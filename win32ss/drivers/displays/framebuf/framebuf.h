@@ -83,6 +83,8 @@ typedef struct _PDEV
    SURFOBJ *psoShadow;    /* Persistently locked shadow SURFOBJ */
    LONG CursorWidth;      /* Cached cursor dimensions for flush */
    LONG CursorHeight;
+   LONG CursorHotX;       /* Hotspot offset within cursor bitmap */
+   LONG CursorHotY;
    RECTL OldCursorRect;   /* Last known cursor bounds for flush on move/hide */
 
 #ifdef EXPERIMENTAL_MOUSE_CURSOR_SUPPORT
@@ -298,6 +300,12 @@ VOID
 FbShadowFlushRect(
    _In_ PPDEV ppdev,
    _In_ const RECTL *prcl);
+
+VOID
+FbShadowFlushRects(
+   _In_ PPDEV ppdev,
+   _In_opt_ const RECTL *prcl1,
+   _In_opt_ const RECTL *prcl2);
 
 BOOL APIENTRY
 DrvTextOut(

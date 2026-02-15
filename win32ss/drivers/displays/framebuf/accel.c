@@ -89,6 +89,77 @@ FbClipRectToScreen(_In_ PPDEV ppdev,
     return (Rect->left < Rect->right) && (Rect->top < Rect->bottom);
 }
 
+static BOOLEAN
+FbNormalizeAndClipRect(_In_ PPDEV ppdev,
+                       _In_ const RECTL *InputRect,
+                       _Out_ PRECTL OutputRect)
+{
+    RECTL rcl;
+
+    if (!InputRect)
+        return FALSE;
+
+    rcl = *InputRect;
+
+    if (rcl.left > rcl.right)
+    {
+        LONG t = rcl.left;
+        rcl.left = rcl.right;
+        rcl.right = t;
+    }
+    if (rcl.top > rcl.bottom)
+    {
+        LONG t = rcl.top;
+        rcl.top = rcl.bottom;
+        rcl.bottom = t;
+    }
+
+    if (!FbClipRectToScreen(ppdev, &rcl))
+        return FALSE;
+
+    *OutputRect = rcl;
+    return TRUE;
+}
+
+FORCEINLINE VOID
+FbShadowCopyToVram(_Out_writes_bytes_all_(Length) PVOID Destination,
+                   _In_reads_bytes_(Length) const VOID *Source,
+                   _In_ SIZE_T Length)
+{
+    RtlCopyMemory(Destination, Source, Length);
+}
+
+static VOID
+FbShadowFlushNormalizedRect(_In_ PPDEV ppdev,
+                            _In_ const RECTL *Rect)
+{
+    LONG y;
+    LONG bytesPerPixel = (ppdev->BitsPerPixel + 7) / 8;
+    LONG height = Rect->bottom - Rect->top;
+    SIZE_T rowBytes = (SIZE_T)(Rect->right - Rect->left) * bytesPerPixel;
+    PUCHAR shadowRow = (PUCHAR)ppdev->ShadowBuffer +
+                       (SIZE_T)Rect->top * ppdev->ScreenDelta +
+                       (SIZE_T)Rect->left * bytesPerPixel;
+    PUCHAR vramRow = (PUCHAR)ppdev->VramPtr +
+                     (SIZE_T)Rect->top * ppdev->ScreenDelta +
+                     (SIZE_T)Rect->left * bytesPerPixel;
+
+    if ((Rect->left == 0) && (rowBytes == ppdev->ScreenDelta))
+    {
+        /* Whole span copy: one burst is faster than per-line copies. */
+        SIZE_T copyBytes = rowBytes * (SIZE_T)height;
+        FbShadowCopyToVram(vramRow, shadowRow, copyBytes);
+        return;
+    }
+
+    for (y = 0; y < height; y++)
+    {
+        FbShadowCopyToVram(vramRow, shadowRow, rowBytes);
+        shadowRow += ppdev->ScreenDelta;
+        vramRow += ppdev->ScreenDelta;
+    }
+}
+
 /*
  * FbShadowFlushRect
  *
@@ -100,59 +171,85 @@ FbShadowFlushRect(
    _In_ PPDEV ppdev,
    _In_ const RECTL *prcl)
 {
-   RECTL rcl;
-   LONG y;
-   PUCHAR shadowRow;
-   PUCHAR vramRow;
-   SIZE_T rowBytes;
-
    if (!ppdev->UsingShadow || !ppdev->ShadowBuffer || !ppdev->VramPtr || !prcl)
       return;
 
-   rcl = *prcl;
-
-   /* Normalize reversed rectangles (directional BitBlt can pass left>right or top>bottom) */
-   if (rcl.left > rcl.right)
    {
-      LONG t = rcl.left;
-      rcl.left = rcl.right;
-      rcl.right = t;
-   }
-   if (rcl.top > rcl.bottom)
-   {
-      LONG t = rcl.top;
-      rcl.top = rcl.bottom;
-      rcl.bottom = t;
-   }
+      RECTL rcl;
+      if (!FbNormalizeAndClipRect(ppdev, prcl, &rcl))
+         return;
 
-   /* Clip to screen bounds */
-   if (rcl.left < 0)
-      rcl.left = 0;
-   if (rcl.top < 0)
-      rcl.top = 0;
-   if (rcl.right > (LONG)ppdev->ScreenWidth)
-      rcl.right = (LONG)ppdev->ScreenWidth;
-   if (rcl.bottom > (LONG)ppdev->ScreenHeight)
-      rcl.bottom = (LONG)ppdev->ScreenHeight;
+      FbShadowFlushNormalizedRect(ppdev, &rcl);
+   }
+}
 
-   if (rcl.left >= rcl.right || rcl.top >= rcl.bottom)
+VOID
+FbShadowFlushRects(
+   _In_ PPDEV ppdev,
+   _In_opt_ const RECTL *prcl1,
+   _In_opt_ const RECTL *prcl2)
+{
+   RECTL rcl1, rcl2, rclUnion;
+   BOOLEAN valid1, valid2;
+
+   if (!ppdev->UsingShadow || !ppdev->ShadowBuffer || !ppdev->VramPtr)
       return;
 
-   rowBytes = (SIZE_T)(rcl.right - rcl.left) * ((ppdev->BitsPerPixel + 7) / 8);
+   valid1 = FbNormalizeAndClipRect(ppdev, prcl1, &rcl1);
+   valid2 = FbNormalizeAndClipRect(ppdev, prcl2, &rcl2);
 
-   shadowRow = (PUCHAR)ppdev->ShadowBuffer +
-               (SIZE_T)rcl.top * ppdev->ScreenDelta +
-               (SIZE_T)rcl.left * ((ppdev->BitsPerPixel + 7) / 8);
-   vramRow = (PUCHAR)ppdev->VramPtr +
-             (SIZE_T)rcl.top * ppdev->ScreenDelta +
-             (SIZE_T)rcl.left * ((ppdev->BitsPerPixel + 7) / 8);
-
-   for (y = rcl.top; y < rcl.bottom; y++)
+   if (!valid1 && !valid2)
    {
-      RtlCopyMemory(vramRow, shadowRow, rowBytes);
-      shadowRow += ppdev->ScreenDelta;
-      vramRow += ppdev->ScreenDelta;
+      return;
    }
+   else if (valid1 && !valid2)
+   {
+      FbShadowFlushNormalizedRect(ppdev, &rcl1);
+      return;
+   }
+   else if (!valid1 && valid2)
+   {
+      FbShadowFlushNormalizedRect(ppdev, &rcl2);
+      return;
+   }
+
+   rclUnion.left = min(rcl1.left, rcl2.left);
+   rclUnion.top = min(rcl1.top, rcl2.top);
+   rclUnion.right = max(rcl1.right, rcl2.right);
+   rclUnion.bottom = max(rcl1.bottom, rcl2.bottom);
+
+   /* Coalesce overlapping or touching dirty rectangles into one flush burst. */
+   if (!((rcl1.right < rcl2.left) ||
+         (rcl2.right < rcl1.left) ||
+         (rcl1.bottom < rcl2.top) ||
+         (rcl2.bottom < rcl1.top)))
+   {
+      FbShadowFlushNormalizedRect(ppdev, &rclUnion);
+      return;
+   }
+
+   /* Coalesce nearby disjoint rects when the wasted area is small (<=50%).
+    * One large memcpy burst is cheaper than two separate flushes across
+    * the bus, so merge when union <= sum + sum/2.  Use LONGLONG to avoid
+    * overflow on large screen resolutions. */
+   {
+      LONGLONG unionArea = (LONGLONG)(rclUnion.right - rclUnion.left) *
+                           (rclUnion.bottom - rclUnion.top);
+      LONGLONG area1 = (LONGLONG)(rcl1.right - rcl1.left) *
+                        (rcl1.bottom - rcl1.top);
+      LONGLONG area2 = (LONGLONG)(rcl2.right - rcl2.left) *
+                        (rcl2.bottom - rcl2.top);
+      LONGLONG sumArea = area1 + area2;
+
+      if (unionArea <= sumArea + sumArea / 2)
+      {
+         FbShadowFlushNormalizedRect(ppdev, &rclUnion);
+         return;
+      }
+   }
+
+   FbShadowFlushNormalizedRect(ppdev, &rcl1);
+   FbShadowFlushNormalizedRect(ppdev, &rcl2);
 }
 
 /*
@@ -1385,10 +1482,9 @@ DrvTextOut(
                             prclOpaque, pboFore, pboOpaque, pptlOrg, mix);
         if (result)
         {
-            if (pstro)
-                FbShadowFlushRect(ppdev, &pstro->rclBkGround);
-            if (prclOpaque)
-                FbShadowFlushRect(ppdev, prclOpaque);
+            FbShadowFlushRects(ppdev,
+                               pstro ? &pstro->rclBkGround : NULL,
+                               prclOpaque);
         }
         return result;
     }
@@ -1442,12 +1538,22 @@ DrvStrokePath(
                                pptlBrushOrg, plineattrs, mix);
         if (result)
         {
-            if (pco)
-                FbShadowFlushRect(ppdev, &pco->rclBounds);
+            RECTFX rcfx;
+            RECTL rclPath;
+            PATHOBJ_vGetBounds(ppo, &rcfx);
+            rclPath.left   = rcfx.xLeft >> 4;
+            rclPath.top    = rcfx.yTop >> 4;
+            rclPath.right  = (rcfx.xRight + 15) >> 4;
+            rclPath.bottom = (rcfx.yBottom + 15) >> 4;
+            if (pco && pco->iDComplexity != DC_TRIVIAL)
+            {
+                RECTL rclFlush;
+                if (FbIntersectRectPair(&rclFlush, &rclPath, &pco->rclBounds))
+                    FbShadowFlushRect(ppdev, &rclFlush);
+            }
             else
             {
-                RECTL rclFull = { 0, 0, ppdev->ScreenWidth, ppdev->ScreenHeight };
-                FbShadowFlushRect(ppdev, &rclFull);
+                FbShadowFlushRect(ppdev, &rclPath);
             }
         }
         return result;
@@ -1474,12 +1580,22 @@ DrvFillPath(
                              mix, flOptions);
         if (result)
         {
-            if (pco)
-                FbShadowFlushRect(ppdev, &pco->rclBounds);
+            RECTFX rcfx;
+            RECTL rclPath;
+            PATHOBJ_vGetBounds(ppo, &rcfx);
+            rclPath.left   = rcfx.xLeft >> 4;
+            rclPath.top    = rcfx.yTop >> 4;
+            rclPath.right  = (rcfx.xRight + 15) >> 4;
+            rclPath.bottom = (rcfx.yBottom + 15) >> 4;
+            if (pco && pco->iDComplexity != DC_TRIVIAL)
+            {
+                RECTL rclFlush;
+                if (FbIntersectRectPair(&rclFlush, &rclPath, &pco->rclBounds))
+                    FbShadowFlushRect(ppdev, &rclFlush);
+            }
             else
             {
-                RECTL rclFull = { 0, 0, ppdev->ScreenWidth, ppdev->ScreenHeight };
-                FbShadowFlushRect(ppdev, &rclFull);
+                FbShadowFlushRect(ppdev, &rclPath);
             }
         }
         return result;
@@ -1510,12 +1626,22 @@ DrvStrokeAndFillPath(
                                       pptlBrushOrg, mixFill, flOptions);
         if (result)
         {
-            if (pco)
-                FbShadowFlushRect(ppdev, &pco->rclBounds);
+            RECTFX rcfx;
+            RECTL rclPath;
+            PATHOBJ_vGetBounds(ppo, &rcfx);
+            rclPath.left   = rcfx.xLeft >> 4;
+            rclPath.top    = rcfx.yTop >> 4;
+            rclPath.right  = (rcfx.xRight + 15) >> 4;
+            rclPath.bottom = (rcfx.yBottom + 15) >> 4;
+            if (pco && pco->iDComplexity != DC_TRIVIAL)
+            {
+                RECTL rclFlush;
+                if (FbIntersectRectPair(&rclFlush, &rclPath, &pco->rclBounds))
+                    FbShadowFlushRect(ppdev, &rclFlush);
+            }
             else
             {
-                RECTL rclFull = { 0, 0, ppdev->ScreenWidth, ppdev->ScreenHeight };
-                FbShadowFlushRect(ppdev, &rclFull);
+                FbShadowFlushRect(ppdev, &rclPath);
             }
         }
         return result;
@@ -1735,14 +1861,29 @@ DrvPlgBlt(
                            FbPuntSurface(ppdev, psoSrc),
                            psoMsk, pco, pxlo, pca,
                            pptlBrushOrg, pptfx, prclSrc, pptlMask, iMode);
-        if (result && dstIsOurs)
+        if (result && dstIsOurs && pptfx)
         {
-            if (pco)
-                FbShadowFlushRect(ppdev, &pco->rclBounds);
+            /* Derive 4th parallelogram vertex: D = B + C - A */
+            FIX fx4x = pptfx[1].x + pptfx[2].x - pptfx[0].x;
+            FIX fx4y = pptfx[1].y + pptfx[2].y - pptfx[0].y;
+            FIX fxLeft   = min(min(pptfx[0].x, pptfx[1].x), min(pptfx[2].x, fx4x));
+            FIX fxTop    = min(min(pptfx[0].y, pptfx[1].y), min(pptfx[2].y, fx4y));
+            FIX fxRight  = max(max(pptfx[0].x, pptfx[1].x), max(pptfx[2].x, fx4x));
+            FIX fxBottom = max(max(pptfx[0].y, pptfx[1].y), max(pptfx[2].y, fx4y));
+            RECTL rclPlg;
+            rclPlg.left   = fxLeft >> 4;
+            rclPlg.top    = fxTop >> 4;
+            rclPlg.right  = (fxRight + 15) >> 4;
+            rclPlg.bottom = (fxBottom + 15) >> 4;
+            if (pco && pco->iDComplexity != DC_TRIVIAL)
+            {
+                RECTL rclFlush;
+                if (FbIntersectRectPair(&rclFlush, &rclPlg, &pco->rclBounds))
+                    FbShadowFlushRect(ppdev, &rclFlush);
+            }
             else
             {
-                RECTL rclFull = { 0, 0, ppdev->ScreenWidth, ppdev->ScreenHeight };
-                FbShadowFlushRect(ppdev, &rclFull);
+                FbShadowFlushRect(ppdev, &rclPlg);
             }
         }
         return result;

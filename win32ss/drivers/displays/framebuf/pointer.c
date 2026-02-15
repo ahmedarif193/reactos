@@ -46,7 +46,7 @@ DrvSetPointerShape(
 {
    PPDEV ppdev = pso ? (PPDEV)pso->dhpdev : NULL;
 
-   /* Track cursor dimensions for shadow flush in DrvMovePointer */
+   /* Track cursor dimensions and hotspot for shadow flush in DrvMovePointer */
    if (ppdev && psoMask)
    {
       ppdev->CursorWidth = psoMask->sizlBitmap.cx;
@@ -57,6 +57,12 @@ DrvSetPointerShape(
    {
       ppdev->CursorWidth = psoColor->sizlBitmap.cx;
       ppdev->CursorHeight = psoColor->sizlBitmap.cy;
+   }
+
+   if (ppdev)
+   {
+      ppdev->CursorHotX = xHot;
+      ppdev->CursorHotY = yHot;
    }
 
    {
@@ -80,11 +86,13 @@ DrvSetPointerShape(
          {
             LONG cw = ppdev->CursorWidth > 0 ? ppdev->CursorWidth : 32;
             LONG ch = ppdev->CursorHeight > 0 ? ppdev->CursorHeight : 32;
+            LONG hotX = ppdev->CursorHotX;
+            LONG hotY = ppdev->CursorHotY;
             RECTL cursorRect;
-            cursorRect.left = x - cw;
-            cursorRect.top = y - ch;
-            cursorRect.right = x + cw;
-            cursorRect.bottom = y + ch;
+            cursorRect.left = x - hotX;
+            cursorRect.top = y - hotY;
+            cursorRect.right = cursorRect.left + cw;
+            cursorRect.bottom = cursorRect.top + ch;
             FbShadowFlushRect(ppdev, &cursorRect);
             ppdev->OldCursorRect = cursorRect;
          }
@@ -155,10 +163,12 @@ DrvMovePointer(
          {
             LONG cw = ppdev->CursorWidth > 0 ? ppdev->CursorWidth : 32;
             LONG ch = ppdev->CursorHeight > 0 ? ppdev->CursorHeight : 32;
-            newRect.left = x - cw;
-            newRect.top = y - ch;
-            newRect.right = x + cw;
-            newRect.bottom = y + ch;
+            LONG hotX = ppdev->CursorHotX;
+            LONG hotY = ppdev->CursorHotY;
+            newRect.left = x - hotX;
+            newRect.top = y - hotY;
+            newRect.right = newRect.left + cw;
+            newRect.bottom = newRect.top + ch;
          }
 
          haveNew = (newRect.left < newRect.right) && (newRect.top < newRect.bottom);
@@ -173,24 +183,15 @@ DrvMovePointer(
 
          if (haveOld || haveNew)
          {
-            RECTL flushRect;
+            const RECTL *oldToFlush = NULL;
+            const RECTL *newToFlush = NULL;
 
-            if (haveOld && haveNew && !sameRect)
-            {
-               flushRect.left = min(oldRect.left, newRect.left);
-               flushRect.top = min(oldRect.top, newRect.top);
-               flushRect.right = max(oldRect.right, newRect.right);
-               flushRect.bottom = max(oldRect.bottom, newRect.bottom);
-               FbShadowFlushRect(ppdev, &flushRect);
-            }
-            else if (haveOld)
-            {
-               FbShadowFlushRect(ppdev, &oldRect);
-            }
-            else
-            {
-               FbShadowFlushRect(ppdev, &newRect);
-            }
+            if (haveOld)
+               oldToFlush = &oldRect;
+            if (haveNew && !sameRect)
+               newToFlush = &newRect;
+
+            FbShadowFlushRects(ppdev, oldToFlush, newToFlush);
          }
 
          if (haveNew)
