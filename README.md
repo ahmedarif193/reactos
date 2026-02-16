@@ -1,130 +1,118 @@
-<p align=center>
-  <a href="https://reactos.org/">
-    <img alt="ReactOS" src="https://reactos.org/wiki/images/0/02/ReactOS_logo.png">
-  </a>
+<p align="center">
+  <img alt="ReactOS" src="https://reactos.org/wiki/images/0/02/ReactOS_logo.png">
 </p>
 
----
+# ReactOS Build Guide
 
-<p align=center>
-  <a href="https://reactos.org/project-news/reactos-0415-released/">
-    <img alt="ReactOS 0.4.15 Release" src="https://img.shields.io/badge/release-0.4.15-0688CB.svg"></a>
-  <a href="https://reactos.org/download/">
-    <img alt="Download ReactOS" src="https://img.shields.io/badge/download-latest-0688CB.svg"></a>
-  <a href="https://sourceforge.net/projects/reactos/">
-    <img alt="SourceForge Download" src="https://img.shields.io/sourceforge/dm/reactos.svg?colorB=0688CB"></a>
-  <a href="https://github.com/reactos/reactos/blob/master/COPYING">
-    <img alt="License" src="https://img.shields.io/badge/license-GNU_GPL_2.0-0688CB.svg"></a>
-  <a href="https://reactos.org/donate/">
-    <img alt="Donate" src="https://img.shields.io/badge/%24-donate-E44E4A.svg"></a>
-  <a href="https://twitter.com/reactos">
-    <img alt="Follow on Twitter" src="https://img.shields.io/twitter/follow/reactos.svg?style=social&label=Follow%20%40reactos"></a>
-</p>
+Building ReactOS is handled entirely by the `./configurev2.sh` script. It automatically downloads the required compilers (MinGW/GCC), sets up the Rust toolchain, and configures the build environment for you.
 
-## Quick Links
-[Website](https://reactos.org/) &bull;
-[Official chat](https://chat.reactos.org/) &bull;
-[Wiki](https://reactos.org/wiki/) &bull;
-[Forum](https://reactos.org/forum/) &bull;
-[Community Discord](https://discord.gg/7knjvhT) &bull;
-[JIRA Bug Tracker](https://jira.reactos.org/issues/) &bull;
-[ReactOS Git mirror](https://git.reactos.org/) &bull;
-[Testman](https://reactos.org/testman/)
+## Supported Features (This fork)
 
-## What is ReactOS?
+- Modern HAL work with MSI/MSI-X interrupt support.
+- Full UEFI support path for `amd64` and `arm64`.
+- Ramdisk boot support for bring-up and live images.
+- Reworked USB stack targeting up to USB 3.2 class hardware, including MSI/MSI-X-capable controller paths.
+- Stabilized Plug and Play (PnP) behavior for USB and PCI (SDIO support is added to the roadmap).
 
-ReactOS™ is an Open Source effort to develop a quality operating system that is compatible with applications and drivers written for the Microsoft® Windows™ NT family of operating systems (NT4, 2000, XP, 2003, Vista, 7).
+## Driver Support Status (vs upstream ReactOS)
 
-The ReactOS project, although currently focused on Windows Server 2003 compatibility, is always keeping an eye toward compatibility with Windows Vista and future Windows NT releases.
+| Area | Status |
+| --- | --- |
+| ARM64 CPU power management | Ongoing |
+| Intel CPU power management | Ongoing |
+| AHCI storage port | Done |
+| USB RNDIS NIC | Done (VBox, QEMU, Alder Lake Intel CPU targets) |
+| USB video class | Done (VBox, QEMU, Alder Lake Intel CPU targets) |
+| USB xHCI (USB 3.x) | Done (VBox, QEMU, Alder Lake Intel CPU targets) |
+| NDIS 6 stack | Ongoing |
+| Intel e1000 | Done |
 
-The code of ReactOS is licensed under [GNU GPL 2.0](https://github.com/reactos/reactos/blob/master/COPYING).
+Validation note: this fork is proven to work on Intel e1000 and Intel N100 CPU targets in bare UEFI mode (no CSM). Additional hardware validation is still pending.
 
-### Product quality warning
+README note: a supported hardware list will be added in a later update; current bring-up/testing includes LattePanda Mu hardware.
 
-**ReactOS is currently an Alpha quality operating system.** This means that ReactOS is under heavy development and you have to be ready to encounter some problems. Different things may not work well and it can corrupt the data present on your hard disk. It is HIGHLY recommended to test ReactOS on a virtual machine or on a computer with no sensitive or critical data!
+## Quick Start
 
-## Building
+The default build creates a **Debug** version for **amd64** using the **MinGW** compiler.
 
-![Build](https://github.com/reactos/reactos/workflows/Build/badge.svg) [![rosbewin.badge]][rosbewin.link] [![rosbeunix.badge]][rosbeunix.link] [![coverity.badge]][coverity.link]
+```bash
+# 1. Configure
+./configurev2.sh
 
-To build the system it is strongly advised to use the _ReactOS Build Environment (RosBE)._
-Up-to-date versions for Windows and for Unix/GNU-Linux are available from our download page at: ["Build Environment"](https://reactos.org/wiki/Build_Environment).
+# 2. Compile
+cd output-MinGW-amd64-Debug
+ninja livecd
+```
 
-Alternatively one can use Microsoft Visual C++ (MSVC) version 2019+. Building with MSVC is covered here: ["Visual Studio or Microsoft Visual C++"](https://reactos.org/wiki/CMake#Visual_Studio_or_Microsoft_Visual_C.2B.2B).
+## Build Configuration Matrix
 
-See ["Building ReactOS"](https://reactos.org/wiki/Building_ReactOS) article for more details.
+You can customize the architecture, compiler, and build type using flags.
 
-### Binaries
+### 1. Architectures
 
-To build ReactOS you must run the `configure` script in the directory you want to have your build files. Choose `configure.cmd` or `configure.sh` depending on your system. Then run `ninja <modulename>` to build a module you want or just `ninja` to build all modules.
+Change the target CPU using `-a`. The script defaults to `amd64`.
 
-### Bootable images
+**i386 (32-bit)**
 
-To build a bootable CD image run `ninja bootcd` from the build directory. This will create a CD image with a filename `bootcd.iso`.
+```bash
+./configurev2.sh -a i386
+cd output-MinGW-i386-Debug && ninja livecd
+```
 
-You can always download fresh binary builds of bootable images from the ["Daily builds"](https://reactos.org/getbuilds/) page.
+**ARM64 (AArch64)**
 
-## Installing
+```bash
+./configurev2.sh -a arm64
+cd output-MinGW-arm64-Debug && ninja livecd
+```
 
-By default, ReactOS currently can only be installed on a machine that has a FAT16 or FAT32 partition as the active (bootable) partition.
-The partition on which ReactOS is to be installed (which may or may not be the bootable partition) must also be formatted as FAT16 or FAT32.
-ReactOS Setup can format the partitions if needed.
+### 2. Clang Support
 
-Starting with 0.4.10, ReactOS can be installed using the BtrFS file system. But consider this as an experimental feature and thus regressions not triggered on FAT setup may be observed.
+To build using LLVM/Clang instead of GCC, add the `--clang` flag. You can optionally specify a version.
 
-To install ReactOS from the bootable CD distribution, extract the archive contents. Then burn the CD image, boot from it, and follow the instructions.
+**Default Clang (amd64)**
 
-See ["Installing ReactOS"](https://reactos.org/wiki/Installing_ReactOS) Wiki page or [INSTALL](INSTALL) for more details.
+```bash
+./configurev2.sh --clang
+cd output-Clang-amd64-Debug && ninja livecd
+```
 
-## Testing
+**Specific Clang Version (e.g., v21)**
 
-If you discover a bug in ReactOS search on JIRA first - it might be reported already. If not report the bug providing logs and as much information as possible.
+```bash
+./configurev2.sh --clang=21
+cd output-Clang-amd64-Debug && ninja livecd
+```
 
-See ["File Bugs"](https://reactos.org/wiki/File_Bugs) for a guide.
+### 3. Release Builds
 
-__NOTE:__ The bug tracker is _not_ for discussions. Please use our [official chat](https://chat.reactos.org/) or our [forum](https://reactos.org/forum/).
+By default, the script builds in Debug mode. For an optimized build, add `-r` (or `--release`).
 
-## Contributing  [![prwelcome.badge]](https://reactos.org/wiki/Commiting_Changes)
+**Release Mode (MinGW)**
 
-We are always looking for developers! Check [how to contribute](CONTRIBUTING.md) if you are willing to participate.
+```bash
+./configurev2.sh -r
+cd output-MinGW-amd64-MinSizeRel && ninja livecd
+```
 
-__Legal notice__: If you have seen proprietary Microsoft Windows source code (including but not limited to the leaked Windows NT 3.5, NT 4, 2000 source code and the Windows Research Kernel), your contribution won't be accepted because of potential copyright violation.
+**Release Mode (Clang)**
 
-Try out cloud-based ReactOS development using Gitpod and Docker:
+```bash
+./configurev2.sh --clang -r
+cd output-Clang-amd64-MinSizeRel && ninja livecd
+```
 
-[![Open in Gitpod](https://gitpod.io/button/open-in-gitpod.svg)](https://gitpod.io/#https://github.com/reactos/reactos)
+## Command Reference
 
-You can also support ReactOS by [donating](https://reactos.org/donate/)! We rely on our backers to maintain our servers and accelerate development by [hiring full-time devs](https://reactos.org/contributing/#paid-jobs).
+| Flag | Description | Values |
+| --- | --- | --- |
+| `-a` | Architecture | `amd64` (default), `i386`, `arm64` |
+| `-r` | Release Mode | Switches build type to `MinSizeRel` |
+| `--clang` | Compiler | Switches from MinGW to Clang |
+| `--clang=XX` | Compiler Version | Uses specific Clang version (e.g., `21`) |
+| `-c` | Ccache | Enables ccache for faster rebuilds |
+| `--clean` | Clean | Wipes the build directory before starting |
 
-## More information
+## Note on Dependencies
 
-ReactOS is a Free and Open Source operating system based on the Windows architecture,
-providing support for existing applications and drivers, and an alternative to the current dominant consumer operating system.
-
-It is not another wrapper built on Linux, like WINE. It does not attempt or plan to compete with WINE; in fact, the user-mode part of ReactOS is almost entirely WINE-based and our two teams have cooperated closely in the past.
-
-ReactOS is also not "yet another OS". It does not attempt to be a third player like any other alternative OS out there. People are not meant to uninstall Linux and use ReactOS instead; ReactOS is a replacement for Windows users who want a Windows replacement that behaves just like Windows.
-
-More information is available at: [reactos.org](https://reactos.org/).
-
-Also see the [media/doc](/media/doc/) subdirectory for some sparse notes.
-
-## Who is responsible
-
-Active devs are listed as members of [GitHub organization](https://github.com/orgs/reactos/people).
-See also the [CREDITS](CREDITS) file for others.
-
-## Code mirrors
-
-The main development is done on [GitHub](https://github.com/reactos/reactos). We have an [alternative mirror](https://git.reactos.org/?p=reactos.git) in case GitHub is down.
-
-There is also an obsolete [SVN archive repository](https://svn.reactos.org/reactos/) that is kept for historical purposes.
-
-[coverity.badge]:   https://scan.coverity.com/projects/205/badge.svg?flat=1
-[rosbewin.badge]:   https://img.shields.io/badge/RosBE_Windows-2.2.1-0688CB.svg
-[rosbeunix.badge]:  https://img.shields.io/badge/RosBE_Unix-2.2.1-0688CB.svg
-[prwelcome.badge]:  https://img.shields.io/badge/PR-welcome-0688CB.svg
-
-[coverity.link]:    https://scan.coverity.com/projects/205
-[rosbewin.link]:    https://sourceforge.net/projects/reactos/files/RosBE-Windows/i386/2.2.1/
-[rosbeunix.link]:   https://sourceforge.net/projects/reactos/files/RosBE-Unix/2.2.1/
+The script automatically fetches the necessary MinGW toolchains and sets up Rust (via rustup) if they are missing. On macOS, it will also check for Homebrew dependencies.

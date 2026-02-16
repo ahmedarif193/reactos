@@ -27,7 +27,7 @@ import platform
 LOG_FILE = "/tmp/v.log"
 STALL_TIMEOUT = 6   # Log inactivity timeout
 HARD_TIMEOUT = 20   # Total maximum runtime seconds
-VM_NAME = "testWin11"
+VM_NAME = "ROS11"
 
 def get_build_dir():
     """

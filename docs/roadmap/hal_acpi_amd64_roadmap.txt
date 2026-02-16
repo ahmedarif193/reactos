@@ -1,0 +1,31 @@
+HAL ACPI (amd64) Roadmap
+========================
+
+How to use
+----------
+- Mark each task with [x] when completed.
+- Use [~] for partial/in-progress implementation.
+- Keep file/line references updated when code moves.
+
+Completed
+---------
+- [x] Support ACPI table overrides from loader extension (`hal/arch/common/acpi/halacpi.c:760`).
+- [x] Use FADT 64-bit `x_*` pointers and map ACPI tables above 4 GB (`hal/arch/common/acpi/halacpi.c:165`, `hal/arch/common/acpi/halacpi.c:698`).
+- [x] Implement ACPI timer bring-up in `HalaAcpiTimerInit` (`hal/arch/common/acpi/halacpi.c:773`).
+- [x] Enhance ACPI PCI root handling: parse `_CRS/_PRT` for `PNP0A03` and `PNP0A08`, honor segment/group, publish 64-bit resources.
+
+Pending
+-------
+- [~] Initialize 64-bit DMA support during resource reporting (`hal/arch/common/acpi/halacpi.c:1482`).
+- [ ] Flesh out MCA bus initialization (`hal/arch/common/acpi/halacpi.c:1484`).
+- [ ] Handle ACPI BOOT table instead of unsupported log (`hal/arch/common/acpi/halacpi.c:529`).
+- [ ] Process SRAT for NUMA topology and memory hot-plug (`hal/arch/common/acpi/halacpi.c:833`).
+- [ ] Implement machine-specific ACPI table match handling (`hal/arch/common/acpi/halacpi.c:508`).
+- [ ] Surface ACPI watchdog (WDRT) as child device (`hal/arch/common/acpi/halpnpdd.c:137`).
+- [~] Provide standard ACPI interfaces in `HalpQueryInterface` (`hal/arch/common/acpi/halpnpdd.c:152`).
+- [~] Implement WMI handling in HAL PnP driver (`hal/arch/common/acpi/halpnpdd.c:826`).
+- [ ] Return real EISA config data or graceful fallback in `HalGetBusData` (`hal/arch/i386/acpi/busemul.c:204`).
+- [~] Extend MADT parsing (respect `ACPI_MADT_PCAT_COMPAT`, more subtables, correct APIC mode) (`hal/arch/common/acpi/madt.c:74`).
+- [x] Apply MADT interrupt source override `IntiFlags` into `HalpPicVectorRedirect` (`hal/arch/common/acpi/madt.c:206`).
+- [ ] Expand PCIe `_OSC` support for AER/PME/hotplug controls once HAL programming paths exist.
+- [~] Consume ACPI 1.5+/3.0 extended PCI resource descriptors during PCI bus setup.
