@@ -14,7 +14,7 @@ Building ReactOS is handled entirely by the `./configurev2.sh` script. It automa
 - Reworked USB stack targeting up to USB 3.2 class hardware, including MSI/MSI-X-capable controller paths.
 - Stabilized Plug and Play (PnP) behavior for USB and PCI (SDIO support is added to the roadmap).
 
-## Driver Support Status (vs upstream ReactOS)
+## Driver Support Status (in testing, to be upstreamed later)
 
 | Area | Status |
 | --- | --- |
