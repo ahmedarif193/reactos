@@ -9,7 +9,7 @@ Building ReactOS is handled entirely by the `./configurev2.sh` script. It automa
 ## Supported Features (This fork)
 
 - Modern HAL work with MSI/MSI-X interrupt support.
-- Full UEFI support path for `amd64` and `arm64`.
+- UEFI support path for `amd64` and `arm64`.
 - Ramdisk boot support for bring-up and live images.
 - Reworked USB stack targeting up to USB 3.2 class hardware, including MSI/MSI-X-capable controller paths.
 - Stabilized Plug and Play (PnP) behavior for USB and PCI (SDIO support is added to the roadmap).
@@ -32,6 +32,8 @@ Validation note: this fork is proven to work on Intel e1000 and Intel N100 CPU t
 README note: a supported hardware list will be added in a later update; current bring-up/testing includes LattePanda Mu hardware.
 
 ## Quick Start
+
+The script automatically fetches the necessary MinGW toolchains and sets up Rust (via rustup) if they are missing. On macOS, it will also check for Homebrew dependencies.
 
 The default build creates a **Debug** version for **amd64** using the **MinGW** compiler.
 
@@ -112,7 +114,3 @@ cd output-Clang-amd64-MinSizeRel && ninja livecd
 | `--clang=XX` | Compiler Version | Uses specific Clang version (e.g., `21`) |
 | `-c` | Ccache | Enables ccache for faster rebuilds |
 | `--clean` | Clean | Wipes the build directory before starting |
-
-## Note on Dependencies
-
-The script automatically fetches the necessary MinGW toolchains and sets up Rust (via rustup) if they are missing. On macOS, it will also check for Homebrew dependencies.
