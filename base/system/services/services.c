@@ -196,18 +196,6 @@ ScmLogEvent(DWORD dwEventId,
 {
     HANDLE hLog;
 
-        /* During SCM initialization or setup/livecd scenarios, the eventlog
-       service is not yet available. Avoid recursive RPC attempts that
-       would only fail (and chew stack) by short-circuiting here. */
-    if (ScmInitialize || ScmLiveSetup || ScmSetupInProgress)
-    {
-        DPRINT1("ScmLogEvent: Event log not ready (Init=%u Live=%u Setup=%u), skipping\n",
-                ScmInitialize,
-                ScmLiveSetup,
-                ScmSetupInProgress);
-        return;
-    }
-
     hLog = RegisterEventSourceW(NULL,
                                 L"Service Control Manager");
     if (hLog == NULL)
