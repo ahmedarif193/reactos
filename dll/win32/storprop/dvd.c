@@ -83,9 +83,6 @@ DvdClassInstaller(
     _In_ HDEVINFO DeviceInfoSet,
     _In_ PSP_DEVINFO_DATA DeviceInfoData OPTIONAL)
 {
-    DPRINT1("DvdClassInstaller(%u %p %p)\n",
-           InstallFunction, DeviceInfoSet, DeviceInfoData);
-
     return ERROR_DI_DO_DEFAULT;
 }
 

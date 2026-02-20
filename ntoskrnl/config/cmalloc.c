@@ -429,8 +429,6 @@ CmpFreeDelayItem(PVOID Entry)
      */
     if (AllocPage->Reserved == CM_ALLOC_PAGE_FREED_SENTINEL)
     {
-        DPRINT1("CmpFreeDelayItem: Page %p already freed (stale entry %p), skipping\n",
-                AllocPage, Entry);
         KeReleaseGuardedMutex(&CmpDelayAllocBucketLock);
         return;
     }
@@ -442,8 +440,6 @@ CmpFreeDelayItem(PVOID Entry)
         {
             if (CmpFreedPageCache[j] == AllocPage)
             {
-                DPRINT1("CmpFreeDelayItem: Page %p in freed cache (stale entry %p)\n",
-                        AllocPage, Entry);
                 KeReleaseGuardedMutex(&CmpDelayAllocBucketLock);
                 return;
             }
