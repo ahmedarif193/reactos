@@ -1019,23 +1019,12 @@ MmInitializeProcessAddressSpace(IN PEPROCESS Process,
 #endif
 #endif /* !_M_ARM64 */
 
-    DPRINT1("[arm64] MmInitializeProcessAddressSpace: ENTRY Process=%p Section=%p\n", Process, Section);
-
     /* We should have a PDE */
     ASSERT(Process->Pcb.DirectoryTableBase[0] != 0);
     ASSERT(Process->PdeUpdateNeeded == FALSE);
 
-    DPRINT1("[arm64] MmInitializeProcessAddressSpace: Attaching to process DTB=0x%llx\n",
-            (ULONGLONG)Process->Pcb.DirectoryTableBase[0]);
-
     /* Attach to the process */
     KeAttachProcess(&Process->Pcb);
-
-    /* Use direct UART output after TTBR0 switch - DPRINT1 hangs after process swap */
-#ifdef _M_ARM64
-#else
-    DPRINT1("[arm64] MmInitializeProcessAddressSpace: Attached to process\n");
-#endif
 
     /* The address space should now been in phase 1 or 0 */
     ASSERT(Process->AddressSpaceInitialized <= 1);
@@ -1049,22 +1038,8 @@ MmInitializeProcessAddressSpace(IN PEPROCESS Process,
     ASSERT(Process->VadRoot.NumberGenericTableElements == 0);
     Process->VadRoot.BalancedRoot.u1.Parent = &Process->VadRoot.BalancedRoot;
 
-    /* Use direct UART output after TTBR0 switch - DPRINT1 hangs after process swap */
-#ifdef _M_ARM64
-#else
-    DPRINT1("[arm64] MmInitializeProcessAddressSpace: Before MiLockProcessWorkingSet\n");
-#endif
-
     /* Lock our working set */
     MiLockProcessWorkingSet(Process, PsGetCurrentThread());
-
-    /* Use direct UART output after TTBR0 switch - DPRINT1 hangs after process swap */
-#ifdef _M_ARM64
-#else
-    DPRINT1("[arm64] MmInitializeProcessAddressSpace: After MiLockProcessWorkingSet\n");
-#endif
-
-    /* Use UART for logging after TTBR0 switch */
 
     /* Lock PFN database */
     OldIrql = MiAcquirePfnLock();
@@ -1253,21 +1228,12 @@ PageFrameNumber = Process->WorkingSetPage;
     }
 #endif
 
-#ifdef _M_ARM64
-#else
-    DPRINT1("[arm64] MmInitializeProcessAddressSpace: Checking Section=%p\n", Section);
-#endif
-
     /* Check if there's a Section Object */
     if (Section)
     {
 
         /* Determine the image file name and save it to EPROCESS */
         PFILE_OBJECT FileObject = MmGetFileObjectForSection(Section);
-#ifndef _M_ARM64
-        DPRINT1("[arm64] MmInitializeProcessAddressSpace: FileObject=%p FileName='%wZ'\n",
-                FileObject, FileObject ? &FileObject->FileName : NULL);
-#endif
         FileName = FileObject->FileName;
         Source = (PWCHAR)((PCHAR)FileName.Buffer + FileName.Length);
         if (FileName.Buffer)
@@ -1296,42 +1262,21 @@ PageFrameNumber = Process->WorkingSetPage;
         while (Length--) *Destination++ = (UCHAR)*Source++;
         *Destination = ANSI_NULL;
 
-#ifdef _M_ARM64
-#else
-        DPRINT1("[arm64] MmInitializeProcessAddressSpace: Process->ImageFileName='%s'\n",
-                Process->ImageFileName);
-#endif
+        DPRINT1("MmInitializeProcessAddressSpace: spawn '%s' Process=%p\n",
+                Process->ImageFileName,
+                Process);
 
         /* Check if caller wants an audit name */
         if (AuditName)
         {
-#ifdef _M_ARM64
-#else
-            /* Setup the audit name */
-            DPRINT1("[arm64] MmInitializeProcessAddressSpace: Setting up audit name\n");
-#endif
             Status = SeInitializeProcessAuditName(FileObject, FALSE, AuditName);
             if (!NT_SUCCESS(Status))
             {
-#ifdef _M_ARM64
-#else
-                /* Fail */
-                DPRINT1("[arm64] MmInitializeProcessAddressSpace: SeInitializeProcessAuditName FAILED 0x%x\n", Status);
-#endif
                 KeDetachProcess();
                 return Status;
             }
-#ifdef _M_ARM64
-#else
-            DPRINT1("[arm64] MmInitializeProcessAddressSpace: Audit name set\n");
-#endif
         }
 
-#ifdef _M_ARM64
-#else
-        /* Map the section */
-        DPRINT1("[arm64] MmInitializeProcessAddressSpace: Calling MmMapViewOfSection\n");
-#endif
         Status = MmMapViewOfSection(Section,
                                     Process,
                                     (PVOID*)&ImageBase,
@@ -1342,11 +1287,6 @@ PageFrameNumber = Process->WorkingSetPage;
                                     ViewUnmap,
                                     MEM_COMMIT,
                                     PAGE_READWRITE);
-#ifdef _M_ARM64
-#else
-        DPRINT1("[arm64] MmInitializeProcessAddressSpace: MmMapViewOfSection returned 0x%x ImageBase=%p ViewSize=0x%Ix\n",
-                Status, ImageBase, ViewSize);
-#endif
 
         /* Save the pointer */
         Process->SectionBaseAddress = ImageBase;
