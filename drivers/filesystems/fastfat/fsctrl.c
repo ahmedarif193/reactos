@@ -677,19 +677,6 @@ Return Value:
     DebugTrace(+1, Dbg,"FatFsdFileSystemControl\n", 0);
 
 #if DBG
-    /*
-     * Minimal IRP sanity logging to help diagnose ASSERTs in
-     * IoGetCurrentIrpStackLocation when the IRP stack state is bad.
-     * This runs before any IoGetCurrentIrpStackLocation usage.
-     */
-    DbgPrint(
-        "FASTFAT: FsdFsCtrl entry IRP=%p DevObj=%p StackCount=%d CurrentLocation=%d CurStackLoc=%p\n",
-        Irp,
-        VolumeDeviceObject,
-        (int)Irp->StackCount,
-        (int)Irp->CurrentLocation,
-        Irp->Tail.Overlay.CurrentStackLocation);
-
     if ((UCHAR)Irp->CurrentLocation > (UCHAR)(Irp->StackCount + 1)) {
         DbgPrint(
             "FASTFAT: IRP sanity FAIL: CurrentLocation(%u) > StackCount+1(%u). Early-fail to avoid ASSERT.\n",
