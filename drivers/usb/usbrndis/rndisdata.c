@@ -240,9 +240,6 @@ RndisBuildNcmNtbMulti(
     Ndp16->Datagram[DatagramCount].wDatagramIndex = 0;
     Ndp16->Datagram[DatagramCount].wDatagramLength = 0;
 
-    DPRINT1("USBRNDIS: Built NCM NTB with %lu datagrams: seq=%u len=%lu ndp@%lu\n",
-           DatagramCount, Nth16->wSequence, TotalLength, NdpOffset);
-
     return TotalLength;
 }
 
@@ -669,8 +666,6 @@ RndisProcessReceivedPacket(
     PUCHAR EthernetData;
     ULONG EthernetLength;
     ULONG DataOffset;
-
-    DPRINT1("USBRNDIS: Processing received data (%u bytes)\n", Length);
 
     /* Check if paused */
     if (Adapter->Paused)
@@ -1461,8 +1456,6 @@ FailCurrentNbl:
             /* Update stats for all batched datagrams */
             Adapter->TxBytes += TotalDataLength;
 
-            DPRINT1("USBRNDIS: CDC-NCM TX NTB with %lu datagrams from %lu NBLs (%lu bytes total, NTB %lu bytes)\n",
-                   DatagramCount, UniqueNblCount, TotalDataLength, TotalLength);
         }
         else
         {

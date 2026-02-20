@@ -1868,7 +1868,6 @@ RndisRxComplete(
     {
         LONG BudgetRemaining;
 
-        DPRINT1("USBRNDIS: RX complete, %u bytes received\n", TransferLength);
         Adapter->RxHot.RxConsecutiveErrors = 0;  /* Reset error counter on success */
 
         /*
@@ -2041,9 +2040,6 @@ RndisUsbSubmitBulkRead(
     }
     Adapter->RxHot.RxSubmitted = TRUE;
     NdisReleaseSpinLock(&Adapter->RxLock);
-
-    DPRINT1("USBRNDIS: Submitting async bulk read (PipeHandle=%p)\n",
-            Adapter->BulkInEndpoint.PipeHandle);
 
     /* Build the URB */
     Urb = &Adapter->RxHot.RxUrb;
