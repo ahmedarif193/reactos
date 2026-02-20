@@ -222,14 +222,8 @@ NdisMAllocateSharedMemory(
   if (DmaAdapter != NULL)
   {
       /* NDIS 6.x path - use DMA adapter from device extension */
-      DPRINT1("NDIS 6.x shared memory allocation: Length=%lu, DmaAdapter=%p\n",
-                                Length, DmaAdapter);
-
       *VirtualAddress = DmaAdapter->DmaOperations->AllocateCommonBuffer(
           DmaAdapter, Length, PhysicalAddress, Cached);
-
-      DPRINT1("NDIS 6.x AllocateCommonBuffer returned VA=%p PA=0x%I64x\n",
-                                *VirtualAddress, PhysicalAddress->QuadPart);
   }
   else
   {
