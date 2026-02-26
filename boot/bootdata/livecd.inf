@@ -9,7 +9,7 @@ HKLM,"SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\Shell Folders"
 
 ; Default wallpaper
 HKU,".DEFAULT\Control Panel\Desktop","Wallpaper",0x00000000,"%SystemRoot%\Web\Wallpaper\WinlogonSky.jpg"
-HKU,".DEFAULT\Control Panel\Desktop","WallpaperStyle",0x00000000,"6"
+HKU,".DEFAULT\Control Panel\Desktop","WallpaperStyle",0x00000000,"2"
 HKU,".DEFAULT\Control Panel\Desktop","TileWallpaper",0x00000000,"0"
 
 ; Default locale for the keyboard layout
