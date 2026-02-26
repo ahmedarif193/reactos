@@ -1847,6 +1847,116 @@ IntFreeDesktopHeap(IN OUT PDESKTOP Desktop)
 #endif
 }
 
+/*
+ * FIXME: The first desktop paint should display a dedicated logon background
+ * image (e.g. the Windows "Welcome" screen bitmap) rather than the user's
+ * wallpaper. The wallpaper preload below is a temporary workaround to avoid
+ * a solid-color flash on first paint.
+ */
+
+static ULONG
+IntLoadDesktopIntSetting(
+    _In_ PCWSTR pszValueName,
+    _In_ ULONG ulDefaultValue)
+{
+    WCHAR awcBuffer[16];
+    UNICODE_STRING ustrValue;
+    ULONG ulValue = ulDefaultValue;
+
+    if (!RegReadUserSetting(L"Control Panel\\Desktop",
+                            pszValueName,
+                            REG_SZ,
+                            awcBuffer,
+                            sizeof(awcBuffer)))
+    {
+        return ulDefaultValue;
+    }
+
+    RtlInitUnicodeString(&ustrValue, awcBuffer);
+    if (!NT_SUCCESS(RtlUnicodeStringToInteger(&ustrValue, 10, &ulValue)))
+    {
+        return ulDefaultValue;
+    }
+
+    return ulValue;
+}
+
+static VOID
+IntTryLoadWallpaperForDesktopPaint(VOID)
+{
+    UNICODE_STRING ustrNtPath;
+    WCHAR awcNtPath[MAX_PATH];
+    HBITMAP hbmp, hOldBitmap;
+    SURFACE *psurfBmp;
+    ULONG ulTile, ulStyle;
+
+    if (gspv.hbmWallpaper != NULL || gspv.awcWallpaper[0] == L'\0')
+    {
+        return;
+    }
+
+    ustrNtPath.Buffer = awcNtPath;
+    ustrNtPath.MaximumLength = sizeof(awcNtPath);
+    ustrNtPath.Length = 0;
+
+    if (!W32kDosPathNameToNtPathName(gspv.awcWallpaper, &ustrNtPath))
+    {
+        WARN("IntTryLoadWallpaperForDesktopPaint: failed to build NT path for '%ls'\n",
+                gspv.awcWallpaper);
+        return;
+    }
+
+    hbmp = UserLoadImage(ustrNtPath.Buffer);
+    if (!hbmp)
+    {
+        WARN("IntTryLoadWallpaperForDesktopPaint: UserLoadImage failed for '%ls' (err=%lu)\n",
+                ustrNtPath.Buffer, EngGetLastError());
+        return;
+    }
+
+    psurfBmp = SURFACE_ShareLockSurface(hbmp);
+    if (!psurfBmp)
+    {
+        GreDeleteObject(hbmp);
+        return;
+    }
+
+    gspv.cxWallpaper = psurfBmp->SurfObj.sizlBitmap.cx;
+    gspv.cyWallpaper = psurfBmp->SurfObj.sizlBitmap.cy;
+    gspv.WallpaperMode = wmCenter;
+    SURFACE_ShareUnlockSurface(psurfBmp);
+
+    GreSetObjectOwner(hbmp, GDI_OBJ_HMGR_PUBLIC);
+
+    ulTile = IntLoadDesktopIntSetting(L"TileWallpaper", 0);
+    ulStyle = IntLoadDesktopIntSetting(L"WallpaperStyle", 0);
+
+    if (ulTile && !ulStyle)
+    {
+        gspv.WallpaperMode = wmTile;
+    }
+    else if (!ulTile && ulStyle)
+    {
+        if (ulStyle == 2)
+            gspv.WallpaperMode = wmStretch;
+        else if (ulStyle == 6)
+            gspv.WallpaperMode = wmFit;
+        else if (ulStyle == 10)
+            gspv.WallpaperMode = wmFill;
+    }
+
+    hOldBitmap = gspv.hbmWallpaper;
+    if (hOldBitmap != NULL)
+    {
+        GreSetObjectOwner(hOldBitmap, GDI_OBJ_HMGR_POWNED);
+        GreDeleteObject(hOldBitmap);
+    }
+
+    gspv.hbmWallpaper = hbmp;
+    TRACE("IntTryLoadWallpaperForDesktopPaint: loaded '%ls' (%ldx%ld), mode=%u\n",
+            gspv.awcWallpaper, gspv.cxWallpaper, gspv.cyWallpaper, gspv.WallpaperMode);
+}
+
 BOOL FASTCALL
 IntPaintDesktop(HDC hDC)
 {
@@ -1874,6 +1984,15 @@ IntPaintDesktop(HDC hDC)
     if (!InSafeMode)
     {
         DesktopBrush = (HBRUSH)WndDesktop->pcls->hbrBackground;
+
+        /*
+         * If an earlier wallpaper set happened before a display PDEV was ready,
+         * retry materializing the bitmap now during the first desktop paint.
+         */
+        if (gspv.hbmWallpaper == NULL && gspv.awcWallpaper[0] != L'\0')
+        {
+            IntTryLoadWallpaperForDesktopPaint();
+        }
 
         /*
          * Paint desktop background
