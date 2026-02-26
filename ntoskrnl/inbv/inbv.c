@@ -15,6 +15,7 @@
 #include <reactos/arc/arc.h>
 #include <drivers/bootvid/bootvid.h>
 #include "inbv/logo.h"
+#include "inbv/inbvgop.h"
 
 /* GLOBALS *******************************************************************/
 
@@ -529,6 +530,9 @@ NTAPI
 InbvNotifyDisplayOwnershipLost(
     _In_ INBV_RESET_DISPLAY_PARAMETERS Callback)
 {
+    /* Stop the GOP spinner before releasing display ownership */
+    InbvGopSpinnerStop();
+
     /* Check if we're installed */
     if (InbvBootDriverInstalled)
     {

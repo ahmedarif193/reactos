@@ -6,12 +6,15 @@
  */
 
 #include <ntoskrnl.h>
+#define NDEBUG
+#include <debug.h>
 #include <reactos/arc/arc.h>
 #include <drivers/bootvid/bootvid.h>
 #include "logo.h"
 #include "resource.h"
 #include "inbvgop.h"
 #include "reactos_gop_logo.h"
+#include "uefi_center_mark.h"
 
 extern BOOLEAN ShowProgressBar;
 
@@ -36,6 +39,50 @@ typedef struct tagBITMAPINFOHEADER
 #ifndef BI_RLE4
 #define BI_RLE4 2
 #endif
+#define INBV_BMP_MAGIC              0x4D42
+#define INBV_WORDMARK_SCALE         0.40f   /* wordmark drawn at 40% of source size */
+#define INBV_WORDMARK_BOTTOM_MARGIN 32      /* pixels from screen bottom edge */
+#define INBV_CENTERMARK_SCALE       0.05f   /* center mark drawn at 5% of source size */
+#define INBV_CENTERMARK_VPOS        0.625f  /* vertical: 62.5% into lower half of screen */
+#define INBV_SPINNER_STEPS          72      /* rotation steps per revolution (5 deg each) */
+#define INBV_SPINNER_FRAME_MS       33      /* ~30 fps */
+#define INBV_PI                     3.14159265f
+
+typedef struct _INBV_GOP_RECT
+{
+    ULONG X;
+    ULONG Y;
+    ULONG Width;
+    ULONG Height;
+} INBV_GOP_RECT, *PINBV_GOP_RECT;
+
+/* ---- Center-mark spinner state (persists beyond INIT) ---- */
+
+typedef struct _INBV_SPINNER_STATE
+{
+    const UCHAR *Bits;
+    ULONG SrcWidth, SrcHeight, SrcStride, BytesPerPixel;
+    BOOLEAN TopDown;
+    float SrcCX, SrcCY;
+    float InvScale;
+
+    LONG  DestCX, DestCY;
+    ULONG BBoxHalf;           /* half-side of bounding square */
+
+    ULONG RedMask, GreenMask, BlueMask;
+    ULONG RedShift, GreenShift, BlueShift;
+    ULONG RedMax, GreenMax, BlueMax;
+} INBV_SPINNER_STATE;
+
+static INBV_SPINNER_STATE g_Spinner;
+static float   g_SinTable[INBV_SPINNER_STEPS];
+static float   g_CosTable[INBV_SPINNER_STEPS];
+static KEVENT  g_SpinnerStop;
+static KEVENT  g_SpinnerDone;
+static BOOLEAN g_SpinnerReady = FALSE;
+
+extern VOID NTAPI InbvAcquireLock(VOID);
+extern VOID NTAPI InbvReleaseLock(VOID);
 
 CODE_SEG("INIT")
 static
@@ -89,19 +136,358 @@ static ULONG InbvPackColor(ULONG RedMask, ULONG GreenMask, ULONG BlueMask,
            (BlueMask  ? ((B << BlueShift)  & BlueMask)  : 0);
 }
 
+static USHORT
+InbvReadU16(
+    _In_reads_(2) const UCHAR *Ptr)
+{
+    return (USHORT)(Ptr[0] | ((USHORT)Ptr[1] << 8));
+}
+
+static ULONG
+InbvReadU32(
+    _In_reads_(4) const UCHAR *Ptr)
+{
+    return ((ULONG)Ptr[0]) |
+           ((ULONG)Ptr[1] << 8) |
+           ((ULONG)Ptr[2] << 16) |
+           ((ULONG)Ptr[3] << 24);
+}
+
+/*
+ * Bhaskara I sine approximation (max error < 0.2%).
+ * Only uses basic float arithmetic -- no libm needed.
+ */
+static float
+InbvApproxSin(float x)
+{
+    float sign = 1.0f, xpi;
+    while (x < 0.0f) x += 2.0f * INBV_PI;
+    while (x >= 2.0f * INBV_PI) x -= 2.0f * INBV_PI;
+    if (x >= INBV_PI) { x -= INBV_PI; sign = -1.0f; }
+    if (x > INBV_PI / 2.0f) x = INBV_PI - x;
+    xpi = x * (INBV_PI - x);
+    return sign * (16.0f * xpi) / (5.0f * INBV_PI * INBV_PI - 4.0f * xpi);
+}
+
 static
 BOOLEAN
-InbvGopDrawWordmark(
+InbvGopComputeWordmarkRect(
     _In_ ULONG ScreenWidth,
-    _In_ ULONG ScreenHeight)
+    _In_ ULONG ScreenHeight,
+    _Out_ PINBV_GOP_RECT Rect)
 {
-    const ULONG BottomMargin = 32;
     const ULONG BitmapFileHeaderSize = 14; /* sizeof(BITMAPFILEHEADER) */
     PUCHAR Bitmap = (PUCHAR)g_ReactOSGopLogoBmp + BitmapFileHeaderSize;
     PBITMAPINFOHEADER Header;
     ULONG SrcWidth, SrcHeight;
     ULONG DstWidth, DstHeight;
-    ULONG DestX, DestY;
+
+    if (!Rect)
+        return FALSE;
+
+    Header = (PBITMAPINFOHEADER)Bitmap;
+    if (!Header || Header->biPlanes != 1 || Header->biBitCount != 4)
+        return FALSE;
+
+    if (Header->biCompression != BI_RGB && Header->biCompression != BI_RLE4)
+        return FALSE;
+
+    SrcWidth = (ULONG)Header->biWidth;
+    SrcHeight = (Header->biHeight < 0) ? (ULONG)(-Header->biHeight) : (ULONG)Header->biHeight;
+    if (!SrcWidth || !SrcHeight)
+        return FALSE;
+
+    DstWidth = (ULONG)(SrcWidth * INBV_WORDMARK_SCALE + 0.5f);
+    if (DstWidth == 0)
+        DstWidth = 1;
+
+    DstHeight = (ULONG)(SrcHeight * INBV_WORDMARK_SCALE + 0.5f);
+    if (DstHeight == 0)
+        DstHeight = 1;
+
+    Rect->Width = DstWidth;
+    Rect->Height = DstHeight;
+    Rect->X = (ScreenWidth > DstWidth) ? ((ScreenWidth - DstWidth) / 2) : 0;
+    Rect->Y = (ScreenHeight > DstHeight + INBV_WORDMARK_BOTTOM_MARGIN) ?
+              (ScreenHeight - DstHeight - INBV_WORDMARK_BOTTOM_MARGIN) :
+              0;
+    return TRUE;
+}
+
+/*
+ * Draw one rotated frame of the center mark.
+ * Float math runs at PASSIVE_LEVEL (outside lock); only the blit is locked.
+ */
+static VOID
+InbvGopSpinnerDrawFrame(ULONG Step)
+{
+    const INBV_SPINNER_STATE *S = &g_Spinner;
+    float cosA = g_CosTable[Step];
+    float sinA = g_SinTable[Step];
+    static ULONG LineBuf[2048];
+    ULONG fullW = S->BBoxHalf * 2;
+    ULONG x0 = ((ULONG)S->DestCX > S->BBoxHalf) ? ((ULONG)S->DestCX - S->BBoxHalf) : 0;
+    LONG  ry;
+
+    if (fullW > RTL_NUMBER_OF(LineBuf))
+        fullW = RTL_NUMBER_OF(LineBuf);
+
+    for (ry = -(LONG)S->BBoxHalf; ry < (LONG)S->BBoxHalf; ry++)
+    {
+        LONG screenY = S->DestCY + ry;
+        LONG rx;
+        if (screenY < 0)
+            continue;
+
+        /* Zero the row — pixels outside the rotated source stay black */
+        RtlZeroMemory(LineBuf, fullW * sizeof(ULONG));
+
+        for (rx = -(LONG)S->BBoxHalf; rx < (LONG)S->BBoxHalf; rx++)
+        {
+            float srcFX = S->SrcCX + ((float)rx * cosA + (float)ry * sinA) * S->InvScale;
+            float srcFY = S->SrcCY + (-(float)rx * sinA + (float)ry * cosA) * S->InvScale;
+            LONG sx = (LONG)srcFX;
+            LONG sy = (LONG)srcFY;
+            ULONG effRow, idx;
+            const UCHAR *Pixel;
+            UCHAR b, g, r, a;
+
+            if (sx < 0 || sy < 0 ||
+                (ULONG)sx >= S->SrcWidth || (ULONG)sy >= S->SrcHeight)
+                continue;
+
+            effRow = S->TopDown ? (ULONG)sy : (S->SrcHeight - 1 - (ULONG)sy);
+            Pixel = S->Bits + (SIZE_T)effRow * S->SrcStride +
+                    (ULONG)sx * S->BytesPerPixel;
+            b = Pixel[0]; g = Pixel[1]; r = Pixel[2];
+            a = (S->BytesPerPixel == 4) ? Pixel[3] : 0xFF;
+            if (a == 0)
+                continue;
+
+            idx = (ULONG)(rx + (LONG)S->BBoxHalf);
+            if (idx < fullW)
+                LineBuf[idx] = InbvPackColor(S->RedMask, S->GreenMask,
+                                             S->BlueMask, S->RedShift,
+                                             S->GreenShift, S->BlueShift,
+                                             S->RedMax, S->GreenMax,
+                                             S->BlueMax, r, g, b);
+        }
+
+        InbvAcquireLock();
+        VidBufferToScreenBlt((PUCHAR)LineBuf, x0, (ULONG)screenY,
+                             fullW, 1, fullW * sizeof(ULONG));
+        InbvReleaseLock();
+    }
+}
+
+static VOID NTAPI
+InbvGopSpinnerThread(PVOID Context)
+{
+    ULONG Frame = 0;
+    LARGE_INTEGER Delay;
+
+    UNREFERENCED_PARAMETER(Context);
+    Delay.QuadPart = -(LONGLONG)(INBV_SPINNER_FRAME_MS * 10000LL);
+
+    while (KeReadStateEvent(&g_SpinnerStop) == 0)
+    {
+        InbvGopSpinnerDrawFrame(Frame);
+        Frame = (Frame + 1) % INBV_SPINNER_STEPS;
+        KeDelayExecutionThread(KernelMode, FALSE, &Delay);
+    }
+
+    /* Erase mark area on exit */
+    {
+        const INBV_SPINNER_STATE *S = &g_Spinner;
+        static ULONG ZeroBuf[2048];
+        ULONG fullW = S->BBoxHalf * 2;
+        ULONG x0 = ((ULONG)S->DestCX > S->BBoxHalf) ?
+                    ((ULONG)S->DestCX - S->BBoxHalf) : 0;
+        ULONG y0 = ((ULONG)S->DestCY > S->BBoxHalf) ?
+                    ((ULONG)S->DestCY - S->BBoxHalf) : 0;
+        ULONG row;
+
+        if (fullW > RTL_NUMBER_OF(ZeroBuf))
+            fullW = RTL_NUMBER_OF(ZeroBuf);
+        RtlZeroMemory(ZeroBuf, fullW * sizeof(ULONG));
+
+        InbvAcquireLock();
+        for (row = 0; row < fullW; row++)
+            VidBufferToScreenBlt((PUCHAR)ZeroBuf, x0, y0 + row,
+                                 fullW, 1, fullW * sizeof(ULONG));
+        InbvReleaseLock();
+    }
+
+    KeSetEvent(&g_SpinnerDone, IO_NO_INCREMENT, FALSE);
+    PsTerminateSystemThread(STATUS_SUCCESS);
+}
+
+CODE_SEG("INIT")
+static BOOLEAN
+InbvGopSpinnerSetup(
+    _In_ ULONG ScreenWidth,
+    _In_ ULONG ScreenHeight)
+{
+    const UCHAR *Base = g_UefiCenterMarkBmp;
+    const ULONG BitmapSize = g_UefiCenterMarkBmpSize;
+    BITMAPINFOHEADER Header;
+    INBV_SPINNER_STATE *S = &g_Spinner;
+    ULONG DstWidth, DstHeight, HalfHeight, DestX, DestY, i;
+    LOADER_PARAMETER_FRAMEBUFFER FbInfo;
+    USHORT bfType;
+    ULONG bfOffBits;
+
+    if (!Base || BitmapSize < (14 + sizeof(BITMAPINFOHEADER)))
+        return FALSE;
+
+    bfType = InbvReadU16(Base);
+    bfOffBits = InbvReadU32(Base + 10);
+    if (bfType != INBV_BMP_MAGIC || bfOffBits >= BitmapSize)
+        return FALSE;
+
+    RtlCopyMemory(&Header, Base + 14, sizeof(Header));
+    if (Header.biSize < sizeof(BITMAPINFOHEADER) ||
+        Header.biPlanes != 1 ||
+        Header.biCompression != BI_RGB ||
+        (Header.biBitCount != 24 && Header.biBitCount != 32))
+        return FALSE;
+
+    if (Header.biWidth <= 0 || Header.biHeight == 0)
+        return FALSE;
+
+    S->SrcWidth      = (ULONG)Header.biWidth;
+    S->SrcHeight     = (Header.biHeight < 0) ? (ULONG)(-Header.biHeight)
+                                              : (ULONG)Header.biHeight;
+    S->TopDown       = (Header.biHeight < 0);
+    S->BytesPerPixel = Header.biBitCount / 8;
+    S->SrcStride     = (ULONG)((((ULONGLONG)S->SrcWidth * Header.biBitCount
+                                 + 31) & ~31ULL) >> 3);
+
+    if ((ULONGLONG)S->SrcStride * S->SrcHeight >
+        (ULONGLONG)(BitmapSize - bfOffBits))
+        return FALSE;
+
+    S->Bits     = Base + bfOffBits;
+    S->SrcCX    = (float)S->SrcWidth  / 2.0f;
+    S->SrcCY    = (float)S->SrcHeight / 2.0f;
+    S->InvScale = 1.0f / INBV_CENTERMARK_SCALE;
+
+    /* Destination size and position */
+    DstWidth  = (ULONG)(S->SrcWidth  * INBV_CENTERMARK_SCALE + 0.5f);
+    DstHeight = (ULONG)(S->SrcHeight * INBV_CENTERMARK_SCALE + 0.5f);
+    if (DstWidth  == 0) DstWidth  = 1;
+    if (DstHeight == 0) DstHeight = 1;
+    if (DstWidth  > ScreenWidth)  DstWidth  = ScreenWidth;
+    if (DstHeight > ScreenHeight) DstHeight = ScreenHeight;
+
+    HalfHeight = ScreenHeight / 2;
+    DestX = (ScreenWidth > DstWidth) ? ((ScreenWidth - DstWidth) / 2) : 0;
+    DestY = (ULONG)(HalfHeight + (ScreenHeight - HalfHeight) *
+                    INBV_CENTERMARK_VPOS);
+    if (DestY > DstHeight / 2)
+        DestY -= DstHeight / 2;
+    else
+        DestY = HalfHeight;
+    if (DestY + DstHeight > ScreenHeight)
+        DestY = ScreenHeight - DstHeight;
+
+    S->DestCX   = (LONG)(DestX + DstWidth  / 2);
+    S->DestCY   = (LONG)(DestY + DstHeight / 2);
+
+    /* Bounding square for any rotation angle: diagonal / 2 + margin */
+    {
+        /* Integer sqrt via Newton iteration (no sqrtf in kernel) */
+        ULONG d = DstWidth * DstWidth + DstHeight * DstHeight, s;
+        if (d > 0)
+        {
+            s = d;
+            while ((ULONGLONG)s * s > d)
+                s = (s + d / s) / 2;
+            S->BBoxHalf = s / 2 + 2;
+        }
+        else
+        {
+            S->BBoxHalf = 2;
+        }
+    }
+
+    /* Cache framebuffer color info */
+    if (!InbvGopQueryInfo(&FbInfo))
+        return FALSE;
+
+    S->RedMask   = FbInfo.RedMask;   S->GreenMask = FbInfo.GreenMask;
+    S->BlueMask  = FbInfo.BlueMask;
+    S->RedShift   = InbvMaskShift(S->RedMask);
+    S->GreenShift = InbvMaskShift(S->GreenMask);
+    S->BlueShift  = InbvMaskShift(S->BlueMask);
+    S->RedMax     = InbvMaskMax(S->RedMask   >> S->RedShift);
+    S->GreenMax   = InbvMaskMax(S->GreenMask >> S->GreenShift);
+    S->BlueMax    = InbvMaskMax(S->BlueMask  >> S->BlueShift);
+
+    /* Build sin/cos lookup table */
+    for (i = 0; i < INBV_SPINNER_STEPS; i++)
+    {
+        float angle = (float)i * 2.0f * INBV_PI / (float)INBV_SPINNER_STEPS;
+        g_SinTable[i] = InbvApproxSin(angle);
+        g_CosTable[i] = InbvApproxSin(angle + INBV_PI / 2.0f);
+    }
+
+    return TRUE;
+}
+
+CODE_SEG("INIT")
+static VOID
+InbvGopSpinnerStart(
+    _In_ ULONG ScreenWidth,
+    _In_ ULONG ScreenHeight)
+{
+    HANDLE Thread;
+    OBJECT_ATTRIBUTES ObjAttr;
+
+    if (!InbvGopSpinnerSetup(ScreenWidth, ScreenHeight))
+        return;
+
+    KeInitializeEvent(&g_SpinnerStop, NotificationEvent, FALSE);
+    KeInitializeEvent(&g_SpinnerDone, NotificationEvent, FALSE);
+    g_SpinnerReady = TRUE;
+
+    InitializeObjectAttributes(&ObjAttr, NULL, OBJ_KERNEL_HANDLE, NULL, NULL);
+    if (NT_SUCCESS(PsCreateSystemThread(&Thread, 0, &ObjAttr, NULL, NULL,
+                                        InbvGopSpinnerThread, NULL)))
+    {
+        ZwClose(Thread);
+    }
+    else
+    {
+        g_SpinnerReady = FALSE;
+    }
+}
+
+VOID
+NTAPI
+InbvGopSpinnerStop(VOID)
+{
+    if (!g_SpinnerReady)
+        return;
+
+    KeSetEvent(&g_SpinnerStop, IO_NO_INCREMENT, FALSE);
+    KeWaitForSingleObject(&g_SpinnerDone, Executive, KernelMode, FALSE, NULL);
+    g_SpinnerReady = FALSE;
+}
+
+static
+BOOLEAN
+InbvGopDrawWordmark(
+    _In_ ULONG ScreenWidth,
+    _In_ ULONG ScreenHeight,
+    _In_opt_ const INBV_GOP_RECT *WordmarkRectOverride)
+{
+    const ULONG BitmapFileHeaderSize = 14; /* sizeof(BITMAPFILEHEADER) */
+    PUCHAR Bitmap = (PUCHAR)g_ReactOSGopLogoBmp + BitmapFileHeaderSize;
+    PBITMAPINFOHEADER Header;
+    ULONG SrcWidth, SrcHeight;
+    INBV_GOP_RECT WordmarkRect;
+    ULONG DstWidth, DstHeight, DestX, DestY;
     BOOLEAN TopDown = FALSE;
 
     LOADER_PARAMETER_FRAMEBUFFER FbInfo;
@@ -122,19 +508,20 @@ InbvGopDrawWordmark(
     if (!SrcWidth || !SrcHeight)
         return FALSE;
 
-    /* Generic downscale: set desired percentage here */
-    const ULONG SCALE_NUM = 40;   /* percent numerator */
-    const ULONG SCALE_DEN = 100;  /* percent denominator */
-    DstWidth = (ULONG)(((ULONGLONG)SrcWidth * SCALE_NUM + (SCALE_DEN - 1)) / SCALE_DEN);
-    if (DstWidth == 0) DstWidth = 1;
-    DstHeight = (ULONG)(((ULONGLONG)SrcHeight * SCALE_NUM + (SCALE_DEN - 1)) / SCALE_DEN);
-    if (DstHeight == 0) DstHeight = 1;
-
-    DestX = (ScreenWidth > DstWidth) ? (ScreenWidth - DstWidth) / 2 : 0;
-    if (ScreenHeight > DstHeight + BottomMargin)
-        DestY = ScreenHeight - DstHeight - BottomMargin;
+    if (WordmarkRectOverride)
+    {
+        WordmarkRect = *WordmarkRectOverride;
+    }
     else
-        DestY = 0;
+    {
+        if (!InbvGopComputeWordmarkRect(ScreenWidth, ScreenHeight, &WordmarkRect))
+            return FALSE;
+    }
+
+    DstWidth = WordmarkRect.Width;
+    DstHeight = WordmarkRect.Height;
+    DestX = WordmarkRect.X;
+    DestY = WordmarkRect.Y;
 
     if (!InbvGopQueryInfo(&FbInfo))
         return FALSE;
@@ -172,7 +559,7 @@ InbvGopDrawWordmark(
     for (ULONG dy = 0; dy < DstHeight; dy++)
     {
         ULONG sy = (ULONG)min((ULONGLONG)SrcHeight - 1,
-                              ((ULONGLONG)dy * SCALE_DEN) / SCALE_NUM);
+                              (ULONGLONG)(dy / INBV_WORDMARK_SCALE));
         ULONG effRow = TopDown ? sy : (SrcHeight - 1 - sy);
         PUCHAR Row = Bits + effRow * SrcDelta;
 
@@ -186,7 +573,7 @@ InbvGopDrawWordmark(
             {
                 /* Map destination x back to source and do a simple 2x2 box filter for smoothing */
                 ULONG sx0 = (ULONG)min((ULONGLONG)SrcWidth - 1,
-                                       ((ULONGLONG)(produced + dx) * SCALE_DEN) / SCALE_NUM);
+                                       (ULONGLONG)((produced + dx) / INBV_WORDMARK_SCALE));
                 ULONG sy0 = sy;
                 ULONG sx1 = min(sx0 + 1, SrcWidth  - 1);
                 ULONG sy1 = min(sy0 + 1, SrcHeight - 1);
@@ -254,6 +641,7 @@ InbvGopHandleBootBitmap(
     LOADER_PARAMETER_FRAMEBUFFER FbInfo;
     ULONG Width, Height;
     BOOLEAN BgrtActive;
+    BOOLEAN WordmarkDrawn;
 
     if (!InbvGopQueryInfo(&FbInfo))
         return FALSE;
@@ -278,7 +666,10 @@ InbvGopHandleBootBitmap(
     InbvSetTextColor(BV_COLOR_WHITE);
     /* Do not clear the framebuffer here: preserve any firmware BGRT */
 
-    if (!InbvGopDrawWordmark(Width, Height))
+    InbvGopSpinnerStart(Width, Height);
+    WordmarkDrawn = InbvGopDrawWordmark(Width, Height, NULL);
+
+    if (!WordmarkDrawn)
     {
         static const CHAR LoadingMsg[] = "ReactOS";
         const ULONG CharW = 8;

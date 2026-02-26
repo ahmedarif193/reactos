@@ -26,6 +26,10 @@ NTAPI
 InbvQueryBgrtInfo(
     _Out_opt_ PLOADER_PARAMETER_BGRT BgrtInfo);
 
+VOID
+NTAPI
+InbvGopSpinnerStop(VOID);
+
 #ifdef __cplusplus
 }
 #endif
