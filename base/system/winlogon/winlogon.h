@@ -415,6 +415,9 @@ PlaySoundRoutine(IN LPCWSTR FileName,
                  IN UINT Flags);
 
 BOOL
+WlPreloadWallpaper(VOID);
+
+BOOL
 DisplayStatusMessage(IN PWLSESSION Session,
                      IN HDESK hDesktop,
                      IN UINT ResourceId);

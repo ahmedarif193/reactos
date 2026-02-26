@@ -1075,8 +1075,16 @@ CreateWindowStationAndDesktops(
     /*
      * Switch to winlogon desktop
     */
-    if (!SetThreadDesktop(Session->WinlogonDesktop) ||
-        !SwitchDesktop(Session->WinlogonDesktop))
+    if (!SetThreadDesktop(Session->WinlogonDesktop))
+    {
+        ERR("WL: Cannot attach to Winlogon desktop (%lu)\n", GetLastError());
+        goto cleanup;
+    }
+
+    /* Preload once before first desktop switch and rely on lazy materialization if needed. */
+    WlPreloadWallpaper();
+
+    if (!SwitchDesktop(Session->WinlogonDesktop))
     {
         ERR("WL: Cannot switch to Winlogon desktop (%lu)\n", GetLastError());
         goto cleanup;

@@ -5,7 +5,7 @@
  * PURPOSE:         Logon
  * PROGRAMMERS:     Thomas Weidenmueller (w3seek@users.sourceforge.net)
  *                  Filip Navara
- *                  Hervé Poussineau (hpoussin@reactos.org)
+ *                  Hervï¿½ Poussineau (hpoussin@reactos.org)
  */
 
 /* INCLUDES *****************************************************************/
@@ -441,6 +441,68 @@ GinaLoadFailedWindowProc(
         }
     }
 
+    return FALSE;
+}
+
+
+/*
+ * Pre-load the desktop wallpaper before the first visible desktop paint.
+ * Called from CreateWindowStationAndDesktops() after SetThreadDesktop() and
+ * before SwitchDesktop(), so the wallpaper is visible from the very first
+ * frame instead of solid blue.
+ */
+BOOL
+WlPreloadWallpaper(VOID)
+{
+    HKEY hKey;
+    DWORD Type = 0, Size;
+    WCHAR szWallpaper[MAX_PATH + 1];
+    LONG rc;
+
+    szWallpaper[0] = L'\0';
+
+    rc = RegOpenKeyExW(HKEY_CURRENT_USER, L"Control Panel\\Desktop",
+                       0, KEY_QUERY_VALUE, &hKey);
+    if (rc == ERROR_SUCCESS)
+    {
+        Size = sizeof(szWallpaper);
+        rc = RegQueryValueExW(hKey, L"Wallpaper", NULL, &Type,
+                              (LPBYTE)szWallpaper, &Size);
+        RegCloseKey(hKey);
+    }
+
+    if (rc != ERROR_SUCCESS || Type != REG_SZ || szWallpaper[0] == L'\0')
+    {
+        /* Winlogon runs as LocalSystem: resolve directly from .DEFAULT as fallback. */
+        rc = RegOpenKeyExW(HKEY_USERS, L".DEFAULT\\Control Panel\\Desktop",
+                           0, KEY_QUERY_VALUE, &hKey);
+        if (rc == ERROR_SUCCESS)
+        {
+            Size = sizeof(szWallpaper);
+            rc = RegQueryValueExW(hKey, L"Wallpaper", NULL, &Type,
+                                  (LPBYTE)szWallpaper, &Size);
+            RegCloseKey(hKey);
+        }
+    }
+
+    if (rc != ERROR_SUCCESS || Type != REG_SZ || szWallpaper[0] == L'\0')
+    {
+        /* Last-resort fallback for LiveCD branding. */
+        StringCchCopyW(szWallpaper, ARRAYSIZE(szWallpaper),
+                       L"%SystemRoot%\\Web\\Wallpaper\\WinlogonSky.jpg");
+    }
+
+    ExpandEnvironmentStringsW(szWallpaper, szWallpaper, ARRAYSIZE(szWallpaper));
+    TRACE("WL: WlPreloadWallpaper: applying '%S'\n", szWallpaper);
+
+    /* No SPIF_UPDATEINIFILE / SPIF_SENDCHANGE: just set the in-memory bitmap.
+     * Userinit will do the full persist+broadcast later. */
+    if (SystemParametersInfoW(SPI_SETDESKWALLPAPER, 0, szWallpaper, 0))
+    {
+        return TRUE;
+    }
+
+    WARN("WL: WlPreloadWallpaper: SPI_SETDESKWALLPAPER failed (%lu)\n", GetLastError());
     return FALSE;
 }
 

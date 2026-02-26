@@ -21,7 +21,7 @@
  * PROJECT:     ReactOS Userinit Logon Application
  * FILE:        base/system/userinit/userinit.c
  * PROGRAMMERS: Thomas Weidenmueller (w3seek@users.sourceforge.net)
- *              Hervé Poussineau (hpoussin@reactos.org)
+ *              Hervï¿½ Poussineau (hpoussin@reactos.org)
  */
 
 #include "userinit.h"
@@ -429,29 +429,25 @@ SetUserWallpaper(VOID)
     WCHAR szWallpaper[MAX_PATH + 1];
     LONG rc;
 
-    TRACE("()\n");
+    TRACE("SetUserWallpaper()\n");
 
     rc = RegOpenKeyExW(HKEY_CURRENT_USER, REGSTR_PATH_DESKTOP,
                        0, KEY_QUERY_VALUE, &hKey);
     if (rc != ERROR_SUCCESS)
     {
-        WARN("RegOpenKeyEx() failed with error %lu\n", rc);
+        WARN("SetUserWallpaper: RegOpenKeyEx failed, error %lu\n", rc);
         return;
     }
 
     Size = sizeof(szWallpaper);
-    rc = RegQueryValueExW(hKey,
-                          L"Wallpaper",
-                          NULL,
-                          &Type,
-                          (LPBYTE)szWallpaper,
-                          &Size);
+    rc = RegQueryValueExW(hKey, L"Wallpaper", NULL, &Type,
+                          (LPBYTE)szWallpaper, &Size);
     RegCloseKey(hKey);
 
     if (rc == ERROR_SUCCESS && Type == REG_SZ)
     {
         ExpandEnvironmentStringsW(szWallpaper, szWallpaper, ARRAYSIZE(szWallpaper));
-        TRACE("Using wallpaper %s\n", debugstr_w(szWallpaper));
+        TRACE("SetUserWallpaper: using '%S'\n", szWallpaper);
 
         /* Load and change the wallpaper */
         SystemParametersInfoW(SPI_SETDESKWALLPAPER, 0, szWallpaper, SPIF_SENDCHANGE);
@@ -459,7 +455,7 @@ SetUserWallpaper(VOID)
     else
     {
         /* Remove the wallpaper */
-        TRACE("No wallpaper set in registry (error %lu)\n", rc);
+        TRACE("SetUserWallpaper: no wallpaper set in registry (error %lu)\n", rc);
         SystemParametersInfoW(SPI_SETDESKWALLPAPER, 0, NULL, SPIF_SENDCHANGE);
     }
 }
