@@ -12,6 +12,5 @@ UnattendSetupEnabled = no
 LocaleID = 409
 
 [Shell]
-DefaultThemesOff = no
-CustomDefaultThemeFile = "%WINDIR%\Resources\Themes\Mizu\mizu.msstyles"
+DefaultThemesOff = yes
 
