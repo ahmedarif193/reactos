@@ -32,17 +32,6 @@ static PHPET_DESCRIPTION_TABLE HalpHpetTable = NULL;
 /* PRIVATE FUNCTIONS *********************************************************/
 
 /**
- * @brief Read a 32-bit HPET register
- */
-FORCEINLINE
-ULONG
-HalpHpetRead32(
-    _In_ ULONG Offset)
-{
-    return READ_REGISTER_ULONG((PULONG)((PUCHAR)HalpHpetBase + Offset));
-}
-
-/**
  * @brief Read a 64-bit HPET register
  */
 FORCEINLINE
@@ -67,18 +56,6 @@ HalpHpetRead64(
 
     Value = ((ULONGLONG)High2 << 32) | Low;
     return Value;
-}
-
-/**
- * @brief Write a 32-bit HPET register
- */
-FORCEINLINE
-VOID
-HalpHpetWrite32(
-    _In_ ULONG Offset,
-    _In_ ULONG Value)
-{
-    WRITE_REGISTER_ULONG((PULONG)((PUCHAR)HalpHpetBase + Offset), Value);
 }
 
 /**
