@@ -75,8 +75,13 @@ typedef struct _HARDWARE_PTE
     ULONG64 CopyOnWrite:1;
     ULONG64 Prototype:1;
     ULONG64 reserved0:1;
-    ULONG64 PageFrameNumber:28;
-    ULONG64 reserved1:12;
+    /*
+     * AMD64 hardware PTEs always encode a high-width PFN field.
+     * Do not shrink this based on NTDDI, otherwise high MMIO BARs
+     * (for example 64-bit PCI BARs above 1TB) get truncated.
+     */
+    ULONG64 PageFrameNumber:36;
+    ULONG64 reserved1:4;
     ULONG64 SoftwareWsIndex:11;
     ULONG64 NoExecute:1;
 } HARDWARE_PTE, *PHARDWARE_PTE;
@@ -103,13 +108,8 @@ typedef struct _MMPTE_TRANSITION
     ULONG64 Protection:5;
     ULONG64 Prototype:1;
     ULONG64 Transition:1;
-#if (NTDDI_VERSION >= NTDDI_LONGHORN)
     ULONG64 PageFrameNumber:36;
     ULONG64 Unused:16;
-#else
-    ULONG64 PageFrameNumber:28;
-    ULONG64 Unused:24;
-#endif
 } MMPTE_TRANSITION;
 
 typedef struct _MMPTE_PROTOTYPE
@@ -176,8 +176,8 @@ typedef struct _MMPTE_HARDWARE
 #else
     ULONG64 reserved0:1;
 #endif
-    ULONG64 PageFrameNumber:28;
-    ULONG64 reserved1:12;
+    ULONG64 PageFrameNumber:36;
+    ULONG64 reserved1:4;
 #endif
     ULONG64 SoftwareWsIndex:11;
     ULONG64 NoExecute:1;
@@ -199,13 +199,8 @@ typedef struct _MMPTE_HARDWARE_LARGEPAGE
     ULONG64 reserved0:1;
     ULONG64 PAT:1;
     ULONG64 reserved1:8;
-#if (NTDDI_VERSION >= NTDDI_LONGHORN)
     ULONG64 PageFrameNumber:27;
     ULONG64 reserved2:16;
-#else
-    ULONG64 PageFrameNumber:19;
-    ULONG64 reserved2:24;
-#endif
 } MMPTE_HARDWARE_LARGEPAGE, *PMMPTE_HARDWARE_LARGEPAGE;
 
 typedef struct _MMPTE
