@@ -917,84 +917,73 @@ UefiSetupBlockDevices(VOID)
         }
         if (bio->Media->LogicalPartition == FALSE)
         {
+            ULONG ArcDiskNumber = BlockDeviceIndex;
+
             TRACE("Found root of a HDD\n");
+            InternalUefiDisk[ArcDiskNumber].ArcDriveNumber = ArcDiskNumber;
+            InternalUefiDisk[ArcDiskNumber].UefiRootNumber = i;
             PcBiosDiskCount++;
-            InternalUefiDisk[BlockDeviceIndex].ArcDriveNumber = BlockDeviceIndex;
-            InternalUefiDisk[BlockDeviceIndex].UefiRootNumber = i;
-            GetHarddiskInformation(BlockDeviceIndex + FIRST_BIOS_DISK);
+            GetHarddiskInformation(ArcDiskNumber + FIRST_BIOS_DISK);
+
+            if (handles[i] == PublicBootHandle)
+            {
+                UefiBootRootIdentifier = i;
+                InternalUefiDisk[ArcDiskNumber].IsThisTheBootDrive = TRUE;
+                PublicBootArcDisk = ArcDiskNumber;
+                TRACE("Found Boot drive at root index %u (arc %lu)\n", i, ArcDiskNumber);
+            }
+
             BlockDeviceIndex++;
         }
         else if (handles[i] == PublicBootHandle)
         {
-            GlobalSystemTable->BootServices->HandleProtocol(handles[i], &bioGuid, (void**)&bio);
-            if (bio->Media->LogicalPartition == FALSE)
+            EFI_DEVICE_PATH_PROTOCOL* BootPartitionPath = NULL;
+            if (!EFI_ERROR(GlobalSystemTable->BootServices->HandleProtocol(
+                    handles[i], &DevicePathProtocolGuid, (VOID**)&BootPartitionPath)) &&
+                BootPartitionPath)
             {
-                ULONG j;
-
-                TRACE("Found root at index %u\n", i);
-                UefiBootRootIdentifier = i;
-
-                for (j = 0; j < PcBiosDiskCount; ++j)
+                for (ULONG root = 0; root < SystemHandleCount; ++root)
                 {
-                    /* Now only of the root drive number is equal to this drive we found above */
-                    if (InternalUefiDisk[j].UefiRootNumber == UefiBootRootIdentifier)
+                    EFI_BLOCK_IO* RootBio;
+                    EFI_DEVICE_PATH_PROTOCOL* RootPath = NULL;
+
+                    if (EFI_ERROR(GlobalSystemTable->BootServices->HandleProtocol(
+                            handles[root], &bioGuid, (VOID**)&RootBio)) ||
+                        !RootBio || RootBio->Media->LogicalPartition)
                     {
-                        InternalUefiDisk[j].IsThisTheBootDrive = TRUE;
-                        PublicBootArcDisk = j;
-                        TRACE("Found Boot drive\n");
+                        continue;
                     }
-                }
-                }
-            }
-            else
-            {
-                EFI_DEVICE_PATH_PROTOCOL* BootPartitionPath = NULL;
-                if (!EFI_ERROR(GlobalSystemTable->BootServices->HandleProtocol(
-                        handles[i], &DevicePathProtocolGuid, (VOID**)&BootPartitionPath)) &&
-                    BootPartitionPath)
-                {
-                    for (ULONG root = 0; root < SystemHandleCount; ++root)
+
+                    if (EFI_ERROR(GlobalSystemTable->BootServices->HandleProtocol(
+                            handles[root], &DevicePathProtocolGuid, (VOID**)&RootPath)) ||
+                        !RootPath)
                     {
-                        EFI_BLOCK_IO* RootBio;
-                        EFI_DEVICE_PATH_PROTOCOL* RootPath = NULL;
+                        continue;
+                    }
 
-                        if (EFI_ERROR(GlobalSystemTable->BootServices->HandleProtocol(
-                                handles[root], &bioGuid, (VOID**)&RootBio)) ||
-                            !RootBio || RootBio->Media->LogicalPartition)
+                    if (UefiDevicePathMatchesParentDisk(RootPath, BootPartitionPath))
+                    {
+                        ULONG j;
+
+                        TRACE("Boot partition maps to root index %lu\n", root);
+                        UefiBootRootIdentifier = root;
+                        for (j = 0; j < PcBiosDiskCount; ++j)
                         {
-                            continue;
-                        }
-
-                        if (EFI_ERROR(GlobalSystemTable->BootServices->HandleProtocol(
-                                handles[root], &DevicePathProtocolGuid, (VOID**)&RootPath)) ||
-                            !RootPath)
-                        {
-                            continue;
-                        }
-
-                        if (UefiDevicePathMatchesParentDisk(RootPath, BootPartitionPath))
-                        {
-                            ULONG j;
-
-                            TRACE("Boot partition maps to root index %lu\n", root);
-                            UefiBootRootIdentifier = root;
-                            for (j = 0; j < PcBiosDiskCount; ++j)
+                            if (InternalUefiDisk[j].UefiRootNumber == UefiBootRootIdentifier)
                             {
-                                if (InternalUefiDisk[j].UefiRootNumber == UefiBootRootIdentifier)
-                                {
-                                    InternalUefiDisk[j].IsThisTheBootDrive = TRUE;
-                                    PublicBootArcDisk = j;
-                                    TRACE("Found Boot drive via partition mapping\n");
-                                    break;
-                                }
+                                InternalUefiDisk[j].IsThisTheBootDrive = TRUE;
+                                PublicBootArcDisk = j;
+                                TRACE("Found Boot drive via partition mapping\n");
+                                break;
                             }
-                            break;
                         }
+                        break;
                     }
                 }
             }
         }
     }
+}
 
 ULONG
 UefiGetPhysicalDiskCount(VOID)
@@ -1012,11 +1001,73 @@ UefiGetPhysicalDiskHandle(ULONG ArcIndex)
 
 static
 BOOLEAN
+UefiResolveBootArcDiskFromHandle(
+    IN EFI_HANDLE BootHandle,
+    OUT PULONG ArcDiskNumber OPTIONAL,
+    OUT PULONG RootIdentifier OPTIONAL)
+{
+    EFI_DEVICE_PATH_PROTOCOL* BootPath = NULL;
+    ULONG ArcDisk;
+
+    if (ArcDiskNumber)
+        *ArcDiskNumber = 0;
+    if (RootIdentifier)
+        *RootIdentifier = 0;
+
+    if (!BootHandle || !handles || !InternalUefiDisk || (PcBiosDiskCount == 0))
+        return FALSE;
+
+    if (EFI_ERROR(GlobalSystemTable->BootServices->HandleProtocol(
+            BootHandle, &DevicePathProtocolGuid, (VOID**)&BootPath)) ||
+        !BootPath)
+    {
+        BootPath = NULL;
+    }
+
+    for (ArcDisk = 0; ArcDisk < PcBiosDiskCount; ++ArcDisk)
+    {
+        ULONG RootIndex = InternalUefiDisk[ArcDisk].UefiRootNumber;
+        EFI_HANDLE RootHandle = handles[RootIndex];
+        EFI_DEVICE_PATH_PROTOCOL* RootPath = NULL;
+
+        if (RootHandle == BootHandle)
+        {
+            if (ArcDiskNumber)
+                *ArcDiskNumber = ArcDisk;
+            if (RootIdentifier)
+                *RootIdentifier = RootIndex;
+            return TRUE;
+        }
+
+        if (!BootPath)
+            continue;
+
+        if (EFI_ERROR(GlobalSystemTable->BootServices->HandleProtocol(
+                RootHandle, &DevicePathProtocolGuid, (VOID**)&RootPath)) ||
+            !RootPath)
+        {
+            continue;
+        }
+
+        if (UefiDevicePathMatchesParentDisk(RootPath, BootPath))
+        {
+            if (ArcDiskNumber)
+                *ArcDiskNumber = ArcDisk;
+            if (RootIdentifier)
+                *RootIdentifier = RootIndex;
+            return TRUE;
+        }
+    }
+
+    return FALSE;
+}
+
+static
+BOOLEAN
 UefiSetBootpath(VOID)
 {
    TRACE("UefiSetBootpath: Setting up boot path\n");
-   GlobalSystemTable->BootServices->HandleProtocol(handles[UefiBootRootIdentifier], &bioGuid, (void**)&bio);
-   FrldrBootDrive = (FIRST_BIOS_DISK + PublicBootArcDisk);
+   bio = NULL;
    UefiBootHasDiskArc = FALSE;
    UefiBootDiskArcNumber = 0;
    UefiBootDiskArcPartition = 0;
@@ -1024,9 +1075,9 @@ UefiSetBootpath(VOID)
    EFI_LOADED_IMAGE_PROTOCOL* LoadedImage = NULL;
    EFI_HANDLE BootHandle = NULL;
    EFI_BLOCK_IO* BootBlockIo = NULL;
-   EFI_BLOCK_IO* BootMediaIo = bio;
+   EFI_BLOCK_IO* BootMediaIo = NULL;
    EFI_BLOCK_IO* RootDiskIo = NULL;
-   EFI_BLOCK_IO* BootClassifyIo = bio;
+   EFI_BLOCK_IO* BootClassifyIo = NULL;
    BOOLEAN BootHandleIsPartition = FALSE;
 
    if (!EFI_ERROR(GlobalSystemTable->BootServices->HandleProtocol(
@@ -1057,8 +1108,30 @@ UefiSetBootpath(VOID)
                     TRACE("Boot handle is a logical partition; using partition media for heuristics\n");
                 }
             }
+	        }
+	   }
+
+   if (BootHandle)
+   {
+        ULONG ArcDisk = 0;
+        ULONG RootIdentifier = 0;
+
+        if (UefiResolveBootArcDiskFromHandle(BootHandle, &ArcDisk, &RootIdentifier))
+        {
+            PublicBootArcDisk = ArcDisk;
+            UefiBootRootIdentifier = RootIdentifier;
+            TRACE("Resolved boot root from loaded image: root=%lu arc=%lu\n",
+                  UefiBootRootIdentifier, PublicBootArcDisk);
         }
    }
+
+   FrldrBootDrive = (FIRST_BIOS_DISK + PublicBootArcDisk);
+   GlobalSystemTable->BootServices->HandleProtocol(handles[UefiBootRootIdentifier], &bioGuid, (void**)&bio);
+
+   if (!BootMediaIo)
+       BootMediaIo = bio;
+   if (!BootClassifyIo)
+       BootClassifyIo = bio;
 
    if (!EFI_ERROR(GlobalSystemTable->BootServices->HandleProtocol(
            handles[UefiBootRootIdentifier],
