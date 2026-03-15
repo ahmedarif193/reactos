@@ -592,9 +592,6 @@ KeFlushIoBuffers(_Inout_ PMDL Mdl,
     EndAddress = ((ULONG_PTR)VirtualAddress + Length + CacheLineSize - 1) &
                  ~((ULONG_PTR)CacheLineSize - 1);
 
-    DPRINT1("[arm64] KeFlushIoBuffers: MDL %p VA=%p Len=%lu Start=0x%p End=0x%p Read=%d DMA=%d MappedByUs=%d\n",
-            Mdl, VirtualAddress, Length, (PVOID)StartAddress, (PVOID)EndAddress, ReadOperation, DmaOperation, MappedByUs);
-
     /*
      * Perform cache maintenance based on operation type.
      */

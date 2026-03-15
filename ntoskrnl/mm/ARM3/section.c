@@ -464,12 +464,6 @@ MiAddMappedPtes(IN PMMPTE FirstPte,
         RosSegment = (PMM_SECTION_SEGMENT)ControlArea->Segment;
         IsRosFileBackedSection = TRUE;
 
-#if defined(_M_ARM64)
-        DPRINT1("[arm64] MiAddMappedPtes: Detected ROS file-backed section\n"
-                "  ControlArea=%p FilePointer=%p Segment=%p\n"
-                "  Will pre-populate prototype PTEs with hardware PTEs from SSEs\n",
-                ControlArea, ControlArea->FilePointer, RosSegment);
-#endif
     }
     else
 #endif
@@ -499,6 +493,7 @@ MiAddMappedPtes(IN PMMPTE FirstPte,
     /* Loop the PTEs for the mapping */
     while (PointerPte < LastPte)
     {
+
         /* We may have run out of prototype PTEs in this subsection */
         if (ProtoPte >= LastProtoPte)
         {
@@ -551,40 +546,12 @@ MiAddMappedPtes(IN PMMPTE FirstPte,
                     /* Write the hardware PTE directly to the prototype PTE */
                     MI_WRITE_VALID_PTE(ProtoPte, TempPte);
 
-#if defined(_M_ARM64) && DBG
-                    /* Log the first few pre-populated PTEs */
-                    if ((PointerPte - FirstPte) < 3)
-                    {
-                        DPRINT1("[arm64] MiAddMappedPtes: Pre-populated ProtoPTE[%lu] with hardware PTE\n"
-                                "  FileOffset=0x%I64x SSE=0x%I64x PFN=0x%I64x\n"
-                                "  ProtoPTE=%p contents=0x%llx (Valid=%d)\n",
-                                (ULONG)(PointerPte - FirstPte),
-                                FileOffset.QuadPart, SseEntry, (ULONG64)Pfn,
-                                ProtoPte, (ULONG64)ProtoPte->u.Long,
-                                (int)ProtoPte->u.Hard.Valid);
-                    }
-#endif
                 }
             }
         }
 
         /* Build the prototype PTE reference and write it to the actual PTE */
         MI_MAKE_PROTOTYPE_PTE(&TempPte, ProtoPte);
-
-#if defined(_M_ARM64) && DBG
-        /* Log the first few prototype PTE mappings for debugging */
-        if ((PointerPte - FirstPte) < 3)
-        {
-            DPRINT1("[arm64] MiAddMappedPtes: PTE[%lu] at %p -> ProtoPTE %p\n"
-                    "  Encoded proto PTE=0x%llx\n"
-                    "  ProtoPTE contents=0x%llx (Valid=%d PFN=0x%llx)\n",
-                    (ULONG)(PointerPte - FirstPte), PointerPte, ProtoPte,
-                    (ULONG64)TempPte.u.Long,
-                    (ULONG64)ProtoPte->u.Long,
-                    (int)ProtoPte->u.Hard.Valid,
-                    (ULONG64)(ProtoPte->u.Hard.Valid ? ProtoPte->u.Hard.PageFrameNumber : 0));
-        }
-#endif
 
         MI_WRITE_INVALID_PTE(PointerPte, TempPte);
 
@@ -767,6 +734,16 @@ MiSegmentDelete(IN PSEGMENT Segment)
     {
         /* Fault it in */
         MiMakeSystemAddressValidPfn(PointerPte, OldIrql);
+#if defined(_M_ARM64) || defined(__aarch64__)
+        /*
+         * ARM64: After demand-faulting the prototype PTE page, ensure cache coherency
+         * before reading PTE contents. The page fault handler maps the page and does
+         * cache maintenance, but stale cache lines can persist for the VA we're about
+         * to read. This is similar to the LdrpNameToOrdinal binary search bug where
+         * reading from newly-faulted pages returned transiently wrong data.
+         */
+        KeMemoryBarrier();
+#endif
     }
 
     /* Loop all the segment PTEs */
@@ -782,12 +759,35 @@ MiSegmentDelete(IN PSEGMENT Segment)
             {
                 /* Fault it in */
                 MiMakeSystemAddressValidPfn(PointerPte, OldIrql);
+#if defined(_M_ARM64) || defined(__aarch64__)
+                /* ARM64: Ensure cache coherency after faulting in PTE page */
+                KeMemoryBarrier();
+#endif
             }
         }
 
         /* This should be a prototype PTE */
         TempPte = *PointerPte;
         ASSERT(SegmentFlags.LargePages == 0);
+#if defined(_M_ARM64) || defined(__aarch64__)
+        if (TempPte.u.Hard.Valid != 0)
+        {
+            DPRINT1("[SECTION-DELETE] ERROR: Prototype PTE %p is VALID (expected invalid)\n", PointerPte);
+            DPRINT1("  PTE.Raw=0x%016llx PFN=%lu Owner=%u NotDirty=%u\n",
+                    TempPte.u.Long,
+                    (ULONG)PFN_FROM_PTE(&TempPte),
+                    (UINT)TempPte.u.Hard.Owner,
+                    (UINT)TempPte.u.Hard.NotDirty);
+            DPRINT1("  ControlArea=%p Flags.Image=%u Flags.File=%u Flags.BeingDeleted=%u\n",
+                    ControlArea,
+                    ControlArea->u.Flags.Image,
+                    ControlArea->u.Flags.File,
+                    ControlArea->u.Flags.BeingDeleted);
+            DPRINT1("  NumberOfMappedViews=%lu NumberOfSectionReferences=%lu\n",
+                    (ULONG)ControlArea->NumberOfMappedViews,
+                    (ULONG)ControlArea->NumberOfSectionReferences);
+        }
+#endif
         ASSERT(TempPte.u.Hard.Valid == 0);
 
         /* See if we should clean things up */
@@ -1348,15 +1348,6 @@ MiMapViewInSystemSpace(
          *   CcCreateVacbArray maps 256KB views (VACB_MAPPING_GRANULARITY)
          *   Result: 256KB of VA reserved, pages faulted in as needed
          */
-#if defined(_M_ARM64) && DBG
-        if (SectionOffset->QuadPart + *ViewSize > SectionSize)
-        {
-            DPRINT1("[arm64] SEC_RESERVE: ViewSize (0x%lx) exceeds SectionSize (0x%I64x) - OK\n"
-                    "  This is expected for Cache Manager VACBs and other demand-paged mappings.\n"
-                    "  Physical pages will be allocated on page fault via MmAccessFault.\n",
-                    (ULONG)*ViewSize, SectionSize);
-        }
-#endif
     }
     else
     {
@@ -1733,12 +1724,6 @@ MiCreateDataFileMap(IN PFILE_OBJECT File,
         if (ActualSize < VACB_MAPPING_GRANULARITY)
         {
             ActualSize = VACB_MAPPING_GRANULARITY;
-#if DBG
-            DPRINT1("[arm64] MiCreateDataFileMap: Rounding up SEC_RESERVE section size:\n"
-                    "  Requested: 0x%I64x\n"
-                    "  Actual: 0x%I64x (VACB_MAPPING_GRANULARITY)\n",
-                    MaximumSize->QuadPart, ActualSize);
-#endif
         }
 
         /* Create a pagefile-backed segment with sufficient prototype PTEs */
@@ -1806,27 +1791,6 @@ MiCreatePagingFileMap(OUT PSEGMENT *Segment,
     }
     *Segment = NewSegment;
 
-#if defined(_M_ARM64)
-    /* ARM64 DIAGNOSTIC: Log segment allocation address to diagnose System View Space issue */
-    {
-        extern PVOID MiSystemViewStart, MmPagedPoolStart;
-        extern SIZE_T MmSystemViewSize;
-        DPRINT1("[arm64] MiCreatePagingFileMap: NewSegment=%p (PteCount=%lu)\n",
-                NewSegment, (ULONG)PteCount);
-        DPRINT1("  MmPagedPoolStart=%p MiSystemViewStart=%p MmSystemViewSize=0x%lx\n",
-                MmPagedPoolStart, MiSystemViewStart, (ULONG)MmSystemViewSize);
-
-        /* Check if allocation landed in System View Space by mistake */
-        if (MiSystemViewStart != NULL &&
-            (ULONG_PTR)NewSegment >= (ULONG_PTR)MiSystemViewStart &&
-            (ULONG_PTR)NewSegment < ((ULONG_PTR)MiSystemViewStart + MmSystemViewSize))
-        {
-            DPRINT1("  *** ERROR: Segment allocated in System View Space instead of Paged Pool! ***\n");
-            DPRINT1("  This will cause a crash when filling prototype PTEs.\n");
-        }
-    }
-#endif
-
     /* Now allocate the control area, which has the subsection structure */
     ControlArea = ExAllocatePoolWithTag(NonPagedPool,
                                         sizeof(CONTROL_AREA) + sizeof(SUBSECTION),
@@ -1893,28 +1857,10 @@ MiCreatePagingFileMap(OUT PSEGMENT *Segment,
     TempPte.u.Long = 0;
     TempPte.u.Soft.Protection = ProtectionMask;
 
-#if defined(_M_ARM64) && DBG
-    DPRINT1("[arm64] MiCreatePagingFileMap: Initialized prototype PTE template:\n"
-            "  AllocationAttributes=0x%lx (SEC_COMMIT=%d SEC_RESERVE=%d)\n"
-            "  ProtectionMask=0x%lx\n"
-            "  TempPte.u.Long=0x%llx\n"
-            "  TempPte.u.Soft.Protection=%lu\n",
-            (ULONG)AllocationAttributes,
-            !!(AllocationAttributes & SEC_COMMIT),
-            !!(AllocationAttributes & SEC_RESERVE),
-            (ULONG)ProtectionMask,
-            (unsigned long long)TempPte.u.Long,
-            (ULONG)TempPte.u.Soft.Protection);
-#endif
-
     /* For SEC_COMMIT, mark pages as committed for accounting purposes */
     if (AllocationAttributes & SEC_COMMIT)
     {
         NewSegment->NumberOfCommittedPages = PteCount;
-#if defined(_M_ARM64) && DBG
-        DPRINT1("[arm64] MiCreatePagingFileMap: SEC_COMMIT detected, NumberOfCommittedPages=%lu\n",
-                (ULONG)PteCount);
-#endif
     }
 
     /* The template PTE itself for the segment should also have the mask set */
@@ -1922,12 +1868,6 @@ MiCreatePagingFileMap(OUT PSEGMENT *Segment,
 
     /* Write out the prototype PTEs, for now they're simply demand zero */
 #ifdef _WIN64
-#if defined(_M_ARM64)
-    /* ARM64 DIAGNOSTIC: Log prototype PTE initialization */
-    DPRINT1("[arm64] MiCreatePagingFileMap: Filling %lu PTEs at %p (size=0x%lx) with value 0x%llx\n",
-            (ULONG)PteCount, PointerPte, (ULONG)(PteCount * sizeof(MMPTE)),
-            (unsigned long long)TempPte.u.Long);
-#endif
     RtlFillMemoryUlonglong(PointerPte, PteCount * sizeof(MMPTE), TempPte.u.Long);
 #else
     RtlFillMemoryUlong(PointerPte, PteCount * sizeof(MMPTE), TempPte.u.Long);
@@ -3089,17 +3029,6 @@ MmMapViewOfArm3Section(IN PVOID SectionObject,
             return STATUS_INVALID_VIEW_SIZE;
         }
     }
-#if defined(_M_ARM64) && DBG
-    else
-    {
-        /* SEC_RESERVE: Log if view exceeds section (this is allowed) */
-        if (((ULONG64)SectionOffset->QuadPart + *ViewSize) >
-             (ULONG64)Section->SizeOfSection.QuadPart)
-        {
-            DPRINT1("[arm64] SEC_RESERVE user mapping: ViewSize exceeds SectionSize - OK\n");
-        }
-    }
-#endif
 
     /* Check if the caller did not specify a view size */
     if (!(*ViewSize))

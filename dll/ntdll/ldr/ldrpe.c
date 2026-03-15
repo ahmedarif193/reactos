@@ -659,7 +659,55 @@ LdrpNameToOrdinal(IN LPSTR ImportName,
     }
 
     /* If end is before start, then the search failed */
-    if (End < Start) return -1;
+    if (End < Start)
+    {
+#if defined(_M_ARM64) || defined(__aarch64__)
+        /*
+         * ARM64 workaround: Binary search can fail due to transient page data
+         * inconsistency during demand-paging of section view pages (DLL .rdata).
+         * The export name table data can be momentarily wrong when a page is
+         * first faulted in, causing the binary search to take a wrong branch.
+         *
+         * Pre-fault all name table pages by touching one byte per page, then
+         * do a linear search. The pre-fault ensures all pages are properly
+         * mapped before the search reads from them.
+         */
+        if (NumberOfNames > 2)
+        {
+            ULONG i;
+
+            /* Pre-fault: touch first name string on each page to ensure all
+             * export table pages are demand-faulted with correct data before
+             * we do the linear search. The page fault handler's TLB invalidation
+             * and cache maintenance ensure subsequent reads get correct data. */
+            {
+                volatile UCHAR Touch;
+                ULONG_PTR LastPage = 0;
+                for (i = 0; i < NumberOfNames; i++)
+                {
+                    PCHAR N = (PCHAR)((ULONG_PTR)ExportBase + NameTable[i]);
+                    ULONG_PTR Page = (ULONG_PTR)N & ~(ULONG_PTR)0xFFF;
+                    if (Page != LastPage)
+                    {
+                        Touch = *(volatile UCHAR *)N;
+                        LastPage = Page;
+                    }
+                }
+                (void)Touch;
+            }
+
+            /* Now do the actual linear search */
+            for (i = 0; i < NumberOfNames; i++)
+            {
+                if (!strcmp(ImportName, (PCHAR)((ULONG_PTR)ExportBase + NameTable[i])))
+                {
+                    return OrdinalTable[i];
+                }
+            }
+        }
+#endif
+        return -1;
+    }
 
     /* Return found name */
     return OrdinalTable[Next];
@@ -1105,6 +1153,35 @@ FailurePath:
         AddressOfFunctions = (PULONG)
                              ((ULONG_PTR)ExportBase +
                               (ULONG_PTR)ExportDirectory->AddressOfFunctions);
+
+#if defined(_M_ARM64) || defined(__aarch64__)
+        /*
+         * ARM64 diagnostic + workaround: demand-paging can return stale/wrong
+         * data on first access to section view pages. Validate the computed
+         * AddressOfFunctions pointer before using it.
+         */
+        {
+            ULONG_PTR AoF_VA = (ULONG_PTR)&AddressOfFunctions[Ordinal];
+            /* Check if the address looks reasonable (within 256MB of ExportBase) */
+            if (AoF_VA < (ULONG_PTR)ExportBase ||
+                AoF_VA > (ULONG_PTR)ExportBase + 0x10000000ULL)
+            {
+                ULONG AoF_RVA = ExportDirectory->AddressOfFunctions;
+                DbgPrint("[SNAP-BAD-AOF] Base=%p Dir=%p AoF_RVA=0x%x Ordinal=%u "
+                         "AoF_VA=%p NumFuncs=%u DllName=%s\n",
+                         ExportBase, ExportDirectory, AoF_RVA, (ULONG)Ordinal,
+                         (PVOID)AoF_VA, ExportDirectory->NumberOfFunctions,
+                         DllName ? DllName : "?");
+
+                /* Re-read AddressOfFunctions RVA (may have stabilized) */
+                AoF_RVA = *(volatile ULONG *)&ExportDirectory->AddressOfFunctions;
+                AddressOfFunctions = (PULONG)((ULONG_PTR)ExportBase + (ULONG_PTR)AoF_RVA);
+
+                DbgPrint("[SNAP-BAD-AOF] Re-read AoF_RVA=0x%x AoF_VA=%p\n",
+                         AoF_RVA, (PVOID)(ULONG_PTR)&AddressOfFunctions[Ordinal]);
+            }
+        }
+#endif
 
         /* Write the function pointer*/
         Thunk->u1.Function = (ULONG_PTR)ExportBase + AddressOfFunctions[Ordinal];

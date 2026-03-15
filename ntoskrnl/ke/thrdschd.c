@@ -25,6 +25,23 @@
 KAFFINITY KiIdleSummary;
 KAFFINITY KiIdleSMTSummary;
 
+#ifdef _M_ARM64
+static ULONG KiArm64SchedulerTraceBudget = 4096;
+
+static
+BOOLEAN
+KiArm64ShouldTraceScheduler(VOID)
+{
+    if (KiArm64SchedulerTraceBudget == 0)
+    {
+        return FALSE;
+    }
+
+    KiArm64SchedulerTraceBudget--;
+    return TRUE;
+}
+#endif
+
 /* FUNCTIONS *****************************************************************/
 
 PKTHREAD
@@ -154,10 +171,55 @@ KiDeferredReadyThread(IN PKTHREAD Thread)
     ULONG Processor;
     KPRIORITY OldPriority;
     PKTHREAD NextThread;
+    PEPROCESS Process;
+    BOOLEAN TraceBootProc;
+#ifdef _M_ARM64
+    BOOLEAN Arm64Trace;
+#endif
 
     /* Sanity checks */
     ASSERT(Thread->State == DeferredReady);
     ASSERT((Thread->Priority >= 0) && (Thread->Priority <= HIGH_PRIORITY));
+
+    Process = (PEPROCESS)Thread->ApcState.Process;
+    /* Scheduler tracing disabled - string comparisons + DPRINT1 on every
+     * KiDeferredReadyThread call cause severe boot slowdown */
+    TraceBootProc = FALSE;
+#ifdef _M_ARM64
+    Arm64Trace = KiArm64ShouldTraceScheduler();
+    if (Arm64Trace)
+    {
+        PKPRCB CurPrcb = KeGetCurrentPrcb();
+        DPRINT("[arm64][SCH] DeferredReady entry: T=%p S=%u Pri=%d Cur=%p Next=%p Ready=0x%Ix Idle=0x%Ix\n",
+                   Thread,
+                   Thread->State,
+                   Thread->Priority,
+                   CurPrcb ? CurPrcb->CurrentThread : NULL,
+                   CurPrcb ? CurPrcb->NextThread : NULL,
+                   CurPrcb ? CurPrcb->ReadySummary : 0,
+                   KiIdleSummary);
+    }
+#endif
+
+    if (TraceBootProc)
+    {
+        PEPROCESS CurProcess = KeGetCurrentPrcb()->CurrentThread ?
+                               (PEPROCESS)KeGetCurrentPrcb()->CurrentThread->ApcState.Process :
+                               NULL;
+        PEPROCESS NextProcess = KeGetCurrentPrcb()->NextThread ?
+                                (PEPROCESS)KeGetCurrentPrcb()->NextThread->ApcState.Process :
+                                NULL;
+
+        DPRINT1("PS: [RD1] KiDeferredReadyThread Thread=%p(%.16s) State=%u Pri=%d Cur=%p(%.16s) Next=%p(%.16s)\n",
+                Thread,
+                Process ? Process->ImageFileName : "<null>",
+                Thread->State,
+                Thread->Priority,
+                KeGetCurrentPrcb()->CurrentThread,
+                CurProcess ? CurProcess->ImageFileName : "<null>",
+                KeGetCurrentPrcb()->NextThread,
+                NextProcess ? NextProcess->ImageFileName : "<null>");
+    }
 
     /* Check if we have any adjusts to do */
     if (Thread->AdjustReason == AdjustBoost)
@@ -316,6 +378,15 @@ KiDeferredReadyThread(IN PKTHREAD Thread)
         Thread->State = Standby;
         Prcb->NextThread = Thread;
 
+#ifdef _M_ARM64
+        if (Arm64Trace)
+        {
+            DPRINT("[arm64][SCH] DeferredReady -> Standby via IdleSummary: T=%p Next=%p\n",
+                       Thread,
+                       Prcb->NextThread);
+        }
+#endif
+
         /* Unlock the PRCB */
         KiReleasePrcbLock(Prcb);
 
@@ -355,6 +426,16 @@ KiDeferredReadyThread(IN PKTHREAD Thread)
             /* Set it in deferred ready mode */
             NextThread->State = DeferredReady;
             NextThread->DeferredProcessor = Prcb->Number;
+#ifdef _M_ARM64
+            if (Arm64Trace)
+            {
+                DPRINT("[arm64][SCH] DeferredReady preempt-standby: T=%p Next=%p OldPri=%d NewPri=%d\n",
+                           Thread,
+                           NextThread,
+                           OldPriority,
+                           NextThread->Priority);
+            }
+#endif
             KiReleasePrcbLock(Prcb);
             KiDeferredReadyThread(NextThread);
             return;
@@ -373,6 +454,17 @@ KiDeferredReadyThread(IN PKTHREAD Thread)
             Thread->State = Standby;
             Prcb->NextThread = Thread;
 
+#ifdef _M_ARM64
+            if (Arm64Trace)
+            {
+                DPRINT("[arm64][SCH] DeferredReady selected as Next: T=%p Cur=%p OldPri=%d CurPri=%d\n",
+                           Thread,
+                           NextThread,
+                           OldPriority,
+                           NextThread->Priority);
+            }
+#endif
+
             /* Release the lock */
             KiReleasePrcbLock(Prcb);
 
@@ -389,6 +481,30 @@ KiDeferredReadyThread(IN PKTHREAD Thread)
     /* Sanity check */
     ASSERT((OldPriority >= 0) && (OldPriority <= HIGH_PRIORITY));
 
+    if (TraceBootProc)
+    {
+        PEPROCESS CurProcess = Prcb->CurrentThread ?
+                               (PEPROCESS)Prcb->CurrentThread->ApcState.Process :
+                               NULL;
+        PEPROCESS NextProcess = Prcb->NextThread ?
+                                (PEPROCESS)Prcb->NextThread->ApcState.Process :
+                                NULL;
+
+        DPRINT1("PS: [RD3] NoPreempt Thread=%p(%.16s) Pri=%d Cur=%p(%.16s) CurPri=%d CurState=%u CurQ=%d Next=%p(%.16s) NextPri=%d IdleSummary=0x%Ix\n",
+                Thread,
+                Process ? Process->ImageFileName : "<null>",
+                OldPriority,
+                Prcb->CurrentThread,
+                CurProcess ? CurProcess->ImageFileName : "<null>",
+                Prcb->CurrentThread ? Prcb->CurrentThread->Priority : -1,
+                Prcb->CurrentThread ? Prcb->CurrentThread->State : 0,
+                Prcb->CurrentThread ? Prcb->CurrentThread->Quantum : -1,
+                Prcb->NextThread,
+                NextProcess ? NextProcess->ImageFileName : "<null>",
+                Prcb->NextThread ? Prcb->NextThread->Priority : -1,
+                KiIdleSummary);
+    }
+
     /* Set this thread as ready */
     Thread->State = Ready;
     Thread->WaitTime = KeTickCount.LowPart;
@@ -402,11 +518,34 @@ KiDeferredReadyThread(IN PKTHREAD Thread)
     /* Update the ready summary */
     Prcb->ReadySummary |= PRIORITY_MASK(OldPriority);
 
+#ifdef _M_ARM64
+    if (Arm64Trace)
+    {
+        DPRINT("[arm64][SCH] DeferredReady queued: T=%p Pri=%d Ready=0x%Ix Next=%p Cur=%p\n",
+                   Thread,
+                   OldPriority,
+                   Prcb->ReadySummary,
+                   Prcb->NextThread,
+                   Prcb->CurrentThread);
+    }
+#endif
+
     /* Sanity check */
     ASSERT(OldPriority == Thread->Priority);
 
     /* Release the lock */
     KiReleasePrcbLock(Prcb);
+
+    if (TraceBootProc)
+    {
+        DPRINT1("PS: [RD2] KiDeferredReadyThread done Thread=%p(%.16s) State=%u Pri=%d Cpu=%lu ReadySummary=0x%lx\n",
+                Thread,
+                Process ? Process->ImageFileName : "<null>",
+                Thread->State,
+                Thread->Priority,
+                Thread->NextProcessor,
+                Prcb->ReadySummary);
+    }
 }
 
 PKTHREAD
@@ -447,8 +586,6 @@ KiSwapThread(IN PKTHREAD CurrentThread,
     PKTHREAD NextThread;
     ASSERT(KeGetCurrentIrql() >= DISPATCH_LEVEL);
 
-    /* Debug disabled for performance */
-
     /* Acquire the PRCB lock */
     KiAcquirePrcbLock(Prcb);
 
@@ -482,8 +619,6 @@ KiSwapThread(IN PKTHREAD CurrentThread,
             NextThread->State = Running;
         }
     }
-
-    /* Debug disabled for performance */
 
     /* Sanity check and release the PRCB */
     ASSERT(CurrentThread != Prcb->IdleThread);
@@ -521,8 +656,6 @@ KiSwapThread(IN PKTHREAD CurrentThread,
     /* Lower IRQL back to what it was and return the wait status */
     KeLowerIrql(WaitIrql);
 
-    /* Debug disabled for performance */
-
     return WaitStatus;
 }
 
@@ -531,8 +664,17 @@ NTAPI
 KiReadyThread(IN PKTHREAD Thread)
 {
     IN PKPROCESS Process = Thread->ApcState.Process;
+    BOOLEAN TraceBootProc;
+#ifdef _M_ARM64
+    BOOLEAN Arm64Trace;
+#endif
 
-    /* Debug disabled for performance */
+    /* Scheduler tracing disabled - string comparisons + DPRINT1 on every
+     * KiReadyThread call cause severe boot slowdown */
+    TraceBootProc = FALSE;
+#ifdef _M_ARM64
+    Arm64Trace = KiArm64ShouldTraceScheduler();
+#endif
 
     /* Check if the process is paged out */
     if (Process->State != ProcessInMemory)
@@ -557,6 +699,30 @@ KiReadyThread(IN PKTHREAD Thread)
     }
     else
     {
+#ifdef _M_ARM64
+        if (Arm64Trace)
+        {
+            PKPRCB Prcb = KeGetCurrentPrcb();
+            DPRINT("[arm64][SCH] KiReadyThread begin: T=%p S=%u Pri=%d Cur=%p Next=%p Ready=0x%Ix\n",
+                       Thread,
+                       Thread->State,
+                       Thread->Priority,
+                       Prcb ? Prcb->CurrentThread : NULL,
+                       Prcb ? Prcb->NextThread : NULL,
+                       Prcb ? Prcb->ReadySummary : 0);
+        }
+#endif
+
+        if (TraceBootProc)
+        {
+            DPRINT1("PS: [RD0] KiReadyThread Thread=%p(%.16s) State=%u Pri=%d NextCpu=%lu\n",
+                    Thread,
+                    ((PEPROCESS)Process)->ImageFileName,
+                    Thread->State,
+                    Thread->Priority,
+                    Thread->NextProcessor);
+        }
+
         /*
          * ARM64 CRITICAL: Memory barrier before inserting thread into ready list.
          *
@@ -575,6 +741,29 @@ KiReadyThread(IN PKTHREAD Thread)
 
         /* Insert the thread on the deferred ready list */
         KiInsertDeferredReadyList(Thread);
+
+#ifdef _M_ARM64
+        if (Arm64Trace)
+        {
+            PKPRCB Prcb = KeGetCurrentPrcb();
+            DPRINT("[arm64][SCH] KiReadyThread end: T=%p S=%u Cur=%p Next=%p Ready=0x%Ix\n",
+                       Thread,
+                       Thread->State,
+                       Prcb ? Prcb->CurrentThread : NULL,
+                       Prcb ? Prcb->NextThread : NULL,
+                       Prcb ? Prcb->ReadySummary : 0);
+        }
+#endif
+
+        if (TraceBootProc)
+        {
+            DPRINT1("PS: [RD0B] KiReadyThread inserted Thread=%p(%.16s) State=%u Pri=%d NextCpu=%lu\n",
+                    Thread,
+                    ((PEPROCESS)Process)->ImageFileName,
+                    Thread->State,
+                    Thread->Priority,
+                    Thread->NextProcessor);
+        }
 
         /* Debug disabled for performance */
     }
@@ -762,9 +951,32 @@ KiSetPriorityThread(IN PKTHREAD Thread,
                             NewThread->State = Standby;
                             Prcb->NextThread = NewThread;
 
+#ifdef _M_ARM64
+                            if (KiArm64ShouldTraceScheduler())
+                            {
+                                DPRINT("[arm64][SCH] KiSetPriorityThread selected Next: Cur=%p OldPri=%d NewPri=%d Next=%p NextPri=%d Ready=0x%Ix\n",
+                                           Thread,
+                                           OldPriority,
+                                           Priority,
+                                           NewThread,
+                                           NewThread->Priority,
+                                           Prcb->ReadySummary);
+                            }
+#endif
+
                             /* Request an interrupt */
                             RequestInterrupt = TRUE;
                         }
+#ifdef _M_ARM64
+                        else if (KiArm64ShouldTraceScheduler())
+                        {
+                            DPRINT("[arm64][SCH] KiSetPriorityThread no candidate: Cur=%p OldPri=%d NewPri=%d Ready=0x%Ix\n",
+                                       Thread,
+                                       OldPriority,
+                                       Priority,
+                                       Prcb->ReadySummary);
+                        }
+#endif
                     }
 
                     /* Release the lock and check if we need an interrupt */

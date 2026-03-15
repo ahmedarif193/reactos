@@ -1773,6 +1773,9 @@ typedef struct _KTHREAD
 #endif // ]
 #if defined(__REACTOS__) && defined(_M_AMD64) // HACK!
     XSAVE_FORMAT* StateSaveArea;
+#elif defined(__REACTOS__) && defined(_M_ARM64)
+    PVOID StateSaveArea;
+    PVOID Arm64FpState;
 #endif
 } KTHREAD;
 
@@ -1802,6 +1805,9 @@ typedef struct _KTHREAD
     ULONG ExpectedRunTime;
     PVOID KernelStack;
     XSAVE_FORMAT* StateSaveArea;
+#if defined(__REACTOS__) && defined(_M_ARM64)
+    PVOID Arm64FpState;
+#endif
     struct _KSCHEDULING_GROUP* SchedulingGroup;
     KWAIT_STATUS_REGISTER WaitRegister;
     BOOLEAN Running;

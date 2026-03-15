@@ -326,7 +326,14 @@ MiInsertVadEx(
                                            &Parent);
         if (Result == TableFoundNode)
         {
-            DPRINT("Given address conflicts with existing node\n");
+            PMMVAD ConflictVad = (PMMVAD)Parent;
+            DPRINT1("MiInsertVadEx: CONFLICT at %p-%p (size 0x%Ix) with VAD %p-%p Private=%u Prot=%u Proc=%s\n",
+                    (PVOID)StartingAddress, (PVOID)EndingAddress, ViewSize,
+                    (PVOID)(ConflictVad->StartingVpn << PAGE_SHIFT),
+                    (PVOID)((ConflictVad->EndingVpn << PAGE_SHIFT) | (PAGE_SIZE - 1)),
+                    (ULONG)ConflictVad->u.VadFlags.PrivateMemory,
+                    (ULONG)ConflictVad->u.VadFlags.Protection,
+                    CurrentProcess->ImageFileName);
             KeReleaseGuardedMutex(&CurrentProcess->AddressCreationLock);
             return STATUS_CONFLICTING_ADDRESSES;
         }

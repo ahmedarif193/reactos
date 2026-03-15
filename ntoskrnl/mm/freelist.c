@@ -630,6 +630,7 @@ MmAllocPage(ULONG Type)
     DPRINT("Legacy allocate: %lx\n", PfnOffset);
     Pfn1 = MiGetPfnEntry(PfnOffset);
     Pfn1->u3.e2.ReferenceCount = 1;
+    Pfn1->u2.ShareCount = 0;
     Pfn1->u3.e1.PageLocation = ActiveAndValid;
 
     /* This marks the PFN as a ReactOS PFN */

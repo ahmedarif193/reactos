@@ -21,8 +21,15 @@ KiTrapReturn:
      * Prevent IRQ/FIQ from clobbering ELR_EL1/SPSR_EL1 while we are preparing
      * the exception return state. When KiTrapReturn is invoked directly (e.g.
      * from thread startup), interrupts may still be enabled at EL1.
+     *
+     * CRITICAL: Must disable ALL interrupts (DAIF) and synchronize with ISB
+     * before modifying SPSR_EL1. Without ISB, an IRQ could fire AFTER daifset
+     * but BEFORE the CPU recognizes the mask. When the IRQ is taken, the
+     * hardware AUTOMATICALLY overwrites SPSR_EL1 with the current PSTATE
+     * (EL1h=5), destroying the mode=0 value we're about to set for EL0 return.
      */
-    msr     daifset, #0x3
+    msr     daifset, #0xF                /* Disable D(8), A(4), I(2), F(1) */
+    isb                                  /* Ensure mask takes effect NOW */
 
     /* Preserve fallback frame pointer/link register */
     ldr     x24, [x20, #TfFp]
@@ -42,28 +49,14 @@ KiTrapReturn:
     isb
 
     /*
-     * DEBUG: One-shot marker for the first return to EL0.
-     * Print before restoring registers so we don't clobber user state.
+     * CRITICAL: Save trap frame pointer (x20) to stack so we can access it
+     * after exception frame restoration to re-load SPSR/ELR just before ERET.
+     *
+     * Reserve 16 bytes on stack (16-byte aligned):
+     *   [sp+0]  = trap frame pointer (x20)
+     *   [sp+8]  = padding
      */
-#ifdef KDBG
-    ands    w27, w22, #0xF
-    b.ne    9f
-    adrp    x9, KiArm64TrapReturnOnce
-    ldr     w10, [x9, #:lo12:KiArm64TrapReturnOnce]
-    cbnz    w10, 9f
-    mov     w10, #1
-    str     w10, [x9, #:lo12:KiArm64TrapReturnOnce]
-    ldr     x9, =0xFFFF800009000000
-    mov     w10, #'T'
-    strb    w10, [x9]
-    mov     w10, #'R'
-    strb    w10, [x9]
-    mov     w10, #'U'
-    strb    w10, [x9]
-    mov     w10, #'\n'
-    strb    w10, [x9]
-9:
-#endif /* KDBG */
+    str     x20, [sp, #-16]!             /* Save trap frame pointer */
 
     /* Restore volatile registers from the trap frame */
     ldr     x18, [x20, #TfX18]
@@ -77,86 +70,87 @@ KiTrapReturn:
     ldp     x2,  x3,  [x20, #TfX2]
     ldp     x0,  x1,  [x20, #TfX0]
 
-    /* Select appropriate stack pointer */
+    /* Select appropriate return path based on SPSR mode bits.
+     * x22 was loaded with TfSpsr above. SPSR.M[3:0] == 0 means EL0. */
     ands    w27, w22, #0xF
     cbnz    w27, 1f
+
+    cbnz    x23, .Luser_pc_ready
+
+    /*
+     * Keep the system alive when the debug-print BRK frame got clobbered.
+     * BRK #0xF003 resume address can safely fall back to LR.
+     */
+    ldr     w16, [x20, #TfEsr]
+    lsr     w17, w16, #26
+    cmp     w17, #0x3C
+    b.ne    .Luser_pc_ready
+    and     w17, w16, #0xFFFF
+    mov     w18, #0xF003
+    cmp     w17, w18
+    b.ne    .Luser_pc_ready
+    ldr     x16, [x20, #TfLr]
+    cbz     x16, .Luser_pc_ready
+    mov     x23, x16
+    str     x23, [x20, #TfPc]
+.Luser_pc_ready:
+
     msr     sp_el0, x26              /* Returning to EL0 */
+
+    /* User I-cache maintenance is handled on fault/map paths. */
+
     /* Ensure x18/TPIDR_EL0 track the current TEB for user-mode ABI */
-    adrp    x16, KeArm64CurrentThread
-    ldr     x16, [x16, #:lo12:KeArm64CurrentThread]
-    cbz     x16, 2f
+    mrs     x16, tpidr_el1
+    cbz     x16, .Lno_teb
+    ldr     x16, [x16, #PcCurrentThread]
+    cbz     x16, .Lno_teb
+
     ldr     x18, [x16, #ThTeb]
     msr     tpidr_el0, x18
-2:
+    b       .Lteb_done
+.Lno_teb:
+    ldr     x16, [x20, #TfX16]
+    b       3f
+.Lteb_done:
     ldr     x16, [x20, #TfX16]
     b       3f
 1:
-    /*
-     * Returning to EL1: Restore SP from trap frame if it differs.
-     *
-     * SAFETY FIX: The old code assumed SP_EL1 was already correct from the
-     * vector stub, but KiTrapReturn can be called from non-vector paths
-     * (e.g., KiThreadStartup). Those callers may expect TfSp to be honored.
-     *
-     * If TfSp (x26) is non-zero and differs from current SP, use TfSp.
-     * This maintains correctness for both vector-based returns (where SP
-     * is already correct) and direct calls (where SP needs restoration).
-     */
-    cbz     x26, 3f              /* If TfSp is 0, don't touch SP */
-    mov     x27, sp
-    cmp     x26, x27
-    b.eq    3f                   /* If TfSp == current SP, nothing to do */
-    mov     sp, x26              /* Restore SP from trap frame */
+    /* EL1 return path - falls through to common path */
 3:
     /*
-     * DEBUG: One-shot marker just before restoring the exception frame and ERET.
-     * Reload the volatile register bank afterwards to preserve user state.
+     * ARM64 CRITICAL FIX: Set SPSR_EL1/ELR_EL1 BEFORE exception frame restore.
+     *
+     * Previous code set SPSR/ELR AFTER exception frame restore, using x29/x27/x28
+     * as scratch. This clobbered the exception-frame-restored values of FP (x29),
+     * x27, and x28 for EL1 returns (data abort page faults). The corrupted FP
+     * caused stack frame corruption, leading to SPIN_LOCK_NOT_OWNED bugchecks.
+     *
+     * Fix: Pop trap frame pointer and set SPSR/ELR system registers FIRST,
+     * then restore exception frame (which correctly sets ALL GPRs including
+     * x27, x28, x29). ERET immediately after - no GPR clobber.
+     *
+     * Safety: Interrupts are disabled (daifset #0xF from entry), and the
+     * exception frame is on the kernel stack (always mapped), so no exceptions
+     * can occur between MSR and ERET to corrupt SPSR_EL1/ELR_EL1.
      */
-#ifdef KDBG
-    ands    w27, w22, #0xF
-    b.ne    8f
-    adrp    x9, KiArm64TrapReturnOnce2
-    ldr     w10, [x9, #:lo12:KiArm64TrapReturnOnce2]
-    cbnz    w10, 8f
-    mov     w10, #1
-    str     w10, [x9, #:lo12:KiArm64TrapReturnOnce2]
-    ldr     x9, =0xFFFF800009000000
-    mov     w10, #'T'
-    strb    w10, [x9]
-    mov     w10, #'R'
-    strb    w10, [x9]
-    mov     w10, #'2'
-    strb    w10, [x9]
-    mov     w10, #'\n'
-    strb    w10, [x9]
+    dsb     sy
+    isb
 
-    /* Re-load volatile registers from trap frame (printing clobbered them). */
-    ldr     x18, [x20, #TfX18]
-    ldp     x16, x17, [x20, #TfX16]
-    ldp     x14, x15, [x20, #TfX14]
-    ldp     x12, x13, [x20, #TfX12]
-    ldp     x10, x11, [x20, #TfX10]
-    ldp     x8,  x9,  [x20, #TfX8]
-    ldp     x6,  x7,  [x20, #TfX6]
-    ldp     x4,  x5,  [x20, #TfX4]
-    ldp     x2,  x3,  [x20, #TfX2]
-    ldp     x0,  x1,  [x20, #TfX0]
-8:
-#endif /* KDBG */
+    /* Pop trap frame pointer from stack (saved at entry) */
+    ldr     x29, [sp], #16
 
-    /* Restore non-volatiles when an exception frame is present */
+    /* Load SPSR and ELR from trap frame, set system registers */
+    ldr     w27, [x29, #TfSpsr]
+    ldr     x28, [x29, #TfPc]
+    msr     spsr_el1, x27
+    msr     elr_el1, x28
+    dsb     sy
+    isb
+
+    /* Restore non-volatiles from exception frame (if present).
+     * This restores x19-x30, x27 to their correct pre-exception values.
+     * SPSR_EL1/ELR_EL1 are already set above, so clobbering GPRs is fine. */
     cbz     x21, 5f
-    /*
-     * ARM64 BUG FIX: Use x27 as scratch instead of x11.
-     * x11 was already restored from trap frame at line 42.
-     * If we use x11 here, we would clobber its correct value.
-     *
-     * x27 is a callee-saved register that we're about to restore from the
-     * exception frame anyway, so it's safe to use it as a temporary pointer.
-     * We must load x27's real value AFTER we're done using it as a pointer.
-     *
-     * Order matters: load x27 LAST among the registers we access via it.
-     */
     mov     x27, x21             /* Use x27 as exception frame pointer */
     ldr     x19, [x27, #ExX19]
     ldr     x20, [x27, #ExX20]
@@ -172,24 +166,17 @@ KiTrapReturn:
     ldr     x27, [x27, #ExX27]   /* Load x27 LAST (clobbers pointer) */
     b       4f
 5:
+    /* No exception frame - use fallback FP/LR */
     mov     x29, x24
     mov     x30, x25
 4:
-    /* Full memory barrier before exception return */
+    /* All GPRs now have correct values. SPSR/ELR already set. ERET. */
+
     dsb     sy
     isb
     eret
-    .seh_endproc
 
-#ifdef KDBG
-    .bss
-    .align 4
-KiArm64TrapReturnOnce:
-    .word 0
-KiArm64TrapReturnOnce2:
-    .word 0
-    .text
-#endif /* KDBG */
+    .seh_endproc
 
 
     .align 4
@@ -202,4 +189,5 @@ KiArm64BugCheckEntry:
     br      x16
     .seh_endproc
 
+    .data
     .ltorg

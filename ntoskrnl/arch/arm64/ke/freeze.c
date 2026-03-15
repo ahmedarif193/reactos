@@ -7,6 +7,49 @@
 #define NDEBUG
 #include <debug.h>
 
+extern BOOLEAN KiHalInitialized;
+
+KIRQL
+NTAPI
+KxFreezeExecutionRaiseIrql(
+    VOID)
+{
+    KIRQL OldIrql;
+
+    /*
+     * Bypass the generic IRQL path while entering KDBG freeze on ARM64.
+     * The debugger only needs a stable HIGH_LEVEL mask across DAIF and PMR.
+     */
+    OldIrql = KeGetCurrentIrql();
+    __asm__ __volatile__("msr daifset, #0xf" ::: "memory");
+    __asm__ __volatile__("dsb sy" ::: "memory");
+    if (KiHalInitialized)
+    {
+        HalSetGicPriorityMask(HIGH_LEVEL);
+    }
+    KiSetCurrentIrql(HIGH_LEVEL);
+    __asm__ __volatile__("isb" ::: "memory");
+
+    return OldIrql;
+}
+
+VOID
+NTAPI
+KxFreezeExecutionLowerIrql(
+    _In_ KIRQL OldIrql)
+{
+    /*
+     * Restore the saved logical IRQL and matching GIC PMR.
+     * KeRestoreInterrupts() handles the final DAIF state on the shared path.
+     */
+    KiSetCurrentIrql(OldIrql);
+    if (KiHalInitialized)
+    {
+        HalSetGicPriorityMask(OldIrql);
+    }
+    __asm__ __volatile__("dsb sy\n\tisb" ::: "memory");
+}
+
 #ifdef CONFIG_SMP
 
 static PKPRCB KiFreezeOwner;
@@ -194,7 +237,18 @@ KxFreezeExecution(
         }
     }
 
-    KiIpiSend(KeActiveProcessors & ~CurrentPrcb->SetMember, IPI_FREEZE);
+    /*
+     * Send IPI directly via HalRequestIpi, NOT through KiIpiSend.
+     *
+     * KiIpiSend uses InterlockedBitTestAndSet on IpiFrozen to signal the
+     * IPI type, but the freeze code uses IpiFrozen as a STATE value
+     * (IPI_FROZEN_STATE_TARGET_FREEZE = 5). KiIpiSend would corrupt the
+     * state by setting bit IPI_FREEZE (bit 4), changing 5 → 21.
+     *
+     * The freeze state is already communicated via IpiFrozen assignment above.
+     * We just need the SGI to interrupt the target CPUs.
+     */
+    HalRequestIpi(KeActiveProcessors & ~CurrentPrcb->SetMember);
     KiArm64WaitForFrozenTargets(CurrentPrcb);
 }
 

@@ -39,14 +39,18 @@ KiThreadStartup:
      */
     .seh_endprologue
 
-    /* DEBUG: Print entry marker - use x9-x11 (scratch) */
-    ldr     x9, =0xFFFF800009000000
-    mov     w10, #'T'
-    strb    w10, [x9]
-    mov     w10, #'S'
-    strb    w10, [x9]
-    mov     w10, #'\n'
-    strb    w10, [x9]
+    /*
+     * ARM64 FIX: Set x18 (TEB platform register) for the new thread.
+     * Read current thread from per-CPU PRCB via TPIDR_EL1 (not the global).
+     * For system threads, Teb is NULL so NtCurrentTeb() returns NULL safely.
+     * For user threads, Teb is the user-mode TEB address.
+     */
+    mrs     x18, tpidr_el1
+    cbz     x18, .Lskip_teb_startup
+    ldr     x18, [x18, #PcCurrentThread]
+    cbz     x18, .Lskip_teb_startup
+    ldr     x18, [x18, #ThTeb]
+.Lskip_teb_startup:
 
     /* Clear non-volatile registers to prevent stale data leaking to new thread */
     mov     x19, xzr
@@ -67,15 +71,6 @@ KiThreadStartup:
      */
     add     sp, sp, #KSWITCH_FRAME_LENGTH
 
-    /* DEBUG: Print after frame skip */
-    ldr     x9, =0xFFFF800009000000
-    mov     w10, #'L'
-    strb    w10, [x9]
-    mov     w10, #'D'
-    strb    w10, [x9]
-    mov     w10, #'\n'
-    strb    w10, [x9]
-
     /* Load startup parameters from KSTART_FRAME (SP now points to it).
      * Preserve them in callee-saved registers across KfLowerIrql. */
     ldr     x21, [sp, #SfSystemRoutine]
@@ -84,15 +79,6 @@ KiThreadStartup:
 
     /* Pop the start frame before invoking the system routine; SP stays aligned */
     add     sp, sp, #KSTART_FRAME_LENGTH
-
-    /* DEBUG: Print before KfLowerIrql */
-    ldr     x9, =0xFFFF800009000000
-    mov     w10, #'I'
-    strb    w10, [x9]
-    mov     w10, #'L'
-    strb    w10, [x9]
-    mov     w10, #'\n'
-    strb    w10, [x9]
 
     /*
      * CRITICAL: Lower IRQL to APC_LEVEL before calling the system routine.
@@ -109,57 +95,16 @@ KiThreadStartup:
     mov     w0, #APC_LEVEL
     bl      KfLowerIrql
 
-    /* DEBUG: Print after KfLowerIrql */
-    ldr     x9, =0xFFFF800009000000
-    mov     w10, #'O'
-    strb    w10, [x9]
-    mov     w10, #'K'
-    strb    w10, [x9]
-    mov     w10, #'\n'
-    strb    w10, [x9]
-
     /* ARM64: x2 = SystemRoutine, x0 = StartRoutine, x1 = StartContext */
     mov     x0, x19
     mov     x1, x20
     mov     x2, x21
 
-    /* DEBUG: Check if x21 (SystemRoutine) is valid before blr */
+    /* Validate SystemRoutine is non-NULL before calling */
     cbz     x21, .Lbad_sysroutine
 
-    /* Print "BLR:" and the hex value of x2 (SystemRoutine address) */
-    ldr     x9, =0xFFFF800009000000
-    mov     w10, #'B'
-    strb    w10, [x9]
-    mov     w10, #'L'
-    strb    w10, [x9]
-    mov     w10, #'R'
-    strb    w10, [x9]
-    mov     w10, #':'
-    strb    w10, [x9]
-    mov     w10, #'0'
-    strb    w10, [x9]
-    mov     w10, #'x'
-    strb    w10, [x9]
-
-    /* Print x2 as 16 hex digits */
-    mov     x11, x2
-    mov     x12, #60           /* Start with bit 60 (nibble 15) */
-.Lprint_x2_loop:
-    lsr     x13, x11, x12      /* Shift right by x12 bits */
-    and     x13, x13, #0xF     /* Mask to get low nibble */
-    cmp     x13, #10
-    blt     .Lprint_x2_digit
-    add     x13, x13, #('A' - 10 - '0')
-.Lprint_x2_digit:
-    add     w13, w13, #'0'
-    strb    w13, [x9]
-    subs    x12, x12, #4
-    bpl     .Lprint_x2_loop
-    mov     w10, #'\n'
-    strb    w10, [x9]
-
-	    /* Start the thread - call SystemRoutine(StartRoutine, StartContext) */
-	    blr     x2
+    /* Start the thread - call SystemRoutine(StartRoutine, StartContext) */
+    blr     x2
 
 	    /*
 	     * If the system routine returned, this must be a user thread.
@@ -167,109 +112,14 @@ KiThreadStartup:
 	     *
 	     * For system threads, returning is a fatal error.
 	     */
-	    adrp    x16, KeArm64CurrentThread
-	    ldr     x16, [x16, #:lo12:KeArm64CurrentThread]
+	    mrs     x16, tpidr_el1
+	    cbz     x16, .Lthreadstart_bad_return
+	    ldr     x16, [x16, #PcCurrentThread]
 	    cbz     x16, .Lthreadstart_bad_return
 	    ldr     x0, [x16, #ThTrapFrame]     /* x0 = TrapFrame */
 	    cbz     x0, .Lthreadstart_bad_return
+
 	    mov     x1, sp                      /* x1 = ExceptionFrame (user threads) */
-
-	    /* DEBUG: mark user-mode return and print SPSR (32-bit) */
-	    ldr     x9, =0xFFFF800009000000
-	    mov     w10, #'T'
-	    strb    w10, [x9]
-	    mov     w10, #'U'
-	    strb    w10, [x9]
-	    mov     w10, #' '
-	    strb    w10, [x9]
-	    mov     w10, #'S'
-	    strb    w10, [x9]
-	    mov     w10, #'='
-	    strb    w10, [x9]
-	    mov     w10, #'0'
-	    strb    w10, [x9]
-	    mov     w10, #'x'
-	    strb    w10, [x9]
-
-	    ldr     w11, [x0, #TfSpsr]
-	    mov     w12, #28
-1:
-	    lsr     w13, w11, w12
-	    and     w13, w13, #0xF
-	    cmp     w13, #10
-	    b.lt    2f
-	    add     w13, w13, #('A' - 10 - '0')
-2:
-	    add     w13, w13, #'0'
-	    strb    w13, [x9]
-	    subs    w12, w12, #4
-	    bpl     1b
-
-	    mov     w10, #'\n'
-	    strb    w10, [x9]
-
-	    /* DEBUG: print user return PC/SP from the trap frame */
-	    ldr     x9, =0xFFFF800009000000
-	    mov     w10, #'T'
-	    strb    w10, [x9]
-	    mov     w10, #'U'
-	    strb    w10, [x9]
-	    mov     w10, #' '
-	    strb    w10, [x9]
-	    mov     w10, #'P'
-	    strb    w10, [x9]
-	    mov     w10, #'C'
-	    strb    w10, [x9]
-	    mov     w10, #'='
-	    strb    w10, [x9]
-	    mov     w10, #'0'
-	    strb    w10, [x9]
-	    mov     w10, #'x'
-	    strb    w10, [x9]
-
-	    ldr     x11, [x0, #TfPc]
-	    mov     x12, #60
-1:
-	    lsr     x13, x11, x12
-	    and     x13, x13, #0xF
-	    cmp     x13, #10
-	    b.lt    2f
-	    add     x13, x13, #('A' - 10 - '0')
-2:
-	    add     w13, w13, #'0'
-	    strb    w13, [x9]
-	    subs    x12, x12, #4
-	    bpl     1b
-
-	    mov     w10, #' '
-	    strb    w10, [x9]
-	    mov     w10, #'S'
-	    strb    w10, [x9]
-	    mov     w10, #'P'
-	    strb    w10, [x9]
-	    mov     w10, #'='
-	    strb    w10, [x9]
-	    mov     w10, #'0'
-	    strb    w10, [x9]
-	    mov     w10, #'x'
-	    strb    w10, [x9]
-
-	    ldr     x11, [x0, #TfSp]
-	    mov     x12, #60
-3:
-	    lsr     x13, x11, x12
-	    and     x13, x13, #0xF
-	    cmp     x13, #10
-	    b.lt    4f
-	    add     x13, x13, #('A' - 10 - '0')
-4:
-	    add     w13, w13, #'0'
-	    strb    w13, [x9]
-	    subs    x12, x12, #4
-	    bpl     3b
-
-	    mov     w10, #'\n'
-	    strb    w10, [x9]
 
 	    b       KiTrapReturn                /* Never returns (ERET) */
 
@@ -297,9 +147,6 @@ KiThreadStartup:
 
 
     .extern KiSwapContextResume
-    .extern KiDebugDumpSwitchFrame
-    .extern KiDebugRestoreContext
-    .extern KiDebugBeforeReturn
     .extern KeArm64CurrentPcr
 
 /*
@@ -365,9 +212,12 @@ KiSwapContext:
      */
     strb    wzr, [sp, #SwApcBypass]
 
-    /* Locate the target (new) thread from the current PCR */
-    adrp    x9, KeArm64CurrentPcr
-    ldr     x9, [x9, #:lo12:KeArm64CurrentPcr]
+    /*
+     * Locate the target (new) thread from the per-CPU PCR.
+     * TPIDR_EL1 holds the per-CPU PCR pointer (set in KiInitializePcr).
+     * Do NOT use the global KeArm64CurrentPcr - it's shared and wrong on SMP.
+     */
+    mrs     x9, tpidr_el1
     cbz     x9, .Lfallback_thread
     ldr     x2, [x9, #PcCurrentThread]
     cbz     x2, .Lfallback_thread
@@ -389,16 +239,23 @@ KiSwapContext:
     ldp     x27, x28, [sp, #SwX27]
     ldr     x29, [sp, #SwFp]
     ldr     x30, [sp, #SwLr]       /* Load (but don't use - we use SwReturn) */
+
+    /*
+     * ARM64 FIX: Restore x18 (platform TEB register) from the new thread's
+     * KTHREAD.Teb field via per-CPU PRCB (not the global).
+     * KiSwapContextResume has already updated Prcb->CurrentThread.
+     */
+    mrs     x9, tpidr_el1
+    cbz     x9, .Lskip_teb_restore
+    ldr     x9, [x9, #PcCurrentThread]
+    cbz     x9, .Lskip_teb_restore
+    ldr     x18, [x9, #ThTeb]
+.Lskip_teb_restore:
+
     ldr     x9,  [sp, #SwReturn]   /* Load caller's return address */
     add     sp, sp, #KSWITCH_FRAME_LENGTH
     ret     x9                      /* Return to our caller */
     .seh_endproc
-
-/* Note: Debug logging strings were removed after fixing KiThreadStartup.
- * The key fixes were:
- * 1. Lower IRQL to APC_LEVEL before calling SystemRoutine (matching AMD64)
- * 2. Ensure 16-byte stack alignment before function calls
- */
 
 /*
  * BOOLEAN
@@ -434,6 +291,7 @@ KiSwapContextInternal:
      * We declare a minimal frame to allow unwinding.
      */
     .seh_endprologue
+
     /* Wait until the incoming thread clears its SwapBusy bit */
 .Lswapbusy_wait:
     ldrb    w3, [x2, #ThSwapBusy]
@@ -479,14 +337,6 @@ KiSwapContextInternal:
     bl      KiSwapContextResume
     ldr     x30, [sp], #16       /* Restore return address to LR */
 
-    /* DEBUG: Dump switch frame before returning */
-    stp     x0, x30, [sp, #-16]! /* Save return value and LR */
-    mov     x0, sp               /* First arg: stack pointer (adjusted for our push) */
-    add     x0, x0, #16          /* Point to actual KSWITCH_FRAME */
-    mov     x1, x30              /* Second arg: SwLr value we're about to return to */
-    bl      KiDebugDumpSwitchFrame
-    ldp     x0, x30, [sp], #16   /* Restore return value and LR */
-
     ret                          /* Return to .Lrestore_context in KiSwapContext */
 
 .Lnew_thread:
@@ -504,40 +354,8 @@ KiSwapContextInternal:
      *   x2 = NewThread (this new thread)
      */
 
-    /* DEBUG: Print marker for new thread path - save x0-x2 first! */
-    stp     x0, x1, [sp, #-32]!
-    stp     x2, x3, [sp, #16]
-    ldr     x3, =0xFFFF800009000000  /* UART base */
-    mov     w4, #'N'
-    strb    w4, [x3]
-    mov     w4, #'T'
-    strb    w4, [x3]
-    mov     w4, #'\n'
-    strb    w4, [x3]
-    ldp     x2, x3, [sp, #16]
-    ldp     x0, x1, [sp], #32
-
     bl      KiSwapContextResume
 
-    /* DEBUG: Print marker after KiSwapContextResume - use scratch registers only */
-    ldr     x9, =0xFFFF800009000000
-    mov     w10, #'S'
-    strb    w10, [x9]
-    mov     w10, #'R'
-    strb    w10, [x9]
-    mov     w10, #'\n'
-    strb    w10, [x9]
-
     ldr     x9, [sp, #SwReturn]  /* Load KiThreadStartup address */
-
-    /* DEBUG: Print SwReturn value - use x10/x11 as scratch */
-    ldr     x10, =0xFFFF800009000000
-    mov     w11, #'J'
-    strb    w11, [x10]
-    mov     w11, #'>'
-    strb    w11, [x10]
-    mov     w11, #'\n'
-    strb    w11, [x10]
-
     br      x9                   /* Jump to KiThreadStartup (SP points to KSWITCH_FRAME) */
     .seh_endproc

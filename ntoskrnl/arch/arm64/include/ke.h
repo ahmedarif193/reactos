@@ -3,6 +3,12 @@
 #include <ndk/arm64/ketypes.h>
 #include "intrin_i.h"
 
+/* Local KSEG0 base for physical-to-virtual mapping in inline functions.
+ * Avoids dependency on mm.h include order. Same value as KSEG0_BASE in mm.h. */
+#ifndef KE_ARM64_KSEG0_BASE
+#define KE_ARM64_KSEG0_BASE 0xFFFF800000000000ULL
+#endif
+
 typedef struct _KSWITCHFRAME
 {
     ULONG64 Dummy;
@@ -78,10 +84,67 @@ KeFlushProcessTb(VOID)
     __asm__ __volatile__("isb" ::: "memory");
 }
 
+/*
+ * Conservative upper bound for the kernel ntdll mapping size.
+ * Typical ntdll is well under 4MB; 16MB is generous headroom.
+ * Used until PspSystemDllSize (or SizeOfImage from the PE header) is
+ * properly exported and cached.
+ */
+#define KI_MAX_NTDLL_KERNEL_MAPPING_SIZE (16ULL * 1024 * 1024)
+
+/*
+ * Convert a kernel-mapped ntdll address to the equivalent user-space address.
+ * Returns NULL if KernelAddress is NULL, not within the kernel ntdll mapping,
+ * or exceeds the conservative size bound.
+ *
+ * All ARM64 files that need kernel-to-user ntdll address translation must use
+ * this single implementation rather than defining local copies.
+ */
+static inline PVOID
+KiConvertSystemDllAddressToUser(
+    _In_opt_ PVOID KernelAddress,
+    _In_ PEPROCESS Process)
+{
+    extern PVOID PspSystemDllBase;
+    ULONG_PTR Addr;
+    ULONG_PTR Base;
+    ULONG_PTR Offset;
+
+    if (!KernelAddress) return NULL;
+    if (!Process->SystemDllBase) return NULL;
+
+    Addr = (ULONG_PTR)KernelAddress;
+    Base = (ULONG_PTR)PspSystemDllBase;
+
+    /* Validate the address is within the kernel ntdll mapping */
+    if (Addr < Base) return NULL;
+
+    Offset = Addr - Base;
+
+    /* Upper-bound check: reject addresses past the expected ntdll image end */
+    if (Offset >= KI_MAX_NTDLL_KERNEL_MAPPING_SIZE) return NULL;
+
+    return (PVOID)((ULONG_PTR)Process->SystemDllBase + Offset);
+}
+
+/*
+ * Bug #37: Per-CPU merged PXE alias page PFNs.
+ * Declared in ntoskrnl/arch/arm64/mm/ARM3/init.c.
+ * Contains merged L0 entries from both TTBR0 (user) and TTBR1 (kernel).
+ *
+ * Each CPU gets its own merged page to avoid SMP races.
+ * During single-core bring-up only index [0] (BSP) is allocated.
+ *
+ * NOTE: pagfault.c has local `extern PFN_NUMBER MiArm64PxeMergedPfn[];` declarations
+ * that currently hardcode index [0] (BSP). For SMP, update to KeGetCurrentProcessorNumber().
+ */
+extern PFN_NUMBER MiArm64PxeMergedPfn[MAXIMUM_PROCESSORS];
+
 FORCEINLINE
 VOID
 KiArm64WriteUserTtbr(
-    _In_ ULONGLONG DirectoryBase)
+    _In_ ULONGLONG UserDirectoryBase,
+    _In_ ULONGLONG KernelDirectoryBase)
 {
     /*
      * ARM64 ASID Note (Bring-up):
@@ -97,14 +160,78 @@ KiArm64WriteUserTtbr(
      * For SMP/performance: Must preserve ASID bits from DirectoryTableBase,
      * use targeted TLBI (aside1is), and properly manage ASID allocation.
      */
-    ULONGLONG MaskedBase = DirectoryBase & ~((ULONGLONG)PAGE_SIZE - 1ULL);
+    ULONGLONG MaskedUserBase = UserDirectoryBase & ~((ULONGLONG)PAGE_SIZE - 1ULL);
+    ULONGLONG SavedDaif;
+    PFN_NUMBER MergedPfn;
+    UNREFERENCED_PARAMETER(KernelDirectoryBase);
 
-    __asm__ __volatile__("dsb ishst" ::: "memory");
-    __asm__ __volatile__("msr ttbr0_el1, %0" :: "r"(MaskedBase) : "memory");
+    /*
+     * Merged PXE page lookup: use index [0] (BSP) unconditionally.
+     *
+     * The array is declared per-CPU for future SMP support, but right now
+     * the self-map VA (PXE alias in TTBR1) maps globally to PFN[0].
+     * Until per-CPU TTBR1 roots (or per-CPU self-map VA windows) are
+     * implemented, writing to PFN[N>0] would be invisible to the self-map
+     * on that AP -- the global TTBR1 mapping still points at PFN[0].
+     *
+     * Using [0] preserves uniprocessor correctness.  For SMP bring-up,
+     * the race between CPUs sharing PFN[0] is the same as before;
+     * fixing it requires per-CPU mapping infrastructure (Option A or B
+     * from the design doc), not just per-CPU PFN allocation.
+     */
+    MergedPfn = MiArm64PxeMergedPfn[0];
+
+    /*
+     * Disable ALL interrupts (DAIF: Debug, SError, IRQ, FIQ) across the
+     * entire TTBR0 switch + merged page update + TLBI sequence.
+     *
+     * This prevents any code (interrupt handlers, DPCs) from accessing
+     * the self-map region during the transition window where:
+     *  (a) TTBR0 has been updated but the merged page still has old data, or
+     *  (b) the merged page is being written but TLBI has not yet flushed
+     *      stale TLB entries.
+     *
+     * Without this, an interrupt handler that touches user PTEs via the
+     * self-map could refill the TLB with stale merged-page entries.
+     */
+    __asm__ __volatile__("mrs %0, daif" : "=r"(SavedDaif));
+    __asm__ __volatile__("msr daifset, #0xF" ::: "memory");
+
+    /*
+     * Step 1: Write TTBR0 with the new process root.
+     * TTBR1 remains global; process hyperspace is selected by patching
+     * TTBR1's HYPER_SPACE slot (L0[492]) below.
+     */
+    __asm__ __volatile__("msr ttbr0_el1, %0" :: "r"(MaskedUserBase) : "memory");
     __asm__ __volatile__("isb" ::: "memory");
+
+    /*
+     * Step 2: Copy new TTBR0 L0 entries into this CPU's merged PXE page.
+     * (TTBR1 hyperspace slot update is performed by KiSwapProcess.)
+     */
+    if (MergedPfn != 0 && MaskedUserBase != 0)
+    {
+        volatile ULONGLONG *Merged = (volatile ULONGLONG *)(KE_ARM64_KSEG0_BASE | ((ULONGLONG)MergedPfn << PAGE_SHIFT));
+        volatile ULONGLONG *UserL0 = (volatile ULONGLONG *)(KE_ARM64_KSEG0_BASE | MaskedUserBase);
+        int i;
+        for (i = 0; i < 256; i++)
+        {
+            Merged[i] = UserL0[i];
+        }
+    }
+
+    /* Step 3: Ensure merged page writes are visible before TLBI */
+    __asm__ __volatile__("dsb ishst" ::: "memory");
+
+    /* Step 4: Invalidate stale TLB entries - now the new data is in place */
     __asm__ __volatile__("tlbi vmalle1is" ::: "memory");
+
+    /* Step 5: Ensure TLBI completes on all CPUs in the inner-shareable domain */
     __asm__ __volatile__("dsb ish" ::: "memory");
     __asm__ __volatile__("isb" ::: "memory");
+
+    /* Restore interrupt state */
+    __asm__ __volatile__("msr daif, %0" :: "r"(SavedDaif) : "memory");
 }
 
 FORCEINLINE
@@ -317,6 +444,15 @@ VOID
 FASTCALL
 HalSetGicPriorityMask(
     _In_ KIRQL Irql);
+
+VOID
+KiSetCurrentIrql(
+    _In_ KIRQL Irql);
+
+VOID
+NTAPI
+KeReenableTimerInterrupt(
+    VOID);
 
 ULONG
 FASTCALL

@@ -15,6 +15,7 @@
 
 RTL_CRITICAL_SECTION RtlpVectoredHandlerLock;
 LIST_ENTRY RtlpVectoredExceptionList, RtlpVectoredContinueList;
+static volatile BOOLEAN RtlpVectoredHandlersInitialized = FALSE;
 
 typedef struct _RTL_VECTORED_HANDLER_ENTRY
 {
@@ -33,6 +34,7 @@ RtlpInitializeVectoredExceptionHandling(VOID)
     RtlInitializeCriticalSection(&RtlpVectoredHandlerLock);
     InitializeListHead(&RtlpVectoredExceptionList);
     InitializeListHead(&RtlpVectoredContinueList);
+    RtlpVectoredHandlersInitialized = TRUE;
 }
 
 BOOLEAN
@@ -54,6 +56,18 @@ RtlpCallVectoredHandlers(IN PEXCEPTION_RECORD ExceptionRecord,
      */
     HandlerRemoved = FALSE;
     HandlerReturn = EXCEPTION_CONTINUE_SEARCH;
+
+    /*
+     * ARM64 FIX (Bug #19): Guard against uninitialized vectored handler list.
+     *
+     * During early process startup, RtlpInitializeVectoredExceptionHandling()
+     * may not have been called yet. Detect this with an explicit init flag
+     * rather than relying on BSS-zero heuristics.
+     */
+    if (!RtlpVectoredHandlersInitialized)
+    {
+        return FALSE;
+    }
 
     /* Set up the data to pass to the handler */
     ExceptionInfo.ExceptionRecord = ExceptionRecord;

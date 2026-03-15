@@ -380,6 +380,21 @@ DbgkForwardException(IN PEXCEPTION_RECORD ExceptionRecord,
         return FALSE;
     }
 
+#if defined(_M_ARM64)
+    /*
+     * ARM64 FIX: Also check the exception port (LPC) reply on second chance.
+     * When csrsrv can't find the thread, it replies DBG_EXCEPTION_NOT_HANDLED.
+     * Without this check, KiDispatchException thinks the exception was handled
+     * and returns to the faulting instruction, causing an infinite loop.
+     * Returning FALSE here lets KiDispatchException proceed to ZwTerminateProcess.
+     */
+    if (!DebugPort && SecondChance &&
+        ApiMessage.ReturnedStatus == DBG_EXCEPTION_NOT_HANDLED)
+    {
+        return FALSE;
+    }
+#endif
+
     /* Otherwise, we're ok */
     return TRUE;
 }

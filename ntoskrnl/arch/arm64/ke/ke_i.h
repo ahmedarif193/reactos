@@ -44,7 +44,7 @@
 #define _10 PVOID
 #define _11 PVOID
 
-#define SYSCALL(x, y) typedef NTSTATUS (*PKI_SYSCALL_##x##PARAM)y;
+#define SYSCALL(x, y) typedef ULONG_PTR (*PKI_SYSCALL_##x##PARAM)y;
 
 #undef PROTO
 
@@ -69,7 +69,7 @@
 #define _11 g[0x10]
 
 #define SYSCALL(x, y)                        \
-    NTSTATUS                                 \
+    ULONG_PTR                                \
     KiSyscall##x##Param(                     \
         _In_ PVOID p,                        \
         _In_ PVOID *g                        \

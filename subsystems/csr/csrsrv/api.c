@@ -157,6 +157,11 @@ CsrApiHandleConnectionRequest(IN PCSR_API_MESSAGE ApiMessage)
     /* Lookup the CSR Thread */
     CsrThread = CsrLocateThreadByClientId(NULL, &ApiMessage->Header.ClientId);
 
+    DPRINT("CSRSRV: [CONN] Lookup PID=%p TID=%p => CsrThread=%p\n",
+            ApiMessage->Header.ClientId.UniqueProcess,
+            ApiMessage->Header.ClientId.UniqueThread,
+            CsrThread);
+
     /* Check if we have a thread */
     if (CsrThread)
     {
@@ -175,9 +180,16 @@ CsrApiHandleConnectionRequest(IN PCSR_API_MESSAGE ApiMessage)
                 ConnectInfo->DebugFlags = CsrDebug;
                 AllowConnection = TRUE;
             }
-
+            else
+            {
+                DPRINT1("CSRSRV: [CONN] CsrSrvAttachSharedSection FAILED 0x%lx\n", Status);
+            }
             /* Dereference the Process */
             CsrLockedDereferenceProcess(CsrProcess);
+        }
+        else
+        {
+            DPRINT1("CSRSRV: [CONN] CsrThread->Process is NULL!\n");
         }
     }
 
@@ -258,9 +270,11 @@ NTSTATUS
 NTAPI
 CsrpCheckRequestThreads(VOID)
 {
+#if !defined(_M_ARM64)
     HANDLE hThread;
     CLIENT_ID ClientId;
     NTSTATUS Status;
+#endif
 
     /* Decrease the count, and see if we're out */
     if (InterlockedDecrementUL(&CsrpStaticThreadCount) == 0)
@@ -268,6 +282,23 @@ CsrpCheckRequestThreads(VOID)
         /* Check if we've still got space for a Dynamic Thread */
         if (CsrpDynamicThreadTotal < CsrMaxApiRequestThreads)
         {
+#if defined(_M_ARM64)
+            /*
+             * ARM64 WORKAROUND: On ARM64, RtlCreateUserThread (which
+             * calls NtCreateThread) blocks during boot because
+             * the kernel's thread creation path acquires the process
+             * address space lock which is contended. This prevents
+             * the API dispatch from proceeding. Since we only have
+             * one API thread on single-CPU, skip dynamic thread
+             * creation and increment the counts to avoid repeated
+             * attempts.
+             */
+            DPRINT("[CRT1] CsrpCheckRequestThreads: SKIPPING thread creation (ARM64 workaround)\n");
+
+            /* Restore static count and saturate dynamic total to prevent retries */
+            InterlockedIncrementUL(&CsrpStaticThreadCount);
+            CsrpDynamicThreadTotal = CsrMaxApiRequestThreads;
+#else
             /* Create a new dynamic thread */
             Status = RtlCreateUserThread(NtCurrentProcess(),
                                          NULL,
@@ -279,6 +310,7 @@ CsrpCheckRequestThreads(VOID)
                                          NULL,
                                          &hThread,
                                          &ClientId);
+
             /* Check success */
             if (NT_SUCCESS(Status))
             {
@@ -309,6 +341,7 @@ CsrpCheckRequestThreads(VOID)
                     return STATUS_UNSUCCESSFUL;
                 }
             }
+#endif
         }
     }
 
@@ -350,14 +383,20 @@ CsrApiRequestThread(IN PVOID Parameter)
     PDBGKM_MSG DebugMessage;
     ULONG ServerId, ApiId, MessageType, i;
     HANDLE ReplyPort;
+    HANDLE LastDeadPid = NULL, LastDeadTid = NULL;
+    ULONG DeadRepeatCount = 0;
 
     /* Setup LPC loop port and message */
     ReplyMsg = NULL;
     ReplyPort = CsrApiPort;
 
+    DPRINT("[AT1] CsrApiRequestThread: ENTRY, calling CsrConnectToUser\n");
+
     /* Connect to user32 */
     while (!CsrConnectToUser())
     {
+        DPRINT1("[AT1F] CsrApiRequestThread: CsrConnectToUser FAILED, retrying in 30s\n");
+
         /* Set up the timeout for the connect (30 seconds) */
         TimeOut.QuadPart = -30 * 1000 * 1000 * 10;
 
@@ -365,6 +404,8 @@ CsrApiRequestThread(IN PVOID Parameter)
         Teb->Win32ClientInfo[0] = 0;
         NtDelayExecution(FALSE, &TimeOut);
     }
+
+    DPRINT("[AT2] CsrApiRequestThread: CsrConnectToUser succeeded\n");
 
     /* Get our thread */
     CurrentThread = Teb->CsrClientThread;
@@ -380,6 +421,8 @@ CsrApiRequestThread(IN PVOID Parameter)
         InterlockedIncrementUL(&CsrpStaticThreadCount);
         InterlockedIncrementUL(&CsrpDynamicThreadTotal);
     }
+
+    DPRINT("[AT3] CsrApiRequestThread: entering LPC loop\n");
 
     /* Now start the loop */
     while (TRUE)
@@ -400,10 +443,13 @@ CsrApiRequestThread(IN PVOID Parameter)
 #endif
 
         /* Wait for a message to come through */
+        DPRINT("[AT4] CsrApiRequestThread: calling NtReplyWaitReceivePort\n");
         Status = NtReplyWaitReceivePort(ReplyPort,
                                         &PortContext,
                                         &ReplyMsg->Header,
                                         &ReceiveMsg.Header);
+        DPRINT("[AT5] CsrApiRequestThread: NtReplyWaitReceivePort returned 0x%lx, MsgType=%d\n",
+                Status, ReceiveMsg.Header.u2.s2.Type);
 
         /* Check if we didn't get success */
         if (Status != STATUS_SUCCESS)
@@ -445,9 +491,15 @@ CsrApiRequestThread(IN PVOID Parameter)
         /* Get the Message Type */
         MessageType = ReceiveMsg.Header.u2.s2.Type;
 
+        DPRINT("[AT6] MsgType=%d ClientPid=%p ClientTid=%p\n",
+                MessageType,
+                ReceiveMsg.Header.ClientId.UniqueProcess,
+                ReceiveMsg.Header.ClientId.UniqueThread);
+
         /* Handle connection requests */
         if (MessageType == LPC_CONNECTION_REQUEST)
         {
+            DPRINT("[AT6C] Connection request\n");
             /* Handle the Connection Request */
             CsrApiHandleConnectionRequest(&ReceiveMsg);
 
@@ -466,6 +518,10 @@ CsrApiRequestThread(IN PVOID Parameter)
         /* Did we find a thread? */
         if (!CsrThread)
         {
+            DPRINT("[AT7] Thread NOT found for Pid=%p Tid=%p, MsgType=%d\n",
+                    ReceiveMsg.Header.ClientId.UniqueProcess,
+                    ReceiveMsg.Header.ClientId.UniqueThread,
+                    MessageType);
             /* This wasn't a CSR Thread, release lock */
             CsrReleaseProcessLock();
 
@@ -474,11 +530,38 @@ CsrApiRequestThread(IN PVOID Parameter)
             {
                 ReplyMsg = &ReceiveMsg;
                 ReplyPort = CsrApiPort;
-                ReplyMsg->Status = DBG_CONTINUE;
+                DebugMessage = (PDBGKM_MSG)ReplyMsg;
+                DebugMessage->ReturnedStatus = DBG_EXCEPTION_NOT_HANDLED;
             }
             else if (MessageType == LPC_PORT_CLOSED ||
                      MessageType == LPC_CLIENT_DIED)
             {
+                /*
+                 * ARM64 FIX: Track repeated CLIENT_DIED for same unknown thread.
+                 * If we keep getting CLIENT_DIED for a thread we can't find,
+                 * log once and move on. The message should only arrive once per
+                 * dead client, but if LPC re-delivers it, don't let it hang
+                 * the entire system.
+                 */
+                if (ReceiveMsg.Header.ClientId.UniqueProcess == LastDeadPid &&
+                    ReceiveMsg.Header.ClientId.UniqueThread == LastDeadTid)
+                {
+                    DeadRepeatCount++;
+                    if (DeadRepeatCount >= 5)
+                    {
+                        /* Yield to avoid spinning forever on repeated dead-client messages. */
+                        LARGE_INTEGER Delay;
+                        Delay.QuadPart = -10000LL * 100; /* 100 ms */
+                        NtDelayExecution(FALSE, &Delay);
+                    }
+                }
+                else
+                {
+                    LastDeadPid = ReceiveMsg.Header.ClientId.UniqueProcess;
+                    LastDeadTid = ReceiveMsg.Header.ClientId.UniqueThread;
+                    DeadRepeatCount = 1;
+                }
+
                 /* The Client or Port are gone, loop again */
                 ReplyMsg = NULL;
                 ReplyPort = CsrApiPort;
@@ -738,6 +821,7 @@ CsrApiRequestThread(IN PVOID Parameter)
         }
 
         /* We got an API Request */
+        DPRINT("[AT8] Thread FOUND, processing LPC_REQUEST Api=0x%lx\n", ReceiveMsg.ApiNumber);
         CsrLockedReferenceThread(CsrThread);
         CsrReleaseProcessLock();
 
@@ -805,26 +889,44 @@ CsrApiRequestThread(IN PVOID Parameter)
         /* Check if there's a capture buffer */
         if (ReceiveMsg.CsrCaptureData)
         {
+            DPRINT("[AT9] CaptureData present, calling CsrCaptureArguments\n");
             /* Capture the arguments */
             if (!CsrCaptureArguments(CsrThread, &ReceiveMsg))
             {
+                DPRINT1("[AT9F] CsrCaptureArguments FAILED\n");
                 /* Ignore this message if we failed to get the arguments */
                 CsrDereferenceThread(CsrThread);
                 continue;
             }
+            DPRINT("[AT9S] CsrCaptureArguments succeeded\n");
         }
+
+        DPRINT("[ATA] Dispatching ServerId=%lu ApiId=%lu DispatchTable=%p Func=%p\n",
+                ServerId, ApiId, ServerDll->DispatchTable,
+                ServerDll->DispatchTable ? ServerDll->DispatchTable[ApiId] : NULL);
 
         /* Validation complete, start SEH */
         _SEH2_TRY
         {
+            DPRINT("[ATA1a] calling CsrpCheckRequestThreads (StaticCount=%lu)\n",
+                    CsrpStaticThreadCount);
+
             /* Make sure we have enough threads */
             CsrpCheckRequestThreads();
 
+            DPRINT("[ATA1b] CsrpCheckRequestThreads returned (StaticCount=%lu)\n",
+                    CsrpStaticThreadCount);
+
             Teb->CsrClientThread = CsrThread;
+
+            DPRINT("[ATA2] About to call dispatch func at %p\n",
+                    ServerDll->DispatchTable[ApiId]);
 
             /* Call the API, get the reply code and return the result */
             ReplyCode = CsrReplyImmediately;
             ReplyMsg->Status = ServerDll->DispatchTable[ApiId](&ReceiveMsg, &ReplyCode);
+            DPRINT("[ATB] Dispatch returned Status=0x%lx ReplyCode=%d\n",
+                    ReplyMsg->Status, ReplyCode);
 
             /* Increase the static thread count */
             InterlockedIncrementUL(&CsrpStaticThreadCount);

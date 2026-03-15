@@ -153,8 +153,10 @@ CsrLoadServerDll(IN PCHAR DllString,
     /* If we are loading ourselves, don't actually load us */
     if (ServerId != CSRSRV_SERVERDLL_INDEX)
     {
+        DPRINT1("CSRSRV: LdrLoadDll entering for '%s' (ServerId=%lu)\n", DllString, ServerId);
         /* Load the DLL */
         Status = LdrLoadDll(NULL, 0, &TempString, &hServerDll);
+        DPRINT1("CSRSRV: LdrLoadDll returned Status=0x%08lx for '%s'\n", Status, DllString);
         if (!NT_SUCCESS(Status))
         {
             /* Setup error parameters */
@@ -225,6 +227,8 @@ CsrLoadServerDll(IN PCHAR DllString,
     /* Check if we got the pointer, and call it */
     if (NT_SUCCESS(Status))
     {
+        DPRINT1("CSRSRV: CsrLoadServerDll calling init for '%s' (ServerId=%lu, proc=%p)\n",
+                DllString, ServerId, ServerDllInitProcedure);
         /* Call the Server DLL entrypoint */
         _SEH2_TRY
         {
@@ -239,6 +243,8 @@ CsrLoadServerDll(IN PCHAR DllString,
 #endif
         }
         _SEH2_END;
+        DPRINT1("CSRSRV: CsrLoadServerDll init returned Status=0x%08lx for '%s'\n",
+                Status, DllString);
 
         if (NT_SUCCESS(Status))
         {
@@ -297,6 +303,9 @@ CSR_API(CsrSrvClientConnect)
     PCSR_SERVER_DLL ServerDll;
     PCSR_PROCESS CurrentProcess = CsrGetClientThread()->Process;
 
+    DPRINT("[SCC1] CsrSrvClientConnect: ServerId=%lu InfoSize=%lu\n",
+            ClientConnect->ServerId, ClientConnect->ConnectionInfoSize);
+
     /* Set default reply */
     *ReplyCode = CsrReplyImmediately;
 
@@ -317,6 +326,7 @@ CSR_API(CsrSrvClientConnect)
                                    sizeof(BYTE))))
     {
         /* Fail due to buffer overflow or other invalid buffer */
+        DPRINT1("[SCC1F] CsrValidateMessageBuffer failed\n");
         return STATUS_INVALID_PARAMETER;
     }
 
@@ -326,16 +336,21 @@ CSR_API(CsrSrvClientConnect)
     /* Check if it has a Connect Callback */
     if (ServerDll->ConnectCallback)
     {
+        DPRINT("[SCC2] Calling ConnectCallback for ServerId=%lu\n",
+                ClientConnect->ServerId);
         /* Call the callback */
         Status = ServerDll->ConnectCallback(CurrentProcess,
                                             ClientConnect->ConnectionInfo,
                                             &ClientConnect->ConnectionInfoSize);
+        DPRINT("[SCC3] ConnectCallback returned Status=0x%lx\n", Status);
     }
     else
     {
         /* Assume success */
         Status = STATUS_SUCCESS;
     }
+
+    DPRINT("[SCC4] CsrSrvClientConnect returning Status=0x%lx\n", Status);
 
     /* Return status */
     return Status;
@@ -406,7 +421,19 @@ CsrSrvCreateSharedSection(IN PCHAR ParameterValue)
                              NULL);
     if (!NT_SUCCESS(Status)) return Status;
 
-    /* Map the section */
+    /*
+     * ARM64 fix: Do NOT use MEM_TOP_DOWN for the shared section.
+     *
+     * MEM_TOP_DOWN places the 12MB section near the top of the user VA space,
+     * which competes with other MEM_TOP_DOWN allocations (PEB, TEB, thread
+     * stacks, DLL images) in client processes. When clients connect to CSR,
+     * they must map at the EXACT same address. If a client's top-down
+     * allocations already occupy that address range, the mapping fails with
+     * STATUS_CONFLICTING_ADDRESSES.
+     *
+     * Bottom-up allocation places the section at a low address, far from the
+     * top-down PEB/TEB/stack region, avoiding the conflict entirely.
+     */
     Status = NtMapViewOfSection(CsrSrvSharedSection,
                                 NtCurrentProcess(),
                                 &CsrSrvSharedSectionBase,
@@ -415,7 +442,7 @@ CsrSrvCreateSharedSection(IN PCHAR ParameterValue)
                                 NULL,
                                 &ViewSize,
                                 ViewUnmap,
-                                MEM_TOP_DOWN,
+                                0,
                                 PAGE_EXECUTE_READWRITE);
     if (!NT_SUCCESS(Status))
     {
@@ -425,6 +452,9 @@ CsrSrvCreateSharedSection(IN PCHAR ParameterValue)
     }
 
     /* FIXME: Write the value to registry */
+
+    DPRINT1("CSRSRV: SharedSection mapped at %p Size=0x%lx\n",
+            CsrSrvSharedSectionBase, CsrSrvSharedSectionSize);
 
     /* The Heap is the same place as the Base */
     CsrSrvSharedSectionHeap = CsrSrvSharedSectionBase;
@@ -488,10 +518,12 @@ CsrSrvAttachSharedSection(IN PCSR_PROCESS CsrProcess OPTIONAL,
     /* Check if we have a process */
     if (CsrProcess)
     {
-        /* Map the section into this process */
+        PVOID BaseAddress = CsrSrvSharedSectionBase;
+
+        /* Map the section into this process at the same base as csrss */
         Status = NtMapViewOfSection(CsrSrvSharedSection,
                                     CsrProcess->ProcessHandle,
-                                    &CsrSrvSharedSectionBase,
+                                    &BaseAddress,
                                     0,
                                     0,
                                     NULL,
@@ -499,7 +531,23 @@ CsrSrvAttachSharedSection(IN PCSR_PROCESS CsrProcess OPTIONAL,
                                     ViewUnmap,
                                     SEC_NO_CHANGE,
                                     PAGE_EXECUTE_READ);
-        if (!NT_SUCCESS(Status)) return Status;
+        if (!NT_SUCCESS(Status))
+        {
+            return Status;
+        }
+
+        /*
+         * Shared-section pointers are absolute across processes; accepting a
+         * remapped base here would corrupt all pointer-based lookups.
+         */
+        if (BaseAddress != CsrSrvSharedSectionBase)
+        {
+            DPRINT1("CSRSRV: SharedSection remap conflict: wanted %p got %p (PID=%p)\n",
+                    CsrSrvSharedSectionBase, BaseAddress,
+                    CsrProcess->ClientId.UniqueProcess);
+            NtUnmapViewOfSection(CsrProcess->ProcessHandle, BaseAddress);
+            return STATUS_CONFLICTING_ADDRESSES;
+        }
     }
 
     /* Write the values in the Connection Info structure */

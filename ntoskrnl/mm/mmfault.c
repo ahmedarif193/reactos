@@ -18,152 +18,10 @@
 
 extern MM_AVL_TABLE MiRosKernelVadRoot;
 
-/* Debug logging for kernel section view fault routing - disabled in production */
-#define MMFAULT_DEBUG 0
-
 /* PRIVATE FUNCTIONS **********************************************************/
 
-#if defined(_M_ARM64) || defined(__aarch64__)
-/*
- * ARM64-specific: Handle demand-zero fault for ARM3 VADs (e.g., PEB/TEB).
- *
- * ARM3 allocates PEB/TEB via MiInsertVadEx which creates ARM3 VADs, not ROS
- * memory areas. When a page fault occurs on these addresses, MmLocateMemoryArea
- * returns NULL (since it only finds ROS memory areas), but we still need to
- * handle the demand-zero fault.
- *
- * This function:
- * 1. Allocates a physical page
- * 2. Creates the page table hierarchy in TTBR0 via KSEG0 (direct mapping)
- * 3. Maps the page at the faulting address
- */
-NTSTATUS
-NTAPI
-MiArm64HandleUserDemandZero(
-    _In_ PVOID Address,
-    _In_ ULONG ProtectionCode,
-    _In_ PMMVAD Vad)
-{
-    NTSTATUS Status;
-    PFN_NUMBER PageFrameIndex;
-    PEPROCESS Process;
-    PETHREAD Thread;
-    KIRQL OldIrql;
-    ULONG_PTR VirtualAddress = (ULONG_PTR)Address;
-
-    /* Debug output */
-Process = PsGetCurrentProcess();
-    Thread = PsGetCurrentThread();
-
-    /* Lock the working set */
-    MiLockProcessWorkingSet(Process, Thread);
-
-    /* Allocate a zero page */
-    OldIrql = MiAcquirePfnLock();
-
-    MI_SET_USAGE(MI_USAGE_PEB_TEB);
-    MI_SET_PROCESS(Process);
-
-    /* Get a zeroed page - track if we need to zero it ourselves */
-    BOOLEAN NeedToZeroPage = FALSE;
-    PageFrameIndex = MiRemoveZeroPage(MI_GET_NEXT_PROCESS_COLOR(Process));
-    if (PageFrameIndex == 0)
-    {
-        /* No zeroed pages available, get any page */
-        PageFrameIndex = MiRemoveAnyPage(MI_GET_NEXT_PROCESS_COLOR(Process));
-        if (PageFrameIndex == 0)
-        {
-            MiReleasePfnLock(OldIrql);
-            MiUnlockProcessWorkingSet(Process, Thread);
-            return STATUS_NO_MEMORY;
-        }
-        /* CRITICAL: Must zero pages from MiRemoveAnyPage to prevent info leak */
-        NeedToZeroPage = TRUE;
-    }
-
-    MiReleasePfnLock(OldIrql);
-
-    /*
-     * SECURITY FIX: Zero the page if we got it from MiRemoveAnyPage.
-     * Failure to do so exposes stale physical memory (potentially containing
-     * sensitive data like passwords, kernel data, etc.) to user space.
-     *
-     * Use MiZeroPhysicalPage which maps via hyperspace and zeros safely.
-     */
-    if (NeedToZeroPage)
-    {
-        MiZeroPhysicalPage(PageFrameIndex);
-    }
-
-    /* Create the page table mapping via KSEG0 */
-
-    /* Convert MM protection to PTE protection */
-    ULONG PteProtection;
-    switch (ProtectionCode)
-    {
-        case MM_READONLY:
-            PteProtection = PAGE_READONLY;
-            break;
-        case MM_READWRITE:
-            PteProtection = PAGE_READWRITE;
-            break;
-        case MM_EXECUTE:
-            PteProtection = PAGE_EXECUTE;
-            break;
-        case MM_EXECUTE_READ:
-            PteProtection = PAGE_EXECUTE_READ;
-            break;
-        case MM_EXECUTE_READWRITE:
-            PteProtection = PAGE_EXECUTE_READWRITE;
-            break;
-        default:
-            PteProtection = PAGE_READWRITE;
-            break;
-    }
-
-    Status = MiArm64MapUserPage(VirtualAddress, PageFrameIndex, PteProtection);
-
-    if (!NT_SUCCESS(Status))
-    {
-        /* Failed to map - return the page */
-        OldIrql = MiAcquirePfnLock();
-        MiInsertPageInFreeList(PageFrameIndex);
-        MiReleasePfnLock(OldIrql);
-
-        MiUnlockProcessWorkingSet(Process, Thread);
-
-return Status;
-    }
-
-    /* Initialize the PFN entry */
-    OldIrql = MiAcquirePfnLock();
-
-    /*
-     * For ARM64 user demand-zero pages, we use a simplified PFN setup.
-     * The page is private to the process and demand-paged.
-     *
-     * TODO: PteFrame should be set to the PFN of the page table page containing
-     * this PTE. For now we use 0 which is technically wrong but works for
-     * bring-up because we don't do trimming/outswapping of these pages yet.
-     * This MUST be fixed before enabling working set trimming on ARM64.
-     */
-    PMMPFN Pfn1 = MI_PFN_ELEMENT(PageFrameIndex);
-    Pfn1->u3.e2.ReferenceCount = 1;
-    Pfn1->u2.ShareCount = 1;
-    Pfn1->u3.e1.PageLocation = ActiveAndValid;
-    Pfn1->u3.e1.PrototypePte = 0;
-    /* TODO: Calculate actual PteFrame from the page table page PFN */
-    Pfn1->u4.PteFrame = 0;
-    Pfn1->OriginalPte.u.Long = 0;
-    Pfn1->OriginalPte.u.Soft.Protection = ProtectionCode;
-
-    MiReleasePfnLock(OldIrql);
-
-    MiUnlockProcessWorkingSet(Process, Thread);
-
-return STATUS_SUCCESS;
-}
-#endif /* _M_ARM64 */
+/* Shadow MM functions (MiArm64HandleUserDemandZero, MiArm64HandleUserPrototypeFault)
+ * removed: no longer needed with recursive self-map fix via merged PXE page. */
 
 NTSTATUS
 NTAPI
@@ -305,9 +163,9 @@ MmNotPresentFault(KPROCESSOR_MODE Mode,
 
     DPRINT("MmNotPresentFault(Mode %d, Address %x)\n", Mode, Address);
 
-#if defined(_M_ARM64) || defined(__aarch64__)
-    /* Debug: trace entry to MmNotPresentFault for user addresses */
-#endif
+
+
+
 
     if (KeGetCurrentIrql() >= DISPATCH_LEVEL)
     {
@@ -326,12 +184,24 @@ MmNotPresentFault(KPROCESSOR_MODE Mode,
         if (Mode != KernelMode)
         {
             PEPROCESS Process = PsGetCurrentProcess();
-
+#ifdef _M_ARM64
+            {
+                PKTRAP_FRAME Tf = KeGetCurrentThread()->TrapFrame;
+                DPRINT1("User-mode fault on system address %p (proc %s pid %lu tid %lu) PC=%p LR=%p\n",
+                        Address,
+                        Process ? Process->ImageFileName : "<unknown>",
+                        (ULONG)(ULONG_PTR)PsGetCurrentProcessId(),
+                        (ULONG)(ULONG_PTR)PsGetCurrentThreadId(),
+                        Tf ? (PVOID)Tf->Pc : NULL,
+                        Tf ? (PVOID)Tf->Lr : NULL);
+            }
+#else
             DPRINT1("User-mode fault on system address %p (proc %s pid %lu tid %lu)\n",
                     Address,
                     Process ? Process->ImageFileName : "<unknown>",
                     (ULONG)(ULONG_PTR)PsGetCurrentProcessId(),
                     (ULONG)(ULONG_PTR)PsGetCurrentThreadId());
+#endif
             return(STATUS_ACCESS_VIOLATION);
         }
         AddressSpace = MmGetKernelAddressSpace();
@@ -366,11 +236,14 @@ MmNotPresentFault(KPROCESSOR_MODE Mode,
         {
             /* Already locked by us - nested fault */
             WeAcquiredLock = FALSE;
+
         }
         else
         {
+
             MmLockAddressSpace(AddressSpace);
             WeAcquiredLock = TRUE;
+
         }
         LockHeld = TRUE;
     }
@@ -385,59 +258,9 @@ MmNotPresentFault(KPROCESSOR_MODE Mode,
     do
     {
         MemoryArea = MmLocateMemoryAreaByAddress(AddressSpace, (PVOID)Address);
+
         if (MemoryArea == NULL || MemoryArea->DeleteInProgress)
         {
-#if defined(_M_ARM64) || defined(__aarch64__)
-            /*
-             * ARM64: Check if this is an ARM3 VAD (e.g., PEB/TEB allocation).
-             * MmLocateMemoryAreaByAddress returns NULL for ARM3 VADs because
-             * they're not ROS memory areas. We need to handle demand-zero
-             * faults for these allocations separately.
-             *
-             * LOCKING: MiLocateAddress accesses PsGetCurrentProcess()->VadRoot
-             * which requires holding the process working set lock or
-             * AddressCreationLock. We verify we're faulting in our own process
-             * context (which is always true for user-mode page faults), and
-             * MmLockAddressSpace acquires AddressCreationLock for user spaces.
-             *
-             * CRITICAL: Only do this for USER addresses in our own process.
-             */
-            PMMVAD Arm3Vad = NULL;
-
-            /* Only check ARM3 VAD for user addresses in current process */
-            if (Address < (ULONG_PTR)MmSystemRangeStart)
-            {
-                PEPROCESS CurrentProcess = PsGetCurrentProcess();
-
-                /*
-                 * Verify we're faulting in our own process context.
-                 * User faults should always be in current process; if not,
-                 * we cannot safely access the VAD tree.
-                 */
-                if (AddressSpace == &CurrentProcess->Vm)
-                {
-                    /* Check if there's an ARM3 VAD for this address */
-                    Arm3Vad = MiLocateAddress((PVOID)Address);
-                }
-            }
-
-            if (Arm3Vad != NULL)
-            {
-                /*
-                 * Get protection from the VAD. For PEB/TEB allocations,
-                 * the protection is stored in Vad->u.VadFlags.Protection.
-                 */
-                ULONG ProtectionCode = Arm3Vad->u.VadFlags.Protection;
-
-                /* This is an ARM3 VAD - handle via MiArm64HandleUserDemandZero */
-                Status = MiArm64HandleUserDemandZero((PVOID)Address, ProtectionCode, Arm3Vad);
-                if (WeAcquiredLock)
-                {
-                    MmUnlockAddressSpace(AddressSpace);
-                }
-                return Status;
-            }
-#endif
             if (WeAcquiredLock)
             {
                 MmUnlockAddressSpace(AddressSpace);
@@ -452,6 +275,7 @@ MmNotPresentFault(KPROCESSOR_MODE Mode,
                                                   MemoryArea,
                                                   (PVOID)Address,
                                                   LockHeld);
+
             break;
 #ifdef NEWCC
         case MEMORY_AREA_CACHE:
@@ -468,6 +292,7 @@ MmNotPresentFault(KPROCESSOR_MODE Mode,
             Status = STATUS_ACCESS_VIOLATION;
             break;
         }
+
     }
     while (Status == STATUS_MM_RESTART_OPERATION);
 
@@ -510,10 +335,12 @@ MmAccessFault(IN ULONG FaultCode,
      * - Handle the fault if the page tables are already mapped
      * - Bugcheck if the fault cannot be resolved at high IRQL
      */
+#if defined(_M_ARM64)
     if (KeGetCurrentIrql() > APC_LEVEL)
     {
         return MmArmAccessFault(FaultCode, Address, Mode, TrapInformation);
     }
+#endif
 
     /* Cute little hack for ROS */
     if ((ULONG_PTR)Address >= (ULONG_PTR)MmSystemRangeStart)
@@ -539,22 +366,136 @@ MmAccessFault(IN ULONG FaultCode,
 
 #if defined(_M_ARM64) || defined(__aarch64__)
     /*
-     * ARM64 User Address Fast Path:
+     * ARM64 User Address Fault Routing:
      *
-     * For user addresses on ARM64, we MUST route to MmArmAccessFault first.
-     * MmArmAccessFault has been updated with proper TTBR0 alias handling
-     * (using MiAddressToPteTtbr0 instead of MiAddressToPte) for user addresses.
-     *
-     * If we continue to the VAD lookup path below, code may inadvertently
-     * access page tables via the regular self-map (MiAddressToPde), which
-     * doesn't work for user addresses on ARM64 (causes fault at PDE_BASE).
-     *
-     * MmArmAccessFault will handle the fault properly and route back to
-     * ReactOS section handling if needed.
+     * NOT-PRESENT faults go to MmArmAccessFault (ARM3 demand paging).
+     * ACCESS FLAG faults (DFSC 0x08-0x0B) are resolved by setting AF via KSEG0.
+     * INSTRUCTION FETCH faults check region protection and clear UXN if allowed.
+     * PRESENT-PAGE faults (write/CoW) go to Retry -> MmpAccessFault.
      */
     if (Address < MmSystemRangeStart)
     {
-        return MmArmAccessFault(FaultCode, Address, Mode, TrapInformation);
+        if (MI_IS_NOT_PRESENT_FAULT(FaultCode))
+        {
+            return MmArmAccessFault(FaultCode, Address, Mode, TrapInformation);
+        }
+
+        /* Access flag faults: walk TTBR0 via KSEG0 and set AF bit */
+        if (TrapInformation != NULL &&
+            (ULONG_PTR)TrapInformation >= (ULONG_PTR)MmSystemRangeStart)
+        {
+            PKTRAP_FRAME TrapFrame = (PKTRAP_FRAME)TrapInformation;
+            ULONG Dfsc = TrapFrame->Esr & 0x3FULL;
+
+            if ((Dfsc & 0x3C) == 0x08)
+            {
+                if (MiArm64HandleUserAccessFlagFault(Address, Dfsc & 0x03))
+                {
+                    ULONG64 VaForTlbi = ((ULONG64)(ULONG_PTR)Address) >> 12;
+                    __asm__ __volatile__("dsb ishst" ::: "memory");
+                    __asm__ __volatile__("tlbi vae1is, %0" :: "r"(VaForTlbi) : "memory");
+                    __asm__ __volatile__("dsb ish\n\tisb" ::: "memory");
+                    return STATUS_SUCCESS;
+                }
+                goto Retry;
+            }
+        }
+
+        /*
+         * Instruction fetch permission faults: page is present but UXN=1.
+         * Check region/VAD protection; if execute is allowed, clear UXN.
+         */
+        if (MI_IS_INSTRUCTION_FETCH(FaultCode))
+        {
+            /* Read L3 PTE via KSEG0 — bypasses stale self-map for user PTEs */
+            PMMPTE L3Pte = MiArm64UserPteKseg0(Address);
+            if (L3Pte != NULL)
+            {
+                ULONG64 L3Entry = *(volatile ULONG64 *)L3Pte;
+                if ((L3Entry & (1ULL << 54)) && (L3Entry & 0x1ULL))
+                {
+                    PMMSUPPORT As = &PsGetCurrentProcess()->Vm;
+                    BOOLEAN ShouldExec = FALSE;
+
+                    MmLockAddressSpace(As);
+                    {
+                        MEMORY_AREA *Ma = MmLocateMemoryAreaByAddress(As, Address);
+                        if (Ma != NULL && !Ma->DeleteInProgress &&
+                            Ma->Type == MEMORY_AREA_SECTION_VIEW)
+                        {
+                            PMM_REGION Region = MmFindRegion(
+                                (PVOID)MA_GetStartingAddress(Ma),
+                                &Ma->SectionData.RegionListHead,
+                                Address, NULL);
+                            if (Region && (Region->Protect & PAGE_IS_EXECUTABLE))
+                                ShouldExec = TRUE;
+                        }
+                        else if (Ma == NULL)
+                        {
+                            PMMVAD IfVad = MiLocateAddress(Address);
+                            if (IfVad != NULL)
+                            {
+                                ULONG VadProt = IfVad->u.VadFlags.Protection;
+                                if (VadProt == MM_EXECUTE ||
+                                    VadProt == MM_EXECUTE_READ ||
+                                    VadProt == MM_EXECUTE_READWRITE ||
+                                    VadProt == MM_EXECUTE_WRITECOPY)
+                                    ShouldExec = TRUE;
+                            }
+                        }
+                    }
+                    MmUnlockAddressSpace(As);
+
+                    if (ShouldExec)
+                    {
+                        /* Clear UXN bit via KSEG0 and invalidate TLB */
+                        *(volatile ULONG64 *)L3Pte = L3Entry & ~(1ULL << 54);
+                        ULONG64 VaForTlbi = ((ULONG64)(ULONG_PTR)Address) >> 12;
+                        __asm__ __volatile__("dsb ishst" ::: "memory");
+                        __asm__ __volatile__("tlbi vae1is, %0" :: "r"(VaForTlbi) : "memory");
+                        __asm__ __volatile__("dsb ish\n\tisb" ::: "memory");
+                        return STATUS_SUCCESS;
+                    }
+                }
+            }
+            /* Fall through to Retry — MmpAccessFault returns ACCESS_VIOLATION */
+        }
+
+        /* Present-page write fault: handle dirty-bit promotion inline.
+         *
+         * A write permission fault fires when:
+         *   - SW Writable=1 (bit 55) but HW NotDirty=1 (AP[2]=1 = read-only)
+         *     → dirty bit promotion: clear NotDirty, TLB flush, return SUCCESS.
+         *   - SW Writable=0, CopyOnWrite=1 (bit 56)
+         *     → COW: fall through to MmpAccessFault (RosMM handles section COW).
+         *   - SW Writable=0, CopyOnWrite=0
+         *     → truly read-only: ACCESS_VIOLATION via MmpAccessFault.
+         *
+         * Routing ALL write faults to MmArmAccessFault is wrong: MmArmAccessFault
+         * re-maps section COW pages with the same read-only protection, creating
+         * an infinite fault loop (STATUS_SUCCESS returned but page still HW RO).
+         */
+        if (MI_IS_WRITE_ACCESS(FaultCode))
+        {
+            PMMPTE WritePte = MiArm64UserPteKseg0(Address);
+            if (WritePte != NULL && WritePte->u.Hard.Valid &&
+                WritePte->u.Hard.Writable)
+            {
+                /* Dirty bit promotion: SW Writable=1 but HW NotDirty=1.
+                 * Clear NotDirty (AP[2]=0) to make the page HW writable. */
+                ULONG64 VaForTlbi;
+                MI_MAKE_DIRTY_PAGE(WritePte);
+                VaForTlbi = ((ULONG64)(ULONG_PTR)PAGE_ALIGN(Address)) >> 12;
+                __asm__ __volatile__("dsb ishst" ::: "memory");
+                __asm__ __volatile__("tlbi vae1is, %0" :: "r"(VaForTlbi) : "memory");
+                __asm__ __volatile__("dsb ish\n\tisb" ::: "memory");
+                return STATUS_SUCCESS;
+            }
+            /* CopyOnWrite or truly RO: let MmpAccessFault decide. */
+        }
+
+        /* Other present-page faults (CoW, etc.): use RosMM handlers */
+        goto Retry;
     }
 #endif
 
@@ -565,74 +506,96 @@ MmAccessFault(IN ULONG FaultCode,
         {
 #if defined(_M_ARM64)
             /*
-             * ARM64 PAGE TABLE / HYPERSPACE FAST PATH:
+             * ARM64 PAGE TABLE SELF-MAP FAST PATH:
              *
-             * Addresses in the page table self-map region (PTE_BASE to MmHyperSpaceEnd)
-             * or TTBR0 alias region (PTE_BASE_TTBR0 to HYPER_SPACE_END) MUST be routed
-             * directly to MmArmAccessFault WITHOUT acquiring any working set locks.
-             *
-             * These faults typically occur during nested page table manipulation:
-             * 1. Code handles a user fault and acquires process WS lock
-             * 2. Page table manipulation accesses self-map addresses
-             * 3. Self-map address faults (page table page not yet mapped)
-             * 4. If we try to acquire MmSystemCacheWs lock here, we hit:
-             *    "Assertion failed: !MM_ANY_WS_LOCK_HELD(Thread)"
-             *
-             * MmArmAccessFault handles self-map/hyperspace faults specially via
-             * MiArm64MapAliasForPointer without needing any VAD lookup.
-             *
-             * ARM64 FIX: Use PXE_TOP (not MmHyperSpaceEnd) as the upper bound.
-             * HYPER_SPACE is at L0[492], while the self-map (PTE_BASE) starts at L0[493].
-             * HYPER_SPACE_END < PTE_BASE, so using it would never match self-map addresses!
+             * Addresses in the page table self-map region (L0[493]) MUST be
+             * routed directly to MmArmAccessFault WITHOUT acquiring any
+             * working set locks (nested fault during page table manipulation).
              */
-            if (((ULONG_PTR)Address >= PTE_BASE && (ULONG_PTR)Address <= (ULONG_PTR)PXE_TOP))
+            if (((ULONG_PTR)Address >= (ULONG_PTR)PTE_BASE) &&
+                ((ULONG_PTR)Address < (ULONG_PTR)PTE_TOP))
             {
                 return MmArmAccessFault(FaultCode, Address, Mode, TrapInformation);
             }
-#endif
 
-            /* Check if this is an ARM3 memory area */
-            MiLockWorkingSetShared(PsGetCurrentThread(), &MmSystemCacheWs);
-            Vad = MiLocateVad(&MiRosKernelVadRoot, Address);
-
-#if MMFAULT_DEBUG
-            if ((ULONG_PTR)Address >= 0xFFFF8000B0000000ULL &&
-                (ULONG_PTR)Address < 0xFFFF8000E0000000ULL)
+            /*
+             * ARM64 SYSTEM CACHE FAST PATH:
+             *
+             * System Cache addresses MUST skip the VAD lookup below to avoid
+             * deadlock (same thread may already hold MmSystemCacheWs lock).
+             */
+            if (((ULONG_PTR)Address >= MI_SYSTEM_CACHE_START &&
+                 (ULONG_PTR)Address <= MI_SYSTEM_CACHE_END))
             {
-                DbgPrintEx(DPFLTR_DEFAULT_ID, DPFLTR_ERROR_LEVEL,
-                    "[MmAccessFault] Kernel addr %p: Vad=%p IsRosMmVad=%d\n",
-                    Address, Vad,
-                    Vad ? (MI_IS_ROSMM_VAD(Vad) ? 1 : 0) : -1);
-                if (Vad)
-                {
-                    DbgPrintEx(DPFLTR_DEFAULT_ID, DPFLTR_ERROR_LEVEL,
-                        "[MmAccessFault] Vad->StartingVpn=0x%llx EndingVpn=0x%llx Spare=0x%x\n",
-                        (ULONGLONG)Vad->StartingVpn,
-                        (ULONGLONG)Vad->EndingVpn,
-                        Vad->u.VadFlags.Spare);
-                }
+                goto Retry;
             }
 #endif
 
-            if ((Vad != NULL) && !MI_IS_ROSMM_VAD(Vad))
+            /*
+             * ARM64: avoid recursive WS lock acquisition.
+             *
+             * This kernel VAD probe takes MmSystemCacheWs shared. If the fault
+             * happens while the thread already owns any WS lock (common in nested
+             * fault paths), MiLockWorkingSetShared asserts on !MM_ANY_WS_LOCK_HELD.
+             *
+             * In that context, route directly to ARM3 fault handling. The special
+             * RosMM system cache range above already jumps to Retry, so this
+             * fallback only applies to non-system-cache kernel addresses.
+             */
+            if (
+#if defined(_M_ARM64) || defined(__aarch64__)
+                MM_ANY_WS_LOCK_HELD(PsGetCurrentThread())
+#else
+                FALSE
+#endif
+                )
             {
                 IsArm3Fault = TRUE;
             }
+            else
+            {
+                /* Check if this is an ARM3 memory area */
+                MiLockWorkingSetShared(PsGetCurrentThread(), &MmSystemCacheWs);
+                Vad = MiLocateVad(&MiRosKernelVadRoot, Address);
 
-            MiUnlockWorkingSetShared(PsGetCurrentThread(), &MmSystemCacheWs);
+                if ((Vad != NULL) && !MI_IS_ROSMM_VAD(Vad))
+                {
+                    IsArm3Fault = TRUE;
+                }
+
+                MiUnlockWorkingSetShared(PsGetCurrentThread(), &MmSystemCacheWs);
+            }
         }
         else
         {
-            /* Could this be a VAD fault from user-mode? */
-            MiLockProcessWorkingSetShared(PsGetCurrentProcess(), PsGetCurrentThread());
-            Vad = MiLocateVad(&PsGetCurrentProcess()->VadRoot, Address);
-
-            if ((Vad != NULL) && !MI_IS_ROSMM_VAD(Vad))
+            /*
+             * ARM64: same recursive-lock hazard for user VAD probe.
+             * If a WS lock is already held, skip the shared-lock lookup and
+             * route to ARM3 fault handling.
+             */
+            if (
+#if defined(_M_ARM64) || defined(__aarch64__)
+                MM_ANY_WS_LOCK_HELD(PsGetCurrentThread())
+#else
+                FALSE
+#endif
+                )
             {
                 IsArm3Fault = TRUE;
             }
+            else
+            {
+                /* Could this be a VAD fault from user-mode? */
+                MiLockProcessWorkingSetShared(PsGetCurrentProcess(), PsGetCurrentThread());
+                Vad = MiLocateVad(&PsGetCurrentProcess()->VadRoot, Address);
 
-            MiUnlockProcessWorkingSetShared(PsGetCurrentProcess(), PsGetCurrentThread());
+                if ((Vad != NULL) && !MI_IS_ROSMM_VAD(Vad))
+                {
+                    IsArm3Fault = TRUE;
+                }
+
+                MiUnlockProcessWorkingSetShared(PsGetCurrentProcess(), PsGetCurrentThread());
+            }
         }
     }
 

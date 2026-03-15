@@ -123,17 +123,6 @@ ExfWakePushLock(PEX_PUSH_LOCK PushLock,
         }
 #endif
 
-        /* ARM64 DEBUG: Log wait block extraction */
-        DPRINT1("ExfWakePushLock: OldValue.Value=%016llX, FirstWaitBlock=%p\n",
-                (ULONGLONG)OldValue.Value, FirstWaitBlock);
-        if (FirstWaitBlock)
-        {
-            DPRINT1("                 WaitBlock->WakeGate=%p, Type=%02X, Flags=%08lX\n",
-                    &FirstWaitBlock->WakeGate,
-                    FirstWaitBlock->WakeGate.Header.Type,
-                    FirstWaitBlock->Flags);
-        }
-
         /* Try to find the last block */
         while (TRUE)
         {
@@ -215,10 +204,6 @@ ExfWakePushLock(PEX_PUSH_LOCK PushLock,
         /* We are about to get signaled */
         WaitBlock->Signaled = TRUE;
 #endif
-
-        /* ARM64 DEBUG: Log before signaling */
-        DPRINT1("ExfWakePushLock: Signaling WaitBlock=%p, WakeGate=%p, Gate.Type=%02X\n",
-                WaitBlock, &WaitBlock->WakeGate, WaitBlock->WakeGate.Header.Type);
 
         /* Set the Wait Bit in the Wait Block */
         if (!InterlockedBitTestAndReset(&WaitBlock->Flags, 1))
@@ -610,13 +595,6 @@ ExfAcquirePushLockExclusive(PEX_PUSH_LOCK PushLock)
             __asm__ __volatile__("dmb ishst" : : : "memory");
 #endif
 
-            /* ARM64 DEBUG: Log wait block details */
-            DPRINT1("ExfAcquirePushLockExclusive: WaitBlock=%p (aligned=%d), WakeGate=%p, Gate.Type=%02X\n",
-                    WaitBlock,
-                    ((ULONG_PTR)WaitBlock & 0xF) == 0 ? 1 : 0,
-                    &WaitBlock->WakeGate,
-                    WaitBlock->WakeGate.Header.Type);
-            DPRINT1("                              Publishing to PushLock=%p\n", PushLock);
 
             /* Write the new value */
             TempValue = NewValue;
@@ -661,10 +639,6 @@ ExfAcquirePushLockExclusive(PEX_PUSH_LOCK PushLock)
             /* Now try to remove the wait bit */
             if (InterlockedBitTestAndReset(&WaitBlock->Flags, 1))
             {
-                /* ARM64 DEBUG: About to wait on gate */
-                DPRINT1("ExfAcquirePushLockExclusive: About to wait - WaitBlock=%p, WakeGate=%p, Type=%02X\n",
-                        WaitBlock, &WaitBlock->WakeGate, WaitBlock->WakeGate.Header.Type);
-
                 /* Nobody removed it already, let's do a full wait */
                 KeWaitForGate(&WaitBlock->WakeGate, WrPushLock, KernelMode);
                 ASSERT(WaitBlock->Signaled);
@@ -800,12 +774,6 @@ ExfAcquirePushLockShared(PEX_PUSH_LOCK PushLock)
             __asm__ __volatile__("dmb ishst" : : : "memory");
 #endif
 
-            /* ARM64 DEBUG: Log wait block details */
-            DPRINT1("ExfAcquirePushLockShared: WaitBlock=%p (aligned=%d), WakeGate=%p, Gate.Type=%02X\n",
-                    WaitBlock,
-                    ((ULONG_PTR)WaitBlock & 0xF) == 0 ? 1 : 0,
-                    &WaitBlock->WakeGate,
-                    WaitBlock->WakeGate.Header.Type);
 
             /* Write the new value */
             NewValue.Ptr = InterlockedCompareExchangePointer(&PushLock->Ptr,
@@ -852,10 +820,6 @@ ExfAcquirePushLockShared(PEX_PUSH_LOCK PushLock)
             /* Now try to remove the wait bit */
             if (InterlockedBitTestAndReset(&WaitBlock->Flags, 1))
             {
-                /* ARM64 DEBUG: About to wait on gate */
-                DPRINT1("ExfAcquirePushLockShared: About to wait - WaitBlock=%p, WakeGate=%p, Type=%02X\n",
-                        WaitBlock, &WaitBlock->WakeGate, WaitBlock->WakeGate.Header.Type);
-
                 /* Fast-path did not work, we need to do a full wait */
                 KeWaitForGate(&WaitBlock->WakeGate, WrPushLock, KernelMode);
                 ASSERT(WaitBlock->Signaled);

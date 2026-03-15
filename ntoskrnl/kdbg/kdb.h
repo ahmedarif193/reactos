@@ -58,6 +58,24 @@ typedef enum _KD_CONTINUE_TYPE
     kdHandleException
 } KD_CONTINUE_TYPE;
 
+#if defined(_M_ARM64)
+BOOLEAN
+NTAPI
+KxKdbFilterLoadSymbols(
+    _In_ BOOLEAN LoadSymbols);
+#endif
+
+#if !defined(_M_ARM64)
+FORCEINLINE
+BOOLEAN
+NTAPI
+KxKdbFilterLoadSymbols(
+    _In_ BOOLEAN LoadSymbols)
+{
+    return LoadSymbols;
+}
+#endif
+
 
 /* GLOBALS *******************************************************************/
 

@@ -160,8 +160,8 @@ KeInitializeProcess(IN OUT PKPROCESS Process,
         /* Loop every node */
         do
         {
-            /* Check if the affinity matches */
-            if (KeNodeBlock[IdealNode]->ProcessorMask != Affinity) break;
+            /* Check whether this node intersects the requested process affinity */
+            if (KeNodeBlock[IdealNode]->ProcessorMask & Affinity) break;
 
             /* No match, try next Ideal Node and increase node loop index */
             IdealNode++;
@@ -706,6 +706,54 @@ KeStackAttachProcess(IN PKPROCESS Process,
 {
     KLOCK_QUEUE_HANDLE ApcLock;
     PKTHREAD Thread = KeGetCurrentThread();
+
+#if defined(_M_ARM64)
+    /* Defensive checks: validate Process pointer before accessing it */
+    ASSERT(Process != NULL);
+    if (Process == NULL)
+    {
+        KeBugCheckEx(INVALID_PROCESS_ATTACH_ATTEMPT,
+                     0,
+                     (ULONG_PTR)Thread->ApcState.Process,
+                     Thread->ApcStateIndex,
+                     0xDEAD0001);
+    }
+
+    /* Validate process object type - dump diagnostics before assertion */
+    if ((Process->Header.Type & KOBJECT_TYPE_MASK) != ProcessObject)
+    {
+        POBJECT_HEADER ObjHeader = OBJECT_TO_OBJECT_HEADER(CONTAINING_RECORD(Process, EPROCESS, Pcb));
+        DPRINT1("\n[ASSERT_PROCESS FAILURE] KeStackAttachProcess:\n"
+                "  Process=%p Header.Type=0x%x (expected ProcessObject=0x%x, mask=0x%x)\n"
+                "  Header.Size=0x%x Header.SignalState=0x%lx\n"
+                "  ObjHeader=%p PointerCount=%ld HandleCount=%ld\n"
+                "  ObjType=%p ObjTypeName=%wZ\n"
+                "  CurrentThread=%p CurrentProcess=%p\n"
+                "  IRQL=%d\n",
+                Process,
+                (ULONG)Process->Header.Type,
+                (ULONG)ProcessObject,
+                (ULONG)KOBJECT_TYPE_MASK,
+                (ULONG)Process->Header.Size,
+                Process->Header.SignalState,
+                ObjHeader,
+                ObjHeader->PointerCount,
+                ObjHeader->HandleCount,
+                ObjHeader->Type,
+                ObjHeader->Type ? &ObjHeader->Type->Name : NULL,
+                Thread,
+                Thread->ApcState.Process,
+                KeGetCurrentIrql());
+
+        /* Bugcheck with diagnostic info instead of just asserting */
+        KeBugCheckEx(INVALID_PROCESS_ATTACH_ATTEMPT,
+                     (ULONG_PTR)Process,
+                     (ULONG_PTR)Process->Header.Type,
+                     (ULONG_PTR)Thread->ApcState.Process,
+                     0xDEAD0002);
+    }
+#endif
+
     ASSERT_PROCESS(Process);
     ASSERT_IRQL_LESS_OR_EQUAL(DISPATCH_LEVEL);
 

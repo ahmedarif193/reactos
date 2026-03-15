@@ -15,16 +15,6 @@
 #include <debug.h>
 
 #if defined(_M_ARM64)
-typedef union _RTL_SLIST_CAS128
-{
-    __int128 Value;
-    struct
-    {
-        ULONGLONG Low;
-        ULONGLONG High;
-    } Parts;
-} RTL_SLIST_CAS128, *PRTL_SLIST_CAS128;
-
 static __inline unsigned char
 RtlpInterlockedCompareExchange128(
     _Interlocked_operand_ volatile __int64 *Destination,
@@ -32,33 +22,45 @@ RtlpInterlockedCompareExchange128(
     __int64 ExchangeLow,
     __int64 *ComparandResult)
 {
-    RTL_SLIST_CAS128 Expected;
-    RTL_SLIST_CAS128 Desired;
+    ULONGLONG OldLow, OldHigh;
+    ULONGLONG ExpLow = (ULONGLONG)ComparandResult[0];
+    ULONGLONG ExpHigh = (ULONGLONG)ComparandResult[1];
+    ULONG Status;
 
-    Expected.Parts.Low = (ULONGLONG)ComparandResult[0];
-    Expected.Parts.High = (ULONGLONG)ComparandResult[1];
-    Desired.Parts.Low = (ULONGLONG)ExchangeLow;
-    Desired.Parts.High = (ULONGLONG)ExchangeHigh;
-
-    if (__atomic_compare_exchange_n((volatile __int128 *)Destination,
-                                    &Expected.Value,
-                                    Desired.Value,
-                                    0,
-                                    __ATOMIC_ACQ_REL,
-                                    __ATOMIC_ACQUIRE))
+    for (;;)
     {
-        return 1;
-    }
+        __asm__ __volatile__("ldaxp %0, %1, [%2]"
+                             : "=&r"(OldLow), "=&r"(OldHigh)
+                             : "r"(Destination)
+                             : "memory");
 
-    ComparandResult[0] = (LONG64)Expected.Parts.Low;
-    ComparandResult[1] = (LONG64)Expected.Parts.High;
-    return 0;
+        if ((OldLow != ExpLow) || (OldHigh != ExpHigh))
+        {
+            ComparandResult[0] = (__int64)OldLow;
+            ComparandResult[1] = (__int64)OldHigh;
+            __asm__ __volatile__("clrex" ::: "memory");
+            return 0;
+        }
+
+        __asm__ __volatile__("stlxp %w0, %1, %2, [%3]"
+                             : "=&r"(Status)
+                             : "r"((ULONGLONG)ExchangeLow),
+                               "r"((ULONGLONG)ExchangeHigh),
+                               "r"(Destination)
+                             : "memory");
+
+        if (Status == 0)
+            return 1;
+    }
 }
 #define _InterlockedCompareExchange128 RtlpInterlockedCompareExchange128
 #endif
 
 #ifdef _WIN64
 BOOLEAN RtlpUse16ByteSLists = -1;
+
+#define RTL_SLIST_ENCODE_NEXT16(_Entry) ((ULONGLONG)((ULONG_PTR)(_Entry) >> 4))
+#define RTL_SLIST_DECODE_NEXT16(_Header) ((PSLIST_ENTRY)((ULONG_PTR)((_Header).Header16.NextEntry) << 4))
 #endif
 
 /* FUNCTIONS ***************************************************************/
@@ -112,7 +114,7 @@ RtlFirstEntrySList(
     /* Check if the header is initialized as 16 byte header */
     if (SListHead->Header16.HeaderType)
     {
-        return (PVOID)(SListHead->Region & ~0xFLL);
+        return RTL_SLIST_DECODE_NEXT16((*SListHead));
     }
     else
     {
@@ -177,14 +179,14 @@ RtlInterlockedPushListSList(
             OldSListHead = *SListHead;
 
             /* Link the last list entry */
-            FirstEntry = (PSLIST_ENTRY)(SListHead->Region & ~0xFLL);
+            FirstEntry = RTL_SLIST_DECODE_NEXT16(OldSListHead);
             ListEnd->Next = FirstEntry;
 
             /* Set up new SListHead */
             NewSListHead = OldSListHead;
             NewSListHead.Header16.Depth += Count;
             NewSListHead.Header16.Sequence++;
-            NewSListHead.Region = (ULONG64)List;
+            NewSListHead.Header16.NextEntry = RTL_SLIST_ENCODE_NEXT16(List);
             NewSListHead.Header16.HeaderType = 1;
             NewSListHead.Header16.Init = 1;
 
@@ -318,13 +320,13 @@ RtlInterlockedPushEntrySList(
     do
     {
         OldHeader = *SListHead;
-        FirstEntry = (PSLIST_ENTRY)(OldHeader.Region & ~0xFLL);
+        FirstEntry = RTL_SLIST_DECODE_NEXT16(OldHeader);
         SListEntry->Next = FirstEntry;
 
         NewHeader = OldHeader;
         NewHeader.Header16.Depth++;
         NewHeader.Header16.Sequence++;
-        NewHeader.Region = (ULONG64)SListEntry;
+        NewHeader.Header16.NextEntry = RTL_SLIST_ENCODE_NEXT16(SListEntry);
         NewHeader.Header16.HeaderType = 1;
         NewHeader.Header16.Init = 1;
 
@@ -367,7 +369,7 @@ RtlInterlockedPopEntrySList(
     do
     {
         OldHeader = *SListHead;
-        FirstEntry = (PSLIST_ENTRY)(OldHeader.Region & ~0xFLL);
+        FirstEntry = RTL_SLIST_DECODE_NEXT16(OldHeader);
         if (FirstEntry == NULL)
         {
             return NULL;
@@ -378,7 +380,7 @@ RtlInterlockedPopEntrySList(
         NewHeader = OldHeader;
         NewHeader.Header16.Depth--;
         NewHeader.Header16.Sequence++;
-        NewHeader.Region = (ULONG64)NextEntry;
+        NewHeader.Header16.NextEntry = RTL_SLIST_ENCODE_NEXT16(NextEntry);
         NewHeader.Header16.HeaderType = 1;
         NewHeader.Header16.Init = 1;
 
@@ -419,7 +421,7 @@ RtlInterlockedFlushSList(
     do
     {
         OldHeader = *SListHead;
-        FirstEntry = (PSLIST_ENTRY)(OldHeader.Region & ~0xFLL);
+        FirstEntry = RTL_SLIST_DECODE_NEXT16(OldHeader);
         if (FirstEntry == NULL)
         {
             return NULL;
@@ -428,7 +430,7 @@ RtlInterlockedFlushSList(
         NewHeader = OldHeader;
         NewHeader.Header16.Depth = 0;
         NewHeader.Header16.Sequence++;
-        NewHeader.Region = 0;
+        NewHeader.Header16.NextEntry = 0;
         NewHeader.Header16.HeaderType = 1;
         NewHeader.Header16.Init = 1;
 

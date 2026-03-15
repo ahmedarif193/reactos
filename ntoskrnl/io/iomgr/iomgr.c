@@ -618,10 +618,6 @@ IoInitSystem(IN PLOADER_PARAMETER_BLOCK LoaderBlock)
     CHAR Buffer[256];
     ANSI_STRING NtBootPath, RootString;
 
-#if defined(_M_ARM64)
-    DPRINT1("[arm64] IoInitSystem: ENTRY\n");
-#endif
-
     /* Initialize empty NT Boot Path */
     RtlInitEmptyAnsiString(&NtBootPath, Buffer, sizeof(Buffer));
 
@@ -719,20 +715,12 @@ IoInitSystem(IN PLOADER_PARAMETER_BLOCK LoaderBlock)
     /* Initialize HAL Root Bus Driver */
     HalInitPnpDriver();
 
-#if defined(_M_ARM64)
-    DPRINT1("[arm64] IoInitSystem: HalInitPnpDriver done, queueing root enumeration\n");
-#endif
-
     /* Reenumerate what HAL has added (synchronously)
      * This function call should eventually become a 2nd stage of the PnP initialization */
     PiQueueDeviceAction(IopRootDeviceNode->PhysicalDeviceObject,
                         PiActionEnumRootDevices,
                         NULL,
                         NULL);
-
-#if defined(_M_ARM64)
-    DPRINT1("[arm64] IoInitSystem: PiQueueDeviceAction done, loading boot drivers\n");
-#endif
 
     /* Make loader block available for the whole kernel */
     IopLoaderBlock = LoaderBlock;
@@ -745,10 +733,6 @@ IoInitSystem(IN PLOADER_PARAMETER_BLOCK LoaderBlock)
     /* Call back drivers that asked for */
     IopReinitializeBootDrivers();
 
-#if defined(_M_ARM64)
-    DPRINT1("[arm64] IoInitSystem: IopReinitializeBootDrivers done\n");
-#endif
-
     /* Check if this was a ramdisk boot */
     if (!_strnicmp(LoaderBlock->ArcBootDeviceName, "ramdisk(0)", 10))
     {
@@ -756,19 +740,12 @@ IoInitSystem(IN PLOADER_PARAMETER_BLOCK LoaderBlock)
         IopStartRamdisk(LoaderBlock);
     }
 
-#if defined(_M_ARM64)
-    DPRINT1("[arm64] IoInitSystem: ramdisk check done\n");
-#endif
-
     /* No one should need loader block any longer */
     IopLoaderBlock = NULL;
 
     /* Create ARC names for boot devices */
     Status = IopCreateArcNames(LoaderBlock);
 
-#if defined(_M_ARM64)
-    DPRINT1("[arm64] IoInitSystem: IopCreateArcNames returned 0x%lx\n", Status);
-#endif
     if (!NT_SUCCESS(Status))
     {
         DPRINT1("IopCreateArcNames failed: %lx\n", Status);
@@ -776,64 +753,32 @@ IoInitSystem(IN PLOADER_PARAMETER_BLOCK LoaderBlock)
     }
 
     /* Mark the system boot partition */
-#if defined(_M_ARM64)
-    DPRINT1("[arm64] IoInitSystem: before IopMarkBootPartition\n");
-#endif
     if (!IopMarkBootPartition(LoaderBlock))
     {
-#if defined(_M_ARM64)
-        /* ARM64: Don't fail boot if partition marking fails - PnP may still be running.
-         * Continue boot and hope SystemRoot gets set later. */
-        DPRINT1("[arm64] IoInitSystem: IopMarkBootPartition failed, continuing anyway\n");
-#else
         DPRINT1("IopMarkBootPartition failed!\n");
+        KeBugCheckEx(INACCESSIBLE_BOOT_DEVICE, 0, 0, 0, 0);
         return FALSE;
-#endif
     }
-#if defined(_M_ARM64)
-    else
-    {
-        DPRINT1("[arm64] IoInitSystem: IopMarkBootPartition done\n");
-    }
-#endif
 
     /* The disk subsystem is initialized here and the SystemRoot is set too.
      * We can finally load other drivers from the boot volume. */
     PnPBootDriversInitialized = TRUE;
 
     /* Load system start drivers */
-#if defined(_M_ARM64)
-    DPRINT1("[arm64] IoInitSystem: before IopInitializeSystemDrivers\n");
-#endif
     IopInitializeSystemDrivers();
     PnpSystemInit = TRUE;
-#if defined(_M_ARM64)
-    DPRINT1("[arm64] IoInitSystem: after IopInitializeSystemDrivers\n");
-#endif
 
     /* Reinitialize drivers that requested it */
-#if defined(_M_ARM64)
-    DPRINT1("[arm64] IoInitSystem: before IopReinitializeDrivers\n");
-#endif
     IopReinitializeDrivers();
-#if defined(_M_ARM64)
-    DPRINT1("[arm64] IoInitSystem: after IopReinitializeDrivers\n");
-#endif
 
-#if defined(_M_ARM64)
-    DPRINT1("[arm64] IoInitSystem: before IopReassignSystemRoot\n");
-#endif
     /* Convert SystemRoot from ARC to NT path */
     Status = IopReassignSystemRoot(LoaderBlock, &NtBootPath);
-#if defined(_M_ARM64)
-    DPRINT1("[arm64] IoInitSystem: after IopReassignSystemRoot Status=0x%lx NtSystemRoot=%wZ\n",
-            Status, &NtSystemRoot);
-#endif
     if (!NT_SUCCESS(Status))
     {
         DPRINT1("IopReassignSystemRoot failed: %lx\n", Status);
         return FALSE;
     }
+
     /* Set the ANSI_STRING for the root path */
     RootString.MaximumLength = NtSystemRoot.MaximumLength / sizeof(WCHAR);
     RootString.Length = 0;
@@ -850,16 +795,10 @@ IoInitSystem(IN PLOADER_PARAMETER_BLOCK LoaderBlock)
     }
 
     /* Assign drive letters */
-#if defined(_M_ARM64)
-    DPRINT1("[arm64] IoInitSystem: before IoAssignDriveLetters\n");
-#endif
     IoAssignDriveLetters(LoaderBlock,
                          &NtBootPath,
                          (PUCHAR)RootString.Buffer,
                          &RootString);
-#if defined(_M_ARM64)
-    DPRINT1("[arm64] IoInitSystem: after IoAssignDriveLetters\n");
-#endif
 
     /* Update system root */
     Status = RtlAnsiStringToUnicodeString(&NtSystemRoot, &RootString, FALSE);
@@ -870,25 +809,12 @@ IoInitSystem(IN PLOADER_PARAMETER_BLOCK LoaderBlock)
     }
 
     /* Load the System DLL and its entrypoints */
-#if defined(_M_ARM64)
-    DPRINT1("[arm64] IoInitSystem: RE-ENABLING PsLocateSystemDll (Cycle 14 - finding deadlock)\n");
-    DPRINT1("[arm64] IoInitSystem: Current IRQL=%u Thread=%p State=%u\n",
-            KeGetCurrentIrql(), PsGetCurrentThread(), PsGetCurrentThread()->Tcb.State);
-#endif
     Status = PsLocateSystemDll();
     if (!NT_SUCCESS(Status))
     {
         DPRINT1("PsLocateSystemDll failed: %lx\n", Status);
-#if defined(_M_ARM64)
-        DPRINT1("[arm64] IoInitSystem: PsLocateSystemDll FAILED with status 0x%lx\n", Status);
-        DPRINT1("[arm64] IoInitSystem: Thread State after fail=%u WaitReason=%u\n",
-                PsGetCurrentThread()->Tcb.State, PsGetCurrentThread()->Tcb.WaitReason);
-#endif
         return FALSE;
     }
-#if defined(_M_ARM64)
-    DPRINT1("[arm64] IoInitSystem: PsLocateSystemDll completed successfully!\n");
-#endif
 
     /* Return success */
     return TRUE;

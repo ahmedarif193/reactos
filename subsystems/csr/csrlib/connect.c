@@ -57,6 +57,7 @@ CsrpConnectToServer(
     ULONG ConnectionInfoLength = sizeof(ConnectionInfo);
 
     DPRINT("%s(%S)\n", __FUNCTION__, ObjectDirectory);
+    DPRINT("[CC1] CsrpConnectToServer: ENTRY ObjDir='%S'\n", ObjectDirectory);
 
     /* Calculate the total port name size */
     PortNameLength = ((wcslen(ObjectDirectory) + 1) * sizeof(WCHAR)) +
@@ -137,6 +138,8 @@ CsrpConnectToServer(
         return Status;
     }
 
+    DPRINT("[CC2] CsrpConnectToServer: calling NtSecureConnectPort\n");
+
     /* Connect to the port */
     Status = NtSecureConnectPort(&CsrApiPort,
                                  &PortName,
@@ -156,6 +159,8 @@ CsrpConnectToServer(
         return Status;
     }
 
+    DPRINT("[CC3] CsrpConnectToServer: NtSecureConnectPort returned 0x%lx\n", Status);
+
     /* Save the delta between the sections, for capture usage later */
     CsrPortMemoryDelta = (ULONG_PTR)LpcWrite.ViewRemoteBase -
                          (ULONG_PTR)LpcWrite.ViewBase;
@@ -167,6 +172,9 @@ CsrpConnectToServer(
     NtCurrentPeb()->ReadOnlySharedMemoryBase = ConnectionInfo.SharedSectionBase;
     NtCurrentPeb()->ReadOnlySharedMemoryHeap = ConnectionInfo.SharedSectionHeap;
     NtCurrentPeb()->ReadOnlyStaticServerData = ConnectionInfo.SharedStaticServerData;
+
+
+    DPRINT("[CC4] CsrpConnectToServer: creating port heap\n");
 
     /* Create the port heap */
     CsrPortHeap = RtlCreateHeap(0,
@@ -183,6 +191,8 @@ CsrpConnectToServer(
         CsrApiPort = NULL;
         return STATUS_INSUFFICIENT_RESOURCES;
     }
+
+    DPRINT("[CC5] CsrpConnectToServer: SUCCESS\n");
 
     /* Return success */
     return STATUS_SUCCESS;
@@ -435,9 +445,11 @@ CsrClientCallServer(
         }
 
         /* Send the LPC Message */
+        DPRINT("[CL1] CsrClientCallServer: sending LPC Api=%lx\n", ApiMessage->ApiNumber);
         Status = NtRequestWaitReplyPort(CsrApiPort,
                                         &ApiMessage->Header,
                                         &ApiMessage->Header);
+        DPRINT("[CL2] CsrClientCallServer: LPC returned 0x%lx\n", Status);
 
         /* Check if we got a Capture Buffer */
         if (CaptureBuffer)

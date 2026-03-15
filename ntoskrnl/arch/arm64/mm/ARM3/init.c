@@ -71,7 +71,28 @@ static BOOLEAN MiArm64PfnDatabaseReady = FALSE;
 static UCHAR MiArm64SelfMapL0Cache[MI_SELFMAP_CACHE_L0_SIZE];
 static UCHAR MiArm64SelfMapL1Cache[MI_SELFMAP_CACHE_L1_SIZE];
 static BOOLEAN MiArm64SelfMapCacheInitialized = FALSE;
-static PFN_NUMBER MiArm64SelfMapL1Pfn = 0;
+
+/*
+ * Bug #37: Per-CPU merged PXE alias pages.
+ *
+ * The PXE alias page must contain L0 entries from BOTH TTBR0 (user, indices
+ * 0-255) and TTBR1 (kernel, indices 256-511). Since these are in separate
+ * physical pages, we allocate a merged page and keep it in sync.
+ *
+ * On every TTBR0 switch the lower half of the merged page is overwritten
+ * with the new process's L0 entries. A single global page is not SMP-safe
+ * because two CPUs running different processes would race on the same page.
+ * We therefore allocate one merged page per processor.
+ *
+ * MiArm64PxeMergedPfn[cpu]: Per-CPU physical page holding merged PXE entries.
+ * MiArm64PxeKernelPfn:      The TTBR1 L0 root PFN (for kernel entries).
+ *
+ * During early boot only index [0] (BSP) is allocated via MxGetNextPage.
+ * AP processors must have their merged pages allocated during their init
+ * before they call any code that touches this array.
+ */
+PFN_NUMBER MiArm64PxeMergedPfn[MAXIMUM_PROCESSORS] = {0};
+static PFN_NUMBER MiArm64PxeKernelPfn = 0;
 
 /*
  * Check if an L0 entry has been created in the self-map.
@@ -132,6 +153,22 @@ static VOID MiMapPDEs(PVOID StartAddress, PVOID EndAddress);
 static VOID MiMapPTEs(PVOID StartAddress, PVOID EndAddress);
 
 /*
+ * Sync an L0 table descriptor to the merged PXE page.
+ * Must be called after writing a new L0 entry to the real TTBR1 L0 table,
+ * because the self-map walks through L0[493] → merged page, not the real L0.
+ */
+static __inline VOID
+MiArm64SyncL0ToMerged(ULONG L0Index, UINT64 Desc)
+{
+    if (MiArm64PxeMergedPfn[0] != 0)
+    {
+        volatile UINT64 *Merged = (volatile UINT64 *)MiArm64PfnToKseg0(MiArm64PxeMergedPfn[0]);
+        Merged[L0Index] = Desc;
+        __asm__ __volatile__("dsb ishst" ::: "memory");
+    }
+}
+
+/*
  * DIAGNOSTIC: Helper function to verify System View Space PTE integrity.
  * This function checks if the first PTE of System View Space has been corrupted.
  * It's called at strategic checkpoints to identify exactly when corruption occurs.
@@ -150,8 +187,28 @@ MiArm64CheckSystemViewSpacePte(_In_z_ PCSTR Location)
 #define ARM64_TCR_T1SZ_SHIFT        16
 #define ARM64_PTE_TABLE_COMPAT      (ARM64_PTE_AF | ARM64_PTE_SH_INNER)
 /* Self-map entry now points to a dedicated alias L1 table. */
-#define ARM64_SELFMAP_ENTRY_BITS    (ARM64_PTE_TYPE_TABLE)
-#define MI_ARM64_MAKE_TABLE_DESC(Pfn) (((UINT64)(Pfn) << PAGE_SHIFT) | ARM64_PTE_TYPE_TABLE)
+#define ARM64_SELFMAP_ENTRY_BITS    (ARM64_PTE_TYPE_TABLE | ((UINT64)MI_ARM64_MAIR_NORMAL_WB_IDX << 2))
+#define MI_ARM64_MAKE_TABLE_DESC(Pfn) (((UINT64)(Pfn) << PAGE_SHIFT) | ARM64_SELFMAP_ENTRY_BITS)
+
+/*
+ * MI_ARM64_MAKE_SELFMAP_DESC - Create a self-referential page table descriptor.
+ *
+ * The self-referential entry in the merged PXE page (merged[493]) is special:
+ * the MMU reads it as a table descriptor at L0/L1/L2 levels AND as a page
+ * descriptor at L3 level (the deepest level in the 4-level recursive walk).
+ *
+ * At L3, the entry MUST have:
+ *   - AF (bit 10) set — otherwise the first access triggers an Access Flag
+ *     fault, which causes recursive page faults → stack overflow.
+ *   - SH (bits 9:8) set to Inner Shareable — for cache coherency.
+ *   - AttrIndx (bits 4:2) set to Normal WB - to match KSEG0 mapping caching!
+ *
+ * These extra bits are harmless when the entry is read as a table descriptor
+ * at L0/L1/L2 (bits 10:8 are in the "ignored" range for table descriptors
+ * per ARMv8-A Architecture Reference Manual D5.3.3).
+ */
+#define MI_ARM64_MAKE_SELFMAP_DESC(Pfn) \
+    (((UINT64)(Pfn) << PAGE_SHIFT) | ARM64_PTE_TYPE_TABLE | ARM64_PTE_AF | ARM64_PTE_SH_INNER | ((UINT64)MI_ARM64_MAIR_NORMAL_WB_IDX << 2))
 
 VOID
 MiArm64DumpPoolDescriptors(
@@ -179,81 +236,6 @@ MiArm64PfnToKseg0(PFN_NUMBER Pfn)
     return MiArm64PhysToKseg0(((UINT64)Pfn) << PAGE_SHIFT);
 }
 
-static VOID
-MiArm64NormalizePoolPfnFlagsRange(_In_ PVOID Base,
-                                  _In_ SIZE_T SizeBytes)
-{
-    ULONG_PTR start = (ULONG_PTR)Base;
-    ULONG_PTR end = start + SizeBytes;
-    ULONG_PTR va;
-    for (va = start; va < end; va += PAGE_SIZE)
-    {
-        PHYSICAL_ADDRESS Pa = MmGetPhysicalAddress((PVOID)va);
-        if (Pa.QuadPart == 0)
-        {
-            continue;
-        }
-
-        PFN_NUMBER pfn = (PFN_NUMBER)(Pa.QuadPart >> PAGE_SHIFT);
-        PMMPFN pf = MiGetPfnEntry(pfn);
-        if (pf && (MiGetPfnEntryIndex(pf) <= MmHighestPhysicalPage))
-        {
-            /*
-             * ARM64 CRITICAL FIX: Initialize PFN entries for data pages allocated
-             * by MiMapPTEs during early boot. These pages were allocated via
-             * MxGetNextPage before the PFN database was ready, so their PFN entries
-             * have RefCount=0 and PageLocation=ZeroedPageList (uninitialized).
-             *
-             * When MmProbeAndLockPages is later called on these pool pages, it
-             * calls MiReferenceProbedPageAndBumpLockCount which asserts RefCount != 0.
-             * This caused the crash in SCSI port driver during FdoSendInquiry.
-             *
-             * We must properly initialize these fields:
-             * - ReferenceCount = 1 (page is in use)
-             * - ShareCount = 1 (one reference to the page)
-             * - PageLocation = ActiveAndValid (page is active)
-             * - PteAddress = PTE that maps this page
-             * - PteFrame = PFN of the page table containing the PTE
-             *
-             * Only initialize if the page appears uninitialized (RefCount=0).
-             * Already-initialized pages from expansion allocations have proper values.
-             */
-            if (pf->u3.e2.ReferenceCount == 0)
-            {
-                PMMPTE PointerPte = MiAddressToPte((PVOID)va);
-                PMMPTE PointerPtePte = MiAddressToPte(PointerPte);
-                PFN_NUMBER PageTableFrameNumber = 0;
-
-                /* Get the PFN of the page table containing the PTE */
-                if (PointerPtePte->u.Hard.Valid)
-                {
-                    PageTableFrameNumber = PFN_FROM_PTE(PointerPtePte);
-                }
-
-                pf->u3.e2.ReferenceCount = 1;
-                pf->u2.ShareCount = 1;
-                pf->u3.e1.PageLocation = ActiveAndValid;
-                pf->PteAddress = PointerPte;
-                pf->u4.PteFrame = PageTableFrameNumber;
-
-                /* Also increment the share count of the page table */
-                if (PageTableFrameNumber != 0 && PageTableFrameNumber <= MmHighestPhysicalPage)
-                {
-                    PMMPFN PageTablePfn = MiGetPfnEntry(PageTableFrameNumber);
-                    if (PageTablePfn)
-                    {
-                        PageTablePfn->u2.ShareCount++;
-                    }
-                }
-            }
-
-            /* Clear allocation flags regardless of whether we initialized RefCount */
-            pf->u3.e1.StartOfAllocation = 0;
-            pf->u3.e1.EndOfAllocation = 0;
-            pf->u4.VerifierAllocation = 0;
-        }
-    }
-}
 
 static RTL_BITMAP MiArm64PageTablePfnBitmap;
 static PULONG MiArm64PageTablePfnBitmapBuffer;
@@ -309,7 +291,11 @@ MiArm64BuildPageTablePfnBitmap(VOID)
     }
 
     L0 = (volatile UINT64 *)MiArm64PhysToKseg0(RootPa);
-    for (ULONG L0Index = 0; L0Index < 512; ++L0Index)
+    /*
+     * TTBR1 only serves the upper canonical half; limit the bitmap walk to
+     * kernel L0 slots to avoid scanning irrelevant lower-half entries.
+     */
+    for (ULONG L0Index = 256; L0Index < 512; ++L0Index)
     {
         UINT64 L0Entry = L0[L0Index];
         if ((L0Entry & ARM64_PTE_TYPE_MASK) != ARM64_PTE_TYPE_TABLE)
@@ -373,6 +359,326 @@ MiArm64IsPageTablePfn(_In_ PFN_NUMBER Pfn)
     }
 
     return RtlCheckBit(&MiArm64PageTablePfnBitmap, (ULONG)Pfn) ? TRUE : FALSE;
+}
+
+BOOLEAN
+MiArm64RangeHasPageTablePfn(_In_ PFN_NUMBER StartPfn,
+                            _In_ PFN_NUMBER PageCount)
+{
+    PFN_NUMBER EndPfn;
+    ULONG StartBit, LengthBits;
+
+    if (!MiArm64PageTablePfnBitmapReady || (PageCount == 0))
+    {
+        return FALSE;
+    }
+
+    if (StartPfn > MmHighestPhysicalPage)
+    {
+        return FALSE;
+    }
+
+    EndPfn = StartPfn + PageCount - 1;
+    if (EndPfn < StartPfn)
+    {
+        EndPfn = MmHighestPhysicalPage;
+    }
+    else if (EndPfn > MmHighestPhysicalPage)
+    {
+        EndPfn = MmHighestPhysicalPage;
+    }
+
+    StartBit = (ULONG)StartPfn;
+    LengthBits = (ULONG)(EndPfn - StartPfn + 1);
+
+    return !RtlAreBitsClear(&MiArm64PageTablePfnBitmap, StartBit, LengthBits);
+}
+
+/*
+ * MiArm64InitPoolPfnEntries - Initialize PFN database entries for nonpaged pool
+ *
+ * Walks the hardware page tables via KSEG0 direct mapping to find all physical
+ * pages mapped in the nonpaged pool VA range, then initializes their PFN entries.
+ *
+ * This replaces the generic MiBuildPfnDatabaseFromPages scan on ARM64, which
+ * iterated 131K PDEs via MmIsAddressValid (taking ~30 seconds on 8GB systems)
+ * to do useful work on only the nonpaged pool range.
+ *
+ * Note: Kernel image / boot driver pages are handled separately by
+ * MiArm64InitLoaderMappedPfnEntries() which walks the loader module list.
+ */
+CODE_SEG("INIT")
+VOID
+MiArm64InitPoolPfnEntries(VOID)
+{
+    UINT64 Ttbr1;
+    ULONG_PTR PoolStart, PoolEnd, Va;
+    ULONG PrevL0 = ~0U, PrevL1 = ~0U, PrevL2 = ~0U;
+    volatile UINT64 *L0, *L1 = NULL, *L2 = NULL, *L3 = NULL;
+    PFN_NUMBER L3TablePfn = 0;
+
+    PoolStart = (ULONG_PTR)MmNonPagedPoolStart;
+    PoolEnd = PoolStart + MmSizeOfNonPagedPoolInBytes;
+
+    __asm__ __volatile__("mrs %0, ttbr1_el1" : "=r"(Ttbr1));
+    L0 = (volatile UINT64 *)MiArm64PhysToKseg0(MI_ARM64_TTBR_TO_PA(Ttbr1));
+
+    for (Va = PoolStart; Va < PoolEnd; Va += PAGE_SIZE)
+    {
+        ULONG L0Idx = (Va >> 39) & 0x1FF;
+        ULONG L1Idx = (Va >> 30) & 0x1FF;
+        ULONG L2Idx = (Va >> 21) & 0x1FF;
+        ULONG L3Idx = (Va >> 12) & 0x1FF;
+        UINT64 Entry;
+        PFN_NUMBER DataPfn;
+        PMMPFN Pfn;
+
+        /* Refresh cached table pointers only when index changes */
+        if (L0Idx != PrevL0)
+        {
+            Entry = L0[L0Idx];
+            if ((Entry & 3) != ARM64_PTE_TYPE_TABLE) break;
+            L1 = (volatile UINT64 *)MiArm64PhysToKseg0(Entry & ARM64_PTE_ADDR_MASK);
+            PrevL0 = L0Idx;
+            PrevL1 = ~0U;
+        }
+
+        if (L1Idx != PrevL1)
+        {
+            Entry = L1[L1Idx];
+            if ((Entry & 3) != ARM64_PTE_TYPE_TABLE) break;
+            L2 = (volatile UINT64 *)MiArm64PhysToKseg0(Entry & ARM64_PTE_ADDR_MASK);
+            PrevL1 = L1Idx;
+            PrevL2 = ~0U;
+        }
+
+        if (L2Idx != PrevL2)
+        {
+            Entry = L2[L2Idx];
+            if ((Entry & 3) != ARM64_PTE_TYPE_TABLE) break;
+            L3 = (volatile UINT64 *)MiArm64PhysToKseg0(Entry & ARM64_PTE_ADDR_MASK);
+            L3TablePfn = (PFN_NUMBER)((Entry & ARM64_PTE_ADDR_MASK) >> PAGE_SHIFT);
+            PrevL2 = L2Idx;
+        }
+
+        /* Read leaf (L3) entry */
+        Entry = L3[L3Idx];
+        if (!(Entry & 1))
+            continue;
+
+        DataPfn = (PFN_NUMBER)((Entry & ARM64_PTE_ADDR_MASK) >> PAGE_SHIFT);
+        if (DataPfn > MmHighestPhysicalPage)
+            continue;
+
+        Pfn = MiGetPfnEntry(DataPfn);
+        Pfn->u4.PteFrame = L3TablePfn;
+        Pfn->PteAddress = MiAddressToPte((PVOID)Va);
+        Pfn->u2.ShareCount++;
+        Pfn->u3.e2.ReferenceCount = 1;
+        Pfn->u3.e1.PageLocation = ActiveAndValid;
+        Pfn->u3.e1.CacheAttribute = MiNonCached;
+    }
+}
+
+/*
+ * MiArm64InitLoaderMappedPfnEntries - Initialize PFN entries for boot-loaded modules
+ *
+ * Bug #46: Walks the TTBR1 page tables via KSEG0 (bypassing the self-map) to
+ * initialize PFN entries for both DATA pages AND PAGE TABLE pages of boot-loaded
+ * kernel modules (ntoskrnl, HAL, boot drivers).
+ *
+ * On amd64, MiBuildPfnDatabaseFromPages walks all valid PDEs in the self-map and
+ * initializes each page table PFN with ShareCount = 1 + N (one per valid PTE).
+ * On ARM64, the self-map may not be fully valid at this early stage, and the
+ * previous implementation only initialized data page PFNs (not page table PFNs).
+ *
+ * Without page table PFN initialization:
+ * - Page table PFNs have RefCount=0, get inserted into the free list
+ * - MiDeleteSystemPageableVm (INIT section discard) calls MiDecrementShareCount
+ *   on the page table PFN → PageLocation=FreePageList → PFN_LIST_CORRUPT 0x4E/0x99
+ *
+ * Without proper ShareCount tracking:
+ * - Page table PFNs have ShareCount=1 (from MiBuildPfnDatabaseFromLoaderBlock default case)
+ * - MiDeleteSystemPageableVm decrements ShareCount N times (once per INIT PTE)
+ * - If N > 1, ShareCount underflows → MiDecrementShareCount frees the page table
+ *   prematurely → subsequent PTE decrements crash
+ */
+CODE_SEG("INIT")
+VOID
+MiArm64InitLoaderMappedPfnEntries(_In_ PLOADER_PARAMETER_BLOCK LoaderBlock)
+{
+    PLIST_ENTRY ListHead, NextEntry;
+    PLDR_DATA_TABLE_ENTRY DataEntry;
+    ULONG TotalDataPages = 0, TotalPtPages = 0;
+    UINT64 Ttbr1;
+    volatile UINT64 *L0;
+    PFN_NUMBER L0Pfn;
+
+    __asm__ __volatile__("mrs %0, ttbr1_el1" : "=r"(Ttbr1));
+    L0 = (volatile UINT64 *)MiArm64PhysToKseg0(MI_ARM64_TTBR_TO_PA(Ttbr1));
+    L0Pfn = (PFN_NUMBER)(MI_ARM64_TTBR_TO_PA(Ttbr1) >> PAGE_SHIFT);
+
+    ListHead = &LoaderBlock->LoadOrderListHead;
+    NextEntry = ListHead->Flink;
+
+    while (NextEntry != ListHead)
+    {
+        DataEntry = CONTAINING_RECORD(NextEntry, LDR_DATA_TABLE_ENTRY, InLoadOrderLinks);
+        NextEntry = NextEntry->Flink;
+
+        if (DataEntry->DllBase && DataEntry->SizeOfImage)
+        {
+            ULONG_PTR Base = (ULONG_PTR)DataEntry->DllBase;
+            ULONG_PTR End = Base + DataEntry->SizeOfImage;
+            ULONG_PTR Va;
+            ULONG PrevL0Idx = ~0U, PrevL1Idx = ~0U, PrevL2Idx = ~0U;
+            volatile UINT64 *L1 = NULL, *L2 = NULL, *L3 = NULL;
+            PFN_NUMBER L1Pfn = 0, L2Pfn = 0, L3Pfn = 0;
+            PMMPFN PfnL3 = NULL;
+
+            for (Va = Base; Va < End; Va += PAGE_SIZE)
+            {
+                ULONG L0Idx = (Va >> 39) & 0x1FF;
+                ULONG L1Idx = (Va >> 30) & 0x1FF;
+                ULONG L2Idx = (Va >> 21) & 0x1FF;
+                ULONG L3Idx = (Va >> 12) & 0x1FF;
+                UINT64 Entry;
+                PFN_NUMBER DataPfn;
+                PMMPFN Pfn;
+
+                /* Walk L0 -> L1 */
+                if (L0Idx != PrevL0Idx)
+                {
+                    Entry = L0[L0Idx];
+                    if ((Entry & 3) != ARM64_PTE_TYPE_TABLE) break;
+                    L1Pfn = (PFN_NUMBER)((Entry & ARM64_PTE_ADDR_MASK) >> PAGE_SHIFT);
+                    L1 = (volatile UINT64 *)MiArm64PhysToKseg0(Entry & ARM64_PTE_ADDR_MASK);
+                    PrevL0Idx = L0Idx;
+                    PrevL1Idx = ~0U;
+                    PrevL2Idx = ~0U;
+
+                    /* Initialize L1 page table PFN */
+                    if (L1Pfn <= MmHighestPhysicalPage)
+                    {
+                        Pfn = MiGetPfnEntry(L1Pfn);
+                        if (Pfn->u3.e2.ReferenceCount == 0)
+                        {
+                            Pfn->u3.e2.ReferenceCount = 1;
+                            Pfn->u2.ShareCount = 1;
+                            Pfn->u3.e1.PageLocation = ActiveAndValid;
+                            Pfn->u3.e1.CacheAttribute = MiNonCached;
+                            Pfn->u4.PteFrame = L0Pfn;
+                            Pfn->PteAddress = (PMMPTE)MiAddressToPxe((PVOID)Va);
+                            TotalPtPages++;
+                        }
+                    }
+                }
+
+                /* Walk L1 -> L2 */
+                if (L1Idx != PrevL1Idx)
+                {
+                    Entry = L1[L1Idx];
+                    if ((Entry & 3) != ARM64_PTE_TYPE_TABLE)
+                    {
+                        PrevL1Idx = L1Idx;
+                        L2 = NULL; L3 = NULL; PfnL3 = NULL;
+                        PrevL2Idx = ~0U;
+                        continue;
+                    }
+                    L2Pfn = (PFN_NUMBER)((Entry & ARM64_PTE_ADDR_MASK) >> PAGE_SHIFT);
+                    L2 = (volatile UINT64 *)MiArm64PhysToKseg0(Entry & ARM64_PTE_ADDR_MASK);
+                    PrevL1Idx = L1Idx;
+                    PrevL2Idx = ~0U;
+
+                    /* Initialize L2 page table PFN */
+                    if (L2Pfn <= MmHighestPhysicalPage)
+                    {
+                        Pfn = MiGetPfnEntry(L2Pfn);
+                        if (Pfn->u3.e2.ReferenceCount == 0)
+                        {
+                            Pfn->u3.e2.ReferenceCount = 1;
+                            Pfn->u2.ShareCount = 1;
+                            Pfn->u3.e1.PageLocation = ActiveAndValid;
+                            Pfn->u3.e1.CacheAttribute = MiNonCached;
+                            Pfn->u4.PteFrame = L1Pfn;
+                            Pfn->PteAddress = (PMMPTE)MiAddressToPpe((PVOID)Va);
+                            TotalPtPages++;
+                        }
+                    }
+                }
+
+                /* Walk L2 -> L3 */
+                if (L2Idx != PrevL2Idx)
+                {
+                    if (!L2) { PrevL2Idx = L2Idx; L3 = NULL; PfnL3 = NULL; continue; }
+                    Entry = L2[L2Idx];
+                    if ((Entry & 3) != ARM64_PTE_TYPE_TABLE)
+                    {
+                        PrevL2Idx = L2Idx;
+                        L3 = NULL; PfnL3 = NULL;
+                        continue;
+                    }
+                    L3Pfn = (PFN_NUMBER)((Entry & ARM64_PTE_ADDR_MASK) >> PAGE_SHIFT);
+                    L3 = (volatile UINT64 *)MiArm64PhysToKseg0(Entry & ARM64_PTE_ADDR_MASK);
+                    PrevL2Idx = L2Idx;
+
+                    /* Initialize L3 page table PFN */
+                    PfnL3 = NULL;
+                    if (L3Pfn <= MmHighestPhysicalPage)
+                    {
+                        PfnL3 = MiGetPfnEntry(L3Pfn);
+                        if (PfnL3->u3.e2.ReferenceCount == 0)
+                        {
+                            PfnL3->u3.e2.ReferenceCount = 1;
+                            PfnL3->u2.ShareCount = 1; /* baseline for L2→L3 entry */
+                            PfnL3->u3.e1.PageLocation = ActiveAndValid;
+                            PfnL3->u3.e1.CacheAttribute = MiNonCached;
+                            PfnL3->u4.PteFrame = L2Pfn;
+                            PfnL3->PteAddress = (PMMPTE)MiAddressToPde((PVOID)Va);
+                            TotalPtPages++;
+                        }
+                    }
+                }
+
+                /* Read L3 leaf entry */
+                if (!L3) continue;
+                Entry = L3[L3Idx];
+                if (!(Entry & 1)) continue;
+
+                DataPfn = (PFN_NUMBER)((Entry & ARM64_PTE_ADDR_MASK) >> PAGE_SHIFT);
+                if (DataPfn > MmHighestPhysicalPage) continue;
+
+                /*
+                 * Increment L3 page table ShareCount for this data page PTE.
+                 * This mirrors the amd64 inner loop in MiBuildPfnDatabaseFromPages
+                 * (mminit.c line 1015: Pfn1->u2.ShareCount++) which increments the
+                 * PDE page's ShareCount for each valid PTE.
+                 *
+                 * MiDeleteSystemPageableVm decrements L3 ShareCount once per valid
+                 * PTE it frees. Without this increment, ShareCount underflows.
+                 */
+                if (PfnL3) PfnL3->u2.ShareCount++;
+
+                /* Initialize data page PFN */
+                Pfn = MiGetPfnEntry(DataPfn);
+                if (Pfn->u3.e2.ReferenceCount == 0)
+                {
+                    Pfn->u3.e2.ReferenceCount = 1;
+                    Pfn->u2.ShareCount = 1;
+                    Pfn->u3.e1.PageLocation = ActiveAndValid;
+                    Pfn->u3.e1.CacheAttribute = MiNonCached;
+                    Pfn->u4.PteFrame = L3Pfn;
+                    Pfn->PteAddress = MiAddressToPte((PVOID)Va);
+                    TotalDataPages++;
+                }
+            }
+        }
+    }
+
+#if DBG
+    DbgPrint("[arm64] MiArm64InitLoaderMappedPfnEntries: %u data pages, %u PT pages\n",
+             TotalDataPages, TotalPtPages);
+#endif
 }
 
 static __inline volatile UINT64*
@@ -499,6 +805,52 @@ MiArm64PublishTableDesc(_Inout_ volatile UINT64 *Entry, _In_ PFN_NUMBER Pfn)
 }
 
 static
+PFN_NUMBER
+MiArm64AllocatePageTablePage(VOID)
+{
+    PFN_NUMBER Pfn;
+    KIRQL OldIrql;
+    ULONG CpuIndex;
+    BOOLEAN ReleasePfnLock;
+    extern volatile LONG MiArm64PfnLockDepth[MAXIMUM_PROCESSORS];
+
+    /*
+     * Runtime self-map growth must not call MxGetNextPage() because it lives
+     * in INIT text. Once PFNs are initialized, allocate directly from a free
+     * list page under the PFN lock.
+     */
+    if (MiArm64PfnDatabaseReady)
+    {
+        CpuIndex = KeGetCurrentProcessorNumber();
+        ReleasePfnLock = TRUE;
+
+        /*
+         * Avoid recursive acquisition on paths that already hold MmPfnLock.
+         * ARM64 queued spinlock code tracks per-CPU PFN lock depth.
+         */
+        if ((CpuIndex < MAXIMUM_PROCESSORS) &&
+            (MiArm64PfnLockDepth[CpuIndex] > 0))
+        {
+            OldIrql = DISPATCH_LEVEL;
+            ReleasePfnLock = FALSE;
+        }
+        else
+        {
+            OldIrql = MiAcquirePfnLock();
+        }
+
+        Pfn = MiRemoveAnyPage(MI_GET_NEXT_COLOR());
+        if (ReleasePfnLock)
+        {
+            MiReleasePfnLock(OldIrql);
+        }
+        return Pfn;
+    }
+
+    return MxGetNextPage(1);
+}
+
+static
 BOOLEAN
 MiArm64SplitL1BlockToL2(_Inout_ volatile UINT64 *Entry, _In_ PFN_NUMBER ParentPfn)
 {
@@ -508,7 +860,7 @@ MiArm64SplitL1BlockToL2(_Inout_ volatile UINT64 *Entry, _In_ PFN_NUMBER ParentPf
         return TRUE;
     }
 
-    PFN_NUMBER NewPfn = MxGetNextPage(1);
+    PFN_NUMBER NewPfn = MiArm64AllocatePageTablePage();
     if (NewPfn == 0)
     {
         return FALSE;
@@ -546,7 +898,7 @@ MiArm64SplitL2BlockToL3(_Inout_ volatile UINT64 *Entry, _In_ PFN_NUMBER ParentPf
         return TRUE;
     }
 
-    PFN_NUMBER NewPfn = MxGetNextPage(1);
+    PFN_NUMBER NewPfn = MiArm64AllocatePageTablePage();
     if (NewPfn == 0)
     {
         return FALSE;
@@ -576,59 +928,7 @@ MiArm64SplitL2BlockToL3(_Inout_ volatile UINT64 *Entry, _In_ PFN_NUMBER ParentPf
 
 
 
-/*
- * Recursion guard for MiArm64MapAliasForPointer to prevent infinite recursion.
- *
- * PROBLEM: When MiArm64MapAliasForPointer calls MxGetNextPage to allocate page
- * table pages, MxGetNextPage may trigger PFN initialization or other operations
- * that access paged pool. Accessing paged pool descriptors causes a page fault
- * on self-map addresses (PTE_BASE region), which calls MiArm64MapAliasForPointer
- * again, creating infinite recursion that exhausts all available pages.
- *
- * SOLUTION: Per-CPU recursion flag. If we're already handling a self-map fault,
- * skip the recursive call and let the fault retry - the outer call will have
- * created the necessary mappings by the time we retry.
- *
- * This is safe because:
- * - ARM64 faults are synchronous - only one fault active per CPU at a time
- * - The flag is per-CPU, no SMP conflicts
- * - Skipping the inner call just causes a fault retry, which succeeds after
- *   the outer call completes
- */
-/*
- * MiArm64InAliasFault - Per-CPU recursion guard for alias page mapping.
- * This is accessed by MxGetNextPage in mminit.c to avoid PFN lock recursion.
- * Not static - must be visible to mminit.c.
- */
-volatile LONG MiArm64InAliasFault[MAXIMUM_PROCESSORS] = {0};
-volatile LONG MiArm64InSystemFault[MAXIMUM_PROCESSORS] = {0};
 volatile LONG MiArm64PfnLockDepth[MAXIMUM_PROCESSORS] = {0};
-
-/*
- * Sign-extend a 48-bit virtual address to 64-bit canonical form for ARM64.
- * On ARM64 with 48-bit VAs:
- * - Lower-half (user) addresses: bit 47 = 0, bits [63:48] must be 0
- * - Upper-half (kernel) addresses: bit 47 = 1, bits [63:48] must be 1
- *
- * This is critical when synthesizing virtual addresses from page table indices,
- * as the indices may produce non-canonical intermediate values.
- */
-FORCEINLINE
-PVOID
-MiArm64SignExtendVa(ULONG64 Va)
-{
-    /* Check bit 47 - if set, this is an upper-half address needing sign extension */
-    if (Va & (1ULL << 47))
-    {
-        /* Upper-half kernel address: extend bits [63:48] with 1s */
-        return (PVOID)(Va | (0xFFFFULL << 48));
-    }
-    else
-    {
-        /* Lower-half user address: ensure bits [63:48] are 0 */
-        return (PVOID)(Va & ((1ULL << 48) - 1));
-    }
-}
 
 VOID
 MiArm64MapPageTablePage(UINT64 Ttbr1, PVOID TableVa, PFN_NUMBER Pfn)
@@ -636,7 +936,6 @@ MiArm64MapPageTablePage(UINT64 Ttbr1, PVOID TableVa, PFN_NUMBER Pfn)
     UINT64 root_pa = MI_ARM64_TTBR_TO_PA(Ttbr1);
     volatile UINT64 *l0 = (volatile UINT64 *)MiArm64PhysToKseg0(root_pa);
     ULONG l0_idx = MiAddressToPxi(TableVa);
-
 
     /*
      * OPTIMIZATION: Check cache before accessing page table hierarchy.
@@ -649,10 +948,11 @@ MiArm64MapPageTablePage(UINT64 Ttbr1, PVOID TableVa, PFN_NUMBER Pfn)
         /* Cache miss - check actual page table entry */
         if ((l0[l0_idx] & 1ULL) == 0)
         {
-            PFN_NUMBER NewPfn = MxGetNextPage(1);
+            PFN_NUMBER NewPfn = MiArm64AllocatePageTablePage();
             if (NewPfn == 0) return;
             RtlZeroMemory(MiArm64PfnToKseg0(NewPfn), PAGE_SIZE);
             l0[l0_idx] = MI_ARM64_MAKE_TABLE_DESC(NewPfn);
+            MiArm64SyncL0ToMerged(l0_idx, l0[l0_idx]);
             __asm__ __volatile__("dsb ishst" ::: "memory");
 
             /* Register the L1 table page in PFN database to prevent reuse by paged pool.
@@ -681,7 +981,7 @@ MiArm64MapPageTablePage(UINT64 Ttbr1, PVOID TableVa, PFN_NUMBER Pfn)
         /* Cache miss - check actual page table entry */
         if ((l1[l1_idx] & 1ULL) == 0)
         {
-            PFN_NUMBER NewPfn = MxGetNextPage(1);
+            PFN_NUMBER NewPfn = MiArm64AllocatePageTablePage();
             if (NewPfn == 0) return;
             RtlZeroMemory(MiArm64PfnToKseg0(NewPfn), PAGE_SIZE);
             l1[l1_idx] = MI_ARM64_MAKE_TABLE_DESC(NewPfn);
@@ -720,7 +1020,7 @@ MiArm64MapPageTablePage(UINT64 Ttbr1, PVOID TableVa, PFN_NUMBER Pfn)
      */
     if ((l2[l2_idx] & 1ULL) == 0)
     {
-        PFN_NUMBER NewPfn = MxGetNextPage(1);
+        PFN_NUMBER NewPfn = MiArm64AllocatePageTablePage();
         if (NewPfn == 0) return;
         RtlZeroMemory(MiArm64PfnToKseg0(NewPfn), PAGE_SIZE);
         l2[l2_idx] = MI_ARM64_MAKE_TABLE_DESC(NewPfn);
@@ -753,14 +1053,15 @@ MiArm64MapPageTablePage(UINT64 Ttbr1, PVOID TableVa, PFN_NUMBER Pfn)
     volatile UINT64 *l3 = (volatile UINT64 *)MiArm64PhysToKseg0(l2[l2_idx] & ARM64_PTE_ADDR_MASK);
     ULONG l3_idx = MiAddressToPteOffset(TableVa);
 
-    /* Create the L3 (leaf) entry for the page table page */
+    /* Create the L3 (leaf) entry for the page table page.
+     * Page table pages are data (not executable), so set both PXN and UXN. */
     UINT64 Desc = ((UINT64)Pfn << PAGE_SHIFT) |
-                  0x3ULL |                /* valid page */
-                  ((UINT64)4ULL << 2) |   /* AttrIndx=4 (Normal WB) */
-                  (3ULL << 8) |           /* Inner-shareable */
-                  (1ULL << 10) |          /* AF */
-                  (1ULL << 53) |          /* PXN */
-                  (1ULL << 54);           /* UXN */
+                  0x3ULL |                                                  /* valid page */
+                  ((UINT64)MI_ARM64_MAIR_NORMAL_WB_IDX << 2) |             /* AttrIndx (Normal WB) */
+                  (3ULL << 8) |                                             /* Inner-shareable */
+                  (1ULL << 10) |                                            /* AF */
+                  ARM64_PTE_PXN |                                           /* PXN=1 (not kernel-exec) */
+                  ARM64_PTE_UXN;                                            /* UXN=1 (not user-exec) */
 
 
 
@@ -768,133 +1069,139 @@ MiArm64MapPageTablePage(UINT64 Ttbr1, PVOID TableVa, PFN_NUMBER Pfn)
     __asm__ __volatile__("dsb ish\n\ttlbi vmalle1is\n\tdsb ish\n\tisb" ::: "memory");
 }
 
-/*
- * Ensure that the alias page containing the page table entries for AliasVa
- * is mapped in the kernel address space. This creates any missing parent
- * tables (L0/L1/L2) and installs an L3 mapping for the alias page itself.
- */
-VOID
-MiArm64EnsureAliasMappingForPointer(
-    _In_ PVOID AliasVa)
-{
-    UINT64 Ttbr1;
-    __asm__ __volatile__("mrs %0, ttbr1_el1" : "=r"(Ttbr1));
-
-    /* Ensure L0 self-map entry points to the root L0 */
-    {
-        UINT64 RootPa = MI_ARM64_TTBR_TO_PA(Ttbr1);
-        volatile UINT64 *RootL0 = (volatile UINT64 *)MiArm64PhysToKseg0(RootPa);
-        ULONG SelfIndex = MiAddressToPxi((PVOID)PXE_SELFMAP);
-        UINT64 Current = RootL0[SelfIndex];
-        if (MiArm64SelfMapL1Pfn == 0)
-        {
-            MiArm64SelfMapL1Pfn = MxGetNextPage(1);
-            if (MiArm64SelfMapL1Pfn != 0)
-            {
-                RtlZeroMemory(MiArm64PfnToKseg0(MiArm64SelfMapL1Pfn), PAGE_SIZE);
-            }
-        }
-
-        UINT64 Desired = MI_ARM64_MAKE_TABLE_DESC(MiArm64SelfMapL1Pfn);
-        UINT64 DesiredPa = (UINT64)MiArm64SelfMapL1Pfn << PAGE_SHIFT;
-        if ((Current & ARM64_PTE_ADDR_MASK) != DesiredPa ||
-            (Current & ARM64_PTE_TYPE_MASK) != ARM64_PTE_TYPE_TABLE)
-        {
-            RootL0[SelfIndex] = Desired;
-            __asm__ __volatile__("dsb ishst\n\ttlbi vmalle1is\n\tdsb ish\n\tisb" ::: "memory");
-        }
-    }
-
-    UNREFERENCED_PARAMETER(AliasVa);
-}
+static VOID MiArm64MapPxeAlias(VOID);
 
 /*
- * Configure the alias tree at L0[493] and ensure PXE_BASE maps the L0 page.
- * PPE/PDE/PTE alias pages are mapped on demand by MiArm64MapAliasForPointer.
+ * MiArm64MapPxeAlias - Set up recursive self-map through merged PXE page.
+ *
+ * ARM64 RECURSIVE SELF-MAP ARCHITECTURE:
+ *
+ * On AMD64, MiAddressToPte(VA) works for both user and kernel addresses because
+ * the recursive self-map entry in L4 points to L4 itself, creating a structure
+ * where all page table levels are accessible through PTE_BASE/PDE_BASE/etc.
+ *
+ * On ARM64, user (TTBR0) and kernel (TTBR1) address spaces have separate L0
+ * page tables. The recursive self-map in TTBR1's L0 only provides access to
+ * TTBR1's page table hierarchy, not TTBR0's.
+ *
+ * THE FIX: Allocate a "merged PXE page" that combines:
+ *   - Entries [0..255] from TTBR0 L0 (user page tables)
+ *   - Entries [256..511] from TTBR1 L0 (kernel page tables)
+ *   - Entry [493] self-referential (points to merged page itself)
+ *
+ * Then set TTBR1 L0[493] to point to this merged page instead of TTBR1's own
+ * L0. This creates a true recursive self-map that covers BOTH address spaces:
+ *
+ *   MiAddressToPte(UserVA):
+ *     L0[493] -> merged -> merged[user_L0_idx] -> TTBR0 L1 -> L2 -> L3 PTE
+ *
+ *   MiAddressToPte(KernelVA):
+ *     L0[493] -> merged -> merged[kern_L0_idx] -> TTBR1 L1 -> L2 -> L3 PTE
+ *
+ *   MiAddressToPde(VA):
+ *     L0[493] -> merged -> merged[493] -> merged -> merged[L0_idx] -> L1 -> L2 PDE
+ *
+ *   MiAddressToPxe(VA):
+ *     L0[493] -> merged -> merged[493] -> merged -> merged[493] -> merged -> PXE entry
+ *
+ * On context switch (KiArm64WriteUserTtbr), entries [0..255] are resynced
+ * with the new process's TTBR0 L0 entries. This is already implemented.
+ *
+ * IMPORTANT: Writes to PXE-level entries through the self-map go to the merged
+ * page, NOT to the real TTBR0/TTBR1 L0 pages. ARM3 code that creates new PXE
+ * entries must use MI_WRITE_VALID_PXE which dual-writes to both locations.
  */
 VOID
 MiArm64MapPxeAlias(VOID)
 {
     UINT64 Ttbr1;
-
-    DPRINT("%s\n", "[arm64] MiArm64MapPxeAlias: entry");
+    UINT64 RootPa;
+    volatile UINT64 *RootL0;
+    volatile UINT64 *Merged;
 
     __asm__ __volatile__("mrs %0, ttbr1_el1" : "=r"(Ttbr1));
+    RootPa = MI_ARM64_TTBR_TO_PA(Ttbr1);
+    RootL0 = (volatile UINT64 *)MiArm64PhysToKseg0(RootPa);
 
-    /* The alias VA we want to back is the page containing PXE_SELFMAP (= PXE_BASE page). */
-    PVOID VaBase = (PVOID)((ULONG_PTR)PXE_SELFMAP & ~(PAGE_SIZE - 1ULL));
-    UINT64 RootPa = MI_ARM64_TTBR_TO_PA(Ttbr1);
-    ULONG SelfIndex = MiAddressToPxi((PVOID)PXE_SELFMAP);
+    MiArm64PxeKernelPfn = (PFN_NUMBER)(RootPa >> PAGE_SHIFT);
 
-
-
-    volatile UINT64 *RootL0 = (volatile UINT64 *)MiArm64PhysToKseg0(RootPa);
-    UINT64 Current = RootL0[SelfIndex];
-
-    if (MiArm64SelfMapL1Pfn == 0)
+    /*
+     * Step 1: Allocate the merged PXE page (one per CPU, index [0] for BSP).
+     */
+    if (MiArm64PxeMergedPfn[0] == 0)
     {
-        MiArm64SelfMapL1Pfn = MxGetNextPage(1);
-        if (MiArm64SelfMapL1Pfn != 0)
-        {
-            RtlZeroMemory(MiArm64PfnToKseg0(MiArm64SelfMapL1Pfn), PAGE_SIZE);
-        }
+        MiArm64PxeMergedPfn[0] = MiArm64AllocatePageTablePage();
     }
-    if (MiArm64SelfMapL1Pfn == 0)
+
+    if (MiArm64PxeMergedPfn[0] == 0)
     {
-        DPRINT("%s\n", "[arm64] MiArm64MapPxeAlias: self-map L1 allocation failed");
+        DPRINT1("[arm64] MiArm64MapPxeAlias: FATAL - merged page allocation failed\n");
         return;
     }
 
-    /* Ensure the L0 self-map slot points to the alias L1 root. */
-    UINT64 DesiredEntry = MI_ARM64_MAKE_TABLE_DESC(MiArm64SelfMapL1Pfn);
-    UINT64 DesiredPa = (UINT64)MiArm64SelfMapL1Pfn << PAGE_SHIFT;
+    Merged = (volatile UINT64 *)MiArm64PfnToKseg0(MiArm64PxeMergedPfn[0]);
 
-    if ((Current & ARM64_PTE_ADDR_MASK) != DesiredPa ||
-        (Current & ARM64_PTE_TYPE_MASK) != ARM64_PTE_TYPE_TABLE)
+    /*
+     * Step 2: Populate the merged page.
+     *
+     * Copy all 512 entries from TTBR1 L0 first (kernel entries at 256-511,
+     * lower half typically empty). Then overlay TTBR0 entries for indices 0-255.
+     */
+    RtlCopyMemory((PVOID)Merged, (PVOID)RootL0, PAGE_SIZE);
+
     {
-
-
-        RootL0[SelfIndex] = DesiredEntry;
-        __asm__ __volatile__("dsb ishst\n\ttlbi vmalle1is\n\tdsb ish\n\tisb" ::: "memory");
-        Current = RootL0[SelfIndex];
-    }
-    else
-    {
-        DPRINT("%s\n", "[arm64] MiArm64MapPxeAlias: L0[493] self-map root already correct");
+        UINT64 Ttbr0;
+        __asm__ __volatile__("mrs %0, ttbr0_el1" : "=r"(Ttbr0));
+        UINT64 Ttbr0Pa = Ttbr0 & ARM64_PTE_ADDR_MASK;
+        if (Ttbr0Pa != 0)
+        {
+            volatile UINT64 *UserL0 = (volatile UINT64 *)(KSEG0_BASE | Ttbr0Pa);
+            int i;
+            for (i = 0; i < 256; i++)
+            {
+                Merged[i] = UserL0[i];
+            }
+        }
     }
 
     /*
-     * NOTE: The self-map recursive structure has specific requirements for L0 entries.
-     * When accessing PDE_BASE or PTE_BASE through the self-map, the translation walk
-     * may need to traverse L0 entries that correspond to user-mode address ranges.
+     * Step 3: Make entry [493] self-referential.
      *
-     * DANGEROUS APPROACH (REMOVED): Previously, we filled ALL empty L0 entries with
-     * a shared placeholder page. This creates serious problems:
-     * - Those entries are no longer "empty" - code may treat them as real mappings
-     * - When user processes need real page tables, we'd have conflicts
-     * - Hard-to-debug memory corruption when the shared page is accessed
+     * This is the KEY to the recursive self-map. merged[493] points back to
+     * the merged page itself, creating the same recursive structure that
+     * AMD64 has with L4[recursive] = L4.
      *
-     * SAFER APPROACH: Only ensure the kernel-space L0 entries are properly mapped.
-     * The self-map should primarily be used for kernel address space management.
-     * If user-space self-map access is needed, allocate real tables on-demand
-     * through proper fault handlers, not dummy placeholders.
-     *
-     * For now, we rely on FreeLDR having set up the necessary kernel L0 entries
-     * (typically indices 256-511 for kernel space on ARM64). The self-map recursive
-     * entry at L0[493] is sufficient for most kernel MM operations.
+     * The self-referential entry ensures that:
+     *   PXE_BASE walk: L0[493]->merged->merged[493]->merged->merged[493]->merged->... (PXE view)
+     *   PDE_BASE walk: L0[493]->merged->merged[493]->merged->merged[L0_idx]->L1 (PDE view)
+     *   PTE_BASE walk: L0[493]->merged->merged[L0_idx]->L1->L2->L3 (PTE view)
      */
+    Merged[PXE_SELFMAP_INDEX] = MI_ARM64_MAKE_SELFMAP_DESC(MiArm64PxeMergedPfn[0]);
 
+    __asm__ __volatile__("dsb ishst" ::: "memory");
 
+    /*
+     * Step 4: Point TTBR1 L0[493] to the merged page.
+     *
+     * This redirects the self-map root from TTBR1's own L0 page to the merged
+     * page. The hardware walk for any self-map address (PTE_BASE, PDE_BASE, etc.)
+     * now goes through the merged page which has entries for BOTH TTBR0 and TTBR1.
+     *
+     * Normal kernel VA resolution is NOT affected - it still uses the other
+     * TTBR1 L0 entries (256-511) directly, bypassing L0[493].
+     */
+    RootL0[PXE_SELFMAP_INDEX] = MI_ARM64_MAKE_SELFMAP_DESC(MiArm64PxeMergedPfn[0]);
 
+    __asm__ __volatile__(
+        "dsb ishst\n\t"
+        "tlbi vmalle1is\n\t"
+        "dsb ish\n\t"
+        "isb"
+        ::: "memory"
+    );
 
-    /* Map the PXE alias page to the L0 root via the alias tree. */
-    if (MiArm64SelfMapL1Pfn != 0)
-    {
-        PFN_NUMBER RootPfn = (PFN_NUMBER)(RootPa >> PAGE_SHIFT);
-        MiArm64MapPageTablePage(Ttbr1, VaBase, RootPfn);
-    }
-
-    DPRINT("%s\n", "[arm64] MiArm64MapPxeAlias: self-map alias root configured");
+    DPRINT("[arm64] MiArm64MapPxeAlias: recursive self-map via merged page (PFN 0x%lx)\n",
+           (ULONG)MiArm64PxeMergedPfn[0]);
 }
 
 /*
@@ -941,7 +1248,7 @@ MiArm64InitializeTtbr0Alias(VOID)
      * Descriptor format: Table descriptor (type = 0b11) pointing to TTBR0's L0 PA
      */
     {
-        UINT64 AliasEntry = (Ttbr0Pa & ARM64_PTE_ADDR_MASK) | ARM64_PTE_TYPE_TABLE;
+        UINT64 AliasEntry = (Ttbr0Pa & ARM64_PTE_ADDR_MASK) | ARM64_PTE_TYPE_TABLE | ((UINT64)MI_ARM64_MAIR_NORMAL_WB_IDX << 2);
         UINT64 CurrentEntry = L0Table[PXE_TTBR0_ALIAS_INDEX];
 
         if (CurrentEntry != AliasEntry)
@@ -968,297 +1275,9 @@ MiArm64InitializeTtbr0Alias(VOID)
     DPRINT("%s\n", "[arm64] MiArm64InitializeTtbr0Alias: TTBR0 alias initialized");
 }
 
-VOID
-MiArm64MapAliasForPointer(
-    _In_ PVOID AliasVa)
-{
-    UINT64 Ttbr1;
-    PFN_NUMBER RootPfn;
-    ULONG CpuIndex;
-    LONG PreviousValue;
-
-    __asm__ __volatile__("mrs %0, ttbr1_el1" : "=r"(Ttbr1));
-    RootPfn = (PFN_NUMBER)(MI_ARM64_TTBR_TO_PA(Ttbr1) >> PAGE_SHIFT);
-
-    PVOID AliasBase = (PVOID)((ULONG_PTR)AliasVa & ~(PAGE_SIZE - 1ULL));
-
-    /*
-     * ARM64 RECURSION GUARD: Prevent infinite recursion when MxGetNextPage
-     * triggers nested faults while allocating page table pages.
-     *
-     * Check if we're already handling an alias fault on this CPU. If so,
-     * return immediately - the outer call will create the necessary mappings
-     * and the fault will retry successfully.
-     */
-    CpuIndex = KeGetCurrentProcessorNumber();
-    if (CpuIndex >= MAXIMUM_PROCESSORS)
-    {
-        /* Invalid CPU index - proceed without guard (should never happen) */
-        CpuIndex = 0;
-    }
-
-    PreviousValue = InterlockedCompareExchange(&MiArm64InAliasFault[CpuIndex], 1, 0);
-    if (PreviousValue != 0)
-    {
-        /* Already handling an alias fault on this CPU - skip to prevent recursion */
-
-        return;
-    }
-
-    /* Handle PXE alias page (user and kernel). */
-    if ((AliasVa >= (PVOID)PXE_BASE) && (AliasVa <= (PVOID)PXE_TOP))
-    {
-        MiArm64MapPxeAlias();
-        InterlockedExchange(&MiArm64InAliasFault[CpuIndex], 0);
-        return;
-    }
-
-    /* Handle all PPEs - both user and kernel/system.
-     * The self-map needs alias pages for kernel PPEs too.
-     * NOTE: Use PPE_TOP not PXE_BASE as upper bound, since PXE_BASE < PPE_TOP
-     * and high PPE addresses (like for paged pool at L0[497]) exceed PXE_BASE.
-     */
-    if ((AliasVa >= (PVOID)PPE_BASE) && (AliasVa <= (PVOID)PPE_TOP))
-    {
-        ULONG64 ippe = (((ULONG64)(ULONG_PTR)AliasVa) - (ULONG64)PPE_BASE) >> 3;
-        ULONG64 pxi = (ippe >> 9) & 0x1FFULL;
-        PVOID VaSynth = MiArm64SignExtendVa(pxi << PXI_SHIFT);
-
-
-
-        volatile UINT64 *E0 = MiArm64LookupTableEntry(Ttbr1, VaSynth, 0);
-
-
-
-        /* Ensure L0 entry exists for this region */
-        if (E0 && ((*E0 & 1ULL) == 0))
-        {
-            /* L0 entry missing - create a new L1 table */
-            PFN_NUMBER Pfn = MxGetNextPage(1);
-            if (Pfn != 0)
-            {
-                /* Zero the new L1 table page before publishing */
-                RtlZeroMemory(MiArm64PfnToKseg0(Pfn), PAGE_SIZE);
-                UINT64 Desc = MI_ARM64_MAKE_TABLE_DESC(Pfn);
-                *E0 = Desc;
-                __asm__ __volatile__("dsb ishst" ::: "memory");
-                if (MiArm64PfnDatabaseReady)
-                {
-                    MiInitializePfnForOtherProcess(Pfn, (PVOID)E0, RootPfn);
-                }
-
-
-            }
-        }
-
-        /* L1 PFN backs the PPE alias page */
-        if (E0 && ((*E0 & 1ULL) != 0))
-        {
-            PFN_NUMBER PfnL1 = (PFN_NUMBER)((*E0 & ARM64_PTE_ADDR_MASK) >> PAGE_SHIFT);
-            MiArm64MapPageTablePage(Ttbr1, AliasBase, PfnL1);
-
-
-        }
-
-        InterlockedExchange(&MiArm64InAliasFault[CpuIndex], 0);
-        return;
-    }
-
-    /* Handle all PDEs - both user and kernel/system.
-     * The self-map needs alias pages for kernel PDEs too.
-     * NOTE: Use PDE_TOP not PPE_BASE as upper bound, since PPE_BASE < PDE_TOP.
-     * PPE addresses are already handled by the previous check.
-     */
-    if ((AliasVa >= (PVOID)PDE_BASE) && (AliasVa <= (PVOID)PDE_TOP))
-    {
-        ULONG64 ipde = (((ULONG64)(ULONG_PTR)AliasVa) - (ULONG64)PDE_BASE) >> 3;
-        ULONG64 ppi = (ipde >> 9) & 0x1FFULL;
-        ULONG64 pxi = (ipde >> 18) & 0x1FFULL;
-        PVOID VaSynth = MiArm64SignExtendVa((pxi << PXI_SHIFT) | (ppi << PPI_SHIFT));
-
-        volatile UINT64 *E0 = MiArm64LookupTableEntry(Ttbr1, VaSynth, 0);
-        if (E0 && ((*E0 & 1ULL) == 0))
-        {
-            PFN_NUMBER Pfn = MxGetNextPage(1);
-            if (Pfn != 0)
-            {
-                /* Zero new L1 table page before publishing descriptor */
-                RtlZeroMemory(MiArm64PfnToKseg0(Pfn), PAGE_SIZE);
-                UINT64 Desc = MI_ARM64_MAKE_TABLE_DESC(Pfn);
-                *E0 = Desc;
-                __asm__ __volatile__("dsb ishst" ::: "memory");
-                if (MiArm64PfnDatabaseReady)
-                {
-                    MiInitializePfnForOtherProcess(Pfn, (PVOID)E0, RootPfn);
-                }
-
-
-            }
-        }
-
-        volatile UINT64 *E1 = MiArm64LookupTableEntry(Ttbr1, VaSynth, 1);
-        if (E1 && ((*E1 & 1ULL) == 0))
-        {
-            PFN_NUMBER Pfn = MxGetNextPage(1);
-            if (Pfn != 0)
-            {
-                /* Zero new L2 table page before publishing descriptor */
-                RtlZeroMemory(MiArm64PfnToKseg0(Pfn), PAGE_SIZE);
-                *E1 = MI_ARM64_MAKE_TABLE_DESC(Pfn);
-                __asm__ __volatile__("dsb ishst" ::: "memory");
-                if (MiArm64PfnDatabaseReady)
-                {
-                    PFN_NUMBER L1Pfn = (PFN_NUMBER)((*E0 & ARM64_PTE_ADDR_MASK) >> PAGE_SHIFT);
-                    MiInitializePfnForOtherProcess(Pfn, (PVOID)E1, L1Pfn);
-                }
-
-
-            }
-        }
-
-        if (E1 && ((*E1 & ARM64_PTE_TYPE_MASK) == ARM64_PTE_TYPE_BLOCK))
-        {
-            PFN_NUMBER L1Pfn = (PFN_NUMBER)((*E0 & ARM64_PTE_ADDR_MASK) >> PAGE_SHIFT);
-            if (!MiArm64SplitL1BlockToL2(E1, L1Pfn))
-            {
-                InterlockedExchange(&MiArm64InAliasFault[CpuIndex], 0);
-                return;
-            }
-        }
-
-        /* L2 PFN backs the PDE alias page */
-        if (E1 && ((*E1 & 1ULL) != 0))
-        {
-            PFN_NUMBER PfnL2 = (PFN_NUMBER)((*E1 & ARM64_PTE_ADDR_MASK) >> PAGE_SHIFT);
-            MiArm64MapPageTablePage(Ttbr1, AliasBase, PfnL2);
-
-
-        }
-
-        InterlockedExchange(&MiArm64InAliasFault[CpuIndex], 0);
-        return;
-    }
-
-    /* Handle all PTEs - both user and kernel/system.
-     * The self-map needs alias pages for kernel PTEs too!
-     *
-     * Previously, only MiIsUserPte() addresses were handled, which caused
-     * translation faults when accessing PTEs for kernel addresses
-     * (e.g., FFFFF6C000214000 is the PTE for kernel VA 0xFFFF800042800000).
-     * NOTE: Use PTE_TOP not PDE_BASE as upper bound, since PDE_BASE < PTE_TOP.
-     * PDE addresses are already handled by the previous check.
-     */
-    if ((AliasVa >= (PVOID)PTE_BASE) && (AliasVa <= (PVOID)PTE_TOP))
-    {
-        ULONG64 ipte = (((ULONG64)(ULONG_PTR)AliasVa) - (ULONG64)PTE_BASE) >> 3;
-        ULONG64 pdi = (ipte >> 9) & 0x1FFULL;
-        ULONG64 ppi = (ipte >> 18) & 0x1FFULL;
-        ULONG64 pxi = (ipte >> 27) & 0x1FFULL;
-        PVOID VaSynth = MiArm64SignExtendVa((pxi << PXI_SHIFT) | (ppi << PPI_SHIFT) | (pdi << PDI_SHIFT));
-
-        volatile UINT64 *E0 = MiArm64LookupTableEntry(Ttbr1, VaSynth, 0);
-        if (E0 && ((*E0 & 1ULL) == 0))
-        {
-            PFN_NUMBER Pfn = MxGetNextPage(1);
-            if (Pfn != 0)
-            {
-                /* Zero new L1 table page then publish descriptor */
-                RtlZeroMemory(MiArm64PfnToKseg0(Pfn), PAGE_SIZE);
-                *E0 = MI_ARM64_MAKE_TABLE_DESC(Pfn);
-                __asm__ __volatile__("dsb ishst" ::: "memory");
-                if (MiArm64PfnDatabaseReady)
-                {
-                    MiInitializePfnForOtherProcess(Pfn, (PVOID)E0, RootPfn);
-                }
-
-
-            }
-        }
-
-        volatile UINT64 *E1 = MiArm64LookupTableEntry(Ttbr1, VaSynth, 1);
-        if (E1 && ((*E1 & 1ULL) == 0))
-        {
-            PFN_NUMBER Pfn = MxGetNextPage(1);
-            if (Pfn != 0)
-            {
-                *E1 = MI_ARM64_MAKE_TABLE_DESC(Pfn);
-                __asm__ __volatile__("dsb ishst\n\ttlbi vmalle1is\n\tdsb ish\n\tisb" ::: "memory");
-                RtlZeroMemory(MiArm64PfnToKseg0(Pfn), PAGE_SIZE);
-                if (MiArm64PfnDatabaseReady)
-                {
-                    PFN_NUMBER L1Pfn = (PFN_NUMBER)((*E0 & ARM64_PTE_ADDR_MASK) >> PAGE_SHIFT);
-                    MiInitializePfnForOtherProcess(Pfn, (PVOID)E1, L1Pfn);
-                }
-            }
-        }
-
-        if (E1 && ((*E1 & ARM64_PTE_TYPE_MASK) == ARM64_PTE_TYPE_BLOCK))
-        {
-            PFN_NUMBER L1Pfn = (PFN_NUMBER)((*E0 & ARM64_PTE_ADDR_MASK) >> PAGE_SHIFT);
-            if (!MiArm64SplitL1BlockToL2(E1, L1Pfn))
-            {
-                InterlockedExchange(&MiArm64InAliasFault[CpuIndex], 0);
-                return;
-            }
-        }
-
-        volatile UINT64 *E2 = MiArm64LookupTableEntry(Ttbr1, VaSynth, 2);
-        if (E2 && ((*E2 & ARM64_PTE_TYPE_MASK) == ARM64_PTE_TYPE_BLOCK))
-        {
-            PFN_NUMBER L2Pfn = (PFN_NUMBER)((*E1 & ARM64_PTE_ADDR_MASK) >> PAGE_SHIFT);
-            if (!MiArm64SplitL2BlockToL3(E2, L2Pfn))
-            {
-                InterlockedExchange(&MiArm64InAliasFault[CpuIndex], 0);
-                return;
-            }
-        }
-
-        /*
-         * ARM64 PTE ALIAS FIX: Create L3 (page table) if it doesn't exist.
-         *
-         * When handling a page fault for a new kernel allocation (like a VACB buffer),
-         * the page table hierarchy (L0/L1/L2/L3) may not exist yet for the target VA.
-         * The code above creates L0 and L1 entries if missing, but the L2 (PDE) entry
-         * pointing to an L3 table might still be invalid/empty.
-         *
-         * Without an L3 table, there's nothing to map into the self-map alias region,
-         * and subsequent attempts to access the PTE via the self-map will fault.
-         *
-         * Solution: Create an empty L3 table if the L2 entry is invalid, then map
-         * that L3 table into the self-map. The page fault handler can then use the
-         * self-map to populate the L3 entries as needed.
-         */
-        if (E2 && ((*E2 & 1ULL) == 0))
-        {
-            /* L2 entry is invalid - create a new L3 table */
-            PFN_NUMBER Pfn = MxGetNextPage(1);
-            if (Pfn != 0)
-            {
-                /* Zero the new L3 table page then publish the descriptor */
-                RtlZeroMemory(MiArm64PfnToKseg0(Pfn), PAGE_SIZE);
-                *E2 = MI_ARM64_MAKE_TABLE_DESC(Pfn);
-                __asm__ __volatile__("dsb ishst\n\ttlbi vmalle1is\n\tdsb ish\n\tisb" ::: "memory");
-
-                if (MiArm64PfnDatabaseReady && E1)
-                {
-                    PFN_NUMBER L2Pfn = (PFN_NUMBER)((*E1 & ARM64_PTE_ADDR_MASK) >> PAGE_SHIFT);
-                    MiInitializePfnForOtherProcess(Pfn, (PVOID)E2, L2Pfn);
-                }
-            }
-        }
-
-        if (E2 && ((*E2 & 1ULL) != 0))
-        {
-            PFN_NUMBER PfnL3 = (PFN_NUMBER)((*E2 & ARM64_PTE_ADDR_MASK) >> PAGE_SHIFT);
-            MiArm64MapPageTablePage(Ttbr1, AliasBase, PfnL3);
-        }
-        InterlockedExchange(&MiArm64InAliasFault[CpuIndex], 0);
-        return;
-    }
-
-    /* If we reach here, the address is not in any recognized self-map range */
-    InterlockedExchange(&MiArm64InAliasFault[CpuIndex], 0);
-}
+/* MiArm64MapAliasForPointer removed: the recursive self-map through the
+ * merged PXE page makes explicit alias mapping unnecessary. MiMapPPEs/MiMapPDEs
+ * internally call MiArm64MapPageTablePage which creates self-map entries. */
 
 static
 BOOLEAN
@@ -1310,29 +1329,94 @@ MiArm64CanTouchSystemPageTables(VOID)
         return FALSE;
     }
 
-    ULONG SelfIndex = MiAddressToPxi((PVOID)PXE_SELFMAP);
-    if (MiArm64SelfMapL1Pfn == 0)
+    /*
+     * Set up the recursive self-map via merged PXE page if not already done.
+     * MiArm64MapPxeAlias allocates the merged page, populates it with both
+     * TTBR0 and TTBR1 L0 entries, makes entry[493] self-referential, and
+     * sets L0[493] to point to the merged page.
+     */
+    if (MiArm64PxeMergedPfn[0] == 0)
     {
-        MiArm64SelfMapL1Pfn = MxGetNextPage(1);
-        if (MiArm64SelfMapL1Pfn == 0)
+        MiArm64MapPxeAlias();
+        if (MiArm64PxeMergedPfn[0] == 0)
         {
             MiArm64SelfMapProbe = 0;
             return FALSE;
         }
-        RtlZeroMemory(MiArm64PfnToKseg0(MiArm64SelfMapL1Pfn), PAGE_SIZE);
     }
-
-    UINT64 Desired = MI_ARM64_MAKE_TABLE_DESC(MiArm64SelfMapL1Pfn);
-    UINT64 DesiredPa = (UINT64)MiArm64SelfMapL1Pfn << PAGE_SHIFT;
-    if ((Current & ARM64_PTE_ADDR_MASK) != DesiredPa ||
-        (Current & ARM64_PTE_TYPE_MASK) != ARM64_PTE_TYPE_TABLE)
+    else
     {
-        RootL0[SelfIndex] = Desired;
-        __asm__ __volatile__("dsb ishst\n\ttlbi vmalle1is\n\tdsb ish\n\tisb" ::: "memory");
-
+        /* Verify L0[493] points to the merged page */
+        ULONG SelfIndex = MiAddressToPxi((PVOID)PXE_SELFMAP);
+        UINT64 MergedPa = (UINT64)MiArm64PxeMergedPfn[0] << PAGE_SHIFT;
+        if ((Current & ARM64_PTE_ADDR_MASK) != MergedPa)
+        {
+            RootL0[SelfIndex] = MI_ARM64_MAKE_SELFMAP_DESC(MiArm64PxeMergedPfn[0]);
+            __asm__ __volatile__("dsb ishst\n\ttlbi vmalle1is\n\tdsb ish\n\tisb" ::: "memory");
+        }
     }
 
     MiArm64SelfMapProbe = 1;
+
+    /*
+     * SELF-MAP VALIDATION: Verify the recursive self-map is working correctly.
+     *
+     * The merged PXE page should make MiAddressToPte/Pde/Ppe/Pxe work for
+     * both user and kernel addresses. Validate by cross-checking self-map
+     * reads against direct KSEG0 physical walks.
+     */
+#if DBG
+    {
+        volatile UINT64 *MergedPage = (volatile UINT64 *)MiArm64PfnToKseg0(MiArm64PxeMergedPfn[0]);
+
+        /* 1. Verify merged[493] is self-referential */
+        UINT64 SelfEntry = MergedPage[PXE_SELFMAP_INDEX];
+        PFN_NUMBER SelfPfn = (PFN_NUMBER)((SelfEntry & ARM64_PTE_ADDR_MASK) >> PAGE_SHIFT);
+        if (SelfPfn != MiArm64PxeMergedPfn[0])
+        {
+            DPRINT1("MERGED PXE BROKEN: merged[493] PFN=0x%lx expected=0x%lx\n",
+                    (ULONG)SelfPfn, (ULONG)MiArm64PxeMergedPfn[0]);
+            ASSERT(SelfPfn == MiArm64PxeMergedPfn[0]);
+        }
+
+        /* 2. Verify TTBR1 L0[493] points to the merged page */
+        UINT64 L0Entry = RootL0[PXE_SELFMAP_INDEX];
+        PFN_NUMBER L0Pfn = (PFN_NUMBER)((L0Entry & ARM64_PTE_ADDR_MASK) >> PAGE_SHIFT);
+        if (L0Pfn != MiArm64PxeMergedPfn[0])
+        {
+            DPRINT1("TTBR1 L0[493] BROKEN: PFN=0x%lx expected=0x%lx\n",
+                    (ULONG)L0Pfn, (ULONG)MiArm64PxeMergedPfn[0]);
+            ASSERT(L0Pfn == MiArm64PxeMergedPfn[0]);
+        }
+
+        /* 3. Verify PXE_BASE reads from the merged page (self-referential chain) */
+        PMMPTE PxeEntry = MiAddressToPxe((PVOID)PTE_BASE);
+        PFN_NUMBER PxePfn = PFN_FROM_PTE(PxeEntry);
+        if (PxePfn != MiArm64PxeMergedPfn[0])
+        {
+            DPRINT1("PXE SELFMAP READ BROKEN: PXE for PTE_BASE PFN=0x%lx expected=0x%lx\n",
+                    (ULONG)PxePfn, (ULONG)MiArm64PxeMergedPfn[0]);
+            ASSERT(PxePfn == MiArm64PxeMergedPfn[0]);
+        }
+
+        /* 4. Verify kernel PTE self-map works for a known kernel address (KSEG0_BASE) */
+        {
+            PMMPTE KernPxe = MiAddressToPxe((PVOID)KSEG0_BASE);
+            ULONG KernL0Idx = ((ULONG_PTR)KSEG0_BASE >> PXI_SHIFT) & PXI_MASK;
+            UINT64 DirectEntry = MergedPage[KernL0Idx];
+            if (KernPxe->u.Long != DirectEntry)
+            {
+                DPRINT1("KERNEL PXE MISMATCH: selfmap=0x%llx direct=0x%llx idx=%u\n",
+                        (ULONG64)KernPxe->u.Long, DirectEntry, KernL0Idx);
+                ASSERT(KernPxe->u.Long == DirectEntry);
+            }
+        }
+
+        DPRINT("[arm64] Self-map validation passed: merged PFN=0x%lx\n",
+               (ULONG)MiArm64PxeMergedPfn[0]);
+    }
+#endif /* DBG */
+
     return TRUE;
 }
 
@@ -1774,11 +1858,32 @@ MiInitMachineDependent(_Inout_ PLOADER_PARAMETER_BLOCK LoaderBlock)
     RtlZeroMemory(MiArm64SelfMapL0Cache, sizeof(MiArm64SelfMapL0Cache));
     RtlZeroMemory(MiArm64SelfMapL1Cache, sizeof(MiArm64SelfMapL1Cache));
     MiArm64SelfMapCacheInitialized = TRUE;
-    DPRINT("%s\n", "[arm64] MiInitMachineDependent: self-map cache initialized (64B L0 + 32KB L1)");
 
-    /* Ensure kernel leaf PTEs use Normal WB (MAIR index 4) to match loader. */
+    /* Ensure kernel leaf PTEs use Normal WB (MAIR index MI_ARM64_MAIR_NORMAL_WB_IDX). */
     extern MMPTE ValidKernelPte;
-    ValidKernelPte.u.Long |= ((ULONGLONG)4ULL << ARM64_PTE_CACHE_SHIFT);
+    ValidKernelPte.u.Long |= ((ULONGLONG)MI_ARM64_MAIR_NORMAL_WB_IDX << ARM64_PTE_CACHE_SHIFT);
+
+    /*
+     * Boot-time MAIR validation: verify that MAIR_EL1 slot MI_ARM64_MAIR_NORMAL_WB_IDX
+     * actually contains 0xFF (Normal, Inner/Outer Write-Back, Read/Write Allocate).
+     * If the bootloader programmed a different layout, all subsequent kernel page
+     * table entries will use the wrong memory attributes, leading to subtle data
+     * corruption or performance issues.
+     */
+    {
+        UINT64 MairVal;
+        __asm__ __volatile__("mrs %0, mair_el1" : "=r"(MairVal));
+        UINT64 Slot = (MairVal >> (MI_ARM64_MAIR_NORMAL_WB_IDX * 8)) & 0xFF;
+        if (Slot != 0xFF)
+        {
+            DPRINT1("[arm64] MAIR VALIDATION FAILED: MAIR_EL1=0x%016llx, "
+                    "slot %u = 0x%02llx (expected 0xFF for Normal WB)\n",
+                    (ULONGLONG)MairVal, (unsigned)MI_ARM64_MAIR_NORMAL_WB_IDX,
+                    (ULONGLONG)Slot);
+            /* ASSERT in debug builds; in release, log and continue */
+            ASSERT(Slot == 0xFF);
+        }
+    }
 
     if (MmSecondaryColors == 0)
     {
@@ -1893,14 +1998,13 @@ MiInitMachineDependent(_Inout_ PLOADER_PARAMETER_BLOCK LoaderBlock)
             /* Set DirectoryTableBase[0] to TTBR0 (user space page tables) */
             PsGetCurrentProcess()->Pcb.DirectoryTableBase[0] =
                 (ULONG_PTR)MI_ARM64_TTBR_TO_PA(Ttbr0);
+            /* Keep the process KPROCESS DTB pair coherent for scheduler checks. */
+            PsGetCurrentProcess()->Pcb.DirectoryTableBase[1] =
+                (ULONG_PTR)MI_ARM64_TTBR_TO_PA(Ttbr1);
 
-            DPRINT1("[arm64] MiInitMachineDependent: System process DirectoryTableBase[0]=0x%llx (TTBR0=0x%llx, TTBR1=0x%llx)\n",
-                    (UINT64)PsGetCurrentProcess()->Pcb.DirectoryTableBase[0],
-                    Ttbr0, Ttbr1);
         }
         MiArm64SeedAccessFlagsForKernelTables();
         /* Seed alias windows early to avoid fault-time alias recursion. */
-        DPRINT("%s\n", "[arm64] MiInitMachineDependent: seeding alias windows");
         MiArm64MapPxeAlias();
 
         /*
@@ -1910,7 +2014,6 @@ MiInitMachineDependent(_Inout_ PLOADER_PARAMETER_BLOCK LoaderBlock)
          * With this alias, MiAddressToPteTtbr0(UserAddress) will correctly
          * access TTBR0's page tables through the kernel's self-map mechanism.
          */
-        DPRINT("%s\n", "[arm64] MiInitMachineDependent: initializing TTBR0 alias");
         MiArm64InitializeTtbr0Alias();
 
         /* Pre-map PFN DB page table levels (parity with amd64):
@@ -1919,168 +2022,34 @@ MiInitMachineDependent(_Inout_ PLOADER_PARAMETER_BLOCK LoaderBlock)
         {
             PVOID PfnDbStart = (PVOID)MmPfnDatabase;
             PVOID PfnDbEnd = (PVOID)((PUCHAR)MmPfnDatabase + (MxPfnAllocation * PAGE_SIZE) - 1);
-            DPRINT("%s\n", "[arm64] MiInitMachineDependent: pre-mapping PFN DB PPEs");
             MiMapPPEs(PfnDbStart, PfnDbEnd);
-            DPRINT("%s\n", "[arm64] MiInitMachineDependent: pre-mapping PFN DB PDEs");
             MiMapPDEs(PfnDbStart, PfnDbEnd);
-            DPRINT("%s\n", "[arm64] MiInitMachineDependent: PFN DB PDEs ready");
 
-            /* Ensure the alias pages for PFN DB page tables are mapped. */
-            {
-                PMMPTE FirstPte = MiAddressToPte(PfnDbStart);
-                PMMPTE LastPte = MiAddressToPte(PfnDbEnd);
-                PMMPDE FirstPde = MiAddressToPde(PfnDbStart);
-                PMMPDE LastPde = MiAddressToPde(PfnDbEnd);
-                PMMPPE FirstPpe = MiAddressToPpe(PfnDbStart);
-                PMMPPE LastPpe = MiAddressToPpe(PfnDbEnd);
-
-                DPRINT("%s\n", "[arm64] MiInitMachineDependent: mapping PFN DB alias pages");
-
-                MiArm64MapAliasForPointer(FirstPpe);
-                if (LastPpe != FirstPpe)
-                {
-                    MiArm64MapAliasForPointer(LastPpe);
-                }
-
-                MiArm64MapAliasForPointer(FirstPde);
-                if (LastPde != FirstPde)
-                {
-                    MiArm64MapAliasForPointer(LastPde);
-                }
-
-                for (PMMPTE CurrentPte = FirstPte; CurrentPte <= LastPte; CurrentPte += 512)
-                {
-                    MiArm64MapAliasForPointer(CurrentPte);
-                }
-                if (((ULONG_PTR)LastPte & ~((ULONG_PTR)PAGE_SIZE - 1)) !=
-                    ((ULONG_PTR)(LastPte - 512) & ~((ULONG_PTR)PAGE_SIZE - 1)))
-                {
-                    MiArm64MapAliasForPointer(LastPte);
-                }
-
-                DPRINT("%s\n", "[arm64] MiInitMachineDependent: PFN DB alias pages mapped");
-            }
         }
 
         /* Map the PFN database before touching the color tables so the
          * MmFreePagesByColor backing range has valid leaf entries. */
-        DPRINT("%s\n", "[arm64] MiInitMachineDependent: mapping PFN database");
+#if DBG
+        DbgPrint("[arm64][MMT] MiMapPfnDatabase: begin\n");
+#endif
         MiMapPfnDatabase(LoaderBlock);
-        DPRINT("%s\n", "[arm64] MiInitMachineDependent: PFN database region mapped (entries not initialized yet)");
+#if DBG
+        DbgPrint("[arm64][MMT] MiMapPfnDatabase: end\n");
+#endif
 
-        /* Pre-map hyperspace alias pages to allow MmGetPhysicalAddress(HYPER_SPACE). */
-        {
-            PMMPTE FirstPte = MiAddressToPte((PVOID)MI_MAPPING_RANGE_START);
-            PMMPTE LastPte = MiAddressToPte((PVOID)MI_MAPPING_RANGE_END);
-            PMMPDE FirstPde = MiAddressToPde((PVOID)MI_MAPPING_RANGE_START);
-            PMMPDE LastPde = MiAddressToPde((PVOID)MI_MAPPING_RANGE_END);
-            PMMPPE FirstPpe = MiAddressToPpe((PVOID)MI_MAPPING_RANGE_START);
-            PMMPPE LastPpe = MiAddressToPpe((PVOID)MI_MAPPING_RANGE_END);
+        /* KSEG0 alias pages are now created on demand by the alias fault path. */
+#if DBG
+        DbgPrint("[arm64][MMT] KSEG0 alias pre-map: skipped (on-demand)\n");
+#endif
 
-            MiArm64MapAliasForPointer(FirstPpe);
-            if (LastPpe != FirstPpe)
-            {
-                MiArm64MapAliasForPointer(LastPpe);
-            }
-
-            MiArm64MapAliasForPointer(FirstPde);
-            if (LastPde != FirstPde)
-            {
-                MiArm64MapAliasForPointer(LastPde);
-            }
-
-            MiArm64MapAliasForPointer(FirstPte);
-            if (LastPte != FirstPte)
-            {
-                MiArm64MapAliasForPointer(LastPte);
-            }
-        }
-
-        /* Pre-map alias pages covering the kernel image to allow early VA walks. */
-        {
-            PLIST_ENTRY ListEntry = LoaderBlock->LoadOrderListHead.Flink;
-            if (ListEntry != &LoaderBlock->LoadOrderListHead)
-            {
-                PLDR_DATA_TABLE_ENTRY LdrEntry =
-                    CONTAINING_RECORD(ListEntry, LDR_DATA_TABLE_ENTRY, InLoadOrderLinks);
-                PVOID ImageBase = LdrEntry->DllBase;
-                PVOID ImageEnd = (PVOID)((PUCHAR)ImageBase + LdrEntry->SizeOfImage - 1);
-                PMMPTE FirstPte = MiAddressToPte(ImageBase);
-                PMMPTE LastPte = MiAddressToPte(ImageEnd);
-                PMMPDE FirstPde = MiAddressToPde(ImageBase);
-                PMMPDE LastPde = MiAddressToPde(ImageEnd);
-                PMMPPE FirstPpe = MiAddressToPpe(ImageBase);
-                PMMPPE LastPpe = MiAddressToPpe(ImageEnd);
-
-                MiArm64MapAliasForPointer(FirstPpe);
-                if (LastPpe != FirstPpe)
-                {
-                    MiArm64MapAliasForPointer(LastPpe);
-                }
-
-                MiArm64MapAliasForPointer(FirstPde);
-                if (LastPde != FirstPde)
-                {
-                    MiArm64MapAliasForPointer(LastPde);
-                }
-
-                for (PMMPTE CurrentPte = FirstPte; CurrentPte <= LastPte; CurrentPte += 512)
-                {
-                    MiArm64MapAliasForPointer(CurrentPte);
-                }
-                if (((ULONG_PTR)LastPte & ~((ULONG_PTR)PAGE_SIZE - 1)) !=
-                    ((ULONG_PTR)(LastPte - 512) & ~((ULONG_PTR)PAGE_SIZE - 1)))
-                {
-                    MiArm64MapAliasForPointer(LastPte);
-                }
-            }
-        }
-
-        /* Pre-map PDE alias pages for the KSEG0 linear map used during PFN init. */
-        if (MmHighestPhysicalPage >= MmLowestPhysicalPage)
-        {
-            PFN_NUMBER FirstPfn = MmLowestPhysicalPage;
-            PFN_NUMBER LastPfn = MmHighestPhysicalPage;
-            PVOID KsegStart = (PVOID)(KSEG0_BASE + ((ULONG64)FirstPfn << PAGE_SHIFT));
-            PVOID KsegEnd = (PVOID)(KSEG0_BASE + (((ULONG64)LastPfn << PAGE_SHIFT) | (PAGE_SIZE - 1)));
-            PMMPDE FirstPde = MiAddressToPde(KsegStart);
-            PMMPDE LastPde = MiAddressToPde(KsegEnd);
-            PMMPTE FirstPte = MiAddressToPte(KsegStart);
-            PMMPTE LastPte = MiAddressToPte(KsegEnd);
-            ULONG_PTR FirstPage = (ULONG_PTR)FirstPde & ~(PAGE_SIZE - 1);
-            ULONG_PTR LastPage = (ULONG_PTR)LastPde & ~(PAGE_SIZE - 1);
-            ULONG_PTR FirstPtePage = (ULONG_PTR)FirstPte & ~(PAGE_SIZE - 1);
-            ULONG_PTR LastPtePage = (ULONG_PTR)LastPte & ~(PAGE_SIZE - 1);
-            ULONG_PTR Page;
-
-            for (Page = FirstPage; Page <= LastPage; Page += PAGE_SIZE)
-            {
-                MiArm64MapAliasForPointer((PVOID)Page);
-            }
-
-            for (Page = FirstPtePage; Page <= LastPtePage; Page += PAGE_SIZE)
-            {
-                MiArm64MapAliasForPointer((PVOID)Page);
-            }
-        }
-
-        DPRINT("%s\n", "[arm64] MiInitMachineDependent: initializing color tables");
         MiInitializeColorTables();
-        DPRINT("%s\n", "[arm64] MiInitMachineDependent: color tables ready");
-        DPRINT("%s\n", "[arm64] MiInitMachineDependent: building nonpaged pool");
         MiBuildNonPagedPool();
-        DPRINT("%s\n", "[arm64] MiInitMachineDependent: nonpaged pool ready");
 
         /* Initialize the nonpaged pool descriptor so ExAllocatePoolWithTag works */
-        DPRINT("%s\n", "[arm64] MiInitMachineDependent: initializing pool descriptor");
         InitializePool(NonPagedPool, 0);
-        DPRINT("%s\n", "[arm64] MiInitMachineDependent: pool descriptor ready");
 
-        DPRINT("%s\n", "[arm64] MiInitMachineDependent: building system PTE space");
         MiBuildSystemPteSpace();
-        DPRINT("%s\n", "[arm64] MiInitMachineDependent: system PTE space ready");
 
-        DPRINT("%s\n", "[arm64] MiInitMachineDependent: mapping hyperspace range");
         MiMapPPEs((PVOID)MI_MAPPING_RANGE_START, (PVOID)MI_MAPPING_RANGE_END);
         MiMapPDEs((PVOID)MI_MAPPING_RANGE_START, (PVOID)MI_MAPPING_RANGE_END);
         MmFirstReservedMappingPte = MiAddressToPte((PVOID)MI_MAPPING_RANGE_START);
@@ -2103,7 +2072,68 @@ MiInitMachineDependent(_Inout_ PLOADER_PARAMETER_BLOCK LoaderBlock)
          */
         MmFirstReservedMappingPte->u.Hard.PageFrameNumber = MI_HYPERSPACE_PTES - 1;
 
+        /*
+         * ARM64: Fix System/Idle process DirectoryTableBase[1].
+         *
+         * DirectoryTableBase[1] stores the hyperspace L1 table PFN (physical
+         * address). KiSwapProcess uses it to patch L0[492] in the merged page
+         * during context switches.
+         *
+         * Earlier, DirectoryTableBase[1] was incorrectly set to TTBR1's PA
+         * (the kernel L0 root page). When KiSwapProcess switched back to the
+         * System process, it put the kernel L0 root into merged_page[492].
+         * The self-map walk for hyperspace PTEs then went through:
+         *   merged[493] -> merged -> merged[492] -> kernel_L0_root ->
+         *   kernel_L0_root[0] -> FAULT (no valid entry at L0[0])
+         *
+         * Fix: Extract the actual hyperspace L1 PFN from L0[492] of the
+         * TTBR1 root page, which MiMapPPEs just set up correctly.
+         */
+        {
+            UINT64 Ttbr1Val;
+            volatile UINT64 *RootL0;
+            UINT64 HyperL0Entry;
+            ULONG HyperIndex;
+
+            __asm__ __volatile__("mrs %0, ttbr1_el1" : "=r"(Ttbr1Val));
+            RootL0 = (volatile UINT64 *)(KSEG0_BASE | MI_ARM64_TTBR_TO_PA(Ttbr1Val));
+            HyperIndex = MiAddressToPxi((PVOID)HYPER_SPACE);
+            HyperL0Entry = RootL0[HyperIndex];
+
+            if (HyperL0Entry & 1ULL) /* Valid table descriptor */
+            {
+                ULONG_PTR HyperL1Pa = (ULONG_PTR)(HyperL0Entry & ARM64_PTE_ADDR_MASK);
+
+                /* Fix the System process */
+                PsGetCurrentProcess()->Pcb.DirectoryTableBase[1] = HyperL1Pa;
+
+                /* Fix the Idle process (shares boot hyperspace tables) */
+                if (PsIdleProcess != NULL &&
+                    PsIdleProcess != PsGetCurrentProcess())
+                {
+                    PsIdleProcess->Pcb.DirectoryTableBase[1] = HyperL1Pa;
+                }
+
+                DPRINT1("[arm64] Fixed System/Idle DTB[1]: 0x%p (HyperL1 PFN 0x%lx)\n",
+                        (PVOID)HyperL1Pa, (ULONG)(HyperL1Pa >> PAGE_SHIFT));
+            }
+            else
+            {
+                DPRINT1("[arm64] WARNING: L0[%u] for HYPER_SPACE is not valid! Entry=0x%llx\n",
+                        HyperIndex, (unsigned long long)HyperL0Entry);
+            }
+        }
+
+        /* ARM64: System cache page table hierarchy is pre-mapped later
+         * (after PFN database is ready) via MiMapPPEs. */
+
+#if DBG
+        DbgPrint("[arm64][MMT] MiInitializePfnDatabase: begin\n");
+#endif
         MiInitializePfnDatabase(LoaderBlock);
+#if DBG
+        DbgPrint("[arm64][MMT] MiInitializePfnDatabase: end\n");
+#endif
 
         /* CHECKPOINT 3: After MiInitializePfnDatabase - DISABLED (MiSystemViewStart not initialized yet) */
         /* MiArm64CheckSystemViewSpacePte("After MiInitializePfnDatabase"); */
@@ -2112,9 +2142,7 @@ MiInitMachineDependent(_Inout_ PLOADER_PARAMETER_BLOCK LoaderBlock)
 
         if (MiArm64PfnFinalizePending)
         {
-            DPRINT("%s\n", "[arm64] MiInitMachineDependent: finalizing PFN database now");
             MiArm64FinalizePfnDatabase(LoaderBlock);
-            DPRINT("%s\n", "[arm64] MiInitMachineDependent: PFN database finalized");
         }
 
         /* CRITICAL: Now that MiInitializePfnDatabase has completed and scanned all existing page tables,
@@ -2130,7 +2158,6 @@ MiInitMachineDependent(_Inout_ PLOADER_PARAMETER_BLOCK LoaderBlock)
          * - Later page tables (System View Space) had correct registrations, but earlier ones were corrupted
          * - This allowed paged pool to reuse page table pages, causing PTE corruption */
         MiArm64PfnDatabaseReady = TRUE;
-        DPRINT("%s\n", "[arm64] MiInitMachineDependent: PFN database ready - new page tables will be registered");
 
         /* CRITICAL: Register all FreeLDR-created page tables in the PFN database.
          * This must happen immediately after PFN database is ready, before any pool operations.
@@ -2140,30 +2167,19 @@ MiInitMachineDependent(_Inout_ PLOADER_PARAMETER_BLOCK LoaderBlock)
          *
          * This function walks TTBR1 (kernel page tables) and registers all page table pages
          * found by traversing the hierarchy. This prevents pool allocator from reusing them. */
-        DPRINT("%s\n", "[arm64] MiInitMachineDependent: registering FreeLDR page tables");
+#if DBG
+        DbgPrint("[arm64][MMT] MiArm64RegisterFreeLdrPageTables: begin\n");
+#endif
         MiArm64RegisterFreeLdrPageTables();
-        DPRINT("%s\n", "[arm64] MiInitMachineDependent: FreeLDR page tables registered");
-
-        /* CHECKPOINT 2: After MiArm64RegisterFreeLdrPageTables - DISABLED (MiSystemViewStart not initialized yet) */
-        /* MiArm64CheckSystemViewSpacePte("After MiArm64RegisterFreeLdrPageTables"); */
-
-        /* Normalize PFN boundary flags for initial nonpaged pool pages. */
 #if DBG
-        DbgPrint("[arm64] MiInitMachineDependent: NPP range %p-%p\n",
-                 MmNonPagedPoolStart,
-                 (PVOID)((PUCHAR)MmNonPagedPoolStart + MmSizeOfNonPagedPoolInBytes - 1));
+        DbgPrint("[arm64][MMT] MiArm64RegisterFreeLdrPageTables: end\n");
 #endif
-        MiArm64NormalizePoolPfnFlagsRange(MmNonPagedPoolStart,
-                                          MmSizeOfNonPagedPoolInBytes);
-#if DBG
-        DbgPrint("[arm64] MiInitMachineDependent: NPP PFN flags normalized\n");
-#endif
-        DPRINT("%s\n", "[arm64] MiInitMachineDependent: normalized NPP PFN flags after PFN DB init");
+
+        /* Pool page PFN entries already initialized by MiArm64InitPoolPfnEntries(). */
 
         /* Pre-map paged pool page table structures so MiBuildPagedPool can access them.
          * MiBuildPagedPool will try to access PPE/PDE aliases for the paged pool region,
          * so we need to ensure those alias pages are properly backed before it runs. */
-        DPRINT("%s\n", "[arm64] MiInitMachineDependent: pre-mapping paged pool page tables");
         {
             PVOID PagedPoolEnd = (PVOID)(((ULONG_PTR)MmPagedPoolStart +
                                           MmSizeOfPagedPoolInBytes) - 1);
@@ -2177,50 +2193,9 @@ MiInitMachineDependent(_Inout_ PLOADER_PARAMETER_BLOCK LoaderBlock)
              * the PDEs (L2->L3 table entries) itself via MI_WRITE_VALID_PDE. */
             MiMapPPEs(MmPagedPoolStart, PagedPoolEnd);
 
-            /* CRITICAL for ARM64: Ensure the PTE/PDE/PPE alias pages themselves are mapped.
-             * MiBuildPagedPool will access these alias regions:
-             * - MiAddressToPpe(MmPagedPoolStart) -> PPE alias (around 0xFFFFF6FB7DA...)
-             * - MiAddressToPde(MmPagedPoolStart) -> PDE alias (around 0xFFFFF6FB7E2...)
-             * - MiAddressToPte(MmPagedPoolStart) -> PTE alias (around 0xFFFFF6C...)
-             * All of these alias addresses need their own page tables to be accessible. */
-            {
-                PMMPTE FirstPte = MiAddressToPte(MmPagedPoolStart);
-                PMMPTE LastPte = MiAddressToPte(PagedPoolEnd);
-                PMMPDE FirstPde = MiAddressToPde(MmPagedPoolStart);
-                PMMPDE LastPde = MiAddressToPde(PagedPoolEnd);
-                PMMPPE FirstPpe = MiAddressToPpe(MmPagedPoolStart);
-                PMMPPE LastPpe = MiAddressToPpe(PagedPoolEnd);
-
-                DPRINT("%s\n", "[arm64] MiInitMachineDependent: mapping paged pool alias pages");
-
-                /* Ensure the PPE alias pages are backed */
-                MiArm64MapAliasForPointer(FirstPpe);
-                if (LastPpe != FirstPpe)
-                {
-                    MiArm64MapAliasForPointer(LastPpe);
-                }
-
-                /* Ensure the PDE alias pages are backed */
-                MiArm64MapAliasForPointer(FirstPde);
-                if (LastPde != FirstPde)
-                {
-                    MiArm64MapAliasForPointer(LastPde);
-                }
-
-                /* Ensure the PTE alias pages are backed */
-                MiArm64MapAliasForPointer(FirstPte);
-                if (LastPte != FirstPte)
-                {
-                    MiArm64MapAliasForPointer(LastPte);
-                }
-
-                DPRINT("%s\n", "[arm64] MiInitMachineDependent: paged pool alias pages mapped");
-            }
-
             /* Note: We do NOT map PTEs yet - MiBuildPagedPool will handle the first
              * PDE worth of PTEs, and the rest will be demand-allocated during pool growth. */
         }
-        DPRINT("%s\n", "[arm64] MiInitMachineDependent: paged pool page tables pre-mapped");
 
         /* CHECKPOINT 4: After pool initialization (paged pool page tables pre-mapped) - DISABLED (MiSystemViewStart not initialized yet) */
         /* MiArm64CheckSystemViewSpacePte("After paged pool page tables pre-mapped"); */
@@ -2253,7 +2228,6 @@ MiInitMachineDependent(_Inout_ PLOADER_PARAMETER_BLOCK LoaderBlock)
              * PTEs to be zero. Instead, we ensure the self-map aliases for PTE addresses are
              * mapped, which creates the L3 page tables without mapping the data pages.
              */
-            DPRINT("%s\n", "[arm64] MiInitMachineDependent: pre-mapping system view space page tables");
 
             /* Disable interrupts while mapping System View Space to prevent
              * timer interrupt handler from accessing System View Space before page tables exist. */
@@ -2291,7 +2265,7 @@ MiInitMachineDependent(_Inout_ PLOADER_PARAMETER_BLOCK LoaderBlock)
                                     if (!CurrentPde->u.Hard.Valid)
                                     {
                                         /* Allocate a physical page for the L3 table */
-                                        PFN_NUMBER Pfn = MxGetNextPage(1);
+                                        PFN_NUMBER Pfn = MiArm64AllocatePageTablePage();
                                         if (Pfn != 0)
                                         {
                                             /* Zero the L3 table - critical so PTEs start as zero */
@@ -2318,13 +2292,9 @@ MiInitMachineDependent(_Inout_ PLOADER_PARAMETER_BLOCK LoaderBlock)
                                             TempPde.u.Hard.PageFrameNumber = Pfn;
                                             MI_WRITE_VALID_PDE(CurrentPde, TempPde);
                 
-                                            /* CRITICAL FIX: Register the L3 table page in PFN database.
-                             * This was the root cause of PTE corruption at FFFFF6FCBFDD0000:
-                             * - L3 tables for System View Space were created but not registered
-                             * - When mapped into self-map via MiArm64MapAliasForPointer, the source
-                             *   PFN (L3 table) was never registered in PFN database
-                             * - Paged pool would then reuse these L3 table pages, corrupting PTEs
-                             * - L3 table is contained in L2, so PteFrame is the L2 (PPE) PFN */
+                                            /* Register the L3 table page in PFN database to prevent
+                             * paged pool from reusing these pages.
+                             * L3 table is contained in L2, so PteFrame is the L2 (PPE) PFN. */
                             if (MiArm64PfnDatabaseReady)
                             {
                                 /* Find the PPE that contains this PDE to get the L2 PFN */
@@ -2346,57 +2316,6 @@ MiInitMachineDependent(_Inout_ PLOADER_PARAMETER_BLOCK LoaderBlock)
 
             }
 
-            /* Now ensure the self-map alias pages for System View Space PTEs are accessible.
-             * This is the key fix: by mapping all L3 page tables in the self-map region,
-             * we ensure that when code accesses PTEs via MiAddressToPte(), those accesses
-             * won't page fault, even at DISPATCH_LEVEL.
-             */
-            PMMPTE FirstPte = MiAddressToPte(MiSystemViewStart);
-            PMMPTE LastPte = MiAddressToPte(SystemViewEnd);
-            PMMPDE FirstPde = MiAddressToPde(MiSystemViewStart);
-            PMMPDE LastPde = MiAddressToPde(SystemViewEnd);
-            PMMPPE FirstPpe = MiAddressToPpe(MiSystemViewStart);
-            PMMPPE LastPpe = MiAddressToPpe(SystemViewEnd);
-
-            DPRINT("%s\n", "[arm64] MiInitMachineDependent: mapping system view space alias pages");
-
-            /* Ensure the PPE alias pages are backed */
-            MiArm64MapAliasForPointer(FirstPpe);
-            if (LastPpe != FirstPpe)
-            {
-                MiArm64MapAliasForPointer(LastPpe);
-            }
-
-            /* Ensure ALL PDE alias pages are backed - critical for 512 MB range */
-            for (PMMPDE CurrentPde = FirstPde; CurrentPde <= LastPde; CurrentPde++)
-            {
-                /* Map each page containing PDEs (avoid redundant mappings) */
-                PVOID CurrentPage = (PVOID)((ULONG_PTR)CurrentPde & ~((ULONG_PTR)PAGE_SIZE - 1));
-                if (CurrentPde == FirstPde || CurrentPage != (PVOID)((ULONG_PTR)(CurrentPde - 1) & ~((ULONG_PTR)PAGE_SIZE - 1)))
-                {
-                    MiArm64MapAliasForPointer(CurrentPde);
-                }
-            }
-
-            /* Ensure ALL PTE alias pages are backed - this is critical!
-             * For 512 MB of System View Space, we have 131,072 PTEs (each covering 4 KB).
-             * PTEs are 8 bytes each, so 512 PTEs fit in one 4 KB page.
-             * We need to map 256 L3 page tables in the self-map region.
-             */
-            for (PMMPTE CurrentPte = FirstPte; CurrentPte <= LastPte; CurrentPte += 512)
-            {
-                MiArm64MapAliasForPointer(CurrentPte);
-            }
-            /* Ensure the last PTE page is mapped if not already covered */
-            PVOID LastPage = (PVOID)((ULONG_PTR)LastPte & ~((ULONG_PTR)PAGE_SIZE - 1));
-            PVOID PrevPage = (PVOID)((ULONG_PTR)(LastPte - 512) & ~((ULONG_PTR)PAGE_SIZE - 1));
-            if (LastPage != PrevPage)
-            {
-                MiArm64MapAliasForPointer(LastPte);
-            }
-
-            DPRINT("%s\n", "[arm64] MiInitMachineDependent: system view space alias pages mapped");
-
             /* CHECKPOINT 1: After System View Space mapping completes */
             /* MiArm64CheckSystemViewSpacePte("After System View Space MiMapPDEs + alias mapping"); */
         }
@@ -2410,221 +2329,21 @@ MiInitMachineDependent(_Inout_ PLOADER_PARAMETER_BLOCK LoaderBlock)
             PVOID SessionSpaceEnd = (PUCHAR)MiSessionSpaceEnd - 1;
 
             /* First, ensure the page table hierarchy exists for Session Space itself */
-            DPRINT("%s\n", "[arm64] MiInitMachineDependent: pre-mapping session space page tables");
             MiMapPPEs(MmSessionBase, SessionSpaceEnd);
             MiMapPDEs(MmSessionBase, SessionSpaceEnd);
 
-            /* Now ensure the self-map alias pages for Session Space are accessible */
-            PMMPTE FirstPte = MiAddressToPte(MmSessionBase);
-            PMMPTE LastPte = MiAddressToPte(SessionSpaceEnd);
-            PMMPDE FirstPde = MiAddressToPde(MmSessionBase);
-            PMMPDE LastPde = MiAddressToPde(SessionSpaceEnd);
-            PMMPPE FirstPpe = MiAddressToPpe(MmSessionBase);
-            PMMPPE LastPpe = MiAddressToPpe(SessionSpaceEnd);
-
-            DPRINT("%s\n", "[arm64] MiInitMachineDependent: mapping session space alias pages");
-
-            /* Ensure the PPE alias pages are backed */
-            MiArm64MapAliasForPointer(FirstPpe);
-            if (LastPpe != FirstPpe)
-            {
-                MiArm64MapAliasForPointer(LastPpe);
-            }
-
-            /* Ensure the PDE alias pages are backed */
-            MiArm64MapAliasForPointer(FirstPde);
-            if (LastPde != FirstPde)
-            {
-                MiArm64MapAliasForPointer(LastPde);
-            }
-
-            /* Ensure the PTE alias pages are backed */
-            MiArm64MapAliasForPointer(FirstPte);
-            if (LastPte != FirstPte)
-            {
-                MiArm64MapAliasForPointer(LastPte);
-            }
-
-            DPRINT("%s\n", "[arm64] MiInitMachineDependent: session space alias pages mapped");
         }
 
-        /* CRITICAL for ARM64: Pre-map page tables for System Cache.
-         * The System Cache region (MI_SYSTEM_CACHE_START to MI_SYSTEM_CACHE_END) is used
-         * by the file system cache (CcRos* functions). When section views are mapped
-         * into this region, MmCreateVirtualMapping needs to access the self-map PTEs.
-         * If the intermediate page tables (PPE, PDE) don't exist, the self-map access
-         * will fault, causing a crash during volume mount.
-         *
-         * NOTE: We only pre-map a reasonable initial portion of the cache space
-         * (first 1GB) since the full 1TB range would consume too many pages.
-         */
-        {
-            PVOID SysCacheStart = MmSystemCacheStart;
-            /* Pre-map only first 1GB to conserve memory - more will be mapped on demand */
-            PVOID SysCacheEnd = (PUCHAR)SysCacheStart + (1ULL * 1024 * 1024 * 1024) - 1;
-
-            DPRINT("%s\n", "[arm64] MiInitMachineDependent: pre-mapping system cache page tables");
-            MiMapPPEs(SysCacheStart, SysCacheEnd);
-            MiMapPDEs(SysCacheStart, SysCacheEnd);
-
-            /* Ensure the self-map alias pages for System Cache are accessible */
-            PMMPTE FirstPte = MiAddressToPte(SysCacheStart);
-            PMMPTE LastPte = MiAddressToPte(SysCacheEnd);
-            PMMPDE FirstPde = MiAddressToPde(SysCacheStart);
-            PMMPDE LastPde = MiAddressToPde(SysCacheEnd);
-            PMMPPE FirstPpe = MiAddressToPpe(SysCacheStart);
-            PMMPPE LastPpe = MiAddressToPpe(SysCacheEnd);
-
-            DPRINT("%s\n", "[arm64] MiInitMachineDependent: mapping system cache alias pages");
-
-            /* Ensure the PPE alias pages are backed */
-            MiArm64MapAliasForPointer(FirstPpe);
-            if (LastPpe != FirstPpe)
-            {
-                MiArm64MapAliasForPointer(LastPpe);
-            }
-
-            /* Ensure the PDE alias pages are backed */
-            MiArm64MapAliasForPointer(FirstPde);
-            if (LastPde != FirstPde)
-            {
-                MiArm64MapAliasForPointer(LastPde);
-            }
-
-            /* Ensure the PTE alias pages are backed */
-            for (PMMPTE CurrentPte = FirstPte; CurrentPte <= LastPte; CurrentPte += 512)
-            {
-                MiArm64MapAliasForPointer(CurrentPte);
-            }
-            if (((ULONG_PTR)LastPte & ~((ULONG_PTR)PAGE_SIZE - 1)) !=
-                ((ULONG_PTR)(FirstPte + ((LastPte - FirstPte) / 512) * 512) & ~((ULONG_PTR)PAGE_SIZE - 1)))
-            {
-                MiArm64MapAliasForPointer(LastPte);
-            }
-
-            DPRINT("%s\n", "[arm64] MiInitMachineDependent: system cache page tables mapped");
-        }
-
-        /* CRITICAL for ARM64: Pre-map self-map entries for NonPaged Pool Expansion.
-         */
-        if (MmNonPagedPoolExpansionStart != NULL && MmNonPagedPoolEnd != NULL)
-        {
-            PVOID ExpansionEnd = (PUCHAR)MmNonPagedPoolEnd - 1;
-            PMMPTE FirstPte = MiAddressToPte(MmNonPagedPoolExpansionStart);
-            PMMPTE LastPte = MiAddressToPte(ExpansionEnd);
-            PMMPDE FirstPde = MiAddressToPde(MmNonPagedPoolExpansionStart);
-            PMMPDE LastPde = MiAddressToPde(ExpansionEnd);
-            PMMPPE FirstPpe = MiAddressToPpe(MmNonPagedPoolExpansionStart);
-            PMMPPE LastPpe = MiAddressToPpe(ExpansionEnd);
-
-            DPRINT("%s\n", "[arm64] MiInitMachineDependent: mapping nonpaged pool expansion alias pages");
-
-            /* Ensure the PPE alias pages are backed */
-            MiArm64MapAliasForPointer(FirstPpe);
-            if (LastPpe != FirstPpe)
-            {
-                MiArm64MapAliasForPointer(LastPpe);
-            }
-
-            /* Ensure the PDE alias pages are backed */
-            MiArm64MapAliasForPointer(FirstPde);
-            if (LastPde != FirstPde)
-            {
-                MiArm64MapAliasForPointer(LastPde);
-            }
-
-            /* Ensure the PTE alias pages are backed */
-            MiArm64MapAliasForPointer(FirstPte);
-            if (LastPte != FirstPte)
-            {
-                MiArm64MapAliasForPointer(LastPte);
-            }
-
-            DPRINT("%s\n", "[arm64] MiInitMachineDependent: nonpaged pool expansion alias pages mapped");
-        }
-
-        /* CRITICAL for ARM64: Pre-map self-map entries for PFN Database.
-         * The PFN database is accessed during Phase 1 and must have its
-         * self-map entries pre-mapped.
-         */
-        {
-            PVOID PfnDbEnd = (PUCHAR)MmPfnDatabase + (MxPfnAllocation << PAGE_SHIFT) - 1;
-            PMMPTE FirstPte = MiAddressToPte(MmPfnDatabase);
-            PMMPTE LastPte = MiAddressToPte(PfnDbEnd);
-            PMMPDE FirstPde = MiAddressToPde(MmPfnDatabase);
-            PMMPDE LastPde = MiAddressToPde(PfnDbEnd);
-            PMMPPE FirstPpe = MiAddressToPpe(MmPfnDatabase);
-            PMMPPE LastPpe = MiAddressToPpe(PfnDbEnd);
-
-            DPRINT("%s\n", "[arm64] MiInitMachineDependent: mapping PFN database alias pages");
-
-            /* Ensure the PPE alias pages are backed */
-            MiArm64MapAliasForPointer(FirstPpe);
-            if (LastPpe != FirstPpe)
-            {
-                MiArm64MapAliasForPointer(LastPpe);
-            }
-
-            /* Ensure the PDE alias pages are backed */
-            MiArm64MapAliasForPointer(FirstPde);
-            if (LastPde != FirstPde)
-            {
-                MiArm64MapAliasForPointer(LastPde);
-            }
-
-            /* Ensure the PTE alias pages are backed */
-            MiArm64MapAliasForPointer(FirstPte);
-            if (LastPte != FirstPte)
-            {
-                MiArm64MapAliasForPointer(LastPte);
-            }
-
-            DPRINT("%s\n", "[arm64] MiInitMachineDependent: PFN database alias pages mapped");
-        }
-
-        /* CRITICAL for ARM64: Pre-map self-map entries for System PTE space.
-         */
-        if (MmNonPagedSystemStart != NULL && MmNumberOfSystemPtes > 0)
-        {
-            PVOID SystemPteEnd = (PUCHAR)MmNonPagedSystemStart + ((MmNumberOfSystemPtes + 1) * PAGE_SIZE) - 1;
-            PMMPTE FirstPte = MiAddressToPte(MmNonPagedSystemStart);
-            PMMPTE LastPte = MiAddressToPte(SystemPteEnd);
-            PMMPDE FirstPde = MiAddressToPde(MmNonPagedSystemStart);
-            PMMPDE LastPde = MiAddressToPde(SystemPteEnd);
-            PMMPPE FirstPpe = MiAddressToPpe(MmNonPagedSystemStart);
-            PMMPPE LastPpe = MiAddressToPpe(SystemPteEnd);
-
-            DPRINT("%s\n", "[arm64] MiInitMachineDependent: mapping system PTE space alias pages");
-
-            /* Ensure the PPE alias pages are backed */
-            MiArm64MapAliasForPointer(FirstPpe);
-            if (LastPpe != FirstPpe)
-            {
-                MiArm64MapAliasForPointer(LastPpe);
-            }
-
-            /* Ensure the PDE alias pages are backed */
-            MiArm64MapAliasForPointer(FirstPde);
-            if (LastPde != FirstPde)
-            {
-                MiArm64MapAliasForPointer(LastPde);
-            }
-
-            /* Ensure the PTE alias pages are backed */
-            MiArm64MapAliasForPointer(FirstPte);
-            if (LastPte != FirstPte)
-            {
-                MiArm64MapAliasForPointer(LastPte);
-            }
-
-            DPRINT("%s\n", "[arm64] MiInitMachineDependent: system PTE space alias pages mapped");
-        }
+        /* Pre-map page table hierarchy for System Cache range.
+         * This is the ARM64 equivalent of AMD64's MiInitializePageTable which
+         * creates PXE/PPE entries for the entire kernel space. Without this,
+         * the on-demand PDE creation in the fault handler can't access the
+         * PPE via the self-map. PDEs are created on demand by the fault handler. */
+        MiMapPPEs(MmSystemCacheStart, (PVOID)MI_SYSTEM_CACHE_END);
     }
     else
     {
-        DPRINT("%s\n", "[arm64] MiInitMachineDependent: deferring pool/PTE bring-up (self-map unavailable)");
     }
-    DPRINT("%s\n", "[arm64] MiInitMachineDependent: guard check done");
 
     /* CHECKPOINT 5: Before MiInitMachineDependent returns */
     /* MiArm64CheckSystemViewSpacePte("Before MiInitMachineDependent returns"); */
@@ -2692,7 +2411,7 @@ MiMapPPEs(
     PMMPDE EndPpe;
         BasePpe = MiAddressToPpe(StartAddress);
         EndPpe = MiAddressToPpe(EndAddress);
-    
+
         for (PointerPpe = BasePpe;
          PointerPpe <= EndPpe;
          PointerPpe++)
@@ -2709,7 +2428,7 @@ MiMapPPEs(
             volatile UINT64 *L0Entry = MiArm64LookupTableEntry(Ttbr1, TargetVa, 0);
             if (L0Entry && ((*L0Entry & 1ULL) == 0))
             {
-                PFN_NUMBER Pfn = MxGetNextPage(1);
+                PFN_NUMBER Pfn = MiArm64AllocatePageTablePage();
                 if (Pfn != 0)
                 {
                     /* Initialize the new L1 table page before publishing. */
@@ -2725,6 +2444,7 @@ MiMapPPEs(
 
                     UINT64 Desc = MI_ARM64_MAKE_TABLE_DESC(Pfn);
                     *L0Entry = Desc;
+                    MiArm64SyncL0ToMerged(MiAddressToPxi(TargetVa), Desc);
                     __asm__ __volatile__("dsb ishst" ::: "memory");
 
                     /* Register the L1 table page in PFN database to prevent reuse by paged pool.
@@ -2777,7 +2497,7 @@ MiMapPPEs(
         }
         if ((Entry & 1ULL) == 0)
         {
-            PFN_NUMBER Pfn = MxGetNextPage(1);
+            PFN_NUMBER Pfn = MiArm64AllocatePageTablePage();
             /* Initialize the L2 table page before publishing. */
             RtlZeroMemory(MiArm64PfnToKseg0(Pfn), PAGE_SIZE);
             UINT64 table_desc = MI_ARM64_MAKE_TABLE_DESC(Pfn);
@@ -2847,13 +2567,14 @@ MiMapPDEs(
                 volatile UINT64 *L0Entry = MiArm64LookupTableEntry(Ttbr1, TargetVa, 0);
                 if (L0Entry && ((*L0Entry & 1ULL) == 0))
                 {
-                    PFN_NUMBER Pfn = MxGetNextPage(1);
+                    PFN_NUMBER Pfn = MiArm64AllocatePageTablePage();
                     if (Pfn != 0)
                     {
                         /* Initialize the new L1 table page before publishing. */
                         RtlZeroMemory(MiArm64PfnToKseg0(Pfn), PAGE_SIZE);
                         UINT64 Desc = MI_ARM64_MAKE_TABLE_DESC(Pfn);
                         *L0Entry = Desc;
+                        MiArm64SyncL0ToMerged(MiAddressToPxi(TargetVa), Desc);
                         __asm__ __volatile__("dsb ishst" ::: "memory");
 
                         /* Register the L1 table page in PFN database to prevent reuse by paged pool.
@@ -2877,7 +2598,7 @@ MiMapPDEs(
 
                 if (PpeEntry && ((*PpeEntry & 1ULL) == 0))
                 {
-                    PFN_NUMBER Pfn = MxGetNextPage(1);
+                    PFN_NUMBER Pfn = MiArm64AllocatePageTablePage();
                     if (Pfn != 0)
                     {
                         /* Initialize the new L2 table page before publishing. */
@@ -2938,7 +2659,7 @@ MiMapPDEs(
             }
             if ((Entry & 1ULL) == 0)
             {
-                PFN_NUMBER Pfn = MxGetNextPage(1);
+                PFN_NUMBER Pfn = MiArm64AllocatePageTablePage();
                 /* Initialize the new L3 table page before publishing. */
                 RtlZeroMemory(MiArm64PfnToKseg0(Pfn), PAGE_SIZE);
                 UINT64 table_desc = MI_ARM64_MAKE_TABLE_DESC(Pfn);
@@ -3042,7 +2763,7 @@ MiMapPTEs(
              * L0/L1/L2 tables for every PTE, consuming 900K pages before
              * paged pool initialization, causing bugcheck 0x5F.
              */
-            TmplPte.u.Hard.PageFrameNumber = MxGetNextPage(1);
+            TmplPte.u.Hard.PageFrameNumber = MiArm64AllocatePageTablePage();
             MI_WRITE_VALID_PTE(PointerPte, TmplPte);
 
             /* Zero the page if requested */
@@ -3186,60 +2907,8 @@ MiBuildNonPagedPool(VOID)
 
     DPRINT("%s\n", "[arm64] MiBuildNonPagedPool: address space mapped");
 
-    /* Ensure the alias pages for the final nonpaged pool range are mapped
-     * before any MmGetPhysicalAddress usage. */
-    {
-        PVOID NonPagedPoolEnd = (PUCHAR)MmNonPagedPoolStart + MmSizeOfNonPagedPoolInBytes - 1;
-        PMMPTE FirstPte = MiAddressToPte(MmNonPagedPoolStart);
-        PMMPTE LastPte = MiAddressToPte(NonPagedPoolEnd);
-        PMMPDE FirstPde = MiAddressToPde(MmNonPagedPoolStart);
-        PMMPDE LastPde = MiAddressToPde(NonPagedPoolEnd);
-        PMMPPE FirstPpe = MiAddressToPpe(MmNonPagedPoolStart);
-        PMMPPE LastPpe = MiAddressToPpe(NonPagedPoolEnd);
-
-        /* Ensure the PPE alias pages are backed */
-        MiArm64MapAliasForPointer(FirstPpe);
-        if (LastPpe != FirstPpe)
-        {
-            MiArm64MapAliasForPointer(LastPpe);
-        }
-
-        /* Ensure all PDE alias pages for the initial nonpaged pool are backed */
-        {
-            ULONG_PTR FirstPage = (ULONG_PTR)FirstPde & ~(PAGE_SIZE - 1);
-            ULONG_PTR LastPage = (ULONG_PTR)LastPde & ~(PAGE_SIZE - 1);
-            ULONG_PTR Page;
-
-            for (Page = FirstPage; Page <= LastPage; Page += PAGE_SIZE)
-            {
-                MiArm64MapAliasForPointer((PVOID)Page);
-            }
-        }
-
-        /* Ensure all PTE alias pages for the initial nonpaged pool are backed */
-        {
-            ULONG_PTR FirstPage = (ULONG_PTR)FirstPte & ~(PAGE_SIZE - 1);
-            ULONG_PTR LastPage = (ULONG_PTR)LastPte & ~(PAGE_SIZE - 1);
-            ULONG_PTR Page;
-
-            for (Page = FirstPage; Page <= LastPage; Page += PAGE_SIZE)
-            {
-                MiArm64MapAliasForPointer((PVOID)Page);
-            }
-        }
-    }
-
-    /* Normalize PFN boundary flags for initial nonpaged pool pages. */
-#if DBG
-    DbgPrint("[arm64] MiBuildNonPagedPool: normalize PFN flags %p-%p\n",
-             MmNonPagedPoolStart,
-             (PVOID)((PUCHAR)MmNonPagedPoolStart + MmSizeOfNonPagedPoolInBytes - 1));
-#endif
-    MiArm64NormalizePoolPfnFlagsRange(MmNonPagedPoolStart,
-                                      MmSizeOfNonPagedPoolInBytes);
-#if DBG
-    DbgPrint("[arm64] MiBuildNonPagedPool: normalize PFN flags done\n");
-#endif
+    /* Pool page PFN entries are initialized later by MiArm64InitPoolPfnEntries()
+     * during MiInitializePfnDatabase, which walks the page tables via KSEG0. */
 
     /* Initialize the ARM3 nonpaged pool */
 #if DBG
@@ -3281,6 +2950,12 @@ MiBuildSystemPteSpace(VOID)
 
     /* Convert exclusive end into inclusive end for the mapping helpers */
     SystemPteRangeEnd = (PVOID)((PUCHAR)MiSystemPteSpaceEnd - 1);
+
+    DPRINT("[ARM64] SystemPTE range: Start=%p End=%p (End-1 byte from %p)\n",
+           MiSystemPteSpaceStart, SystemPteRangeEnd, MiSystemPteSpaceEnd);
+    DPRINT("[ARM64] SystemPTE PTEs: Start=%p End=%p\n",
+           MiAddressToPte(MiSystemPteSpaceStart), MiAddressToPte(SystemPteRangeEnd));
+
     MiArm64DumpPoolDescriptors(MiSystemPteSpaceStart, "syspte-pre");
     MiArm64DumpPoolDescriptors(SystemPteRangeEnd, "syspte-end");
     MiMapPPEs(MiSystemPteSpaceStart, SystemPteRangeEnd);

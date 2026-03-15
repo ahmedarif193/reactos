@@ -208,7 +208,8 @@ typedef enum _ARM64_UNWIND_OP_KIND
     Arm64UnwindOpSaveFp,
     Arm64UnwindOpSaveFpPair,
     Arm64UnwindOpSaveQ,
-    Arm64UnwindOpSaveQPair
+    Arm64UnwindOpSaveQPair,
+    Arm64UnwindOpSaveNext    /* placeholder resolved in post-decode pass */
 } ARM64_UNWIND_OP_KIND;
 
 typedef struct _ARM64_UNWIND_OP
@@ -226,7 +227,12 @@ RtlpArm64GetUnwindByte(
     _In_ ULONG Index)
 {
     ULONG Word = UnwindWords[Index >> 2];
-    ULONG Shift = 24 - ((Index & 3u) * 8u);
+    /*
+     * Clang/LLVM stores unwind code bytes in native (little-endian) byte order
+     * within each DWORD.  Byte 0 of the sequence is at the least-significant
+     * byte of the first DWORD, byte 1 at the next byte, etc.
+     */
+    ULONG Shift = (Index & 3u) * 8u;
     return (UCHAR)((Word >> Shift) & 0xFFu);
 }
 
@@ -535,6 +541,20 @@ RtlpArm64DecodeUnwindOps(
 
         if (Op == 0xE6u)
         {
+            /*
+             * save_next: Placeholder – resolved after the full stream is decoded.
+             *
+             * In the unwind code stream (which is in reverse prolog order),
+             * save_next extends the FOLLOWING op (the one at the next higher
+             * byte index, decoded in the next iteration).  That following op
+             * describes the earlier prolog instruction whose register pair
+             * is the base for the "next" pair.
+             *
+             * We push a placeholder here and resolve it in a post-decode
+             * reverse walk so that save_next can reference the op that has
+             * not yet been decoded.
+             */
+            RtlpArm64PushUnwindOp(Ops, &Count, MaxOps, Arm64UnwindOpSaveNext, 0, 0, 0, 0);
             continue;
         }
 
@@ -612,6 +632,65 @@ RtlpArm64DecodeUnwindOps(
         return FALSE;
     }
 
+    /*
+     * Post-decode pass: resolve Arm64UnwindOpSaveNext placeholders.
+     *
+     * In the unwind code stream (reverse prolog order), save_next appears
+     * BEFORE the base save it extends.  In the Ops array (same order as
+     * the stream), the base save is at a HIGHER index.  Walk the array
+     * from the end so that chained save_next entries are resolved
+     * correctly (each one references the already-resolved op at index+1).
+     */
+    {
+        LONG j;
+        for (j = (LONG)Count - 2; j >= 0; j--)
+        {
+            if (Ops[j].Kind != Arm64UnwindOpSaveNext)
+                continue;
+
+            if ((ULONG)(j + 1) >= Count)
+            {
+                /* No following op – turn into a harmless no-op */
+                Ops[j].Kind = Arm64UnwindOpAlloc;
+                Ops[j].Delta = 0;
+                continue;
+            }
+
+            switch (Ops[j + 1].Kind)
+            {
+            case Arm64UnwindOpSaveIntPair:
+                Ops[j].Kind  = Arm64UnwindOpSaveIntPair;
+                Ops[j].Reg   = Ops[j + 1].Reg + 2;
+                Ops[j].Reg2  = Ops[j + 1].Reg2 + 2;
+                Ops[j].Offset = Ops[j + 1].Offset + 16;
+                Ops[j].Delta = 0;
+                break;
+            case Arm64UnwindOpSaveFpPair:
+                Ops[j].Kind  = Arm64UnwindOpSaveFpPair;
+                Ops[j].Reg   = Ops[j + 1].Reg + 2;
+                Ops[j].Reg2  = Ops[j + 1].Reg2 + 2;
+                Ops[j].Offset = Ops[j + 1].Offset + 16;
+                Ops[j].Delta = 0;
+                break;
+            case Arm64UnwindOpSaveQPair:
+                Ops[j].Kind  = Arm64UnwindOpSaveQPair;
+                Ops[j].Reg   = Ops[j + 1].Reg + 2;
+                Ops[j].Reg2  = Ops[j + 1].Reg2 + 2;
+                Ops[j].Offset = Ops[j + 1].Offset + 32;
+                Ops[j].Delta = 0;
+                break;
+            default:
+                /* Unsupported base for save_next – make it a no-op */
+                Ops[j].Kind  = Arm64UnwindOpAlloc;
+                Ops[j].Reg   = 0;
+                Ops[j].Reg2  = 0;
+                Ops[j].Offset = 0;
+                Ops[j].Delta = 0;
+                break;
+            }
+        }
+    }
+
     *OpCount = Count;
     return TRUE;
 }
@@ -626,14 +705,35 @@ RtlpArm64ApplyUnwindOps(
     _In_ ULONG64 StackLow,
     _In_ ULONG64 StackHigh)
 {
-    while (OpCount--)
+    ULONG i;
+
+    /*
+     * Process ops in decode order (index 0 first). The unwind codes are
+     * stored in reverse prolog order, so the first decoded op corresponds
+     * to the last prolog instruction. Processing in decode order correctly
+     * unwinds the stack from the current position back to the caller.
+     */
+    for (i = 0; i < OpCount; i++)
     {
-        const ARM64_UNWIND_OP *Op = &Ops[OpCount];
+        const ARM64_UNWIND_OP *Op = &Ops[i];
+        ULONG64 Address;
 
-        if (!RtlpIsStackPointerValid(ContextRecord->Sp, StackLow, StackHigh))
+        /*
+         * Guard against corrupted SP before computing Address to prevent
+         * wraparound.  Use <= StackHigh (not strict <) because alloc ops
+         * can legitimately push SP to exactly StackHigh before the last
+         * register restore ops execute.  The actual memory access is still
+         * validated by RtlpIsStackAddressValid which checks Address+Size.
+         */
+        if (Op->Kind != Arm64UnwindOpAlloc &&
+            ((ContextRecord->Sp & 0xF) != 0 ||
+             ContextRecord->Sp < StackLow ||
+             ContextRecord->Sp > StackHigh))
+        {
             return FALSE;
+        }
 
-        ULONG64 Address = ContextRecord->Sp + Op->Offset;
+        Address = ContextRecord->Sp + Op->Offset;
 
         switch (Op->Kind)
         {
@@ -668,11 +768,8 @@ RtlpArm64ApplyUnwindOps(
                 RtlpArm64RestoreQReg(ContextRecord, Op->Reg, Address);
                 break;
             case Arm64UnwindOpSaveQPair:
-                if (!RtlpIsStackAddressValid(Address, StackLow, StackHigh, 2 * sizeof(ULONG64)) ||
-                    !RtlpIsStackAddressValid(Address + 16, StackLow, StackHigh, 2 * sizeof(ULONG64)))
-                {
+                if (!RtlpIsStackAddressValid(Address, StackLow, StackHigh, 4 * sizeof(ULONG64)))
                     return FALSE;
-                }
                 RtlpArm64RestoreQReg(ContextRecord, Op->Reg, Address);
                 RtlpArm64RestoreQReg(ContextRecord, Op->Reg2, Address + 16);
                 break;
@@ -686,7 +783,18 @@ RtlpArm64ApplyUnwindOps(
         }
     }
 
-    return RtlpIsStackPointerValid(ContextRecord->Sp, StackLow, StackHigh);
+    /*
+     * Validate the final SP: must be 16-byte aligned and within [StackLow, StackHigh].
+     * Allow SP == StackHigh since full unwind naturally reaches the stack top.
+     */
+    if ((ContextRecord->Sp & 0xF) != 0)
+        return FALSE;
+    if (ContextRecord->Sp < StackLow)
+        return FALSE;
+    if (ContextRecord->Sp > StackHigh)
+        return FALSE;
+
+    return TRUE;
 }
 
 BOOLEAN
@@ -979,15 +1087,59 @@ RtlVirtualUnwind(
                                                           ImageBase);
             UseXdata = TRUE;
             EpilogCount = Xdata->EpilogCount;
-            EpilogTableCount = (Xdata->EpilogInHeader && (EpilogCount > 0)) ?
-                               (EpilogCount - 1) : EpilogCount;
 
-            UnwindWords = (const ULONG *)(Xdata + 1);
-            HandlerRvaPtr = UnwindWords + Xdata->CodeWords + EpilogTableCount;
+            /*
+             * When EpilogInHeader (E=1), the EpilogCount field is NOT a
+             * count of epilog scope table entries -- it is the index of the
+             * first unwind code that describes the single epilog.  There is
+             * no epilog scope table at all.
+             *
+             * When E=0, EpilogCount is the number of epilog scope entries
+             * that follow the header (each one DWORD).
+             *
+             * Ref: Microsoft ARM64 exception handling documentation.
+             */
+            EpilogTableCount = Xdata->EpilogInHeader ? 0 : EpilogCount;
+
+            /*
+             * Sanity: EpilogTableCount and CodeWords must be small.
+             * The xdata blob for a single function is at most a few hundred
+             * bytes; 256 DWORDs (1 KB) is a generous upper bound.
+             */
+            ASSERT(EpilogTableCount <= 256);
+            ASSERT(Xdata->CodeWords <= 256);
+
+            /*
+             * The layout after the header is:
+             *   [Epilog scope table entries: EpilogTableCount DWORDs]
+             *   [Unwind code words: CodeWords DWORDs]
+             *   [Handler RVA: 1 DWORD if ExceptionDataPresent]
+             *   [Handler data (scope table etc.)]
+             */
+            UnwindWords = (const ULONG *)(Xdata + 1) + EpilogTableCount;
+            HandlerRvaPtr = UnwindWords + Xdata->CodeWords;
 
             if (Xdata->ExceptionDataPresent)
             {
-                Handler = (PEXCEPTION_ROUTINE)RVA(*HandlerRvaPtr, ImageBase);
+                ULONG HandlerRva = *HandlerRvaPtr;
+
+                /*
+                 * Sanity check: a non-zero handler RVA should look like a
+                 * real code address. RVA 0 means no handler; very small
+                 * values (< 0x1000) almost certainly indicate a corrupt
+                 * xdata parse from miscomputing the epilog table size.
+                 */
+                ASSERT(HandlerRva == 0 || HandlerRva >= 0x1000);
+                if (HandlerRva >= FunctionEntry->BeginAddress ||
+                    HandlerRva == 0)
+                {
+                    DPRINT("[RtlVirtualUnwind] Handler RVA 0x%lx seems invalid "
+                           "(FuncBegin=0x%lx EpilogInHeader=%u EpilogCount=%u)\n",
+                           HandlerRva, FunctionEntry->BeginAddress,
+                           Xdata->EpilogInHeader, Xdata->EpilogCount);
+                }
+
+                Handler = (PEXCEPTION_ROUTINE)RVA(HandlerRva, ImageBase);
                 LocalHandlerData = (PVOID)(HandlerRvaPtr + 1);
             }
 
@@ -1023,10 +1175,13 @@ RtlVirtualUnwind(
             if (!RtlpArm64ApplyUnwindOps(Ops, OpCount, ContextRecord, ContextPointers, StackLow, StackHigh))
             {
                 *ContextRecord = OriginalContext;
-                if (HandlerType == UNW_FLAG_NHANDLER)
-                    return NULL;
-
-                RtlRaiseStatus(STATUS_BAD_STACK);
+                /*
+                 * Never call RtlRaiseStatus from RtlVirtualUnwind.
+                 * Raising an exception from within exception dispatch
+                 * causes infinite recursion and stack exhaustion.
+                 * Return NULL and let the caller handle the error.
+                 */
+                return NULL;
             }
         }
         SavedFp = ContextRecord->Fp;
@@ -1099,8 +1254,15 @@ RtlVirtualUnwind(
         SavedFp = ContextRecord->Fp;
         SavedLr = ContextRecord->Lr;
     }
-    else if (ContextRecord->Fp != 0)
+    else if (ContextRecord->Fp != 0 &&
+             RtlpIsStackAddressValid(ContextRecord->Fp, StackLow, StackHigh, 2 * sizeof(ULONG64)))
     {
+        /*
+         * FP-chain unwind: read saved FP and LR from the frame pointed to by FP.
+         * Guard with RtlpIsStackAddressValid to prevent reading from a corrupted
+         * FP value (e.g., FP=2 from a leaf function that inherited the caller's
+         * corrupted X29) which would cause a double-fault during exception dispatch.
+         */
         SavedFp = *(ULONG64 *)(ContextRecord->Fp);
         SavedLr = *(ULONG64 *)(ContextRecord->Fp + sizeof(ULONG64));
         ContextRecord->Sp = ContextRecord->Fp + 2 * sizeof(ULONG64);

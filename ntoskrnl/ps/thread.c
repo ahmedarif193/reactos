@@ -15,6 +15,13 @@
 #define NDEBUG
 #include <debug.h>
 
+/* Keep UT trace prints architecture-safe. */
+#if defined(_M_ARM)
+#define PSP_GET_TRAPFRAME_SP(_TrapFrame) ((ULONG_PTR)(_TrapFrame)->Sp)
+#else
+#define PSP_GET_TRAPFRAME_SP(_TrapFrame) KeGetTrapFrameStackRegister(_TrapFrame)
+#endif
+
 /* GLOBALS ******************************************************************/
 
 extern BOOLEAN CcPfEnablePrefetcher;
@@ -33,12 +40,21 @@ PspUserThreadStartup(IN PKSTART_ROUTINE StartRoutine,
     BOOLEAN DeadThread = FALSE;
     KIRQL OldIrql;
     PAGED_CODE();
-    PSTRACE(PS_THREAD_DEBUG,
-            "StartRoutine: %p StartContext: %p\n", StartRoutine, StartContext);
 
     /* Go to Passive Level */
     KeLowerIrql(PASSIVE_LEVEL);
+
     Thread = PsGetCurrentThread();
+    DPRINT("PS: [UT1] PspUserThreadStartup Thread=%p Proc=%p(%.16s) Pri=%d BasePri=%d Q=%d StartRoutine=%p StartContext=%p DeadThread=%u\n",
+            Thread,
+            PsGetCurrentProcess(),
+            PsGetCurrentProcess() ? PsGetCurrentProcess()->ImageFileName : "<null>",
+            Thread->Tcb.Priority,
+            Thread->Tcb.BasePriority,
+            Thread->Tcb.Quantum,
+            StartRoutine,
+            StartContext,
+            Thread->DeadThread);
 
     /* Check if the thread is dead */
     if (Thread->DeadThread)
@@ -49,8 +65,15 @@ PspUserThreadStartup(IN PKSTART_ROUTINE StartRoutine,
     else
     {
         /* Get the Locale ID and save Preferred Proc */
+#ifdef _M_ARM64
+        Teb = Thread->Tcb.Teb;
+#else
         Teb = NtCurrentTeb();
-        Teb->CurrentLocale = MmGetSessionLocaleId();
+#endif
+        {
+            ULONG LocaleId = MmGetSessionLocaleId();
+            Teb->CurrentLocale = LocaleId;
+        }
         Teb->IdealProcessor = Thread->Tcb.IdealProcessor;
     }
 
@@ -80,7 +103,12 @@ PspUserThreadStartup(IN PKSTART_ROUTINE StartRoutine,
 
             ExceptionFrame = KeGetExceptionFrame(&Thread->Tcb);
             TrapFrame = KeGetTrapFrame(&Thread->Tcb);
-
+            DPRINT("PS: [UT2] Before KiInitializeUserApc Proc=%.16s TrapPc=%p TrapSp=%p DllEntry=%p DllBase=%p\n",
+                    PsGetCurrentProcess()->ImageFileName,
+                    (PVOID)(ULONG_PTR)KeGetTrapFramePc(TrapFrame),
+                    (PVOID)(ULONG_PTR)PSP_GET_TRAPFRAME_SP(TrapFrame),
+                    PspSystemDllEntryPoint,
+                    PspSystemDllBase);
 
             KiInitializeUserApc(ExceptionFrame,
                                 TrapFrame,
@@ -88,11 +116,14 @@ PspUserThreadStartup(IN PKSTART_ROUTINE StartRoutine,
                             NULL,
                             PspSystemDllBase,
                             NULL);
+            DPRINT("PS: [UT3] After KiInitializeUserApc Proc=%.16s TrapPc=%p TrapSp=%p\n",
+                    PsGetCurrentProcess()->ImageFileName,
+                    (PVOID)(ULONG_PTR)KeGetTrapFramePc(TrapFrame),
+                    (PVOID)(ULONG_PTR)PSP_GET_TRAPFRAME_SP(TrapFrame));
         }
 
         /* Lower it back to passive */
         KeLowerIrql(PASSIVE_LEVEL);
-
     }
     else
     {
@@ -186,6 +217,11 @@ PspSystemThreadStartup(IN PKSTART_ROUTINE StartRoutine,
     PETHREAD Thread;
     PSTRACE(PS_THREAD_DEBUG,
             "StartRoutine: %p StartContext: %p\n", StartRoutine, StartContext);
+    DPRINT("PS: [ST] PspSystemThreadStartup entry Thread=%p Start=%p Context=%p Irql=%u\n",
+            PsGetCurrentThread(),
+            StartRoutine,
+            StartContext,
+            KeGetCurrentIrql());
 
     /* Unlock the dispatcher Database */
     KeLowerIrql(PASSIVE_LEVEL);
@@ -206,6 +242,11 @@ PspSystemThreadStartup(IN PKSTART_ROUTINE StartRoutine,
                 PspTerminateThreadByPointer(Thread, STATUS_INVALID_PARAMETER, TRUE);
                 return;
             }
+            DPRINT("PS: [ST] PspSystemThreadStartup invoke Start=%p Thread=%p Proc=%p(%.16s)\n",
+                    StartRoutine,
+                    Thread,
+                    PsGetCurrentProcess(),
+                    PsGetCurrentProcess() ? PsGetCurrentProcess()->ImageFileName : "<null>");
             StartRoutine(StartContext);
         }
     }
@@ -369,14 +410,20 @@ PspCreateThread(OUT PHANDLE ThreadHandle,
     if (ThreadContext)
     {
         /* User-mode Thread, create Teb */
+        DPRINT("PS: PspCreateThread: creating TEB for Proc=%p(%.16s) ThreadCid=%p\n",
+                Process, Process->ImageFileName, Thread->Cid.UniqueThread);
         Status = MmCreateTeb(Process, &Thread->Cid, InitialTeb, &TebBase);
         if (!NT_SUCCESS(Status))
         {
+            DPRINT1("PS: PspCreateThread: MmCreateTeb failed Proc=%p(%.16s) Status=0x%lx\n",
+                    Process, Process->ImageFileName, Status);
             /* Failed to create the TEB. Release rundown and dereference */
             ExReleaseRundownProtection(&Process->RundownProtect);
             ObDereferenceObject(Thread);
             return Status;
         }
+        DPRINT("PS: PspCreateThread: TEB created Proc=%p(%.16s) TebBase=%p\n",
+                Process, Process->ImageFileName, TebBase);
 
         /* Set the Start Addresses from the untrusted ThreadContext */
         _SEH2_TRY
@@ -423,6 +470,8 @@ PspCreateThread(OUT PHANDLE ThreadHandle,
     /* Check if we failed */
     if (!NT_SUCCESS(Status))
     {
+        DPRINT1("PS: PspCreateThread: init failed Proc=%p(%.16s) Thread=%p Status=0x%lx Teb=%p\n",
+                Process, Process->ImageFileName, Thread, Status, TebBase);
         /* Delete the TEB if we had done */
         if (TebBase) MmDeleteTeb(Process, TebBase);
 
@@ -465,6 +514,8 @@ PspCreateThread(OUT PHANDLE ThreadHandle,
 #endif
 
     /* Start the thread */
+    DPRINT("PS: PspCreateThread: KeStartThread Proc=%p(%.16s) Thread=%p Teb=%p Start=%p Win32Start=%p Irql=%u\n",
+            Process, Process->ImageFileName, Thread, TebBase, Thread->StartAddress, Thread->Win32StartAddress, KeGetCurrentIrql());
     KeStartThread(&Thread->Tcb);
 
     /* Release the process lock */
@@ -491,6 +542,9 @@ PspCreateThread(OUT PHANDLE ThreadHandle,
     if (Thread->Terminated) KeForceResumeThread(&Thread->Tcb);
 
     /* Create an access state */
+    DPRINT("PS: PspCreateThread: SeCreateAccessStateEx begin Thread=%p Irql=%u\n",
+            Thread,
+            KeGetCurrentIrql());
     Status = SeCreateAccessStateEx(NULL,
                                    ThreadContext ?
                                    PsGetCurrentProcess() : Process,
@@ -498,6 +552,10 @@ PspCreateThread(OUT PHANDLE ThreadHandle,
                                    &AuxData,
                                    DesiredAccess,
                                    &PsThreadType->TypeInfo.GenericMapping);
+    DPRINT("PS: PspCreateThread: SeCreateAccessStateEx end Thread=%p Status=0x%lx Irql=%u\n",
+            Thread,
+            Status,
+            KeGetCurrentIrql());
     if (!NT_SUCCESS(Status))
     {
         /* Access state failed, thread is dead */
@@ -515,12 +573,19 @@ PspCreateThread(OUT PHANDLE ThreadHandle,
     }
 
     /* Insert the Thread into the Object Manager */
+    DPRINT("PS: PspCreateThread: ObInsertObject begin Thread=%p Irql=%u\n",
+            Thread,
+            KeGetCurrentIrql());
     Status = ObInsertObject(Thread,
                             AccessState,
                             DesiredAccess,
                             0,
                             NULL,
                             &hThread);
+    DPRINT("PS: PspCreateThread: ObInsertObject end Thread=%p Status=0x%lx Irql=%u\n",
+            Thread,
+            Status,
+            KeGetCurrentIrql());
 
     /* Delete the access state if we had one */
     if (AccessState) SeDeleteAccessState(AccessState);
@@ -633,6 +698,13 @@ PspCreateThread(OUT PHANDLE ThreadHandle,
     }
 
     /* Dispatch thread */
+    DPRINT("PS: PspCreateThread: KeReadyThread Proc=%p(%.16s) Thread=%p Start=%p State=%u Pri=%d\n",
+            Process,
+            Process->ImageFileName,
+            Thread,
+            Thread->StartAddress,
+            Thread->Tcb.State,
+            Thread->Tcb.Priority);
     KeReadyThread(&Thread->Tcb);
 
     /* Dereference it, leaving only the keep-alive */
@@ -1240,17 +1312,21 @@ NtCreateThread(OUT PHANDLE ThreadHandle,
     }
 
     /* Call the shared function */
-    return PspCreateThread(ThreadHandle,
-                           DesiredAccess,
-                           ObjectAttributes,
-                           ProcessHandle,
-                           NULL,
-                           ClientId,
-                           ThreadContext,
-                           &SafeInitialTeb,
-                           CreateSuspended,
-                           NULL,
-                           NULL);
+    {
+        NTSTATUS CreateStatus;
+        CreateStatus = PspCreateThread(ThreadHandle,
+                               DesiredAccess,
+                               ObjectAttributes,
+                               ProcessHandle,
+                               NULL,
+                               ClientId,
+                               ThreadContext,
+                               &SafeInitialTeb,
+                               CreateSuspended,
+                               NULL,
+                               NULL);
+        return CreateStatus;
+    }
 }
 
 /*

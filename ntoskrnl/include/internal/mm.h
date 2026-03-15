@@ -1123,20 +1123,7 @@ MiGetPfnEntry(IN PFN_NUMBER Pfn)
     if (Pfn > MmHighestPhysicalPage) return NULL;
 
     /* Make sure this page actually has a PFN entry */
-#if defined(_M_ARM64) || defined(__aarch64__)
-    /*
-     * ARM64: Don't return NULL based on MiPfnBitMap check.
-     * During early boot, pages are allocated from MxFreeDescriptor via MxGetNextPage.
-     * These pages are valid physical pages but may not be in MmPhysicalMemoryBlock,
-     * so they won't be set in MiPfnBitMap. However, MmPfnDatabase covers all PFNs
-     * up to MmHighestPhysicalPage, so the entry exists - it just might not be
-     * in the bitmap. Returning NULL causes crashes in pool code that expects
-     * valid PFN entries for mapped pages.
-     */
-    (void)MiPfnBitMap; /* Suppress unused warning */
-#else
     if ((MiPfnBitMap.Buffer) && !(RtlTestBit(&MiPfnBitMap, (ULONG)Pfn))) return NULL;
-#endif
 
     /* Get the entry */
     Page = &MmPfnDatabase[Pfn];
@@ -1613,6 +1600,43 @@ MmMakeDataSectionResident(
     _In_ ULONG Length,
     _In_ PLARGE_INTEGER ValidDataLength);
 
+#if defined(_M_ARM64)
+BOOLEAN
+NTAPI
+MiArchShouldRouteFileReserveSectionToArm3(
+    _In_opt_ PFILE_OBJECT FileObject,
+    _In_ ULONG AllocationAttributes);
+
+BOOLEAN
+NTAPI
+MiArchAllowMissingDataSectionSegment(
+    _In_ PSECTION_OBJECT_POINTERS SectionObjectPointer);
+#endif
+
+#if !defined(_M_ARM64)
+FORCEINLINE
+BOOLEAN
+NTAPI
+MiArchShouldRouteFileReserveSectionToArm3(
+    _In_opt_ PFILE_OBJECT FileObject,
+    _In_ ULONG AllocationAttributes)
+{
+    UNREFERENCED_PARAMETER(FileObject);
+    UNREFERENCED_PARAMETER(AllocationAttributes);
+    return FALSE;
+}
+
+FORCEINLINE
+BOOLEAN
+NTAPI
+MiArchAllowMissingDataSectionSegment(
+    _In_ PSECTION_OBJECT_POINTERS SectionObjectPointer)
+{
+    UNREFERENCED_PARAMETER(SectionObjectPointer);
+    return FALSE;
+}
+#endif
+
 BOOLEAN
 NTAPI
 MmPurgeSegment(
@@ -1897,13 +1921,6 @@ _Requires_exclusive_lock_held_(WorkingSet->WorkingSetMutex)
 VOID
 NTAPI
 MiInitializeWorkingSetList(_Inout_ PMMSUPPORT WorkingSet);
-
-/* ARM64-specific MM functions ***********************************************/
-#if defined(_M_ARM64) || defined(__aarch64__)
-VOID
-MiArm64MapAliasForPointer(
-    _In_ PVOID AliasVa);
-#endif
 
 #ifdef __cplusplus
 } // extern "C"

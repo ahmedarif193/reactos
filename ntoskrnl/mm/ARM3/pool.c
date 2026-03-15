@@ -15,11 +15,6 @@
 #define MODULE_INVOLVED_IN_ARM3
 #include <mm/ARM3/miarm.h>
 
-#if defined(_M_ARM64)
-/* ARM64: Forward declaration for System View Space PTE diagnostic helper */
-extern VOID MiArm64CheckSystemViewSpacePte(_In_z_ PCSTR Location);
-#endif
-
 /* GLOBALS ********************************************************************/
 
 LIST_ENTRY MmNonPagedPoolFreeListHead[MI_MAX_FREE_PAGE_LISTS];
@@ -212,20 +207,6 @@ MiInitializePoolEvents(VOID)
 {
     KIRQL OldIrql;
     PFN_NUMBER FreePoolInPages;
-
-    /*
-     * ARM64 WORKAROUND: On ARM64, global variables in BSS may be cleared between
-     * Phase 0 (where MmPagedPoolMutex is initialized) and Phase 1 (where this
-     * function is called). Re-initialize the mutex here if it's uninitialized.
-     * This ensures the Gate->Header.Type is set correctly before we try to acquire it.
-     */
-#if defined(_M_ARM64) || defined(__aarch64__)
-    if (MmPagedPoolMutex.Gate.Header.Type != GateObject)
-    {
-        /* ARM64: Re-initialize the mutex if it's uninitialized (BSS clearing workaround) */
-        KeInitializeGuardedMutex(&MmPagedPoolMutex);
-    }
-#endif
 
     /* Lock paged pool */
     KeAcquireGuardedMutex(&MmPagedPoolMutex);
@@ -573,10 +554,22 @@ MiAllocatePoolPages(IN POOL_TYPE PoolType,
             OldIrql = MiAcquirePfnLock();
             do
             {
-                //
-                // It should not already be valid
-                //
-                ASSERT(PointerPde->u.Hard.Valid == 0);
+#if defined(_M_ARM64)
+                /*
+                 * ARM64: The PDE may already be valid if it was pre-allocated
+                 * during boot (MiMapPDEs in Phase 0 init creates PDEs for
+                 * the initial paged pool range). Skip allocation for PDEs
+                 * that already exist.
+                 */
+                if (PointerPde->u.Hard.Valid != 0)
+                {
+                    /* PDE already valid - skip allocation, just use it */
+                    PointerPde++;
+                    BaseVa = (PVOID)((ULONG_PTR)BaseVa + PAGE_SIZE);
+                    i--;
+                    continue;
+                }
+#endif
 
                 /* Request a page */
                 MI_SET_USAGE(MI_USAGE_PAGED_POOL);
@@ -681,110 +674,6 @@ MiAllocatePoolPages(IN POOL_TYPE PoolType,
         //
         KeFlushEntireTb(TRUE, TRUE);
 
-#if defined(_M_ARM64) || defined(__aarch64__)
-        //
-        // ARM64: During early boot, demand-zero PTEs cause problems because
-        // the page fault handler may not be ready. We need to immediately
-        // allocate and map physical pages for paged pool, similar to how
-        // NonPagedPool expansion works.
-        //
-        {
-            KIRQL PoolOldIrql;
-            PMMPTE PointerPtePte;
-            PFN_NUMBER PageTableFrameNumber;
-            NTSTATUS Status;
-
-            TempPte = ValidKernelPte;
-            PointerPte = MiAddressToPte(BaseVa);
-            StartPte = PointerPte + SizeInPages;
-
-            /* Lock PFN database */
-            PoolOldIrql = MiAcquirePfnLock();
-
-            /* Check if we have enough pages */
-            if (MmAvailablePages < SizeInPages)
-            {
-                MiReleasePfnLock(PoolOldIrql);
-
-                /* Clear the allocation bits we set */
-                KeAcquireGuardedMutex(&MmPagedPoolMutex);
-                RtlClearBit(MmPagedPoolInfo.EndOfPagedPoolBitmap, EndAllocation);
-                RtlClearBits(MmPagedPoolInfo.PagedPoolAllocationMap, i, SizeInPages);
-                KeReleaseGuardedMutex(&MmPagedPoolMutex);
-                return NULL;
-            }
-
-            do
-            {
-                /* Allocate a physical page */
-                MI_SET_USAGE(MI_USAGE_PAGED_POOL);
-                MI_SET_PROCESS2("Kernel");
-                PageFrameNumber = MiRemoveAnyPage(MI_GET_NEXT_COLOR());
-
-                /* Get the PFN entry for it and fill it out */
-                Pfn1 = MiGetPfnEntry(PageFrameNumber);
-                Pfn1->u3.e2.ReferenceCount = 1;
-                Pfn1->u2.ShareCount = 1;
-                Pfn1->PteAddress = PointerPte;
-                Pfn1->u3.e1.PageLocation = ActiveAndValid;
-                Pfn1->u4.VerifierAllocation = 0;
-
-                /*
-                 * CRITICAL ARM64 FIX: Set u4.PteFrame to the page table that contains this PTE.
-                 * This field is accessed by MiDeleteSystemPageableVm when freeing paged pool.
-                 * Without this initialization, u4.PteFrame contains garbage (often 0xFFFFFFFF),
-                 * causing MiDecrementShareCount to fail with "PFN mismatch" assertion.
-                 *
-                 * The logic mirrors MiInitializePfn (pfnlist.c:1014-1034):
-                 * 1. Get the PTE that maps the page table containing PointerPte
-                 * 2. Ensure that PTE is valid (page table must be present for paged pool)
-                 * 3. Extract the PFN of the page table from that PTE
-                 * 4. Store it in Pfn1->u4.PteFrame
-                 */
-                PointerPtePte = MiAddressToPte(PointerPte);
-                if (PointerPtePte->u.Hard.Valid == 0)
-                {
-                    /* Page table not present - this should not happen for paged pool */
-                    Status = MiCheckPdeForPagedPool(PointerPte);
-                    if (!NT_SUCCESS(Status))
-                    {
-                        /* Critical error - cannot proceed */
-                        MiReleasePfnLock(PoolOldIrql);
-
-                        /* Clear the allocation bits we set */
-                        KeAcquireGuardedMutex(&MmPagedPoolMutex);
-                        RtlClearBit(MmPagedPoolInfo.EndOfPagedPoolBitmap, EndAllocation);
-                        RtlClearBits(MmPagedPoolInfo.PagedPoolAllocationMap, i, SizeInPages);
-                        KeReleaseGuardedMutex(&MmPagedPoolMutex);
-                        return NULL;
-                    }
-                }
-
-                /* Get the PFN of the page table and store it */
-                PageTableFrameNumber = PFN_FROM_PTE(PointerPtePte);
-                ASSERT(PageTableFrameNumber != 0);
-                Pfn1->u4.PteFrame = PageTableFrameNumber;
-
-                /* Increment the share count of the page table */
-                Pfn1 = MiGetPfnEntry(PageTableFrameNumber);
-                Pfn1->u2.ShareCount++;
-
-                /* Restore Pfn1 to point to the data page we're initializing */
-                Pfn1 = MiGetPfnEntry(PageFrameNumber);
-
-                /* Write the valid PTE */
-                TempPte.u.Hard.PageFrameNumber = PageFrameNumber;
-                MI_WRITE_VALID_PTE(PointerPte, TempPte);
-            } while (++PointerPte < StartPte);
-
-            /* Release PFN lock */
-            MiReleasePfnLock(PoolOldIrql);
-
-            /* Update allocated pool count */
-            InterlockedExchangeAddSizeT(&MmPagedPoolInfo.AllocatedPagedPool,
-                                        SizeInPages << PAGE_SHIFT);
-        }
-#else
         /* Setup a demand-zero writable PTE */
         MI_MAKE_SOFTWARE_PTE(&TempPte, MM_READWRITE);
 
@@ -800,7 +689,6 @@ MiAllocatePoolPages(IN POOL_TYPE PoolType,
             //
             MI_WRITE_INVALID_PTE(PointerPte, TempPte);
         } while (++PointerPte < StartPte);
-#endif
 
         //
         // Return the allocation address to the caller
@@ -1149,20 +1037,6 @@ MiFreePoolPages(IN PVOID StartingVa)
     // the S-LIST instead of freeing it
     //
     StartPte = PointerPte = MiAddressToPte(StartingVa);
-
-#if defined(_M_ARM64) || defined(__aarch64__)
-    //
-    // ARM64: Check if the PTE is valid before accessing PageFrameNumber.
-    // For nonpaged pool, PTEs must always be valid. If we hit an invalid PTE,
-    // it indicates a serious error. Return 0 to indicate failure rather than
-    // crashing when accessing u.Hard.PageFrameNumber on an invalid PTE.
-    //
-    if (!PointerPte->u.Hard.Valid)
-    {
-        return 0;
-    }
-#endif
-
     StartPfn = Pfn1 = MiGetPfnEntry(PointerPte->u.Hard.PageFrameNumber);
     if ((Pfn1->u3.e1.EndOfAllocation == 1) &&
         (ExQueryDepthSList(&MiNonPagedPoolSListHead) < MiNonPagedPoolSListMaximum))
@@ -1180,18 +1054,6 @@ MiFreePoolPages(IN PVOID StartingVa)
         // Keep going
         //
         PointerPte++;
-
-#if defined(_M_ARM64) || defined(__aarch64__)
-        //
-        // ARM64: Verify each PTE in the chain is valid
-        //
-        if (!PointerPte->u.Hard.Valid)
-        {
-            // Invalid PTE in allocation chain - return 0
-            return 0;
-        }
-#endif
-
         Pfn1 = MiGetPfnEntry(PointerPte->u.Hard.PageFrameNumber);
     }
 

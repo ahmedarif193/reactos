@@ -179,8 +179,30 @@ KiArm64SyncVectorCommon:
     ldr x11, [x9, #72]           /* Original x30 at [caller_sp + 72] */
     str x11, [sp, #(ARM64_EARLY_STATE_REGS + 30 * 8)]
 
-    /* Calculate original SP (before caller's 80-byte frame) */
+    /*
+     * Save the interrupted code's stack pointer.
+     *
+     * For lower-EL exceptions (vectors 8+), the CPU switched from EL0 to
+     * EL1 on entry.  The user stack pointer lives in SP_EL0 — the kernel
+     * stack (SP_EL1) that we have been using is irrelevant for the saved
+     * user context.
+     *
+     * For same-EL exceptions (vectors 0-7), the interrupted code was
+     * running at EL1 using SP_ELx, so the original SP is the kernel
+     * stack pointer before the caller's 80-byte frame was pushed.
+     *
+     * BUG FIX: Previously this always computed the kernel SP, causing
+     * user-mode TrapFrame->Sp to contain a kernel address.  After the
+     * page fault handler returned, KiTrapReturn wrote the kernel SP
+     * into SP_EL0, corrupting the user stack pointer.
+     */
+    cmp x28, #8
+    b.lt .Lsave_kernel_sp
+    mrs x12, sp_el0
+    b .Lstore_saved_sp
+.Lsave_kernel_sp:
     add x12, x9, #80
+.Lstore_saved_sp:
     str x12, [sp, #ARM64_EARLY_STATE_REG_SP]
 
     /* Save exception registers */
@@ -221,6 +243,26 @@ KiArm64SyncVectorCommon:
     ldr x2, [sp, #ARM64_EARLY_STATE_TRAP_PTR]
     ldr x3, [sp, #ARM64_EARLY_STATE_EXC_PTR]
     dsb ld
+
+    /*
+     * CRITICAL: Disable ALL interrupts BEFORE popping the stack.
+     *
+     * The trap frame and exception frame are embedded in the early state
+     * context on the kernel stack. After the `add sp` instructions below,
+     * this memory lies below SP and is effectively deallocated. If an IRQ
+     * fires between the stack pop and KiTrapReturn's daifset, the IRQ
+     * handler (0xD0-byte frame + C call stack for timer/DPC processing)
+     * overwrites the deallocated trap frame data. KiTrapReturn then reads
+     * corrupted SPSR/ELR values and ERETs to a garbage address — typically
+     * a kernel stack address, causing a kernel instruction abort.
+     *
+     * The trap frame sits ~0x318 bytes below the restored SP. The IRQ
+     * handler's 0xD0-byte save area plus ~500+ bytes of C call stack
+     * easily reaches that depth, corrupting TrapFrame->Spsr and ->Pc.
+     */
+    msr daifset, #0xF
+    isb
+
     add sp, sp, #ARM64_EARLY_STATE_SIZE
 
     /* Pop caller's 80-byte frame (x0, x1, x9, x10, x11, x28, padding*2, x29, x30) */
@@ -229,8 +271,6 @@ KiArm64SyncVectorCommon:
     /* Set up args for KiTrapReturn */
     mov x0, x2
     mov x1, x3
-    dsb sy
-    isb
     b KiTrapReturn
 
 .Lsync_bugcheck:
@@ -337,27 +377,6 @@ KiArm64PermVectorSyncLowerA64_Handler:
     add x29, sp, #64
     .seh_add_fp 64
     .seh_endprologue
-
-#ifdef KDBG
-    /* DEBUG: One-shot marker for first SYNC-from-EL0 entry (vector 8). */
-    adrp x9, KiArm64SyncLowerOnce
-    ldr  w10, [x9, #:lo12:KiArm64SyncLowerOnce]
-    cbnz w10, 1f
-    mov  w10, #1
-    str  w10, [x9, #:lo12:KiArm64SyncLowerOnce]
-    ldr  x9, =0xFFFF800009000000
-    mov  w10, #'S'
-    strb w10, [x9]
-    mov  w10, #'Y'
-    strb w10, [x9]
-    mov  w10, #'N'
-    strb w10, [x9]
-    mov  w10, #'8'
-    strb w10, [x9]
-    mov  w10, #'\n'
-    strb w10, [x9]
-1:
-#endif /* KDBG */
 
     mov w1, #8                    /* Vector ID in x1, preserving x0 */
     bl KiArm64SyncVectorCommon
@@ -504,6 +523,15 @@ KiArm64PermVectorIrqSp0_Handler:
     bl KiArm64InterruptDispatchEntry
     dsb sy
     isb
+    /*
+     * CRITICAL: Mask ALL exceptions before restoring ELR_EL1/SPSR_EL1.
+     * If an IRQ fires between msr elr_el1 and eret, the hardware overwrites
+     * ELR_EL1/SPSR_EL1 with the current context, losing the return-to-user
+     * values. The nested handler's eret would return here, but our subsequent
+     * eret would use wrong ELR/SPSR — causing return to a garbage address.
+     */
+    msr daifset, #0xF
+    isb
     ldp x18, x19, [sp, #0x90]
     ldp x16, x17, [sp, #0x80]
     ldp x14, x15, [sp, #0x70]
@@ -554,6 +582,8 @@ KiArm64PermVectorFiqSp0_Handler:
     mov w0, #2
     bl KiArm64InterruptDispatchEntry
     dsb sy
+    isb
+    msr daifset, #0xF
     isb
     ldp x18, x19, [sp, #0x90]
     ldp x16, x17, [sp, #0x80]
@@ -606,6 +636,8 @@ KiArm64PermVectorIrqSpx_Handler:
     bl KiArm64InterruptDispatchEntry
     dsb sy
     isb
+    msr daifset, #0xF
+    isb
     ldp x18, x19, [sp, #0x90]
     ldp x16, x17, [sp, #0x80]
     ldp x14, x15, [sp, #0x70]
@@ -657,6 +689,8 @@ KiArm64PermVectorFiqSpx_Handler:
     bl KiArm64InterruptDispatchEntry
     dsb sy
     isb
+    msr daifset, #0xF
+    isb
     ldp x18, x19, [sp, #0x90]
     ldp x16, x17, [sp, #0x80]
     ldp x14, x15, [sp, #0x70]
@@ -678,12 +712,26 @@ KiArm64PermVectorFiqSpx_Handler:
     eret
     .seh_endproc
 
-/* IRQ handler: IrqLowerA64 (vector 9) */
+/* IRQ handler: IrqLowerA64 (vector 9)
+ *
+ * CRITICAL: This is a lower-EL handler — the interrupted code was running
+ * at EL0 using SP_EL0 as its stack pointer.  SP_EL0 is NOT part of the
+ * normal GPR save set but MUST be preserved across context switches.
+ *
+ * If a timer IRQ triggers a scheduler context switch while we're in
+ * KiArm64InterruptDispatchEntry, the new thread may write a different
+ * value to SP_EL0 (via KiTrapReturn's `msr sp_el0`).  When we resume
+ * and eret back to EL0, the CPU would use the WRONG SP_EL0 — causing
+ * the non-deterministic SP corruption observed in smss.exe.
+ *
+ * Fix: Expand frame from 0xD0 to 0xE0, save SP_EL0 at entry [sp+0xD0],
+ * restore it before eret.
+ */
     .global KiArm64PermVectorIrqLowerA64_Handler
     .seh_proc KiArm64PermVectorIrqLowerA64_Handler
 KiArm64PermVectorIrqLowerA64_Handler:
-    sub sp, sp, #0xD0
-    .seh_stackalloc 0xD0
+    sub sp, sp, #0xE0
+    .seh_stackalloc 0xE0
     stp x20, x21, [sp, #0xA0]
     .seh_save_regp x20, 0xA0
     stp x29, x30, [sp, #0xB0]
@@ -692,6 +740,8 @@ KiArm64PermVectorIrqLowerA64_Handler:
     mrs x20, elr_el1
     mrs x21, spsr_el1
     stp x20, x21, [sp, #0xC0]
+    mrs x9, sp_el0
+    str x9, [sp, #0xD0]           /* Save user SP_EL0 */
     stp x0,  x1,  [sp, #0x00]
     stp x2,  x3,  [sp, #0x10]
     stp x4,  x5,  [sp, #0x20]
@@ -730,6 +780,10 @@ KiArm64PermVectorIrqLowerA64_Handler:
     bl KiArm64InterruptDispatchEntry
     dsb sy
     isb
+    msr daifset, #0xF
+    isb
+    ldr x9, [sp, #0xD0]           /* Restore user SP_EL0 BEFORE GPRs */
+    msr sp_el0, x9
     ldp x18, x19, [sp, #0x90]
     ldp x16, x17, [sp, #0x80]
     ldp x14, x15, [sp, #0x70]
@@ -745,7 +799,7 @@ KiArm64PermVectorIrqLowerA64_Handler:
     msr elr_el1, x20
     msr spsr_el1, x21
     ldp x20, x21, [sp, #0xA0]
-    add sp, sp, #0xD0
+    add sp, sp, #0xE0
     dsb sy
     isb
     eret
@@ -756,17 +810,15 @@ KiArm64PermVectorIrqLowerA64_Handler:
     .align 4
 KiArm64IrqLowerOnce:
     .word 0
-KiArm64SyncLowerOnce:
-    .word 0
     .text
 #endif /* KDBG */
 
-/* FIQ handler: FiqLowerA64 (vector 10) */
+/* FIQ handler: FiqLowerA64 (vector 10) — save/restore SP_EL0 (see vector 9) */
     .global KiArm64PermVectorFiqLowerA64_Handler
     .seh_proc KiArm64PermVectorFiqLowerA64_Handler
 KiArm64PermVectorFiqLowerA64_Handler:
-    sub sp, sp, #0xD0
-    .seh_stackalloc 0xD0
+    sub sp, sp, #0xE0
+    .seh_stackalloc 0xE0
     stp x20, x21, [sp, #0xA0]
     .seh_save_regp x20, 0xA0
     stp x29, x30, [sp, #0xB0]
@@ -775,6 +827,8 @@ KiArm64PermVectorFiqLowerA64_Handler:
     mrs x20, elr_el1
     mrs x21, spsr_el1
     stp x20, x21, [sp, #0xC0]
+    mrs x9, sp_el0
+    str x9, [sp, #0xD0]           /* Save user SP_EL0 */
     stp x0,  x1,  [sp, #0x00]
     stp x2,  x3,  [sp, #0x10]
     stp x4,  x5,  [sp, #0x20]
@@ -785,12 +839,17 @@ KiArm64PermVectorFiqLowerA64_Handler:
     stp x14, x15, [sp, #0x70]
     stp x16, x17, [sp, #0x80]
     stp x18, x19, [sp, #0x90]
+
     dsb sy
     isb
     mov w0, #10
     bl KiArm64InterruptDispatchEntry
     dsb sy
     isb
+    msr daifset, #0xF
+    isb
+    ldr x9, [sp, #0xD0]           /* Restore user SP_EL0 BEFORE GPRs */
+    msr sp_el0, x9
     ldp x18, x19, [sp, #0x90]
     ldp x16, x17, [sp, #0x80]
     ldp x14, x15, [sp, #0x70]
@@ -806,18 +865,18 @@ KiArm64PermVectorFiqLowerA64_Handler:
     msr elr_el1, x20
     msr spsr_el1, x21
     ldp x20, x21, [sp, #0xA0]
-    add sp, sp, #0xD0
+    add sp, sp, #0xE0
     dsb sy
     isb
     eret
     .seh_endproc
 
-/* IRQ handler: IrqLowerA32 (vector 13) */
+/* IRQ handler: IrqLowerA32 (vector 13) — save/restore SP_EL0 (see vector 9) */
     .global KiArm64PermVectorIrqLowerA32_Handler
     .seh_proc KiArm64PermVectorIrqLowerA32_Handler
 KiArm64PermVectorIrqLowerA32_Handler:
-    sub sp, sp, #0xD0
-    .seh_stackalloc 0xD0
+    sub sp, sp, #0xE0
+    .seh_stackalloc 0xE0
     stp x20, x21, [sp, #0xA0]
     .seh_save_regp x20, 0xA0
     stp x29, x30, [sp, #0xB0]
@@ -826,6 +885,8 @@ KiArm64PermVectorIrqLowerA32_Handler:
     mrs x20, elr_el1
     mrs x21, spsr_el1
     stp x20, x21, [sp, #0xC0]
+    mrs x9, sp_el0
+    str x9, [sp, #0xD0]           /* Save user SP_EL0 */
     stp x0,  x1,  [sp, #0x00]
     stp x2,  x3,  [sp, #0x10]
     stp x4,  x5,  [sp, #0x20]
@@ -842,6 +903,10 @@ KiArm64PermVectorIrqLowerA32_Handler:
     bl KiArm64InterruptDispatchEntry
     dsb sy
     isb
+    msr daifset, #0xF
+    isb
+    ldr x9, [sp, #0xD0]           /* Restore user SP_EL0 BEFORE GPRs */
+    msr sp_el0, x9
     ldp x18, x19, [sp, #0x90]
     ldp x16, x17, [sp, #0x80]
     ldp x14, x15, [sp, #0x70]
@@ -857,18 +922,18 @@ KiArm64PermVectorIrqLowerA32_Handler:
     msr elr_el1, x20
     msr spsr_el1, x21
     ldp x20, x21, [sp, #0xA0]
-    add sp, sp, #0xD0
+    add sp, sp, #0xE0
     dsb sy
     isb
     eret
     .seh_endproc
 
-/* FIQ handler: FiqLowerA32 (vector 14) */
+/* FIQ handler: FiqLowerA32 (vector 14) — save/restore SP_EL0 (see vector 9) */
     .global KiArm64PermVectorFiqLowerA32_Handler
     .seh_proc KiArm64PermVectorFiqLowerA32_Handler
 KiArm64PermVectorFiqLowerA32_Handler:
-    sub sp, sp, #0xD0
-    .seh_stackalloc 0xD0
+    sub sp, sp, #0xE0
+    .seh_stackalloc 0xE0
     stp x20, x21, [sp, #0xA0]
     .seh_save_regp x20, 0xA0
     stp x29, x30, [sp, #0xB0]
@@ -877,6 +942,8 @@ KiArm64PermVectorFiqLowerA32_Handler:
     mrs x20, elr_el1
     mrs x21, spsr_el1
     stp x20, x21, [sp, #0xC0]
+    mrs x9, sp_el0
+    str x9, [sp, #0xD0]           /* Save user SP_EL0 */
     stp x0,  x1,  [sp, #0x00]
     stp x2,  x3,  [sp, #0x10]
     stp x4,  x5,  [sp, #0x20]
@@ -893,6 +960,10 @@ KiArm64PermVectorFiqLowerA32_Handler:
     bl KiArm64InterruptDispatchEntry
     dsb sy
     isb
+    msr daifset, #0xF
+    isb
+    ldr x9, [sp, #0xD0]           /* Restore user SP_EL0 BEFORE GPRs */
+    msr sp_el0, x9
     ldp x18, x19, [sp, #0x90]
     ldp x16, x17, [sp, #0x80]
     ldp x14, x15, [sp, #0x70]
@@ -908,7 +979,7 @@ KiArm64PermVectorFiqLowerA32_Handler:
     msr elr_el1, x20
     msr spsr_el1, x21
     ldp x20, x21, [sp, #0xA0]
-    add sp, sp, #0xD0
+    add sp, sp, #0xE0
     dsb sy
     isb
     eret

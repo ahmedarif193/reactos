@@ -547,6 +547,8 @@ IopStartRamdisk(IN PLOADER_PARAMETER_BLOCK LoaderBlock)
                RamdiskCreate.DiskLength.QuadPart,
                RamdiskCreate.DriveLetter);
 
+    DbgPrintEx(DPFLTR_DEFAULT_ID, DPFLTR_ERROR_LEVEL,
+               "[arm64] IopStartRamdisk: about to issue FSCTL_CREATE_RAM_DISK\n");
     Status = ZwDeviceIoControlFile(DriverHandle,
                                    NULL,
                                    NULL,
@@ -557,6 +559,8 @@ IopStartRamdisk(IN PLOADER_PARAMETER_BLOCK LoaderBlock)
                                    sizeof(RamdiskCreate),
                                    NULL,
                                    0);
+    DbgPrintEx(DPFLTR_DEFAULT_ID, DPFLTR_ERROR_LEVEL,
+               "[arm64] IopStartRamdisk: FSCTL done status=0x%08X\n", Status);
     ZwClose(DriverHandle);
     if (!(NT_SUCCESS(Status)) || !(NT_SUCCESS(IoStatusBlock.Status)))
     {
@@ -703,6 +707,8 @@ IopStartRamdisk(IN PLOADER_PARAMETER_BLOCK LoaderBlock)
                               (ULONG)((wcslen(SourceString) + 1) * sizeof(WCHAR)));
     }
 
+    DbgPrintEx(DPFLTR_DEFAULT_ID, DPFLTR_ERROR_LEVEL,
+               "[arm64] IopStartRamdisk: registry + symlinks done, creating ArcName\n");
     SymbolicLinkName.Length = 38;
     SymbolicLinkName.MaximumLength = 38 + sizeof(UNICODE_NULL);
     SymbolicLinkName.Buffer = L"\\ArcName\\ramdisk(0)";
@@ -797,22 +803,24 @@ IopStartRamdisk(IN PLOADER_PARAMETER_BLOCK LoaderBlock)
             }
         }
         Timeout.QuadPart = (WaitMs == 0) ? 0 : -(LONGLONG)WaitMs * 10 * 1000;
+        DbgPrintEx(DPFLTR_DEFAULT_ID, DPFLTR_ERROR_LEVEL,
+                   "[arm64] IopStartRamdisk: waiting for PiEnumerationFinished (timeout=%ums)\n", WaitMs);
         NTSTATUS WaitStatus = KeWaitForSingleObject(&PiEnumerationFinished,
                                                     Executive,
                                                     KernelMode,
                                                     FALSE,
                                                     &Timeout);
+        DbgPrintEx(DPFLTR_DEFAULT_ID, DPFLTR_ERROR_LEVEL,
+                   "[arm64] IopStartRamdisk: PiEnumerationFinished wait returned 0x%08X\n", WaitStatus);
         if (!NT_SUCCESS(WaitStatus))
         {
-            DbgPrintEx(DPFLTR_DEFAULT_ID,
-                       DPFLTR_WARNING_LEVEL,
+            DbgPrintEx(DPFLTR_DEFAULT_ID, DPFLTR_ERROR_LEVEL,
                        "IopStartRamdisk: PiEnumerationFinished wait status=0x%08X; continuing\n",
                        WaitStatus);
         }
         else
         {
-            DbgPrintEx(DPFLTR_DEFAULT_ID,
-                       DPFLTR_INFO_LEVEL,
+            DbgPrintEx(DPFLTR_DEFAULT_ID, DPFLTR_ERROR_LEVEL,
                        "IopStartRamdisk: ramdisk enumeration complete\n");
         }
     }
@@ -820,5 +828,7 @@ IopStartRamdisk(IN PLOADER_PARAMETER_BLOCK LoaderBlock)
     //
     // We made it
     //
+    DbgPrintEx(DPFLTR_DEFAULT_ID, DPFLTR_ERROR_LEVEL,
+               "[arm64] IopStartRamdisk: complete, returning SUCCESS\n");
     return STATUS_SUCCESS;
 }

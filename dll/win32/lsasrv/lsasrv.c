@@ -298,15 +298,17 @@ LsapInitLsa(VOID)
     NTSTATUS Status;
     BOOLEAN PrivilegeEnabled;
 
-    TRACE("LsapInitLsa()\n");
+    DbgPrint("LsapInitLsa: starting\n");
 
     /* Get the product type */
     RtlGetNtProductType(&LsapProductType);
 
     /* Initialize the well known SIDs */
+    DbgPrint("LsapInitLsa: InitSids\n");
     LsapInitSids();
 
     /* Initialize the SRM server */
+    DbgPrint("LsapInitLsa: RmInitializeServer\n");
     Status = LsapRmInitializeServer();
     if (!NT_SUCCESS(Status))
     {
@@ -315,15 +317,18 @@ LsapInitLsa(VOID)
     }
 
     /* Initialize the LSA database */
+    DbgPrint("LsapInitLsa: InitDatabase\n");
     LsapInitDatabase();
 
     /* Initialize logon sessions */
+    DbgPrint("LsapInitLsa: InitLogonSessions\n");
     LsapInitLogonSessions();
 
     /* Initialize the notification list */
     LsapInitNotificationList();
 
     /* Initialize registered authentication packages */
+    DbgPrint("LsapInitLsa: InitAuthPackages\n");
     Status = LsapInitAuthPackages();
     if (!NT_SUCCESS(Status))
     {
@@ -339,6 +344,7 @@ LsapInitLsa(VOID)
     }
 
     /* Start the authentication LPC port thread */
+    DbgPrint("LsapInitLsa: StartAuthenticationPort\n");
     Status = StartAuthenticationPort();
     if (!NT_SUCCESS(Status))
     {
@@ -347,6 +353,7 @@ LsapInitLsa(VOID)
     }
 
     /* Start the RPC server */
+    DbgPrint("LsapInitLsa: StartRpcServer\n");
     Status = LsarStartRpcServer();
     if (!NT_SUCCESS(Status))
     {
@@ -354,6 +361,7 @@ LsapInitLsa(VOID)
         return Status;
     }
 
+    DbgPrint("LsapInitLsa: complete\n");
     return STATUS_SUCCESS;
 }
 

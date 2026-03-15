@@ -62,6 +62,7 @@ KdpCopyMemoryChunks(
 {
     NTSTATUS Status;
     ULONG RemainingLength, CopyChunk;
+    ULONG64 StartAddress = Address;
 
     /* Check if we didn't get a chunk size or if it is too big */
     if (ChunkSize == 0)
@@ -117,8 +118,14 @@ KdpCopyMemoryChunks(
         RemainingLength = RemainingLength - CopyChunk;
     }
 
-    /* We may have modified executable code, flush the instruction cache */
-    KeSweepICache((PVOID)(ULONG_PTR)Address, TotalSize);
+    /*
+     * Flush I-cache only for virtual writes. Reads and physical accesses may
+     * target unmapped address spaces and must not trigger cache maintenance.
+     */
+    if ((Flags & MMDBG_COPY_WRITE) && !(Flags & MMDBG_COPY_PHYSICAL))
+    {
+        KeSweepICache((PVOID)(ULONG_PTR)StartAddress, TotalSize - RemainingLength);
+    }
 
     /*
      * Return the size we managed to copy and return
@@ -1899,6 +1906,19 @@ KdEnterDebugger(IN PKTRAP_FRAME TrapFrame,
                 IN PKEXCEPTION_FRAME ExceptionFrame)
 {
     BOOLEAN Enable;
+    PKTHREAD CurrentThread = KeGetCurrentThread();
+
+    /*
+     * Allow recursive entry from the same thread while the debugger is active.
+     * This avoids SPIN_LOCK_ALREADY_OWNED when nested DbgPrint/KD paths re-enter.
+     */
+    if (KdEnteredDebugger &&
+        (KdpDebuggerOwnerThread == CurrentThread) &&
+        (KdpDebuggerEntryCount != 0))
+    {
+        ++KdpDebuggerEntryCount;
+        return FALSE;
+    }
 
     /* Check if we have a trap frame */
     if (TrapFrame)
@@ -1923,6 +1943,8 @@ KdEnterDebugger(IN PKTRAP_FRAME TrapFrame,
     /* Lock the port, save its state and set the debugger entered flag */
     KdpPortLocked = KeTryToAcquireSpinLockAtDpcLevel(&KdpDebuggerLock);
     KdSave(FALSE);
+    KdpDebuggerOwnerThread = CurrentThread;
+    KdpDebuggerEntryCount = 1;
     KdEnteredDebugger = TRUE;
 
     /* Check freeze flag */
@@ -1952,8 +1974,22 @@ KdExitDebugger(IN BOOLEAN Enable)
 {
     ULONG TimeSlip;
 
+    /*
+     * Only the outermost entry owns freeze/thaw and debugger lock lifetime.
+     * Nested entries return immediately after dropping their recursion depth.
+     */
+    if (KdEnteredDebugger &&
+        (KdpDebuggerOwnerThread == KeGetCurrentThread()) &&
+        (KdpDebuggerEntryCount > 1))
+    {
+        --KdpDebuggerEntryCount;
+        return;
+    }
+
     /* Reset the debugger entered flag, restore the port state and unlock it */
     KdEnteredDebugger = FALSE;
+    KdpDebuggerEntryCount = 0;
+    KdpDebuggerOwnerThread = NULL;
     KdRestore(FALSE);
     if (KdpPortLocked) KdpPortUnlock();
 

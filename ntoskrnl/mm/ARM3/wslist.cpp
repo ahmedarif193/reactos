@@ -14,6 +14,7 @@
 
 #define MODULE_INVOLVED_IN_ARM3
 #include "miarm.h"
+#include "mibugchk.h"
 
 /* GLOBALS ********************************************************************/
 PMMWSL MmWorkingSetList;
@@ -200,7 +201,18 @@ RemoveFromWsList(PMMWSL WsList, PVOID Address)
 
     /* Make sure we are removing a paged-in address */
     ASSERT(PointerPte->u.Hard.Valid == 1);
-    PMMPFN Pfn1 = MiGetPfnEntry(PFN_FROM_PTE(PointerPte));
+    PFN_NUMBER PageFrameIndex = PFN_FROM_PTE(PointerPte);
+    PMMPFN Pfn1 = MiGetPfnEntry(PageFrameIndex);
+#if defined(_M_ARM64)
+    if (Pfn1 == NULL)
+    {
+        MI_BUGCHECK_MM(MI_BUGCHECK_ARM64_WS_PFN_MISSING,
+                       PageFrameIndex,
+                       PointerPte,
+                       Address);
+    }
+#endif
+    ASSERT(Pfn1 != NULL);
     ASSERT(Pfn1->u3.e1.PageLocation == ActiveAndValid);
 
     /* Shared pages not supported yet */
@@ -326,7 +338,18 @@ MiInsertInWorkingSetList(
     /* Make sure we are adding a paged-in address */
     ASSERT(PointerPte->u.Hard.Valid == 1);
 
-    PMMPFN Pfn1 = MiGetPfnEntry(PFN_FROM_PTE(PointerPte));
+    PFN_NUMBER PageFrameIndex = PFN_FROM_PTE(PointerPte);
+    PMMPFN Pfn1 = MiGetPfnEntry(PageFrameIndex);
+#if defined(_M_ARM64)
+    if (Pfn1 == NULL)
+    {
+        MI_BUGCHECK_MM(MI_BUGCHECK_ARM64_WS_PFN_MISSING,
+                       PageFrameIndex,
+                       PointerPte,
+                       Address);
+    }
+#endif
+    ASSERT(Pfn1 != NULL);
 
     ASSERT(Pfn1->u3.e1.PageLocation == ActiveAndValid);
 
@@ -387,6 +410,13 @@ MiInitializeWorkingSetList(_Inout_ PMMSUPPORT WorkingSet)
     if (MI_IS_PROCESS_WORKING_SET(WorkingSet))
     {
         ASSERT(WorkingSet->VmWorkingSetList == MmWorkingSetList);
+#ifndef _M_ARM64
+        /*
+         * On x86/amd64, PXE_BASE is the process-private L4 table via the
+         * recursive self-map. On ARM64, PXE_BASE is the shared kernel L0
+         * table in TTBR1 and must NOT be inserted per-process (the same
+         * physical page would conflict across processes).
+         */
 #if _MI_PAGING_LEVELS == 4
         MiInsertInWorkingSetList(WorkingSet, (PVOID)PXE_BASE, 0U);
 #elif _MI_PAGING_LEVELS == 3
@@ -394,39 +424,40 @@ MiInitializeWorkingSetList(_Inout_ PMMSUPPORT WorkingSet)
 #elif _MI_PAGING_LEVELS == 2
         MiInsertInWorkingSetList(WorkingSet, (PVOID)PDE_BASE, 0U);
 #endif
+#endif /* !_M_ARM64 */
     }
 
+#ifdef _M_ARM64
+    /*
+     * ARM64 process working sets must not consume TTBR1 self-map bookkeeping pages.
+     * MiAddressToPpe/Pde/Pte(MmWorkingSetList) resolves through TTBR1 aliases and
+     * does not identify this process's private hyperspace hierarchy.
+     */
+    if (!MI_IS_PROCESS_WORKING_SET(WorkingSet))
+    {
+#if _MI_PAGING_LEVELS == 4
+        MiInsertInWorkingSetList(WorkingSet, MiAddressToPpe(WorkingSet->VmWorkingSetList), 0UL);
+#endif
 
+#if _MI_PAGING_LEVELS >= 3
+        MiInsertInWorkingSetList(WorkingSet, MiAddressToPde(WorkingSet->VmWorkingSetList), 0UL);
+#endif
+
+        MiInsertInWorkingSetList(WorkingSet, (PVOID)MiAddressToPte(WorkingSet->VmWorkingSetList), 0UL);
+    }
+#else
 #if _MI_PAGING_LEVELS == 4
     MiInsertInWorkingSetList(WorkingSet, MiAddressToPpe(WorkingSet->VmWorkingSetList), 0UL);
 #endif
-
 
 #if _MI_PAGING_LEVELS >= 3
     MiInsertInWorkingSetList(WorkingSet, MiAddressToPde(WorkingSet->VmWorkingSetList), 0UL);
 #endif
 
-
     MiInsertInWorkingSetList(WorkingSet, (PVOID)MiAddressToPte(WorkingSet->VmWorkingSetList), 0UL);
-
-#ifdef _M_ARM64
-    /*
-     * ARM64 Skip: On ARM64, the working set list is in HYPER_SPACE which has
-     * per-process L0[492] entries. When we update TTBR1's L0[492] to point to
-     * the new process's hyperspace hierarchy, the self-map path to access
-     * MiAddressToPte(MmWorkingSetList) becomes invalid because the intermediate
-     * page table levels don't match the self-map structure.
-     *
-     * For now, skip inserting MmWorkingSetList into the working set on ARM64.
-     * This page is always resident (it's the working set list itself), so
-     * skipping its WSL entry should not cause functional issues.
-     *
-     * TODO: Implement proper hyperspace self-map support for ARM64 or use
-     * KSEG0-based page table walking for hyperspace PTEs.
-     */
-#else
-    MiInsertInWorkingSetList(WorkingSet, (PVOID)WorkingSet->VmWorkingSetList, 0UL);
 #endif
+
+    MiInsertInWorkingSetList(WorkingSet, (PVOID)WorkingSet->VmWorkingSetList, 0UL);
 
 
     /* From now on, every added page can be trimmed at any time */

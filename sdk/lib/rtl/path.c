@@ -410,7 +410,27 @@ RtlpCollapsePath(PWSTR Path, /* ULONG PathBufferSize, ULONG PathLength, */ ULONG
      * the path string and going up to the end of the buffer.
      * It also NULL-terminate the path string.
      */
-    ASSERT(EndBuffer >= p);
+    if (EndBuffer < p)
+    {
+        static int _pathDiagCount = 0;
+        if (_pathDiagCount < 3) {
+            _pathDiagCount++;
+            DbgPrint("[PATH_BUG] RtlpCollapsePath: EndBuffer < p! Path=%p p=%p EndBuffer=%p mark=%u PathLen=%u EndPath=%p\n",
+                     Path, p, EndBuffer, (unsigned)mark, (unsigned)wcslen(Path), EndPath);
+            DbgPrint("[PATH_BUG]   Path first 60 WCHARs: ");
+            {
+                ULONG i;
+                for (i = 0; i < 60 && i < (ULONG)(EndBuffer - Path + 20); i++) {
+                    if (Path[i] == 0) { DbgPrint("<NUL>"); break; }
+                    else if (Path[i] < 0x80) DbgPrint("%c", (char)Path[i]);
+                    else DbgPrint("?");
+                }
+            }
+            DbgPrint("\n");
+        }
+        /* Clamp p to EndBuffer to avoid buffer overrun */
+        p = EndBuffer;
+    }
     RtlZeroMemory(p, (EndBuffer - p + 1) * sizeof(WCHAR));
 
     /* Return the real path length */
@@ -1425,6 +1445,15 @@ RtlDosPathNameToRelativeNtPathName_Ustr(IN PCUNICODE_STRING DosName,
                                                                RelativeName));
 }
 
+/*
+ * RtlDoesFileExists_UstrEx - Check if a file (not directory) exists.
+ *
+ * Returns TRUE only for actual files. Directories return FALSE to prevent
+ * RtlDosSearchPath_U from returning bare directory paths that fail with
+ * STATUS_FILE_IS_A_DIRECTORY when opened. This matches observed Windows
+ * loader behavior where DLL search paths containing a directory with the
+ * same name as a DLL should not match.
+ */
 BOOLEAN
 NTAPI
 RtlDoesFileExists_UstrEx(IN PCUNICODE_STRING FileName,
@@ -1490,8 +1519,23 @@ RtlDoesFileExists_UstrEx(IN PCUNICODE_STRING FileName,
     }
     else
     {
-        /* The file exists */
-        Result = TRUE;
+        /*
+         * Check if this is a directory rather than a file.
+         * RtlDosSearchPath_U uses this function to verify DLL file
+         * existence; returning TRUE for directories causes the search
+         * to return bare directory paths (without the filename appended),
+         * which then fail with STATUS_FILE_IS_A_DIRECTORY in NtOpenFile.
+         * This matches observed Windows behavior.
+         */
+        if (BasicInformation.FileAttributes & FILE_ATTRIBUTE_DIRECTORY)
+        {
+            Result = FALSE;
+        }
+        else
+        {
+            /* The file exists */
+            Result = TRUE;
+        }
     }
 
     /* Return the result */

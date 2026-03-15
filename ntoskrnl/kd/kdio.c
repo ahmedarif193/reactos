@@ -36,6 +36,9 @@ static HANDLE KdpLogFileHandle;
 ANSI_STRING KdpLogFileName = RTL_CONSTANT_STRING("\\SystemRoot\\debug.log");
 
 static KSPIN_LOCK KdpSerialSpinLock;
+#if defined(_M_ARM64) || defined(__aarch64__)
+static KSPIN_LOCK KdpScreenSpinLock;
+#endif
 ULONG  SerialPortNumber = DEFAULT_DEBUG_PORT;
 CPPORT SerialPortInfo   = {0, DEFAULT_DEBUG_BAUD_RATE, 0};
 
@@ -60,13 +63,112 @@ PKDP_INIT_ROUTINE InitRoutines[KdMax] =
 
 /* LOCKING FUNCTIONS *********************************************************/
 
+#if defined(_M_ARM64) || defined(__aarch64__)
+/*
+ * Flag stored in the high bit of the returned KIRQL to indicate that the
+ * spinlock was NOT acquired due to same-CPU re-entrancy. The release path
+ * checks this flag and skips releasing the lock.
+ */
+#define KD_LOCK_NOT_ACQUIRED 0x80
+
+/*
+ * Raw try-acquire for KD spinlocks.
+ *
+ * We CANNOT use KeTryToAcquireSpinLockAtDpcLevel because in DBG builds,
+ * it bugchecks with SPIN_LOCK_ALREADY_OWNED if the same thread already
+ * holds the lock. That bugcheck handler then tries to print (DbgPrint),
+ * which tries to acquire the same lock, causing infinite recursion.
+ *
+ * Returns the observed lock owner:
+ *  - 0             if lock was acquired
+ *  - non-zero owner if lock is currently held
+ */
+FORCEINLINE
+KSPIN_LOCK
+KdbpTryAcquireSpinLockRaw(
+    _Inout_ PKSPIN_LOCK SpinLock,
+    _In_ KSPIN_LOCK LockOwner)
+{
+    ULONG tmp;
+    KSPIN_LOCK current = 0;
+    PKSPIN_LOCK LockPtr = SpinLock;
+
+    __asm__ __volatile__(
+        "1: ldaxr   %[current], [%[lockptr]]    \n"
+        "   cbnz    %[current], 2f              \n"
+        "   stxr    %w[tmp], %[owner], [%[lockptr]] \n"
+        "   cbnz    %w[tmp], 1b                 \n"
+        "2:                                     \n"
+        : [tmp] "=&r" (tmp), [current] "=&r" (current)
+        : [lockptr] "r" (LockPtr), [owner] "r" (LockOwner)
+        : "memory"
+    );
+
+    return current;
+}
+
+FORCEINLINE
+VOID
+KdbpReleaseSpinLockRaw(
+    _Inout_ PKSPIN_LOCK SpinLock)
+{
+    KSPIN_LOCK zero = 0;
+    __asm__ __volatile__(
+        "stlr   %[zero], [%[lockptr]]    \n"
+        "sev                             \n"
+        :
+        : [zero] "r" (zero), [lockptr] "r" (SpinLock)
+        : "memory"
+    );
+}
+
+FORCEINLINE
+VOID
+KdbpSpinWait(VOID)
+{
+    __asm__ __volatile__(
+        "wfe    \n"
+        :
+        :
+        : "memory"
+    );
+}
+#endif
+
 KIRQL
 NTAPI
 KdbpAcquireLock(
     _In_ PKSPIN_LOCK SpinLock)
 {
     KIRQL OldIrql;
+#if defined(_M_ARM64) || defined(__aarch64__)
+    KSPIN_LOCK CurrentOwner;
+    KSPIN_LOCK LockOwner;
 
+    /* Raise IRQL to HIGH_LEVEL to prevent preemption */
+    KeRaiseIrql(HIGH_LEVEL, &OldIrql);
+
+    /* 0 means free, otherwise owner is (ProcessorNumber + 1). */
+    LockOwner = (KSPIN_LOCK)KeGetCurrentProcessorNumber() + 1;
+
+    for (;;)
+    {
+        CurrentOwner = KdbpTryAcquireSpinLockRaw(SpinLock, LockOwner);
+        if (CurrentOwner == 0)
+        {
+            return OldIrql;
+        }
+
+        /* Same-CPU re-entrancy: drop output to avoid deadlock. */
+        if (CurrentOwner == LockOwner)
+        {
+            return (KIRQL)(OldIrql | KD_LOCK_NOT_ACQUIRED);
+        }
+
+        /* Different CPU owns the lock: wait until release. */
+        KdbpSpinWait();
+    }
+#else
     /* Acquire the spinlock without waiting at raised IRQL */
     while (TRUE)
     {
@@ -85,6 +187,7 @@ KdbpAcquireLock(
     }
 
     return OldIrql;
+#endif
 }
 
 VOID
@@ -93,12 +196,26 @@ KdbpReleaseLock(
     _In_ PKSPIN_LOCK SpinLock,
     _In_ KIRQL OldIrql)
 {
-    /* Release the spinlock */
-    KiReleaseSpinLock(SpinLock);
-    // KeReleaseSpinLockFromDpcLevel(SpinLock);
+#if defined(_M_ARM64) || defined(__aarch64__)
+    /* If the lock was never acquired, just restore IRQL */
+    if (OldIrql & KD_LOCK_NOT_ACQUIRED)
+    {
+        KeLowerIrql((KIRQL)(OldIrql & ~KD_LOCK_NOT_ACQUIRED));
+        return;
+    }
+
+    /* Release the spinlock using raw store-release */
+    KdbpReleaseSpinLockRaw(SpinLock);
 
     /* Restore the old IRQL */
     KeLowerIrql(OldIrql);
+#else
+    /* Release the spinlock */
+    KiReleaseSpinLock(SpinLock);
+
+    /* Restore the old IRQL */
+    KeLowerIrql(OldIrql);
+#endif
 }
 
 /* FILE DEBUG LOG FUNCTIONS **************************************************/
@@ -163,8 +280,16 @@ KdpPrintToLogFile(
 
     if (KdpDebugBuffer == NULL) return;
 
-    /* Acquire the printing spinlock without waiting at raised IRQL */
+    /* Acquire the printing spinlock */
     OldIrql = KdbpAcquireLock(&KdpDebugLogSpinLock);
+
+#if defined(_M_ARM64) || defined(__aarch64__)
+    if (OldIrql & KD_LOCK_NOT_ACQUIRED)
+    {
+        KdbpReleaseLock(&KdpDebugLogSpinLock, OldIrql);
+        return;
+    }
+#endif
 
     beg = KdpCurrentPosition;
     num = min(Length, KdpFreeBytes);
@@ -397,8 +522,16 @@ KdpSerialPrint(
     PCCH pch = String;
     KIRQL OldIrql;
 
-    /* Acquire the printing spinlock without waiting at raised IRQL */
+    /* Acquire the printing spinlock */
     OldIrql = KdbpAcquireLock(&KdpSerialSpinLock);
+
+#if defined(_M_ARM64) || defined(__aarch64__)
+    if (OldIrql & KD_LOCK_NOT_ACQUIRED)
+    {
+        KdbpReleaseLock(&KdpSerialSpinLock, OldIrql);
+        return;
+    }
+#endif
 
     /* Output the string */
     while (pch < String + Length && *pch)
@@ -496,6 +629,16 @@ KdpScreenPrint(
     _In_ ULONG Length)
 {
     PCCH pch = String;
+#if defined(_M_ARM64) || defined(__aarch64__)
+    KIRQL OldIrql;
+
+    OldIrql = KdbpAcquireLock(&KdpScreenSpinLock);
+    if (OldIrql & KD_LOCK_NOT_ACQUIRED)
+    {
+        KdbpReleaseLock(&KdpScreenSpinLock, OldIrql);
+        return;
+    }
+#endif
 
     while (pch < String + Length && *pch)
     {
@@ -540,6 +683,10 @@ KdpScreenPrint(
         HalDisplayString(KdpScreenLineBuffer + KdpScreenLineBufferPos);
         KdpScreenLineBufferPos = KdpScreenLineLength;
     }
+
+#if defined(_M_ARM64) || defined(__aarch64__)
+    KdbpReleaseLock(&KdpScreenSpinLock, OldIrql);
+#endif
 }
 
 NTSTATUS
@@ -558,6 +705,11 @@ KdpScreenInit(
     {
         /* Write out the functions that we support for now */
         DispatchTable->KdpPrintRoutine = KdpScreenPrint;
+
+#if defined(_M_ARM64) || defined(__aarch64__)
+        /* Initialize spinlock */
+        KeInitializeSpinLock(&KdpScreenSpinLock);
+#endif
 
         /* Register for BootPhase 1 initialization and as a Provider */
         DispatchTable->KdpInitRoutine = KdpScreenInit;

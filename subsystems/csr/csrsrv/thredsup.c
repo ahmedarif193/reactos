@@ -219,6 +219,11 @@ CsrLocateThreadByClientId(OUT PCSR_PROCESS *Process OPTIONAL,
     }
 
     /* Nothing found */
+    DPRINT1("CSRSRV: CsrLocateThreadByClientId MISS PID=%p TID=%p Hash=%lu BucketEmpty=%d\n",
+            ClientId->UniqueProcess,
+            ClientId->UniqueThread,
+            i,
+            (int)(ListHead->Flink == ListHead));
     return NULL;
 }
 
@@ -308,8 +313,14 @@ CsrInsertThread(IN PCSR_PROCESS Process,
                                       &ThreadInfo,
                                       sizeof(ThreadInfo),
                                       NULL);
-    if (!NT_SUCCESS(Status)) return Status;
-    if (ThreadInfo) return STATUS_THREAD_IS_TERMINATING;
+    if (!NT_SUCCESS(Status))
+    {
+        return Status;
+    }
+    if (ThreadInfo)
+    {
+        return STATUS_THREAD_IS_TERMINATING;
+    }
 
     /* Insert it into the Regular List */
     InsertTailList(&Process->ThreadList, &Thread->Link);
@@ -322,6 +333,10 @@ CsrInsertThread(IN PCSR_PROCESS Process,
 
     /* Insert it there too */
     InsertHeadList(&CsrThreadHashTable[i], &Thread->HashLinks);
+    DPRINT("CSRSRV: CsrInsertThread PID=%p TID=%p Hash=%lu\n",
+            Thread->ClientId.UniqueProcess,
+            Thread->ClientId.UniqueThread,
+            i);
     return STATUS_SUCCESS;
 }
 

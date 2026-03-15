@@ -14,6 +14,7 @@
 
 #define MODULE_INVOLVED_IN_ARM3
 #include <mm/ARM3/miarm.h>
+#include <mm/ARM3/mibugchk.h>
 
 #if DBG
 #define ASSERT_LIST_INVARIANT(x) \
@@ -121,33 +122,32 @@ VOID
 NTAPI
 MiZeroPhysicalPage(IN PFN_NUMBER PageFrameIndex)
 {
-#if defined(_M_ARM64) || defined(__aarch64__)
-    /*
-     * ARM64 FIX: Use KSEG0 direct mapping instead of hyperspace.
-     *
-     * On ARM64, hyperspace uses per-process page tables that are switched
-     * when attaching to a process. The MmFirstReservedMappingPte pointer
-     * was calculated for the System process's hyperspace at boot time.
-     * When attached to a different process, the self-map chain for hyperspace
-     * addresses is broken, causing faults when trying to access hyperspace PTEs.
-     *
-     * Since ARM64 has the KSEG0 identity map (0xFFFF800000000000 + PA = VA),
-     * we can directly access any physical page without hyperspace mapping.
-     * This is simpler and avoids the hyperspace self-map issues.
-     */
-    PVOID VirtualAddress = (PVOID)(0xFFFF800000000000ULL | ((ULONG64)PageFrameIndex << PAGE_SHIFT));
-    KeZeroPages(VirtualAddress, PAGE_SIZE);
-#else
     KIRQL OldIrql;
     PVOID VirtualAddress;
     PEPROCESS Process = PsGetCurrentProcess();
+
+#if defined(_M_ARM64) || defined(__aarch64__)
+    /*
+     * ARM64: MiRemoveZeroPage can call this while holding the PFN lock
+     * at DISPATCH_LEVEL. A fault on a KSEG0 leaf is fatal there.
+     *
+     * Use the hyperspace mapper for runtime zeroing (same contract as x64)
+     * and keep a direct-map fallback only for very early boot, before
+     * MmFirstReservedMappingPte is initialized.
+     */
+    if (MmFirstReservedMappingPte == NULL)
+    {
+        VirtualAddress = (PVOID)(KSEG0_BASE | ((ULONG64)PageFrameIndex << PAGE_SHIFT));
+        KeZeroPages(VirtualAddress, PAGE_SIZE);
+        return;
+    }
+#endif
 
     /* Map in hyperspace, then wipe it using XMMI or MEMSET */
     VirtualAddress = MiMapPageInHyperSpace(Process, PageFrameIndex, &OldIrql);
     ASSERT(VirtualAddress);
     KeZeroPages(VirtualAddress, PAGE_SIZE);
     MiUnmapPageInHyperSpace(Process, VirtualAddress, OldIrql);
-#endif
 }
 
 VOID
@@ -831,7 +831,7 @@ MiInsertPageInList(IN PMMPFNLIST ListHead,
             (Pfn1->OriginalPte.u.Soft.Transition == 1))
         {
             /* Crash the system on inconsistency */
-            KeBugCheckEx(MEMORY_MANAGEMENT, 0x8888, 0, 0, 0);
+            MI_BUGCHECK_MM(MI_BUGCHECK_MM_PFN_PROTOTYPE_TRANSITION, 0, 0, 0);
         }
     }
 
@@ -1037,11 +1037,10 @@ MiInitializePfn(IN PFN_NUMBER PageFrameIndex,
         if (!NT_SUCCESS(Status))
         {
             /* Crash */
-            KeBugCheckEx(MEMORY_MANAGEMENT,
-                         0x61940,
-                         (ULONG_PTR)PointerPte,
-                         (ULONG_PTR)PointerPtePte->u.Long,
-                         (ULONG_PTR)MiPteToAddress(PointerPte));
+            MI_BUGCHECK_MM(MI_BUGCHECK_MM_PTE_PAGE_TABLE_INVALID,
+                           PointerPte,
+                           PointerPtePte->u.Long,
+                           MiPteToAddress(PointerPte));
         }
     }
 
@@ -1095,11 +1094,10 @@ MiInitializePfnAndMakePteValid(IN PFN_NUMBER PageFrameIndex,
         if (!NT_SUCCESS(Status))
         {
             /* Crash */
-            KeBugCheckEx(MEMORY_MANAGEMENT,
-                         0x61940,
-                         (ULONG_PTR)PointerPte,
-                         (ULONG_PTR)PointerPtePte->u.Long,
-                         (ULONG_PTR)MiPteToAddress(PointerPte));
+            MI_BUGCHECK_MM(MI_BUGCHECK_MM_PTE_PAGE_TABLE_INVALID,
+                           PointerPte,
+                           PointerPtePte->u.Long,
+                           MiPteToAddress(PointerPte));
         }
     }
 
@@ -1176,7 +1174,6 @@ MiDecrementShareCount(IN PMMPFN Pfn1,
     if ((Pfn1->u3.e1.PageLocation != ActiveAndValid) &&
         (Pfn1->u3.e1.PageLocation != StandbyPageList))
     {
-        /* Otherwise we have PFN corruption */
         KeBugCheckEx(PFN_LIST_CORRUPT,
                      0x99,
                      PageFrameIndex,
@@ -1187,7 +1184,22 @@ MiDecrementShareCount(IN PMMPFN Pfn1,
     /* Page should at least have one reference */
     ASSERT(Pfn1->u3.e2.ReferenceCount != 0);
 
-    /* Check if the share count is now 0 */
+    /* Strict accounting: invalid share count is PFN corruption. */
+#if defined(_M_ARM64) || defined(__aarch64__)
+    if ((Pfn1->u2.ShareCount == 0) || (Pfn1->u2.ShareCount >= 0xF000000))
+    {
+#if defined(CONFIG_SMP)
+        DPRINT1("MiDecrementShareCount: PFN %Ix ShareCount=%u (invalid) [SMP race]\n",
+                PageFrameIndex, Pfn1->u2.ShareCount);
+        return;
+#else
+        MI_BUGCHECK_MM(MI_BUGCHECK_ARM64_PFN_SHARECOUNT_INVALID,
+                       PageFrameIndex,
+                       Pfn1->u2.ShareCount,
+                       Pfn1->u4.PteFrame);
+#endif
+    }
+#endif
     ASSERT(Pfn1->u2.ShareCount < 0xF000000);
     if (!--Pfn1->u2.ShareCount)
     {
@@ -1357,40 +1369,20 @@ MiInitializePfnForOtherProcess(IN PFN_NUMBER PageFrameIndex,
     /* Setup the PTE */
     Pfn1 = MI_PFN_ELEMENT(PageFrameIndex);
 
-    /* CRITICAL ARM64 FIX: Check if this page is currently on a free or zero list.
+#if defined(_M_ARM64)
+    /* ARM64 FIX: Check if this page is currently on a free or zero list.
      * This can happen when MiInitializePfnDatabase ran before this page table was created:
      * 1. MiBuildPfnDatabaseFromLoaderBlock inserted all pages from MxFreeDescriptor into free list
      * 2. Later, MxGetNextPage allocated this page for a page table (removed from MxFreeDescriptor but still on PFN free list)
      * 3. Now we're trying to register it in the PFN database while it's still on the free list
      * If we don't remove it from the free list, it will be reallocated by MiRemoveAnyPage!
-     *
-     * CRITICAL TIMING ISSUE FIX: We must verify the page is ACTUALLY linked in a list before
-     * trying to unlink it. MxGetNextPage() can create "orphaned" PFN entries where PageLocation
-     * is set to ZeroedPageList but Flink/Blink are 0 (page was removed from MxFreeDescriptor
-     * but MiBuildPfnDatabaseFromLoaderBlock() set PageLocation based on stale loader descriptors).
-     * Attempting to unlink such orphaned entries will trigger assertion failure at pfnlist.c:161.
      */
     OldLocation = Pfn1->u3.e1.PageLocation;
     if ((OldLocation == FreePageList) || (OldLocation == ZeroedPageList))
     {
-        /* CRITICAL: Check if page is actually linked in a list before unlinking.
-         * We need to verify THREE conditions:
-         * 1. Flink or Blink is non-zero (page appears to be linked)
-         * 2. The corresponding list head has pages (Total > 0)
-         * 3. We're not dealing with garbage data in uninitialized PFN entries
-         *
-         * ARM64 FIX: During early boot, many PFN entries have PageLocation=0 (ZeroedPageList)
-         * as a default value, but MmZeroedPageListHead.Total is 0 because no pages were
-         * actually inserted there. Trying to unlink such entries causes assertion failure.
-         */
         PMMPFNLIST ListHead = MmPageLocationList[OldLocation];
         if ((Pfn1->u1.Flink != 0 || Pfn1->u2.Blink != 0) && ListHead->Total > 0)
         {
-            /*
-             * ARM64 NOTE: This can happen during boot when FreeLDR-allocated page
-             * table pages are still linked in the free list. We handle this by
-             * unlinking them below. This is expected behavior, not an error.
-             */
             /* Acquire PFN lock to safely manipulate the free list */
             OldIrql = MiAcquirePfnLock();
 
@@ -1399,6 +1391,7 @@ MiInitializePfnForOtherProcess(IN PFN_NUMBER PageFrameIndex,
             WasOnFreeList = TRUE;
         }
     }
+#endif
 
     Pfn1->PteAddress = PteAddress;
 

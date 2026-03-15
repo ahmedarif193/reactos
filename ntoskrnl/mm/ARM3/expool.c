@@ -2453,7 +2453,17 @@ ExAllocatePoolWithTag(IN POOL_TYPE PoolType,
     //
     ASSERT(Tag != 0);
     ASSERT(Tag != ' GIB');
-    ASSERT(NumberOfBytes != 0);
+    if (NumberOfBytes == 0)
+    {
+        /*
+         * Windows NT allows 0-byte pool allocations (returns a minimum-size
+         * allocation). Some drivers rely on this behavior. Log it for
+         * debugging but allocate 1 byte to satisfy the request.
+         */
+        DPRINT1("ExAllocatePoolWithTag: NumberOfBytes=0, Tag='%.4s', PoolType=%u\n",
+                (PCCH)&Tag, PoolType);
+        NumberOfBytes = 1;
+    }
 
     //
     // Check if paged pool is being requested but is not yet initialized.

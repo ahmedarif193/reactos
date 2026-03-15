@@ -45,6 +45,30 @@ RtlInitializeContext(
     /* ARM64 requires 16-byte stack alignment */
     ThreadContext->Sp = (DWORD64)(ULONG_PTR)StackBase & ~(DWORD64)15;
     ThreadContext->X[0] = (DWORD64)(ULONG_PTR)ThreadStartParam;
+
+    /*
+     * Bug #54 FIX: Set LR (Link Register, X30) to prevent PC=0 crashes.
+     *
+     * If the thread entry function returns (executes 'ret'), ARM64 jumps to LR.
+     * After RtlZeroMemory, LR=0, so returning threads crash at PC=0.
+     *
+     * Set LR to 1 (invalid but non-zero) to cause a clean fault if a thread
+     * returns. The proper fix (setting LR to RtlExitUserThread) is done in
+     * thread.c after this function returns, but only for same-process threads.
+     *
+     * For cross-process thread creation (e.g., smss.exe's initial thread created
+     * by kernel), thread.c cannot resolve RtlExitUserThread's user-mode address.
+     * Setting LR=1 here ensures we at least don't crash at PC=0 in those cases.
+     */
+    ThreadContext->Lr = 1;
+
+    /*
+     * Set FP (Frame Pointer, X29) to 0 to mark the end of the call chain.
+     * Stack unwinders (debuggers, exception handlers) use FP=0 as the
+     * termination condition when walking the stack.
+     */
+    ThreadContext->Fp = 0;
+
     /* EL0t, interrupts enabled, NZCV = 0 */
     ThreadContext->Cpsr = 0;
 }

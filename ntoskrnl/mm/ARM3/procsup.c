@@ -14,6 +14,166 @@
 
 #define MODULE_INVOLVED_IN_ARM3
 #include <mm/ARM3/miarm.h>
+#include <mm/ARM3/mibugchk.h>
+
+#ifdef _M_ARM64
+#include <arch/arm64/include/arm64pl011.h>
+
+#define MI_ARM64_PTE_ADDR_MASK 0x0000FFFFFFFFF000ULL
+
+typedef struct _MI_ARM64_PT_WALK
+{
+    PMMPTE RootEntry;
+    PMMPTE L1Entry;
+    PMMPTE L2Entry;
+    PMMPTE L3Entry;
+    PFN_NUMBER RootPfn;
+    PFN_NUMBER L1Pfn;
+    PFN_NUMBER L2Pfn;
+    PFN_NUMBER L3Pfn;
+    PFN_NUMBER DataPfn;
+} MI_ARM64_PT_WALK, *PMI_ARM64_PT_WALK;
+
+static
+BOOLEAN
+MiArm64WalkProcessTablesForAddress(
+    _In_ PEPROCESS Process,
+    _In_ PVOID VirtualAddress,
+    _Out_ PMI_ARM64_PT_WALK Walk)
+{
+    volatile ULONG64 *L0;
+    volatile ULONG64 *L1;
+    volatile ULONG64 *L2;
+    volatile ULONG64 *L3;
+    ULONG64 Entry;
+
+    RtlZeroMemory(Walk, sizeof(*Walk));
+
+    Walk->RootPfn = Process->Pcb.DirectoryTableBase[0] >> PAGE_SHIFT;
+    if ((Walk->RootPfn == 0) || (Walk->RootPfn > MmHighestPhysicalPage))
+    {
+        return FALSE;
+    }
+
+    L0 = (volatile ULONG64 *)(KSEG0_BASE | (Walk->RootPfn << PAGE_SHIFT));
+    Walk->RootEntry = (PMMPTE)&L0[MiAddressToPxi(VirtualAddress)];
+
+    Entry = Walk->RootEntry->u.Long;
+    if ((Entry & ARM64_PTE_TYPE_MASK) != ARM64_PTE_TYPE_TABLE)
+    {
+        return FALSE;
+    }
+
+    Walk->L1Pfn = (PFN_NUMBER)((Entry & MI_ARM64_PTE_ADDR_MASK) >> PAGE_SHIFT);
+    if (Walk->L1Pfn > MmHighestPhysicalPage)
+    {
+        return FALSE;
+    }
+
+    L1 = (volatile ULONG64 *)(KSEG0_BASE | (Entry & MI_ARM64_PTE_ADDR_MASK));
+    Walk->L1Entry = (PMMPTE)&L1[((ULONG_PTR)VirtualAddress >> PPI_SHIFT) & PPI_MASK];
+
+    Entry = Walk->L1Entry->u.Long;
+    if ((Entry & ARM64_PTE_TYPE_MASK) != ARM64_PTE_TYPE_TABLE)
+    {
+        return FALSE;
+    }
+
+    Walk->L2Pfn = (PFN_NUMBER)((Entry & MI_ARM64_PTE_ADDR_MASK) >> PAGE_SHIFT);
+    if (Walk->L2Pfn > MmHighestPhysicalPage)
+    {
+        return FALSE;
+    }
+
+    L2 = (volatile ULONG64 *)(KSEG0_BASE | (Entry & MI_ARM64_PTE_ADDR_MASK));
+    Walk->L2Entry = (PMMPTE)&L2[((ULONG_PTR)VirtualAddress >> PDI_SHIFT) & PDI_MASK_ARM64];
+
+    Entry = Walk->L2Entry->u.Long;
+    if ((Entry & ARM64_PTE_TYPE_MASK) != ARM64_PTE_TYPE_TABLE)
+    {
+        return FALSE;
+    }
+
+    Walk->L3Pfn = (PFN_NUMBER)((Entry & MI_ARM64_PTE_ADDR_MASK) >> PAGE_SHIFT);
+    if (Walk->L3Pfn > MmHighestPhysicalPage)
+    {
+        return FALSE;
+    }
+
+    L3 = (volatile ULONG64 *)(KSEG0_BASE | (Entry & MI_ARM64_PTE_ADDR_MASK));
+    Walk->L3Entry = (PMMPTE)&L3[((ULONG_PTR)VirtualAddress >> PTI_SHIFT) & PTI_MASK_ARM64];
+
+    Entry = Walk->L3Entry->u.Long;
+    if ((Entry & ARM64_PTE_TYPE_MASK) != ARM64_PTE_TYPE_PAGE)
+    {
+        return FALSE;
+    }
+
+    Walk->DataPfn = (PFN_NUMBER)((Entry & MI_ARM64_PTE_ADDR_MASK) >> PAGE_SHIFT);
+    if (Walk->DataPfn > MmHighestPhysicalPage)
+    {
+        return FALSE;
+    }
+
+    return TRUE;
+}
+
+static
+VOID
+MiArm64InitializeRootProcessPfn(
+    _In_ PFN_NUMBER RootPfn)
+{
+    PMMPFN Pfn1 = MI_PFN_ELEMENT(RootPfn);
+
+    if (Pfn1->u3.e2.ReferenceCount != 0)
+    {
+        MI_BUGCHECK_MM(MI_BUGCHECK_ARM64_PFN_INIT_STATE,
+                       RootPfn,
+                       Pfn1->u3.e2.ReferenceCount,
+                       Pfn1->u2.ShareCount);
+    }
+
+    Pfn1->PteAddress = (PMMPTE)PXE_SELFMAP;
+    MI_MAKE_SOFTWARE_PTE(&Pfn1->OriginalPte, MM_READWRITE);
+    ASSERT(Pfn1->u3.e2.ReferenceCount == 0);
+    Pfn1->u3.e2.ReferenceCount = 1;
+    Pfn1->u2.ShareCount = 1;
+    Pfn1->u3.e1.PageLocation = ActiveAndValid;
+    Pfn1->u3.e1.Modified = TRUE;
+    Pfn1->u4.InPageError = FALSE;
+    Pfn1->u4.PteFrame = RootPfn;
+}
+
+static
+VOID
+MiArm64InitializeProcessPfnLink(
+    _In_ PFN_NUMBER PageFrameNumber,
+    _In_ PMMPTE ParentEntry,
+    _In_ PFN_NUMBER ParentPageFrameNumber)
+{
+    PMMPFN Pfn1 = MI_PFN_ELEMENT(PageFrameNumber);
+
+    if (Pfn1->u3.e2.ReferenceCount != 0)
+    {
+        MI_BUGCHECK_MM(MI_BUGCHECK_ARM64_PFN_INIT_STATE,
+                       PageFrameNumber,
+                       Pfn1->u3.e2.ReferenceCount,
+                       ParentPageFrameNumber);
+    }
+
+    Pfn1->PteAddress = ParentEntry;
+    MI_MAKE_SOFTWARE_PTE(&Pfn1->OriginalPte, MM_READWRITE);
+    ASSERT(Pfn1->u3.e2.ReferenceCount == 0);
+    Pfn1->u3.e2.ReferenceCount = 1;
+    Pfn1->u2.ShareCount = 1;
+    Pfn1->u3.e1.PageLocation = ActiveAndValid;
+    Pfn1->u3.e1.Modified = TRUE;
+    Pfn1->u4.InPageError = FALSE;
+    Pfn1->u4.PteFrame = ParentPageFrameNumber;
+
+    MI_PFN_ELEMENT(ParentPageFrameNumber)->u2.ShareCount++;
+}
+#endif
 
 /* GLOBALS ********************************************************************/
 
@@ -149,7 +309,7 @@ MmDeleteTeb(IN PEPROCESS Process,
     if (Vad->StartingVpn != ((ULONG_PTR)Teb >> PAGE_SHIFT))
     {
         /* Bug in the AVL code? */
-        DPRINT1("Corrupted VAD!\n");
+        DPRINT("Corrupted VAD!\n");
     }
     else
     {
@@ -573,50 +733,6 @@ MmCreatePeb(IN PEPROCESS Process,
         return Status;
     }
 
-#ifdef _M_ARM64
-    /*
-     * ARM64 PEB Pre-mapping:
-     *
-     * Pre-allocate and map the PEB page before the SEH block accesses it.
-     * This ensures the page is available when RtlZeroMemory tries to write
-     * to the PEB address, avoiding reliance on demand-zero page fault handling
-     * which can have issues during attached process context.
-     */
-    {
-        PFN_NUMBER PebPagePfn;
-        KIRQL OldIrql = MiAcquirePfnLock();
-
-        MI_SET_USAGE(MI_USAGE_PEB_TEB);
-        MI_SET_PROCESS(Process);
-
-        PebPagePfn = MiRemoveZeroPage(MI_GET_NEXT_PROCESS_COLOR(Process));
-        if (PebPagePfn == 0)
-        {
-            PebPagePfn = MiRemoveAnyPage(MI_GET_NEXT_PROCESS_COLOR(Process));
-            if (PebPagePfn == 0)
-            {
-                MiReleasePfnLock(OldIrql);
-                KeDetachProcess();
-                return STATUS_NO_MEMORY;
-            }
-            /* Zero the page via KSEG0 direct mapping */
-            RtlZeroMemory((PVOID)(0xFFFF800000000000ULL | (PebPagePfn << PAGE_SHIFT)), PAGE_SIZE);
-        }
-
-        MiReleasePfnLock(OldIrql);
-
-        NTSTATUS MapStatus = MiArm64MapUserPage((ULONG_PTR)Peb, PebPagePfn, PAGE_READWRITE);
-        if (!NT_SUCCESS(MapStatus))
-        {
-            OldIrql = MiAcquirePfnLock();
-            MiInsertPageInFreeList(PebPagePfn);
-            MiReleasePfnLock(OldIrql);
-            KeDetachProcess();
-            return MapStatus;
-        }
-    }
-#endif
-
     //
     // Use SEH in case we can't load the PEB
     //
@@ -914,7 +1030,7 @@ MmCreateTeb(IN PEPROCESS Process,
     return Status;
 }
 
-#ifdef _M_AMD64
+#if defined(_M_AMD64) || defined(_M_ARM64)
 static
 NTSTATUS
 MiInsertSharedUserPageVad(
@@ -929,7 +1045,7 @@ MiInsertSharedUserPageVad(
         Status = PsChargeProcessNonPagedPoolQuota(Process, sizeof(MMVAD_LONG));
         if (!NT_SUCCESS(Status))
         {
-            DPRINT1("Ran out of quota.\n");
+            DPRINT("Ran out of quota.\n");
             return Status;
         }
     }
@@ -938,7 +1054,7 @@ MiInsertSharedUserPageVad(
     Vad = ExAllocatePoolWithTag(NonPagedPool, sizeof(MMVAD_LONG), 'ldaV');
     if (Vad == NULL)
     {
-        DPRINT1("Failed to allocate VAD for shared user page\n");
+        DPRINT("Failed to allocate VAD for shared user page\n");
         Status = STATUS_INSUFFICIENT_RESOURCES;
         goto FailPath;
     }
@@ -972,7 +1088,7 @@ MiInsertSharedUserPageVad(
                             MEM_TOP_DOWN);
     if (!NT_SUCCESS(Status))
     {
-        DPRINT1("Failed to insert shared user VAD\n");
+        DPRINT("Failed to insert shared user VAD\n");
         ExFreePoolWithTag(Vad, 'ldaV');
         goto FailPath;
     }
@@ -986,7 +1102,7 @@ FailPath:
 
     return Status;
 }
-#endif
+#endif /* _M_AMD64 || _M_ARM64 */
 
 NTSTATUS
 NTAPI
@@ -1001,11 +1117,16 @@ MmInitializeProcessAddressSpace(IN PEPROCESS Process,
     PVOID ImageBase = 0;
     KIRQL OldIrql;
     PMMPFN Pfn;
+#ifndef _M_ARM64
     PFN_NUMBER PageFrameNumber;
+#endif
     UNICODE_STRING FileName;
     PWCHAR Source;
     PCHAR Destination;
     USHORT Length = 0;
+#ifdef _M_ARM64
+    MI_ARM64_PT_WALK WsWalk;
+#endif
 
 #ifndef _M_ARM64
     /* These variables are only used in the non-ARM64 path for PFN initialization */
@@ -1026,6 +1147,28 @@ MmInitializeProcessAddressSpace(IN PEPROCESS Process,
     /* Attach to the process */
     KeAttachProcess(&Process->Pcb);
 
+#ifdef _M_ARM64
+    /*
+     * ARM64 invariant: after attach, the process-local mapping for MmWorkingSetList
+     * must resolve through this process's page tables and point to WorkingSetPage.
+     */
+    if (!MiArm64WalkProcessTablesForAddress(Process, MmWorkingSetList, &WsWalk))
+    {
+        MI_BUGCHECK_MM(MI_BUGCHECK_ARM64_WS_WALK_FAILED,
+                       Process,
+                       MmWorkingSetList,
+                       Process->WorkingSetPage);
+    }
+    if (WsWalk.DataPfn != Process->WorkingSetPage)
+    {
+        MI_BUGCHECK_MM(MI_BUGCHECK_ARM64_WS_PFN_MISMATCH,
+                       Process,
+                       WsWalk.DataPfn,
+                       Process->WorkingSetPage);
+    }
+    ASSERT(MiArm64WalkProcessTablesForAddress(Process, MmWorkingSetList, &WsWalk));
+    ASSERT(WsWalk.DataPfn == Process->WorkingSetPage);
+#endif
     /* The address space should now been in phase 1 or 0 */
     ASSERT(Process->AddressSpaceInitialized <= 1);
     Process->AddressSpaceInitialized = 2;
@@ -1047,44 +1190,7 @@ MmInitializeProcessAddressSpace(IN PEPROCESS Process,
 
     /* Setup the PFN for the PDE base of this process */
 #if (_MI_PAGING_LEVELS == 4)
-#ifdef _M_ARM64
-    /*
-     * ARM64 FIX: On ARM64, TTBR0 (user) and TTBR1 (kernel) are separate.
-     * The self-map structure doesn't work correctly through the TTBR0 alias
-     * because the address decoding requires multiple levels of recursion that
-     * aren't set up in TTBR0's page tables.
-     *
-     * For the process root page directory (L0 table), we initialize the PFN
-     * entry directly without using MiInitializePfn (which needs to dereference
-     * the PointerPte). This is similar to what MiInitializePfnForOtherProcess
-     * does, but inline to avoid lock recursion issues (we already hold PFN lock).
-     *
-     * The PteAddress stored is PXE_SELFMAP from TTBR1's perspective. This will
-     * be wrong if accessed later, but the root page directory PFN is special
-     * and typically not accessed through normal PTE paths.
-     */
-PageFrameNumber = Process->Pcb.DirectoryTableBase[0] >> PAGE_SHIFT;
-    {
-        PMMPFN Pfn1 = MI_PFN_ELEMENT(PageFrameNumber);
-
-        /* Store the PTE address (TTBR1's self-map address for now) */
-        Pfn1->PteAddress = (PMMPTE)PXE_SELFMAP;
-
-        /* Make this a software demand-zero PTE for OriginalPte */
-        MI_MAKE_SOFTWARE_PTE(&Pfn1->OriginalPte, MM_READWRITE);
-
-        /* Setup the page as active and valid */
-        ASSERT(Pfn1->u3.e2.ReferenceCount == 0);
-        Pfn1->u3.e2.ReferenceCount = 1;
-        Pfn1->u2.ShareCount = 1;
-        Pfn1->u3.e1.PageLocation = ActiveAndValid;
-        Pfn1->u3.e1.Modified = TRUE;
-        Pfn1->u4.InPageError = FALSE;
-
-        /* Self-referential: PteFrame points to itself */
-        Pfn1->u4.PteFrame = PageFrameNumber;
-    }
-#else
+#ifndef _M_ARM64
     PointerPte = MiAddressToPte(PXE_BASE);
     PageFrameNumber = PFN_FROM_PTE(PointerPte);
     ASSERT(Process->Pcb.DirectoryTableBase[0] == PageFrameNumber * PAGE_SIZE);
@@ -1103,60 +1209,33 @@ PageFrameNumber = Process->Pcb.DirectoryTableBase[0] >> PAGE_SHIFT;
 #endif
 
 #ifdef _M_ARM64
-/*
-     * ARM64 FIX: Hyperspace and WorkingSetList PFN initialization.
-     *
-     * On ARM64, HYPER_SPACE (0xFFFFF60000000000) is in TTBR1's address space.
-     * TTBR1 is shared across all processes and doesn't change on context switch.
-     * The hyperspace tables were set up in MiArchCreateProcessAddressSpace in
-     * the new process's TTBR0 L0, but that's not actually used because TTBR1
-     * handles these addresses.
-     *
-     * For now, we use the DirectoryTableBase[1] value which holds the hyperspace
-     * PDPT PFN, and initialize the PFN entries using inline code (similar to
-     * what we did for the root L0).
-     *
-     * TODO: This is a workaround. The proper fix would be to either:
-     * 1. Make hyperspace per-TTBR1 (very complex)
-     * 2. Relocate hyperspace to TTBR0 range (requires protection)
-     * 3. Use a different hyperspace mechanism for ARM64
+    /*
+     * ARM64: initialize PFN lineage from the process's real page-table hierarchy
+     * (DirectoryTableBase[0]) instead of TTBR1 self-map virtual aliases.
      */
-/* Initialize PFN for hyperspace root (L0[492] entry in TTBR0, stored in DTB[1]) */
-    PageFrameNumber = Process->Pcb.DirectoryTableBase[1] >> PAGE_SHIFT;
+    if (WsWalk.RootPfn != (Process->Pcb.DirectoryTableBase[0] >> PAGE_SHIFT))
     {
-        PMMPFN Pfn1 = MI_PFN_ELEMENT(PageFrameNumber);
-        PFN_NUMBER RootPfn = Process->Pcb.DirectoryTableBase[0] >> PAGE_SHIFT;
-
-        Pfn1->PteAddress = MiAddressToPxe((PVOID)HYPER_SPACE);
-        MI_MAKE_SOFTWARE_PTE(&Pfn1->OriginalPte, MM_READWRITE);
-        ASSERT(Pfn1->u3.e2.ReferenceCount == 0);
-        Pfn1->u3.e2.ReferenceCount = 1;
-        Pfn1->u2.ShareCount = 1;
-        Pfn1->u3.e1.PageLocation = ActiveAndValid;
-        Pfn1->u3.e1.Modified = TRUE;
-        Pfn1->u4.InPageError = FALSE;
-        /* Hyperspace is contained in the root L0 */
-        Pfn1->u4.PteFrame = RootPfn;
+        MI_BUGCHECK_MM(MI_BUGCHECK_ARM64_WS_ROOT_MISMATCH,
+                       Process,
+                       WsWalk.RootPfn,
+                       (Process->Pcb.DirectoryTableBase[0] >> PAGE_SHIFT));
     }
-
-/* Initialize PFN for WorkingSetList (which was allocated in MiArchCreateProcessAddressSpace) */
-PageFrameNumber = Process->WorkingSetPage;
+    if (WsWalk.L1Pfn != (Process->Pcb.DirectoryTableBase[1] >> PAGE_SHIFT))
     {
-        PMMPFN Pfn1 = MI_PFN_ELEMENT(PageFrameNumber);
-        PFN_NUMBER HyperPfn = Process->Pcb.DirectoryTableBase[1] >> PAGE_SHIFT;
-
-        Pfn1->PteAddress = MiAddressToPte(MmWorkingSetList);
-        MI_MAKE_SOFTWARE_PTE(&Pfn1->OriginalPte, MM_READWRITE);
-        ASSERT(Pfn1->u3.e2.ReferenceCount == 0);
-        Pfn1->u3.e2.ReferenceCount = 1;
-        Pfn1->u2.ShareCount = 1;
-        Pfn1->u3.e1.PageLocation = ActiveAndValid;
-        Pfn1->u3.e1.Modified = TRUE;
-        Pfn1->u4.InPageError = FALSE;
-        /* WorkingSetList's PTE is in hyperspace */
-        Pfn1->u4.PteFrame = HyperPfn;
+        MI_BUGCHECK_MM(MI_BUGCHECK_ARM64_WS_HYPER_MISMATCH,
+                       Process,
+                       WsWalk.L1Pfn,
+                       (Process->Pcb.DirectoryTableBase[1] >> PAGE_SHIFT));
     }
+    ASSERT(WsWalk.RootPfn == (Process->Pcb.DirectoryTableBase[0] >> PAGE_SHIFT));
+    ASSERT(WsWalk.L1Pfn == (Process->Pcb.DirectoryTableBase[1] >> PAGE_SHIFT));
+    ASSERT(WsWalk.DataPfn == Process->WorkingSetPage);
 
+    MiArm64InitializeRootProcessPfn(WsWalk.RootPfn);
+    MiArm64InitializeProcessPfnLink(WsWalk.L1Pfn, WsWalk.RootEntry, WsWalk.RootPfn);
+    MiArm64InitializeProcessPfnLink(WsWalk.L2Pfn, WsWalk.L1Entry, WsWalk.L1Pfn);
+    MiArm64InitializeProcessPfnLink(WsWalk.L3Pfn, WsWalk.L2Entry, WsWalk.L2Pfn);
+    MiArm64InitializeProcessPfnLink(WsWalk.DataPfn, WsWalk.L3Entry, WsWalk.L3Pfn);
 #else /* !_M_ARM64 */
     /* Do the same for hyperspace */
     PointerPde = MiAddressToPde(HYPER_SPACE);
@@ -1191,20 +1270,48 @@ PageFrameNumber = Process->WorkingSetPage;
     /* All our pages are now active & valid. Release the lock. */
     MiReleasePfnLock(OldIrql);
 
-
     /* This should be in hyper space, but not in the mapping range */
     Process->Vm.VmWorkingSetList = MmWorkingSetList;
     ASSERT(((ULONG_PTR)MmWorkingSetList >= MI_MAPPING_RANGE_END) && ((ULONG_PTR)MmWorkingSetList <= HYPER_SPACE_END));
 
-
     /* Now initialize the working set list */
+    DPRINT1("[MM] MmInitializeProcessAddressSpace: enter MiInitializeWorkingSetList Proc=%p(%.16s) DirBase0=%p DirBase1=%p WsVa=%p WsPfn=%lx\n",
+            Process,
+            Process->ImageFileName,
+            (PVOID)Process->Pcb.DirectoryTableBase[0],
+            (PVOID)Process->Pcb.DirectoryTableBase[1],
+            MmWorkingSetList,
+            Process->WorkingSetPage);
+#ifdef _M_ARM64
+    {
+        ULONG64 Ttbr0El1;
+        ULONG64 Ttbr1El1;
+        __asm__ __volatile__("mrs %0, ttbr0_el1" : "=r"(Ttbr0El1));
+        __asm__ __volatile__("mrs %0, ttbr1_el1" : "=r"(Ttbr1El1));
+        DPRINT1("[arm64][MM] active TTBRs: TTBR0=%p TTBR1=%p ProcDir0=%p ProcDir1=%p\n",
+                (PVOID)(Ttbr0El1 & MI_ARM64_PTE_ADDR_MASK),
+                (PVOID)(Ttbr1El1 & MI_ARM64_PTE_ADDR_MASK),
+                (PVOID)Process->Pcb.DirectoryTableBase[0],
+                (PVOID)Process->Pcb.DirectoryTableBase[1]);
+    }
+    DPRINT1("[arm64][MM] MmInitializeProcessAddressSpace: Ws walk Root=%lx L1=%lx L2=%lx L3=%lx Data=%lx\n",
+            WsWalk.RootPfn,
+            WsWalk.L1Pfn,
+            WsWalk.L2Pfn,
+            WsWalk.L3Pfn,
+            WsWalk.DataPfn);
+#endif
     MiInitializeWorkingSetList(&Process->Vm);
-
+    DPRINT1("[MM] MmInitializeProcessAddressSpace: leave MiInitializeWorkingSetList Proc=%p(%.16s) VmWsList=%p WsSize=%Ix Peak=%Ix\n",
+            Process,
+            Process->ImageFileName,
+            Process->Vm.VmWorkingSetList,
+            Process->Vm.WorkingSetSize,
+            Process->Vm.PeakWorkingSetSize);
 
     /* The rule is that the owner process is always in the FLINK of the PDE's PFN entry */
 
     Pfn = MiGetPfnEntry(Process->Pcb.DirectoryTableBase[0] >> PAGE_SHIFT);
-
 
     ASSERT(Pfn->u4.PteFrame == MiGetPfnEntryIndex(Pfn));
     ASSERT(Pfn->u1.WsIndex == 0);
@@ -1217,13 +1324,11 @@ PageFrameNumber = Process->WorkingSetPage;
     /* Release the process working set */
     MiUnlockProcessWorkingSet(Process, PsGetCurrentThread());
 
-
-#ifdef _M_AMD64
-    /* On x64 we need a VAD for the shared user page */
+#if defined(_M_AMD64) || defined(_M_ARM64)
+    /* On x64/ARM64 we need a VAD for the shared user page */
     Status = MiInsertSharedUserPageVad(Process);
     if (!NT_SUCCESS(Status))
     {
-        DPRINT1("MiCreateSharedUserPageVad() failed: 0x%lx\n", Status);
         return Status;
     }
 #endif
@@ -1277,6 +1382,7 @@ PageFrameNumber = Process->WorkingSetPage;
             }
         }
 
+        /* Map the section */
         Status = MmMapViewOfSection(Section,
                                     Process,
                                     (PVOID*)&ImageBase,
@@ -1287,9 +1393,10 @@ PageFrameNumber = Process->WorkingSetPage;
                                     ViewUnmap,
                                     MEM_COMMIT,
                                     PAGE_READWRITE);
-
         /* Save the pointer */
         Process->SectionBaseAddress = ImageBase;
+        DPRINT1("[MM] MmInitializeProcessAddressSpace: %.16s Section mapped Status=0x%lx ImageBase=%p ViewSize=%Ix\n",
+                Process->ImageFileName, Status, ImageBase, ViewSize);
     }
 
 
@@ -1452,7 +1559,7 @@ MmCleanProcessAddressSpace(IN PEPROCESS Process)
     /* Abort early, when the address space wasn't fully initialized */
     if (Process->AddressSpaceInitialized < 2)
     {
-        DPRINT1("Incomplete address space for Process %p. Might leak resources.\n",
+        DPRINT("Incomplete address space for Process %p. Might leak resources.\n",
                 Process);
         return;
     }
@@ -1565,35 +1672,258 @@ MmDeleteProcessAddressSpace(IN PEPROCESS Process)
         Pfn2 = MiGetPfnEntry(Pfn1->u4.PteFrame);
 
         /* Nuke it */
+        DPRINT("Freeing WS PFN=%lx (PID=%p)\n",
+                (ULONG)Process->WorkingSetPage, Process->UniqueProcessId);
         MI_SET_PFN_DELETED(Pfn1);
         MiDecrementShareCount(Pfn2, Pfn1->u4.PteFrame);
         MiDecrementShareCount(Pfn1, Process->WorkingSetPage);
+        if (!((Pfn1->u3.e2.ReferenceCount == 0) || (Pfn1->u3.e1.WriteInProgress)))
+        {
+            DPRINT1("MmDeleteProcessAddressSpace(WS): Proc=%s PFN=0x%lx Ref=%u Share=%u Loc=%u WIP=%u PteAddr=%p PteFrame=0x%lx\n",
+                    (PCSTR)Process->ImageFileName,
+                    Process->WorkingSetPage,
+                    (UINT)Pfn1->u3.e2.ReferenceCount,
+                    (UINT)Pfn1->u2.ShareCount,
+                    (UINT)Pfn1->u3.e1.PageLocation,
+                    (UINT)Pfn1->u3.e1.WriteInProgress,
+                    Pfn1->PteAddress,
+                    (ULONG)Pfn1->u4.PteFrame);
+        }
         ASSERT((Pfn1->u3.e2.ReferenceCount == 0) || (Pfn1->u3.e1.WriteInProgress));
 
-        /* Now map hyperspace and its page table */
+        /* Now free hyperspace page table hierarchy */
         PageFrameIndex = Process->Pcb.DirectoryTableBase[1] >> PAGE_SHIFT;
+
+#ifdef _M_ARM64
+        /*
+         * ARM64 hyperspace teardown: free intermediate L2 and L3 pages.
+         *
+         * MiArchCreateProcessAddressSpace allocated a 4-level hierarchy:
+         *   L1 (HyperPfn) -> L2 (HyperPdPfn) -> L3 (HyperPtPfn) -> Data
+         *
+         * MiArm64InitializeProcessPfnLink set each parent's ShareCount to
+         * 1 (init) + 1 (child link) = 2. Freeing only the WS data page
+         * and the L1 page (as the original code does) leaves L2 and L3
+         * orphaned, with L1's ShareCount stuck at 2 due to the L2 child.
+         *
+         * Fix: Walk L1 -> L2 -> L3 via KSEG0, free bottom-up (L3 then L2),
+         * so that each parent's ShareCount is properly decremented before
+         * we free L1.
+         */
+        {
+            volatile ULONG64 *L1Table;
+            ULONG64 L1Entry, L2Entry;
+            PFN_NUMBER L2PfnIndex, L3PfnIndex;
+            PMMPFN L2Pfn, L3Pfn, ParentPfn;
+
+            /* Walk L1[0] to find L2 */
+            L1Table = (volatile ULONG64 *)(KSEG0_BASE | ((ULONG64)PageFrameIndex << PAGE_SHIFT));
+            L1Entry = L1Table[0];
+
+            if ((L1Entry & 0x3ULL) == 0x3ULL)  /* Valid table descriptor */
+            {
+                volatile ULONG64 *L2Table;
+
+                L2PfnIndex = (PFN_NUMBER)((L1Entry & 0x0000FFFFFFFFF000ULL) >> PAGE_SHIFT);
+                L2Table = (volatile ULONG64 *)(KSEG0_BASE | (L1Entry & 0x0000FFFFFFFFF000ULL));
+                L2Entry = L2Table[0];
+
+                if ((L2Entry & 0x3ULL) == 0x3ULL)  /* Valid table descriptor */
+                {
+                    L3PfnIndex = (PFN_NUMBER)((L2Entry & 0x0000FFFFFFFFF000ULL) >> PAGE_SHIFT);
+                    L3Pfn = MiGetPfnEntry(L3PfnIndex);
+
+                    /* Free L3: mark deleted, decrement parent (L2), decrement self */
+                    MI_SET_PFN_DELETED(L3Pfn);
+                    ParentPfn = MiGetPfnEntry(L3Pfn->u4.PteFrame);
+                    MiDecrementShareCount(ParentPfn, L3Pfn->u4.PteFrame);
+                    MiDecrementShareCount(L3Pfn, L3PfnIndex);
+                    ASSERT((L3Pfn->u3.e2.ReferenceCount == 0) || (L3Pfn->u3.e1.WriteInProgress));
+                }
+
+                L2Pfn = MiGetPfnEntry(L2PfnIndex);
+
+                /* Free L2: mark deleted, decrement parent (L1), decrement self */
+                MI_SET_PFN_DELETED(L2Pfn);
+                ParentPfn = MiGetPfnEntry(L2Pfn->u4.PteFrame);
+                MiDecrementShareCount(ParentPfn, L2Pfn->u4.PteFrame);
+                MiDecrementShareCount(L2Pfn, L2PfnIndex);
+                ASSERT((L2Pfn->u3.e2.ReferenceCount == 0) || (L2Pfn->u3.e1.WriteInProgress));
+            }
+        }
+#endif /* _M_ARM64 */
+
         Pfn1 = MiGetPfnEntry(PageFrameIndex);
         Pfn2 = MiGetPfnEntry(Pfn1->u4.PteFrame);
 
         /* Nuke it */
+        DPRINT("Freeing Hyper L1 PFN=%lx (PID=%p)\n",
+                (ULONG)PageFrameIndex, Process->UniqueProcessId);
         MI_SET_PFN_DELETED(Pfn1);
         MiDecrementShareCount(Pfn2, Pfn1->u4.PteFrame);
         MiDecrementShareCount(Pfn1, PageFrameIndex);
+        if (!((Pfn1->u3.e2.ReferenceCount == 0) || (Pfn1->u3.e1.WriteInProgress)))
+        {
+            DPRINT1("MmDeleteProcessAddressSpace(HYPER): Proc=%s PFN=0x%lx Ref=%u Share=%u Loc=%u WIP=%u PteAddr=%p PteFrame=0x%lx\n",
+                    (PCSTR)Process->ImageFileName,
+                    PageFrameIndex,
+                    (UINT)Pfn1->u3.e2.ReferenceCount,
+                    (UINT)Pfn1->u2.ShareCount,
+                    (UINT)Pfn1->u3.e1.PageLocation,
+                    (UINT)Pfn1->u3.e1.WriteInProgress,
+                    Pfn1->PteAddress,
+                    (ULONG)Pfn1->u4.PteFrame);
+        }
         ASSERT((Pfn1->u3.e2.ReferenceCount == 0) || (Pfn1->u3.e1.WriteInProgress));
 
         /* Finally, nuke the PDE itself */
         PageFrameIndex = Process->Pcb.DirectoryTableBase[0] >> PAGE_SHIFT;
         Pfn1 = MiGetPfnEntry(PageFrameIndex);
+#ifdef _M_ARM64
+        /*
+         * Bug #47: ARM64 L0 cleanup.
+         *
+         * By this point, MmCleanProcessAddressSpace should have deleted all VADs
+         * and freed all user page tables via the MiDeletePde cascade. However,
+         * if any L1 pages remain (due to incomplete cascade or special mappings),
+         * we need to manually free them and decrement L0's ShareCount for each one.
+         *
+         * Walk the L0 table via KSEG0 and free any remaining L1 pages.
+         * Note: HyperSpace (L0[492]) was already freed above.
+         *
+         * IMPORTANT: Do NOT mark L0 as DELETED yet! If we mark it as DELETED
+         * and then decrement its ShareCount to 0, MiDecrementShareCount will
+         * immediately free it, causing subsequent loop iterations to access
+         * a freed PFN.
+         */
+        ULONG64 RootPa = (ULONG64)PageFrameIndex << PAGE_SHIFT;
+        volatile ULONG64 *L0Table = (volatile ULONG64 *)(KSEG0_BASE | RootPa);
+        ULONG i;
+        ULONG OrphanCount = 0;
+        ULONG TotalL1Count = 0;
+        {
+
+            for (i = 0; i < 512; i++)
+            {
+                ULONG64 L0Entry = L0Table[i];
+                if ((L0Entry & 0x3ULL) == 0x3ULL)  /* Valid table descriptor */
+                {
+                    PFN_NUMBER L1Pfn = (PFN_NUMBER)((L0Entry & 0x0000FFFFFFFFF000ULL) >> PAGE_SHIFT);
+                    PMMPFN PfnL1;
+
+                    TotalL1Count++;  /* Count all L1 entries found */
+
+                    /* Skip HyperSpace - already freed above */
+                    if (i == 492)  /* HYPER_SPACE is at L0[492] */
+                        continue;
+
+                    /* Skip self-referential entry (L0 pointing to itself) */
+                    if (L1Pfn == PageFrameIndex)
+                        continue;
+
+                    /*
+                     * Bug #47 FIX: Skip kernel half L1 entries.
+                     * The kernel half (L0[256-511]) contains shared kernel page tables
+                     * that were copied from the master table in MiArchCreateProcessAddressSpace.
+                     * These L1 pages are shared across all processes and must NOT be freed
+                     * when a user process exits. Only user half L1 entries (L0[0-255]) are
+                     * process-private and should be cleaned up here.
+                     *
+                     * Attempting to free kernel L1 pages causes ShareCount underflow because:
+                     * 1. They were never allocated by this process (copied from master)
+                     * 2. They were never tracked in L0's ShareCount for this process
+                     * 3. MiDecrementShareCount on ShareCount=0 underflows to UINT_MAX
+                     */
+                    if (i >= 256)  /* Kernel half starts at L0[256] */
+                        continue;
+
+                    /* Orphan L1 page found - will be freed */
+                    PfnL1 = MI_PFN_ELEMENT(L1Pfn);
+                    DPRINT("Freeing orphan L1[%u] PFN=%lx RefCnt=%u ShareCnt=%u UsedPTEs=%u (PID=%p)\n",
+                            i, (ULONG)L1Pfn,
+                            (ULONG)PfnL1->u3.e2.ReferenceCount,
+                            (ULONG)PfnL1->u2.ShareCount,
+                            (ULONG)PfnL1->OriginalPte.u.Soft.UsedPageTableEntries,
+                            Process->UniqueProcessId);
+
+                    /*
+                     * Decrement L0's ShareCount FIRST, before marking L1 as deleted.
+                     * If L1 PFN linkage or L0 accounting is inconsistent, fail-fast.
+                     */
+                    if (PfnL1->u4.PteFrame != PageFrameIndex)
+                    {
+                        MI_BUGCHECK_MM(MI_BUGCHECK_ARM64_L1_PARENT_MISMATCH,
+                                       L1Pfn,
+                                       PfnL1->u4.PteFrame,
+                                       PageFrameIndex);
+                    }
+                    if (Pfn1->u2.ShareCount <= 1)
+                    {
+                        MI_BUGCHECK_MM(MI_BUGCHECK_ARM64_ROOT_SHARE_UNDERFLOW,
+                                       PageFrameIndex,
+                                       Pfn1->u2.ShareCount,
+                                       L1Pfn);
+                    }
+                    Pfn1->u2.ShareCount--;
+                    OrphanCount++;
+
+                    /* Now mark L1 as deleted and decrement its own counters */
+                    MI_SET_PFN_DELETED(PfnL1);
+                    MiDecrementShareCount(PfnL1, L1Pfn);
+                }
+            }
+
+            DPRINT("Freed %u orphan L1 pages (PID=%p)\n", OrphanCount, Process->UniqueProcessId);
+        }
+
+        /*
+         * Bug #47 cont'd: Final L0 cleanup.
+         *
+         * After freeing all L1 children, L0's ShareCount should be 0 (all children
+         * decremented it). RefCount should still be 1. Mark it as DELETED and do
+         * the final decrement to free it.
+         */
+        DPRINT("Freeing L0 PFN=%lx RefCnt=%u ShareCnt=%u TotalL1=%u OrphanCleaned=%u (PID=%p)\n",
+                (ULONG)PageFrameIndex,
+                (ULONG)Pfn1->u3.e2.ReferenceCount,
+                (ULONG)Pfn1->u2.ShareCount,
+                TotalL1Count,
+                OrphanCount,
+                Process->UniqueProcessId);
+
+        if (Pfn1->u2.ShareCount != 1)
+        {
+            MI_BUGCHECK_MM(MI_BUGCHECK_ARM64_ROOT_SHARE_FINAL_MISMATCH,
+                           PageFrameIndex,
+                           Pfn1->u2.ShareCount,
+                           OrphanCount);
+        }
+
         MI_SET_PFN_DELETED(Pfn1);
         MiDecrementShareCount(Pfn1, PageFrameIndex);
+#else
         MiDecrementShareCount(Pfn1, PageFrameIndex);
+        MiDecrementShareCount(Pfn1, PageFrameIndex);
+#endif
 
         /* Page table is now dead. Bye bye... */
+        if (!((Pfn1->u3.e2.ReferenceCount == 0) || (Pfn1->u3.e1.WriteInProgress)))
+        {
+            DPRINT1("MmDeleteProcessAddressSpace(ROOT): Proc=%s PFN=0x%lx Ref=%u Share=%u Loc=%u WIP=%u PteAddr=%p PteFrame=0x%lx\n",
+                    (PCSTR)Process->ImageFileName,
+                    PageFrameIndex,
+                    (UINT)Pfn1->u3.e2.ReferenceCount,
+                    (UINT)Pfn1->u2.ShareCount,
+                    (UINT)Pfn1->u3.e1.PageLocation,
+                    (UINT)Pfn1->u3.e1.WriteInProgress,
+                    Pfn1->PteAddress,
+                    (ULONG)Pfn1->u4.PteFrame);
+        }
         ASSERT((Pfn1->u3.e2.ReferenceCount == 0) || (Pfn1->u3.e1.WriteInProgress));
     }
     else
     {
-        DPRINT1("Deleting partially initialized address space of Process %p. Might leak resources.\n",
+        DPRINT("Deleting partially initialized address space of Process %p. Might leak resources.\n",
                 Process);
     }
 

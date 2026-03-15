@@ -338,6 +338,8 @@
 @ fastcall -arch=i386 InterlockedPushEntrySList(ptr ptr)
 @ stdcall -arch=arm InterlockedPopEntrySList(ptr) RtlInterlockedPopEntrySList
 @ stdcall -arch=arm InterlockedPushEntrySList(ptr ptr) RtlInterlockedPushEntrySList
+@ cdecl -arch=arm64 _InterlockedXor(ptr long)
+@ cdecl -arch=arm64 _InterlockedXor64(ptr int64)
 @ stdcall -arch=x86_64,arm64 InitializeSListHead(ptr) RtlInitializeSListHead
 @ stdcall IoAcquireCancelSpinLock(ptr)
 @ stdcall IoAcquireRemoveLockEx(ptr ptr str long long)
@@ -567,14 +569,14 @@
 @ cdecl -arch=x86_64,arm64 KeAcquireInStackQueuedSpinLock(ptr ptr)
 @ fastcall KeAcquireInStackQueuedSpinLockAtDpcLevel(ptr ptr)
 @ fastcall KeAcquireInStackQueuedSpinLockForDpc(ptr ptr)
-@ cdecl -arch=x86_64 KeAcquireInStackQueuedSpinLockRaiseToSynch(ptr ptr)
+@ cdecl -arch=x86_64,arm64 KeAcquireInStackQueuedSpinLockRaiseToSynch(ptr ptr)
 @ stdcall KeAcquireInterruptSpinLock(ptr)
-@ cdecl -arch=x86_64 KeAcquireQueuedSpinLock(long)
-@ cdecl -arch=x86_64 KeAcquireQueuedSpinLockRaiseToSynch(long)
+@ cdecl -arch=x86_64,arm64 KeAcquireQueuedSpinLock(long)
+@ cdecl -arch=x86_64,arm64 KeAcquireQueuedSpinLockRaiseToSynch(long)
 @ stdcall KeAcquireSpinLockAtDpcLevel(ptr)
 @ fastcall KeAcquireSpinLockForDpc(ptr)
 @ stdcall -arch=x86_64,arm64 KeAcquireSpinLockRaiseToDpc(ptr)
-@ stdcall -arch=x86_64 KeAcquireSpinLockRaiseToSynch(ptr)
+@ stdcall -arch=x86_64,arm64 KeAcquireSpinLockRaiseToSynch(ptr)
 @ stdcall KeAddSystemServiceTable(ptr ptr long ptr long)
 @ stdcall KeAreAllApcsDisabled()
 @ stdcall KeAreApcsDisabled()
@@ -646,6 +648,7 @@
 @ stdcall KeLeaveCriticalRegion() _KeLeaveCriticalRegion
 @ stdcall KeLeaveGuardedRegion() _KeLeaveGuardedRegion
 @ extern KeLoaderBlock
+@ extern -arch=arm64 KeArm64CurrentPcr
 @ cdecl -arch=x86_64 -private KeLowerIrql(long) KxLowerIrql
 @ extern KeNumberProcessors
 @ stdcall -arch=i386,arm KeProfileInterrupt(ptr)
@@ -661,6 +664,8 @@
 @ stdcall -arch=i386,arm KeQueryTickCount(ptr)
 @ stdcall KeQueryTimeIncrement()
 @ cdecl -arch=x86_64 -private KeRaiseIrqlToDpcLevel() KxRaiseIrqlToDpcLevel
+@ cdecl -arch=arm64 KeRaiseIrqlToDpcLevel() KxRaiseIrqlToDpcLevel
+@ cdecl -arch=arm64 KeRaiseIrqlToSynchLevel() KxRaiseIrqlToSynchLevel
 @ stdcall KeRaiseUserException(long)
 @ stdcall KeReadStateEvent(ptr)
 @ stdcall KeReadStateMutant(ptr)
@@ -679,7 +684,7 @@
 @ stdcall KeReleaseInterruptSpinLock(ptr long)
 @ stdcall KeReleaseMutant(ptr long long long)
 @ stdcall KeReleaseMutex(ptr long)
-@ cdecl -arch=x86_64 KeReleaseQueuedSpinLock(long long)
+@ cdecl -arch=x86_64,arm64 KeReleaseQueuedSpinLock(long long)
 @ stdcall KeReleaseSemaphore(ptr long long long)
 @ stdcall -arch=x86_64,arm64 KeReleaseSpinLock(ptr long)
 @ fastcall KeReleaseSpinLockForDpc(ptr long)
@@ -723,8 +728,8 @@
 @ fastcall KeTestSpinLock(ptr)
 @ extern -arch=i386,arm,arm64 KeTickCount
 @ fastcall KeTryToAcquireGuardedMutex(ptr)
-@ cdecl -arch=x86_64 KeTryToAcquireQueuedSpinLock(long long)
-@ cdecl -arch=x86_64 KeTryToAcquireQueuedSpinLockRaiseToSynch(long long)
+@ cdecl -arch=x86_64,arm64 KeTryToAcquireQueuedSpinLock(long long)
+@ cdecl -arch=x86_64,arm64 KeTryToAcquireQueuedSpinLockRaiseToSynch(long long)
 @ fastcall KeTryToAcquireSpinLockAtDpcLevel(ptr)
 @ stdcall KeUnstackDetachProcess(ptr)
 @ stdcall KeUpdateRunTime(ptr long)
@@ -1136,6 +1141,7 @@
 @ stdcall RtlDestroyAtomTable(ptr)
 @ stdcall RtlDestroyHeap(ptr)
 @ stdcall RtlDowncaseUnicodeString(ptr ptr long)
+@ stdcall -arch=arm64 RtlDuplicateUnicodeString(long ptr ptr)
 @ stdcall RtlEmptyAtomTable(ptr long)
 @ stdcall -arch=win32 RtlEnlargedIntegerMultiply(long long)
 @ stdcall -arch=win32 RtlEnlargedUnsignedDivide(long long long ptr)

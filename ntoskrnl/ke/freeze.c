@@ -37,16 +37,7 @@ KeFreezeExecution(IN PKTRAP_FRAME TrapFrame,
     /* Disable interrupts, get previous state and set the freeze flag */
     Enable = KeDisableInterrupts();
     KiFreezeFlag = 4;
-
-#ifndef CONFIG_SMP
-    /* Raise IRQL if we have to */
-    OldIrql = KeGetCurrentIrql();
-    if (OldIrql < DISPATCH_LEVEL)
-        OldIrql = KeRaiseIrqlToDpcLevel();
-#else
-    /* Raise IRQL to HIGH_LEVEL */
-    KeRaiseIrql(HIGH_LEVEL, &OldIrql);
-#endif
+    OldIrql = KxFreezeExecutionRaiseIrql();
 
 #ifdef CONFIG_SMP
     /* Architecture specific freeze code */
@@ -75,11 +66,7 @@ KeThawExecution(IN BOOLEAN Enable)
     /* Cleanup CPU caches */
     KeFlushCurrentTb();
 
-    /* Restore the old IRQL */
-#ifndef CONFIG_SMP
-    if (KiOldIrql < DISPATCH_LEVEL)
-#endif
-    KeLowerIrql(KiOldIrql);
+    KxFreezeExecutionLowerIrql(KiOldIrql);
 
     /* Re-enable interrupts */
     KeRestoreInterrupts(Enable);

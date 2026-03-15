@@ -92,7 +92,7 @@ KdPortInitializeEx(_Inout_ PCPPORT PortInformation,
 
 #ifndef NDEBUG
     {
-        CHAR Buffer[96];
+        CHAR Buffer[128];
         int Length = snprintf(Buffer, sizeof(Buffer),
                               "\r\nKernel Debugger: Serial port found: COM%lu (Port 0x%p) BaudRate %lu\r\n\r\n",
                               (unsigned long)(ComPortNumber ? ComPortNumber : 1),

@@ -212,13 +212,104 @@ KdpInitializeTimestampLock(VOID)
 
 /* FUNCTIONS *****************************************************************/
 
+#if defined(_M_ARM64) || defined(__aarch64__)
+/*
+ * Flag stored in the high bit of the returned KIRQL to indicate that the
+ * spinlock was NOT acquired due to same-CPU re-entrancy. The release path
+ * checks this flag and skips releasing the lock.
+ */
+#define KD_LOCK_NOT_ACQUIRED 0x80
+
+/*
+ * Raw try-acquire for KD spinlocks.
+ * See comment in kdio.c KdbpTryAcquireSpinLockRaw for full rationale.
+ */
+FORCEINLINE
+KSPIN_LOCK
+KdpTryAcquireSpinLockRaw(
+    _Inout_ PKSPIN_LOCK SpinLock,
+    _In_ KSPIN_LOCK LockOwner)
+{
+    ULONG tmp;
+    KSPIN_LOCK current = 0;
+    PKSPIN_LOCK LockPtr = SpinLock;
+
+    __asm__ __volatile__(
+        "1: ldaxr   %[current], [%[lockptr]]    \n"
+        "   cbnz    %[current], 2f              \n"
+        "   stxr    %w[tmp], %[owner], [%[lockptr]] \n"
+        "   cbnz    %w[tmp], 1b                 \n"
+        "2:                                     \n"
+        : [tmp] "=&r" (tmp), [current] "=&r" (current)
+        : [lockptr] "r" (LockPtr), [owner] "r" (LockOwner)
+        : "memory"
+    );
+
+    return current;
+}
+
+FORCEINLINE
+VOID
+KdpReleaseSpinLockRaw(
+    _Inout_ PKSPIN_LOCK SpinLock)
+{
+    KSPIN_LOCK zero = 0;
+    __asm__ __volatile__(
+        "stlr   %[zero], [%[lockptr]]    \n"
+        "sev                             \n"
+        :
+        : [zero] "r" (zero), [lockptr] "r" (SpinLock)
+        : "memory"
+    );
+}
+
+FORCEINLINE
+VOID
+KdpSpinWait(VOID)
+{
+    __asm__ __volatile__(
+        "wfe    \n"
+        :
+        :
+        : "memory"
+    );
+}
+#endif
+
 KIRQL
 NTAPI
 KdpAcquireLock(
     _In_ PKSPIN_LOCK SpinLock)
 {
     KIRQL OldIrql;
+#if defined(_M_ARM64) || defined(__aarch64__)
+    KSPIN_LOCK CurrentOwner;
+    KSPIN_LOCK LockOwner;
 
+    /* Raise IRQL to HIGH_LEVEL to prevent preemption */
+    KeRaiseIrql(HIGH_LEVEL, &OldIrql);
+
+    /* 0 means free, otherwise owner is (ProcessorNumber + 1). */
+    LockOwner = (KSPIN_LOCK)KeGetCurrentProcessorNumber() + 1;
+
+    for (;;)
+    {
+        CurrentOwner = KdpTryAcquireSpinLockRaw(SpinLock, LockOwner);
+        if (CurrentOwner == 0)
+        {
+            return OldIrql;
+        }
+
+        /* Same-CPU re-entrancy: drop work to avoid deadlock. */
+        if (CurrentOwner == LockOwner)
+        {
+            return (KIRQL)(OldIrql | KD_LOCK_NOT_ACQUIRED);
+        }
+
+        /* Different CPU owns the lock: wait until release. */
+        KdpSpinWait();
+    }
+#else
     /* Acquire the spinlock without waiting at raised IRQL */
     while (TRUE)
     {
@@ -237,6 +328,7 @@ KdpAcquireLock(
     }
 
     return OldIrql;
+#endif
 }
 
 VOID
@@ -245,12 +337,26 @@ KdpReleaseLock(
     _In_ PKSPIN_LOCK SpinLock,
     _In_ KIRQL OldIrql)
 {
-    /* Release the spinlock */
-    KiReleaseSpinLock(SpinLock);
-    // KeReleaseSpinLockFromDpcLevel(SpinLock);
+#if defined(_M_ARM64) || defined(__aarch64__)
+    /* If the lock was never acquired, just restore IRQL */
+    if (OldIrql & KD_LOCK_NOT_ACQUIRED)
+    {
+        KeLowerIrql((KIRQL)(OldIrql & ~KD_LOCK_NOT_ACQUIRED));
+        return;
+    }
+
+    /* Release the spinlock using raw store-release */
+    KdpReleaseSpinLockRaw(SpinLock);
 
     /* Restore the old IRQL */
     KeLowerIrql(OldIrql);
+#else
+    /* Release the spinlock */
+    KiReleaseSpinLock(SpinLock);
+
+    /* Restore the old IRQL */
+    KeLowerIrql(OldIrql);
+#endif
 }
 
 BOOLEAN
@@ -259,12 +365,27 @@ KdpTryAcquireLock(
     _In_ PKSPIN_LOCK SpinLock,
     _Out_ PKIRQL OldIrql)
 {
+#if defined(_M_ARM64) || defined(__aarch64__)
+    KSPIN_LOCK CurrentOwner;
+    KSPIN_LOCK LockOwner;
+
+    KeRaiseIrql(HIGH_LEVEL, OldIrql);
+
+    LockOwner = (KSPIN_LOCK)KeGetCurrentProcessorNumber() + 1;
+    CurrentOwner = KdpTryAcquireSpinLockRaw(SpinLock, LockOwner);
+    if (CurrentOwner == 0)
+        return TRUE;
+
+    KeLowerIrql(*OldIrql);
+    return FALSE;
+#else
     KeRaiseIrql(HIGH_LEVEL, OldIrql);
     if (KeTryToAcquireSpinLockAtDpcLevel(SpinLock))
         return TRUE;
 
     KeLowerIrql(*OldIrql);
     return FALSE;
+#endif
 }
 
 VOID
@@ -312,6 +433,11 @@ KdLogDbgPrint(
         if (KdPrintRolloverCount == 0)
             ++KdPrintRolloverCount;
     }
+
+#if defined(_M_ARM64) || defined(__aarch64__)
+    /* Ensure buffer data is visible to other CPUs before releasing the lock */
+    __asm__ __volatile__("dsb ish" ::: "memory");
+#endif
 
     /* Release the spinlock */
     KdpReleaseLock(&KdpPrintSpinLock, OldIrql);
@@ -493,11 +619,19 @@ KdpSymbol(IN PSTRING DllPath,
                   ContextRecord,
                   sizeof(CONTEXT));
 
+#ifdef _M_ARM64
+    KdpDprintf("[arm64][KD] KdpSymbol: state saved, reporting\n");
+#endif
+
     /* Report the new state */
     KdpReportLoadSymbolsStateChange(DllPath,
                                     SymbolInfo,
                                     Unload,
                                     &Prcb->ProcessorState.ContextFrame);
+
+#ifdef _M_ARM64
+    KdpDprintf("[arm64][KD] KdpSymbol: report done, restoring\n");
+#endif
 
     /* Restore the processor state */
     KdpMoveMemory(ContextRecord,
@@ -505,8 +639,16 @@ KdpSymbol(IN PSTRING DllPath,
                   sizeof(CONTEXT));
     KiRestoreProcessorControlState(&Prcb->ProcessorState);
 
+#ifdef _M_ARM64
+    KdpDprintf("[arm64][KD] KdpSymbol: restored, exiting debugger\n");
+#endif
+
     /* Exit the debugger and return */
     KdExitDebugger(Enable);
+
+#ifdef _M_ARM64
+    DPRINT1("[arm64][KD] KdpSymbol: exited debugger\n");
+#endif
 }
 
 USHORT

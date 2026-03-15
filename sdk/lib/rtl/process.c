@@ -28,8 +28,6 @@ RtlpMapFile(PUNICODE_STRING ImageFileName,
     HANDLE hFile = NULL;
     IO_STATUS_BLOCK IoStatusBlock;
 
-    DPRINT1("[arm64] RtlpMapFile: ENTRY File='%wZ'\n", ImageFileName);
-
     /* Open the Image File */
     InitializeObjectAttributes(&ObjectAttributes,
                                ImageFileName,
@@ -48,10 +46,7 @@ RtlpMapFile(PUNICODE_STRING ImageFileName,
         return Status;
     }
 
-    DPRINT1("[arm64] RtlpMapFile: ZwOpenFile returned 0x%x hFile=%p\n", Status, hFile);
-
     /* Now create a section for this image */
-    DPRINT1("[arm64] RtlpMapFile: Calling ZwCreateSection\n");
     Status = ZwCreateSection(Section,
                              SECTION_ALL_ACCESS,
                              NULL,
@@ -59,17 +54,57 @@ RtlpMapFile(PUNICODE_STRING ImageFileName,
                              PAGE_EXECUTE,
                              SEC_IMAGE,
                              hFile);
-    DPRINT1("[arm64] RtlpMapFile: ZwCreateSection returned 0x%x Section=%p\n", Status, Section ? *Section : NULL);
-
     if (!NT_SUCCESS(Status))
     {
         DPRINT1("Failed to create section for image file, Status = 0x%08X\n", Status);
     }
 
-    DPRINT1("[arm64] RtlpMapFile: Closing hFile\n");
     ZwClose(hFile);
-    DPRINT1("[arm64] RtlpMapFile: EXIT Status=0x%x\n", Status);
     return Status;
+}
+
+static
+ULONG
+NTAPI
+RtlpDebugFnv1a32(
+    _In_reads_bytes_(Size) CONST VOID *Buffer,
+    _In_ SIZE_T Size)
+{
+    CONST UCHAR *Bytes;
+    ULONG Hash;
+
+    Bytes = (CONST UCHAR *)Buffer;
+    Hash = 2166136261u;
+
+    while (Size--)
+    {
+        Hash ^= *Bytes++;
+        Hash *= 16777619u;
+    }
+
+    return Hash;
+}
+
+static
+ULONG
+NTAPI
+RtlpHashProcessParameters(
+    _In_ PRTL_USER_PROCESS_PARAMETERS ProcessParameters,
+    _Out_opt_ PSIZE_T HashSpan)
+{
+    SIZE_T Size;
+
+    if (HashSpan) *HashSpan = 0;
+    if (ProcessParameters == NULL) return 0;
+
+    Size = ProcessParameters->MaximumLength;
+    if ((Size < sizeof(*ProcessParameters)) || (Size > 0x100000))
+    {
+        Size = sizeof(*ProcessParameters);
+    }
+
+    if (HashSpan) *HashSpan = Size;
+    return RtlpDebugFnv1a32(ProcessParameters, Size);
 }
 
 /* FUNCTIONS ****************************************************************/
@@ -216,19 +251,23 @@ RtlCreateUserProcess(IN PUNICODE_STRING ImageFileName,
     PROCESS_BASIC_INFORMATION ProcessBasicInfo;
     OBJECT_ATTRIBUTES ObjectAttributes;
     UNICODE_STRING DebugString = RTL_CONSTANT_STRING(L"\\WindowsSS");
-    DPRINT1("[arm64] RtlCreateUserProcess: ENTRY File='%wZ'\n", ImageFileName);
-
+    HANDLE StdInBefore, StdOutBefore, StdErrBefore, CwdHandleBefore;
+    SIZE_T ProcessParamsHashSize;
+    ULONG ProcessParamsHashBefore, ProcessParamsHashAfter;
     /* Map and Load the File */
+    DPRINT1("[arm64][SMSS] ENTRY StdIn=%p ProcessParams=%p\n",
+            ProcessParameters->StandardInput, ProcessParameters);
+    DPRINT1("[arm64][SMSS] RtlpMapFile('%wZ') begin\n", ImageFileName);
     Status = RtlpMapFile(ImageFileName,
                          Attributes,
                          &hSection);
+    DPRINT1("[arm64][SMSS] RtlpMapFile returned 0x%lx StdIn=%p\n",
+            Status, ProcessParameters->StandardInput);
     if (!NT_SUCCESS(Status))
     {
         DPRINT1("Could not map process image\n");
         return Status;
     }
-
-    DPRINT1("[arm64] RtlCreateUserProcess: After RtlpMapFile hSection=%p\n", hSection);
 
     /* Clean out the current directory handle if we won't use it */
     if (!InheritHandles) ProcessParameters->CurrentDirectory.Handle = NULL;
@@ -253,9 +292,23 @@ RtlCreateUserProcess(IN PUNICODE_STRING ImageFileName,
         ObjectAttributes.ObjectName = &DebugString;
     }
 
-    DPRINT1("[arm64] RtlCreateUserProcess: Calling ZwCreateProcess\n");
+    StdInBefore = ProcessParameters->StandardInput;
+    StdOutBefore = ProcessParameters->StandardOutput;
+    StdErrBefore = ProcessParameters->StandardError;
+    CwdHandleBefore = ProcessParameters->CurrentDirectory.Handle;
+    ProcessParamsHashBefore = RtlpHashProcessParameters(ProcessParameters,
+                                                        &ProcessParamsHashSize);
+    DPRINT1("[arm64][SMSS] PP snapshot before ZwCreateProcess: Hash=0x%lx Size=0x%Ix "
+            "StdIn=%p StdOut=%p StdErr=%p CurDirH=%p\n",
+            ProcessParamsHashBefore,
+            ProcessParamsHashSize,
+            StdInBefore,
+            StdOutBefore,
+            StdErrBefore,
+            CwdHandleBefore);
 
     /* Create Kernel Process Object */
+    DPRINT1("[arm64][SMSS] ZwCreateProcess begin\n");
     Status = ZwCreateProcess(&ProcessInfo->ProcessHandle,
                              PROCESS_ALL_ACCESS,
                              &ObjectAttributes,
@@ -264,9 +317,35 @@ RtlCreateUserProcess(IN PUNICODE_STRING ImageFileName,
                              hSection,
                              DebugPort,
                              ExceptionPort);
+    ProcessParamsHashAfter = RtlpHashProcessParameters(ProcessParameters, NULL);
+    DPRINT1("[arm64][SMSS] ZwCreateProcess returned 0x%lx StdIn=%p Hash=0x%lx->0x%lx\n",
+            Status,
+            ProcessParameters->StandardInput,
+            ProcessParamsHashBefore,
+            ProcessParamsHashAfter);
 
-    DPRINT1("[arm64] RtlCreateUserProcess: ZwCreateProcess returned 0x%x ProcessHandle=%p\n",
-            Status, ProcessInfo ? ProcessInfo->ProcessHandle : NULL);
+    if ((ProcessParamsHashBefore != ProcessParamsHashAfter) ||
+        (StdInBefore != ProcessParameters->StandardInput) ||
+        (StdOutBefore != ProcessParameters->StandardOutput) ||
+        (StdErrBefore != ProcessParameters->StandardError) ||
+        (CwdHandleBefore != ProcessParameters->CurrentDirectory.Handle))
+    {
+        DPRINT1("[arm64][SMSS][CORRUPTION] ProcessParameters mutated across ZwCreateProcess!\n");
+        DPRINT1("[arm64][SMSS][CORRUPTION] StdIn %p -> %p, StdOut %p -> %p, StdErr %p -> %p, CurDirH %p -> %p, Hash 0x%lx -> 0x%lx\n",
+                StdInBefore,
+                ProcessParameters->StandardInput,
+                StdOutBefore,
+                ProcessParameters->StandardOutput,
+                StdErrBefore,
+                ProcessParameters->StandardError,
+                CwdHandleBefore,
+                ProcessParameters->CurrentDirectory.Handle,
+                ProcessParamsHashBefore,
+                ProcessParamsHashAfter);
+#if DBG
+        DbgBreakPoint();
+#endif
+    }
 
     if (!NT_SUCCESS(Status))
     {
@@ -276,11 +355,13 @@ RtlCreateUserProcess(IN PUNICODE_STRING ImageFileName,
     }
 
     /* Get some information on the image */
+    DPRINT1("[arm64][SMSS] ZwQuerySection begin\n");
     Status = ZwQuerySection(hSection,
                             SectionImageInformation,
                             &ProcessInfo->ImageInformation,
                             sizeof(SECTION_IMAGE_INFORMATION),
                             NULL);
+    DPRINT1("[arm64][SMSS] ZwQuerySection returned 0x%lx\n", Status);
     if (!NT_SUCCESS(Status))
     {
         DPRINT1("Could not query Section Info\n");
@@ -290,11 +371,14 @@ RtlCreateUserProcess(IN PUNICODE_STRING ImageFileName,
     }
 
     /* Get some information about the process */
+    DPRINT1("[arm64][SMSS] ZwQueryInformationProcess begin\n");
     Status = ZwQueryInformationProcess(ProcessInfo->ProcessHandle,
                                        ProcessBasicInformation,
                                        &ProcessBasicInfo,
                                        sizeof(ProcessBasicInfo),
                                        NULL);
+    DPRINT1("[arm64][SMSS] ZwQueryInformationProcess returned 0x%lx PebBase=%p\n",
+            Status, ProcessBasicInfo.PebBaseAddress);
     if (!NT_SUCCESS(Status))
     {
         DPRINT1("Could not query Process Info\n");
@@ -304,11 +388,18 @@ RtlCreateUserProcess(IN PUNICODE_STRING ImageFileName,
     }
 
     /* Duplicate the standard handles */
+    DPRINT1("[arm64][SMSS] StdIn=%p StdOut=%p StdErr=%p ParentProc=%p\n",
+            ProcessParameters->StandardInput,
+            ProcessParameters->StandardOutput,
+            ProcessParameters->StandardError,
+            ParentProcess);
     Status = STATUS_SUCCESS;
     _SEH2_TRY
     {
         if (ProcessParameters->StandardInput)
         {
+            DPRINT1("[arm64][SMSS] ZwDuplicateObject(StdIn=%p) begin\n",
+                    ProcessParameters->StandardInput);
             Status = ZwDuplicateObject(ParentProcess,
                                        ProcessParameters->StandardInput,
                                        ProcessInfo->ProcessHandle,
@@ -317,6 +408,7 @@ RtlCreateUserProcess(IN PUNICODE_STRING ImageFileName,
                                        0,
                                        DUPLICATE_SAME_ACCESS |
                                        DUPLICATE_SAME_ATTRIBUTES);
+            DPRINT1("[arm64][SMSS] ZwDuplicateObject(StdIn) returned 0x%lx\n", Status);
             if (!NT_SUCCESS(Status))
             {
                 _SEH2_LEAVE;
@@ -325,6 +417,8 @@ RtlCreateUserProcess(IN PUNICODE_STRING ImageFileName,
 
         if (ProcessParameters->StandardOutput)
         {
+            DPRINT1("[arm64][SMSS] ZwDuplicateObject(StdOut=%p) begin\n",
+                    ProcessParameters->StandardOutput);
             Status = ZwDuplicateObject(ParentProcess,
                                        ProcessParameters->StandardOutput,
                                        ProcessInfo->ProcessHandle,
@@ -333,6 +427,7 @@ RtlCreateUserProcess(IN PUNICODE_STRING ImageFileName,
                                        0,
                                        DUPLICATE_SAME_ACCESS |
                                        DUPLICATE_SAME_ATTRIBUTES);
+            DPRINT1("[arm64][SMSS] ZwDuplicateObject(StdOut) returned 0x%lx\n", Status);
             if (!NT_SUCCESS(Status))
             {
                 _SEH2_LEAVE;
@@ -341,6 +436,8 @@ RtlCreateUserProcess(IN PUNICODE_STRING ImageFileName,
 
         if (ProcessParameters->StandardError)
         {
+            DPRINT1("[arm64][SMSS] ZwDuplicateObject(StdErr=%p) begin\n",
+                    ProcessParameters->StandardError);
             Status = ZwDuplicateObject(ParentProcess,
                                        ProcessParameters->StandardError,
                                        ProcessInfo->ProcessHandle,
@@ -349,6 +446,7 @@ RtlCreateUserProcess(IN PUNICODE_STRING ImageFileName,
                                        0,
                                        DUPLICATE_SAME_ACCESS |
                                        DUPLICATE_SAME_ATTRIBUTES);
+            DPRINT1("[arm64][SMSS] ZwDuplicateObject(StdErr) returned 0x%lx\n", Status);
             if (!NT_SUCCESS(Status))
             {
                 _SEH2_LEAVE;
@@ -359,6 +457,7 @@ RtlCreateUserProcess(IN PUNICODE_STRING ImageFileName,
     {
         if (!NT_SUCCESS(Status))
         {
+            DPRINT1("[arm64][SMSS] Handle dup failed: 0x%lx\n", Status);
             ZwClose(ProcessInfo->ProcessHandle);
             ZwClose(hSection);
         }
@@ -369,9 +468,12 @@ RtlCreateUserProcess(IN PUNICODE_STRING ImageFileName,
         return Status;
 
     /* Create Process Environment */
+    DPRINT1("[arm64][SMSS] RtlpInitEnvironment begin\n");
     Status = RtlpInitEnvironment(ProcessInfo->ProcessHandle,
                                  ProcessBasicInfo.PebBaseAddress,
                                  ProcessParameters);
+    DPRINT1("[arm64][SMSS] RtlpInitEnvironment returned 0x%lx\n", Status);
+
     if (!NT_SUCCESS(Status))
     {
         DPRINT1("Could not Create Process Environment\n");
@@ -381,6 +483,7 @@ RtlCreateUserProcess(IN PUNICODE_STRING ImageFileName,
     }
 
     /* Create the first Thread */
+    DPRINT1("[arm64][SMSS] RtlCreateUserThread begin\n");
     Status = RtlCreateUserThread(ProcessInfo->ProcessHandle,
                                  ThreadSecurityDescriptor,
                                  TRUE,

@@ -24,6 +24,8 @@ extern LIST_ENTRY ExpSystemResourcesList;
 extern ULONG ExpAnsiCodePageDataOffset, ExpOemCodePageDataOffset;
 extern ULONG ExpUnicodeCaseTableDataOffset;
 extern PVOID ExpNlsSectionPointer;
+extern PVOID ExpNlsTableBase;
+extern SIZE_T ExpNlsTableSize;
 extern ULONG NtGlobalFlag;
 extern UNICODE_STRING NtSystemRoot;
 
@@ -81,6 +83,106 @@ VOID
 NTAPI
 ExpDebuggerWorker(
     _In_ PVOID Context);
+
+#if defined(_M_ARM64)
+BOOLEAN
+NTAPI
+ExArchProbeForWrite(
+    _In_ ULONG_PTR Current,
+    _In_ ULONG_PTR Last);
+
+CODE_SEG("INIT")
+VOID
+NTAPI
+ExArchExecutiveInitBarrier(
+    VOID);
+
+CODE_SEG("INIT")
+VOID
+NTAPI
+ExArchCopyNlsSection(
+    _Out_writes_bytes_(Size) PVOID Destination,
+    _In_reads_bytes_(Size) CONST VOID *Source,
+    _In_ SIZE_T Size);
+
+CODE_SEG("INIT")
+BOOLEAN
+NTAPI
+ExArchKeepPoolBackedNls(
+    _In_opt_ PVOID SectionBase);
+
+CODE_SEG("INIT")
+BOOLEAN
+NTAPI
+ExArchShouldMapSystemProcessNlsView(
+    VOID);
+
+CODE_SEG("INIT")
+VOID
+NTAPI
+ExArchPostHalInitSystemPhase0(
+    VOID);
+#endif
+
+#if !defined(_M_ARM64)
+FORCEINLINE
+BOOLEAN
+NTAPI
+ExArchProbeForWrite(
+    _In_ ULONG_PTR Current,
+    _In_ ULONG_PTR Last)
+{
+    UNREFERENCED_PARAMETER(Current);
+    UNREFERENCED_PARAMETER(Last);
+    return FALSE;
+}
+
+FORCEINLINE
+VOID
+NTAPI
+ExArchExecutiveInitBarrier(
+    VOID)
+{
+}
+
+FORCEINLINE
+VOID
+NTAPI
+ExArchCopyNlsSection(
+    _Out_writes_bytes_(Size) PVOID Destination,
+    _In_reads_bytes_(Size) CONST VOID *Source,
+    _In_ SIZE_T Size)
+{
+    RtlCopyMemory(Destination, Source, Size);
+}
+
+FORCEINLINE
+BOOLEAN
+NTAPI
+ExArchKeepPoolBackedNls(
+    _In_opt_ PVOID SectionBase)
+{
+    UNREFERENCED_PARAMETER(SectionBase);
+    return FALSE;
+}
+
+FORCEINLINE
+BOOLEAN
+NTAPI
+ExArchShouldMapSystemProcessNlsView(
+    VOID)
+{
+    return TRUE;
+}
+
+FORCEINLINE
+VOID
+NTAPI
+ExArchPostHalInitSystemPhase0(
+    VOID)
+{
+}
+#endif
 
 #ifdef _WIN64
 #define HANDLE_LOW_BITS     (PAGE_SHIFT - 4)

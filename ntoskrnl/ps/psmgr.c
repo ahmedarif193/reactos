@@ -196,22 +196,40 @@ PspMapSystemDll(IN PEPROCESS Process,
     SIZE_T ViewSize = 0;
     PVOID ImageBase = 0;
 
-    /* Map the System DLL */
+    /*
+     * ZeroBits: let MmMapViewOfSection pick the address freely.
+     * For SEC_IMAGE sections, MmMapViewOfSection uses the PE preferred base
+     * as the hint when ImageBase==NULL, so ntdll maps at 0x10000000 (its PE
+     * preferred base) unless that range is already occupied.
+     *
+     * Historical note: an old ARM64 hack set ZeroBits=1 here to try to
+     * keep ntdll below 2 GB when the preferred base was 0xFF000000.
+     * Now that ntdll's preferred base is 0x10000000 the hack is redundant
+     * (ZeroBits=1 on a 64-bit VA only requires bit 63=0, which is always
+     * true for user addresses) and has been removed.
+     */
+    ULONG ZeroBits = 0;
+
+    /* Map the System DLL using the active architecture's view protection. */
+    ULONG Protect = PsArchSystemDllProtection();
     Status = MmMapViewOfSection(PspSystemDllSection,
                                 Process,
                                 (PVOID*)&ImageBase,
-                                0,
+                                ZeroBits,
                                 0,
                                 &Offset,
                                 &ViewSize,
                                 ViewShare,
                                 0,
-                                PAGE_READWRITE);
-
+                                Protect);
     if (Status != STATUS_SUCCESS)
     {
         /* Normalize status code */
         Status = STATUS_CONFLICTING_ADDRESSES;
+    }
+    else
+    {
+        PsArchSetSystemDllBase(Process, ImageBase);
     }
 
     /* Write the image base and return status */
@@ -231,18 +249,6 @@ PsLocateSystemDll(VOID)
     ULONG_PTR HardErrorParameters;
     ULONG HardErrorResponse;
 
-#if defined(_M_ARM64)
-    DPRINT1("========== ARM64 DEADLOCK TRACE: PsLocateSystemDll START ==========\n");
-    DPRINT1("[arm64] PsLocateSystemDll: ENTRY at IRQL=%u Thread=%p\n",
-            KeGetCurrentIrql(), PsGetCurrentThread());
-    DPRINT1("[arm64] PsLocateSystemDll: Thread TID=%p PID=%p State=%u WaitReason=%u\n",
-            PsGetThreadId(PsGetCurrentThread()),
-            PsGetThreadProcessId(PsGetCurrentThread()),
-            PsGetCurrentThread()->Tcb.State,
-            PsGetCurrentThread()->Tcb.WaitReason);
-    DPRINT1("[arm64] PsLocateSystemDll: Opening file %wZ\n", &PsNtDllPathName);
-#endif
-
     /* Locate and open NTDLL to determine ImageBase and LdrStartup */
     InitializeObjectAttributes(&ObjectAttributes,
                                &PsNtDllPathName,
@@ -250,56 +256,20 @@ PsLocateSystemDll(VOID)
                                NULL,
                                NULL);
 
-#if defined(_M_ARM64)
-    DPRINT1("[arm64] PsLocateSystemDll: *** ABOUT TO CALL ZwOpenFile ***\n");
-    DPRINT1("[arm64] PsLocateSystemDll: Pre-call IRQL=%u Thread State=%u\n",
-            KeGetCurrentIrql(), PsGetCurrentThread()->Tcb.State);
-    /* Memory barrier to ensure all previous operations are visible */
-    __asm__ __volatile__("dmb sy" ::: "memory");
-#endif
-
     Status = ZwOpenFile(&FileHandle,
                         FILE_READ_ACCESS,
                         &ObjectAttributes,
                         &IoStatusBlock,
                         FILE_SHARE_READ,
                         0);
-
-#if defined(_M_ARM64)
-    DPRINT1("[arm64] PsLocateSystemDll: *** ZwOpenFile RETURNED ***\n");
-    DPRINT1("[arm64] PsLocateSystemDll: Status=0x%lx IRQL=%u\n", Status, KeGetCurrentIrql());
-    DPRINT1("[arm64] PsLocateSystemDll: Thread State=%u WaitReason=%u\n",
-            PsGetCurrentThread()->Tcb.State, PsGetCurrentThread()->Tcb.WaitReason);
-    DPRINT1("[arm64] PsLocateSystemDll: FileHandle=%p IoStatusBlock.Status=0x%lx Info=0x%lx\n",
-            FileHandle, IoStatusBlock.Status, IoStatusBlock.Information);
-#endif
-
     if (!NT_SUCCESS(Status))
     {
-#if defined(_M_ARM64)
-        DPRINT1("[arm64] PsLocateSystemDll: ZwOpenFile FAILED with status 0x%lx\n", Status);
-        DPRINT1("========== ARM64 DEADLOCK TRACE: PsLocateSystemDll FAILED ==========\n");
-#endif
-        /* Failed, bugcheck */
+        DPRINT1("PsLocateSystemDll: ZwOpenFile FAILED with status 0x%lx\n", Status);
         KeBugCheckEx(PROCESS1_INITIALIZATION_FAILED, Status, 2, 0, 0);
     }
 
-#if defined(_M_ARM64)
-    DPRINT1("[arm64] PsLocateSystemDll: File opened successfully, checking image\n");
-#endif
-
     /* Check if the image is valid */
-#if defined(_M_ARM64)
-    DPRINT1("[arm64] PsLocateSystemDll: *** Calling MmCheckSystemImage, IRQL=%u ***\n",
-            KeGetCurrentIrql());
-#endif
-
     Status = MmCheckSystemImage(FileHandle);
-
-#if defined(_M_ARM64)
-    DPRINT1("[arm64] PsLocateSystemDll: *** MmCheckSystemImage returned 0x%lx ***\n", Status);
-#endif
-
     if (Status == STATUS_IMAGE_CHECKSUM_MISMATCH || Status == STATUS_INVALID_IMAGE_PROTECT)
     {
         /* Raise a hard error */
@@ -314,11 +284,6 @@ PsLocateSystemDll(VOID)
     }
 
     /* Create a section for NTDLL */
-#if defined(_M_ARM64)
-    DPRINT1("[arm64] PsLocateSystemDll: *** Creating section, IRQL=%u ***\n",
-            KeGetCurrentIrql());
-#endif
-
     Status = ZwCreateSection(&SectionHandle,
                              SECTION_ALL_ACCESS,
                              NULL,
@@ -327,24 +292,11 @@ PsLocateSystemDll(VOID)
                              SEC_IMAGE,
                              FileHandle);
     ZwClose(FileHandle);
-
-#if defined(_M_ARM64)
-    DPRINT1("[arm64] PsLocateSystemDll: *** ZwCreateSection returned 0x%lx ***\n", Status);
-#endif
-
     if (!NT_SUCCESS(Status))
     {
-#if defined(_M_ARM64)
-        DPRINT1("[arm64] PsLocateSystemDll: ZwCreateSection FAILED\n");
-        DPRINT1("========== ARM64 DEADLOCK TRACE: PsLocateSystemDll FAILED ==========\n");
-#endif
-        /* Failed, bugcheck */
+        DPRINT1("PsLocateSystemDll: ZwCreateSection FAILED with 0x%lx\n", Status);
         KeBugCheckEx(PROCESS1_INITIALIZATION_FAILED, Status, 3, 0, 0);
     }
-
-#if defined(_M_ARM64)
-    DPRINT1("[arm64] PsLocateSystemDll: Referencing section object\n");
-#endif
 
     /* Reference the Section */
     Status = ObReferenceObjectByHandle(SectionHandle,
@@ -356,34 +308,17 @@ PsLocateSystemDll(VOID)
     ZwClose(SectionHandle);
     if (!NT_SUCCESS(Status))
     {
-#if defined(_M_ARM64)
-        DPRINT1("[arm64] PsLocateSystemDll: ObReferenceObjectByHandle FAILED with 0x%lx\n", Status);
-        DPRINT1("========== ARM64 DEADLOCK TRACE: PsLocateSystemDll FAILED ==========\n");
-#endif
-        /* Failed, bugcheck */
+        DPRINT1("PsLocateSystemDll: ObReferenceObjectByHandle FAILED with 0x%lx\n", Status);
         KeBugCheckEx(PROCESS1_INITIALIZATION_FAILED, Status, 4, 0, 0);
     }
-
-#if defined(_M_ARM64)
-    DPRINT1("[arm64] PsLocateSystemDll: Mapping system DLL into current process\n");
-#endif
 
     /* Map it */
     Status = PspMapSystemDll(PsGetCurrentProcess(), &PspSystemDllBase, FALSE);
     if (!NT_SUCCESS(Status))
     {
-#if defined(_M_ARM64)
-        DPRINT1("[arm64] PsLocateSystemDll: PspMapSystemDll FAILED with 0x%lx\n", Status);
-        DPRINT1("========== ARM64 DEADLOCK TRACE: PsLocateSystemDll FAILED ==========\n");
-#endif
-        /* Failed, bugcheck */
+        DPRINT1("PsLocateSystemDll: PspMapSystemDll FAILED with 0x%lx\n", Status);
         KeBugCheckEx(PROCESS1_INITIALIZATION_FAILED, Status, 5, 0, 0);
     }
-
-#if defined(_M_ARM64)
-    DPRINT1("[arm64] PsLocateSystemDll: SUCCESS! PspSystemDllBase=%p\n", PspSystemDllBase);
-    DPRINT1("========== ARM64 DEADLOCK TRACE: PsLocateSystemDll COMPLETE ==========\n");
-#endif
 
     /* Return status */
     return Status;

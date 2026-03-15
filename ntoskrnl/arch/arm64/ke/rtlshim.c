@@ -147,6 +147,9 @@ __getf2(
     return 0;
 }
 
+extern BOOLEAN KdDebuggerEnabled;
+extern BOOLEAN KdDebuggerNotPresent;
+
 ULONG
 NTAPI
 DebugService(
@@ -156,7 +159,36 @@ DebugService(
     _In_ PVOID Argument3,
     _In_ PVOID Argument4)
 {
-    KPROCESSOR_MODE PreviousMode = KeGetPreviousMode();
+    /*
+     * ARM64 FIX: Guard against uninitialized KD.
+     *
+     * During early boot (HalInitializeProcessor, GIC init), DPRINT1/DbgPrint
+     * calls arrive before KdInitSystem has configured the debug transport.
+     * On real hardware (RPi5), attempting to send through an uninitialized
+     * port causes an infinite hang in the TX-ready busy-wait.
+     * QEMU's virtual UART never blocks, masking this bug.
+     */
+    if (!KdDebuggerEnabled)
+        return (ULONG)STATUS_SUCCESS;
+
+    /*
+     * ARM64 FIX: Always use KernelMode for DebugService.
+     *
+     * DebugService is only called from kernel code (via DbgPrint,
+     * vDbgPrintExWithPrefixInternal, etc.). On amd64, DebugService uses
+     * int 0x2D (KiDebugServiceTrap) which determines the mode from the
+     * trap frame. On ARM64, this is a C function.
+     *
+     * Using KeGetPreviousMode() is WRONG here because it returns the
+     * thread's PreviousMode from the originating syscall. When a kernel
+     * DbgPrint happens during a user-mode syscall handler (e.g., DPRINT1
+     * in InitProcessCallback called from PsConvertToGuiThread during
+     * NtGdiInit), KeGetPreviousMode() returns UserMode. This causes
+     * KdpPrint to take the user-mode path (KdpPrintFromUser) and probe
+     * the kernel-mode format string as a user buffer, crashing with
+     * ExRaiseDatatypeMisalignment or ExRaiseAccessViolation.
+     */
+    KPROCESSOR_MODE PreviousMode = KernelMode;
     PKTHREAD Thread = KeGetCurrentThread();
     PKTRAP_FRAME TrapFrame = Thread ? Thread->TrapFrame : NULL;
     ULONG_PTR Arg2Value = (ULONG_PTR)Argument2;
@@ -202,7 +234,8 @@ DebugService2(
     _In_ PVOID Argument2,
     _In_ ULONG Service)
 {
-    KPROCESSOR_MODE PreviousMode = KeGetPreviousMode();
+    /* ARM64 FIX: Same as DebugService - always KernelMode (see comment there) */
+    KPROCESSOR_MODE PreviousMode = KernelMode;
     PKTHREAD Thread = KeGetCurrentThread();
     PKTRAP_FRAME TrapFrame = Thread ? Thread->TrapFrame : NULL;
     CONTEXT LocalContext;
@@ -214,6 +247,7 @@ DebugService2(
     {
         case BREAKPOINT_LOAD_SYMBOLS:
         case BREAKPOINT_UNLOAD_SYMBOLS:
+            DPRINT1("[arm64] DebugService2: calling KdpSymbol Service=%lu\n", Service);
             KdpSymbol((PSTRING)Argument1,
                       (PKD_SYMBOLS_INFO)Argument2,
                       (Service == BREAKPOINT_UNLOAD_SYMBOLS),
@@ -221,6 +255,7 @@ DebugService2(
                       &LocalContext,
                       TrapFrame,
                       NULL);
+            DPRINT1("[arm64] DebugService2: KdpSymbol returned\n");
             break;
 
         case BREAKPOINT_COMMAND_STRING:
@@ -256,9 +291,6 @@ VOID
 __cdecl
 __fastfail(
     _In_ unsigned int Code) __attribute__((alias("__reactos_fastfail_impl")));
-
-extern BOOLEAN KdDebuggerEnabled;
-extern BOOLEAN KdDebuggerNotPresent;
 
 static VOID
 __reactos_debugbreak_impl(VOID)

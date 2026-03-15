@@ -235,20 +235,35 @@ typedef BOOL (WINAPI *pThemeWatch)(void);
 static void
 InitThemeSupport(VOID)
 {
-    HMODULE hDll = LoadLibraryW(L"shsvcs.dll");
+    HMODULE hDll;
     pThemeWait themeWait;
     pThemeWatch themeWatch;
 
+    DbgPrint("[THEME1] InitThemeSupport: loading shsvcs.dll\n");
+    hDll = LoadLibraryW(L"shsvcs.dll");
+
     if(!hDll)
+    {
+        DbgPrint("[THEME2] InitThemeSupport: shsvcs.dll load FAILED\n");
         return;
+    }
+    DbgPrint("[THEME3] InitThemeSupport: shsvcs.dll loaded at %p\n", hDll);
 
     themeWait = (pThemeWait) GetProcAddress(hDll, (LPCSTR)2);
     themeWatch = (pThemeWatch) GetProcAddress(hDll, (LPCSTR)1);
+    DbgPrint("[THEME4] InitThemeSupport: themeWait=%p themeWatch=%p\n", themeWait, themeWatch);
 
     if(themeWait && themeWatch)
     {
+        DbgPrint("[THEME5] InitThemeSupport: calling themeWait(5000)\n");
         themeWait(5000);
+        DbgPrint("[THEME6] InitThemeSupport: themeWait done, calling themeWatch\n");
         themeWatch();
+        DbgPrint("[THEME7] InitThemeSupport: themeWatch done\n");
+    }
+    else
+    {
+        DbgPrint("[THEME8] InitThemeSupport: skipping (NULL function pointers)\n");
     }
 }
 
@@ -267,7 +282,9 @@ WlxInitialize(
 
     UNREFERENCED_PARAMETER(pvReserved);
 
+    DbgPrint("[GINA1] WlxInitialize: calling InitThemeSupport\n");
     InitThemeSupport();
+    DbgPrint("[GINA2] WlxInitialize: InitThemeSupport done\n");
 
     pgContext = (PGINA_CONTEXT)LocalAlloc(LMEM_FIXED | LMEM_ZEROINIT, sizeof(GINA_CONTEXT));
     if(!pgContext)
@@ -276,12 +293,14 @@ WlxInitialize(
         return FALSE;
     }
 
+    DbgPrint("[GINA3] WlxInitialize: calling GetRegistrySettings\n");
     if (!GetRegistrySettings(pgContext))
     {
         WARN("GetRegistrySettings() failed\n");
         LocalFree(pgContext);
         return FALSE;
     }
+    DbgPrint("[GINA4] WlxInitialize: GetRegistrySettings done\n");
 
     /* Return the context to winlogon */
     *pWlxContext = (PVOID)pgContext;
@@ -300,15 +319,23 @@ WlxInitialize(
     pgContext->hStatusWindow = NULL;
 
     /* Notify winlogon that we will use the default SAS */
+    DbgPrint("[GINA5] WlxInitialize: calling WlxUseCtrlAltDel\n");
     pgContext->pWlxFuncs->WlxUseCtrlAltDel(hWlx);
+    DbgPrint("[GINA6] WlxInitialize: WlxUseCtrlAltDel done\n");
 
     /* Locates the authentication package */
     //LsaRegisterLogonProcess(...);
 
     pgContext->nShutdownAction = WLX_SAS_ACTION_SHUTDOWN_POWER_OFF;
 
+    DbgPrint("[GINA7] WlxInitialize: calling ChooseGinaUI\n");
     ChooseGinaUI();
-    return pGinaUI->Initialize(pgContext);
+    DbgPrint("[GINA8] WlxInitialize: ChooseGinaUI done, pGinaUI=%p, calling Initialize\n", pGinaUI);
+    {
+        BOOL ret = pGinaUI->Initialize(pgContext);
+        DbgPrint("[GINA9] WlxInitialize: Initialize returned %d\n", ret);
+        return ret;
+    }
 }
 
 /*

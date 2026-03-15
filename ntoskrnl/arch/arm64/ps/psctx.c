@@ -12,6 +12,27 @@
 
 /* FUNCTIONS ******************************************************************/
 
+ULONG
+NTAPI
+PsArchSystemDllProtection(
+    VOID)
+{
+    return PAGE_EXECUTE_WRITECOPY;
+}
+
+VOID
+NTAPI
+PsArchSetSystemDllBase(
+    _Inout_ PEPROCESS Process,
+    _In_opt_ PVOID ImageBase)
+{
+    /*
+     * Keep the user-mode ntdll base so kernel dispatcher entry points can be
+     * translated back into the target process mapping.
+     */
+    Process->SystemDllBase = ImageBase;
+}
+
 /**
  * @brief Get a thread's context from its trap frame
  *

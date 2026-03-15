@@ -254,6 +254,24 @@ RtlCreateUserThread(IN HANDLE ProcessHandle,
                          StartAddress,
                          InitialTeb.StackBase);
 
+#ifdef _M_ARM64
+    /*
+     * ARM64: RtlInitializeContext zeros the entire CONTEXT, leaving LR=0.
+     * If the thread entry function returns (executes 'ret'), it would jump to
+     * PC=0 and crash. Set LR to RtlExitUserThread so returning threads exit
+     * cleanly instead of crashing at NULL.
+     *
+     * Only do this when creating a thread in the current process. When called
+     * from kernel mode (e.g., creating smss.exe's initial thread),
+     * &RtlExitUserThread resolves to the kernel's copy, not the user-mode
+     * ntdll copy, giving a kernel address that would fault from EL0.
+     */
+    if (ProcessHandle == NtCurrentProcess())
+    {
+        Context.Lr = (ULONG64)(ULONG_PTR)RtlExitUserThread;
+    }
+#endif
+
     /* We are now ready to create the Kernel Thread Object */
     InitializeObjectAttributes(&ObjectAttributes,
                                NULL,

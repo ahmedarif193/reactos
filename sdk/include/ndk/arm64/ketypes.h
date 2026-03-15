@@ -26,6 +26,7 @@ extern "C" {
 //
 // IPI Types
 //
+/* NOTE: These constants are bit indices for InterlockedBitTestAndSet/Reset. */
 #define IPI_APC                 1
 #define IPI_DPC                 2
 #define IPI_FREEZE              4
@@ -713,15 +714,51 @@ typedef struct _KIPCR
     KPRCB Prcb;
 } KIPCR, *PKIPCR;
 
-extern PKIPCR KeArm64CurrentPcr;
-extern PKTHREAD KeArm64CurrentThread;
-extern KIRQL KeArm64CurrentIrql;
-extern BOOLEAN KeArm64DpcRoutineActive;
+extern NTKERNELAPI PKIPCR KeArm64CurrentPcr;
+extern NTKERNELAPI PKTHREAD KeArm64CurrentThread;
+extern NTKERNELAPI KIRQL KeArm64CurrentIrql;
+extern NTKERNELAPI BOOLEAN KeArm64DpcRoutineActive;
 
-#define KeGetPcr()                     (KeArm64CurrentPcr)
-#define KeGetCurrentPrcb()             ((KeArm64CurrentPcr && KeArm64CurrentPcr->CurrentPrcb) ? \
-                                        KeArm64CurrentPcr->CurrentPrcb : \
-                                        (KeArm64CurrentPcr ? &KeArm64CurrentPcr->Prcb : (PKPRCB)NULL))
+/*
+ * ARM64: Use TPIDR_EL1 for per-CPU PCR access (ARM64 ABI convention).
+ *
+ * TPIDR_EL1 is the ARM64 standard system register for kernel per-CPU data.
+ * Each CPU has its own TPIDR_EL1 value, making it SMP-safe.
+ *
+ * Early boot fallback: Before TPIDR_EL1 is initialized, KeGetPcr() may read
+ * NULL. Kernel builds fall back to KeArm64CurrentPcr in that case.
+ * _NTOSKRNL_EARLY_INIT_ can still be used to force the fallback path.
+ */
+#if defined(_M_ARM64) && !defined(_NTOSKRNL_EARLY_INIT_)
+/* Runtime path: Read PCR from TPIDR_EL1 (per-CPU, SMP-safe) */
+static __inline PKIPCR KeGetPcr(VOID)
+{
+    PKIPCR Pcr;
+    __asm__ __volatile__("mrs %0, tpidr_el1" : "=r"(Pcr));
+#if defined(_NTOSKRNL_)
+    if (Pcr == NULL)
+    {
+        Pcr = KeArm64CurrentPcr;
+    }
+#endif
+    return Pcr;
+}
+#else
+/* Early boot path: Use global variable (before TPIDR_EL1 init) */
+#define KeGetPcr() (KeArm64CurrentPcr)
+#endif
+
+/*
+ * ARM64: KeGetCurrentPrcb must cache KeGetPcr() result to avoid calling it 4 times.
+ * Reading TPIDR_EL1 is cheap but we should still avoid redundant system register reads.
+ */
+static __inline PKPRCB KeGetCurrentPrcb(VOID)
+{
+    PKIPCR Pcr = KeGetPcr();
+    if (Pcr == NULL)
+        return NULL;
+    return Pcr->CurrentPrcb ? Pcr->CurrentPrcb : &Pcr->Prcb;
+}
 #define PRIMARY_VECTOR_BASE            0x00
 
 //
@@ -729,11 +766,44 @@ extern BOOLEAN KeArm64DpcRoutineActive;
 // Based on WoA symbols
 //
 #ifdef _NTOSKRNL_
-#define KeGetCurrentIrql()             (KeArm64CurrentIrql)
+/*
+ * ARM64 SMP: KeGetCurrentIrql must read from per-CPU PCR, not the global.
+ * IRQL is a per-CPU value. Using a single global works for UP but is
+ * fundamentally broken for SMP: CPU 0 can overwrite IRQL while CPU 1
+ * is in a critical section, causing spurious assertion failures and
+ * incorrect scheduler behavior.
+ *
+ * KeGetPcr() reads TPIDR_EL1 (per-CPU system register), giving each
+ * CPU its own IRQL. Fallback to the global for very early boot before
+ * TPIDR_EL1 is initialized.
+ */
+#define KeGetCurrentIrql() \
+    __extension__ ({ \
+        PKIPCR _irql_pcr = KeGetPcr(); \
+        (_irql_pcr != NULL) ? _irql_pcr->CurrentIrql : KeArm64CurrentIrql; \
+    })
 #endif
-#define _KeGetCurrentThread()          (KeArm64CurrentThread)
-#define _KeGetPreviousMode()           ((KeArm64CurrentThread) ? (KeArm64CurrentThread)->PreviousMode : KernelMode)
-#define _KeIsExecutingDpc()            (KeArm64DpcRoutineActive)
+/*
+ * ARM64 SMP: _KeGetCurrentThread must read from per-CPU PRCB, not the global.
+ * The global KeArm64CurrentThread is written by ALL CPUs during context switch,
+ * so reading it on SMP returns the wrong thread for all but the last writer.
+ * Prcb->CurrentThread is always correct for the current CPU.
+ */
+#define _KeGetCurrentThread() \
+    __extension__ ({ \
+        PKIPCR _ct_pcr = KeGetPcr(); \
+        (_ct_pcr != NULL) ? _ct_pcr->Prcb.CurrentThread : KeArm64CurrentThread; \
+    })
+#define _KeGetPreviousMode() \
+    __extension__ ({ \
+        PKTHREAD _pm_t = _KeGetCurrentThread(); \
+        (_pm_t != NULL) ? _pm_t->PreviousMode : KernelMode; \
+    })
+#define _KeIsExecutingDpc() \
+    __extension__ ({ \
+        PKIPCR _dpc_pcr = KeGetPcr(); \
+        (_dpc_pcr != NULL) ? _dpc_pcr->Prcb.DpcRoutineActive : KeArm64DpcRoutineActive; \
+    })
 
 
 #ifdef __cplusplus

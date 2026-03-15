@@ -264,6 +264,31 @@ MiLoadImageSection(_Inout_ PSECTION *SectionPtr,
 
 #if defined(_M_ARM64)
     /*
+     * ARM64 SMP: Full TLB invalidation before pre-faulting the section view.
+     *
+     * On SMP, section views are mapped/unmapped at the same user-space VA
+     * (e.g., 0x40000) for each driver loaded. When the previous driver's view
+     * was unmapped, the TLB invalidation may not have been visible to all CPUs
+     * (or the current thread may have migrated to a CPU with stale TLB entries).
+     *
+     * If a stale TLB entry from the PREVIOUS driver's mapping is still present,
+     * the pre-fault LDRB instruction below will NOT generate a page fault
+     * (TLB hit with stale entry), causing it to read the PREVIOUS driver's
+     * physical page. The subsequent RtlCopyMemory then copies wrong data.
+     *
+     * Fix: Broadcast a full TLB invalidation (TLBI VMALLE1IS) and ensure it
+     * completes (DSB ISH + ISB) before touching any pages in the view.
+     */
+#if defined(CONFIG_SMP)
+    __asm__ __volatile__(
+        "dsb ishst\n\t"
+        "tlbi vmalle1is\n\t"
+        "dsb ish\n\t"
+        "isb"
+        ::: "memory"
+    );
+#endif
+    /*
      * ARM64: Pre-fault the source pages before copy.
      *
      * Use explicit LDRB (load byte) instructions to avoid GCC's LDP (load pair)
@@ -290,6 +315,41 @@ MiLoadImageSection(_Inout_ PSECTION *SectionPtr,
             Dummy |= Val;
         }
         (void)Dummy;
+    }
+
+    /*
+     * ARM64 SMP diagnostic: Verify section view has correct PE header
+     * after pre-faulting. If wrong, the copy below will produce corrupt images.
+     */
+    {
+        PUSHORT Sig = (PUSHORT)Base;
+        if (*Sig != IMAGE_DOS_SIGNATURE)
+        {
+            DPRINT1("[SMP-STALE-TLB] WRONG PE sig at Base=%p: got 0x%04x, expected 0x5A4D for %wZ\n",
+                    Base, *Sig, FileName);
+            /*
+             * The stale TLB fix above should have prevented this. If we still
+             * see it, there's a deeper issue (e.g., section segment corruption).
+             * Try one more time with a targeted TLBI for this specific VA range.
+             */
+            __asm__ __volatile__("dsb ishst" ::: "memory");
+            {
+                SIZE_T TotalSize = PteCount << PAGE_SHIFT;
+                ULONG_PTR Va;
+                for (Va = (ULONG_PTR)Base; Va < (ULONG_PTR)Base + TotalSize; Va += PAGE_SIZE)
+                {
+                    __asm__ __volatile__("tlbi vale1is, %0" :: "r"(Va >> 12) : "memory");
+                }
+            }
+            __asm__ __volatile__("dsb ish\n\tisb" ::: "memory");
+
+            /* Re-check after targeted TLBI */
+            if (*Sig != IMAGE_DOS_SIGNATURE)
+            {
+                DPRINT1("[SMP-STALE-TLB] STILL wrong after targeted TLBI: 0x%04x at %p for %wZ\n",
+                        *Sig, Base, FileName);
+            }
+        }
     }
 #endif
 
@@ -2786,7 +2846,7 @@ MiWriteProtectSystemImage(
     }
 
 #if defined(_M_ARM64)
-    DPRINT1("[arm64] MiWriteProtectSystemImage: ImageBase=%p\n", ImageBase);
+    /* Debug logging stripped for performance */
 #endif
 
     /* Large page mapped images are not supported */

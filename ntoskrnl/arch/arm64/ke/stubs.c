@@ -52,6 +52,66 @@ const ULONG_PTR MmProtectToPteMask[32] =
     PTE_EXECUTE_WRITECOPY   | PTE_WRITECOMBINED_CACHE,
 };
 
+/*
+ * MmProtectToPteMaskKernel - ARM64 kernel-mode protection to PTE mask table.
+ *
+ * This table mirrors MmProtectToPteMask[] but uses KERNEL execute semantics:
+ *   PXN=0, UXN=1 for executable entries (kernel can execute, user cannot).
+ *
+ * MmProtectToPteMask[] uses USER execute semantics (PXN=1, UXN=0), which is
+ * correct for MI_MAKE_HARDWARE_PTE / MI_MAKE_HARDWARE_PTE_USER. However,
+ * MI_MAKE_HARDWARE_PTE_KERNEL also indexes MmProtectToPteMask[], which causes
+ * kernel executable pages (kernel .text, drivers) to have PXN=1, making them
+ * non-executable at EL1.
+ *
+ * MI_MAKE_HARDWARE_PTE_KERNEL should use this table instead, or call
+ * MiArm64FixupKernelExecutePte() after applying MmProtectToPteMask[].
+ *
+ * Differences from MmProtectToPteMask[]:
+ *   - PTE_EXECUTE (PXN) replaced with PTE_EXECUTE_KERNEL (UXN)
+ *   - PTE_EXECUTE_READ (PXN) replaced with PTE_EXECUTE_KERNEL_READ (UXN)
+ *   - PTE_EXECUTE_READWRITE (PXN|WRITE) replaced with PTE_EXECUTE_KERNEL_RW (UXN|WRITE)
+ *   - PTE_EXECUTE_WRITECOPY (PXN|COW) replaced with PTE_EXECUTE_KERNEL_WC (UXN|COW)
+ *   - PTE_READONLY stays (PXN|UXN) -- both NX bits = non-executable, correct for all
+ *   - PTE_READWRITE stays (PXN|UXN|WRITE) -- non-executable read-write, correct
+ *   - PTE_WRITECOPY stays (PXN|UXN|COW) -- non-executable copy-on-write, correct
+ */
+const ULONG_PTR MmProtectToPteMaskKernel[32] =
+{
+    0,
+    PTE_READONLY              | PTE_ENABLE_CACHE,
+    PTE_EXECUTE_KERNEL        | PTE_ENABLE_CACHE,
+    PTE_EXECUTE_KERNEL_READ   | PTE_ENABLE_CACHE,
+    PTE_READWRITE             | PTE_ENABLE_CACHE,
+    PTE_WRITECOPY             | PTE_ENABLE_CACHE,
+    PTE_EXECUTE_KERNEL_RW     | PTE_ENABLE_CACHE,
+    PTE_EXECUTE_KERNEL_WC     | PTE_ENABLE_CACHE,
+    0,
+    PTE_READONLY              | PTE_DISABLE_CACHE,
+    PTE_EXECUTE_KERNEL        | PTE_DISABLE_CACHE,
+    PTE_EXECUTE_KERNEL_READ   | PTE_DISABLE_CACHE,
+    PTE_READWRITE             | PTE_DISABLE_CACHE,
+    PTE_WRITECOPY             | PTE_DISABLE_CACHE,
+    PTE_EXECUTE_KERNEL_RW     | PTE_DISABLE_CACHE,
+    PTE_EXECUTE_KERNEL_WC     | PTE_DISABLE_CACHE,
+    0,
+    PTE_READONLY              | PTE_ENABLE_CACHE,
+    PTE_EXECUTE_KERNEL        | PTE_ENABLE_CACHE,
+    PTE_EXECUTE_KERNEL_READ   | PTE_ENABLE_CACHE,
+    PTE_READWRITE             | PTE_ENABLE_CACHE,
+    PTE_WRITECOPY             | PTE_ENABLE_CACHE,
+    PTE_EXECUTE_KERNEL_RW     | PTE_ENABLE_CACHE,
+    PTE_EXECUTE_KERNEL_WC     | PTE_ENABLE_CACHE,
+    0,
+    PTE_READONLY              | PTE_WRITECOMBINED_CACHE,
+    PTE_EXECUTE_KERNEL        | PTE_WRITECOMBINED_CACHE,
+    PTE_EXECUTE_KERNEL_READ   | PTE_WRITECOMBINED_CACHE,
+    PTE_READWRITE             | PTE_WRITECOMBINED_CACHE,
+    PTE_WRITECOPY             | PTE_WRITECOMBINED_CACHE,
+    PTE_EXECUTE_KERNEL_RW     | PTE_WRITECOMBINED_CACHE,
+    PTE_EXECUTE_KERNEL_WC     | PTE_WRITECOMBINED_CACHE,
+};
+
 const ULONG MmProtectToValue[32] =
 {
     PAGE_NOACCESS,
@@ -111,22 +171,53 @@ MMPTE ValidKernelPte = {
         .Owner = 0,
     }
 };
-/* Ensure leaf PTEs default to Normal WB (MAIR index 4) */
+/*
+ * Ensure leaf PTEs default to Normal WB (MAIR index MI_ARM64_MAIR_NORMAL_WB_IDX)
+ * and Inner Shareable. Uses the named constant from mm.h instead of a magic number.
+ */
 __attribute__((constructor))
 static void KeArm64InitValidKernelPte(void)
 {
-    /* Bits [4:2] are AttrIndx. Use 0b100 (index 4) to match loader MAIR. */
-    ValidKernelPte.u.Long |= ((ULONGLONG)4ULL << ARM64_PTE_CACHE_SHIFT);
-    /* Make default leaf mappings Inner Shareable to avoid alias issues */
+    /*
+     * Set AttrIndx (bits [4:2]) and SH (bits [9:8]) using clear-then-set
+     * to be idempotent regardless of the initial bitfield state.  Plain OR
+     * only works when the field starts at zero; clear-then-set is robust
+     * against future changes to the static initializer or duplicate calls.
+     */
+
+    /* AttrIndx = MI_ARM64_MAIR_NORMAL_WB_IDX (Normal Write-Back) */
+    ValidKernelPte.u.Long &= ~((ULONGLONG)ARM64_PTE_CACHE_MASK);
+    ValidKernelPte.u.Long |= ((ULONGLONG)MI_ARM64_MAIR_NORMAL_WB_IDX << ARM64_PTE_CACHE_SHIFT);
+    /* SH = Inner Shareable (3) */
+    ValidKernelPte.u.Long &= ~(3ULL << 8);
     ValidKernelPte.u.Long |= (3ULL << 8);
-    ValidKernelPteLocal.u.Long |= ((ULONGLONG)4ULL << ARM64_PTE_CACHE_SHIFT);
+
+    ValidKernelPteLocal.u.Long &= ~((ULONGLONG)ARM64_PTE_CACHE_MASK);
+    ValidKernelPteLocal.u.Long |= ((ULONGLONG)MI_ARM64_MAIR_NORMAL_WB_IDX << ARM64_PTE_CACHE_SHIFT);
+    ValidKernelPteLocal.u.Long &= ~(3ULL << 8);
     ValidKernelPteLocal.u.Long |= (3ULL << 8);
+
+    ValidKernelPde.u.Long &= ~((ULONGLONG)ARM64_PTE_CACHE_MASK);
+    ValidKernelPde.u.Long |= ((ULONGLONG)MI_ARM64_MAIR_NORMAL_WB_IDX << ARM64_PTE_CACHE_SHIFT);
+    ValidKernelPde.u.Long &= ~(3ULL << 8);
+    ValidKernelPde.u.Long |= (3ULL << 8);
+
+    ValidKernelPdeLocal.u.Long &= ~((ULONGLONG)ARM64_PTE_CACHE_MASK);
+    ValidKernelPdeLocal.u.Long |= ((ULONGLONG)MI_ARM64_MAIR_NORMAL_WB_IDX << ARM64_PTE_CACHE_SHIFT);
+    ValidKernelPdeLocal.u.Long &= ~(3ULL << 8);
+    ValidKernelPdeLocal.u.Long |= (3ULL << 8);
 }
 MMPDE ValidKernelPde = {
     .u.Hard = {
         .Valid = 1,
-        .NotLargePage = 1,   /* AF must be 0 for table entries */
-        .Accessed = 0,
+        .NotLargePage = 1,
+        .Shareability = 3,   /* Inner Shareable - required for self-map coherence */
+        .Accessed = 1,       /* AF=1: on ARM64 with recursive self-map, PDEs are also
+                              * readable as L3 page descriptors. Without AF, CPUs that
+                              * lack hardware AF management (TCR.HA=0, e.g. Cortex-A72)
+                              * fault with an Access Flag fault, causing an infinite loop
+                              * in MiMakeSystemAddressValid. AF and SH bits are ignored
+                              * in table descriptors (ARMv8 D5.3.3) so this is safe. */
     }
 };
 MMPTE DemandZeroPte = {.u.Long = (MM_READWRITE << MM_PTE_SOFTWARE_PROTECTION_BITS)};
@@ -141,7 +232,7 @@ MMPTE ValidKernelPteLocal = {
         .Owner = 0
     }
 };
-MMPDE ValidKernelPdeLocal = {.u.Hard.Valid = 1, .u.Hard.Accessed = 1};
+MMPDE ValidKernelPdeLocal = {.u.Hard.Valid = 1, .u.Hard.NotLargePage = 1, .u.Hard.Shareability = 3, .u.Hard.Accessed = 1};
 
 /* Template PTE for decommitted page.
  * CRITICAL: Must use MM_DECOMMIT, NOT MM_READWRITE!
@@ -225,9 +316,35 @@ KeRaiseUserException(
     }
     _SEH2_END;
 
-    OldPc = TrapFrame->Pc;
-    TrapFrame->Pc = (ULONG64)(ULONG_PTR)KeRaiseUserExceptionDispatcher;
-    return (NTSTATUS)OldPc;
+    /*
+     * ARM64 FIX: Convert KeRaiseUserExceptionDispatcher to user address.
+     */
+    {
+        PKTHREAD Thread = KeGetCurrentThread();
+        PEPROCESS Process = (PEPROCESS)Thread->ApcState.Process;
+        PVOID UserRaiseExceptionDispatcher = KiConvertSystemDllAddressToUser(KeRaiseUserExceptionDispatcher, Process);
+        if ((UserRaiseExceptionDispatcher == NULL) &&
+            (KeRaiseUserExceptionDispatcher != NULL) &&
+            ((ULONG_PTR)KeRaiseUserExceptionDispatcher < (ULONG_PTR)MmSystemRangeStart))
+        {
+            UserRaiseExceptionDispatcher = KeRaiseUserExceptionDispatcher;
+        }
+        if (UserRaiseExceptionDispatcher == NULL)
+        {
+            DPRINT1("[arm64][EXC] unresolved raise dispatcher: proc=%.16s KeRaiseUserExceptionDispatcher=%p SystemDllBase=%p PspSystemDllBase=%p TrapPc=%p ExceptionCode=0x%08lx\n",
+                    PsGetCurrentProcess()->ImageFileName,
+                    KeRaiseUserExceptionDispatcher,
+                    Process ? Process->SystemDllBase : NULL,
+                    PspSystemDllBase,
+                    (PVOID)(ULONG_PTR)TrapFrame->Pc,
+                    (ULONG)ExceptionCode);
+            return STATUS_UNSUCCESSFUL;
+        }
+
+        OldPc = TrapFrame->Pc;
+        TrapFrame->Pc = (ULONG64)(ULONG_PTR)UserRaiseExceptionDispatcher;
+        return (NTSTATUS)OldPc;
+    }
 }
 
 VOID
@@ -299,16 +416,151 @@ MmInitGlobalKernelPageDirectory(VOID)
 #endif
 }
 
+/*
+ * KeSwitchKernelStack - Switch the current thread to a new (larger) kernel stack.
+ *
+ * ARM64 Implementation Notes:
+ *
+ * This function copies the current stack contents to the new stack, adjusts all
+ * thread metadata pointers, and then physically adjusts SP to point to the
+ * corresponding location on the new stack.
+ *
+ * The SP adjustment must be done via inline assembly because the compiler
+ * cannot know that we're changing the stack pointer underneath it.
+ *
+ * The function is called from PsConvertToGuiThread inside a guarded region
+ * (APCs disabled), so we won't be preempted during the switch.
+ *
+ * Parameters:
+ *   StackBase  - Top (highest address) of the new stack
+ *   StackLimit - Bottom (lowest address) of the new stack
+ *
+ * Returns:
+ *   The old StackBase (caller uses this to free the old stack)
+ */
 PVOID
 NTAPI
 KeSwitchKernelStack(
     _In_ PVOID StackBase,
     _In_ PVOID StackLimit)
 {
-    UNREFERENCED_PARAMETER(StackBase);
-    UNREFERENCED_PARAMETER(StackLimit);
-    ARM64_STUB();
-    return StackBase;
+    PKTHREAD CurrentThread;
+    PVOID OldStackBase;
+    LONG_PTR StackOffset;
+    SIZE_T StackSize;
+    PKIPCR Pcr;
+
+    /* Get the current thread */
+    CurrentThread = KeGetCurrentThread();
+
+    /* Save the old stack base for return value */
+    OldStackBase = CurrentThread->StackBase;
+
+    /* Compute size of current stack contents */
+    StackSize = (ULONG_PTR)CurrentThread->StackBase - CurrentThread->StackLimit;
+    ASSERT(StackSize <= (ULONG_PTR)StackBase - (ULONG_PTR)StackLimit);
+
+    /* Calculate the offset between old and new stacks */
+    StackOffset = (PUCHAR)StackBase - (PUCHAR)CurrentThread->StackBase;
+
+    /*
+     * Mask ALL exception/interrupt sources (DAIF: Debug, SError, IRQ, FIQ)
+     * BEFORE copying the stack contents.
+     *
+     * _disable() may only mask IRQ/FIQ (DAIF bits I and F), leaving SError
+     * and Debug exceptions unmasked.  For the stack-switch critical section
+     * we need the same "mask everything" policy used in trap return to
+     * guarantee the old stack is completely quiescent during the copy and
+     * the subsequent pointer adjustments.
+     *
+     * If any asynchronous event fires during the copy, the handler pushes
+     * frames onto the old stack; the new stack would then contain a stale
+     * snapshot that misses those modifications.
+     */
+    {
+        ULONGLONG _savedDaif;
+        __asm__ __volatile__("mrs %0, daif" : "=r"(_savedDaif));
+        __asm__ __volatile__("msr daifset, #0xF" ::: "memory");
+        __asm__ __volatile__("isb" ::: "memory");
+
+    /* Copy the entire current stack to the new stack */
+    RtlCopyMemory((PUCHAR)StackBase - StackSize,
+                  (PVOID)CurrentThread->StackLimit,
+                  StackSize);
+
+    /* Adjust thread trap frame pointer to new stack */
+    if (CurrentThread->TrapFrame != NULL)
+    {
+        CurrentThread->TrapFrame = (PKTRAP_FRAME)((PUCHAR)CurrentThread->TrapFrame +
+                                                   StackOffset);
+
+        /*
+         * ARM64 FIX: Also adjust the linked list pointer inside the trap frame.
+         *
+         * TrapFrame->TrapFrame points to the PREVIOUS trap frame (set up by
+         * the SVC handler in trapc.c before calling KiSystemService). The
+         * previous trap frame is also on the kernel stack (it's the thread-init
+         * trap frame from KiInitializeContextThread). Since we copied the entire
+         * stack, the previous trap frame exists at its old address + StackOffset,
+         * but the pointer stored in TrapFrame->TrapFrame still has the old address.
+         *
+         * We must adjust it so that KiGetLinkedTrapFrame returns the correct
+         * address on the new stack.
+         *
+         * Only adjust if the linked trap frame pointer is non-NULL (it can be
+         * NULL for the very first trap frame in the chain).
+         */
+        if (CurrentThread->TrapFrame->TrapFrame != 0)
+        {
+            CurrentThread->TrapFrame->TrapFrame += (ULONG64)StackOffset;
+        }
+    }
+
+    /* Adjust initial stack pointer */
+    CurrentThread->InitialStack = (PVOID)((PUCHAR)CurrentThread->InitialStack +
+                                          StackOffset);
+
+    /* Update stack limits and mark as large stack */
+    CurrentThread->StackBase = StackBase;
+    CurrentThread->StackLimit = (ULONG_PTR)StackLimit;
+    CurrentThread->LargeStack = TRUE;
+
+    /* Adjust RspBase in the PCR */
+    Pcr = (PKIPCR)KeGetPcr();
+    if (Pcr != NULL)
+    {
+        Pcr->Prcb.RspBase += StackOffset;
+    }
+
+    /*
+     * Physically adjust SP and FP (X29) to the new stack.
+     *
+     * Both SP and X29 must be adjusted because:
+     * - SP: the hardware stack pointer must point to the new stack
+     * - X29 (FP): the frame pointer is used by the compiler to access
+     *   local variables and function parameters via [X29, #offset].
+     *   Without adjusting FP, all frame-pointer-relative accesses in
+     *   the ENTIRE call chain above us would access the old (freed) stack.
+     *
+     * The frame pointer chain (each FP on the stack points to the previous
+     * frame) will contain stale old-stack addresses after the copy, but
+     * that only matters for stack unwinding/debugging, not for execution
+     * correctness. What matters is that the CURRENT X29 points to the
+     * correct frame on the new stack.
+     */
+    __asm__ __volatile__(
+        "mov x16, sp\n\t"
+        "add x16, x16, %0\n\t"
+        "mov sp, x16\n\t"
+        "add x29, x29, %0\n\t"
+        : : "r"(StackOffset) : "x16", "memory"
+    );
+
+    /* Restore DAIF to pre-switch state */
+    __asm__ __volatile__("msr daif, %0" :: "r"(_savedDaif) : "memory");
+    }
+
+    return OldStackBase;
 }
 
 /*
@@ -320,6 +572,7 @@ KiInitializePcr(
     _In_ ULONG ProcessorNumber,
     _Inout_ PKIPCR Pcr,
     _In_ PKTHREAD IdleThread,
+    _In_ BOOLEAN SetCurrentPcr,
     _In_opt_ PVOID PanicStack,
     _In_ PVOID DpcStack);
 
@@ -382,6 +635,8 @@ KeStartAllProcessors(
     /* Start from processor 1 since BSP (processor 0) is already running */
     for (ProcessorCount = 1; ProcessorCount < MaximumProcessors; ++ProcessorCount)
     {
+        PKIPCR CurrentPcr;
+
         KernelStack = NULL;
         DPCStack = NULL;
         APInfo = NULL;
@@ -413,11 +668,14 @@ KeStartAllProcessors(
         }
 
         /* Initialize a new PCR for this AP */
+        CurrentPcr = KeGetPcr();
         KiInitializePcr(ProcessorCount,
                         &APInfo->Pcr,
                         (PKTHREAD)&APInfo->Thread,
+                        FALSE,
                         NULL,   /* ARM64 doesn't use separate panic stack here */
                         DPCStack);
+        ASSERT(KeGetPcr() == CurrentPcr);
 
         /* Set up processor state for AP initialization */
         {
@@ -447,6 +705,15 @@ KeStartAllProcessors(
             KeLoaderBlock->Prcb = (ULONG_PTR)&APInfo->Pcr.Prcb;
             KeLoaderBlock->Thread = (ULONG_PTR)APInfo->Pcr.Prcb.IdleThread;
 
+            /*
+             * ARM64-specific: Update Arm64Block with AP's PCR and stacks.
+             * KiInitializeSystem uses Arm64Block->PcrPage to find the PCR.
+             * Without this, the AP would use the BSP's PcrPage and corrupt it.
+             */
+            KeLoaderBlock->u.Arm64.PcrPage = (ULONG_PTR)&APInfo->Pcr;
+            KeLoaderBlock->u.Arm64.PanicStack = 0;
+            KeLoaderBlock->u.Arm64.InterruptStack = (ULONG_PTR)DPCStack;
+
             DPRINT1("[arm64] KeStartAllProcessors: Attempting to start CPU %lu\n",
                     ProcessorCount);
 
@@ -458,11 +725,23 @@ KeStartAllProcessors(
                 break;
             }
 
-            /* Wait for AP to signal it has started */
-            while (KeLoaderBlock->Prcb != 0)
+            /* Wait for AP to signal it has started (with timeout) */
             {
-                KeMemoryBarrier();
-                YieldProcessor();
+                volatile ULONG ApWait;
+                for (ApWait = 0; ApWait < 10000000; ApWait++)
+                {
+                    if (KeLoaderBlock->Prcb == 0)
+                        break;
+                    KeMemoryBarrier();
+                    YieldProcessor();
+                }
+                if (KeLoaderBlock->Prcb != 0)
+                {
+                    DPRINT1("[arm64] KeStartAllProcessors: CPU %lu AP handshake timeout (Prcb still set)\n",
+                            ProcessorCount);
+                    KeLoaderBlock->Prcb = 0; /* Reset for next attempt */
+                    break;
+                }
             }
 
             DPRINT1("[arm64] KeStartAllProcessors: CPU %lu started successfully\n",
@@ -481,4 +760,55 @@ KeStartAllProcessors(
         MmDeleteKernelStack(DPCStack, FALSE);
 
     DPRINT1("[arm64] KeStartAllProcessors: Successfully started %lu APs\n", ProcessorCount);
+
+    /*
+     * Update process affinities now that all CPUs are online.
+     *
+     * The System process (PsInitialSystemProcess) and Idle process
+     * (PsIdleProcess) were created during Phase 0 init when only CPU 0
+     * was active, so their Pcb.Affinity == 0x1.  All threads created in
+     * these processes inherit that single-CPU affinity, which means the
+     * scheduler never dispatches work to secondary CPUs.
+     *
+     * Fix: set their affinity to KeActiveProcessors and update all
+     * existing threads so the scheduler can use every online CPU.
+     */
+    if (KeActiveProcessors != 0 && KeNumberProcessors > 1)
+    {
+        KAFFINITY FullAffinity = KeActiveProcessors;
+        PLIST_ENTRY Entry;
+        PKTHREAD Thread;
+
+        DPRINT1("[arm64] KeStartAllProcessors: Updating process affinities to 0x%Ix\n",
+                FullAffinity);
+
+        /* Update idle process */
+        if (PsIdleProcess != NULL)
+        {
+            PsIdleProcess->Pcb.Affinity = FullAffinity;
+        }
+
+        /* Update system process and all its threads */
+        if (PsInitialSystemProcess != NULL)
+        {
+            KAFFINITY OldAffinity = PsInitialSystemProcess->Pcb.Affinity;
+            PsInitialSystemProcess->Pcb.Affinity = FullAffinity;
+
+            /* Walk all threads in the System process and update their affinity */
+            for (Entry = PsInitialSystemProcess->Pcb.ThreadListHead.Flink;
+                 Entry != &PsInitialSystemProcess->Pcb.ThreadListHead;
+                 Entry = Entry->Flink)
+            {
+                Thread = CONTAINING_RECORD(Entry, KTHREAD, ThreadListEntry);
+                if (Thread->Affinity == OldAffinity)
+                {
+                    Thread->Affinity = FullAffinity;
+                    Thread->UserAffinity = FullAffinity;
+                }
+            }
+
+            DPRINT1("[arm64] KeStartAllProcessors: System process affinity 0x%Ix -> 0x%Ix\n",
+                    OldAffinity, FullAffinity);
+        }
+    }
 }

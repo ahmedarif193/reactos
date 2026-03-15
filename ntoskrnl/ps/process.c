@@ -695,7 +695,16 @@ PspCreateProcess(OUT PHANDLE ProcessHandle,
 #endif
 
     /* Check if we have a section object and map the system DLL */
-    if (SectionObject) PspMapSystemDll(Process, NULL, FALSE);
+    if (SectionObject)
+    {
+        Status = PspMapSystemDll(Process, NULL, FALSE);
+        if (!NT_SUCCESS(Status))
+        {
+            DPRINT1("PS: PspMapSystemDll failed for process %.16s: 0x%08lx\n",
+                    Process->ImageFileName, Status);
+            goto CleanupWithRef;
+        }
+    }
 
     /* Create a handle for the Process */
     CidEntry.Object = Process;

@@ -157,13 +157,22 @@ C_ASSERT(SYSTEM_PD_SIZE == PAGE_SIZE);
 //
 // Access Flags
 //
+// ARM64 Execute Permissions:
+// - UXN=0 (User eXecute Never cleared) allows user-mode execution
+// - UXN=1 prevents user-mode execution
+// - PXN=0 (Privileged eXecute Never cleared) allows kernel-mode execution
+// - PXN=1 prevents kernel-mode execution
+//
+// For user-mode executable pages (.text sections), we want:
+//   UXN=0 (user can execute) + PXN=1 (kernel cannot execute from user pages)
+//
 #define PTE_READONLY            (ARM64_PTE_PXN | ARM64_PTE_UXN)
-#define PTE_EXECUTE             0ULL
-#define PTE_EXECUTE_READ        PTE_EXECUTE
+#define PTE_EXECUTE             ARM64_PTE_PXN  /* UXN=0, PXN=1 */
+#define PTE_EXECUTE_READ        ARM64_PTE_PXN  /* UXN=0, PXN=1 */
 #define PTE_READWRITE           (ARM64_PTE_PXN | ARM64_PTE_UXN | ARM64_PTE_WRITE)
 #define PTE_WRITECOPY           (ARM64_PTE_PXN | ARM64_PTE_UXN | ARM64_PTE_COPY_ON_WRITE)
-#define PTE_EXECUTE_READWRITE   ARM64_PTE_WRITE
-#define PTE_EXECUTE_WRITECOPY   ARM64_PTE_COPY_ON_WRITE
+#define PTE_EXECUTE_READWRITE   (ARM64_PTE_PXN | ARM64_PTE_WRITE)
+#define PTE_EXECUTE_WRITECOPY   (ARM64_PTE_PXN | ARM64_PTE_COPY_ON_WRITE)
 #define PTE_PROTOTYPE           0x0000000000000400ULL
 
 //
@@ -269,8 +278,38 @@ extern const ULONG MmProtectToValue[32];
 #define MI_IS_SYSTEM_PAGE_TABLE_ADDRESS(Address) \
     (((Address) >= (PVOID)MiAddressToPte(MmSystemRangeStart)) && ((Address) <= (PVOID)PTE_TOP))
 
+#if defined(_M_ARM64) || defined(__aarch64__)
+/*
+ * MI_IS_PTE_IN_PAGE_TABLE_REGION - Check if a PTE pointer falls within the
+ * page table self-map (L0[493]) or TTBR0 alias region (L0[494]).
+ *
+ * The self-map covers [PTE_BASE, PTE_TOP] and the TTBR0 alias covers
+ * [PTE_BASE_TTBR0, PTE_BASE_TTBR0 + 512GB). These two regions are
+ * contiguous in the virtual address space, so the combined range is
+ * [PTE_BASE, PTE_BASE_TTBR0 + (1 << 39)).
+ *
+ * Prototype PTEs live in paged pool (starting at MI_PAGED_POOL_START),
+ * which is well above this range, and must NOT trigger TLBI operations
+ * since MiPteToAddress() would return a garbage virtual address for them.
+ */
+#define MI_ARM64_PAGE_TABLE_REGION_END  (PTE_BASE_TTBR0 + (1ULL << 39))
+#define MI_IS_PTE_IN_PAGE_TABLE_REGION(Pte) \
+    (((ULONG_PTR)(Pte) >= PTE_BASE) && ((ULONG_PTR)(Pte) < MI_ARM64_PAGE_TABLE_REGION_END))
+#endif
+
+#if defined(_M_ARM64)
+/*
+ * On ARM64, HYPER_SPACE (0xFFFFF60000000000) is below PTE_BASE (0xFFFFF68000000000),
+ * contiguous with it (HYPER_SPACE_END + 1 == PTE_BASE). The original check
+ * "Address >= PTE_BASE && Address <= MmHyperSpaceEnd" is always FALSE because
+ * MmHyperSpaceEnd < PTE_BASE. Fix by checking the combined range.
+ */
+#define MI_IS_PAGE_TABLE_OR_HYPER_ADDRESS(Address) \
+    (((PVOID)(Address) >= (PVOID)HYPER_SPACE) && ((PVOID)(Address) <= (PVOID)PTE_TOP))
+#else
 #define MI_IS_PAGE_TABLE_OR_HYPER_ADDRESS(Address) \
     (((PVOID)(Address) >= (PVOID)PTE_BASE) && ((PVOID)(Address) <= (PVOID)MmHyperSpaceEnd))
+#endif
 
 //
 // Creates a software PTE with the given protection
@@ -965,6 +1004,25 @@ MI_MAKE_HARDWARE_PTE_KERNEL(IN PMMPTE NewPte,
     NewPte->u.Hard.PageFrameNumber = PageFrameNumber;
     NewPte->u.Long |= MmProtectToPteMask[ProtectionMask];
 
+#if defined(_M_ARM64)
+    /*
+     * ARM64: MmProtectToPteMask[] uses user-execute semantics (PXN=1, UXN=0)
+     * for executable entries. For kernel mappings we need the opposite:
+     * PXN=0 (allow EL1 execution), UXN=1 (block EL0 execution).
+     * Swap PXN/UXN if the user-execute pattern is detected.
+     */
+    MiArm64FixupKernelExecutePte(NewPte);
+
+    /*
+     * ARM64 dirty tracking is tied to AP[1] (NotDirty in this PTE layout):
+     * writable mappings use NotDirty=0, non-writable mappings must be clean.
+     */
+    if (NewPte->u.Hard.Writable)
+        MI_MAKE_DIRTY_PAGE(NewPte);
+    else
+        MI_MAKE_CLEAN_PAGE(NewPte);
+#endif
+
     /* Make this valid & global */
 #ifdef _GLOBAL_PAGES_ARE_AWESOME_
     if (KeFeatureBits & KF_GLOBAL_PAGE)
@@ -991,6 +1049,33 @@ MI_MAKE_HARDWARE_PTE(IN PMMPTE NewPte,
     NewPte->u.Long = MiDetermineUserGlobalPteMask(MappingPte);
     NewPte->u.Long |= MmProtectToPteMask[ProtectionMask];
     NewPte->u.Hard.PageFrameNumber = PageFrameNumber;
+
+#if defined(_M_ARM64)
+    /*
+     * ARM64: Fix kernel PTE execute bits and shareability.
+     *
+     * MmProtectToPteMask[] uses user-execute semantics (PXN=1, UXN=0).
+     * For kernel PTEs (Owner=0), executable pages need the opposite:
+     * PXN=0 (allow EL1 execution), UXN=1 (block EL0 execution).
+     *
+     * Also set Inner Shareable for kernel PTEs; MiDetermineUserGlobalPteMask
+     * does not set SH bits, but kernel pages must be Inner Shareable for
+     * D-cache coherency across CPUs.
+     */
+    if (!NewPte->u.Hard.Owner)
+    {
+        MiArm64FixupKernelExecutePte(NewPte);
+        NewPte->u.Hard.Shareability = 3; /* Inner Shareable */
+    }
+
+    /*
+     * Keep NotDirty coherent with writability for ARM64 software dirty checks.
+     */
+    if (NewPte->u.Hard.Writable)
+        MI_MAKE_DIRTY_PAGE(NewPte);
+    else
+        MI_MAKE_CLEAN_PAGE(NewPte);
+#endif
 }
 
 //
@@ -1027,6 +1112,17 @@ MI_MAKE_HARDWARE_PTE_USER(IN PMMPTE NewPte,
 #endif
     NewPte->u.Hard.PageFrameNumber = PageFrameNumber;
     NewPte->u.Long |= MmProtectToPteMask[ProtectionMask];
+
+#if defined(_M_ARM64)
+    /*
+     * ARM64: read-only/COW user mappings must start clean (NotDirty=1),
+     * writable mappings must keep NotDirty=0.
+     */
+    if (NewPte->u.Hard.Writable)
+        MI_MAKE_DIRTY_PAGE(NewPte);
+    else
+        MI_MAKE_CLEAN_PAGE(NewPte);
+#endif
 }
 
 #if defined(_M_ARM64)
@@ -1057,7 +1153,17 @@ BOOLEAN
 MI_IS_MAPPED_PTE(
     _In_ PMMPTE PointerPte)
 {
-    return (PointerPte->u.Long != 0);
+    /*
+     * A PTE is "mapped" if it is valid, transitional, a prototype reference,
+     * or paged out to a page file. Demand-zero software PTEs that contain
+     * only protection bits (Valid=0, Prototype=0, Transition=0, PageFileHigh=0)
+     * are NOT mapped - they can simply be erased without PFN accounting.
+     *
+     * Match the amd64 mask: bit 0 (Valid) | bits [31:10] (Prototype, Transition,
+     * PageFileHigh). This filters out demand-zero PTEs like 0x28 that would
+     * crash MiDeletePte when it tries to extract a PFN from a software PTE.
+     */
+    return ((PointerPte->u.Long & 0xFFFFFC01) != 0);
 }
 #elif !defined(_M_AMD64)
 //
@@ -1176,6 +1282,92 @@ MI_IS_PHYSICAL_ADDRESS(IN PVOID Address)
 VOID
 KiFlushSingleTb(_In_ BOOLEAN Invalid,
                 _In_ PVOID VirtualAddress);
+
+FORCEINLINE
+BOOLEAN
+MiArm64DecodePteForTrace(_In_ PMMPTE PointerPte,
+                         _Out_ PMMPTE *PteForAddress,
+                         _Out_ PVOID *VirtualAddress,
+                         _Out_ PBOOLEAN IsTtbr0Alias)
+{
+    PMMPTE LocalPte;
+
+    if (!MI_IS_PTE_IN_PAGE_TABLE_REGION(PointerPte))
+    {
+        return FALSE;
+    }
+
+    LocalPte = PointerPte;
+    *IsTtbr0Alias = ((ULONG_PTR)LocalPte >= PTE_BASE_TTBR0) ? TRUE : FALSE;
+    if (*IsTtbr0Alias)
+    {
+        LocalPte = (PMMPTE)((ULONG_PTR)LocalPte - TTBR0_ALIAS_DELTA);
+    }
+
+    *PteForAddress = LocalPte;
+    *VirtualAddress = MiPteToAddress(LocalPte);
+    return TRUE;
+}
+
+FORCEINLINE
+VOID
+MiArm64TraceUserPteWrite(_In_z_ PCSTR Operation,
+                         _In_ PMMPTE PointerPte,
+                         _In_ ULONG64 OldValue,
+                         _In_ ULONG64 NewValue)
+{
+    PMMPTE PteForAddress;
+    PVOID Va;
+    BOOLEAN IsAlias;
+    PETHREAD Thread;
+    PEPROCESS CurrentProcess;
+    PEPROCESS ApcProcess;
+    PEPROCESS SavedApcProcess;
+    ULONG64 Ttbr0;
+    ULONG64 Ttbr1;
+
+    if (!MiArm64DecodePteForTrace(PointerPte, &PteForAddress, &Va, &IsAlias))
+    {
+        return;
+    }
+
+    if ((ULONG_PTR)Va >= MI_REAL_SYSTEM_RANGE_START)
+    {
+        return;
+    }
+
+    ASSERT(((ULONG_PTR)Va & (PAGE_SIZE - 1)) == 0);
+
+    Thread = PsGetCurrentThread();
+    CurrentProcess = PsGetCurrentProcess();
+    ApcProcess = Thread ? (PEPROCESS)Thread->Tcb.ApcState.Process : NULL;
+    SavedApcProcess = Thread ? (PEPROCESS)Thread->Tcb.SavedApcState.Process : NULL;
+
+    __asm__ __volatile__("mrs %0, ttbr0_el1" : "=r"(Ttbr0));
+    __asm__ __volatile__("mrs %0, ttbr1_el1" : "=r"(Ttbr1));
+
+    DPRINT("[arm64][PTEW] %s Pte=%p SelfPte=%p Va=%p Old=0x%llx New=0x%llx Alias=%u "
+           "Cur=%p(%.16s) ApcIdx=%lu Attached=%u Apc=%p(%.16s) Saved=%p(%.16s) "
+           "TTBR0=0x%llx TTBR1=0x%llx CPU=%lu\n",
+            Operation,
+            PointerPte,
+            PteForAddress,
+            Va,
+            (unsigned long long)OldValue,
+            (unsigned long long)NewValue,
+            IsAlias ? 1u : 0u,
+            CurrentProcess,
+            CurrentProcess ? CurrentProcess->ImageFileName : "<none>",
+            Thread ? (ULONG)Thread->Tcb.ApcStateIndex : 0,
+            KeIsAttachedProcess() ? 1u : 0u,
+            ApcProcess,
+            ApcProcess ? ApcProcess->ImageFileName : "<none>",
+            SavedApcProcess,
+            SavedApcProcess ? SavedApcProcess->ImageFileName : "<none>",
+            (unsigned long long)Ttbr0,
+            (unsigned long long)Ttbr1,
+            KeGetCurrentProcessorNumber());
+}
 #endif
 
 //
@@ -1187,6 +1379,9 @@ MI_WRITE_VALID_PTE(IN PMMPTE PointerPte,
                    IN MMPTE TempPte)
 {
     PVOID VirtualAddress;
+#if defined(_M_ARM64) || defined(__aarch64__)
+    ULONG64 OldValue;
+#endif
 
 #if defined(_M_ARM64) || defined(__aarch64__)
     /*
@@ -1210,14 +1405,28 @@ MI_WRITE_VALID_PTE(IN PMMPTE PointerPte,
      * (NotLargePage) to be set. The bit pattern [1:0] = 0b11 indicates a valid
      * page descriptor. Pattern 0b01 is "reserved" (invalid), 0b00 is invalid.
      *
-     * We must check both bits to avoid mistakenly skipping writes to PTEs that
-     * have bit 0 set but are actually reserved/invalid entries (e.g., leftover
-     * from FreeLDR initialization or corrupted values).
+     * Only skip the write when the existing PTE is IDENTICAL to the new value.
+     * This handles the race condition where another path already resolved the
+     * fault identically.
+     *
+     * CRITICAL: Do NOT skip when values differ! Write permission faults (COW,
+     * dirty-bit) call MI_WRITE_VALID_PTE to change permissions or PFN on an
+     * already-valid PTE. Skipping the write causes infinite fault loops because
+     * the PTE remains read-only and the TLB is never flushed.
      */
+    OldValue = PointerPte->u.Long;
     if ((PointerPte->u.Hard.Valid == 1) && (PointerPte->u.Hard.NotLargePage == 1))
     {
-        /* PTE is already valid - skip write, let caller handle cleanup */
-        return;
+        if (PointerPte->u.Long == TempPte.u.Long)
+        {
+            /* PTE already has the exact desired value - skip write */
+            MiArm64TraceUserPteWrite("MI_WRITE_VALID_PTE.skip",
+                                     PointerPte,
+                                     OldValue,
+                                     TempPte.u.Long);
+            return;
+        }
+        /* Values differ: permission upgrade, COW, etc. - fall through to write */
     }
 #endif
 
@@ -1257,13 +1466,45 @@ MI_WRITE_VALID_PTE(IN PMMPTE PointerPte,
     *PointerPte = TempPte;
 
 #if defined(_M_ARM64) || defined(__aarch64__)
+    MiArm64TraceUserPteWrite("MI_WRITE_VALID_PTE",
+                             PointerPte,
+                             OldValue,
+                             TempPte.u.Long);
+
     /*
-     * Invalidate TLB for the virtual address this PTE maps.
-     * This is CRITICAL for ARM64 - without it, page faults loop infinitely
-     * because the CPU keeps using the old cached invalid PTE.
+     * ARM64: Invalidate TLB for the virtual address this PTE maps.
+     *
+     * CRITICAL: Only perform TLBI if the PTE pointer is in the page table
+     * self-map region (L0[493], PTE_BASE..PTE_TOP) or the TTBR0 alias region
+     * (L0[494], PTE_BASE_TTBR0..PTE_BASE_TTBR0+512GB). These are real page
+     * table entries where MiPteToAddress() returns a meaningful virtual address.
+     *
+     * Prototype PTEs live in paged pool (e.g., MI_PAGED_POOL_START), NOT in
+     * page tables. For prototype PTEs, MiPteToAddress() returns a garbage VA,
+     * and flushing a random TLB entry is at minimum a performance problem and
+     * at worst a correctness bug (evicting an unrelated valid TLB entry).
+     *
+     * For PTEs in the TTBR0 alias region, we subtract TTBR0_ALIAS_DELTA to
+     * remap the pointer back to the self-map range before calling
+     * MiPteToAddress(), because MiPteToAddress() assumes PTE_BASE (L0[493]).
      */
-    VirtualAddress = MiPteToAddress(PointerPte);
-    KiFlushSingleTb(FALSE, VirtualAddress);
+    if (MI_IS_PTE_IN_PAGE_TABLE_REGION(PointerPte))
+    {
+        PMMPTE PteForAddr = PointerPte;
+        if ((ULONG_PTR)PteForAddr >= PTE_BASE_TTBR0)
+        {
+            PteForAddr = (PMMPTE)((ULONG_PTR)PteForAddr - TTBR0_ALIAS_DELTA);
+        }
+        VirtualAddress = MiPteToAddress(PteForAddr);
+        KiFlushSingleTb(FALSE, VirtualAddress);
+    }
+    else
+    {
+        UNREFERENCED_PARAMETER(VirtualAddress);
+    }
+
+    /* Propagate PXE-level writes to the real TTBR0/TTBR1 L0 page */
+    MiArm64SyncPxeWrite(PointerPte);
 #else
     UNREFERENCED_PARAMETER(VirtualAddress);
 #endif
@@ -1278,22 +1519,51 @@ MI_UPDATE_VALID_PTE(IN PMMPTE PointerPte,
                    IN MMPTE TempPte)
 {
     PVOID VirtualAddress;
+#if defined(_M_ARM64) || defined(__aarch64__)
+    ULONG64 OldValue;
+#endif
 
     /* Write the valid PTE */
     ASSERT(PointerPte->u.Hard.Valid == 1);
     ASSERT(TempPte.u.Hard.Valid == 1);
     ASSERT(PointerPte->u.Hard.PageFrameNumber == TempPte.u.Hard.PageFrameNumber);
 
+#if defined(_M_ARM64) || defined(__aarch64__)
+    OldValue = PointerPte->u.Long;
+#endif
     *PointerPte = TempPte;
 
 #if defined(_M_ARM64) || defined(__aarch64__)
+    MiArm64TraceUserPteWrite("MI_UPDATE_VALID_PTE",
+                             PointerPte,
+                             OldValue,
+                             TempPte.u.Long);
+
     /*
-     * ARM64: Invalidate TLB when updating a PTE.
-     * Even though the page frame number stays the same, protection bits
-     * or other attributes may have changed (e.g., read-only to read-write).
+     * ARM64: Invalidate TLB when updating a valid PTE.
+     *
+     * Only perform TLBI if the PTE pointer is in the page table self-map or
+     * TTBR0 alias region. Prototype PTEs in paged pool must not trigger TLBI
+     * because MiPteToAddress() returns a garbage VA for them.
+     * See MI_WRITE_VALID_PTE for the full rationale.
      */
-    VirtualAddress = MiPteToAddress(PointerPte);
-    KiFlushSingleTb(FALSE, VirtualAddress);
+    if (MI_IS_PTE_IN_PAGE_TABLE_REGION(PointerPte))
+    {
+        PMMPTE PteForAddr = PointerPte;
+        if ((ULONG_PTR)PteForAddr >= PTE_BASE_TTBR0)
+        {
+            PteForAddr = (PMMPTE)((ULONG_PTR)PteForAddr - TTBR0_ALIAS_DELTA);
+        }
+        VirtualAddress = MiPteToAddress(PteForAddr);
+        KiFlushSingleTb(FALSE, VirtualAddress);
+    }
+    else
+    {
+        UNREFERENCED_PARAMETER(VirtualAddress);
+    }
+
+    /* Propagate PXE-level writes to the real TTBR0/TTBR1 L0 page */
+    MiArm64SyncPxeWrite(PointerPte);
 #else
     UNREFERENCED_PARAMETER(VirtualAddress);
 #endif
@@ -1307,9 +1577,25 @@ VOID
 MI_WRITE_INVALID_PTE(IN PMMPTE PointerPte,
                      IN MMPTE InvalidPte)
 {
+#if defined(_M_ARM64) || defined(__aarch64__)
+    ULONG64 OldValue;
+#endif
     /* Write the invalid PTE */
     ASSERT(InvalidPte.u.Hard.Valid == 0);
+#if defined(_M_ARM64) || defined(__aarch64__)
+    OldValue = PointerPte->u.Long;
+#endif
     *PointerPte = InvalidPte;
+
+#if defined(_M_ARM64) || defined(__aarch64__)
+    MiArm64TraceUserPteWrite("MI_WRITE_INVALID_PTE",
+                             PointerPte,
+                             OldValue,
+                             InvalidPte.u.Long);
+
+    /* Propagate PXE-level writes to the real TTBR0/TTBR1 L0 page */
+    MiArm64SyncPxeWrite(PointerPte);
+#endif
 }
 
 //
@@ -1319,9 +1605,25 @@ FORCEINLINE
 VOID
 MI_ERASE_PTE(IN PMMPTE PointerPte)
 {
+#if defined(_M_ARM64) || defined(__aarch64__)
+    ULONG64 OldValue;
+#endif
     /* Zero out the PTE */
     ASSERT(PointerPte->u.Long != 0);
+#if defined(_M_ARM64) || defined(__aarch64__)
+    OldValue = PointerPte->u.Long;
+#endif
     PointerPte->u.Long = 0;
+
+#if defined(_M_ARM64) || defined(__aarch64__)
+    MiArm64TraceUserPteWrite("MI_ERASE_PTE",
+                             PointerPte,
+                             OldValue,
+                             0ULL);
+
+    /* Propagate PXE-level writes to the real TTBR0/TTBR1 L0 page */
+    MiArm64SyncPxeWrite(PointerPte);
+#endif
 }
 
 //
@@ -2773,6 +3075,13 @@ MiMakePdeExistAndMakeValid(
     IN KIRQL OldIrql
 );
 
+#if defined(_M_ARM64) || defined(__aarch64__)
+VOID
+MiArm64SyncSelfMapForUserAddress(
+    _In_ ULONG_PTR UserVirtualAddress
+);
+#endif
+
 VOID
 NTAPI
 MiWriteProtectSystemImage(
@@ -2862,59 +3171,208 @@ MiDecrementPageTableReferences(IN PVOID Address)
     return *RefCount;
 }
 #else
+
+#if defined(_M_ARM64) || defined(__aarch64__)
+/*
+ * ARM64 helper: Get the L3 (page table) page PFN for a user virtual address.
+ * Uses MiArm64UserPdeKseg0 from mm.h to walk TTBR0 via KSEG0.
+ * Returns the PFN or 0 on failure.
+ *
+ * Bug #42: The TTBR1 self-map PDE alias for user addresses can be stale.
+ * Walking TTBR0 via KSEG0 is always correct.
+ */
+FORCEINLINE
+PFN_NUMBER
+MiArm64GetUserL3Pfn(IN PVOID Address)
+{
+    PMMPTE Pde = MiArm64UserPdeKseg0(Address);
+    if (Pde == NULL || (Pde->u.Long & 0x3ULL) != 0x3ULL) return 0;
+    return (PFN_NUMBER)((Pde->u.Long & 0x0000FFFFFFFFF000ULL) >> PAGE_SHIFT);
+}
+
+/*
+ * MiArm64GetUserL3PfnSafe - Same as MiArm64GetUserL3Pfn but validates
+ * that the returned PFN is still ActiveAndValid. Returns 0 if the PFN
+ * has been freed (stale TTBR0 entry pointing to freed page table).
+ *
+ * Use this variant during process teardown/cleanup where page tables
+ * may have been freed by MiDeletePde.
+ */
+FORCEINLINE
+PFN_NUMBER
+MiArm64GetUserL3PfnSafe(IN PVOID Address)
+{
+    PFN_NUMBER L3Pfn = MiArm64GetUserL3Pfn(Address);
+    if (L3Pfn != 0 && L3Pfn <= MmHighestPhysicalPage)
+    {
+        PMMPFN PfnEntry = MiGetPfnEntry(L3Pfn);
+        if (PfnEntry != NULL && PfnEntry->u3.e1.PageLocation == ActiveAndValid)
+        {
+            return L3Pfn;
+        }
+    }
+    return 0;
+}
+#endif /* _M_ARM64 */
+
 FORCEINLINE
 USHORT
 MiIncrementPageTableReferences(IN PVOID Address)
 {
-    PMMPDE PointerPde = MiAddressToPde(Address);
     PMMPFN Pfn;
 
-    /* We should not tinker with this one. */
-    ASSERT(PointerPde != (PMMPDE)PXE_SELFMAP);
     DPRINT("Incrementing %p from %p\n", Address, _ReturnAddress());
 
     /* Make sure we're locked */
     ASSERT(PsGetCurrentThread()->OwnsProcessWorkingSetExclusive);
 
-    /* If we're bumping refcount, then it must be valid! */
-    ASSERT(PointerPde->u.Hard.Valid == 1);
+#if defined(_M_ARM64) || defined(__aarch64__)
+    /*
+     * Bug #42: For user addresses on ARM64, walk TTBR0 via KSEG0 to find
+     * the L3 page table PFN. The TTBR1 self-map PDE alias can be stale
+     * after new TTBR0 page table pages are created. Walking TTBR0 via
+     * KSEG0 is always correct.
+     */
+    if ((ULONG_PTR)Address < (ULONG_PTR)MmSystemRangeStart)
+    {
+        PFN_NUMBER L3Pfn = MiArm64GetUserL3Pfn(Address);
+        ASSERT(L3Pfn != 0);
 
-    /* This lies on the PFN */
-    Pfn = MiGetPfnEntry(PFN_FROM_PDE(PointerPde));
-    Pfn->OriginalPte.u.Soft.UsedPageTableEntries++;
+        Pfn = MiGetPfnEntry(L3Pfn);
 
-    ASSERT(Pfn->OriginalPte.u.Soft.UsedPageTableEntries <= PTE_PER_PAGE);
+        /*
+         * Only increment UsedPageTableEntries here, NOT ShareCount.
+         * ShareCount is managed centrally by MmCreateVirtualMappingUnsafeEx
+         * (increment when PTE written) and MiDeletePte/MmDeleteVirtualMappingEx
+         * (decrement when PTE removed).
+         */
+        Pfn->OriginalPte.u.Soft.UsedPageTableEntries++;
+        ASSERT(Pfn->OriginalPte.u.Soft.UsedPageTableEntries <= PTE_PER_PAGE);
 
-    return Pfn->OriginalPte.u.Soft.UsedPageTableEntries;
+        return Pfn->OriginalPte.u.Soft.UsedPageTableEntries;
+    }
+#endif
+
+    {
+        PMMPDE PointerPde = MiAddressToPde(Address);
+
+        /* We should not tinker with this one. */
+        ASSERT(PointerPde != (PMMPDE)PXE_SELFMAP);
+
+        /* If we're bumping refcount, then it must be valid! */
+        ASSERT(PointerPde->u.Hard.Valid == 1);
+
+        /* This lies on the PFN */
+        Pfn = MiGetPfnEntry(PFN_FROM_PDE(PointerPde));
+        Pfn->OriginalPte.u.Soft.UsedPageTableEntries++;
+
+        ASSERT(Pfn->OriginalPte.u.Soft.UsedPageTableEntries <= PTE_PER_PAGE);
+
+        return Pfn->OriginalPte.u.Soft.UsedPageTableEntries;
+    }
 }
 
 FORCEINLINE
 USHORT
 MiDecrementPageTableReferences(IN PVOID Address)
 {
-    PMMPDE PointerPde = MiAddressToPde(Address);
     PMMPFN Pfn;
 
-    /* We should not tinker with this one. */
-    ASSERT(PointerPde != (PMMPDE)PXE_SELFMAP);
-
-    DPRINT("Decrementing %p from %p\n", PointerPde, _ReturnAddress());
+    DPRINT("Decrementing %p from %p\n", Address, _ReturnAddress());
 
     /* Make sure we're locked */
     ASSERT(PsGetCurrentThread()->OwnsProcessWorkingSetExclusive);
 
-    /* If we're decreasing refcount, then it must be valid! */
-    ASSERT(PointerPde->u.Hard.Valid == 1);
+#if defined(_M_ARM64) || defined(__aarch64__)
+    /*
+     * Bug #42: For user addresses on ARM64, walk TTBR0 via KSEG0 to find
+     * the L3 page table PFN. Same stale self-map alias issue as increment.
+     */
+    if ((ULONG_PTR)Address < (ULONG_PTR)MmSystemRangeStart)
+    {
+        PFN_NUMBER L3Pfn = MiArm64GetUserL3PfnSafe(Address);
 
-    /* This lies on the PFN */
-    Pfn = MiGetPfnEntry(PFN_FROM_PDE(PointerPde));
+        /*
+         * Bug #56: If L3 PFN is 0, the page table was already freed by
+         * MiDeletePde (stale TTBR0 entry cleared). Return 1 to prevent
+         * caller from cascading into another MiDeletePde.
+         */
+        if (L3Pfn == 0)
+        {
+            return 1;
+        }
 
-    ASSERT(Pfn->OriginalPte.u.Soft.UsedPageTableEntries != 0);
-    Pfn->OriginalPte.u.Soft.UsedPageTableEntries--;
+        Pfn = MiGetPfnEntry(L3Pfn);
+        if (Pfn->OriginalPte.u.Soft.UsedPageTableEntries == 0)
+        {
+            USHORT Recount = 0;
+            PMMPTE PointerPte = MiAddressToPte(Address);
+            PMMPTE PageBase;
+            ULONG i;
 
-    ASSERT(Pfn->OriginalPte.u.Soft.UsedPageTableEntries < PTE_PER_PAGE);
+            /*
+             * ARM64 recovery: our tracked counter drifted to zero while we're
+             * deleting a user VA. Recount non-zero software PTEs in this
+             * self-map page (post-delete state) and use that value so caller
+             * can correctly decide whether to cascade into MiDeletePde.
+             */
+            if (PointerPte != NULL)
+            {
+                PageBase = (PMMPTE)((ULONG_PTR)PointerPte & ~(PAGE_SIZE - 1));
+                for (i = 0; i < PTE_PER_PAGE; i++)
+                {
+                    if (PageBase[i].u.Long != 0)
+                    {
+                        Recount++;
+                    }
+                }
+            }
 
-    return Pfn->OriginalPte.u.Soft.UsedPageTableEntries;
+            DbgPrint("[UPTEBUG] MiDecrementPageTableReferences ARM64-user: UNDERFLOW!\n"
+                     "  Address=%p Caller=%p L3Pfn=%lx UsedPTE=%u Recount=%u Proc=%s\n",
+                     Address, _ReturnAddress(), (ULONG)L3Pfn,
+                     (unsigned)Pfn->OriginalPte.u.Soft.UsedPageTableEntries, (unsigned)Recount,
+                     (PCSTR)((PEPROCESS)KeGetCurrentThread()->ApcState.Process)->ImageFileName);
+            Pfn->OriginalPte.u.Soft.UsedPageTableEntries = Recount;
+            return Recount;
+        }
+        Pfn->OriginalPte.u.Soft.UsedPageTableEntries--;
+        ASSERT(Pfn->OriginalPte.u.Soft.UsedPageTableEntries < PTE_PER_PAGE);
+        return Pfn->OriginalPte.u.Soft.UsedPageTableEntries;
+    }
+#endif
+
+    {
+        PMMPDE PointerPde = MiAddressToPde(Address);
+
+        /* We should not tinker with this one. */
+        ASSERT(PointerPde != (PMMPDE)PXE_SELFMAP);
+
+        /* If we're decreasing refcount, then it must be valid! */
+        ASSERT(PointerPde->u.Hard.Valid == 1);
+
+        /* This lies on the PFN */
+        Pfn = MiGetPfnEntry(PFN_FROM_PDE(PointerPde));
+
+        if (Pfn->OriginalPte.u.Soft.UsedPageTableEntries == 0)
+        {
+            DbgPrint("[UPTEBUG] MiDecrementPageTableReferences: UNDERFLOW!\n"
+                     "  Address=%p Caller=%p\n"
+                     "  PDE=%p PDE.Long=0x%016llx PFN=%lx\n"
+                     "  UsedPTE=%u Proc=%s\n",
+                     Address, _ReturnAddress(),
+                     PointerPde, PointerPde->u.Long, (ULONG)PFN_FROM_PDE(PointerPde),
+                     (unsigned)Pfn->OriginalPte.u.Soft.UsedPageTableEntries,
+                     (PCSTR)((PEPROCESS)KeGetCurrentThread()->ApcState.Process)->ImageFileName);
+            /* Return non-zero to prevent caller from cascading into MiDeletePde */
+            return 1;
+        }
+        Pfn->OriginalPte.u.Soft.UsedPageTableEntries--;
+
+        ASSERT(Pfn->OriginalPte.u.Soft.UsedPageTableEntries < PTE_PER_PAGE);
+
+        return Pfn->OriginalPte.u.Soft.UsedPageTableEntries;
+    }
 }
 #endif
 
@@ -2933,15 +3391,52 @@ MiDeletePde(
 
     /* Kill this one as a PTE */
     MiDeletePte((PMMPTE)PointerPde, MiPdeToPte(PointerPde), CurrentProcess, NULL);
+
+#if defined(_M_ARM64) || defined(__aarch64__)
+    /*
+     * Bug #56: Clear the actual TTBR0 L2 entry after erasing the self-map PDE,
+     * but ONLY if the L3 page table PFN was actually freed.
+     *
+     * On ARM64, MiDeletePte only erases the self-map alias PDE (in TTBR1 space).
+     * The actual TTBR0 L2 entry still points to the L3 page table.
+     *
+     * Only clear when L3 PFN is no longer ActiveAndValid (ShareCount reached 0,
+     * page was freed by MiDecrementShareCount inside MiDeletePte above).
+     */
+    {
+        PVOID UserVa = MiPdeToAddress(PointerPde);
+        PFN_NUMBER L3Pfn = MiArm64GetUserL3Pfn(UserVa);
+
+        if (L3Pfn != 0 && L3Pfn <= MmHighestPhysicalPage)
+        {
+            PMMPFN L3PfnEntry = MiGetPfnEntry(L3Pfn);
+            if (L3PfnEntry != NULL &&
+                L3PfnEntry->u3.e1.PageLocation != ActiveAndValid)
+            {
+                MiArm64ClearTtbr0Entry(UserVa, 2); /* Clear L2 */
+            }
+        }
+    }
+#endif
+
 #if _MI_PAGING_LEVELS >= 3
     /* Cascade down */
     if (MiDecrementPageTableReferences(MiPdeToPte(PointerPde)) == 0)
     {
         MiDeletePte(MiPdeToPpe(PointerPde), PointerPde, CurrentProcess, NULL);
+
+#if defined(_M_ARM64) || defined(__aarch64__)
+        MiArm64ClearTtbr0Entry(MiPdeToAddress(PointerPde), 1); /* Clear L1 */
+#endif
+
 #if _MI_PAGING_LEVELS == 4
         if (MiDecrementPageTableReferences(PointerPde) == 0)
         {
             MiDeletePte(MiPdeToPxe(PointerPde), MiPdeToPpe(PointerPde), CurrentProcess, NULL);
+
+#if defined(_M_ARM64) || defined(__aarch64__)
+            MiArm64ClearTtbr0Entry(MiPdeToAddress(PointerPde), 0); /* Clear L0 */
+#endif
         }
 #endif
     }

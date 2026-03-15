@@ -14,6 +14,12 @@
 #define NDEBUG
 #include <debug.h>
 
+#if defined(_M_ARM64)
+VOID
+KiArm64FreeFpState(
+    _Inout_ PKTHREAD Thread);
+#endif
+
 /* GLOBALS *******************************************************************/
 
 LIST_ENTRY PspReaperListHead = { NULL, NULL };
@@ -90,6 +96,8 @@ PspTerminateProcess(IN PEPROCESS Process,
     if (Process->BreakOnTermination)
     {
         /* Break to debugger */
+        DPRINT1("PspTerminateProcess: CRITICAL process %p (%s) ExitStatus=0x%lx\n",
+                Process, Process->ImageFileName, ExitStatus);
         PspCatchCriticalBreak("Terminating critical process 0x%p (%s)\n",
                               Process,
                               Process->ImageFileName);
@@ -184,6 +192,9 @@ PspReapRoutine(IN PVOID Context)
             /* Get the first Thread Entry */
             Thread = CONTAINING_RECORD(NextEntry, ETHREAD, ReaperLink);
 
+            /* Validate thread object type before processing */
+            ASSERT((Thread->Tcb.Header.Type & KOBJECT_TYPE_MASK) == ThreadObject);
+
             /* Delete this entry's kernel stack */
             MmDeleteKernelStack((PVOID)Thread->Tcb.StackBase,
                                 Thread->Tcb.LargeStack);
@@ -257,6 +268,21 @@ PspDeleteProcess(IN PVOID ObjectBody)
     PAGED_CODE();
     PSTRACE(PS_KILL_DEBUG, "ObjectBody: %p\n", ObjectBody);
     PSREFTRACE(Process);
+
+    /* Validate the process object type at entry - catch corruption early */
+    ASSERT(Process != NULL);
+    if ((Process->Pcb.Header.Type & KOBJECT_TYPE_MASK) != ProcessObject)
+    {
+        DPRINT1("[PspDeleteProcess] CORRUPT Process=%p Header.Type=0x%x (expected 0x%x) ImageFileName=%.16s\n",
+                Process, (ULONG)Process->Pcb.Header.Type, (ULONG)ProcessObject,
+                Process->ImageFileName);
+        KeBugCheckEx(CRITICAL_OBJECT_TERMINATION,
+                     (ULONG_PTR)Process->Pcb.Header.Type,
+                     (ULONG_PTR)Process,
+                     (ULONG_PTR)Process->ImageFileName,
+                     0xDEAD0010);
+    }
+    ASSERT_PROCESS(&Process->Pcb);
 
     /* Check if it has an Active Process Link */
     if (Process->ActiveProcessLinks.Flink)
@@ -401,6 +427,10 @@ PspDeleteThread(IN PVOID ObjectBody)
     PSREFTRACE(Thread);
     ASSERT(Thread->Tcb.Win32Thread == NULL);
 
+#if defined(_M_ARM64)
+    KiArm64FreeFpState(&Thread->Tcb);
+#endif
+
     /* Check if we have a stack */
     if (Thread->Tcb.InitialStack)
     {
@@ -425,6 +455,19 @@ PspDeleteThread(IN PVOID ObjectBody)
 
     /* Make sure the thread was inserted, before continuing */
     if (!Process) return;
+
+    /* Validate the process object type before accessing it */
+    ASSERT((Process->Pcb.Header.Type & KOBJECT_TYPE_MASK) == ProcessObject);
+    if ((Process->Pcb.Header.Type & KOBJECT_TYPE_MASK) != ProcessObject)
+    {
+        DPRINT1("[PspDeleteThread] CORRUPT Process=%p Header.Type=0x%x Thread=%p\n",
+                Process, (ULONG)Process->Pcb.Header.Type, Thread);
+        KeBugCheckEx(CRITICAL_OBJECT_TERMINATION,
+                     (ULONG_PTR)Process->Pcb.Header.Type,
+                     (ULONG_PTR)Process,
+                     (ULONG_PTR)Thread,
+                     0xDEAD0020);
+    }
 
     /* Check if the thread list is valid */
     if (Thread->ThreadListEntry.Flink)
@@ -472,6 +515,10 @@ PspExitThread(IN NTSTATUS ExitStatus)
     Thread = PsGetCurrentThread();
     CurrentProcess = Thread->ThreadsProcess;
     ASSERT((Thread) == PsGetCurrentThread());
+
+    DPRINT1("[TERM] PspExitThread: ENTER Proc=%p(%s) Thread=%p ExitStatus=0x%lx ActiveThreads=%lu IRQL=%d\n",
+            CurrentProcess, CurrentProcess->ImageFileName, Thread, ExitStatus,
+            CurrentProcess->ActiveThreads, KeGetCurrentIrql());
 
     /* Can't terminate a thread if it attached another process */
     if (KeIsAttachedProcess())
@@ -528,6 +575,9 @@ PspExitThread(IN NTSTATUS ExitStatus)
     /* Decrease the active thread count, and check if it's 0 */
     if (!(--CurrentProcess->ActiveThreads))
     {
+        DPRINT1("[TERM] PspExitThread: LAST THREAD Proc=%s ActiveThreads now 0\n",
+                CurrentProcess->ImageFileName);
+
         /* Set the delete flag */
         InterlockedOr((PLONG)&CurrentProcess->Flags, PSF_PROCESS_DELETE_BIT);
 
@@ -902,7 +952,14 @@ PspExitThread(IN NTSTATUS ExitStatus)
     }
 
     /* Clean address space if this was the last thread */
-    if (Last) MmCleanProcessAddressSpace(CurrentProcess);
+    if (Last)
+    {
+        DPRINT1("[TERM] PspExitThread: calling MmCleanProcessAddressSpace Proc=%s\n",
+                CurrentProcess->ImageFileName);
+        MmCleanProcessAddressSpace(CurrentProcess);
+        DPRINT1("[TERM] PspExitThread: MmCleanProcessAddressSpace DONE Proc=%s\n",
+                CurrentProcess->ImageFileName);
+    }
 
     /* Call the Lego routine */
     if (Thread->Tcb.LegoData) PspRunLegoRoutine(&Thread->Tcb);
@@ -922,7 +979,9 @@ PspExitThread(IN NTSTATUS ExitStatus)
     /* Signal the process if this was the last thread */
     if (Last) KeSetProcess(&CurrentProcess->Pcb, 0, FALSE);
 
-    /* Terminate the Thread from the Scheduler */
+    /* Terminate the Thread from the Scheduler -- this should NEVER return */
+    DPRINT1("[TERM] PspExitThread: calling KeTerminateThread Proc=%s Last=%d\n",
+            CurrentProcess->ImageFileName, Last);
     KeTerminateThread(0);
 }
 
@@ -1198,11 +1257,19 @@ NtTerminateProcess(IN HANDLE ProcessHandle OPTIONAL,
                                        KeGetPreviousMode(),
                                        (PVOID*)&Process,
                                        NULL);
-    if (!NT_SUCCESS(Status)) return(Status);
+    if (!NT_SUCCESS(Status))
+    {
+        DPRINT1("[TERM] NtTerminateProcess: ObReferenceObjectByHandle FAILED Status=0x%lx Handle=%p PrevMode=%d Proc=%s\n",
+                Status, ProcessHandle, KeGetPreviousMode(), PsGetCurrentProcess()->ImageFileName);
+        return(Status);
+    }
 
     /* Check if this is a Critical Process, and Bugcheck */
     if (Process->BreakOnTermination)
     {
+        DPRINT1("NtTerminateProcess: CRITICAL process %p (%s) ExitStatus=0x%lx KillByHandle=%d caller=%s\n",
+                Process, Process->ImageFileName, ExitStatus, KillByHandle,
+                PsGetCurrentProcess()->ImageFileName);
         /* Break to debugger */
         PspCatchCriticalBreak("Terminating critical process 0x%p (%s)\n",
                               Process,
@@ -1213,6 +1280,8 @@ NtTerminateProcess(IN HANDLE ProcessHandle OPTIONAL,
     if (!ExAcquireRundownProtection(&Process->RundownProtect))
     {
         /* Failed to lock, fail */
+        DPRINT1("[TERM] NtTerminateProcess: RundownProtect FAILED Proc=%p(%s) KillByHandle=%d Flags=0x%lx\n",
+                Process, Process->ImageFileName, KillByHandle, Process->Flags);
         ObDereferenceObject(Process);
         return STATUS_PROCESS_IS_TERMINATING;
     }
@@ -1252,11 +1321,18 @@ NtTerminateProcess(IN HANDLE ProcessHandle OPTIONAL,
         /* Also make sure the caller gave us our handle */
         if (KillByHandle)
         {
+            DPRINT1("[TERM] NtTerminateProcess: SELF-KILL Proc=%p(%s) ExitStatus=0x%lx ActiveThreads=%lu\n",
+                    Process, Process->ImageFileName, ExitStatus, Process->ActiveThreads);
+
             /* Dereference the process */
             ObDereferenceObject(Process);
 
-            /* Terminate ourselves */
+            /* Terminate ourselves -- this should NEVER return */
             PspTerminateThreadByPointer(CurrentThread, ExitStatus, TRUE);
+
+            /* If we get here, PspTerminateThreadByPointer failed to kill the thread */
+            DPRINT1("[TERM] NtTerminateProcess: CRITICAL - PspTerminateThreadByPointer RETURNED for self-kill! Proc=%s\n",
+                    CurrentProcess->ImageFileName);
         }
     }
     else if (ExitStatus == DBG_TERMINATE_PROCESS)

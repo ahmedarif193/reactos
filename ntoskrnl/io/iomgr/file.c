@@ -358,6 +358,7 @@ IopParseDevice(IN PVOID ParseObject,
     IOTRACE(IO_FILE_DEBUG, "ParseObject: %p. RemainingName: %wZ\n",
             ParseObject, RemainingName);
 
+
     for (Attempt = 0; Attempt < IOP_MAX_REPARSE_TRAVERSAL; ++Attempt)
     {
         /* Assume failure */
@@ -2871,6 +2872,7 @@ IopCreateFile(OUT PHANDLE FileHandle,
      * status, which is in the Open Packet's Final Status, and determined
      * by the Parse Check member.
      */
+
     Status = ObOpenObjectByName(ObjectAttributes,
                                 NULL,
                                 AccessMode,
@@ -3023,9 +3025,10 @@ IoCreateFile(OUT PHANDLE FileHandle,
              IN PVOID ExtraCreateParameters OPTIONAL,
              IN ULONG Options)
 {
+    NTSTATUS IoCfStatus;
     PAGED_CODE();
 
-    return IopCreateFile(FileHandle,
+    IoCfStatus = IopCreateFile(FileHandle,
                          DesiredAccess,
                          ObjectAttributes,
                          IoStatusBlock,
@@ -3041,6 +3044,8 @@ IoCreateFile(OUT PHANDLE FileHandle,
                          Options,
                          0,
                          NULL);
+
+    return IoCfStatus;
 }
 
 /*

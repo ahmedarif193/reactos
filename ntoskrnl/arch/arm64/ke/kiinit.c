@@ -6,11 +6,20 @@
  */
 
 #include <ntoskrnl.h>
+#include "../include/fpstate.h"
 #define NDEBUG
 #include <debug.h>
 #include "../include/arm64pl011.h"
 
 struct _KPCR;
+
+FORCEINLINE
+ULONG64
+KiArm64TtbrToPa(
+    _In_ ULONG64 Ttbr)
+{
+    return Ttbr & 0x0000FFFFFFFFF000ULL;
+}
 
 #ifndef PCR_MAJOR_VERSION
 #define PCR_MAJOR_VERSION 1
@@ -201,6 +210,8 @@ KiInitializeKernel(_Inout_ PKPROCESS InitProcess,
     ULONG_PTR DirectoryTableBase[2] = {0, 0};
     /* Quiet bring-up: suppress verbose kernel init traces */
 
+    KiArm64RawPuts("[KiInitKernel] ENTRY\n");
+
     if ((InitProcess == NULL) ||
         (InitThread == NULL) ||
         (Prcb == NULL) ||
@@ -220,7 +231,71 @@ KiInitializeKernel(_Inout_ PKPROCESS InitProcess,
     /* Boot CPU only work */
     if (Number == 0)
     {
-        /* quiet */
+        {
+            ULONG64 Ttbr0;
+            ULONG64 Ttbr1;
+
+            __asm__ __volatile__("mrs %0, ttbr0_el1" : "=r"(Ttbr0));
+            __asm__ __volatile__("mrs %0, ttbr1_el1" : "=r"(Ttbr1));
+
+            DirectoryTableBase[0] = (ULONG_PTR)KiArm64TtbrToPa(Ttbr0);
+            DirectoryTableBase[1] = (ULONG_PTR)KiArm64TtbrToPa(Ttbr1);
+        }
+
+        /*
+         * ARM64 CRITICAL: Configure TCR_EL1.T0SZ for 48-bit user VA.
+         *
+         * T0SZ (bits [5:0]) controls TTBR0 (user) VA size: VA_bits = 64 - T0SZ.
+         * The bootloader preserves firmware's T0SZ because it runs from identity-
+         * mapped (TTBR0) addresses. Now that we're running entirely from TTBR1
+         * (kernel addresses), we can safely reconfigure T0SZ for user mode.
+         */
+        {
+            ULONG64 TcrEl1;
+            ULONG64 T0sz;
+            ULONG64 NewTcr;
+
+            __asm__ __volatile__("mrs %0, tcr_el1" : "=r"(TcrEl1));
+            T0sz = TcrEl1 & 0x3FULL;
+
+            if (T0sz != 16)
+            {
+                /* Build new TCR with T0SZ = 16 for 48-bit user VA */
+                NewTcr = TcrEl1 & ~0x3FULL;
+                NewTcr |= 16ULL;
+
+                /* Ensure proper TTBR0 attributes for 4KB granule, 48-bit VA */
+                NewTcr &= ~(0x3ULL << 14);   /* TG0 = 0b00 (4KB) */
+                NewTcr |= (0x3ULL << 12);    /* SH0 = Inner Shareable */
+                NewTcr &= ~(0x3ULL << 10);
+                NewTcr |= (0x1ULL << 10);    /* ORGN0 = Write-Back Write-Allocate */
+                NewTcr &= ~(0x3ULL << 8);
+                NewTcr |= (0x1ULL << 8);     /* IRGN0 = Write-Back Write-Allocate */
+
+                /*
+                 * Hardware Access Flag management (ARMv8.1+ optional feature).
+                 *
+                 * CRITICAL: We must check ID_AA64MMFR1_EL1.HAFDBS before enabling
+                 * TCR.HA, as not all ARMv8.0 implementations support it.
+                 *
+                 * HAFDBS (bits [3:0] of MMFR1):
+                 *   0b0000 = Not supported
+                 *   0b0001 = Access flag hardware update supported (HA)
+                 *   0b0010 = AF + Dirty state hardware update supported (HA + HD)
+                 *
+                 * We check for this below after reading MMFR1 (at line ~729).
+                 * For now, do NOT unconditionally enable TCR.HA here.
+                 */
+
+                __asm__ __volatile__("dsb ish" ::: "memory");
+                __asm__ __volatile__("msr tcr_el1, %0" :: "r"(NewTcr) : "memory");
+                __asm__ __volatile__("isb" ::: "memory");
+                __asm__ __volatile__("tlbi vmalle1is" ::: "memory");
+                __asm__ __volatile__("dsb ish" ::: "memory");
+                __asm__ __volatile__("isb" ::: "memory");
+            }
+        }
+
         KxUnexpectedInterrupt.DispatchAddress = KiUnexpectedInterrupt;
         RtlZeroMemory(&KxUnexpectedInterrupt.DispatchCode,
                       sizeof(KxUnexpectedInterrupt.DispatchCode));
@@ -282,6 +357,7 @@ KiInitializeKernel(_Inout_ PKPROCESS InitProcess,
     __asm__ volatile("isb");
 
     ExpInitializeExecutive(Number, LoaderBlock);
+    KiArm64RawPuts("[KiInitKernel] ExpInitializeExecutive done\n");
 
     /*
      * ARM64 parity with amd64: Do NOT invoke Phase1Initialization directly
@@ -300,8 +376,18 @@ KiInitializeKernel(_Inout_ PKPROCESS InitProcess,
         Prcb->AdjustDpcThreshold = KiAdjustDpcThreshold;
     }
 
-    KfRaiseIrql(DISPATCH_LEVEL);
+    /*
+     * ARM64: Raise to SYNCH_LEVEL (not DISPATCH_LEVEL) for scheduler operations.
+     * On x86/amd64, SYNCH_LEVEL == DISPATCH_LEVEL == 2, so this doesn't matter.
+     * On ARM64, SYNCH_LEVEL (12) > DISPATCH_LEVEL (2). The dispatcher lock
+     * (KiAcquireDispatcherLockAtSynchLevel) asserts IRQL >= SYNCH_LEVEL.
+     * KeSetPriorityThread internally acquires the dispatcher lock.
+     */
+    KiArm64RawPuts("[KiInitKernel] raising to SYNCH_LEVEL\n");
+    KfRaiseIrql(SYNCH_LEVEL);
+    KiArm64RawPuts("[KiInitKernel] calling KeSetPriorityThread\n");
     KeSetPriorityThread(InitThread, 0);
+    KiArm64RawPuts("[KiInitKernel] KeSetPriorityThread done\n");
 
     KiAcquirePrcbLock(Prcb);
     if (Prcb->NextThread == NULL)
@@ -309,8 +395,10 @@ KiInitializeKernel(_Inout_ PKPROCESS InitProcess,
         KiIdleSummary |= ((KAFFINITY)1 << Number);
     }
     KiReleasePrcbLock(Prcb);
+    KiArm64RawPuts("[KiInitKernel] PrcbLock released\n");
 
     KfRaiseIrql(HIGH_LEVEL);
+    KiArm64RawPuts("[KiInitKernel] raised to HIGH_LEVEL\n");
     LoaderBlock->Prcb = 0;
 
     Thread = KeGetCurrentThread();
@@ -318,6 +406,7 @@ KiInitializeKernel(_Inout_ PKPROCESS InitProcess,
     {
         Thread->WaitIrql = DISPATCH_LEVEL;
     }
+    KiArm64RawPuts("[KiInitKernel] entering KiIdleLoop\n");
     KiIdleLoop();
 }
 
@@ -326,39 +415,69 @@ NTAPI
 KiInitializePcr(_In_ ULONG ProcessorNumber,
                 _Inout_ PKIPCR Pcr,
                 _Inout_ PKTHREAD IdleThread,
+                _In_ BOOLEAN SetCurrentPcr,
                 _In_opt_ PVOID PanicStack,
                 _In_opt_ PVOID InterruptStack)
 {
     ULONG CacheCount = 0;
     PARM64_LOADER_BLOCK Arm64Block;
     PCACHE_DESCRIPTOR Cache;
+    PKIPCR EntryPcr;
 
     UNREFERENCED_PARAMETER(PanicStack);
     UNREFERENCED_PARAMETER(InterruptStack);
 
+    EntryPcr = KeGetPcr();
     RtlZeroMemory(Pcr, sizeof(*Pcr));
 
-    KeArm64CurrentPcr = Pcr;
-    KeArm64CurrentIrql = PASSIVE_LEVEL;
-    KeArm64DpcRoutineActive = FALSE;
-    KeArm64CurrentThread = IdleThread;
+    if (SetCurrentPcr)
+    {
+        /*
+         * ARM64 CRITICAL: initialize TPIDR_EL1 before any code that may call
+         * KeGetPcr(). This path is only valid when we are bringing up the
+         * currently running CPU.
+         */
+        __asm__ __volatile__("msr tpidr_el1, %0" : : "r"(Pcr) : "memory");
+        __asm__ __volatile__("isb" ::: "memory");
 
-    /*
-     * ARM64 CRITICAL: Issue a data memory barrier after updating global
-     * processor state variables. On ARM64's weakly-ordered memory model,
-     * stores to global variables may not be visible to subsequent reads
-     * (even on the same CPU in early boot before caches are fully coherent)
-     * without an explicit barrier.
-     *
-     * This ensures that when ExInitPoolLookasidePointers (or any other code)
-     * reads KeArm64CurrentPcr, it sees the value we just wrote, not stale
-     * data or uninitialized memory.
-     *
-     * DMB ISH (Inner Shareable) is sufficient here as we're on a single CPU
-     * during early boot, but it ensures proper ordering with respect to any
-     * memory-mapped I/O or cache operations.
-     */
-    __asm__ __volatile__("dmb ish" ::: "memory");
+        /* Verify TPIDR_EL1 was set correctly (diagnostic check) */
+        {
+            PVOID VerifyPcr;
+            __asm__ __volatile__("mrs %0, tpidr_el1" : "=r"(VerifyPcr));
+            DPRINT1("CPU %lu: TPIDR_EL1 initialized to PCR @ %p (verify: %p)\n",
+                    ProcessorNumber, Pcr, VerifyPcr);
+            if (VerifyPcr != Pcr)
+            {
+                KeBugCheckEx(PHASE0_INITIALIZATION_FAILED,
+                             ('A' << 24) | ('R' << 16) | ('M' << 8) | '6',
+                             (ULONG_PTR)Pcr,
+                             (ULONG_PTR)VerifyPcr,
+                             1);
+            }
+        }
+
+        /*
+         * Set global early-boot current CPU state.
+         *
+         * SMP CRITICAL: These globals are only valid for the BSP (CPU 0).
+         * APs must NOT overwrite them - doing so corrupts the BSP's IRQL
+         * tracking, breaking spinlocks and pool operations on the BSP.
+         * APs rely on TPIDR_EL1 → PCR for per-CPU state.
+         */
+        if (ProcessorNumber == 0)
+        {
+            KeArm64CurrentPcr = Pcr;
+            KeArm64CurrentIrql = PASSIVE_LEVEL;
+            KeArm64DpcRoutineActive = FALSE;
+            KeArm64CurrentThread = IdleThread;
+        }
+        __asm__ __volatile__("dmb ish" ::: "memory");
+    }
+    else
+    {
+        /* Offline AP setup must not switch the currently executing CPU context. */
+        ASSERT(KeGetPcr() == EntryPcr);
+    }
 
     Pcr->Self = (struct _KPCR *)Pcr;
     Pcr->CurrentPrcb = &Pcr->Prcb;
@@ -380,6 +499,8 @@ KiInitializePcr(_In_ ULONG ProcessorNumber,
     Pcr->Prcb.Number = (UCHAR)ProcessorNumber;
     Pcr->Prcb.SetMember = 1ULL << ProcessorNumber;
     Pcr->Prcb.MultiThreadProcessorSet = Pcr->Prcb.SetMember;
+    Pcr->Prcb.ParentNode = KeNodeBlock[0];
+    Pcr->Prcb.ParentNode->ProcessorMask |= Pcr->Prcb.SetMember;
 
     Pcr->Prcb.CurrentThread = IdleThread;
     Pcr->Prcb.IdleThread = IdleThread;
@@ -508,9 +629,9 @@ KiInitializeSystem(_Inout_ PLOADER_PARAMETER_BLOCK LoaderBlock)
     KAFFINITY ProcessorMask;
     ULONG ProcessorNumber;
 
+    BOOLEAN IsBsp;
+
     KiArm64RawPuts("[KiInitSys] ENTRY\n");
-    KiArm64PrepareBootPcr(LoaderBlock);
-    KiArm64RawPuts("[KiInitSys] PrepareBootPcr done\n");
 
     if (LoaderBlock == NULL)
     {
@@ -518,32 +639,66 @@ KiInitializeSystem(_Inout_ PLOADER_PARAMETER_BLOCK LoaderBlock)
         KeBugCheckEx(PHASE0_INITIALIZATION_FAILED, 'A64K', 'LDR', 0, 0);
     }
 
+    /*
+     * Detect BSP vs AP: the BSP calls this first (KeNumberProcessors == 0).
+     * APs call this after KeStartAllProcessors has incremented the count.
+     */
+    IsBsp = (KeNumberProcessors == 0);
+
+    if (IsBsp)
+    {
+        /*
+         * BSP path: set up bootstrap PCR and convert FreeLdr physical
+         * addresses to KSEG0 virtual addresses.
+         */
+        KiArm64PrepareBootPcr(LoaderBlock);
+        KiArm64RawPuts("[KiInitSys] BSP PrepareBootPcr done\n");
+    }
+    else
+    {
+        /*
+         * AP path: do NOT overwrite BSP globals (KeArm64CurrentPcr, etc.)
+         * and do NOT call KiArm64PrepareBootPcr. The AP's PCR is pre-allocated
+         * by KeStartAllProcessors and passed via Arm64Block->PcrPage.
+         * Addresses are already in kernel VA space - no KSEG0 conversion needed.
+         */
+        KiArm64RawPuts("[KiInitSys] AP path (skip PrepareBootPcr)\n");
+    }
+
     KiArm64RawPuts("[KiInitSys] LoaderBlock OK\n");
     KeLoaderBlock = LoaderBlock;
     Arm64Block = &LoaderBlock->u.Arm64;
 
+    if (IsBsp)
+    {
+        /*
+         * BSP only: FreeLdr passes physical addresses that need KSEG0 conversion.
+         * AP addresses are already kernel VAs set by KeStartAllProcessors.
+         */
 #define ARM64_LDR_TO_VIRT(Value) \
     (((ULONG_PTR)(Value) < (ULONG_PTR)KSEG0_BASE) ? \
         ((ULONG_PTR)(Value) + (ULONG_PTR)KSEG0_BASE) : \
         (ULONG_PTR)(Value))
 
-    LoaderBlock->Thread = ARM64_LDR_TO_VIRT(LoaderBlock->Thread);
-    LoaderBlock->Process = ARM64_LDR_TO_VIRT(LoaderBlock->Process);
-    if (LoaderBlock->KernelStack != 0)
-    {
-        LoaderBlock->KernelStack = ARM64_LDR_TO_VIRT(LoaderBlock->KernelStack);
-    }
-    Arm64Block->PcrPage = ARM64_LDR_TO_VIRT(Arm64Block->PcrPage);
-    Arm64Block->PanicStack = ARM64_LDR_TO_VIRT(Arm64Block->PanicStack);
-    Arm64Block->InterruptStack = ARM64_LDR_TO_VIRT(Arm64Block->InterruptStack);
+        LoaderBlock->Thread = ARM64_LDR_TO_VIRT(LoaderBlock->Thread);
+        LoaderBlock->Process = ARM64_LDR_TO_VIRT(LoaderBlock->Process);
+        if (LoaderBlock->KernelStack != 0)
+        {
+            LoaderBlock->KernelStack = ARM64_LDR_TO_VIRT(LoaderBlock->KernelStack);
+        }
+        Arm64Block->PcrPage = ARM64_LDR_TO_VIRT(Arm64Block->PcrPage);
+        Arm64Block->PanicStack = ARM64_LDR_TO_VIRT(Arm64Block->PanicStack);
+        Arm64Block->InterruptStack = ARM64_LDR_TO_VIRT(Arm64Block->InterruptStack);
 
 #undef ARM64_LDR_TO_VIRT
+    }
 
     InitialThread = (PKTHREAD)(ULONG_PTR)LoaderBlock->Thread;
     InitialProcess = (PKPROCESS)(ULONG_PTR)LoaderBlock->Process;
 
-    if (InitialThread != NULL)
+    if (IsBsp && InitialThread != NULL)
     {
+        /* BSP only: Convert stack addresses from FreeLdr physical to KSEG0 */
         if ((ULONG_PTR)InitialThread->InitialStack < (ULONG_PTR)KSEG0_BASE)
         {
             InitialThread->InitialStack = (PVOID)((ULONG_PTR)InitialThread->InitialStack +
@@ -560,7 +715,6 @@ KiInitializeSystem(_Inout_ PLOADER_PARAMETER_BLOCK LoaderBlock)
             InitialThread->KernelStack = (PVOID)((ULONG_PTR)InitialThread->KernelStack +
                                                  (ULONG_PTR)KSEG0_BASE);
         }
-
     }
 
     if (InitialThread != NULL)
@@ -582,6 +736,7 @@ KiInitializeSystem(_Inout_ PLOADER_PARAMETER_BLOCK LoaderBlock)
         KiInitializePcr(ProcessorNumber,
                         Pcr,
                         InitialThread,
+                        TRUE,
                         (PVOID)(ULONG_PTR)Arm64Block->PanicStack,
                         (PVOID)(ULONG_PTR)Arm64Block->InterruptStack);
         KiArm64RawPuts("[KiInitSys] KiInitializePcr done\n");
@@ -658,17 +813,70 @@ KiInitializeSystem(_Inout_ PLOADER_PARAMETER_BLOCK LoaderBlock)
         if (((Mmfr1 >> 20) & 0xFULL) != 0)
         {
             ULONG64 PanVal = 0;
+            ULONG64 Sctlr;
+
             /*
              * LLVM's assembler rejects the architectural "msr pan, #imm"
              * syntax when building for -march=armv8-a. Use the encoded sysreg
              * form for PSTATE.PAN instead (op0=3, op1=0, CRn=4, CRm=2, op2=3).
              */
             __asm__ __volatile__("msr s3_0_c4_c2_3, %0" :: "r"(PanVal) : "memory");
+
+            /*
+             * CRITICAL: Set SCTLR_EL1.SPAN (bit 23) to prevent the CPU from
+             * automatically re-enabling PAN on every exception entry.  Without
+             * this, the PSTATE.PAN clear above is immediately undone by the
+             * first interrupt or syscall, and all kernel-mode accesses to user
+             * memory (ProbeForWrite, memmove in APC delivery, etc.) fault with
+             * a PAN permission fault that the fault handler cannot resolve.
+             */
+            __asm__ __volatile__("mrs %0, sctlr_el1" : "=r"(Sctlr));
+            Sctlr |= (1ULL << 23);  /* SPAN = 1 */
+            __asm__ __volatile__("msr sctlr_el1, %0" :: "r"(Sctlr) : "memory");
             __asm__ __volatile__("isb" ::: "memory");
 
-            /* Boot-time warning: PAN disabled for bring-up */
-            DPRINT1("[arm64] WARNING: PAN (Privileged Access Never) DISABLED for bring-up!\n");
-            DPRINT1("[arm64] TODO: Implement proper uaccess enable/disable discipline.\n");
+        }
+
+        /*
+         * Hardware Access Flag (HA) capability detection and enablement.
+         *
+         * Check ID_AA64MMFR1_EL1.HAFDBS (bits [3:0]) to determine if the CPU
+         * supports hardware-managed Access Flags. Only enable TCR.HA if supported.
+         *
+         * Without HA, the CPU generates Access Flag faults (FSC=0x09/0x0A/0x0B)
+         * on first access to pages with AF=0. With HA, the CPU automatically sets
+         * AF=1, eliminating most AF faults.
+         */
+        {
+            ULONG Hafdbs = (ULONG)(Mmfr1 & 0xFULL);
+            BOOLEAN HasHardwareAF = (Hafdbs >= 1); /* 0x1 or 0x2 = HA supported */
+
+            if (HasHardwareAF)
+            {
+                ULONG64 CurrentTcr;
+                __asm__ __volatile__("mrs %0, tcr_el1" : "=r"(CurrentTcr));
+
+                /* Enable TCR.HA (bit 39) */
+                CurrentTcr |= (1ULL << 39);
+
+                __asm__ __volatile__("dsb ish" ::: "memory");
+                __asm__ __volatile__("msr tcr_el1, %0" :: "r"(CurrentTcr) : "memory");
+                __asm__ __volatile__("isb" ::: "memory");
+                __asm__ __volatile__("tlbi vmalle1is" ::: "memory");
+                __asm__ __volatile__("dsb ish" ::: "memory");
+                __asm__ __volatile__("isb" ::: "memory");
+
+                DPRINT1("ARM64: Hardware Access Flag management ENABLED (HAFDBS=0x%lx, TCR.HA=1)\n", Hafdbs);
+            }
+            else
+            {
+                /*
+                 * HA not supported - CPU will continue generating AF faults.
+                 * The fault handler in pagfault.c must handle these (FSC=0x09/0x0A/0x0B).
+                 */
+                DPRINT1("ARM64: Hardware Access Flag management NOT supported (HAFDBS=0x%lx, TCR.HA=0)\n", Hafdbs);
+                DPRINT1("       AF faults will be handled in software (expect higher fault rate)\n");
+            }
         }
 
         /* Read current CPACR_EL1 */
@@ -708,7 +916,88 @@ KiInitializeSystem(_Inout_ PLOADER_PARAMETER_BLOCK LoaderBlock)
         /* Apply configuration */
         __asm__ __volatile__("msr cpacr_el1, %0" : : "r"(Cpacr));
         __asm__ __volatile__("isb" ::: "memory");
+
+        /* Publish hardware FP capability policy used by trap handlers. */
+        KiArm64InitializeFpSupport();
     }
+    else
+    {
+        /*
+         * AP (secondary processor) initialization:
+         *
+         * Per-CPU system registers (CPACR_EL1, SCTLR_EL1, TCR_EL1, PSTATE.PAN)
+         * are NOT shared across CPUs. Each AP starts with reset defaults after
+         * PSCI CPU_ON and must be configured independently.
+         *
+         * Feature detection globals (KiArm64HasNeon, KiArm64HasSve, etc.)
+         * were set by the BSP and are valid for all CPUs in a homogeneous system.
+         */
+        ULONG64 Cpacr, Mmfr1;
+
+        /* Read AP's feature register (should match BSP) */
+        __asm__ __volatile__("mrs %0, id_aa64mmfr1_el1" : "=r"(Mmfr1));
+
+        /*
+         * PAN: Disable on this AP (same as BSP).
+         * Without this, kernel accesses to user addresses fault with DFSC=0xB.
+         */
+        if (((Mmfr1 >> 20) & 0xFULL) != 0)
+        {
+            ULONG64 PanVal = 0;
+            ULONG64 Sctlr;
+
+            __asm__ __volatile__("msr s3_0_c4_c2_3, %0" :: "r"(PanVal) : "memory");
+
+            /* SCTLR_EL1.SPAN = 1 to prevent PAN auto-enable on exception entry */
+            __asm__ __volatile__("mrs %0, sctlr_el1" : "=r"(Sctlr));
+            Sctlr |= (1ULL << 23);
+            __asm__ __volatile__("msr sctlr_el1, %0" :: "r"(Sctlr) : "memory");
+            __asm__ __volatile__("isb" ::: "memory");
+        }
+
+        /*
+         * Hardware Access Flag: Enable on this AP if the CPU supports it.
+         */
+        {
+            ULONG Hafdbs = (ULONG)(Mmfr1 & 0xFULL);
+            if (Hafdbs >= 1)
+            {
+                ULONG64 CurrentTcr;
+                __asm__ __volatile__("mrs %0, tcr_el1" : "=r"(CurrentTcr));
+                CurrentTcr |= (1ULL << 39); /* TCR.HA = 1 */
+                __asm__ __volatile__("dsb ish" ::: "memory");
+                __asm__ __volatile__("msr tcr_el1, %0" :: "r"(CurrentTcr) : "memory");
+                __asm__ __volatile__("isb" ::: "memory");
+                __asm__ __volatile__("tlbi vmalle1is" ::: "memory");
+                __asm__ __volatile__("dsb ish" ::: "memory");
+                __asm__ __volatile__("isb" ::: "memory");
+            }
+        }
+
+        /*
+         * CPACR_EL1: Configure FP/SVE/SME access on this AP.
+         * Without this, FPEN=00 (reset default) causes EC=0x7 (FP trap) on
+         * the first FP/SIMD instruction, which triggers recursive trap reentry
+         * because the trap handler itself may use compiler-generated SIMD code.
+         */
+        __asm__ __volatile__("mrs %0, cpacr_el1" : "=r"(Cpacr));
+        Cpacr |= (3ULL << 20); /* FPEN = 11 (no trap on FP) */
+
+        if (KiArm64HasSve)
+        {
+            Cpacr &= ~(3ULL << 16); /* ZEN = 00 (trap SVE) */
+        }
+
+        /* SME: trap on APs too */
+        Cpacr &= ~(3ULL << 24); /* SMEN = 00 (trap SME) */
+
+        __asm__ __volatile__("msr cpacr_el1, %0" : : "r"(Cpacr));
+        __asm__ __volatile__("isb" ::: "memory");
+
+        DPRINT1("CPU %lu: Per-CPU registers configured (CPACR, PAN, HA)\n",
+                ProcessorNumber);
+    }
+
     KiArm64RawPuts("[KiInitSys] CPU features config done\n");
 
     ProcessorMask = (Pcr != NULL) ?
@@ -775,6 +1064,7 @@ KiInitializeSystem(_Inout_ PLOADER_PARAMETER_BLOCK LoaderBlock)
         }
     }
 
+    KiArm64RawPuts("[KiInitSys] unmasking IRQ/FIQ (daifclr)\n");
     /*
      * Unmask IRQ and FIQ (bits 1, 2) but keep SError masked (bit 3) for now.
      * SErrors can be stale from UEFI/FreeLdr and we don't want them delivered
@@ -783,12 +1073,21 @@ KiInitializeSystem(_Inout_ PLOADER_PARAMETER_BLOCK LoaderBlock)
      */
     __asm__ __volatile__("msr daifclr, #0x3" ::: "memory");
     __asm__ volatile("isb");
+    KiArm64RawPuts("[KiInitSys] daifclr done\n");
 
+    KiArm64RawPuts("[KiInitSys] lowering IRQL to DISPATCH_LEVEL\n");
     KfLowerIrql(DISPATCH_LEVEL);
     if (Pcr != NULL)
     {
         Pcr->CurrentIrql = DISPATCH_LEVEL;
     }
+    KiArm64RawPuts("[KiInitSys] IRQL lowered\n");
+
+    /*
+     * Defer FP trap-on-first-use activation until later scheduling paths.
+     * Early KiInitializeKernel execution still relies on fully enabled FP.
+     */
+    KiArm64RawPuts("[KiInitSys] FP trap-on-first-use deferred\n");
 
     if (Pcr == NULL)
     {
@@ -797,12 +1096,18 @@ KiInitializeSystem(_Inout_ PLOADER_PARAMETER_BLOCK LoaderBlock)
 
     if ((InitialThread != NULL) && (Pcr != NULL))
     {
+        KiArm64RawPuts("[KiInitSys] calling KiInitializeKernel\n");
         KiInitializeKernel((PKPROCESS)(ULONG_PTR)LoaderBlock->Process,
                            InitialThread,
                            (PVOID)(ULONG_PTR)LoaderBlock->KernelStack,
                            &Pcr->Prcb,
                            (CCHAR)ProcessorNumber,
                            KeLoaderBlock);
+        KiArm64RawPuts("[KiInitSys] KiInitializeKernel returned\n");
+    }
+    else
+    {
+        KiArm64RawPuts("[KiInitSys] SKIP KiInitializeKernel (InitialThread/Pcr NULL)\n");
     }
 
     {

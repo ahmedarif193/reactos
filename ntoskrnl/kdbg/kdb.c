@@ -1459,6 +1459,33 @@ KdbpGetExceptionNumberFromStatus(
     return Ret;
 }
 
+static
+VOID
+KdbpPrintBugCheckState(
+    _In_opt_ PCONTEXT Context)
+{
+    if (!KeBugCheckActive)
+        return;
+
+    KdbPrintf("BugCheckData: code=0x%08lx p1=%p p2=%p p3=%p p4=%p\n",
+              (ULONG)KiBugCheckData[0],
+              (PVOID)KiBugCheckData[1],
+              (PVOID)KiBugCheckData[2],
+              (PVOID)KiBugCheckData[3],
+              (PVOID)KiBugCheckData[4]);
+
+#if defined(_M_ARM64)
+    if (Context)
+    {
+        KdbPrintf("BugCheckContext(ARM64): pc=%p lr=%p sp=%p cpsr=0x%08lx\n",
+                  (PVOID)Context->Pc,
+                  (PVOID)Context->X[30],
+                  (PVOID)Context->Sp,
+                  (ULONG)Context->Cpsr);
+    }
+#endif
+}
+
 /*!\brief KDB Exception filter
  *
  * Called by the exception dispatcher.
@@ -1820,6 +1847,8 @@ EnterKdbg:;
         }
     }
 
+    KdbpPrintBugCheckState(Context);
+
     /* Once we enter the debugger we do not expect any more single steps to happen */
     KdbNumSingleSteps = 0;
 
@@ -1836,18 +1865,10 @@ EnterKdbg:;
     _disable();
 
     /*
-     * Save the current IRQL and ensure we are at DISPATCH_LEVEL.
-     * KDB code (specifically KdbpSymFindModule) uses KeAcquireSpinLockAtDpcLevel
-     * which requires IRQL to be at DISPATCH_LEVEL or higher.
-     * If we entered at lower IRQL (e.g., PASSIVE_LEVEL from a breakpoint),
-     * we must raise to DISPATCH_LEVEL. If we're above DISPATCH_LEVEL,
-     * lower to it.
+     * Save the current IRQL and raise/lower it through the active
+     * architecture's debugger policy so KDB's DPC-level spinlocks are safe.
      */
-    OldIrql = KeGetCurrentIrql();
-    if (OldIrql > DISPATCH_LEVEL)
-        KeLowerIrql(DISPATCH_LEVEL);
-    else if (OldIrql < DISPATCH_LEVEL)
-        KeRaiseIrql(DISPATCH_LEVEL, &OldIrql);
+    OldIrql = KxKdbRaiseIrql();
 
     /* Exception inside the debugger? Game over. */
     if (InterlockedIncrement(&KdbEntryCount) > 1)
@@ -1896,10 +1917,7 @@ EnterKdbg:;
     InterlockedDecrement(&KdbEntryCount);
 
     /* Restore original IRQL */
-    if (OldIrql > DISPATCH_LEVEL)
-        KeRaiseIrql(OldIrql, &OldIrql);
-    else if (OldIrql < DISPATCH_LEVEL)
-        KeLowerIrql(OldIrql);
+    KxKdbLowerIrql(OldIrql);
 
     /* Leave critical section */
     __writeeflags(OldEflags);

@@ -255,8 +255,8 @@ KiArm64GetSveStateSize(
 /**
  * @brief Configure CPACR_EL1 for trap-on-first-use.
  *
- * Disables FP/SVE access so the next FP instruction will trap,
- * enabling lazy context switching.
+ * Configures EL0 trap-on-first-use while keeping EL1 usable.
+ * Kernel code (EL1) must never be forced through lazy FP traps.
  */
 FORCEINLINE
 VOID
@@ -267,22 +267,22 @@ KiArm64ConfigureFpTrap(
 
     __asm__ __volatile__("mrs %0, cpacr_el1" : "=r"(Cpacr));
 
-    /* Trap on FP/NEON access */
+    /* Trap on FP/NEON in EL0 only (keep EL1 enabled). */
     Cpacr &= ~CPACR_EL1_FPEN_MASK;
-    Cpacr |= CPACR_EL1_FPEN_TRAP;
+    Cpacr |= CPACR_EL1_FPEN_EL0_TRAP;
 
-    /* Trap on SVE access if hardware supports it */
+    /* Trap on SVE in EL0 only if hardware supports it. */
     if (KiArm64HasSve)
     {
         Cpacr &= ~CPACR_EL1_ZEN_MASK;
-        Cpacr |= CPACR_EL1_ZEN_TRAP;
+        Cpacr |= CPACR_EL1_ZEN_EL0_TRAP;
     }
 
-    /* Trap on SME access if hardware supports it */
+    /* Trap on SME in EL0 only if hardware supports it. */
     if (KiArm64HasSme)
     {
         Cpacr &= ~CPACR_EL1_SMEN_MASK;
-        Cpacr |= CPACR_EL1_SMEN_TRAP;
+        Cpacr |= CPACR_EL1_SMEN_EL0_TRAP;
     }
 
     __asm__ __volatile__("msr cpacr_el1, %0" :: "r"(Cpacr));

@@ -1003,6 +1003,28 @@ NTAPI
 KxThawExecution(
     VOID);
 
+#if defined(_M_ARM64)
+KIRQL
+NTAPI
+KxFreezeExecutionRaiseIrql(
+    VOID);
+
+VOID
+NTAPI
+KxFreezeExecutionLowerIrql(
+    _In_ KIRQL OldIrql);
+
+KIRQL
+NTAPI
+KxKdbRaiseIrql(
+    VOID);
+
+VOID
+NTAPI
+KxKdbLowerIrql(
+    _In_ KIRQL OldIrql);
+#endif
+
 BOOLEAN
 NTAPI
 KeFreezeExecution(IN PKTRAP_FRAME TrapFrame,
@@ -1016,6 +1038,85 @@ KCONTINUE_STATUS
 NTAPI
 KxSwitchKdProcessor(
     _In_ ULONG ProcessorIndex);
+
+#if !defined(_M_ARM64)
+FORCEINLINE
+KIRQL
+NTAPI
+KxFreezeExecutionRaiseIrql(
+    VOID)
+{
+#ifdef CONFIG_SMP
+    KIRQL OldIrql;
+
+    KeRaiseIrql(HIGH_LEVEL, &OldIrql);
+    return OldIrql;
+#else
+    KIRQL OldIrql;
+
+    OldIrql = KeGetCurrentIrql();
+    if (OldIrql < DISPATCH_LEVEL)
+    {
+        OldIrql = KeRaiseIrqlToDpcLevel();
+    }
+
+    return OldIrql;
+#endif
+}
+
+FORCEINLINE
+VOID
+NTAPI
+KxFreezeExecutionLowerIrql(
+    _In_ KIRQL OldIrql)
+{
+#if !defined(CONFIG_SMP)
+    if (OldIrql < DISPATCH_LEVEL)
+    {
+        KeLowerIrql(OldIrql);
+    }
+#else
+    KeLowerIrql(OldIrql);
+#endif
+}
+
+FORCEINLINE
+KIRQL
+NTAPI
+KxKdbRaiseIrql(
+    VOID)
+{
+    KIRQL OldIrql;
+
+    OldIrql = KeGetCurrentIrql();
+    if (OldIrql > DISPATCH_LEVEL)
+    {
+        KeLowerIrql(DISPATCH_LEVEL);
+    }
+    else if (OldIrql < DISPATCH_LEVEL)
+    {
+        KeRaiseIrql(DISPATCH_LEVEL, &OldIrql);
+    }
+
+    return OldIrql;
+}
+
+FORCEINLINE
+VOID
+NTAPI
+KxKdbLowerIrql(
+    _In_ KIRQL OldIrql)
+{
+    if (OldIrql > DISPATCH_LEVEL)
+    {
+        KeRaiseIrql(OldIrql, &OldIrql);
+    }
+    else if (OldIrql < DISPATCH_LEVEL)
+    {
+        KeLowerIrql(OldIrql);
+    }
+}
+#endif
 
 _IRQL_requires_min_(DISPATCH_LEVEL)
 _Acquires_nonreentrant_lock_(*LockHandle->Lock)

@@ -172,6 +172,11 @@ ProbeForWrite(IN PVOID Address,
             ExRaiseAccessViolation();
         }
 
+        if (ExArchProbeForWrite(Current, Last))
+        {
+            return;
+        }
+
         /* Round down to the last page */
         Last = PAGE_ROUND_DOWN(Last) + PAGE_SIZE;
         do

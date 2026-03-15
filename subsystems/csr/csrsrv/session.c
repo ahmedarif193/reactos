@@ -220,6 +220,13 @@ CsrSbCreateSession(IN PSB_API_MSG ApiMessage)
     /* Save the Process and Thread Handles */
     hProcess = CreateSession->ProcessInfo.ProcessHandle;
     hThread = CreateSession->ProcessInfo.ThreadHandle;
+    DPRINT1("CSRSRV: [SB1] CsrSbCreateSession SessionId=%lu PID=%p TID=%p ProcHandle=%p ThreadHandle=%p SubSystemType=%lu\n",
+            CreateSession->SessionId,
+            CreateSession->ProcessInfo.ClientId.UniqueProcess,
+            CreateSession->ProcessInfo.ClientId.UniqueThread,
+            hProcess,
+            hThread,
+            CreateSession->ProcessInfo.ImageInformation.SubSystemType);
 
     /* Lock the Processes */
     CsrAcquireProcessLock();
@@ -306,8 +313,18 @@ CsrSbCreateSession(IN PSB_API_MSG ApiMessage)
     CsrProcess->ProcessHandle = hProcess;
     CsrProcess->NtSession = CsrAllocateNtSession(CreateSession->SessionId);
 
-    /* Set the Process Priority */
-    CsrSetBackgroundPriority(CsrProcess);
+    /*
+     * Session bootstrap process must not start at low base priority.
+     * On single-CPU ARM64 boot paths, keeping it at base 8 can delay
+     * session bring-up behind boosted CSRSS workers.
+     */
+    {
+        KPRIORITY BasePriority = PROCESS_PRIORITY_NORMAL_FOREGROUND + 4;
+        NtSetInformationProcess(hProcess,
+                                ProcessBasePriority,
+                                &BasePriority,
+                                sizeof(BasePriority));
+    }
 
     /* Get the first data location (right after the per-server pointer table) */
     ProcessData = (PVOID)((PUCHAR)CsrProcess +
@@ -341,7 +358,16 @@ CsrSbCreateSession(IN PSB_API_MSG ApiMessage)
     CsrInsertProcess(NULL, CsrProcess);
 
     /* Activate the Thread */
-    ApiMessage->ReturnValue = NtResumeThread(hThread, NULL);
+    {
+        ULONG PreviousSuspendCount = 0;
+        ApiMessage->ReturnValue = NtResumeThread(hThread, &PreviousSuspendCount);
+        DPRINT1("CSRSRV: [SB2] NtResumeThread(Thread=%p) -> 0x%lx PreviousSuspendCount=%lu PID=%p TID=%p\n",
+                hThread,
+                ApiMessage->ReturnValue,
+                PreviousSuspendCount,
+                CreateSession->ProcessInfo.ClientId.UniqueProcess,
+                CreateSession->ProcessInfo.ClientId.UniqueThread);
+    }
 
     /* Release lock and return */
     CsrReleaseProcessLock();
@@ -497,7 +523,7 @@ CsrSbApiRequestThread(IN PVOID Parameter)
         /* Wait for a message to come in */
         Status = NtReplyWaitReceivePort(CsrSbApiPort,
                                         &PortContext,
-                                        &ReplyMsg->h,
+                                        ReplyMsg ? &ReplyMsg->h : NULL,
                                         &ReceiveMsg.h);
 
         /* Check if we didn't get success */

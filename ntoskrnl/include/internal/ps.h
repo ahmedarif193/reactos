@@ -181,6 +181,41 @@ PspMapSystemDll(
     IN BOOLEAN UseLargePages
 );
 
+#if defined(_M_ARM64)
+ULONG
+NTAPI
+PsArchSystemDllProtection(
+    VOID);
+
+VOID
+NTAPI
+PsArchSetSystemDllBase(
+    _Inout_ PEPROCESS Process,
+    _In_opt_ PVOID ImageBase);
+#endif
+
+#if !defined(_M_ARM64)
+FORCEINLINE
+ULONG
+NTAPI
+PsArchSystemDllProtection(
+    VOID)
+{
+    return PAGE_READWRITE;
+}
+
+FORCEINLINE
+VOID
+NTAPI
+PsArchSetSystemDllBase(
+    _Inout_ PEPROCESS Process,
+    _In_opt_ PVOID ImageBase)
+{
+    UNREFERENCED_PARAMETER(Process);
+    UNREFERENCED_PARAMETER(ImageBase);
+}
+#endif
+
 CODE_SEG("INIT")
 NTSTATUS
 NTAPI

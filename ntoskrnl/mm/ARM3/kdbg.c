@@ -237,6 +237,117 @@ ExpKdbgExtPte(
                   Pte->u.Hard.WriteThrough,
                   Pte->u.Hard.CacheDisable);
     }
+#elif defined(_M_ARM64)
+    PMMPTE Pxe, Ppe, Pde, Pte;
+    PMMPTE UserPte;
+    ULONG64 Ttbr0, RootPa;
+    volatile ULONG64 *L0, *L1, *L2, *L3;
+    ULONG64 E0 = 0, E1 = 0, E2 = 0, E3 = 0;
+    ULONG_PTR L0i, L1i, L2i, L3i;
+    MMPTE Hw;
+
+    /* Self-map view (TTBR1 recursive mapping) */
+    Pxe = MiAddressToPxe((PVOID)Va);
+    Ppe = MiAddressToPpe((PVOID)Va);
+    Pde = MiAddressToPde((PVOID)Va);
+    Pte = MiAddressToPte((PVOID)Va);
+
+    KdbpPrint("ARM64 !pte for VA %p\n", (PVOID)Va);
+    KdbpPrint("SelfMap PXE %p: %016I64x (%s)\n",
+              Pxe,
+              MmIsAddressValid(Pxe) ? Pxe->u.Long : 0ULL,
+              (MmIsAddressValid(Pxe) && Pxe->u.Hard.Valid) ? "valid" : "not valid");
+    KdbpPrint("SelfMap PPE %p: %016I64x (%s)\n",
+              Ppe,
+              MmIsAddressValid(Ppe) ? Ppe->u.Long : 0ULL,
+              (MmIsAddressValid(Ppe) && Ppe->u.Hard.Valid) ? "valid" : "not valid");
+    KdbpPrint("SelfMap PDE %p: %016I64x (%s%s)\n",
+              Pde,
+              MmIsAddressValid(Pde) ? Pde->u.Long : 0ULL,
+              (MmIsAddressValid(Pde) && Pde->u.Hard.Valid) ? "valid" : "not valid",
+              (MmIsAddressValid(Pde) && Pde->u.Hard.Valid && !Pde->u.Hard.NotLargePage) ? " block" : "");
+    KdbpPrint("SelfMap PTE %p: %016I64x (%s)\n",
+              Pte,
+              MmIsAddressValid(Pte) ? Pte->u.Long : 0ULL,
+              (MmIsAddressValid(Pte) && Pte->u.Hard.Valid) ? "valid" : "not valid");
+
+    /*
+     * Hardware walk for user addresses: walk TTBR0 via KSEG0 to avoid stale
+     * self-map aliasing and show what the MMU actually uses.
+     */
+    if ((ULONG_PTR)Va < (ULONG_PTR)MmSystemRangeStart)
+    {
+        __asm__ __volatile__("mrs %0, ttbr0_el1" : "=r"(Ttbr0));
+        RootPa = Ttbr0 & 0x0000FFFFFFFFF000ULL;
+
+        KdbpPrint("TTBR0=%016I64x RootPA=%016I64x\n", Ttbr0, RootPa);
+        if (RootPa == 0)
+        {
+            KdbpPrint("TTBR0 root is zero\n");
+            return TRUE;
+        }
+
+        L0 = (volatile ULONG64 *)(KSEG0_BASE | RootPa);
+        L0i = ((ULONG_PTR)Va >> PXI_SHIFT) & PXI_MASK;
+        E0 = L0[L0i];
+        KdbpPrint("L0[%lu] @%p = %016I64x (%s)\n",
+                  (ULONG)L0i, (PVOID)&L0[L0i], E0, (E0 & 1ULL) ? "valid" : "not valid");
+        if ((E0 & 3ULL) != 3ULL) return TRUE;
+
+        L1 = (volatile ULONG64 *)(KSEG0_BASE | (E0 & 0x0000FFFFFFFFF000ULL));
+        L1i = ((ULONG_PTR)Va >> PPI_SHIFT) & PPI_MASK;
+        E1 = L1[L1i];
+        KdbpPrint("L1[%lu] @%p = %016I64x (%s)\n",
+                  (ULONG)L1i, (PVOID)&L1[L1i], E1, (E1 & 1ULL) ? "valid" : "not valid");
+        if ((E1 & 3ULL) != 3ULL) return TRUE;
+
+        L2 = (volatile ULONG64 *)(KSEG0_BASE | (E1 & 0x0000FFFFFFFFF000ULL));
+        L2i = ((ULONG_PTR)Va >> PDI_SHIFT) & PDI_MASK_ARM64;
+        E2 = L2[L2i];
+        KdbpPrint("L2[%lu] @%p = %016I64x (%s%s)\n",
+                  (ULONG)L2i, (PVOID)&L2[L2i], E2,
+                  (E2 & 1ULL) ? "valid" : "not valid",
+                  ((E2 & 3ULL) == 1ULL) ? " block" : "");
+        if ((E2 & 1ULL) == 0) return TRUE;
+
+        if ((E2 & 3ULL) == 1ULL)
+        {
+            ULONG64 Pa = (E2 & 0x0000FFFFFFE00000ULL) | ((ULONG64)Va & 0x1FFFFFULL);
+            KdbpPrint("L2 block maps VA %p -> PA %016I64x\n", (PVOID)Va, Pa);
+            return TRUE;
+        }
+        if ((E2 & 3ULL) != 3ULL) return TRUE;
+
+        L3 = (volatile ULONG64 *)(KSEG0_BASE | (E2 & 0x0000FFFFFFFFF000ULL));
+        L3i = ((ULONG_PTR)Va >> PTI_SHIFT) & PTI_MASK_ARM64;
+        E3 = L3[L3i];
+        KdbpPrint("L3[%lu] @%p = %016I64x (%s)\n",
+                  (ULONG)L3i, (PVOID)&L3[L3i], E3, (E3 & 1ULL) ? "valid" : "not valid");
+
+        UserPte = MiArm64UserPteKseg0((PVOID)Va);
+        if (UserPte)
+        {
+            KdbpPrint("UserPteKseg0 %p: %016I64x\n", UserPte, UserPte->u.Long);
+        }
+
+        if (E3 & 1ULL)
+        {
+            ULONG64 Pa = (E3 & 0x0000FFFFFFFFF000ULL) | ((ULONG64)Va & (PAGE_SIZE - 1));
+            Hw.u.Long = E3;
+
+            KdbpPrint("PA=%016I64x PFN=%09lx AF=%u SH=%u Attr=%u NG=%u PXN=%u UXN=%u RO=%u US=%u\n",
+                      Pa,
+                      (ULONG_PTR)Hw.u.Hard.PageFrameNumber,
+                      Hw.u.Hard.Accessed,
+                      Hw.u.Hard.Shareability,
+                      Hw.u.Hard.CacheType,
+                      Hw.u.Hard.NonGlobal,
+                      Hw.u.Hard.PrivilegedNoExecute,
+                      Hw.u.Hard.UserNoExecute,
+                      Hw.u.Hard.NotDirty,
+                      Hw.u.Hard.Owner);
+        }
+    }
 #else
     UNREFERENCED_PARAMETER(Va);
     KdbpPrint("!pte is not implemented on this architecture\n");

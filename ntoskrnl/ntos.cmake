@@ -425,6 +425,8 @@ elseif(NT_ARCH STREQUAL "arm64")
         ${NTOS_ARCH_DIR}/ke/bootstack.S)
     list(APPEND SOURCE
         ${NTOS_ARCH_DIR}/config/cmhardwr.c
+        ${NTOS_ARCH_DIR}/ex/init.c
+        ${NTOS_ARCH_DIR}/ex/probe.c
         ${NTOS_ARCH_DIR}/ex/ioport.c
         ${NTOS_ARCH_DIR}/kd64/kdarm64.c
         ${NTOS_ARCH_DIR}/kd/kdfallback.c
@@ -449,6 +451,7 @@ elseif(NT_ARCH STREQUAL "arm64")
         ${NTOS_ARCH_DIR}/ke/trapdump.c
         ${NTOS_ARCH_DIR}/ke/usercall.c
         ${NTOS_ARCH_DIR}/mm/page.c
+        ${NTOS_ARCH_DIR}/mm/section.c
         ${NTOS_ARCH_DIR}/mm/procsup.c
         ${NTOS_ARCH_DIR}/mm/ARM3/init.c
         ${NTOS_ARCH_DIR}/mm/ARM3/maputils.c

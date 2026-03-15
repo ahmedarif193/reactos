@@ -113,6 +113,15 @@ KiInsertQueue(IN PKQUEUE Queue,
         Timer = &Thread->Timer;
         if (Timer->Header.Inserted) KxRemoveTreeTimer(Timer);
 
+#ifdef _M_ARM64
+        DPRINT("[arm64][QUE] KiInsertQueue: DIRECT WAKE T=%p CurCount=%ld->%ld MaxCount=%ld Sig=%ld\n",
+                 Thread,
+                 Queue->CurrentCount - 1,
+                 Queue->CurrentCount,
+                 Queue->MaximumCount,
+                 Queue->Header.SignalState);
+#endif
+
         /* Reschedule the Thread */
         KiReadyThread(Thread);
     }
@@ -120,6 +129,15 @@ KiInsertQueue(IN PKQUEUE Queue,
     {
         /* Increase the Entries */
         Queue->Header.SignalState++;
+
+#ifdef _M_ARM64
+        DPRINT("[arm64][QUE] KiInsertQueue: QUEUED entry CurCount=%ld MaxCount=%ld Sig=%ld->%ld WaitEmpty=%d\n",
+                 Queue->CurrentCount,
+                 Queue->MaximumCount,
+                 Queue->Header.SignalState - 1,
+                 Queue->Header.SignalState,
+                 (WaitEntry == &Queue->Header.WaitListHead));
+#endif
 
         /* Check which mode we're using */
         if (Head)
@@ -296,6 +314,11 @@ KeRemoveQueue(IN PKQUEUE Queue,
     {
         /* Same queue, decrement waiting threads */
         Queue->CurrentCount--;
+#ifdef _M_ARM64
+        DPRINT("[arm64][QUE] KeRemoveQueue: same queue, CurCount-- => %ld (MaxCount=%ld Sig=%ld) T=%p\n",
+                 Queue->CurrentCount, Queue->MaximumCount,
+                 Queue->Header.SignalState, Thread);
+#endif
     }
 
     /* Loop until the queue is processed */
@@ -374,6 +397,19 @@ KeRemoveQueue(IN PKQUEUE Queue,
                 /* Insert the wait block in the list */
                 InsertTailList(&Queue->Header.WaitListHead,
                                &WaitBlock->WaitListEntry);
+
+#ifdef _M_ARM64
+                {
+                    PKPRCB _Prcb = KeGetCurrentPrcb();
+                    DPRINT("[arm64][QUE] KeRemoveQueue: T=%p ENTERING WAIT CurCount=%ld Sig=%ld Next=%p Ready=0x%lx IdleSummary=0x%Ix\n",
+                             Thread,
+                             Queue->CurrentCount,
+                             Queue->Header.SignalState,
+                             _Prcb ? _Prcb->NextThread : NULL,
+                             _Prcb ? _Prcb->ReadySummary : 0,
+                             KiIdleSummary);
+                }
+#endif
 
                 /* Setup the wait information */
                 Thread->State = Waiting;

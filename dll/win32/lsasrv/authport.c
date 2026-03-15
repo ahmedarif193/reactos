@@ -275,6 +275,15 @@ AuthPortThreadRoutine(PVOID Param)
             default:
                 TRACE("Received request (ApiNumber: %lu)\n", RequestMsg.ApiNumber);
 
+                if (LogonContext == NULL)
+                {
+                    ERR("Received request with NULL LogonContext (ApiNumber: %lu)\n",
+                        RequestMsg.ApiNumber);
+                    RequestMsg.Status = STATUS_INVALID_PARAMETER;
+                    ReplyMsg = &RequestMsg;
+                    break;
+                }
+
                 switch (RequestMsg.ApiNumber)
                 {
                     case LSASS_REQUEST_CALL_AUTHENTICATION_PACKAGE:

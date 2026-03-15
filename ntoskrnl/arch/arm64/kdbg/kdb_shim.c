@@ -25,6 +25,51 @@
 
 /* PUBLIC FUNCTIONS **********************************************************/
 
+KIRQL
+NTAPI
+KxKdbRaiseIrql(
+    VOID)
+{
+    KIRQL OldIrql;
+
+    /*
+     * Keep KDB at HIGH_LEVEL on ARM64 so both DAIF and GIC PMR fully block
+     * interrupts while the common debugger code holds DPC-level spinlocks.
+     */
+    OldIrql = KeGetCurrentIrql();
+    if (OldIrql < HIGH_LEVEL)
+    {
+        KeRaiseIrql(HIGH_LEVEL, &OldIrql);
+    }
+
+    return OldIrql;
+}
+
+VOID
+NTAPI
+KxKdbLowerIrql(
+    _In_ KIRQL OldIrql)
+{
+    if (OldIrql < HIGH_LEVEL)
+    {
+        KeLowerIrql(OldIrql);
+    }
+}
+
+BOOLEAN
+NTAPI
+KxKdbFilterLoadSymbols(
+    _In_ BOOLEAN LoadSymbols)
+{
+    UNREFERENCED_PARAMETER(LoadSymbols);
+
+    /*
+     * ARM64 bring-up keeps symbol loading disabled during early KDB init to
+     * avoid the current symbol-loader cost and noise while debugging boot.
+     */
+    return FALSE;
+}
+
 /*
  * ARM64-specific disassembly and instruction length functions are provided
  * by arm64-dis.c (KdbpGetInstLength, KdbpDisassemble).

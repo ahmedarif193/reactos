@@ -137,10 +137,24 @@ ExpWorkerThreadEntryPoint(IN PVOID Context)
 ProcessLoop:
     for (;;)
     {
+#ifdef _M_ARM64
+        DPRINT("[arm64][WRK] Worker T=%p QType=%d about to KeRemoveQueue (CurCount=%ld Sig=%ld)\n",
+                 Thread, WorkQueueType,
+                 WorkQueue->WorkerQueue.CurrentCount,
+                 WorkQueue->WorkerQueue.Header.SignalState);
+#endif
+
         /* Wait for something to happen on the queue */
         QueueEntry = KeRemoveQueue(&WorkQueue->WorkerQueue,
                                    WaitMode,
                                    TimeoutPointer);
+
+#ifdef _M_ARM64
+        DPRINT("[arm64][WRK] Worker T=%p QType=%d KeRemoveQueue returned %p (CurCount=%ld Sig=%ld)\n",
+                 Thread, WorkQueueType, QueueEntry,
+                 WorkQueue->WorkerQueue.CurrentCount,
+                 WorkQueue->WorkerQueue.Header.SignalState);
+#endif
 
         /* Check if we timed out and quit this loop in that case */
         if ((NTSTATUS)(ULONG_PTR)QueueEntry == STATUS_TIMEOUT) break;
@@ -153,6 +167,11 @@ ProcessLoop:
 
         /* Make sure nobody is trying to play smart with us */
         ASSERT((ULONG_PTR)WorkItem->WorkerRoutine > MmUserProbeAddress);
+
+#ifdef _M_ARM64
+        DPRINT("[arm64][WRK] Worker T=%p calling routine %p param=%p\n",
+                 Thread, WorkItem->WorkerRoutine, WorkItem->Parameter);
+#endif
 
         /* Call the Worker Routine */
         WorkItem->WorkerRoutine(WorkItem->Parameter);
@@ -525,8 +544,6 @@ ExpInitializeWorkerThreads(VOID)
     ULONG i;
     NTSTATUS Status;
 
-    DPRINT1("[arm64] ExpInitializeWorkerThreads: ENTRY\n");
-
     /* Setup the stack swap support */
     ExInitializeFastMutex(&ExpWorkerSwapinMutex);
     InitializeListHead(&ExpWorkerListHead);
@@ -563,14 +580,10 @@ ExpInitializeWorkerThreads(VOID)
                       NotificationEvent,
                       FALSE);
 
-    DPRINT1("[arm64] ExpInitializeWorkerThreads: Creating %lu critical, %lu delayed threads\n",
-            CriticalThreads, DelayedThreads);
-
     /* Create the built-in worker threads for the critical queue */
     for (i = 0; i < CriticalThreads; i++)
     {
         /* Create the thread */
-        DPRINT1("[arm64] ExpInitializeWorkerThreads: Creating critical worker %lu\n", i);
         ExpCreateWorkerThread(CriticalWorkQueue, FALSE);
         ExCriticalWorkerThreads++;
     }
@@ -579,13 +592,11 @@ ExpInitializeWorkerThreads(VOID)
     for (i = 0; i < DelayedThreads; i++)
     {
         /* Create the thread */
-        DPRINT1("[arm64] ExpInitializeWorkerThreads: Creating delayed worker %lu\n", i);
         ExpCreateWorkerThread(DelayedWorkQueue, FALSE);
         ExDelayedWorkerThreads++;
     }
 
     /* Create the built-in worker thread for the hypercritical queue */
-    DPRINT1("[arm64] ExpInitializeWorkerThreads: Creating hypercritical worker\n");
     ExpCreateWorkerThread(HyperCriticalWorkQueue, FALSE);
 
 #if defined(_M_ARM64) || defined(__aarch64__)
@@ -611,16 +622,12 @@ ExpInitializeWorkerThreads(VOID)
         ULONG YieldCount;
         ULONG TotalWorkers = ExCriticalWorkerThreads + ExDelayedWorkerThreads + 1;
 
-        DPRINT1("[arm64] ExpInitializeWorkerThreads: Yielding %lu times for %lu workers\n",
-                TotalWorkers * 2, TotalWorkers);
-
         /* Yield multiple times - once for each worker to start, once to wait */
         for (YieldCount = 0; YieldCount < TotalWorkers * 2; YieldCount++)
         {
             NtYieldExecution();
         }
 
-        DPRINT1("[arm64] ExpInitializeWorkerThreads: Yield complete\n");
     }
 #endif
 
@@ -780,7 +787,16 @@ ExQueueWorkItem(IN PWORK_QUEUE_ITEM WorkItem,
     }
 
     /* Insert the Queue */
-    KeInsertQueue(&WorkQueue->WorkerQueue, &WorkItem->List);
+    {
+        LONG InsertResult = KeInsertQueue(&WorkQueue->WorkerQueue, &WorkItem->List);
+        DPRINT("[arm64][WRK] ExQueueWorkItem: QueueType=%d Routine=%p InsertResult=%ld CurrentCount=%ld MaxCount=%ld SignalState=%ld\n",
+                QueueType,
+                WorkItem->WorkerRoutine,
+                InsertResult,
+                WorkQueue->WorkerQueue.CurrentCount,
+                WorkQueue->WorkerQueue.MaximumCount,
+                WorkQueue->WorkerQueue.Header.SignalState);
+    }
     ASSERT(!WorkQueue->Info.QueueDisabled);
 
     /*

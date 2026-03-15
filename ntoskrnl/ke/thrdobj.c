@@ -388,15 +388,37 @@ NTAPI
 KeResumeThread(IN PKTHREAD Thread)
 {
     KLOCK_QUEUE_HANDLE ApcLock;
+    PEPROCESS Process;
+    BOOLEAN TraceBootProc;
     ULONG PreviousCount;
     ASSERT_THREAD(Thread);
     ASSERT_IRQL_LESS_OR_EQUAL(DISPATCH_LEVEL);
+
+    Process = (PEPROCESS)Thread->ApcState.Process;
+    /* Scheduler tracing disabled - string comparisons on every
+     * KeResumeThread call cause severe boot slowdown */
+    TraceBootProc = FALSE;
 
     /* Lock the APC Queue */
     KiAcquireApcLockRaiseToSynch(Thread, &ApcLock);
 
     /* Save the Old Count */
     PreviousCount = Thread->SuspendCount;
+
+    if (TraceBootProc)
+    {
+        DPRINT1("PS: [RS1] KeResumeThread Proc=%.16s Thread=%p State=%u Pri=%d BasePri=%d Q=%d Suspend=%u Freeze=%u Signal=%ld WaitListEmpty=%u\n",
+                Process ? Process->ImageFileName : "<null>",
+                Thread,
+                Thread->State,
+                Thread->Priority,
+                Thread->BasePriority,
+                Thread->Quantum,
+                Thread->SuspendCount,
+                Thread->FreezeCount,
+                Thread->SuspendSemaphore.Header.SignalState,
+                IsListEmpty(&Thread->SuspendSemaphore.Header.WaitListHead));
+    }
 
     /* Check if it existed */
     if (PreviousCount)
@@ -413,6 +435,20 @@ KeResumeThread(IN PKTHREAD Thread)
             /* Signal the Suspend Semaphore */
             Thread->SuspendSemaphore.Header.SignalState++;
             KiWaitTest(&Thread->SuspendSemaphore.Header, IO_NO_INCREMENT);
+
+            if (TraceBootProc)
+            {
+                DPRINT1("PS: [RS2] After KiWaitTest Proc=%.16s Thread=%p State=%u Pri=%d BasePri=%d Q=%d Suspend=%u Freeze=%u Signal=%ld\n",
+                        Process ? Process->ImageFileName : "<null>",
+                        Thread,
+                        Thread->State,
+                        Thread->Priority,
+                        Thread->BasePriority,
+                        Thread->Quantum,
+                        Thread->SuspendCount,
+                        Thread->FreezeCount,
+                        Thread->SuspendSemaphore.Header.SignalState);
+            }
 
             /* Release the dispatcher lock */
             KiReleaseDispatcherLockFromSynchLevel();
@@ -1358,6 +1394,10 @@ KeTerminateThread(IN KPRIORITY Increment)
     PKTHREAD Thread = KeGetCurrentThread();
     PKPROCESS Process = Thread->ApcState.Process;
     ASSERT_IRQL_LESS_OR_EQUAL(DISPATCH_LEVEL);
+
+    /* Validate process object before using it */
+    ASSERT(Process != NULL);
+    ASSERT_PROCESS(Process);
 
     /* Lock the process */
     KiAcquireProcessLockRaiseToSynch(Process, &LockHandle);

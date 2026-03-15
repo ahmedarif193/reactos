@@ -6,6 +6,7 @@
  */
 
 #include <ntoskrnl.h>
+#include "../include/fpstate.h"
 #define NDEBUG
 #include <debug.h>
 
@@ -40,6 +41,21 @@ typedef struct _KKINIT_FRAME
 VOID
 NTAPI
 KiThreadStartup(VOID);
+
+static ULONG KiArm64IdleTraceBudget = 0;
+
+static
+BOOLEAN
+KiArm64ShouldTraceIdle(VOID)
+{
+    if (KiArm64IdleTraceBudget == 0)
+    {
+        return FALSE;
+    }
+
+    KiArm64IdleTraceBudget--;
+    return TRUE;
+}
 
 static
 VOID
@@ -144,49 +160,31 @@ VOID
 KiIdleLoop(VOID)
 {
     PKPRCB Prcb = KeGetCurrentPrcb();
-    static ULONG IdleLoopCounter = 0;
-    static BOOLEAN FirstIdle = TRUE;
 
-    DbgPrintEx(DPFLTR_DEFAULT_ID, DPFLTR_ERROR_LEVEL,
-               "[KiIdleLoop] ENTRY - Prcb=%p\n", Prcb);
+    /*
+     * ARM64 UP kernel: APs must NOT touch scheduler state.
+     *
+     * On a UP kernel (no CONFIG_SMP), spinlocks are no-ops, scheduler data
+     * structures are not protected, and there is only one logical CPU as
+     * far as the kernel is concerned. APs simply spin in WFI.
+     *
+     * On an SMP kernel (CONFIG_SMP), APs run the full idle loop below
+     * so they can receive IPIs and dispatch threads.
+     */
+#ifndef CONFIG_SMP
+    if (Prcb != NULL && Prcb->Number != 0)
+    {
+        __asm__ __volatile__("msr daifset, #3" ::: "memory");
+        __asm__ __volatile__("isb" ::: "memory");
+        for (;;)
+        {
+            __asm__ __volatile__("wfi" ::: "memory");
+        }
+    }
+#endif
 
     for (;;)
     {
-        IdleLoopCounter++;
-
-        /*
-         * Every few iterations, print that we're alive.
-         * This helps detect if the idle loop is running but stuck.
-         * DEBUG: Reduced from 100000 to 10000 to get more frequent timer status
-         */
-        if (IdleLoopCounter % 10000 == 1)
-        {
-            DbgPrintEx(DPFLTR_DEFAULT_ID, DPFLTR_ERROR_LEVEL,
-                       "[KiIdleLoop] Alive loop=%lu ReadySummary=0x%llx NextThread=%p\n",
-                       IdleLoopCounter, (ULONG64)Prcb->ReadySummary, Prcb->NextThread);
-
-            /* [CYCLE33] Check interrupt state and timer status */
-            {
-                ULONG64 Daif, CntvCtl, IccPmr, IccIgrpen1;
-                extern ULONG KiTimerIsrCallCount;
-
-                __asm__ __volatile__("mrs %0, daif" : "=r"(Daif));
-                __asm__ __volatile__("mrs %0, cntv_ctl_el0" : "=r"(CntvCtl)); /* Virtual timer */
-                __asm__ __volatile__("mrs %0, icc_pmr_el1" : "=r"(IccPmr));
-                __asm__ __volatile__("mrs %0, icc_igrpen1_el1" : "=r"(IccIgrpen1));
-                DbgPrintEx(DPFLTR_DEFAULT_ID, DPFLTR_ERROR_LEVEL,
-                           "[CYCLE33] IdleLoop: DAIF=0x%llx CNTV_CTL=0x%llx (EN=%d IM=%d IS=%d) ISRCnt=%lu PMR=0x%llx GRPEN1=%llu\n",
-                           Daif, CntvCtl,
-                           (int)(CntvCtl & 1),       /* bit 0: ENABLE */
-                           (int)((CntvCtl >> 1) & 1), /* bit 1: IMASK */
-                           (int)((CntvCtl >> 2) & 1), /* bit 2: ISTATUS (pending) */
-                           KiTimerIsrCallCount,
-                           IccPmr,
-                           IccIgrpen1
-                );
-            }
-        }
-
         /*
          * ARM64 CRITICAL: Issue a data memory barrier before checking scheduler
          * state variables. This ensures we see updates from other CPUs/threads
@@ -198,23 +196,6 @@ KiIdleLoop(VOID)
         __asm__ __volatile__("dmb ish" ::: "memory");
 
         /*
-         * Debug: Check ready summary periodically to find hung threads.
-         * This helps diagnose cases where threads are on ready queues but
-         * never get scheduled.
-         */
-        if (FirstIdle || (IdleLoopCounter % 5000000 == 0))
-        {
-            FirstIdle = FALSE;
-            DbgPrintEx(DPFLTR_DEFAULT_ID, DPFLTR_ERROR_LEVEL,
-                       "[KiIdleLoop] Loop=%lu ReadySummary=0x%llx NextThread=%p DpcDepth=%lu DefReady=%p\n",
-                       IdleLoopCounter,
-                       (ULONG64)Prcb->ReadySummary,
-                       Prcb->NextThread,
-                       Prcb->DpcData[0].DpcQueueDepth,
-                       Prcb->DeferredReadyListHead.Next);
-        }
-
-        /*
          * Check for pending DPC work. On ARM64, also check DpcInterruptRequested
          * which is set by HalRequestSoftwareInterrupt when a DPC is queued.
          */
@@ -223,6 +204,19 @@ KiIdleLoop(VOID)
             Prcb->DeferredReadyListHead.Next ||
             Prcb->DpcInterruptRequested)
         {
+            if (KiArm64ShouldTraceIdle())
+            {
+                DbgPrintEx(DPFLTR_DEFAULT_ID,
+                           DPFLTR_ERROR_LEVEL,
+                           "[arm64][IDLE] dispatch work: DpcDepth=%lu TimerReq=%p Deferred=%p DpcReq=%u Next=%p Ready=0x%Ix\n",
+                           Prcb->DpcData[0].DpcQueueDepth,
+                           Prcb->TimerRequest,
+                           Prcb->DeferredReadyListHead.Next,
+                           Prcb->DpcInterruptRequested,
+                           Prcb->NextThread,
+                           Prcb->ReadySummary);
+            }
+
             HalClearSoftwareInterrupt(DISPATCH_LEVEL);
             Prcb->DpcInterruptRequested = FALSE;
             KiRetireDpcList(Prcb);
@@ -243,6 +237,15 @@ KiIdleLoop(VOID)
             PKTHREAD ReadyThread;
             KIRQL OldIrql;
 
+            if (KiArm64ShouldTraceIdle())
+            {
+                DbgPrintEx(DPFLTR_DEFAULT_ID,
+                           DPFLTR_ERROR_LEVEL,
+                           "[arm64][IDLE] ready-summary fallback: Ready=0x%Ix Cur=%p\n",
+                           Prcb->ReadySummary,
+                           Prcb->CurrentThread);
+            }
+
             /* Acquire PRCB lock at SYNCH_LEVEL to select a thread */
             OldIrql = KeRaiseIrqlToSynchLevel();
             KiAcquirePrcbLock(Prcb);
@@ -253,9 +256,15 @@ KiIdleLoop(VOID)
                 ReadyThread = KiSelectReadyThread(0, Prcb);
                 if (ReadyThread)
                 {
-                    DbgPrintEx(DPFLTR_DEFAULT_ID, DPFLTR_ERROR_LEVEL,
-                               "[KiIdleLoop] FIX: Found ready thread %p (Priority=%d) from ReadySummary=0x%llx\n",
-                               ReadyThread, ReadyThread->Priority, (ULONG64)Prcb->ReadySummary);
+                    if (KiArm64ShouldTraceIdle())
+                    {
+                        DbgPrintEx(DPFLTR_DEFAULT_ID,
+                                   DPFLTR_ERROR_LEVEL,
+                                   "[arm64][IDLE] selected from ready-summary: T=%p Pri=%d Ready=0x%Ix\n",
+                                   ReadyThread,
+                                   ReadyThread->Priority,
+                                   Prcb->ReadySummary);
+                    }
                     ReadyThread->State = Standby;
                     Prcb->NextThread = ReadyThread;
                 }
@@ -270,15 +279,26 @@ KiIdleLoop(VOID)
             PKTHREAD OldThread = Prcb->CurrentThread;
             PKTHREAD NewThread = Prcb->NextThread;
 
-            DbgPrintEx(DPFLTR_DEFAULT_ID, DPFLTR_ERROR_LEVEL,
-                       "[KiIdleLoop] Switching to NextThread=%p (State=%d Pri=%d) from Idle=%p\n",
-                       NewThread, NewThread->State, NewThread->Priority, OldThread);
+            if (KiArm64ShouldTraceIdle())
+            {
+                DbgPrintEx(DPFLTR_DEFAULT_ID,
+                           DPFLTR_ERROR_LEVEL,
+                           "[arm64][IDLE] swap: Old=%p OldPri=%d OldWait=%u OldBusy=%u New=%p NewPri=%d NewBusy=%u\n",
+                           OldThread,
+                           OldThread ? OldThread->Priority : -1,
+                           OldThread ? OldThread->WaitIrql : 0xFF,
+                           OldThread ? OldThread->SwapBusy : 0xFF,
+                           NewThread,
+                           NewThread ? NewThread->Priority : -1,
+                           NewThread ? NewThread->SwapBusy : 0xFF);
+            }
 
             Prcb->NextThread = NULL;
             Prcb->CurrentThread = NewThread;
             NewThread->State = Running;
 
-            KiSwapContext(APC_LEVEL, OldThread);
+            ASSERT(OldThread != NULL);
+            KiSwapContext(OldThread->WaitIrql, OldThread);
             continue;
         }
 
@@ -300,6 +320,22 @@ KiIdleLoop(VOID)
         KeStallExecutionProcessor(1000); /* 1ms delay */
         __asm__ __volatile__("yield" ::: "memory");
     }
+}
+
+/*
+ * Debug trace function called from assembly at key points.
+ * Uses DbgPrintEx which should work regardless of NDEBUG.
+ */
+VOID
+FASTCALL
+KiDebugTracePoint(
+    _In_ ULONG Point,
+    _In_ ULONG64 Value1,
+    _In_ ULONG64 Value2)
+{
+    UNREFERENCED_PARAMETER(Point);
+    UNREFERENCED_PARAMETER(Value1);
+    UNREFERENCED_PARAMETER(Value2);
 }
 
 /*
@@ -348,11 +384,7 @@ FASTCALL
 KiDebugRestoreContext(
     _In_ PVOID StackPointer)
 {
-    PKSWITCH_FRAME Frame = (PKSWITCH_FRAME)StackPointer;
-
-    DbgPrintEx(DPFLTR_DEFAULT_ID, DPFLTR_ERROR_LEVEL,
-               "[KiDebugRestoreContext] Reached! SP=%p ReturnAddress=0x%llx\n",
-               StackPointer, Frame->ReturnAddress);
+    UNREFERENCED_PARAMETER(StackPointer);
 }
 
 /*
@@ -363,9 +395,7 @@ FASTCALL
 KiDebugBeforeReturn(
     _In_ ULONG64 ReturnAddr)
 {
-    DbgPrintEx(DPFLTR_DEFAULT_ID, DPFLTR_ERROR_LEVEL,
-               "[KiDebugBeforeReturn] About to return to 0x%llx\n",
-               ReturnAddr);
+    UNREFERENCED_PARAMETER(ReturnAddr);
 }
 
 BOOLEAN
@@ -381,17 +411,57 @@ KiSwapContextResume(
     ASSERT(OldThread != NULL);
     ASSERT(NewThread != NULL);
 
+    if (KiArm64ShouldTraceIdle())
+    {
+        DbgPrintEx(DPFLTR_DEFAULT_ID,
+                   DPFLTR_ERROR_LEVEL,
+                   "[arm64][CTX] Resume entry: WaitIrql=%u CurIrql=%u Old=%p(S=%u,P=%d,Busy=%u) New=%p(S=%u,P=%d,Busy=%u)\n",
+                   WaitIrql,
+                   KeGetCurrentIrql(),
+                   OldThread,
+                   OldThread->State,
+                   OldThread->Priority,
+                   OldThread->SwapBusy,
+                   NewThread,
+                   NewThread->State,
+                   NewThread->Priority,
+                   NewThread->SwapBusy);
+    }
+
+    /*
+     * Hook for FP/SIMD state handling and trap-on-first-use mediation.
+     *
+     * DISABLED: Acquiring/releasing spinlocks during context switch manipulates
+     * IRQL via KfRaiseIrql/KfLowerIrql. On ARM64 with SMP, the AP idle loops
+     * can corrupt KeArm64CurrentIrql via KiSetCurrentIrql. Together with the
+     * spinlock IRQL dance here, this can cause IRQL state corruption and stalls.
+     *
+     * TODO: Re-enable once IRQL is fully per-CPU and spinlocks are safe in
+     * the context switch path.
+     */
+#if 0
+    KiArm64SaveFpState(OldThread);
+#endif
+
     Prcb = KeGetCurrentPrcb();
 
     NewThread->ContextSwitches++;
-    KeArm64CurrentThread = NewThread;
 
-    OldThread->SwapBusy = FALSE;
+    /*
+     * Update per-CPU current thread pointer.
+     * On SMP, only write the PRCB (per-CPU) - the global is a UP-only fallback.
+     * Writing the global on SMP corrupts other CPUs' view of their current thread.
+     */
     if (Prcb != NULL)
     {
         Prcb->KeContextSwitches++;
         Prcb->CurrentThread = NewThread;
     }
+#ifndef CONFIG_SMP
+    KeArm64CurrentThread = NewThread;
+#endif
+
+    OldThread->SwapBusy = FALSE;
 
     /*
      * ARM64: Switch address space (TTBR0) when moving to a different process.
@@ -405,32 +475,104 @@ KiSwapContextResume(
      */
     OldProcess = OldThread->ApcState.Process;
     NewProcess = NewThread->ApcState.Process;
+
     if (OldProcess != NewProcess)
     {
         KiSwapProcess(NewProcess, OldProcess);
+
+        if (KiArm64ShouldTraceIdle())
+        {
+            DbgPrintEx(DPFLTR_DEFAULT_ID,
+                       DPFLTR_ERROR_LEVEL,
+                       "[arm64][CTX] Resume after KiSwapProcess\n");
+        }
     }
 
     /*
-     * ARM64: Set the TEB pointer in TPIDR_EL0 for user mode.
-     * This register is used by user-mode code (via NtCurrentTeb macro) to
-     * access thread-local storage. The Windows ARM64 ABI also uses X18
-     * as the TEB pointer, which we set in KiTrapReturn before ERET.
+     * Re-arm trap-on-first-use for the incoming thread context.
+     * This must happen after the process switch so CPACR_EL1 state matches
+     * the currently scheduled thread.
+     *
+     * DISABLED: Same rationale as KiArm64SaveFpState above — the CPACR
+     * write and spinlock interactions are unsafe during SMP context switch
+     * while IRQL is still per-global rather than per-CPU.
+     *
+     * TODO: Re-enable once IRQL is fully per-CPU and spinlocks are safe in
+     * the context switch path.
      */
-    if (NewThread->Teb)
+#if 0
+    KiArm64ConfigureFpTrap();
+#endif
+
+#if 0 /* Disabled along with KiArm64ConfigureFpTrap above */
     {
-        __asm__ __volatile__("msr tpidr_el0, %0" :: "r"(NewThread->Teb) : "memory");
+        ULONG64 Cpacr;
+        __asm__ __volatile__("mrs %0, cpacr_el1" : "=r"(Cpacr));
+        ASSERT((Cpacr & CPACR_EL1_FPEN_MASK) == CPACR_EL1_FPEN_EL0_TRAP);
+        if (KiArm64HasSve)
+            ASSERT((Cpacr & CPACR_EL1_ZEN_MASK) == CPACR_EL1_ZEN_EL0_TRAP);
+        if (KiArm64HasSme)
+            ASSERT((Cpacr & CPACR_EL1_SMEN_MASK) == CPACR_EL1_SMEN_EL0_TRAP);
     }
+#endif
+
+    if (KiArm64ShouldTraceIdle())
+    {
+        DbgPrintEx(DPFLTR_DEFAULT_ID,
+                   DPFLTR_ERROR_LEVEL,
+                   "[arm64][CTX] Resume: KiArm64ConfigureFpTrap done\n");
+    }
+
+    /*
+     * ARM64 ABI: Do NOT set x18=TEB or tpidr_el0=TEB here.
+     *
+     * Per Microsoft's ARM64 Windows ABI conventions:
+     *   - In kernel mode (EL1): x18 = KPCR  (platform register)
+     *   - In user mode  (EL0): x18 = TEB
+     *   - TPIDR_EL0: reserved (not part of the ABI contract)
+     *
+     * Setting x18=TEB while still executing in EL1 violates the ABI and
+     * corrupts the kernel's platform register.  The correct location for
+     * x18=TEB and tpidr_el0=TEB is KiTrapReturn (trapret.S), which sets
+     * them immediately before ERET to EL0.
+     *
+     * TPIDR_EL0 is written in trapret.S as an internal convenience for
+     * user-mode NtCurrentTeb() implementations, but it is NOT backed by
+     * Microsoft's ABI contract (they mark it as "reserved").
+     */
 
     if (NewThread->ApcState.KernelApcPending &&
         !NewThread->SpecialApcDisable &&
         !WaitIrql)
     {
+        if (KiArm64ShouldTraceIdle())
+        {
+            DbgPrintEx(DPFLTR_DEFAULT_ID,
+                       DPFLTR_ERROR_LEVEL,
+                       "[arm64][CTX] Resume exit: return TRUE for APC delivery\n");
+        }
         return TRUE;
     }
 
     if (NewThread->ApcState.KernelApcPending)
     {
+        if (KiArm64ShouldTraceIdle())
+        {
+            DbgPrintEx(DPFLTR_DEFAULT_ID,
+                       DPFLTR_ERROR_LEVEL,
+                       "[arm64][CTX] Resume: New thread has KernelApcPending, WaitIrql=%u\n",
+                       WaitIrql);
+        }
+
         HalRequestSoftwareInterrupt(APC_LEVEL);
+    }
+
+    if (KiArm64ShouldTraceIdle())
+    {
+        DbgPrintEx(DPFLTR_DEFAULT_ID,
+                   DPFLTR_ERROR_LEVEL,
+                   "[arm64][CTX] Resume exit: return FALSE CurThread=%p\n",
+                   KeGetCurrentThread());
     }
 
     return FALSE;

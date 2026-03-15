@@ -1375,6 +1375,7 @@ typedef struct _EPROCESS
     struct _EJOB *Job;
     PVOID SectionObject;
     PVOID SectionBaseAddress;
+    PVOID SystemDllBase; /* User-mode base address of ntdll.dll for this process */
     PEPROCESS_QUOTA_BLOCK QuotaBlock;
     PPAGEFAULT_HISTORY WorkingSetWatch;
     PVOID Win32WindowStation;

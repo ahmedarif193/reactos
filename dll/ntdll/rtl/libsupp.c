@@ -669,6 +669,25 @@ RtlPcToFileHeader(IN PVOID PcValue,
     PLDR_DATA_TABLE_ENTRY Module;
     PVOID ImageBase = NULL;
 
+    /*
+     * ARM64 FIX (Bug #19): Guard against NULL PEB, Ldr, or LoaderLock.
+     *
+     * During early process startup (before the loader has fully initialized),
+     * PEB->Ldr may be NULL.  If an exception occurs at this point (e.g. an
+     * alignment fault in ntdll initialization code), the user-mode exception
+     * dispatcher calls RtlDispatchException → RtlpUnwindInternal →
+     * RtlLookupFunctionEntry → RtlPcToFileHeader.  Without this guard,
+     * accessing NULL->InLoadOrderModuleList (offset 0x10 in PEB_LDR_DATA)
+     * causes a crash at address 0x10, leading to infinite recursive exception
+     * dispatch.
+     */
+    if (!NtCurrentPeb() || !NtCurrentPeb()->Ldr || !NtCurrentPeb()->LoaderLock)
+    {
+        if (BaseOfImage)
+            *BaseOfImage = NULL;
+        return NULL;
+    }
+
     RtlEnterCriticalSection (NtCurrentPeb()->LoaderLock);
     ModuleListHead = &NtCurrentPeb()->Ldr->InLoadOrderModuleList;
     Entry = ModuleListHead->Flink;

@@ -102,7 +102,7 @@ KeAcquireQueuedSpinLock(
     Lock = Prcb->LockQueue[LockNumber].Lock;
     if (Lock == NULL)
     {
-        KeBugCheckEx(SPIN_LOCK_INIT_FAILURE, 2, LockNumber, (ULONG_PTR)Prcb, (ULONG_PTR)KeArm64CurrentPcr);
+        KeBugCheckEx(SPIN_LOCK_INIT_FAILURE, 2, LockNumber, (ULONG_PTR)Prcb, (ULONG_PTR)KeGetPcr());
     }
 
     KxAcquireSpinLock(Lock);
@@ -152,7 +152,7 @@ KeReleaseQueuedSpinLock(
     Lock = Prcb->LockQueue[LockNumber].Lock;
     if (Lock == NULL)
     {
-        KeBugCheckEx(SPIN_LOCK_INIT_FAILURE, 4, LockNumber, (ULONG_PTR)Prcb, (ULONG_PTR)KeArm64CurrentPcr);
+        KeBugCheckEx(SPIN_LOCK_INIT_FAILURE, 4, LockNumber, (ULONG_PTR)Prcb, (ULONG_PTR)KeGetPcr());
     }
 
     KxReleaseSpinLock(Lock);

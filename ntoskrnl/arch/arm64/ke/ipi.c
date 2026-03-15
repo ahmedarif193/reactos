@@ -104,11 +104,25 @@ KiIpiServiceRoutine(
     _In_ PKTRAP_FRAME TrapFrame,
     _In_ PKEXCEPTION_FRAME ExceptionFrame)
 {
-    UNREFERENCED_PARAMETER(TrapFrame);
-    UNREFERENCED_PARAMETER(ExceptionFrame);
 #ifdef CONFIG_SMP
     {
         PKPRCB Prcb = KeGetCurrentPrcb();
+
+        /*
+         * Check for freeze IPI FIRST, before any other processing.
+         *
+         * The freeze mechanism uses IpiFrozen as a STATE value (not bit flags).
+         * KxFreezeExecution sets IpiFrozen = IPI_FROZEN_STATE_TARGET_FREEZE
+         * on target CPUs, then sends a raw SGI via HalRequestIpi.
+         *
+         * If IpiFrozen indicates a freeze request, enter the freeze handler
+         * which saves state and spins until the debugger releases us.
+         */
+        if (Prcb->IpiFrozen == IPI_FROZEN_STATE_TARGET_FREEZE)
+        {
+            KiProcessorFreezeHandler(TrapFrame, ExceptionFrame);
+            return TRUE;
+        }
 
         if (InterlockedBitTestAndReset((PLONG)&Prcb->IpiFrozen, IPI_APC))
         {
@@ -126,6 +140,9 @@ KiIpiServiceRoutine(
             DbgBreakPoint();
         }
     }
+#else
+    UNREFERENCED_PARAMETER(TrapFrame);
+    UNREFERENCED_PARAMETER(ExceptionFrame);
 #endif
     return TRUE;
 }

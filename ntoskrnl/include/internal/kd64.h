@@ -559,6 +559,8 @@ extern BOOLEAN KdpPortLocked;
 extern BOOLEAN KdpControlCPressed;
 extern BOOLEAN KdpContextSent;
 extern KSPIN_LOCK KdpDebuggerLock;
+extern ULONG KdpDebuggerEntryCount;
+extern PKTHREAD KdpDebuggerOwnerThread;
 extern LARGE_INTEGER KdTimerStop, KdTimerStart, KdTimerDifference;
 
 extern CHAR KdpMessageBuffer[KDP_MSG_BUFFER_SIZE];

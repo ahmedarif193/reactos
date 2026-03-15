@@ -614,8 +614,14 @@ CsrCreateProcess(IN HANDLE hProcess,
     CsrProcess->ProcessHandle = hProcess;
     CsrProcess->ShutdownLevel = 0x280;
 
-    /* Set the priority to Background */
-    CsrSetBackgroundPriority(CsrProcess);
+    /*
+     * Console processes are dynamically foreground/background managed by
+     * consrv. Keep non-console processes at their inherited foreground mode.
+     */
+    if (CsrProcess->Flags & CsrProcessIsConsoleApp)
+    {
+        CsrSetBackgroundPriority(CsrProcess);
+    }
 
     /* Insert the Process */
     CsrInsertProcess(CurrentProcess, CsrProcess);

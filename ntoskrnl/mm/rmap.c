@@ -414,6 +414,7 @@ MmInsertRmap(PFN_NUMBER Page, PEPROCESS Process,
         KeBugCheck(MEMORY_MANAGEMENT);
     }
 
+
     OldIrql = MiAcquirePfnLock();
     current_entry = MmGetRmapListHeadPage(Page);
 

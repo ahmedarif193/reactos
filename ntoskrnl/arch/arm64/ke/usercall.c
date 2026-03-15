@@ -14,7 +14,19 @@ KiTrapReturn(
     _In_ PKTRAP_FRAME TrapFrame,
     _In_opt_ PKEXCEPTION_FRAME ExceptionFrame);
 
-typedef NTSTATUS (*PKI_SYSCALL_PARAM_HANDLER)(PVOID, PVOID *);
+/* Forward declaration - PsConvertToGuiThread is not in any header because
+ * it's normally called only from architecture-specific assembly (x86-64) */
+NTSTATUS NTAPI PsConvertToGuiThread(VOID);
+
+/*
+ * Return type is ULONG_PTR (not NTSTATUS) to preserve all 64 bits of the
+ * return value.  Many Nt* syscalls return handles (pointer-sized values).
+ * If the dispatch layer truncates through NTSTATUS (LONG, 32-bit signed),
+ * handles with bit 31 set get sign-extended to 0xFFFFFFFF_xxxxxxxx when
+ * stored back into TrapFrame->X0 (64-bit), producing corrupt handles
+ * that fail GDI/USER validation.
+ */
+typedef ULONG_PTR (*PKI_SYSCALL_PARAM_HANDLER)(PVOID, PVOID *);
 
 #define BUILD_SYSCALLS                                                        \
 SYSCALL(00, ())                                                               \
@@ -101,11 +113,74 @@ KiSystemService(
     DescriptorTable = (PKSERVICE_TABLE_DESCRIPTOR)(ServiceTable + TableIndex);
 
     ServiceNumber = Instruction & SERVICE_NUMBER_MASK;
+
     if (ServiceNumber >= DescriptorTable->Limit)
     {
+        /*
+         * ARM64 FIX: GUI Thread Conversion for Win32K System Calls.
+         *
+         * When a user-mode thread makes its first win32k system call (table
+         * index 1), the thread's ServiceTable still points to
+         * KeServiceDescriptorTable, which only has the NT table (index 0)
+         * populated. The win32k table (index 1) has Limit=0 and Base=NULL,
+         * so every service number fails this check.
+         *
+         * On x86-64 this is handled by KiSystemCallEntry64/KiConvertToGuiThread
+         * in assembly. On ARM64 we must handle it here in C.
+         *
+         * Call PsConvertToGuiThread() to:
+         * 1. Allocate a large kernel stack if needed
+         * 2. Call the win32k process callout (W32pProcessCallout)
+         * 3. Switch ServiceTable to KeServiceDescriptorTableShadow
+         * 4. Call the win32k thread callout (W32pThreadCallout)
+         *
+         * Then retry the service lookup with the new shadow table.
+         */
+        if (TableIndex == SERVICE_TABLE_TEST &&
+            Thread->ServiceTable == KeServiceDescriptorTable)
+        {
+            /* Only convert if win32k callouts are registered */
+            if (PspW32ProcessCallout != NULL && PspW32ThreadCallout != NULL)
+            {
+                NTSTATUS ConvertStatus = PsConvertToGuiThread();
+                if (NT_SUCCESS(ConvertStatus) ||
+                    ConvertStatus == STATUS_ALREADY_WIN32)
+                {
+                    /*
+                     * ARM64 FIX: Re-read TrapFrame after stack switch.
+                     *
+                     * PsConvertToGuiThread() calls KeSwitchKernelStack() which
+                     * copies the entire kernel stack to a new (larger) location
+                     * and adjusts Thread->TrapFrame accordingly. Our local
+                     * TrapFrame pointer still references the OLD stack which
+                     * has been freed by MmDeleteKernelStack(). We MUST update
+                     * our local pointer to the new location.
+                     *
+                     * TrapFrame->TrapFrame (the linked list pointer to the
+                     * previous trap frame) was also adjusted by
+                     * KeSwitchKernelStack, so the linked list is correct.
+                     */
+                    TrapFrame = Thread->TrapFrame;
+
+                    /* Retry with the new service table */
+                    ServiceTable = (ULONG_PTR)Thread->ServiceTable;
+                    DescriptorTable =
+                        (PKSERVICE_TABLE_DESCRIPTOR)(ServiceTable + TableIndex);
+
+                    if (ServiceNumber < DescriptorTable->Limit)
+                    {
+                        /* Success - fall through to the service dispatch below */
+                        goto ServiceDispatch;
+                    }
+                }
+            }
+        }
+
         TrapFrame->X0 = STATUS_INVALID_SYSTEM_SERVICE;
         return;
     }
+
+ServiceDispatch:
 
     SystemCall = (PVOID)DescriptorTable->Base[ServiceNumber];
     ArgumentCount = DescriptorTable->Number[ServiceNumber] / sizeof(ULONG_PTR);
@@ -158,7 +233,7 @@ KiSystemService(
                          0);
         }
 
-        if ((Thread->ApcStateIndex != CurrentApcEnvironment) ||
+        if ((Thread->ApcStateIndex != OriginalApcEnvironment) ||
             (Thread->CombinedApcDisable != 0))
         {
             KeBugCheckEx(APC_INDEX_MISMATCH,
@@ -169,7 +244,20 @@ KiSystemService(
         }
     }
 
-    Thread->TrapFrame = KiGetLinkedTrapFrame(TrapFrame);
+    /*
+     * NOTE: Thread->TrapFrame is NOT restored here.
+     *
+     * On x86-64, the assembly exit code (trap.S) restores Thread->TrapFrame
+     * from TrapFrame->TrapFrame after KiSystemService returns. On ARM64,
+     * the equivalent is done by the SVC handler in trapc.c after this
+     * function returns.
+     *
+     * We cannot do it here because after a GUI thread conversion
+     * (KeSwitchKernelStack), the local TrapFrame parameter is stale
+     * (points to the freed old stack). The caller (trapc.c) re-reads
+     * TrapFrame from Thread->TrapFrame which was adjusted by
+     * KeSwitchKernelStack, and then restores the linked list.
+     */
 }
 
 DECLSPEC_NORETURN
@@ -204,9 +292,69 @@ KiInitializeUserApc(
     PUAPC_FRAME ApcFrame;
     CONTEXT LocalContext = { 0 };
     ULONG_PTR Stack;
+    PKTHREAD Thread;
+    PEPROCESS Process;
+    PVOID UserApcDispatcher;
+    PVOID UserNormalRoutine;
 
     UNREFERENCED_PARAMETER(ExceptionFrame);
 
+    /*
+     * ARM64 FIX: Set X18 to TEB for user-mode ABI compliance.
+     *
+     * On ARM64, the platform ABI requires X18 to point to the Thread Environment Block (TEB)
+     * when executing in user mode. The kernel must ensure X18 is properly set before
+     * returning to user mode.
+     *
+     * Without this, user-mode code that accesses thread-local storage via X18 will fault
+     * or access garbage data, causing crashes or hangs.
+     */
+    Thread = KeGetCurrentThread();
+    Process = (PEPROCESS)Thread->ApcState.Process;
+    TrapFrame->X18 = (ULONG_PTR)Thread->Teb;
+
+    /*
+     * ARM64 FIX: Convert KeUserApcDispatcher from its kernel-mapped ntdll
+     * address to the user-space equivalent. If conversion fails but the
+     * global already contains a user VA, use it directly.
+     */
+    UserApcDispatcher = KiConvertSystemDllAddressToUser(KeUserApcDispatcher, Process);
+    if (!UserApcDispatcher)
+    {
+        if ((KeUserApcDispatcher != NULL) &&
+            ((ULONG_PTR)KeUserApcDispatcher < (ULONG_PTR)MmSystemRangeStart))
+        {
+            UserApcDispatcher = KeUserApcDispatcher;
+        }
+        if (!UserApcDispatcher)
+        {
+            DPRINT1("[arm64][APC] unresolved APC dispatcher: proc=%.16s KeUserApcDispatcher=%p SystemDllBase=%p PspSystemDllBase=%p TrapPc=%p TrapSp=%p\n",
+                    PsGetCurrentProcess()->ImageFileName,
+                    KeUserApcDispatcher,
+                    Process ? Process->SystemDllBase : NULL,
+                    PspSystemDllBase,
+                    (PVOID)(ULONG_PTR)TrapFrame->Pc,
+                    (PVOID)(ULONG_PTR)TrapFrame->Sp);
+            return;
+        }
+    }
+
+    /*
+     * ARM64 FIX: Convert NormalRoutine only if it is a kernel ntdll address.
+     *
+     * For LdrInitializeThunk APCs, NormalRoutine points into the kernel
+     * mapping of ntdll and must be converted. For ordinary user APCs,
+     * NormalRoutine is already a user-mode address (not within the kernel
+     * ntdll mapping). The range-checked helper returns NULL for addresses
+     * outside the kernel ntdll range, so we fall back to the original
+     * address in that case.
+     */
+    UserNormalRoutine = KiConvertSystemDllAddressToUser(NormalRoutine, Process);
+    if (!UserNormalRoutine)
+    {
+        /* NormalRoutine is not a kernel ntdll address -- use it directly */
+        UserNormalRoutine = NormalRoutine;
+    }
 
     ApcFrame = (PUAPC_FRAME)ALIGN_DOWN_POINTER_BY(TrapFrame->Sp - sizeof(*ApcFrame), 16);
 
@@ -219,18 +367,61 @@ KiInitializeUserApc(
     Stack = (ULONG_PTR)ApcFrame;
     ProbeForWrite(ApcFrame, sizeof(*ApcFrame), TYPE_ALIGNMENT(UAPC_FRAME));
 
+    /*
+     * ARM64 FIX: Pre-fault user stack pages before memmove.
+     *
+     * ProbeForWrite now resolves write faults via MmAccessFault instead of the
+     * old faulting store loop, but memmove itself still has no SEH around it.
+     * Pre-fault the exact APC frame range up front so stack growth or commit
+     * failure is handled here instead of during the copy.
+     *
+     * FaultCode 0x2 = write access (bit 1), not-present (bit 0 clear),
+     * kernel mode (bit 2 clear). This matches what the data abort handler
+     * would construct for a kernel write to an unmapped user page.
+     */
+    {
+        ULONG_PTR Start = (ULONG_PTR)ApcFrame;
+        ULONG_PTR End = Start + sizeof(*ApcFrame) - 1;
+        ULONG_PTR Page;
+        for (Page = Start & ~(PAGE_SIZE - 1); Page <= End; Page += PAGE_SIZE)
+        {
+            NTSTATUS FaultStatus = MmAccessFault(0x2, (PVOID)Page, KernelMode, (PVOID)1);
+            if (!NT_SUCCESS(FaultStatus))
+            {
+                return;
+            }
+        }
+    }
 
     RtlMoveMemory(&ApcFrame->Context, &LocalContext, sizeof(LocalContext));
     ApcFrame->MachineFrame.Pc = TrapFrame->Pc;
     ApcFrame->MachineFrame.Sp = TrapFrame->Sp;
 
+    /*
+     * ARM64 FIX: SystemArgument1 may be PspSystemDllBase (a kernel address
+     * pointing into the kernel ntdll mapping). If it is a kernel-range
+     * address, attempt conversion; if the conversion returns NULL (the
+     * address is in kernel space but outside ntdll), keep the original
+     * value -- the caller presumably knows what it is doing.
+     */
+    PVOID UserSystemArgument1 = SystemArgument1;
+    if (SystemArgument1 != NULL &&
+        (ULONG_PTR)SystemArgument1 >= (ULONG_PTR)MmSystemRangeStart)
+    {
+        PVOID Converted = KiConvertSystemDllAddressToUser(SystemArgument1, Process);
+        if (Converted != NULL)
+        {
+            UserSystemArgument1 = Converted;
+        }
+    }
+
     TrapFrame->X0 = (ULONG_PTR)NormalContext;
-    TrapFrame->X1 = (ULONG_PTR)SystemArgument1;
+    TrapFrame->X1 = (ULONG_PTR)UserSystemArgument1;  /* Use converted user address if needed */
     TrapFrame->X2 = (ULONG_PTR)SystemArgument2;
-    TrapFrame->X3 = (ULONG_PTR)NormalRoutine;
+    TrapFrame->X3 = (ULONG_PTR)UserNormalRoutine;  /* Use converted user address */
     TrapFrame->Sp = Stack;
-    TrapFrame->Pc = (ULONG_PTR)KeUserApcDispatcher;
-    TrapFrame->Lr = (ULONG_PTR)KeUserApcDispatcher;
+    TrapFrame->Pc = (ULONG_PTR)UserApcDispatcher;  /* Use converted user address */
+    TrapFrame->Lr = (ULONG_PTR)UserApcDispatcher;  /* Use converted user address */
 
 }
 

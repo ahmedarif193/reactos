@@ -205,7 +205,9 @@ KiArm64TimerIsr(
 #ifdef KDBG
     if ((KiTimerIsrCallCount % 10) == 0)
     {
-        *(volatile UCHAR *)KI_ARM64_PL011_VA = '~';
+        volatile UCHAR *Uart = (volatile UCHAR *)KI_ARM64_PL011_VA;
+        *Uart = '~';
+        *Uart = '\n';
     }
 #endif /* KDBG */
 

@@ -278,6 +278,13 @@ MiDereferenceSessionFinal(VOID)
     /* Get the pointer to the global session address */
     SessionGlobal = MmSessionSpace->GlobalVirtualAddress;
 
+    DPRINT("MMSESSION: Final begin SessionId=%lu Ref=%lu Resident=%ld Attach=%lu DeletePending=%lu\n",
+            SessionGlobal->SessionId,
+            SessionGlobal->ReferenceCount,
+            SessionGlobal->ResidentProcessCount,
+            SessionGlobal->AttachCount,
+            SessionGlobal->u.Flags.DeletePending);
+
     /* Acquire the expansion lock */
     OldIrql = MiAcquireExpansionLock();
 
@@ -289,6 +296,10 @@ MiDereferenceSessionFinal(VOID)
     /* Check if we have any attached processes */
     if (SessionGlobal->AttachCount)
     {
+        DPRINT("MMSESSION: Final waiting for AttachEvent SessionId=%lu Attach=%lu\n",
+                SessionGlobal->SessionId,
+                SessionGlobal->AttachCount);
+
         /* Initialize the event (it's not in use yet!) */
         KeInitializeEvent(&SessionGlobal->AttachEvent, NotificationEvent, FALSE);
 
@@ -297,6 +308,10 @@ MiDereferenceSessionFinal(VOID)
 
         /* Wait for the event to be set due to the last process detach */
         KeWaitForSingleObject(&SessionGlobal->AttachEvent, WrVirtualMemory, 0, 0, 0);
+
+        DPRINT("MMSESSION: Final wait complete SessionId=%lu Attach=%lu\n",
+                SessionGlobal->SessionId,
+                SessionGlobal->AttachCount);
 
         /* Reacquire the expansion lock */
         OldIrql = MiAcquireExpansionLock();
@@ -331,6 +346,8 @@ MiDereferenceSessionFinal(VOID)
         /* Call it */
         SessionGlobal->Win32KDriverUnload(NULL);
     }
+
+    DPRINT("MMSESSION: Final done SessionId=%lu\n", SessionGlobal->SessionId);
 }
 
 
@@ -355,14 +372,60 @@ MiDereferenceSession(VOID)
     /* Get the current process */
     Process = PsGetCurrentProcess();
 
-    /* Decrement the process count */
-    InterlockedDecrement(&MmSessionSpace->ResidentProcessCount);
+    DPRINT("MMSESSION: Deref begin Proc=%p(%.16s) SessionId=%lu Ref=%lu Resident=%ld Attach=%lu Leader=%u\n",
+            Process,
+            Process ? Process->ImageFileName : "<null>",
+            SessionId,
+            MmSessionSpace->ReferenceCount,
+            MmSessionSpace->ResidentProcessCount,
+            MmSessionSpace->AttachCount,
+            Process ? Process->Vm.Flags.SessionLeader : 0);
 
-    /* Decrement the reference count and check if was the last reference */
+#if defined(_M_ARM64) || defined(__aarch64__)
+    {
+        PMMPTE SessionPte = MiAddressToPte(MmSessionSpace);
+        DPRINT("MMSESSION: Deref pte MmSessionSpace=%p Pte=%p Long=0x%llx Valid=%u NotDirty=%u\n",
+                MmSessionSpace,
+                SessionPte,
+                (unsigned long long)SessionPte->u.Long,
+                SessionPte->u.Hard.Valid,
+                SessionPte->u.Hard.NotDirty);
+    }
+#endif
+
+    /* Decrement the process/reference counts */
+#if defined(_M_ARM64) || defined(__aarch64__)
+    {
+        KIRQL SessionOldIrql;
+        LONG ResidentAfter;
+
+        /*
+         * ARM64: Protect session counter updates with the expansion lock.
+         * This avoids relying on exclusive-atomic loops against session-space
+         * mappings during detach while preserving synchronization.
+         */
+        SessionOldIrql = MiAcquireExpansionLock();
+        ASSERT(MmSessionSpace->ResidentProcessCount > 0);
+        ASSERT(MmSessionSpace->ReferenceCount > 0);
+        ResidentAfter = --MmSessionSpace->ResidentProcessCount;
+        ReferenceCount = --MmSessionSpace->ReferenceCount;
+        MiReleaseExpansionLock(SessionOldIrql);
+
+        DPRINT("MMSESSION: Deref resident decremented SessionId=%lu ResidentNow=%ld\n",
+                SessionId,
+                ResidentAfter);
+    }
+#else
+    InterlockedDecrement(&MmSessionSpace->ResidentProcessCount);
     ReferenceCount = InterlockedDecrement(&MmSessionSpace->ReferenceCount);
+#endif
+    DPRINT("MMSESSION: Deref ref decremented SessionId=%lu RefNow=%lu\n",
+            SessionId,
+            ReferenceCount);
     if (ReferenceCount == 0)
     {
         /* No more references left, kill the session completely */
+        DPRINT("MMSESSION: Deref finalizing SessionId=%lu\n", SessionId);
         MiDereferenceSessionFinal();
         return;
     }
@@ -370,21 +433,46 @@ MiDereferenceSession(VOID)
     /* Check if this is the session leader */
     if (Process->Vm.Flags.SessionLeader)
     {
+        DPRINT("MMSESSION: Deref leader branch SessionId=%lu MmSessionSpace=%p\n",
+                SessionId,
+                MmSessionSpace);
+
         /* Get the global session address before we kill the session mapping */
         SessionGlobal = MmSessionSpace->GlobalVirtualAddress;
+        DPRINT("MMSESSION: Deref leader global SessionId=%lu SessionGlobal=%p\n",
+                SessionId,
+                SessionGlobal);
 
         /* Delete all session PDEs and flush the TB */
         //RtlZeroMemory(MiAddressToPde(MmSessionBase),
         //              BYTES_TO_PAGES(MmSessionSize) * sizeof(MMPDE));
+        DPRINT("MMSESSION: Deref leader flush begin SessionId=%lu\n", SessionId);
         KeFlushEntireTb(FALSE, FALSE);
+        DPRINT("MMSESSION: Deref leader flush end SessionId=%lu ProcessRef=%ld\n",
+                SessionId,
+                SessionGlobal->ProcessReferenceToSession);
 
         /* Clean up the references here. */
         ASSERT(Process->Session == NULL);
+        DPRINT("MMSESSION: Deref leader release-data begin SessionId=%lu ProcessRef=%ld\n",
+                SessionId,
+                SessionGlobal->ProcessReferenceToSession);
         MiReleaseProcessReferenceToSessionDataPage(SessionGlobal);
+        DPRINT("MMSESSION: Deref leader release-data end SessionId=%lu ProcessRef=%ld\n",
+                SessionId,
+                SessionGlobal->ProcessReferenceToSession);
     }
 
     /* Reset the current process' session flag */
     RtlInterlockedClearBits(&Process->Flags, PSF_PROCESS_IN_SESSION_BIT);
+
+    DPRINT("MMSESSION: Deref end Proc=%p(%.16s) SessionId=%lu Ref=%lu Resident=%ld Attach=%lu\n",
+            Process,
+            Process ? Process->ImageFileName : "<null>",
+            SessionId,
+            MmSessionSpace->ReferenceCount,
+            MmSessionSpace->ResidentProcessCount,
+            MmSessionSpace->AttachCount);
 }
 
 VOID
@@ -602,11 +690,11 @@ NTAPI
 MiSessionCreateInternal(OUT PULONG SessionId)
 {
     PEPROCESS Process = PsGetCurrentProcess();
-    ULONG NewFlags, Flags, i, Color;
+    ULONG NewFlags, Flags, i, Color = 0;
 #if (_MI_PAGING_LEVELS < 3)
     ULONG Size;
-#endif // (_MI_PAGING_LEVELS < 3)
     PMMPDE PageTables = NULL;
+#endif // (_MI_PAGING_LEVELS < 3)
     KIRQL OldIrql;
     PMMPTE PointerPte, SessionPte;
     PMMPDE PointerPde;
@@ -615,6 +703,9 @@ MiSessionCreateInternal(OUT PULONG SessionId)
     MMPDE TempPde;
     NTSTATUS Status;
     BOOLEAN Result;
+#if defined(_M_ARM64) || defined(__aarch64__)
+    BOOLEAN ReusedPde = FALSE;
+#endif
     PFN_NUMBER SessionPageDirIndex;
     PFN_NUMBER TagPage[MI_SESSION_TAG_PAGES_MAXIMUM];
     PFN_NUMBER DataPage[MI_SESSION_DATA_PAGES_MAXIMUM];
@@ -710,33 +801,56 @@ MiSessionCreateInternal(OUT PULONG SessionId)
     /* Set the pointer to global space */
     SessionGlobal = MiPteToAddress(SessionPte);
 
-    /* Get a zeroed colored zero page */
-    MI_SET_USAGE(MI_USAGE_INIT_MEMORY);
-    Color = MI_GET_NEXT_COLOR();
-    SessionPageDirIndex = MiRemoveZeroPageSafe(Color);
-    if (!SessionPageDirIndex)
-    {
-        /* No zero pages, grab a free one */
-        SessionPageDirIndex = MiRemoveAnyPage(Color);
-
-        /* Zero it outside the PFN lock */
-        MiReleasePfnLock(OldIrql);
-        MiZeroPhysicalPage(SessionPageDirIndex);
-        OldIrql = MiAcquirePfnLock();
-    }
-
-    /* Fill the PTE out */
-    TempPde = ValidKernelPdeLocal;
-    TempPde.u.Hard.PageFrameNumber = SessionPageDirIndex;
-
     /* Setup, allocate, fill out the MmSessionSpace PTE */
     PointerPde = MiAddressToPde(MmSessionSpace);
-    ASSERT(PointerPde->u.Long == 0);
-    MI_WRITE_VALID_PDE(PointerPde, TempPde);
-    MiInitializePfnForOtherProcess(SessionPageDirIndex,
-                                   PointerPde,
-                                   SessionPageDirIndex);
-    ASSERT(MI_PFN_ELEMENT(SessionPageDirIndex)->u1.WsIndex == 0);
+
+#if defined(_M_ARM64) || defined(__aarch64__)
+    if (PointerPde->u.Long != 0)
+    {
+        /*
+         * ARM64 FIX: The PDE (L2 table descriptor) may have been
+         * pre-created during self-map setup. The PDE already points to
+         * a valid, zeroed L3 page table. Reuse its physical page frame
+         * and skip MiInitializePfnForOtherProcess to avoid double-init
+         * assertions.
+         */
+        SessionPageDirIndex = PointerPde->u.Hard.PageFrameNumber;
+        ReusedPde = TRUE;
+    }
+    else
+#endif
+    {
+        /* Get a zeroed colored zero page */
+        MI_SET_USAGE(MI_USAGE_INIT_MEMORY);
+        Color = MI_GET_NEXT_COLOR();
+        SessionPageDirIndex = MiRemoveZeroPageSafe(Color);
+        if (!SessionPageDirIndex)
+        {
+            /* No zero pages, grab a free one */
+            SessionPageDirIndex = MiRemoveAnyPage(Color);
+
+            /* Zero it outside the PFN lock */
+            MiReleasePfnLock(OldIrql);
+            MiZeroPhysicalPage(SessionPageDirIndex);
+            OldIrql = MiAcquirePfnLock();
+        }
+
+        /* Fill the PDE out */
+        TempPde = ValidKernelPdeLocal;
+        TempPde.u.Hard.PageFrameNumber = SessionPageDirIndex;
+        ASSERT(PointerPde->u.Long == 0);
+        MI_WRITE_VALID_PDE(PointerPde, TempPde);
+    }
+
+#if defined(_M_ARM64) || defined(__aarch64__)
+    if (!ReusedPde)
+#endif
+    {
+        MiInitializePfnForOtherProcess(SessionPageDirIndex,
+                                       PointerPde,
+                                       SessionPageDirIndex);
+        ASSERT(MI_PFN_ELEMENT(SessionPageDirIndex)->u1.WsIndex == 0);
+    }
 
      /* Loop all the local PTEs for it */
     TempPte = ValidKernelPteLocal;
@@ -777,6 +891,11 @@ MiSessionCreateInternal(OUT PULONG SessionId)
     /* PTEs have been setup, release the PFN lock */
     MiReleasePfnLock(OldIrql);
 
+#if defined(_M_ARM64) || defined(__aarch64__)
+    /* TLB flush after writing new page table entries */
+    __asm__ __volatile__("dsb ishst\n\ttlbi vmalle1is\n\tdsb ish\n\tisb" ::: "memory");
+#endif
+
     /* Fill out the session space structure now */
     MmSessionSpace->GlobalVirtualAddress = SessionGlobal;
     MmSessionSpace->ReferenceCount = 1;
@@ -788,14 +907,11 @@ MiSessionCreateInternal(OUT PULONG SessionId)
     MmSessionSpace->Color = Color;
     MmSessionSpace->NonPageablePages = MiSessionCreateCharge;
     MmSessionSpace->CommittedPages = MiSessionCreateCharge;
-#ifndef _M_AMD64
+#if (_MI_PAGING_LEVELS < 3)
     MmSessionSpace->PageTables = PageTables;
     MmSessionSpace->PageTables[PointerPde - MiAddressToPde(MmSessionBase)] = *PointerPde;
 #endif
     InitializeListHead(&MmSessionSpace->ImageList);
-
-    DPRINT1("Session %lu is ready to go: 0x%p 0x%p, %lx 0x%p\n",
-            *SessionId, MmSessionSpace, SessionGlobal, SessionPageDirIndex, PageTables);
 
     /* Initialize session pool */
     //Status = MiInitializeSessionPool();
@@ -858,6 +974,7 @@ MmSessionCreate(OUT PULONG SessionId)
     /* Create the session */
     KeEnterCriticalRegion();
     Status = MiSessionCreateInternal(SessionId);
+
     if (!NT_SUCCESS(Status))
     {
         KeLeaveCriticalRegion();
@@ -866,6 +983,7 @@ MmSessionCreate(OUT PULONG SessionId)
 
     /* Set up the session working set */
     Status = MiSessionInitializeWorkingSetList();
+
     if (!NT_SUCCESS(Status))
     {
         /* Fail */
@@ -882,6 +1000,7 @@ MmSessionCreate(OUT PULONG SessionId)
     MmSessionSpace->u.Flags.Initialized = 1;
     PspSetProcessFlag(Process, PSF_PROCESS_IN_SESSION_BIT);
     ASSERT(MiSessionLeaderExists == 1);
+
     return Status;
 }
 
@@ -890,6 +1009,17 @@ NTAPI
 MmSessionDelete(IN ULONG SessionId)
 {
     PEPROCESS Process = PsGetCurrentProcess();
+
+    DPRINT("MMSESSION: Delete begin Proc=%p(%.16s) ArgSession=%lu CurSession=%lu Ref=%lu Resident=%ld Attach=%lu Leader=%u InSession=%u\n",
+            Process,
+            Process ? Process->ImageFileName : "<null>",
+            SessionId,
+            MmSessionSpace ? MmSessionSpace->SessionId : 0,
+            MmSessionSpace ? MmSessionSpace->ReferenceCount : 0,
+            MmSessionSpace ? MmSessionSpace->ResidentProcessCount : 0,
+            MmSessionSpace ? MmSessionSpace->AttachCount : 0,
+            Process ? Process->Vm.Flags.SessionLeader : 0,
+            Process ? ((Process->Flags & PSF_PROCESS_IN_SESSION_BIT) ? 1 : 0) : 0);
 
     /* Process must be in a session */
     if (!(Process->Flags & PSF_PROCESS_IN_SESSION_BIT))
@@ -909,6 +1039,11 @@ MmSessionDelete(IN ULONG SessionId)
     KeEnterCriticalRegion();
     MiDereferenceSession();
     KeLeaveCriticalRegion();
+
+    DPRINT("MMSESSION: Delete end Proc=%p(%.16s) SessionId=%lu\n",
+            Process,
+            Process ? Process->ImageFileName : "<null>",
+            SessionId);
 
     /* All done */
     return STATUS_SUCCESS;

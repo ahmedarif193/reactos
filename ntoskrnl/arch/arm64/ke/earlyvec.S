@@ -235,7 +235,8 @@ KiArm64VectorSyncLowerA64:
     str x9, [sp, #(ARM64_EARLY_STATE_REGS + 29 * 8)]
     ldr x10, [x29, #8]
     str x10, [sp, #(ARM64_EARLY_STATE_REGS + 30 * 8)]
-    add x11, x29, #16
+    /* BUG FIX: Lower-EL (vector 8) - user SP is in SP_EL0, not kernel stack */
+    mrs x11, sp_el0
     str x11, [sp, #ARM64_EARLY_STATE_REG_SP]
     mrs x12, elr_el1
     str x12, [sp, #ARM64_EARLY_STATE_ELR]
@@ -300,6 +301,8 @@ KiArm64VectorIrqSp0:
     ldp x10, x11, [sp, #32]
     msr elr_el1, x10
     msr spsr_el1, x11
+    ldp x0, x1, [sp, #0]
+    ldp x2, x3, [sp, #16]
     mov sp, x29
     ldp x29, x30, [sp], #16
     eret
@@ -340,6 +343,8 @@ KiArm64VectorFiqSp0:
     ldp x10, x11, [sp, #32]
     msr elr_el1, x10
     msr spsr_el1, x11
+    ldp x0, x1, [sp, #0]
+    ldp x2, x3, [sp, #16]
     mov sp, x29
     ldp x29, x30, [sp], #16
     eret
@@ -380,6 +385,8 @@ KiArm64VectorSErrorSp0:
     ldp x10, x11, [sp, #32]
     msr elr_el1, x10
     msr spsr_el1, x11
+    ldp x0, x1, [sp, #0]
+    ldp x2, x3, [sp, #16]
     mov sp, x29
     ldp x29, x30, [sp], #16
     eret
@@ -420,6 +427,8 @@ KiArm64VectorIrqSpx:
     ldp x10, x11, [sp, #32]
     msr elr_el1, x10
     msr spsr_el1, x11
+    ldp x0, x1, [sp, #0]
+    ldp x2, x3, [sp, #16]
     mov sp, x29
     ldp x29, x30, [sp], #16
     eret
@@ -460,6 +469,8 @@ KiArm64VectorFiqSpx:
     ldp x10, x11, [sp, #32]
     msr elr_el1, x10
     msr spsr_el1, x11
+    ldp x0, x1, [sp, #0]
+    ldp x2, x3, [sp, #16]
     mov sp, x29
     ldp x29, x30, [sp], #16
     eret
@@ -500,6 +511,8 @@ KiArm64VectorSErrorSpx:
     ldp x10, x11, [sp, #32]
     msr elr_el1, x10
     msr spsr_el1, x11
+    ldp x0, x1, [sp, #0]
+    ldp x2, x3, [sp, #16]
     mov sp, x29
     ldp x29, x30, [sp], #16
     eret
@@ -540,6 +553,8 @@ KiArm64VectorIrqLowerA64:
     ldp x10, x11, [sp, #32]
     msr elr_el1, x10
     msr spsr_el1, x11
+    ldp x0, x1, [sp, #0]
+    ldp x2, x3, [sp, #16]
     mov sp, x29
     ldp x29, x30, [sp], #16
     eret
@@ -580,6 +595,8 @@ KiArm64VectorFiqLowerA64:
     ldp x10, x11, [sp, #32]
     msr elr_el1, x10
     msr spsr_el1, x11
+    ldp x0, x1, [sp, #0]
+    ldp x2, x3, [sp, #16]
     mov sp, x29
     ldp x29, x30, [sp], #16
     eret
@@ -620,6 +637,8 @@ KiArm64VectorSErrorLowerA64:
     ldp x10, x11, [sp, #32]
     msr elr_el1, x10
     msr spsr_el1, x11
+    ldp x0, x1, [sp, #0]
+    ldp x2, x3, [sp, #16]
     mov sp, x29
     ldp x29, x30, [sp], #16
     eret
@@ -660,6 +679,8 @@ KiArm64VectorSyncLowerA32:
     ldp x10, x11, [sp, #32]
     msr elr_el1, x10
     msr spsr_el1, x11
+    ldp x0, x1, [sp, #0]
+    ldp x2, x3, [sp, #16]
     mov sp, x29
     ldp x29, x30, [sp], #16
     eret
@@ -700,6 +721,8 @@ KiArm64VectorIrqLowerA32:
     ldp x10, x11, [sp, #32]
     msr elr_el1, x10
     msr spsr_el1, x11
+    ldp x0, x1, [sp, #0]
+    ldp x2, x3, [sp, #16]
     mov sp, x29
     ldp x29, x30, [sp], #16
     eret
@@ -740,6 +763,8 @@ KiArm64VectorFiqLowerA32:
     ldp x10, x11, [sp, #32]
     msr elr_el1, x10
     msr spsr_el1, x11
+    ldp x0, x1, [sp, #0]
+    ldp x2, x3, [sp, #16]
     mov sp, x29
     ldp x29, x30, [sp], #16
     eret
@@ -780,6 +805,8 @@ KiArm64VectorSErrorLowerA32:
     ldp x10, x11, [sp, #32]
     msr elr_el1, x10
     msr spsr_el1, x11
+    ldp x0, x1, [sp, #0]
+    ldp x2, x3, [sp, #16]
     mov sp, x29
     ldp x29, x30, [sp], #16
     eret

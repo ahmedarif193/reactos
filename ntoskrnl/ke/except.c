@@ -188,6 +188,10 @@ NtRaiseException(
     /* Get trap frame and link previous one */
     Thread = KeGetCurrentThread();
     TrapFrame = Thread->TrapFrame;
+    if (TrapFrame == NULL)
+    {
+        return STATUS_INVALID_PARAMETER;
+    }
     Thread->TrapFrame = KiGetLinkedTrapFrame(TrapFrame);
 
     /* Set exception list */
@@ -230,9 +234,32 @@ NtContinue(
     /* Get trap frame and link previous one*/
     Thread = KeGetCurrentThread();
     TrapFrame = Thread->TrapFrame;
+    if (TrapFrame == NULL)
+    {
+        return STATUS_INVALID_PARAMETER;
+    }
     Thread->TrapFrame = KiGetLinkedTrapFrame(TrapFrame);
 
     /* Continue from this point on */
+#if defined(_M_ARM64)
+    {
+        CONTEXT UserCtx;
+        NTSTATUS ProbeStatus = STATUS_SUCCESS;
+        _SEH2_TRY {
+            ProbeForRead(Context, sizeof(CONTEXT), 1);
+            RtlCopyMemory(&UserCtx, Context, sizeof(CONTEXT));
+        } _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER) {
+            ProbeStatus = _SEH2_GetExceptionCode();
+        } _SEH2_END;
+        if (NT_SUCCESS(ProbeStatus))
+        {
+            DPRINT("[NtContinue] Pc=%p Lr=%p Sp=%p Fp=%p Proc=%s\n",
+                    (PVOID)UserCtx.Pc, (PVOID)UserCtx.Lr, (PVOID)UserCtx.Sp,
+                    (PVOID)UserCtx.Fp,
+                    (PCSTR)((PEPROCESS)Thread->ApcState.Process)->ImageFileName);
+        }
+    }
+#endif
     Status = KiContinue(Context, ExceptionFrame, TrapFrame);
     if (!NT_SUCCESS(Status))
     {

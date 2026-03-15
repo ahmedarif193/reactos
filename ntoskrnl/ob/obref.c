@@ -334,6 +334,14 @@ ObfDereferenceObject(IN PVOID Object)
     if (!NewCount)
     {
         /* Sanity check */
+        if (Header->HandleCount != 0)
+        {
+            DPRINT1("[OBREF] HandleCount mismatch! Object=%p Type=%wZ HandleCount=%ld PointerCount=%ld\n",
+                    Object,
+                    Header->Type ? &Header->Type->Name : NULL,
+                    Header->HandleCount,
+                    Header->PointerCount);
+        }
         ASSERT(Header->HandleCount == 0);
 
         /* Check if APCs are still active */

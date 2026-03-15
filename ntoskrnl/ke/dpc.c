@@ -11,7 +11,7 @@
 /* INCLUDES ******************************************************************/
 
 #include <ntoskrnl.h>
-//#define NDEBUG  /* Temporarily disabled for timer debugging */
+#define NDEBUG
 #include <debug.h>
 
 /* GLOBALS *******************************************************************/
@@ -161,7 +161,6 @@ KiTimerExpiration(IN PKDPC Dpc,
                 /* Check if there's any waiters */
                 if (!IsListEmpty(&Timer->Header.WaitListHead))
                 {
-                    /* Debug disabled for performance */
                     /* Check the type of event */
                     if (Timer->Header.Type == TimerNotificationObject)
                     {
@@ -593,6 +592,7 @@ KiRetireDpcList(IN PKPRCB Prcb)
 
             /* Expire timers with interrupts enabled */
             _enable();
+
             KiTimerExpiration(NULL, NULL, (PVOID)TimerHand, NULL);
             _disable();
         }

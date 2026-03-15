@@ -1117,9 +1117,15 @@ static BOOL add_dependent_assembly_id(struct actctx_loader* acl,
     return TRUE;
 }
 
-static void free_depend_manifests(struct actctx_loader* acl)
+static __attribute__((noinline)) void free_depend_manifests(struct actctx_loader* acl)
 {
     unsigned int i;
+    if (acl->num_dependencies > 0 && !acl->dependencies)
+    {
+        DPRINT1("[ACTCTX] BUG in free_depend: num_deps=%u but deps=NULL! Skipping.\n",
+                acl->num_dependencies);
+        return;
+    }
     for (i = 0; i < acl->num_dependencies; i++)
         free_assembly_identity(&acl->dependencies[i]);
     RtlFreeHeap(GetProcessHeap(), 0, acl->dependencies);
@@ -3419,7 +3425,7 @@ static NTSTATUS lookup_winsxs(struct actctx_loader* acl, struct assembly_identit
     return io.Status;
 }
 
-static NTSTATUS lookup_assembly(struct actctx_loader* acl,
+static __attribute__((noinline)) NTSTATUS lookup_assembly(struct actctx_loader* acl,
                                 struct assembly_identity* ai)
 {
     static const WCHAR dotDllW[] = {'.','d','l','l',0};
@@ -3508,14 +3514,23 @@ static NTSTATUS lookup_assembly(struct actctx_loader* acl,
     return status;
 }
 
-static NTSTATUS parse_depend_manifests(struct actctx_loader* acl)
+static __attribute__((noinline)) NTSTATUS parse_depend_manifests(struct actctx_loader* acl)
 {
     NTSTATUS status = STATUS_SUCCESS;
     unsigned int i;
 
+    if (acl->num_dependencies > 0 && !acl->dependencies)
+    {
+        DPRINT1("[ACTCTX] BUG: num_dependencies=%u but dependencies=NULL! Skipping.\n",
+                acl->num_dependencies);
+        return STATUS_SXS_CANT_GEN_ACTCTX;
+    }
+
     for (i = 0; i < acl->num_dependencies; i++)
     {
-        if (lookup_assembly(acl, &acl->dependencies[i]) != STATUS_SUCCESS)
+        NTSTATUS lookup_status;
+        lookup_status = lookup_assembly(acl, &acl->dependencies[i]);
+        if (lookup_status != STATUS_SUCCESS)
         {
             if (!acl->dependencies[i].optional && !acl->dependencies[i].delayed)
             {
@@ -5195,6 +5210,7 @@ void actctx_init(void)
 {
     ACTCTXW ctx;
     HANDLE handle;
+    NTSTATUS st;
 
     ctx.cbSize   = sizeof(ctx);
     ctx.lpSource = NULL;
@@ -5202,7 +5218,8 @@ void actctx_init(void)
     ctx.hModule  = NtCurrentTeb()->ProcessEnvironmentBlock->ImageBaseAddress;
     ctx.lpResourceName = (LPCWSTR)CREATEPROCESS_MANIFEST_RESOURCE_ID;
 
-    if (NT_SUCCESS(RtlCreateActivationContext(0, (PVOID)&ctx, 0, NULL, NULL, &handle)))
+    st = RtlCreateActivationContext(0, (PVOID)&ctx, 0, NULL, NULL, &handle);
+    if (NT_SUCCESS(st))
     {
         process_actctx = check_actctx(handle);
     }

@@ -357,34 +357,9 @@ IopCompleteRequest(IN PKAPC Apc,
             _SEH2_END;
         }
 
-#if defined(_M_ARM64) || defined(__aarch64__)
-        /*
-         * ARM64: Full memory barrier before accessing UserEvent.
-         *
-         * The Event structure is on the caller's stack. On ARM64, this APC may run
-         * on a different CPU than where the IRP was submitted. Without a barrier,
-         * the Event structure initialization (KeInitializeEvent) may not be visible
-         * to this CPU yet, causing corrupted Event->Header.Type.
-         *
-         * DSB SY ensures all prior writes (including Event init on other CPUs)
-         * are visible before we access the Event.
-         */
-        __asm__ __volatile__("dsb sy" ::: "memory");
-        /*
-         * ARM64 NOTE: We do NOT check Irp->Tail.Overlay.Thread here because the IRP
-         * may have been reused/recycled by the time this APC runs. The APC framework
-         * guarantees this APC runs on the thread it was queued to (which is correct).
-         * Checking Irp->Thread here would be reading potentially freed/reused memory.
-         */
-#endif
-
         /* Check if we have an event or a file object */
         if (Irp->UserEvent)
         {
-#if defined(_M_ARM64) || defined(__aarch64__)
-            /* ARM64: Barrier before signaling to ensure Event structure is fully visible */
-            __asm__ __volatile__("dsb sy" ::: "memory");
-#endif
             /* At the very least, this is a PKEVENT, so signal it always */
             KeSetEvent(Irp->UserEvent, 0, FALSE);
 
@@ -1352,12 +1327,6 @@ IofCallDriver(IN PDEVICE_OBJECT DeviceObject,
                 &DriverObject->DriverName, DispatchRoutine);
     }
 
-#if defined(_M_ARM64) || defined(__aarch64__)
-    /* ARM64: Ensure all IRP setup (stack location, parameters) is visible
-     * to the dispatch routine before we call it */
-    __asm__ __volatile__("dmb sy" ::: "memory");
-#endif
-
     /* Call it */
     return DispatchRoutine(DeviceObject, Irp);
 }
@@ -1577,9 +1546,7 @@ IofCompleteRequest(IN PIRP Irp,
      *
      * We explicitly EXCLUDE buffered IOCTLs (IRP_BUFFERED_IO with IRP_INPUT_OPERATION).
      */
-    if ((Irp->Flags & (IRP_PAGING_IO | IRP_CLOSE_OPERATION)) ||
-        ((Irp->Flags & IRP_SYNCHRONOUS_PAGING_IO) && (Irp->Flags & IRP_PAGING_IO) &&
-         !(Irp->Flags & IRP_BUFFERED_IO)))
+    if (Irp->Flags & (IRP_PAGING_IO | IRP_CLOSE_OPERATION))
     {
         /* Handle a Close Operation or Sync Paging I/O */
         if (Irp->Flags & (IRP_SYNCHRONOUS_PAGING_IO | IRP_CLOSE_OPERATION))
@@ -1592,19 +1559,17 @@ IofCompleteRequest(IN PIRP Irp,
             /* Free the IRP for a Paging I/O Only, Close is handled by us */
             if (Flags)
             {
+#if defined(_M_ARM64)
                 /*
                  * ARM64 FIX: Dequeue the IRP from the thread's IRP list before
                  * freeing. IRPs created via IoBuildDeviceIoControlRequest are
                  * queued to the thread, and must be dequeued before freeing to
                  * avoid an assertion failure in IoFreeIrp.
-                 *
-                 * Enter a guarded region to disable APCs, as required by
-                 * IopUnQueueIrpFromThread to safely manipulate the thread's
-                 * IRP list without racing with IopCompleteRequest.
                  */
                 KeEnterGuardedRegion();
                 IopUnQueueIrpFromThread(Irp);
                 KeLeaveGuardedRegion();
+#endif
 
                 /* If we were using the reserve IRP, then call the appropriate
                  * free function (to make the IRP available again)
@@ -1675,6 +1640,7 @@ IofCompleteRequest(IN PIRP Irp,
     Thread = Irp->Tail.Overlay.Thread;
     FileObject = Irp->Tail.Overlay.OriginalFileObject;
 
+#if defined(_M_ARM64)
     /*
      * ARM64 FIX: Handle synchronous IRP completion for IRPs created by
      * IoBuildDeviceIoControlRequest and similar functions.
@@ -1748,27 +1714,14 @@ IofCompleteRequest(IN PIRP Irp,
     }
 
     /*
-     * Synchronous completion with no FileObject (PnP, etc).
+     * ARM64 FIX: Synchronous completion path for stack-backed UserEvent/UserIosb.
      *
-     * The normal completion path queues a special kernel APC (IopCompleteRequest)
-     * to the requesting thread, which will later write *UserIosb and signal
-     * UserEvent.
-     *
-     * If the IRP completed synchronously (PendingReturned == FALSE), many
-     * callers do not wait on the stack-allocated event/IOSB and return
-     * immediately. The deferred APC may then run after the stack frame has
-     * unwound, causing use-after-free and assertions inside KeSetEvent.
-     *
-     * Publish the completion to the caller now and then clear the pointers so
-     * the queued APC will not touch stale stack addresses.
-     *
-     * ARM64 FIX: Use inline signaling WITH memory barriers to ensure the event
-     * state is visible to the waiting thread. Then clear UserEvent so the APC
-     * won't access the freed stack. This is the same as x86/x64 but with barriers.
+     * Publish completion immediately and clear the pointers so the queued APC
+     * will not access stale stack data.
      */
     if (Irp->UserEvent != NULL &&
-        FileObject == NULL &&
-        !Irp->PendingReturned)
+        !Irp->PendingReturned &&
+        ((FileObject == NULL) || (Irp->Flags & IRP_SYNCHRONOUS_API)))
     {
         if (Irp->UserIosb != NULL)
         {
@@ -1783,31 +1736,13 @@ IofCompleteRequest(IN PIRP Irp,
             _SEH2_END;
         }
 
-#if defined(_M_ARM64) || defined(__aarch64__)
-        /*
-         * ARM64: FULL synchronization barrier (DSB) BEFORE signaling to ensure
-         * ALL prior writes (IoStatus, IRP fields) are completed and visible
-         * to all observers before we signal the event.
-         */
-        __asm__ __volatile__("dsb sy" ::: "memory");
-#endif
-
         KeSetEvent(Irp->UserEvent, PriorityBoost, FALSE);
-
-#if defined(_M_ARM64) || defined(__aarch64__)
-        /*
-         * ARM64: DSB + ISB AFTER signaling to ensure:
-         * 1. Event state change is fully completed (DSB)
-         * 2. Instruction pipeline is flushed (ISB)
-         * This ensures the signaled event is immediately visible to waiting threads.
-         */
-        __asm__ __volatile__("dsb sy; isb" ::: "memory");
-#endif
 
         /* Clear pointers so APC won't access freed stack */
         Irp->UserEvent = NULL;
         Irp->UserIosb = NULL;
     }
+#endif
 
     /* Make sure the IRP isn't canceled */
     if (!Irp->Cancel)

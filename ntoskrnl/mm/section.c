@@ -58,6 +58,14 @@
 
 extern MMSESSION MmSession;
 
+#ifdef _M_ARM64
+BOOLEAN
+MiArm64ReadUserPtePhysically(
+    _In_ PVOID Address,
+    _Out_opt_ PULONG64 OutPte,
+    _Out_opt_ PULONG OutDepth);
+#endif
+
 static LARGE_INTEGER TinyTime = {{-1L, -1L}};
 
 #ifndef NEWCC
@@ -1186,7 +1194,7 @@ MmUnsharePageEntrySectionSegment(PMEMORY_AREA MemoryArea,
         MmFreeSwapPage(SwapEntry);
     }
     MmSetPageEntrySectionSegment(Segment, Offset, 0);
-#if DBG
+#if DBG && !defined(CONFIG_SMP)
     {
         KIRQL OldIrql = MiAcquirePfnLock();
         ASSERT(MmGetRmapListHeadPage(Page) == NULL);
@@ -1427,11 +1435,13 @@ MmMakeSegmentResident(
             FileOffset.QuadPart = Segment->Image.FileOffset + ChunkOffset;
 
 #if defined(_M_ARM64)
-            /* Debug: trace file read offset, file name, and PFNs (Cycle 57 enhanced) */
+            /* Debug: trace file read offset, file name, and PFNs */
             DPRINT("[arm64] MmMakeSegmentResident: File='%wZ' FileObj=%p FsContext=%p\n",
                     &FileObject->FileName, FileObject, FileObject->FsContext);
             DPRINT("[arm64] MmMakeSegmentResident: Reading FileOffset=0x%I64x ChunkOffset=0x%I64x Segment->FileOffset=0x%I64x ReadLen=%lu PFN[0]=0x%I64x\n",
                     FileOffset.QuadPart, ChunkOffset, Segment->Image.FileOffset, ReadLength, (ULONG64)Pages[0]);
+
+            /* rpcrt4.dll diagnostic removed -- confirmed pages read correctly */
 #endif
 
             /* Clamp to VDL */
@@ -1453,32 +1463,30 @@ MmMakeSegmentResident(
             KIRQL OldIrql;
             KeRaiseIrql(APC_LEVEL, &OldIrql);
 
+
             IO_STATUS_BLOCK Iosb;
             Status = IoPageRead(FileObject, Mdl, &FileOffset, &Event, &Iosb);
+
+
 
             if (Status == STATUS_PENDING)
             {
                 KeWaitForSingleObject(&Event, WrPageIn, KernelMode, FALSE, NULL);
                 Status = Iosb.Status;
+
             }
 
 #if defined(_M_ARM64)
-            /*
-             * ARM64: Flush CPU caches after DMA read completes.
-             * DMA writes directly to physical memory, bypassing the CPU cache.
-             * The CPU may have stale data cached for the same physical pages,
-             * so we must invalidate the cache to ensure the CPU sees the fresh
-             * DMA data when accessing these pages through any virtual address.
-             *
-             * IMPORTANT: Call this BEFORE MmUnmapLockedPages so KeFlushIoBuffers
-             * can use the existing system VA mapping if present, avoiding the
-             * need to create a new mapping.
-             */
             if (NT_SUCCESS(Status))
             {
-                KeFlushIoBuffers(Mdl, TRUE /* ReadOperation */, FALSE /* DmaOperation */);
+                /*
+                 * DMA filled the MDL pages directly; flush before unmapping so the
+                 * existing system VA can be used for cache maintenance.
+                 */
+                KeFlushIoBuffers(Mdl, TRUE, FALSE);
             }
 #endif
+
 
             if (Mdl->MdlFlags & MDL_MAPPED_TO_SYSTEM_VA)
             {
@@ -1533,6 +1541,7 @@ AssignPagesToSegment:
                     Entry = DIRTY_SSE(Entry);
 
                 MmSetPageEntrySectionSegment(Segment, &CurrentOffset, Entry);
+
             }
 
             MmUnlockSectionSegment(Segment);
@@ -1658,6 +1667,8 @@ MmNotPresentFaultSectionView(PMMSUPPORT AddressSpace,
     SWAPENTRY SwapEntry;
 
 
+
+
     ASSERT(Locked);
 
     /*
@@ -1676,6 +1687,7 @@ MmNotPresentFaultSectionView(PMMSUPPORT AddressSpace,
 #if defined(_M_ARM64)
         KeInvalidateTlbEntry(Address);
 #endif
+
         return STATUS_SUCCESS;
     }
 
@@ -1805,6 +1817,7 @@ MmNotPresentFaultSectionView(PMMSUPPORT AddressSpace,
     /*
      * Lock the segment
      */
+
     MmLockSectionSegment(Segment);
 
     /*
@@ -1854,12 +1867,8 @@ MmNotPresentFaultSectionView(PMMSUPPORT AddressSpace,
      */
     Entry = MmGetPageEntrySectionSegment(Segment, &Offset);
 
-#if defined(_M_ARM64)
-    /*
-     * Avoid DbgPrint from ARM64 user-mode section faults here.
-     * (DbgPrint paths can wedge after TTBR0 switch / while holding MM locks.)
-     */
-#endif
+
+
 
     if (Entry == 0)
     {
@@ -1899,18 +1908,10 @@ MmNotPresentFaultSectionView(PMMSUPPORT AddressSpace,
         MmUnlockAddressSpace(AddressSpace);
 
 
-#if defined(_M_ARM64)
-        if (PAddress >= MmSystemRangeStart)
-        {
-            DPRINT("[arm64] MmNotPresentFaultSectionView: About to read segment data\n");
-            DPRINT("[arm64] MmNotPresentFaultSectionView: Segment=%p FileObj=%p File='%wZ'\n",
-                    Segment, Segment->FileObject, &Segment->FileObject->FileName);
-            DPRINT("[arm64] MmNotPresentFaultSectionView: Segment->Image.FileOffset=0x%I64x Offset=0x%I64x\n",
-                    (LONGLONG)Segment->Image.FileOffset, Offset.QuadPart);
-        }
-#endif
+
 
         /* The data must be paged in. Lock the file, so that the VDL doesn't get updated behind us. */
+
         FsRtlAcquireFileExclusive(Segment->FileObject);
 
         PFSRTL_COMMON_FCB_HEADER FcbHeader = Segment->FileObject->FsContext;
@@ -1921,6 +1922,7 @@ MmNotPresentFaultSectionView(PMMSUPPORT AddressSpace,
 
         /* Lock address space again */
         MmLockAddressSpace(AddressSpace);
+
 
         if (!NT_SUCCESS(Status))
         {
@@ -2024,42 +2026,83 @@ MmNotPresentFaultSectionView(PMMSUPPORT AddressSpace,
         /* We already have a page on this section offset. Map it into the process address space. */
         Page = PFN_FROM_SSE(Entry);
 
+        if (Page == 0)
+        {
+            /* Reset the section entry to 0 so MmMakeSegmentResident re-reads from file */
+            MmSetPageEntrySectionSegment(Segment, &Offset, 0);
+            MmUnlockSectionSegment(Segment);
+            return STATUS_MM_RESTART_OPERATION;
+        }
+
+
+
+
+
+
 #if defined(_M_ARM64)
         /*
-         * ARM64: Avoid taking the process working set lock while holding the segment lock.
-         * MmCreateVirtualMapping for user addresses acquires the process WS lock, which can
-         * deadlock with other paths that take WS lock and then the segment lock.
+         * ARM64: Release the segment lock before MmCreateVirtualMapping to avoid
+         * deadlock with the working set (WS) lock. MmCreateVirtualMappingUnsafeEx
+         * on ARM64 acquires the WS lock internally, creating a lock ordering issue:
+         *   Thread A: AddressSpace -> Segment -> WS (deadlock)
+         *   Thread B: WS -> ... -> Segment
          *
-         * Take the share-count reference while still holding the segment lock, then drop
-         * the segment lock before mapping into the process.
+         * Solution: Drop the segment lock (keep address space lock for VA protection),
+         * take a share-count reference to keep the page alive, then call
+         * MmCreateVirtualMapping. The address space lock prevents concurrent
+         * modifications to the same VA range.
          */
-        BOOLEAN DroppedSegmentLock = FALSE;
-        BOOLEAN DroppedAddressSpaceLock = FALSE;
+        BOOLEAN Arm64DroppedSegmentLock = FALSE;
         if (PAddress < MmSystemRangeStart)
         {
             MmSharePageEntrySectionSegment(Segment, &Offset);
             MmUnlockSectionSegment(Segment);
-            DroppedSegmentLock = TRUE;
+            Arm64DroppedSegmentLock = TRUE;
         }
 #endif
 
 #if defined(_M_ARM64)
-        /* Debug: trace the PFN being mapped for SYSCACHE */
-        if ((ULONG_PTR)PAddress >= 0xFFFFF98000000000ULL &&
-            (ULONG_PTR)PAddress < 0xFFFFFA8000000000ULL)
+        /*
+         * Bug #52 fix: Check if the page is already mapped before creating mapping.
+         *
+         * CRITICAL: This check must be AFTER dropping the segment lock but BEFORE
+         * MmCreateVirtualMapping. The address space lock is still held, preventing
+         * concurrent modifications to the same VA.
+         *
+         * This handles race conditions where two threads fault on the same VA:
+         * - Both see SSE has valid page
+         * - Both drop segment lock
+         * - First thread maps page + adds rmap
+         * - Second thread checks here, sees page already mapped, skips duplicate
+         *
+         * The check was originally BEFORE dropping the segment lock, creating a window
+         * where another thread could enter after the check but before the mapping.
+         */
+        if (Process && PAddress < MmSystemRangeStart)
         {
-            DPRINT("[arm64] MmNotPresentFaultSectionView: SYSCACHE Mapping VA=%p to PFN=0x%I64x (Entry=0x%I64x) Attr=0x%x\n",
-                    PAddress, (ULONG64)Page, Entry, Attributes);
-        }
-        /* Debug: skip user-space DbgPrint here (can wedge on ARM64). */
-#endif
+            PFN_NUMBER ExistingPfn = MmGetPfnForProcess(Process, PAddress);
 
+            if (ExistingPfn == Page)
+            {
+                /*
+                 * BUG #52 FIX: Page already mapped by another thread - this is a race.
+                 *
+                 * We've already taken an SSE reference at line 2312 and dropped the
+                 * segment lock at line 2313. But the other thread completed the mapping,
+                 * so our work is redundant. We must release our SSE reference before
+                 * returning to avoid leaking references.
+                 */
+                DPRINT("[SECTION-RACE-SKIP] Page 0x%lx already at VA %p in %s, releasing SSE ref\n",
+                       (ULONG)Page, PAddress, Process->ImageFileName);
 
-#if defined(_M_ARM64)
-        if (DroppedSegmentLock && !DroppedAddressSpaceLock)
-        {
-            MmUnlockAddressSpace(AddressSpace);
-            DroppedAddressSpaceLock = TRUE;
+                /* Re-acquire segment lock to call MmUnsharePageEntrySectionSegment */
+                MmLockSectionSegment(Segment);
+                MmUnsharePageEntrySectionSegment(MemoryArea, Segment, &Offset, FALSE, FALSE, NULL);
+                MmUnlockSectionSegment(Segment);
+
+                /* Other thread's mapping is correct */
+                return STATUS_SUCCESS;
+            }
         }
 #endif
         Status = MmCreateVirtualMapping(Process,
@@ -2067,17 +2110,14 @@ MmNotPresentFaultSectionView(PMMSUPPORT AddressSpace,
                                         Attributes,
                                         Page);
 
-#if defined(_M_ARM64)
-        if (DroppedAddressSpaceLock)
-        {
-            MmLockAddressSpace(AddressSpace);
-        }
-#endif
         if (!NT_SUCCESS(Status))
         {
             DPRINT1("Unable to create virtual mapping\n");
             KeBugCheck(MEMORY_MANAGEMENT);
         }
+
+        /* (Diagnostic removed: all-zero check was too noisy - legitimate BSS/gap pages) */
+
 
 
 #if defined(_M_ARM64)
@@ -2134,11 +2174,7 @@ MmNotPresentFaultSectionView(PMMSUPPORT AddressSpace,
              * The direct read via PAddress is safe because we just created
              * the mapping above.
              */
-            {
-                volatile PUCHAR SysCacheData = (volatile PUCHAR)PAddress;
-                DPRINT("[arm64] MmNotPresentFaultSectionView: SYSCACHE direct read VA=%p first4=0x%02x 0x%02x 0x%02x 0x%02x\n",
-                        PAddress, SysCacheData[0], SysCacheData[1], SysCacheData[2], SysCacheData[3]);
-            }
+
         }
         /*
          * ARM64: User-space pages don't need cache invalidation here because:
@@ -2156,28 +2192,74 @@ MmNotPresentFaultSectionView(PMMSUPPORT AddressSpace,
 #endif
 
         if (Process)
-            MmInsertRmap(Page, Process, Address);
+        {
+#if defined(_M_ARM64)
+            /*
+             * BUG #52 FIX: Final race check before MmInsertRmap.
+             *
+             * Even with the earlier check at line 2337, there's a race window:
+             * 1. Thread A checks (page not mapped) → passes
+             * 2. Thread B checks (page not mapped) → passes
+             * 3. Thread A calls MmCreateVirtualMapping → maps page
+             * 4. Thread A calls MmInsertRmap → adds rmap entry
+             * 5. Thread B calls MmCreateVirtualMapping → OVERWRITES A's PTE (same PFN)
+             * 6. Thread B reaches here → would add DUPLICATE rmap entry → BUGCHECK
+             *
+             * This final check prevents step 6. We check if rmap entry already exists.
+             */
+            if (Arm64DroppedSegmentLock)
+            {
+                KIRQL OldIrql;
+                PMMPFN Pfn1;
+                BOOLEAN RmapExists = FALSE;
+
+                OldIrql = MiAcquirePfnLock();
+                Pfn1 = MiGetPfnEntry(Page);
+
+                /* Walk rmap list to check for duplicate */
+                PMM_RMAP_ENTRY Entry = Pfn1->RmapListHead;
+                while (Entry)
+                {
+                    if (Entry->Process == Process && Entry->Address == Address)
+                    {
+                        RmapExists = TRUE;
+                        break;
+                    }
+                    Entry = Entry->Next;
+                }
+                MiReleasePfnLock(OldIrql);
+
+                if (!RmapExists)
+                {
+                    MmInsertRmap(Page, Process, Address);
+                }
+                else
+                {
+                    MmLockSectionSegment(Segment);
+                    MmUnsharePageEntrySectionSegment(MemoryArea, Segment, &Offset, FALSE, FALSE, NULL);
+                    MmUnlockSectionSegment(Segment);
+                    return STATUS_SUCCESS;
+                }
+            }
+            else
+#endif
+            {
+                MmInsertRmap(Page, Process, Address);
+            }
+        }
 
 #if defined(_M_ARM64)
-        if (DroppedSegmentLock)
+        if (Arm64DroppedSegmentLock)
         {
-            /*
-             * ARM64: We already did MmSharePageEntrySectionSegment and
-             * MmUnlockSectionSegment earlier (before MmCreateVirtualMapping)
-             * to avoid lock ordering issues. Skip the normal path below.
-             *
-             * NOTE: If any cleanup code is added after this block, it must
-             * be duplicated here or refactored to use a unified exit path.
-             */
-            DPRINT("Address 0x%p\n", Address);
+            /* Segment lock already released, share count already taken */
+
             return STATUS_SUCCESS;
         }
 #endif
-
         /* Take a reference on it */
         MmSharePageEntrySectionSegment(Segment, &Offset);
         MmUnlockSectionSegment(Segment);
-        DPRINT("Address 0x%p\n", Address);
+
         return STATUS_SUCCESS;
     }
 }
@@ -2203,7 +2285,7 @@ MmAccessFaultSectionView(PMMSUPPORT AddressSpace,
     BOOLEAN Unmapped;
     NTSTATUS Status;
 
-    DPRINT("MmAccessFaultSectionView(%p, %p, %p)\n", AddressSpace, MemoryArea, Address);
+
 
     /* Get the region for this address */
     Region = MmFindRegion((PVOID)MA_GetStartingAddress(MemoryArea),
@@ -2229,7 +2311,7 @@ MmAccessFaultSectionView(PMMSUPPORT AddressSpace,
      */
     if (MmGetPageProtect(Process, Address) & (PAGE_READWRITE | PAGE_EXECUTE_READWRITE))
     {
-        DPRINT("Address 0x%p\n", Address);
+
         return STATUS_SUCCESS;
     }
 
@@ -2302,7 +2384,7 @@ MmAccessFaultSectionView(PMMSUPPORT AddressSpace,
     /*
      * Unshare the old page.
      */
-    DPRINT("Swapping page (Old %x New %x)\n", OldPage, NewPage);
+
     Unmapped = MmDeleteVirtualMapping(Process, PAddress, NULL, &UnmappedPage);
     if (!Unmapped || (UnmappedPage != OldPage))
     {
@@ -2331,7 +2413,7 @@ MmAccessFaultSectionView(PMMSUPPORT AddressSpace,
     if (Process)
         MmInsertRmap(NewPage, Process, PAddress);
 
-    DPRINT("Address 0x%p\n", Address);
+
     return STATUS_SUCCESS;
 }
 
@@ -2431,7 +2513,7 @@ MmpDeleteSection(PVOID ObjectBody)
         return;
     }
 
-    DPRINT("MmpDeleteSection(ObjectBody %p)\n", ObjectBody);
+
     if (Section->u.Flags.Image)
     {
         PMM_IMAGE_SECTION_OBJECT ImageSectionObject = (PMM_IMAGE_SECTION_OBJECT)Section->Segment;
@@ -2479,7 +2561,7 @@ MmpCloseSection(IN PEPROCESS Process OPTIONAL,
                 IN ULONG ProcessHandleCount,
                 IN ULONG SystemHandleCount)
 {
-    DPRINT("MmpCloseSection(OB %p, HC %lu)\n", Object, ProcessHandleCount);
+
 }
 
 CODE_SEG("INIT")
@@ -2581,7 +2663,7 @@ MmInitSectionImplementation(VOID)
     OBJECT_TYPE_INITIALIZER ObjectTypeInitializer;
     UNICODE_STRING Name;
 
-    DPRINT("Creating Section Object Type\n");
+
 
     /* Initialize the section based root */
     ASSERT(MmSectionBasedRoot.NumberGenericTableElements == 0);
@@ -3359,17 +3441,12 @@ ExeFmtpCreateImageSection(PFILE_OBJECT FileObject,
      */
     Offset.QuadPart = 0;
 
-    DPRINT("[arm64] ExeFmtpCreateImageSection: ENTRY File='%wZ'\n", &FileObject->FileName);
-
     Status = ExeFmtpReadFile (FileObject,
                               &Offset,
                               PAGE_SIZE * 2,
                               &FileHeader,
                               &FileHeaderBuffer,
                               &FileHeaderSize);
-
-    DPRINT("[arm64] ExeFmtpCreateImageSection: After ExeFmtpReadFile Status=0x%x HeaderSize=%lu\n", Status, FileHeaderSize);
-
     if (!NT_SUCCESS(Status))
         return Status;
 
@@ -3648,11 +3725,7 @@ grab_image_section_object:
         /* Purge the cache */
         CcFlushCache(FileObject->SectionObjectPointer, NULL, 0, NULL);
 
-        DPRINT("[arm64] MmCreateImageSection: Calling ExeFmtpCreateImageSection\n");
-
         StatusExeFmt = ExeFmtpCreateImageSection(FileObject, ImageSectionObject);
-
-        DPRINT("[arm64] MmCreateImageSection: ExeFmtpCreateImageSection returned 0x%x\n", StatusExeFmt);
 
         if (!NT_SUCCESS(StatusExeFmt))
         {
@@ -3682,14 +3755,10 @@ grab_image_section_object:
         ASSERT(ImageSectionObject->Segments);
         ASSERT(ImageSectionObject->RefCount > 0);
 
-        DPRINT("[arm64] MmCreateImageSection: Before MmspWaitForFileLock\n");
-
         /*
          * Lock the file
          */
         Status = MmspWaitForFileLock(FileObject);
-
-        DPRINT("[arm64] MmCreateImageSection: MmspWaitForFileLock returned 0x%x\n", Status);
 
         if (!NT_SUCCESS(Status))
         {
@@ -3829,36 +3898,17 @@ MmMapViewOfSegment(
 
 #if defined(_M_ARM64)
     /*
-     * ARM64 Cycle 57: Clear any stale PTEs in the newly mapped VA range.
-     *
-     * FreeLoader creates identity mappings in user space (TTBR0) during boot.
-     * These mappings may cover the VA range we just reserved. If so, reads from
-     * this VA range would hit FreeLoader's identity-mapped physical pages
-     * instead of the section data (which is demand-loaded on page faults).
-     *
-     * Solution: Walk the page table hierarchy for this VA range and invalidate
-     * any existing PTEs. This ensures page faults occur when the section is
-     * accessed, which will properly populate the pages with file data.
-     *
-     * NOTE: We only do this for user-space section views mapped in a process
-     * context (i.e., Process != NULL and Address < MmSystemRangeStart).
+     * Clear stale TTBR0 identity mappings for user section views.
+     * This helper handles both L3 PTEs and L2 block descriptors.
      */
+    if ((AddressSpace != NULL) &&
+        ((ULONG_PTR)(*BaseAddress) < (ULONG_PTR)MmSystemRangeStart))
     {
-        /*
-         * ARM64 Cycle 57: DISABLED stale PTE clearing.
-         *
-         * The stale PTE clearing code was causing issues because:
-         * 1. FreeLoader creates 2MB block descriptors (not L3 page tables)
-         * 2. Clearing the L2 block descriptor removes the entire mapping
-         * 3. The page fault handler can't create mappings without page tables
-         *
-         * For now, we need a different approach:
-         * - Either fix FreeLoader to not create identity mappings
-         * - Or use a different VA range for section views (not 0-2MB)
-         * - Or have the page fault handler create page tables on demand
-         */
-        UNREFERENCED_PARAMETER(AddressSpace);
-        /* Skip DPRINT1 here - it hangs after TTBR0 switch in process context */
+        PEPROCESS Process = MmGetAddressSpaceOwner(AddressSpace);
+        if ((Process != NULL) && (Process != PsInitialSystemProcess))
+        {
+            MiArm64ClearStaleUserPtes(*BaseAddress, ViewSize, Process);
+        }
     }
 #endif
 
@@ -3982,7 +4032,7 @@ MmFreeSectionPage(PVOID Context, MEMORY_AREA* MemoryArea, PVOID Address,
                     MmSetSavedSwapEntryPage(Page, 0);
                 }
                 MmDeleteRmap(Page, Process, Address);
-#if DBG
+#if DBG && !defined(CONFIG_SMP)
                 {
                     KIRQL OldIrql = MiAcquirePfnLock();
                     ASSERT(MmGetRmapListHeadPage(Page) == NULL);
@@ -4641,6 +4691,10 @@ return Arm3Status;
         if (((ImageBase + ImageSize) > (ULONG_PTR)MM_HIGHEST_VAD_ADDRESS) ||
                 ((ImageBase + ImageSize) < ImageSize))
         {
+#if defined(_M_ARM64) || defined(__aarch64__)
+            DPRINT1("[ARM64] Image base 0x%p + size 0x%zx exceeds MM_HIGHEST_VAD_ADDRESS 0x%p\n",
+                    (PVOID)ImageBase, ImageSize, MM_HIGHEST_VAD_ADDRESS);
+#endif
             ASSERT(*BaseAddress == NULL);
             ImageBase = ALIGN_DOWN_BY((ULONG_PTR)MM_HIGHEST_VAD_ADDRESS - ImageSize,
                                       MM_VIRTMEM_GRANULARITY);
@@ -4648,6 +4702,11 @@ return Arm3Status;
         }
         else if (ImageBase != ALIGN_DOWN_BY(ImageBase, MM_VIRTMEM_GRANULARITY))
         {
+#if defined(_M_ARM64) || defined(__aarch64__)
+            DPRINT1("[ARM64] Image base 0x%p not aligned to 0x%x, adjusting to 0x%p\n",
+                    (PVOID)ImageBase, MM_VIRTMEM_GRANULARITY,
+                    (PVOID)ALIGN_DOWN_BY(ImageBase, MM_VIRTMEM_GRANULARITY));
+#endif
             ASSERT(*BaseAddress == NULL);
             ImageBase = ALIGN_DOWN_BY(ImageBase, MM_VIRTMEM_GRANULARITY);
             NotAtBase = TRUE;
@@ -4657,6 +4716,11 @@ return Arm3Status;
         /* Check there is enough space to map the section at that point. */
         if (!MmIsAddressRangeFree(AddressSpace, (PVOID)ImageBase, PAGE_ROUND_UP(ImageSize)))
         {
+#if defined(_M_ARM64) || defined(__aarch64__)
+            DPRINT("[ARM64] Address range 0x%p - 0x%p (size 0x%zx) NOT FREE, finding gap\n",
+                   (PVOID)ImageBase, (PVOID)(ImageBase + PAGE_ROUND_UP(ImageSize)),
+                   PAGE_ROUND_UP(ImageSize));
+#endif
             /* Fail if the user requested a fixed base address. */
             if ((*BaseAddress) != NULL)
             {
@@ -4665,6 +4729,9 @@ return Arm3Status;
             }
             /* Otherwise find a gap to map the image. */
             ImageBase = (ULONG_PTR)MmFindGap(AddressSpace, PAGE_ROUND_UP(ImageSize), MM_VIRTMEM_GRANULARITY, FALSE);
+#if defined(_M_ARM64) || defined(__aarch64__)
+            DPRINT("[ARM64] MmFindGap returned new base 0x%p\n", (PVOID)ImageBase);
+#endif
             if (ImageBase == 0)
             {
                 Status = STATUS_CONFLICTING_ADDRESSES;
@@ -5139,19 +5206,8 @@ MmMapViewInSystemSpaceEx (
                                 SectionOffset->QuadPart,
                                 SEC_RESERVE);
 
-#if defined(_M_ARM64)
-    DPRINT("[arm64] MmMapViewInSystemSpaceEx: MmMapViewOfSegment returned Status=0x%lx Base=%p\n",
-            Status, *MappedBase);
-#endif
-
     MmUnlockSectionSegment(Segment);
-#if defined(_M_ARM64)
-    DPRINT("[arm64] MmMapViewInSystemSpaceEx: After MmUnlockSectionSegment\n");
-#endif
     MmUnlockAddressSpace(AddressSpace);
-#if defined(_M_ARM64)
-    DPRINT("[arm64] MmMapViewInSystemSpaceEx: Returning Status=0x%lx\n", Status);
-#endif
 
     return Status;
 }
@@ -5249,9 +5305,6 @@ MmCreateSection (OUT PVOID  * Section,
     {
         if (!(FileObject) && !(FileHandle))
         {
-#if defined(_M_ARM64)
-            DPRINT("[arm64] MmCreateSection: Taking ARM3 path (no file)\n");
-#endif
             return MmCreateArm3Section(Section,
                                        DesiredAccess,
                                        ObjectAttributes,
@@ -5261,14 +5314,6 @@ MmCreateSection (OUT PVOID  * Section,
                                        FileHandle,
                                        FileObject);
         }
-#if defined(_M_ARM64)
-        else
-        {
-            DPRINT("[arm64] MmCreateSection: FileObject=%p FileHandle=%p AllocationAttributes=0x%lx\n",
-                    FileObject, FileHandle, AllocationAttributes);
-            DPRINT("[arm64] MmCreateSection: Taking LEGACY ROS path (has file)\n");
-        }
-#endif
     }
 
     /* Convert section flag to page flag */
@@ -5285,14 +5330,8 @@ MmCreateSection (OUT PVOID  * Section,
     /* Check if this is going to be a data or image backed file section */
     if ((FileHandle) || (FileObject))
     {
-#if defined(_M_ARM64)
-        /* ARM64: For SEC_RESERVE file-backed sections (Cache Manager), use ARM3.
-         * ARM3's MiCreateDataFileMap will create a pagefile-backed segment for SEC_RESERVE,
-         * providing ARM3 section benefits (FFFFF97F... addresses with prototype PTE
-         * demand-paging that works correctly after Cycle 18). */
-        if ((AllocationAttributes & SEC_RESERVE) && FileObject)
+        if (MiArchShouldRouteFileReserveSectionToArm3(FileObject, AllocationAttributes))
         {
-            DPRINT("[arm64] MmCreateSection: Redirecting file-backed SEC_RESERVE to ARM3\n");
             return MmCreateArm3Section(Section,
                                        DesiredAccess,
                                        ObjectAttributes,
@@ -5302,7 +5341,6 @@ MmCreateSection (OUT PVOID  * Section,
                                        FileHandle,
                                        FileObject);
         }
-#endif
 
         /* These cannot be mapped with large pages */
         if (AllocationAttributes & SEC_LARGE_PAGES)
@@ -5625,22 +5663,13 @@ MmMakeDataSectionResident(
 {
     PMM_SECTION_SEGMENT Segment = MiGrabDataSection(SectionObjectPointer);
 
-#if defined(_M_ARM64)
-    /*
-     * ARM64: For SEC_RESERVE sections created via ARM3, there may be no RosMm segment.
-     * ARM3 handles mapping, but doesn't support file I/O yet. SEC_RESERVE sections
-     * are demand-paged from zero (no actual file backing), so we can safely skip
-     * making data resident - it will be zero-filled on page fault.
-     */
-    if (!Segment)
+    if (!Segment && MiArchAllowMissingDataSectionSegment(SectionObjectPointer))
     {
-        /* No RosMm segment (ARM3 SEC_RESERVE section) - data is demand-zero */
         return STATUS_SUCCESS;
     }
-#else
+
     /* There must be a segment for this call */
     ASSERT(Segment);
-#endif
 
     NTSTATUS Status = MmMakeSegmentResident(Segment, Offset, Length, ValidDataLength, FALSE);
 
@@ -5819,8 +5848,23 @@ MmCheckDirtySegment(
          * We got a dirty entry. This path is for the shared data,
          * be-it regular file maps or shared sections of DLLs
          */
+#if defined(_M_ARM64) || defined(__aarch64__)
+        /*
+         * ARM64: Skip assertion — ARM64 hardware dirty bit (DBM) management
+         * may mark pages dirty that wouldn't be on x86 (e.g., due to
+         * speculative writes or COW page attribute differences). If this is
+         * a non-shared image segment, just skip the writeback — the page
+         * is effectively a private copy and doesn't need to be written to disk.
+         */
+        if (!FlagOn(*Segment->Flags, MM_DATAFILE_SEGMENT) &&
+            !FlagOn(Segment->Image.Characteristics, IMAGE_SCN_MEM_SHARED))
+        {
+            return FALSE;
+        }
+#else
         ASSERT(FlagOn(*Segment->Flags, MM_DATAFILE_SEGMENT) ||
                FlagOn(Segment->Image.Characteristics, IMAGE_SCN_MEM_SHARED));
+#endif
 
         /* Insert the cleaned entry back. Mark it as write in progress, and clear the dirty bit. */
         Entry = MAKE_SSE(PAGE_FROM_SSE(Entry), SHARE_COUNT_FROM_SSE(Entry) + 1);

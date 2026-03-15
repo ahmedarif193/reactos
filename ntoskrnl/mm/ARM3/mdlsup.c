@@ -14,6 +14,7 @@
 
 #define MODULE_INVOLVED_IN_ARM3
 #include <mm/ARM3/miarm.h>
+#include <mm/ARM3/mibugchk.h>
 
 /* GLOBALS ********************************************************************/
 
@@ -609,7 +610,7 @@ MmFreePagesFromMdl(IN PMDL Mdl)
         if (Pfn1->u4.PteFrame != 0x1FFEDCB)
         {
             /* Corrupted PFN entry or invalid free */
-            KeBugCheckEx(MEMORY_MANAGEMENT, 0x1236, (ULONG_PTR)Mdl, (ULONG_PTR)Pages, *Pages);
+            MI_BUGCHECK_MM(MI_BUGCHECK_MM_UNLOCK_PAGES_PFN_CORRUPT, Mdl, Pages, *Pages);
         }
 
         //
@@ -1150,53 +1151,18 @@ MmProbeAndLockPages(IN PMDL Mdl,
         //
         UsePfnLock = TRUE;
 
-#if defined(_M_ARM64) || defined(__aarch64__)
         /*
-         * ARM64 SELF-MAP PRE-MAPPING:
+         * ARM64 NOTE: The self-map pre-mapping loop that was here has been
+         * removed. It pre-populated TTBR1 self-map aliases before acquiring
+         * the PFN lock (DISPATCH_LEVEL) to avoid faulting on self-map pages.
          *
-         * Unlike x86-64 which has a recursive page table structure, ARM64 uses
-         * explicit alias mappings for the self-map (PTE_BASE region). When we
-         * hold the PFN lock (DISPATCH_LEVEL), we cannot handle page faults on
-         * unmapped self-map alias pages because the fault handler would need to
-         * allocate memory (which requires IRQL < DISPATCH_LEVEL).
-         *
-         * Before acquiring the PFN lock, we must ensure that ALL self-map alias
-         * pages we'll access during the MDL loop are already mapped. This includes:
-         * - PointerPxe, PointerPpe, PointerPde, PointerPte for the start address
-         * - All PTEs between StartAddress and LastAddress
-         *
-         * We call MiArm64MapAliasForPointer for each PTE pointer. This function
-         * will allocate page table pages if needed BEFORE we raise IRQL.
+         * This is no longer needed because:
+         * 1. This path handles kernel-mode MDLs (Base > MM_HIGHEST_USER_ADDRESS)
+         * 2. Kernel addresses use TTBR1 self-map which is always consistent
+         * 3. User-address PTE reads in the MDL loop now use KSEG0 helpers
+         *    (MiArm64UserPteKseg0) which bypass the self-map entirely and
+         *    never fault at any IRQL
          */
-        {
-            extern VOID MiArm64MapAliasForPointer(_In_ PVOID AliasVa);
-            PVOID TempAddress;
-            PMMPTE TempPte;
-            PMMPDE TempPde;
-            PMMPDE TempPpe;
-            PMMPDE TempPxe;
-
-            /* Map self-map aliases for the entire range we'll be accessing */
-            for (TempAddress = StartAddress;
-                 TempAddress < LastAddress;
-                 TempAddress = (PVOID)((ULONG_PTR)TempAddress + PAGE_SIZE))
-            {
-                TempPte = MiAddressToPte(TempAddress);
-                TempPde = MiAddressToPde(TempAddress);
-                TempPpe = MiAddressToPpe(TempAddress);
-                TempPxe = MiAddressToPxe(TempAddress);
-
-                /* Ensure self-map alias pages are mapped for each level */
-                MiArm64MapAliasForPointer(TempPxe);
-                MiArm64MapAliasForPointer(TempPpe);
-                MiArm64MapAliasForPointer(TempPde);
-                MiArm64MapAliasForPointer(TempPte);
-            }
-
-            /* Ensure TLB sees the new mappings */
-            __asm__ __volatile__("dsb ishst\n\ttlbi vmalle1is\n\tdsb ish\n\tisb" ::: "memory");
-        }
-#endif /* _M_ARM64 */
 
         OldIrql = MiAcquirePfnLock();
     }
@@ -1240,6 +1206,123 @@ MmProbeAndLockPages(IN PMDL Mdl,
         //
         *MdlPages = LIST_HEAD;
 
+#if defined(_M_ARM64) || defined(__aarch64__)
+        /*
+         * ARM64 KSEG0 PTE access path.
+         *
+         * For user addresses, read the PTE through KSEG0 (physical identity
+         * mapping) instead of the TTBR1 self-map. KSEG0 reads are always
+         * fresh (no stale alias problem) and never fault at any IRQL.
+         *
+         * This eliminates the need for MiArm64SyncSelfMapForUserAddress()
+         * that was previously required before every self-map PTE read (Bugs
+         * #61, #62).
+         *
+         * For kernel addresses, the self-map path below is used unchanged
+         * (TTBR1 self-map is always consistent for kernel page tables).
+         */
+        Address = MiPteToAddress(PointerPte);
+        if (MiIsUserAddress(Address))
+        {
+            PMMPTE KsegPte;
+            MMPTE KsegPteValue;
+
+            /* Read PTE through KSEG0 — always fresh, no self-map dependency */
+            KsegPte = MiArm64UserPteKseg0(Address);
+
+            /* Fault in the page if page tables or PTE are not valid */
+            while (!KsegPte || KsegPte->u.Hard.Valid == 0)
+            {
+                if (UsePfnLock)
+                {
+                    MiReleasePfnLock(OldIrql);
+                }
+                else
+                {
+                    MiUnlockProcessWorkingSet(CurrentProcess, PsGetCurrentThread());
+                }
+
+                //HACK: Pass a placeholder TrapInformation so the fault handler knows we're unlocked
+                Status = MmAccessFault(FALSE, Address, KernelMode, (PVOID)(ULONG_PTR)0xBADBADA3BADBADA3ULL);
+                if (!NT_SUCCESS(Status))
+                {
+                    DPRINT1("Access fault failed for VA=%p Status=0x%lx\n",
+                            Address, Status);
+                    goto Cleanup;
+                }
+
+                if (UsePfnLock)
+                {
+                    OldIrql = MiAcquirePfnLock();
+                }
+                else
+                {
+                    MiLockProcessWorkingSet(CurrentProcess, PsGetCurrentThread());
+                }
+
+                /* Re-read PTE through KSEG0 after fault handler ran */
+                KsegPte = MiArm64UserPteKseg0(Address);
+            }
+
+            /* Snapshot the PTE value now that it's confirmed valid */
+            KsegPteValue = *KsegPte;
+
+            /* Check write permission for write operations */
+            if (Operation != IoReadAccess)
+            {
+                if (KsegPteValue.u.Hard.Writable == 0)
+                {
+                    if (KsegPteValue.u.Hard.CopyOnWrite)
+                    {
+                        /* COW page — trigger write fault to break COW */
+                        if (UsePfnLock)
+                        {
+                            MiReleasePfnLock(OldIrql);
+                        }
+                        else
+                        {
+                            MiUnlockProcessWorkingSet(CurrentProcess, PsGetCurrentThread());
+                        }
+
+                        //HACK: Pass a placeholder TrapInformation so the fault handler knows we're unlocked
+                        Status = MmAccessFault(TRUE, Address, KernelMode, (PVOID)(ULONG_PTR)0xBADBADA3BADBADA3ULL);
+                        if (!NT_SUCCESS(Status))
+                        {
+                            DPRINT1("Access fault failed\n");
+                            goto Cleanup;
+                        }
+
+                        if (UsePfnLock)
+                        {
+                            OldIrql = MiAcquirePfnLock();
+                        }
+                        else
+                        {
+                            MiLockProcessWorkingSet(CurrentProcess, PsGetCurrentThread());
+                        }
+
+                        /* Retry — COW should be broken, page now writable */
+                        continue;
+                    }
+
+                    /*
+                     * Page is not writable and not COW. With KSEG0, we read the
+                     * real hardware PTE directly, so this is genuinely read-only.
+                     * (Previously Bug #62 required a stale-alias workaround here
+                     * because the self-map could show old read-only state even
+                     * after the hardware PTE was made writable by ProbeForWrite.)
+                     */
+                    Status = STATUS_ACCESS_VIOLATION;
+                    goto CleanupWithLock;
+                }
+            }
+
+            /* Extract PFN from the KSEG0-read PTE */
+            PageFrameIndex = (PFN_NUMBER)KsegPteValue.u.Hard.PageFrameNumber;
+            goto HavePfnArm64;
+        }
+#endif /* _M_ARM64 */
+
         while (
 #if (_MI_PAGING_LEVELS == 4)
                (PointerPxe->u.Hard.Valid == 0) ||
@@ -1278,7 +1361,8 @@ MmProbeAndLockPages(IN PMDL Mdl,
                 //
                 // Fail
                 //
-                DPRINT1("Access fault failed\n");
+                DPRINT1("Access fault failed for VA=%p Status=0x%lx\n",
+                        Address, Status);
                 goto Cleanup;
             }
 
@@ -1379,6 +1463,7 @@ MmProbeAndLockPages(IN PMDL Mdl,
                 //
                 Status = STATUS_ACCESS_VIOLATION;
                 goto CleanupWithLock;
+
             }
         }
 
@@ -1386,6 +1471,10 @@ MmProbeAndLockPages(IN PMDL Mdl,
         // Grab the PFN
         //
         PageFrameIndex = PFN_FROM_PTE(PointerPte);
+
+#if defined(_M_ARM64) || defined(__aarch64__)
+HavePfnArm64:
+#endif
         Pfn1 = MiGetPfnEntry(PageFrameIndex);
         if (Pfn1)
         {

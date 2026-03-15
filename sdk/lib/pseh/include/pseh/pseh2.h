@@ -97,6 +97,7 @@ _Pragma("GCC diagnostic pop")
 #endif
 #define _exception_code() 0
 #define _exception_info() ((void*)0)
+#define _abnormal_termination() 0
 
 #elif defined(_USE_PSEH3)
 

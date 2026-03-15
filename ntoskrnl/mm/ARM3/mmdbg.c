@@ -126,6 +126,7 @@ MmDbgCopyMemory(IN ULONG64 Address,
                 IN ULONG Size,
                 IN ULONG Flags)
 {
+    NTSTATUS Status = STATUS_SUCCESS;
     PVOID TargetAddress;
     ULONG64 PhysicalAddress;
     PMMPTE PointerPte;
@@ -246,36 +247,47 @@ MmDbgCopyMemory(IN ULONG64 Address,
         CopySource = TargetAddress;
     }
 
-    /* Do the copy  */
-    switch (Size)
+    /*
+     * Guard the raw memory access. Even after MmIsAddressValid succeeds,
+     * mappings can race and fault at DISPATCH_LEVEL/HIGH_LEVEL.
+     */
+    _SEH2_TRY
     {
-        case 1:
+        switch (Size)
+        {
+            case 1:
 
-            /* 1 byte */
-            *(PUCHAR)CopyDestination = *(PUCHAR)CopySource;
-            break;
+                /* 1 byte */
+                *(PUCHAR)CopyDestination = *(PUCHAR)CopySource;
+                break;
 
-        case 2:
+            case 2:
 
-            /* 2 bytes */
-            *(PUSHORT)CopyDestination = *(PUSHORT)CopySource;
-            break;
+                /* 2 bytes */
+                *(PUSHORT)CopyDestination = *(PUSHORT)CopySource;
+                break;
 
-        case 4:
+            case 4:
 
-            /* 4 bytes */
-            *(PULONG)CopyDestination = *(PULONG)CopySource;
-            break;
+                /* 4 bytes */
+                *(PULONG)CopyDestination = *(PULONG)CopySource;
+                break;
 
-        case 8:
+            case 8:
 
-            /* 8 bytes */
-            *(PULONGLONG)CopyDestination = *(PULONGLONG)CopySource;
-            break;
+                /* 8 bytes */
+                *(PULONGLONG)CopyDestination = *(PULONGLONG)CopySource;
+                break;
 
-        /* Size is sanitized above */
-        DEFAULT_UNREACHABLE;
+            /* Size is sanitized above */
+            DEFAULT_UNREACHABLE;
+        }
     }
+    _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
+    {
+        Status = _SEH2_GetExceptionCode();
+    }
+    _SEH2_END;
 
     /* Get rid of the mapping if this was a physical copy */
     if (Flags & MMDBG_COPY_PHYSICAL)
@@ -285,5 +297,5 @@ MmDbgCopyMemory(IN ULONG64 Address,
     }
 
     /* And we are done */
-    return STATUS_SUCCESS;
+    return Status;
 }

@@ -700,14 +700,18 @@ LoadSymbolsRoutine(
                 continue;
             }
 
+            DPRINT1("File opened successfully, loading symbols for %wZ\n", &LdrEntry->BaseDllName);
             /* Hand it to Rossym */
+            DPRINT1("About to call RosSymCreateFromFile for %wZ\n", &LdrEntry->BaseDllName);
             if (!RosSymCreateFromFile(&FileHandle, (PROSSYM_INFO*)&LdrEntry->PatchInformation))
             {
+                DPRINT1("RosSymCreateFromFile failed for %wZ\n", &LdrEntry->BaseDllName);
                 LdrEntry->PatchInformation = NULL;
             }
 #if DBG && defined(__ROS_DWARF__)
             else
             {
+                DPRINT1("RosSymCreateFromFile succeeded for %wZ\n", &LdrEntry->BaseDllName);
                 CHAR ModuleName[64] = "??";
                 ANSI_STRING Ansi = {0};
 
@@ -897,6 +901,8 @@ KdbSymInit(
                 ++CommandLine;
         }
 
+        LoadSymbols = KxKdbFilterLoadSymbols(LoadSymbols);
+
 #if 1 // FIXME: This is a workaround HACK!!
 // Save the actual value of LoadSymbols but disable it for BootPhase 0.
         OrigLoadSymbols = LoadSymbols;
@@ -1020,7 +1026,7 @@ KdbRosSymSelfTest(
     _In_ ULONG_PTR LoadedBase)
 {
     static BOOLEAN RanSelfTest = FALSE;
-    const ULONG_PTR TestAddrs[] = {0x55c704, 0x4951c8};
+    ULONG_PTR TestAddrs[2];
     ULONG i;
 
     if (RanSelfTest || !RosSymInfo)
@@ -1028,10 +1034,20 @@ KdbRosSymSelfTest(
 
     RanSelfTest = TRUE;
 
+    /* Use actual runtime addresses of known kernel functions */
+    TestAddrs[0] = (ULONG_PTR)KeBugCheckEx;
+    TestAddrs[1] = (ULONG_PTR)MmAccessFault;
+
+    DbgPrint("[ROSSYM-SELFTEST] LoadedBase=%p KeBugCheckEx=%p MmAccessFault=%p\n",
+             (PVOID)LoadedBase, (PVOID)TestAddrs[0], (PVOID)TestAddrs[1]);
+
     for (i = 0; i < sizeof(TestAddrs)/sizeof(TestAddrs[0]); i++)
     {
         ULONG_PTR Rel = TestAddrs[i] - LoadedBase;
         ROSSYM_LINEINFO LineInfo = {0};
+
+        DbgPrint("[ROSSYM-SELFTEST] Testing addr %p (RVA 0x%lx)\n",
+                 (PVOID)TestAddrs[i], (unsigned long)Rel);
 
         if (RosSymGetAddressInformation(RosSymInfo, Rel, &LineInfo))
         {
@@ -1042,6 +1058,12 @@ KdbRosSymSelfTest(
                      (unsigned long)LineInfo.LineNumber,
                      LineInfo.FunctionName ? LineInfo.FunctionName : "?(func)");
             RosSymFreeInfo(&LineInfo);
+        }
+        else
+        {
+            DbgPrint("[ROSSYM-SELFTEST] FAILED to resolve %p (RVA 0x%lx): %s\n",
+                     (PVOID)TestAddrs[i], (unsigned long)Rel,
+                     RosSymGetLastErrorString());
         }
     }
 }

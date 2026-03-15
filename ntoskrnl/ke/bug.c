@@ -1433,6 +1433,9 @@ VOID
 NTAPI
 KeBugCheck(ULONG BugCheckCode)
 {
+#ifdef _M_ARM64
+    DPRINT1("[BugCheck] code=0x%08lx caller=%p\n", BugCheckCode, _ReturnAddress());
+#endif
     /* Call the internal API */
     KeBugCheckWithTf(BugCheckCode, 0, 0, 0, 0, NULL);
 }

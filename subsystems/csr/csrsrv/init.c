@@ -1019,6 +1019,8 @@ CsrServerInitialization(IN ULONG ArgumentCount,
 {
     NTSTATUS Status = STATUS_SUCCESS;
 
+    DPRINT1("CSRSRV: CsrServerInitialization enter\n");
+
     /* Cache System Basic Information so we don't always request it */
     Status = NtQuerySystemInformation(SystemBasicInformation,
                                       &CsrNtSysInfo,
@@ -1034,6 +1036,7 @@ CsrServerInitialization(IN ULONG ArgumentCount,
     /* Save our Heap */
     CsrHeap = RtlGetProcessHeap();
 
+    DPRINT1("CSRSRV: calling CsrSetProcessSecurity\n");
     /* Set our Security Descriptor to protect the process */
     Status = CsrSetProcessSecurity();
     if (!NT_SUCCESS(Status))
@@ -1043,6 +1046,7 @@ CsrServerInitialization(IN ULONG ArgumentCount,
         return Status;
     }
 
+    DPRINT1("CSRSRV: calling CsrInitializeNtSessionList\n");
     /* Set up Session Support */
     Status = CsrInitializeNtSessionList();
     if (!NT_SUCCESS(Status))
@@ -1052,6 +1056,7 @@ CsrServerInitialization(IN ULONG ArgumentCount,
         return Status;
     }
 
+    DPRINT1("CSRSRV: calling CsrInitializeProcessStructure\n");
     /* Set up Process Support and allocate the CSR Root Process */
     Status = CsrInitializeProcessStructure();
     if (!NT_SUCCESS(Status))
@@ -1061,6 +1066,7 @@ CsrServerInitialization(IN ULONG ArgumentCount,
         return Status;
     }
 
+    DPRINT1("CSRSRV: calling CsrParseServerCommandLine\n");
     /* Parse the command line */
     Status = CsrParseServerCommandLine(ArgumentCount, Arguments);
     if (!NT_SUCCESS(Status))
@@ -1070,6 +1076,7 @@ CsrServerInitialization(IN ULONG ArgumentCount,
         return Status;
     }
 
+    DPRINT1("CSRSRV: calling CsrInitCsrRootProcess\n");
     /* Finish to initialize the CSR Root Process */
     Status = CsrInitCsrRootProcess();
     if (!NT_SUCCESS(Status))
@@ -1079,6 +1086,7 @@ CsrServerInitialization(IN ULONG ArgumentCount,
         return Status;
     }
 
+    DPRINT1("CSRSRV: calling CsrApiPortInitialize\n");
     /* Now initialize our API Port */
     Status = CsrApiPortInitialize();
     if (!NT_SUCCESS(Status))
@@ -1088,10 +1096,13 @@ CsrServerInitialization(IN ULONG ArgumentCount,
         return Status;
     }
 
+    DPRINT1("CSRSRV: CsrApiPortInitialize done (Status=0x%08lx)\n", Status);
+
 #ifdef __REACTOS__
     if (CsrSubSystemType != IMAGE_SUBSYSTEM_UNKNOWN)
     {
 #endif
+    DPRINT1("CSRSRV: calling CsrSbApiPortInitialize\n");
     /* Initialize the API Port for SM communication */
     Status = CsrSbApiPortInitialize();
     if (!NT_SUCCESS(Status))
@@ -1101,6 +1112,7 @@ CsrServerInitialization(IN ULONG ArgumentCount,
         return Status;
     }
 
+    DPRINT1("CSRSRV: calling SmConnectToSm\n");
     /* We're all set! Connect to SM! */
     Status = SmConnectToSm(&CsrSbApiPortName,
                            CsrSbApiPort,
@@ -1116,10 +1128,12 @@ CsrServerInitialization(IN ULONG ArgumentCount,
                 __FUNCTION__, Status);
         return Status;
     }
+    DPRINT1("CSRSRV: SmConnectToSm done (Status=0x%08lx)\n", Status);
 #ifdef __REACTOS__
     }
 #endif
 
+    DPRINT1("CSRSRV: calling NtSetDefaultHardErrorPort\n");
     /* Have us handle Hard Errors */
     Status = NtSetDefaultHardErrorPort(CsrApiPort);
     if (!NT_SUCCESS(Status))
@@ -1129,6 +1143,7 @@ CsrServerInitialization(IN ULONG ArgumentCount,
         return Status;
     }
 
+    DPRINT1("CSRSRV: CsrServerInitialization complete (Status=0x%08lx)\n", Status);
     /* Return status */
     return Status;
 }

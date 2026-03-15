@@ -93,13 +93,6 @@ PVOID ExpNlsSectionPointer;
 /* CMOS Timer Sanity */
 BOOLEAN ExCmosClockIsSane = TRUE;
 
-/* CYCLE 30: Timer ISR diagnostic counters (defined in arch/arm64/ke/interrupt.c) */
-#if defined(_M_ARM64) || defined(__aarch64__)
-extern ULONG KiTimerIsrCallCount;
-extern ULONG KiInitInterruptsCallCount;
-extern ULONG KiTimerStartedFlag;
-extern ULONG KiTimerCtlReadback;
-#endif
 BOOLEAN ExpRealTimeIsUniversal;
 
 /* FUNCTIONS ****************************************************************/
@@ -420,45 +413,17 @@ ExpInitNls(IN PLOADER_PARAMETER_BLOCK LoaderBlock)
 
     /* Copy the codepage data in its new location. */
     ASSERT(SectionBase >= MmSystemRangeStart);
-#if defined(_M_ARM64)
-    /*
-     * ARM64 CRITICAL FIX: Pre-fault all destination pages before memmove.
-     *
-     * On ARM64, memmove uses SIMD (NEON) registers for efficient memory copy.
-     * However, the current trap frame does NOT save/restore SIMD registers (V0-V31).
-     * If a page fault occurs mid-copy, the SIMD registers containing source data
-     * are clobbered by the fault handler, causing zeros or garbage to be written.
-     *
-     * WORKAROUND: Touch each destination page with a simple scalar write before
-     * the copy starts. This triggers the demand-zero page faults using scalar
-     * registers which ARE properly saved/restored in the trap frame.
-     *
-     * TODO: The proper fix is to save/restore SIMD registers in KTRAP_FRAME.
-     */
+    ExArchCopyNlsSection(SectionBase, ExpNlsTableBase, ExpNlsTableSize);
+
+    if (ExArchKeepPoolBackedNls(SectionBase))
     {
-        volatile PUCHAR PagePtr;
-        SIZE_T Offset;
-
-        for (Offset = 0; Offset < ExpNlsTableSize; Offset += PAGE_SIZE)
-        {
-            PagePtr = (volatile PUCHAR)((ULONG_PTR)SectionBase + Offset);
-            /* Simple scalar write to trigger page fault */
-            *PagePtr = 0;
-            /* Memory barrier to ensure fault completes before next iteration */
-            __dsb(_ARM64_BARRIER_SY);
-        }
+        /* Architecture keeps the NonPagedPool buffer as the canonical NLS base. */
     }
-
-    /* Now copy data with memmove - pages are already faulted in */
-    memmove(SectionBase, ExpNlsTableBase, ExpNlsTableSize);
-    __dsb(_ARM64_BARRIER_SY);
-#else
-    RtlCopyMemory(SectionBase, ExpNlsTableBase, ExpNlsTableSize);
-#endif
-
-    /* Free the previously allocated buffer and set the new location */
-    ExFreePoolWithTag(ExpNlsTableBase, TAG_RTLI);
-    ExpNlsTableBase = SectionBase;
+    else
+    {
+        ExFreePoolWithTag(ExpNlsTableBase, TAG_RTLI);
+        ExpNlsTableBase = SectionBase;
+    }
 
     /* Initialize the NLS Tables */
     RtlInitNlsTables((PVOID)((ULONG_PTR)ExpNlsTableBase +
@@ -470,48 +435,30 @@ ExpInitNls(IN PLOADER_PARAMETER_BLOCK LoaderBlock)
                      &ExpNlsTableInfo);
     RtlResetRtlTranslations(&ExpNlsTableInfo);
 
-    /*
-     * Map the section in the system process.
-     *
-     * ARM64 Note: We map this as PAGE_READONLY. The section is backed by
-     * physical pages that are shared with user-space mappings.
-     */
-    ViewSize = 0;
-    SectionBase = NULL;
-
-    Status = MmMapViewOfSection(ExpNlsSectionPointer,
-                                 PsGetCurrentProcess(),
-                                 &SectionBase,
-                                 0,
-                                 0,
-                                 &SectionOffset,
-                                 &ViewSize,
-                                 ViewShare,
-                                 0,
-                                 PAGE_READWRITE);
-    if (!NT_SUCCESS(Status))
+    if (ExArchShouldMapSystemProcessNlsView())
     {
-        /* Failed */
-        KeBugCheckEx(PHASE1_INITIALIZATION_FAILED, Status, 5, 0, 0);
-    }
+        ViewSize = 0;
+        SectionBase = NULL;
 
-    /*
-     * Copy the table into the system process and set this as the base.
-     *
-     * ARM64 Note: On ARM64, kernel code cannot directly access user-space
-     * addresses (SectionBase = 0x10000) because the kernel uses TTBR1
-     * (addresses >= 0xFFFF800000000000) while user space uses TTBR0.
-     * However, since both views map the same SEC_COMMIT section, the physical
-     * pages are shared and the data written via the system-space mapping
-     * is already visible in user space. The copy is therefore unnecessary.
-     */
-#if defined(_M_ARM64)
-    /* On ARM64, we keep ExpNlsTableBase pointing to kernel space mapping */
-    /* User-mode processes will use the user-space mapping at SectionBase */
-#else
-    RtlCopyMemory(SectionBase, ExpNlsTableBase, ExpNlsTableSize);
-    ExpNlsTableBase = SectionBase;
-#endif
+        Status = MmMapViewOfSection(ExpNlsSectionPointer,
+                                     PsGetCurrentProcess(),
+                                     &SectionBase,
+                                     0,
+                                     0,
+                                     &SectionOffset,
+                                     &ViewSize,
+                                     ViewShare,
+                                     0,
+                                     PAGE_READWRITE);
+        if (!NT_SUCCESS(Status))
+        {
+            /* Failed */
+            KeBugCheckEx(PHASE1_INITIALIZATION_FAILED, Status, 5, 0, 0);
+        }
+
+        RtlCopyMemory(SectionBase, ExpNlsTableBase, ExpNlsTableSize);
+        ExpNlsTableBase = SectionBase;
+    }
 }
 
 CODE_SEG("INIT")
@@ -535,40 +482,16 @@ ExpLoadInitialProcess(IN PINIT_BUFFER InitBuffer,
     /* Use the initial buffer, after the strings */
     ProcessInformation = &InitBuffer->ProcessInfo;
 
-#if defined(_M_ARM64)
-    /* ARM64 workaround: ZwAllocateVirtualMemory doesn't work properly for user-mode
-     * addresses in the System process because the memory manager's PTE manipulation
-     * functions (MiAddressToPte, etc.) use self-mapping which only works for TTBR1
-     * (kernel space), not TTBR0 (user space).
-     *
-     * Instead, allocate the memory in kernel space (non-paged pool) and use it
-     * directly. We'll copy it to the new process's user space later.
-     */
-    Size = sizeof(*ProcessParams) + ((MAX_WIN32_PATH * 6) * sizeof(WCHAR));
-    ProcessParams = ExAllocatePoolWithTag(NonPagedPool, (SIZE_T)Size, 'spmS');
-    if (!ProcessParams)
-    {
-        /* Failed, display error */
-        _snwprintf(InitBuffer->DebugBuffer,
-                   sizeof(InitBuffer->DebugBuffer)/sizeof(WCHAR),
-                   L"INIT: Unable to allocate Process Parameters (ARM64 pool)");
-        RtlInitUnicodeString(&DebugString, InitBuffer->DebugBuffer);
-        ZwDisplayString(&DebugString);
-
-        /* Bugcheck the system */
-        KeBugCheckEx(SESSION1_INITIALIZATION_FAILED, STATUS_NO_MEMORY, 0, 0, 0);
-    }
-    RtlZeroMemory(ProcessParams, (SIZE_T)Size);
-    Status = STATUS_SUCCESS;
-#else
     /* Allocate memory for the process parameters */
     Size = sizeof(*ProcessParams) + ((MAX_WIN32_PATH * 6) * sizeof(WCHAR));
+    DPRINT1("[arm64][SMSS] ZwAllocateVirtualMemory(ProcessParams, Size=0x%lx) begin\n", (ULONG)Size);
     Status = ZwAllocateVirtualMemory(NtCurrentProcess(),
                                      (PVOID*)&ProcessParams,
                                      0,
                                      &Size,
                                      MEM_RESERVE | MEM_COMMIT,
                                      PAGE_READWRITE);
+    DPRINT1("[arm64][SMSS] ZwAllocateVirtualMemory(ProcessParams) -> 0x%lx, Ptr=%p\n", Status, ProcessParams);
     if (!NT_SUCCESS(Status))
     {
         /* Failed, display error */
@@ -582,40 +505,26 @@ ExpLoadInitialProcess(IN PINIT_BUFFER InitBuffer,
         /* Bugcheck the system */
         KeBugCheckEx(SESSION1_INITIALIZATION_FAILED, Status, 0, 0, 0);
     }
-#endif
 
     /* Setup the basic header, and give the process the low 1MB to itself */
+    DPRINT1("[arm64][SMSS] writing ProcessParams at %p, Size=0x%lx\n", ProcessParams, (ULONG)Size);
     ProcessParams->Length = (ULONG)Size;
+    DPRINT1("[arm64][SMSS] ProcessParams->Length written\n");
     ProcessParams->MaximumLength = (ULONG)Size;
     ProcessParams->Flags = RTL_USER_PROCESS_PARAMETERS_NORMALIZED |
                            RTL_USER_PROCESS_PARAMETERS_RESERVE_1MB;
+    DPRINT1("[arm64][SMSS] ProcessParams header done\n");
 
     /* Allocate a page for the environment */
-#if defined(_M_ARM64)
-    /* ARM64: Same issue as ProcessParams - allocate in kernel pool */
     Size = PAGE_SIZE;
-    EnvironmentPtr = ExAllocatePoolWithTag(NonPagedPool, (SIZE_T)Size, 'vnES');
-    if (!EnvironmentPtr)
-    {
-        /* Failed, display error */
-        _snwprintf(InitBuffer->DebugBuffer,
-                   sizeof(InitBuffer->DebugBuffer)/sizeof(WCHAR),
-                   L"INIT: Unable to allocate Process Environment (ARM64 pool)");
-        RtlInitUnicodeString(&DebugString, InitBuffer->DebugBuffer);
-        ZwDisplayString(&DebugString);
-
-        /* Bugcheck the system */
-        KeBugCheckEx(SESSION2_INITIALIZATION_FAILED, STATUS_NO_MEMORY, 0, 0, 0);
-    }
-    RtlZeroMemory(EnvironmentPtr, (SIZE_T)Size);
-#else
-    Size = PAGE_SIZE;
+    DPRINT1("[arm64][SMSS] ZwAllocateVirtualMemory(Environment) begin\n");
     Status = ZwAllocateVirtualMemory(NtCurrentProcess(),
                                      &EnvironmentPtr,
                                      0,
                                      &Size,
                                      MEM_RESERVE | MEM_COMMIT,
                                      PAGE_READWRITE);
+    DPRINT1("[arm64][SMSS] ZwAllocateVirtualMemory(Environment) -> 0x%lx\n", Status);
     if (!NT_SUCCESS(Status))
     {
         /* Failed, display error */
@@ -629,7 +538,6 @@ ExpLoadInitialProcess(IN PINIT_BUFFER InitBuffer,
         /* Bugcheck the system */
         KeBugCheckEx(SESSION2_INITIALIZATION_FAILED, Status, 0, 0, 0);
     }
-#endif
 
     /* Write the pointer */
     ProcessParams->Environment = EnvironmentPtr;
@@ -639,23 +547,8 @@ ExpLoadInitialProcess(IN PINIT_BUFFER InitBuffer,
     ProcessParams->CurrentDirectory.DosPath.Buffer = p;
     ProcessParams->CurrentDirectory.DosPath.MaximumLength = MAX_WIN32_PATH *
                                                             sizeof(WCHAR);
-#if defined(_M_ARM64)
-    /* ARM64: Flush cache lines to ensure writes are visible */
-    {
-        ULONG_PTR addr = (ULONG_PTR)&ProcessParams->CurrentDirectory.DosPath;
-        ULONG_PTR end = addr + sizeof(ProcessParams->CurrentDirectory.DosPath);
-        for (ULONG_PTR va = addr & ~63ULL; va < end; va += 64)
-        {
-            __asm__ volatile("dc cvau, %0" : : "r"(va) : "memory");
-        }
-        __asm__ volatile("dsb ish\n\tisb" ::: "memory");
-    }
-#endif
 
     /* Copy the DOS path */
-#if defined(_M_ARM64)
-    __asm__ volatile("dmb sy" ::: "memory");
-#endif
     RtlCopyUnicodeString(&ProcessParams->CurrentDirectory.DosPath,
                          &NtSystemRoot);
 
@@ -747,6 +640,23 @@ ExpLoadInitialProcess(IN PINIT_BUFFER InitBuffer,
 
     /* Create SMSS process */
     SmssName = ProcessParams->ImagePathName;
+    DPRINT1("[arm64][SMSS] string setup done, SmssName='%wZ' Len=%u\n", &SmssName, SmssName.Length);
+    DPRINT1("[arm64][SMSS] PRE-denorm StdIn=%p StdOut=%p StdErr=%p Flags=0x%lx\n",
+            ProcessParams->StandardInput,
+            ProcessParams->StandardOutput,
+            ProcessParams->StandardError,
+            ProcessParams->Flags);
+    DPRINT1("[arm64][SMSS] calling RtlDeNormalizeProcessParams(%p)\n", ProcessParams);
+    {
+        PRTL_USER_PROCESS_PARAMETERS DeNormed = RtlDeNormalizeProcessParams(ProcessParams);
+        DPRINT1("[arm64][SMSS] POST-denorm StdIn=%p StdOut=%p StdErr=%p Flags=0x%lx DeNormed=%p\n",
+                ProcessParams->StandardInput,
+                ProcessParams->StandardOutput,
+                ProcessParams->StandardError,
+                ProcessParams->Flags,
+                DeNormed);
+    }
+    DPRINT1("[arm64][PHASE1] RtlCreateUserProcess('%wZ') begin\n", &SmssName);
     Status = RtlCreateUserProcess(&SmssName,
                                   OBJ_CASE_INSENSITIVE,
                                   RtlDeNormalizeProcessParams(ProcessParams),
@@ -757,6 +667,7 @@ ExpLoadInitialProcess(IN PINIT_BUFFER InitBuffer,
                                   NULL,
                                   NULL,
                                   ProcessInformation);
+    DPRINT1("[arm64][PHASE1] RtlCreateUserProcess returned 0x%lx\n", Status);
     if (!NT_SUCCESS(Status))
     {
         /* Failed, display error */
@@ -776,6 +687,7 @@ ExpLoadInitialProcess(IN PINIT_BUFFER InitBuffer,
 
     /* Resume the thread */
     Status = ZwResumeThread(ProcessInformation->ThreadHandle, NULL);
+
     if (!NT_SUCCESS(Status))
     {
         /* Failed, display error */
@@ -1136,13 +1048,7 @@ ExpInitializeExecutive(IN ULONG Cpu,
     PCHAR RcEnd = NULL;
     CHAR VersionBuffer[65];
 
-#if defined(_M_ARM64) || defined(__aarch64__)
-    {
-        /* Memory barrier to ensure all previous memory accesses complete */
-        __asm__ volatile("dsb sy" ::: "memory");
-        __asm__ volatile("isb" ::: "memory");
-    }
-#endif
+    ExArchExecutiveInitBarrier();
 
     /* Validate Loader */
     if (!ExpIsLoaderValid(LoaderBlock))
@@ -1262,37 +1168,7 @@ ExpInitializeExecutive(IN ULONG Cpu,
         KeBugCheck(HAL_INITIALIZATION_FAILED);
     }
 
-#if defined(_M_ARM64)
-    /*
-     * ARM64: Enable GIC priority masking for IRQL management.
-     *
-     * Now that HalInitSystem(0) has completed successfully, the HAL's exports
-     * (including HalSetGicPriorityMask) are fully initialized and safe to call.
-     * Setting KiHalInitialized allows the kernel's IRQL subsystem to use GIC
-     * priority masking instead of binary DAIF masking.
-     *
-     * CRITICAL: This must be set by the kernel, NOT by the HAL, to avoid
-     * circular import dependencies (HAL importing kernel exports).
-     */
-    extern BOOLEAN KiHalInitialized;
-    KiHalInitialized = TRUE;
-
-    /*
-     * ARM64: Re-enable the timer PPI now that the GIC is fully initialized.
-     *
-     * During early boot, KeInitInterrupts() connects the timer interrupt before
-     * HalInitSystem(0) runs. At that point, HalpGicUseSysRegs is FALSE and the
-     * timer PPI is not properly enabled in the GIC redistributor.
-     *
-     * Now that HalInitSystem(0) has configured the GIC, we re-enable the timer
-     * PPI to ensure it's properly routed through the redistributor.
-     *
-     * This fixes the "5-second timer gap" bug where timer interrupts would
-     * not fire consistently during USB enumeration.
-     */
-    extern VOID NTAPI KeReenableTimerInterrupt(VOID);
-    KeReenableTimerInterrupt();
-#endif
+    ExArchPostHalInitSystemPhase0();
 
     /* Make sure interrupts are active now */
     _enable();
@@ -1368,7 +1244,10 @@ ExpInitializeExecutive(IN ULONG Cpu,
     }
 
     /* Set system ranges */
-#ifdef _M_AMD64
+#if defined(_M_AMD64) || defined(_M_ARM64)
+    /* On 64-bit platforms, Reserved1/Reserved3 are ULONG fields that hold WOW64 (32-bit) values.
+     * Native 64-bit processes get the correct values via NtQuerySystemInformation(SystemBasicInformation).
+     */
     SharedUserData->Reserved1 = MM_HIGHEST_USER_ADDRESS_WOW64;
     SharedUserData->Reserved3 = MM_SYSTEM_RANGE_START_WOW64;
 #else
@@ -2094,28 +1973,6 @@ Phase1InitializationDiscard(IN PVOID Context)
     /* Initialize the I/O Subsystem */
     if (!IoInitSystem(LoaderBlock)) KeBugCheck(IO1_INITIALIZATION_FAILED);
 
-#if defined(_M_ARM64) || defined(__aarch64__)
-    /*
-     * CYCLE 30: Timer ISR Diagnostics
-     * Print timer state AFTER IoInitSystem when logging is fully working.
-     * These counters help diagnose why timer interrupts aren't firing:
-     * - KiInitInterruptsCallCount: Should be 1 if KeInitInterrupts was called
-     * - KiTimerStartedFlag: Should be 1 if timer was configured
-     * - KiTimerIsrCallCount: Should be >0 if timer ISR is firing
-     * - KiTimerCtlReadback: Timer control register state
-     */
-    DPRINT1("========== CYCLE 30: TIMER ISR DIAGNOSTICS ==========\n");
-    DPRINT1("[TIMER DIAG] KeInitInterrupts called: %lu\n", KiInitInterruptsCallCount);
-    DPRINT1("[TIMER DIAG] Timer started: %lu\n", KiTimerStartedFlag);
-    DPRINT1("[TIMER DIAG] Timer ISR count: %lu\n", KiTimerIsrCallCount);
-    DPRINT1("[TIMER DIAG] Timer CTL readback: 0x%lx (ENABLE=%lu, IMASK=%lu, ISTATUS=%lu)\n",
-            KiTimerCtlReadback,
-            KiTimerCtlReadback & 1,
-            (KiTimerCtlReadback >> 1) & 1,
-            (KiTimerCtlReadback >> 2) & 1);
-    DPRINT1("====================================================\n");
-#endif
-
     /* Set maximum update to 100% */
     InbvSetProgressBarSubset(0, 100);
 
@@ -2244,7 +2101,9 @@ Phase1InitializationDiscard(IN PVOID Context)
     }
 
     /* FIXME: This doesn't do anything for now */
+    DPRINT1("[arm64][PHASE1] MmArmInitSystem(2) begin\n");
     MmArmInitSystem(2, LoaderBlock);
+    DPRINT1("[arm64][PHASE1] MmArmInitSystem(2) done\n");
 
     /* Update progress bar */
     InbvUpdateProgressBar(80);
@@ -2255,21 +2114,29 @@ Phase1InitializationDiscard(IN PVOID Context)
 #endif
 
     /* Initialize Power Subsystem in Phase 1*/
+    DPRINT1("[arm64][PHASE1] PoInitSystem(1) begin\n");
     if (!PoInitSystem(1)) KeBugCheck(INTERNAL_POWER_ERROR);
+    DPRINT1("[arm64][PHASE1] PoInitSystem(1) done\n");
 
     /* Update progress bar */
     InbvUpdateProgressBar(90);
 
     /* Initialize the Process Manager at Phase 1 */
+    DPRINT1("[arm64][PHASE1] PsInitSystem begin\n");
     if (!PsInitSystem(LoaderBlock)) KeBugCheck(PROCESS1_INITIALIZATION_FAILED);
+    DPRINT1("[arm64][PHASE1] PsInitSystem done\n");
 
     /* Make sure nobody touches the loader block again */
     if (LoaderBlock == KeLoaderBlock) KeLoaderBlock = NULL;
+    DPRINT1("[arm64][PHASE1] MmFreeLoaderBlock begin\n");
     MmFreeLoaderBlock(LoaderBlock);
+    DPRINT1("[arm64][PHASE1] MmFreeLoaderBlock done\n");
     LoaderBlock = Context = NULL;
 
     /* Initialize the SRM in phase 1 */
+    DPRINT1("[arm64][PHASE1] SeRmInitPhase1 begin\n");
     if (!SeRmInitPhase1()) KeBugCheck(PROCESS1_INITIALIZATION_FAILED);
+    DPRINT1("[arm64][PHASE1] SeRmInitPhase1 done\n");
 
     /* Update progress bar */
     InbvUpdateProgressBar(100);
@@ -2281,8 +2148,10 @@ Phase1InitializationDiscard(IN PVOID Context)
     InbvEnableDisplayString(TRUE);
 
     /* Launch initial process */
+    DPRINT1("[arm64][PHASE1] ExpLoadInitialProcess begin (smss.exe)\n");
     ProcessInfo = &InitBuffer->ProcessInfo;
     ExpLoadInitialProcess(InitBuffer, &ProcessParameters, &Environment);
+    DPRINT1("[arm64][PHASE1] ExpLoadInitialProcess done, waiting for smss.exe\n");
 
     /* Wait 5 seconds for initial process to initialize */
     Timeout.QuadPart = Int32x32To64(5, -10000000);
@@ -2301,18 +2170,24 @@ Phase1InitializationDiscard(IN PVOID Context)
     ZwClose(ProcessInfo->ProcessHandle);
 
     /* Free the initial process environment */
-    Size = 0;
-    ZwFreeVirtualMemory(NtCurrentProcess(),
-                        (PVOID*)&Environment,
-                        &Size,
-                        MEM_RELEASE);
+    if (Environment)
+    {
+        Size = 0;
+        ZwFreeVirtualMemory(NtCurrentProcess(),
+                            (PVOID*)&Environment,
+                            &Size,
+                            MEM_RELEASE);
+    }
 
     /* Free the initial process parameters */
-    Size = 0;
-    ZwFreeVirtualMemory(NtCurrentProcess(),
-                        (PVOID*)&ProcessParameters,
-                        &Size,
-                        MEM_RELEASE);
+    if (ProcessParameters)
+    {
+        Size = 0;
+        ZwFreeVirtualMemory(NtCurrentProcess(),
+                            (PVOID*)&ProcessParameters,
+                            &Size,
+                            MEM_RELEASE);
+    }
 
     /* Increase init phase */
     ExpInitializationPhase++;

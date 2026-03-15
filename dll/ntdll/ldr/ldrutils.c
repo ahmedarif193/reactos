@@ -236,7 +236,7 @@ LdrpUpdateLoadCount3(IN PLDR_DATA_TABLE_ENTRY LdrEntry,
                     }
                     else if (RedirectedDll)
                     {
-                        DPRINT1("LDR: LdrpCheckForLoadedDll failed for redirected dll %wZ\n", RedirectedImportName);
+                        DPRINT("LDR: LdrpCheckForLoadedDll failed for redirected dll %wZ\n", RedirectedImportName);
                     }
                 }
                 else
@@ -310,7 +310,7 @@ LdrpUpdateLoadCount3(IN PLDR_DATA_TABLE_ENTRY LdrEntry,
                         }
                         else if (RedirectedDll)
                         {
-                            DPRINT1("LDR: LdrpCheckForLoadedDll failed with status %x for redirected dll %wZ\n", Status, RedirectedImportName);
+                            DPRINT("LDR: LdrpCheckForLoadedDll failed for redirected dll %wZ\n", RedirectedImportName);
                         }
                     }
                     else
@@ -408,7 +408,7 @@ LdrpUpdateLoadCount3(IN PLDR_DATA_TABLE_ENTRY LdrEntry,
                     }
                     else if (RedirectedDll)
                     {
-                        DPRINT1("LDR: LdrpCheckForLoadedDll failed for redirected dll %wZ\n", RedirectedImportName);
+                        DPRINT("LDR: LdrpCheckForLoadedDll failed for redirected dll %wZ\n", RedirectedImportName);
                     }
 
                 }
@@ -1981,17 +1981,39 @@ LdrpCheckForLoadedDll(IN PWSTR DllPath,
     /* Check if a dll name was provided */
     if (!(DllName->Buffer) || !(DllName->Buffer[0])) return FALSE;
 
-    /* FIXME: Warning, "Flag" is used as magic instead of "Static" */
-    /* FIXME: Warning, code does not support redirection at all */
-
     /* Look in the hash table if flag was set */
 lookinhash:
-    if (Flag  /* the second check is a hack */ && !RedirectedDll)
+    if (Flag)
     {
-        /* FIXME: if we get redirected dll it means that we also get a full path so we need to find its filename for the hash lookup */
+        PCWCH HashName;
+        UNICODE_STRING BaseName;
+
+        if (RedirectedDll)
+        {
+            /*
+             * For redirected DLLs we receive a full WinSxS path like
+             * X:\reactos\winsxs\arch_assembly_...\gdiplus.dll
+             * Extract the base filename for the hash table lookup.
+             */
+            PCWCH p, last = DllName->Buffer;
+            for (p = DllName->Buffer; p < DllName->Buffer + DllName->Length / sizeof(WCHAR); p++)
+            {
+                if (*p == L'\\' || *p == L'/')
+                    last = p + 1;
+            }
+            BaseName.Buffer = (PWCH)last;
+            BaseName.Length = (USHORT)((DllName->Buffer + DllName->Length / sizeof(WCHAR) - last) * sizeof(WCHAR));
+            BaseName.MaximumLength = BaseName.Length + sizeof(UNICODE_NULL);
+            HashName = last;
+        }
+        else
+        {
+            BaseName = *DllName;
+            HashName = DllName->Buffer;
+        }
 
         /* Get hash index */
-        HashIndex = LDR_GET_HASH_ENTRY(DllName->Buffer[0]);
+        HashIndex = LDR_GET_HASH_ENTRY(HashName[0]);
 
         /* Traverse that list */
         ListHead = &LdrpHashTable[HashIndex];
@@ -2002,7 +2024,7 @@ lookinhash:
             CurEntry = CONTAINING_RECORD(ListEntry, LDR_DATA_TABLE_ENTRY, HashLinks);
 
             /* Check base name of that module */
-            if (RtlEqualUnicodeString(DllName, &CurEntry->BaseDllName, TRUE))
+            if (RtlEqualUnicodeString(&BaseName, &CurEntry->BaseDllName, TRUE))
             {
                 /* It matches, return it */
                 *LdrEntry = CurEntry;

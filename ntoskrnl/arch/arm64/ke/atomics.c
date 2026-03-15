@@ -120,18 +120,20 @@ UCHAR Arm64InterlockedBitTestAndReset(
     _Inout_ volatile LONG *Base,
     _In_ LONG Bit)
 {
-    ULONG Mask = 1u << Bit;
+    ULONG BitIndex = ((ULONG)Bit) & 31u;
+    ULONG Mask = 1u << BitIndex;
     ULONG Previous = __atomic_fetch_and(Base, ~Mask, __ATOMIC_SEQ_CST);
-    return (UCHAR)((Previous >> Bit) & 1u);
+    return (UCHAR)((Previous >> BitIndex) & 1u);
 }
 
 UCHAR Arm64InterlockedBitTestAndSet(
     _Inout_ volatile LONG *Base,
     _In_ LONG Bit)
 {
-    ULONG Mask = 1u << Bit;
+    ULONG BitIndex = ((ULONG)Bit) & 31u;
+    ULONG Mask = 1u << BitIndex;
     ULONG Previous = __atomic_fetch_or(Base, Mask, __ATOMIC_SEQ_CST);
-    return (UCHAR)((Previous >> Bit) & 1u);
+    return (UCHAR)((Previous >> BitIndex) & 1u);
 }
 
 PVOID Arm64InterlockedCompareExchangePointer(
@@ -153,14 +155,28 @@ LONG Arm64InterlockedOr(
     _Inout_ volatile LONG *Destination,
     _In_ LONG Value)
 {
-    return __atomic_or_fetch(Destination, Value, __ATOMIC_SEQ_CST);
+    return __atomic_fetch_or(Destination, Value, __ATOMIC_SEQ_CST);
 }
 
 LONG Arm64InterlockedAnd(
     _Inout_ volatile LONG *Destination,
     _In_ LONG Value)
 {
-    return __atomic_and_fetch(Destination, Value, __ATOMIC_SEQ_CST);
+    return __atomic_fetch_and(Destination, Value, __ATOMIC_SEQ_CST);
+}
+
+LONG Arm64InterlockedXor(
+    _Inout_ volatile LONG *Destination,
+    _In_ LONG Value)
+{
+    return __atomic_xor_fetch(Destination, Value, __ATOMIC_SEQ_CST);
+}
+
+LONGLONG Arm64InterlockedXor64(
+    _Inout_ volatile LONGLONG *Destination,
+    _In_ LONGLONG Value)
+{
+    return __atomic_xor_fetch(Destination, Value, __ATOMIC_SEQ_CST);
 }
 
 CHAR Arm64InterlockedCompareExchange8(
@@ -216,6 +232,10 @@ __asm__(".globl _interlockedbittestandreset\n"
         "_InterlockedOr = Arm64InterlockedOr\n"
         ".globl _InterlockedAnd\n"
         "_InterlockedAnd = Arm64InterlockedAnd\n"
+        ".globl _InterlockedXor\n"
+        "_InterlockedXor = Arm64InterlockedXor\n"
+        ".globl _InterlockedXor64\n"
+        "_InterlockedXor64 = Arm64InterlockedXor64\n"
         ".globl _InterlockedCompareExchange8\n"
         "_InterlockedCompareExchange8 = Arm64InterlockedCompareExchange8\n"
         ".globl _InterlockedCompareExchange16\n"
@@ -231,7 +251,7 @@ __aarch64_swp4_acq_rel(
     _In_ LONG Value,
     _Inout_ volatile LONG *Destination)
 {
-    return __atomic_exchange_n(Destination, Value, __ATOMIC_ACQUIRE);
+    return __atomic_exchange_n(Destination, Value, __ATOMIC_ACQ_REL);
 }
 
 LONGLONG
@@ -239,7 +259,7 @@ __aarch64_swp8_acq_rel(
     _In_ LONGLONG Value,
     _Inout_ volatile LONGLONG *Destination)
 {
-    return __atomic_exchange_n(Destination, Value, __ATOMIC_ACQUIRE);
+    return __atomic_exchange_n(Destination, Value, __ATOMIC_ACQ_REL);
 }
 
 LONG
@@ -263,7 +283,7 @@ __aarch64_ldset4_acq_rel(
     _In_ LONG Value,
     _Inout_ volatile LONG *Destination)
 {
-    return __atomic_fetch_or(Destination, Value, __ATOMIC_ACQUIRE);
+    return __atomic_fetch_or(Destination, Value, __ATOMIC_ACQ_REL);
 }
 
 LONG
@@ -271,7 +291,7 @@ __aarch64_ldclr4_acq_rel(
     _In_ LONG Value,
     _Inout_ volatile LONG *Destination)
 {
-    return __atomic_fetch_and(Destination, ~Value, __ATOMIC_ACQUIRE);
+    return __atomic_fetch_and(Destination, ~Value, __ATOMIC_ACQ_REL);
 }
 
 LONGLONG
@@ -279,7 +299,7 @@ __aarch64_ldset8_acq_rel(
     _In_ LONGLONG Value,
     _Inout_ volatile LONGLONG *Destination)
 {
-    return __atomic_fetch_or(Destination, Value, __ATOMIC_ACQUIRE);
+    return __atomic_fetch_or(Destination, Value, __ATOMIC_ACQ_REL);
 }
 
 LONGLONG
@@ -287,7 +307,7 @@ __aarch64_ldclr8_acq_rel(
     _In_ LONGLONG Value,
     _Inout_ volatile LONGLONG *Destination)
 {
-    return __atomic_fetch_and(Destination, ~Value, __ATOMIC_ACQUIRE);
+    return __atomic_fetch_and(Destination, ~Value, __ATOMIC_ACQ_REL);
 }
 
 

@@ -144,6 +144,19 @@ ExpRaiseHardError(IN NTSTATUS ErrorStatus,
         /* Check if we can't do errors anymore, and this is serious */
         if (!ExReadyForErrors && NT_ERROR(ErrorStatus))
         {
+#if defined(_M_ARM64) || defined(__aarch64__)
+            /*
+             * During early ARM64 bringup, do not BSOD on user-mode hard errors
+             * before the error port is ready. This allows the system to continue
+             * past non-critical initialization failures (e.g. app init failures
+             * in smss child processes). Kernel-mode errors still BSOD.
+             */
+            if (PreviousMode != KernelMode)
+            {
+                *Response = ResponseReturnToCaller;
+                return STATUS_SUCCESS;
+            }
+#endif
             /* Use the system handler */
             ExpSystemErrorHandler(ErrorStatus,
                                   NumberOfParameters,
@@ -626,7 +639,15 @@ NtRaiseHardError(IN NTSTATUS ErrorStatus,
             if (Parameters)
             {
                 /* Validate the parameter pointers */
+#if defined(_M_ARM64)
+                /* ARM64: Use sizeof(ULONG) alignment because callers such as
+                 * LdrpInitFailure pass (PULONG_PTR)&Status where Status
+                 * is a 4-byte NTSTATUS on the stack, which may only be
+                 * 4-byte aligned (not 8-byte aligned). */
+                ProbeForRead(Parameters, ParamSize, sizeof(ULONG));
+#else
                 ProbeForRead(Parameters, ParamSize, sizeof(ULONG_PTR));
+#endif
 
                 /* Copy them */
                 RtlCopyMemory(SafeParams, Parameters, ParamSize);
@@ -654,6 +675,7 @@ NtRaiseHardError(IN NTSTATUS ErrorStatus,
                             ProbeForRead(SafeString.Buffer,
                                          SafeString.MaximumLength,
                                          sizeof(UCHAR));
+
                         }
                     }
                 }
@@ -668,6 +690,7 @@ NtRaiseHardError(IN NTSTATUS ErrorStatus,
             _SEH2_YIELD(return _SEH2_GetExceptionCode());
         }
         _SEH2_END;
+
 
         /* Call the system function directly, because we probed */
         Status = ExpRaiseHardError(ErrorStatus,

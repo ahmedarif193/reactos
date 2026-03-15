@@ -77,6 +77,8 @@ BOOLEAN KdpPortLocked;
 KSPIN_LOCK KdpDebuggerLock;
 BOOLEAN KdpControlCPressed;
 BOOLEAN KdpContextSent;
+ULONG KdpDebuggerEntryCount;
+PKTHREAD KdpDebuggerOwnerThread;
 
 //
 // Debug Trap Handlers
