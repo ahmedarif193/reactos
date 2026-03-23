@@ -1,7 +1,7 @@
 
 option(ENABLE_ROSAPPS "Enable building the ReactOS extra applications" OFF)
 option(ENABLE_ROSTESTS "Enable building the ReactOS test suite" OFF)
-option(ENABLE_WALLPAPERS "Integrate wallpapers into the built ISOs" OFF)
+option(ENABLE_WALLPAPERS "Integrate wallpapers into the built ISOs" ON)
 
 if(ENABLE_ROSAPPS)
     add_subdirectory(rosapps)
@@ -13,6 +13,12 @@ endif()
 
 if(ENABLE_WALLPAPERS)
     add_subdirectory(wallpapers)
+endif()
+
+option(ENABLE_ROSV "Enable building the ROSV hypervisor driver" OFF)
+
+if(ARCH STREQUAL "amd64" AND ENABLE_ROSV)
+    add_subdirectory(rosv)
 endif()
 
 if(EXISTS ${CMAKE_CURRENT_SOURCE_DIR}/AHK_Tests/)

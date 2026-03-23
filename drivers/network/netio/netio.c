@@ -975,7 +975,9 @@ WskReceiveFrom(
     UNIMPLEMENTED;
     if (Irp != NULL)
     {
+        IoSetNextIrpStackLocation(Irp);
         Irp->IoStatus.Status = STATUS_NOT_IMPLEMENTED;
+        Irp->IoStatus.Information = 0;
         IoCompleteRequest(Irp, IO_NETWORK_INCREMENT);
     }
     return STATUS_NOT_IMPLEMENTED;
@@ -1009,7 +1011,9 @@ WskGetLocalAddress(_In_ PWSK_SOCKET SocketParam, _Out_ PSOCKADDR LocalAddress, _
     UNIMPLEMENTED;
     if (Irp != NULL)
     {
+        IoSetNextIrpStackLocation(Irp);
         Irp->IoStatus.Status = STATUS_NOT_IMPLEMENTED;
+        Irp->IoStatus.Information = 0;
         IoCompleteRequest(Irp, IO_NETWORK_INCREMENT);
     }
     return STATUS_NOT_IMPLEMENTED;

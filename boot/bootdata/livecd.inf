@@ -52,8 +52,8 @@ HKCU,"SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\Explorer","NoDisconnect
 HKCU,"SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\Explorer","NoLogoff",0x00010001,1
 HKCU,"SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\Explorer","StartMenuLogoff",0x00010001,1
 
-; Launch the editor after explorer has brought up the desktop.
-HKCU,"SOFTWARE\Microsoft\Windows\CurrentVersion\Run","LiveCDEdit",0x00020002,"%SystemRoot%\system32\edit.exe"
+; Launch rosl (VMX Hypervisor Launcher) for testing.
+HKCU,"SOFTWARE\Microsoft\Windows\CurrentVersion\Run","LiveCDRosl",0x00020002,"%SystemRoot%\system32\rosl.exe"
 
 ; User Profile environment variables
 HKLM,"SYSTEM\CurrentControlSet\Control\Session Manager\Environment","USERPROFILE",0x00020000,"%SystemDrive%\Profiles\Default User"
