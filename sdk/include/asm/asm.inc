@@ -279,7 +279,9 @@ ENDM
 
 /* To avoid reverse syntax we provide a new macro .PROC, replacing PROC... */
 .macro .PROC name
+#ifndef __clang__
     .func \name
+#endif
     \name:
 #ifdef _X86_
     .cfi_startproc
@@ -296,7 +298,9 @@ ENDM
 #else
     .seh_endproc
 #endif
+#ifndef __clang__
     .endfunc
+#endif
 .endm
 #define ENDFUNC .ENDP
 

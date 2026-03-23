@@ -401,4 +401,3 @@ NtCallbackReturn(
     /* Now switch back to the old stack */
     KiCallbackReturn(CalloutFrame, CallbackStatus);
 }
-

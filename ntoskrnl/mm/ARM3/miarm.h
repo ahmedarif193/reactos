@@ -633,6 +633,12 @@ extern PVOID MiSessionImageStart;
 extern PVOID MiSessionImageEnd;
 extern PMMPTE MiHighestUserPte;
 extern PMMPDE MiHighestUserPde;
+#if (_MI_PAGING_LEVELS >= 3)
+extern PMMPTE MiHighestUserPpe;
+#if (_MI_PAGING_LEVELS >= 4)
+extern PMMPTE MiHighestUserPxe;
+#endif
+#endif
 extern PFN_NUMBER MmSystemPageDirectory[PPE_PER_PAGE];
 extern PMMPTE MmSharedUserDataPte;
 extern LIST_ENTRY MmProcessList;
@@ -693,28 +699,32 @@ FORCEINLINE
 BOOLEAN
 MiIsUserPxe(PVOID Address)
 {
-    return ((ULONG_PTR)Address >> 7) == 0x1FFFFEDF6FB7DA0ULL;
+    return ((Address >= (PVOID)MiAddressToPxe(NULL)) &&
+            (Address <= (PVOID)MiHighestUserPxe));
 }
 
 FORCEINLINE
 BOOLEAN
 MiIsUserPpe(PVOID Address)
 {
-    return ((ULONG_PTR)Address >> 16) == 0xFFFFF6FB7DA0ULL;
+    return ((Address >= (PVOID)MiAddressToPpe(NULL)) &&
+            (Address <= (PVOID)MiHighestUserPpe));
 }
 
 FORCEINLINE
 BOOLEAN
 MiIsUserPde(PVOID Address)
 {
-    return ((ULONG_PTR)Address >> 25) == 0x7FFFFB7DA0ULL;
+    return ((Address >= (PVOID)MiAddressToPde(NULL)) &&
+            (Address <= (PVOID)MiHighestUserPde));
 }
 
 FORCEINLINE
 BOOLEAN
 MiIsUserPte(PVOID Address)
 {
-    return ((ULONG_PTR)Address >> 34) == 0x3FFFFDA0ULL;
+    return ((Address >= (PVOID)PTE_BASE) &&
+            (Address <= (PVOID)MiHighestUserPte));
 }
 #else
 FORCEINLINE

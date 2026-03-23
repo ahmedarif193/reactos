@@ -115,20 +115,16 @@ extern "C" {
 #if (_WIN32_WINNT >= _WIN32_WINNT_VISTA)
 #define ENABLE_AUTO_POSITION            0x0100
 #endif
-#if (NTDDI_VERSION >= NTDDI_WIN10_RS1) // (_WIN32_WINNT >= _WIN32_WINNT_WIN10)
 #define ENABLE_VIRTUAL_TERMINAL_INPUT   0x0200
-#endif
 
 /*
  * Output mode flags
  */
 #define ENABLE_PROCESSED_OUTPUT             0x0001
 #define ENABLE_WRAP_AT_EOL_OUTPUT           0x0002
-#if (NTDDI_VERSION >= NTDDI_WIN10_RS1) // (_WIN32_WINNT >= _WIN32_WINNT_WIN10)
 #define ENABLE_VIRTUAL_TERMINAL_PROCESSING  0x0004
 #define DISABLE_NEWLINE_AUTO_RETURN         0x0008
 #define ENABLE_LVB_GRID_WORLDWIDE           0x0010
-#endif
 
 /*
  * Console selection flags

@@ -14,6 +14,7 @@
 #include <consrv.h>
 #include <coninput.h>
 #include "../../concfg/font.h"
+#include "../include/vt.h"
 
 #define NDEBUG
 #include <debug.h>
@@ -61,6 +62,68 @@ ConDrvValidateConsoleUnsafe(IN PCONSOLE Console,
 
 
 /* CONSOLE INITIALIZATION FUNCTIONS *******************************************/
+
+static VOID
+ConDrvLoadVtPolicy(PCONSOLE Console)
+{
+    RTL_QUERY_REGISTRY_TABLE QueryTable[4];
+    ULONG ClipboardValue = 1;
+    ULONG HyperlinkValue = 1;
+    ULONG DcsValue = 1;
+    NTSTATUS Status;
+
+    if (!Console)
+        return;
+
+    RtlZeroMemory(QueryTable, sizeof(QueryTable));
+
+    QueryTable[0].Flags = RTL_QUERY_REGISTRY_DIRECT;
+    QueryTable[0].Name = L"AllowVtOscClipboard";
+    QueryTable[0].EntryContext = &ClipboardValue;
+    QueryTable[0].DefaultType = REG_DWORD;
+    QueryTable[0].DefaultData = &ClipboardValue;
+    QueryTable[0].DefaultLength = sizeof(ClipboardValue);
+
+    QueryTable[1].Flags = RTL_QUERY_REGISTRY_DIRECT;
+    QueryTable[1].Name = L"AllowVtOscHyperlinks";
+    QueryTable[1].EntryContext = &HyperlinkValue;
+    QueryTable[1].DefaultType = REG_DWORD;
+    QueryTable[1].DefaultData = &HyperlinkValue;
+    QueryTable[1].DefaultLength = sizeof(HyperlinkValue);
+
+    QueryTable[2].Flags = RTL_QUERY_REGISTRY_DIRECT;
+    QueryTable[2].Name = L"AllowVtDcsPassthrough";
+    QueryTable[2].EntryContext = &DcsValue;
+    QueryTable[2].DefaultType = REG_DWORD;
+    QueryTable[2].DefaultData = &DcsValue;
+    QueryTable[2].DefaultLength = sizeof(DcsValue);
+
+    Status = RtlQueryRegistryValues(RTL_REGISTRY_USER,
+                                    L"Console\\VT",
+                                    QueryTable,
+                                    NULL,
+                                    NULL);
+    if (!NT_SUCCESS(Status))
+    {
+        Status = RtlQueryRegistryValues(RTL_REGISTRY_USER,
+                                        L"Console",
+                                        QueryTable,
+                                        NULL,
+                                        NULL);
+    }
+    if (!NT_SUCCESS(Status))
+    {
+        Status = RtlQueryRegistryValues(RTL_REGISTRY_CONTROL,
+                                        L"Session Manager\\Console",
+                                        QueryTable,
+                                        NULL,
+                                        NULL);
+    }
+
+    Console->AllowVtOscClipboard = (ClipboardValue != 0);
+    Console->AllowVtOscHyperlinks = (HyperlinkValue != 0);
+    Console->AllowVtDcsPassthrough = (DcsValue != 0);
+}
 
 /* For resetting the terminal - defined in dummyterm.c */
 VOID ResetTerminal(IN PCONSOLE Console);
@@ -145,6 +208,10 @@ ConDrvInitConsole(
     /* Make the new screen buffer active */
     Console->ActiveBuffer = NewBuffer;
     Console->ConsolePaused = FALSE;
+    Console->AllowVtOscClipboard = TRUE;
+    Console->AllowVtOscHyperlinks = TRUE;
+    Console->AllowVtDcsPassthrough = TRUE;
+    ConDrvLoadVtPolicy(Console);
 
     DPRINT("Console initialized\n");
 
@@ -358,10 +425,13 @@ ConDrvSetConsoleMode(IN PCONSOLE Console,
                      IN PCONSOLE_IO_OBJECT Object,
                      IN ULONG ConsoleMode)
 {
-#define CONSOLE_VALID_INPUT_MODES   ( ENABLE_PROCESSED_INPUT  | ENABLE_LINE_INPUT   | \
-                                      ENABLE_ECHO_INPUT       | ENABLE_WINDOW_INPUT | \
-                                      ENABLE_MOUSE_INPUT )
-#define CONSOLE_VALID_OUTPUT_MODES  ( ENABLE_PROCESSED_OUTPUT | ENABLE_WRAP_AT_EOL_OUTPUT )
+#define CONSOLE_VALID_INPUT_MODES   ( ENABLE_PROCESSED_INPUT          | ENABLE_LINE_INPUT   | \
+                                      ENABLE_ECHO_INPUT               | ENABLE_WINDOW_INPUT | \
+                                      ENABLE_MOUSE_INPUT              | ENABLE_EXTENDED_FLAGS | \
+                                      ENABLE_VIRTUAL_TERMINAL_INPUT )
+#define CONSOLE_VALID_OUTPUT_MODES  ( ENABLE_PROCESSED_OUTPUT             | ENABLE_WRAP_AT_EOL_OUTPUT | \
+                                      ENABLE_VIRTUAL_TERMINAL_PROCESSING  | DISABLE_NEWLINE_AUTO_RETURN | \
+                                      ENABLE_LVB_GRID_WORLDWIDE )
 
     NTSTATUS Status = STATUS_SUCCESS;
 
@@ -396,7 +466,15 @@ ConDrvSetConsoleMode(IN PCONSOLE Console,
         }
         else
         {
+            ULONG OldMode = Buffer->Mode;
             Buffer->Mode = (ConsoleMode & CONSOLE_VALID_OUTPUT_MODES);
+
+            if ((OldMode & ENABLE_VIRTUAL_TERMINAL_PROCESSING) &&
+                !(Buffer->Mode & ENABLE_VIRTUAL_TERMINAL_PROCESSING) &&
+                GetType(Buffer) == TEXTMODE_BUFFER)
+            {
+                ConDrvVtInvalidateBufferRgb((PTEXTMODE_SCREEN_BUFFER)Buffer);
+            }
         }
     }
     else

@@ -10,6 +10,7 @@
 /* INCLUDES *******************************************************************/
 
 #include <consrv.h>
+#include "../include/vt.h"
 
 #define NDEBUG
 #include <debug.h>
@@ -88,6 +89,23 @@ TEXTMODE_BUFFER_Initialize(OUT PCONSOLE_SCREEN_BUFFER* Buffer,
         return STATUS_INSUFFICIENT_RESOURCES;
     }
 
+    {
+        SIZE_T CellCount = (SIZE_T)TextModeInfo->ScreenBufferSize.X * TextModeInfo->ScreenBufferSize.Y;
+        NewBuffer->FgColors = ConsoleAllocHeap(HEAP_ZERO_MEMORY, CellCount * sizeof(COLORREF));
+        NewBuffer->BgColors = ConsoleAllocHeap(HEAP_ZERO_MEMORY, CellCount * sizeof(COLORREF));
+        if (NewBuffer->FgColors == NULL || NewBuffer->BgColors == NULL)
+        {
+            if (NewBuffer->FgColors) ConsoleFreeHeap(NewBuffer->FgColors);
+            if (NewBuffer->BgColors) ConsoleFreeHeap(NewBuffer->BgColors);
+            ConsoleFreeHeap(NewBuffer->Buffer);
+            CONSOLE_SCREEN_BUFFER_Destroy((PCONSOLE_SCREEN_BUFFER)NewBuffer);
+            return STATUS_INSUFFICIENT_RESOURCES;
+        }
+
+        RtlFillMemory(NewBuffer->FgColors, CellCount * sizeof(COLORREF), 0xFF);
+        RtlFillMemory(NewBuffer->BgColors, CellCount * sizeof(COLORREF), 0xFF);
+    }
+
     NewBuffer->ScreenBufferSize = TextModeInfo->ScreenBufferSize;
     NewBuffer->OldScreenBufferSize = NewBuffer->ScreenBufferSize;
 
@@ -116,6 +134,8 @@ TEXTMODE_BUFFER_Initialize(OUT PCONSOLE_SCREEN_BUFFER* Buffer,
     }
     NewBuffer->CursorPosition.X = NewBuffer->CursorPosition.Y = 0;
 
+    ConDrvVtInitializeBuffer(NewBuffer);
+
     NewBuffer->Mode = ENABLE_PROCESSED_OUTPUT | ENABLE_WRAP_AT_EOL_OUTPUT;
 
     *Buffer = (PCONSOLE_SCREEN_BUFFER)NewBuffer;
@@ -134,6 +154,10 @@ TEXTMODE_BUFFER_Destroy(IN OUT PCONSOLE_SCREEN_BUFFER Buffer)
     Buffer->Header.Type = SCREEN_BUFFER;
 
     ConsoleFreeHeap(Buff->Buffer);
+    if (Buff->FgColors) ConsoleFreeHeap(Buff->FgColors);
+    if (Buff->BgColors) ConsoleFreeHeap(Buff->BgColors);
+    if (Buff->VtState.HyperlinkUri.Buffer)
+        ConsoleFreeHeap(Buff->VtState.HyperlinkUri.Buffer);
 
     CONSOLE_SCREEN_BUFFER_Destroy(Buffer);
 }
@@ -158,6 +182,8 @@ ClearLineBuffer(PTEXTMODE_SCREEN_BUFFER Buff)
         /* Fill the cell */
         Ptr->Char.UnicodeChar = L' ';
         Ptr->Attributes = Buff->ScreenDefaultAttrib;
+        ConioSetCellFgColor(Buff, Pos, Buff->CursorPosition.Y, CLR_INVALID);
+        ConioSetCellBgColor(Buff, Pos, Buff->CursorPosition.Y, CLR_INVALID);
     }
 }
 
@@ -282,6 +308,22 @@ ConioCopyRegion(
 #else
         /* RtlMoveMemory() takes into account for the direction of the copy */
         RtlMoveMemory(PtrDst, PtrSrc, Width * sizeof(CHAR_INFO));
+        if (ScreenBuffer->FgColors)
+        {
+            ULONG SrcIndex = ConioCoordToIndex(ScreenBuffer, SrcRegion->Left, SY);
+            ULONG DstIndex = ConioCoordToIndex(ScreenBuffer, DstOrigin->X, DY);
+            RtlMoveMemory(ScreenBuffer->FgColors + DstIndex,
+                          ScreenBuffer->FgColors + SrcIndex,
+                          Width * sizeof(COLORREF));
+        }
+        if (ScreenBuffer->BgColors)
+        {
+            ULONG SrcIndex = ConioCoordToIndex(ScreenBuffer, SrcRegion->Left, SY);
+            ULONG DstIndex = ConioCoordToIndex(ScreenBuffer, DstOrigin->X, DY);
+            RtlMoveMemory(ScreenBuffer->BgColors + DstIndex,
+                          ScreenBuffer->BgColors + SrcIndex,
+                          Width * sizeof(COLORREF));
+        }
 #endif
     }
 }
@@ -337,6 +379,8 @@ ConioFillRegion(
                 /* We are outside the excluded region, fill the destination */
                 *Ptr = FillChar;
                 // Ptr->Attributes &= ~COMMON_LVB_SBCSDBCS;
+                ConioSetCellFgColor(ScreenBuffer, X, Y, CLR_INVALID);
+                ConioSetCellBgColor(ScreenBuffer, X, Y, CLR_INVALID);
             }
 
             ++Ptr;
@@ -366,6 +410,10 @@ ConioResizeBuffer(PCONSOLE Console,
     WORD CurrentAttribute;
     USHORT CurrentY;
     PCHAR_INFO OldBuffer;
+    COLORREF *NewFg;
+    COLORREF *NewBg;
+    COLORREF *OldFgColors;
+    COLORREF *OldBgColors;
     DWORD i;
     DWORD diff;
 
@@ -397,9 +445,24 @@ ConioResizeBuffer(PCONSOLE Console,
     Buffer = ConsoleAllocHeap(HEAP_ZERO_MEMORY, Size.X * Size.Y * sizeof(CHAR_INFO));
     if (!Buffer) return STATUS_NO_MEMORY;
 
+    NewFg = ConsoleAllocHeap(HEAP_ZERO_MEMORY, Size.X * Size.Y * sizeof(COLORREF));
+    NewBg = ConsoleAllocHeap(HEAP_ZERO_MEMORY, Size.X * Size.Y * sizeof(COLORREF));
+    if (!NewFg || !NewBg)
+    {
+        if (NewFg) ConsoleFreeHeap(NewFg);
+        if (NewBg) ConsoleFreeHeap(NewBg);
+        ConsoleFreeHeap(Buffer);
+        return STATUS_NO_MEMORY;
+    }
+
+    RtlFillMemory(NewFg, Size.X * Size.Y * sizeof(COLORREF), 0xFF);
+    RtlFillMemory(NewBg, Size.X * Size.Y * sizeof(COLORREF), 0xFF);
+
     DPRINT("Resizing (%d,%d) to (%d,%d)\n", ScreenBuffer->ScreenBufferSize.X, ScreenBuffer->ScreenBufferSize.Y, Size.X, Size.Y);
 
     OldBuffer = ScreenBuffer->Buffer;
+    OldFgColors = ScreenBuffer->FgColors;
+    OldBgColors = ScreenBuffer->BgColors;
 
     for (CurrentY = 0; CurrentY < ScreenBuffer->ScreenBufferSize.Y && CurrentY < Size.Y; CurrentY++)
     {
@@ -409,6 +472,16 @@ ConioResizeBuffer(PCONSOLE Console,
         {
             /* Reduce size */
             RtlCopyMemory(Buffer + Offset, Ptr, Size.X * sizeof(CHAR_INFO));
+            if (ScreenBuffer->FgColors)
+            {
+                ULONG SrcIndex = ConioCoordToIndex(ScreenBuffer, 0, CurrentY);
+                RtlMoveMemory(NewFg + Offset, ScreenBuffer->FgColors + SrcIndex, Size.X * sizeof(COLORREF));
+            }
+            if (ScreenBuffer->BgColors)
+            {
+                ULONG SrcIndex = ConioCoordToIndex(ScreenBuffer, 0, CurrentY);
+                RtlMoveMemory(NewBg + Offset, ScreenBuffer->BgColors + SrcIndex, Size.X * sizeof(COLORREF));
+            }
             Offset += Size.X;
 
             /* If we have cut a trailing full-width character in half, remove it completely */
@@ -418,12 +491,26 @@ ConioResizeBuffer(PCONSOLE Console,
                 Ptr->Char.UnicodeChar = L' ';
                 /* Keep all the other original attributes intact */
                 Ptr->Attributes &= ~COMMON_LVB_SBCSDBCS;
+                NewFg[Offset - 1] = CLR_INVALID;
+                NewBg[Offset - 1] = CLR_INVALID;
             }
         }
         else
         {
             /* Enlarge size */
             RtlCopyMemory(Buffer + Offset, Ptr, ScreenBuffer->ScreenBufferSize.X * sizeof(CHAR_INFO));
+            if (ScreenBuffer->FgColors)
+            {
+                ULONG SrcIndex = ConioCoordToIndex(ScreenBuffer, 0, CurrentY);
+                RtlMoveMemory(NewFg + Offset, ScreenBuffer->FgColors + SrcIndex,
+                              ScreenBuffer->ScreenBufferSize.X * sizeof(COLORREF));
+            }
+            if (ScreenBuffer->BgColors)
+            {
+                ULONG SrcIndex = ConioCoordToIndex(ScreenBuffer, 0, CurrentY);
+                RtlMoveMemory(NewBg + Offset, ScreenBuffer->BgColors + SrcIndex,
+                              ScreenBuffer->ScreenBufferSize.X * sizeof(COLORREF));
+            }
             Offset += ScreenBuffer->ScreenBufferSize.X;
 
             /* The attribute to be used is the one of the last cell of the current line */
@@ -460,9 +547,32 @@ ConioResizeBuffer(PCONSOLE Console,
     }
 
     (void)InterlockedExchangePointer((PVOID volatile*)&ScreenBuffer->Buffer, Buffer);
-    ConsoleFreeHeap(OldBuffer);
+    (void)InterlockedExchangePointer((PVOID volatile*)&ScreenBuffer->FgColors, NewFg);
+    (void)InterlockedExchangePointer((PVOID volatile*)&ScreenBuffer->BgColors, NewBg);
+    if (OldBuffer) ConsoleFreeHeap(OldBuffer);
+    if (OldFgColors) ConsoleFreeHeap(OldFgColors);
+    if (OldBgColors) ConsoleFreeHeap(OldBgColors);
     ScreenBuffer->ScreenBufferSize = ScreenBuffer->OldScreenBufferSize = Size;
     ScreenBuffer->VirtualY = 0;
+
+    if (ScreenBuffer->ScreenBufferSize.Y <= 0)
+    {
+        ScreenBuffer->VtState.ScrollTop = 0;
+        ScreenBuffer->VtState.ScrollBottom = 0;
+    }
+    else
+    {
+        if (ScreenBuffer->VtState.ScrollTop < 0 ||
+            ScreenBuffer->VtState.ScrollTop >= ScreenBuffer->ScreenBufferSize.Y)
+        {
+            ScreenBuffer->VtState.ScrollTop = 0;
+        }
+        if (ScreenBuffer->VtState.ScrollBottom < ScreenBuffer->VtState.ScrollTop ||
+            ScreenBuffer->VtState.ScrollBottom >= ScreenBuffer->ScreenBufferSize.Y)
+        {
+            ScreenBuffer->VtState.ScrollBottom = ScreenBuffer->ScreenBufferSize.Y - 1;
+        }
+    }
 
     /* Ensure the cursor and the view are within the buffer */
     ScreenBuffer->CursorPosition.X = min(ScreenBuffer->CursorPosition.X, Size.X - 1);
@@ -687,6 +797,8 @@ ConDrvWriteConsoleOutput(IN PCONSOLE Console,
             }
             // TODO: Sanitize DBCS attributes?
             Ptr->Attributes = CurCharInfo->Attributes;
+            ConioSetCellFgColor(Buffer, X, Y, CLR_INVALID);
+            ConioSetCellBgColor(Buffer, X, Y, CLR_INVALID);
             ++Ptr;
             ++CurCharInfo;
         }
@@ -751,6 +863,8 @@ ConDrvWriteConsoleOutputVDM(IN PCONSOLE Console,
         {
             ConsoleOutputAnsiToUnicodeChar(Console, &Ptr->Char.UnicodeChar, &CurCharInfo->Char);
             Ptr->Attributes = CurCharInfo->Attributes;
+            ConioSetCellFgColor(Buffer, X, Y, CLR_INVALID);
+            ConioSetCellBgColor(Buffer, X, Y, CLR_INVALID);
             ++Ptr;
             ++CurCharInfo;
         }
@@ -771,6 +885,7 @@ ConDrvWriteConsole(IN PCONSOLE Console,
     PWCHAR Buffer = NULL;
     ULONG Written = 0;
     ULONG Length;
+    ULONG WriteLength;
 
     if (Console == NULL || ScreenBuffer == NULL /* || StringBuffer == NULL */)
         return STATUS_INVALID_PARAMETER;
@@ -786,6 +901,7 @@ ConDrvWriteConsole(IN PCONSOLE Console,
     if (Unicode)
     {
         Buffer = StringBuffer;
+        Length = NumCharsToWrite;
     }
     else
     {
@@ -807,19 +923,35 @@ ConDrvWriteConsole(IN PCONSOLE Console,
         }
     }
 
+    WriteLength = Length;
+
     /* Send it */
     if (Buffer)
     {
         if (NT_SUCCESS(Status))
         {
-            Status = TermWriteStream(Console,
-                                     ScreenBuffer,
-                                     Buffer,
-                                     NumCharsToWrite,
-                                     TRUE);
-            if (NT_SUCCESS(Status))
+            if (ScreenBuffer->Mode & ENABLE_VIRTUAL_TERMINAL_PROCESSING)
             {
-                Written = NumCharsToWrite;
+                Status = ConDrvVtWriteConsole(Console,
+                                              ScreenBuffer,
+                                              Buffer,
+                                              WriteLength,
+                                              &Written,
+                                              NULL);
+                if (NT_SUCCESS(Status))
+                    Written = NumCharsToWrite;
+            }
+            else
+            {
+                Status = TermWriteStream(Console,
+                                         ScreenBuffer,
+                                         Buffer,
+                                         WriteLength,
+                                         TRUE);
+                if (NT_SUCCESS(Status))
+                {
+                    Written = NumCharsToWrite;
+                }
             }
         }
 

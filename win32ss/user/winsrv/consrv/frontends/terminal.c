@@ -9,6 +9,7 @@
 /* INCLUDES *******************************************************************/
 
 #include <consrv.h>
+#include "../include/vt.h"
 #include "concfg/font.h"
 
 // #include "frontends/gui/guiterm.h"
@@ -18,6 +19,12 @@
 
 #define NDEBUG
 #include <debug.h>
+
+#define SET_CELL_COLORS(Buffer, XCoord, YCoord, FgColor, BgColor) \
+    do { \
+        ConioSetCellFgColor((Buffer), (XCoord), (YCoord), (FgColor)); \
+        ConioSetCellBgColor((Buffer), (XCoord), (YCoord), (BgColor)); \
+    } while (0)
 
 
 
@@ -477,8 +484,23 @@ ConSrvTermReadStream(IN OUT PTERMINAL This,
 ClearLineBuffer(PTEXTMODE_SCREEN_BUFFER Buff);
 
 static VOID
-ConioNextLine(PTEXTMODE_SCREEN_BUFFER Buff, PSMALL_RECT UpdateRect, PUINT ScrolledLines)
+ConioNextLine(PCONSRV_CONSOLE Console,
+              PTEXTMODE_SCREEN_BUFFER Buff,
+              PSMALL_RECT UpdateRect,
+              PUINT ScrolledLines)
 {
+    Buff->VtState.PrivateModes &= ~VT_PRIVMODE_DELAYED_EOL_WRAP;
+
+    if (Buff->VtState.Active)
+    {
+        ConDrvVtAdvanceLine((PCONSOLE)Console, Buff);
+        UpdateRect->Left = 0;
+        UpdateRect->Right = Buff->ScreenBufferSize.X - 1;
+        UpdateRect->Top = min(UpdateRect->Top, Buff->CursorPosition.Y);
+        UpdateRect->Bottom = max(UpdateRect->Bottom, Buff->CursorPosition.Y);
+        return;
+    }
+
     /* If we hit bottom, slide the viewable screen */
     if (++Buff->CursorPosition.Y == Buff->ScreenBufferSize.Y)
     {
@@ -513,8 +535,12 @@ ConioWriteConsole(PFRONTEND FrontEnd,
     SMALL_RECT UpdateRect;
     SHORT CursorStartX, CursorStartY;
     UINT ScrolledLines;
+    int CellWidth;
     BOOLEAN bFullwidth;
-    BOOLEAN bCJK = Console->IsCJK;
+    BOOLEAN UseRgbForeground;
+    BOOLEAN UseRgbBackground;
+    COLORREF FgColorValue;
+    COLORREF BgColorValue;
 
     /* If nothing to write, bail out now */
     if (Length == 0)
@@ -530,6 +556,22 @@ ConioWriteConsole(PFRONTEND FrontEnd,
 
     for (i = 0; i < Length; i++)
     {
+        if (Buff->VtState.PrivateModes & VT_PRIVMODE_DELAYED_EOL_WRAP)
+        {
+            if (!(Buff->Mode & ENABLE_PROCESSED_OUTPUT) ||
+                (Buffer[i] != L'\r' && Buffer[i] != L'\n' &&
+                 Buffer[i] != L'\b' && Buffer[i] != L'\a'))
+            {
+                Buff->CursorPosition.X = 0;
+                CursorStartX = Buff->CursorPosition.X;
+                ConioNextLine(Console, Buff, &UpdateRect, &ScrolledLines);
+            }
+            else if (Buffer[i] != L'\a')
+            {
+                Buff->VtState.PrivateModes &= ~VT_PRIVMODE_DELAYED_EOL_WRAP;
+            }
+        }
+
         /*
          * If we are in processed mode, interpret special characters and
          * display them correctly. Otherwise, just put them into the buffer.
@@ -548,9 +590,17 @@ ConioWriteConsole(PFRONTEND FrontEnd,
             /* --- LF --- */
             else if (Buffer[i] == L'\n')
             {
-                Buff->CursorPosition.X = 0; // TODO: Make this behaviour optional!
-                CursorStartX = Buff->CursorPosition.X;
-                ConioNextLine(Buff, &UpdateRect, &ScrolledLines);
+                Buff->VtState.PrivateModes &= ~VT_PRIVMODE_DELAYED_EOL_WRAP;
+                if (Buff->Mode & DISABLE_NEWLINE_AUTO_RETURN)
+                {
+                    CursorStartX = Buff->CursorPosition.X;
+                }
+                else
+                {
+                    Buff->CursorPosition.X = 0;
+                    CursorStartX = Buff->CursorPosition.X;
+                }
+                ConioNextLine(Console, Buff, &UpdateRect, &ScrolledLines);
                 continue;
             }
             /* --- BS --- */
@@ -610,6 +660,7 @@ ConioWriteConsole(PFRONTEND FrontEnd,
                     if (Attrib)
                         Ptr->Attributes = Buff->ScreenDefaultAttrib;
                     Ptr->Attributes &= ~COMMON_LVB_SBCSDBCS;
+                    SET_CELL_COLORS(Buff, Buff->CursorPosition.X, Buff->CursorPosition.Y, CLR_INVALID, CLR_INVALID);
 
                     if (Buff->CursorPosition.X > 0)
                         Buff->CursorPosition.X--;
@@ -621,6 +672,7 @@ ConioWriteConsole(PFRONTEND FrontEnd,
                 if (Attrib)
                     Ptr->Attributes = Buff->ScreenDefaultAttrib;
                 Ptr->Attributes &= ~COMMON_LVB_SBCSDBCS;
+                SET_CELL_COLORS(Buff, Buff->CursorPosition.X, Buff->CursorPosition.Y, CLR_INVALID, CLR_INVALID);
 
                 UpdateRect.Left  = min(UpdateRect.Left , Buff->CursorPosition.X);
                 UpdateRect.Right = max(UpdateRect.Right, Buff->CursorPosition.X);
@@ -655,6 +707,7 @@ ConioWriteConsole(PFRONTEND FrontEnd,
                     if (Attrib)
                         Ptr->Attributes = Buff->ScreenDefaultAttrib;
                     Ptr->Attributes &= ~COMMON_LVB_SBCSDBCS;
+                    SET_CELL_COLORS(Buff, Buff->CursorPosition.X, Buff->CursorPosition.Y, CLR_INVALID, CLR_INVALID);
 
                     ++Ptr;
                     Buff->CursorPosition.X++;
@@ -668,6 +721,7 @@ ConioWriteConsole(PFRONTEND FrontEnd,
                         if (Attrib)
                             Ptr->Attributes = Buff->ScreenDefaultAttrib;
                         Ptr->Attributes &= ~COMMON_LVB_SBCSDBCS;
+                        SET_CELL_COLORS(Buff, Buff->CursorPosition.X, Buff->CursorPosition.Y, CLR_INVALID, CLR_INVALID);
                     }
                 }
                 UpdateRect.Right = max(UpdateRect.Right, Buff->CursorPosition.X);
@@ -676,10 +730,18 @@ ConioWriteConsole(PFRONTEND FrontEnd,
                 {
                     if (Buff->Mode & ENABLE_WRAP_AT_EOL_OUTPUT)
                     {
-                        /* Wrapping mode: Go to next line */
-                        Buff->CursorPosition.X = 0;
-                        CursorStartX = Buff->CursorPosition.X;
-                        ConioNextLine(Buff, &UpdateRect, &ScrolledLines);
+                        if (Buff->Mode & DISABLE_NEWLINE_AUTO_RETURN)
+                        {
+                            Buff->CursorPosition.X = Buff->ScreenBufferSize.X - 1;
+                            Buff->VtState.PrivateModes |= VT_PRIVMODE_DELAYED_EOL_WRAP;
+                        }
+                        else
+                        {
+                            /* Wrapping mode: Go to next line */
+                            Buff->CursorPosition.X = 0;
+                            CursorStartX = Buff->CursorPosition.X;
+                            ConioNextLine(Console, Buff, &UpdateRect, &ScrolledLines);
+                        }
                     }
                     else
                     {
@@ -696,11 +758,20 @@ ConioWriteConsole(PFRONTEND FrontEnd,
                 continue;
             }
         }
+        CellWidth = mk_wcwidth_cjk(Buffer[i]);
+        if (CellWidth < 0)
+            CellWidth = 1;
+        if (CellWidth == 0)
+            continue;
+
         UpdateRect.Left  = min(UpdateRect.Left , Buff->CursorPosition.X);
         UpdateRect.Right = max(UpdateRect.Right, Buff->CursorPosition.X);
 
-        /* For Chinese, Japanese and Korean */
-        bFullwidth = (bCJK && IS_FULL_WIDTH(Buffer[i]));
+        bFullwidth = (Console->IsCJK && CellWidth == 2);
+        UseRgbForeground = (Buff->VtState.Active && Buff->VtState.UseRgbForeground);
+        UseRgbBackground = (Buff->VtState.Active && Buff->VtState.UseRgbBackground);
+        FgColorValue = UseRgbForeground ? Buff->VtState.CurrentFgColor : CLR_INVALID;
+        BgColorValue = UseRgbBackground ? Buff->VtState.CurrentBgColor : CLR_INVALID;
 
         /* Check whether we can insert the full-width character */
         if (bFullwidth)
@@ -713,7 +784,7 @@ ConioWriteConsole(PFRONTEND FrontEnd,
                     /* Wrapping mode: Go to next line */
                     Buff->CursorPosition.X = 0;
                     CursorStartX = Buff->CursorPosition.X;
-                    ConioNextLine(Buff, &UpdateRect, &ScrolledLines);
+                    ConioNextLine(Console, Buff, &UpdateRect, &ScrolledLines);
                 }
                 else
                 {
@@ -754,6 +825,7 @@ ConioWriteConsole(PFRONTEND FrontEnd,
                 if (Attrib)
                     Ptr->Attributes = Buff->ScreenDefaultAttrib;
                 Ptr->Attributes &= ~COMMON_LVB_SBCSDBCS;
+                SET_CELL_COLORS(Buff, Buff->CursorPosition.X - 1, Buff->CursorPosition.Y, CLR_INVALID, CLR_INVALID);
             }
             Ptr = ConioCoordToPointer(Buff, Buff->CursorPosition.X, Buff->CursorPosition.Y);
         }
@@ -769,6 +841,7 @@ ConioWriteConsole(PFRONTEND FrontEnd,
                 Ptr->Attributes = Buff->ScreenDefaultAttrib;
             Ptr->Attributes &= ~COMMON_LVB_SBCSDBCS;
             Ptr->Attributes |= COMMON_LVB_LEADING_BYTE;
+            SET_CELL_COLORS(Buff, Buff->CursorPosition.X, Buff->CursorPosition.Y, FgColorValue, BgColorValue);
 
             /* Set the trailing byte */
             Buff->CursorPosition.X++;
@@ -778,6 +851,7 @@ ConioWriteConsole(PFRONTEND FrontEnd,
                 Ptr->Attributes = Buff->ScreenDefaultAttrib;
             Ptr->Attributes &= ~COMMON_LVB_SBCSDBCS;
             Ptr->Attributes |= COMMON_LVB_TRAILING_BYTE;
+            SET_CELL_COLORS(Buff, Buff->CursorPosition.X, Buff->CursorPosition.Y, FgColorValue, BgColorValue);
         }
         else
         {
@@ -785,6 +859,7 @@ ConioWriteConsole(PFRONTEND FrontEnd,
             if (Attrib)
                 Ptr->Attributes = Buff->ScreenDefaultAttrib;
             Ptr->Attributes &= ~COMMON_LVB_SBCSDBCS;
+            SET_CELL_COLORS(Buff, Buff->CursorPosition.X, Buff->CursorPosition.Y, FgColorValue, BgColorValue);
         }
 
         ++Ptr;
@@ -799,6 +874,7 @@ ConioWriteConsole(PFRONTEND FrontEnd,
                 if (Attrib)
                     Ptr->Attributes = Buff->ScreenDefaultAttrib;
                 Ptr->Attributes &= ~COMMON_LVB_SBCSDBCS;
+                SET_CELL_COLORS(Buff, Buff->CursorPosition.X, Buff->CursorPosition.Y, CLR_INVALID, CLR_INVALID);
             }
         }
 
@@ -806,10 +882,18 @@ ConioWriteConsole(PFRONTEND FrontEnd,
         {
             if (Buff->Mode & ENABLE_WRAP_AT_EOL_OUTPUT)
             {
-                /* Wrapping mode: Go to next line */
-                Buff->CursorPosition.X = 0;
-                CursorStartX = Buff->CursorPosition.X;
-                ConioNextLine(Buff, &UpdateRect, &ScrolledLines);
+                if (Buff->Mode & DISABLE_NEWLINE_AUTO_RETURN)
+                {
+                    Buff->CursorPosition.X = Buff->ScreenBufferSize.X - 1;
+                    Buff->VtState.PrivateModes |= VT_PRIVMODE_DELAYED_EOL_WRAP;
+                }
+                else
+                {
+                    /* Wrapping mode: Go to next line */
+                    Buff->CursorPosition.X = 0;
+                    CursorStartX = Buff->CursorPosition.X;
+                    ConioNextLine(Console, Buff, &UpdateRect, &ScrolledLines);
+                }
             }
             else
             {

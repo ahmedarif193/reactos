@@ -434,7 +434,21 @@ translate_token(TokenList& tokens, size_t index, const vector<string> &macro_par
             {
                 printf("\\");
             }
-            printf("%s", tok.str().c_str());
+            /* Translate MASM comparison operators to GAS equivalents */
+            if (iequals(tok.str(), "ne"))
+                printf("!=");
+            else if (iequals(tok.str(), "eq"))
+                printf("==");
+            else if (iequals(tok.str(), "lt"))
+                printf("<");
+            else if (iequals(tok.str(), "gt"))
+                printf(">");
+            else if (iequals(tok.str(), "le"))
+                printf("<=");
+            else if (iequals(tok.str(), "ge"))
+                printf(">=");
+            else
+                printf("%s", tok.str().c_str());
             break;
 
         // We migt want to improve these
@@ -517,7 +531,7 @@ translate_expression(TokenList &tokens, size_t index, const vector<string> &macr
                 }
                 else if (iequals(tok.str(), "not"))
                 {
-                    printf("!");
+                    printf("~");
                     index += 1;
                 }
                 else
@@ -622,6 +636,21 @@ size_t translate_instruction_param(TokenList& tokens, size_t index, const vector
                     !is_string_in_list(macro_params, tok.str()) &&
                     !g_processing_jmp)
                 {
+                    /* Collect any +/- offset before emitting [rip] so that
+                       symbol+offset[rip] is produced instead of symbol[rip]+offset */
+                    while (index < tokens.size() &&
+                           tokens[index].type() == TOKEN_TYPE::Operator &&
+                           (tokens[index].str() == "+" || tokens[index].str() == "-"))
+                    {
+                        index = translate_token(tokens, index, macro_params);
+                        if (index < tokens.size() &&
+                            (tokens[index].type() == TOKEN_TYPE::HexNumber ||
+                             tokens[index].type() == TOKEN_TYPE::DecNumber ||
+                             tokens[index].type() == TOKEN_TYPE::Identifier))
+                        {
+                            index = translate_token(tokens, index, macro_params);
+                        }
+                    }
                     printf("[rip]");
                 }
                 break;
@@ -989,7 +1018,6 @@ translate_identifier_construct(TokenList& tokens, size_t index, const vector<str
 
         case TOKEN_TYPE::KW_PROC:
         {
-            printf(".func %s\n", tok.str().c_str());
             printf("%s:", tok.str().c_str());
             index += 3;
 
@@ -1009,7 +1037,7 @@ translate_identifier_construct(TokenList& tokens, size_t index, const vector<str
 
         case TOKEN_TYPE::KW_ENDP:
         {
-            printf(".seh_endproc\n.endfunc");
+            printf(".seh_endproc");
             index += 3;
             break;
         }

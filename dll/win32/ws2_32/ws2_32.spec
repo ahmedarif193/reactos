@@ -180,6 +180,7 @@
 @ stdcall -version=0x600+ WahRemoveHandleContext(ptr ptr)
 @ stdcall -version=0x600+ WahWaitForNotification(long long ptr ptr)
 @ stdcall -stub -version=0x600+ WahWriteLSPEvent(ptr ptr)
+@ stdcall -stub -version=0x602+ GetHostNameW(ptr long)
 @ stdcall freeaddrinfo(ptr)
 @ stdcall getaddrinfo(str str ptr ptr)
 @ stdcall getnameinfo(ptr long ptr long ptr long long)

@@ -548,7 +548,6 @@ MmCreatePeb(IN PEPROCESS Process,
                                 ViewShare,
                                 MEM_TOP_DOWN,
                                 PAGE_READONLY);
-    DPRINT("NLS Tables at: %p\n", TableBase);
     if (!NT_SUCCESS(Status))
     {
         /* Cleanup and exit */
@@ -560,7 +559,6 @@ MmCreatePeb(IN PEPROCESS Process,
     // Allocate the PEB
     //
     Status = MiCreatePebOrTeb(Process, sizeof(PEB), (PULONG_PTR)&Peb);
-    DPRINT("PEB at: %p\n", Peb);
     if (!NT_SUCCESS(Status))
     {
         /* Cleanup and exit */
@@ -835,6 +833,7 @@ MmCreateTeb(IN PEPROCESS Process,
         //
         Teb->StaticUnicodeString.MaximumLength = sizeof(Teb->StaticUnicodeBuffer);
         Teb->StaticUnicodeString.Buffer = Teb->StaticUnicodeBuffer;
+
     }
     _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
     {

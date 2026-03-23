@@ -95,7 +95,6 @@ RtlpCreateUserStack(IN HANDLE ProcessHandle,
     InitialTeb->StackBase = (PVOID)(Stack + StackReserve);
     InitialTeb->PreviousStackBase = NULL;
     InitialTeb->PreviousStackLimit = NULL;
-
     /* Update the stack position */
     Stack += StackReserve - StackCommit;
 
@@ -246,7 +245,6 @@ RtlCreateUserThread(IN HANDLE ProcessHandle,
                          Parameter,
                          StartAddress,
                          InitialTeb.StackBase);
-
     /* We are now ready to create the Kernel Thread Object */
     InitializeObjectAttributes(&ObjectAttributes,
                                NULL,

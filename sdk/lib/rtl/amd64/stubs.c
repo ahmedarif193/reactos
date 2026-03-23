@@ -37,7 +37,6 @@ RtlInitializeContext(
     /* Align stack by 16 and substract 8 (unaligned on function entry) */
     ThreadContext->Rsp &= ~15;
     ThreadContext->Rsp -= 8;
-
     /* Enable Interrupts */
     ThreadContext->EFlags = EFLAGS_INTERRUPT_MASK;
 
@@ -89,4 +88,3 @@ RtlQueueApcWow64Thread(
     UNIMPLEMENTED;
     return STATUS_NOT_IMPLEMENTED;
 }
-

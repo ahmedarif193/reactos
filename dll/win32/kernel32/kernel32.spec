@@ -1211,7 +1211,10 @@
 @ stdcall -stub -version=0x600+ WaitForThreadpoolWorkCallbacks(ptr long)
 @ stdcall WaitNamedPipeA(str long)
 @ stdcall WaitNamedPipeW(wstr long)
+@ stdcall -stub -version=0x602+ WaitOnAddress(ptr ptr long long)
 @ stdcall -version=0x600+ WakeAllConditionVariable(ptr) ntdll.RtlWakeAllConditionVariable
+@ stdcall -stub -version=0x602+ WakeByAddressAll(ptr)
+@ stdcall -stub -version=0x602+ WakeByAddressSingle(ptr)
 @ stdcall -version=0x600+ WakeConditionVariable(ptr) ntdll.RtlWakeConditionVariable
 @ stub -version=0x600+ WerGetFlags
 @ stub -version=0x600+ WerRegisterFile

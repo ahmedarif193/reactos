@@ -913,6 +913,22 @@ __INTRIN_INLINE_SSE2 int _mm_cvttsd_si32(__m128d a)
     return __builtin_ia32_cvttsd2si((__v2df)a);
 }
 
+#if defined(__clang__) && (__clang_major__ >= 21)
+__INTRIN_INLINE_SSE2 __m64 _mm_cvtpd_pi32(__m128d a)
+{
+    return __ros_trunc64(__builtin_ia32_cvtpd2dq((__v2df)a));
+}
+
+__INTRIN_INLINE_SSE2 __m64 _mm_cvttpd_pi32(__m128d a)
+{
+    return __ros_trunc64(__builtin_ia32_cvttpd2dq((__v2df)a));
+}
+
+__INTRIN_INLINE_SSE2 __m128d _mm_cvtpi32_pd(__m64 a)
+{
+    return (__m128d)__builtin_convertvector((__v2si)a, __v2df);
+}
+#else
 __INTRIN_INLINE_MMXSSE2 __m64 _mm_cvtpd_pi32(__m128d a)
 {
     return (__m64)__builtin_ia32_cvtpd2pi((__v2df)a);
@@ -927,6 +943,7 @@ __INTRIN_INLINE_MMXSSE2 __m128d _mm_cvtpi32_pd(__m64 a)
 {
     return __builtin_ia32_cvtpi2pd((__v2si)a);
 }
+#endif
 
 __INTRIN_INLINE_SSE2 double _mm_cvtsd_f64(__m128d a)
 {
@@ -1139,10 +1156,17 @@ __INTRIN_INLINE_SSE2 __m128i _mm_add_epi32(__m128i a, __m128i b)
     return (__m128i)((__v4su)a + (__v4su)b);
 }
 
+#if defined(__clang__) && (__clang_major__ >= 21)
+__INTRIN_INLINE_SSE2 __m64 _mm_add_si64(__m64 a, __m64 b)
+{
+    return (__m64)((unsigned long long)a + (unsigned long long)b);
+}
+#else
 __INTRIN_INLINE_MMXSSE2 __m64 _mm_add_si64(__m64 a, __m64 b)
 {
     return (__m64)__builtin_ia32_paddq((__v1di)a, (__v1di)b);
 }
+#endif
 
 __INTRIN_INLINE_SSE2 __m128i _mm_add_epi64(__m128i a, __m128i b)
 {
@@ -1251,10 +1275,18 @@ __INTRIN_INLINE_SSE2 __m128i _mm_mullo_epi16(__m128i a, __m128i b)
     return (__m128i)((__v8hu)a * (__v8hu)b);
 }
 
+#if defined(__clang__) && (__clang_major__ >= 21)
+__INTRIN_INLINE_SSE2 __m64 _mm_mul_su32(__m64 a, __m64 b)
+{
+    return __ros_trunc64(__builtin_ia32_pmuludq128((__v4si)__ros_anyext128(a),
+                                                    (__v4si)__ros_anyext128(b)));
+}
+#else
 __INTRIN_INLINE_MMXSSE2 __m64 _mm_mul_su32(__m64 a, __m64 b)
 {
     return (__m64)__builtin_ia32_pmuludq((__v2si)a, (__v2si)b);
 }
+#endif
 
 __INTRIN_INLINE_SSE2 __m128i _mm_mul_epu32(__m128i a, __m128i b)
 {
@@ -1281,10 +1313,17 @@ __INTRIN_INLINE_SSE2 __m128i _mm_sub_epi32(__m128i a, __m128i b)
     return (__m128i)((__v4su)a - (__v4su)b);
 }
 
+#if defined(__clang__) && (__clang_major__ >= 21)
+__INTRIN_INLINE_SSE2 __m64 _mm_sub_si64(__m64 a, __m64 b)
+{
+    return (__m64)((unsigned long long)a - (unsigned long long)b);
+}
+#else
 __INTRIN_INLINE_MMXSSE2 __m64 _mm_sub_si64(__m64 a, __m64 b)
 {
     return (__m64)__builtin_ia32_psubq((__v1di)a, (__v1di)b);
 }
+#endif
 
 __INTRIN_INLINE_SSE2 __m128i _mm_sub_epi64(__m128i a, __m128i b)
 {

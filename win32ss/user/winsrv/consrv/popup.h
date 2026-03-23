@@ -22,6 +22,8 @@ typedef struct _POPUP_WINDOW
     COORD       Size;               /* Size of the popup window */
 
     PCHAR_INFO  OldContents;        /* The data under the popup window */
+    COLORREF   *OldFgColors;        /* Saved per-cell foreground colours */
+    COLORREF   *OldBgColors;        /* Saved per-cell background colours */
     PPOPUP_INPUT_ROUTINE PopupInputRoutine; /* Routine called when input is received */
 } POPUP_WINDOW, *PPOPUP_WINDOW;
 

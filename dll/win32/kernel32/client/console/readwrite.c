@@ -239,6 +239,8 @@ IntGetConsoleInput(IN HANDLE hConsoleInput,
     CONSOLE_API_MESSAGE ApiMessage;
     PCONSOLE_GETINPUT GetInputRequest = &ApiMessage.Data.GetInputRequest;
     PCSR_CAPTURE_BUFFER CaptureBuffer = NULL;
+    BOOLEAN CaptureFailed = FALSE;
+    static ULONG MaxInputCaptureRecords;
 
     if (!IsConsoleHandle(hConsoleInput))
     {
@@ -278,21 +280,58 @@ IntGetConsoleInput(IN HANDLE hConsoleInput,
     }
     else
     {
-        ULONG Size = nLength * sizeof(INPUT_RECORD);
+        ULONG NumRecords = nLength;
 
-        /* Allocate a Capture Buffer */
-        CaptureBuffer = CsrAllocateCaptureBuffer(1, Size);
-        if (CaptureBuffer == NULL)
+        /*
+         * The CSR port heap lives in a fixed 64 KiB shared section.
+         * Some callers, like the new console-based edit, ask for 4096
+         * INPUT_RECORDs at once (80 KiB) which will never fit there.
+         * Seed the cache with a batch size that comfortably fits the heap
+         * and keep the failure/halve path as a fallback for tighter cases.
+         */
+        if (MaxInputCaptureRecords == 0)
+            MaxInputCaptureRecords = 2048;
+
+        if (MaxInputCaptureRecords != 0 && NumRecords > MaxInputCaptureRecords)
+            NumRecords = MaxInputCaptureRecords;
+
+        /*
+         * Large ReadConsoleInputExW callers can request more input records
+         * than fit in the CSR capture heap. Reading fewer records than asked
+         * for is allowed, so progressively shrink the batch instead of
+         * failing the whole read.
+         */
+        while (NumRecords > sizeof(GetInputRequest->RecordStaticBuffer)/sizeof(INPUT_RECORD))
         {
-            DPRINT1("CsrAllocateCaptureBuffer failed!\n");
-            SetLastError(ERROR_NOT_ENOUGH_MEMORY);
-            return FALSE;
+            ULONG Size = NumRecords * sizeof(INPUT_RECORD);
+
+            CaptureBuffer = CsrAllocateCaptureBuffer(1, Size);
+            if (CaptureBuffer != NULL)
+            {
+                GetInputRequest->NumRecords = NumRecords;
+
+                if (CaptureFailed &&
+                    ((MaxInputCaptureRecords == 0) || (NumRecords < MaxInputCaptureRecords)))
+                {
+                    MaxInputCaptureRecords = NumRecords;
+                }
+
+                /* Allocate space in the Buffer */
+                CsrAllocateMessagePointer(CaptureBuffer,
+                                          Size,
+                                          (PVOID*)&GetInputRequest->RecordBufPtr);
+                break;
+            }
+
+            CaptureFailed = TRUE;
+            NumRecords /= 2;
         }
 
-        /* Allocate space in the Buffer */
-        CsrAllocateMessagePointer(CaptureBuffer,
-                                  Size,
-                                  (PVOID*)&GetInputRequest->RecordBufPtr);
+        if (CaptureBuffer == NULL)
+        {
+            GetInputRequest->NumRecords = NumRecords;
+            GetInputRequest->RecordBufPtr = GetInputRequest->RecordStaticBuffer;
+        }
     }
 
     /* Call the server */

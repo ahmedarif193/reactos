@@ -55,4 +55,7 @@ endif()
 
 if(CMAKE_C_COMPILER_ID STREQUAL "GNU" OR CMAKE_C_COMPILER_ID STREQUAL "Clang")
     target_compile_options(freetype PRIVATE -fno-builtin-malloc)
+    # GCC 11+ -Warray-parameter flags the FT_Vector sub[3] vs FT_Vector* sub
+    # mismatch between ftlcdfil.h declaration and ftlcdfil.c definition.
+    target_compile_options(freetype PRIVATE -Wno-array-parameter)
 endif()

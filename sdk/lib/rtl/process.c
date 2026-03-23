@@ -130,6 +130,10 @@ RtlpInitEnvironment(HANDLE ProcessHandle,
 
         /* Save pointer */
         ProcessParameters->Environment = BaseAddress;
+        DPRINT1("RtlpInitEnvironment: Peb=%p Environment=%p EnvSize=%p\n",
+                Peb,
+                ProcessParameters->Environment,
+                (PVOID)EnviroSize);
     }
 
     /* Now allocate space for the Parameter Block */
@@ -170,6 +174,12 @@ RtlpInitEnvironment(HANDLE ProcessHandle,
         DPRINT1("Failed to write pointer to Parameter Block\n");
         return Status;
     }
+
+    DPRINT1("RtlpInitEnvironment: Peb=%p ProcessParameters=%p MaximumLength=%p Environment=%p\n",
+            Peb,
+            BaseAddress,
+            (PVOID)ProcessParameters->MaximumLength,
+            ProcessParameters->Environment);
 
     /* Return */
     return STATUS_SUCCESS;
@@ -362,6 +372,12 @@ RtlCreateUserProcess(IN PUNICODE_STRING ImageFileName,
         ZwClose(hSection);
         return Status;
     }
+
+    DPRINT1("RtlCreateUserProcess: Peb=%p TransferAddress=%p MaxStack=%p CommitStack=%p\n",
+            ProcessBasicInfo.PebBaseAddress,
+            ProcessInfo->ImageInformation.TransferAddress,
+            (PVOID)ProcessInfo->ImageInformation.MaximumStackSize,
+            (PVOID)ProcessInfo->ImageInformation.CommittedStackSize);
 
     /* Create the first Thread */
     Status = RtlCreateUserThread(ProcessInfo->ProcessHandle,

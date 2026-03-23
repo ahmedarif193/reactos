@@ -67,7 +67,32 @@ typedef union _DECLSPEC_INTRIN_TYPE _CRT_ALIGN(16) __m128
 #else
 #define __ATTRIBUTE_SSE__ __attribute__((__target__("sse")))
 #endif
-#define __INTRIN_INLINE_SSE __INTRIN_INLINE __ATTRIBUTE_SSE__ 
+#define __INTRIN_INLINE_SSE __INTRIN_INLINE __ATTRIBUTE_SSE__
+
+/* Clang 21+ removed legacy MMX builtins; provide SSE2-based replacements */
+#if defined(__clang__) && (__clang_major__ >= 21)
+
+/* Forward-declare 128-bit vector types needed before emmintrin.h */
+typedef long long __v2di __attribute__((__vector_size__(16)));
+typedef short     __v8hi __attribute__((__vector_size__(16)));
+typedef char      __v16qi __attribute__((__vector_size__(16)));
+
+/* Unsigned 64-bit vector types */
+typedef unsigned long long __v1du __attribute__((__vector_size__(8)));
+typedef unsigned char      __v8qu __attribute__((__vector_size__(8)));
+typedef signed char        __v8qs __attribute__((__vector_size__(8)));
+typedef unsigned short     __v4hu __attribute__((__vector_size__(8)));
+
+/* MMX-to-SSE2 helper macros (following Clang 21 conventions) */
+#define __ros_trunc64(x)     (__m64)__builtin_shufflevector((__v2di)(x), __extension__(__v2di){}, 0)
+#define __ros_zext128(x)     (__v2di)__builtin_shufflevector((__v2si)(x), __extension__(__v2si){}, 0, 1, 2, 3)
+#define __ros_anyext128(x)   (__v2di)__builtin_shufflevector((__v2si)(x), __extension__(__v2si){}, 0, 1, -1, -1)
+#define __ros_zeroupper64(x) (__v2di)__builtin_shufflevector((__v4si)(x), __extension__(__v4si){}, 0, 1, 4, 5)
+
+#define __ATTRIBUTE_SSE2_COMPAT__ __attribute__((__target__("sse2"),__min_vector_width__(128)))
+#define __INTRIN_INLINE_SSE2_COMPAT __INTRIN_INLINE __ATTRIBUTE_SSE2_COMPAT__
+
+#endif /* __clang__ >= 21 */
 
 #endif /* _MSC_VER */
 
@@ -873,10 +898,17 @@ __INTRIN_INLINE_SSE long long _mm_cvtss_si64(__m128 __a)
 #endif
 
 // _mm_cvt_ps2pi
+#if defined(__clang__) && (__clang_major__ >= 21)
+__INTRIN_INLINE_SSE2_COMPAT __m64 _mm_cvtps_pi32(__m128 __a)
+{
+    return __ros_trunc64(__builtin_ia32_cvtps2dq((__v4sf)__ros_zeroupper64(__a)));
+}
+#else
 __INTRIN_INLINE_SSE __m64 _mm_cvtps_pi32(__m128 __a)
 {
     return (__m64)__builtin_ia32_cvtps2pi((__v4sf)__a);
 }
+#endif
 
 // _mm_cvtt_ss2si
 __INTRIN_INLINE_SSE int _mm_cvttss_si32(__m128 __a)
@@ -892,10 +924,17 @@ __INTRIN_INLINE_SSE long long _mm_cvttss_si64(__m128 __a)
 #endif
 
 // _mm_cvtt_ps2pi
+#if defined(__clang__) && (__clang_major__ >= 21)
+__INTRIN_INLINE_SSE2_COMPAT __m64 _mm_cvttps_pi32(__m128 __a)
+{
+    return __ros_trunc64(__builtin_ia32_cvttps2dq((__v4sf)__ros_zeroupper64(__a)));
+}
+#else
 __INTRIN_INLINE_SSE __m64 _mm_cvttps_pi32(__m128 __a)
 {
     return (__m64)__builtin_ia32_cvttps2pi((__v4sf)__a);
 }
+#endif
 
 // _mm_cvt_si2ss
 __INTRIN_INLINE_SSE __m128 _mm_cvtsi32_ss(__m128 __a, int __b)
@@ -913,10 +952,20 @@ __INTRIN_INLINE_SSE __m128 _mm_cvtsi64_ss(__m128 __a, long long __b)
 #endif
 
 // _mm_cvt_pi2ps
+#if defined(__clang__) && (__clang_major__ >= 21)
+__INTRIN_INLINE_SSE2_COMPAT __m128 _mm_cvtpi32_ps(__m128 __a, __m64 __b)
+{
+    return (__m128)__builtin_shufflevector(
+        (__v4sf)__a,
+        __builtin_convertvector((__v4si)__ros_zext128(__b), __v4sf),
+        4, 5, 2, 3);
+}
+#else
 __INTRIN_INLINE_SSE __m128 _mm_cvtpi32_ps(__m128 __a, __m64 __b)
 {
     return __builtin_ia32_cvtpi2ps((__v4sf)__a, (__v2si)__b);
 }
+#endif
 
 __INTRIN_INLINE_SSE float _mm_cvtss_f32(__m128 __a)
 {
@@ -1120,7 +1169,9 @@ __INTRIN_INLINE_SSE void _mm_storer_ps(float *__p, __m128 __a)
 
 __INTRIN_INLINE_SSE void _mm_stream_pi(__m64 *__p, __m64 __a)
 {
-#ifdef __clang__
+#if defined(__clang__) && (__clang_major__ >= 21)
+    __builtin_nontemporal_store(__a, (__m64 *)__p);
+#elif defined(__clang__)
     __builtin_ia32_movntq((__v1di*)__p, __a);
 #else
     __builtin_ia32_movntq((long long unsigned int *)__p, (long long unsigned int)__a);
@@ -1167,40 +1218,76 @@ __INTRIN_INLINE_SSE __m64 _mm_insert_pi16 (__m64 const __a, int const __d, int c
 // _m_pmaxsw
 __INTRIN_INLINE_SSE __m64 _mm_max_pi16(__m64 __a, __m64 __b)
 {
+#if defined(__clang__) && (__clang_major__ >= 21)
+    return (__m64)__builtin_elementwise_max((__v4hi)__a, (__v4hi)__b);
+#else
     return (__m64)__builtin_ia32_pmaxsw((__v4hi)__a, (__v4hi)__b);
+#endif
 }
 
 // _m_pmaxub
 __INTRIN_INLINE_SSE __m64 _mm_max_pu8(__m64 __a, __m64 __b)
 {
+#if defined(__clang__) && (__clang_major__ >= 21)
+    return (__m64)__builtin_elementwise_max((__v8qu)__a, (__v8qu)__b);
+#else
     return (__m64)__builtin_ia32_pmaxub((__v8qi)__a, (__v8qi)__b);
+#endif
 }
 
 // _m_pminsw
 __INTRIN_INLINE_SSE __m64 _mm_min_pi16(__m64 __a, __m64 __b)
 {
+#if defined(__clang__) && (__clang_major__ >= 21)
+    return (__m64)__builtin_elementwise_min((__v4hi)__a, (__v4hi)__b);
+#else
     return (__m64)__builtin_ia32_pminsw((__v4hi)__a, (__v4hi)__b);
+#endif
 }
 
 // _m_pminub
 __INTRIN_INLINE_SSE __m64 _mm_min_pu8(__m64 __a, __m64 __b)
 {
+#if defined(__clang__) && (__clang_major__ >= 21)
+    return (__m64)__builtin_elementwise_min((__v8qu)__a, (__v8qu)__b);
+#else
     return (__m64)__builtin_ia32_pminub((__v8qi)__a, (__v8qi)__b);
+#endif
 }
 
 // _m_pmovmskb
+#if defined(__clang__) && (__clang_major__ >= 21)
+__INTRIN_INLINE_SSE2_COMPAT int _mm_movemask_pi8(__m64 __a)
+{
+    return __builtin_ia32_pmovmskb128((__v16qi)__ros_zext128(__a));
+}
+#else
 __INTRIN_INLINE_SSE int _mm_movemask_pi8(__m64 __a)
 {
     return __builtin_ia32_pmovmskb((__v8qi)__a);
 }
+#endif
 
 // _m_pmulhuw
+#if defined(__clang__) && (__clang_major__ >= 21)
+__INTRIN_INLINE_SSE2_COMPAT __m64 _mm_mulhi_pu16(__m64 __a, __m64 __b)
+{
+    return __ros_trunc64(__builtin_ia32_pmulhuw128((__v8hi)__ros_anyext128(__a),
+                                                    (__v8hi)__ros_anyext128(__b)));
+}
+#else
 __INTRIN_INLINE_SSE __m64 _mm_mulhi_pu16(__m64 __a, __m64 __b)
 {
     return (__m64)__builtin_ia32_pmulhuw((__v4hi)__a, (__v4hi)__b);
 }
+#endif
 
-#ifdef __clang__
+#if defined(__clang__) && (__clang_major__ >= 21)
+#define _m_pshufw(a, n) \
+    ((__m64)__builtin_shufflevector((__v4hi)(__m64)(a), __extension__(__v4hi){}, \
+                                    (n) & 0x3, ((n) >> 2) & 0x3, \
+                                    ((n) >> 4) & 0x3, ((n) >> 6) & 0x3))
+#elif defined(__clang__)
 #define _m_pshufw(a, n) \
     ((__m64)__builtin_ia32_pshufw((__v4hi)(__m64)(a), (n)))
 #else
@@ -1212,28 +1299,67 @@ __INTRIN_INLINE_MMX __m64 _mm_shuffle_pi16 (__m64 __a, int const __n)
 #endif
 
 // _m_maskmovq
+#if defined(__clang__) && (__clang_major__ >= 21)
+__INTRIN_INLINE_SSE2_COMPAT void _mm_maskmove_si64(__m64 __d, __m64 __n, char *__p)
+{
+    __v2di __d128 = __ros_anyext128(__d);
+    __v2di __n128 = __ros_zext128(__n);
+    if (((__SIZE_TYPE__)__p & 0xfff) >= 4096-15 &&
+        ((__SIZE_TYPE__)__p & 0xfff) <= 4096-8) {
+        __p -= 8;
+        __d128 = __builtin_ia32_pslldqi128_byteshift(__d128, 8);
+        __n128 = __builtin_ia32_pslldqi128_byteshift(__n128, 8);
+    }
+    __builtin_ia32_maskmovdqu((__v16qi)__d128, (__v16qi)__n128, __p);
+}
+#else
 __INTRIN_INLINE_SSE void _mm_maskmove_si64(__m64 __d, __m64 __n, char *__p)
 {
     __builtin_ia32_maskmovq((__v8qi)__d, (__v8qi)__n, __p);
 }
+#endif
 
 // _m_pavgb
+#if defined(__clang__) && (__clang_major__ >= 21)
+__INTRIN_INLINE_SSE2_COMPAT __m64 _mm_avg_pu8(__m64 __a, __m64 __b)
+{
+    return __ros_trunc64(__builtin_ia32_pavgb128((__v16qi)__ros_anyext128(__a),
+                                                  (__v16qi)__ros_anyext128(__b)));
+}
+#else
 __INTRIN_INLINE_SSE __m64 _mm_avg_pu8(__m64 __a, __m64 __b)
 {
     return (__m64)__builtin_ia32_pavgb((__v8qi)__a, (__v8qi)__b);
 }
+#endif
 
 // _m_pavgw
+#if defined(__clang__) && (__clang_major__ >= 21)
+__INTRIN_INLINE_SSE2_COMPAT __m64 _mm_avg_pu16(__m64 __a, __m64 __b)
+{
+    return __ros_trunc64(__builtin_ia32_pavgw128((__v8hi)__ros_anyext128(__a),
+                                                  (__v8hi)__ros_anyext128(__b)));
+}
+#else
 __INTRIN_INLINE_SSE __m64 _mm_avg_pu16(__m64 __a, __m64 __b)
 {
     return (__m64)__builtin_ia32_pavgw((__v4hi)__a, (__v4hi)__b);
 }
+#endif
 
 // _m_psadbw
+#if defined(__clang__) && (__clang_major__ >= 21)
+__INTRIN_INLINE_SSE2_COMPAT __m64 _mm_sad_pu8(__m64 __a, __m64 __b)
+{
+    return __ros_trunc64(__builtin_ia32_psadbw128((__v16qi)__ros_zext128(__a),
+                                                   (__v16qi)__ros_zext128(__b)));
+}
+#else
 __INTRIN_INLINE_SSE __m64 _mm_sad_pu8(__m64 __a, __m64 __b)
 {
     return (__m64)__builtin_ia32_psadbw((__v8qi)__a, (__v8qi)__b);
 }
+#endif
 
 #endif // __GNUC__
 

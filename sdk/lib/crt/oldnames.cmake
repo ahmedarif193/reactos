@@ -1,12 +1,18 @@
 
 if(NOT MSVC)
+    if(ARCH STREQUAL "amd64")
+        set(OLDNAMES_DLLTOOL_MACHINE i386:x86-64)
+    else()
+        set(OLDNAMES_DLLTOOL_MACHINE ${ARCH})
+    endif()
+
     # Use the same trick as with the other import libs. See gcc.cmake --> generate_import_lib function
     set(LIBRARY_PRIVATE_DIR ${CMAKE_CURRENT_BINARY_DIR}${CMAKE_FILES_DIRECTORY}/oldnames.dir)
     add_custom_command(
         OUTPUT ${LIBRARY_PRIVATE_DIR}/oldnames.a
         # ar just puts stuff into the archive, without looking twice. Just delete the lib, we're going to rebuild it anyway
         COMMAND ${CMAKE_COMMAND} -E rm -f ${LIBRARY_PRIVATE_DIR}/oldnames.a
-        COMMAND ${CMAKE_DLLTOOL} --def ${CMAKE_CURRENT_SOURCE_DIR}/moldname-msvcrt.def --kill-at --output-lib=oldnames.a -t oldnames
+        COMMAND ${CMAKE_DLLTOOL} -m ${OLDNAMES_DLLTOOL_MACHINE} -d ${CMAKE_CURRENT_SOURCE_DIR}/moldname-msvcrt.def -k -l oldnames.a -t oldnames
         DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/moldname-msvcrt.def
         WORKING_DIRECTORY ${LIBRARY_PRIVATE_DIR})
 

@@ -6,8 +6,8 @@
 #define _MI_PAGING_LEVELS 4
 #define _MI_HAS_NO_EXECUTE 1
 
-/* Memory layout base addresses (This is based on Vista!) */
-#define MI_USER_PROBE_ADDRESS           (PVOID)0x000007FFFFFF0000ULL
+/* Memory layout base addresses (largely based on Vista; user VA updated to Windows 8.1+) */
+#define MI_USER_PROBE_ADDRESS           (PVOID)0x00007FFFFFFF0000ULL
 #define MI_DEFAULT_SYSTEM_RANGE_START   (PVOID)0xFFFF080000000000ULL
 #define MI_REAL_SYSTEM_RANGE_START             0xFFFF800000000000ULL
 //#define MI_PAGE_TABLE_BASE                   0xFFFFF68000000000ULL // 512 GB page tables
@@ -369,4 +369,3 @@ MiIsPdeForAddressValid(PVOID Address)
             (MiAddressToPpe(Address)->u.Hard.Valid) &&
             (MiAddressToPde(Address)->u.Hard.Valid));
 }
-

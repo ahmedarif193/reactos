@@ -130,7 +130,90 @@ typedef struct _TEXTMODE_SCREEN_BUFFER
 
     USHORT ScreenDefaultAttrib; /* Default screen char attribute */
     USHORT PopupDefaultAttrib;  /* Default popup char attribute */
+    COLORREF *FgColors;         /* Extended per-cell foreground colours (CLR_INVALID when unused) */
+    COLORREF *BgColors;         /* Extended per-cell background colours (CLR_INVALID when unused) */
+#define VT_PENDING_SEQUENCE_MAX 256
+    struct _VT_MODE_STATE
+    {
+        BOOLEAN Active;             /* VT processing currently enabled */
+        BOOLEAN CursorSaved;        /* Whether a cursor position was saved */
+        COORD   SavedCursorPos;     /* Last saved cursor position */
+        USHORT  SavedAttributes;    /* Saved SGR attributes */
+        USHORT  CurrentAttributes;  /* Current SGR attributes */
+        ULONG   PrivateModes;       /* Bitmask of active DEC private modes */
+        struct _TEXTMODE_SCREEN_BUFFER* AlternateBuffer; /* Alternate screen buffer */
+        struct _TEXTMODE_SCREEN_BUFFER* PrimaryBuffer;   /* Primary buffer when alternate active */
+        CONSOLE_CURSOR_INFO PrimaryCursorInfo;   /* Saved cursor info for primary buffer */
+        COORD   PrimaryCursorPos;                /* Saved cursor position for primary buffer */
+        COORD   PrimaryViewOrigin;               /* Saved viewport origin */
+        USHORT  PrimaryVirtualY;                 /* Saved scrollback origin */
+        CONSOLE_CURSOR_INFO DefaultCursorInfo;   /* Default cursor info for DECSCUSR reset */
+        UCHAR   CurrentCursorStyle;              /* Last DECSCUSR style parameter */
+        BOOLEAN UseRgbForeground;                /* TRUE when foreground colour uses 24-bit RGB */
+        BOOLEAN UseRgbBackground;                /* TRUE when background colour uses 24-bit RGB */
+        COLORREF CurrentFgColor;                 /* Current 24-bit foreground colour */
+        COLORREF CurrentBgColor;                 /* Current 24-bit background colour */
+        COLORREF SavedFgColor;                   /* Saved foreground colour for DECSC */
+        COLORREF SavedBgColor;                   /* Saved background colour for DECSC */
+        BOOLEAN SavedUseRgbForeground;           /* Saved RGB flag for foreground */
+        BOOLEAN SavedUseRgbBackground;           /* Saved RGB flag for background */
+        SHORT   ScrollTop;                       /* Top margin for scrolling (0-based) */
+        SHORT   ScrollBottom;                    /* Bottom margin for scrolling (0-based inclusive) */
+        BOOLEAN HyperlinkActive;                 /* TRUE when OSC 8 hyperlink is active */
+        UNICODE_STRING HyperlinkUri;             /* Current hyperlink target */
+        UCHAR   G0Charset;                       /* Currently designated G0 character set */
+        UCHAR   G1Charset;                       /* Currently designated G1 character set */
+        UCHAR   G2Charset;                       /* Currently designated G2 character set */
+        UCHAR   G3Charset;                       /* Currently designated G3 character set */
+        UCHAR   ActiveCharset;                   /* Active GL charset slot (0-3) */
+        UCHAR   PendingSingleShift;              /* Pending single-shift slot override (SS2/SS3) */
+        UCHAR   SavedG0Charset;                  /* Saved G0 charset for DECSC */
+        UCHAR   SavedG1Charset;                  /* Saved G1 charset for DECSC */
+        UCHAR   SavedG2Charset;                  /* Saved G2 charset for DECSC */
+        UCHAR   SavedG3Charset;                  /* Saved G3 charset for DECSC */
+        UCHAR   SavedActiveCharset;              /* Saved active charset selector for DECSC */
+        WCHAR   LastWrittenChar;                 /* Last printable glyph emitted for REP */
+        BOOLEAN LastCharValid;                   /* Tracks whether LastWrittenChar is valid */
+        ULONG   MouseButtonState;                /* Tracks currently pressed mouse buttons */
+        COORD   LastMousePosition;               /* Last reported mouse position */
+        PUCHAR  TabStops;                        /* Dynamic tab-stop bitmap (one byte per column) */
+        USHORT  TabStopLength;                   /* Number of columns represented in TabStops */
+        WCHAR   PendingSequence[VT_PENDING_SEQUENCE_MAX]; /* Unterminated VT sequence kept across writes */
+        USHORT  PendingSequenceLength;           /* Number of valid WCHARs in PendingSequence */
+    } VtState;
 } TEXTMODE_SCREEN_BUFFER, *PTEXTMODE_SCREEN_BUFFER;
+
+FORCEINLINE ULONG
+ConioCoordToIndex(PTEXTMODE_SCREEN_BUFFER Buff, ULONG X, ULONG Y)
+{
+    return ((Y + Buff->VirtualY) % Buff->ScreenBufferSize.Y) * Buff->ScreenBufferSize.X + X;
+}
+
+FORCEINLINE COLORREF
+ConioGetCellFgColor(PTEXTMODE_SCREEN_BUFFER Buff, ULONG X, ULONG Y)
+{
+    if (!Buff->FgColors) return CLR_INVALID;
+    return Buff->FgColors[ConioCoordToIndex(Buff, X, Y)];
+}
+
+FORCEINLINE COLORREF
+ConioGetCellBgColor(PTEXTMODE_SCREEN_BUFFER Buff, ULONG X, ULONG Y)
+{
+    if (!Buff->BgColors) return CLR_INVALID;
+    return Buff->BgColors[ConioCoordToIndex(Buff, X, Y)];
+}
+
+FORCEINLINE VOID
+ConioSetCellFgColor(PTEXTMODE_SCREEN_BUFFER Buff, ULONG X, ULONG Y, COLORREF Color)
+{
+    if (Buff->FgColors) Buff->FgColors[ConioCoordToIndex(Buff, X, Y)] = Color;
+}
+
+FORCEINLINE VOID
+ConioSetCellBgColor(PTEXTMODE_SCREEN_BUFFER Buff, ULONG X, ULONG Y, COLORREF Color)
+{
+    if (Buff->BgColors) Buff->BgColors[ConioCoordToIndex(Buff, X, Y)] = Color;
+}
 
 
 /*
@@ -309,6 +392,9 @@ typedef struct _CONSOLE
     COORD   ConsoleSize;                    /* The current size of the console, for text-mode only */
     BOOLEAN FixedSize;                      /* TRUE if the console is of fixed size */
     BOOLEAN IsCJK;                          /* TRUE if Chinese, Japanese or Korean (CJK) */
+    BOOLEAN AllowVtOscClipboard;            /* TRUE when OSC 52 clipboard access is permitted */
+    BOOLEAN AllowVtOscHyperlinks;           /* TRUE when OSC 8 hyperlinks are permitted */
+    BOOLEAN AllowVtDcsPassthrough;          /* TRUE when raw DCS payloads may be processed */
 } CONSOLE, *PCONSOLE;
 
 /* console.c */

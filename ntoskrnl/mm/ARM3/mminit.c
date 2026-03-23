@@ -2102,7 +2102,8 @@ MmArmInitSystem(IN ULONG Phase,
         MmSystemRangeStart = (PVOID)MI_DEFAULT_SYSTEM_RANGE_START;
         MmUserProbeAddress = (ULONG_PTR)MI_USER_PROBE_ADDRESS;
         MmHighestUserAddress = (PVOID)MI_HIGHEST_USER_ADDRESS;
-
+        ASSERT(((ULONG_PTR)MmHighestUserAddress + 1) == MmUserProbeAddress);
+        ASSERT((ULONG_PTR)MmHighestUserAddress < (ULONG_PTR)MmSystemRangeStart);
         /* Highest PTE and PDE based on the addresses above */
         MiHighestUserPte = MiAddressToPte(MmHighestUserAddress);
         MiHighestUserPde = MiAddressToPde(MmHighestUserAddress);

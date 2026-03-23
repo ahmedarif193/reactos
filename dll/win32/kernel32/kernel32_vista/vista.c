@@ -19,6 +19,59 @@
 #define NDEBUG
 #include <debug.h>
 
+static
+BOOL
+BasepGetDummyPreferredUILanguages(
+    _In_ LCID Locale,
+    _In_ DWORD dwFlags,
+    _Out_ PULONG pulNumLanguages,
+    _Out_writes_opt_(*pcchLanguagesBuffer) PZZWSTR pwszLanguagesBuffer,
+    _Inout_ PULONG pcchLanguagesBuffer)
+{
+    LCTYPE Type;
+    INT Length;
+
+    if (!pulNumLanguages || !pcchLanguagesBuffer)
+    {
+        SetLastError(ERROR_INVALID_PARAMETER);
+        return FALSE;
+    }
+
+    if (*pcchLanguagesBuffer && !pwszLanguagesBuffer)
+    {
+        SetLastError(ERROR_INVALID_PARAMETER);
+        return FALSE;
+    }
+
+    Type = (dwFlags & MUI_LANGUAGE_ID) ? LOCALE_ILANGUAGE : LOCALE_SNAME;
+    Length = GetLocaleInfoW(Locale, Type, NULL, 0);
+    if (Length <= 0)
+        return FALSE;
+
+    /* Return a double-NULL-terminated multi-string with a single language. */
+    Length++;
+    if (*pcchLanguagesBuffer == 0)
+    {
+        *pcchLanguagesBuffer = Length;
+        *pulNumLanguages = 1;
+        return TRUE;
+    }
+
+    if ((ULONG)Length > *pcchLanguagesBuffer)
+    {
+        SetLastError(ERROR_INSUFFICIENT_BUFFER);
+        return FALSE;
+    }
+
+    if (!GetLocaleInfoW(Locale, Type, pwszLanguagesBuffer, *pcchLanguagesBuffer))
+        return FALSE;
+
+    pwszLanguagesBuffer[Length - 1] = UNICODE_NULL;
+    *pcchLanguagesBuffer = Length;
+    *pulNumLanguages = 1;
+    return TRUE;
+}
+
 /* PUBLIC FUNCTIONS ***********************************************************/
 
 /*
@@ -643,9 +696,23 @@ GetSystemPreferredUILanguages(
     PZZWSTR pwszLanguagesBuffer,
     PULONG pcchLanguagesBuffer)
 {
-    DPRINT1("%x %p %p %p\n", dwFlags, pulNumLanguages, pwszLanguagesBuffer, pcchLanguagesBuffer);
-    SetLastError(ERROR_CALL_NOT_IMPLEMENTED);
-    return FALSE;
+    if (dwFlags & ~(MUI_LANGUAGE_NAME | MUI_LANGUAGE_ID | MUI_MACHINE_LANGUAGE_SETTINGS))
+    {
+        SetLastError(ERROR_INVALID_PARAMETER);
+        return FALSE;
+    }
+
+    if ((dwFlags & MUI_LANGUAGE_NAME) && (dwFlags & MUI_LANGUAGE_ID))
+    {
+        SetLastError(ERROR_INVALID_PARAMETER);
+        return FALSE;
+    }
+
+    return BasepGetDummyPreferredUILanguages(LOCALE_SYSTEM_DEFAULT,
+                                             dwFlags,
+                                             pulNumLanguages,
+                                             pwszLanguagesBuffer,
+                                             pcchLanguagesBuffer);
 }
 
 /*
@@ -659,9 +726,17 @@ GetThreadPreferredUILanguages(
     PZZWSTR pwszLanguagesBuffer,
     PULONG pcchLanguagesBuffer)
 {
-    DPRINT1("%x %p %p %p\n", dwFlags, pulNumLanguages, pwszLanguagesBuffer, pcchLanguagesBuffer);
-    SetLastError(ERROR_CALL_NOT_IMPLEMENTED);
-    return FALSE;
+    if ((dwFlags & MUI_LANGUAGE_NAME) && (dwFlags & MUI_LANGUAGE_ID))
+    {
+        SetLastError(ERROR_INVALID_PARAMETER);
+        return FALSE;
+    }
+
+    return BasepGetDummyPreferredUILanguages(GetThreadLocale(),
+                                             dwFlags,
+                                             pulNumLanguages,
+                                             pwszLanguagesBuffer,
+                                             pcchLanguagesBuffer);
 }
 
 /*
@@ -705,9 +780,23 @@ GetUserPreferredUILanguages(
     PZZWSTR pwszLanguagesBuffer,
     PULONG pcchLanguagesBuffer)
 {
-    DPRINT1("%x %p %p %p\n", dwFlags, pulNumLanguages, pwszLanguagesBuffer, pcchLanguagesBuffer);
-    SetLastError(ERROR_CALL_NOT_IMPLEMENTED);
-    return FALSE;
+    if (dwFlags & ~(MUI_LANGUAGE_NAME | MUI_LANGUAGE_ID))
+    {
+        SetLastError(ERROR_INVALID_PARAMETER);
+        return FALSE;
+    }
+
+    if ((dwFlags & MUI_LANGUAGE_NAME) && (dwFlags & MUI_LANGUAGE_ID))
+    {
+        SetLastError(ERROR_INVALID_PARAMETER);
+        return FALSE;
+    }
+
+    return BasepGetDummyPreferredUILanguages(GetUserDefaultLCID(),
+                                             dwFlags,
+                                             pulNumLanguages,
+                                             pwszLanguagesBuffer,
+                                             pcchLanguagesBuffer);
 }
 
 /*
