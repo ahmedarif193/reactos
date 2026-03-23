@@ -83,6 +83,7 @@ typedef struct _WSK_SOCKET_INTERNAL
     ULONG WskFlags;             /* WSK_FLAG_LISTEN_SOCKET, ... */
     PVOID user_context;         /* parameter for callbacks, opaque */
     UNICODE_STRING TdiName;     /* \\Devices\\Tcp, \\Devices\\Udp */
+    WCHAR TdiNameBuffer[32];    /* For dynamic names like \\Device\\RawIp\\1 */
 
     struct sockaddr LocalAddress;
     PFILE_OBJECT LocalAddressFile;
@@ -131,6 +132,7 @@ typedef struct _NETIO_CONTEXT
     PWSK_SOCKET_INTERNAL socket;
     PTDI_CONNECTION_INFORMATION TargetConnectionInfo;
     PTDI_CONNECTION_INFORMATION PeerAddrRet;
+    PSOCKADDR RemoteAddressOut;  /* WskReceiveFrom caller's output address */
 } NETIO_CONTEXT, *PNETIO_CONTEXT;
 
 static void
@@ -383,6 +385,10 @@ NetioComplete(_In_ PDEVICE_OBJECT DeviceObject, _In_ PIRP Irp, _In_ PVOID Contex
             (PSOCKADDR)(&((PTRANSPORT_ADDRESS)Context->PeerAddrRet->RemoteAddress)->Address[0].AddressType);
 
         memcpy(&Context->socket->RemoteAddress, RemoteAddress, sizeof(Context->socket->RemoteAddress));
+        if (Context->RemoteAddressOut != NULL)
+        {
+            memcpy(Context->RemoteAddressOut, RemoteAddress, sizeof(*Context->RemoteAddressOut));
+        }
     }
     if (Irp->IoStatus.Status != STATUS_CANCELLED)
     {
@@ -921,6 +927,7 @@ WskSendTo(
     }
     NetioContext->TargetConnectionInfo = TargetConnectionInfo;
     NetioContext->PeerAddrRet = NULL;
+    NetioContext->RemoteAddressOut = NULL;
 
     BufferData = MmGetSystemAddressForMdlSafe(Buffer->Mdl, NormalPagePriority);
     if (BufferData == NULL)
@@ -970,17 +977,93 @@ WskReceiveFrom(
     _Out_writes_bytes_opt_(*ControlLength) PCMSGHDR ControlInfo,
     _Out_opt_ PULONG ControlFlags, _Inout_ PIRP Irp)
 {
+    PIRP tdiIrp = NULL;
+    PWSK_SOCKET_INTERNAL Socket = CONTAINING_RECORD(SocketParam, WSK_SOCKET_INTERNAL, Socket);
+    PTDI_CONNECTION_INFORMATION PeerAddrRet = NULL;
+    NTSTATUS status;
+    void *BufferData;
+    PNETIO_CONTEXT NetioContext;
+
     FUNCTION_TRACE;
 
-    UNIMPLEMENTED;
-    if (Irp != NULL)
+    IoSetNextIrpStackLocation(Irp);
+
+    if (ControlLength != NULL)
+        *ControlLength = 0;
+    if (ControlFlags != NULL)
+        *ControlFlags = 0;
+    (void)ControlInfo;
+    (void)Flags;
+
+    status = STATUS_INVALID_PARAMETER;
+    if (Socket == NULL || Socket->LocalAddressFile == NULL)
     {
-        IoSetNextIrpStackLocation(Irp);
-        Irp->IoStatus.Status = STATUS_NOT_IMPLEMENTED;
-        Irp->IoStatus.Information = 0;
-        IoCompleteRequest(Irp, IO_NETWORK_INCREMENT);
+        goto err_out;
     }
-    return STATUS_NOT_IMPLEMENTED;
+
+    status = STATUS_INSUFFICIENT_RESOURCES;
+    NetioContext = ExAllocatePoolUninitialized(NonPagedPool, sizeof(*NetioContext), TAG_NETIO);
+    if (NetioContext == NULL)
+    {
+        goto err_out;
+    }
+
+    NetioContext->socket = Socket;
+    NetioContext->UserIrp = Irp;
+    NetioContext->TargetConnectionInfo = NULL;
+    NetioContext->PeerAddrRet = NULL;
+    NetioContext->RemoteAddressOut = RemoteAddress;
+
+    if (RemoteAddress != NULL)
+    {
+        if (!NT_SUCCESS(TdiBuildNullConnectionInfo(&PeerAddrRet, TDI_ADDRESS_TYPE_IP)))
+        {
+            goto err_out_free_nc;
+        }
+        PeerAddrRet->OptionsLength = 0;
+        NetioContext->PeerAddrRet = PeerAddrRet;
+    }
+
+    BufferData = MmGetSystemAddressForMdlSafe(Buffer->Mdl, NormalPagePriority);
+    if (BufferData == NULL)
+    {
+        DPRINT1("Error mapping MDL\n");
+        goto err_out_free_nc_and_pci;
+    }
+
+    IoMarkIrpPending(Irp);
+    ReferenceSocket(Socket);
+
+    status = TdiReceiveDatagram(&tdiIrp,
+                                Socket->LocalAddressFile,
+                                0,
+                                ((char *)BufferData) + Buffer->Offset,
+                                Buffer->Length,
+                                PeerAddrRet,
+                                NetioComplete,
+                                NetioContext);
+    if (!NT_SUCCESS(status))
+    {
+        DereferenceSocket(Socket);
+        goto err_out_free_nc_and_pci;
+    }
+
+    return STATUS_PENDING;
+
+err_out_free_nc_and_pci:
+    if (PeerAddrRet != NULL)
+    {
+        ExFreePoolWithTag(PeerAddrRet, TAG_AFD_TDI_CONNECTION_INFORMATION);
+    }
+
+err_out_free_nc:
+    ExFreePoolWithTag(NetioContext, TAG_NETIO);
+
+err_out:
+    Irp->IoStatus.Status = status;
+    IoCompleteRequest(Irp, IO_NETWORK_INCREMENT);
+
+    return status;
 }
 
 static NTSTATUS WSKAPI
@@ -1059,7 +1142,9 @@ WskSocketConnect(
     UNIMPLEMENTED;
     if (Irp != NULL)
     {
+        IoSetNextIrpStackLocation(Irp);
         Irp->IoStatus.Status = STATUS_NOT_IMPLEMENTED;
+        Irp->IoStatus.Information = 0;
         IoCompleteRequest(Irp, IO_NETWORK_INCREMENT);
     }
     return STATUS_NOT_IMPLEMENTED;
@@ -1080,13 +1165,25 @@ WskControlClient(
     UNIMPLEMENTED;
     if (Irp != NULL)
     {
+        IoSetNextIrpStackLocation(Irp);
         Irp->IoStatus.Status = STATUS_NOT_IMPLEMENTED;
+        Irp->IoStatus.Information = 0;
         IoCompleteRequest(Irp, IO_NETWORK_INCREMENT);
     }
     return STATUS_NOT_IMPLEMENTED;
 }
 
 static WSK_PROVIDER_DATAGRAM_DISPATCH UdpDispatch = {
+    .WskControlSocket = WskControlSocket,
+    .WskCloseSocket = WskCloseSocket,
+    .WskBind = WskBind,
+    .WskSendTo = WskSendTo,
+    .WskReceiveFrom = WskReceiveFrom,
+    .WskRelease = WskReleaseUdp,
+    .WskGetLocalAddress = WskGetLocalAddress,
+};
+
+static WSK_PROVIDER_DATAGRAM_DISPATCH RawDispatch = {
     .WskControlSocket = WskControlSocket,
     .WskCloseSocket = WskCloseSocket,
     .WskBind = WskBind,
@@ -1126,6 +1223,7 @@ WskConnect(_In_ PWSK_SOCKET SocketParam, _In_ PSOCKADDR RemoteAddress, _Reserved
     }
     NetioContext->socket = Socket;
     NetioContext->UserIrp = Irp;
+    NetioContext->RemoteAddressOut = NULL;
 
     tdiIrp = NULL;
 
@@ -1219,6 +1317,7 @@ WskStreamIo(
 
     NetioContext->TargetConnectionInfo = NULL;
     NetioContext->PeerAddrRet = NULL;
+    NetioContext->RemoteAddressOut = NULL;
 
     BufferData = MmGetSystemAddressForMdlSafe(Buffer->Mdl, NormalPagePriority);
     if (BufferData == NULL)
@@ -1369,9 +1468,19 @@ WskSocket(
             break;
 
         case SOCK_RAW:
-            DPRINT1("SOCK_RAW not supported\n");
-            status = STATUS_NOT_SUPPORTED;
-            goto err_out;
+            if (Protocol > 255)
+            {
+                DPRINT1("SOCK_RAW only supports protocol values in the range [0,255], got %lu\n", Protocol);
+                status = STATUS_INVALID_PARAMETER;
+                goto err_out;
+            }
+            if (Flags != WSK_FLAG_DATAGRAM_SOCKET)
+            {
+                DPRINT1("SOCK_RAW flags must be WSK_FLAG_DATAGRAM_SOCKET\n");
+                status = STATUS_INVALID_PARAMETER;
+                goto err_out;
+            }
+            break;
 
         default:
             status = STATUS_INVALID_PARAMETER;
@@ -1398,6 +1507,23 @@ WskSocket(
         case SOCK_DGRAM:
             Socket->Socket.Dispatch = &UdpDispatch;
             RtlInitUnicodeString(&Socket->TdiName, L"\\Device\\Udp");
+            break;
+        case SOCK_RAW:
+            Socket->Socket.Dispatch = &RawDispatch;
+            /* Build \Device\RawIp\<N> into the per-socket buffer */
+            {
+                UNICODE_STRING ProtoStr;
+                WCHAR ProtoBuf[12];
+                RtlInitEmptyUnicodeString(&Socket->TdiName, Socket->TdiNameBuffer,
+                                          sizeof(Socket->TdiNameBuffer));
+                RtlAppendUnicodeToString(&Socket->TdiName, L"\\Device\\RawIp\\");
+                ProtoStr.Buffer = ProtoBuf;
+                ProtoStr.Length = 0;
+                ProtoStr.MaximumLength = sizeof(ProtoBuf);
+                RtlIntegerToUnicodeString(Protocol, 10, &ProtoStr);
+                RtlAppendUnicodeStringToString(&Socket->TdiName, &ProtoStr);
+                DPRINT1("[NETIO] WskSocket: SOCK_RAW proto=%lu flags=0x%lX\n", Protocol, Flags);
+            }
             break;
         case SOCK_STREAM:
             Socket->Socket.Dispatch = &TcpDispatch;
