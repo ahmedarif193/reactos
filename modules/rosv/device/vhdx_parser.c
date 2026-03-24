@@ -651,6 +651,39 @@ RosvVhdxOpen(
                State->IsFixed ? "fixed" : (State->HasParent ? "differencing" : "dynamic"),
                State->LogicalSectorSize);
 
+    /* Allocate readahead cache for demand-paged reads (256KB).
+     * Demand handles use FILE_NO_INTERMEDIATE_BUFFERING, so keep the cache
+     * buffer aligned to the stricter of the logical and physical sector size. */
+    {
+        ULONG ReadaheadAlignment = State->LogicalSectorSize;
+        SIZE_T RawSize;
+        ULONG_PTR RawAddress;
+        ULONG_PTR AlignedAddress;
+
+        if (State->PhysicalSectorSize > ReadaheadAlignment)
+            ReadaheadAlignment = State->PhysicalSectorSize;
+
+        RawSize = (SIZE_T)ROSV_VHDX_READAHEAD_BYTES + (SIZE_T)ReadaheadAlignment - 1;
+        State->ReadaheadBufferAlloc = ExAllocatePoolWithTag(
+            NonPagedPool, RawSize, ROSV_DRIVER_TAG);
+        State->ReadaheadBuffer = NULL;
+        if (State->ReadaheadBufferAlloc != NULL)
+        {
+            RawAddress = (ULONG_PTR)State->ReadaheadBufferAlloc;
+            AlignedAddress = (RawAddress + ((ULONG_PTR)ReadaheadAlignment - 1)) &
+                             ~((ULONG_PTR)ReadaheadAlignment - 1);
+            State->ReadaheadBuffer = (PVOID)AlignedAddress;
+        }
+    }
+    State->ReadaheadSectorCount = 0;
+    State->ReadaheadStartSector = 0;
+    State->ReadaheadHits = 0;
+    State->ReadaheadMisses = 0;
+    if (State->ReadaheadBuffer == NULL)
+    {
+        ROSV_WARN("VhdxOpen: readahead cache allocation failed (256KB), demand reads will be uncached");
+    }
+
     return STATUS_SUCCESS;
 }
 
@@ -664,6 +697,23 @@ RosvVhdxClose(
 {
     ROSV_TRACE("VHDX: closing (lookups=%llu, misses=%llu, allocs=%llu)",
                State->BatLookups, State->BatMisses, State->BlockAllocations);
+
+    /* Free readahead cache if allocated */
+    if (State->ReadaheadBufferAlloc != NULL || State->ReadaheadBuffer != NULL)
+    {
+        ExFreePoolWithTag(State->ReadaheadBufferAlloc != NULL ?
+                          State->ReadaheadBufferAlloc :
+                          State->ReadaheadBuffer,
+                          ROSV_DRIVER_TAG);
+        State->ReadaheadBufferAlloc = NULL;
+        State->ReadaheadBuffer = NULL;
+    }
+
+    if (State->ReadaheadHits > 0 || State->ReadaheadMisses > 0)
+    {
+        ROSV_TRACE("VHDX: readahead stats: hits=%llu misses=%llu",
+                   State->ReadaheadHits, State->ReadaheadMisses);
+    }
 
     /*
      * We don't own the file mapping (FileBase), so we don't free it.

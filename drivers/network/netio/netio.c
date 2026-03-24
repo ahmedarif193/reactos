@@ -133,6 +133,8 @@ typedef struct _NETIO_CONTEXT
     PTDI_CONNECTION_INFORMATION TargetConnectionInfo;
     PTDI_CONNECTION_INFORMATION PeerAddrRet;
     PSOCKADDR RemoteAddressOut;  /* WskReceiveFrom caller's output address */
+    const char *Operation;
+    SIZE_T Length;
 } NETIO_CONTEXT, *PNETIO_CONTEXT;
 
 static void
@@ -373,11 +375,15 @@ NetioComplete(_In_ PDEVICE_OBJECT DeviceObject, _In_ PIRP Irp, _In_ PVOID Contex
 
     FUNCTION_TRACE;
 
-    if (Irp->IoStatus.Status != STATUS_CANCELLED)
-    {
-        UserIrp->IoStatus.Status = Irp->IoStatus.Status;
-        UserIrp->IoStatus.Information = Irp->IoStatus.Information;
-    }
+    UserIrp->IoStatus.Status = Irp->IoStatus.Status;
+    UserIrp->IoStatus.Information = Irp->IoStatus.Information;
+
+    DPRINT1("[NETIO] complete op=%s status=0x%08x info=%Iu req_len=%Iu socket=%p\n",
+            Context->Operation != NULL ? Context->Operation : "unknown",
+            Irp->IoStatus.Status,
+            (SIZE_T)Irp->IoStatus.Information,
+            Context->Length,
+            Context->socket);
 
     if (Context->PeerAddrRet != NULL)
     {
@@ -390,10 +396,7 @@ NetioComplete(_In_ PDEVICE_OBJECT DeviceObject, _In_ PIRP Irp, _In_ PVOID Contex
             memcpy(Context->RemoteAddressOut, RemoteAddress, sizeof(*Context->RemoteAddressOut));
         }
     }
-    if (Irp->IoStatus.Status != STATUS_CANCELLED)
-    {
-        IoCompleteRequest(UserIrp, IO_NETWORK_INCREMENT);
-    }
+    IoCompleteRequest(UserIrp, IO_NETWORK_INCREMENT);
 
     DereferenceSocket(Context->socket);
     if (Context->TargetConnectionInfo != NULL)
@@ -919,6 +922,8 @@ WskSendTo(
     }
     NetioContext->socket = Socket;
     NetioContext->UserIrp = Irp;
+    NetioContext->Operation = "sendto";
+    NetioContext->Length = Buffer->Length;
 
     TargetConnectionInfo = TdiConnectionInfoFromSocketAddress(RemoteAddress);
     if (TargetConnectionInfo == NULL)
@@ -1013,6 +1018,8 @@ WskReceiveFrom(
     NetioContext->TargetConnectionInfo = NULL;
     NetioContext->PeerAddrRet = NULL;
     NetioContext->RemoteAddressOut = RemoteAddress;
+    NetioContext->Operation = "recvfrom";
+    NetioContext->Length = Buffer->Length;
 
     if (RemoteAddress != NULL)
     {
@@ -1224,6 +1231,8 @@ WskConnect(_In_ PWSK_SOCKET SocketParam, _In_ PSOCKADDR RemoteAddress, _Reserved
     NetioContext->socket = Socket;
     NetioContext->UserIrp = Irp;
     NetioContext->RemoteAddressOut = NULL;
+    NetioContext->Operation = "connect";
+    NetioContext->Length = 0;
 
     tdiIrp = NULL;
 
@@ -1318,6 +1327,8 @@ WskStreamIo(
     NetioContext->TargetConnectionInfo = NULL;
     NetioContext->PeerAddrRet = NULL;
     NetioContext->RemoteAddressOut = NULL;
+    NetioContext->Operation = (Direction == DIR_SEND) ? "send" : "recv";
+    NetioContext->Length = Buffer->Length;
 
     BufferData = MmGetSystemAddressForMdlSafe(Buffer->Mdl, NormalPagePriority);
     if (BufferData == NULL)
@@ -1337,7 +1348,10 @@ WskStreamIo(
     }
     else
     {
-        status = TdiReceive(&tdiIrp, Socket->ConnectionFile, 0, ((char *)BufferData) + Buffer->Offset,
+        status = TdiReceive(&tdiIrp,
+                       Socket->ConnectionFile,
+                       TDI_RECEIVE_NORMAL,
+                       ((char *)BufferData) + Buffer->Offset,
                        Buffer->Length, NetioComplete, NetioContext);
     }
 
@@ -1381,17 +1395,61 @@ static NTSTATUS WSKAPI
 WskDisconnect(_In_ PWSK_SOCKET SocketParam, _In_opt_ PWSK_BUF Buffer, _In_ ULONG Flags, _Inout_ PIRP Irp)
 {
     PWSK_SOCKET_INTERNAL Socket = CONTAINING_RECORD(SocketParam, WSK_SOCKET_INTERNAL, Socket);
+    PIRP tdiIrp = NULL;
+    NTSTATUS status;
+    PNETIO_CONTEXT NetioContext;
+    USHORT DisconnectFlags;
 
     FUNCTION_TRACE;
 
-    SocketShutdown(Socket);
-
     IoSetNextIrpStackLocation(Irp);
 
-    Irp->IoStatus.Status = STATUS_SUCCESS;
-    IoCompleteRequest(Irp, IO_NETWORK_INCREMENT);
+    if (Buffer != NULL && Buffer->Length != 0)
+    {
+        status = STATUS_NOT_IMPLEMENTED;
+        goto err_out;
+    }
 
-    return STATUS_PENDING;
+    status = STATUS_INVALID_DEVICE_STATE;
+    if (Socket->ConnectionFile == NULL)
+        goto err_out;
+
+    status = STATUS_INSUFFICIENT_RESOURCES;
+    NetioContext = ExAllocatePoolUninitialized(NonPagedPool, sizeof(*NetioContext), TAG_NETIO);
+    if (NetioContext == NULL)
+        goto err_out;
+
+    NetioContext->socket = Socket;
+    NetioContext->UserIrp = Irp;
+    NetioContext->TargetConnectionInfo = NULL;
+    NetioContext->PeerAddrRet = NULL;
+    NetioContext->RemoteAddressOut = NULL;
+    NetioContext->Operation = (Flags & WSK_FLAG_ABORTIVE) ? "disconnect-abort" : "disconnect";
+    NetioContext->Length = 0;
+
+    IoMarkIrpPending(Irp);
+    ReferenceSocket(Socket);
+
+    DisconnectFlags = (Flags & WSK_FLAG_ABORTIVE) ? TDI_DISCONNECT_ABORT
+                                                  : TDI_DISCONNECT_RELEASE;
+    status = TdiDisconnect(&tdiIrp,
+                           Socket->ConnectionFile,
+                           NULL,
+                           DisconnectFlags,
+                           NetioComplete,
+                           NetioContext,
+                           NULL,
+                           NULL);
+    if (NT_SUCCESS(status))
+        return STATUS_PENDING;
+
+    DereferenceSocket(Socket);
+    ExFreePoolWithTag(NetioContext, TAG_NETIO);
+
+err_out:
+    Irp->IoStatus.Status = status;
+    IoCompleteRequest(Irp, IO_NETWORK_INCREMENT);
+    return status;
 }
 
 

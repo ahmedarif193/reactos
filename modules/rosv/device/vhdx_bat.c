@@ -27,6 +27,20 @@ ZwWaitForSingleObject(
 #define ROSV_VHDX_PENDING_READ_TIMEOUT_SECONDS 20ULL
 #define ROSV_VHDX_MAX_DEMAND_READ_BYTES (64UL * 1024UL)
 
+/* ROSV_VHDX_READAHEAD_BYTES and ROSV_VHDX_READAHEAD_SECTORS are in vhdx.h */
+
+FORCEINLINE
+VOID
+RosvVhdxInvalidateReadahead(
+    _Inout_ PROSV_VHDX_STATE State)
+{
+    if (State == NULL)
+        return;
+
+    State->ReadaheadStartSector = 0;
+    State->ReadaheadSectorCount = 0;
+}
+
 static
 BOOLEAN
 RosvIsMappedRangeResident(
@@ -608,6 +622,26 @@ RosvVhdxReadSectorsDemandPagedDirect(
                                    ? ((PULONG64)State->BatBase)[BatIdx] : 0;
 
                 /*
+                 * Readahead cache check: if the requested sectors fall entirely
+                 * within the cached readahead window, copy from cache and skip
+                 * all I/O.  This dramatically reduces per-sector round-trips
+                 * for sequential workloads (ext4 journal replay, inode tables).
+                 */
+                if (State->ReadaheadBuffer != NULL &&
+                    CurrentSector >= State->ReadaheadStartSector &&
+                    (CurrentSector + SectorsInThisBatch) <=
+                        (State->ReadaheadStartSector + State->ReadaheadSectorCount))
+                {
+                    ULONG64 CacheOffset =
+                        (CurrentSector - State->ReadaheadStartSector) * SectorSize;
+                    RtlCopyMemory(OutputPtr,
+                                  (PUCHAR)State->ReadaheadBuffer + CacheOffset,
+                                  (SIZE_T)ReadSize);
+                    State->ReadaheadHits++;
+                    break;
+                }
+
+                /*
                  * Prefer mapped payload copy when FileBase is retained.
                  * The demand worker thread runs outside VM-exit context, so this
                  * avoids blocking filesystem ZwReadFile calls in the hot path.
@@ -736,6 +770,65 @@ RosvVhdxReadSectorsDemandPagedDirect(
                 {
                     RtlCopyMemory(OutputPtr, IoBuffer, (SIZE_T)ReadSize);
                     ExFreePoolWithTag(IoBufferAlloc, ROSV_DRIVER_TAG);
+                }
+
+                /*
+                 * Populate readahead cache: after a successful ZwReadFile,
+                 * issue a speculative read for the next ROSV_VHDX_READAHEAD_SECTORS
+                 * within the same VHDX block.  This converts sequential
+                 * per-sector round-trips into single bulk reads.
+                 */
+                if (State->ReadaheadBuffer != NULL &&
+                    SectorsToBlockEnd > SectorsInThisBatch)
+                {
+                    ULONG64 AheadStart = CurrentSector + SectorsInThisBatch;
+                    ULONG AheadCount = SectorsToBlockEnd - SectorsInThisBatch;
+                    ULONG AheadMax = ROSV_VHDX_READAHEAD_SECTORS;
+                    IO_STATUS_BLOCK AheadIoSb;
+                    LARGE_INTEGER AheadOff;
+                    ULONG64 AheadFileOff;
+                    ULONG64 AheadBytes;
+
+                    if (AheadCount > AheadMax)
+                        AheadCount = AheadMax;
+                    AheadBytes = (ULONG64)AheadCount * SectorSize;
+                    AheadFileOff = FileOffset + ReadSize;
+
+                    if (AheadBytes <= ROSV_VHDX_READAHEAD_BYTES &&
+                        AheadFileOff + AheadBytes <= State->FileSize)
+                    {
+                        AheadOff.QuadPart = (LONGLONG)AheadFileOff;
+                        AheadIoSb.Status = STATUS_PENDING;
+                        AheadIoSb.Information = 0;
+                        Status = ZwReadFile(FileHandle, NULL, NULL, NULL,
+                                            &AheadIoSb,
+                                            State->ReadaheadBuffer,
+                                            (ULONG)AheadBytes,
+                                            &AheadOff, NULL);
+                        if (Status == STATUS_PENDING)
+                        {
+                            LARGE_INTEGER AheadTimeout;
+                            AheadTimeout.QuadPart =
+                                -((LONGLONG)ROSV_VHDX_PENDING_READ_TIMEOUT_SECONDS * 10 * 1000 * 1000);
+                            Status = ZwWaitForSingleObject(FileHandle, FALSE, &AheadTimeout);
+                            if (NT_SUCCESS(Status))
+                                Status = AheadIoSb.Status;
+                        }
+                        if (NT_SUCCESS(Status) &&
+                            AheadIoSb.Information >= AheadBytes)
+                        {
+                            State->ReadaheadStartSector = AheadStart;
+                            State->ReadaheadSectorCount = AheadCount;
+                            State->ReadaheadMisses++;
+                        }
+                        else
+                        {
+                            /* Readahead failed — invalidate cache, not fatal */
+                            RosvVhdxInvalidateReadahead(State);
+                        }
+                        /* Reset Status for caller — readahead failure is non-fatal */
+                        Status = STATUS_SUCCESS;
+                    }
                 }
 
                 break;
@@ -930,6 +1023,8 @@ RosvVhdxWriteSectors(
                 RtlCopyMemory((PUCHAR)State->FileBase + FileOffset,
                               InputPtr,
                               (SIZE_T)CopySize);
+                /* Guest writes must invalidate speculative read cache. */
+                RosvVhdxInvalidateReadahead(State);
 
                 ROSV_DEBUG("vhdx_bat: WriteSectors - wrote %u sectors at file offset 0x%llX "
                            "(sector %llu, block %u)",
@@ -988,6 +1083,8 @@ RosvVhdxWriteSectors(
                 RtlCopyMemory((PUCHAR)State->FileBase + NewFileOffset + OffsetInBlock,
                               InputPtr,
                               (SIZE_T)CopySize);
+                /* Guest writes must invalidate speculative read cache. */
+                RosvVhdxInvalidateReadahead(State);
 
                 ROSV_DEBUG("vhdx_bat: WriteSectors - allocated block %u at MB offset %llu, "
                            "wrote %u sectors (sector %llu)",

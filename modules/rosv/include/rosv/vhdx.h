@@ -21,6 +21,10 @@
 /* Forward declarations */
 typedef struct _ROSV_VM ROSV_VM, *PROSV_VM;
 
+/* Readahead window size for demand-paged reads (256KB = 512 sectors) */
+#define ROSV_VHDX_READAHEAD_BYTES       (256UL * 1024UL)
+#define ROSV_VHDX_READAHEAD_SECTORS     (ROSV_VHDX_READAHEAD_BYTES / 512UL)
+
 /* ========================================================================== */
 /* Signatures                                                                  */
 /* ========================================================================== */
@@ -383,6 +387,16 @@ typedef struct _ROSV_VHDX_STATE {
 
     /* Dynamic allocation tracking */
     ULONG64     HighestAllocatedMB;     /* Highest FileOffsetMB in BAT + 1 */
+
+    /* Readahead cache for demand-paged reads (ROSV_VHDX_READAHEAD_BYTES).
+     * ReadaheadBuffer points at the aligned I/O window; ReadaheadBufferAlloc
+     * preserves the original allocation for free. */
+    PVOID       ReadaheadBufferAlloc;   /* Original NonPaged allocation */
+    PVOID       ReadaheadBuffer;        /* Aligned cache window */
+    ULONG64     ReadaheadStartSector;   /* First sector in the cached window */
+    ULONG       ReadaheadSectorCount;   /* Valid sectors in the window */
+    ULONG64     ReadaheadHits;          /* Cache hit count */
+    ULONG64     ReadaheadMisses;        /* Cache miss / refill count */
 
     /* Statistics */
     ULONG64     BatLookups;

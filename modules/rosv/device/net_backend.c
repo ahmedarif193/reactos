@@ -31,10 +31,11 @@ ZwYieldExecution(
 #define ROSV_NET_ICMP_TIMEOUT_MS    10000
 #define ROSV_NET_PUMP_IDLE_TIMEOUT_MS 100
 #define ROSV_NET_GUEST_INJECT_RETRY_COUNT 4
-#define ROSV_NET_TRACE_TCP_GUEST_MAX 64
-#define ROSV_NET_TRACE_TCP_HOST_MAX 64
-#define ROSV_NET_TRACE_UDP_MAX     32
-#define ROSV_NET_TRACE_ICMP_MAX    8
+#define ROSV_NET_TRACE_TCP_GUEST_MAX 4096
+#define ROSV_NET_TRACE_TCP_HOST_MAX 4096
+#define ROSV_NET_TRACE_UDP_MAX     1024
+#define ROSV_NET_TRACE_ICMP_MAX    256
+#define ROSV_NET_SLOW_IO_LOG_MS    20
 
 #define ETH_TYPE_IPV4               0x0800
 #define ETH_TYPE_ARP                0x0806
@@ -62,6 +63,7 @@ typedef enum _ROSV_TCP_STATE {
     RosvTcpConnecting = 0,
     RosvTcpSynAckSent,
     RosvTcpEstablished,
+    RosvTcpFinWait,
     RosvTcpCloseWait,
     RosvTcpClosed
 } ROSV_TCP_STATE;
@@ -232,6 +234,8 @@ RosvNetTcpStateName(
             return "syn-ack";
         case RosvTcpEstablished:
             return "established";
+        case RosvTcpFinWait:
+            return "fin-wait";
         case RosvTcpCloseWait:
             return "close-wait";
         case RosvTcpClosed:
@@ -419,19 +423,35 @@ RosvNetWaitSyncIrp(
     _Inout_ PIRP Irp,
     _Inout_ PKEVENT Event,
     _In_ NTSTATUS Status,
-    _Out_opt_ PULONG_PTR Information)
+    _Out_opt_ PULONG_PTR Information,
+    _In_opt_z_ const char *Operation)
 {
     NTSTATUS FinalStatus;
+    ULONGLONG StartMs;
+    ULONGLONG ElapsedMs;
+    ULONG_PTR IoInfo;
 
     FinalStatus = Status;
+    StartMs = RosvNetNowMs();
     if (FinalStatus == STATUS_PENDING)
     {
         KeWaitForSingleObject(Event, Executive, KernelMode, FALSE, NULL);
         FinalStatus = Irp->IoStatus.Status;
     }
 
+    IoInfo = Irp->IoStatus.Information;
+    ElapsedMs = RosvNetNowMs() - StartMs;
     if (Information != NULL)
-        *Information = Irp->IoStatus.Information;
+        *Information = IoInfo;
+
+    if (!NT_SUCCESS(FinalStatus) || ElapsedMs >= ROSV_NET_SLOW_IO_LOG_MS)
+    {
+        DbgPrint("[ROSV:NET] syncio op=%s status=0x%08X info=%Iu wait_ms=%llu\n",
+                 Operation != NULL ? Operation : "irp",
+                 FinalStatus,
+                 (SIZE_T)IoInfo,
+                 (unsigned long long)ElapsedMs);
+    }
 
     IoFreeIrp(Irp);
     return FinalStatus;
@@ -495,7 +515,7 @@ RosvNetSocketCreate(
                                  NULL,
                                  Irp);
     Information = 0;
-    Status = RosvNetWaitSyncIrp(Irp, &Event, Status, &Information);
+    Status = RosvNetWaitSyncIrp(Irp, &Event, Status, &Information, "socket");
     if (!NT_SUCCESS(Status))
         return Status;
 
@@ -519,7 +539,7 @@ RosvNetSocketBind(
         return Status;
 
     Status = Dispatch->WskBind(Socket, LocalAddress, 0, Irp);
-    return RosvNetWaitSyncIrp(Irp, &Event, Status, NULL);
+    return RosvNetWaitSyncIrp(Irp, &Event, Status, NULL, "bind");
 }
 
 static NTSTATUS
@@ -538,7 +558,7 @@ RosvNetSocketConnect(
         return Status;
 
     Status = Dispatch->WskConnect(Socket, RemoteAddress, 0, Irp);
-    return RosvNetWaitSyncIrp(Irp, &Event, Status, NULL);
+    return RosvNetWaitSyncIrp(Irp, &Event, Status, NULL, "connect");
 }
 
 static NTSTATUS
@@ -573,7 +593,7 @@ RosvNetSocketSend(
     Dispatch = (PWSK_PROVIDER_CONNECTION_DISPATCH)Socket->Dispatch;
     Status = Dispatch->WskSend(Socket, &WskBuf, 0, Irp);
     Information = 0;
-    Status = RosvNetWaitSyncIrp(Irp, &Event, Status, &Information);
+    Status = RosvNetWaitSyncIrp(Irp, &Event, Status, &Information, "send");
     IoFreeMdl(Mdl);
 
     if (NT_SUCCESS(Status) && BytesSent != NULL)
@@ -614,13 +634,32 @@ RosvNetSocketReceive(
     Dispatch = (PWSK_PROVIDER_CONNECTION_DISPATCH)Socket->Dispatch;
     Status = Dispatch->WskReceive(Socket, &WskBuf, 0, Irp);
     Information = 0;
-    Status = RosvNetWaitSyncIrp(Irp, &Event, Status, &Information);
+    Status = RosvNetWaitSyncIrp(Irp, &Event, Status, &Information, "recv");
     IoFreeMdl(Mdl);
 
     if (NT_SUCCESS(Status) && BytesReceived != NULL)
         *BytesReceived = (SIZE_T)Information;
 
     return Status;
+}
+
+static NTSTATUS
+RosvNetSocketDisconnect(
+    _In_ PWSK_SOCKET Socket,
+    _In_ ULONG Flags)
+{
+    PIRP Irp;
+    KEVENT Event;
+    NTSTATUS Status;
+    PWSK_PROVIDER_CONNECTION_DISPATCH Dispatch;
+
+    Dispatch = (PWSK_PROVIDER_CONNECTION_DISPATCH)Socket->Dispatch;
+    Status = RosvNetAllocateSyncIrp(&Irp, &Event);
+    if (!NT_SUCCESS(Status))
+        return Status;
+
+    Status = Dispatch->WskDisconnect(Socket, NULL, Flags, Irp);
+    return RosvNetWaitSyncIrp(Irp, &Event, Status, NULL, "disconnect");
 }
 
 static NTSTATUS
@@ -656,7 +695,7 @@ RosvNetSocketSendTo(
     Dispatch = (PWSK_PROVIDER_DATAGRAM_DISPATCH)Socket->Dispatch;
     Status = Dispatch->WskSendTo(Socket, &WskBuf, 0, RemoteAddress, 0, NULL, Irp);
     Information = 0;
-    Status = RosvNetWaitSyncIrp(Irp, &Event, Status, &Information);
+    Status = RosvNetWaitSyncIrp(Irp, &Event, Status, &Information, "sendto");
     IoFreeMdl(Mdl);
 
     if (NT_SUCCESS(Status) && BytesSent != NULL)
@@ -709,7 +748,7 @@ RosvNetSocketReceiveFrom(
                                       &ControlFlags,
                                       Irp);
     Information = 0;
-    Status = RosvNetWaitSyncIrp(Irp, &Event, Status, &Information);
+    Status = RosvNetWaitSyncIrp(Irp, &Event, Status, &Information, "recvfrom");
     IoFreeMdl(Mdl);
 
     if (NT_SUCCESS(Status) && BytesReceived != NULL)
@@ -736,7 +775,7 @@ RosvNetSocketClose(
         return;
 
     Status = Dispatch->WskCloseSocket(Socket, Irp);
-    (void)RosvNetWaitSyncIrp(Irp, &Event, Status, NULL);
+    (void)RosvNetWaitSyncIrp(Irp, &Event, Status, NULL, "close");
 }
 
 static VOID
@@ -809,6 +848,14 @@ RosvNetQueueRecvCompletion(
 
     if (Signal)
         KeSetEvent(&Backend->CompletionEvent, IO_NO_INCREMENT, FALSE);
+    else if (!Entry->RecvQueued)
+    {
+        DbgPrint("[ROSV:NET] recv completion queue full proto=%u bytes=%Iu status=0x%08X count=%lu\n",
+                 Entry->Protocol,
+                 Entry->RecvBytes,
+                 Entry->RecvStatus,
+                 Backend->CompletionCount);
+    }
 }
 
 static NTSTATUS NTAPI
@@ -818,13 +865,35 @@ RosvNetRecvCompletion(
     _In_ PVOID Context)
 {
     PROSV_NAT_ENTRY Entry;
+    ULONG PostedGeneration;
 
     UNREFERENCED_PARAMETER(DeviceObject);
 
     Entry = (PROSV_NAT_ENTRY)Context;
+    PostedGeneration = PtrToUlong(Irp->Tail.Overlay.DriverContext[0]);
+    if (PostedGeneration != Entry->Generation)
+    {
+        DbgPrint("[ROSV:NET] stale recv completion proto=%u status=0x%08X bytes=%Iu posted_gen=%lu entry_gen=%lu\n",
+                 Entry->Protocol,
+                 Irp->IoStatus.Status,
+                 (SIZE_T)(NT_SUCCESS(Irp->IoStatus.Status) ? Irp->IoStatus.Information : 0),
+                 PostedGeneration,
+                 Entry->Generation);
+        return STATUS_MORE_PROCESSING_REQUIRED;
+    }
+
     Entry->RecvStatus = Irp->IoStatus.Status;
     Entry->RecvBytes = NT_SUCCESS(Irp->IoStatus.Status) ? (SIZE_T)Irp->IoStatus.Information : 0;
     Entry->RecvPosted = FALSE;
+    if (!NT_SUCCESS(Entry->RecvStatus) || Entry->RecvBytes == 0 || Entry->Protocol == RosvNatProtoTcp)
+    {
+        DbgPrint("[ROSV:NET] recv complete proto=%u status=0x%08X bytes=%Iu queued=%u posted=%u\n",
+                 Entry->Protocol,
+                 Entry->RecvStatus,
+                 Entry->RecvBytes,
+                 Entry->RecvQueued ? 1 : 0,
+                 Entry->RecvPosted ? 1 : 0);
+    }
     RosvNetQueueRecvCompletion(Entry);
     return STATUS_MORE_PROCESSING_REQUIRED;
 }
@@ -881,6 +950,7 @@ RosvNetPostTcpReceive(
     Entry->RecvBytes = 0;
     Entry->RecvPosted = TRUE;
     IoReuseIrp(Entry->RecvIrp, STATUS_UNSUCCESSFUL);
+    Entry->RecvIrp->Tail.Overlay.DriverContext[0] = UlongToPtr(Entry->Generation);
     IoSetCompletionRoutine(Entry->RecvIrp,
                            RosvNetRecvCompletion,
                            Entry,
@@ -893,6 +963,13 @@ RosvNetPostTcpReceive(
                                   &Entry->RecvWskBuf,
                                   0,
                                   Entry->RecvIrp);
+    if (Status != STATUS_PENDING)
+    {
+        DbgPrint("[ROSV:NET] tcp recv post immediate status=0x%08X bytes=%Iu queued=%u\n",
+                 Status,
+                 (SIZE_T)Entry->RecvIrp->IoStatus.Information,
+                 Entry->RecvQueued ? 1 : 0);
+    }
     if (Status != STATUS_PENDING && !Entry->RecvQueued)
     {
         Entry->RecvStatus = Status;
@@ -928,6 +1005,7 @@ RosvNetPostUdpReceive(
     Entry->RecvBytes = 0;
     Entry->RecvPosted = TRUE;
     IoReuseIrp(Entry->RecvIrp, STATUS_UNSUCCESSFUL);
+    Entry->RecvIrp->Tail.Overlay.DriverContext[0] = UlongToPtr(Entry->Generation);
     IoSetCompletionRoutine(Entry->RecvIrp,
                            RosvNetRecvCompletion,
                            Entry,
@@ -1030,6 +1108,12 @@ RosvNetSendPacketToGuest(
         {
             Backend->RxPackets++;
             Backend->RxBytes += Length;
+            if (Attempt != 0)
+            {
+                DbgPrint("[ROSV:NET] RX inject len=%lu succeeded after retries=%lu\n",
+                         Length,
+                         Attempt);
+            }
             return TRUE;
         }
 
@@ -1040,7 +1124,12 @@ RosvNetSendPacketToGuest(
             KeSetEvent(&Backend->Vm->Vcpu.HaltWakeEvent, IO_NO_INCREMENT, FALSE);
 
         if ((Attempt + 1) < ROSV_NET_GUEST_INJECT_RETRY_COUNT)
+        {
+            DbgPrint("[ROSV:NET] RX inject retry len=%lu attempt=%lu\n",
+                     Length,
+                     Attempt + 1);
             (void)ZwYieldExecution();
+        }
     }
 
     DbgPrint("[ROSV:NET] RX inject failed len=%lu\n", Length);
@@ -1583,6 +1672,53 @@ RosvNetDrainRecvCompletions(
         else if (Entries[i]->Protocol == RosvNatProtoIcmp)
             RosvNetProcessIcmpRecvCompletion(Entries[i]);
     }
+}
+
+static VOID
+RosvNetPostPendingTcpReceives(
+    _Inout_ PROSV_NET_BACKEND_STATE Backend)
+{
+    ULONG i;
+
+    ExAcquireFastMutex(&Backend->Lock);
+    for (i = 0; i < ROSV_NET_NAT_TABLE_SIZE; i++)
+    {
+        PROSV_NAT_ENTRY Entry;
+        NTSTATUS Status;
+
+        Entry = &Backend->NatTable[i];
+        if (!Entry->InUse ||
+            Entry->Protocol != RosvNatProtoTcp ||
+            Entry->Closing ||
+            Entry->ThreadRunning ||
+            Entry->Socket == NULL ||
+            Entry->RecvPosted ||
+            Entry->RecvQueued ||
+            Entry->GuestSendPending)
+        {
+            continue;
+        }
+
+        if (Entry->TcpState != RosvTcpSynAckSent &&
+            Entry->TcpState != RosvTcpEstablished &&
+            Entry->TcpState != RosvTcpFinWait)
+        {
+            continue;
+        }
+
+        /* Async TDI receive IRPs are thread-owned. Post them from the long-lived
+         * pump thread so they do not get cancelled when the connect worker exits.
+         */
+        Status = RosvNetPostTcpReceive(Entry);
+        if (!NT_SUCCESS(Status))
+        {
+            DbgPrint("[ROSV:NET] deferred TCP receive post failed %u.%u.%u.%u:%u -> %u.%u.%u.%u:%u status=0x%08X\n",
+                     Entry->GuestIp[0], Entry->GuestIp[1], Entry->GuestIp[2], Entry->GuestIp[3], Entry->GuestPort,
+                     Entry->DestIp[0], Entry->DestIp[1], Entry->DestIp[2], Entry->DestIp[3], Entry->DestPort,
+                     Status);
+        }
+    }
+    ExReleaseFastMutex(&Backend->Lock);
 }
 
 static BOOLEAN
@@ -2421,7 +2557,7 @@ RosvNetTcpThreadProc(
     USHORT DestPort;
     ULONG SeqNum;
     ULONG AckNum;
-    NTSTATUS PostStatus;
+    BOOLEAN WakePump;
 
     Entry = (PROSV_NAT_ENTRY)Context;
     Backend = Entry->Backend;
@@ -2434,7 +2570,7 @@ RosvNetTcpThreadProc(
     DestPort = 0;
     SeqNum = 0;
     AckNum = 0;
-    PostStatus = STATUS_UNSUCCESSFUL;
+    WakePump = FALSE;
 
     RosvNetBuildAddress(&RemoteAddr, Entry->RealDestIp, Entry->RealDestPort);
     Status = RosvNetSocketConnect(Socket, (PSOCKADDR)&RemoteAddr);
@@ -2509,33 +2645,13 @@ RosvNetTcpThreadProc(
     ExAcquireFastMutex(&Backend->Lock);
     if (Entry->InUse && Entry->Socket == Socket)
     {
-        PostStatus = RosvNetPostTcpReceive(Entry);
-        DbgPrint("[ROSV:NET] TCP receive post %u.%u.%u.%u:%u -> %u.%u.%u.%u:%u status=0x%08X\n",
-                 Entry->GuestIp[0], Entry->GuestIp[1], Entry->GuestIp[2], Entry->GuestIp[3], Entry->GuestPort,
-                 Entry->DestIp[0], Entry->DestIp[1], Entry->DestIp[2], Entry->DestIp[3], Entry->DestPort,
-                 PostStatus);
-        if (NT_SUCCESS(PostStatus))
-        {
-            Entry->ThreadRunning = FALSE;
-        }
-        else
-        {
-            RtlCopyMemory(GuestIp, Entry->GuestIp, 4);
-            RtlCopyMemory(DestIp, Entry->DestIp, 4);
-            GuestPort = Entry->GuestPort;
-            DestPort = Entry->DestPort;
-            RstSeq = Entry->GuestAckBase + 1 + Entry->BytesRecvFromHost;
-            Entry->Socket = NULL;
-            Entry->ThreadRunning = FALSE;
-            Entry->TcpState = RosvTcpClosed;
-            SendRst = TRUE;
-            RosvNetNatReleaseClosed(Entry);
-        }
+        Entry->ThreadRunning = FALSE;
+        WakePump = TRUE;
     }
     ExReleaseFastMutex(&Backend->Lock);
 
-    if (!NT_SUCCESS(PostStatus))
-        RosvNetSocketClose(Socket);
+    if (WakePump)
+        KeSetEvent(&Backend->CompletionEvent, IO_NO_INCREMENT, FALSE);
 
     if (SendRst)
     {
@@ -3180,6 +3296,28 @@ TcpCreateFail:
         }
     }
 
+    if (Entry->TcpState == RosvTcpFinWait)
+    {
+        if ((Flags & TCP_FLAG_FIN) || TcpPayloadLen != 0)
+        {
+            SendSeq = Entry->GuestAckBase + 1 + Entry->BytesRecvFromHost;
+            SendAck = Entry->GuestSeqNext;
+            ExReleaseFastMutex(&Backend->Lock);
+            (void)RosvNetSendTcpToGuest(Backend,
+                                        DestIpCopy,
+                                        GuestIpCopy,
+                                        DestPortCopy,
+                                        GuestPortCopy,
+                                        SendSeq,
+                                        SendAck,
+                                        TCP_FLAG_ACK,
+                                        NULL,
+                                        0,
+                                        FALSE);
+            return;
+        }
+    }
+
     if (Entry->TcpState == RosvTcpSynAckSent && (Flags & TCP_FLAG_ACK))
         Entry->TcpState = RosvTcpEstablished;
 
@@ -3329,16 +3467,66 @@ TcpCreateFail:
     if (Flags & TCP_FLAG_FIN)
     {
         Socket = Entry->Socket;
-        Entry->Closing = TRUE;
-        Entry->Socket = NULL;
-        Entry->TcpState = RosvTcpClosed;
-        Entry->LastActivityMs = RosvNetNowMs();
         SendSeq = Entry->GuestAckBase + 1 + Entry->BytesRecvFromHost;
         SendAck = SeqNum + TcpPayloadLen + 1;
         ExReleaseFastMutex(&Backend->Lock);
 
         if (Socket != NULL)
-            RosvNetSocketClose(Socket);
+        {
+            Status = RosvNetSocketDisconnect(Socket, 0);
+            if (!NT_SUCCESS(Status))
+            {
+                DbgPrint("[ROSV:NET] TCP guest FIN disconnect failed %u.%u.%u.%u:%u -> %u.%u.%u.%u:%u "
+                         "status=0x%08X\n",
+                         GuestIpCopy[0], GuestIpCopy[1], GuestIpCopy[2], GuestIpCopy[3], GuestPortCopy,
+                         DestIpCopy[0], DestIpCopy[1], DestIpCopy[2], DestIpCopy[3], DestPortCopy,
+                         Status);
+                RosvNetSocketClose(Socket);
+                ExAcquireFastMutex(&Backend->Lock);
+                Entry = RosvNetNatLookup(Backend,
+                                         RosvNatProtoTcp,
+                                         GuestIpCopy,
+                                         GuestPortCopy,
+                                         DestIpCopy,
+                                         DestPortCopy);
+                if (Entry != NULL && Entry->Socket == Socket)
+                {
+                    Entry->Closing = TRUE;
+                    Entry->Socket = NULL;
+                    Entry->ThreadRunning = FALSE;
+                    Entry->TcpState = RosvTcpClosed;
+                    RosvNetNatReleaseClosed(Entry);
+                }
+                ExReleaseFastMutex(&Backend->Lock);
+                (void)RosvNetSendTcpToGuest(Backend,
+                                            DestIpCopy,
+                                            GuestIpCopy,
+                                            DestPortCopy,
+                                            GuestPortCopy,
+                                            0,
+                                            SendAck,
+                                            TCP_FLAG_RST | TCP_FLAG_ACK,
+                                            NULL,
+                                            0,
+                                            FALSE);
+                return;
+            }
+        }
+
+        ExAcquireFastMutex(&Backend->Lock);
+        Entry = RosvNetNatLookup(Backend,
+                                 RosvNatProtoTcp,
+                                 GuestIpCopy,
+                                 GuestPortCopy,
+                                 DestIpCopy,
+                                 DestPortCopy);
+        if (Entry != NULL && Entry->Socket == Socket && !Entry->Closing)
+        {
+            Entry->TcpState = RosvTcpFinWait;
+            Entry->GuestSeqNext = SendAck;
+            Entry->LastActivityMs = RosvNetNowMs();
+        }
+        ExReleaseFastMutex(&Backend->Lock);
 
         (void)RosvNetSendTcpToGuest(Backend,
                                     DestIpCopy,
@@ -3425,6 +3613,7 @@ RosvNetPumpThreadProc(
         DidWork = FALSE;
         RosvNetDrainRecvCompletions(Backend);
         RosvNetFlushPendingTcpSends(Backend);
+        RosvNetPostPendingTcpReceives(Backend);
         while (Backend->Running)
         {
             RtlZeroMemory(Packet, sizeof(*Packet));
@@ -3472,6 +3661,7 @@ RosvNetPumpThreadProc(
         else if (WaitStatus == STATUS_WAIT_1)
         {
             RosvNetDrainRecvCompletions(Backend);
+            RosvNetPostPendingTcpReceives(Backend);
         }
     }
 

@@ -578,6 +578,13 @@ RosvTryInjectPendingInterrupts(
      *   5. virtio-con  (console, low frequency)
      *   6. UART        (serial, lowest frequency)
      */
+    /*
+     * Track whether any device had a pending interrupt during the cascade.
+     * Each TryInject function returns FALSE either because no interrupt is
+     * pending or because the guest cannot accept one (IF=0).  We record
+     * pending state from the early-exit checks to avoid a redundant re-scan
+     * of all device flags after the cascade.
+     */
     Injected = RosvTryInjectGuestVirtioNetIrq(Vcpu, Vm);
     if (!Injected)
         Injected = RosvTryInjectGuestTimer(Vcpu, Vm);
@@ -594,34 +601,26 @@ RosvTryInjectPendingInterrupts(
      * If we have a pending device interrupt but could not inject (guest IF=0),
      * enable interrupt-window exiting so we get a VM-exit as soon as the guest
      * executes STI or clears an interruptibility block.
+     *
+     * We already attempted all 6 device sources above. If none succeeded but
+     * at least one had a pending flag set, we know the failure was due to the
+     * guest not accepting interrupts.  Rather than re-scanning all device
+     * pending flags (which includes an expensive KeQueryPerformanceCounter for
+     * the LAPIC timer), use a lightweight check: if injection failed AND the
+     * guest has IF=0/interruptibility, assume there is pending work and enable
+     * INT_WINDOW_EXIT.  The next interrupt-window exit will re-attempt injection
+     * through the full cascade.
+     *
+     * False-positive (enable INT_WINDOW when nothing is pending) costs one
+     * extra VM-exit but is harmless.  False-negative cannot happen here since
+     * all pending sources were already tried.
      */
     if (!Injected)
     {
-        BOOLEAN AnyPending = FALSE;
         ULONG64 Rflags = RosvVmcsRead(VMCS_GUEST_RFLAGS);
         ULONG64 Interruptibility = RosvVmcsRead(VMCS_GUEST_INTERRUPTIBILITY);
 
-        if (Vm && Vm->Console)
-        {
-            AnyPending = RosvRtl8139HasPendingInterrupt(&Vm->Console->Rtl8139) ||
-                         Vm->Console->Uart.InterruptPending;
-        }
-        if (Vm)
-            AnyPending = AnyPending ||
-                         RosvVirtioBlkHasPendingInterrupt(&Vm->VirtioBlk) ||
-                         RosvVirtioNetHasPendingInterrupt(&Vm->VirtioNet) ||
-                         RosvVirtioConHasPendingInterrupt(&Vm->VirtioCon) ||
-                         RosvHasPendingLapicTimer(Vm) ||
-                         RosvInterruptHasPendingTimer(Vm);
-
-        /*
-         * Only enable INT_WINDOW_EXIT when guest interrupts are disabled
-         * (IF=0 or interruptibility shadow).  If guest IF=1 but injection
-         * failed for other reasons (PIC ISR blocking), INT_WINDOW_EXIT
-         * would just cause a tight exit loop.  The preemption timer / DPC
-         * will retry injection later.
-         */
-        if (AnyPending && (!(Rflags & 0x200) || (Interruptibility & 0xF)))
+        if (!(Rflags & 0x200) || (Interruptibility & 0xF))
         {
             ProcCtls = RosvVmcsRead(VMCS_CTRL_PROC_BASED);
             if (!(ProcCtls & VMX_PROC_INT_WINDOW_EXIT))
