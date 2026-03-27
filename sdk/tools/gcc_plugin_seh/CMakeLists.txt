@@ -1,7 +1,17 @@
 
+find_path(GMP_INCLUDE_DIR gmp.h)
+
 add_host_module(gcc_plugin_seh main.cpp)
 target_include_directories(gcc_plugin_seh PRIVATE ${GCC_PLUGIN_DIR}/include)
+if(GMP_INCLUDE_DIR)
+    target_include_directories(gcc_plugin_seh PRIVATE ${GMP_INCLUDE_DIR})
+endif()
 set_target_properties(gcc_plugin_seh PROPERTIES POSITION_INDEPENDENT_CODE ON)
+
+if(APPLE)
+    # GCC plugin symbols are resolved at load time by the host compiler
+    target_link_options(gcc_plugin_seh PRIVATE -undefined dynamic_lookup)
+endif()
 
 if (CMAKE_HOST_SYSTEM MATCHES "Windows")
     # On windows, GCC plugins need to be linked to the main executable
