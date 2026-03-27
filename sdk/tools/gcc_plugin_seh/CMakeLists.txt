@@ -1,6 +1,11 @@
 
+find_path(GMP_INCLUDE_DIR gmp.h)
+
 add_host_module(gcc_plugin_seh main.cpp)
 target_include_directories(gcc_plugin_seh PRIVATE ${CMAKE_CURRENT_SOURCE_DIR} ${GCC_PLUGIN_DIR}/include)
+if(GMP_INCLUDE_DIR)
+    target_include_directories(gcc_plugin_seh PRIVATE ${GMP_INCLUDE_DIR})
+endif()
 set_target_properties(gcc_plugin_seh PROPERTIES POSITION_INDEPENDENT_CODE ON)
 
 if(APPLE)

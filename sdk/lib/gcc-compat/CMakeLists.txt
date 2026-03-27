@@ -6,6 +6,7 @@ list(APPEND SOURCE
     __mingw_vsprintf.c
     __throw_out_of_range_fmt.cpp
     StringCchCopyNA.c
+    wctype_compat.c
     ftelli64_compat.c)
 
 if(DLL_EXPORT_VERSION LESS 0x600)
@@ -17,9 +18,6 @@ if(DLL_EXPORT_VERSION LESS 0x600)
         snprintf_compat.c
         strnlen_compat.c
         wchar_compat.c)
-else()
-    list(APPEND SOURCE
-        wctype_compat.c)
 endif()
 
 add_library(stdc++compat ${SOURCE})
