@@ -16,6 +16,7 @@ void PrintUsage(void)
     RoslLog("       rosl.exe --attach <session-id>\n");
     RoslLog("\nOptions:\n");
     RoslLog("  --service         Start the ROSL supervisor service (default)\n");
+    RoslLog("  --selftest        Start the supervisor and run guest network selftest after shell prompt\n");
     RoslLog("  --attach <id>     Connect as an interactive client to service session <id>\n");
     RoslLog("  --pty             Client terminal uses PTY data plane (default for --attach)\n");
     RoslLog("  --uart            Legacy direct UART mode (service supervision only)\n");
@@ -63,6 +64,11 @@ int ParseOptions(int argc, char *argv[], char *posArgs[], int maxPos)
         }
         else if (strcmp(argv[i], "--service") == 0)
         {
+            g_ForceService = TRUE;
+        }
+        else if (strcmp(argv[i], "--selftest") == 0)
+        {
+            g_SelfTestMode = TRUE;
             g_ForceService = TRUE;
         }
         else if (strcmp(argv[i], "--rows") == 0)

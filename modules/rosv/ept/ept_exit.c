@@ -1311,9 +1311,10 @@ RosvHandleVirtioConMmio(
     ULONG InstrLen = (ULONG)RosvVmcsRead(VMCS_RO_EXIT_INSTR_LENGTH);
     UCHAR InsnBuf[MMIO_INSN_MAX_BYTES];
     MMIO_INSN_INFO InsnInfo;
-    BOOLEAN IsWrite = (ExitQualification & EPT_QUAL_WRITE) != 0;
     ULONG64 Value;
     BOOLEAN Ok;
+
+    UNREFERENCED_PARAMETER(ExitQualification);
 
     if (InstrLen == 0 || InstrLen > MMIO_INSN_MAX_BYTES)
     {

@@ -359,7 +359,27 @@ typedef struct {
 
 #define DEFAULT_RAM_MB  1024
 #define DEFAULT_DISK_RAM_MB  1024  /* Need ~1GB for kernels with KASAN/debug features */
-#define DEFAULT_CMDLINE_COMMON "console=ttyS0,115200n8 earlyprintk=serial,ttyS0,115200 nokaslr kasan=off nosoftlockup i8042.noaux i8042.nopnp nomodeset video=vesafb:off systemd.getty_auto=no systemd.mask=console-getty.service systemd.mask=getty@tty1.service sysctl.net.ipv4.ping_group_range=\"0 2147483647\""
+#define DEFAULT_CMDLINE_COMMON \
+    "console=ttyS0,115200n8 " \
+    "earlyprintk=serial,ttyS0,115200 " \
+    "nokaslr kasan=off nosoftlockup " \
+    "i8042.noaux i8042.nopnp " \
+    "nomodeset video=vesafb:off " \
+    "systemd.getty_auto=no " \
+    "systemd.mask=console-getty.service " \
+    "systemd.mask=getty@tty1.service " \
+    "systemd.mask=landscape-client.service " \
+    "systemd.mask=systemd-timesyncd.service " \
+    "systemd.mask=apt-daily.service " \
+    "systemd.mask=apt-daily.timer " \
+    "systemd.mask=apt-daily-upgrade.service " \
+    "systemd.mask=apt-daily-upgrade.timer " \
+    "systemd.mask=unattended-upgrades.service " \
+    "systemd.mask=motd-news.service " \
+    "systemd.mask=motd-news.timer " \
+    "systemd.mask=ua-timer.timer " \
+    "systemd.mask=ubuntu-advantage.service " \
+    "sysctl.net.ipv4.ping_group_range=\"0 2147483647\""
 #define DEFAULT_INITRD_ROOT_ARGS "rdinit=/sbin/init"
 #define DEFAULT_DISK_ROOT_ARGS "root=/dev/vda rootfstype=ext4 rw rootwait init=/sbin/init"
 
@@ -435,6 +455,7 @@ extern ULONG g_ReaderIndex;
 extern ULONG g_VconPort;
 extern ULONG g_AttachSessionId;
 extern BOOL g_ForceService;
+extern BOOL g_SelfTestMode;
 extern USHORT g_InitialRows;
 extern USHORT g_InitialCols;
 extern const char *g_DiskImagePath;

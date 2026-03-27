@@ -28,6 +28,8 @@
 #include <rosv/vm.h>
 #include <rosv/virtio_net.h>
 
+#define IP_PROTO_TCP    6
+
 #if defined(ROSV_ENABLE_TRACE) && (ROSV_ENABLE_TRACE != 0)
 typedef struct _ROSV_NET_TRACE_ICMP_ECHO {
     BOOLEAN Valid;
@@ -463,33 +465,339 @@ RosvNetVirtqueueCacheHva(
     }
 }
 
+/* ---- TX checksum offload helpers ---------------------------------------- */
+
+/*
+ * Internet checksum (RFC 1071): ones-complement sum of 16-bit words.
+ */
+static USHORT
+RosvVirtioNetCsum16(
+    _In_reads_bytes_(Length) const UCHAR *Data,
+    _In_ ULONG Length)
+{
+    ULONG Sum = 0;
+    ULONG i;
+
+    for (i = 0; i + 3 < Length; i += 4)
+    {
+        Sum += ((ULONG)Data[i] << 8) | Data[i + 1];
+        Sum += ((ULONG)Data[i + 2] << 8) | Data[i + 3];
+    }
+    if (i + 1 < Length)
+    {
+        Sum += ((ULONG)Data[i] << 8) | Data[i + 1];
+        i += 2;
+    }
+    if (i < Length)
+        Sum += ((ULONG)Data[i] << 8);
+
+    while (Sum > 0xFFFF)
+        Sum = (Sum & 0xFFFF) + (Sum >> 16);
+
+    return (USHORT)(~(USHORT)Sum);
+}
+
+/*
+ * Finalize a partial checksum for CSUM offload.
+ *
+ * When the guest sets VIRTIO_NET_HDR_F_NEEDS_CSUM, the checksum field at
+ * PacketBuf[CsumStart + CsumOffset] contains the pseudo-header sum.
+ * We complete the checksum by summing the data with the checksum field
+ * zeroed, adding the saved pseudo-header contribution, and folding.
+ */
+static VOID
+RosvVirtioNetFinalizeCsum(
+    _Inout_updates_bytes_(PacketLen) PUCHAR PacketBuf,
+    _In_ ULONG PacketLen,
+    _In_ USHORT CsumStart,
+    _In_ USHORT CsumOffset)
+{
+    ULONG CsumFieldOff;
+    USHORT PartialCsum;
+    ULONG Sum;
+    ULONG DataLen;
+    ULONG i;
+    USHORT FinalCsum;
+
+    CsumFieldOff = (ULONG)CsumStart + (ULONG)CsumOffset;
+    if (CsumFieldOff + 2 > PacketLen || CsumStart >= PacketLen)
+        return;
+
+    /* Save the pseudo-header checksum (network byte order) */
+    PartialCsum = (USHORT)(((USHORT)PacketBuf[CsumFieldOff] << 8) |
+                            PacketBuf[CsumFieldOff + 1]);
+
+    /* Zero the field before summing */
+    PacketBuf[CsumFieldOff] = 0;
+    PacketBuf[CsumFieldOff + 1] = 0;
+
+    /* Ones-complement sum of [CsumStart .. end] */
+    DataLen = PacketLen - CsumStart;
+    Sum = 0;
+    for (i = 0; i + 3 < DataLen; i += 4)
+    {
+        Sum += ((ULONG)PacketBuf[CsumStart + i] << 8) | PacketBuf[CsumStart + i + 1];
+        Sum += ((ULONG)PacketBuf[CsumStart + i + 2] << 8) | PacketBuf[CsumStart + i + 3];
+    }
+    if (i + 1 < DataLen)
+    {
+        Sum += ((ULONG)PacketBuf[CsumStart + i] << 8) | PacketBuf[CsumStart + i + 1];
+        i += 2;
+    }
+    if (i < DataLen)
+        Sum += ((ULONG)PacketBuf[CsumStart + i] << 8);
+
+    /* Add the pseudo-header contribution */
+    Sum += PartialCsum;
+
+    while (Sum > 0xFFFF)
+        Sum = (Sum & 0xFFFF) + (Sum >> 16);
+
+    FinalCsum = (USHORT)(~Sum & 0xFFFF);
+
+    PacketBuf[CsumFieldOff] = (UCHAR)((FinalCsum >> 8) & 0xFF);
+    PacketBuf[CsumFieldOff + 1] = (UCHAR)(FinalCsum & 0xFF);
+}
+
+/* ---- TX TSO segmentation ------------------------------------------------ */
+
+/*
+ * Enqueue a single packet into a queue pair's TxRing.
+ * Returns TRUE if enqueued, FALSE if ring full.
+ * Caller must NOT hold Pair->TxRingLock.
+ */
+static BOOLEAN
+RosvVirtioNetEnqueueTxPacket(
+    _Inout_ PROSV_VIRTIO_NET_STATE State,
+    _Inout_ PROSV_VIRTIO_NET_QUEUE_PAIR Pair,
+    _In_reads_bytes_(PacketLen) const PUCHAR PacketBuf,
+    _In_ ULONG PacketLen)
+{
+    KIRQL OldIrql;
+    BOOLEAN Enqueued = FALSE;
+
+    if (PacketLen == 0 || PacketLen > ROSV_VIRTIO_NET_MAX_PACKET)
+        return FALSE;
+
+    KeAcquireSpinLock(&Pair->TxRingLock, &OldIrql);
+
+    if (Pair->TxRingCount < Pair->TxRingCapacity)
+    {
+        PROSV_VIRTIO_NET_TX_ENTRY Entry = &Pair->TxRing[Pair->TxRingHead];
+        ULONG64 EnqueueQpc = RosvVirtioNetReadQpc();
+
+        RtlCopyMemory(Entry->Data, PacketBuf, PacketLen);
+        Entry->Length = PacketLen;
+        Entry->EnqueueQpc = EnqueueQpc;
+        Entry->TraceSeq = ++State->TxTraceSeqNext;
+        Pair->TxRingHead = (Pair->TxRingHead + 1) & (Pair->TxRingCapacity - 1);
+        Pair->TxRingCount++;
+        Pair->TxPackets++;
+        Pair->TxBytes += PacketLen;
+        State->TxPackets++;
+        State->TxBytes += PacketLen;
+        Enqueued = TRUE;
+    }
+
+    KeReleaseSpinLock(&Pair->TxRingLock, OldIrql);
+
+    if (Enqueued)
+        KeSetEvent(&State->TxReadyEvent, IO_NETWORK_INCREMENT, FALSE);
+
+    return Enqueued;
+}
+
+/*
+ * Perform TCP Segmentation Offload (TSO) for a large TCP packet.
+ *
+ * Splits a large TCP packet into MSS-sized segments with correct
+ * TCP sequence numbers, IP total lengths, and recomputed checksums.
+ * Each segment is enqueued into the queue pair's TxRing.
+ *
+ * Returns the number of segments successfully enqueued.
+ */
+static ULONG
+RosvVirtioNetSegmentTso(
+    _Inout_ PROSV_VIRTIO_NET_STATE State,
+    _Inout_ PROSV_VIRTIO_NET_QUEUE_PAIR Pair,
+    _In_reads_bytes_(PacketLen) const PUCHAR PacketBuf,
+    _In_ ULONG PacketLen,
+    _In_ UCHAR GsoType,
+    _In_ USHORT GsoSize)
+{
+    PUCHAR SegBuf = State->TsoSegBuf;
+    const ULONG EthHdrLen = 14;
+    ULONG IpHdrLen;
+    ULONG TcpHdrOff;
+    ULONG TcpHdrLen;
+    ULONG AllHdrLen;
+    ULONG TcpPayloadLen;
+    ULONG TcpPayloadOff;
+    ULONG OrigSeqNum;
+    ULONG PayloadSent;
+    ULONG SegCount = 0;
+    ULONG Mss;
+
+    UNREFERENCED_PARAMETER(GsoType);
+
+    if (PacketLen < EthHdrLen + 20)
+        return 0;
+    if ((PacketBuf[14] >> 4) != 4)
+        return 0;
+
+    IpHdrLen = (ULONG)(PacketBuf[14] & 0x0F) * 4;
+    if (IpHdrLen < 20 || PacketLen < EthHdrLen + IpHdrLen + 20)
+        return 0;
+
+    TcpHdrOff = EthHdrLen + IpHdrLen;
+    TcpHdrLen = (ULONG)((PacketBuf[TcpHdrOff + 12] >> 4) & 0x0F) * 4;
+    if (TcpHdrLen < 20 || PacketLen < TcpHdrOff + TcpHdrLen)
+        return 0;
+
+    AllHdrLen = TcpHdrOff + TcpHdrLen;
+    TcpPayloadOff = AllHdrLen;
+    TcpPayloadLen = PacketLen - AllHdrLen;
+    Mss = (ULONG)GsoSize;
+
+    if (Mss == 0 || TcpPayloadLen == 0)
+        return 0;
+
+    OrigSeqNum = ((ULONG)PacketBuf[TcpHdrOff + 4] << 24) |
+                 ((ULONG)PacketBuf[TcpHdrOff + 5] << 16) |
+                 ((ULONG)PacketBuf[TcpHdrOff + 6] << 8) |
+                 (ULONG)PacketBuf[TcpHdrOff + 7];
+
+    PayloadSent = 0;
+
+    while (PayloadSent < TcpPayloadLen)
+    {
+        ULONG ChunkLen = TcpPayloadLen - PayloadSent;
+        ULONG SegLen;
+        ULONG SegSeqNum;
+        USHORT SegIpTotalLen;
+        ULONG SegTcpLen;
+        ULONG CsumSum;
+        USHORT TcpCsum;
+        USHORT IpCsum;
+        ULONG i;
+
+        if (ChunkLen > Mss)
+            ChunkLen = Mss;
+
+        SegLen = AllHdrLen + ChunkLen;
+        if (SegLen > ROSV_VIRTIO_NET_MAX_PACKET)
+            break;
+
+        /* Copy all headers + this segment's payload */
+        RtlCopyMemory(SegBuf, PacketBuf, AllHdrLen);
+        RtlCopyMemory(&SegBuf[AllHdrLen],
+                       &PacketBuf[TcpPayloadOff + PayloadSent],
+                       ChunkLen);
+
+        /* Update IP total length */
+        SegIpTotalLen = (USHORT)(IpHdrLen + TcpHdrLen + ChunkLen);
+        SegBuf[16] = (UCHAR)((SegIpTotalLen >> 8) & 0xFF);
+        SegBuf[17] = (UCHAR)(SegIpTotalLen & 0xFF);
+
+        /* Update TCP sequence number */
+        SegSeqNum = OrigSeqNum + PayloadSent;
+        SegBuf[TcpHdrOff + 4] = (UCHAR)((SegSeqNum >> 24) & 0xFF);
+        SegBuf[TcpHdrOff + 5] = (UCHAR)((SegSeqNum >> 16) & 0xFF);
+        SegBuf[TcpHdrOff + 6] = (UCHAR)((SegSeqNum >> 8) & 0xFF);
+        SegBuf[TcpHdrOff + 7] = (UCHAR)(SegSeqNum & 0xFF);
+
+        /* Clear FIN/PSH on non-final segments */
+        if (PayloadSent + ChunkLen < TcpPayloadLen)
+            SegBuf[TcpHdrOff + 13] &= ~0x09;
+
+        /* Recompute IP header checksum */
+        SegBuf[EthHdrLen + 10] = 0;
+        SegBuf[EthHdrLen + 11] = 0;
+        IpCsum = RosvVirtioNetCsum16(&SegBuf[EthHdrLen], IpHdrLen);
+        SegBuf[EthHdrLen + 10] = (UCHAR)((IpCsum >> 8) & 0xFF);
+        SegBuf[EthHdrLen + 11] = (UCHAR)(IpCsum & 0xFF);
+
+        /* Compute TCP checksum with pseudo-header */
+        SegTcpLen = TcpHdrLen + ChunkLen;
+        SegBuf[TcpHdrOff + 16] = 0;
+        SegBuf[TcpHdrOff + 17] = 0;
+
+        CsumSum = 0;
+        CsumSum += ((ULONG)SegBuf[EthHdrLen + 12] << 8) | SegBuf[EthHdrLen + 13];
+        CsumSum += ((ULONG)SegBuf[EthHdrLen + 14] << 8) | SegBuf[EthHdrLen + 15];
+        CsumSum += ((ULONG)SegBuf[EthHdrLen + 16] << 8) | SegBuf[EthHdrLen + 17];
+        CsumSum += ((ULONG)SegBuf[EthHdrLen + 18] << 8) | SegBuf[EthHdrLen + 19];
+        CsumSum += IP_PROTO_TCP;
+        CsumSum += SegTcpLen;
+
+        for (i = 0; i + 1 < SegTcpLen; i += 2)
+            CsumSum += ((ULONG)SegBuf[TcpHdrOff + i] << 8) | SegBuf[TcpHdrOff + i + 1];
+        if (i < SegTcpLen)
+            CsumSum += ((ULONG)SegBuf[TcpHdrOff + i] << 8);
+
+        while (CsumSum > 0xFFFF)
+            CsumSum = (CsumSum & 0xFFFF) + (CsumSum >> 16);
+
+        TcpCsum = (USHORT)(~CsumSum & 0xFFFF);
+        if (TcpCsum == 0)
+            TcpCsum = 0xFFFF;
+
+        SegBuf[TcpHdrOff + 16] = (UCHAR)((TcpCsum >> 8) & 0xFF);
+        SegBuf[TcpHdrOff + 17] = (UCHAR)(TcpCsum & 0xFF);
+
+        /* Pad to minimum Ethernet frame */
+        if (SegLen < 60)
+        {
+            RtlZeroMemory(&SegBuf[SegLen], 60 - SegLen);
+            SegLen = 60;
+        }
+
+        if (!RosvVirtioNetEnqueueTxPacket(State, Pair, SegBuf, SegLen))
+        {
+            Pair->TxBackpressure = TRUE;
+            break;
+        }
+
+        SegCount++;
+        PayloadSent += ChunkLen;
+    }
+
+    return SegCount;
+}
+
 /* ---- TX path: guest -> host --------------------------------------------- */
 
 /*
- * Process all pending packets in the TX virtqueue (queue 1).
+ * Process all pending packets in a TX virtqueue.
  * For each packet:
  *   1. Read the descriptor chain (virtio_net_hdr + data)
- *   2. Strip the virtio_net_hdr (we don't need GSO/csum offload)
- *   3. Copy the raw ethernet frame into the TxRing buffer
- *   4. Push a used entry to signal completion to the guest
+ *   2. Handle checksum offload (finalize partial checksums if NEEDS_CSUM set)
+ *   3. Handle TSO/GSO (segment large packets into MSS-sized frames)
+ *   4. Copy the raw ethernet frame(s) into the queue pair's TxRing buffer
+ *   5. Push a used entry to signal completion to the guest
  *
  * The TxRing is consumed by the active host network backend.
+ *
+ * @param PairIndex  Queue pair index (0..NumQueuePairs-1).
+ *                   The TX virtqueue index is 2*PairIndex + 1.
  */
 static VOID
 RosvVirtioNetProcessTxQueue(
-    _Inout_ PROSV_VIRTIO_NET_STATE State)
+    _Inout_ PROSV_VIRTIO_NET_STATE State,
+    _In_ ULONG PairIndex)
 {
     PROSV_VM Vm = State->OwnerVm;
-    PROSV_VIRTQUEUE Vq = &State->Vq[VIRTIO_NET_QUEUE_TX];
+    ULONG TxQueueIdx = PairIndex * 2 + 1;
+    PROSV_VIRTQUEUE Vq = &State->Vq[TxQueueIdx];
+    PROSV_VIRTIO_NET_QUEUE_PAIR Pair = &State->QueuePairs[PairIndex];
     USHORT AvailIdx;
     USHORT DescIdx;
     ULONG ProcessedCount = 0;
-    KIRQL OldIrql;
     USHORT BaseUsedIdx;
     BOOLEAN RingFull = FALSE;
 
-    ExAcquireFastMutex(&State->TxQueueMutex);
-    State->TxBackpressure = FALSE;
+    ExAcquireFastMutex(&Pair->TxQueueMutex);
+    Pair->TxBackpressure = FALSE;
 
     if (!Vq->Ready)
     {
@@ -529,7 +837,9 @@ RosvVirtioNetProcessTxQueue(
         VIRTIO_NET_HDR NetHdr;
         USHORT CurrentIdx;
         ULONG TotalDataLen = 0;
-        UCHAR PacketBuf[ROSV_VIRTIO_NET_MAX_PACKET];
+        UCHAR StackBuf[ROSV_VIRTIO_NET_MAX_PACKET];
+        PUCHAR PacketBuf = StackBuf;
+        ULONG PacketBufSize = sizeof(StackBuf);
         ULONG PacketOffset = 0;
         BOOLEAN HeaderRead = FALSE;
         ULONG ChainDepth = 0;
@@ -568,7 +878,7 @@ RosvVirtioNetProcessTxQueue(
                     break;
                 }
 
-                /* Read the header (we mostly ignore it for simple forwarding) */
+                /* Read the header for checksum offload and GSO/TSO */
                 CopyStatus = RosvMemoryCopyFromGpa(Vm, &NetHdr, Desc.Addr,
                                                     sizeof(VIRTIO_NET_HDR));
                 if (!NT_SUCCESS(CopyStatus))
@@ -579,12 +889,20 @@ RosvVirtioNetProcessTxQueue(
                 }
                 HeaderRead = TRUE;
 
+                /* If GSO is active, switch to the larger gather buffer */
+                if (NetHdr.GsoType != VIRTIO_NET_HDR_GSO_NONE &&
+                    State->TsoGatherBuf != NULL)
+                {
+                    PacketBuf = State->TsoGatherBuf;
+                    PacketBufSize = ROSV_VIRTIO_NET_TSO_MAX_PACKET;
+                }
+
                 /* Copy any data after the header in this descriptor */
                 if (Desc.Len > sizeof(VIRTIO_NET_HDR))
                 {
                     ULONG ExtraLen = Desc.Len - sizeof(VIRTIO_NET_HDR);
-                    if (PacketOffset + ExtraLen > sizeof(PacketBuf))
-                        ExtraLen = sizeof(PacketBuf) - PacketOffset;
+                    if (PacketOffset + ExtraLen > PacketBufSize)
+                        ExtraLen = PacketBufSize - PacketOffset;
 
                     if (ExtraLen > 0)
                     {
@@ -606,8 +924,8 @@ RosvVirtioNetProcessTxQueue(
             {
                 /* Subsequent descriptors are pure data */
                 ULONG CopyLen = Desc.Len;
-                if (PacketOffset + CopyLen > sizeof(PacketBuf))
-                    CopyLen = sizeof(PacketBuf) - PacketOffset;
+                if (PacketOffset + CopyLen > PacketBufSize)
+                    CopyLen = PacketBufSize - PacketOffset;
 
                 if (CopyLen > 0)
                 {
@@ -634,44 +952,63 @@ RosvVirtioNetProcessTxQueue(
             ChainDepth++;
         }
 
-        /* Buffer the extracted packet in TxRing for the host backend. */
+        /* Buffer the extracted packet in this pair's TxRing for the host backend.
+         * Handle checksum offload and TSO/GSO if indicated by virtio_net_hdr. */
         if (PacketOffset > 0)
         {
             BOOLEAN Enqueued = FALSE;
 
-            KeAcquireSpinLock(&State->TxRingLock, &OldIrql);
-
-            if (State->TxRingCount < ROSV_VIRTIO_NET_TX_RING_SIZE)
+            if (HeaderRead &&
+                NetHdr.GsoType != VIRTIO_NET_HDR_GSO_NONE &&
+                (NetHdr.GsoType == VIRTIO_NET_HDR_GSO_TCPV4 ||
+                 NetHdr.GsoType == VIRTIO_NET_HDR_GSO_TCPV6))
             {
-                PROSV_VIRTIO_NET_TX_ENTRY Entry = &State->TxRing[State->TxRingHead];
-                ULONG CopyLen = PacketOffset;
-                ULONG64 EnqueueQpc = RosvVirtioNetReadQpc();
-                ULONG64 TraceSeq;
+                /* TSO/GSO: segment the large packet into MSS-sized frames */
+                ULONG SegCount;
 
-                if (CopyLen > ROSV_VIRTIO_NET_MAX_PACKET)
-                    CopyLen = ROSV_VIRTIO_NET_MAX_PACKET;
+                SegCount = RosvVirtioNetSegmentTso(State, Pair,
+                                                    PacketBuf, PacketOffset,
+                                                    NetHdr.GsoType,
+                                                    NetHdr.GsoSize);
+                if (SegCount > 0)
+                    Enqueued = TRUE;
+                else
+                    RingFull = Pair->TxBackpressure;
+            }
+            else
+            {
+                /* Non-GSO path: single packet.
+                 * Finalize checksum if guest requested CSUM offload. */
+                if (HeaderRead &&
+                    (NetHdr.Flags & VIRTIO_NET_HDR_F_NEEDS_CSUM))
+                {
+                    RosvVirtioNetFinalizeCsum(PacketBuf, PacketOffset,
+                                              NetHdr.CsumStart,
+                                              NetHdr.CsumOffset);
+                }
 
-                RtlCopyMemory(Entry->Data, PacketBuf, CopyLen);
-                Entry->Length = CopyLen;
-                Entry->EnqueueQpc = EnqueueQpc;
-                TraceSeq = ++State->TxTraceSeqNext;
-                Entry->TraceSeq = TraceSeq;
-                State->TxRingHead = (State->TxRingHead + 1) & (ROSV_VIRTIO_NET_TX_RING_SIZE - 1);
-                State->TxRingCount++;
-                State->TxPackets++;
-                State->TxBytes += CopyLen;
-                Enqueued = TRUE;
+                if (PacketOffset > ROSV_VIRTIO_NET_MAX_PACKET)
+                    PacketOffset = ROSV_VIRTIO_NET_MAX_PACKET;
+
+                Enqueued = RosvVirtioNetEnqueueTxPacket(State, Pair,
+                                                         PacketBuf,
+                                                         PacketOffset);
+                if (!Enqueued)
+                {
+                    Pair->TxBackpressure = TRUE;
+                    RingFull = TRUE;
+                }
 
 #if defined(ROSV_ENABLE_TRACE) && (ROSV_ENABLE_TRACE != 0)
+                if (Enqueued)
                 {
                     ROSV_NET_TRACE_ICMP_ECHO EchoInfo;
-                    RosvVirtioNetDecodeIcmpEcho(PacketBuf, CopyLen, &EchoInfo);
+                    RosvVirtioNetDecodeIcmpEcho(PacketBuf, PacketOffset, &EchoInfo);
                     if (EchoInfo.Valid)
                     {
-                        ROSV_TRACE("virtio-net: [PERF] guest->ring tx_seq=%llu ring=%u len=%u icmp=%s id=0x%04X seq=%u %u.%u.%u.%u->%u.%u.%u.%u",
-                                   TraceSeq,
-                                   State->TxRingCount,
-                                   CopyLen,
+                        ROSV_TRACE("virtio-net: [PERF] guest->ring pair=%u len=%u icmp=%s id=0x%04X seq=%u %u.%u.%u.%u->%u.%u.%u.%u",
+                                   PairIndex,
+                                   PacketOffset,
                                    EchoInfo.IsRequest ? "echo-req" : "echo-reply",
                                    EchoInfo.Id,
                                    EchoInfo.Seq,
@@ -681,25 +1018,14 @@ RosvVirtioNetProcessTxQueue(
                 }
 #endif
             }
-            else
-            {
-                State->TxBackpressure = TRUE;
-                RingFull = TRUE;
-            }
 
-            KeReleaseSpinLock(&State->TxRingLock, OldIrql);
-
-            if (Enqueued)
+            if (!Enqueued && RingFull)
             {
-                /* Wake any waiting NET_RX IOCTL immediately */
-                KeSetEvent(&State->TxReadyEvent, IO_NETWORK_INCREMENT, FALSE);
-            }
-            else if (RingFull)
-            {
-                ROSV_TRACE("virtio-net: TX ring full, deferring guest completion "
+                ROSV_TRACE("virtio-net: TX pair %u ring full, deferring guest completion "
                            "(pending_desc=%u ring_count=%u)",
+                           PairIndex,
                            (USHORT)(AvailIdx - Vq->LastAvailIdx),
-                           State->TxRingCount);
+                           Pair->TxRingCount);
                 break;
             }
         }
@@ -739,15 +1065,18 @@ RosvVirtioNetProcessTxQueue(
     }
 
 Exit:
-    ExReleaseFastMutex(&State->TxQueueMutex);
+    ExReleaseFastMutex(&Pair->TxQueueMutex);
 }
 
 /* ---- RX path: host -> guest --------------------------------------------- */
 
 /*
- * Try to inject a packet into the guest RX virtqueue (queue 0).
+ * Try to inject a packet into a guest RX virtqueue.
  * The guest pre-posts receive buffers; we fill the first available one
  * with a virtio_net_hdr prefix followed by the raw ethernet frame.
+ *
+ * @param PairIndex  Queue pair index (0..NumQueuePairs-1).
+ *                   The RX virtqueue index is 2*PairIndex.
  *
  * Returns TRUE if the packet was successfully injected.
  * Returns FALSE if no receive buffers are available (guest hasn't posted any).
@@ -755,11 +1084,14 @@ Exit:
 static BOOLEAN
 RosvVirtioNetInjectToRxQueue(
     _Inout_ PROSV_VIRTIO_NET_STATE State,
+    _In_ ULONG PairIndex,
     _In_reads_bytes_(Length) const UCHAR *Data,
     _In_ ULONG Length)
 {
     PROSV_VM Vm = State->OwnerVm;
-    PROSV_VIRTQUEUE Vq = &State->Vq[VIRTIO_NET_QUEUE_RX];
+    ULONG RxQueueIdx = PairIndex * 2;
+    PROSV_VIRTQUEUE Vq = &State->Vq[RxQueueIdx];
+    PROSV_VIRTIO_NET_QUEUE_PAIR Pair = &State->QueuePairs[PairIndex];
     USHORT AvailIdx;
     USHORT DescIdx;
     VRING_DESC Desc;
@@ -774,7 +1106,7 @@ RosvVirtioNetInjectToRxQueue(
     ULONG WritableCapacity = 0;
     BOOLEAN Success = FALSE;
 
-    ExAcquireFastMutex(&State->RxQueueMutex);
+    ExAcquireFastMutex(&Pair->RxQueueMutex);
     if (!Vq->Ready || !Vq->DescGpa || !Vq->AvailGpa || !Vq->UsedGpa)
         goto Exit;
 
@@ -799,50 +1131,12 @@ RosvVirtioNetInjectToRxQueue(
     NetHdr.Flags = 0;
     NetHdr.GsoType = VIRTIO_NET_HDR_GSO_NONE;
 
-    /* Preflight the writable capacity before touching guest memory. */
+    /* Single-pass RX: validate and write each descriptor in one walk.
+     * We read each descriptor once, check WRITE flag, and copy data into it
+     * immediately. If the chain is too short for the full packet we bail
+     * before pushing the used entry, so the guest never sees partial data.
+     * This halves GPA translation cost vs. the old preflight+write approach. */
     RequiredBytes = sizeof(VIRTIO_NET_HDR) + Length;
-    CurrentIdx = DescIdx;
-    ChainDepth = 0;
-    while (ChainDepth < Vq->Num)
-    {
-        if (!RosvNetVirtqueueReadDesc(Vm, Vq, CurrentIdx, &Desc))
-        {
-            ROSV_ERR("virtio-net: RX preflight failed to read descriptor at index %u",
-                     CurrentIdx);
-            goto Exit;
-        }
-
-        if (!(Desc.Flags & VRING_DESC_F_WRITE))
-        {
-            ROSV_ERR("virtio-net: RX preflight found non-writable descriptor %u (flags=0x%X)",
-                     CurrentIdx, Desc.Flags);
-            goto Exit;
-        }
-
-        if (WritableCapacity < RequiredBytes)
-        {
-            ULONG Remaining = RequiredBytes - WritableCapacity;
-            WritableCapacity += (Desc.Len > Remaining) ? Remaining : Desc.Len;
-        }
-
-        if (WritableCapacity >= RequiredBytes)
-            break;
-
-        if (!(Desc.Flags & VRING_DESC_F_NEXT))
-            break;
-
-        CurrentIdx = Desc.Next;
-        ChainDepth++;
-    }
-
-    if (WritableCapacity < RequiredBytes)
-    {
-        ROSV_TRACE("virtio-net: RX chain too small for packet (%u < %u), leaving staged",
-                   WritableCapacity, RequiredBytes);
-        goto Exit;
-    }
-
-    /* Walk the descriptor chain and fill with header + data */
     CurrentIdx = DescIdx;
     ChainDepth = 0;
 
@@ -854,13 +1148,14 @@ RosvVirtioNetInjectToRxQueue(
             goto Exit;
         }
 
-        /* RX descriptors must be device-writable */
         if (!(Desc.Flags & VRING_DESC_F_WRITE))
         {
             ROSV_ERR("virtio-net: RX descriptor %u not writable (flags=0x%X)",
                      CurrentIdx, Desc.Flags);
             goto Exit;
         }
+
+        WritableCapacity += Desc.Len;
 
         if (!HeaderWritten)
         {
@@ -921,6 +1216,10 @@ RosvVirtioNetInjectToRxQueue(
             }
         }
 
+        /* All data written? */
+        if (DataOffset >= Length && HeaderWritten)
+            break;
+
         if (!(Desc.Flags & VRING_DESC_F_NEXT))
             break;
 
@@ -930,8 +1229,16 @@ RosvVirtioNetInjectToRxQueue(
 
     if (!HeaderWritten || DataOffset != Length)
     {
-        ROSV_ERR("virtio-net: RX write incomplete (header=%u data=%u/%u)",
-                 HeaderWritten ? 1 : 0, DataOffset, Length);
+        if (WritableCapacity < RequiredBytes)
+        {
+            ROSV_TRACE("virtio-net: RX chain too small for packet (%u < %u), leaving staged",
+                       WritableCapacity, RequiredBytes);
+        }
+        else
+        {
+            ROSV_ERR("virtio-net: RX write incomplete (header=%u data=%u/%u)",
+                     HeaderWritten ? 1 : 0, DataOffset, Length);
+        }
         goto Exit;
     }
 
@@ -939,7 +1246,18 @@ RosvVirtioNetInjectToRxQueue(
     RosvNetVirtqueuePushUsed(Vm, Vq, (ULONG)DescIdx, TotalWritten);
     Vq->LastAvailIdx++;
 
-    /* Raise interrupt to notify guest of received packet */
+    Pair->RxPackets++;
+    Pair->RxBytes += Length;
+    State->RxPackets++;
+    State->RxBytes += Length;
+
+    /* Interrupt coalescing: only raise the interrupt when the coalescing
+     * policy says so (packet count threshold, time threshold, or guest
+     * halted). This reduces VM-exit rate during bulk RX.
+     * We always signal HaltWakeEvent regardless of coalescing so that a
+     * sleeping guest wakes promptly; ShouldInjectIrq(GuestIsHalted=FALSE)
+     * gates only the actual interrupt injection. */
+    if (RosvVirtioNetShouldInjectIrq(State, FALSE))
     {
         KIRQL IntIrql;
         KeAcquireSpinLock(&State->InterruptLock, &IntIrql);
@@ -947,18 +1265,16 @@ RosvVirtioNetInjectToRxQueue(
         State->InterruptPending = TRUE;
         KeMemoryBarrier();
         KeReleaseSpinLock(&State->InterruptLock, IntIrql);
+
+        RosvVirtioNetRecordIrqInjected(State);
+
+        if (State->OwnerVm != NULL)
+            KeSetEvent(&State->OwnerVm->Vcpu.HaltWakeEvent, IO_NO_INCREMENT, FALSE);
     }
-
-    /* Wake vCPU if halted so it can inject this RX interrupt */
-    if (State->OwnerVm != NULL)
-        KeSetEvent(&State->OwnerVm->Vcpu.HaltWakeEvent, IO_NO_INCREMENT, FALSE);
-
-    State->RxPackets++;
-    State->RxBytes += Length;
     Success = TRUE;
 
 Exit:
-    ExReleaseFastMutex(&State->RxQueueMutex);
+    ExReleaseFastMutex(&Pair->RxQueueMutex);
     return Success;
 }
 
@@ -1072,7 +1388,12 @@ RosvVirtioNetMmioRead(
         break;
 
     case VIRTIO_MMIO_QUEUE_NUM_MAX:
-        Result = ROSV_VIRTIO_QUEUE_SIZE_MAX;
+        /* Return 0 for non-existent queues (signals queue not available).
+         * Also return 0 for queues beyond NumQueuePairs*2. */
+        if (SelectedVq != NULL && State->QueueSel < State->NumQueuePairs * 2)
+            Result = ROSV_VIRTIO_QUEUE_SIZE_MAX;
+        else
+            Result = 0;
         break;
 
     case VIRTIO_MMIO_QUEUE_READY:
@@ -1159,7 +1480,8 @@ RosvVirtioNetMmioWrite(
         State->QueueSel = Val32;
         if (Val32 >= VIRTIO_NET_NUM_QUEUES)
         {
-            ROSV_WARN("virtio-net: guest selected queue %u (only 0/1 exist)", Val32);
+            ROSV_TRACE("virtio-net: guest selected queue %u (NumQueues=%u)",
+                       Val32, VIRTIO_NET_NUM_QUEUES);
         }
         break;
 
@@ -1201,119 +1523,186 @@ RosvVirtioNetMmioWrite(
         break;
 
     case VIRTIO_MMIO_QUEUE_NOTIFY:
-        if (Val32 == VIRTIO_NET_QUEUE_TX)
+        /* Dispatch based on queue index: even=RX, odd=TX per virtio spec.
+         * The value written is the queue index (not QueueSel). */
+        if (Val32 < VIRTIO_NET_NUM_QUEUES && Val32 < State->NumQueuePairs * 2)
         {
-            RosvVirtioNetProcessTxQueue(State);
-        }
-        else if (Val32 == VIRTIO_NET_QUEUE_RX)
-        {
-            /* Guest posted new RX buffers. Drain as much staged host traffic as
-             * the queue can currently accept. */
-            KIRQL OldIrql;
-            ULONG Drained = 0;
+            ULONG NotifyPairIdx = VIRTIO_NET_QUEUE_PAIR(Val32);
 
-            for (;;)
+            if (VIRTIO_NET_QUEUE_IS_TX(Val32))
             {
-                UCHAR LocalBuf[ROSV_VIRTIO_NET_MAX_PACKET];
-                ULONG LocalLen;
-                ULONG64 LocalEnqueueQpc;
+                /* TX queue notification */
+                RosvVirtioNetProcessTxQueue(State, NotifyPairIdx);
+            }
+            else
+            {
+                /* RX queue notification -- guest posted new RX buffers.
+                 * Drain as much staged host traffic from this pair's RxRing
+                 * as the queue can currently accept. */
+                PROSV_VIRTIO_NET_QUEUE_PAIR NotifyPair = &State->QueuePairs[NotifyPairIdx];
+                KIRQL OldIrql;
+                ULONG Drained = 0;
+
+                for (;;)
+                {
+                    UCHAR LocalBuf[ROSV_VIRTIO_NET_MAX_PACKET];
+                    ULONG LocalLen;
+                    ULONG64 LocalEnqueueQpc;
+                    BOOLEAN FromDrain = FALSE;
+                    BOOLEAN RetireDrain = FALSE;
 #if defined(ROSV_ENABLE_TRACE) && (ROSV_ENABLE_TRACE != 0)
-                ULONG64 LocalTraceSeq;
+                    ULONG64 LocalTraceSeq;
 #endif
 
-                /* Dequeue one packet under lock */
-                KeAcquireSpinLock(&State->RxLock, &OldIrql);
-                if (State->RxRingCount == 0)
-                {
-                    KeReleaseSpinLock(&State->RxLock, OldIrql);
-                    break;
-                }
-                {
-                    PROSV_VIRTIO_NET_TX_ENTRY Entry = &State->RxRing[State->RxRingTail];
-                    LocalLen = Entry->Length;
-                    LocalEnqueueQpc = Entry->EnqueueQpc;
-#if defined(ROSV_ENABLE_TRACE) && (ROSV_ENABLE_TRACE != 0)
-                    LocalTraceSeq = Entry->TraceSeq;
-#endif
-                    if (LocalLen > ROSV_VIRTIO_NET_MAX_PACKET)
-                        LocalLen = ROSV_VIRTIO_NET_MAX_PACKET;
-                    RtlCopyMemory(LocalBuf, Entry->Data, LocalLen);
-                    Entry->Length = 0;
-                    State->RxRingTail = (State->RxRingTail + 1) & (ROSV_VIRTIO_NET_RX_RING_SIZE - 1);
-                    State->RxRingCount--;
-                    KeMemoryBarrier();
-                }
-                KeReleaseSpinLock(&State->RxLock, OldIrql);
-
-                /* Inject to guest without holding the lock */
-                if (!RosvVirtioNetInjectToRxQueue(State, LocalBuf, LocalLen))
-                {
-                    /* No more guest RX buffers available - re-queue the packet */
-                    KeAcquireSpinLock(&State->RxLock, &OldIrql);
+                    /* Dequeue one packet under lock */
+                    KeAcquireSpinLock(&NotifyPair->RxLock, &OldIrql);
+                    if (NotifyPair->RxDrainCount == 0 &&
+                        NotifyPair->RxRingCount == 0)
                     {
-                        /* Put it back at the tail (which we just advanced).
-                         * Rewind the tail by one slot. */
-                        State->RxRingTail = (State->RxRingTail - 1) & (ROSV_VIRTIO_NET_RX_RING_SIZE - 1);
-                        {
-                            PROSV_VIRTIO_NET_TX_ENTRY Entry = &State->RxRing[State->RxRingTail];
-                            RtlCopyMemory(Entry->Data, LocalBuf, LocalLen);
-                            Entry->Length = LocalLen;
-                            Entry->EnqueueQpc = LocalEnqueueQpc;
+                        KeReleaseSpinLock(&NotifyPair->RxLock, OldIrql);
+                        break;
+                    }
+                    if (NotifyPair->RxDrainCount > 0)
+                    {
+                        PROSV_VIRTIO_NET_TX_ENTRY Entry = &NotifyPair->RxDrainRing[NotifyPair->RxDrainTail];
+
+                        FromDrain = TRUE;
+                        LocalLen = Entry->Length;
+                        LocalEnqueueQpc = Entry->EnqueueQpc;
 #if defined(ROSV_ENABLE_TRACE) && (ROSV_ENABLE_TRACE != 0)
-                            Entry->TraceSeq = LocalTraceSeq;
+                        LocalTraceSeq = Entry->TraceSeq;
 #endif
-                        }
-                        State->RxRingCount++;
+                        if (LocalLen > ROSV_VIRTIO_NET_MAX_PACKET)
+                            LocalLen = ROSV_VIRTIO_NET_MAX_PACKET;
+                        RtlCopyMemory(LocalBuf, Entry->Data, LocalLen);
+                        Entry->Length = 0;
+                        NotifyPair->RxDrainTail = (NotifyPair->RxDrainTail + 1) & (NotifyPair->RxDrainCapacity - 1);
+                        NotifyPair->RxDrainCount--;
+                        RetireDrain = (NotifyPair->RxDrainCount == 0);
                         KeMemoryBarrier();
                     }
-                    KeReleaseSpinLock(&State->RxLock, OldIrql);
-                    break;
-                }
+                    else
+                    {
+                        PROSV_VIRTIO_NET_TX_ENTRY Entry = &NotifyPair->RxRing[NotifyPair->RxRingTail];
+                        LocalLen = Entry->Length;
+                        LocalEnqueueQpc = Entry->EnqueueQpc;
+#if defined(ROSV_ENABLE_TRACE) && (ROSV_ENABLE_TRACE != 0)
+                        LocalTraceSeq = Entry->TraceSeq;
+#endif
+                        if (LocalLen > ROSV_VIRTIO_NET_MAX_PACKET)
+                            LocalLen = ROSV_VIRTIO_NET_MAX_PACKET;
+                        RtlCopyMemory(LocalBuf, Entry->Data, LocalLen);
+                        Entry->Length = 0;
+                        NotifyPair->RxRingTail = (NotifyPair->RxRingTail + 1) & (NotifyPair->RxRingCapacity - 1);
+                        NotifyPair->RxRingCount--;
+                        KeMemoryBarrier();
+                    }
+                    KeReleaseSpinLock(&NotifyPair->RxLock, OldIrql);
 
-                Drained++;
+                    /* Inject to guest without holding the lock */
+                    if (!RosvVirtioNetInjectToRxQueue(State, NotifyPairIdx, LocalBuf, LocalLen))
+                    {
+                        /* No more guest RX buffers available - re-queue the packet */
+                        KeAcquireSpinLock(&NotifyPair->RxLock, &OldIrql);
+                        if (FromDrain)
+                        {
+                            NotifyPair->RxDrainTail = (NotifyPair->RxDrainTail - 1) & (NotifyPair->RxDrainCapacity - 1);
+                            {
+                                PROSV_VIRTIO_NET_TX_ENTRY Entry = &NotifyPair->RxDrainRing[NotifyPair->RxDrainTail];
+                                RtlCopyMemory(Entry->Data, LocalBuf, LocalLen);
+                                Entry->Length = LocalLen;
+                                Entry->EnqueueQpc = LocalEnqueueQpc;
+#if defined(ROSV_ENABLE_TRACE) && (ROSV_ENABLE_TRACE != 0)
+                                Entry->TraceSeq = LocalTraceSeq;
+#endif
+                            }
+                            NotifyPair->RxDrainCount++;
+                        }
+                        else
+                        {
+                            NotifyPair->RxRingTail = (NotifyPair->RxRingTail - 1) & (NotifyPair->RxRingCapacity - 1);
+                            {
+                                PROSV_VIRTIO_NET_TX_ENTRY Entry = &NotifyPair->RxRing[NotifyPair->RxRingTail];
+                                RtlCopyMemory(Entry->Data, LocalBuf, LocalLen);
+                                Entry->Length = LocalLen;
+                                Entry->EnqueueQpc = LocalEnqueueQpc;
+#if defined(ROSV_ENABLE_TRACE) && (ROSV_ENABLE_TRACE != 0)
+                                Entry->TraceSeq = LocalTraceSeq;
+#endif
+                            }
+                            NotifyPair->RxRingCount++;
+                        }
+                        KeMemoryBarrier();
+                        KeReleaseSpinLock(&NotifyPair->RxLock, OldIrql);
+                        break;
+                    }
+
+                    if (FromDrain && RetireDrain)
+                    {
+                        PROSV_VIRTIO_NET_TX_ENTRY RetiredRing = NULL;
+
+                        KeAcquireSpinLock(&NotifyPair->RxLock, &OldIrql);
+                        if (NotifyPair->RxDrainCount == 0 &&
+                            NotifyPair->RxDrainRing != NULL)
+                        {
+                            RetiredRing = NotifyPair->RxDrainRing;
+                            NotifyPair->RxDrainRing = NULL;
+                            NotifyPair->RxDrainCapacity = 0;
+                            NotifyPair->RxDrainTail = 0;
+                        }
+                        KeReleaseSpinLock(&NotifyPair->RxLock, OldIrql);
+
+                        if (RetiredRing != NULL)
+                            ExFreePoolWithTag(RetiredRing, 'rRvR');
+                    }
+
+                    Drained++;
 
 #if defined(ROSV_ENABLE_TRACE) && (ROSV_ENABLE_TRACE != 0)
-                {
-                    ROSV_NET_TRACE_ICMP_ECHO EchoInfo;
-                    ULONG64 NowQpc = RosvVirtioNetReadQpc();
-                    ULONG64 StageWaitUs = RosvVirtioNetQpcDeltaUs(State, LocalEnqueueQpc, NowQpc);
-
-                    RosvVirtioNetDecodeIcmpEcho(LocalBuf, LocalLen, &EchoInfo);
-
-                    if (EchoInfo.Valid || StageWaitUs >= 10000)
                     {
-                        ROSV_TRACE("virtio-net: [PERF] stage->guest rx_seq=%llu wait_us=%llu len=%u icmp=%s id=0x%04X seq=%u %u.%u.%u.%u->%u.%u.%u.%u",
-                                   LocalTraceSeq,
-                                   StageWaitUs,
-                                   LocalLen,
-                                   EchoInfo.Valid ? (EchoInfo.IsRequest ? "echo-req" : "echo-reply") : "n/a",
-                                   EchoInfo.Valid ? EchoInfo.Id : 0,
-                                   EchoInfo.Valid ? EchoInfo.Seq : 0,
-                                   EchoInfo.Valid ? EchoInfo.SrcIp[0] : 0,
-                                   EchoInfo.Valid ? EchoInfo.SrcIp[1] : 0,
-                                   EchoInfo.Valid ? EchoInfo.SrcIp[2] : 0,
-                                   EchoInfo.Valid ? EchoInfo.SrcIp[3] : 0,
-                                   EchoInfo.Valid ? EchoInfo.DstIp[0] : 0,
-                                   EchoInfo.Valid ? EchoInfo.DstIp[1] : 0,
-                                   EchoInfo.Valid ? EchoInfo.DstIp[2] : 0,
-                                   EchoInfo.Valid ? EchoInfo.DstIp[3] : 0);
+                        ROSV_NET_TRACE_ICMP_ECHO EchoInfo;
+                        ULONG64 NowQpc = RosvVirtioNetReadQpc();
+                        ULONG64 StageWaitUs = RosvVirtioNetQpcDeltaUs(State, LocalEnqueueQpc, NowQpc);
+
+                        RosvVirtioNetDecodeIcmpEcho(LocalBuf, LocalLen, &EchoInfo);
+
+                        if (EchoInfo.Valid || StageWaitUs >= 10000)
+                        {
+                            ROSV_TRACE("virtio-net: [PERF] stage->guest pair=%u rx_seq=%llu wait_us=%llu len=%u icmp=%s id=0x%04X seq=%u %u.%u.%u.%u->%u.%u.%u.%u",
+                                       NotifyPairIdx,
+                                       LocalTraceSeq,
+                                       StageWaitUs,
+                                       LocalLen,
+                                       EchoInfo.Valid ? (EchoInfo.IsRequest ? "echo-req" : "echo-reply") : "n/a",
+                                       EchoInfo.Valid ? EchoInfo.Id : 0,
+                                       EchoInfo.Valid ? EchoInfo.Seq : 0,
+                                       EchoInfo.Valid ? EchoInfo.SrcIp[0] : 0,
+                                       EchoInfo.Valid ? EchoInfo.SrcIp[1] : 0,
+                                       EchoInfo.Valid ? EchoInfo.SrcIp[2] : 0,
+                                       EchoInfo.Valid ? EchoInfo.SrcIp[3] : 0,
+                                       EchoInfo.Valid ? EchoInfo.DstIp[0] : 0,
+                                       EchoInfo.Valid ? EchoInfo.DstIp[1] : 0,
+                                       EchoInfo.Valid ? EchoInfo.DstIp[2] : 0,
+                                       EchoInfo.Valid ? EchoInfo.DstIp[3] : 0);
+                        }
                     }
-                }
 #endif
-            }
+                }
 
-            if (Drained > 1)
-            {
-                ROSV_TRACE("virtio-net: RX ring drained %u packets, %u remaining",
-                           Drained, State->RxRingCount);
-            }
+                if (Drained > 1)
+                {
+                    ROSV_TRACE("virtio-net: RX pair %u ring drained %u packets, %u remaining",
+                               NotifyPairIdx, Drained, NotifyPair->RxRingCount);
+                }
 
-            if (State->OwnerVm != NULL && State->OwnerVm->NetBackend != NULL)
-                RosvNetBackendKick(State->OwnerVm);
+                if (State->OwnerVm != NULL && State->OwnerVm->NetBackend != NULL)
+                    RosvNetBackendKick(State->OwnerVm);
+            }
         }
         else
         {
-            ROSV_WARN("virtio-net: QUEUE_NOTIFY for non-existent queue %u", Val32);
+            ROSV_WARN("virtio-net: QUEUE_NOTIFY for non-existent queue %u (max=%u)",
+                      Val32, State->NumQueuePairs * 2);
         }
         break;
 
@@ -1340,7 +1729,8 @@ RosvVirtioNetMmioWrite(
     case VIRTIO_MMIO_STATUS:
         if (Val32 == 0)
         {
-            /* Device reset */
+            ULONG i;
+            /* Device reset -- zero all virtqueues */
             ROSV_TRACE("virtio-net: device RESET");
             State->Status = 0;
             State->DriverFeatures = 0;
@@ -1355,8 +1745,8 @@ RosvVirtioNetMmioWrite(
             State->QueueSel = 0;
             State->DeviceFeaturesSelPage = 0;
             State->DriverFeaturesSelPage = 0;
-            RtlZeroMemory(&State->Vq[0], sizeof(ROSV_VIRTQUEUE));
-            RtlZeroMemory(&State->Vq[1], sizeof(ROSV_VIRTQUEUE));
+            for (i = 0; i < VIRTIO_NET_NUM_QUEUES; i++)
+                RtlZeroMemory(&State->Vq[i], sizeof(ROSV_VIRTQUEUE));
         }
         else
         {
@@ -1541,36 +1931,83 @@ RosvVirtioNetDequeueTxPacket(
     KIRQL OldIrql;
     BOOLEAN Got = FALSE;
     BOOLEAN ResumeTx = FALSE;
+    ULONG ResumePairIdx = 0;
+    ULONG DequeuePairIdx = 0;
     ULONG64 EnqueueQpc = 0;
     ULONG64 TraceSeq = 0;
+    ULONG PairIdx;
 
-    KeAcquireSpinLock(&State->TxRingLock, &OldIrql);
-
-    if (State->TxRingCount > 0)
+    /* Round-robin dequeue across all active queue pairs.
+     * Check each pair's TxRing and return the first available packet.
+     * This ensures all TX queues are serviced fairly by the host backend. */
+    for (PairIdx = 0; PairIdx < State->NumQueuePairs; PairIdx++)
     {
-        PROSV_VIRTIO_NET_TX_ENTRY Entry = &State->TxRing[State->TxRingTail];
+        PROSV_VIRTIO_NET_QUEUE_PAIR Pair = &State->QueuePairs[PairIdx];
+        PROSV_VIRTIO_NET_TX_ENTRY RetiredRing = NULL;
 
-        if (Entry->Length > 0 && Entry->Length <= ROSV_NET_PACKET_MAX)
+        KeAcquireSpinLock(&Pair->TxRingLock, &OldIrql);
+
+        if (Pair->TxDrainCount > 0)
         {
-            PacketOut->Length = Entry->Length;
-            RtlCopyMemory(PacketOut->Data, Entry->Data, Entry->Length);
-            EnqueueQpc = Entry->EnqueueQpc;
-            TraceSeq = Entry->TraceSeq;
-            Got = TRUE;
+            PROSV_VIRTIO_NET_TX_ENTRY Entry = &Pair->TxDrainRing[Pair->TxDrainTail];
+
+            if (Entry->Length > 0 && Entry->Length <= ROSV_NET_PACKET_MAX)
+            {
+                PacketOut->Length = Entry->Length;
+                RtlCopyMemory(PacketOut->Data, Entry->Data, Entry->Length);
+                EnqueueQpc = Entry->EnqueueQpc;
+                TraceSeq = Entry->TraceSeq;
+                Got = TRUE;
+                DequeuePairIdx = PairIdx;
+            }
+
+            Entry->Length = 0;
+            Entry->EnqueueQpc = 0;
+            Entry->TraceSeq = 0;
+            Pair->TxDrainTail = (Pair->TxDrainTail + 1) & (Pair->TxDrainCapacity - 1);
+            Pair->TxDrainCount--;
+            if (Pair->TxDrainCount == 0)
+            {
+                RetiredRing = Pair->TxDrainRing;
+                Pair->TxDrainRing = NULL;
+                Pair->TxDrainCapacity = 0;
+                Pair->TxDrainTail = 0;
+            }
+        }
+        else if (Pair->TxRingCount > 0)
+        {
+            PROSV_VIRTIO_NET_TX_ENTRY Entry = &Pair->TxRing[Pair->TxRingTail];
+
+            if (Entry->Length > 0 && Entry->Length <= ROSV_NET_PACKET_MAX)
+            {
+                PacketOut->Length = Entry->Length;
+                RtlCopyMemory(PacketOut->Data, Entry->Data, Entry->Length);
+                EnqueueQpc = Entry->EnqueueQpc;
+                TraceSeq = Entry->TraceSeq;
+                Got = TRUE;
+                DequeuePairIdx = PairIdx;
+            }
+
+            Entry->Length = 0;
+            Entry->EnqueueQpc = 0;
+            Entry->TraceSeq = 0;
+            Pair->TxRingTail = (Pair->TxRingTail + 1) & (Pair->TxRingCapacity - 1);
+            Pair->TxRingCount--;
+            ResumeTx = Pair->TxBackpressure;
+            ResumePairIdx = PairIdx;
         }
 
-        Entry->Length = 0;
-        Entry->EnqueueQpc = 0;
-        Entry->TraceSeq = 0;
-        State->TxRingTail = (State->TxRingTail + 1) & (ROSV_VIRTIO_NET_TX_RING_SIZE - 1);
-        State->TxRingCount--;
-        ResumeTx = State->TxBackpressure;
+        KeReleaseSpinLock(&Pair->TxRingLock, OldIrql);
+
+        if (RetiredRing != NULL)
+            ExFreePoolWithTag(RetiredRing, 'tRvR');
+
+        if (Got)
+            break;
     }
 
-    KeReleaseSpinLock(&State->TxRingLock, OldIrql);
-
     if (ResumeTx)
-        RosvVirtioNetProcessTxQueue(State);
+        RosvVirtioNetProcessTxQueue(State, ResumePairIdx);
 
 #if defined(ROSV_ENABLE_TRACE) && (ROSV_ENABLE_TRACE != 0)
     if (Got)
@@ -1582,10 +2019,10 @@ RosvVirtioNetDequeueTxPacket(
         RosvVirtioNetDecodeIcmpEcho(PacketOut->Data, PacketOut->Length, &EchoInfo);
         if (EchoInfo.Valid || QueueDelayUs >= 10000)
         {
-            ROSV_TRACE("virtio-net: [PERF] ring->netrx tx_seq=%llu delay_us=%llu ring=%u len=%u icmp=%s id=0x%04X seq=%u %u.%u.%u.%u->%u.%u.%u.%u",
+            ROSV_TRACE("virtio-net: [PERF] ring->netrx tx_seq=%llu delay_us=%llu pair=%u len=%u icmp=%s id=0x%04X seq=%u %u.%u.%u.%u->%u.%u.%u.%u",
                        TraceSeq,
                        QueueDelayUs,
-                       State->TxRingCount,
+                       DequeuePairIdx,
                        PacketOut->Length,
                        EchoInfo.Valid ? (EchoInfo.IsRequest ? "echo-req" : "echo-reply") : "n/a",
                        EchoInfo.Valid ? EchoInfo.Id : 0,
@@ -1603,6 +2040,7 @@ RosvVirtioNetDequeueTxPacket(
 #else
     UNREFERENCED_PARAMETER(TraceSeq);
     UNREFERENCED_PARAMETER(EnqueueQpc);
+    UNREFERENCED_PARAMETER(DequeuePairIdx);
 #endif
 
     return Got;
@@ -1616,6 +2054,9 @@ RosvVirtioNetInjectRxPacket(
     _In_reads_bytes_(Length) const UCHAR *Data,
     _In_ ULONG Length)
 {
+    /* Host-side RX injection always targets pair 0 for now.
+     * Future: RSS/flow-steering could hash the packet to select a pair. */
+    PROSV_VIRTIO_NET_QUEUE_PAIR Pair = &State->QueuePairs[0];
     KIRQL OldIrql;
     ULONG64 StartQpc = RosvVirtioNetReadQpc();
     ULONG64 TraceSeq;
@@ -1626,8 +2067,8 @@ RosvVirtioNetInjectRxPacket(
         return FALSE;
     }
 
-    /* First try to inject directly into the RX virtqueue */
-    if (RosvVirtioNetInjectToRxQueue(State, Data, Length))
+    /* First try to inject directly into the RX virtqueue (pair 0) */
+    if (RosvVirtioNetInjectToRxQueue(State, 0, Data, Length))
     {
         TraceSeq = ++State->RxTraceSeqNext;
 #if defined(ROSV_ENABLE_TRACE) && (ROSV_ENABLE_TRACE != 0)
@@ -1654,45 +2095,51 @@ RosvVirtioNetInjectRxPacket(
         UNREFERENCED_PARAMETER(TraceSeq);
         UNREFERENCED_PARAMETER(StartQpc);
 #endif
-        /* Wake the vCPU if it's yielding so it can deliver the interrupt */
+        /* Wake both the network-yield wait and the HLT-idle wait so
+         * an otherwise idle guest takes the RX interrupt immediately
+         * instead of waiting for the fallback HLT timeout. */
         KeSetEvent(&State->RxPendingEvent, IO_NETWORK_INCREMENT, FALSE);
+        KeSetEvent(&State->OwnerVm->Vcpu.HaltWakeEvent, IO_NO_INCREMENT, FALSE);
         return TRUE;
     }
 
-    /* No RX buffers available. Enqueue into RX ring for later delivery
+    /* No RX buffers available. Enqueue into pair 0's RX ring for later delivery
      * when the guest posts new RX buffers (QUEUE_NOTIFY on queue 0). */
-    KeAcquireSpinLock(&State->RxLock, &OldIrql);
+    KeAcquireSpinLock(&Pair->RxLock, &OldIrql);
 
-    if (State->RxRingCount >= ROSV_VIRTIO_NET_RX_RING_SIZE)
+    if (Pair->RxRingCount >= Pair->RxRingCapacity)
     {
         /* Ring full. Drop this packet and track in state struct. */
+        Pair->RxDropCount++;
         State->RxDropCount++;
         if (State->RxDropCount <= 16 || (State->RxDropCount % 1024) == 0)
         {
             ROSV_WARN("virtio-net: RX ring full (%u/%u), dropping packet (%u bytes), "
-                      "total drops=%u", State->RxRingCount,
-                      ROSV_VIRTIO_NET_RX_RING_SIZE, Length, State->RxDropCount);
+                      "total drops=%u", Pair->RxRingCount,
+                      Pair->RxRingCapacity, Length, State->RxDropCount);
         }
-        KeReleaseSpinLock(&State->RxLock, OldIrql);
+        KeReleaseSpinLock(&Pair->RxLock, OldIrql);
         return FALSE;
     }
 
     {
-        PROSV_VIRTIO_NET_TX_ENTRY Entry = &State->RxRing[State->RxRingHead];
+        PROSV_VIRTIO_NET_TX_ENTRY Entry = &Pair->RxRing[Pair->RxRingHead];
         RtlCopyMemory(Entry->Data, Data, Length);
         Entry->Length = Length;
         TraceSeq = ++State->RxTraceSeqNext;
         Entry->TraceSeq = TraceSeq;
         Entry->EnqueueQpc = StartQpc;
-        State->RxRingHead = (State->RxRingHead + 1) & (ROSV_VIRTIO_NET_RX_RING_SIZE - 1);
-        State->RxRingCount++;
+        Pair->RxRingHead = (Pair->RxRingHead + 1) & (Pair->RxRingCapacity - 1);
+        Pair->RxRingCount++;
         KeMemoryBarrier();
     }
 
-    KeReleaseSpinLock(&State->RxLock, OldIrql);
+    KeReleaseSpinLock(&Pair->RxLock, OldIrql);
 
-    /* Wake the vCPU if it's yielding so it can deliver the packet later */
+    /* Wake both the network-yield wait and the HLT-idle wait so the
+     * guest notices staged RX work without the 10 ms HLT timeout tail. */
     KeSetEvent(&State->RxPendingEvent, IO_NETWORK_INCREMENT, FALSE);
+    KeSetEvent(&State->OwnerVm->Vcpu.HaltWakeEvent, IO_NO_INCREMENT, FALSE);
 
 #if defined(ROSV_ENABLE_TRACE) && (ROSV_ENABLE_TRACE != 0)
     {
@@ -1715,6 +2162,340 @@ RosvVirtioNetInjectRxPacket(
     return TRUE;
 }
 
+/* ---- Dynamic ring resize ------------------------------------------------ */
+
+/*
+ * Allocate a ring buffer of the given entry count.
+ * Returns NULL on failure. Tag distinguishes TX ('tRvR') from RX ('rRvR').
+ */
+static PROSV_VIRTIO_NET_TX_ENTRY
+RosvVirtioNetAllocRing(
+    _In_ ULONG EntryCount,
+    _In_ ULONG Tag)
+{
+    SIZE_T Bytes = (SIZE_T)EntryCount * sizeof(ROSV_VIRTIO_NET_TX_ENTRY);
+    PROSV_VIRTIO_NET_TX_ENTRY Ring;
+
+    Ring = (PROSV_VIRTIO_NET_TX_ENTRY)ExAllocatePoolWithTag(NonPagedPool, Bytes, Tag);
+    if (Ring != NULL)
+        RtlZeroMemory(Ring, Bytes);
+    return Ring;
+}
+
+/*
+ * Attempt to resize a ring (TX or RX). Called from the DPC timer callback
+ * at DISPATCH_LEVEL. A fresh ring is allocated first, then swapped in under
+ * the spin lock. If the old ring still has live entries, it becomes a
+ * drain-only ring and is freed after consumers retire it.
+ *
+ * Returns TRUE if resize happened.
+ */
+static BOOLEAN
+RosvVirtioNetResizeRing(
+    _Inout_ PROSV_VIRTIO_NET_TX_ENTRY *RingPtr,
+    _Inout_ PULONG Capacity,
+    _Inout_ PULONG Head,
+    _Inout_ PULONG Tail,
+    _Inout_ PULONG Count,
+    _Inout_ PROSV_VIRTIO_NET_TX_ENTRY *DrainRingPtr,
+    _Inout_ PULONG DrainCapacity,
+    _Inout_ PULONG DrainTail,
+    _Inout_ PULONG DrainCount,
+    _In_ PKSPIN_LOCK Lock,
+    _In_ ULONG NewCapacity,
+    _In_ ULONG Tag,
+    _In_ const char *Name)
+{
+    PROSV_VIRTIO_NET_TX_ENTRY NewRing;
+    PROSV_VIRTIO_NET_TX_ENTRY OldRing;
+    ULONG OldCapacity;
+    ULONG OldTail;
+    ULONG OldCount;
+    KIRQL OldIrql;
+
+    /* Validate power-of-2 and bounds */
+    if ((NewCapacity & (NewCapacity - 1)) != 0 ||
+        NewCapacity < ROSV_VIRTIO_NET_RING_SIZE_MIN ||
+        NewCapacity > ROSV_VIRTIO_NET_RING_SIZE_MAX)
+    {
+        return FALSE;
+    }
+
+    /* Pre-allocate before taking the lock */
+    NewRing = RosvVirtioNetAllocRing(NewCapacity, Tag);
+    if (NewRing == NULL)
+    {
+        ROSV_WARN("virtio-net: %s resize alloc failed (%u entries)", Name, NewCapacity);
+        return FALSE;
+    }
+
+    KeAcquireSpinLock(Lock, &OldIrql);
+
+    OldRing = *RingPtr;
+    OldCapacity = *Capacity;
+    OldTail = *Tail;
+    OldCount = *Count;
+
+    if (*DrainRingPtr != NULL ||
+        OldRing == NULL ||
+        OldCapacity == NewCapacity)
+    {
+        KeReleaseSpinLock(Lock, OldIrql);
+        ExFreePoolWithTag(NewRing, Tag);
+        return FALSE;
+    }
+
+    *RingPtr = NewRing;
+    *Capacity = NewCapacity;
+    *Head = 0;
+    *Tail = 0;
+    *Count = 0;
+
+    if (OldCount > 0)
+    {
+        *DrainRingPtr = OldRing;
+        *DrainCapacity = OldCapacity;
+        *DrainTail = OldTail;
+        *DrainCount = OldCount;
+        OldRing = NULL;
+    }
+
+    KeReleaseSpinLock(Lock, OldIrql);
+
+    if (OldRing != NULL)
+        ExFreePoolWithTag(OldRing, Tag);
+
+    if (OldCount > 0)
+    {
+        ROSV_TRACE("virtio-net: %s resized %u -> %u (draining %u entries)",
+                   Name, OldCapacity, NewCapacity, OldCount);
+    }
+    else
+    {
+        ROSV_TRACE("virtio-net: %s resized %u -> %u (idle swap)",
+                   Name, OldCapacity, NewCapacity);
+    }
+    return TRUE;
+}
+
+/*
+ * DPC callback invoked every 1 second by the ring resize timer.
+ * Checks TX and RX ring occupancy (pair 0) and triggers grow/shrink as needed.
+ *
+ * Runs at DISPATCH_LEVEL. Allocation from NonPagedPool is safe here.
+ */
+static
+KDEFERRED_ROUTINE RosvVirtioNetRingResizeDpcRoutine;
+
+static
+VOID
+NTAPI
+RosvVirtioNetRingResizeDpcRoutine(
+    _In_ PKDPC Dpc,
+    _In_opt_ PVOID DeferredContext,
+    _In_opt_ PVOID SystemArgument1,
+    _In_opt_ PVOID SystemArgument2)
+{
+    PROSV_VIRTIO_NET_STATE State = (PROSV_VIRTIO_NET_STATE)DeferredContext;
+    PROSV_VIRTIO_NET_QUEUE_PAIR Pair;
+    ULONG TxCount, TxCap, RxCount, RxCap;
+    ULONG TxPct, RxPct;
+    BOOLEAN TxDrainPending, RxDrainPending;
+
+    UNREFERENCED_PARAMETER(Dpc);
+    UNREFERENCED_PARAMETER(SystemArgument1);
+    UNREFERENCED_PARAMETER(SystemArgument2);
+
+    if (State == NULL)
+        return;
+
+    /* Operate on pair 0 for now (future: iterate all active pairs) */
+    Pair = &State->QueuePairs[0];
+
+    /* Snapshot current ring state (no lock needed for read of ULONG on x64;
+     * worst case we see a slightly stale value, which is fine for heuristics). */
+    KeMemoryBarrier();
+    TxCount = Pair->TxRingCount;
+    TxCap   = Pair->TxRingCapacity;
+    RxCount = Pair->RxRingCount;
+    RxCap   = Pair->RxRingCapacity;
+    TxDrainPending = (Pair->TxDrainRing != NULL);
+    RxDrainPending = (Pair->RxDrainRing != NULL);
+
+    /* Update high watermarks (relaxed, for stats only) */
+    if (TxCount > State->TxRingHighWatermark)
+        State->TxRingHighWatermark = TxCount;
+    if (RxCount > State->RxRingHighWatermark)
+        State->RxRingHighWatermark = RxCount;
+
+    /* ---- TX ring resize decision ---- */
+    TxPct = (TxCap > 0) ? (TxCount * 100 / TxCap) : 0;
+
+    if (TxDrainPending)
+    {
+        State->TxGrowCounter = 0;
+        State->TxShrinkCounter = 0;
+    }
+    else if (TxPct > ROSV_VIRTIO_NET_RING_GROW_PCT)
+    {
+        State->TxShrinkCounter = 0;
+        State->TxGrowCounter++;
+        if (State->TxGrowCounter >= ROSV_VIRTIO_NET_RING_GROW_CHECKS &&
+            TxCap < ROSV_VIRTIO_NET_RING_SIZE_MAX)
+        {
+            ULONG NewCap = TxCap * 2;
+            if (NewCap > ROSV_VIRTIO_NET_RING_SIZE_MAX)
+                NewCap = ROSV_VIRTIO_NET_RING_SIZE_MAX;
+
+            if (RosvVirtioNetResizeRing(
+                    &Pair->TxRing, &Pair->TxRingCapacity,
+                    &Pair->TxRingHead, &Pair->TxRingTail,
+                    &Pair->TxRingCount,
+                    &Pair->TxDrainRing, &Pair->TxDrainCapacity,
+                    &Pair->TxDrainTail, &Pair->TxDrainCount,
+                    &Pair->TxRingLock,
+                    NewCap, 'tRvR', "TX"))
+            {
+                State->RingResizeCount++;
+            }
+            State->TxGrowCounter = 0;
+        }
+    }
+    else if (TxPct < ROSV_VIRTIO_NET_RING_SHRINK_PCT)
+    {
+        State->TxGrowCounter = 0;
+        State->TxShrinkCounter++;
+        if (State->TxShrinkCounter >= ROSV_VIRTIO_NET_RING_SHRINK_SECS &&
+            TxCap > ROSV_VIRTIO_NET_TX_RING_SHRINK_FLOOR)
+        {
+            ULONG NewCap = TxCap / 2;
+            if (NewCap < ROSV_VIRTIO_NET_TX_RING_SHRINK_FLOOR)
+                NewCap = ROSV_VIRTIO_NET_TX_RING_SHRINK_FLOOR;
+
+            if (RosvVirtioNetResizeRing(
+                    &Pair->TxRing, &Pair->TxRingCapacity,
+                    &Pair->TxRingHead, &Pair->TxRingTail,
+                    &Pair->TxRingCount,
+                    &Pair->TxDrainRing, &Pair->TxDrainCapacity,
+                    &Pair->TxDrainTail, &Pair->TxDrainCount,
+                    &Pair->TxRingLock,
+                    NewCap, 'tRvR', "TX"))
+            {
+                State->RingResizeCount++;
+            }
+            State->TxShrinkCounter = 0;
+        }
+    }
+    else
+    {
+        /* Occupancy in the neutral zone: reset both counters */
+        State->TxGrowCounter = 0;
+        State->TxShrinkCounter = 0;
+    }
+
+    /* ---- RX ring resize decision ---- */
+    RxPct = (RxCap > 0) ? (RxCount * 100 / RxCap) : 0;
+
+    if (RxDrainPending)
+    {
+        State->RxGrowCounter = 0;
+        State->RxShrinkCounter = 0;
+    }
+    else if (RxPct > ROSV_VIRTIO_NET_RING_GROW_PCT)
+    {
+        State->RxShrinkCounter = 0;
+        State->RxGrowCounter++;
+        if (State->RxGrowCounter >= ROSV_VIRTIO_NET_RING_GROW_CHECKS &&
+            RxCap < ROSV_VIRTIO_NET_RING_SIZE_MAX)
+        {
+            ULONG NewCap = RxCap * 2;
+            if (NewCap > ROSV_VIRTIO_NET_RING_SIZE_MAX)
+                NewCap = ROSV_VIRTIO_NET_RING_SIZE_MAX;
+
+            if (RosvVirtioNetResizeRing(
+                    &Pair->RxRing, &Pair->RxRingCapacity,
+                    &Pair->RxRingHead, &Pair->RxRingTail,
+                    &Pair->RxRingCount,
+                    &Pair->RxDrainRing, &Pair->RxDrainCapacity,
+                    &Pair->RxDrainTail, &Pair->RxDrainCount,
+                    &Pair->RxLock,
+                    NewCap, 'rRvR', "RX"))
+            {
+                State->RingResizeCount++;
+            }
+            State->RxGrowCounter = 0;
+        }
+    }
+    else if (RxPct < ROSV_VIRTIO_NET_RING_SHRINK_PCT)
+    {
+        State->RxGrowCounter = 0;
+        State->RxShrinkCounter++;
+        if (State->RxShrinkCounter >= ROSV_VIRTIO_NET_RING_SHRINK_SECS &&
+            RxCap > ROSV_VIRTIO_NET_RING_SIZE_MIN)
+        {
+            ULONG NewCap = RxCap / 2;
+            if (NewCap < ROSV_VIRTIO_NET_RING_SIZE_MIN)
+                NewCap = ROSV_VIRTIO_NET_RING_SIZE_MIN;
+
+            if (RosvVirtioNetResizeRing(
+                    &Pair->RxRing, &Pair->RxRingCapacity,
+                    &Pair->RxRingHead, &Pair->RxRingTail,
+                    &Pair->RxRingCount,
+                    &Pair->RxDrainRing, &Pair->RxDrainCapacity,
+                    &Pair->RxDrainTail, &Pair->RxDrainCount,
+                    &Pair->RxLock,
+                    NewCap, 'rRvR', "RX"))
+            {
+                State->RingResizeCount++;
+            }
+            State->RxShrinkCounter = 0;
+        }
+    }
+    else
+    {
+        State->RxGrowCounter = 0;
+        State->RxShrinkCounter = 0;
+    }
+}
+
+VOID
+RosvVirtioNetStartResizeTimer(
+    _Inout_ PROSV_VIRTIO_NET_STATE State)
+{
+    LARGE_INTEGER DueTime;
+
+    if (State->RingResizeTimerActive)
+        return;
+
+    KeInitializeTimer(&State->RingResizeTimer);
+    KeInitializeDpc(&State->RingResizeDpc,
+                    RosvVirtioNetRingResizeDpcRoutine,
+                    State);
+
+    /* Period = 1 second. DueTime is relative (negative = relative in 100ns units). */
+    DueTime.QuadPart = -10000000LL;  /* -1 second */
+    KeSetTimerEx(&State->RingResizeTimer,
+                 DueTime,
+                 1000,  /* 1000 ms period */
+                 &State->RingResizeDpc);
+
+    State->RingResizeTimerActive = TRUE;
+    ROSV_TRACE("virtio-net: ring resize timer started (1-second interval)");
+}
+
+VOID
+RosvVirtioNetStopResizeTimer(
+    _Inout_ PROSV_VIRTIO_NET_STATE State)
+{
+    if (!State->RingResizeTimerActive)
+        return;
+
+    KeCancelTimer(&State->RingResizeTimer);
+    KeFlushQueuedDpcs();
+    State->RingResizeTimerActive = FALSE;
+    ROSV_TRACE("virtio-net: ring resize timer stopped");
+}
+
 /* ---- Initialization and lifecycle --------------------------------------- */
 
 NTSTATUS
@@ -1723,6 +2504,8 @@ RosvVirtioNetInitialize(
     _In_ PROSV_VM Vm,
     _In_reads_(6) const UCHAR *MacAddress)
 {
+    ULONG i;
+
     RtlZeroMemory(State, sizeof(ROSV_VIRTIO_NET_STATE));
     KeQueryPerformanceCounter(&State->PerfFrequency);
     if (State->PerfFrequency.QuadPart <= 0)
@@ -1730,12 +2513,29 @@ RosvVirtioNetInitialize(
 
     State->OwnerVm = Vm;
 
-    /* Set device features:
-     * - VERSION_1: required for virtio 1.0
-     * - MAC: device provides a MAC address in config space
-     * - STATUS: config space has link status field
-     * We intentionally do NOT offer MRG_RXBUF, CTRL_VQ, MQ, CSUM, or GSO
-     * features to keep the implementation simple. */
+    /* Multi-queue setup: advertise ROSV_NET_MAX_QUEUE_PAIRS TX/RX pairs.
+     * When the guest negotiates VIRTIO_NET_F_MQ, it reads MaxVirtqueuePairs
+     * from config space and activates up to that many pairs.
+     * Without MQ negotiation, only pair 0 (queues 0/1) is used. */
+    /* TODO: Enable multi-queue (ROSV_NET_MAX_QUEUE_PAIRS) once MQ config space
+     * layout, per-pair QUEUE_NOTIFY dispatch, and round-robin TX dequeue are
+     * validated against the Linux virtio-net driver. The infrastructure is in
+     * place (QueuePairs[], pair-indexed ProcessTxQueue/InjectToRxQueue) but
+     * advertising VIRTIO_NET_F_MQ broke guest driver init. */
+    State->NumQueuePairs = 1;
+
+    /* Set device features.
+     *
+     * TODO: Re-enable these once the backend properly handles them:
+     *   - VIRTIO_NET_F_CSUM: need RosvVirtioNetFinalizeCsum() to compute
+     *     partial checksum at [CsumStart..end] and write at CsumStart+CsumOffset.
+     *     Also set VIRTIO_NET_HDR_F_DATA_VALID on RX inject.
+     *   - VIRTIO_NET_F_GUEST_CSUM: requires CSUM to be working first.
+     *   - VIRTIO_NET_F_HOST_TSO4/TSO6: need RosvVirtioNetSegmentTso() to split
+     *     large TCP segments by MSS. Backend must accept >MTU payloads via WSK.
+     *     Also needs TsoGatherBuf (64KB) allocation in init.
+     *   - VIRTIO_NET_F_MQ: see NumQueuePairs TODO above. Config space must
+     *     expose MaxVirtqueuePairs at the correct offset per virtio spec. */
     State->DeviceFeatures = VIRTIO_F_VERSION_1 |
                             VIRTIO_NET_F_MAC |
                             VIRTIO_NET_F_STATUS;
@@ -1743,44 +2543,122 @@ RosvVirtioNetInitialize(
     /* Build device configuration */
     RtlCopyMemory(State->Config.Mac, MacAddress, 6);
     State->Config.Status = VIRTIO_NET_S_LINK_UP;
-    State->Config.MaxVirtqueuePairs = 1;  /* Single TX/RX pair */
+    State->Config.MaxVirtqueuePairs = (USHORT)State->NumQueuePairs;
     State->Config.Mtu = 1500;
 
-    /* Initialize spin locks */
-    KeInitializeSpinLock(&State->TxRingLock);
-    ExInitializeFastMutex(&State->TxQueueMutex);
-    KeInitializeSpinLock(&State->RxLock);
-    ExInitializeFastMutex(&State->RxQueueMutex);
+    /* Initialize shared locks and events */
     KeInitializeSpinLock(&State->InterruptLock);
-
-    /* Initialize TX ring and ready event */
-    State->TxRingHead = 0;
-    State->TxRingTail = 0;
-    State->TxRingCount = 0;
-    State->TxBackpressure = FALSE;
     KeInitializeEvent(&State->TxReadyEvent, SynchronizationEvent, FALSE);
-
-    /* Initialize RX ring buffer */
-    State->RxRingHead = 0;
-    State->RxRingTail = 0;
-    State->RxRingCount = 0;
     KeInitializeEvent(&State->RxPendingEvent, SynchronizationEvent, FALSE);
 
-    /* Initialize interrupt coalescing — disabled by default (inject every packet) */
+    /* Initialize active queue-pair state.
+     * Only queue pairs exposed to the guest allocate ring buffers.
+     * The resize timer can grow/shrink pair 0's rings at runtime. */
+    for (i = 0; i < State->NumQueuePairs; i++)
+    {
+        PROSV_VIRTIO_NET_QUEUE_PAIR Pair = &State->QueuePairs[i];
+
+        KeInitializeSpinLock(&Pair->TxRingLock);
+        ExInitializeFastMutex(&Pair->TxQueueMutex);
+        KeInitializeSpinLock(&Pair->RxLock);
+        ExInitializeFastMutex(&Pair->RxQueueMutex);
+
+        Pair->TxRingHead = 0;
+        Pair->TxRingTail = 0;
+        Pair->TxRingCount = 0;
+        Pair->TxDrainRing = NULL;
+        Pair->TxDrainCapacity = 0;
+        Pair->TxDrainTail = 0;
+        Pair->TxDrainCount = 0;
+        Pair->TxBackpressure = FALSE;
+        Pair->RxRingHead = 0;
+        Pair->RxRingTail = 0;
+        Pair->RxRingCount = 0;
+        Pair->RxDrainRing = NULL;
+        Pair->RxDrainCapacity = 0;
+        Pair->RxDrainTail = 0;
+        Pair->RxDrainCount = 0;
+
+        /* Dynamically allocate TX ring at initial size */
+        Pair->TxRingCapacity = ROSV_VIRTIO_NET_RING_SIZE_INIT;
+        Pair->TxRing = RosvVirtioNetAllocRing(Pair->TxRingCapacity, 'tRvR');
+        if (Pair->TxRing == NULL)
+        {
+            ROSV_ERR("virtio-net: failed to allocate TX ring for pair %u (%u entries)",
+                     i, Pair->TxRingCapacity);
+            return STATUS_INSUFFICIENT_RESOURCES;
+        }
+
+        /* Dynamically allocate RX ring at initial size */
+        Pair->RxRingCapacity = ROSV_VIRTIO_NET_RING_SIZE_INIT;
+        Pair->RxRing = RosvVirtioNetAllocRing(Pair->RxRingCapacity, 'rRvR');
+        if (Pair->RxRing == NULL)
+        {
+            ROSV_ERR("virtio-net: failed to allocate RX ring for pair %u (%u entries)",
+                     i, Pair->RxRingCapacity);
+            ExFreePoolWithTag(Pair->TxRing, 'tRvR');
+            Pair->TxRing = NULL;
+            return STATUS_INSUFFICIENT_RESOURCES;
+        }
+    }
+
+    /* Initialize resize counters and stats */
+    State->TxGrowCounter = 0;
+    State->TxShrinkCounter = 0;
+    State->RxGrowCounter = 0;
+    State->RxShrinkCounter = 0;
+    State->TxRingHighWatermark = 0;
+    State->RxRingHighWatermark = 0;
+    State->RingResizeCount = 0;
+    State->RingResizeTimerActive = FALSE;
+
+    /* Allocate TSO scratch buffers for GSO packet gathering and segmentation */
+    State->TsoGatherBuf = (PUCHAR)ExAllocatePoolWithTag(NonPagedPool,
+                                                         ROSV_VIRTIO_NET_TSO_MAX_PACKET,
+                                                         'gTvR');
+    State->TsoSegBuf = (PUCHAR)ExAllocatePoolWithTag(NonPagedPool,
+                                                      ROSV_VIRTIO_NET_MAX_PACKET,
+                                                      'sTvR');
+    if (State->TsoGatherBuf == NULL || State->TsoSegBuf == NULL)
+    {
+        ROSV_WARN("virtio-net: TSO buffer allocation failed, GSO will be disabled");
+        if (State->TsoGatherBuf != NULL)
+        {
+            ExFreePoolWithTag(State->TsoGatherBuf, 'gTvR');
+            State->TsoGatherBuf = NULL;
+        }
+        if (State->TsoSegBuf != NULL)
+        {
+            ExFreePoolWithTag(State->TsoSegBuf, 'sTvR');
+            State->TsoSegBuf = NULL;
+        }
+    }
+
+    /* Initialize interrupt coalescing.
+     * Batch up to 12 RX packets per interrupt, with a 75 us timer-based flush
+     * to bound latency when traffic is light. Both QEMU and VBox coalesce
+     * interrupts similarly. A halted guest is always woken immediately
+     * (see RosvVirtioNetShouldInjectIrq). */
     State->IrqCoalesce.PendingCount = 0;
     State->IrqCoalesce.LastIrqQpc = 0;
-    State->IrqCoalesce.CoalesceMaxPackets = 1;  /* 1 = no coalescing */
-    State->IrqCoalesce.CoalesceMaxUsec = 0;     /* 0 = no time limit */
+    State->IrqCoalesce.CoalesceMaxPackets = 12;
+    State->IrqCoalesce.CoalesceMaxUsec = 75;
+
+    /* Start the periodic ring resize timer */
+    RosvVirtioNetStartResizeTimer(State);
 
     ROSV_ERR("virtio-net: initialized at MMIO 0x%llX-0x%llX, IRQ %u, "
-             "MAC=%02X:%02X:%02X:%02X:%02X:%02X, features=0x%llX, qpc_freq=%lld",
+             "MAC=%02X:%02X:%02X:%02X:%02X:%02X, features=0x%llX, "
+             "num_queue_pairs=%u, qpc_freq=%lld, ring_init=%u",
              ROSV_VIRTIO_NET_MMIO_BASE,
              ROSV_VIRTIO_NET_MMIO_BASE + ROSV_VIRTIO_NET_MMIO_SIZE - 1,
              ROSV_VIRTIO_NET_IRQ,
              MacAddress[0], MacAddress[1], MacAddress[2],
              MacAddress[3], MacAddress[4], MacAddress[5],
              State->DeviceFeatures,
-             State->PerfFrequency.QuadPart);
+             State->NumQueuePairs,
+             State->PerfFrequency.QuadPart,
+             ROSV_VIRTIO_NET_RING_SIZE_INIT);
 
     return STATUS_SUCCESS;
 }
@@ -1789,11 +2667,58 @@ VOID
 RosvVirtioNetDestroy(
     _Inout_ PROSV_VIRTIO_NET_STATE State)
 {
+    ULONG i;
+
     ROSV_ERR("virtio-net: destroy (tx=%llu/%llu bytes, rx=%llu/%llu bytes, "
-             "tx_drops=%u, rx_drops=%u)",
+             "tx_drops=%u, rx_drops=%u, num_queue_pairs=%u, "
+             "tx_hwm=%u, rx_hwm=%u, resizes=%u)",
              State->TxPackets, State->TxBytes,
              State->RxPackets, State->RxBytes,
-             State->TxDropCount, State->RxDropCount);
+             State->TxDropCount, State->RxDropCount,
+             State->NumQueuePairs,
+             State->TxRingHighWatermark, State->RxRingHighWatermark,
+             State->RingResizeCount);
+
+    /* Stop the ring resize timer before freeing ring buffers */
+    RosvVirtioNetStopResizeTimer(State);
+
+    /* Free TSO scratch buffers */
+    if (State->TsoGatherBuf != NULL)
+    {
+        ExFreePoolWithTag(State->TsoGatherBuf, 'gTvR');
+        State->TsoGatherBuf = NULL;
+    }
+    if (State->TsoSegBuf != NULL)
+    {
+        ExFreePoolWithTag(State->TsoSegBuf, 'sTvR');
+        State->TsoSegBuf = NULL;
+    }
+
+    /* Free dynamically allocated ring buffers for all pairs */
+    for (i = 0; i < ROSV_NET_MAX_QUEUE_PAIRS; i++)
+    {
+        PROSV_VIRTIO_NET_QUEUE_PAIR Pair = &State->QueuePairs[i];
+        if (Pair->TxRing != NULL)
+        {
+            ExFreePoolWithTag(Pair->TxRing, 'tRvR');
+            Pair->TxRing = NULL;
+        }
+        if (Pair->TxDrainRing != NULL)
+        {
+            ExFreePoolWithTag(Pair->TxDrainRing, 'tRvR');
+            Pair->TxDrainRing = NULL;
+        }
+        if (Pair->RxRing != NULL)
+        {
+            ExFreePoolWithTag(Pair->RxRing, 'rRvR');
+            Pair->RxRing = NULL;
+        }
+        if (Pair->RxDrainRing != NULL)
+        {
+            ExFreePoolWithTag(Pair->RxDrainRing, 'rRvR');
+            Pair->RxDrainRing = NULL;
+        }
+    }
 
     RtlZeroMemory(State, sizeof(ROSV_VIRTIO_NET_STATE));
 }
@@ -1804,8 +2729,9 @@ BOOLEAN
 RosvVirtioNetRxRingHasSpace(
     _In_ PROSV_VIRTIO_NET_STATE State)
 {
+    /* Check pair 0 (host-side RX injection targets pair 0) */
     BOOLEAN HasSpace;
     KeMemoryBarrier();
-    HasSpace = (State->RxRingCount < ROSV_VIRTIO_NET_RX_RING_SIZE);
+    HasSpace = (State->QueuePairs[0].RxRingCount < State->QueuePairs[0].RxRingCapacity);
     return HasSpace;
 }

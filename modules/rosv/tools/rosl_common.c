@@ -29,6 +29,7 @@ ULONG g_ReaderIndex = 0;
 ULONG g_VconPort = 0;           /* Virtio-console port index (--vcon N) */
 ULONG g_AttachSessionId = (ULONG)-1;
 BOOL g_ForceService = FALSE;
+BOOL g_SelfTestMode = FALSE;
 USHORT g_InitialRows = 0;   /* 0 = auto-detect */
 USHORT g_InitialCols = 0;   /* 0 = auto-detect */
 const char *g_DiskImagePath = NULL; /* --disk <path> */

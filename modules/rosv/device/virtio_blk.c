@@ -64,6 +64,22 @@ RosvAreInterruptsEnabled(
 #endif
 }
 
+/*
+ * Check if a descriptor index has already been visited in a chain walk.
+ * Returns TRUE if a cycle is detected (index already visited), FALSE otherwise.
+ * VisitedBitmap must be at least 32 bytes (256 bits) and zeroed before the walk.
+ */
+FORCEINLINE BOOLEAN
+RosvVirtqueueCheckAndMarkVisited(
+    _Inout_updates_(32) PUCHAR VisitedBitmap,
+    _In_ USHORT Index)
+{
+    if (VisitedBitmap[Index / 8] & (1 << (Index % 8)))
+        return TRUE;   /* Cycle detected */
+    VisitedBitmap[Index / 8] |= (1 << (Index % 8));
+    return FALSE;
+}
+
 static
 NTSTATUS
 RosvVirtioBlkDemandReadDirect(
@@ -1255,6 +1271,7 @@ RosvVirtioBlkWriteStatus(
 static ULONG
 RosvVirtioBlkProcessRequest(
     _Inout_ PROSV_VIRTIO_BLK_STATE State,
+    _In_ PROSV_VIRTQUEUE Vq,
     _In_ USHORT HeadIdx)
 {
     PROSV_VM Vm = State->OwnerVm;
@@ -1269,7 +1286,7 @@ RosvVirtioBlkProcessRequest(
     ULONG ChainDepth = 0;
 
     /* Step 1: Read the header descriptor */
-    if (!RosvVirtqueueReadDesc(Vm, &State->Vq, HeadIdx, &Desc))
+    if (!RosvVirtqueueReadDesc(Vm, Vq, HeadIdx, &Desc))
     {
         ROSV_ERR("virtio-blk: failed to read header descriptor at index %u", HeadIdx);
         return 0;
@@ -1319,12 +1336,12 @@ RosvVirtioBlkProcessRequest(
         CurrentIdx = Desc.Next;
         ChainDepth = 0;
 
-        while (ChainDepth < State->Vq.Num)
+        while (ChainDepth < Vq->Num)
         {
             /* Check for descriptor chain cycle */
-            if (CurrentIdx >= State->Vq.Num)
+            if (CurrentIdx >= Vq->Num)
             {
-                ROSV_ERR("VirtIO-blk: descriptor index %u out of range (max %u)", CurrentIdx, State->Vq.Num);
+                ROSV_ERR("VirtIO-blk: descriptor index %u out of range (max %u)", CurrentIdx, Vq->Num);
                 break;
             }
             if (VisitedBitmapRead[CurrentIdx / 8] & (1 << (CurrentIdx % 8)))
@@ -1334,7 +1351,7 @@ RosvVirtioBlkProcessRequest(
             }
             VisitedBitmapRead[CurrentIdx / 8] |= (1 << (CurrentIdx % 8));
 
-            if (!RosvVirtqueueReadDesc(Vm, &State->Vq, CurrentIdx, &Desc))
+            if (!RosvVirtqueueReadDesc(Vm, Vq, CurrentIdx, &Desc))
             {
                 ROSV_ERR("virtio-blk: failed to read data descriptor at index %u", CurrentIdx);
                 StatusByte = VIRTIO_BLK_S_IOERR;
@@ -1409,9 +1426,9 @@ RosvVirtioBlkProcessRequest(
             ChainDepth++;
         }
 
-        if (ChainDepth >= State->Vq.Num)
+        if (ChainDepth >= Vq->Num)
         {
-            ROSV_ERR("virtio-blk: descriptor chain too long (>%u)", State->Vq.Num);
+            ROSV_ERR("virtio-blk: descriptor chain too long (>%u)", Vq->Num);
         }
         break;
     }
@@ -1440,12 +1457,12 @@ RosvVirtioBlkProcessRequest(
         CurrentIdx = Desc.Next;
         ChainDepth = 0;
 
-        while (ChainDepth < State->Vq.Num)
+        while (ChainDepth < Vq->Num)
         {
             /* Check for descriptor chain cycle */
-            if (CurrentIdx >= State->Vq.Num)
+            if (CurrentIdx >= Vq->Num)
             {
-                ROSV_ERR("VirtIO-blk: descriptor index %u out of range (max %u)", CurrentIdx, State->Vq.Num);
+                ROSV_ERR("VirtIO-blk: descriptor index %u out of range (max %u)", CurrentIdx, Vq->Num);
                 break;
             }
             if (VisitedBitmapWrite[CurrentIdx / 8] & (1 << (CurrentIdx % 8)))
@@ -1455,7 +1472,7 @@ RosvVirtioBlkProcessRequest(
             }
             VisitedBitmapWrite[CurrentIdx / 8] |= (1 << (CurrentIdx % 8));
 
-            if (!RosvVirtqueueReadDesc(Vm, &State->Vq, CurrentIdx, &Desc))
+            if (!RosvVirtqueueReadDesc(Vm, Vq, CurrentIdx, &Desc))
             {
                 ROSV_ERR("virtio-blk: failed to read write-data descriptor at index %u", CurrentIdx);
                 StatusByte = VIRTIO_BLK_S_IOERR;
@@ -1534,7 +1551,7 @@ RosvVirtioBlkProcessRequest(
     case VIRTIO_BLK_T_GET_ID: /* Get device ID string */
     {
         CurrentIdx = Desc.Next;
-        if (!RosvVirtqueueReadDesc(Vm, &State->Vq, CurrentIdx, &Desc))
+        if (!RosvVirtqueueReadDesc(Vm, Vq, CurrentIdx, &Desc))
         {
             ROSV_ERR("virtio-blk: failed to read GET_ID data descriptor");
             return 0;
@@ -1588,7 +1605,7 @@ RosvVirtioBlkProcessRequest(
         if (Desc.Flags & VRING_DESC_F_NEXT)
         {
             CurrentIdx = Desc.Next;
-            if (RosvVirtqueueReadDesc(Vm, &State->Vq, CurrentIdx, &Desc))
+            if (RosvVirtqueueReadDesc(Vm, Vq, CurrentIdx, &Desc))
             {
                 if (Desc.Len >= 1 && (Desc.Flags & VRING_DESC_F_WRITE))
                 {
@@ -1618,12 +1635,12 @@ RosvVirtioBlkProcessRequest(
          */
         /* Walk to status descriptor */
         CurrentIdx = Desc.Next;
-        while (ChainDepth < State->Vq.Num)
+        while (ChainDepth < Vq->Num)
         {
             /* Check for descriptor chain cycle */
-            if (CurrentIdx >= State->Vq.Num)
+            if (CurrentIdx >= Vq->Num)
             {
-                ROSV_ERR("VirtIO-blk: descriptor index %u out of range (max %u)", CurrentIdx, State->Vq.Num);
+                ROSV_ERR("VirtIO-blk: descriptor index %u out of range (max %u)", CurrentIdx, Vq->Num);
                 break;
             }
             if (VisitedBitmapFlush[CurrentIdx / 8] & (1 << (CurrentIdx % 8)))
@@ -1633,7 +1650,7 @@ RosvVirtioBlkProcessRequest(
             }
             VisitedBitmapFlush[CurrentIdx / 8] |= (1 << (CurrentIdx % 8));
 
-            if (!RosvVirtqueueReadDesc(Vm, &State->Vq, CurrentIdx, &Desc))
+            if (!RosvVirtqueueReadDesc(Vm, Vq, CurrentIdx, &Desc))
                 break;
             if (!(Desc.Flags & VRING_DESC_F_NEXT))
             {
@@ -1668,12 +1685,12 @@ RosvVirtioBlkProcessRequest(
 
         /* Walk to status descriptor and write UNSUPP */
         CurrentIdx = Desc.Next;
-        while (ChainDepth < State->Vq.Num)
+        while (ChainDepth < Vq->Num)
         {
             /* Check for descriptor chain cycle */
-            if (CurrentIdx >= State->Vq.Num)
+            if (CurrentIdx >= Vq->Num)
             {
-                ROSV_ERR("VirtIO-blk: descriptor index %u out of range (max %u)", CurrentIdx, State->Vq.Num);
+                ROSV_ERR("VirtIO-blk: descriptor index %u out of range (max %u)", CurrentIdx, Vq->Num);
                 break;
             }
             if (VisitedBitmapUnsupp[CurrentIdx / 8] & (1 << (CurrentIdx % 8)))
@@ -1683,7 +1700,7 @@ RosvVirtioBlkProcessRequest(
             }
             VisitedBitmapUnsupp[CurrentIdx / 8] |= (1 << (CurrentIdx % 8));
 
-            if (!RosvVirtqueueReadDesc(Vm, &State->Vq, CurrentIdx, &Desc))
+            if (!RosvVirtqueueReadDesc(Vm, Vq, CurrentIdx, &Desc))
                 break;
             if (!(Desc.Flags & VRING_DESC_F_NEXT))
             {
@@ -1711,25 +1728,324 @@ RosvVirtioBlkProcessRequest(
     return BytesWritten;
 }
 
+/* ---- Async request queue helpers ----------------------------------------- */
+
 /**
- * Process all pending requests in the virtqueue.
- * Called when the guest writes to QUEUE_NOTIFY.
+ * Try to enqueue a parsed request into the async ring buffer.
+ * Returns TRUE on success, FALSE if the queue is full.
+ */
+static BOOLEAN
+RosvAsyncQueueEnqueue(
+    _Inout_ PROSV_VIRTIO_BLK_STATE State,
+    _In_ ULONG DescIdx,
+    _In_ ULONG Type,
+    _In_ ULONG64 Sector,
+    _In_ ULONG DataLen,
+    _In_ ULONG64 DataGpa,
+    _In_ ULONG64 StatusGpa)
+{
+    LONG Slot;
+    LONG CurrentCount;
+
+    CurrentCount = InterlockedCompareExchange(&State->AsyncQueue.Count, 0, 0);
+    if (CurrentCount >= ROSV_BLK_ASYNC_QUEUE_SIZE)
+        return FALSE;
+
+    CurrentCount = InterlockedIncrement(&State->AsyncQueue.Count);
+    if (CurrentCount > ROSV_BLK_ASYNC_QUEUE_SIZE)
+    {
+        InterlockedDecrement(&State->AsyncQueue.Count);
+        return FALSE;
+    }
+
+    Slot = InterlockedIncrement(&State->AsyncQueue.Head) - 1;
+    Slot = Slot % ROSV_BLK_ASYNC_QUEUE_SIZE;
+    if (Slot < 0)
+        Slot += ROSV_BLK_ASYNC_QUEUE_SIZE;
+
+    State->AsyncQueue.Entries[Slot].DescIdx = DescIdx;
+    State->AsyncQueue.Entries[Slot].Type = Type;
+    State->AsyncQueue.Entries[Slot].Sector = Sector;
+    State->AsyncQueue.Entries[Slot].DataLen = DataLen;
+    State->AsyncQueue.Entries[Slot].DataGpa = DataGpa;
+    State->AsyncQueue.Entries[Slot].StatusGpa = StatusGpa;
+
+    KeMemoryBarrier();
+    return TRUE;
+}
+
+/**
+ * Dequeue one request from the async ring buffer.
+ * Returns TRUE if an entry was available, FALSE if empty.
+ */
+static BOOLEAN
+RosvAsyncQueueDequeue(
+    _Inout_ PROSV_VIRTIO_BLK_STATE State,
+    _Out_ PULONG DescIdx,
+    _Out_ PULONG Type,
+    _Out_ PULONG64 Sector,
+    _Out_ PULONG DataLen,
+    _Out_ PULONG64 DataGpa,
+    _Out_ PULONG64 StatusGpa)
+{
+    LONG Slot;
+    LONG CurrentCount;
+
+    CurrentCount = InterlockedCompareExchange(&State->AsyncQueue.Count, 0, 0);
+    if (CurrentCount <= 0)
+        return FALSE;
+
+    KeMemoryBarrier();
+
+    Slot = InterlockedIncrement(&State->AsyncQueue.Tail) - 1;
+    Slot = Slot % ROSV_BLK_ASYNC_QUEUE_SIZE;
+    if (Slot < 0)
+        Slot += ROSV_BLK_ASYNC_QUEUE_SIZE;
+
+    *DescIdx = State->AsyncQueue.Entries[Slot].DescIdx;
+    *Type = State->AsyncQueue.Entries[Slot].Type;
+    *Sector = State->AsyncQueue.Entries[Slot].Sector;
+    *DataLen = State->AsyncQueue.Entries[Slot].DataLen;
+    *DataGpa = State->AsyncQueue.Entries[Slot].DataGpa;
+    *StatusGpa = State->AsyncQueue.Entries[Slot].StatusGpa;
+
+    InterlockedDecrement(&State->AsyncQueue.Count);
+    return TRUE;
+}
+
+/**
+ * Raise a used-buffer interrupt. Called by the async worker after a batch.
  */
 static VOID
-RosvVirtioBlkProcessQueue(
+RosvAsyncRaiseInterrupt(
     _Inout_ PROSV_VIRTIO_BLK_STATE State)
 {
     PROSV_VM Vm = State->OwnerVm;
-    PROSV_VIRTQUEUE Vq = &State->Vq;
+    if (Vm == NULL)
+        return;
+
+    KeMemoryBarrier();
+
+    State->InterruptStatus |= VIRTIO_INT_VRING;
+    State->InterruptPending = TRUE;
+    KeSetEvent(&Vm->Vcpu.HaltWakeEvent, IO_NO_INCREMENT, FALSE);
+}
+
+/**
+ * Async worker thread. Waits for WorkAvailable, drains all queued requests,
+ * pushes used-ring completions, and raises a single batched interrupt.
+ * Runs at PASSIVE_LEVEL for demand-paged file I/O compatibility.
+ *
+ * TODO: The demand-paged I/O worker is single-threaded and rejects concurrent
+ * requests with STATUS_DEVICE_BUSY ("demand worker request collision").
+ * This async worker can submit multiple requests in a batch, causing collisions.
+ * Fix: serialize demand-paged reads within this worker (process one request at
+ * a time when the backend is demand-paged), or allow the demand worker to queue
+ * multiple pending requests.
+ */
+static VOID
+RosvVirtioBlkAsyncWorkerThread(
+    _In_ PVOID Context)
+{
+    PROSV_VIRTIO_BLK_STATE State;
+    PROSV_VM Vm;
+    PROSV_VIRTQUEUE Vq;
+    ULONG DescIdx, Type, DataLen, BytesWritten, BatchCount;
+    ULONG64 Sector, DataGpa, StatusGpa;
+
+    State = (PROSV_VIRTIO_BLK_STATE)Context;
+    if (State == NULL)
+    {
+        PsTerminateSystemThread(STATUS_INVALID_PARAMETER);
+        return;
+    }
+
+    Vm = State->OwnerVm;
+    ROSV_TRACE("virtio-blk: async worker thread started");
+
+    for (;;)
+    {
+        KeWaitForSingleObject(&State->AsyncQueue.WorkAvailable,
+                              Executive, KernelMode, FALSE, NULL);
+
+        if (InterlockedCompareExchange(&State->AsyncQueue.Running, 0, 0) == 0)
+            break;
+
+        BatchCount = 0;
+
+        while (RosvAsyncQueueDequeue(State, &DescIdx, &Type, &Sector,
+                                     &DataLen, &DataGpa, &StatusGpa))
+        {
+            /* Use queue 0 as the primary request queue for async processing.
+             * The async path currently handles single-queue mode; multi-queue
+             * async support can store QueueIndex in the entry if needed. */
+            Vq = &State->Vqs[0];
+
+            switch (Type)
+            {
+            case VIRTIO_BLK_T_IN:
+            case VIRTIO_BLK_T_OUT:
+                BytesWritten = RosvVirtioBlkProcessRequest(State, Vq, (USHORT)DescIdx);
+                break;
+            case VIRTIO_BLK_T_FLUSH:
+                BytesWritten = 1;
+                break;
+            case VIRTIO_BLK_T_GET_ID:
+                BytesWritten = DataLen + 1;
+                break;
+            default:
+                BytesWritten = 1;
+                break;
+            }
+
+            if (!RosvVirtqueuePushUsed(Vm, Vq, DescIdx, BytesWritten))
+                ROSV_ERR("virtio-blk: async worker PushUsed failed for desc %u", DescIdx);
+
+            BatchCount++;
+
+            if (InterlockedCompareExchange(&State->AsyncQueue.Running, 0, 0) == 0)
+                break;
+        }
+
+        if (BatchCount > 0)
+            RosvAsyncRaiseInterrupt(State);
+
+        KeSetEvent(&State->AsyncQueue.WorkComplete, IO_NO_INCREMENT, FALSE);
+    }
+
+    ROSV_TRACE("virtio-blk: async worker thread exiting");
+    PsTerminateSystemThread(STATUS_SUCCESS);
+}
+
+/**
+ * Parse a virtio-blk descriptor chain and either enqueue it for async
+ * processing or fall back to synchronous inline processing.
+ */
+static BOOLEAN
+RosvVirtioBlkEnqueueOrProcess(
+    _Inout_ PROSV_VIRTIO_BLK_STATE State,
+    _In_ PROSV_VIRTQUEUE Vq,
+    _In_ USHORT HeadIdx)
+{
+    PROSV_VM Vm = State->OwnerVm;
+    VRING_DESC Desc;
+    VIRTIO_BLK_REQ_HDR Header;
+    NTSTATUS IoStatus;
+    ULONG BytesWritten;
+
+    if (!RosvVirtqueueReadDesc(Vm, Vq, HeadIdx, &Desc))
+        return FALSE;
+    if (Desc.Len < sizeof(VIRTIO_BLK_REQ_HDR))
+        return FALSE;
+
+    IoStatus = RosvMemoryCopyFromGpa(Vm, &Header, Desc.Addr, sizeof(VIRTIO_BLK_REQ_HDR));
+    if (!NT_SUCCESS(IoStatus))
+        return FALSE;
+    if (!(Desc.Flags & VRING_DESC_F_NEXT))
+        return FALSE;
+
+    switch (Header.Type)
+    {
+    case VIRTIO_BLK_T_IN:
+    case VIRTIO_BLK_T_OUT:
+        if (RosvAsyncQueueEnqueue(State, (ULONG)HeadIdx, Header.Type,
+                                  Header.Sector, 0, 0, 0))
+            return TRUE;
+        /* Async queue full: synchronous fallback */
+        BytesWritten = RosvVirtioBlkProcessRequest(State, Vq, HeadIdx);
+        RosvVirtqueuePushUsed(Vm, Vq, (ULONG)HeadIdx, BytesWritten);
+        return TRUE;
+
+    case VIRTIO_BLK_T_FLUSH:
+    {
+        USHORT CurrentIdx = Desc.Next;
+        ULONG ChainDepth = 0;
+        UCHAR Visited[32];
+        BOOLEAN StatusWritten = FALSE;
+
+        RtlZeroMemory(Visited, sizeof(Visited));
+        while (ChainDepth < Vq->Num)
+        {
+            if (CurrentIdx >= Vq->Num)
+                break;
+            if (RosvVirtqueueCheckAndMarkVisited(Visited, CurrentIdx))
+                break;
+            if (!RosvVirtqueueReadDesc(Vm, Vq, CurrentIdx, &Desc))
+                break;
+            if (!(Desc.Flags & VRING_DESC_F_NEXT))
+            {
+                if (Desc.Len >= 1 && (Desc.Flags & VRING_DESC_F_WRITE))
+                {
+                    RosvVirtioBlkWriteStatus(Vm, Desc.Addr, VIRTIO_BLK_S_OK);
+                    StatusWritten = TRUE;
+                }
+                break;
+            }
+            CurrentIdx = Desc.Next;
+            ChainDepth++;
+        }
+
+        if (RosvAsyncQueueEnqueue(State, (ULONG)HeadIdx, VIRTIO_BLK_T_FLUSH, 0, 0, 0, 0))
+            return TRUE;
+        RosvVirtqueuePushUsed(Vm, Vq, (ULONG)HeadIdx, StatusWritten ? 1 : 0);
+        return TRUE;
+    }
+
+    case VIRTIO_BLK_T_GET_ID:
+        BytesWritten = RosvVirtioBlkProcessRequest(State, Vq, HeadIdx);
+        if (RosvAsyncQueueEnqueue(State, (ULONG)HeadIdx, VIRTIO_BLK_T_GET_ID,
+                                  0, BytesWritten > 1 ? BytesWritten - 1 : 0, 0, 0))
+            return TRUE;
+        RosvVirtqueuePushUsed(Vm, Vq, (ULONG)HeadIdx, BytesWritten);
+        return TRUE;
+
+    default:
+        BytesWritten = RosvVirtioBlkProcessRequest(State, Vq, HeadIdx);
+        if (RosvAsyncQueueEnqueue(State, (ULONG)HeadIdx, Header.Type, 0, 0, 0, 0))
+            return TRUE;
+        RosvVirtqueuePushUsed(Vm, Vq, (ULONG)HeadIdx, BytesWritten);
+        return TRUE;
+    }
+}
+
+/**
+ * Process all pending requests in a specific virtqueue.
+ * Called when the guest writes to QUEUE_NOTIFY with the queue index.
+ *
+ * When the async worker is running, IN/OUT requests are enqueued to the
+ * async ring buffer. The worker thread handles I/O and completion.
+ * FLUSH/GET_ID/unsupported types are pre-completed inline.
+ * If the async queue is full, processing falls back to synchronous inline.
+ *
+ * @param QueueIndex  The virtqueue index (0..NumQueues-1) being notified.
+ */
+static VOID
+RosvVirtioBlkProcessQueue(
+    _Inout_ PROSV_VIRTIO_BLK_STATE State,
+    _In_ ULONG QueueIndex)
+{
+    PROSV_VM Vm = State->OwnerVm;
+    PROSV_VIRTQUEUE Vq;
     USHORT AvailIdx;
     USHORT DescIdx;
     ULONG BytesWritten;
     ULONG ProcessedCount = 0;
+    ULONG EnqueuedCount = 0;
     USHORT AvailFlags;
+    BOOLEAN AsyncEnabled;
+
+    if (QueueIndex >= State->NumQueues)
+    {
+        ROSV_WARN("virtio-blk: QUEUE_NOTIFY for queue %u but only %u queues exist",
+                  QueueIndex, State->NumQueues);
+        return;
+    }
+
+    Vq = &State->Vqs[QueueIndex];
 
     if (!Vq->Ready)
     {
-        ROSV_WARN("virtio-blk: QUEUE_NOTIFY but queue not ready");
+        ROSV_WARN("virtio-blk: QUEUE_NOTIFY for queue %u but queue not ready", QueueIndex);
         return;
     }
 
@@ -1765,35 +2081,28 @@ RosvVirtioBlkProcessQueue(
         }
     }
 
-    /* Read barrier before reading available index — ensures we see the
-     * guest's latest writes to the available ring before reading avail idx. */
     KeMemoryBarrier();
-
     AvailIdx = RosvVirtqueueReadAvailIdx(Vm, Vq);
-
-    /* Read barrier after reading avail idx — ensures subsequent ring entry
-     * reads see data that was written before the index update. */
     KeMemoryBarrier();
 
-    /* Wraparound-safe check: the number of new entries must not exceed
-     * the queue size. The cast to USHORT handles 16-bit wraparound. */
     {
         USHORT NumPending = (USHORT)(AvailIdx - Vq->LastAvailIdx);
         if (NumPending > (USHORT)Vq->Num)
         {
             ROSV_ERR("virtio-blk: avail idx jump too large: avail_idx=%u last_avail=%u "
-                     "delta=%u queue_size=%u — refusing to process",
+                     "delta=%u queue_size=%u -- refusing to process",
                      AvailIdx, Vq->LastAvailIdx, NumPending, Vq->Num);
             return;
         }
     }
 
+    /* Determine if async path is available */
+    AsyncEnabled = (InterlockedCompareExchange(&State->AsyncQueue.Running, 0, 0) != 0);
+
     while (Vq->LastAvailIdx != AvailIdx)
     {
-        /* Read descriptor index from available ring */
         DescIdx = RosvVirtqueueReadAvailRing(Vm, Vq, Vq->LastAvailIdx);
 
-        /* Validate descriptor index from avail ring */
         if (DescIdx >= (USHORT)Vq->Num)
         {
             ROSV_ERR("virtio-blk: avail ring entry %u has desc index %u >= queue size %u",
@@ -1803,22 +2112,33 @@ RosvVirtioBlkProcessQueue(
             continue;
         }
 
-        /* Process the request */
-        BytesWritten = RosvVirtioBlkProcessRequest(State, DescIdx);
-
-        /* Push completion to used ring */
-        if (!RosvVirtqueuePushUsed(Vm, Vq, (ULONG)DescIdx, BytesWritten))
+        if (AsyncEnabled)
         {
-            ROSV_ERR("virtio-blk: PushUsed failed for desc %u, aborting batch", DescIdx);
-            Vq->LastAvailIdx++;
-            ProcessedCount++;
-            break;
+            if (!RosvVirtioBlkEnqueueOrProcess(State, Vq, DescIdx))
+            {
+                ROSV_ERR("virtio-blk: async parse failed for desc %u, skipping", DescIdx);
+            }
+            else
+            {
+                EnqueuedCount++;
+            }
+        }
+        else
+        {
+            BytesWritten = RosvVirtioBlkProcessRequest(State, Vq, DescIdx);
+
+            if (!RosvVirtqueuePushUsed(Vm, Vq, (ULONG)DescIdx, BytesWritten))
+            {
+                ROSV_ERR("virtio-blk: PushUsed failed for desc %u, aborting batch", DescIdx);
+                Vq->LastAvailIdx++;
+                ProcessedCount++;
+                break;
+            }
         }
 
         Vq->LastAvailIdx++;
         ProcessedCount++;
 
-        /* Safety limit to prevent infinite loops from corrupted rings */
         if (ProcessedCount > Vq->Num)
         {
             ROSV_ERR("virtio-blk: processed %u requests (> queue size %u), stopping",
@@ -1827,13 +2147,17 @@ RosvVirtioBlkProcessQueue(
         }
     }
 
-    if (ProcessedCount > 0)
+    if (EnqueuedCount > 0)
     {
-        /* Read barrier before checking avail flags */
+        KeSetEvent(&State->AsyncQueue.WorkAvailable, IO_NO_INCREMENT, FALSE);
+    }
+
+    /* Raise interrupt for synchronous completions only.
+     * Async completions raise their own interrupt from the worker thread. */
+    if (ProcessedCount > 0 && ProcessedCount > EnqueuedCount)
+    {
         KeMemoryBarrier();
 
-        /* Guest NO_INTERRUPT is advisory when EVENT_IDX is not negotiated.
-         * Keep completion interrupts enabled for correctness/liveness. */
         AvailFlags = RosvVirtqueueReadAvailFlags(Vm, Vq);
         if (AvailFlags & VRING_AVAIL_F_NO_INTERRUPT)
         {
@@ -1847,11 +2171,9 @@ RosvVirtioBlkProcessQueue(
             NoInterruptHintCount++;
         }
 
-        /* Raise used buffer notification interrupt */
         State->InterruptStatus |= VIRTIO_INT_VRING;
         State->InterruptPending = TRUE;
 
-        /* Wake vCPU if halted so it can inject this interrupt promptly */
         if (State->OwnerVm != NULL)
             KeSetEvent(&State->OwnerVm->Vcpu.HaltWakeEvent, IO_NO_INCREMENT, FALSE);
     }
@@ -1916,6 +2238,7 @@ RosvVirtioBlkMmioRead(
 {
     ULONG Offset;
     ULONG Result = 0;
+    PROSV_VIRTQUEUE SelectedVq;
 
     if (GuestPhysicalAddress < ROSV_VIRTIO_BLK_MMIO_BASE ||
         GuestPhysicalAddress >= ROSV_VIRTIO_BLK_MMIO_BASE + ROSV_VIRTIO_BLK_MMIO_SIZE)
@@ -1932,6 +2255,13 @@ RosvVirtioBlkMmioRead(
         *Value = (ULONG64)Result;
         return TRUE;
     }
+
+    /* Select the appropriate virtqueue for queue-specific registers.
+     * Returns NULL for out-of-range QueueSel (returns 0 for those reads). */
+    if (State->QueueSel < State->NumQueues)
+        SelectedVq = &State->Vqs[State->QueueSel];
+    else
+        SelectedVq = NULL;
 
     switch (Offset)
     {
@@ -1961,11 +2291,12 @@ RosvVirtioBlkMmioRead(
         break;
 
     case VIRTIO_MMIO_QUEUE_NUM_MAX:
-        Result = ROSV_VIRTIO_QUEUE_SIZE_MAX;
+        /* Return 0 for non-existent queues (signals queue not available) */
+        Result = SelectedVq ? ROSV_VIRTIO_QUEUE_SIZE_MAX : 0;
         break;
 
     case VIRTIO_MMIO_QUEUE_READY:
-        Result = State->Vq.Ready ? 1 : 0;
+        Result = (SelectedVq && SelectedVq->Ready) ? 1 : 0;
         break;
 
     case VIRTIO_MMIO_INTERRUPT_STATUS:
@@ -2000,6 +2331,7 @@ RosvVirtioBlkMmioWrite(
 {
     ULONG Offset;
     ULONG Val32 = (ULONG)(Value & 0xFFFFFFFF);
+    PROSV_VIRTQUEUE SelectedVq;
 
     if (GuestPhysicalAddress < ROSV_VIRTIO_BLK_MMIO_BASE ||
         GuestPhysicalAddress >= ROSV_VIRTIO_BLK_MMIO_BASE + ROSV_VIRTIO_BLK_MMIO_SIZE)
@@ -2015,6 +2347,12 @@ RosvVirtioBlkMmioWrite(
         /* Config space is read-only for virtio-blk; ignore writes silently */
         return TRUE;
     }
+
+    /* Select the appropriate virtqueue for queue-specific registers */
+    if (State->QueueSel < State->NumQueues)
+        SelectedVq = &State->Vqs[State->QueueSel];
+    else
+        SelectedVq = NULL;
 
     switch (Offset)
     {
@@ -2040,14 +2378,17 @@ RosvVirtioBlkMmioWrite(
 
     case VIRTIO_MMIO_QUEUE_SEL:
         State->QueueSel = Val32;
-        if (Val32 != 0)
+        if (Val32 >= State->NumQueues)
         {
-            ROSV_WARN("virtio-blk: guest selected queue %u (only queue 0 exists)", Val32);
+            /* Not an error -- the driver probes queues by reading QUEUE_NUM_MAX
+             * after setting QUEUE_SEL.  We return 0 for non-existent queues. */
+            ROSV_TRACE("virtio-blk: guest selected queue %u (NumQueues=%u)",
+                       Val32, State->NumQueues);
         }
         break;
 
     case VIRTIO_MMIO_QUEUE_NUM:
-        if (State->QueueSel == 0)
+        if (SelectedVq != NULL)
         {
             if (Val32 > ROSV_VIRTIO_QUEUE_SIZE_MAX)
             {
@@ -2055,33 +2396,36 @@ RosvVirtioBlkMmioWrite(
                          Val32, ROSV_VIRTIO_QUEUE_SIZE_MAX);
                 Val32 = ROSV_VIRTIO_QUEUE_SIZE_MAX;
             }
-            State->Vq.Num = Val32;
-            ROSV_TRACE("virtio-blk: queue 0 size set to %u", Val32);
+            SelectedVq->Num = Val32;
+            ROSV_TRACE("virtio-blk: queue %u size set to %u", State->QueueSel, Val32);
         }
         break;
 
     case VIRTIO_MMIO_QUEUE_READY:
-        if (State->QueueSel == 0)
+        if (SelectedVq != NULL)
         {
-            State->Vq.Ready = (Val32 != 0);
-            ROSV_TRACE("virtio-blk: queue 0 ready = %u", Val32);
-            if (State->Vq.Ready)
+            SelectedVq->Ready = (Val32 != 0);
+            ROSV_TRACE("virtio-blk: queue %u ready = %u", State->QueueSel, Val32);
+            if (SelectedVq->Ready)
             {
-                ROSV_TRACE("virtio-blk: queue 0 configured: num=%u desc=0x%llX avail=0x%llX used=0x%llX",
-                           State->Vq.Num, State->Vq.DescGpa,
-                           State->Vq.AvailGpa, State->Vq.UsedGpa);
+                ROSV_TRACE("virtio-blk: queue %u configured: num=%u desc=0x%llX avail=0x%llX used=0x%llX",
+                           State->QueueSel, SelectedVq->Num, SelectedVq->DescGpa,
+                           SelectedVq->AvailGpa, SelectedVq->UsedGpa);
             }
         }
         break;
 
     case VIRTIO_MMIO_QUEUE_NOTIFY:
-        if (Val32 == 0)
+        /* The value written to QUEUE_NOTIFY is the queue index to notify,
+         * NOT State->QueueSel.  Per virtio spec section 4.2.3.2. */
+        if (Val32 < State->NumQueues)
         {
-            RosvVirtioBlkProcessQueue(State);
+            RosvVirtioBlkProcessQueue(State, Val32);
         }
         else
         {
-            ROSV_WARN("virtio-blk: QUEUE_NOTIFY for non-existent queue %u", Val32);
+            ROSV_WARN("virtio-blk: QUEUE_NOTIFY for non-existent queue %u (NumQueues=%u)",
+                      Val32, State->NumQueues);
         }
         break;
 
@@ -2094,7 +2438,7 @@ RosvVirtioBlkMmioWrite(
         else
         {
             State->InterruptPending = TRUE;
-            /* Wake vCPU if halted — unacknowledged status bits remain */
+            /* Wake vCPU if halted -- unacknowledged status bits remain */
             if (State->OwnerVm != NULL)
                 KeSetEvent(&State->OwnerVm->Vcpu.HaltWakeEvent, IO_NO_INCREMENT, FALSE);
         }
@@ -2103,7 +2447,8 @@ RosvVirtioBlkMmioWrite(
     case VIRTIO_MMIO_STATUS:
         if (Val32 == 0)
         {
-            /* Device reset */
+            ULONG i;
+            /* Device reset -- zero all queues */
             ROSV_TRACE("virtio-blk: device RESET");
             State->Status = 0;
             State->DriverFeatures = 0;
@@ -2112,7 +2457,8 @@ RosvVirtioBlkMmioWrite(
             State->QueueSel = 0;
             State->DeviceFeaturesSelPage = 0;
             State->DriverFeaturesSelPage = 0;
-            RtlZeroMemory(&State->Vq, sizeof(ROSV_VIRTQUEUE));
+            for (i = 0; i < State->NumQueues; i++)
+                RtlZeroMemory(&State->Vqs[i], sizeof(ROSV_VIRTQUEUE));
         }
         else
         {
@@ -2148,48 +2494,36 @@ RosvVirtioBlkMmioWrite(
         break;
 
     case VIRTIO_MMIO_QUEUE_DESC_LOW:
-        if (State->QueueSel == 0)
-        {
-            State->Vq.DescGpa = (State->Vq.DescGpa & 0xFFFFFFFF00000000ULL) | Val32;
-        }
+        if (SelectedVq != NULL)
+            SelectedVq->DescGpa = (SelectedVq->DescGpa & 0xFFFFFFFF00000000ULL) | Val32;
         break;
 
     case VIRTIO_MMIO_QUEUE_DESC_HIGH:
-        if (State->QueueSel == 0)
-        {
-            State->Vq.DescGpa = (State->Vq.DescGpa & 0x00000000FFFFFFFFULL) |
-                                ((ULONG64)Val32 << 32);
-        }
+        if (SelectedVq != NULL)
+            SelectedVq->DescGpa = (SelectedVq->DescGpa & 0x00000000FFFFFFFFULL) |
+                                  ((ULONG64)Val32 << 32);
         break;
 
     case VIRTIO_MMIO_QUEUE_AVAIL_LOW:
-        if (State->QueueSel == 0)
-        {
-            State->Vq.AvailGpa = (State->Vq.AvailGpa & 0xFFFFFFFF00000000ULL) | Val32;
-        }
+        if (SelectedVq != NULL)
+            SelectedVq->AvailGpa = (SelectedVq->AvailGpa & 0xFFFFFFFF00000000ULL) | Val32;
         break;
 
     case VIRTIO_MMIO_QUEUE_AVAIL_HIGH:
-        if (State->QueueSel == 0)
-        {
-            State->Vq.AvailGpa = (State->Vq.AvailGpa & 0x00000000FFFFFFFFULL) |
-                                 ((ULONG64)Val32 << 32);
-        }
+        if (SelectedVq != NULL)
+            SelectedVq->AvailGpa = (SelectedVq->AvailGpa & 0x00000000FFFFFFFFULL) |
+                                   ((ULONG64)Val32 << 32);
         break;
 
     case VIRTIO_MMIO_QUEUE_USED_LOW:
-        if (State->QueueSel == 0)
-        {
-            State->Vq.UsedGpa = (State->Vq.UsedGpa & 0xFFFFFFFF00000000ULL) | Val32;
-        }
+        if (SelectedVq != NULL)
+            SelectedVq->UsedGpa = (SelectedVq->UsedGpa & 0xFFFFFFFF00000000ULL) | Val32;
         break;
 
     case VIRTIO_MMIO_QUEUE_USED_HIGH:
-        if (State->QueueSel == 0)
-        {
-            State->Vq.UsedGpa = (State->Vq.UsedGpa & 0x00000000FFFFFFFFULL) |
-                                ((ULONG64)Val32 << 32);
-        }
+        if (SelectedVq != NULL)
+            SelectedVq->UsedGpa = (SelectedVq->UsedGpa & 0x00000000FFFFFFFFULL) |
+                                  ((ULONG64)Val32 << 32);
         break;
 
     default:
@@ -2231,6 +2565,12 @@ RosvVirtioBlkInitialize(
     State->DiskImageSize = DiskImageSize;
     State->ReadOnly = ReadOnly;
 
+    /* Multi-queue setup: advertise ROSV_BLK_NUM_QUEUES request queues.
+     * If the guest does not negotiate VIRTIO_BLK_F_MQ, only queue 0 will be
+     * used (single-queue default).  The NumQueues field in config space tells
+     * the driver how many queues the device offers. */
+    State->NumQueues = ROSV_BLK_NUM_QUEUES;
+
     /* Set device features */
     State->DeviceFeatures = VIRTIO_F_VERSION_1;
     if (ReadOnly)
@@ -2239,6 +2579,7 @@ RosvVirtioBlkInitialize(
     State->DeviceFeatures |= VIRTIO_BLK_F_FLUSH;
     State->DeviceFeatures |= VIRTIO_BLK_F_SEG_MAX;
     State->DeviceFeatures |= VIRTIO_BLK_F_SIZE_MAX;
+    State->DeviceFeatures |= VIRTIO_BLK_F_MQ;
 
     /* Build device configuration */
     if (State->BackendType == ROSV_DISK_BACKEND_VHDX && Vm)
@@ -2262,9 +2603,15 @@ RosvVirtioBlkInitialize(
     State->Config.Geometry.Cylinders = 0;
     State->Config.Geometry.Heads = 0;
     State->Config.Geometry.Sectors = 0;
+    /* Topology -- zeroed (present only for correct offset alignment) */
+    RtlZeroMemory(&State->Config.Topology, sizeof(State->Config.Topology));
+    State->Config.Writeback = 0;
+    State->Config.Unused0 = 0;
+    /* NumQueues in config space (read by driver when VIRTIO_BLK_F_MQ is set) */
+    State->Config.NumQueues = (USHORT)State->NumQueues;
 
     ROSV_TRACE("virtio-blk: initialized at MMIO 0x%llX-0x%llX, disk=%p file_size=%llu bytes "
-               "capacity=%llu bytes (%llu sectors), %s, backend=%s, mode=%s",
+               "capacity=%llu bytes (%llu sectors), %s, backend=%s, mode=%s, num_queues=%u",
                ROSV_VIRTIO_BLK_MMIO_BASE,
                ROSV_VIRTIO_BLK_MMIO_BASE + ROSV_VIRTIO_BLK_MMIO_SIZE - 1,
                DiskImageBase,
@@ -2273,7 +2620,8 @@ RosvVirtioBlkInitialize(
                State->Config.Capacity,
                ReadOnly ? "read-only" : "read-write",
                (State->BackendType == ROSV_DISK_BACKEND_VHDX) ? "VHDX" : "RAW",
-               (State->Mode == ROSV_DISK_MODE_DEMAND_PAGED) ? "demand-paged" : "ramdisk");
+               (State->Mode == ROSV_DISK_MODE_DEMAND_PAGED) ? "demand-paged" : "ramdisk",
+               State->NumQueues);
     ROSV_TRACE("virtio-blk: features offered = 0x%llX", State->DeviceFeatures);
 
     /* Initialize COW sector cache */
@@ -2327,6 +2675,59 @@ RosvVirtioBlkInitialize(
         }
     }
 
+    /* Initialize async request queue and worker thread */
+    State->AsyncQueue.Head = 0;
+    State->AsyncQueue.Tail = 0;
+    State->AsyncQueue.Count = 0;
+    KeInitializeEvent(&State->AsyncQueue.WorkAvailable, SynchronizationEvent, FALSE);
+    KeInitializeEvent(&State->AsyncQueue.WorkComplete, SynchronizationEvent, FALSE);
+    InterlockedExchange(&State->AsyncQueue.Running, 1);
+    State->AsyncQueue.WorkerThread = NULL;
+    State->AsyncQueue.WorkerThreadObject = NULL;
+
+    {
+        OBJECT_ATTRIBUTES AsyncObjAttrs;
+
+        InitializeObjectAttributes(&AsyncObjAttrs, NULL, OBJ_KERNEL_HANDLE, NULL, NULL);
+
+        Status = PsCreateSystemThread(&State->AsyncQueue.WorkerThread,
+                                      THREAD_ALL_ACCESS,
+                                      &AsyncObjAttrs,
+                                      NULL,
+                                      NULL,
+                                      RosvVirtioBlkAsyncWorkerThread,
+                                      State);
+        if (!NT_SUCCESS(Status))
+        {
+            ROSV_WARN("virtio-blk: failed to create async worker thread (Status=0x%08X), "
+                      "falling back to synchronous processing", Status);
+            InterlockedExchange(&State->AsyncQueue.Running, 0);
+            /* Non-fatal: synchronous path will be used */
+        }
+        else
+        {
+            Status = ObReferenceObjectByHandle(State->AsyncQueue.WorkerThread,
+                                               THREAD_ALL_ACCESS,
+                                               NULL,
+                                               KernelMode,
+                                               (PVOID *)&State->AsyncQueue.WorkerThreadObject,
+                                               NULL);
+            if (!NT_SUCCESS(Status))
+            {
+                ROSV_WARN("virtio-blk: failed to reference async worker thread (Status=0x%08X)",
+                          Status);
+                InterlockedExchange(&State->AsyncQueue.Running, 0);
+                KeSetEvent(&State->AsyncQueue.WorkAvailable, IO_NO_INCREMENT, FALSE);
+                ZwClose(State->AsyncQueue.WorkerThread);
+                State->AsyncQueue.WorkerThread = NULL;
+            }
+            else
+            {
+                ROSV_TRACE("virtio-blk: async worker thread created successfully");
+            }
+        }
+    }
+
     return STATUS_SUCCESS;
 }
 
@@ -2337,6 +2738,35 @@ RosvVirtioBlkDestroy(
     ROSV_TRACE("virtio-blk: destroy (reads=%llu/%llu bytes, writes=%llu/%llu bytes)",
                State->ReadOps, State->ReadBytes,
                State->WriteOps, State->WriteBytes);
+
+    /* Shut down the async worker thread first -- it may issue I/O requests
+     * that depend on the demand I/O worker, so stop it before DemandIo. */
+    if (State->AsyncQueue.WorkerThreadObject != NULL ||
+        State->AsyncQueue.WorkerThread != NULL)
+    {
+        InterlockedExchange(&State->AsyncQueue.Running, 0);
+        KeSetEvent(&State->AsyncQueue.WorkAvailable, IO_NO_INCREMENT, FALSE);
+
+        if (State->AsyncQueue.WorkerThreadObject != NULL)
+        {
+            KeWaitForSingleObject(State->AsyncQueue.WorkerThreadObject,
+                                  Executive,
+                                  KernelMode,
+                                  FALSE,
+                                  NULL);
+            ObDereferenceObject(State->AsyncQueue.WorkerThreadObject);
+            State->AsyncQueue.WorkerThreadObject = NULL;
+        }
+
+        if (State->AsyncQueue.WorkerThread != NULL)
+        {
+            ZwClose(State->AsyncQueue.WorkerThread);
+            State->AsyncQueue.WorkerThread = NULL;
+        }
+
+        ROSV_TRACE("virtio-blk: async worker thread stopped (remaining=%ld)",
+                   State->AsyncQueue.Count);
+    }
 
     if (State->DemandIoThreadObject != NULL || State->DemandIoThreadHandle != NULL)
     {

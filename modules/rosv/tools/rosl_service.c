@@ -29,6 +29,12 @@ static const char *g_WslProbeCommandsTail[] = {
     "printf '\\137\\137ROSL\\137WSL2\\137PROBE\\137DONE\\137\\137\\n'"
 };
 
+#define ROSL_SELFTEST_BEGIN_MARKER "__ROSL_SELFTEST_BEGIN__"
+#define ROSL_SELFTEST_READY_MARKER "__ROSL_SELFTEST_READY__"
+#define ROSL_SELFTEST_SPLIT_MARKER "__ROSL_SELFTEST_SPLIT__"
+#define ROSL_SELFTEST_DONE_MARKER  "__ROSL_SELFTEST_DONE__"
+#define ROSL_SELFTEST_LINE_MAX     1024
+
 /* Built at startup based on g_ProbeNetTests */
 const char *g_WslProbeCommands[ROSL_WSL_PROBE_MAX_CMDS];
 DWORD g_WslProbeCmdCount = 0;
@@ -49,6 +55,144 @@ void RoslBuildProbeCommandList(void)
 
     for (i = 0; i < (DWORD)(sizeof(g_WslProbeCommandsTail) / sizeof(g_WslProbeCommandsTail[0])); i++)
         g_WslProbeCommands[g_WslProbeCmdCount++] = g_WslProbeCommandsTail[i];
+}
+
+static BOOL
+RoslServicePrepareSelfTest(void)
+{
+    char PrepareCommand[256];
+    int PrepareLength;
+
+    PrepareLength = _snprintf(
+        PrepareCommand,
+        sizeof(PrepareCommand),
+        "sudo -n systemctl stop "
+        "landscape-client.service "
+        "systemd-timesyncd.service "
+        "apt-daily.timer "
+        "apt-daily-upgrade.timer "
+        "unattended-upgrades.service "
+        "> /dev/null 2>&1 || true; sleep 1; "
+        "printf '" ROSL_SELFTEST_READY_MARKER "\\n'\n");
+    if (PrepareLength <= 0 || (DWORD)PrepareLength >= sizeof(PrepareCommand))
+    {
+        SetLastError(ERROR_BUFFER_OVERFLOW);
+        return FALSE;
+    }
+
+    RoslLog("[INFO] Selftest: quiescing guest background services\n");
+    return RoslConsoleSendInput(PrepareCommand, (DWORD)PrepareLength);
+}
+
+static BOOL
+RoslServiceStartSelfTestRun(void)
+{
+    char TestCommand[512];
+    int TestLength;
+
+    TestLength = _snprintf(
+        TestCommand,
+        sizeof(TestCommand),
+        "printf '" ROSL_SELFTEST_BEGIN_MARKER "\\n'; "
+        "ping -c 2 -W 1 google.com 2>&1 || true; "
+        "printf '" ROSL_SELFTEST_SPLIT_MARKER "\\n'; "
+        "timeout 30 sudo -n apt-get update -o APT::Color=0 -o Dpkg::Use-Pty=0 -o Acquire::Languages=none 2>&1 || true; "
+        "echo; printf '" ROSL_SELFTEST_DONE_MARKER "\\n'\n");
+    if (TestLength <= 0 || (DWORD)TestLength >= sizeof(TestCommand))
+    {
+        SetLastError(ERROR_BUFFER_OVERFLOW);
+        return FALSE;
+    }
+
+    RoslLog("[INFO] Selftest: running guest network checks\n");
+    return RoslConsoleSendInput(TestCommand, (DWORD)TestLength);
+}
+
+static VOID
+RoslSelfTestDbgPrintLine(
+    _In_reads_(Length) const char *Line,
+    _In_ DWORD Length)
+{
+    char Buffer[ROSL_SELFTEST_LINE_MAX + 1];
+
+    if (Length == 0)
+        return;
+
+    if (Length > ROSL_SELFTEST_LINE_MAX)
+        Length = ROSL_SELFTEST_LINE_MAX;
+
+    memcpy(Buffer, Line, Length);
+    Buffer[Length] = '\0';
+    DbgPrint("rosl-selftest: %s\n", Buffer);
+    RoslLog("[SELFTEST] %s\n", Buffer);
+}
+
+static VOID
+RoslSelfTestFeedOutput(
+    _Inout_ PBOOL CaptureActive,
+    _Inout_ PBOOL Completed,
+    _Inout_opt_ PBOOL ReadyToRun,
+    _Inout_updates_(ROSL_SELFTEST_LINE_MAX + 1) char *LineBuffer,
+    _Inout_ PDWORD LineLength,
+    _In_reads_bytes_(Length) const UCHAR *Data,
+    _In_ DWORD Length)
+{
+    DWORD i;
+
+    if (Completed != NULL && *Completed)
+        return;
+
+    for (i = 0; i < Length; i++)
+    {
+        UCHAR Byte = Data[i];
+
+        if (Byte == '\r')
+            continue;
+
+        if (Byte != '\n')
+        {
+            if (*LineLength < ROSL_SELFTEST_LINE_MAX)
+            {
+                LineBuffer[*LineLength] = (char)Byte;
+                (*LineLength)++;
+            }
+            continue;
+        }
+
+        LineBuffer[*LineLength] = '\0';
+
+        if (strcmp(LineBuffer, ROSL_SELFTEST_BEGIN_MARKER) == 0)
+        {
+            *CaptureActive = TRUE;
+            RoslLog("[INFO] Selftest: ping google.com starting\n");
+        }
+        else if (strcmp(LineBuffer, ROSL_SELFTEST_READY_MARKER) == 0)
+        {
+            if (ReadyToRun != NULL)
+                *ReadyToRun = TRUE;
+            RoslLog("[INFO] Selftest: guest background services stopped\n");
+        }
+        else if (strcmp(LineBuffer, ROSL_SELFTEST_SPLIT_MARKER) == 0)
+        {
+            if (*CaptureActive)
+                RoslLog("[INFO] Selftest: apt-get update starting\n");
+        }
+        else if (strcmp(LineBuffer, ROSL_SELFTEST_DONE_MARKER) == 0)
+        {
+            if (*CaptureActive)
+                RoslLog("[OK]   Selftest completed\n");
+            *CaptureActive = FALSE;
+            if (Completed != NULL)
+                *Completed = TRUE;
+        }
+        else if (*CaptureActive)
+        {
+            RoslSelfTestDbgPrintLine(LineBuffer, *LineLength);
+        }
+
+        *LineLength = 0;
+        LineBuffer[0] = '\0';
+    }
 }
 
 /* ---- Vcon shell launch -------------------------------------------------- */
@@ -127,6 +271,33 @@ RoslServiceNoteSerialPrompt(void)
     {
         SetEvent(g_ServicePromptEvent);
     }
+}
+
+static BOOL
+RoslServiceTailHasPrompt(
+    _In_opt_z_ const char *Tail)
+{
+    if (Tail == NULL || Tail[0] == '\0')
+        return FALSE;
+
+    return strstr(Tail, ":~$ ") != NULL ||
+           strstr(Tail, ":/$ ") != NULL ||
+           strstr(Tail, ":~# ") != NULL ||
+           strstr(Tail, ":/# ") != NULL ||
+           strstr(Tail, "wsluser@") != NULL ||
+           strstr(Tail, "root@") != NULL;
+}
+
+static BOOL
+RoslServiceTailHasAutologinReadyMarker(
+    _In_opt_z_ const char *Tail)
+{
+    if (Tail == NULL || Tail[0] == '\0')
+        return FALSE;
+
+    return strstr(Tail, "serial-getty@ttyS0.service") != NULL ||
+           strstr(Tail, "Reached target multi-user.target") != NULL ||
+           strstr(Tail, "Reached target graphical.target") != NULL;
 }
 
 /* ---- WSL probe functions ------------------------------------------------ */
@@ -386,14 +557,27 @@ void ServiceSupervisorLoop(void)
     DWORD stateHeartbeatCounter = 0;
     DWORD lastStatsTick;
     BOOL bootCmdSent = FALSE;
+    BOOL serialPromptNudgeWarned = FALSE;
+    BOOL serialShellReady = FALSE;
+    BOOL selfTestCommandSent = FALSE;
+    BOOL selfTestReadyToRun = FALSE;
+    BOOL selfTestTriggered = FALSE;
+    BOOL selfTestCaptureActive = FALSE;
+    BOOL selfTestCompleted = FALSE;
     char bootCmdTail[512];
+    char selfTestLine[ROSL_SELFTEST_LINE_MAX + 1];
     DWORD bootCmdTailLen = 0;
+    DWORD serialPromptNudgeCount = 0;
+    DWORD selfTestLineLen = 0;
+    DWORD selfTestCommandSentTick = 0;
+    DWORD lastSerialPromptNudgeTick = 0;
     BOOL probeEnabled;
     ULONGLONG lastStatsExitCount = 0;
     ULONGLONG lastStatsTotalTicks = 0;
     ULONGLONG lastStatsHltTicks = 0;
 
     memset(bootCmdTail, 0, sizeof(bootCmdTail));
+    memset(selfTestLine, 0, sizeof(selfTestLine));
     probeEnabled = (g_WslProbeMode == RoslWslProbeEnabled);
     lastStatsTick = GetTickCount();
 
@@ -433,6 +617,17 @@ void ServiceSupervisorLoop(void)
                 if (copyLen > 0)
                     RoslWslProbeFeedOutput(&wslProbe, readBuf, copyLen);
 
+                if (copyLen > 0 && g_SelfTestMode)
+                {
+                    RoslSelfTestFeedOutput(&selfTestCaptureActive,
+                                           &selfTestCompleted,
+                                           &selfTestReadyToRun,
+                                           selfTestLine,
+                                           &selfTestLineLen,
+                                           readBuf,
+                                           copyLen);
+                }
+
                 /* Keep a sliding window of the last sizeof(bootCmdTail)-1 bytes
                  * of serial output so we can detect shell prompts. */
                 {
@@ -462,12 +657,15 @@ void ServiceSupervisorLoop(void)
                     bootCmdTail[bootCmdTailLen] = '\0';
                 }
 
+                if (!serialShellReady &&
+                    RoslServiceTailHasAutologinReadyMarker(bootCmdTail))
+                {
+                    serialShellReady = TRUE;
+                    RoslLog("[INFO] Service supervisor: serial autologin shell is expected now\n");
+                }
+
                 if (!g_ServiceSerialPromptSeen &&
-                    (strstr(bootCmdTail, ":~$ ") != NULL ||
-                     strstr(bootCmdTail, ":/$ ") != NULL ||
-                     strstr(bootCmdTail, ":~# ") != NULL ||
-                     strstr(bootCmdTail, ":/# ") != NULL ||
-                     strstr(bootCmdTail, "# ") != NULL))
+                    RoslServiceTailHasPrompt(bootCmdTail))
                 {
                     RoslServiceNoteSerialPrompt();
                 }
@@ -483,12 +681,82 @@ void ServiceSupervisorLoop(void)
                     }
                     bootCmdSent = TRUE;
                 }
+
+                if (g_SelfTestMode && !selfTestTriggered && g_ServiceSerialPromptSeen)
+                {
+                    if (!RoslServicePrepareSelfTest())
+                    {
+                        RoslLog("[FAIL] Selftest preparation failed (err=%lu)\n", GetLastError());
+                    }
+                    selfTestTriggered = TRUE;
+                }
+
+                if (g_SelfTestMode &&
+                    selfTestTriggered &&
+                    selfTestReadyToRun &&
+                    !selfTestCommandSent)
+                {
+                    if (!RoslServiceStartSelfTestRun())
+                    {
+                        RoslLog("[FAIL] Selftest injection failed (err=%lu)\n", GetLastError());
+                    }
+                    selfTestCommandSent = TRUE;
+                    selfTestCommandSentTick = GetTickCount();
+                }
             }
         }
 
         RoslWslProbeTick(&wslProbe);
 
+        /* Selftest exit: success or 180s timeout */
+        if (g_SelfTestMode)
+        {
+            if (selfTestCompleted)
+            {
+                RoslLog("[OK]   Selftest: all markers received, exiting\n");
+                g_Running = FALSE;
+                break;
+            }
+            if (selfTestCommandSent &&
+                (GetTickCount() - selfTestCommandSentTick) >= 300000)
+            {
+                RoslLog("[FAIL] Selftest: timed out after 300 seconds\n");
+                g_Running = FALSE;
+                break;
+            }
+        }
+
         nowTick = GetTickCount();
+        if (!g_ServiceSerialPromptSeen &&
+            serialShellReady &&
+            serialPromptNudgeCount < 8 &&
+            (serialPromptNudgeCount == 0 ||
+             (nowTick - lastSerialPromptNudgeTick) >= 1000))
+        {
+            if (RoslConsoleSendInput("\n", 1))
+            {
+                serialPromptNudgeCount++;
+                lastSerialPromptNudgeTick = nowTick;
+                RoslLog("[INFO] Service supervisor: nudging ttyS0 autologin shell (%lu/8)\n",
+                        (unsigned long)serialPromptNudgeCount);
+            }
+            else
+            {
+                serialPromptNudgeCount++;
+                lastSerialPromptNudgeTick = nowTick;
+                RoslLog("[WARN] Service supervisor: ttyS0 nudge failed (err=%lu)\n",
+                        GetLastError());
+            }
+        }
+        else if (!g_ServiceSerialPromptSeen &&
+                 serialShellReady &&
+                 serialPromptNudgeCount >= 8 &&
+                 !serialPromptNudgeWarned)
+        {
+            serialPromptNudgeWarned = TRUE;
+            RoslLog("[WARN] Service supervisor: no serial shell prompt after 8 nudges\n");
+        }
+
         if ((nowTick - lastStatsTick) >= 1000)
         {
             lastStatsTick = nowTick;

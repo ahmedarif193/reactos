@@ -96,7 +96,7 @@ typedef struct _ROSV_IO_HANDLER {
 
 /* ---- UART emulation state ----------------------------------------------- */
 
-#define ROSV_UART_RX_FIFO_SIZE  256
+#define ROSV_UART_RX_FIFO_SIZE  512
 #define ROSV_UART_TX_RING_SIZE  4096
 
 typedef struct _ROSV_UART_STATE {

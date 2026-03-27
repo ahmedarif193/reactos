@@ -268,20 +268,6 @@ RosvConsumeLapicTimerDelivery(
 
 static
 BOOLEAN
-RosvHasPendingLapicTimer(
-    _In_ PROSV_VM Vm)
-{
-    UCHAR Vector;
-    ULONG64 ExpiredPeriods;
-
-    if (Vm == NULL)
-        return FALSE;
-
-    return RosvResolveLapicTimerVector(Vm, &Vector, &ExpiredPeriods);
-}
-
-static
-BOOLEAN
 RosvTryInjectGuestTimer(
     _Inout_ PROSV_VCPU Vcpu,
     _In_ PROSV_VM Vm)
@@ -998,8 +984,11 @@ RosvHandleHlt(
 
         LARGE_INTEGER HltStart, HltEnd;
 
-        /* 10ms relative timeout (100ns units, negative = relative) */
-        Timeout.QuadPart = -(LONGLONG)(10 * 1000 * 10); /* 10ms */
+        /* 1ms relative timeout (100ns units, negative = relative).
+         * Device paths are expected to signal HaltWakeEvent promptly,
+         * but keep the fallback wait short so an idle guest does not
+         * accumulate an avoidable 10ms interrupt-delivery tail. */
+        Timeout.QuadPart = -(LONGLONG)(1 * 1000 * 10); /* 1ms */
 
         HltStart = KeQueryPerformanceCounter(NULL);
 

@@ -7,9 +7,11 @@
  * Implements virtio 1.0+ MMIO transport (virtio-v1.0-cs04, Section 4.2)
  * with a virtio-net device (Section 5.1).
  *
- * The device provides two virtqueues:
- *   Queue 0: Receiveq (device writes packets to guest)
- *   Queue 1: Transmitq (guest writes packets to device)
+ * Multi-queue (VIRTIO_NET_F_MQ) layout:
+ *   Queue 2*N:   Receiveq N  (device writes packets to guest)
+ *   Queue 2*N+1: Transmitq N (guest writes packets to device)
+ *
+ * When MQ is not negotiated, only queue pair 0 (queues 0/1) is used.
  *
  * Packet format: virtio_net_hdr (12 bytes) + raw ethernet frame.
  */
@@ -33,6 +35,8 @@
 #define VIRTIO_NET_F_MTU               (1ULL << 3)   /* MTU value in config space */
 #define VIRTIO_NET_F_CSUM              (1ULL << 0)   /* Checksum offload */
 #define VIRTIO_NET_F_GUEST_CSUM        (1ULL << 1)   /* Guest handles partial csum */
+#define VIRTIO_NET_F_HOST_TSO4         (1ULL << 11)  /* Host can handle TSOv4 */
+#define VIRTIO_NET_F_HOST_TSO6         (1ULL << 12)  /* Host can handle TSOv6 */
 
 /* ---- Virtio-net config space (Section 5.1.4) ---------------------------- */
 
@@ -85,21 +89,53 @@ C_ASSERT(sizeof(VIRTIO_NET_HDR) == 12);
  * Uses IRQ 6, separate from virtio-blk IRQ 5. */
 #define ROSV_VIRTIO_NET_IRQ             6
 
-/* ---- Virtqueue indices -------------------------------------------------- */
+/* ---- Multi-queue configuration ------------------------------------------ */
 
-#define VIRTIO_NET_QUEUE_RX             0   /* Receiveq: device -> guest */
-#define VIRTIO_NET_QUEUE_TX             1   /* Transmitq: guest -> device */
-#define VIRTIO_NET_NUM_QUEUES           2
+/* Maximum number of TX/RX queue pairs.  When VIRTIO_NET_F_MQ is negotiated,
+ * the driver reads MaxVirtqueuePairs from config space and uses up to that
+ * many pairs.  Each pair occupies two consecutive virtqueues:
+ *   Queue 2*i     = Receiveq i  (even index, device -> guest)
+ *   Queue 2*i + 1 = Transmitq i (odd index,  guest -> device)
+ *
+ * 4 pairs is a good default: matches typical multi-queue NIC vCPU affinity
+ * without excessive memory overhead. */
+#define ROSV_NET_MAX_QUEUE_PAIRS        4
+
+/* Total number of virtqueues = 2 * MaxPairs (no control VQ for now) */
+#define VIRTIO_NET_NUM_QUEUES           (ROSV_NET_MAX_QUEUE_PAIRS * 2)
+
+/* Legacy single-pair queue indices (pair 0) */
+#define VIRTIO_NET_QUEUE_RX             0   /* Receiveq 0: device -> guest */
+#define VIRTIO_NET_QUEUE_TX             1   /* Transmitq 0: guest -> device */
+
+/* Per virtio spec: even queue indices are RX, odd are TX */
+#define VIRTIO_NET_QUEUE_IS_RX(idx)     (((idx) & 1) == 0)
+#define VIRTIO_NET_QUEUE_IS_TX(idx)     (((idx) & 1) != 0)
+#define VIRTIO_NET_QUEUE_PAIR(idx)      ((idx) / 2)
 
 /* ---- TX packet ring buffer (guest -> host) ------------------------------ */
 
-#define ROSV_VIRTIO_NET_TX_RING_SIZE    1024
-#define ROSV_VIRTIO_NET_RX_RING_SIZE    2048
-#define ROSV_VIRTIO_NET_MAX_PACKET      1600  /* Same as ROSV_NET_PACKET_MAX */
+/* Dynamic ring sizing bounds (all must be powers of two).
+ * Rings start at INITIAL, grow up to MAX, shrink down to MIN. */
+#define ROSV_VIRTIO_NET_RING_SIZE_MIN   256
+#define ROSV_VIRTIO_NET_RING_SIZE_MAX   4096
+#define ROSV_VIRTIO_NET_RING_SIZE_INIT  2048
 
-/* Ring sizes must be powers of two for & (SIZE - 1) wraparound to work */
-C_ASSERT((ROSV_VIRTIO_NET_TX_RING_SIZE & (ROSV_VIRTIO_NET_TX_RING_SIZE - 1)) == 0);
-C_ASSERT((ROSV_VIRTIO_NET_RX_RING_SIZE & (ROSV_VIRTIO_NET_RX_RING_SIZE - 1)) == 0);
+C_ASSERT((ROSV_VIRTIO_NET_RING_SIZE_MIN & (ROSV_VIRTIO_NET_RING_SIZE_MIN - 1)) == 0);
+C_ASSERT((ROSV_VIRTIO_NET_RING_SIZE_MAX & (ROSV_VIRTIO_NET_RING_SIZE_MAX - 1)) == 0);
+C_ASSERT((ROSV_VIRTIO_NET_RING_SIZE_INIT & (ROSV_VIRTIO_NET_RING_SIZE_INIT - 1)) == 0);
+C_ASSERT(ROSV_VIRTIO_NET_RING_SIZE_MIN <= ROSV_VIRTIO_NET_RING_SIZE_INIT);
+C_ASSERT(ROSV_VIRTIO_NET_RING_SIZE_INIT <= ROSV_VIRTIO_NET_RING_SIZE_MAX);
+
+/* Ring resize thresholds and timing */
+#define ROSV_VIRTIO_NET_RING_GROW_PCT   75  /* Grow when occupancy exceeds 75% */
+#define ROSV_VIRTIO_NET_RING_SHRINK_PCT 25  /* Shrink when occupancy stays below 25% */
+#define ROSV_VIRTIO_NET_RING_GROW_CHECKS  3 /* Consecutive checks above grow threshold */
+#define ROSV_VIRTIO_NET_RING_SHRINK_SECS 10 /* Seconds below shrink threshold to trigger */
+#define ROSV_VIRTIO_NET_TX_RING_SHRINK_FLOOR ROSV_VIRTIO_NET_RING_SIZE_INIT
+
+#define ROSV_VIRTIO_NET_MAX_PACKET      1600  /* Same as ROSV_NET_PACKET_MAX */
+#define ROSV_VIRTIO_NET_TSO_MAX_PACKET  65536 /* Max TSO/GSO packet from guest (64KB) */
 
 typedef struct _ROSV_VIRTIO_NET_TX_ENTRY {
     ULONG Length;                               /* Bytes used in Data[] (0 = empty) */
@@ -127,6 +163,58 @@ typedef struct _ROSV_VIRTIO_NET_IRQ_COALESCE {
     ULONG   CoalesceMaxUsec;    /* Or after N microseconds (0 = no time limit) */
 } ROSV_VIRTIO_NET_IRQ_COALESCE, *PROSV_VIRTIO_NET_IRQ_COALESCE;
 
+/* ---- Per queue-pair state ------------------------------------------------ */
+
+/*
+ * Each TX/RX queue pair has its own ring buffers and synchronization
+ * primitives.  This allows independent, lock-free processing on different
+ * vCPUs or worker threads.
+ *
+ * All queue pairs share the same host backend: packets from any TX queue
+ * are funneled into the single TxRing for the host backend to dequeue,
+ * and RX packets from the host are distributed to pair 0's RX ring
+ * (future: RSS-style hashing across pairs).
+ */
+typedef struct _ROSV_VIRTIO_NET_QUEUE_PAIR {
+    /* TX side: guest -> host.
+     * Dynamically sized: starts at RING_SIZE_INIT, grows/shrinks
+     * between RING_SIZE_MIN and RING_SIZE_MAX. Always power-of-2. */
+    ROSV_VIRTIO_NET_TX_ENTRY *TxRing;   /* Dynamically allocated ring */
+    ULONG TxRingCapacity;  /* Current allocated entry count (power-of-2) */
+    ULONG TxRingHead;
+    ULONG TxRingTail;
+    ULONG TxRingCount;
+    ROSV_VIRTIO_NET_TX_ENTRY *TxDrainRing; /* Previous ring draining after resize */
+    ULONG TxDrainCapacity;
+    ULONG TxDrainTail;
+    ULONG TxDrainCount;
+    BOOLEAN TxBackpressure;
+    KSPIN_LOCK TxRingLock;
+    FAST_MUTEX TxQueueMutex;
+
+    /* RX side: host -> guest.
+     * Dynamically sized: same policy as TxRing. */
+    ROSV_VIRTIO_NET_TX_ENTRY *RxRing;   /* Dynamically allocated ring */
+    ULONG RxRingCapacity;  /* Current allocated entry count (power-of-2) */
+    ULONG RxRingHead;
+    ULONG RxRingTail;
+    ULONG RxRingCount;
+    ROSV_VIRTIO_NET_TX_ENTRY *RxDrainRing; /* Previous ring draining after resize */
+    ULONG RxDrainCapacity;
+    ULONG RxDrainTail;
+    ULONG RxDrainCount;
+    KSPIN_LOCK RxLock;
+    FAST_MUTEX RxQueueMutex;
+
+    /* Per-pair statistics */
+    ULONG64 TxPackets;
+    ULONG64 TxBytes;
+    ULONG64 RxPackets;
+    ULONG64 RxBytes;
+    ULONG   TxDropCount;
+    ULONG   RxDropCount;
+} ROSV_VIRTIO_NET_QUEUE_PAIR, *PROSV_VIRTIO_NET_QUEUE_PAIR;
+
 /* ---- Virtio-net device state -------------------------------------------- */
 
 typedef struct _ROSV_VIRTIO_NET_STATE {
@@ -141,36 +229,46 @@ typedef struct _ROSV_VIRTIO_NET_STATE {
     KSPIN_LOCK InterruptLock;   /* Protects InterruptStatus + InterruptPending */
     ULONG   ConfigGeneration;
 
-    /* Queue selector and virtqueues */
+    /* Queue selector and virtqueues.
+     * Layout: Vq[0]=RX0, Vq[1]=TX0, Vq[2]=RX1, Vq[3]=TX1, ... */
+    ULONG   NumQueuePairs;                          /* Active queue pairs (1..ROSV_NET_MAX_QUEUE_PAIRS) */
     ULONG   QueueSel;
-    ROSV_VIRTQUEUE Vq[VIRTIO_NET_NUM_QUEUES]; /* [0]=RX, [1]=TX */
+    ROSV_VIRTQUEUE Vq[VIRTIO_NET_NUM_QUEUES];       /* All RX/TX virtqueues */
 
     /* Network device configuration */
     VIRTIO_NET_CONFIG Config;
 
-    /* TX ring buffer: packets extracted from guest TX virtqueue,
-     * waiting to be picked up by the host network backend.
-     * (Guest TX -> host RX from the host's perspective.) */
-    ROSV_VIRTIO_NET_TX_ENTRY TxRing[ROSV_VIRTIO_NET_TX_RING_SIZE];
-    ULONG TxRingHead;      /* Next write position (producer: QUEUE_NOTIFY path) */
-    ULONG TxRingTail;      /* Next read position (consumer: NET_RX IOCTL) */
-    ULONG TxRingCount;     /* Current number of buffered packets */
-    BOOLEAN TxBackpressure; /* Guest TX queue has pending work but TxRing is full */
-    KSPIN_LOCK TxRingLock;  /* Protects TxRing* fields */
-    KEVENT TxReadyEvent;   /* Signaled when packet enters TxRing (for blocking NET_RX) */
-    FAST_MUTEX TxQueueMutex; /* Serialize guest TX virtqueue consumption */
+    /* Per queue-pair state (TX/RX rings, locks, stats).
+     * Pair 0 is always active; pairs 1..NumQueuePairs-1 are active only
+     * when the guest negotiates VIRTIO_NET_F_MQ.
+     * All rings are dynamically allocated and resizable. */
+    ROSV_VIRTIO_NET_QUEUE_PAIR QueuePairs[ROSV_NET_MAX_QUEUE_PAIRS];
 
-    /* RX path: packets from the host network backend pushed to guest RX virtqueue.
-     * If guest RX virtqueue has buffers available, inject directly.
-     * Otherwise, buffer in a ring for later injection when guest posts
-     * new RX buffers (QUEUE_NOTIFY on queue 0). */
-    ROSV_VIRTIO_NET_TX_ENTRY RxRing[ROSV_VIRTIO_NET_RX_RING_SIZE];
-    ULONG RxRingHead;      /* Next write position (producer: InjectRxPacket) */
-    ULONG RxRingTail;      /* Next read position (consumer: QUEUE_NOTIFY on queue 0) */
-    ULONG RxRingCount;     /* Current number of buffered packets */
-    KSPIN_LOCK RxLock;      /* Protects RxRing* fields */
-    KEVENT RxPendingEvent;  /* Signaled when host→guest packet injected (wakes vCPU yield) */
-    FAST_MUTEX RxQueueMutex; /* Serialize guest RX virtqueue writes */
+    /* Shared events (pair 0 -- kept here for API compatibility) */
+    KEVENT TxReadyEvent;   /* Signaled when any TX ring receives a packet */
+    KEVENT RxPendingEvent;  /* Signaled when host->guest packet injected */
+
+    /* Dynamic ring resize state.
+     * A periodic DPC (1-second interval) samples ring occupancy. If the
+     * occupancy exceeds GROW_PCT for GROW_CHECKS consecutive ticks the
+     * ring doubles (capped at RING_SIZE_MAX). If it stays below SHRINK_PCT
+     * for SHRINK_SECS consecutive seconds the ring halves (floor at
+     * RING_SIZE_MIN, except TX stays at least at the initial single-queue
+     * size). Resize swaps in a fresh active ring under the respective spin
+     * lock and drains the old ring asynchronously to avoid bulk copies in
+     * the hot lock-held path. */
+    KTIMER      RingResizeTimer;
+    KDPC        RingResizeDpc;
+    ULONG       TxGrowCounter;      /* Consecutive ticks above grow threshold */
+    ULONG       TxShrinkCounter;    /* Consecutive ticks below shrink threshold */
+    ULONG       RxGrowCounter;
+    ULONG       RxShrinkCounter;
+    BOOLEAN     RingResizeTimerActive;
+
+    /* Ring watermark / resize statistics */
+    ULONG       TxRingHighWatermark; /* Peak TxRingCount seen */
+    ULONG       RxRingHighWatermark; /* Peak RxRingCount seen */
+    ULONG       RingResizeCount;     /* Total grow + shrink operations */
 
     /* Interrupt coalescing (reduces VM-exit rate during bulk transfers) */
     ROSV_VIRTIO_NET_IRQ_COALESCE IrqCoalesce;
@@ -178,13 +276,20 @@ typedef struct _ROSV_VIRTIO_NET_STATE {
     /* Parent VM (for GPA translation and interrupt injection) */
     PROSV_VM OwnerVm;
 
-    /* Statistics */
+    /* Aggregate statistics (sum of all pairs for quick access) */
     ULONG64 TxPackets;
     ULONG64 TxBytes;
     ULONG64 RxPackets;
     ULONG64 RxBytes;
-    ULONG   TxDropCount;    /* Packets dropped due to TX ring full */
-    ULONG   RxDropCount;    /* Packets dropped due to RX ring full */
+    ULONG   TxDropCount;
+    ULONG   RxDropCount;
+
+    /* Pre-allocated TSO scratch buffers (avoid large stack allocations).
+     * TsoGatherBuf holds the full GSO packet from the guest (up to 64KB).
+     * TsoSegBuf holds one output segment during segmentation.
+     * Protected by the per-pair TxQueueMutex. */
+    PUCHAR TsoGatherBuf;    /* ROSV_VIRTIO_NET_TSO_MAX_PACKET bytes */
+    PUCHAR TsoSegBuf;       /* ROSV_VIRTIO_NET_MAX_PACKET bytes */
 
     /* Perf tracing state */
     LARGE_INTEGER PerfFrequency;
@@ -260,3 +365,13 @@ RosvVirtioNetInjectRxPacket(
 BOOLEAN
 RosvVirtioNetRxRingHasSpace(
     _In_ PROSV_VIRTIO_NET_STATE State);
+
+/* Start / stop the periodic ring-resize timer (1-second interval).
+ * Called from Initialize and Destroy respectively. */
+VOID
+RosvVirtioNetStartResizeTimer(
+    _Inout_ PROSV_VIRTIO_NET_STATE State);
+
+VOID
+RosvVirtioNetStopResizeTimer(
+    _Inout_ PROSV_VIRTIO_NET_STATE State);

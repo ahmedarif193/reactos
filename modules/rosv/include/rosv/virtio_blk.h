@@ -154,7 +154,24 @@ typedef struct _VIRTIO_BLK_REQ_HDR {
 
 C_ASSERT(sizeof(VIRTIO_BLK_REQ_HDR) == 16);
 
-/* Block device configuration (Section 5.2.4) */
+/* Block device configuration (Section 5.2.4)
+ *
+ * When VIRTIO_BLK_F_MQ is negotiated the config space includes a num_queues
+ * field at offset 0x24 telling the driver how many request virtqueues are
+ * available.  Each queue is independently selectable via QUEUE_SEL and can
+ * be serviced by a separate I/O thread or vCPU.
+ *
+ * Layout (packed):
+ *   0x00  ULONG64  Capacity
+ *   0x08  ULONG    SizeMax
+ *   0x0C  ULONG    SegMax
+ *   0x10  Geometry (4 bytes)
+ *   0x14  ULONG    BlkSize
+ *   0x18  Topology (8 bytes -- we pad with zeros)
+ *   0x20  UCHAR    Writeback
+ *   0x21  UCHAR    Unused0
+ *   0x22  USHORT   NumQueues    <-- VIRTIO_BLK_F_MQ
+ */
 typedef struct _VIRTIO_BLK_CONFIG {
     ULONG64 Capacity;       /* Disk size in 512-byte sectors */
     ULONG   SizeMax;        /* Max segment size (if VIRTIO_BLK_F_SIZE_MAX) */
@@ -166,6 +183,17 @@ typedef struct _VIRTIO_BLK_CONFIG {
         UCHAR  Sectors;
     } Geometry;
     ULONG   BlkSize;        /* Block size (if VIRTIO_BLK_F_BLK_SIZE) */
+    /* Topology (if VIRTIO_BLK_F_TOPOLOGY) -- zeroed, present for correct
+     * offset alignment of NumQueues per the virtio 1.0 spec. */
+    struct {
+        UCHAR  PhysicalBlockExp;
+        UCHAR  AlignmentOffset;
+        USHORT MinIoSize;
+        ULONG  OptIoSize;
+    } Topology;
+    UCHAR   Writeback;      /* Write cache mode (0=writethrough) */
+    UCHAR   Unused0;
+    USHORT  NumQueues;      /* Number of request queues (if VIRTIO_BLK_F_MQ) */
 } VIRTIO_BLK_CONFIG, *PVIRTIO_BLK_CONFIG;
 
 #include <poppack.h>
@@ -173,6 +201,20 @@ typedef struct _VIRTIO_BLK_CONFIG {
 /* ---- Virtqueue state ---------------------------------------------------- */
 
 #define ROSV_VIRTIO_QUEUE_SIZE_MAX      256     /* Maximum virtqueue depth */
+
+/* ---- Multi-queue configuration ------------------------------------------ */
+
+/* Maximum number of request virtqueues for virtio-blk multi-queue (MQ).
+ * Each queue is independently addressable via QUEUE_SEL / QUEUE_NOTIFY
+ * and can be serviced by a dedicated worker thread.
+ *
+ * When the guest does NOT negotiate VIRTIO_BLK_F_MQ, only queue 0 is used
+ * (single-queue legacy behaviour).  When MQ is negotiated, all NumQueues
+ * queues become active.
+ *
+ * 4 queues is the sweet-spot for a single-disk VM: enough to saturate a
+ * modern NVMe backend without excessive per-queue memory overhead. */
+#define ROSV_BLK_NUM_QUEUES             4
 
 typedef struct _ROSV_VIRTQUEUE {
     /* Queue configuration (set by driver during init) */
@@ -249,9 +291,20 @@ typedef struct _ROSV_VIRTIO_BLK_STATE {
     BOOLEAN InterruptPending;           /* Edge-triggered injection latch */
     ULONG   ConfigGeneration;           /* Config space change counter */
 
-    /* Virtqueue (only queue 0 for virtio-blk) */
-    ULONG   QueueSel;                   /* Currently selected queue index */
-    ROSV_VIRTQUEUE Vq;                  /* The single request queue */
+    /* Virtqueues — multi-queue (VIRTIO_BLK_F_MQ).
+     *
+     * NumQueues is set at init time:
+     *   - Always ROSV_BLK_NUM_QUEUES in the device config space.
+     *   - The guest may choose to use fewer; only queues with Ready==TRUE
+     *     will be serviced on QUEUE_NOTIFY.
+     *
+     * QueueSel tracks the MMIO QUEUE_SEL register: all queue-specific
+     * register accesses (QUEUE_NUM, QUEUE_READY, QUEUE_DESC_*, etc.)
+     * operate on Vqs[QueueSel].
+     */
+    ULONG   NumQueues;                  /* Number of advertised request queues */
+    ULONG   QueueSel;                   /* Currently selected queue index (MMIO QUEUE_SEL) */
+    ROSV_VIRTQUEUE Vqs[ROSV_BLK_NUM_QUEUES]; /* Request queues [0..NumQueues-1] */
 
     /* Block device configuration */
     VIRTIO_BLK_CONFIG Config;
@@ -292,6 +345,37 @@ typedef struct _ROSV_VIRTIO_BLK_STATE {
 
     /* COW (copy-on-write) sector cache for read-only backing images */
     ROSV_COW_CACHE CowCache;
+
+    /* ---- Async request queue ------------------------------------------------
+     *
+     * Decouples virtqueue parsing (VM-exit path) from actual I/O processing.
+     * The VM-exit handler enqueues parsed request metadata into this ring;
+     * a dedicated worker thread dequeues entries, performs the I/O, pushes
+     * used-ring completions, and injects a batch interrupt.
+     *
+     * When the async queue is full the VM-exit path falls back to inline
+     * synchronous processing, so correctness is never lost.
+     */
+#define ROSV_BLK_ASYNC_QUEUE_SIZE 32
+
+    struct {
+        struct {
+            ULONG DescIdx;      /* Head descriptor index (for used-ring push) */
+            ULONG Type;         /* VIRTIO_BLK_T_IN / OUT / FLUSH / GET_ID */
+            ULONG64 Sector;     /* Starting 512-byte sector from request header */
+            ULONG DataLen;      /* Total data payload length (bytes) */
+            ULONG64 DataGpa;    /* Guest physical address of data buffer */
+            ULONG64 StatusGpa;  /* Guest physical address of status byte */
+        } Entries[ROSV_BLK_ASYNC_QUEUE_SIZE];
+        volatile LONG Head;     /* Producer index (VM-exit path writes) */
+        volatile LONG Tail;     /* Consumer index (worker thread reads) */
+        volatile LONG Count;    /* Number of entries currently queued */
+        KEVENT WorkAvailable;   /* Signaled when new work is enqueued */
+        KEVENT WorkComplete;    /* Signaled when worker drains a batch (for shutdown) */
+        volatile LONG Running;  /* 1 while worker thread should keep running */
+        HANDLE WorkerThread;    /* Worker thread handle */
+        PKTHREAD WorkerThreadObject; /* Referenced thread object for shutdown wait */
+    } AsyncQueue;
 } ROSV_VIRTIO_BLK_STATE, *PROSV_VIRTIO_BLK_STATE;
 
 /* ---- Function prototypes (device/virtio_blk.c) -------------------------- */
