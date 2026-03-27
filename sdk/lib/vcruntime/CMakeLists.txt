@@ -70,6 +70,7 @@ elseif(${ARCH} STREQUAL "amd64")
     )
     list(APPEND VCRT_SETJMP_ASM_SOURCES
         amd64/__longjmp_noframe.s
+        amd64/_intrinsic_setjmp.s
         amd64/_setjmp.s
     )
 elseif(${ARCH} STREQUAL "arm")
