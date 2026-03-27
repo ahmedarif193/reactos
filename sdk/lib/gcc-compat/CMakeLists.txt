@@ -5,7 +5,9 @@ include_directories(
 list(APPEND SOURCE
     __mingw_vsprintf.c
     __throw_out_of_range_fmt.cpp
-    StringCchCopyNA.c)
+    StringCchCopyNA.c
+    wctype_compat.c
+    ftelli64_compat.c)
 
 if(DLL_EXPORT_VERSION LESS 0x600)
     list(APPEND SOURCE
