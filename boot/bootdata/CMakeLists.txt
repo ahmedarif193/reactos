@@ -51,19 +51,25 @@ endif()
 # freeldr.ini
 add_cd_file(FILE ${CMAKE_CURRENT_SOURCE_DIR}/bootcd.ini DESTINATION root NO_CAB NAME_ON_CD freeldr.ini FOR bootcd)
 add_cd_file(FILE ${CMAKE_CURRENT_SOURCE_DIR}/bootcd_regtest.ini DESTINATION root NO_CAB NAME_ON_CD freeldr.ini FOR regtest)
+add_cd_file(FILE ${CMAKE_CURRENT_SOURCE_DIR}/preinstall.ini DESTINATION root NAME_ON_CD freeldr.ini FOR preinstall)
 
 # Unattend
 add_cd_file(FILE ${CMAKE_CURRENT_SOURCE_DIR}/bootcd/unattend.inf DESTINATION reactos NO_CAB FOR bootcd)
 add_cd_file(FILE ${CMAKE_CURRENT_SOURCE_DIR}/bootcdregtest/unattend.inf DESTINATION reactos NO_CAB FOR regtest)
 add_cd_file(FILE ${CMAKE_CURRENT_SOURCE_DIR}/livecd/unattend.inf DESTINATION reactos NO_CAB FOR livecd)
+add_cd_file(FILE ${CMAKE_CURRENT_SOURCE_DIR}/preinstall/unattend.inf DESTINATION reactos FOR preinstall)
+
 
 # LiveImage shortcuts
 add_custom_target(livecd_links)
 function(add_livecd_shortcut name path)
-    # Only handle DESTINATION; transfer all the other parameters verbatim to add_link()
-    cmake_parse_arguments(_shortcut "" "" "DESTINATION" ${ARGN})
+    # Only handle DESTINATION and FOR; transfer all the other parameters verbatim to add_link()
+    cmake_parse_arguments(_shortcut "" "" "DESTINATION;FOR" ${ARGN})
     if(NOT _shortcut_DESTINATION)
         message(FATAL_ERROR "You must provide at least one destination")
+    endif()
+    if(NOT _shortcut_FOR)
+        set(_shortcut_FOR livecd preinstall)
     endif()
 
     add_link(${name} ${path} ${_shortcut_UNPARSED_ARGUMENTS})
@@ -74,7 +80,7 @@ function(add_livecd_shortcut name path)
         add_cd_file(FILE "${CMAKE_CURRENT_BINARY_DIR}/${name}.lnk"
                     TARGET livecd_links
                     DESTINATION ${dest}
-                    FOR livecd)
+                    FOR ${_shortcut_FOR})
     endforeach()
 endfunction()
 
@@ -118,6 +124,7 @@ add_livecd_shortcut("Install ReactOS"
     CMDLINE_ARGS "/D /E:ON /C \"start ${envvar_systemdrive}\\${envvar_archdir}\\reactos.exe\""
     ICON "${envvar_systemroot}\\system32\\msiexec.exe"
     MINIMIZE
+    FOR livecd
     DESTINATION "${dir_allusers_desktop}")
 
 add_livecd_shortcut("Read Me"
