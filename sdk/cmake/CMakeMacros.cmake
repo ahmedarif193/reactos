@@ -379,7 +379,7 @@ function(add_cd_file)
     if(NOT __cd EQUAL -1)
         # manage dependency
         if(_CD_TARGET)
-            add_dependencies(preinstall_partition ${_CD_TARGET} registry_inf)
+            add_dependencies(reactosimg ${_CD_TARGET} registry_inf)
         endif()
         foreach(item ${_CD_FILE})
             if(_CD_NAME_ON_CD)
@@ -441,8 +441,10 @@ endif()
 
     # Write the BootCD file list
     get_property(_filelist GLOBAL PROPERTY BOOTCD_FILE_LIST)
-    string(REPLACE ";" "\n" _filelist "${_filelist}")
-    file(APPEND ${REACTOS_BINARY_DIR}/boot/bootcd.cmake.lst "${_filelist}")
+    if(_filelist)
+        string(REPLACE ";" "\n" _filelist "${_filelist}")
+        file(APPEND ${REACTOS_BINARY_DIR}/boot/bootcd.cmake.lst "${_filelist}\n")
+    endif()
     unset(_filelist)
     # Also, append the file contents list of the LiveImage to the BootCD file list
     file(APPEND ${REACTOS_BINARY_DIR}/boot/bootcd.cmake.lst "\n")
@@ -453,7 +455,26 @@ endif()
          OUTPUT ${REACTOS_BINARY_DIR}/boot/bootcd.$<CONFIG>.lst
          INPUT ${REACTOS_BINARY_DIR}/boot/bootcd.cmake.lst)
 
-    # Write the BootCDRegTest file list
+    get_property(_filelist GLOBAL PROPERTY LIVECD_FILE_LIST)
+    if(_filelist)
+        string(REPLACE ";" "\n" _filelist "${_filelist}")
+        file(APPEND ${REACTOS_BINARY_DIR}/boot/livecd.cmake.lst "${_filelist}\n")
+    endif()
+    unset(_filelist)
+    file(GENERATE
+         OUTPUT ${REACTOS_BINARY_DIR}/boot/livecd.$<CONFIG>.lst
+         INPUT ${REACTOS_BINARY_DIR}/boot/livecd.cmake.lst)
+
+    get_property(_filelist GLOBAL PROPERTY HYBRIDCD_FILE_LIST)
+    if(_filelist)
+        string(REPLACE ";" "\n" _filelist "${_filelist}")
+        file(APPEND ${REACTOS_BINARY_DIR}/boot/hybridcd.cmake.lst "${_filelist}\n")
+    endif()
+    unset(_filelist)
+    file(GENERATE
+         OUTPUT ${REACTOS_BINARY_DIR}/boot/hybridcd.$<CONFIG>.lst
+         INPUT ${REACTOS_BINARY_DIR}/boot/hybridcd.cmake.lst)
+
     get_property(_filelist GLOBAL PROPERTY BOOTCDREGTEST_FILE_LIST)
     if(_filelist)
         string(REPLACE ";" "\n" _filelist "${_filelist}")
