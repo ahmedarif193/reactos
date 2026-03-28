@@ -1336,11 +1336,7 @@ typedef struct _ETHREAD
     KSEMAPHORE AlpcWaitSemaphore;
     ULONG CacheManagerCount;
 #endif
-    // TODO: Missing Vista+ members
-#if (NTDDI_VERSION >= NTDDI_WIN10_RS1) || defined(__REACTOS__)
-    PUNICODE_STRING ThreadName;
-    // TODO: Missing Win10+ members
-#endif
+    UNICODE_STRING ThreadName;
 } ETHREAD;
 
 //
