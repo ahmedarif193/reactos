@@ -637,5 +637,4 @@ static const INFORMATION_CLASS_INFO PsThreadInfoClass[] =
     IQS_NONE,
     /* ThreadEffectivePagePriority */
     IQS_NONE,
-#endif
 };
