@@ -65,6 +65,14 @@ UniataSataConnect(
         return IDE_STATUS_IDLE;
     }
 
+    /* Early check: no device present, skip lengthy poll */
+    SStatus.Reg = UniataSataReadPort4(chan, IDX_SATA_SStatus, pm_port);
+    if(SStatus.DET == SStatus_DET_NoDev && SStatus.SPD == SStatus_SPD_NoDev) {
+        KdPrint((PRINT_PREFIX "UniataSataConnect: ch %lu no device (SStatus %#x), skipping\n",
+                 lChannel, SStatus.Reg));
+        return IDE_STATUS_WRONG;
+    }
+
     /* clear SATA error register, some controllers need this */
     UniataSataWritePort4(chan, IDX_SATA_SError,
         UniataSataReadPort4(chan, IDX_SATA_SError, pm_port), pm_port);
@@ -145,6 +153,18 @@ UniataSataPhyEnable(
     if(SControl.DET == SControl_DET_Idle) {
         if(!doReset) {
             return UniataSataConnect(HwDeviceExtension, lChannel, pm_port);
+        }
+    }
+
+    /* Quick check: if no device after initial reset, skip retry loop */
+    {
+        SATA_SSTATUS_REG SStatus;
+        AtapiStallExecution(1000);
+        SStatus.Reg = UniataSataReadPort4(chan, IDX_SATA_SStatus, pm_port);
+        if(SStatus.DET == SStatus_DET_NoDev) {
+            KdPrint((PRINT_PREFIX "UniataSataPhyEnable: ch %lu no device after reset (SStatus %#x), skipping retries\n",
+                     lChannel, SStatus.Reg));
+            return IDE_STATUS_WRONG;
         }
     }
 
@@ -1940,6 +1960,20 @@ UniataAhciReset(
     KdPrint(("UniataAhciReset: lChan %d\n", chan->lChannel));
 
     //base = (ULONGIO_PTR)(&deviceExtension->BaseIoAHCI_0 + offs);
+
+    /* Skip full reset if no device present */
+    {
+        SATA_SSTATUS_REG SStatus;
+        SStatus.Reg = UniataSataReadPort4(chan, IDX_SATA_SStatus, 0);
+        if(SStatus.DET == SStatus_DET_NoDev) {
+            KdPrint(("UniataAhciReset: lChan %d no device (SStatus %#x), skipping reset\n",
+                     lChannel, SStatus.Reg));
+            for (i=0; i<deviceExtension->NumberLuns; i++) {
+                UniataForgetDevice(chan->lun[i]);
+            }
+            return;
+        }
+    }
 
     /* Disable port interrupts */
     UniataAhciWriteChannelPort4(chan, IDX_AHCI_P_IE, 0);
