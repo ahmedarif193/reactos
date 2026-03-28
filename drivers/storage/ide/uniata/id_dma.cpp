@@ -313,13 +313,21 @@ AtapiDmaSetup(
             dma_base = chan->DB_PRD_PhAddr;
             AtaReq->Flags |= REQ_FLAG_DMA_DBUF_PRD;
             i = 1;
+        } else
+        if(use_AHCI) {
+            /* AHCI cmd table above 4GB: force copy-to-below-4GB path.
+             * The ata.dma_base (ULONG) alias loses upper 32 bits of ahci_base64. */
+            KdPrint2((PRINT_PREFIX "AtapiDmaSetup: AHCI CMD above 4Gb, using CTL block copy path\n"));
+            AtaReq->ahci.ahci_base64 = 0;
         }
     } else
     if(!dma_base || !i || ((LONG)(dma_base) == -1)) {
         KdPrint2((PRINT_PREFIX "AtapiDmaSetup: No BASE\n" ));
         return FALSE;
     }
-    AtaReq->ata.dma_base = dma_base; // aliased to AtaReq->ahci.ahci_base64
+    if(!use_AHCI) {
+        AtaReq->ata.dma_base = dma_base; // only safe for non-AHCI (32-bit alias)
+    }
 
     KdPrint2((PRINT_PREFIX "  get Phys(data[0]=%x)\n", data ));
     dma_base = AtapiVirtToPhysAddr(HwDeviceExtension, Srb, data, &dma_count, &dma_baseu);
@@ -330,7 +338,8 @@ retry_DB_IO:
             use_DB_IO = TRUE;
             dma_base = chan->DB_IO_PhAddr;
             data = (PUCHAR)(chan->DB_IO);
-        } else {
+        } else
+        if(!use_AHCI) {
             AtaReq->ahci.ahci_base64 = (ULONGLONG)dma_base | ((ULONGLONG)dma_baseu << 32);
         }
     } else
