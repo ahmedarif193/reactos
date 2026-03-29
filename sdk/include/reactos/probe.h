@@ -7,6 +7,14 @@
 #error Header intended for use by NTOSKRNL/WIN32K only!
 #endif
 
+#ifndef ROS_PROBE_UNUSED
+#if defined(__GNUC__)
+#define ROS_PROBE_UNUSED __attribute__((unused))
+#else
+#define ROS_PROBE_UNUSED
+#endif
+#endif
+
 static const UNICODE_STRING __emptyUnicodeString = {0, 0, NULL};
 static const LARGE_INTEGER __emptyLargeInteger = {{0, 0}};
 static const ULARGE_INTEGER __emptyULargeInteger = {{0, 0}};
@@ -137,7 +145,7 @@ ProbeArrayForWrite(IN OUT PVOID ArrayPtr,
 }
 #endif /* _WIN32K_ */
 
-__attribute__((unused))
+ROS_PROBE_UNUSED
 static __inline
 NTSTATUS
 ProbeAndCaptureUnicodeString(OUT PUNICODE_STRING Dest,
