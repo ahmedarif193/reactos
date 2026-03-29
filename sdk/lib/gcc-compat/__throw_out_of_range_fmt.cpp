@@ -5,9 +5,10 @@
  * COPYRIGHT:   Copyright 2024 Timo Kreuzer <timo.kreuzer@reactos.org>
  */
 
-#include <stdexcept>
+#include <exception>
 #include <cstdarg>
 #include <cstring>
+#include <stdio.h>
 #include <malloc.h>
 
 namespace std {
@@ -32,7 +33,7 @@ void __throw_out_of_range_fmt(const char *format, ...)
     va_list argptr;
 
     va_start(argptr, format);
-    _vsnprintf(buffer, sizeof(buffer), format, argptr);
+    ::_vsnprintf(buffer, sizeof(buffer), format, argptr);
     buffer[sizeof(buffer) - 1] = 0;
     va_end(argptr);
 
