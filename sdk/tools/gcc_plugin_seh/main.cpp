@@ -6,18 +6,24 @@
  *              Copyright 2024 Timo Kreuzer <timo.kreuzer@reactos.org>
  */
 
+#include <iostream>
+#include <sstream>
+#include <unordered_map>
+#include <vector>
+#include <cstdio>
+#include <cstring>
+
+/*
+ * GCC plugin headers pull in safe-ctype.h, which defines macros like
+ * toupper()/isspace(). Include the C++ standard library first so those
+ * macros do not rewrite declarations inside libc++ on Apple hosts.
+ */
 #include <gcc-plugin.h>
 #include <plugin-version.h>
 #include <function.h>
 #include <tree.h>
 #include <c-family/c-pragma.h>
 #include <c-family/c-common.h>
-
-#include <iostream>
-#include <sstream>
-#include <unordered_map>
-#include <vector>
-#include <cstdio>
 
 #if 0 // To enable tracing
 #define trace(...) fprintf(stderr, __VA_ARGS__)
