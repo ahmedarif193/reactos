@@ -1,10 +1,16 @@
 /*
  * Provide wctype() for libstdc++ compatibility.
  * MSVCRT does not export wctype(), only iswctype() and the _wctype table.
+ *
+ * For pre-0x600 CRTs, wchar_compat.c provides wctype together with wctob/btowc.
+ * Keep this file in the target so incremental static-library rebuilds overwrite
+ * any stale archive member, but emit no symbol in that configuration.
  */
 
 #include <wctype.h>
 #include <string.h>
+
+#if DLL_EXPORT_VERSION >= 0x600
 
 wctype_t wctype(const char *property)
 {
@@ -30,3 +36,5 @@ wctype_t wctype(const char *property)
     }
     return 0;
 }
+
+#endif
