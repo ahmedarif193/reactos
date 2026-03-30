@@ -34,6 +34,7 @@ endif()
 
 if(USE_DUMMY_PSEH)
     add_definitions(-D_USE_DUMMY_PSEH=1)
+    add_definitions(-D_USE_NATIVE_SEH=1)
 endif()
 
 if(STACK_PROTECTOR)
