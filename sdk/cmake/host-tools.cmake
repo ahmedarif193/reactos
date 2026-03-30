@@ -9,7 +9,7 @@ function(setup_host_tools)
             list(APPEND HOST_TOOLS rsym)
         endif()
     endif()
-    if ((ARCH STREQUAL "amd64") AND (CMAKE_C_COMPILER_ID STREQUAL "GNU"))
+    if ((ARCH STREQUAL "amd64") AND (CMAKE_C_COMPILER_ID STREQUAL "GNU") AND (NOT USE_DUMMY_PSEH))
         execute_process(
             COMMAND ${CMAKE_C_COMPILER} --print-file-name=plugin
             OUTPUT_VARIABLE GCC_PLUGIN_DIR)
