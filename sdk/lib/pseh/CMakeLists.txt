@@ -11,14 +11,19 @@ if(MSVC OR ((CMAKE_C_COMPILER_ID STREQUAL "Clang") AND (ARCH STREQUAL "amd64")))
     add_library(pseh ${SOURCE} ${pseh_asm})
     add_dependencies(pseh asm)
 elseif((CMAKE_C_COMPILER_ID STREQUAL "GNU") AND (ARCH STREQUAL "amd64"))
-    # for GCC amd64 this is just an interface library, with our home-made plugin
-    add_library(pseh INTERFACE)
-    if (CMAKE_HOST_WIN32)
-        target_compile_options(pseh INTERFACE
-            $<$<COMPILE_LANGUAGE:C>:-fplugin=$<TARGET_FILE:native-gcc_plugin_seh>>
-            $<$<COMPILE_LANGUAGE:CXX>:-fplugin=$<TARGET_FILE:native-g++_plugin_seh>>)
+    if(USE_DUMMY_PSEH)
+        list(APPEND SOURCE dummy.c)
+        add_library(pseh ${SOURCE})
     else()
-        target_compile_options(pseh INTERFACE $<$<COMPILE_LANGUAGE:C,CXX>:-fplugin=$<TARGET_FILE:native-gcc_plugin_seh>>)
+        # for GCC amd64 this is just an interface library, with our home-made plugin
+        add_library(pseh INTERFACE)
+        if (CMAKE_HOST_WIN32)
+            target_compile_options(pseh INTERFACE
+                $<$<COMPILE_LANGUAGE:C>:-fplugin=$<TARGET_FILE:native-gcc_plugin_seh>>
+                $<$<COMPILE_LANGUAGE:CXX>:-fplugin=$<TARGET_FILE:native-g++_plugin_seh>>)
+        else()
+            target_compile_options(pseh INTERFACE $<$<COMPILE_LANGUAGE:C,CXX>:-fplugin=$<TARGET_FILE:native-gcc_plugin_seh>>)
+        endif()
     endif()
 else()
 

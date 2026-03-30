@@ -25,7 +25,7 @@
 
 #define __USE_PSEH2__
 
-#if defined(_USE_NATIVE_SEH) || defined(_MSC_VER)
+#if defined(_MSC_VER) || (defined(_USE_NATIVE_SEH) && !defined(__cplusplus))
 
 #define _SEH2_TRY __try
 #define _SEH2_FINALLY __finally
@@ -40,7 +40,7 @@
 
 #define __endtry
 
-#elif defined(__GNUC__) && !defined(__clang__) && defined(_M_AMD64)
+#elif defined(__GNUC__) && !defined(__clang__) && defined(_M_AMD64) && !defined(_USE_DUMMY_PSEH)
 
 #include "pseh2_64.h"
 
