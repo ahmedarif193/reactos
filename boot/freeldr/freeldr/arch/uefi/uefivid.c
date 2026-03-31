@@ -7,7 +7,6 @@
 
 #include <uefildr.h>
 #include "../vidfb.h"
-#include <reactos/drivers/acpi/acpi.h>
 
 #include <debug.h>
 DBG_DEFAULT_CHANNEL(UI);
@@ -591,7 +590,7 @@ UefiCalculateBmpRowStride(
     ULONGLONG BitsPerRow, Stride;
 
     BitsPerRow = (ULONGLONG)Width * BitsPerPixel;
-    Stride = ((BitsPerRow + 31) / 32) * sizeof(ULONG);
+    Stride = ROUND_UP(BitsPerRow, 32) / 8;
     if (Stride > MAXULONG)
         return FALSE;
 
@@ -599,8 +598,9 @@ UefiCalculateBmpRowStride(
     return TRUE;
 }
 
+static
 VOID
-UefiPrepareLogoAxis(
+UefiPrepareCenteredLogoAxis(
     _In_ ULONG BitmapSize,
     _In_ ULONG ScreenSize,
     _Out_ PULONG SourceOffset,
@@ -622,6 +622,97 @@ UefiPrepareLogoAxis(
 
 static
 VOID
+UefiPreparePositionedLogoAxis(
+    _In_ ULONG BitmapSize,
+    _In_ ULONG ScreenSize,
+    _In_ ULONG RequestedOffset,
+    _Out_ PULONG SourceOffset,
+    _Out_ PULONG DestinationOffset,
+    _Out_ PULONG DrawSize)
+{
+    *SourceOffset = 0;
+    *DestinationOffset = RequestedOffset;
+
+    if (RequestedOffset >= ScreenSize)
+    {
+        *DrawSize = 0;
+        return;
+    }
+
+    *DrawSize = min(BitmapSize, ScreenSize - RequestedOffset);
+}
+
+static
+VOID
+UefiGetRotatedLogoSize(
+    _In_ PUEFI_BGRT_LOGO Logo,
+    _Out_ PULONG Width,
+    _Out_ PULONG Height)
+{
+    if ((Logo->Orientation == BGRT_ORIENTATION_90) ||
+        (Logo->Orientation == BGRT_ORIENTATION_270))
+    {
+        *Width = Logo->Height;
+        *Height = Logo->Width;
+        return;
+    }
+
+    *Width = Logo->Width;
+    *Height = Logo->Height;
+}
+
+static
+VOID
+UefiGetLogoSourceCoordinates(
+    _In_ PUEFI_BGRT_LOGO Logo,
+    _In_ ULONG X,
+    _In_ ULONG Y,
+    _Out_ PULONG SourceX,
+    _Out_ PULONG SourceY)
+{
+    switch (Logo->Orientation)
+    {
+        case BGRT_ORIENTATION_90:
+            *SourceX = Y;
+            *SourceY = Logo->Height - 1 - X;
+            break;
+
+        case BGRT_ORIENTATION_180:
+            *SourceX = Logo->Width - 1 - X;
+            *SourceY = Logo->Height - 1 - Y;
+            break;
+
+        case BGRT_ORIENTATION_270:
+            *SourceX = Logo->Width - 1 - Y;
+            *SourceY = X;
+            break;
+
+        case BGRT_ORIENTATION_0:
+        default:
+            *SourceX = X;
+            *SourceY = Y;
+            break;
+    }
+}
+
+static
+__inline
+PUCHAR
+UefiGetLogoPixelAddress(
+    _In_ PUEFI_BGRT_LOGO Logo,
+    _In_ ULONG X,
+    _In_ ULONG Y)
+{
+    ULONG SourceRowIndex;
+
+    SourceRowIndex = (Logo->TopDown ? Y : (Logo->Height - 1 - Y));
+    return Logo->PixelData +
+           SourceRowIndex * Logo->RowStride +
+           X * (Logo->BitsPerPixel / 8);
+}
+
+static
+VOID
 UefiInitializeBgrtLogo(VOID)
 {
     PBGRT_TABLE BgrtTable;
@@ -629,8 +720,10 @@ UefiInitializeBgrtLogo(VOID)
     PBMP_INFO_HEADER InfoHeader;
     ULONG RowStride, HeaderSize;
     ULONG Width, Height;
+    ULONG RotatedWidth, RotatedHeight;
     ULONGLONG ImageSize;
     LONGLONG SignedHeight;
+    BOOLEAN UseFirmwarePlacement;
 
     RtlZeroMemory(&UefiBgrtLogo, sizeof(UefiBgrtLogo));
 
@@ -661,7 +754,7 @@ UefiInitializeBgrtLogo(VOID)
         return;
     }
 
-    if (BgrtTable->ImageType != BgrtImageTypeBitmap)
+    if (BgrtTable->ImageType != BGRT_IMAGE_TYPE_BITMAP)
     {
         WARN("Unsupported BGRT image type %u\n", BgrtTable->ImageType);
         return;
@@ -681,8 +774,16 @@ UefiInitializeBgrtLogo(VOID)
         return;
     }
 
+    if (FileHeader->Size < sizeof(*FileHeader) + sizeof(*InfoHeader))
+    {
+        WARN("BGRT BMP is too small for a BITMAPINFOHEADER (%lu)\n",
+             FileHeader->Size);
+        return;
+    }
+
     InfoHeader = (PBMP_INFO_HEADER)(FileHeader + 1);
-    if (InfoHeader->Size < sizeof(*InfoHeader))
+    if ((InfoHeader->Size < sizeof(*InfoHeader)) ||
+        (InfoHeader->Size > FileHeader->Size - sizeof(*FileHeader)))
     {
         WARN("Unsupported BMP info header size %lu\n", InfoHeader->Size);
         return;
@@ -747,21 +848,51 @@ UefiInitializeBgrtLogo(VOID)
     UefiBgrtLogo.Height = Height;
     UefiBgrtLogo.RowStride = RowStride;
     UefiBgrtLogo.BitsPerPixel = InfoHeader->BitCount;
+    UefiBgrtLogo.Orientation =
+        (UCHAR)((BgrtTable->Status & BGRT_STATUS_ORIENTATION_MASK) >> 1);
 
-    UefiPrepareLogoAxis(UefiBgrtLogo.Width,
-                        FrameBufferData->ScreenWidth,
-                        &UefiBgrtLogo.SourceX,
-                        &UefiBgrtLogo.PositionX,
-                        &UefiBgrtLogo.DrawWidth);
+    UefiGetRotatedLogoSize(&UefiBgrtLogo, &RotatedWidth, &RotatedHeight);
 
-    UefiPrepareLogoAxis(UefiBgrtLogo.Height,
-                        FrameBufferData->ScreenHeight,
-                        &UefiBgrtLogo.SourceY,
-                        &UefiBgrtLogo.PositionY,
-                        &UefiBgrtLogo.DrawHeight);
+    UseFirmwarePlacement =
+        (RotatedWidth <= FrameBufferData->ScreenWidth) &&
+        (RotatedHeight <= FrameBufferData->ScreenHeight) &&
+        (BgrtTable->OffsetX <= FrameBufferData->ScreenWidth - RotatedWidth) &&
+        (BgrtTable->OffsetY <= FrameBufferData->ScreenHeight - RotatedHeight);
 
-    TRACE("BGRT logo ready: %lux%lu @ (%lu,%lu), crop (%lu,%lu) -> %lux%lu\n",
+    if (UseFirmwarePlacement)
+    {
+        UefiPreparePositionedLogoAxis(RotatedWidth,
+                                      FrameBufferData->ScreenWidth,
+                                      BgrtTable->OffsetX,
+                                      &UefiBgrtLogo.SourceX,
+                                      &UefiBgrtLogo.PositionX,
+                                      &UefiBgrtLogo.DrawWidth);
+
+        UefiPreparePositionedLogoAxis(RotatedHeight,
+                                      FrameBufferData->ScreenHeight,
+                                      BgrtTable->OffsetY,
+                                      &UefiBgrtLogo.SourceY,
+                                      &UefiBgrtLogo.PositionY,
+                                      &UefiBgrtLogo.DrawHeight);
+    }
+    else
+    {
+        UefiPrepareCenteredLogoAxis(RotatedWidth,
+                                    FrameBufferData->ScreenWidth,
+                                    &UefiBgrtLogo.SourceX,
+                                    &UefiBgrtLogo.PositionX,
+                                    &UefiBgrtLogo.DrawWidth);
+
+        UefiPrepareCenteredLogoAxis(RotatedHeight,
+                                    FrameBufferData->ScreenHeight,
+                                    &UefiBgrtLogo.SourceY,
+                                    &UefiBgrtLogo.PositionY,
+                                    &UefiBgrtLogo.DrawHeight);
+    }
+
+    TRACE("BGRT logo ready: %lux%lu rot=%u @ (%lu,%lu), crop (%lu,%lu) -> %lux%lu\n",
           UefiBgrtLogo.Width, UefiBgrtLogo.Height,
+          UefiBgrtLogo.Orientation * 90,
           UefiBgrtLogo.PositionX, UefiBgrtLogo.PositionY,
           UefiBgrtLogo.SourceX, UefiBgrtLogo.SourceY,
           UefiBgrtLogo.DrawWidth, UefiBgrtLogo.DrawHeight);
@@ -790,41 +921,29 @@ UefiDrawBgrtLogo(VOID)
 
     for (Row = 0; Row < UefiBgrtLogo.DrawHeight; ++Row)
     {
-        ULONG SourceRowIndex = UefiBgrtLogo.SourceY + Row;
-        PUCHAR SourceRow;
         PULONG DestinationRow;
-
-        if (!UefiBgrtLogo.TopDown)
-            SourceRowIndex = UefiBgrtLogo.Height - 1 - SourceRowIndex;
-
-        SourceRow = UefiBgrtLogo.PixelData + SourceRowIndex * UefiBgrtLogo.RowStride;
-        SourceRow += UefiBgrtLogo.SourceX * (UefiBgrtLogo.BitsPerPixel / 8);
 
         DestinationRow = (PULONG)(VramBase +
                                   (UefiBgrtLogo.PositionY + Row) * Pitch +
                                   UefiBgrtLogo.PositionX * BytesPerPixel);
 
-        if (UefiBgrtLogo.BitsPerPixel == 24)
+        for (Col = 0; Col < UefiBgrtLogo.DrawWidth; ++Col)
         {
-            for (Col = 0; Col < UefiBgrtLogo.DrawWidth; ++Col)
-            {
-                DestinationRow[Col] = 0xFF000000 |
-                                      (SourceRow[2] << 16) |
-                                      (SourceRow[1] << 8) |
-                                      SourceRow[0];
-                SourceRow += 3;
-            }
-        }
-        else
-        {
-            for (Col = 0; Col < UefiBgrtLogo.DrawWidth; ++Col)
-            {
-                DestinationRow[Col] = 0xFF000000 |
-                                      (SourceRow[2] << 16) |
-                                      (SourceRow[1] << 8) |
-                                      SourceRow[0];
-                SourceRow += 4;
-            }
+            ULONG SourceX, SourceY;
+            PUCHAR SourcePixel;
+
+            UefiGetLogoSourceCoordinates(&UefiBgrtLogo,
+                                         UefiBgrtLogo.SourceX + Col,
+                                         UefiBgrtLogo.SourceY + Row,
+                                         &SourceX,
+                                         &SourceY);
+
+            SourcePixel = UefiGetLogoPixelAddress(&UefiBgrtLogo, SourceX, SourceY);
+
+            DestinationRow[Col] = 0xFF000000 |
+                                  (SourcePixel[2] << 16) |
+                                  (SourcePixel[1] << 8) |
+                                  SourcePixel[0];
         }
     }
 }
