@@ -91,14 +91,12 @@ HalInitSystem(
 
     if (BootPhase <= 1)
     {
-        ASSERT(LoaderBlock->Extension != NULL);
-
 #if (NTDDI_VERSION >= NTDDI_LONGHORN)
         BootViaEfi = LoaderBlock->FirmwareInformation.FirmwareTypeEfi;
-#endif
+#else
+        ASSERT(LoaderBlock->Extension != NULL);
 
-#if defined(__REACTOS__)
-        if (!BootViaEfi && (LoaderBlock->Extension->Size >= FIELD_OFFSET(LOADER_PARAMETER_EXTENSION, LoaderPerformanceData)))
+        if (LoaderBlock->Extension->Size >= FIELD_OFFSET(LOADER_PARAMETER_EXTENSION, LoaderPerformanceData))
         {
             BootViaEfi = LoaderBlock->Extension->BootViaEFI;
         }
