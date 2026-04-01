@@ -12,7 +12,9 @@
 /* INCLUDES ******************************************************************/
 
 #include <ntoskrnl.h>
+#include <reactos/arc/arc.h>
 #include "inbv/logo.h"
+#include "inbv/inbvgop.h"
 
 /* See also mm/ARM3/miarm.h */
 #define MM_READONLY     1   // PAGE_READONLY
@@ -97,33 +99,7 @@ static UCHAR RotLineBuffer[SCREEN_WIDTH * 6];
 
 /* FADE-IN FUNCTION **********************************************************/
 
-/** From include/psdk/wingdi.h and bootvid/precomp.h **/
-typedef struct tagRGBQUAD
-{
-    UCHAR rgbBlue;
-    UCHAR rgbGreen;
-    UCHAR rgbRed;
-    UCHAR rgbReserved;
-} RGBQUAD, *LPRGBQUAD;
-
-//
-// Bitmap Header
-//
-typedef struct tagBITMAPINFOHEADER
-{
-    ULONG  biSize;
-    LONG   biWidth;
-    LONG   biHeight;
-    USHORT biPlanes;
-    USHORT biBitCount;
-    ULONG  biCompression;
-    ULONG  biSizeImage;
-    LONG   biXPelsPerMeter;
-    LONG   biYPelsPerMeter;
-    ULONG  biClrUsed;
-    ULONG  biClrImportant;
-} BITMAPINFOHEADER, *PBITMAPINFOHEADER;
-/*******************************/
+/* RGBQUAD and BITMAPINFOHEADER are now defined in logo.h */
 
 static RGBQUAD MainPalette[16];
 
@@ -509,6 +485,9 @@ DisplayBootBitmap(
 {
     PVOID BootCopy = NULL, BootProgress = NULL, BootLogo = NULL, Header = NULL, Footer = NULL;
 
+    if (InbvGopHandleBootBitmap(TextMode))
+        return;
+
 #ifdef INBV_ROTBAR_IMPLEMENTED
     UCHAR Buffer[RTL_NUMBER_OF(RotBarBuffer)];
     PVOID Bar = NULL, LineBmp = NULL;
@@ -592,192 +571,194 @@ DisplayBootBitmap(
     }
     else
     {
-#ifdef REACTOS_FANCY_BOOT
-        /* Decide whether this is a good time to change our logo ;^) */
-        BOOLEAN IsXmas = IsXmasTime();
-#endif
-
         /* Is the boot driver installed? */
         if (!InbvBootDriverInstalled) return;
 
-        /*
-         * Make the kernel resource section temporarily writable,
-         * as we are going to change the bitmaps' palette in place.
-         */
-        MmChangeKernelResourceSectionProtection(MM_READWRITE);
+            /* Legacy VGA path: full classic boot animation */
 
-        /* Load boot screen logo */
-        BootLogo = InbvGetResourceAddress(
-            SELECT_LOGO_ID(IDB_LOGO_DEFAULT, IsXmas, IDB_LOGO_XMAS));
+#ifdef REACTOS_FANCY_BOOT
+            /* Decide whether this is a good time to change our logo ;^) */
+            BOOLEAN IsXmas = IsXmasTime();
+#endif
+
+            /*
+             * Make the kernel resource section temporarily writable,
+             * as we are going to change the bitmaps' palette in place.
+             */
+            MmChangeKernelResourceSectionProtection(MM_READWRITE);
+
+            /* Load boot screen logo */
+            BootLogo = InbvGetResourceAddress(
+                SELECT_LOGO_ID(IDB_LOGO_DEFAULT, IsXmas, IDB_LOGO_XMAS));
 
 #ifdef REACTOS_SKUS
-        Text = NULL;
-        if (SharedUserData->NtProductType == NtProductWinNt)
-        {
+            Text = NULL;
+            if (SharedUserData->NtProductType == NtProductWinNt)
+            {
 #ifdef INBV_ROTBAR_IMPLEMENTED
-            /* Workstation product, use appropriate status bar color */
-            Bar = InbvGetResourceAddress(IDB_BAR_WKSTA);
+                /* Workstation product, use appropriate status bar color */
+                Bar = InbvGetResourceAddress(IDB_BAR_WKSTA);
 #endif
-        }
-        else
-        {
-            /* Display correct branding based on server suite */
-            if (ExVerifySuite(StorageServer))
-            {
-                /* Storage Server Edition */
-                Text = InbvGetResourceAddress(IDB_STORAGE_SERVER);
-            }
-            else if (ExVerifySuite(ComputeServer))
-            {
-                /* Compute Cluster Edition */
-                Text = InbvGetResourceAddress(IDB_CLUSTER_SERVER);
             }
             else
             {
-                /* Normal edition */
-                Text = InbvGetResourceAddress(
-                    SELECT_LOGO_ID(IDB_SERVER_LOGO, IsXmas, IDB_LOGO_XMAS));
-            }
+                /* Display correct branding based on server suite */
+                if (ExVerifySuite(StorageServer))
+                {
+                    /* Storage Server Edition */
+                    Text = InbvGetResourceAddress(IDB_STORAGE_SERVER);
+                }
+                else if (ExVerifySuite(ComputeServer))
+                {
+                    /* Compute Cluster Edition */
+                    Text = InbvGetResourceAddress(IDB_CLUSTER_SERVER);
+                }
+                else
+                {
+                    /* Normal edition */
+                    Text = InbvGetResourceAddress(
+                        SELECT_LOGO_ID(IDB_SERVER_LOGO, IsXmas, IDB_LOGO_XMAS));
+                }
 
 #ifdef INBV_ROTBAR_IMPLEMENTED
-            /* Server product, use appropriate status bar color */
-            Bar = InbvGetResourceAddress(IDB_BAR_DEFAULT);
+                /* Server product, use appropriate status bar color */
+                Bar = InbvGetResourceAddress(IDB_BAR_DEFAULT);
 #endif
-        }
+            }
 #else // REACTOS_SKUS
 #ifdef INBV_ROTBAR_IMPLEMENTED
-        /* Use default status bar */
-        Bar = InbvGetResourceAddress(IDB_BAR_WKSTA);
+            /* Use default status bar */
+            Bar = InbvGetResourceAddress(IDB_BAR_WKSTA);
 #endif
 #endif // REACTOS_SKUS
 
-        /* Make sure we have a logo */
-        if (BootLogo)
-        {
-            /* Save the main image palette for implementing the fade-in effect */
-            PBITMAPINFOHEADER BitmapInfoHeader = BootLogo;
-            LPRGBQUAD Palette = (LPRGBQUAD)((PUCHAR)BootLogo + BitmapInfoHeader->biSize);
-            RtlCopyMemory(MainPalette, Palette, sizeof(MainPalette));
+            /* Make sure we have a logo */
+            if (BootLogo)
+            {
+                /* Save the main image palette for implementing the fade-in effect */
+                PBITMAPINFOHEADER BitmapInfoHeader = BootLogo;
+                LPRGBQUAD Palette = (LPRGBQUAD)((PUCHAR)BootLogo + BitmapInfoHeader->biSize);
+                RtlCopyMemory(MainPalette, Palette, sizeof(MainPalette));
 
-            /* Draw the logo at the center of the screen */
-            BitBltAligned(BootLogo,
+                /* Draw the logo at the center of the screen */
+                BitBltAligned(BootLogo,
+                              TRUE,
+                              AL_HORIZONTAL_CENTER,
+                              AL_VERTICAL_CENTER,
+                              0, 0, 0, 34);
+
+#ifdef INBV_ROTBAR_IMPLEMENTED
+                /* Choose progress bar */
+                TempRotBarSelection = ROT_BAR_DEFAULT_MODE;
+#endif
+
+                /* Set progress bar coordinates and display it */
+                InbvSetProgressBarCoordinates(VID_PROGRESS_BAR_LEFT,
+                                              VID_PROGRESS_BAR_TOP);
+
+#ifdef REACTOS_SKUS
+                /* Check for non-workstation products */
+                if (SharedUserData->NtProductType != NtProductWinNt)
+                {
+                    /* Overwrite part of the logo for a server product */
+                    InbvScreenToBufferBlt(Buffer, VID_SKU_SAVE_AREA_LEFT,
+                                          VID_SKU_SAVE_AREA_TOP, 7, 7, 8);
+                    InbvSolidColorFill(VID_SKU_AREA_LEFT, VID_SKU_AREA_TOP,
+                                       VID_SKU_AREA_RIGHT, VID_SKU_AREA_BOTTOM, BV_COLOR_BLACK);
+                    InbvBufferToScreenBlt(Buffer, VID_SKU_SAVE_AREA_LEFT,
+                                          VID_SKU_SAVE_AREA_TOP, 7, 7, 8);
+
+                    /* In setup mode, you haven't selected a SKU yet */
+                    if (ExpInTextModeSetup) Text = NULL;
+                }
+#endif // REACTOS_SKUS
+            }
+
+            /* Load and draw progress bar bitmap */
+            BootProgress = InbvGetResourceAddress(IDB_PROGRESS_BAR);
+            BitBltAligned(BootProgress,
                           TRUE,
                           AL_HORIZONTAL_CENTER,
                           AL_VERTICAL_CENTER,
-                          0, 0, 0, 34);
+                          0, 118, 0, 0);
 
-#ifdef INBV_ROTBAR_IMPLEMENTED
-            /* Choose progress bar */
-            TempRotBarSelection = ROT_BAR_DEFAULT_MODE;
-#endif
-
-            /* Set progress bar coordinates and display it */
-            InbvSetProgressBarCoordinates(VID_PROGRESS_BAR_LEFT,
-                                          VID_PROGRESS_BAR_TOP);
-
-#ifdef REACTOS_SKUS
-            /* Check for non-workstation products */
-            if (SharedUserData->NtProductType != NtProductWinNt)
-            {
-                /* Overwrite part of the logo for a server product */
-                InbvScreenToBufferBlt(Buffer, VID_SKU_SAVE_AREA_LEFT,
-                                      VID_SKU_SAVE_AREA_TOP, 7, 7, 8);
-                InbvSolidColorFill(VID_SKU_AREA_LEFT, VID_SKU_AREA_TOP,
-                                   VID_SKU_AREA_RIGHT, VID_SKU_AREA_BOTTOM, BV_COLOR_BLACK);
-                InbvBufferToScreenBlt(Buffer, VID_SKU_SAVE_AREA_LEFT,
-                                      VID_SKU_SAVE_AREA_TOP, 7, 7, 8);
-
-                /* In setup mode, you haven't selected a SKU yet */
-                if (ExpInTextModeSetup) Text = NULL;
-            }
-#endif // REACTOS_SKUS
-        }
-
-        /* Load and draw progress bar bitmap */
-        BootProgress = InbvGetResourceAddress(IDB_PROGRESS_BAR);
-        BitBltAligned(BootProgress,
-                      TRUE,
-                      AL_HORIZONTAL_CENTER,
-                      AL_VERTICAL_CENTER,
-                      0, 118, 0, 0);
-
-        /* Load and draw copyright text bitmap */
-        BootCopy = InbvGetResourceAddress(IDB_COPYRIGHT);
-        BitBltAligned(BootCopy,
-                      TRUE,
-                      AL_HORIZONTAL_LEFT,
-                      AL_VERTICAL_BOTTOM,
-                      22, 0, 0, 20);
+            /* Load and draw copyright text bitmap */
+            BootCopy = InbvGetResourceAddress(IDB_COPYRIGHT);
+            BitBltAligned(BootCopy,
+                          TRUE,
+                          AL_HORIZONTAL_LEFT,
+                          AL_VERTICAL_BOTTOM,
+                          22, 0, 0, 20);
 
 #ifdef REACTOS_SKUS
-        /* Draw the SKU text if it exits */
-        if (Text)
-            BitBltPalette(Text, TRUE, VID_SKU_TEXT_LEFT, VID_SKU_TEXT_TOP);
+            /* Draw the SKU text if it exists */
+            if (Text)
+                BitBltPalette(Text, TRUE, VID_SKU_TEXT_LEFT, VID_SKU_TEXT_TOP);
 #endif
 
 #ifdef INBV_ROTBAR_IMPLEMENTED
-        if ((TempRotBarSelection == RB_SQUARE_CELLS) && Bar)
-        {
-            /* Save previous screen pixels to buffer */
-            InbvScreenToBufferBlt(Buffer, 0, 0, 22, 9, 24);
-            /* Draw the progress bar bit */
-            BitBltPalette(Bar, TRUE, 0, 0);
-            /* Store it in global buffer */
-            InbvScreenToBufferBlt(RotBarBuffer, 0, 0, 22, 9, 24);
-            /* Restore screen pixels */
-            InbvBufferToScreenBlt(Buffer, 0, 0, 22, 9, 24);
-        }
-
-        /*
-         * Add a rotating bottom horizontal bar when using a progress bar,
-         * to show that ReactOS can be still alive when the bar does not
-         * appear to progress.
-         */
-        if (TempRotBarSelection == RB_PROGRESS_BAR)
-        {
-            LineBmp = InbvGetResourceAddress(IDB_ROTATING_LINE);
-            if (LineBmp)
+            if ((TempRotBarSelection == RB_SQUARE_CELLS) && Bar)
             {
-                /* Draw the line and store it in global buffer */
-                BitBltPalette(LineBmp, TRUE, 0, SCREEN_HEIGHT-6);
-                InbvScreenToBufferBlt(RotLineBuffer, 0, SCREEN_HEIGHT-6, SCREEN_WIDTH, 6, SCREEN_WIDTH);
+                /* Save previous screen pixels to buffer */
+                InbvScreenToBufferBlt(Buffer, 0, 0, 22, 9, 24);
+                /* Draw the progress bar bit */
+                BitBltPalette(Bar, TRUE, 0, 0);
+                /* Store it in global buffer */
+                InbvScreenToBufferBlt(RotBarBuffer, 0, 0, 22, 9, 24);
+                /* Restore screen pixels */
+                InbvBufferToScreenBlt(Buffer, 0, 0, 22, 9, 24);
             }
-        }
-        else
-        {
-            /* Hide the simple progress bar if not used */
-            ShowProgressBar = FALSE;
-        }
+
+            /*
+             * Add a rotating bottom horizontal bar when using a progress bar,
+             * to show that ReactOS is still alive when the bar does not
+             * appear to progress.
+             */
+            if (TempRotBarSelection == RB_PROGRESS_BAR)
+            {
+                LineBmp = InbvGetResourceAddress(IDB_ROTATING_LINE);
+                if (LineBmp)
+                {
+                    /* Draw the line and store it in global buffer */
+                    BitBltPalette(LineBmp, TRUE, 0, SCREEN_HEIGHT-6);
+                    InbvScreenToBufferBlt(RotLineBuffer, 0, SCREEN_HEIGHT-6, SCREEN_WIDTH, 6, SCREEN_WIDTH);
+                }
+            }
+            else
+            {
+                /* Hide the simple progress bar if not used */
+                ShowProgressBar = FALSE;
+            }
 #endif // INBV_ROTBAR_IMPLEMENTED
 
-        /* Restore the kernel resource section protection to be read-only */
-        MmChangeKernelResourceSectionProtection(MM_READONLY);
+            /* Restore the kernel resource section protection to be read-only */
+            MmChangeKernelResourceSectionProtection(MM_READONLY);
 
-        /* Display the boot logo and fade it in */
-        BootLogoFadeIn();
+            /* Display the boot logo and fade it in */
+            BootLogoFadeIn();
 
 #ifdef INBV_ROTBAR_IMPLEMENTED
-        if (!RotBarThreadActive && TempRotBarSelection != RB_UNSPECIFIED)
-        {
-            /* Start the animation thread */
-            Status = PsCreateSystemThread(&ThreadHandle,
-                                          0,
-                                          NULL,
-                                          NULL,
-                                          NULL,
-                                          InbvRotationThread,
-                                          NULL);
-            if (NT_SUCCESS(Status))
+            if (!RotBarThreadActive && TempRotBarSelection != RB_UNSPECIFIED)
             {
-                /* The thread has started, close the handle as we don't need it */
-                RotBarThreadActive = TRUE;
-                ObCloseHandle(ThreadHandle, KernelMode);
+                /* Start the animation thread */
+                Status = PsCreateSystemThread(&ThreadHandle,
+                                              0,
+                                              NULL,
+                                              NULL,
+                                              NULL,
+                                              InbvRotationThread,
+                                              NULL);
+                if (NT_SUCCESS(Status))
+                {
+                    /* The thread has started, close the handle as we don't need it */
+                    RotBarThreadActive = TRUE;
+                    ObCloseHandle(ThreadHandle, KernelMode);
+                }
             }
-        }
 #endif // INBV_ROTBAR_IMPLEMENTED
 
-        /* Set filter which will draw text display if needed */
-        InbvInstallDisplayStringFilter(DisplayFilter);
+            /* Set filter which will draw text display if needed */
+            InbvInstallDisplayStringFilter(DisplayFilter);
     }
 
 #ifdef INBV_ROTBAR_IMPLEMENTED
