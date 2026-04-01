@@ -309,6 +309,16 @@ VidBufferToScreenBlt(
     if (!Width || !Height)
         return;
 
+#ifdef HAS_NATIVE_BUFFER_TO_SCREEN_BLT
+    /*
+     * The GOP boot animation path provides native 32-bit scanlines that
+     * should be written directly to the framebuffer without passing through
+     * the legacy 4bpp indexed-color helper.
+     */
+    if (VidBufferToScreenBltNative(Buffer, Left, Top, Width, Height, Delta))
+        return;
+#endif
+
     /* Call the helper function */
     BitBlt(Left, Top, Width, Height, Buffer, 4, Stride);
 }
