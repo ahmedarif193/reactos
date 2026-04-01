@@ -92,15 +92,17 @@ HalInitSystem(
     if (BootPhase <= 1)
     {
         ASSERT(LoaderBlock->Extension != NULL);
+
 #if (NTDDI_VERSION >= NTDDI_LONGHORN)
         BootViaEfi = LoaderBlock->FirmwareInformation.FirmwareTypeEfi;
 #endif
-        if (LoaderBlock->Extension->Size >= FIELD_OFFSET(LOADER_PARAMETER_EXTENSION,
-                                                         LoaderPerformanceData) &&
-            !BootViaEfi)
+
+#if defined(__REACTOS__)
+        if (!BootViaEfi && (LoaderBlock->Extension->Size >= FIELD_OFFSET(LOADER_PARAMETER_EXTENSION, LoaderPerformanceData)))
         {
             BootViaEfi = LoaderBlock->Extension->BootViaEFI;
         }
+#endif
     }
 
     /* Check the boot phase */
@@ -189,7 +191,9 @@ HalInitSystem(
 
         /* Initialize Phase 0 of the x86 emulator */
         if (!BootViaEfi)
+        {
             HalInitializeBios(0, LoaderBlock);
+        }
     }
     else if (BootPhase == 1)
     {
@@ -201,7 +205,9 @@ HalInitSystem(
 
         /* Initialize Phase 1 of the x86 emulator */
         if (!BootViaEfi)
+        {
             HalInitializeBios(1, LoaderBlock);
+        }
     }
 
     /* All done, return */
