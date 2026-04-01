@@ -770,9 +770,6 @@ LoadWindowsCore(IN USHORT OperatingSystemVersion,
     // TODO: "USERVA=" for XP/2k3
 #endif
 
-    /* NOTE: SAFEBOOT is parsed earlier in LoadAndBootWindows(), before
-     * WinLdrScanSystemHive(), so that CmpFindDrivers can filter boot drivers.
-     * InitSafeBootMode is already set at this point. */
 
     if ((OperatingSystemVersion > _WIN32_WINNT_WIN2K) &&
         NtLdrGetOption(BootOptions, "BOOTLOGO"))
