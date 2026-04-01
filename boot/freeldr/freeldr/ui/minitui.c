@@ -9,10 +9,6 @@
 
 #include <freeldr.h>
 
-#define MINITUI_PROGRESS_TEXT_ATTR      ATTR(COLOR_GRAY, COLOR_BLACK)
-#define MINITUI_PROGRESS_FILL_ATTR      ATTR(COLOR_WHITE, COLOR_WHITE)
-#define MINITUI_PROGRESS_REMAINING_ATTR ATTR(COLOR_GRAY, COLOR_GRAY)
-
 /* NTLDR or Vista+ BOOTMGR progress-bar style */
 // #define NTLDR_PROGRESSBAR
 // #define BTMGR_PROGRESSBAR /* Default style */
