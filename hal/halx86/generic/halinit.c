@@ -87,6 +87,21 @@ HalInitSystem(
 {
     PKPRCB Prcb = KeGetCurrentPrcb();
     NTSTATUS Status;
+    BOOLEAN BootViaEfi = FALSE;
+
+    if (BootPhase <= 1)
+    {
+        ASSERT(LoaderBlock->Extension != NULL);
+#if (NTDDI_VERSION >= NTDDI_LONGHORN)
+        BootViaEfi = LoaderBlock->FirmwareInformation.FirmwareTypeEfi;
+#endif
+        if (LoaderBlock->Extension->Size >= FIELD_OFFSET(LOADER_PARAMETER_EXTENSION,
+                                                         LoaderPerformanceData) &&
+            !BootViaEfi)
+        {
+            BootViaEfi = LoaderBlock->Extension->BootViaEFI;
+        }
+    }
 
     /* Check the boot phase */
     if (BootPhase == 0)
@@ -173,7 +188,8 @@ HalInitSystem(
         HalpInitPhase0(LoaderBlock);
 
         /* Initialize Phase 0 of the x86 emulator */
-        HalInitializeBios(0, LoaderBlock);
+        if (!BootViaEfi)
+            HalInitializeBios(0, LoaderBlock);
     }
     else if (BootPhase == 1)
     {
@@ -184,7 +200,8 @@ HalInitSystem(
         HalpInitPhase1();
 
         /* Initialize Phase 1 of the x86 emulator */
-        HalInitializeBios(1, LoaderBlock);
+        if (!BootViaEfi)
+            HalInitializeBios(1, LoaderBlock);
     }
 
     /* All done, return */
