@@ -32,8 +32,9 @@ PLOADER_SYSTEM_BLOCK WinLdrSystemBlock;
 
 BOOLEAN VirtualBias = FALSE;
 BOOLEAN SosEnabled = FALSE;
-BOOLEAN SafeBoot = FALSE;
 BOOLEAN BootLogo = FALSE;
+
+extern ULONG InitSafeBootMode;
 #ifdef _M_IX86
 BOOLEAN PaeModeOn = FALSE;
 #endif
@@ -602,7 +603,7 @@ WinLdrIsPaeSupported(
         PaeDisabled = TRUE;
     }
 
-    if (SafeBoot)
+    if (InitSafeBootMode != 0)
         PaeDisabled = TRUE;
 
     TRACE("PaeEnabled %X, PaeDisabled %X\n", PaeEnabled, PaeDisabled);
@@ -769,14 +770,9 @@ LoadWindowsCore(IN USHORT OperatingSystemVersion,
     // TODO: "USERVA=" for XP/2k3
 #endif
 
-    if ((OperatingSystemVersion > _WIN32_WINNT_NT4) &&
-        (NtLdrGetOption(BootOptions, "SAFEBOOT") ||
-         NtLdrGetOption(BootOptions, "SAFEBOOT:")))
-    {
-        /* We found the SAFEBOOT option. */
-        FIXME("LoadWindowsCore: SAFEBOOT - TRUE (not implemented)\n");
-        SafeBoot = TRUE;
-    }
+    /* NOTE: SAFEBOOT is parsed earlier in LoadAndBootWindows(), before
+     * WinLdrScanSystemHive(), so that CmpFindDrivers can filter boot drivers.
+     * InitSafeBootMode is already set at this point. */
 
     if ((OperatingSystemVersion > _WIN32_WINNT_WIN2K) &&
         NtLdrGetOption(BootOptions, "BOOTLOGO"))
@@ -818,7 +814,7 @@ LoadWindowsCore(IN USHORT OperatingSystemVersion,
 
 #ifdef _M_IX86
         /* Disable DEP in SafeBoot mode for x86 only */
-        if (SafeBoot)
+        if (InitSafeBootMode != 0)
             NoExecuteEnabled = FALSE;
 #endif
     }
@@ -1351,6 +1347,23 @@ LoadAndBootWindows(
         OperatingSystemVersion = WinLdrDetectVersion();
     LoaderBlock->Extension->MajorVersion = (OperatingSystemVersion & 0xFF00) >> 8;
     LoaderBlock->Extension->MinorVersion = (OperatingSystemVersion & 0xFF);
+
+    /* Parse SafeBoot mode before scanning the registry, so that
+     * CmpFindDrivers() can filter boot drivers via CmpIsSafe(). */
+    {
+        ULONG OptLen;
+        PCSTR SafeBootValue = NtLdrGetOptionEx(BootOptions, "SAFEBOOT:", &OptLen);
+        if (SafeBootValue)
+        {
+            SafeBootValue += 9; /* skip past "SAFEBOOT:" */
+            if (_strnicmp(SafeBootValue, "MINIMAL", 7) == 0)
+                InitSafeBootMode = 1;
+            else if (_strnicmp(SafeBootValue, "NETWORK", 7) == 0)
+                InitSafeBootMode = 2;
+            else if (_strnicmp(SafeBootValue, "DSREPAIR", 8) == 0)
+                InitSafeBootMode = 3;
+        }
+    }
 
     /* Load NLS data, OEM font, and prepare boot drivers list */
     Success = WinLdrScanSystemHive(LoaderBlock, BootPath);
