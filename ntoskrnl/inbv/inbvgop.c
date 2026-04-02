@@ -664,7 +664,7 @@ InbvGopHandleBootBitmap(
         ULONG msgPx = (ULONG)(sizeof(LoadingMsg) - 1) * CharW;
         ULONG x = (Width > msgPx) ? ((Width - msgPx) / 2) : 0;
         ULONG y = (Height > (CharH + 4)) ? (Height - (CharH + 4)) : 0;
-        VidDisplayStringXY((PUCHAR)LoadingMsg, x, y, TRUE);
+        VidDisplayStringXY(LoadingMsg, x, y, TRUE);
     }
 
     ShowProgressBar = FALSE;
