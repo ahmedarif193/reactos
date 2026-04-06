@@ -216,9 +216,15 @@ KiGetFeatureBits(VOID)
     if (VersionInfo.Edx.Bits.HTT)
     {
         /* Set the number of logical CPUs */
+#if (NTDDI_VERSION >= NTDDI_LONGHORN)
+        Prcb->LogicalProcessorsPerCore =
+            VersionInfo.Ebx.Bits.MaximumAddressableIdsForLogicalProcessors;
+        if (Prcb->LogicalProcessorsPerCore > 1)
+#else
         Prcb->LogicalProcessorsPerPhysicalProcessor =
             VersionInfo.Ebx.Bits.MaximumAddressableIdsForLogicalProcessors;
         if (Prcb->LogicalProcessorsPerPhysicalProcessor > 1)
+#endif
         {
             /* We're on dual-core */
             KiSMTProcessorsPresent = TRUE;
@@ -227,7 +233,11 @@ KiGetFeatureBits(VOID)
     else
     {
         /* We only have a single CPU */
+#if (NTDDI_VERSION >= NTDDI_LONGHORN)
+        Prcb->LogicalProcessorsPerCore = 1;
+#else
         Prcb->LogicalProcessorsPerPhysicalProcessor = 1;
+#endif
     }
 
     /* Check if CPUID_THERMAL_POWER_MANAGEMENT (0x06) is supported */

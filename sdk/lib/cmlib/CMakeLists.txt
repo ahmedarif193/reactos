@@ -1,7 +1,8 @@
 
 add_definitions(
     -D_NTSYSTEM_
-    -DNASSERT)
+    -DNASSERT
+    -DNTDDI_VERSION=${REACTOS_TARGET_NTDDI})
 
 list(APPEND SOURCE
     cmcheck.c

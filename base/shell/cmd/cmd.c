@@ -961,6 +961,8 @@ GetEnvVarOrSpecial(LPCTSTR varName)
     else if (_tcsicmp(varName, _T("HIGHESTNUMANODENUMBER")) == 0)
     {
         ULONG NumaNodeNumber = 0;
+        /* Not declared in ReactOS winbase.h yet; kernel32 exports it since Win2003 */
+        BOOL WINAPI GetNumaHighestNodeNumber(PULONG HighestNodeNumber);
         GetNumaHighestNodeNumber(&NumaNodeNumber);
         _itot(NumaNodeNumber, ret, 10);
         return ret;

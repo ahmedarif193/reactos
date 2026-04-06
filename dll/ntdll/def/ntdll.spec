@@ -297,7 +297,7 @@
 @ stdcall NtCreateToken(ptr long ptr long ptr ptr ptr ptr ptr ptr ptr ptr ptr)
 @ stdcall -stub -version=0x600+ NtCreateTransaction(ptr long ptr ptr ptr long long long ptr wstr)
 @ stdcall -stub -version=0x600+ NtCreateTransactionManager(ptr long ptr wstr long long)
-@ stdcall -stub -version=0x600+ NtCreateUserProcess(ptr ptr long long ptr ptr long long ptr long long)
+@ stdcall -version=0x600+ NtCreateUserProcess(ptr ptr long long ptr ptr long long ptr ptr ptr)
 @ stdcall NtCreateWaitablePort(ptr ptr long long long)
 @ stdcall -stub -version=0x600+ NtCreateWorkerFactory(ptr long long long long long long long long long)
 @ stdcall -arch=win32 NtCurrentTeb() _NtCurrentTeb
@@ -1462,7 +1462,7 @@
 @ stdcall ZwCreateToken(ptr long ptr long ptr ptr ptr ptr ptr ptr ptr ptr ptr)
 @ stdcall -stub -version=0x600+ ZwCreateTransaction(ptr long ptr ptr ptr long long long ptr wstr)
 @ stdcall -stub -version=0x600+ ZwCreateTransactionManager(ptr long ptr ptr long long)
-@ stdcall -stub -version=0x600+ ZwCreateUserProcess(ptr ptr long long ptr ptr long long ptr ptr ptr)
+@ stdcall -version=0x600+ ZwCreateUserProcess(ptr ptr long long ptr ptr long long ptr ptr ptr) NtCreateUserProcess
 @ stdcall ZwCreateWaitablePort(ptr ptr long long long)
 @ stdcall -stub -version=0x600+ ZwCreateWorkerFactory(ptr long ptr ptr ptr ptr ptr long long long)
 @ stdcall ZwDebugActiveProcess(ptr ptr)

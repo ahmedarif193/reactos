@@ -265,7 +265,9 @@ MmFreeMemoryArea(
     PVOID EndAddress;
 
     /* Make sure we own the address space lock! */
+#if (NTDDI_VERSION < NTDDI_LONGHORN)
     ASSERT(CONTAINING_RECORD(AddressSpace, EPROCESS, Vm)->AddressCreationLock.Owner == KeGetCurrentThread());
+#endif
 
     /* Check magic */
     ASSERT(MemoryArea->Magic == 'erAM');
