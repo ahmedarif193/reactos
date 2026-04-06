@@ -421,11 +421,17 @@ FORCEINLINE
 VOID
 KiSetThreadSwapBusy(IN PKTHREAD Thread)
 {
+#if (NTDDI_VERSION < NTDDI_WIN7)
     /* Make sure nobody already set it */
     ASSERT(Thread->SwapBusy == FALSE);
 
     /* Set it ourselves */
     Thread->SwapBusy = TRUE;
+#else
+    /* Win7+ removed SwapBusy from KTHREAD; swap synchronization is
+     * handled through ThreadLock and the dispatcher database lock. */
+    UNREFERENCED_PARAMETER(Thread);
+#endif
 }
 
 //
@@ -1367,7 +1373,11 @@ KxQueueReadyThread(IN PKTHREAD Thread,
 
     /* Check if this thread is allowed to run in this CPU */
 #ifdef CONFIG_SMP
+#if (NTDDI_VERSION >= NTDDI_WIN7)
+    if ((Thread->Affinity.Mask) & (Prcb->SetMember))
+#else
     if ((Thread->Affinity) & (Prcb->SetMember))
+#endif
 #else
     if (TRUE)
 #endif
@@ -1445,7 +1455,11 @@ KiSelectReadyThread(IN KPRIORITY Priority,
 
     /* Make sure this thread is here for a reason */
     ASSERT(HighPriority == Thread->Priority);
+#if (NTDDI_VERSION >= NTDDI_WIN7)
+    ASSERT(Thread->Affinity.Mask & AFFINITY_MASK(Prcb->Number));
+#else
     ASSERT(Thread->Affinity & AFFINITY_MASK(Prcb->Number));
+#endif
     ASSERT(Thread->NextProcessor == Prcb->Number);
 
     /* Remove it from the list */

@@ -10,6 +10,8 @@
 
 WINE_DEFAULT_DEBUG_CHANNEL(win);
 
+/* Only define DISPLAYCONFIG types locally when system headers do not provide them. */
+#if (WINVER < 0x601)
 typedef enum DISPLAYCONFIG_TOPOLOGY_ID
 {
     DISPLAYCONFIG_TOPOLOGY_INTERNAL       = 0x00000001,
@@ -206,6 +208,7 @@ typedef struct DISPLAYCONFIG_MODE_INFO {
         DISPLAYCONFIG_DESKTOP_IMAGE_INFO desktopImageInfo;
     } DUMMYUNIONNAME;
 } DISPLAYCONFIG_MODE_INFO;
+#endif /* (WINVER < 0x601) */
 
 
 LONG

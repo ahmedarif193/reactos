@@ -129,14 +129,22 @@ PLPCP_MESSAGE
 LpcpGetMessageFromThread(IN PETHREAD Thread)
 {
     /* Check if the port flag is set */
+#if (NTDDI_VERSION >= NTDDI_LONGHORN)
+    if (((ULONG_PTR)Thread->AlpcMessage) & LPCP_THREAD_FLAG_IS_PORT)
+#else
     if (((ULONG_PTR)Thread->LpcReplyMessage) & LPCP_THREAD_FLAG_IS_PORT)
+#endif
     {
         /* The pointer is actually a port, not a message, so return NULL */
         return NULL;
     }
 
     /* Otherwise, this is a message. Return the pointer */
+#if (NTDDI_VERSION >= NTDDI_LONGHORN)
+    return (PLPCP_MESSAGE)((ULONG_PTR)Thread->AlpcMessage & ~LPCP_THREAD_FLAGS);
+#else
     return (PLPCP_MESSAGE)((ULONG_PTR)Thread->LpcReplyMessage & ~LPCP_THREAD_FLAGS);
+#endif
 }
 
 FORCEINLINE
@@ -144,12 +152,21 @@ PLPCP_PORT_OBJECT
 LpcpGetPortFromThread(IN PETHREAD Thread)
 {
     /* Check if the port flag is set */
+#if (NTDDI_VERSION >= NTDDI_LONGHORN)
+    if (((ULONG_PTR)Thread->AlpcMessage) & LPCP_THREAD_FLAG_IS_PORT)
+    {
+        /* The pointer is actually a port, return it */
+        return (PLPCP_PORT_OBJECT)((ULONG_PTR)Thread->AlpcMessage &
+                       ~LPCP_THREAD_FLAGS);
+    }
+#else
     if (((ULONG_PTR)Thread->LpcReplyMessage) & LPCP_THREAD_FLAG_IS_PORT)
     {
         /* The pointer is actually a port, return it */
         return (PLPCP_PORT_OBJECT)((ULONG_PTR)Thread->LpcWaitingOnPort &
                        ~LPCP_THREAD_FLAGS);
     }
+#endif
 
     /* Otherwise, this is a message. There is nothing to return */
     return NULL;
@@ -161,8 +178,13 @@ LpcpSetPortToThread(IN PETHREAD Thread,
                     IN PLPCP_PORT_OBJECT Port)
 {
     /* Set the port object */
+#if (NTDDI_VERSION >= NTDDI_LONGHORN)
+    Thread->AlpcMessage = (PVOID)(((ULONG_PTR)Port) |
+                                  LPCP_THREAD_FLAG_IS_PORT);
+#else
     Thread->LpcWaitingOnPort = (PVOID)(((ULONG_PTR)Port) |
                                        LPCP_THREAD_FLAG_IS_PORT);
+#endif
 }
 
 FORCEINLINE

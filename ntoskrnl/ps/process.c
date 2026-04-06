@@ -786,7 +786,13 @@ PspCreateProcess(OUT PHANDLE ProcessHandle,
     Process->Pcb.QuantumReset = Quantum;
 
     /* Check if we have a parent other then the initial system process */
-    Process->GrantedAccess = PROCESS_TERMINATE;
+#if (NTDDI_VERSION >= NTDDI_LONGHORN)
+    /* GrantedAccess was replaced by ImagePathHash at Vista+ */
+#define _ProcGrantedAccess ImagePathHash
+#else
+#define _ProcGrantedAccess GrantedAccess
+#endif
+    Process->_ProcGrantedAccess = PROCESS_TERMINATE;
     if ((Parent) && (Parent != PsInitialSystemProcess))
     {
         /* Get the process's SD */
@@ -814,7 +820,7 @@ PspCreateProcess(OUT PHANDLE ProcessHandle,
                                NULL,
                                &PsProcessType->TypeInfo.GenericMapping,
                                PreviousMode,
-                               &Process->GrantedAccess,
+                               &Process->_ProcGrantedAccess,
                                &AccessStatus);
 
         /* Dereference the token and let go the SD */
@@ -823,10 +829,10 @@ PspCreateProcess(OUT PHANDLE ProcessHandle,
         ObReleaseObjectSecurity(SecurityDescriptor, SdAllocated);
 
         /* Remove access if it failed */
-        if (!Result) Process->GrantedAccess = 0;
+        if (!Result) Process->_ProcGrantedAccess = 0;
 
         /* Give the process some basic access */
-        Process->GrantedAccess |= (PROCESS_VM_OPERATION |
+        Process->_ProcGrantedAccess |= (PROCESS_VM_OPERATION |
                                    PROCESS_VM_READ |
                                    PROCESS_VM_WRITE |
                                    PROCESS_QUERY_INFORMATION |
@@ -841,8 +847,9 @@ PspCreateProcess(OUT PHANDLE ProcessHandle,
     else
     {
         /* Set full granted access */
-        Process->GrantedAccess = PROCESS_ALL_ACCESS;
+        Process->_ProcGrantedAccess = PROCESS_ALL_ACCESS;
     }
+#undef _ProcGrantedAccess
 
     /* Set the Creation Time */
     KeQuerySystemTime(&Process->CreateTime);
@@ -990,7 +997,7 @@ PsLookupProcessThreadByCid(IN PCLIENT_ID Cid,
                 if (Process)
                 {
                     /* Return it and reference it */
-                    *Process = FoundThread->ThreadsProcess;
+                    *Process = (PEPROCESS)FoundThread->ThreadsProcess;
                     ObReferenceObject(*Process);
                 }
             }
@@ -1431,6 +1438,881 @@ NtCreateProcess(OUT PHANDLE ProcessHandle,
                              ExceptionPort,
                              FALSE);
 }
+
+#if (NTDDI_VERSION >= NTDDI_LONGHORN)
+/*
+ * @implemented
+ *
+ * NtCreateUserProcess - Vista+ combined process-and-thread creation syscall.
+ *
+ * This replaces the separate NtCreateProcess + NtCreateThread sequence used
+ * on XP/2003. It creates the process, section, PEB, initial thread, TEB,
+ * and returns both handles in a single call.
+ */
+NTSTATUS
+NTAPI
+NtCreateUserProcess(OUT PHANDLE ProcessHandle,
+                    OUT PHANDLE ThreadHandle,
+                    IN ACCESS_MASK ProcessDesiredAccess,
+                    IN ACCESS_MASK ThreadDesiredAccess,
+                    IN POBJECT_ATTRIBUTES ProcessObjectAttributes OPTIONAL,
+                    IN POBJECT_ATTRIBUTES ThreadObjectAttributes OPTIONAL,
+                    IN ULONG ProcessFlags,
+                    IN ULONG ThreadFlags,
+                    IN PRTL_USER_PROCESS_PARAMETERS ProcessParameters OPTIONAL,
+                    IN OUT PPS_CREATE_INFO CreateInfo,
+                    IN OUT PPS_ATTRIBUTE_LIST AttributeList OPTIONAL)
+{
+    NTSTATUS Status;
+    KPROCESSOR_MODE PreviousMode = ExGetPreviousMode();
+    HANDLE hProcess = NULL, hThread = NULL;
+    HANDLE hSection = NULL, hFile = NULL;
+    HANDLE ParentProcess = NtCurrentProcess();
+    HANDLE DebugPort = NULL;
+    HANDLE ExceptionPort = NULL;
+    HANDLE TokenHandle = NULL;
+    ULONG PspProcessFlags = 0;
+    OBJECT_ATTRIBUTES LocalFileObjectAttributes;
+    IO_STATUS_BLOCK IoStatusBlock;
+    UNICODE_STRING ImageName;
+    UNICODE_STRING CapturedImageName;
+    PCLIENT_ID ClientIdPtr = NULL;
+    PTEB *TebAddressPtr = NULL;
+    PSECTION_IMAGE_INFORMATION ImageInfoPtr = NULL;
+    PS_CREATE_INFO CapturedCreateInfo;
+    SIZE_T AttributeCount, i;
+    SECTION_IMAGE_INFORMATION ImageInformation;
+    PEPROCESS Process = NULL;
+    PETHREAD Thread = NULL;
+    CLIENT_ID ClientId;
+    INITIAL_TEB InitialTeb;
+    CONTEXT ThreadContext;
+    PROCESS_BASIC_INFORMATION ProcessBasicInfo;
+    PAGED_CODE();
+    PSTRACE(PS_PROCESS_DEBUG,
+            "ProcessFlags: %lx ThreadFlags: %lx\n", ProcessFlags, ThreadFlags);
+
+    RtlInitUnicodeString(&ImageName, NULL);
+    RtlInitUnicodeString(&CapturedImageName, NULL);
+
+    /* Validate user-mode parameters */
+    if (PreviousMode != KernelMode)
+    {
+        _SEH2_TRY
+        {
+            /* Probe output handles */
+            ProbeForWriteHandle(ProcessHandle);
+            ProbeForWriteHandle(ThreadHandle);
+
+            /* Probe and capture CreateInfo */
+            ProbeForWrite(CreateInfo, sizeof(PS_CREATE_INFO), sizeof(ULONG));
+            CapturedCreateInfo = *CreateInfo;
+
+            /* Probe the attribute list if present */
+            if (AttributeList)
+            {
+                ProbeForWrite(AttributeList, sizeof(PS_ATTRIBUTE_LIST), sizeof(ULONG_PTR));
+
+                /* Calculate the number of attributes */
+                if (AttributeList->TotalLength < sizeof(PS_ATTRIBUTE_LIST))
+                {
+                    _SEH2_YIELD(return STATUS_INVALID_PARAMETER);
+                }
+                AttributeCount = (AttributeList->TotalLength - FIELD_OFFSET(PS_ATTRIBUTE_LIST, Attributes)) /
+                                  sizeof(PS_ATTRIBUTE);
+
+                /* Probe the full attribute array */
+                ProbeForWrite(AttributeList->Attributes,
+                              AttributeCount * sizeof(PS_ATTRIBUTE),
+                              sizeof(ULONG_PTR));
+            }
+            else
+            {
+                AttributeCount = 0;
+            }
+        }
+        _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
+        {
+            _SEH2_YIELD(return _SEH2_GetExceptionCode());
+        }
+        _SEH2_END;
+    }
+    else
+    {
+        /* Kernel mode */
+        CapturedCreateInfo = *CreateInfo;
+        if (AttributeList && AttributeList->TotalLength >= sizeof(PS_ATTRIBUTE_LIST))
+        {
+            AttributeCount = (AttributeList->TotalLength - FIELD_OFFSET(PS_ATTRIBUTE_LIST, Attributes)) /
+                              sizeof(PS_ATTRIBUTE);
+        }
+        else
+        {
+            AttributeCount = 0;
+        }
+    }
+
+    /* Verify CreateInfo state is initial */
+    if (CapturedCreateInfo.State != PsCreateInitialState)
+    {
+        return STATUS_INVALID_PARAMETER;
+    }
+
+    /*
+     * Parse the attribute list to extract:
+     * - Image name (required)
+     * - Parent process handle (optional)
+     * - Debug port (optional)
+     * - Token (optional)
+     * - Client ID output pointer
+     * - TEB address output pointer
+     * - Image info output pointer
+     */
+    _SEH2_TRY
+    {
+        for (i = 0; i < AttributeCount; i++)
+        {
+            ULONG_PTR AttributeNumber = AttributeList->Attributes[i].Attribute & 0x0000FFFF;
+
+            switch (AttributeNumber)
+            {
+                case PsAttributeImageName:
+                    /* Input: image path as a UNICODE_STRING buffer */
+                    ImageName.Buffer = (PWSTR)AttributeList->Attributes[i].ValuePtr;
+                    ImageName.Length = (USHORT)AttributeList->Attributes[i].Size;
+                    ImageName.MaximumLength = ImageName.Length;
+                    break;
+
+                case PsAttributeParentProcess:
+                    /* Input: parent process handle */
+                    ParentProcess = (HANDLE)AttributeList->Attributes[i].Value;
+                    break;
+
+                case PsAttributeDebugPort:
+                    /* Input: debug port handle */
+                    DebugPort = (HANDLE)AttributeList->Attributes[i].Value;
+                    break;
+
+                case PsAttributeToken:
+                    /* Input: token handle */
+                    TokenHandle = (HANDLE)AttributeList->Attributes[i].Value;
+                    break;
+
+                case PsAttributeClientId:
+                    /* Output: pointer to CLIENT_ID to receive the result */
+                    ClientIdPtr = (PCLIENT_ID)AttributeList->Attributes[i].ValuePtr;
+                    break;
+
+                case PsAttributeTebAddress:
+                    /* Output: pointer to PTEB to receive the TEB address */
+                    TebAddressPtr = (PTEB*)AttributeList->Attributes[i].ValuePtr;
+                    break;
+
+                case PsAttributeImageInfo:
+                    /* Output: pointer to SECTION_IMAGE_INFORMATION */
+                    ImageInfoPtr = (PSECTION_IMAGE_INFORMATION)AttributeList->Attributes[i].ValuePtr;
+                    break;
+
+                default:
+                    /* Ignore unknown attributes for forward compatibility */
+                    break;
+            }
+        }
+    }
+    _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
+    {
+        _SEH2_YIELD(return _SEH2_GetExceptionCode());
+    }
+    _SEH2_END;
+
+    /* Image name is required */
+    if (!ImageName.Buffer || !ImageName.Length)
+    {
+        DPRINT1("NtCreateUserProcess: No image name provided\n");
+        return STATUS_INVALID_PARAMETER;
+    }
+
+    /*
+     * Capture the image name string to kernel memory.
+     *
+     * ImageName was populated from the attribute list inside the SEH try
+     * block above: its Length/MaximumLength are already captured to the
+     * kernel stack, while its Buffer still points into user space.
+     * We cannot use ProbeAndCaptureUnicodeString here because that
+     * function expects a UNICODE_STRING residing in user memory (it
+     * probes the structure itself).  Instead, probe and copy the
+     * Buffer contents directly.
+     */
+    if (PreviousMode != KernelMode)
+    {
+        PWCHAR CapturedBuffer;
+
+        _SEH2_TRY
+        {
+            /* Probe the user-mode buffer */
+            ProbeForRead(ImageName.Buffer, ImageName.Length, sizeof(WCHAR));
+
+            /* Allocate kernel memory for the captured string */
+            CapturedBuffer = ExAllocatePoolWithTag(PagedPool,
+                                                   ImageName.Length + sizeof(WCHAR),
+                                                   'RTSU');
+            if (!CapturedBuffer)
+            {
+                Status = STATUS_INSUFFICIENT_RESOURCES;
+                _SEH2_LEAVE;
+            }
+
+            /* Copy and null-terminate */
+            RtlCopyMemory(CapturedBuffer, ImageName.Buffer, ImageName.Length);
+            CapturedBuffer[ImageName.Length / sizeof(WCHAR)] = UNICODE_NULL;
+
+            CapturedImageName.Buffer = CapturedBuffer;
+            CapturedImageName.Length = ImageName.Length;
+            CapturedImageName.MaximumLength = ImageName.Length + sizeof(WCHAR);
+            Status = STATUS_SUCCESS;
+        }
+        _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
+        {
+            Status = _SEH2_GetExceptionCode();
+        }
+        _SEH2_END;
+
+        if (!NT_SUCCESS(Status))
+        {
+            DPRINT1("NtCreateUserProcess: Failed to capture image name, Status=0x%lx\n", Status);
+            return Status;
+        }
+    }
+    else
+    {
+        CapturedImageName = ImageName;
+    }
+
+    DPRINT("NtCreateUserProcess: Image='%wZ'\n", &CapturedImageName);
+
+    /*
+     * Step 1: Open the image file
+     */
+    InitializeObjectAttributes(&LocalFileObjectAttributes,
+                               &CapturedImageName,
+                               OBJ_CASE_INSENSITIVE | OBJ_KERNEL_HANDLE,
+                               NULL,
+                               NULL);
+    Status = ZwOpenFile(&hFile,
+                        SYNCHRONIZE | FILE_EXECUTE | FILE_READ_DATA,
+                        &LocalFileObjectAttributes,
+                        &IoStatusBlock,
+                        FILE_SHARE_DELETE | FILE_SHARE_READ,
+                        FILE_SYNCHRONOUS_IO_NONALERT | FILE_NON_DIRECTORY_FILE);
+    if (!NT_SUCCESS(Status))
+    {
+        DPRINT1("NtCreateUserProcess: Failed to open image '%wZ', Status=0x%lx\n",
+                &CapturedImageName, Status);
+
+        /* Report failure at file open stage */
+        _SEH2_TRY
+        {
+            CreateInfo->State = PsCreateFailOnFileOpen;
+            CreateInfo->FailSection.FileHandle = NULL;
+        }
+        _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
+        {
+            Status = _SEH2_GetExceptionCode();
+        }
+        _SEH2_END;
+
+        goto Cleanup;
+    }
+
+    /*
+     * Step 2: Create an image section from the file
+     */
+    Status = ZwCreateSection(&hSection,
+                             SECTION_ALL_ACCESS,
+                             NULL,
+                             NULL,
+                             PAGE_EXECUTE,
+                             SEC_IMAGE,
+                             hFile);
+    if (!NT_SUCCESS(Status))
+    {
+        DPRINT1("NtCreateUserProcess: Failed to create section, Status=0x%lx\n", Status);
+
+        /* Report failure at section creation stage */
+        _SEH2_TRY
+        {
+            CreateInfo->State = PsCreateFailOnSectionCreate;
+            CreateInfo->FailSection.FileHandle = hFile;
+            hFile = NULL; /* Caller now owns this handle */
+        }
+        _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
+        {
+            Status = _SEH2_GetExceptionCode();
+        }
+        _SEH2_END;
+
+        goto Cleanup;
+    }
+
+    /*
+     * Step 3: Convert process flags to internal flags
+     */
+    if (ProcessFlags & PROCESS_CREATE_FLAGS_INHERIT_HANDLES)
+        PspProcessFlags |= PROCESS_CREATE_FLAGS_INHERIT_HANDLES;
+    if (ProcessFlags & PROCESS_CREATE_FLAGS_NO_DEBUG_INHERIT)
+        PspProcessFlags |= PROCESS_CREATE_FLAGS_NO_DEBUG_INHERIT;
+    if (ProcessFlags & PROCESS_CREATE_FLAGS_BREAKAWAY)
+        PspProcessFlags |= PROCESS_CREATE_FLAGS_BREAKAWAY;
+
+    /*
+     * Step 4: Create the process via PspCreateProcess
+     *
+     * This is the same internal function used by NtCreateProcessEx.
+     * It creates the EPROCESS, address space, PEB, and inserts the
+     * process object.
+     */
+    Status = PspCreateProcess(&hProcess,
+                              ProcessDesiredAccess,
+                              ProcessObjectAttributes,
+                              ParentProcess,
+                              PspProcessFlags,
+                              hSection,
+                              DebugPort,
+                              ExceptionPort,
+                              FALSE);
+    if (!NT_SUCCESS(Status))
+    {
+        DPRINT1("NtCreateUserProcess: PspCreateProcess failed, Status=0x%lx\n", Status);
+        goto Cleanup;
+    }
+
+    DPRINT("NtCreateUserProcess: Process created, handle=%p\n", hProcess);
+
+    /*
+     * Step 5a: Query image information from the section AFTER process creation.
+     *
+     * The section has now been mapped into the new process's address space
+     * by PspCreateProcess -> MmInitializeProcessAddressSpace -> MmMapViewOfSection.
+     * The TransferAddress in SECTION_IMAGE_INFORMATION is computed from the PE
+     * header's preferred ImageBase + AddressOfEntryPoint at section creation time.
+     * If the image was relocated (mapped at a different base), we must adjust
+     * the TransferAddress accordingly.
+     */
+    Status = ZwQuerySection(hSection,
+                            SectionImageInformation,
+                            &ImageInformation,
+                            sizeof(SECTION_IMAGE_INFORMATION),
+                            NULL);
+    if (!NT_SUCCESS(Status))
+    {
+        DPRINT1("NtCreateUserProcess: ZwQuerySection failed, Status=0x%lx\n", Status);
+        goto Cleanup;
+    }
+
+    /*
+     * Step 5b: Get PEB address and SectionBaseAddress from the newly created process.
+     *
+     * Reference the EPROCESS to get SectionBaseAddress. If the image was
+     * relocated (mapped at a different address than the PE header's preferred
+     * ImageBase), we must adjust TransferAddress to reflect the actual base.
+     */
+    Status = ZwQueryInformationProcess(hProcess,
+                                       ProcessBasicInformation,
+                                       &ProcessBasicInfo,
+                                       sizeof(ProcessBasicInfo),
+                                       NULL);
+    if (!NT_SUCCESS(Status))
+    {
+        DPRINT1("NtCreateUserProcess: QueryInformationProcess failed, Status=0x%lx\n", Status);
+        goto Cleanup;
+    }
+
+    /*
+     * Get the actual section base address from the EPROCESS.
+     * The TransferAddress from ZwQuerySection is: PreferredImageBase + AddressOfEntryPoint.
+     * If the image was relocated, we need: ActualImageBase + AddressOfEntryPoint.
+     * Compute: ActualTransfer = TransferAddress + (ActualBase - PreferredBase)
+     */
+    Status = ObReferenceObjectByHandle(hProcess,
+                                       PROCESS_QUERY_INFORMATION,
+                                       PsProcessType,
+                                       KernelMode,
+                                       (PVOID*)&Process,
+                                       NULL);
+    if (NT_SUCCESS(Status))
+    {
+        PVOID ActualBase = Process->SectionBaseAddress;
+
+        DPRINT("NtCreateUserProcess: TransferAddress=%p, SectionBaseAddress=%p\n",
+               ImageInformation.TransferAddress, ActualBase);
+
+        if (ActualBase && ImageInformation.TransferAddress)
+        {
+            /*
+             * Compute the RVA of the entry point from the original TransferAddress.
+             * TransferAddress = PreferredBase + EntryPointRVA
+             * We need: ActualBase + EntryPointRVA
+             *
+             * Use SECTION_IMAGE_INFORMATION to get the preferred base indirectly:
+             * We can query it from the image headers at the actual base, but since
+             * we are in the parent process context, we need to work with what we have.
+             *
+             * The SectionBaseAddress IS the actual mapped base. The difference
+             * between the preferred base (from PE header) and actual base gives us
+             * the relocation delta. If the image mapped at preferred base, delta = 0.
+             *
+             * For now, get the preferred ImageBase from the section object.
+             */
+            PSECTION SectionObject;
+            Status = ObReferenceObjectByHandle(hSection,
+                                               SECTION_QUERY,
+                                               MmSectionObjectType,
+                                               KernelMode,
+                                               (PVOID*)&SectionObject,
+                                               NULL);
+            if (NT_SUCCESS(Status))
+            {
+                PMM_IMAGE_SECTION_OBJECT ImageSectionObject =
+                    (PMM_IMAGE_SECTION_OBJECT)SectionObject->Segment;
+                PVOID PreferredBase = ImageSectionObject->BasedAddress;
+                LONG_PTR Delta = (LONG_PTR)ActualBase - (LONG_PTR)PreferredBase;
+
+                DPRINT("NtCreateUserProcess: PreferredBase=%p, ActualBase=%p, Delta=%p\n",
+                       PreferredBase, ActualBase, (PVOID)Delta);
+
+                if (Delta != 0)
+                {
+                    /* Image was relocated; adjust TransferAddress */
+                    ImageInformation.TransferAddress =
+                        (PVOID)((LONG_PTR)ImageInformation.TransferAddress + Delta);
+
+                    DPRINT("NtCreateUserProcess: Adjusted TransferAddress=%p\n",
+                            ImageInformation.TransferAddress);
+                }
+
+                ObDereferenceObject(SectionObject);
+            }
+            Status = STATUS_SUCCESS; /* Don't fail if section query fails */
+        }
+
+        ObDereferenceObject(Process);
+        Process = NULL;
+    }
+    else
+    {
+        DPRINT1("NtCreateUserProcess: Failed to reference process, Status=0x%lx\n", Status);
+        goto Cleanup;
+    }
+
+    /*
+     * Step 6: Write process parameters into the new process's address space.
+     *
+     * If the caller provided ProcessParameters, initialize the environment
+     * in the child process, similar to RtlpInitEnvironment.
+     */
+    if (ProcessParameters && ProcessBasicInfo.PebBaseAddress)
+    {
+        PVOID BaseAddress = NULL;
+        SIZE_T RegionSize;
+        PVOID EnvironmentBase = NULL;
+        SIZE_T EnvSize;
+        PVOID SavedEnvironment;
+        BOOLEAN WasNormalized;
+
+        /* Remember the original environment pointer before we modify anything */
+        SavedEnvironment = ProcessParameters->Environment;
+
+        /* First, write the environment block if present */
+        if (ProcessParameters->Environment)
+        {
+            PWCHAR Env = (PWCHAR)ProcessParameters->Environment;
+            while (*Env) { while (*Env++); }
+            Env++;
+            EnvSize = (SIZE_T)((ULONG_PTR)Env - (ULONG_PTR)ProcessParameters->Environment);
+
+            RegionSize = EnvSize;
+            Status = ZwAllocateVirtualMemory(hProcess,
+                                             &EnvironmentBase,
+                                             0,
+                                             &RegionSize,
+                                             MEM_RESERVE | MEM_COMMIT,
+                                             PAGE_READWRITE);
+            if (NT_SUCCESS(Status))
+            {
+                ZwWriteVirtualMemory(hProcess,
+                                     EnvironmentBase,
+                                     ProcessParameters->Environment,
+                                     EnvSize,
+                                     NULL);
+            }
+        }
+
+        /* Allocate space for the parameters block in the child */
+        RegionSize = ProcessParameters->MaximumLength;
+        Status = ZwAllocateVirtualMemory(hProcess,
+                                         &BaseAddress,
+                                         0,
+                                         &RegionSize,
+                                         MEM_RESERVE | MEM_COMMIT,
+                                         PAGE_READWRITE);
+        if (NT_SUCCESS(Status))
+        {
+            /*
+             * The caller (RtlCreateUserProcess) passes normalized parameters
+             * where string Buffer pointers are absolute addresses in the parent
+             * process. We need to denormalize them (convert to offsets relative
+             * to the parameters base) before writing to the child, because the
+             * child's LDR will call RtlNormalizeProcessParams to convert them
+             * to absolute addresses in the child's address space.
+             *
+             * We temporarily denormalize in place, write, then restore.
+             */
+            WasNormalized = (ProcessParameters->Flags & RTL_USER_PROCESS_PARAMETERS_NORMALIZED) != 0;
+
+            /*
+             * Set Environment to the child's copy. Environment is NOT part of
+             * the normalize/denormalize set; it is always an absolute pointer.
+             */
+            ProcessParameters->Environment = EnvironmentBase;
+
+            if (WasNormalized)
+            {
+                /* Denormalize: convert absolute parent pointers to relative offsets */
+                #define DENORM_FIELD(field) \
+                    if (ProcessParameters->field) \
+                        ProcessParameters->field = (PVOID)((ULONG_PTR)ProcessParameters->field - (ULONG_PTR)ProcessParameters)
+
+                DENORM_FIELD(CurrentDirectory.DosPath.Buffer);
+                DENORM_FIELD(DllPath.Buffer);
+                DENORM_FIELD(ImagePathName.Buffer);
+                DENORM_FIELD(CommandLine.Buffer);
+                DENORM_FIELD(WindowTitle.Buffer);
+                DENORM_FIELD(DesktopInfo.Buffer);
+                DENORM_FIELD(ShellInfo.Buffer);
+                DENORM_FIELD(RuntimeData.Buffer);
+
+                #undef DENORM_FIELD
+
+                ProcessParameters->Flags &= ~RTL_USER_PROCESS_PARAMETERS_NORMALIZED;
+            }
+
+            /* Write the denormalized parameters to the child */
+            ZwWriteVirtualMemory(hProcess,
+                                 BaseAddress,
+                                 ProcessParameters,
+                                 ProcessParameters->Length,
+                                 NULL);
+
+            /* Restore the parent's parameters to their original state */
+            if (WasNormalized)
+            {
+                #define RENORM_FIELD(field) \
+                    if (ProcessParameters->field) \
+                        ProcessParameters->field = (PVOID)((ULONG_PTR)ProcessParameters->field + (ULONG_PTR)ProcessParameters)
+
+                RENORM_FIELD(CurrentDirectory.DosPath.Buffer);
+                RENORM_FIELD(DllPath.Buffer);
+                RENORM_FIELD(ImagePathName.Buffer);
+                RENORM_FIELD(CommandLine.Buffer);
+                RENORM_FIELD(WindowTitle.Buffer);
+                RENORM_FIELD(DesktopInfo.Buffer);
+                RENORM_FIELD(ShellInfo.Buffer);
+                RENORM_FIELD(RuntimeData.Buffer);
+
+                #undef RENORM_FIELD
+
+                ProcessParameters->Flags |= RTL_USER_PROCESS_PARAMETERS_NORMALIZED;
+            }
+
+            /* Restore the parent's original environment pointer */
+            ProcessParameters->Environment = SavedEnvironment;
+
+            /* Write the pointer to parameters into the PEB */
+            ZwWriteVirtualMemory(hProcess,
+                                 &ProcessBasicInfo.PebBaseAddress->ProcessParameters,
+                                 &BaseAddress,
+                                 sizeof(BaseAddress),
+                                 NULL);
+        }
+        else
+        {
+            DPRINT1("NtCreateUserProcess: Failed to allocate process parameters, Status=0x%lx\n", Status);
+        }
+
+        /* Reset Status since parameter writing is not critical */
+        Status = STATUS_SUCCESS;
+    }
+
+    /*
+     * Step 7: Create the initial thread.
+     *
+     * We use PspCreateThread, which is the same internal function used by
+     * NtCreateThread. We need to build up a CONTEXT and INITIAL_TEB for it.
+     *
+     * The approach mirrors what RtlCreateUserThread does:
+     * 1. Create the user-mode stack
+     * 2. Initialize the context with the image entry point
+     * 3. Call PspCreateThread
+     */
+
+    /*
+     * Set up the initial thread stack.
+     *
+     * This mirrors RtlpCreateUserStack: reserve the full stack, then commit
+     * the initial portion plus one guard page at the bottom. The guard page
+     * is included in the committed size so that the usable committed area
+     * equals the requested commit size.
+     */
+    {
+        PVOID StackBase = NULL;
+        ULONG_PTR StackTop;
+        SIZE_T StackReserve = ImageInformation.MaximumStackSize;
+        SIZE_T StackCommit = ImageInformation.CommittedStackSize;
+        SIZE_T GuardPageSize = PAGE_SIZE;
+        BOOLEAN UseGuard;
+
+        /* Ensure reasonable defaults */
+        if (StackReserve == 0) StackReserve = 0x100000;  /* 1MB default */
+        if (StackCommit == 0) StackCommit = PAGE_SIZE;
+
+        /* Ensure commit does not exceed reserve */
+        if (StackCommit >= StackReserve)
+        {
+            StackReserve = ROUND_UP(StackCommit, 1024 * 1024);
+        }
+
+        /* Align to page boundaries */
+        StackCommit = ROUND_UP(StackCommit, PAGE_SIZE);
+        StackReserve = ROUND_UP(StackReserve, 64 * 1024); /* 64KB allocation granularity */
+
+        /* Reserve stack memory */
+        Status = ZwAllocateVirtualMemory(hProcess,
+                                         &StackBase,
+                                         0,
+                                         &StackReserve,
+                                         MEM_RESERVE,
+                                         PAGE_READWRITE);
+        if (!NT_SUCCESS(Status))
+        {
+            DPRINT1("NtCreateUserProcess: Failed to reserve stack, Status=0x%lx\n", Status);
+            goto Cleanup;
+        }
+
+        /* Calculate top of stack (highest address) */
+        StackTop = (ULONG_PTR)StackBase + StackReserve;
+
+        /*
+         * Add a guard page if there's room. The guard page is included in the
+         * total commit so the usable committed area stays at StackCommit bytes.
+         */
+        UseGuard = (StackReserve >= StackCommit + PAGE_SIZE);
+        if (UseGuard)
+        {
+            StackCommit += PAGE_SIZE;
+        }
+
+        /* Commit from (StackTop - StackCommit) up to StackTop */
+        {
+            PVOID CommitBase = (PVOID)(StackTop - StackCommit);
+            SIZE_T CommitSize = StackCommit;
+            Status = ZwAllocateVirtualMemory(hProcess,
+                                             &CommitBase,
+                                             0,
+                                             &CommitSize,
+                                             MEM_COMMIT,
+                                             PAGE_READWRITE);
+            if (!NT_SUCCESS(Status))
+            {
+                DPRINT1("NtCreateUserProcess: Failed to commit stack, Status=0x%lx\n", Status);
+                goto Cleanup;
+            }
+        }
+
+        /* Set up a guard page at the bottom of the committed region */
+        if (UseGuard)
+        {
+            PVOID GuardBase = (PVOID)(StackTop - StackCommit);
+            ULONG OldProtect;
+            ZwProtectVirtualMemory(hProcess,
+                                   &GuardBase,
+                                   &GuardPageSize,
+                                   PAGE_READWRITE | PAGE_GUARD,
+                                   &OldProtect);
+        }
+
+        /* Fill in the InitialTeb */
+        RtlZeroMemory(&InitialTeb, sizeof(INITIAL_TEB));
+        InitialTeb.AllocatedStackBase = StackBase;
+        InitialTeb.StackBase = (PVOID)StackTop;
+
+        /*
+         * StackLimit points above the guard page, matching RtlpCreateUserStack.
+         * The guard page sits at StackTop - StackCommit; usable stack starts
+         * one page above that.
+         */
+        if (UseGuard)
+        {
+            InitialTeb.StackLimit = (PVOID)(StackTop - StackCommit + PAGE_SIZE);
+        }
+        else
+        {
+            InitialTeb.StackLimit = (PVOID)(StackTop - StackCommit);
+        }
+        InitialTeb.PreviousStackBase = NULL;
+        InitialTeb.PreviousStackLimit = NULL;
+    }
+
+    /* Initialize the thread context */
+    RtlZeroMemory(&ThreadContext, sizeof(CONTEXT));
+    ThreadContext.ContextFlags = CONTEXT_FULL;
+
+#ifdef _M_AMD64
+    /* AMD64: Set up initial context for the thread */
+    ThreadContext.Rip = (ULONG64)ImageInformation.TransferAddress;
+    ThreadContext.Rsp = (ULONG64)InitialTeb.StackBase - 6 * sizeof(PVOID);
+    ThreadContext.Rsp &= ~15ULL;
+    ThreadContext.Rsp -= 8;  /* Unaligned on function entry per ABI */
+    ThreadContext.EFlags = EFLAGS_INTERRUPT_MASK;
+    ThreadContext.Rcx = (ULONG64)ProcessBasicInfo.PebBaseAddress;
+
+    /* Set user-mode segments */
+    ThreadContext.SegCs = KGDT64_R3_CODE | RPL_MASK;
+    ThreadContext.SegDs = KGDT64_R3_DATA | RPL_MASK;
+    ThreadContext.SegEs = KGDT64_R3_DATA | RPL_MASK;
+    ThreadContext.SegFs = KGDT64_R3_CMTEB | RPL_MASK;
+    ThreadContext.SegGs = KGDT64_R3_DATA | RPL_MASK;
+    ThreadContext.SegSs = KGDT64_R3_DATA | RPL_MASK;
+    ThreadContext.MxCsr = INITIAL_MXCSR;
+#elif defined(_M_IX86)
+    /* x86: Set up initial context for the thread */
+    ThreadContext.Eip = (ULONG)ImageInformation.TransferAddress;
+    ThreadContext.Esp = (ULONG)(ULONG_PTR)InitialTeb.StackBase - sizeof(PVOID);
+    ThreadContext.EFlags = EFLAGS_INTERRUPT_MASK;
+
+    /* Push PEB address as parameter */
+    {
+        ULONG PebParam = (ULONG)(ULONG_PTR)ProcessBasicInfo.PebBaseAddress;
+        PVOID WriteAddr = (PVOID)(ULONG_PTR)(ThreadContext.Esp);
+        ZwWriteVirtualMemory(hProcess, WriteAddr, &PebParam, sizeof(PebParam), NULL);
+        ThreadContext.Esp -= sizeof(ULONG); /* Return address placeholder */
+    }
+
+    /* Set user-mode segments */
+    ThreadContext.SegCs = KGDT_R3_CODE | RPL_MASK;
+    ThreadContext.SegDs = KGDT_R3_DATA | RPL_MASK;
+    ThreadContext.SegEs = KGDT_R3_DATA | RPL_MASK;
+    ThreadContext.SegFs = KGDT_R3_TEB | RPL_MASK;
+    ThreadContext.SegGs = 0;
+    ThreadContext.SegSs = KGDT_R3_DATA | RPL_MASK;
+#elif defined(_M_ARM64)
+    /* ARM64: Set up initial context */
+    ThreadContext.Pc = (ULONG64)ImageInformation.TransferAddress;
+    ThreadContext.Sp = (ULONG64)InitialTeb.StackBase;
+    ThreadContext.Sp &= ~15ULL;
+    ThreadContext.X0 = (ULONG64)ProcessBasicInfo.PebBaseAddress;
+    ThreadContext.Cpsr = 0;  /* User mode */
+#elif defined(_M_ARM)
+    /* ARM: Set up initial context */
+    ThreadContext.Pc = (ULONG)ImageInformation.TransferAddress;
+    ThreadContext.Sp = (ULONG)(ULONG_PTR)InitialTeb.StackBase;
+    ThreadContext.R0 = (ULONG)(ULONG_PTR)ProcessBasicInfo.PebBaseAddress;
+    ThreadContext.Cpsr = 0x10;  /* User mode */
+#else
+#error "Unsupported architecture"
+#endif
+
+    /* Create the initial thread via PspCreateThread */
+    Status = PspCreateThread(&hThread,
+                             ThreadDesiredAccess,
+                             ThreadObjectAttributes,
+                             hProcess,
+                             NULL,
+                             &ClientId,
+                             &ThreadContext,
+                             &InitialTeb,
+                             (ThreadFlags & THREAD_CREATE_FLAGS_CREATE_SUSPENDED) ? TRUE : FALSE,
+                             NULL,
+                             NULL);
+    if (!NT_SUCCESS(Status))
+    {
+        DPRINT1("NtCreateUserProcess: PspCreateThread failed, Status=0x%lx\n", Status);
+        goto Cleanup;
+    }
+
+    DPRINT("NtCreateUserProcess: Thread created, handle=%p, TID=%p\n",
+           hThread, ClientId.UniqueThread);
+
+    /*
+     * Step 8: Fill output structures
+     */
+    _SEH2_TRY
+    {
+        /* Return process and thread handles */
+        *ProcessHandle = hProcess;
+        *ThreadHandle = hThread;
+
+        /* Fill the CreateInfo success output */
+        CreateInfo->State = PsCreateSuccess;
+        CreateInfo->SuccessState.OutputFlags = 0;
+        CreateInfo->SuccessState.FileHandle = hFile;
+        CreateInfo->SuccessState.SectionHandle = hSection;
+        CreateInfo->SuccessState.UserProcessParametersNative = 0;
+        CreateInfo->SuccessState.UserProcessParametersWow64 = 0;
+        CreateInfo->SuccessState.CurrentParameterFlags = 0;
+        CreateInfo->SuccessState.PebAddressNative = (ULONGLONG)(ULONG_PTR)ProcessBasicInfo.PebBaseAddress;
+        CreateInfo->SuccessState.PebAddressWow64 = 0;
+        CreateInfo->SuccessState.ManifestAddress = 0;
+        CreateInfo->SuccessState.ManifestSize = 0;
+
+        /* Write back CLIENT_ID if requested */
+        if (ClientIdPtr)
+        {
+            if (PreviousMode != KernelMode)
+                ProbeForWrite(ClientIdPtr, sizeof(CLIENT_ID), sizeof(ULONG));
+            *ClientIdPtr = ClientId;
+        }
+
+        /* Write back image information if requested */
+        if (ImageInfoPtr)
+        {
+            if (PreviousMode != KernelMode)
+                ProbeForWrite(ImageInfoPtr, sizeof(SECTION_IMAGE_INFORMATION), sizeof(ULONG));
+            *ImageInfoPtr = ImageInformation;
+        }
+
+        /* We do not write TEB address here; it was set by PspCreateThread internally */
+    }
+    _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
+    {
+        Status = _SEH2_GetExceptionCode();
+    }
+    _SEH2_END;
+
+    /* On success, the caller owns the file and section handles */
+    if (NT_SUCCESS(Status))
+    {
+        hFile = NULL;
+        hSection = NULL;
+        hProcess = NULL;
+        hThread = NULL;
+    }
+
+Cleanup:
+    /* Release captured image name */
+    if (PreviousMode != KernelMode && CapturedImageName.Buffer != ImageName.Buffer)
+    {
+        ReleaseCapturedUnicodeString(&CapturedImageName, PreviousMode);
+    }
+
+    /* Close kernel handles on failure */
+    if (hThread) ZwClose(hThread);
+    if (hProcess) ZwClose(hProcess);
+    if (hSection) ZwClose(hSection);
+    if (hFile) ZwClose(hFile);
+
+    return Status;
+}
+#endif /* NTDDI_VERSION >= NTDDI_LONGHORN */
 
 /*
  * @implemented

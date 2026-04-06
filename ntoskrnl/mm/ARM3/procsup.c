@@ -15,6 +15,16 @@
 #define MODULE_INVOLVED_IN_ARM3
 #include <mm/ARM3/miarm.h>
 
+/* DirectoryTableBase compatibility: single value at Vista+, array pre-Vista */
+#if (NTDDI_VERSION >= NTDDI_LONGHORN)
+#define DTB0 DirectoryTableBase
+#define DTB1 Unused0
+#else
+#define DTB0 DirectoryTableBase[0]
+#define DTB1 DirectoryTableBase[1]
+#endif
+
+
 /* GLOBALS ********************************************************************/
 
 ULONG MmProcessColorSeed = 0x12345678;
@@ -135,7 +145,19 @@ MmDeleteTeb(IN PEPROCESS Process,
     KeAttachProcess(&Process->Pcb);
 
     /* Lock the process address space */
+    #if (NTDDI_VERSION >= NTDDI_LONGHORN)
+    /*
+     * Vista+ converted AddressCreationLock from KGUARDED_MUTEX to EX_PUSH_LOCK.
+     * KeAcquireGuardedMutex implicitly entered a guarded region, so APCs were
+     * disabled; ExAcquirePushLockExclusive does NOT, so downstream callers such
+     * as MiLockProcessWorkingSetUnsafe would see APCs still enabled. Enter a
+     * guarded region explicitly to match the Win7 contract.
+     */
+    KeEnterGuardedRegion();
+    ExAcquirePushLockExclusive(&Process->AddressCreationLock);
+#else
     KeAcquireGuardedMutex(&Process->AddressCreationLock);
+#endif
 
     /* Find the VAD, make sure it's a TEB VAD */
     Vad = MiLocateAddress(Teb);
@@ -176,7 +198,12 @@ MmDeleteTeb(IN PEPROCESS Process,
     }
 
     /* Release the address space lock */
+    #if (NTDDI_VERSION >= NTDDI_LONGHORN)
+    ExReleasePushLockExclusive(&Process->AddressCreationLock);
+    KeLeaveGuardedRegion();
+#else
     KeReleaseGuardedMutex(&Process->AddressCreationLock);
+#endif
 
     /* Detach */
     KeDetachProcess();
@@ -956,7 +983,7 @@ MmInitializeProcessAddressSpace(IN PEPROCESS Process,
 #endif
 
     /* We should have a PDE */
-    ASSERT(Process->Pcb.DirectoryTableBase[0] != 0);
+    ASSERT(Process->Pcb.DTB0 != 0);
     ASSERT(Process->PdeUpdateNeeded == FALSE);
 
     /* Attach to the process */
@@ -967,7 +994,11 @@ MmInitializeProcessAddressSpace(IN PEPROCESS Process,
     Process->AddressSpaceInitialized = 2;
 
     /* Initialize the Addresss Space lock */
+    #if (NTDDI_VERSION >= NTDDI_LONGHORN)
+    ExInitializePushLock(&Process->AddressCreationLock);
+#else
     KeInitializeGuardedMutex(&Process->AddressCreationLock);
+#endif
     Process->Vm.WorkingSetExpansionLinks.Flink = NULL;
 
     /* Initialize AVL tree */
@@ -989,7 +1020,7 @@ MmInitializeProcessAddressSpace(IN PEPROCESS Process,
     PointerPte = MiAddressToPte(PDE_BASE);
 #endif
     PageFrameNumber = PFN_FROM_PTE(PointerPte);
-    ASSERT(Process->Pcb.DirectoryTableBase[0] == PageFrameNumber * PAGE_SIZE);
+    ASSERT(Process->Pcb.DTB0 == PageFrameNumber * PAGE_SIZE);
     MiInitializePfn(PageFrameNumber, PointerPte, TRUE);
 
     /* Do the same for hyperspace */
@@ -997,7 +1028,7 @@ MmInitializeProcessAddressSpace(IN PEPROCESS Process,
     PageFrameNumber = PFN_FROM_PTE(PointerPde);
     MiInitializePfn(PageFrameNumber, (PMMPTE)PointerPde, TRUE);
 #if (_MI_PAGING_LEVELS == 2)
-    ASSERT(Process->Pcb.DirectoryTableBase[1] == PageFrameNumber * PAGE_SIZE);
+    ASSERT(Process->Pcb.DTB1 == PageFrameNumber * PAGE_SIZE);
 #endif
 
 #if (_MI_PAGING_LEVELS >= 3)
@@ -1005,14 +1036,14 @@ MmInitializeProcessAddressSpace(IN PEPROCESS Process,
     PageFrameNumber = PFN_FROM_PTE(PointerPpe);
     MiInitializePfn(PageFrameNumber, PointerPpe, TRUE);
 #if (_MI_PAGING_LEVELS == 3)
-    ASSERT(Process->Pcb.DirectoryTableBase[1] == PageFrameNumber * PAGE_SIZE);
+    ASSERT(Process->Pcb.DTB1 == PageFrameNumber * PAGE_SIZE);
 #endif
 #endif
 #if (_MI_PAGING_LEVELS == 4)
     PointerPxe = MiAddressToPxe((PVOID)HYPER_SPACE);
     PageFrameNumber = PFN_FROM_PTE(PointerPxe);
     MiInitializePfn(PageFrameNumber, PointerPxe, TRUE);
-    ASSERT(Process->Pcb.DirectoryTableBase[1] == PageFrameNumber * PAGE_SIZE);
+    ASSERT(Process->Pcb.DTB1 == PageFrameNumber * PAGE_SIZE);
 #endif
 
     /* Do the same for the Working set list */
@@ -1031,7 +1062,7 @@ MmInitializeProcessAddressSpace(IN PEPROCESS Process,
     MiInitializeWorkingSetList(&Process->Vm);
 
     /* The rule is that the owner process is always in the FLINK of the PDE's PFN entry */
-    Pfn = MiGetPfnEntry(Process->Pcb.DirectoryTableBase[0] >> PAGE_SHIFT);
+    Pfn = MiGetPfnEntry(Process->Pcb.DTB0 >> PAGE_SHIFT);
     ASSERT(Pfn->u4.PteFrame == MiGetPfnEntryIndex(Pfn));
     ASSERT(Pfn->u1.WsIndex == 0);
     Pfn->u1.Event = (PKEVENT)Process;
@@ -1128,12 +1159,20 @@ MmInitializeHandBuiltProcess(IN PEPROCESS Process,
                              IN PULONG_PTR DirectoryTableBase)
 {
     /* Share the directory base with the idle process */
-    DirectoryTableBase[0] = PsGetCurrentProcess()->Pcb.DirectoryTableBase[0];
-    DirectoryTableBase[1] = PsGetCurrentProcess()->Pcb.DirectoryTableBase[1];
+    DirectoryTableBase[0] = PsGetCurrentProcess()->Pcb.DTB0;
+    DirectoryTableBase[1] = PsGetCurrentProcess()->Pcb.DTB1;
 
     /* Initialize the Addresss Space */
+    #if (NTDDI_VERSION >= NTDDI_LONGHORN)
+    ExInitializePushLock(&Process->AddressCreationLock);
+#else
     KeInitializeGuardedMutex(&Process->AddressCreationLock);
+#endif
+    #if (NTDDI_VERSION < NTDDI_LONGHORN)
+
     KeInitializeSpinLock(&Process->HyperSpaceLock);
+
+    #endif
     Process->Vm.WorkingSetExpansionLinks.Flink = NULL;
     ASSERT(Process->VadRoot.NumberGenericTableElements == 0);
     Process->VadRoot.BalancedRoot.u1.Parent = &Process->VadRoot.BalancedRoot;
@@ -1167,15 +1206,23 @@ MmCreateProcessAddressSpace(IN ULONG MinWs,
     ULONG Color;
 
     /* Make sure we don't already have a page directory setup */
-    ASSERT(Process->Pcb.DirectoryTableBase[0] == 0);
-    ASSERT(Process->Pcb.DirectoryTableBase[1] == 0);
+    ASSERT(Process->Pcb.DTB0 == 0);
+    ASSERT(Process->Pcb.DTB1 == 0);
     ASSERT(Process->WorkingSetPage == 0);
 
     /* Choose a process color */
-    Process->NextPageColor = (USHORT)RtlRandom(&MmProcessColorSeed);
+    #if (NTDDI_VERSION >= NTDDI_LONGHORN)
+    Process->Spare7 =
+#else
+    Process->NextPageColor =
+#endif (USHORT)RtlRandom(&MmProcessColorSeed);
 
     /* Setup the hyperspace lock */
+    #if (NTDDI_VERSION < NTDDI_LONGHORN)
+
     KeInitializeSpinLock(&Process->HyperSpaceLock);
+
+    #endif
 
     /* Lock PFN database */
     OldIrql = MiAcquirePfnLock();
@@ -1391,7 +1438,7 @@ MmDeleteProcessAddressSpace(IN PEPROCESS Process)
         ASSERT((Pfn1->u3.e2.ReferenceCount == 0) || (Pfn1->u3.e1.WriteInProgress));
 
         /* Now map hyperspace and its page table */
-        PageFrameIndex = Process->Pcb.DirectoryTableBase[1] >> PAGE_SHIFT;
+        PageFrameIndex = Process->Pcb.DTB1 >> PAGE_SHIFT;
         Pfn1 = MiGetPfnEntry(PageFrameIndex);
         Pfn2 = MiGetPfnEntry(Pfn1->u4.PteFrame);
 
@@ -1402,7 +1449,7 @@ MmDeleteProcessAddressSpace(IN PEPROCESS Process)
         ASSERT((Pfn1->u3.e2.ReferenceCount == 0) || (Pfn1->u3.e1.WriteInProgress));
 
         /* Finally, nuke the PDE itself */
-        PageFrameIndex = Process->Pcb.DirectoryTableBase[0] >> PAGE_SHIFT;
+        PageFrameIndex = Process->Pcb.DTB0 >> PAGE_SHIFT;
         Pfn1 = MiGetPfnEntry(PageFrameIndex);
         MI_SET_PFN_DELETED(Pfn1);
         MiDecrementShareCount(Pfn1, PageFrameIndex);
@@ -1424,8 +1471,8 @@ MmDeleteProcessAddressSpace(IN PEPROCESS Process)
     if (Process->Session) MiReleaseProcessReferenceToSessionDataPage(Process->Session);
 
     /* Clear out the PDE pages */
-    Process->Pcb.DirectoryTableBase[0] = 0;
-    Process->Pcb.DirectoryTableBase[1] = 0;
+    Process->Pcb.DTB0 = 0;
+    Process->Pcb.DTB1 = 0;
 }
 
 
