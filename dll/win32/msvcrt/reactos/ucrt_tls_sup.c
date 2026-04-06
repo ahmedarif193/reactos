@@ -5,8 +5,8 @@
  * COPYRIGHT:   Copyright 2025 Timo Kreuzer <timo.kreuzer@reactos.org>
  */
 
-#include <process.h>
-#include <assert.h>
+#include "../include/process.h"
+#include "../include/assert.h"
 #include "msvcrt.h"
 #include "wine/debug.h"
 

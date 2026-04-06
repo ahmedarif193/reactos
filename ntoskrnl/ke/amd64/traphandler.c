@@ -197,8 +197,12 @@ KiSystemCallHandler(
     }
 
     /* Get descriptor table */
-#if defined(_WIN64) && (NTDDI_VERSION >= NTDDI_WIN7)
-    /* ServiceTable removed from KTHREAD on amd64 at Win7+; use global table */
+#if defined(_WIN64) && (NTDDI_VERSION >= NTDDI_LONGHORN)
+    /* TODO(NT6.1): KTHREAD->ServiceTable does not exist on amd64 from Vista onwards
+     * (see ndk/ketypes.h). This branch derives the descriptor table from the global
+     * KeServiceDescriptorTable[Shadow] using the GuiThread flag. The lookup compiles
+     * but has not been validated against real NT6.x semantics — revisit when wiring
+     * up the full Win7 syscall path. */
     {
         PVOID _ServiceTable = (Thread->GuiThread) ?
             (PVOID)KeServiceDescriptorTableShadow : (PVOID)KeServiceDescriptorTable;
@@ -213,7 +217,8 @@ KiSystemCallHandler(
     {
         /* Check if this is a GUI call and this is not a GUI thread yet */
         if ((TableIndex == WIN32K_SERVICE_INDEX) &&
-#if defined(_WIN64) && (NTDDI_VERSION >= NTDDI_WIN7)
+#if defined(_WIN64) && (NTDDI_VERSION >= NTDDI_LONGHORN)
+            /* TODO(NT6.1): see above — uses GuiThread instead of ServiceTable compare */
             (!Thread->GuiThread))
 #else
             (Thread->ServiceTable == KeServiceDescriptorTable))

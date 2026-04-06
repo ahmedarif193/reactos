@@ -9,8 +9,8 @@
 #ifndef _INC_WCTYPE // include guard for 3rd party interop
 #define _INC_WCTYPE
 
-#include <corecrt.h>
-#include <corecrt_wctype.h>
+#include "corecrt.h"
+#include "corecrt_wctype.h"
 
 #pragma warning(push)
 #pragma warning(disable: _UCRT_DISABLED_WARNINGS)

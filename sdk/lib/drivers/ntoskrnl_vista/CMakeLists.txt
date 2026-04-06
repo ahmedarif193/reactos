@@ -1,4 +1,4 @@
-remove_definitions(-D_WIN32_WINNT=0x600)
+remove_definitions(-D_WIN32_WINNT=${REACTOS_TARGET_NT})
 add_definitions(-D_WIN32_WINNT=0x602)
 
 add_definitions(-DUNICODE -D_UNICODE -D_NTOSKRNL_ -D_NTSYSTEM_)

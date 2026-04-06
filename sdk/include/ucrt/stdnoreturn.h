@@ -9,7 +9,7 @@
 #ifndef _INC_STDNORETURN // include guard for 3rd party interop
 #define _INC_STDNORETURN
 
-#include <corecrt.h>
+#include "corecrt.h"
 
 #pragma warning(push)
 #pragma warning(disable: _UCRT_DISABLED_WARNINGS)

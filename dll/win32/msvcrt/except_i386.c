@@ -28,7 +28,7 @@
 #ifdef __i386__
 
 #include <stdarg.h>
-#include <fpieee.h>
+#include "include/fpieee.h"
 #define longjmp ms_longjmp  /* avoid prototype mismatch */
 #include <setjmp.h>
 #undef longjmp

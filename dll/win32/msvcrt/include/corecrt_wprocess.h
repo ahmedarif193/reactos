@@ -6,7 +6,7 @@
 #ifndef _WPROCESS_DEFINED
 #define _WPROCESS_DEFINED
 
-#include <corecrt.h>
+#include "corecrt.h"
 
 #ifdef __cplusplus
 extern "C" {

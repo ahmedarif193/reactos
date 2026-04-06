@@ -22,9 +22,9 @@
  * Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA 02110-1301, USA
  */
 
-#include <locale.h>
-#include <stdlib.h>
-#include <time.h>
+#include "include/locale.h"
+#include "include/stdlib.h"
+#include "include/time.h"
 #include <sys/timeb.h>
 
 #include "msvcrt.h"

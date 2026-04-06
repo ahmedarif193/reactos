@@ -21,6 +21,6 @@
 #ifndef __WINE_CRTDEFS_H
 #define __WINE_CRTDEFS_H
 
-#include <corecrt.h>
+#include "corecrt.h"
 
 #endif /* __WINE_CRTDEFS_H */

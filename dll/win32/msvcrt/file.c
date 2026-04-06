@@ -26,14 +26,14 @@
 
 #include <direct.h>
 #include <fcntl.h>
-#include <io.h>
+#include "include/io.h"
 #include <share.h>
 #include <stdarg.h>
 #include <sys/locking.h>
 #include <sys/types.h>
 #include <sys/utime.h>
-#include <time.h>
-#include <limits.h>
+#include "include/time.h"
+#include "include/limits.h"
 
 #include "windef.h"
 #include "winbase.h"

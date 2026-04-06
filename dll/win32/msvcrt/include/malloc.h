@@ -20,8 +20,8 @@
 #ifndef __WINE_MALLOC_H
 #define __WINE_MALLOC_H
 
-#include <corecrt.h>
-#include <corecrt_malloc.h>
+#include "corecrt.h"
+#include "corecrt_malloc.h"
 
 /* heap function constants */
 #define _HEAPEMPTY    -1
