@@ -21,7 +21,7 @@
 #if defined(__x86_64__) && !defined(__arm64ec__)
 
 #include <stdarg.h>
-#include <fpieee.h>
+#include "include/fpieee.h"
 #define longjmp ms_longjmp  /* avoid prototype mismatch */
 #include <setjmp.h>
 #undef longjmp

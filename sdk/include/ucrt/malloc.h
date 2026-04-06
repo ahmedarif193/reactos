@@ -9,8 +9,8 @@
 #ifndef _INC_MALLOC // include guard for 3rd party interop
 #define _INC_MALLOC
 
-#include <corecrt.h>
-#include <corecrt_malloc.h>
+#include "corecrt.h"
+#include "corecrt_malloc.h"
 
 #pragma warning(push)
 #pragma warning(disable: _UCRT_DISABLED_WARNINGS)

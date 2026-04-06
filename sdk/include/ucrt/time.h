@@ -9,8 +9,8 @@
 #ifndef _INC_TIME // include guard for 3rd party interop
 #define _INC_TIME
 
-#include <corecrt.h>
-#include <corecrt_wtime.h>
+#include "corecrt.h"
+#include "corecrt_wtime.h"
 
 #pragma warning(push)
 #pragma warning(disable: _UCRT_DISABLED_WARNINGS)

@@ -23,8 +23,8 @@
 #endif
 
 #include <stdarg.h>
-#include <stdlib.h>
-#include <process.h>
+#include "include/stdlib.h"
+#include "include/process.h"
 
 #include "windef.h"
 #include "winbase.h"

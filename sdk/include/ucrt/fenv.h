@@ -9,8 +9,8 @@
 #ifndef _FENV // include guard for 3rd party interop
 #define _FENV
 
-#include <corecrt.h>
-#include <float.h>
+#include "corecrt.h"
+#include "float.h"
 
 #pragma warning(push)
 #pragma warning(disable: _UCRT_DISABLED_WARNINGS)

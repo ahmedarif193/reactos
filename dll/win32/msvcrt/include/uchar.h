@@ -23,9 +23,9 @@
 #ifndef __UCHAR_H
 #define __UCHAR_H
 
-#include <stddef.h>	/* size_t */
-#include <stdint.h>	/* uint_leastXX_t */
-#include <wchar.h>	/* mbstate_t */
+#include "stddef.h"	/* size_t */
+#include "stdint.h"	/* uint_leastXX_t */
+#include "wchar.h"	/* mbstate_t */
 
 /* Remember that g++ >= 4.4 defines these types only in c++0x mode */
 #if !(defined(__cplusplus) && defined(__GXX_EXPERIMENTAL_CXX0X__)) ||	\

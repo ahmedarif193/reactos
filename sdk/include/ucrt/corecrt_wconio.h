@@ -8,8 +8,8 @@
 //
 #pragma once
 
-#include <corecrt.h>
-#include <corecrt_stdio_config.h>
+#include "corecrt.h"
+#include "corecrt_stdio_config.h"
 
 #pragma warning(push)
 #pragma warning(disable: _UCRT_DISABLED_WARNINGS)

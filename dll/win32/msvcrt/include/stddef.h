@@ -18,7 +18,7 @@
 #ifndef __WINE_STDDEF_H
 #define __WINE_STDDEF_H
 
-#include <corecrt.h>
+#include "corecrt.h"
 
 #if defined(__GNUC__) || defined(__clang__)
 #define offsetof(s,m)       __builtin_offsetof(s,m)

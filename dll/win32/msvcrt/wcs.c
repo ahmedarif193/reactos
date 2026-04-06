@@ -20,11 +20,11 @@
  */
 
 #define _NO_CRT_STDIO_INLINE
-#include <limits.h>
-#include <locale.h>
-#include <math.h>
-#include <assert.h>
-#include <wchar.h>
+#include "include/limits.h"
+#include "include/locale.h"
+#include "include/math.h"
+#include "include/assert.h"
+#include "include/wchar.h"
 #include <wctype.h>
 #include "msvcrt.h"
 #include "winnls.h"

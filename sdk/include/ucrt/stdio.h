@@ -9,8 +9,8 @@
 #ifndef _INC_STDIO // include guard for 3rd party interop
 #define _INC_STDIO
 
-#include <corecrt.h>
-#include <corecrt_wstdio.h>
+#include "corecrt.h"
+#include "corecrt_wstdio.h"
 
 #pragma warning(push)
 #pragma warning(disable: _UCRT_DISABLED_WARNINGS)

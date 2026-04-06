@@ -21,7 +21,7 @@
 #ifndef _INC_STDARG
 #define _INC_STDARG
 
-#include <vadefs.h>
+#include "vadefs.h"
 
 #define va_start(v,l)  _crt_va_start(v,l)
 #define va_arg(v,l)    _crt_va_arg(v,l)

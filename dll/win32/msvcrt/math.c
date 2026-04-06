@@ -35,14 +35,15 @@
  * ====================================================
  */
 
-#include <assert.h>
-#include <complex.h>
-#include <stdio.h>
-#include <fenv.h>
-#include <fpieee.h>
-#include <limits.h>
-#include <locale.h>
-#include <math.h>
+#include "include/assert.h"
+#include "include/complex.h"
+#include "include/stdio.h"
+#include "include/fenv.h"
+#include "include/fpieee.h"
+#include "include/limits.h"
+#include "include/locale.h"
+#include "include/math.h"
+#include <xmmintrin.h>
 
 #include "msvcrt.h"
 #include "winternl.h"
@@ -2052,7 +2053,7 @@ int CDECL _gcvt_s(char *buff, size_t size, double number, int digits)
     return 0;
 }
 
-#include <stdlib.h> /* div_t, ldiv_t */
+#include "include/stdlib.h" /* div_t, ldiv_t */
 
 #ifndef __REACTOS__
 /*********************************************************************

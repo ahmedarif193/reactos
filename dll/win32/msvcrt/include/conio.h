@@ -8,7 +8,7 @@
 #ifndef __WINE_CONIO_H
 #define __WINE_CONIO_H
 
-#include <corecrt.h>
+#include "corecrt.h"
 
 #ifdef __cplusplus
 extern "C" {

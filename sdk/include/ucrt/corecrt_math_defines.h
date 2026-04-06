@@ -9,7 +9,7 @@
 #ifndef _MATH_DEFINES_DEFINED
 #define _MATH_DEFINES_DEFINED
 
-#include <corecrt.h>
+#include "corecrt.h"
 
 #pragma warning(push)
 #pragma warning(disable: _UCRT_DISABLED_WARNINGS)

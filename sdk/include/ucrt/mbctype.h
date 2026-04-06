@@ -9,8 +9,8 @@
 #ifndef _INC_MBCTYPE // include guard for 3rd party interop
 #define _INC_MBCTYPE
 
-#include <corecrt.h>
-#include <ctype.h>
+#include "corecrt.h"
+#include "ctype.h"
 
 #pragma warning(push)
 #pragma warning(disable: _UCRT_DISABLED_WARNINGS)

@@ -8,7 +8,7 @@
 #ifndef __WINE_CTYPE_H
 #define __WINE_CTYPE_H
 
-#include <corecrt_wctype.h>
+#include "corecrt_wctype.h"
 
 #ifdef __cplusplus
 extern "C" {

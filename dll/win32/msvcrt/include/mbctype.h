@@ -20,7 +20,7 @@
 #ifndef __WINE_MBCTYPE_H
 #define __WINE_MBCTYPE_H
 
-#include <corecrt.h>
+#include "corecrt.h"
 
 #ifdef __cplusplus
 extern "C" {

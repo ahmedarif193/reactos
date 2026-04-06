@@ -20,7 +20,7 @@
 #ifndef __WINE_MBSTRING_H
 #define __WINE_MBSTRING_H
 
-#include <corecrt.h>
+#include "corecrt.h"
 
 #include <pshpack8.h>
 

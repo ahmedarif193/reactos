@@ -22,9 +22,9 @@
  */
 
 #include <corecrt_io.h>
-#include <mbctype.h>
+#include "include/mbctype.h"
 #include <stdarg.h>
-#include <stdlib.h>
+#include "include/stdlib.h"
 #include <direct.h>
 
 #include "windef.h"

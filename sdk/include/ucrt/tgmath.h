@@ -9,7 +9,7 @@
 #ifndef _TGMATH
 #define _TGMATH
 
-#include <corecrt.h>
+#include "corecrt.h"
 
 #if (_CRT_HAS_CXX17 == 1) && !defined(_CRT_USE_C_TGMATH_H)
 
@@ -17,8 +17,8 @@
 
 #else // ^^^^ /std:c++17 ^^^^ // vvvv _CRT_USE_C_TGMATH_H vvvv
 
-#include <math.h>
-#include <complex.h>
+#include "math.h"
+#include "complex.h"
 
 #if _CRT_HAS_C11 == 0
 

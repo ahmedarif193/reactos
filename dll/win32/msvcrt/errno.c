@@ -18,9 +18,9 @@
  * Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA 02110-1301, USA
  */
 
-#include <io.h>
-#include <stdio.h>
-#include <string.h>
+#include "include/io.h"
+#include "include/stdio.h"
+#include "include/string.h"
 #include <stdarg.h>
 
 #include "ntstatus.h"

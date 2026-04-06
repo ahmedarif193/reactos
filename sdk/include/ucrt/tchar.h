@@ -17,7 +17,7 @@
 #ifndef _INC_TCHAR // include guard for 3rd party interop
 #define _INC_TCHAR
 
-#include <corecrt.h>
+#include "corecrt.h"
 
 #pragma warning(push)
 #pragma warning(disable: _UCRT_DISABLED_WARNINGS)
@@ -157,7 +157,7 @@ mechanism we can warn about them. You should switch to the identical function wi
 
 /* ++++++++++++++++++++ UNICODE ++++++++++++++++++++ */
 
-#include <wchar.h>
+#include "wchar.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -838,7 +838,7 @@ __DEFINE_CPP_OVERLOAD_INLINE_FUNC_0_2_EX(wchar_t *, __RETURN_POLICY_DST, _wcsset
 }   /* ... extern "C" */
 #endif  /* __cplusplus */
 
-#include <string.h>
+#include "string.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -1230,7 +1230,7 @@ extern "C" {
 }   /* ... extern "C" */
 #endif  /* __cplusplus */
 
-#include <mbstring.h>
+#include "mbstring.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -2327,4 +2327,3 @@ __DEFINE_CPP_OVERLOAD_INLINE_FUNC_0_2_EX(char *, __RETURN_POLICY_DST, _strset_l,
 _UCRT_RESTORE_CLANG_WARNINGS
 #pragma warning(pop) // _UCRT_DISABLED_WARNINGS
 #endif  /* _INC_TCHAR */
-

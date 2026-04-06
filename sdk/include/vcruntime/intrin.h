@@ -4,9 +4,9 @@
 
 #ifndef RC_INVOKED
 
-#include <vcruntime.h>
-#include <intrin0.inl.h>
-#include <setjmp.h>
+#include "vcruntime.h"
+#include "intrin0.inl.h"
+#include "setjmp.h"
 #include <stddef.h>
 
 #if defined(_M_IX86) || defined(_M_X64)
@@ -162,7 +162,7 @@ int __cdecl _inp(unsigned short);
 unsigned long __cdecl _inpd(unsigned short);
 unsigned short __cdecl _inpw(unsigned short);
 void _m_prefetch(void *);
-void _m_prefetchw(volatile const void *);
+void _m_prefetchw(void *);
 
 void _mm_mfence(void);
 void _mm_lfence(void);

@@ -1279,6 +1279,11 @@ typedef enum _MINIDUMP_TYPE
     MiniDumpWithThreadInfo                      = 0x1000,
     MiniDumpWithCodeSegs                        = 0x2000
 } MINIDUMP_TYPE;
+#if defined(__GNUC__) && !defined(__clang__)
+/* Matches the packed Windows SDK ABI; GCC warns because CONTEXT is 16-byte aligned. */
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wpacked-not-aligned"
+#endif
 typedef struct _MINIDUMP_THREAD_CALLBACK
 {
     ULONG                       ThreadId;
@@ -1299,6 +1304,9 @@ typedef struct _MINIDUMP_THREAD_EX_CALLBACK
     ULONG64                     BackingStoreBase;
     ULONG64                     BackingStoreEnd;
 } MINIDUMP_THREAD_EX_CALLBACK, *PMINIDUMP_THREAD_EX_CALLBACK;
+#if defined(__GNUC__) && !defined(__clang__)
+#pragma GCC diagnostic pop
+#endif
 typedef struct _MINIDUMP_MODULE_CALLBACK
 {
     PWCHAR                      FullPath;

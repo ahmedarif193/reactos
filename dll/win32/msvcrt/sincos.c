@@ -22,7 +22,7 @@
 #pragma makedep implib
 #endif
 
-#include <math.h>
+#include "include/math.h"
 
 /* GCC may optimize a pair of sin(), cos() calls to a single sincos() call,
  * which is not exported by any msvcrt version. */

@@ -18,9 +18,9 @@
  * Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA 02110-1301, USA
  */
 #include <conio.h>
-#include <process.h>
+#include "include/process.h"
 #include <signal.h>
-#include <stdio.h>
+#include "include/stdio.h"
 #include "msvcrt.h"
 #include "mtdll.h"
 #include "winuser.h"

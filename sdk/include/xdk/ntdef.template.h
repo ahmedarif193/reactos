@@ -24,9 +24,7 @@
 
 /* Dependencies */
 #include <ctype.h>
-$if(0)
-//#include <winapifamily.h>
-$endif()
+#include <winapifamily.h>
 #include <basetsd.h>
 #include <guiddef.h>
 #include <excpt.h>

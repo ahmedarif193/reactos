@@ -8,7 +8,7 @@
 #ifndef _UCHAR // include guard for 3rd party interop
 #define _UCHAR
 
-#include <corecrt.h>
+#include "corecrt.h"
 
 #pragma warning(push)
 #pragma warning(disable: _UCRT_DISABLED_WARNINGS)

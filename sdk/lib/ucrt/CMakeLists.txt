@@ -5,7 +5,7 @@ set(CMAKE_CXX_STANDARD 17)
 get_property(INCLUDE_DIRS DIRECTORY . PROPERTY INCLUDE_DIRECTORIES)
 list(REMOVE_ITEM INCLUDE_DIRS "${REACTOS_SOURCE_DIR}/sdk/include/crt")
 set_property(DIRECTORY . PROPERTY INCLUDE_DIRECTORIES ${INCLUDE_DIRS})
-include_directories(${REACTOS_SOURCE_DIR}/sdk/include/ucrt)
+include_directories(BEFORE ${REACTOS_SOURCE_DIR}/sdk/include/ucrt)
 
 if(MSVC)
     # Disable warning C4083: expected ')'; found identifier '<warning identifier>'
@@ -22,7 +22,7 @@ if(${ARCH} STREQUAL "i386")
     include_directories(inc/i386)
 endif()
 
-remove_definitions(-D_WIN32_WINNT=0x600 -DWINVER=0x600)
+remove_definitions(-D_WIN32_WINNT=${REACTOS_TARGET_NT} -DWINVER=${REACTOS_TARGET_NT})
 add_compile_definitions(
     WINVER=0x600
     _WIN32_WINNT=0x600

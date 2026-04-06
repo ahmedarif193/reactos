@@ -20,7 +20,7 @@
 #ifndef __WINE_EH_H
 #define __WINE_EH_H
 
-#include <corecrt.h>
+#include "corecrt.h"
 
 #ifndef __cplusplus
 #error "eh.h is meant only for C++ applications"

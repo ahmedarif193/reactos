@@ -8,7 +8,7 @@
 #ifndef __WINE_DIRECT_H
 #define __WINE_DIRECT_H
 
-#include <corecrt_wdirect.h>
+#include "corecrt_wdirect.h"
 
 #include <pshpack8.h>
 

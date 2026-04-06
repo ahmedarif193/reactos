@@ -7,8 +7,8 @@
 //
 #pragma once
 
-#include <corecrt.h>
-#include <errno.h>
+#include "corecrt.h"
+#include "errno.h"
 #include <vcruntime_string.h>
 
 #pragma warning(push)

@@ -8,8 +8,8 @@
 #ifndef __WINE_SYS_STAT_H
 #define __WINE_SYS_STAT_H
 
-#include <corecrt.h>
-#include <sys/types.h>
+#include "../corecrt.h"
+#include "types.h"
 
 #include <pshpack8.h>
 
