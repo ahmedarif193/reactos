@@ -257,6 +257,15 @@ HalStartNextProcessor(
     LowStub = (PUCHAR)HalpLowStub;
     LowStubPhys = HalpLowStubPhysicalAddress.QuadPart;
 
+    /* Bail out if the low stub was not allocated (no free memory below 1MB) */
+    if (!LowStub || !LowStubPhys)
+    {
+        DPRINT1("HalStartNextProcessor: Low stub not available "
+                "(LowStub=%p, LowStubPhys=0x%I64x)\n",
+                LowStub, LowStubPhys);
+        return FALSE;
+    }
+
     /* Build temporary page tables for the AP mode transition */
     Pml4Phys = HalpSetupTemporaryMappings();
     if (!Pml4Phys)

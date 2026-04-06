@@ -1,0 +1,864 @@
+================================================================================
+  WINDOWS 7 x86 SMP MECHANISM — REVERSE ENGINEERING REFERENCE
+  Source: ntkrnlpa.exe (PE32 i386, Build 7601.17651, Win7 SP1)
+  Extracted from: Win7.iso → BOOT.WIM → Windows/system32/ntkrnlpa.exe
+  Image base: 0x00400000
+  Date: 2026-04-06
+================================================================================
+
+TABLE OF CONTENTS
+  1. KPRCB IPI Data Structure Layout
+  2. KiIpiServiceRoutine — IPI Interrupt Service Routine
+  3. KiIpiSendPacket — Send IPI Packet to Target Processors
+  4. KiIpiSend (lightweight) — Bitmask-Based IPI Broadcast
+  5. KeIpiGenericCall — Broadcast Function to All Processors
+  6. KeGenericCallDpc — DPC-Based Cross-Processor Call
+  7. KeFlushEntireTb — System-Wide TLB Flush
+  8. KePollFreezeExecution — Freeze Polling
+  9. SwapContext — Thread/Process Context Switch
+  10. KiDispatchInterrupt — Scheduler Dispatch
+  11. Spinlock Implementation
+  12. KeSignalCallDpcDone / KeSignalCallDpcSynchronize
+  13. Global SMP Data Addresses
+  14. ReactOS AMD64 Implementation Status
+  15. Critical SMP Gaps Blocking Boot
+
+
+================================================================================
+1. KPRCB IPI DATA STRUCTURE LAYOUT (x86, offsets from KPRCB base)
+================================================================================
+
+  Offset   Size   Field                        Description
+  ------   ----   -----                        -----------
+  0x0010   4      ContextSwitches              Per-processor context switch count
+  0x0014   4      SetMember                    Bitmask with this CPU's bit
+  0x0020   PTR    CurrentThread                Currently running KTHREAD
+  0x0124   PTR    CurrentThread (alt path)     (FS:0x124 = KPCR->PrcbData->CurrentThread)
+  0x0128   PTR    NextThread                   Thread selected by scheduler
+  0x0131   1      QuantumEnd                   Quantum end flag
+  0x1820   4/8    IpiRequestPacket             Pointer to requesting PRCB (bit 0 = busy flag)
+  0x1828   PTR    IpiSaveArea                  Saved state for IPI
+  0x1860   PTR    WorkerRoutine                IPI function pointer arg 1
+  0x1864   PTR    Parameter1                   IPI function pointer arg 2
+  0x1868   PTR    Parameter2                   IPI function pointer arg 3
+  0x186C   4      Parameter3 / BusyCheck       Busy flag for IPI packet
+  0x1870   PTR    TargetFunction               IPI target function to call
+  0x18A0   4      IpiRequestBits               Bitmask of pending IPI requests
+  0x18A4   PTR    SignalDone / PacketBarrier    IPI completion signaling
+
+  IPI Request Bits (in IpiRequestBits, offset 0x18A0):
+    Bit 0 (0x01): APC interrupt request     -> KiRequestSoftwareInterrupt(APC_LEVEL)
+    Bit 1 (0x02): DPC interrupt request     -> KiRequestSoftwareInterrupt(DISPATCH_LEVEL)
+    Bit 2 (0x04): Freeze/NMI request        -> handled inline
+    Bit 4 (0x10): IPI packet request        -> call through TargetFunction
+    Bit 3,5:      Additional SW interrupt requests
+
+  FS Segment (KPCR) Quick Reference:
+    FS:0x1C   = KPCR.SelfPcr (self pointer)
+    FS:0x20   = KPCR.Prcb (pointer to KPRCB)
+    FS:0x124  = KPCR.PrcbData.CurrentThread
+    FS:0x4EC  = KPCR.PrcbData.Number (processor index)
+
+
+================================================================================
+2. KiIpiServiceRoutine — IPI Interrupt Service Routine
+   RVA: 0x0007CC44   VA: 0x0047CC44
+================================================================================
+
+  This is the ISR called when an IPI arrives on a target processor.
+  It dispatches all pending IPI requests atomically.
+
+  Annotated disassembly:
+
+  47cc44: push  %ebx
+  47cc45: push  %esi
+  47cc46: push  %edi
+  47cc47: mov   %fs:0x20,%esi           ; esi = KPRCB pointer
+  47cc4e: xor   %ebx,%ebx
+  47cc50: xchg  %ebx,0x18a0(%esi)       ; ebx = atomically read+clear IpiRequestBits
+  47cc56: mov   0x18a4(%esi),%edi        ; edi = SignalDone/PacketBarrier pointer
+  47cc5c: and   $0xfffffffe,%edi         ; clear low bit (busy flag)
+  47cc5f: je    0x47cc75                 ; if NULL, no packet pending
+
+  ; --- IPI Packet handling ---
+  47cc61: cmpl  $0x0,0x186c(%edi)        ; check sender's BusyCheck
+  47cc68: mov   $0x0,%edi                ; prepare to clear
+  47cc6d: je    0x47cc75                 ; if not busy, skip
+  47cc6f: xchg  %edi,0x18a4(%esi)        ; clear our SignalDone atomically
+
+  ; --- Check for freeze/packet requests first ---
+  47cc75: test  $0x14,%bl                ; test bits 2 (freeze) and 4 (packet)
+  47cc78: jne   0x47ccd2                 ; handle freeze/packet path
+
+  ; --- Normal IPI request dispatch ---
+  47cc7a: mov   $0x1,%bh                 ; set "handled" flag
+  47cc7c: mov   %edi,%edx
+  47cc7e: and   $0xfffffffe,%edx         ; mask pointer
+  47cc81: je    0x47ccaa                 ; if no packet, skip to SW interrupt check
+
+  ; --- Call IPI target function ---
+  47cc83: push  0x1868(%edx)             ; push Parameter2
+  47cc89: push  0x1864(%edx)             ; push Parameter1
+  47cc8f: push  0x1860(%edx)             ; push WorkerRoutine
+  47cc95: push  %edi                     ; push SignalDone pointer
+  47cc96: mov   0x1870(%edx),%eax        ; eax = TargetFunction
+  47cc9c: mov   0x20(%esp),%edx          ; restore PRCB
+  47cca0: mov   %edx,0x1828(%esi)        ; save in IpiSaveArea
+  47cca6: call  *%eax                    ; CALL the target function!
+
+  ; --- Check APC software interrupt request ---
+  47ccaa: test  $0x01,%bl                ; bit 0 = APC request
+  47ccad: je    0x47ccba
+  47ccaf: mov   $0x1,%ecx               ; IRQL = APC_LEVEL
+  47ccb4: call  *0x40118c               ; KiRequestSoftwareInterrupt(APC_LEVEL)
+
+  ; --- Check DPC software interrupt request ---
+  47ccba: test  $0x02,%bl                ; bit 1 = DPC request
+  47ccbd: je    0x47ccca
+  47ccbf: mov   $0x2,%ecx               ; IRQL = DISPATCH_LEVEL
+  47ccc4: call  *0x40118c               ; KiRequestSoftwareInterrupt(DISPATCH_LEVEL)
+
+  47ccca: mov   %bh,%al                  ; return handled status
+  47cccc: pop   %edi
+  47cccd: pop   %esi
+  47ccce: pop   %ebx
+  47cccf: ret   $0x8
+
+  ; === Freeze/Packet path (bits 2 or 4 set) ===
+  47ccd2: test  $0x04,%bl                ; bit 2 = freeze/debug
+  47ccd5: je    0x47ccf1
+  47ccd7: mov   0x14(%esp),%ecx          ; TrapFrame
+  47ccdb: mov   0x10(%esp),%edx          ; ExceptionFrame
+  47ccdf: push  %ecx
+  47cce0: push  %edx
+  47cce1: call  0x41129c                 ; KiFreezeTargetExecution(ExFrame, TrapFrame)
+  47cce6: test  $0xfb,%bl                ; any other bits besides freeze?
+  47cce9: setne %bh
+  47ccec: test  $0x10,%bl                ; bit 4 = deferred packet
+  47ccef: je    0x47cc7c                 ; loop back to process remaining
+
+  ; --- Deferred IPI packet dispatch ---
+  47ccf1: mov   0x528104,%eax            ; global IPI target pointer
+  47ccf6: mov   %eax,%edx
+  47ccf8: btr   $0x0,%edx                ; clear low bit
+  47ccfc: push  0x1868(%edx)
+  47cd02: push  0x1864(%edx)
+  47cd08: push  0x1860(%edx)
+  47cd0e: push  %eax
+  47cd0f: mov   0x1870(%edx),%eax
+  47cd15: mov   0x20(%esp),%edx
+  47cd19: mov   %edx,0x1828(%esi)
+  47cd1f: call  *%eax                    ; call deferred target function
+  47cd21: mov   $0x1,%bh
+  47cd23: jmp   0x47cc7c                 ; loop back
+
+  SUMMARY:
+    The IPI ISR atomically swaps out IpiRequestBits, then processes each bit:
+    - Bit 0: Request APC software interrupt
+    - Bit 1: Request DPC software interrupt
+    - Bit 2: Freeze execution (debugger)
+    - Bit 4: Call function pointer from IPI packet (WorkerRoutine/TargetFunction)
+    This is the central dispatch for ALL cross-processor communication in NT.
+
+
+================================================================================
+3. KiIpiSendPacket — Send IPI Packet to Target Processors
+   VA: 0x0047CD5C (internal, not exported)
+================================================================================
+
+  Sends an IPI "packet" containing a function pointer + 3 arguments to each
+  target processor. Used by KeIpiGenericCall and KeFlushEntireTb.
+
+  Annotated disassembly:
+
+  47cd5c: push  %esi
+  47cd5d: push  %edi
+  47cd5e: mov   0xc(%esp),%eax           ; eax = Broadcast flag (0=use targets, 1=all)
+  47cd62: cmp   $0x0,%eax
+  47cd65: jne   0x47cd70                 ; if broadcast=0, use caller's target set
+  47cd67: mov   0x10(%esp),%edx          ; edx = caller's RequestPacket
+  47cd6b: mov   0x8(%edx),%ecx           ; ecx = target processor set from packet
+  47cd6e: jmp   0x47cd86
+
+  ; --- Broadcast to all (flag=1): get all processors minus self ---
+  47cd70: mov   $0x5699d0,%edx           ; KiProcessorGroup pointer
+  47cd75: mov   0x8(%edx),%ecx           ; ecx = KeActiveProcessors mask
+  47cd78: cmp   $0x1,%eax
+  47cd7b: jne   0x47cd86
+  47cd7d: mov   %fs:0x4ec,%eax           ; eax = current processor index
+  47cd83: btr   %eax,%ecx                ; clear our bit from target set
+
+  ; --- Set up IPI packet in each target PRCB ---
+  47cd86: mov   %fs:0x20,%edx            ; edx = our KPRCB
+  47cd8d: mov   0x14(%esp),%eax          ; eax = WorkerRoutine
+  47cd91: mov   0x18(%esp),%edi          ; edi = Parameter1
+  47cd95: mov   0x1c(%esp),%esi          ; esi = Parameter2
+  47cd99: mov   %eax,0x1870(%edx)        ; Store TargetFunction in our PRCB
+  47cd9f: mov   0x20(%esp),%eax          ; eax = Parameter3
+  47cda3: mov   %edi,0x1860(%edx)        ; Store WorkerRoutine in our PRCB
+  47cda9: mov   %esi,0x1864(%edx)        ; Store Parameter1
+  47cdaf: mov   %eax,0x1868(%edx)        ; Store Parameter2
+
+  ; --- Check if single target (power of 2) ---
+  47cdb5: push  %ecx                     ; save target set
+  47cdb6: mov   %ecx,%edi
+  47cdb8: lea   -0x1(%ecx),%esi          ; esi = ecx - 1
+  47cdbb: and   %esi,%edi                ; edi = ecx & (ecx-1)
+  47cdbd: neg   %edi
+  47cdbf: sbb   %edi,%edi                ; edi = (multi-target) ? -1 : 0
+  47cdc1: inc   %edi                     ; edi = (multi-target) ? 0 : 1
+  47cdc2: jne   0x47cdca                 ; if single target, skip
+  47cdc4: mov   %ecx,0x1820(%edx)        ; Store in IpiRequestPacket (multi-target)
+
+  ; --- Iterate through target processors ---
+  47cdca: add   %edi,%edx                ; adjust pointer (single-target optimization)
+  47cdcc: shr   $1,%ecx                  ; shift target bits
+  47cdce: lea   0x569a00,%edi            ; edi = KiProcessorBlock[]
+  47cdd4: jae   0x47cdf0                 ; if bit was 0, skip this processor
+
+  ; --- Signal target processor ---
+  47cdd6: mov   (%edi),%esi              ; esi = target KPRCB
+  47cdd8: push  %ecx
+  47cdd9: xor   %ecx,%ecx
+  47cddb: mov   0x18a4(%esi),%eax        ; check target's SignalDone
+  47cde1: or    %eax,%eax
+  47cde3: jne   0x47ce1d                 ; if busy, spin-wait
+
+  ; --- CAS to set our RequestPacket on target ---
+  47cde5: lock cmpxchg %edx,0x18a4(%esi) ; atomically set SignalDone = our PRCB
+  47cded: jne   0x47cddb                 ; if failed (was modified), retry
+  47cdef: pop   %ecx                     ; restore target set
+
+  ; --- Next processor ---
+  47cdf0: shr   $1,%ecx
+  47cdf2: lea   0x4(%edi),%edi           ; advance KiProcessorBlock index
+  47cdf5: jb    0x47cdd6                 ; if carry (bit was set), process this CPU
+  47cdf7: jne   0x47cdf0                 ; if more bits, continue
+  47cdf9: pop   %ecx                     ; restore original target set
+
+  ; --- Now send the actual IPI hardware interrupt ---
+  47cdfa: mov   %ecx,%fs:0x198c          ; store target set
+  47ce01: mov   0xc(%esp),%ecx
+  47ce05: mov   0x10(%esp),%edx
+  47ce09: incl  %fs:0x3690               ; increment IPI send count
+  47ce10: push  %edx
+  47ce11: push  %ecx
+  47ce12: call  *0x4010a4                ; HalRequestIpi(TargetSet)
+  47ce18: pop   %edi
+  47ce19: pop   %esi
+  47ce1a: ret   $0x18
+
+  ; --- Spin-wait for busy target ---
+  47ce1d: inc   %ecx                     ; spin count++
+  47ce1e: test  %ecx,0x569bc4            ; check spin limit
+  47ce24: jne   0x47ce39
+  47ce26: testb $0x40,0x569bbc           ; check backoff flag
+  47ce2d: je    0x47ce39
+  47ce2f: ... call backoff routine ...
+  47ce39: pause                          ; CPU yield
+  47ce3b: ...                            ; retry loop back to 47cddb
+
+  SUMMARY:
+    For each target processor:
+      1. Write function pointer + args into OUR PRCB (0x1860-0x1870)
+      2. lock cmpxchg to atomically set target PRCB->SignalDone (0x18A4) = our PRCB
+      3. Spin-wait with pause if target is busy processing a previous IPI
+    Then call HalRequestIpi to deliver the hardware interrupt to all targets.
+    Targets handle it in KiIpiServiceRoutine which reads from the sender's PRCB.
+
+
+================================================================================
+4. KiIpiSend (lightweight) — Bitmask-Based IPI Broadcast
+   VA: 0x0047CD28 (internal, follows KiIpiSendPacket)
+================================================================================
+
+  Lightweight IPI send — just OR's request bits into each target's IpiRequestBits.
+  Used for APC/DPC/freeze IPIs (no function pointer payload).
+
+  47cd28: push  %esi
+  47cd29: push  %edi
+  47cd2a: mov   0x8(%ecx),%esi           ; esi = target processor set
+  47cd2d: shr   $1,%esi                  ; shift bits
+  47cd2f: lea   0x569a00,%edi            ; edi = KiProcessorBlock[]
+  47cd35: jae   0x47cd40                 ; skip if bit not set
+
+  ; --- OR request bits into target ---
+  47cd37: mov   (%edi),%eax              ; eax = target KPRCB
+  47cd39: lock or %edx,0x18a0(%eax)      ; atomically OR IpiRequestBits
+  47cd40: shr   $1,%esi
+  47cd42: lea   0x4(%edi),%edi
+  47cd45: jb    0x47cd37
+  47cd47: jne   0x47cd40
+
+  ; --- Send hardware IPI ---
+  47cd49: incl  %fs:0x3690
+  47cd50: push  %ecx
+  47cd51: push  $0x0
+  47cd53: call  *0x4010a4                ; HalRequestIpi
+  47cd59: pop   %edi
+  47cd5a: pop   %esi
+  47cd5b: ret
+
+  SUMMARY:
+    Simpler than KiIpiSendPacket. Just sets bits in each target's IpiRequestBits
+    using `lock or`, then calls HalRequestIpi. The target's KiIpiServiceRoutine
+    reads these bits and dispatches accordingly.
+
+
+================================================================================
+5. KeIpiGenericCall — Broadcast Function to All Processors
+   RVA: 0x00012982   VA: 0x00412982   (EXPORTED)
+================================================================================
+
+  Broadcasts a function call to ALL processors. The calling processor also
+  executes the function. All processors synchronize before returning.
+
+  41298a: push  %ebx
+  41298b: push  %esi
+  41298c: push  %edi
+  41298d: call  *0x401168                ; KfRaiseIrql — raise IRQL
+  412993: mov   0x40115c,%edi            ; edi = KfLowerIrql import
+  412999: mov   $0x1b,%cl               ; IPI_LEVEL = 0x1B
+  41299b: mov   %al,-0x1(%ebp)           ; save OldIrql
+  41299e: cmp   %cl,%al                  ; already at IPI_LEVEL?
+  4129a0: jae   0x4129a4
+  4129a2: call  *%edi                    ; raise to IPI_LEVEL
+
+  ; --- Acquire KiReverseStallIpiLock ---
+  4129a4: mov   0x569ab0,%eax            ; eax = KeNumberProcessors
+  4129a9: andl  $0x0,-0xc(%ebp)          ; clear completion counter
+  4129ad: mov   %eax,-0x8(%ebp)          ; store processor count
+
+  4129b0: mov   -0x8(%ebp),%esi          ; esi = processor count
+  4129b3: mov   $0x56b8c0,%ebx           ; ebx = &KiReverseStallIpiLock
+  4129b8: mov   %ebx,%ecx
+  4129ba: dec   %esi                     ; esi = count - 1 (other processors)
+  4129bb: call  0x478220                 ; KeAcquireSpinLockAtDpcLevel(&KiReverseStallIpiLock)
+
+  ; --- If only 1 processor, skip IPI ---
+  4129c0: test  %esi,%esi
+  4129c2: je    0x4129ff                 ; single CPU: skip broadcast
+
+  ; --- Broadcast to all other processors ---
+  4129c4: lea   %eax,-0x8(%ebp)          ; &completion counter
+  4129c7: push  %eax                     ; param: completion counter ptr
+  4129c8: push  0xc(%ebp)                ; param: Argument
+  4129cb: push  0x8(%ebp)                ; param: Function
+  4129ce: push  $0x412a7b                ; param: KiIpiGenericCallTarget (worker)
+  4129d3: push  $0x0
+  4129d5: push  $0x1                     ; broadcast flag = 1 (all CPUs)
+  4129d7: call  0x47cd5c                 ; KiIpiSendPacket(Broadcast, Worker, Func, Arg, &Counter)
+
+  ; --- Execute function locally ---
+  4129ff: push  0xc(%ebp)
+  412a02: call  0x8(%ebp)                ; Status = Function(Argument)
+
+  ; --- Wait for all remote processors to complete ---
+  412a05: ... spin-wait on completion counter reaching 0 ...
+
+  ; --- Release lock and restore IRQL ---
+  412a1f: mov   %ebx,%ecx
+  412a21: call  0x4782d8                 ; KeReleaseSpinLockFromDpcLevel
+  412a26: mov   -0x1(%ebp),%cl
+  412a29: call  *%edi                    ; KfLowerIrql(OldIrql)
+
+  SUMMARY:
+    1. Raise IRQL to IPI_LEVEL
+    2. Acquire KiReverseStallIpiLock (serializes generic calls)
+    3. KiIpiSendPacket() to broadcast KiIpiGenericCallTarget to all other CPUs
+    4. Execute Function(Argument) locally
+    5. Spin-wait until all remote CPUs decrement the completion counter
+    6. Release lock, lower IRQL
+    This ensures the function runs on ALL processors before any returns.
+
+
+================================================================================
+6. KeGenericCallDpc — DPC-Based Cross-Processor Call
+   RVA: 0x0001F4E4   VA: 0x0041F4E4   (EXPORTED)
+================================================================================
+
+  Alternative to KeIpiGenericCall — uses DPCs instead of IPIs.
+  Queues a DPC to every processor and waits for all to complete.
+
+  41f4e4: mov   %edi,%edi
+  41f4e6: push  %ebp
+  41f4e7: mov   %esp,%ebp
+  41f4e9: and   $0xfffffff8,%esp         ; align stack
+  41f4ec: sub   $0x54,%esp               ; local variables
+  ...
+  41f506: mov   0x569ab0,%eax            ; KeNumberProcessors
+  41f50b: mov   0x5647c0,%ecx            ; processor group info
+  ...
+  41f526: mov   %fs:0x124,%esi           ; esi = CurrentThread
+  ...
+  ; For each processor group:
+  41f5a0: mov   0x569a00(,%edi,4),%eax   ; KiProcessorBlock[i]
+  41f5ab: add   $0x31a0,%eax             ; offset to DPC data
+  41f5be: mov   %ebx,0xc(%eax)           ; set DPC routine = caller's function
+  41f5c1: call  0x47d6f9                 ; KeInsertQueueDpc (queue on target CPU)
+  ...
+  ; Wait loop for completion...
+
+  SUMMARY:
+    Queues a DPC on each processor. The DPC routine calls the user function.
+    KeSignalCallDpcDone/KeSignalCallDpcSynchronize used for synchronization.
+    Safer than IPI (runs at DISPATCH_LEVEL, not IPI_LEVEL) but higher latency.
+
+
+================================================================================
+7. KeFlushEntireTb — System-Wide TLB Flush
+   RVA: 0x000E1D60   VA: 0x004E1D60   (EXPORTED)
+================================================================================
+
+  Flushes TLB on current processor and (on SMP) all other processors via IPI.
+
+  4e1d60: mov   %edi,%edi
+  4e1d62: push  %ebp
+  4e1d63: mov   %esp,%ebp
+  4e1d65: push  %ecx
+  4e1d66: push  %ecx
+  4e1d67: mov   0x569bbc,%al             ; al = KeFeatureBits (low byte)
+  4e1d6c: push  %ebx
+  4e1d6d: test  $0x6,%al                 ; test PCID/GlobalPage bits
+  4e1d6f: je    0x4e1dee                 ; if neither: simple local flush
+
+  ; --- Check processor count ---
+  4e1d71: xor   %ebx,%ebx
+  4e1d73: inc   %ebx                     ; ebx = 1
+  4e1d74: test  $0x2,%al                 ; test GlobalPage bit
+  4e1d76: jne   0x4e1d80                 ; if GlobalPage: always do IPI path
+  4e1d78: cmp   %ebx,0x569ab0            ; compare 1 with KeNumberProcessors
+  4e1d7e: jbe   0x4e1dee                 ; if UP: simple local flush
+
+  ; === SMP TLB Shootdown Path ===
+  4e1d80: push  %esi
+  4e1d81: push  %edi
+  4e1d82: call  *0x401064                ; KfRaiseIrql(SYNCH_LEVEL)
+  4e1d88: andl  $0x0,-0x8(%ebp)          ; clear spin counter
+  4e1d8c: mov   %al,-0x1(%ebp)           ; save OldIrql
+  4e1d8f: mov   $0x52e400,%esi           ; esi = &KiTbFlushLock (global TLB lock)
+
+  ; --- Acquire TLB flush lock (lock cmpxchg) ---
+  4e1d94: jmp   0x4e1db7
+  4e1d96: incl  -0x8(%ebp)               ; spin count++
+  4e1d99: mov   -0x8(%ebp),%eax
+  4e1d9c: test  %eax,0x569bc4            ; check spin limit
+  4e1da2: jne   0x4e1db5
+  4e1da4: testb $0x40,0x569bbc           ; check backoff feature
+  4e1dab: je    0x4e1db5
+  4e1dad: push  %eax
+  4e1dae: call  0x4d84ff                 ; backoff routine
+  4e1db3: jmp   0x4e1db7
+  4e1db5: pause                          ; yield
+  4e1db7: mov   0x52e400,%ecx            ; ecx = current lock value
+  4e1dbd: test  %cl,%bl                  ; test if bit 0 (locked) is set
+  4e1dbf: jne   0x4e1d96                 ; if locked, spin
+  4e1dc1: mov   %ecx,%eax               ; eax = expected (unlocked)
+  4e1dc3: or    %ebx,%eax               ; eax = expected | 1 (set lock bit)
+  4e1dc5: mov   %eax,%edx
+  4e1dc7: mov   %esi,%edi
+  4e1dc9: mov   %ecx,%eax               ; eax = expected
+  4e1dcb: lock cmpxchg %edx,(%edi)       ; CAS: try to set lock bit
+  4e1dcf: cmp   %ecx,%eax
+  4e1dd1: jne   0x4e1db7                 ; if failed, retry
+
+  ; --- Lock acquired: broadcast TLB flush ---
+  4e1dd3: push  %ebx                     ; AllProcessors = TRUE
+  4e1dd4: push  $0x0                     ; Invalid = FALSE
+  4e1dd6: xor   %eax,%eax
+  4e1dd8: call  0x516a8c                 ; KiFlushTargetEntireTb (broadcasts IPI)
+
+  ; --- Release TLB flush lock ---
+  4e1ddd: lock xadd %ebx,(%esi)          ; atomically increment (clears lock bit)
+  4e1de1: mov   -0x1(%ebp),%cl
+  4e1de4: call  *0x401158                ; KfLowerIrql(OldIrql)
+  4e1dea: pop   %edi
+  4e1deb: pop   %esi
+  4e1dec: jmp   0x4e1df3
+
+  ; --- UP/Simple path: just flush local TLB ---
+  4e1dee: call  0x4975ed                 ; KeFlushCurrentTb (mov cr3, cr3)
+
+  4e1df3: pop   %ebx
+  4e1df4: leave
+  4e1df5: ret   $0x8
+
+  SUMMARY:
+    1. Check KeFeatureBits for GlobalPage/PCID support
+    2. If UP: just flush local TLB via CR3 reload
+    3. If SMP:
+       a. Raise IRQL
+       b. Acquire global KiTbFlushLock via lock cmpxchg (spin with pause)
+       c. Call KiFlushTargetEntireTb which broadcasts IPI to all CPUs
+       d. Release lock, lower IRQL
+    The key point: TLB coherency on SMP REQUIRES IPI broadcast.
+    ReactOS currently SKIPS step 3 entirely.
+
+
+================================================================================
+8. KePollFreezeExecution
+   RVA: 0x000E2908   VA: 0x004E2908   (EXPORTED)
+================================================================================
+
+  4e2908: jmp   0x412ab4                 ; just a jump thunk
+
+  This is a thin wrapper — redirects to the actual implementation.
+  Used by the debugger to poll for freeze requests while spinning.
+
+
+================================================================================
+9. SwapContext — Thread/Process Context Switch
+   VA: 0x004778E0 (internal, called from KiDispatchInterrupt)
+================================================================================
+
+  Core context switch routine. Saves old thread state, loads new thread state,
+  swaps address space if process changes.
+
+  ; --- Wait for new thread's swap to complete ---
+  4778e0: cmpb  $0x0,0x39(%esi)          ; check NewThread->SwapBusy
+  4778e4: je    0x4778ea
+  4778e6: pause                          ; spin-wait
+  4778e8: jmp   0x4778e0
+
+  ; --- Set new thread as swap-busy ---
+  4778ea: movb  $0x1,0x39(%esi)          ; NewThread->SwapBusy = TRUE
+  4778ee: push  %ecx                     ; save APC bypass
+
+  ; --- Account for idle time ---
+  4778ef: cli
+  4778f0: decb  0x131(%ebx)              ; Prcb->SkipTick--
+  4778f6: rdtsc                          ; read timestamp
+  ...                                    ; subtract Prcb->StartCycles
+  ...                                    ; accumulate in Prcb->IdleCycles
+
+  ; --- Increment context switch counter ---
+  477935: incl  0x10(%ebx)               ; Prcb->ContextSwitches++
+
+  ; --- Save CR0 and handle FPU state ---
+  47793a: mov   %cr0,%ebp
+  47793d: movsbl 0x69(%edi),%eax         ; OldThread->NpxState
+  ...                                    ; fxsave if state is switched
+
+  ; === Core stack switch ===
+  47796e: mov   %esp,0x30(%edi)          ; save OldThread->KernelStack
+  477971: mov   0x28(%esi),%eax          ; load NewThread->InitialStack
+  477974: mov   0x30(%esi),%esp          ; ESP = NewThread->KernelStack
+
+  ; === Process address space swap ===
+  477977: mov   0x50(%esi),%ebp          ; ebp = NewThread->ApcState.Process
+  47797a: mov   0x50(%edi),%eax          ; eax = OldThread->ApcState.Process
+  47797d: cmp   %eax,%ebp               ; same process?
+  47797f: je    0x47799e                 ; skip if same
+
+  ; --- Toggle ActiveProcessors ---
+  477981: mov   0x14(%ebx),%ecx          ; ecx = Prcb->SetMember
+  477984: lock xor %ecx,0x58(%ebp)       ; NewProcess->ActiveProcessors ^= SetMember
+  477988: lock xor %ecx,0x58(%eax)       ; OldProcess->ActiveProcessors ^= SetMember
+
+  ; --- Check if TLB flush needed ---
+  47798c: mov   0x1c(%ebp),%ecx          ; NewProcess->xxx
+  47798f: or    0x1c(%eax),%ecx          ; OldProcess->xxx
+  477992: jne   0x477a6a                 ; if either has pending, handle
+
+  ; --- Load new CR3 ---
+  477998: mov   0x18(%ebp),%eax          ; NewProcess->DirectoryTableBase
+  47799b: mov   %eax,%cr3                ; flush TLB and switch address space
+
+  ; --- Clear swap busy ---
+  4779ce: movb  $0x0,0x39(%edi)          ; OldThread->SwapBusy = FALSE
+
+  ; --- Restore FPU state ---
+  ...                                    ; fxrstor / xrstor
+  ; --- Set up TEB, segments ---
+  ...                                    ; GS/FS reload for user mode
+
+  KPROCESS field offsets (x86):
+    0x18  DirectoryTableBase
+    0x58  ActiveProcessors (KAFFINITY)
+
+
+================================================================================
+10. KiDispatchInterrupt — Scheduler Dispatch
+    RVA: 0x000777B0   VA: 0x004777B0   (EXPORTED)
+================================================================================
+
+  Called on DISPATCH_LEVEL software interrupt. Processes DPCs, checks quantum,
+  and performs context switch if NextThread is set.
+
+  4777b0: push  %ebx
+  4777b1: mov   %fs:0x1c,%ebx            ; ebx = KPCR
+
+  ; --- Retire DPCs ---
+  4777b8: cli
+  4777b9: testb $0x3f,0x1a54(%ebx)       ; check DpcInterruptRequested + queue depth
+  4777c0: je    0x4777e0                 ; skip if no DPCs
+  4777c2: push  %ebp
+  4777c3: push  (%ebx)                   ; save ExceptionList
+  4777c5: movl  $0xffffffff,(%ebx)       ; mark ExceptionList as used
+  4777cb: mov   %esp,%edx               ; save current ESP
+  4777cd: mov   0x1a28(%ebx),%esp        ; switch to DPC stack
+  4777d3: push  %edx
+  4777d4: mov   0x20(%ebx),%ecx          ; ecx = KPRCB
+  4777d7: call  0x477f43                 ; KiRetireDpcList(Prcb)
+  4777dc: pop   %esp                     ; restore stack
+  4777dd: pop   (%ebx)                   ; restore ExceptionList
+  4777df: pop   %ebp
+
+  ; --- Check quantum end ---
+  4777e0: sti
+  4777e1: cmpb  $0x0,0x1a51(%ebx)        ; check Prcb->QuantumEnd
+  4777e8: jne   0x4778c4                 ; if set: call KiQuantumEnd
+
+  ; --- Check for NextThread ---
+  4777ee: cmpl  $0x0,0x128(%ebx)         ; check Prcb->NextThread
+  4777f5: je    0x4778a0                 ; if NULL: return
+
+  ; === Context switch to NextThread ===
+  477809: mov   0x124(%ebx),%edi          ; edi = OldThread = Prcb->CurrentThread
+  47780f: lea   0x1a3c(%ebx),%ecx        ; ecx = &Prcb->PrcbLock
+  477815: lock btsl $0x0,(%ecx)           ; acquire PrcbLock
+  47781a: jae   0x477823                 ; if acquired, continue
+  47781c: call  0x478220                 ; spin to acquire
+  477823: incl  %fs:0x3680               ; SpinLock statistics
+
+  ; --- Swap threads ---
+  47782a: mov   0x128(%ebx),%esi          ; esi = NewThread = Prcb->NextThread
+  477830: andl  $0x0,0x128(%ebx)          ; Prcb->NextThread = NULL
+  477837: cli
+  ...                                    ; rdtsc for time accounting
+  477860: testb $0x5,0x2(%edi)            ; check OldThread flags
+  477867: movb  $0x2,0x131(%ebx)          ; set schedule flag
+  47786d: mov   %esi,0x124(%ebx)          ; Prcb->CurrentThread = NewThread
+  477873: movb  $0x2,0x68(%esi)           ; NewThread->State = Running
+  477877: movb  $0x1f,0x187(%edi)         ; OldThread->WaitReason = WrDispatchInt
+  47787e: mov   %edi,%ecx               ; ecx = OldThread
+  477880: lea   0x120(%ebx),%edx          ; edx = &Prcb (for KiQueueReadyThread)
+  477886: call  0x437d62                 ; KiQueueReadyThread(OldThread, Prcb)
+  47788d: call  0x4778e0                 ; SwapContext(NewThread)
+
+  4778a0: pop   %ebx
+  4778a1: ret
+
+  ; --- Quantum end path ---
+  4778c4: movb  $0x0,0x1a51(%ebx)        ; clear QuantumEnd
+  4778cb: call  0x4c5cc6                 ; KiQuantumEnd()
+  4778d0: pop   %ebx
+  4778d1: ret
+
+  SUMMARY:
+    1. cli, retire DPCs on DPC stack
+    2. sti, check QuantumEnd → KiQuantumEnd
+    3. Check Prcb->NextThread
+    4. If NextThread: acquire PrcbLock, set up swap, call SwapContext
+    Key SMP aspect: PrcbLock is acquired via `lock bts` before touching
+    Prcb->CurrentThread/NextThread. This prevents races with other CPUs
+    that might be selecting this thread for migration.
+
+
+================================================================================
+11. Spinlock Implementation
+================================================================================
+
+  --- KeAcquireSpinLockAtDpcLevel (0x478270, stdcall) ---
+
+  478270: mov   0x4(%esp),%ecx           ; ecx = SpinLock pointer
+  478274: xor   %eax,%eax               ; eax = spin count = 0
+  478276: lock btsl $0x0,(%ecx)          ; atomically test-and-set bit 0
+  47827b: jb    0x47829a                 ; if was already set: spin
+
+  ; --- Acquired ---
+  47827d: incl  %fs:0x3680               ; Prcb->SpinLockAcquireCount++
+  478284: cmp   $0x0,%eax               ; any spins?
+  478287: je    0x478297                 ; no: skip stats
+  478289: incl  %fs:0x3684               ; Prcb->SpinLockContentionCount++
+  478290: add   %eax,%fs:0x3688          ; Prcb->SpinLockSpinCount += spins
+  478297: ret   $0x4
+
+  ; --- Spin loop ---
+  47829a: xor   %eax,%eax
+  47829c: inc   %eax                     ; spin count++
+  47829d: test  %eax,0x569bc4            ; check yield threshold
+  4782a3: jne   0x4782ba
+  4782a5: testb $0x40,0x569bbc           ; check backoff feature
+  4782ac: je    0x4782ba
+  4782ae: ... call backoff ...
+  4782ba: pause                          ; CPU yield hint
+  4782bc: testl $0x1,(%ecx)             ; test lock without bus lock
+  4782c2: jne   0x47829c                ; still locked: keep spinning
+  4782c4: jmp   0x478276                ; unlocked: try lock bts again
+
+  --- KeReleaseSpinLockFromDpcLevel (0x4782d8, stdcall) ---
+
+  4782d8: mov   0x4(%esp),%ecx
+  4782dc: lock andb $0x0,(%ecx)          ; atomically clear byte (release)
+  4782e0: ret   $0x4
+
+  --- KiAcquireSpinLock (0x4782f0, fastcall, ecx=lock) ---
+  Same algorithm as KeAcquireSpinLockAtDpcLevel but fastcall convention.
+
+  --- KiReleaseSpinLock (0x478340, fastcall, ecx=lock) ---
+  478340: lock andb $0x0,(%ecx)
+  478344: ret
+
+  PATTERN:
+    Acquire: lock bts bit 0, spin with test+pause if contended
+    Release: lock and byte with 0 (clear all bits)
+    Statistics tracked per-processor:
+      FS:0x3680 = SpinLockAcquireCount
+      FS:0x3684 = SpinLockContentionCount
+      FS:0x3688 = SpinLockSpinCount (cumulative)
+
+
+================================================================================
+12. KeSignalCallDpcDone / KeSignalCallDpcSynchronize
+================================================================================
+
+  --- KeSignalCallDpcDone (0x4e1f7f) ---
+
+  4e1f7f: mov   0x4(%esp),%eax           ; eax = SystemArgument1 (counter ptr)
+  4e1f83: mov   $0xff,%ecx
+  4e1f88: lock xadd %ecx,(%eax)          ; atomically decrement counter
+  4e1f8c: cmp   $0x1,%ecx               ; was last processor?
+  4e1f8f: sete  %al                      ; return TRUE if we were the last one
+  4e1f92: ret   $0x4
+
+  SUMMARY: Each processor calls this when done. Uses lock xadd with -1 (0xFF
+  as signed byte = -1). Returns TRUE when the counter reaches 0, meaning all
+  processors have completed.
+
+  --- KeSignalCallDpcSynchronize (0x409917) ---
+  Complex barrier synchronization with spin-wait and 0x80000000 bitmask.
+  Used to synchronize between DPC execution phases.
+
+
+================================================================================
+13. Global SMP Data Addresses (ntkrnlpa.exe, Win7 SP1 x86)
+================================================================================
+
+  Address     Size    Symbol / Purpose
+  --------    ----    ----------------------------------------
+  0x569A00    PTR[]   KiProcessorBlock[] — array of KPRCB pointers
+  0x569AB0    4       KeNumberProcessors
+  0x569BBC    4       KeFeatureBits (low byte used for TLB/spinlock features)
+                        Bit 1 (0x02): GlobalPage support
+                        Bit 2 (0x04): PCID support
+                        Bit 6 (0x40): Spinlock backoff enabled
+                        Bit 7 (0x80): Enhanced TLB flush mode
+  0x569BC4    4       KiSpinLockYieldThreshold (contention limit)
+  0x5699D0    4       KiProcessorGroupCount
+  0x52E400    4       KiTbFlushLock (global TLB shootdown lock, bit 0 = locked)
+  0x528104    PTR     KiIpiDeferredPacket (global deferred IPI pointer)
+  0x56B8C0    4       KiReverseStallIpiLock (serializes KeIpiGenericCall)
+  0x52AA48    4       __security_cookie
+
+
+================================================================================
+14. ReactOS AMD64 Implementation Status
+================================================================================
+
+  Component                    Status          File                                    Notes
+  ---------                    ------          ----                                    -----
+  KiIpiSend                    IMPLEMENTED     ntoskrnl/ke/amd64/ipi.c:32              Routes APC/DPC/FREEZE to HalSend*
+  KiIpiSendPacket              MISSING         (not in amd64)                          i386 version stubbed in ke/ipi.c
+  KiIpiServiceRoutine          MISSING         (not in amd64)                          No IPI ISR — cannot dispatch function-pointer IPIs
+  KeIpiGenericCall              PARTIAL         ntoskrnl/ke/amd64/ipi.c:71              Only executes locally, does NOT broadcast
+                                                                                       TODO at line 110 acknowledges this
+  KiIpiGenericCallTarget       MISSING         i386 version stubbed                    Target-side handler for generic call
+  KiIpiSignalPacketDone        MISSING         i386 version stubbed                    Completion signaling for IPI packets
+  KiIpiSignalPacketDoneAndStall MISSING        i386 version stubbed                    Stall variant
+
+  KxFreezeExecution            IMPLEMENTED     ntoskrnl/ke/amd64/freeze.c:100          NMI-based freeze, well-implemented
+  KxThawExecution              IMPLEMENTED     ntoskrnl/ke/amd64/freeze.c:170          Proper wait-for-resume
+  KiProcessorFreezeHandler     IMPLEMENTED     ntoskrnl/ke/amd64/freeze.c:42           NMI handler for freeze targets
+  KxSwitchKdProcessor          IMPLEMENTED     ntoskrnl/ke/amd64/freeze.c:212          Debugger processor switch
+
+  KeFlushEntireTb              BROKEN          ntoskrnl/ke/amd64/cpu.c:661             "FIXME: halfplemented"
+                                                                                       Only flushes local CPU
+                                                                                       NO IPI broadcast to other CPUs
+  KeFlushCurrentTb             IMPLEMENTED     ntoskrnl/ke/amd64/cpu.c:535             Simple CR3 reload
+
+  KiSwapContext                IMPLEMENTED     ntoskrnl/ke/amd64/ctxswitch.S:238       Assembly context switch
+  KiSwapContextInternal        IMPLEMENTED     ntoskrnl/ke/amd64/ctxswitch.S:171       Core swap logic
+  KiSwapContextResume          IMPLEMENTED     ntoskrnl/ke/amd64/thrdini.c:171         C-level resume with CR3/TEB/FPU
+  KiSwapProcess                IMPLEMENTED     ntoskrnl/ke/amd64/stubs.c:170           ActiveProcessors XOR + CR3 + IOPM
+
+  KiDpcInterruptHandler        IMPLEMENTED     ntoskrnl/ke/amd64/traphandler.c:27      DPC retire + quantum + context switch
+  KiNmiInterruptHandler        IMPLEMENTED     ntoskrnl/ke/amd64/traphandler.c:88      Routes to freeze handler
+
+  KiIdleSchedule               BROKEN          ntoskrnl/ke/thrdschd.c:32               ASSERTMSG("SMP: Not yet implemented")
+                                                                                       THIS IS A CRITICAL BLOCKER
+  KiProcessDeferredReadyList   IMPLEMENTED     ntoskrnl/ke/thrdschd.c:41
+  KiQueueReadyThread           IMPLEMENTED     ntoskrnl/ke/thrdschd.c:70
+  KiFindIdealProcessor         IMPLEMENTED     ntoskrnl/ke/thrdschd.c:80               CONFIG_SMP guarded
+  KiDeferredReadyThread        IMPLEMENTED     ntoskrnl/ke/thrdschd.c:150
+  KiSelectNextThread           IMPLEMENTED     ntoskrnl/ke/thrdschd.c:401
+  KiReadyThread                IMPLEMENTED     ntoskrnl/ke/thrdschd.c:502
+
+  KeStartAllProcessors         IMPLEMENTED     ntoskrnl/ke/amd64/mproc.c:66            AP allocation + startup
+  KiInitializeKernel           IMPLEMENTED     ntoskrnl/ke/amd64/krnlinit.c
+
+  Spinlocks                    IMPLEMENTED     ntoskrnl/ke/amd64/spinlock.c            Functional but some "HACK" comments
+  KeTryToAcquire*              BUG             ntoskrnl/ke/amd64/spinlock.c:167         Leaves IRQL elevated on failure (SMP)
+
+  KiIdleLoop                   IMPLEMENTED     ntoskrnl/ke/amd64/stubs.c:103
+
+
+================================================================================
+15. Critical SMP Gaps Blocking Boot (CSRSS Hang Analysis)
+================================================================================
+
+  Boot log symptom: "Context Switches: 0", CSRSS launched but never connects.
+
+  ROOT CAUSE CHAIN:
+
+  1. KiIdleSchedule (thrdschd.c:35) — UNCONDITIONALLY ASSERTS FALSE
+     This is called from the idle loop when the idle thread needs to find
+     work to do on an SMP system. When it asserts, the idle thread on
+     secondary processors crashes. On the BSP, if the assert is non-fatal
+     (retail build), it returns NULL, and the idle loop never finds a thread.
+
+     In Win7, KiIdleSchedule is the function that checks:
+       - Prcb->NextThread (set by another CPU's scheduler)
+       - Prcb->ReadySummary (local ready queue)
+       - Other processors' ready queues (thread stealing)
+     Without this, threads created on one CPU can never migrate to another.
+
+  2. KeIpiGenericCall (ipi.c:71-124) — ONLY EXECUTES LOCALLY
+     The TODO at line 110 says it all. Without KiIpiSendPacket and
+     KiIpiServiceRoutine, there is no way to broadcast a function
+     to all processors and wait for completion. Any kernel code calling
+     KeIpiGenericCall expecting all CPUs to execute it will only run
+     on the calling CPU.
+
+  3. KeFlushEntireTb (cpu.c:661-677) — NO CROSS-CPU TLB FLUSH
+     When page tables change, only the local CPU's TLB is flushed.
+     Remote CPUs keep stale TLB entries. This causes random page faults,
+     memory corruption, and crashes on SMP.
+
+  4. KeTryToAcquireQueuedSpinLock* (spinlock.c:167-208) — IRQL LEAK
+     On SMP builds, if the try-acquire fails, IRQL remains elevated.
+     Callers that check the return value and bail out will run at
+     elevated IRQL indefinitely, eventually causing deadlocks.
+
+  LIKELY BOOT HANG SEQUENCE:
+    a. BSP boots, initializes, starts APs
+    b. APs start, enter idle loop
+    c. BSP creates CSRSS process + initial thread
+    d. Scheduler queues CSRSS thread (likely on BSP's ready queue)
+    e. BSP's idle loop calls KiIdleSchedule → ASSERT(FALSE) → returns NULL
+    f. CSRSS thread is in ready queue but never gets dequeued
+    g. "Context Switches: 0" — scheduler never ran any thread switch
+    h. SMSS waits forever for CSRSS connection that never comes
+
+  FIX PRIORITY:
+    [P0] KiIdleSchedule — implement thread selection for SMP idle
+    [P0] KeIpiGenericCall — implement broadcast + wait
+    [P1] KeFlushEntireTb — add IPI-based TLB shootdown
+    [P1] KiIpiServiceRoutine — implement for amd64
+    [P1] KiIpiSendPacket — implement for amd64
+    [P2] KeTryToAcquireQueuedSpinLock* — fix IRQL on failure
+
+
+================================================================================
+  END OF DOCUMENT
+================================================================================

@@ -177,6 +177,7 @@ NtUserInitialize(
 
     TRACE("Enter NtUserInitialize(%lx, %p, %p)\n",
           dwWinVersion, hPowerRequestEvent, hMediaRequestEvent);
+    ERR("[SMP] NtUserInitialize called (CSRSS reached win32k)\n");
 
     /* Check if we are already initialized */
     if (gpepCSRSS)

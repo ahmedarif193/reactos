@@ -200,6 +200,18 @@ KiSwapContextResume(
     NewProcess = NewThread->ApcState.Process;
     if (OldProcess != NewProcess)
     {
+#ifdef CONFIG_SMP
+        /* Update active processor masks for both processes.
+         * This is necessary for correct TLB shootdown targeting --
+         * KeFlushEntireTb and targeted TLB invalidation use
+         * ActiveProcessors to determine which CPUs need to be notified
+         * when page tables change. Without this, a CPU running a process
+         * may not receive TLB flush IPIs when another CPU modifies
+         * the process's page tables. */
+        InterlockedXor64((PLONG64)&NewProcess->ActiveProcessors, Pcr->Prcb.SetMember);
+        InterlockedXor64((PLONG64)&OldProcess->ActiveProcessors, Pcr->Prcb.SetMember);
+#endif
+
         /* Switch address space and flush TLB */
 #if (NTDDI_VERSION >= NTDDI_LONGHORN)
         __writecr3(NewProcess->DirectoryTableBase);
@@ -219,7 +231,11 @@ KiSwapContextResume(
        __writemsr(MSR_GS_SWAP, (ULONG64)NewThread->Teb);
     }
 
-    /* Increase context switch count */
+    /* Increase context switch count.
+     * KeGetContextSwitches() on amd64 reads Prcb.KeContextSwitches,
+     * so we must increment that field. The Pcr->ContextSwitches hack
+     * field is also maintained for compatibility. */
+    Pcr->Prcb.KeContextSwitches++;
     Pcr->ContextSwitches++;
     NewThread->ContextSwitches++;
 

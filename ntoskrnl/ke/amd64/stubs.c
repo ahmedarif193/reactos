@@ -159,6 +159,28 @@ KiIdleLoop(VOID)
         }
         else
         {
+#ifdef CONFIG_SMP
+            /* On SMP, check if there are threads in our ready queues */
+            if (Prcb->ReadySummary)
+            {
+                _enable();
+                KfRaiseIrql(SYNCH_LEVEL);
+                KiAcquirePrcbLock(Prcb);
+                NewThread = KiIdleSchedule(Prcb);
+                KiReleasePrcbLock(Prcb);
+                if (NewThread)
+                {
+                    OldThread = Prcb->CurrentThread;
+                    Prcb->NextThread = NULL;
+                    Prcb->CurrentThread = NewThread;
+                    NewThread->State = Running;
+                    KiSwapContext(APC_LEVEL, OldThread);
+                    KeLowerIrql(DISPATCH_LEVEL);
+                    continue;
+                }
+                KeLowerIrql(DISPATCH_LEVEL);
+            }
+#endif
             /* Continue staying idle. Note the HAL returns with interrupts on */
             Prcb->PowerState.IdleFunction(&Prcb->PowerState);
         }

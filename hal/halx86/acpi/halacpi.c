@@ -861,6 +861,12 @@ HalpSetupAcpiPhase0(IN PLOADER_PARAMETER_BLOCK LoaderBlock)
             /* Map it */
             HalpLowStub = HalpMapPhysicalMemory64(HalpLowStubPhysicalAddress, HALP_LOW_STUB_SIZE_IN_PAGES);
         }
+        else
+        {
+            DPRINT1("HAL: Failed to allocate low stub below 1MB "
+                    "(%u pages needed). SMP AP startup will not work.\n",
+                    HALP_LOW_STUB_SIZE_IN_PAGES);
+        }
     }
 
     /* Grab a page for flushes */

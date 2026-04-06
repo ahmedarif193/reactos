@@ -152,6 +152,8 @@ SmpLoadSubSystem(IN PUNICODE_STRING FileName,
     PSB_CREATE_PROCESS_MSG CreateProcess = &SbApiMsg.u.CreateProcess;
     PSB_CREATE_SESSION_MSG CreateSession = &SbApiMsg.u.CreateSession;
 
+    DPRINT1("SMSS: SmpLoadSubSystem(%wZ) enter, MuSessionId=%lu\n", FileName, MuSessionId);
+
     /* Make sure this is a found subsystem */
     if (Flags & SMP_INVALID_PATH)
     {
@@ -278,12 +280,14 @@ SmpLoadSubSystem(IN PUNICODE_STRING FileName,
     else
     {
         /* This must be CSRSS itself, so just launch it and that's it */
+        DPRINT1("SMSS: SmpLoadSubSystem - launching CSRSS via SmpExecuteImage\n");
         Status = SmpExecuteImage(FileName,
                                  Directory,
                                  CommandLine,
                                  MuSessionId,
                                  Flags | SMP_DEFERRED_FLAG,
                                  &ProcessInformation);
+        DPRINT1("SMSS: SmpLoadSubSystem - SmpExecuteImage returned Status %lx\n", Status);
         if (!NT_SUCCESS(Status))
         {
             /* Handle failures */
@@ -429,7 +433,28 @@ SmpLoadSubSystem(IN PUNICODE_STRING FileName,
     else
     {
         /* This a session 0 subsystem, just wait for it to initialize */
-        NtWaitForSingleObject(NewSubsystem->Event, FALSE, NULL);
+        {
+            LARGE_INTEGER PollTimeout;
+            NTSTATUS WaitStatus;
+            ULONG PollCount;
+
+            DPRINT1("SMSS: SmpLoadSubSystem - waiting for CSRSS to connect (Session 0)...\n");
+
+            for (PollCount = 0; ; PollCount++)
+            {
+                PollTimeout.QuadPart = -50000000LL; /* 5 seconds */
+                WaitStatus = NtWaitForSingleObject(NewSubsystem->Event, FALSE, &PollTimeout);
+                if (WaitStatus == STATUS_SUCCESS)
+                    break;
+                DPRINT1("SMSS: Still waiting for CSRSS after %lu seconds...\n", (PollCount + 1) * 5);
+                if (PollCount >= 11)
+                {
+                    DPRINT1("SMSS: CSRSS failed to connect after 60s, giving up\n");
+                    break;
+                }
+            }
+            DPRINT1("SMSS: SmpLoadSubSystem - CSRSS wait completed, status=0x%lx\n", WaitStatus);
+        }
     }
 
     /* Subsystem is created, resumed, and initialized. Close handles and exit */

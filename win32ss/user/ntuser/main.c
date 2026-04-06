@@ -1083,20 +1083,26 @@ DriverEntry(
     RtlZeroMemory(gpsi, sizeof(*gpsi));
     DPRINT("Global Server Data -> %p\n", gpsi);
 
+    DPRINT1("[SMP] InitGdiHandleTable\n");
     NT_ROF(InitGdiHandleTable());
     NT_ROF(InitPaletteImpl());
 
     /* Create stock objects, ie. precreated objects commonly
        used by win32 applications */
+    DPRINT1("[SMP] CreateStockObjects\n");
     CreateStockObjects();
     CreateSysColorObjects();
 
+    DPRINT1("[SMP] InitBrushImpl..InitDeviceImpl\n");
     NT_ROF(InitBrushImpl());
     NT_ROF(InitPDEVImpl());
     NT_ROF(InitLDEVImpl());
     NT_ROF(InitDeviceImpl());
+    DPRINT1("[SMP] InitDcImpl\n");
     NT_ROF(InitDcImpl());
+    DPRINT1("[SMP] InitUserImpl\n");
     USERLOCK_AND_ROF(InitUserImpl());
+    DPRINT1("[SMP] InitWindowStationImpl\n");
     NT_ROF(InitWindowStationImpl());
     NT_ROF(InitDesktopImpl());
     NT_ROF(InitInputImpl());
@@ -1104,6 +1110,7 @@ DriverEntry(
     NT_ROF(MsqInitializeImpl());
     NT_ROF(InitTimerImpl());
     NT_ROF(InitDCEImpl());
+    DPRINT1("[SMP] win32k DriverEntry complete\n");
 
     return STATUS_SUCCESS;
 }

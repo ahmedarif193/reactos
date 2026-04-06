@@ -186,7 +186,6 @@ KiSystemStartupBootStack(VOID)
     }
     else
     {
-        DPRINT1("[AP%lu] KiSystemStartupBootStack: Initializing\n", Prcb->Number);
         /* Initialize the startup thread */
         KiInitializeHandBuiltThread(Thread, Process, KernelStack);
     }

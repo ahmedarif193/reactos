@@ -770,7 +770,13 @@ typedef struct _KPRCB
 #endif
     UINT64 TargetSet;
     ULONG IpiFrozen;
-    UCHAR PrcbPad3[116];
+    ULONG IpiPad1;
+    volatile PVOID CurrentPacket[3];
+    volatile PVOID WorkerRoutine;
+    volatile ULONG RequestSummary;
+    ULONG IpiPad2;
+    volatile struct _KPRCB *SignalDone;
+    UCHAR PrcbPad3[64];
     REQUEST_MAILBOX RequestMailbox[64];
     UINT64 SenderSummary;
     UCHAR PrcbPad4[120];
