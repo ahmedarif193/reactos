@@ -126,7 +126,7 @@ PspWriteTebImpersonationInfo(IN PETHREAD Thread,
     ASSERT(CurrentThread == PsGetCurrentThread());
 
     /* Get process and TEB */
-    Process = Thread->ThreadsProcess;
+    Process = (PEPROCESS)Thread->ThreadsProcess;
     Teb = Thread->Tcb.Teb;
     if (Teb)
     {
@@ -301,7 +301,11 @@ PspSetPrimaryToken(IN PEPROCESS Process,
                                    NULL,
                                    &PsProcessType->TypeInfo.GenericMapping,
                                    PreviousMode,
+#if (NTDDI_VERSION >= NTDDI_LONGHORN)
+                                   &Process->ImagePathHash,
+#else
                                    &Process->GrantedAccess,
+#endif
                                    &AccessStatus);
 
             /* Dereference the token and let go the SD */
@@ -310,10 +314,17 @@ PspSetPrimaryToken(IN PEPROCESS Process,
             ObReleaseObjectSecurity(SecurityDescriptor, SdAllocated);
 
             /* Remove access if it failed */
+#if (NTDDI_VERSION >= NTDDI_LONGHORN)
+            if (!Result) Process->ImagePathHash = 0;
+
+            /* Setup granted access */
+            Process->ImagePathHash |= (PROCESS_VM_OPERATION |
+#else
             if (!Result) Process->GrantedAccess = 0;
 
             /* Setup granted access */
             Process->GrantedAccess |= (PROCESS_VM_OPERATION |
+#endif
                                        PROCESS_VM_READ |
                                        PROCESS_VM_WRITE |
                                        PROCESS_QUERY_INFORMATION |
@@ -683,7 +694,7 @@ PsImpersonateClient(IN PETHREAD Thread,
         ImpersonationToken = Token;
 
         /* Obtain a token from the process */
-        ProcessToken = PsReferencePrimaryToken(Thread->ThreadsProcess);
+        ProcessToken = PsReferencePrimaryToken((PEPROCESS)Thread->ThreadsProcess);
         if (!ProcessToken)
         {
             /* We can't continue this way without having the process' token... */
@@ -703,7 +714,7 @@ PsImpersonateClient(IN PETHREAD Thread,
             if (!NT_SUCCESS(Status))
             {
                 /* We can't even make a copy of the token? Then bail out... */
-                ObFastDereferenceObject(&Thread->ThreadsProcess->Token, ProcessToken);
+                ObFastDereferenceObject(&((PEPROCESS)Thread->ThreadsProcess)->Token, ProcessToken);
                 return Status;
             }
 
@@ -718,10 +729,10 @@ PsImpersonateClient(IN PETHREAD Thread,
         }
 
         /* We no longer need the process' token */
-        ObFastDereferenceObject(&Thread->ThreadsProcess->Token, ProcessToken);
+        ObFastDereferenceObject(&((PEPROCESS)Thread->ThreadsProcess)->Token, ProcessToken);
 
         /* Check if this is a job */
-        Job = Thread->ThreadsProcess->Job;
+        Job = ((PEPROCESS)Thread->ThreadsProcess)->Job;
         if (Job != NULL)
         {
             /* No admin allowed in this job */
@@ -813,7 +824,7 @@ PsReferenceEffectiveToken(IN PETHREAD Thread,
             "Thread: %p, TokenType: %p\n", Thread, TokenType);
 
     /* Check if we don't have impersonation info */
-    Process = Thread->ThreadsProcess;
+    Process = (PEPROCESS)Thread->ThreadsProcess;
     if (Thread->ActiveImpersonationInfo)
     {
         /* Lock the Process */

@@ -88,6 +88,30 @@ typedef struct _GET_SET_CTX_CONTEXT
 } GET_SET_CTX_CONTEXT, *PGET_SET_CTX_CONTEXT;
 
 //
+// ETHREAD/EPROCESS field compatibility macros for Vista+ (NTDDI_LONGHORN)
+//
+// At Vista+, several ETHREAD and EPROCESS fields were renamed or restructured:
+//   ETHREAD.ThreadsProcess      -> Tcb.Process (access via KTHREAD.Process)
+//   ETHREAD.GrantedAccess       -> removed (use OBJECT_HEADER or SpareUlong0)
+//   ETHREAD.DeadThread          -> ThreadInserted
+//   ETHREAD.LpcReplyMessageId   -> AlpcMessageId (handled in lpc.h)
+//   ETHREAD.ForwardClusterOnly  -> CacheManagerActive
+//   ETHREAD.AddressSpaceOwner   -> Spare (bit flag)
+//   ETHREAD.ApcNeeded           -> removed
+//   EPROCESS.ExceptionPort      -> ExceptionPortData (union)
+//   EPROCESS.GrantedAccess      -> ImagePathHash
+//   EPROCESS.HyperSpaceLock     -> removed (AddressCreationLock is EX_PUSH_LOCK)
+//   EPROCESS.NextPageColor      -> Spare7
+//   EPROCESS.JobStatus          -> Flags2
+//
+#if (NTDDI_VERSION >= NTDDI_LONGHORN)
+/* ThreadsProcess was replaced by KTHREAD.Process at Vista+ */
+#define THREAD_TO_PROCESS(Thread)   ((PEPROCESS)(Thread)->Tcb.Process)
+#else
+#define THREAD_TO_PROCESS(Thread)   ((Thread)->ThreadsProcess)
+#endif
+
+//
 // Initialization Functions
 //
 VOID
@@ -163,6 +187,25 @@ PspCreateProcess(
     IN HANDLE DebugPort OPTIONAL,
     IN HANDLE ExceptionPort OPTIONAL,
     IN BOOLEAN InJob
+);
+
+//
+// Thread Routines
+//
+NTSTATUS
+NTAPI
+PspCreateThread(
+    OUT PHANDLE ThreadHandle,
+    IN ACCESS_MASK DesiredAccess,
+    IN POBJECT_ATTRIBUTES ObjectAttributes OPTIONAL,
+    IN HANDLE ProcessHandle,
+    IN PEPROCESS TargetProcess,
+    OUT PCLIENT_ID ClientId,
+    IN PCONTEXT ThreadContext,
+    IN PINITIAL_TEB InitialTeb,
+    IN BOOLEAN CreateSuspended,
+    IN PKSTART_ROUTINE StartRoutine OPTIONAL,
+    IN PVOID StartContext OPTIONAL
 );
 
 //

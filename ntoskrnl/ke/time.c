@@ -174,8 +174,8 @@ KeUpdateRunTime(IN PKTRAP_FRAME TrapFrame,
             /* Handle being in a DPC */
             Prcb->DpcTime++;
 
-#if DBG
-            /* Update the DPC time */
+#if DBG && (NTDDI_VERSION < NTDDI_LONGHORN)
+            /* Update the DPC time (DebugDpcTime removed at Vista+) */
             Prcb->DebugDpcTime++;
 
             /* Check if we have timed out */
