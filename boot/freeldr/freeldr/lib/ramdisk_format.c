@@ -10,7 +10,6 @@
 #include <fs/fat.h>
 #include <disk.h>
 #include "ramdisk.h"
-#include "../disk/part_mbr.h"
 #include "ramdisk_signature.h"
 
 #ifndef ARRAYSIZE
