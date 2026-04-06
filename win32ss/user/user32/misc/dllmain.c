@@ -227,11 +227,21 @@ ClientThreadSetupHelper(BOOL IsCallback)
     PCLIENTINFO ClientInfo = GetWin32ClientInfo();
     BOOLEAN IsFirstThread = _InterlockedExchange8((PCHAR)&gfFirstThread, FALSE);
 
+    ERR("USER32: ClientThreadSetupHelper enter callback=%d server=%d first=%d clientinfo=%p flags=%lx\n",
+        IsCallback,
+        gfServerProcess,
+        IsFirstThread,
+        ClientInfo,
+        ClientInfo ? ClientInfo->CI_flags : 0);
     TRACE("In ClientThreadSetup(IsCallback == %s, gfServerProcess = %s, IsFirstThread = %s)\n",
           IsCallback ? "TRUE" : "FALSE", gfServerProcess ? "TRUE" : "FALSE", IsFirstThread ? "TRUE" : "FALSE");
 
     if (IsFirstThread)
+    {
+        ERR("USER32: ClientThreadSetupHelper GdiProcessSetup enter\n");
         GdiProcessSetup();
+        ERR("USER32: ClientThreadSetupHelper GdiProcessSetup done\n");
+    }
 
     /* Check for already initialized thread, and bail out if so */
     if (ClientInfo->CI_flags & CI_INITTHREAD)
@@ -258,9 +268,12 @@ ClientThreadSetupHelper(BOOL IsCallback)
         // UserCon.dwDispatchCount;
 
         /* Connect to win32k */
+        ERR("USER32: ClientThreadSetupHelper NtUserProcessConnect(server) enter\n");
         Status = NtUserProcessConnect(NtCurrentProcess(),
                                       &UserCon,
                                       sizeof(UserCon));
+        ERR("USER32: ClientThreadSetupHelper NtUserProcessConnect(server) status=%lx\n",
+            Status);
         if (!NT_SUCCESS(Status)) return FALSE;
 
         /* Retrieve data */
@@ -275,11 +288,14 @@ ClientThreadSetupHelper(BOOL IsCallback)
     }
 
     TRACE("Checkpoint (register PFN)\n");
+    ERR("USER32: ClientThreadSetupHelper RegisterClientPFN enter\n");
     if (!RegisterClientPFN())
     {
+        ERR("USER32: ClientThreadSetupHelper RegisterClientPFN failed\n");
         ERR("RegisterClientPFN failed\n");
         return FALSE;
     }
+    ERR("USER32: ClientThreadSetupHelper RegisterClientPFN done\n");
 
     /* Mark this thread as initialized */
     ClientInfo->CI_flags |= CI_INITTHREAD;
@@ -288,11 +304,13 @@ ClientThreadSetupHelper(BOOL IsCallback)
     if (IsFirstThread)
     {
         TRACE("Checkpoint (Allocating TLS)\n");
+        ERR("USER32: ClientThreadSetupHelper TlsAlloc enter\n");
 
         /* Allocate an index for user32 thread local data */
         User32TlsIndex = TlsAlloc();
         if (User32TlsIndex == TLS_OUT_OF_INDEXES)
             return FALSE;
+        ERR("USER32: ClientThreadSetupHelper TlsAlloc done index=%lu\n", User32TlsIndex);
 
         // HAAAAAAAAAACK!!!!!!
         // ASSERT(gpsi);
@@ -300,15 +318,22 @@ ClientThreadSetupHelper(BOOL IsCallback)
         if (gpsi)
         {
         TRACE("Checkpoint (MessageInit)\n");
+        ERR("USER32: ClientThreadSetupHelper MessageInit enter\n");
 
         if (MessageInit())
         {
+            ERR("USER32: ClientThreadSetupHelper MessageInit done\n");
             TRACE("Checkpoint (MenuInit)\n");
+            ERR("USER32: ClientThreadSetupHelper MenuInit enter\n");
             if (MenuInit())
             {
+                ERR("USER32: ClientThreadSetupHelper MenuInit done\n");
                 TRACE("Checkpoint initialization done OK\n");
+                ERR("USER32: ClientThreadSetupHelper LoadAppInitDlls enter\n");
                 InitializeCriticalSection(&U32AccelCacheLock);
                 LoadAppInitDlls();
+                ERR("USER32: ClientThreadSetupHelper LoadAppInitDlls done\n");
+                ERR("USER32: ClientThreadSetupHelper done\n");
                 return TRUE;
             }
             MessageCleanup();
@@ -319,6 +344,7 @@ ClientThreadSetupHelper(BOOL IsCallback)
         }
     }
 
+    ERR("USER32: ClientThreadSetupHelper done\n");
     return TRUE;
 }
 
@@ -362,6 +388,9 @@ ClientThreadSetup(VOID)
 
     // FIXME: Disabling this call is a HACK!! See also User32CallClientThreadSetupFromKernel...
     // return ClientThreadSetupHelper(FALSE);
+    ERR("USER32: ClientThreadSetup called server=%d first=%d\n",
+        gfServerProcess,
+        gfFirstThread);
     TRACE("ClientThreadSetup is not implemented\n");
     return TRUE;
 }
@@ -371,17 +400,22 @@ Init(PUSERCONNECT UserCon /*PUSERSRV_API_CONNECTINFO*/)
 {
     NTSTATUS Status = STATUS_SUCCESS;
 
+    ERR("USER32: Init enter usercon=%p\n", UserCon);
     TRACE("user32::Init(0x%p) -->\n", UserCon);
 
+    ERR("USER32: Init RtlInitializeCriticalSection(gcsUserApiHook) enter\n");
     RtlInitializeCriticalSection(&gcsUserApiHook);
+    ERR("USER32: Init RtlInitializeCriticalSection(gcsUserApiHook) done\n");
 
     /* Initialize callback table in PEB data */
     NtCurrentPeb()->KernelCallbackTable = apfnDispatch;
     NtCurrentPeb()->PostProcessInitRoutine = NULL;
+    ERR("USER32: Init kernel callback table installed\n");
 
     // This is a HACK!! //
     gfServerProcess = FALSE;
     gfFirstThread   = TRUE;
+    ERR("USER32: Init hack flags server=%d first=%d\n", gfServerProcess, gfFirstThread);
     //// End of HACK!! ///
 
     /*
@@ -407,9 +441,11 @@ Init(PUSERCONNECT UserCon /*PUSERSRV_API_CONNECTINFO*/)
 
             TRACE("HACK: Hackish NtUserProcessConnect call!!\n");
             /* Connect to win32k */
+            ERR("USER32: Init NtUserProcessConnect(client-hack) enter\n");
             Status = NtUserProcessConnect(NtCurrentProcess(),
                                           UserCon,
                                           sizeof(*UserCon));
+            ERR("USER32: Init NtUserProcessConnect(client-hack) status=%lx\n", Status);
             if (!NT_SUCCESS(Status)) return FALSE;
         }
 
@@ -428,13 +464,17 @@ Init(PUSERCONNECT UserCon /*PUSERSRV_API_CONNECTINFO*/)
     // FIXME: Yet another hack... This call should normally not be done here, but
     // instead in ClientThreadSetup, and in User32CallClientThreadSetupFromKernel as well.
     TRACE("HACK: Using Init-ClientThreadSetupHelper hack!!\n");
+    ERR("USER32: Init ClientThreadSetupHelper hack enter\n");
     if (!ClientThreadSetupHelper(FALSE))
     {
+        ERR("USER32: Init ClientThreadSetupHelper hack failed\n");
         TRACE("Init-ClientThreadSetupHelper hack failed!\n");
         return FALSE;
     }
+    ERR("USER32: Init ClientThreadSetupHelper hack done\n");
 
     TRACE("<-- user32::Init()\n");
+    ERR("USER32: Init done status=%lx\n", Status);
 
     return NT_SUCCESS(Status);
 }
@@ -458,6 +498,10 @@ DllMain(
     _In_ ULONG dwReason,
     _In_opt_ PVOID pReserved)
 {
+    ERR("USER32: DllMain reason=%lu hDll=%p reserved=%p enter\n",
+        dwReason,
+        hDll,
+        pReserved);
     switch (dwReason)
     {
         case DLL_PROCESS_ATTACH:
@@ -526,8 +570,16 @@ DllMain(
 
             /* Finish initialization */
             TRACE("Checkpoint (call Init)\n");
+            ERR("USER32: DllMain calling Init\n");
             if (!Init(&ConnectInfo))
+            {
+                ERR("USER32: DllMain Init failed\n");
                 return FALSE;
+            }
+            ERR("USER32: DllMain Init done server=%d first=%d gpsi=%p\n",
+                gfServerProcess,
+                gfFirstThread,
+                gpsi);
 
             if (!gfServerProcess)
             {
@@ -558,7 +610,14 @@ DllMain(
     }
 
     /* Finally, initialize GDI */
-    return GdiDllInitialize(hDll, dwReason, pReserved);
+    ERR("USER32: DllMain calling GdiDllInitialize reason=%lu\n", dwReason);
+    {
+        BOOL Result = GdiDllInitialize(hDll, dwReason, pReserved);
+        ERR("USER32: DllMain GdiDllInitialize reason=%lu result=%d\n",
+            dwReason,
+            Result);
+        return Result;
+    }
 }
 
 NTSTATUS

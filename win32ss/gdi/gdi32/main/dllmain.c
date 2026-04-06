@@ -25,6 +25,10 @@ DllMain(
     _In_ ULONG dwReason,
     _In_opt_ PVOID pReserved)
 {
+    DbgPrint("GDI32: DllMain reason=%lu hDll=%p reserved=%p enter\n",
+             dwReason,
+             hDll,
+             pReserved);
     UNREFERENCED_PARAMETER(pReserved);
 
     switch (dwReason)
@@ -36,6 +40,7 @@ DllMain(
     default:
         break;
     }
+    DbgPrint("GDI32: DllMain reason=%lu done\n", dwReason);
     return TRUE;
 }
 
@@ -44,6 +49,7 @@ VOID
 WINAPI
 GdiProcessSetup(VOID)
 {
+    DbgPrint("GDI32: GdiProcessSetup enter initialized=%d\n", gbInitialized);
     if (!gbInitialized)
     {
         gbInitialized = TRUE;
@@ -60,6 +66,7 @@ GdiProcessSetup(VOID)
         InitializeCriticalSection(&gcsClientObjLinks);
         GdiInitializeLanguagePack(0);
     }
+    DbgPrint("GDI32: GdiProcessSetup done initialized=%d\n", gbInitialized);
 }
 
 VOID
@@ -81,6 +88,10 @@ GdiDllInitialize(
     _In_ ULONG dwReason,
     _In_opt_ PVOID pReserved)
 {
+    DbgPrint("GDI32: GdiDllInitialize reason=%lu hDll=%p reserved=%p enter\n",
+             dwReason,
+             hDll,
+             pReserved);
     UNREFERENCED_PARAMETER(pReserved);
 
     switch (dwReason)
@@ -91,7 +102,13 @@ GdiDllInitialize(
             // DisableThreadLibraryCalls(hDll);
 
             /* Initialize the kernel part of GDI first */
-            if (!NtGdiInit()) return FALSE;
+            DbgPrint("GDI32: GdiDllInitialize NtGdiInit enter\n");
+            if (!NtGdiInit())
+            {
+                DbgPrint("GDI32: GdiDllInitialize NtGdiInit failed\n");
+                return FALSE;
+            }
+            DbgPrint("GDI32: GdiDllInitialize NtGdiInit done\n");
 
             /* Now initialize ourselves */
             GdiProcessSetup();
@@ -123,6 +140,7 @@ GdiDllInitialize(
         SetStockObjects = TRUE;
     }
 
+    DbgPrint("GDI32: GdiDllInitialize reason=%lu done\n", dwReason);
     return TRUE;
 }
 

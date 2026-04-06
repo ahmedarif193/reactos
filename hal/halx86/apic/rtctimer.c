@@ -147,10 +147,6 @@ HalpClockInterruptHandler(IN PKTRAP_FRAME TrapFrame)
 
     /* Enter trap */
     KiEnterInterruptTrap(TrapFrame);
-#ifdef _M_AMD64
-    /* This is for debugging */
-    TrapFrame->ErrorCode = 0xc10c4;
-#endif
 
     /* Start the interrupt */
     if (!HalBeginSystemInterrupt(CLOCK_LEVEL, APIC_CLOCK_VECTOR, &Irql))
@@ -204,10 +200,6 @@ HalpClockIpiHandler(IN PKTRAP_FRAME TrapFrame)
 
     /* Enter trap */
     KiEnterInterruptTrap(TrapFrame);
-#ifdef _M_AMD64
-    /* This is for debugging */
-    TrapFrame->ErrorCode = 0xc10c4;
-#endif
 
     /* Start the interrupt */
     if (!HalBeginSystemInterrupt(CLOCK_LEVEL, CLOCK_IPI_VECTOR, &Irql))

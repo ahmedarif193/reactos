@@ -311,11 +311,11 @@ ApicInitializeLocalApic(ULONG Cpu)
     /* Read the version and save it globally */
     if (Cpu == 0) ApicVersion = ApicRead(APIC_VER);
 
-    /* Set the mode to flat (max 8 CPUs supported!) */
+#ifndef _M_AMD64
+    /* x86 still relies on flat logical delivery, which limits us to 8 CPUs. */
     ApicWrite(APIC_DFR, APIC_DF_Flat);
-
-    /* Set logical apic ID */
     ApicWrite(APIC_LDR, ApicLogicalId(Cpu) << 24);
+#endif
 
     /* Set the spurious ISR */
     KeRegisterInterruptHandler(APIC_SPURIOUS_VECTOR, ApicSpuriousService);
@@ -377,8 +377,18 @@ HalpAllocateSystemInterrupt(
 
     /* Setup a redirection entry */
     ReDirReg.Vector = Vector;
+#ifdef _M_AMD64
+    /*
+     * amd64 startup and runtime IPIs already use physical LAPIC IDs.
+     * Keep masked IRQ entries physical as well so bringing up CPUs > 8
+     * does not depend on the old flat-logical APIC layout.
+     */
+    ReDirReg.MessageType = APIC_MT_Fixed;
+    ReDirReg.DestinationMode = APIC_DM_Physical;
+#else
     ReDirReg.MessageType = APIC_MT_LowestPriority;
     ReDirReg.DestinationMode = APIC_DM_Logical;
+#endif
     ReDirReg.DeliveryStatus = 0;
     ReDirReg.Polarity = 0;
     ReDirReg.RemoteIRR = 0;

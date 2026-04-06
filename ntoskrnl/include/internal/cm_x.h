@@ -6,16 +6,26 @@
 * PROGRAMMERS:     Alex Ionescu (alex.ionescu@reactos.org)
 */
 
-#if DBG
+#if DBG && _CM_DEBUG_
 FORCEINLINE
 VOID
 CmpCaptureLockBackTraceByIndex(_In_ ULONG Index)
 {
+    if ((CmpTraceLevel & CM_REFERENCE_DEBUG) == 0)
+        return;
+
     /* Capture the backtrace */
     RtlCaptureStackBackTrace(1,
                              _countof(CmpCacheTable[Index].LockBackTrace),
                              CmpCacheTable[Index].LockBackTrace,
                              NULL);
+}
+#else
+FORCEINLINE
+VOID
+CmpCaptureLockBackTraceByIndex(_In_ ULONG Index)
+{
+    UNREFERENCED_PARAMETER(Index);
 }
 #endif
 

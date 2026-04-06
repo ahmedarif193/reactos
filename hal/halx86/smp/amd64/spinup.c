@@ -98,8 +98,6 @@ HalStartNextProcessor(
     if (HalpStartedProcessorCount == HalpApicInfoTable.ProcessorCount)
         return FALSE;
 
-    if (HalpStartedProcessorCount >=  8)
-        return FALSE;
     /* Clean up low stub from any previous data */
     RtlZeroMemory(HalpLowStub, HALP_LOW_STUB_SIZE_IN_PAGES * PAGE_SIZE);
 

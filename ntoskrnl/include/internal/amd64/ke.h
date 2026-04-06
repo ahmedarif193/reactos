@@ -351,8 +351,7 @@ VOID
 KiEndInterrupt(IN KIRQL Irql,
                IN PKTRAP_FRAME TrapFrame)
 {
-    /* Make sure this is from the clock handler */
-    ASSERT(TrapFrame->ErrorCode == 0xc10c4);
+    UNREFERENCED_PARAMETER(TrapFrame);
 
     /* Disable interrupts and end the interrupt */
     _disable();
