@@ -123,31 +123,38 @@ KxFreezeExecution(
     /* We are the owner now and active */
     CurrentPrcb->IpiFrozen = IPI_FROZEN_STATE_OWNER | IPI_FROZEN_FLAG_ACTIVE;
 
-    /* Loop all processors */
-    for (ULONG i = 0; i < KeNumberProcessors; i++)
+    /*
+     * Use KeActiveProcessors (not KeNumberProcessors) to determine targets.
+     * During AP startup, KeNumberProcessors is incremented before the new AP
+     * joins KeActiveProcessors.  Targeting a CPU that is registered but not
+     * yet active would set TARGET_FREEZE without sending an NMI, causing
+     * the wait loop below to spin forever.
+     */
     {
-        PKPRCB TargetPrcb = KiProcessorBlock[i];
-        if (TargetPrcb != CurrentPrcb)
-        {
-            /* Only the active processor is allowed to change IpiFrozen */
-            ASSERT(TargetPrcb->IpiFrozen == IPI_FROZEN_STATE_RUNNING);
+        KAFFINITY TargetSet = KeActiveProcessors & ~CurrentPrcb->SetMember;
+        KAFFINITY RemainingSet;
+        ULONG ProcessorIndex;
 
-            /* Request target to freeze */
-            TargetPrcb->IpiFrozen = IPI_FROZEN_STATE_TARGET_FREEZE;
+        /* Set TARGET_FREEZE on each active target */
+        RemainingSet = TargetSet;
+        while (RemainingSet != 0)
+        {
+            BitScanForwardAffinity(&ProcessorIndex, RemainingSet);
+            RemainingSet &= ~AFFINITY_MASK(ProcessorIndex);
+            ASSERT(KiProcessorBlock[ProcessorIndex]->IpiFrozen == IPI_FROZEN_STATE_RUNNING);
+            KiProcessorBlock[ProcessorIndex]->IpiFrozen = IPI_FROZEN_STATE_TARGET_FREEZE;
         }
-    }
 
-    /* Send the freeze IPI */
-    KiIpiSend(KeActiveProcessors & ~CurrentPrcb->SetMember, IPI_FREEZE);
+        /* Send the freeze NMI to active targets */
+        KiIpiSend(TargetSet, IPI_FREEZE);
 
-    /* Wait for all targets to be frozen */
-    for (ULONG i = 0; i < KeNumberProcessors; i++)
-    {
-        PKPRCB TargetPrcb = KiProcessorBlock[i];
-        if (TargetPrcb != CurrentPrcb)
+        /* Wait for all active targets to reach FROZEN */
+        RemainingSet = TargetSet;
+        while (RemainingSet != 0)
         {
-            /* Wait for the target to be frozen */
-            while (TargetPrcb->IpiFrozen != IPI_FROZEN_STATE_FROZEN)
+            BitScanForwardAffinity(&ProcessorIndex, RemainingSet);
+            RemainingSet &= ~AFFINITY_MASK(ProcessorIndex);
+            while (KiProcessorBlock[ProcessorIndex]->IpiFrozen != IPI_FROZEN_STATE_FROZEN)
             {
                 YieldProcessor();
                 KeMemoryBarrier();
@@ -155,7 +162,7 @@ KxFreezeExecution(
         }
     }
 
-    /* All targets are frozen, we can continue */
+    /* All active targets are frozen, we can continue */
 }
 
 VOID
@@ -164,34 +171,32 @@ KxThawExecution(
     VOID)
 {
     PKPRCB CurrentPrcb = KeGetCurrentPrcb();
+    KAFFINITY TargetSet = KeActiveProcessors & ~CurrentPrcb->SetMember;
+    KAFFINITY RemainingSet;
+    ULONG ProcessorIndex;
+
     ASSERT(CurrentPrcb->IpiFrozen & IPI_FROZEN_FLAG_ACTIVE);
 
-    /* Loop all processors */
-    for (ULONG i = 0; i < KeNumberProcessors; i++)
+    /* Thaw all active targets */
+    RemainingSet = TargetSet;
+    while (RemainingSet != 0)
     {
-        PKPRCB TargetPrcb = KiProcessorBlock[i];
-        if (TargetPrcb != CurrentPrcb)
-        {
-            /* Make sure they are still frozen */
-            ASSERT(TargetPrcb->IpiFrozen == IPI_FROZEN_STATE_FROZEN);
-
-            /* Request target to thaw */
-            TargetPrcb->IpiFrozen = IPI_FROZEN_STATE_THAW;
-        }
+        BitScanForwardAffinity(&ProcessorIndex, RemainingSet);
+        RemainingSet &= ~AFFINITY_MASK(ProcessorIndex);
+        ASSERT(KiProcessorBlock[ProcessorIndex]->IpiFrozen == IPI_FROZEN_STATE_FROZEN);
+        KiProcessorBlock[ProcessorIndex]->IpiFrozen = IPI_FROZEN_STATE_THAW;
     }
 
-    /* Wait for all targets to be running */
-    for (ULONG i = 0; i < KeNumberProcessors; i++)
+    /* Wait for all active targets to resume */
+    RemainingSet = TargetSet;
+    while (RemainingSet != 0)
     {
-        PKPRCB TargetPrcb = KiProcessorBlock[i];
-        if (TargetPrcb != CurrentPrcb)
+        BitScanForwardAffinity(&ProcessorIndex, RemainingSet);
+        RemainingSet &= ~AFFINITY_MASK(ProcessorIndex);
+        while (KiProcessorBlock[ProcessorIndex]->IpiFrozen != IPI_FROZEN_STATE_RUNNING)
         {
-            /* Wait for the target to be running again */
-            while (TargetPrcb->IpiFrozen != IPI_FROZEN_STATE_RUNNING)
-            {
-                YieldProcessor();
-                KeMemoryBarrier();
-            }
+            YieldProcessor();
+            KeMemoryBarrier();
         }
     }
 

@@ -1473,4 +1473,24 @@ extern "C" {
 #pragma pack(pop)
 
 #include <sec_api/stdlib_s.h>
+#endif /* _INC_STDLIB */
+
+/*
+ * C11/C++11 quick_exit functions: declared outside _INC_STDLIB guard so they
+ * are available even when MinGW's stdlib.h was included first via #include_next
+ * (MinGW gates these behind _UCRT which ReactOS does not define).
+ */
+#ifndef _REACTOS_QUICK_EXIT_DECLARED
+#define _REACTOS_QUICK_EXIT_DECLARED
+#if (!defined(__cplusplus) && defined(__STDC_VERSION__) && (__STDC_VERSION__ >= 201112L)) || \
+    (defined(__cplusplus) && (__cplusplus >= 201103L))
+#ifdef __cplusplus
+extern "C" {
 #endif
+  __declspec(noreturn) void __cdecl quick_exit(int);
+  int __cdecl at_quick_exit(void (__cdecl *)(void));
+#ifdef __cplusplus
+}
+#endif
+#endif /* C11/C++11 */
+#endif /* _REACTOS_QUICK_EXIT_DECLARED */

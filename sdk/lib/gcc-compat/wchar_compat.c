@@ -29,35 +29,9 @@
 #define CRT_HEX     0x0080
 #define CRT_ALPHA   0x0103
 
+/* wctype is provided by wctype_compat.c */
 typedef unsigned short wctype_t;
-
-wctype_t __cdecl wctype(const char *property)
-{
-    static const struct {
-        const char *name;
-        wctype_t mask;
-    } props[] = {
-        { "alnum",  CRT_DIGIT | CRT_ALPHA },
-        { "alpha",  CRT_ALPHA },
-        { "cntrl",  CRT_CONTROL },
-        { "digit",  CRT_DIGIT },
-        { "graph",  CRT_DIGIT | CRT_PUNCT | CRT_ALPHA },
-        { "lower",  CRT_LOWER },
-        { "print",  CRT_DIGIT | CRT_PUNCT | CRT_BLANK | CRT_ALPHA },
-        { "punct",  CRT_PUNCT },
-        { "space",  CRT_SPACE },
-        { "upper",  CRT_UPPER },
-        { "xdigit", CRT_HEX },
-    };
-    unsigned int i;
-
-    for (i = 0; i < sizeof(props) / sizeof(props[0]); i++)
-    {
-        if (strcmp(property, props[i].name) == 0)
-            return props[i].mask;
-    }
-    return 0;
-}
+wctype_t __cdecl wctype(const char *property);
 
 int __cdecl wctob(unsigned int c)
 {

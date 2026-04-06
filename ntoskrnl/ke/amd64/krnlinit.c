@@ -186,6 +186,7 @@ KiSystemStartupBootStack(VOID)
     }
     else
     {
+        DPRINT1("[AP%lu] KiSystemStartupBootStack: Initializing\n", Prcb->Number);
         /* Initialize the startup thread */
         KiInitializeHandBuiltThread(Thread, Process, KernelStack);
     }
@@ -207,6 +208,7 @@ KiSystemStartupBootStack(VOID)
     /* Raise back to HIGH_LEVEL and clear the PRCB for the loader block */
     KfRaiseIrql(HIGH_LEVEL);
     LoaderBlock->Prcb = 0;
+
 
     /* Set the priority of this thread to 0 */
     Thread = KeGetCurrentThread();

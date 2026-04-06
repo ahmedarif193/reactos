@@ -105,6 +105,7 @@ KiIdleLoop(VOID)
     PKPRCB Prcb = KeGetCurrentPrcb();
     PKTHREAD OldThread, NewThread;
 
+
     /* Now loop forever */
     while (TRUE)
     {
