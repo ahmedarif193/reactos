@@ -105,10 +105,14 @@ KiIdleLoop(VOID)
     PKPRCB Prcb = KeGetCurrentPrcb();
     PKTHREAD OldThread, NewThread;
 
+    /* Set idle summary bit */
+    InterlockedBitTestAndSetAffinity(&KiIdleSummary, Prcb->Number);
 
     /* Now loop forever */
     while (TRUE)
     {
+        ASSERT(KeGetCurrentThread()->SwapBusy == FALSE);
+
         /* Start of the idle loop: disable interrupts */
         _enable();
         YieldProcessor();
@@ -133,6 +137,17 @@ KiIdleLoop(VOID)
             /* Enable interrupts */
             _enable();
 
+#ifdef CONFIG_SMP
+            /* Do the swap at SYNCH_LEVEL */
+            KfRaiseIrql(SYNCH_LEVEL);
+#endif
+
+            // Do we need this?
+            KiSetThreadSwapBusy(Prcb->IdleThread);
+
+            /* Acquire the PRCB lock */
+            KiAcquirePrcbLock(Prcb);
+
             /* Capture current thread data */
             OldThread = Prcb->CurrentThread;
             NewThread = Prcb->NextThread;
@@ -141,16 +156,28 @@ KiIdleLoop(VOID)
             Prcb->NextThread = NULL;
             Prcb->CurrentThread = NewThread;
 
+            /* Release the PRCB lock */
+            KiReleasePrcbLock(Prcb);
+
             /* The thread is now running */
             NewThread->State = Running;
 
-#ifdef CONFIG_SMP
-            /* Do the swap at SYNCH_LEVEL */
-            KfRaiseIrql(SYNCH_LEVEL);
-#endif
+            /* Check if we're actually running a different thread */
+            if (NewThread != OldThread)
+            {
+                /* Clear idle summary bit */
+                InterlockedBitTestAndResetAffinity(&KiIdleSummary, Prcb->Number);
 
-            /* Switch away from the idle thread */
-            KiSwapContext(APC_LEVEL, OldThread);
+                /* Switch away from the idle thread */
+                KiSwapContext(APC_LEVEL, OldThread);
+
+                /* Set idle summary bit */
+                InterlockedBitTestAndSetAffinity(&KiIdleSummary, Prcb->Number);
+            }
+            else
+            {
+                NewThread->SwapBusy = FALSE;
+            }
 
 #ifdef CONFIG_SMP
             /* Go back to DISPATCH_LEVEL */
@@ -159,30 +186,18 @@ KiIdleLoop(VOID)
         }
         else
         {
-#ifdef CONFIG_SMP
-            /* On SMP, check if there are threads in our ready queues */
-            if (Prcb->ReadySummary)
-            {
-                _enable();
-                KfRaiseIrql(SYNCH_LEVEL);
-                KiAcquirePrcbLock(Prcb);
-                NewThread = KiIdleSchedule(Prcb);
-                KiReleasePrcbLock(Prcb);
-                if (NewThread)
-                {
-                    OldThread = Prcb->CurrentThread;
-                    Prcb->NextThread = NULL;
-                    Prcb->CurrentThread = NewThread;
-                    NewThread->State = Running;
-                    KiSwapContext(APC_LEVEL, OldThread);
-                    KeLowerIrql(DISPATCH_LEVEL);
-                    continue;
-                }
-                KeLowerIrql(DISPATCH_LEVEL);
-            }
-#endif
+            Prcb->IdleHalt = 1;
+
+            /* Lower IRQL to passive */
+            KeLowerIrql(PASSIVE_LEVEL);
+
             /* Continue staying idle. Note the HAL returns with interrupts on */
             Prcb->PowerState.IdleFunction(&Prcb->PowerState);
+
+            /* Raise IRQL back to DISPATCH_LEVEL */
+            KfRaiseIrql(DISPATCH_LEVEL);
+
+            Prcb->IdleHalt = 0;
         }
     }
 }
@@ -197,7 +212,9 @@ KiSwapProcess(IN PKPROCESS NewProcess,
 #ifdef CONFIG_SMP
     /* Update active processor mask */
     InterlockedXor64((PLONG64)&NewProcess->ActiveProcessors, Pcr->Prcb.SetMember);
+    NT_ASSERT((NewProcess->ActiveProcessors & Pcr->Prcb.SetMember) != 0);
     InterlockedXor64((PLONG64)&OldProcess->ActiveProcessors, Pcr->Prcb.SetMember);
+    NT_ASSERT((OldProcess->ActiveProcessors & Pcr->Prcb.SetMember) == 0);
 #endif
 
     /* Update CR3 */

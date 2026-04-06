@@ -20,7 +20,6 @@ EXTERN KiGeneralProtectionFaultHandler:PROC
 EXTERN KiXmmExceptionHandler:PROC
 EXTERN KiDeliverApc:PROC
 EXTERN KiDpcInterruptHandler:PROC
-EXTERN KiIpiServiceRoutine:PROC
 EXTERN PsConvertToGuiThread:PROC
 EXTERN MmCreateKernelStack:PROC
 EXTERN MmDeleteKernelStack:PROC
@@ -767,7 +766,7 @@ PUBLIC KiDpcInterrupt
     ExitTrap (TF_SAVE_ALL OR TF_IRQL)
 .ENDP
 
-
+EXTERN KiIpiInterruptHandler:PROC
 PUBLIC KiIpiInterrupt
 .PROC KiIpiInterrupt
    /* No error code */
@@ -780,10 +779,10 @@ PUBLIC KiIpiInterrupt
     /* End the interrupt */
     mov dword ptr [APIC_EOI], 0
 
-    /* Call the IPI service routine */
-    lea rcx, [rbp]
-    xor edx, edx
-    call KiIpiServiceRoutine
+    call KiIpiInterruptHandler
+
+    movzx rax, byte ptr [rbp + KTRAP_FRAME_PreviousIrql]
+    mov cr8, rax
 
     /* Return */
     ExitTrap (TF_SAVE_ALL OR TF_IRQL)

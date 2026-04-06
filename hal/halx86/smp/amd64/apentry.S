@@ -1,255 +1,205 @@
 /*
- * PROJECT:     ReactOS HAL
+ * PROJECT:     ReactOS Kernel
  * LICENSE:     GPL-2.0-or-later (https://spdx.org/licenses/GPL-2.0-or-later)
- * PURPOSE:     AMD64 Application Processor (AP) entry trampoline
- * COPYRIGHT:   Copyright 2023 Justin Miller <justin.miller@reactos.org>
- *              Copyright 2025 ReactOS Team
- *
- * DESCRIPTION:
- *     Trampoline code executed by APs after receiving a SIPI from the BSP.
- *     Performs: 16-bit real mode -> 64-bit long mode transition.
- *
- *     The 16-bit section (HalpAPEntry16 .. HalpAPEntry16End) is copied
- *     to a low-memory stub by HalStartNextProcessor() in spinup.c.
- *     The data fields within that section are patched before the AP is
- *     started.
- *
- *     After the far jump to 64-bit mode, the AP switches to the kernel
- *     page tables using ProcessorState->SpecialRegisters.Cr3, then jumps
- *     to the kernel-mapped HalpAPEntry64 which loads the final GDT/IDT/TSS
- *     and jumps to KiSystemStartup.
- *
- *     Low stub layout (5 pages):
- *       Page 0 (0x0000): 16-bit trampoline + data + 64-bit bridge
- *       Page 1 (0x1000): Temporary PML4
- *       Page 2 (0x2000): Temporary PDPT
- *       Page 3 (0x3000): Temporary PD (identity maps low 1GB with 2MB pages)
- *       Page 4 (0x4000): Reserved
+ * PURPOSE:     Assembly file for real mode AP code
+ * COPYRIGHT:   Copyright 2023 Timo Kreuzer <timo.kreuzer@reactos.org>
  */
 
 #include <asm.inc>
 #include <ksamd64.inc>
 
-/*
- * Offset of a symbol relative to HalpAPEntry16 (the trampoline base).
- * Used in 16-bit mode for CS-relative addressing.
- */
-#define ZERO_OFFSET(f) (f - HalpAPEntry16)
+#define ZERO_OFFSET(f) (offset f - offset HalpAPEntry16)
+
+#ifndef _USE_ML
+.macro data32, opcode:vararg
+    .byte 0x66
+    \opcode
+.endm
+#endif
 
 PUBLIC HalpAPEntry16
 PUBLIC HalpAPEntryData
-PUBLIC HalpAPEntry64
 PUBLIC HalpAPEntry16End
 
-/* =========================================================================
- * 16-BIT REAL MODE ENTRY POINT
- *
- * AP starts here after SIPI. CS:IP = (phys_page >> 4) : 0.
- * Transitions directly from real mode to long mode.
- * ========================================================================= */
+.code64 // Workaround to be able to link this code
 
-.code16
+///////////////////////////////////////////////////////////////////////////////
+// 16-bit code
+///////////////////////////////////////////////////////////////////////////////
+
+// The following code is executed in real mode.
+// We compile it as 64-bit code, because otherwise we cannot link it.
+// To fix differences between 64-bit and 16-bt code, we need to manually
+// add the data32 (0x66) prefix to some instructions.
+// We also need to use indirect addressing, because the 64-bit assembler
+// does not support the 16-bit addressing mode.
+
 HalpAPEntry16:
+
+    /* Disable interrupts */
     cli
 
-    /* Compute flat physical base: CS << 4 */
-    mov ebp, cs
-    shl ebp, 4
+    /* Use esi = 0 for register relative addressing */
+    data32 xor esi, esi
 
-    /* Flat DS = 0 for absolute addressing */
-    xor eax, eax
-    mov ds, eax
+    /* Set up ds segment */
+    data32 mov edi, cs
+    data32 mov ds, edi
 
-    /* Load the temporary GDT (32-bit base in 16-bit mode) */
+    /* Calculate the flat base address */
+    data32 shl edi, 4
+
+    /* Enable A20 address line */
+    data32 call EnableA20
+
+    /* Set up far pointer offset for switch to 32 bit */
+    data32 lea eax, [edi + ZERO_OFFSET(APEntry32)]
+    data32 mov [esi + ZERO_OFFSET(Jump32Offset)], eax
+
+    /* Set up far pointer offset for switch to 64 bit */
+    data32 lea eax, [edi + ZERO_OFFSET(APEntry64)]
+    data32 mov [esi + ZERO_OFFSET(Jump64Offset)], eax
+
+    /* Set up temporary GDT pointer */
+    data32 lea eax, [edi + ZERO_OFFSET(TempGdt)]
+    data32 mov [esi + ZERO_OFFSET(TempGdtr_Base)], eax
+ 
+    /* Load the initial GDT */
 #ifdef _USE_ML
-    data32 lgdt fword ptr cs:[ZERO_OFFSET(TempGdtr)]
+    lgdt fword ptr [esi + ZERO_OFFSET(TempGdtr)]
 #else
-    data32 lgdt cs:[ZERO_OFFSET(TempGdtr)]
+    lgdt ds:[esi + ZERO_OFFSET(TempGdtr)]
 #endif
 
-    /* Enable PAE in CR4 (required for long mode) */
-    mov eax, cr4
-    or eax, HEX(20)            /* CR4_PAE */
-    mov cr4, eax
+    /* Set PAE and PGE: 10100000b */
+    mov rax, cr4
+    data32 or eax, HEX(00A0)
+    mov cr4, rax
 
-    /* Load temporary PML4 into CR3 */
-    mov eax, cs:[ZERO_OFFSET(APData_TempCr3)]
-    mov cr3, eax
+    /* Enable protected mode */
+    mov rax, cr0
+    data32 or eax, HEX(00000001)
+    mov cr0, rax
 
-    /* Enable Long Mode (LME) and NX in EFER */
-    mov ecx, HEX(C0000080)     /* MSR_EFER */
+    /* Long jump, 32bit address */
+    .byte HEX(66)
+    .byte HEX(EA)
+Jump32Offset:
+    .long 0
+    .short HEX(20) // Protected mode CS
+
+Empty8042:
+    .word HEX(00eb), HEX(00eb)      // jmp $+2, jmp $+2
+    in al, HEX(64)
+    cmp al, HEX(0ff)                // legacy-free machine without keyboard
+    jz Empty8042_ret                // controllers on Intel Macs read back 0xFF
+    test al, 2
+    jnz Empty8042
+Empty8042_ret:
+    data32 ret
+
+EnableA20:
+    data32 call Empty8042
+    mov al, HEX(0D1)                // command write
+    out HEX(064), al
+    data32 call Empty8042
+    mov al, HEX(0DF)                // A20 on
+    out HEX(060), al
+    data32 call Empty8042
+    mov al, HEX(0FF)                // pulse output port
+    out HEX(064), al
+    data32 call Empty8042
+    data32 ret
+
+.align 8
+TempGdt:
+    .word HEX(0000), HEX(0000), HEX(0000), HEX(0000) /* 00: NULL descriptor */
+    .word HEX(0000), HEX(0000), HEX(0000), HEX(0000) /* 08:  */
+    .word HEX(0000), HEX(0000), HEX(9B00), HEX(0020) /* 10: long mode CS */
+    .word HEX(FFFF), HEX(0000), HEX(9300), HEX(00CF) /* 18: long mode DS */
+    .word HEX(FFFF), HEX(0000), HEX(9B00), HEX(00CF) /* 20: protected mode CS */
+    .word HEX(FFFF), HEX(0000), HEX(9300), HEX(00CF) /* 28: protected mode DS */
+
+/* GDT table pointer */
+TempGdtr:
+    .word HEX(2F)       /* Limit */
+TempGdtr_Base:
+    .long 0 /* Base */
+
+///////////////////////////////////////////////////////////////////////////////
+// 32-bit code
+///////////////////////////////////////////////////////////////////////////////
+
+APEntry32:
+
+    /* Load protected mode DS */
+    mov eax, HEX(28)
+    mov ds, eax
+
+    /* Set up the long mode page table in cr3 */
+    lea eax, [rdi + PAGE_SIZE]
+    mov cr3, rax
+
+    /* Enable EFER.LME (long mode enable) and NXE (no-execute enable) */
+    mov ecx, MSR_EFER
     rdmsr
-    or eax, HEX(900)           /* EFER_LME | EFER_NXE */
+    or eax, HEX(00000900)
     wrmsr
 
-    /* Enable paging and protection -> activates long mode */
-    mov eax, cr0
-    or eax, HEX(80000001)      /* CR0_PG | CR0_PE */
-    mov cr0, eax
+    /* Enable paging for long mode */
+    mov rax, cr0
+    or eax, HEX(80000000)
+    mov cr0, rax
 
-    /*
-     * Far jump to 64-bit code segment (selector 0x08 in TempGdt).
-     * The 32-bit offset at APData_FarJmp32Target is patched by spinup.c
-     * to the physical address of the 64-bit bridge code in the low stub.
-     */
-.align 4
-    .byte HEX(66)              /* Operand size override */
-    .byte HEX(EA)              /* Far jump opcode */
-APData_FarJmp32Target:
-    .long 0                    /* 32-bit offset - patched by spinup.c */
-    .short HEX(08)             /* Segment selector: 64-bit code */
-
-/*
- * Temporary GDT for the mode transition.
- * Entry 0 (0x00): Null descriptor
- * Entry 1 (0x08): 64-bit code (L=1, D=0, P=1, DPL=0, Type=Execute/Read)
- * Entry 2 (0x10): Data (G=1, D/B=1, P=1, DPL=0, Type=Read/Write)
- */
-.align 4
-TempGdtr:
-    .short (TempGdtEnd - TempGdt - 1)  /* Limit */
-APData_TempGdtrBase:
-    .long 0                             /* Base - patched by spinup.c */
-
-TempGdt:
-    .quad 0
-    .short HEX(FFFF)
-    .short 0
-    .byte 0
-    .byte HEX(9A)
-    .byte HEX(AF)
-    .byte 0
-    .short HEX(FFFF)
-    .short 0
-    .byte 0
-    .byte HEX(92)
-    .byte HEX(CF)
-    .byte 0
-TempGdtEnd:
-
-/*
- * AP_ENTRY_DATA: Data fields filled by spinup.c.
- * Exported as HalpAPEntryData so spinup.c can find the base.
- * Field offsets from HalpAPEntryData must match AP_ENTRY_DATA in spinup.c.
- */
-
-/* Temporary CR3: physical address of PML4, patched by spinup.c */
-APData_TempCr3:
+    /* Long jump to 64 bit segment to activate long mode */
+    .byte HEX(EA)
+Jump64Offset:
     .long 0
+    .short HEX(10) // Long mode CS
 
+
+///////////////////////////////////////////////////////////////////////////////
+// 64-bit code
+///////////////////////////////////////////////////////////////////////////////
+
+APEntry64:
+
+    /* Load long mode segments */
+    mov ax, KGDT64_R0_DATA
+    mov ds, ax
+    mov es, ax
+    mov fs, ax
+    mov gs, ax
+    mov ss, ax
+
+    /* Load ProcessorState pointer */
+    mov rsi, [rdi + ZERO_OFFSET(ProcessorState)]
+
+    /* Load the final GDT and IDT from the ProcessorState */
+    lgdt fword ptr [rsi + PsGdtr]
+    lidt fword ptr [rsi + PsIdtr]
+
+    /* Set LTR */
+    mov ax, KGDT64_SYS_TSS
+    ltr ax
+
+    /* Set up the stack */
+    mov rsp, [rsi + PsContextFrame + CxRsp]
+
+    /* Set parameters and jump to entry point */
+    mov rcx, [rsi + PsContextFrame + CxRcx]
+    mov rdx, [rsi + PsContextFrame + CxRdx]
+    mov r8, [rsi + PsContextFrame + CxR8]
+    mov r9, [rsi + PsContextFrame + CxR9]
+    jmp qword ptr [rsi + PsContextFrame + CxRip]
+
+// Layout in sync with AP_ENTRY_DATA in spinup.c
+.align 8
 HalpAPEntryData:
-/* +0x00: ProcessorState pointer (PKPROCESSOR_STATE, kernel VA) */
-APData_ProcessorState:
-    .quad 0
-/* +0x08: Entry64 virtual address (kernel VA of HalpAPEntry64) */
-APData_Entry64VA:
-    .quad 0
-/* +0x10: Kernel CR3 */
-APData_KernelCr3:
+ProcessorState:
     .quad 0
 
 HalpAPEntry16End:
-.endcode16
-
-/* =========================================================================
- * 64-BIT LONG MODE ENTRY POINT
- *
- * Reached from the kernel address space after the bridge switches CR3.
- * RSI = ProcessorState pointer (set by bridge).
- *
- * Loads the kernel GDT, IDT, TSS, debug registers, stack, and jumps
- * to KiSystemStartup.
- * ========================================================================= */
-
-.code64
-
-HalpAPEntry64:
-    /*
-     * At this point we are in 64-bit mode with temporary page tables
-     * that include both identity-mapped low memory and kernel VA mappings.
-     * RSI holds the ProcessorState pointer (set by bridge stub).
-     * First, switch to the kernel's real page tables.
-     */
-
-    /* Load CR3 from ProcessorState - switch to kernel page tables.
-     * Safe because we are executing at kernel VA, which is mapped
-     * in both the temporary and kernel page tables. */
-    mov rax, [rsi + PsCr3]
-    mov cr3, rax
-
-    /* Load CR4 from ProcessorState */
-    mov rax, [rsi + PsCr4]
-    mov cr4, rax
-
-    /* Load the kernel's GDT and IDT.
-     * KDESCRIPTOR has: Pad[3] (6 bytes), Limit (2 bytes), Base (8 bytes).
-     * lgdt/lidt expect the Limit:Base pair starting at Pad[3]+Limit,
-     * which is at offset PsGdtr + 6. */
-    lgdt [rsi + PsGdtr + 6]
-    lidt [rsi + PsIdtr + 6]
-
-    /* Load debug registers */
-    mov rax, [rsi + PsKernelDr0]
-    mov dr0, rax
-    mov rax, [rsi + PsKernelDr1]
-    mov dr1, rax
-    mov rax, [rsi + PsKernelDr2]
-    mov dr2, rax
-    mov rax, [rsi + PsKernelDr3]
-    mov dr3, rax
-    mov rax, [rsi + PsKernelDr6]
-    mov dr6, rax
-    mov rax, [rsi + PsKernelDr7]
-    mov dr7, rax
-
-    /* Load TSS selector */
-    ltr word ptr [rsi + PsTr]
-
-    /* Set data segments to kernel data selector */
-    mov ax, HEX(18)            /* KGDT64_R0_DATA */
-    mov ds, ax
-    mov es, ax
-    mov ss, ax
-    xor ax, ax
-    mov fs, ax
-    mov gs, ax
-
-    /* Load the kernel stack */
-    mov rsp, [rsi + PsContextFrame + CxRsp]
-
-    /* Load the entry point (KiSystemStartup) */
-    mov rax, [rsi + PsContextFrame + CxRip]
-
-    /*
-     * Load RCX with the first argument for KiSystemStartup.
-     * On AMD64, the first parameter is passed in RCX.
-     * mproc.c stores KeLoaderBlock in ContextFrame.Rcx.
-     */
-    mov rcx, [rsi + PsContextFrame + CxRcx]
-
-    /* Clear remaining GP registers for a clean entry state */
-    xor rdx, rdx
-    xor r8, r8
-    xor r9, r9
-    xor r10, r10
-    xor r11, r11
-    xor rdi, rdi
-    xor rbp, rbp
-    xor rbx, rbx
-    xor r12, r12
-    xor r13, r13
-    xor r14, r14
-    xor r15, r15
-    xor rsi, rsi
-
-    /*
-     * The x64 calling convention requires that on function entry the stack
-     * is aligned to 16 bytes minus 8 (i.e., RSP mod 16 == 8) to account
-     * for the return address push. We subtract 8 for the shadow space
-     * alignment, then push a dummy return address.
-     */
-    sub rsp, HEX(28)          /* Shadow space (32 bytes) + alignment */
-    mov [rsp], rax             /* Store target as "return address" at [rsp] */
-    jmp rax                    /* Jump to KiSystemStartup(KeLoaderBlock) */
+    nop
 
 END

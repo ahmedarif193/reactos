@@ -547,14 +547,6 @@ KiGetCacheInformation(VOID)
 
 VOID
 NTAPI
-KeFlushCurrentTb(VOID)
-{
-    /* Flush the TLB by resetting CR3 */
-    __writecr3(__readcr3());
-}
-
-VOID
-NTAPI
 KiRestoreProcessorControlState(PKPROCESSOR_STATE ProcessorState)
 {
     /* Restore the CR registers */
@@ -669,75 +661,6 @@ KiRestoreProcessorState(
 
     /* Restore control registers */
     KiRestoreProcessorControlState(&Prcb->ProcessorState);
-}
-
-/*
- * KiFlushTbBroadcastWorker
- *
- * Broadcast function called on ALL CPUs (including self) to flush TLB.
- * Used by KeFlushEntireTb via KeIpiGenericCall.
- */
-static
-ULONG_PTR
-NTAPI
-KiFlushTbBroadcastWorker(IN ULONG_PTR Argument)
-{
-    UNREFERENCED_PARAMETER(Argument);
-
-    /* Flush the TB for the current CPU */
-    KeFlushCurrentTb();
-
-    return 0;
-}
-
-VOID
-NTAPI
-KeFlushEntireTb(IN BOOLEAN Invalid,
-                IN BOOLEAN AllProcessors)
-{
-    KIRQL OldIrql;
-
-    /* Raise the IRQL for the TB Flush */
-    OldIrql = KeRaiseIrqlToSynchLevel();
-
-#ifdef CONFIG_SMP
-    /*
-     * On SMP, use KeIpiGenericCall to synchronously flush TLBs on all
-     * processors. This ensures that all CPUs have completed the flush
-     * before we return, which is critical for correctness when page
-     * table entries have been modified.
-     *
-     * The previous implementation only sent IPI_DPC which was
-     * asynchronous and did not guarantee immediate TLB invalidation
-     * on remote CPUs. This caused race conditions where remote CPUs
-     * could access stale page table entries (e.g., seeing NULL PEB
-     * during process initialization because demand-zero page mappings
-     * were not flushed from remote TLBs).
-     *
-     * KeIpiGenericCall manages IRQL internally -- it will raise to
-     * IPI_LEVEL for the broadcast and lower back when done. Since we
-     * are already at SYNCH_LEVEL (>= DISPATCH_LEVEL), the IRQL
-     * management is safe.
-     */
-    if (AllProcessors && KeNumberProcessors > 1)
-    {
-        /* Broadcast TLB flush to all processors synchronously.
-         * KeIpiGenericCall saves/restores IRQL internally. We pass
-         * SYNCH_LEVEL as the saved IRQL since that's where we are. */
-        KeLowerIrql(OldIrql);
-        KeIpiGenericCall(KiFlushTbBroadcastWorker, 0);
-        OldIrql = KeRaiseIrqlToSynchLevel();
-    }
-    else
-#endif
-    {
-        /* UP path or local-only flush: just flush this CPU */
-        KeFlushCurrentTb();
-    }
-
-    /* Update the flush stamp and return to original IRQL */
-    InterlockedExchangeAdd(&KiTbFlushTimeStamp, 1);
-    KeLowerIrql(OldIrql);
 }
 
 NTSTATUS
