@@ -45,7 +45,8 @@ IopCreateArcNames(IN PLOADER_PARAMETER_BLOCK LoaderBlock)
     BOOLEAN FoundBoot = FALSE;
     UNICODE_STRING SystemDevice, LoaderPathNameW, BootDeviceName;
     PARC_DISK_INFORMATION ArcDiskInfo = LoaderBlock->ArcDiskInformation;
-    ANSI_STRING ArcString, LanmanRedirector, LoaderPathNameA;
+    ANSI_STRING ArcSystemString, ArcString, LanmanRedirector, LoaderPathNameA;
+    BOOLEAN RamdiskBoot = (_strnicmp(LoaderBlock->ArcBootDeviceName, "ramdisk(0)", 10) == 0);
 
     /* Check if we only have one disk on the machine */
     SingleDisk = (ArcDiskInfo->DiskSignatureListHead.Flink->Flink ==
@@ -139,6 +140,13 @@ IopCreateArcNames(IN PLOADER_PARAMETER_BLOCK LoaderBlock)
     if (NT_SUCCESS(Status) && !FoundBoot)
     {
         Status = IopCreateArcNamesCd(LoaderBlock);
+    }
+
+    /* For ramdisk boots, the ARC name symlink was already created by IopStartRamdisk,
+     * so disk/CD enumeration failure is acceptable */
+    if (!FoundBoot && RamdiskBoot)
+    {
+        Status = STATUS_SUCCESS;
     }
 
     /* Return success */
