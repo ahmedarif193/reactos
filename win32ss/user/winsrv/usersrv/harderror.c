@@ -46,7 +46,15 @@ RtlLoadUnicodeString(
     UINT Length;
 
     /* Try to load the string from the resource */
+    DPRINT1("WINSRV: RtlLoadUnicodeString enter instance=%p id=%u target=%p\n",
+            hInstance,
+            uID,
+            pUnicodeString);
     Length = LoadStringW(hInstance, uID, (LPWSTR)&pUnicodeString->Buffer, 0);
+    DPRINT1("WINSRV: RtlLoadUnicodeString LoadStringW id=%u length=%u buffer=%p\n",
+            uID,
+            Length,
+            pUnicodeString->Buffer);
     if (Length == 0)
     {
         /* If the resource string was not found, use the fallback default one */
@@ -58,6 +66,11 @@ RtlLoadUnicodeString(
         pUnicodeString->MaximumLength = (USHORT)(Length * sizeof(WCHAR));
         pUnicodeString->Length = pUnicodeString->MaximumLength;
     }
+    DPRINT1("WINSRV: RtlLoadUnicodeString done id=%u length=%u max=%u buffer=%p\n",
+            uID,
+            pUnicodeString->Length,
+            pUnicodeString->MaximumLength,
+            pUnicodeString->Buffer);
 }
 
 
@@ -1191,7 +1204,11 @@ UserInitHardErrorsCache(VOID)
     NTSTATUS Status;
     LCID CurrentUserLCID = 0;
 
+    DPRINT1("WINSRV: UserInitHardErrorsCache NtQueryDefaultLocale enter\n");
     Status = NtQueryDefaultLocale(TRUE, &CurrentUserLCID);
+    DPRINT1("WINSRV: UserInitHardErrorsCache NtQueryDefaultLocale status=%lx lcid=%lx\n",
+            Status,
+            CurrentUserLCID);
     if (!NT_SUCCESS(Status) || CurrentUserLCID == 0)
     {
         /* Fall back to english locale */
@@ -1202,28 +1219,26 @@ UserInitHardErrorsCache(VOID)
     if (g_CurrentUserLangId == LANGIDFROMLCID(CurrentUserLCID))
     {
         /* The current lang ID and the hard error strings have already been cached */
+        DPRINT1("WINSRV: UserInitHardErrorsCache cache hit lang=%x\n", g_CurrentUserLangId);
         return;
     }
 
-    /* Load the strings using the current system locale */
-    RtlLoadUnicodeString(UserServerDllInstance, IDS_SEVERITY_SUCCESS,
-                         &g_SuccessU, L"Success");
-    RtlLoadUnicodeString(UserServerDllInstance, IDS_SEVERITY_INFORMATIONAL,
-                         &g_InformationU, L"System Information");
-    RtlLoadUnicodeString(UserServerDllInstance, IDS_SEVERITY_WARNING,
-                         &g_WarningU, L"System Warning");
-    RtlLoadUnicodeString(UserServerDllInstance, IDS_SEVERITY_ERROR,
-                         &g_ErrorU, L"System Error");
-    // "unknown software exception"
-    RtlLoadUnicodeString(UserServerDllInstance, IDS_SYSTEM_PROCESS,
-                         &g_SystemProcessU, L"System Process");
-    RtlLoadUnicodeString(UserServerDllInstance, IDS_OK_TERMINATE_PROGRAM,
-                         &g_OKTerminateU, L"Click on OK to terminate the program.");
-    RtlLoadUnicodeString(UserServerDllInstance, IDS_CANCEL_DEBUG_PROGRAM,
-                         &g_CancelDebugU, L"Click on CANCEL to debug the program.");
+    /*
+     * Early CSRSS bootstrap must not pull USER32 resource loading into the
+     * loader path before USER is fully initialized. Use the fallback strings
+     * here so hard-error text initialization stays loader-safe.
+     */
+    RtlInitUnicodeString(&g_SuccessU, L"Success");
+    RtlInitUnicodeString(&g_InformationU, L"System Information");
+    RtlInitUnicodeString(&g_WarningU, L"System Warning");
+    RtlInitUnicodeString(&g_ErrorU, L"System Error");
+    RtlInitUnicodeString(&g_SystemProcessU, L"System Process");
+    RtlInitUnicodeString(&g_OKTerminateU, L"Click on OK to terminate the program.");
+    RtlInitUnicodeString(&g_CancelDebugU, L"Click on CANCEL to debug the program.");
 
     /* Remember that we cached the hard error strings */
     g_CurrentUserLangId = LANGIDFROMLCID(CurrentUserLCID);
+    DPRINT1("WINSRV: UserInitHardErrorsCache done lang=%x\n", g_CurrentUserLangId);
 }
 
 /* EOF */

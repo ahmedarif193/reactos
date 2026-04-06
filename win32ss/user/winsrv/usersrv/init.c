@@ -237,8 +237,13 @@ CSR_SERVER_DLL_INIT(UserServerDllInitialization)
 {
     NTSTATUS Status;
 
+    DPRINT1("WINSRV: UserServerDllInitialization entry LoadedServerDll=%p handle=%p\n",
+            LoadedServerDll,
+            LoadedServerDll ? LoadedServerDll->ServerHandle : NULL);
+
     /* Initialize the memory */
     UserServerHeap = RtlGetProcessHeap();
+    DPRINT1("WINSRV: step 1 UserServerHeap=%p\n", UserServerHeap);
 
     /* Setup the DLL Object */
     LoadedServerDll->ApiBase = USERSRV_FIRST_API_NUMBER;
@@ -255,13 +260,18 @@ CSR_SERVER_DLL_INIT(UserServerDllInitialization)
     LoadedServerDll->ShutdownProcessCallback = UserClientShutdown;
 
     UserServerDllInstance = LoadedServerDll->ServerHandle;
+    DPRINT1("WINSRV: step 2 DLL object ready instance=%p\n", UserServerDllInstance);
 
     /* Create the power request event */
+    DPRINT1("WINSRV: step 3 NtCreateEvent(power) enter\n");
     Status = NtCreateEvent(&ghPowerRequestEvent,
                            EVENT_ALL_ACCESS,
                            NULL,
                            SynchronizationEvent,
                            FALSE);
+    DPRINT1("WINSRV: step 3 NtCreateEvent(power) status=%lx handle=%p\n",
+            Status,
+            ghPowerRequestEvent);
     if (!NT_SUCCESS(Status))
     {
         DPRINT1("Power request event creation failed with Status 0x%08x\n", Status);
@@ -269,11 +279,15 @@ CSR_SERVER_DLL_INIT(UserServerDllInitialization)
     }
 
     /* Create the media request event */
+    DPRINT1("WINSRV: step 4 NtCreateEvent(media) enter\n");
     Status = NtCreateEvent(&ghMediaRequestEvent,
                            EVENT_ALL_ACCESS,
                            NULL,
                            SynchronizationEvent,
                            FALSE);
+    DPRINT1("WINSRV: step 4 NtCreateEvent(media) status=%lx handle=%p\n",
+            Status,
+            ghMediaRequestEvent);
     if (!NT_SUCCESS(Status))
     {
         DPRINT1("Media request event creation failed with Status 0x%08x\n", Status);
@@ -281,15 +295,21 @@ CSR_SERVER_DLL_INIT(UserServerDllInitialization)
     }
 
     /* Set the process creation notify routine for BASE */
+    DPRINT1("WINSRV: step 5 BaseSetProcessCreateNotify enter\n");
     BaseSetProcessCreateNotify(NtUserNotifyProcessCreate);
+    DPRINT1("WINSRV: step 5 BaseSetProcessCreateNotify done\n");
 
     /* Initialize the hard errors cache */
+    DPRINT1("WINSRV: step 6 UserInitHardErrorsCache enter\n");
     UserInitHardErrorsCache();
+    DPRINT1("WINSRV: step 6 UserInitHardErrorsCache done\n");
 
     /* Initialize the kernel mode subsystem */
+    DPRINT1("WINSRV: step 7 NtUserInitialize enter\n");
     Status = NtUserInitialize(USER_VERSION,
                               ghPowerRequestEvent,
                               ghMediaRequestEvent);
+    DPRINT1("WINSRV: step 7 NtUserInitialize status=%lx\n", Status);
     if (!NT_SUCCESS(Status))
     {
         DPRINT1("NtUserInitialize failed with Status 0x%08x\n", Status);
@@ -297,6 +317,7 @@ CSR_SERVER_DLL_INIT(UserServerDllInitialization)
     }
 
     /* All done */
+    DPRINT1("WINSRV: UserServerDllInitialization done\n");
     return STATUS_SUCCESS;
 }
 

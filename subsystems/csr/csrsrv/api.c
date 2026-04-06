@@ -1035,30 +1035,55 @@ CsrConnectToUser(VOID)
         /* Get the DLL Handle for user32.dll */
         RtlInitAnsiString(&DllName, "user32");
         RtlAnsiStringToUnicodeString(&TempName, &DllName, TRUE);
+        DPRINT1("CSRSS: CsrConnectToUser LdrGetDllHandle(%wZ) enter\n", &TempName);
         Status = LdrGetDllHandle(NULL,
                                  NULL,
                                  &TempName,
                                  &hUser32);
+        DPRINT1("CSRSS: CsrConnectToUser LdrGetDllHandle(%wZ) status=%lx handle=%p\n",
+                &TempName,
+                Status,
+                hUser32);
+
+        /* If USER32 has not been loaded yet, load it now that USER is initialized. */
+        if (!NT_SUCCESS(Status))
+        {
+            DPRINT1("CSRSS: CsrConnectToUser LdrLoadDll(%wZ) enter\n", &TempName);
+            Status = LdrLoadDll(NULL, 0, &TempName, &hUser32);
+            DPRINT1("CSRSS: CsrConnectToUser LdrLoadDll(%wZ) status=%lx handle=%p\n",
+                    &TempName,
+                    Status,
+                    hUser32);
+        }
         RtlFreeUnicodeString(&TempName);
 
         /* If we got the handle, get the Client Thread Startup Entrypoint */
         if (NT_SUCCESS(Status))
         {
             RtlInitAnsiString(&StartupName,"ClientThreadSetup");
+            DPRINT1("CSRSS: CsrConnectToUser LdrGetProcedureAddress(user32!%Z) enter\n",
+                    &StartupName);
             Status = LdrGetProcedureAddress(hUser32,
                                             &StartupName,
                                             0,
                                             (PVOID)&CsrClientThreadSetup);
+            DPRINT1("CSRSS: CsrConnectToUser LdrGetProcedureAddress(user32!%Z) status=%lx proc=%p\n",
+                    &StartupName,
+                    Status,
+                    CsrClientThreadSetup);
         }
     }
 
     /* Connect to user32 */
     _SEH2_TRY
     {
+        DPRINT1("CSRSS: CsrConnectToUser callback enter proc=%p\n", CsrClientThreadSetup);
         Connected = CsrClientThreadSetup();
+        DPRINT1("CSRSS: CsrConnectToUser callback returned connected=%d\n", Connected);
     }
     _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
     {
+        DPRINT1("CSRSS: CsrConnectToUser callback exception=%lx\n", _SEH2_GetExceptionCode());
         Connected = FALSE;
     }
     _SEH2_END;

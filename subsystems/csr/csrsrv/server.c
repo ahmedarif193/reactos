@@ -154,7 +154,15 @@ CsrLoadServerDll(IN PCHAR DllString,
     if (ServerId != CSRSRV_SERVERDLL_INDEX)
     {
         /* Load the DLL */
+        DPRINT1("CSRSS: CsrLoadServerDll[%lu] LdrLoadDll(%wZ) enter\n",
+                ServerId,
+                &TempString);
         Status = LdrLoadDll(NULL, 0, &TempString, &hServerDll);
+        DPRINT1("CSRSS: CsrLoadServerDll[%lu] LdrLoadDll(%wZ) status=%lx handle=%p\n",
+                ServerId,
+                &TempString,
+                Status,
+                hServerDll);
         if (!NT_SUCCESS(Status))
         {
             /* Setup error parameters */
@@ -184,6 +192,10 @@ CsrLoadServerDll(IN PCHAR DllString,
         if (hServerDll) LdrUnloadDll(hServerDll);
         return STATUS_NO_MEMORY;
     }
+    DPRINT1("CSRSS: CsrLoadServerDll[%lu] allocated ServerDll=%p size=%lu\n",
+            ServerId,
+            ServerDll,
+            Size);
 
     /* Set up the Object */
     ServerDll->Length = Size;
@@ -207,10 +219,20 @@ CsrLoadServerDll(IN PCHAR DllString,
                           EntryPoint ? EntryPoint : "ServerDllInitialization");
 
         /* Get a pointer to it */
+        DPRINT1("CSRSS: CsrLoadServerDll[%lu] LdrGetProcedureAddress(%Z!%Z) enter\n",
+                ServerId,
+                &DllName,
+                &EntryPointString);
         Status = LdrGetProcedureAddress(hServerDll,
                                         &EntryPointString,
                                         0,
                                         (PVOID)&ServerDllInitProcedure);
+        DPRINT1("CSRSS: CsrLoadServerDll[%lu] LdrGetProcedureAddress(%Z!%Z) status=%lx proc=%p\n",
+                ServerId,
+                &DllName,
+                &EntryPointString,
+                Status,
+                ServerDllInitProcedure);
     }
     else
     {
@@ -226,6 +248,11 @@ CsrLoadServerDll(IN PCHAR DllString,
     if (NT_SUCCESS(Status))
     {
         /* Call the Server DLL entrypoint */
+        DPRINT1("CSRSS: CsrLoadServerDll[%lu] callback enter dll=%Z entry=%Z proc=%p\n",
+                ServerId,
+                &DllName,
+                &EntryPointString,
+                ServerDllInitProcedure);
         _SEH2_TRY
         {
             Status = ServerDllInitProcedure(ServerDll);
@@ -239,6 +266,9 @@ CsrLoadServerDll(IN PCHAR DllString,
 #endif
         }
         _SEH2_END;
+        DPRINT1("CSRSS: CsrLoadServerDll[%lu] callback done status=%lx\n",
+                ServerId,
+                Status);
 
         if (NT_SUCCESS(Status))
         {
@@ -262,6 +292,11 @@ CsrLoadServerDll(IN PCHAR DllString,
 
     if (!NT_SUCCESS(Status))
     {
+        DPRINT1("CSRSS: CsrLoadServerDll[%lu] failure cleanup status=%lx handle=%p obj=%p\n",
+                ServerId,
+                Status,
+                hServerDll,
+                ServerDll);
         /* Server Init failed, unload it */
         if (hServerDll) LdrUnloadDll(hServerDll);
 

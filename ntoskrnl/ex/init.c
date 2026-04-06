@@ -1653,6 +1653,9 @@ Phase1InitializationDiscard(IN PVOID Context)
 
     /* Start Application Processors */
     KeStartAllProcessors();
+
+    /* Match the branch SMP startup behavior for system worker/process affinity. */
+    KeSetAffinityProcess(&PsInitialSystemProcess->Pcb, KeActiveProcessors);
 #endif
 
     /* Initialize all processors */

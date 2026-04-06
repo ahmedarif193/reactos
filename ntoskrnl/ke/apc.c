@@ -271,11 +271,11 @@ KiInsertQueueApc(IN PKAPC Apc,
                 KiUnwaitThread(Thread, Status, PriorityBoost);
             }
 
+            /* Send IPI before releasing the lock to keep the target thread stable. */
+            KiRequestApcInterrupt(RequestInterrupt, Thread->NextProcessor);
+
             /* Release dispatcher lock */
             KiReleaseDispatcherLockFromSynchLevel();
-
-            /* Check if an interrupt was requested */
-            KiRequestApcInterrupt(RequestInterrupt, Thread->NextProcessor);
         }
     }
 }

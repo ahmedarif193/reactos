@@ -105,6 +105,7 @@ ExfWakePushLock(PEX_PUSH_LOCK PushLock,
 
             /* Someone changed the value behind our back, update it*/
             OldValue = NewValue;
+            YieldProcessor();
         }
 
         /* Save the First Block */
@@ -982,6 +983,7 @@ ExfReleasePushLockShared(PEX_PUSH_LOCK PushLock)
 
         /* Did it enter a wait state? */
         OldValue = NewValue;
+        YieldProcessor();
     }
 
     /* Ok, we do know someone is waiting on it. Are there more then one? */
@@ -1042,6 +1044,10 @@ ExfReleasePushLockShared(PEX_PUSH_LOCK PushLock)
                                                              NewValue.Ptr,
                                                              OldValue.Ptr);
             if (NewValue.Value == OldValue.Value) return;
+
+            /* CMPXCHG failed - update and yield to reduce SMP contention */
+            OldValue = NewValue;
+            YieldProcessor();
         }
         else
         {
@@ -1061,7 +1067,13 @@ ExfReleasePushLockShared(PEX_PUSH_LOCK PushLock)
             NewValue.Ptr = InterlockedCompareExchangePointer(&PushLock->Ptr,
                                                              NewValue.Ptr,
                                                              OldValue.Ptr);
-            if (NewValue.Value != OldValue.Value) continue;
+            if (NewValue.Value != OldValue.Value)
+            {
+                /* CMPXCHG failed - update and yield to reduce SMP contention */
+                OldValue = NewValue;
+                YieldProcessor();
+                continue;
+            }
 
             /* The write was successful. The pushlock is Unlocked and Waking */
             ExfWakePushLock(PushLock, WakeValue);
