@@ -2435,7 +2435,9 @@ UserFault:
 
             /* Not supported */
             ASSERT(ProtoPte == NULL);
+#if (NTDDI_VERSION < NTDDI_LONGHORN)
             ASSERT(CurrentThread->ApcNeeded == 0);
+#endif
 
             /* Drop the working set lock */
             MiUnlockProcessWorkingSet(CurrentProcess, CurrentThread);
@@ -2605,7 +2607,9 @@ UserFault:
         if (Status != STATUS_SUCCESS)
         {
             /* Not supported */
+#if (NTDDI_VERSION < NTDDI_LONGHORN)
             ASSERT(CurrentThread->ApcNeeded == 0);
+#endif
 
             /* Drop the working set lock */
             MiUnlockProcessWorkingSet(CurrentProcess, CurrentThread);

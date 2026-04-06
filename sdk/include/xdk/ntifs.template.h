@@ -1243,6 +1243,16 @@ typedef struct _SRV_OPEN_ECP_CONTEXT {
   BOOLEAN OplockFinalState;
 } SRV_OPEN_ECP_CONTEXT, *PSRV_OPEN_ECP_CONTEXT;
 
+#define SRV_OPEN_ECP_CONTEXT_VERSION_2  2
+
+typedef enum _SRV_INSTANCE_TYPE {
+  SrvInstanceTypeUndefined = 0,
+  SrvInstanceTypePrimary,
+  SrvInstanceTypeCsv,
+  SrvInstanceTypeSBL,
+  SrvInstanceTypeSR
+} SRV_INSTANCE_TYPE;
+
 #endif /* (NTDDI_VERSION >= NTDDI_WIN7) */
 
 #define PIN_WAIT                        (1)

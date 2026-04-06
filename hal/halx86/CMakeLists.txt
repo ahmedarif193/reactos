@@ -1,7 +1,8 @@
 
 add_definitions(
     -D_NTHALDLL_
-    -D_NTHAL_)
+    -D_NTHAL_
+    -DNTDDI_VERSION=${REACTOS_TARGET_NTDDI})
 
 include_directories(
     include

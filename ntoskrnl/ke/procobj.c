@@ -134,8 +134,13 @@ KeInitializeProcess(IN OUT PKPROCESS Process,
     Process->Affinity = Affinity;
     Process->BasePriority = (CHAR)Priority;
     Process->QuantumReset = 6;
+#if (NTDDI_VERSION >= NTDDI_LONGHORN)
+    Process->DirectoryTableBase = DirectoryTableBase[0];
+    Process->Unused0 = DirectoryTableBase[1];
+#else
     Process->DirectoryTableBase[0] = DirectoryTableBase[0];
     Process->DirectoryTableBase[1] = DirectoryTableBase[1];
+#endif
     Process->AutoAlignment = Enable;
 #if defined(_M_IX86)
     Process->IopmOffset = KiComputeIopmOffset(IO_ACCESS_MAP_NONE);
