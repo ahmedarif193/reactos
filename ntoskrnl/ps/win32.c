@@ -53,7 +53,12 @@ PsConvertToGuiThread(VOID)
     if (!PspW32ProcessCallout) return STATUS_ACCESS_DENIED;
 
     /* Make sure it's not already win32 */
-#if defined(_WIN64) && (NTDDI_VERSION >= NTDDI_WIN7)
+#if defined(_WIN64) && (NTDDI_VERSION >= NTDDI_LONGHORN)
+    /* TODO(NT6.1): KTHREAD->ServiceTable was removed on amd64 starting at Vista
+     * (see ndk/ketypes.h). The intent of the original check was "is this thread
+     * already attached to the shadow (Win32) descriptor table?". We approximate
+     * that with the GuiThread flag, but the equivalence has not been validated
+     * against real NT6.x semantics. */
     if (Thread->Tcb.GuiThread)
 #else
     if (Thread->Tcb.ServiceTable != KeServiceDescriptorTable)
@@ -94,8 +99,11 @@ PsConvertToGuiThread(VOID)
     if (!NT_SUCCESS(Status)) return Status;
 
     /* Set the new service table */
-#if defined(_WIN64) && (NTDDI_VERSION >= NTDDI_WIN7)
-    /* At Win7+ amd64, ServiceTable removed; use GuiThread flag */
+#if defined(_WIN64) && (NTDDI_VERSION >= NTDDI_LONGHORN)
+    /* TODO(NT6.1): see comment above — at Vista+ amd64 KTHREAD->ServiceTable was
+     * removed, so we just flip GuiThread to mark the thread as attached to the
+     * shadow descriptor table. The actual descriptor lookup happens in
+     * ke/amd64/traphandler.c via KeServiceDescriptorTable[Shadow]. */
     Thread->Tcb.GuiThread = TRUE;
 #else
     Thread->Tcb.ServiceTable = KeServiceDescriptorTableShadow;
@@ -107,7 +115,9 @@ PsConvertToGuiThread(VOID)
     if (!NT_SUCCESS(Status))
     {
         /* Revert our table */
-#if defined(_WIN64) && (NTDDI_VERSION >= NTDDI_WIN7)
+#if defined(_WIN64) && (NTDDI_VERSION >= NTDDI_LONGHORN)
+        /* TODO(NT6.1): roll back the GuiThread mark since the win32k callout
+         * failed. Equivalent to restoring ServiceTable on the legacy path. */
         Thread->Tcb.GuiThread = FALSE;
 #else
         Thread->Tcb.ServiceTable = KeServiceDescriptorTable;

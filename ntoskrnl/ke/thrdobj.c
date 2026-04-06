@@ -816,8 +816,13 @@ KeInitThread(IN OUT PKTHREAD Thread,
     KeInitializeSpinLock(&Thread->ThreadLock);
 
     /* Setup the Service Descriptor Table for Native Calls */
-#if defined(_WIN64) && (NTDDI_VERSION >= NTDDI_WIN7)
-    /* ServiceTable removed from KTHREAD on amd64 at Win7+; handled via GuiThread flag */
+#if defined(_WIN64) && (NTDDI_VERSION >= NTDDI_LONGHORN)
+    /* TODO(NT6.1): ServiceTable was removed from KTHREAD on amd64 starting at Vista
+     * (per ndk/ketypes.h KTHREAD definition). Real NT routes the syscall table via
+     * KeServiceDescriptorTable[Shadow] + Thread->GuiThread flag instead. We currently
+     * just skip the per-thread assignment here so the build compiles for NT6.x x64,
+     * but the actual GuiThread plumbing for the descriptor lookup needs to be wired
+     * up properly. See traphandler.c for the matching read-side TODOs. */
 #else
     Thread->ServiceTable = KeServiceDescriptorTable;
 #endif
