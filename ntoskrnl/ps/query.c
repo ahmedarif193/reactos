@@ -2470,7 +2470,7 @@ NtSetInformationThread(
                 break;
 
             /* Get the process */
-            Process = Thread->ThreadsProcess;
+            Process = (PEPROCESS)Thread->ThreadsProcess;
 
             /* Try to acquire rundown */
             if (ExAcquireRundownProtection(&Process->RundownProtect))
@@ -2746,7 +2746,7 @@ NtSetInformationThread(
             }
 
             /* Get the process */
-            Process = Thread->ThreadsProcess;
+            Process = (PEPROCESS)Thread->ThreadsProcess;
 
             /* Loop the threads */
             ProcThread = PsGetNextProcessThread(Process, NULL);
@@ -3133,7 +3133,11 @@ NtQueryInformationThread(
                 ThreadBasicInfo->ExitStatus = Thread->ExitStatus;
                 ThreadBasicInfo->TebBaseAddress = (PVOID)Thread->Tcb.Teb;
                 ThreadBasicInfo->ClientId = Thread->Cid;
+#if (NTDDI_VERSION >= NTDDI_WIN7)
+                ThreadBasicInfo->AffinityMask = Thread->Tcb.Affinity.Mask;
+#else
                 ThreadBasicInfo->AffinityMask = Thread->Tcb.Affinity;
+#endif
                 ThreadBasicInfo->Priority = Thread->Tcb.Priority;
                 ThreadBasicInfo->BasePriority = KeQueryBasePriorityThread(&Thread->Tcb);
             }
@@ -3306,9 +3310,9 @@ NtQueryInformationThread(
             _SEH2_TRY
             {
                 /* Return whether or not we are the last thread */
-                *(PULONG)ThreadInformation = ((Thread->ThreadsProcess->
+                *(PULONG)ThreadInformation = ((((PEPROCESS)Thread->ThreadsProcess)->
                                                ThreadListHead.Flink->Flink ==
-                                               &Thread->ThreadsProcess->
+                                               &((PEPROCESS)Thread->ThreadsProcess)->
                                                ThreadListHead) ?
                                               TRUE : FALSE);
             }

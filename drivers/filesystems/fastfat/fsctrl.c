@@ -7165,7 +7165,7 @@ Return Value:
 
     RtlZeroMemory( RetrievalPointerBase, BufferLength );
 
-    try {
+    _SEH2_TRY {
 
         FatAcquireSharedVcb(IrpContext, Vcb);
         FatQuickVerifyVcb(IrpContext, Vcb);
@@ -7173,11 +7173,11 @@ Return Value:
         RetrievalPointerBase->FileAreaOffset.QuadPart = Vcb->AllocationSupport.FileAreaLbo >> Vcb->AllocationSupport.LogOfBytesPerSector;
         Irp->IoStatus.Information = sizeof( RETRIEVAL_POINTER_BASE );
 
-    } finally {
+    } _SEH2_FINALLY {
 
         FatReleaseVcb(IrpContext, Vcb);
 
-    }
+    } _SEH2_END;
 
     FatCompleteRequest( IrpContext, Irp, STATUS_SUCCESS );
 
@@ -7271,7 +7271,7 @@ Return Value:
 
     RtlZeroMemory( BootAreaInfo, BufferLength );
 
-    try {
+    _SEH2_TRY {
 
         FatAcquireSharedVcb(IrpContext, Vcb);
         FatQuickVerifyVcb(IrpContext, Vcb);
@@ -7289,10 +7289,10 @@ Return Value:
 
         Irp->IoStatus.Information = sizeof( BOOT_AREA_INFO );
 
-    } finally {
+    } _SEH2_FINALLY {
 
         FatReleaseVcb(IrpContext, Vcb);
-    }
+    } _SEH2_END;
 
     FatCompleteRequest( IrpContext, Irp, STATUS_SUCCESS );
     return STATUS_SUCCESS;

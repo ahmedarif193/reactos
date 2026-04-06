@@ -299,7 +299,9 @@ VOID
 NTAPI
 MmRebalanceMemoryConsumersAndWait(VOID)
 {
+#if (NTDDI_VERSION < NTDDI_LONGHORN)
     ASSERT(PsGetCurrentProcess()->AddressCreationLock.Owner != KeGetCurrentThread());
+#endif
     ASSERT(!MM_ANY_WS_LOCK_HELD(PsGetCurrentThread()));
     ASSERT(KeGetCurrentIrql() < DISPATCH_LEVEL);
 

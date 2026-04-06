@@ -62,15 +62,24 @@ MiDbgAssertIsLockedForRead(_In_ PMM_AVL_TABLE Table)
            the idle process' AddressCreationLock */
         ASSERT(PsGetCurrentThread()->OwnsSystemWorkingSetExclusive ||
                PsGetCurrentThread()->OwnsSystemWorkingSetShared ||
+#if (NTDDI_VERSION >= NTDDI_LONGHORN)
+               /* AddressCreationLock is EX_PUSH_LOCK at Vista+; no Owner field */
+               TRUE);
+#else
                (PsIdleProcess->AddressCreationLock.Owner == KeGetCurrentThread()));
+#endif
     }
     else
     {
         /* Need to hold either the process working-set lock or
            the current process' AddressCreationLock */
         PEPROCESS Process = CONTAINING_RECORD(Table, EPROCESS, VadRoot);
+#if (NTDDI_VERSION >= NTDDI_LONGHORN)
+        ASSERT(MI_WS_OWNER(Process) || TRUE);
+#else
         ASSERT(MI_WS_OWNER(Process) ||
                (Process->AddressCreationLock.Owner == KeGetCurrentThread()));
+#endif
     }
 }
 
@@ -88,7 +97,9 @@ MiDbgAssertIsLockedForWrite(_In_ PMM_AVL_TABLE Table)
         /* Need to hold both the system working-set lock exclusive and
            the idle process' AddressCreationLock */
         ASSERT(PsGetCurrentThread()->OwnsSystemWorkingSetExclusive);
+#if (NTDDI_VERSION < NTDDI_LONGHORN)
         ASSERT(PsIdleProcess->AddressCreationLock.Owner == KeGetCurrentThread());
+#endif
     }
     else
     {
@@ -97,7 +108,9 @@ MiDbgAssertIsLockedForWrite(_In_ PMM_AVL_TABLE Table)
         PEPROCESS Process = CONTAINING_RECORD(Table, EPROCESS, VadRoot);
         ASSERT(Process == PsGetCurrentProcess());
         ASSERT(PsGetCurrentThread()->OwnsProcessWorkingSetExclusive);
+#if (NTDDI_VERSION < NTDDI_LONGHORN)
         ASSERT(Process->AddressCreationLock.Owner == KeGetCurrentThread());
+#endif
     }
 }
 
@@ -263,10 +276,18 @@ MiInsertVadEx(
     CurrentProcess = PsGetCurrentProcess();
 
     /* Acquire the address creation lock and make sure the process is alive */
+    #if (NTDDI_VERSION >= NTDDI_LONGHORN)
+    ExAcquirePushLockExclusive(&CurrentProcess->AddressCreationLock);
+#else
     KeAcquireGuardedMutex(&CurrentProcess->AddressCreationLock);
+#endif
     if (CurrentProcess->VmDeleted)
     {
-        KeReleaseGuardedMutex(&CurrentProcess->AddressCreationLock);
+        #if (NTDDI_VERSION >= NTDDI_LONGHORN)
+    ExReleasePushLockExclusive(&CurrentProcess->AddressCreationLock);
+#else
+    KeReleaseGuardedMutex(&CurrentProcess->AddressCreationLock);
+#endif
         DPRINT1("The process is dying\n");
         return STATUS_PROCESS_IS_TERMINATING;
     }
@@ -305,7 +326,11 @@ MiInsertVadEx(
         if ((Result == TableFoundNode) || (EndingAddress > HighestAddress))
         {
             DPRINT1("Not enough free space to insert this VAD node!\n");
-            KeReleaseGuardedMutex(&CurrentProcess->AddressCreationLock);
+            #if (NTDDI_VERSION >= NTDDI_LONGHORN)
+    ExReleasePushLockExclusive(&CurrentProcess->AddressCreationLock);
+#else
+    KeReleaseGuardedMutex(&CurrentProcess->AddressCreationLock);
+#endif
             return STATUS_NO_MEMORY;
         }
 
@@ -327,7 +352,11 @@ MiInsertVadEx(
         if (Result == TableFoundNode)
         {
             DPRINT("Given address conflicts with existing node\n");
-            KeReleaseGuardedMutex(&CurrentProcess->AddressCreationLock);
+            #if (NTDDI_VERSION >= NTDDI_LONGHORN)
+    ExReleasePushLockExclusive(&CurrentProcess->AddressCreationLock);
+#else
+    KeReleaseGuardedMutex(&CurrentProcess->AddressCreationLock);
+#endif
             return STATUS_CONFLICTING_ADDRESSES;
         }
     }
@@ -358,6 +387,7 @@ MiInsertVadEx(
 
     /* Lock the working set */
     CurrentThread = PsGetCurrentThread();
+    KeEnterGuardedRegion();
     MiLockProcessWorkingSetUnsafe(CurrentProcess, CurrentThread);
 
     /* Insert the VAD */
@@ -366,6 +396,7 @@ MiInsertVadEx(
 
     /* Release the working set */
     MiUnlockProcessWorkingSetUnsafe(CurrentProcess, CurrentThread);
+    KeLeaveGuardedRegion();
 
     /* Update the process' virtual size, and peak virtual size */
     CurrentProcess->VirtualSize += ViewSize;
@@ -375,7 +406,11 @@ MiInsertVadEx(
     }
 
     /* Unlock the address space */
+    #if (NTDDI_VERSION >= NTDDI_LONGHORN)
+    ExReleasePushLockExclusive(&CurrentProcess->AddressCreationLock);
+#else
     KeReleaseGuardedMutex(&CurrentProcess->AddressCreationLock);
+#endif
 
     *BaseAddress = StartingAddress;
     return STATUS_SUCCESS;

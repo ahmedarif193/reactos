@@ -230,7 +230,12 @@ KiInsertQueueApc(IN PKAPC Apc,
                         DPRINT1("A thread was in a gate wait\n");
 
                         /* Get the gate */
+#if (NTDDI_VERSION >= NTDDI_WIN7)
+                        /* GateObject removed from KTHREAD at Win7; use WaitBlockList */
+                        Gate = (PKGATE)Thread->WaitBlockList;
+#else
                         Gate = Thread->GateObject;
+#endif
 
                         /* Lock the gate */
                         KiAcquireDispatcherObject(&Gate->Header);

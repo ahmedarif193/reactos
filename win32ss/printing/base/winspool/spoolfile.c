@@ -7,6 +7,7 @@
 
 #include "precomp.h"
 
+#undef GetSpoolFileHandle
 
 HANDLE WINAPI
 GetSpoolFileHandle( HANDLE hPrinter )

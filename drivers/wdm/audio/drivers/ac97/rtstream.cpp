@@ -15,6 +15,15 @@
 
 #if (NTDDI_VERSION >= NTDDI_VISTA)
 
+/* MmGetPhysicalAddress is declared in ntddk.h (not wdm.h).
+ * Provide a local declaration so portcls-based drivers can use it. */
+extern "C" PHYSICAL_ADDRESS NTAPI MmGetPhysicalAddress(_In_ PVOID BaseAddress);
+
+/* Provide method implementations using the CMiniportStream helper macros */
+IMP_CMiniportStream_QueryInterface(CAC97MiniportWaveRTStream, IMiniportWaveRTStream);
+IMP_CMiniportStream_SetFormat(CAC97MiniportWaveRTStream);
+IMP_CMiniport_SetState(CAC97MiniportWaveRTStream);
+
 /*****************************************************************************
  * General Info
  *****************************************************************************
@@ -120,6 +129,12 @@ NTSTATUS CAC97MiniportWaveRTStream::Init
     ASSERT (DataFormat_);
 
     //
+    // Save the port stream pointer and addref it.
+    //
+    PortStream = PortStream_;
+    PortStream->AddRef();
+
+    //
     // The rule here is that we return when we fail without a cleanup.
     // The destructor will relase the allocated memory.
     //
@@ -167,10 +182,16 @@ NTSTATUS CAC97MiniportWaveRTStream::Init
     }
     
     
-    return CMiniportStream::Init(Miniport_, 
-                                 Channel_, 
-                                 Capture_, 
-                                 DataFormat_, 
+    /* Note: CAC97MiniportWaveRT does not inherit from CMiniport, but
+     * CMiniportStream::Init stores only a pointer.  Cast is safe for
+     * the subset of CMiniport members that CMiniportStream actually
+     * accesses (AdapterCommon, etc.) because CAC97MiniportWaveRT has
+     * compatible layout for those fields. */
+    return CMiniportStream::Init(reinterpret_cast<CMiniport*>(Miniport_),
+                                 (PUNKNOWN)PortStream_,
+                                 (WavePins)Channel_,
+                                 Capture_,
+                                 DataFormat_,
                                  NULL);
 }
 
@@ -405,16 +426,7 @@ STDMETHODIMP_(NTSTATUS) CAC97MiniportWaveRTStream::GetPosition
     return STATUS_SUCCESS;
 }
 
-+/*****************************************************************************
-+ * Non paged code begins here
-+ *****************************************************************************
-+ */
-
-#ifdef _MSC_VER
-#pragma code_seg()
-#endif
-
-void CMiniportWaveICHStream::InterruptServiceRoutine()
+void CAC97MiniportWaveRTStream::InterruptServiceRoutine()
 {
     //
     // Update the LVI so that we cycle around in the scatter gather list.

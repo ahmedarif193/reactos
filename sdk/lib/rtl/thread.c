@@ -291,7 +291,13 @@ RtlExitUserThread(NTSTATUS Status)
     LdrShutdownThread();
 
     /* Shut us down */
+#if (NTDDI_VERSION >= NTDDI_WIN7)
+    NtCurrentTeb()->ReservedPad1 = TRUE;
+#elif (NTDDI_VERSION >= NTDDI_LONGHORN)
+    NtCurrentTeb()->SpareBool1 = TRUE;
+#else
     NtCurrentTeb()->FreeStackOnTermination = TRUE;
+#endif
     NtTerminateThread(NtCurrentThread(), Status);
 }
 

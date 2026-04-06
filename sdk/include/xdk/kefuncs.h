@@ -1164,6 +1164,21 @@ KeRemoveQueueEx(
   _Out_writes_to_(Count, return) PLIST_ENTRY *EntryArray,
   _In_ ULONG Count);
 $endif (_NTIFS_)
+$if (_NTDDK_)
+
+_Must_inspect_result_
+_IRQL_requires_max_(APC_LEVEL)
+NTKERNELAPI
+NTSTATUS
+NTAPI
+KeExpandKernelStackAndCalloutEx(
+  _In_ PEXPAND_STACK_CALLOUT Callout,
+  _In_opt_ PVOID Parameter,
+  _In_ SIZE_T Size,
+  _In_ BOOLEAN Wait,
+  _In_opt_ PVOID Context);
+
+$endif (_NTDDK_)
 
 #endif /* (NTDDI_VERSION >= NTDDI_VISTA) */
 

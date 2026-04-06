@@ -673,6 +673,9 @@ typedef struct _KPRCB
 #endif
     UINT64 RspBase;
     UINT64 PrcbLock;
+#if (NTDDI_VERSION >= NTDDI_VISTA)
+    PCHAR PriorityState;
+#endif
     UINT64 SetMember;
     KPROCESSOR_STATE ProcessorState;
     CHAR CpuType;

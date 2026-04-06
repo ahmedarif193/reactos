@@ -387,8 +387,12 @@ ExitThread(IN DWORD uExitCode)
     /* Notify DLLs and TLS Callbacks of termination */
     LdrShutdownThread();
 
-    /* Tell the Kernel to free the Stack */
+    /* Tell the Kernel to free the Stack
+     * (the TEB flag was retired at Vista — the kernel handles stack
+     *  reclamation automatically as part of thread teardown). */
+#if (NTDDI_VERSION < NTDDI_LONGHORN)
     NtCurrentTeb()->FreeStackOnTermination = TRUE;
+#endif
     NtTerminateThread(NULL, uExitCode);
 
     /* We should never reach this place */

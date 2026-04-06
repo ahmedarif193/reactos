@@ -451,7 +451,12 @@ CsrSrvCreateSharedSection(IN PCHAR ParameterValue)
 
     /* Write the values to the PEB */
     Peb->ReadOnlySharedMemoryBase = CsrSrvSharedSectionBase;
+#if (NTDDI_VERSION >= NTDDI_LONGHORN)
+    /* ReadOnlySharedMemoryHeap was replaced by HotpatchInformation at Vista */
+    Peb->HotpatchInformation = CsrSrvSharedSectionHeap;
+#else
     Peb->ReadOnlySharedMemoryHeap = CsrSrvSharedSectionHeap;
+#endif
     Peb->ReadOnlyStaticServerData = CsrSrvSharedStaticServerData;
 
     /* Return */

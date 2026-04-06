@@ -197,14 +197,27 @@ KiSystemCallHandler(
     }
 
     /* Get descriptor table */
+#if defined(_WIN64) && (NTDDI_VERSION >= NTDDI_WIN7)
+    /* ServiceTable removed from KTHREAD on amd64 at Win7+; use global table */
+    {
+        PVOID _ServiceTable = (Thread->GuiThread) ?
+            (PVOID)KeServiceDescriptorTableShadow : (PVOID)KeServiceDescriptorTable;
+        DescriptorTable = &((PKSERVICE_TABLE_DESCRIPTOR)_ServiceTable)[TableIndex];
+    }
+#else
     DescriptorTable = &((PKSERVICE_TABLE_DESCRIPTOR)Thread->ServiceTable)[TableIndex];
+#endif
 
     /* Validate the system call number */
     if (ServiceNumber >= DescriptorTable->Limit)
     {
         /* Check if this is a GUI call and this is not a GUI thread yet */
         if ((TableIndex == WIN32K_SERVICE_INDEX) &&
+#if defined(_WIN64) && (NTDDI_VERSION >= NTDDI_WIN7)
+            (!Thread->GuiThread))
+#else
             (Thread->ServiceTable == KeServiceDescriptorTable))
+#endif
         {
             /* Convert this thread to a GUI thread.
                It is invalid to change the stack in the middle of a C function,

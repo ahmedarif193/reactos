@@ -196,7 +196,12 @@ KiInitSpinLocks(IN PKPRCB Prcb,
     }
 
     /* Initialize DPC Fields */
+#if (NTDDI_VERSION >= NTDDI_LONGHORN)
+    Prcb->DpcData[DPC_NORMAL].DpcList.ListHead.Next = NULL;
+    Prcb->DpcData[DPC_NORMAL].DpcList.LastEntry = NULL;
+#else
     InitializeListHead(&Prcb->DpcData[DPC_NORMAL].DpcListHead);
+#endif
     KeInitializeSpinLock(&Prcb->DpcData[DPC_NORMAL].DpcLock);
     Prcb->DpcData[DPC_NORMAL].DpcQueueDepth = 0;
     Prcb->DpcData[DPC_NORMAL].DpcCount = 0;

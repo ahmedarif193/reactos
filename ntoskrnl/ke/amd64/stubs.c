@@ -178,7 +178,11 @@ KiSwapProcess(IN PKPROCESS NewProcess,
 #endif
 
     /* Update CR3 */
+#if (NTDDI_VERSION >= NTDDI_LONGHORN)
+    __writecr3(NewProcess->DirectoryTableBase);
+#else
     __writecr3(NewProcess->DirectoryTableBase[0]);
+#endif
 
     /* Update IOPM offset */
     Pcr->TssBase->IoMapBase = NewProcess->IopmOffset;

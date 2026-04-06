@@ -309,7 +309,11 @@ NtCreateJobObject (
         /* inherit the session id from the caller */
         Job->SessionId = PsGetProcessSessionId(CurrentProcess);
 
+#if (NTDDI_VERSION >= NTDDI_LONGHORN)
+        ExInitializePushLock(&Job->MemoryLimitsLock);
+#else
         KeInitializeGuardedMutex(&Job->MemoryLimitsLock);
+#endif
 
         Status = ExInitializeResource(&Job->JobLock);
         if(!NT_SUCCESS(Status))
@@ -677,13 +681,21 @@ NtQueryInformationJobObject (
             if (JobInformationClass == JobObjectExtendedLimitInformation)
             {
                 /* Lock our memory lock */
+#if (NTDDI_VERSION >= NTDDI_LONGHORN)
+                ExAcquirePushLockExclusive(&Job->MemoryLimitsLock);
+#else
                 KeAcquireGuardedMutexUnsafe(&Job->MemoryLimitsLock);
+#endif
                 /* Return limits */
                 ExtendedLimit.ProcessMemoryLimit = Job->ProcessMemoryLimit << PAGE_SHIFT;
                 ExtendedLimit.JobMemoryLimit = Job->JobMemoryLimit << PAGE_SHIFT;
                 ExtendedLimit.PeakProcessMemoryUsed = Job->PeakProcessMemoryUsed << PAGE_SHIFT;
                 ExtendedLimit.PeakJobMemoryUsed = Job->PeakJobMemoryUsed << PAGE_SHIFT;
+#if (NTDDI_VERSION >= NTDDI_LONGHORN)
+                ExReleasePushLockExclusive(&Job->MemoryLimitsLock);
+#else
                 KeReleaseGuardedMutexUnsafe(&Job->MemoryLimitsLock);
+#endif
 
                 /* And done */
                 ExReleaseResourceLite(&Job->JobLock);

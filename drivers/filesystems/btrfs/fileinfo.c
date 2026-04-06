@@ -5267,6 +5267,24 @@ static NTSTATUS query_info(device_extension* Vcb, PFILE_OBJECT FileObject, PIRP 
         }
 
 #if (NTDDI_VERSION >= NTDDI_VISTA)
+        case FileNormalizedNameInformation:
+        {
+            FILE_NAME_INFORMATION* fni = Irp->AssociatedIrp.SystemBuffer;
+
+            TRACE("FileNormalizedNameInformation\n");
+
+            Status = fill_in_file_name_information(fni, fcb, fileref, &length);
+
+            break;
+        }
+#endif
+#if (NTDDI_VERSION >= NTDDI_WIN7)
+        case FileRemoteProtocolInformation:
+            TRACE("FileRemoteProtocolInformation\n");
+            Status = STATUS_INVALID_PARAMETER;
+            goto exit;
+#endif
+#ifndef __REACTOS__
         case FileHardLinkInformation:
         {
             FILE_LINKS_INFORMATION* fli = Irp->AssociatedIrp.SystemBuffer;
@@ -5276,17 +5294,6 @@ static NTSTATUS query_info(device_extension* Vcb, PFILE_OBJECT FileObject, PIRP 
             ExAcquireResourceSharedLite(&Vcb->tree_lock, true);
             Status = fill_in_hard_link_information(fli, fileref, Irp, &length);
             ExReleaseResourceLite(&Vcb->tree_lock);
-
-            break;
-        }
-
-        case FileNormalizedNameInformation:
-        {
-            FILE_NAME_INFORMATION* fni = Irp->AssociatedIrp.SystemBuffer;
-
-            TRACE("FileNormalizedNameInformation\n");
-
-            Status = fill_in_file_name_information(fni, fcb, fileref, &length);
 
             break;
         }
@@ -5302,15 +5309,6 @@ static NTSTATUS query_info(device_extension* Vcb, PFILE_OBJECT FileObject, PIRP 
             break;
         }
 
-        case FileRemoteProtocolInformation:
-            TRACE("FileRemoteProtocolInformation\n");
-            Status = STATUS_INVALID_PARAMETER;
-            goto exit;
-
-#ifndef _MSC_VER
-#pragma GCC diagnostic push
-#pragma GCC diagnostic ignored "-Wswitch"
-#endif
         case FileIdInformation:
         {
             FILE_ID_INFORMATION* fii = Irp->AssociatedIrp.SystemBuffer;
@@ -5391,9 +5389,6 @@ static NTSTATUS query_info(device_extension* Vcb, PFILE_OBJECT FileObject, PIRP 
 
             break;
         }
-#ifndef _MSC_VER
-#pragma GCC diagnostic pop
-#endif
 #endif
 
         default:

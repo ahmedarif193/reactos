@@ -129,5 +129,10 @@ endif()
 set(USE_DUMMY_PSEH FALSE CACHE BOOL
 "Whether to disable PSEH support.")
 
-set(DLL_EXPORT_VERSION "0x502" CACHE STRING
-"The NT version the user mode DLLs target.")
+set(REACTOS_TARGET_NT "0x600" CACHE STRING
+"Target NT version (e.g. 0x502, 0x600, 0x601)")
+
+# Keep the derived export version synchronized with the selected target NT.
+# This is consumed by spec2def invocations and CMake-side NT6 feature gates.
+set(DLL_EXPORT_VERSION "${REACTOS_TARGET_NT}" CACHE INTERNAL
+"The NT version the user mode DLLs target." FORCE)

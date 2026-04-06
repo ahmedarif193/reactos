@@ -111,4 +111,87 @@ typedef struct _WHEA_RECOVERY_CONTEXT
     UINT64 PartitionId;
     UINT32 VpIndex;
 } WHEA_RECOVERY_CONTEXT, *PWHEA_RECOVERY_CONTEXT;
+
+typedef enum _WHEA_ERROR_TYPE {
+    WheaErrTypeProcessor = 0,
+    WheaErrTypeMemory,
+    WheaErrTypePCIExpress,
+    WheaErrTypeNMI,
+    WheaErrTypePCIXBus,
+    WheaErrTypePCIXDevice,
+    WheaErrTypeGeneric
+} WHEA_ERROR_TYPE, *PWHEA_ERROR_TYPE;
+
+typedef enum _WHEA_ERROR_SOURCE_TYPE {
+    WheaErrSrcTypeMCE = 0,
+    WheaErrSrcTypeCMC,
+    WheaErrSrcTypeCPE,
+    WheaErrSrcTypeNMI,
+    WheaErrSrcTypePCIe,
+    WheaErrSrcTypeGeneric,
+    WheaErrSrcTypeINIT,
+    WheaErrSrcTypeBOOT,
+    WheaErrSrcTypeSCIGeneric,
+    WheaErrSrcTypeIPFMCA,
+    WheaErrSrcTypeIPFCMC,
+    WheaErrSrcTypeIPFCPE,
+    WheaErrSrcTypeMax
+} WHEA_ERROR_SOURCE_TYPE, *PWHEA_ERROR_SOURCE_TYPE;
+
+typedef union _WHEA_ERROR_PACKET_FLAGS {
+    struct {
+        ULONG PreviousError : 1;
+        ULONG Reserved1 : 1;
+        ULONG HypervisorError : 1;
+        ULONG Simulated : 1;
+        ULONG PlatformPfaControl : 1;
+        ULONG PlatformDirectedOffline : 1;
+        ULONG Reserved2 : 26;
+    } DUMMYSTRUCTNAME;
+    ULONG AsULONG;
+} WHEA_ERROR_PACKET_FLAGS, *PWHEA_ERROR_PACKET_FLAGS;
+
+typedef enum _WHEA_ERROR_PACKET_DATA_FORMAT {
+    WheaDataFormatIPFSalRecord = 0,
+    WheaDataFormatXPFMCA,
+    WheaDataFormatMemory,
+    WheaDataFormatPCIExpress,
+    WheaDataFormatNMIPort,
+    WheaDataFormatPCIXBus,
+    WheaDataFormatPCIXDevice,
+    WheaDataFormatGeneric,
+    WheaDataFormatMax
+} WHEA_ERROR_PACKET_DATA_FORMAT, *PWHEA_ERROR_PACKET_DATA_FORMAT;
+
+#if (NTDDI_VERSION >= NTDDI_WIN7)
+
+#define WHEA_ERROR_PACKET_V2_SIGNATURE 'AEHW'
+#define WHEA_ERROR_PACKET_V2_VERSION   3
+
+typedef struct _WHEA_ERROR_PACKET_V2 {
+    ULONG Signature;
+    ULONG Version;
+    ULONG Length;
+    WHEA_ERROR_PACKET_FLAGS Flags;
+    WHEA_ERROR_TYPE ErrorType;
+    WHEA_ERROR_SEVERITY ErrorSeverity;
+    ULONG ErrorSourceId;
+    WHEA_ERROR_SOURCE_TYPE ErrorSourceType;
+    GUID NotifyType;
+    ULONGLONG Context;
+    WHEA_ERROR_PACKET_DATA_FORMAT DataFormat;
+    ULONG Reserved1;
+    ULONG DataOffset;
+    ULONG DataLength;
+    ULONG PshedDataOffset;
+    ULONG PshedDataLength;
+} WHEA_ERROR_PACKET_V2, *PWHEA_ERROR_PACKET_V2;
+
+#define WHEA_ERROR_PACKET_SIGNATURE WHEA_ERROR_PACKET_V2_SIGNATURE
+#define WHEA_ERROR_PACKET_VERSION   WHEA_ERROR_PACKET_V2_VERSION
+typedef WHEA_ERROR_PACKET_V2 WHEA_ERROR_PACKET;
+typedef WHEA_ERROR_PACKET_V2 *PWHEA_ERROR_PACKET;
+
+#endif /* (NTDDI_VERSION >= NTDDI_WIN7) */
+
 $endif (_NTDDK_)

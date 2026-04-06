@@ -96,7 +96,10 @@ KiInitializeContextThread(IN PKTHREAD Thread,
 
         /* Set the Thread's NPX State */
         Thread->NpxState = SharedUserData->XState.EnabledFeatures;
+        /* TODO: NpxIrql was a ReactOS extension to DISPATCHER_HEADER; removed at Win7 */
+#if (NTDDI_VERSION < NTDDI_WIN7)
         Thread->Header.NpxIrql = PASSIVE_LEVEL;
+#endif
 
         /* Make sure, we have control registers, disable debug registers */
         ASSERT((Context->ContextFlags & CONTEXT_CONTROL) == CONTEXT_CONTROL);
@@ -198,7 +201,11 @@ KiSwapContextResume(
     if (OldProcess != NewProcess)
     {
         /* Switch address space and flush TLB */
+#if (NTDDI_VERSION >= NTDDI_LONGHORN)
+        __writecr3(NewProcess->DirectoryTableBase);
+#else
         __writecr3(NewProcess->DirectoryTableBase[0]);
+#endif
 
         /* Set new TSS fields */
         //Pcr->TssBase->IoMapBase = NewProcess->IopmOffset;
@@ -227,8 +234,10 @@ KiSwapContextResume(
                      0);
     }
 
-    /* Old thread os no longer busy */
+    /* Old thread is no longer busy */
+#if (NTDDI_VERSION < NTDDI_WIN7)
     OldThread->SwapBusy = FALSE;
+#endif
 
     /* Kernel APCs may be pending */
     if (NewThread->ApcState.KernelApcPending)

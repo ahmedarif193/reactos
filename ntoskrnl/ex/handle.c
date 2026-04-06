@@ -18,6 +18,9 @@
 LIST_ENTRY HandleTableListHead;
 EX_PUSH_LOCK HandleTableListLock;
 #define SizeOfHandle(x) (sizeof(HANDLE) * (x))
+
+/* HANDLE_TABLE at Vista+ uses unions for FirstFree/LastFree fields,
+ * providing both old (ULONG) and new (LONG/PHANDLE_TABLE_ENTRY) names. */
 #define INDEX_TO_HANDLE_VALUE(x) ((x) << HANDLE_TAG_BITS)
 
 /* PRIVATE FUNCTIONS *********************************************************/

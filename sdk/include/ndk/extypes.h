@@ -810,8 +810,16 @@ typedef struct _HANDLE_TABLE
         ULONG Flags;
         UCHAR StrictFIFO:1;
     };
-    LONG FirstFreeHandle;
-    PHANDLE_TABLE_ENTRY LastFreeHandleEntry;
+    union
+    {
+        LONG FirstFreeHandle;
+        ULONG FirstFree;        /* ReactOS compat: same offset, same size */
+    };
+    union
+    {
+        PHANDLE_TABLE_ENTRY LastFreeHandleEntry;
+        ULONG LastFree;         /* ReactOS compat: uses low 32 bits of pointer slot */
+    };
     LONG HandleCount;
     ULONG NextHandleNeedingPool;
 #else

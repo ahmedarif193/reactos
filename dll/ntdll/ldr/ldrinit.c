@@ -984,7 +984,11 @@ LdrShutdownProcess(VOID)
     RtlEnterCriticalSection(&LdrpLoaderLock);
 
     /* Cleanup trace logging data (Etw) */
+#if (NTDDI_VERSION >= NTDDI_LONGHORN)
+    if (SharedUserData->SharedDataFlags)
+#else
     if (SharedUserData->TraceLogging)
+#endif
     {
         /* FIXME */
         DPRINT1("We don't support Etw yet.\n");
@@ -1103,7 +1107,11 @@ LdrShutdownThread(VOID)
             &LdrpImageEntry->BaseDllName);
 
     /* Cleanup trace logging data (Etw) */
+#if (NTDDI_VERSION >= NTDDI_LONGHORN)
+    if (SharedUserData->SharedDataFlags)
+#else
     if (SharedUserData->TraceLogging)
+#endif
     {
         /* FIXME */
         DPRINT1("We don't support Etw yet.\n");
@@ -1250,7 +1258,13 @@ LdrShutdownThread(VOID)
     }
 
     /* Check for Fiber data */
+#if (NTDDI_VERSION >= NTDDI_WIN7)
+    if (Teb->ReservedPad2)
+#elif (NTDDI_VERSION >= NTDDI_LONGHORN)
+    if (Teb->SpareBool2)
+#else
     if (Teb->HasFiberData)
+#endif
     {
         /* Free Fiber data*/
         RtlFreeHeap(RtlGetProcessHeap(), 0, Teb->NtTib.FiberData);

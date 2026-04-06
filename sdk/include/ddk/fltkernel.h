@@ -39,6 +39,10 @@ extern "C" {
 #define FLT_MGR_LONGHORN (NTDDI_VERSION >= NTDDI_VISTA)
 #define FLT_MGR_WIN7 (NTDDI_VERSION >= NTDDI_WIN7)
 
+/* KTRANSACTION is part of the Kernel Transaction Manager (KTM).
+ * Provide a forward declaration so fltkernel.h compiles without ktmtypes.h. */
+typedef struct _KTRANSACTION *PKTRANSACTION;
+
 #include <ntifs.h>
 #include <fltuserstructures.h>
 #include <initguid.h>

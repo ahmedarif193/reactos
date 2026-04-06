@@ -812,14 +812,25 @@ ExpIsLoaderValid(IN PLOADER_PARAMETER_BLOCK LoaderBlock)
     /* Validate the size (Windows 2003 loader doesn't provide more) */
     if (Extension->Size < LOADER_PARAMETER_EXTENSION_MIN_SIZE) return FALSE;
 
-    /* Don't validate upper versions */
-    if (Extension->MajorVersion > VER_PRODUCTMAJORVERSION) return TRUE;
+#if (NTDDI_VERSION >= NTDDI_WIN7)
+    /* Win7+ stores version in the LOADER_PARAMETER_BLOCK itself */
+    {
+        ULONG MajorVer = LoaderBlock->OsMajorVersion;
+        ULONG MinorVer = LoaderBlock->OsMinorVersion;
+#else
+    {
+        ULONG MajorVer = Extension->MajorVersion;
+        ULONG MinorVer = Extension->MinorVersion;
+#endif
+        /* Don't validate upper versions */
+        if (MajorVer > VER_PRODUCTMAJORVERSION) return TRUE;
 
-    /* Fail if this is NT 4 */
-    if (Extension->MajorVersion < VER_PRODUCTMAJORVERSION) return FALSE;
+        /* Fail if this is NT 4 */
+        if (MajorVer < VER_PRODUCTMAJORVERSION) return FALSE;
 
-    /* Fail if this is XP */
-    if (Extension->MinorVersion < VER_PRODUCTMINORVERSION) return FALSE;
+        /* Fail if this is XP */
+        if (MinorVer < VER_PRODUCTMINORVERSION) return FALSE;
+    }
 
     /* This is 2003 or newer, approve it */
     return TRUE;
@@ -983,8 +994,13 @@ ExpInitializeExecutive(IN ULONG Cpu,
         KeBugCheckEx(MISMATCHED_HAL,
                      3,
                      LoaderBlock->Extension->Size,
+#if (NTDDI_VERSION >= NTDDI_WIN7)
+                     LoaderBlock->OsMajorVersion,
+                     LoaderBlock->OsMinorVersion);
+#else
                      LoaderBlock->Extension->MajorVersion,
                      LoaderBlock->Extension->MinorVersion);
+#endif
     }
 
     /* Initialize PRCB pool lookaside pointers */
@@ -1008,6 +1024,7 @@ ExpInitializeExecutive(IN ULONG Cpu,
     ExpInTextModeSetup = FALSE;
     IoRemoteBootClient = FALSE;
 
+#if (NTDDI_VERSION < NTDDI_WIN7)
     /* Check if we have a setup loader block */
     if (LoaderBlock->SetupLdrBlock)
     {
@@ -1025,6 +1042,10 @@ ExpInitializeExecutive(IN ULONG Cpu,
             ASSERT(!_memicmp(LoaderBlock->ArcBootDeviceName, "net(0)", 6));
         }
     }
+#else
+    /* TODO: Win7+ removed SetupLdrBlock from LOADER_PARAMETER_BLOCK;
+     * setup boot detection needs porting to the new mechanism. */
+#endif
 
     /* Set phase to 0 */
     ExpInitializationPhase = 0;

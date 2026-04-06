@@ -69,17 +69,28 @@ ExInitPoolLookasidePointers(VOID)
         Entry = &ExpSmallNPagedPoolLookasideLists[i];
         InitializeSListHead(&Entry->ListHead);
 
+#if (NTDDI_VERSION >= NTDDI_LONGHORN)
+        /* At Vista+, GENERAL_LOOKASIDE_POOL is inline, not a P/L pointer pair.
+         * TODO: Initialize the inline lookaside for Win7 boot. */
+        UNREFERENCED_PARAMETER(Entry);
+        RtlZeroMemory(&Prcb->PPNPagedLookasideList[i], sizeof(Prcb->PPNPagedLookasideList[i]));
+#else
         /* Bind to PRCB */
         Prcb->PPNPagedLookasideList[i].P = Entry;
         Prcb->PPNPagedLookasideList[i].L = Entry;
+#endif
 
         /* Initialize the paged list */
         Entry = &ExpSmallPagedPoolLookasideLists[i];
         InitializeSListHead(&Entry->ListHead);
 
+#if (NTDDI_VERSION >= NTDDI_LONGHORN)
+        RtlZeroMemory(&Prcb->PPPagedLookasideList[i], sizeof(Prcb->PPPagedLookasideList[i]));
+#else
         /* Bind to PRCB */
         Prcb->PPPagedLookasideList[i].P = Entry;
         Prcb->PPPagedLookasideList[i].L = Entry;
+#endif
     }
 }
 

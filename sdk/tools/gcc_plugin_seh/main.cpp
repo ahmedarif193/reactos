@@ -208,8 +208,22 @@ finish_seh_function(void* event_data, void* UNUSED user_data)
 
     for (auto& handler : seh_fun->handlers)
     {
+        /*
+         * Use __seh2$$filter__ as the scope End instead of __seh2$$end_try__.
+         *
+         * GCC may reorder basic blocks from the try body past the
+         * __seh2$$end_try__ label, placing them between end_try and the filter.
+         * __C_specific_handler checks whether the faulting RIP is within
+         * [BeginAddress, EndAddress).  If reordered code falls outside this
+         * range, the exception goes uncaught.
+         *
+         * The filter label is always emitted by GCC after all try-block code
+         * (it lives inside an unreachable "if (0)" branch), so using it as
+         * the scope End guarantees the entire try body is covered regardless
+         * of basic-block reordering.
+         */
         asm_str << "\n\t.rva " << "__seh2$$begin_try__" << handler.line; /* Begin of tried code */
-        asm_str << "\n\t.rva " << "__seh2$$end_try__" << handler.line; /* End of tried code */
+        asm_str << "\n\t.rva " << "__seh2$$filter__" << handler.line; /* End of tried code (filter is after all reordered try-block code) */
         asm_str << "\n\t.rva " << "__seh2$$filter__" << handler.line; /* Filter function */
         if (handler.is_except)
             asm_str << "\n\t.rva " << "__seh2$$begin_except__" << handler.line; /* Called on except */

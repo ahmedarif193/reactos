@@ -94,7 +94,12 @@ KeWaitForGate(IN PKGATE Gate,
             Thread->WaitReason = WaitReason;
             Thread->WaitIrql = ApcLock.OldIrql;
             Thread->State = GateWait;
+#if (NTDDI_VERSION >= NTDDI_WIN7)
+            /* GateObject removed from KTHREAD at Win7; store in WaitBlockList */
+            Thread->WaitBlockList = (PKWAIT_BLOCK)Gate;
+#else
             Thread->GateObject = Gate;
+#endif
 
             /* Insert into the Wait List */
             InsertTailList(&Gate->Header.WaitListHead,

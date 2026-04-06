@@ -1364,7 +1364,10 @@ IopInitializeBootDrivers(VOID)
                                           &BootEntry->RegistryPath,
                                           KEY_READ);
             DPRINT("IopOpenRegistryKeyEx(%wZ) returned 0x%08lx\n", &BootEntry->RegistryPath, Status);
-#if 0
+#if (NTDDI_VERSION >= NTDDI_WIN7)
+            /* TODO: Win7+ removed SetupLdrBlock; the SETUPLDR hack needs porting */
+            if (NT_SUCCESS(Status))
+#elif 0
             if (NT_SUCCESS(Status))
 #else // Hack still needed...
             if ((NT_SUCCESS(Status)) || /* ReactOS HACK for SETUPLDR */
@@ -1460,8 +1463,12 @@ IopInitializeSystemDrivers(VOID)
 
     PiPerformSyncDeviceAction(IopRootDeviceNode->PhysicalDeviceObject, PiActionEnumDeviceTree);
 
+#if (NTDDI_VERSION < NTDDI_WIN7)
     /* HACK: No system drivers on the BootCD */
     if (KeLoaderBlock->SetupLdrBlock) return;
+#else
+    /* TODO: Win7+ removed SetupLdrBlock; BootCD detection needs porting */
+#endif
 
     /* Get the driver list */
     SavedList = DriverList = CmGetSystemDriverList();

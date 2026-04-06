@@ -4908,7 +4908,7 @@ static NTSTATUS fsctl_oplock(device_extension* Vcb, PIRP* Pirp) {
     bool oplock_request = false;
 #endif
     ULONG oplock_count = 0;
-#ifdef __REACTOS__
+#if defined(__REACTOS__) && (NTDDI_VERSION < NTDDI_WIN7)
     bool shared_request;
 #endif
 
