@@ -20,7 +20,7 @@
 #ifndef __WINE_CRTDBG_H_
 #define __WINE_CRTDBG_H_
 
-#include <corecrt.h>
+#include "corecrt.h"
 
 /* The debug API is not implemented in Winelib.
  * Redirect everything to the regular APIs.
@@ -67,7 +67,7 @@ typedef struct _CrtMemState
 
 #else /* _DEBUG */
 
-#include <assert.h>
+#include "assert.h"
 #define _ASSERT(expr)                   assert(expr)
 #define _ASSERTE(expr)                  assert(expr)
 #if defined(_MSC_VER)

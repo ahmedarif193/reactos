@@ -21,13 +21,13 @@
  * Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA 02110-1301, USA
  */
 
-#include <assert.h>
-#include <stdlib.h>
-#include <stdio.h>
-#include <math.h>
-#include <limits.h>
-#include <locale.h>
-#include <float.h>
+#include "include/assert.h"
+#include "include/stdlib.h"
+#include "include/stdio.h"
+#include "include/math.h"
+#include "include/limits.h"
+#include "include/locale.h"
+#include "include/float.h"
 #include "msvcrt.h"
 #include "bnum.h"
 #include "winnls.h"

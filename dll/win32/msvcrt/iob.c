@@ -23,7 +23,7 @@
 #pragma makedep implib
 #endif
 
-#include <stdio.h>
+#include "include/stdio.h"
 #include <wine/asm.h>
 
 #undef __iob_func

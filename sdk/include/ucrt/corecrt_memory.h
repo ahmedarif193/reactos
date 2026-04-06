@@ -10,8 +10,8 @@
 //
 #pragma once
 
-#include <corecrt.h>
-#include <corecrt_memcpy_s.h>
+#include "corecrt.h"
+#include "corecrt_memcpy_s.h"
 #include <vcruntime_string.h>
 
 #pragma warning(push)

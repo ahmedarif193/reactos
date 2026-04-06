@@ -9,5 +9,5 @@
 #ifndef _INC_MEMORY // include guard for 3rd party interop
 #define _INC_MEMORY
 
-#include <corecrt_memory.h>
+#include "corecrt_memory.h"
 #endif // _INC_MEMORY

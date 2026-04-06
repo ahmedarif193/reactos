@@ -9,6 +9,7 @@
 //
 
 #include <internal_shared.h>
+#include <immintrin.h>
 
 #ifdef _WIN64
 #define DEFAULT_SECURITY_COOKIE 0x00002B992DDFA232ull
