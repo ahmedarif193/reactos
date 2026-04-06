@@ -33,8 +33,8 @@ Boston, MA 02110-1301, USA.  */
 #ifndef _INC_STDARG
 #define _INC_STDARG
 
-#include <vcruntime.h>
-#include <vadefs.h>
+#include "vcruntime.h"
+#include "vadefs.h"
 
 #ifndef _WIN32
 #error Only Win32 target is supported!

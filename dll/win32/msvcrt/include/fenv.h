@@ -6,7 +6,7 @@
 #ifndef _INC_FENV
 #define _INC_FENV
 
-#include <float.h>
+#include "float.h"
 
 #define FE_TONEAREST   _RC_NEAR
 #define FE_UPWARD      _RC_UP

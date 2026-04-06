@@ -21,7 +21,7 @@
  * FIXME: Incomplete support for nested exceptions/try block cleanup.
  */
 
-#include <float.h>
+#include "include/float.h"
 #include <signal.h>
 #include <stdarg.h>
 #include <stdbool.h>

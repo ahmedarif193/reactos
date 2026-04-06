@@ -5,8 +5,8 @@
  * COPYRIGHT:   Copyright Timo Kreuzer <timo.kreuzer@reactos.org>
  */
 
-#include <stdlib.h>
-#include <errno.h>
+#include "../include/stdlib.h"
+#include "../include/errno.h"
 #include <msvcrt.h>
 
 extern unsigned int MSVCRT__winver;
