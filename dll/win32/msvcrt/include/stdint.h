@@ -25,8 +25,8 @@
 #ifndef _STDINT_H
 #define _STDINT_H
 
-#include <corecrt.h>
-#include <stddef.h>
+#include "corecrt.h"
+#include "stddef.h"
 
 /* 7.18.1.1  Exact-width integer types */
 typedef signed char int8_t;

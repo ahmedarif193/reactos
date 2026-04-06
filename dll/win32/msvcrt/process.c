@@ -28,8 +28,8 @@
  */
 
 #include <fcntl.h>
-#include <io.h>
-#include <process.h>
+#include "include/io.h"
+#include "include/process.h"
 #include <stdarg.h>
 
 #include "msvcrt.h"
