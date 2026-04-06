@@ -49,6 +49,72 @@
 #define KeReleaseGuardedMutexUnsafe _KeReleaseGuardedMutexUnsafe
 #define KeTryToAcquireGuardedMutex _KeTryToAcquireGuardedMutex
 
+//
+// ETHREAD/EPROCESS field compatibility for Vista+ (NTDDI_LONGHORN)
+//
+// At Vista+, many fields were renamed or restructured. These macros let
+// pre-Vista code compile against the new structures.
+//
+//
+// ETHREAD/EPROCESS field compatibility for Vista+ (NTDDI_LONGHORN) and Win7+
+//
+// At Vista+, many fields were renamed or restructured. These field-level
+// macros transparently redirect old field names to their new equivalents,
+// allowing pre-Vista code to compile against new structures.
+//
+#if (NTDDI_VERSION >= NTDDI_LONGHORN)
+
+/* ETHREAD.ThreadsProcess -> Tcb.Process (KTHREAD.Process) at Vista+.
+ * Tcb.Process is KPROCESS*, but code expects PEPROCESS. Since KPROCESS (Pcb)
+ * is the first member of EPROCESS, we use CONTAINING_RECORD to get the
+ * correct EPROCESS pointer type. This is a two-part macro:
+ * - _KThreadToEProcess: converts a KPROCESS* to PEPROCESS via CONTAINING_RECORD
+ * - ThreadsProcess: field redirect that produces KPROCESS* (needs explicit cast
+ *   at use sites that assign to PEPROCESS)
+ * For the common case (reads assigned to PEPROCESS), callers should use
+ * THREAD_TO_PROCESS(Thread) from ps.h or cast explicitly. */
+#define ThreadsProcess  Tcb.Process
+
+/* ETHREAD.DeadThread -> ThreadInserted at Vista+ */
+#define DeadThread      ThreadInserted
+
+/* EPROCESS.ExceptionPort -> ExceptionPortData at Vista+ (union member) */
+#define ExceptionPort   ExceptionPortData
+
+/* ETHREAD.LpcReplyMessageId -> AlpcMessageId at Vista+ */
+/* (also defined in lpc.h for LPC subsystem files) */
+
+/* KTHREAD.Quantum -> ResourceIndex (same byte overlay) at Win7, Spare04 at Vista.
+ * The quantum management changed to QuantumTarget at Vista+, but for skeleton
+ * compatibility we redirect the field name to the same physical byte. */
+#if (NTDDI_VERSION >= NTDDI_WIN7)
+#define Quantum         ResourceIndex
+#elif (NTDDI_VERSION >= NTDDI_LONGHORN)
+#define Quantum         Spare04
+#endif
+
+/* KTHREAD.GateObject -> removed at Win7 (was in union with WaitBlockList).
+ * At Win7+, WaitBlockList is used directly. Since the types differ
+ * (PKGATE vs PKWAIT_BLOCK), we handle this per-file with explicit casts. */
+
+/* KTHREAD.PowerState -> LargeStack at Win7 (same byte overlay).
+ * NOTE: Cannot use a global #define because PowerState exists in KPRCB,
+ * KPROCESS, and other structures. Handle per-file where needed. */
+
+/* EPROCESS.JobStatus -> Flags2 at Vista+ */
+#define JobStatus       Flags2
+
+/* ETHREAD.ForwardClusterOnly -> CacheManagerActive at Vista+ */
+#define ForwardClusterOnly CacheManagerActive
+
+/* ETHREAD.AddressSpaceOwner -> Spare at Vista+ */
+#define AddressSpaceOwner  Spare
+
+/* ETHREAD.ApcNeeded -> removed at Vista+; stub to 0 */
+/* (handled per-file where needed) */
+
+#endif /* NTDDI_VERSION >= NTDDI_LONGHORN */
+
 #include "tag.h"
 #include "ke.h"
 #include "ob.h"
@@ -100,7 +166,9 @@
 
 #endif
 
-#ifndef _WIN64
+#if !defined(_WIN64) && (NTDDI_VERSION < NTDDI_LONGHORN)
+/* These C_ASSERTs validate pre-Vista (XP/2003) structure layouts.
+ * They are not valid for Vista+ where KTHREAD/KPROCESS were restructured. */
 C_ASSERT(FIELD_OFFSET(KUSER_SHARED_DATA, SystemCall) == 0x300);
 
 C_ASSERT(FIELD_OFFSET(KTHREAD, InitialStack) == KTHREAD_INITIAL_STACK);

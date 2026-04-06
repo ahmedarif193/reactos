@@ -5725,10 +5725,14 @@ RamdiskAddDevice(IN PDRIVER_OBJECT DriverObject,
         /* Loop for loader block */
         if (KeLoaderBlock)
         {
+#if (NTDDI_VERSION < NTDDI_WIN7)
             /* Are we being booted from setup? Not yet supported */
             if (KeLoaderBlock->SetupLdrBlock)
                 DPRINT1("FIXME: RamdiskAddDevice is UNSUPPORTED when being started from SETUPLDR!\n");
             // ASSERT(!KeLoaderBlock->SetupLdrBlock);
+#else
+            /* TODO: Win7+ moved SetupLdrBlock; setup-boot detection not yet ported */
+#endif
         }
 
         /* All done */
@@ -5822,10 +5826,14 @@ DriverEntry(IN PDRIVER_OBJECT DriverObject,
         }
     }
 
+#if (NTDDI_VERSION < NTDDI_WIN7)
     /* Installing from Ramdisk isn't supported yet */
     if (KeLoaderBlock->SetupLdrBlock)
         DPRINT1("FIXME: Installing from RamDisk is UNSUPPORTED!\n");
     // ASSERT(!KeLoaderBlock->SetupLdrBlock);
+#else
+    /* TODO: Win7+ moved SetupLdrBlock out of LOADER_PARAMETER_BLOCK */
+#endif
 
     /* Are we reporting the device */
     if (ReportDetectedDevice)

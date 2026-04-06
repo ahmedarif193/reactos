@@ -485,6 +485,16 @@ SeAuditTransactionStateChange(
   _In_ GUID *TransactionId,
   _In_ GUID *ResourceManagerId,
   _In_ ULONG NewTransactionState);
+
+
+NTKERNELAPI
+VOID
+NTAPI
+SeCaptureSubjectContextEx(
+  _In_ PETHREAD Thread,
+  _In_ PEPROCESS Process,
+  _Out_ PSECURITY_SUBJECT_CONTEXT SubjectContext);
+
 $endif (_NTIFS_)
 $if (_WDMDDK_ || _NTIFS_)
 #endif /* (NTDDI_VERSION >= NTDDI_VISTA) */

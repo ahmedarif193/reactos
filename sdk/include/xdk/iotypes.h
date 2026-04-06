@@ -1313,6 +1313,29 @@ typedef enum _FILE_INFORMATION_CLASS {
   FileStandardLinkInformation,
   FileRemoteProtocolInformation,
 #endif
+#if (NTDDI_VERSION >= NTDDI_WIN8)
+  FileRenameInformationBypassAccessCheck,
+  FileLinkInformationBypassAccessCheck,
+  FileVolumeNameInformation,
+  FileIdInformation,
+  FileIdExtdDirectoryInformation,
+  FileReplaceCompletionInformation,
+  FileHardLinkFullIdInformation,
+  FileIdExtdBothDirectoryInformation,
+  FileDispositionInformationEx,
+  FileRenameInformationEx,
+  FileRenameInformationExBypassAccessCheck,
+  FileDesiredStorageClassInformation,
+  FileStatInformation,
+  FileMemoryPartitionInformation,
+  FileStatLxInformation,
+  FileCaseSensitiveInformation,
+  FileLinkInformationEx,
+  FileLinkInformationExBypassAccessCheck,
+  FileStorageReserveIdInformation,
+  FileCaseSensitiveInformationForceAccessCheck,
+  FileKnownFolderInformation,
+#endif
   FileMaximumInformation
 } FILE_INFORMATION_CLASS, *PFILE_INFORMATION_CLASS;
 

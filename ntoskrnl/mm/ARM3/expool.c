@@ -2096,9 +2096,16 @@ ExAllocatePoolWithTag(IN POOL_TYPE PoolType,
         //
         // Try popping it from the per-CPU lookaside list
         //
+#if (NTDDI_VERSION >= NTDDI_LONGHORN)
+        /* At Vista+, GENERAL_LOOKASIDE_POOL is inline, not P/L pointer pair */
+        LookasideList = (PoolType == PagedPool) ?
+                         (PGENERAL_LOOKASIDE)&Prcb->PPPagedLookasideList[i - 1] :
+                         (PGENERAL_LOOKASIDE)&Prcb->PPNPagedLookasideList[i - 1];
+#else
         LookasideList = (PoolType == PagedPool) ?
                          Prcb->PPPagedLookasideList[i - 1].P :
                          Prcb->PPNPagedLookasideList[i - 1].P;
+#endif
         LookasideList->TotalAllocates++;
         Entry = (PPOOL_HEADER)InterlockedPopEntrySList(&LookasideList->ListHead);
         if (!Entry)
@@ -2106,9 +2113,15 @@ ExAllocatePoolWithTag(IN POOL_TYPE PoolType,
             //
             // We failed, try popping it from the global list
             //
+#if (NTDDI_VERSION >= NTDDI_LONGHORN)
+            LookasideList = (PoolType == PagedPool) ?
+                             (PGENERAL_LOOKASIDE)&Prcb->PPPagedLookasideList[i - 1] :
+                             (PGENERAL_LOOKASIDE)&Prcb->PPNPagedLookasideList[i - 1];
+#else
             LookasideList = (PoolType == PagedPool) ?
                              Prcb->PPPagedLookasideList[i - 1].L :
                              Prcb->PPNPagedLookasideList[i - 1].L;
+#endif
             LookasideList->TotalAllocates++;
             Entry = (PPOOL_HEADER)InterlockedPopEntrySList(&LookasideList->ListHead);
         }
@@ -2741,9 +2754,15 @@ ExFreePoolWithTag(IN PVOID P,
         //
         // Try pushing it into the per-CPU lookaside list
         //
+#if (NTDDI_VERSION >= NTDDI_LONGHORN)
+        LookasideList = (PoolType == PagedPool) ?
+                         (PGENERAL_LOOKASIDE)&Prcb->PPPagedLookasideList[BlockSize - 1] :
+                         (PGENERAL_LOOKASIDE)&Prcb->PPNPagedLookasideList[BlockSize - 1];
+#else
         LookasideList = (PoolType == PagedPool) ?
                          Prcb->PPPagedLookasideList[BlockSize - 1].P :
                          Prcb->PPNPagedLookasideList[BlockSize - 1].P;
+#endif
         LookasideList->TotalFrees++;
         if (ExQueryDepthSList(&LookasideList->ListHead) < LookasideList->Depth)
         {
@@ -2755,9 +2774,15 @@ ExFreePoolWithTag(IN PVOID P,
         //
         // We failed, try to push it into the global lookaside list
         //
+#if (NTDDI_VERSION >= NTDDI_LONGHORN)
+        LookasideList = (PoolType == PagedPool) ?
+                         (PGENERAL_LOOKASIDE)&Prcb->PPPagedLookasideList[BlockSize - 1] :
+                         (PGENERAL_LOOKASIDE)&Prcb->PPNPagedLookasideList[BlockSize - 1];
+#else
         LookasideList = (PoolType == PagedPool) ?
                          Prcb->PPPagedLookasideList[BlockSize - 1].L :
                          Prcb->PPNPagedLookasideList[BlockSize - 1].L;
+#endif
         LookasideList->TotalFrees++;
         if (ExQueryDepthSList(&LookasideList->ListHead) < LookasideList->Depth)
         {
