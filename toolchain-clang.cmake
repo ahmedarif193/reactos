@@ -47,7 +47,14 @@ set(CMAKE_RC_COMPILER ${GCC_TOOLCHAIN_PREFIX}windres)
 # This allows to have CMake test the compiler without linking
 set(CMAKE_TRY_COMPILE_TARGET_TYPE STATIC_LIBRARY)
 
-set(CMAKE_C_CREATE_STATIC_LIBRARY "<CMAKE_AR> crT <TARGET> <LINK_FLAGS> <OBJECTS>")
+# ar just puts stuff into the archive, without looking twice: if a member
+# has been removed from the source list, 'ar crT' on a pre-existing archive
+# will happily keep the stale object file inside. Delete the archive first
+# so that every link starts from a clean state (same pattern as used for
+# import libs in sdk/cmake/gcc.cmake).
+set(CMAKE_C_CREATE_STATIC_LIBRARY
+    "<CMAKE_COMMAND> -E rm -f <TARGET>"
+    "<CMAKE_AR> crT <TARGET> <LINK_FLAGS> <OBJECTS>")
 set(CMAKE_CXX_CREATE_STATIC_LIBRARY ${CMAKE_C_CREATE_STATIC_LIBRARY})
 set(CMAKE_ASM_CREATE_STATIC_LIBRARY ${CMAKE_C_CREATE_STATIC_LIBRARY})
 
