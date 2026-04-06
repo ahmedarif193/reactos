@@ -1050,6 +1050,148 @@ cleanup:
     return ReturnValue;
 }
 
+
+/*
+ * @implemented
+ *
+ * Batch variant of ClientSideInstallW. Reads the same prologue (event name
+ * and ShowWizard) but then a DeviceCount followed by Count (size, instance)
+ * pairs, installing each device in a loop inside a single rundll32.exe
+ * process. The install event is signalled exactly once after the whole
+ * batch completes so umpnpmgr's handshake behaves the same as for a
+ * single-device install.
+ *
+ * Used by umpnpmgr's DeviceInstallThread Step 1 (boot device list) to
+ * avoid launching rundll32 once per device.
+ */
+BOOL WINAPI
+ClientSideInstallBatchW(
+    IN HWND hWndOwner,
+    IN HINSTANCE hInstance,
+    IN LPWSTR lpNamedPipeName,
+    IN INT Show)
+{
+    BOOL ReturnValue = FALSE;
+    BOOL ShowWizard;
+    DWORD BytesRead;
+    DWORD Value;
+    DWORD DeviceCount;
+    DWORD i;
+    HANDLE hPipe = INVALID_HANDLE_VALUE;
+    PWSTR DeviceInstance = NULL;
+    PWSTR InstallEventName = NULL;
+    HANDLE hInstallEvent;
+
+    /* Open the pipe */
+    hPipe = CreateFileW(lpNamedPipeName, GENERIC_READ, 0, NULL, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
+    if (hPipe == INVALID_HANDLE_VALUE)
+    {
+        ERR("CreateFileW failed with error %u\n", GetLastError());
+        goto cleanup;
+    }
+
+    /* Prologue — same as ClientSideInstallW: event name size + event name */
+    if (!ReadFile(hPipe, &Value, sizeof(Value), &BytesRead, NULL))
+    {
+        ERR("ReadFile(cbEventName) failed with error %u\n", GetLastError());
+        goto cleanup;
+    }
+
+    InstallEventName = HeapAlloc(GetProcessHeap(), 0, Value);
+    if (!InstallEventName)
+    {
+        ERR("HeapAlloc(InstallEventName) failed\n");
+        goto cleanup;
+    }
+
+    if (!ReadFile(hPipe, InstallEventName, Value, &BytesRead, NULL))
+    {
+        ERR("ReadFile(EventName) failed with error %u\n", GetLastError());
+        goto cleanup;
+    }
+
+    /* Consumed for symmetry with the single-install protocol. Batch mode is
+     * always driven with SW_HIDE so this is effectively informational. */
+    if (!ReadFile(hPipe, &ShowWizard, sizeof(ShowWizard), &BytesRead, NULL))
+    {
+        ERR("ReadFile(ShowWizard) failed with error %u\n", GetLastError());
+        goto cleanup;
+    }
+
+    /* Batch-specific: device count, followed by N (size, instance) pairs */
+    if (!ReadFile(hPipe, &DeviceCount, sizeof(DeviceCount), &BytesRead, NULL))
+    {
+        ERR("ReadFile(DeviceCount) failed with error %u\n", GetLastError());
+        goto cleanup;
+    }
+
+    TRACE("ClientSideInstallBatchW: processing %lu device(s)\n", DeviceCount);
+
+    for (i = 0; i < DeviceCount; i++)
+    {
+        if (!ReadFile(hPipe, &Value, sizeof(Value), &BytesRead, NULL))
+        {
+            ERR("ReadFile(cbDeviceInstance[%lu]) failed with error %u\n", i, GetLastError());
+            goto cleanup;
+        }
+
+        DeviceInstance = HeapAlloc(GetProcessHeap(), 0, Value);
+        if (!DeviceInstance)
+        {
+            ERR("HeapAlloc(DeviceInstance[%lu]) failed\n", i);
+            goto cleanup;
+        }
+
+        if (!ReadFile(hPipe, DeviceInstance, Value, &BytesRead, NULL))
+        {
+            ERR("ReadFile(DeviceInstance[%lu]) failed with error %u\n", i, GetLastError());
+            goto cleanup;
+        }
+
+        TRACE("ClientSideInstallBatchW: installing [%lu/%lu] %ls\n",
+              i + 1, DeviceCount, DeviceInstance);
+
+        /* Best-effort install: individual failures are logged but don't
+         * abort the batch, matching the pre-existing boot loop behaviour.
+         * Per-device progress for the serial log is emitted by umpnpmgr's
+         * batch caller before we ever run — see InstallDevicesBatch. */
+        if (!DevInstallW(NULL, NULL, DeviceInstance, SW_HIDE))
+        {
+            TRACE("DevInstallW failed for %ls (error %lu)\n",
+                  DeviceInstance, GetLastError());
+        }
+
+        HeapFree(GetProcessHeap(), 0, DeviceInstance);
+        DeviceInstance = NULL;
+    }
+
+    /* Signal completion of the whole batch exactly once. */
+    hInstallEvent = CreateEventW(NULL, TRUE, FALSE, InstallEventName);
+    if (!hInstallEvent)
+    {
+        TRACE("CreateEventW('%ls') failed with error %lu\n", InstallEventName, GetLastError());
+        goto cleanup;
+    }
+
+    SetEvent(hInstallEvent);
+    CloseHandle(hInstallEvent);
+
+    ReturnValue = TRUE;
+
+cleanup:
+    if (hPipe != INVALID_HANDLE_VALUE)
+        CloseHandle(hPipe);
+
+    if (InstallEventName)
+        HeapFree(GetProcessHeap(), 0, InstallEventName);
+
+    if (DeviceInstance)
+        HeapFree(GetProcessHeap(), 0, DeviceInstance);
+
+    return ReturnValue;
+}
+
+
 BOOL WINAPI
 DllMain(
     IN HINSTANCE hInstance,

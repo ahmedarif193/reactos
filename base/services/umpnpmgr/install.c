@@ -51,6 +51,68 @@ CreatePnpInstallEventSecurity(
 
 /* FUNCTIONS *****************************************************************/
 
+/*
+ * Returns TRUE if the given device-instance still needs installation.
+ *
+ * Filter rules (any one excludes the device from the batch):
+ *   1. "Class" registry value already present       -> driver installed previously
+ *   2. ConfigFlags has CONFIGFLAG_FAILEDINSTALL     -> previously failed, sticky
+ *
+ * This mirrors the early-out in InstallDevice(). Being started is not a safe
+ * proxy for "already installed": DevInstallW still drives the INF/class
+ * installer pipeline for started devices that have not been fully installed.
+ */
+static BOOL
+DeviceNeedsInstall(PCWSTR DeviceInstance)
+{
+    HKEY DeviceKey;
+    DWORD Value;
+    DWORD BytesWritten;
+    BOOL NeedsInstall = TRUE;
+
+    if (RegOpenKeyExW(hEnumKey,
+                      DeviceInstance,
+                      0,
+                      KEY_QUERY_VALUE,
+                      &DeviceKey) != ERROR_SUCCESS)
+    {
+        /* No Enum subkey yet — definitely needs install. */
+        return TRUE;
+    }
+
+    if (RegQueryValueExW(DeviceKey,
+                         L"Class",
+                         NULL,
+                         NULL,
+                         NULL,
+                         NULL) == ERROR_SUCCESS)
+    {
+        /* Class already assigned — driver was installed in a prior boot. */
+        NeedsInstall = FALSE;
+        goto done;
+    }
+
+    BytesWritten = sizeof(DWORD);
+    if (RegQueryValueExW(DeviceKey,
+                         L"ConfigFlags",
+                         NULL,
+                         NULL,
+                         (PBYTE)&Value,
+                         &BytesWritten) == ERROR_SUCCESS)
+    {
+        if (Value & CONFIGFLAG_FAILEDINSTALL)
+        {
+            /* Previously failed — don't re-attempt during batch install. */
+            NeedsInstall = FALSE;
+        }
+    }
+
+done:
+    RegCloseKey(DeviceKey);
+    return NeedsInstall;
+}
+
+
 static BOOL
 InstallDevice(PCWSTR DeviceInstance, BOOL ShowWizard)
 {
@@ -246,6 +308,259 @@ cleanup:
     }
 
     return DeviceInstalled;
+}
+
+
+static BOOL
+WaitForBatchClientConnect(
+    _In_ HANDLE hPipe,
+    _In_ HANDLE hProcess)
+{
+    DWORD ErrCode;
+    DWORD WaitMode = PIPE_WAIT;
+
+    while (TRUE)
+    {
+        if (ConnectNamedPipe(hPipe, NULL))
+            break;
+
+        ErrCode = GetLastError();
+        if (ErrCode == ERROR_PIPE_CONNECTED)
+            break;
+
+        if (ErrCode != ERROR_PIPE_LISTENING)
+            return FALSE;
+
+        if (WaitForSingleObject(hProcess, 0) == WAIT_OBJECT_0)
+        {
+            SetLastError(ERROR_PIPE_NOT_CONNECTED);
+            return FALSE;
+        }
+
+        Sleep(50);
+    }
+
+    if (!SetNamedPipeHandleState(hPipe, &WaitMode, NULL, NULL))
+        return FALSE;
+
+    return TRUE;
+}
+
+
+/*
+ * Batch-install every device in a multi-sz list via a single
+ * rundll32.exe invocation of newdev.dll,ClientSideInstallBatchW.
+ *
+ * Used at boot to amortize the rundll32 process-spawn cost (previously
+ * ~1 spawn per device, e.g. 53 spawns on the livecd first boot). The
+ * spawned child reads the whole device list from the named pipe and
+ * calls DevInstallW for each entry, signalling the install event once
+ * at the end.
+ *
+ * Returns TRUE if the batch child ran to completion and signalled the
+ * event (individual device failures inside the batch do NOT make this
+ * return FALSE — they match the per-device loop's tolerant behaviour).
+ * Returns FALSE on infrastructure failure (pipe/process creation, or
+ * child crash before signalling), in which case the caller should fall
+ * back to the per-device InstallDevice loop.
+ */
+static BOOL
+InstallDevicesBatch(PCWSTR MultiSzDeviceList, DWORD DeviceCount)
+{
+    BOOL BatchInstalled = FALSE;
+    DWORD BytesWritten;
+    DWORD Value;
+    DWORD ErrCode;
+    DWORD PipeBufferSize;
+    HANDLE hInstallEvent = NULL;
+    HANDLE hPipe = INVALID_HANDLE_VALUE;
+    LPVOID Environment = NULL;
+    PROCESS_INFORMATION ProcessInfo;
+    STARTUPINFOW StartupInfo;
+    UUID RandomUuid;
+    SECURITY_ATTRIBUTES EventAttrs;
+    PSECURITY_DESCRIPTOR EventSd;
+    PCWSTR currentDev;
+    DWORD i;
+
+    /* The following lengths are constant (see InstallDevice for rationale) */
+    WCHAR CommandLine[124];
+    WCHAR InstallEventName[73];
+    WCHAR PipeName[74];
+    WCHAR UuidString[39];
+
+    DPRINT1("Installing: batch[%lu devices]\n", DeviceCount);
+
+    ZeroMemory(&ProcessInfo, sizeof(ProcessInfo));
+
+    if (DeviceCount == 0 || MultiSzDeviceList == NULL)
+        return TRUE;
+
+    /* Random UUID for the pipe/event names (same pattern as InstallDevice) */
+    UuidCreate(&RandomUuid);
+    swprintf(UuidString, L"{%08X-%04X-%04X-%02X%02X-%02X%02X%02X%02X%02X%02X}",
+        RandomUuid.Data1, RandomUuid.Data2, RandomUuid.Data3,
+        RandomUuid.Data4[0], RandomUuid.Data4[1], RandomUuid.Data4[2],
+        RandomUuid.Data4[3], RandomUuid.Data4[4], RandomUuid.Data4[5],
+        RandomUuid.Data4[6], RandomUuid.Data4[7]);
+
+    ErrCode = CreatePnpInstallEventSecurity(&EventSd);
+    if (ErrCode != ERROR_SUCCESS)
+    {
+        DPRINT1("CreatePnpInstallEventSecurity failed with error %u\n", GetLastError());
+        return FALSE;
+    }
+
+    EventAttrs.nLength = sizeof(SECURITY_ATTRIBUTES);
+    EventAttrs.lpSecurityDescriptor = EventSd;
+    EventAttrs.bInheritHandle = FALSE;
+
+    wcscpy(InstallEventName, L"Global\\PNP_Device_Install_Event_0.");
+    wcscat(InstallEventName, UuidString);
+    hInstallEvent = CreateEventW(&EventAttrs, TRUE, FALSE, InstallEventName);
+    HeapFree(GetProcessHeap(), 0, EventSd);
+    if (!hInstallEvent)
+    {
+        DPRINT1("CreateEventW('%ls') failed with error %lu\n", InstallEventName, GetLastError());
+        goto cleanup;
+    }
+
+    /* 64 KB pipe buffer — 53 devices ≈ 8 KB, 64 KB leaves room to grow. */
+    PipeBufferSize = 64 * 1024;
+
+    wcscpy(PipeName, L"\\\\.\\pipe\\PNP_Device_Install_Pipe_0.");
+    wcscat(PipeName, UuidString);
+    hPipe = CreateNamedPipeW(PipeName, PIPE_ACCESS_OUTBOUND, PIPE_TYPE_BYTE | PIPE_NOWAIT, 1,
+                             PipeBufferSize, PipeBufferSize, 0, NULL);
+    if (hPipe == INVALID_HANDLE_VALUE)
+    {
+        DPRINT1("CreateNamedPipeW failed with error %u\n", GetLastError());
+        goto cleanup;
+    }
+
+    /* Launch rundll32 to call ClientSideInstallBatchW.
+     *
+     * rundll32 appends a 'W' suffix to the function name at Unicode lookup
+     * time (see base/system/rundll32/rundll32.c), so we pass
+     * "ClientSideInstallBatch" here and rundll32 resolves the real export
+     * "ClientSideInstallBatchW". Mirrors how "ClientSideInstall" resolves
+     * to ClientSideInstallW for the single-device path. */
+    wcscpy(CommandLine, L"rundll32.exe newdev.dll,ClientSideInstallBatch ");
+    wcscat(CommandLine, PipeName);
+
+    ZeroMemory(&StartupInfo, sizeof(StartupInfo));
+    StartupInfo.cb = sizeof(StartupInfo);
+
+    if (hUserToken)
+    {
+        /* Match InstallDevice(): even silent installs should run in the
+         * current user's environment once an interactive logon is known. */
+        if (!CreateEnvironmentBlock(&Environment, hUserToken, FALSE))
+        {
+            DPRINT1("CreateEnvironmentBlock(batch) failed with error %d\n", GetLastError());
+            goto cleanup;
+        }
+
+        if (!CreateProcessAsUserW(hUserToken, NULL, CommandLine, NULL, NULL, FALSE,
+                                  CREATE_UNICODE_ENVIRONMENT, Environment, NULL,
+                                  &StartupInfo, &ProcessInfo))
+        {
+            DPRINT1("CreateProcessAsUserW(batch) failed with error %u\n", GetLastError());
+            goto cleanup;
+        }
+    }
+    else
+    {
+        /* Step 1 runs before any interactive user token is reported. */
+        if (!CreateProcessW(NULL, CommandLine, NULL, NULL, FALSE, 0, NULL, NULL, &StartupInfo, &ProcessInfo))
+        {
+            DPRINT1("CreateProcessW(batch) failed with error %u\n", GetLastError());
+            goto cleanup;
+        }
+    }
+
+    /* Wait for the child to connect to our pipe */
+    if (!WaitForBatchClientConnect(hPipe, ProcessInfo.hProcess))
+    {
+        DPRINT1("WaitForBatchClientConnect failed with error %u\n", GetLastError());
+        goto cleanup;
+    }
+
+    /* Prologue: event name size + event name */
+    Value = sizeof(InstallEventName);
+    if (!WriteFile(hPipe, &Value, sizeof(Value), &BytesWritten, NULL) ||
+        !WriteFile(hPipe, InstallEventName, Value, &BytesWritten, NULL))
+    {
+        DPRINT1("WriteFile(EventName) failed with error %u\n", GetLastError());
+        goto cleanup;
+    }
+
+    /* ShowWizard — always FALSE for batch. */
+    {
+        BOOL ShowWizardFalse = FALSE;
+        if (!WriteFile(hPipe, &ShowWizardFalse, sizeof(ShowWizardFalse), &BytesWritten, NULL))
+        {
+            DPRINT1("WriteFile(ShowWizard) failed with error %u\n", GetLastError());
+            goto cleanup;
+        }
+    }
+
+    /* Batch-specific payload: DeviceCount then N (size, instance) pairs. */
+    if (!WriteFile(hPipe, &DeviceCount, sizeof(DeviceCount), &BytesWritten, NULL))
+    {
+        DPRINT1("WriteFile(DeviceCount) failed with error %u\n", GetLastError());
+        goto cleanup;
+    }
+
+    i = 0;
+    for (currentDev = MultiSzDeviceList;
+         currentDev[0] != UNICODE_NULL && i < DeviceCount;
+         currentDev += lstrlenW(currentDev) + 1, i++)
+    {
+        /* Same per-device DPRINT1 format as the legacy InstallDevice path —
+         * this is what the serial log used to show before we hand control to
+         * rundll32, keeping "where is the installs?" answerable in batch mode
+         * without dragging DbgPrint into newdev.dll. */
+        DPRINT1("Installing: %S\n", currentDev);
+
+        Value = (lstrlenW(currentDev) + 1) * sizeof(WCHAR);
+        if (!WriteFile(hPipe, &Value, sizeof(Value), &BytesWritten, NULL) ||
+            !WriteFile(hPipe, currentDev, Value, &BytesWritten, NULL))
+        {
+            DPRINT1("WriteFile(DeviceInstance[%lu]) failed with error %u\n", i, GetLastError());
+            goto cleanup;
+        }
+    }
+
+    /* Wait for the batch child to finish processing */
+    WaitForSingleObject(ProcessInfo.hProcess, INFINITE);
+
+    /* Batch success is reported by the shared install event being signalled
+     * exactly once at the end of the child's loop. */
+    BatchInstalled = WaitForSingleObject(hInstallEvent, 0) == WAIT_OBJECT_0;
+
+cleanup:
+    if (hInstallEvent)
+        CloseHandle(hInstallEvent);
+
+    if (hPipe != INVALID_HANDLE_VALUE)
+        CloseHandle(hPipe);
+
+    if (Environment)
+        DestroyEnvironmentBlock(Environment);
+
+    if (ProcessInfo.hProcess)
+        CloseHandle(ProcessInfo.hProcess);
+
+    if (ProcessInfo.hThread)
+        CloseHandle(ProcessInfo.hThread);
+
+    if (!BatchInstalled)
+    {
+        DPRINT1("InstallDevicesBatch failed for %lu device(s); caller will fall back\n", DeviceCount);
+    }
+
+    return BatchInstalled;
 }
 
 
@@ -525,7 +840,6 @@ DWORD
 WINAPI
 DeviceInstallThread(LPVOID lpParameter)
 {
-    PLIST_ENTRY ListEntry;
     DeviceInstallParams* Params;
 
     UNREFERENCED_PARAMETER(lpParameter);
@@ -567,12 +881,90 @@ DeviceInstallThread(LPVOID lpParameter)
         }
     }
 
+    /*
+     * Walk the raw multi-sz device list and build a filtered copy that
+     * contains ONLY devices which still need installation. Every already-
+     * installed device (Class assigned) or previously-failed device
+     * (CONFIGFLAG_FAILEDINSTALL) is dropped here, before we ever spawn
+     * rundll32 — this is where most of the boot-time savings come from on
+     * warm boots.
+     */
+    DWORD totalCount = 0, filteredCount = 0;
+    SIZE_T totalBytes = 0;
+    PWSTR filteredList = NULL;
+
     for (PWSTR currentDev = deviceList;
          currentDev[0] != UNICODE_NULL;
          currentDev += lstrlenW(currentDev) + 1)
     {
-        InstallDevice(currentDev, FALSE);
+        totalCount++;
+        totalBytes += (lstrlenW(currentDev) + 1) * sizeof(WCHAR);
     }
+    totalBytes += sizeof(WCHAR); /* final multi-sz terminator */
+
+    filteredList = HeapAlloc(GetProcessHeap(), 0, totalBytes);
+    if (filteredList)
+    {
+        PWSTR outCursor = filteredList;
+        for (PWSTR currentDev = deviceList;
+             currentDev[0] != UNICODE_NULL;
+             currentDev += lstrlenW(currentDev) + 1)
+        {
+            if (DeviceNeedsInstall(currentDev))
+            {
+                SIZE_T cch = lstrlenW(currentDev) + 1;
+                memcpy(outCursor, currentDev, cch * sizeof(WCHAR));
+                outCursor += cch;
+                filteredCount++;
+            }
+            else
+            {
+                DPRINT("No need to install: %S\n", currentDev);
+            }
+        }
+        *outCursor = UNICODE_NULL; /* multi-sz terminator */
+    }
+
+    DPRINT1("Boot device install: %lu candidate(s), %lu need install\n",
+            totalCount, filteredCount);
+
+    if (filteredList != NULL && filteredCount != 0)
+    {
+        /* Try the batch path first — one rundll32 spawn for the whole
+         * filtered boot device list. Falls back to the legacy per-device
+         * loop if the batch child fails to signal completion (e.g. an
+         * older newdev.dll without ClientSideInstallBatchW, or an
+         * infrastructure failure). */
+        if (!InstallDevicesBatch(filteredList, filteredCount))
+        {
+            DPRINT1("Batch install failed, falling back to per-device loop\n");
+
+            for (PWSTR currentDev = filteredList;
+                 currentDev[0] != UNICODE_NULL;
+                 currentDev += lstrlenW(currentDev) + 1)
+            {
+                InstallDevice(currentDev, FALSE);
+            }
+        }
+    }
+    else if (filteredList == NULL)
+    {
+        /* Allocation failed — fall back to the legacy per-device loop over
+         * the unfiltered list. Each InstallDevice call will still skip
+         * already-installed entries via its own RegQueryValueExW check. */
+        DPRINT1("Filtered list allocation failed, falling back to per-device loop\n");
+
+        for (PWSTR currentDev = deviceList;
+             currentDev[0] != UNICODE_NULL;
+             currentDev += lstrlenW(currentDev) + 1)
+        {
+            InstallDevice(currentDev, FALSE);
+        }
+    }
+    /* else: nothing to install, skip the spawn entirely. */
+
+    if (filteredList)
+        HeapFree(GetProcessHeap(), 0, filteredList);
 
 Cleanup:
     HeapFree(GetProcessHeap(), 0, deviceList);
@@ -588,22 +980,107 @@ Step2:
 
     while (TRUE)
     {
-        /* Dequeue the next oldest device-install event */
+        /*
+         * Drain the queue into a local list under a single mutex hold, then
+         * release the mutex and process the whole burst. When the kernel
+         * triggers a flurry of DeviceInstall events (e.g. after Step 1
+         * completes and PnP starts its way through all boot devices), this
+         * lets us batch them into one rundll32 spawn instead of firing one
+         * CreateProcess per event — which was the main residual slowness
+         * after the Step 1 batch optimization.
+         */
+        LIST_ENTRY LocalBurst;
+        InitializeListHead(&LocalBurst);
+
         WaitForSingleObject(hDeviceInstallListMutex, INFINITE);
-        ListEntry = (IsListEmpty(&DeviceInstallListHead)
-                        ? NULL : RemoveHeadList(&DeviceInstallListHead));
+        while (!IsListEmpty(&DeviceInstallListHead))
+        {
+            PLIST_ENTRY entry = RemoveHeadList(&DeviceInstallListHead);
+            InsertTailList(&LocalBurst, entry);
+        }
         ReleaseMutex(hDeviceInstallListMutex);
 
-        if (ListEntry == NULL)
+        if (IsListEmpty(&LocalBurst))
         {
             SetEvent(hNoPendingInstalls);
             WaitForSingleObject(hDeviceInstallListNotEmpty, INFINITE);
+            continue;
         }
-        else
+
+        ResetEvent(hNoPendingInstalls);
+
+        /*
+         * If the burst contains more than one device AND we don't need the
+         * UI wizard, batch them through a single ClientSideInstallBatchW
+         * rundll32 spawn. Otherwise fall back to the legacy per-device
+         * path (which still respects ShowWizard and drives the wizard UI
+         * for interactive installs).
+         */
+        BOOL burstShowWizard = showWizard && !IsUISuppressionAllowed();
+        if (!burstShowWizard)
         {
-            ResetEvent(hNoPendingInstalls);
-            Params = CONTAINING_RECORD(ListEntry, DeviceInstallParams, ListEntry);
-            InstallDevice(Params->DeviceIds, showWizard && !IsUISuppressionAllowed());
+            /* Count the burst and build a multi-sz list for the batch child. */
+            DWORD burstCount = 0;
+            SIZE_T burstBytes = sizeof(WCHAR); /* final multi-sz NUL */
+
+            for (PLIST_ENTRY e = LocalBurst.Flink; e != &LocalBurst; e = e->Flink)
+            {
+                DeviceInstallParams* p = CONTAINING_RECORD(e, DeviceInstallParams, ListEntry);
+                burstCount++;
+                burstBytes += (lstrlenW(p->DeviceIds) + 1) * sizeof(WCHAR);
+            }
+
+            PWSTR burstList = NULL;
+            if (burstCount > 1)
+            {
+                burstList = HeapAlloc(GetProcessHeap(), 0, burstBytes);
+            }
+
+            if (burstList != NULL)
+            {
+                /* Filter out devices that no longer need install. */
+                DWORD filteredBurstCount = 0;
+                PWSTR outCursor = burstList;
+                for (PLIST_ENTRY e = LocalBurst.Flink; e != &LocalBurst; e = e->Flink)
+                {
+                    DeviceInstallParams* p = CONTAINING_RECORD(e, DeviceInstallParams, ListEntry);
+                    if (DeviceNeedsInstall(p->DeviceIds))
+                    {
+                        SIZE_T cch = lstrlenW(p->DeviceIds) + 1;
+                        memcpy(outCursor, p->DeviceIds, cch * sizeof(WCHAR));
+                        outCursor += cch;
+                        filteredBurstCount++;
+                    }
+                }
+                *outCursor = UNICODE_NULL;
+
+                if (filteredBurstCount == 0 ||
+                    InstallDevicesBatch(burstList, filteredBurstCount))
+                {
+                    /* Burst handled (batch succeeded or nothing to do). */
+                    HeapFree(GetProcessHeap(), 0, burstList);
+                    while (!IsListEmpty(&LocalBurst))
+                    {
+                        PLIST_ENTRY e = RemoveHeadList(&LocalBurst);
+                        Params = CONTAINING_RECORD(e, DeviceInstallParams, ListEntry);
+                        HeapFree(GetProcessHeap(), 0, Params);
+                    }
+                    continue;
+                }
+
+                HeapFree(GetProcessHeap(), 0, burstList);
+                /* Fall through to per-device loop on batch failure. */
+                DPRINT1("Step 2 batch failed, falling back to per-device loop\n");
+            }
+        }
+
+        /* Per-device path: either a single-device burst, a wizard is wanted,
+         * or the batch attempt failed — process each entry individually. */
+        while (!IsListEmpty(&LocalBurst))
+        {
+            PLIST_ENTRY e = RemoveHeadList(&LocalBurst);
+            Params = CONTAINING_RECORD(e, DeviceInstallParams, ListEntry);
+            InstallDevice(Params->DeviceIds, burstShowWizard);
             HeapFree(GetProcessHeap(), 0, Params);
         }
     }
