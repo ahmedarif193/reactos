@@ -25,6 +25,7 @@
 #if defined(__GNUC__)
 extern VOID
 AddReactOSArcDiskInfo(
+<<<<<<< HEAD
     _In_ PCSTR ArcName,
     _In_opt_ PGUID GptDiskGuid,
     _In_ ULONG Signature,
@@ -41,6 +42,21 @@ AddReactOSArcDiskInfoStub(
 {
     UNREFERENCED_PARAMETER(ArcName);
     UNREFERENCED_PARAMETER(GptDiskGuid);
+=======
+    IN PSTR ArcName,
+    IN ULONG Signature,
+    IN ULONG Checksum,
+    IN BOOLEAN ValidPartitionTable) __attribute__((weak));
+#elif defined(_MSC_VER)
+VOID
+AddReactOSArcDiskInfoStub(
+    IN PSTR ArcName,
+    IN ULONG Signature,
+    IN ULONG Checksum,
+    IN BOOLEAN ValidPartitionTable)
+{
+    UNREFERENCED_PARAMETER(ArcName);
+>>>>>>> f1134838189 ([RAMDISK] Add writable FAT ramdisk boot support for LiveCD/UEFI)
     UNREFERENCED_PARAMETER(Signature);
     UNREFERENCED_PARAMETER(Checksum);
     UNREFERENCED_PARAMETER(ValidPartitionTable);
@@ -71,7 +87,10 @@ VOID FatFlushCacheStub(VOID)
 #endif
 #include <ramdisk_fatwrite.h>
 #include <ramdisk_signature.h>
+<<<<<<< HEAD
 #include <wim.h>
+=======
+>>>>>>> f1134838189 ([RAMDISK] Add writable FAT ramdisk boot support for LiveCD/UEFI)
 #include "../ntldr/ntldropts.h"
 
 DBG_DEFAULT_CHANNEL(DISK);
@@ -236,7 +255,11 @@ RamDiskRegisterArcDevice(VOID)
 
     if (AddReactOSArcDiskInfo)
     {
+<<<<<<< HEAD
         AddReactOSArcDiskInfo("ramdisk(0)", NULL, Signature, Checksum, ValidPartition);
+=======
+        AddReactOSArcDiskInfo("ramdisk(0)", Signature, Checksum, ValidPartition);
+>>>>>>> f1134838189 ([RAMDISK] Add writable FAT ramdisk boot support for LiveCD/UEFI)
     }
     ArcRegistered = TRUE;
 }
@@ -298,6 +321,7 @@ typedef struct _ISO_SOURCE
     ULONGLONG ArcPosition;
 } ISO_SOURCE, *PISO_SOURCE;
 
+<<<<<<< HEAD
 typedef struct _RAMDISK_PROGRESS_CONTEXT
 {
     BOOLEAN ProgressActive;
@@ -313,6 +337,8 @@ typedef struct _RAMDISK_PROGRESS_CONTEXT
     PCSTR CompletionText;
 } RAMDISK_PROGRESS_CONTEXT, *PRAMDISK_PROGRESS_CONTEXT;
 
+=======
+>>>>>>> f1134838189 ([RAMDISK] Add writable FAT ramdisk boot support for LiveCD/UEFI)
 typedef struct _ISO_COPY_CONTEXT
 {
     PISO_SOURCE Source;
@@ -323,12 +349,24 @@ typedef struct _ISO_COPY_CONTEXT
     PUCHAR DirectoryBuffer;
     ULONG DirectoryBufferSize;
     BOOLEAN DirectoryBufferBusy;
+<<<<<<< HEAD
     RAMDISK_PROGRESS_CONTEXT Progress;
     /* If non-NULL, causes IsoCopyDirectoryRecursive() to skip any file
      * named exactly this at the ROOT of the ISO walk.  Used by the WIM
      * overlay step so boot.wim itself is not re-copied into the ramdisk
      * it already unpacked into. Case-insensitive ASCII compare. */
     PCSTR SkipRootFileName;
+=======
+    BOOLEAN ProgressActive;
+    ULONGLONG TotalBytes;
+    ULONGLONG BytesCopied;
+    ULONG LastPercentShown;
+    CHAR ProgressMessage[128];
+    ULONG ProgressStartSeconds;
+    ULONG LastDisplaySeconds;
+    ULONG LastSpeedKBs;
+    ULONG LastSecsLeft;
+>>>>>>> f1134838189 ([RAMDISK] Add writable FAT ramdisk boot support for LiveCD/UEFI)
 } ISO_COPY_CONTEXT, *PISO_COPY_CONTEXT;
 
 #define ISO_SCRATCH_MIN_SIZE     (1024 * 1024)
@@ -488,8 +526,13 @@ IsoEnsureScratchBuffer(
 
 static
 VOID
+<<<<<<< HEAD
 RamDiskProgressDisplay(
     _Inout_ PRAMDISK_PROGRESS_CONTEXT Context,
+=======
+IsoProgressDisplay(
+    _Inout_ PISO_COPY_CONTEXT Context,
+>>>>>>> f1134838189 ([RAMDISK] Add writable FAT ramdisk boot support for LiveCD/UEFI)
     _In_ ULONG Percent)
 {
     if (!Context)
@@ -500,6 +543,7 @@ RamDiskProgressDisplay(
 
 static
 VOID
+<<<<<<< HEAD
 RamDiskProgressInitialize(
     _Inout_ PRAMDISK_PROGRESS_CONTEXT Context,
     _In_ ULONGLONG TotalBytes,
@@ -511,6 +555,15 @@ RamDiskProgressInitialize(
         return;
 
     Context->TotalBytes = TotalBytes;
+=======
+IsoProgressInitialize(
+    _Inout_ PISO_COPY_CONTEXT Context)
+{
+    if (!Context || !Context->Source || Context->Source->Size == 0)
+        return;
+
+    Context->TotalBytes = Context->Source->Size;
+>>>>>>> f1134838189 ([RAMDISK] Add writable FAT ramdisk boot support for LiveCD/UEFI)
     Context->BytesCopied = 0;
     Context->LastPercentShown = 0;
     Context->ProgressActive = TRUE;
@@ -518,6 +571,7 @@ RamDiskProgressInitialize(
     Context->LastDisplaySeconds = Context->ProgressStartSeconds;
     Context->LastSpeedKBs = 0;
     Context->LastSecsLeft = 0;
+<<<<<<< HEAD
     Context->ActivityPrefix = ActivityPrefix;
     Context->CompletionText = CompletionText;
 
@@ -528,12 +582,26 @@ RamDiskProgressInitialize(
                        "%s",
                        TitleText);
     RamDiskProgressDisplay(Context, 0);
+=======
+
+    UiDrawProgressBarCenter("Copying files...");
+
+    RtlStringCbPrintfA(Context->ProgressMessage,
+                       sizeof(Context->ProgressMessage),
+                       "Copying files...");
+    IsoProgressDisplay(Context, 0);
+>>>>>>> f1134838189 ([RAMDISK] Add writable FAT ramdisk boot support for LiveCD/UEFI)
 }
 
 static
 VOID
+<<<<<<< HEAD
 RamDiskProgressAdvance(
     _Inout_ PRAMDISK_PROGRESS_CONTEXT Context,
+=======
+IsoProgressAdvance(
+    _Inout_ PISO_COPY_CONTEXT Context,
+>>>>>>> f1134838189 ([RAMDISK] Add writable FAT ramdisk boot support for LiveCD/UEFI)
     _In_ ULONGLONG Bytes)
 {
     ULONG Percent;
@@ -596,15 +664,23 @@ RamDiskProgressAdvance(
         {
             RtlStringCbPrintfA(Context->ProgressMessage,
                                sizeof(Context->ProgressMessage),
+<<<<<<< HEAD
                                "%s",
                                Context->CompletionText ? Context->CompletionText : "Complete");
+=======
+                               "Copy complete");
+>>>>>>> f1134838189 ([RAMDISK] Add writable FAT ramdisk boot support for LiveCD/UEFI)
         }
         else
         {
             RtlStringCbPrintfA(Context->ProgressMessage,
                                sizeof(Context->ProgressMessage),
+<<<<<<< HEAD
                                "%s %u%% (%llu/%llu KB, %u KB/s, %us left)",
                                Context->ActivityPrefix ? Context->ActivityPrefix : "Ramdisk",
+=======
+                               "Ramdisk %u%% (%llu/%llu KB, %u KB/s, %us left)",
+>>>>>>> f1134838189 ([RAMDISK] Add writable FAT ramdisk boot support for LiveCD/UEFI)
                                Percent,
                                CopiedKB,
                                TotalKB,
@@ -612,16 +688,26 @@ RamDiskProgressAdvance(
                                Context->LastSecsLeft);
         }
 
+<<<<<<< HEAD
         RamDiskProgressDisplay(Context, Percent);
         TRACE("RamDiskProgress: %s\n", Context->ProgressMessage);
+=======
+        IsoProgressDisplay(Context, Percent);
+        TRACE("IsoProgress: %s\n", Context->ProgressMessage);
+>>>>>>> f1134838189 ([RAMDISK] Add writable FAT ramdisk boot support for LiveCD/UEFI)
         Context->LastPercentShown = Percent;
     }
 }
 
 static
 VOID
+<<<<<<< HEAD
 RamDiskProgressComplete(
     _Inout_ PRAMDISK_PROGRESS_CONTEXT Context)
+=======
+IsoProgressComplete(
+    _Inout_ PISO_COPY_CONTEXT Context)
+>>>>>>> f1134838189 ([RAMDISK] Add writable FAT ramdisk boot support for LiveCD/UEFI)
 {
     if (!Context || !Context->ProgressActive)
         return;
@@ -632,6 +718,7 @@ RamDiskProgressComplete(
 
     RtlStringCbPrintfA(Context->ProgressMessage,
                        sizeof(Context->ProgressMessage),
+<<<<<<< HEAD
                        "%s",
                        Context->CompletionText ? Context->CompletionText : "Complete");
     RamDiskProgressDisplay(Context, 100);
@@ -673,6 +760,10 @@ IsoProgressComplete(
         return;
 
     RamDiskProgressComplete(&Context->Progress);
+=======
+                       "Copy complete");
+    IsoProgressDisplay(Context, 100);
+>>>>>>> f1134838189 ([RAMDISK] Add writable FAT ramdisk boot support for LiveCD/UEFI)
 }
 
 static
@@ -1261,6 +1352,7 @@ IsoCopyDirectoryRecursive(
             continue;
         }
 
+<<<<<<< HEAD
         /* Root-level skip filter: used by the WIM overlay so the
          * caller can exclude boot.wim itself from the copy (the WIM
          * has already been unpacked into the FAT by its own populator).
@@ -1276,6 +1368,8 @@ IsoCopyDirectoryRecursive(
             continue;
         }
 
+=======
+>>>>>>> f1134838189 ([RAMDISK] Add writable FAT ramdisk boot support for LiveCD/UEFI)
         {
             size_t Need = strlen(DestinationPath) + 1 + strlen(NameBuffer) + 1;
 
@@ -1458,6 +1552,7 @@ RamDiskPopulateFatFromIso(
     return TRUE;
 }
 
+<<<<<<< HEAD
 /*
  * Overlay the remaining CD-ROM content into the FAT32 volume AFTER the
  * WIM payload has been unpacked.
@@ -1793,6 +1888,8 @@ RamDiskPopulateFatFromWim(
     return TRUE;
 }
 
+=======
+>>>>>>> f1134838189 ([RAMDISK] Add writable FAT ramdisk boot support for LiveCD/UEFI)
 BOOLEAN
 RamDiskBuildWritableImage(
     IN PISO_SOURCE Source,
@@ -1804,14 +1901,20 @@ RamDiskBuildWritableImage(
     PVOID WritableBase = NULL;
     ULONGLONG WritableSize = 0;
     ULONGLONG RequiredSize;
+<<<<<<< HEAD
     ULONGLONG SourceSize;
     ULONGLONG ResidentSourceBytes = 0;
     BOOLEAN WimSource;
+=======
+    ULONGLONG IsoSize;
+    ULONGLONG ResidentIsoBytes = 0;
+>>>>>>> f1134838189 ([RAMDISK] Add writable FAT ramdisk boot support for LiveCD/UEFI)
     RAMDISK_FAT32_LAYOUT Layout;
 
     if (!Source || !NewBase || !NewSize || Source->Size == 0)
         return FALSE;
 
+<<<<<<< HEAD
     SourceSize = Source->Size;
     WimSource = RamDiskSourceIsWim(Source);
 
@@ -1854,6 +1957,14 @@ RamDiskBuildWritableImage(
         if (RequiredSize < SourceSize + RAMDISK_MINIMUM_EXTRA_SPACE)
             RequiredSize = SourceSize + RAMDISK_MINIMUM_EXTRA_SPACE;
     }
+=======
+    IsoSize = Source->Size;
+
+    /* Leave some slack to account for ISO9660 metadata and future writes */
+    RequiredSize = RequestedSize;
+    if (RequiredSize < IsoSize + RAMDISK_MINIMUM_EXTRA_SPACE)
+        RequiredSize = IsoSize + RAMDISK_MINIMUM_EXTRA_SPACE;
+>>>>>>> f1134838189 ([RAMDISK] Add writable FAT ramdisk boot support for LiveCD/UEFI)
 
     if (RequiredSize + RAMDISK_SAFETY_SLACK > RAMDISK_LOW_ALLOC_MAX)
     {
@@ -1869,17 +1980,30 @@ RamDiskBuildWritableImage(
     }
 
     if (Source->MemoryBase)
+<<<<<<< HEAD
         ResidentSourceBytes = ALIGN_UP_BY_ULL(SourceSize, RAMDISK_ALLOCATION_ALIGNMENT);
 
     if ((RequiredSize + ResidentSourceBytes + RAMDISK_SAFETY_SLACK) > RAMDISK_LOW_ALLOC_MAX)
     {
         WARN("RamDiskBuildWritableImage: %llu-byte source plus %llu-byte writable buffer exceed low-memory budget %llu\n",
              SourceSize,
+=======
+        ResidentIsoBytes = ALIGN_UP_BY_ULL(IsoSize, RAMDISK_ALLOCATION_ALIGNMENT);
+
+    if ((RequiredSize + ResidentIsoBytes + RAMDISK_SAFETY_SLACK) > RAMDISK_LOW_ALLOC_MAX)
+    {
+        WARN("RamDiskBuildWritableImage: %llu-byte ISO plus %llu-byte writable buffer exceed low-memory budget %llu\n",
+             IsoSize,
+>>>>>>> f1134838189 ([RAMDISK] Add writable FAT ramdisk boot support for LiveCD/UEFI)
              RequiredSize,
              RAMDISK_LOW_ALLOC_MAX);
         if (!RamDiskErrorShown && !OptionalRamDisk)
         {
+<<<<<<< HEAD
             UiMessageBox("Writable RAM disk request uses too much low memory to keep the source image resident.");
+=======
+            UiMessageBox("Writable RAM disk request uses too much low memory to keep the ISO resident.");
+>>>>>>> f1134838189 ([RAMDISK] Add writable FAT ramdisk boot support for LiveCD/UEFI)
             RamDiskErrorShown = TRUE;
         }
         return FALSE;
@@ -1889,8 +2013,13 @@ RamDiskBuildWritableImage(
     if (RequiredSize == 0 || RequiredSize > MAXULONG)
         return FALSE;
 
+<<<<<<< HEAD
     TRACE("RamDiskBuildWritableImage: source=%llu requested=%llu align=%llu\n",
           SourceSize,
+=======
+    TRACE("RamDiskBuildWritableImage: ISO=%llu requested=%llu align=%llu\n",
+          IsoSize,
+>>>>>>> f1134838189 ([RAMDISK] Add writable FAT ramdisk boot support for LiveCD/UEFI)
           RequestedSize,
           RequiredSize);
 
@@ -1911,8 +2040,12 @@ RamDiskBuildWritableImage(
         return FALSE;
     }
 
+<<<<<<< HEAD
     TRACE("RamDiskBuildWritableImage: populating ramdisk from %s\n",
           WimSource ? "WIM" : "ISO");
+=======
+    TRACE("RamDiskBuildWritableImage: populating ramdisk from ISO\n");
+>>>>>>> f1134838189 ([RAMDISK] Add writable FAT ramdisk boot support for LiveCD/UEFI)
 
     {
         ULONGLONG VolumeOffset;
@@ -1929,6 +2062,7 @@ RamDiskBuildWritableImage(
         VolumeBase = (PUCHAR)WritableBase + VolumeOffset;
         VolumeSize = WritableSize - VolumeOffset;
 
+<<<<<<< HEAD
         if (WimSource)
         {
             TRACE("RamDiskBuildWritableImage: source is a WIM archive, using WIM populator\n");
@@ -1951,6 +2085,15 @@ RamDiskBuildWritableImage(
                 MmFreeMemory(WritableBase);
                 return FALSE;
             }
+=======
+        if (!RamDiskPopulateFatFromIso(VolumeBase,
+                                       VolumeSize,
+                                       Source,
+                                       &Layout))
+        {
+            MmFreeMemory(WritableBase);
+            return FALSE;
+>>>>>>> f1134838189 ([RAMDISK] Add writable FAT ramdisk boot support for LiveCD/UEFI)
         }
 
         RamDiskSetVisibleRegion(VolumeOffset, VolumeSize);
@@ -2681,7 +2824,10 @@ RamDiskInitialize(
         PVOID OriginalBase;
         BOOLEAN StreamingSucceeded = FALSE;
         ULONGLONG StreamIsoSize = 0;
+<<<<<<< HEAD
         BOOLEAN StreamSourceIsWim = FALSE;
+=======
+>>>>>>> f1134838189 ([RAMDISK] Add writable FAT ramdisk boot support for LiveCD/UEFI)
         BOOLEAN OptionalRamDisk;
 
         /* If we don't have any load options, initialize an empty Ramdisk */
@@ -2785,6 +2931,7 @@ RamDiskInitialize(
 
                 if (StreamStatus == ESUCCESS)
                 {
+<<<<<<< HEAD
                     StreamSourceIsWim = RamDiskSourceIsWim(&StreamSource);
                     if (StreamSourceIsWim)
                     {
@@ -2797,6 +2944,8 @@ RamDiskInitialize(
 
                 if (StreamStatus == ESUCCESS)
                 {
+=======
+>>>>>>> f1134838189 ([RAMDISK] Add writable FAT ramdisk boot support for LiveCD/UEFI)
                     StreamIsoSize = StreamSource.Size;
                     {
                         ULONGLONG ExtraBytes = RamDiskRequestedSize;
@@ -2868,7 +3017,11 @@ RamDiskInitialize(
             if (StreamingSucceeded)
                 goto WritableReady;
 
+<<<<<<< HEAD
             if (RamDiskRequestedSize != 0 && StreamIsoSize != 0 && !StreamSourceIsWim)
+=======
+            if (RamDiskRequestedSize != 0 && StreamIsoSize != 0)
+>>>>>>> f1134838189 ([RAMDISK] Add writable FAT ramdisk boot support for LiveCD/UEFI)
             {
                 ULONGLONG IsoSize = StreamIsoSize;
                 ULONGLONG ResidentIsoBytes;
@@ -2926,16 +3079,29 @@ RamDiskInitialize(
             return Status;
 
         OriginalBase = RamDiskBase;
+<<<<<<< HEAD
+=======
+        if (RamDiskRequestedSize != 0)
+>>>>>>> f1134838189 ([RAMDISK] Add writable FAT ramdisk boot support for LiveCD/UEFI)
         {
             PVOID WritableBase;
             ULONGLONG WritableSize;
             PVOID IsoImageBase;
             ULONGLONG IsoImageLength;
             ISO_SOURCE MemorySource;
+<<<<<<< HEAD
             BOOLEAN WimSource;
             ULONGLONG ExtraBytes;
             ULONGLONG TotalTarget;
 
+=======
+            ULONGLONG ExtraBytes;
+            ULONGLONG TotalTarget;
+
+            TRACE("RamDiskInitialize: expanding to writable RAMFS (extra %llu bytes requested)\n",
+                  RamDiskRequestedSize);
+
+>>>>>>> f1134838189 ([RAMDISK] Add writable FAT ramdisk boot support for LiveCD/UEFI)
             IsoImageBase = (PVOID)((ULONG_PTR)OriginalBase + RamDiskImageOffset);
             IsoImageLength = RamDiskFileSize - RamDiskImageOffset;
 
@@ -2948,6 +3114,7 @@ RamDiskInitialize(
             MemorySource.ArcOffset = 0;
             MemorySource.ArcPosition = 0;
 
+<<<<<<< HEAD
             WimSource = RamDiskSourceIsWim(&MemorySource);
             if (RamDiskRequestedSize != 0 || WimSource)
             {
@@ -3023,6 +3190,45 @@ RamDiskInitialize(
                 TRACE("RamDiskInitialize: writable ramdisk ready (%llu bytes)\n",
                       RamDiskFileSize);
             }
+=======
+            /* New semantics: total target = ISO length + extra (>=64MiB) */
+            ExtraBytes = RamDiskRequestedSize;
+            if (ExtraBytes < RAMDISK_MINIMUM_EXTRA_SPACE)
+                ExtraBytes = RAMDISK_MINIMUM_EXTRA_SPACE;
+            TotalTarget = MemorySource.Size + ExtraBytes;
+
+            if (!RamDiskBuildWritableImage(&MemorySource,
+                                           TotalTarget,
+                                           &WritableBase,
+                                           &WritableSize,
+                                           OptionalRamDisk))
+            {
+                if (!RamDiskErrorShown && !OptionalRamDisk)
+                {
+                    UiMessageBox("Failed to expand LiveCD into writable RAM.");
+                    RamDiskErrorShown = TRUE;
+                }
+                RamDiskRequestedSize = 0;
+                TRACE("RamDiskInitialize: continuing with read-only ISO because writable buffer allocation failed\n");
+                RamDiskBase = OriginalBase;
+                RamDiskVolumeOffset = 0;
+                RamDiskVolumeLength = 0;
+                goto WritableFallback;
+            }
+
+            if ((OriginalBase != gInitRamDiskBase) &&
+                (OriginalBase != WritableBase))
+            {
+                MmFreeMemory(OriginalBase);
+            }
+
+            RamDiskBase = WritableBase;
+            RamDiskFileSize = WritableSize;
+            RamDiskImageOffset = 0;
+            RamDiskImageLength = WritableSize;
+            TRACE("RamDiskInitialize: writable ramdisk ready (%llu bytes)\n",
+                  RamDiskFileSize);
+>>>>>>> f1134838189 ([RAMDISK] Add writable FAT ramdisk boot support for LiveCD/UEFI)
         }
     }
 

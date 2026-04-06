@@ -45,7 +45,11 @@ IopCreateArcNames(IN PLOADER_PARAMETER_BLOCK LoaderBlock)
     BOOLEAN FoundBoot = FALSE;
     UNICODE_STRING SystemDevice, LoaderPathNameW, BootDeviceName;
     PARC_DISK_INFORMATION ArcDiskInfo = LoaderBlock->ArcDiskInformation;
+<<<<<<< HEAD
     ANSI_STRING ArcString, LanmanRedirector, LoaderPathNameA;
+=======
+    ANSI_STRING ArcSystemString, ArcString, LanmanRedirector, LoaderPathNameA;
+>>>>>>> f1134838189 ([RAMDISK] Add writable FAT ramdisk boot support for LiveCD/UEFI)
     BOOLEAN RamdiskBoot = (_strnicmp(LoaderBlock->ArcBootDeviceName, "ramdisk(0)", 10) == 0);
 
     /* Check if we only have one disk on the machine */
