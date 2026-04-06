@@ -898,13 +898,14 @@ FsRtlOplockCleanup(IN PINTERNAL_OPLOCK Oplock,
 
 NTSTATUS
 NTAPI
-FsRtlOplockBreakToNone(IN PINTERNAL_OPLOCK Oplock,
+FsRtlOplockBreakToNone(IN POPLOCK OplockPtr,
                        IN PIO_STACK_LOCATION Stack,
                        IN PIRP Irp,
                        IN PVOID Context,
                        IN POPLOCK_WAIT_COMPLETE_ROUTINE CompletionRoutine OPTIONAL,
                        IN POPLOCK_FS_PREPOST_IRP PostIrpRoutine OPTIONAL)
 {
+    PINTERNAL_OPLOCK Oplock = (PINTERNAL_OPLOCK)OplockPtr;
     PLIST_ENTRY NextEntry;
     PWAIT_CONTEXT WaitCtx;
     PIRP ListIrp;
@@ -1185,7 +1186,7 @@ FsRtlCheckOplock(IN POPLOCK Oplock,
 
 #define BreakToNoneIfRequired                                                             \
     if (IntOplock->Flags == LEVEL_2_OPLOCK || IntOplock->FileObject != Stack->FileObject) \
-        return FsRtlOplockBreakToNone(IntOplock, Stack, Irp, Context, CompletionRoutine, PostIrpRoutine)
+        return FsRtlOplockBreakToNone((POPLOCK)IntOplock, Stack, Irp, Context, CompletionRoutine, PostIrpRoutine)
 
     DPRINT("FsRtlCheckOplock(%p, %p, %p, %p, %p)\n", Oplock, Irp, Context, CompletionRoutine, PostIrpRoutine);
 

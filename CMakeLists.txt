@@ -61,6 +61,12 @@ include(sdk/include/reactos/version.cmake)
 # Compile options
 include(sdk/cmake/config.cmake)
 
+# Derive the target NTDDI level from REACTOS_TARGET_NT for *both* the
+# cross-compile (target) build and the host-tools build below — host tools like
+# mkhive need the same NTDDI level the kernel will use so cmlib's hive-format
+# feature gates stay in sync. (NTDDI = _WIN32_WINNT << 16, e.g. 0x601 → 0x06010000.)
+math(EXPR REACTOS_TARGET_NTDDI "${REACTOS_TARGET_NT} * 65536" OUTPUT_FORMAT HEXADECIMAL)
+
 # Compiler flags handling
 include(sdk/cmake/compilerflags.cmake)
 
@@ -232,16 +238,22 @@ Enable this if the module uses typeid or dynamic_cast. You will probably need to
         option(PCH "Whether to use precompiled headers" ON)
     endif()
 
-    # Version Options
-    add_definitions(-DWINVER=0x502
+    # Version Options (REACTOS_TARGET_NTDDI is computed unconditionally above
+    # so host-tools see the same value).
+    math(EXPR _NT_MAJOR "${REACTOS_TARGET_NT} / 256")
+    math(EXPR _NT_MINOR "${REACTOS_TARGET_NT} % 256")
+
+    add_definitions(-DWINVER=${REACTOS_TARGET_NT}
                     -D_WIN32_IE=0x603
-                    -D_WIN32_WINNT=0x502
-                    -D_WIN32_WINDOWS=0x502
-                    -D_SETUPAPI_VER=0x502
+                    -D_WIN32_WINNT=${REACTOS_TARGET_NT}
+                    -D_WIN32_WINDOWS=${REACTOS_TARGET_NT}
+                    -D_SETUPAPI_VER=${REACTOS_TARGET_NT}
                     -DMINGW_HAS_SECURE_API=1
                     -DD3D_UMD_INTERFACE_VERSION=0x000C # Vista
                     -DDXGKDDI_INTERFACE_VERSION=0x1052 # Vista
-                    -DDLL_EXPORT_VERSION=${DLL_EXPORT_VERSION})
+                    -DDLL_EXPORT_VERSION=${DLL_EXPORT_VERSION}
+                    -DVER_PRODUCTMAJORVERSION=${_NT_MAJOR}
+                    -DVER_PRODUCTMINORVERSION=${_NT_MINOR})
 
     # Arch Options
     if(ARCH STREQUAL "i386")

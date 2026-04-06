@@ -13,6 +13,12 @@ USHORT gusLanguageID;
 
 BOOL NTAPI GDI_CleanupForProcess(struct _EPROCESS *Process);
 
+/* Undocumented but exported ntoskrnl function */
+NTKERNELAPI
+PPEB
+NTAPI
+PsGetProcessPeb(PEPROCESS Process);
+
 NTSTATUS
 GdiProcessCreate(PEPROCESS Process)
 {
@@ -28,8 +34,14 @@ GdiProcessCreate(PEPROCESS Process)
     InitializeListHead(&ppiCurrent->GDIDcAttrFreeList);
 
     /* Map the GDI handle table to user land */
-    Process->Peb->GdiSharedHandleTable = GDI_MapHandleTable(Process);
-    Process->Peb->GdiDCAttributeList = GDI_BATCH_LIMIT;
+    {
+        PPEB Peb = PsGetProcessPeb(Process);
+        if (Peb)
+        {
+            Peb->GdiSharedHandleTable = GDI_MapHandleTable(Process);
+            Peb->GdiDCAttributeList = GDI_BATCH_LIMIT;
+        }
+    }
 
     /* Create pools for GDI object attributes */
     ppiCurrent->pPoolDcAttr = GdiPoolCreate(sizeof(DC_ATTR), 'acdG');

@@ -359,3 +359,90 @@ FailEmpty:
     return STATUS_NOT_FOUND;
 }
 
+NTKRNLVISTAAPI
+BOOLEAN
+NTAPI
+FsRtlAreVolumeStartupApplicationsComplete(VOID)
+{
+    return TRUE;
+}
+
+NTKRNLVISTAAPI
+NTSTATUS
+NTAPI
+FsRtlCheckOplockEx(
+    _In_ POPLOCK Oplock,
+    _In_ PIRP Irp,
+    _In_ ULONG Flags,
+    _In_opt_ PVOID Context,
+    _In_opt_ POPLOCK_WAIT_COMPLETE_ROUTINE CompletionRoutine,
+    _In_opt_ POPLOCK_FS_PREPOST_IRP PostIrpRoutine)
+{
+    return FsRtlCheckOplock(Oplock, Irp, Context, CompletionRoutine, PostIrpRoutine);
+}
+
+NTKRNLVISTAAPI
+NTSTATUS
+NTAPI
+FsRtlOplockBreakH(
+    _In_ POPLOCK Oplock,
+    _In_ PIRP Irp,
+    _In_ ULONG Flags,
+    _In_opt_ PVOID Context,
+    _In_opt_ POPLOCK_WAIT_COMPLETE_ROUTINE CompletionRoutine,
+    _In_opt_ POPLOCK_FS_PREPOST_IRP PostIrpRoutine)
+{
+    return FsRtlCheckOplock(Oplock, Irp, Context, CompletionRoutine, PostIrpRoutine);
+}
+
+NTKRNLVISTAAPI
+BOOLEAN
+NTAPI
+FsRtlOplockIsSharedRequest(
+    _In_ PIRP Irp)
+{
+    return FALSE;
+}
+
+NTKRNLVISTAAPI
+BOOLEAN
+NTAPI
+FsRtlCurrentOplockH(
+    _In_ POPLOCK Oplock)
+{
+    return FALSE;
+}
+
+NTKRNLVISTAAPI
+BOOLEAN
+NTAPI
+FsRtlAreThereCurrentOrInProgressFileLocks(
+    _In_ PFILE_LOCK FileLock)
+{
+    return FsRtlAreThereCurrentFileLocks(FileLock);
+}
+
+NTKRNLVISTAAPI
+VOID
+NTAPI
+CcCoherencyFlushAndPurgeCache(
+    _In_ PSECTION_OBJECT_POINTERS SectionObjectPointer,
+    _In_opt_ PLARGE_INTEGER FileOffset,
+    _In_ ULONG Length,
+    _Out_ PIO_STATUS_BLOCK IoStatus,
+    _In_opt_ ULONG Flags)
+{
+    CcFlushCache(SectionObjectPointer, FileOffset, Length, IoStatus);
+}
+
+NTKRNLVISTAAPI
+BOOLEAN
+NTAPI
+CcCopyWriteWontFlush(
+    _In_ PFILE_OBJECT FileObject,
+    _In_ PLARGE_INTEGER FileOffset,
+    _In_ ULONG Length)
+{
+    return CcCanIWrite(FileObject, Length, FALSE, FALSE);
+}
+

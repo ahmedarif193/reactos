@@ -96,7 +96,11 @@ KsecGetKeyData (
         ProcessData.Process = CurrentProcess;
         ProcessData.ProcessId = CurrentProcess->UniqueProcessId;
         ProcessData.CreateTime = PsGetProcessCreateTimeQuadPart(CurrentProcess);
+#if (NTDDI_VERSION >= NTDDI_LONGHORN)
+        ProcessData.DirectoryTableBase = CurrentProcess->Pcb.DirectoryTableBase;
+#else
         ProcessData.DirectoryTableBase = CurrentProcess->Pcb.DirectoryTableBase[0];
+#endif
         MD5Update(&Md5Contexts[0], (PVOID)&ProcessData, sizeof(ProcessData));
         MD5Update(&Md5Contexts[1], (PVOID)&ProcessData, sizeof(ProcessData));
     }

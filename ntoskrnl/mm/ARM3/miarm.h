@@ -234,7 +234,12 @@ extern const ULONG MmProtectToValue[32];
 //
 #define MI_GET_PAGE_COLOR(x)                ((x) & MmSecondaryColorMask)
 #define MI_GET_NEXT_COLOR()                 (MI_GET_PAGE_COLOR(++MmSystemPageColor))
+#if (NTDDI_VERSION >= NTDDI_LONGHORN)
+/* NextPageColor removed at Vista+; use Spare7 as a surrogate page color counter */
+#define MI_GET_NEXT_PROCESS_COLOR(x)        (MI_GET_PAGE_COLOR(++(x)->Spare7))
+#else
 #define MI_GET_NEXT_PROCESS_COLOR(x)        (MI_GET_PAGE_COLOR(++(x)->NextPageColor))
+#endif
 
 //
 // Prototype PTEs that don't yet have a pagefile association
@@ -1135,7 +1140,7 @@ MiLockProcessWorkingSet(IN PEPROCESS Process,
     ASSERT(Thread->OwnsProcessWorkingSetShared == FALSE);
     ASSERT(Thread->OwnsProcessWorkingSetExclusive == FALSE);
 
-    /* Block APCs, make sure that still nothing is already held */
+    /* Block APCs */
     KeEnterGuardedRegion();
     ASSERT(!MM_ANY_WS_LOCK_HELD(Thread));
 
@@ -1157,7 +1162,7 @@ MiLockProcessWorkingSetShared(IN PEPROCESS Process,
     ASSERT(Thread->OwnsProcessWorkingSetShared == FALSE);
     ASSERT(Thread->OwnsProcessWorkingSetExclusive == FALSE);
 
-    /* Block APCs, make sure that still nothing is already held */
+    /* Block APCs */
     KeEnterGuardedRegion();
     ASSERT(!MM_ANY_WS_LOCK_HELD(Thread));
 
