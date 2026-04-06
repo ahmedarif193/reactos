@@ -9,7 +9,7 @@
 #ifndef _INC_NEW // include guard for 3rd party interop
 #define _INC_NEW
 
-#include <corecrt.h>
+#include "corecrt.h"
 #include <vcruntime_new_debug.h>
 
 #ifdef __cplusplus

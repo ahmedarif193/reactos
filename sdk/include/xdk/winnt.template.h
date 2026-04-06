@@ -29,7 +29,7 @@
 #endif
 
 #include <ctype.h>
-//#include <winapifamily.h>
+#include <winapifamily.h>
 #ifdef __GNUC__
 #include <msvctarget.h>
 #endif
@@ -54,6 +54,10 @@
 #pragma warning(push)
 #pragma warning(disable:4201)
 #pragma warning(disable:4214)
+#endif
+
+#ifndef CONST
+#define CONST const
 #endif
 
 #ifndef DECLSPEC_NOINITALL

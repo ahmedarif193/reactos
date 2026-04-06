@@ -9,7 +9,7 @@
 #ifndef _COMPLEX
 #define _COMPLEX
 
-#include <corecrt.h>
+#include "corecrt.h"
 
 #if (_CRT_HAS_CXX17 == 1) && !defined(_CRT_USE_C_COMPLEX_H)
 #include <ccomplex>

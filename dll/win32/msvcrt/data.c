@@ -19,7 +19,7 @@
  */
 
 #include <fcntl.h>
-#include <math.h>
+#include "include/math.h"
 #include "msvcrt.h"
 #include <winnls.h>
 #include "wine/debug.h"

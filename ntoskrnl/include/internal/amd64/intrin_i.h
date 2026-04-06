@@ -1,6 +1,8 @@
 #ifndef _INTRIN_INTERNAL_
 #define _INTRIN_INTERNAL_
 
+#include <immintrin.h>
+
 FORCEINLINE
 VOID
 KeSetCurrentIrql(KIRQL Irql)
