@@ -751,7 +751,7 @@ RegSetValueExW(
         if (!DataCell)
             return ERROR_GEN_FAILURE; // STATUS_UNSUCCESSFUL;
 
-        DataCellSize = (ULONG)(-HvGetCellSize(Hive, DataCell));
+        DataCellSize = (ULONG)HvGetCellSize(Hive, DataCell);
     }
     else
     {
