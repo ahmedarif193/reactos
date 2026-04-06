@@ -12,7 +12,7 @@
 
 #pragma once
 
-#include <crtdbg.h>
+#include "crtdbg.h"
 
 #pragma pack(push, _CRT_PACKING)
 

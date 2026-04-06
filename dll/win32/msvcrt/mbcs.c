@@ -23,10 +23,10 @@
  * populated correctly and the ismb* functions should reference it.
  */
 
-#include <stdio.h>
-#include <limits.h>
-#include <mbctype.h>
-#include <mbstring.h>
+#include "include/stdio.h"
+#include "include/limits.h"
+#include "include/mbctype.h"
+#include "include/mbstring.h"
 
 #include "msvcrt.h"
 #include "mtdll.h"
