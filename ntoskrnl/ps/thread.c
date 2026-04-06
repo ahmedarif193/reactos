@@ -37,6 +37,8 @@ PspUserThreadStartup(IN PKSTART_ROUTINE StartRoutine,
     /* Go to Passive Level */
     KeLowerIrql(PASSIVE_LEVEL);
     Thread = PsGetCurrentThread();
+    DPRINT1("PSP: UserThreadStartup tid=%p dead=%d cpu=%u\n",
+            Thread, Thread->DeadThread, KeGetCurrentProcessorNumber());
 
     /* Check if the thread is dead */
     if (Thread->DeadThread)
@@ -72,12 +74,18 @@ PspUserThreadStartup(IN PKSTART_ROUTINE StartRoutine,
         KeRaiseIrql(APC_LEVEL, &OldIrql);
 
         /* Queue the User APC */
+        DPRINT1("PSP: Calling KiInitializeUserApc tf=%p ef=%p ntdll=%p entry=%p\n",
+                KeGetTrapFrame(&Thread->Tcb),
+                KeGetExceptionFrame(&Thread->Tcb),
+                PspSystemDllBase,
+                PspSystemDllEntryPoint);
         KiInitializeUserApc(KeGetExceptionFrame(&Thread->Tcb),
                             KeGetTrapFrame(&Thread->Tcb),
                             PspSystemDllEntryPoint,
                             NULL,
                             PspSystemDllBase,
                             NULL);
+        DPRINT1("PSP: KiInitializeUserApc returned\n");
 
         /* Lower it back to passive */
         KeLowerIrql(PASSIVE_LEVEL);

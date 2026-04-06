@@ -515,6 +515,13 @@ KiSystemStartup(IN PLOADER_PARAMETER_BLOCK LoaderBlock)
     /* Get Pcr from loader block */
     Pcr = CONTAINING_RECORD(LoaderBlock->Prcb, KIPCR, Prcb);
 
+    /*
+     * APs start on the temporary HAL mappings. Switch to the saved kernel
+     * address space before touching the rest of the processor state.
+     */
+    if (Cpu != 0)
+        __writecr3(Pcr->Prcb.ProcessorState.SpecialRegisters.Cr3);
+
     /* Set the PRCB for this Processor */
     KiProcessorBlock[Cpu] = &Pcr->Prcb;
 
@@ -582,4 +589,3 @@ KiSystemStartup(IN PLOADER_PARAMETER_BLOCK LoaderBlock)
     /* Switch to new kernel stack and start kernel bootstrapping */
     KiSwitchToBootStack(InitialStack);
 }
-

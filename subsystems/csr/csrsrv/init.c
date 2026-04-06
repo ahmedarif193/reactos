@@ -590,7 +590,7 @@ CsrParseServerCommandLine(IN ULONG ArgumentCount,
         ParameterValue = NULL;
         ParameterValue = strchr(ParameterName, '=');
         if (ParameterValue) *ParameterValue++ = ANSI_NULL;
-        DPRINT("Name=%s, Value=%s\n", ParameterName, ParameterValue);
+        DPRINT1("CSR-INIT[arg %lu]: %s=%s\n", i, ParameterName, ParameterValue);
 
         /* Check for Object Directory */
         if (_stricmp(ParameterName, "ObjectDirectory") == 0)
@@ -676,7 +676,9 @@ CsrParseServerCommandLine(IN ULONG ArgumentCount,
         else if (_stricmp(ParameterName, "SharedSection") == 0)
         {
             /* Create the Section */
+            DPRINT1("CSR-INIT[arg %lu]: CsrSrvCreateSharedSection enter\n", i);
             Status = CsrSrvCreateSharedSection(ParameterValue);
+            DPRINT1("CSR-INIT[arg %lu]: CsrSrvCreateSharedSection done status=%lx\n", i, Status);
             if (!NT_SUCCESS(Status))
             {
                 DPRINT1("CSRSS: *** Invalid syntax for %s=%s (Status == %X)\n",
@@ -685,7 +687,9 @@ CsrParseServerCommandLine(IN ULONG ArgumentCount,
             }
 
             /* Load us */
+            DPRINT1("CSR-INIT[arg %lu]: CsrLoadServerDll(CSRSS) enter\n", i);
             Status = CsrLoadServerDll("CSRSS" /* "CSRSRV" */, NULL, CSRSRV_SERVERDLL_INDEX);
+            DPRINT1("CSR-INIT[arg %lu]: CsrLoadServerDll(CSRSS) done status=%lx\n", i, Status);
         }
         else if (_stricmp(ParameterName, "ServerDll") == 0)
         {
@@ -722,8 +726,11 @@ CsrParseServerCommandLine(IN ULONG ArgumentCount,
             if (NT_SUCCESS(Status)) ServerString[-1] = ANSI_NULL;
 
             /* Load it */
-            if (CsrDebug & 1) DPRINT1("CSRSS: Loading ServerDll=%s:%s\n", ParameterValue, EntryPoint);
+            DPRINT1("CSR-INIT[arg %lu]: CsrLoadServerDll(%s:%s, index=%lu) enter\n",
+                    i, ParameterValue, EntryPoint, DllIndex);
             Status = CsrLoadServerDll(ParameterValue, EntryPoint, DllIndex);
+            DPRINT1("CSR-INIT[arg %lu]: CsrLoadServerDll(%s) done status=%lx\n",
+                    i, ParameterValue, Status);
             if (!NT_SUCCESS(Status))
             {
                 DPRINT1("CSRSS: *** Failed loading ServerDll=%s (Status == 0x%x)\n",
@@ -1013,11 +1020,15 @@ CsrServerInitialization(IN ULONG ArgumentCount,
 {
     NTSTATUS Status = STATUS_SUCCESS;
 
+    DPRINT1("CSR-INIT: step 0 CsrServerInitialization entry\n");
+
     /* Cache System Basic Information so we don't always request it */
+    DPRINT1("CSR-INIT: step 1 NtQuerySystemInformation enter\n");
     Status = NtQuerySystemInformation(SystemBasicInformation,
                                       &CsrNtSysInfo,
                                       sizeof(SYSTEM_BASIC_INFORMATION),
                                       NULL);
+    DPRINT1("CSR-INIT: step 1 NtQuerySystemInformation done status=%lx\n", Status);
     if (!NT_SUCCESS(Status))
     {
         DPRINT1("CSRSRV:%s: NtQuerySystemInformation failed (Status=0x%08lx)\n",
@@ -1027,9 +1038,12 @@ CsrServerInitialization(IN ULONG ArgumentCount,
 
     /* Save our Heap */
     CsrHeap = RtlGetProcessHeap();
+    DPRINT1("CSR-INIT: step 2 CsrHeap=%p\n", CsrHeap);
 
     /* Set our Security Descriptor to protect the process */
+    DPRINT1("CSR-INIT: step 3 CsrSetProcessSecurity enter\n");
     Status = CsrSetProcessSecurity();
+    DPRINT1("CSR-INIT: step 3 CsrSetProcessSecurity done status=%lx\n", Status);
     if (!NT_SUCCESS(Status))
     {
         DPRINT1("CSRSRV:%s: CsrSetProcessSecurity failed (Status=0x%08lx)\n",
@@ -1038,7 +1052,9 @@ CsrServerInitialization(IN ULONG ArgumentCount,
     }
 
     /* Set up Session Support */
+    DPRINT1("CSR-INIT: step 4 CsrInitializeNtSessionList enter\n");
     Status = CsrInitializeNtSessionList();
+    DPRINT1("CSR-INIT: step 4 CsrInitializeNtSessionList done status=%lx\n", Status);
     if (!NT_SUCCESS(Status))
     {
         DPRINT1("CSRSRV:%s: CsrInitializeSessions failed (Status=0x%08lx)\n",
@@ -1047,7 +1063,9 @@ CsrServerInitialization(IN ULONG ArgumentCount,
     }
 
     /* Set up Process Support and allocate the CSR Root Process */
+    DPRINT1("CSR-INIT: step 5 CsrInitializeProcessStructure enter\n");
     Status = CsrInitializeProcessStructure();
+    DPRINT1("CSR-INIT: step 5 CsrInitializeProcessStructure done status=%lx\n", Status);
     if (!NT_SUCCESS(Status))
     {
         DPRINT1("CSRSRV:%s: CsrInitializeProcessStructure failed (Status=0x%08lx)\n",
@@ -1056,7 +1074,9 @@ CsrServerInitialization(IN ULONG ArgumentCount,
     }
 
     /* Parse the command line */
+    DPRINT1("CSR-INIT: step 6 CsrParseServerCommandLine enter argc=%lu\n", ArgumentCount);
     Status = CsrParseServerCommandLine(ArgumentCount, Arguments);
+    DPRINT1("CSR-INIT: step 6 CsrParseServerCommandLine done status=%lx\n", Status);
     if (!NT_SUCCESS(Status))
     {
         DPRINT1("CSRSRV:%s: CsrParseServerCommandLine failed (Status=0x%08lx)\n",
@@ -1065,7 +1085,9 @@ CsrServerInitialization(IN ULONG ArgumentCount,
     }
 
     /* Finish to initialize the CSR Root Process */
+    DPRINT1("CSR-INIT: step 7 CsrInitCsrRootProcess enter\n");
     Status = CsrInitCsrRootProcess();
+    DPRINT1("CSR-INIT: step 7 CsrInitCsrRootProcess done status=%lx\n", Status);
     if (!NT_SUCCESS(Status))
     {
         DPRINT1("CSRSRV:%s: CsrInitCsrRootProcess failed (Status=0x%08lx)\n",
@@ -1074,7 +1096,9 @@ CsrServerInitialization(IN ULONG ArgumentCount,
     }
 
     /* Now initialize our API Port */
+    DPRINT1("CSR-INIT: step 8 CsrApiPortInitialize enter\n");
     Status = CsrApiPortInitialize();
+    DPRINT1("CSR-INIT: step 8 CsrApiPortInitialize done status=%lx\n", Status);
     if (!NT_SUCCESS(Status))
     {
         DPRINT1("CSRSRV:%s: CsrApiPortInitialize failed (Status=0x%08lx)\n",
@@ -1087,7 +1111,9 @@ CsrServerInitialization(IN ULONG ArgumentCount,
     {
 #endif
     /* Initialize the API Port for SM communication */
+    DPRINT1("CSR-INIT: step 9 CsrSbApiPortInitialize enter\n");
     Status = CsrSbApiPortInitialize();
+    DPRINT1("CSR-INIT: step 9 CsrSbApiPortInitialize done status=%lx\n", Status);
     if (!NT_SUCCESS(Status))
     {
         DPRINT1("CSRSRV:%s: CsrSbApiPortInitialize failed (Status=0x%08lx)\n",
@@ -1096,6 +1122,7 @@ CsrServerInitialization(IN ULONG ArgumentCount,
     }
 
     /* We're all set! Connect to SM! */
+    DPRINT1("CSR-INIT: step 10 SmConnectToSm enter\n");
     Status = SmConnectToSm(&CsrSbApiPortName,
                            CsrSbApiPort,
 #ifdef __REACTOS__
@@ -1104,6 +1131,7 @@ CsrServerInitialization(IN ULONG ArgumentCount,
                            IMAGE_SUBSYSTEM_WINDOWS_GUI,
 #endif
                            &CsrSmApiPort);
+    DPRINT1("CSR-INIT: step 10 SmConnectToSm done status=%lx\n", Status);
     if (!NT_SUCCESS(Status))
     {
         DPRINT1("CSRSRV:%s: SmConnectToSm failed (Status=0x%08lx)\n",

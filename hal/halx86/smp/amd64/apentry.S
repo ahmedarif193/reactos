@@ -10,13 +10,6 @@
 
 #define ZERO_OFFSET(f) (offset f - offset HalpAPEntry16)
 
-#ifndef _USE_ML
-.macro data32, opcode:vararg
-    .byte 0x66
-    \opcode
-.endm
-#endif
-
 PUBLIC HalpAPEntry16
 PUBLIC HalpAPEntryData
 PUBLIC HalpAPEntry16End
@@ -176,8 +169,8 @@ APEntry64:
     mov rsi, [rdi + ZERO_OFFSET(ProcessorState)]
 
     /* Load the final GDT and IDT from the ProcessorState */
-    lgdt fword ptr [rsi + PsGdtr]
-    lidt fword ptr [rsi + PsIdtr]
+    lgdt [rsi + PsGdtr]
+    lidt [rsi + PsIdtr]
 
     /* Set LTR */
     mov ax, KGDT64_SYS_TSS

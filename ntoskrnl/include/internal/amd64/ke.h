@@ -260,6 +260,20 @@ KeRestoreInterrupts(BOOLEAN WereEnabled)
 
 FORCEINLINE
 VOID
+KeFlushCurrentTb(VOID)
+{
+    __writecr3(__readcr3());
+}
+
+FORCEINLINE
+VOID
+KeInvalidateTlbEntry(IN PVOID Address)
+{
+    __invlpg(Address);
+}
+
+FORCEINLINE
+VOID
 KeSweepICache(IN PVOID BaseAddress,
               IN SIZE_T FlushSize)
 {
