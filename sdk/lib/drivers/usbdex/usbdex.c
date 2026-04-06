@@ -4,7 +4,10 @@
 #include <usbdlib.h>
 #include <debug.h>
 
+#if (NTDDI_VERSION < NTDDI_VISTA)
+/* USBD_HANDLE is declared in usbdlib.h at Vista+ */
 DECLARE_HANDLE(USBD_HANDLE);
+#endif
 
 NTSTATUS
 USBD_QueryUsbCapability(

@@ -27,7 +27,7 @@ co_IntRegisterLogonProcess(HANDLE ProcessId, BOOL Register)
         return FALSE;
     }
 
-    ProcessId = Process->UniqueProcessId;
+    ProcessId = PsGetProcessId(Process);
 
     ObDereferenceObject(Process);
 

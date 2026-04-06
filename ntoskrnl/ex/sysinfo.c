@@ -818,8 +818,10 @@ QSI_DEF(SystemPerformanceInformation)
         if (Prcb)
         {
             Spi->ContextSwitches += KeGetContextSwitches(Prcb);
+#if (NTDDI_VERSION < NTDDI_LONGHORN)
             Spi->FirstLevelTbFills += Prcb->KeFirstLevelTbFills;
             Spi->SecondLevelTbFills += Prcb->KeSecondLevelTbFills;
+#endif
             Spi->SystemCalls += Prcb->KeSystemCalls;
         }
     }
@@ -1801,9 +1803,9 @@ QSI_DEF(SystemExceptionInformation)
         {
             AlignmentFixupCount += Prcb->KeAlignmentFixupCount;
             ExceptionDispatchCount += Prcb->KeExceptionDispatchCount;
-#ifndef _M_ARM
+#if !defined(_M_ARM) && (NTDDI_VERSION < NTDDI_LONGHORN)
             FloatingEmulationCount += Prcb->KeFloatingEmulationCount;
-#endif // _M_ARM
+#endif
         }
     }
 

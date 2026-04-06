@@ -165,7 +165,12 @@ CsrpConnectToServer(
 
     /* Save CSR Section data */
     NtCurrentPeb()->ReadOnlySharedMemoryBase = ConnectionInfo.SharedSectionBase;
+#if (NTDDI_VERSION >= NTDDI_LONGHORN)
+    /* ReadOnlySharedMemoryHeap was replaced by HotpatchInformation at Vista */
+    NtCurrentPeb()->HotpatchInformation = ConnectionInfo.SharedSectionHeap;
+#else
     NtCurrentPeb()->ReadOnlySharedMemoryHeap = ConnectionInfo.SharedSectionHeap;
+#endif
     NtCurrentPeb()->ReadOnlyStaticServerData = ConnectionInfo.SharedStaticServerData;
 
     /* Create the port heap */

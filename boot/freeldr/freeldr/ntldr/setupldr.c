@@ -805,7 +805,11 @@ LoadReactOSSetup(
 
     /* Allocate and initialize the setup loader block */
     SetupBlock = &WinLdrSystemBlock->SetupBlock;
+#if (NTDDI_VERSION < NTDDI_WIN7)
     LoaderBlock->SetupLdrBlock = SetupBlock;
+#else
+    /* TODO: Win7+ removed SetupLdrBlock from LOADER_PARAMETER_BLOCK */
+#endif
 
     /* Set textmode setup flag */
     SetupBlock->Flags = SETUPLDR_TEXT_MODE;

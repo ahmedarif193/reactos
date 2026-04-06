@@ -488,6 +488,19 @@ SkipStackCheck:
 
 IntsDisabled:
 
+    /* Save current IRQL from cr8, lower to APC_LEVEL for page fault handling.
+     * Working set locks use KeEnterGuardedRegion which requires IRQL <= APC_LEVEL.
+     * Only lower if currently above APC_LEVEL.
+     * Push 16 bytes to maintain stack alignment for the call. */
+    mov rax, cr8
+    push rax
+    sub rsp, 8
+    cmp rax, APC_LEVEL
+    jbe .LIrqlOk
+    mov rax, APC_LEVEL
+    mov cr8, rax
+.LIrqlOk:
+
     /* Call page fault handler */
     mov ecx, [rbp + KTRAP_FRAME_ErrorCode] // FaultCode
     // rdx == Address
@@ -495,6 +508,11 @@ IntsDisabled:
     and r8b, 1
     mov r9, rbp // TrapInformation
     call MmAccessFault
+
+    /* Restore previous IRQL */
+    add rsp, 8
+    pop rcx
+    mov cr8, rcx
 
     /* Check for success */
     test eax, eax

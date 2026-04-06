@@ -111,6 +111,13 @@ function(setup_host_tools)
             -DTARGET_COMPILER_ID=${CMAKE_C_COMPILER_ID}
             -DTARGET_BUILD_TYPE=${CMAKE_BUILD_TYPE}
             -DCMAKE_BUILD_TYPE=${HOST_BUILD_TYPE}
+            # Pin host-tools cmlib (mkhive) to the WS03SP4 hive layout
+            # regardless of REACTOS_TARGET_NT — the kernel-side cmlib has
+            # working backwards compat to read these hives, but the Win7+
+            # cmlibhost paths still segfault inside mkhive (HHIVE dual-log
+            # accesses on uninitialized fields). Keep this stable until the
+            # full Win7 hive write path is ported.
+            -DREACTOS_TARGET_NT:STRING=0x502
             ${CMAKE_HOST_TOOLS_EXTRA_ARGS}
         BUILD_ALWAYS TRUE
         INSTALL_COMMAND ${CMAKE_COMMAND} -E true

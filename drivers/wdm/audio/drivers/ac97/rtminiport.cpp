@@ -19,7 +19,56 @@
 #pragma code_seg("PAGE")
 #endif
 
-IMP_CMiniport(CAC97MiniportWaveRT, IID_IMiniportRT)
+/* CAC97MiniportWaveRT does not inherit from CMiniport, so we cannot
+ * use the IMP_CMiniport macro.  Provide stub implementations of the
+ * IMiniport methods and NonDelegatingQueryInterface instead. */
+STDMETHODIMP_(NTSTATUS) CAC97MiniportWaveRT::GetDescription(
+    _Out_ PPCFILTER_DESCRIPTOR *OutFilterDescriptor)
+{
+    UNREFERENCED_PARAMETER(OutFilterDescriptor);
+    return STATUS_NOT_IMPLEMENTED;
+}
+
+STDMETHODIMP_(NTSTATUS) CAC97MiniportWaveRT::DataRangeIntersection(
+    IN  ULONG PinId,
+    IN  PKSDATARANGE DataRange,
+    IN  PKSDATARANGE MatchingDataRange,
+    IN  ULONG OutputBufferLength,
+    OUT PVOID ResultantFormat OPTIONAL,
+    OUT PULONG ResultantFormatLength)
+{
+    UNREFERENCED_PARAMETER(PinId);
+    UNREFERENCED_PARAMETER(DataRange);
+    UNREFERENCED_PARAMETER(MatchingDataRange);
+    UNREFERENCED_PARAMETER(OutputBufferLength);
+    UNREFERENCED_PARAMETER(ResultantFormat);
+    UNREFERENCED_PARAMETER(ResultantFormatLength);
+    return STATUS_NOT_IMPLEMENTED;
+}
+
+STDMETHODIMP_(NTSTATUS) CAC97MiniportWaveRT::NonDelegatingQueryInterface(
+    _In_         REFIID  Interface,
+    _COM_Outptr_ PVOID  *Object)
+{
+    ASSERT(Object);
+
+    if (IsEqualGUIDAligned(Interface, IID_IUnknown))
+        *Object = (PVOID)(PUNKNOWN)(IMiniportWaveRT*)this;
+    else if (IsEqualGUIDAligned(Interface, IID_IMiniport))
+        *Object = (PVOID)(PMINIPORT)(IMiniportWaveRT*)this;
+    else if (IsEqualGUIDAligned(Interface, IID_IMiniportWaveRT))
+        *Object = (PVOID)(PMINIPORTWAVERT)this;
+    else if (IsEqualGUIDAligned(Interface, IID_IPowerNotify))
+        *Object = (PVOID)(PPOWERNOTIFY)this;
+    else
+    {
+        *Object = NULL;
+        return STATUS_INVALID_PARAMETER;
+    }
+
+    ((PUNKNOWN)*Object)->AddRef();
+    return STATUS_SUCCESS;
+}
 
 /*****************************************************************************
  * CreateAC97MiniportWaveRT
@@ -64,11 +113,38 @@ STDMETHODIMP_(NTSTATUS) CAC97MiniportWaveRT::Init
 {
     PAGED_CODE ();
 
-    return CMiniport::Init(
-        UnknownAdapter,
-        ResourceList,
-        Port_
-        );
+    ASSERT(UnknownAdapter);
+    ASSERT(ResourceList);
+    ASSERT(Port_);
+
+    DOUT (DBG_PRINT, ("[CAC97MiniportWaveRT::Init]"));
+
+    /* Query the adapter for the AC97 common interface */
+    NTSTATUS ntStatus = UnknownAdapter->QueryInterface(
+        IID_IAC97AdapterCommon, (PVOID *)&AdapterCommon);
+    if (!NT_SUCCESS(ntStatus))
+    {
+        DOUT (DBG_ERROR, ("QueryInterface for IAC97AdapterCommon failed!"));
+        return ntStatus;
+    }
+
+    /* Save the port driver reference */
+    Port = Port_;
+    Port->AddRef();
+
+    /* Initialize power state */
+    m_PowerState = PowerDeviceD0;
+
+    /* Zero out the streams */
+    for (int i = 0; i <= PIN_MICIN_OFFSET; i++)
+        Streams[i] = NULL;
+
+    /* Process the resources */
+    ntStatus = ProcessResources(ResourceList);
+    if (!NT_SUCCESS(ntStatus))
+        return ntStatus;
+
+    return ntStatus;
 }
 
 
@@ -172,12 +248,10 @@ STDMETHODIMP CAC97MiniportWaveRT::NewStream
 
     //
     // Check parameters.
+    // Note: ValidateFormat is a CMiniport method not available here.
+    // TODO: Implement proper format validation for WaveRT.
     //
-    ntStatus = ValidateFormat (DataFormat, (WavePins)Channel_);
-    if (!NT_SUCCESS (ntStatus))
-    {
-        return ntStatus;
-    }
+    UNREFERENCED_PARAMETER(DataFormat);
 
     //
     // Create a new stream.
@@ -198,7 +272,7 @@ STDMETHODIMP CAC97MiniportWaveRT::NewStream
     //
     ntStatus = pStream->Init (this,
                               PortStream,
-                              Channel,
+                              Channel_,
                               Capture,
                               DataFormat);
     if (!NT_SUCCESS (ntStatus))
@@ -246,6 +320,82 @@ STDMETHODIMP_(NTSTATUS) CAC97MiniportWaveRT::GetDeviceDescription
     return STATUS_SUCCESS;
 }
 
+/*****************************************************************************
+ * CAC97MiniportWaveRT::~CAC97MiniportWaveRT
+ *****************************************************************************
+ * Destructor.
+ */
+CAC97MiniportWaveRT::~CAC97MiniportWaveRT()
+{
+    PAGED_CODE();
+
+    DOUT(DBG_PRINT, ("[CAC97MiniportWaveRT::~CAC97MiniportWaveRT]"));
+
+    if (InterruptSync)
+    {
+        InterruptSync->Disconnect();
+        InterruptSync->Release();
+        InterruptSync = NULL;
+    }
+    if (AdapterCommon)
+    {
+        AdapterCommon->Release();
+        AdapterCommon = NULL;
+    }
+    if (Port)
+    {
+        Port->Release();
+        Port = NULL;
+    }
+}
+
+/*****************************************************************************
+ * CAC97MiniportWaveRT::PowerChangeNotify
+ *****************************************************************************
+ * Handle power state changes.
+ */
+STDMETHODIMP_(void) CAC97MiniportWaveRT::PowerChangeNotify
+(
+    _In_ POWER_STATE NewState
+)
+{
+    PAGED_CODE();
+
+    DOUT(DBG_PRINT, ("[CAC97MiniportWaveRT::PowerChangeNotify]"));
+
+    m_PowerState = NewState.DeviceState;
+}
+
+/*****************************************************************************
+ * CAC97MiniportWaveRT::InterruptServiceRoutine
+ *****************************************************************************
+ * ISR for all streams.
+ */
+NTSTATUS
+#ifdef _MSC_VER
+__stdcall
+#else
+NTAPI
+#endif
+CAC97MiniportWaveRT::InterruptServiceRoutine
+(
+    IN  PINTERRUPTSYNC  InterruptSync_,
+    IN  PVOID           StaticContext
+)
+{
+    UNREFERENCED_PARAMETER(InterruptSync_);
+
+    CAC97MiniportWaveRT *that = (CAC97MiniportWaveRT *)StaticContext;
+    ASSERT(that);
+
+    for (int i = 0; i <= PIN_MICIN_OFFSET; i++)
+    {
+        if (that->Streams[i])
+            that->Streams[i]->InterruptServiceRoutine();
+    }
+
+    return STATUS_SUCCESS;
+}
 
 
 #endif

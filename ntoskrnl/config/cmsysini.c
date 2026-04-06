@@ -1440,6 +1440,7 @@ CmpLoadHiveThread(IN PVOID StartContext)
             }
             else
             {
+#if (NTDDI_VERSION < NTDDI_VISTA)
                 /*
                  * Check whether the both primary and alternate hives are the same,
                  * or that the primary or alternate were created for the first time.
@@ -1459,6 +1460,10 @@ CmpLoadHiveThread(IN PVOID StartContext)
                         goto Exit;
                     }
                 }
+#else
+                /* TODO: Vista+ uses dual-log mechanism instead of alternate hives */
+                UNREFERENCED_PARAMETER(HasDiverged);
+#endif /* NTDDI_VERSION < NTDDI_VISTA */
             }
 
             /* Finally, set our allocated hive to the same hive we've had */

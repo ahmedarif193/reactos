@@ -917,7 +917,7 @@ FsRtlNotifyFilterChangeDirectory(IN PNOTIFY_SYNC NotifySync,
             NotifyChange->BufferLength = Stack->Parameters.NotifyDirectory.Length;
         }
 
-        NotifyChange->OwningProcess = NotifyIrp->Tail.Overlay.Thread->ThreadsProcess;
+        NotifyChange->OwningProcess = (PEPROCESS)NotifyIrp->Tail.Overlay.Thread->ThreadsProcess;
 
         /* Insert the notification into the notification list */
         InsertTailList(NotifyList, &(NotifyChange->NotifyList));

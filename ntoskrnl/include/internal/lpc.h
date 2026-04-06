@@ -162,6 +162,20 @@ extern ULONG LpcpMaxMessageSize;
 extern ULONG LpcpTraceLevel;
 
 //
+// LPC/ALPC field compatibility macros
+// At Vista+ (NTDDI_LONGHORN), ETHREAD LPC fields were renamed to ALPC equivalents:
+//   LpcReplyMessage    -> AlpcMessage
+//   LpcReplyMessageId  -> AlpcMessageId
+//   LpcReplySemaphore  -> AlpcWaitSemaphore
+//   LpcWaitingOnPort   -> removed (stored in AlpcMessage with flag bits)
+//
+#if (NTDDI_VERSION >= NTDDI_LONGHORN)
+#define LpcReplyMessage      AlpcMessage
+#define LpcReplyMessageId    AlpcMessageId
+#define LpcReplySemaphore    AlpcWaitSemaphore
+#endif
+
+//
 // Inlined Functions
 //
 #include "lpc_x.h"

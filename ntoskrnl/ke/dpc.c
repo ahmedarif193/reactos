@@ -14,6 +14,13 @@
 #define NDEBUG
 #include <debug.h>
 
+/* DebugDpcTime removed from KPRCB at Vista+ */
+#if (NTDDI_VERSION >= NTDDI_LONGHORN)
+#define KiResetDebugDpcTime(Prcb) ((void)0)
+#else
+#define KiResetDebugDpcTime(Prcb) ((Prcb)->DebugDpcTime = 0)
+#endif
+
 /* GLOBALS *******************************************************************/
 
 ULONG KiMaximumDpcQueueDepth = 4;
@@ -227,7 +234,7 @@ KiTimerExpiration(IN PKDPC Dpc,
                     {
 #if DBG
                         /* Clear DPC Time */
-                        Prcb->DebugDpcTime = 0;
+                        KiResetDebugDpcTime(Prcb);
 #endif
 
                         /* Call the DPC */
@@ -275,7 +282,7 @@ KiTimerExpiration(IN PKDPC Dpc,
                     {
 #if DBG
                         /* Clear DPC Time */
-                        Prcb->DebugDpcTime = 0;
+                        KiResetDebugDpcTime(Prcb);
 #endif
 
                         /* Call the DPC */
@@ -313,7 +320,7 @@ KiTimerExpiration(IN PKDPC Dpc,
         {
 #if DBG
             /* Clear DPC Time */
-            Prcb->DebugDpcTime = 0;
+            KiResetDebugDpcTime(Prcb);
 #endif
 
             /* Call the DPC */
@@ -440,7 +447,7 @@ KiTimerListExpire(IN PLIST_ENTRY ExpiredListHead,
         {
 #if DBG
             /* Clear DPC Time */
-            Prcb->DebugDpcTime = 0;
+            KiResetDebugDpcTime(Prcb);
 #endif
 
             /* Call the DPC */
@@ -573,7 +580,9 @@ KiRetireDpcList(IN PKPRCB Prcb)
 
     /* Get data and list variables before starting anything else */
     DpcData = &Prcb->DpcData[DPC_NORMAL];
+#if (NTDDI_VERSION < NTDDI_LONGHORN)
     ListHead = &DpcData->DpcListHead;
+#endif
 
     /* Main outer loop */
     do
@@ -599,6 +608,30 @@ KiRetireDpcList(IN PKPRCB Prcb)
         {
             /* Lock the DPC data and get the DPC entry*/
             KeAcquireSpinLockAtDpcLevel(&DpcData->DpcLock);
+
+#if (NTDDI_VERSION >= NTDDI_LONGHORN)
+            /* Vista+: KDPC_LIST uses SINGLE_LIST_ENTRY */
+            {
+                PSINGLE_LIST_ENTRY SListEntry = PopEntryList(&DpcData->DpcList.ListHead);
+                if (SListEntry)
+                {
+                    DpcEntry = (PLIST_ENTRY)SListEntry;
+                    Dpc = CONTAINING_RECORD(DpcEntry, KDPC, DpcListEntry);
+                    /* Clear LastEntry if list is now empty */
+                    if (!DpcData->DpcList.ListHead.Next)
+                        DpcData->DpcList.LastEntry = NULL;
+                }
+                else
+                {
+                    DpcEntry = NULL;
+                    Dpc = NULL;
+                }
+            }
+
+            /* Make sure we have an entry */
+            if (Dpc)
+            {
+#else
             DpcEntry = ListHead->Flink;
 
             /* Make sure we have an entry */
@@ -607,6 +640,7 @@ KiRetireDpcList(IN PKPRCB Prcb)
                 /* Remove the DPC from the list */
                 RemoveEntryList(DpcEntry);
                 Dpc = CONTAINING_RECORD(DpcEntry, KDPC, DpcListEntry);
+#endif
 
                 /* Clear its DPC data and save its parameters */
                 Dpc->DpcData = NULL;
@@ -620,7 +654,7 @@ KiRetireDpcList(IN PKPRCB Prcb)
 
 #if DBG
                 /* Clear DPC Time */
-                Prcb->DebugDpcTime = 0;
+                KiResetDebugDpcTime(Prcb);
 #endif
 
                 /* Release the lock */
@@ -782,13 +816,29 @@ KeInsertQueueDpc(IN PKDPC Dpc,
         /* Check if this is a high importance DPC */
         if (Dpc->Importance == HighImportance)
         {
-            /* Pre-empty other DPCs */
+#if (NTDDI_VERSION >= NTDDI_LONGHORN)
+            /* Vista+: push to head of singly-linked list */
+            PushEntryList(&DpcData->DpcList.ListHead, (PSINGLE_LIST_ENTRY)&Dpc->DpcListEntry);
+            if (!DpcData->DpcList.LastEntry)
+                DpcData->DpcList.LastEntry = (PSINGLE_LIST_ENTRY)&Dpc->DpcListEntry;
+#else
             InsertHeadList(&DpcData->DpcListHead, &Dpc->DpcListEntry);
+#endif
         }
         else
         {
-            /* Add it at the end */
+#if (NTDDI_VERSION >= NTDDI_LONGHORN)
+            /* Vista+: append to tail of singly-linked list */
+            PSINGLE_LIST_ENTRY Entry = (PSINGLE_LIST_ENTRY)&Dpc->DpcListEntry;
+            Entry->Next = NULL;
+            if (DpcData->DpcList.LastEntry)
+                DpcData->DpcList.LastEntry->Next = Entry;
+            else
+                DpcData->DpcList.ListHead.Next = Entry;
+            DpcData->DpcList.LastEntry = Entry;
+#else
             InsertTailList(&DpcData->DpcListHead, &Dpc->DpcListEntry);
+#endif
         }
 
         /* Check if this is the DPC on the threaded list */
@@ -896,7 +946,22 @@ KeRemoveQueueDpc(IN PKDPC Dpc)
         {
             /* Remove the DPC */
             DpcData->DpcQueueDepth--;
+#if (NTDDI_VERSION >= NTDDI_LONGHORN)
+            {
+                /* Vista+: singly-linked list removal — find previous entry */
+                PSINGLE_LIST_ENTRY Prev = &DpcData->DpcList.ListHead;
+                PSINGLE_LIST_ENTRY Cur = (PSINGLE_LIST_ENTRY)&Dpc->DpcListEntry;
+                while (Prev->Next && Prev->Next != Cur) Prev = Prev->Next;
+                if (Prev->Next == Cur)
+                {
+                    Prev->Next = Cur->Next;
+                    if (DpcData->DpcList.LastEntry == Cur)
+                        DpcData->DpcList.LastEntry = (Prev == &DpcData->DpcList.ListHead && !Prev->Next) ? NULL : Prev;
+                }
+            }
+#else
             RemoveEntryList(&Dpc->DpcListEntry);
+#endif
             Dpc->DpcData = NULL;
         }
 

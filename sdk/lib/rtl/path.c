@@ -1936,7 +1936,40 @@ Leave:
 
 /*
  * @implemented
+ * Note: Win7+ changed this function's return type from ULONG to NTSTATUS.
  */
+#if (NTDDI_VERSION >= NTDDI_WIN7)
+NTSTATUS
+NTAPI
+RtlGetFullPathName_UEx(
+    _In_ PWSTR FileName,
+    _In_ ULONG BufferLength,
+    _Out_writes_bytes_(BufferLength) PWSTR Buffer,
+    _Out_opt_ PWSTR *FilePart,
+    _Out_opt_ RTL_PATH_TYPE *InputPathType)
+{
+    UNICODE_STRING FileNameString;
+    NTSTATUS Status;
+
+    if (InputPathType)
+        *InputPathType = 0;
+
+    /* Build the string */
+    Status = RtlInitUnicodeStringEx(&FileNameString, FileName);
+    if (!NT_SUCCESS(Status)) return Status;
+
+    /* Call the extended function */
+    RtlGetFullPathName_Ustr(
+        &FileNameString,
+        BufferLength,
+        Buffer,
+        (PCWSTR*)FilePart,
+        NULL,
+        InputPathType);
+
+    return STATUS_SUCCESS;
+}
+#else
 ULONG
 NTAPI
 RtlGetFullPathName_UEx(
@@ -1965,6 +1998,7 @@ RtlGetFullPathName_UEx(
         NULL,
         InputPathType);
 }
+#endif /* NTDDI_VERSION >= NTDDI_WIN7 */
 
 /******************************************************************
  *    RtlGetFullPathName_U  (NTDLL.@)
@@ -1991,13 +2025,20 @@ RtlGetFullPathName_U(
     _Out_opt_ PWSTR *ShortName)
 {
     RTL_PATH_TYPE PathType;
+    UNICODE_STRING FileNameString;
+    NTSTATUS Status;
 
-    /* Call the extended function */
-    return RtlGetFullPathName_UEx((PWSTR)FileName,
-                                   Size,
-                                   Buffer,
-                                   ShortName,
-                                   &PathType);
+    Status = RtlInitUnicodeStringEx(&FileNameString, FileName);
+    if (!NT_SUCCESS(Status)) return 0;
+
+    /* Call the internal function directly to get the ULONG result */
+    return RtlGetFullPathName_Ustr(
+        &FileNameString,
+        Size,
+        Buffer,
+        (PCWSTR*)ShortName,
+        NULL,
+        &PathType);
 }
 
 /*

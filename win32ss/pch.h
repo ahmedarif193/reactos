@@ -21,8 +21,10 @@
 #include <intrin.h>
 
 /* DDK headers */
-#undef NTDDI_VERSION
-#define NTDDI_VERSION NTDDI_WS03SP1
+/* Use the build-wide NTDDI_VERSION so that KPROCESS/EPROCESS layouts match ntoskrnl.
+ * Previously this was forced to NTDDI_WS03SP1 which caused a 32-byte struct mismatch
+ * with ntoskrnl on amd64 (missing KGDTENTRY64 LdtSystemDescriptor + LdtBaseAddress +
+ * CycleTime). This manifested as gpidLogon/UniqueProcessId reading wrong offsets. */
 #include <ntifs.h>
 #include <ntddkbd.h>
 #include <ntddmou.h>

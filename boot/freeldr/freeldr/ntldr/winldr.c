@@ -102,8 +102,14 @@ AllocateAndInitLPB(
     Extension = &WinLdrSystemBlock->Extension;
     LoaderBlock->Extension = Extension;
     Extension->Size = sizeof(LOADER_PARAMETER_EXTENSION);
+#if (NTDDI_VERSION >= NTDDI_WIN7)
+    /* Win7+ moved version info to the LOADER_PARAMETER_BLOCK itself */
+    LoaderBlock->OsMajorVersion = (VersionToBoot & 0xFF00) >> 8;
+    LoaderBlock->OsMinorVersion = (VersionToBoot & 0xFF);
+#else
     Extension->MajorVersion = (VersionToBoot & 0xFF00) >> 8;
     Extension->MinorVersion = (VersionToBoot & 0xFF);
+#endif
 
 #ifdef UEFIBOOT
     Extension->BootViaEFI = 1;
@@ -171,6 +177,7 @@ WinLdrInitializePhase1(
 // SetupBlock->ArcSetupDeviceName must be the path to the setup **SOURCE**,
 // and not the setup boot path. Indeed they may differ!!
 //
+#if (NTDDI_VERSION < NTDDI_WIN7)
     if (LoaderBlock->SetupLdrBlock)
     {
         PSETUP_LOADER_BLOCK SetupBlock = LoaderBlock->SetupLdrBlock;
@@ -182,6 +189,9 @@ WinLdrInitializePhase1(
         /* Convert the setup block pointer */
         LoaderBlock->SetupLdrBlock = PaToVa(LoaderBlock->SetupLdrBlock);
     }
+#else
+    /* TODO: Win7+ removed SetupLdrBlock from LOADER_PARAMETER_BLOCK */
+#endif
 
     /* Fill the firmware system loader / "HAL" partition ARC device path */
     LoaderBlock->ArcHalDeviceName = WinLdrSystemBlock->ArcHalDeviceName;
@@ -309,7 +319,10 @@ WinLdrInitializePhase1(
 
     if (OperatingSystemVersion >= _WIN32_WINNT_VISTA)
     {
+#if (OSVER(NTDDI_VERSION) == NTDDI_LONGHORN)
+        /* Vista-only flag: not present at Win7+ */
         Extension->BootViaWinload = 1;
+#endif
         Extension->LoaderPerformanceData = PaToVa(&WinLdrSystemBlock->LoaderPerformanceData);
 
         InitializeListHead(&Extension->BootApplicationPersistentData);
@@ -843,8 +856,11 @@ LoadWindowsCore(IN USHORT OperatingSystemVersion,
     }
 
     /* Check the (NO)EXECUTE options */
-    if ((OperatingSystemVersion > _WIN32_WINNT_WIN2K) &&
-        !LoaderBlock->SetupLdrBlock)
+    if ((OperatingSystemVersion > _WIN32_WINNT_WIN2K)
+#if (NTDDI_VERSION < NTDDI_WIN7)
+        && !LoaderBlock->SetupLdrBlock
+#endif
+        )
     {
         /* Disable NX by default on x86, otherwise enable it */
 #ifdef _M_IX86
@@ -1261,7 +1277,7 @@ LoadAndBootWindows(
     if (_stricmp(ArgValue, "Windows") == 0 ||
         _stricmp(ArgValue, "Windows2003") == 0)
     {
-        OperatingSystemVersion = _WIN32_WINNT_WS03;
+        OperatingSystemVersion = _WIN32_WINNT;
     }
     else if (_stricmp(ArgValue, "WindowsNT40") == 0)
     {
@@ -1416,8 +1432,14 @@ LoadAndBootWindows(
     /* Fixup the version number using data from the registry */
     if (OperatingSystemVersion == 0)
         OperatingSystemVersion = WinLdrDetectVersion();
+#if (NTDDI_VERSION >= NTDDI_WIN7)
+    /* Win7+ stores version in the LOADER_PARAMETER_BLOCK itself */
+    LoaderBlock->OsMajorVersion = (OperatingSystemVersion & 0xFF00) >> 8;
+    LoaderBlock->OsMinorVersion = (OperatingSystemVersion & 0xFF);
+#else
     LoaderBlock->Extension->MajorVersion = (OperatingSystemVersion & 0xFF00) >> 8;
     LoaderBlock->Extension->MinorVersion = (OperatingSystemVersion & 0xFF);
+#endif
 
     /* Load NLS data, OEM font, and prepare boot drivers list */
     Success = WinLdrScanSystemHive(LoaderBlock, BootPath);

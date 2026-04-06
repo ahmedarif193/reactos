@@ -2045,7 +2045,11 @@ NtGdiGetFontFileData(
     _Out_writes_bytes_(cjBuf) PVOID pvBuf,
     _In_ SIZE_T cjBuf);
 
-#if (_WIN32_WINNT >= _WIN32_WINNT_WIN7)
+/*
+ * NtGdiGetFontFileInfo Win7+ variant uses PFONT_FILE_INFO which is not
+ * defined in ReactOS headers. Exclude until the type is available.
+ */
+#if (_WIN32_WINNT >= _WIN32_WINNT_WIN7) && defined(_FONT_FILE_INFO_DEFINED)
 __kernel_entry
 W32KAPI
 DWORD
@@ -2056,7 +2060,7 @@ NtGdiGetFontFileInfo(
     _Out_writes_bytes_(cjSize) PFONT_FILE_INFO pffi,
     _In_ SIZE_T cjSize,
     _Out_opt_ PSIZE_T pcjActualSize);
-#endif /* (_WIN32_WINNT >= _WIN32_WINNT_WIN7) */
+#endif /* (_WIN32_WINNT >= _WIN32_WINNT_WIN7) && _FONT_FILE_INFO_DEFINED */
 
 __kernel_entry
 W32KAPI
@@ -3036,14 +3040,11 @@ NtGdiGetFontUnicodeRanges(
     _Out_ _Post_bytecount_(return) LPGLYPHSET pgs);
 
 #ifdef LANGPACK
-#if (_WIN32_WINNT >= _WIN32_WINNT_WIN7)
-__kernel_entry
-W32KAPI
-BOOL
-NtGdiGetRealizationInfo(
-    _In_ HDC hdc,
-    _Out_ PFONT_REALIZATION_INFO pri);
-#else
+/*
+ * ReactOS implements the pre-Win7 NtGdiGetRealizationInfo (3 args).
+ * The Win7+ variant uses PFONT_REALIZATION_INFO which is not defined.
+ * Always use the pre-Win7 declaration.
+ */
 __kernel_entry
 W32KAPI
 BOOL
@@ -3052,7 +3053,6 @@ NtGdiGetRealizationInfo(
     _In_ HDC hdc,
     _Out_ PREALIZATION_INFO pri,
     _In_ HFONT hf);
-#endif
 #endif
 
 __kernel_entry

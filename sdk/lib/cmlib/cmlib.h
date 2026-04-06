@@ -26,7 +26,12 @@
     #define NTDDI_VISTA                         NTDDI_WIN6
     #define NTDDI_WIN7                          0x06010000
 
-    #define NTDDI_VERSION   NTDDI_WS03SP4 // This is the ReactOS NT kernel version
+    // Track the kernel's NTDDI level — CMakeLists.txt forwards
+    // -DNTDDI_VERSION=${REACTOS_TARGET_NTDDI} for both kernel and host builds.
+    // Fall back to WS03SP4 if no explicit value was provided (legacy behaviour).
+    #ifndef NTDDI_VERSION
+    #define NTDDI_VERSION   NTDDI_WS03SP4
+    #endif
 
     /* C_ASSERT Definition */
     #define C_ASSERT(expr) extern char (*c_assert(void)) [(expr) ? 1 : -1]
@@ -518,10 +523,12 @@ BOOLEAN CMAPI
 HvWriteHive(
    PHHIVE RegistryHive);
 
+#if (NTDDI_VERSION < NTDDI_VISTA)
 BOOLEAN
 CMAPI
 HvWriteAlternateHive(
     _In_ PHHIVE RegistryHive);
+#endif
 
 BOOLEAN
 CMAPI

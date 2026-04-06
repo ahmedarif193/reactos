@@ -1,7 +1,5 @@
-remove_definitions(-D_WIN32_WINNT=0x502)
-add_definitions(-D_WIN32_WINNT=0x600)
-
 spec2def(localspl.dll localspl.spec ADD_IMPORTLIB)
+add_definitions(-D_WIN32_WINNT=0x600)
 
 include_directories(${REACTOS_SOURCE_DIR}/sdk/lib/skiplist)
 

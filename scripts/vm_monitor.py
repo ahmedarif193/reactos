@@ -1,0 +1,792 @@
+#!/usr/bin/env python3
+"""
+VM Monitor Script
+Builds livecd, starts VM (VirtualBox or QEMU) and monitors for stalls.
+If log stops updating for more than 6 seconds, or total runtime exceeds 30 seconds,
+forcefully stops the VM.
+
+Usage:
+  # Run from within your build directory (e.g., output-arm64)
+  python3 ../vm_monitor.py
+  
+  # Or if script is in the build dir:
+  python3 vm_monitor.py
+"""
+
+import subprocess
+import time
+import os
+import sys
+import signal
+import atexit
+import argparse
+import shutil
+import platform
+
+# Configuration (never change those values)
+LOG_FILE = "/tmp/v.log"
+STALL_TIMEOUT = 6   # Log inactivity timeout
+HARD_TIMEOUT = 20   # Total maximum runtime seconds
+VM_NAME = "testWin11"
+BOOT_SUCCESS_MARKER = "Attempting to call RegisterClassNameW in comctl32.dll"
+BOOT_SUCCESS_STATUS = "BOOT_SUCCESS"
+BOOT_FAILURE_STATUS = "BOOT_FAILURE"
+
+def get_build_dir():
+    """
+    Returns the current working directory as the build directory.
+    Strictly assumes the script is executed FROM the output directory.
+    """
+    if "REACTOS_BUILD_DIR" in os.environ:
+        return os.environ["REACTOS_BUILD_DIR"]
+    
+    cwd = os.getcwd()
+    
+    # We validate strictly: must look like an output dir or contain build.ninja
+    # but we do NOT search parent directories.
+    if "output-" in os.path.basename(cwd) or os.path.exists(os.path.join(cwd, "build.ninja")):
+        return cwd
+        
+    print(f"Warning: Current directory '{cwd}' does not look like a standard 'output-' directory.")
+    print("Proceeding using current directory as BUILD_DIR...")
+    return cwd
+
+BUILD_DIR = get_build_dir()
+FAT32_IMG = os.path.join(BUILD_DIR, "fat32.img")
+
+# UEFI firmware paths - architecture dependent
+OVMF_ENV_CODE_VARS = ["REACTOS_OVMF_CODE", "OVMF_CODE"]
+OVMF_ENV_VARS_VARS = ["REACTOS_OVMF_VARS", "OVMF_VARS"]
+
+OVMF_X64_CODE_CANDIDATES = [
+    "/tmp/OVMF_CODE_latest.fd",
+    "/opt/homebrew/share/qemu/edk2-x86_64-code.fd",
+    "/usr/local/share/qemu/edk2-x86_64-code.fd",
+    "/usr/share/OVMF/OVMF_CODE.fd",
+    "/usr/share/OVMF/OVMF_CODE_4M.fd",
+    "/usr/share/edk2-ovmf/x64/OVMF_CODE.fd",
+    "/usr/share/edk2/ovmf/OVMF_CODE.fd",
+]
+
+OVMF_X64_VARS_CANDIDATES = [
+    "/tmp/OVMF_VARS_latest.fd",
+    "/opt/homebrew/share/qemu/edk2-x86_64-vars.fd",
+    "/usr/local/share/qemu/edk2-x86_64-vars.fd",
+    "/usr/share/OVMF/OVMF_VARS.fd",
+    "/usr/share/OVMF/OVMF_VARS_4M.fd",
+    "/usr/share/edk2-ovmf/x64/OVMF_VARS.fd",
+    "/usr/share/edk2/ovmf/OVMF_VARS.fd",
+]
+
+OVMF_IA32_CODE_CANDIDATES = [
+    "/usr/share/OVMF/OVMF32_CODE_4M.fd",
+    "/usr/share/OVMF/OVMF32_CODE.fd",
+    "/usr/share/edk2-ovmf/ia32/OVMF_CODE.fd",
+    "/usr/share/edk2/ovmf/OVMF32_CODE.fd",
+]
+
+OVMF_IA32_VARS_CANDIDATES = [
+    "/usr/share/OVMF/OVMF32_VARS_4M.fd",
+    "/usr/share/OVMF/OVMF32_VARS.fd",
+    "/usr/share/edk2-ovmf/ia32/OVMF_VARS.fd",
+    "/usr/share/edk2/ovmf/OVMF32_VARS.fd",
+]
+
+# Global state
+qemu_process = None
+use_qemu = False
+target_arch = "amd64" 
+
+
+def detect_target_arch():
+    """Detect target architecture from build directory name."""
+    global target_arch
+    build_dir_lower = BUILD_DIR.lower()
+    
+    if "arm64" in build_dir_lower or "aarch64" in build_dir_lower:
+        target_arch = "arm64"
+    elif "i386" in build_dir_lower or "x86" in build_dir_lower or "i686" in build_dir_lower:
+        target_arch = "i386"
+    elif "amd64" in build_dir_lower or "x64" in build_dir_lower:
+        target_arch = "amd64"
+    else:
+        target_arch = "amd64"
+    return target_arch
+
+
+def env_path(var_names):
+    """Return the first set env var path from var_names, or None."""
+    for name in var_names:
+        value = os.environ.get(name)
+        if value:
+            return value
+    return None
+
+
+def find_first_existing(paths):
+    """Return the first existing path in paths, or None."""
+    for path in paths:
+        if path and os.path.exists(path):
+            return path
+    return None
+
+
+def resolve_ovmf_paths(arch):
+    """Resolve OVMF CODE and VARS (writable) paths for the given arch."""
+    if arch == "i386":
+        code_candidates = OVMF_IA32_CODE_CANDIDATES
+        vars_candidates = OVMF_IA32_VARS_CANDIDATES
+        vars_local = os.path.join(BUILD_DIR, "OVMF32_VARS.fd")
+    else:
+        code_candidates = OVMF_X64_CODE_CANDIDATES
+        vars_candidates = OVMF_X64_VARS_CANDIDATES
+        vars_local = os.path.join(BUILD_DIR, "OVMF_VARS.fd")
+
+    code_env = env_path(OVMF_ENV_CODE_VARS)
+    vars_env = env_path(OVMF_ENV_VARS_VARS)
+
+    if code_env and os.path.exists(code_env):
+        ovmf_code = code_env
+    else:
+        ovmf_code = find_first_existing(code_candidates)
+
+    if vars_env:
+        if os.path.exists(vars_env) and os.access(vars_env, os.W_OK):
+            ovmf_vars = vars_env
+            ovmf_vars_template = None
+        else:
+            ovmf_vars = vars_env
+            ovmf_vars_template = find_first_existing(vars_candidates)
+    else:
+        ovmf_vars = vars_local
+        ovmf_vars_template = find_first_existing(vars_candidates)
+
+    return ovmf_code, ovmf_vars, ovmf_vars_template, code_candidates, vars_candidates
+
+
+def prepare_ovmf_vars(template_path, vars_path):
+    """Ensure a writable VARS file exists; copy template if needed."""
+    if template_path is None:
+        if os.path.exists(vars_path):
+            return True
+        print(f"Error: OVMF VARS not found: {vars_path}")
+        return False
+
+    if not os.path.exists(template_path):
+        print(f"Error: OVMF VARS template not found: {template_path}")
+        return False
+
+    try:
+        if (not os.path.exists(vars_path) or
+                os.path.getmtime(template_path) > os.path.getmtime(vars_path)):
+            shutil.copy(template_path, vars_path)
+            print(f"Copied OVMF VARS to {vars_path}")
+        return True
+    except Exception as e:
+        print(f"Error preparing OVMF VARS: {e}")
+        return False
+
+
+def create_fat32_img():
+    """Create a FAT32 disk image for USB storage testing."""
+    if os.path.exists(FAT32_IMG):
+        print(f"FAT32 image already exists: {FAT32_IMG}")
+        return True
+
+    print(f"Creating FAT32 image: {FAT32_IMG}")
+    try:
+        subprocess.run(["dd", "if=/dev/zero", f"of={FAT32_IMG}", "bs=1M", "count=64"],
+                      stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=True)
+        subprocess.run(["mkfs.vfat", "-F", "32", FAT32_IMG],
+                      stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=True)
+        return True
+    except Exception as e:
+        print(f"Error creating FAT32 image: {e}")
+        return False
+
+
+def force_kill_vm():
+    """Forcefully kill VM - called on exit."""
+    global qemu_process, use_qemu
+
+    if use_qemu:
+        if qemu_process:
+            try:
+                qemu_process.terminate()
+                qemu_process.wait(timeout=5)
+            except Exception:
+                try:
+                    qemu_process.kill()
+                except Exception:
+                    pass
+        try:
+            subprocess.run(["pkill", "-9", "-f", "qemu-system.*livecd.iso"],
+                          stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=5)
+        except Exception:
+            pass
+    else:
+        try:
+            subprocess.run(
+                ["VBoxManage", "controlvm", VM_NAME, "poweroff"],
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                timeout=10
+            )
+        except Exception:
+            pass
+
+
+def build_livecd():
+    """Build livecd using ninja before starting VM."""
+    print(f"Building livecd in {BUILD_DIR}...")
+    try:
+        result = subprocess.run(
+            ["ninja", "livecd"],
+            cwd=BUILD_DIR,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            timeout=600
+        )
+        if result.returncode != 0:
+            print(f"Build failed with return code {result.returncode}")
+            return False
+        print("Build completed successfully.")
+        return True
+    except Exception as e:
+        print(f"Error building livecd: {e}")
+        return False
+
+
+def start_qemu(rpi_mode=False, smp_cores=1):
+    """Start QEMU based on architecture."""
+    global qemu_process, target_arch
+
+    livecd_path = os.path.join(BUILD_DIR, "livecd.iso")
+    
+    # Reset log file
+    try:
+        open(LOG_FILE, 'w').close()
+    except Exception as e:
+        print(f"Error resetting log file: {e}")
+        return False
+
+    # ---------------- ARM64 CONFIGURATION ----------------
+    if target_arch == "arm64":
+        is_darwin = platform.system() == "Darwin"
+        if rpi_mode:
+            mode_str = "RPI emulation (cortex-a76)"
+        else:
+            mode_str = "HVF accelerated (max)" if is_darwin else "CPU max"
+        print(f"Starting QEMU (ARM64 - {mode_str})...")
+        print(f"  SMP cores: {smp_cores}")
+
+        # Darwin-specific configuration (macOS)
+        if is_darwin:
+            if rpi_mode:
+                # Raspberry Pi emulation mode (cortex-a76, no HVF)
+                qemu_cmd = [
+                    "qemu-system-aarch64",
+                    "-smp", str(smp_cores),
+                    "-device", "ramfb",
+                    "-machine", "virt,gic-version=3",
+                    "-cpu", "cortex-a76",
+                    "-m", "4G",
+                    "-drive", "if=pflash,format=raw,readonly=on,file=/opt/homebrew/share/qemu/edk2-aarch64-code.fd",
+                    "-drive", f"if=virtio,media=cdrom,readonly=on,file={livecd_path}",
+                    "-boot", "order=d,menu=on",
+                    "-display", "none",
+                    "-serial", f"file:{LOG_FILE}",
+                    "-device", "qemu-xhci,id=xhci",
+                    "-device", "usb-kbd,bus=xhci.0",
+                    "-device", "usb-mouse,bus=xhci.0"
+                ]
+            else:
+                # HVF accelerated mode (max CPU features)
+                qemu_cmd = [
+                    "qemu-system-aarch64",
+                    "-accel", "hvf",
+                    "-smp", str(smp_cores),
+                    "-device", "ramfb",
+                    "-machine", "virt,gic-version=3",
+                    "-cpu", "max",
+                    "-m", "4G",
+                    "-drive", "if=pflash,format=raw,readonly=on,file=/opt/homebrew/share/qemu/edk2-aarch64-code.fd",
+                    "-drive", f"if=virtio,media=cdrom,readonly=on,file={livecd_path}",
+                    "-boot", "order=d,menu=on",
+                    "-display", "none",
+                    "-serial", f"file:{LOG_FILE}",
+                    "-device", "qemu-xhci,id=xhci",
+                    "-device", "usb-kbd,bus=xhci.0",
+                    "-device", "usb-mouse,bus=xhci.0"
+                ]
+        else:
+            # Linux/other systems
+            if rpi_mode:
+                # Raspberry Pi emulation mode
+                qemu_cmd = [
+                    "qemu-system-aarch64",
+                    "-smp", str(smp_cores),
+                    "-device", "ramfb",
+                    "-machine", "virt,gic-version=3",
+                    "-cpu", "cortex-a76",
+                    "-m", "4G",
+                    "-bios", "/usr/share/qemu-efi-aarch64/QEMU_EFI.fd",
+                    "-drive", f"if=virtio,media=cdrom,readonly=on,file={livecd_path}",
+                    "-boot", "order=d,menu=on",
+                    "-display", "none",
+                    "-serial", f"file:{LOG_FILE}",
+                    "-device", "qemu-xhci,id=xhci",
+                    "-device", "usb-kbd,bus=xhci.0",
+                    "-device", "usb-mouse,bus=xhci.0"
+                ]
+            else:
+                # Default accelerated mode
+                qemu_cmd = [
+                    "qemu-system-aarch64",
+                    "-smp", str(smp_cores),
+                    "-device", "ramfb",
+                    "-machine", "virt,gic-version=3",
+                    "-cpu", "max",
+                    "-m", "4G",
+                    "-bios", "/usr/share/qemu-efi-aarch64/QEMU_EFI.fd",
+                    "-drive", f"if=virtio,media=cdrom,readonly=on,file={livecd_path}",
+                    "-boot", "order=d,menu=on",
+                    "-display", "none",
+                    "-serial", f"file:{LOG_FILE}",
+                    "-device", "qemu-xhci,id=xhci",
+                    "-device", "usb-kbd,bus=xhci.0",
+                    "-device", "usb-mouse,bus=xhci.0"
+                ]
+
+        print(f"  Command: {' '.join(qemu_cmd)}")
+
+        try:
+            # Output stdout/stderr to console, but serial is redirected via the command argument
+            qemu_process = subprocess.Popen(
+                qemu_cmd,
+                cwd=BUILD_DIR,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.STDOUT,
+                stdin=subprocess.DEVNULL
+            )
+            print(f"QEMU ARM64 started with PID {qemu_process.pid}")
+            return True
+        except Exception as e:
+            print(f"Error starting QEMU ARM64: {e}")
+            return False
+
+    # ---------------- X86 / X64 CONFIGURATION ----------------
+    # Linux amd64 uses a fixed legacy-style command profile; i386 uses BIOS; macOS amd64 keeps UEFI path.
+    qemu_binary = "qemu-system-i386" if target_arch == "i386" else "qemu-system-x86_64"
+    is_darwin = platform.system() == "Darwin"
+    amd64_linux_custom = (target_arch == "amd64" and not is_darwin)
+    use_uefi = (target_arch != "i386") and not amd64_linux_custom
+    ovmf_code = None
+    ovmf_vars = None
+    darwin_amd64_simple = use_uefi and is_darwin and target_arch == "amd64"
+
+    if use_uefi:
+        ovmf_code, ovmf_vars, ovmf_vars_template, code_candidates, vars_candidates = resolve_ovmf_paths(target_arch)
+
+    print(f"Starting QEMU ({target_arch}) with xHCI USB...")
+    print(f"  QEMU binary: {qemu_binary}")
+    if amd64_linux_custom:
+        print("  Boot mode: Legacy/Custom (Linux amd64)")
+    else:
+        print(f"  Boot mode: {'UEFI' if use_uefi else 'BIOS'}")
+    print(f"  SMP cores: {smp_cores}")
+    if use_uefi:
+        print(f"  OVMF CODE: {ovmf_code}")
+        if darwin_amd64_simple:
+            print("  OVMF VARS: (not used on macOS amd64)")
+        else:
+            print(f"  OVMF VARS: {ovmf_vars}")
+    print(f"  LiveCD: {livecd_path}")
+    print(f"  FAT32 USB disk: {FAT32_IMG}")
+    print(f"  Serial output: {LOG_FILE}")
+
+    # Verify OVMF firmware exists (only for UEFI boot)
+    if use_uefi:
+        if not ovmf_code or not os.path.exists(ovmf_code):
+            print(f"Error: OVMF CODE not found: {ovmf_code}")
+            print("Set REACTOS_OVMF_CODE or OVMF_CODE to override.")
+            print(f"Tried: {', '.join(code_candidates)}")
+            print("Install ovmf package: sudo apt install ovmf")
+            return False
+        if not darwin_amd64_simple:
+            if not prepare_ovmf_vars(ovmf_vars_template, ovmf_vars):
+                return False
+
+    try:
+        log_fd = None
+
+        if amd64_linux_custom:
+            # Linux amd64 path requested by user:
+            # qemu-system-x86_64 -enable-kvm -M q35 -no-shutdown -no-reboot -smp N -m 8G ...
+            log_fd = open(LOG_FILE, 'w')
+            qemu_cmd = [
+                qemu_binary,
+                "-M", "q35",
+                "-no-shutdown",
+                "-no-reboot",
+                "-smp", str(smp_cores),
+                "-m", "8G",
+                "-drive", "file=livecd.iso",
+                "-device", "qemu-xhci,id=xhci",
+                "-drive", "if=none,id=usbdisk,file=fat32.img",
+                "-device", "usb-storage,drive=usbdisk",
+                "-serial", "stdio",
+                "-display", "none",
+                "-device", "usb-kbd",
+                "-device", "usb-tablet",
+                "-netdev", "user,id=net0",
+                "-device", "virtio-net-pci,netdev=net0,bus=pcie.0"
+            ]
+        elif use_uefi:
+            # Open log file for stdout redirection (UEFI uses serial stdio)
+            log_fd = open(LOG_FILE, 'w')
+            if darwin_amd64_simple:
+                # macOS amd64: Homebrew EDK2 code-only + IDE CD-ROM
+                qemu_cmd = [
+                    qemu_binary,
+                    "-M", "q35",
+                    "-smp", str(smp_cores),
+                    "-m", "3G",
+                    "-drive", f"file={livecd_path},format=raw,if=ide,index=0,media=cdrom",
+                    "-drive", f"if=pflash,format=raw,readonly=on,file={ovmf_code}",
+                    "-serial", "stdio",
+                    "-device", "qemu-xhci,id=usbxhci",
+                    "-device", "usb-kbd,bus=usbxhci.0",
+                    "-device", "usb-mouse,bus=usbxhci.0",
+                    "-device", "virtio-scsi-pci,id=scsi0",
+                ]
+            else:
+                # UEFI boot for amd64 (non-macOS defaults)
+                qemu_cmd = [
+                    qemu_binary,
+                    "-smp", str(smp_cores),
+                    "-m", "3G",
+                    "-M", "q35",
+                    "-drive", f"if=pflash,format=raw,readonly=on,file={ovmf_code}",
+                    "-cdrom", livecd_path,
+                    "-boot", "d",  # Boot from CD-ROM
+                    "-serial", "stdio",
+                    "-display", "none",
+                    "-no-reboot",
+                    "-no-shutdown",
+                    "-device", "qemu-xhci,id=xhci",
+                    "-device", "usb-kbd,bus=xhci.0",
+                    "-device", "usb-mouse,bus=xhci.0",
+                    "-drive", f"if=none,id=usbdisk,format=raw,file={FAT32_IMG}",
+                    "-device", "usb-storage,bus=xhci.0,drive=usbdisk"
+                ]
+        else:
+            # BIOS boot for i386
+            qemu_cmd = [
+                qemu_binary,
+                "-M", "q35",
+                "-smp", str(smp_cores),
+                "-m", "3G",
+                "-drive", f"file={livecd_path},format=raw,if=ide,index=0,media=cdrom",
+                "-boot", "order=d",
+                "-serial", f"file:{LOG_FILE}",
+                "-device", "qemu-xhci,id=xhci",
+                "-device", "usb-kbd,bus=xhci.0",
+                "-device", "usb-mouse,bus=xhci.0",
+                "-drive", f"if=none,id=usbdisk,format=raw,file={FAT32_IMG}",
+                "-device", "usb-storage,bus=xhci.0,drive=usbdisk"
+            ]
+
+        # Add acceleration: TCG on macOS, KVM on Linux
+        if is_darwin:
+            qemu_cmd.insert(1, "-accel")
+            qemu_cmd.insert(2, "tcg")
+        else:
+            qemu_cmd.insert(1, "-enable-kvm")
+
+        print(f"  Command: {' '.join(qemu_cmd)}")
+
+        if use_uefi or amd64_linux_custom:
+            # stdio serial mode: redirect host stdio to log file
+            qemu_process = subprocess.Popen(
+                qemu_cmd,
+                cwd=BUILD_DIR,
+                stdout=log_fd,
+                stderr=subprocess.STDOUT,
+                stdin=subprocess.DEVNULL
+            )
+        else:
+            # BIOS mode: serial goes directly to file via QEMU
+            qemu_process = subprocess.Popen(
+                qemu_cmd,
+                cwd=BUILD_DIR,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                stdin=subprocess.DEVNULL
+            )
+
+        print(f"QEMU started with PID {qemu_process.pid}")
+        return True
+
+    except Exception as e:
+        print(f"Error starting QEMU: {e}")
+        return False
+
+
+def start_vbox():
+    """Start VirtualBox VM in headless mode."""
+    print(f"Starting VirtualBox VM '{VM_NAME}' (headless)...")
+    try:
+        subprocess.Popen(
+            ["VBoxManage", "startvm", VM_NAME, "--type", "headless"],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL
+        )
+        print(f"VM '{VM_NAME}' start command issued.")
+        return True
+    except Exception as e:
+        print(f"Error starting VM: {e}")
+        return False
+
+
+def start_vm(rpi_mode=False, smp_cores=1):
+    """Start the VM (QEMU or VirtualBox)."""
+    if use_qemu:
+        return start_qemu(rpi_mode, smp_cores)
+    else:
+        return start_vbox()
+
+
+def get_file_size(filepath):
+    try:
+        return os.path.getsize(filepath)
+    except OSError:
+        return -1
+
+
+def check_log_contents(filepath):
+    try:
+        with open(filepath, 'r', errors='ignore') as f:
+            content = f.read()
+        has_xhci = "usbxhci" in content.lower() or "xhci" in content.lower()
+        has_usb = "usb" in content.lower() and "device" in content.lower()
+        return has_xhci, has_usb
+    except Exception:
+        return False, False
+
+
+def append_line_to_log(filepath, line):
+    try:
+        with open(filepath, 'a') as f:
+            f.write(f"{line}\n")
+        return True
+    except Exception:
+        return False
+
+
+def sanitize_log_file(filepath):
+    """Remove noisy runtime lines that should not be part of result logs."""
+    try:
+        with open(filepath, 'r', errors='ignore') as f:
+            lines = f.readlines()
+    except Exception:
+        return False
+
+    filtered = []
+    for line in lines:
+        lower = line.lower()
+        if "qemu-system-" in lower and "terminating on signal" in lower:
+            continue
+        if "stall detected after" in lower:
+            continue
+        if "ected after" in lower and "xhci=" in lower and "usb=" in lower:
+            continue
+        filtered.append(line)
+
+    try:
+        with open(filepath, 'w') as f:
+            f.writelines(filtered)
+        return True
+    except Exception:
+        return False
+
+
+def emit_boot_status(success):
+    status = BOOT_SUCCESS_STATUS if success else BOOT_FAILURE_STATUS
+    line = f"[{status}]"
+    print(line)
+    append_line_to_log(LOG_FILE, line)
+
+
+def has_boot_success_marker(filepath):
+    try:
+        with open(filepath, 'r', errors='ignore') as f:
+            return BOOT_SUCCESS_MARKER in f.read()
+    except Exception:
+        return False
+
+
+def monitor_log():
+    """Monitor log file for stalls and enforce hard timeout."""
+    global qemu_process, use_qemu
+
+    stall_count = 0
+    last_size = -1
+    last_change_time = time.time()
+    
+    overall_start_time = time.time()
+
+    print(f"Monitoring log file: {LOG_FILE}")
+    print(f"Stall timeout: {STALL_TIMEOUT} seconds")
+    print(f"Hard timeout: {HARD_TIMEOUT} seconds")
+
+    wait_count = 0
+    while get_file_size(LOG_FILE) <= 0:
+        if time.time() - overall_start_time > HARD_TIMEOUT:
+            print(f"HARD TIMEOUT ({HARD_TIMEOUT}s) reached waiting for log.")
+            force_kill_vm()
+            return
+
+        if wait_count % 10 == 0:
+            print(f"Waiting for log output... ({int(time.time() - overall_start_time)}s)")
+        wait_count += 1
+        time.sleep(0.5)
+        
+        if use_qemu and qemu_process and qemu_process.poll() is not None:
+            print(f"QEMU exited with code {qemu_process.returncode}")
+            return
+
+    print(f"Log file has content. Starting monitor...\n")
+    last_size = get_file_size(LOG_FILE)
+    last_change_time = time.time()
+
+    try:
+        while True:
+            time.sleep(0.5)
+
+            # 1. Check Hard Timeout
+            total_runtime = time.time() - overall_start_time
+            if total_runtime > HARD_TIMEOUT:
+                print(f"HARD TIMEOUT REACHED! Running for {total_runtime:.1f} seconds.")
+                force_kill_vm()
+                return
+
+            # 2. Check Process Status (QEMU only)
+            if use_qemu and qemu_process and qemu_process.poll() is not None:
+                print(f"QEMU exited with code {qemu_process.returncode}")
+                return
+
+            # 3. Check Log Stall
+            current_size = get_file_size(LOG_FILE)
+            current_time = time.time()
+
+            if current_size != last_size:
+                last_size = current_size
+                last_change_time = current_time
+            else:
+                stall_duration = current_time - last_change_time
+
+                if stall_duration >= STALL_TIMEOUT:
+                    print(f"STALL DETECTED! Log unchanged for {stall_duration:.1f} seconds")
+                    
+                    has_xhci, has_usb = check_log_contents(LOG_FILE)
+                    print(f"Stall details: XHCI={has_xhci}, USB={has_usb}")
+
+                    force_kill_vm()
+                    return
+
+    except KeyboardInterrupt:
+        print("\nMonitoring interrupted.")
+
+
+def signal_handler(sig, frame):
+    force_kill_vm()
+    sys.exit(0)
+
+
+def main():
+    global use_qemu, target_arch
+
+    parser = argparse.ArgumentParser(description='VM Monitor Script')
+    parser.add_argument('--qemu', action='store_true', help='Use QEMU instead of VirtualBox')
+    parser.add_argument('--vbox', action='store_true', help='Use VirtualBox (default behavior)')
+    parser.add_argument('--rpi', action='store_true', help='Use Raspberry Pi emulation mode (cortex-a76, no HVF)')
+    parser.add_argument('--smp', type=int, default=1, help='Number of virtual CPU cores for QEMU (default: 1)')
+    args = parser.parse_args()
+
+    if args.smp < 1:
+        parser.error("--smp must be >= 1")
+
+    # --vbox is explicit but same as default (no --qemu)
+    use_qemu = args.qemu and not args.vbox
+
+    # Detect target architecture from CWD
+    target_arch = detect_target_arch()
+    
+    # Force QEMU for ARM64 (VirtualBox does not exist for arm64)
+    if target_arch == "arm64":
+        use_qemu = True
+
+    atexit.register(force_kill_vm)
+    signal.signal(signal.SIGINT, signal_handler)
+    signal.signal(signal.SIGTERM, signal_handler)
+
+    vm_type = f"QEMU ({target_arch})" if use_qemu else "VirtualBox"
+    if args.rpi:
+        vm_type += " - RPI Mode"
+    print("="*60)
+    print(f"VM Monitor Script ({vm_type})")
+    print(f"Build directory: {BUILD_DIR}")
+    print("="*60 + "\n")
+
+    if not build_livecd():
+        sys.exit(1)
+
+    # Cleanup: Stop previous QEMU instances (skip on darwin/macOS)
+    is_darwin = platform.system() == "Darwin"
+
+    if not is_darwin:
+        if target_arch != "arm64":
+            print("Ensuring previous QEMU instances are stopped...")
+            try:
+                subprocess.run("sudo kill -9 $(pidof qemu-system-x86_64)", shell=True,
+                              stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                subprocess.run("sudo kill -9 $(pidof qemu-system-i386)", shell=True,
+                              stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            except Exception:
+                pass
+        else:
+            # Simple cleanup for aarch64
+            try:
+                subprocess.run("pkill -9 -f qemu-system-aarch64", shell=True,
+                              stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            except Exception:
+                pass
+
+    if use_qemu and target_arch != "arm64":
+        if not create_fat32_img():
+            print("Warning: Could not create FAT32 image...")
+
+    if not start_vm(rpi_mode=args.rpi, smp_cores=args.smp):
+        sys.exit(1)
+
+    time.sleep(2)
+
+    monitor_log()
+
+    boot_succeeded = True
+    if use_qemu:
+        boot_succeeded = has_boot_success_marker(LOG_FILE)
+
+    force_kill_vm()
+    sanitize_log_file(LOG_FILE)
+
+    if use_qemu:
+        emit_boot_status(boot_succeeded)
+
+    if use_qemu and not boot_succeeded:
+        sys.exit(1)
+
+
+if __name__ == "__main__":
+    main()

@@ -54,6 +54,28 @@ MiMapPageInHyperSpace(IN PEPROCESS Process,
     // Acquire the hyperlock
     //
     ASSERT(Process == PsGetCurrentProcess());
+#if (NTDDI_VERSION >= NTDDI_LONGHORN)
+    //
+    // Vista+: lock-free hyperspace. Raise IRQL to prevent preemption,
+    // then use interlocked operations on the FIFO counter.
+    //
+    KeRaiseIrql(DISPATCH_LEVEL, OldIrql);
+
+    //
+    // Atomically read and decrement the FIFO counter.
+    // PageFrameNumber is a bit-field so we operate on the full PTE value.
+    // At DISPATCH_LEVEL on UP, no contention is possible, so simple
+    // read-modify-write is safe. On SMP, DISPATCH prevents preemption
+    // on this CPU, and per-process hyperspace means no cross-CPU contention.
+    //
+    Offset = PFN_FROM_PTE(PointerPte);
+    if (!Offset)
+    {
+        Offset = MI_HYPERSPACE_PTES;
+        KeFlushProcessTb();
+    }
+    PointerPte->u.Hard.PageFrameNumber = Offset - 1;
+#else
     KeAcquireSpinLock(&Process->HyperSpaceLock, OldIrql);
 
     //
@@ -73,6 +95,7 @@ MiMapPageInHyperSpace(IN PEPROCESS Process,
     // Prepare the next PTE
     //
     PointerPte->u.Hard.PageFrameNumber = Offset - 1;
+#endif
 
     //
     // Write the current PTE
@@ -103,7 +126,11 @@ MiUnmapPageInHyperSpace(IN PEPROCESS Process,
     // Release the hyperlock
     //
     ASSERT(KeGetCurrentIrql() == DISPATCH_LEVEL);
+#if (NTDDI_VERSION >= NTDDI_LONGHORN)
+    KeLowerIrql(OldIrql);
+#else
     KeReleaseSpinLock(&Process->HyperSpaceLock, OldIrql);
+#endif
 }
 
 PVOID

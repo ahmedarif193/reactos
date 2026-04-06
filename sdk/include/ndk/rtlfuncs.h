@@ -2741,7 +2741,12 @@ RtlCreateUserProcess(
     _Out_ PRTL_USER_PROCESS_INFORMATION ProcessInfo
 );
 
-#if (NTDDI_VERSION >= NTDDI_WIN7)
+/*
+ * ReactOS always exports the pre-Win7 RtlCreateUserThread signature.
+ * The Win7+ variant has a completely different parameter layout that
+ * ReactOS does not implement.
+ */
+#if (NTDDI_VERSION >= NTDDI_WIN7) && !defined(__REACTOS__)
 NTSYSAPI
 NTSTATUS
 NTAPI

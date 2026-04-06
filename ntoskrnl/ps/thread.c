@@ -269,7 +269,12 @@ PspCreateThread(OUT PHANDLE ThreadHandle,
     Thread->ExitStatus = STATUS_PENDING;
 
     /* Set the Process CID */
+#if (NTDDI_VERSION >= NTDDI_LONGHORN)
+    /* At Vista+, ThreadsProcess -> Tcb.Process (KPROCESS*) */
+    Thread->Tcb.Process = &Process->Pcb;
+#else
     Thread->ThreadsProcess = Process;
+#endif
     Thread->Cid.UniqueProcess = Process->UniqueProcessId;
 
     /* Create Cid Handle */
@@ -541,7 +546,11 @@ PspCreateThread(OUT PHANDLE ThreadHandle,
                                NULL,
                                &PsThreadType->TypeInfo.GenericMapping,
                                PreviousMode,
+#if (NTDDI_VERSION >= NTDDI_LONGHORN)
+                               &Thread->SpareUlong0,
+#else
                                &Thread->GrantedAccess,
+#endif
                                &AccessStatus);
 
         /* Dereference the token and let go the SD */
@@ -550,6 +559,20 @@ PspCreateThread(OUT PHANDLE ThreadHandle,
         ObReleaseObjectSecurity(SecurityDescriptor, SdAllocated);
 
         /* Remove access if it failed */
+#if (NTDDI_VERSION >= NTDDI_LONGHORN)
+        if (!Result) Process->ImagePathHash = 0;
+
+        /* Set least some minimum access */
+        Thread->SpareUlong0 |= (THREAD_TERMINATE |
+                                THREAD_SET_INFORMATION |
+                                THREAD_QUERY_INFORMATION);
+    }
+    else
+    {
+        /* Set the thread access mask to maximum */
+        Thread->SpareUlong0 = THREAD_ALL_ACCESS;
+    }
+#else
         if (!Result) Process->GrantedAccess = 0;
 
         /* Set least some minimum access */
@@ -562,6 +585,7 @@ PspCreateThread(OUT PHANDLE ThreadHandle,
         /* Set the thread access mask to maximum */
         Thread->GrantedAccess = THREAD_ALL_ACCESS;
     }
+#endif
 
     /* Dispatch thread */
     KeReadyThread(&Thread->Tcb);
@@ -724,7 +748,7 @@ PEPROCESS
 NTAPI
 PsGetThreadProcess(IN PETHREAD Thread)
 {
-    return Thread->ThreadsProcess;
+    return (PEPROCESS)Thread->ThreadsProcess;
 }
 
 /*
@@ -734,7 +758,7 @@ PEPROCESS
 NTAPI
 PsGetCurrentThreadProcess(VOID)
 {
-    return PsGetCurrentThread()->ThreadsProcess;
+    return (PEPROCESS)PsGetCurrentThread()->ThreadsProcess;
 }
 
 /*
@@ -764,7 +788,7 @@ ULONG
 NTAPI
 PsGetThreadSessionId(IN PETHREAD Thread)
 {
-    return MmGetSessionId(Thread->ThreadsProcess);
+    return MmGetSessionId((PEPROCESS)Thread->ThreadsProcess);
 }
 
 /*

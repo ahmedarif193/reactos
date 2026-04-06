@@ -1700,14 +1700,30 @@ MmLockAddressSpace(PMMSUPPORT AddressSpace)
     ASSERT(!PsGetCurrentThread()->OwnsSystemWorkingSetShared);
     ASSERT(!PsGetCurrentThread()->OwnsSessionWorkingSetExclusive);
     ASSERT(!PsGetCurrentThread()->OwnsSessionWorkingSetShared);
+#if (NTDDI_VERSION >= NTDDI_LONGHORN)
+    /*
+     * At Vista+, AddressCreationLock is EX_PUSH_LOCK.
+     * Enter guarded region to disable APCs — callers downstream
+     * (MiLockProcessWorkingSetUnsafe) assert APCs are disabled.
+     * KeAcquireGuardedMutex did this implicitly at pre-Vista.
+     */
+    KeEnterGuardedRegion();
+    ExAcquirePushLockExclusive(&CONTAINING_RECORD(AddressSpace, EPROCESS, Vm)->AddressCreationLock);
+#else
     KeAcquireGuardedMutex(&CONTAINING_RECORD(AddressSpace, EPROCESS, Vm)->AddressCreationLock);
+#endif
 }
 
 FORCEINLINE
 VOID
 MmUnlockAddressSpace(PMMSUPPORT AddressSpace)
 {
+#if (NTDDI_VERSION >= NTDDI_LONGHORN)
+    ExReleasePushLockExclusive(&CONTAINING_RECORD(AddressSpace, EPROCESS, Vm)->AddressCreationLock);
+    KeLeaveGuardedRegion();
+#else
     KeReleaseGuardedMutex(&CONTAINING_RECORD(AddressSpace, EPROCESS, Vm)->AddressCreationLock);
+#endif
 }
 
 FORCEINLINE

@@ -1,5 +1,6 @@
 
 add_library(genincdata MODULE genincdata.c)
+target_compile_definitions(genincdata PRIVATE NTDDI_VERSION=${REACTOS_TARGET_NTDDI})
 
 set_entrypoint(genincdata 0)
 add_dependencies(genincdata bugcodes psdk xdk)

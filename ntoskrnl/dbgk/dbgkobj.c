@@ -666,7 +666,11 @@ DbgkpPostFakeThreadMessages(IN PEPROCESS Process,
         if ((IsFirstThread) &&
             !(Flags & DEBUG_EVENT_PROTECT_FAILED) &&
             !(ThisThread->SystemThread) &&
+#if (NTDDI_VERSION >= NTDDI_LONGHORN)
+            (ThisThread->SpareUlong0))
+#else
             (ThisThread->GrantedAccess))
+#endif
         {
             /* It is, save the flag */
             First = TRUE;
@@ -1330,7 +1334,11 @@ ThreadScan:
 
             /* Check if the status is success */
             if ((MsgStatus == STATUS_SUCCESS) &&
+#if (NTDDI_VERSION >= NTDDI_LONGHORN)
+                (EventThread->SpareUlong0) &&
+#else
                 (EventThread->GrantedAccess) &&
+#endif
                 (!EventThread->SystemThread))
             {
                 /* Check if we couldn't acquire rundown for it */

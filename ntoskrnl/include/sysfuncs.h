@@ -294,3 +294,4 @@
     SVC_(QueryPortInformationProcess, 0)
     SVC_(GetCurrentProcessorNumber, 0)
     SVC_(WaitForMultipleObjects32, 5)
+    SVC_(CreateUserProcess, 11)

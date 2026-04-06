@@ -19,6 +19,12 @@ HANDLE hModuleWin;
 NTSTATUS ExitProcessCallback(PEPROCESS Process);
 NTSTATUS NTAPI ExitThreadCallback(PETHREAD Thread);
 
+/* Undocumented but exported ntoskrnl function */
+NTKERNELAPI
+PPEB
+NTAPI
+PsGetProcessPeb(PEPROCESS Process);
+
 // TODO: Should be moved to some GDI header
 NTSTATUS GdiProcessCreate(PEPROCESS Process);
 NTSTATUS GdiProcessDestroy(PEPROCESS Process);
@@ -158,11 +164,14 @@ UserProcessCreate(PEPROCESS Process)
 
     /* Setup process flags */
     ppiCurrent->W32PF_flags |= W32PF_PROCESSCONNECTED;
-    if (Process->Peb->ProcessParameters &&
-        (Process->Peb->ProcessParameters->WindowFlags & STARTF_SCREENSAVER))
     {
-        ppiScrnSaver = ppiCurrent;
-        ppiCurrent->W32PF_flags |= W32PF_SCREENSAVER;
+        PPEB Peb = PsGetProcessPeb(Process);
+        if (Peb && Peb->ProcessParameters &&
+            (Peb->ProcessParameters->WindowFlags & STARTF_SCREENSAVER))
+        {
+            ppiScrnSaver = ppiCurrent;
+            ppiCurrent->W32PF_flags |= W32PF_SCREENSAVER;
+        }
     }
 
     // FIXME: check if this process is allowed.
@@ -207,7 +216,7 @@ UserProcessDestroy(PEPROCESS Process)
     /*
      * Deregister logon application automatically
      */
-    if (gpidLogon == ppiCurrent->peProcess->UniqueProcessId)
+    if (gpidLogon == PsGetProcessId(ppiCurrent->peProcess))
         gpidLogon = 0;
 
     /* Close the current window station */
@@ -345,7 +354,19 @@ Win32kProcessCallback(PEPROCESS Process,
 {
     NTSTATUS Status;
 
-    ASSERT(Process->Peb);
+    /*
+     * Use PsGetProcessPeb() instead of direct Process->Peb access.
+     * The SDK's EPROCESS layout may differ from the ntoskrnl internal
+     * layout on Win7+, making direct field access unreliable from
+     * external modules like win32k.
+     */
+    if (!PsGetProcessPeb(Process))
+    {
+        DPRINT1("Win32kProcessCallback: Process %p (PID %p) has no PEB, "
+                "skipping win32k initialization\n",
+                Process, PsGetProcessId(Process));
+        return STATUS_SUCCESS;
+    }
 
     TRACE_CH(UserProcess, "Win32kProcessCallback -->\n");
 
@@ -465,7 +486,7 @@ InitThreadCallback(PETHREAD Thread)
     PKL pDefKL;
     BOOLEAN bFirstThread;
 
-    Process = Thread->ThreadsProcess;
+    Process = (PEPROCESS)PsGetThreadProcess(Thread);
 
     pTeb = NtCurrentTeb();
     ASSERT(pTeb);
@@ -662,7 +683,7 @@ InitThreadCallback(PETHREAD Thread)
 
         /* Store the parsed desktop as the initial desktop */
         ASSERT(ptiCurrent->ppi->hdeskStartup == NULL);
-        ASSERT(Process->UniqueProcessId != gpidLogon);
+        ASSERT(PsGetProcessId(Process) != gpidLogon);
         ptiCurrent->ppi->hdeskStartup = hDesk;
         ptiCurrent->ppi->rpdeskStartup = pdesk;
     }
@@ -735,7 +756,7 @@ ExitThreadCallback(PETHREAD Thread)
     PTHREADINFO ptiCurrent;
     PWINDOWLIST pwl, pwlNext;
 
-    Process = Thread->ThreadsProcess;
+    Process = (PEPROCESS)PsGetThreadProcess(Thread);
 
     /* Get the Win32 Thread */
     ptiCurrent = PsGetThreadWin32Thread(Thread);

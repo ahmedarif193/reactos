@@ -384,7 +384,7 @@ KiDispatchException(IN PEXCEPTION_RECORD ExceptionRecord,
         }
 
         /* 3rd strike, kill the process */
-        DPRINT1("Kill %.16s, ExceptionCode: %lx, ExceptionAddress: %lx, BaseAddress: %lx\n",
+        DPRINT1("Kill %.16s, ExceptionCode: %lx, ExceptionAddress: %p, BaseAddress: %p\n",
                 PsGetCurrentProcess()->ImageFileName,
                 ExceptionRecord->ExceptionCode,
                 ExceptionRecord->ExceptionAddress,
@@ -667,6 +667,15 @@ KiGeneralProtectionFaultHandler(
         return STATUS_ACCESS_VIOLATION;
     }
 
+    DPRINT1("KiGeneralProtectionFaultHandler: unhandled kernel GPF at RIP=%p\n"
+            "  Instruction bytes: %02x %02x %02x %02x %02x %02x %02x %02x\n"
+            "  RAX=%p RCX=%p RDX=%p\n"
+            "  ErrorCode=%p\n",
+            (PVOID)TrapFrame->Rip,
+            Instructions[0], Instructions[1], Instructions[2], Instructions[3],
+            Instructions[4], Instructions[5], Instructions[6], Instructions[7],
+            (PVOID)TrapFrame->Rax, (PVOID)TrapFrame->Rcx, (PVOID)TrapFrame->Rdx,
+            (PVOID)(ULONG_PTR)TrapFrame->ErrorCode);
     ASSERT(FALSE);
     return STATUS_UNSUCCESSFUL;
 }

@@ -23,7 +23,7 @@ include_directories(
     ${REACTOS_SOURCE_DIR}/sdk/include/reactos/libs
     ${REACTOS_SOURCE_DIR}/sdk/include/reactos/elf)
 
-add_definitions(-D_NTHAL_ -D_BLDR_ -D_NTSYSTEM_)
+add_definitions(-D_NTHAL_ -D_BLDR_ -D_NTSYSTEM_ -DNTDDI_VERSION=${REACTOS_TARGET_NTDDI})
 
 list(APPEND FREELDR_ARC_SOURCE
     arcname.c

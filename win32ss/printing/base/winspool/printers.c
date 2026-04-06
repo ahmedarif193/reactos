@@ -654,6 +654,7 @@ DevQueryPrintEx( PDEVQUERYPRINT_INFO pDQPInfo )
     return Ret;
 }
 
+#undef DocumentEvent
 INT WINAPI
 DocumentEvent( HANDLE hPrinter, HDC hdc, int iEsc, ULONG cbIn, PVOID pvIn, ULONG cbOut, PVOID pvOut)
 {

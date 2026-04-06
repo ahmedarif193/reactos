@@ -767,7 +767,12 @@ OFFSET(ThSystemCallNumber, KTHREAD, SystemCallNumber),
 OFFSET(ThTrapFrame, KTHREAD, TrapFrame),
 OFFSET(ThApcState, KTHREAD, ApcState),
 OFFSET(ThPriority, KTHREAD, Priority), // obsolete
+#if (NTDDI_VERSION < NTDDI_WIN7)
 OFFSET(ThSwapBusy, KTHREAD, SwapBusy),
+#else
+/* SwapBusy was removed at Win7; use Running field at same region as stub offset */
+OFFSET(ThSwapBusy, KTHREAD, Running),
+#endif
 OFFSET(ThContextSwitches, KTHREAD, ContextSwitches),
 OFFSET(ThState, KTHREAD, State),
 OFFSET(ThProcess, KTHREAD, Process), // thProcess in native headers
@@ -886,7 +891,13 @@ OFFSET(UsSystemCallReturn, KUSER_SHARED_DATA, SystemCallReturn), // not in win10
 OFFSET(UsSystemCallPad, KUSER_SHARED_DATA, SystemCallPad),
 OFFSET(UsTickCount, KUSER_SHARED_DATA, TickCount),
 OFFSET(UsTickCountQuad, KUSER_SHARED_DATA, TickCountQuad),
-OFFSET(UsWow64SharedInformation, KUSER_SHARED_DATA, Wow64SharedInformation), // not in win10
+#if (NTDDI_VERSION >= NTDDI_VISTASP2)
+OFFSET(UsWow64SharedInformation, KUSER_SHARED_DATA, DEPRECATED_Wow64SharedInformation),
+#elif (NTDDI_VERSION >= NTDDI_VISTA)
+/* Field does not exist -- Vista pre-SP2 has it under a different layout */
+#else
+OFFSET(UsWow64SharedInformation, KUSER_SHARED_DATA, Wow64SharedInformation),
+#endif
 //OFFSET(UsXState, KUSER_SHARED_DATA, XState), // win 10
 
 HEADER("KWAIT_BLOCK offsets"),

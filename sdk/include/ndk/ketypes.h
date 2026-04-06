@@ -1322,6 +1322,47 @@ typedef struct _KLOCK_ENTRY
 #endif
 
 //
+// UMS (User-Mode Scheduling) types -- Win7+, amd64 only
+// TODO: These are stub definitions for asm offset generation.
+// Full UMS support is not yet implemented in ReactOS.
+//
+#if (NTDDI_VERSION >= NTDDI_WIN7) && defined(_M_AMD64)
+
+typedef struct _KUMS_CONTEXT_HEADER
+{
+    ULONG64 P1Home;
+    ULONG64 P2Home;
+    ULONG64 P3Home;
+    ULONG64 P4Home;
+    PVOID StackTop;
+    ULONG64 StackSize;
+    ULONG64 RspOffset;
+    ULONG64 Rip;
+    PXMM_SAVE_AREA32 FltSave;
+    union
+    {
+        struct
+        {
+            ULONG64 Volatile : 1;
+            ULONG64 Reserved : 63;
+        };
+        ULONG64 Flags;
+    };
+    PKTRAP_FRAME TrapFrame;
+    PKEXCEPTION_FRAME ExceptionFrame;
+    struct _KTHREAD *SourceThread;
+    ULONG64 Return;
+} KUMS_CONTEXT_HEADER, *PKUMS_CONTEXT_HEADER;
+
+/* TODO: UMS_CONTROL_BLOCK is opaque; stub with the field used by asm offsets */
+typedef struct _UMS_CONTROL_BLOCK
+{
+    PVOID UmsTeb;
+} UMS_CONTROL_BLOCK, *PUMS_CONTROL_BLOCK;
+
+#endif /* NTDDI_WIN7 && _M_AMD64 */
+
+//
 // Kernel Thread (KTHREAD)
 //
 #if (NTDDI_VERSION < NTDDI_WIN8)
@@ -1554,7 +1595,7 @@ typedef struct _KTHREAD
             UCHAR WaitBlockFill6[2 * sizeof(KWAIT_BLOCK) + FIELD_OFFSET(KWAIT_BLOCK, SpareLong)];
             ULONG WaitTime;
         };
-#if (NTDDI_VERSION >= NTDDI_WIN7) // [
+#if (NTDDI_VERSION >= NTDDI_VISTA) // [
         struct
         {
             UCHAR WaitBlockFill7[168];
@@ -1564,7 +1605,7 @@ typedef struct _KTHREAD
 #endif // ]
         struct
         {
-#if (NTDDI_VERSION >= NTDDI_WIN7) // [
+#if (NTDDI_VERSION >= NTDDI_VISTA) // [
             UCHAR WaitBlockFill8[188];
 #else // ][
             UCHAR WaitBlockFill7[3 * sizeof(KWAIT_BLOCK) + FIELD_OFFSET(KWAIT_BLOCK, SpareLong)];
@@ -2220,6 +2261,10 @@ typedef struct _KPROCESS
 #if defined(_M_IX86)
     KGDTENTRY LdtDescriptor;
     KIDTENTRY Int21Descriptor;
+#endif
+#if defined(_M_AMD64) && (NTDDI_VERSION >= NTDDI_VISTA)
+    KGDTENTRY64 LdtSystemDescriptor;
+    PVOID LdtBaseAddress;
 #endif
     USHORT IopmOffset;
 #if defined(_M_IX86)

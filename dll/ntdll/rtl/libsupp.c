@@ -35,10 +35,22 @@ NTAPI
 RtlpSetInDbgPrint(VOID)
 {
     /* Check if it's already set and return TRUE if so */
+#if (NTDDI_VERSION >= NTDDI_WIN7)
+    if (NtCurrentTeb()->ReservedPad0) return TRUE;
+
+    /* Set it and return */
+    NtCurrentTeb()->ReservedPad0 = TRUE;
+#elif (NTDDI_VERSION >= NTDDI_LONGHORN)
+    if (NtCurrentTeb()->SpareBool0) return TRUE;
+
+    /* Set it and return */
+    NtCurrentTeb()->SpareBool0 = TRUE;
+#else
     if (NtCurrentTeb()->InDbgPrint) return TRUE;
 
     /* Set it and return */
     NtCurrentTeb()->InDbgPrint = TRUE;
+#endif
     return FALSE;
 }
 
@@ -47,7 +59,13 @@ NTAPI
 RtlpClearInDbgPrint(VOID)
 {
     /* Clear the flag */
+#if (NTDDI_VERSION >= NTDDI_WIN7)
+    NtCurrentTeb()->ReservedPad0 = FALSE;
+#elif (NTDDI_VERSION >= NTDDI_LONGHORN)
+    NtCurrentTeb()->SpareBool0 = FALSE;
+#else
     NtCurrentTeb()->InDbgPrint = FALSE;
+#endif
 }
 
 KPROCESSOR_MODE
