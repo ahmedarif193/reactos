@@ -9,7 +9,7 @@
 #ifndef _INC_CRTDBG // include guard for 3rd party interop
 #define _INC_CRTDBG
 
-#include <corecrt.h>
+#include "corecrt.h"
 #include <vcruntime_new_debug.h>
 #include <intrin.h> // for __debugbreak() on GCC
 

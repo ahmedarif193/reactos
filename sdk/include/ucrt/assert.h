@@ -9,7 +9,7 @@
     #error assert.h not for CRT internal use
 #endif
 
-#include <corecrt.h>
+#include "corecrt.h"
 
 #pragma warning(push)
 #pragma warning(disable: _UCRT_DISABLED_WARNINGS)

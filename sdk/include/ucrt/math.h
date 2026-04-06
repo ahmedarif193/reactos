@@ -8,7 +8,7 @@
 // the nonstandard but useful constant definitions.  The headers are divided in
 // this way for modularity (to support the C++ modules feature).
 //
-#include <corecrt_math.h>
+#include "corecrt_math.h"
 
 #ifdef _USE_MATH_DEFINES
     #include <corecrt_math_defines.h>

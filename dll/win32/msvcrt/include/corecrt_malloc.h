@@ -20,7 +20,7 @@
 #ifndef __WINE_CORECRT_MALLOC_H
 #define __WINE_CORECRT_MALLOC_H
 
-#include <corecrt.h>
+#include "corecrt.h"
 
 #ifdef __cplusplus
 extern "C" {

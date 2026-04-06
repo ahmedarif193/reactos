@@ -16,7 +16,7 @@
     #error ERROR: This file is not supported in the pure mode!
 #endif
 
-#include <corecrt.h>
+#include "corecrt.h"
 
 #pragma warning(push)
 #pragma warning(disable: _UCRT_DISABLED_WARNINGS)

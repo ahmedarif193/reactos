@@ -9,8 +9,8 @@
 #ifndef _INC_CONIO // include guard for 3rd party interop
 #define _INC_CONIO
 
-#include <corecrt.h>
-#include <corecrt_wconio.h>
+#include "corecrt.h"
+#include "corecrt_wconio.h"
 
 #pragma warning(push)
 #pragma warning(disable: _UCRT_DISABLED_WARNINGS)
