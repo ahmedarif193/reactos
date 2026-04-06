@@ -503,6 +503,11 @@ HvSyncHive(
     KeQuerySystemTime(&RegistryHive->BaseBlock->TimeStamp);
 #endif
 
+    /*
+     * Pre-Vista hives use a single log file and an alternate hive.
+     * Vista+ replaced this with a dual-log mechanism (CurrentLog/LogSize[2]).
+     */
+#if (NTDDI_VERSION < NTDDI_VISTA)
     /* Update the hive log file if present */
     if (RegistryHive->Log)
     {
@@ -515,6 +520,7 @@ HvSyncHive(
             return FALSE;
         }
     }
+#endif /* NTDDI_VERSION < NTDDI_VISTA */
 
     /* Update the primary hive file */
     if (!HvpWriteHive(RegistryHive, TRUE, HFILE_TYPE_PRIMARY))
@@ -526,6 +532,7 @@ HvSyncHive(
         return FALSE;
     }
 
+#if (NTDDI_VERSION < NTDDI_VISTA)
     /* Update the alternate hive file if present */
     if (RegistryHive->Alternate)
     {
@@ -538,6 +545,7 @@ HvSyncHive(
             return FALSE;
         }
     }
+#endif /* NTDDI_VERSION < NTDDI_VISTA */
 
     /* Clear dirty bitmap. */
     RtlClearAllBits(&RegistryHive->DirtyVector);
@@ -628,7 +636,12 @@ HvWriteHive(
  * @return
  * Returns TRUE if hive writing has succeeded,
  * FALSE otherwise.
+ *
+ * @note
+ * Vista+ replaced alternate hives with a dual-log mechanism.
+ * This function is only available pre-Vista.
  */
+#if (NTDDI_VERSION < NTDDI_VISTA)
 BOOLEAN
 CMAPI
 HvWriteAlternateHive(
@@ -652,6 +665,7 @@ HvWriteAlternateHive(
 
     return TRUE;
 }
+#endif /* NTDDI_VERSION < NTDDI_VISTA */
 
 /**
  * @brief

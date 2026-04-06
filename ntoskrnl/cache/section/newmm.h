@@ -296,7 +296,14 @@ _MmTryToLockAddressSpace(IN PMMSUPPORT AddressSpace,
                          const char *file,
                          int line)
 {
+#if (NTDDI_VERSION >= NTDDI_LONGHORN)
+    BOOLEAN Result;
+    KeEnterGuardedRegion();
+    Result = ExTryToAcquirePushLockExclusive(&CONTAINING_RECORD(AddressSpace, EPROCESS, Vm)->AddressCreationLock);
+    if (!Result) KeLeaveGuardedRegion();
+#else
     BOOLEAN Result = KeTryToAcquireGuardedMutex(&CONTAINING_RECORD(AddressSpace, EPROCESS, Vm)->AddressCreationLock);
+#endif
     //DbgPrint("(%s:%d) Try Lock Address Space %x -> %s\n", file, line, AddressSpace, Result ? "true" : "false");
     return Result;
 }

@@ -250,8 +250,13 @@ ObInitSystem(VOID)
     KeInitializeGuardedMutex(&ObpDeviceMapLock);
 
     /* Setup default access for the system process */
+#if (NTDDI_VERSION >= NTDDI_LONGHORN)
+    PsGetCurrentProcess()->ImagePathHash = PROCESS_ALL_ACCESS;
+    PsGetCurrentThread()->SpareUlong0 = THREAD_ALL_ACCESS;
+#else
     PsGetCurrentProcess()->GrantedAccess = PROCESS_ALL_ACCESS;
     PsGetCurrentThread()->GrantedAccess = THREAD_ALL_ACCESS;
+#endif
 
     /* Setup the Object Reaper */
     ExInitializeWorkItem(&ObpReaperWorkItem, ObpReapObject, NULL);
