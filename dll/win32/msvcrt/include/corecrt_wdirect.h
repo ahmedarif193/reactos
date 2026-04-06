@@ -6,7 +6,7 @@
 #ifndef _WDIRECT_DEFINED
 #define _WDIRECT_DEFINED
 
-#include <corecrt.h>
+#include "corecrt.h"
 
 #ifdef __cplusplus
 extern "C" {

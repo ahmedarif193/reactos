@@ -20,7 +20,7 @@
 #ifndef __WINE_TIME_H
 #define __WINE_TIME_H
 
-#include <corecrt_wtime.h>
+#include "corecrt_wtime.h"
 
 #include <pshpack8.h>
 

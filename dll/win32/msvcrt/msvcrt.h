@@ -52,14 +52,14 @@ typedef struct _iobuf
 
 #endif
 
-#include <errno.h>
-#include <locale.h>
-#include <stdarg.h>
-#include <stdint.h>
+#include "include/errno.h"
+#include "include/locale.h"
+#include "include/stdarg.h"
+#include "include/stdint.h"
 #define _NO_CRT_STDIO_INLINE
-#include <stdio.h>
-#include <stdlib.h>
-#include <wchar.h>
+#include "include/stdio.h"
+#include "include/stdlib.h"
+#include "include/wchar.h"
 
 #include "windef.h"
 #include "winbase.h"

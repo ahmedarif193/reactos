@@ -8,8 +8,8 @@
 #ifndef __WINE_IO_H
 #define __WINE_IO_H
 
-#include <corecrt.h>
-#include <corecrt_io.h>
+#include "corecrt.h"
+#include "corecrt_io.h"
 
 static inline int access(const char* path, int mode) { return _access(path, mode); }
 static inline int chmod(const char* path, int mode) { return _chmod(path, mode); }

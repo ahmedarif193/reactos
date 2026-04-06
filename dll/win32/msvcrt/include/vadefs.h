@@ -21,7 +21,7 @@
 #ifndef _INC_VADEFS
 #define _INC_VADEFS
 
-#include <corecrt.h>
+#include "corecrt.h"
 
 #ifdef __cplusplus
 #define _ADDRESSOF(v) (&reinterpret_cast<const char &>(v))

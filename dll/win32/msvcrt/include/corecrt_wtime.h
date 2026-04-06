@@ -6,7 +6,7 @@
 #ifndef _WTIME_DEFINED
 #define _WTIME_DEFINED
 
-#include <corecrt.h>
+#include "corecrt.h"
 
 struct tm {
     int tm_sec;

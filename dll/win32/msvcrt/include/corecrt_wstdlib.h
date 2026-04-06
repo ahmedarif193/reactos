@@ -6,7 +6,7 @@
 #ifndef _WSTDLIB_DEFINED
 #define _WSTDLIB_DEFINED
 
-#include <corecrt.h>
+#include "corecrt.h"
 
 #ifdef __cplusplus
 extern "C" {

@@ -24,7 +24,7 @@
 
 #include <setjmp.h>
 #include <stdarg.h>
-#include <fpieee.h>
+#include "include/fpieee.h"
 
 #include "ntstatus.h"
 #define WIN32_NO_STATUS

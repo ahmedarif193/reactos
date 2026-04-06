@@ -8,7 +8,7 @@
 #ifndef __WINE_DOS_H
 #define __WINE_DOS_H
 
-#include <corecrt.h>
+#include "corecrt.h"
 
 #include <pshpack8.h>
 

@@ -8,7 +8,7 @@
 #ifndef __WINE_STDIO_H
 #define __WINE_STDIO_H
 
-#include <corecrt_wstdio.h>
+#include "corecrt_wstdio.h"
 
 /* file._flag flags */
 #ifndef _UCRT

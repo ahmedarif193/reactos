@@ -23,7 +23,7 @@
 #if defined(__x86_64__) && _MSVCR_VER>=140
 
 #include <stdarg.h>
-#include <stdlib.h>
+#include "include/stdlib.h"
 
 #include "wine/exception.h"
 #include "wine/debug.h"

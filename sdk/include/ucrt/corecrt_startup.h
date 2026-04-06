@@ -8,8 +8,8 @@
 //
 #pragma once
 
-#include <corecrt.h>
-#include <math.h>
+#include "corecrt.h"
+#include "math.h"
 #include <vcruntime_startup.h>
 
 #pragma warning(push)

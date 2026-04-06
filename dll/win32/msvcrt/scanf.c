@@ -25,8 +25,8 @@
 
 #include <conio.h>
 #include <stdarg.h>
-#include <limits.h>
-#include <math.h>
+#include "include/limits.h"
+#include "include/math.h"
 
 #include "windef.h"
 #include "winbase.h"

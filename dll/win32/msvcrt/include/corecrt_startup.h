@@ -6,7 +6,7 @@
 #ifndef _INC_CORECRT_STARTUP
 #define _INC_CORECRT_STARTUP
 
-#include <corecrt.h>
+#include "corecrt.h"
 
 typedef enum _crt_argv_mode
 {

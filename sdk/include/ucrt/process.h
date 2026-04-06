@@ -10,9 +10,9 @@
 #ifndef _INC_PROCESS // include guard for 3rd party interop
 #define _INC_PROCESS
 
-#include <corecrt.h>
-#include <corecrt_startup.h>
-#include <corecrt_wprocess.h>
+#include "corecrt.h"
+#include "corecrt_startup.h"
+#include "corecrt_wprocess.h"
 
 #pragma warning(push)
 #pragma warning(disable: _UCRT_DISABLED_WARNINGS)

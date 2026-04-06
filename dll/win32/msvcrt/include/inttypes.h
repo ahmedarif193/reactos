@@ -8,9 +8,9 @@
 #ifndef _INTTYPES_H_
 #define _INTTYPES_H_
 
-#include <corecrt.h>
-#include <stdint.h>
-#include <stddef.h>
+#include "corecrt.h"
+#include "stdint.h"
+#include "stddef.h"
 
 #ifdef	__cplusplus
 extern	"C"	{

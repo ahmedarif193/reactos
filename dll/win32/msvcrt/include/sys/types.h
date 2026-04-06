@@ -20,7 +20,7 @@
 #ifndef __WINE_SYS_TYPES_H
 #define __WINE_SYS_TYPES_H
 
-#include <corecrt.h>
+#include "../corecrt.h"
 
 #ifndef _DEV_T_DEFINED
 # ifdef _CRTDLL

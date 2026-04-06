@@ -10,7 +10,7 @@
 #ifndef _INTTYPES // include guard for 3rd party interop
 #define _INTTYPES
 
-#include <corecrt.h>
+#include "corecrt.h"
 #include <stdint.h>
 
 #pragma warning(push)

@@ -9,9 +9,9 @@
 #ifndef _INC_STRING // include guard for 3rd party interop
 #define _INC_STRING
 
-#include <corecrt.h>
-#include <corecrt_memory.h>
-#include <corecrt_wstring.h>
+#include "corecrt.h"
+#include "corecrt_memory.h"
+#include "corecrt_wstring.h"
 #include <vcruntime_string.h>
 
 #ifndef __midl

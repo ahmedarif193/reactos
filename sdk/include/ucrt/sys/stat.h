@@ -7,8 +7,8 @@
 //
 #pragma once
 
-#include <corecrt.h>
-#include <sys/types.h>
+#include "../corecrt.h"
+#include "types.h"
 
 #pragma warning(push)
 #pragma warning(disable: _UCRT_DISABLED_WARNINGS)

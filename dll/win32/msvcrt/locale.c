@@ -18,13 +18,13 @@
  * Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA 02110-1301, USA
  */
 
-#include <limits.h>
-#include <locale.h>
-#include <stdarg.h>
-#include <stdio.h>
-#include <stdlib.h>
-#include <mbctype.h>
-#include <wctype.h>
+#include "include/limits.h"
+#include "include/locale.h"
+#include "include/stdarg.h"
+#include "include/stdio.h"
+#include "include/stdlib.h"
+#include "include/mbctype.h"
+#include "include/wctype.h"
 
 #include "windef.h"
 #include "winbase.h"

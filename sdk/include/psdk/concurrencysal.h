@@ -45,6 +45,9 @@
 #define _Has_lock_kind_(kind)
 #define _Has_lock_level_(level)
 #define _Interlocked_
+#ifndef _Interlocked_operand_
+#define _Interlocked_operand_ _Pre_ _SA_annotes0(SAL_interlocked)
+#endif
 #define _Internal_lock_level_order_(a,b)
 #define _Lock_level_order_(a,b)
 #define _No_competing_thread_
@@ -92,6 +95,9 @@ const char _Lock_kind_critical_section_[] = "";
 #define _Has_lock_kind_(kind)
 #define _Has_lock_level_(level)
 #define _Interlocked_
+#ifndef _Interlocked_operand_
+#define _Interlocked_operand_
+#endif
 #define _Internal_lock_level_order_(a,b)
 #define _Lock_level_order_(a,b)
 #define _No_competing_thread_
@@ -114,4 +120,3 @@ const char _Lock_kind_critical_section_[] = "";
 #define _Internal_set_lock_count_to_zero_(lock)
 #define _Internal_set_lock_count_to_one_(lock)
 #endif // 0
-

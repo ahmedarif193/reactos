@@ -23,7 +23,7 @@
 #pragma makedep implib
 #endif
 
-#include <process.h>
+#include "include/process.h"
 #include "msvcrt.h"
 #include "mtdll.h"
 

@@ -30,6 +30,22 @@ Abstract:
 #define _WIN32_WINNT_WINBLUE                0x0603
 #define _WIN32_WINNT_WINTHRESHOLD           0x0A00
 #define _WIN32_WINNT_WIN10                  0x0A00
+/*
+ * _WIN32_WINNT only carries the major/minor OS version. Keep the Windows 10
+ * branch aliases available for SDK compatibility while preserving that
+ * granularity.
+ */
+#define _WIN32_WINNT_WIN10_TH2              _WIN32_WINNT_WIN10
+#define _WIN32_WINNT_WIN10_RS1              _WIN32_WINNT_WIN10
+#define _WIN32_WINNT_WIN10_RS2              _WIN32_WINNT_WIN10
+#define _WIN32_WINNT_WIN10_RS3              _WIN32_WINNT_WIN10
+#define _WIN32_WINNT_WIN10_RS4              _WIN32_WINNT_WIN10
+#define _WIN32_WINNT_WIN10_RS5              _WIN32_WINNT_WIN10
+#define _WIN32_WINNT_RS1                    _WIN32_WINNT_WIN10_RS1
+#define _WIN32_WINNT_RS2                    _WIN32_WINNT_WIN10_RS2
+#define _WIN32_WINNT_RS3                    _WIN32_WINNT_WIN10_RS3
+#define _WIN32_WINNT_RS4                    _WIN32_WINNT_WIN10_RS4
+#define _WIN32_WINNT_RS5                    _WIN32_WINNT_WIN10_RS5
 
 /* _WIN32_IE */
 #define _WIN32_IE_IE20                      0x0200
@@ -139,6 +155,15 @@ Abstract:
                                                             // Windows 10.0.27548-27686 / 25H1 / "Dilithium"
 #define NTDDI_WIN11_SE                      0x0A000011      // Windows 10.0.27695-?     / 25H2 / Selenium
 
+/*
+ * Keep the default WDK target conservative. This is only used when a caller
+ * explicitly opts into a Windows 10 _WIN32_WINNT value without selecting a
+ * more specific NTDDI level.
+ */
+#ifndef WDK_NTDDI_VERSION
+#define WDK_NTDDI_VERSION                   NTDDI_WIN10_RS5
+#endif
+
 /* Version Fields in NTDDI_VERSION */
 #define OSVERSION_MASK                      0xFFFF0000UL
 #define SPVERSION_MASK                      0x0000FF00UL
@@ -165,7 +190,11 @@ Abstract:
 /* Choose NTDDI Version */
 #ifndef NTDDI_VERSION
 #ifdef _WIN32_WINNT
+#if (_WIN32_WINNT <= _WIN32_WINNT_WINBLUE)
 #define NTDDI_VERSION   NTDDI_VERSION_FROM_WIN32_WINNT(_WIN32_WINNT)
+#elif (_WIN32_WINNT >= _WIN32_WINNT_WIN10)
+#define NTDDI_VERSION   WDK_NTDDI_VERSION
+#endif
 #else
 #define NTDDI_VERSION   0x06000000 /* NTDDI_WS03SP4 */
 #endif

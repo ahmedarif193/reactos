@@ -9,6 +9,7 @@
 #pragma once
 
 #include <intrin.h>
+#include <immintrin.h>
 #include <isa_availability.h>
 #include <stdint.h>
 

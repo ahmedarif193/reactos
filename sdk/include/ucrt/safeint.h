@@ -220,8 +220,8 @@
 
 #if !defined(RC_INVOKED)
 
-#include <corecrt.h>
-#include <crtdbg.h>
+#include "corecrt.h"
+#include "crtdbg.h"
 
 // Disable warnings hit under /Wall:
 // C4514: unreferenced inline function has been removed (/Wall)

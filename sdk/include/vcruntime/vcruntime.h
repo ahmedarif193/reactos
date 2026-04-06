@@ -9,9 +9,9 @@
 
 #define _VCRUNTIME_H
 
-#include <_mingw.h>
+#include "_mingw.h"
 #include <sal.h>
-#include <vadefs.h>
+#include "vadefs.h"
 
 #define _CRT_STRINGIZE_(_Value) #_Value
 #define _CRT_STRINGIZE(_Value) _CRT_STRINGIZE_(_Value)
@@ -29,18 +29,50 @@
 #define __pragma(x) _Pragma(_CRT_STRINGIZE(x))
 #endif
 
-#ifdef __cplusplus
-    #define _CRT_BEGIN_C_HEADER \
-        __pragma(pack(push, _CRT_PACKING_IDENTIFIER, _CRT_PACKING)) \
-        extern "C" {
-    #define _CRT_END_C_HEADER \
-        } \
-        __pragma(pack(pop, _CRT_PACKING_IDENTIFIER))
+#if defined(_MSC_VER)
+    #if defined(_CRT_PACKING_IDENTIFIER)
+        #ifdef __cplusplus
+            #define _CRT_BEGIN_C_HEADER \
+                __pragma(pack(push, _CRT_PACKING_IDENTIFIER, _CRT_PACKING)) \
+                extern "C" {
+            #define _CRT_END_C_HEADER \
+                } \
+                __pragma(pack(pop, _CRT_PACKING_IDENTIFIER))
+        #else
+            #define _CRT_BEGIN_C_HEADER \
+                __pragma(pack(push, _CRT_PACKING_IDENTIFIER, _CRT_PACKING))
+            #define _CRT_END_C_HEADER \
+                __pragma(pack(pop, _CRT_PACKING_IDENTIFIER))
+        #endif
+    #else
+        #ifdef __cplusplus
+            #define _CRT_BEGIN_C_HEADER \
+                __pragma(pack(push, _CRT_PACKING)) \
+                extern "C" {
+            #define _CRT_END_C_HEADER \
+                } \
+                __pragma(pack(pop))
+        #else
+            #define _CRT_BEGIN_C_HEADER \
+                __pragma(pack(push, _CRT_PACKING))
+            #define _CRT_END_C_HEADER \
+                __pragma(pack(pop))
+        #endif
+    #endif
 #else
-    #define _CRT_BEGIN_C_HEADER \
-        __pragma(pack(push, _CRT_PACKING_IDENTIFIER, _CRT_PACKING))
-    #define _CRT_END_C_HEADER \
-        __pragma(pack(pop, _CRT_PACKING_IDENTIFIER))
+    #ifdef __cplusplus
+        #define _CRT_BEGIN_C_HEADER \
+            __pragma(pack(push, _CRT_PACKING)) \
+            extern "C" {
+        #define _CRT_END_C_HEADER \
+            } \
+            __pragma(pack(pop))
+    #else
+        #define _CRT_BEGIN_C_HEADER \
+            __pragma(pack(push, _CRT_PACKING))
+        #define _CRT_END_C_HEADER \
+            __pragma(pack(pop))
+    #endif
 #endif
 
 _CRT_BEGIN_C_HEADER
@@ -132,6 +164,23 @@ _CRT_BEGIN_C_HEADER
 #endif
 #else
   typedef int intptr_t;
+#endif
+#endif
+#endif
+
+#ifndef _UINTPTR_T_DEFINED
+#define _UINTPTR_T_DEFINED
+#ifndef __uintptr_t_defined
+#define __uintptr_t_defined
+#undef uintptr_t
+#ifdef _WIN64
+#if defined(__GNUC__) && defined(__STRICT_ANSI__)
+  typedef unsigned int uintptr_t __attribute__ ((mode (DI)));
+#else
+  typedef unsigned __int64 uintptr_t;
+#endif
+#else
+  typedef unsigned int uintptr_t;
 #endif
 #endif
 #endif

@@ -10,8 +10,8 @@
 //
 #pragma once
 
-#include <corecrt.h>
-#include <stddef.h>
+#include "corecrt.h"
+#include "stddef.h"
 
 #pragma warning(push)
 #pragma warning(disable: _UCRT_DISABLED_WARNINGS)

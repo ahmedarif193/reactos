@@ -8,8 +8,8 @@
 #ifndef __WINE_PROCESS_H
 #define __WINE_PROCESS_H
 
-#include <corecrt_startup.h>
-#include <corecrt_wprocess.h>
+#include "corecrt_startup.h"
+#include "corecrt_wprocess.h"
 
 /* Process creation flags */
 #define _P_WAIT    0

@@ -6,8 +6,8 @@
 #ifndef _WSTRING_DEFINED
 #define _WSTRING_DEFINED
 
-#include <corecrt.h>
-#include <corecrt_malloc.h>
+#include "corecrt.h"
+#include "corecrt_malloc.h"
 
 #ifdef __cplusplus
 extern "C" {

@@ -9,5 +9,5 @@
 #ifndef _INC_IO // include guard for 3rd party interop
 #define _INC_IO
 
-#include <corecrt_io.h>
+#include "corecrt_io.h"
 #endif // _INC_IO

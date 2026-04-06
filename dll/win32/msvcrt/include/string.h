@@ -8,8 +8,8 @@
 #ifndef __WINE_STRING_H
 #define __WINE_STRING_H
 
-#include <corecrt_malloc.h>
-#include <corecrt_wstring.h>
+#include "corecrt_malloc.h"
+#include "corecrt_wstring.h"
 
 #ifndef _NLSCMP_DEFINED
 #define _NLSCMPERROR               ((unsigned int)0x7fffffff)

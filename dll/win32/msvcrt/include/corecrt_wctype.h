@@ -6,7 +6,7 @@
 #ifndef _WCTYPE_DEFINED
 #define _WCTYPE_DEFINED
 
-#include <corecrt.h>
+#include "corecrt.h"
 
 #ifdef __cplusplus
 extern "C" {

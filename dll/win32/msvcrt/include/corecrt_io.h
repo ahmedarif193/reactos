@@ -6,7 +6,7 @@
 #ifndef _IO_DEFINED
 #define _IO_DEFINED
 
-#include <corecrt_wio.h>
+#include "corecrt_wio.h"
 
 #include <pshpack8.h>
 
