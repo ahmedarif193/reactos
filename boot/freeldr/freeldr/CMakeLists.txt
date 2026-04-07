@@ -56,7 +56,34 @@ list(APPEND FREELDR_BOOTLIB_SOURCE
     lib/inifile/parse.c
     lib/mm/meminit.c
     lib/mm/mm.c
-    lib/mm/heap.c)
+    lib/mm/heap.c
+    lib/wim/wim_freeldr.c)
+
+add_library(freeldr_wimcore STATIC
+    ${REACTOS_SOURCE_DIR}/sdk/lib/libwim/sha1.c
+    ${REACTOS_SOURCE_DIR}/sdk/lib/libwim/wimcore.c
+    ${REACTOS_SOURCE_DIR}/sdk/lib/libwim/xpress_huff.c)
+set_property(TARGET freeldr_wimcore PROPERTY C_STANDARD 11)
+target_include_directories(freeldr_wimcore PRIVATE
+    ${REACTOS_SOURCE_DIR}/sdk/include/reactos/libs/libwim
+    ${REACTOS_SOURCE_DIR}/boot/freeldr/freeldr/include)
+target_compile_definitions(freeldr_wimcore PRIVATE
+    XPRESS_HUFF_DECOMPRESS_ONLY=1
+    _NTHAL_
+    _BLDR_
+    _NTSYSTEM_)
+if(CMAKE_C_COMPILER_ID STREQUAL "GNU" OR CMAKE_C_COMPILER_ID STREQUAL "Clang")
+    target_compile_options(freeldr_wimcore PUBLIC -mno-sse)
+endif()
+
+# The XPRESS decoder shared with sdk/lib/libwim is built in decompress-only
+# mode for freeldr: this disables the SIMD dispatch table and the compressor
+# paths, keeping the file freestanding and pulling in zero runtime helpers
+# beyond memcpy/memset.
+set_source_files_properties(
+    lib/wim/wim_freeldr.c
+    PROPERTIES
+        INCLUDE_DIRECTORIES "${REACTOS_SOURCE_DIR}/sdk/include/reactos/libs/libwim")
 
 list(APPEND FREELDR_BOOTMGR_SOURCE
     include/freeldr.h
