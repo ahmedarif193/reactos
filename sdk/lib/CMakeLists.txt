@@ -2,6 +2,7 @@
 add_subdirectory(atl)
 add_subdirectory(cmlib)
 add_subdirectory(inflib)
+add_subdirectory(libwim)
 
 if(CMAKE_CROSSCOMPILING)
 
