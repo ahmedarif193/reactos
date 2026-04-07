@@ -156,7 +156,7 @@ endif()
 
 set_entrypoint(uefildr EfiEntry)
 
-target_link_libraries(uefildr uefifreeldr_common cportlib blcmlib blrtl libcntpr)
+target_link_libraries(uefildr uefifreeldr_common freeldr_wimcore cportlib blcmlib blrtl libcntpr)
 if(ARCH STREQUAL "i386")
     target_link_libraries(uefildr mini_hal)
 endif()

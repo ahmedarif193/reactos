@@ -176,12 +176,28 @@ file(APPEND ${CMAKE_CURRENT_BINARY_DIR}/livecd.cmake.lst "reactos/TEMP=${CMAKE_C
 add_allusers_profile_dirs(${CMAKE_CURRENT_BINARY_DIR}/livecd.cmake.lst "Profiles")
 add_user_profile_dirs(${CMAKE_CURRENT_BINARY_DIR}/livecd.cmake.lst "Profiles" "Default User")
 
+set(_livecd_stage_dir  ${CMAKE_CURRENT_BINARY_DIR}/livecd_wim_stage)
+set(_livecd_boot_wim   ${CMAKE_CURRENT_BINARY_DIR}/boot.wim)
+set(_livecd_wim_lst    ${CMAKE_CURRENT_BINARY_DIR}/livecd_wim.$<CONFIG>.lst)
+set(_livecd_ini_src    ${REACTOS_SOURCE_DIR}/boot/bootdata/livecd.ini)
+set(_livecd_wim_ini    ${CMAKE_CURRENT_BINARY_DIR}/livecd_wim.freeldr.ini)
+set(_livecd_wim_script ${REACTOS_SOURCE_DIR}/boot/bootdata/wim/make_livecd_wim.cmake)
+
 add_custom_target(livecd
+    COMMAND ${CMAKE_COMMAND}
+        -DINPUT_LIST=${CMAKE_CURRENT_BINARY_DIR}/livecd.$<CONFIG>.lst
+        -DSTAGE_DIR=${_livecd_stage_dir}
+        -DOUTPUT_WIM=${_livecd_boot_wim}
+        -DOUTPUT_LIST=${_livecd_wim_lst}
+        -DWIMAGE_EXE=$<TARGET_FILE:native-wimage>
+        -DSOURCE_FREELDR_INI=${_livecd_ini_src}
+        -DOUTPUT_FREELDR_INI=${_livecd_wim_ini}
+        -P ${_livecd_wim_script}
     COMMAND native-mkisofs -quiet -o ${REACTOS_BINARY_DIR}/livecd.iso
         ${ISO_COMMON_OPTIONS} ${ISO_BOOT_OPTIONS} ${ISO_BOOT_FILES_OPTIONS} ${ISO_LAYOUT_OPTIONS}
-        -path-list ${CMAKE_CURRENT_BINARY_DIR}/livecd.$<CONFIG>.lst
+        -path-list ${_livecd_wim_lst}
     COMMAND native-isohybrid -b ${_isombr_file} -t 0x96 ${REACTOS_BINARY_DIR}/livecd.iso
-    DEPENDS isombr native-isohybrid native-mkisofs
+    DEPENDS isombr native-isohybrid native-mkisofs native-wimage ${_livecd_ini_src} ${_livecd_wim_script}
     VERBATIM)
 
 ## HybridCD
