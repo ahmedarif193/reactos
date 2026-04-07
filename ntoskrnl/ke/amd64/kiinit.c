@@ -568,7 +568,8 @@ KiSystemStartup(IN PLOADER_PARAMETER_BLOCK LoaderBlock)
     HalInitializeProcessor(Cpu, KeLoaderBlock);
 
     /* We are running the initial system process now */
-    InterlockedOr64(&KiInitialProcess.Pcb.ActiveProcessors, 1ULL << Cpu);
+    InterlockedOr64((PLONG64)&KiInitialProcess.Pcb.ActiveProcessors,
+                    (LONG64)(1ULL << Cpu));
 
     /* Release lock */
     InterlockedAnd64((PLONG64)&KiFreezeExecutionLock, 0);

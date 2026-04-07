@@ -172,6 +172,7 @@ KiCompleteTimer(IN PKTIMER Timer,
                 IN PKSPIN_LOCK_QUEUE LockQueue)
 {
     LIST_ENTRY ListHead;
+    PLIST_ENTRY TemporaryListHead;
     BOOLEAN RequestInterrupt = FALSE;
     DPRINT("KiCompleteTimer(): Timer %p, LockQueue: %p\n", Timer, LockQueue);
 

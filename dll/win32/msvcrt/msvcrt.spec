@@ -1361,6 +1361,7 @@
 @ cdecl iswupper(long)
 @ cdecl iswxdigit(long)
 @ cdecl isxdigit(long)
+@ cdecl wctype(str)
 @ cdecl labs(long)
 @ cdecl ldexp(double long)
 @ cdecl -ret64 ldiv(long long)
