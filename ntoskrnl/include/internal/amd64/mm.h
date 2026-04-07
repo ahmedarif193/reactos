@@ -118,8 +118,10 @@
 #define MI_MAKE_WRITE_PAGE(x)      ((x)->u.Hard.Write = 1)
 #elif !defined(CONFIG_SMP)
 #define MI_MAKE_WRITE_PAGE(x)      ((x)->u.Hard.Write = 1)
+#define MI_SET_PAGE_WRITEABLE(x,v) ((x)->u.Hard.Write = !!(v))
 #else
 #define MI_MAKE_WRITE_PAGE(x)      ((x)->u.Hard.Writable = 1)
+#define MI_SET_PAGE_WRITEABLE(x,v) ((x)->u.Hard.Writable = !!(v))
 #endif
 
 /* Macros to identify the page fault reason from the error code */
@@ -374,4 +376,3 @@ MiIsPdeForAddressValid(PVOID Address)
             (MiAddressToPpe(Address)->u.Hard.Valid) &&
             (MiAddressToPde(Address)->u.Hard.Valid));
 }
-

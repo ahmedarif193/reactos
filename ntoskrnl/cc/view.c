@@ -58,7 +58,7 @@ ULONG CcTotalDirtyPages = 0;
 LIST_ENTRY CcDeferredWrites;
 KSPIN_LOCK CcDeferredWriteSpinLock;
 LIST_ENTRY CcCleanSharedCacheMapList;
-
+static BOOLEAN CcViewInitialized;
 #if DBG
 ULONG CcRosVacbIncRefCount_(PROS_VACB vacb, PCSTR file, INT line)
 {
@@ -473,6 +473,12 @@ CcRosTrimCache(
     BOOLEAN FlushedPages = FALSE;
 
     DPRINT("CcRosTrimCache(Target %lu)\n", Target);
+
+    if (!CcViewInitialized)
+    {
+        *NrFreed = 0;
+        return;
+    }
 
     InitializeListHead(&FreeList);
 
@@ -1507,6 +1513,7 @@ CcInitView (
                                     20);
 
     CcInitCacheZeroPage();
+    CcViewInitialized = TRUE;
 }
 
 #if DBG && defined(KDBG)
