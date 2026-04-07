@@ -33,8 +33,15 @@ list(APPEND SOURCE
     ndis/time.c
     include/ndissys.h)
 
+# NDIS 6 stubs are compiled with NDIS620_MINIPORT / NDIS620 so they see the
+# NDIS 6.20 view of ndis.h. They live outside the precompiled header because
+# the PCH is built at NDIS 5.1 level.
+set(NDIS6_SOURCE ndis/60stubs.c)
+set_source_files_properties(${NDIS6_SOURCE} PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
+
 add_library(ndis MODULE
     ${SOURCE}
+    ${NDIS6_SOURCE}
     ndis.rc
     ${CMAKE_CURRENT_BINARY_DIR}/ndis.def)
 

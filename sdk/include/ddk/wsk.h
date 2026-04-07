@@ -615,6 +615,44 @@ WSKAPI
 WskDeregister(
     _In_ PWSK_REGISTRATION WskRegistration);
 
+/* ------------------------------------------------------------------ */
+/*  WSK 1.1 / Win7 extensions                                         */
+/*  Added on the dev-nt6-1 branch; core surface above is unchanged.   */
+/*  PFN_WSK_RELEASE_DATA_INDICATION_LIST is already declared near     */
+/*  line 328 so it is not repeated here.                              */
+/* ------------------------------------------------------------------ */
+
+/* Buffer list used by WskSendMessages (declared before the typedef
+ * that references it) */
+typedef struct _WSK_BUF_LIST {
+    struct _WSK_BUF_LIST* Next;
+    WSK_BUF Buffer;
+} WSK_BUF_LIST, *PWSK_BUF_LIST;
+
+/* PFN_WSK_SEND_MESSAGES — send multiple datagrams in one call (Vista+) */
+typedef
+_Must_inspect_result_
+NTSTATUS
+(WSKAPI * PFN_WSK_SEND_MESSAGES)(
+    _In_ PWSK_SOCKET Socket,
+    _In_ PWSK_BUF_LIST BufferList,
+    _In_ ULONG Flags,
+    _In_opt_ PSOCKADDR RemoteAddress,
+    _In_ ULONG ControlInfoLength,
+    _In_reads_bytes_opt_(ControlInfoLength) PVOID ControlInfo,
+    _Inout_ PIRP Irp);
+
+/* PFN_WSK_CONNECT_EX — Win7 addition: connect with initial send data */
+typedef
+_Must_inspect_result_
+NTSTATUS
+(WSKAPI * PFN_WSK_CONNECT_EX)(
+    _In_ PWSK_SOCKET Socket,
+    _In_ PSOCKADDR RemoteAddress,
+    _In_opt_ PWSK_BUF Buffer,
+    _In_opt_ ULONG Flags,
+    _Inout_ PIRP Irp);
+
 #ifdef __cplusplus
 }
 #endif
