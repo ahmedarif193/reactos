@@ -1563,33 +1563,12 @@ EnterKdbg:;
     }
 
 #ifdef CONFIG_SMP
-    /*
-     * SMP: Freeze all other CPUs via NMI IPI before entering the
-     * interactive loop. Without this, every kdb break leaves the other
-     * CPUs running freely — they tear down threads that are mid-flight on
-     * the breaking CPU, post messages to dying window queues, and the
-     * system rapidly destroys itself while the user stares at the prompt.
-     *
-     * The WinDbg KD path does this via KeFreezeExecution at
-     * ntoskrnl/kd64/kdapi.c:1921. KDBG was missing the equivalent.
-     *
-     * We call KxFreezeExecution directly (not KeFreezeExecution) because
-     * KeFreezeExecution raises IRQL to HIGH_LEVEL, which would conflict
-     * with the "pretend DISPATCH_LEVEL" HACK above. KxFreezeExecution only
-     * sends the freeze NMI IPI and waits for acknowledgements — it leaves
-     * IRQL untouched. The freeze IPI on remote CPUs is an NMI, so it's
-     * delivered even though their (and our) IF flag is masked.
-     *
-     * Recursive-entry safety: bug.c's KeBugCheckEx path freezes everything
-     * BEFORE calling KiBugCheckDebugBreak(DBG_STATUS_BUGCHECK_SECOND), which
-     * lands here as a nested entry with KiFreezeOwner already pointing at
-     * us. In that case KxFreezeExecution would early-return without touching
-     * IpiFrozen, and the matching KxThawExecution would then assert on
-     * IPI_FROZEN_FLAG_ACTIVE. To avoid that, snapshot the freeze owner
-     * BEFORE calling and only call freeze/thaw if we are NOT already the
-     * owner — letting the outer caller (bug.c) own the lifecycle in the
-     * nested case.
-     */
+    /* Freeze other CPUs via NMI IPI — the WinDbg KD path does this at
+     * kd64/kdapi.c:1921; KDBG was missing it. Use Kx* directly to skip
+     * the IRQL raise to HIGH_LEVEL that Ke* does (conflicts with the
+     * "pretend DISPATCH_LEVEL" HACK above). Guard against nested entry
+     * from bug.c (which freezes before KiBugCheckDebugBreak) — if we
+     * are already the freeze owner, leave the lifecycle to the caller. */
     if (KiFreezeOwner != KeGetCurrentPrcb())
     {
         KxFreezeExecution();
@@ -1601,22 +1580,10 @@ EnterKdbg:;
     KdbpInternalEnter(EntryPoint);
 
 #ifdef CONFIG_SMP
-    /*
-     * SMP: Thaw the other CPUs as soon as the interactive session is done,
-     * but ONLY if we were the ones who froze them above. If bug.c froze
-     * before nesting into us, leave the freeze in place — the outer caller
-     * is responsible for thawing.
-     *
-     * This must come BEFORE the InterlockedDecrement(&KdbEntryCount) below
-     * so we still hold "freeze owner" status when KxThawExecution checks
-     * its assertions. Subsequent local cleanup (single-step prep, process
-     * detach, context update) is current-CPU-local and doesn't need other
-     * CPUs to remain frozen.
-     */
+    /* Thaw before decrementing KdbEntryCount so we still hold freeze
+     * owner status when KxThawExecution runs its assertions. */
     if (bKdbgFroze)
-    {
         KxThawExecution();
-    }
 #endif
 
     /* Check if we should single step */

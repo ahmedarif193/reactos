@@ -924,6 +924,12 @@ PUBLIC KiSystemCallEntry64
     mov [rsp + MAX_SYSCALL_PARAM_SIZE + KTRAP_FRAME_EFlags], r11
     mov [rsp + MAX_SYSCALL_PARAM_SIZE + KTRAP_FRAME_Rbp], rbp
 
+    /* SYSCALL doesn't push an iret frame, so CS/SS aren't auto-saved.
+     * Store user selectors so code that reads tf->SegCs (e.g. ExitTrap's
+     * user-mode-return check) doesn't see uninitialized stack data. */
+    mov word ptr [rsp + MAX_SYSCALL_PARAM_SIZE + KTRAP_FRAME_SegCs], (KGDT64_R3_CODE or RPL_MASK)
+    mov word ptr [rsp + MAX_SYSCALL_PARAM_SIZE + KTRAP_FRAME_SegSs], (KGDT64_R3_DATA or RPL_MASK)
+
     /* Store user stack pointer in the trap frame */
     mov rax, gs:[PcUserRsp]
     mov [rsp + MAX_SYSCALL_PARAM_SIZE + KTRAP_FRAME_Rsp], rax
