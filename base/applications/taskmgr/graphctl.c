@@ -25,6 +25,10 @@ GraphCtrl_Create(PTM_GRAPH_CONTROL inst, HWND hWnd, HWND hParentWnd, PTM_FORMAT 
     inst->hParentWnd = hParentWnd;
     inst->hWnd = hWnd;
 
+    /* Attach the TM_GRAPH_CONTROL to the HWND so the wndproc can find it
+     * via GetWindowLongPtr(GWLP_USERDATA) instead of HWND comparisons. */
+    SetWindowLongPtrW(hWnd, GWLP_USERDATA, (LONG_PTR)inst);
+
     Size = GetSystemMetrics(SM_CXSCREEN);
     inst->BitmapWidth = Size;
     Size /= PLOT_SHIFT;
@@ -289,9 +293,8 @@ GraphCtrl_RedrawOnHeightChange(PTM_GRAPH_CONTROL inst, INT nh)
     GraphCtrl_RedrawBitmap(inst, nh);
 }
 
-extern TM_GRAPH_CONTROL PerformancePageCpuUsageHistoryGraph;
+/* Legacy fallback for Mem graph dispatch when USERDATA isn't set yet. */
 extern TM_GRAPH_CONTROL PerformancePageMemUsageHistoryGraph;
-extern HWND hPerformancePageCpuUsageHistoryGraph;
 extern HWND hPerformancePageMemUsageHistoryGraph;
 
 INT_PTR CALLBACK
@@ -362,12 +365,14 @@ GraphCtrl_WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
 
         case WM_SIZE:
         {
-            if (hWnd == hPerformancePageCpuUsageHistoryGraph)
-                graph = &PerformancePageCpuUsageHistoryGraph;
-            else if (hWnd == hPerformancePageMemUsageHistoryGraph)
-                graph = &PerformancePageMemUsageHistoryGraph;
-            else
-                return 0;
+            graph = (PTM_GRAPH_CONTROL)GetWindowLongPtrW(hWnd, GWLP_USERDATA);
+            if (graph == NULL)
+            {
+                if (hWnd == hPerformancePageMemUsageHistoryGraph)
+                    graph = &PerformancePageMemUsageHistoryGraph;
+                else
+                    return 0;
+            }
 
             if (HIWORD(lParam) != graph->BitmapHeight)
             {
@@ -384,12 +389,14 @@ GraphCtrl_WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
             HDC         hdc;
             PAINTSTRUCT ps;
 
-            if (hWnd == hPerformancePageCpuUsageHistoryGraph)
-                graph = &PerformancePageCpuUsageHistoryGraph;
-            else if (hWnd == hPerformancePageMemUsageHistoryGraph)
-                graph = &PerformancePageMemUsageHistoryGraph;
-            else
-                return 0;
+            graph = (PTM_GRAPH_CONTROL)GetWindowLongPtrW(hWnd, GWLP_USERDATA);
+            if (graph == NULL)
+            {
+                if (hWnd == hPerformancePageMemUsageHistoryGraph)
+                    graph = &PerformancePageMemUsageHistoryGraph;
+                else
+                    return 0;
+            }
 
             hdc = BeginPaint(hWnd, &ps);
             GetClientRect(hWnd, &rcClient);

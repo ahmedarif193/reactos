@@ -95,3 +95,7 @@ ULONG	PerfDataGetPhysicalMemorySystemCacheK(void);
 ULONG	PerfDataGetSystemHandleCount(void);
 
 ULONG	PerfDataGetTotalThreadCount(void);
+
+ULONG	PerfDataGetProcessorCount(void);
+ULONG	PerfDataGetProcessorUsageForLP(ULONG LPIndex);
+ULONG	PerfDataGetProcessorSystemUsageForLP(ULONG LPIndex);

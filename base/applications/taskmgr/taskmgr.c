@@ -933,7 +933,6 @@ void TaskManager_OnTabWndSelChange(void)
     HMENU  hViewMenu;
     HMENU  hSubMenu;
     WCHAR  szTemp[256];
-    SYSTEM_INFO sysInfo;
 
     hMenu = GetMenu(hMainWnd);
     hViewMenu = GetSubMenu(hMenu, 2);
@@ -1017,10 +1016,8 @@ void TaskManager_OnTabWndSelChange(void)
             DrawMenuBar(hMainWnd);
         }
 
-        GetSystemInfo(&sysInfo);
-
-        /* Hide CPU graph options on single CPU systems */
-        if (sysInfo.dwNumberOfProcessors > 1)
+        /* Always create the CPU History submenu. On UP "Per CPU" and
+         * "All CPUs" look the same (1 graph), so the menu is harmless there. */
         {
             hSubMenu = CreatePopupMenu();
 

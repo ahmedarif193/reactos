@@ -7,14 +7,22 @@
 
 #include "precomp.h"
 #include <shlwapi.h>
+#include <math.h>
 
-TM_GRAPH_CONTROL PerformancePageCpuUsageHistoryGraph;
+/* Per-LP CPU history graphs. [0] is the legacy dialog template control;
+ * [1..nLPs-1] are dynamically created STATIC children used in "Per CPU" mode. */
+static PTM_GRAPH_CONTROL PerfPageCpuGraphs = NULL;
+static HWND             *PerfPageCpuHwnds  = NULL;
+static ULONG             nLPs              = 1;
+
+#define PerformancePageCpuUsageHistoryGraph   (PerfPageCpuGraphs[0])
+#define hPerformancePageCpuUsageHistoryGraph  (PerfPageCpuHwnds[0])
+
 TM_GRAPH_CONTROL PerformancePageMemUsageHistoryGraph;
 
 HWND hPerformancePage;                /* Performance Property Page */
 static HWND hCpuUsageGraph;                  /* CPU Usage Graph */
 static HWND hMemUsageGraph;                  /* MEM Usage Graph */
-HWND hPerformancePageCpuUsageHistoryGraph;           /* CPU Usage History Graph */
 HWND hPerformancePageMemUsageHistoryGraph;           /* Memory Usage History Graph */
 static HWND hTotalsFrame;                    /* Totals Frame */
 static HWND hCommitChargeFrame;              /* Commit Charge Frame */
@@ -88,6 +96,65 @@ void AdjustControlPosition(HWND hCntrl, HWND hDlg, int nXDifference, int nYDiffe
     AdjustFrameSize(hCntrl, hDlg, nXDifference, nYDifference, 0);
 }
 
+/* Layout the N per-LP CPU history graphs inside hCpuUsageHistoryFrame.
+ * "All CPUs" mode: graph[0] fills the frame, rest hidden.
+ * "Per CPU" mode: NxM grid with cols = ceil(sqrt(N * aspect)), rebalanced. */
+static void PerformancePage_LayoutCpuGraphs(HWND hDlg)
+{
+    RECT  cpuArea;
+    ULONG i;
+
+    if (!PerfPageCpuHwnds || !hCpuUsageHistoryFrame)
+        return;
+
+    GetWindowRect(hCpuUsageHistoryFrame, &cpuArea);
+    MapWindowPoints(NULL, hDlg, (LPPOINT)&cpuArea, 2);
+    InflateRect(&cpuArea, -3, -3);
+
+    if (TaskManagerSettings.CPUHistory_OneGraphPerCPU)
+    {
+        int W = cpuArea.right - cpuArea.left;
+        int H = cpuArea.bottom - cpuArea.top;
+        double aspect;
+        int cols, rows, gutter, tileW, tileH;
+
+        if (W < 1) W = 1;
+        if (H < 1) H = 1;
+        aspect = (double)W / (double)H;
+        cols = (int)ceil(sqrt((double)nLPs * aspect));
+        if (cols < 1) cols = 1;
+        rows = ((int)nLPs + cols - 1) / cols;
+        while (rows > 1 && (rows - 1) * cols >= (int)nLPs)
+            rows--;
+
+        gutter = 2;
+        tileW = (W - (cols + 1) * gutter) / cols;
+        tileH = (H - (rows + 1) * gutter) / rows;
+        if (tileW < 1) tileW = 1;
+        if (tileH < 1) tileH = 1;
+
+        for (i = 0; i < nLPs; i++)
+        {
+            int r = (int)i / cols;
+            int c = (int)i % cols;
+            int x = cpuArea.left + gutter + c * (tileW + gutter);
+            int y = cpuArea.top  + gutter + r * (tileH + gutter);
+            SetWindowPos(PerfPageCpuHwnds[i], NULL, x, y, tileW, tileH,
+                         SWP_NOZORDER | SWP_NOACTIVATE | SWP_SHOWWINDOW);
+        }
+    }
+    else
+    {
+        SetWindowPos(PerfPageCpuHwnds[0], NULL,
+                     cpuArea.left, cpuArea.top,
+                     cpuArea.right - cpuArea.left,
+                     cpuArea.bottom - cpuArea.top,
+                     SWP_NOZORDER | SWP_NOACTIVATE | SWP_SHOWWINDOW);
+        for (i = 1; i < nLPs; i++)
+            ShowWindow(PerfPageCpuHwnds[i], SW_HIDE);
+    }
+}
+
 static inline
 void AdjustCntrlPos(int ctrl_id, HWND hDlg, int nXDifference, int nYDifference)
 {
@@ -102,7 +169,26 @@ PerformancePageWndProc(HWND hDlg, UINT message, WPARAM wParam, LPARAM lParam)
     switch (message)
     {
         case WM_DESTROY:
-            GraphCtrl_Dispose(&PerformancePageCpuUsageHistoryGraph);
+            if (PerfPageCpuGraphs)
+            {
+                ULONG i;
+                for (i = 0; i < nLPs; i++)
+                    GraphCtrl_Dispose(&PerfPageCpuGraphs[i]);
+                HeapFree(GetProcessHeap(), 0, PerfPageCpuGraphs);
+                PerfPageCpuGraphs = NULL;
+            }
+            if (PerfPageCpuHwnds)
+            {
+                /* Index 0 is owned by the dialog template; only destroy [1..] */
+                ULONG i;
+                for (i = 1; i < nLPs; i++)
+                {
+                    if (PerfPageCpuHwnds[i])
+                        DestroyWindow(PerfPageCpuHwnds[i]);
+                }
+                HeapFree(GetProcessHeap(), 0, PerfPageCpuHwnds);
+                PerfPageCpuHwnds = NULL;
+            }
             GraphCtrl_Dispose(&PerformancePageMemUsageHistoryGraph);
 #ifdef RUN_PERF_PAGE
             EndLocalThread(&hPerformanceThread, dwPerformanceThread);
@@ -151,7 +237,38 @@ PerformancePageWndProc(HWND hDlg, UINT message, WPARAM wParam, LPARAM lParam)
             hCpuUsageGraph = GetDlgItem(hDlg, IDC_CPU_USAGE_GRAPH);
             hMemUsageGraph = GetDlgItem(hDlg, IDC_MEM_USAGE_GRAPH);
             hPerformancePageMemUsageHistoryGraph = GetDlgItem(hDlg, IDC_MEM_USAGE_HISTORY_GRAPH);
-            hPerformancePageCpuUsageHistoryGraph = GetDlgItem(hDlg, IDC_CPU_USAGE_HISTORY_GRAPH);
+
+            nLPs = PerfDataGetProcessorCount();
+            if (nLPs == 0)
+                nLPs = 1;
+
+            PerfPageCpuGraphs = (PTM_GRAPH_CONTROL)HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY,
+                                                             sizeof(TM_GRAPH_CONTROL) * nLPs);
+            PerfPageCpuHwnds  = (HWND *)HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY,
+                                                  sizeof(HWND) * nLPs);
+            if (!PerfPageCpuGraphs || !PerfPageCpuHwnds)
+            {
+                EndDialog(hDlg, 0);
+                return FALSE;
+            }
+
+            PerfPageCpuHwnds[0] = GetDlgItem(hDlg, IDC_CPU_USAGE_HISTORY_GRAPH);
+            {
+                ULONG i;
+                for (i = 1; i < nLPs; i++)
+                {
+                    PerfPageCpuHwnds[i] = CreateWindowExW(
+                        0, L"STATIC", L"",
+                        WS_CHILD | SS_BLACKRECT,
+                        0, 0, 1, 1,
+                        hDlg, NULL, hInst, NULL);
+                    if (!PerfPageCpuHwnds[i])
+                    {
+                        EndDialog(hDlg, 0);
+                        return FALSE;
+                    }
+                }
+            }
 
             /* Create the controls */
             fmt.clrBack = RGB(0, 0, 0);
@@ -160,11 +277,18 @@ PerformancePageWndProc(HWND hDlg, UINT message, WPARAM wParam, LPARAM lParam)
             fmt.clrPlot1 = RGB(255, 0, 0);
             fmt.GridCellWidth = fmt.GridCellHeight = 12;
             fmt.DrawSecondaryPlot = TaskManagerSettings.ShowKernelTimes;
-            bGraph = GraphCtrl_Create(&PerformancePageCpuUsageHistoryGraph, hPerformancePageCpuUsageHistoryGraph, hDlg, &fmt);
-            if (!bGraph)
+
             {
-                EndDialog(hDlg, 0);
-                return FALSE;
+                ULONG i;
+                for (i = 0; i < nLPs; i++)
+                {
+                    bGraph = GraphCtrl_Create(&PerfPageCpuGraphs[i], PerfPageCpuHwnds[i], hDlg, &fmt);
+                    if (!bGraph)
+                    {
+                        EndDialog(hDlg, 0);
+                        return FALSE;
+                    }
+                }
             }
 
             fmt.clrPlot0 = RGB(255, 255, 0);
@@ -188,7 +312,32 @@ PerformancePageWndProc(HWND hDlg, UINT message, WPARAM wParam, LPARAM lParam)
             OldGraphWndProc = (WNDPROC)SetWindowLongPtrW(hCpuUsageGraph, GWLP_WNDPROC, (LONG_PTR)Graph_WndProc);
             SetWindowLongPtrW(hMemUsageGraph, GWLP_WNDPROC, (LONG_PTR)Graph_WndProc);
             OldGraphCtrlWndProc = (WNDPROC)SetWindowLongPtrW(hPerformancePageMemUsageHistoryGraph, GWLP_WNDPROC, (LONG_PTR)GraphCtrl_WndProc);
-            SetWindowLongPtrW(hPerformancePageCpuUsageHistoryGraph, GWLP_WNDPROC, (LONG_PTR)GraphCtrl_WndProc);
+            {
+                ULONG i;
+                for (i = 0; i < nLPs; i++)
+                {
+                    SetWindowLongPtrW(PerfPageCpuHwnds[i], GWLP_WNDPROC, (LONG_PTR)GraphCtrl_WndProc);
+                }
+            }
+
+            /* Reflect the persisted "One Graph Per CPU" setting in the View menu radio. */
+            {
+                HMENU hMenu = GetMenu(hMainWnd);
+                HMENU hViewMenu = hMenu ? GetSubMenu(hMenu, 2) : NULL;
+                HMENU hCPUHistoryMenu = hViewMenu ? GetSubMenu(hViewMenu, 3) : NULL;
+                if (hCPUHistoryMenu)
+                {
+                    CheckMenuRadioItem(hCPUHistoryMenu,
+                                       ID_VIEW_CPUHISTORY_ONEGRAPHALL,
+                                       ID_VIEW_CPUHISTORY_ONEGRAPHPERCPU,
+                                       TaskManagerSettings.CPUHistory_OneGraphPerCPU ?
+                                           ID_VIEW_CPUHISTORY_ONEGRAPHPERCPU :
+                                           ID_VIEW_CPUHISTORY_ONEGRAPHALL,
+                                       MF_BYCOMMAND);
+                }
+            }
+
+            PerformancePage_LayoutCpuGraphs(hDlg);
             return TRUE;
         }
 
@@ -277,8 +426,9 @@ PerformancePageWndProc(HWND hDlg, UINT message, WPARAM wParam, LPARAM lParam)
             AdjustFrameSize(hMemUsageHistoryFrame, hDlg, nXDifference, nYDifference, 4);
             AdjustFrameSize(hCpuUsageGraph, hDlg, nXDifference, nYDifference, 1);
             AdjustFrameSize(hMemUsageGraph, hDlg, nXDifference, nYDifference, 2);
-            AdjustFrameSize(hPerformancePageCpuUsageHistoryGraph, hDlg, nXDifference, nYDifference, 3);
             AdjustFrameSize(hPerformancePageMemUsageHistoryGraph, hDlg, nXDifference, nYDifference, 4);
+
+            PerformancePage_LayoutCpuGraphs(hDlg);
             break;
         }
     }
@@ -441,10 +591,24 @@ DWORD WINAPI PerformancePageRefreshThread(PVOID Parameter)
             PhysicalMemoryAvailable = PerfDataGetPhysicalMemoryAvailableK();
             nBarsUsed2 = PhysicalMemoryTotal ? ((PhysicalMemoryAvailable * 100) / PhysicalMemoryTotal) : 0;
 
-            GraphCtrl_AddPoint(&PerformancePageCpuUsageHistoryGraph, CpuUsage, CpuKernelUsage);
+            if (TaskManagerSettings.CPUHistory_OneGraphPerCPU)
+            {
+                ULONG i;
+                for (i = 0; i < nLPs; i++)
+                {
+                    BYTE u = (BYTE)PerfDataGetProcessorUsageForLP(i);
+                    BYTE k = (BYTE)PerfDataGetProcessorSystemUsageForLP(i);
+                    GraphCtrl_AddPoint(&PerfPageCpuGraphs[i], u, k);
+                    InvalidateRect(PerfPageCpuHwnds[i], NULL, FALSE);
+                }
+            }
+            else
+            {
+                GraphCtrl_AddPoint(&PerfPageCpuGraphs[0], CpuUsage, CpuKernelUsage);
+                InvalidateRect(PerfPageCpuHwnds[0], NULL, FALSE);
+            }
             GraphCtrl_AddPoint(&PerformancePageMemUsageHistoryGraph, nBarsUsed1, nBarsUsed2);
             InvalidateRect(hPerformancePageMemUsageHistoryGraph, NULL, FALSE);
-            InvalidateRect(hPerformancePageCpuUsageHistoryGraph, NULL, FALSE);
         }
     }
     return 0;
@@ -454,26 +618,43 @@ void PerformancePage_OnViewShowKernelTimes(void)
 {
     HMENU hMenu;
     HMENU hViewMenu;
+    BOOL  bShow;
+    ULONG i;
 
     hMenu = GetMenu(hMainWnd);
     hViewMenu = GetSubMenu(hMenu, 2);
 
-    /* Check or uncheck the show 16-bit tasks menu item */
     if (GetMenuState(hViewMenu, ID_VIEW_SHOWKERNELTIMES, MF_BYCOMMAND) & MF_CHECKED)
     {
         CheckMenuItem(hViewMenu, ID_VIEW_SHOWKERNELTIMES, MF_BYCOMMAND|MF_UNCHECKED);
         TaskManagerSettings.ShowKernelTimes = FALSE;
-        PerformancePageCpuUsageHistoryGraph.DrawSecondaryPlot = FALSE;
+        bShow = FALSE;
     }
     else
     {
         CheckMenuItem(hViewMenu, ID_VIEW_SHOWKERNELTIMES, MF_BYCOMMAND|MF_CHECKED);
         TaskManagerSettings.ShowKernelTimes = TRUE;
-        PerformancePageCpuUsageHistoryGraph.DrawSecondaryPlot = TRUE;
+        bShow = TRUE;
     }
 
-    GraphCtrl_RedrawBitmap(&PerformancePageCpuUsageHistoryGraph, PerformancePageCpuUsageHistoryGraph.BitmapHeight);
+    if (PerfPageCpuGraphs)
+    {
+        for (i = 0; i < nLPs; i++)
+        {
+            PerfPageCpuGraphs[i].DrawSecondaryPlot = bShow;
+            GraphCtrl_RedrawBitmap(&PerfPageCpuGraphs[i], PerfPageCpuGraphs[i].BitmapHeight);
+        }
+    }
     RefreshPerformancePage();
+}
+
+static void PerformancePage_RelayoutCpuGraphs(void)
+{
+    if (hPerformancePage)
+    {
+        PerformancePage_LayoutCpuGraphs(hPerformancePage);
+        InvalidateRect(hPerformancePage, NULL, TRUE);
+    }
 }
 
 void PerformancePage_OnViewCPUHistoryOneGraphAll(void)
@@ -488,6 +669,7 @@ void PerformancePage_OnViewCPUHistoryOneGraphAll(void)
 
     TaskManagerSettings.CPUHistory_OneGraphPerCPU = FALSE;
     CheckMenuRadioItem(hCPUHistoryMenu, ID_VIEW_CPUHISTORY_ONEGRAPHALL, ID_VIEW_CPUHISTORY_ONEGRAPHPERCPU, ID_VIEW_CPUHISTORY_ONEGRAPHALL, MF_BYCOMMAND);
+    PerformancePage_RelayoutCpuGraphs();
 }
 
 void PerformancePage_OnViewCPUHistoryOneGraphPerCPU(void)
@@ -502,4 +684,5 @@ void PerformancePage_OnViewCPUHistoryOneGraphPerCPU(void)
 
     TaskManagerSettings.CPUHistory_OneGraphPerCPU = TRUE;
     CheckMenuRadioItem(hCPUHistoryMenu, ID_VIEW_CPUHISTORY_ONEGRAPHALL, ID_VIEW_CPUHISTORY_ONEGRAPHPERCPU, ID_VIEW_CPUHISTORY_ONEGRAPHPERCPU, MF_BYCOMMAND);
+    PerformancePage_RelayoutCpuGraphs();
 }
