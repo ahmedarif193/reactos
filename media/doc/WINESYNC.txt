@@ -23,6 +23,7 @@ sdk/tools/wpp                   # Synced to Wine-10.0 (Module was moved into wrc
 
 The following headers are shared with Wine.
 sdk/include/psdk/rpcproxy.h     # Synced to Wine-10.0
+sdk/include/psdk/netioapi.h     # Synced to Wine-10.0 (mirrors sdk/include/wine/netioapi.h)
 
 The following libraries are shared with Wine.
 
