@@ -996,6 +996,12 @@ VOID
 NTAPI
 KiInitMachineDependent(VOID);
 
+/* Per-arch processor freeze. KiFreezeOwner is the PRCB of the CPU currently
+ * holding the freeze (NULL if none). Inspected by callers (e.g. kdbg) that
+ * need to detect nested freeze entries to keep their own freeze/thaw pairing
+ * balanced. Defined in ntoskrnl/ke/<arch>/freeze.c. */
+extern PKPRCB KiFreezeOwner;
+
 VOID
 NTAPI
 KxFreezeExecution(
