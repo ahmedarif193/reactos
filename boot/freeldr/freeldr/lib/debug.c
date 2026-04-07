@@ -27,8 +27,8 @@
 // #define DEBUG_ERR
 // #define DEBUG_INIFILE
 // #define DEBUG_REACTOS
-// #define DEBUG_CUSTOM
-#define DEBUG_NONE
+#define DEBUG_CUSTOM      /* DPRINT_DISK + DPRINT_FILESYSTEM at full trace */
+// #define DEBUG_NONE
 
 #define DBG_DEFAULT_LEVELS (ERR_LEVEL|FIXME_LEVEL)
 
@@ -79,8 +79,13 @@ DebugInit(
     DbgChannels[DPRINT_REACTOS] = MAX_LEVEL;
     DbgChannels[DPRINT_REGISTRY] = MAX_LEVEL;
 #elif defined (DEBUG_CUSTOM)
-    DbgChannels[DPRINT_WARNING] = MAX_LEVEL;
-    DbgChannels[DPRINT_WINDOWS] = MAX_LEVEL;
+    /* Enable full trace for the ramdisk / WIM extraction path during
+     * boot.wim bring-up. Keeps the serial log focused on WimLoader*,
+     * Fat32*, RamDisk* without drowning the console in unrelated
+     * loader output. */
+    DbgChannels[DPRINT_DISK]       = MAX_LEVEL;
+    DbgChannels[DPRINT_FILESYSTEM] = MAX_LEVEL;
+    DbgChannels[DPRINT_WARNING]    = MAX_LEVEL;
 #endif
 
     CommandLine = NULL;
