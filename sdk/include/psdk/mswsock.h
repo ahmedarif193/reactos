@@ -240,6 +240,15 @@ typedef INT
 #define WSAID_WSARECVMSG \
   {0xf689d7c8,0x6f1f,0x436b,{0x8a,0x53,0xe5,0x4f,0xe3,0x51,0xc3,0x22}}
 
+INT
+WSAAPI
+WSARecvMsg(
+  _In_ SOCKET s,
+  _Inout_ LPWSAMSG lpMsg,
+  _Out_opt_ LPDWORD lpdwNumberOfBytesRecvd,
+  _Inout_opt_ LPWSAOVERLAPPED lpOverlapped,
+  _In_opt_ LPWSAOVERLAPPED_COMPLETION_ROUTINE lpCompletionRoutine);
+
 #endif /* (_WIN32_WINNT >= 0x0501) */
 
 #if(_WIN32_WINNT >= 0x0600)
