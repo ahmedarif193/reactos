@@ -1,3 +1,29 @@
+/*
+ * Copyright 2015 Hans Leidekker for CodeWeavers
+ *
+ * This library is free software; you can redistribute it and/or
+ * modify it under the terms of the GNU Lesser General Public
+ * License as published by the Free Software Foundation; either
+ * version 2.1 of the License, or (at your option) any later version.
+ *
+ * This library is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
+ * Lesser General Public License for more details.
+ *
+ * You should have received a copy of the GNU Lesser General Public
+ * License along with this library; if not, write to the Free Software
+ * Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA 02110-1301, USA
+ *
+ * Mirrored into sdk/include/psdk/ from sdk/include/wine/netioapi.h on the
+ * dev-nt6-1 branch so that Win7-level code can see the Vista+ IP Helper v2
+ * API surface (MIB_IPINTERFACE_ROW, MIB_UNICASTIPADDRESS_ROW,
+ * MIB_IPFORWARD_ROW2, MIB_IPNET_ROW2 and the associated Convert, Get and
+ * Notify function families). The previous PSDK stub only exposed MIB_IF_ROW2
+ * behind an _WS2IPDEF_ include-order trick; this version is self-contained
+ * via the explicit prerequisite includes below.
+ */
+
 #ifndef _NETIOAPI_H_
 #define _NETIOAPI_H_
 
@@ -5,21 +31,46 @@
 extern "C" {
 #endif
 
-#ifdef _IPHLPAPI_H
-    #define NETIO_STATUS DWORD
-    #define NETIOAPI_API_ WINAPI
-#else
-    #define NETIO_STATUS NTSTATUS
-    #define NETIOAPI_API_ NTAPI
+/*
+ * The body below requires winsock2-era types (SOCKADDR_INET, ADDRESS_FAMILY,
+ * etc.) and therefore cannot coexist with the legacy winsock.h 1.x view. We
+ * gate on _WS2IPDEF_ (the include-guard macro of ws2ipdef.h) so that callers
+ * who already pulled in <winsock2.h> / <ws2ipdef.h> see the declarations,
+ * while callers who use the legacy <winsock.h> path get an empty header and
+ * don't suffer struct sockaddr / ip_mreq redefinitions. This matches the
+ * pre-existing behaviour of the ReactOS PSDK stub that lived here before.
+ */
+#ifdef _WS2IPDEF_
+
+#include <ifdef.h>        /* NET_LUID, NET_IFINDEX, IFTYPE, TUNNEL_TYPE, NET_IF_*, SCOPE_ID, ScopeLevelCount */
+#include <ntddndis.h>     /* NDIS_MEDIUM, NDIS_PHYSICAL_MEDIUM */
+#include <nldef.h>        /* NL_ROUTE_PROTOCOL/ORIGIN, NL_DAD_STATE, NL_INTERFACE_OFFLOAD_ROD, ... */
+
+#ifndef IPHLPAPI_DLL_LINKAGE
+#define IPHLPAPI_DLL_LINKAGE    /* import decoration handled by the .spec link stubs */
 #endif
 
-#define NETIOAPI_API NETIO_STATUS NETIOAPI_API_
+#ifndef ANY_SIZE
+#define ANY_SIZE 1
+#endif
 
-#ifdef _WS2IPDEF_
-#include <ntddndis.h>
-#include <ifdef.h>
+typedef enum _MIB_IF_TABLE_LEVEL
+{
+    MibIfTableNormal,
+    MibIfTableRaw,
+    MibIfTableNormalWithoutStatistics,
+} MIB_IF_TABLE_LEVEL, *PMIB_IF_TABLE_LEVEL;
 
-typedef struct _MIB_IF_ROW2 {
+typedef enum _MIB_NOTIFICATION_TYPE
+{
+    MibParameterNotification,
+    MibAddInstance,
+    MibDeleteInstance,
+    MibInitialNotification,
+} MIB_NOTIFICATION_TYPE, *PMIB_NOTIFICATION_TYPE;
+
+typedef struct _MIB_IF_ROW2
+{
     NET_LUID InterfaceLuid;
     NET_IFINDEX InterfaceIndex;
     GUID InterfaceGuid;
@@ -35,7 +86,8 @@ typedef struct _MIB_IF_ROW2 {
     NDIS_PHYSICAL_MEDIUM PhysicalMediumType;
     NET_IF_ACCESS_TYPE AccessType;
     NET_IF_DIRECTION_TYPE DirectionType;
-    struct {
+    struct
+    {
         BOOLEAN HardwareInterface : 1;
         BOOLEAN FilterInterface : 1;
         BOOLEAN ConnectorPresent : 1;
@@ -78,13 +130,190 @@ typedef struct _MIB_IF_TABLE2
     MIB_IF_ROW2 Table[1];
 } MIB_IF_TABLE2, *PMIB_IF_TABLE2;
 
-NETIOAPI_API GetIfEntry2(IN OUT PMIB_IF_ROW2 Row);
-NETIOAPI_API GetIfTable2(OUT PMIB_IF_TABLE2 *Table);
+typedef struct _MIB_IPINTERFACE_ROW
+{
+    ADDRESS_FAMILY Family;
+    NET_LUID InterfaceLuid;
+    NET_IFINDEX InterfaceIndex;
+    ULONG MaxReassemblySize;
+    ULONG64 InterfaceIdentifier;
+    ULONG MinRouterAdvertisementInterval;
+    ULONG MaxRouterAdvertisementInterval;
+    BOOLEAN AdvertisingEnabled;
+    BOOLEAN ForwardingEnabled;
+    BOOLEAN WeakHostSend;
+    BOOLEAN WeakHostReceive;
+    BOOLEAN UseAutomaticMetric;
+    BOOLEAN UseNeighborUnreachabilityDetection;
+    BOOLEAN ManagedAddressConfigurationSupported;
+    BOOLEAN OtherStatefulConfigurationSupported;
+    BOOLEAN AdvertiseDefaultRoute;
+    NL_ROUTER_DISCOVERY_BEHAVIOR RouterDiscoveryBehavior;
+    ULONG DadTransmits;
+    ULONG BaseReachableTime;
+    ULONG RetransmitTime;
+    ULONG PathMtuDiscoveryTimeout;
+    NL_LINK_LOCAL_ADDRESS_BEHAVIOR LinkLocalAddressBehavior;
+    ULONG LinkLocalAddressTimeout;
+    ULONG ZoneIndices[ScopeLevelCount];
+    ULONG SitePrefixLength;
+    ULONG Metric;
+    ULONG NlMtu;
+    BOOLEAN Connected;
+    BOOLEAN SupportsWakeUpPatterns;
+    BOOLEAN SupportsNeighborDiscovery;
+    BOOLEAN SupportsRouterDiscovery;
+    ULONG ReachableTime;
+    NL_INTERFACE_OFFLOAD_ROD TransmitOffload;
+    NL_INTERFACE_OFFLOAD_ROD ReceiveOffload;
+    BOOLEAN DisableDefaultRoutes;
+} MIB_IPINTERFACE_ROW, *PMIB_IPINTERFACE_ROW;
 
-#endif
+typedef struct _MIB_IPINTERFACE_TABLE
+{
+    ULONG NumEntries;
+    MIB_IPINTERFACE_ROW Table[ANY_SIZE];
+} MIB_IPINTERFACE_TABLE, *PMIB_IPINTERFACE_TABLE;
+
+typedef struct _MIB_UNICASTIPADDRESS_ROW
+{
+    SOCKADDR_INET       Address;
+    NET_LUID            InterfaceLuid;
+    NET_IFINDEX         InterfaceIndex;
+    NL_PREFIX_ORIGIN    PrefixOrigin;
+    NL_SUFFIX_ORIGIN    SuffixOrigin;
+    ULONG               ValidLifetime;
+    ULONG               PreferredLifetime;
+    UINT8               OnLinkPrefixLength;
+    BOOLEAN             SkipAsSource;
+    NL_DAD_STATE        DadState;
+    SCOPE_ID            ScopeId;
+    LARGE_INTEGER       CreationTimeStamp;
+} MIB_UNICASTIPADDRESS_ROW, *PMIB_UNICASTIPADDRESS_ROW;
+
+typedef struct _MIB_UNICASTIPADDRESS_TABLE
+{
+    ULONG NumEntries;
+    MIB_UNICASTIPADDRESS_ROW Table[1];
+} MIB_UNICASTIPADDRESS_TABLE, *PMIB_UNICASTIPADDRESS_TABLE;
+
+typedef struct _MIB_ANYCASTIPADDRESS_ROW
+{
+    SOCKADDR_INET Address;
+    NET_LUID      InterfaceLuid;
+    NET_IFINDEX   InterfaceIndex;
+    SCOPE_ID      ScopeId;
+} MIB_ANYCASTIPADDRESS_ROW, *PMIB_ANYCASTIPADDRESS_ROW;
+
+typedef struct _MIB_ANYCASTIPADDRESS_TABLE
+{
+    ULONG                    NumEntries;
+    MIB_ANYCASTIPADDRESS_ROW Table[ANY_SIZE];
+} MIB_ANYCASTIPADDRESS_TABLE, *PMIB_ANYCASTIPADDRESS_TABLE;
+
+typedef struct _IP_ADDRESS_PREFIX
+{
+    SOCKADDR_INET Prefix;
+    UINT8         PrefixLength;
+} IP_ADDRESS_PREFIX, *PIP_ADDRESS_PREFIX;
+
+typedef struct _MIB_IPFORWARD_ROW2
+{
+    NET_LUID          InterfaceLuid;
+    NET_IFINDEX       InterfaceIndex;
+    IP_ADDRESS_PREFIX DestinationPrefix;
+    SOCKADDR_INET     NextHop;
+    UCHAR             SitePrefixLength;
+    ULONG             ValidLifetime;
+    ULONG             PreferredLifetime;
+    ULONG             Metric;
+    NL_ROUTE_PROTOCOL Protocol;
+    BOOLEAN           Loopback;
+    BOOLEAN           AutoconfigureAddress;
+    BOOLEAN           Publish;
+    BOOLEAN           Immortal;
+    ULONG             Age;
+    NL_ROUTE_ORIGIN   Origin;
+} MIB_IPFORWARD_ROW2, *PMIB_IPFORWARD_ROW2;
+
+typedef struct _MIB_IPFORWARD_TABLE2
+{
+    ULONG              NumEntries;
+    MIB_IPFORWARD_ROW2 Table[ANY_SIZE];
+} MIB_IPFORWARD_TABLE2, *PMIB_IPFORWARD_TABLE2;
+
+typedef struct _MIB_IPNET_ROW2
+{
+    SOCKADDR_INET Address;
+    NET_IFINDEX InterfaceIndex;
+    NET_LUID InterfaceLuid;
+    UCHAR PhysicalAddress[IF_MAX_PHYS_ADDRESS_LENGTH];
+    ULONG PhysicalAddressLength;
+    NL_NEIGHBOR_STATE State;
+
+    union
+    {
+        struct
+        {
+            BOOLEAN IsRouter : 1;
+            BOOLEAN IsUnreachable : 1;
+        } DUMMYSTRUCTNAME;
+        UCHAR Flags;
+    } DUMMYUNIONNAME;
+
+    union
+    {
+        ULONG LastReachable;
+        ULONG LastUnreachable;
+    } ReachabilityTime;
+} MIB_IPNET_ROW2, *PMIB_IPNET_ROW2;
+
+typedef struct _MIB_IPNET_TABLE2
+{
+    ULONG NumEntries;
+    MIB_IPNET_ROW2 Table[ANY_SIZE];
+} MIB_IPNET_TABLE2, *PMIB_IPNET_TABLE2;
+
+typedef VOID (WINAPI *PIPINTERFACE_CHANGE_CALLBACK)(PVOID, PMIB_IPINTERFACE_ROW,
+                                                    MIB_NOTIFICATION_TYPE);
+typedef VOID (WINAPI *PUNICAST_IPADDRESS_CHANGE_CALLBACK)(PVOID, PMIB_UNICASTIPADDRESS_ROW,
+                                                          MIB_NOTIFICATION_TYPE);
+
+typedef VOID (WINAPI *PIPFORWARD_CHANGE_CALLBACK)(VOID*,MIB_IPFORWARD_ROW2*,MIB_NOTIFICATION_TYPE);
+
+IPHLPAPI_DLL_LINKAGE DWORD WINAPI ConvertInterfaceAliasToLuid(const WCHAR*,NET_LUID*);
+IPHLPAPI_DLL_LINKAGE DWORD WINAPI ConvertInterfaceGuidToLuid(const GUID*,NET_LUID*);
+IPHLPAPI_DLL_LINKAGE DWORD WINAPI ConvertInterfaceIndexToLuid(NET_IFINDEX,NET_LUID*);
+IPHLPAPI_DLL_LINKAGE DWORD WINAPI ConvertInterfaceLuidToAlias(const NET_LUID*,WCHAR*,SIZE_T);
+IPHLPAPI_DLL_LINKAGE DWORD WINAPI ConvertInterfaceLuidToGuid(const NET_LUID*,GUID*);
+IPHLPAPI_DLL_LINKAGE DWORD WINAPI ConvertInterfaceLuidToIndex(const NET_LUID*,NET_IFINDEX*);
+IPHLPAPI_DLL_LINKAGE DWORD WINAPI ConvertInterfaceLuidToNameA(const NET_LUID*,char*,SIZE_T);
+IPHLPAPI_DLL_LINKAGE DWORD WINAPI ConvertInterfaceLuidToNameW(const NET_LUID*,WCHAR*,SIZE_T);
+IPHLPAPI_DLL_LINKAGE DWORD WINAPI ConvertInterfaceNameToLuidA(const char*,NET_LUID*);
+IPHLPAPI_DLL_LINKAGE DWORD WINAPI ConvertInterfaceNameToLuidW(const WCHAR*,NET_LUID*);
+IPHLPAPI_DLL_LINKAGE DWORD WINAPI ConvertLengthToIpv4Mask(ULONG,ULONG*);
+IPHLPAPI_DLL_LINKAGE void WINAPI FreeMibTable(void*);
+IPHLPAPI_DLL_LINKAGE DWORD WINAPI GetAnycastIpAddressTable(ADDRESS_FAMILY,MIB_ANYCASTIPADDRESS_TABLE**);
+IPHLPAPI_DLL_LINKAGE NET_IF_COMPARTMENT_ID WINAPI GetCurrentThreadCompartmentId(void);
+IPHLPAPI_DLL_LINKAGE DWORD WINAPI GetIfEntry2(MIB_IF_ROW2*);
+IPHLPAPI_DLL_LINKAGE DWORD WINAPI GetIfEntry2Ex(MIB_IF_TABLE_LEVEL,MIB_IF_ROW2*);
+IPHLPAPI_DLL_LINKAGE DWORD WINAPI GetIfTable2(MIB_IF_TABLE2**);
+IPHLPAPI_DLL_LINKAGE DWORD WINAPI GetIfTable2Ex(MIB_IF_TABLE_LEVEL,MIB_IF_TABLE2**);
+IPHLPAPI_DLL_LINKAGE DWORD WINAPI GetIpForwardEntry2(MIB_IPFORWARD_ROW2*);
+IPHLPAPI_DLL_LINKAGE DWORD WINAPI GetIpForwardTable2(ADDRESS_FAMILY,MIB_IPFORWARD_TABLE2**);
+IPHLPAPI_DLL_LINKAGE DWORD WINAPI GetIpInterfaceTable(ADDRESS_FAMILY,MIB_IPINTERFACE_TABLE**);
+IPHLPAPI_DLL_LINKAGE DWORD WINAPI GetIpNetEntry2(MIB_IPNET_ROW2*);
+IPHLPAPI_DLL_LINKAGE DWORD WINAPI GetIpNetTable2(ADDRESS_FAMILY,MIB_IPNET_TABLE2**);
+IPHLPAPI_DLL_LINKAGE DWORD WINAPI GetUnicastIpAddressEntry(MIB_UNICASTIPADDRESS_ROW*);
+IPHLPAPI_DLL_LINKAGE DWORD WINAPI GetUnicastIpAddressTable(ADDRESS_FAMILY,MIB_UNICASTIPADDRESS_TABLE**);
+IPHLPAPI_DLL_LINKAGE DWORD WINAPI SetCurrentThreadCompartmentId(NET_IF_COMPARTMENT_ID);
+IPHLPAPI_DLL_LINKAGE PCHAR WINAPI if_indextoname(NET_IFINDEX,PCHAR);
+IPHLPAPI_DLL_LINKAGE NET_IFINDEX WINAPI if_nametoindex(PCSTR);
+
+#endif /* _WS2IPDEF_ */
 
 #ifdef __cplusplus
 }
 #endif
 
-#endif
+#endif /* _NETIOAPI_H_ */
