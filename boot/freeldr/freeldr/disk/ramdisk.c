@@ -67,6 +67,7 @@ VOID FatFlushCacheStub(VOID)
 #endif
 #include <ramdisk_fatwrite.h>
 #include <ramdisk_signature.h>
+#include <wim.h>
 #include "../ntldr/ntldropts.h"
 
 DBG_DEFAULT_CHANNEL(DISK);
@@ -293,6 +294,21 @@ typedef struct _ISO_SOURCE
     ULONGLONG ArcPosition;
 } ISO_SOURCE, *PISO_SOURCE;
 
+typedef struct _RAMDISK_PROGRESS_CONTEXT
+{
+    BOOLEAN ProgressActive;
+    ULONGLONG TotalBytes;
+    ULONGLONG BytesCopied;
+    ULONG LastPercentShown;
+    CHAR ProgressMessage[128];
+    ULONG ProgressStartSeconds;
+    ULONG LastDisplaySeconds;
+    ULONG LastSpeedKBs;
+    ULONG LastSecsLeft;
+    PCSTR ActivityPrefix;
+    PCSTR CompletionText;
+} RAMDISK_PROGRESS_CONTEXT, *PRAMDISK_PROGRESS_CONTEXT;
+
 typedef struct _ISO_COPY_CONTEXT
 {
     PISO_SOURCE Source;
@@ -303,15 +319,12 @@ typedef struct _ISO_COPY_CONTEXT
     PUCHAR DirectoryBuffer;
     ULONG DirectoryBufferSize;
     BOOLEAN DirectoryBufferBusy;
-    BOOLEAN ProgressActive;
-    ULONGLONG TotalBytes;
-    ULONGLONG BytesCopied;
-    ULONG LastPercentShown;
-    CHAR ProgressMessage[128];
-    ULONG ProgressStartSeconds;
-    ULONG LastDisplaySeconds;
-    ULONG LastSpeedKBs;
-    ULONG LastSecsLeft;
+    RAMDISK_PROGRESS_CONTEXT Progress;
+    /* If non-NULL, causes IsoCopyDirectoryRecursive() to skip any file
+     * named exactly this at the ROOT of the ISO walk.  Used by the WIM
+     * overlay step so boot.wim itself is not re-copied into the ramdisk
+     * it already unpacked into. Case-insensitive ASCII compare. */
+    PCSTR SkipRootFileName;
 } ISO_COPY_CONTEXT, *PISO_COPY_CONTEXT;
 
 #define ISO_SCRATCH_MIN_SIZE     (1024 * 1024)
@@ -471,8 +484,8 @@ IsoEnsureScratchBuffer(
 
 static
 VOID
-IsoProgressDisplay(
-    _Inout_ PISO_COPY_CONTEXT Context,
+RamDiskProgressDisplay(
+    _Inout_ PRAMDISK_PROGRESS_CONTEXT Context,
     _In_ ULONG Percent)
 {
     if (!Context)
@@ -483,13 +496,17 @@ IsoProgressDisplay(
 
 static
 VOID
-IsoProgressInitialize(
-    _Inout_ PISO_COPY_CONTEXT Context)
+RamDiskProgressInitialize(
+    _Inout_ PRAMDISK_PROGRESS_CONTEXT Context,
+    _In_ ULONGLONG TotalBytes,
+    _In_ PCSTR TitleText,
+    _In_ PCSTR ActivityPrefix,
+    _In_ PCSTR CompletionText)
 {
-    if (!Context || !Context->Source || Context->Source->Size == 0)
+    if (!Context || TotalBytes == 0)
         return;
 
-    Context->TotalBytes = Context->Source->Size;
+    Context->TotalBytes = TotalBytes;
     Context->BytesCopied = 0;
     Context->LastPercentShown = 0;
     Context->ProgressActive = TRUE;
@@ -497,19 +514,22 @@ IsoProgressInitialize(
     Context->LastDisplaySeconds = Context->ProgressStartSeconds;
     Context->LastSpeedKBs = 0;
     Context->LastSecsLeft = 0;
+    Context->ActivityPrefix = ActivityPrefix;
+    Context->CompletionText = CompletionText;
 
-    UiDrawProgressBarCenter("Copying files...");
+    UiDrawProgressBarCenter(TitleText);
 
     RtlStringCbPrintfA(Context->ProgressMessage,
                        sizeof(Context->ProgressMessage),
-                       "Copying files...");
-    IsoProgressDisplay(Context, 0);
+                       "%s",
+                       TitleText);
+    RamDiskProgressDisplay(Context, 0);
 }
 
 static
 VOID
-IsoProgressAdvance(
-    _Inout_ PISO_COPY_CONTEXT Context,
+RamDiskProgressAdvance(
+    _Inout_ PRAMDISK_PROGRESS_CONTEXT Context,
     _In_ ULONGLONG Bytes)
 {
     ULONG Percent;
@@ -572,13 +592,15 @@ IsoProgressAdvance(
         {
             RtlStringCbPrintfA(Context->ProgressMessage,
                                sizeof(Context->ProgressMessage),
-                               "Copy complete");
+                               "%s",
+                               Context->CompletionText ? Context->CompletionText : "Complete");
         }
         else
         {
             RtlStringCbPrintfA(Context->ProgressMessage,
                                sizeof(Context->ProgressMessage),
-                               "Ramdisk %u%% (%llu/%llu KB, %u KB/s, %us left)",
+                               "%s %u%% (%llu/%llu KB, %u KB/s, %us left)",
+                               Context->ActivityPrefix ? Context->ActivityPrefix : "Ramdisk",
                                Percent,
                                CopiedKB,
                                TotalKB,
@@ -586,16 +608,16 @@ IsoProgressAdvance(
                                Context->LastSecsLeft);
         }
 
-        IsoProgressDisplay(Context, Percent);
-        TRACE("IsoProgress: %s\n", Context->ProgressMessage);
+        RamDiskProgressDisplay(Context, Percent);
+        TRACE("RamDiskProgress: %s\n", Context->ProgressMessage);
         Context->LastPercentShown = Percent;
     }
 }
 
 static
 VOID
-IsoProgressComplete(
-    _Inout_ PISO_COPY_CONTEXT Context)
+RamDiskProgressComplete(
+    _Inout_ PRAMDISK_PROGRESS_CONTEXT Context)
 {
     if (!Context || !Context->ProgressActive)
         return;
@@ -606,8 +628,47 @@ IsoProgressComplete(
 
     RtlStringCbPrintfA(Context->ProgressMessage,
                        sizeof(Context->ProgressMessage),
-                       "Copy complete");
-    IsoProgressDisplay(Context, 100);
+                       "%s",
+                       Context->CompletionText ? Context->CompletionText : "Complete");
+    RamDiskProgressDisplay(Context, 100);
+}
+
+static
+VOID
+IsoProgressInitialize(
+    _Inout_ PISO_COPY_CONTEXT Context)
+{
+    if (!Context || !Context->Source)
+        return;
+
+    RamDiskProgressInitialize(&Context->Progress,
+                              Context->Source->Size,
+                              "Copying files...",
+                              "Ramdisk",
+                              "Copy complete");
+}
+
+static
+VOID
+IsoProgressAdvance(
+    _Inout_ PISO_COPY_CONTEXT Context,
+    _In_ ULONGLONG Bytes)
+{
+    if (!Context)
+        return;
+
+    RamDiskProgressAdvance(&Context->Progress, Bytes);
+}
+
+static
+VOID
+IsoProgressComplete(
+    _Inout_ PISO_COPY_CONTEXT Context)
+{
+    if (!Context)
+        return;
+
+    RamDiskProgressComplete(&Context->Progress);
 }
 
 static
@@ -1196,6 +1257,21 @@ IsoCopyDirectoryRecursive(
             continue;
         }
 
+        /* Root-level skip filter: used by the WIM overlay so the
+         * caller can exclude boot.wim itself from the copy (the WIM
+         * has already been unpacked into the FAT by its own populator).
+         * Only applies at the root — subdirectories are walked in full. */
+        if (!IsDirectory &&
+            Context->SkipRootFileName &&
+            DestinationPath[0] == '\0' &&
+            _stricmp(NameBuffer, Context->SkipRootFileName) == 0)
+        {
+            TRACE("IsoCopyDirectoryRecursive: skipping root entry '%s' (caller filter)\n",
+                  NameBuffer);
+            Offset = NextOffset;
+            continue;
+        }
+
         {
             size_t Need = strlen(DestinationPath) + 1 + strlen(NameBuffer) + 1;
 
@@ -1378,6 +1454,341 @@ RamDiskPopulateFatFromIso(
     return TRUE;
 }
 
+/*
+ * Overlay the remaining CD-ROM content into the FAT32 volume AFTER the
+ * WIM payload has been unpacked.
+ *
+ * boot.wim follows Windows PE semantics: only the OS payload lives
+ * inside the archive.  The ISO surface still carries everything the
+ * firmware needs before freeldr is up (loader/, efi/, boot.catalog)
+ * plus the tiny user-visible root files (freeldr.ini, autorun.inf,
+ * icon.ico, readme.txt).  Those files are not in the WIM, and the
+ * kernel's "C:\ after boot" view is supposed to mirror the ISO, so
+ * freeldr walks cdrom(0)'s root at boot time and copies everything
+ * except boot.wim itself into the writable FAT.
+ *
+ * Returns TRUE on success. A failure here is non-fatal: the WIM
+ * payload is already in place and the OS can boot without the ISO
+ * root files, so we only log a warning.
+ */
+static
+BOOLEAN
+RamDiskOverlayCdromRoot(
+    _Inout_ PFAT32_WRITER Writer,
+    _In_ PCSTR SkipRootFileName)
+{
+    ISO_SOURCE CdSource;
+    ISO_COPY_CONTEXT Context;
+    PPVD PrimaryVolumeDescriptor;
+    UCHAR DescriptorBuffer[ISO_SECTOR_SIZE];
+    ARC_STATUS Status = EIO;
+    BOOLEAN Result = FALSE;
+    ULONG Index;
+
+    /*
+     * Try the boot device's full ARC name first (e.g.
+     * "multi(0)disk(0)cdrom(0)" on UEFI), then fall back to bare
+     * "cdrom(0)" / "cdrom(1)" for legacy-BIOS code paths. The boot
+     * path is set by the arch-specific disk layer long before
+     * RamDiskInitialize runs.
+     */
+    PCCHAR BootPath = FrLdrGetBootPath();
+    static const PCSTR CdCandidates[] = { "cdrom(0)", "cdrom(1)", NULL };
+
+    if (BootPath && *BootPath)
+    {
+        TRACE("RamDiskOverlayCdromRoot: trying boot path '%s'\n", BootPath);
+        Status = RamDiskOpenIsoSource((PCSTR)BootPath, NULL, 0, 0, &CdSource);
+        if (Status == ESUCCESS)
+        {
+            TRACE("RamDiskOverlayCdromRoot: opened %s (size=%llu)\n",
+                  BootPath, CdSource.Size);
+        }
+    }
+    if (Status != ESUCCESS)
+    {
+        for (Index = 0; CdCandidates[Index]; ++Index)
+        {
+            Status = RamDiskOpenIsoSource(CdCandidates[Index], NULL, 0, 0, &CdSource);
+            if (Status == ESUCCESS)
+            {
+                TRACE("RamDiskOverlayCdromRoot: opened %s (size=%llu)\n",
+                      CdCandidates[Index], CdSource.Size);
+                break;
+            }
+        }
+    }
+    if (Status != ESUCCESS)
+    {
+        WARN("RamDiskOverlayCdromRoot: no cdrom device available; skipping overlay\n");
+        return FALSE;
+    }
+
+    /* Read Primary Volume Descriptor at LBA 16. */
+    if (!IsoSourceRead(&CdSource,
+                       (ULONGLONG)16 * ISO_SECTOR_SIZE,
+                       DescriptorBuffer,
+                       sizeof(DescriptorBuffer)))
+    {
+        WARN("RamDiskOverlayCdromRoot: failed to read PVD\n");
+        goto Cleanup;
+    }
+
+    PrimaryVolumeDescriptor = (PPVD)DescriptorBuffer;
+    if (PrimaryVolumeDescriptor->VdType != 1 ||
+        !RtlEqualMemory(PrimaryVolumeDescriptor->StandardId, "CD001", 5) ||
+        PrimaryVolumeDescriptor->VdVersion != 1)
+    {
+        WARN("RamDiskOverlayCdromRoot: source is not an ISO9660 filesystem\n");
+        goto Cleanup;
+    }
+
+    /*
+     * Share the existing Fat32Writer by value: IsoCopyDirectoryRecursive
+     * only mutates Writer.NextFreeCluster (sequential allocator) and the
+     * FAT table contents through a stable pointer, so copying the struct
+     * in and back out keeps the caller's allocator in sync.
+     */
+    RtlZeroMemory(&Context, sizeof(Context));
+    Context.Source = &CdSource;
+    Context.Writer = *Writer;
+    Context.SkipRootFileName = SkipRootFileName;
+
+    IsoProgressInitialize(&Context);
+
+    TRACE("RamDiskOverlayCdromRoot: walking ISO root (sector %lu length %lu), skip='%s'\n",
+          PrimaryVolumeDescriptor->RootDirRecord.ExtentLocationL,
+          PrimaryVolumeDescriptor->RootDirRecord.DataLengthL,
+          SkipRootFileName ? SkipRootFileName : "(none)");
+
+    if (!IsoCopyDirectoryRecursive(&Context,
+                                   PrimaryVolumeDescriptor->RootDirRecord.ExtentLocationL,
+                                   PrimaryVolumeDescriptor->RootDirRecord.DataLengthL,
+                                   ""))
+    {
+        WARN("RamDiskOverlayCdromRoot: IsoCopyDirectoryRecursive failed\n");
+        goto Cleanup;
+    }
+
+    /* Copy the updated allocator state back into the caller's writer. */
+    *Writer = Context.Writer;
+    Result = TRUE;
+
+    IsoProgressComplete(&Context);
+    TRACE("RamDiskOverlayCdromRoot: overlay complete\n");
+
+Cleanup:
+    if (Context.ScratchBuffer)
+        FrLdrTempFree(Context.ScratchBuffer, TAG_ISO_BUFFER);
+    if (Context.DirectoryBuffer)
+        FrLdrTempFree(Context.DirectoryBuffer, TAG_ISO_BUFFER);
+    RamDiskCloseIsoSource(&CdSource);
+    return Result;
+}
+
+static
+BOOLEAN
+RamDiskSourceHasSignature(
+    _In_ PISO_SOURCE Source,
+    _In_reads_bytes_(Length) const VOID *Signature,
+    _In_ ULONG Length)
+{
+    UCHAR Buffer[16];
+
+    if (!Source || !Signature || Length == 0 || Length > sizeof(Buffer) || Source->Size < Length)
+        return FALSE;
+
+    if (Source->MemoryBase)
+        return (memcmp(Source->MemoryBase, Signature, Length) == 0);
+
+    if (!IsoSourceRead(Source, 0, Buffer, Length))
+        return FALSE;
+
+    return (memcmp(Buffer, Signature, Length) == 0);
+}
+
+/*
+ * Returns TRUE when Source looks like a WIM archive (MSWIM magic at byte 0).
+ * Falls through to the ISO path for all other layouts, preserving the existing
+ * LiveCD boot behaviour on unmodified builds.
+ */
+static
+BOOLEAN
+RamDiskSourceIsWim(
+    _In_ PISO_SOURCE Source)
+{
+    static const UCHAR WimMagic[8] = { 'M', 'S', 'W', 'I', 'M', 0, 0, 0 };
+
+    return RamDiskSourceHasSignature(Source, WimMagic, sizeof(WimMagic));
+}
+
+static
+ARC_STATUS
+RamDiskWimOpenSelectedImage(
+    _In_ PISO_SOURCE Source,
+    _Out_ PWIM_LOADER_CTX WimCtx,
+    _Out_opt_ PULONG ImageIndex)
+{
+    ARC_STATUS Status;
+    ULONG SelectedImage;
+
+    if (!Source || !Source->MemoryBase || !WimCtx)
+        return EINVAL;
+
+    Status = WimLoaderOpen(Source->MemoryBase, Source->Size, WimCtx);
+    if (Status != ESUCCESS)
+        return Status;
+
+    SelectedImage = (WimCtx->BootIndex != 0) ? WimCtx->BootIndex : 1;
+    Status = WimLoaderSelectImage(WimCtx, SelectedImage);
+    if (Status != ESUCCESS)
+    {
+        WimLoaderClose(WimCtx);
+        return Status;
+    }
+
+    if (ImageIndex)
+        *ImageIndex = SelectedImage;
+
+    return ESUCCESS;
+}
+
+static
+ARC_STATUS
+RamDiskQueryWimSelectedImageStats(
+    _In_ PISO_SOURCE Source,
+    _Out_ PWIM_LOADER_IMAGE_STATS Stats)
+{
+    WIM_LOADER_CTX WimCtx;
+    ARC_STATUS Status;
+
+    Status = RamDiskWimOpenSelectedImage(Source, &WimCtx, NULL);
+    if (Status != ESUCCESS)
+        return Status;
+
+    Status = WimLoaderQuerySelectedImageStats(&WimCtx, Stats);
+    WimLoaderClose(&WimCtx);
+    return Status;
+}
+
+static
+VOID
+RamDiskWimProgressCallback(
+    _In_opt_ PVOID Context,
+    _In_ ULONGLONG BytesAdvanced,
+    _In_opt_ PCSTR CurrentPath)
+{
+    UNREFERENCED_PARAMETER(CurrentPath);
+
+    if (!Context)
+        return;
+
+    RamDiskProgressAdvance((PRAMDISK_PROGRESS_CONTEXT)Context, BytesAdvanced);
+}
+
+/*
+ * Populate a freshly-formatted FAT32 volume from an in-memory WIM archive.
+ * Expects Source->MemoryBase to point at the full .wim file (no streaming:
+ * libwim's freeldr reader parses the blob table and metadata resource from
+ * a contiguous buffer). Uses the WIM's boot_index to pick the image; falls
+ * back to image 1 if the WIM was not marked bootable.
+ *
+ * After the WIM payload is unpacked, the CD-ROM root is overlaid into the
+ * same FAT volume (minus boot.wim itself) so the ramdisk view matches the
+ * original ISO layout: loader/, efi/, freeldr.ini, autorun.inf, icon.ico
+ * and readme.txt all become visible to the running OS alongside reactos/
+ * and Profiles/.
+ */
+static
+BOOLEAN
+RamDiskPopulateFatFromWim(
+    _In_ PVOID FatBase,
+    _In_ ULONGLONG FatSize,
+    _In_ PISO_SOURCE Source,
+    _In_ PRAMDISK_FAT32_LAYOUT Layout)
+{
+    WIM_LOADER_CTX WimCtx;
+    WIM_LOADER_IMAGE_STATS WimStats;
+    FAT32_WRITER Writer;
+    RAMDISK_PROGRESS_CONTEXT Progress;
+    ARC_STATUS Status;
+    ULONG ImageIndex;
+
+    if (!Source->MemoryBase || Source->Size < 208)
+    {
+        WARN("RamDiskPopulateFatFromWim: WIM source not in memory\n");
+        return FALSE;
+    }
+
+    TRACE("RamDiskPopulateFatFromWim: WIM at %p size %llu\n",
+          Source->MemoryBase, Source->Size);
+
+    Status = RamDiskWimOpenSelectedImage(Source, &WimCtx, &ImageIndex);
+    if (Status != ESUCCESS)
+    {
+        WARN("RamDiskPopulateFatFromWim: failed to open selected WIM image (%lu)\n", Status);
+        return FALSE;
+    }
+
+    TRACE("RamDiskPopulateFatFromWim: selecting image %lu of %lu\n",
+          ImageIndex, WimCtx.ImageCount);
+
+    Status = WimLoaderQuerySelectedImageStats(&WimCtx, &WimStats);
+    if (Status != ESUCCESS)
+    {
+        WARN("RamDiskPopulateFatFromWim: QuerySelectedImageStats failed (%lu)\n", Status);
+        WimLoaderClose(&WimCtx);
+        return FALSE;
+    }
+
+    if (!Fat32WriterInit(&Writer, FatBase, FatSize, Layout))
+    {
+        WARN("RamDiskPopulateFatFromWim: Fat32WriterInit failed\n");
+        WimLoaderClose(&WimCtx);
+        return FALSE;
+    }
+
+    TRACE("RamDiskPopulateFatFromWim: extracting dentry tree\n");
+    RtlZeroMemory(&Progress, sizeof(Progress));
+    UiSetProgressBarSubset(0, 85);
+    RamDiskProgressInitialize(&Progress,
+                              WimStats.FileBytes ? WimStats.FileBytes : 1,
+                              "Unpacking boot.wim...",
+                              "Ramdisk",
+                              "Unpack complete");
+    Status = WimLoaderExtractToFat(&WimCtx,
+                                   &Writer,
+                                   RamDiskWimProgressCallback,
+                                   &Progress);
+    RamDiskProgressComplete(&Progress);
+
+    if (Status != ESUCCESS)
+    {
+        WARN("RamDiskPopulateFatFromWim: WimLoaderExtractToFat failed (%lu)\n",
+             Status);
+        WimLoaderClose(&WimCtx);
+        return FALSE;
+    }
+
+    /*
+     * Overlay the remaining CD-ROM root into the FAT (everything but
+     * the WIM itself).  Non-fatal: the kernel can boot from the WIM
+     * payload alone if the CD-ROM is not reachable here.
+     */
+    TRACE("RamDiskPopulateFatFromWim: overlaying ISO root on top of WIM payload\n");
+    UiSetProgressBarSubset(85, 100);
+    if (!RamDiskOverlayCdromRoot(&Writer, "boot.wim"))
+    {
+        WARN("RamDiskPopulateFatFromWim: ISO overlay failed — ramdisk will only contain WIM contents\n");
+    }
+
+    WimLoaderClose(&WimCtx);
+    UiSetProgressBarSubset(0, 100);
+    UiUpdateProgressBar(100, NULL);
+    TRACE("RamDiskPopulateFatFromWim: unpack complete\n");
+    return TRUE;
+}
+
 BOOLEAN
 RamDiskBuildWritableImage(
     IN PISO_SOURCE Source,
@@ -1389,19 +1800,56 @@ RamDiskBuildWritableImage(
     PVOID WritableBase = NULL;
     ULONGLONG WritableSize = 0;
     ULONGLONG RequiredSize;
-    ULONGLONG IsoSize;
-    ULONGLONG ResidentIsoBytes = 0;
+    ULONGLONG SourceSize;
+    ULONGLONG ResidentSourceBytes = 0;
+    BOOLEAN WimSource;
     RAMDISK_FAT32_LAYOUT Layout;
 
     if (!Source || !NewBase || !NewSize || Source->Size == 0)
         return FALSE;
 
-    IsoSize = Source->Size;
+    SourceSize = Source->Size;
+    WimSource = RamDiskSourceIsWim(Source);
 
-    /* Leave some slack to account for ISO9660 metadata and future writes */
-    RequiredSize = RequestedSize;
-    if (RequiredSize < IsoSize + RAMDISK_MINIMUM_EXTRA_SPACE)
-        RequiredSize = IsoSize + RAMDISK_MINIMUM_EXTRA_SPACE;
+    if (WimSource)
+    {
+        WIM_LOADER_IMAGE_STATS WimStats;
+        ULONGLONG RequestedExtra = (RequestedSize > SourceSize) ? (RequestedSize - SourceSize) : 0;
+        ARC_STATUS Status;
+
+        if (!Source->MemoryBase)
+        {
+            WARN("RamDiskBuildWritableImage: WIM sources must be resident in memory\n");
+            return FALSE;
+        }
+
+        if (RequestedExtra < RAMDISK_MINIMUM_EXTRA_SPACE)
+            RequestedExtra = RAMDISK_MINIMUM_EXTRA_SPACE;
+
+        Status = RamDiskQueryWimSelectedImageStats(Source, &WimStats);
+        if (Status != ESUCCESS)
+        {
+            WARN("RamDiskBuildWritableImage: failed to size WIM payload (%lu)\n", Status);
+            return FALSE;
+        }
+
+        if (WimStats.FileBytes > ULLONG_MAX - RequestedExtra)
+            return FALSE;
+
+        RequiredSize = WimStats.FileBytes + RequestedExtra;
+        TRACE("RamDiskBuildWritableImage: WIM source=%llu extracted=%llu extra=%llu target=%llu\n",
+              SourceSize,
+              WimStats.FileBytes,
+              RequestedExtra,
+              RequiredSize);
+    }
+    else
+    {
+        /* Leave some slack to account for ISO9660 metadata and future writes */
+        RequiredSize = RequestedSize;
+        if (RequiredSize < SourceSize + RAMDISK_MINIMUM_EXTRA_SPACE)
+            RequiredSize = SourceSize + RAMDISK_MINIMUM_EXTRA_SPACE;
+    }
 
     if (RequiredSize + RAMDISK_SAFETY_SLACK > RAMDISK_LOW_ALLOC_MAX)
     {
@@ -1417,17 +1865,17 @@ RamDiskBuildWritableImage(
     }
 
     if (Source->MemoryBase)
-        ResidentIsoBytes = ALIGN_UP_BY_ULL(IsoSize, RAMDISK_ALLOCATION_ALIGNMENT);
+        ResidentSourceBytes = ALIGN_UP_BY_ULL(SourceSize, RAMDISK_ALLOCATION_ALIGNMENT);
 
-    if ((RequiredSize + ResidentIsoBytes + RAMDISK_SAFETY_SLACK) > RAMDISK_LOW_ALLOC_MAX)
+    if ((RequiredSize + ResidentSourceBytes + RAMDISK_SAFETY_SLACK) > RAMDISK_LOW_ALLOC_MAX)
     {
-        WARN("RamDiskBuildWritableImage: %llu-byte ISO plus %llu-byte writable buffer exceed low-memory budget %llu\n",
-             IsoSize,
+        WARN("RamDiskBuildWritableImage: %llu-byte source plus %llu-byte writable buffer exceed low-memory budget %llu\n",
+             SourceSize,
              RequiredSize,
              RAMDISK_LOW_ALLOC_MAX);
         if (!RamDiskErrorShown && !OptionalRamDisk)
         {
-            UiMessageBox("Writable RAM disk request uses too much low memory to keep the ISO resident.");
+            UiMessageBox("Writable RAM disk request uses too much low memory to keep the source image resident.");
             RamDiskErrorShown = TRUE;
         }
         return FALSE;
@@ -1437,8 +1885,8 @@ RamDiskBuildWritableImage(
     if (RequiredSize == 0 || RequiredSize > MAXULONG)
         return FALSE;
 
-    TRACE("RamDiskBuildWritableImage: ISO=%llu requested=%llu align=%llu\n",
-          IsoSize,
+    TRACE("RamDiskBuildWritableImage: source=%llu requested=%llu align=%llu\n",
+          SourceSize,
           RequestedSize,
           RequiredSize);
 
@@ -1459,7 +1907,8 @@ RamDiskBuildWritableImage(
         return FALSE;
     }
 
-    TRACE("RamDiskBuildWritableImage: populating ramdisk from ISO\n");
+    TRACE("RamDiskBuildWritableImage: populating ramdisk from %s\n",
+          WimSource ? "WIM" : "ISO");
 
     {
         ULONGLONG VolumeOffset;
@@ -1476,13 +1925,28 @@ RamDiskBuildWritableImage(
         VolumeBase = (PUCHAR)WritableBase + VolumeOffset;
         VolumeSize = WritableSize - VolumeOffset;
 
-        if (!RamDiskPopulateFatFromIso(VolumeBase,
-                                       VolumeSize,
-                                       Source,
-                                       &Layout))
+        if (WimSource)
         {
-            MmFreeMemory(WritableBase);
-            return FALSE;
+            TRACE("RamDiskBuildWritableImage: source is a WIM archive, using WIM populator\n");
+            if (!RamDiskPopulateFatFromWim(VolumeBase,
+                                           VolumeSize,
+                                           Source,
+                                           &Layout))
+            {
+                MmFreeMemory(WritableBase);
+                return FALSE;
+            }
+        }
+        else
+        {
+            if (!RamDiskPopulateFatFromIso(VolumeBase,
+                                           VolumeSize,
+                                           Source,
+                                           &Layout))
+            {
+                MmFreeMemory(WritableBase);
+                return FALSE;
+            }
         }
 
         RamDiskSetVisibleRegion(VolumeOffset, VolumeSize);
@@ -2213,6 +2677,7 @@ RamDiskInitialize(
         PVOID OriginalBase;
         BOOLEAN StreamingSucceeded = FALSE;
         ULONGLONG StreamIsoSize = 0;
+        BOOLEAN StreamSourceIsWim = FALSE;
         BOOLEAN OptionalRamDisk;
 
         /* If we don't have any load options, initialize an empty Ramdisk */
@@ -2316,6 +2781,18 @@ RamDiskInitialize(
 
                 if (StreamStatus == ESUCCESS)
                 {
+                    StreamSourceIsWim = RamDiskSourceIsWim(&StreamSource);
+                    if (StreamSourceIsWim)
+                    {
+                        TRACE("RamDiskInitialize: streaming path skipped for WIM source '%s'; falling back to in-memory load\n",
+                              StreamFileName);
+                        RamDiskCloseIsoSource(&StreamSource);
+                        StreamStatus = EINVAL;
+                    }
+                }
+
+                if (StreamStatus == ESUCCESS)
+                {
                     StreamIsoSize = StreamSource.Size;
                     {
                         ULONGLONG ExtraBytes = RamDiskRequestedSize;
@@ -2387,7 +2864,7 @@ RamDiskInitialize(
             if (StreamingSucceeded)
                 goto WritableReady;
 
-            if (RamDiskRequestedSize != 0 && StreamIsoSize != 0)
+            if (RamDiskRequestedSize != 0 && StreamIsoSize != 0 && !StreamSourceIsWim)
             {
                 ULONGLONG IsoSize = StreamIsoSize;
                 ULONGLONG ResidentIsoBytes;
@@ -2445,18 +2922,15 @@ RamDiskInitialize(
             return Status;
 
         OriginalBase = RamDiskBase;
-        if (RamDiskRequestedSize != 0)
         {
             PVOID WritableBase;
             ULONGLONG WritableSize;
             PVOID IsoImageBase;
             ULONGLONG IsoImageLength;
             ISO_SOURCE MemorySource;
+            BOOLEAN WimSource;
             ULONGLONG ExtraBytes;
             ULONGLONG TotalTarget;
-
-            TRACE("RamDiskInitialize: expanding to writable RAMFS (extra %llu bytes requested)\n",
-                  RamDiskRequestedSize);
 
             IsoImageBase = (PVOID)((ULONG_PTR)OriginalBase + RamDiskImageOffset);
             IsoImageLength = RamDiskFileSize - RamDiskImageOffset;
@@ -2470,43 +2944,81 @@ RamDiskInitialize(
             MemorySource.ArcOffset = 0;
             MemorySource.ArcPosition = 0;
 
-            /* New semantics: total target = ISO length + extra (>=64MiB) */
-            ExtraBytes = RamDiskRequestedSize;
-            if (ExtraBytes < RAMDISK_MINIMUM_EXTRA_SPACE)
-                ExtraBytes = RAMDISK_MINIMUM_EXTRA_SPACE;
-            TotalTarget = MemorySource.Size + ExtraBytes;
-
-            if (!RamDiskBuildWritableImage(&MemorySource,
-                                           TotalTarget,
-                                           &WritableBase,
-                                           &WritableSize,
-                                           OptionalRamDisk))
+            WimSource = RamDiskSourceIsWim(&MemorySource);
+            if (RamDiskRequestedSize != 0 || WimSource)
             {
-                if (!RamDiskErrorShown && !OptionalRamDisk)
+                ExtraBytes = RamDiskRequestedSize;
+                if (ExtraBytes < RAMDISK_MINIMUM_EXTRA_SPACE)
+                    ExtraBytes = RAMDISK_MINIMUM_EXTRA_SPACE;
+                TotalTarget = MemorySource.Size + ExtraBytes;
+
+                TRACE("RamDiskInitialize: materializing %s-backed ramdisk (extra %llu bytes requested)\n",
+                      WimSource ? "WIM" : "ISO",
+                      ExtraBytes);
+
+                if (!RamDiskBuildWritableImage(&MemorySource,
+                                               TotalTarget,
+                                               &WritableBase,
+                                               &WritableSize,
+                                               OptionalRamDisk))
                 {
-                    UiMessageBox("Failed to expand LiveCD into writable RAM.");
-                    RamDiskErrorShown = TRUE;
+                    if (!RamDiskErrorShown && !OptionalRamDisk)
+                    {
+                        UiMessageBox("Failed to expand LiveCD into writable RAM.");
+                        RamDiskErrorShown = TRUE;
+                    }
+                    RamDiskRequestedSize = 0;
+                    TRACE("RamDiskInitialize: continuing with read-only media because writable buffer allocation failed\n");
+                    RamDiskBase = OriginalBase;
+                    RamDiskVolumeOffset = 0;
+                    RamDiskVolumeLength = 0;
+                    goto WritableFallback;
                 }
-                RamDiskRequestedSize = 0;
-                TRACE("RamDiskInitialize: continuing with read-only ISO because writable buffer allocation failed\n");
-                RamDiskBase = OriginalBase;
-                RamDiskVolumeOffset = 0;
-                RamDiskVolumeLength = 0;
-                goto WritableFallback;
-            }
 
-            if ((OriginalBase != gInitRamDiskBase) &&
-                (OriginalBase != WritableBase))
-            {
-                MmFreeMemory(OriginalBase);
-            }
+                if ((OriginalBase != gInitRamDiskBase) &&
+                    (OriginalBase != WritableBase))
+                {
+                    /*
+                     * MmFreeMemory() is a no-op in freeldr, so the original
+                     * source buffer's memory descriptor stays in the loader
+                     * memory list. Because we allocated it as LoaderXIPRom,
+                     * the kernel's IopStartRamdisk() walks the descriptor
+                     * list looking for the FIRST LoaderXIPRom region and
+                     * picks the OLD source buffer instead of the writable
+                     * FAT volume — the kernel then mounts garbage as the
+                     * boot device and bugchecks 0x7B INACCESSIBLE_BOOT_DEVICE.
+                     *
+                     * Re-tag the source pages as LoaderFirmwareTemporary so
+                     * they look free to the kernel and are skipped by the
+                     * LoaderXIPRom search. The data inside them is dead at
+                     * this point — the WIM extractor / ISO->FAT copier has
+                     * already finished reading from them.
+                     */
+                    ULONG_PTR SrcBase = (ULONG_PTR)OriginalBase;
+                    ULONGLONG SrcSize = (ULONGLONG)RamDiskFileSize;
+                    if (SrcSize > 0)
+                    {
+                        PFN_NUMBER FirstPage = (PFN_NUMBER)(SrcBase / MM_PAGE_SIZE);
+                        PFN_NUMBER PageCount = (PFN_NUMBER)((SrcSize + MM_PAGE_SIZE - 1) / MM_PAGE_SIZE);
+                        TRACE("RamDiskInitialize: relabelling source PFN %lx-%lx (%lu pages) as LoaderFirmwareTemporary\n",
+                              (ULONG)FirstPage,
+                              (ULONG)(FirstPage + PageCount - 1),
+                              (ULONG)PageCount);
+                        MmMarkPagesInLookupTable(PageLookupTableAddress,
+                                                 FirstPage,
+                                                 (PFN_COUNT)PageCount,
+                                                 LoaderFirmwareTemporary);
+                    }
+                    MmFreeMemory(OriginalBase);
+                }
 
-            RamDiskBase = WritableBase;
-            RamDiskFileSize = WritableSize;
-            RamDiskImageOffset = 0;
-            RamDiskImageLength = WritableSize;
-            TRACE("RamDiskInitialize: writable ramdisk ready (%llu bytes)\n",
-                  RamDiskFileSize);
+                RamDiskBase = WritableBase;
+                RamDiskFileSize = WritableSize;
+                RamDiskImageOffset = 0;
+                RamDiskImageLength = WritableSize;
+                TRACE("RamDiskInitialize: writable ramdisk ready (%llu bytes)\n",
+                      RamDiskFileSize);
+            }
         }
     }
 
