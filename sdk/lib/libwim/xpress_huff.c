@@ -20,30 +20,15 @@
 /* Runtime SIMD dispatch on Intel; decompress-only builds stay scalar. */
 #if !defined(XPRESS_HUFF_DECOMPRESS_ONLY) && \
     (defined(__x86_64__) || defined(_M_X64))
-#  if defined(__has_include)
-#    if __has_include(<emmintrin.h>)
-#      include <emmintrin.h>
-#      define WIMAGE_HAVE_SSE2  1
-#    endif
-#    if __has_include(<tmmintrin.h>) && !defined(__MINGW32__)
-#      include <tmmintrin.h>
-#      define WIMAGE_HAVE_SSSE3 1
-#    endif
-#    if __has_include(<immintrin.h>) && !defined(__MINGW32__)
-#      include <immintrin.h>
-#      define WIMAGE_HAVE_AVX2  1
-#    endif
-#  else
-#    include <emmintrin.h>
-#    define WIMAGE_HAVE_SSE2  1
-#    if !defined(__MINGW32__)
-#      include <tmmintrin.h>
-#      include <immintrin.h>
-#    define WIMAGE_HAVE_SSSE3 1
-#    define WIMAGE_HAVE_AVX2  1
-#    endif
-#  endif
-#  if defined(_MSC_VER)
+#  include <emmintrin.h>
+#  include <tmmintrin.h>
+#  include <immintrin.h>
+#  define WIMAGE_HAVE_SSE2  1
+#  define WIMAGE_HAVE_SSSE3 1
+#  define WIMAGE_HAVE_AVX2  1
+#  if defined(__GNUC__) || defined(__clang__)
+#    include <cpuid.h>
+#  elif defined(_MSC_VER)
 #    include <intrin.h>
 #  endif
 
@@ -71,43 +56,38 @@ static void wimage_init_rle_masks(void)
 
 static void wimage_detect_intel(void)
 {
-#if defined(__GNUC__) || defined(__clang__)
-    wimage_sse2_enabled = 1;
-#  if WIMAGE_HAVE_SSSE3
-    if (__builtin_cpu_supports("ssse3"))
-        wimage_ssse3_enabled = 1;
-#  endif
-#  if WIMAGE_HAVE_AVX2
-    if (__builtin_cpu_supports("avx2"))
-        wimage_avx2_enabled = 1;
-#  endif
-#elif defined(_MSC_VER)
     unsigned int eax = 0, ebx = 0, ecx = 0, edx = 0;
+#if defined(__GNUC__) || defined(__clang__)
+    if (!__get_cpuid(0u, &eax, &ebx, &ecx, &edx))
+        return;
+#elif defined(_MSC_VER)
     int regs[4] = {0, 0, 0, 0};
-
     __cpuid(regs, 0);
     eax = (unsigned)regs[0]; ebx = (unsigned)regs[1];
     ecx = (unsigned)regs[2]; edx = (unsigned)regs[3];
+#else
+    return; /* no portable CPUID available */
+#endif
     if (!(ebx == 0x756E6547u && edx == 0x49656E69u && ecx == 0x6C65746Eu))
         return;
 
     wimage_sse2_enabled = 1;
 
+#if defined(__GNUC__) || defined(__clang__)
+    if (__get_cpuid(1u, &eax, &ebx, &ecx, &edx) && (ecx & (1u << 9)))
+        wimage_ssse3_enabled = 1;
+#elif defined(_MSC_VER)
     {
         int r[4] = {0};
         __cpuid(r, 1);
         if (((unsigned)r[2] & (1u << 9)) != 0)
             wimage_ssse3_enabled = 1;
     }
+#endif
 
-    {
-        int r[4] = {0};
-        __cpuidex(r, 7, 0);
-        if (((unsigned)r[1] & (1u << 5)) != 0)
-            wimage_avx2_enabled = 1;
-    }
-#else
-    return; /* no portable CPU feature detection available */
+#if defined(__GNUC__) || defined(__clang__)
+    if (__builtin_cpu_supports("avx2"))
+        wimage_avx2_enabled = 1;
 #endif
 
 #  if WIMAGE_HAVE_SSSE3
@@ -176,12 +156,10 @@ static inline uint32_t rd32(const uint8_t* p)
            ((uint32_t)p[2] << 16) | ((uint32_t)p[3] << 24);
 }
 
-#ifndef XPRESS_HUFF_DECOMPRESS_ONLY
 static inline void wr16(uint8_t* p, uint16_t v)
 {
     p[0] = (uint8_t)v;  p[1] = (uint8_t)(v >> 8);
 }
-#endif
 
 /*======================================================================
  * Constants
