@@ -292,3 +292,38 @@
  @ stdcall TrFilterDprIndicateReceive(ptr ptr ptr long ptr long long)
  @ stdcall TrFilterDprIndicateReceiveComplete(ptr)
  @ stdcall NdisScheduleWorkItem(ptr)
+
+; ====================================================================
+; NDIS 6 / NDIS 6.20 stub exports (implemented in ndis/60stubs.c).
+; All entry points are functional stubs — registration succeeds, datapath
+; ops are no-ops. Added for the dev-nt6-1 branch (NT 5.2 -> NT 6.1 upgrade).
+; ====================================================================
+ @ stdcall NdisAllocateNetBufferListPool(ptr ptr)
+ @ stdcall NdisFreeNetBufferListPool(ptr)
+ @ stdcall NdisAllocateNetBufferPool(ptr ptr)
+ @ stdcall NdisFreeNetBufferPool(ptr)
+ @ stdcall NdisAllocateNetBufferList(ptr long long)
+ @ stdcall NdisFreeNetBufferList(ptr)
+ @ stdcall NdisAllocateNetBufferAndNetBufferList(ptr long long ptr long double)
+ @ stdcall NdisAllocateNetBuffer(ptr ptr long double)
+ @ stdcall NdisFreeNetBuffer(ptr)
+ @ stdcall NdisRetreatNetBufferDataStart(ptr long long ptr)
+ @ stdcall NdisAdvanceNetBufferDataStart(ptr long long ptr)
+ @ stdcall NdisMRegisterMiniportDriver(ptr ptr ptr ptr ptr)
+ @ stdcall NdisMDeregisterMiniportDriver(ptr)
+ @ stdcall NdisMSetMiniportAttributes(ptr ptr)
+ @ stdcall NdisFRegisterFilterDriver(ptr ptr ptr ptr)
+ @ stdcall NdisFDeregisterFilterDriver(ptr)
+ @ stdcall NdisRegisterProtocolDriver(ptr ptr ptr)
+ @ stdcall NdisDeregisterProtocolDriver(ptr)
+ @ stdcall NdisSendNetBufferLists(ptr ptr long long)
+ @ stdcall NdisReturnNetBufferLists(ptr ptr long)
+ @ stdcall NdisOidRequest(ptr ptr)
+ @ stdcall NdisMSendNetBufferListsComplete(ptr ptr long)
+ @ stdcall NdisMIndicateReceiveNetBufferLists(ptr ptr long long long)
+ @ stdcall NdisMIndicateStatusEx(ptr ptr)
+ @ stdcall NdisMOidRequestComplete(ptr ptr long)
+ @ stdcall NdisMRegisterInterruptEx(ptr ptr ptr ptr)
+ @ stdcall NdisMDeregisterInterruptEx(ptr)
+ @ stdcall NdisMRegisterScatterGatherDma(ptr ptr ptr)
+ @ stdcall NdisMDeregisterScatterGatherDma(ptr)

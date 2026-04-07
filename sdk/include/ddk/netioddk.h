@@ -151,6 +151,48 @@ NmrProviderDetachClientComplete(
 
 #endif /* (NTDDI_VERSION >= NTDDI_VISTA) */
 
+
+/* ============================================================================
+ *  Kernel-mode counterparts of the user-mode netioapi.h v2 API family.
+ *  Added on the dev-nt6-1 branch so kernel callers (WFP callouts, NDIS 6
+ *  protocol drivers) can use the same interface identifier helpers without
+ *  pulling in the user-mode psdk netioapi.h.
+ *
+ *  These forward to the same implementation that backs user-mode iphlpapi.
+ *  At this stage the calls are stubs; wire them up properly in Phase F/G.
+ * ============================================================================ */
+#if (NTDDI_VERSION >= NTDDI_VISTA)
+
+/* MIB_IF_ROW2 and friends already live in the psdk netioapi.h, which is
+ * designed to be includable from kernel code too (it only needs ifdef.h
+ * and nldef.h). Kernel consumers should include <netioapi.h> directly
+ * via the psdk search path after including <ws2ipdef.h>. The declarations
+ * below cover just the helpers that the kernel-mode netio.sys exports
+ * for its own clients. */
+
+/* ConvertInterface* helpers — these exist in user-mode iphlpapi and in
+ * kernel-mode netio.sys with identical signatures. Declare them here so
+ * kernel callers don't have to include the psdk header. */
+NTSTATUS
+NTAPI
+ConvertInterfaceLuidToIndexKernel(
+  _In_  CONST ULONG64 *InterfaceLuid,
+  _Out_ PULONG         InterfaceIndex);
+
+NTSTATUS
+NTAPI
+ConvertInterfaceIndexToLuidKernel(
+  _In_  ULONG    InterfaceIndex,
+  _Out_ ULONG64* InterfaceLuid);
+
+/* FreeMibTable — symmetric counterpart to user-mode FreeMibTable */
+VOID
+NTAPI
+FreeMibTableKernel(
+  _Inout_ PVOID Table);
+
+#endif /* (NTDDI_VERSION >= NTDDI_VISTA) */
+
 #ifdef __cplusplus
 }
 #endif
