@@ -547,10 +547,15 @@ PacketSocketRecvComplete(
     PAFD_STORED_DATAGRAM DatagramRecv;
     UINT DGSize = Irp->IoStatus.Information + sizeof( AFD_STORED_DATAGRAM );
     PLIST_ENTRY NextIrpEntry, DatagramRecvEntry;
+    static volatile LONG PsrCount = 0;
+    LONG psr = InterlockedIncrement(&PsrCount);
 
     UNREFERENCED_PARAMETER(DeviceObject);
 
-    AFD_DbgPrint(MID_TRACE,("Called on %p\n", FCB));
+    if (psr <= 10)
+        DbgPrint("AFD-RX: PacketSocketRecvComplete #%ld FCB=%p Status=0x%08lx Info=%lu\n",
+                 psr, FCB, (ULONG)Irp->IoStatus.Status,
+                 (ULONG)Irp->IoStatus.Information);
 
     if( !SocketAcquireStateLock( FCB ) )
         return STATUS_FILE_CLOSED;

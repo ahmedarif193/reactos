@@ -215,23 +215,25 @@ E1000MiniportInitializeEx(
     Adapter->NdisMiniportDriverHandle = g_NdisMiniportDriverHandle;
 
     /*
-     * In NDIS 6.x (ReactOS implementation), NdisMiniportHandle is actually
-     * a DeviceObject. The PDO is stored in DeviceExtension[1] by Ndis6AddDevice.
-     * We need the PDO to query BUS_INTERFACE_STANDARD for PCI config access.
+     * Get the PDO via the proper NDIS 6 API. NdisMGetDeviceProperty
+     * returns the PDO/FDO/next-lower DO and (optionally) the resource
+     * lists. The dev-nt6-1 NDIS 6 bridge populates these from the
+     * NDIS6_ADAPTER_EXT recorded at AddDevice time.
      */
+    NdisMGetDeviceProperty(NdisMiniportHandle,
+                           &Adapter->PhysicalDeviceObject,
+                           NULL,    /* FDO not needed */
+                           NULL,    /* NextDeviceObject not needed */
+                           NULL,    /* AllocatedResources — use param below */
+                           NULL);
+    if (Adapter->PhysicalDeviceObject != NULL)
     {
-        PDEVICE_OBJECT DeviceObject = (PDEVICE_OBJECT)NdisMiniportHandle;
-        if (DeviceObject != NULL && DeviceObject->DeviceExtension != NULL)
-        {
-            Adapter->PhysicalDeviceObject = ((PVOID*)DeviceObject->DeviceExtension)[1];
-            DPRINT1("E1000: Extracted PDO=%p from DeviceObject=%p\n",
-                     Adapter->PhysicalDeviceObject, DeviceObject);
-        }
-        else
-        {
-            DPRINT1("E1000: Warning - Could not extract PDO from MiniportHandle\n");
-            Adapter->PhysicalDeviceObject = NULL;
-        }
+        DPRINT1("E1000: PDO=%p from NdisMGetDeviceProperty\n",
+                Adapter->PhysicalDeviceObject);
+    }
+    else
+    {
+        DPRINT1("E1000: Warning - NdisMGetDeviceProperty returned NULL PDO\n");
     }
 
     /* Initialize spin locks */
