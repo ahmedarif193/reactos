@@ -447,12 +447,25 @@ NdisFSetAttributes(
 {
     PNDIS6_FILTER_MODULE Module = (PNDIS6_FILTER_MODULE)NdisFilterHandle;
 
-    UNREFERENCED_PARAMETER(AttributeData);
-
     if (Module == NULL)
         return NDIS_STATUS_INVALID_PARAMETER;
 
     Module->FilterModuleContext = FilterModuleContext;
+
+    /* D5: decode NDIS_FILTER_ATTRIBUTES (Header + Flags). The header
+     * is 8 bytes + ULONG Flags at offset 8. Read the Flags field so
+     * the chain walker can honor NDIS_FILTER_ATTRIBUTES_MANDATORY
+     * and similar bits. */
+    if (AttributeData != NULL)
+    {
+        PNDIS_OBJECT_HEADER Header = (PNDIS_OBJECT_HEADER)AttributeData;
+        if (Header->Size >= sizeof(NDIS_OBJECT_HEADER) + sizeof(ULONG))
+        {
+            Module->Flags = *(PULONG)((PUCHAR)AttributeData +
+                                      sizeof(NDIS_OBJECT_HEADER));
+            Module->AttributesValid = TRUE;
+        }
+    }
     return NDIS_STATUS_SUCCESS;
 }
 
