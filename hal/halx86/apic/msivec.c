@@ -11,6 +11,7 @@
 #include <hal.h>
 #include "apicp.h"
 #include "msip.h"
+#include <smp.h>
 #define NDEBUG
 #include <debug.h>
 
@@ -23,6 +24,31 @@ typedef struct _MSI_ALLOCATION_STATE {
 
 static MSI_ALLOCATION_STATE HalpMsiVectorState[MSI_VECTOR_COUNT];
 static KSPIN_LOCK HalpMsiVectorLock;
+extern PPROCESSOR_IDENTITY HalpProcessorIdentity;
+
+static
+ULONG
+NTAPI
+HalpSelectTargetProcessor(
+    _In_ KAFFINITY TargetProcessors)
+{
+    KAFFINITY Mask;
+    ULONG ProcessorNumber;
+
+    Mask = TargetProcessors;
+    if (Mask == 0)
+        Mask = HalpDefaultInterruptAffinity ? HalpDefaultInterruptAffinity
+                                            : KeQueryActiveProcessors();
+
+    ProcessorNumber = 0;
+    while ((Mask & 1) == 0)
+    {
+        Mask >>= 1;
+        ProcessorNumber++;
+    }
+
+    return ProcessorNumber;
+}
 
 /* FUNCTIONS ******************************************************************/
 
@@ -43,11 +69,111 @@ HalpInitializeMsiVectors(VOID)
         HalpMsiVectorState[i].Irql = 0;
     }
 
-    DPRINT1("MSI Vector Allocator initialized (vectors 0x%02x-0x%02x, above legacy IRQ range 0x%02x-0x%02x)\n",
-            MSI_VECTOR_MIN, MSI_VECTOR_MAX,
-            PRIMARY_VECTOR_BASE, PRIMARY_VECTOR_BASE + APIC_MAX_IRQ - 1);
+    DPRINT("MSI Vector Allocator initialized (vectors 0x%02x-0x%02x, legacy IRQ range 0x%02x-0x%02x)\n",
+           MSI_VECTOR_MIN, MSI_VECTOR_MAX,
+           PRIMARY_VECTOR_BASE, PRIMARY_VECTOR_BASE + APIC_MAX_IRQ - 1);
 
     return TRUE;
+}
+
+KIRQL
+NTAPI
+HalConvertDeviceIdtToIrql(
+    _In_ ULONG Vector)
+{
+    return HalpVectorToIrql((UCHAR)Vector);
+}
+
+NTSTATUS
+NTAPI
+HalGetInterruptTargetInformation(
+    _Inout_ PHAL_INTERRUPT_TARGET_INFORMATION TargetInformation)
+{
+    ULONG ProcessorNumber;
+    KAFFINITY Mask;
+
+    if (TargetInformation == NULL ||
+        TargetInformation->Version != HAL_INTERRUPT_TARGET_INFORMATION_VERSION)
+    {
+        return STATUS_INVALID_PARAMETER;
+    }
+
+    Mask = TargetInformation->TargetProcessors;
+    if (Mask == 0)
+        Mask = HalpDefaultInterruptAffinity ? HalpDefaultInterruptAffinity
+                                            : KeQueryActiveProcessors();
+
+    ProcessorNumber = HalpSelectTargetProcessor(Mask);
+    TargetInformation->ProcessorNumber = ProcessorNumber;
+    TargetInformation->TargetProcessors = ((KAFFINITY)1 << ProcessorNumber);
+    TargetInformation->DestinationId = HalpProcessorIdentity[ProcessorNumber].LapicId;
+    if (TargetInformation->DestinationId == 0)
+        TargetInformation->DestinationId = ProcessorNumber;
+
+    return STATUS_SUCCESS;
+}
+
+NTSTATUS
+NTAPI
+HalGetMessageRoutingInfo(
+    _Inout_ PHAL_MESSAGE_ROUTING_INFO RoutingInfo)
+{
+    HAL_INTERRUPT_TARGET_INFORMATION TargetInfo;
+    KIRQL DesiredIrql;
+    UCHAR AllocatedVector;
+    KIRQL AllocatedIrql;
+    KAFFINITY AllocatedAffinity;
+    BOOLEAN Allocated;
+    NTSTATUS Status;
+
+    if (RoutingInfo == NULL ||
+        RoutingInfo->Version != HAL_MESSAGE_ROUTING_INFO_VERSION)
+    {
+        return STATUS_INVALID_PARAMETER;
+    }
+
+    if (RoutingInfo->Flags & HAL_MSI_ROUTING_ALLOCATE_VECTOR)
+    {
+        DesiredIrql = RoutingInfo->DesiredIrql ? RoutingInfo->DesiredIrql
+                                               : (CLOCK_LEVEL - 1);
+        Allocated = HalpAllocateMsiVector(DesiredIrql,
+                                          &AllocatedVector,
+                                          &AllocatedIrql,
+                                          &AllocatedAffinity);
+        if (!Allocated)
+            return STATUS_INSUFFICIENT_RESOURCES;
+
+        RoutingInfo->Vector = AllocatedVector;
+        RoutingInfo->Irql = AllocatedIrql;
+        RoutingInfo->TargetProcessors = AllocatedAffinity;
+    }
+    else
+    {
+        if (RoutingInfo->Vector == 0)
+            return STATUS_INVALID_PARAMETER;
+
+        if (RoutingInfo->TargetProcessors == 0)
+            RoutingInfo->TargetProcessors = HalpDefaultInterruptAffinity ?
+                                            HalpDefaultInterruptAffinity :
+                                            KeQueryActiveProcessors();
+        if (RoutingInfo->Irql == 0)
+            RoutingInfo->Irql = HalpVectorToIrql((UCHAR)RoutingInfo->Vector);
+    }
+
+    TargetInfo.Version = HAL_INTERRUPT_TARGET_INFORMATION_VERSION;
+    TargetInfo.TargetProcessors = RoutingInfo->TargetProcessors;
+    TargetInfo.ProcessorNumber = 0;
+    TargetInfo.DestinationId = 0;
+    Status = HalGetInterruptTargetInformation(&TargetInfo);
+    if (!NT_SUCCESS(Status))
+        return Status;
+
+    RoutingInfo->TargetProcessors = TargetInfo.TargetProcessors;
+    RoutingInfo->DestinationId = TargetInfo.DestinationId;
+    RoutingInfo->MessageAddress.QuadPart = 0xFEE00000ULL |
+                                           ((ULONGLONG)TargetInfo.DestinationId << 12);
+    RoutingInfo->MessageData = (USHORT)(RoutingInfo->Vector & 0xFF);
+    return STATUS_SUCCESS;
 }
 
 KIRQL
@@ -139,8 +265,8 @@ HalpAllocateMsiVector(
             *OutIrql = AllocatedIrql;
             *OutAffinity = HalpDefaultInterruptAffinity;
 
-            DPRINT1("HalpAllocateMsiVector: Allocated vector 0x%02x for IRQL %d\n",
-                    Vector, AllocatedIrql);
+            DPRINT("HalpAllocateMsiVector: allocated vector 0x%02x at IRQL %d\n",
+                   Vector, AllocatedIrql);
 
             /* Release the spin lock and return success */
             KeReleaseSpinLock(&HalpMsiVectorLock, OldIrql);

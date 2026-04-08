@@ -405,46 +405,57 @@ HalpGetRootInterruptVector(
     _Out_ PKAFFINITY OutAffinity)
 {
     UCHAR Vector;
-    KIRQL Irql;
 
-    /* Get the vector currently registered */
+    /* The IOAPIC exposes APIC_MAX_IRQ GSIs. Bus interrupt levels
+     * outside that range cannot be routed by a line and must be
+     * rejected so the caller falls back to another allocation path
+     * (MSI, deferred, etc.) instead of producing a vector that would
+     * land in the MSI/MSI-X pool. */
+    if (BusInterruptLevel >= APIC_MAX_IRQ)
+    {
+        DPRINT1("HalpGetRootInterruptVector: out-of-range IRQ %lu (max %u)\n",
+                BusInterruptLevel, APIC_MAX_IRQ);
+        if (OutAffinity)
+            *OutAffinity = 0;
+        if (OutIrql)
+            *OutIrql = 0;
+        return 0;
+    }
+
+    /* If the IOAPIC redirection entry for this GSI is already
+     * programmed, reuse the existing vector. */
     Vector = HalpIrqToVector(BusInterruptLevel);
-
-    /* Check if it's used */
     if (Vector != APIC_FREE_VECTOR)
     {
-        /* Calculate IRQL */
         NT_ASSERT(HalpVectorToIndex[Vector] == BusInterruptLevel);
         *OutIrql = HalpVectorToIrql(Vector);
     }
     else
     {
-        ULONG Offset;
+        /* Use the fixed IRQ -> vector mapping:
+         *     Vector = PRIMARY_VECTOR_BASE + BusInterruptLevel
+         *
+         * With BusInterruptLevel validated above to be < APIC_MAX_IRQ,
+         * the result is bounded to
+         * [PRIMARY_VECTOR_BASE .. PRIMARY_VECTOR_BASE + APIC_MAX_IRQ),
+         * i.e. 0x30..0x47. This window is strictly disjoint from the
+         * MSI/MSI-X allocation pool (0x50..0xCF), so the two interrupt
+         * classes cannot collide by construction. */
+        Vector = (UCHAR)(PRIMARY_VECTOR_BASE + BusInterruptLevel);
 
-        /* Outer loop to find alternative slots, when all IRQLs are in use */
-        for (Offset = 0; Offset < 15; Offset++)
+        if (HalpVectorToIrq(Vector) != APIC_FREE_VECTOR)
         {
-            /* Loop allowed IRQL range */
-            for (Irql = CLOCK_LEVEL - 1; Irql >= CMCI_LEVEL; Irql--)
-            {
-                /* Calculate the vactor */
-                Vector = IrqlToTpr(Irql) + Offset;
-
-                /* Check if the vector is free */
-                if (HalpVectorToIrq(Vector) == APIC_FREE_VECTOR)
-                {
-                    /* Found one, allocate the interrupt */
-                    Vector = HalpAllocateSystemInterrupt(BusInterruptLevel, Vector);
-                    *OutIrql = Irql;
-                    goto Exit;
-                }
-            }
+            DPRINT1("HalpGetRootInterruptVector: vector 0x%x already claimed for IRQ %lu\n",
+                    Vector, BusInterruptLevel);
+            if (OutAffinity)
+                *OutAffinity = 0;
+            if (OutIrql)
+                *OutIrql = 0;
+            return 0;
         }
 
-        DPRINT1("Failed to get an interrupt vector for IRQ %lu\n", BusInterruptLevel);
-        *OutAffinity = 0;
-        *OutIrql = 0;
-        return 0;
+        Vector = HalpAllocateSystemInterrupt(BusInterruptLevel, Vector);
+        *OutIrql = HalpVectorToIrql(Vector);
     }
 
 Exit:

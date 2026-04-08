@@ -1589,12 +1589,11 @@ PiUpdateDeviceState(
     }
     else if (PnPFlags & PNP_DEVICE_RESOURCE_REQUIREMENTS_CHANGED)
     {
-        // Query resource rebalance
-
-        if (PnPFlags & PNP_DEVICE_FAILED)
-            DeviceNode->Flags &= DNF_NON_STOPPED_REBALANCE;
-        else
-            DeviceNode->Flags |= DNF_NON_STOPPED_REBALANCE;
+        /* ReactOS does not implement a true non-stopped rebalance yet.
+         * Route resource requirement changes through a full query-stop /
+         * stop / reassign / start cycle instead of pretending the live
+         * resource list was refreshed in place. */
+        DeviceNode->Flags &= ~DNF_NON_STOPPED_REBALANCE;
 
         // Clear DNF_NO_RESOURCE_REQUIRED just in case (will be set back if needed)
         DeviceNode->Flags &= ~DNF_NO_RESOURCE_REQUIRED;

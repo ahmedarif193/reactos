@@ -258,6 +258,41 @@ HalAllocateCrashDumpRegisters(
   _In_ PADAPTER_OBJECT AdapterObject,
   _Inout_ PULONG NumberOfMapRegisters);
 
+#if (NTDDI_VERSION >= NTDDI_WIN7)
+NTHALAPI
+KIRQL
+NTAPI
+HalConvertDeviceIdtToIrql(
+  _In_ ULONG Vector);
+
+NTHALAPI
+NTSTATUS
+NTAPI
+HalGetInterruptTargetInformation(
+  _Inout_ PHAL_INTERRUPT_TARGET_INFORMATION TargetInformation);
+
+NTHALAPI
+NTSTATUS
+NTAPI
+HalGetMessageRoutingInfo(
+  _Inout_ PHAL_MESSAGE_ROUTING_INFO RoutingInfo);
+
+NTHALAPI
+NTSTATUS
+NTAPI
+HalGetMemoryCachingRequirements(
+  _In_ PHYSICAL_ADDRESS BaseAddress,
+  _In_ SIZE_T Length,
+  _Out_ MEMORY_CACHING_TYPE *CacheType);
+
+NTHALAPI
+NTSTATUS
+NTAPI
+HalGetProcessorIdByNtNumber(
+  _In_ ULONG ProcessorNumber,
+  _Out_ PULONG ProcessorId);
+#endif
+
 NTSTATUS
 NTAPI
 HalGetScatterGatherList(
