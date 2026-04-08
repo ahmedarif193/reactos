@@ -111,23 +111,11 @@ Ndis6OidForward(
     InsertTailList(&Ext->OidWaiters, &Waiter.ListEntry);
     KeReleaseSpinLock(&Ext->OidWaiterLock, OldIrql);
 
-    DbgPrint("NDIS6-OID: forward Type=%d Oid=0x%08lx → driver\n",
-             Request->RequestType,
-             (Request->RequestType == NdisRequestQueryInformation)
-                 ? Request->DATA.QUERY_INFORMATION.Oid
-                 : Request->DATA.SET_INFORMATION.Oid);
-
     /* Phase 9D: route through the filter chain so any installed filters
      * see (and possibly modify/intercept) the OID before the miniport.
      * Ndis6FilterDispatchOidRequest short-circuits to the miniport when
      * no filters are attached. */
     Status = Ndis6FilterDispatchOidRequest(Ext->Adapter, &OidReq);
-
-    DbgPrint("NDIS6-OID: forward Oid=0x%08lx → driver returned 0x%08lx\n",
-             (Request->RequestType == NdisRequestQueryInformation)
-                 ? Request->DATA.QUERY_INFORMATION.Oid
-                 : Request->DATA.SET_INFORMATION.Oid,
-             (ULONG)Status);
 
     if (Status == NDIS_STATUS_PENDING)
     {
