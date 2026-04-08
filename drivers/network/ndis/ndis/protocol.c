@@ -604,19 +604,15 @@ ProSendPackets(
     NDIS_STATUS NdisStatus;
     UINT i;
 
-    /* dev-nt6-1: NDIS 6 adapters get the Phase 3 TX thunk. Loop over the
-     * packet array and hand each one to Ndis6TxSendPacket. Packets that
-     * return anything other than PENDING get an immediate MiniSendComplete
-     * so the legacy protocol's completion handler still runs. */
+    /* dev-nt6-1: NDIS 6 adapters get the Phase 3 TX thunk. B1: use the
+     * batched Ndis6TxSendPackets entry which wraps each NDIS_PACKET in
+     * an NBL, chains them via NET_BUFFER_LIST_NEXT_NBL, and hands the
+     * whole chain to the miniport's SendNetBufferListsHandler in ONE
+     * call. Failed wraps are completed synchronously inside the thunk. */
     if (Adapter->IsNdis6)
     {
-        extern NDIS_STATUS Ndis6TxSendPacket(PLOGICAL_ADAPTER, PNDIS_PACKET);
-        for (i = 0; i < NumberOfPackets; i++)
-        {
-            NDIS_STATUS TxStatus = Ndis6TxSendPacket(Adapter, PacketArray[i]);
-            if (TxStatus != NDIS_STATUS_PENDING)
-                MiniSendComplete(Adapter, PacketArray[i], TxStatus);
-        }
+        extern ULONG Ndis6TxSendPackets(PLOGICAL_ADAPTER, PPNDIS_PACKET, UINT);
+        Ndis6TxSendPackets(Adapter, PacketArray, NumberOfPackets);
         return;
     }
 

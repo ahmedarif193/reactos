@@ -196,8 +196,24 @@ E1000RegisterInterrupt(
                 }
                 else
                 {
-                    Adapter->InterruptMode = E1000InterruptModeMsi;
-                    DPRINT("E1000: SUCCESS - Registered single MSI vector (with MessageInfo)!\n");
+                    /* MessageCount == 1: this is either single-vector MSI-X
+                     * (PCIe with PciPdoEnableMsix programming the BAR3 table)
+                     * or plain MSI on a legacy device. On the 82574L the
+                     * difference matters for HARDWARE: even with one vector
+                     * the chip needs IVAR programmed to route RX/TX/Other
+                     * causes to that single MSI-X table entry. We treat
+                     * this as MSI-X on PCIe so the EnableInterrupts path
+                     * later writes EIMS/EIAC and we configure IVAR here. */
+                    if (Adapter->IsPCIe)
+                    {
+                        Adapter->InterruptMode = E1000InterruptModeMsix;
+                        DPRINT1("E1000: SUCCESS - Registered single MSI-X vector on PCIe (treating as MSI-X for IVAR/EIMS)!\n");
+                    }
+                    else
+                    {
+                        Adapter->InterruptMode = E1000InterruptModeMsi;
+                        DPRINT1("E1000: SUCCESS - Registered single MSI vector (legacy MSI)!\n");
+                    }
 
                     if (IntChars.MessageInfoTable->MessageInfo != NULL)
                     {
@@ -205,6 +221,15 @@ E1000RegisterInterrupt(
                             &IntChars.MessageInfoTable->MessageInfo[0];
                         DPRINT1("E1000:   Vector[0]: MessageAddr=0x%I64x, Data=0x%x, Vector=%u\n",
                                  Entry->MessageAddress.QuadPart, Entry->MessageData, Entry->Vector);
+                    }
+
+                    /* For 82574L (PCIe), the IVAR register must be programmed
+                     * regardless of MessageCount: causes won't reach the MSI-X
+                     * table without it. E1000ConfigureIvarRegisters handles
+                     * the single-vector layout when count == 1. */
+                    if (Adapter->IsPCIe)
+                    {
+                        E1000ConfigureIvarRegisters(Adapter, IntChars.MessageInfoTable);
                     }
                 }
             }
