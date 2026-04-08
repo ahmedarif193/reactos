@@ -453,12 +453,6 @@ VOID ProcessFragment(
     /* Hole list is empty which means a complete datagram can be assembled.
        Assemble the datagram and pass it to an upper layer protocol */
 
-    {
-        static volatile LONG ReasmCount = 0;
-        LONG rc = InterlockedIncrement(&ReasmCount);
-        if (rc <= 5) DbgPrint("TCPIP-IP: ProcessFragment #%ld complete\n", rc);
-    }
-
     RemoveIPDR(IPDR);
     TcpipReleaseSpinLock(&IPDR->Lock, OldIrql);
 
@@ -474,12 +468,6 @@ VOID ProcessFragment(
       return;
 
     DISPLAY_IP_PACKET(&Datagram);
-
-    {
-        static volatile LONG DispCount = 0;
-        LONG dc = InterlockedIncrement(&DispCount);
-        if (dc <= 5) DbgPrint("TCPIP-IP: → IPDispatchProtocol #%ld\n", dc);
-    }
 
     /* Give the packet to the protocol dispatcher */
     IPDispatchProtocol(IF, &Datagram);
@@ -572,12 +560,6 @@ VOID IPv4Receive(PIP_INTERFACE IF, PIP_PACKET IPPacket)
 {
     UCHAR FirstByte;
     ULONG BytesCopied;
-    static volatile LONG IPv4Count = 0;
-    LONG ic = InterlockedIncrement(&IPv4Count);
-
-    if (ic <= 5)
-        DbgPrint("TCPIP-IP: IPv4Receive #%ld TotalSize=%lu\n", ic, IPPacket->TotalSize);
-
     /* Read in the first IP header byte for size information */
     BytesCopied = CopyPacketToBuffer((PCHAR)&FirstByte,
                                      IPPacket->NdisPacket,
@@ -626,9 +608,6 @@ VOID IPv4Receive(PIP_INTERFACE IF, PIP_PACKET IPPacket)
 
     /* Checksum IPv4 header */
     if (!IPv4CorrectChecksum(IPPacket->Header, IPPacket->HeaderSize)) {
-        if (ic <= 5)
-            DbgPrint("TCPIP-IP: IPv4Receive #%ld BAD CHECKSUM 0x%04x\n", ic,
-                     WN2H(((PIPv4_HEADER)IPPacket->Header)->Checksum));
         /* Discard packet */
         return;
     }
@@ -637,12 +616,6 @@ VOID IPv4Receive(PIP_INTERFACE IF, PIP_PACKET IPPacket)
 
     AddrInitIPv4(&IPPacket->SrcAddr, ((PIPv4_HEADER)IPPacket->Header)->SrcAddr);
     AddrInitIPv4(&IPPacket->DstAddr, ((PIPv4_HEADER)IPPacket->Header)->DstAddr);
-
-    if (ic <= 5)
-        DbgPrint("TCPIP-IP: IPv4Receive #%ld src=0x%08x dst=0x%08x proto=%d\n", ic,
-                 ((PIPv4_HEADER)IPPacket->Header)->SrcAddr,
-                 ((PIPv4_HEADER)IPPacket->Header)->DstAddr,
-                 ((PIPv4_HEADER)IPPacket->Header)->Protocol);
 
     /* FIXME: Possibly forward packets with multicast addresses */
 

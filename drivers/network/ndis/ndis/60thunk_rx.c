@@ -71,42 +71,23 @@ Ndis6RxBuildLegacyPacket(
     ULONG        MdlSegmentSize;
     ULONG        MdlSegmentOffset;
     ULONG        ChainedMdls = 0;
-    static volatile LONG BuildCount = 0;
-    LONG bc;
-
     /* Note: RxLegacyBufferPool is always NULL because NdisAllocateBufferPool
      * is a no-op stub in the legacy library — NdisAllocateBuffer ignores
      * the handle and just calls IoAllocateMdl. Only the packet pool needs
      * to be non-NULL. */
     if (Ext->RxLegacyPacketPool == NULL)
-    {
-        DbgPrint("NDIS6-RX: BuildLegacyPacket NULL packet pool\n");
         return NULL;
-    }
 
     CurrentMdl = NET_BUFFER_CURRENT_MDL(Nb);
     DataOffset = NET_BUFFER_CURRENT_MDL_OFFSET(Nb);
     DataLength = NET_BUFFER_DATA_LENGTH(Nb);
 
-    bc = InterlockedIncrement(&BuildCount);
-    if (bc <= 5)
-        DbgPrint("NDIS6-RX: BuildLegacyPacket #%ld FirstMdl=%p Offset=%lu Length=%lu\n",
-                 bc, CurrentMdl, DataOffset, DataLength);
-
     if (CurrentMdl == NULL || DataLength == 0)
-    {
-        if (bc <= 5)
-            DbgPrint("NDIS6-RX: BuildLegacyPacket NULL Mdl or zero len — drop\n");
         return NULL;
-    }
 
     NdisAllocatePacket(&Status, &Packet, Ext->RxLegacyPacketPool);
     if (Status != NDIS_STATUS_SUCCESS || Packet == NULL)
-    {
-        if (bc <= 5)
-            DbgPrint("NDIS6-RX: NdisAllocatePacket failed 0x%08lx\n", (ULONG)Status);
         return NULL;
-    }
 
     /* A2: walk the NET_BUFFER MDL chain and chain a PNDIS_BUFFER per MDL.
      * The first MDL starts at NET_BUFFER_CURRENT_MDL_OFFSET; subsequent
@@ -142,8 +123,6 @@ Ndis6RxBuildLegacyPacket(
                            MdlSegmentSize);
         if (Status != NDIS_STATUS_SUCCESS || NdisBuffer == NULL)
         {
-            if (bc <= 5)
-                DbgPrint("NDIS6-RX: NdisAllocateBuffer failed 0x%08lx\n", (ULONG)Status);
             /* Tear down the partial chain we built before this failure,
              * then free the packet itself. */
             {
@@ -179,9 +158,6 @@ Ndis6RxBuildLegacyPacket(
 
     if (FirstBuffer == NULL || Remaining > 0)
     {
-        if (bc <= 5)
-            DbgPrint("NDIS6-RX: BuildLegacyPacket short chain (Remaining=%lu) — drop\n",
-                     Remaining);
         {
             PNDIS_BUFFER toFree = FirstBuffer;
             while (toFree != NULL)
@@ -194,10 +170,6 @@ Ndis6RxBuildLegacyPacket(
         NdisFreePacket(Packet);
         return NULL;
     }
-
-    if (bc <= 5 && ChainedMdls > 1)
-        DbgPrint("NDIS6-RX: BuildLegacyPacket #%ld chained %lu MDLs total=%lu\n",
-                 bc, ChainedMdls, DataLength);
 
     NdisChainBufferAtFront(Packet, FirstBuffer);
 
@@ -326,16 +298,8 @@ NdisMIndicateReceiveNetBufferLists(
     PLOGICAL_ADAPTER  Adapter = (PLOGICAL_ADAPTER)NdisMiniportHandle;
     PNET_BUFFER_LIST  CurrentNbl;
     PNET_BUFFER_LIST  NextNbl;
-    static volatile LONG RxCount = 0;
-    LONG MyCount;
-
     if (Adapter == NULL || !Adapter->IsNdis6 || NetBufferLists == NULL)
         return;
-
-    MyCount = InterlockedIncrement(&RxCount);
-    if (MyCount <= 30)
-        DbgPrint("NDIS6-RX: NdisMIndicateReceiveNetBufferLists #%ld NumNbls=%lu Flags=0x%lx\n",
-                 MyCount, NumberOfNetBufferLists, ReceiveFlags);
 
     /* Phase 8: walk the chain bottom→top — bottommost filter sees the
      * RX first, then up through each filter, finally to the terminal
@@ -375,9 +339,6 @@ Ndis6FilterTerminalReceive(
     PNET_BUFFER_LIST    CurrentNbl;
     PNET_BUFFER_LIST    NextNbl;
     BOOLEAN             ResourcesFlag;
-    static volatile LONG TermRxCount = 0;
-    LONG TermCount;
-
     UNREFERENCED_PARAMETER(PortNumber);
     UNREFERENCED_PARAMETER(NumberOfNetBufferLists);
 
@@ -387,14 +348,6 @@ Ndis6FilterTerminalReceive(
     Ext = NDIS6_EXT(Adapter);
     if (Ext == NULL)
         return;
-
-    TermCount = InterlockedIncrement(&TermRxCount);
-    if (TermCount <= 30)
-    {
-        BOOLEAN HasProto = !IsListEmpty(&Adapter->ProtocolListHead);
-        DbgPrint("NDIS6-RX: TerminalReceive #%ld HasProtocol=%d Flags=0x%lx\n",
-                 TermCount, HasProto, ReceiveFlags);
-    }
 
     ResourcesFlag = (ReceiveFlags & NDIS_RECEIVE_FLAGS_RESOURCES) != 0;
 
@@ -417,9 +370,6 @@ Ndis6FilterTerminalReceive(
                 PacketArray[PacketCount++] = LegacyPacket;
         }
 
-        if (TermCount <= 30)
-            DbgPrint("NDIS6-RX: TerminalReceive built PacketCount=%u\n", PacketCount);
-
         if (PacketCount == 0)
         {
             /* Nothing to indicate — return the NBL immediately via the
@@ -439,16 +389,6 @@ Ndis6FilterTerminalReceive(
          * for each protocol that holds the packet. Packets that no
          * protocol holds (refcount stays 0) need to be freed immediately
          * and counted as one fewer outstanding NBL ref. */
-        {
-            static volatile LONG IndicateCount = 0;
-            LONG ic = InterlockedIncrement(&IndicateCount);
-            if (ic <= 5)
-            {
-                BOOLEAN HasProto = !IsListEmpty(&Adapter->ProtocolListHead);
-                DbgPrint("NDIS6-RX: MiniIndicateReceivePacket #%ld PacketCount=%u HasProtocol=%d\n",
-                         ic, PacketCount, HasProto);
-            }
-        }
         MiniIndicateReceivePacket((NDIS_HANDLE)Adapter, PacketArray, PacketCount);
 
         /* B3: RESOURCES path — the miniport needs the NBL back before
