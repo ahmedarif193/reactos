@@ -82,17 +82,6 @@ DGDeliverData(
 
     LockObject(AddrFile);
 
-    {
-        static volatile LONG DgCount = 0;
-        LONG dc = InterlockedIncrement(&DgCount);
-        if (dc <= 10)
-            DbgPrint("TCPIP-DG: DGDeliverData #%ld AddrFile=%p RecvQueueEmpty=%d Handler=%p Registered=%d\n",
-                     dc, AddrFile,
-                     IsListEmpty(&AddrFile->ReceiveQueue),
-                     AddrFile->ReceiveDatagramHandler,
-                     AddrFile->RegisteredReceiveDatagramHandler);
-    }
-
     if (AddrFile->Protocol == IPPROTO_UDP)
     {
         DataBuffer = IPPacket->Data;
@@ -112,14 +101,6 @@ DGDeliverData(
         PLIST_ENTRY CurrentEntry;
         PDATAGRAM_RECEIVE_REQUEST Current = NULL;
         PTA_IP_ADDRESS RTAIPAddress;
-        static volatile LONG MatchCount = 0;
-        LONG mc = InterlockedIncrement(&MatchCount);
-
-        if (mc <= 10)
-            DbgPrint("TCPIP-DG: queue scan AfPort=%u DstPort=%u AfAddr=0x%08x DstAddr=0x%08x\n",
-                     WN2H(AddrFile->Port), WN2H(DstPort),
-                     AddrFile->Address.Address.IPv4Address,
-                     DstAddress->Address.IPv4Address);
 
         /* Search receive request list to find a match */
         CurrentEntry = AddrFile->ReceiveQueue.Flink;
@@ -132,10 +113,6 @@ DGDeliverData(
                 AddrIsUnspecified(&AddrFile->Address) ||
                 AddrIsUnspecified(DstAddress)))
             {
-                if (mc <= 10)
-                    DbgPrint("TCPIP-DG: MATCH — delivering to recv request %p buf=%p sz=%lu\n",
-                             Current, Current->Buffer, Current->BufferSize);
-
                 /* Remove the request from the queue */
                 RemoveEntryList(&Current->ListEntry);
 
