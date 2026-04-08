@@ -101,6 +101,9 @@ BusType = 5 ; PCIBus
 AddReg = E1000_AddReg.NT
 CopyFiles = E1000_CopyFiles.NT
 
+[E1000_Inst.ndi.NT.HW]
+AddReg = E1000_HwAddReg.NT
+
 [E1000_CopyFiles.NT]
 e1000e.sys
 
@@ -108,6 +111,11 @@ e1000e.sys
 HKR, Ndi,            Service,    0, "e1000e"
 HKR, Ndi\Interfaces, UpperRange, 0, "ndis5"
 HKR, Ndi\Interfaces, LowerRange, 0, "ethernet"
+
+[E1000_HwAddReg.NT]
+HKR, Interrupt Management,,0x00000010
+HKR, Interrupt Management\MessageSignaledInterruptProperties,,0x00000010
+HKR, Interrupt Management\MessageSignaledInterruptProperties,MSISupported,0x00010001,1
 
 [E1000_Inst.ndi.NT.Services]
 AddService = e1000e, 0x00000002, E1000_Service_Inst
