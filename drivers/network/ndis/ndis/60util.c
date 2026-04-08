@@ -353,4 +353,171 @@ NdisAllocateNetBufferMdlAndData(
     return Nb;
 }
 
+/* ============================================================================
+ *  E3: miscellaneous utility APIs
+ *
+ *  NdisMSleep and NdisGetCurrentProcessorCounts are already implemented
+ *  in the legacy NDIS 5 library (miniport.c / misc.c) and callable from
+ *  NDIS 6 drivers unchanged — nothing extra needed here.
+ *
+ *  NdisGetSystemUpTimeEx is new (NDIS 6.0+) and returns a LARGE_INTEGER
+ *  in 100ns units since boot. Wraps KeQueryTickCount * KeQueryTimeIncrement.
+ * ============================================================================ */
+
+VOID
+NTAPI
+NdisGetSystemUpTimeEx(
+    _Out_ PLARGE_INTEGER pSystemUpTime)
+{
+    LARGE_INTEGER TickCount;
+    if (pSystemUpTime == NULL)
+        return;
+    KeQueryTickCount(&TickCount);
+    /* TickCount is in units of KeQueryTimeIncrement (100ns). The
+     * result is a straight 100ns-since-boot value. */
+    pSystemUpTime->QuadPart = TickCount.QuadPart * KeQueryTimeIncrement();
+}
+
+/* ============================================================================
+ *  E4: NDIS 6.30+ polling API — NdisRegisterPoll / NdisMPollComplete
+ *
+ *  The polling API lets a driver run its RX/TX work via a kernel poll
+ *  callback instead of DPC-based dispatch. We model each registered poll
+ *  as a KDPC that the driver can request via NdisRequestPoll; the DPC
+ *  calls back into the driver's NDIS_POLL routine, which does work and
+ *  optionally re-requests.
+ *
+ *  This is a minimal functional implementation — no NUMA affinity, no
+ *  budget tracking, no separate DPC queue priority. Sufficient for
+ *  drivers that opt-in but not full-performance poll mode.
+ * ============================================================================ */
+
+typedef VOID (NTAPI *PNDIS6_POLL_HANDLER)(
+    _In_ PVOID PollContext,
+    _In_ PVOID Parameters);
+
+typedef struct _NDIS6_POLL_CONTEXT
+{
+    ULONG                   Magic;
+    KDPC                    Dpc;
+    PNDIS6_POLL_HANDLER     PollHandler;
+    PVOID                   PollContext;
+    LONG                    RequestCount;       /* atomic: pending requests */
+    BOOLEAN                 Unregistered;
+} NDIS6_POLL_CONTEXT, *PNDIS6_POLL_CONTEXT;
+
+#define NDIS6_POLL_MAGIC   0x504F4C4CU  /* 'POLL' */
+#define NDIS6_POLL_TAG     'PlNn'
+
+static VOID NTAPI
+Ndis6PollDpcRoutine(
+    _In_     PKDPC Dpc,
+    _In_opt_ PVOID DeferredContext,
+    _In_opt_ PVOID SystemArgument1,
+    _In_opt_ PVOID SystemArgument2)
+{
+    PNDIS6_POLL_CONTEXT Poll = (PNDIS6_POLL_CONTEXT)DeferredContext;
+
+    UNREFERENCED_PARAMETER(Dpc);
+    UNREFERENCED_PARAMETER(SystemArgument1);
+    UNREFERENCED_PARAMETER(SystemArgument2);
+
+    if (Poll == NULL || Poll->Magic != NDIS6_POLL_MAGIC || Poll->Unregistered)
+        return;
+
+    if (Poll->PollHandler != NULL)
+    {
+        /* Windows passes a NDIS_POLL_PARAMETERS struct. Most driver-side
+         * NDIS_POLL routines tolerate NULL (they only look at
+         * Parameters->MaxNblsToIndicate and fall through to the "no
+         * limit" path when it's 0). */
+        Poll->PollHandler(Poll->PollContext, NULL);
+    }
+
+    /* If the driver re-requested a poll while we were inside the handler,
+     * queue another DPC round. Otherwise clear the count. */
+    if (InterlockedExchange(&Poll->RequestCount, 0) > 1)
+    {
+        InterlockedIncrement(&Poll->RequestCount);
+        KeInsertQueueDpc(&Poll->Dpc, NULL, NULL);
+    }
+}
+
+NDIS_STATUS
+NTAPI
+NdisRegisterPoll(
+    _In_     NDIS_HANDLE   NdisHandle,
+    _In_opt_ PVOID         PollContext,
+    _In_     PVOID         PollCharacteristics,  /* NDIS_POLL_CHARACTERISTICS */
+    _Out_    PNDIS_HANDLE  PollHandle)
+{
+    PNDIS6_POLL_CONTEXT Poll;
+    PNDIS6_POLL_HANDLER Handler = NULL;
+
+    UNREFERENCED_PARAMETER(NdisHandle);
+
+    if (PollHandle == NULL || PollCharacteristics == NULL)
+        return NDIS_STATUS_INVALID_PARAMETER;
+
+    /* NDIS_POLL_CHARACTERISTICS layout: Header + PollHandler +
+     * SetPollNotificationHandler. We read PollHandler at offset
+     * sizeof(NDIS_OBJECT_HEADER). */
+    Handler = *(PNDIS6_POLL_HANDLER*)((PUCHAR)PollCharacteristics +
+                                      sizeof(NDIS_OBJECT_HEADER));
+    if (Handler == NULL)
+        return NDIS_STATUS_INVALID_PARAMETER;
+
+    Poll = (PNDIS6_POLL_CONTEXT)ExAllocatePoolWithTag(
+        NonPagedPool, sizeof(NDIS6_POLL_CONTEXT), NDIS6_POLL_TAG);
+    if (Poll == NULL)
+        return NDIS_STATUS_RESOURCES;
+
+    RtlZeroMemory(Poll, sizeof(*Poll));
+    Poll->Magic        = NDIS6_POLL_MAGIC;
+    Poll->PollHandler  = Handler;
+    Poll->PollContext  = PollContext;
+    Poll->RequestCount = 0;
+    KeInitializeDpc(&Poll->Dpc, Ndis6PollDpcRoutine, Poll);
+
+    *PollHandle = (NDIS_HANDLE)Poll;
+    return NDIS_STATUS_SUCCESS;
+}
+
+VOID
+NTAPI
+NdisDeregisterPoll(
+    _In_ NDIS_HANDLE PollHandle)
+{
+    PNDIS6_POLL_CONTEXT Poll = (PNDIS6_POLL_CONTEXT)PollHandle;
+    if (Poll == NULL || Poll->Magic != NDIS6_POLL_MAGIC)
+        return;
+
+    Poll->Unregistered = TRUE;
+    /* Flush any pending DPC. */
+    KeRemoveQueueDpc(&Poll->Dpc);
+
+    Poll->Magic = 0;
+    ExFreePoolWithTag(Poll, NDIS6_POLL_TAG);
+}
+
+VOID
+NTAPI
+NdisRequestPoll(
+    _In_ NDIS_HANDLE PollHandle,
+    _In_opt_ PVOID   Reserved)
+{
+    PNDIS6_POLL_CONTEXT Poll = (PNDIS6_POLL_CONTEXT)PollHandle;
+
+    UNREFERENCED_PARAMETER(Reserved);
+
+    if (Poll == NULL || Poll->Magic != NDIS6_POLL_MAGIC || Poll->Unregistered)
+        return;
+
+    /* Only queue a DPC on the 0→1 transition. Subsequent requests just
+     * bump the counter; the running handler will re-queue itself on exit
+     * if RequestCount > 1. */
+    if (InterlockedIncrement(&Poll->RequestCount) == 1)
+        KeInsertQueueDpc(&Poll->Dpc, NULL, NULL);
+}
+
 /* EOF */

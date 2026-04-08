@@ -114,9 +114,34 @@ typedef struct _NDIS6_ADAPTER_EXT
     NDIS_MINIPORT_INTERRUPT_CHARACTERISTICS IntChars;
     NDIS_HANDLE                     MiniportInterruptContext;
 
+    /* C1: MSI/MSI-X support. If NdisMRegisterInterruptEx requested a
+     * message-based connection, we used IoConnectInterruptEx which
+     * returned an IO_INTERRUPT_MESSAGE_INFO table with one entry per
+     * message vector. MsiTable is that pointer (or NULL for line-based). */
+    PIO_INTERRUPT_MESSAGE_INFO      MsiTable;
+    BOOLEAN                         MsiConnected;
+
     /* DMA adapter for AllocateCommonBuffer / scatter-gather. */
     struct _DMA_ADAPTER*            DmaAdapter;
     ULONG                           NumberOfMapRegisters;
+
+    /* A3: SG DMA description the driver passed via
+     * NdisMRegisterScatterGatherDma. We need ProcessSGListHandler +
+     * MaximumPhysicalMapping saved so NdisMAllocateNetBufferSGList
+     * can call the driver back when the SGL is ready. */
+    NDIS_SG_DMA_DESCRIPTION         SgDescription;
+    BOOLEAN                         SgDescriptionValid;
+
+    /* B2: offload capabilities the driver reported via
+     * NdisMSetMiniportAttributes(OFFLOAD). Saved as raw pointers into
+     * the driver's own memory — the miniport contract requires drivers
+     * to keep the offload state alive for the adapter's lifetime.
+     * The legacy OID dispatcher reads fields out of these via
+     * unchecked pointer arithmetic; we don't redeclare NDIS_OFFLOAD
+     * locally because it's large (~256 bytes) and version-dependent. */
+    PVOID                           OffloadHwPtr;
+    PVOID                           OffloadDefaultPtr;
+    BOOLEAN                         OffloadValid;
 
     /* Phase 3 TX thunk: NBL pool used to wrap legacy NDIS_PACKETs when
      * forwarding sends from a legacy NDIS 5 protocol (tcpip.sys) into an
@@ -127,6 +152,23 @@ typedef struct _NDIS6_ADAPTER_EXT
     NDIS_HANDLE                     TxWrapperNblPool;
     LIST_ENTRY                      InFlightNblsTx;
     KSPIN_LOCK                      TxLookupLock;
+
+    /* A1: HaltEx send drain. TxInFlightCount tracks the number of wrapper
+     * NBLs on InFlightNblsTx. TxDrainEvent is signaled each time the count
+     * decrements; HaltEx waits on it with a timeout until the count reaches
+     * zero, preventing MiniSendComplete from firing on a torn-down adapter. */
+    LONG                            TxInFlightCount;
+    KEVENT                          TxDrainEvent;
+
+    /* A4: Pause/Restart state machine. PauseState is PAUSED / RUNNING /
+     * PAUSING / RESTARTING. PauseEvent is signaled when an async pause
+     * completes (via NdisMPauseComplete). Drivers can return PENDING
+     * from their PauseHandler / RestartHandler; we wait on the event. */
+    ULONG                           PauseState;
+    KEVENT                          PauseEvent;     /* pause complete */
+    KEVENT                          RestartEvent;   /* restart complete */
+    NDIS_STATUS                     PauseStatus;
+    NDIS_STATUS                     RestartStatus;
 
     /* Phase 3 OID thunk: per-adapter waiter list. When a legacy NDIS 5
      * protocol calls NdisRequest with a set-OID (or an unknown query),
@@ -167,6 +209,12 @@ typedef struct _NDIS6_FILTER_MODULE
     struct _NDIS6_FILTER_DRIVER_BLOCK*      DriverBlock;
     PLOGICAL_ADAPTER                        Adapter;
     NDIS_HANDLE                             FilterModuleContext;
+    /* D5: attributes the filter set via NdisFSetAttributes. The
+     * NDIS_FILTER_ATTRIBUTES struct is just Header + Flags; we copy
+     * them through so any future chain walk can honor Flags bits
+     * like NDIS_FILTER_ATTRIBUTES_MANDATORY. */
+    ULONG                                   Flags;
+    BOOLEAN                                 AttributesValid;
 } NDIS6_FILTER_MODULE, *PNDIS6_FILTER_MODULE;
 
 /* ============================================================================
@@ -210,6 +258,23 @@ VOID
 Ndis6CallMiniportHaltEx(
     _In_ PLOGICAL_ADAPTER       Adapter,
     _In_ NDIS_HALT_ACTION       HaltAction);
+
+/* A4: Pause/Restart state-machine helpers. Called around filter
+ * attach/detach, HaltEx, and power transitions. Both wait on the
+ * respective event if the driver returned PENDING. */
+NDIS_STATUS
+Ndis6CallMiniportPauseEx(
+    _In_ PLOGICAL_ADAPTER       Adapter);
+
+NDIS_STATUS
+Ndis6CallMiniportRestartEx(
+    _In_ PLOGICAL_ADAPTER       Adapter);
+
+/* PauseState constants — stored in NDIS6_ADAPTER_EXT.PauseState. */
+#define NDIS6_PAUSE_STATE_RUNNING     0
+#define NDIS6_PAUSE_STATE_PAUSING     1
+#define NDIS6_PAUSE_STATE_PAUSED      2
+#define NDIS6_PAUSE_STATE_RESTARTING  3
 
 /* 60io.c */
 NDIS_STATUS
@@ -495,7 +560,23 @@ typedef struct _NDIS6_PROTOCOL_BINDING
     PNDIS6_PROTOCOL_DRIVER_BLOCK            DriverBlock;
     PLOGICAL_ADAPTER                        Adapter;
     NDIS_HANDLE                             ProtocolBindingContext;
+    /* D4: list of in-flight async OID requests issued by this protocol
+     * binding. Each pending NdisOidRequest adds an entry; the matching
+     * NdisMOidRequestComplete walks it to find the binding to notify. */
+    LIST_ENTRY                              PendingOidRequests;
+    KSPIN_LOCK                              PendingOidRequestsLock;
 } NDIS6_PROTOCOL_BINDING, *PNDIS6_PROTOCOL_BINDING;
+
+/* D4: per-async-OID context. Stashed in OidRequest->RequestId by
+ * NdisOidRequest so NdisMOidRequestComplete can find the binding +
+ * original RequestId and call the protocol's OidRequestCompleteHandler. */
+typedef struct _NDIS6_PROTOCOL_PENDING_OID
+{
+    LIST_ENTRY                              ListEntry;
+    struct _NDIS6_PROTOCOL_BINDING*         Binding;
+    PVOID                                   OriginalRequestId;
+    PNDIS_OID_REQUEST                       OidRequest;
+} NDIS6_PROTOCOL_PENDING_OID, *PNDIS6_PROTOCOL_PENDING_OID;
 
 extern LIST_ENTRY g_Ndis6ProtocolDriverList;
 extern KSPIN_LOCK g_Ndis6ProtocolDriverListLock;
