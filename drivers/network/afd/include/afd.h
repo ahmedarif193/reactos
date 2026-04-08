@@ -107,6 +107,13 @@ typedef struct IPADDR_ENTRY {
 typedef struct _AFD_MAPBUF {
     PVOID BufferAddress;
     PMDL  Mdl;
+    /* dev-nt6-1: original user-mode pointer. LockBuffers stashes the user
+     * pointer here so UnlockBuffers can SEH-copy the kernel-pool staging
+     * buffer back to user space at the end of a RECV operation. We can't
+     * reuse BufferAddress for this because SatisfyPacketRecvRequest,
+     * TryToSatisfyRecvRequestFromBuffer, and the send path in write.c all
+     * overwrite BufferAddress with a transient MmMapLockedPages result. */
+    PVOID OriginalUserBuffer;
 } AFD_MAPBUF, *PAFD_MAPBUF;
 
 typedef struct _AFD_DEVICE_EXTENSION {
