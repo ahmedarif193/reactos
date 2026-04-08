@@ -240,8 +240,11 @@ NdisMOidRequestComplete(
 {
     PLOGICAL_ADAPTER    Adapter = (PLOGICAL_ADAPTER)NdisMiniportHandle;
     PNDIS6_ADAPTER_EXT  Ext;
+    PVOID               RequestId;
     PNDIS6_OID_WAITER   Waiter;
     KIRQL               OldIrql;
+    PLIST_ENTRY         entry;
+    BOOLEAN             IsProtocolPending;
 
     if (Adapter == NULL || !Adapter->IsNdis6 || OidRequest == NULL)
         return;
@@ -250,21 +253,72 @@ NdisMOidRequestComplete(
     if (Ext == NULL)
         return;
 
-    Waiter = (PNDIS6_OID_WAITER)OidRequest->RequestId;
-    if (Waiter == NULL)
+    RequestId = OidRequest->RequestId;
+    if (RequestId == NULL)
         return;
 
+    /* Two possible RequestId types:
+     *   1. PNDIS6_OID_WAITER — a legacy-NDIS-5 forwarded request. Signal
+     *      the event and let Ndis6OidForward wake up.
+     *   2. PNDIS6_PROTOCOL_PENDING_OID — a native NDIS 6 protocol async
+     *      request. Restore the original RequestId, pop the entry, and
+     *      call the protocol's OidRequestCompleteHandler.
+     *
+     * We disambiguate by walking the legacy waiter list first (cheap,
+     * one spinlock) — if found, treat as case 1. Otherwise case 2. */
+
+    IsProtocolPending = TRUE;
     KeAcquireSpinLock(&Ext->OidWaiterLock, &OldIrql);
-    if (Waiter->ListEntry.Flink != NULL && Waiter->ListEntry.Blink != NULL)
+    for (entry = Ext->OidWaiters.Flink;
+         entry != &Ext->OidWaiters;
+         entry = entry->Flink)
     {
-        RemoveEntryList(&Waiter->ListEntry);
-        Waiter->ListEntry.Flink = NULL;
-        Waiter->ListEntry.Blink = NULL;
+        Waiter = CONTAINING_RECORD(entry, NDIS6_OID_WAITER, ListEntry);
+        if ((PVOID)Waiter == RequestId)
+        {
+            IsProtocolPending = FALSE;
+            RemoveEntryList(&Waiter->ListEntry);
+            Waiter->ListEntry.Flink = NULL;
+            Waiter->ListEntry.Blink = NULL;
+            break;
+        }
     }
     KeReleaseSpinLock(&Ext->OidWaiterLock, OldIrql);
 
-    Waiter->CompletionStatus = Status;
-    KeSetEvent(&Waiter->Event, IO_NO_INCREMENT, FALSE);
+    if (!IsProtocolPending)
+    {
+        Waiter->CompletionStatus = Status;
+        KeSetEvent(&Waiter->Event, IO_NO_INCREMENT, FALSE);
+        return;
+    }
+
+    /* D4: native protocol async completion. */
+    {
+        PNDIS6_PROTOCOL_PENDING_OID Pending = (PNDIS6_PROTOCOL_PENDING_OID)RequestId;
+        PNDIS6_PROTOCOL_BINDING     Binding;
+        KIRQL                       BIrql;
+
+        if (Pending == NULL)
+            return;
+        Binding = Pending->Binding;
+        if (Binding == NULL || Binding->DriverBlock == NULL)
+            return;
+
+        /* Remove the pending entry from the binding's list. */
+        KeAcquireSpinLock(&Binding->PendingOidRequestsLock, &BIrql);
+        RemoveEntryList(&Pending->ListEntry);
+        KeReleaseSpinLock(&Binding->PendingOidRequestsLock, BIrql);
+
+        /* Restore the protocol's original RequestId and call its
+         * completion handler. */
+        OidRequest->RequestId = Pending->OriginalRequestId;
+        if (Binding->DriverBlock->Characteristics.OidRequestCompleteHandler != NULL)
+        {
+            Binding->DriverBlock->Characteristics.OidRequestCompleteHandler(
+                Binding->ProtocolBindingContext, OidRequest, Status);
+        }
+        ExFreePoolWithTag(Pending, 'dOPn');
+    }
 }
 
 /* ============================================================================
@@ -305,15 +359,42 @@ Ndis6LegacyDoRequest(
 
         switch (Oid)
         {
+        case 0x0001021E:    /* OID_GEN_RECEIVE_SCALE_CAPABILITIES */
+        {
+            /* E5: advertise single-queue RSS capabilities. Drivers that
+             * support RSS will call back into NdisMSetMiniportAttributes
+             * with an NDIS_OBJECT_TYPE_DEFAULT attrs of type
+             * NDIS_RECEIVE_SCALE_CAPABILITIES. For query, we return
+             * a single-queue capability so the caller knows RSS is
+             * recognised without actually doing multi-queue. */
+            UCHAR* rss = (UCHAR*)Buffer;
+            if (BufferLen < 32)
+            {
+                Request->DATA.QUERY_INFORMATION.BytesNeeded = 32;
+                return NDIS_STATUS_BUFFER_TOO_SHORT;
+            }
+            RtlZeroMemory(rss, 32);
+            *(PUSHORT)(rss + 0)  = NDIS_OBJECT_TYPE_DEFAULT;
+            *(PUCHAR) (rss + 2)  = 1;      /* Revision */
+            *(PUSHORT)(rss + 4)  = 32;     /* Size */
+            /* CapabilitiesFlags=0 NumberOfInterruptMessages=0
+             * NumberOfReceiveQueues=1 NumberOfIndirectionTableEntries=0 */
+            *(PULONG)(rss + 16) = 1;       /* NumberOfReceiveQueues */
+            Request->DATA.QUERY_INFORMATION.BytesWritten = 32;
+            return NDIS_STATUS_SUCCESS;
+        }
+
         case OID_GEN_MAXIMUM_SEND_PACKETS:
             if (BufferLen < sizeof(ULONG))
             {
                 Request->DATA.QUERY_INFORMATION.BytesNeeded = sizeof(ULONG);
                 return NDIS_STATUS_BUFFER_TOO_SHORT;
             }
-            /* e1000e in our bridge currently accepts one NBL at a time;
-             * revisit when 60thunk.c batches sends. */
-            *(PULONG)Buffer = 1;
+            /* B1: batch up to 64 sends per miniport call. The bridge's
+             * TX thunk handles chained NBLs and the driver's
+             * SendNetBufferListsHandler sees the whole batch in one
+             * invocation — critical for gigabit line-rate sends. */
+            *(PULONG)Buffer = 64;
             Request->DATA.QUERY_INFORMATION.BytesWritten = sizeof(ULONG);
             return NDIS_STATUS_SUCCESS;
 
@@ -501,6 +582,73 @@ Ndis6LegacyDoRequest(
     default:
         return NDIS_STATUS_NOT_SUPPORTED;
     }
+}
+
+/* ============================================================================
+ *  A5: NdisMCancelOidRequest / NdisCancelOidRequest
+ *
+ *  Walk Ext->OidWaiters and signal the matching waiter with
+ *  NDIS_STATUS_REQUEST_ABORTED. Also forward to the driver's
+ *  CancelOidRequestHandler if it has one so the driver can drop
+ *  any in-progress async OID work.
+ * ============================================================================ */
+
+VOID
+NTAPI
+NdisMCancelOidRequest(
+    _In_ NDIS_HANDLE NdisMiniportHandle,
+    _In_ PVOID       RequestId)
+{
+    PLOGICAL_ADAPTER    Adapter = (PLOGICAL_ADAPTER)NdisMiniportHandle;
+    PNDIS6_ADAPTER_EXT  Ext;
+    PLIST_ENTRY         entry;
+    KIRQL               OldIrql;
+
+    if (Adapter == NULL || !Adapter->IsNdis6)
+        return;
+
+    Ext = NDIS6_EXT(Adapter);
+    if (Ext == NULL)
+        return;
+
+    /* Forward to the driver first so it knows to stop any hardware
+     * OID processing tied to this RequestId. */
+    if (Ext->DriverBlock != NULL &&
+        Ext->DriverBlock->Characteristics.CancelOidRequestHandler != NULL &&
+        Ext->MiniportAdapterContext != NULL)
+    {
+        Ext->DriverBlock->Characteristics.CancelOidRequestHandler(
+            Ext->MiniportAdapterContext, RequestId);
+    }
+
+    /* Walk the waiter list and signal any entry whose OID request
+     * matches the cancel ID. The legacy-request forwarder stashes its
+     * own waiter pointer as RequestId (not a caller id), but RequestId
+     * in an OID_REQUEST is caller-opaque, so we scan for pointer match. */
+    KeAcquireSpinLock(&Ext->OidWaiterLock, &OldIrql);
+    for (entry = Ext->OidWaiters.Flink;
+         entry != &Ext->OidWaiters;
+         entry = entry->Flink)
+    {
+        PNDIS6_OID_WAITER w = CONTAINING_RECORD(entry, NDIS6_OID_WAITER, ListEntry);
+        if (w->OidRequest != NULL && w->OidRequest->RequestId == RequestId)
+        {
+            w->CompletionStatus = NDIS_STATUS_REQUEST_ABORTED;
+            KeSetEvent(&w->Event, IO_NO_INCREMENT, FALSE);
+        }
+    }
+    KeReleaseSpinLock(&Ext->OidWaiterLock, OldIrql);
+}
+
+VOID
+NTAPI
+NdisCancelOidRequest(
+    _In_ NDIS_HANDLE NdisBindingHandle,
+    _In_ PVOID       RequestId)
+{
+    /* Native NDIS 6 protocol path. The binding handle doubles as the
+     * adapter pointer in our scheme; forward to the miniport path. */
+    NdisMCancelOidRequest(NdisBindingHandle, RequestId);
 }
 
 /* EOF */
