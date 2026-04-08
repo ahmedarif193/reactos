@@ -280,6 +280,17 @@ NdisReturnPackets(
 
             NDIS_DbgPrint(MAX_TRACE, ("Freeing packet %d (adapter = 0x%p)\n", i, Adapter));
 
+            /* dev-nt6-1: NDIS 6 adapters route returns through the
+             * Phase 3 RX thunk. The legacy ReturnPacketHandler is NULL
+             * for them — defer to the bridge which decrements the per-NBL
+             * refcount and possibly returns the NBL to the miniport. */
+            if (Adapter->IsNdis6)
+            {
+                extern VOID Ndis6RxReturnLegacyPacket(PNDIS_PACKET);
+                Ndis6RxReturnLegacyPacket(PacketsToReturn[i]);
+                continue;
+            }
+
             KeRaiseIrql(DISPATCH_LEVEL, &OldIrql);
             Adapter->NdisMiniportBlock.DriverHandle->MiniportCharacteristics.ReturnPacketHandler(
                   Adapter->NdisMiniportBlock.MiniportAdapterContext,
@@ -875,6 +886,19 @@ MiniCheckForHang( PLOGICAL_ADAPTER Adapter )
    BOOLEAN Ret = FALSE;
    KIRQL OldIrql;
 
+   /* dev-nt6-1: NDIS 6 adapters route CheckForHang through the NDIS 6
+    * CheckForHangHandlerEx in the driver block characteristics. e1000e
+    * and usbrndis don't register one; other drivers may. Helper lives
+    * in 60oid.c so this file doesn't need NDIS 6 struct visibility. */
+   if (Adapter->IsNdis6)
+   {
+       extern BOOLEAN Ndis6CallCheckForHangHandlerEx(PLOGICAL_ADAPTER);
+       KeRaiseIrql(DISPATCH_LEVEL, &OldIrql);
+       Ret = Ndis6CallCheckForHangHandlerEx(Adapter);
+       KeLowerIrql(OldIrql);
+       return Ret;
+   }
+
    KeRaiseIrql(DISPATCH_LEVEL, &OldIrql);
    if (Adapter->NdisMiniportBlock.DriverHandle->MiniportCharacteristics.CheckForHangHandler)
        Ret = (*Adapter->NdisMiniportBlock.DriverHandle->MiniportCharacteristics.CheckForHangHandler)(
@@ -918,6 +942,15 @@ MiniReset(
        return NDIS_STATUS_PENDING;
    }
 
+   /* dev-nt6-1: NDIS 6 adapters use ResetHandlerEx via the bridge helper.
+    * Returns NOT_SUPPORTED if the driver didn't register one — legacy
+    * protocols tolerate this. Pause/Restart-based reset is Phase 6. */
+   if (Adapter->IsNdis6)
+   {
+       extern NDIS_STATUS Ndis6CallResetHandlerEx(PLOGICAL_ADAPTER, BOOLEAN*);
+       return Ndis6CallResetHandlerEx(Adapter, &AddressingReset);
+   }
+
    NdisMIndicateStatus(Adapter, NDIS_STATUS_RESET_START, NULL, 0);
    NdisMIndicateStatusComplete(Adapter);
 
@@ -953,6 +986,12 @@ MiniportHangDpc(
         PVOID SystemArgument2)
 {
   PLOGICAL_ADAPTER Adapter = DeferredContext;
+
+  /* dev-nt6-1: NDIS 6 adapters never have the legacy WakeUpDpcTimer
+   * armed (the bridge never starts it). If we somehow get here for an
+   * NDIS 6 adapter, bail. */
+  if (Adapter && Adapter->IsNdis6)
+      return;
 
   if (MiniCheckForHang(Adapter)) {
       NDIS_DbgPrint(MIN_TRACE, ("Miniport detected adapter hang\n"));
@@ -1120,6 +1159,17 @@ MiniDoRequest(
     KIRQL OldIrql;
     NDIS_DbgPrint(DEBUG_MINIPORT, ("Called.\n"));
 
+    /* dev-nt6-1: NDIS 6 adapters don't carry a legacy DriverHandle, so
+     * the classic dereference below would crash on a NULL pointer. Serve
+     * the request from the NDIS 6 bridge's cached attributes instead. */
+    if (Adapter->IsNdis6)
+    {
+        extern NDIS_STATUS Ndis6LegacyDoRequest(PLOGICAL_ADAPTER, PNDIS_REQUEST);
+        Status = Ndis6LegacyDoRequest(Adapter, NdisRequest);
+        MiniWorkItemComplete(Adapter, NdisWorkItemRequest);
+        return Status;
+    }
+
     KeRaiseIrql(DISPATCH_LEVEL, &OldIrql);
 
     KeAcquireSpinLockAtDpcLevel(&Adapter->NdisMiniportBlock.Lock);
@@ -1248,6 +1298,18 @@ MiniportWorker(IN PDEVICE_OBJECT DeviceObject, IN PVOID Context)
              * called by ProSend when protocols want to send packets to the miniport
              */
 
+            /* dev-nt6-1: NDIS 6 adapters route through the Phase 3 TX
+             * thunk. Drop into Ndis6TxSendPacket; if it doesn't return
+             * PENDING, signal MiniSendComplete here. */
+            if (Adapter->IsNdis6)
+            {
+                extern NDIS_STATUS Ndis6TxSendPacket(PLOGICAL_ADAPTER, PNDIS_PACKET);
+                NdisStatus = Ndis6TxSendPacket(Adapter, (PNDIS_PACKET)WorkItemContext);
+                if (NdisStatus != NDIS_STATUS_PENDING)
+                    MiniSendComplete(Adapter, (PNDIS_PACKET)WorkItemContext, NdisStatus);
+                break;
+            }
+
             if(Adapter->NdisMiniportBlock.DriverHandle->MiniportCharacteristics.SendPacketsHandler)
               {
                 if(Adapter->NdisMiniportBlock.Flags & NDIS_ATTRIBUTE_DESERIALIZE)
@@ -1323,6 +1385,18 @@ MiniportWorker(IN PDEVICE_OBJECT DeviceObject, IN PVOID Context)
             break;
 
           case NdisWorkItemResetRequested:
+            /* dev-nt6-1: NDIS 6 adapters fall through to ResetHandlerEx
+             * via the bridge helper. The legacy DriverHandle->ResetHandler
+             * is NULL for them and the deref below would crash. */
+            if (Adapter->IsNdis6)
+            {
+                extern NDIS_STATUS Ndis6CallResetHandlerEx(PLOGICAL_ADAPTER, BOOLEAN*);
+                NdisStatus = Ndis6CallResetHandlerEx(Adapter, &AddressingReset);
+                if (NdisStatus != NDIS_STATUS_PENDING)
+                    MiniResetComplete(Adapter, NdisStatus, AddressingReset);
+                break;
+            }
+
             NdisMIndicateStatus(Adapter, NDIS_STATUS_RESET_START, NULL, 0);
             NdisMIndicateStatusComplete(Adapter);
 
@@ -1897,6 +1971,11 @@ NdisIPnPStartDevice(
   PIO_STACK_LOCATION Stack = IoGetCurrentIrpStackLocation(Irp);
   PLOGICAL_ADAPTER Adapter = (PLOGICAL_ADAPTER)DeviceObject->DeviceExtension;
   NDIS_WRAPPER_CONTEXT WrapperContext;
+  /* dev-nt6-1: legacy NdisIPnPStartDevice must NEVER run for NDIS 6
+   * adapters — Ndis6DispatchPnp in 60driver.c owns the dispatch table
+   * for NDIS 6 drivers. If this fires, the driver-object hijack is
+   * broken and we'd crash on DriverHandle below anyway. */
+  ASSERT(!Adapter->IsNdis6);
   NDIS_STATUS NdisStatus;
   NDIS_STATUS OpenErrorStatus;
   NTSTATUS Status;
@@ -2222,6 +2301,10 @@ NdisIPnPStopDevice(
 {
   PLOGICAL_ADAPTER Adapter = (PLOGICAL_ADAPTER)DeviceObject->DeviceExtension;
 
+  /* dev-nt6-1: Ndis6DispatchPnp handles IRP_MN_STOP_DEVICE with a
+   * pass-through; this legacy path must never run for NDIS 6 adapters. */
+  ASSERT(!Adapter->IsNdis6);
+
   /* Remove adapter from adapter list for this miniport */
   ExInterlockedRemoveEntryList(&Adapter->MiniportListEntry, &Adapter->NdisMiniportBlock.DriverHandle->Lock);
 
@@ -2343,7 +2426,12 @@ NdisIPnPRemoveDevice(
 {
     NTSTATUS Status;
     PLOGICAL_ADAPTER Adapter = DeviceObject->DeviceExtension;
-    
+
+    /* dev-nt6-1: Ndis6DispatchPnp handles IRP_MN_REMOVE_DEVICE itself
+     * (calls Ndis6CallMiniportHaltEx then Ndis6DestroyLogicalAdapter).
+     * This legacy path must never run for NDIS 6 adapters. */
+    ASSERT(!Adapter->IsNdis6);
+
     if (Adapter->NdisMiniportBlock.SymbolicLinkName.Buffer)
     {
         IoSetDeviceInterfaceState(&Adapter->NdisMiniportBlock.SymbolicLinkName, FALSE);
