@@ -116,7 +116,7 @@ GetErrorCodeFromCrCode(const IN CONFIGRET cr)
     default:                      return ERROR_GEN_FAILURE;
   }
 
-  /* Does not happen */
+    /* Does not happen */
 }
 
 /* Lower scores are best ones */
@@ -5660,8 +5660,18 @@ SetupDiInstallDevice(
     if (GetLastError() == ERROR_SUCCESS_REBOOT_REQUIRED)
         RebootRequired = TRUE;
 
-    /* Open device registry key */
-    hKey = SETUPDI_OpenDevKey(((struct DeviceInfoSet *)DeviceInfoSet)->HKLM, (struct DeviceInfo *)DeviceInfoData->Reserved, KEY_SET_VALUE);
+    /* Open device registry key. DDInstall.HW AddReg commonly creates
+     * nested subkeys such as "Interrupt Management\\..."; KEY_SET_VALUE
+     * alone cannot do that. */
+#if _WIN32_WINNT >= 0x502
+    hKey = SETUPDI_OpenDevKey(((struct DeviceInfoSet *)DeviceInfoSet)->HKLM,
+                              (struct DeviceInfo *)DeviceInfoData->Reserved,
+                              KEY_READ | KEY_WRITE);
+#else
+    hKey = SETUPDI_OpenDevKey(((struct DeviceInfoSet *)DeviceInfoSet)->HKLM,
+                              (struct DeviceInfo *)DeviceInfoData->Reserved,
+                              KEY_ALL_ACCESS);
+#endif
     if (hKey == INVALID_HANDLE_VALUE)
         goto cleanup;
 
