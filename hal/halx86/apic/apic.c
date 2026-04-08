@@ -688,6 +688,19 @@ HalEnableSystemInterrupt(
         return FALSE;
     }
 
+    /* Cherry-picked from dev branch (f08c89371ff): an MSI/MSI-X vector
+     * marked as RESERVED has no IO-APIC redirection entry to program.
+     * The driver may try to enable the vector again when falling back
+     * from MSI to INTx with the same vector — treat that as success
+     * (idempotent enable) instead of indexing past HalpVectorToIndex
+     * with the sentinel 0xFE. */
+    if (Index == APIC_RESERVED_VECTOR)
+    {
+        DPRINT1("HalEnableSystemInterrupt: Vector=%lu is reserved (MSI/MSI-X)\n",
+                Vector);
+        return TRUE;
+    }
+
     /* Read the redirection entry */
     ReDirReg = ApicReadIORedirectionEntry(Index);
 
