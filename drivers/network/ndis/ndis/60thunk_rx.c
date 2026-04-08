@@ -61,11 +61,16 @@ Ndis6RxBuildLegacyPacket(
     _In_ BOOLEAN            ResourcesFlag)
 {
     PNDIS_PACKET Packet     = NULL;
-    PNDIS_BUFFER NdisBuffer = NULL;
+    PNDIS_BUFFER FirstBuffer = NULL;
+    PNDIS_BUFFER PrevBuffer = NULL;
     NDIS_STATUS  Status;
-    PMDL         FirstMdl;
+    PMDL         CurrentMdl;
     ULONG        DataOffset;
     ULONG        DataLength;
+    ULONG        Remaining;
+    ULONG        MdlSegmentSize;
+    ULONG        MdlSegmentOffset;
+    ULONG        ChainedMdls = 0;
     static volatile LONG BuildCount = 0;
     LONG bc;
 
@@ -79,16 +84,16 @@ Ndis6RxBuildLegacyPacket(
         return NULL;
     }
 
-    FirstMdl   = NET_BUFFER_CURRENT_MDL(Nb);
+    CurrentMdl = NET_BUFFER_CURRENT_MDL(Nb);
     DataOffset = NET_BUFFER_CURRENT_MDL_OFFSET(Nb);
     DataLength = NET_BUFFER_DATA_LENGTH(Nb);
 
     bc = InterlockedIncrement(&BuildCount);
     if (bc <= 5)
         DbgPrint("NDIS6-RX: BuildLegacyPacket #%ld FirstMdl=%p Offset=%lu Length=%lu\n",
-                 bc, FirstMdl, DataOffset, DataLength);
+                 bc, CurrentMdl, DataOffset, DataLength);
 
-    if (FirstMdl == NULL || DataLength == 0)
+    if (CurrentMdl == NULL || DataLength == 0)
     {
         if (bc <= 5)
             DbgPrint("NDIS6-RX: BuildLegacyPacket NULL Mdl or zero len — drop\n");
@@ -103,28 +108,122 @@ Ndis6RxBuildLegacyPacket(
         return NULL;
     }
 
-    /* Build a single NDIS_BUFFER mapping the NB's first MDL. For simple
-     * single-MDL NBs (which is what e1000e produces from its RX descriptor
-     * ring) this is a zero-copy wrap. For multi-MDL NBs we'd need to chain
-     * multiple buffers — Phase 4 work; e1000e's path doesn't hit this. */
-    NdisAllocateBuffer(&Status,
-                       &NdisBuffer,
-                       Ext->RxLegacyBufferPool,
-                       (PUCHAR)MmGetMdlVirtualAddress(FirstMdl) + DataOffset,
-                       DataLength);
-    if (Status != NDIS_STATUS_SUCCESS || NdisBuffer == NULL)
+    /* A2: walk the NET_BUFFER MDL chain and chain a PNDIS_BUFFER per MDL.
+     * The first MDL starts at NET_BUFFER_CURRENT_MDL_OFFSET; subsequent
+     * MDLs start at offset 0. The total of all segments must equal
+     * DataLength — we stop when Remaining hits 0. Works for single-MDL
+     * NBs (e1000e) AND multi-MDL NBs (jumbo frames, virtio-net, etc.). */
+    Remaining        = DataLength;
+    MdlSegmentOffset = DataOffset;
+    while (CurrentMdl != NULL && Remaining > 0)
+    {
+        ULONG MdlSize = MmGetMdlByteCount(CurrentMdl);
+        PNDIS_BUFFER NdisBuffer = NULL;
+
+        /* Clamp the MDL segment to what's available in this MDL AND
+         * what's remaining in the total payload. */
+        if (MdlSegmentOffset >= MdlSize)
+        {
+            /* Offset puts us past this MDL — shouldn't normally happen
+             * for first MDL (CurrentMdl is CURRENT_MDL by definition),
+             * but defensively skip to the next MDL and try again. */
+            MdlSegmentOffset = 0;
+            CurrentMdl = CurrentMdl->Next;
+            continue;
+        }
+        MdlSegmentSize = MdlSize - MdlSegmentOffset;
+        if (MdlSegmentSize > Remaining)
+            MdlSegmentSize = Remaining;
+
+        NdisAllocateBuffer(&Status,
+                           &NdisBuffer,
+                           Ext->RxLegacyBufferPool,
+                           (PUCHAR)MmGetMdlVirtualAddress(CurrentMdl) + MdlSegmentOffset,
+                           MdlSegmentSize);
+        if (Status != NDIS_STATUS_SUCCESS || NdisBuffer == NULL)
+        {
+            if (bc <= 5)
+                DbgPrint("NDIS6-RX: NdisAllocateBuffer failed 0x%08lx\n", (ULONG)Status);
+            /* Tear down the partial chain we built before this failure,
+             * then free the packet itself. */
+            {
+                PNDIS_BUFFER toFree = FirstBuffer;
+                while (toFree != NULL)
+                {
+                    PNDIS_BUFFER next = NDIS_BUFFER_LINKAGE(toFree);
+                    NdisFreeBuffer(toFree);
+                    toFree = next;
+                }
+            }
+            NdisFreePacket(Packet);
+            return NULL;
+        }
+
+        if (FirstBuffer == NULL)
+        {
+            FirstBuffer = NdisBuffer;
+        }
+        else
+        {
+            /* Chain after the previous buffer — legacy NDIS_BUFFER is just
+             * an MDL so NDIS_BUFFER_LINKAGE is the MDL Next pointer. */
+            NDIS_BUFFER_LINKAGE(PrevBuffer) = NdisBuffer;
+        }
+        PrevBuffer = NdisBuffer;
+        ChainedMdls++;
+
+        Remaining       -= MdlSegmentSize;
+        MdlSegmentOffset = 0;              /* second and later MDLs start at 0 */
+        CurrentMdl       = CurrentMdl->Next;
+    }
+
+    if (FirstBuffer == NULL || Remaining > 0)
     {
         if (bc <= 5)
-            DbgPrint("NDIS6-RX: NdisAllocateBuffer failed 0x%08lx\n", (ULONG)Status);
+            DbgPrint("NDIS6-RX: BuildLegacyPacket short chain (Remaining=%lu) — drop\n",
+                     Remaining);
+        {
+            PNDIS_BUFFER toFree = FirstBuffer;
+            while (toFree != NULL)
+            {
+                PNDIS_BUFFER next = NDIS_BUFFER_LINKAGE(toFree);
+                NdisFreeBuffer(toFree);
+                toFree = next;
+            }
+        }
         NdisFreePacket(Packet);
         return NULL;
     }
 
-    NdisChainBufferAtFront(Packet, NdisBuffer);
+    if (bc <= 5 && ChainedMdls > 1)
+        DbgPrint("NDIS6-RX: BuildLegacyPacket #%ld chained %lu MDLs total=%lu\n",
+                 bc, ChainedMdls, DataLength);
+
+    NdisChainBufferAtFront(Packet, FirstBuffer);
 
     /* Stash NBL backptr + Ext so Ndis6RxReturnLegacyPacket can find them. */
     Packet->Reserved[2] = (ULONG_PTR)Nbl;
     Packet->Reserved[3] = (ULONG_PTR)Ext;
+
+    /* B2: translate RX offload result from NBL info to legacy packet info.
+     * NDIS_TCP_IP_CHECKSUM_PACKET_INFO.Receive and
+     * NDIS_TCP_IP_CHECKSUM_NET_BUFFER_LIST_INFO.Receive share the same
+     * bit layout — raw PVOID copy carries it across. */
+    {
+        PVOID ChecksumValue =
+            NET_BUFFER_LIST_INFO(Nbl, TcpIpChecksumNetBufferListInfo);
+        if (ChecksumValue != NULL)
+            NDIS_PER_PACKET_INFO_FROM_PACKET(Packet, TcpIpChecksumPacketInfo) = ChecksumValue;
+    }
+
+    /* D1: translate RX VLAN tag. Same union-over-PVOID layout in
+     * both NDIS 5 IEEE_8021Q_INFO and NDIS 6 Ieee8021QNetBufferListInfo. */
+    {
+        PVOID VlanValue =
+            NET_BUFFER_LIST_INFO(Nbl, Ieee8021QNetBufferListInfo);
+        if (VlanValue != NULL)
+            NDIS_PER_PACKET_INFO_FROM_PACKET(Packet, Ieee8021QInfo) = VlanValue;
+    }
 
     /* Initial refcount of zero — protocols increment as they hold the
      * packet across async work. */
@@ -150,9 +249,17 @@ Ndis6RxFreeLegacyPacket(
 {
     PNDIS_BUFFER NdisBuffer;
 
+    /* A2: walk the chain — there may be more than one NDIS_BUFFER if the
+     * original NET_BUFFER spanned multiple MDLs. NdisUnchainBufferAtFront
+     * pops the head; NDIS_BUFFER_LINKAGE lets us walk the rest. */
     NdisUnchainBufferAtFront(Packet, &NdisBuffer);
-    if (NdisBuffer != NULL)
+    while (NdisBuffer != NULL)
+    {
+        PNDIS_BUFFER Next = NDIS_BUFFER_LINKAGE(NdisBuffer);
+        NDIS_BUFFER_LINKAGE(NdisBuffer) = NULL;
         NdisFreeBuffer(NdisBuffer);
+        NdisBuffer = Next;
+    }
 
     NdisFreePacket(Packet);
 }
@@ -344,10 +451,28 @@ Ndis6FilterTerminalReceive(
         }
         MiniIndicateReceivePacket((NDIS_HANDLE)Adapter, PacketArray, PacketCount);
 
-        /* Walk the array; for unheld wrappers (refcount==0), free now and
-         * decrement the per-NBL refcount. For held wrappers, the protocol
-         * will eventually call NdisReturnPackets which routes through the
-         * IsNdis6 gate to Ndis6RxReturnLegacyPacket. */
+        /* B3: RESOURCES path — the miniport needs the NBL back before
+         * we return, and protocols are contractually required to copy
+         * the data inline (they cannot hold the wrapper). So we free
+         * every wrapper immediately WITHOUT touching the per-NBL
+         * refcount, then return the NBL once through the filter chain.
+         * This is a fast path that skips the refcount bookkeeping. */
+        if (ResourcesFlag)
+        {
+            UINT j;
+            for (j = 0; j < PacketCount; j++)
+            {
+                /* Direct free — does not touch the NBL refcount. */
+                Ndis6RxFreeLegacyPacket(PacketArray[j]);
+            }
+            Ndis6FilterDispatchReturn(Adapter, CurrentNbl, 0);
+            continue;
+        }
+
+        /* Normal path: walk the array; for unheld wrappers (refcount==0),
+         * free now and decrement the per-NBL refcount. For held wrappers,
+         * the protocol will eventually call NdisReturnPackets which routes
+         * through the IsNdis6 gate to Ndis6RxReturnLegacyPacket. */
         {
             UINT j;
             for (j = 0; j < PacketCount; j++)
@@ -359,17 +484,6 @@ Ndis6FilterTerminalReceive(
                     Ndis6RxReturnLegacyPacket(PacketArray[j]);
                 }
             }
-        }
-
-        /* If the miniport set RESOURCES, it needs the NBL back NOW (it
-         * cannot post more receives until we return). The wrappers we
-         * issued can no longer hold a reference past this call, so the
-         * protocols must have copied the data inline. We force-return
-         * the NBL irrespective of refcount in this case — through the
-         * filter chain so any installed filters see the return. */
-        if (ResourcesFlag)
-        {
-            Ndis6FilterDispatchReturn(Adapter, CurrentNbl, 0);
         }
     }
 }
@@ -507,8 +621,38 @@ NdisMIndicateStatusEx(
          * advertise offloads to legacy protocols. */
         return;
 
+    case NDIS_STATUS_PACKET_FILTER:
+        /* Driver changed effective packet filter — legacy protocols
+         * don't care (they drive the filter via OID_GEN_CURRENT_PACKET_FILTER
+         * which is round-tripped via Ndis6OidForward). Drop. */
+        return;
+
+    case NDIS_STATUS_MEDIA_SPECIFIC_INDICATION:
+    case NDIS_STATUS_MEDIA_SPECIFIC_INDICATION_EX:
+        /* WWAN / WLAN driver-specific indications. No legacy parallel;
+         * forwarding as NDIS_STATUS_MEDIA_SPECIFIC_INDICATION keeps the
+         * bit pattern consistent so protocols that DO care can decode it. */
+        LegacyStatus = NDIS_STATUS_MEDIA_SPECIFIC_INDICATION;
+        LegacyBuffer = StatusIndication->StatusBuffer;
+        LegacyBufferSize = StatusIndication->StatusBufferSize;
+        break;
+
+    case NDIS_STATUS_DOT11_SCAN_CONFIRM:
+    case NDIS_STATUS_DOT11_MPDU_MAX_LENGTH_CHANGED:
+    case NDIS_STATUS_DOT11_ASSOCIATION_START:
+    case NDIS_STATUS_DOT11_ASSOCIATION_COMPLETION:
+    case NDIS_STATUS_DOT11_CONNECTION_START:
+    case NDIS_STATUS_DOT11_CONNECTION_COMPLETION:
+    case NDIS_STATUS_DOT11_ROAMING_START:
+    case NDIS_STATUS_DOT11_ROAMING_COMPLETION:
+    case NDIS_STATUS_DOT11_DISASSOCIATION:
+        /* 802.11 WLAN indications — no legacy WLAN stack in ReactOS, drop. */
+        return;
+
     default:
-        /* Unknown indication — drop. */
+        /* Unknown indication — drop with debug log. */
+        DbgPrint("NDIS6: unhandled status indication 0x%08lx\n",
+                 StatusIndication->StatusCode);
         return;
     }
 
