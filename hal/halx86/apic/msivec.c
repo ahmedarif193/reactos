@@ -43,8 +43,9 @@ HalpInitializeMsiVectors(VOID)
         HalpMsiVectorState[i].Irql = 0;
     }
 
-    DPRINT("MSI Vector Allocator initialized (vectors 0x%02x-0x%02x)\n",
-           MSI_VECTOR_MIN, MSI_VECTOR_MAX);
+    DPRINT1("MSI Vector Allocator initialized (vectors 0x%02x-0x%02x, above legacy IRQ range 0x%02x-0x%02x)\n",
+            MSI_VECTOR_MIN, MSI_VECTOR_MAX,
+            PRIMARY_VECTOR_BASE, PRIMARY_VECTOR_BASE + APIC_MAX_IRQ - 1);
 
     return TRUE;
 }
@@ -138,8 +139,8 @@ HalpAllocateMsiVector(
             *OutIrql = AllocatedIrql;
             *OutAffinity = HalpDefaultInterruptAffinity;
 
-            DPRINT("HalpAllocateMsiVector: Allocated vector 0x%02x for IRQL %d\n",
-                   Vector, AllocatedIrql);
+            DPRINT1("HalpAllocateMsiVector: Allocated vector 0x%02x for IRQL %d\n",
+                    Vector, AllocatedIrql);
 
             /* Release the spin lock and return success */
             KeReleaseSpinLock(&HalpMsiVectorLock, OldIrql);

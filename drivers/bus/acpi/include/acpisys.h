@@ -33,6 +33,15 @@ typedef struct _COMMON_DEVICE_DATA
     DEVICE_POWER_STATE  DevicePowerState;
 } COMMON_DEVICE_DATA, *PCOMMON_DEVICE_DATA;
 
+typedef struct _ACPI_NOTIFICATION_ENTRY
+{
+    LIST_ENTRY ListEntry;
+    PDEVICE_NOTIFY_CALLBACK Callback;
+    PVOID Context;
+} ACPI_NOTIFICATION_ENTRY, *PACPI_NOTIFICATION_ENTRY;
+
+#define ACPI_NOTIFY_TAG 'nIcA'
+
 typedef struct _PDO_DEVICE_DATA
 {
     COMMON_DEVICE_DATA Common;
@@ -47,6 +56,24 @@ typedef struct _PDO_DEVICE_DATA
     LIST_ENTRY  Link;
     ULONG       InterfaceRefCount;
     UNICODE_STRING InterfaceName;
+    ULONG CachedBusNumber;
+    BOOLEAN HasCachedBusNumber;
+    BOOLEAN HasPciRootBusRange;
+    BOOLEAN HasPciRootSegment;
+    ULONG PciRootSegment;
+    ULONG PciRootMinBus;
+    ULONG PciRootMaxBus;
+    /* Cached PCI root window information (from _CRS) */
+#define ACPI_PCI_MAX_WINDOWS 8
+    ULONG PciRootIoWindowCount;
+    struct { ULONGLONG Start; ULONGLONG End; } PciRootIoWindows[ACPI_PCI_MAX_WINDOWS];
+    ULONG PciRootMemWindowCount;
+    struct { ULONGLONG Start; ULONGLONG End; BOOLEAN Prefetchable; } PciRootMemWindows[ACPI_PCI_MAX_WINDOWS];
+    LIST_ENTRY NotificationList;
+    KSPIN_LOCK NotificationLock;
+    ULONG NotificationRegistrationCount;
+    BOOLEAN NotificationHandlersInstalled;
+    BOOLEAN PciRootLogged;
 
 } PDO_DEVICE_DATA, *PPDO_DEVICE_DATA;
 
@@ -71,6 +98,12 @@ typedef struct _FDO_DEVICE_DATA
 
     // A synchronization for access to the device extension.
     FAST_MUTEX      Mutex;
+
+    // Device interface for PCI ACPI services
+    // Registered when FDO starts, allows PCI driver to send IOCTLs
+    UNICODE_STRING  PciInterfaceName;
+    BOOLEAN         PciInterfaceRegistered;
+    BOOLEAN         PciInterfaceEnabled;
 
 } FDO_DEVICE_DATA, *PFDO_DEVICE_DATA;
 
@@ -98,6 +131,12 @@ NTSTATUS
 NTAPI
 Bus_PDO_EvalMethod(
     _In_ PPDO_DEVICE_DATA DeviceData,
+    _Inout_ PIRP Irp);
+
+NTSTATUS
+NTAPI
+AcpiEvalMethodForPciDeviceIoctl(
+    _In_ PFDO_DEVICE_DATA FdoData,
     _Inout_ PIRP Irp);
 
 NTSTATUS
@@ -154,6 +193,11 @@ NTSTATUS
 Bus_DestroyPdo (
     PDEVICE_OBJECT      Device,
     PPDO_DEVICE_DATA    PdoData
+    );
+
+VOID
+AcpiInterfaceResetNotifications(
+    PPDO_DEVICE_DATA DeviceData
     );
 
 

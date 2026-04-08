@@ -116,6 +116,29 @@ typedef struct _PCIPBUSDATA
     UCHAR SwizzleIn[4];
     RTL_BITMAP DeviceConfigured;
     ULONG ConfiguredBits[PCI_MAX_DEVICES * PCI_MAX_FUNCTION / 32];
+
+    /* PCI bus resource apertures (IO/Memory/Prefetch windows) */
+    ULONGLONG IoBase;
+    ULONGLONG IoLimit;
+    ULONGLONG IoNext;
+    ULONGLONG MemoryBase;
+    ULONGLONG MemoryLimit;
+    ULONGLONG MemoryNext;
+    ULONGLONG IoWindowBase;
+    ULONGLONG IoWindowLimit;
+    ULONGLONG MemoryWindowBase;
+    ULONGLONG MemoryWindowLimit;
+    ULONGLONG PrefetchWindowBase;
+    ULONGLONG PrefetchWindowLimit;
+
+    /* PCI bus number range */
+    BOOLEAN BusNumbersConfigured;
+    UCHAR BusNumberStart;
+    UCHAR BusNumberEnd;
+
+    /* Extended fields (appended to preserve ABI with original layout above) */
+    BOOLEAN ResourcesInitialized;
+    USHORT PciSegment;
 } PCIPBUSDATA, *PPCIPBUSDATA;
 
 typedef ULONG

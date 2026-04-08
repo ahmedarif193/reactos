@@ -296,7 +296,7 @@ EvalConvertParameterObjects(
     _Out_ ACPI_OBJECT* Arg,
     _In_ ULONG Depth,
     _In_ PACPI_METHOD_ARGUMENT Argument,
-    _In_ ULONG BufferBoundary,
+    _In_ PIO_STACK_LOCATION IoStack,
     _In_ ULONG Offset)
 {
 
@@ -311,7 +311,7 @@ EvalConvertParameterObjects(
     {
         Offset += ACPI_METHOD_ARGUMENT_LENGTH_FROM_ARGUMENT(Argument);
 
-        if (Offset > BufferBoundary)
+        if (!AcpiVerifyInBuffer(IoStack, Offset))
         {
             DPRINT1("Argument buffer outside of argument bounds\n");
             return STATUS_ACPI_INVALID_ARGTYPE;
@@ -390,7 +390,7 @@ EvalConvertParameterObjects(
                 Status = EvalConvertParameterObjects(&Arg->Package.Elements[i],
                                                      Depth + 1,
                                                      PackageArgument,
-                                                     BufferBoundary,
+                                                     IoStack,
                                                      Offset);
                 if (!NT_SUCCESS(Status))
                 {
@@ -405,10 +405,8 @@ EvalConvertParameterObjects(
 
         default:
         {
-            Arg->Type = ACPI_TYPE_BUFFER;
-            Arg->Buffer.Pointer = &Argument->Data[0];
-            Arg->Buffer.Length = Argument->DataLength;
-            break;
+            DPRINT1("Unknown argument type %u\n", Argument->Type);
+            return STATUS_UNSUCCESSFUL;
         }
     }
 
@@ -501,19 +499,13 @@ EvalCreateParametersList(
         {
             PACPI_EVAL_INPUT_BUFFER_COMPLEX ComplexBuffer;
             PACPI_METHOD_ARGUMENT Argument;
-            ULONG i, Length, Offset, ArgumentsSize, BufferBoundary;
+            ULONG i, Length, Offset, ArgumentsSize;
             NTSTATUS Status;
 
-            if (!AcpiVerifyInBuffer(IoStack, sizeof(ACPI_EVAL_INPUT_BUFFER)))
+            if (!AcpiVerifyInBuffer(IoStack, sizeof(*ComplexBuffer)))
             {
                 DPRINT1("Buffer too small\n");
                 return STATUS_INFO_LENGTH_MISMATCH;
-            }
-
-            if (!AcpiVerifyInBuffer(IoStack, FIELD_OFFSET(ACPI_EVAL_INPUT_BUFFER_COMPLEX, Argument)))
-            {
-                DPRINT1("Complex buffer header is truncated\n");
-                return STATUS_INSUFFICIENT_RESOURCES;
             }
 
             ComplexBuffer = Irp->AssociatedIrp.SystemBuffer;
@@ -542,14 +534,13 @@ EvalCreateParametersList(
 
             Argument = ComplexBuffer->Argument;
             Length = FIELD_OFFSET(ACPI_EVAL_INPUT_BUFFER_COMPLEX, Argument);
-            BufferBoundary = IoStack->Parameters.DeviceIoControl.InputBufferLength;
 
             for (i = 0; i < ParamList->Count; i++)
             {
                 Offset = Length;
                 Length += ACPI_METHOD_ARGUMENT_LENGTH_FROM_ARGUMENT(Argument);
 
-                if (Length > BufferBoundary)
+                if (!AcpiVerifyInBuffer(IoStack, Length))
                 {
                     DPRINT1("Argument buffer outside of argument bounds\n");
 
@@ -557,11 +548,7 @@ EvalCreateParametersList(
                     return STATUS_ACPI_INVALID_ARGTYPE;
                 }
 
-                Status = EvalConvertParameterObjects(Arg,
-                                                     0,
-                                                     Argument,
-                                                     BufferBoundary,
-                                                     Offset);
+                Status = EvalConvertParameterObjects(Arg, 0, Argument, IoStack, Offset);
                 if (!NT_SUCCESS(Status))
                 {
                     ExFreePoolWithTag(ParamList->Pointer, TAG_ACPI_PARAMETERS_LIST);
@@ -761,7 +748,6 @@ EvalCreateOutputArguments(
                OutputBufSize);
 
         Irp->IoStatus.Information = OutputBufSize;
-
         return STATUS_BUFFER_OVERFLOW;
     }
 
@@ -771,6 +757,25 @@ EvalCreateOutputArguments(
 
     Irp->IoStatus.Information = OutputBufSize;
     return STATUS_SUCCESS;
+}
+
+/**
+ * @brief Evaluates an ACPI namespace object given an ACPI handle directly.
+ */
+static
+ACPI_STATUS
+EvalEvaluateObjectWithHandle(
+    _In_ ACPI_HANDLE AcpiHandle,
+    _In_ PACPI_EVAL_INPUT_BUFFER EvalInputBuffer,
+    _In_ ACPI_OBJECT_LIST* ParamList,
+    _In_ ACPI_BUFFER* ReturnBuffer)
+{
+    CHAR MethodName[ACPI_OBJECT_NAME_LENGTH];
+
+    RtlCopyMemory(MethodName, EvalInputBuffer->MethodName, ACPI_OBJECT_NAME_LENGTH - 1);
+    MethodName[ACPI_OBJECT_NAME_LENGTH - 1] = ANSI_NULL;
+
+    return AcpiEvaluateObject(AcpiHandle, MethodName, ParamList, ReturnBuffer);
 }
 
 /* IOCTL handlers for asynchronous evaluation requests must not be paged */
@@ -789,13 +794,6 @@ Bus_PDO_EvalMethod(
 
     IoStack = IoGetCurrentIrpStackLocation(Irp);
     EvalInputBuffer = Irp->AssociatedIrp.SystemBuffer;
-
-    /* Validate the output buffer size before processing the input */
-    if (IoStack->Parameters.DeviceIoControl.OutputBufferLength > 0 &&
-        !AcpiVerifyOutBuffer(IoStack, sizeof(ACPI_EVAL_OUTPUT_BUFFER)))
-    {
-        return STATUS_BUFFER_TOO_SMALL;
-    }
 
     Status = EvalCreateParametersList(Irp, IoStack, EvalInputBuffer, &ParamList);
     if (!NT_SUCCESS(Status))
@@ -820,6 +818,217 @@ Bus_PDO_EvalMethod(
 
     if (ReturnBuffer.Pointer)
         AcpiOsFree(ReturnBuffer.Pointer);
+
+    return Status;
+}
+
+/**
+ * @brief Evaluates an ACPI method for a PCI device given its location.
+ *
+ * This function finds the ACPI namespace node corresponding to the specified
+ * PCI device (Segment:Bus:Device:Function) and evaluates the ACPI method
+ * specified in the IRP's input buffer.
+ *
+ * This is intended to be called by the PCI driver to forward IOCTL_ACPI_EVAL_METHOD
+ * requests from drivers above it in the stack.
+ *
+ * @param Segment   PCI segment number (typically 0)
+ * @param Bus       PCI bus number
+ * @param Device    PCI device (slot) number
+ * @param Function  PCI function number
+ * @param Irp       The IRP containing IOCTL_ACPI_EVAL_METHOD request
+ *
+ * @return STATUS_SUCCESS on success
+ * @return STATUS_NOT_FOUND if no ACPI device corresponds to this PCI device
+ * @return Other NTSTATUS error codes on failure
+ */
+/**
+ * @brief Internal helper to evaluate an ACPI method for a PCI device.
+ *
+ * This function finds the ACPI namespace node corresponding to the specified
+ * PCI device (Segment:Bus:Device:Function) and evaluates the ACPI method.
+ *
+ * @param Segment   PCI segment number (typically 0)
+ * @param Bus       PCI bus number
+ * @param Device    PCI device (slot) number
+ * @param Function  PCI function number
+ * @param EvalInputBuffer  The standard ACPI evaluation input buffer
+ * @param IoStack   The IRP stack location with buffer sizes
+ * @param Irp       The IRP for output buffer handling
+ *
+ * @return STATUS_SUCCESS on success
+ * @return STATUS_NOT_FOUND if no ACPI device corresponds to this PCI device
+ * @return Other NTSTATUS error codes on failure
+ */
+static
+NTSTATUS
+EvalMethodForPciDeviceInternal(
+    _In_ ULONG Segment,
+    _In_ ULONG Bus,
+    _In_ ULONG Device,
+    _In_ ULONG Function,
+    _In_ PACPI_EVAL_INPUT_BUFFER EvalInputBuffer,
+    _In_ PIO_STACK_LOCATION IoStack,
+    _Inout_ PIRP Irp)
+{
+    ACPI_OBJECT_LIST ParamList;
+    ACPI_STATUS AcpiStatus;
+    NTSTATUS Status;
+    ACPI_BUFFER ReturnBuffer = { ACPI_ALLOCATE_BUFFER, NULL };
+    ACPI_HANDLE AcpiHandle = NULL;
+
+    /* Find the ACPI device node for this PCI device */
+    if (!AcpiFindPciDeviceInNamespace(Segment, Bus, Device, Function, &AcpiHandle))
+    {
+        DPRINT("ACPI: No ACPI device for PCI %lu:%lu:%lu:%lu\n",
+               Segment, Bus, Device, Function);
+        return STATUS_NOT_FOUND;
+    }
+
+    Status = EvalCreateParametersList(Irp, IoStack, EvalInputBuffer, &ParamList);
+    if (!NT_SUCCESS(Status))
+        return Status;
+
+    AcpiStatus = EvalEvaluateObjectWithHandle(AcpiHandle, EvalInputBuffer, &ParamList, &ReturnBuffer);
+
+    if (ParamList.Count != 0)
+        EvalFreeParametersList(&ParamList);
+
+    if (!ACPI_SUCCESS(AcpiStatus))
+    {
+        DPRINT("Query method '%.4s' failed on PCI %lu:%lu:%lu:%lu (handle %p) with status 0x%04x\n",
+               EvalInputBuffer->MethodName,
+               Segment, Bus, Device, Function,
+               AcpiHandle,
+               AcpiStatus);
+
+        return EvalAcpiStatusToNtStatus(AcpiStatus);
+    }
+
+    Status = EvalCreateOutputArguments(Irp, IoStack, &ReturnBuffer);
+
+    if (ReturnBuffer.Pointer)
+        AcpiOsFree(ReturnBuffer.Pointer);
+
+    return Status;
+}
+
+/**
+ * @brief Handles IOCTL_ACPI_EVAL_METHOD_FOR_PCI from the device interface.
+ *
+ * This function is called when the PCI driver sends an IOCTL to the ACPI
+ * device interface. It parses the ACPI_PCI_EVAL_INPUT_BUFFER to extract
+ * the PCI device location and the embedded ACPI evaluation input buffer,
+ * then performs the ACPI method evaluation.
+ *
+ * @param FdoData   The FDO device extension
+ * @param Irp       The IRP containing IOCTL_ACPI_EVAL_METHOD_FOR_PCI request
+ *
+ * @return STATUS_SUCCESS on success
+ * @return STATUS_INVALID_PARAMETER if the input buffer is malformed
+ * @return STATUS_NOT_FOUND if no ACPI device corresponds to the PCI device
+ * @return Other NTSTATUS error codes on failure
+ */
+NTSTATUS
+NTAPI
+AcpiEvalMethodForPciDeviceIoctl(
+    _In_ PFDO_DEVICE_DATA FdoData,
+    _Inout_ PIRP Irp)
+{
+    PIO_STACK_LOCATION IoStack;
+    PACPI_PCI_EVAL_INPUT_BUFFER PciInputBuffer;
+    PACPI_EVAL_INPUT_BUFFER EvalInputBuffer;
+    ULONG InputBufferSize;
+    NTSTATUS Status;
+    IO_STACK_LOCATION SyntheticIoStack;
+
+    UNREFERENCED_PARAMETER(FdoData);
+
+    IoStack = IoGetCurrentIrpStackLocation(Irp);
+    InputBufferSize = IoStack->Parameters.DeviceIoControl.InputBufferLength;
+
+    /* Validate minimum input buffer size */
+    if (InputBufferSize < ACPI_PCI_EVAL_INPUT_BUFFER_MIN_SIZE)
+    {
+        DPRINT1("ACPI: IOCTL_ACPI_EVAL_METHOD_FOR_PCI: buffer too small (%lu < %lu)\n",
+                InputBufferSize, ACPI_PCI_EVAL_INPUT_BUFFER_MIN_SIZE);
+        return STATUS_INFO_LENGTH_MISMATCH;
+    }
+
+    PciInputBuffer = (PACPI_PCI_EVAL_INPUT_BUFFER)Irp->AssociatedIrp.SystemBuffer;
+
+    /* Validate signature */
+    if (PciInputBuffer->Signature != ACPI_PCI_EVAL_INPUT_BUFFER_SIGNATURE)
+    {
+        DPRINT1("ACPI: IOCTL_ACPI_EVAL_METHOD_FOR_PCI: invalid signature 0x%lx (expected 0x%lx)\n",
+                PciInputBuffer->Signature, ACPI_PCI_EVAL_INPUT_BUFFER_SIGNATURE);
+        return STATUS_INVALID_PARAMETER;
+    }
+
+    /* Validate embedded buffer offset and size */
+    if (PciInputBuffer->InputBufferOffset < sizeof(ACPI_PCI_EVAL_INPUT_BUFFER))
+    {
+        DPRINT1("ACPI: IOCTL_ACPI_EVAL_METHOD_FOR_PCI: invalid offset %lu\n",
+                PciInputBuffer->InputBufferOffset);
+        return STATUS_INVALID_PARAMETER;
+    }
+
+    if (PciInputBuffer->InputBufferOffset + PciInputBuffer->InputBufferSize > InputBufferSize)
+    {
+        DPRINT1("ACPI: IOCTL_ACPI_EVAL_METHOD_FOR_PCI: embedded buffer overflow (%lu + %lu > %lu)\n",
+                PciInputBuffer->InputBufferOffset,
+                PciInputBuffer->InputBufferSize,
+                InputBufferSize);
+        return STATUS_INVALID_PARAMETER;
+    }
+
+    if (PciInputBuffer->InputBufferSize < sizeof(ACPI_EVAL_INPUT_BUFFER))
+    {
+        DPRINT1("ACPI: IOCTL_ACPI_EVAL_METHOD_FOR_PCI: embedded buffer too small (%lu)\n",
+                PciInputBuffer->InputBufferSize);
+        return STATUS_INFO_LENGTH_MISMATCH;
+    }
+
+    /* Get pointer to embedded ACPI evaluation input buffer */
+    EvalInputBuffer = (PACPI_EVAL_INPUT_BUFFER)ACPI_PCI_EVAL_GET_INPUT_BUFFER(PciInputBuffer);
+
+    DPRINT("ACPI: IOCTL_ACPI_EVAL_METHOD_FOR_PCI: PCI %lu:%lu:%lu:%lu method '%.4s'\n",
+           PciInputBuffer->Segment,
+           PciInputBuffer->Bus,
+           PciInputBuffer->Device,
+           PciInputBuffer->Function,
+           EvalInputBuffer->MethodName);
+
+    /*
+     * Create a synthetic IO_STACK_LOCATION that describes the embedded buffer.
+     * This is needed because EvalCreateParametersList validates against the
+     * IoStack buffer lengths.
+     */
+    RtlZeroMemory(&SyntheticIoStack, sizeof(SyntheticIoStack));
+    SyntheticIoStack.Parameters.DeviceIoControl.InputBufferLength = PciInputBuffer->InputBufferSize;
+    SyntheticIoStack.Parameters.DeviceIoControl.OutputBufferLength =
+        IoStack->Parameters.DeviceIoControl.OutputBufferLength;
+
+    /*
+     * We need to temporarily replace the system buffer with the embedded buffer
+     * for the helper function to work correctly. Save and restore afterwards.
+     */
+    {
+        PVOID OriginalSystemBuffer = Irp->AssociatedIrp.SystemBuffer;
+
+        Irp->AssociatedIrp.SystemBuffer = EvalInputBuffer;
+
+        Status = EvalMethodForPciDeviceInternal(
+            PciInputBuffer->Segment,
+            PciInputBuffer->Bus,
+            PciInputBuffer->Device,
+            PciInputBuffer->Function,
+            EvalInputBuffer,
+            &SyntheticIoStack,
+            Irp);
+
+        Irp->AssociatedIrp.SystemBuffer = OriginalSystemBuffer;
+    }
 
     return Status;
 }

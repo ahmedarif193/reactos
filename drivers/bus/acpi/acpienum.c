@@ -9,14 +9,77 @@
 
 #include "precomp.h"
 
+#include <acpixf.h>
+
 #define NDEBUG
 #include <debug.h>
+
+#define ACPI_PCIROOT_TRACE(...) \
+    DPRINT1("ACPI-PCIROOT: " __VA_ARGS__)
 
 #define HAS_CHILDREN(d)		((d)->children.next != &((d)->children))
 #define HAS_SIBLINGS(d)		(((d)->parent) && ((d)->node.next != &(d)->parent->children))
 #define NODE_TO_DEVICE(n)	(list_entry(n, struct acpi_device, node))
 
 extern struct acpi_device		*acpi_root;
+
+static
+BOOLEAN
+BuspAppendHardwareId(
+    _Inout_updates_(BufferLength) PWCHAR Buffer,
+    _Inout_ PULONG Index,
+    _In_ ULONG BufferLength,
+    _In_ PCWSTR Prefix,
+    _In_ PCSTR Id)
+{
+    int written;
+
+    if (!Id || !Id[0] || *Index >= BufferLength)
+        return FALSE;
+
+    written = _snwprintf(Buffer + *Index,
+                         BufferLength - *Index,
+                         L"%s%hs",
+                         Prefix,
+                         Id);
+    if (written < 0 || (ULONG)written >= BufferLength - *Index)
+        return FALSE;
+
+    *Index += (ULONG)written;
+    if (*Index >= BufferLength)
+        return FALSE;
+
+    Buffer[(*Index)++] = UNICODE_NULL;
+    return TRUE;
+}
+
+static BOOLEAN BuspCheckedForMmConfig;
+static BOOLEAN BuspHasMmConfig;
+
+static
+VOID
+BuspLogPciRootResources(
+    _In_ struct acpi_device *Device);
+
+static
+VOID
+BuspEnsureMmConfigState(VOID)
+{
+    ACPI_STATUS Status;
+    ACPI_TABLE_HEADER *Table;
+
+    if (BuspCheckedForMmConfig)
+        return;
+
+    BuspCheckedForMmConfig = TRUE;
+
+    Status = AcpiGetTable(ACPI_SIG_MCFG, 0, &Table);
+    if (ACPI_SUCCESS(Status) && Table)
+    {
+        BuspHasMmConfig = TRUE;
+        AcpiPutTable(Table);
+    }
+}
 
 NTSTATUS
 Bus_PlugInDevice (
@@ -28,8 +91,11 @@ Bus_PlugInDevice (
     PPDO_DEVICE_DATA    pdoData;
     NTSTATUS            status;
     ULONG               index;
-	WCHAR               temp[256];
+	WCHAR               temp[512];
     PLIST_ENTRY         entry;
+    BOOLEAN             multiSzBuilt = TRUE;
+    BOOLEAN             hasPciExpressCid = FALSE;
+    BOOLEAN             isPciRoot;
 
     PAGED_CODE ();
 
@@ -75,6 +141,38 @@ Bus_PlugInDevice (
         }
     }
 
+    isPciRoot = (Device->pnp.hardware_id &&
+                 strncmp(Device->pnp.hardware_id, "PNP0A", 5) == 0);
+
+    if (isPciRoot)
+    {
+        BuspEnsureMmConfigState();
+
+        const char *UidString = (Device->flags.unique_id && Device->pnp.unique_id[0]) ?
+                                Device->pnp.unique_id : "<none>";
+        ULONGLONG AdrValue = Device->flags.bus_address ? (ULONGLONG)Device->pnp.bus_address : (ULONGLONG)-1;
+
+        ACPI_PCIROOT_TRACE("Enumerating PCI root candidate HID=%hs UID=%s ADR=0x%I64x handle=%p\n",
+                           Device->pnp.hardware_id,
+                           UidString,
+                           AdrValue,
+                           Device->handle);
+
+        if (Device->pnp.cid_list && Device->pnp.cid_list->Count)
+        {
+            UINT32 Index;
+
+            for (Index = 0; Index < Device->pnp.cid_list->Count; Index++)
+            {
+                ACPI_PCIROOT_TRACE("  |_ CID[%u]=%s\n",
+                                   Index,
+                                   Device->pnp.cid_list->Ids[Index].String);
+            }
+        }
+
+        BuspLogPciRootResources(Device);
+    }
+
     DPRINT("Exposing PDO\n"
            "======AcpiHandle:   %p\n"
            "======HardwareId:     %s\n",
@@ -101,22 +199,119 @@ Bus_PlugInDevice (
     }
 
     pdoData = (PPDO_DEVICE_DATA) pdo->DeviceExtension;
-	pdoData->AcpiHandle = Device->handle;
+    RtlZeroMemory(pdoData, sizeof(*pdoData));
+    pdoData->AcpiHandle = Device->handle;
+    InitializeListHead(&pdoData->NotificationList);
+    KeInitializeSpinLock(&pdoData->NotificationLock);
+
+    if (isPciRoot)
+    {
+        ULONG Segment, BusStart, BusEnd;
+
+        if (AcpiPciRootQueryInfo(Device->handle, &Segment, &BusStart, &BusEnd))
+        {
+            pdoData->HasPciRootSegment = TRUE;
+            pdoData->PciRootSegment = Segment;
+
+            if (!pdoData->HasPciRootBusRange)
+            {
+                pdoData->PciRootMinBus = BusStart;
+                pdoData->PciRootMaxBus = BusEnd;
+                pdoData->HasPciRootBusRange = TRUE;
+            }
+        }
+    }
 
     //
-    // Copy the hardware IDs
+    // Copy the hardware IDs and merge in compat IDs from _CID
     //
-		index = 0;
-		index += _swprintf(&temp[index],
-							L"ACPI\\%hs",
-							Device->pnp.hardware_id);
-		temp[index++] = UNICODE_NULL;
+    RtlZeroMemory(temp, sizeof(temp));
+    index = 0;
 
-		index += _swprintf(&temp[index],
-							L"*%hs",
-							Device->pnp.hardware_id);
-		temp[index++] = UNICODE_NULL;
-		temp[index++] = UNICODE_NULL;
+    if (!BuspAppendHardwareId(temp, &index, RTL_NUMBER_OF(temp), L"ACPI\\", Device->pnp.hardware_id) ||
+        !BuspAppendHardwareId(temp, &index, RTL_NUMBER_OF(temp), L"*", Device->pnp.hardware_id))
+    {
+        multiSzBuilt = FALSE;
+    }
+
+    if (multiSzBuilt && Device->pnp.cid_list && Device->pnp.cid_list->Count)
+    {
+        UINT32 CidIndex;
+
+        for (CidIndex = 0; CidIndex < Device->pnp.cid_list->Count; CidIndex++)
+        {
+            PCSTR Cid = Device->pnp.cid_list->Ids[CidIndex].String;
+
+            if (!Cid || !Cid[0])
+                continue;
+
+            if (!BuspAppendHardwareId(temp, &index, RTL_NUMBER_OF(temp), L"ACPI\\", Cid) ||
+                !BuspAppendHardwareId(temp, &index, RTL_NUMBER_OF(temp), L"*", Cid))
+            {
+                multiSzBuilt = FALSE;
+                break;
+            }
+
+            if (_stricmp(Cid, "PNP0A08") == 0)
+            {
+                hasPciExpressCid = TRUE;
+            }
+        }
+    }
+
+    if (multiSzBuilt)
+    {
+        if (index < RTL_NUMBER_OF(temp))
+        {
+            temp[index++] = UNICODE_NULL;
+        }
+        else
+        {
+            multiSzBuilt = FALSE;
+        }
+    }
+
+    if (!multiSzBuilt)
+    {
+        index = 0;
+        index += swprintf(&temp[index],
+                          L"ACPI\\%hs",
+                          Device->pnp.hardware_id);
+        temp[index++] = UNICODE_NULL;
+
+        index += swprintf(&temp[index],
+                          L"*%hs",
+                          Device->pnp.hardware_id);
+        temp[index++] = UNICODE_NULL;
+        temp[index++] = UNICODE_NULL;
+    }
+
+    /* If firmware omitted PNP0A08 but MCFG exists, advertise PCIe anyway. */
+    if (!hasPciExpressCid && BuspHasMmConfig &&
+        Device->pnp.hardware_id && !_stricmp(Device->pnp.hardware_id, "PNP0A03"))
+    {
+        ULONG injectionIndex = (index > 0) ? index - 1 : 0;
+
+        if (BuspAppendHardwareId(temp,
+                                 &injectionIndex,
+                                 RTL_NUMBER_OF(temp),
+                                 L"ACPI\\",
+                                 "PNP0A08") &&
+            BuspAppendHardwareId(temp,
+                                 &injectionIndex,
+                                 RTL_NUMBER_OF(temp),
+                                 L"*",
+                                 "PNP0A08"))
+        {
+            if (injectionIndex < RTL_NUMBER_OF(temp))
+            {
+                temp[injectionIndex++] = UNICODE_NULL;
+                index = injectionIndex;
+                hasPciExpressCid = TRUE;
+                ACPI_PCIROOT_TRACE("  |_ Injected PCIe CID PNP0A08 based on MCFG presence\n");
+            }
+        }
+    }
 
 		pdoData->HardwareIDs = ExAllocatePoolWithTag(NonPagedPool, index*sizeof(WCHAR), 'DpcA');
 
@@ -127,6 +322,12 @@ Bus_PlugInDevice (
     }
 
 	RtlCopyMemory (pdoData->HardwareIDs, temp, index*sizeof(WCHAR));
+
+    if (hasPciExpressCid)
+    {
+        ACPI_PCIROOT_TRACE("  |_ PCI root %hs exposes PCIe compatibility ID\n",
+                           Device->pnp.hardware_id);
+    }
     Bus_InitializePdo (pdo, FdoData);
 
     //
@@ -177,3 +378,185 @@ ACPIEnumerateDevices(PFDO_DEVICE_DATA DeviceExtension)
 }
 
 /* EOF */
+static
+VOID
+BuspLogPciRootResources(
+    _In_ struct acpi_device *Device)
+{
+    ACPI_BUFFER Buffer;
+    ACPI_STATUS Status;
+    ACPI_RESOURCE *Resource;
+    BOOLEAN FoundBusRange = FALSE;
+
+    Buffer.Length = ACPI_ALLOCATE_BUFFER;
+    Buffer.Pointer = NULL;
+
+    Status = AcpiGetCurrentResources(Device->handle, &Buffer);
+    if (ACPI_FAILURE(Status))
+    {
+        ACPI_PCIROOT_TRACE("  |_ Failed to evaluate _CRS (Status=0x%08x)\n", Status);
+        return;
+    }
+
+    Resource = Buffer.Pointer;
+    while (Resource && Resource->Type != ACPI_RESOURCE_TYPE_END_TAG)
+    {
+        UINT64 Minimum = 0;
+        UINT64 Maximum = 0;
+        UINT64 Length = 0;
+        const CHAR *DescriptorName = NULL;
+
+        switch (Resource->Type)
+        {
+            case ACPI_RESOURCE_TYPE_ADDRESS16:
+            {
+                const ACPI_RESOURCE_ADDRESS16 *Address = &Resource->Data.Address16;
+                if (Address->ResourceType == ACPI_BUS_NUMBER_RANGE)
+                {
+                    Minimum = Address->Address.Minimum;
+                    Maximum = Address->Address.Maximum;
+                    Length = Address->Address.AddressLength;
+                    DescriptorName = "Bus";
+                    FoundBusRange = TRUE;
+                }
+                else if (Address->ResourceType == ACPI_MEMORY_RANGE)
+                {
+                    Minimum = Address->Address.Minimum;
+                    Maximum = Address->Address.Maximum;
+                    Length = Address->Address.AddressLength;
+                    DescriptorName = "Mem16";
+                }
+                else if (Address->ResourceType == ACPI_IO_RANGE)
+                {
+                    Minimum = Address->Address.Minimum;
+                    Maximum = Address->Address.Maximum;
+                    Length = Address->Address.AddressLength;
+                    DescriptorName = "Io16";
+                }
+                break;
+            }
+
+            case ACPI_RESOURCE_TYPE_ADDRESS32:
+            {
+                const ACPI_RESOURCE_ADDRESS32 *Address = &Resource->Data.Address32;
+                if (Address->ResourceType == ACPI_BUS_NUMBER_RANGE)
+                {
+                    Minimum = Address->Address.Minimum;
+                    Maximum = Address->Address.Maximum;
+                    Length = Address->Address.AddressLength;
+                    DescriptorName = "Bus";
+                    FoundBusRange = TRUE;
+                }
+                else if (Address->ResourceType == ACPI_MEMORY_RANGE)
+                {
+                    Minimum = Address->Address.Minimum;
+                    Maximum = Address->Address.Maximum;
+                    Length = Address->Address.AddressLength;
+                    DescriptorName = "Mem32";
+                }
+                else if (Address->ResourceType == ACPI_IO_RANGE)
+                {
+                    Minimum = Address->Address.Minimum;
+                    Maximum = Address->Address.Maximum;
+                    Length = Address->Address.AddressLength;
+                    DescriptorName = "Io32";
+                }
+                break;
+            }
+
+            case ACPI_RESOURCE_TYPE_ADDRESS64:
+            {
+                const ACPI_RESOURCE_ADDRESS64 *Address = &Resource->Data.Address64;
+                if (Address->ResourceType == ACPI_BUS_NUMBER_RANGE)
+                {
+                    Minimum = Address->Address.Minimum;
+                    Maximum = Address->Address.Maximum;
+                    Length = Address->Address.AddressLength;
+                    DescriptorName = "Bus";
+                    FoundBusRange = TRUE;
+                }
+                else if (Address->ResourceType == ACPI_MEMORY_RANGE)
+                {
+                    Minimum = Address->Address.Minimum;
+                    Maximum = Address->Address.Maximum;
+                    Length = Address->Address.AddressLength;
+                    DescriptorName = "Mem64";
+                }
+                else if (Address->ResourceType == ACPI_IO_RANGE)
+                {
+                    Minimum = Address->Address.Minimum;
+                    Maximum = Address->Address.Maximum;
+                    Length = Address->Address.AddressLength;
+                    DescriptorName = "Io64";
+                }
+                break;
+            }
+
+            case ACPI_RESOURCE_TYPE_EXTENDED_ADDRESS64:
+            {
+                const ACPI_RESOURCE_EXTENDED_ADDRESS64 *Address = &Resource->Data.ExtAddress64;
+                Minimum = Address->Address.Minimum;
+                Maximum = Address->Address.Maximum;
+                Length = Address->Address.AddressLength;
+                DescriptorName = "ExtMem64";
+                break;
+            }
+
+            case ACPI_RESOURCE_TYPE_FIXED_MEMORY32:
+            {
+                const ACPI_RESOURCE_FIXED_MEMORY32 *Memory = &Resource->Data.FixedMemory32;
+                Minimum = Memory->Address;
+                Maximum = (ULONGLONG)Memory->Address + Memory->AddressLength - 1;
+                Length = Memory->AddressLength;
+                DescriptorName = "FixedMem32";
+                break;
+            }
+
+            case ACPI_RESOURCE_TYPE_IO:
+            {
+                const ACPI_RESOURCE_IO *Io = &Resource->Data.Io;
+                Minimum = Io->Minimum;
+                Maximum = Io->Maximum;
+                Length = Io->AddressLength;
+                DescriptorName = "Io16";
+                break;
+            }
+
+            case ACPI_RESOURCE_TYPE_FIXED_IO:
+            {
+                const ACPI_RESOURCE_FIXED_IO *Io = &Resource->Data.FixedIo;
+                Minimum = Io->Address;
+                Maximum = Io->Address + Io->AddressLength - 1;
+                Length = Io->AddressLength;
+                DescriptorName = "FixedIO";
+                break;
+            }
+
+            default:
+                ACPI_PCIROOT_TRACE("  |_ _CRS resource type %u not decoded\n",
+                                   Resource->Type);
+                break;
+        }
+
+        if (DescriptorName)
+        {
+            ACPI_PCIROOT_TRACE("  |_ _CRS %s 0x%I64x-0x%I64x (len=0x%I64x)\n",
+                               DescriptorName,
+                               Minimum,
+                               Maximum,
+                               Length);
+        }
+
+        Resource = ACPI_NEXT_RESOURCE(Resource);
+    }
+
+    if (!FoundBusRange)
+    {
+        ACPI_PCIROOT_TRACE("  |_ WARNING: _CRS does not expose a bus-number range\n");
+    }
+
+    if (Buffer.Pointer)
+    {
+        AcpiOsFree(Buffer.Pointer);
+    }
+}

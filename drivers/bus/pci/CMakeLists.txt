@@ -3,7 +3,11 @@ include_directories(
     ${REACTOS_SOURCE_DIR}/sdk/include/reactos/drivers)
 
 list(APPEND SOURCE
+    arb.c
+    config.c
     fdo.c
+    hookhal.c
+    intrconn.c
     pci.c
     pdo.c
     pci.h)

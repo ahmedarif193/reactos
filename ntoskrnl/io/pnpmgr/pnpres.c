@@ -12,6 +12,20 @@
 #define NDEBUG
 #include <debug.h>
 
+/* dev-nt6-1: HAL-side MSI vector allocator. Lives in
+ * hal/halx86/apic/msivec.c on amd64, exported via hal.spec.
+ * The PnP arbiter calls it from IopFindInterruptResource to satisfy
+ * CM_RESOURCE_INTERRUPT_MESSAGE requirements. */
+#ifdef _M_AMD64
+BOOLEAN
+NTAPI
+HalpAllocateMsiVector(
+    _In_ KIRQL DesiredIrql,
+    _Out_ PUCHAR OutVector,
+    _Out_ PKIRQL OutIrql,
+    _Out_ PKAFFINITY OutAffinity);
+#endif
+
 FORCEINLINE
 PIO_RESOURCE_LIST
 IopGetNextResourceList(
@@ -190,9 +204,64 @@ IopFindInterruptResource(
     OUT PCM_PARTIAL_RESOURCE_DESCRIPTOR CmDesc)
 {
     ULONG Vector;
+    static volatile LONG FindCount = 0;
+    LONG MyCount = InterlockedIncrement(&FindCount);
 
     ASSERT(IoDesc->Type == CmDesc->Type);
     ASSERT(IoDesc->Type == CmResourceTypeInterrupt);
+
+    DPRINT1("IopFindInterruptResource #%ld flags=0x%x min=0x%x max=0x%x\n",
+            MyCount, IoDesc->Flags,
+            IoDesc->u.Interrupt.MinimumVector, IoDesc->u.Interrupt.MaximumVector);
+
+#ifdef _M_AMD64
+    /* dev-nt6-1: MSI/MSI-X path. Allocate a real message vector via the
+     * HAL allocator and synthesize a CM_RESOURCE_INTERRUPT_MESSAGE
+     * descriptor. The PCI driver's start path will program the MSI
+     * capability registers from this descriptor.
+     *
+     * TEMPORARY GATE: only the FIRST MSI request this boot is granted.
+     * Subsequent MSI requirements are rejected so the PnP arbiter falls
+     * back to the legacy INTx alternative. The full multi-device MSI
+     * flow stalls during the LPC bridge's PdoStartDevice path because
+     * writing the LPC's MSI capability triggers something we don't yet
+     * handle. e1000e is loaded early so it gets the MSI vector. */
+    {
+        static volatile LONG MsiAllocatedThisBoot = 0;
+
+        if (IoDesc->Flags & CM_RESOURCE_INTERRUPT_MESSAGE)
+        {
+            UCHAR     MsiVector;
+            KIRQL     MsiIrql;
+            KAFFINITY MsiAffinity;
+            BOOLEAN   Allocated;
+
+            if (InterlockedCompareExchange(&MsiAllocatedThisBoot, 1, 0) != 0)
+            {
+                DPRINT1("MSI gate closed — letting arbiter try next alternative\n");
+                return FALSE;
+            }
+
+            Allocated = HalpAllocateMsiVector(CLOCK_LEVEL - 1,
+                                              &MsiVector, &MsiIrql, &MsiAffinity);
+            if (Allocated)
+            {
+                CmDesc->Flags = IoDesc->Flags;
+                CmDesc->ShareDisposition = IoDesc->ShareDisposition;
+                CmDesc->u.Interrupt.Vector   = MsiVector;
+                CmDesc->u.Interrupt.Level    = MsiIrql;
+                CmDesc->u.Interrupt.Affinity = MsiAffinity;
+                DPRINT1("Satisfying MSI interrupt requirement with vector 0x%02x irql=%u\n",
+                        MsiVector, MsiIrql);
+                return TRUE;
+            }
+
+            DPRINT1("MSI vector allocation failed — letting arbiter try next alternative\n");
+            InterlockedExchange(&MsiAllocatedThisBoot, 0);
+            return FALSE;
+        }
+    }
+#endif /* _M_AMD64 */
 
     for (Vector = IoDesc->u.Interrupt.MinimumVector;
          Vector <= IoDesc->u.Interrupt.MaximumVector;
@@ -300,19 +369,31 @@ IopFixupResourceListWithRequirements(
                 switch (IoDesc->Type)
                 {
                     case CmResourceTypeInterrupt:
-                        /* Make sure it satisfies our vector range */
-                        if (CmDesc->u.Interrupt.Vector >= IoDesc->u.Interrupt.MinimumVector &&
-                            CmDesc->u.Interrupt.Vector <= IoDesc->u.Interrupt.MaximumVector)
+                        /* dev-nt6-1: an MSI/MSI-X requirement uses MinimumVector
+                         * and MaximumVector to express the message count, not
+                         * a global vector range. The actual allocated vector
+                         * (0x30-0xCF on amd64) lives in a different range.
+                         * Match by the MESSAGE flag instead of the value range. */
+                        if ((IoDesc->Flags & CM_RESOURCE_INTERRUPT_MESSAGE) &&
+                            (CmDesc->Flags & CM_RESOURCE_INTERRUPT_MESSAGE))
                         {
-                            /* Found it */
+                            Matched = TRUE;
+                        }
+                        else if (!(IoDesc->Flags & CM_RESOURCE_INTERRUPT_MESSAGE) &&
+                                 !(CmDesc->Flags & CM_RESOURCE_INTERRUPT_MESSAGE) &&
+                                 CmDesc->u.Interrupt.Vector >= IoDesc->u.Interrupt.MinimumVector &&
+                                 CmDesc->u.Interrupt.Vector <= IoDesc->u.Interrupt.MaximumVector)
+                        {
+                            /* Legacy interrupt match — vector in requested range. */
                             Matched = TRUE;
                         }
                         else
                         {
-                            DPRINT("Interrupt - Not a match! 0x%x not inside 0x%x to 0x%x\n",
-                                   CmDesc->u.Interrupt.Vector,
+                            DPRINT("Interrupt - Not a match! 0x%x flags=0x%x not inside 0x%x-0x%x flags=0x%x\n",
+                                   CmDesc->u.Interrupt.Vector, CmDesc->Flags,
                                    IoDesc->u.Interrupt.MinimumVector,
-                                   IoDesc->u.Interrupt.MaximumVector);
+                                   IoDesc->u.Interrupt.MaximumVector,
+                                   IoDesc->Flags);
                         }
                         break;
 
@@ -577,6 +658,48 @@ IopCheckResourceDescriptor(
             /* Partial resource descriptors can be of variable size (CmResourceTypeDeviceSpecific),
                but only one is allowed and it must be the last one in the list! */
             PCM_PARTIAL_RESOURCE_DESCRIPTOR ResDesc2 = &ResList->PartialDescriptors[ii];
+
+            /* dev-nt6-1: skip self-comparison. When IopDetectResourceConflict
+             * walks the registry RESOURCEMAP for already-granted resources,
+             * a device's own previously-recorded entries are in the list and
+             * comparing the candidate descriptor against its own copy reports
+             * a spurious conflict (e.g. "IRQ (0xa 0xa vs. 0xa 0xa)"). Compare
+             * by content (vector + level for interrupts, base + length for
+             * memory/port). Affinity is intentionally not part of the
+             * equality check because the registry-recorded copy and the
+             * in-memory candidate may differ in affinity but still describe
+             * the same physical resource. */
+            if (ResDesc == ResDesc2)
+                continue;
+            if (ResDesc->Type == ResDesc2->Type)
+            {
+                BOOLEAN SameResource = FALSE;
+                switch (ResDesc->Type)
+                {
+                case CmResourceTypeInterrupt:
+                    SameResource =
+                        (ResDesc->u.Interrupt.Vector == ResDesc2->u.Interrupt.Vector) &&
+                        (ResDesc->u.Interrupt.Level  == ResDesc2->u.Interrupt.Level);
+                    break;
+                case CmResourceTypeMemory:
+                    SameResource =
+                        (ResDesc->u.Memory.Start.QuadPart == ResDesc2->u.Memory.Start.QuadPart) &&
+                        (ResDesc->u.Memory.Length == ResDesc2->u.Memory.Length);
+                    break;
+                case CmResourceTypePort:
+                    SameResource =
+                        (ResDesc->u.Port.Start.QuadPart == ResDesc2->u.Port.Start.QuadPart) &&
+                        (ResDesc->u.Port.Length == ResDesc2->u.Port.Length);
+                    break;
+                case CmResourceTypeDma:
+                    SameResource = (ResDesc->u.Dma.Channel == ResDesc2->u.Dma.Channel);
+                    break;
+                default:
+                    break;
+                }
+                if (SameResource)
+                    continue;
+            }
 
             /* We don't care about shared resources */
             if (ResDesc->ShareDisposition == CmResourceShareShared &&
@@ -1042,6 +1165,25 @@ IopTranslateDeviceResources(
             case CmResourceTypeInterrupt:
             {
                KIRQL Irql;
+
+               /* dev-nt6-1: CM_RESOURCE_INTERRUPT_MESSAGE descriptors
+                * carry an APIC vector / IRQL pair that's already in
+                * fully-translated form (allocated by HalpAllocateMsiVector
+                * in IopFindInterruptResource). HalGetInterruptVector
+                * doesn't know about MSI vectors and would either return 0
+                * or remap into the legacy IO-APIC range, both of which
+                * destroy the message vector and break MSI delivery.
+                * Skip translation entirely for MSI descriptors. */
+               if (DescriptorRaw->Flags & CM_RESOURCE_INTERRUPT_MESSAGE)
+               {
+                   /* Translated copy already has the MSI vector + IRQL +
+                    * affinity from the RtlCopyMemory above — leave it. */
+                   DPRINT1("Skipping MSI vector translation (vec=0x%x level=%lu)\n",
+                           DescriptorRaw->u.Interrupt.Vector,
+                           DescriptorRaw->u.Interrupt.Level);
+                   break;
+               }
+
                DescriptorTranslated->u.Interrupt.Vector = HalGetInterruptVector(
                   DeviceNode->ResourceList->List[i].InterfaceType,
                   DeviceNode->ResourceList->List[i].BusNumber,

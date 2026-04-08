@@ -235,105 +235,155 @@ ACPIDispatchDeviceControl(
 
     Irp->IoStatus.Information = 0;
 
-    if (!commonData->IsFDO)
+    /*
+     * Handle FDO IOCTLs - these are for the device interface
+     * that allows the PCI driver to evaluate ACPI methods.
+     */
+    if (commonData->IsFDO)
     {
-       switch (irpStack->Parameters.DeviceIoControl.IoControlCode)
-       {
-            case IOCTL_ACPI_ASYNC_EVAL_METHOD:
-            {
-                ASSERT(KeGetCurrentIrql() <= DISPATCH_LEVEL);
+        PFDO_DEVICE_DATA fdoData = (PFDO_DEVICE_DATA)commonData;
 
-                status = Bus_PDO_EvalMethod((PPDO_DEVICE_DATA)commonData, Irp);
+        switch (irpStack->Parameters.DeviceIoControl.IoControlCode)
+        {
+            case IOCTL_ACPI_EVAL_METHOD_FOR_PCI:
+            {
+                /*
+                 * This IOCTL is sent by the PCI driver via the device interface.
+                 * It includes the PCI device location (Segment:Bus:Device:Function)
+                 * and the ACPI method to evaluate.
+                 */
+                status = AcpiEvalMethodForPciDeviceIoctl(fdoData, Irp);
                 break;
             }
 
-            case IOCTL_ACPI_EVAL_METHOD:
-            {
-                ASSERT(KeGetCurrentIrql() < DISPATCH_LEVEL);
-
-                status = Bus_PDO_EvalMethod((PPDO_DEVICE_DATA)commonData, Irp);
+            default:
+                DPRINT("ACPI FDO: Unknown IOCTL 0x%X\n",
+                       irpStack->Parameters.DeviceIoControl.IoControlCode);
+                status = STATUS_NOT_SUPPORTED;
                 break;
-            }
+        }
 
-           case IOCTL_GET_SYS_BUTTON_CAPS:
-              if (irpStack->Parameters.DeviceIoControl.OutputBufferLength < sizeof(ULONG))
-              {
-                  status = STATUS_BUFFER_TOO_SMALL;
-                  break;
-              }
+        if (status != STATUS_PENDING)
+        {
+            Irp->IoStatus.Status = status;
+            IoCompleteRequest(Irp, IO_NO_INCREMENT);
+        }
+        else
+        {
+            IoMarkIrpPending(Irp);
+        }
 
-              if (wcsstr(((PPDO_DEVICE_DATA)commonData)->HardwareIDs, L"PNP0C0D"))
-              {
-                  DPRINT1("Lid button reported to power manager\n");
-                  Caps |= SYS_BUTTON_LID;
-              }
-              else if (((PPDO_DEVICE_DATA)commonData)->AcpiHandle == NULL)
-              {
-                  /* We have to return both at the same time because since we
-                   * have a NULL handle we are the fixed feature DO and we will
-                   * only be called once (not once per device)
-                   */
-                  if (power_button)
-                  {
-                      DPRINT("Fixed power button reported to power manager\n");
-                      Caps |= SYS_BUTTON_POWER;
-                  }
-                  if (sleep_button)
-                  {
-                      DPRINT("Fixed sleep button reported to power manager\n");
-                      Caps |= SYS_BUTTON_SLEEP;
-                  }
-              }
-              else if (wcsstr(((PPDO_DEVICE_DATA)commonData)->HardwareIDs, L"PNP0C0C"))
-              {
-                  DPRINT("Control method power button reported to power manager\n");
-                  Caps |= SYS_BUTTON_POWER;
-              }
-              else if (wcsstr(((PPDO_DEVICE_DATA)commonData)->HardwareIDs, L"PNP0C0E"))
-              {
-                  DPRINT("Control method sleep reported to power manager\n");
-                  Caps |= SYS_BUTTON_SLEEP;
-              }
-              else
-              {
-                  DPRINT1("IOCTL_GET_SYS_BUTTON_CAPS sent to a non-button device\n");
-                  status = STATUS_INVALID_PARAMETER;
-              }
-
-              if (Caps != 0)
-              {
-                  RtlCopyMemory(Irp->AssociatedIrp.SystemBuffer, &Caps, sizeof(Caps));
-                  Irp->IoStatus.Information = sizeof(Caps);
-                  status = STATUS_SUCCESS;
-              }
-              break;
-
-           case IOCTL_GET_SYS_BUTTON_EVENT:
-              PsCreateSystemThread(&ThreadHandle, THREAD_ALL_ACCESS, 0, 0, 0, ButtonWaitThread, Irp);
-              ZwClose(ThreadHandle);
-
-              status = STATUS_PENDING;
-              break;
-
-           case IOCTL_BATTERY_QUERY_TAG:
-              DPRINT("IOCTL_BATTERY_QUERY_TAG is not supported!\n");
-              break;
-
-           default:
-              DPRINT1("Unsupported IOCTL: %x\n", irpStack->Parameters.DeviceIoControl.IoControlCode);
-              break;
-       }
+        return status;
     }
-    else
-       DPRINT1("IOCTL sent to the ACPI FDO! Kill the caller!\n");
+
+    /* Handle PDO IOCTLs */
+    switch (irpStack->Parameters.DeviceIoControl.IoControlCode)
+    {
+        case IOCTL_ACPI_ASYNC_EVAL_METHOD:
+        {
+            ASSERT(KeGetCurrentIrql() <= DISPATCH_LEVEL);
+
+            status = Bus_PDO_EvalMethod((PPDO_DEVICE_DATA)commonData, Irp);
+            break;
+        }
+
+        case IOCTL_ACPI_EVAL_METHOD:
+        {
+            ASSERT(KeGetCurrentIrql() < DISPATCH_LEVEL);
+
+            status = Bus_PDO_EvalMethod((PPDO_DEVICE_DATA)commonData, Irp);
+            break;
+        }
+
+        case IOCTL_GET_SYS_BUTTON_CAPS:
+            if (irpStack->Parameters.DeviceIoControl.OutputBufferLength < sizeof(ULONG))
+            {
+                status = STATUS_BUFFER_TOO_SMALL;
+                break;
+            }
+
+            if (wcsstr(((PPDO_DEVICE_DATA)commonData)->HardwareIDs, L"PNP0C0D"))
+            {
+                DPRINT1("Lid button reported to power manager\n");
+                Caps |= SYS_BUTTON_LID;
+            }
+            else if (((PPDO_DEVICE_DATA)commonData)->AcpiHandle == NULL)
+            {
+                /* We have to return both at the same time because since we
+                 * have a NULL handle we are the fixed feature DO and we will
+                 * only be called once (not once per device)
+                 */
+                if (power_button)
+                {
+                    DPRINT("Fixed power button reported to power manager\n");
+                    Caps |= SYS_BUTTON_POWER;
+                }
+                if (sleep_button)
+                {
+                    DPRINT("Fixed sleep button reported to power manager\n");
+                    Caps |= SYS_BUTTON_SLEEP;
+                }
+            }
+            else if (wcsstr(((PPDO_DEVICE_DATA)commonData)->HardwareIDs, L"PNP0C0C"))
+            {
+                DPRINT("Control method power button reported to power manager\n");
+                Caps |= SYS_BUTTON_POWER;
+            }
+            else if (wcsstr(((PPDO_DEVICE_DATA)commonData)->HardwareIDs, L"PNP0C0E"))
+            {
+                DPRINT("Control method sleep reported to power manager\n");
+                Caps |= SYS_BUTTON_SLEEP;
+            }
+            else
+            {
+                DPRINT1("IOCTL_GET_SYS_BUTTON_CAPS sent to a non-button device\n");
+                status = STATUS_INVALID_PARAMETER;
+            }
+
+            if (Caps != 0)
+            {
+                RtlCopyMemory(Irp->AssociatedIrp.SystemBuffer, &Caps, sizeof(Caps));
+                Irp->IoStatus.Information = sizeof(Caps);
+                status = STATUS_SUCCESS;
+            }
+            break;
+
+        case IOCTL_GET_SYS_BUTTON_EVENT:
+            {
+                NTSTATUS ThreadStatus = PsCreateSystemThread(&ThreadHandle, THREAD_ALL_ACCESS, 0, 0, 0, ButtonWaitThread, Irp);
+                if (NT_SUCCESS(ThreadStatus))
+                {
+                    ZwClose(ThreadHandle);
+                }
+                else
+                {
+                    DPRINT1("Failed to create system thread: 0x%lx\n", ThreadStatus);
+                    status = ThreadStatus;
+                    break;
+                }
+            }
+
+            status = STATUS_PENDING;
+            break;
+
+        case IOCTL_BATTERY_QUERY_TAG:
+            DPRINT("IOCTL_BATTERY_QUERY_TAG is not supported!\n");
+            break;
+
+        default:
+            DPRINT1("Unsupported IOCTL: %x\n", irpStack->Parameters.DeviceIoControl.IoControlCode);
+            break;
+    }
 
     if (status != STATUS_PENDING)
     {
-       Irp->IoStatus.Status = status;
-       IoCompleteRequest(Irp, IO_NO_INCREMENT);
+        Irp->IoStatus.Status = status;
+        IoCompleteRequest(Irp, IO_NO_INCREMENT);
     }
     else
-       IoMarkIrpPending(Irp);
+    {
+        IoMarkIrpPending(Irp);
+    }
 
     return status;
 }
@@ -702,8 +752,13 @@ DriverEntry (
     Status = GetProcessorInformation();
     if (!NT_SUCCESS(Status))
     {
-        NT_ASSERT(FALSE);
-        return Status;
+        /*
+         * ACPI can function without processor information - this is not fatal.
+         * On ARM64, the CentralProcessor registry key may not exist yet as it's
+         * architecture-specific. We'll continue loading ACPI with default values.
+         */
+        DPRINT1("Failed to get processor information (0x%lx) - continuing with defaults\n", Status);
+        Status = STATUS_SUCCESS;
     }
 
     //
