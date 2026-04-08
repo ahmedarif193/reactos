@@ -544,7 +544,10 @@ TiDispatch(
 
             case IOCTL_ICMP_ECHO_REQUEST:
                 TI_DbgPrint(MIN_TRACE, ("ICMP_ECHO_REQUEST\n"));
+                DbgPrint("TCPIP-IOCTL: IOCTL_ICMP_ECHO_REQUEST received FileObj=%p\n",
+                         IrpSp->FileObject);
                 Status = DispEchoRequest(DeviceObject, Irp, IrpSp);
+                DbgPrint("TCPIP-IOCTL: DispEchoRequest returned 0x%08x\n", Status);
                 break;
 
             default:

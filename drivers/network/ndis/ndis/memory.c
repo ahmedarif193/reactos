@@ -168,6 +168,16 @@ NdisMAllocateSharedMemory(
 
   NDIS_DbgPrint(MAX_TRACE,("Called.\n"));
 
+  /* dev-nt6-1: NDIS 6 adapters get their DMA adapter via
+   * NdisMRegisterScatterGatherDma instead of NdisMAllocateMapRegisters,
+   * so the legacy SystemAdapterObject is NULL. Forward to the bridge. */
+  if (Adapter->IsNdis6)
+  {
+      extern VOID NTAPI Ndis6MAllocateSharedMemory(NDIS_HANDLE, ULONG, BOOLEAN, PVOID*, PNDIS_PHYSICAL_ADDRESS);
+      Ndis6MAllocateSharedMemory(MiniportAdapterHandle, Length, Cached, VirtualAddress, PhysicalAddress);
+      return;
+  }
+
   if (KeGetCurrentIrql() != PASSIVE_LEVEL)
   {
       KeBugCheckEx(BUGCODE_ID_DRIVER,
@@ -234,7 +244,17 @@ NdisMFreeSharedMemory(
 {
   PLOGICAL_ADAPTER Adapter = (PLOGICAL_ADAPTER)MiniportAdapterHandle;
   PMINIPORT_SHARED_MEMORY Memory;
-  PDMA_ADAPTER DmaAdapter = Adapter->NdisMiniportBlock.SystemAdapterObject;
+  PDMA_ADAPTER DmaAdapter;
+
+  /* dev-nt6-1: NDIS 6 adapters use the bridge's DMA path. */
+  if (Adapter->IsNdis6)
+  {
+      extern VOID NTAPI Ndis6MFreeSharedMemory(NDIS_HANDLE, ULONG, BOOLEAN, PVOID, NDIS_PHYSICAL_ADDRESS);
+      Ndis6MFreeSharedMemory(MiniportAdapterHandle, Length, Cached, VirtualAddress, PhysicalAddress);
+      return;
+  }
+
+  DmaAdapter = Adapter->NdisMiniportBlock.SystemAdapterObject;
 
   NDIS_DbgPrint(MAX_TRACE,("Called.\n"));
 
@@ -340,6 +360,23 @@ NdisMAllocateSharedMemoryAsync(
   NDIS_DbgPrint(MAX_TRACE,("Called.\n"));
 
   ASSERT(KeGetCurrentIrql() <= DISPATCH_LEVEL);
+
+  /* dev-nt6-1: NDIS 6 adapters have a NULL legacy SystemAdapterObject
+   * (the bridge owns DMA via Ext->DmaAdapter). The async work item
+   * would crash dereferencing it. NDIS 6 also has no
+   * AllocateCompleteHandlerEx — drivers don't expose async shared-mem
+   * alloc completion. Do a synchronous allocation via the bridge and
+   * return SUCCESS; the driver doesn't expect a callback. */
+  if (Adapter->IsNdis6)
+  {
+      PVOID                  va;
+      NDIS_PHYSICAL_ADDRESS  pa;
+      extern VOID NTAPI Ndis6MAllocateSharedMemory(
+          NDIS_HANDLE, ULONG, BOOLEAN, PVOID*, PNDIS_PHYSICAL_ADDRESS);
+      UNREFERENCED_PARAMETER(Context);
+      Ndis6MAllocateSharedMemory(MiniportAdapterHandle, Length, Cached, &va, &pa);
+      return va ? NDIS_STATUS_SUCCESS : NDIS_STATUS_FAILURE;
+  }
 
   /* Must be NonpagedPool because by definition we're at DISPATCH_LEVEL */
   Memory = ExAllocatePool(NonPagedPool, sizeof(MINIPORT_SHARED_MEMORY));
