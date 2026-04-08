@@ -227,7 +227,7 @@ HalpParseApicTables(
             {
                 DPRINT01(" UNIMPLEMENTED: Type %u, Length %u\n",
                          AcpiHeader->Type, AcpiHeader->Length);
-                return;
+                break;
             }
         }
 
