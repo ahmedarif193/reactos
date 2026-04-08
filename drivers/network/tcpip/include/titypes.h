@@ -298,9 +298,18 @@ typedef struct _TRANSPORT_CONTEXT {
 
 typedef struct _TI_QUERY_CONTEXT {
     PIRP Irp;
-    PMDL InputMdl;
-    PMDL OutputMdl;
+    PMDL InputMdl;     /* legacy NDIS_BUFFER expected by InfoTdiQuery* */
+    PMDL OutputMdl;    /* legacy NDIS_BUFFER expected by Info* helpers */
     TCP_REQUEST_QUERY_INFORMATION_EX QueryInfo;
+    /* dev-nt6-1: kernel-pool copies of the user buffers. ReactOS's
+     * MmProbeAndLockPages raises STATUS_ACCESS_VIOLATION on valid user
+     * stack pointers, so we copy in/out via SEH and pass MDLs that map
+     * the kernel-pool copies through to InfoTdi*. */
+    PVOID UserInputBuffer;       /* original user-mode input ptr */
+    PVOID UserOutputBuffer;      /* original user-mode output ptr (or NULL) */
+    ULONG UserOutputLength;      /* original user-mode output length */
+    PVOID KernelInputBuffer;     /* kernel-pool copy of input */
+    PVOID KernelOutputBuffer;    /* kernel-pool buffer for output */
 } TI_QUERY_CONTEXT, *PTI_QUERY_CONTEXT;
 
 /* EOF */

@@ -171,6 +171,15 @@ VOID IPDispatchProtocol(
 
     NBResetNeighborTimeout(&SrcAddress);
 
+    {
+        static volatile LONG DispCount = 0;
+        LONG dc = InterlockedIncrement(&DispCount);
+        if (dc <= 5)
+            DbgPrint("TCPIP-IP: IPDispatchProtocol #%ld proto=%d handler=%p\n",
+                     dc, Protocol,
+                     Protocol < IP_PROTOCOL_TABLE_SIZE ? ProtocolTable[Protocol] : NULL);
+    }
+
     if (Protocol < IP_PROTOCOL_TABLE_SIZE)
     {
        /* Call the appropriate protocol handler */
