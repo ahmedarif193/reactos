@@ -242,6 +242,118 @@ KeFlushWriteBuffer(VOID)
     return;
 }
 
+#ifndef _M_AMD64
+KIRQL
+NTAPI
+HalConvertDeviceIdtToIrql(
+    _In_ ULONG Vector)
+{
+    return HalpVectorToIrql((UCHAR)Vector);
+}
+
+NTSTATUS
+NTAPI
+HalGetInterruptTargetInformation(
+    _Inout_ PHAL_INTERRUPT_TARGET_INFORMATION TargetInformation)
+{
+    KAFFINITY Mask;
+    ULONG ProcessorNumber;
+
+    if (TargetInformation == NULL ||
+        TargetInformation->Version != HAL_INTERRUPT_TARGET_INFORMATION_VERSION)
+    {
+        return STATUS_INVALID_PARAMETER;
+    }
+
+    Mask = TargetInformation->TargetProcessors;
+    if (Mask == 0)
+        Mask = KeQueryActiveProcessors();
+
+    ProcessorNumber = 0;
+    while ((Mask & 1) == 0)
+    {
+        Mask >>= 1;
+        ProcessorNumber++;
+    }
+
+    TargetInformation->ProcessorNumber = ProcessorNumber;
+    TargetInformation->TargetProcessors = ((KAFFINITY)1 << ProcessorNumber);
+    TargetInformation->DestinationId = ProcessorNumber;
+    return STATUS_SUCCESS;
+}
+
+NTSTATUS
+NTAPI
+HalGetMessageRoutingInfo(
+    _Inout_ PHAL_MESSAGE_ROUTING_INFO RoutingInfo)
+{
+    HAL_INTERRUPT_TARGET_INFORMATION TargetInfo;
+    NTSTATUS Status;
+
+    if (RoutingInfo == NULL ||
+        RoutingInfo->Version != HAL_MESSAGE_ROUTING_INFO_VERSION)
+    {
+        return STATUS_INVALID_PARAMETER;
+    }
+
+    if (RoutingInfo->Flags & HAL_MSI_ROUTING_ALLOCATE_VECTOR)
+        return STATUS_NOT_SUPPORTED;
+
+    if (RoutingInfo->Vector == 0)
+        return STATUS_INVALID_PARAMETER;
+
+    TargetInfo.Version = HAL_INTERRUPT_TARGET_INFORMATION_VERSION;
+    TargetInfo.TargetProcessors = RoutingInfo->TargetProcessors;
+    TargetInfo.ProcessorNumber = 0;
+    TargetInfo.DestinationId = 0;
+    Status = HalGetInterruptTargetInformation(&TargetInfo);
+    if (!NT_SUCCESS(Status))
+        return Status;
+
+    RoutingInfo->TargetProcessors = TargetInfo.TargetProcessors;
+    RoutingInfo->DestinationId = TargetInfo.DestinationId;
+    if (RoutingInfo->Irql == 0)
+        RoutingInfo->Irql = HalConvertDeviceIdtToIrql(RoutingInfo->Vector);
+    RoutingInfo->MessageAddress.QuadPart = 0xFEE00000ULL |
+                                           ((ULONGLONG)TargetInfo.DestinationId << 12);
+    RoutingInfo->MessageData = (USHORT)(RoutingInfo->Vector & 0xFF);
+    return STATUS_SUCCESS;
+}
+#endif
+
+NTSTATUS
+NTAPI
+HalGetMemoryCachingRequirements(
+    _In_ PHYSICAL_ADDRESS BaseAddress,
+    _In_ SIZE_T Length,
+    _Out_ MEMORY_CACHING_TYPE *CacheType)
+{
+    UNREFERENCED_PARAMETER(BaseAddress);
+    UNREFERENCED_PARAMETER(Length);
+
+    if (CacheType == NULL)
+        return STATUS_INVALID_PARAMETER;
+
+    *CacheType = MmNonCached;
+    return STATUS_SUCCESS;
+}
+
+NTSTATUS
+NTAPI
+HalGetProcessorIdByNtNumber(
+    _In_ ULONG ProcessorNumber,
+    _Out_ PULONG ProcessorId)
+{
+    if (ProcessorId == NULL)
+        return STATUS_INVALID_PARAMETER;
+
+    if (ProcessorNumber >= MAXIMUM_PROCESSORS)
+        return STATUS_INVALID_PARAMETER;
+
+    *ProcessorId = ProcessorNumber;
+    return STATUS_SUCCESS;
+}
+
 #ifdef _M_IX86
 /* x86 fastcall wrappers */
 
