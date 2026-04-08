@@ -289,19 +289,10 @@ DispEchoRequest(
     UINT8 SavedTtl;
 
     TI_DbgPrint(DEBUG_ICMP, ("About to send datagram, OutputBufferLength: %u, SystemBuffer: %p\n", OutputBufferLength, Irp->AssociatedIrp.SystemBuffer));
-    DbgPrint("TCPIP-ICMP: DispEchoRequest ENTER OutBuf=%u InBuf=%u Request=%p\n",
-             OutputBufferLength, InputBufferLength, Request);
 
     // check buffers
     if (OutputBufferLength < sizeof(ICMP_ECHO_REPLY) || InputBufferLength < sizeof(ICMP_ECHO_REQUEST))
-    {
-        DbgPrint("TCPIP-ICMP: REJECT - buffer size (out=%u<%u or in=%u<%u)\n",
-                 OutputBufferLength, (ULONG)sizeof(ICMP_ECHO_REPLY),
-                 InputBufferLength, (ULONG)sizeof(ICMP_ECHO_REQUEST));
         return STATUS_INVALID_PARAMETER;
-    }
-    DbgPrint("TCPIP-ICMP: Request target=0x%08x DataSize=%u Ttl=%u Timeout=%u\n",
-             Request->Address, Request->DataSize, Request->Ttl, Request->Timeout);
 
     // check request parameters
     if ((Request->DataSize > UINT16_MAX - sizeof(ICMP_HEADER) - sizeof(IPv4_HEADER)) ||
@@ -337,13 +328,10 @@ DispEchoRequest(
     LocalAddressTa.Address[0].Address[0].in_addr = 0;
 
     Status = FileOpenAddress(&SendContext->TdiRequest, &LocalAddressTa, IPPROTO_ICMP, FALSE, NULL);
-    DbgPrint("TCPIP-ICMP: FileOpenAddress(ICMP) -> 0x%08x handle=%p\n",
-             Status, SendContext->TdiRequest.Handle.AddressHandle);
 
     if (!NT_SUCCESS(Status))
     {
         TI_DbgPrint(DEBUG_ICMP, ("Failed to open address file status: 0x%x\n", Status));
-        DbgPrint("TCPIP-ICMP: ABORT - FileOpenAddress failed\n");
 
         ExFreePoolWithTag(SendContext, OUT_DATA_TAG);
 
@@ -403,11 +391,7 @@ DispEchoRequest(
 
     UnlockObject(AddrFile);
 
-    DbgPrint("TCPIP-ICMP: calling AddrFile->Send(%p) RequestSize=%u target=0x%08x\n",
-             AddrFile->Send, RequestSize, Request->Address);
     Status = AddrFile->Send(AddrFile, &ConnectionInfo, (PCHAR)Buffer, RequestSize, &DataUsed);
-    DbgPrint("TCPIP-ICMP: AddrFile->Send returned 0x%08x DataUsed=%u\n",
-             Status, DataUsed);
 
     // From this point we may receive a reply packet.
     // But we are not ready for it thus InitializationFinishedEvent is needed (see below)
