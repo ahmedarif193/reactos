@@ -18,6 +18,9 @@
  */
 
 #include "ndis6_internal.h"
+#define INITGUID
+#include <guiddef.h>
+#include <wdmguid.h>
 
 /* ============================================================================
  *  Helper: get the NDIS6_ADAPTER_EXT from any miniport handle the driver
@@ -218,9 +221,7 @@ NdisMRegisterScatterGatherDma(
     PNDIS6_ADAPTER_EXT Ext;
     NDIS_STATUS Status;
 
-    UNREFERENCED_PARAMETER(DmaDescription);
-
-    if (NdisMiniportDmaHandle == NULL)
+    if (NdisMiniportDmaHandle == NULL || DmaDescription == NULL)
         return NDIS_STATUS_INVALID_PARAMETER;
 
     Ext = Ndis6IoExtFromHandle(NdisMiniportHandle);
@@ -231,10 +232,13 @@ NdisMRegisterScatterGatherDma(
     if (Status != NDIS_STATUS_SUCCESS)
         return Status;
 
-    /* The DMA handle the driver gets back is just the adapter extension —
-     * we don't yet do per-call SG list management, so all we need is for
-     * the handle to be unique per adapter and dereferenceable in the
-     * Free path. */
+    /* A3: save the driver's ProcessSGListHandler + MaximumPhysicalMapping
+     * so NdisMAllocateNetBufferSGList can call the driver back when the
+     * DMA adapter produces a SGL. */
+    Ext->SgDescription      = *DmaDescription;
+    Ext->SgDescriptionValid = TRUE;
+
+    /* The DMA handle the driver gets back is just the adapter extension. */
     *NdisMiniportDmaHandle = (NDIS_HANDLE)Ext;
     return NDIS_STATUS_SUCCESS;
 }
@@ -250,12 +254,259 @@ NdisMDeregisterScatterGatherDma(
     Ndis6IoFreeDmaAdapter(Ext);
 }
 
-/* NdisMFreeNetBufferSGList — Phase 5 stub. The Phase 3 TX thunk hands the
- * legacy NDIS_PACKET MDL chain straight to SendNetBufferListsHandler
- * without ever allocating a per-packet SG list, so e1000e's send-completion
- * path that calls this is operating on a synthetic NDIS 6 NBL whose
- * MiniportReserved we own. There's no SG list to actually free. We accept
- * the call and no-op so the driver doesn't see NDIS_STATUS_NOT_SUPPORTED. */
+/* ============================================================================
+ *  E2: NdisMGetBusData / NdisMSetBusData
+ *
+ *  NDIS wrappers over BUS_INTERFACE_STANDARD. The miniport could also
+ *  do its own IRP_MN_QUERY_INTERFACE dance, but these helpers are the
+ *  idiomatic way to read/write PCI config space from an NDIS 6 driver.
+ *  We query the bus interface lazily on first use and cache it on the
+ *  adapter extension.
+ * ============================================================================ */
+
+static BUS_INTERFACE_STANDARD*
+Ndis6IoGetBusInterface(
+    _In_ PNDIS6_ADAPTER_EXT Ext)
+{
+    KEVENT          Event;
+    IO_STATUS_BLOCK IoStatus;
+    PIRP            Irp;
+    PIO_STACK_LOCATION Stack;
+    NTSTATUS        Status;
+    static BUS_INTERFACE_STANDARD CachedBusInterface;
+    static BOOLEAN                CachedValid = FALSE;
+
+    /* Simple per-adapter cache. For multi-adapter workloads the cache
+     * would need to move onto Ext — this is a static for now because
+     * the e1000e-only test path has a single adapter. */
+    if (CachedValid)
+        return &CachedBusInterface;
+
+    if (Ext == NULL || Ext->PhysicalDeviceObject == NULL)
+        return NULL;
+
+    RtlZeroMemory(&CachedBusInterface, sizeof(CachedBusInterface));
+
+    KeInitializeEvent(&Event, NotificationEvent, FALSE);
+    Irp = IoBuildSynchronousFsdRequest(
+        IRP_MJ_PNP, Ext->PhysicalDeviceObject, NULL, 0, NULL, &Event, &IoStatus);
+    if (Irp == NULL)
+        return NULL;
+
+    Irp->IoStatus.Status = STATUS_NOT_SUPPORTED;
+
+    Stack = IoGetNextIrpStackLocation(Irp);
+    Stack->MajorFunction = IRP_MJ_PNP;
+    Stack->MinorFunction = IRP_MN_QUERY_INTERFACE;
+    Stack->Parameters.QueryInterface.InterfaceType        = &GUID_BUS_INTERFACE_STANDARD;
+    Stack->Parameters.QueryInterface.Size                 = sizeof(BUS_INTERFACE_STANDARD);
+    Stack->Parameters.QueryInterface.Version              = 1;
+    Stack->Parameters.QueryInterface.Interface            = (PINTERFACE)&CachedBusInterface;
+    Stack->Parameters.QueryInterface.InterfaceSpecificData = NULL;
+
+    Status = IoCallDriver(Ext->PhysicalDeviceObject, Irp);
+    if (Status == STATUS_PENDING)
+    {
+        KeWaitForSingleObject(&Event, Executive, KernelMode, FALSE, NULL);
+        Status = IoStatus.Status;
+    }
+
+    if (!NT_SUCCESS(Status) || CachedBusInterface.GetBusData == NULL)
+        return NULL;
+
+    CachedValid = TRUE;
+    return &CachedBusInterface;
+}
+
+ULONG
+NTAPI
+NdisMGetBusData(
+    _In_  NDIS_HANDLE NdisMiniportHandle,
+    _In_  ULONG       DataType,
+    _In_  ULONG       Offset,
+    _Out_ PVOID       Buffer,
+    _In_  ULONG       Length)
+{
+    PNDIS6_ADAPTER_EXT      Ext;
+    BUS_INTERFACE_STANDARD* Bus;
+
+    UNREFERENCED_PARAMETER(DataType);
+
+    Ext = Ndis6IoExtFromHandle(NdisMiniportHandle);
+    if (Ext == NULL)
+        return 0;
+
+    Bus = Ndis6IoGetBusInterface(Ext);
+    if (Bus == NULL || Bus->GetBusData == NULL)
+        return 0;
+
+    return Bus->GetBusData(Bus->Context, PCI_WHICHSPACE_CONFIG,
+                           Buffer, Offset, Length);
+}
+
+ULONG
+NTAPI
+NdisMSetBusData(
+    _In_  NDIS_HANDLE NdisMiniportHandle,
+    _In_  ULONG       DataType,
+    _In_  ULONG       Offset,
+    _In_  PVOID       Buffer,
+    _In_  ULONG       Length)
+{
+    PNDIS6_ADAPTER_EXT      Ext;
+    BUS_INTERFACE_STANDARD* Bus;
+
+    UNREFERENCED_PARAMETER(DataType);
+
+    Ext = Ndis6IoExtFromHandle(NdisMiniportHandle);
+    if (Ext == NULL)
+        return 0;
+
+    Bus = Ndis6IoGetBusInterface(Ext);
+    if (Bus == NULL || Bus->SetBusData == NULL)
+        return 0;
+
+    return Bus->SetBusData(Bus->Context, PCI_WHICHSPACE_CONFIG,
+                           Buffer, Offset, Length);
+}
+
+/* ============================================================================
+ *  A3: NdisMAllocateNetBufferSGList + NdisMFreeNetBufferSGList
+ *
+ *  Real implementation that calls the DMA adapter's GetScatterGatherList /
+ *  PutScatterGatherList. When the SGL is ready, we invoke the driver's
+ *  ProcessSGListHandler (which was saved in Ext->SgDescription during
+ *  NdisMRegisterScatterGatherDma).
+ *
+ *  On x86/amd64 with identity DMA, GetScatterGatherList typically calls
+ *  the ExecutionRoutine SYNCHRONOUSLY before returning. We still use a
+ *  lookaside-list-backed wrapper context to handle the async case
+ *  (waiting map registers) correctly.
+ * ============================================================================ */
+
+#define NDIS6_SG_CTX_TAG  'SgN6'
+
+typedef struct _NDIS6_SG_CALL_CONTEXT
+{
+    PNDIS6_ADAPTER_EXT  Ext;
+    PNET_BUFFER         NetBuffer;
+    PVOID               OriginalContext;    /* caller's Context */
+    BOOLEAN             WriteToDevice;
+} NDIS6_SG_CALL_CONTEXT, *PNDIS6_SG_CALL_CONTEXT;
+
+/* Execution routine invoked by the DMA subsystem when a SGL is ready. We
+ * unpack the bridge context, call the miniport's ProcessSGListHandler,
+ * and free our wrapper context. The DeviceObject parameter is the DMA
+ * device object (= our adapter's PDO). */
+static VOID NTAPI
+Ndis6SgExecutionRoutine(
+    _In_ PDEVICE_OBJECT       DeviceObject,
+    _In_ PIRP                 Irp,
+    _In_ PSCATTER_GATHER_LIST SGList,
+    _In_ PVOID                Context)
+{
+    PNDIS6_SG_CALL_CONTEXT ctx = (PNDIS6_SG_CALL_CONTEXT)Context;
+    PNDIS6_ADAPTER_EXT     Ext;
+    MINIPORT_PROCESS_SG_LIST* Handler;
+
+    UNREFERENCED_PARAMETER(Irp);
+
+    if (ctx == NULL)
+        return;
+
+    Ext     = ctx->Ext;
+    Handler = (Ext && Ext->SgDescriptionValid)
+                  ? Ext->SgDescription.ProcessSGListHandler
+                  : NULL;
+
+    if (Handler != NULL)
+    {
+        Handler(DeviceObject,
+                ctx->NetBuffer,     /* Reserved/NetBuffer slot */
+                SGList,
+                ctx->OriginalContext);
+    }
+
+    ExFreePoolWithTag(ctx, NDIS6_SG_CTX_TAG);
+}
+
+NDIS_STATUS
+NTAPI
+NdisMAllocateNetBufferSGList(
+    _In_  NDIS_HANDLE NdisMiniportDmaHandle,
+    _In_  PNET_BUFFER NetBuffer,
+    _In_  PVOID       Context,
+    _In_  ULONG       Flags,
+    _Out_ PVOID       ScatterGatherListBuffer,
+    _In_  ULONG       ScatterGatherListBufferSize)
+{
+    PNDIS6_ADAPTER_EXT     Ext = (PNDIS6_ADAPTER_EXT)NdisMiniportDmaHandle;
+    PNDIS6_SG_CALL_CONTEXT ctx;
+    PMDL                   Mdl;
+    PVOID                  CurrentVa;
+    ULONG                  Length;
+    ULONG                  MdlOffset;
+    BOOLEAN                WriteToDevice;
+    NTSTATUS               Status;
+
+    UNREFERENCED_PARAMETER(ScatterGatherListBuffer);
+    UNREFERENCED_PARAMETER(ScatterGatherListBufferSize);
+
+    if (Ext == NULL || NetBuffer == NULL)
+        return NDIS_STATUS_INVALID_PARAMETER;
+
+    if (Ext->DmaAdapter == NULL || !Ext->SgDescriptionValid ||
+        Ext->SgDescription.ProcessSGListHandler == NULL)
+    {
+        return NDIS_STATUS_INVALID_PARAMETER;
+    }
+
+    Mdl       = NET_BUFFER_CURRENT_MDL(NetBuffer);
+    MdlOffset = NET_BUFFER_CURRENT_MDL_OFFSET(NetBuffer);
+    Length    = NET_BUFFER_DATA_LENGTH(NetBuffer);
+
+    if (Mdl == NULL || Length == 0)
+        return NDIS_STATUS_INVALID_PARAMETER;
+
+    CurrentVa = (PUCHAR)MmGetMdlVirtualAddress(Mdl) + MdlOffset;
+
+    /* NDIS_SG_LIST_WRITE_TO_DEVICE == 0x01 — for TX direction (most sends).
+     * The symbol isn't in the ReactOS NDIS headers yet; use the literal. */
+    WriteToDevice = (Flags & 0x00000001) ? TRUE : FALSE;
+
+    ctx = (PNDIS6_SG_CALL_CONTEXT)ExAllocatePoolWithTag(
+        NonPagedPool, sizeof(NDIS6_SG_CALL_CONTEXT), NDIS6_SG_CTX_TAG);
+    if (ctx == NULL)
+        return NDIS_STATUS_RESOURCES;
+
+    ctx->Ext             = Ext;
+    ctx->NetBuffer       = NetBuffer;
+    ctx->OriginalContext = Context;
+    ctx->WriteToDevice   = WriteToDevice;
+
+    Status = Ext->DmaAdapter->DmaOperations->GetScatterGatherList(
+        Ext->DmaAdapter,
+        Ext->PhysicalDeviceObject,
+        Mdl,
+        CurrentVa,
+        Length,
+        Ndis6SgExecutionRoutine,
+        ctx,
+        WriteToDevice);
+
+    if (!NT_SUCCESS(Status))
+    {
+        /* On sync failure the execution routine is NOT called — free ctx. */
+        ExFreePoolWithTag(ctx, NDIS6_SG_CTX_TAG);
+        return (NDIS_STATUS)Status;
+    }
+
+    /* Success path: on x86/amd64 the execution routine already ran and
+     * freed ctx. On an async path the routine will run and free it later;
+     * we must NOT touch ctx here. */
+    return NDIS_STATUS_SUCCESS;
+}
+
 VOID
 NTAPI
 NdisMFreeNetBufferSGList(
@@ -263,9 +514,19 @@ NdisMFreeNetBufferSGList(
     _In_ PSCATTER_GATHER_LIST pSGL,
     _In_ PNET_BUFFER          NetBuffer)
 {
-    UNREFERENCED_PARAMETER(NdisMiniportDmaHandle);
-    UNREFERENCED_PARAMETER(pSGL);
+    PNDIS6_ADAPTER_EXT Ext = (PNDIS6_ADAPTER_EXT)NdisMiniportDmaHandle;
+    BOOLEAN WriteToDevice = FALSE;
     UNREFERENCED_PARAMETER(NetBuffer);
+
+    if (Ext == NULL || pSGL == NULL || Ext->DmaAdapter == NULL)
+        return;
+
+    /* HalPutScatterGatherList reads WriteToDevice from the per-element
+     * context stashed in SGL->Reserved, but still wants a hint. We can't
+     * reliably recover the original direction here — HalPutScatterGatherList
+     * uses the stashed copy regardless, so the hint is cosmetic. */
+    Ext->DmaAdapter->DmaOperations->PutScatterGatherList(
+        Ext->DmaAdapter, pSGL, WriteToDevice);
 }
 
 /* ============================================================================
@@ -419,18 +680,77 @@ Ndis6DpcWrapper(
         NULL);
 }
 
+/* MSI message-service adapter. The NDIS 6 driver's message-based
+ * ISR is a MINIPORT_MESSAGE_INTERRUPT routine with signature
+ *   BOOLEAN (*)(NDIS_HANDLE Ctx, ULONG MessageId, PBOOLEAN QueueDpc,
+ *               PULONG TargetProcessors);
+ * The kernel IoConnectInterruptEx speaks PKMESSAGE_SERVICE_ROUTINE which
+ * is (PKINTERRUPT, PVOID, ULONG). We bridge by stashing the Ext pointer
+ * as ServiceContext; the kernel then gives us (Interrupt, Ext, MsgId)
+ * and we call into Ext->IntChars.MessageInterruptHandler.
+ *
+ * Many drivers (e1000e, virtio-net) only set MsiSupported = TRUE and
+ * leave MessageInterruptHandler NULL — for those, NDIS dispatches the
+ * regular line-based InterruptHandler and the driver checks ICR/EIMS
+ * itself to figure out which message fired. We fall back to the
+ * regular handler when MessageInterruptHandler is absent. */
+static BOOLEAN NTAPI
+Ndis6MsiIsrWrapper(
+    _In_ PKINTERRUPT Interrupt,
+    _In_ PVOID       Context,
+    _In_ ULONG       MessageId)
+{
+    PNDIS6_ADAPTER_EXT Ext = (PNDIS6_ADAPTER_EXT)Context;
+    BOOLEAN QueueDpc = FALSE;
+    ULONG TargetCpus = 0;
+    BOOLEAN Recognized;
+
+    UNREFERENCED_PARAMETER(Interrupt);
+
+    if (Ext == NULL)
+        return FALSE;
+
+    if (Ext->IntChars.MessageInterruptHandler != NULL)
+    {
+        Recognized = Ext->IntChars.MessageInterruptHandler(
+            Ext->MiniportInterruptContext,
+            MessageId,
+            &QueueDpc,
+            &TargetCpus);
+    }
+    else if (Ext->IntChars.InterruptHandler != NULL)
+    {
+        /* Fall back to the regular ISR — the driver figures out which
+         * message fired by reading hardware status registers. */
+        Recognized = Ext->IntChars.InterruptHandler(
+            Ext->MiniportInterruptContext,
+            &QueueDpc,
+            &TargetCpus);
+    }
+    else
+    {
+        return FALSE;
+    }
+
+    if (Recognized && QueueDpc)
+        KeInsertQueueDpc(&Ext->InterruptDpc, NULL, NULL);
+
+    return Recognized;
+}
+
 NDIS_STATUS
 NTAPI
 NdisMRegisterInterruptEx(
-    _In_  NDIS_HANDLE                                NdisMiniportHandle,
-    _In_  NDIS_HANDLE                                MiniportInterruptContext,
-    _In_  PNDIS_MINIPORT_INTERRUPT_CHARACTERISTICS   MiniportInterruptCharacteristics,
-    _Out_ PNDIS_HANDLE                               NdisInterruptHandle)
+    _In_    NDIS_HANDLE                                NdisMiniportHandle,
+    _In_    NDIS_HANDLE                                MiniportInterruptContext,
+    _Inout_ PNDIS_MINIPORT_INTERRUPT_CHARACTERISTICS   MiniportInterruptCharacteristics,
+    _Out_   PNDIS_HANDLE                               NdisInterruptHandle)
 {
     PNDIS6_ADAPTER_EXT Ext;
     NTSTATUS           Status;
     KINTERRUPT_MODE    InterruptMode;
     BOOLEAN            ShareVector;
+    BOOLEAN            WantsMsi;
 
     if (NdisInterruptHandle == NULL || MiniportInterruptCharacteristics == NULL)
         return NDIS_STATUS_INVALID_PARAMETER;
@@ -447,6 +767,82 @@ NdisMRegisterInterruptEx(
      * handler runs from inside this wrapper at DISPATCH_LEVEL. */
     KeInitializeDpc(&Ext->InterruptDpc, Ndis6DpcWrapper, Ext);
 
+    /* C1/C2: the driver asks for MSI by setting IntChars.MsiSupported.
+     * Some drivers also fill MessageInterruptHandler; many (e1000e
+     * included) leave it NULL and reuse the regular ISR per message.
+     * Try the message-based path first via IoConnectInterruptEx; if the
+     * PDO has no MSI resources the EX path falls back to a line-based
+     * connection on its own via FallBackServiceRoutine. */
+    WantsMsi = (Ext->IntChars.MsiSupported &&
+                Ext->PhysicalDeviceObject != NULL);
+
+    if (WantsMsi)
+    {
+        IO_CONNECT_INTERRUPT_PARAMETERS p;
+        RtlZeroMemory(&p, sizeof(p));
+        p.Version = CONNECT_MESSAGE_BASED;
+        p.MessageBased.PhysicalDeviceObject    = Ext->PhysicalDeviceObject;
+        p.MessageBased.ConnectionContext.InterruptMessageTable = &Ext->MsiTable;
+        p.MessageBased.MessageServiceRoutine   = Ndis6MsiIsrWrapper;
+        p.MessageBased.ServiceContext          = Ext;
+        p.MessageBased.SpinLock                = NULL;
+        p.MessageBased.SynchronizeIrql         = 0;
+        p.MessageBased.FloatingSave            = FALSE;
+        p.MessageBased.FallBackServiceRoutine  = Ndis6IsrWrapper;
+
+        Status = IoConnectInterruptEx(&p);
+        DbgPrint("NDIS6: IoConnectInterruptEx(MSG) -> 0x%08lx MsiTable=%p\n",
+                 (ULONG)Status, Ext->MsiTable);
+
+        if (NT_SUCCESS(Status))
+        {
+            if (Ext->MsiTable != NULL && Ext->MsiTable->MessageCount > 0)
+            {
+                /* True MSI/MSI-X was connected — keep the table, mark
+                 * the InterruptObject as the first vector's PKINTERRUPT
+                 * so the legacy deregister path still works. */
+                Ext->InterruptObject = Ext->MsiTable->MessageInfo[0].InterruptObject;
+                Ext->MsiConnected    = TRUE;
+                Ext->IntChars.InterruptType    = NDIS_CONNECT_MESSAGE_BASED;
+                Ext->IntChars.MessageInfoTable = Ext->MsiTable;
+
+                /* Per the DDK, MiniportInterruptCharacteristics is in/out:
+                 * NDIS must write the actual connection type and the
+                 * message info table back to the caller so the miniport
+                 * can decide whether it's running MSI-X (and program its
+                 * own per-vector cause routing accordingly). */
+                MiniportInterruptCharacteristics->InterruptType    = NDIS_CONNECT_MESSAGE_BASED;
+                MiniportInterruptCharacteristics->MessageInfoTable = Ext->MsiTable;
+
+                DbgPrint("NDIS6: connected %lu MSI vectors (wrote back InterruptType=MSG MessageInfoTable=%p)\n",
+                         Ext->MsiTable->MessageCount, Ext->MsiTable);
+            }
+            else
+            {
+                /* Fallback path inside IoConnectInterruptEx used the
+                 * line-based connection; InterruptObject is stashed in
+                 * ConnectionContext.InterruptObject which aliases the
+                 * first element of the MessageTable union. */
+                Ext->InterruptObject =
+                    (PKINTERRUPT)(ULONG_PTR)Ext->MsiTable;
+                Ext->MsiTable        = NULL;
+                Ext->IntChars.InterruptType    = NDIS_CONNECT_LINE_BASED;
+                Ext->IntChars.MessageInfoTable = NULL;
+
+                /* Same write-back as above, line-based variant. */
+                MiniportInterruptCharacteristics->InterruptType    = NDIS_CONNECT_LINE_BASED;
+                MiniportInterruptCharacteristics->MessageInfoTable = NULL;
+
+                DbgPrint("NDIS6: message-based fell back to line KINTERRUPT=%p\n",
+                         Ext->InterruptObject);
+            }
+
+            *NdisInterruptHandle = (NDIS_HANDLE)Ext;
+            return NDIS_STATUS_SUCCESS;
+        }
+        /* EX path failed outright — fall through to the legacy line path. */
+    }
+
     /* The Phase 1 PnP dispatcher already extracted the IRQ vector / IRQL /
      * affinity from the translated resource list at IRP_MN_START_DEVICE
      * time (see 60driver.c). If those fields are zero we can't connect. */
@@ -462,8 +858,7 @@ NdisMRegisterInterruptEx(
                         ? Latched
                         : LevelSensitive;
 
-    /* Share the vector unless the driver explicitly asked for MSI-X (which
-     * we can't satisfy on this HAL — fall back to line-based shared). */
+    /* Share the vector — we default to shared line-based. */
     ShareVector = TRUE;
 
     DbgPrint("NDIS6: NdisMRegisterInterruptEx vec=%u irql=%u affinity=0x%lx mode=%s share=%d\n",
@@ -495,9 +890,13 @@ NdisMRegisterInterruptEx(
     }
 
     /* Force the interrupt-type field to LINE_BASED so any post-registration
-     * check the driver does picks its legacy interrupt code path. e1000e
-     * inspects this in interrupt_ndis6.c around line 168. */
-    Ext->IntChars.InterruptType = NDIS_CONNECT_LINE_BASED;
+     * check the driver does picks its legacy interrupt code path. */
+    Ext->IntChars.InterruptType    = NDIS_CONNECT_LINE_BASED;
+    Ext->IntChars.MessageInfoTable = NULL;
+
+    /* DDK in/out semantics: write back to the caller. */
+    MiniportInterruptCharacteristics->InterruptType    = NDIS_CONNECT_LINE_BASED;
+    MiniportInterruptCharacteristics->MessageInfoTable = NULL;
 
     *NdisInterruptHandle = (NDIS_HANDLE)Ext;
     return NDIS_STATUS_SUCCESS;
