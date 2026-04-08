@@ -1,4 +1,6 @@
 
+spec2def(acpi.sys acpi.spec ADD_IMPORTLIB)
+
 include_directories(
     include
     acpica/include)
@@ -196,6 +198,7 @@ list(APPEND ACPI_SOURCE
     acpienum.c
     eval.c
     interface.c
+    opregion.c
     pnp.c
     power.c
     buspdo.c
@@ -206,6 +209,7 @@ list(APPEND ACPI_SOURCE
 
 add_library(acpi MODULE
     ${ACPI_SOURCE}
+    ${CMAKE_CURRENT_BINARY_DIR}/acpi.def
     acpi.rc)
 
 set_module_type(acpi kernelmodedriver)

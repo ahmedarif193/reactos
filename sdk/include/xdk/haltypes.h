@@ -201,6 +201,32 @@ typedef UCHAR
 (NTAPI *pHalVectorToIDTEntry)(
   ULONG Vector);
 
+typedef struct _HAL_INTERRUPT_TARGET_INFORMATION {
+  ULONG Version;
+  KAFFINITY TargetProcessors;
+  ULONG ProcessorNumber;
+  ULONG DestinationId;
+} HAL_INTERRUPT_TARGET_INFORMATION, *PHAL_INTERRUPT_TARGET_INFORMATION;
+
+#define HAL_INTERRUPT_TARGET_INFORMATION_VERSION 1
+
+typedef struct _HAL_MESSAGE_ROUTING_INFO {
+  ULONG Version;
+  ULONG Flags;
+  KIRQL DesiredIrql;
+  ULONG MessageCount;
+  ULONG Vector;
+  KIRQL Irql;
+  KAFFINITY TargetProcessors;
+  ULONG DestinationId;
+  PHYSICAL_ADDRESS MessageAddress;
+  USHORT MessageData;
+  USHORT Reserved;
+} HAL_MESSAGE_ROUTING_INFO, *PHAL_MESSAGE_ROUTING_INFO;
+
+#define HAL_MESSAGE_ROUTING_INFO_VERSION 1
+#define HAL_MSI_ROUTING_ALLOCATE_VECTOR  0x00000001
+
 typedef BOOLEAN
 (NTAPI *pHalFindBusAddressTranslation)(
   _In_ PHYSICAL_ADDRESS BusAddress,

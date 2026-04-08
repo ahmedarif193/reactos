@@ -13,7 +13,7 @@
 #define NDEBUG
 #include <debug.h>
 
-static PKINTERRUPT AcpiInterrupt;
+static PVOID AcpiInterrupt;
 static BOOLEAN AcpiInterruptHandlerRegistered = FALSE;
 static ACPI_OSD_HANDLER AcpiIrqHandler = NULL;
 static PVOID AcpiIrqContext = NULL;
@@ -291,12 +291,15 @@ AcpiOsMapMemory (
     ACPI_SIZE               length)
 {
     PHYSICAL_ADDRESS Address;
+    MEMORY_CACHING_TYPE CacheType;
     PVOID Ptr;
 
     DPRINT("AcpiOsMapMemory(phys 0x%p  size 0x%X)\n", phys, length);
 
-    Address.QuadPart = (ULONGLONG)phys;
-    Ptr = MmMapIoSpace(Address, length, MmNonCached);
+    Address.QuadPart = (ULONG)phys;
+    CacheType = MmNonCached;
+    HalGetMemoryCachingRequirements(Address, length, &CacheType);
+    Ptr = MmMapIoSpace(Address, length, CacheType);
     if (!Ptr)
     {
         DPRINT1("Mapping failed\n");
@@ -735,6 +738,8 @@ AcpiOsInstallInterruptHandler (
     KIRQL DIrql;
     KAFFINITY Affinity;
     NTSTATUS Status;
+    IO_CONNECT_INTERRUPT_PARAMETERS Parameters;
+    HAL_INTERRUPT_TARGET_INFORMATION TargetInfo;
 
     if (AcpiInterruptHandlerRegistered)
     {
@@ -756,28 +761,41 @@ AcpiOsInstallInterruptHandler (
         InterruptNumber,
         &DIrql,
         &Affinity);
+    DIrql = HalConvertDeviceIdtToIrql(Vector);
+
+    RtlZeroMemory(&TargetInfo, sizeof(TargetInfo));
+    TargetInfo.Version = HAL_INTERRUPT_TARGET_INFORMATION_VERSION;
+    TargetInfo.TargetProcessors = Affinity;
+    HalGetInterruptTargetInformation(&TargetInfo);
 
     AcpiIrqNumber = InterruptNumber;
     AcpiIrqHandler = ServiceRoutine;
     AcpiIrqContext = Context;
     AcpiInterruptHandlerRegistered = TRUE;
 
-    Status = IoConnectInterrupt(
-        &AcpiInterrupt,
-        OslIsrStub,
-        NULL,
-        NULL,
-        Vector,
-        DIrql,
-        DIrql,
-        LevelSensitive,
-        TRUE,
-        Affinity,
-        FALSE);
+    RtlZeroMemory(&Parameters, sizeof(Parameters));
+    Parameters.Version = CONNECT_FULLY_SPECIFIED;
+    Parameters.FullySpecified.PhysicalDeviceObject = NULL;
+    Parameters.FullySpecified.InterruptObject = (PKINTERRUPT *)&AcpiInterrupt;
+    Parameters.FullySpecified.ServiceRoutine = OslIsrStub;
+    Parameters.FullySpecified.ServiceContext = NULL;
+    Parameters.FullySpecified.SpinLock = NULL;
+    Parameters.FullySpecified.Vector = Vector;
+    Parameters.FullySpecified.Irql = DIrql;
+    Parameters.FullySpecified.SynchronizeIrql = DIrql;
+    Parameters.FullySpecified.InterruptMode = LevelSensitive;
+    Parameters.FullySpecified.ShareVector = TRUE;
+    Parameters.FullySpecified.ProcessorEnableMask =
+        TargetInfo.TargetProcessors ? TargetInfo.TargetProcessors : Affinity;
+    Parameters.FullySpecified.FloatingSave = FALSE;
+    Parameters.FullySpecified.Group = 0;
+
+    Status = IoConnectInterruptEx(&Parameters);
 
     if (!NT_SUCCESS(Status))
     {
         DPRINT("Could not connect to interrupt %d\n", Vector);
+        AcpiInterruptHandlerRegistered = FALSE;
         return AE_ERROR;
     }
     return AE_OK;
@@ -788,7 +806,11 @@ AcpiOsRemoveInterruptHandler (
     UINT32                  InterruptNumber,
     ACPI_OSD_HANDLER        ServiceRoutine)
 {
+    IO_DISCONNECT_INTERRUPT_PARAMETERS DisconnectParameters;
+
     DPRINT("AcpiOsRemoveInterruptHandler()\n");
+
+    UNREFERENCED_PARAMETER(InterruptNumber);
 
     if (!ServiceRoutine)
     {
@@ -798,7 +820,10 @@ AcpiOsRemoveInterruptHandler (
 
     if (AcpiInterruptHandlerRegistered)
     {
-        IoDisconnectInterrupt(AcpiInterrupt);
+        RtlZeroMemory(&DisconnectParameters, sizeof(DisconnectParameters));
+        DisconnectParameters.Version = CONNECT_FULLY_SPECIFIED;
+        DisconnectParameters.ConnectionContext.Generic = AcpiInterrupt;
+        IoDisconnectInterruptEx(&DisconnectParameters);
         AcpiInterrupt = NULL;
         AcpiInterruptHandlerRegistered = FALSE;
     }
