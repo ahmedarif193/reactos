@@ -12,14 +12,19 @@ list(APPEND HAL_GENERIC_SOURCE
     generic/nmi.c
     generic/pic.c
     generic/reboot.c
+    generic/sysinfo_stubs.c
     generic/sysinfo.c
     generic/usage.c
     generic/x86bios.c)
 
+if(ARCH STREQUAL "i386" OR ARCH STREQUAL "amd64")
+    list(APPEND HAL_GENERIC_SOURCE
+        generic/portio.c)
+endif()
+
 if(ARCH STREQUAL "i386")
     list(APPEND HAL_GENERIC_SOURCE
-        generic/bios.c
-        generic/portio.c)
+        generic/bios.c)
 
     list(APPEND HAL_GENERIC_ASM_SOURCE
         generic/v86.S)
