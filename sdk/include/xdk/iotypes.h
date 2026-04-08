@@ -2069,6 +2069,7 @@ typedef enum _DMA_WIDTH {
   Width8Bits,
   Width16Bits,
   Width32Bits,
+  Width64Bits,
   MaximumDmaWidth
 } DMA_WIDTH, *PDMA_WIDTH;
 

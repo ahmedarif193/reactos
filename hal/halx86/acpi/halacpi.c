@@ -38,6 +38,9 @@ LIST_ENTRY HalpAcpiTableMatchList;
 ULONG HalpInvalidAcpiTable;
 
 ULONG HalpPicVectorRedirect[] = {0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15};
+UCHAR HalpPicVectorOverrideTriggerMode[16];
+UCHAR HalpPicVectorOverridePolarity[16]; /* Populated by MADT parsing for future IOAPIC use, currently unused */
+BOOLEAN HalpPicVectorOverrideValid[16];
 
 /* This determines the HAL type */
 BOOLEAN HalDisableFirmwareMapper = TRUE;

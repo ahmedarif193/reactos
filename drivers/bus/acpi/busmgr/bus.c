@@ -1792,10 +1792,8 @@ acpi_init (void)
 	acpi_button_init();
 	//acpi_ec_init();		/* ACPI Embedded Controller */
 #ifdef CONFIG_ACPI_PCI
-	if (!acpi_pci_disabled) {
-		acpi_pci_link_init();	/* ACPI PCI Interrupt Link */
-		acpi_pci_root_init();	/* ACPI PCI Root Bridge */
-	}
+	acpi_pci_link_init();	/* ACPI PCI Interrupt Link */
+	acpi_pci_root_init();	/* ACPI PCI Root Bridge */
 #endif
 
 	//acpi_scan_init();
@@ -1823,4 +1821,3 @@ acpi_exit (void)
 
 	return_VOID;
 }
-
