@@ -10,6 +10,7 @@
 #include "pci.h"
 
 #include <initguid.h>
+#include <devpkey.h>
 #include <wdmguid.h>
 
 DEFINE_GUID(GUID_REACTOS_PCI_ROOT_BUS_INTERFACE,
@@ -539,6 +540,185 @@ PciPdoOpenEnumInstanceKey(
 }
 
 static
+NTSTATUS
+PciPdoQueryStringProperty(
+    _In_ PPDO_DEVICE_EXTENSION DeviceExtension,
+    _In_ CONST DEVPROPKEY *PropertyKey,
+    _In_ DEVICE_REGISTRY_PROPERTY LegacyProperty,
+    _Out_ PUNICODE_STRING Value)
+{
+    DEVPROPTYPE PropertyType = DEVPROP_TYPE_EMPTY;
+    ULONG RequiredLength = 0;
+    PWSTR Buffer = NULL;
+    NTSTATUS Status;
+
+    if (!Value)
+        return STATUS_INVALID_PARAMETER;
+
+    Value->Buffer = NULL;
+    Value->Length = 0;
+    Value->MaximumLength = 0;
+
+    if (!DeviceExtension ||
+        !DeviceExtension->PciDevice ||
+        !DeviceExtension->PciDevice->Pdo)
+    {
+        return STATUS_INVALID_PARAMETER;
+    }
+
+    Status = IoGetDevicePropertyData(DeviceExtension->PciDevice->Pdo,
+                                     PropertyKey,
+                                     0,
+                                     0,
+                                     0,
+                                     NULL,
+                                     &RequiredLength,
+                                     &PropertyType);
+    if (Status == STATUS_BUFFER_TOO_SMALL &&
+        RequiredLength >= sizeof(WCHAR) &&
+        PropertyType == DEVPROP_TYPE_STRING)
+    {
+        Buffer = ExAllocatePoolWithTag(PagedPool, RequiredLength, TAG_PCI);
+        if (!Buffer)
+            return STATUS_INSUFFICIENT_RESOURCES;
+
+        Status = IoGetDevicePropertyData(DeviceExtension->PciDevice->Pdo,
+                                         PropertyKey,
+                                         0,
+                                         0,
+                                         RequiredLength,
+                                         Buffer,
+                                         &RequiredLength,
+                                         &PropertyType);
+    }
+    else
+    {
+        Status = IoGetDeviceProperty(DeviceExtension->PciDevice->Pdo,
+                                     LegacyProperty,
+                                     0,
+                                     NULL,
+                                     &RequiredLength);
+        if (Status != STATUS_BUFFER_TOO_SMALL ||
+            RequiredLength < sizeof(WCHAR))
+        {
+            return Status;
+        }
+
+        Buffer = ExAllocatePoolWithTag(PagedPool, RequiredLength, TAG_PCI);
+        if (!Buffer)
+            return STATUS_INSUFFICIENT_RESOURCES;
+
+        Status = IoGetDeviceProperty(DeviceExtension->PciDevice->Pdo,
+                                     LegacyProperty,
+                                     RequiredLength,
+                                     Buffer,
+                                     &RequiredLength);
+    }
+
+    if (!NT_SUCCESS(Status))
+    {
+        ExFreePoolWithTag(Buffer, TAG_PCI);
+        return Status;
+    }
+
+    if (RequiredLength < sizeof(WCHAR) || RequiredLength > MAXUSHORT)
+    {
+        ExFreePoolWithTag(Buffer, TAG_PCI);
+        return STATUS_OBJECT_NAME_NOT_FOUND;
+    }
+
+    Value->Buffer = Buffer;
+    Value->Length = (USHORT)(RequiredLength - sizeof(WCHAR));
+    Value->MaximumLength = (USHORT)RequiredLength;
+    return STATUS_SUCCESS;
+}
+
+static
+NTSTATUS
+PciPdoOpenDriverPropertyKey(
+    _In_ PPDO_DEVICE_EXTENSION DeviceExtension,
+    _In_ ACCESS_MASK DesiredAccess,
+    _Out_ PHANDLE KeyHandle)
+{
+    UNICODE_STRING DriverKeyName;
+    OBJECT_ATTRIBUTES ObjectAttributes;
+    NTSTATUS Status;
+
+    Status = PciPdoQueryStringProperty(DeviceExtension,
+                                       &DEVPKEY_Device_Driver,
+                                       DevicePropertyDriverKeyName,
+                                       &DriverKeyName);
+    if (!NT_SUCCESS(Status))
+        return Status;
+
+    InitializeObjectAttributes(&ObjectAttributes,
+                               &DriverKeyName,
+                               OBJ_CASE_INSENSITIVE | OBJ_KERNEL_HANDLE,
+                               NULL,
+                               NULL);
+    Status = ZwOpenKey(KeyHandle, DesiredAccess, &ObjectAttributes);
+    ExFreePoolWithTag(DriverKeyName.Buffer, TAG_PCI);
+    return Status;
+}
+
+static
+VOID
+PciPdoSetUint32DeviceProperty(
+    _In_ PPDO_DEVICE_EXTENSION DeviceExtension,
+    _In_ CONST DEVPROPKEY *PropertyKey,
+    _In_ ULONG Value)
+{
+    NTSTATUS Status;
+
+    if (!DeviceExtension ||
+        !DeviceExtension->PciDevice ||
+        !DeviceExtension->PciDevice->Pdo)
+    {
+        return;
+    }
+
+    Status = IoSetDevicePropertyData(DeviceExtension->PciDevice->Pdo,
+                                     PropertyKey,
+                                     0,
+                                     0,
+                                     DEVPROP_TYPE_UINT32,
+                                     sizeof(Value),
+                                     &Value);
+    if (!NT_SUCCESS(Status))
+    {
+        DPRINT("PCI: IoSetDevicePropertyData(pid %lu) failed for %lu:%02lx:%02lx.%lu: 0x%08lx\n",
+               PropertyKey->pid,
+               PciPdoGetSegment(DeviceExtension),
+               DeviceExtension->PciDevice->BusNumber,
+               DeviceExtension->PciDevice->SlotNumber.u.bits.DeviceNumber,
+               DeviceExtension->PciDevice->SlotNumber.u.bits.FunctionNumber,
+               Status);
+    }
+}
+
+static
+VOID
+PciPdoPublishDeviceProperties(
+    _In_ PPDO_DEVICE_EXTENSION DeviceExtension)
+{
+    ULONG DeviceNumber, FunctionNumber, Address;
+
+    if (!DeviceExtension || !DeviceExtension->PciDevice)
+        return;
+
+    DeviceNumber = DeviceExtension->PciDevice->SlotNumber.u.bits.DeviceNumber;
+    FunctionNumber = DeviceExtension->PciDevice->SlotNumber.u.bits.FunctionNumber;
+    Address = ((DeviceNumber << 16) & 0xFFFF0000) | (FunctionNumber & 0xFFFF);
+
+    PciPdoSetUint32DeviceProperty(DeviceExtension,
+                                  &DEVPKEY_Device_BusNumber,
+                                  DeviceExtension->PciDevice->BusNumber);
+    PciPdoSetUint32DeviceProperty(DeviceExtension,
+                                  &DEVPKEY_Device_Address,
+                                  Address);
+}
+
+static
 ULONG
 PciPdoNormalizeMsiMessageCount(
     _In_ ULONG MessageCount)
@@ -691,15 +871,26 @@ PciPdoDetermineInterruptPolicy(
         ZwClose(KeyHandle);
     }
 
-    if (NT_SUCCESS(IoOpenDeviceRegistryKey(DeviceExtension->PciDevice->Pdo,
-                                           PLUGPLAY_REGKEY_DRIVER,
-                                           KEY_READ,
-                                           &KeyHandle)))
+    if (NT_SUCCESS(PciPdoOpenDriverPropertyKey(DeviceExtension,
+                                               KEY_READ,
+                                               &KeyHandle)))
     {
         /* ReactOS network and audio INFs commonly place hardware policy
-         * under HKR in the main DDInstall section, which resolves to the
-         * class driver key. Honor that as a compatibility fallback until
-         * every class installer consistently uses DDInstall.HW. */
+         * under HKR in the main DDInstall section. Query the same class
+         * driver key through the Win7 property path first, then keep the
+         * direct registry-key fallback below for older callers. */
+        PciPdoApplyStandardMessageInterruptPolicy(KeyHandle,
+                                                  &UseMsi,
+                                                  &UseMsix,
+                                                  &MessageLimit);
+        PciPdoApplyLegacyInterruptPolicyFromKey(KeyHandle, &UseMsi, &UseMsix);
+        ZwClose(KeyHandle);
+    }
+    else if (NT_SUCCESS(IoOpenDeviceRegistryKey(DeviceExtension->PciDevice->Pdo,
+                                                PLUGPLAY_REGKEY_DRIVER,
+                                                KEY_READ,
+                                                &KeyHandle)))
+    {
         PciPdoApplyStandardMessageInterruptPolicy(KeyHandle,
                                                   &UseMsi,
                                                   &UseMsix,
@@ -2752,6 +2943,7 @@ PdoStartDevice(
         }
     }
     PciPdoCacheMsiInfo(DeviceExtension);
+    PciPdoPublishDeviceProperties(DeviceExtension);
     if (DeviceExtension->PciDevice->MsixCapability)
     {
         MsixMessageLimit = DeviceExtension->PciDevice->MsixTableSize;
