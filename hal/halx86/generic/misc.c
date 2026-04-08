@@ -354,6 +354,71 @@ HalGetProcessorIdByNtNumber(
     return STATUS_SUCCESS;
 }
 
+#ifdef _M_AMD64
+#undef KfLowerIrql
+#undef KeRaiseIrql
+#undef KeAcquireSpinLock
+#undef KfAcquireSpinLock
+#undef KfReleaseSpinLock
+
+KIRQL
+NTAPI
+KeGetCurrentIrql(VOID)
+{
+    return (KIRQL)__readcr8();
+}
+
+VOID
+FASTCALL
+KfLowerIrql(
+    _In_ KIRQL OldIrql)
+{
+    KeLowerIrql(OldIrql);
+}
+
+VOID
+NTAPI
+KeRaiseIrql(
+    _In_ KIRQL NewIrql,
+    _Out_ PKIRQL OldIrql)
+{
+    *OldIrql = KfRaiseIrql(NewIrql);
+}
+
+KIRQL
+NTAPI
+KeRaiseIrqlToSynchLevel(VOID)
+{
+    return KfRaiseIrql(SYNCH_LEVEL);
+}
+
+VOID
+NTAPI
+KeAcquireSpinLock(
+    _Inout_ PKSPIN_LOCK SpinLock,
+    _Out_ PKIRQL OldIrql)
+{
+    *OldIrql = KeAcquireSpinLockRaiseToDpc(SpinLock);
+}
+
+KIRQL
+FASTCALL
+KfAcquireSpinLock(
+    _Inout_ PKSPIN_LOCK SpinLock)
+{
+    return KeAcquireSpinLockRaiseToDpc(SpinLock);
+}
+
+VOID
+FASTCALL
+KfReleaseSpinLock(
+    _Inout_ PKSPIN_LOCK SpinLock,
+    _In_ KIRQL OldIrql)
+{
+    KeReleaseSpinLock(SpinLock, OldIrql);
+}
+#endif /* _M_AMD64 */
+
 #ifdef _M_IX86
 /* x86 fastcall wrappers */
 
