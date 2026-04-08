@@ -306,11 +306,27 @@ VOID UDPReceive(PIP_INTERFACE Interface, PIP_PACKET IPPacket)
      request on the address file object, call the associated receive
      handler. If no receive handler is registered, drop the packet */
 
+  {
+      static volatile LONG UdpRxCount = 0;
+      LONG uc = InterlockedIncrement(&UdpRxCount);
+      if (uc <= 10)
+      {
+          DbgPrint("TCPIP-UDP: UDPReceive #%ld dst=0x%08x:%u src=0x%08x:%u len=%u\n",
+                   uc, DstAddress->Address.IPv4Address, WH2N(UDPHeader->DestPort),
+                   SrcAddress->Address.IPv4Address, WH2N(UDPHeader->SourcePort),
+                   DataSize);
+      }
+  }
+
   AddrFile = AddrSearchFirst(DstAddress,
                              UDPHeader->DestPort,
                              IPPROTO_UDP,
                              &SearchContext);
   if (AddrFile) {
+    static volatile LONG UdpDelivered = 0;
+    LONG ud = InterlockedIncrement(&UdpDelivered);
+    if (ud <= 10)
+        DbgPrint("TCPIP-UDP: matched AddrFile=%p — delivering\n", AddrFile);
     do {
       DGDeliverData(AddrFile,
 		    SrcAddress,
@@ -323,11 +339,29 @@ VOID UDPReceive(PIP_INTERFACE Interface, PIP_PACKET IPPacket)
     } while ((AddrFile = AddrSearchNext(&SearchContext)) != NULL);
   } else {
     /* There are no open address files that will take this datagram */
-    /* FIXME: IPv4 only */
-    TI_DbgPrint(MID_TRACE, ("Cannot deliver IPv4 UDP datagram to address (0x%X).\n",
-      DN2H(DstAddress->Address.IPv4Address)));
-
-    /* FIXME: Send ICMP reply */
+    static volatile LONG UdpUnmatched = 0;
+    LONG uu = InterlockedIncrement(&UdpUnmatched);
+    if (uu <= 10)
+    {
+        /* Walk the address file list to see what IS bound. */
+        extern LIST_ENTRY AddressFileListHead;
+        extern KSPIN_LOCK AddressFileListLock;
+        PLIST_ENTRY entry;
+        KIRQL OldIrql;
+        DbgPrint("TCPIP-UDP: NO MATCH for dst=0x%08x:%u proto=UDP — listing all bound:\n",
+                 DstAddress->Address.IPv4Address, WH2N(UDPHeader->DestPort));
+        TcpipAcquireSpinLock(&AddressFileListLock, &OldIrql);
+        for (entry = AddressFileListHead.Flink;
+             entry != &AddressFileListHead;
+             entry = entry->Flink)
+        {
+            PADDRESS_FILE Af = CONTAINING_RECORD(entry, ADDRESS_FILE, ListEntry);
+            DbgPrint("TCPIP-UDP:   bound: addr=0x%08x port=%u proto=%d\n",
+                     Af->Address.Address.IPv4Address,
+                     WN2H(Af->Port), Af->Protocol);
+        }
+        TcpipReleaseSpinLock(&AddressFileListLock, OldIrql);
+    }
   }
   TI_DbgPrint(MAX_TRACE, ("Leaving.\n"));
 }

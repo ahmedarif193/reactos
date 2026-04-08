@@ -33,6 +33,17 @@ VOID NTAPI HandleDeferredProcessing(
 
   ASSERT(KeGetCurrentIrql() == DISPATCH_LEVEL);
 
+  /* dev-nt6-1: NDIS 6 adapters route their DPC through Ndis6DpcWrapper in
+   * 60io.c. The legacy DriverHandle is NULL for these adapters, so the
+   * dereference below would crash. If we got here it means a stale legacy
+   * DPC was queued against an NDIS 6 adapter — that should not happen
+   * after Phase 2, but bail defensively. */
+  if (Adapter && Adapter->IsNdis6)
+  {
+      NDIS_DbgPrint(MIN_TRACE, ("Legacy HandleDeferredProcessing called on NDIS 6 adapter %p — bridge bug\n", Adapter));
+      return;
+  }
+
   /* Call the deferred interrupt service handler for this adapter */
   (*Adapter->NdisMiniportBlock.DriverHandle->MiniportCharacteristics.HandleInterruptHandler)(
       Adapter->NdisMiniportBlock.MiniportAdapterContext);
@@ -65,6 +76,22 @@ BOOLEAN NTAPI ServiceRoutine(
   BOOLEAN Initializing;
 
   NDIS_DbgPrint(MAX_TRACE, ("Called. Interrupt (0x%X)\n", NdisInterrupt));
+
+  /* dev-nt6-1: NDIS 6 adapters install Ndis6IsrWrapper directly via
+   * IoConnectInterrupt and never use the legacy NDIS_MINIPORT_INTERRUPT
+   * object — so this routine should never be called for them. The legacy
+   * DriverHandle is NULL for NDIS 6 adapters, so any access below would
+   * crash. Defensive bail. */
+  if (NdisMiniportBlock != NULL)
+  {
+      PLOGICAL_ADAPTER Adapter =
+          CONTAINING_RECORD(NdisMiniportBlock, LOGICAL_ADAPTER, NdisMiniportBlock);
+      if (Adapter->IsNdis6)
+      {
+          NDIS_DbgPrint(MIN_TRACE, ("Legacy ServiceRoutine called on NDIS 6 adapter %p — bridge bug\n", Adapter));
+          return FALSE;
+      }
+  }
 
   /* Certain behavior differs if MiniportInitialize is executing when the interrupt is generated */
   Initializing = (NdisMiniportBlock->PnPDeviceState != NdisPnPDeviceStarted);
@@ -801,6 +828,15 @@ NdisMMapIoSpace(
 
   NDIS_DbgPrint(MAX_TRACE, ("Called\n"));
 
+  /* dev-nt6-1: NDIS 6 adapters skip the legacy bus-translation path
+   * because their PnP resources are already physical and the bus
+   * type/number aren't populated in NdisMiniportBlock. */
+  if (Adapter->IsNdis6)
+  {
+      extern NDIS_STATUS NTAPI Ndis6MMapIoSpace(PVOID*, NDIS_HANDLE, NDIS_PHYSICAL_ADDRESS, UINT);
+      return Ndis6MMapIoSpace(VirtualAddress, MiniportAdapterHandle, PhysicalAddress, Length);
+  }
+
   if(!HalTranslateBusAddress(Adapter->NdisMiniportBlock.BusType, Adapter->NdisMiniportBlock.BusNumber,
                              PhysicalAddress, &AddressSpace, &TranslatedAddress))
   {
@@ -1039,6 +1075,13 @@ NdisMRegisterIoPortRange(
 
   NDIS_DbgPrint(MAX_TRACE, ("Called - InitialPort 0x%x, NumberOfPorts 0x%x\n", InitialPort, NumberOfPorts));
 
+  /* dev-nt6-1: NDIS 6 adapters get the simple identity mapping. */
+  if (Adapter->IsNdis6)
+  {
+      extern NDIS_STATUS NTAPI Ndis6MRegisterIoPortRange(PVOID*, NDIS_HANDLE, UINT, UINT);
+      return Ndis6MRegisterIoPortRange(PortOffset, MiniportAdapterHandle, InitialPort, NumberOfPorts);
+  }
+
   /*
    * FIXME: NDIS 5+ completely ignores the InitialPort parameter, but
    * we don't have a way to get the I/O base address yet (see
@@ -1108,6 +1151,14 @@ NdisMDeregisterIoPortRange(IN  NDIS_HANDLE MiniportAdapterHandle,
     ULONG AddressSpace = 1;
 
     NDIS_DbgPrint(MAX_TRACE, ("Called - InitialPort 0x%x, NumberOfPorts 0x%x, Port Offset 0x%x\n", InitialPort, NumberOfPorts, PortOffset));
+
+    /* dev-nt6-1: NDIS 6 adapters used the identity mapping; symmetric tear-down. */
+    if (Adapter->IsNdis6)
+    {
+        extern VOID NTAPI Ndis6MDeregisterIoPortRange(NDIS_HANDLE, UINT, UINT, PVOID);
+        Ndis6MDeregisterIoPortRange(MiniportAdapterHandle, InitialPort, NumberOfPorts, PortOffset);
+        return;
+    }
 
     /* Translate the initial port again to find the address space of the translated address */
     if(!HalTranslateBusAddress(Adapter->NdisMiniportBlock.BusType, Adapter->NdisMiniportBlock.BusNumber,

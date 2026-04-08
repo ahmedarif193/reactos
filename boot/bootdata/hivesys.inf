@@ -1634,6 +1634,16 @@ HKLM,"SYSTEM\CurrentControlSet\Services\swenum","ImagePath",0x00020000,"system32
 HKLM,"SYSTEM\CurrentControlSet\Services\swenum","Start",0x00010001,0x00000000
 HKLM,"SYSTEM\CurrentControlSet\Services\swenum","Type",0x00010001,0x00000001
 
+; Base Filtering Engine (BFE) — stub, dev-nt6-1 branch
+HKLM,"SYSTEM\CurrentControlSet\Services\BFE","DisplayName",0x00000000,"Base Filtering Engine"
+HKLM,"SYSTEM\CurrentControlSet\Services\BFE","Description",0x00000000,"Manages WFP filters and callouts. Stub — accepts filter add/delete but never evaluates them."
+HKLM,"SYSTEM\CurrentControlSet\Services\BFE","ErrorControl",0x00010001,0x00000001
+HKLM,"SYSTEM\CurrentControlSet\Services\BFE","Group",0x00000000,"NetworkProvider"
+HKLM,"SYSTEM\CurrentControlSet\Services\BFE","ImagePath",0x00020000,"%SystemRoot%\system32\bfe.exe"
+HKLM,"SYSTEM\CurrentControlSet\Services\BFE","ObjectName",0x00000000,"LocalSystem"
+HKLM,"SYSTEM\CurrentControlSet\Services\BFE","Start",0x00010001,0x00000003
+HKLM,"SYSTEM\CurrentControlSet\Services\BFE","Type",0x00010001,0x00000010
+
 ; Audio Service
 HKLM,"SYSTEM\CurrentControlSet\Services\AudioSrv","DisplayName",0x00000000,%AUDIO_SERVICE%
 HKLM,"SYSTEM\CurrentControlSet\Services\AudioSrv","Description",0x00000000,%AUDIO_SERVICE_DESCRIPTION%

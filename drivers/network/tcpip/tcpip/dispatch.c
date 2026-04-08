@@ -1289,25 +1289,73 @@ VOID DispTdiQueryInformationExComplete(
  *     Context   = Pointer to the IRP for the request
  *     Status    = TDI status of the request
  *     ByteCount = Number of bytes returned in output buffer
+ *
+ * dev-nt6-1: this dispatch path uses kernel-pool buffers and copies
+ * to/from user space via SEH at completion time, instead of relying on
+ * MmProbeAndLockPages which is broken in ReactOS for valid user
+ * buffers. The dispatch saves user pointers in QueryContext->User*Buffer
+ * and we copy back here.
  */
 {
     PTI_QUERY_CONTEXT QueryContext;
 
     QueryContext = (PTI_QUERY_CONTEXT)Context;
-    if (NT_SUCCESS(Status)) {
-        CopyBufferToBufferChain(
-            QueryContext->InputMdl,
-            FIELD_OFFSET(TCP_REQUEST_QUERY_INFORMATION_EX, Context),
-            (PCHAR)&QueryContext->QueryInfo.Context,
-            CONTEXT_SIZE);
+
+    if (NT_SUCCESS(Status))
+    {
+        /* Write the resolved Context block back into the user input
+         * buffer at offset FIELD_OFFSET(TCP_REQUEST_QUERY_INFORMATION_EX, Context). */
+        if (QueryContext->UserInputBuffer)
+        {
+            _SEH2_TRY {
+                RtlCopyMemory(
+                    (PUCHAR)QueryContext->UserInputBuffer +
+                        FIELD_OFFSET(TCP_REQUEST_QUERY_INFORMATION_EX, Context),
+                    &QueryContext->QueryInfo.Context,
+                    CONTEXT_SIZE);
+            } _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER) {
+                /* User buffer went away — keep going. */
+            } _SEH2_END;
+        }
+        else if (QueryContext->InputMdl)
+        {
+            /* Legacy path: writeback via MDL (only used if the dispatch
+             * didn't take the kernel-buffer path). */
+            CopyBufferToBufferChain(
+                QueryContext->InputMdl,
+                FIELD_OFFSET(TCP_REQUEST_QUERY_INFORMATION_EX, Context),
+                (PCHAR)&QueryContext->QueryInfo.Context,
+                CONTEXT_SIZE);
+        }
+
+        /* Copy the kernel output buffer back to the user output buffer. */
+        if (QueryContext->KernelOutputBuffer && QueryContext->UserOutputBuffer)
+        {
+            ULONG CopyLen = (ByteCount < QueryContext->UserOutputLength)
+                ? ByteCount
+                : QueryContext->UserOutputLength;
+            _SEH2_TRY {
+                RtlCopyMemory(QueryContext->UserOutputBuffer,
+                              QueryContext->KernelOutputBuffer,
+                              CopyLen);
+            } _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER) {
+                /* User buffer went away — keep going. */
+            } _SEH2_END;
+        }
     }
 
-    MmUnlockPages(QueryContext->InputMdl);
-    IoFreeMdl(QueryContext->InputMdl);
-    if( QueryContext->OutputMdl ) {
-	MmUnlockPages(QueryContext->OutputMdl);
-	IoFreeMdl(QueryContext->OutputMdl);
-    }
+    /* Free MDLs (built via MmBuildMdlForNonPagedPool, no MmUnlockPages
+     * needed because we never locked). */
+    if (QueryContext->InputMdl)
+        IoFreeMdl(QueryContext->InputMdl);
+    if (QueryContext->OutputMdl)
+        IoFreeMdl(QueryContext->OutputMdl);
+
+    /* Free kernel-pool copy buffers. */
+    if (QueryContext->KernelInputBuffer)
+        ExFreePoolWithTag(QueryContext->KernelInputBuffer, QUERY_CONTEXT_TAG);
+    if (QueryContext->KernelOutputBuffer)
+        ExFreePoolWithTag(QueryContext->KernelOutputBuffer, QUERY_CONTEXT_TAG);
 
     QueryContext->Irp->IoStatus.Information = ByteCount;
     QueryContext->Irp->IoStatus.Status      = Status;
@@ -1342,30 +1390,47 @@ NTSTATUS DispTdiQueryInformationEx(
     PMDL OutputMdl          = NULL;
     NTSTATUS Status         = STATUS_SUCCESS;
 
-    TI_DbgPrint(DEBUG_IRP, ("Called.\n"));
+    DbgPrint("TCPIP-TDI: DispTdiQueryInformationEx ENTER FileObj=%p FsContext=%p FsContext2=%p RequestorMode=%d\n",
+             IrpSp->FileObject,
+             IrpSp->FileObject ? IrpSp->FileObject->FsContext : NULL,
+             IrpSp->FileObject ? IrpSp->FileObject->FsContext2 : NULL,
+             Irp->RequestorMode);
 
     TranContext = (PTRANSPORT_CONTEXT)IrpSp->FileObject->FsContext;
 
     switch ((ULONG_PTR)IrpSp->FileObject->FsContext2) {
     case TDI_TRANSPORT_ADDRESS_FILE:
+        DbgPrint("TCPIP-TDI: TRANSPORT_ADDRESS_FILE TranContext=%p\n", TranContext);
         Request.Handle.AddressHandle = TranContext->Handle.AddressHandle;
         break;
 
     case TDI_CONNECTION_FILE:
+        DbgPrint("TCPIP-TDI: CONNECTION_FILE TranContext=%p\n", TranContext);
         Request.Handle.ConnectionContext = TranContext->Handle.ConnectionContext;
         break;
 
     case TDI_CONTROL_CHANNEL_FILE:
+        DbgPrint("TCPIP-TDI: CONTROL_CHANNEL_FILE TranContext=%p\n", TranContext);
         Request.Handle.ControlChannel = TranContext->Handle.ControlChannel;
         break;
 
     default:
-        TI_DbgPrint(MIN_TRACE, ("Invalid transport context\n"));
+        DbgPrint("TCPIP-TDI: invalid FsContext2=%p — returning STATUS_INVALID_PARAMETER\n",
+                 IrpSp->FileObject ? IrpSp->FileObject->FsContext2 : NULL);
         return STATUS_INVALID_PARAMETER;
     }
 
     InputBufferLength  = IrpSp->Parameters.DeviceIoControl.InputBufferLength;
     OutputBufferLength = IrpSp->Parameters.DeviceIoControl.OutputBufferLength;
+
+    DbgPrint("TCPIP-TDI: InputBufferLength=%u (expected %u) OutputBufferLength=%u\n",
+             InputBufferLength,
+             (UINT)sizeof(TCP_REQUEST_QUERY_INFORMATION_EX),
+             OutputBufferLength);
+    DbgPrint("TCPIP-TDI: Type3InputBuffer=%p UserBuffer=%p SystemBuffer=%p\n",
+             IrpSp->Parameters.DeviceIoControl.Type3InputBuffer,
+             Irp->UserBuffer,
+             Irp->AssociatedIrp.SystemBuffer);
 
     /* Validate parameters */
     if ((InputBufferLength == sizeof(TCP_REQUEST_QUERY_INFORMATION_EX)) &&
@@ -1374,36 +1439,73 @@ NTSTATUS DispTdiQueryInformationEx(
         InputBuffer = (PTCP_REQUEST_QUERY_INFORMATION_EX)
             IrpSp->Parameters.DeviceIoControl.Type3InputBuffer;
         OutputBuffer = Irp->UserBuffer;
+        DbgPrint("TCPIP-TDI: TAKING DATA-FETCH PATH (output != 0)\n");
 
         QueryContext = ExAllocatePoolWithTag(NonPagedPool, sizeof(TI_QUERY_CONTEXT), QUERY_CONTEXT_TAG);
         if (QueryContext) {
-	    _SEH2_TRY {
-                InputMdl = IoAllocateMdl(InputBuffer,
-                    sizeof(TCP_REQUEST_QUERY_INFORMATION_EX),
-                    FALSE, TRUE, NULL);
+            RtlZeroMemory(QueryContext, sizeof(*QueryContext));
 
-                OutputMdl = IoAllocateMdl(OutputBuffer,
-                    OutputBufferLength, FALSE, TRUE, NULL);
+            /* Allocate kernel-pool buffers and SEH-copy the input from
+             * user space. Bypass MmProbeAndLockPages entirely since
+             * ReactOS's implementation faults on valid user pointers. */
+            QueryContext->KernelInputBuffer = ExAllocatePoolWithTag(
+                NonPagedPool,
+                sizeof(TCP_REQUEST_QUERY_INFORMATION_EX),
+                QUERY_CONTEXT_TAG);
+            QueryContext->KernelOutputBuffer = ExAllocatePoolWithTag(
+                NonPagedPool, OutputBufferLength, QUERY_CONTEXT_TAG);
 
-                if (InputMdl && OutputMdl) {
+            if (!QueryContext->KernelInputBuffer || !QueryContext->KernelOutputBuffer)
+            {
+                Status = STATUS_INSUFFICIENT_RESOURCES;
+                goto fetch_cleanup;
+            }
 
-                    MmProbeAndLockPages(InputMdl, Irp->RequestorMode,
-                        IoModifyAccess);
-
-                    InputMdlLocked = TRUE;
-
-                    MmProbeAndLockPages(OutputMdl, Irp->RequestorMode,
-                        IoWriteAccess);
-
-                    OutputMdlLocked = TRUE;
-
-                    RtlCopyMemory(&QueryContext->QueryInfo,
-                        InputBuffer, sizeof(TCP_REQUEST_QUERY_INFORMATION_EX));
-                } else
-                    Status = STATUS_INSUFFICIENT_RESOURCES;
+            _SEH2_TRY {
+                RtlCopyMemory(QueryContext->KernelInputBuffer,
+                              InputBuffer,
+                              sizeof(TCP_REQUEST_QUERY_INFORMATION_EX));
+                RtlCopyMemory(&QueryContext->QueryInfo,
+                              QueryContext->KernelInputBuffer,
+                              sizeof(TCP_REQUEST_QUERY_INFORMATION_EX));
+                Status = STATUS_SUCCESS;
+                DbgPrint("TCPIP-TDI: data-fetch user→kernel copy OK\n");
             } _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER) {
                 Status = _SEH2_GetExceptionCode();
+                DbgPrint("TCPIP-TDI: data-fetch SEH caught 0x%08lx\n", (ULONG)Status);
+                goto fetch_cleanup;
             } _SEH2_END;
+
+            /* Build MDLs that wrap the KERNEL-pool buffers. These are
+             * always valid in any process context, so the legacy
+             * CopyBufferToBufferChain calls in InfoTdi* work without
+             * touching user memory. */
+            InputMdl = IoAllocateMdl(QueryContext->KernelInputBuffer,
+                sizeof(TCP_REQUEST_QUERY_INFORMATION_EX), FALSE, FALSE, NULL);
+            OutputMdl = IoAllocateMdl(QueryContext->KernelOutputBuffer,
+                OutputBufferLength, FALSE, FALSE, NULL);
+
+            if (!InputMdl || !OutputMdl)
+            {
+                Status = STATUS_INSUFFICIENT_RESOURCES;
+                goto fetch_cleanup;
+            }
+
+            MmBuildMdlForNonPagedPool(InputMdl);
+            MmBuildMdlForNonPagedPool(OutputMdl);
+            InputMdlLocked = TRUE;    /* not locked, but treated as such for cleanup */
+            OutputMdlLocked = TRUE;
+
+            /* Save the original user pointers so completion can copy back. */
+            QueryContext->UserInputBuffer  = InputBuffer;
+            QueryContext->UserOutputBuffer = OutputBuffer;
+            QueryContext->UserOutputLength = OutputBufferLength;
+
+            DbgPrint("TCPIP-TDI: data-fetch MDLs ready InputMdl=%p OutputMdl=%p\n",
+                     InputMdl, OutputMdl);
+
+        fetch_cleanup:
+            ;
 
             if (NT_SUCCESS(Status)) {
                 Size = MmGetMdlByteCount(OutputMdl);
@@ -1444,8 +1546,7 @@ NTSTATUS DispTdiQueryInformationEx(
     } else if( InputBufferLength ==
 	       sizeof(TCP_REQUEST_QUERY_INFORMATION_EX) ) {
 	/* Handle the case where the user is probing the buffer for length */
-	TI_DbgPrint(MAX_TRACE, ("InputBufferLength %d OutputBufferLength %d\n",
-				InputBufferLength, OutputBufferLength));
+	DbgPrint("TCPIP-TDI: TAKING SIZE-QUERY PATH\n");
         InputBuffer = (PTCP_REQUEST_QUERY_INFORMATION_EX)
             IrpSp->Parameters.DeviceIoControl.Type3InputBuffer;
 
@@ -1453,21 +1554,53 @@ NTSTATUS DispTdiQueryInformationEx(
 
         QueryContext = ExAllocatePoolWithTag(NonPagedPool, sizeof(TI_QUERY_CONTEXT), QUERY_CONTEXT_TAG);
         if (!QueryContext) return STATUS_INSUFFICIENT_RESOURCES;
+        RtlZeroMemory(QueryContext, sizeof(*QueryContext));
+
+	/* Same kernel-buffer trick as the data-fetch path: SEH-copy
+	 * the input from user space, build a kernel-pool MDL, then
+	 * dispatch normally. Avoids ReactOS's broken
+	 * MmProbeAndLockPages behaviour. */
+	QueryContext->KernelInputBuffer = ExAllocatePoolWithTag(
+	    NonPagedPool,
+	    sizeof(TCP_REQUEST_QUERY_INFORMATION_EX),
+	    QUERY_CONTEXT_TAG);
+	if (!QueryContext->KernelInputBuffer)
+	{
+	    ExFreePoolWithTag(QueryContext, QUERY_CONTEXT_TAG);
+	    return STATUS_INSUFFICIENT_RESOURCES;
+	}
 
 	_SEH2_TRY {
-	    InputMdl = IoAllocateMdl(InputBuffer,
-				     sizeof(TCP_REQUEST_QUERY_INFORMATION_EX),
-				     FALSE, TRUE, NULL);
-
-	    MmProbeAndLockPages(InputMdl, Irp->RequestorMode,
-				IoModifyAccess);
-
-	    InputMdlLocked = TRUE;
+	    RtlCopyMemory(QueryContext->KernelInputBuffer,
+	                  InputBuffer,
+	                  sizeof(TCP_REQUEST_QUERY_INFORMATION_EX));
+	    RtlCopyMemory(&QueryContext->QueryInfo,
+	                  QueryContext->KernelInputBuffer,
+	                  sizeof(TCP_REQUEST_QUERY_INFORMATION_EX));
 	    Status = STATUS_SUCCESS;
+	    DbgPrint("TCPIP-TDI: size-query user→kernel copy OK\n");
 	} _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER) {
-	    TI_DbgPrint(MAX_TRACE, ("Failed to acquire client buffer\n"));
 	    Status = _SEH2_GetExceptionCode();
+	    DbgPrint("TCPIP-TDI: size-query SEH caught 0x%08lx\n", (ULONG)Status);
 	} _SEH2_END;
+
+	if (NT_SUCCESS(Status))
+	{
+	    InputMdl = IoAllocateMdl(QueryContext->KernelInputBuffer,
+	                             sizeof(TCP_REQUEST_QUERY_INFORMATION_EX),
+	                             FALSE, FALSE, NULL);
+	    if (InputMdl == NULL)
+	    {
+	        Status = STATUS_INSUFFICIENT_RESOURCES;
+	    }
+	    else
+	    {
+	        MmBuildMdlForNonPagedPool(InputMdl);
+	        InputMdlLocked = TRUE;
+	        QueryContext->UserInputBuffer = InputBuffer;
+	        DbgPrint("TCPIP-TDI: size-query InputMdl=%p ready\n", InputMdl);
+	    }
+	}
 
 	if( !NT_SUCCESS(Status) || !InputMdl ) {
 	    if( InputMdl ) IoFreeMdl( InputMdl );
