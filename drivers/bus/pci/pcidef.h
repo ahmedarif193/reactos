@@ -63,6 +63,8 @@
 #define  PCI_HEADER_TYPE_NORMAL	0
 #define  PCI_HEADER_TYPE_BRIDGE 1
 #define  PCI_HEADER_TYPE_CARDBUS 2
+#define  PCI_HEADER_TYPE_MASK   0x7f
+#define  PCI_HEADER_TYPE_MULTI_FUNCTION 0x80
 
 #define PCI_BIST		0x0f	/* 8 bits */
 #define PCI_BIST_CODE_MASK	0x0f	/* Return result */
@@ -195,6 +197,19 @@
 #define  PCI_CAP_ID_SLOTID	0x04	/* Slot Identification */
 #define  PCI_CAP_ID_MSI		0x05	/* Message Signalled Interrupts */
 #define  PCI_CAP_ID_CHSWP	0x06	/* CompactPCI HotSwap */
+#define  PCI_CAP_ID_PCIX    0x07    /* PCI-X */
+#define  PCI_CAP_ID_HT      0x08    /* HyperTransport */
+#define  PCI_CAP_ID_VENDOR_SPECIFIC 0x09
+#define  PCI_CAP_ID_DEBUG_PORT 0x0A
+#define  PCI_CAP_ID_CPCI_RES_CTRL 0x0B
+#define  PCI_CAP_ID_SHPC    0x0C    /* PCI Standard Hot-Plug Controller */
+#define  PCI_CAP_ID_P2P_SSID 0x0D   /* Bridge Subsystem ID */
+#define  PCI_CAP_ID_AGP_TARGET 0x0E
+#define  PCI_CAP_ID_SECURE  0x0F
+#define  PCI_CAP_ID_PCI_EXPRESS 0x10
+#define  PCI_CAP_ID_MSIX     0x11    /* MSI-X */
+#define  PCI_CAP_ID_SATA_CONFIG 0x12
+#define  PCI_CAP_ID_ADVANCED_FEATURES 0x13
 #define PCI_CAP_LIST_NEXT	1	/* Next capability in the list */
 #define PCI_CAP_FLAGS		2	/* Capability defined flags (16 bits) */
 #define PCI_CAP_SIZEOF		4
@@ -265,11 +280,24 @@
 #define  PCI_MSI_FLAGS_QSIZE	0x70	/* Message queue size configured */
 #define  PCI_MSI_FLAGS_QMASK	0x0e	/* Maximum queue size available */
 #define  PCI_MSI_FLAGS_ENABLE	0x01	/* MSI feature enabled */
+#define  PCI_MSI_FLAGS_MASK_BIT 0x0100  /* Per-vector mask supported */
 #define PCI_MSI_RFU		3	/* Rest of capability flags */
 #define PCI_MSI_ADDRESS_LO	4	/* Lower 32 bits */
 #define PCI_MSI_ADDRESS_HI	8	/* Upper 32 bits (if PCI_MSI_FLAGS_64BIT set) */
 #define PCI_MSI_DATA_32		8	/* 16 bits of data for 32-bit devices */
 #define PCI_MSI_DATA_64		12	/* 16 bits of data for 64-bit devices */
+
+/* MSI-X registers */
+#define PCI_MSIX_FLAGS          2
+#define  PCI_MSIX_FLAGS_ENABLE  0x8000
+#define  PCI_MSIX_FLAGS_MASKALL 0x4000
+#define  PCI_MSIX_FLAGS_TABLE_SIZE 0x07ff
+#define PCI_MSIX_TABLE          4
+#define PCI_MSIX_PBA            8
+#define  PCI_MSIX_TABLE_BIR_MASK   0x7
+#define  PCI_MSIX_TABLE_OFFSET_MASK 0xfffffff8
+
+#define PCI_COMMAND_INTX_DISABLE 0x0400
 
 /*
  * The PCI interface treats multi-function devices as independent
