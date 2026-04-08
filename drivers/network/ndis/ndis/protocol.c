@@ -397,6 +397,15 @@ proSendPacketToMiniport(PLOGICAL_ADAPTER Adapter, PNDIS_PACKET Packet)
 
    NDIS_DbgPrint(MAX_TRACE, ("Called.\n"));
 
+   /* dev-nt6-1: NDIS 6 adapters get the real Phase 3 TX thunk in
+    * 60thunk_tx.c. Ndis6TxSendPacket wraps the legacy NDIS_PACKET in
+    * an NBL and calls the miniport's SendNetBufferListsHandler. */
+   if (Adapter->IsNdis6)
+   {
+       extern NDIS_STATUS Ndis6TxSendPacket(PLOGICAL_ADAPTER, PNDIS_PACKET);
+       return Ndis6TxSendPacket(Adapter, Packet);
+   }
+
    if(MiniIsBusy(Adapter, NdisWorkItemSend)) {
       NDIS_DbgPrint(MID_TRACE, ("Busy: NdisWorkItemSend.\n"));
 
@@ -525,6 +534,16 @@ ProSend(
         return ProIndicatePacket(Adapter, Packet);
 #endif
     } else {
+        /* dev-nt6-1: NDIS 6 adapters do their own DMA via the bridge.
+         * The legacy SystemAdapterObject is NULL, so the SG-DMA path
+         * below would crash. Skip directly to proSendPacketToMiniport
+         * (which has its own NDIS 6 placeholder until the Phase 3 thunk
+         * lands). */
+        if (Adapter->IsNdis6)
+        {
+            return proSendPacketToMiniport(Adapter, Packet);
+        }
+
         if (Adapter->NdisMiniportBlock.ScatterGatherListSize != 0)
         {
             NDIS_DbgPrint(MID_TRACE, ("Using Scatter/Gather DMA\n"));
@@ -584,6 +603,22 @@ ProSendPackets(
     KIRQL RaiseOldIrql;
     NDIS_STATUS NdisStatus;
     UINT i;
+
+    /* dev-nt6-1: NDIS 6 adapters get the Phase 3 TX thunk. Loop over the
+     * packet array and hand each one to Ndis6TxSendPacket. Packets that
+     * return anything other than PENDING get an immediate MiniSendComplete
+     * so the legacy protocol's completion handler still runs. */
+    if (Adapter->IsNdis6)
+    {
+        extern NDIS_STATUS Ndis6TxSendPacket(PLOGICAL_ADAPTER, PNDIS_PACKET);
+        for (i = 0; i < NumberOfPackets; i++)
+        {
+            NDIS_STATUS TxStatus = Ndis6TxSendPacket(Adapter, PacketArray[i]);
+            if (TxStatus != NDIS_STATUS_PENDING)
+                MiniSendComplete(Adapter, PacketArray[i], TxStatus);
+        }
+        return;
+    }
 
     if(Adapter->NdisMiniportBlock.DriverHandle->MiniportCharacteristics.SendPacketsHandler)
     {
@@ -660,6 +695,16 @@ ProTransferData(
     KIRQL OldIrql;
 
     NDIS_DbgPrint(MAX_TRACE, ("Called.\n"));
+
+    /* dev-nt6-1: NDIS 6 miniports never get TransferDataHandler calls —
+     * the NDIS 6 receive path always delivers the full payload in the
+     * NB chain, so the lookahead-mismatch path that legacy protocols
+     * would take is unused. Return NOT_SUPPORTED defensively. */
+    if (Adapter->IsNdis6)
+    {
+        *BytesTransferred = 0;
+        return NDIS_STATUS_NOT_SUPPORTED;
+    }
 
     /* FIXME: Interrupts must be disabled for adapter */
     /* XXX sd - why is that true? */

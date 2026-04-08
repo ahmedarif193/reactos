@@ -164,10 +164,13 @@ BOOLEAN ARPTransmit(PIP_ADDRESS Address, PVOID LinkAddress,
     PC(NdisPacket)->DLComplete = ARPTransmitComplete;
 
     TI_DbgPrint(DEBUG_ARP,("Sending ARP Packet\n"));
+    DbgPrint("TCPIP-ARP: ARPTransmit target=0x%08x via Interface=%p Transmit=%p\n",
+             Address->Address.IPv4Address, Interface, Interface->Transmit);
 
     (*Interface->Transmit)(Interface->Context, NdisPacket,
         0, NULL, LAN_PROTO_ARP);
 
+    DbgPrint("TCPIP-ARP: ARPTransmit -> Interface->Transmit returned\n");
     return TRUE;
 }
 
@@ -195,6 +198,7 @@ VOID ARPReceive(
     PAGED_CODE();
 
     TI_DbgPrint(DEBUG_ARP, ("Called.\n"));
+    DbgPrint("TCPIP-ARP: ARPReceive Interface=%p Packet=%p\n", Interface, Packet);
 
     Packet->Header = ExAllocatePoolWithTag(PagedPool,
                                            sizeof(ARP_HEADER),
@@ -261,25 +265,31 @@ VOID ARPReceive(
     TargetProtoAddress = (PVOID)(SenderProtoAddress + Header->ProtoAddrLen + Header->HWAddrLen);
 
     AddrInitIPv4(&DstAddress, *((PULONG)TargetProtoAddress));
+    AddrInitIPv4(&SrcAddress, *((PULONG)SenderProtoAddress));
+    DbgPrint("TCPIP-ARP: ARPReceive src=0x%08x dst=0x%08x opcode=%u IfUnicast=0x%08x\n",
+             SrcAddress.Address.IPv4Address, DstAddress.Address.IPv4Address,
+             WN2H(Header->Opcode), Interface->Unicast.Address.IPv4Address);
     if (!AddrIsEqual(&DstAddress, &Interface->Unicast))
     {
+        DbgPrint("TCPIP-ARP:   not for us — ignoring\n");
         ExFreePool(DataBuffer);
         Packet->Free(Packet);
         return;
     }
-
-    AddrInitIPv4(&SrcAddress, *((PULONG)SenderProtoAddress));
 
     /* Check if we know the sender */
     NCE = NBLocateNeighbor(&SrcAddress, Interface);
     if (NCE) {
         /* We know the sender. Update the hardware address
            and state in our neighbor address cache */
+        DbgPrint("TCPIP-ARP:   updating existing NCE=%p\n", NCE);
         NBUpdateNeighbor(NCE, SenderHWAddress, 0);
     } else {
         /* The packet had our protocol address as target. The sender
            may want to communicate with us soon, so add his address
            to our address cache */
+        DbgPrint("TCPIP-ARP:   adding new NCE for 0x%08x\n",
+                 SrcAddress.Address.IPv4Address);
         NBAddNeighbor(Interface, &SrcAddress, SenderHWAddress,
                       Header->HWAddrLen, 0, ARP_COMPLETE_TIMEOUT);
     }
