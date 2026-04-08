@@ -106,39 +106,118 @@ IntVideoPortFilterResourceRequirements(
         return Irp->IoStatus.Status;
     }
 
-    /* OK, we've got the access ranges now. Let's set up the resource requirements list */
+    /* OK, we've got the access ranges now. Let's set up the resource requirements list.
+     *
+     * The PnP manager and bus drivers may hand us a multi-alternative
+     * IO_RESOURCE_REQUIREMENTS_LIST (e.g. the PCI bus driver emits one
+     * alternative per supported interrupt mode: MSI-X / MSI / legacy).
+     * The legacy VGA access ranges we need to add must apply to EVERY
+     * alternative because the arbiter is free to pick any of them.
+     */
 
     if (OldResList)
     {
-        /* Already one there so let's add to it */
-        ListSize = OldResList->ListSize + sizeof(IO_RESOURCE_DESCRIPTOR) * AccessRangeCount;
-        ResList = ExAllocatePool(NonPagedPool,
-                                 ListSize);
+        ULONG AlternativeCount = OldResList->AlternativeLists;
+        ULONG Alt;
+        PIO_RESOURCE_LIST OldAlt;
+        PIO_RESOURCE_LIST NewAlt;
+
+        if (AlternativeCount == 0)
+            AlternativeCount = 1;
+
+        /* New size: original header + each alternative grows by AccessRangeCount
+         * descriptors. The header (FIELD_OFFSET to List[0]) stays the same. */
+        ListSize = OldResList->ListSize +
+                   AlternativeCount * AccessRangeCount * sizeof(IO_RESOURCE_DESCRIPTOR);
+        ResList = ExAllocatePool(NonPagedPool, ListSize);
         if (!ResList) return STATUS_NO_MEMORY;
 
-        RtlCopyMemory(ResList, OldResList, OldResList->ListSize);
+        RtlZeroMemory(ResList, ListSize);
 
-        ASSERT(ResList->AlternativeLists == 1);
-
+        /* Copy the fixed header, then walk each alternative and append. */
+        RtlCopyMemory(ResList,
+                      OldResList,
+                      FIELD_OFFSET(IO_RESOURCE_REQUIREMENTS_LIST, List));
         ResList->ListSize = ListSize;
-        ResList->List[0].Count += AccessRangeCount;
+        ResList->AlternativeLists = AlternativeCount;
 
-        CurrentDescriptor = (PIO_RESOURCE_DESCRIPTOR)((PUCHAR)ResList + OldResList->ListSize);
+        OldAlt = &OldResList->List[0];
+        NewAlt = &ResList->List[0];
+        for (Alt = 0; Alt < AlternativeCount; Alt++)
+        {
+            ULONG OldCount = OldAlt->Count;
+            ULONG NewCount = OldCount + AccessRangeCount;
+            ULONG OldAltSize, NewAltSize;
+
+            NewAlt->Version = OldAlt->Version;
+            NewAlt->Revision = OldAlt->Revision;
+            NewAlt->Count = NewCount;
+
+            if (OldCount)
+            {
+                RtlCopyMemory(&NewAlt->Descriptors[0],
+                              &OldAlt->Descriptors[0],
+                              OldCount * sizeof(IO_RESOURCE_DESCRIPTOR));
+            }
+
+            CurrentDescriptor = &NewAlt->Descriptors[OldCount];
+            for (i = 0; i < AccessRangeCount; i++)
+            {
+                CurrentDescriptor->Option = 0;
+                if (AccessRanges[i].RangeInIoSpace)
+                    CurrentDescriptor->Type = CmResourceTypePort;
+                else
+                    CurrentDescriptor->Type = CmResourceTypeMemory;
+                CurrentDescriptor->ShareDisposition =
+                    (AccessRanges[i].RangeShareable ? CmResourceShareShared
+                                                    : CmResourceShareDeviceExclusive);
+                CurrentDescriptor->Flags = 0;
+                if (CurrentDescriptor->Type == CmResourceTypePort)
+                {
+                    CurrentDescriptor->u.Port.Length = AccessRanges[i].RangeLength;
+                    CurrentDescriptor->u.Port.MinimumAddress = AccessRanges[i].RangeStart;
+                    CurrentDescriptor->u.Port.MaximumAddress.QuadPart =
+                        AccessRanges[i].RangeStart.QuadPart + AccessRanges[i].RangeLength - 1;
+                    CurrentDescriptor->u.Port.Alignment = 1;
+                    if (AccessRanges[i].RangePassive & VIDEO_RANGE_PASSIVE_DECODE)
+                        CurrentDescriptor->Flags |= CM_RESOURCE_PORT_PASSIVE_DECODE;
+                    if (AccessRanges[i].RangePassive & VIDEO_RANGE_10_BIT_DECODE)
+                        CurrentDescriptor->Flags |= CM_RESOURCE_PORT_10_BIT_DECODE;
+                }
+                else
+                {
+                    CurrentDescriptor->u.Memory.Length = AccessRanges[i].RangeLength;
+                    CurrentDescriptor->u.Memory.MinimumAddress = AccessRanges[i].RangeStart;
+                    CurrentDescriptor->u.Memory.MaximumAddress.QuadPart =
+                        AccessRanges[i].RangeStart.QuadPart + AccessRanges[i].RangeLength - 1;
+                    CurrentDescriptor->u.Memory.Alignment = 1;
+                    CurrentDescriptor->Flags |= CM_RESOURCE_MEMORY_READ_WRITE;
+                }
+                CurrentDescriptor++;
+            }
+
+            /* Advance to the next alternative in BOTH lists. */
+            OldAltSize = FIELD_OFFSET(IO_RESOURCE_LIST, Descriptors) +
+                         OldCount * sizeof(IO_RESOURCE_DESCRIPTOR);
+            NewAltSize = FIELD_OFFSET(IO_RESOURCE_LIST, Descriptors) +
+                         NewCount * sizeof(IO_RESOURCE_DESCRIPTOR);
+            OldAlt = (PIO_RESOURCE_LIST)((PUCHAR)OldAlt + OldAltSize);
+            NewAlt = (PIO_RESOURCE_LIST)((PUCHAR)NewAlt + NewAltSize);
+        }
 
         ExFreePool(OldResList);
         Irp->IoStatus.Information = 0;
     }
     else
     {
-        /* We need to make a new one */
-        ListSize = sizeof(IO_RESOURCE_REQUIREMENTS_LIST) + sizeof(IO_RESOURCE_DESCRIPTOR) * (AccessRangeCount - 1);
-        ResList = ExAllocatePool(NonPagedPool,
-                                 ListSize);
+        /* No prior list. Build a fresh single-alternative list. */
+        ListSize = sizeof(IO_RESOURCE_REQUIREMENTS_LIST) +
+                   sizeof(IO_RESOURCE_DESCRIPTOR) * (AccessRangeCount - 1);
+        ResList = ExAllocatePool(NonPagedPool, ListSize);
         if (!ResList) return STATUS_NO_MEMORY;
 
         RtlZeroMemory(ResList, ListSize);
 
-        /* We need to initialize some fields */
         ResList->ListSize = ListSize;
         ResList->InterfaceType = DeviceExtension->AdapterInterfaceType;
         ResList->BusNumber = DeviceExtension->SystemIoBusNumber;
@@ -149,44 +228,40 @@ IntVideoPortFilterResourceRequirements(
         ResList->List[0].Count = AccessRangeCount;
 
         CurrentDescriptor = ResList->List[0].Descriptors;
-    }
-
-    for (i = 0; i < AccessRangeCount; i++)
-    {
-        /* This is a required resource */
-        CurrentDescriptor->Option = 0;
-
-        if (AccessRanges[i].RangeInIoSpace)
-            CurrentDescriptor->Type = CmResourceTypePort;
-        else
-            CurrentDescriptor->Type = CmResourceTypeMemory;
-
-        CurrentDescriptor->ShareDisposition =
-        (AccessRanges[i].RangeShareable ? CmResourceShareShared : CmResourceShareDeviceExclusive);
-
-        CurrentDescriptor->Flags = 0;
-
-        if (CurrentDescriptor->Type == CmResourceTypePort)
+        for (i = 0; i < AccessRangeCount; i++)
         {
-            CurrentDescriptor->u.Port.Length = AccessRanges[i].RangeLength;
-            CurrentDescriptor->u.Port.MinimumAddress = AccessRanges[i].RangeStart;
-            CurrentDescriptor->u.Port.MaximumAddress.QuadPart = AccessRanges[i].RangeStart.QuadPart + AccessRanges[i].RangeLength - 1;
-            CurrentDescriptor->u.Port.Alignment = 1;
-            if (AccessRanges[i].RangePassive & VIDEO_RANGE_PASSIVE_DECODE)
-                CurrentDescriptor->Flags |= CM_RESOURCE_PORT_PASSIVE_DECODE;
-            if (AccessRanges[i].RangePassive & VIDEO_RANGE_10_BIT_DECODE)
-                CurrentDescriptor->Flags |= CM_RESOURCE_PORT_10_BIT_DECODE;
+            CurrentDescriptor->Option = 0;
+            if (AccessRanges[i].RangeInIoSpace)
+                CurrentDescriptor->Type = CmResourceTypePort;
+            else
+                CurrentDescriptor->Type = CmResourceTypeMemory;
+            CurrentDescriptor->ShareDisposition =
+                (AccessRanges[i].RangeShareable ? CmResourceShareShared
+                                                : CmResourceShareDeviceExclusive);
+            CurrentDescriptor->Flags = 0;
+            if (CurrentDescriptor->Type == CmResourceTypePort)
+            {
+                CurrentDescriptor->u.Port.Length = AccessRanges[i].RangeLength;
+                CurrentDescriptor->u.Port.MinimumAddress = AccessRanges[i].RangeStart;
+                CurrentDescriptor->u.Port.MaximumAddress.QuadPart =
+                    AccessRanges[i].RangeStart.QuadPart + AccessRanges[i].RangeLength - 1;
+                CurrentDescriptor->u.Port.Alignment = 1;
+                if (AccessRanges[i].RangePassive & VIDEO_RANGE_PASSIVE_DECODE)
+                    CurrentDescriptor->Flags |= CM_RESOURCE_PORT_PASSIVE_DECODE;
+                if (AccessRanges[i].RangePassive & VIDEO_RANGE_10_BIT_DECODE)
+                    CurrentDescriptor->Flags |= CM_RESOURCE_PORT_10_BIT_DECODE;
+            }
+            else
+            {
+                CurrentDescriptor->u.Memory.Length = AccessRanges[i].RangeLength;
+                CurrentDescriptor->u.Memory.MinimumAddress = AccessRanges[i].RangeStart;
+                CurrentDescriptor->u.Memory.MaximumAddress.QuadPart =
+                    AccessRanges[i].RangeStart.QuadPart + AccessRanges[i].RangeLength - 1;
+                CurrentDescriptor->u.Memory.Alignment = 1;
+                CurrentDescriptor->Flags |= CM_RESOURCE_MEMORY_READ_WRITE;
+            }
+            CurrentDescriptor++;
         }
-        else
-        {
-            CurrentDescriptor->u.Memory.Length = AccessRanges[i].RangeLength;
-            CurrentDescriptor->u.Memory.MinimumAddress = AccessRanges[i].RangeStart;
-            CurrentDescriptor->u.Memory.MaximumAddress.QuadPart = AccessRanges[i].RangeStart.QuadPart + AccessRanges[i].RangeLength - 1;
-            CurrentDescriptor->u.Memory.Alignment = 1;
-            CurrentDescriptor->Flags |= CM_RESOURCE_MEMORY_READ_WRITE;
-        }
-
-        CurrentDescriptor++;
     }
 
     Irp->IoStatus.Information = (ULONG_PTR)ResList;
