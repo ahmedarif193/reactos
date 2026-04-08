@@ -498,6 +498,7 @@
 @ stdcall IoReportTargetDeviceChangeAsynchronous(ptr ptr ptr ptr)
 @ stdcall IoRequestDeviceEject(ptr)
 @ stdcall IoReuseIrp(ptr long)
+@ stdcall IoGetDevicePropertyData(ptr ptr long long long ptr ptr ptr)
 @ stdcall IoSetCompletionRoutineEx(ptr ptr ptr ptr long long long)
 @ stdcall IoSetDeviceInterfacePropertyData(ptr ptr long long long long ptr)
 @ stdcall IoSetDeviceInterfaceState(ptr long)

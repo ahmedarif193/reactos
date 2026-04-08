@@ -2,6 +2,7 @@
 #include "precomp.h"
 
 #include <initguid.h>
+#include <devpkey.h>
 #include <poclass.h>
 #include <wdmguid.h>
 
@@ -53,6 +54,55 @@ BuspIsPciRootDevice(
 }
 
 #ifndef UNIT_TEST
+static
+ULONG
+BuspEnsurePciRootBusNumber(
+    _Inout_ PPDO_DEVICE_DATA DeviceData);
+
+static
+VOID
+BuspSetUint32DeviceProperty(
+    _In_ PPDO_DEVICE_DATA DeviceData,
+    _In_ CONST DEVPROPKEY *PropertyKey,
+    _In_ ULONG Value)
+{
+    NTSTATUS Status;
+
+    Status = IoSetDevicePropertyData(DeviceData->Common.Self,
+                                     PropertyKey,
+                                     0,
+                                     0,
+                                     DEVPROP_TYPE_UINT32,
+                                     sizeof(Value),
+                                     &Value);
+    if (!NT_SUCCESS(Status))
+    {
+        DPRINT("ACPI: IoSetDevicePropertyData(%lu) failed for pid %lu: 0x%08lx\n",
+               Value,
+               PropertyKey->pid,
+               Status);
+    }
+}
+
+static
+VOID
+BuspPublishDeviceProperties(
+    _Inout_ PPDO_DEVICE_DATA DeviceData,
+    _In_opt_ struct acpi_device *Device)
+{
+    if (BuspIsPciRootDevice(DeviceData))
+    {
+        ULONG BusNumber = BuspEnsurePciRootBusNumber(DeviceData);
+        BuspSetUint32DeviceProperty(DeviceData, &DEVPKEY_Device_BusNumber, BusNumber);
+    }
+
+    if (Device != NULL)
+    {
+        ULONG Address = (ULONG)Device->pnp.bus_address;
+        BuspSetUint32DeviceProperty(DeviceData, &DEVPKEY_Device_Address, Address);
+    }
+}
+
 static
 VOID
 BuspApplyTrackedPciRootInfo(
@@ -1601,6 +1651,7 @@ BuspPublishLegacyScsiportConfig(
     ULONG neededLength = 0, descriptorSize;
     ULONG deviceIndex;
     PCM_FULL_RESOURCE_DESCRIPTOR fullDescriptor;
+    DEVPROPTYPE propType = DEVPROP_TYPE_EMPTY;
     NTSTATUS Status;
 
     driverKeyName.Buffer = NULL;
@@ -1613,24 +1664,52 @@ BuspPublishLegacyScsiportConfig(
     if (!ResourceListTranslated || ResourceListTranslated->Count == 0)
         return;
 
-    /* Obtain the driver key name */
-    Status = IoGetDeviceProperty(DeviceData->Common.Self,
-                                 DevicePropertyDriverKeyName,
-                                 0,
-                                 NULL,
-                                 &neededLength);
-    if (Status != STATUS_BUFFER_TOO_SMALL || neededLength < sizeof(WCHAR))
-        return;
+    /* Prefer the Win7-style property-data path and fall back to the legacy API. */
+    Status = IoGetDevicePropertyData(DeviceData->Common.Self,
+                                     &DEVPKEY_Device_Driver,
+                                     0,
+                                     0,
+                                     0,
+                                     NULL,
+                                     &neededLength,
+                                     &propType);
+    if (Status == STATUS_BUFFER_TOO_SMALL &&
+        neededLength >= sizeof(WCHAR) &&
+        propType == DEVPROP_TYPE_STRING)
+    {
+        driverKeyName.Buffer = ExAllocatePoolWithTag(PagedPool, neededLength, 'prCA');
+        if (!driverKeyName.Buffer)
+            return;
 
-    driverKeyName.Buffer = ExAllocatePoolWithTag(PagedPool, neededLength, 'prCA');
-    if (!driverKeyName.Buffer)
-        return;
+        Status = IoGetDevicePropertyData(DeviceData->Common.Self,
+                                         &DEVPKEY_Device_Driver,
+                                         0,
+                                         0,
+                                         neededLength,
+                                         driverKeyName.Buffer,
+                                         &neededLength,
+                                         &propType);
+    }
+    else
+    {
+        Status = IoGetDeviceProperty(DeviceData->Common.Self,
+                                     DevicePropertyDriverKeyName,
+                                     0,
+                                     NULL,
+                                     &neededLength);
+        if (Status != STATUS_BUFFER_TOO_SMALL || neededLength < sizeof(WCHAR))
+            return;
 
-    Status = IoGetDeviceProperty(DeviceData->Common.Self,
-                                 DevicePropertyDriverKeyName,
-                                 neededLength,
-                                 driverKeyName.Buffer,
-                                 &neededLength);
+        driverKeyName.Buffer = ExAllocatePoolWithTag(PagedPool, neededLength, 'prCA');
+        if (!driverKeyName.Buffer)
+            return;
+
+        Status = IoGetDeviceProperty(DeviceData->Common.Self,
+                                     DevicePropertyDriverKeyName,
+                                     neededLength,
+                                     driverKeyName.Buffer,
+                                     &neededLength);
+    }
     if (!NT_SUCCESS(Status))
         goto Cleanup;
 
@@ -1897,6 +1976,8 @@ Bus_PDO_PnP (
         {
             (void)BuspEnsurePciRootBusNumber(DeviceData);
         }
+
+        BuspPublishDeviceProperties(DeviceData, device);
 
         if (BuspIsPciRootDevice(DeviceData))
         {
