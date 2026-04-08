@@ -186,6 +186,20 @@ Ndis6CreateLogicalAdapter(
     /* Phase 3 TX thunk: in-flight wrapper NBL list. */
     KeInitializeSpinLock(&Ext->TxLookupLock);
     InitializeListHead(&Ext->InFlightNblsTx);
+    /* A1: drain event — notification, manually reset when a send lands on
+     * the in-flight list, set when the count decrements. HaltEx waits
+     * for count == 0 with a timeout. */
+    Ext->TxInFlightCount = 0;
+    KeInitializeEvent(&Ext->TxDrainEvent, NotificationEvent, TRUE);
+
+    /* A4: Pause/Restart state machine — starts in RUNNING after init.
+     * The Pause/Restart events are synchronization events (auto-reset)
+     * signaled when the driver calls the respective Complete routine. */
+    Ext->PauseState    = NDIS6_PAUSE_STATE_RUNNING;
+    Ext->PauseStatus   = NDIS_STATUS_SUCCESS;
+    Ext->RestartStatus = NDIS_STATUS_SUCCESS;
+    KeInitializeEvent(&Ext->PauseEvent, SynchronizationEvent, FALSE);
+    KeInitializeEvent(&Ext->RestartEvent, SynchronizationEvent, FALSE);
 
     /* Phase 3 OID thunk: legacy-NDIS5-request waiter list. */
     KeInitializeSpinLock(&Ext->OidWaiterLock);
@@ -374,6 +388,10 @@ Ndis6CallMiniportHaltEx(
     _In_ NDIS_HALT_ACTION HaltAction)
 {
     PNDIS6_ADAPTER_EXT Ext;
+    LARGE_INTEGER      Timeout;
+    NTSTATUS           WaitStatus;
+    LONG               StartingCount;
+    LONG               RemainingCount;
 
     if (Adapter == NULL || !Adapter->IsNdis6)
         return;
@@ -382,6 +400,61 @@ Ndis6CallMiniportHaltEx(
     if (Ext == NULL || Ext->DriverBlock == NULL)
         return;
 
+    /* A4: Pause the driver first so it stops accepting new sends. This
+     * gives the TX DPC a chance to drain what's already in flight and
+     * prevents new NBLs from landing on InFlightNblsTx while we wait. */
+    (VOID)Ndis6CallMiniportPauseEx(Adapter);
+
+    /* A1: drain in-flight TX wrapper NBLs before the driver tears down.
+     * NdisMSendNetBufferListsComplete (60thunk_tx.c) decrements
+     * TxInFlightCount and signals TxDrainEvent when it hits zero. We
+     * wait up to 5 seconds for the count to drain, then push through
+     * regardless — an NBL leak is preferable to hanging REMOVE_DEVICE.
+     *
+     * The common case is count == 0 because the stack has already
+     * stopped sending by the time PnP sends REMOVE; we just sample
+     * the event and return immediately. The wait only blocks when a
+     * send is genuinely in flight on the miniport's TX DPC. */
+    StartingCount = Ext->TxInFlightCount;
+    if (StartingCount > 0)
+    {
+        DbgPrint("NDIS6: HaltEx draining %ld in-flight TX NBLs\n", StartingCount);
+
+        /* Clear the event so we wait for the NEXT decrement. We own
+         * the event setter side (TerminalSendComplete), so clearing
+         * here can't race the setter in a problematic way — if the
+         * count is about to hit zero we'll see it in the re-sample
+         * after the wait. */
+        KeClearEvent(&Ext->TxDrainEvent);
+
+        /* If the count was already zero when the setter side raced
+         * our clear, the sampling after the clear catches it. */
+        if (Ext->TxInFlightCount == 0)
+        {
+            KeSetEvent(&Ext->TxDrainEvent, IO_NO_INCREMENT, FALSE);
+        }
+        else
+        {
+            /* 5-second absolute timeout (negative = relative 100-ns units). */
+            Timeout.QuadPart = -50000000LL;
+            WaitStatus = KeWaitForSingleObject(&Ext->TxDrainEvent,
+                                               Executive, KernelMode,
+                                               FALSE, &Timeout);
+            RemainingCount = Ext->TxInFlightCount;
+            if (WaitStatus == STATUS_TIMEOUT && RemainingCount > 0)
+            {
+                DbgPrint("NDIS6: HaltEx drain TIMEOUT, %ld NBLs still in flight — leaking\n",
+                         RemainingCount);
+                /* Fall through. The send-completion path will still
+                 * try to call MiniSendComplete on an adapter whose
+                 * extension may be gone. Ndis6FilterTerminalSendComplete
+                 * checks for NULL Ext and drops the call, so this just
+                 * leaks the wrapper NBL and the legacy protocol's
+                 * SendCompleteHandler never fires for those packets. */
+            }
+        }
+    }
+
     if (Ext->DriverBlock->Characteristics.HaltHandlerEx != NULL &&
         Ext->MiniportAdapterContext != NULL)
     {
@@ -389,6 +462,184 @@ Ndis6CallMiniportHaltEx(
             Ext->MiniportAdapterContext, HaltAction);
         Ext->MiniportAdapterContext = NULL;
     }
+}
+
+/* ============================================================================
+ *  A4: Pause/Restart state machine
+ *
+ *  NDIS 6 miniports transition through running → pausing → paused →
+ *  restarting → running. Pause stops the driver's send/receive; Restart
+ *  wakes them back up. We call Pause before filter attach/detach and
+ *  before Halt; Restart after attach and after init. Drivers may return
+ *  PENDING from PauseHandler/RestartHandler and call NdisMPauseComplete /
+ *  NdisMRestartComplete when the transition is done; we wait on the
+ *  respective event in that case.
+ * ============================================================================ */
+
+NDIS_STATUS
+Ndis6CallMiniportPauseEx(
+    _In_ PLOGICAL_ADAPTER Adapter)
+{
+    PNDIS6_ADAPTER_EXT           Ext;
+    NDIS_MINIPORT_PAUSE_PARAMETERS PauseParams;
+    NDIS_STATUS                  Status;
+
+    if (Adapter == NULL || !Adapter->IsNdis6)
+        return NDIS_STATUS_INVALID_PARAMETER;
+
+    Ext = NDIS6_EXT(Adapter);
+    if (Ext == NULL || Ext->DriverBlock == NULL ||
+        Ext->DriverBlock->Characteristics.PauseHandler == NULL ||
+        Ext->MiniportAdapterContext == NULL)
+    {
+        /* Driver has no pause handler — treat as already paused. Many
+         * simple miniports don't need pause semantics and fall through. */
+        Ext->PauseState = NDIS6_PAUSE_STATE_PAUSED;
+        return NDIS_STATUS_SUCCESS;
+    }
+
+    if (Ext->PauseState == NDIS6_PAUSE_STATE_PAUSED ||
+        Ext->PauseState == NDIS6_PAUSE_STATE_PAUSING)
+    {
+        return NDIS_STATUS_SUCCESS;
+    }
+
+    RtlZeroMemory(&PauseParams, sizeof(PauseParams));
+    PauseParams.Header.Type     = NDIS_OBJECT_TYPE_DEFAULT;
+    PauseParams.Header.Revision = 1;    /* NDIS_MINIPORT_PAUSE_PARAMETERS_REVISION_1 */
+    PauseParams.Header.Size     = sizeof(PauseParams);
+    PauseParams.PauseReason     = 0;
+
+    Ext->PauseState  = NDIS6_PAUSE_STATE_PAUSING;
+    Ext->PauseStatus = NDIS_STATUS_PENDING;
+    KeClearEvent(&Ext->PauseEvent);
+
+    DbgPrint("NDIS6: Pause → driver\n");
+    Status = Ext->DriverBlock->Characteristics.PauseHandler(
+        Ext->MiniportAdapterContext, &PauseParams);
+    DbgPrint("NDIS6: PauseHandler returned 0x%08lx\n", (ULONG)Status);
+
+    if (Status == NDIS_STATUS_PENDING)
+    {
+        LARGE_INTEGER Timeout;
+        Timeout.QuadPart = -50000000LL;  /* 5 seconds */
+        KeWaitForSingleObject(&Ext->PauseEvent, Executive, KernelMode,
+                              FALSE, &Timeout);
+        Status = Ext->PauseStatus;
+    }
+
+    if (NT_SUCCESS(Status))
+        Ext->PauseState = NDIS6_PAUSE_STATE_PAUSED;
+    else
+        Ext->PauseState = NDIS6_PAUSE_STATE_RUNNING;  /* stay in running on fail */
+
+    return Status;
+}
+
+NDIS_STATUS
+Ndis6CallMiniportRestartEx(
+    _In_ PLOGICAL_ADAPTER Adapter)
+{
+    PNDIS6_ADAPTER_EXT                 Ext;
+    NDIS_MINIPORT_RESTART_PARAMETERS   RestartParams;
+    NDIS_STATUS                        Status;
+
+    if (Adapter == NULL || !Adapter->IsNdis6)
+        return NDIS_STATUS_INVALID_PARAMETER;
+
+    Ext = NDIS6_EXT(Adapter);
+    if (Ext == NULL || Ext->DriverBlock == NULL ||
+        Ext->DriverBlock->Characteristics.RestartHandler == NULL ||
+        Ext->MiniportAdapterContext == NULL)
+    {
+        Ext->PauseState = NDIS6_PAUSE_STATE_RUNNING;
+        return NDIS_STATUS_SUCCESS;
+    }
+
+    if (Ext->PauseState == NDIS6_PAUSE_STATE_RUNNING ||
+        Ext->PauseState == NDIS6_PAUSE_STATE_RESTARTING)
+    {
+        return NDIS_STATUS_SUCCESS;
+    }
+
+    RtlZeroMemory(&RestartParams, sizeof(RestartParams));
+    RestartParams.Header.Type     = NDIS_OBJECT_TYPE_DEFAULT;
+    RestartParams.Header.Revision = 1;    /* NDIS_MINIPORT_RESTART_PARAMETERS_REVISION_1 */
+    RestartParams.Header.Size     = sizeof(RestartParams);
+    RestartParams.AllocatedResources = NULL;
+    RestartParams.RestartAttributes  = 0;
+
+    Ext->PauseState    = NDIS6_PAUSE_STATE_RESTARTING;
+    Ext->RestartStatus = NDIS_STATUS_PENDING;
+    KeClearEvent(&Ext->RestartEvent);
+
+    DbgPrint("NDIS6: Restart → driver\n");
+    Status = Ext->DriverBlock->Characteristics.RestartHandler(
+        Ext->MiniportAdapterContext, &RestartParams);
+    DbgPrint("NDIS6: RestartHandler returned 0x%08lx\n", (ULONG)Status);
+
+    if (Status == NDIS_STATUS_PENDING)
+    {
+        LARGE_INTEGER Timeout;
+        Timeout.QuadPart = -50000000LL;  /* 5 seconds */
+        KeWaitForSingleObject(&Ext->RestartEvent, Executive, KernelMode,
+                              FALSE, &Timeout);
+        Status = Ext->RestartStatus;
+    }
+
+    if (NT_SUCCESS(Status))
+        Ext->PauseState = NDIS6_PAUSE_STATE_RUNNING;
+    else
+        Ext->PauseState = NDIS6_PAUSE_STATE_PAUSED;  /* stay paused on fail */
+
+    return Status;
+}
+
+/* ============================================================================
+ *  NdisMPauseComplete / NdisMRestartComplete — driver-side callbacks
+ *
+ *  A driver returning PENDING from its PauseHandler or RestartHandler must
+ *  call these when the transition finishes. We record the status and set
+ *  the event the wait-side is blocked on.
+ * ============================================================================ */
+
+VOID
+NTAPI
+NdisMPauseComplete(
+    _In_ NDIS_HANDLE NdisMiniportHandle)
+{
+    PLOGICAL_ADAPTER    Adapter = (PLOGICAL_ADAPTER)NdisMiniportHandle;
+    PNDIS6_ADAPTER_EXT  Ext;
+
+    if (Adapter == NULL || !Adapter->IsNdis6)
+        return;
+
+    Ext = NDIS6_EXT(Adapter);
+    if (Ext == NULL)
+        return;
+
+    Ext->PauseStatus = NDIS_STATUS_SUCCESS;
+    KeSetEvent(&Ext->PauseEvent, IO_NO_INCREMENT, FALSE);
+}
+
+VOID
+NTAPI
+NdisMRestartComplete(
+    _In_ NDIS_HANDLE NdisMiniportHandle,
+    _In_ NDIS_STATUS Status)
+{
+    PLOGICAL_ADAPTER    Adapter = (PLOGICAL_ADAPTER)NdisMiniportHandle;
+    PNDIS6_ADAPTER_EXT  Ext;
+
+    if (Adapter == NULL || !Adapter->IsNdis6)
+        return;
+
+    Ext = NDIS6_EXT(Adapter);
+    if (Ext == NULL)
+        return;
+
+    Ext->RestartStatus = Status;
+    KeSetEvent(&Ext->RestartEvent, IO_NO_INCREMENT, FALSE);
 }
 
 /* ============================================================================

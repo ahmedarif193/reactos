@@ -254,10 +254,27 @@ NdisMSetMiniportAttributes(
             return NDIS_STATUS_SUCCESS;
         }
 
+        case 0xCA:  /* NDIS_OBJECT_TYPE_MINIPORT_ADAPTER_OFFLOAD_ATTRIBUTES */
+        {
+            /* B2: record the driver's offload capability pointers. The
+             * struct layout at the start is:
+             *   NDIS_OBJECT_HEADER Header;
+             *   NDIS_OFFLOAD*      DefaultOffloadConfiguration;
+             *   NDIS_OFFLOAD*      HardwareOffloadCapabilities;
+             * We read the pointers by offset because the header file
+             * doesn't fully declare the struct in our NDIS 5.1 PCH. */
+            PVOID* AttrBase  = (PVOID*)((PUCHAR)MiniportAttributes + sizeof(NDIS_OBJECT_HEADER));
+            Ext->OffloadDefaultPtr = AttrBase[0];
+            Ext->OffloadHwPtr      = AttrBase[1];
+            Ext->OffloadValid      = TRUE;
+            DbgPrint("NDIS6: offload attrs recorded Default=%p Hw=%p\n",
+                     Ext->OffloadDefaultPtr, Ext->OffloadHwPtr);
+            return NDIS_STATUS_SUCCESS;
+        }
+
         case NDIS_OBJECT_TYPE_DEFAULT:
         default:
-            /* Offload, RSS, etc. attributes — accept and ignore for now.
-             * The driver will fall back to software paths automatically. */
+            /* RSS and other attributes — accept and ignore for now. */
             return NDIS_STATUS_SUCCESS;
     }
 }
@@ -596,6 +613,106 @@ Ndis6PowerCompletionRoutine(
     return STATUS_CONTINUE_COMPLETION;
 }
 
+/* D3: NET_DEVICE_PNP_EVENT isn't fully defined in the ReactOS NDIS 5.1
+ * headers, just forward-declared. We mirror the Windows DDK struct so
+ * DevicePnPEventNotifyHandler gets a valid layout. Keep the fields in
+ * the same order as the MSDN documentation. */
+typedef struct _NDIS6_NET_DEVICE_PNP_EVENT
+{
+    NDIS_OBJECT_HEADER      Header;
+    NDIS_PORT_NUMBER        PortNumber;
+    NDIS_DEVICE_PNP_EVENT   DevicePnPEvent;
+    PVOID                   InformationBuffer;
+    ULONG                   InformationBufferLength;
+    UCHAR                   NdisReserved[2 * sizeof(PVOID)];
+} NDIS6_NET_DEVICE_PNP_EVENT, *PNDIS6_NET_DEVICE_PNP_EVENT;
+
+/* D3: call the miniport's DevicePnPEventNotifyHandler for a given
+ * event. The handler was installed via the driver's characteristics
+ * struct; most drivers tolerate NULL data. */
+static VOID
+Ndis6NotifyMiniportDevicePnPEvent(
+    _In_ PNDIS6_ADAPTER_EXT     Ext,
+    _In_ NDIS_DEVICE_PNP_EVENT  Event)
+{
+    NDIS6_NET_DEVICE_PNP_EVENT NetEvent;
+
+    if (Ext == NULL || !Ext->Initialized || Ext->DriverBlock == NULL ||
+        Ext->DriverBlock->Characteristics.DevicePnPEventNotifyHandler == NULL ||
+        Ext->MiniportAdapterContext == NULL)
+    {
+        return;
+    }
+
+    RtlZeroMemory(&NetEvent, sizeof(NetEvent));
+    NetEvent.Header.Type     = NDIS_OBJECT_TYPE_DEFAULT;
+    NetEvent.Header.Revision = 1;
+    NetEvent.Header.Size     = sizeof(NetEvent);
+    NetEvent.DevicePnPEvent  = Event;
+    NetEvent.PortNumber      = 0;
+    NetEvent.InformationBuffer       = NULL;
+    NetEvent.InformationBufferLength = 0;
+
+    /* Cast to the forward-declared type the handler expects. */
+    Ext->DriverBlock->Characteristics.DevicePnPEventNotifyHandler(
+        Ext->MiniportAdapterContext,
+        (struct _NET_DEVICE_PNP_EVENT*)&NetEvent);
+}
+
+/* D3: Ndis6IndicateNetPnPEvent — fan a NET_PNP_EVENT out to every
+ * bound legacy protocol driver. The protocol's PnPEventHandler is
+ * called with the event struct. */
+VOID
+Ndis6IndicateNetPnPEvent(
+    _In_ PLOGICAL_ADAPTER Adapter,
+    _In_ NET_PNP_EVENT_CODE EventCode,
+    _In_opt_ PVOID        EventData,
+    _In_ ULONG            EventDataLength)
+{
+    PLIST_ENTRY         Entry;
+    KIRQL               OldIrql;
+    NET_PNP_EVENT       Event;
+
+    if (Adapter == NULL || !Adapter->IsNdis6)
+        return;
+
+    RtlZeroMemory(&Event, sizeof(Event));
+    Event.NetEvent     = EventCode;
+    Event.Buffer       = EventData;
+    Event.BufferLength = EventDataLength;
+
+    KeAcquireSpinLock(&Adapter->NdisMiniportBlock.Lock, &OldIrql);
+    for (Entry = Adapter->ProtocolListHead.Flink;
+         Entry != &Adapter->ProtocolListHead;
+         Entry = Entry->Flink)
+    {
+        PADAPTER_BINDING Binding =
+            CONTAINING_RECORD(Entry, ADAPTER_BINDING, AdapterListEntry);
+        PNP_EVENT_HANDLER Handler;
+        PVOID             Context;
+        NDIS_STATUS       CallbackStatus;
+
+        if (Binding->ProtocolBinding == NULL)
+            continue;
+        Handler = Binding->ProtocolBinding->Chars.PnPEventHandler;
+        if (Handler == NULL)
+            continue;
+
+        Context = Binding->NdisOpenBlock.ProtocolBindingContext;
+
+        /* Drop lock across callback — protocols re-enter the bridge. */
+        KeReleaseSpinLock(&Adapter->NdisMiniportBlock.Lock, OldIrql);
+        CallbackStatus = Handler(Context, &Event);
+        (void)CallbackStatus;
+        KeAcquireSpinLock(&Adapter->NdisMiniportBlock.Lock, &OldIrql);
+
+        /* List may have been mutated under us. Restart from head so
+         * we don't dereference a freed binding. */
+        Entry = &Adapter->ProtocolListHead;
+    }
+    KeReleaseSpinLock(&Adapter->NdisMiniportBlock.Lock, OldIrql);
+}
+
 static NTSTATUS NTAPI
 Ndis6DispatchPower(
     _In_ PDEVICE_OBJECT DeviceObject,
@@ -611,6 +728,18 @@ Ndis6DispatchPower(
         return Ndis6CompleteIrp(Irp, STATUS_INVALID_DEVICE_STATE);
 
     Stack = IoGetCurrentIrpStackLocation(Irp);
+
+    /* D3: system power state transitions (S0→S3/S4/S5 etc.). Notify the
+     * miniport via DevicePnPEventNotifyHandler with
+     * NdisDevicePnPEventPowerProfileChanged so drivers can adjust their
+     * WoL / WOL / suspend state. */
+    if (Ext != NULL && Stack->MajorFunction == IRP_MJ_POWER &&
+        Stack->MinorFunction == IRP_MN_SET_POWER &&
+        Stack->Parameters.Power.Type == SystemPowerState)
+    {
+        Ndis6NotifyMiniportDevicePnPEvent(
+            Ext, NdisDevicePnPEventPowerProfileChanged);
+    }
 
     /* Phase 6: route SET_POWER state transitions through the NDIS 6
      * miniport's PauseHandler / RestartHandler. NDIS 6 conceptually
