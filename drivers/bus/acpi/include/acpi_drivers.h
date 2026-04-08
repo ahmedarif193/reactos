@@ -28,6 +28,11 @@
 
 #define ACPI_MAX_STRING			80
 
+/* Temporary toggle while ReactOS brings up ACPI PCI support */
+#ifndef CONFIG_ACPI_PCI
+#define CONFIG_ACPI_PCI 1
+#endif
+
 
 /* --------------------------------------------------------------------------
                                     ACPI Bus
@@ -160,6 +165,29 @@ void acpi_ec_exit (void);
 
 int acpi_pci_root_init (void);
 void acpi_pci_root_exit (void);
+BOOLEAN
+NTAPI
+AcpiPciRootQueryInfo(
+    _In_ ACPI_HANDLE Handle,
+    _Out_opt_ PULONG Segment,
+    _Out_opt_ PULONG BusStart,
+    _Out_opt_ PULONG BusEnd);
+
+/*
+ * AcpiFindPciDeviceInNamespace - Find ACPI device for a PCI device
+ *
+ * Used internally by the ACPI driver to locate ACPI namespace nodes
+ * for PCI devices. The PCI driver uses the device interface and
+ * IOCTL_ACPI_EVAL_METHOD_FOR_PCI instead of calling this directly.
+ */
+BOOLEAN
+NTAPI
+AcpiFindPciDeviceInNamespace(
+    _In_ ULONG Segment,
+    _In_ ULONG Bus,
+    _In_ ULONG Device,
+    _In_ ULONG Function,
+    _Out_ ACPI_HANDLE *OutHandle);
 
 /* ACPI PCI Interrupt Link (pci_link.c) */
 

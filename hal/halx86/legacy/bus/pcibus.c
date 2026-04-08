@@ -9,6 +9,7 @@
 /* INCLUDES ******************************************************************/
 
 #include <hal.h>
+#include <reactos/hal/acpi_pci.h>   /* PHAL_ACPI_PCI_ROUTE_QUERY */
 #define NDEBUG
 #include <debug.h>
 
@@ -21,6 +22,43 @@ BOOLEAN HalpPCIConfigInitialized;
 ULONG HalpMinPciBus, HalpMaxPciBus;
 KSPIN_LOCK HalpPCIConfigLock;
 PCI_CONFIG_HANDLER PCIConfigHandler;
+
+/* Default PCI bus resource apertures */
+#define HALP_PCI_DEFAULT_IO_BASE          0x0ULL
+#define HALP_PCI_DEFAULT_IO_LIMIT         0xFFFFULL
+#define HALP_PCI_DEFAULT_MEM_BASE         0xC0000000ULL
+#define HALP_PCI_DEFAULT_MEM_LIMIT        0xFEBFFFFFULL
+
+/* PCI GSI (Global System Interrupt) routing table */
+#define HALP_PCI_GSI_TAG                  'isGH'
+
+typedef struct _HALP_PCI_GSI_INFO
+{
+    BOOLEAN Valid;
+    BOOLEAN FromFirmware;
+    UCHAR Polarity;
+    UCHAR Trigger;
+    USHORT Segment;
+    UCHAR Bus;
+    UCHAR Device;
+    UCHAR Function;
+    UCHAR Pin;
+} HALP_PCI_GSI_INFO, *PHALP_PCI_GSI_INFO;
+
+#define HALP_PCI_GSI_STATIC_CAPACITY 256
+static HALP_PCI_GSI_INFO HalpPciGsiStaticInfo[HALP_PCI_GSI_STATIC_CAPACITY];
+static PHALP_PCI_GSI_INFO HalpPciGsiInfo = HalpPciGsiStaticInfo;
+static ULONG HalpPciGsiCapacity = HALP_PCI_GSI_STATIC_CAPACITY;
+static BOOLEAN HalpPciGsiInfoUsesPool;
+static KSPIN_LOCK HalpPciGsiLock;
+static volatile LONG HalpPciGsiLockInitState;
+
+/* HalpAcpiEcamCoverageFlags is defined in halacpi.c and declared in halacpi.h */
+
+/* ACPI PCI routing callback (set by ACPI driver via HalpRegisterPciRouteQuery) */
+static PHAL_ACPI_PCI_ROUTE_QUERY HalpPciRouteQueryCallback;
+
+/* MSI support: TRUE by default on x86 APIC systems, set to FALSE on _OSC failure */
 
 /* PCI Operation Matrix */
 UCHAR PCIDeref[4][4] =
@@ -1303,4 +1341,175 @@ HalpInitializePciStubs(VOID)
     HalpPCIConfigInitialized = TRUE;
 }
 
+VOID
+NTAPI
+HalpRegisterPciRouteQuery(
+    _In_opt_ PHAL_ACPI_PCI_ROUTE_QUERY Provider)
+{
+    HalpPciRouteQueryCallback = Provider;
+}
+
+VOID
+NTAPI
+HalpSetPciRoutingMap(
+    _In_reads_opt_(EntryCount) const HAL_ACPI_PCI_ROUTE_ENTRY *Entries,
+    _In_ ULONG EntryCount)
+{
+    ULONG Index;
+
+    RtlZeroMemory(HalpPciGsiInfo,
+                  sizeof(HalpPciGsiStaticInfo));
+
+    if (!Entries || EntryCount == 0)
+    {
+        return;
+    }
+
+    for (Index = 0; Index < EntryCount; ++Index)
+    {
+        const HAL_ACPI_PCI_ROUTE_ENTRY *Entry = &Entries[Index];
+
+        if (Entry->Gsi >= RTL_NUMBER_OF(HalpPciGsiStaticInfo))
+        {
+            continue;
+        }
+
+        HalpPciGsiInfo[Entry->Gsi].Valid = TRUE;
+        HalpPciGsiInfo[Entry->Gsi].FromFirmware = TRUE;
+        HalpPciGsiInfo[Entry->Gsi].Polarity = Entry->Polarity;
+        HalpPciGsiInfo[Entry->Gsi].Trigger = Entry->TriggerMode;
+        HalpPciGsiInfo[Entry->Gsi].Segment = (USHORT)Entry->Segment;
+        HalpPciGsiInfo[Entry->Gsi].Bus = Entry->Bus;
+        HalpPciGsiInfo[Entry->Gsi].Device = Entry->Device;
+        HalpPciGsiInfo[Entry->Gsi].Function = 0xFF;
+        HalpPciGsiInfo[Entry->Gsi].Pin = Entry->Pin;
+    }
+}
+
+VOID
+NTAPI
+HalpRecordPciMaxGsi(
+    _In_ const HAL_ACPI_PCI_ROUTE_ENTRY *Entry)
+{
+    UNREFERENCED_PARAMETER(Entry);
+}
+
+VOID
+NTAPI
+HalpConfigurePciRootBridge(
+    _In_ const HAL_ACPI_PCI_ROOT_INFO *Info)
+{
+    PBUS_HANDLER Bus;
+    PPCIPBUSDATA BusData;
+    PSUPPORTED_RANGES Ranges;
+    ULONG BusStart;
+    ULONG BusEnd;
+
+    if (!Info)
+    {
+        return;
+    }
+
+    Bus = HalHandlerForBus(PCIBus, Info->Bus);
+    if (!Bus || !Bus->BusData)
+    {
+        DPRINT1("HAL: No PCI bus handler for ACPI root segment %lu bus %lu\n",
+                Info->Segment,
+                Info->Bus);
+        return;
+    }
+
+    BusData = (PPCIPBUSDATA)Bus->BusData;
+    BusData->PciSegment = (USHORT)Info->Segment;
+
+    if (Info->BusRangePresent)
+    {
+        BusStart = Info->BusStart;
+        BusEnd = Info->BusEnd;
+    }
+    else
+    {
+        BusStart = Info->Bus;
+        BusEnd = Info->Bus;
+    }
+
+    BusData->BusNumberStart = (UCHAR)BusStart;
+    BusData->BusNumberEnd = (UCHAR)BusEnd;
+    BusData->BusNumbersConfigured = TRUE;
+
+    if (Info->IoWindow.Present)
+    {
+        BusData->IoWindowBase = Info->IoWindow.Base;
+        BusData->IoWindowLimit = Info->IoWindow.Limit;
+        BusData->IoBase = Info->IoWindow.Base;
+        BusData->IoLimit = Info->IoWindow.Limit;
+        BusData->IoNext = Info->IoWindow.Base;
+    }
+
+    if (Info->MemoryWindow.Present)
+    {
+        BusData->MemoryWindowBase = Info->MemoryWindow.Base;
+        BusData->MemoryWindowLimit = Info->MemoryWindow.Limit;
+        BusData->MemoryBase = Info->MemoryWindow.Base;
+        BusData->MemoryLimit = Info->MemoryWindow.Limit;
+        BusData->MemoryNext = Info->MemoryWindow.Base;
+    }
+
+    if (Info->PrefetchWindow.Present)
+    {
+        BusData->PrefetchWindowBase = Info->PrefetchWindow.Base;
+        BusData->PrefetchWindowLimit = Info->PrefetchWindow.Limit;
+    }
+
+    BusData->ResourcesInitialized = TRUE;
+
+    if (BusStart < HalpMinPciBus)
+        HalpMinPciBus = BusStart;
+    if (BusEnd > HalpMaxPciBus)
+        HalpMaxPciBus = BusEnd;
+
+    Ranges = Bus->BusAddresses;
+    if (!Ranges)
+    {
+        return;
+    }
+
+    Ranges->Sorted = TRUE;
+    Ranges->IO.Next = NULL;
+    Ranges->Memory.Next = NULL;
+    Ranges->PrefetchMemory.Next = NULL;
+
+    if (Info->IoWindow.Present)
+    {
+        Ranges->NoIO = 1;
+        Ranges->IO.Base = Info->IoWindow.Base;
+        Ranges->IO.Limit = Info->IoWindow.Limit;
+        Ranges->IO.SystemBase = Info->IoWindow.HasTranslation ?
+                                (LONGLONG)(Info->IoWindow.Base + Info->IoWindow.Translation) :
+                                0;
+        Ranges->IO.SystemAddressSpace = 1;
+    }
+
+    if (Info->MemoryWindow.Present)
+    {
+        Ranges->NoMemory = 1;
+        Ranges->Memory.Base = Info->MemoryWindow.Base;
+        Ranges->Memory.Limit = Info->MemoryWindow.Limit;
+        Ranges->Memory.SystemBase = Info->MemoryWindow.HasTranslation ?
+                                    (LONGLONG)(Info->MemoryWindow.Base + Info->MemoryWindow.Translation) :
+                                    0;
+        Ranges->Memory.SystemAddressSpace = 0;
+    }
+
+    if (Info->PrefetchWindow.Present)
+    {
+        Ranges->NoPrefetchMemory = 1;
+        Ranges->PrefetchMemory.Base = Info->PrefetchWindow.Base;
+        Ranges->PrefetchMemory.Limit = Info->PrefetchWindow.Limit;
+        Ranges->PrefetchMemory.SystemBase = Info->PrefetchWindow.HasTranslation ?
+                                            (LONGLONG)(Info->PrefetchWindow.Base + Info->PrefetchWindow.Translation) :
+                                            0;
+        Ranges->PrefetchMemory.SystemAddressSpace = 0;
+    }
+}
 /* EOF */
