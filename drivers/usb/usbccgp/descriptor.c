@@ -90,6 +90,11 @@ USBCCGP_GetDescriptor(
         //
         *OutDescriptor = Descriptor;
     }
+    else
+    {
+        FreeItem(Descriptor);
+        *OutDescriptor = NULL;
+    }
 
     //
     // done
@@ -123,7 +128,12 @@ USBCCGP_GetStringDescriptor(
     StringDescriptor = (PUSB_STRING_DESCRIPTOR)*OutDescriptor;
 
     // sanity check
-    ASSERT(StringDescriptor->bLength < DescriptorLength - 2);
+    if (StringDescriptor->bLength < sizeof(USB_STRING_DESCRIPTOR) ||
+        StringDescriptor->bLength > DescriptorLength)
+    {
+        FreeItem(StringDescriptor);
+        return STATUS_DEVICE_DATA_ERROR;
+    }
 
     if (StringDescriptor->bLength == 2)
     {
@@ -133,7 +143,7 @@ USBCCGP_GetStringDescriptor(
     }
 
     // calculate size
-    Size = StringDescriptor->bLength + sizeof(WCHAR);
+    Size = (StringDescriptor->bLength - FIELD_OFFSET(USB_STRING_DESCRIPTOR, bString)) + sizeof(WCHAR);
 
     // allocate buffer
     Buffer = AllocateItem(NonPagedPool, Size);
@@ -145,7 +155,10 @@ USBCCGP_GetStringDescriptor(
     }
 
     // copy result
-    RtlCopyMemory(Buffer, StringDescriptor->bString, Size - FIELD_OFFSET(USB_STRING_DESCRIPTOR, bString));
+    RtlCopyMemory(Buffer,
+                  StringDescriptor->bString,
+                  StringDescriptor->bLength - FIELD_OFFSET(USB_STRING_DESCRIPTOR, bString));
+    ((PWCHAR)Buffer)[(Size / sizeof(WCHAR)) - 1] = UNICODE_NULL;
 
     // free buffer
     FreeItem(StringDescriptor);
@@ -251,6 +264,15 @@ AllocateInterfaceDescriptorsArray(
         InterfaceDescriptor = USBD_ParseConfigurationDescriptorEx(ConfigurationDescriptor, ConfigurationDescriptor, Count, 0, -1, -1, -1);
         if (!InterfaceDescriptor)
             break;
+
+        //
+        // bounds check against allocated array size
+        //
+        if (Count >= ConfigurationDescriptor->bNumInterfaces)
+        {
+            DPRINT1("[USBCCGP] More interfaces found than bNumInterfaces (%u)\n", ConfigurationDescriptor->bNumInterfaces);
+            break;
+        }
 
         //
         // store descriptor
@@ -369,12 +391,7 @@ USBCCGP_ScanConfigurationDescriptor(
             DumpConfigurationDescriptor(ConfigurationDescriptor);
             DumpFullConfigurationDescriptor(FDODeviceExtension, ConfigurationDescriptor);
 
-            //
-            // see issue
-            // CORE-6574 Test 3 (USB Web Cam)
-            //
-            if (FDODeviceExtension->DeviceDescriptor && FDODeviceExtension->DeviceDescriptor->idVendor == 0x0458 && FDODeviceExtension->DeviceDescriptor->idProduct == 0x705f)
-                ASSERT(FALSE);
+            DPRINT1("[USBCCGP] Interface index %lu not found in configuration descriptor\n", InterfaceIndex);
         }
 
         //
@@ -526,7 +543,8 @@ USBCCGP_SelectConfiguration(
             //
             // no memory
             //
-            return STATUS_INSUFFICIENT_RESOURCES;
+            Status = STATUS_INSUFFICIENT_RESOURCES;
+            goto Cleanup;
         }
 
         //
@@ -554,5 +572,17 @@ USBCCGP_SelectConfiguration(
     //
     // done
     //
+    return Status;
+
+Cleanup:
+    for (; Index > 0; Index--)
+    {
+        if (DeviceExtension->InterfaceList[Index - 1].Interface)
+        {
+            FreeItem(DeviceExtension->InterfaceList[Index - 1].Interface);
+            DeviceExtension->InterfaceList[Index - 1].Interface = NULL;
+        }
+    }
+    ExFreePool(Urb);
     return Status;
 }

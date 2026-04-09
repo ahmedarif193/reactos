@@ -581,6 +581,7 @@ OHCI_RH_EnableIrq(IN PVOID ohciExtension)
 
     InterruptEnable.AsULONG = 0;
     InterruptEnable.RootHubStatusChange = 1;
+    InterruptEnable.MasterInterruptEnable = 1;
 
     WRITE_REGISTER_ULONG(InterruptEnableReg, InterruptEnable.AsULONG);
 }

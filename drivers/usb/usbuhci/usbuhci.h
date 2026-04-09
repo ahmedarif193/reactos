@@ -300,4 +300,11 @@ NTAPI
 UhciHardwarePresent(
   IN PUHCI_EXTENSION UhciExtension);
 
+BOOLEAN
+NTAPI
+UHCI_QueryPortAttributes(
+  IN PVOID UhciExtension,
+  IN USHORT Port,
+  OUT PULONG Attributes);
+
 #endif /* USBUHCI_H__ */
