@@ -480,7 +480,42 @@ NTAPI
 USBPORT_SystemPowerState(IN PDEVICE_OBJECT FdoDevice,
                          IN PIRP Irp)
 {
-    DPRINT1("USBPORT_SystemPowerState: UNIMPLEMENTED. FIXME. \n");
+    PIO_STACK_LOCATION IoStack;
+    POWER_STATE State;
+
+    IoStack = IoGetCurrentIrpStackLocation(Irp);
+    State = IoStack->Parameters.Power.State;
+
+    DPRINT1("USBPORT_SystemPowerState: SystemState=%x\n",
+            State.SystemState);
+
+    switch (State.SystemState)
+    {
+        case PowerSystemWorking:
+            /* Resume to S0 – per‑device D‑state flows will handle
+             * full controller restart via USBPORT_ResumeController. */
+            break;
+
+        case PowerSystemSleeping1:
+        case PowerSystemSleeping2:
+        case PowerSystemSleeping3:
+        case PowerSystemHibernate:
+        case PowerSystemShutdown:
+            /*
+             * System is transitioning away from S0. Ensure the host
+             * controller is quiesced so any saved memory image (S4) or
+             * firmware shutdown (S5) sees the controller halted and
+             * interrupts disabled. This funnels down into the miniport’s
+             * SuspendController/StopController as appropriate.
+             */
+            USBPORT_SuspendController(FdoDevice);
+            break;
+
+        default:
+            break;
+    }
+
+    Irp->IoStatus.Status = STATUS_SUCCESS;
     return STATUS_SUCCESS;
 }
 

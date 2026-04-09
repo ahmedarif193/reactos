@@ -192,6 +192,9 @@ USBSTOR_QueueTerminateRequest(
     PIO_STACK_LOCATION IoStack = IoGetCurrentIrpStackLocation(Irp);
     PSCSI_REQUEST_BLOCK Request = (PSCSI_REQUEST_BLOCK)IoStack->Parameters.Others.Argument1;
 
+    DPRINT("USBSTOR_QueueTerminateRequest: Irp=%p Srb=%p IoStatus=0x%lx\n",
+           Irp, Request, Irp->IoStatus.Status);
+
     FDODeviceExtension = (PFDO_DEVICE_EXTENSION)FDODeviceObject->DeviceExtension;
     ASSERT(FDODeviceExtension->Common.IsFDO);
 
@@ -228,10 +231,14 @@ USBSTOR_QueueNextRequest(
     FDODeviceExtension = (PFDO_DEVICE_EXTENSION)DeviceObject->DeviceExtension;
     ASSERT(FDODeviceExtension->Common.IsFDO);
 
+    DPRINT("USBSTOR_QueueNextRequest: ActiveSrb=%p Flags=0x%lx PendingCount=%lu\n",
+           FDODeviceExtension->ActiveSrb, FDODeviceExtension->Flags, FDODeviceExtension->IrpPendingCount);
+
     // check first if there's already a request pending or the queue is frozen
     if (FDODeviceExtension->ActiveSrb != NULL ||
         BooleanFlagOn(FDODeviceExtension->Flags, USBSTOR_FDO_FLAGS_IRP_LIST_FREEZE))
     {
+        DPRINT("USBSTOR_QueueNextRequest: skipping (ActiveSrb or frozen)\n");
         // no work to do yet
         return;
     }
@@ -242,6 +249,7 @@ USBSTOR_QueueNextRequest(
     // is there an irp pending
     if (!Irp)
     {
+        DPRINT("USBSTOR_QueueNextRequest: no IRP in list, calling IoStartNextPacket\n");
         // no work to do
         IoStartNextPacket(DeviceObject, TRUE);
         return;
@@ -252,6 +260,8 @@ USBSTOR_QueueNextRequest(
     ASSERT(Request);
 
     FDODeviceExtension->ActiveSrb = Request;
+
+    DPRINT("USBSTOR_QueueNextRequest: starting Irp=%p Srb=%p\n", Irp, Request);
 
     // start next packet
     IoStartPacket(DeviceObject, Irp, &Request->QueueSortKey, USBSTOR_CancelIo);
@@ -308,7 +318,7 @@ USBSTOR_StartIo(
     KIRQL OldLevel;
     BOOLEAN ResetInProgress;
 
-    DPRINT("USBSTOR_StartIo\n");
+    DPRINT("USBSTOR_StartIo: DevObj=%p Irp=%p\n", DeviceObject, Irp);
 
     FDODeviceExtension = (PFDO_DEVICE_EXTENSION)DeviceObject->DeviceExtension;
     ASSERT(FDODeviceExtension->Common.IsFDO);

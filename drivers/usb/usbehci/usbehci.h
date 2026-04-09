@@ -144,6 +144,7 @@ typedef struct _EHCI_ENDPOINT {
   LIST_ENTRY ListTDs;
   const EHCI_PERIOD * PeriodTable;
   PEHCI_STATIC_QH StaticQH;
+  ULONG NextDataToggle;
 } EHCI_ENDPOINT, *PEHCI_ENDPOINT;
 
 /* EHCI Transfer follows USBPORT Transfer */
@@ -174,6 +175,7 @@ typedef struct _EHCI_EXTENSION {
   ULONG Flags;
   PEHCI_HC_CAPABILITY_REGISTERS CapabilityRegisters;
   PEHCI_HW_REGISTERS OperationalRegs;
+  EHCI_HC_STRUCTURAL_PARAMS StructuralParameters;
   UCHAR FrameLengthAdjustment;
   BOOLEAN IsStarted;
   USHORT HcSystemErrors;
@@ -196,6 +198,8 @@ typedef struct _EHCI_EXTENSION {
   ULONG SuspendPortBits;
   ULONG ResetPortBits;
   ULONG FinishResetPortBits;
+  /* Cached per-port connect state (bit per port) */
+  ULONG LastConnectStatusBits;
   /* Transfers */
   ULONG PendingTransfers;
   /* Lock Queue */
@@ -333,5 +337,24 @@ VOID
 NTAPI
 EHCI_RH_EnableIrq(
   IN PVOID ohciExtension);
+
+VOID
+NTAPI
+EHCI_TakePortControl(
+  IN PVOID EhciExtension);
+
+BOOLEAN
+NTAPI
+EHCI_QueryCompanionPortInfo(
+  IN PVOID EhciExtension,
+  IN USHORT Port,
+  OUT PUSBPORT_COMPANION_PORT_INFO PortInfo);
+
+BOOLEAN
+NTAPI
+EHCI_QueryPortAttributes(
+  IN PVOID EhciExtension,
+  IN USHORT Port,
+  OUT PULONG Attributes);
 
 #endif /* USBEHCI_H__ */

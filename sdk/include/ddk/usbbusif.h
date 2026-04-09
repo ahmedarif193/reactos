@@ -121,13 +121,6 @@ typedef struct _USB_BUS_INTERFACE_USBDI_V2 {
 
 #if (NTDDI_VERSION >= NTDDI_VISTA)
 
-/* Forward-declare PDEVICE_OBJECT if not already provided by wdm.h/ntddk.h */
-#ifndef _DEVICE_OBJECT_DEFINED_
-struct _DEVICE_OBJECT;
-typedef struct _DEVICE_OBJECT *PDEVICE_OBJECT;
-#define _DEVICE_OBJECT_DEFINED_
-#endif
-
 typedef
 _Must_inspect_result_
 NTSTATUS

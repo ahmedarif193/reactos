@@ -16,6 +16,42 @@
 #define NDEBUG
 #include <debug.h>
 
+static NTSTATUS
+USBCCGP_QueryGenericCompositeUSBDeviceString(
+    OUT LPWSTR *OutString)
+{
+    NTSTATUS Status;
+    RTL_QUERY_REGISTRY_TABLE QueryTable[2];
+    UNICODE_STRING DeviceString;
+
+    RtlInitUnicodeString(&DeviceString, NULL);
+
+    RtlZeroMemory(QueryTable, sizeof(QueryTable));
+    QueryTable[0].Flags = RTL_QUERY_REGISTRY_DIRECT | RTL_QUERY_REGISTRY_REQUIRED;
+    QueryTable[0].Name = L"GenericCompositeUSBDeviceString";
+    QueryTable[0].EntryContext = &DeviceString;
+    QueryTable[0].DefaultType = REG_NONE;
+
+    Status = RtlQueryRegistryValues(RTL_REGISTRY_CONTROL,
+                                    L"usbflags",
+                                    QueryTable,
+                                    NULL,
+                                    NULL);
+
+    if (NT_SUCCESS(Status) && DeviceString.Length > 0 && DeviceString.Buffer)
+    {
+        *OutString = DeviceString.Buffer;
+        return STATUS_SUCCESS;
+    }
+
+    if (DeviceString.Buffer)
+    {
+        RtlFreeUnicodeString(&DeviceString);
+    }
+
+    return STATUS_OBJECT_NAME_NOT_FOUND;
+}
+
 NTSTATUS
 USBCCGP_PdoHandleQueryDeviceText(
     IN PDEVICE_OBJECT DeviceObject,
@@ -24,7 +60,8 @@ USBCCGP_PdoHandleQueryDeviceText(
     PIO_STACK_LOCATION IoStack;
     LPWSTR Buffer;
     PPDO_DEVICE_EXTENSION PDODeviceExtension;
-    LPWSTR GenericString = L"Composite USB Device";
+    LPWSTR GenericString = L"USB Composite Device";
+    LPWSTR RegistryString = NULL;
 
     //
     // get current irp stack location
@@ -55,7 +92,7 @@ USBCCGP_PdoHandleQueryDeviceText(
         //
         // allocate buffer
         //
-        Buffer = AllocateItem(NonPagedPool, PDODeviceExtension->FunctionDescriptor->FunctionDescription.Length + sizeof(WCHAR));
+        Buffer = AllocateItem(PagedPool, PDODeviceExtension->FunctionDescriptor->FunctionDescription.Length + sizeof(WCHAR));
         if (!Buffer)
         {
             //
@@ -68,14 +105,36 @@ USBCCGP_PdoHandleQueryDeviceText(
         // copy buffer
         //
         Irp->IoStatus.Information = (ULONG_PTR)Buffer;
-        RtlCopyMemory(Buffer, PDODeviceExtension->FunctionDescriptor->FunctionDescription.Buffer, PDODeviceExtension->FunctionDescriptor->FunctionDescription.Length);
+        RtlCopyMemory(Buffer,
+                      PDODeviceExtension->FunctionDescriptor->FunctionDescription.Buffer,
+                      PDODeviceExtension->FunctionDescriptor->FunctionDescription.Length);
+        Buffer[PDODeviceExtension->FunctionDescriptor->FunctionDescription.Length / sizeof(WCHAR)] = UNICODE_NULL;
         return STATUS_SUCCESS;
     }
 
     //
-    // FIXME use GenericCompositeUSBDeviceString
+    // try reading GenericCompositeUSBDeviceString from registry
     //
-    UNIMPLEMENTED;
+    if (NT_SUCCESS(USBCCGP_QueryGenericCompositeUSBDeviceString(&RegistryString)))
+    {
+        //
+        // allocate PnP buffer and copy registry string
+        //
+        Buffer = AllocateItem(PagedPool, (wcslen(RegistryString) + 1) * sizeof(WCHAR));
+        if (Buffer)
+        {
+            RtlCopyMemory(Buffer, RegistryString, (wcslen(RegistryString) + 1) * sizeof(WCHAR));
+            Irp->IoStatus.Information = (ULONG_PTR)Buffer;
+            ExFreePool(RegistryString);
+            return STATUS_SUCCESS;
+        }
+        ExFreePool(RegistryString);
+        return STATUS_INSUFFICIENT_RESOURCES;
+    }
+
+    //
+    // fall back to default generic string
+    //
     Buffer = AllocateItem(PagedPool, (wcslen(GenericString) + 1) * sizeof(WCHAR));
     if (!Buffer)
     {
@@ -263,6 +322,8 @@ USBCCGP_PdoHandleQueryId(
                 //
                 // no memory
                 //
+                ExFreePool((PVOID)Irp->IoStatus.Information);
+                Irp->IoStatus.Information = 0;
                 Status = STATUS_INSUFFICIENT_RESOURCES;
             }
         }
@@ -540,6 +601,9 @@ USBCCGP_BuildConfigurationDescriptor(
         InterfaceDescriptor = PDODeviceExtension->FunctionDescriptor->InterfaceDescriptorList[Index];
         InterfaceNumber = InterfaceDescriptor->bInterfaceNumber;
 
+        if (InterfaceDescriptor->bLength == 0)
+            return STATUS_DEVICE_DATA_ERROR;
+
         //
         // add to size and move to next descriptor
         //
@@ -555,6 +619,9 @@ USBCCGP_BuildConfigurationDescriptor(
                 //
                 break;
             }
+
+            if (InterfaceDescriptor->bLength == 0)
+                return STATUS_DEVICE_DATA_ERROR;
 
             //
             // association descriptors are removed
@@ -616,6 +683,12 @@ USBCCGP_BuildConfigurationDescriptor(
         InterfaceDescriptor = PDODeviceExtension->FunctionDescriptor->InterfaceDescriptorList[Index];
         InterfaceNumber = InterfaceDescriptor->bInterfaceNumber;
 
+        if (InterfaceDescriptor->bLength == 0)
+        {
+            FreeItem(Buffer);
+            return STATUS_DEVICE_DATA_ERROR;
+        }
+
         //
         // copy descriptor and move to next descriptor
         //
@@ -631,6 +704,12 @@ USBCCGP_BuildConfigurationDescriptor(
                 // reached end of configuration descriptor
                 //
                 break;
+            }
+
+            if (InterfaceDescriptor->bLength == 0)
+            {
+                FreeItem(Buffer);
+                return STATUS_DEVICE_DATA_ERROR;
             }
 
             //
@@ -759,6 +838,9 @@ USBCCGP_PDOSelectConfiguration(
     //C_ASSERT(sizeof(struct _URB_SELECT_CONFIGURATION) == 0x3C);
 
     // available buffer length
+    if (Urb->UrbSelectConfiguration.Hdr.Length < FIELD_OFFSET(struct _URB_SELECT_CONFIGURATION, Interface.Length))
+        return STATUS_INVALID_PARAMETER;
+
     Length = Urb->UrbSelectConfiguration.Hdr.Length - FIELD_OFFSET(struct _URB_SELECT_CONFIGURATION, Interface.Length);
 
     //
@@ -769,9 +851,11 @@ USBCCGP_PDOSelectConfiguration(
     Entry = NULL;
     do
     {
-        DPRINT1("[USBCCGP] SelectConfiguration Function %x InterfaceNumber %x Alternative %x Length %lu InterfaceInformation->Length %lu\n", 
+        DPRINT("[USBCCGP] SelectConfiguration Function %x InterfaceNumber %x Alternative %x Length %lu InterfaceInformation->Length %lu\n",
                PDODeviceExtension->FunctionDescriptor->FunctionNumber, InterfaceInformation->InterfaceNumber, InterfaceInformation->AlternateSetting, Length, InterfaceInformation->Length);
         ASSERT(InterfaceInformation->Length);
+        if (InterfaceInformation->Length == 0 || InterfaceInformation->Length > Length)
+            return STATUS_INVALID_PARAMETER;
         //
         // search for the interface in the local interface list
         //
@@ -813,13 +897,13 @@ USBCCGP_PDOSelectConfiguration(
         //
         // sanity check
         //
-        ASSERT(Entry);
         if (!Entry)
         {
             //
-            // corruption detected
+            // interface not found in global list
             //
-            KeBugCheck(0);
+            DPRINT1("[USBCCGP] Interface %u not found in interface list\n", InterfaceInformation->InterfaceNumber);
+            return STATUS_UNSUCCESSFUL;
         }
 
         NeedSelect = FALSE;
@@ -850,6 +934,8 @@ USBCCGP_PDOSelectConfiguration(
             // interface is already selected
             //
             ASSERT(Length >= Entry->Interface->Length);
+            if (Entry->Interface->Length == 0 || Entry->Interface->Length > Length)
+                return STATUS_INVALID_PARAMETER;
             RtlCopyMemory(InterfaceInformation, Entry->Interface, Entry->Interface->Length);
 
             //
@@ -868,7 +954,7 @@ USBCCGP_PDOSelectConfiguration(
             //
             // select interface
             //
-            DPRINT1("Selecting InterfaceIndex %lu AlternateSetting %lu NumberOfPipes %lu\n", InterfaceInformation->InterfaceNumber, InterfaceInformation->AlternateSetting, InterfaceInformation->NumberOfPipes);
+            DPRINT("Selecting InterfaceIndex %lu AlternateSetting %lu NumberOfPipes %lu\n", InterfaceInformation->InterfaceNumber, InterfaceInformation->AlternateSetting, InterfaceInformation->NumberOfPipes);
             ASSERT(InterfaceInformation->Length == Entry->Interface->Length);
 
             //
@@ -892,14 +978,15 @@ USBCCGP_PDOSelectConfiguration(
             // now select the interface
             //
             Status = USBCCGP_SyncUrbRequest(PDODeviceExtension->NextDeviceObject, NewUrb);
-            DPRINT1("SelectInterface Status %x\n", Status);
+            DPRINT("SelectInterface Status %x\n", Status);
 
             if (!NT_SUCCESS(Status))
             {
                  //
                  // failed
                  //
-                 break;
+                 FreeItem(NewUrb);
+                 return Status;
             }
 
             //
@@ -913,6 +1000,11 @@ USBCCGP_PDOSelectConfiguration(
             // update provided interface information
             //
             ASSERT(Length >= Entry->Interface->Length);
+            if (Entry->Interface->Length == 0 || Entry->Interface->Length > Length)
+            {
+                FreeItem(NewUrb);
+                return STATUS_INVALID_PARAMETER;
+            }
             RtlCopyMemory(InterfaceInformation, Entry->Interface, Entry->Interface->Length);
 
             //
@@ -939,7 +1031,7 @@ USBCCGP_PDOSelectConfiguration(
     //
     Urb->UrbSelectConfiguration.ConfigurationHandle = PDODeviceExtension->ConfigurationHandle;
 
-    DPRINT1("[USBCCGP] SelectConfiguration Function %x Completed\n", PDODeviceExtension->FunctionDescriptor->FunctionNumber);
+    DPRINT("[USBCCGP] SelectConfiguration Function %x Completed\n", PDODeviceExtension->FunctionDescriptor->FunctionNumber);
 
     //
     // done
@@ -1047,11 +1139,23 @@ PDO_HandleInternalDeviceControl(
                     }
                     else
                     {
-                        RtlCopyMemory(Urb->UrbControlDescriptorRequest.TransferBuffer,
-                                      StringDescriptor->bString,
-                                      StringDescriptor->bLength + sizeof(WCHAR));
-                        FreeItem(StringDescriptor);
-                        Status = STATUS_SUCCESS;
+                        ULONG CopyLength;
+                        if (StringDescriptor->bLength < sizeof(USB_STRING_DESCRIPTOR))
+                        {
+                            FreeItem(StringDescriptor);
+                            Status = STATUS_DEVICE_DATA_ERROR;
+                        }
+                        else
+                        {
+                            CopyLength = min((ULONG)StringDescriptor->bLength,
+                                             Urb->UrbControlDescriptorRequest.TransferBufferLength);
+                            RtlCopyMemory(Urb->UrbControlDescriptorRequest.TransferBuffer,
+                                          StringDescriptor,
+                                          CopyLength);
+                            Urb->UrbControlDescriptorRequest.TransferBufferLength = CopyLength;
+                            FreeItem(StringDescriptor);
+                            Status = STATUS_SUCCESS;
+                        }
                     }
                 }
                 Irp->IoStatus.Status = Status;
@@ -1085,12 +1189,7 @@ PDO_HandleInternalDeviceControl(
         return Status;
     }
 
-    DPRINT1("IOCTL %x\n", IoStack->Parameters.DeviceIoControl.IoControlCode);
-    DPRINT1("InputBufferLength %lu\n", IoStack->Parameters.DeviceIoControl.InputBufferLength);
-    DPRINT1("OutputBufferLength %lu\n", IoStack->Parameters.DeviceIoControl.OutputBufferLength);
-    DPRINT1("Type3InputBuffer %p\n", IoStack->Parameters.DeviceIoControl.Type3InputBuffer);
-
-    ASSERT(FALSE);
+    DPRINT1("[USBCCGP] Unhandled IOCTL %x\n", IoStack->Parameters.DeviceIoControl.IoControlCode);
 
     Irp->IoStatus.Status = STATUS_NOT_IMPLEMENTED;
     IoCompleteRequest(Irp, IO_NO_INCREMENT);
@@ -1142,7 +1241,7 @@ PDO_Dispatch(
         case IRP_MJ_POWER:
             return PDO_HandlePower(DeviceObject, Irp);
         default:
-            DPRINT1("PDO_Dispatch Function %x not implemented\n", IoStack->MajorFunction);
+            DPRINT1("[USBCCGP] PDO_Dispatch: unhandled major function %x\n", IoStack->MajorFunction);
             Status = Irp->IoStatus.Status;
             IoCompleteRequest(Irp, IO_NO_INCREMENT);
             return Status;

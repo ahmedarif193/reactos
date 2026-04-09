@@ -14,6 +14,211 @@
 #define NDEBUG
 #include <debug.h>
 
+static VOID
+USBCCGP_FreeUnicodeString(
+    IN OUT PUNICODE_STRING String,
+    IN BOOLEAN Tagged)
+{
+    if (!String || !String->Buffer)
+        return;
+
+    if (String->Length == 0 && String->MaximumLength == sizeof(WCHAR))
+    {
+        String->Buffer = NULL;
+        String->MaximumLength = 0;
+        return;
+    }
+
+    if (Tagged)
+        ExFreePoolWithTag(String->Buffer, USBCCPG_TAG);
+    else
+        ExFreePool(String->Buffer);
+
+    String->Buffer = NULL;
+    String->Length = 0;
+    String->MaximumLength = 0;
+}
+
+static VOID
+USBCCGP_FreeFunctionDescriptors(
+    IN OUT PFDO_DEVICE_EXTENSION FDODeviceExtension)
+{
+    ULONG Index;
+    BOOLEAN Tagged;
+
+    if (!FDODeviceExtension->FunctionDescriptor)
+        return;
+
+    Tagged = FDODeviceExtension->FunctionDescriptorOwned ? TRUE : FALSE;
+
+    for (Index = 0; Index < FDODeviceExtension->FunctionDescriptorCount; Index++)
+    {
+        if (FDODeviceExtension->FunctionDescriptor[Index].InterfaceDescriptorList)
+        {
+            if (Tagged)
+                ExFreePoolWithTag(FDODeviceExtension->FunctionDescriptor[Index].InterfaceDescriptorList, USBCCPG_TAG);
+            else
+                ExFreePool(FDODeviceExtension->FunctionDescriptor[Index].InterfaceDescriptorList);
+            FDODeviceExtension->FunctionDescriptor[Index].InterfaceDescriptorList = NULL;
+        }
+
+        USBCCGP_FreeUnicodeString(&FDODeviceExtension->FunctionDescriptor[Index].HardwareId, Tagged);
+        USBCCGP_FreeUnicodeString(&FDODeviceExtension->FunctionDescriptor[Index].CompatibleId, Tagged);
+        USBCCGP_FreeUnicodeString(&FDODeviceExtension->FunctionDescriptor[Index].FunctionDescription, Tagged);
+    }
+
+    if (Tagged)
+        ExFreePoolWithTag(FDODeviceExtension->FunctionDescriptor, USBCCPG_TAG);
+    else
+        ExFreePool(FDODeviceExtension->FunctionDescriptor);
+
+    FDODeviceExtension->FunctionDescriptor = NULL;
+    FDODeviceExtension->FunctionDescriptorCount = 0;
+    FDODeviceExtension->FunctionDescriptorOwned = FALSE;
+}
+
+static VOID
+USBCCGP_FreeInterfaceList(
+    IN OUT PFDO_DEVICE_EXTENSION FDODeviceExtension)
+{
+    ULONG Index;
+
+    if (!FDODeviceExtension->InterfaceList)
+        return;
+
+    for (Index = 0; Index < FDODeviceExtension->InterfaceListCount; Index++)
+    {
+        if (FDODeviceExtension->InterfaceList[Index].Interface)
+        {
+            FreeItem(FDODeviceExtension->InterfaceList[Index].Interface);
+            FDODeviceExtension->InterfaceList[Index].Interface = NULL;
+        }
+    }
+
+    FreeItem(FDODeviceExtension->InterfaceList);
+    FDODeviceExtension->InterfaceList = NULL;
+    FDODeviceExtension->InterfaceListCount = 0;
+    FDODeviceExtension->ConfigurationHandle = NULL;
+}
+
+static VOID
+USBCCGP_DrainResetCycleQueue(
+    IN OUT PFDO_DEVICE_EXTENSION FDODeviceExtension,
+    IN PLIST_ENTRY ListHead,
+    IN NTSTATUS Status)
+{
+    LIST_ENTRY TempList;
+    PLIST_ENTRY Entry;
+    PIRP ListIrp;
+    KIRQL CancelIrql;
+
+    InitializeListHead(&TempList);
+
+    IoAcquireCancelSpinLock(&CancelIrql);
+    KeAcquireSpinLockAtDpcLevel(&FDODeviceExtension->Lock);
+
+    while (!IsListEmpty(ListHead))
+    {
+        Entry = RemoveHeadList(ListHead);
+        ListIrp = CONTAINING_RECORD(Entry, IRP, Tail.Overlay.ListEntry);
+        ListIrp->Tail.Overlay.DriverContext[0] = NULL;
+        IoSetCancelRoutine(ListIrp, NULL);
+        InsertTailList(&TempList, Entry);
+    }
+
+    KeReleaseSpinLockFromDpcLevel(&FDODeviceExtension->Lock);
+    IoReleaseCancelSpinLock(CancelIrql);
+
+    while (!IsListEmpty(&TempList))
+    {
+        Entry = RemoveHeadList(&TempList);
+        ListIrp = CONTAINING_RECORD(Entry, IRP, Tail.Overlay.ListEntry);
+        ListIrp->IoStatus.Status = Status;
+        IoCompleteRequest(ListIrp, IO_NO_INCREMENT);
+    }
+}
+
+static VOID
+USBCCGP_FdoCleanup(
+    IN PDEVICE_OBJECT DeviceObject)
+{
+    PFDO_DEVICE_EXTENSION FDODeviceExtension;
+    ULONG Index;
+
+    FDODeviceExtension = (PFDO_DEVICE_EXTENSION)DeviceObject->DeviceExtension;
+
+    USBCCGP_DrainResetCycleQueue(FDODeviceExtension, &FDODeviceExtension->ResetPortListHead, STATUS_CANCELLED);
+    USBCCGP_DrainResetCycleQueue(FDODeviceExtension, &FDODeviceExtension->CyclePortListHead, STATUS_CANCELLED);
+
+    if (FDODeviceExtension->ChildPDO)
+    {
+        for (Index = 0; Index < FDODeviceExtension->FunctionDescriptorCount; Index++)
+        {
+            if (FDODeviceExtension->ChildPDO[Index])
+            {
+                IoDeleteDevice(FDODeviceExtension->ChildPDO[Index]);
+                FDODeviceExtension->ChildPDO[Index] = NULL;
+            }
+        }
+
+        FreeItem(FDODeviceExtension->ChildPDO);
+        FDODeviceExtension->ChildPDO = NULL;
+    }
+
+    USBCCGP_FreeFunctionDescriptors(FDODeviceExtension);
+    USBCCGP_FreeInterfaceList(FDODeviceExtension);
+
+    /* Dereference bus interface if we acquired a reference */
+    if (FDODeviceExtension->BusInterfaceReferenced)
+    {
+        if (FDODeviceExtension->BusInterface.InterfaceDereference)
+        {
+            FDODeviceExtension->BusInterface.InterfaceDereference(FDODeviceExtension->BusInterface.Context);
+        }
+    }
+
+    RtlZeroMemory(&FDODeviceExtension->BusInterface, sizeof(FDODeviceExtension->BusInterface));
+    FDODeviceExtension->BusInterfaceReferenced = FALSE;
+
+    if (FDODeviceExtension->ConfigurationDescriptor)
+    {
+        FreeItem(FDODeviceExtension->ConfigurationDescriptor);
+        FDODeviceExtension->ConfigurationDescriptor = NULL;
+    }
+
+    if (FDODeviceExtension->DeviceDescriptor)
+    {
+        FreeItem(FDODeviceExtension->DeviceDescriptor);
+        FDODeviceExtension->DeviceDescriptor = NULL;
+    }
+}
+
+VOID
+NTAPI
+USBCCGP_CancelResetCycleIrp(
+    IN PDEVICE_OBJECT DeviceObject,
+    IN PIRP Irp)
+{
+    PFDO_DEVICE_EXTENSION FDODeviceExtension;
+    KIRQL OldLevel;
+    PLIST_ENTRY ListHead;
+
+    FDODeviceExtension = (PFDO_DEVICE_EXTENSION)DeviceObject->DeviceExtension;
+    IoReleaseCancelSpinLock(Irp->CancelIrql);
+
+    KeAcquireSpinLock(&FDODeviceExtension->Lock, &OldLevel);
+    ListHead = (PLIST_ENTRY)Irp->Tail.Overlay.DriverContext[0];
+    if (ListHead)
+    {
+        RemoveEntryList(&Irp->Tail.Overlay.ListEntry);
+        Irp->Tail.Overlay.DriverContext[0] = NULL;
+    }
+    KeReleaseSpinLock(&FDODeviceExtension->Lock, OldLevel);
+
+    Irp->IoStatus.Status = STATUS_CANCELLED;
+    IoCompleteRequest(Irp, IO_NO_INCREMENT);
+}
+
 NTSTATUS
 NTAPI
 FDO_QueryCapabilitiesCompletionRoutine(
@@ -194,7 +399,7 @@ FDO_CreateChildPdo(
         if (FDODeviceExtension->FunctionDescriptor[Index].NumberOfInterfaces == 0)
         {
             // Ignore invalid devices
-            DPRINT1("[USBCCGP] Found descriptor with 0 interfaces\n");
+            DPRINT("[USBCCGP] Found descriptor with 0 interfaces\n");
             continue;
         }
 
@@ -254,10 +459,13 @@ FDO_StartDevice(
 {
     NTSTATUS Status;
     PFDO_DEVICE_EXTENSION FDODeviceExtension;
+    BOOLEAN InterfaceReferenced = FALSE;
 
     /* Get device extension */
     FDODeviceExtension = (PFDO_DEVICE_EXTENSION)DeviceObject->DeviceExtension;
     ASSERT(FDODeviceExtension->Common.IsFDO);
+
+    DPRINT("[USBCCGP] FDO_StartDevice: starting lower device\n");
 
     /* First start lower device */
     if (IoForwardIrpSynchronously(FDODeviceExtension->NextDeviceObject, Irp))
@@ -273,8 +481,11 @@ FDO_StartDevice(
     {
         /* Failed to start lower device */
         DPRINT1("FDO_StartDevice lower device failed to start with %x\n", Status);
+        USBCCGP_FdoCleanup(DeviceObject);
         return Status;
     }
+
+    DPRINT("[USBCCGP] FDO_StartDevice: lower device started, getting descriptors\n");
 
     /* Get descriptors */
     Status = USBCCGP_GetDescriptors(DeviceObject);
@@ -282,8 +493,11 @@ FDO_StartDevice(
     {
         /* Failed to start lower device */
         DPRINT1("FDO_StartDevice failed to get descriptors with %x\n", Status);
+        USBCCGP_FdoCleanup(DeviceObject);
         return Status;
     }
+
+    DPRINT("[USBCCGP] FDO_StartDevice: descriptors obtained, querying capabilities\n");
 
     /* Get capabilities */
     Status = FDO_QueryCapabilities(DeviceObject,
@@ -292,21 +506,36 @@ FDO_StartDevice(
     {
         /* Failed to start lower device */
         DPRINT1("FDO_StartDevice failed to get capabilities with %x\n", Status);
+        USBCCGP_FdoCleanup(DeviceObject);
         return Status;
     }
+
+    DPRINT("[USBCCGP] FDO_StartDevice: capabilities obtained, selecting configuration\n");
 
     /* Now select the configuration */
     Status = USBCCGP_SelectConfiguration(DeviceObject, FDODeviceExtension);
     if (!NT_SUCCESS(Status))
     {
         /* Failed to select interface */
-        DPRINT1("FDO_StartDevice failed to get capabilities with %x\n", Status);
+        DPRINT1("FDO_StartDevice failed to select configuration with %x\n", Status);
+        USBCCGP_FdoCleanup(DeviceObject);
         return Status;
     }
 
+    DPRINT("[USBCCGP] FDO_StartDevice: configuration selected, querying bus interface\n");
+
     /* Query bus interface */
-    USBCCGP_QueryInterface(FDODeviceExtension->NextDeviceObject,
-                           &FDODeviceExtension->BusInterface);
+    Status = USBCCGP_QueryInterface(FDODeviceExtension->NextDeviceObject,
+                                    &FDODeviceExtension->BusInterface);
+    if (NT_SUCCESS(Status) &&
+        FDODeviceExtension->BusInterface.InterfaceReference)
+    {
+        FDODeviceExtension->BusInterface.InterfaceReference(FDODeviceExtension->BusInterface.Context);
+        InterfaceReferenced = TRUE;
+    }
+    FDODeviceExtension->BusInterfaceReferenced = InterfaceReferenced;
+
+    DPRINT("[USBCCGP] FDO_StartDevice: bus interface queried, enumerating functions\n");
 
     /* Now enumerate the functions */
     Status = USBCCGP_EnumerateFunctions(DeviceObject);
@@ -314,6 +543,7 @@ FDO_StartDevice(
     {
         /* Failed to enumerate functions */
         DPRINT1("Failed to enumerate functions with %x\n", Status);
+        USBCCGP_FdoCleanup(DeviceObject);
         return Status;
     }
 
@@ -329,6 +559,7 @@ FDO_StartDevice(
     {
         /* Failed */
         DPRINT1("FDO_CreateChildPdo failed with %x\n", Status);
+        USBCCGP_FdoCleanup(DeviceObject);
         return Status;
     }
 
@@ -348,6 +579,8 @@ FDO_CloseConfiguration(
     NTSTATUS Status;
     PURB Urb;
     PFDO_DEVICE_EXTENSION FDODeviceExtension;
+    PUSBD_INTERFACE_LIST_ENTRY TempList;
+    ULONG ListSize;
 
     /* Get device extension */
     FDODeviceExtension = (PFDO_DEVICE_EXTENSION)DeviceObject->DeviceExtension;
@@ -360,9 +593,25 @@ FDO_CloseConfiguration(
         return STATUS_SUCCESS;
     }
 
+    /*
+     * USBD_CreateConfigurationRequestEx overwrites InterfaceList[i].Interface
+     * with pointers into the URB it creates. We must use a temporary copy so
+     * the real Interface pointers (separately allocated) are not clobbered.
+     * Otherwise USBCCGP_FreeInterfaceList would try to free URB-internal
+     * pointers, causing misaligned-pointer / double-free pool corruption.
+     */
+    ListSize = sizeof(USBD_INTERFACE_LIST_ENTRY) * (FDODeviceExtension->InterfaceListCount + 1);
+    TempList = AllocateItem(NonPagedPool, ListSize);
+    if (!TempList)
+    {
+        return STATUS_INSUFFICIENT_RESOURCES;
+    }
+    RtlCopyMemory(TempList, FDODeviceExtension->InterfaceList, ListSize);
+
     /* Now allocate the urb */
     Urb = USBD_CreateConfigurationRequestEx(FDODeviceExtension->ConfigurationDescriptor,
-                                            FDODeviceExtension->InterfaceList);
+                                            TempList);
+    FreeItem(TempList);
     if (!Urb)
     {
         /* No memory */
@@ -377,7 +626,7 @@ FDO_CloseConfiguration(
     if (!NT_SUCCESS(Status))
     {
         /* Failed to set configuration */
-        DPRINT1("USBCCGP_SyncUrbRequest failed to unconfigure device\n", Status);
+        DPRINT1("USBCCGP_SyncUrbRequest failed to unconfigure device %x\n", Status);
     }
 
     ExFreePool(Urb);
@@ -406,11 +655,12 @@ FDO_HandlePnp(
     {
         case IRP_MN_REMOVE_DEVICE:
         {
-            // Unconfigure device */
-            DPRINT1("[USBCCGP] FDO IRP_MN_REMOVE\n");
+            /* Unconfigure device */
+            DPRINT("[USBCCGP] FDO IRP_MN_REMOVE\n");
             FDO_CloseConfiguration(DeviceObject);
+            USBCCGP_FdoCleanup(DeviceObject);
 
-            /* Send the IRP down the stack */
+            /* Forward remove IRP down the stack */
             Irp->IoStatus.Status = STATUS_SUCCESS;
             IoSkipCurrentIrpStackLocation(Irp);
             Status = IoCallDriver(FDODeviceExtension->NextDeviceObject, Irp);
@@ -421,8 +671,15 @@ FDO_HandlePnp(
             /* Delete the device object */
             IoDeleteDevice(DeviceObject);
 
-            /* The lower driver completes the IRP for removal */
+            /* The lower driver owns IRP completion; do not touch it again. */
             return Status;
+        }
+        case IRP_MN_SURPRISE_REMOVAL:
+        {
+            FDO_CloseConfiguration(DeviceObject);
+            USBCCGP_FdoCleanup(DeviceObject);
+            IoSkipCurrentIrpStackLocation(Irp);
+            return IoCallDriver(FDODeviceExtension->NextDeviceObject, Irp);
         }
         case IRP_MN_START_DEVICE:
         {
@@ -461,6 +718,17 @@ FDO_HandlePnp(
             }
             break;
        }
+        case IRP_MN_STOP_DEVICE:
+        {
+            /* Close configuration and clean up resources */
+            FDO_CloseConfiguration(DeviceObject);
+            USBCCGP_FdoCleanup(DeviceObject);
+
+            /* Forward stop IRP to lower driver */
+            Irp->IoStatus.Status = STATUS_SUCCESS;
+            IoSkipCurrentIrpStackLocation(Irp);
+            return IoCallDriver(FDODeviceExtension->NextDeviceObject, Irp);
+        }
         case IRP_MN_QUERY_REMOVE_DEVICE:
         case IRP_MN_QUERY_STOP_DEVICE:
         {
@@ -494,11 +762,10 @@ FDO_HandleResetCyclePort(
     PIO_STACK_LOCATION IoStack;
     NTSTATUS Status;
     PFDO_DEVICE_EXTENSION FDODeviceExtension;
-    PLIST_ENTRY ListHead, Entry;
-    LIST_ENTRY TempList;
+    PLIST_ENTRY ListHead;
     PUCHAR ResetActive;
-    PIRP ListIrp;
     KIRQL OldLevel;
+    KIRQL CancelIrql;
 
     /* Get device extension */
     FDODeviceExtension = (PFDO_DEVICE_EXTENSION)DeviceObject->DeviceExtension;
@@ -526,15 +793,31 @@ FDO_HandleResetCyclePort(
 
     if (*ResetActive)
     {
+        KeReleaseSpinLock(&FDODeviceExtension->Lock, OldLevel);
+
+        IoAcquireCancelSpinLock(&CancelIrql);
+        KeAcquireSpinLockAtDpcLevel(&FDODeviceExtension->Lock);
+
+        if (Irp->Cancel)
+        {
+            KeReleaseSpinLockFromDpcLevel(&FDODeviceExtension->Lock);
+            IoReleaseCancelSpinLock(CancelIrql);
+            Irp->IoStatus.Status = STATUS_CANCELLED;
+            IoCompleteRequest(Irp, IO_NO_INCREMENT);
+            return STATUS_CANCELLED;
+        }
+
         /* Insert into pending list */
+        Irp->Tail.Overlay.DriverContext[0] = ListHead;
         InsertTailList(ListHead, &Irp->Tail.Overlay.ListEntry);
+        IoSetCancelRoutine(Irp, USBCCGP_CancelResetCycleIrp);
 
         /* Mark irp pending */
         IoMarkIrpPending(Irp);
         Status = STATUS_PENDING;
 
-        /* Release lock */
-        KeReleaseSpinLock(&FDODeviceExtension->Lock, OldLevel);
+        KeReleaseSpinLockFromDpcLevel(&FDODeviceExtension->Lock);
+        IoReleaseCancelSpinLock(CancelIrql);
     }
     else
     {
@@ -547,36 +830,20 @@ FDO_HandleResetCyclePort(
         /* Forward request synchronized */
         NT_VERIFY(IoForwardIrpSynchronously(FDODeviceExtension->NextDeviceObject, Irp));
 
+        /* Capture actual completion status from lower driver */
+        Status = Irp->IoStatus.Status;
+
         /* Reacquire lock */
         KeAcquireSpinLock(&FDODeviceExtension->Lock, &OldLevel);
 
         /* Mark reset as completed */
         *ResetActive = FALSE;
 
-        /* Move all requests into temporary list */
-        InitializeListHead(&TempList);
-        while(!IsListEmpty(ListHead))
-        {
-            Entry = RemoveHeadList(ListHead);
-            InsertTailList(&TempList, Entry);
-        }
-
         /* Release lock */
         KeReleaseSpinLock(&FDODeviceExtension->Lock, OldLevel);
 
-        /* Complete pending irps */
-        while(!IsListEmpty(&TempList))
-        {
-            Entry = RemoveHeadList(&TempList);
-            ListIrp = (PIRP)CONTAINING_RECORD(Entry, IRP, Tail.Overlay.ListEntry);
-
-            /* Complete request with status success */
-            ListIrp->IoStatus.Status = STATUS_SUCCESS;
-            IoCompleteRequest(ListIrp, IO_NO_INCREMENT);
-        }
-
-        /* Status success */
-        Status = STATUS_SUCCESS;
+        /* Complete pending irps with the actual status */
+        USBCCGP_DrainResetCycleQueue(FDODeviceExtension, ListHead, Status);
     }
 
     return Status;
@@ -665,8 +932,7 @@ FDO_Dispatch(
         case IRP_MJ_SYSTEM_CONTROL:
             return FDO_HandleSystemControl(DeviceObject, Irp);
         default:
-            DPRINT1("FDO_Dispatch Function %x not implemented\n", IoStack->MajorFunction);
-            ASSERT(FALSE);
+            DPRINT1("[USBCCGP] FDO_Dispatch: unhandled major function %x\n", IoStack->MajorFunction);
             Status = Irp->IoStatus.Status;
             IoCompleteRequest(Irp, IO_NO_INCREMENT);
             return Status;

@@ -1,4 +1,8 @@
 
+if(NOT (ARCH STREQUAL "i386" OR ARCH STREQUAL "amd64"))
+    return()
+endif()
+
 list(APPEND SOURCE
     roothub.c
     usbuhci.c
@@ -8,10 +12,6 @@ add_library(usbuhci MODULE
     ${SOURCE}
     guid.c
     usbuhci.rc)
-
-target_compile_definitions(usbuhci
-    # HACK: Disabled until USB Stack is reinvestigated.
-    PRIVATE NO_KERNEL_LIST_ENTRY_CHECKS)
 
 set_module_type(usbuhci kernelmodedriver)
 add_importlibs(usbuhci usbport usbd hal ntoskrnl)

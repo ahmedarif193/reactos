@@ -1,14 +1,7 @@
 #
 # ReactOS USB RNDIS Network Driver
 #
-# Uses NDIS 6.20 with NET_BUFFER_LIST send/receive. On the dev-nt6-1 branch
-# the NDIS 6 stubs live in drivers/network/ndis/ndis/60stubs.c — this
-# driver links against those symbols and the usbrndis/ndis6_compat.h
-# shim fills in anything that the mainline ndis.h is still missing.
-#
-# NDIS_LEGACY_DRIVER=1 is needed because a few function declarations in
-# ndis.h still use the legacy PNDIS_PACKET / PNDIS_REQUEST types without
-# proper version gating. The driver itself does not call any legacy API.
+# Using NDIS 6.20 with NET_BUFFER_LIST send/receive.
 #
 
 add_definitions(

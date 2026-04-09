@@ -6,4 +6,4 @@
 #include <hubbusif.h>
 #include <usbbusif.h>
 
-/* NO CODE HERE, THIS IS JUST REQUIRED FOR THE GUID DEFINITIONS */
+/* GUID definitions only */

@@ -7,7 +7,6 @@
 
 #include "usbohci.h"
 
-#define NDEBUG
 #include <debug.h>
 
 #define NDEBUG_OHCI_TRACE
@@ -836,6 +835,8 @@ OHCI_StartController(IN PVOID ohciExtension,
     Interrupts.UnrecoverableError = 1;
     Interrupts.FrameNumberOverflow = 1;
     Interrupts.OwnershipChange = 1;
+    Interrupts.RootHubStatusChange = 1;
+    Interrupts.MasterInterruptEnable = 1;
 
     WRITE_REGISTER_ULONG(InterruptEnableReg, Interrupts.AsULONG);
 
@@ -1182,6 +1183,7 @@ OHCI_MapTransferToTD(IN POHCI_EXTENSION OhciExtension,
                 SGList->SgElementCount);
 
     ASSERT(SgIdx < SGList->SgElementCount);
+    SgElement = &SGList->SgElement[SgIdx];
     ASSERT(TransferedLen == SgElement->SgOffset);
 
     /* The buffer for a TD can be 0 to 8192 bytes long,
@@ -1741,6 +1743,7 @@ OHCI_AbortTransfer(IN PVOID ohciExtension,
 
     if (!IsProcessed)
     {
+        LastTD = NULL;
         for (TD = OhciEndpoint->HcdHeadP; TD->OhciTransfer != OhciTransfer; TD = TD->NextTDVa)
         {
             if (TD == OhciEndpoint->HcdTailP)
@@ -1762,10 +1765,12 @@ OHCI_AbortTransfer(IN PVOID ohciExtension,
                 OHCI_ProcessDoneTD(OhciExtension, TD, FALSE);
         }
 
-        LastTD->OhciTransfer->NextTD = TD;
-
-        LastTD->NextTDVa = TD;
-        LastTD->HwTD.gTD.NextTD = TD->PhysicalAddress;
+        if (LastTD)
+        {
+            LastTD->OhciTransfer->NextTD = TD;
+            LastTD->NextTDVa = TD;
+            LastTD->HwTD.gTD.NextTD = TD->PhysicalAddress;
+        }
     }
 
     *CompletedLength = OhciTransfer->TransferLen;
@@ -2498,6 +2503,22 @@ OHCI_FlushInterrupts(IN PVOID uhciExtension)
     return;
 }
 
+BOOLEAN
+NTAPI
+OHCI_QueryPortAttributes(IN PVOID ohciExtension,
+                         IN USHORT Port,
+                         OUT PULONG Attributes)
+{
+    UNREFERENCED_PARAMETER(ohciExtension);
+    UNREFERENCED_PARAMETER(Port);
+
+    if (!Attributes)
+        return FALSE;
+
+    *Attributes = 0;
+    return FALSE;
+}
+
 NTSTATUS
 NTAPI
 DriverEntry(IN PDRIVER_OBJECT DriverObject,
@@ -2571,6 +2592,7 @@ DriverEntry(IN PDRIVER_OBJECT DriverObject,
     RegPacket.EndSendOnePacket = OHCI_EndSendOnePacket;
     RegPacket.PassThru = OHCI_PassThru;
     RegPacket.FlushInterrupts = OHCI_FlushInterrupts;
+    RegPacket.QueryPortAttributes = OHCI_QueryPortAttributes;
 
     DriverObject->DriverUnload = OHCI_Unload;
 

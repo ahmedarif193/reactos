@@ -8,6 +8,17 @@
 #ifndef USBDEBUG_H__
 #define USBDEBUG_H__
 
+/* Master switch to disable all USBPORT debug output */
+#ifdef NDEBUG_USBPORT_ALL
+#define NDEBUG_USBPORT_MINIPORT
+#define NDEBUG_USBPORT_CORE
+#define NDEBUG_USBPORT_URB
+#define NDEBUG_USBPORT_INTERRUPT
+#define NDEBUG_USBPORT_TIMER
+#define NDEBUG_USBPORT_QUEUE
+#define NDEBUG_USBPORT_USB2
+#endif
+
 #if DBG
 
     #ifndef NDEBUG_USBPORT_MINIPORT

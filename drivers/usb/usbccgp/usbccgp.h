@@ -27,6 +27,8 @@ typedef struct
     ULONG InterfaceListCount;                                // interface list count
     USBD_CONFIGURATION_HANDLE ConfigurationHandle;           // configuration handle
     USBC_DEVICE_CONFIGURATION_INTERFACE_V1 BusInterface;     // bus custom enumeration interface
+    BOOLEAN BusInterfaceReferenced;                          // interface reference acquired
+    BOOLEAN FunctionDescriptorOwned;                          // function descriptor buffer owned by usbccgp
     PUSBC_FUNCTION_DESCRIPTOR FunctionDescriptor;            // usb function descriptor
     ULONG FunctionDescriptorCount;                           // number of function descriptor
     PDEVICE_OBJECT * ChildPDO;                               // child pdos

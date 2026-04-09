@@ -41,6 +41,10 @@
 #define USBPORT_RESOURCES_INTERRUPT 2
 #define USBPORT_RESOURCES_MEMORY    4
 
+#if defined(_M_IX86)
+#include <pshpack4.h>
+#endif
+
 typedef struct _USBPORT_RESOURCES {
   ULONG ResourcesTypes;
   USB_CONTROLLER_FLAVOR HcFlavor;
@@ -51,18 +55,50 @@ typedef struct _USBPORT_RESOURCES {
   BOOLEAN ShareVector;
   UCHAR Padded2[3];
   KINTERRUPT_MODE InterruptMode;
+  ULONG InterruptFlags;
+  ULONG InterruptMessageCount;
   ULONG_PTR Reserved;
   PVOID ResourceBase;
   ULONG IoSpaceLength;
   ULONG_PTR StartVA;
-  ULONG StartPA;
+  ULONGLONG StartPA;
   UCHAR LegacySupport;
   BOOLEAN IsChirpHandled;
   UCHAR Reserved2;
   UCHAR Reserved3;
+  /*
+   * LowerDeviceObject: The device object below the FDO in the stack.
+   * This is typically the ACPI filter (if present) or the PDO.
+   * Miniport drivers can use this to send ACPI IOCTLs for _OSC etc.
+   * Added to support USB _OSC negotiation in xHCI driver.
+   */
+  PDEVICE_OBJECT LowerDeviceObject;
+  /*
+   * PCI location information for ACPI namespace lookup.
+   * Miniport drivers can use these to find their ACPI device node
+   * for evaluating _OSC, _DSM, and other ACPI methods.
+   */
+  ULONG PciSegment;
+  ULONG PciBusNumber;
+  ULONG PciDeviceNumber;
+  ULONG PciFunctionNumber;
 } USBPORT_RESOURCES, *PUSBPORT_RESOURCES;
 
-C_ASSERT(sizeof(USBPORT_RESOURCES) == 32 + 5 * sizeof(PVOID));
+#if defined(_M_IX86)
+#include <poppack.h>
+#endif
+
+C_ASSERT(sizeof(USBPORT_RESOURCES) == 56 + 7 * sizeof(PVOID));
+
+/* USBPORT_RESOURCES::Reserved flags */
+#define USBPORT_RES_DMA_ADDR_32BIT 0x00000001u
+#define USBPORT_RES_DMA_ADDR_64BIT 0x00000002u
+#define USBPORT_RES_DMA_ADDR_MASK  (USBPORT_RES_DMA_ADDR_32BIT | USBPORT_RES_DMA_ADDR_64BIT)
+
+typedef struct _USBPORT_COMPANION_PORT_INFO {
+  USHORT CompanionIndex;
+  USHORT CompanionPortNumber;
+} USBPORT_COMPANION_PORT_INFO, *PUSBPORT_COMPANION_PORT_INFO;
 
 typedef struct _USBPORT_ENDPOINT_PROPERTIES {
   USHORT DeviceAddress;
@@ -91,6 +127,15 @@ typedef struct _USBPORT_ENDPOINT_PROPERTIES {
 } USBPORT_ENDPOINT_PROPERTIES, *PUSBPORT_ENDPOINT_PROPERTIES;
 
 C_ASSERT(sizeof(USBPORT_ENDPOINT_PROPERTIES) == 56 + 2 * sizeof(PVOID));
+
+/* USBPORT_ENDPOINT_PROPERTIES::Reserved3 flags for SS LPM policy */
+#define USBPORT_EP_LPM_VALID       0x80000000u
+#define USBPORT_EP_LPM_ALLOW_U1    0x40000000u
+#define USBPORT_EP_LPM_ALLOW_U2    0x20000000u
+#define USBPORT_EP_LPM_U1_SHIFT    0
+#define USBPORT_EP_LPM_U1_MASK     0x000000FFu
+#define USBPORT_EP_LPM_U2_SHIFT    8
+#define USBPORT_EP_LPM_U2_MASK     0x00FFFF00u
 
 typedef struct _USBPORT_TRANSFER_PARAMETERS {
   ULONG TransferFlags;
@@ -253,6 +298,18 @@ typedef VOID
 
 typedef VOID
 (NTAPI *PHCI_POLL_CONTROLLER)(PVOID);
+
+typedef BOOLEAN
+(NTAPI *PHCI_QUERY_COMPANION_PORT_INFO)(
+  PVOID,
+  USHORT,
+  PUSBPORT_COMPANION_PORT_INFO);
+
+typedef BOOLEAN
+(NTAPI *PHCI_QUERY_PORT_ATTRIBUTES)(
+  PVOID,
+  USHORT,
+  PULONG);
 
 typedef VOID
 (NTAPI *PHCI_SET_ENDPOINT_DATA_TOGGLE)(
@@ -537,9 +594,16 @@ typedef VOID
 #define USB_MINIPORT_FLAGS_POLLING      0x0080
 #define USB_MINIPORT_FLAGS_NO_DMA       0x0100
 #define USB_MINIPORT_FLAGS_WAKE_SUPPORT 0x0200
+#define USB_MINIPORT_FLAGS_USB3         0x0400
 
-#define TOTAL_USB11_BUS_BANDWIDTH  12000
-#define TOTAL_USB20_BUS_BANDWIDTH  400000
+#define TOTAL_USB11_BUS_BANDWIDTH        12000
+#define TOTAL_USB20_BUS_BANDWIDTH       400000
+/* Approximate aggregate SuperSpeed/SSP bus bandwidth (5/10 Gbps), expressed
+ * in the same abstract units used by the USB 2.0 scheduler.  These are not
+ * consumed by the legacy frame-based bandwidth pool but are available for
+ * future SuperSpeed-aware accounting or diagnostics. */
+#define TOTAL_USB30_BUS_BANDWIDTH_GEN1 4000000   /* ~10x USB 2.0 */
+#define TOTAL_USB30_BUS_BANDWIDTH_GEN2 8000000   /* ~20x USB 2.0 */
 
 typedef struct _USBPORT_REGISTRATION_PACKET {
   ULONG MiniPortVersion;
@@ -605,6 +669,8 @@ typedef struct _USBPORT_REGISTRATION_PACKET {
   PHCI_START_SEND_ONE_PACKET StartSendOnePacket;
   PHCI_END_SEND_ONE_PACKET EndSendOnePacket;
   PHCI_PASS_THRU PassThru;
+  PHCI_QUERY_COMPANION_PORT_INFO QueryCompanionPortInfo;
+  PHCI_QUERY_PORT_ATTRIBUTES QueryPortAttributes;
 
   /* Port */
   PUSBPORT_DBG_PRINT UsbPortDbgPrint;
@@ -644,7 +710,7 @@ typedef struct _USBPORT_MINIPORT_INTERFACE {
   USBPORT_REGISTRATION_PACKET Packet;
 } USBPORT_MINIPORT_INTERFACE, *PUSBPORT_MINIPORT_INTERFACE;
 
-C_ASSERT(sizeof(USBPORT_MINIPORT_INTERFACE) == 32 + 76 * sizeof(PVOID));
+C_ASSERT(sizeof(USBPORT_MINIPORT_INTERFACE) == 32 + 78 * sizeof(PVOID));
 
 #define USBPORT_TRANSFER_DIRECTION_OUT  1 // From host to device
 #define USBPORT_MAX_DEVICE_ADDRESS      127

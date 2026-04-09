@@ -10,6 +10,260 @@
 #define NDEBUG
 #include <debug.h>
 
+static VOID USBPORT_FillTransportCharacteristics(IN PUSBPORT_DEVICE_EXTENSION FdoExtension,
+                                                 OUT PUSB_TRANSPORT_CHARACTERISTICS Characteristics);
+static VOID USBPORT_FillDeviceCharacteristics(IN PUSBPORT_DEVICE_EXTENSION FdoExtension,
+                                              OUT PUSB_DEVICE_CHARACTERISTICS Characteristics);
+
+static
+VOID
+NTAPI
+USBPORT_CancelTransportNotificationIrp(
+    IN PDEVICE_OBJECT DeviceObject,
+    IN PIRP Irp);
+
+VOID
+NTAPI
+USBPORT_CompleteTransportNotificationIrp(
+    IN PUSBPORT_DEVICE_EXTENSION FdoExtension,
+    IN PIRP Irp,
+    IN NTSTATUS Status,
+    IN BOOLEAN UpdateData)
+{
+    KIRQL CancelIrql;
+
+    if (!Irp)
+        return;
+
+    IoAcquireCancelSpinLock(&CancelIrql);
+    if (!IoSetCancelRoutine(Irp, NULL))
+    {
+        IoReleaseCancelSpinLock(CancelIrql);
+        return;
+    }
+
+    if (Irp->Cancel)
+        Status = STATUS_CANCELLED;
+
+    IoReleaseCancelSpinLock(CancelIrql);
+
+    Irp->Tail.Overlay.DriverContext[0] = NULL;
+
+    if (Status == STATUS_SUCCESS && UpdateData)
+    {
+        PUSB_TRANSPORT_CHARACTERISTICS_CHANGE_NOTIFICATION Notification;
+        PIO_STACK_LOCATION IoStack;
+
+        IoStack = IoGetCurrentIrpStackLocation(Irp);
+        Notification = Irp->AssociatedIrp.SystemBuffer;
+
+        if (Notification &&
+            IoStack->Parameters.DeviceIoControl.InputBufferLength >= sizeof(*Notification))
+        {
+            USBPORT_FillTransportCharacteristics(FdoExtension,
+                                                 &Notification->UsbTransportCharacteristics);
+            Irp->IoStatus.Information = sizeof(*Notification);
+        }
+        else
+        {
+            Status = STATUS_BUFFER_TOO_SMALL;
+            Irp->IoStatus.Information = 0;
+        }
+    }
+    else
+    {
+        Irp->IoStatus.Information = 0;
+    }
+
+    Irp->IoStatus.Status = Status;
+    IoCompleteRequest(Irp, IO_NO_INCREMENT);
+}
+
+VOID
+NTAPI
+USBPORT_SignalTransportChange(
+    IN PUSBPORT_DEVICE_EXTENSION FdoExtension,
+    IN ULONG ChangeFlags)
+{
+    PLIST_ENTRY ListEntry;
+    PUSBPORT_TRANSPORT_REGISTRATION Registration;
+    KIRQL OldIrql;
+
+    if (ChangeFlags == 0)
+    {
+        ChangeFlags = USB_REGISTER_FOR_TRANSPORT_LATENCY_CHANGE |
+                      USB_REGISTER_FOR_TRANSPORT_BANDWIDTH_CHANGE;
+    }
+
+    KeAcquireSpinLock(&FdoExtension->Aux.TransportListSpinLock, &OldIrql);
+
+RestartScan:
+    ListEntry = FdoExtension->Aux.TransportRegistrationList.Flink;
+    while (ListEntry != &FdoExtension->Aux.TransportRegistrationList)
+    {
+        Registration = CONTAINING_RECORD(ListEntry,
+                                         USBPORT_TRANSPORT_REGISTRATION,
+                                         ListEntry);
+
+        if (Registration->PendingIrp)
+        {
+            ULONG Flags = Registration->Flags;
+
+            if (Flags == 0)
+            {
+                Flags = USB_REGISTER_FOR_TRANSPORT_LATENCY_CHANGE |
+                        USB_REGISTER_FOR_TRANSPORT_BANDWIDTH_CHANGE;
+            }
+
+            if ((Flags & ChangeFlags) != 0)
+            {
+                PIRP Irp = Registration->PendingIrp;
+                Registration->PendingIrp = NULL;
+
+                KeReleaseSpinLock(&FdoExtension->Aux.TransportListSpinLock, OldIrql);
+
+                USBPORT_CompleteTransportNotificationIrp(FdoExtension,
+                                                         Irp,
+                                                         STATUS_SUCCESS,
+                                                         TRUE);
+
+                KeAcquireSpinLock(&FdoExtension->Aux.TransportListSpinLock, &OldIrql);
+                goto RestartScan;
+            }
+        }
+
+        ListEntry = ListEntry->Flink;
+    }
+
+    KeReleaseSpinLock(&FdoExtension->Aux.TransportListSpinLock, OldIrql);
+}
+
+VOID
+NTAPI
+USBPORT_InvalidateTimeSyncGeneration(
+    IN PUSBPORT_DEVICE_EXTENSION FdoExtension)
+{
+    PLIST_ENTRY ListEntry;
+    KIRQL OldIrql;
+
+    KeAcquireSpinLock(&FdoExtension->Aux.TimeSyncSpinLock, &OldIrql);
+    FdoExtension->Aux.NextTimeSyncId++;
+    if (FdoExtension->Aux.NextTimeSyncId == 0)
+        FdoExtension->Aux.NextTimeSyncId = 1;
+
+    ListEntry = FdoExtension->Aux.TimeSyncTrackingList.Flink;
+    while (ListEntry != &FdoExtension->Aux.TimeSyncTrackingList)
+    {
+        PUSBPORT_TIMESYNC_CONTEXT Context;
+
+        Context = CONTAINING_RECORD(ListEntry,
+                                    USBPORT_TIMESYNC_CONTEXT,
+                                    ListEntry);
+        Context->GenerationID = FdoExtension->Aux.NextTimeSyncId;
+        ListEntry = ListEntry->Flink;
+    }
+
+    KeReleaseSpinLock(&FdoExtension->Aux.TimeSyncSpinLock, OldIrql);
+}
+
+static
+VOID
+NTAPI
+USBPORT_CancelTransportNotificationIrp(
+    IN PDEVICE_OBJECT DeviceObject,
+    IN PIRP Irp)
+{
+    PUSBPORT_DEVICE_EXTENSION FdoExtension;
+    PUSBPORT_TRANSPORT_REGISTRATION Registration;
+    KIRQL OldIrql;
+
+    FdoExtension = DeviceObject->DeviceExtension;
+    Registration = (PUSBPORT_TRANSPORT_REGISTRATION)Irp->Tail.Overlay.DriverContext[0];
+    Irp->Tail.Overlay.DriverContext[0] = NULL;
+
+    IoReleaseCancelSpinLock(Irp->CancelIrql);
+
+    if (Registration)
+    {
+        KeAcquireSpinLock(&FdoExtension->Aux.TransportListSpinLock, &OldIrql);
+        if (Registration->PendingIrp == Irp)
+            Registration->PendingIrp = NULL;
+        KeReleaseSpinLock(&FdoExtension->Aux.TransportListSpinLock, OldIrql);
+    }
+
+    Irp->IoStatus.Status = STATUS_CANCELLED;
+    Irp->IoStatus.Information = 0;
+    IoCompleteRequest(Irp, IO_NO_INCREMENT);
+}
+
+static
+ULONGLONG
+USBPORT_QueryMaxBandwidth(IN PUSBPORT_DEVICE_EXTENSION FdoExtension)
+{
+    ULONG MiniportFlags = 0;
+
+    if (FdoExtension->MiniPortInterface)
+        MiniportFlags = FdoExtension->MiniPortInterface->Packet.MiniPortFlags;
+
+    if (MiniportFlags & USB_MINIPORT_FLAGS_USB3)
+        return 5000000000ULL;
+
+    if (MiniportFlags & USB_MINIPORT_FLAGS_USB2)
+        return 480000000ULL;
+
+    return 12000000ULL;
+}
+
+static
+ULONG
+USBPORT_QueryDefaultLatency(IN PUSBPORT_DEVICE_EXTENSION FdoExtension)
+{
+    ULONG MiniportFlags = 0;
+
+    if (FdoExtension->MiniPortInterface)
+        MiniportFlags = FdoExtension->MiniPortInterface->Packet.MiniPortFlags;
+
+    if (MiniportFlags & USB_MINIPORT_FLAGS_USB3)
+        return 0;
+
+    if (MiniportFlags & USB_MINIPORT_FLAGS_USB2)
+        return 1;
+
+    return 5;
+}
+
+static
+VOID
+USBPORT_FillTransportCharacteristics(IN PUSBPORT_DEVICE_EXTENSION FdoExtension,
+                                     OUT PUSB_TRANSPORT_CHARACTERISTICS Characteristics)
+{
+    RtlZeroMemory(Characteristics, sizeof(*Characteristics));
+    Characteristics->Version = USB_TRANSPORT_CHARACTERISTICS_VERSION_1;
+    Characteristics->TransportCharacteristicsFlags =
+        USB_TRANSPORT_CHARACTERISTICS_LATENCY_AVAILABLE |
+        USB_TRANSPORT_CHARACTERISTICS_BANDWIDTH_AVAILABLE;
+
+    Characteristics->CurrentRoundtripLatencyInMilliSeconds =
+        USBPORT_QueryDefaultLatency(FdoExtension);
+    Characteristics->MaxPotentialBandwidth =
+        USBPORT_QueryMaxBandwidth(FdoExtension);
+}
+
+static
+VOID
+USBPORT_FillDeviceCharacteristics(IN PUSBPORT_DEVICE_EXTENSION FdoExtension,
+                                  OUT PUSB_DEVICE_CHARACTERISTICS Characteristics)
+{
+    ULONG Latency = USBPORT_QueryDefaultLatency(FdoExtension);
+
+    RtlZeroMemory(Characteristics, sizeof(*Characteristics));
+    Characteristics->Version = USB_DEVICE_CHARACTERISTICS_VERSION_1;
+    Characteristics->UsbDeviceCharacteristicsFlags =
+        USB_DEVICE_CHARACTERISTICS_MAXIMUM_PATH_DELAYS_AVAILABLE;
+    Characteristics->MaximumSendPathDelayInMilliSeconds = Latency;
+    Characteristics->MaximumCompletionPathDelayInMilliSeconds = Latency;
+}
+
 VOID
 NTAPI
 USBPORT_UserGetHcName(IN PDEVICE_OBJECT FdoDevice,
@@ -308,8 +562,23 @@ NTAPI
 USBPORT_PdoDeviceControl(IN PDEVICE_OBJECT PdoDevice,
                          IN PIRP Irp)
 {
-    DPRINT1("USBPORT_PdoDeviceControl: UNIMPLEMENTED. FIXME. \n");
-    return 0;
+    PIO_STACK_LOCATION IoStack;
+    ULONG IoCtl;
+    NTSTATUS Status = STATUS_INVALID_DEVICE_REQUEST;
+
+    IoStack = IoGetCurrentIrpStackLocation(Irp);
+    IoCtl = IoStack->Parameters.DeviceIoControl.IoControlCode;
+
+    DPRINT("USBPORT_PdoDeviceControl: PdoDevice - %p, Irp - %p, IoCtl - %x\n",
+           PdoDevice,
+           Irp,
+           IoCtl);
+
+    Irp->IoStatus.Status = Status;
+    Irp->IoStatus.Information = 0;
+    IoCompleteRequest(Irp, IO_NO_INCREMENT);
+
+    return Status;
 }
 
 NTSTATUS
@@ -338,7 +607,10 @@ USBPORT_PdoInternalDeviceControl(IN PDEVICE_OBJECT PdoDevice,
 
     if (IoCtl == IOCTL_INTERNAL_USB_GET_ROOTHUB_PDO)
     {
-        DPRINT("USBPORT_PdoInternalDeviceControl: IOCTL_INTERNAL_USB_GET_ROOTHUB_PDO\n");
+        DPRINT1("USBPORT_PdoInternalDeviceControl: IOCTL_INTERNAL_USB_GET_ROOTHUB_PDO Pdo=%p Arg1=%p Arg2=%p\n",
+                PdoDevice,
+                IoStack->Parameters.Others.Argument1,
+                IoStack->Parameters.Others.Argument2);
 
         if (IoStack->Parameters.Others.Argument1)
             *(PVOID *)IoStack->Parameters.Others.Argument1 = PdoDevice;
@@ -398,6 +670,7 @@ USBPORT_FdoDeviceControl(IN PDEVICE_OBJECT FdoDevice,
 {
     PUSBPORT_DEVICE_EXTENSION FdoExtension;
     PIO_STACK_LOCATION IoStack;
+    PUSBUSER_REQUEST_HEADER UserHeader;
     ULONG ControlCode;
     NTSTATUS Status = STATUS_INVALID_DEVICE_REQUEST;
     ULONG_PTR Information = 0;
@@ -432,8 +705,685 @@ USBPORT_FdoDeviceControl(IN PDEVICE_OBJECT FdoDevice,
             break;
 
         case IOCTL_USB_USER_REQUEST:
-            DPRINT1("USBPORT_FdoDeviceControl: IOCTL_USB_USER_REQUEST UNIMPLEMENTED. FIXME\n");
+        {
+            DPRINT("USBPORT_FdoDeviceControl: IOCTL_USB_USER_REQUEST\n");
+
+            if (IoStack->Parameters.DeviceIoControl.InputBufferLength < sizeof(USBUSER_REQUEST_HEADER) ||
+                IoStack->Parameters.DeviceIoControl.OutputBufferLength < sizeof(USBUSER_REQUEST_HEADER) ||
+                !Irp->AssociatedIrp.SystemBuffer)
+            {
+                Status = STATUS_BUFFER_TOO_SMALL;
+                break;
+            }
+
+            UserHeader = (PUSBUSER_REQUEST_HEADER)Irp->AssociatedIrp.SystemBuffer;
+
+            if (UserHeader->RequestBufferLength > IoStack->Parameters.DeviceIoControl.OutputBufferLength)
+            {
+                UserHeader->UsbUserStatusCode = UsbUserBufferTooSmall;
+                UserHeader->ActualBufferLength = 0;
+                Status = STATUS_BUFFER_TOO_SMALL;
+                Information = sizeof(USBUSER_REQUEST_HEADER);
+                break;
+            }
+
+            switch (UserHeader->UsbUserRequest)
+            {
+                case USBUSER_GET_CONTROLLER_DRIVER_KEY:
+                case USBUSER_GET_ROOTHUB_SYMBOLIC_NAME:
+                {
+                    PUSBUSER_CONTROLLER_UNICODE_NAME CtlName;
+                    PUSB_UNICODE_NAME UnicodeName;
+
+                    if (UserHeader->RequestBufferLength < sizeof(USBUSER_CONTROLLER_UNICODE_NAME))
+                    {
+                        UserHeader->UsbUserStatusCode = UsbUserInvalidParameter;
+                        UserHeader->ActualBufferLength = sizeof(USBUSER_CONTROLLER_UNICODE_NAME);
+                        Status = STATUS_INVALID_PARAMETER;
+                        Information = sizeof(USBUSER_REQUEST_HEADER);
+                        break;
+                    }
+
+                    CtlName = (PUSBUSER_CONTROLLER_UNICODE_NAME)UserHeader;
+                    UnicodeName = &CtlName->UnicodeName;
+
+                    if (UserHeader->UsbUserRequest == USBUSER_GET_CONTROLLER_DRIVER_KEY)
+                    {
+                        USBPORT_UserGetHcName(FdoDevice, CtlName, UnicodeName);
+                    }
+                    else
+                    {
+                        USBPORT_UserGetRootHubName(FdoDevice, CtlName, UnicodeName);
+                    }
+
+                    if (CtlName->Header.UsbUserStatusCode == UsbUserSuccess)
+                    {
+                        Status = STATUS_SUCCESS;
+                    }
+                    else if (CtlName->Header.UsbUserStatusCode == UsbUserBufferTooSmall)
+                    {
+                        Status = STATUS_BUFFER_TOO_SMALL;
+                    }
+                    else
+                    {
+                        Status = STATUS_UNSUCCESSFUL;
+                    }
+
+                    Information = CtlName->Header.ActualBufferLength;
+                    break;
+                }
+
+                case USBUSER_GET_CONTROLLER_INFO_0:
+                {
+                    PUSBUSER_CONTROLLER_INFO_0 CtlInfo;
+                    PUSBPORT_RHDEVICE_EXTENSION RhExtension;
+                    PUSB_HUB_DESCRIPTOR HubDesc;
+                    USB_CONTROLLER_FLAVOR Flavor = USB_HcGeneric;
+
+                    if (UserHeader->RequestBufferLength < sizeof(USBUSER_CONTROLLER_INFO_0))
+                    {
+                        UserHeader->UsbUserStatusCode = UsbUserInvalidParameter;
+                        UserHeader->ActualBufferLength = sizeof(USBUSER_CONTROLLER_INFO_0);
+                        Status = STATUS_INVALID_PARAMETER;
+                        Information = sizeof(USBUSER_REQUEST_HEADER);
+                        break;
+                    }
+
+                    CtlInfo = (PUSBUSER_CONTROLLER_INFO_0)UserHeader;
+
+                    RtlZeroMemory(&CtlInfo->Info0, sizeof(USB_CONTROLLER_INFO_0));
+
+                    CtlInfo->Info0.PciVendorId = FdoExtension->VendorID;
+                    CtlInfo->Info0.PciDeviceId = FdoExtension->DeviceID;
+                    CtlInfo->Info0.PciRevision = FdoExtension->RevisionID;
+
+                    RhExtension = USBPORT_GetRootHubExtension(FdoExtension);
+                    if (RhExtension && RhExtension->RootHubDescriptors)
+                    {
+                        HubDesc = &RhExtension->RootHubDescriptors->Descriptor;
+                        CtlInfo->Info0.NumberOfRootPorts = HubDesc->bNumberOfPorts;
+                    }
+
+                    if (FdoExtension->BaseClass == PCI_CLASS_SERIAL_BUS_CTLR &&
+                        FdoExtension->SubClass == PCI_SUBCLASS_SB_USB)
+                    {
+                        switch (FdoExtension->ProgIf)
+                        {
+                            case PCI_INTERFACE_USB_ID_OHCI:
+                                Flavor = OHCI_Generic;
+                                break;
+
+                            case PCI_INTERFACE_USB_ID_UHCI:
+                                Flavor = UHCI_Generic;
+                                break;
+
+                            case PCI_INTERFACE_USB_ID_EHCI:
+                                Flavor = EHCI_Generic;
+                                break;
+
+                            default:
+                                Flavor = USB_HcGeneric;
+                                break;
+                        }
+                    }
+
+                    CtlInfo->Info0.ControllerFlavor = Flavor;
+
+                    CtlInfo->Info0.HcFeatureFlags = 0;
+
+                    UserHeader->UsbUserStatusCode = UsbUserSuccess;
+                    UserHeader->ActualBufferLength = sizeof(USBUSER_CONTROLLER_INFO_0);
+                    Status = STATUS_SUCCESS;
+                    Information = UserHeader->ActualBufferLength;
+                    break;
+                }
+
+                case USBUSER_GET_BANDWIDTH_INFORMATION:
+                {
+                    PUSBUSER_BANDWIDTH_INFO_REQUEST BwReq;
+                    PUSB_BANDWIDTH_INFO BwInfo;
+                    KIRQL OldIrql;
+                    PLIST_ENTRY Entry;
+                    PUSBPORT_DEVICE_HANDLE Handle;
+                    ULONG DeviceCount = 0;
+
+                    if (UserHeader->RequestBufferLength < sizeof(USBUSER_BANDWIDTH_INFO_REQUEST))
+                    {
+                        UserHeader->UsbUserStatusCode = UsbUserInvalidParameter;
+                        UserHeader->ActualBufferLength = sizeof(USBUSER_BANDWIDTH_INFO_REQUEST);
+                        Status = STATUS_INVALID_PARAMETER;
+                        Information = sizeof(USBUSER_REQUEST_HEADER);
+                        break;
+                    }
+
+                    BwReq = (PUSBUSER_BANDWIDTH_INFO_REQUEST)UserHeader;
+                    BwInfo = &BwReq->BandwidthInformation;
+
+                    RtlZeroMemory(BwInfo, sizeof(USB_BANDWIDTH_INFO));
+
+                    KeAcquireSpinLock(&FdoExtension->DeviceHandleSpinLock, &OldIrql);
+                    Entry = FdoExtension->DeviceHandleList.Flink;
+                    while (Entry != &FdoExtension->DeviceHandleList)
+                    {
+                        Handle = CONTAINING_RECORD(Entry,
+                                                   USBPORT_DEVICE_HANDLE,
+                                                   DeviceHandleLink);
+
+                        if (!(Handle->Flags & DEVICE_HANDLE_FLAG_REMOVED))
+                        {
+                            DeviceCount++;
+                        }
+
+                        Entry = Entry->Flink;
+                    }
+                    KeReleaseSpinLock(&FdoExtension->DeviceHandleSpinLock, OldIrql);
+
+                    BwInfo->DeviceCount = DeviceCount;
+                    BwInfo->TotalBusBandwidth = FdoExtension->TotalBusBandwidth;
+                    BwInfo->Total32secBandwidth = FdoExtension->TotalBusBandwidth * USB2_FRAMES;
+
+                    UserHeader->UsbUserStatusCode = UsbUserSuccess;
+                    UserHeader->ActualBufferLength = sizeof(USBUSER_BANDWIDTH_INFO_REQUEST);
+                    Status = STATUS_SUCCESS;
+                    Information = UserHeader->ActualBufferLength;
+                    break;
+                }
+
+                case USBUSER_GET_USB_DRIVER_VERSION:
+                {
+                    PUSBUSER_GET_DRIVER_VERSION Ver;
+                    USB_DRIVER_VERSION_PARAMETERS *Params;
+
+                    if (UserHeader->RequestBufferLength < sizeof(USBUSER_GET_DRIVER_VERSION))
+                    {
+                        UserHeader->UsbUserStatusCode = UsbUserInvalidParameter;
+                        UserHeader->ActualBufferLength = sizeof(USBUSER_GET_DRIVER_VERSION);
+                        Status = STATUS_INVALID_PARAMETER;
+                        Information = sizeof(USBUSER_REQUEST_HEADER);
+                        break;
+                    }
+
+                    Ver = (PUSBUSER_GET_DRIVER_VERSION)UserHeader;
+                    Params = &Ver->Parameters;
+
+                    RtlZeroMemory(Params, sizeof(USB_DRIVER_VERSION_PARAMETERS));
+
+                    Params->DriverTrackingCode = 0;
+                    Params->USBDI_Version = USBDI_VERSION;
+                    Params->USBUSER_Version = USBUSER_VERSION;
+#if DBG
+                    Params->CheckedPortDriver = TRUE;
+#else
+                    Params->CheckedPortDriver = FALSE;
+#endif
+                    Params->CheckedMiniportDriver = FALSE;
+
+                    if (FdoExtension->MiniPortInterface &&
+                        (FdoExtension->MiniPortInterface->Packet.MiniPortFlags & USB_MINIPORT_FLAGS_USB2))
+                    {
+                        Params->USB_Version = 0x0200;
+                    }
+                    else
+                    {
+                        Params->USB_Version = 0x0110;
+                    }
+
+                    UserHeader->UsbUserStatusCode = UsbUserSuccess;
+                    UserHeader->ActualBufferLength = sizeof(USBUSER_GET_DRIVER_VERSION);
+                    Status = STATUS_SUCCESS;
+                    Information = UserHeader->ActualBufferLength;
+                    break;
+                }
+
+                case USBUSER_GET_BUS_STATISTICS_0:
+                {
+                    PUSBUSER_BUS_STATISTICS_0_REQUEST StatReq;
+                    PUSB_BUS_STATISTICS_0 Stats;
+                    KIRQL OldIrql;
+                    PLIST_ENTRY Entry;
+                    PUSBPORT_DEVICE_HANDLE Handle;
+                    ULONG DeviceCount = 0;
+                    LARGE_INTEGER Now;
+                    PUSBPORT_REGISTRATION_PACKET Packet;
+                    ULONG FrameNumber = 0;
+
+                    if (UserHeader->RequestBufferLength < sizeof(USBUSER_BUS_STATISTICS_0_REQUEST))
+                    {
+                        UserHeader->UsbUserStatusCode = UsbUserInvalidParameter;
+                        UserHeader->ActualBufferLength = sizeof(USBUSER_BUS_STATISTICS_0_REQUEST);
+                        Status = STATUS_INVALID_PARAMETER;
+                        Information = sizeof(USBUSER_REQUEST_HEADER);
+                        break;
+                    }
+
+                    StatReq = (PUSBUSER_BUS_STATISTICS_0_REQUEST)UserHeader;
+                    Stats = &StatReq->BusStatistics0;
+
+                    RtlZeroMemory(Stats, sizeof(USB_BUS_STATISTICS_0));
+
+                    KeAcquireSpinLock(&FdoExtension->DeviceHandleSpinLock, &OldIrql);
+                    Entry = FdoExtension->DeviceHandleList.Flink;
+                    while (Entry != &FdoExtension->DeviceHandleList)
+                    {
+                        Handle = CONTAINING_RECORD(Entry,
+                                                   USBPORT_DEVICE_HANDLE,
+                                                   DeviceHandleLink);
+
+                        if (!(Handle->Flags & DEVICE_HANDLE_FLAG_REMOVED))
+                        {
+                            DeviceCount++;
+                        }
+
+                        Entry = Entry->Flink;
+                    }
+                    KeReleaseSpinLock(&FdoExtension->DeviceHandleSpinLock, OldIrql);
+
+                    Stats->DeviceCount = DeviceCount;
+
+                    KeQuerySystemTime(&Now);
+                    Stats->CurrentSystemTime = Now;
+
+                    Packet = &FdoExtension->MiniPortInterface->Packet;
+                    KeAcquireSpinLock(&FdoExtension->MiniportSpinLock, &OldIrql);
+                    FrameNumber = Packet->Get32BitFrameNumber(FdoExtension->MiniPortExt);
+                    KeReleaseSpinLock(&FdoExtension->MiniportSpinLock, OldIrql);
+
+                    Stats->CurrentUsbFrame = FrameNumber;
+
+                    Stats->RootHubEnabled = TRUE;
+                    Stats->RootHubDevicePowerState = (UCHAR)FdoExtension->Capabilities.DeviceState[PowerSystemWorking];
+
+                    UserHeader->UsbUserStatusCode = UsbUserSuccess;
+                    UserHeader->ActualBufferLength = sizeof(USBUSER_BUS_STATISTICS_0_REQUEST);
+                    Status = STATUS_SUCCESS;
+                    Information = UserHeader->ActualBufferLength;
+                    break;
+                }
+
+                default:
+                    UserHeader->UsbUserStatusCode = UsbUserNotSupported;
+                    UserHeader->ActualBufferLength = sizeof(USBUSER_REQUEST_HEADER);
+                    Status = STATUS_NOT_SUPPORTED;
+                    Information = sizeof(USBUSER_REQUEST_HEADER);
+                    break;
+            }
             break;
+        }
+
+        case IOCTL_USB_GET_TRANSPORT_CHARACTERISTICS:
+        {
+            PUSB_TRANSPORT_CHARACTERISTICS Transport;
+
+            if (!Irp->AssociatedIrp.SystemBuffer ||
+                IoStack->Parameters.DeviceIoControl.OutputBufferLength < sizeof(*Transport))
+            {
+                Status = STATUS_BUFFER_TOO_SMALL;
+                break;
+            }
+
+            Transport = Irp->AssociatedIrp.SystemBuffer;
+            USBPORT_FillTransportCharacteristics(FdoExtension, Transport);
+            Information = sizeof(*Transport);
+            Status = STATUS_SUCCESS;
+            break;
+        }
+
+        case IOCTL_USB_REGISTER_FOR_TRANSPORT_CHARACTERISTICS_CHANGE:
+        {
+            PUSB_TRANSPORT_CHARACTERISTICS_CHANGE_REGISTRATION Registration;
+            PUSBPORT_TRANSPORT_REGISTRATION Entry;
+            KIRQL OldIrql;
+
+            if (!Irp->AssociatedIrp.SystemBuffer ||
+                IoStack->Parameters.DeviceIoControl.InputBufferLength < sizeof(*Registration))
+            {
+                Status = STATUS_BUFFER_TOO_SMALL;
+                break;
+            }
+
+            Registration = Irp->AssociatedIrp.SystemBuffer;
+
+            Entry = ExAllocatePoolWithTag(NonPagedPool,
+                                          sizeof(*Entry),
+                                          USB_PORT_TAG);
+            if (!Entry)
+            {
+                Status = STATUS_INSUFFICIENT_RESOURCES;
+                break;
+            }
+
+            Entry->Handle = (USB_CHANGE_REGISTRATION_HANDLE)Entry;
+            Entry->Flags = Registration->ChangeNotificationInputFlags;
+            Entry->PendingIrp = NULL;
+
+            KeAcquireSpinLock(&FdoExtension->Aux.TransportListSpinLock, &OldIrql);
+            InsertTailList(&FdoExtension->Aux.TransportRegistrationList, &Entry->ListEntry);
+            KeReleaseSpinLock(&FdoExtension->Aux.TransportListSpinLock, OldIrql);
+
+            Registration->Handle = Entry->Handle;
+            USBPORT_FillTransportCharacteristics(FdoExtension,
+                                                 &Registration->UsbTransportCharacteristics);
+
+            Information = sizeof(*Registration);
+            Status = STATUS_SUCCESS;
+            break;
+        }
+
+        case IOCTL_USB_NOTIFY_ON_TRANSPORT_CHARACTERISTICS_CHANGE:
+        {
+            PUSB_TRANSPORT_CHARACTERISTICS_CHANGE_NOTIFICATION Notification;
+            PLIST_ENTRY ListEntry;
+            PUSBPORT_TRANSPORT_REGISTRATION Entry;
+            BOOLEAN Found = FALSE;
+            BOOLEAN Busy = FALSE;
+            KIRQL OldIrql;
+            KIRQL CancelIrql;
+
+            if (!Irp->AssociatedIrp.SystemBuffer ||
+                IoStack->Parameters.DeviceIoControl.InputBufferLength < sizeof(*Notification))
+            {
+                Status = STATUS_BUFFER_TOO_SMALL;
+                break;
+            }
+
+            Notification = Irp->AssociatedIrp.SystemBuffer;
+
+            KeAcquireSpinLock(&FdoExtension->Aux.TransportListSpinLock, &OldIrql);
+            ListEntry = FdoExtension->Aux.TransportRegistrationList.Flink;
+            while (ListEntry != &FdoExtension->Aux.TransportRegistrationList)
+            {
+                Entry = CONTAINING_RECORD(ListEntry,
+                                          USBPORT_TRANSPORT_REGISTRATION,
+                                          ListEntry);
+                if (Entry->Handle == Notification->Handle)
+                {
+                    Found = TRUE;
+                    if (Entry->PendingIrp)
+                        Busy = TRUE;
+                    else
+                        Entry->PendingIrp = Irp;
+                    break;
+                }
+
+                ListEntry = ListEntry->Flink;
+            }
+            KeReleaseSpinLock(&FdoExtension->Aux.TransportListSpinLock, OldIrql);
+
+            if (!Found)
+            {
+                Status = STATUS_INVALID_PARAMETER;
+                break;
+            }
+
+            if (Busy)
+            {
+                Status = STATUS_DEVICE_BUSY;
+                break;
+            }
+
+            IoAcquireCancelSpinLock(&CancelIrql);
+            if (Irp->Cancel)
+            {
+                IoReleaseCancelSpinLock(CancelIrql);
+
+                KeAcquireSpinLock(&FdoExtension->Aux.TransportListSpinLock, &OldIrql);
+                if (Entry->PendingIrp == Irp)
+                    Entry->PendingIrp = NULL;
+                KeReleaseSpinLock(&FdoExtension->Aux.TransportListSpinLock, OldIrql);
+
+                Status = STATUS_CANCELLED;
+                break;
+            }
+
+            IoMarkIrpPending(Irp);
+            Irp->Tail.Overlay.DriverContext[0] = Entry;
+            IoSetCancelRoutine(Irp, USBPORT_CancelTransportNotificationIrp);
+            IoReleaseCancelSpinLock(CancelIrql);
+
+            Irp->IoStatus.Status = STATUS_PENDING;
+            Irp->IoStatus.Information = 0;
+            return STATUS_PENDING;
+        }
+
+        case IOCTL_USB_UNREGISTER_FOR_TRANSPORT_CHARACTERISTICS_CHANGE:
+        {
+            PUSB_TRANSPORT_CHARACTERISTICS_CHANGE_UNREGISTRATION Unregister;
+            PLIST_ENTRY ListEntry;
+            PUSBPORT_TRANSPORT_REGISTRATION Entry;
+            BOOLEAN Found = FALSE;
+            KIRQL OldIrql;
+            PIRP PendingIrp = NULL;
+
+            if (!Irp->AssociatedIrp.SystemBuffer ||
+                IoStack->Parameters.DeviceIoControl.InputBufferLength < sizeof(*Unregister))
+            {
+                Status = STATUS_BUFFER_TOO_SMALL;
+                break;
+            }
+
+            Unregister = Irp->AssociatedIrp.SystemBuffer;
+
+            KeAcquireSpinLock(&FdoExtension->Aux.TransportListSpinLock, &OldIrql);
+            ListEntry = FdoExtension->Aux.TransportRegistrationList.Flink;
+            while (ListEntry != &FdoExtension->Aux.TransportRegistrationList)
+            {
+                Entry = CONTAINING_RECORD(ListEntry,
+                                          USBPORT_TRANSPORT_REGISTRATION,
+                                          ListEntry);
+                if (Entry->Handle == Unregister->Handle)
+                {
+                    RemoveEntryList(&Entry->ListEntry);
+                    PendingIrp = Entry->PendingIrp;
+                    Entry->PendingIrp = NULL;
+                    Found = TRUE;
+                    break;
+                }
+
+                ListEntry = ListEntry->Flink;
+            }
+            KeReleaseSpinLock(&FdoExtension->Aux.TransportListSpinLock, OldIrql);
+
+            if (!Found)
+            {
+                Status = STATUS_INVALID_PARAMETER;
+                break;
+            }
+
+            if (PendingIrp)
+            {
+                USBPORT_CompleteTransportNotificationIrp(FdoExtension,
+                                                         PendingIrp,
+                                                         STATUS_CANCELLED,
+                                                         FALSE);
+            }
+
+            ExFreePoolWithTag(Entry, USB_PORT_TAG);
+            Information = sizeof(*Unregister);
+            Status = STATUS_SUCCESS;
+            break;
+        }
+
+        case IOCTL_USB_GET_DEVICE_CHARACTERISTICS:
+        {
+            PUSB_DEVICE_CHARACTERISTICS Characteristics;
+
+            if (!Irp->AssociatedIrp.SystemBuffer ||
+                IoStack->Parameters.DeviceIoControl.OutputBufferLength < sizeof(*Characteristics))
+            {
+                Status = STATUS_BUFFER_TOO_SMALL;
+                break;
+            }
+
+            Characteristics = Irp->AssociatedIrp.SystemBuffer;
+            USBPORT_FillDeviceCharacteristics(FdoExtension, Characteristics);
+            Information = sizeof(*Characteristics);
+            Status = STATUS_SUCCESS;
+            break;
+        }
+
+        case IOCTL_USB_START_TRACKING_FOR_TIME_SYNC:
+        {
+            PUSB_START_TRACKING_FOR_TIME_SYNC_INFORMATION TrackingInfo;
+            PUSBPORT_TIMESYNC_CONTEXT Context;
+            KIRQL OldIrql;
+
+            if (!Irp->AssociatedIrp.SystemBuffer ||
+                IoStack->Parameters.DeviceIoControl.InputBufferLength < sizeof(*TrackingInfo))
+            {
+                Status = STATUS_BUFFER_TOO_SMALL;
+                break;
+            }
+
+            TrackingInfo = Irp->AssociatedIrp.SystemBuffer;
+
+            Context = ExAllocatePoolWithTag(NonPagedPool,
+                                            sizeof(*Context),
+                                            USB_PORT_TAG);
+            if (!Context)
+            {
+                Status = STATUS_INSUFFICIENT_RESOURCES;
+                break;
+            }
+
+            Context->Handle = (HANDLE)Context;
+            if (FdoExtension->Aux.NextTimeSyncId == 0)
+                FdoExtension->Aux.NextTimeSyncId = 1;
+            Context->GenerationID = FdoExtension->Aux.NextTimeSyncId;
+
+            KeAcquireSpinLock(&FdoExtension->Aux.TimeSyncSpinLock, &OldIrql);
+            InsertTailList(&FdoExtension->Aux.TimeSyncTrackingList, &Context->ListEntry);
+            KeReleaseSpinLock(&FdoExtension->Aux.TimeSyncSpinLock, OldIrql);
+
+            TrackingInfo->TimeTrackingHandle = Context->Handle;
+            Information = sizeof(*TrackingInfo);
+            Status = STATUS_SUCCESS;
+            break;
+        }
+
+        case IOCTL_USB_STOP_TRACKING_FOR_TIME_SYNC:
+        {
+            PUSB_STOP_TRACKING_FOR_TIME_SYNC_INFORMATION StopInfo;
+            PLIST_ENTRY ListEntry;
+            PUSBPORT_TIMESYNC_CONTEXT Context = NULL;
+            KIRQL OldIrql;
+
+            if (!Irp->AssociatedIrp.SystemBuffer ||
+                IoStack->Parameters.DeviceIoControl.InputBufferLength < sizeof(*StopInfo))
+            {
+                Status = STATUS_BUFFER_TOO_SMALL;
+                break;
+            }
+
+            StopInfo = Irp->AssociatedIrp.SystemBuffer;
+
+            KeAcquireSpinLock(&FdoExtension->Aux.TimeSyncSpinLock, &OldIrql);
+            ListEntry = FdoExtension->Aux.TimeSyncTrackingList.Flink;
+            while (ListEntry != &FdoExtension->Aux.TimeSyncTrackingList)
+            {
+                Context = CONTAINING_RECORD(ListEntry,
+                                            USBPORT_TIMESYNC_CONTEXT,
+                                            ListEntry);
+                if (Context->Handle == StopInfo->TimeTrackingHandle)
+                {
+                    RemoveEntryList(&Context->ListEntry);
+                    break;
+                }
+
+                Context = NULL;
+                ListEntry = ListEntry->Flink;
+            }
+            KeReleaseSpinLock(&FdoExtension->Aux.TimeSyncSpinLock, OldIrql);
+
+            if (!Context)
+            {
+                Status = STATUS_INVALID_PARAMETER;
+                break;
+            }
+
+            ExFreePoolWithTag(Context, USB_PORT_TAG);
+            Information = sizeof(*StopInfo);
+            Status = STATUS_SUCCESS;
+            break;
+        }
+
+        case IOCTL_USB_GET_FRAME_NUMBER_AND_QPC_FOR_TIME_SYNC:
+        {
+            PUSB_FRAME_NUMBER_AND_QPC_FOR_TIME_SYNC_INFORMATION FrameInfo;
+            PLIST_ENTRY ListEntry;
+            PUSBPORT_TIMESYNC_CONTEXT Context = NULL;
+            ULONG GenerationId = 0;
+            KIRQL OldIrql;
+            LARGE_INTEGER PerfFreq;
+            LARGE_INTEGER Counter;
+            ULONG FrameNumber = 0;
+            ULONG MicroFrame = 0;
+            PUSBPORT_REGISTRATION_PACKET Packet;
+
+            if (!Irp->AssociatedIrp.SystemBuffer ||
+                IoStack->Parameters.DeviceIoControl.InputBufferLength < sizeof(*FrameInfo))
+            {
+                Status = STATUS_BUFFER_TOO_SMALL;
+                break;
+            }
+
+            FrameInfo = Irp->AssociatedIrp.SystemBuffer;
+
+            KeAcquireSpinLock(&FdoExtension->Aux.TimeSyncSpinLock, &OldIrql);
+            ListEntry = FdoExtension->Aux.TimeSyncTrackingList.Flink;
+            while (ListEntry != &FdoExtension->Aux.TimeSyncTrackingList)
+            {
+                Context = CONTAINING_RECORD(ListEntry,
+                                            USBPORT_TIMESYNC_CONTEXT,
+                                            ListEntry);
+                if (Context->Handle == FrameInfo->TimeTrackingHandle)
+                {
+                    GenerationId = Context->GenerationID;
+                    break;
+                }
+
+                Context = NULL;
+                ListEntry = ListEntry->Flink;
+            }
+            KeReleaseSpinLock(&FdoExtension->Aux.TimeSyncSpinLock, OldIrql);
+
+            if (!Context)
+            {
+                Status = STATUS_INVALID_PARAMETER;
+                break;
+            }
+
+            Counter = KeQueryPerformanceCounter(&PerfFreq);
+
+            Packet = FdoExtension->MiniPortInterface ?
+                     &FdoExtension->MiniPortInterface->Packet :
+                     NULL;
+
+            if (Packet && Packet->Get32BitFrameNumber)
+            {
+                KeAcquireSpinLock(&FdoExtension->MiniportSpinLock, &OldIrql);
+                FrameNumber = Packet->Get32BitFrameNumber(FdoExtension->MiniPortExt);
+                KeReleaseSpinLock(&FdoExtension->MiniportSpinLock, OldIrql);
+            }
+
+            if (Packet &&
+                (Packet->MiniPortFlags & USB_MINIPORT_FLAGS_USB2))
+            {
+                MicroFrame = FrameNumber & 0x7;
+            }
+
+            FrameInfo->QueryPerformanceCounterAtInputFrameOrMicroFrame = Counter;
+            FrameInfo->QueryPerformanceCounterFrequency = PerfFreq;
+            FrameInfo->PredictedAccuracyInMicroSeconds = 50;
+            FrameInfo->CurrentGenerationID = GenerationId;
+            FrameInfo->CurrentQueryPerformanceCounter = Counter;
+            FrameInfo->CurrentHardwareFrameNumber = FrameNumber & 0x7FF;
+            FrameInfo->CurrentHardwareMicroFrameNumber = MicroFrame;
+            FrameInfo->CurrentUSBFrameNumber = FrameNumber;
+
+            Information = sizeof(*FrameInfo);
+            Status = STATUS_SUCCESS;
+            break;
+        }
 
         default:
             DPRINT1("USBPORT_FdoDeviceControl: Not supported IoControlCode - %x\n",
@@ -454,6 +1404,64 @@ NTAPI
 USBPORT_FdoInternalDeviceControl(IN PDEVICE_OBJECT FdoDevice,
                                  IN PIRP Irp)
 {
-    DPRINT1("USBPORT_FdoInternalDeviceControl: UNIMPLEMENTED. FIXME. \n");
-    return 0;
+    PUSBPORT_DEVICE_EXTENSION FdoExtension;
+    PIO_STACK_LOCATION IoStack;
+    ULONG IoCtl;
+    NTSTATUS Status;
+
+    FdoExtension = FdoDevice->DeviceExtension;
+    IoStack = IoGetCurrentIrpStackLocation(Irp);
+    IoCtl = IoStack->Parameters.DeviceIoControl.IoControlCode;
+
+    //DPRINT("USBPORT_FdoInternalDeviceControl: FdoDevice - %p, Irp - %p, IoCtl - %x\n",
+    //       FdoDevice,
+    //       Irp,
+    //       IoCtl);
+
+    if (IoCtl == IOCTL_INTERNAL_USB_GET_ROOTHUB_PDO)
+    {
+        PDEVICE_OBJECT RootHubPdo;
+
+        RootHubPdo = FdoExtension->RootHubPdo;
+
+        DPRINT1("USBPORT_FdoInternalDeviceControl: IOCTL_INTERNAL_USB_GET_ROOTHUB_PDO Fdo=%p RootHubPdo=%p Arg1=%p Arg2=%p\n",
+                FdoDevice,
+                RootHubPdo,
+                IoStack->Parameters.Others.Argument1,
+                IoStack->Parameters.Others.Argument2);
+
+        if (IoStack->Parameters.Others.Argument1)
+        {
+            *(PDEVICE_OBJECT *)IoStack->Parameters.Others.Argument1 = RootHubPdo;
+        }
+
+        if (IoStack->Parameters.Others.Argument2)
+        {
+            *(PDEVICE_OBJECT *)IoStack->Parameters.Others.Argument2 = RootHubPdo;
+        }
+
+        Status = RootHubPdo ? STATUS_SUCCESS : STATUS_DEVICE_NOT_READY;
+        goto Exit;
+    }
+
+    if (IoCtl == IOCTL_INTERNAL_USB_GET_HUB_COUNT)
+    {
+        if (IoStack->Parameters.Others.Argument1)
+        {
+            ++*(PULONG)IoStack->Parameters.Others.Argument1;
+        }
+
+        Status = STATUS_SUCCESS;
+        goto Exit;
+    }
+
+    DPRINT("USBPORT_FdoInternalDeviceControl: INVALID INTERNAL DEVICE CONTROL\n");
+    Status = STATUS_INVALID_DEVICE_REQUEST;
+
+Exit:
+    Irp->IoStatus.Status = Status;
+    Irp->IoStatus.Information = 0;
+    IoCompleteRequest(Irp, IO_NO_INCREMENT);
+
+    return Status;
 }

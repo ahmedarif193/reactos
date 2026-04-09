@@ -9,9 +9,208 @@
 
 #define NDEBUG
 #include <debug.h>
-
 #define NDEBUG_USBPORT_URB
 #include "usbdebug.h"
+
+static
+ULONG
+USBPORT_GetIsoPathDelay(
+    IN PUSBPORT_DEVICE_EXTENSION FdoExtension,
+    IN PUSBPORT_ENDPOINT Endpoint)
+{
+    ULONG Delay;
+    ULONG MiniportFlags = 0;
+
+    if (FdoExtension->MiniPortInterface)
+    {
+        MiniportFlags = FdoExtension->MiniPortInterface->Packet.MiniPortFlags;
+    }
+
+    if (MiniportFlags & USB_MINIPORT_FLAGS_USB3)
+    {
+        return 0;
+    }
+
+    Delay = USBPORT_DEFAULT_ISOCH_PATH_DELAY_MS;
+
+    if (!Endpoint)
+        return Delay;
+
+    switch (Endpoint->EndpointProperties.DeviceSpeed)
+    {
+        case UsbSuperSpeed:
+            Delay = 0;
+            break;
+
+        case UsbHighSpeed:
+            if (FdoExtension->Usb2Extension)
+                Delay = FdoExtension->Usb2Extension->HcDelayTime;
+            else
+                Delay = 1;
+            break;
+
+        default:
+            Delay = 2;
+            if (Endpoint->TtExtension)
+                Delay += Endpoint->TtExtension->Tt.DelayTime;
+            else if (FdoExtension->Usb2Extension)
+                Delay += FdoExtension->Usb2Extension->HcDelayTime;
+            else
+                Delay += USBPORT_DEFAULT_ISOCH_PATH_DELAY_MS;
+            break;
+    }
+
+    if (Delay == 0)
+        Delay = USBPORT_DEFAULT_ISOCH_PATH_DELAY_MS;
+
+    return Delay;
+}
+
+static
+BOOLEAN
+USBPORT_IsPowerOfTwo(_In_ ULONG Value)
+{
+    return (Value != 0) && ((Value & (Value - 1)) == 0);
+}
+
+static
+NTSTATUS
+USBPORT_HandleOpenStaticStreams(IN PDEVICE_OBJECT FdoDevice,
+                                IN PURB Urb)
+{
+    PUSBPORT_DEVICE_EXTENSION FdoExtension;
+    PUSBPORT_REGISTRATION_PACKET Packet;
+    PUSBPORT_DEVICE_HANDLE DeviceHandle;
+    PUSBPORT_PIPE_HANDLE PipeHandle;
+    PUSBPORT_ENDPOINT Endpoint;
+    PUSBD_STREAM_INFORMATION StreamInfo;
+    ULONG StreamCount;
+    ULONG ix;
+    NTSTATUS Status;
+
+    DeviceHandle = Urb->UrbHeader.UsbdDeviceHandle;
+    PipeHandle = Urb->UrbOpenStaticStreams.PipeHandle;
+    StreamInfo = Urb->UrbOpenStaticStreams.Streams;
+    StreamCount = Urb->UrbOpenStaticStreams.NumberOfStreams;
+
+    if (!FdoDevice || !DeviceHandle || !PipeHandle || !StreamInfo)
+        return USBPORT_USBDStatusToNtStatus(Urb, USBD_STATUS_INVALID_PARAMETER);
+
+    if (Urb->UrbOpenStaticStreams.StreamInfoVersion != URB_OPEN_STATIC_STREAMS_VERSION_100 ||
+        Urb->UrbOpenStaticStreams.StreamInfoSize != sizeof(USBD_STREAM_INFORMATION))
+    {
+        return USBPORT_USBDStatusToNtStatus(Urb, USBD_STATUS_INVALID_PARAMETER);
+    }
+
+    if (!USBPORT_ValidatePipeHandle(DeviceHandle, PipeHandle))
+        return USBPORT_USBDStatusToNtStatus(Urb, USBD_STATUS_INVALID_PIPE_HANDLE);
+
+    if (PipeHandle->BasePipe)
+        return USBPORT_USBDStatusToNtStatus(Urb, USBD_STATUS_INVALID_PIPE_HANDLE);
+
+    Endpoint = PipeHandle->Endpoint;
+    if (!Endpoint ||
+        Endpoint->EndpointProperties.TransferType != USBPORT_TRANSFER_TYPE_BULK ||
+        Endpoint->EndpointProperties.DeviceSpeed != UsbSuperSpeed)
+    {
+        return USBPORT_USBDStatusToNtStatus(Urb, USBD_STATUS_INVALID_PIPE_HANDLE);
+    }
+
+    if (PipeHandle->StreamCount != 0)
+        return USBPORT_USBDStatusToNtStatus(Urb, USBD_STATUS_ERROR_BUSY);
+
+    if (!USBPORT_IsPowerOfTwo(StreamCount) || StreamCount > 0xFFFFu)
+        return USBPORT_USBDStatusToNtStatus(Urb, USBD_STATUS_INVALID_PARAMETER);
+
+    FdoExtension = FdoDevice->DeviceExtension;
+    Packet = &FdoExtension->MiniPortInterface->Packet;
+
+    Endpoint->EndpointProperties.Reserved6 = StreamCount;
+    if (Packet->ReopenEndpoint)
+    {
+        MPSTATUS MpStatus = Packet->ReopenEndpoint(FdoExtension->MiniPortExt,
+                                                   &Endpoint->EndpointProperties,
+                                                   Endpoint + 1);
+        if (MpStatus != MP_STATUS_SUCCESS)
+        {
+            Endpoint->EndpointProperties.Reserved6 = 0;
+            return USBPORT_USBDStatusToNtStatus(Urb, USBD_STATUS_NOT_SUPPORTED);
+        }
+    }
+
+    PipeHandle->StreamCount = StreamCount;
+
+    for (ix = 0; ix < StreamCount; ix++)
+    {
+        PUSBPORT_PIPE_HANDLE StreamHandle;
+
+        StreamHandle = ExAllocatePoolWithTag(NonPagedPool,
+                                             sizeof(*StreamHandle),
+                                             USB_PORT_TAG);
+        if (!StreamHandle)
+        {
+            USBPORT_CloseStaticStreamsInternal(FdoDevice,
+                                               DeviceHandle,
+                                               PipeHandle,
+                                               TRUE);
+            return USBPORT_USBDStatusToNtStatus(Urb, USBD_STATUS_INSUFFICIENT_RESOURCES);
+        }
+
+        RtlZeroMemory(StreamHandle, sizeof(*StreamHandle));
+        StreamHandle->Flags = PipeHandle->Flags & ~PIPE_HANDLE_FLAG_CLOSED;
+        StreamHandle->PipeFlags = PipeHandle->PipeFlags;
+        StreamHandle->EndpointDescriptor = PipeHandle->EndpointDescriptor;
+        StreamHandle->Endpoint = Endpoint;
+        StreamHandle->StreamId = ix + 1;
+        StreamHandle->StreamCount = 0;
+        StreamHandle->BasePipe = PipeHandle;
+        InitializeListHead(&StreamHandle->StreamList);
+        StreamHandle->StreamLink.Flink = NULL;
+        StreamHandle->StreamLink.Blink = NULL;
+
+        USBPORT_AddPipeHandle(DeviceHandle, StreamHandle);
+        InsertTailList(&PipeHandle->StreamList, &StreamHandle->StreamLink);
+
+        StreamInfo[ix].PipeHandle = StreamHandle;
+        StreamInfo[ix].StreamID = StreamHandle->StreamId;
+        StreamInfo[ix].MaximumTransferSize = Endpoint->EndpointProperties.MaxTransferSize;
+        StreamInfo[ix].PipeFlags = StreamHandle->PipeFlags;
+    }
+
+    Status = USBPORT_USBDStatusToNtStatus(Urb, USBD_STATUS_SUCCESS);
+    return Status;
+}
+
+static
+NTSTATUS
+USBPORT_HandleCloseStaticStreams(IN PDEVICE_OBJECT FdoDevice,
+                                 IN PURB Urb)
+{
+    PUSBPORT_DEVICE_HANDLE DeviceHandle;
+    PUSBPORT_PIPE_HANDLE PipeHandle;
+
+    DeviceHandle = Urb->UrbHeader.UsbdDeviceHandle;
+    PipeHandle = Urb->UrbOpenStaticStreams.PipeHandle;
+
+    if (!FdoDevice || !DeviceHandle || !PipeHandle)
+        return USBPORT_USBDStatusToNtStatus(Urb, USBD_STATUS_INVALID_PARAMETER);
+
+    if (!USBPORT_ValidatePipeHandle(DeviceHandle, PipeHandle))
+        return USBPORT_USBDStatusToNtStatus(Urb, USBD_STATUS_INVALID_PIPE_HANDLE);
+
+    if (PipeHandle->BasePipe)
+        return USBPORT_USBDStatusToNtStatus(Urb, USBD_STATUS_INVALID_PIPE_HANDLE);
+
+    if (PipeHandle->StreamCount != 0)
+    {
+        USBPORT_CloseStaticStreamsInternal(FdoDevice,
+                                           DeviceHandle,
+                                           PipeHandle,
+                                           TRUE);
+    }
+
+    return USBPORT_USBDStatusToNtStatus(Urb, USBD_STATUS_SUCCESS);
+}
 
 NTSTATUS
 NTAPI
@@ -62,6 +261,38 @@ USBPORT_HandleGetCurrentFrame(IN PDEVICE_OBJECT FdoDevice,
 
     DPRINT_URB("USBPORT_HandleGetCurrentFrame: FrameNumber - %p\n",
                FrameNumber);
+
+    return USBPORT_USBDStatusToNtStatus(Urb, USBD_STATUS_SUCCESS);
+}
+
+NTSTATUS
+NTAPI
+USBPORT_HandleGetIsochPipeDelays(IN PURB Urb)
+{
+    PUSBPORT_PIPE_HANDLE PipeHandle;
+    PUSBPORT_ENDPOINT Endpoint;
+    PUSBPORT_DEVICE_EXTENSION FdoExtension;
+    ULONG Delay;
+
+    PipeHandle = Urb->UrbGetIsochPipeTransferPathDelays.PipeHandle;
+    if (!PipeHandle || !PipeHandle->Endpoint)
+    {
+        return USBPORT_USBDStatusToNtStatus(Urb,
+                                            USBD_STATUS_INVALID_PIPE_HANDLE);
+    }
+
+    Endpoint = PipeHandle->Endpoint;
+    if (Endpoint->EndpointProperties.TransferType != USBPORT_TRANSFER_TYPE_ISOCHRONOUS)
+    {
+        return USBPORT_USBDStatusToNtStatus(Urb,
+                                            USBD_STATUS_INVALID_PIPE_HANDLE);
+    }
+
+    FdoExtension = Endpoint->FdoDevice->DeviceExtension;
+    Delay = USBPORT_GetIsoPathDelay(FdoExtension, Endpoint);
+
+    Urb->UrbGetIsochPipeTransferPathDelays.MaximumSendPathDelayInMilliSeconds = Delay;
+    Urb->UrbGetIsochPipeTransferPathDelays.MaximumCompletionPathDelayInMilliSeconds = Delay;
 
     return USBPORT_USBDStatusToNtStatus(Urb, USBD_STATUS_SUCCESS);
 }
@@ -120,6 +351,9 @@ USBPORT_ResetPipe(IN PDEVICE_OBJECT FdoDevice,
     PUSBPORT_PIPE_HANDLE PipeHandle;
     PUSBPORT_ENDPOINT Endpoint;
     NTSTATUS Status;
+    BOOLEAN HasActiveTransfers;
+    PLIST_ENTRY Entry;
+    PUSBPORT_TRANSFER Transfer;
 
     DPRINT_URB("USBPORT_ResetPipe: ... \n");
 
@@ -138,7 +372,23 @@ USBPORT_ResetPipe(IN PDEVICE_OBJECT FdoDevice,
 
     KeAcquireSpinLock(&Endpoint->EndpointSpinLock, &Endpoint->EndpointOldIrql);
 
-    if (IsListEmpty(&Endpoint->TransferList))
+    /* Check for active (non-completed) transfers on TransferList.
+     * Completed transfers may still be linked here awaiting removal by
+     * FlushDoneTransfers -- they must not prevent the pipe reset. */
+    HasActiveTransfers = FALSE;
+    for (Entry = Endpoint->TransferList.Flink;
+         Entry && Entry != &Endpoint->TransferList;
+         Entry = Entry->Flink)
+    {
+        Transfer = CONTAINING_RECORD(Entry, USBPORT_TRANSFER, TransferLink);
+        if (!(Transfer->Flags & TRANSFER_FLAG_COMPLETED))
+        {
+            HasActiveTransfers = TRUE;
+            break;
+        }
+    }
+
+    if (!HasActiveTransfers)
     {
         if (Urb->UrbHeader.UsbdFlags & USBD_FLAG_NOT_ISO_TRANSFER)
         {
@@ -863,8 +1113,24 @@ USBPORT_HandleSubmitURB(IN PDEVICE_OBJECT PdoDevice,
     switch (Function)
     {
         case URB_FUNCTION_ISOCH_TRANSFER:
-            DPRINT1("USBPORT_HandleSubmitURB: URB_FUNCTION_ISOCH_TRANSFER UNIMPLEMENTED. FIXME. \n");
+        {
+            DPRINT_URB("USBPORT_HandleSubmitURB: URB_FUNCTION_ISOCH_TRANSFER\n");
+
+            Status = USBPORT_ValidateURB(FdoDevice,
+                                         Irp,
+                                         Urb,
+                                         FALSE,
+                                         FALSE);
+
+            if (!NT_SUCCESS(Status))
+            {
+                DPRINT1("USBPORT_HandleSubmitURB: ISOCH_TRANSFER validation failed\n");
+                break;
+            }
+
+            Status = USBPORT_HandleDataTransfers(Urb);
             break;
+        }
 
         case URB_FUNCTION_BULK_OR_INTERRUPT_TRANSFER:
         case URB_FUNCTION_CONTROL_TRANSFER:
@@ -964,6 +1230,20 @@ USBPORT_HandleSubmitURB(IN PDEVICE_OBJECT PdoDevice,
             return USBPORT_USBDStatusToNtStatus(Urb,
                                                 USBD_STATUS_INVALID_URB_FUNCTION);
 
+        case URB_FUNCTION_OPEN_STATIC_STREAMS:
+            Status = USBPORT_HandleOpenStaticStreams(PdoExtension->FdoDevice, Urb);
+            break;
+
+        case URB_FUNCTION_CLOSE_STATIC_STREAMS:
+            Status = USBPORT_HandleCloseStaticStreams(PdoExtension->FdoDevice, Urb);
+            break;
+
+        case URB_FUNCTION_BULK_OR_INTERRUPT_TRANSFER_USING_CHAINED_MDL:
+        case URB_FUNCTION_ISOCH_TRANSFER_USING_CHAINED_MDL:
+            DPRINT1("USBPORT_HandleSubmitURB: stream/chained-MDL URB function 0x%02X NOT_SUPPORTED\n",
+                    Function);
+            return USBPORT_USBDStatusToNtStatus(Urb, USBD_STATUS_NOT_SUPPORTED);
+
         case URB_FUNCTION_SYNC_RESET_PIPE_AND_CLEAR_STALL:
             Status = USBPORT_SyncResetPipeAndClearStall(PdoExtension->FdoDevice,
                                                         Irp,
@@ -1012,6 +1292,10 @@ USBPORT_HandleSubmitURB(IN PDEVICE_OBJECT PdoDevice,
                                                    Urb);
             break;
 
+        case URB_FUNCTION_GET_ISOCH_PIPE_TRANSFER_PATH_DELAYS:
+            Status = USBPORT_HandleGetIsochPipeDelays(Urb);
+            break;
+
         case URB_FUNCTION_TAKE_FRAME_LENGTH_CONTROL:
             DPRINT1("USBPORT_HandleSubmitURB: URB_FUNCTION_TAKE_FRAME_LENGTH_CONTROL (0x03) NOT_SUPPORTED\n");
             return USBPORT_USBDStatusToNtStatus(Urb, USBD_STATUS_NOT_SUPPORTED);
@@ -1052,7 +1336,7 @@ USBPORT_HandleSubmitURB(IN PDEVICE_OBJECT PdoDevice,
 
         Transfer = Urb->UrbControlTransfer.hca.Reserved8[0];
         Urb->UrbControlTransfer.hca.Reserved8[0] = NULL;
-        Urb->UrbHeader.UsbdFlags |= ~USBD_FLAG_ALLOCATED_TRANSFER;
+        Urb->UrbHeader.UsbdFlags &= ~USBD_FLAG_ALLOCATED_TRANSFER;
         ExFreePoolWithTag(Transfer, USB_PORT_TAG);
     }
 

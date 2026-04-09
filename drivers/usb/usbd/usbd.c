@@ -36,6 +36,7 @@
 #define NDEBUG
 #include <ntddk.h>
 #include <usbdi.h>
+#include <usbbusif.h>
 #include <usbdlib.h>
 #include <debug.h>
 #ifndef PLUGPLAY_REGKEY_DRIVER
@@ -283,8 +284,78 @@ USBD_QueryBusTime(
     PULONG CurrentFrame
     )
 {
-    UNIMPLEMENTED;
-    return STATUS_NOT_SUPPORTED;
+    static const GUID UsbBusInterfaceUsbdIGuid =
+    { 0xb1a96a13, 0x3de0, 0x4574, { 0x9b, 0x01, 0xc0, 0x8f, 0xea, 0xb3, 0x18, 0xd6 } };
+
+    PIO_STACK_LOCATION IoStack;
+    KEVENT Event;
+    IO_STATUS_BLOCK IoStatus;
+    PIRP Irp;
+    NTSTATUS Status;
+    USB_BUS_INTERFACE_USBDI_V2 BusInterface;
+
+    if (!RootHubPdo || !CurrentFrame)
+    {
+        return STATUS_INVALID_PARAMETER;
+    }
+
+    RtlZeroMemory(&BusInterface, sizeof(BusInterface));
+
+    KeInitializeEvent(&Event, NotificationEvent, FALSE);
+
+    Irp = IoBuildSynchronousFsdRequest(IRP_MJ_PNP,
+                                       RootHubPdo,
+                                       NULL,
+                                       0,
+                                       NULL,
+                                       &Event,
+                                       &IoStatus);
+    if (!Irp)
+    {
+        return STATUS_INSUFFICIENT_RESOURCES;
+    }
+
+    Irp->IoStatus.Status = STATUS_NOT_SUPPORTED;
+    Irp->IoStatus.Information = 0;
+
+    IoStack = IoGetNextIrpStackLocation(Irp);
+    IoStack->MinorFunction = IRP_MN_QUERY_INTERFACE;
+    IoStack->Parameters.QueryInterface.InterfaceType = (LPGUID)&UsbBusInterfaceUsbdIGuid;
+    IoStack->Parameters.QueryInterface.Size = sizeof(USB_BUS_INTERFACE_USBDI_V2);
+    IoStack->Parameters.QueryInterface.Version = USB_BUSIF_USBDI_VERSION_2;
+    IoStack->Parameters.QueryInterface.Interface = (PINTERFACE)&BusInterface;
+    IoStack->Parameters.QueryInterface.InterfaceSpecificData = NULL;
+
+    Status = IoCallDriver(RootHubPdo, Irp);
+    if (Status == STATUS_PENDING)
+    {
+        KeWaitForSingleObject(&Event,
+                              Executive,
+                              KernelMode,
+                              FALSE,
+                              NULL);
+        Status = IoStatus.Status;
+    }
+
+    if (!NT_SUCCESS(Status))
+    {
+        return Status;
+    }
+
+    if (!BusInterface.QueryBusTime)
+    {
+        if (BusInterface.InterfaceDereference)
+            BusInterface.InterfaceDereference(BusInterface.BusContext);
+        return STATUS_NOT_SUPPORTED;
+    }
+
+    Status = BusInterface.QueryBusTime(BusInterface.BusContext,
+                                       CurrentFrame);
+
+    if (BusInterface.InterfaceDereference)
+        BusInterface.InterfaceDereference(BusInterface.BusContext);
+
+    return Status;
 }
 
 /*
