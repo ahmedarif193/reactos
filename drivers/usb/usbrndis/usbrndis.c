@@ -1222,9 +1222,7 @@ DriverEntry(
     DPRINT1("USBRNDIS: Registering miniport driver with NDIS 6.%d\n",
             NDIS_MINIPORT_MINOR_VERSION);
 
-    /* Register with NDIS — NdisMRegisterMiniportDriver is the correct name
-     * per the MS DDK; the previous NdisRegisterMiniportDriver typo was a
-     * clean-room slip on the dev branch. */
+    /* Register with NDIS */
     Status = NdisMRegisterMiniportDriver(
         DriverObject,
         RegistryPath,

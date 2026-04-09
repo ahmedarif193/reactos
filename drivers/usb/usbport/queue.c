@@ -442,7 +442,7 @@ USBPORT_FindIrpInTable(IN PUSBPORT_IRP_TABLE IrpTable,
 
     ASSERT(IrpTable != NULL);
 
-    do
+    while (IrpTable)
     {
         for (ix = 0; ix < 0x200; ix++)
         {
@@ -456,7 +456,6 @@ USBPORT_FindIrpInTable(IN PUSBPORT_IRP_TABLE IrpTable,
 
         IrpTable = IrpTable->LinkNextTable;
     }
-    while (IrpTable->LinkNextTable);
 
     DPRINT_CORE("USBPORT_FindIrpInTable: Not found!!!\n");
     return NULL;
@@ -521,7 +520,7 @@ USBPORT_CancelPendingTransferIrp(IN PDEVICE_OBJECT DeviceObject,
     KeReleaseSpinLockFromDpcLevel(&Endpoint->EndpointSpinLock);
     KeReleaseSpinLock(&FdoExtension->FlushPendingTransferSpinLock, OldIrql);
 
-    USBPORT_CompleteTransfer(Transfer->Urb, USBD_STATUS_CANCELED);
+    USBPORT_CompleteTransferSafe(Transfer, USBD_STATUS_CANCELED);
 }
 
 VOID
@@ -655,7 +654,13 @@ USBPORT_FlushAbortList(IN PUSBPORT_ENDPOINT Endpoint)
                                      USBPORT_TRANSFER,
                                      TransferLink);
 
-        if (Transfer->Flags & TRANSFER_FLAG_ABORTED)
+        /*
+         * Skip completed transfers -- they are already done and waiting
+         * for FlushDoneTransfers to remove them from TransferList. They
+         * must not block the abort completion.
+         */
+        if (!(Transfer->Flags & TRANSFER_FLAG_COMPLETED) &&
+            (Transfer->Flags & TRANSFER_FLAG_ABORTED))
         {
             DPRINT_CORE("USBPORT_FlushAbortList: Aborted ActiveTransfer - %p\n",
                         Transfer);
@@ -754,19 +759,19 @@ USBPORT_FlushCancelList(IN PUSBPORT_ENDPOINT Endpoint)
 
         if (Endpoint->Flags & ENDPOINT_FLAG_NUKE)
         {
-            USBPORT_CompleteTransfer(Transfer->Urb, USBD_STATUS_DEVICE_GONE);
+            USBPORT_CompleteTransferSafe(Transfer, USBD_STATUS_DEVICE_GONE);
         }
         else
         {
             if (Transfer->Flags & TRANSFER_FLAG_DEVICE_GONE)
             {
-                USBPORT_CompleteTransfer(Transfer->Urb,
-                                         USBD_STATUS_DEVICE_GONE);
+                USBPORT_CompleteTransferSafe(Transfer,
+                                             USBD_STATUS_DEVICE_GONE);
             }
             else
             {
-                USBPORT_CompleteTransfer(Transfer->Urb,
-                                         USBD_STATUS_CANCELED);
+                USBPORT_CompleteTransferSafe(Transfer,
+                                             USBD_STATUS_CANCELED);
             }
         }
 
@@ -836,6 +841,13 @@ USBPORT_FlushPendingTransfers(IN PUSBPORT_ENDPOINT Endpoint)
                     Transfer = CONTAINING_RECORD(List,
                                                  USBPORT_TRANSFER,
                                                  TransferLink);
+
+                    /* Skip completed transfers awaiting FlushDoneTransfers removal */
+                    if (Transfer->Flags & TRANSFER_FLAG_COMPLETED)
+                    {
+                        List = Transfer->TransferLink.Flink;
+                        continue;
+                    }
 
                     if (!(Transfer->Flags & TRANSFER_FLAG_SUBMITED))
                     {
@@ -928,7 +940,7 @@ USBPORT_FlushPendingTransfers(IN PUSBPORT_ENDPOINT Endpoint)
                 KeReleaseSpinLock(&FdoExtension->FlushTransferSpinLock,
                                   OldIrql);
 
-                USBPORT_CompleteTransfer(Transfer->Urb, USBD_STATUS_CANCELED);
+                USBPORT_CompleteTransferSafe(Transfer, USBD_STATUS_CANCELED);
                 goto Worker;
             }
 
@@ -959,6 +971,31 @@ Worker:
 Next:
         if (IsEnd)
         {
+            /*
+             * Before releasing the lock, re-check if a new transfer was
+             * queued to PendingTransferList while we held FlushPendingLock.
+             * This happens when a completion callback (running on another
+             * CPU via FlushDoneTransfers) submits a follow-up transfer
+             * while this FlushPendingTransfers instance is still active
+             * (e.g. inside EndpointWorker -> PollEndpoint).  Without this
+             * re-check the new transfer would be stranded because the
+             * WorkerDPC scheduled by FlushDoneTransfers is suppressed by
+             * the IsrDpcHandlerCounter reentrancy guard.
+             */
+            KeAcquireSpinLock(&Endpoint->EndpointSpinLock,
+                              &Endpoint->EndpointOldIrql);
+
+            if (!IsListEmpty(&Endpoint->PendingTransferList))
+            {
+                KeReleaseSpinLock(&Endpoint->EndpointSpinLock,
+                                  Endpoint->EndpointOldIrql);
+                IsEnd = FALSE;
+                continue;
+            }
+
+            KeReleaseSpinLock(&Endpoint->EndpointSpinLock,
+                              Endpoint->EndpointOldIrql);
+
             InterlockedDecrement(&Endpoint->FlushPendingLock);
             DPRINT_CORE("USBPORT_FlushPendingTransfers: Endpoint Unlocked. Exit\n");
             return;
@@ -1020,6 +1057,16 @@ USBPORT_QueueActiveUrbToEndpoint(IN PUSBPORT_ENDPOINT Endpoint,
     if (Transfer->TransferParameters.TransferBufferLength == 0 ||
         !(Endpoint->Flags & ENDPOINT_FLAG_DMA_TYPE))
     {
+        if (Endpoint &&
+            (Endpoint->EndpointProperties.TransferType == USBPORT_TRANSFER_TYPE_BULK ||
+             Transfer->TransferParameters.TransferBufferLength >= 64))
+        {
+            DPRINT("USBPORT_QueueActiveUrbToEndpoint: non-DMA path Ep=%p Len=%lu Flags=0x%lx Mdl=%p\n",
+                   Endpoint,
+                   Transfer->TransferParameters.TransferBufferLength,
+                   Transfer->TransferParameters.TransferFlags,
+                   Transfer->TransferBufferMDL);
+        }
         InsertTailList(&Endpoint->TransferList, &Transfer->TransferLink);
 
         KeReleaseSpinLock(&Endpoint->EndpointSpinLock,
@@ -1039,6 +1086,18 @@ USBPORT_QueueActiveUrbToEndpoint(IN PUSBPORT_ENDPOINT Endpoint,
     InterlockedIncrement(&DeviceHandle->DeviceHandleLock);
 
     KeReleaseSpinLock(&FdoExtension->MapTransferSpinLock, OldIrql);
+
+    if (Endpoint &&
+        (Endpoint->EndpointProperties.TransferType == USBPORT_TRANSFER_TYPE_BULK ||
+         Transfer->TransferParameters.TransferBufferLength >= 64))
+    {
+        DPRINT("USBPORT_QueueActiveUrbToEndpoint: DMA map queued Ep=%p Len=%lu Flags=0x%lx Mdl=%p Transfer=%p\n",
+               Endpoint,
+               Transfer->TransferParameters.TransferBufferLength,
+               Transfer->TransferParameters.TransferFlags,
+               Transfer->TransferBufferMDL,
+               Transfer);
+    }
 
     //DPRINT_CORE("USBPORT_QueueActiveUrbToEndpoint: return TRUE\n");
     return TRUE;
@@ -1071,7 +1130,7 @@ USBPORT_QueuePendingTransferIrp(IN PIRP Irp)
 
     if (Irp->Cancel && IoSetCancelRoutine(Irp, NULL))
     {
-        USBPORT_CompleteTransfer(Urb, USBD_STATUS_CANCELED);
+        USBPORT_CompleteTransferSafe(Transfer, USBD_STATUS_CANCELED);
     }
     else
     {
@@ -1104,16 +1163,22 @@ USBPORT_QueueTransferUrb(IN PURB Urb)
     Parameters->TransferBufferLength = Urb->UrbControlTransfer.TransferBufferLength;
     Parameters->TransferFlags = Urb->UrbControlTransfer.TransferFlags;
 
-    Transfer->TransferBufferMDL = Urb->UrbControlTransfer.TransferBufferMDL;
+    if (Endpoint &&
+        (Endpoint->EndpointProperties.TransferType == USBPORT_TRANSFER_TYPE_BULK ||
+         Parameters->TransferBufferLength >= 64))
+    {
+        DPRINT("USBPORT_QueueTransferUrb: Ep=%p Type=%lu Dir=%lu Len=%lu Flags=0x%lx Buf=%p Mdl=%p Irp=%p\n",
+               Endpoint,
+               Endpoint->EndpointProperties.TransferType,
+               Endpoint->EndpointProperties.Direction,
+               Parameters->TransferBufferLength,
+               Parameters->TransferFlags,
+               Urb->UrbControlTransfer.TransferBuffer,
+               Urb->UrbControlTransfer.TransferBufferMDL,
+                Transfer->Irp);
+    }
 
-    if (Urb->UrbControlTransfer.TransferFlags & USBD_TRANSFER_DIRECTION_IN)
-    {
-        Transfer->Direction = USBPORT_DMA_DIRECTION_FROM_DEVICE;
-    }
-    else
-    {
-        Transfer->Direction = USBPORT_DMA_DIRECTION_TO_DEVICE;
-    }
+    Transfer->TransferBufferMDL = Urb->UrbControlTransfer.TransferBufferMDL;
 
     if (Endpoint->EndpointProperties.TransferType == USBPORT_TRANSFER_TYPE_CONTROL)
     {
@@ -1237,12 +1302,20 @@ USBPORT_KillEndpointActiveTransfers(IN PDEVICE_OBJECT FdoDevice,
 
     while (ActiveList && ActiveList != &Endpoint->TransferList)
     {
-        ++KilledTransfers;
-
         Transfer = CONTAINING_RECORD(ActiveList,
                                      USBPORT_TRANSFER,
                                      TransferLink);
 
+        /* Skip completed transfers -- they are already on the DoneTransferList
+         * and will be removed by FlushDoneTransfers. Aborting them would be
+         * redundant and inflate the KilledTransfers count. */
+        if (Transfer->Flags & TRANSFER_FLAG_COMPLETED)
+        {
+            ActiveList = Transfer->TransferLink.Flink;
+            continue;
+        }
+
+        ++KilledTransfers;
         Transfer->Flags |= TRANSFER_FLAG_ABORTED;
 
         ActiveList = Transfer->TransferLink.Flink;
@@ -1393,6 +1466,15 @@ USBPORT_AbortEndpoint(IN PDEVICE_OBJECT FdoDevice,
                                            USBPORT_TRANSFER,
                                            TransferLink);
 
+        /* Skip completed transfers -- they are already on the DoneTransferList
+         * and will be completed by FlushDoneTransfers. Setting ABORTED on them
+         * is redundant and could interfere with the done-transfer path. */
+        if (ActiveTransfer->Flags & TRANSFER_FLAG_COMPLETED)
+        {
+            ActiveList = ActiveTransfer->TransferLink.Flink;
+            continue;
+        }
+
         DPRINT_CORE("USBPORT_AbortEndpoint: Abort ActiveTransfer - %p\n",
                     ActiveTransfer);
 
@@ -1407,6 +1489,9 @@ USBPORT_AbortEndpoint(IN PDEVICE_OBJECT FdoDevice,
     }
 
     KeReleaseSpinLock(&Endpoint->EndpointSpinLock, Endpoint->EndpointOldIrql);
+
+    /* Free any cached reusable transfer on abort */
+    USBPORT_FreeReusableTransfer(Endpoint);
 
     USBPORT_InvalidateEndpointHandler(FdoDevice,
                                       Endpoint,

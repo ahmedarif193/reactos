@@ -10,6 +10,92 @@
 #define NDEBUG
 #include <debug.h>
 
+static
+VOID
+USBPORT_FetchBosDescriptor(IN PUSBPORT_DEVICE_HANDLE DeviceHandle,
+                           IN PDEVICE_OBJECT FdoDevice);
+
+static
+VOID
+USBPORT_ComputeLpmPolicy(IN PUSBPORT_DEVICE_HANDLE DeviceHandle);
+
+#if DBG
+#define USBPORT_GUARD_HEAD 0x47445255u /* 'URDG' */
+#define USBPORT_GUARD_TAIL 0x544C4755u /* 'UGLT' */
+#define USBPORT_GUARD_MAX_SIZE 4096u
+
+typedef struct _USBPORT_GUARD_HEADER
+{
+    ULONG Size;
+    ULONG Guard;
+} USBPORT_GUARD_HEADER, *PUSBPORT_GUARD_HEADER;
+
+static
+PUCHAR
+USBPORT_AllocGuardedDescriptor(
+    _In_ ULONG Size,
+    _In_ PCSTR Name)
+{
+    SIZE_T Total = sizeof(USBPORT_GUARD_HEADER) + (SIZE_T)Size + sizeof(ULONG);
+    PUSBPORT_GUARD_HEADER Header;
+    PUCHAR Payload;
+
+    Header = ExAllocatePoolWithTag(NonPagedPool, Total, USB_PORT_TAG);
+    if (!Header)
+        return NULL;
+
+    Header->Size = Size;
+    Header->Guard = USBPORT_GUARD_HEAD;
+    Payload = (PUCHAR)(Header + 1);
+    *(PULONG)(Payload + Size) = USBPORT_GUARD_TAIL;
+    RtlZeroMemory(Payload, Size);
+    DPRINT1("USBPORT_GUARD alloc %s size=%lu buf=%p\n", Name, Size, Payload);
+    return Payload;
+}
+
+static
+VOID
+USBPORT_FreeGuardedDescriptor(
+    _In_opt_ PUCHAR Buffer,
+    _In_ PCSTR Name)
+{
+    PUSBPORT_GUARD_HEADER Header;
+    ULONG Size;
+    ULONG Tail;
+
+    if (!Buffer)
+        return;
+
+    Header = (PUSBPORT_GUARD_HEADER)(Buffer - sizeof(USBPORT_GUARD_HEADER));
+    Size = Header->Size;
+    Tail = 0;
+
+    if (Header->Guard != USBPORT_GUARD_HEAD || Size > USBPORT_GUARD_MAX_SIZE)
+    {
+        DPRINT1("USBPORT_GUARD corrupt %s buf=%p head=%08lx size=%lu\n",
+                Name,
+                Buffer,
+                Header->Guard,
+                Size);
+    }
+    else
+    {
+        Tail = *(PULONG)(Buffer + Size);
+        if (Tail != USBPORT_GUARD_TAIL)
+        {
+            DPRINT1("USBPORT_GUARD corrupt %s buf=%p size=%lu head=%08lx tail=%08lx\n",
+                    Name,
+                    Buffer,
+                    Size,
+                    Header->Guard,
+                    Tail);
+        }
+    }
+
+    ExFreePoolWithTag(Header, USB_PORT_TAG);
+}
+#endif
+
 NTSTATUS
 NTAPI
 USBPORT_SendSetupPacket(IN PUSBPORT_DEVICE_HANDLE DeviceHandle,
@@ -34,6 +120,16 @@ USBPORT_SendSetupPacket(IN PUSBPORT_DEVICE_HANDLE DeviceHandle,
            Length,
            TransferedLen,
            pUSBDStatus);
+#if DBG
+    if (SetupPacket &&
+        SetupPacket->bRequest == USB_REQUEST_GET_DESCRIPTOR &&
+        SetupPacket->wValue.HiByte == USB_BOS_DESCRIPTOR_TYPE)
+    {
+        DPRINT1("USBPORT_SendSetupPacket: BOS GET_DESCRIPTOR len=%lu buf=%p\n",
+                Length,
+                Buffer);
+    }
+#endif
 
     KeInitializeEvent(&Event, NotificationEvent, FALSE);
 
@@ -81,6 +177,10 @@ USBPORT_SendSetupPacket(IN PUSBPORT_DEVICE_HANDLE DeviceHandle,
             {
                 Urb->UrbHeader.UsbdFlags |= USBD_FLAG_ALLOCATED_MDL;
                 MmBuildMdlForNonPagedPool(Mdl);
+
+                KeFlushIoBuffers(Mdl,
+                                 (SetupPacket->bmRequestType.Dir == BMREQUEST_DEVICE_TO_HOST),
+                                 TRUE);
             }
             else
             {
@@ -119,6 +219,40 @@ USBPORT_SendSetupPacket(IN PUSBPORT_DEVICE_HANDLE DeviceHandle,
 
             if (pUSBDStatus)
                 *pUSBDStatus = USBDStatus;
+
+            /*
+             * For debug builds, trace the actual payload length and the first
+             * bytes returned for device-descriptor requests. This helps catch
+             * cases where the miniport reports a successful transfer but the
+             * buffer contents seen by USBPORT_CreateDevice do not match the
+             * SW-ENUM logs or expected descriptor layout.
+             */
+#if DBG
+            if (NT_SUCCESS(Status) &&
+                TransferedLen &&
+                Buffer &&
+                SetupPacket &&
+                SetupPacket->bRequest == USB_REQUEST_GET_DESCRIPTOR &&
+                SetupPacket->wValue.HiByte == USB_DEVICE_DESCRIPTOR_TYPE)
+            {
+                ULONG Len = *TransferedLen;
+                const UCHAR *Raw = (const UCHAR *)Buffer;
+
+                DPRINT1("USBPORT_SendSetupPacket: GET_DESCRIPTOR(Device) completed len=%lu, "
+                        "first bytes=%02X %02X %02X %02X %02X %02X %02X %02X\n",
+                        Len,
+                        (Len > 0) ? Raw[0] : 0,
+                        (Len > 1) ? Raw[1] : 0,
+                        (Len > 2) ? Raw[2] : 0,
+                        (Len > 3) ? Raw[3] : 0,
+                        (Len > 4) ? Raw[4] : 0,
+                        (Len > 5) ? Raw[5] : 0,
+                        (Len > 6) ? Raw[6] : 0,
+                        (Len > 7) ? Raw[7] : 0);
+            }
+#endif
+
+            /* No additional cache maintenance required after completion */
         }
 
         InterlockedDecrement(&DeviceHandle->DeviceHandleLock);
@@ -166,6 +300,25 @@ USBPORT_GetInterfaceLength(IN PUSB_INTERFACE_DESCRIPTOR iDescriptor,
             Length += Descriptor->bLength;
             Descriptor = (PUSB_ENDPOINT_DESCRIPTOR)((ULONG_PTR)Descriptor +
                                                     Descriptor->bLength);
+
+            /*
+             * Skip over any SuperSpeed Endpoint Companion descriptors
+             * or other class/vendor-specific descriptors that directly
+             * follow this endpoint. They increase the interface length
+             * but do not change the endpoint count.
+             *
+             * USB 3.0 companion descriptors use bDescriptorType 0x30.
+             * We treat them as opaque and ignore their contents here.
+             */
+            while ((ULONG_PTR)Descriptor < EndDescriptors &&
+                   Descriptor->bDescriptorType != USB_INTERFACE_DESCRIPTOR_TYPE &&
+                   Descriptor->bDescriptorType != USB_ENDPOINT_DESCRIPTOR_TYPE &&
+                   Descriptor->bLength > 0)
+            {
+                Length += Descriptor->bLength;
+                Descriptor = (PUSB_ENDPOINT_DESCRIPTOR)((ULONG_PTR)Descriptor +
+                                                        Descriptor->bLength);
+            }
         }
     }
 
@@ -282,6 +435,9 @@ USBPORT_OpenInterface(IN PURB Urb,
 
     if (HasAlternates && SendSetInterface)
     {
+        DPRINT("USBPORT_OpenInterface: SET_INTERFACE iface=%u alt=%u\n",
+               InterfaceInfo->InterfaceNumber, InterfaceInfo->AlternateSetting);
+
         RtlZeroMemory(&SetupPacket, sizeof(SetupPacket));
 
         SetupPacket.bmRequestType.Dir = BMREQUEST_HOST_TO_DEVICE;
@@ -299,6 +455,9 @@ USBPORT_OpenInterface(IN PURB Urb,
                                 0,
                                 NULL,
                                 &USBDStatus);
+
+        DPRINT("USBPORT_OpenInterface: SET_INTERFACE done USBDStatus=0x%lx\n", USBDStatus);
+
         if (!USBD_SUCCESS(USBDStatus))
         {
             goto Exit;
@@ -395,19 +554,45 @@ USBPORT_OpenInterface(IN PURB Urb,
 
         Descriptor = (PUSB_ENDPOINT_DESCRIPTOR)((ULONG_PTR)Descriptor +
                                                 Descriptor->bLength);
+
+        /*
+         * Skip over any SuperSpeed Endpoint Companion descriptors and
+         * other non-endpoint, non-interface descriptors that immediately
+         * follow this endpoint. They do not correspond to additional
+         * USBD pipes.
+         */
+        while ((ULONG_PTR)Descriptor < (ULONG_PTR)ConfigHandle->ConfigurationDescriptor +
+                                      ConfigHandle->ConfigurationDescriptor->wTotalLength &&
+               Descriptor->bDescriptorType != USB_INTERFACE_DESCRIPTOR_TYPE &&
+               Descriptor->bDescriptorType != USB_ENDPOINT_DESCRIPTOR_TYPE &&
+               Descriptor->bLength > 0)
+        {
+            Descriptor = (PUSB_ENDPOINT_DESCRIPTOR)((ULONG_PTR)Descriptor +
+                                                    Descriptor->bLength);
+        }
     }
 
     if (USBD_SUCCESS(USBDStatus))
     {
+        DPRINT("USBPORT_OpenInterface: opening %lu endpoints\n", NumEndpoints);
+
         for (ix = 0; ix < NumEndpoints; ++ix)
         {
             PipeInfo = &InterfaceInfo->Pipes[ix];
             PipeHandle = &InterfaceHandle->PipeHandle[ix];
 
+            DPRINT("USBPORT_OpenInterface: OpenPipe ix=%lu EP=0x%02x type=%u maxpkt=%u\n",
+                   ix, PipeHandle->EndpointDescriptor.bEndpointAddress,
+                   PipeHandle->EndpointDescriptor.bmAttributes & USB_ENDPOINT_TYPE_MASK,
+                   PipeHandle->EndpointDescriptor.wMaxPacketSize);
+
             Status = USBPORT_OpenPipe(FdoDevice,
                                       DeviceHandle,
                                       PipeHandle,
                                       &USBDStatus);
+
+            DPRINT("USBPORT_OpenInterface: OpenPipe ix=%lu done Status=0x%lx USBDStatus=0x%lx\n",
+                   ix, Status, USBDStatus);
 
             if (!NT_SUCCESS(Status))
                 break;
@@ -592,11 +777,15 @@ USBPORT_HandleSelectConfiguration(IN PDEVICE_OBJECT FdoDevice,
 
     FdoExtension = FdoDevice->DeviceExtension;
 
+    DPRINT("USBPORT_HandleSelectConfiguration: waiting for DeviceSemaphore\n");
+
     KeWaitForSingleObject(&FdoExtension->DeviceSemaphore,
                           Executive,
                           KernelMode,
                           FALSE,
                           NULL);
+
+    DPRINT("USBPORT_HandleSelectConfiguration: DeviceSemaphore acquired\n");
 
     DeviceHandle = Urb->UrbHeader.UsbdDeviceHandle;
     ConfigDescriptor = Urb->UrbSelectConfiguration.ConfigurationDescriptor;
@@ -677,6 +866,9 @@ USBPORT_HandleSelectConfiguration(IN PDEVICE_OBJECT FdoDevice,
     SetupPacket.wIndex.W = 0;
     SetupPacket.wLength = 0;
 
+    DPRINT("USBPORT_HandleSelectConfiguration: sending SET_CONFIGURATION (value=%u, %u interfaces)\n",
+           ConfigDescriptor->bConfigurationValue, iNumber);
+
     USBPORT_SendSetupPacket(DeviceHandle,
                             FdoDevice,
                             &SetupPacket,
@@ -684,6 +876,9 @@ USBPORT_HandleSelectConfiguration(IN PDEVICE_OBJECT FdoDevice,
                             0,
                             NULL,
                             &USBDStatus);
+
+    DPRINT("USBPORT_HandleSelectConfiguration: SET_CONFIGURATION done USBDStatus=0x%lx\n",
+           USBDStatus);
 
     if (USBD_ERROR(USBDStatus))
     {
@@ -704,6 +899,9 @@ USBPORT_HandleSelectConfiguration(IN PDEVICE_OBJECT FdoDevice,
 
     for (ix = 0; ix < iNumber; ++ix)
     {
+        DPRINT("USBPORT_HandleSelectConfiguration: InitInterfaceInfo ix=%lu/%lu InterfaceNumber=%u AltSetting=%u\n",
+               ix, iNumber, InterfaceInfo->InterfaceNumber, InterfaceInfo->AlternateSetting);
+
         USBDStatus = USBPORT_InitInterfaceInfo(InterfaceInfo,
                                                ConfigHandle);
 
@@ -711,6 +909,9 @@ USBPORT_HandleSelectConfiguration(IN PDEVICE_OBJECT FdoDevice,
 
         if (USBD_SUCCESS(USBDStatus))
         {
+            DPRINT("USBPORT_HandleSelectConfiguration: OpenInterface ix=%lu InterfaceNumber=%u NumEPs=%u\n",
+                   ix, InterfaceInfo->InterfaceNumber, InterfaceInfo->NumberOfPipes);
+
             USBDStatus = USBPORT_OpenInterface(Urb,
                                                DeviceHandle,
                                                FdoDevice,
@@ -718,6 +919,14 @@ USBPORT_HandleSelectConfiguration(IN PDEVICE_OBJECT FdoDevice,
                                                InterfaceInfo,
                                                &InterfaceHandle,
                                                TRUE);
+
+            DPRINT("USBPORT_HandleSelectConfiguration: OpenInterface ix=%lu done USBDStatus=0x%lx\n",
+                   ix, USBDStatus);
+        }
+        else
+        {
+            DPRINT1("USBPORT_HandleSelectConfiguration: InitInterfaceInfo FAILED ix=%lu USBDStatus=0x%lx\n",
+                    ix, USBDStatus);
         }
 
         if (InterfaceHandle)
@@ -871,11 +1080,25 @@ NTAPI
 USBPORT_AbortTransfers(IN PDEVICE_OBJECT FdoDevice,
                        IN PUSBPORT_DEVICE_HANDLE DeviceHandle)
 {
+    PUSBPORT_DEVICE_EXTENSION FdoExtension;
     PLIST_ENTRY HandleList;
     PUSBPORT_PIPE_HANDLE PipeHandle;
     BOOLEAN Result;
+    ULONG WaitCount;
+    ULONG MaxWaitCount;
+    KIRQL OldIrql;
 
     DPRINT("USBPORT_AbortAllTransfers: ... \n");
+
+    FdoExtension = FdoDevice->DeviceExtension;
+
+    /* If the host controller never started, treat all endpoints as dead and
+     * skip miniport abort callbacks that assume valid hardware state. */
+    if (!(FdoExtension->Flags & USBPORT_FLAG_HC_STARTED))
+    {
+        DPRINT1("USBPORT_AbortTransfers: HC not started; treating endpoints as dead\n");
+        return;
+    }
 
     HandleList = DeviceHandle->PipeHandleList.Flink;
 
@@ -896,6 +1119,17 @@ USBPORT_AbortTransfers(IN PDEVICE_OBJECT FdoDevice,
         }
     }
 
+    /*
+     * Wait for all transfers to be drained from the device's endpoints.
+     * Use a timeout (5 seconds) to prevent infinite stalls when the
+     * hardware cannot complete aborts (e.g., device disconnected and
+     * the miniport's AbortTransfer returns early). After the timeout,
+     * set ENDPOINT_FLAG_NUKE on all endpoints to force-complete any
+     * remaining transfers.
+     */
+    WaitCount = 0;
+    MaxWaitCount = 50; /* 50 * 100ms = 5 seconds */
+
     while (TRUE)
     {
         Result = USBPORT_DeviceHasTransfers(FdoDevice, DeviceHandle);
@@ -903,8 +1137,49 @@ USBPORT_AbortTransfers(IN PDEVICE_OBJECT FdoDevice,
         if (!Result)
             break;
 
+        WaitCount++;
+
+        if (WaitCount >= MaxWaitCount)
+        {
+            DPRINT1("USBPORT_AbortTransfers: timeout after %lu ms, forcing NUKE on endpoints\n",
+                    WaitCount * 100);
+
+            /*
+             * Timeout reached: transfers are stuck because the hardware
+             * cannot abort them (e.g., device physically disconnected).
+             * Set ENDPOINT_FLAG_NUKE on all device endpoints to allow
+             * USBPORT_DmaEndpointPaused to skip the miniport abort call
+             * and directly complete the transfers.
+             */
+            HandleList = DeviceHandle->PipeHandleList.Flink;
+
+            while (HandleList != &DeviceHandle->PipeHandleList)
+            {
+                PipeHandle = CONTAINING_RECORD(HandleList,
+                                               USBPORT_PIPE_HANDLE,
+                                               PipeLink);
+
+                HandleList = HandleList->Flink;
+
+                if (!(PipeHandle->Flags & DEVICE_HANDLE_FLAG_ROOTHUB) &&
+                    PipeHandle->Endpoint)
+                {
+                    KeAcquireSpinLock(&PipeHandle->Endpoint->EndpointSpinLock, &OldIrql);
+                    PipeHandle->Endpoint->Flags |= ENDPOINT_FLAG_NUKE;
+                    KeReleaseSpinLock(&PipeHandle->Endpoint->EndpointSpinLock, OldIrql);
+
+                    /* Re-trigger abort processing with NUKE flag set */
+                    USBPORT_AbortEndpoint(FdoDevice, PipeHandle->Endpoint, NULL);
+                }
+            }
+
+            USBPORT_FlushMapTransfers(FdoDevice);
+        }
+
         USBPORT_Wait(FdoDevice, 100);
     }
+
+    DPRINT("USBPORT_AbortTransfers: completed after %lu iterations\n", WaitCount);
 }
 
 PUSB2_TT_EXTENSION
@@ -985,17 +1260,19 @@ USBPORT_CreateDevice(IN OUT PUSB_DEVICE_HANDLE *pUsbdDeviceHandle,
                      IN USHORT PortStatus,
                      IN USHORT Port)
 {
+    USB_PORT_STATUS PortStatusUnion;
     PUSBPORT_DEVICE_HANDLE TtDeviceHandle = NULL;
     PUSB2_TT_EXTENSION TtExtension = NULL;
     USHORT port;
     PUSBPORT_DEVICE_HANDLE DeviceHandle;
     PUSBPORT_PIPE_HANDLE PipeHandle;
+    PUSBPORT_ENDPOINT Endpoint;
     BOOL IsOpenedPipe;
     PVOID DeviceDescriptor;
     USB_DEFAULT_PIPE_SETUP_PACKET SetupPacket;
     ULONG TransferedLen;
     ULONG DescriptorMinSize;
-    UCHAR MaxPacketSize;
+    USHORT MaxPacketSize;
     PUSBPORT_DEVICE_EXTENSION FdoExtension;
     PUSBPORT_REGISTRATION_PACKET Packet;
     NTSTATUS Status;
@@ -1064,7 +1341,38 @@ USBPORT_CreateDevice(IN OUT PUSB_DEVICE_HANDLE *pUsbdDeviceHandle,
     DeviceHandle->PortNumber = Port;
     DeviceHandle->HubDeviceHandle = HubDeviceHandle;
 
-    if (PortStatus & USB_PORT_STATUS_LOW_SPEED)
+    /*
+     * Derive the initial device speed from the port status.
+     * For USB 3.x controllers (xHCI) use the negotiated device
+     * speed reported in the USB 3.0 port status union so we can
+     * distinguish SuperSpeed from true High‑Speed. For legacy
+     * controllers fall back to the classic LOW/HIGH bits.
+     */
+    PortStatusUnion.AsUshort16 = PortStatus;
+    if ((Packet->MiniPortFlags & USB_MINIPORT_FLAGS_USB3) &&
+        PortStatusUnion.Usb30PortStatus.NegotiatedDeviceSpeed != 0)
+    {
+        switch (PortStatusUnion.Usb30PortStatus.NegotiatedDeviceSpeed)
+        {
+            case 2: /* low‑speed device on a USB 3 port */
+                DeviceHandle->DeviceSpeed = UsbLowSpeed;
+                break;
+
+            case 1: /* full‑speed device on a USB 3 port */
+                DeviceHandle->DeviceSpeed = UsbFullSpeed;
+                break;
+
+            case 3: /* high‑speed device on a USB 3 port */
+                DeviceHandle->DeviceSpeed = UsbHighSpeed;
+                break;
+
+            case 4: /* SuperSpeed device */
+            default:
+                DeviceHandle->DeviceSpeed = UsbSuperSpeed;
+                break;
+        }
+    }
+    else if (PortStatus & USB_PORT_STATUS_LOW_SPEED)
     {
         DeviceHandle->DeviceSpeed = UsbLowSpeed;
     }
@@ -1084,19 +1392,41 @@ USBPORT_CreateDevice(IN OUT PUSB_DEVICE_HANDLE *pUsbdDeviceHandle,
                           NULL);
 
     PipeHandle = &DeviceHandle->PipeHandle;
+    Endpoint = NULL;
 
     PipeHandle->Flags = PIPE_HANDLE_FLAG_CLOSED;
 
     PipeHandle->EndpointDescriptor.bLength = sizeof(PipeHandle->EndpointDescriptor);
     PipeHandle->EndpointDescriptor.bDescriptorType = USB_ENDPOINT_DESCRIPTOR_TYPE;
 
-    if (DeviceHandle->DeviceSpeed == UsbLowSpeed)
+    /*
+     * Initial EP0 max-packet size before we have seen the device descriptor.
+     *
+     * The USB 2.0 / 3.x specs fix EP0 MPS to:
+     *  - 64 bytes for all High-Speed devices.
+     *  - 512 bytes for all SuperSpeed devices (bMaxPacketSize0 == 9 encoding).
+     *
+     * Full-/Low-Speed devices still report their literal EP0 MPS in the
+     * device descriptor (8/16/32/64), so until we have fetched at least
+     * the bMaxPacketSize0 field we start them at 8 bytes here and remap
+     * once the descriptor is available.
+     *
+     * NOTE: The "first 8 bytes only" rule for the initial GET_DESCRIPTOR
+     * is enforced via the transfer length, not by programming an invalid
+     * EP0 MPS into the controller. High-Speed devices must always use 64
+     * and SuperSpeed devices must always use 512 at the hardware level.
+     */
+    if (DeviceHandle->DeviceSpeed == UsbSuperSpeed)
     {
-        PipeHandle->EndpointDescriptor.wMaxPacketSize = 8;
+        PipeHandle->EndpointDescriptor.wMaxPacketSize = 512;
+    }
+    else if (DeviceHandle->DeviceSpeed == UsbHighSpeed)
+    {
+        PipeHandle->EndpointDescriptor.wMaxPacketSize = USB_DEFAULT_MAX_PACKET;
     }
     else
     {
-        PipeHandle->EndpointDescriptor.wMaxPacketSize = USB_DEFAULT_MAX_PACKET;
+        PipeHandle->EndpointDescriptor.wMaxPacketSize = 8;
     }
 
     InitializeListHead(&DeviceHandle->PipeHandleList);
@@ -1123,9 +1453,18 @@ USBPORT_CreateDevice(IN OUT PUSB_DEVICE_HANDLE *pUsbdDeviceHandle,
         return Status;
     }
 
+    Endpoint = PipeHandle->Endpoint;
+
+    /* Allocate enough space for the full device descriptor, not just MPS0. */
+#if DBG
+    DeviceDescriptor = (PUSB_DEVICE_DESCRIPTOR)USBPORT_AllocGuardedDescriptor(
+        sizeof(USB_DEVICE_DESCRIPTOR),
+        "DEV_DESC");
+#else
     DeviceDescriptor = ExAllocatePoolWithTag(NonPagedPool,
-                                             USB_DEFAULT_MAX_PACKET,
+                                             sizeof(USB_DEVICE_DESCRIPTOR),
                                              USB_PORT_TAG);
+#endif
 
     if (!DeviceDescriptor)
     {
@@ -1133,13 +1472,16 @@ USBPORT_CreateDevice(IN OUT PUSB_DEVICE_HANDLE *pUsbdDeviceHandle,
         goto ErrorExit;
     }
 
-    RtlZeroMemory(DeviceDescriptor, USB_DEFAULT_MAX_PACKET);
+    RtlZeroMemory(DeviceDescriptor, sizeof(USB_DEVICE_DESCRIPTOR));
     RtlZeroMemory(&SetupPacket, sizeof(USB_DEFAULT_PIPE_SETUP_PACKET));
+
+    DescriptorMinSize = RTL_SIZEOF_THROUGH_FIELD(USB_DEVICE_DESCRIPTOR,
+                                                 bMaxPacketSize0);
 
     SetupPacket.bmRequestType.Dir = BMREQUEST_DEVICE_TO_HOST;
     SetupPacket.bRequest = USB_REQUEST_GET_DESCRIPTOR;
     SetupPacket.wValue.HiByte = USB_DEVICE_DESCRIPTOR_TYPE;
-    SetupPacket.wLength = USB_DEFAULT_MAX_PACKET;
+    SetupPacket.wLength = DescriptorMinSize;
 
     TransferedLen = 0;
 
@@ -1147,35 +1489,227 @@ USBPORT_CreateDevice(IN OUT PUSB_DEVICE_HANDLE *pUsbdDeviceHandle,
                                      FdoDevice,
                                      &SetupPacket,
                                      DeviceDescriptor,
-                                     USB_DEFAULT_MAX_PACKET,
+                                     DescriptorMinSize,
                                      &TransferedLen,
                                      NULL);
 
+    if (!NT_SUCCESS(Status) || TransferedLen < DescriptorMinSize)
+        goto PostDescriptor;
+
+    RtlZeroMemory(&DeviceHandle->DeviceDescriptor,
+                  sizeof(USB_DEVICE_DESCRIPTOR));
     RtlCopyMemory(&DeviceHandle->DeviceDescriptor,
                   DeviceDescriptor,
-                  sizeof(USB_DEVICE_DESCRIPTOR));
+                  (TransferedLen < sizeof(USB_DEVICE_DESCRIPTOR)) ?
+                  TransferedLen : sizeof(USB_DEVICE_DESCRIPTOR));
 
-    ExFreePoolWithTag(DeviceDescriptor, USB_PORT_TAG);
-
-    DescriptorMinSize = RTL_SIZEOF_THROUGH_FIELD(USB_DEVICE_DESCRIPTOR,
-                                                 bMaxPacketSize0);
-
-    if ((TransferedLen == DescriptorMinSize) && !NT_SUCCESS(Status))
+    /*
+     * Map bMaxPacketSize0 to an actual max packet size for EP0.
+     * For USB 1.x/2.0 this is the literal size (8/16/32/64).
+     * For USB 3.x SuperSpeed devices, the encoding is 9 -> 512 bytes.
+     *
+     * In debug builds we have seen cases where DeviceHandle->DeviceDescriptor
+     * remained all zeros even though the transfer for the first 8 bytes of
+     * the descriptor completed successfully (e.g. QEMU xHCI SW‑ENUM). To
+     * avoid treating those as bogus devices, re-synchronize the cached
+     * descriptor from the temporary buffer if it still looks empty here and
+     * fall back to a spec‑compliant EP0 MPS whenever the raw value is zero.
+     */
     {
-        Status = STATUS_SUCCESS;
+        ULONG RawMaxPacketSize;
+
+        if (DeviceHandle->DeviceDescriptor.bLength == 0 &&
+            TransferedLen >= DescriptorMinSize &&
+            DeviceDescriptor != NULL)
+        {
+            RtlCopyMemory(&DeviceHandle->DeviceDescriptor,
+                          DeviceDescriptor,
+                          (TransferedLen < sizeof(USB_DEVICE_DESCRIPTOR)) ?
+                          TransferedLen : sizeof(USB_DEVICE_DESCRIPTOR));
+        }
+
+        RawMaxPacketSize = DeviceHandle->DeviceDescriptor.bMaxPacketSize0;
+
+        /*
+         * Treat a raw value of zero as a malformed descriptor and substitute
+         * the minimum legal EP0 size for the negotiated device speed so that
+         * enumeration can continue. This mirrors how Windows tolerates some
+         * emulated controllers that do not fill bMaxPacketSize0 correctly.
+         */
+        if (RawMaxPacketSize == 0)
+        {
+            switch (DeviceHandle->DeviceSpeed)
+            {
+                case UsbHighSpeed:
+                    MaxPacketSize = USB_DEFAULT_MAX_PACKET;
+                    break;
+
+                case UsbSuperSpeed:
+                    MaxPacketSize = 512;
+                    break;
+
+                default:
+                    /* Low-/Full-speed: start from 8 bytes for EP0. */
+                    MaxPacketSize = 8;
+                    break;
+            }
+        }
+        else if (DeviceHandle->DeviceDescriptor.bcdUSB >= 0x0300 &&
+                 RawMaxPacketSize == 9)
+        {
+            MaxPacketSize = 512;
+        }
+        else
+        {
+            MaxPacketSize = RawMaxPacketSize;
+        }
     }
+
+    if (MaxPacketSize != 8 &&
+        MaxPacketSize != 16 &&
+        MaxPacketSize != 32 &&
+        MaxPacketSize != 64 &&
+        MaxPacketSize != 512)
+    {
+        DPRINT1("USBPORT_CreateDevice: invalid EP0 MPS %u from descriptor\n",
+                MaxPacketSize);
+        goto PostDescriptor;
+    }
+
+    if (DeviceHandle->DeviceSpeed == UsbHighSpeed &&
+        MaxPacketSize != USB_DEFAULT_MAX_PACKET)
+    {
+        DPRINT1("USBPORT_CreateDevice: HS device reported illegal EP0 MPS %u (expected 64)\n",
+                MaxPacketSize);
+        goto PostDescriptor;
+    }
+
+    if (DeviceHandle->DeviceSpeed == UsbSuperSpeed &&
+        MaxPacketSize != 512)
+    {
+        DPRINT1("USBPORT_CreateDevice: SS device reported illegal EP0 MPS %u (expected 512)\n",
+                MaxPacketSize);
+        goto PostDescriptor;
+    }
+
+    PipeHandle->EndpointDescriptor.wMaxPacketSize = (USHORT)MaxPacketSize;
+
+    if (Endpoint)
+    {
+        Endpoint->EndpointProperties.TotalMaxPacketSize = MaxPacketSize;
+        Endpoint->EndpointProperties.MaxPacketSize = MaxPacketSize;
+    }
+
+    Status = USBPORT_ReopenPipe(FdoDevice, Endpoint);
+
+    if (!NT_SUCCESS(Status))
+        goto PostDescriptor;
+
+    USBPORT_Wait(FdoDevice, 10);
+
+    {
+        NTSTATUS InitialStatus = Status;
+        ULONG InitialTransferLen = TransferedLen;
+
+        RtlZeroMemory(&SetupPacket, sizeof(USB_DEFAULT_PIPE_SETUP_PACKET));
+
+        SetupPacket.bmRequestType.Dir = BMREQUEST_DEVICE_TO_HOST;
+        SetupPacket.bRequest = USB_REQUEST_GET_DESCRIPTOR;
+        SetupPacket.wValue.HiByte = USB_DEVICE_DESCRIPTOR_TYPE;
+        SetupPacket.wLength = sizeof(USB_DEVICE_DESCRIPTOR);
+
+        TransferedLen = 0;
+
+        Status = USBPORT_SendSetupPacket(DeviceHandle,
+                                         FdoDevice,
+                                         &SetupPacket,
+                                         DeviceDescriptor,
+                                         sizeof(USB_DEVICE_DESCRIPTOR),
+                                         &TransferedLen,
+                                         NULL);
+
+        /*
+         * Some emulated controllers (notably the QEMU/xHCI SW-ENUM path)
+         * can complete the full-device GET_DESCRIPTOR with a short length
+         * even though the buffer contains a complete, well-formed device
+         * descriptor.  Accept any successful transfer that returned at
+         * least through bMaxPacketSize0 and copy whatever was delivered.
+         */
+        if (NT_SUCCESS(Status) &&
+            TransferedLen >= DescriptorMinSize)
+        {
+            ULONG CopyLength =
+                (TransferedLen < sizeof(USB_DEVICE_DESCRIPTOR)) ?
+                TransferedLen : sizeof(USB_DEVICE_DESCRIPTOR);
+
+            RtlCopyMemory(&DeviceHandle->DeviceDescriptor,
+                          DeviceDescriptor,
+                          CopyLength);
+        }
+        else if (!NT_SUCCESS(Status) &&
+                 NT_SUCCESS(InitialStatus) &&
+                 InitialTransferLen >= DescriptorMinSize)
+        {
+            Status = STATUS_SUCCESS;
+            TransferedLen = InitialTransferLen;
+        }
+    }
+
+PostDescriptor:
+
+#if DBG
+    USBPORT_FreeGuardedDescriptor((PUCHAR)DeviceDescriptor, "DEV_DESC");
+#else
+    ExFreePoolWithTag(DeviceDescriptor, USB_PORT_TAG);
+#endif
 
     if (NT_SUCCESS(Status) && (TransferedLen >= DescriptorMinSize))
     {
         if ((DeviceHandle->DeviceDescriptor.bLength >= sizeof(USB_DEVICE_DESCRIPTOR)) &&
             (DeviceHandle->DeviceDescriptor.bDescriptorType == USB_DEVICE_DESCRIPTOR_TYPE))
         {
-            MaxPacketSize = DeviceHandle->DeviceDescriptor.bMaxPacketSize0;
+            /*
+             * Re-evaluate EP0 max-packet size using the same mapping as
+             * above so that SuperSpeed devices (bcdUSB >= 0x0300 with
+             * bMaxPacketSize0 == 9 -> 512 bytes) and emulated devices
+             * with a bogus zero value are accepted here too.
+             */
+            {
+                ULONG RawMaxPacketSize = DeviceHandle->DeviceDescriptor.bMaxPacketSize0;
+
+                if (RawMaxPacketSize == 0)
+                {
+                    switch (DeviceHandle->DeviceSpeed)
+                    {
+                        case UsbHighSpeed:
+                            MaxPacketSize = USB_DEFAULT_MAX_PACKET;
+                            break;
+
+                        case UsbSuperSpeed:
+                            MaxPacketSize = 512;
+                            break;
+
+                        default:
+                            MaxPacketSize = 8;
+                            break;
+                    }
+                }
+                else if (DeviceHandle->DeviceDescriptor.bcdUSB >= 0x0300 &&
+                         RawMaxPacketSize == 9)
+                {
+                    MaxPacketSize = 512;
+                }
+                else
+                {
+                    MaxPacketSize = RawMaxPacketSize;
+                }
+            }
 
             if (MaxPacketSize == 8 ||
                 MaxPacketSize == 16 ||
                 MaxPacketSize == 32 ||
-                MaxPacketSize == 64)
+                MaxPacketSize == 64 ||
+                MaxPacketSize == 512)
             {
                 USBPORT_AddDeviceHandle(FdoDevice, DeviceHandle);
 
@@ -1194,6 +1728,26 @@ USBPORT_CreateDevice(IN OUT PUSB_DEVICE_HANDLE *pUsbdDeviceHandle,
     DPRINT1("USBPORT_CreateDevice: ERROR!!! TransferedLen - %x, Status - %lx\n",
             TransferedLen,
             Status);
+
+#if DBG
+    {
+        const UCHAR *RawDescriptor = (const UCHAR *)&DeviceHandle->DeviceDescriptor;
+        ULONG ByteIndex;
+
+        DPRINT1("USBPORT_CreateDevice: descriptor bytes (len=%lu)\n",
+                (ULONG)sizeof(USB_DEVICE_DESCRIPTOR));
+
+        for (ByteIndex = 0; ByteIndex < sizeof(USB_DEVICE_DESCRIPTOR); ByteIndex++)
+        {
+            DPRINT1("USBPORT_CreateDevice: desc[%02lu] = %02X\n",
+                    ByteIndex,
+                    RawDescriptor[ByteIndex]);
+        }
+    }
+#endif
+
+    /* Keep the structured dump for anyone building with URB tracing enabled */
+    USBPORT_DumpingDeviceDescriptor(&DeviceHandle->DeviceDescriptor);
 
 ErrorExit:
 
@@ -1228,6 +1782,7 @@ ErrorExit:
                                 NULL);
     }
 
+    DPRINT1("USBPORT_CreateDevice: Failed with Status %x, masking to STATUS_DEVICE_DATA_ERROR\n", Status);
     Status = STATUS_DEVICE_DATA_ERROR;
 
     if (IsOpenedPipe)
@@ -1318,6 +1873,7 @@ USBPORT_InitializeDevice(IN PUSBPORT_DEVICE_HANDLE DeviceHandle,
 {
     PUSBPORT_ENDPOINT Endpoint;
     USB_DEFAULT_PIPE_SETUP_PACKET CtrlSetup;
+    ULONG EffectiveMaxPacketSize;
     ULONG TransferedLen;
     USHORT DeviceAddress = 0;
     UCHAR MaxPacketSize;
@@ -1379,42 +1935,124 @@ USBPORT_InitializeDevice(IN PUSBPORT_DEVICE_HANDLE DeviceHandle,
     CtrlSetup.wLength = sizeof(USB_DEVICE_DESCRIPTOR);
     CtrlSetup.bmRequestType.B = 0x80;
 
-    Status = USBPORT_SendSetupPacket(DeviceHandle,
-                                     FdoDevice,
-                                     &CtrlSetup,
-                                     &DeviceHandle->DeviceDescriptor,
-                                     sizeof(USB_DEVICE_DESCRIPTOR),
-                                     &TransferedLen,
-                                     NULL);
-
-    if (NT_SUCCESS(Status))
+    /*
+     * Issue the final full‑descriptor GET_DESCRIPTOR(DEVICE) with a
+     * small retry budget for SuperSpeed devices. Some USB 3.x devices
+     * are slow to respond immediately after SET_ADDRESS; giving them
+     * a couple of extra attempts here avoids spurious enumeration
+     * failures while still failing quickly on real errors.
+     */
+    TransferedLen = 0;
+    if (DeviceHandle->DeviceSpeed == UsbSuperSpeed)
     {
-        /* Some devices may return a short transfer here; accept it if the
-           header through bMaxPacketSize0 was received earlier during
-           USBPORT_CreateDevice. */
-        if (TransferedLen < sizeof(USB_DEVICE_DESCRIPTOR))
+        ULONG attempt;
+
+        for (attempt = 0; attempt < 3; attempt++)
         {
-            DPRINT1("USBPORT_InitializeDevice: Short device descriptor len %lu\n",
+            TransferedLen = 0;
+
+            Status = USBPORT_SendSetupPacket(DeviceHandle,
+                                             FdoDevice,
+                                             &CtrlSetup,
+                                             &DeviceHandle->DeviceDescriptor,
+                                             sizeof(USB_DEVICE_DESCRIPTOR),
+                                             &TransferedLen,
+                                             NULL);
+
+            if (NT_SUCCESS(Status) &&
+                TransferedLen == sizeof(USB_DEVICE_DESCRIPTOR))
+            {
+                break;
+            }
+
+            DPRINT1("USBPORT_InitializeDevice: GET_DESCRIPTOR(DEVICE) attempt %lu failed (Status=%x, Len=%lu)\n",
+                    attempt + 1,
+                    Status,
                     TransferedLen);
+
+            USBPORT_Wait(FdoDevice, 10);
+        }
+    }
+    else
+    {
+        Status = USBPORT_SendSetupPacket(DeviceHandle,
+                                         FdoDevice,
+                                         &CtrlSetup,
+                                         &DeviceHandle->DeviceDescriptor,
+                                         sizeof(USB_DEVICE_DESCRIPTOR),
+                                         &TransferedLen,
+                                         NULL);
+    }
+
+    if (NT_SUCCESS(Status) &&
+        TransferedLen == sizeof(USB_DEVICE_DESCRIPTOR))
+    {
+        ASSERT(DeviceHandle->DeviceDescriptor.bLength >= sizeof(USB_DEVICE_DESCRIPTOR));
+        ASSERT(DeviceHandle->DeviceDescriptor.bDescriptorType == USB_DEVICE_DESCRIPTOR_TYPE);
+        /*
+         * Map bMaxPacketSize0 to the actual EP0 max-packet size.
+         * For USB 1.x/2.0 this is the literal value (8/16/32/64).
+         * For USB 3.x SuperSpeed devices the encoding is 9 -> 512 bytes.
+         * Keep the Endpoint properties in sync with this mapping so that
+         * the miniport and USBPORT agree on EP0 transfer sizes.
+         */
+        MaxPacketSize = DeviceHandle->DeviceDescriptor.bMaxPacketSize0;
+        if (DeviceHandle->DeviceDescriptor.bcdUSB >= 0x0300 &&
+            MaxPacketSize == 9)
+        {
+            EffectiveMaxPacketSize = 512;
+        }
+        else
+        {
+            EffectiveMaxPacketSize = MaxPacketSize;
         }
 
-        /* Use the known bMaxPacketSize0 (was obtained prior to SetAddress) */
-        MaxPacketSize = DeviceHandle->DeviceDescriptor.bMaxPacketSize0;
+        ASSERT((EffectiveMaxPacketSize == 8)  ||
+               (EffectiveMaxPacketSize == 16) ||
+               (EffectiveMaxPacketSize == 32) ||
+               (EffectiveMaxPacketSize == 64) ||
+               (EffectiveMaxPacketSize == 512));
 
-        if (!(MaxPacketSize == 8 || MaxPacketSize == 16 ||
-              MaxPacketSize == 32 || MaxPacketSize == 64))
+        if (DeviceHandle->DeviceSpeed == UsbHighSpeed &&
+            EffectiveMaxPacketSize != USB_DEFAULT_MAX_PACKET)
         {
-            DPRINT1("USBPORT_InitializeDevice: Invalid MPS0 %u\n", MaxPacketSize);
-            Status = STATUS_DEVICE_DATA_ERROR;
+            DPRINT1("USBPORT_InitializeDevice: HS device has illegal EP0 MPS %lu (expected 64)\n",
+                    EffectiveMaxPacketSize);
             goto ExitError;
         }
 
-        /* Mark USB2 hub flag when identifiable (bDeviceClass available in header) */
+        if (DeviceHandle->DeviceSpeed == UsbSuperSpeed &&
+            EffectiveMaxPacketSize != 512)
+        {
+            DPRINT1("USBPORT_InitializeDevice: SS device has illegal EP0 MPS %lu (expected 512)\n",
+                    EffectiveMaxPacketSize);
+            goto ExitError;
+        }
+
         if (DeviceHandle->DeviceSpeed == UsbHighSpeed &&
             DeviceHandle->DeviceDescriptor.bDeviceClass == USB_DEVICE_CLASS_HUB)
         {
             DeviceHandle->Flags |= DEVICE_HANDLE_FLAG_USB2HUB;
         }
+
+        Endpoint->EndpointProperties.TotalMaxPacketSize = EffectiveMaxPacketSize;
+        Endpoint->EndpointProperties.MaxPacketSize = EffectiveMaxPacketSize;
+
+        /*
+         * For devices that support a BOS, retrieve and parse it so that
+         * USB 2.0 LPM, SuperSpeed capabilities and Container ID are
+         * available in the device handle for later policy and IOCTLs.
+         * Failure to retrieve or parse BOS is non-fatal.
+         */
+        USBPORT_FetchBosDescriptor(DeviceHandle, FdoDevice);
+
+        /*
+         * Compute a basic link power management policy for SuperSpeed devices
+         * based on the BOS SuperSpeed capability (U1/U2 exit latencies).
+         * This only derives per-device flags; actual link state programming
+         * is handled separately in the xHCI / hub policy code.
+         */
+        USBPORT_ComputeLpmPolicy(DeviceHandle);
     }
     else
     {
@@ -1439,6 +2077,7 @@ USBPORT_GetUsbDescriptor(IN PUSBPORT_DEVICE_HANDLE DeviceHandle,
                          IN PULONG ConfigDescSize)
 {
     USB_DEFAULT_PIPE_SETUP_PACKET SetupPacket;
+    NTSTATUS Status;
 
     DPRINT("USBPORT_GetUsbDescriptor: Type - %x\n");
 
@@ -1449,13 +2088,231 @@ USBPORT_GetUsbDescriptor(IN PUSBPORT_DEVICE_HANDLE DeviceHandle,
     SetupPacket.wValue.HiByte = Type;
     SetupPacket.wLength = (USHORT)*ConfigDescSize;
 
-    return USBPORT_SendSetupPacket(DeviceHandle,
-                                   FdoDevice,
-                                   &SetupPacket,
-                                   ConfigDesc,
-                                   *ConfigDescSize,
-                                   ConfigDescSize,
-                                   NULL);
+    Status = USBPORT_SendSetupPacket(DeviceHandle,
+                                     FdoDevice,
+                                     &SetupPacket,
+                                     ConfigDesc,
+                                     *ConfigDescSize,
+                                     ConfigDescSize,
+                                     NULL);
+
+#if DBG
+    if (NT_SUCCESS(Status) && ConfigDesc && ConfigDescSize && *ConfigDescSize)
+    {
+        ULONG dumpLen = (*ConfigDescSize < 16) ? *ConfigDescSize : 16;
+
+        DPRINT1("USBPORT_GetUsbDescriptor: completed type=0x%x len=%lu first bytes=%02x %02x %02x %02x %02x %02x\n",
+                Type,
+                *ConfigDescSize,
+                ((PUCHAR)ConfigDesc)[0],
+                dumpLen > 1 ? ((PUCHAR)ConfigDesc)[1] : 0,
+                dumpLen > 2 ? ((PUCHAR)ConfigDesc)[2] : 0,
+                dumpLen > 3 ? ((PUCHAR)ConfigDesc)[3] : 0,
+                dumpLen > 4 ? ((PUCHAR)ConfigDesc)[4] : 0,
+                dumpLen > 5 ? ((PUCHAR)ConfigDesc)[5] : 0);
+    }
+    else
+    {
+        DPRINT1("USBPORT_GetUsbDescriptor: type=0x%x failed Status=0x%08lx len=%lu\n",
+                Type,
+                Status,
+                ConfigDescSize ? *ConfigDescSize : 0);
+    }
+#endif
+
+    return Status;
+}
+
+static
+VOID
+USBPORT_FetchBosDescriptor(IN PUSBPORT_DEVICE_HANDLE DeviceHandle,
+                           IN PDEVICE_OBJECT FdoDevice)
+{
+    USB_BOS_DESCRIPTOR BosHeader;
+    ULONG Length;
+    NTSTATUS Status;
+    PUCHAR BosBuffer = NULL;
+    ULONG BosTotalLength;
+    PUCHAR Ptr;
+    PUCHAR End;
+
+    /*
+     * BOS (Binary Object Store) descriptor is only mandatory for USB 3.0+
+     * devices. USB 2.1 (0x0210) devices MAY have BOS for LPM support, but
+     * USB 2.0 (0x0200) and below devices typically do not support BOS and
+     * will STALL the request, causing the endpoint to halt and triggering
+     * expensive reset sequences with 5-second timeouts.
+     *
+     * Skip BOS fetch for USB 2.0 and below to avoid unnecessary stalls.
+     */
+    if (DeviceHandle->DeviceDescriptor.bcdUSB < 0x0201)
+        return;
+
+    RtlZeroMemory(&BosHeader, sizeof(BosHeader));
+    Length = sizeof(BosHeader);
+
+    Status = USBPORT_GetUsbDescriptor(DeviceHandle,
+                                      FdoDevice,
+                                      USB_BOS_DESCRIPTOR_TYPE,
+                                      (PUCHAR)&BosHeader,
+                                      &Length);
+
+    if (!NT_SUCCESS(Status) ||
+        Length < sizeof(USB_BOS_DESCRIPTOR) ||
+        BosHeader.bLength < sizeof(USB_BOS_DESCRIPTOR) ||
+        BosHeader.bDescriptorType != USB_BOS_DESCRIPTOR_TYPE ||
+        BosHeader.wTotalLength < sizeof(USB_BOS_DESCRIPTOR))
+    {
+        return;
+    }
+
+    BosTotalLength = BosHeader.wTotalLength;
+#if DBG
+    DPRINT1("USBPORT_FetchBosDescriptor: BOS total=%lu numcaps=%u headerlen=%lu\n",
+            BosTotalLength,
+            BosHeader.bNumDeviceCaps,
+            Length);
+#endif
+
+    if (BosTotalLength > 512)
+        BosTotalLength = 512;
+
+#if DBG
+    BosBuffer = USBPORT_AllocGuardedDescriptor(BosTotalLength, "BOS_DESC");
+#else
+    BosBuffer = ExAllocatePoolWithTag(NonPagedPool,
+                                      BosTotalLength,
+                                      USB_PORT_TAG);
+#endif
+    if (!BosBuffer)
+        return;
+
+    RtlZeroMemory(BosBuffer, BosTotalLength);
+    Length = BosTotalLength;
+
+    Status = USBPORT_GetUsbDescriptor(DeviceHandle,
+                                      FdoDevice,
+                                      USB_BOS_DESCRIPTOR_TYPE,
+                                      BosBuffer,
+                                      &Length);
+
+    if (!NT_SUCCESS(Status) ||
+        Length < sizeof(USB_BOS_DESCRIPTOR))
+        goto Done;
+
+    if (Length > BosTotalLength)
+        Length = BosTotalLength;
+
+    DeviceHandle->HasBosDescriptor = TRUE;
+
+    Ptr = BosBuffer;
+    End = BosBuffer + Length;
+
+    if ((ULONG)(End - Ptr) < sizeof(USB_BOS_DESCRIPTOR))
+        goto Done;
+
+    Ptr += ((PUSB_BOS_DESCRIPTOR)Ptr)->bLength;
+
+    while (Ptr + sizeof(USB_COMMON_DESCRIPTOR) <= End)
+    {
+        PUSB_COMMON_DESCRIPTOR Common;
+        UCHAR DevCapType;
+
+        Common = (PUSB_COMMON_DESCRIPTOR)Ptr;
+
+        if (Common->bLength < sizeof(USB_COMMON_DESCRIPTOR) ||
+            Ptr + Common->bLength > End)
+        {
+            break;
+        }
+
+        if (Common->bDescriptorType == 0x10) /* Device Capability */
+        {
+            if (Common->bLength >= sizeof(USB_DEVICE_CAPABILITY_USB20_EXTENSION_DESCRIPTOR) &&
+                !DeviceHandle->HasUsb20Extension)
+            {
+                const USB_DEVICE_CAPABILITY_USB20_EXTENSION_DESCRIPTOR *Ext =
+                    (const USB_DEVICE_CAPABILITY_USB20_EXTENSION_DESCRIPTOR *)Common;
+
+                if (Ext->bDevCapabilityType == USB_DEVICE_CAPABILITY_USB20_EXTENSION)
+                {
+                    DeviceHandle->HasUsb20Extension = TRUE;
+                    DeviceHandle->Usb20LpmCapable = Ext->bmAttributes.LPMCapable ? TRUE : FALSE;
+                    DeviceHandle->Usb20BeslSupported =
+                        Ext->bmAttributes.BESLAndAlternateHIRDSupported ? TRUE : FALSE;
+                    DeviceHandle->Usb20BaselineBesl = (UCHAR)Ext->bmAttributes.BaselineBESL;
+                    DeviceHandle->Usb20DeepBesl = (UCHAR)Ext->bmAttributes.DeepBESL;
+                }
+            }
+            else if (Common->bLength >= sizeof(USB_DEVICE_CAPABILITY_SUPERSPEED_USB_DESCRIPTOR) &&
+                     !DeviceHandle->HasSsCapability)
+            {
+                const USB_DEVICE_CAPABILITY_SUPERSPEED_USB_DESCRIPTOR *Ss =
+                    (const USB_DEVICE_CAPABILITY_SUPERSPEED_USB_DESCRIPTOR *)Common;
+
+                if (Ss->bDevCapabilityType == USB_DEVICE_CAPABILITY_SUPERSPEED_USB)
+                {
+                    DeviceHandle->HasSsCapability = TRUE;
+                    DeviceHandle->SsSpeedsSupported = Ss->wSpeedsSupported;
+                    DeviceHandle->SsFunctionalitySupport = Ss->bFunctionalitySupport;
+                    DeviceHandle->SsU1ExitLatency = Ss->bU1DevExitLat;
+                    DeviceHandle->SsU2ExitLatency = Ss->wU2DevExitLat;
+                }
+            }
+            else if (Common->bLength >= sizeof(USB_DEVICE_CAPABILITY_CONTAINER_ID_DESCRIPTOR) &&
+                     !DeviceHandle->HasContainerId)
+            {
+                const USB_DEVICE_CAPABILITY_CONTAINER_ID_DESCRIPTOR *Cid =
+                    (const USB_DEVICE_CAPABILITY_CONTAINER_ID_DESCRIPTOR *)Common;
+
+                if (Cid->bDevCapabilityType == USB_DEVICE_CAPABILITY_CONTAINER_ID)
+                {
+                    DeviceHandle->HasContainerId = TRUE;
+                    RtlCopyMemory(DeviceHandle->ContainerId,
+                                  Cid->ContainerID,
+                                  sizeof(DeviceHandle->ContainerId));
+                }
+            }
+        }
+
+        DevCapType = 0;
+        (void)DevCapType; /* silence unused warning in non-DBG builds */
+
+        Ptr += Common->bLength;
+    }
+
+Done:
+#if DBG
+    USBPORT_FreeGuardedDescriptor(BosBuffer, "BOS_DESC");
+#else
+    ExFreePoolWithTag(BosBuffer, USB_PORT_TAG);
+#endif
+}
+
+static
+VOID
+USBPORT_ComputeLpmPolicy(IN PUSBPORT_DEVICE_HANDLE DeviceHandle)
+{
+    BOOLEAN allowU1 = FALSE;
+    BOOLEAN allowU2 = FALSE;
+
+    if (DeviceHandle->DeviceSpeed == UsbSuperSpeed &&
+        DeviceHandle->HasSsCapability)
+    {
+        if (DeviceHandle->SsU1ExitLatency <= USB_DEVICE_CAPABILITY_SUPERSPEED_U1_DEVICE_EXIT_MAX_VALUE)
+        {
+            allowU1 = TRUE;
+        }
+
+        if (DeviceHandle->SsU2ExitLatency <= USB_DEVICE_CAPABILITY_SUPERSPEED_U2_DEVICE_EXIT_MAX_VALUE)
+        {
+            allowU2 = TRUE;
+        }
+    }
+
+    DeviceHandle->LpmPolicyComputed = TRUE;
+    DeviceHandle->LpmAllowU1 = allowU1;
+    DeviceHandle->LpmAllowU2 = allowU2;
 }
 
 PUSBPORT_INTERFACE_HANDLE
@@ -1530,7 +2387,7 @@ USBPORT_HandleSelectInterface(IN PDEVICE_OBJECT FdoDevice,
     if (USBDStatus)
     {
         Interface->InterfaceHandle = (USBD_INTERFACE_HANDLE)-1;
-        return USBPORT_USBDStatusToNtStatus(Urb, USBDStatus);
+        goto Exit;
     }
 
     DeviceHandle = Urb->UrbHeader.UsbdDeviceHandle;
@@ -1581,6 +2438,8 @@ USBPORT_HandleSelectInterface(IN PDEVICE_OBJECT FdoDevice,
                        &iHandle->InterfaceLink);
     }
 
+Exit:
+
     KeReleaseSemaphore(&FdoExtension->DeviceSemaphore,
                        LOW_REALTIME_PRIORITY,
                        1,
@@ -1628,6 +2487,31 @@ USBPORT_RemoveDevice(IN PDEVICE_OBJECT FdoDevice,
         DPRINT1("USBPORT_RemoveDevice: Not valid device handle\n");
         return STATUS_DEVICE_NOT_CONNECTED;
     }
+
+#if DBG
+    if (DeviceHandle->Flags & DEVICE_HANDLE_FLAG_ROOTHUB)
+    {
+        PVOID CallStack[8] = {0};
+        USHORT Depth;
+        USHORT Index;
+
+        Depth = RtlCaptureStackBackTrace(1,
+                                         RTL_NUMBER_OF(CallStack),
+                                         CallStack,
+                                         NULL);
+
+        DPRINT1("USBPORT_RemoveDevice: root hub handle %p removal requested (Flags=0x%lx)\n",
+                DeviceHandle,
+                DeviceHandle->Flags);
+
+        for (Index = 0; Index < Depth; Index++)
+        {
+            DPRINT1("USBPORT_RemoveDevice:  caller[%u]=%p\n",
+                    Index,
+                    CallStack[Index]);
+        }
+    }
+#endif
 
     USBPORT_RemoveDeviceHandle(FdoDevice, DeviceHandle);
 
