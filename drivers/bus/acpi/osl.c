@@ -296,7 +296,8 @@ AcpiOsMapMemory (
 
     DPRINT("AcpiOsMapMemory(phys 0x%p  size 0x%X)\n", phys, length);
 
-    Address.QuadPart = (ULONG)phys;
+    /* ACPI tables can reside above 4 GB on amd64, so keep the full address. */
+    Address.QuadPart = (ULONGLONG)phys;
     CacheType = MmNonCached;
     HalGetMemoryCachingRequirements(Address, length, &CacheType);
     Ptr = MmMapIoSpace(Address, length, CacheType);
