@@ -10,10 +10,15 @@
 
 #if DBG
 
+    /* Global runtime trace mask (defined in usbehci.c) */
+    extern unsigned long g_EhciTraceMask;
+
     #ifndef NDEBUG_EHCI_TRACE
         #define DPRINT_EHCI(fmt, ...) do { \
-            if (DbgPrint("(%s:%d) " fmt, __RELFILE__, __LINE__, ##__VA_ARGS__))  \
-                DbgPrint("(%s:%d) DbgPrint() failed!\n", __RELFILE__, __LINE__); \
+            if ((g_EhciTraceMask & 0x1) != 0) { \
+                if (DbgPrint("(%s:%d) " fmt, __RELFILE__, __LINE__, ##__VA_ARGS__))  \
+                    DbgPrint("(%s:%d) DbgPrint() failed!\n", __RELFILE__, __LINE__); \
+            } \
         } while (0)
     #else
         #if defined(_MSC_VER)
@@ -25,8 +30,10 @@
 
     #ifndef NDEBUG_EHCI_ROOT_HUB
         #define DPRINT_RH(fmt, ...) do { \
-            if (DbgPrint("(%s:%d) " fmt, __RELFILE__, __LINE__, ##__VA_ARGS__))  \
-                DbgPrint("(%s:%d) DbgPrint() failed!\n", __RELFILE__, __LINE__); \
+            if ((g_EhciTraceMask & 0x2) != 0) { \
+                if (DbgPrint("(%s:%d) " fmt, __RELFILE__, __LINE__, ##__VA_ARGS__))  \
+                    DbgPrint("(%s:%d) DbgPrint() failed!\n", __RELFILE__, __LINE__); \
+            } \
         } while (0)
     #else
         #if defined(_MSC_VER)
