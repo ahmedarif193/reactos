@@ -79,6 +79,7 @@
 #define USBHUB_PDO_FLAG_PORT_RESSETING    (1 << 19)
 #define USBHUB_PDO_FLAG_IDLE_NOTIFICATION (1 << 22)
 #define USBHUB_PDO_FLAG_PORT_HIGH_SPEED   (1 << 23)
+#define USBHUB_PDO_FLAG_PORT_SUPER_SPEED  (1 << 24)
 #define USBHUB_PDO_FLAG_ENUMERATED        (1 << 26)
 
 #define USBHUB_ENUM_FLAG_DEVICE_PRESENT   0x01
@@ -105,7 +106,49 @@
 
 #define USBHUB_MAX_CASCADE_LEVELS  6
 #define USBHUB_RESET_PORT_MAX_RETRY  3
+#define USBHUB_RESET_PORT_POLL_MS    10
 #define USBHUB_MAX_REQUEST_ERRORS    3
+
+/* Adaptive port debounce parameters (USB 2.0 spec section 7.1.7.3 TATTDB) */
+#define USBHUB_DEBOUNCE_TIMEOUT   2000  /* Max total debounce time (ms) */
+#define USBHUB_DEBOUNCE_STEP        25  /* Polling interval (ms) */
+#define USBHUB_DEBOUNCE_STABLE     100  /* Required stable time (ms) */
+
+FORCEINLINE
+BOOLEAN
+USBH_PortStatusIsConnected(
+    _In_ const USB_PORT_STATUS_AND_CHANGE *PortStatus)
+{
+    return (PortStatus->PortStatus.Usb20PortStatus.CurrentConnectStatus != 0) ||
+           (PortStatus->PortStatus.Usb30PortStatus.CurrentConnectStatus != 0);
+}
+
+FORCEINLINE
+VOID
+USBH_PortStatusForceConnected(
+    _Inout_ USB_PORT_STATUS_AND_CHANGE *PortStatus)
+{
+    PortStatus->PortStatus.Usb20PortStatus.CurrentConnectStatus = 1;
+    PortStatus->PortStatus.Usb30PortStatus.CurrentConnectStatus = 1;
+}
+
+FORCEINLINE
+BOOLEAN
+USBH_PortChangeHasConnect(
+    _In_ const USB_PORT_STATUS_AND_CHANGE *PortStatus)
+{
+    return (PortStatus->PortChange.Usb20PortChange.ConnectStatusChange != 0) ||
+           (PortStatus->PortChange.Usb30PortChange.ConnectStatusChange != 0);
+}
+
+FORCEINLINE
+VOID
+USBH_PortChangeMarkConnect(
+    _Inout_ USB_PORT_STATUS_AND_CHANGE *PortStatus)
+{
+    PortStatus->PortChange.Usb20PortChange.ConnectStatusChange = 1;
+    PortStatus->PortChange.Usb30PortChange.ConnectStatusChange = 1;
+}
 
 
 #define USBHUB_FAIL_NO_FAIL            5
@@ -113,12 +156,16 @@
 #define USBHUB_FAIL_OVERCURRENT        7
 
 extern PWSTR GenericUSBDeviceString;
+extern LONG USBH_NextDebugBusNumber;
 
 typedef struct _USBHUB_PORT_DATA {
   USB_PORT_STATUS_AND_CHANGE PortStatus;
   PDEVICE_OBJECT DeviceObject;
   USB_CONNECTION_STATUS ConnectionStatus;
   ULONG PortAttributes;
+  ULONG LogFlags;
+  BOOLEAN SynthConnectPending;
+  UCHAR Reserved[3];
 } USBHUB_PORT_DATA, *PUSBHUB_PORT_DATA;
 
 typedef struct _USBHUB_FDO_EXTENSION *PUSBHUB_FDO_EXTENSION;
@@ -198,6 +245,7 @@ typedef struct _USBHUB_FDO_EXTENSION {
   USB_IDLE_CALLBACK_INFO IdleCallbackInfo;
   USB_PORT_STATUS_AND_CHANGE PortStatus;
   PIRP PowerIrp;
+  ULONG DebugBusNumber;
 } USBHUB_FDO_EXTENSION, *PUSBHUB_FDO_EXTENSION;
 
 typedef struct _USBHUB_PORT_PDO_EXTENSION {
@@ -213,6 +261,12 @@ typedef struct _USBHUB_PORT_PDO_EXTENSION {
   USHORT SN_DescriptorLength;
   BOOL IgnoringHwSerial;
   LPWSTR SerialNumber; // serial number string
+  USHORT SelectedLanguageId;
+  BOOLEAN LanguageIdCached;
+  PWSTR ProductString;
+  PWSTR ManufacturerString;
+  PWSTR ConfigurationString;
+  PWSTR InterfaceString;
   USB_DEVICE_DESCRIPTOR DeviceDescriptor;
   USB_DEVICE_DESCRIPTOR OldDeviceDescriptor;
   USB_CONFIGURATION_DESCRIPTOR ConfigDescriptor;
@@ -232,6 +286,7 @@ typedef struct _USBHUB_PORT_PDO_EXTENSION {
   PIRP PdoWaitWakeIrp;
   LIST_ENTRY PortPowerList;
   KSPIN_LOCK PortPowerListSpinLock;
+  WCHAR DevPath[32];
 } USBHUB_PORT_PDO_EXTENSION, *PUSBHUB_PORT_PDO_EXTENSION;
 
 typedef struct _USBHUB_URB_TIMEOUT_CONTEXT {
@@ -337,11 +392,6 @@ USBH_HubSetD0(
 
 NTSTATUS
 NTAPI
-USBH_HubStartESDRecovery(
-  IN PUSBHUB_FDO_EXTENSION HubExtension);
-
-NTSTATUS
-NTAPI
 USBH_FdoPower(
   IN PUSBHUB_FDO_EXTENSION HubExtension,
   IN PIRP Irp,
@@ -377,6 +427,13 @@ NTSTATUS
 NTAPI
 USBH_Wait(
   IN ULONG Milliseconds);
+
+NTSTATUS
+NTAPI
+USBH_PortDebounce(
+  IN PUSBHUB_FDO_EXTENSION HubExtension,
+  IN USHORT Port,
+  OUT PUSB_PORT_STATUS_AND_CHANGE PortStatus);
 
 VOID
 NTAPI
@@ -435,6 +492,19 @@ USBH_GetDeviceType(
   IN PUSBHUB_FDO_EXTENSION HubExtension,
   IN PUSB_DEVICE_HANDLE DeviceHandle,
   OUT USB_DEVICE_TYPE * OutDeviceType);
+
+NTSTATUS
+NTAPI
+USBH_RegQueryDeviceIgnoreHWSerNumFlag(
+  IN USHORT VendorId,
+  IN USHORT ProductId,
+  IN USHORT BcdDevice,
+  OUT PBOOLEAN IgnoreHwSerialNumber);
+
+BOOLEAN
+NTAPI
+USBH_DeviceIs2xDualMode(
+  IN PUSBHUB_PORT_PDO_EXTENSION PdoExtension);
 
 PUSBHUB_FDO_EXTENSION
 NTAPI
@@ -501,6 +571,13 @@ USBH_SyncClearPortStatus(
   IN PUSBHUB_FDO_EXTENSION HubExtension,
   IN USHORT Port,
   IN USHORT RequestValue);
+
+NTSTATUS
+NTAPI
+USBH_SyncPowerOnPort(
+  IN PUSBHUB_FDO_EXTENSION HubExtension,
+  IN USHORT Port,
+  IN BOOLEAN IsWait);
 
 NTSTATUS
 NTAPI
@@ -636,6 +713,23 @@ NTAPI
 USBH_CheckDeviceLanguage(
   IN PDEVICE_OBJECT DeviceObject,
   IN USHORT LanguageId);
+
+NTSTATUS
+NTAPI
+USBH_SelectLanguageId(
+  IN PDEVICE_OBJECT DeviceObject,
+  IN USHORT PreferredId,
+  OUT PUSHORT OutLanguageId);
+
+NTSTATUS
+NTAPI
+USBH_CacheDeviceStrings(
+  IN PUSBHUB_PORT_PDO_EXTENSION PortExtension);
+
+VOID
+NTAPI
+USBH_FreeCachedStrings(
+  IN PUSBHUB_PORT_PDO_EXTENSION PortExtension);
 
 NTSTATUS
 NTAPI

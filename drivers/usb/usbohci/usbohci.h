@@ -265,6 +265,13 @@ NTAPI
 OHCI_RH_EnableIrq(
   IN PVOID ohciExtension);
 
+BOOLEAN
+NTAPI
+OHCI_QueryPortAttributes(
+  IN PVOID OhciExtension,
+  IN USHORT Port,
+  OUT PULONG Attributes);
+
 OHCI_REG_RH_DESCRIPTORA
 NTAPI
 OHCI_ReadRhDescriptorA(
