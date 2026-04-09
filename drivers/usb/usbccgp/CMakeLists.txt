@@ -1,6 +1,8 @@
 
-add_definitions(-DDEBUG_MODE)
+remove_definitions(-D_WIN32_WINNT=0x502)
 add_definitions(-D_WIN32_WINNT=0x600)
+
+add_definitions(-DDEBUG_MODE)
 include_directories(${REACTOS_SOURCE_DIR}/ntoskrnl/include)
 
 list(APPEND SOURCE
@@ -18,10 +20,6 @@ add_library(usbccgp MODULE
     ${SOURCE}
     ${PCH_SKIP_SOURCE}
     usbccgp.rc)
-
-target_compile_definitions(usbccgp
-    # HACK: Disabled until USB Stack is reinvestigated.
-    PRIVATE NO_KERNEL_LIST_ENTRY_CHECKS)
 
 target_link_libraries(usbccgp ${PSEH_LIB})
 set_module_type(usbccgp kernelmodedriver)
