@@ -10,10 +10,46 @@
 #define NDEBUG
 #include <debug.h>
 
-#define NDEBUG_USBPORT_MINIPORT
-#define NDEBUG_USBPORT_URB
-//#define NDEBUG_USBPORT_USB2
+/* Define to disable all USBPORT debug output */
+#define NDEBUG_USBPORT_ALL
 #include "usbdebug.h"
+
+#if DBG
+#ifdef ExAllocatePoolWithTag
+#undef ExAllocatePoolWithTag
+#endif
+#ifdef ExFreePoolWithTag
+#undef ExFreePoolWithTag
+#endif
+
+PVOID
+USBPORT_AllocPoolWithTagDbg(
+    _In_ POOL_TYPE PoolType,
+    _In_ SIZE_T NumberOfBytes,
+    _In_ ULONG Tag,
+    _In_ PCSTR File,
+    _In_ ULONG Line)
+{
+    UNREFERENCED_PARAMETER(File);
+    UNREFERENCED_PARAMETER(Line);
+
+    return ExAllocatePoolWithTag(PoolType, NumberOfBytes, Tag);
+}
+
+VOID
+USBPORT_FreePoolWithTagDbg(
+    _In_ PVOID P,
+    _In_ ULONG Tag,
+    _In_ PCSTR File,
+    _In_ ULONG Line)
+{
+    UNREFERENCED_PARAMETER(File);
+    UNREFERENCED_PARAMETER(Line);
+    UNREFERENCED_PARAMETER(Tag);
+
+    ExFreePoolWithTag(P, Tag);
+}
+#endif
 
 ULONG
 USBPORT_DbgPrint(IN PVOID MiniPortExtension,
@@ -310,4 +346,3 @@ USBPORT_DumpingTtEndpoint(IN PUSB2_TT_ENDPOINT TtEndpoint)
     DPRINT_USB2("Nums            - %X\n", TtEndpoint->Nums.AsULONG);
     DPRINT_USB2("nextTtEndpoint  - %X\n", TtEndpoint->NextTtEndpoint);
 }
-

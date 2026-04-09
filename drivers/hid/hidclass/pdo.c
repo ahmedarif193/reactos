@@ -308,6 +308,17 @@ HidClassPDO_HandleQueryHardwareId(
     return STATUS_SUCCESS;
 }
 
+static NTSTATUS NTAPI
+HidClass_GetParentInstanceId_Completion(
+    IN PDEVICE_OBJECT DeviceObject,
+    IN PIRP Irp,
+    IN PVOID Context);
+
+static NTSTATUS
+HidClass_GetParentInstanceId(
+    IN PDEVICE_OBJECT DeviceObject,
+    OUT PWSTR *InstanceId);
+
 NTSTATUS
 HidClassPDO_HandleQueryInstanceId(
     IN PDEVICE_OBJECT DeviceObject,
@@ -315,6 +326,11 @@ HidClassPDO_HandleQueryInstanceId(
 {
     LPWSTR Buffer;
     PHIDCLASS_PDO_DEVICE_EXTENSION PDODeviceExtension;
+    PDEVICE_OBJECT ParentDevice;
+    PWSTR ParentId = NULL;
+    WCHAR SuffixBuffer[20];
+    NTSTATUS Status;
+    ULONG TotalSize;
 
     //
     // get device extension
@@ -323,11 +339,40 @@ HidClassPDO_HandleQueryInstanceId(
     ASSERT(PDODeviceExtension->Common.IsFDO == FALSE);
 
     //
+    // Get the NextDeviceObject from the FDO extension.
+    // This is the device object of the parent (e.g. USB) driver.
+    //
+    ParentDevice = PDODeviceExtension->FDODeviceExtension->Common.HidDeviceExtension.NextDeviceObject;
+
+    //
+    // Query Parent Instance ID to ensure uniqueness
+    //
+    Status = HidClass_GetParentInstanceId(ParentDevice, &ParentId);
+    if (!NT_SUCCESS(Status))
+    {
+        DPRINT1("[HIDCLASS] Failed to query Parent Instance ID %x\n", Status);
+        ParentId = NULL;
+    }
+
+    //
+    // Prepare suffix: &ColXXXX
+    //
+    swprintf(SuffixBuffer, L"&Col%04x", PDODeviceExtension->CollectionNumber);
+
+    //
+    // Calculate required size
+    //
+    TotalSize = (ParentId ? wcslen(ParentId) * sizeof(WCHAR) : sizeof(WCHAR)) + sizeof(SuffixBuffer);
+
+    //
     // allocate buffer
     //
-    Buffer = ExAllocatePoolWithTag(NonPagedPool, 5 * sizeof(WCHAR), HIDCLASS_TAG);
+    Buffer = ExAllocatePoolWithTag(NonPagedPool, TotalSize, HIDCLASS_TAG);
     if (!Buffer)
     {
+        if (ParentId)
+            ExFreePoolWithTag(ParentId, 0);
+
         //
         // failed
         //
@@ -335,15 +380,88 @@ HidClassPDO_HandleQueryInstanceId(
     }
 
     //
-    // write device id
+    // Build the Instance ID: ParentInstanceID&ColXXXX
     //
-    swprintf(Buffer, L"%04x", PDODeviceExtension->CollectionNumber);
+    Buffer[0] = UNICODE_NULL;
+    if (ParentId)
+    {
+        wcscpy(Buffer, ParentId);
+        ExFreePoolWithTag(ParentId, 0);
+    }
+    wcscat(Buffer, SuffixBuffer);
+
+    DPRINT("[HIDCLASS] Generated Instance ID: %S\n", Buffer);
     Irp->IoStatus.Information = (ULONG_PTR)Buffer;
 
     //
     // done
     //
     return STATUS_SUCCESS;
+}
+
+static NTSTATUS NTAPI
+HidClass_GetParentInstanceId_Completion(
+    IN PDEVICE_OBJECT DeviceObject,
+    IN PIRP Irp,
+    IN PVOID Context)
+{
+    PKEVENT Event = (PKEVENT)Context;
+
+    UNREFERENCED_PARAMETER(DeviceObject);
+    UNREFERENCED_PARAMETER(Irp);
+
+    KeSetEvent(Event, IO_NO_INCREMENT, FALSE);
+    return STATUS_MORE_PROCESSING_REQUIRED;
+}
+
+static NTSTATUS
+HidClass_GetParentInstanceId(
+    IN PDEVICE_OBJECT DeviceObject,
+    OUT PWSTR *InstanceId)
+{
+    PIRP Irp;
+    PIO_STACK_LOCATION IrpSp;
+    KEVENT Event;
+    NTSTATUS Status;
+
+    KeInitializeEvent(&Event, NotificationEvent, FALSE);
+
+    Irp = IoAllocateIrp(DeviceObject->StackSize, FALSE);
+    if (!Irp)
+        return STATUS_INSUFFICIENT_RESOURCES;
+
+    IrpSp = IoGetNextIrpStackLocation(Irp);
+    RtlZeroMemory(IrpSp, sizeof(IO_STACK_LOCATION));
+
+    IrpSp->MajorFunction = IRP_MJ_PNP;
+    IrpSp->MinorFunction = IRP_MN_QUERY_ID;
+    IrpSp->Parameters.QueryId.IdType = BusQueryInstanceID;
+
+    Irp->IoStatus.Status = STATUS_NOT_SUPPORTED;
+    Irp->IoStatus.Information = 0;
+
+    IoSetCompletionRoutine(Irp, HidClass_GetParentInstanceId_Completion, &Event, TRUE, TRUE, TRUE);
+
+    Status = IoCallDriver(DeviceObject, Irp);
+
+    if (Status == STATUS_PENDING)
+    {
+        KeWaitForSingleObject(&Event, Executive, KernelMode, FALSE, NULL);
+    }
+
+    Status = Irp->IoStatus.Status;
+
+    if (NT_SUCCESS(Status))
+    {
+        *InstanceId = (PWSTR)Irp->IoStatus.Information;
+    }
+    else
+    {
+        *InstanceId = NULL;
+    }
+
+    IoFreeIrp(Irp);
+    return Status;
 }
 
 NTSTATUS

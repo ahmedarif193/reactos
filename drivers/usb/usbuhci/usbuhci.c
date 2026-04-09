@@ -1095,9 +1095,8 @@ UhciMapAsyncTransferToTDs(IN PUHCI_EXTENSION UhciExtension,
     USHORT DeviceAddress;
     ULONG TransferType;
     SIZE_T TransferLength = 0;
-    SIZE_T LengthMapped = 0;
     SIZE_T BytesRemaining;
-    SIZE_T LengthThisTD;
+    SIZE_T LengthThisTD = 0;
     ULONG ix;
     BOOL DataToggle;
     UCHAR PIDCode;
@@ -1212,7 +1211,6 @@ UhciMapAsyncTransferToTDs(IN PUHCI_EXTENSION UhciExtension,
                 ASSERT(FALSE);
 
             PhysicalAddress += LengthThisTD;
-            LengthMapped += LengthThisTD;
 
             if (LastTD)
             {
@@ -2676,6 +2674,22 @@ UhciFlushInterrupts(IN PVOID uhciExtension)
     DPRINT_IMPL("UhciFlushInterrupts: UNIMPLEMENTED. FIXME\n");
 }
 
+BOOLEAN
+NTAPI
+UHCI_QueryPortAttributes(IN PVOID UhciExtension,
+                         IN USHORT Port,
+                         OUT PULONG Attributes)
+{
+    UNREFERENCED_PARAMETER(UhciExtension);
+    UNREFERENCED_PARAMETER(Port);
+
+    if (!Attributes)
+        return FALSE;
+
+    *Attributes = 0;
+    return FALSE;
+}
+
 MPSTATUS
 NTAPI
 UhciUnload(IN PVOID uhciExtension)
@@ -2755,6 +2769,7 @@ DriverEntry(IN PDRIVER_OBJECT DriverObject,
     RegPacket.EndSendOnePacket = UhciEndSendOnePacket;
     RegPacket.PassThru = UhciPassThru;
     RegPacket.FlushInterrupts = UhciFlushInterrupts;
+    RegPacket.QueryPortAttributes = UHCI_QueryPortAttributes;
 
     DriverObject->DriverUnload = NULL;
 
