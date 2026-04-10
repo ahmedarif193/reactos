@@ -1,0 +1,42 @@
+/*
+ * PROJECT:     ReactOS Disk Management
+ * LICENSE:     GPL-2.0-or-later (https://spdx.org/licenses/GPL-2.0-or-later)
+ * PURPOSE:     Resources file.
+ */
+
+#include <windef.h>
+#include <winuser.h>
+#include <commctrl.h>
+
+#include "resource.h"
+
+#define REACTOS_STR_FILE_DESCRIPTION  "ReactOS Disk Management"
+#define REACTOS_STR_INTERNAL_NAME     "diskmgmt"
+#define REACTOS_STR_ORIGINAL_FILENAME "diskmgmt.exe"
+#include <reactos/version.rc>
+
+#include <reactos/manifest_exe.rc>
+
+LANGUAGE LANG_NEUTRAL, SUBLANG_NEUTRAL
+
+IDI_DISKMGMT ICON "res/hdisk.ico"
+IDB_TB_BACK BITMAP "res/tb_back.bmp"
+IDB_TB_FORWARD BITMAP "res/tb_forward.bmp"
+IDB_TB_RESCAN BITMAP "res/tb_rescan.bmp"
+IDB_TB_REFRESH BITMAP "res/tb_refresh.bmp"
+IDB_TB_CREATE BITMAP "res/tb_create.bmp"
+IDB_TB_DELETE BITMAP "res/tb_delete.bmp"
+IDB_TB_PROPERTIES BITMAP "res/tb_properties.bmp"
+IDB_TB_HELP BITMAP "res/tb_help.bmp"
+IDB_LV_VOLUME BITMAP "res/lv_volume.bmp"
+IDB_LV_PARTITION BITMAP "res/lv_partition.bmp"
+
+/* UTF-8 */
+#pragma code_page(65001)
+
+#ifdef LANGUAGE_DE_DE
+    #include "lang/de-DE.rc"
+#endif
+#ifdef LANGUAGE_EN_US
+    #include "lang/en-US.rc"
+#endif

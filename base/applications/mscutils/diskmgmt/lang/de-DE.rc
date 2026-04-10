@@ -1,0 +1,239 @@
+/*
+ * PROJECT:     ReactOS Disk Management
+ * LICENSE:     GPL-2.0-or-later (https://spdx.org/licenses/GPL-2.0-or-later)
+ * PURPOSE:     German resource file.
+ */
+
+LANGUAGE LANG_GERMAN, SUBLANG_NEUTRAL
+
+IDM_DISKMGMT MENU
+BEGIN
+    POPUP "&Datei"
+    BEGIN
+        MENUITEM "&Beenden", IDM_FILE_EXIT
+    END
+    POPUP "&Aktion"
+    BEGIN
+        MENUITEM "Datentraeger er&neut suchen", IDM_ACTION_RESCAN
+        MENUITEM "&Aktualisieren\tF5", IDM_ACTION_REFRESH
+        MENUITEM SEPARATOR
+        MENUITEM "Datentraeger &initialisieren...", IDM_ACTION_INITIALIZE_DISK
+        MENUITEM "In &GPT-Datentraeger konvertieren", IDM_ACTION_CONVERT_GPT
+        MENUITEM "In &MBR-Datentraeger konvertieren", IDM_ACTION_CONVERT_MBR
+        MENUITEM "&Partition erstellen...", IDM_ACTION_CREATE_PARTITION
+        MENUITEM "&Volume loeschen", IDM_ACTION_DELETE_VOLUME
+        MENUITEM "Volume e&rweitern...", IDM_ACTION_EXTEND_VOLUME
+        MENUITEM "Volume ver&kleinern...", IDM_ACTION_SHRINK_VOLUME
+        MENUITEM "&Formatieren...", IDM_ACTION_FORMAT
+        MENUITEM "Laufwerksbuchstaben &zuweisen", IDM_ACTION_ASSIGN_LETTER
+        MENUITEM "Laufwerksbuchstaben &entfernen", IDM_ACTION_REMOVE_LETTER
+        MENUITEM "Bereitstellungs&pfad aendern...", IDM_ACTION_CHANGE_MOUNT_PATH
+        MENUITEM "Bereitstellungspf&ad entfernen", IDM_ACTION_REMOVE_MOUNT_PATH
+        MENUITEM SEPARATOR
+        MENUITEM "&Online", IDM_ACTION_ONLINE
+        MENUITEM "&Offline", IDM_ACTION_OFFLINE
+        MENUITEM "Schreibschutz &setzen", IDM_ACTION_SET_READ_ONLY
+        MENUITEM "Schreibschutz &loeschen", IDM_ACTION_CLEAR_READ_ONLY
+        MENUITEM "Partition als &aktiv markieren", IDM_ACTION_MARK_ACTIVE
+        MENUITEM "Partition als &inaktiv markieren", IDM_ACTION_MARK_INACTIVE
+        MENUITEM SEPARATOR
+        MENUITEM "&Eigenschaften", IDM_ACTION_PROPERTIES
+    END
+    POPUP "&Ansicht"
+    BEGIN
+        MENUITEM "&Oben", IDM_VIEW_TOP
+        MENUITEM "&Unten", IDM_VIEW_BOTTOM
+        MENUITEM "&Datentraegerliste", IDM_VIEW_DISK_LIST
+    END
+    POPUP "&Hilfe"
+    BEGIN
+        MENUITEM "Ueber die &Datentraegerverwaltung", IDM_HELP_ABOUT
+    END
+END
+
+IDA_DISKMGMT ACCELERATORS
+BEGIN
+    VK_F5, IDM_ACTION_REFRESH, VIRTKEY
+    VK_DELETE, IDM_ACTION_DELETE_VOLUME, VIRTKEY
+    VK_RETURN, IDM_ACTION_PROPERTIES, VIRTKEY, ALT
+    "F", IDM_ACTION_FORMAT, VIRTKEY, ALT
+END
+
+IDD_ASSIGN_LETTER DIALOGEX 0, 0, 190, 68
+STYLE DS_MODALFRAME | DS_SHELLFONT | WS_POPUP | WS_CAPTION | WS_SYSMENU
+CAPTION "Laufwerksbuchstaben zuweisen"
+FONT 8, "MS Shell Dlg"
+BEGIN
+    LTEXT "Waehlen Sie den Laufwerksbuchstaben aus, der dem ausgewaehlten Volume zugewiesen werden soll:", -1, 8, 10, 174, 18
+    COMBOBOX IDC_ASSIGN_LETTER_COMBO, 8, 31, 58, 100, CBS_DROPDOWNLIST | WS_VSCROLL | WS_TABSTOP
+    DEFPUSHBUTTON "OK", IDOK, 78, 47, 50, 14
+    PUSHBUTTON "Abbrechen", IDCANCEL, 132, 47, 50, 14
+END
+
+IDD_CREATE_PARTITION DIALOGEX 0, 0, 224, 184
+STYLE DS_MODALFRAME | DS_SHELLFONT | WS_POPUP | WS_CAPTION | WS_SYSMENU
+CAPTION "Volume erstellen"
+FONT 8, "MS Shell Dlg"
+BEGIN
+    LTEXT "Geben Sie Groesse und Anfangseinstellungen fuer den ausgewaehlten nicht zugeordneten Bereich ein:", IDC_CREATE_PARTITION_PROMPT, 8, 10, 206, 18
+    LTEXT "Maximale Groesse:", -1, 8, 33, 70, 8
+    LTEXT "", IDC_CREATE_PARTITION_MAX, 82, 33, 66, 8
+    LTEXT "Partitionsgroesse (MB):", IDC_CREATE_PARTITION_SIZE_LABEL, 8, 49, 74, 8
+    EDITTEXT IDC_CREATE_PARTITION_SIZE, 86, 47, 52, 12, ES_AUTOHSCROLL | ES_NUMBER | WS_TABSTOP
+    LTEXT "Partitionstyp:", -1, 8, 65, 74, 8
+    COMBOBOX IDC_CREATE_PARTITION_TYPE, 86, 62, 104, 72, CBS_DROPDOWNLIST | WS_VSCROLL | WS_TABSTOP
+    CONTROL "Diesen Laufwerksbuchstaben zuweisen:", IDC_CREATE_PARTITION_ASSIGN, "Button", BS_AUTOCHECKBOX | WS_TABSTOP, 8, 85, 132, 10
+    COMBOBOX IDC_CREATE_PARTITION_LETTER, 146, 82, 44, 72, CBS_DROPDOWNLIST | WS_VSCROLL | WS_TABSTOP
+    CONTROL "Dieses Volume mit diesen Einstellungen formatieren:", IDC_CREATE_PARTITION_FORMAT, "Button", BS_AUTOCHECKBOX | WS_TABSTOP, 8, 105, 176, 10
+    LTEXT "Dateisystem:", -1, 20, 122, 52, 8
+    COMBOBOX IDC_CREATE_PARTITION_FS, 86, 119, 88, 72, CBS_DROPDOWNLIST | WS_VSCROLL | WS_TABSTOP
+    LTEXT "Volumebezeichnung:", -1, 20, 140, 60, 8
+    EDITTEXT IDC_CREATE_PARTITION_LABEL, 86, 137, 104, 14, ES_AUTOHSCROLL | WS_TABSTOP
+    CONTROL "Schnellformatierung durchfuehren", IDC_CREATE_PARTITION_QUICK, "Button", BS_AUTOCHECKBOX | WS_TABSTOP, 20, 158, 130, 10
+    DEFPUSHBUTTON "OK", IDOK, 116, 164, 42, 14
+    PUSHBUTTON "Abbrechen", IDCANCEL, 164, 164, 42, 14
+END
+
+IDD_FORMAT_VOLUME DIALOGEX 0, 0, 214, 112
+STYLE DS_MODALFRAME | DS_SHELLFONT | WS_POPUP | WS_CAPTION | WS_SYSMENU
+CAPTION "Formatieren"
+FONT 8, "MS Shell Dlg"
+BEGIN
+    LTEXT "Dateisystem:", -1, 8, 11, 52, 8
+    COMBOBOX IDC_FORMAT_FILESYSTEM, 72, 8, 98, 80, CBS_DROPDOWNLIST | WS_VSCROLL | WS_TABSTOP
+    LTEXT "Volumebezeichnung:", -1, 8, 31, 60, 8
+    EDITTEXT IDC_FORMAT_LABEL, 72, 28, 126, 14, ES_AUTOHSCROLL | WS_TABSTOP
+    CONTROL "Schnellformatierung durchfuehren", IDC_FORMAT_QUICK, "Button", BS_AUTOCHECKBOX | WS_TABSTOP, 8, 53, 130, 10
+    DEFPUSHBUTTON "OK", IDOK, 110, 90, 42, 14
+    PUSHBUTTON "Abbrechen", IDCANCEL, 156, 90, 42, 14
+END
+
+IDD_SELECT_MOUNT_PATH DIALOGEX 0, 0, 236, 116
+STYLE DS_MODALFRAME | DS_SHELLFONT | WS_POPUP | WS_CAPTION | WS_SYSMENU
+CAPTION "Bereitstellungspfad auswaehlen"
+FONT 8, "MS Shell Dlg"
+BEGIN
+    LTEXT "Waehlen Sie den vorhandenen Ordner-Bereitstellungspfad aus, der ersetzt oder entfernt werden soll:", IDC_SELECT_MOUNT_PATH_PROMPT, 8, 10, 220, 16
+    LISTBOX IDC_SELECT_MOUNT_PATH_LIST, 8, 28, 220, 54, LBS_NOTIFY | WS_VSCROLL | WS_TABSTOP
+    CONTROL "Den ausgewaehlten vorhandenen Bereitstellungspfad nach dem Zuweisen des neuen Pfads ersetzen", IDC_SELECT_MOUNT_PATH_REPLACE, "Button", BS_AUTOCHECKBOX | WS_TABSTOP, 8, 88, 210, 10
+    DEFPUSHBUTTON "OK", IDOK, 140, 98, 40, 14
+    PUSHBUTTON "Abbrechen", IDCANCEL, 186, 98, 40, 14
+END
+
+IDD_EXTEND_VOLUME DIALOGEX 0, 0, 214, 102
+STYLE DS_MODALFRAME | DS_SHELLFONT | WS_POPUP | WS_CAPTION | WS_SYSMENU
+CAPTION "Volume erweitern"
+FONT 8, "MS Shell Dlg"
+BEGIN
+    LTEXT "Geben Sie an, wie viel rechts angrenzender freier Speicher dem ausgewaehlten RAW-Volume hinzugefuegt werden soll:", -1, 8, 10, 198, 18
+    LTEXT "Aktuelle Groesse:", -1, 8, 34, 64, 8
+    LTEXT "", IDC_RESIZE_CURRENT, 98, 34, 80, 8
+    LTEXT "Maximale Zusatzgroesse:", -1, 8, 50, 86, 8
+    LTEXT "", IDC_RESIZE_LIMIT, 98, 50, 80, 8
+    LTEXT "Zusatzgroesse (MB):", -1, 8, 67, 86, 8
+    EDITTEXT IDC_RESIZE_AMOUNT, 98, 64, 54, 12, ES_AUTOHSCROLL | ES_NUMBER | WS_TABSTOP
+    DEFPUSHBUTTON "OK", IDOK, 120, 84, 40, 14
+    PUSHBUTTON "Abbrechen", IDCANCEL, 166, 84, 40, 14
+END
+
+IDD_SHRINK_VOLUME DIALOGEX 0, 0, 214, 102
+STYLE DS_MODALFRAME | DS_SHELLFONT | WS_POPUP | WS_CAPTION | WS_SYSMENU
+CAPTION "Volume verkleinern"
+FONT 8, "MS Shell Dlg"
+BEGIN
+    LTEXT "Geben Sie an, wie viel Speicher vom ausgewaehlten RAW-Volume entfernt werden soll:", -1, 8, 10, 198, 18
+    LTEXT "Aktuelle Groesse:", -1, 8, 34, 64, 8
+    LTEXT "", IDC_RESIZE_CURRENT, 98, 34, 80, 8
+    LTEXT "Maximale Verkleinerung:", -1, 8, 50, 86, 8
+    LTEXT "", IDC_RESIZE_LIMIT, 98, 50, 80, 8
+    LTEXT "Verkleinerung (MB):", -1, 8, 67, 86, 8
+    EDITTEXT IDC_RESIZE_AMOUNT, 98, 64, 54, 12, ES_AUTOHSCROLL | ES_NUMBER | WS_TABSTOP
+    DEFPUSHBUTTON "OK", IDOK, 120, 84, 40, 14
+    PUSHBUTTON "Abbrechen", IDCANCEL, 166, 84, 40, 14
+END
+
+STRINGTABLE
+BEGIN
+    IDS_COPYRIGHT "Copyright (C) 2026 ReactOS"
+    IDS_APPNAME "Datentraegerverwaltung"
+    IDS_STATUS_READY "Bereit"
+    IDS_STATUS_RESCANNING "Datentraeger werden erneut gesucht..."
+    IDS_STATUS_REFRESHING "Datentraegerdaten werden aktualisiert..."
+    IDS_STATUS_INITIALIZING_DISK "Datentraeger wird initialisiert..."
+    IDS_STATUS_CREATING_PARTITION "Partition wird erstellt..."
+    IDS_STATUS_DELETING_VOLUME "Volume wird geloescht..."
+    IDS_STATUS_PROPERTIES "Eigenschaften werden geoeffnet..."
+    IDS_STATUS_ASSIGNING_LETTER "Laufwerksbuchstabe wird zugewiesen..."
+    IDS_STATUS_REMOVING_LETTER "Laufwerksbuchstabe wird entfernt..."
+    IDS_STATUS_ONLINING_DISK "Datentraeger wird online geschaltet..."
+    IDS_STATUS_OFFLINING_DISK "Datentraeger wird offline geschaltet..."
+    IDS_STATUS_SETTING_READ_ONLY "Schreibschutz wird gesetzt..."
+    IDS_STATUS_CLEARING_READ_ONLY "Schreibschutz wird geloescht..."
+    IDS_STATUS_MARKING_ACTIVE "Partition wird als aktiv markiert..."
+    IDS_STATUS_MARKING_INACTIVE "Partition wird als inaktiv markiert..."
+    IDS_STATUS_FORMATTING_VOLUME "Volume wird formatiert..."
+    IDS_STATUS_CHANGING_MOUNT_PATH "Bereitstellungspfad wird geaendert..."
+    IDS_STATUS_REMOVING_MOUNT_PATH "Bereitstellungspfad wird entfernt..."
+    IDS_STATUS_CONVERTING_GPT "Datentraeger wird in GPT konvertiert..."
+    IDS_STATUS_CONVERTING_MBR "Datentraeger wird in MBR konvertiert..."
+    IDS_STATUS_EXTENDING_VOLUME "Volume wird erweitert..."
+    IDS_STATUS_SHRINKING_VOLUME "Volume wird verkleinert..."
+    IDS_CREATE_PROMPT_VOLUME "Geben Sie Groesse und Anfangseinstellungen fuer den ausgewaehlten nicht zugeordneten Bereich ein:"
+    IDS_CREATE_PROMPT_PARTITION "Geben Sie Groesse und Anfangseinstellungen fuer den ausgewaehlten nicht zugeordneten Bereich ein:"
+    IDS_CREATE_PROMPT_LOGICAL "Geben Sie Groesse und Anfangseinstellungen fuer das neue logische Laufwerk im ausgewaehlten freien Bereich ein:"
+    IDS_CREATE_SIZE_LABEL_VOLUME "Volumegroesse (MB):"
+    IDS_CREATE_SIZE_LABEL_PARTITION "Partitionsgroesse (MB):"
+    IDS_CREATE_SIZE_LABEL_LOGICAL "Groesse des logischen Laufwerks (MB):"
+
+    IDS_HINT_READY "Bereit"
+    IDS_HINT_FILE_EXIT "Datentraegerverwaltung beenden"
+    IDS_HINT_ACTION_RESCAN "Speichergeraete erneut suchen"
+    IDS_HINT_ACTION_REFRESH "Aktuelle Ansicht aktualisieren"
+    IDS_HINT_ACTION_INITIALIZE_DISK "Ausgewaehlten Datentraeger initialisieren"
+    IDS_HINT_ACTION_CREATE_PARTITION "Neue Partition oder neues Volume erstellen"
+    IDS_HINT_ACTION_DELETE_VOLUME "Ausgewaehltes Volume loeschen"
+    IDS_HINT_ACTION_PROPERTIES "Eigenschaften fuer die Auswahl anzeigen"
+    IDS_HINT_ACTION_FORMAT "Ausgewaehltes Volume formatieren"
+    IDS_HINT_ACTION_ASSIGN_LETTER "Dem ausgewaehlten Volume einen Laufwerksbuchstaben zuweisen"
+    IDS_HINT_ACTION_REMOVE_LETTER "Den Laufwerksbuchstaben vom ausgewaehlten Volume entfernen"
+    IDS_HINT_ACTION_CONVERT_GPT "Den ausgewaehlten leeren Datentraeger in GPT konvertieren"
+    IDS_HINT_ACTION_CONVERT_MBR "Den ausgewaehlten leeren Datentraeger in MBR konvertieren"
+    IDS_HINT_ACTION_ONLINE "Den ausgewaehlten Datentraeger online schalten"
+    IDS_HINT_ACTION_OFFLINE "Den ausgewaehlten Datentraeger offline schalten"
+    IDS_HINT_ACTION_SET_READ_ONLY "Schreibschutz fuer den ausgewaehlten Datentraeger setzen"
+    IDS_HINT_ACTION_CLEAR_READ_ONLY "Schreibschutz fuer den ausgewaehlten Datentraeger loeschen"
+    IDS_HINT_ACTION_MARK_ACTIVE "Die ausgewaehlte MBR-Primärpartition als aktiv markieren"
+    IDS_HINT_ACTION_MARK_INACTIVE "Die Aktiv-Markierung der ausgewaehlten MBR-Partition entfernen"
+    IDS_HINT_VIEW_TOP "Oberen Bereich anzeigen"
+    IDS_HINT_VIEW_BOTTOM "Unteren Bereich anzeigen"
+    IDS_HINT_VIEW_DISK_LIST "Datentraegerliste anzeigen"
+    IDS_HINT_HELP_ABOUT "Versionsinformationen anzeigen"
+    IDS_HINT_ACTION_CHANGE_MOUNT_PATH "Einen Ordner-Bereitstellungspfad fuer das ausgewaehlte Volume zuweisen oder ersetzen"
+    IDS_HINT_ACTION_REMOVE_MOUNT_PATH "Den Ordner-Bereitstellungspfad vom ausgewaehlten Volume entfernen"
+    IDS_HINT_ACTION_EXTEND_VOLUME "Das ausgewaehlte RAW-Volume in angrenzenden freien Speicher erweitern"
+    IDS_HINT_ACTION_SHRINK_VOLUME "Das ausgewaehlte RAW-Volume verkleinern und rechts freien Speicher erstellen"
+
+    IDS_COL_VOLUME "Volume"
+    IDS_COL_LAYOUT "Layout"
+    IDS_COL_TYPE "Typ"
+    IDS_COL_FILESYSTEM "Dateisystem"
+    IDS_COL_STATUS "Status"
+    IDS_COL_CAPACITY "Kapazitaet"
+    IDS_COL_FREE "Freier Speicher"
+    IDS_COL_FREE_PCT "% Frei"
+    IDS_TOOLBAR_BACK "Zurueck"
+    IDS_TOOLBAR_FORWARD "Weiter"
+    IDS_TOOLBAR_RESCAN "Suchen"
+    IDS_TOOLBAR_REFRESH "F5"
+    IDS_TOOLBAR_CREATE "Erstellen"
+    IDS_TOOLBAR_DELETE "Loeschen"
+    IDS_TOOLBAR_PROPERTIES "Eigensch."
+    IDS_TOOLBAR_HELP "?"
+    IDS_PARTITION_TYPE_PRIMARY "Primaer"
+    IDS_PARTITION_TYPE_BASIC "Basisdaten"
+    IDS_PARTITION_TYPE_EFI "EFI-System"
+    IDS_PARTITION_TYPE_MSR "Microsoft-reserviert"
+    IDS_PARTITION_TYPE_RECOVERY "Wiederherstellung"
+    IDS_PARTITION_TYPE_EXTENDED "Erweitert"
+    IDS_PARTITION_TYPE_LOGICAL "Logisch"
+END

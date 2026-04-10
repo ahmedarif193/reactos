@@ -1,0 +1,144 @@
+ReactOS Disk Management Task Tracker
+====================================
+
+Legend:
+[ ] Open
+[x] Done
+
+Phase 0 - Skeleton Baseline
+---------------------------
+[x] Create a standalone mscutils Disk Management application.
+[x] Add build integration and system32 deployment.
+[x] Add app resources, menu shell, accelerators, and version metadata.
+[x] Add a dedicated disk management icon and Administrative Tools shortcut.
+[x] Implement a read-only storage snapshot layer for disks, volumes, and regions.
+[x] Populate the top volume list from live enumeration.
+[x] Render a graphical bottom disk map with partitions and unallocated regions.
+[x] Verify the target builds with `ninja -C output-MinGW-amd64-Debug diskmgmt`.
+
+Phase 1 - Read-Only Polish
+--------------------------
+[x] Preserve selection across Refresh / Rescan.
+[x] Synchronize volume-list selection with bottom disk-map highlighting.
+[x] Improve list sorting for numeric columns and stateful column ordering.
+[x] Add keyboard navigation and double-click behavior for read-only inspection.
+[x] Add context menus for disks, volumes, partitions, and unallocated regions.
+[x] Replace placeholder View commands with real pane/view behavior.
+[x] Add pane splitters for left/right and top/bottom resizing.
+[x] Improve disk-map layout, clipping, minimum widths, and scrolling.
+[x] Improve disk and region labeling for GPT/MBR partition types.
+[x] Improve health/status strings beyond generic "Healthy" and "Unknown".
+[x] Distinguish fixed, removable, optical, RAW, and no-media devices in the UI.
+[x] Preserve scroll/focus state when the snapshot is refreshed.
+
+Phase 1A - Windows UI Parity Recovery
+-------------------------------------
+[x] Remove the fake left MMC navigation tree from the standalone window.
+[x] Add a toolbar layout that mirrors standalone Windows Disk Management rather than a generic shell.
+[x] Match the top/bottom pane proportions, borders, and spacing to the Windows reference.
+[x] Add the bottom legend strip for partition/unallocated types.
+[x] Rework the disk label panel to match Windows ordering and typography.
+[x] Rework the graphical region rendering to match Windows colors, hatching, and selection treatment.
+[x] Tighten top-list wording, status strings, and column widths against the Windows reference.
+[x] Add a readable toolbar fallback when standard toolbar images are unavailable on ReactOS/classic builds.
+[x] Replace the shared common-control toolbar art dependency with app-owned deterministic toolbar bitmaps.
+[x] Add deterministic volume/partition row icons to the top list.
+[x] Improve the empty/no-disk bottom pane framing so the shell still reads like Windows Disk Management.
+[x] Audit the visible UI against the screenshot before resuming backend-heavy work.
+[x] Record the current parity findings and next visual-tightening steps in `UI_AUDIT.txt`.
+
+Phase 2 - Inspection and Properties
+-----------------------------------
+[x] Implement volume Properties dialog.
+[x] Implement disk Properties dialog.
+[x] Show disk signature / GPT disk GUID.
+[x] Show filesystem, mount points, label, serial, free space, and geometry details.
+[x] Show partition attributes for EFI/MSR/recovery/system/boot/active/hidden.
+[x] Show volume extents for multi-extent volumes.
+[x] Show mount-manager unique ID details for read-only inspection.
+[x] Show how many disks a multi-extent volume spans in Properties.
+[x] Add Help / About text that reflects actual support status.
+
+Phase 3 - Basic Disk Operations
+-------------------------------
+[x] Implement Initialize Disk (MBR/GPT choice).
+[x] Implement Create Partition / Create Volume.
+[x] Implement first-pass Create Partition for whole-region GPT basic data and simple primary MBR partitions.
+[x] Extend the Create Volume dialog with richer GPT partition-type choices.
+[x] Extend the MBR Create Volume flow with primary vs extended type selection.
+[x] Implement first-pass creation of the first logical drive inside free space within an extended MBR partition.
+[x] Support creating additional logical drives by rebuilding the MBR logical partition table instead of stopping after the first one.
+[x] Infer MBR primary/logical partition types from the requested filesystem and partition location instead of hardcoding `PARTITION_IFS`.
+[x] Replace generic create-flow titles and prompts with context-specific `Create Partition`, `Create Logical Drive`, and `Create Volume` wording plus a confirmation summary.
+[x] Make the create dialog instruction text and size label follow the selected partition kind.
+[x] Prefill more Windows-like default sizes for special GPT partition kinds in the create dialog.
+[x] Allow `Create Logical Drive` from top-level free MBR space by creating the extended partition container and first logical drive together.
+[ ] Extend Create Volume beyond simple primary/basic-data creation to cover logical/extended MBR, richer partition-type choices, and more Windows-like creation flows.
+[x] Implement Delete Partition / Delete Volume.
+[x] Implement first-pass Delete Volume / Delete Partition for GPT and non-logical MBR partitions.
+[x] Implement Format workflow (filesystem, label, quick/full).
+[x] Implement first-pass Format workflow via the shell format dialog for writable drive-letter volumes.
+[x] Implement Assign Drive Letter / Remove Drive Letter.
+[x] Implement first-pass Assign Drive Letter using the next available drive letter.
+[x] Prompt for a selectable free drive letter instead of silently picking the next one.
+[x] Implement first-pass Remove Drive Letter for non-system, non-boot volumes.
+[x] Implement Change Mount Path / Remove Mount Path.
+[x] Implement first-pass Change Mount Path / Remove Mount Path for folder mount points.
+[x] Extend mount-path management beyond first-pass folder mount point handling to cover more Windows-like entry/replace/remove flows and multiple mount targets.
+[x] Enumerate multiple folder mount paths per volume and allow targeted replace/remove selection.
+[x] Implement Refresh / Rescan using real backend action flow and progress UI.
+[x] Add operation confirmation and detailed error reporting.
+
+Phase 4 - Advanced Basic-Disk Operations
+----------------------------------------
+[ ] Implement Extend Volume.
+[ ] Implement Shrink Volume.
+[x] Expose Extend / Shrink Volume in the menu and context menus with backend-aligned availability.
+[x] Implement first-pass Extend Volume for single-extent RAW volumes with right-adjacent free space.
+[x] Implement first-pass Shrink Volume for single-extent RAW volumes by reducing the partition length and creating free space to the right.
+[x] Implement Mark Partition Active / Inactive where applicable.
+[x] Implement Online / Offline disk.
+[x] Implement Set / Clear disk read-only.
+[x] Implement Convert RAW -> MBR/GPT.
+[x] Implement Convert MBR <-> GPT where supported.
+[x] Allow RAW disks to use the explicit Convert to GPT / Convert to MBR verbs as initialize-to-style actions.
+[x] Support safe empty basic-disk conversion between MBR and GPT.
+[x] Add safeguards for system/boot volume operations.
+[x] Block online/offline and read-only changes on system/boot disks.
+[x] Align menu and context-menu availability with backend protection checks for delete, remove-letter, and related verbs.
+
+Phase 5 - Architecture and Parity Work
+--------------------------------------
+[x] Replace heuristic disk scan with robust device enumeration.
+[x] Reuse or factor shared storage logic with diskpart where appropriate.
+[ ] Handle multi-extent and dynamic-disk semantics explicitly.
+[x] Stop inferring dynamic volume status from extent count alone; track multi-extent explicitly.
+[x] Bind every matching extent of a multi-extent volume to its corresponding region instead of only the first one.
+[x] Surface multi-extent / dynamic membership more explicitly in the top list and bottom disk map status text.
+[x] Classify MBR logical partitions explicitly and stop exposing synthetic EBR link entries as user-visible regions.
+[x] Synthesize free space inside extended MBR containers and keep the flat renderer from drawing the hidden container entry directly.
+[x] Build unallocated regions from usable MBR/GPT bounds instead of raw byte gaps at disk edges.
+[x] Improve volume-to-region matching with storage-device-number fallback beyond exact extent equality.
+[x] Stop labeling every multi-extent volume as `Spanned`; use neutral wording until its true layout is known.
+[x] Disable mutating single-region-only verbs for multi-extent volumes until dynamic-disk support exists.
+[x] Block drive-letter, format, and mount-path mutations on dynamic / LDM volumes until full support exists.
+[x] Detect and label dynamic / LDM disks and volumes explicitly.
+[x] Explain multi-extent and dynamic / LDM action restrictions in status-bar hints, not only by disabling commands.
+[x] Decide and document unsupported LDM / dynamic-disk operations.
+[x] Add localization strings beyond en-US.
+[x] Add a de-DE resource file and wire it into the diskmgmt resource build.
+[x] Add tests for snapshot enumeration and volume-to-region matching.
+[x] Extract pure volume-to-region matching into a shared helper and add apitest coverage for exact-match, later-extent, and no-match cases.
+[x] Add manual validation coverage for MBR, GPT, RAW, removable, CD-ROM, and no-letter volumes.
+[x] Extract the disk-view child window registration, scrolling, and painting into a dedicated module.
+[x] Start the main-window split by extracting action/menu-state command plumbing into a dedicated module.
+[x] Continue the main-window split by extracting toolbar, status-bar, paint, About, and hint chrome helpers into dedicated modules.
+[x] Continue the main-window split by extracting pane layout and splitter handling into a dedicated module.
+[x] Finish the main-window split by extracting the core window procedure and event routing into a dedicated module.
+[x] Split the large main window implementation into list, disk-view, action, and dialog modules.
+[x] Decide whether to keep a standalone EXE model or grow toward MMC / compmgmt integration later.
+[x] Record the standalone-vs-MMC decision in `INTEGRATION.txt`.
+
+Current Phase
+-------------
+Phase 3 backend work and Phase 5 storage semantics work are active.

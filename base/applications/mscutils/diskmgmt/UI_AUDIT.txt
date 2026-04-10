@@ -1,0 +1,46 @@
+ReactOS Disk Management UI Audit
+================================
+
+Reference
+---------
+- Windows Disk Management standalone screenshot from the development thread.
+- Current ReactOS `diskmgmt` shell structure and the latest session-side runtime captures.
+
+Audit Date
+----------
+- 2026-04-09
+
+Areas That Match Reasonably Well
+--------------------------------
+- Standalone window layout without the fake left MMC tree.
+- Menu bar structure: `File`, `Action`, `View`, `Help`.
+- Top and bottom two-pane model.
+- Toolbar presence and deterministic toolbar bitmaps.
+- Bottom legend strip for `Unallocated` and `Primary partition`.
+- Disk label ordering in the lower pane: disk name, type, size, online state.
+- Basic partition bar rendering, selection hatching, and framed lower rows.
+- Top-list row icons for visible volumes vs hidden partitions.
+
+Areas Still Visibly Different From Windows
+------------------------------------------
+- Toolbar button set and spacing are close but not pixel-identical to Windows MMC.
+- Top-list typography, row height, and exact column proportions still differ.
+- Lower-pane partition caption wrapping and clipping are still approximate.
+- Disk-map proportional sizing is functionally correct but still not a pixel match.
+- Classic theme details such as divider thickness and some border tones still differ.
+- Empty-state messaging and spacing are closer now, but still not a perfect Windows clone.
+
+Behavior Differences Still Relevant To UI Parity
+------------------------------------------------
+- The shell is a standalone EXE, not an MMC snap-in hosted under Computer Management.
+- Some actions that exist in Windows UI remain unsupported or intentionally disabled.
+- Dynamic/LDM storage is labeled and guarded, but not functionally equivalent to Windows.
+- Advanced create/resize flows do not yet mirror Windows dialogs and wizard behavior.
+
+Recommended Next UI Parity Order
+--------------------------------
+1. Do a live side-by-side screenshot comparison after the next runtime test pass.
+2. Tighten top-list metrics: row height, column widths, and text truncation.
+3. Tighten lower-pane metrics: left disk card width, partition caption padding, and bar height.
+4. Review toolbar button order, separators, and fallback text/icon behavior against Windows.
+5. Re-check classic-theme rendering on actual ReactOS and not only on host-side captures.

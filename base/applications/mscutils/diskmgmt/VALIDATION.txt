@@ -1,0 +1,205 @@
+ReactOS Disk Management Validation Matrix
+=========================================
+
+Legend:
+[ ] Not run
+[x] Pass
+[!] Fail
+
+Environment
+-----------
+[ ] Clean boot on target build
+[ ] Admin privileges available
+[ ] At least one GPT disk present
+[ ] At least one MBR disk present
+[ ] At least one removable device present
+[ ] At least one optical drive present
+[ ] At least one RAW disk or RAW volume present
+[ ] At least one volume without a drive letter present
+
+Phase 1 - Read Only
+-------------------
+[ ] Launch `diskmgmt.exe`
+[ ] Main window opens without crash
+[ ] Title, menu bar, toolbar, and icon load correctly
+[ ] Toolbar remains usable when standard common-control images are unavailable
+[ ] Toolbar uses app-owned diskmgmt image resources instead of relying on shared commctrl art
+[ ] Top volume list shows deterministic row icons for mounted volumes and hidden partitions
+[ ] Standalone full-width layout renders without a fake left navigation pane
+[ ] Top volume list renders
+[ ] Bottom disk map renders
+[ ] Refresh updates disk and volume data
+[ ] Rescan updates disk and volume data
+[ ] Selection persists across Refresh
+[ ] Selection persists across Rescan
+[ ] Top list selection highlights matching disk map region
+[ ] Disk map selection changes when list selection changes
+[ ] F5 triggers Refresh
+[ ] Delete key does not crash on read-only selections
+[ ] Volume list sorting works on text columns
+[ ] Volume list sorting works on numeric columns
+[ ] Double-click on a volume opens a properties action or placeholder
+[ ] Keyboard navigation moves focus between panes without crashing
+
+Disk Cases
+----------
+[ ] Boot disk is identified
+[ ] System disk is identified
+[ ] Boot/system labels are shown in the UI
+[ ] GPT disk is displayed
+[ ] GPT disk shows correct partition-style labeling
+[ ] GPT reserved metadata gaps do not appear as bogus unallocated space
+[ ] MBR disk is displayed
+[ ] MBR disk shows correct partition-style labeling
+[ ] MBR reserved leading space does not appear as bogus unallocated space
+[ ] Free space inside an extended MBR partition is shown as logical free space, not top-level unallocated space
+[ ] RAW disk is displayed
+[ ] RAW disk shows sensible placeholder text
+[ ] Removable disk is displayed
+[ ] Removable disk shows correct device type text
+[ ] Optical media is displayed
+[ ] Optical media shows no-media or CD-ROM appropriate text
+[ ] Volume without drive letter is listed
+[ ] Volume without drive letter remains selectable
+[ ] Volume without drive letter shows mount-point or raw volume name
+[ ] Removable media does not get misclassified as a fixed disk
+[ ] RAW disk and RAW volume text are distinct and understandable
+[ ] Basic volumes still bind to the correct partition when extent equality alone is insufficient
+
+Partition and Volume Labels
+---------------------------
+[ ] EFI System partition label is correct
+[ ] Microsoft Reserved partition label is correct
+[ ] Basic data partition label is correct
+[ ] Recovery partition label is correct
+[ ] Extended partition / container label is correct
+[ ] Logical partition label is correct
+[ ] Unallocated space is labeled clearly
+[ ] Volume filesystem label is shown
+[ ] Volume free-space values are shown
+[ ] Volume percent-free values are shown
+[ ] Disk bus type text is reasonable
+[ ] Disk status wording is not blank or generic where a specific status exists
+[ ] GPT label wording matches expected management terminology
+[ ] MBR container and logical labels are distinct
+
+Interaction Checks
+-------------------
+[ ] Double-click on a volume opens a properties action or placeholder
+[ ] Right-click context menu appears for volume items
+[ ] Right-click context menu appears for unallocated space
+[ ] Right-click context menu appears for disk background
+[ ] View commands do not crash
+[ ] About dialog opens
+[ ] Menu hover and command navigation do not disturb the standalone layout
+[ ] Context menu verb availability matches current selection
+[ ] Menu check state matches current view/pane focus
+
+Phase 1A - Windows UI Parity
+----------------------------
+[ ] Top/bottom pane proportions match the Windows reference closely
+[ ] Top and bottom panes use Windows-like inset borders and spacing
+[ ] Standalone window does not show a status bar
+[ ] Disk label card ordering matches `Disk N`, type, size, `Online`
+[ ] Disk map background, row frames, and legend resemble the Windows reference
+[ ] Empty/no-disk lower pane still preserves Windows-like section framing
+[ ] Selected region hatching and partition colors resemble the Windows reference
+[ ] Top list column widths and status wording resemble the Windows reference
+
+Phase 2 - Near-Term Features
+----------------------------
+[ ] Disk Properties dialog shows disk number and geometry
+[ ] Disk Properties dialog shows MBR signature or GPT disk ID
+[ ] Volume Properties dialog shows filesystem and mount points
+[ ] Properties dialog shows partition count / extent count
+[ ] Properties dialog shows boot/system flags
+[ ] Context menu commands are routed through the action helper layer
+[ ] Menu enabled state matches current selection
+[ ] Protected delete/remove-letter and similar verbs stay disabled for boot/system and unsupported selections
+[ ] Pane splitting / resizing works
+[ ] Sorting works on numeric list columns
+[ ] Localized strings load for en-US
+[ ] Localized strings load for de-DE
+[ ] Labels module reports partition style, GPT special types, and health/status wording correctly
+[ ] Properties dialog strings include disk, volume, and extent details
+[ ] Properties show clear storage-model wording for basic, basic multi-extent, and dynamic / LDM-backed volumes
+[ ] Volume Properties shows mount-manager unique ID details when the storage stack exposes them
+[ ] Volume Properties shows how many disks a multi-extent volume spans
+[ ] Context menus are wired to the centralized action layer
+
+Phase 3 - Basic Disk Operations
+-------------------------------
+[ ] Initialize Disk prompt offers GPT vs MBR
+[ ] Initializing a RAW disk updates the UI after refresh
+[ ] Initialize Disk reports backend errors clearly
+[ ] Create Partition prompts before consuming the selected unallocated region
+[ ] Create flow titles and confirmation summaries follow the selected partition kind as `Create Partition`, `Create Logical Drive`, or `Create Volume`
+[ ] Create dialog instruction text and size label update when the selected partition kind changes
+[ ] Special GPT partition kinds prefill more Windows-like default sizes in the create dialog
+[ ] Create Volume dialog offers size, drive letter, filesystem, label, and quick-format controls
+[ ] Create Volume dialog offers GPT partition-type choices for basic data, EFI system, Microsoft reserved, and recovery partitions
+[ ] Create Partition works for GPT basic data on an initialized GPT disk
+[ ] Create Partition works for simple primary MBR creation
+[ ] Create Partition can create an extended MBR partition from top-level free space
+[ ] Create Partition can create the first logical drive inside free space within an extended MBR partition
+[ ] Create Partition can create an additional logical drive in later free space within an existing extended MBR partition
+[ ] Create Logical Drive can be selected from top-level free MBR space and creates the extended container plus first logical drive together
+[ ] MBR create chooses FAT/NTFS/Linux partition types from the requested filesystem instead of always writing `0x07`
+[ ] Create Volume can assign the selected drive letter during creation
+[ ] Create Volume can format the new volume with the requested initial settings
+[ ] Delete Volume prompts before rewriting the selected partition entry
+[ ] Delete Volume works for GPT partitions that are not boot/system
+[ ] Delete Volume works for non-logical MBR primary partitions
+[ ] Unsupported logical / extended MBR delete paths fail clearly
+[ ] Format dialog offers filesystem, label, and quick/full choices for writable drive-letter volumes
+[ ] Format uses the native FMIFS formatting path instead of the shell shortcut
+[ ] Format blocks boot, system, offline, read-only, and no-letter volumes clearly
+[ ] Assign Drive Letter offers selectable free letters on a no-letter volume
+[ ] Assign Drive Letter updates the UI after refresh
+[ ] Remove Drive Letter works for non-system, non-boot volumes
+[ ] Remove Drive Letter blocks system and boot volumes clearly
+[ ] Change Mount Path assigns an empty folder path and refreshes the UI
+[ ] Change Mount Path can add a new folder mount path without replacing an existing one
+[ ] Change Mount Path can replace a selected existing folder mount path
+[ ] Remove Mount Path removes an existing folder mount path and refreshes the UI
+[ ] Remove Mount Path can choose a specific folder mount path when multiple are present
+[ ] Change / Remove Mount Path blocks boot, system, offline, and read-only volumes clearly
+[ ] Multi-extent volumes keep mutating volume verbs disabled until dynamic-disk support exists
+[ ] Every extent of a multi-extent volume is labeled against its matching region in the bottom disk map
+[ ] Multi-extent and dynamic membership are called out explicitly in top-list and region status text
+[ ] Dynamic / LDM disks are labeled explicitly in the UI and properties
+[ ] Dynamic / LDM volumes show specific known partition roles such as `LDM Data` or `LDM Metadata` instead of only generic `Dynamic`
+[ ] Layout-changing verbs stay disabled on dynamic / LDM storage
+[ ] Drive-letter, format, and mount-path verbs stay hidden or disabled on dynamic / LDM volumes
+[ ] Disabled mutating commands show a status-bar hint that explains multi-extent or dynamic / LDM restrictions
+
+Phase 4 - Advanced Basic-Disk Operations
+----------------------------------------
+[ ] Online Disk brings an offline data disk back online and refreshes the UI
+[ ] Offline Disk blocks boot and system disks clearly
+[ ] Offline Disk takes a non-system data disk offline and refreshes the UI
+[ ] Set Read-only blocks boot and system disks clearly
+[ ] Set Read-only marks a non-system data disk read-only and refreshes the UI
+[ ] Clear Read-only clears the disk flag and refreshes the UI
+[ ] Mark Partition Active works for a non-boot, non-system MBR primary partition
+[ ] Mark Partition Inactive clears the active flag on a non-boot, non-system MBR primary partition
+[ ] Mark Partition Active / Inactive is hidden or disabled for GPT, logical, and extended partitions
+[ ] Convert to GPT is offered only for empty online writable basic MBR disks
+[ ] Convert to MBR is offered only for empty online writable basic GPT disks
+[ ] Convert to GPT is offered for online writable RAW disks and initializes them as GPT
+[ ] Convert to MBR is offered for online writable RAW disks and initializes them as MBR
+[ ] Empty-disk MBR -> GPT conversion refreshes the UI and reclassifies free space correctly
+[ ] Empty-disk GPT -> MBR conversion refreshes the UI and reclassifies free space correctly
+[ ] Extend Volume is offered only for single-extent RAW volumes with right-adjacent free space
+[ ] Extend Volume grows the partition and refreshes the UI for a supported RAW volume
+[ ] Shrink Volume is offered only for single-extent RAW volumes
+[ ] Shrink Volume reduces the RAW partition length and creates right-side free space after refresh
+[ ] Disk Properties reflects offline and read-only attributes
+[ ] Disk status text reflects online/offline/read-only state
+
+Notes
+-----
+[ ] Record device topology used for this test run
+[ ] Record any unexpected GPT or MBR classification
+[ ] Record any refresh/rescan regressions
+[ ] Record any selection/highlight mismatches
