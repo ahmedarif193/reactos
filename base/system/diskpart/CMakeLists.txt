@@ -1,6 +1,7 @@
 
 include_directories(${REACTOS_SOURCE_DIR}/sdk/lib/conutils)
 include_directories(${REACTOS_SOURCE_DIR}/sdk/include/reactos/libs/fmifs)
+include_directories(${REACTOS_SOURCE_DIR}/sdk/lib/storageutils)
 
 list(APPEND SOURCE
     active.c
@@ -46,6 +47,7 @@ list(APPEND SOURCE
     setid.c
     shrink.c
     uniqueid.c
+    ${REACTOS_SOURCE_DIR}/sdk/lib/storageutils/mountmgrutil.c
     diskpart.h)
 
 add_executable(diskpart ${SOURCE} diskpart.rc)
