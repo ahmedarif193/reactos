@@ -9,6 +9,7 @@
 #include "diskpart.h"
 
 #include <mountmgr.h>
+#include <mountmgrutil.h>
 
 #define NDEBUG
 #include <debug.h>
@@ -182,15 +183,6 @@ AssignDriveLetter(
     _In_ PWSTR DeviceName,
     _In_ WCHAR DriveLetter)
 {
-    WCHAR DosDeviceName[30];
-    ULONG DosDeviceNameLength, DeviceNameLength; 
-    ULONG InputBufferLength;
-    PMOUNTMGR_CREATE_POINT_INPUT InputBuffer;
-    HANDLE MountMgrHandle = NULL;
-    IO_STATUS_BLOCK Iosb;
-    NTSTATUS Status;
-    BOOL Ret = TRUE;
-
     DPRINT1("AssignDriveLetter(%S %c)\n", DeviceName, DriveLetter);
 
     DeviceNameLength = wcslen(DeviceName) * sizeof(WCHAR);
@@ -259,72 +251,8 @@ AssignNextDriveLetter(
     _In_ PWSTR DeviceName,
     _Out_ PWCHAR DriveLetter)
 {
-    MOUNTMGR_DRIVE_LETTER_INFORMATION LetterInfo;
-    PMOUNTMGR_DRIVE_LETTER_TARGET InputBuffer;
-    ULONG DeviceNameLength, InputBufferLength;
-    HANDLE MountMgrHandle = NULL;
-    IO_STATUS_BLOCK Iosb;
-    NTSTATUS Status;
-    BOOL Ret = TRUE;
-
     DPRINT("AssignNextDriveLetter(%S %p)\n", DeviceName, DriveLetter);
-
-    DeviceNameLength = wcslen(DeviceName) * sizeof(WCHAR);
-
-    InputBufferLength = DeviceNameLength + FIELD_OFFSET(MOUNTMGR_DRIVE_LETTER_TARGET, DeviceName);
-    InputBuffer = RtlAllocateHeap(RtlGetProcessHeap(), HEAP_ZERO_MEMORY, InputBufferLength);
-    if (InputBuffer == NULL)
-    {
-        DPRINT1("InputBuffer allocation failed!\n");
-        return FALSE;
-    }
-
-    /* And fill it with the device hat needs a drive letter */
-    InputBuffer->DeviceNameLength = DeviceNameLength;
-    RtlCopyMemory(&InputBuffer->DeviceName[0],
-                  DeviceName,
-                  DeviceNameLength);
-
-    Status = OpenMountManager(&MountMgrHandle, GENERIC_READ | GENERIC_WRITE);
-    if (!NT_SUCCESS(Status))
-    {
-        DPRINT1("OpenMountManager() failed (Status 0x%08lx)\n", Status);
-        Ret = FALSE;
-        goto done;
-    }
-
-    Status = NtDeviceIoControlFile(MountMgrHandle,
-                                   NULL,
-                                   NULL,
-                                   NULL,
-                                   &Iosb,
-                                   IOCTL_MOUNTMGR_CREATE_POINT,
-                                   InputBuffer,
-                                   InputBufferLength,
-                                   &LetterInfo,
-                                   sizeof(LetterInfo));
-    if (!NT_SUCCESS(Status))
-    {
-        DPRINT1("NtDeviceIoControlFile() failed (Status 0x%08lx)\n", Status);
-        Ret = FALSE;
-        goto done;
-    }
-
-done:
-    if (MountMgrHandle)
-        NtClose(MountMgrHandle);
-
-    RtlFreeHeap(RtlGetProcessHeap(), 0, InputBuffer);
-
-    if (Ret)
-    {
-        if (LetterInfo.DriveLetterWasAssigned)
-            *DriveLetter = LetterInfo.CurrentDriveLetter;
-        else
-            *DriveLetter = UNICODE_NULL;
-    }
-
-    return Ret;
+    return StorageUtilAssignNextDriveLetter(DeviceName, DriveLetter);
 }
 
 
@@ -332,16 +260,6 @@ BOOL
 DeleteDriveLetter(
     _In_ WCHAR DriveLetter)
 {
-    PMOUNTMGR_MOUNT_POINT InputBuffer = NULL;
-    PMOUNTMGR_MOUNT_POINTS OutputBuffer = NULL;
-    WCHAR DosDeviceName[30];
-    ULONG InputBufferLength, DosDeviceNameLength;
-    ULONG OutputBufferLength = 0x1000;
-    HANDLE MountMgrHandle = NULL;
-    IO_STATUS_BLOCK Iosb;
-    NTSTATUS Status;
-    BOOL Ret = TRUE;
-
     DPRINT("DeleteDriveLetter(%c)\n", DriveLetter);
 
     /* Setup the device name of the letter to delete */
