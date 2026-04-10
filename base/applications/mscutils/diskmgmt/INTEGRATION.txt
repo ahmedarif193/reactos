@@ -1,0 +1,26 @@
+ReactOS Disk Management Integration Decision
+============================================
+
+Decision
+--------
+Keep `diskmgmt` as a standalone `diskmgmt.exe` for now.
+
+Rationale
+---------
+- `diskmgmt` is already implemented as a first-class standalone GUI application in this tree.
+- ReactOS `mmc.exe` still does not load a passed `.msc` file end-to-end, and console open/save support remains incomplete.
+- There is no real `compmgmt.msc` or `diskmgmt.msc` integration surface in-tree yet.
+- ReactOS already follows the same pragmatic pattern elsewhere: Device Manager runs as its own UI today and defers MMC hosting for later.
+
+Practical Direction
+-------------------
+- Finish `diskmgmt.exe` as the real storage-management implementation now.
+- Revisit MMC / Computer Management integration later, after `mmc.exe` can:
+  1. open `.msc` console files reliably
+  2. save console state
+  3. host real snap-ins cleanly
+
+Current Consequence
+-------------------
+- UI parity is pursued against the standalone Windows Disk Management window, not against an MMC-hosted shell.
+- `diskmgmt.exe` remains the supported launch surface for ReactOS in the near term.
