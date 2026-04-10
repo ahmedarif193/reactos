@@ -1,0 +1,239 @@
+/*
+ * PROJECT:     ReactOS Disk Management
+ * LICENSE:     GPL-2.0-or-later (https://spdx.org/licenses/GPL-2.0-or-later)
+ * PURPOSE:     English resource file.
+ */
+
+LANGUAGE LANG_ENGLISH, SUBLANG_ENGLISH_US
+
+IDM_DISKMGMT MENU
+BEGIN
+    POPUP "&File"
+    BEGIN
+        MENUITEM "E&xit", IDM_FILE_EXIT
+    END
+    POPUP "&Action"
+    BEGIN
+        MENUITEM "Res&can Disks", IDM_ACTION_RESCAN
+        MENUITEM "&Refresh\tF5", IDM_ACTION_REFRESH
+        MENUITEM SEPARATOR
+        MENUITEM "&Initialize Disk...", IDM_ACTION_INITIALIZE_DISK
+        MENUITEM "Convert to &GPT Disk", IDM_ACTION_CONVERT_GPT
+        MENUITEM "Convert to &MBR Disk", IDM_ACTION_CONVERT_MBR
+        MENUITEM "Cre&ate Partition...", IDM_ACTION_CREATE_PARTITION
+        MENUITEM "De&lete Volume", IDM_ACTION_DELETE_VOLUME
+        MENUITEM "E&xtend Volume...", IDM_ACTION_EXTEND_VOLUME
+        MENUITEM "Sh&rink Volume...", IDM_ACTION_SHRINK_VOLUME
+        MENUITEM "&Format...", IDM_ACTION_FORMAT
+        MENUITEM "Assi&gn Drive Letter", IDM_ACTION_ASSIGN_LETTER
+        MENUITEM "&Remove Drive Letter", IDM_ACTION_REMOVE_LETTER
+        MENUITEM "Change Mount &Path...", IDM_ACTION_CHANGE_MOUNT_PATH
+        MENUITEM "Remove Mount Pat&h", IDM_ACTION_REMOVE_MOUNT_PATH
+        MENUITEM SEPARATOR
+        MENUITEM "&Online", IDM_ACTION_ONLINE
+        MENUITEM "O&ffline", IDM_ACTION_OFFLINE
+        MENUITEM "Set &Read-only", IDM_ACTION_SET_READ_ONLY
+        MENUITEM "C&lear Read-only", IDM_ACTION_CLEAR_READ_ONLY
+        MENUITEM "Mark Partition &Active", IDM_ACTION_MARK_ACTIVE
+        MENUITEM "Mark Partition &Inactive", IDM_ACTION_MARK_INACTIVE
+        MENUITEM SEPARATOR
+        MENUITEM "&Properties", IDM_ACTION_PROPERTIES
+    END
+    POPUP "&View"
+    BEGIN
+        MENUITEM "&Top", IDM_VIEW_TOP
+        MENUITEM "&Bottom", IDM_VIEW_BOTTOM
+        MENUITEM "&Disk List", IDM_VIEW_DISK_LIST
+    END
+    POPUP "&Help"
+    BEGIN
+        MENUITEM "&About Disk Management", IDM_HELP_ABOUT
+    END
+END
+
+IDA_DISKMGMT ACCELERATORS
+BEGIN
+    VK_F5, IDM_ACTION_REFRESH, VIRTKEY
+    VK_DELETE, IDM_ACTION_DELETE_VOLUME, VIRTKEY
+    VK_RETURN, IDM_ACTION_PROPERTIES, VIRTKEY, ALT
+    "F", IDM_ACTION_FORMAT, VIRTKEY, ALT
+END
+
+IDD_ASSIGN_LETTER DIALOGEX 0, 0, 190, 68
+STYLE DS_MODALFRAME | DS_SHELLFONT | WS_POPUP | WS_CAPTION | WS_SYSMENU
+CAPTION "Assign Drive Letter"
+FONT 8, "MS Shell Dlg"
+BEGIN
+    LTEXT "Select the drive letter to assign to the selected volume:", -1, 8, 10, 174, 18
+    COMBOBOX IDC_ASSIGN_LETTER_COMBO, 8, 31, 58, 100, CBS_DROPDOWNLIST | WS_VSCROLL | WS_TABSTOP
+    DEFPUSHBUTTON "OK", IDOK, 78, 47, 50, 14
+    PUSHBUTTON "Cancel", IDCANCEL, 132, 47, 50, 14
+END
+
+IDD_CREATE_PARTITION DIALOGEX 0, 0, 224, 184
+STYLE DS_MODALFRAME | DS_SHELLFONT | WS_POPUP | WS_CAPTION | WS_SYSMENU
+CAPTION "Create Volume"
+FONT 8, "MS Shell Dlg"
+BEGIN
+    LTEXT "Enter the size and initial settings for the selected unallocated region:", IDC_CREATE_PARTITION_PROMPT, 8, 10, 206, 18
+    LTEXT "Maximum size:", -1, 8, 33, 56, 8
+    LTEXT "", IDC_CREATE_PARTITION_MAX, 68, 33, 66, 8
+    LTEXT "Partition size (MB):", IDC_CREATE_PARTITION_SIZE_LABEL, 8, 49, 74, 8
+    EDITTEXT IDC_CREATE_PARTITION_SIZE, 86, 47, 52, 12, ES_AUTOHSCROLL | ES_NUMBER | WS_TABSTOP
+    LTEXT "Partition type:", -1, 8, 65, 74, 8
+    COMBOBOX IDC_CREATE_PARTITION_TYPE, 86, 62, 104, 72, CBS_DROPDOWNLIST | WS_VSCROLL | WS_TABSTOP
+    CONTROL "Assign the following drive letter:", IDC_CREATE_PARTITION_ASSIGN, "Button", BS_AUTOCHECKBOX | WS_TABSTOP, 8, 85, 128, 10
+    COMBOBOX IDC_CREATE_PARTITION_LETTER, 146, 82, 44, 72, CBS_DROPDOWNLIST | WS_VSCROLL | WS_TABSTOP
+    CONTROL "Format this volume with these settings:", IDC_CREATE_PARTITION_FORMAT, "Button", BS_AUTOCHECKBOX | WS_TABSTOP, 8, 105, 148, 10
+    LTEXT "File system:", -1, 20, 122, 52, 8
+    COMBOBOX IDC_CREATE_PARTITION_FS, 86, 119, 88, 72, CBS_DROPDOWNLIST | WS_VSCROLL | WS_TABSTOP
+    LTEXT "Volume label:", -1, 20, 140, 52, 8
+    EDITTEXT IDC_CREATE_PARTITION_LABEL, 86, 137, 104, 14, ES_AUTOHSCROLL | WS_TABSTOP
+    CONTROL "Perform a quick format", IDC_CREATE_PARTITION_QUICK, "Button", BS_AUTOCHECKBOX | WS_TABSTOP, 20, 158, 102, 10
+    DEFPUSHBUTTON "OK", IDOK, 116, 164, 42, 14
+    PUSHBUTTON "Cancel", IDCANCEL, 164, 164, 42, 14
+END
+
+IDD_FORMAT_VOLUME DIALOGEX 0, 0, 214, 112
+STYLE DS_MODALFRAME | DS_SHELLFONT | WS_POPUP | WS_CAPTION | WS_SYSMENU
+CAPTION "Format"
+FONT 8, "MS Shell Dlg"
+BEGIN
+    LTEXT "File system:", -1, 8, 11, 52, 8
+    COMBOBOX IDC_FORMAT_FILESYSTEM, 72, 8, 98, 80, CBS_DROPDOWNLIST | WS_VSCROLL | WS_TABSTOP
+    LTEXT "Volume label:", -1, 8, 31, 52, 8
+    EDITTEXT IDC_FORMAT_LABEL, 72, 28, 126, 14, ES_AUTOHSCROLL | WS_TABSTOP
+    CONTROL "Perform a quick format", IDC_FORMAT_QUICK, "Button", BS_AUTOCHECKBOX | WS_TABSTOP, 8, 53, 104, 10
+    DEFPUSHBUTTON "OK", IDOK, 110, 90, 42, 14
+    PUSHBUTTON "Cancel", IDCANCEL, 156, 90, 42, 14
+END
+
+IDD_SELECT_MOUNT_PATH DIALOGEX 0, 0, 236, 116
+STYLE DS_MODALFRAME | DS_SHELLFONT | WS_POPUP | WS_CAPTION | WS_SYSMENU
+CAPTION "Select Mount Path"
+FONT 8, "MS Shell Dlg"
+BEGIN
+    LTEXT "Select the existing folder mount path to replace or remove:", IDC_SELECT_MOUNT_PATH_PROMPT, 8, 10, 220, 16
+    LISTBOX IDC_SELECT_MOUNT_PATH_LIST, 8, 28, 220, 54, LBS_NOTIFY | WS_VSCROLL | WS_TABSTOP
+    CONTROL "Replace the selected existing mount path after assigning the new one", IDC_SELECT_MOUNT_PATH_REPLACE, "Button", BS_AUTOCHECKBOX | WS_TABSTOP, 8, 88, 190, 10
+    DEFPUSHBUTTON "OK", IDOK, 140, 98, 40, 14
+    PUSHBUTTON "Cancel", IDCANCEL, 186, 98, 40, 14
+END
+
+IDD_EXTEND_VOLUME DIALOGEX 0, 0, 214, 102
+STYLE DS_MODALFRAME | DS_SHELLFONT | WS_POPUP | WS_CAPTION | WS_SYSMENU
+CAPTION "Extend Volume"
+FONT 8, "MS Shell Dlg"
+BEGIN
+    LTEXT "Specify the amount of right-adjacent free space to add to the selected RAW volume:", -1, 8, 10, 198, 18
+    LTEXT "Current size:", -1, 8, 34, 64, 8
+    LTEXT "", IDC_RESIZE_CURRENT, 90, 34, 80, 8
+    LTEXT "Maximum additional size:", -1, 8, 50, 80, 8
+    LTEXT "", IDC_RESIZE_LIMIT, 90, 50, 80, 8
+    LTEXT "Additional size (MB):", -1, 8, 67, 80, 8
+    EDITTEXT IDC_RESIZE_AMOUNT, 90, 64, 54, 12, ES_AUTOHSCROLL | ES_NUMBER | WS_TABSTOP
+    DEFPUSHBUTTON "OK", IDOK, 120, 84, 40, 14
+    PUSHBUTTON "Cancel", IDCANCEL, 166, 84, 40, 14
+END
+
+IDD_SHRINK_VOLUME DIALOGEX 0, 0, 214, 102
+STYLE DS_MODALFRAME | DS_SHELLFONT | WS_POPUP | WS_CAPTION | WS_SYSMENU
+CAPTION "Shrink Volume"
+FONT 8, "MS Shell Dlg"
+BEGIN
+    LTEXT "Specify the amount of space to remove from the selected RAW volume:", -1, 8, 10, 198, 18
+    LTEXT "Current size:", -1, 8, 34, 64, 8
+    LTEXT "", IDC_RESIZE_CURRENT, 90, 34, 80, 8
+    LTEXT "Maximum shrink size:", -1, 8, 50, 80, 8
+    LTEXT "", IDC_RESIZE_LIMIT, 90, 50, 80, 8
+    LTEXT "Shrink size (MB):", -1, 8, 67, 80, 8
+    EDITTEXT IDC_RESIZE_AMOUNT, 90, 64, 54, 12, ES_AUTOHSCROLL | ES_NUMBER | WS_TABSTOP
+    DEFPUSHBUTTON "OK", IDOK, 120, 84, 40, 14
+    PUSHBUTTON "Cancel", IDCANCEL, 166, 84, 40, 14
+END
+
+STRINGTABLE
+BEGIN
+    IDS_COPYRIGHT "Copyright (C) 2026 ReactOS"
+    IDS_APPNAME "Disk Management"
+    IDS_STATUS_READY "Ready"
+    IDS_STATUS_RESCANNING "Rescanning disks..."
+    IDS_STATUS_REFRESHING "Refreshing disk information..."
+    IDS_STATUS_INITIALIZING_DISK "Initializing disk..."
+    IDS_STATUS_CREATING_PARTITION "Creating partition..."
+    IDS_STATUS_DELETING_VOLUME "Deleting volume..."
+    IDS_STATUS_PROPERTIES "Opening properties..."
+    IDS_STATUS_ASSIGNING_LETTER "Assigning drive letter..."
+    IDS_STATUS_REMOVING_LETTER "Removing drive letter..."
+    IDS_STATUS_ONLINING_DISK "Bringing disk online..."
+    IDS_STATUS_OFFLINING_DISK "Taking disk offline..."
+    IDS_STATUS_SETTING_READ_ONLY "Setting disk read-only..."
+    IDS_STATUS_CLEARING_READ_ONLY "Clearing disk read-only..."
+    IDS_STATUS_MARKING_ACTIVE "Marking partition active..."
+    IDS_STATUS_MARKING_INACTIVE "Marking partition inactive..."
+    IDS_STATUS_FORMATTING_VOLUME "Formatting volume..."
+    IDS_STATUS_CHANGING_MOUNT_PATH "Changing mount path..."
+    IDS_STATUS_REMOVING_MOUNT_PATH "Removing mount path..."
+    IDS_STATUS_CONVERTING_GPT "Converting disk to GPT..."
+    IDS_STATUS_CONVERTING_MBR "Converting disk to MBR..."
+    IDS_STATUS_EXTENDING_VOLUME "Extending volume..."
+    IDS_STATUS_SHRINKING_VOLUME "Shrinking volume..."
+    IDS_CREATE_PROMPT_VOLUME "Enter the size and initial settings for the selected unallocated region:"
+    IDS_CREATE_PROMPT_PARTITION "Enter the size and initial settings for the selected unallocated region:"
+    IDS_CREATE_PROMPT_LOGICAL "Enter the size and initial settings for the new logical drive in the selected free space:"
+    IDS_CREATE_SIZE_LABEL_VOLUME "Volume size (MB):"
+    IDS_CREATE_SIZE_LABEL_PARTITION "Partition size (MB):"
+    IDS_CREATE_SIZE_LABEL_LOGICAL "Logical drive size (MB):"
+
+    IDS_HINT_READY "Ready"
+    IDS_HINT_FILE_EXIT "Exit Disk Management"
+    IDS_HINT_ACTION_RESCAN "Rescan storage devices"
+    IDS_HINT_ACTION_REFRESH "Refresh the current view"
+    IDS_HINT_ACTION_INITIALIZE_DISK "Initialize the selected disk"
+    IDS_HINT_ACTION_CREATE_PARTITION "Create a new partition or volume"
+    IDS_HINT_ACTION_DELETE_VOLUME "Delete the selected volume"
+    IDS_HINT_ACTION_PROPERTIES "Show properties for the selection"
+    IDS_HINT_ACTION_FORMAT "Format the selected volume"
+    IDS_HINT_ACTION_ASSIGN_LETTER "Assign a drive letter to the selected volume"
+    IDS_HINT_ACTION_REMOVE_LETTER "Remove the drive letter from the selected volume"
+    IDS_HINT_ACTION_CONVERT_GPT "Convert the selected empty disk to GPT"
+    IDS_HINT_ACTION_CONVERT_MBR "Convert the selected empty disk to MBR"
+    IDS_HINT_ACTION_ONLINE "Bring the selected disk online"
+    IDS_HINT_ACTION_OFFLINE "Take the selected disk offline"
+    IDS_HINT_ACTION_SET_READ_ONLY "Set the selected disk read-only"
+    IDS_HINT_ACTION_CLEAR_READ_ONLY "Clear the selected disk read-only flag"
+    IDS_HINT_ACTION_MARK_ACTIVE "Mark the selected MBR primary partition active"
+    IDS_HINT_ACTION_MARK_INACTIVE "Clear the active flag on the selected MBR partition"
+    IDS_HINT_VIEW_TOP "Show the top pane"
+    IDS_HINT_VIEW_BOTTOM "Show the bottom pane"
+    IDS_HINT_VIEW_DISK_LIST "Show the disk list view"
+    IDS_HINT_HELP_ABOUT "Display version information"
+    IDS_HINT_ACTION_CHANGE_MOUNT_PATH "Assign or replace a folder mount path for the selected volume"
+    IDS_HINT_ACTION_REMOVE_MOUNT_PATH "Remove the folder mount path from the selected volume"
+    IDS_HINT_ACTION_EXTEND_VOLUME "Extend the selected RAW volume into adjacent free space"
+    IDS_HINT_ACTION_SHRINK_VOLUME "Shrink the selected RAW volume and create free space to the right"
+
+    IDS_COL_VOLUME "Volume"
+    IDS_COL_LAYOUT "Layout"
+    IDS_COL_TYPE "Type"
+    IDS_COL_FILESYSTEM "File System"
+    IDS_COL_STATUS "Status"
+    IDS_COL_CAPACITY "Capacity"
+    IDS_COL_FREE "Free Space"
+    IDS_COL_FREE_PCT "% Free"
+    IDS_TOOLBAR_BACK "Back"
+    IDS_TOOLBAR_FORWARD "Next"
+    IDS_TOOLBAR_RESCAN "Rescan"
+    IDS_TOOLBAR_REFRESH "F5"
+    IDS_TOOLBAR_CREATE "Create"
+    IDS_TOOLBAR_DELETE "Delete"
+    IDS_TOOLBAR_PROPERTIES "Props"
+    IDS_TOOLBAR_HELP "?"
+    IDS_PARTITION_TYPE_PRIMARY "Primary"
+    IDS_PARTITION_TYPE_BASIC "Basic data"
+    IDS_PARTITION_TYPE_EFI "EFI system"
+    IDS_PARTITION_TYPE_MSR "Microsoft reserved"
+    IDS_PARTITION_TYPE_RECOVERY "Recovery"
+    IDS_PARTITION_TYPE_EXTENDED "Extended"
+    IDS_PARTITION_TYPE_LOGICAL "Logical"
+END
