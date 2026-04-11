@@ -49,6 +49,12 @@
 #define XHCI_QUIRK_VBOX_SPURIOUS_IMAN 0x00000200
 #define XHCI_QUIRK_QEMU_PORT_RESET    0x00000400
 #define XHCI_QUIRK_VBOX_POLL_XFERS    0x00000800
+#define XHCI_QUIRK_QEMU_POLL_XFERS    0x00001000
+#define XHCI_QUIRK_IS_QEMU_XHCI       0x00002000
+
+/* Mask of quirks that force transfer polling for the fallback event drain. */
+#define XHCI_QUIRK_POLL_XFERS_MASK    (XHCI_QUIRK_VBOX_POLL_XFERS | \
+                                       XHCI_QUIRK_QEMU_POLL_XFERS)
 #define XHCI_BOUNCE_POOL_SLOTS 4
 #define XHCI_BOUNCE_BUFFER_SIZE 0x10000
 
@@ -317,6 +323,9 @@ typedef struct _XHCI_EXTENSION {
   ULONG FrameHighBits;
   /* Debug counters */
   volatile ULONG IsrCallCount;
+  /* TRUE if we raised the system clock resolution via ExSetTimerResolution
+   * during StartController and must restore it on StopController. */
+  BOOLEAN TimerResolutionRaised;
   /* ACPI _OSC (Operating System Capabilities) context */
   XHCI_OSC_CONTEXT OscContext;
 } XHCI_EXTENSION, *PXHCI_EXTENSION;
