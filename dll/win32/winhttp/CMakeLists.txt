@@ -1,9 +1,10 @@
 
+remove_definitions(-D_WIN32_WINNT=0x601 -D_CRT_NON_CONFORMING_SWPRINTFS)
+add_definitions(-D_WIN32_WINNT=0x600)
+
 add_definitions(
     -D_WINE
     -D_WINHTTP_INTERNAL_)
-
-add_definitions(-D_WIN32_WINNT=0x600)
 
 spec2def(winhttp.dll winhttp.spec ADD_IMPORTLIB)
 

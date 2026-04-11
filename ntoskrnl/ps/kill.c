@@ -416,14 +416,7 @@ PspDeleteThread(IN PVOID ObjectBody)
         }
     }
 
-    /* Free thread name if set */
-    if (Thread->ThreadName.Buffer)
-    {
-        ExFreePoolWithTag(Thread->ThreadName.Buffer, 'mNhT');
-        Thread->ThreadName.Buffer = NULL;
-    }
-
-    /* Cleanup impersionation information */
+    /* Cleanup impersonation information */
     PspDeleteThreadSecurity(Thread);
 
     /* Free the thread name if set */
