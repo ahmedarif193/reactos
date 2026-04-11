@@ -1,0 +1,60 @@
+; USBVIDEO.INF
+
+; Installation of the USB Video Class function driver (usbvideo.sys).
+; Matches bInterfaceClass=0x0E (CC_VIDEO) devices on the USB bus.
+;
+; Note on Class: Windows ships usbvideo.sys under Class=Image because it
+; bridges USB Video Class to the WIA user-mode stack. ReactOS does not
+; currently provide the STI/WIA class installer (sti_ci.dll is absent),
+; so declaring Class=Image would point PnP at a missing co-installer.
+; We use Class=USB to match the ReactOS convention for bus-level function
+; drivers (see usb.inf usbhub/usbccgp). This can be revisited when the
+; Image/WIA class installer lands.
+
+[Version]
+Signature  = "$Windows NT$"
+;Signature  = "$ReactOS$"
+LayoutFile = layout.inf
+Class      = USB
+ClassGUID  = {36FC9E60-C465-11CF-8056-444553540000}
+Provider   = %ReactOS%
+DriverVer  = 10/02/2005,1.00.0.0
+
+[DestinationDirs]
+DefaultDestDir = 12
+
+[Manufacturer]
+%GenericMfg% = GenericMfg
+
+[GenericMfg]
+%USB\Class_0E.DeviceDesc%                = usbvideo_Inst, USB\Class_0E
+%USB\Vid_174f&Pid_181f&MI_00.DeviceDesc% = usbvideo_Inst, USB\Vid_174f&Pid_181f&MI_00
+
+;------------------------- USB VIDEO CLASS DRIVER -----------------------
+
+[usbvideo_Inst.NT]
+CopyFiles = usbvideo_CopyFiles.NT
+
+[usbvideo_CopyFiles.NT]
+usbvideo.sys
+
+[usbvideo_Inst.NT.Services]
+AddService = usbvideo, 0x00000002, usbvideo_Service_Inst
+
+[usbvideo_Service_Inst]
+ServiceType   = 1
+StartType     = 3
+ErrorControl  = 1
+ServiceBinary = %12%\usbvideo.sys
+LoadOrderGroup = Base
+
+;-------------------------------- STRINGS -------------------------------
+
+[Strings]
+; Non-localizable
+ReactOS = "ReactOS Project"
+
+; Localizable
+GenericMfg                             = "(Generic USB Video devices)"
+USB\Class_0E.DeviceDesc                = "USB Video Device"
+USB\Vid_174f&Pid_181f&MI_00.DeviceDesc = "USB Video Device (Integrated Camera)"
