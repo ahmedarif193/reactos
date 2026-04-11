@@ -766,9 +766,7 @@ DriverEntry(
     XhciRegPacket.MiniPortFlags = USB_MINIPORT_FLAGS_INTERRUPT |
                                   USB_MINIPORT_FLAGS_MEMORY_IO |
                                   USB_MINIPORT_FLAGS_USB3 |
-                                  USB_MINIPORT_FLAGS_WAKE_SUPPORT |
-                                  /* Force USBPORT to poll if interrupts are lost. */
-                                  USB_MINIPORT_FLAGS_POLLING;
+                                  USB_MINIPORT_FLAGS_WAKE_SUPPORT;
 
     /*
      * SuperSpeed Periodic Bandwidth Budgeting
@@ -7976,7 +7974,11 @@ XHCI_DetectHardwareQuirks(
     if (Extension->HciVersion <= 0x0100)
         Extension->Quirks |= XHCI_QUIRK_LIMIT_U1U2;
 
-    /* VID/DID logging only. Vendor-specific quirks are disabled. */
+    /* VID/DID logging + QEMU auto-detection. qemu-xhci advertises
+     * VID=0x1b36 (Red Hat) DID=0x000d. On QEMU, MSI interrupt delivery
+     * for interrupt-type endpoints is unreliable, causing HID mouse
+     * cursor lag (~64Hz vs >=125Hz expected). Force the poll fallback
+     * to also cover bulk/interrupt transfers on QEMU. */
     if (XHCI_ReadPciConfig(Extension, 0x00, &VendorId, sizeof(VendorId)) &&
         XHCI_ReadPciConfig(Extension, 0x02, &DeviceId, sizeof(DeviceId)))
     {
@@ -7984,6 +7986,16 @@ XHCI_DetectHardwareQuirks(
                 VendorId,
                 DeviceId,
                 Extension->HciVersion);
+
+        if (VendorId == 0x1B36 && DeviceId == 0x000D)
+        {
+            Extension->Quirks |= XHCI_QUIRK_IS_QEMU_XHCI |
+                                 XHCI_QUIRK_QEMU_POLL_XFERS |
+                                 XHCI_QUIRK_IGNORE_STARTUP_HCE |
+                                 XHCI_QUIRK_QEMU_CONFIG_EP_ORDER |
+                                 XHCI_QUIRK_QEMU_PORT_RESET;
+            DPRINT("usbxhci: detected qemu-xhci, enabling QEMU quirks + poll fallback\n");
+        }
     }
 
     /*
@@ -8036,7 +8048,8 @@ XHCI_DetectHardwareQuirks(
     {
         ULONG QemuQuirks = XHCI_QUIRK_IGNORE_STARTUP_HCE |
                           XHCI_QUIRK_QEMU_CONFIG_EP_ORDER |
-                          XHCI_QUIRK_QEMU_PORT_RESET;
+                          XHCI_QUIRK_QEMU_PORT_RESET |
+                          XHCI_QUIRK_QEMU_POLL_XFERS;
         if (g_XhciQemuQuirksOverride)
             Extension->Quirks |= QemuQuirks;
         else
@@ -10645,7 +10658,7 @@ XHCI_SubmitControlTransfer(
      * sequential and infrequent, so polling overhead is negligible.
      */
     if (Endpoint->DefaultControl ||
-        (Extension->Quirks & XHCI_QUIRK_VBOX_POLL_XFERS))
+        (Extension->Quirks & XHCI_QUIRK_POLL_XFERS_MASK))
     {
         LONG NewCount;
         Transfer->Flags |= XHCI_TRANSFER_FLAG_NEEDS_POLL;
@@ -11123,10 +11136,13 @@ XHCI_SubmitSgTransfer(
     }
 
     /*
-     * VirtualBox UEFI quirk: MSI interrupts may not be reliably delivered.
-     * Enable polling for bulk/interrupt transfers when VirtualBox is detected.
+     * Enable the poll fallback for bulk/interrupt transfers on emulators
+     * where MSI/INTx delivery is unreliable (VirtualBox UEFI, QEMU q35
+     * xHCI). Without this, interrupt-type endpoints such as HID mouse IN
+     * stall until some other DPC drains the event ring, producing very
+     * laggy cursor movement.
      */
-    if (Extension->Quirks & XHCI_QUIRK_VBOX_POLL_XFERS)
+    if (Extension->Quirks & XHCI_QUIRK_POLL_XFERS_MASK)
     {
         Transfer->Flags |= XHCI_TRANSFER_FLAG_NEEDS_POLL;
         if (InterlockedIncrement(&Extension->TransferPollCounter) == 1)
@@ -12232,6 +12248,27 @@ XHCI_StartController(PVOID MiniPortExtension,
 
     XHCI_PowerOnAllPorts(Extension);
     XHCI_ConfigureAllPortsLpm(Extension);
+
+    /*
+     * When the poll-fallback quirk is active (QEMU/VBox), the
+     * XHCI_TransferPollDpc runs off a KTIMER whose DueTime is clamped
+     * to the system clock quantum. ReactOS defaults to ~10 ms, which
+     * pins HID interrupt-IN completions to ~100 Hz and makes the
+     * cursor feel laggy. Request a 1 ms system clock resolution so
+     * KeSetTimer can honour sub-10 ms intervals. This is reversed in
+     * XHCI_StopController. Do NOT raise the resolution when real
+     * interrupts are driving completions — polling isn't the hot path.
+     */
+    if ((Extension->Quirks & XHCI_QUIRK_POLL_XFERS_MASK) &&
+        !Extension->TimerResolutionRaised)
+    {
+        ULONG Achieved = ExSetTimerResolution(10000 /* 100ns = 1ms */, TRUE);
+        Extension->TimerResolutionRaised = TRUE;
+        DPRINT("usbxhci: raised system timer resolution to %lu*100ns "
+               "(target 10000) for poll-fallback quirk\n",
+               Achieved);
+    }
+
     return MP_STATUS_SUCCESS;
 }
 
@@ -12253,6 +12290,13 @@ XHCI_StopController(PVOID MiniPortExtension,
 
     Extension->StoppingOrRemoved = TRUE;
     KeCancelTimer(&Extension->TransferPollTimer);
+
+    /* Reverse the ExSetTimerResolution raise performed at Start. */
+    if (Extension->TimerResolutionRaised)
+    {
+        Extension->TimerResolutionRaised = FALSE;
+        (VOID)ExSetTimerResolution(0, FALSE);
+    }
     InterlockedExchange(&Extension->TransferPollCounter, 0);
 
     /* Mark any pending SW-enum transfers as canceled so workers exit cleanly. */
