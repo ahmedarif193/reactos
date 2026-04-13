@@ -42,6 +42,7 @@ static ULONG DefaultLanguageIndex = 0;
 
 /* FUNCTIONS ****************************************************************/
 
+#ifndef _M_AMD64
 static
 BOOLEAN
 IsAcpiComputer(VOID)
@@ -207,6 +208,7 @@ cleanup:
         NtClose(hDeviceKey);
     return ret;
 }
+#endif
 
 static
 BOOLEAN

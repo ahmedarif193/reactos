@@ -1172,6 +1172,7 @@ static void test_ApplicationAttributes(void)
 }
 
 /* Showing that SdbGetAppPatchDir returns HRESULT */
+#ifdef _M_IX86
 static void test_SdbGetAppPatchDir(void)
 {
     WCHAR Buffer[MAX_PATH];
@@ -1227,6 +1228,7 @@ static void test_SdbGetAppPatchDir(void)
         ok(hr == S_OK || hr == expect_hr, "Expected S_OK or 0x%lx, was: 0x%lx (at %d)\n", expect_hr, hr, n);
     }
 }
+#endif
 START_TEST(apphelp)
 {
     //SetEnvironmentVariable("SHIM_DEBUG_LEVEL", "4");

@@ -36,8 +36,8 @@ static BOOLEAN g_IsReactOS;
 
 #define PTI_SHIFT  12L
 #define PTE_BASE    0xFFFFF68000000000ULL
-PULONGLONG
 FORCEINLINE
+PULONGLONG
 _MiAddressToPte(PVOID Address)
 {
     ULONG64 Offset = (ULONG64)Address >> (PTI_SHIFT - 3);
