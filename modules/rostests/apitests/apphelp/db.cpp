@@ -1200,10 +1200,12 @@ static void check_adwExeFlags(DWORD adwExeFlags_0, SDBQUERYRESULT_T& query, cons
         ok_(file, line)(query.adwExeFlags[n] == 0, "Expected adwExeFlags[%d] to be 0, was: %x for %d\n", n, query.adwExeFlags[0], cur);
 }
 
+#ifdef _M_IX86
 template<>
 void check_adwExeFlags(DWORD, SDBQUERYRESULT_2k3&, const char*, int, size_t)
 {
 }
+#endif
 
 
 template<typename SDBQUERYRESULT_T>
@@ -2032,6 +2034,7 @@ static void test_IndexKeyFromString(void)
 #endif
 }
 
+#ifdef _M_IX86
 static int validate_SDBQUERYRESULT_size()
 {
     unsigned char buffer[SDBQUERYRESULT_EXPECTED_SIZE_VISTA * 2];
@@ -2069,6 +2072,7 @@ static int validate_SDBQUERYRESULT_size()
 
     return 0;
 }
+#endif
 
 
 START_TEST(db)
