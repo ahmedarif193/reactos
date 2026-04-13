@@ -381,6 +381,8 @@ TestInterlockedFunctional(VOID)
 #ifdef _WIN64
     CheckInterlockedOp(InterlockedXor64, LONGLONG, "0x%I64x", 0x200001234LL, 0x100001111LL, 0x300000325LL, 0x200001234LL);
 #endif
+
+    DBG_UNREFERENCED_LOCAL_VARIABLE(pSpinLock);
 }
 
 START_TEST(ExInterlocked)
