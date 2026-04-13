@@ -214,6 +214,7 @@ typedef struct test_RemoteShimInfo
 } test_RemoteShimInfo;
 
 
+#ifdef _M_IX86
 static BOOL readproc(HANDLE proc, LPVOID address, PVOID target, DWORD size)
 {
     SIZE_T dwRead;
@@ -665,7 +666,6 @@ static void Test_repeatlayer(WCHAR szApphelp[256])
     }
 
 }
-
 
 TAGREF find_layer(const char* szLayerStart, const char* szLayerEnd)
 {
@@ -1371,13 +1371,16 @@ static void Test_ApphelpCheckRunApp(WCHAR szApphelp[256])
     DestroyEnvironmentBlock(DuplicatedEnv);
     NtClose(FileHandle);
 }
+#endif
 
 
 START_TEST(env)
 {
     WCHAR szApphelp[MAX_PATH];
     ShimData_QueryOffset QueryOffset;
+#ifdef _M_IX86
     DWORD ShimDataType;
+#endif
     NTSTATUS ExceptionStatus = STATUS_SUCCESS;
 
     //SetEnvironmentVariable("SHIM_DEBUG_LEVEL", "127");
@@ -1432,7 +1435,11 @@ START_TEST(env)
     g_ShimDataSize = g_WinVersion < WINVER_WIN8 ? 4096 : 8192;
     _SEH2_TRY
     {
+#ifdef _M_IX86
         ShimDataType = pSdbGetAppCompatDataSize(&QueryOffset);
+#else
+        pSdbGetAppCompatDataSize(&QueryOffset);
+#endif
     }
     _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
     {
@@ -1473,4 +1480,3 @@ START_TEST(env)
     if (g_LayerDB)
         pSdbReleaseDatabase(g_LayerDB);
 }
-

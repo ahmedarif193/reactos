@@ -2627,6 +2627,7 @@ struct volatile_context
 };
 #endif
 
+#if defined(__GNUC__) && defined(__i386__)
 static
 DECLSPEC_NOINLINE
 int sanity_check(int ret, struct volatile_context * before, struct volatile_context * after)
@@ -2639,8 +2640,9 @@ int sanity_check(int ret, struct volatile_context * before, struct volatile_cont
 
 	return ret;
 }
+#endif
 
-#ifndef _PSEH3_H_
+#if defined(_X86_) && !defined(_PSEH3_H_) && !defined(_MSC_VER)
 static
 int passthrough_handler(struct _EXCEPTION_RECORD * e, void * f, struct _CONTEXT * c, void * d)
 {
@@ -2653,7 +2655,9 @@ DECLSPEC_NOINLINE
 int call_test(int (* func)(void))
 {
 	static int ret;
+#if defined(__GNUC__) && defined(__i386__)
 	static struct volatile_context before, after;
+#endif
 	static LPTOP_LEVEL_EXCEPTION_FILTER prev_unhandled_exception;
 #if defined(_X86_) && !defined(_PSEH3_H_) && !defined(_MSC_VER)
 	static _SEH2Registration_t * prev_frame;
