@@ -51,8 +51,6 @@ static UEFI_BGRT_LOGO UefiBgrtLogo = {0};
 #define BGRT_ORIENTATION_180          2
 #define BGRT_ORIENTATION_270          3
 
-#define LOWEST_SUPPORTED_RES 1
-
 #include <pshpack1.h>
 typedef struct _BMP_FILE_HEADER
 {
@@ -496,8 +494,17 @@ UefiInitializeGop(VOID)
         return Status;
     }
 
-    /* We don't need high resolutions for freeldr */
-    gop->SetMode(gop, LOWEST_SUPPORTED_RES);
+    /*
+     * Keep the firmware-selected GOP mode instead of forcing a smaller
+     * fallback mode. QEMU/OVMF already exposes an active mode here, and the
+     * kernel GOP hand-off should preserve that exact framebuffer geometry.
+     */
+    TRACE("Using existing GOP mode %u: %ux%u, pixel format %u, stride %u\n",
+          gop->Mode->Mode,
+          gop->Mode->Info->HorizontalResolution,
+          gop->Mode->Info->VerticalResolution,
+          gop->Mode->Info->PixelFormat,
+          gop->Mode->Info->PixelsPerScanLine);
 
     /* Physical format of the pixel */
     PixelFormat = gop->Mode->Info->PixelFormat;
