@@ -11,8 +11,8 @@
 #define NEW_CONTENT "NewContent"
 #define NEW_CONTENT_LEN sizeof(NEW_CONTENT)
 #define IsInvalidParamStatus(Status) \
-    (Status == STATUS_INVALID_PARAMETER || Status == STATUS_INVALID_PARAMETER_MIX || \
-    (Status >= STATUS_INVALID_PARAMETER_1 && Status <= STATUS_INVALID_PARAMETER_12))
+    (((Status) == STATUS_INVALID_PARAMETER) || ((Status) == STATUS_INVALID_PARAMETER_MIX) || \
+    (((Status) >= STATUS_INVALID_PARAMETER_1) && ((Status) <= STATUS_INVALID_PARAMETER_12)))
 #define ok_invalid_parameter(Status) ok(IsInvalidParamStatus(Status), "Invalid status code (0x%X)\n", Status)
 
 static UNICODE_STRING FileReadOnlyPath = RTL_CONSTANT_STRING(L"\\SystemRoot\\system32\\ntdll.dll");

@@ -1,1 +1,1 @@
-@ stdcall DllGetClassObject(ptr ptr ptr)
+@ stdcall -private DllGetClassObject(ptr ptr ptr)
