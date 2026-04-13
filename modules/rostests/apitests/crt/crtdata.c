@@ -541,8 +541,8 @@ void Test__tzname(void)
 
 void Test__wcmdln(void)
 {
-    _CRTIMP extern wchar_t* _wcmdln;
 #ifdef _M_IX86
+    _CRTIMP extern wchar_t* _wcmdln;
     _CRTIMP wchar_t** __p__wcmdln(void);
     ok_ptr(__p__wcmdln(), &_wcmdln);
 #endif
