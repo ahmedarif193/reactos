@@ -2188,7 +2188,7 @@ static UINT ParaNdis_ProcessRxPath(PARANDIS_ADAPTER *pContext, ULONG ulMaxPacket
     NdisReleaseSpinLock(&pContext->ReceiveLock);
     if (nReceived && pBatchOfPackets)
     {
-        DPrintf(1, ("[%s]%d: received %d buffers of max %d", __FUNCTION__, KeGetCurrentProcessorNumber(), nReceived, ulMaxPacketsToIndicate));
+        DPrintf(1, ("[%s]%d: received %d buffers of max %d", __FUNCTION__, ParaNdisCurrentProcessorIndex(), nReceived, ulMaxPacketsToIndicate));
         ParaNdis_IndicateReceivedBatch(pContext, pBatchOfPackets, nReceived);
     }
     if (pBatchOfPackets) NdisFreeMemory(pBatchOfPackets, 0, 0);
