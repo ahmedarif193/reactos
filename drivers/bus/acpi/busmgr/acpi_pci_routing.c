@@ -10,6 +10,12 @@
 
 #define ACPI_PRT_POOL_TAG 'TRPA'
 
+#if defined(__GNUC__) || defined(__clang__)
+#define ACPI_ROUTE_UNUSED __attribute__((unused))
+#else
+#define ACPI_ROUTE_UNUSED
+#endif
+
 typedef struct _PRT_MAP_ENTRY
 {
     ULONG Segment;
@@ -336,7 +342,7 @@ AcpiPrtBuildForHandle(
     return AE_OK;
 }
 
-static
+static ACPI_ROUTE_UNUSED
 BOOLEAN
 NTAPI
 HalPciRouteProvider(
