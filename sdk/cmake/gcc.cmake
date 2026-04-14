@@ -444,8 +444,9 @@ endif()
 function(fixup_load_config _target)
     add_custom_command(TARGET ${_target} POST_BUILD
         COMMAND native-pefixup --loadconfig "$<TARGET_FILE:${_target}>"
-        COMMENT "Patching in LOAD_CONFIG"
-        DEPENDS native-pefixup)
+        COMMENT "Patching in LOAD_CONFIG")
+    set_property(TARGET ${_target} APPEND PROPERTY LINK_DEPENDS
+        $<TARGET_PROPERTY:native-pefixup,IMPORTED_LOCATION>)
 endfunction()
 
 function(generate_import_lib _libname _dllname _spec_file __version_arg __dbg_arg)
@@ -683,4 +684,3 @@ target_compile_definitions(libstdc++ INTERFACE "$<$<COMPILE_LANGUAGE:CXX>:PAL_ST
 
 # Create our alias libraries
 add_library(cppstl ALIAS libstdc++)
-
