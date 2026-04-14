@@ -2114,7 +2114,7 @@ BOOL _SHGetUserProfileDirectoryW(HANDLE hToken, LPWSTR szPath, LPDWORD lpcchPath
         result = GetUserProfileDirectoryW(hToken, szPath, lpcchPath);
         CloseHandle(hToken);
     }
-    else if ((INT) hToken == -1)
+    else if (hToken == (HANDLE)-1)
     {
         result = GetDefaultUserProfileDirectoryW(szPath, lpcchPath);
     }

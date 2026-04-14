@@ -465,7 +465,10 @@ MiSessionInitializeWorkingSetList(VOID)
     PMMPDE PointerPde;
     MMPTE TempPte;
     MMPDE TempPde;
-    ULONG Color, Index;
+    ULONG Color;
+#ifndef _M_AMD64
+    ULONG Index;
+#endif
     PFN_NUMBER PageFrameIndex;
     PMM_SESSION_SPACE SessionGlobal;
     BOOLEAN AllocatedPageTable;
@@ -527,8 +530,8 @@ MiSessionInitializeWorkingSetList(VOID)
         MI_WRITE_VALID_PDE(PointerPde, TempPde);
 
         /* Add this into the list */
-        Index = ((ULONG_PTR)WorkingSetList - (ULONG_PTR)MmSessionBase) >> 22;
 #ifndef _M_AMD64
+        Index = ((ULONG_PTR)WorkingSetList - (ULONG_PTR)MmSessionBase) >> 22;
         MmSessionSpace->PageTables[Index] = TempPde;
 #endif
         /* Initialize the page directory page, and now zero the working set list itself */
