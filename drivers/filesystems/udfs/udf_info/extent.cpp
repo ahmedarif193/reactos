@@ -2258,6 +2258,11 @@ UDFResizeExtent(
 
     ExtPrint(("Resize ExtInfo %x, %I64x -> %I64x\n", ExtInfo, ExtInfo->Length, Length));
 
+    ASSERT(Length >= 0);
+    if(Length < 0) {
+        return STATUS_INVALID_PARAMETER;
+    }
+
     if(ExtInfo->Flags & EXTENT_FLAG_CUT_PREALLOCATED) {
         AdPrint(("  cut preallocated\n"));
     } else
@@ -2271,7 +2276,7 @@ UDFResizeExtent(
 
     UDFCheckSpaceAllocation(Vcb, 0, ExtInfo->Mapping, AS_USED); // check if used
     if(ExtInfo->Offset) {
-        if(ExtInfo->Offset + Length <= LBS) {
+        if(((uint64)ExtInfo->Offset + (uint64)Length) <= (uint64)LBS) {
             ExtPrint(("Resize IN-ICB\n"));
             ExtInfo->Length = Length;
             return STATUS_SUCCESS;
@@ -2501,7 +2506,7 @@ UDFResizeExtent(
             if(l < Length) {
                 // we get here if simple increasing of the last frag failed
                 AdPrint(("Resize add new frag (7)\n"));
-                if(l < LBS && Length >= LBS &&
+                if(l >= 0 && ((uint64)l < (uint64)LBS) && ((uint64)Length >= (uint64)LBS) &&
                    (ExtInfo->Flags & EXTENT_FLAG_ALLOC_MASK) == EXTENT_FLAG_ALLOC_SEQUENTIAL) {
                     AdPrint(("Resize tune for SEQUENTIAL i/o\n"));
                 }
@@ -2985,9 +2990,18 @@ UDFReadExtentCached(
     uint32 to_read, Lba, sect_offs, flags;
     SIZE_T _ReadBytes;
     OSSTATUS status;
+    uint64 ExtLength;
+    uint64 Offset64;
+    uint64 Remaining;
     // prevent reading out of data space
-    if(Offset > ExtInfo->Length) return STATUS_END_OF_FILE;
-    if(Offset+Length > ExtInfo->Length) Length = (uint32)(ExtInfo->Length - Offset);
+    ASSERT(Offset >= 0);
+    ASSERT(ExtInfo->Length >= 0);
+    if(Offset < 0 || ExtInfo->Length < 0) return STATUS_INVALID_PARAMETER;
+    ExtLength = (uint64)ExtInfo->Length;
+    Offset64 = (uint64)Offset;
+    if(Offset64 > ExtLength) return STATUS_END_OF_FILE;
+    Remaining = ExtLength - Offset64;
+    if((uint64)Length > Remaining) Length = (SIZE_T)Remaining;
     Offset += ExtInfo->Offset;               // used for in-ICB data
     // read maximal possible part of each frag of extent
     while(((LONG)Length) > 0) {
@@ -3039,9 +3053,18 @@ UDFReadExtent(
     uint32 Lba, sect_offs, flags;
     uint32 index;
     OSSTATUS status;
+    uint64 ExtLength;
+    uint64 Offset64;
+    uint64 Remaining;
     // prevent reading out of data space
-    if(Offset > ExtInfo->Length) return STATUS_END_OF_FILE;
-    if(Offset+Length > ExtInfo->Length) Length = (uint32)(ExtInfo->Length - Offset);
+    ASSERT(Offset >= 0);
+    ASSERT(ExtInfo->Length >= 0);
+    if(Offset < 0 || ExtInfo->Length < 0) return STATUS_INVALID_PARAMETER;
+    ExtLength = (uint64)ExtInfo->Length;
+    Offset64 = (uint64)Offset;
+    if(Offset64 > ExtLength) return STATUS_END_OF_FILE;
+    Remaining = ExtLength - Offset64;
+    if((uint64)Length > Remaining) Length = (SIZE_T)Remaining;
     Offset += ExtInfo->Offset;               // used for in-ICB data
     // read maximal possible part of each frag of extent
     Lba = UDFExtentOffsetToLba(Vcb, Extent, Offset, &sect_offs, &to_read, &flags, &index);
