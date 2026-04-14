@@ -18,6 +18,7 @@
 #include <acpiioct.h>
 #include <ntintsafe.h>
 #include <initguid.h>
+#include <reactos/drivers/acpi/acpipci.h>
 
 /* TEST DEFINITIONS ***********************************************************/
 
@@ -182,6 +183,11 @@ typedef struct _PDO_DEVICE_DATA
     HANDLE AcpiHandle;
 } PDO_DEVICE_DATA, *PPDO_DEVICE_DATA;
 
+typedef struct _FDO_DEVICE_DATA
+{
+    ULONG Dummy;
+} FDO_DEVICE_DATA, *PFDO_DEVICE_DATA;
+
 typedef struct _GTM_OBJECT_BUFFER
 {
     ACPI_OBJECT Obj;
@@ -225,6 +231,27 @@ static const ULONG DrvpMyDsmIntegerFields[3] =
 };
 
 static const EVAL_TEST_ENTRY* DrvpEvalTestEntry;
+static ACPI_HANDLE CorrectHandle = (ACPI_HANDLE)(ULONG_PTR)FAKE_SB_NAMESPACE_ACPI_HANDLE;
+
+BOOLEAN
+NTAPI
+AcpiFindPciDeviceInNamespace(
+    _In_ ULONG Segment,
+    _In_ ULONG Bus,
+    _In_ ULONG Device,
+    _In_ ULONG Function,
+    _Out_ ACPI_HANDLE *OutHandle)
+{
+    UNREFERENCED_PARAMETER(Segment);
+    UNREFERENCED_PARAMETER(Bus);
+    UNREFERENCED_PARAMETER(Device);
+    UNREFERENCED_PARAMETER(Function);
+
+    if (OutHandle)
+        *OutHandle = CorrectHandle;
+
+    return TRUE;
+}
 
 void *
 AcpiOsAllocate (
