@@ -30,8 +30,6 @@ PCI_CONFIG_HANDLER PCIConfigHandler;
 #define HALP_PCI_DEFAULT_MEM_LIMIT        0xFEBFFFFFULL
 
 /* PCI GSI (Global System Interrupt) routing table */
-#define HALP_PCI_GSI_TAG                  'isGH'
-
 typedef struct _HALP_PCI_GSI_INFO
 {
     BOOLEAN Valid;
@@ -48,10 +46,6 @@ typedef struct _HALP_PCI_GSI_INFO
 #define HALP_PCI_GSI_STATIC_CAPACITY 256
 static HALP_PCI_GSI_INFO HalpPciGsiStaticInfo[HALP_PCI_GSI_STATIC_CAPACITY];
 static PHALP_PCI_GSI_INFO HalpPciGsiInfo = HalpPciGsiStaticInfo;
-static ULONG HalpPciGsiCapacity = HALP_PCI_GSI_STATIC_CAPACITY;
-static BOOLEAN HalpPciGsiInfoUsesPool;
-static KSPIN_LOCK HalpPciGsiLock;
-static volatile LONG HalpPciGsiLockInitState;
 
 /* HalpAcpiEcamCoverageFlags is defined in halacpi.c and declared in halacpi.h */
 
