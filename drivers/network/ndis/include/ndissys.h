@@ -18,6 +18,20 @@
 #include "efilter.h"
 #include "buffer.h"
 
+FORCEINLINE
+ULONG
+NdisCurrentProcessorIndex(VOID)
+{
+#if (NTDDI_VERSION >= NTDDI_WIN7)
+    ULONG ProcessorIndex = KeGetCurrentProcessorIndex();
+#else
+    ULONG ProcessorIndex = KeGetCurrentProcessorNumber();
+#endif
+
+    ASSERT(ProcessorIndex < MAXIMUM_PROCESSORS);
+    return ProcessorIndex;
+}
+
 /* Exported functions */
 #ifndef EXPORT
 #define EXPORT NTAPI
