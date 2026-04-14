@@ -646,7 +646,12 @@ typedef struct _LOADER_PARAMETER_EXTENSION
     ULONG IumEnabled:1;
 #endif
 #if (OSVER(NTDDI_VERSION) == NTDDI_LONGHORN)
+#if defined(__REACTOS__)
+    ULONG BootViaEFI:1;
+    ULONG Reserved:30;
+#else
     ULONG Reserved:31;
+#endif
 #elif (NTDDI_VERSION == NTDDI_WIN7)
 #if defined(__REACTOS__)
     /* ReactOS-specific flags consumed by freeldr/ntoskrnl UEFI path */

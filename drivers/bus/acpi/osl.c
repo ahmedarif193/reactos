@@ -299,7 +299,9 @@ AcpiOsMapMemory (
     /* ACPI tables can reside above 4 GB on amd64, so keep the full address. */
     Address.QuadPart = (ULONGLONG)phys;
     CacheType = MmNonCached;
+#if (NTDDI_VERSION >= NTDDI_WIN7)
     HalGetMemoryCachingRequirements(Address, length, &CacheType);
+#endif
     Ptr = MmMapIoSpace(Address, length, CacheType);
     if (!Ptr)
     {
@@ -739,8 +741,6 @@ AcpiOsInstallInterruptHandler (
     KIRQL DIrql;
     KAFFINITY Affinity;
     NTSTATUS Status;
-    IO_CONNECT_INTERRUPT_PARAMETERS Parameters;
-    HAL_INTERRUPT_TARGET_INFORMATION TargetInfo;
 
     if (AcpiInterruptHandlerRegistered)
     {
@@ -762,36 +762,60 @@ AcpiOsInstallInterruptHandler (
         InterruptNumber,
         &DIrql,
         &Affinity);
-    DIrql = HalConvertDeviceIdtToIrql(Vector);
+#if (NTDDI_VERSION >= NTDDI_WIN7)
+    {
+        IO_CONNECT_INTERRUPT_PARAMETERS Parameters;
+        HAL_INTERRUPT_TARGET_INFORMATION TargetInfo;
 
-    RtlZeroMemory(&TargetInfo, sizeof(TargetInfo));
-    TargetInfo.Version = HAL_INTERRUPT_TARGET_INFORMATION_VERSION;
-    TargetInfo.TargetProcessors = Affinity;
-    HalGetInterruptTargetInformation(&TargetInfo);
+        DIrql = HalConvertDeviceIdtToIrql(Vector);
 
+        RtlZeroMemory(&TargetInfo, sizeof(TargetInfo));
+        TargetInfo.Version = HAL_INTERRUPT_TARGET_INFORMATION_VERSION;
+        TargetInfo.TargetProcessors = Affinity;
+        HalGetInterruptTargetInformation(&TargetInfo);
+
+        AcpiIrqNumber = InterruptNumber;
+        AcpiIrqHandler = ServiceRoutine;
+        AcpiIrqContext = Context;
+        AcpiInterruptHandlerRegistered = TRUE;
+
+        RtlZeroMemory(&Parameters, sizeof(Parameters));
+        Parameters.Version = CONNECT_FULLY_SPECIFIED;
+        Parameters.FullySpecified.PhysicalDeviceObject = NULL;
+        Parameters.FullySpecified.InterruptObject = (PKINTERRUPT *)&AcpiInterrupt;
+        Parameters.FullySpecified.ServiceRoutine = OslIsrStub;
+        Parameters.FullySpecified.ServiceContext = NULL;
+        Parameters.FullySpecified.SpinLock = NULL;
+        Parameters.FullySpecified.Vector = Vector;
+        Parameters.FullySpecified.Irql = DIrql;
+        Parameters.FullySpecified.SynchronizeIrql = DIrql;
+        Parameters.FullySpecified.InterruptMode = LevelSensitive;
+        Parameters.FullySpecified.ShareVector = TRUE;
+        Parameters.FullySpecified.ProcessorEnableMask =
+            TargetInfo.TargetProcessors ? TargetInfo.TargetProcessors : Affinity;
+        Parameters.FullySpecified.FloatingSave = FALSE;
+        Parameters.FullySpecified.Group = 0;
+
+        Status = IoConnectInterruptEx(&Parameters);
+    }
+#else
     AcpiIrqNumber = InterruptNumber;
     AcpiIrqHandler = ServiceRoutine;
     AcpiIrqContext = Context;
     AcpiInterruptHandlerRegistered = TRUE;
 
-    RtlZeroMemory(&Parameters, sizeof(Parameters));
-    Parameters.Version = CONNECT_FULLY_SPECIFIED;
-    Parameters.FullySpecified.PhysicalDeviceObject = NULL;
-    Parameters.FullySpecified.InterruptObject = (PKINTERRUPT *)&AcpiInterrupt;
-    Parameters.FullySpecified.ServiceRoutine = OslIsrStub;
-    Parameters.FullySpecified.ServiceContext = NULL;
-    Parameters.FullySpecified.SpinLock = NULL;
-    Parameters.FullySpecified.Vector = Vector;
-    Parameters.FullySpecified.Irql = DIrql;
-    Parameters.FullySpecified.SynchronizeIrql = DIrql;
-    Parameters.FullySpecified.InterruptMode = LevelSensitive;
-    Parameters.FullySpecified.ShareVector = TRUE;
-    Parameters.FullySpecified.ProcessorEnableMask =
-        TargetInfo.TargetProcessors ? TargetInfo.TargetProcessors : Affinity;
-    Parameters.FullySpecified.FloatingSave = FALSE;
-    Parameters.FullySpecified.Group = 0;
-
-    Status = IoConnectInterruptEx(&Parameters);
+    Status = IoConnectInterrupt((PKINTERRUPT *)&AcpiInterrupt,
+                                OslIsrStub,
+                                NULL,
+                                NULL,
+                                Vector,
+                                DIrql,
+                                DIrql,
+                                LevelSensitive,
+                                TRUE,
+                                Affinity,
+                                FALSE);
+#endif
 
     if (!NT_SUCCESS(Status))
     {
@@ -807,8 +831,6 @@ AcpiOsRemoveInterruptHandler (
     UINT32                  InterruptNumber,
     ACPI_OSD_HANDLER        ServiceRoutine)
 {
-    IO_DISCONNECT_INTERRUPT_PARAMETERS DisconnectParameters;
-
     DPRINT("AcpiOsRemoveInterruptHandler()\n");
 
     UNREFERENCED_PARAMETER(InterruptNumber);
@@ -821,10 +843,16 @@ AcpiOsRemoveInterruptHandler (
 
     if (AcpiInterruptHandlerRegistered)
     {
+#if (NTDDI_VERSION >= NTDDI_WIN7)
+        IO_DISCONNECT_INTERRUPT_PARAMETERS DisconnectParameters;
+
         RtlZeroMemory(&DisconnectParameters, sizeof(DisconnectParameters));
         DisconnectParameters.Version = CONNECT_FULLY_SPECIFIED;
         DisconnectParameters.ConnectionContext.Generic = AcpiInterrupt;
         IoDisconnectInterruptEx(&DisconnectParameters);
+#else
+        IoDisconnectInterrupt((PKINTERRUPT)AcpiInterrupt);
+#endif
         AcpiInterrupt = NULL;
         AcpiInterruptHandlerRegistered = FALSE;
     }
