@@ -14,6 +14,7 @@
 
 /* Kernel definitions (mock) */
 #define PAGED_CODE()
+#define DPRINT(...)  do { if (0) DbgPrint(__VA_ARGS__); } while (0)
 #define DPRINT1(...) do { if (0) DbgPrint(__VA_ARGS__); } while (0)
 
 typedef struct _IRP
@@ -60,7 +61,47 @@ typedef struct _PDO_DEVICE_DATA
 {
     HANDLE AcpiHandle;
     PWCHAR HardwareIDs;
+    ULONG CachedBusNumber;
+    BOOLEAN HasCachedBusNumber;
+    BOOLEAN HasPciRootBusRange;
+    BOOLEAN HasPciRootSegment;
+    ULONG PciRootSegment;
+    ULONG PciRootMinBus;
+    ULONG PciRootMaxBus;
+#define ACPI_PCI_MAX_WINDOWS 8
+    ULONG PciRootIoWindowCount;
+    struct { ULONGLONG Start; ULONGLONG End; } PciRootIoWindows[ACPI_PCI_MAX_WINDOWS];
+    ULONG PciRootMemWindowCount;
+    struct { ULONGLONG Start; ULONGLONG End; BOOLEAN Prefetchable; } PciRootMemWindows[ACPI_PCI_MAX_WINDOWS];
+    BOOLEAN PciRootLogged;
 } PDO_DEVICE_DATA, *PPDO_DEVICE_DATA;
+
+struct acpi_device_flags
+{
+    unsigned int dynamic_status:1;
+    unsigned int removable:1;
+    unsigned int ejectable:1;
+    unsigned int lockable:1;
+    unsigned int suprise_removal_ok:1;
+    unsigned int power_manageable:1;
+    unsigned int performance_manageable:1;
+    unsigned int wake_capable:1;
+    unsigned int force_power_state:1;
+    unsigned int bus_address:1;
+    unsigned int unique_id:1;
+};
+
+struct acpi_device_pnp
+{
+    char unique_id[9];
+    ULONG bus_address;
+};
+
+struct acpi_device
+{
+    struct acpi_device_flags flags;
+    struct acpi_device_pnp pnp;
+};
 
 /* ACPICA functions (mock) */
 static BOOLEAN AcpiCallExpected;
@@ -102,6 +143,7 @@ AcpiGetPossibleResources (
     return AE_OK;
 }
 
+#undef stat
 #include "../../../../drivers/bus/acpi/buspdo.c"
 
 /* ACPI_RESOURCE builder helpers */
