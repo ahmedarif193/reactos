@@ -1,0 +1,17 @@
+; UEFI Framebuffer Miniport Driver
+[AddReg]
+HKLM,"SYSTEM\CurrentControlSet\Services\uefifb","ErrorControl",0x00010001,0x00000000
+HKLM,"SYSTEM\CurrentControlSet\Services\uefifb","Group",0x00000000,"Video Save"
+HKLM,"SYSTEM\CurrentControlSet\Services\uefifb","ImagePath",0x00020000,"system32\drivers\uefifb.sys"
+HKLM,"SYSTEM\CurrentControlSet\Services\uefifb","Start",0x00010001,0x00000001
+HKLM,"SYSTEM\CurrentControlSet\Services\uefifb","Type",0x00010001,0x00000001
+HKLM,"SYSTEM\CurrentControlSet\Services\uefifb","Tag",0x00010001,0x00000001
+HKLM,"SYSTEM\CurrentControlSet\Services\uefifb\Video","Service",0x00000000,"uefifb"
+
+HKLM,"SYSTEM\CurrentControlSet\Services\uefifb\Device0","InstalledDisplayDrivers",0x00010000,"framebuf"
+HKLM,"SYSTEM\CurrentControlSet\Services\uefifb\Device0","DefaultSettings.VRefresh",0x00010001,0x00000001
+HKLM,"SYSTEM\CurrentControlSet\Services\uefifb\Device0","DefaultSettings.BitsPerPel",0x00010001,0x00000020
+HKLM,"SYSTEM\CurrentControlSet\Services\uefifb\Device0","DefaultSettings.XResolution",0x00010001,0x00000400
+HKLM,"SYSTEM\CurrentControlSet\Services\uefifb\Device0","DefaultSettings.YResolution",0x00010001,0x00000300
+HKLM,"SYSTEM\CurrentControlSet\Services\uefifb\Device0","Device Description",0x00000000,"UEFI Framebuffer"
+HKLM,"SYSTEM\CurrentControlSet\Services\uefifb\Device0","VgaCompatible",0x00010001,0x00000000
