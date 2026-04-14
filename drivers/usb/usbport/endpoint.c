@@ -723,6 +723,7 @@ MiniportCloseEndpoint(IN PDEVICE_OBJECT FdoDevice,
     PUSBPORT_DEVICE_EXTENSION  FdoExtension;
     PUSBPORT_REGISTRATION_PACKET Packet;
     BOOLEAN IsDoDisablePeriodic;
+    BOOLEAN IsOpened;
     ULONG TransferType;
     KIRQL OldIrql;
 
@@ -732,8 +733,9 @@ MiniportCloseEndpoint(IN PDEVICE_OBJECT FdoDevice,
     Packet = &FdoExtension->MiniPortInterface->Packet;
 
     KeAcquireSpinLock(&FdoExtension->MiniportSpinLock, &OldIrql);
+    IsOpened = (Endpoint->Flags & ENDPOINT_FLAG_OPENED) != 0;
 
-    if (Endpoint->Flags & ENDPOINT_FLAG_OPENED)
+    if (IsOpened)
     {
         TransferType = Endpoint->EndpointProperties.TransferType;
 
@@ -744,15 +746,35 @@ MiniportCloseEndpoint(IN PDEVICE_OBJECT FdoDevice,
         }
 
         IsDoDisablePeriodic = FdoExtension->PeriodicEndpoints == 0;
-
-        Packet->CloseEndpoint(FdoExtension->MiniPortExt,
-                              Endpoint + 1,
-                              IsDoDisablePeriodic);
-
         Endpoint->Flags &= ~ENDPOINT_FLAG_OPENED;
         Endpoint->Flags |= ENDPOINT_FLAG_CLOSED;
     }
 
+    KeReleaseSpinLock(&FdoExtension->MiniportSpinLock, OldIrql);
+
+    if (!IsOpened)
+        return;
+
+    /*
+     * Miniports that advertise USB_MINIPORT_FLAGS_CLOSE_AT_PASSIVE require
+     * their CloseEndpoint callback to run at PASSIVE_LEVEL without the
+     * MiniportSpinLock held — xHCI frees ring/common-buffer DMA via
+     * MmFreeContiguousMemory, which is passive-only. Legacy miniports
+     * (UHCI/OHCI/EHCI) keep the historical locked close path because
+     * their callbacks only touch controller state at DISPATCH_LEVEL.
+     */
+    if (Packet->MiniPortFlags & USB_MINIPORT_FLAGS_CLOSE_AT_PASSIVE)
+    {
+        Packet->CloseEndpoint(FdoExtension->MiniPortExt,
+                              Endpoint + 1,
+                              IsDoDisablePeriodic);
+        return;
+    }
+
+    KeAcquireSpinLock(&FdoExtension->MiniportSpinLock, &OldIrql);
+    Packet->CloseEndpoint(FdoExtension->MiniPortExt,
+                          Endpoint + 1,
+                          IsDoDisablePeriodic);
     KeReleaseSpinLock(&FdoExtension->MiniportSpinLock, OldIrql);
 }
 
