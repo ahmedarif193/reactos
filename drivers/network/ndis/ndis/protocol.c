@@ -277,7 +277,7 @@ ProIndicatePacket(
   KeAcquireSpinLock(&Adapter->NdisMiniportBlock.Lock, &OldIrql);
     {
       BufferedLength = CopyPacketToBuffer(LookaheadBuffer, Packet, 0, PacketLength);
-      Adapter->NdisMiniportBlock.IndicatedPacket[KeGetCurrentProcessorNumber()] = Packet;
+      Adapter->NdisMiniportBlock.IndicatedPacket[NdisCurrentProcessorIndex()] = Packet;
     }
   KeReleaseSpinLock(&Adapter->NdisMiniportBlock.Lock, OldIrql);
 
@@ -297,7 +297,7 @@ ProIndicatePacket(
 
   KeAcquireSpinLock(&Adapter->NdisMiniportBlock.Lock, &OldIrql);
     {
-      Adapter->NdisMiniportBlock.IndicatedPacket[KeGetCurrentProcessorNumber()] = NULL;
+      Adapter->NdisMiniportBlock.IndicatedPacket[NdisCurrentProcessorIndex()] = NULL;
     }
   KeReleaseSpinLock(&Adapter->NdisMiniportBlock.Lock, OldIrql);
 
@@ -705,13 +705,13 @@ ProTransferData(
     /* FIXME: Interrupts must be disabled for adapter */
     /* XXX sd - why is that true? */
 
-    if (Adapter->NdisMiniportBlock.IndicatedPacket[KeGetCurrentProcessorNumber()]) {
+    if (Adapter->NdisMiniportBlock.IndicatedPacket[NdisCurrentProcessorIndex()]) {
 	NDIS_DbgPrint(MAX_TRACE, ("LoopPacket\n"));
         /* NDIS is responsible for looping this packet */
         NdisCopyFromPacketToPacket(Packet,
                                    ByteOffset + Adapter->MediumHeaderSize,
                                    BytesToTransfer + Adapter->MediumHeaderSize,
-                                   Adapter->NdisMiniportBlock.IndicatedPacket[KeGetCurrentProcessorNumber()],
+                                   Adapter->NdisMiniportBlock.IndicatedPacket[NdisCurrentProcessorIndex()],
                                    0,
                                    BytesTransferred);
         return NDIS_STATUS_SUCCESS;

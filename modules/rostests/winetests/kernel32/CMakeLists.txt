@@ -1,7 +1,6 @@
 
 include_directories(BEFORE ${REACTOS_SOURCE_DIR}/sdk/include/wine)
 remove_definitions(-DWINVER=0x600 -D_WIN32_IE=0x600 -D_WIN32_WINNT=0x600 -D_CRT_NON_CONFORMING_SWPRINTFS)
-add_definitions(-DWINVER=0x0A00 -D_WIN32_WINNT=0x0A00 -DNTDDI_VERSION=0x0A000007)
 
 # Comment this block out if you want to debug the heap issue with these tests on ROS x64. ROSTESTS-415
 if(ARCH STREQUAL "amd64")
@@ -91,6 +90,9 @@ endif()
 
 if(CMAKE_C_COMPILER_ID STREQUAL "GNU" OR CMAKE_C_COMPILER_ID STREQUAL "Clang")
     target_compile_options(kernel32_winetest PRIVATE
+        -UNTDDI_VERSION -DNTDDI_VERSION=0x0A000007
+        -U_WIN32_WINNT -D_WIN32_WINNT=0x0A00
+        -UWINVER -DWINVER=0x0A00
         -Wno-format
         -Wno-int-conversion
         -Wno-old-style-declaration

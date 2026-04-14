@@ -386,7 +386,7 @@ void ParaNdis_DebugHistory(
     phe->lParam4 = lParam4;
 #if (PARANDIS_DEBUG_HISTORY_DATA_VERSION == 1)
     phe->uIRQL = KeGetCurrentIrql();
-    phe->uProcessor = KeGetCurrentProcessorNumber();
+    phe->uProcessor = ParaNdisCurrentProcessorIndex();
 #endif
     NdisGetCurrentSystemTime(&phe->TimeStamp);
 }
