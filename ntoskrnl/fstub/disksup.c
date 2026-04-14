@@ -897,6 +897,7 @@ xHalIoAssignDriveLetters(IN PLOADER_PARAMETER_BLOCK LoaderBlock,
     HANDLE FileHandle;
     UCHAR DriveLetter;
     BOOLEAN BootableFound;
+    BOOLEAN PreserveBootRamdiskLetter;
     IO_STATUS_BLOCK StatusBlock;
     PARTITION_TYPE PartitionType;
     PSTR LoadOptions;
@@ -910,6 +911,8 @@ xHalIoAssignDriveLetters(IN PLOADER_PARAMETER_BLOCK LoaderBlock,
     WCHAR Buffer[sizeof("\\Device\\Harddisk4294967295\\Partition4294967295")];
 
     PAGED_CODE();
+
+    PreserveBootRamdiskLetter = FALSE;
 
     /* Get our disk count */
     ConfigInfo = IoGetConfigurationInformation();
@@ -1028,8 +1031,9 @@ xHalIoAssignDriveLetters(IN PLOADER_PARAMETER_BLOCK LoaderBlock,
         strstr(LoadOptions, "MININT") != NULL &&
         NT_SUCCESS(RtlAnsiStringToUnicodeString(&DeviceName, NtDeviceName, TRUE)))
     {
-        if (NT_SUCCESS(HalpSetMountLetter(&DeviceName, 'X')))
-            *NtSystemPath = 'X';
+        HalpSetMountLetter(&DeviceName, 'X');
+        *NtSystemPath = 'X';
+        PreserveBootRamdiskLetter = TRUE;
 
         RtlFreeUnicodeString(&DeviceName);
     }
@@ -1220,7 +1224,9 @@ xHalIoAssignDriveLetters(IN PLOADER_PARAMETER_BLOCK LoaderBlock,
     }
 
     /* If not remote boot, handle NtDeviceName */
-    if (!IoRemoteBootClient && NT_SUCCESS(RtlAnsiStringToUnicodeString(&DeviceName, NtDeviceName, TRUE)))
+    if (!IoRemoteBootClient &&
+        !PreserveBootRamdiskLetter &&
+        NT_SUCCESS(RtlAnsiStringToUnicodeString(&DeviceName, NtDeviceName, TRUE)))
     {
         /* Assign it a drive letter */
         DriveLetter = HalpNextDriveLetter(&DeviceName, NULL, NULL, TRUE);
