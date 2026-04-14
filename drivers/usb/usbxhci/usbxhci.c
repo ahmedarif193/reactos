@@ -766,7 +766,8 @@ DriverEntry(
     XhciRegPacket.MiniPortFlags = USB_MINIPORT_FLAGS_INTERRUPT |
                                   USB_MINIPORT_FLAGS_MEMORY_IO |
                                   USB_MINIPORT_FLAGS_USB3 |
-                                  USB_MINIPORT_FLAGS_WAKE_SUPPORT;
+                                  USB_MINIPORT_FLAGS_WAKE_SUPPORT |
+                                  USB_MINIPORT_FLAGS_CLOSE_AT_PASSIVE;
 
     /*
      * SuperSpeed Periodic Bandwidth Budgeting
