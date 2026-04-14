@@ -346,16 +346,16 @@ ACPI_GLOBAL (BOOLEAN,               AcpiGbl_SystemAwakeAndRunning);
 
 #else
 #define ACPI_HW_DEPENDENT_RETURN_STATUS(Prototype) \
-    static ACPI_INLINE Prototype {return(AE_NOT_CONFIGURED);}
+    static ACPI_INLINE ACPI_UNUSED_FUNCTION Prototype {return(AE_NOT_CONFIGURED);}
 
 #define ACPI_HW_DEPENDENT_RETURN_OK(Prototype) \
-    static ACPI_INLINE Prototype {return(AE_OK);}
+    static ACPI_INLINE ACPI_UNUSED_FUNCTION Prototype {return(AE_OK);}
 
 #define ACPI_HW_DEPENDENT_RETURN_UINT32(prototype) \
-    static ACPI_INLINE prototype {return(0);}
+    static ACPI_INLINE ACPI_UNUSED_FUNCTION prototype {return(0);}
 
 #define ACPI_HW_DEPENDENT_RETURN_VOID(Prototype) \
-    static ACPI_INLINE Prototype {return;}
+    static ACPI_INLINE ACPI_UNUSED_FUNCTION Prototype {return;}
 
 #endif /* !ACPI_REDUCED_HARDWARE */
 
@@ -373,7 +373,7 @@ ACPI_GLOBAL (BOOLEAN,               AcpiGbl_SystemAwakeAndRunning);
 
 #else
 #define ACPI_MSG_DEPENDENT_RETURN_VOID(Prototype) \
-    static ACPI_INLINE Prototype {return;}
+    static ACPI_INLINE ACPI_UNUSED_FUNCTION Prototype {return;}
 
 #endif /* ACPI_NO_ERROR_MESSAGES */
 
@@ -391,7 +391,7 @@ ACPI_GLOBAL (BOOLEAN,               AcpiGbl_SystemAwakeAndRunning);
 
 #else
 #define ACPI_DBG_DEPENDENT_RETURN_VOID(Prototype) \
-    static ACPI_INLINE Prototype {return;}
+    static ACPI_INLINE ACPI_UNUSED_FUNCTION Prototype {return;}
 
 #endif /* ACPI_DEBUG_OUTPUT */
 
@@ -409,7 +409,7 @@ ACPI_GLOBAL (BOOLEAN,               AcpiGbl_SystemAwakeAndRunning);
 
 #else
 #define ACPI_APP_DEPENDENT_RETURN_VOID(Prototype) \
-    static ACPI_INLINE Prototype {return;}
+    static ACPI_INLINE ACPI_UNUSED_FUNCTION Prototype {return;}
 
 #endif /* ACPI_APPLICATION */
 
@@ -430,10 +430,10 @@ ACPI_GLOBAL (BOOLEAN,               AcpiGbl_SystemAwakeAndRunning);
 
 #else
 #define ACPI_DBR_DEPENDENT_RETURN_OK(Prototype) \
-    static ACPI_INLINE Prototype {return(AE_OK);}
+    static ACPI_INLINE ACPI_UNUSED_FUNCTION Prototype {return(AE_OK);}
 
 #define ACPI_DBR_DEPENDENT_RETURN_VOID(Prototype) \
-    static ACPI_INLINE Prototype {return;}
+    static ACPI_INLINE ACPI_UNUSED_FUNCTION Prototype {return;}
 
 #endif /* ACPI_DEBUGGER */
 
