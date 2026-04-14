@@ -385,12 +385,17 @@ sort_n_finish(this_dir)
 			if (d1 > 5)
 				rootname[5] = 0;
 		}
-		new_reclen = strlen(rootname);
-		sprintf(newname, "%s000%s%s",
-				rootname,
-				extname,
-				((s_entry->isorec.flags[0] & ISO_DIRECTORY) ||
-				omit_version_number ? "" : ";1"));
+			new_reclen = strlen(rootname);
+			if (strlcpy(newname, rootname, sizeof (newname)) >= sizeof (newname) ||
+			    strlcat(newname, "000", sizeof (newname)) >= sizeof (newname) ||
+			    strlcat(newname, extname, sizeof (newname)) >= sizeof (newname) ||
+			    strlcat(newname,
+				    ((s_entry->isorec.flags[0] & ISO_DIRECTORY) ||
+				    omit_version_number ? "" : ";1"),
+				    sizeof (newname)) >= sizeof (newname))
+				comerrno(EX_BAD,
+					_("Fatal goof, generated ISO name '%s' is too long.\n"),
+					s_entry->isorec.name);
 
 		for (d1 = 0; d1 < 36; d1++) {
 			for (d2 = 0; d2 < 36; d2++) {
@@ -2116,14 +2121,15 @@ insert_file_entry(this_dir, whole_path, short_name, statp, have_rsrc)
 	    strcmp(s_entry->name, ".") != 0 &&
 	    strcmp(s_entry->name, "..") != 0) {
 
-		char	buffer[SECTOR_SIZE];
-		int	nchar;
+			char	*buffer = NULL;
+			int	nchar;
 
-		switch (lstatbuf.st_mode & S_IFMT) {
-		case S_IFDIR:
-			sprintf(buffer, "D\t%s\n",
-				s_entry->name);
-			break;
+			switch (lstatbuf.st_mode & S_IFMT) {
+			case S_IFDIR:
+				buffer = e_malloc(strlen(s_entry->name) + 4);
+				sprintf(buffer, "D\t%s\n",
+					s_entry->name);
+				break;
 
 /*
  * extra for WIN32 - if it doesn't have the major/minor defined, then
@@ -2145,29 +2151,32 @@ insert_file_entry(this_dir, whole_path, short_name, statp, have_rsrc)
 #endif
 
 #ifdef S_IFBLK
-		case S_IFBLK:
-			sprintf(buffer, "B\t%s\t%lu %lu\n",
-				s_entry->name,
-				(unsigned long) major(statbuf.st_rdev),
-				(unsigned long) minor(statbuf.st_rdev));
-			break;
+			case S_IFBLK:
+				buffer = e_malloc(strlen(s_entry->name) + 64);
+				sprintf(buffer, "B\t%s\t%lu %lu\n",
+					s_entry->name,
+					(unsigned long) major(statbuf.st_rdev),
+					(unsigned long) minor(statbuf.st_rdev));
+				break;
 #endif
 #ifdef S_IFIFO
-		case S_IFIFO:
-			sprintf(buffer, "P\t%s\n",
-				s_entry->name);
-			break;
+			case S_IFIFO:
+				buffer = e_malloc(strlen(s_entry->name) + 4);
+				sprintf(buffer, "P\t%s\n",
+					s_entry->name);
+				break;
 #endif
 #ifdef S_IFCHR
-		case S_IFCHR:
-			sprintf(buffer, "C\t%s\t%lu %lu\n",
-				s_entry->name,
-				(unsigned long) major(statbuf.st_rdev),
-				(unsigned long) minor(statbuf.st_rdev));
-			break;
+			case S_IFCHR:
+				buffer = e_malloc(strlen(s_entry->name) + 64);
+				sprintf(buffer, "C\t%s\t%lu %lu\n",
+					s_entry->name,
+					(unsigned long) major(statbuf.st_rdev),
+					(unsigned long) minor(statbuf.st_rdev));
+				break;
 #endif
 #ifdef S_IFLNK
-		case S_IFLNK:
+			case S_IFLNK:
 #ifdef	HAVE_READLINK
 			nchar = readlink(statp?short_name:whole_path,
 				(char *)symlink_buff,
@@ -2177,27 +2186,31 @@ insert_file_entry(this_dir, whole_path, short_name, statp, have_rsrc)
 					statp?short_name:whole_path);
 			}
 #else
-			nchar = -1;
+				nchar = -1;
 #endif
-			symlink_buff[nchar < 0 ? 0 : nchar] = 0;
-			sprintf(buffer, "L\t%s\t%s\n",
-				s_entry->name, symlink_buff);
-			break;
+				symlink_buff[nchar < 0 ? 0 : nchar] = 0;
+				buffer = e_malloc(strlen(s_entry->name) +
+						  strlen((char *)symlink_buff) + 5);
+				sprintf(buffer, "L\t%s\t%s\n",
+					s_entry->name, symlink_buff);
+				break;
 #endif
 #ifdef S_IFSOCK
-		case S_IFSOCK:
-			sprintf(buffer, "S\t%s\n",
-				s_entry->name);
-			break;
+			case S_IFSOCK:
+				buffer = e_malloc(strlen(s_entry->name) + 4);
+				sprintf(buffer, "S\t%s\n",
+					s_entry->name);
+				break;
 #endif
-		case S_IFREG:
-		default:
-			sprintf(buffer, "F\t%s\n",
-				s_entry->name);
-			break;
-		};
-		s_entry->table = e_strdup(buffer);
-	}
+			case S_IFREG:
+			default:
+				buffer = e_malloc(strlen(s_entry->name) + 4);
+				sprintf(buffer, "F\t%s\n",
+					s_entry->name);
+				break;
+			};
+			s_entry->table = buffer;
+		}
 	if (S_ISDIR(statbuf.st_mode)) {
 		int	dflag;
 
