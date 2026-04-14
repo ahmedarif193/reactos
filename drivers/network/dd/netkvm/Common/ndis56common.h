@@ -76,6 +76,18 @@
 #error "Something is wrong with NDIS environment"
 #endif
 
+static FORCEINLINE ULONG ParaNdisCurrentProcessorIndex(VOID)
+{
+#if (NTDDI_VERSION >= NTDDI_WIN7)
+    ULONG ProcessorIndex = KeGetCurrentProcessorIndex();
+#else
+    ULONG ProcessorIndex = KeGetCurrentProcessorNumber();
+#endif
+
+    ASSERT(ProcessorIndex < MAXIMUM_PROCESSORS);
+    return ProcessorIndex;
+}
+
 //define to see when the status register is unreadable(see ParaNdis_ResetVirtIONetDevice)
 //#define VIRTIO_RESET_VERIFY
 
