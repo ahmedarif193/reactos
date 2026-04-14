@@ -438,6 +438,7 @@ static VOID NTAPI XHCI_RebalanceEndpoint(PVOID MiniPortExtension,
                                          PUSBPORT_ENDPOINT_PROPERTIES EndpointProperties,
                                          PVOID EndpointHandle);
 static BOOLEAN XHCI_EnablePciBusMaster(PXHCI_EXTENSION Extension);
+static BOOLEAN XHCI_DisableMessageInterrupts(PXHCI_EXTENSION Extension);
 static VOID XHCI_DisablePciIntx(PXHCI_EXTENSION Extension);
 static VOID NTAPI XHCI_FlushInterrupts(PVOID MiniPortExtension);
 static MPSTATUS NTAPI XHCI_RH_ChirpRootPort(PVOID MiniPortExtension,
@@ -471,9 +472,6 @@ static VOID XHCI_RingCommandDoorbell(PXHCI_EXTENSION Extension);
 static VOID XHCI_ServiceEventRing(PXHCI_EXTENSION Extension,
                                   BOOLEAN AcknowledgeInterrupt,
                                   BOOLEAN AllowCallbacks);
-#if !defined(_M_ARM64)
-static BOOLEAN XHCI_EnableMsix(PXHCI_EXTENSION Extension);
-#endif
 /* Async EP0 bring-up context and callback */
 typedef struct _XHCI_EP0_BRINGUP_CTX {
     PXHCI_ENDPOINT Endpoint;
@@ -8670,52 +8668,84 @@ XHCI_ProbeMsiMsix(
             Extension->MsixEnabled ? 1 : 0);
 }
 
-#if !defined(_M_ARM64)
 /*
- * XHCI_EnableMsix - Enable MSI-X in the PCI device
+ * XHCI_DisableMessageInterrupts - Disable MSI/MSI-X in PCI config space
  *
- * On x86/x64, the miniport driver can enable MSI-X directly because the APIC
- * MSI address format is fixed and doesn't require HAL involvement.
- *
- * On ARM64, MSI-X requires the GIC ITS (Interrupt Translation Service) which
- * must be set up by the HAL. If ITS setup fails (e.g., QEMU HVF doesn't support
- * ITS), USBPORT falls back to legacy INTx. In this case, the miniport should
- * NOT try to enable MSI-X because the MSI-X table contains invalid addresses.
- * Therefore, this function is not used on ARM64.
+ * USBPORT/PCI own interrupt-mode selection and message table programming.
+ * If the controller reaches StartController without an active message-based
+ * interrupt assignment, the miniport must not leave stale MSI/MSI-X enable
+ * bits armed while continuing on legacy INTx.
  */
 static BOOLEAN
-XHCI_EnableMsix(
+XHCI_DisableMessageInterrupts(
     _Inout_ PXHCI_EXTENSION Extension)
 {
-    USHORT MsixControl;
+    USHORT Control;
 
-    if (!Extension || !Extension->MsixSupported || Extension->MsixCapOffset == 0)
+    if (!Extension)
         return FALSE;
 
-    if (!XHCI_ReadPciConfig(Extension,
-                            Extension->MsixCapOffset + 2,
-                            &MsixControl,
-                            sizeof(MsixControl)))
-        return FALSE;
+    if (Extension->MsixCapOffset != 0)
+    {
+        if (!XHCI_ReadPciConfig(Extension,
+                                Extension->MsixCapOffset + 2,
+                                &Control,
+                                sizeof(Control)))
+        {
+            DPRINT1("usbxhci: failed to read MSI-X control while disabling message interrupts\n");
+            return FALSE;
+        }
 
-    if (MsixControl & 0x8000)
-        return TRUE;
+        if (Control & 0x8000)
+        {
+            Control &= (USHORT)~0x8000;
+            Control |= 0x4000;
 
-    /* Clear function mask (bit 14), set MSI-X enable (bit 15). */
-    MsixControl &= ~(1u << 14);
-    MsixControl |= (1u << 15);
+            if (!XHCI_WritePciConfig(Extension,
+                                     Extension->MsixCapOffset + 2,
+                                     &Control,
+                                     sizeof(Control)))
+            {
+                DPRINT1("usbxhci: failed to disable MSI-X (control=0x%04x)\n", Control);
+                return FALSE;
+            }
 
-    if (!XHCI_WritePciConfig(Extension,
-                             Extension->MsixCapOffset + 2,
-                             &MsixControl,
-                             sizeof(MsixControl)))
-        return FALSE;
+            DPRINT1("usbxhci: disabled stale MSI-X (control=0x%04x)\n", Control);
+        }
+    }
 
-    Extension->MsixEnabled = TRUE;
-    DPRINT1("usbxhci: enabled MSI-X (control=0x%04x)\n", MsixControl);
+    if (Extension->MsiCapOffset != 0)
+    {
+        if (!XHCI_ReadPciConfig(Extension,
+                                Extension->MsiCapOffset + 2,
+                                &Control,
+                                sizeof(Control)))
+        {
+            DPRINT1("usbxhci: failed to read MSI control while disabling message interrupts\n");
+            return FALSE;
+        }
+
+        if (Control & 0x0001)
+        {
+            Control &= (USHORT)~0x0001;
+
+            if (!XHCI_WritePciConfig(Extension,
+                                     Extension->MsiCapOffset + 2,
+                                     &Control,
+                                     sizeof(Control)))
+            {
+                DPRINT1("usbxhci: failed to disable MSI (control=0x%04x)\n", Control);
+                return FALSE;
+            }
+
+            DPRINT1("usbxhci: disabled stale MSI (control=0x%04x)\n", Control);
+        }
+    }
+
+    Extension->MsixEnabled = FALSE;
+    Extension->MsiEnabled = FALSE;
     return TRUE;
 }
-#endif /* !_M_ARM64 */
 
 /*
  * XHCI_DisablePciIntx - Set the Interrupt Disable bit in PCI Command register
@@ -11696,6 +11726,8 @@ XHCI_StartController(PVOID MiniPortExtension,
     ULONG HcsParams3;
     ULONG HccParams;
     ULONG Port;
+    BOOLEAN MessageResourceAssigned;
+    BOOLEAN MessageInterruptsEnabled;
     MPSTATUS Status;
 
     if (!Extension || !UsbPortResources ||
@@ -11842,57 +11874,46 @@ XHCI_StartController(PVOID MiniPortExtension,
     }
     /* Probe for MSI/MSI-X capabilities */
     XHCI_ProbeMsiMsix(Extension);
-#if !defined(_M_ARM64)
-    /*
-     * On x86/x64, we can enable MSI-X ourselves if the hardware supports it.
-     * On ARM64, MSI-X requires the GIC ITS which may not be available or may have
-     * failed initialization (e.g., QEMU HVF doesn't support ITS). On ARM64, we rely
-     * on USBPORT to set up MSI-X; if USBPORT failed, MSI-X will not be enabled in
-     * the PCI config and we should not try to enable it ourselves.
-     */
-    if (Extension->MsixSupported && !Extension->MsixEnabled)
-    {
-        if (!XHCI_EnableMsix(Extension))
-            DPRINT1("usbxhci: failed to enable MSI-X\n");
-    }
-#else
-    DPRINT1("usbxhci: ARM64: MSI-X enable delegated to USBPORT (MsixEnabled=%d)\n",
-            Extension->MsixEnabled);
-#endif
-    /* MSI/MSI-X only: require message interrupt resources and enabled MSI/MSI-X. */
-    if ((UsbPortResources->InterruptFlags & CM_RESOURCE_INTERRUPT_MESSAGE) == 0)
-    {
-        DPRINT1("usbxhci: MSI/MSI-X required but no message interrupt resource assigned\n");
-        return MP_STATUS_NOT_SUPPORTED;
-    }
+    MessageResourceAssigned =
+        (UsbPortResources->InterruptFlags & CM_RESOURCE_INTERRUPT_MESSAGE) != 0;
+    MessageInterruptsEnabled = Extension->MsixEnabled || Extension->MsiEnabled;
 
-    if (!Extension->MsixEnabled && !Extension->MsiEnabled)
+    if (MessageResourceAssigned && MessageInterruptsEnabled)
     {
-        DPRINT1("usbxhci: MSI/MSI-X required but not enabled in PCI config\n");
-        return MP_STATUS_NOT_SUPPORTED;
+        /*
+         * Disable legacy INTx interrupts now that MSI/MSI-X is confirmed active.
+         * Per PCI 3.0 spec section 6.8.1, the device must not assert INTx when
+         * MSI/MSI-X is enabled. Some emulators (notably QEMU xhci-pci) violate
+         * this by asserting BOTH MSI and INTx simultaneously, causing an
+         * interrupt storm on the unhandled legacy vector after device disconnect.
+         */
+        XHCI_DisablePciIntx(Extension);
+
+        {
+            ULONG Messages = UsbPortResources->InterruptMessageCount ?
+                             UsbPortResources->InterruptMessageCount : 1;
+            DPRINT("usbxhci: using message interrupts (%lu vector%s)\n",
+                   Messages,
+                   (Messages == 1) ? "" : "s");
+        }
     }
-
-    /*
-     * Disable legacy INTx interrupts now that MSI/MSI-X is confirmed active.
-     * Per PCI 3.0 spec section 6.8.1, the device must not assert INTx when
-     * MSI/MSI-X is enabled. Some emulators (notably QEMU xhci-pci) violate
-     * this by asserting BOTH MSI and INTx simultaneously, causing an interrupt
-     * storm on the unhandled legacy vector after device disconnect.
-     *
-     * USBPORT_ProgramMsixTable/USBPORT_ProgramMsiTable also set this bit,
-     * but we set it again here as defense-in-depth in case:
-     * 1. The PCI bus driver restored default Command register state
-     * 2. USBPORT's MSI programming took a different code path
-     * 3. The bit was cleared by a controller reset during startup
-     */
-    XHCI_DisablePciIntx(Extension);
-
+    else
     {
-        ULONG Messages = UsbPortResources->InterruptMessageCount ?
-                         UsbPortResources->InterruptMessageCount : 1;
-        DPRINT("usbxhci: using message interrupts (%lu vector%s)\n",
-                Messages,
-                (Messages == 1) ? "" : "s");
+        if (MessageInterruptsEnabled &&
+            !XHCI_DisableMessageInterrupts(Extension))
+        {
+            DPRINT1("usbxhci: unable to disable message interrupts for legacy INTx startup\n");
+            return MP_STATUS_ERROR;
+        }
+
+        if (MessageResourceAssigned)
+        {
+            DPRINT1("usbxhci: message interrupt resource assigned but MSI/MSI-X inactive, using legacy INTx fallback\n");
+        }
+        else
+        {
+            DPRINT("usbxhci: no message interrupt resource assigned, using legacy INTx\n");
+        }
     }
 
     Extension->PendingUsbSts = 0;
