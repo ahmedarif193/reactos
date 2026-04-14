@@ -849,13 +849,14 @@ BOOL WINAPI CryptDecrypt (HCRYPTKEY hKey, HCRYPTHASH hHash, BOOL Final,
 			Final, dwFlags, pbData, pdwDataLen);
 #ifdef __REACTOS__
 	}
-	_SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
-    {
-        SetLastError(ERROR_INVALID_PARAMETER);
-        _SEH2_YIELD(return FALSE);
-    }
-    _SEH2_END;
-#endif
+		_SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
+	    {
+	        SetLastError(ERROR_INVALID_PARAMETER);
+	        _SEH2_YIELD(return FALSE);
+	    }
+	    _SEH2_END;
+	    return FALSE;
+	#endif
 }
 
 /******************************************************************************
@@ -1154,13 +1155,14 @@ BOOL WINAPI CryptEncrypt (HCRYPTKEY hKey, HCRYPTHASH hHash, BOOL Final,
 			Final, dwFlags, pbData, pdwDataLen, dwBufLen);
 #ifdef __REACTOS__
 	}
-	_SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
-    {
-        SetLastError(ERROR_INVALID_PARAMETER);
-        _SEH2_YIELD(return FALSE);
-    }
-    _SEH2_END;
-#endif
+		_SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
+	    {
+	        SetLastError(ERROR_INVALID_PARAMETER);
+	        _SEH2_YIELD(return FALSE);
+	    }
+	    _SEH2_END;
+	    return FALSE;
+	#endif
 }
 
 /******************************************************************************
@@ -1489,13 +1491,14 @@ BOOL WINAPI CryptExportKey (HCRYPTKEY hKey, HCRYPTKEY hExpKey, DWORD dwBlobType,
 			dwBlobType, dwFlags, pbData, pdwDataLen);
 #ifdef __REACTOS__
 	}
-	_SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
-    {
-        SetLastError(ERROR_INVALID_PARAMETER);
-        _SEH2_YIELD(return FALSE);
-    }
-    _SEH2_END;
-#endif
+		_SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
+	    {
+	        SetLastError(ERROR_INVALID_PARAMETER);
+	        _SEH2_YIELD(return FALSE);
+	    }
+	    _SEH2_END;
+	    return FALSE;
+	#endif
 }
 
 /******************************************************************************
