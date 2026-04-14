@@ -326,6 +326,7 @@
 @ stdcall InbvDisplayString(str)
 @ stdcall InbvEnableBootDriver(long)
 @ stdcall InbvEnableDisplayString(long)
+@ stdcall InbvGetGopFrameBufferInfo(ptr)
 @ stdcall InbvInstallDisplayStringFilter(ptr)
 @ stdcall InbvIsBootDriverInstalled()
 @ stdcall InbvNotifyDisplayOwnershipLost(ptr)
