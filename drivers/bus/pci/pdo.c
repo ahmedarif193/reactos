@@ -986,7 +986,10 @@ PciPdoNeedsMessageInterruptRequirementsRefresh(
     BOOLEAN AllowMsix;
     BOOLEAN SupportsMsi;
     BOOLEAN SupportsMsix;
+    BOOLEAN HasMessageResource;
+    BOOLEAN HasLegacyResource;
     PDEVICE_NODE DeviceNode;
+    PCM_RESOURCE_LIST EffectiveResources;
     NTSTATUS Status;
 
     if (!DeviceExtension || !DeviceExtension->PciDevice)
@@ -1009,17 +1012,26 @@ PciPdoNeedsMessageInterruptRequirementsRefresh(
     if (!NT_SUCCESS(Status))
         return FALSE;
 
+    EffectiveResources = DeviceNode->ResourceList ?
+                         DeviceNode->ResourceList :
+                         DeviceNode->BootResources;
+    HasMessageResource = PciPdoResourceListHasMessageInterrupt(EffectiveResources);
+    HasLegacyResource = PciPdoResourceListHasLegacyInterrupt(EffectiveResources);
+
     /* DDInstall.HW policy arrives after the first requirements query in
      * this tree. If the device is still running on legacy INTx and the
-     * cached requirements list never advertised message interrupts,
-     * ask PnP for a fresh requirements pass instead of rewriting the
-     * assigned descriptor pair inside START_DEVICE. */
-    if (PciPdoResourceListHasMessageInterrupt(DeviceNode->ResourceList))
-        return FALSE;
-    if (!PciPdoResourceListHasLegacyInterrupt(DeviceNode->ResourceList))
+     * cached requirements list never advertised message interrupts, ask
+     * PnP for a fresh requirements pass instead of rewriting the assigned
+     * descriptor pair inside START_DEVICE. For first-start devices there is
+     * no live ResourceList yet; fall back to BootResources so MSI-only
+     * stacks like xHCI can refresh before their first START_DEVICE fails. */
+    if (HasMessageResource)
         return FALSE;
     if (PciPdoRequirementsListHasMessageInterrupt(DeviceNode->ResourceRequirements))
         return FALSE;
+
+    if (EffectiveResources != NULL)
+        return HasLegacyResource;
 
     return TRUE;
 }
