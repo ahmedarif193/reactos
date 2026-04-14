@@ -64,8 +64,13 @@ include(sdk/cmake/config.cmake)
 # Derive the target NTDDI level from REACTOS_TARGET_NT for *both* the
 # cross-compile (target) build and the host-tools build below — host tools like
 # mkhive need the same NTDDI level the kernel will use so cmlib's hive-format
-# feature gates stay in sync. (NTDDI = _WIN32_WINNT << 16, e.g. 0x601 → 0x06010000.)
-math(EXPR REACTOS_TARGET_NTDDI "${REACTOS_TARGET_NT} * 65536" OUTPUT_FORMAT HEXADECIMAL)
+# feature gates stay in sync. Mirror sdkddkver.h's WS03 default too: when the
+# selected target is 5.2, default NTDDI should be WS03SP1 rather than raw WS03.
+if(REACTOS_TARGET_NT STREQUAL "0x502")
+    set(REACTOS_TARGET_NTDDI "0x05020100")
+else()
+    math(EXPR REACTOS_TARGET_NTDDI "${REACTOS_TARGET_NT} * 65536" OUTPUT_FORMAT HEXADECIMAL)
+endif()
 
 # Compiler flags handling
 include(sdk/cmake/compilerflags.cmake)
