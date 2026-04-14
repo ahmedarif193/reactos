@@ -595,6 +595,10 @@ typedef VOID
 #define USB_MINIPORT_FLAGS_NO_DMA       0x0100
 #define USB_MINIPORT_FLAGS_WAKE_SUPPORT 0x0200
 #define USB_MINIPORT_FLAGS_USB3         0x0400
+/* Miniport requires its CloseEndpoint callback to run at PASSIVE_LEVEL
+ * without MiniportSpinLock held (e.g. xHCI frees ring/common-buffer DMA
+ * via MmFreeContiguousMemory). */
+#define USB_MINIPORT_FLAGS_CLOSE_AT_PASSIVE 0x0800
 
 #define TOTAL_USB11_BUS_BANDWIDTH        12000
 #define TOTAL_USB20_BUS_BANDWIDTH       400000
