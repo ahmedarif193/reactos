@@ -121,15 +121,15 @@
 /* External interface for __KERNEL__, stub is needed */
 
 #define ACPI_EXTERNAL_RETURN_STATUS(Prototype) \
-    static ACPI_INLINE Prototype {return(AE_NOT_CONFIGURED);}
+    static ACPI_INLINE ACPI_UNUSED_FUNCTION Prototype {return(AE_NOT_CONFIGURED);}
 #define ACPI_EXTERNAL_RETURN_OK(Prototype) \
-    static ACPI_INLINE Prototype {return(AE_OK);}
+    static ACPI_INLINE ACPI_UNUSED_FUNCTION Prototype {return(AE_OK);}
 #define ACPI_EXTERNAL_RETURN_VOID(Prototype) \
-    static ACPI_INLINE Prototype {return;}
+    static ACPI_INLINE ACPI_UNUSED_FUNCTION Prototype {return;}
 #define ACPI_EXTERNAL_RETURN_UINT32(Prototype) \
-    static ACPI_INLINE Prototype {return(0);}
+    static ACPI_INLINE ACPI_UNUSED_FUNCTION Prototype {return(0);}
 #define ACPI_EXTERNAL_RETURN_PTR(Prototype) \
-    static ACPI_INLINE Prototype {return(NULL);}
+    static ACPI_INLINE ACPI_UNUSED_FUNCTION Prototype {return(NULL);}
 
 #endif /* CONFIG_ACPI */
 
