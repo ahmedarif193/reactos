@@ -13,7 +13,7 @@
 @ stdcall DceErrorInqTextA (long ptr)
 @ stdcall DceErrorInqTextW (long ptr)
 #@ stub DllGetClassObject
-@ stub DllInstall
+@ stub -private DllInstall
 @ stdcall -private DllRegisterServer()
 @ stub GlobalMutexClearExternal
 @ stub GlobalMutexRequestExternal

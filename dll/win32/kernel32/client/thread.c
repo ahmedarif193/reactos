@@ -85,6 +85,7 @@ BaseThreadStartup(
         }
     }
     _SEH2_END;
+    UNREACHABLE;
 }
 
 VOID
