@@ -307,7 +307,7 @@ WinLdrInitializePhase1(
     }
 #endif
 
-    if (VersionToBoot >= _WIN32_WINNT_VISTA)
+    if (OperatingSystemVersion >= _WIN32_WINNT_VISTA)
     {
         Extension->BootViaWinload = 1;
         Extension->LoaderPerformanceData = PaToVa(&WinLdrSystemBlock->LoaderPerformanceData);
