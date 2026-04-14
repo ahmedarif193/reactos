@@ -816,6 +816,7 @@ SmpTranslateSystemPartitionInformation(VOID)
     HANDLE KeyHandle, LinkHandle;
     ULONG Length, Context;
     size_t StrLength;
+    WCHAR BootDrivePrefix[2] = {0};
     WCHAR LinkBuffer[MAX_PATH];
     struct { KEY_VALUE_PARTIAL_INFORMATION; CHAR Buffer[512]; } ValueBuffer;
     struct { OBJECT_DIRECTORY_INFORMATION; WCHAR Buffer[256]; } DirInfoBuffer;
@@ -903,6 +904,9 @@ SmpTranslateSystemPartitionInformation(VOID)
                     (RtlPrefixUnicodeString(&SystemPartition, &LinkTarget, TRUE) &&
                      (LinkTarget.Buffer[SystemPartition.Length / sizeof(WCHAR)] == L'\\'))))
                 {
+                    BootDrivePrefix[0] = DirInfo->Name.Buffer[0];
+                    BootDrivePrefix[1] = DirInfo->Name.Buffer[1];
+
                     /* All done */
                     break;
                 }
@@ -952,8 +956,8 @@ SmpTranslateSystemPartitionInformation(VOID)
     }
 
     /* Wrap up the end of the link buffer */
-    LinkBuffer[0] = DirInfo->Name.Buffer[0];
-    LinkBuffer[1] = DirInfo->Name.Buffer[1]; // == L':';
+    LinkBuffer[0] = BootDrivePrefix[0];
+    LinkBuffer[1] = BootDrivePrefix[1]; // == L':';
     LinkBuffer[2] = L'\\';
     LinkBuffer[3] = UNICODE_NULL;
 
