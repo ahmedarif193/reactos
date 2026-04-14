@@ -326,6 +326,24 @@ typedef UINT64                          ACPI_PHYSICAL_ADDRESS;
 #endif
 
 /*
+ * Some header-local stub functions are compiled only for specific build
+ * configurations and can legitimately go unused in a translation unit.
+ */
+#ifndef ACPI_UNUSED_FUNCTION
+#if defined(__has_attribute)
+#if __has_attribute(unused)
+#define ACPI_UNUSED_FUNCTION __attribute__ ((unused))
+#endif
+#elif defined(__GNUC__) || defined(__clang__)
+#define ACPI_UNUSED_FUNCTION __attribute__ ((unused))
+#endif
+#endif
+
+#ifndef ACPI_UNUSED_FUNCTION
+#define ACPI_UNUSED_FUNCTION
+#endif
+
+/*
  * All ACPICA external functions that are available to the rest of the
  * kernel are tagged with these macros which can be defined as appropriate
  * for the host.
