@@ -51,7 +51,7 @@ host_read(
     if (!file || !buffer)
         return -1;
 
-    if (fseeko(file, (off_t)offset, SEEK_SET) != 0)
+    if (wim_fseeko(file, (wim_off_t)offset, SEEK_SET) != 0)
         return -1;
 
     return (fread(buffer, 1, size, file) == size) ? 0 : -1;
@@ -62,24 +62,24 @@ host_get_file_size(
     FILE* file,
     uint64_t* size)
 {
-    off_t current;
-    off_t end;
+    wim_off_t current;
+    wim_off_t end;
 
     if (!file || !size)
         return -1;
 
-    current = ftello(file);
+    current = wim_ftello(file);
     if (current < 0)
         return -1;
 
-    if (fseeko(file, 0, SEEK_END) != 0)
+    if (wim_fseeko(file, 0, SEEK_END) != 0)
         return -1;
 
-    end = ftello(file);
+    end = wim_ftello(file);
     if (end < 0)
         return -1;
 
-    if (fseeko(file, current, SEEK_SET) != 0)
+    if (wim_fseeko(file, current, SEEK_SET) != 0)
         return -1;
 
     *size = (uint64_t)end;
