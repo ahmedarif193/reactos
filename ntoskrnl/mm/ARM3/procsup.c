@@ -1215,7 +1215,8 @@ MmCreateProcessAddressSpace(IN ULONG MinWs,
     Process->Spare7 =
 #else
     Process->NextPageColor =
-#endif (USHORT)RtlRandom(&MmProcessColorSeed);
+#endif
+        (USHORT)RtlRandom(&MmProcessColorSeed);
 
     /* Setup the hyperspace lock */
     #if (NTDDI_VERSION < NTDDI_LONGHORN)

@@ -11,12 +11,19 @@
 
 VOID
 NTAPI
+#if (NTDDI_VERSION >= NTDDI_WIN7)
 HalBugCheckSystem(
     _In_ PWHEA_ERROR_SOURCE_DESCRIPTOR ErrorSource,
     _In_ PWHEA_ERROR_RECORD ErrorRecord)
 {
     UNREFERENCED_PARAMETER(ErrorSource);
     UNREFERENCED_PARAMETER(ErrorRecord);
+#else
+HalBugCheckSystem(
+    _In_ PWHEA_ERROR_RECORD ErrorRecord)
+{
+    UNREFERENCED_PARAMETER(ErrorRecord);
+#endif
     DPRINT1("HalBugCheckSystem: STUB\n");
 }
 

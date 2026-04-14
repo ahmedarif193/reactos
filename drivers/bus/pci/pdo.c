@@ -35,6 +35,20 @@ DEFINE_GUID(GUID_PCI_VIRTUALIZATION_INTERFACE,
 #define DBGPRINT(...)
 #endif
 
+#if defined(_M_AMD64)
+NTHALAPI
+NTSTATUS
+NTAPI
+HalpGetInterruptTargetInformation(
+    _Inout_ PHAL_INTERRUPT_TARGET_INFORMATION TargetInformation);
+
+NTHALAPI
+NTSTATUS
+NTAPI
+HalpGetMessageRoutingInfo(
+    _Inout_ PHAL_MESSAGE_ROUTING_INFO RoutingInfo);
+#endif
+
 static
 BOOLEAN
 PciPdoIsBusInRange(
@@ -944,6 +958,26 @@ PciPdoDetermineInterruptPolicy(
 }
 
 static
+ULONG
+PciPdoSelectDestinationId(
+    _In_ KAFFINITY Affinity)
+{
+    ULONG Index = 0;
+    KAFFINITY Mask = Affinity;
+
+    if (Mask == 0)
+        Mask = KeQueryActiveProcessors();
+
+    while ((Mask & 1) == 0)
+    {
+        Mask >>= 1;
+        Index++;
+    }
+
+    return Index;
+}
+
+static
 BOOLEAN
 PciPdoNeedsMessageInterruptRequirementsRefresh(
     _In_ PPDO_DEVICE_EXTENSION DeviceExtension)
@@ -1046,9 +1080,11 @@ PciPdoEnableMsi(
     ULONG MessageCount;
     KAFFINITY Affinity;
     ULONG Vector;
+#if defined(_M_AMD64) || (NTDDI_VERSION >= NTDDI_WIN7)
     HAL_MESSAGE_ROUTING_INFO RoutingInfo;
     HAL_INTERRUPT_TARGET_INFORMATION TargetInfo;
     NTSTATUS Status;
+#endif
 
     Device = DeviceExtension->PciDevice;
     if (!Device || Device->MsiCapability == 0 || !RawDescriptor)
@@ -1068,6 +1104,30 @@ PciPdoEnableMsi(
              TranslatedDescriptor->u.Interrupt.Vector :
              PCI_MSG_RAW(RawDescriptor)->Vector;
 
+#if defined(_M_AMD64)
+    RtlZeroMemory(&TargetInfo, sizeof(TargetInfo));
+    TargetInfo.Version = HAL_INTERRUPT_TARGET_INFORMATION_VERSION;
+    TargetInfo.TargetProcessors = Affinity;
+    Status = HalpGetInterruptTargetInformation(&TargetInfo);
+    if (NT_SUCCESS(Status) && TargetInfo.TargetProcessors != 0)
+        Affinity = TargetInfo.TargetProcessors;
+
+    RtlZeroMemory(&RoutingInfo, sizeof(RoutingInfo));
+    RoutingInfo.Version = HAL_MESSAGE_ROUTING_INFO_VERSION;
+    RoutingInfo.TargetProcessors = Affinity;
+    RoutingInfo.Vector = Vector;
+    RoutingInfo.Irql = TranslatedDescriptor ?
+                       (KIRQL)TranslatedDescriptor->u.Interrupt.Level :
+                       0;
+    RoutingInfo.MessageCount = MessageCount;
+    Status = HalpGetMessageRoutingInfo(&RoutingInfo);
+    if (!NT_SUCCESS(Status))
+        return Status;
+
+    MessageAddressLow = RoutingInfo.MessageAddress.LowPart;
+    MessageAddressHigh = RoutingInfo.MessageAddress.HighPart;
+    MessageData = RoutingInfo.MessageData;
+#elif (NTDDI_VERSION >= NTDDI_WIN7)
     RtlZeroMemory(&TargetInfo, sizeof(TargetInfo));
     TargetInfo.Version = HAL_INTERRUPT_TARGET_INFORMATION_VERSION;
     TargetInfo.TargetProcessors = Affinity;
@@ -1090,6 +1150,11 @@ PciPdoEnableMsi(
     MessageAddressLow = RoutingInfo.MessageAddress.LowPart;
     MessageAddressHigh = RoutingInfo.MessageAddress.HighPart;
     MessageData = RoutingInfo.MessageData;
+#else
+    MessageAddressLow = 0xFEE00000 | (PciPdoSelectDestinationId(Affinity) << 12);
+    MessageAddressHigh = 0;
+    MessageData = (USHORT)(Vector & 0xFF);
+#endif
 
     Control = Device->MsiControl;
     Control &= ~(PCI_MSI_FLAGS_QSIZE | PCI_MSI_FLAGS_ENABLE);
@@ -1147,7 +1212,9 @@ PciPdoEnableMsix(
     ULONG ProgramCount;
     ULONG i;
     USHORT Control;
+#if defined(_M_AMD64) || (NTDDI_VERSION >= NTDDI_WIN7)
     NTSTATUS Status;
+#endif
 
     Device = DeviceExtension->PciDevice;
     if (!Device || Device->MsixCapability == 0 || !Messages || MessageCount == 0)
@@ -1179,8 +1246,10 @@ PciPdoEnableMsix(
         USHORT Data;
         KAFFINITY MsgAffinity;
         ULONG MsgVector;
+#if defined(_M_AMD64) || (NTDDI_VERSION >= NTDDI_WIN7)
         HAL_MESSAGE_ROUTING_INFO RoutingInfo;
         HAL_INTERRUPT_TARGET_INFORMATION TargetInfo;
+#endif
         PPCI_MSIX_TABLE_ENTRY Entry;
 
         MsgAffinity = Messages[i].Affinity;
@@ -1188,6 +1257,30 @@ PciPdoEnableMsix(
             MsgAffinity = KeQueryActiveProcessors();
 
         MsgVector = Messages[i].Vector;
+#if defined(_M_AMD64)
+        RtlZeroMemory(&TargetInfo, sizeof(TargetInfo));
+        TargetInfo.Version = HAL_INTERRUPT_TARGET_INFORMATION_VERSION;
+        TargetInfo.TargetProcessors = MsgAffinity;
+        Status = HalpGetInterruptTargetInformation(&TargetInfo);
+        if (NT_SUCCESS(Status) && TargetInfo.TargetProcessors != 0)
+            MsgAffinity = TargetInfo.TargetProcessors;
+
+        RtlZeroMemory(&RoutingInfo, sizeof(RoutingInfo));
+        RoutingInfo.Version = HAL_MESSAGE_ROUTING_INFO_VERSION;
+        RoutingInfo.TargetProcessors = MsgAffinity;
+        RoutingInfo.Vector = MsgVector;
+        RoutingInfo.MessageCount = 1;
+        Status = HalpGetMessageRoutingInfo(&RoutingInfo);
+        if (!NT_SUCCESS(Status))
+        {
+            MmUnmapIoSpace(TableMapping, ProgramCount * sizeof(PCI_MSIX_TABLE_ENTRY));
+            return Status;
+        }
+
+        AddressLow = RoutingInfo.MessageAddress.LowPart;
+        AddressHigh = RoutingInfo.MessageAddress.HighPart;
+        Data = RoutingInfo.MessageData;
+#elif (NTDDI_VERSION >= NTDDI_WIN7)
         RtlZeroMemory(&TargetInfo, sizeof(TargetInfo));
         TargetInfo.Version = HAL_INTERRUPT_TARGET_INFORMATION_VERSION;
         TargetInfo.TargetProcessors = MsgAffinity;
@@ -1210,6 +1303,10 @@ PciPdoEnableMsix(
         AddressLow = RoutingInfo.MessageAddress.LowPart;
         AddressHigh = RoutingInfo.MessageAddress.HighPart;
         Data = RoutingInfo.MessageData;
+#else
+        AddressLow = 0xFEE00000 | (PciPdoSelectDestinationId(MsgAffinity) << 12);
+        Data = (USHORT)(MsgVector & 0xFF);
+#endif
 
         Entry = (PPCI_MSIX_TABLE_ENTRY)((PUCHAR)TableMapping + (i * sizeof(PCI_MSIX_TABLE_ENTRY)));
         Entry->MessageAddressLow = AddressLow;
