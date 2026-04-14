@@ -86,7 +86,7 @@ HalConvertDeviceIdtToIrql(
 
 NTSTATUS
 NTAPI
-HalGetInterruptTargetInformation(
+HalpGetInterruptTargetInformation(
     _Inout_ PHAL_INTERRUPT_TARGET_INFORMATION TargetInformation)
 {
     ULONG ProcessorNumber;
@@ -115,7 +115,7 @@ HalGetInterruptTargetInformation(
 
 NTSTATUS
 NTAPI
-HalGetMessageRoutingInfo(
+HalpGetMessageRoutingInfo(
     _Inout_ PHAL_MESSAGE_ROUTING_INFO RoutingInfo)
 {
     HAL_INTERRUPT_TARGET_INFORMATION TargetInfo;
@@ -164,7 +164,7 @@ HalGetMessageRoutingInfo(
     TargetInfo.TargetProcessors = RoutingInfo->TargetProcessors;
     TargetInfo.ProcessorNumber = 0;
     TargetInfo.DestinationId = 0;
-    Status = HalGetInterruptTargetInformation(&TargetInfo);
+    Status = HalpGetInterruptTargetInformation(&TargetInfo);
     if (!NT_SUCCESS(Status))
         return Status;
 
@@ -175,6 +175,24 @@ HalGetMessageRoutingInfo(
     RoutingInfo->MessageData = (USHORT)(RoutingInfo->Vector & 0xFF);
     return STATUS_SUCCESS;
 }
+
+#if (NTDDI_VERSION >= NTDDI_WIN7)
+NTSTATUS
+NTAPI
+HalGetInterruptTargetInformation(
+    _Inout_ PHAL_INTERRUPT_TARGET_INFORMATION TargetInformation)
+{
+    return HalpGetInterruptTargetInformation(TargetInformation);
+}
+
+NTSTATUS
+NTAPI
+HalGetMessageRoutingInfo(
+    _Inout_ PHAL_MESSAGE_ROUTING_INFO RoutingInfo)
+{
+    return HalpGetMessageRoutingInfo(RoutingInfo);
+}
+#endif
 
 KIRQL
 FASTCALL

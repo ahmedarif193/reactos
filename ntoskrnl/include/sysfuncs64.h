@@ -1,3 +1,5 @@
+#include <sdkddkver.h>
+
 SVC_(MapUserPhysicalPagesScatter, 3)
 SVC_(WaitForSingleObject, 4)
 SVC_(CallbackReturn, 3)
@@ -641,5 +643,4 @@ SVC_(WaitLowEventPair, 1)
 #if (NTDDI_VERSION >= NTDDI_VISTA)
 SVC_(WorkerFactoryWorkerReady, 1)
 #endif
-
 
