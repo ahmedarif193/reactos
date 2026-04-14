@@ -45,7 +45,7 @@ IopCreateArcNames(IN PLOADER_PARAMETER_BLOCK LoaderBlock)
     BOOLEAN FoundBoot = FALSE;
     UNICODE_STRING SystemDevice, LoaderPathNameW, BootDeviceName;
     PARC_DISK_INFORMATION ArcDiskInfo = LoaderBlock->ArcDiskInformation;
-    ANSI_STRING ArcSystemString, ArcString, LanmanRedirector, LoaderPathNameA;
+    ANSI_STRING ArcString, LanmanRedirector, LoaderPathNameA;
     BOOLEAN RamdiskBoot = (_strnicmp(LoaderBlock->ArcBootDeviceName, "ramdisk(0)", 10) == 0);
 
     /* Check if we only have one disk on the machine */

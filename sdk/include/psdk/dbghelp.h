@@ -630,6 +630,23 @@ typedef enum _MINIDUMP_CALLBACK_TYPE
     MemoryCallback,
 } MINIDUMP_CALLBACK_TYPE;
 
+/*
+ * These callback structs are 4-byte packed as part of the public dbghelp ABI,
+ * but CONTEXT still carries a stronger alignment requirement on some targets.
+ * Keep the layout intact and silence the compiler's packed/alignment warning.
+ */
+#if defined(__clang__)
+#if __has_warning("-Wpacked-not-aligned")
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wpacked-not-aligned"
+#define DBGHELP_RESTORE_PACKED_NOT_ALIGNED
+#endif
+#elif defined(__GNUC__) && (__GNUC__ >= 9)
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wpacked-not-aligned"
+#define DBGHELP_RESTORE_PACKED_NOT_ALIGNED
+#endif
+
 typedef struct _MINIDUMP_THREAD_CALLBACK
 {
     ULONG                       ThreadId;
@@ -651,6 +668,15 @@ typedef struct _MINIDUMP_THREAD_EX_CALLBACK
     ULONG64                     BackingStoreBase;
     ULONG64                     BackingStoreEnd;
 } MINIDUMP_THREAD_EX_CALLBACK, *PMINIDUMP_THREAD_EX_CALLBACK;
+
+#ifdef DBGHELP_RESTORE_PACKED_NOT_ALIGNED
+#if defined(__clang__)
+#pragma clang diagnostic pop
+#else
+#pragma GCC diagnostic pop
+#endif
+#undef DBGHELP_RESTORE_PACKED_NOT_ALIGNED
+#endif
 
 typedef struct _MINIDUMP_INCLUDE_THREAD_CALLBACK
 {
