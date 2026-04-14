@@ -521,6 +521,7 @@ UDFIndexDirectory(
     uint16 PartNum;
     SIZE_T ReadBytes;
     uint16 valueCRC;
+    uint64 ExtLength;
 
     if(!FileInfo) return STATUS_INVALID_PARAMETER;
     ValidateFileInfo(FileInfo);
@@ -532,6 +533,7 @@ UDFIndexDirectory(
     ASSERT((uint32)(ExtInfo->Length));
     if(!ExtInfo->Length)
         return STATUS_FILE_CORRUPT_ERROR;
+    ExtLength = (uint64)ExtInfo->Length;
     buff = (int8*)DbgAllocatePool(PagedPool, (uint32)(ExtInfo->Length));
     if(!buff)
         return STATUS_INSUFFICIENT_RESOURCES;
@@ -576,7 +578,7 @@ UDFIndexDirectory(
         Offset += (FileId->lengthFileIdent + FileId->lengthOfImpUse + sizeof(FILE_IDENT_DESC) + 3) & (~((uint32)3));
         FileId = (PFILE_IDENT_DESC)((buff)+Offset);
         Count++;
-        if(Offset+sizeof(FILE_IDENT_DESC) > ExtInfo->Length) {
+        if(((uint64)Offset + sizeof(FILE_IDENT_DESC)) > ExtLength) {
             if(Offset != ExtInfo->Length) {
                 UDFPrint(("  Trash at the end of Dir\n"));
             }
@@ -668,8 +670,9 @@ UDFIndexDirectory(
             DirNdx->FI_Flags |= UDFBuildHashEntry(Vcb, &(DirNdx->FName), &(DirNdx->hashes), HASH_ALL | HASH_KEEP_NAME);
         } else {
             // init plain file/dir entry
-            ASSERT( (Offset+sizeof(FILE_IDENT_DESC)+FileId->lengthOfImpUse+FileId->lengthFileIdent) <=
-                    ExtInfo->Length );
+            ASSERT( ((uint64)Offset + sizeof(FILE_IDENT_DESC) +
+                     FileId->lengthOfImpUse + FileId->lengthFileIdent) <=
+                    ExtLength );
             UDFDecompressUnicode(&(DirNdx->FName),
                              ((uint8*)(FileId+1)) + (FileId->lengthOfImpUse),
                              FileId->lengthFileIdent,
@@ -714,7 +717,7 @@ UDFIndexDirectory(
         Offset += DirNdx->Length;
         FileId = (PFILE_IDENT_DESC)(((int8*)FileId)+DirNdx->Length);
         Count++;
-        if(Offset+sizeof(FILE_IDENT_DESC) > ExtInfo->Length) {
+        if(((uint64)Offset + sizeof(FILE_IDENT_DESC)) > ExtLength) {
             if(Offset != ExtInfo->Length) {
                 UDFPrint(("  Trash at the end of Dir (2)\n"));
             }
@@ -1478,4 +1481,3 @@ UDFInsertLinkedFile(
     fi->PrevLinkedFile->NextLinkedFile = fi;
     return;
 } // end UDFInsertLinkedFile()
-
