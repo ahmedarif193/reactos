@@ -138,7 +138,7 @@ handle_seh_pragma(cpp_reader* UNUSED parser)
         (pragma_lex(&x) != CPP_EOF)
         )
     {
-        error("%<#pragma REACTOS seh%> needs two parameters%>");
+        error("%<#pragma REACTOS seh%> needs two parameters");
         return;
     }
 
@@ -190,7 +190,7 @@ finish_seh_function(void* event_data, void* UNUSED user_data)
 
     if (DECL_FUNCTION_PERSONALITY(fndef) != nullptr)
     {
-        error("Function %s has a personality. Are you mixing SEH with C++ exceptions ?",
+        error("Function %s has a personality. Are you mixing SEH with C++ exceptions?",
               IDENTIFIER_POINTER(fndef));
         return;
     }

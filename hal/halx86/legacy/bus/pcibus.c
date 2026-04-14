@@ -1304,4 +1304,3 @@ HalpInitializePciStubs(VOID)
 }
 
 /* EOF */
-
