@@ -1,10 +1,6 @@
 
 cmake_minimum_required(VERSION 3.17.0)
 
-if(NOT CMAKE_VERSION MATCHES "ReactOS")
-    message(WARNING "Building with \"${CMAKE_COMMAND}\", which is not the custom CMake included in RosBE, might cause build issues...")
-endif()
-
 include(CMakeDependentOption)
 
 # CMAKE_CROSSCOMPILING and MSVC_IDE are not set until project() is called, so let's test this instead
@@ -229,8 +225,8 @@ Enable this if the module uses typeid or dynamic_cast. You will probably need to
         message(WARNING "-- Disabling precompiled headers support (ccache).")
         option(PCH "Whether to use precompiled headers" OFF)
         set_property(GLOBAL PROPERTY RULE_LAUNCH_COMPILE ccache)
-    elseif(CMAKE_C_COMPILER_ID STREQUAL "GNU")
-        message(WARNING "-- Disabling precompiled headers on GCC by default CORE-17108.")
+    elseif(CMAKE_C_COMPILER_ID STREQUAL "GNU" AND CMAKE_C_COMPILER_VERSION VERSION_LESS_EQUAL 15)
+        message(STATUS "-- Disabling precompiled headers on GCC <= 15 by default CORE-17108.")
         option(PCH "Whether to use precompiled headers" OFF)
     else()
         option(PCH "Whether to use precompiled headers" ON)
