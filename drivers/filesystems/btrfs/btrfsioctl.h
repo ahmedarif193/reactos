@@ -54,7 +54,7 @@ typedef struct {
 } btrfs_create_snapshot;
 
 typedef struct {
-    void* POINTER_32 subvol;
+    UINT32 subvol;
     BOOL readonly;
     BOOL posix;
     uint16_t namelen;
@@ -271,9 +271,9 @@ typedef struct {
 } btrfs_send_subvol;
 
 typedef struct {
-    void* POINTER_32 parent;
+    UINT32 parent;
     ULONG num_clones;
-    void* POINTER_32 clones[1];
+    UINT32 clones[1];
 } btrfs_send_subvol32;
 
 typedef struct {
