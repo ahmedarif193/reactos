@@ -12,6 +12,14 @@
 #define NDEBUG
 #include <debug.h>
 
+#if defined(_M_AMD64)
+NTHALAPI
+NTSTATUS
+NTAPI
+HalpGetMessageRoutingInfo(
+    _Inout_ PHAL_MESSAGE_ROUTING_INFO RoutingInfo);
+#endif
+
 /* Strict MSI/legacy vector-range separation on Intel APIC HAL.
  *
  * Legacy line IRQs map through HalpIrqToVector(irq) = irq +
@@ -324,7 +332,7 @@ IopFindInterruptResource(
            IoDesc->Flags,
            IoDesc->u.Interrupt.MinimumVector, IoDesc->u.Interrupt.MaximumVector);
 
-#ifdef _M_AMD64
+#if defined(_M_AMD64)
     /* MSI/MSI-X satisfaction path. Allocate a real message vector
      * via the HAL allocator and synthesize a
      * CM_RESOURCE_INTERRUPT_MESSAGE descriptor. The PCI driver's
@@ -342,7 +350,7 @@ IopFindInterruptResource(
             RoutingInfo.DesiredIrql = CLOCK_LEVEL - 1;
             RoutingInfo.MessageCount = 1;
 
-            RoutingStatus = HalGetMessageRoutingInfo(&RoutingInfo);
+            RoutingStatus = HalpGetMessageRoutingInfo(&RoutingInfo);
             if (NT_SUCCESS(RoutingStatus))
             {
                 CmDesc->Flags = IoDesc->Flags;
@@ -360,7 +368,7 @@ IopFindInterruptResource(
             return FALSE;
         }
     }
-#endif /* _M_AMD64 */
+#endif /* defined(_M_AMD64) */
 
     {
         ULONG LegacyMin = IoDesc->u.Interrupt.MinimumVector;

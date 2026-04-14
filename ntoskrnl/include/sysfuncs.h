@@ -1,3 +1,5 @@
+#include <sdkddkver.h>
+
     SVC_(AcceptConnectPort, 6)
     SVC_(AccessCheck, 8)
     SVC_(AccessCheckAndAuditAlarm, 11)
@@ -294,4 +296,6 @@
     SVC_(QueryPortInformationProcess, 0)
     SVC_(GetCurrentProcessorNumber, 0)
     SVC_(WaitForMultipleObjects32, 5)
+#if (NTDDI_VERSION >= NTDDI_VISTA)
     SVC_(CreateUserProcess, 11)
+#endif
