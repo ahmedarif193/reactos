@@ -475,6 +475,7 @@ BaseProcessStartup(
         }
     }
     _SEH2_END;
+    UNREACHABLE;
 }
 
 BOOLEAN
