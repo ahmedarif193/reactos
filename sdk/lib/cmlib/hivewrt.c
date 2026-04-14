@@ -56,6 +56,7 @@ HvpValidateBaseHeader(
     ASSERT(BaseBlock->Major == HSYS_MAJOR);
 }
 
+#if (NTDDI_VERSION < NTDDI_VISTA)
 /**
  * @unimplemented
  * @brief
@@ -276,6 +277,7 @@ HvpWriteLog(
 
     return TRUE;
 }
+#endif /* NTDDI_VERSION < NTDDI_VISTA */
 
 /**
  * @brief
