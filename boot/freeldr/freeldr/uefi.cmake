@@ -54,8 +54,13 @@ if(ARCH STREQUAL "i386")
 elseif(ARCH STREQUAL "amd64")
     list(APPEND UEFILDR_COMMON_ASM_SOURCE
         arch/uefi/amd64/uefiasm.S
-        ${REACTOS_SOURCE_DIR}/sdk/lib/vcruntime/amd64/__longjmp_noframe.s
-        ${REACTOS_SOURCE_DIR}/sdk/lib/vcruntime/amd64/_setjmp.s)
+        ${REACTOS_SOURCE_DIR}/sdk/lib/vcruntime/amd64/__longjmp_noframe.s)
+    if(CMAKE_C_COMPILER_ID STREQUAL "GNU" AND
+       CMAKE_C_COMPILER_VERSION VERSION_GREATER_EQUAL "15")
+        list(APPEND UEFILDR_COMMON_ASM_SOURCE
+            ${REACTOS_SOURCE_DIR}/sdk/lib/vcruntime/amd64/_setjmp.s
+            ${REACTOS_SOURCE_DIR}/sdk/lib/vcruntime/amd64/_intrinsic_setjmp.s)
+    endif()
 elseif(ARCH STREQUAL "arm")
     list(APPEND UEFILDR_ARC_SOURCE
         arch/arm/macharm.c
