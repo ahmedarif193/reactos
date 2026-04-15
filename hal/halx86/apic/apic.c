@@ -447,6 +447,7 @@ HalpGetRootInterruptVector(
         return 0;
     }
 
+Exit:
     *OutAffinity = HalpDefaultInterruptAffinity;
     ASSERT(HalpDefaultInterruptAffinity);
 
