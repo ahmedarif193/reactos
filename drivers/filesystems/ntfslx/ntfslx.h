@@ -771,6 +771,10 @@ NtfslxReadFileObject(
     _Out_opt_ PULONG BytesRead);
 
 NTSTATUS
+NtfslxRefreshFileObjectMetadata(
+    _In_ PFILE_OBJECT FileObject);
+
+NTSTATUS
 NtfslxWriteFileObject(
     _In_ PFILE_OBJECT FileObject,
     _In_reads_bytes_(Length) const VOID *Buffer,
@@ -1082,6 +1086,25 @@ NtfslxReadReparsePoint(
     _Outptr_opt_ PVOID *ReparseData,
     _Out_opt_ PUSHORT ReparseDataLength);
 
+NTSTATUS
+NtfslxSetReparsePoint(
+    _In_ PFILE_OBJECT FileObject,
+    _In_reads_bytes_(InputLength) PVOID InputBuffer,
+    _In_ ULONG InputLength);
+
+NTSTATUS
+NtfslxGetReparsePoint(
+    _In_ PFILE_OBJECT FileObject,
+    _Out_writes_bytes_to_(OutputLength, *ReturnLength) PVOID OutputBuffer,
+    _In_ ULONG OutputLength,
+    _Out_ PULONG ReturnLength);
+
+NTSTATUS
+NtfslxDeleteReparsePoint(
+    _In_ PFILE_OBJECT FileObject,
+    _In_reads_bytes_(InputLength) PVOID InputBuffer,
+    _In_ ULONG InputLength);
+
 /* ========================================================================
  * Extended attributes (ea.c) - EA reading
  * ======================================================================== */
@@ -1102,6 +1125,16 @@ NtfslxReadEaData(
     _In_ ULONGLONG MftIndex,
     _Outptr_ PVOID *EaBuffer,
     _Out_ PULONG EaBufferLength);
+
+NTSTATUS
+NtfslxQueryEa(
+    _In_ PDEVICE_OBJECT DeviceObject,
+    _Inout_ PIRP Irp);
+
+NTSTATUS
+NtfslxSetEa(
+    _In_ PDEVICE_OBJECT DeviceObject,
+    _Inout_ PIRP Irp);
 
 /* ========================================================================
  * Metadata helpers (metadata.c) - mapping pairs and mapped read

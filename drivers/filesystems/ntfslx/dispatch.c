@@ -2781,6 +2781,13 @@ NtfslxFillNameInformation(
         NameCharCount = FnAttr->FileNameLength;
     }
 
+    /* NTFS root is stored as "." internally, but Win32 root queries expect just "\". */
+    if (Name != NULL && NameCharCount == 1 && Name[0] == L'.')
+    {
+        Name = NULL;
+        NameCharCount = 0;
+    }
+
     /* Format is "\<name>" — leading backslash plus the file name. */
     TotalBytes = HeaderBytes + (NameCharCount + 1) * sizeof(WCHAR);
     if (BufferLength < HeaderBytes + sizeof(WCHAR))
@@ -2856,6 +2863,12 @@ NtfslxQueryFileInformation(
     else
     {
         ValidContext = TRUE;
+        Status = NtfslxRefreshFileObjectMetadata(Stack->FileObject);
+        if (!NT_SUCCESS(Status))
+        {
+            DbgPrint("ntfslx: QueryFileInformation refresh failed 0x%08lx\n", Status);
+            return NtfslxCompleteRequest(Irp, Status, 0);
+        }
         NtfslxCollectFileMetadata(FileContext, &StdInfo, &FnAttr, &RealAttributes);
     }
 
@@ -2946,6 +2959,28 @@ NtfslxQueryFileInformation(
         {
             PFILE_EA_INFORMATION Info = SystemBuffer;
             Info->EaSize = 0;
+            if (ValidContext)
+            {
+                NTFSLX_EA_INFORMATION EaInfo;
+
+                Status = NtfslxReadEaInformation(DeviceExtension->StorageDevice,
+                                                 &DeviceExtension->VolumeInfo,
+                                                 DeviceExtension->MftRunlist,
+                                                 FileContext->MftIndex,
+                                                 &EaInfo);
+                if (Status == STATUS_NOT_FOUND)
+                {
+                    Status = STATUS_SUCCESS;
+                }
+                else if (!NT_SUCCESS(Status))
+                {
+                    break;
+                }
+                else
+                {
+                    Info->EaSize = EaInfo.EaLength;
+                }
+            }
             ReturnLength = sizeof(*Info);
         }
         else
@@ -2960,6 +2995,28 @@ NtfslxQueryFileInformation(
             PFILE_ATTRIBUTE_TAG_INFORMATION Info = SystemBuffer;
             Info->FileAttributes = RealAttributes;
             Info->ReparseTag = 0;
+            if (ValidContext)
+            {
+                Status = NtfslxReadReparsePoint(DeviceExtension->StorageDevice,
+                                                &DeviceExtension->VolumeInfo,
+                                                DeviceExtension->MftRunlist,
+                                                FileContext->MftIndex,
+                                                &Info->ReparseTag,
+                                                NULL,
+                                                NULL);
+                if (Status == STATUS_NOT_A_REPARSE_POINT)
+                {
+                    Status = STATUS_SUCCESS;
+                }
+                else if (!NT_SUCCESS(Status))
+                {
+                    break;
+                }
+                else
+                {
+                    Info->FileAttributes |= FILE_ATTRIBUTE_REPARSE_POINT;
+                }
+            }
             ReturnLength = sizeof(*Info);
         }
         else
@@ -3084,6 +3141,28 @@ NtfslxQueryFileInformation(
             Info->InternalInformation.IndexNumber.QuadPart =
                 NtfslxQueryFileId(FileContext);
             Info->EaInformation.EaSize = 0;
+            if (ValidContext)
+            {
+                NTFSLX_EA_INFORMATION EaInfo;
+
+                Status = NtfslxReadEaInformation(DeviceExtension->StorageDevice,
+                                                 &DeviceExtension->VolumeInfo,
+                                                 DeviceExtension->MftRunlist,
+                                                 FileContext->MftIndex,
+                                                 &EaInfo);
+                if (Status == STATUS_NOT_FOUND)
+                {
+                    Status = STATUS_SUCCESS;
+                }
+                else if (!NT_SUCCESS(Status))
+                {
+                    break;
+                }
+                else
+                {
+                    Info->EaInformation.EaSize = EaInfo.EaLength;
+                }
+            }
             Info->AccessInformation.AccessFlags = 0;
             Info->PositionInformation.CurrentByteOffset =
                 Stack->FileObject->CurrentByteOffset;
@@ -3985,8 +4064,16 @@ NtfslxFsdDispatch(
             Status = NtfslxQueryFileInformation(DeviceObject, Irp);
             break;
 
+        case IRP_MJ_QUERY_EA:
+            Status = NtfslxQueryEa(DeviceObject, Irp);
+            break;
+
         case IRP_MJ_SET_INFORMATION:
             Status = NtfslxSetInformation(DeviceObject, Irp);
+            break;
+
+        case IRP_MJ_SET_EA:
+            Status = NtfslxSetEa(DeviceObject, Irp);
             break;
 
         case IRP_MJ_SHUTDOWN:

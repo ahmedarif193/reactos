@@ -22,6 +22,8 @@
  * terminator. 512 comfortably holds ~30 fragmented runs before we'd need an
  * attribute-list promotion (out of scope for this pass). */
 #define NTFSLX_MP_ENCODE_MAX           512
+#define NTFSLX_NONRESIDENT_ATTR_HEADER_SIZE \
+    (FIELD_OFFSET(NTFSLX_ATTR_RECORD, Data.NonResident.CompressedSize) + sizeof(ULONGLONG))
 
 NTSTATUS
 NtfslxExtendedWrite(
@@ -276,6 +278,90 @@ NtfslxCountRunlistEntries(
     return Count + 1;
 }
 
+
+static
+NTSTATUS
+NtfslxEnsureNonResidentRunlistState(
+    _Inout_ PNTFSLX_FILE_CONTEXT FileContext)
+{
+    PNTFSLX_ATTR_RECORD DataAttr;
+    PNTFSLX_RUNLIST_ELEMENT RebuiltRunlist;
+    ULONG ActualCount;
+    ULONG RebuiltCount;
+    NTSTATUS Status;
+
+    if (FileContext == NULL || FileContext->ResidentData)
+    {
+        return STATUS_SUCCESS;
+    }
+
+    DataAttr = FileContext->DataAttribute;
+    if (FileContext->DataRunlist == NULL || DataAttr == NULL || DataAttr->NonResident == 0)
+    {
+        return STATUS_INVALID_DEVICE_REQUEST;
+    }
+
+    ActualCount = NtfslxCountRunlistEntries(FileContext->DataRunlist);
+    if (ActualCount == 0)
+    {
+        return STATUS_FILE_CORRUPT_ERROR;
+    }
+
+    if (ActualCount != FileContext->DataRunlistCount)
+    {
+        DbgPrint("ntfslx: runlist count fixup mft=%I64u old=%lu new=%lu alloc=%I64u data=%I64u\n",
+                 FileContext->MftIndex,
+                 FileContext->DataRunlistCount,
+                 ActualCount,
+                 FileContext->AllocationSize,
+                 FileContext->DataSize);
+        FileContext->DataRunlistCount = ActualCount;
+    }
+
+    if (FileContext->AllocationSize == 0 || FileContext->DataRunlistCount > 1)
+    {
+        return STATUS_SUCCESS;
+    }
+
+    RebuiltRunlist = NULL;
+    RebuiltCount = 0;
+    Status = NtfslxMappingPairsDecompress(&FileContext->DeviceExtension->VolumeInfo,
+                                          DataAttr,
+                                          &RebuiltRunlist,
+                                          &RebuiltCount);
+    if (!NT_SUCCESS(Status))
+    {
+        DbgPrint("ntfslx: runlist rebuild failed mft=%I64u status=0x%08lx alloc=%I64u data=%I64u\n",
+                 FileContext->MftIndex,
+                 Status,
+                 FileContext->AllocationSize,
+                 FileContext->DataSize);
+        return Status;
+    }
+
+    ActualCount = NtfslxCountRunlistEntries(RebuiltRunlist);
+    if (ActualCount <= 1)
+    {
+        ExFreePoolWithTag(RebuiltRunlist, NTFSLX_TAG);
+        DbgPrint("ntfslx: runlist rebuild still empty mft=%I64u alloc=%I64u data=%I64u\n",
+                 FileContext->MftIndex,
+                 FileContext->AllocationSize,
+                 FileContext->DataSize);
+        return STATUS_FILE_CORRUPT_ERROR;
+    }
+
+    DbgPrint("ntfslx: runlist rebuilt mft=%I64u old=%lu new=%lu alloc=%I64u data=%I64u\n",
+             FileContext->MftIndex,
+             FileContext->DataRunlistCount,
+             ActualCount,
+             FileContext->AllocationSize,
+             FileContext->DataSize);
+    ExFreePoolWithTag(FileContext->DataRunlist, NTFSLX_TAG);
+    FileContext->DataRunlist = RebuiltRunlist;
+    FileContext->DataRunlistCount = ActualCount;
+    return STATUS_SUCCESS;
+}
+
 static
 NTSTATUS
 NtfslxSplitRunlistAtCluster(
@@ -412,6 +498,11 @@ NtfslxRewriteNonResidentDataAttribute(
     }
 
     MpOffset = DataAttr->Data.NonResident.MappingPairsOffset;
+    if (MpOffset < NTFSLX_NONRESIDENT_ATTR_HEADER_SIZE)
+    {
+        MpOffset = NTFSLX_NONRESIDENT_ATTR_HEADER_SIZE;
+        DataAttr->Data.NonResident.MappingPairsOffset = (USHORT)MpOffset;
+    }
     NewAttrLength = ROUND_UP(MpOffset + MpSize, 8);
     if (NewAttrLength != DataAttr->Length)
     {
@@ -432,6 +523,7 @@ NtfslxRewriteNonResidentDataAttribute(
     DataAttr->Data.NonResident.InitializedSize = DataSize;
     DataAttr->Data.NonResident.CompressedSize = 0;
 
+
     return STATUS_SUCCESS;
 }
 
@@ -449,6 +541,7 @@ NtfslxTruncateNonResident(
     PNTFSLX_RUNLIST_ELEMENT OldRunlist;
     ULONG KeepRunlistCount;
     ULONG TailRunlistCount;
+    ULONG OldRunlistCount;
     ULONG ClusterSize;
     ULONGLONG CurrentClusters;
     ULONGLONG NewClusters;
@@ -461,8 +554,10 @@ NtfslxTruncateNonResident(
     DataAttr = FileContext->DataAttribute;
     KeepRunlist = NULL;
     TailRunlist = NULL;
+    OldRunlist = NULL;
     KeepRunlistCount = 0;
     TailRunlistCount = 0;
+    OldRunlistCount = 0;
 
     if (DataAttr == NULL || DataAttr->NonResident == 0)
     {
@@ -471,6 +566,12 @@ NtfslxTruncateNonResident(
     if (FileContext->DataRunlist == NULL)
     {
         return STATUS_INVALID_DEVICE_REQUEST;
+    }
+
+    Status = NtfslxEnsureNonResidentRunlistState(FileContext);
+    if (!NT_SUCCESS(Status))
+    {
+        return Status;
     }
 
     ClusterSize = DevExt->VolumeInfo.BytesPerCluster;
@@ -502,6 +603,83 @@ NtfslxTruncateNonResident(
         }
 
         return Status;
+    }
+
+    if (NewClusters == 0)
+    {
+        ASSERT(CurrentClusters != 0);
+
+        KeepRunlist = ExAllocatePoolWithTag(NonPagedPool,
+                                            sizeof(NTFSLX_RUNLIST_ELEMENT),
+                                            NTFSLX_TAG);
+        if (KeepRunlist == NULL)
+        {
+            return STATUS_INSUFFICIENT_RESOURCES;
+        }
+
+        KeepRunlist[0].Vcn = 0;
+        KeepRunlist[0].Lcn = NTFSLX_LCN_ENOENT;
+        KeepRunlist[0].Length = 0;
+        KeepRunlistCount = 1;
+
+        OldRunlist = FileContext->DataRunlist;
+        OldRunlistCount = FileContext->DataRunlistCount;
+
+        Status = NtfslxRewriteNonResidentDataAttribute(FileContext,
+                                                       DataAttr,
+                                                       KeepRunlist,
+                                                       0,
+                                                       0,
+                                                       0);
+        if (!NT_SUCCESS(Status))
+        {
+            goto Cleanup;
+        }
+
+        Status = NtfslxWriteMftRecord(DevExt->StorageDevice, &DevExt->VolumeInfo,
+                                      DevExt->MftRunlist, FileContext->MftIndex,
+                                      Record);
+        if (!NT_SUCCESS(Status))
+        {
+            goto Cleanup;
+        }
+
+        FileContext->DataRunlist = KeepRunlist;
+        FileContext->DataRunlistCount = KeepRunlistCount;
+        FileContext->AllocationSize = 0;
+        FileContext->DataSize = 0;
+        KeepRunlist = NULL;
+
+        ASSERT(FileContext->DataRunlistCount == 1);
+        ASSERT(FileContext->DataRunlist[0].Length == 0);
+
+        NtfslxUpdateFcbAndCacheSizes(FileContext, 0, 0, 0);
+        NtfslxUpdateFileNameSize(FileContext, 0, 0);
+        FileContext->PendingDataNotify = TRUE;
+
+        FreeStatus = STATUS_SUCCESS;
+        if (OldRunlist != NULL && OldRunlistCount > 1)
+        {
+            DbgPrint("ntfslx: TruncateNonRes freeing full runlist mft=%I64u runs=%lu oldClusters=%I64u\n",
+                     FileContext->MftIndex,
+                     OldRunlistCount,
+                     CurrentClusters);
+            FreeStatus = NtfslxFreeClusters(DevExt->StorageDevice, &DevExt->VolumeInfo,
+                                            DevExt->MftRunlist, OldRunlist, OldRunlistCount);
+            if (!NT_SUCCESS(FreeStatus))
+            {
+                DbgPrint("ntfslx: TruncateNonRes zero-size free failed mft=%I64u status=0x%08lx\n",
+                         FileContext->MftIndex,
+                         FreeStatus);
+            }
+        }
+
+        if (OldRunlist != NULL)
+        {
+            ExFreePoolWithTag(OldRunlist, NTFSLX_TAG);
+        }
+
+        return NT_SUCCESS(FreeStatus) ? Status : FreeStatus;
     }
 
     Status = NtfslxSplitRunlistAtCluster(FileContext->DataRunlist,
@@ -958,7 +1136,7 @@ NtfslxPromoteToNonResident(
         }
 
         /* New layout: 16 (generic header) + 48 (non-resident block) + mapping pairs */
-        HeaderName = 64;
+        HeaderName = NTFSLX_NONRESIDENT_ATTR_HEADER_SIZE;
         MpOffset = HeaderName;
         NewAttrSize = ROUND_UP(MpOffset + MpSize, 8);
 
@@ -1085,6 +1263,12 @@ NtfslxExtendNonResident(
         return STATUS_INVALID_DEVICE_REQUEST;
     }
 
+    Status = NtfslxEnsureNonResidentRunlistState(FileContext);
+    if (!NT_SUCCESS(Status))
+    {
+        return Status;
+    }
+
     CurrentClusters = FileContext->AllocationSize / ClusterSize;
     NewTotalClusters = (NewAllocSize + ClusterSize - 1) / ClusterSize;
     if (NewTotalClusters <= CurrentClusters)
@@ -1189,7 +1373,7 @@ NtfslxExtendNonResident(
     MpOffset = DataAttr->Data.NonResident.MappingPairsOffset;
     if (MpOffset == 0)
     {
-        MpOffset = 64;
+        MpOffset = NTFSLX_NONRESIDENT_ATTR_HEADER_SIZE;
     }
     OldAttrLength = DataAttr->Length;
     NewAttrLength = ROUND_UP(MpOffset + MpSize, 8);
@@ -1295,9 +1479,17 @@ NtfslxWriteNonResidentOverwrite(
     ULONG I;
     NTSTATUS Status;
 
+    NTSTATUS NormalizeStatus;
+
     DevExt = FileContext->DeviceExtension;
     ClusterSize = DevExt->VolumeInfo.BytesPerCluster;
     SectorSize = DevExt->VolumeInfo.BytesPerSector;
+
+    NormalizeStatus = NtfslxEnsureNonResidentRunlistState(FileContext);
+    if (!NT_SUCCESS(NormalizeStatus))
+    {
+        return NormalizeStatus;
+    }
 
     if (ByteOffset + Length > FileContext->AllocationSize)
     {

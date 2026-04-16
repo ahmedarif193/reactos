@@ -87,6 +87,15 @@ NtfslxSameMftReference(
 }
 
 static
+NTSTATUS
+NtfslxBuildAttributeDataRunlist(
+    _In_ PNTFSLX_DEVICE_EXTENSION DeviceExtension,
+    _In_ PNTFSLX_MFT_RECORD FileRecord,
+    _In_ PNTFSLX_ATTR_RECORD Attribute,
+    _Outptr_ PNTFSLX_RUNLIST_ELEMENT *Runlist,
+    _Out_ PULONG RunlistCount);
+
+static
 VOID
 NtfslxFreeRunlist(
     _In_opt_ PNTFSLX_RUNLIST_ELEMENT Runlist)
@@ -207,6 +216,128 @@ NtfslxValidateFileContext(
         *FileContext = Context;
     }
 
+    return STATUS_SUCCESS;
+}
+
+static
+VOID
+NtfslxRefreshFcbAndCacheSizes(
+    _Inout_ PNTFSLX_FILE_CONTEXT FileContext,
+    _In_ ULONGLONG NewAllocationSize,
+    _In_ ULONGLONG NewFileSize,
+    _In_ ULONGLONG NewValidDataLength)
+{
+    CC_FILE_SIZES Sizes;
+
+    if (NewAllocationSize < NewFileSize)
+    {
+        NewAllocationSize = NewFileSize;
+    }
+    if (NewValidDataLength > NewFileSize)
+    {
+        NewValidDataLength = NewFileSize;
+    }
+
+    FileContext->FcbHeader.AllocationSize.QuadPart = (LONGLONG)NewAllocationSize;
+    FileContext->FcbHeader.FileSize.QuadPart = (LONGLONG)NewFileSize;
+    FileContext->FcbHeader.ValidDataLength.QuadPart = (LONGLONG)NewValidDataLength;
+
+    if (FileContext->CacheContext != NULL)
+    {
+        Sizes.AllocationSize.QuadPart = (LONGLONG)NewAllocationSize;
+        Sizes.FileSize.QuadPart = (LONGLONG)NewFileSize;
+        Sizes.ValidDataLength.QuadPart = (LONGLONG)NewValidDataLength;
+        (VOID)NtfslxCacheRuntimeSetFileSizes(FileContext->CacheContext, &Sizes);
+    }
+}
+
+NTSTATUS
+NtfslxRefreshFileObjectMetadata(
+    _In_ PFILE_OBJECT FileObject)
+{
+    PNTFSLX_FILE_CONTEXT Context;
+    PNTFSLX_ATTR_RECORD DataAttribute;
+    PNTFSLX_RUNLIST_ELEMENT NewRunlist = NULL;
+    ULONG NewRunlistCount = 0;
+    NTSTATUS Status;
+
+    Status = NtfslxValidateFileContext(FileObject, &Context);
+    if (!NT_SUCCESS(Status))
+    {
+        return Status;
+    }
+
+    if (Context->IsDirectory || Context->FileRecord == NULL)
+    {
+        return STATUS_SUCCESS;
+    }
+
+    Status = NtfslxReadMftRecord(Context->DeviceExtension->StorageDevice,
+                                 &Context->DeviceExtension->VolumeInfo,
+                                 Context->DeviceExtension->MftRunlist,
+                                 Context->MftIndex,
+                                 Context->FileRecord);
+    if (!NT_SUCCESS(Status))
+    {
+        return Status;
+    }
+
+    Status = NtfslxFindAttribute(Context->FileRecord,
+                                 NTFSLX_ATTRIBUTE_DATA,
+                                 NULL,
+                                 0,
+                                 &DataAttribute);
+    if (Status == STATUS_OBJECT_NAME_NOT_FOUND)
+    {
+        NtfslxFreeRunlist(Context->DataRunlist);
+        Context->DataRunlist = NULL;
+        Context->DataRunlistCount = 0;
+        Context->DataAttribute = NULL;
+        Context->ResidentData = TRUE;
+        Context->DataSize = 0;
+        Context->AllocationSize = 0;
+        NtfslxRefreshFcbAndCacheSizes(Context, 0, 0, 0);
+        return STATUS_SUCCESS;
+    }
+    if (!NT_SUCCESS(Status))
+    {
+        return Status;
+    }
+
+    if (DataAttribute->NonResident != 0)
+    {
+        Status = NtfslxBuildAttributeDataRunlist(Context->DeviceExtension,
+                                                 Context->FileRecord,
+                                                 DataAttribute,
+                                                 &NewRunlist,
+                                                 &NewRunlistCount);
+        if (!NT_SUCCESS(Status))
+        {
+            return Status;
+        }
+    }
+
+    NtfslxFreeRunlist(Context->DataRunlist);
+    Context->DataRunlist = NewRunlist;
+    Context->DataRunlistCount = NewRunlistCount;
+    Context->DataAttribute = DataAttribute;
+    Context->ResidentData = (DataAttribute->NonResident == 0);
+    Context->DataSize = Context->ResidentData
+        ? DataAttribute->Data.Resident.ValueLength
+        : DataAttribute->Data.NonResident.DataSize;
+    Context->AllocationSize = Context->ResidentData
+        ? DataAttribute->Data.Resident.ValueLength
+        : DataAttribute->Data.NonResident.AllocatedSize;
+
+    NtfslxRefreshFcbAndCacheSizes(Context,
+                                  Context->AllocationSize,
+                                  Context->DataSize,
+                                  Context->DataSize);
+    DbgPrint("ntfslx: RefreshFileObjectMetadata mft=%I64u data=%I64u alloc=%I64u resident=%u\n",
+             Context->MftIndex,
+             Context->DataSize,
+             Context->AllocationSize,
+             Context->ResidentData);
     return STATUS_SUCCESS;
 }
 
@@ -1037,6 +1168,16 @@ NtfslxReadFileObject(
     {
         DbgPrint("ntfslx: Read mft=%I64u: is directory\n", Context->MftIndex);
         return STATUS_INVALID_DEVICE_REQUEST;
+    }
+
+    if (!PagingIo)
+    {
+        Status = NtfslxRefreshFileObjectMetadata(FileObject);
+        if (!NT_SUCCESS(Status))
+        {
+            DbgPrint("ntfslx: Read: refresh metadata failed 0x%08lx\n", Status);
+            return Status;
+        }
     }
 
     LocalOffset = *ByteOffset;

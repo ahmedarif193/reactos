@@ -590,7 +590,7 @@ NtfslxAppendRightLeafIndexBlock(
                                  &BitmapAttr);
     if (!NT_SUCCESS(Status) || BitmapAttr->NonResident != 0)
     {
-        Status = NT_SUCCESS(Status) ? STATUS_NOT_SUPPORTED : Status;
+        Status = NT_SUCCESS(Status) ? STATUS_FILE_CORRUPT_ERROR : Status;
         goto Cleanup;
     }
 
@@ -616,7 +616,7 @@ NtfslxAppendRightLeafIndexBlock(
                                      &BitmapAttr);
         if (!NT_SUCCESS(Status) || BitmapAttr->NonResident != 0)
         {
-            Status = NT_SUCCESS(Status) ? STATUS_NOT_SUPPORTED : Status;
+            Status = NT_SUCCESS(Status) ? STATUS_FILE_CORRUPT_ERROR : Status;
             goto Cleanup;
         }
 
@@ -1506,7 +1506,7 @@ NtfslxSpillIndexRootToAllocation(
         NtfslxFreeClusters(DevExt->StorageDevice, &DevExt->VolumeInfo,
                            DevExt->MftRunlist, Runlist, RunlistCount);
         ExFreePoolWithTag(Runlist, NTFSLX_TAG);
-        return STATUS_NOT_SUPPORTED;
+        return STATUS_FILE_CORRUPT_ERROR;
     }
 
     /* Build a single-run mapping pair. */
@@ -1693,7 +1693,7 @@ NtfslxIndexAllocationInsert(
                                  &IndexAllocAttr);
     if (!NT_SUCCESS(Status) || IndexAllocAttr->NonResident == 0)
     {
-        return STATUS_NOT_SUPPORTED;
+        return STATUS_FILE_CORRUPT_ERROR;
     }
 
     Status = NtfslxBuildIndexAllocationRunlist(IndexAllocAttr,
@@ -2055,7 +2055,7 @@ NtfslxIndexInsertFileName(
     {
         ExFreePoolWithTag(DirRecord, NTFSLX_TAG);
         ExFreePoolWithTag(NewEntry, NTFSLX_TAG);
-        return STATUS_DISK_FULL; /* Non-resident index root not supported */
+        return STATUS_FILE_CORRUPT_ERROR;
     }
 
     IndexRoot = (PNTFSLX_INDEX_ROOT)((PUCHAR)IndexRootAttr +
@@ -2319,7 +2319,7 @@ NtfslxIndexUpdateFileName(
     if (IndexRootAttr->NonResident != 0)
     {
         ExFreePoolWithTag(DirRecord, NTFSLX_TAG);
-        return STATUS_NOT_SUPPORTED;
+        return STATUS_FILE_CORRUPT_ERROR;
     }
 
     IndexRoot = (PNTFSLX_INDEX_ROOT)((PUCHAR)IndexRootAttr +
@@ -2444,7 +2444,7 @@ NtfslxIndexRemoveFileName(
     if (IndexRootAttr->NonResident != 0)
     {
         ExFreePoolWithTag(DirRecord, NTFSLX_TAG);
-        return STATUS_NOT_SUPPORTED;
+        return STATUS_FILE_CORRUPT_ERROR;
     }
 
     IndexRoot = (PNTFSLX_INDEX_ROOT)((PUCHAR)IndexRootAttr +

@@ -12,6 +12,9 @@
  *   are accepted. Anything that would require allocation growth, compression
  *   handling, sparse fill semantics, or journaling is rejected with
  *   deterministic NTSTATUS values instead of being faked.
+ * - Nonresident files whose InitializedSize trails DataSize are accepted only
+ *   when the write stays fully inside the initialized prefix. We do not fake
+ *   hole-filling or metadata extension for those cases.
  */
 
 #include "ntfslx.h"
@@ -68,6 +71,37 @@ NtfslxSafeMultiplyUlongLong(
     }
 
     return TRUE;
+}
+
+static
+BOOLEAN
+NtfslxIsWriteWithinInitializedSize(
+    _In_ PNTFSLX_FILE_CONTEXT FileContext,
+    _In_ ULONGLONG ByteOffset,
+    _In_ ULONG Length)
+{
+    ULONGLONG EndOffset;
+    ULONGLONG InitializedSize;
+
+    if (FileContext == NULL ||
+        FileContext->DataAttribute == NULL ||
+        FileContext->ResidentData)
+    {
+        return FALSE;
+    }
+
+    if (!NtfslxSafeAddUlongLong(ByteOffset, Length, &EndOffset))
+    {
+        return FALSE;
+    }
+
+    InitializedSize = FileContext->DataAttribute->Data.NonResident.InitializedSize;
+    if (InitializedSize > FileContext->DataSize)
+    {
+        return FALSE;
+    }
+
+    return EndOffset <= InitializedSize;
 }
 
 static
@@ -189,11 +223,6 @@ NtfslxValidateConservativeWriteContext(
             return STATUS_FILE_CORRUPT_ERROR;
         }
 
-        if (FileContext->DataAttribute->Data.NonResident.InitializedSize !=
-            FileContext->DataAttribute->Data.NonResident.DataSize)
-        {
-            return STATUS_NOT_SUPPORTED;
-        }
     }
     else
     {
@@ -572,9 +601,9 @@ NtfslxWriteNonResidentData(
 
     if (FileContext->DataAttribute->Data.NonResident.DataSize != FileContext->DataSize ||
         FileContext->DataAttribute->Data.NonResident.AllocatedSize != FileContext->AllocationSize ||
-        FileContext->DataAttribute->Data.NonResident.InitializedSize != FileContext->DataSize)
+        FileContext->DataAttribute->Data.NonResident.InitializedSize > FileContext->DataSize)
     {
-        return STATUS_NOT_SUPPORTED;
+        return STATUS_FILE_CORRUPT_ERROR;
     }
 
     if (ByteOffset > FileContext->DataSize)
@@ -591,6 +620,11 @@ NtfslxWriteNonResidentData(
         EndOffset > FileContext->DataSize)
     {
         return STATUS_NOT_IMPLEMENTED;
+    }
+
+    if (!NtfslxIsWriteWithinInitializedSize(FileContext, ByteOffset, Length))
+    {
+        return STATUS_NOT_SUPPORTED;
     }
 
     return NtfslxWriteMappedData(FileContext->DeviceExtension->StorageDevice,

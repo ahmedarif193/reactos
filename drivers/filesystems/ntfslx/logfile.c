@@ -11,12 +11,154 @@
 
 #define NTFS_BLOCK_SIZE 512
 
+static
+BOOLEAN
+NtfslxValidateResidentAttributeValueBounds(
+    _In_ PNTFSLX_ATTR_RECORD Attribute)
+{
+    ULONG ValueOffset;
+    ULONG ValueLength;
+
+    if (Attribute == NULL || Attribute->NonResident != 0)
+    {
+        return FALSE;
+    }
+
+    ValueOffset = Attribute->Data.Resident.ValueOffset;
+    ValueLength = Attribute->Data.Resident.ValueLength;
+
+    if (ValueOffset < FIELD_OFFSET(NTFSLX_ATTR_RECORD, Data.Resident) ||
+        ValueOffset > Attribute->Length ||
+        ValueLength > Attribute->Length - ValueOffset)
+    {
+        return FALSE;
+    }
+
+    return TRUE;
+}
+
+static
+LONGLONG
+NtfslxRunlistVcnToLcn(
+    _In_ PNTFSLX_RUNLIST_ELEMENT Runlist,
+    _In_ LONGLONG Vcn)
+{
+    ULONG Index;
+
+    if (Runlist == NULL)
+    {
+        return NTFSLX_LCN_RL_NOT_MAPPED;
+    }
+
+    if (Vcn < Runlist[0].Vcn)
+    {
+        return NTFSLX_LCN_ENOENT;
+    }
+
+    for (Index = 0; Runlist[Index].Length != 0; ++Index)
+    {
+        if (Vcn < Runlist[Index + 1].Vcn)
+        {
+            if (Runlist[Index].Lcn >= 0)
+            {
+                return Runlist[Index].Lcn + (Vcn - Runlist[Index].Vcn);
+            }
+
+            return Runlist[Index].Lcn;
+        }
+    }
+
+    return Runlist[Index].Lcn;
+}
+
+static
+NTSTATUS
+NtfslxReadLogFileData(
+    _In_ BOOLEAN ResidentData,
+    _In_reads_bytes_opt_(ResidentDataSize) const PUCHAR ResidentBuffer,
+    _In_ ULONGLONG ResidentDataSize,
+    _In_opt_ PDEVICE_OBJECT StorageDevice,
+    _In_opt_ PNTFSLX_RUNLIST_ELEMENT LogRunlist,
+    _In_ PNTFSLX_VOLUME_INFO VolumeInfo,
+    _In_ ULONGLONG Offset,
+    _Out_writes_bytes_(Length) PUCHAR Buffer,
+    _In_ ULONG Length)
+{
+    ULONGLONG Remaining;
+    ULONGLONG CurrentOffset;
+    ULONG ClusterOffset;
+    ULONG ChunkLength;
+    LONGLONG Vcn;
+    LONGLONG Lcn;
+    NTSTATUS Status;
+
+    if (Length == 0)
+    {
+        return STATUS_INVALID_PARAMETER;
+    }
+
+    if (ResidentData)
+    {
+        if (ResidentBuffer == NULL ||
+            Offset > ResidentDataSize ||
+            (ULONGLONG)Length > ResidentDataSize - Offset)
+        {
+            return STATUS_FILE_CORRUPT_ERROR;
+        }
+
+        RtlCopyMemory(Buffer, ResidentBuffer + Offset, Length);
+        return STATUS_SUCCESS;
+    }
+
+    if (StorageDevice == NULL || LogRunlist == NULL || VolumeInfo == NULL)
+    {
+        return STATUS_INVALID_PARAMETER;
+    }
+
+    Remaining = Length;
+    CurrentOffset = Offset;
+    while (Remaining != 0)
+    {
+        Vcn = (LONGLONG)(CurrentOffset / VolumeInfo->BytesPerCluster);
+        ClusterOffset = (ULONG)(CurrentOffset % VolumeInfo->BytesPerCluster);
+        ChunkLength = VolumeInfo->BytesPerCluster - ClusterOffset;
+        if ((ULONGLONG)ChunkLength > Remaining)
+        {
+            ChunkLength = (ULONG)Remaining;
+        }
+
+        Lcn = NtfslxRunlistVcnToLcn(LogRunlist, Vcn);
+        if (Lcn == NTFSLX_LCN_HOLE || Lcn < 0)
+        {
+            return STATUS_FILE_CORRUPT_ERROR;
+        }
+
+        Status = NtfslxReadDisk(StorageDevice,
+                                (LONGLONG)(Lcn * VolumeInfo->BytesPerCluster + ClusterOffset),
+                                ChunkLength,
+                                VolumeInfo->BytesPerSector,
+                                Buffer,
+                                FALSE);
+        if (!NT_SUCCESS(Status))
+        {
+            return Status;
+        }
+
+        Buffer += ChunkLength;
+        CurrentOffset += ChunkLength;
+        Remaining -= ChunkLength;
+    }
+
+    return STATUS_SUCCESS;
+}
+
 /*
  * Validate a single restart page header for consistency.
  */
 static BOOLEAN
 NtfslxCheckRestartPageHeader(
     _In_ PNTFSLX_RESTART_PAGE_HEADER Rp,
+    _In_ ULONG BufferLength,
     _In_ LONGLONG Position)
 {
     ULONG SystemPageSize;
@@ -45,6 +187,9 @@ NtfslxCheckRestartPageHeader(
         return FALSE;
     }
 
+    if (BufferLength < sizeof(NTFSLX_RESTART_PAGE_HEADER))
+        return FALSE;
+
     /* Position must be 0 (first page) or SystemPageSize (second page) */
     if (Position != 0 && Position != (LONGLONG)SystemPageSize)
         return FALSE;
@@ -64,16 +209,22 @@ NtfslxCheckRestartPageHeader(
     UsaOffset = Rp->UsaOffset;
     UsaEnd = UsaOffset + UsaCount * sizeof(USHORT);
     if (UsaOffset < sizeof(NTFSLX_RESTART_PAGE_HEADER) ||
-        UsaEnd > NTFS_BLOCK_SIZE - sizeof(USHORT))
+        UsaEnd > BufferLength - sizeof(USHORT))
     {
         return FALSE;
     }
 
 SkipUsa:
-    /* Restart area offset must be 8-byte aligned and within the page */
+    /* Restart area offset must be 8-byte aligned and within the buffered page */
     RaOffset = Rp->RestartAreaOffset;
-    if ((RaOffset & 7) != 0 || RaOffset > SystemPageSize)
+    if ((RaOffset & 7) != 0 ||
+        RaOffset > SystemPageSize ||
+        RaOffset < sizeof(NTFSLX_RESTART_PAGE_HEADER) ||
+        RaOffset > BufferLength ||
+        RaOffset + sizeof(NTFSLX_RESTART_AREA) > BufferLength)
+    {
         return FALSE;
+    }
 
     return TRUE;
 }
@@ -125,11 +276,12 @@ NtfslxCheckLogFile(
     PNTFSLX_MFT_RECORD LogFileRecord = NULL;
     PNTFSLX_ATTR_RECORD DataAttr = NULL;
     PNTFSLX_RUNLIST_ELEMENT LogRunlist = NULL;
-    ULONG LogRunlistCount = 0;
     PUCHAR PageBuffer = NULL;
     ULONG PageSize;
+    ULONG PageReadLength;
     LONGLONG LogFileDataSize;
-    LONGLONG DiskOffset;
+    BOOLEAN ResidentData = FALSE;
+    PUCHAR ResidentBuffer = NULL;
     BOOLEAN Page1Valid = FALSE;
     BOOLEAN Page2Valid = FALSE;
 
@@ -156,30 +308,35 @@ NtfslxCheckLogFile(
 
     if (DataAttr->NonResident == 0)
     {
-        /* Resident LogFile is unexpected but technically valid if small */
-        Status = STATUS_NOT_SUPPORTED;
-        goto Cleanup;
+        if (!NtfslxValidateResidentAttributeValueBounds(DataAttr))
+        {
+            Status = STATUS_FILE_CORRUPT_ERROR;
+            goto Cleanup;
+        }
+
+        ResidentData = TRUE;
+        ResidentBuffer = (PUCHAR)DataAttr + DataAttr->Data.Resident.ValueOffset;
+        LogFileDataSize = (LONGLONG)DataAttr->Data.Resident.ValueLength;
+        DbgPrint("ntfslx: CheckLogFile: resident $LogFile size=%I64u\n",
+                 LogFileDataSize);
     }
-
-    LogFileDataSize = (LONGLONG)DataAttr->Data.NonResident.DataSize;
-
-    /* Build runlist for LogFile data */
+    else
     {
         PNTFSLX_RUNLIST_ELEMENT TempRl = NULL;
         ULONG TempCount = 0;
+
+        LogFileDataSize = (LONGLONG)DataAttr->Data.NonResident.DataSize;
 
         Status = NtfslxMappingPairsDecompress(VolumeInfo, DataAttr, &TempRl, &TempCount);
         if (!NT_SUCCESS(Status))
             goto Cleanup;
 
         LogRunlist = TempRl;
-        LogRunlistCount = TempCount;
     }
 
     /*
-     * Read the first NTFS_BLOCK_SIZE bytes from offset 0.
-     * That's enough to check the restart page header.
-     * We'll read a full system page once we know the size.
+     * Read the first restart-page chunk from offset 0.
+     * Resident LogFile values may be smaller than 512 bytes; use what exists.
      */
     PageBuffer = ExAllocatePoolWithTag(NonPagedPool, NTFS_BLOCK_SIZE, NTFSLX_TAG);
     if (PageBuffer == NULL)
@@ -188,29 +345,42 @@ NtfslxCheckLogFile(
         goto Cleanup;
     }
 
-    /* Read first sector of LogFile */
-    if (LogRunlist == NULL || LogRunlistCount == 0)
+    PageReadLength = NTFS_BLOCK_SIZE;
+    if (ResidentData && LogFileDataSize < (LONGLONG)PageReadLength)
+    {
+        PageReadLength = (ULONG)LogFileDataSize;
+    }
+
+    if (PageReadLength < sizeof(NTFSLX_RESTART_PAGE_HEADER))
     {
         Status = STATUS_FILE_CORRUPT_ERROR;
         goto Cleanup;
     }
 
-    DiskOffset = LogRunlist[0].Lcn * VolumeInfo->BytesPerCluster;
-    Status = NtfslxReadDisk(StorageDevice, DiskOffset, NTFS_BLOCK_SIZE,
-                            VolumeInfo->BytesPerSector, PageBuffer, FALSE);
+    Status = NtfslxReadLogFileData(ResidentData,
+                                   ResidentBuffer,
+                                   (ULONGLONG)LogFileDataSize,
+                                   StorageDevice,
+                                   LogRunlist,
+                                   VolumeInfo,
+                                   0,
+                                   PageBuffer,
+                                   PageReadLength);
     if (!NT_SUCCESS(Status))
         goto Cleanup;
 
     /* Check first restart page header */
     if (NtfslxCheckRestartPageHeader(
-            (PNTFSLX_RESTART_PAGE_HEADER)PageBuffer, 0))
+            (PNTFSLX_RESTART_PAGE_HEADER)PageBuffer,
+            PageReadLength,
+            0))
     {
         PNTFSLX_RESTART_PAGE_HEADER Rp = (PNTFSLX_RESTART_PAGE_HEADER)PageBuffer;
         PageSize = Rp->SystemPageSize;
         Page1Valid = TRUE;
 
         /* Apply MST fixup */
-        NtfslxPostReadMstFixup((PNTFSLX_RECORD_HEADER)PageBuffer, NTFS_BLOCK_SIZE);
+        NtfslxPostReadMstFixup((PNTFSLX_RECORD_HEADER)PageBuffer, PageReadLength);
 
         if (NtfslxIsRestartAreaClean(Rp))
         {
@@ -227,49 +397,28 @@ NtfslxCheckLogFile(
     /* Try the second restart page at offset = SystemPageSize */
     if (LogFileDataSize >= (LONGLONG)(PageSize + NTFS_BLOCK_SIZE))
     {
-        LONGLONG SecondPageLcn;
-        LONGLONG SecondPageVcn;
         LONGLONG SecondPageOffset = (LONGLONG)PageSize;
-        ULONG I;
 
-        SecondPageVcn = SecondPageOffset / VolumeInfo->BytesPerCluster;
-
-        /* Find the LCN for this VCN */
-        SecondPageLcn = -1;
-        for (I = 0; I < LogRunlistCount; I++)
+        Status = NtfslxReadLogFileData(ResidentData,
+                                       ResidentBuffer,
+                                       (ULONGLONG)LogFileDataSize,
+                                       StorageDevice,
+                                       LogRunlist,
+                                       VolumeInfo,
+                                       (ULONGLONG)SecondPageOffset,
+                                       PageBuffer,
+                                       NTFS_BLOCK_SIZE);
+        if (NT_SUCCESS(Status) &&
+            NtfslxCheckRestartPageHeader((PNTFSLX_RESTART_PAGE_HEADER)PageBuffer,
+                                         NTFS_BLOCK_SIZE,
+                                         SecondPageOffset))
         {
-            if (SecondPageVcn >= LogRunlist[I].Vcn &&
-                SecondPageVcn < LogRunlist[I].Vcn + LogRunlist[I].Length)
+            Page2Valid = TRUE;
+            NtfslxPostReadMstFixup((PNTFSLX_RECORD_HEADER)PageBuffer, NTFS_BLOCK_SIZE);
+
+            if (NtfslxIsRestartAreaClean((PNTFSLX_RESTART_PAGE_HEADER)PageBuffer))
             {
-                SecondPageLcn = LogRunlist[I].Lcn +
-                    (SecondPageVcn - LogRunlist[I].Vcn);
-                break;
-            }
-        }
-
-        if (SecondPageLcn >= 0)
-        {
-            LONGLONG Offset2 = SecondPageLcn * VolumeInfo->BytesPerCluster +
-                (SecondPageOffset % VolumeInfo->BytesPerCluster);
-
-            Status = NtfslxReadDisk(StorageDevice, Offset2, NTFS_BLOCK_SIZE,
-                                    VolumeInfo->BytesPerSector, PageBuffer, FALSE);
-            if (NT_SUCCESS(Status))
-            {
-                if (NtfslxCheckRestartPageHeader(
-                        (PNTFSLX_RESTART_PAGE_HEADER)PageBuffer,
-                        SecondPageOffset))
-                {
-                    Page2Valid = TRUE;
-                    NtfslxPostReadMstFixup(
-                        (PNTFSLX_RECORD_HEADER)PageBuffer, NTFS_BLOCK_SIZE);
-
-                    if (NtfslxIsRestartAreaClean(
-                            (PNTFSLX_RESTART_PAGE_HEADER)PageBuffer))
-                    {
-                        *IsClean = TRUE;
-                    }
-                }
+                *IsClean = TRUE;
             }
         }
     }
@@ -323,8 +472,10 @@ NtfslxFillLogFile(
     PNTFSLX_RUNLIST_ELEMENT LogRuns = NULL;
     ULONG LogRunCount = 0;
     PUCHAR FillBuffer = NULL;
+    PUCHAR ResidentBuffer = NULL;
     ULONG FillBufferSize;
     ULONG I;
+    BOOLEAN ResidentData = FALSE;
 
     if (StorageDevice == NULL || VolumeInfo == NULL)
         return STATUS_INVALID_PARAMETER;
@@ -346,20 +497,54 @@ NtfslxFillLogFile(
 
     Status = NtfslxFindAttribute(LogFileRecord, NTFSLX_ATTRIBUTE_DATA,
                                  NULL, 0, &DataAttr);
-    if (!NT_SUCCESS(Status) || DataAttr->NonResident == 0)
+    if (!NT_SUCCESS(Status))
     {
-        DbgPrint("ntfslx: FillLogFile: $LogFile $DATA missing or resident 0x%08lx\n",
+        DbgPrint("ntfslx: FillLogFile: $LogFile $DATA missing 0x%08lx\n",
                  Status);
-        Status = NT_SUCCESS(Status) ? STATUS_NOT_SUPPORTED : Status;
         goto Cleanup;
     }
 
-    Status = NtfslxMappingPairsDecompress(VolumeInfo, DataAttr,
-                                          &LogRuns, &LogRunCount);
-    if (!NT_SUCCESS(Status))
+    if (DataAttr->NonResident == 0)
     {
-        DbgPrint("ntfslx: FillLogFile: decompress runs failed 0x%08lx\n",
-                 Status);
+        if (!NtfslxValidateResidentAttributeValueBounds(DataAttr))
+        {
+            Status = STATUS_FILE_CORRUPT_ERROR;
+            goto Cleanup;
+        }
+
+        ResidentData = TRUE;
+        ResidentBuffer = (PUCHAR)DataAttr + DataAttr->Data.Resident.ValueOffset;
+        DbgPrint("ntfslx: FillLogFile: resident $LogFile size=%lu\n",
+                 DataAttr->Data.Resident.ValueLength);
+    }
+    else
+    {
+        Status = NtfslxMappingPairsDecompress(VolumeInfo, DataAttr,
+                                              &LogRuns, &LogRunCount);
+        if (!NT_SUCCESS(Status))
+        {
+            DbgPrint("ntfslx: FillLogFile: decompress runs failed 0x%08lx\n",
+                     Status);
+            goto Cleanup;
+        }
+    }
+
+    if (ResidentData)
+    {
+        if (DataAttr->Data.Resident.ValueLength == 0)
+        {
+            Status = STATUS_FILE_CORRUPT_ERROR;
+            goto Cleanup;
+        }
+
+        RtlFillMemory(ResidentBuffer, DataAttr->Data.Resident.ValueLength, 0xFF);
+        Status = NtfslxWriteMftRecord(StorageDevice, VolumeInfo, MftRunlist,
+                                      NTFSLX_FILE_LOGFILE, LogFileRecord);
+        if (NT_SUCCESS(Status))
+        {
+            DbgPrint("ntfslx: FillLogFile: wiped resident $LogFile to 0xFF (%lu bytes)\n",
+                     DataAttr->Data.Resident.ValueLength);
+        }
         goto Cleanup;
     }
 

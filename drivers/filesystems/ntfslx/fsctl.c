@@ -626,6 +626,159 @@ NtfslxIsSupportedDeviceControl(
     }
 }
 
+static
+BOOLEAN
+NtfslxIsReparseDeviceControl(
+    _In_ ULONG IoControlCode)
+{
+    switch (IoControlCode)
+    {
+        case FSCTL_SET_REPARSE_POINT:
+        case FSCTL_GET_REPARSE_POINT:
+        case FSCTL_DELETE_REPARSE_POINT:
+            return TRUE;
+
+        default:
+            return FALSE;
+    }
+}
+
+static
+NTSTATUS
+NtfslxHandleReparseDeviceControl(
+    _In_ PFILE_OBJECT FileObject,
+    _In_ ULONG IoControlCode,
+    _In_opt_ PVOID Buffer,
+    _In_ ULONG InputLength,
+    _In_ ULONG OutputLength,
+    _Out_ PULONG ReturnLength)
+{
+    if (ReturnLength != NULL)
+    {
+        *ReturnLength = 0;
+    }
+
+    switch (IoControlCode)
+    {
+        case FSCTL_SET_REPARSE_POINT:
+            return NtfslxSetReparsePoint(FileObject, Buffer, InputLength);
+
+        case FSCTL_GET_REPARSE_POINT:
+            return NtfslxGetReparsePoint(FileObject,
+                                        Buffer,
+                                        OutputLength,
+                                        ReturnLength);
+
+        case FSCTL_DELETE_REPARSE_POINT:
+            return NtfslxDeleteReparsePoint(FileObject, Buffer, InputLength);
+
+        default:
+            return STATUS_INVALID_DEVICE_REQUEST;
+    }
+}
+
+static
+NTSTATUS
+NtfslxReportVolumeDirty(
+    _In_ PNTFSLX_DEVICE_EXTENSION DeviceExtension,
+    _Inout_ PIRP Irp,
+    _In_ ULONG OutputBufferLength)
+{
+    PULONG VolumeState;
+
+    if (Irp->AssociatedIrp.SystemBuffer != NULL)
+    {
+        VolumeState = (PULONG)Irp->AssociatedIrp.SystemBuffer;
+    }
+    else if (Irp->MdlAddress != NULL)
+    {
+        VolumeState = (PULONG)MmGetSystemAddressForMdlSafe(Irp->MdlAddress,
+                                                           NormalPagePriority);
+    }
+    else
+    {
+        return STATUS_INVALID_USER_BUFFER;
+    }
+
+    if (VolumeState == NULL)
+    {
+        return STATUS_INSUFFICIENT_RESOURCES;
+    }
+
+    if (OutputBufferLength < sizeof(ULONG))
+    {
+        return STATUS_BUFFER_TOO_SMALL;
+    }
+
+    *VolumeState = 0;
+    if (DeviceExtension->VolumeInfo.Flags & NTFSLX_VOLUME_IS_DIRTY)
+    {
+        *VolumeState |= VOLUME_IS_DIRTY;
+    }
+
+    Irp->IoStatus.Information = sizeof(ULONG);
+    return STATUS_SUCCESS;
+}
+
+static
+NTSTATUS
+NtfslxUserFsRequest(
+    _In_ PDEVICE_OBJECT DeviceObject,
+    _Inout_ PIRP Irp)
+{
+    PIO_STACK_LOCATION Stack;
+    PNTFSLX_DEVICE_EXTENSION DeviceExtension;
+
+    Stack = IoGetCurrentIrpStackLocation(Irp);
+    DeviceExtension = DeviceObject->DeviceExtension;
+
+    if (!NtfslxIsVolumeDevice(DeviceExtension) || Stack->FileObject == NULL)
+    {
+        return STATUS_INVALID_DEVICE_REQUEST;
+    }
+
+    if (NtfslxIsReparseDeviceControl(Stack->Parameters.FileSystemControl.FsControlCode))
+    {
+        NTSTATUS Status;
+        ULONG ReparseReturnLength;
+
+        ReparseReturnLength = 0;
+        Status = NtfslxHandleReparseDeviceControl(Stack->FileObject,
+                                                  Stack->Parameters.FileSystemControl.FsControlCode,
+                                                  Irp->AssociatedIrp.SystemBuffer,
+                                                  Stack->Parameters.FileSystemControl.InputBufferLength,
+                                                  Stack->Parameters.FileSystemControl.OutputBufferLength,
+                                                  &ReparseReturnLength);
+        Irp->IoStatus.Information = ReparseReturnLength;
+        return Status;
+    }
+
+    switch (Stack->Parameters.FileSystemControl.FsControlCode)
+    {
+        case FSCTL_IS_VOLUME_DIRTY:
+        {
+            NTSTATUS Status;
+            ULONG DirtyFlags = 0;
+
+            Status = NtfslxReportVolumeDirty(DeviceExtension,
+                                             Irp,
+                                             Stack->Parameters.FileSystemControl.OutputBufferLength);
+            if (NT_SUCCESS(Status) && Irp->AssociatedIrp.SystemBuffer != NULL)
+            {
+                DirtyFlags = *(PULONG)Irp->AssociatedIrp.SystemBuffer;
+            }
+
+            DbgPrint("ntfslx: UserFsRequest FSCTL_IS_VOLUME_DIRTY flags=0x%08lx volumeFlags=0x%04x\n",
+                     DirtyFlags,
+                     DeviceExtension->VolumeInfo.Flags);
+            return Status;
+        }
+
+        default:
+            return STATUS_INVALID_DEVICE_REQUEST;
+    }
+}
+
 /*
  * NtfslxGatherTier0Proof - read the on-disk state that's expected to be
  * kept consistent by the TIER 0 corruption fixes (mirror, dirty flag,
@@ -991,11 +1144,54 @@ NtfslxDeviceControl(
         goto CompleteRequest;
     }
 
+    if (NtfslxIsReparseDeviceControl(IoControlCode))
+    {
+        Status = NtfslxHandleReparseDeviceControl(Stack->FileObject,
+                                                  IoControlCode,
+                                                  Irp->AssociatedIrp.SystemBuffer,
+                                                  Stack->Parameters.DeviceIoControl.InputBufferLength,
+                                                  OutputLength,
+                                                  &OutputLength);
+        goto CompleteRequest;
+    }
+
     if (!NtfslxIsVolumeDevice(DeviceExtension) ||
         DeviceExtension->StorageDevice == NULL)
     {
         Status = STATUS_INVALID_DEVICE_REQUEST;
         OutputLength = 0;
+        goto CompleteRequest;
+    }
+
+    if (IoControlCode == FSCTL_IS_VOLUME_DIRTY)
+    {
+        if (Stack->FileObject == NULL)
+        {
+            Status = STATUS_INVALID_DEVICE_REQUEST;
+            OutputLength = 0;
+            goto CompleteRequest;
+        }
+
+        Status = NtfslxReportVolumeDirty(DeviceExtension,
+                                         Irp,
+                                         OutputLength);
+        if (NT_SUCCESS(Status))
+        {
+            OutputLength = sizeof(ULONG);
+        }
+        else if (Status == STATUS_BUFFER_TOO_SMALL)
+        {
+            OutputLength = sizeof(ULONG);
+        }
+        else
+        {
+            OutputLength = 0;
+        }
+
+        DbgPrint("ntfslx: DeviceControl FSCTL_IS_VOLUME_DIRTY status=0x%08lx flags=0x%04x file='%wZ'\n",
+                 Status,
+                 DeviceExtension->VolumeInfo.Flags,
+                 &Stack->FileObject->FileName);
         goto CompleteRequest;
     }
 
@@ -1051,9 +1247,14 @@ NtfslxFileSystemControl(
 
     Stack = IoGetCurrentIrpStackLocation(Irp);
     DeviceExtension = DeviceObject->DeviceExtension;
+    Irp->IoStatus.Information = 0;
 
     switch (Stack->MinorFunction)
     {
+        case IRP_MN_USER_FS_REQUEST:
+            Status = NtfslxUserFsRequest(DeviceObject, Irp);
+            break;
+
         case IRP_MN_MOUNT_VOLUME:
             if (!NtfslxIsControlDevice(DeviceExtension))
             {
@@ -1082,7 +1283,6 @@ NtfslxFileSystemControl(
     }
 
     Irp->IoStatus.Status = Status;
-    Irp->IoStatus.Information = 0;
     IoCompleteRequest(Irp, IO_NO_INCREMENT);
     return Status;
 }
