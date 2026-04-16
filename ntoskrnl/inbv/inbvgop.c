@@ -1,8 +1,8 @@
 /*
  * PROJECT:     ReactOS Kernel
  * LICENSE:     GPL-2.0-or-later (https://spdx.org/licenses/GPL-2.0-or-later)
- * PURPOSE:     UEFI GOP-specific boot UI helpers (separate from legacy path)
- * Copyright : Ahmed ARIF <arif.ing@outlook.com>
+ * PURPOSE:     UEFI GOP-specific boot UI helpers
+ * COPYRIGHT:   Copyright 2026 Ahmed ARIF (arif.ing@outlook.com)
  */
 
 #include <ntoskrnl.h>
@@ -14,7 +14,6 @@
 #include "resource.h"
 #include "inbvgop.h"
 #include "reactos_gop_logo.h"
-#include "uefi_center_mark.h"
 
 extern BOOLEAN ShowProgressBar;
 
@@ -24,13 +23,21 @@ extern BOOLEAN ShowProgressBar;
 #ifndef BI_RLE4
 #define BI_RLE4 2
 #endif
-#define INBV_BMP_MAGIC              0x4D42
-#define INBV_WORDMARK_SCALE         0.40f   /* wordmark drawn at 40% of source size */
-#define INBV_WORDMARK_BOTTOM_MARGIN 32      /* pixels from screen bottom edge */
-#define INBV_CENTERMARK_SCALE       0.05f   /* center mark drawn at 5% of source size */
-#define INBV_CENTERMARK_VPOS        0.625f  /* vertical: 62.5% into lower half of screen */
-#define INBV_SPINNER_STEPS          72      /* rotation steps per revolution (5 deg each) */
-#define INBV_SPINNER_FRAME_MS       33      /* ~30 fps */
+#define INBV_WORDMARK_SCALE         0.40f
+#define INBV_WORDMARK_TOP_VPOS      0.08f
+#define INBV_WORDMARK_BGRT_SAFE_TOP 0.35f
+#define INBV_CENTERMARK_VPOS        0.625f
+
+#define INBV_SPINNER_FRAME_MS         33
+#define INBV_SPINNER_PERIOD_MS        4000
+#define INBV_SPINNER_STEPS            (INBV_SPINNER_PERIOD_MS / INBV_SPINNER_FRAME_MS)
+#define INBV_SPINNER_PERIOD_100NS     ((ULONGLONG)INBV_SPINNER_PERIOD_MS * 10000ULL)
+#define INBV_SPINNER_RING_RADIUS      20
+#define INBV_SPINNER_STROKE_HALF_Q8   640
+#define INBV_SPINNER_BBOX_HALF        26
+#define INBV_SPINNER_MAX_ROTATION_DEG 900.0f
+#define INBV_SPINNER_MAX_TRIM         0.5f
+
 #define INBV_PI                     3.14159265f
 
 typedef struct _INBV_GOP_RECT
@@ -41,27 +48,25 @@ typedef struct _INBV_GOP_RECT
     ULONG Height;
 } INBV_GOP_RECT, *PINBV_GOP_RECT;
 
-/* ---- Center-mark spinner state (persists beyond INIT) ---- */
+#define INBV_SPINNER_BBOX_SIZE     (INBV_SPINNER_BBOX_HALF * 2)
+#define INBV_SPINNER_FB_CAPACITY   (INBV_SPINNER_BBOX_SIZE * INBV_SPINNER_BBOX_SIZE)
 
 typedef struct _INBV_SPINNER_STATE
 {
-    const UCHAR *Bits;
-    ULONG SrcWidth, SrcHeight, SrcStride, BytesPerPixel;
-    BOOLEAN TopDown;
-    float SrcCX, SrcCY;
-    float InvScale;
-
     LONG  DestCX, DestCY;
-    ULONG BBoxHalf;           /* half-side of bounding square */
+    ULONG BBoxHalf;
+    ULONG BBoxSize;
 
     ULONG RedMask, GreenMask, BlueMask;
     ULONG RedShift, GreenShift, BlueShift;
     ULONG RedMax, GreenMax, BlueMax;
+
+    ULONG GrayLut[256];
+    ULONGLONG StartTime;
 } INBV_SPINNER_STATE;
 
 static INBV_SPINNER_STATE g_Spinner;
-static float   g_SinTable[INBV_SPINNER_STEPS];
-static float   g_CosTable[INBV_SPINNER_STEPS];
+static ULONG   g_SpinnerFrameBuf[INBV_SPINNER_FB_CAPACITY];
 static KEVENT  g_SpinnerStop;
 static KEVENT  g_SpinnerDone;
 static BOOLEAN g_SpinnerReady = FALSE;
@@ -121,27 +126,6 @@ static ULONG InbvPackColor(ULONG RedMask, ULONG GreenMask, ULONG BlueMask,
            (BlueMask  ? ((B << BlueShift)  & BlueMask)  : 0);
 }
 
-static USHORT
-InbvReadU16(
-    _In_reads_(2) const UCHAR *Ptr)
-{
-    return (USHORT)(Ptr[0] | ((USHORT)Ptr[1] << 8));
-}
-
-static ULONG
-InbvReadU32(
-    _In_reads_(4) const UCHAR *Ptr)
-{
-    return ((ULONG)Ptr[0]) |
-           ((ULONG)Ptr[1] << 8) |
-           ((ULONG)Ptr[2] << 16) |
-           ((ULONG)Ptr[3] << 24);
-}
-
-/*
- * Bhaskara I sine approximation (max error < 0.2%).
- * Only uses basic float arithmetic -- no libm needed.
- */
 static float
 InbvApproxSin(float x)
 {
@@ -154,6 +138,21 @@ InbvApproxSin(float x)
     return sign * (16.0f * xpi) / (5.0f * INBV_PI * INBV_PI - 4.0f * xpi);
 }
 
+static ULONG
+InbvIsqrt(ULONG n)
+{
+    ULONG x, y;
+    if (n <= 1) return n;
+    x = n;
+    y = (x + 1) >> 1;
+    while (y < x)
+    {
+        x = y;
+        y = (x + n / x) >> 1;
+    }
+    return x;
+}
+
 static
 BOOLEAN
 InbvGopComputeWordmarkRect(
@@ -161,7 +160,7 @@ InbvGopComputeWordmarkRect(
     _In_ ULONG ScreenHeight,
     _Out_ PINBV_GOP_RECT Rect)
 {
-    const ULONG BitmapFileHeaderSize = 14; /* sizeof(BITMAPFILEHEADER) */
+    const ULONG BitmapFileHeaderSize = 14;
     PUCHAR Bitmap = (PUCHAR)g_ReactOSGopLogoBmp + BitmapFileHeaderSize;
     PBITMAPINFOHEADER Header;
     ULONG SrcWidth, SrcHeight;
@@ -193,115 +192,240 @@ InbvGopComputeWordmarkRect(
     Rect->Width = DstWidth;
     Rect->Height = DstHeight;
     Rect->X = (ScreenWidth > DstWidth) ? ((ScreenWidth - DstWidth) / 2) : 0;
-    Rect->Y = (ScreenHeight > DstHeight + INBV_WORDMARK_BOTTOM_MARGIN) ?
-              (ScreenHeight - DstHeight - INBV_WORDMARK_BOTTOM_MARGIN) :
-              0;
+
+    {
+        ULONG TopMargin = (ULONG)(ScreenHeight * INBV_WORDMARK_TOP_VPOS + 0.5f);
+        ULONG SafeBottom = (ULONG)(ScreenHeight * INBV_WORDMARK_BGRT_SAFE_TOP);
+        if (TopMargin + DstHeight > SafeBottom)
+            TopMargin = (SafeBottom > DstHeight) ? (SafeBottom - DstHeight) : 0;
+        if (TopMargin + DstHeight > ScreenHeight)
+            TopMargin = (ScreenHeight > DstHeight) ? (ScreenHeight - DstHeight) : 0;
+        Rect->Y = TopMargin;
+    }
     return TRUE;
 }
 
-/*
- * Draw one rotated frame of the center mark.
- * Float math runs at PASSIVE_LEVEL (outside lock); only the blit is locked.
- */
+static float
+InbvPiecewise(float t, const float *KeyTimes, const float *KeyVals, ULONG N)
+{
+    ULONG i;
+    if (N == 0) return 0.0f;
+    if (t <= KeyTimes[0]) return KeyVals[0];
+    if (t >= KeyTimes[N - 1]) return KeyVals[N - 1];
+    for (i = 1; i < N; i++)
+    {
+        if (t <= KeyTimes[i])
+        {
+            float t0 = KeyTimes[i - 1], t1 = KeyTimes[i];
+            float v0 = KeyVals [i - 1], v1 = KeyVals [i];
+            float span = t1 - t0;
+            return (span > 0.0f) ? (v0 + (v1 - v0) * (t - t0) / span) : v1;
+        }
+    }
+    return KeyVals[N - 1];
+}
+
 static VOID
-InbvGopSpinnerDrawFrame(ULONG Step)
+InbvGopSpinnerResetState(VOID)
+{
+    RtlZeroMemory(&g_Spinner, sizeof(g_Spinner));
+}
+
+static VOID
+InbvGopSpinnerBlitBuffer(
+    _In_reads_(g_Spinner.BBoxSize * g_Spinner.BBoxSize) const ULONG *FrameBuffer)
 {
     const INBV_SPINNER_STATE *S = &g_Spinner;
-    float cosA = g_CosTable[Step];
-    float sinA = g_SinTable[Step];
-    static ULONG LineBuf[2048];
-    ULONG fullW = S->BBoxHalf * 2;
-    ULONG x0 = ((ULONG)S->DestCX > S->BBoxHalf) ? ((ULONG)S->DestCX - S->BBoxHalf) : 0;
-    LONG  ry;
+    const ULONG fullW = S->BBoxSize;
+    const ULONG x0 = ((ULONG)S->DestCX > S->BBoxHalf) ?
+                     ((ULONG)S->DestCX - S->BBoxHalf) : 0;
+    const ULONG y0 = ((ULONG)S->DestCY > S->BBoxHalf) ?
+                     ((ULONG)S->DestCY - S->BBoxHalf) : 0;
 
-    if (fullW > RTL_NUMBER_OF(LineBuf))
-        fullW = RTL_NUMBER_OF(LineBuf);
+    if (!FrameBuffer || fullW == 0)
+        return;
+
+    InbvAcquireLock();
+    VidBufferToScreenBlt((PUCHAR)FrameBuffer, x0, y0,
+                         fullW, fullW, fullW * sizeof(ULONG));
+    InbvReleaseLock();
+}
+
+static VOID
+InbvGopSpinnerRasterizeFrame(
+    _In_ float t,
+    _Out_writes_(INBV_SPINNER_FB_CAPACITY) PULONG FrameBuffer)
+{
+    static const float RotationTimes[3] = { 0.0f, 0.5f, 1.0f };
+    static const float RotationVals [3] = { 0.0f, 450.0f, INBV_SPINNER_MAX_ROTATION_DEG };
+    static const float TrimEndTimes [3] = { 0.0f, 0.5f, 1.0f };
+    static const float TrimEndVals  [3] = { 0.0f, INBV_SPINNER_MAX_TRIM, INBV_SPINNER_MAX_TRIM };
+    static const float TrimStartTimes[3] = { 0.0f, 0.5f, 1.0f };
+    static const float TrimStartVals [3] = { 0.0f, 0.0f, INBV_SPINNER_MAX_TRIM };
+
+    const INBV_SPINNER_STATE *S = &g_Spinner;
+    const ULONG fullW = S->BBoxSize;
+    float rotation_deg = InbvPiecewise(t, RotationTimes, RotationVals, 3);
+    float trim_end     = InbvPiecewise(t, TrimEndTimes,  TrimEndVals,  3);
+    float trim_start   = InbvPiecewise(t, TrimStartTimes,TrimStartVals,3);
+
+    float as_rad = (rotation_deg + 360.0f * trim_start) * (INBV_PI / 180.0f);
+    float ae_rad = (rotation_deg + 360.0f * trim_end)   * (INBV_PI / 180.0f);
+
+    float sin_start = InbvApproxSin(as_rad);
+    float cos_start = InbvApproxSin(as_rad + INBV_PI / 2.0f);
+    float sin_end   = InbvApproxSin(ae_rad);
+    float cos_end   = InbvApproxSin(ae_rad + INBV_PI / 2.0f);
+
+    float span_deg = (trim_end - trim_start) * 360.0f;
+    BOOLEAN arc_visible = (span_deg > 0.0f);
+
+    const float R_f = (float)INBV_SPINNER_RING_RADIUS;
+    const LONG  cap1_cx_q8 = (LONG)(cos_start * R_f * 256.0f);
+    const LONG  cap1_cy_q8 = (LONG)(sin_start * R_f * 256.0f);
+    const LONG  cap2_cx_q8 = (LONG)(cos_end   * R_f * 256.0f);
+    const LONG  cap2_cy_q8 = (LONG)(sin_end   * R_f * 256.0f);
+
+    const LONG  sin_start_q8 = (LONG)(sin_start * 256.0f);
+    const LONG  cos_start_q8 = (LONG)(cos_start * 256.0f);
+    const LONG  sin_end_q8   = (LONG)(sin_end   * 256.0f);
+    const LONG  cos_end_q8   = (LONG)(cos_end   * 256.0f);
+
+    const LONG  ring_q8      = INBV_SPINNER_RING_RADIUS * 256;
+    const LONG  stroke_q8    = INBV_SPINNER_STROKE_HALF_Q8;
+    const LONG  stroke_in    = (stroke_q8 > 128) ? (stroke_q8 - 128) : 0;
+    const LONG  stroke_out   = stroke_q8 + 128;
+
+    const LONG  annulus_outer = ring_q8 + stroke_out;
+    const LONG  annulus_inner = (ring_q8 > stroke_out) ? (ring_q8 - stroke_out) : 0;
+    const LONGLONG annulus_outer_sq = (LONGLONG)annulus_outer * annulus_outer;
+    const LONGLONG annulus_inner_sq = (LONGLONG)annulus_inner * annulus_inner;
+
+    const LONGLONG cap_out_sq = (LONGLONG)stroke_out * stroke_out;
+    const LONGLONG cap_in_sq  = (LONGLONG)stroke_in  * stroke_in;
+    const LONGLONG cap_span   = (cap_out_sq > cap_in_sq) ? (cap_out_sq - cap_in_sq) : 1;
+    LONG ry;
+
+    if (!FrameBuffer || fullW == 0)
+        return;
+
+    RtlZeroMemory(FrameBuffer, (SIZE_T)fullW * fullW * sizeof(ULONG));
 
     for (ry = -(LONG)S->BBoxHalf; ry < (LONG)S->BBoxHalf; ry++)
     {
-        LONG screenY = S->DestCY + ry;
-        LONG rx;
-        if (screenY < 0)
-            continue;
-
-        /* Zero the row — pixels outside the rotated source stay black */
-        RtlZeroMemory(LineBuf, fullW * sizeof(ULONG));
+        PULONG Row   = FrameBuffer + (SIZE_T)(ry + (LONG)S->BBoxHalf) * fullW;
+        LONG   py_q8 = (ry * 256) + 128;
+        LONG   rx;
 
         for (rx = -(LONG)S->BBoxHalf; rx < (LONG)S->BBoxHalf; rx++)
         {
-            float srcFX = S->SrcCX + ((float)rx * cosA + (float)ry * sinA) * S->InvScale;
-            float srcFY = S->SrcCY + (-(float)rx * sinA + (float)ry * cosA) * S->InvScale;
-            LONG sx = (LONG)srcFX;
-            LONG sy = (LONG)srcFY;
-            ULONG effRow, idx;
-            const UCHAR *Pixel;
-            UCHAR b, g, r, a;
+            LONG px_q8 = (rx * 256) + 128;
+            LONGLONG d2 = (LONGLONG)px_q8 * px_q8 + (LONGLONG)py_q8 * py_q8;
+            ULONG cov = 0;
 
-            if (sx < 0 || sy < 0 ||
-                (ULONG)sx >= S->SrcWidth || (ULONG)sy >= S->SrcHeight)
-                continue;
+            if (arc_visible && d2 < annulus_outer_sq && d2 > annulus_inner_sq)
+            {
+                LONGLONG cross_start =
+                    (LONGLONG)cos_start_q8 * py_q8 - (LONGLONG)sin_start_q8 * px_q8;
+                LONGLONG cross_end =
+                    (LONGLONG)cos_end_q8   * py_q8 - (LONGLONG)sin_end_q8   * px_q8;
 
-            effRow = S->TopDown ? (ULONG)sy : (S->SrcHeight - 1 - (ULONG)sy);
-            Pixel = S->Bits + (SIZE_T)effRow * S->SrcStride +
-                    (ULONG)sx * S->BytesPerPixel;
-            b = Pixel[0]; g = Pixel[1]; r = Pixel[2];
-            a = (S->BytesPerPixel == 4) ? Pixel[3] : 0xFF;
-            if (a == 0)
-                continue;
+                if (cross_start >= 0 && cross_end <= 0)
+                {
+                    ULONG d_q8     = InbvIsqrt((ULONG)d2);
+                    LONG  radial   = (LONG)d_q8 - ring_q8;
+                    if (radial < 0) radial = -radial;
 
-            idx = (ULONG)(rx + (LONG)S->BBoxHalf);
-            if (idx < fullW)
-                LineBuf[idx] = InbvPackColor(S->RedMask, S->GreenMask,
-                                             S->BlueMask, S->RedShift,
-                                             S->GreenShift, S->BlueShift,
-                                             S->RedMax, S->GreenMax,
-                                             S->BlueMax, r, g, b);
+                    if (radial <= stroke_in)
+                    {
+                        cov = 255;
+                    }
+                    else if (radial < stroke_out)
+                    {
+                        ULONG frac = (ULONG)((stroke_out - radial) * 255) /
+                                     (ULONG)(stroke_out - stroke_in);
+                        cov = frac > 255 ? 255 : frac;
+                    }
+                }
+            }
+
+            {
+                LONG dx = px_q8 - cap1_cx_q8;
+                LONG dy = py_q8 - cap1_cy_q8;
+                LONGLONG cd2 = (LONGLONG)dx * dx + (LONGLONG)dy * dy;
+                if (cd2 < cap_out_sq)
+                {
+                    ULONG c;
+                    if (cd2 <= cap_in_sq)
+                        c = 255;
+                    else
+                    {
+                        LONGLONG frac = ((cap_out_sq - cd2) * 255) / cap_span;
+                        c = (frac < 0) ? 0 : (frac > 255) ? 255 : (ULONG)frac;
+                    }
+                    if (c > cov) cov = c;
+                }
+            }
+
+            {
+                LONG dx = px_q8 - cap2_cx_q8;
+                LONG dy = py_q8 - cap2_cy_q8;
+                LONGLONG cd2 = (LONGLONG)dx * dx + (LONGLONG)dy * dy;
+                if (cd2 < cap_out_sq)
+                {
+                    ULONG c;
+                    if (cd2 <= cap_in_sq)
+                        c = 255;
+                    else
+                    {
+                        LONGLONG frac = ((cap_out_sq - cd2) * 255) / cap_span;
+                        c = (frac < 0) ? 0 : (frac > 255) ? 255 : (ULONG)frac;
+                    }
+                    if (c > cov) cov = c;
+                }
+            }
+
+            if (cov > 0)
+            {
+                ULONG idx = (ULONG)(rx + (LONG)S->BBoxHalf);
+                if (idx < fullW)
+                    Row[idx] = S->GrayLut[cov];
+            }
         }
-
-        InbvAcquireLock();
-        VidBufferToScreenBlt((PUCHAR)LineBuf, x0, (ULONG)screenY,
-                             fullW, 1, fullW * sizeof(ULONG));
-        InbvReleaseLock();
     }
 }
 
 static VOID NTAPI
 InbvGopSpinnerThread(PVOID Context)
 {
-    ULONG Frame = 0;
+    INBV_SPINNER_STATE *S = &g_Spinner;
     LARGE_INTEGER Delay;
+    NTSTATUS Status;
 
     UNREFERENCED_PARAMETER(Context);
     Delay.QuadPart = -(LONGLONG)(INBV_SPINNER_FRAME_MS * 10000LL);
+    S->StartTime = KeQueryInterruptTime();
 
-    while (KeReadStateEvent(&g_SpinnerStop) == 0)
+    while (TRUE)
     {
-        InbvGopSpinnerDrawFrame(Frame);
-        Frame = (Frame + 1) % INBV_SPINNER_STEPS;
-        KeDelayExecutionThread(KernelMode, FALSE, &Delay);
+        ULONGLONG Elapsed100ns = KeQueryInterruptTime() - S->StartTime;
+        ULONGLONG Phase100ns   = Elapsed100ns % INBV_SPINNER_PERIOD_100NS;
+        float t = (float)((double)Phase100ns / (double)INBV_SPINNER_PERIOD_100NS);
+
+        InbvGopSpinnerRasterizeFrame(t, g_SpinnerFrameBuf);
+        InbvGopSpinnerBlitBuffer(g_SpinnerFrameBuf);
+
+        Status = KeWaitForSingleObject(&g_SpinnerStop,
+                                       Executive,
+                                       KernelMode,
+                                       FALSE,
+                                       &Delay);
+        if (Status != STATUS_TIMEOUT)
+            break;
     }
 
-    /* Erase mark area on exit */
-    {
-        const INBV_SPINNER_STATE *S = &g_Spinner;
-        static ULONG ZeroBuf[2048];
-        ULONG fullW = S->BBoxHalf * 2;
-        ULONG x0 = ((ULONG)S->DestCX > S->BBoxHalf) ?
-                    ((ULONG)S->DestCX - S->BBoxHalf) : 0;
-        ULONG y0 = ((ULONG)S->DestCY > S->BBoxHalf) ?
-                    ((ULONG)S->DestCY - S->BBoxHalf) : 0;
-        ULONG row;
-
-        if (fullW > RTL_NUMBER_OF(ZeroBuf))
-            fullW = RTL_NUMBER_OF(ZeroBuf);
-        RtlZeroMemory(ZeroBuf, fullW * sizeof(ULONG));
-
-        InbvAcquireLock();
-        for (row = 0; row < fullW; row++)
-            VidBufferToScreenBlt((PUCHAR)ZeroBuf, x0, y0 + row,
-                                 fullW, 1, fullW * sizeof(ULONG));
-        InbvReleaseLock();
-    }
+    RtlZeroMemory(g_SpinnerFrameBuf, sizeof(g_SpinnerFrameBuf));
+    InbvGopSpinnerBlitBuffer(g_SpinnerFrameBuf);
 
     KeSetEvent(&g_SpinnerDone, IO_NO_INCREMENT, FALSE);
     PsTerminateSystemThread(STATUS_SUCCESS);
@@ -313,95 +437,38 @@ InbvGopSpinnerSetup(
     _In_ ULONG ScreenWidth,
     _In_ ULONG ScreenHeight)
 {
-    const UCHAR *Base = g_UefiCenterMarkBmp;
-    const ULONG BitmapSize = g_UefiCenterMarkBmpSize;
-    BITMAPINFOHEADER Header;
     INBV_SPINNER_STATE *S = &g_Spinner;
-    ULONG DstWidth, DstHeight, HalfHeight, DestX, DestY, i;
     LOADER_PARAMETER_FRAMEBUFFER FbInfo;
-    USHORT bfType;
-    ULONG bfOffBits;
+    ULONG HalfHeight, DestY, i;
 
-    if (!Base || BitmapSize < (14 + sizeof(BITMAPINFOHEADER)))
-        return FALSE;
+    RtlZeroMemory(S, sizeof(*S));
 
-    bfType = InbvReadU16(Base);
-    bfOffBits = InbvReadU32(Base + 10);
-    if (bfType != INBV_BMP_MAGIC || bfOffBits >= BitmapSize)
-        return FALSE;
-
-    RtlCopyMemory(&Header, Base + 14, sizeof(Header));
-    if (Header.biSize < sizeof(BITMAPINFOHEADER) ||
-        Header.biPlanes != 1 ||
-        Header.biCompression != BI_RGB ||
-        (Header.biBitCount != 24 && Header.biBitCount != 32))
-        return FALSE;
-
-    if (Header.biWidth <= 0 || Header.biHeight == 0)
-        return FALSE;
-
-    S->SrcWidth      = (ULONG)Header.biWidth;
-    S->SrcHeight     = (Header.biHeight < 0) ? (ULONG)(-Header.biHeight)
-                                              : (ULONG)Header.biHeight;
-    S->TopDown       = (Header.biHeight < 0);
-    S->BytesPerPixel = Header.biBitCount / 8;
-    S->SrcStride     = (ULONG)((((ULONGLONG)S->SrcWidth * Header.biBitCount
-                                 + 31) & ~31ULL) >> 3);
-
-    if ((ULONGLONG)S->SrcStride * S->SrcHeight >
-        (ULONGLONG)(BitmapSize - bfOffBits))
-        return FALSE;
-
-    S->Bits     = Base + bfOffBits;
-    S->SrcCX    = (float)S->SrcWidth  / 2.0f;
-    S->SrcCY    = (float)S->SrcHeight / 2.0f;
-    S->InvScale = 1.0f / INBV_CENTERMARK_SCALE;
-
-    /* Destination size and position */
-    DstWidth  = (ULONG)(S->SrcWidth  * INBV_CENTERMARK_SCALE + 0.5f);
-    DstHeight = (ULONG)(S->SrcHeight * INBV_CENTERMARK_SCALE + 0.5f);
-    if (DstWidth  == 0) DstWidth  = 1;
-    if (DstHeight == 0) DstHeight = 1;
-    if (DstWidth  > ScreenWidth)  DstWidth  = ScreenWidth;
-    if (DstHeight > ScreenHeight) DstHeight = ScreenHeight;
-
-    HalfHeight = ScreenHeight / 2;
-    DestX = (ScreenWidth > DstWidth) ? ((ScreenWidth - DstWidth) / 2) : 0;
-    DestY = (ULONG)(HalfHeight + (ScreenHeight - HalfHeight) *
-                    INBV_CENTERMARK_VPOS);
-    if (DestY > DstHeight / 2)
-        DestY -= DstHeight / 2;
-    else
-        DestY = HalfHeight;
-    if (DestY + DstHeight > ScreenHeight)
-        DestY = ScreenHeight - DstHeight;
-
-    S->DestCX   = (LONG)(DestX + DstWidth  / 2);
-    S->DestCY   = (LONG)(DestY + DstHeight / 2);
-
-    /* Bounding square for any rotation angle: diagonal / 2 + margin */
+    S->BBoxHalf = INBV_SPINNER_BBOX_HALF;
+    if (S->BBoxHalf == 0 ||
+        (S->BBoxHalf * 2) > ScreenWidth ||
+        (S->BBoxHalf * 2) > ScreenHeight)
     {
-        /* Integer sqrt via Newton iteration (no sqrtf in kernel) */
-        ULONG d = DstWidth * DstWidth + DstHeight * DstHeight, s;
-        if (d > 0)
-        {
-            s = d;
-            while ((ULONGLONG)s * s > d)
-                s = (s + d / s) / 2;
-            S->BBoxHalf = s / 2 + 2;
-        }
-        else
-        {
-            S->BBoxHalf = 2;
-        }
+        return FALSE;
     }
 
-    /* Cache framebuffer color info */
+    S->BBoxSize = S->BBoxHalf * 2;
+    S->DestCX = (LONG)(ScreenWidth / 2);
+
+    HalfHeight = ScreenHeight / 2;
+    DestY = (ULONG)(HalfHeight +
+                    (ScreenHeight - HalfHeight) * INBV_CENTERMARK_VPOS);
+    if (DestY + S->BBoxHalf > ScreenHeight)
+        DestY = ScreenHeight - S->BBoxHalf;
+    if (DestY < S->BBoxHalf)
+        DestY = S->BBoxHalf;
+    S->DestCY = (LONG)DestY;
+
     if (!InbvGopQueryInfo(&FbInfo))
         return FALSE;
 
-    S->RedMask   = FbInfo.RedMask;   S->GreenMask = FbInfo.GreenMask;
-    S->BlueMask  = FbInfo.BlueMask;
+    S->RedMask    = FbInfo.RedMask;
+    S->GreenMask  = FbInfo.GreenMask;
+    S->BlueMask   = FbInfo.BlueMask;
     S->RedShift   = InbvMaskShift(S->RedMask);
     S->GreenShift = InbvMaskShift(S->GreenMask);
     S->BlueShift  = InbvMaskShift(S->BlueMask);
@@ -409,12 +476,13 @@ InbvGopSpinnerSetup(
     S->GreenMax   = InbvMaskMax(S->GreenMask >> S->GreenShift);
     S->BlueMax    = InbvMaskMax(S->BlueMask  >> S->BlueShift);
 
-    /* Build sin/cos lookup table */
-    for (i = 0; i < INBV_SPINNER_STEPS; i++)
+    for (i = 0; i < RTL_NUMBER_OF(S->GrayLut); ++i)
     {
-        float angle = (float)i * 2.0f * INBV_PI / (float)INBV_SPINNER_STEPS;
-        g_SinTable[i] = InbvApproxSin(angle);
-        g_CosTable[i] = InbvApproxSin(angle + INBV_PI / 2.0f);
+        UCHAR v = (UCHAR)i;
+        S->GrayLut[i] = InbvPackColor(S->RedMask, S->GreenMask, S->BlueMask,
+                                      S->RedShift, S->GreenShift, S->BlueShift,
+                                      S->RedMax, S->GreenMax, S->BlueMax,
+                                      v, v, v);
     }
 
     return TRUE;
@@ -444,6 +512,7 @@ InbvGopSpinnerStart(
     }
     else
     {
+        InbvGopSpinnerResetState();
         g_SpinnerReady = FALSE;
     }
 }
@@ -457,6 +526,7 @@ InbvGopSpinnerStop(VOID)
 
     KeSetEvent(&g_SpinnerStop, IO_NO_INCREMENT, FALSE);
     KeWaitForSingleObject(&g_SpinnerDone, Executive, KernelMode, FALSE, NULL);
+    InbvGopSpinnerResetState();
     g_SpinnerReady = FALSE;
 }
 
@@ -467,7 +537,7 @@ InbvGopDrawWordmark(
     _In_ ULONG ScreenHeight,
     _In_opt_ const INBV_GOP_RECT *WordmarkRectOverride)
 {
-    const ULONG BitmapFileHeaderSize = 14; /* sizeof(BITMAPFILEHEADER) */
+    const ULONG BitmapFileHeaderSize = 14;
     PUCHAR Bitmap = (PUCHAR)g_ReactOSGopLogoBmp + BitmapFileHeaderSize;
     PBITMAPINFOHEADER Header;
     ULONG SrcWidth, SrcHeight;
@@ -515,7 +585,6 @@ InbvGopDrawWordmark(
     RedShift = InbvMaskShift(RedMask); GreenShift = InbvMaskShift(GreenMask); BlueShift = InbvMaskShift(BlueMask);
     RedMax = InbvMaskMax(RedMask >> RedShift); GreenMax = InbvMaskMax(GreenMask >> GreenShift); BlueMax = InbvMaskMax(BlueMask >> BlueShift);
 
-    /* Build 32-bit palette */
     ULONG PaletteCount = Header->biClrUsed ? Header->biClrUsed : 16;
     if (PaletteCount == 0)
         PaletteCount = 16;
@@ -532,12 +601,10 @@ InbvGopDrawWordmark(
         Palette32[i] = InbvPackColor(RedMask,GreenMask,BlueMask,RedShift,GreenShift,BlueShift,RedMax,GreenMax,BlueMax,r,g,b);
     }
 
-    /* Locate pixel data */
     PUCHAR Bits = Bitmap + Header->biSize + PaletteCount * sizeof(BMP_RGBQUAD);
     LONG SrcDelta = ((SrcWidth + 1) / 2);
     SrcDelta = (SrcDelta + 3) & ~3;
 
-    /* Helper to extract 8-bit channel from packed color */
 #define INBV_EXTRACT(C,Mask,Shift,Maxv) \
     ((Mask) ? ((Maxv) ? ((((((C) & (Mask)) >> (Shift)) * 255) + ((Maxv)/2)) / (Maxv)) : 0) : 0)
 
@@ -548,7 +615,6 @@ InbvGopDrawWordmark(
         ULONG effRow = TopDown ? sy : (SrcHeight - 1 - sy);
         PUCHAR Row = Bits + effRow * SrcDelta;
 
-        /* Write scaled row in chunks to the screen using BootVID */
         static ULONG LineBuf[1024];
         ULONG produced = 0;
         while (produced < DstWidth)
@@ -556,21 +622,19 @@ InbvGopDrawWordmark(
             ULONG toDo = min((ULONG)1024, DstWidth - produced);
             for (ULONG dx = 0; dx < toDo; dx++)
             {
-                /* Map destination x back to source and do a simple 2x2 box filter for smoothing */
+
                 ULONG sx0 = (ULONG)min((ULONGLONG)SrcWidth - 1,
                                        (ULONGLONG)((produced + dx) / INBV_WORDMARK_SCALE));
                 ULONG sy0 = sy;
                 ULONG sx1 = min(sx0 + 1, SrcWidth  - 1);
                 ULONG sy1 = min(sy0 + 1, SrcHeight - 1);
 
-                /* Fetch 4 neighboring indices */
                 UCHAR b00 = Row[sx0 / 2];
                 UCHAR i00 = (sx0 & 1) ? (b00 & 0x0F) : ((b00 >> 4) & 0x0F);
 
                 UCHAR b10 = Row[sx1 / 2];
                 UCHAR i10 = (sx1 & 1) ? (b10 & 0x0F) : ((b10 >> 4) & 0x0F);
 
-                /* For y+1 we need the next source row */
                 ULONG effRow1 = TopDown ? sy1 : (SrcHeight - 1 - sy1);
                 PUCHAR Row1 = Bits + effRow1 * SrcDelta;
 
@@ -579,13 +643,11 @@ InbvGopDrawWordmark(
                 UCHAR b11 = Row1[sx1 / 2];
                 UCHAR i11 = (sx1 & 1) ? (b11 & 0x0F) : ((b11 >> 4) & 0x0F);
 
-                /* Unpack to 8-bit RGB by reversing the screen format */
                 ULONG c00 = Palette32[i00];
                 ULONG c10 = Palette32[i10];
                 ULONG c01 = Palette32[i01];
                 ULONG c11 = Palette32[i11];
 
-                /* Extract and normalize to 0..255 */
                 ULONG r = (INBV_EXTRACT(c00, RedMask,   RedShift,   RedMax)   +
                            INBV_EXTRACT(c10, RedMask,   RedShift,   RedMax)   +
                            INBV_EXTRACT(c01, RedMask,   RedShift,   RedMax)   +
@@ -638,7 +700,6 @@ InbvGopHandleBootBitmap(
 
     if (TextMode)
     {
-        /* Debug/Text mode: raw text only, like legacy console. */
         InbvSetTextColor(BV_COLOR_WHITE);
         InbvSolidColorFill(0, 0, Width - 1, Height - 1, BV_COLOR_BLACK);
         InbvSetScrollRegion(0, 0, Width - 1, Height - 1);
@@ -647,12 +708,8 @@ InbvGopHandleBootBitmap(
         return TRUE;
     }
 
-    /* Non-debug: minimal quiet mode with just the ReactOS wordmark. */
     InbvSetTextColor(BV_COLOR_WHITE);
-    /* Do not clear the framebuffer here: preserve any firmware BGRT */
 
-    /* Draw the wordmark BEFORE starting the spinner thread to avoid
-     * concurrent VidBufferToScreenBlt calls without lock synchronization. */
     WordmarkDrawn = InbvGopDrawWordmark(Width, Height, NULL);
     InbvGopSpinnerStart(Width, Height);
 
