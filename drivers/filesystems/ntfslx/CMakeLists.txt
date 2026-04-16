@@ -38,7 +38,14 @@ list(APPEND SOURCE
     volinfo.c
     write.c)
 
+option(NTFSLX_ENABLE_DEBUG_TRACES "Enable verbose ntfslx debug output" ON)
+
 add_library(ntfslx MODULE ${SOURCE})
+if(NTFSLX_ENABLE_DEBUG_TRACES)
+    target_compile_definitions(ntfslx PRIVATE NTFSLX_ENABLE_DEBUG_TRACES=1)
+else()
+    target_compile_definitions(ntfslx PRIVATE NTFSLX_ENABLE_DEBUG_TRACES=0)
+endif()
 set_module_type(ntfslx kernelmodedriver)
 add_importlibs(ntfslx ntoskrnl hal)
 add_pch(ntfslx ntfslx.h SOURCE)

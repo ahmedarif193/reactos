@@ -16,7 +16,7 @@
 #include <debug.h>
 
 #ifndef NTFSLX_TRACE_ALWAYS
-#define NTFSLX_TRACE_ALWAYS DbgPrint
+#define NTFSLX_TRACE_ALWAYS NTFSDBG
 #endif
 
 #define NTFSLX_TRACE_LOOKUP(...) NTFSLX_TRACE_ALWAYS(__VA_ARGS__)

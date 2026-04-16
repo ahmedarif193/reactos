@@ -37,7 +37,7 @@ DriverEntry(
                             &DeviceObject);
     if (!NT_SUCCESS(Status))
     {
-        DPRINT1("IoCreateDevice failed with status %lx\n", Status);
+        NTFSDBG("IoCreateDevice failed with status %lx\n", Status);
         return Status;
     }
 
@@ -51,7 +51,7 @@ DriverEntry(
     Status = ExInitializeResourceLite(&DeviceExtension->Resource);
     if (!NT_SUCCESS(Status))
     {
-        DPRINT1("ExInitializeResourceLite failed with status %lx\n", Status);
+        NTFSDBG("ExInitializeResourceLite failed with status %lx\n", Status);
         IoDeleteDevice(DeviceObject);
         return Status;
     }

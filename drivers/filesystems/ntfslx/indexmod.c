@@ -458,7 +458,7 @@ NtfslxAppendRightLeafIndexBlock(
     MoveStart = InsertOffset;
     MovedBytes = EndOffset - MoveStart;
     MoveIndex = InsertIndex;
-    DbgPrint("ntfslx: append-right rightmostVcn=%I64u free=%lu needExtra=%lu entries=%lu insertIndex=%lu moved=%lu\n",
+    NTFSDBG("ntfslx: append-right rightmostVcn=%I64u free=%lu needExtra=%lu entries=%lu insertIndex=%lu moved=%lu\n",
              RightmostVcn,
              FreeBytes,
              NeedExtraBytes,
@@ -689,7 +689,7 @@ NtfslxAppendRightLeafIndexBlock(
         goto Cleanup;
     }
 
-    DbgPrint("ntfslx: AllocationInsert: extended index dir block=%I64u newBlock=%I64u moved=%lu\n",
+    NTFSDBG("ntfslx: AllocationInsert: extended index dir block=%I64u newBlock=%I64u moved=%lu\n",
              RightmostVcn,
              NewBlockVcn,
              MovedBytes);
@@ -698,7 +698,7 @@ NtfslxAppendRightLeafIndexBlock(
 Cleanup:
     if (!NT_SUCCESS(Status))
     {
-        DbgPrint("ntfslx: append-right failed stage=%s status=0x%08lx rightmostVcn=%I64u moved=%lu needExtra=%lu\n",
+        NTFSDBG("ntfslx: append-right failed stage=%s status=0x%08lx rightmostVcn=%I64u moved=%lu needExtra=%lu\n",
                  Stage,
                  Status,
                  RightmostVcn,
@@ -841,7 +841,7 @@ NtfslxReadDirIndexBlock(
                                             BlockBuffer);
     if (!NT_SUCCESS(Status))
     {
-        DbgPrint("ntfslx: ReadDirIndexBlock vcn=%I64u failed 0x%08lx\n", Vcn, Status);
+        NTFSDBG("ntfslx: ReadDirIndexBlock vcn=%I64u failed 0x%08lx\n", Vcn, Status);
         return Status;
     }
 
@@ -851,7 +851,7 @@ NtfslxReadDirIndexBlock(
                                                 Vcn);
     if (!NT_SUCCESS(Status))
     {
-        DbgPrint("ntfslx: ValidateIndexAllocationBlock vcn=%I64u failed 0x%08lx\n",
+        NTFSDBG("ntfslx: ValidateIndexAllocationBlock vcn=%I64u failed 0x%08lx\n",
                  Vcn, Status);
     }
     return Status;
@@ -891,7 +891,7 @@ NtfslxWriteDirIndexBlock(
     Status = NtfslxPreWriteMstFixup((PNTFSLX_RECORD_HEADER)Copy, BlockSize);
     if (!NT_SUCCESS(Status))
     {
-        DbgPrint("ntfslx: WriteDirIndexBlock: MST fixup failed 0x%08lx\n", Status);
+        NTFSDBG("ntfslx: WriteDirIndexBlock: MST fixup failed 0x%08lx\n", Status);
         ExFreePoolWithTag(Copy, NTFSLX_TAG);
         return Status;
     }
@@ -917,7 +917,7 @@ NtfslxWriteDirIndexBlock(
         }
         if (Lcn < 0)
         {
-            DbgPrint("ntfslx: WriteDirIndexBlock: no mapping for vcn=%I64d\n",
+            NTFSDBG("ntfslx: WriteDirIndexBlock: no mapping for vcn=%I64d\n",
                      BlockVcn);
             ExFreePoolWithTag(Copy, NTFSLX_TAG);
             return STATUS_FILE_CORRUPT_ERROR;
@@ -931,7 +931,7 @@ NtfslxWriteDirIndexBlock(
                                  TRUE);
         if (!NT_SUCCESS(Status))
         {
-            DbgPrint("ntfslx: WriteDirIndexBlock: WriteDisk vcn=%I64d lcn=%I64d failed 0x%08lx\n",
+            NTFSDBG("ntfslx: WriteDirIndexBlock: WriteDisk vcn=%I64d lcn=%I64d failed 0x%08lx\n",
                      BlockVcn, Lcn, Status);
             ExFreePoolWithTag(Copy, NTFSLX_TAG);
             return Status;
@@ -1190,7 +1190,7 @@ NtfslxIndexAllocationRemove(
                                               BlockSize, BlockBuf);
             ExFreePoolWithTag(BlockBuf, NTFSLX_TAG);
             ExFreePoolWithTag(Runlist, 'aIxN');
-            DbgPrint("ntfslx: AllocationRemove: removed '%.*S' from vcn=%I64u (%lu bytes)\n",
+            NTFSDBG("ntfslx: AllocationRemove: removed '%.*S' from vcn=%I64u (%lu bytes)\n",
                      FileNameLength, FileName, Vcn, RemovedLength);
             return Status;
         }
@@ -1348,13 +1348,13 @@ NtfslxSpillIndexRootToAllocation(
                                     &RunlistCount);
     if (!NT_SUCCESS(Status))
     {
-        DbgPrint("ntfslx: SpillIndexRoot: AllocateClusters failed 0x%08lx\n", Status);
+        NTFSDBG("ntfslx: SpillIndexRoot: AllocateClusters failed 0x%08lx\n", Status);
         return Status;
     }
     if (RunlistCount < 2 || Runlist[0].Length < (LONGLONG)ClustersPerBlock ||
         Runlist[0].Lcn < 0)
     {
-        DbgPrint("ntfslx: SpillIndexRoot: unexpected runlist shape count=%lu\n",
+        NTFSDBG("ntfslx: SpillIndexRoot: unexpected runlist shape count=%lu\n",
                  RunlistCount);
         NtfslxFreeClusters(DevExt->StorageDevice, &DevExt->VolumeInfo,
                            DevExt->MftRunlist, Runlist, RunlistCount);
@@ -1403,7 +1403,7 @@ NtfslxSpillIndexRootToAllocation(
         if (DstHeader->EntriesOffset + MigrateBytes +
             sizeof(NTFSLX_I30_INDEX_ENTRY) > DstHeader->AllocatedSize)
         {
-            DbgPrint("ntfslx: SpillIndexRoot: migrate %lu bytes won't fit block %lu\n",
+            NTFSDBG("ntfslx: SpillIndexRoot: migrate %lu bytes won't fit block %lu\n",
                      MigrateBytes, BlockSize);
             ExFreePoolWithTag(BlockBuf, NTFSLX_TAG);
             NtfslxFreeClusters(DevExt->StorageDevice, &DevExt->VolumeInfo,
@@ -1433,7 +1433,7 @@ NtfslxSpillIndexRootToAllocation(
     Status = NtfslxWriteDirIndexBlock(DevExt, Runlist, 0, BlockSize, BlockBuf);
     if (!NT_SUCCESS(Status))
     {
-        DbgPrint("ntfslx: SpillIndexRoot: WriteDirIndexBlock failed 0x%08lx\n", Status);
+        NTFSDBG("ntfslx: SpillIndexRoot: WriteDirIndexBlock failed 0x%08lx\n", Status);
         ExFreePoolWithTag(BlockBuf, NTFSLX_TAG);
         NtfslxFreeClusters(DevExt->StorageDevice, &DevExt->VolumeInfo,
                            DevExt->MftRunlist, Runlist, RunlistCount);
@@ -1462,7 +1462,7 @@ NtfslxSpillIndexRootToAllocation(
     Status = NtfslxResizeAttributeRecord(DirRecord, IndexRootAttr, NewRootAttrSize);
     if (!NT_SUCCESS(Status))
     {
-        DbgPrint("ntfslx: SpillIndexRoot: shrink root failed 0x%08lx\n", Status);
+        NTFSDBG("ntfslx: SpillIndexRoot: shrink root failed 0x%08lx\n", Status);
         NtfslxFreeClusters(DevExt->StorageDevice, &DevExt->VolumeInfo,
                            DevExt->MftRunlist, Runlist, RunlistCount);
         ExFreePoolWithTag(Runlist, NTFSLX_TAG);
@@ -1502,7 +1502,7 @@ NtfslxSpillIndexRootToAllocation(
     {
         /* An allocation already exists — caller should have taken the
          * append path, not the spill path. */
-        DbgPrint("ntfslx: SpillIndexRoot: stale $INDEX_ALLOCATION present\n");
+        NTFSDBG("ntfslx: SpillIndexRoot: stale $INDEX_ALLOCATION present\n");
         NtfslxFreeClusters(DevExt->StorageDevice, &DevExt->VolumeInfo,
                            DevExt->MftRunlist, Runlist, RunlistCount);
         ExFreePoolWithTag(Runlist, NTFSLX_TAG);
@@ -1514,7 +1514,7 @@ NtfslxSpillIndexRootToAllocation(
                                              MpBuf, sizeof(MpBuf));
     if (MpLen == 0)
     {
-        DbgPrint("ntfslx: SpillIndexRoot: mapping pairs too long\n");
+        NTFSDBG("ntfslx: SpillIndexRoot: mapping pairs too long\n");
         NtfslxFreeClusters(DevExt->StorageDevice, &DevExt->VolumeInfo,
                            DevExt->MftRunlist, Runlist, RunlistCount);
         ExFreePoolWithTag(Runlist, NTFSLX_TAG);
@@ -1551,7 +1551,7 @@ NtfslxSpillIndexRootToAllocation(
                                          &NewIndexAllocAttr);
     if (!NT_SUCCESS(Status))
     {
-        DbgPrint("ntfslx: SpillIndexRoot: insert placeholder $INDEX_ALLOCATION failed 0x%08lx\n",
+        NTFSDBG("ntfslx: SpillIndexRoot: insert placeholder $INDEX_ALLOCATION failed 0x%08lx\n",
                  Status);
         NtfslxFreeClusters(DevExt->StorageDevice, &DevExt->VolumeInfo,
                            DevExt->MftRunlist, Runlist, RunlistCount);
@@ -1563,7 +1563,7 @@ NtfslxSpillIndexRootToAllocation(
                                          NewIndexAllocLen);
     if (!NT_SUCCESS(Status))
     {
-        DbgPrint("ntfslx: SpillIndexRoot: resize $INDEX_ALLOCATION to %lu failed 0x%08lx\n",
+        NTFSDBG("ntfslx: SpillIndexRoot: resize $INDEX_ALLOCATION to %lu failed 0x%08lx\n",
                  NewIndexAllocLen, Status);
         NtfslxFreeClusters(DevExt->StorageDevice, &DevExt->VolumeInfo,
                            DevExt->MftRunlist, Runlist, RunlistCount);
@@ -1622,7 +1622,7 @@ NtfslxSpillIndexRootToAllocation(
     }
     if (!NT_SUCCESS(Status))
     {
-        DbgPrint("ntfslx: SpillIndexRoot: $BITMAP insert/update failed 0x%08lx\n",
+        NTFSDBG("ntfslx: SpillIndexRoot: $BITMAP insert/update failed 0x%08lx\n",
                  Status);
         NtfslxFreeClusters(DevExt->StorageDevice, &DevExt->VolumeInfo,
                            DevExt->MftRunlist, Runlist, RunlistCount);
@@ -1633,7 +1633,7 @@ NtfslxSpillIndexRootToAllocation(
     /* Free our temporary runlist; the on-disk attribute holds the canonical copy. */
     ExFreePoolWithTag(Runlist, NTFSLX_TAG);
 
-    DbgPrint("ntfslx: SpillIndexRoot dir=%I64u migrated=%lu bytes, block at lcn=%I64d\n",
+    NTFSDBG("ntfslx: SpillIndexRoot dir=%I64u migrated=%lu bytes, block at lcn=%I64d\n",
              DirectoryMftIndex, MigrateBytes,
              (LONGLONG)NewIndexAllocAttr->Data.NonResident.DataSize / DevExt->VolumeInfo.BytesPerCluster);
 
@@ -1701,7 +1701,7 @@ NtfslxIndexAllocationInsert(
                                                &RunlistCount);
     if (!NT_SUCCESS(Status))
     {
-        DbgPrint("ntfslx: AllocationInsert: BuildRunlist failed 0x%08lx\n", Status);
+        NTFSDBG("ntfslx: AllocationInsert: BuildRunlist failed 0x%08lx\n", Status);
         return Status;
     }
 
@@ -1716,7 +1716,7 @@ NtfslxIndexAllocationInsert(
         return STATUS_INSUFFICIENT_RESOURCES;
     }
 
-    DbgPrint("ntfslx: AllocationInsert: scanning %I64u blocks\n", NumBlocks);
+    NTFSDBG("ntfslx: AllocationInsert: scanning %I64u blocks\n", NumBlocks);
 
     for (BlockIdx = 0; BlockIdx < NumBlocks; BlockIdx++)
     {
@@ -1725,7 +1725,7 @@ NtfslxIndexAllocationInsert(
         Status = NtfslxReadDirIndexBlock(DevExt, Runlist, Vcn, BlockSize, BlockBuf);
         if (!NT_SUCCESS(Status))
         {
-            DbgPrint("ntfslx: AllocationInsert: read block vcn=%I64u failed 0x%08lx\n",
+            NTFSDBG("ntfslx: AllocationInsert: read block vcn=%I64u failed 0x%08lx\n",
                      Vcn, Status);
             LastFailure = Status;
             continue;
@@ -1739,7 +1739,7 @@ NtfslxIndexAllocationInsert(
             NewEntry, NewEntryLength,
             DevExt);
 
-        DbgPrint("ntfslx: AllocationInsert: block vcn=%I64u insert result=0x%08lx\n",
+        NTFSDBG("ntfslx: AllocationInsert: block vcn=%I64u insert result=0x%08lx\n",
                  Vcn, Status);
 
         if (Status == STATUS_DISK_FULL)
@@ -1760,7 +1760,7 @@ NtfslxIndexAllocationInsert(
         ExFreePoolWithTag(Runlist, 'aIxN');
         if (NT_SUCCESS(Status))
         {
-            DbgPrint("ntfslx: AllocationInsert: wrote to block vcn=%I64u\n", Vcn);
+            NTFSDBG("ntfslx: AllocationInsert: wrote to block vcn=%I64u\n", Vcn);
         }
         return Status;
     }
@@ -1768,7 +1768,7 @@ NtfslxIndexAllocationInsert(
     ExFreePoolWithTag(BlockBuf, NTFSLX_TAG);
     ExFreePoolWithTag(Runlist, 'aIxN');
 
-    DbgPrint("ntfslx: AllocationInsert: no block has room (blocks=%I64u)\n",
+    NTFSDBG("ntfslx: AllocationInsert: no block has room (blocks=%I64u)\n",
              NumBlocks);
     if (LastFailure == STATUS_DISK_FULL)
     {
@@ -1783,7 +1783,7 @@ NtfslxIndexAllocationInsert(
             return STATUS_SUCCESS;
         }
 
-        DbgPrint("ntfslx: AllocationInsert: append-right failed 0x%08lx\n",
+        NTFSDBG("ntfslx: AllocationInsert: append-right failed 0x%08lx\n",
                  ExtendStatus);
         LastFailure = ExtendStatus;
     }
@@ -2182,13 +2182,13 @@ NtfslxIndexInsertFileName(
                 ExFreePoolWithTag(NewEntry, NTFSLX_TAG);
                 return ResizeStatus;
             }
-            DbgPrint("ntfslx: IndexInsert dir=%I64u resident root full, trying allocation\n",
+            NTFSDBG("ntfslx: IndexInsert dir=%I64u resident root full, trying allocation\n",
                      DirectoryMftIndex);
         }
     }
     else
     {
-        DbgPrint("ntfslx: IndexInsert dir=%I64u bypassing resident root for large index\n",
+        NTFSDBG("ntfslx: IndexInsert dir=%I64u bypassing resident root for large index\n",
                  DirectoryMftIndex);
     }
 
@@ -2212,7 +2212,7 @@ NtfslxIndexInsertFileName(
                                                       DirectoryMftIndex);
             if (!NT_SUCCESS(Status))
             {
-                DbgPrint("ntfslx: IndexInsert: spill failed 0x%08lx\n", Status);
+                NTFSDBG("ntfslx: IndexInsert: spill failed 0x%08lx\n", Status);
                 ExFreePoolWithTag(DirRecord, NTFSLX_TAG);
                 ExFreePoolWithTag(NewEntry, NTFSLX_TAG);
                 return Status;
@@ -2250,7 +2250,7 @@ NtfslxIndexInsertFileName(
     }
     if (!NT_SUCCESS(Status))
     {
-        DbgPrint("ntfslx: IndexInsert: allocation insert failed 0x%08lx\n", Status);
+        NTFSDBG("ntfslx: IndexInsert: allocation insert failed 0x%08lx\n", Status);
     }
 
     ExFreePoolWithTag(DirRecord, NTFSLX_TAG);
@@ -2527,7 +2527,7 @@ NtfslxIndexRemoveFileName(
                                                    NewAttrLength);
         if (!NT_SUCCESS(ResizeStatus))
         {
-            DbgPrint("ntfslx: IndexRemove: ResizeAttributeRecord to %lu failed 0x%08lx\n",
+            NTFSDBG("ntfslx: IndexRemove: ResizeAttributeRecord to %lu failed 0x%08lx\n",
                      NewAttrLength, ResizeStatus);
             ExFreePoolWithTag(DirRecord, NTFSLX_TAG);
             return ResizeStatus;
@@ -2537,7 +2537,7 @@ NtfslxIndexRemoveFileName(
          * be updated to reflect the shrink. */
         IndexRootAttr->Data.Resident.ValueLength = NewValueLength;
 
-        DbgPrint("ntfslx: IndexRemove dir=%I64u name='%.*S' removed from resident root (%lu bytes), new attr size=%lu\n",
+        NTFSDBG("ntfslx: IndexRemove dir=%I64u name='%.*S' removed from resident root (%lu bytes), new attr size=%lu\n",
                  DirectoryMftIndex, FileNameLength, FileName, EntryLength, NewAttrLength);
 
         Status = NtfslxWriteMftRecord(DevExt->StorageDevice, &DevExt->VolumeInfo,
@@ -2547,10 +2547,10 @@ NtfslxIndexRemoveFileName(
     }
 
     /* Not in resident root — fall through to $INDEX_ALLOCATION scan. */
-    DbgPrint("ntfslx: IndexRemove dir=%I64u name='%.*S' not in resident root, trying allocation\n",
+    NTFSDBG("ntfslx: IndexRemove dir=%I64u name='%.*S' not in resident root, trying allocation\n",
              DirectoryMftIndex, FileNameLength, FileName);
     Status = NtfslxIndexAllocationRemove(DevExt, DirRecord, FileName, FileNameLength);
-    DbgPrint("ntfslx: IndexRemove dir=%I64u name='%.*S' allocation result=0x%08lx\n",
+    NTFSDBG("ntfslx: IndexRemove dir=%I64u name='%.*S' allocation result=0x%08lx\n",
              DirectoryMftIndex, FileNameLength, FileName, Status);
     ExFreePoolWithTag(DirRecord, NTFSLX_TAG);
     return Status;

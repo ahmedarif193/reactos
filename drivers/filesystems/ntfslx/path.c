@@ -23,7 +23,7 @@
 #include <debug.h>
 
 #ifndef NTFSLX_PATH_TRACE
-#define NTFSLX_PATH_TRACE DbgPrint
+#define NTFSLX_PATH_TRACE NTFSDBG
 #endif
 
 static __inline BOOLEAN

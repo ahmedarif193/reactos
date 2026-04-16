@@ -208,7 +208,7 @@ NtfslxWriteMftRecord(
                                                    RecordSize);
         if (!NT_SUCCESS(MirrorStatus))
         {
-            DbgPrint("ntfslx: WriteMftRecord: mirror write rec=%I64u failed 0x%08lx (non-fatal)\n",
+            NTFSDBG("ntfslx: WriteMftRecord: mirror write rec=%I64u failed 0x%08lx (non-fatal)\n",
                      RecordNumber, MirrorStatus);
         }
     }
@@ -311,7 +311,7 @@ NtfslxEnsureMftBitmapCoverage(
                                  NULL, 0, &BitmapAttr);
     if (!NT_SUCCESS(Status))
     {
-        DbgPrint("ntfslx: MftBitmap: FindAttribute($BITMAP) failed 0x%08lx\n",
+        NTFSDBG("ntfslx: MftBitmap: FindAttribute($BITMAP) failed 0x%08lx\n",
                  Status);
         return Status;
     }
@@ -353,7 +353,7 @@ NtfslxEnsureMftBitmapCoverage(
                                               &BitmapRunlist, &BitmapRunlistCount);
         if (!NT_SUCCESS(Status))
         {
-            DbgPrint("ntfslx: MftBitmap: decompress failed 0x%08lx\n", Status);
+            NTFSDBG("ntfslx: MftBitmap: decompress failed 0x%08lx\n", Status);
             return Status;
         }
         ActiveRunlist = BitmapRunlist;
@@ -383,7 +383,7 @@ NtfslxEnsureMftBitmapCoverage(
                                             &NewRunCount);
             if (!NT_SUCCESS(Status))
             {
-                DbgPrint("ntfslx: MftBitmap: AllocateClusters failed 0x%08lx add=%I64u\n",
+                NTFSDBG("ntfslx: MftBitmap: AllocateClusters failed 0x%08lx add=%I64u\n",
                          Status, AdditionalClusters);
                 goto Cleanup;
             }
@@ -438,7 +438,7 @@ NtfslxEnsureMftBitmapCoverage(
                                              0, -1, NULL);
             if (!NT_SUCCESS(Status))
             {
-                DbgPrint("ntfslx: MftBitmap: MappingPairsBuild failed 0x%08lx\n",
+                NTFSDBG("ntfslx: MftBitmap: MappingPairsBuild failed 0x%08lx\n",
                          Status);
                 goto Cleanup;
             }
@@ -451,7 +451,7 @@ NtfslxEnsureMftBitmapCoverage(
                                                      NewAttrLength);
                 if (!NT_SUCCESS(Status))
                 {
-                    DbgPrint("ntfslx: MftBitmap: resize attr %lu->%lu failed 0x%08lx\n",
+                    NTFSDBG("ntfslx: MftBitmap: resize attr %lu->%lu failed 0x%08lx\n",
                              BitmapAttr->Length, NewAttrLength, Status);
                     goto Cleanup;
                 }
@@ -487,7 +487,7 @@ NtfslxEnsureMftBitmapCoverage(
                                                    BitmapData);
             if (!NT_SUCCESS(Status))
             {
-                DbgPrint("ntfslx: MftBitmap: read old data failed 0x%08lx\n",
+                NTFSDBG("ntfslx: MftBitmap: read old data failed 0x%08lx\n",
                          Status);
                 goto Cleanup;
             }
@@ -530,7 +530,7 @@ NtfslxEnsureMftBitmapCoverage(
         }
     }
 
-    DbgPrint("ntfslx: MftBitmap: grow %I64u -> %I64u bytes for %I64u records\n",
+    NTFSDBG("ntfslx: MftBitmap: grow %I64u -> %I64u bytes for %I64u records\n",
              OldDataBytes, RequiredBytes, RequiredRecords);
 
     if (BitmapAttr->NonResident == 0)
@@ -558,7 +558,7 @@ NtfslxEnsureMftBitmapCoverage(
                                             BitmapData);
         if (!NT_SUCCESS(Status))
         {
-            DbgPrint("ntfslx: MftBitmap: write grown bitmap failed 0x%08lx\n",
+            NTFSDBG("ntfslx: MftBitmap: write grown bitmap failed 0x%08lx\n",
                      Status);
             goto Cleanup;
         }
@@ -646,12 +646,12 @@ NtfslxExtendMftRunlist(
                                  NULL, 0, &DataAttr);
     if (!NT_SUCCESS(Status))
     {
-        DbgPrint("ntfslx: ExtendMft: FindAttribute($DATA) failed 0x%08lx\n", Status);
+        NTFSDBG("ntfslx: ExtendMft: FindAttribute($DATA) failed 0x%08lx\n", Status);
         return Status;
     }
     if (DataAttr->NonResident == 0)
     {
-        DbgPrint("ntfslx: ExtendMft: $MFT $DATA is resident?!\n");
+        NTFSDBG("ntfslx: ExtendMft: $MFT $DATA is resident?!\n");
         return STATUS_NOT_SUPPORTED;
     }
 
@@ -659,7 +659,7 @@ NtfslxExtendMftRunlist(
                                           &OldRunlist, &OldRunCount);
     if (!NT_SUCCESS(Status))
     {
-        DbgPrint("ntfslx: ExtendMft: Decompress failed 0x%08lx\n", Status);
+        NTFSDBG("ntfslx: ExtendMft: Decompress failed 0x%08lx\n", Status);
         return Status;
     }
 
@@ -676,7 +676,7 @@ NtfslxExtendMftRunlist(
         }
     }
 
-    DbgPrint("ntfslx: ExtendMft: old runs=%lu lastVcn=%I64d hintLcn=%I64d addClusters=%lu\n",
+    NTFSDBG("ntfslx: ExtendMft: old runs=%lu lastVcn=%I64d hintLcn=%I64d addClusters=%lu\n",
              OldRunCount, LastVcn, HintLcn, AdditionalClusters);
 
     Status = NtfslxAllocateClusters(DevExt->StorageDevice, &DevExt->VolumeInfo,
@@ -686,7 +686,7 @@ NtfslxExtendMftRunlist(
                                     &NewRuns, &NewRunCount);
     if (!NT_SUCCESS(Status))
     {
-        DbgPrint("ntfslx: ExtendMft: AllocateClusters failed 0x%08lx\n", Status);
+        NTFSDBG("ntfslx: ExtendMft: AllocateClusters failed 0x%08lx\n", Status);
         ExFreePoolWithTag(OldRunlist, NTFSLX_TAG);
         return Status;
     }
@@ -735,7 +735,7 @@ NtfslxExtendMftRunlist(
         0, LastVcn, NULL);
     if (!NT_SUCCESS(Status))
     {
-        DbgPrint("ntfslx: ExtendMft: MappingPairsBuild failed 0x%08lx merged=%lu lastVcn=%I64d\n",
+        NTFSDBG("ntfslx: ExtendMft: MappingPairsBuild failed 0x%08lx merged=%lu lastVcn=%I64d\n",
                  Status, MergedCount, LastVcn);
         goto Cleanup;
     }
@@ -744,7 +744,7 @@ NtfslxExtendMftRunlist(
     MpLen = 1;
     while (MpLen < sizeof(MpBuf) && MpBuf[MpLen - 1] != 0)
         MpLen++;
-    DbgPrint("ntfslx: ExtendMft: new mapping pairs len=%lu runs=%lu lastVcn=%I64d\n",
+    NTFSDBG("ntfslx: ExtendMft: new mapping pairs len=%lu runs=%lu lastVcn=%I64d\n",
              MpLen, MergedCount, LastVcn);
 
     /* Resize $DATA attribute if the new mapping pairs don't fit. */
@@ -755,7 +755,7 @@ NtfslxExtendMftRunlist(
         Status = NtfslxResizeAttributeRecord(MftRecord, DataAttr, NewAttrLen);
         if (!NT_SUCCESS(Status))
         {
-            DbgPrint("ntfslx: ExtendMft: ResizeAttributeRecord to %lu failed 0x%08lx\n",
+            NTFSDBG("ntfslx: ExtendMft: ResizeAttributeRecord to %lu failed 0x%08lx\n",
                      NewAttrLen, Status);
             goto Cleanup;
         }
@@ -784,7 +784,7 @@ NtfslxExtendMftRunlist(
         }
     }
 
-    DbgPrint("ntfslx: ExtendMft: success new $DATA alloc=%I64u records=%I64u\n",
+    NTFSDBG("ntfslx: ExtendMft: success new $DATA alloc=%I64u records=%I64u\n",
              NewAllocatedBytes, NewAllocatedBytes / DevExt->VolumeInfo.BytesPerFileRecord);
     Status = STATUS_SUCCESS;
 
@@ -835,7 +835,7 @@ NtfslxAllocateMftRecord(
                                  NTFSLX_FILE_MFT, MftRecord);
     if (!NT_SUCCESS(Status))
     {
-        DbgPrint("ntfslx: AllocMft: ReadMftRecord($MFT) failed 0x%08lx\n", Status);
+        NTFSDBG("ntfslx: AllocMft: ReadMftRecord($MFT) failed 0x%08lx\n", Status);
         ExFreePoolWithTag(MftRecord, NTFSLX_TAG);
         return Status;
     }
@@ -843,13 +843,13 @@ NtfslxAllocateMftRecord(
     Status = NtfslxFindAttribute(MftRecord, NTFSLX_ATTRIBUTE_BITMAP, NULL, 0, &BitmapAttr);
     if (!NT_SUCCESS(Status))
     {
-        DbgPrint("ntfslx: AllocMft: FindAttribute($BITMAP) failed 0x%08lx MftBytesInUse=%lu\n",
+        NTFSDBG("ntfslx: AllocMft: FindAttribute($BITMAP) failed 0x%08lx MftBytesInUse=%lu\n",
                  Status, MftRecord->BytesInUse);
         ExFreePoolWithTag(MftRecord, NTFSLX_TAG);
         return Status;
     }
 
-    DbgPrint("ntfslx: AllocMft: $BITMAP found NonResident=%u Length=%lu ValueLength=%lu\n",
+    NTFSDBG("ntfslx: AllocMft: $BITMAP found NonResident=%u Length=%lu ValueLength=%lu\n",
              BitmapAttr->NonResident, BitmapAttr->Length,
              BitmapAttr->NonResident == 0 ? BitmapAttr->Data.Resident.ValueLength : 0);
 
@@ -874,13 +874,13 @@ NtfslxAllocateMftRecord(
             {
                 MftDataSize = MftDataAttr->Data.NonResident.AllocatedSize;
             }
-            DbgPrint("ntfslx: AllocMft: $MFT $DATA alloc=%I64u records=%I64u\n",
+            NTFSDBG("ntfslx: AllocMft: $MFT $DATA alloc=%I64u records=%I64u\n",
                      MftDataSize, MftDataSize / RecordSize);
             *OutRecordNumber = MftDataSize / RecordSize;  /* remember cap */
         }
         else
         {
-            DbgPrint("ntfslx: AllocMft: FindAttribute($DATA) failed 0x%08lx\n", Status);
+            NTFSDBG("ntfslx: AllocMft: FindAttribute($DATA) failed 0x%08lx\n", Status);
             *OutRecordNumber = (ULONGLONG)-1;
         }
     }
@@ -907,18 +907,18 @@ NtfslxAllocateMftRecord(
     {
         /* Non-resident bitmap */
         BitmapLength = (ULONG)BitmapAttr->Data.NonResident.DataSize;
-        DbgPrint("ntfslx: AllocMft: non-resident bitmap DataSize=%I64u AllocSize=%I64u\n",
+        NTFSDBG("ntfslx: AllocMft: non-resident bitmap DataSize=%I64u AllocSize=%I64u\n",
                  BitmapAttr->Data.NonResident.DataSize,
                  BitmapAttr->Data.NonResident.AllocatedSize);
         Status = NtfslxMappingPairsDecompress(VolumeInfo, BitmapAttr,
                                               &BitmapRunlist, &BitmapRunlistCount);
         if (!NT_SUCCESS(Status))
         {
-            DbgPrint("ntfslx: AllocMft: MappingPairsDecompress failed 0x%08lx\n", Status);
+            NTFSDBG("ntfslx: AllocMft: MappingPairsDecompress failed 0x%08lx\n", Status);
             ExFreePoolWithTag(MftRecord, NTFSLX_TAG);
             return Status;
         }
-        DbgPrint("ntfslx: AllocMft: bitmap runlist count=%lu\n", BitmapRunlistCount);
+        NTFSDBG("ntfslx: AllocMft: bitmap runlist count=%lu\n", BitmapRunlistCount);
 
         BitmapData = ExAllocatePoolWithTag(NonPagedPool, BitmapLength, NTFSLX_TAG);
         if (BitmapData == NULL)
@@ -933,7 +933,7 @@ NtfslxAllocateMftRecord(
                                                BitmapData);
         if (!NT_SUCCESS(Status))
         {
-            DbgPrint("ntfslx: AllocMft: ReadMappedAttributeData($BITMAP) failed 0x%08lx\n", Status);
+            NTFSDBG("ntfslx: AllocMft: ReadMappedAttributeData($BITMAP) failed 0x%08lx\n", Status);
             ExFreePoolWithTag(BitmapData, NTFSLX_TAG);
             ExFreePoolWithTag(BitmapRunlist, NTFSLX_TAG);
             ExFreePoolWithTag(MftRecord, NTFSLX_TAG);
@@ -941,7 +941,7 @@ NtfslxAllocateMftRecord(
         }
     }
 
-    DbgPrint("ntfslx: AllocMft: scan BitmapLength=%lu TotalBits=%I64u\n",
+    NTFSDBG("ntfslx: AllocMft: scan BitmapLength=%lu TotalBits=%I64u\n",
              BitmapLength, (ULONGLONG)BitmapLength * 8);
 
     /*
@@ -956,7 +956,7 @@ NtfslxAllocateMftRecord(
         ULONGLONG MftRecordCap = *OutRecordNumber; /* captured above */
         if (MftRecordCap != (ULONGLONG)-1 && MftRecordCap < TotalBits)
         {
-            DbgPrint("ntfslx: AllocMft: capping TotalBits %I64u -> %I64u by $MFT $DATA\n",
+            NTFSDBG("ntfslx: AllocMft: capping TotalBits %I64u -> %I64u by $MFT $DATA\n",
                      TotalBits, MftRecordCap);
             TotalBits = MftRecordCap;
         }
@@ -975,7 +975,7 @@ NtfslxAllocateMftRecord(
 
     if (RecordNumber == (ULONGLONG)-1)
     {
-        DbgPrint("ntfslx: AllocMft: no free records in [%u..%I64u) -- DISK_FULL\n",
+        NTFSDBG("ntfslx: AllocMft: no free records in [%u..%I64u) -- DISK_FULL\n",
                  NTFSLX_FILE_FIRST_USER, TotalBits);
         if (BitmapRunlist != NULL)
             ExFreePoolWithTag(BitmapRunlist, NTFSLX_TAG);
@@ -1097,12 +1097,12 @@ NtfslxAllocateMftRecord(
 
     if (!NT_SUCCESS(Status))
     {
-        DbgPrint("ntfslx: AllocMft: WriteMftRecord(rec=%I64u) failed 0x%08lx\n",
+        NTFSDBG("ntfslx: AllocMft: WriteMftRecord(rec=%I64u) failed 0x%08lx\n",
                  RecordNumber, Status);
         return Status;
     }
 
-    DbgPrint("ntfslx: AllocMft: allocated record=%I64u\n", RecordNumber);
+    NTFSDBG("ntfslx: AllocMft: allocated record=%I64u\n", RecordNumber);
     *OutRecordNumber = RecordNumber;
     return STATUS_SUCCESS;
 }
@@ -1147,7 +1147,7 @@ NtfslxAllocateMftRecordEx(
                                  NTFSLX_FILE_MFT, MftRecord);
     if (!NT_SUCCESS(Status))
     {
-        DbgPrint("ntfslx: AllocateMftRecordEx: ReadMftRecord($MFT) failed 0x%08lx\n",
+        NTFSDBG("ntfslx: AllocateMftRecordEx: ReadMftRecord($MFT) failed 0x%08lx\n",
                  Status);
         ExFreePoolWithTag(MftRecord, NTFSLX_TAG);
         return Status;
@@ -1156,7 +1156,7 @@ NtfslxAllocateMftRecordEx(
     Status = NtfslxGetMftRecordCapacity(MftRecord, RecordSize, &RecordCap);
     if (!NT_SUCCESS(Status))
     {
-        DbgPrint("ntfslx: AllocateMftRecordEx: GetMftRecordCapacity failed 0x%08lx\n",
+        NTFSDBG("ntfslx: AllocateMftRecordEx: GetMftRecordCapacity failed 0x%08lx\n",
                  Status);
         ExFreePoolWithTag(MftRecord, NTFSLX_TAG);
         return Status;
@@ -1165,7 +1165,7 @@ NtfslxAllocateMftRecordEx(
     Status = NtfslxEnsureMftBitmapCoverage(DevExt, MftRecord, RecordCap, &MetadataDirty);
     if (!NT_SUCCESS(Status))
     {
-        DbgPrint("ntfslx: AllocateMftRecordEx: bitmap coverage sync failed 0x%08lx\n",
+        NTFSDBG("ntfslx: AllocateMftRecordEx: bitmap coverage sync failed 0x%08lx\n",
                  Status);
         ExFreePoolWithTag(MftRecord, NTFSLX_TAG);
         return Status;
@@ -1179,7 +1179,7 @@ NtfslxAllocateMftRecordEx(
                                       NTFSLX_FILE_MFT, MftRecord);
         if (!NT_SUCCESS(Status))
         {
-            DbgPrint("ntfslx: AllocateMftRecordEx: WriteMftRecord(bitmap sync) failed 0x%08lx\n",
+            NTFSDBG("ntfslx: AllocateMftRecordEx: WriteMftRecord(bitmap sync) failed 0x%08lx\n",
                      Status);
             ExFreePoolWithTag(MftRecord, NTFSLX_TAG);
             return Status;
@@ -1190,7 +1190,7 @@ NtfslxAllocateMftRecordEx(
                                          DevExt->MftRunlist,
                                          DevExt->MftRunlistCount,
                                          OutRecordNumber);
-        DbgPrint("ntfslx: AllocateMftRecordEx: retry after bitmap sync result=0x%08lx rec=%I64u\n",
+        NTFSDBG("ntfslx: AllocateMftRecordEx: retry after bitmap sync result=0x%08lx rec=%I64u\n",
                  Status, NT_SUCCESS(Status) ? *OutRecordNumber : 0);
         if (Status != STATUS_DISK_FULL)
         {
@@ -1204,20 +1204,20 @@ NtfslxAllocateMftRecordEx(
                                      NTFSLX_FILE_MFT, MftRecord);
         if (!NT_SUCCESS(Status))
         {
-            DbgPrint("ntfslx: AllocateMftRecordEx: re-read $MFT failed 0x%08lx\n",
+            NTFSDBG("ntfslx: AllocateMftRecordEx: re-read $MFT failed 0x%08lx\n",
                      Status);
             ExFreePoolWithTag(MftRecord, NTFSLX_TAG);
             return Status;
         }
     }
 
-    DbgPrint("ntfslx: AllocateMftRecordEx: $MFT still full, extending by %lu clusters\n",
+    NTFSDBG("ntfslx: AllocateMftRecordEx: $MFT still full, extending by %lu clusters\n",
              ExtraClusters);
 
     Status = NtfslxExtendMftRunlist(DevExt, MftRecord, ExtraClusters);
     if (!NT_SUCCESS(Status))
     {
-        DbgPrint("ntfslx: AllocateMftRecordEx: ExtendMftRunlist failed 0x%08lx\n",
+        NTFSDBG("ntfslx: AllocateMftRecordEx: ExtendMftRunlist failed 0x%08lx\n",
                  Status);
         ExFreePoolWithTag(MftRecord, NTFSLX_TAG);
         return Status;
@@ -1226,7 +1226,7 @@ NtfslxAllocateMftRecordEx(
     Status = NtfslxGetMftRecordCapacity(MftRecord, RecordSize, &RecordCap);
     if (!NT_SUCCESS(Status))
     {
-        DbgPrint("ntfslx: AllocateMftRecordEx: GetMftRecordCapacity(post-extend) failed 0x%08lx\n",
+        NTFSDBG("ntfslx: AllocateMftRecordEx: GetMftRecordCapacity(post-extend) failed 0x%08lx\n",
                  Status);
         ExFreePoolWithTag(MftRecord, NTFSLX_TAG);
         return Status;
@@ -1235,7 +1235,7 @@ NtfslxAllocateMftRecordEx(
     Status = NtfslxEnsureMftBitmapCoverage(DevExt, MftRecord, RecordCap, &MetadataDirty);
     if (!NT_SUCCESS(Status))
     {
-        DbgPrint("ntfslx: AllocateMftRecordEx: bitmap grow after extend failed 0x%08lx\n",
+        NTFSDBG("ntfslx: AllocateMftRecordEx: bitmap grow after extend failed 0x%08lx\n",
                  Status);
         ExFreePoolWithTag(MftRecord, NTFSLX_TAG);
         return Status;
@@ -1249,7 +1249,7 @@ NtfslxAllocateMftRecordEx(
 
     if (!NT_SUCCESS(Status))
     {
-        DbgPrint("ntfslx: AllocateMftRecordEx: WriteMftRecord($MFT) failed 0x%08lx\n",
+        NTFSDBG("ntfslx: AllocateMftRecordEx: WriteMftRecord($MFT) failed 0x%08lx\n",
                  Status);
         return Status;
     }
@@ -1260,7 +1260,7 @@ NtfslxAllocateMftRecordEx(
                                      DevExt->MftRunlist,
                                      DevExt->MftRunlistCount,
                                      OutRecordNumber);
-    DbgPrint("ntfslx: AllocateMftRecordEx: retry after extend result=0x%08lx rec=%I64u\n",
+    NTFSDBG("ntfslx: AllocateMftRecordEx: retry after extend result=0x%08lx rec=%I64u\n",
              Status, NT_SUCCESS(Status) ? *OutRecordNumber : 0);
     return Status;
 }

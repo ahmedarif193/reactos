@@ -333,7 +333,7 @@ NtfslxRefreshFileObjectMetadata(
                                   Context->AllocationSize,
                                   Context->DataSize,
                                   Context->DataSize);
-    DbgPrint("ntfslx: RefreshFileObjectMetadata mft=%I64u data=%I64u alloc=%I64u resident=%u\n",
+    NTFSDBG("ntfslx: RefreshFileObjectMetadata mft=%I64u data=%I64u alloc=%I64u resident=%u\n",
              Context->MftIndex,
              Context->DataSize,
              Context->AllocationSize,
@@ -1106,7 +1106,7 @@ NtfslxEnsureCacheInitialized(
         FileSizes.AllocationSize.QuadPart = PAGE_SIZE;
     }
 
-    DbgPrint("ntfslx: CacheAttach mft=%I64u file=%I64d alloc=%I64d vdl=%I64d\n",
+    NTFSDBG("ntfslx: CacheAttach mft=%I64u file=%I64d alloc=%I64d vdl=%I64d\n",
              Context->MftIndex,
              FileSizes.FileSize.QuadPart,
              FileSizes.AllocationSize.QuadPart,
@@ -1117,7 +1117,7 @@ NtfslxEnsureCacheInitialized(
                                       FALSE,
                                       PAGE_SIZE,
                                       &Context->CacheContext);
-    DbgPrint("ntfslx: CacheAttach mft=%I64u result=0x%08lx cacheCtx=%p\n",
+    NTFSDBG("ntfslx: CacheAttach mft=%I64u result=0x%08lx cacheCtx=%p\n",
              Context->MftIndex, Status, Context->CacheContext);
     return Status;
 }
@@ -1151,7 +1151,7 @@ NtfslxReadFileObject(
     Status = NtfslxValidateFileContext(FileObject, &Context);
     if (!NT_SUCCESS(Status))
     {
-        DbgPrint("ntfslx: Read: ValidateFileContext failed 0x%08lx\n", Status);
+        NTFSDBG("ntfslx: Read: ValidateFileContext failed 0x%08lx\n", Status);
         return Status;
     }
 
@@ -1166,7 +1166,7 @@ NtfslxReadFileObject(
 
     if (Context->IsDirectory)
     {
-        DbgPrint("ntfslx: Read mft=%I64u: is directory\n", Context->MftIndex);
+        NTFSDBG("ntfslx: Read mft=%I64u: is directory\n", Context->MftIndex);
         return STATUS_INVALID_DEVICE_REQUEST;
     }
 
@@ -1175,7 +1175,7 @@ NtfslxReadFileObject(
         Status = NtfslxRefreshFileObjectMetadata(FileObject);
         if (!NT_SUCCESS(Status))
         {
-            DbgPrint("ntfslx: Read: refresh metadata failed 0x%08lx\n", Status);
+            NTFSDBG("ntfslx: Read: refresh metadata failed 0x%08lx\n", Status);
             return Status;
         }
     }
@@ -1191,7 +1191,7 @@ NtfslxReadFileObject(
         return STATUS_SUCCESS;
     }
 
-    DbgPrint("ntfslx: Read mft=%I64u ofs=%I64u len=%lu dataSize=%I64u allocSize=%I64u resident=%u\n",
+    NTFSDBG("ntfslx: Read mft=%I64u ofs=%I64u len=%lu dataSize=%I64u allocSize=%I64u resident=%u\n",
              Context->MftIndex, (ULONGLONG)LocalOffset.QuadPart, Length,
              Context->DataSize, Context->AllocationSize, Context->ResidentData);
 
@@ -1212,12 +1212,12 @@ NtfslxReadFileObject(
             {
                 *BytesRead = RequestedLength;
             }
-            DbgPrint("ntfslx: Read mft=%I64u: paging-io past DataSize; zero-fill %lu bytes\n",
+            NTFSDBG("ntfslx: Read mft=%I64u: paging-io past DataSize; zero-fill %lu bytes\n",
                      Context->MftIndex, RequestedLength);
             return STATUS_SUCCESS;
         }
 
-        DbgPrint("ntfslx: Read mft=%I64u: EOF ofs=%I64u >= dataSize=%I64u\n",
+        NTFSDBG("ntfslx: Read mft=%I64u: EOF ofs=%I64u >= dataSize=%I64u\n",
                  Context->MftIndex, (ULONGLONG)LocalOffset.QuadPart,
                  Context->DataSize);
         return STATUS_END_OF_FILE;
@@ -1269,7 +1269,7 @@ NtfslxReadFileObject(
         }
     }
 
-    DbgPrint("ntfslx: Read mft=%I64u result=0x%08lx bytesRead=%lu (req=%lu)\n",
+    NTFSDBG("ntfslx: Read mft=%I64u result=0x%08lx bytesRead=%lu (req=%lu)\n",
              Context->MftIndex, Status,
              NT_SUCCESS(Status) ? LocalBytesRead : 0,
              RequestedLength);

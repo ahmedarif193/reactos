@@ -3,11 +3,22 @@
 
 #include <ntifs.h>
 #include <ntdddisk.h>
+#include <debug.h>
 #include "ntfslx_layout.h"
 
 #define NTFSLX_TAG 'xlTN'
 #define NTFSLX_DEVICE_NAME L"\\NtfsLx"
 #define NTFSLX_DEFAULT_UPCASE_LENGTH 0x10000
+
+#ifndef NTFSLX_ENABLE_DEBUG_TRACES
+#define NTFSLX_ENABLE_DEBUG_TRACES 1
+#endif
+
+#if NTFSLX_ENABLE_DEBUG_TRACES
+#define NTFSDBG(fmt, ...) DPRINT1(fmt, ##__VA_ARGS__)
+#else
+#define NTFSDBG(...) do { if (0) DPRINT1(__VA_ARGS__); } while (0)
+#endif
 
 /*
  * In-memory self-test IOCTL (sent to the control device \NtfsLx).

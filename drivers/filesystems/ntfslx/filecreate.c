@@ -292,13 +292,13 @@ NtfslxCreateNewFile(
         return Status;
     }
 
-    DbgPrint("ntfslx: CreateNewFile: name='%.*S' parent=%I64u isDir=%u\n",
+    NTFSDBG("ntfslx: CreateNewFile: name='%.*S' parent=%I64u isDir=%u\n",
              FileNameLength, FileName, ParentMftIndex, IsDirectory);
 
     /* Step 1: Allocate a new MFT record. Use the Ex variant so the $MFT
      * gets extended on demand when the initial allocation is exhausted. */
     Status = NtfslxAllocateMftRecordEx(DeviceExtension, &RecordNumber);
-    DbgPrint("ntfslx: CreateNewFile: AllocateMftRecord returned 0x%08lx rec=%I64u\n",
+    NTFSDBG("ntfslx: CreateNewFile: AllocateMftRecord returned 0x%08lx rec=%I64u\n",
              Status, RecordNumber);
     if (!NT_SUCCESS(Status))
     {
@@ -346,14 +346,14 @@ NtfslxCreateNewFile(
     StdInfo.LastAccessTime = (ULONGLONG)CurrentTime.QuadPart;
     StdInfo.FileAttributes = IsDirectory ? FILE_ATTRIBUTE_DIRECTORY : FILE_ATTRIBUTE_NORMAL;
 
-    DbgPrint("ntfslx: CreateNewFile step2: inserting $STANDARD_INFORMATION size=%u recSize=%lu bytesInUse=%lu\n",
+    NTFSDBG("ntfslx: CreateNewFile step2: inserting $STANDARD_INFORMATION size=%u recSize=%lu bytesInUse=%lu\n",
              (unsigned)sizeof(StdInfo), RecordSize, NewRecord->BytesInUse);
     Status = NtfslxInsertAttributeRecord(NewRecord, RecordSize,
                                          NTFSLX_ATTRIBUTE_STANDARD_INFORMATION,
                                          NULL, 0,
                                          &StdInfo, sizeof(StdInfo),
                                          NULL);
-    DbgPrint("ntfslx: CreateNewFile step2: result=0x%08lx bytesInUse=%lu\n", Status, NewRecord->BytesInUse);
+    NTFSDBG("ntfslx: CreateNewFile step2: result=0x%08lx bytesInUse=%lu\n", Status, NewRecord->BytesInUse);
     if (!NT_SUCCESS(Status))
     {
         goto RollbackMft;
@@ -388,14 +388,14 @@ NtfslxCreateNewFile(
                       FileName, NameBytes);
     }
 
-    DbgPrint("ntfslx: CreateNewFile step3: inserting $FILE_NAME fnLen=%lu bytesInUse=%lu\n",
+    NTFSDBG("ntfslx: CreateNewFile step3: inserting $FILE_NAME fnLen=%lu bytesInUse=%lu\n",
              FnAttrValueLength, NewRecord->BytesInUse);
     Status = NtfslxInsertAttributeRecord(NewRecord, RecordSize,
                                          NTFSLX_ATTRIBUTE_FILE_NAME,
                                          NULL, 0,
                                          FnAttrValue, FnAttrValueLength,
                                          NULL);
-    DbgPrint("ntfslx: CreateNewFile step3: result=0x%08lx bytesInUse=%lu\n", Status, NewRecord->BytesInUse);
+    NTFSDBG("ntfslx: CreateNewFile step3: result=0x%08lx bytesInUse=%lu\n", Status, NewRecord->BytesInUse);
     ExFreePoolWithTag(FnAttrValue, NTFSLX_TAG);
     if (!NT_SUCCESS(Status))
     {
@@ -439,14 +439,14 @@ NtfslxCreateNewFile(
         }
     }
 
-    DbgPrint("ntfslx: CreateNewFile step4/5 done, bytesInUse=%lu\n", NewRecord->BytesInUse);
+    NTFSDBG("ntfslx: CreateNewFile step4/5 done, bytesInUse=%lu\n", NewRecord->BytesInUse);
 
     /* Step 6: Write MFT record to disk */
     Status = NtfslxWriteMftRecord(DeviceExtension->StorageDevice,
                                   &DeviceExtension->VolumeInfo,
                                   DeviceExtension->MftRunlist,
                                   RecordNumber, NewRecord);
-    DbgPrint("ntfslx: CreateNewFile step6: WriteMftRecord=0x%08lx\n", Status);
+    NTFSDBG("ntfslx: CreateNewFile step6: WriteMftRecord=0x%08lx\n", Status);
     if (!NT_SUCCESS(Status))
     {
         goto RollbackMft;

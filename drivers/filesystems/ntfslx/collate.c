@@ -176,7 +176,7 @@ NtfslxCollate(
         return NtfslxCollateNtofsUlongs(Data1, Data1Length, Data2, Data2Length);
 
     default:
-        DbgPrint("NTFSLX: Unknown collation rule 0x%lx\n", CollationRule);
+        NTFSDBG("NTFSLX: Unknown collation rule 0x%lx\n", CollationRule);
         return -2;
     }
 }

@@ -112,7 +112,7 @@ NtfslxNotifyReportChange(
     TargetNameOffset = (USHORT)(FileContext->FullPath.Length -
                                 FileContext->LeafNameLength);
 
-    DbgPrint("ntfslx: NotifyReport path='%wZ' leafOfs=%u filter=0x%08lx action=%lu\n",
+    NTFSDBG("ntfslx: NotifyReport path='%wZ' leafOfs=%u filter=0x%08lx action=%lu\n",
              &FileContext->FullPath, (ULONG)TargetNameOffset, Filter, Action);
 
     FsRtlNotifyFullReportChange(DevExt->NotifySync,
@@ -191,7 +191,7 @@ NtfslxNotifyChangeDirectory(
     CompletionFilter = Stack->Parameters.NotifyDirectory.CompletionFilter;
     WatchTree = BooleanFlagOn(Stack->Flags, SL_WATCH_TREE);
 
-    DbgPrint("ntfslx: NotifyChangeDirectory mft=%I64u path='%wZ' filter=0x%08lx watchTree=%u ccb=%p fileObj=%p\n",
+    NTFSDBG("ntfslx: NotifyChangeDirectory mft=%I64u path='%wZ' filter=0x%08lx watchTree=%u ccb=%p fileObj=%p\n",
              FileContext->MftIndex,
              &FileContext->FullPath,
              CompletionFilter,
@@ -212,7 +212,7 @@ NtfslxNotifyChangeDirectory(
                                    NULL,
                                    NULL);
 
-    DbgPrint("ntfslx: NotifyChangeDirectory queued path='%wZ' filter=0x%08lx watchTree=%u ccb=%p\n",
+    NTFSDBG("ntfslx: NotifyChangeDirectory queued path='%wZ' filter=0x%08lx watchTree=%u ccb=%p\n",
              &FileContext->FullPath,
              CompletionFilter,
              WatchTree,
@@ -222,7 +222,7 @@ NtfslxNotifyChangeDirectory(
     return STATUS_PENDING;
 
 Reject:
-    DbgPrint("ntfslx: NotifyChangeDirectory reject reason=%s DevObj=%p FileObj=%p flags=0x%02x\n",
+    NTFSDBG("ntfslx: NotifyChangeDirectory reject reason=%s DevObj=%p FileObj=%p flags=0x%02x\n",
              RejectReason,
              DeviceObject,
              Stack->FileObject,
@@ -243,7 +243,7 @@ NtfslxNotifyCleanupCcb(
         return;
     }
 
-    DbgPrint("ntfslx: NotifyCleanup ccb=%p\n",
+    NTFSDBG("ntfslx: NotifyCleanup ccb=%p\n",
              Ccb);
 
     /* Use the dedicated cleanup helper, not the change-directory entrypoint.

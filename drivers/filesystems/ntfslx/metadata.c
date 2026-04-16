@@ -569,7 +569,7 @@ NtfslxSetVolumeDirtyFlag(
                                  VolumeRecord);
     if (!NT_SUCCESS(Status))
     {
-        DbgPrint("ntfslx: SetVolumeDirty: read $Volume failed 0x%08lx\n", Status);
+        NTFSDBG("ntfslx: SetVolumeDirty: read $Volume failed 0x%08lx\n", Status);
         ExFreePoolWithTag(VolumeRecord, NTFSLX_TAG);
         return Status;
     }
@@ -581,7 +581,7 @@ NtfslxSetVolumeDirtyFlag(
         Attribute->NonResident != 0 ||
         Attribute->Data.Resident.ValueLength < sizeof(NTFSLX_VOLUME_INFORMATION_ATTRIBUTE))
     {
-        DbgPrint("ntfslx: SetVolumeDirty: $VOLUME_INFORMATION missing / malformed 0x%08lx\n",
+        NTFSDBG("ntfslx: SetVolumeDirty: $VOLUME_INFORMATION missing / malformed 0x%08lx\n",
                  Status);
         ExFreePoolWithTag(VolumeRecord, NTFSLX_TAG);
         return NT_SUCCESS(Status) ? STATUS_FILE_CORRUPT_ERROR : Status;
@@ -615,12 +615,12 @@ NtfslxSetVolumeDirtyFlag(
     if (NT_SUCCESS(Status))
     {
         VolumeInfo->Flags = NewFlags;
-        DbgPrint("ntfslx: $Volume flags now 0x%04x (dirty=%u)\n",
+        NTFSDBG("ntfslx: $Volume flags now 0x%04x (dirty=%u)\n",
                  NewFlags, Dirty);
     }
     else
     {
-        DbgPrint("ntfslx: SetVolumeDirty: write $Volume failed 0x%08lx\n", Status);
+        NTFSDBG("ntfslx: SetVolumeDirty: write $Volume failed 0x%08lx\n", Status);
     }
 
     ExFreePoolWithTag(VolumeRecord, NTFSLX_TAG);

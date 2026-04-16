@@ -14,7 +14,7 @@
 #define NDEBUG
 #include <debug.h>
 
-#define STLOG(fmt, ...) DbgPrint("NTFSLX-SELFTEST: " fmt, ##__VA_ARGS__)
+#define STLOG(fmt, ...) NTFSDBG("NTFSLX-SELFTEST: " fmt, ##__VA_ARGS__)
 
 #define ST_FAIL(Code) \
     do { \

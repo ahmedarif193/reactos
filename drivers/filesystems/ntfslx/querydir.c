@@ -197,7 +197,7 @@ NtfslxQueryDirectoryMatchName(
         Match = FALSE;
     }
 
-    DbgPrint("ntfslx: dirmatch pat='%wZ' name='%.*S' caseSens=%u match=%u\n",
+    NTFSDBG("ntfslx: dirmatch pat='%wZ' name='%.*S' caseSens=%u match=%u\n",
              (PUNICODE_STRING)Context->SearchPattern,
              (int)(EntryName.Length / sizeof(WCHAR)),
              EntryName.Buffer,

@@ -9,7 +9,7 @@
 #include <debug.h>
 
 #ifndef NTFSLX_DISPATCH_TRACE
-#define NTFSLX_DISPATCH_TRACE DbgPrint
+#define NTFSLX_DISPATCH_TRACE NTFSDBG
 #endif
 
 /* NTFSLX_FILE_NAME_ATTRIBUTE is now in ntfslx_layout.h */
@@ -778,7 +778,7 @@ NtfslxGetDirectoryIndexRoot(
                                  &IndexRootAttribute);
     if (!NT_SUCCESS(Status))
     {
-        DPRINT1("ntfslx: index-root lookup failed for directory MFT %I64u status=0x%08lx\n",
+        NTFSDBG("ntfslx: index-root lookup failed for directory MFT %I64u status=0x%08lx\n",
                 FileRecord->MftRecordNumber,
                 Status);
         return Status;
@@ -790,7 +790,7 @@ NtfslxGetDirectoryIndexRoot(
         IndexRootAttribute->Data.Resident.ValueOffset + IndexRootAttribute->Data.Resident.ValueLength >
             IndexRootAttribute->Length)
     {
-        DPRINT1("ntfslx: invalid $INDEX_ROOT in directory MFT %I64u AttrLen=%lu NonResident=%u ValueOffset=%u ValueLength=%lu\n",
+        NTFSDBG("ntfslx: invalid $INDEX_ROOT in directory MFT %I64u AttrLen=%lu NonResident=%u ValueOffset=%u ValueLength=%lu\n",
                 FileRecord->MftRecordNumber,
                 IndexRootAttribute->Length,
                 IndexRootAttribute->NonResident,
@@ -826,7 +826,7 @@ NtfslxEnumerateLookupDirectory(
     Status = NtfslxGetDirectoryIndexRoot(FileRecord, &IndexRootBuffer, &IndexRootLength);
     if (!NT_SUCCESS(Status))
     {
-        DPRINT1("ntfslx: failed to get directory index-root for MFT %I64u status=0x%08lx\n",
+        NTFSDBG("ntfslx: failed to get directory index-root for MFT %I64u status=0x%08lx\n",
                 FileRecord->MftRecordNumber,
                 Status);
         return Status;
@@ -841,7 +841,7 @@ NtfslxEnumerateLookupDirectory(
     {
         if (IndexAllocationAttribute->NonResident == 0)
         {
-            DPRINT1("ntfslx: invalid resident $INDEX_ALLOCATION in directory MFT %I64u AttrLen=%lu\n",
+            NTFSDBG("ntfslx: invalid resident $INDEX_ALLOCATION in directory MFT %I64u AttrLen=%lu\n",
                     FileRecord->MftRecordNumber,
                     IndexAllocationAttribute->Length);
             return STATUS_FILE_CORRUPT_ERROR;
@@ -852,7 +852,7 @@ NtfslxEnumerateLookupDirectory(
                                                    &IndexAllocationRunlistCount);
         if (!NT_SUCCESS(Status))
         {
-            DPRINT1("ntfslx: failed to build $INDEX_ALLOCATION runlist for directory MFT %I64u status=0x%08lx\n",
+            NTFSDBG("ntfslx: failed to build $INDEX_ALLOCATION runlist for directory MFT %I64u status=0x%08lx\n",
                     FileRecord->MftRecordNumber,
                     Status);
             return Status;
@@ -860,7 +860,7 @@ NtfslxEnumerateLookupDirectory(
     }
     else if (Status != STATUS_OBJECT_NAME_NOT_FOUND)
     {
-        DPRINT1("ntfslx: $INDEX_ALLOCATION lookup failed for directory MFT %I64u status=0x%08lx\n",
+        NTFSDBG("ntfslx: $INDEX_ALLOCATION lookup failed for directory MFT %I64u status=0x%08lx\n",
                 FileRecord->MftRecordNumber,
                 Status);
         return Status;
@@ -881,7 +881,7 @@ NtfslxEnumerateLookupDirectory(
 
     if (!NT_SUCCESS(Status))
     {
-        DPRINT1("ntfslx: directory enumeration failed for MFT %I64u status=0x%08lx RootLen=%lu RunCount=%lu\n",
+        NTFSDBG("ntfslx: directory enumeration failed for MFT %I64u status=0x%08lx RootLen=%lu RunCount=%lu\n",
                 FileRecord->MftRecordNumber,
                 Status,
                 IndexRootLength,
@@ -932,7 +932,7 @@ NtfslxLookupPathComponent(
                                  FileRecord);
     if (!NT_SUCCESS(Status))
     {
-        DPRINT1("ntfslx: failed to read parent directory MFT %I64u for component '%wZ' status=0x%08lx\n",
+        NTFSDBG("ntfslx: failed to read parent directory MFT %I64u for component '%wZ' status=0x%08lx\n",
                 ParentIndex,
                 ComponentName,
                 Status);
@@ -971,7 +971,7 @@ NtfslxLookupPathComponent(
     ExFreePoolWithTag(FileRecord, NTFSLX_TAG);
     if (!NT_SUCCESS(Status))
     {
-        DPRINT1("ntfslx: component lookup failed in directory MFT %I64u for '%wZ' status=0x%08lx\n",
+        NTFSDBG("ntfslx: component lookup failed in directory MFT %I64u for '%wZ' status=0x%08lx\n",
                 ParentIndex,
                 ComponentName,
                 Status);
@@ -980,7 +980,7 @@ NtfslxLookupPathComponent(
 
     if (ParentIndex == NTFSLX_FILE_ROOT)
     {
-        DPRINT1("ntfslx: root lookup completed for '%wZ' found=%u index=%I64u\n",
+        NTFSDBG("ntfslx: root lookup completed for '%wZ' found=%u index=%I64u\n",
                 ComponentName,
                 SearchContext.Found,
                 SearchContext.FoundIndex);
@@ -995,7 +995,7 @@ NtfslxLookupPathComponent(
 
         if (ParentIndex == NTFSLX_FILE_ROOT)
         {
-            DPRINT1("ntfslx: root component '%wZ' is absent from ntfs.img root enumeration, likely image content mismatch rather than case-only lookup failure\n",
+            NTFSDBG("ntfslx: root component '%wZ' is absent from ntfs.img root enumeration, likely image content mismatch rather than case-only lookup failure\n",
                     ComponentName);
         }
 
@@ -1330,10 +1330,10 @@ NtfslxCreate(
     {
         if (Stack->FileObject->FileName.Length == 0)
         {
-            DbgPrint("ntfslx: Create control-device open fileObj=%p\n", Stack->FileObject);
+            NTFSDBG("ntfslx: Create control-device open fileObj=%p\n", Stack->FileObject);
             return NtfslxCompleteRequest(Irp, STATUS_SUCCESS, FILE_OPENED);
         }
-        DbgPrint("ntfslx: Create control-device named open rejected name='%wZ'\n",
+        NTFSDBG("ntfslx: Create control-device named open rejected name='%wZ'\n",
                  &Stack->FileObject->FileName);
         return NtfslxCompleteRequest(Irp, STATUS_INVALID_DEVICE_REQUEST, 0);
     }
@@ -1347,7 +1347,7 @@ NtfslxCreate(
 
     if (Stack->FileObject->FileName.Length == 0)
     {
-        DbgPrint("ntfslx: Create volume-open fileObj=%p\n", Stack->FileObject);
+        NTFSDBG("ntfslx: Create volume-open fileObj=%p\n", Stack->FileObject);
         return NtfslxCompleteRequest(Irp, STATUS_SUCCESS, FILE_OPENED);
     }
 
@@ -1356,7 +1356,7 @@ NtfslxCreate(
         ACCESS_MASK Desired = Stack->Parameters.Create.SecurityContext
             ? Stack->Parameters.Create.SecurityContext->DesiredAccess
             : 0;
-        DbgPrint("ntfslx: Create fileObj=%p name='%wZ' disposition=%lu desiredAccess=0x%08lx options=0x%08lx\n",
+        NTFSDBG("ntfslx: Create fileObj=%p name='%wZ' disposition=%lu desiredAccess=0x%08lx options=0x%08lx\n",
                  Stack->FileObject, &Stack->FileObject->FileName,
                  Disp, Desired, Stack->Parameters.Create.Options);
     }
@@ -1374,7 +1374,7 @@ NtfslxCreate(
 
     if (HadTrailingBackslash)
     {
-        DbgPrint("ntfslx: Create normalized trailing slash name='%wZ' base='%wZ'\n",
+        NTFSDBG("ntfslx: Create normalized trailing slash name='%wZ' base='%wZ'\n",
                  &Stack->FileObject->FileName,
                  &BasePath);
     }
@@ -1392,7 +1392,7 @@ NtfslxCreate(
                                      &TargetLeafName);
         if (!NT_SUCCESS(Status))
         {
-            DbgPrint("ntfslx: Create target-dir split failed target='%wZ' status=0x%08lx\n",
+            NTFSDBG("ntfslx: Create target-dir split failed target='%wZ' status=0x%08lx\n",
                      &BasePath,
                      Status);
             return NtfslxCompleteRequest(Irp, Status, 0);
@@ -1403,7 +1403,7 @@ NtfslxCreate(
                                              &MftIndex);
         if (!NT_SUCCESS(Status))
         {
-            DbgPrint("ntfslx: Create target-dir resolve parent failed parent='%wZ' status=0x%08lx\n",
+            NTFSDBG("ntfslx: Create target-dir resolve parent failed parent='%wZ' status=0x%08lx\n",
                      &TargetParentPath,
                      Status);
             return NtfslxCompleteRequest(Irp, Status, 0);
@@ -1424,13 +1424,13 @@ NtfslxCreate(
         }
         else
         {
-            DbgPrint("ntfslx: Create target-dir probe failed target='%wZ' status=0x%08lx\n",
+            NTFSDBG("ntfslx: Create target-dir probe failed target='%wZ' status=0x%08lx\n",
                      &BasePath,
                      Status);
             return NtfslxCompleteRequest(Irp, Status, 0);
         }
 
-        DbgPrint("ntfslx: Create target-dir target='%wZ' parent='%wZ' leaf='%wZ' result=%Iu\n",
+        NTFSDBG("ntfslx: Create target-dir target='%wZ' parent='%wZ' leaf='%wZ' result=%Iu\n",
                  &BasePath,
                  &TargetParentPath,
                  &TargetLeafName,
@@ -1492,7 +1492,7 @@ NtfslxCreate(
             {
                 if (CreateDisp == FILE_CREATE)
                 {
-                    DbgPrint("ntfslx: Create FILE_CREATE stream exists '%wZ:%.*S'\n",
+                    NTFSDBG("ntfslx: Create FILE_CREATE stream exists '%wZ:%.*S'\n",
                              &BasePath, StreamNameLength, StreamName);
                     return NtfslxCompleteRequest(Irp, STATUS_OBJECT_NAME_COLLISION, 0);
                 }
@@ -1516,7 +1516,7 @@ NtfslxCreate(
                                                               StreamNameLength);
                     if (!NT_SUCCESS(AddSt))
                     {
-                        DbgPrint("ntfslx: Create AddNamedDataStream '%wZ:%.*S' failed 0x%08lx\n",
+                        NTFSDBG("ntfslx: Create AddNamedDataStream '%wZ:%.*S' failed 0x%08lx\n",
                                  &BasePath, StreamNameLength, StreamName, AddSt);
                         return NtfslxCompleteRequest(Irp, AddSt, 0);
                     }
@@ -1530,7 +1530,7 @@ NtfslxCreate(
         }
         else if (CreateDisp == FILE_CREATE)
         {
-            DbgPrint("ntfslx: Create FILE_CREATE but target exists: '%wZ' mft=%I64u\n",
+            NTFSDBG("ntfslx: Create FILE_CREATE but target exists: '%wZ' mft=%I64u\n",
                      &BasePath, MftIndex);
             return NtfslxCompleteRequest(Irp, STATUS_OBJECT_NAME_COLLISION, 0);
         }
@@ -1539,7 +1539,7 @@ NtfslxCreate(
                  CreateDisp == FILE_OVERWRITE_IF)
         {
             /* Mark for truncation after open. */
-            DbgPrint("ntfslx: Create disposition=%lu will truncate existing '%wZ' mft=%I64u\n",
+            NTFSDBG("ntfslx: Create disposition=%lu will truncate existing '%wZ' mft=%I64u\n",
                      CreateDisp, &BasePath, MftIndex);
             /* Fall through to open; truncation happens post-open below. */
         }
@@ -1552,7 +1552,7 @@ NtfslxCreate(
 
         CreateDisposition = (Stack->Parameters.Create.Options >> 24) & 0xFF;
 
-        DbgPrint("ntfslx: create failed status=0x%08lx disposition=%lu path='%wZ'\n",
+        NTFSDBG("ntfslx: create failed status=0x%08lx disposition=%lu path='%wZ'\n",
                  Status, CreateDisposition, &BasePath);
 
         /*
@@ -1634,7 +1634,7 @@ NtfslxCreate(
             }
 
             /* Create the file */
-            DbgPrint("ntfslx: creating file '%wZ' under parent MFT %I64u isDir=%u\n",
+            NTFSDBG("ntfslx: creating file '%wZ' under parent MFT %I64u isDir=%u\n",
                      &FinalComponent, ParentMftIndex, IsDirectory);
             Status = NtfslxCreateNewFile(DeviceExtension,
                                          ParentMftIndex,
@@ -1642,7 +1642,7 @@ NtfslxCreate(
                                          FinalComponent.Length / sizeof(WCHAR),
                                          IsDirectory,
                                          &NewMftIndex);
-            DbgPrint("ntfslx: NtfslxCreateNewFile returned 0x%08lx newMft=%I64u\n",
+            NTFSDBG("ntfslx: NtfslxCreateNewFile returned 0x%08lx newMft=%I64u\n",
                      Status, NewMftIndex);
             if (!NT_SUCCESS(Status))
             {
@@ -1656,7 +1656,7 @@ NtfslxCreate(
             goto OpenByIndex;
         }
 
-        DPRINT1("ntfslx: create resolve failed File='%wZ' Base='%wZ' Status=0x%08lx DirOpt=%u NonDirOpt=%u\n",
+        NTFSDBG("ntfslx: create resolve failed File='%wZ' Base='%wZ' Status=0x%08lx DirOpt=%u NonDirOpt=%u\n",
                 &Stack->FileObject->FileName,
                 &BasePath,
                 Status,
@@ -1666,7 +1666,7 @@ NtfslxCreate(
         if ((Status == STATUS_OBJECT_PATH_NOT_FOUND || Status == STATUS_OBJECT_NAME_NOT_FOUND) &&
             RtlPrefixUnicodeString(&SystemVolumeInformationPrefix, &BasePath, TRUE))
         {
-            DPRINT1("ntfslx: open hit missing System Volume Information path, verify image population because external NTFS listing may show the directory was never created\n");
+            NTFSDBG("ntfslx: open hit missing System Volume Information path, verify image population because external NTFS listing may show the directory was never created\n");
         }
 
         return NtfslxCompleteRequest(Irp, Status, 0);
@@ -1784,7 +1784,7 @@ OpenByIndex:
             }
 
             Ccb->DeletePending = TRUE;
-            DbgPrint("ntfslx: Create FILE_DELETE_ON_CLOSE set mft=%I64u\n",
+            NTFSDBG("ntfslx: Create FILE_DELETE_ON_CLOSE set mft=%I64u\n",
                      FileContext->MftIndex);
         }
 
@@ -1795,7 +1795,7 @@ OpenByIndex:
             FileContext->DataSize > 0)
         {
             NTSTATUS TruncStatus = NtfslxSetFileSize(FileContext, 0);
-            DbgPrint("ntfslx: Create truncate mft=%I64u result=0x%08lx\n",
+            NTFSDBG("ntfslx: Create truncate mft=%I64u result=0x%08lx\n",
                      FileContext->MftIndex, TruncStatus);
             /* Non-fatal: open still succeeds even if truncate partially fails. */
         }
@@ -1823,7 +1823,7 @@ OpenByIndex:
             CacheStatus = NtfslxEnsureCacheInitialized(Stack->FileObject);
             if (!NT_SUCCESS(CacheStatus))
             {
-                DbgPrint("ntfslx: Create cache init non-fatal failure mft=%I64u status=0x%08lx\n",
+                NTFSDBG("ntfslx: Create cache init non-fatal failure mft=%I64u status=0x%08lx\n",
                          FileContext->MftIndex, CacheStatus);
             }
         }
@@ -2020,12 +2020,12 @@ NtfslxCleanup(
                                               NameBuffer, &NameLength);
         if (NT_SUCCESS(Status))
         {
-            DbgPrint("ntfslx: Cleanup delete mft=%I64u parent=%I64u name='%.*S'\n",
+            NTFSDBG("ntfslx: Cleanup delete mft=%I64u parent=%I64u name='%.*S'\n",
                      FileContext->MftIndex, ParentMftIdx, NameLength, NameBuffer);
             Status = NtfslxDeleteFile(DeviceExtension, ParentMftIdx,
                                       FileContext->MftIndex,
                                       NameBuffer, NameLength);
-            DbgPrint("ntfslx: Cleanup delete result=0x%08lx\n", Status);
+            NTFSDBG("ntfslx: Cleanup delete result=0x%08lx\n", Status);
 
             if (NT_SUCCESS(Status))
             {
@@ -2036,7 +2036,7 @@ NtfslxCleanup(
         }
         else
         {
-            DbgPrint("ntfslx: Cleanup delete: resolve failed 0x%08lx mft=%I64u\n",
+            NTFSDBG("ntfslx: Cleanup delete: resolve failed 0x%08lx mft=%I64u\n",
                      Status, FileContext->MftIndex);
         }
         Ccb->DeletePending = FALSE;
@@ -2459,7 +2459,7 @@ NtfslxQueryDirectoryCallback(
                     &EntryName,
                     (BOOLEAN)!QueryContext->CaseSensitive,
                     NULL);
-        DbgPrint("ntfslx: dirmatch pat='%wZ' name='%.*S' caseSens=%u match=%u\n",
+        NTFSDBG("ntfslx: dirmatch pat='%wZ' name='%.*S' caseSens=%u match=%u\n",
                  (PUNICODE_STRING)QueryContext->SearchPattern,
                  (int)(EntryName.Length / sizeof(WCHAR)),
                  EntryName.Buffer,
@@ -2866,7 +2866,7 @@ NtfslxQueryFileInformation(
         Status = NtfslxRefreshFileObjectMetadata(Stack->FileObject);
         if (!NT_SUCCESS(Status))
         {
-            DbgPrint("ntfslx: QueryFileInformation refresh failed 0x%08lx\n", Status);
+            NTFSDBG("ntfslx: QueryFileInformation refresh failed 0x%08lx\n", Status);
             return NtfslxCompleteRequest(Irp, Status, 0);
         }
         NtfslxCollectFileMetadata(FileContext, &StdInfo, &FnAttr, &RealAttributes);
@@ -2874,7 +2874,7 @@ NtfslxQueryFileInformation(
 
     TracePath = ValidContext ? NtfslxTraceFileContextPath(FileContext)
                              : NtfslxTraceUnicodeStringOrEmpty(NULL);
-    DbgPrint("ntfslx: QueryFileInformation begin path='%wZ' class=%s(%d) fileObj=%p buflen=%lu hasCtx=%u mft=%I64u dataSize=%I64u allocSize=%I64u attrs=0x%08lx isDir=%u\n",
+    NTFSDBG("ntfslx: QueryFileInformation begin path='%wZ' class=%s(%d) fileObj=%p buflen=%lu hasCtx=%u mft=%I64u dataSize=%I64u allocSize=%I64u attrs=0x%08lx isDir=%u\n",
              (PUNICODE_STRING)TracePath,
              NtfslxFileInfoClassName(InfoClass),
              (int)InfoClass,
@@ -2920,7 +2920,7 @@ NtfslxQueryFileInformation(
             {
                 PFILE_STANDARD_INFORMATION Info = SystemBuffer;
                 NtfslxFillStandardInformation(FileContext, Ccb, SystemBuffer);
-                DbgPrint("ntfslx: StdInfo returned mft=%I64u eof=%I64u alloc=%I64u dir=%u\n",
+                NTFSDBG("ntfslx: StdInfo returned mft=%I64u eof=%I64u alloc=%I64u dir=%u\n",
                          FileContext->MftIndex,
                          (ULONGLONG)Info->EndOfFile.QuadPart,
                          (ULONGLONG)Info->AllocationSize.QuadPart,
@@ -3222,13 +3222,13 @@ NtfslxQueryFileInformation(
         break;
 
     default:
-        DbgPrint("ntfslx: QueryFileInformation: unsupported class=%d\n",
+        NTFSDBG("ntfslx: QueryFileInformation: unsupported class=%d\n",
                  (int)InfoClass);
         Status = STATUS_INVALID_INFO_CLASS;
         break;
     }
 
-    DbgPrint("ntfslx: QueryFileInformation done path='%wZ' class=%s(%d) status=0x%08lx info=%lu fileId=0x%I64x attrs=0x%08lx eof=%I64u alloc=%I64u dir=%u currentOfs=%I64u\n",
+    NTFSDBG("ntfslx: QueryFileInformation done path='%wZ' class=%s(%d) status=0x%08lx info=%lu fileId=0x%I64x attrs=0x%08lx eof=%I64u alloc=%I64u dir=%u currentOfs=%I64u\n",
              (PUNICODE_STRING)TracePath,
              NtfslxFileInfoClassName(InfoClass),
              (int)InfoClass,
@@ -3361,7 +3361,7 @@ NtfslxSetInformation(
 
     Ccb = (PNTFSLX_CCB)Stack->FileObject->FsContext2;
 
-    DbgPrint("ntfslx: SetInformation class=%d mft=%I64u\n",
+    NTFSDBG("ntfslx: SetInformation class=%d mft=%I64u\n",
              (int)InfoClass, FileContext->MftIndex);
 
     switch (InfoClass)
@@ -3468,7 +3468,7 @@ NtfslxSetInformation(
             }
 
             Ccb->DeletePending = DispInfo->DeleteFile;
-            DbgPrint("ntfslx: SetInformation: DeletePending=%u mft=%I64u\n",
+            NTFSDBG("ntfslx: SetInformation: DeletePending=%u mft=%I64u\n",
                      Ccb->DeletePending, FileContext->MftIndex);
             Status = STATUS_SUCCESS;
         }
@@ -3536,7 +3536,7 @@ NtfslxSetInformation(
                                                               &NewFullPath);
                 if (!NT_SUCCESS(Status))
                 {
-                    DbgPrint("ntfslx: Rename: normalize target failed 0x%08lx len=%lu root=%p\n",
+                    NTFSDBG("ntfslx: Rename: normalize target failed 0x%08lx len=%lu root=%p\n",
                              Status,
                              RenameInfo->FileNameLength,
                              RenameInfo->RootDirectory);
@@ -3548,7 +3548,7 @@ NtfslxSetInformation(
                                              &NewLeafName);
                 if (!NT_SUCCESS(Status))
                 {
-                    DbgPrint("ntfslx: Rename: split target '%wZ' failed 0x%08lx\n",
+                    NTFSDBG("ntfslx: Rename: split target '%wZ' failed 0x%08lx\n",
                              &NewFullPath,
                              Status);
                     break;
@@ -3570,7 +3570,7 @@ NtfslxSetInformation(
                     }
                     else if (!NT_SUCCESS(LookupStatus))
                     {
-                        DbgPrint("ntfslx: Rename: LookupParentIndex fallback failed 0x%08lx\n",
+                        NTFSDBG("ntfslx: Rename: LookupParentIndex fallback failed 0x%08lx\n",
                                  LookupStatus);
                         Status = LookupStatus;
                         break;
@@ -3582,7 +3582,7 @@ NtfslxSetInformation(
                                                      &NewParentMft);
                 if (!NT_SUCCESS(Status))
                 {
-                    DbgPrint("ntfslx: Rename: resolve parent '%wZ' failed 0x%08lx\n",
+                    NTFSDBG("ntfslx: Rename: resolve parent '%wZ' failed 0x%08lx\n",
                              &NewParentPath,
                              Status);
                     break;
@@ -3596,7 +3596,7 @@ NtfslxSetInformation(
                     (NewParentPath.Length == FileContext->FullPath.Length ||
                      NewParentPath.Buffer[FileContext->FullPath.Length / sizeof(WCHAR)] == L'\\'))
                 {
-                    DbgPrint("ntfslx: Rename: refusing to move directory '%wZ' into '%wZ'\n",
+                    NTFSDBG("ntfslx: Rename: refusing to move directory '%wZ' into '%wZ'\n",
                              &FileContext->FullPath,
                              &NewParentPath);
                     Status = STATUS_ACCESS_DENIED;
@@ -3619,7 +3619,7 @@ NtfslxSetInformation(
                                              NewParentRecord);
                 if (!NT_SUCCESS(Status))
                 {
-                    DbgPrint("ntfslx: Rename: read new parent %I64u failed 0x%08lx\n",
+                    NTFSDBG("ntfslx: Rename: read new parent %I64u failed 0x%08lx\n",
                              NewParentMft,
                              Status);
                     break;
@@ -3639,12 +3639,12 @@ NtfslxSetInformation(
                                                       &OldNameLen);
                 if (!NT_SUCCESS(Status))
                 {
-                    DbgPrint("ntfslx: Rename: ExtractPrimaryFileName failed 0x%08lx\n",
+                    NTFSDBG("ntfslx: Rename: ExtractPrimaryFileName failed 0x%08lx\n",
                              Status);
                     break;
                 }
 
-                DbgPrint("ntfslx: Rename mft=%I64u oldParent=%I64u newParent=%I64u old='%.*S' new='%wZ'\n",
+                NTFSDBG("ntfslx: Rename mft=%I64u oldParent=%I64u newParent=%I64u old='%.*S' new='%wZ'\n",
                          FileContext->MftIndex,
                          OldParentMft,
                          NewParentMft,
@@ -3658,7 +3658,7 @@ NtfslxSetInformation(
                                      NewFullPath.Buffer,
                                      NewFullPath.Length) == NewFullPath.Length)
                 {
-                    DbgPrint("ntfslx: Rename: identical full path, no-op\n");
+                    NTFSDBG("ntfslx: Rename: identical full path, no-op\n");
                     Status = STATUS_SUCCESS;
                     break;
                 }
@@ -3672,7 +3672,7 @@ NtfslxSetInformation(
                     {
                         if (!RenameInfo->ReplaceIfExists)
                         {
-                            DbgPrint("ntfslx: Rename collision: target '%wZ' mft=%I64u and ReplaceIfExists=FALSE\n",
+                            NTFSDBG("ntfslx: Rename collision: target '%wZ' mft=%I64u and ReplaceIfExists=FALSE\n",
                                      &NewFullPath,
                                      ExistingMft);
                             Status = STATUS_OBJECT_NAME_COLLISION;
@@ -3709,7 +3709,7 @@ NtfslxSetInformation(
                                                               ExistingMft,
                                                               NewLeafName.Buffer,
                                                               NewLeafName.Length / sizeof(WCHAR));
-                                    DbgPrint("ntfslx: Rename: victim delete mft=%I64u result=0x%08lx\n",
+                                    NTFSDBG("ntfslx: Rename: victim delete mft=%I64u result=0x%08lx\n",
                                              ExistingMft,
                                              Status);
                                 }
@@ -3724,13 +3724,13 @@ NtfslxSetInformation(
                     }
                     else
                     {
-                        DbgPrint("ntfslx: Rename: target resolves to the same MFT, continuing as case/update rename\n");
+                        NTFSDBG("ntfslx: Rename: target resolves to the same MFT, continuing as case/update rename\n");
                     }
                 }
                 else if (Status != STATUS_OBJECT_NAME_NOT_FOUND &&
                          Status != STATUS_OBJECT_PATH_NOT_FOUND)
                 {
-                    DbgPrint("ntfslx: Rename: collision check failed 0x%08lx\n", Status);
+                    NTFSDBG("ntfslx: Rename: collision check failed 0x%08lx\n", Status);
                     break;
                 }
 
@@ -3742,7 +3742,7 @@ NtfslxSetInformation(
                                                    OldNameLen);
                 if (!NT_SUCCESS(Status))
                 {
-                    DbgPrint("ntfslx: Rename: IndexRemove old failed 0x%08lx\n", Status);
+                    NTFSDBG("ntfslx: Rename: IndexRemove old failed 0x%08lx\n", Status);
                     break;
                 }
 
@@ -3753,7 +3753,7 @@ NtfslxSetInformation(
                                              &FnAttr);
                 if (!NT_SUCCESS(Status))
                 {
-                    DbgPrint("ntfslx: Rename: FindAttribute($FILE_NAME) failed 0x%08lx\n", Status);
+                    NTFSDBG("ntfslx: Rename: FindAttribute($FILE_NAME) failed 0x%08lx\n", Status);
                     break;
                 }
 
@@ -3770,7 +3770,7 @@ NtfslxSetInformation(
                                                          NewAttrLength);
                     if (!NT_SUCCESS(Status))
                     {
-                        DbgPrint("ntfslx: Rename: ResizeAttributeRecord to %lu failed 0x%08lx\n",
+                        NTFSDBG("ntfslx: Rename: ResizeAttributeRecord to %lu failed 0x%08lx\n",
                                  NewAttrLength,
                                  Status);
                         break;
@@ -3794,7 +3794,7 @@ NtfslxSetInformation(
                                               FileContext->FileRecord);
                 if (!NT_SUCCESS(Status))
                 {
-                    DbgPrint("ntfslx: Rename: WriteMftRecord failed 0x%08lx\n", Status);
+                    NTFSDBG("ntfslx: Rename: WriteMftRecord failed 0x%08lx\n", Status);
                     break;
                 }
 
@@ -3816,12 +3816,12 @@ NtfslxSetInformation(
                                                   &Now);
                 if (!NT_SUCCESS(Status))
                 {
-                    DbgPrint("ntfslx: Rename: IndexInsert new failed 0x%08lx\n", Status);
+                    NTFSDBG("ntfslx: Rename: IndexInsert new failed 0x%08lx\n", Status);
                     break;
                 }
 
                 FileContext->ParentMftIndex = NewParentMft;
-                DbgPrint("ntfslx: Rename: success mft=%I64u new='%wZ'\n",
+                NTFSDBG("ntfslx: Rename: success mft=%I64u new='%wZ'\n",
                          FileContext->MftIndex,
                          &NewFullPath);
 
@@ -3849,13 +3849,13 @@ NtfslxSetInformation(
         break;
 
     default:
-        DbgPrint("ntfslx: SetInformation: unsupported class=%d\n",
+        NTFSDBG("ntfslx: SetInformation: unsupported class=%d\n",
                  (int)InfoClass);
         Status = STATUS_NOT_IMPLEMENTED;
         break;
     }
 
-    DbgPrint("ntfslx: SetInformation class=%d result=0x%08lx\n",
+    NTFSDBG("ntfslx: SetInformation class=%d result=0x%08lx\n",
              (int)InfoClass, Status);
 
     return NtfslxCompleteRequest(Irp, Status, 0);
@@ -3925,20 +3925,20 @@ NtfslxFlushBuffers(
 
     if (FileObject->FileName.Length == 0)
     {
-        DbgPrint("ntfslx: FlushBuffers volume-open fileObj=%p\n", FileObject);
+        NTFSDBG("ntfslx: FlushBuffers volume-open fileObj=%p\n", FileObject);
         return NtfslxCompleteRequest(Irp, STATUS_SUCCESS, 0);
     }
 
     Status = NtfslxValidateOpenFileObject(FileObject, &FileContext);
     if (!NT_SUCCESS(Status))
     {
-        DbgPrint("ntfslx: FlushBuffers validate failed fileObj=%p status=0x%08lx\n",
+        NTFSDBG("ntfslx: FlushBuffers validate failed fileObj=%p status=0x%08lx\n",
                  FileObject,
                  Status);
         return NtfslxCompleteRequest(Irp, Status, 0);
     }
 
-    DbgPrint("ntfslx: FlushBuffers mft=%I64u path='%wZ' data=%I64u alloc=%I64u resident=%u cache=%p\n",
+    NTFSDBG("ntfslx: FlushBuffers mft=%I64u path='%wZ' data=%I64u alloc=%I64u resident=%u cache=%p\n",
              FileContext->MftIndex,
              NtfslxTraceFileContextPath(FileContext),
              FileContext->DataSize,
@@ -3972,7 +3972,7 @@ NtfslxShutdown(
         return NtfslxCompleteRequest(Irp, STATUS_SUCCESS, 0);
     }
 
-    DbgPrint("ntfslx: shutdown begin volume=%p storage=%p flags=0x%04x\n",
+    NTFSDBG("ntfslx: shutdown begin volume=%p storage=%p flags=0x%04x\n",
              DeviceObject,
              DeviceExtension->StorageDevice,
              DeviceExtension->VolumeInfo.Flags);
@@ -3983,19 +3983,19 @@ NtfslxShutdown(
                                       FALSE);
     if (!NT_SUCCESS(Status))
     {
-        DbgPrint("ntfslx: shutdown: clear dirty flag failed 0x%08lx\n",
+        NTFSDBG("ntfslx: shutdown: clear dirty flag failed 0x%08lx\n",
                  Status);
     }
     else
     {
-        DbgPrint("ntfslx: shutdown: volume marked clean flags=0x%04x\n",
+        NTFSDBG("ntfslx: shutdown: volume marked clean flags=0x%04x\n",
                  DeviceExtension->VolumeInfo.Flags);
     }
 
     StorageStatus = NtfslxShutdownStorageDevice(DeviceExtension->StorageDevice);
     if (!NT_SUCCESS(StorageStatus))
     {
-        DbgPrint("ntfslx: shutdown: storage shutdown failed 0x%08lx\n",
+        NTFSDBG("ntfslx: shutdown: storage shutdown failed 0x%08lx\n",
                  StorageStatus);
         if (NT_SUCCESS(Status))
         {

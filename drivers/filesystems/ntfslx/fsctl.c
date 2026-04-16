@@ -265,7 +265,7 @@ NtfslxTraceMountVpb(
     _In_ PDEVICE_OBJECT VolumeDevice,
     _In_opt_ PVPB Vpb)
 {
-    DPRINT1("ntfslx: %s: Storage=%p StorageVpb=%p Volume=%p VolumeVpb=%p Vpb=%p Type=%hu Size=%hu Flags=0x%lx Ref=%ld Real=%p Device=%p\n",
+    NTFSDBG("ntfslx: %s: Storage=%p StorageVpb=%p Volume=%p VolumeVpb=%p Vpb=%p Type=%hu Size=%hu Flags=0x%lx Ref=%ld Real=%p Device=%p\n",
             Reason,
             StorageDevice,
             StorageDevice != NULL ? StorageDevice->Vpb : NULL,
@@ -411,9 +411,9 @@ NtfslxMountVolume(
         Status = STATUS_SUCCESS;
     }
 
-    DbgPrint("ntfslx: mount bitmap: FreeClusters=%I64u ClusterCount=%I64u BytesPerCluster=%lu\n",
+    NTFSDBG("ntfslx: mount bitmap: FreeClusters=%I64u ClusterCount=%I64u BytesPerCluster=%lu\n",
              VolumeInfo.FreeClusters, VolumeInfo.ClusterCount, VolumeInfo.BytesPerCluster);
-    DbgPrint("ntfslx: mount label: len=%u label='%.*S'\n",
+    NTFSDBG("ntfslx: mount label: len=%u label='%.*S'\n",
              VolumeInfo.VolumeLabelLength,
              VolumeInfo.VolumeLabelLength / (USHORT)sizeof(WCHAR),
              VolumeInfo.VolumeLabel);
@@ -456,13 +456,13 @@ NtfslxMountVolume(
     Status = NtfslxValidateMountVpb(Vpb, StorageDevice, VolumeDevice);
     if (!NT_SUCCESS(Status))
     {
-        DPRINT1("ntfslx: mount validation failed with status 0x%08lx\n", Status);
+        NTFSDBG("ntfslx: mount validation failed with status 0x%08lx\n", Status);
         NtfslxTraceMountVpb("mount validation failure",
                             StorageDevice,
                             VolumeDevice,
                             Vpb);
 
-        DPRINT1("ntfslx: mount rejected Storage=%p ExistingStorageVpb=%p Volume=%p VolumeVpb=%p IncomingVpb=%p\n",
+        NTFSDBG("ntfslx: mount rejected Storage=%p ExistingStorageVpb=%p Volume=%p VolumeVpb=%p IncomingVpb=%p\n",
                 StorageDevice,
                 StorageDevice != NULL ? StorageDevice->Vpb : NULL,
                 VolumeDevice,
@@ -474,7 +474,7 @@ NtfslxMountVolume(
         if (StorageDevice->Vpb == Vpb)
         {
             StorageDevice->Vpb = NULL;
-            DPRINT1("ntfslx: cleared stale storage VPB pointer after failed mount Storage=%p Vpb=%p\n",
+            NTFSDBG("ntfslx: cleared stale storage VPB pointer after failed mount Storage=%p Vpb=%p\n",
                     StorageDevice,
                     Vpb);
         }
@@ -488,7 +488,7 @@ NtfslxMountVolume(
     Status = ExInitializeResourceLite(&VolumeExtension->Resource);
     if (!NT_SUCCESS(Status))
     {
-        DPRINT1("ntfslx: ExInitializeResourceLite failed with status 0x%08lx\n", Status);
+        NTFSDBG("ntfslx: ExInitializeResourceLite failed with status 0x%08lx\n", Status);
         VolumeDevice->Vpb = NULL;
         VolumeExtension->Vpb = NULL;
         if (StorageDevice->Vpb == Vpb)
@@ -555,7 +555,7 @@ NtfslxMountVolume(
                                      TRUE);
         if (!NT_SUCCESS(DirtyStatus))
         {
-            DPRINT1("ntfslx: mount: could not set VOLUME_IS_DIRTY 0x%08lx\n",
+            NTFSDBG("ntfslx: mount: could not set VOLUME_IS_DIRTY 0x%08lx\n",
                     DirtyStatus);
         }
     }
@@ -578,7 +578,7 @@ NtfslxMountVolume(
                               VolumeExtension->MftRunlist);
         if (!NT_SUCCESS(FillStatus))
         {
-            DPRINT1("ntfslx: mount: could not fill $LogFile with 0xFF 0x%08lx\n",
+            NTFSDBG("ntfslx: mount: could not fill $LogFile with 0xFF 0x%08lx\n",
                     FillStatus);
         }
     }
@@ -586,7 +586,7 @@ NtfslxMountVolume(
     Status = IoRegisterShutdownNotification(VolumeDevice);
     if (!NT_SUCCESS(Status))
     {
-        DPRINT1("ntfslx: mount: IoRegisterShutdownNotification failed 0x%08lx\n",
+        NTFSDBG("ntfslx: mount: IoRegisterShutdownNotification failed 0x%08lx\n",
                 Status);
         Status = STATUS_SUCCESS;
     }
@@ -768,7 +768,7 @@ NtfslxUserFsRequest(
                 DirtyFlags = *(PULONG)Irp->AssociatedIrp.SystemBuffer;
             }
 
-            DbgPrint("ntfslx: UserFsRequest FSCTL_IS_VOLUME_DIRTY flags=0x%08lx volumeFlags=0x%04x\n",
+            NTFSDBG("ntfslx: UserFsRequest FSCTL_IS_VOLUME_DIRTY flags=0x%08lx volumeFlags=0x%04x\n",
                      DirtyFlags,
                      DeviceExtension->VolumeInfo.Flags);
             return Status;
@@ -1188,7 +1188,7 @@ NtfslxDeviceControl(
             OutputLength = 0;
         }
 
-        DbgPrint("ntfslx: DeviceControl FSCTL_IS_VOLUME_DIRTY status=0x%08lx flags=0x%04x file='%wZ'\n",
+        NTFSDBG("ntfslx: DeviceControl FSCTL_IS_VOLUME_DIRTY status=0x%08lx flags=0x%04x file='%wZ'\n",
                  Status,
                  DeviceExtension->VolumeInfo.Flags,
                  &Stack->FileObject->FileName);
@@ -1221,7 +1221,7 @@ NtfslxDeviceControl(
         Status != STATUS_BUFFER_OVERFLOW &&
         Status != STATUS_BUFFER_TOO_SMALL)
     {
-        DPRINT1("ntfslx: device control 0x%08lx failed status=0x%08lx In=%lu Out=%lu Storage=%p\n",
+        NTFSDBG("ntfslx: device control 0x%08lx failed status=0x%08lx In=%lu Out=%lu Storage=%p\n",
                 IoControlCode,
                 Status,
                 Stack->Parameters.DeviceIoControl.InputBufferLength,

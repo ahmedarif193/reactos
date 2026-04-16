@@ -317,7 +317,7 @@ NtfslxCheckLogFile(
         ResidentData = TRUE;
         ResidentBuffer = (PUCHAR)DataAttr + DataAttr->Data.Resident.ValueOffset;
         LogFileDataSize = (LONGLONG)DataAttr->Data.Resident.ValueLength;
-        DbgPrint("ntfslx: CheckLogFile: resident $LogFile size=%I64u\n",
+        NTFSDBG("ntfslx: CheckLogFile: resident $LogFile size=%I64u\n",
                  LogFileDataSize);
     }
     else
@@ -425,7 +425,7 @@ NtfslxCheckLogFile(
 
     if (!Page1Valid && !Page2Valid)
     {
-        DbgPrint("NTFSLX: No valid restart page found in LogFile\n");
+        NTFSDBG("NTFSLX: No valid restart page found in LogFile\n");
         Status = STATUS_FILE_CORRUPT_ERROR;
         goto Cleanup;
     }
@@ -490,7 +490,7 @@ NtfslxFillLogFile(
                                  NTFSLX_FILE_LOGFILE, LogFileRecord);
     if (!NT_SUCCESS(Status))
     {
-        DbgPrint("ntfslx: FillLogFile: read $LogFile MFT failed 0x%08lx\n",
+        NTFSDBG("ntfslx: FillLogFile: read $LogFile MFT failed 0x%08lx\n",
                  Status);
         goto Cleanup;
     }
@@ -499,7 +499,7 @@ NtfslxFillLogFile(
                                  NULL, 0, &DataAttr);
     if (!NT_SUCCESS(Status))
     {
-        DbgPrint("ntfslx: FillLogFile: $LogFile $DATA missing 0x%08lx\n",
+        NTFSDBG("ntfslx: FillLogFile: $LogFile $DATA missing 0x%08lx\n",
                  Status);
         goto Cleanup;
     }
@@ -514,7 +514,7 @@ NtfslxFillLogFile(
 
         ResidentData = TRUE;
         ResidentBuffer = (PUCHAR)DataAttr + DataAttr->Data.Resident.ValueOffset;
-        DbgPrint("ntfslx: FillLogFile: resident $LogFile size=%lu\n",
+        NTFSDBG("ntfslx: FillLogFile: resident $LogFile size=%lu\n",
                  DataAttr->Data.Resident.ValueLength);
     }
     else
@@ -523,7 +523,7 @@ NtfslxFillLogFile(
                                               &LogRuns, &LogRunCount);
         if (!NT_SUCCESS(Status))
         {
-            DbgPrint("ntfslx: FillLogFile: decompress runs failed 0x%08lx\n",
+            NTFSDBG("ntfslx: FillLogFile: decompress runs failed 0x%08lx\n",
                      Status);
             goto Cleanup;
         }
@@ -542,7 +542,7 @@ NtfslxFillLogFile(
                                       NTFSLX_FILE_LOGFILE, LogFileRecord);
         if (NT_SUCCESS(Status))
         {
-            DbgPrint("ntfslx: FillLogFile: wiped resident $LogFile to 0xFF (%lu bytes)\n",
+            NTFSDBG("ntfslx: FillLogFile: wiped resident $LogFile to 0xFF (%lu bytes)\n",
                      DataAttr->Data.Resident.ValueLength);
         }
         goto Cleanup;
@@ -599,7 +599,7 @@ NtfslxFillLogFile(
                                      TRUE);
             if (!NT_SUCCESS(Status))
             {
-                DbgPrint("ntfslx: FillLogFile: write run %lu offset=0x%I64x chunk=%lu failed 0x%08lx\n",
+                NTFSDBG("ntfslx: FillLogFile: write run %lu offset=0x%I64x chunk=%lu failed 0x%08lx\n",
                          I, ByteOffset, Chunk, Status);
                 goto Cleanup;
             }
@@ -608,7 +608,7 @@ NtfslxFillLogFile(
         }
     }
 
-    DbgPrint("ntfslx: FillLogFile: wiped $LogFile to 0xFF across %lu runs\n",
+    NTFSDBG("ntfslx: FillLogFile: wiped $LogFile to 0xFF across %lu runs\n",
              LogRunCount);
     Status = STATUS_SUCCESS;
 

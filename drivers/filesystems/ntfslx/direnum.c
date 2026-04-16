@@ -294,7 +294,7 @@ NtfslxDirWalkResidentIndexRoot(
          * $INDEX_ALLOCATION. Enumerating only the resident path is a safe
          * partial implementation until subnodes are wired in.
          */
-        DPRINT1("ntfslx: resident directory enumeration sees LARGE index; subnodes deferred\n");
+        NTFSDBG("ntfslx: resident directory enumeration sees LARGE index; subnodes deferred\n");
     }
 
     Offset = IndexRoot->Index.EntriesOffset;

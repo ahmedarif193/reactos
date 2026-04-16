@@ -75,7 +75,7 @@ NtfslxGetFsVolumeInformation(
                       DeviceExtension->VolumeInfo.VolumeLabelLength);
     }
 
-    DbgPrint("ntfslx: FsVolumeInfo label='%.*S' labelLen=%lu serial=0x%08lx supportsObjects=%u\n",
+    NTFSDBG("ntfslx: FsVolumeInfo label='%.*S' labelLen=%lu serial=0x%08lx supportsObjects=%u\n",
              (int)(FsVolumeInfo->VolumeLabelLength / sizeof(WCHAR)),
              FsVolumeInfo->VolumeLabel,
              FsVolumeInfo->VolumeLabelLength,
@@ -116,7 +116,7 @@ NtfslxGetFsAttributeInformation(
     FsAttributeInfo->FileSystemNameLength = NameLength;
     RtlCopyMemory(FsAttributeInfo->FileSystemName, NtfsName, NameLength);
 
-    DbgPrint("ntfslx: FsAttributeInfo fs='%.*S' attrs=0x%08lx maxComp=%lu\n",
+    NTFSDBG("ntfslx: FsAttributeInfo fs='%.*S' attrs=0x%08lx maxComp=%lu\n",
              (int)(FsAttributeInfo->FileSystemNameLength / sizeof(WCHAR)),
              FsAttributeInfo->FileSystemName,
              FsAttributeInfo->FileSystemAttributes,
@@ -144,7 +144,7 @@ NtfslxGetFsSizeInformation(
     FsSizeInfo->SectorsPerAllocationUnit = DeviceExtension->VolumeInfo.SectorsPerCluster;
     FsSizeInfo->BytesPerSector = DeviceExtension->VolumeInfo.BytesPerSector;
 
-    DbgPrint("ntfslx: FsSizeInfo total=%I64u avail=%I64u spau=%lu bps=%lu\n",
+    NTFSDBG("ntfslx: FsSizeInfo total=%I64u avail=%I64u spau=%lu bps=%lu\n",
              FsSizeInfo->TotalAllocationUnits.QuadPart,
              FsSizeInfo->AvailableAllocationUnits.QuadPart,
              FsSizeInfo->SectorsPerAllocationUnit,
@@ -173,7 +173,7 @@ NtfslxGetFsFullSizeInformation(
     FsFullSizeInfo->SectorsPerAllocationUnit = DeviceExtension->VolumeInfo.SectorsPerCluster;
     FsFullSizeInfo->BytesPerSector = DeviceExtension->VolumeInfo.BytesPerSector;
 
-    DbgPrint("ntfslx: FsFullSizeInfo total=%I64u callerAvail=%I64u actualAvail=%I64u spau=%lu bps=%lu\n",
+    NTFSDBG("ntfslx: FsFullSizeInfo total=%I64u callerAvail=%I64u actualAvail=%I64u spau=%lu bps=%lu\n",
              FsFullSizeInfo->TotalAllocationUnits.QuadPart,
              FsFullSizeInfo->CallerAvailableAllocationUnits.QuadPart,
              FsFullSizeInfo->ActualAvailableAllocationUnits.QuadPart,
@@ -200,7 +200,7 @@ NtfslxGetFsDeviceInformation(
     FsDeviceInfo->DeviceType = FILE_DEVICE_DISK;
     FsDeviceInfo->Characteristics = DeviceObject->Characteristics;
 
-    DbgPrint("ntfslx: FsDeviceInfo deviceType=0x%08lx characteristics=0x%08lx\n",
+    NTFSDBG("ntfslx: FsDeviceInfo deviceType=0x%08lx characteristics=0x%08lx\n",
              FsDeviceInfo->DeviceType,
              FsDeviceInfo->Characteristics);
 
@@ -226,7 +226,7 @@ NtfslxQueryVolumeInformation(
     BufferLength = Stack->Parameters.QueryVolume.Length;
     ReturnLength = 0;
 
-    DbgPrint("ntfslx: QueryVolumeInformation begin class=%s(%d) buflen=%lu DevObj=%p Kind=%d\n",
+    NTFSDBG("ntfslx: QueryVolumeInformation begin class=%s(%d) buflen=%lu DevObj=%p Kind=%d\n",
              NtfslxFsInfoClassName(Stack->Parameters.QueryVolume.FsInformationClass),
              Stack->Parameters.QueryVolume.FsInformationClass,
              BufferLength,
@@ -281,7 +281,7 @@ NtfslxQueryVolumeInformation(
         }
     }
 
-    DbgPrint("ntfslx: QueryVolumeInformation done class=%s(%d) status=0x%08lx info=%lu\n",
+    NTFSDBG("ntfslx: QueryVolumeInformation done class=%s(%d) status=0x%08lx info=%lu\n",
              NtfslxFsInfoClassName(Stack->Parameters.QueryVolume.FsInformationClass),
              Stack->Parameters.QueryVolume.FsInformationClass,
              Status,

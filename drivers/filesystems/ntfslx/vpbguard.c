@@ -29,7 +29,7 @@ NtfslxDebugTraceVpbState(
     _In_opt_ PDEVICE_OBJECT RealDevice,
     _In_opt_ PDEVICE_OBJECT FileSystemDeviceObject)
 {
-    DPRINT1("ntfslx: %s: Vpb=%p Type=%hu Size=%hu Flags=0x%lx Ref=%ld Real=%p Fs=%p Device=%p\n",
+    NTFSDBG("ntfslx: %s: Vpb=%p Type=%hu Size=%hu Flags=0x%lx Ref=%ld Real=%p Fs=%p Device=%p\n",
             Reason,
             Vpb,
             Vpb != NULL ? Vpb->Type : 0,
@@ -54,7 +54,7 @@ NtfslxDebugTraceFileObjectState(
     FileContext = FileObject != NULL ? (PNTFSLX_FILE_CONTEXT)FileObject->FsContext : NULL;
     Ccb = FileObject != NULL ? (PNTFSLX_CCB)FileObject->FsContext2 : NULL;
 
-    DPRINT1("ntfslx: %s: FileObject=%p DevObj=%p Vpb=%p FsContext=%p(%lx) FsContext2=%p(%lx) DevExt=%p DevExtVpb=%p\n",
+    NTFSDBG("ntfslx: %s: FileObject=%p DevObj=%p Vpb=%p FsContext=%p(%lx) FsContext2=%p(%lx) DevExt=%p DevExtVpb=%p\n",
             Reason,
             FileObject,
             FileObject != NULL ? FileObject->DeviceObject : NULL,
@@ -215,7 +215,7 @@ NtfslxValidateFileContextBindings(
     {
         if (RequireCcb)
         {
-            DPRINT1("ntfslx: FileObject %p missing FsContext2\n", FileObject);
+            NTFSDBG("ntfslx: FileObject %p missing FsContext2\n", FileObject);
             return STATUS_INVALID_DEVICE_REQUEST;
         }
 

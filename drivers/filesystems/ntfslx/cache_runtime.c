@@ -452,7 +452,7 @@ NtfslxCacheRuntimeInitializeCacheMapInternal(
     _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
     {
         Status = _SEH2_GetExceptionCode();
-        DbgPrint("ntfslx: CcInitializeCacheMap raised 0x%08lx\n", Status);
+        NTFSDBG("ntfslx: CcInitializeCacheMap raised 0x%08lx\n", Status);
     }
     _SEH2_END;
 
@@ -684,7 +684,7 @@ NtfslxCacheRuntimeSetFileSizes(
     _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
     {
         Status = _SEH2_GetExceptionCode();
-        DbgPrint("ntfslx: CcSetFileSizes raised 0x%08lx\n", Status);
+        NTFSDBG("ntfslx: CcSetFileSizes raised 0x%08lx\n", Status);
     }
     _SEH2_END;
 
@@ -810,7 +810,7 @@ NtfslxCacheRuntimeDestroy(
                 _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
                 {
                     Status = _SEH2_GetExceptionCode();
-                    DbgPrint("ntfslx: CcUninitializeCacheMap raised 0x%08lx\n",
+                    NTFSDBG("ntfslx: CcUninitializeCacheMap raised 0x%08lx\n",
                              Status);
                 }
                 _SEH2_END;

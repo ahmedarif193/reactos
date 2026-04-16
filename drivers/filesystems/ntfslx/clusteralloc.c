@@ -343,7 +343,7 @@ NtfslxAdjustFreeClusterCount(
     }
 
     VolumeInfo->FreeClusters = After;
-    DbgPrint("ntfslx: volume space %s delta=%I64d before=%I64u after=%I64u total=%I64u\n",
+    NTFSDBG("ntfslx: volume space %s delta=%I64d before=%I64u after=%I64u total=%I64u\n",
              Reason, Delta, Before, After, VolumeInfo->ClusterCount);
 }
 

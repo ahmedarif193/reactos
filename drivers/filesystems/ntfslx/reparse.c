@@ -426,7 +426,7 @@ NtfslxSetReparsePoint(
         return Status;
     }
 
-    DbgPrint("ntfslx: reparse set begin mft=%I64u tag=0x%08lx in=%lu path='%wZ'\n",
+    NTFSDBG("ntfslx: reparse set begin mft=%I64u tag=0x%08lx in=%lu path='%wZ'\n",
              FileContext->MftIndex,
              ReparseBuffer->ReparseTag,
              InputLength,
@@ -481,13 +481,13 @@ NtfslxSetReparsePoint(
                                  FileContext->FileRecord);
     if (!NT_SUCCESS(Status))
     {
-        DbgPrint("ntfslx: reparse set write failed mft=%I64u status=0x%08lx\n",
+        NTFSDBG("ntfslx: reparse set write failed mft=%I64u status=0x%08lx\n",
                  FileContext->MftIndex,
                  Status);
         return Status;
     }
 
-    DbgPrint("ntfslx: reparse set done mft=%I64u tag=0x%08lx bytes=%lu\n",
+    NTFSDBG("ntfslx: reparse set done mft=%I64u tag=0x%08lx bytes=%lu\n",
              FileContext->MftIndex,
              ReparseBuffer->ReparseTag,
              InputLength);
@@ -569,7 +569,7 @@ NtfslxGetReparsePoint(
         ExFreePoolWithTag(ReparseData, NTFSLX_TAG);
     }
 
-    DbgPrint("ntfslx: reparse get done mft=%I64u tag=0x%08lx bytes=%lu\n",
+    NTFSDBG("ntfslx: reparse get done mft=%I64u tag=0x%08lx bytes=%lu\n",
              FileContext->MftIndex,
              ReparseTag,
              RequiredLength);
@@ -611,7 +611,7 @@ NtfslxDeleteReparsePoint(
         return STATUS_NOT_SUPPORTED;
     }
 
-    DbgPrint("ntfslx: reparse delete begin mft=%I64u tag=0x%08lx path='%wZ'\n",
+    NTFSDBG("ntfslx: reparse delete begin mft=%I64u tag=0x%08lx path='%wZ'\n",
              FileContext->MftIndex,
              DeleteBuffer->ReparseTag,
              &FileContext->FullPath);
@@ -680,13 +680,13 @@ NtfslxDeleteReparsePoint(
                                   FileContext->FileRecord);
     if (!NT_SUCCESS(Status))
     {
-        DbgPrint("ntfslx: reparse delete write failed mft=%I64u status=0x%08lx\n",
+        NTFSDBG("ntfslx: reparse delete write failed mft=%I64u status=0x%08lx\n",
                  FileContext->MftIndex,
                  Status);
         return Status;
     }
 
-    DbgPrint("ntfslx: reparse delete done mft=%I64u tag=0x%08lx\n",
+    NTFSDBG("ntfslx: reparse delete done mft=%I64u tag=0x%08lx\n",
              FileContext->MftIndex,
              DeleteBuffer->ReparseTag);
     return STATUS_SUCCESS;

@@ -309,7 +309,7 @@ NtfslxEnsureNonResidentRunlistState(
 
     if (ActualCount != FileContext->DataRunlistCount)
     {
-        DbgPrint("ntfslx: runlist count fixup mft=%I64u old=%lu new=%lu alloc=%I64u data=%I64u\n",
+        NTFSDBG("ntfslx: runlist count fixup mft=%I64u old=%lu new=%lu alloc=%I64u data=%I64u\n",
                  FileContext->MftIndex,
                  FileContext->DataRunlistCount,
                  ActualCount,
@@ -331,7 +331,7 @@ NtfslxEnsureNonResidentRunlistState(
                                           &RebuiltCount);
     if (!NT_SUCCESS(Status))
     {
-        DbgPrint("ntfslx: runlist rebuild failed mft=%I64u status=0x%08lx alloc=%I64u data=%I64u\n",
+        NTFSDBG("ntfslx: runlist rebuild failed mft=%I64u status=0x%08lx alloc=%I64u data=%I64u\n",
                  FileContext->MftIndex,
                  Status,
                  FileContext->AllocationSize,
@@ -343,14 +343,14 @@ NtfslxEnsureNonResidentRunlistState(
     if (ActualCount <= 1)
     {
         ExFreePoolWithTag(RebuiltRunlist, NTFSLX_TAG);
-        DbgPrint("ntfslx: runlist rebuild still empty mft=%I64u alloc=%I64u data=%I64u\n",
+        NTFSDBG("ntfslx: runlist rebuild still empty mft=%I64u alloc=%I64u data=%I64u\n",
                  FileContext->MftIndex,
                  FileContext->AllocationSize,
                  FileContext->DataSize);
         return STATUS_FILE_CORRUPT_ERROR;
     }
 
-    DbgPrint("ntfslx: runlist rebuilt mft=%I64u old=%lu new=%lu alloc=%I64u data=%I64u\n",
+    NTFSDBG("ntfslx: runlist rebuilt mft=%I64u old=%lu new=%lu alloc=%I64u data=%I64u\n",
              FileContext->MftIndex,
              FileContext->DataRunlistCount,
              ActualCount,
@@ -579,7 +579,7 @@ NtfslxTruncateNonResident(
     NewClusters = (NewSize == 0) ? 0 : ((NewSize + ClusterSize - 1) / ClusterSize);
     NewAllocationSize = NewClusters * ClusterSize;
 
-    DbgPrint("ntfslx: TruncateNonRes mft=%I64u oldSize=%I64u newSize=%I64u oldAlloc=%I64u newAlloc=%I64u\n",
+    NTFSDBG("ntfslx: TruncateNonRes mft=%I64u oldSize=%I64u newSize=%I64u oldAlloc=%I64u newAlloc=%I64u\n",
              FileContext->MftIndex, FileContext->DataSize, NewSize,
              FileContext->AllocationSize, NewAllocationSize);
 
@@ -660,7 +660,7 @@ NtfslxTruncateNonResident(
         FreeStatus = STATUS_SUCCESS;
         if (OldRunlist != NULL && OldRunlistCount > 1)
         {
-            DbgPrint("ntfslx: TruncateNonRes freeing full runlist mft=%I64u runs=%lu oldClusters=%I64u\n",
+            NTFSDBG("ntfslx: TruncateNonRes freeing full runlist mft=%I64u runs=%lu oldClusters=%I64u\n",
                      FileContext->MftIndex,
                      OldRunlistCount,
                      CurrentClusters);
@@ -668,7 +668,7 @@ NtfslxTruncateNonResident(
                                             DevExt->MftRunlist, OldRunlist, OldRunlistCount);
             if (!NT_SUCCESS(FreeStatus))
             {
-                DbgPrint("ntfslx: TruncateNonRes zero-size free failed mft=%I64u status=0x%08lx\n",
+                NTFSDBG("ntfslx: TruncateNonRes zero-size free failed mft=%I64u status=0x%08lx\n",
                          FileContext->MftIndex,
                          FreeStatus);
             }
@@ -735,7 +735,7 @@ NtfslxTruncateNonResident(
                                         DevExt->MftRunlist, TailRunlist, TailRunlistCount);
         if (!NT_SUCCESS(FreeStatus))
         {
-            DbgPrint("ntfslx: TruncateNonRes post-commit free failed mft=%I64u status=0x%08lx\n",
+            NTFSDBG("ntfslx: TruncateNonRes post-commit free failed mft=%I64u status=0x%08lx\n",
                      FileContext->MftIndex, FreeStatus);
         }
     }
@@ -859,7 +859,7 @@ NtfslxUpdateFileNameSize(
                 }
                 else if (ParentCount >= NTFSLX_UPDATE_FN_MAX_PARENTS)
                 {
-                    DbgPrint("ntfslx: UpdateFileNameSize: more than %lu parents on mft=%I64u, dropping extras\n",
+                    NTFSDBG("ntfslx: UpdateFileNameSize: more than %lu parents on mft=%I64u, dropping extras\n",
                              (ULONG)NTFSLX_UPDATE_FN_MAX_PARENTS, FileContext->MftIndex);
                 }
             }
@@ -873,12 +873,12 @@ NtfslxUpdateFileNameSize(
                                   DevExt->MftRunlist, FileContext->MftIndex, Record);
     if (!NT_SUCCESS(Status))
     {
-        DbgPrint("ntfslx: UpdateFileNameSize: WriteMft mft=%I64u failed 0x%08lx\n",
+        NTFSDBG("ntfslx: UpdateFileNameSize: WriteMft mft=%I64u failed 0x%08lx\n",
                  FileContext->MftIndex, Status);
         return Status;
     }
 
-    DbgPrint("ntfslx: UpdateFileNameSize mft=%I64u dataSize=%I64u allocSize=%I64u parents=%lu\n",
+    NTFSDBG("ntfslx: UpdateFileNameSize mft=%I64u dataSize=%I64u allocSize=%I64u parents=%lu\n",
              FileContext->MftIndex, NewDataSize, NewAllocatedSize, ParentCount);
 
     /* Propagate into each parent directory's $I30 entry. */
@@ -894,7 +894,7 @@ NtfslxUpdateFileNameSize(
             &Now, &Now, &Now, &Now);
         if (!NT_SUCCESS(IxStatus))
         {
-            DbgPrint("ntfslx: IndexUpdateFileName dir=%I64u name='%.*S' status=0x%08lx\n",
+            NTFSDBG("ntfslx: IndexUpdateFileName dir=%I64u name='%.*S' status=0x%08lx\n",
                      Parents[I].ParentMftIdx,
                      Parents[I].NameLen, Parents[I].Name,
                      IxStatus);
@@ -946,7 +946,7 @@ NtfslxWriteResidentExtend(
     /* New attribute length, 8-byte aligned */
     NewAttrLength = ROUND_UP(HeaderAndName + NewValueLength, 8);
 
-    DbgPrint("ntfslx: ResidentExtend mft=%I64u ofs=%I64u len=%lu oldVal=%lu newVal=%lu oldAttr=%lu newAttr=%lu bytesInUse=%lu\n",
+    NTFSDBG("ntfslx: ResidentExtend mft=%I64u ofs=%I64u len=%lu oldVal=%lu newVal=%lu oldAttr=%lu newAttr=%lu bytesInUse=%lu\n",
              FileContext->MftIndex, ByteOffset, Length, OldValueLength, NewValueLength,
              OldAttrLength, NewAttrLength, Record->BytesInUse);
 
@@ -954,7 +954,7 @@ NtfslxWriteResidentExtend(
     if (NewAttrLength > NTFSLX_MAX_RESIDENT_DATA_SIZE ||
         Record->BytesInUse - OldAttrLength + NewAttrLength > Record->BytesAllocated)
     {
-        DbgPrint("ntfslx: ResidentExtend: promote needed (newAttr=%lu > %lu OR bytesInUse %lu -> %lu > alloc %lu)\n",
+        NTFSDBG("ntfslx: ResidentExtend: promote needed (newAttr=%lu > %lu OR bytesInUse %lu -> %lu > alloc %lu)\n",
                  NewAttrLength, (ULONG)NTFSLX_MAX_RESIDENT_DATA_SIZE,
                  Record->BytesInUse,
                  Record->BytesInUse - OldAttrLength + NewAttrLength,
@@ -1044,7 +1044,7 @@ NtfslxPromoteToNonResident(
         ClusterCount = 1;
     AllocSize = ClusterCount * ClusterSize;
 
-    DbgPrint("ntfslx: PromoteToNonRes: newSize=%I64u clusters=%I64u\n",
+    NTFSDBG("ntfslx: PromoteToNonRes: newSize=%I64u clusters=%I64u\n",
              NewDataSize, ClusterCount);
 
     /* Save the old resident value */
@@ -1067,7 +1067,7 @@ NtfslxPromoteToNonResident(
                                     &Runlist, &RunlistCount);
     if (!NT_SUCCESS(Status))
     {
-        DbgPrint("ntfslx: AllocateClusters failed 0x%08lx\n", Status);
+        NTFSDBG("ntfslx: AllocateClusters failed 0x%08lx\n", Status);
         ExFreePoolWithTag(OldValue, NTFSLX_TAG);
         return Status;
     }
@@ -1113,7 +1113,7 @@ NtfslxPromoteToNonResident(
                                  ClusterBuffer + ByteOffset, FALSE);
         if (!NT_SUCCESS(Status))
         {
-            DbgPrint("ntfslx: cluster write failed at run %lu 0x%08lx\n", I, Status);
+            NTFSDBG("ntfslx: cluster write failed at run %lu 0x%08lx\n", I, Status);
             goto Fail;
         }
         ByteOffset += RunBytes;
@@ -1130,7 +1130,7 @@ NtfslxPromoteToNonResident(
                                           sizeof(MpBuffer), &MpSize);
         if (!NT_SUCCESS(Status))
         {
-            DbgPrint("ntfslx: PromoteToNonRes: encode mapping pairs failed 0x%08lx runCount=%lu\n",
+            NTFSDBG("ntfslx: PromoteToNonRes: encode mapping pairs failed 0x%08lx runCount=%lu\n",
                      Status, RunlistCount);
             goto Fail;
         }
@@ -1143,7 +1143,7 @@ NtfslxPromoteToNonResident(
         Status = NtfslxResizeAttributeRecord(Record, DataAttr, NewAttrSize);
         if (!NT_SUCCESS(Status))
         {
-            DbgPrint("ntfslx: Resize to non-res size=%lu failed 0x%08lx\n",
+            NTFSDBG("ntfslx: Resize to non-res size=%lu failed 0x%08lx\n",
                      NewAttrSize, Status);
             goto Fail;
         }
@@ -1175,7 +1175,7 @@ NtfslxPromoteToNonResident(
                                   Record);
     if (!NT_SUCCESS(Status))
     {
-        DbgPrint("ntfslx: Write MFT after promote failed 0x%08lx\n", Status);
+        NTFSDBG("ntfslx: Write MFT after promote failed 0x%08lx\n", Status);
         goto Fail;
     }
 
@@ -1279,7 +1279,7 @@ NtfslxExtendNonResident(
     ActualNewAllocSize = NewTotalClusters * ClusterSize;
     ExtendStartByte = CurrentClusters * ClusterSize;
 
-    DbgPrint("ntfslx: ExtendNonRes mft=%I64u curClusters=%I64u addClusters=%I64u newAlloc=%I64u\n",
+    NTFSDBG("ntfslx: ExtendNonRes mft=%I64u curClusters=%I64u addClusters=%I64u newAlloc=%I64u\n",
              FileContext->MftIndex, CurrentClusters, AdditionalClusters, ActualNewAllocSize);
 
     /* Hint the allocator to try placing the extension contiguous with the
@@ -1301,7 +1301,7 @@ NtfslxExtendNonResident(
                                     &NewRunlist, &NewRunlistCount);
     if (!NT_SUCCESS(Status))
     {
-        DbgPrint("ntfslx: ExtendNonRes: AllocateClusters failed 0x%08lx\n", Status);
+        NTFSDBG("ntfslx: ExtendNonRes: AllocateClusters failed 0x%08lx\n", Status);
         return Status;
     }
 
@@ -1365,7 +1365,7 @@ NtfslxExtendNonResident(
                                       &MpSize);
     if (!NT_SUCCESS(Status))
     {
-        DbgPrint("ntfslx: ExtendNonRes: encode mapping pairs failed 0x%08lx runs=%lu\n",
+        NTFSDBG("ntfslx: ExtendNonRes: encode mapping pairs failed 0x%08lx runs=%lu\n",
                  Status, MergedCount);
         goto Fail;
     }
@@ -1383,7 +1383,7 @@ NtfslxExtendNonResident(
         Status = NtfslxResizeAttributeRecord(Record, DataAttr, NewAttrLength);
         if (!NT_SUCCESS(Status))
         {
-            DbgPrint("ntfslx: ExtendNonRes: resize attr %lu->%lu failed 0x%08lx\n",
+            NTFSDBG("ntfslx: ExtendNonRes: resize attr %lu->%lu failed 0x%08lx\n",
                      OldAttrLength, NewAttrLength, Status);
             goto Fail;
         }
@@ -1407,7 +1407,7 @@ NtfslxExtendNonResident(
                                     ActualNewAllocSize - ExtendStartByte);
     if (!NT_SUCCESS(Status))
     {
-        DbgPrint("ntfslx: ExtendNonRes: zero fill failed 0x%08lx\n", Status);
+        NTFSDBG("ntfslx: ExtendNonRes: zero fill failed 0x%08lx\n", Status);
         goto Fail;
     }
 
@@ -1416,7 +1416,7 @@ NtfslxExtendNonResident(
                                   Record);
     if (!NT_SUCCESS(Status))
     {
-        DbgPrint("ntfslx: ExtendNonRes: WriteMft failed 0x%08lx\n", Status);
+        NTFSDBG("ntfslx: ExtendNonRes: WriteMft failed 0x%08lx\n", Status);
         goto Fail;
     }
 
@@ -1439,7 +1439,7 @@ NtfslxExtendNonResident(
     ExFreePoolWithTag(NewRunlist, NTFSLX_TAG);
     NewRunlist = NULL;
 
-    DbgPrint("ntfslx: ExtendNonRes mft=%I64u ok newAlloc=%I64u runs=%lu\n",
+    NTFSDBG("ntfslx: ExtendNonRes mft=%I64u ok newAlloc=%I64u runs=%lu\n",
              FileContext->MftIndex, ActualNewAllocSize, MergedCount);
 
     return STATUS_SUCCESS;
@@ -1595,7 +1595,7 @@ NtfslxSetFileSize(
     Record = FileContext->FileRecord;
     DataAttr = FileContext->DataAttribute;
 
-    DbgPrint("ntfslx: SetFileSize mft=%I64u newSize=%I64u curSize=%I64u resident=%u\n",
+    NTFSDBG("ntfslx: SetFileSize mft=%I64u newSize=%I64u curSize=%I64u resident=%u\n",
              FileContext->MftIndex, NewSize, FileContext->DataSize,
              FileContext->ResidentData);
 
@@ -1719,7 +1719,7 @@ NtfslxExtendedWrite(
         return STATUS_INVALID_PARAMETER;
     EffectiveOffset = (ULONGLONG)ByteOffset->QuadPart;
 
-    DbgPrint("ntfslx: ExtendedWrite mft=%I64u ofs=%I64u len=%lu resident=%u dataSize=%I64u\n",
+    NTFSDBG("ntfslx: ExtendedWrite mft=%I64u ofs=%I64u len=%lu resident=%u dataSize=%I64u\n",
              FileContext->MftIndex, EffectiveOffset, Length,
              FileContext->ResidentData, FileContext->DataSize);
 
@@ -1745,6 +1745,6 @@ NtfslxExtendedWrite(
     if (NT_SUCCESS(Status) && BytesWritten != NULL)
         *BytesWritten = Length;
 
-    DbgPrint("ntfslx: ExtendedWrite result=0x%08lx\n", Status);
+    NTFSDBG("ntfslx: ExtendedWrite result=0x%08lx\n", Status);
     return Status;
 }

@@ -183,7 +183,7 @@ NtfslxApplyIndexMstFixup(
 
     if ((RecordSize % SectorSize) != 0)
     {
-        DPRINT1("ntfslx: INDX MST invalid sizes RecordSize=%lu SectorSize=%lu\n",
+        NTFSDBG("ntfslx: INDX MST invalid sizes RecordSize=%lu SectorSize=%lu\n",
                 RecordSize,
                 SectorSize);
         return STATUS_FILE_CORRUPT_ERROR;
@@ -192,7 +192,7 @@ NtfslxApplyIndexMstFixup(
     SectorCount = RecordSize / SectorSize;
     if (SectorCount == 0)
     {
-        DPRINT1("ntfslx: INDX MST zero sector count RecordSize=%lu SectorSize=%lu\n",
+        NTFSDBG("ntfslx: INDX MST zero sector count RecordSize=%lu SectorSize=%lu\n",
                 RecordSize,
                 SectorSize);
         return STATUS_FILE_CORRUPT_ERROR;
@@ -202,7 +202,7 @@ NtfslxApplyIndexMstFixup(
     UsaCount = Record->UsaCount;
     if (UsaCount == 0)
     {
-        DPRINT1("ntfslx: INDX MST zero USA count UsaOffset=%hu RecordSize=%lu\n",
+        NTFSDBG("ntfslx: INDX MST zero USA count UsaOffset=%hu RecordSize=%lu\n",
                 UsaOffset,
                 RecordSize);
         return STATUS_FILE_CORRUPT_ERROR;
@@ -214,7 +214,7 @@ NtfslxApplyIndexMstFixup(
         UsaSize > RecordSize - UsaOffset ||
         UsaCount != (USHORT)(SectorCount + 1))
     {
-        DPRINT1("ntfslx: INDX MST invalid USA layout UsaOffset=%hu UsaCount=%hu UsaSize=%lu SectorCount=%lu RecordSize=%lu\n",
+        NTFSDBG("ntfslx: INDX MST invalid USA layout UsaOffset=%hu UsaCount=%hu UsaSize=%lu SectorCount=%lu RecordSize=%lu\n",
                 UsaOffset,
                 UsaCount,
                 UsaSize,
@@ -231,7 +231,7 @@ NtfslxApplyIndexMstFixup(
     {
         if (*DataEntry != UpdateSequenceNumber)
         {
-            DPRINT1("ntfslx: INDX MST sequence mismatch sector=%lu expected=0x%04x actual=0x%04x\n",
+            NTFSDBG("ntfslx: INDX MST sequence mismatch sector=%lu expected=0x%04x actual=0x%04x\n",
                     Index,
                     UpdateSequenceNumber,
                     *DataEntry);
@@ -350,7 +350,7 @@ NtfslxIndexEntryToDirEntry(
 
     if (!NtfslxIndexEntryLooksValid(Entry, RemainingLength, &NameLength))
     {
-        DPRINT1("ntfslx: invalid index entry layout Remaining=%lu EntryLength=%hu KeyLength=%hu Flags=0x%04x\n",
+        NTFSDBG("ntfslx: invalid index entry layout Remaining=%lu EntryLength=%hu KeyLength=%hu Flags=0x%04x\n",
                 RemainingLength,
                 Entry->Length,
                 Entry->KeyLength,
@@ -362,7 +362,7 @@ NtfslxIndexEntryToDirEntry(
         ((const UCHAR *)Entry + sizeof(*Entry));
     if (NameLength < FIELD_OFFSET(NTFSLX_FILENAME_ATTRIBUTE, FileName))
     {
-        DPRINT1("ntfslx: invalid index filename attribute length NameLength=%lu Minimum=%lu\n",
+        NTFSDBG("ntfslx: invalid index filename attribute length NameLength=%lu Minimum=%lu\n",
                 NameLength,
                 (ULONG)FIELD_OFFSET(NTFSLX_FILENAME_ATTRIBUTE, FileName));
         return STATUS_FILE_CORRUPT_ERROR;
@@ -370,7 +370,7 @@ NtfslxIndexEntryToDirEntry(
 
     if (FileNameAttr->FileNameLength > RTL_NUMBER_OF(DirEntry->FileName))
     {
-        DPRINT1("ntfslx: invalid filename length in index entry NameChars=%u MaxChars=%lu\n",
+        NTFSDBG("ntfslx: invalid filename length in index entry NameChars=%u MaxChars=%lu\n",
                 FileNameAttr->FileNameLength,
                 (ULONG)RTL_NUMBER_OF(DirEntry->FileName));
         return STATUS_FILE_CORRUPT_ERROR;
@@ -379,7 +379,7 @@ NtfslxIndexEntryToDirEntry(
     if (FIELD_OFFSET(NTFSLX_FILENAME_ATTRIBUTE, FileName) +
         (FileNameAttr->FileNameLength * sizeof(WCHAR)) != NameLength)
     {
-        DPRINT1("ntfslx: mismatched filename payload length NameChars=%u NameLength=%lu\n",
+        NTFSDBG("ntfslx: mismatched filename payload length NameChars=%u NameLength=%lu\n",
                 FileNameAttr->FileNameLength,
                 NameLength);
         return STATUS_FILE_CORRUPT_ERROR;
@@ -442,7 +442,7 @@ NtfslxValidateIndexEntryRange(
         EntriesOffset > IndexLength ||
         IndexLength > NodeLength)
     {
-        DPRINT1("ntfslx: invalid index entry range NodeLength=%lu EntriesOffset=%lu IndexLength=%lu\n",
+        NTFSDBG("ntfslx: invalid index entry range NodeLength=%lu EntriesOffset=%lu IndexLength=%lu\n",
                 NodeLength,
                 EntriesOffset,
                 IndexLength);
@@ -455,7 +455,7 @@ NtfslxValidateIndexEntryRange(
         IndexEntry = (const NTFSLX_INDEX_ENTRY_ATTRIBUTE *)(NodeBase + Offset);
         if (!NtfslxIndexEntryLooksValid(IndexEntry, IndexLength - Offset, &KeyLength))
         {
-            DPRINT1("ntfslx: malformed index entry at offset=%lu remaining=%lu length=%hu key=%hu flags=0x%04x\n",
+            NTFSDBG("ntfslx: malformed index entry at offset=%lu remaining=%lu length=%hu key=%hu flags=0x%04x\n",
                     Offset,
                     IndexLength - Offset,
                     IndexEntry->Length,
@@ -468,7 +468,7 @@ NtfslxValidateIndexEntryRange(
         {
             if ((Offset + IndexEntry->Length) != IndexLength)
             {
-                DPRINT1("ntfslx: index end entry not terminal offset=%lu entryLength=%hu indexLength=%lu\n",
+                NTFSDBG("ntfslx: index end entry not terminal offset=%lu entryLength=%hu indexLength=%lu\n",
                         Offset,
                         IndexEntry->Length,
                         IndexLength);
@@ -480,7 +480,7 @@ NtfslxValidateIndexEntryRange(
 
         if (IndexEntry->Length == 0)
         {
-            DPRINT1("ntfslx: zero-length index entry at offset=%lu indexLength=%lu\n",
+            NTFSDBG("ntfslx: zero-length index entry at offset=%lu indexLength=%lu\n",
                     Offset,
                     IndexLength);
             return STATUS_FILE_CORRUPT_ERROR;
@@ -537,7 +537,7 @@ NtfslxIndexDecodeMappingPairs(
         Attribute->Data.NonResident.MappingPairsOffset >= Attribute->Length ||
         Attribute->Data.NonResident.HighestVcn < Attribute->Data.NonResident.LowestVcn)
     {
-        DPRINT1("ntfslx: invalid $INDEX_ALLOCATION attribute layout AttrLen=%lu MappingPairsOffset=%hu LowestVcn=%I64u HighestVcn=%I64u\n",
+        NTFSDBG("ntfslx: invalid $INDEX_ALLOCATION attribute layout AttrLen=%lu MappingPairsOffset=%hu LowestVcn=%I64u HighestVcn=%I64u\n",
                 Attribute->Length,
                 Attribute->Data.NonResident.MappingPairsOffset,
                 Attribute->Data.NonResident.LowestVcn,
@@ -572,7 +572,7 @@ NtfslxIndexDecodeMappingPairs(
     AttributeEnd = (PUCHAR)Attribute + Attribute->Length;
     if (Buffer < (PUCHAR)Attribute || Buffer >= AttributeEnd)
     {
-        DPRINT1("ntfslx: invalid mapping-pairs pointer Attr=%p Buffer=%p End=%p\n",
+        NTFSDBG("ntfslx: invalid mapping-pairs pointer Attr=%p Buffer=%p End=%p\n",
                 Attribute,
                 Buffer,
                 AttributeEnd);
@@ -598,7 +598,7 @@ NtfslxIndexDecodeMappingPairs(
             Buffer > AttributeEnd ||
             (ULONG)(AttributeEnd - Buffer) < (ULONG)(LengthBytes + LcnBytes))
         {
-            DPRINT1("ntfslx: invalid mapping-pairs header Header=0x%02x LengthBytes=%u LcnBytes=%u Remaining=%lu\n",
+            NTFSDBG("ntfslx: invalid mapping-pairs header Header=0x%02x LengthBytes=%u LcnBytes=%u Remaining=%lu\n",
                     Header,
                     LengthBytes,
                     LcnBytes,
@@ -615,7 +615,7 @@ NtfslxIndexDecodeMappingPairs(
 
         if (Delta <= 0)
         {
-            DPRINT1("ntfslx: invalid mapping-pairs run length Delta=%I64d\n",
+            NTFSDBG("ntfslx: invalid mapping-pairs run length Delta=%I64d\n",
                     Delta);
             ExFreePoolWithTag(OutputRunlist, NTFSLX_INDEX_ALLOCATION_TAG);
             return STATUS_FILE_CORRUPT_ERROR;
@@ -623,7 +623,7 @@ NtfslxIndexDecodeMappingPairs(
 
         if (Vcn > (LONGLONG)MAXLONGLONG - Delta)
         {
-            DPRINT1("ntfslx: mapping-pairs VCN overflow Vcn=%I64d Delta=%I64d\n",
+            NTFSDBG("ntfslx: mapping-pairs VCN overflow Vcn=%I64d Delta=%I64d\n",
                     Vcn,
                     Delta);
             ExFreePoolWithTag(OutputRunlist, NTFSLX_INDEX_ALLOCATION_TAG);
@@ -649,7 +649,7 @@ NtfslxIndexDecodeMappingPairs(
             Lcn += Delta;
             if (Lcn < -1)
             {
-                DPRINT1("ntfslx: invalid mapping-pairs LCN result Lcn=%I64d Delta=%I64d\n",
+                NTFSDBG("ntfslx: invalid mapping-pairs LCN result Lcn=%I64d Delta=%I64d\n",
                         Lcn,
                         Delta);
                 ExFreePoolWithTag(OutputRunlist, NTFSLX_INDEX_ALLOCATION_TAG);
@@ -665,7 +665,7 @@ NtfslxIndexDecodeMappingPairs(
 
     if (Buffer >= AttributeEnd)
     {
-        DPRINT1("ntfslx: mapping-pairs stream not terminated cleanly Buffer=%p End=%p\n",
+        NTFSDBG("ntfslx: mapping-pairs stream not terminated cleanly Buffer=%p End=%p\n",
                 Buffer,
                 AttributeEnd);
         ExFreePoolWithTag(OutputRunlist, NTFSLX_INDEX_ALLOCATION_TAG);
@@ -675,7 +675,7 @@ NtfslxIndexDecodeMappingPairs(
     HighestVcn = Attribute->Data.NonResident.HighestVcn;
     if (Count == 0 || Vcn == 0 || Vcn - 1 != (LONGLONG)HighestVcn)
     {
-        DPRINT1("ntfslx: mapping-pairs VCN coverage mismatch Count=%lu FinalVcn=%I64d HighestVcn=%I64u\n",
+        NTFSDBG("ntfslx: mapping-pairs VCN coverage mismatch Count=%lu FinalVcn=%I64d HighestVcn=%I64u\n",
                 Count,
                 Vcn,
                 HighestVcn);
@@ -789,7 +789,7 @@ NtfslxValidateResidentIndexRoot(
 
     if (RootLength < sizeof(*IndexRoot) || IndexRoot->Type != NTFSLX_ATTRIBUTE_FILE_NAME)
     {
-        DPRINT1("ntfslx: invalid resident $INDEX_ROOT RootLength=%lu Type=0x%08lx ExpectedType=0x%08lx\n",
+        NTFSDBG("ntfslx: invalid resident $INDEX_ROOT RootLength=%lu Type=0x%08lx ExpectedType=0x%08lx\n",
                 RootLength,
                 IndexRoot != NULL ? IndexRoot->Type : 0UL,
                 NTFSLX_ATTRIBUTE_FILE_NAME);
@@ -809,7 +809,7 @@ NtfslxValidateResidentIndexRoot(
         AllocatedSize > RootLength - HeaderOffset ||
         UsedLength > AllocatedSize)
     {
-        DPRINT1("ntfslx: invalid resident $INDEX_ROOT header FirstEntry=%lu Used=%lu Allocated=%lu RootLength=%lu HeaderOffset=%lu Flags=0x%02x\n",
+        NTFSDBG("ntfslx: invalid resident $INDEX_ROOT header FirstEntry=%lu Used=%lu Allocated=%lu RootLength=%lu HeaderOffset=%lu Flags=0x%02x\n",
                 FirstEntryOffset,
                 UsedLength,
                 AllocatedSize,
@@ -850,7 +850,7 @@ NtfslxValidateIndexBufferHeader(
     if (BufferLength < sizeof(*IndexBuffer) ||
         IndexBuffer->Ntfs.Magic != NTFSLX_RECORD_MAGIC_INDX)
     {
-        DPRINT1("ntfslx: invalid INDX header BufferLength=%lu Magic=0x%08lx\n",
+        NTFSDBG("ntfslx: invalid INDX header BufferLength=%lu Magic=0x%08lx\n",
                 BufferLength,
                 IndexBuffer != NULL ? IndexBuffer->Ntfs.Magic : 0UL);
         return STATUS_FILE_CORRUPT_ERROR;
@@ -858,7 +858,7 @@ NtfslxValidateIndexBufferHeader(
 
     if (IndexBuffer->Vcn != ExpectedVcn)
     {
-        DPRINT1("ntfslx: INDX VCN mismatch Expected=%I64u Actual=%I64u\n",
+        NTFSDBG("ntfslx: INDX VCN mismatch Expected=%I64u Actual=%I64u\n",
                 ExpectedVcn,
                 IndexBuffer->Vcn);
         return STATUS_FILE_CORRUPT_ERROR;
@@ -877,7 +877,7 @@ NtfslxValidateIndexBufferHeader(
         AllocatedSize != BufferLength - HeaderOffset ||
         UsedLength > AllocatedSize)
     {
-        DPRINT1("ntfslx: invalid INDX entry header FirstEntry=%lu Used=%lu Allocated=%lu BufferLength=%lu HeaderOffset=%lu Flags=0x%02x\n",
+        NTFSDBG("ntfslx: invalid INDX entry header FirstEntry=%lu Used=%lu Allocated=%lu BufferLength=%lu HeaderOffset=%lu Flags=0x%02x\n",
                 FirstEntryOffset,
                 UsedLength,
                 AllocatedSize,
@@ -889,7 +889,7 @@ NtfslxValidateIndexBufferHeader(
 
     if (BufferLength % SectorSize != 0)
     {
-        DPRINT1("ntfslx: INDX buffer size is not sector aligned BufferLength=%lu SectorSize=%lu\n",
+        NTFSDBG("ntfslx: INDX buffer size is not sector aligned BufferLength=%lu SectorSize=%lu\n",
                 BufferLength,
                 SectorSize);
         return STATUS_FILE_CORRUPT_ERROR;
@@ -924,7 +924,7 @@ NtfslxWalkIndexEntryRange(
         Offset > IndexLength ||
         IndexLength > NodeLength)
     {
-        DPRINT1("ntfslx: invalid walk range NodeLength=%lu Offset=%lu IndexLength=%lu\n",
+        NTFSDBG("ntfslx: invalid walk range NodeLength=%lu Offset=%lu IndexLength=%lu\n",
                 NodeLength,
                 Offset,
                 IndexLength);
@@ -937,7 +937,7 @@ NtfslxWalkIndexEntryRange(
         Remaining = IndexLength - Offset;
         if (!NtfslxIndexEntryLooksValid(IndexEntry, Remaining, &KeyLength))
         {
-            DPRINT1("ntfslx: walk saw malformed entry Offset=%lu Remaining=%lu Length=%hu Key=%hu Flags=0x%04x\n",
+            NTFSDBG("ntfslx: walk saw malformed entry Offset=%lu Remaining=%lu Length=%hu Key=%hu Flags=0x%04x\n",
                     Offset,
                     Remaining,
                     IndexEntry->Length,
@@ -950,7 +950,7 @@ NtfslxWalkIndexEntryRange(
         {
             if ((Offset + IndexEntry->Length) != IndexLength)
             {
-                DPRINT1("ntfslx: walk end entry not terminal Offset=%lu EntryLength=%hu IndexLength=%lu\n",
+                NTFSDBG("ntfslx: walk end entry not terminal Offset=%lu EntryLength=%hu IndexLength=%lu\n",
                         Offset,
                         IndexEntry->Length,
                         IndexLength);
@@ -965,14 +965,14 @@ NtfslxWalkIndexEntryRange(
 
                 if (Context->Runlist == NULL)
                 {
-                    DPRINT1("ntfslx: terminal child VCN without runlist ChildVcn=%I64u\n",
+                    NTFSDBG("ntfslx: terminal child VCN without runlist ChildVcn=%I64u\n",
                             Entry.ChildVcn);
                     return STATUS_INVALID_PARAMETER;
                 }
 
                 if (NtfslxIndexVisitedVcn(Context, Entry.ChildVcn))
                 {
-                    DPRINT1("ntfslx: duplicate terminal child VCN encountered ChildVcn=%I64u\n",
+                    NTFSDBG("ntfslx: duplicate terminal child VCN encountered ChildVcn=%I64u\n",
                             Entry.ChildVcn);
                     return STATUS_FILE_CORRUPT_ERROR;
                 }
@@ -986,7 +986,7 @@ NtfslxWalkIndexEntryRange(
                 Status = NtfslxEnumerateIndexAllocationBlock(Context, Entry.ChildVcn);
                 if (!NT_SUCCESS(Status))
                 {
-                    DPRINT1("ntfslx: failed to enumerate terminal child INDX block ChildVcn=%I64u status=0x%08lx\n",
+                    NTFSDBG("ntfslx: failed to enumerate terminal child INDX block ChildVcn=%I64u status=0x%08lx\n",
                             Entry.ChildVcn,
                             Status);
                     return Status;
@@ -1018,14 +1018,14 @@ NtfslxWalkIndexEntryRange(
         {
             if (Context->Runlist == NULL)
             {
-                DPRINT1("ntfslx: child VCN without runlist ChildVcn=%I64u\n",
+                NTFSDBG("ntfslx: child VCN without runlist ChildVcn=%I64u\n",
                         Entry.ChildVcn);
                 return STATUS_INVALID_PARAMETER;
             }
 
             if (NtfslxIndexVisitedVcn(Context, Entry.ChildVcn))
             {
-                DPRINT1("ntfslx: duplicate child VCN encountered ChildVcn=%I64u\n",
+                NTFSDBG("ntfslx: duplicate child VCN encountered ChildVcn=%I64u\n",
                         Entry.ChildVcn);
                 return STATUS_FILE_CORRUPT_ERROR;
             }
@@ -1039,7 +1039,7 @@ NtfslxWalkIndexEntryRange(
             Status = NtfslxEnumerateIndexAllocationBlock(Context, Entry.ChildVcn);
             if (!NT_SUCCESS(Status))
             {
-                DPRINT1("ntfslx: failed to enumerate child INDX block ChildVcn=%I64u status=0x%08lx\n",
+                NTFSDBG("ntfslx: failed to enumerate child INDX block ChildVcn=%I64u status=0x%08lx\n",
                         Entry.ChildVcn,
                         Status);
                 return Status;
@@ -1048,7 +1048,7 @@ NtfslxWalkIndexEntryRange(
 
         if (IndexEntry->Length == 0)
         {
-            DPRINT1("ntfslx: walk saw zero-length entry Offset=%lu IndexLength=%lu\n",
+            NTFSDBG("ntfslx: walk saw zero-length entry Offset=%lu IndexLength=%lu\n",
                     Offset,
                     IndexLength);
             return STATUS_FILE_CORRUPT_ERROR;
@@ -1082,7 +1082,7 @@ NtfslxEnumerateIndexAllocationBlock(
 
     if (Context->IndexBlockSize != Context->VolumeInfo->BytesPerIndexRecord)
     {
-        DPRINT1("ntfslx: INDX block size mismatch ContextSize=%lu VolumeSize=%lu\n",
+        NTFSDBG("ntfslx: INDX block size mismatch ContextSize=%lu VolumeSize=%lu\n",
                 Context->IndexBlockSize,
                 Context->VolumeInfo->BytesPerIndexRecord);
         return STATUS_FILE_CORRUPT_ERROR;
@@ -1109,7 +1109,7 @@ NtfslxEnumerateIndexAllocationBlock(
                                            (PUCHAR)IndexBuffer);
     if (!NT_SUCCESS(Status))
     {
-        DPRINT1("ntfslx: failed reading INDX block Vcn=%I64u status=0x%08lx\n",
+        NTFSDBG("ntfslx: failed reading INDX block Vcn=%I64u status=0x%08lx\n",
                 Vcn,
                 Status);
         ExFreePoolWithTag(IndexBuffer, NTFSLX_INDEX_ALLOCATION_TAG);
@@ -1124,7 +1124,7 @@ NtfslxEnumerateIndexAllocationBlock(
                                              &IndexLength);
     if (!NT_SUCCESS(Status))
     {
-        DPRINT1("ntfslx: invalid INDX block header Vcn=%I64u status=0x%08lx\n",
+        NTFSDBG("ntfslx: invalid INDX block header Vcn=%I64u status=0x%08lx\n",
                 Vcn,
                 Status);
         ExFreePoolWithTag(IndexBuffer, NTFSLX_INDEX_ALLOCATION_TAG);
@@ -1136,7 +1136,7 @@ NtfslxEnumerateIndexAllocationBlock(
                                       Context->VolumeInfo->BytesPerSector);
     if (!NT_SUCCESS(Status))
     {
-        DPRINT1("ntfslx: INDX MST fixup failed Vcn=%I64u status=0x%08lx\n",
+        NTFSDBG("ntfslx: INDX MST fixup failed Vcn=%I64u status=0x%08lx\n",
                 Vcn,
                 Status);
         ExFreePoolWithTag(IndexBuffer, NTFSLX_INDEX_ALLOCATION_TAG);
@@ -1196,7 +1196,7 @@ NtfslxReadIndexAllocationBlock(
         VolumeInfo->BytesPerIndexRecord == 0 ||
         (VolumeInfo->BytesPerIndexRecord % VolumeInfo->BytesPerCluster) != 0)
     {
-        DPRINT1("ntfslx: invalid index-allocation read geometry Cluster=%lu IndexRecord=%lu\n",
+        NTFSDBG("ntfslx: invalid index-allocation read geometry Cluster=%lu IndexRecord=%lu\n",
                 VolumeInfo->BytesPerCluster,
                 VolumeInfo->BytesPerIndexRecord);
         return STATUS_FILE_CORRUPT_ERROR;
@@ -1239,7 +1239,7 @@ NtfslxValidateIndexAllocationBlock(
 
     if ((IndexBlockSize % SectorSize) != 0)
     {
-        DPRINT1("ntfslx: invalid index-allocation block geometry IndexBlockSize=%lu SectorSize=%lu\n",
+        NTFSDBG("ntfslx: invalid index-allocation block geometry IndexBlockSize=%lu SectorSize=%lu\n",
                 IndexBlockSize,
                 SectorSize);
         return STATUS_FILE_CORRUPT_ERROR;
@@ -1254,7 +1254,7 @@ NtfslxValidateIndexAllocationBlock(
                                              &IndexLength);
     if (!NT_SUCCESS(Status))
     {
-        DPRINT1("ntfslx: NtfslxValidateIndexBufferHeader failed in NtfslxValidateIndexAllocationBlock status=0x%08lx ExpectedVcn=%I64u\n",
+        NTFSDBG("ntfslx: NtfslxValidateIndexBufferHeader failed in NtfslxValidateIndexAllocationBlock status=0x%08lx ExpectedVcn=%I64u\n",
                 Status,
                 ExpectedVcn);
         return Status;
@@ -1265,7 +1265,7 @@ NtfslxValidateIndexAllocationBlock(
                                       SectorSize);
     if (!NT_SUCCESS(Status))
     {
-        DPRINT1("ntfslx: NtfslxApplyIndexMstFixup failed in NtfslxValidateIndexAllocationBlock status=0x%08lx ExpectedVcn=%I64u\n",
+        NTFSDBG("ntfslx: NtfslxApplyIndexMstFixup failed in NtfslxValidateIndexAllocationBlock status=0x%08lx ExpectedVcn=%I64u\n",
                 Status,
                 ExpectedVcn);
         return Status;
@@ -1293,7 +1293,7 @@ NtfslxValidateIndexRoot(
                                              IndexLength);
     if (!NT_SUCCESS(Status))
     {
-        DPRINT1("ntfslx: invalid $INDEX_ROOT status=0x%08lx RootLength=%lu ExpectedIndexBlock=%lu\n",
+        NTFSDBG("ntfslx: invalid $INDEX_ROOT status=0x%08lx RootLength=%lu ExpectedIndexBlock=%lu\n",
                 Status,
                 RootLength,
                 ExpectedIndexBlockSize);
@@ -1302,7 +1302,7 @@ NtfslxValidateIndexRoot(
 
     if (IndexRoot->IndexBlockSize != ExpectedIndexBlockSize)
     {
-        DPRINT1("ntfslx: unexpected $INDEX_ROOT block size RootBlock=%lu Expected=%lu ClustersPerBlock=%u Flags=0x%02x\n",
+        NTFSDBG("ntfslx: unexpected $INDEX_ROOT block size RootBlock=%lu Expected=%lu ClustersPerBlock=%u Flags=0x%02x\n",
                 IndexRoot->IndexBlockSize,
                 ExpectedIndexBlockSize,
                 IndexRoot->ClustersPerIndexBlock,
@@ -1389,7 +1389,7 @@ NtfslxEnumerateIndexAllocationTree(
         ASSERT(IndexAllocationRunlistCount != 0);
         if (IndexAllocationRunlist[IndexAllocationRunlistCount - 1].Length != 0)
         {
-            DPRINT1("ntfslx: unterminated $INDEX_ALLOCATION runlist Count=%lu LastVcn=%I64d LastLcn=%I64d LastLen=%I64d\n",
+            NTFSDBG("ntfslx: unterminated $INDEX_ALLOCATION runlist Count=%lu LastVcn=%I64d LastLcn=%I64d LastLen=%I64d\n",
                     IndexAllocationRunlistCount,
                     IndexAllocationRunlist[IndexAllocationRunlistCount - 1].Vcn,
                     IndexAllocationRunlist[IndexAllocationRunlistCount - 1].Lcn,
@@ -1401,7 +1401,7 @@ NtfslxEnumerateIndexAllocationTree(
     if (IndexRoot->Header.Flags != 0 &&
         (IndexAllocationRunlist == NULL || IndexAllocationRunlistCount == 0))
     {
-        DPRINT1("ntfslx: large index root seen without an index-allocation runlist\n");
+        NTFSDBG("ntfslx: large index root seen without an index-allocation runlist\n");
         return STATUS_INVALID_PARAMETER;
     }
 
@@ -1412,7 +1412,7 @@ NtfslxEnumerateIndexAllocationTree(
                                               IndexLength);
     if (!NT_SUCCESS(Status))
     {
-        DPRINT1("ntfslx: failed walking index tree status=0x%08lx RootLength=%lu EntriesOffset=%lu IndexLength=%lu RunCount=%lu RootFlags=0x%02x\n",
+        NTFSDBG("ntfslx: failed walking index tree status=0x%08lx RootLength=%lu EntriesOffset=%lu IndexLength=%lu RunCount=%lu RootFlags=0x%02x\n",
                 Status,
                 RootLength,
                 EntriesOffset,
