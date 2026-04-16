@@ -58,6 +58,10 @@ FsRecNtfsFsControl(IN PDEVICE_OBJECT DeviceObject,
     PPACKED_BOOT_SECTOR Bpb = NULL;
     ULONG SectorSize;
     LARGE_INTEGER Offset = {{0, 0}}, Offset2, Offset3, SectorCount;
+    static const WCHAR NtfsLxServicePath[] =
+        L"\\Registry\\Machine\\System\\CurrentControlSet\\Services\\NtfsLx";
+    static const WCHAR NtfsServicePath[] =
+        L"\\Registry\\Machine\\System\\CurrentControlSet\\Services\\Ntfs";
     PAGED_CODE();
 
     /* Get the I/O Stack and check the function type */
@@ -130,9 +134,12 @@ FsRecNtfsFsControl(IN PDEVICE_OBJECT DeviceObject,
 
         case IRP_MN_LOAD_FILE_SYSTEM:
 
-            /* Load the file system */
-            Status = FsRecLoadFileSystem(DeviceObject,
-                                         L"\\Registry\\Machine\\System\\CurrentControlSet\\Services\\Ntfs");
+            /* Load the staged driver first; keep a local fallback for compatibility. */
+            Status = FsRecLoadFileSystem(DeviceObject, NtfsLxServicePath);
+            if (!NT_SUCCESS(Status))
+            {
+                Status = FsRecLoadFileSystem(DeviceObject, NtfsServicePath);
+            }
             break;
 
         default:

@@ -25,6 +25,7 @@ KMT_TESTFUNC Test_MmMapLockedPagesSpecifyCache;
 KMT_TESTFUNC Test_NtCreateSection;
 KMT_TESTFUNC Test_NtSystemDebugControl;
 KMT_TESTFUNC Test_PoIrp;
+KMT_TESTFUNC Test_NtfslxFunc;
 KMT_TESTFUNC Test_RtlAvlTree;
 KMT_TESTFUNC Test_RtlCaptureContext;
 KMT_TESTFUNC Test_RtlException;
@@ -38,7 +39,6 @@ KMT_TESTFUNC Test_RtlUnicodeString;
 KMT_TESTFUNC Test_TcpIpIoctl;
 KMT_TESTFUNC Test_TcpIpTdi;
 KMT_TESTFUNC Test_TcpIpConnect;
-
 /* tests with a leading '-' will not be listed */
 const KMT_TEST TestList[] =
 {
@@ -61,6 +61,7 @@ const KMT_TEST TestList[] =
     { "NtCreateSection",              Test_NtCreateSection },
     { "NtSystemDebugControl",         Test_NtSystemDebugControl },
     { "PoIrp",                        Test_PoIrp },
+    { "NtfslxFunc",                    Test_NtfslxFunc },
     { "RtlAvlTree",                   Test_RtlAvlTree },
     { "RtlException",                 Test_RtlException },
     { "RtlIntSafe",                   Test_RtlIntSafe },

@@ -16,6 +16,31 @@
 
 /* FUNCTIONS ****************************************************************/
 
+static
+VOID
+NTAPI
+FsRecLogFatBpb(
+    _In_ PPACKED_BOOT_SECTOR PackedBootSector,
+    _In_ PBIOS_PARAMETER_BLOCK Bpb)
+{
+    DPRINT1("fs_rec: FAT probe jump=%02x %02x %02x oem='%.*s' bps=%u spc=%u reserved=%u fats=%u root=%u sectors=%u large=%lu media=%02x spf=%u hidden=%lu\n",
+            PackedBootSector->Jump[0],
+            PackedBootSector->Jump[1],
+            PackedBootSector->Jump[2],
+            (INT)sizeof(PackedBootSector->Oem),
+            PackedBootSector->Oem,
+            Bpb->BytesPerSector,
+            Bpb->SectorsPerCluster,
+            Bpb->ReservedSectors,
+            Bpb->Fats,
+            Bpb->RootEntries,
+            Bpb->Sectors,
+            Bpb->LargeSectors,
+            Bpb->Media,
+            Bpb->SectorsPerFat,
+            Bpb->HiddenSectors);
+}
+
 BOOLEAN
 NTAPI
 FsRecIsFatVolume(IN PPACKED_BOOT_SECTOR PackedBootSector)
@@ -29,6 +54,7 @@ FsRecIsFatVolume(IN PPACKED_BOOT_SECTOR PackedBootSector)
     /* Unpack the BPB and do a small fix up */
     FatUnpackBios(&Bpb, &PackedBootSector->PackedBpb);
     if (Bpb.Sectors) Bpb.LargeSectors = 0;
+    FsRecLogFatBpb(PackedBootSector, &Bpb);
 
     /* Recognize jump */
     if ((PackedBootSector->Jump[0] != 0x49) &&
@@ -36,6 +62,8 @@ FsRecIsFatVolume(IN PPACKED_BOOT_SECTOR PackedBootSector)
         (PackedBootSector->Jump[0] != 0xEB))
     {
         /* Fail */
+        DPRINT1("fs_rec: FAT reject invalid jump opcode %02x\n",
+                PackedBootSector->Jump[0]);
         Result = FALSE;
     }
     else if ((Bpb.BytesPerSector != 128) &&
@@ -46,6 +74,8 @@ FsRecIsFatVolume(IN PPACKED_BOOT_SECTOR PackedBootSector)
              (Bpb.BytesPerSector != 4096))
     {
         /* Fail */
+        DPRINT1("fs_rec: FAT reject invalid bytes/sector %u\n",
+                Bpb.BytesPerSector);
         Result = FALSE;
     }
     else if ((Bpb.SectorsPerCluster != 1) &&
@@ -58,16 +88,20 @@ FsRecIsFatVolume(IN PPACKED_BOOT_SECTOR PackedBootSector)
              (Bpb.SectorsPerCluster != 128))
     {
         /* Fail */
+        DPRINT1("fs_rec: FAT reject invalid sectors/cluster %u\n",
+                Bpb.SectorsPerCluster);
         Result = FALSE;
     }
     else if (!Bpb.ReservedSectors)
     {
         /* Fail */
+        DPRINT1("fs_rec: FAT reject reserved sectors == 0\n");
         Result = FALSE;
     }
     else if (!(Bpb.Sectors) && !(Bpb.LargeSectors))
     {
         /* Fail */
+        DPRINT1("fs_rec: FAT reject total sectors == 0\n");
         Result = FALSE;
     }
     else if ((Bpb.Media != 0x00) &&
@@ -83,12 +117,20 @@ FsRecIsFatVolume(IN PPACKED_BOOT_SECTOR PackedBootSector)
              (Bpb.Media != 0xff))
     {
         /* Fail */
+        DPRINT1("fs_rec: FAT reject invalid media byte %02x\n",
+                Bpb.Media);
         Result = FALSE;
     }
     else if ((Bpb.SectorsPerFat) && !(Bpb.RootEntries))
     {
         /* Fail */
+        DPRINT1("fs_rec: FAT reject FAT12/16 BPB with zero root entries\n");
         Result = FALSE;
+    }
+
+    if (Result)
+    {
+        DPRINT1("fs_rec: FAT recognizer accepted volume\n");
     }
 
     /* Return the result */
@@ -120,8 +162,10 @@ FsRecVfatFsControl(IN PDEVICE_OBJECT DeviceObject,
 
             /* Get the device object and request the sector size */
             MountDevice = Stack->Parameters.MountVolume.DeviceObject;
+            DPRINT1("fs_rec: FAT mount probe Device=%p\n", MountDevice);
             if (FsRecGetDeviceSectorSize(MountDevice, &SectorSize))
             {
+                DPRINT1("fs_rec: FAT sector size %lu\n", SectorSize);
                 /* Try to read the BPB */
                 if (FsRecReadBlock(MountDevice,
                                    &Offset,
@@ -135,7 +179,17 @@ FsRecVfatFsControl(IN PDEVICE_OBJECT DeviceObject,
                     {
                         /* It is! */
                         Status = STATUS_FS_DRIVER_REQUIRED;
+                        DPRINT1("fs_rec: FAT mount requires fastfat\n");
                     }
+                    else
+                    {
+                        DPRINT1("fs_rec: FAT mount probe rejected volume\n");
+                    }
+                }
+                else
+                {
+                    DPRINT1("fs_rec: FAT boot sector read failed DeviceError=%u\n",
+                            DeviceError);
                 }
 
                 /* Free the boot sector if we have one */
@@ -145,6 +199,7 @@ FsRecVfatFsControl(IN PDEVICE_OBJECT DeviceObject,
             {
                 /* We have some sort of failure in the storage stack */
                 DeviceError = TRUE;
+                DPRINT1("fs_rec: FAT failed to query sector size\n");
             }
 
             /* Check if we have an error on the stack */
@@ -155,6 +210,7 @@ FsRecVfatFsControl(IN PDEVICE_OBJECT DeviceObject,
                 {
                     /* Let the FS try anyway */
                     Status = STATUS_FS_DRIVER_REQUIRED;
+                    DPRINT1("fs_rec: FAT forcing mount for floppy path\n");
                 }
             }
 
@@ -163,8 +219,10 @@ FsRecVfatFsControl(IN PDEVICE_OBJECT DeviceObject,
         case IRP_MN_LOAD_FILE_SYSTEM:
 
             /* Load the file system */
+            DPRINT1("fs_rec: loading fastfat\n");
             Status = FsRecLoadFileSystem(DeviceObject,
                                          L"\\Registry\\Machine\\System\\CurrentControlSet\\Services\\fastfat");
+            DPRINT1("fs_rec: fastfat load returned 0x%08lx\n", Status);
             break;
 
         default:

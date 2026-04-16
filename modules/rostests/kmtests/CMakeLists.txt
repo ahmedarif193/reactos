@@ -116,6 +116,14 @@ list(APPEND KMTEST_DRV_SOURCE
     ntos_se/SeTokenFiltering.c
     rtl/RtlIsValidOemCharacter.c
     rtl/RtlRangeList.c
+    ntfslx/NtfslxAlgo.c
+    ntfslx/NtfslxFunc.c
+    ${REACTOS_SOURCE_DIR}/drivers/filesystems/ntfslx/bitmap.c
+    ${REACTOS_SOURCE_DIR}/drivers/filesystems/ntfslx/collate.c
+    ${REACTOS_SOURCE_DIR}/drivers/filesystems/ntfslx/compress.c
+    ${REACTOS_SOURCE_DIR}/drivers/filesystems/ntfslx/core.c
+    ${REACTOS_SOURCE_DIR}/drivers/filesystems/ntfslx/mst.c
+    ${REACTOS_SOURCE_DIR}/drivers/filesystems/ntfslx/runlist.c
     ${COMMON_SOURCE}
 
     kmtest_drv/kmtest_drv.rc)
@@ -130,6 +138,7 @@ endif()
 
 add_library(kmtest_drv MODULE ${KMTEST_DRV_SOURCE})
 set_module_type(kmtest_drv kernelmodedriver)
+target_include_directories(kmtest_drv PRIVATE ${REACTOS_SOURCE_DIR}/drivers/filesystems/ntfslx)
 target_link_libraries(kmtest_drv kmtest_printf chkstk memcmp ntoskrnl_vista ${PSEH_LIB})
 add_importlibs(kmtest_drv ntoskrnl hal)
 add_dependencies(kmtest_drv bugcodes xdk)
@@ -178,6 +187,7 @@ list(APPEND KMTEST_SOURCE
     ntos_mm/MmMapLockedPagesSpecifyCache_user.c
     ntos_mm/NtCreateSection_user.c
     ntos_po/PoIrp_user.c
+    ntfslx/NtfslxFunc_user.c
     tcpip/TcpIp_user.c
     ${COMMON_SOURCE}
 

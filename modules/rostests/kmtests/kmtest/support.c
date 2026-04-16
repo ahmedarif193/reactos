@@ -47,9 +47,19 @@ KmtUserCallbackThread(
 
     while (1)
     {
+        BytesReturned = 0;
         if (!DeviceIoControl(LocalKmtHandle, IOCTL_KMTEST_USERMODE_AWAIT_REQ, NULL, 0, &RequestPacket, sizeof(RequestPacket), &BytesReturned, NULL))
+        {
+            Error = GetLastError();
+            if (Error == WAIT_TIMEOUT || Error == ERROR_SEM_TIMEOUT || Error == ERROR_OPERATION_ABORTED)
+            {
+                Error = ERROR_SUCCESS;
+                break;
+            }
             error_goto(Error, cleanup);
-        ASSERT(BytesReturned == sizeof(RequestPacket));
+        }
+        if (BytesReturned != sizeof(RequestPacket))
+            break;
 
         switch (RequestPacket.OperationClass)
         {
@@ -76,7 +86,8 @@ cleanup:
     if (LocalKmtHandle != INVALID_HANDLE_VALUE)
         CloseHandle(LocalKmtHandle);
 
-    DPRINT("Callback handler dying! Error code %lu", Error);
+    if (Error != ERROR_SUCCESS)
+        DPRINT("Callback handler dying! Error code %lu", Error);
     return Error;
 }
 

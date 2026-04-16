@@ -11,6 +11,8 @@
 
 NTFSLX_GLOBAL_DATA NtfslxGlobalData;
 
+static FAST_IO_DISPATCH NtfslxFastIoDispatch;
+
 NTSTATUS
 NTAPI
 DriverEntry(
@@ -59,6 +61,25 @@ DriverEntry(
 
     NtfslxInitializeFunctionPointers(DriverObject);
     DriverObject->DriverUnload = NULL;
+
+    /*
+     * Install a minimal fast-I/O dispatch table. Without it NtWriteFile /
+     * NtReadFile assert on writes to cached files. We use the generic
+     * FsRtlCopyRead / FsRtlCopyWrite helpers which go through CcCopyRead /
+     * CcCopyWrite on the shared cache map set up by NtfslxCacheRuntimeAttach.
+     * FastIoCheckIfPossible stays NULL — the kernel's fallback is "not
+     * possible, use the IRP path", which is what we want when Cc can't
+     * satisfy the request (we then end up in IRP_MJ_READ / IRP_MJ_WRITE).
+     * AcquireFileForNtCreateSection / ReleaseFileForNtCreateSection also
+     * stay NULL so the kernel's default handler acquires FcbHeader.Resource
+     * directly — pointing them at FsRtlAcquireFileExclusive / FsRtlReleaseFile
+     * would recurse because those are the default handlers themselves.
+     */
+    RtlZeroMemory(&NtfslxFastIoDispatch, sizeof(NtfslxFastIoDispatch));
+    NtfslxFastIoDispatch.SizeOfFastIoDispatch = sizeof(FAST_IO_DISPATCH);
+    NtfslxFastIoDispatch.FastIoRead = FsRtlCopyRead;
+    NtfslxFastIoDispatch.FastIoWrite = FsRtlCopyWrite;
+    DriverObject->FastIoDispatch = &NtfslxFastIoDispatch;
 
     DeviceObject->Flags |= DO_DIRECT_IO;
     DeviceObject->Flags &= ~DO_DEVICE_INITIALIZING;

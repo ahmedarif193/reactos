@@ -9,6 +9,30 @@
 #define NDEBUG
 #include <debug.h>
 
+/*
+ * Signal our private event when the downstream disk IRP completes. Registered
+ * as the IRP completion routine for NtfslxReadDisk so that synchronous paging
+ * I/O (which runs at APC_LEVEL with kernel APCs disabled) can still wake up:
+ * IoBuildSynchronousFsdRequest's native completion path uses a kernel APC,
+ * which never delivers at APC_LEVEL and leads to an indefinite wait.
+ */
+static
+NTSTATUS
+NTAPI
+NtfslxReadDiskCompletion(
+    _In_ PDEVICE_OBJECT DeviceObject,
+    _In_ PIRP Irp,
+    _In_ PVOID Context)
+{
+    PKEVENT Event = (PKEVENT)Context;
+
+    UNREFERENCED_PARAMETER(DeviceObject);
+    UNREFERENCED_PARAMETER(Irp);
+
+    KeSetEvent(Event, IO_NO_INCREMENT, FALSE);
+    return STATUS_MORE_PROCESSING_REQUIRED;
+}
+
 NTSTATUS
 NtfslxReadDisk(
     _In_ PDEVICE_OBJECT DeviceObject,
@@ -19,7 +43,6 @@ NtfslxReadDisk(
     _In_ BOOLEAN Override)
 {
     PIO_STACK_LOCATION Stack;
-    IO_STATUS_BLOCK IoStatus;
     LARGE_INTEGER Offset;
     KEVENT Event;
     PIRP Irp;
@@ -51,13 +74,12 @@ NtfslxReadDisk(
     KeInitializeEvent(&Event, NotificationEvent, FALSE);
 
     Offset.QuadPart = RealReadOffset;
-    Irp = IoBuildSynchronousFsdRequest(IRP_MJ_READ,
-                                       DeviceObject,
-                                       ReadBuffer,
-                                       RealLength,
-                                       &Offset,
-                                       &Event,
-                                       &IoStatus);
+    Irp = IoBuildAsynchronousFsdRequest(IRP_MJ_READ,
+                                        DeviceObject,
+                                        ReadBuffer,
+                                        RealLength,
+                                        &Offset,
+                                        NULL);
     if (Irp == NULL)
     {
         if (AllocatedBuffer)
@@ -67,6 +89,16 @@ NtfslxReadDisk(
 
         return STATUS_INSUFFICIENT_RESOURCES;
     }
+
+    Irp->UserIosb = &Irp->IoStatus;
+    Irp->Flags |= IRP_SYNCHRONOUS_PAGING_IO;
+
+    IoSetCompletionRoutine(Irp,
+                           NtfslxReadDiskCompletion,
+                           &Event,
+                           TRUE,
+                           TRUE,
+                           TRUE);
 
     if (Override)
     {
@@ -78,8 +110,22 @@ NtfslxReadDisk(
     if (Status == STATUS_PENDING)
     {
         KeWaitForSingleObject(&Event, Executive, KernelMode, FALSE, NULL);
-        Status = IoStatus.Status;
     }
+    Status = Irp->IoStatus.Status;
+
+    /*
+     * Our completion routine returned STATUS_MORE_PROCESSING_REQUIRED,
+     * short-circuiting the I/O manager's normal teardown. We are
+     * responsible for unlocking and freeing the MDL we built, and the
+     * IRP itself.
+     */
+    if (Irp->MdlAddress != NULL)
+    {
+        MmUnlockPages(Irp->MdlAddress);
+        IoFreeMdl(Irp->MdlAddress);
+        Irp->MdlAddress = NULL;
+    }
+    IoFreeIrp(Irp);
 
     if (AllocatedBuffer)
     {

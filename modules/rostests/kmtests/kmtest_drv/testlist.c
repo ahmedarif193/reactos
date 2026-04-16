@@ -90,6 +90,12 @@ KMT_TESTFUNC Test_ZwAllocateVirtualMemory;
 KMT_TESTFUNC Test_ZwCreateSection;
 KMT_TESTFUNC Test_ZwMapViewOfSection;
 KMT_TESTFUNC Test_ZwWaitForMultipleObjects;
+KMT_TESTFUNC Test_NtfslxAlgo;
+KMT_TESTFUNC Test_NtfslxFunc;
+KMT_TESTFUNC Test_NtfslxFuncSmoke;
+KMT_TESTFUNC Test_NtfslxFuncStressA;
+KMT_TESTFUNC Test_NtfslxFuncStressB;
+KMT_TESTFUNC Test_NtfslxFuncStressC;
 
 const KMT_TEST TestList[] =
 {
@@ -176,6 +182,12 @@ const KMT_TEST TestList[] =
     { "ZwCreateSection",                    Test_ZwCreateSection },
     { "ZwMapViewOfSection",                 Test_ZwMapViewOfSection },
     { "ZwWaitForMultipleObjects",           Test_ZwWaitForMultipleObjects},
+    { "NtfslxAlgo",                         Test_NtfslxAlgo },
+    { "NtfslxFunc",                         Test_NtfslxFunc },
+    { "-NtfslxFuncSmoke",                   Test_NtfslxFuncSmoke },
+    { "-NtfslxFuncStressA",                 Test_NtfslxFuncStressA },
+    { "-NtfslxFuncStressB",                 Test_NtfslxFuncStressB },
+    { "-NtfslxFuncStressC",                 Test_NtfslxFuncStressC },
 #ifdef _M_AMD64
     { "RtlCaptureContextKM",                Test_RtlCaptureContext },
 #endif
