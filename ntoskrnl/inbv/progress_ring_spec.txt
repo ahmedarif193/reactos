@@ -1,0 +1,161 @@
+WinUI Indeterminate ProgressRing Specification
+==============================================
+
+Source of truth (extracted into this port's context from the WinUI repo):
+  microsoft-ui-xaml (Microsoft, MIT-licensed) tree:
+    src/controls/dev/ProgressRing/AnimatedVisuals/ProgressRingIndeterminate.cpp
+  This file is Lottie-generated C++ code; the values below are the baked-in
+  constants produced by the Lottie compiler. Upstream PR reference:
+    microsoft/microsoft-ui-xaml #1858 ("ProgressRing Indeterminate State with
+    Lottie Animations", by karkarl)
+
+Doc reference:
+  learn.microsoft.com/en-us/windows/apps/develop/ui/controls/progress-controls
+
+--------------------------------------------------------------------------
+1. Timing
+--------------------------------------------------------------------------
+Full indeterminate cycle duration : 20000000L hundred-nanosecond ticks
+                                  = 2.0 seconds
+Normalized progress parameter     : t in [0, 1]
+Lottie renders at whatever host fps; the implementation here samples at
+~60 fps (16 ms per frame, 125 frames per cycle).
+
+--------------------------------------------------------------------------
+2. Canvas and geometry (Lottie design units)
+--------------------------------------------------------------------------
+Visual size        : 80.0 x 80.0
+Transform offset   : (40, 40)                (ring is centered in canvas)
+Base ellipse radius: 7.0 on both axes
+Shape scale factor : 5.0                      (applied to the whole shape)
+Effective radius   : 7.0 * 5.0 = 35.0         (stroke centerline radius)
+Stroke thickness   : 1.5                      (pre-scale, in design units)
+Effective stroke   : 1.5 * 5.0 = 7.5          (on the 80x80 canvas)
+
+Derived proportions:
+  radius   / diameter = 35.0 / 80.0 = 0.4375   (about 44% of diameter)
+  stroke   / diameter =  7.5 / 80.0 = 0.09375  (about 9.4% of diameter)
+  ring outer edge     = (35.0 + 7.5/2) / 80.0 = 0.48 of diameter
+
+Line caps                   : round (Lottie stroke rounds by default)
+One ellipse has TrimEnd fixed at 0.5; the other is animated.
+
+--------------------------------------------------------------------------
+3. Animated properties (keyframes over t)
+--------------------------------------------------------------------------
+RotationAngleInDegrees (scalar, linear)
+  t=0.0  -> 0.0     deg
+  t=0.5  -> 450.0   deg
+  t=1.0  -> 900.0   deg                       (2.5 full turns per cycle)
+
+TrimEnd (scalar, piecewise)
+  t=0.0  -> 9.99999975e-05 (~0.0)
+  t=0.5  -> 0.5
+  t=1.0  -> 0.5                               (flat during second half)
+
+TrimStart (scalar, piecewise)
+  t=0.0  -> 0.0
+  t=0.5  -> 0.0                               (flat during first half)
+  t=1.0  -> 0.5
+
+Opacity0 fade-in  (0 -> 1, step at t=0.5, IsFinalStepSingleFrame(true))
+Opacity0 fade-out (1 -> 0, step at t=0.5, IsFinalStepSingleFrame(true))
+
+--------------------------------------------------------------------------
+4. Easing
+--------------------------------------------------------------------------
+All scalar property animations use one cubic-Bezier easing:
+  Control point 1: (0.166999996, 0.166999996)
+  Control point 2: (0.833000004, 0.833000004)
+Both control points lie on the line y = x, so the resulting curve is the
+identity / linear for all practical purposes. Treat as linear.
+
+Opacity transitions use step easing (no interpolation), with
+IsFinalStepSingleFrame(true).
+
+--------------------------------------------------------------------------
+5. Resulting visual behavior per cycle
+--------------------------------------------------------------------------
+Derived arc span from TrimStart/TrimEnd:
+  span(t) = (TrimEnd(t) - TrimStart(t)) * 360 deg
+
+First half  (t in [0, 0.5]):
+  TrimStart = 0; TrimEnd grows 0 -> 0.5
+  -> arc sweep grows from 0 deg to 180 deg
+  -> whole path rotates 0 deg -> 450 deg
+  Visual: a tiny arc appears and grows into a half-circle while spinning.
+
+Second half (t in [0.5, 1]):
+  TrimStart grows 0 -> 0.5; TrimEnd stays at 0.5
+  -> arc sweep shrinks from 180 deg back to 0 deg
+  -> whole path rotates 450 deg -> 900 deg
+  Visual: the trailing end catches up, the arc shrinks to nothing while
+  still rotating.
+
+At t=1 the arc is invisible and centered at the same direction (angle 0
+mod 360) as at t=0; the loop wraps seamlessly.
+
+--------------------------------------------------------------------------
+6. Mapping in this port (ntoskrnl/inbv/inbvgop.c)
+--------------------------------------------------------------------------
+The port rasterizes directly into the GOP framebuffer; no Lottie runtime,
+no composition engine. The ring is scaled to a 48x48 bbox (BBOX_HALF = 26
+pixels of safe margin around the stroke annulus).
+
+Constants that realize the spec (values as of current source):
+  INBV_SPINNER_FRAME_MS         16         (~60 fps sampling target)
+  INBV_SPINNER_PERIOD_MS        2800       (deviation from spec: spec is 2000;
+                                            bumped for perceived cadence on
+                                            virtualized hosts -- see sec. 7)
+  INBV_SPINNER_STEPS            rounded = (PERIOD_MS + FRAME_MS/2) / FRAME_MS
+                                          = (2800 + 8) / 16 = 175 frames
+  INBV_SPINNER_PERIOD_100NS     PERIOD_MS * 10000                (wall-clock)
+  INBV_SPINNER_RING_RADIUS      20 px      (35/80 * 48 ~= 21, rounded down)
+  INBV_SPINNER_STROKE_HALF_Q8   640 (8.8)  (stroke half-width = 2.5 px)
+  INBV_SPINNER_BBOX_HALF        26 px      (ring + stroke + AA margin)
+  INBV_SPINNER_MAX_ROTATION_DEG 900.0f     (== spec)
+  INBV_SPINNER_MAX_TRIM         0.5f       (== spec)
+
+Keyframe tables in InbvGopSpinnerBuildFrame exactly mirror sections 3 & 4:
+  RotationTimes  = { 0.0, 0.5, 1.0 },  RotationVals  = { 0.0, 450.0, 900.0 }
+  TrimEndTimes   = { 0.0, 0.5, 1.0 },  TrimEndVals   = { 0.0, 0.5,   0.5   }
+  TrimStartTimes = { 0.0, 0.5, 1.0 },  TrimStartVals = { 0.0, 0.0,   0.5   }
+Linear interpolation (InbvPiecewise) -- matches the quasi-linear cubic Bezier.
+
+Rasterization approach:
+  - Arc stroke: annulus [R - s, R + s] AND angular sector [A_start, A_end]
+    * Radial AA:     integer-sqrt-based 1-px coverage band around the
+                     stroke centerline.
+    * Angular test:  cross-product signs at both endpoints. Span is always
+                     in [0, 180] deg by construction of TrimStart/TrimEnd,
+                     so "cross_start >= 0 AND cross_end <= 0" picks the
+                     minor arc correctly (no wide-arc inversion needed).
+  - Round line caps: two filled discs of radius = stroke half-width placed
+                     at each arc endpoint, AA'd via squared-distance band.
+  - Per-pixel gray value (0..255) is packed to framebuffer format through
+    a 256-entry GrayLut built once in InbvGopSpinnerSetup.
+
+Each of the 125 frames is rasterized once into a non-paged-pool buffer at
+setup; the spinner thread only does one VidBufferToScreenBlt per frame
+under a single InbvAcquireLock/InbvReleaseLock pair. Frame index is driven
+by wall-clock time (KeQueryInterruptTime) so the cycle stays locked to
+2000 ms regardless of thread-scheduling jitter on virtualized hosts.
+
+--------------------------------------------------------------------------
+7. Notes / divergences
+--------------------------------------------------------------------------
+- Fill colors: the Lottie visual exposes winrt::Color foreground/background
+  parameters for theming; this port hardcodes white stroke on the existing
+  framebuffer background (no per-instance theming in an early-boot path).
+- Opacity keyframes from section 3 are not applied here: they exist in
+  Lottie for scene compositing with other UI (e.g., fade-in on show), which
+  is irrelevant in the kernel boot display path.
+- Determinate ProgressRing (section 2 of the upstream source) is not ported
+  -- this implementation only covers the indeterminate variant since the
+  boot UI has no progress value to report at this stage.
+- Cycle duration diverges intentionally: INBV_SPINNER_PERIOD_MS = 2800 vs
+  the Microsoft spec's 2000. Rationale: on virtualized boot (VBox/QEMU)
+  the 2-second cadence feels notably faster than on bare-metal Windows
+  because of different compositor pipelines and frame pacing upstream of
+  the kernel UI; 2800 ms restores the "relaxed" perception. Drop back to
+  2000 to match stock Windows behavior byte-for-byte.
