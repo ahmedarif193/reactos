@@ -687,7 +687,6 @@ InbvGopHandleBootBitmap(
 {
     LOADER_PARAMETER_FRAMEBUFFER FbInfo;
     ULONG Width, Height;
-    BOOLEAN BgrtActive;
     BOOLEAN WordmarkDrawn;
 
     if (!InbvGopQueryInfo(&FbInfo))
@@ -695,8 +694,6 @@ InbvGopHandleBootBitmap(
 
     Width = FbInfo.HorizontalResolution;
     Height = FbInfo.VerticalResolution;
-    BgrtActive = InbvQueryBgrtInfo(NULL);
-    UNREFERENCED_PARAMETER(BgrtActive);
 
     if (TextMode)
     {
