@@ -3295,4 +3295,3 @@ static const unsigned char g_ReactOSGopLogoBmp[] = {
 };
 
 static const unsigned int g_ReactOSGopLogoBmpSize = sizeof(g_ReactOSGopLogoBmp);
-unsigned int _tmp_reactos_gop_logo_bmp_len = 39478;
