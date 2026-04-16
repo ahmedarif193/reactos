@@ -46,9 +46,20 @@ typedef struct _NTFSLX_TIER0_PROOF
 } NTFSLX_TIER0_PROOF, *PNTFSLX_TIER0_PROOF;
 
 #define TLOG(fmt, ...) DbgPrint("NTFSLX-TEST: " fmt, ##__VA_ARGS__)
+
+#ifndef NTFSLX_TEST_LOG_SUCCESS
+#define NTFSLX_TEST_LOG_SUCCESS 0
+#endif
+
+#if NTFSLX_TEST_LOG_SUCCESS
+#define TOK_SUCCESS(fmt, ...) DbgPrint("NTFSLX-TEST [success]: " fmt, ##__VA_ARGS__)
+#else
+#define TOK_SUCCESS(fmt, ...) ((void)0)
+#endif
+
 #define TOK(cond, fmt, ...) do { \
     if (!(cond)) DbgPrint("NTFSLX-TEST [fail]: " fmt, ##__VA_ARGS__); \
-    else DbgPrint("NTFSLX-TEST [success]: " fmt, ##__VA_ARGS__); \
+    else TOK_SUCCESS(fmt, ##__VA_ARGS__); \
 } while(0)
 
 #define TEST_BIG_BYTES   2048
@@ -2409,6 +2420,10 @@ LongSuitePhaseB:
     {
         FILE_INTERNAL_INFORMATION Internal1 = {0};
         FILE_INTERNAL_INFORMATION Internal2 = {0};
+        UCHAR AllInfo1Buffer[sizeof(FILE_ALL_INFORMATION) + 128 * sizeof(WCHAR)];
+        UCHAR AllInfo2Buffer[sizeof(FILE_ALL_INFORMATION) + 128 * sizeof(WCHAR)];
+        PFILE_ALL_INFORMATION AllInfo1 = (PFILE_ALL_INFORMATION)AllInfo1Buffer;
+        PFILE_ALL_INFORMATION AllInfo2 = (PFILE_ALL_INFORMATION)AllInfo2Buffer;
 
         St = OpenNtfs(L"\\??\\D:\\kmtest_reuse.bin",
                       GENERIC_READ | GENERIC_WRITE | DELETE | SYNCHRONIZE,
@@ -2419,6 +2434,19 @@ LongSuitePhaseB:
             St = ZwQueryInformationFile(h, &IoSb, &Internal1, sizeof(Internal1),
                                         FileInternalInformation);
             TOK(NT_SUCCESS(St), "reuse: first internal info: 0x%08lx\n", St);
+
+            RtlZeroMemory(AllInfo1Buffer, sizeof(AllInfo1Buffer));
+            St = ZwQueryInformationFile(h, &IoSb, AllInfo1Buffer, sizeof(AllInfo1Buffer),
+                                        FileAllInformation);
+            TOK(NT_SUCCESS(St), "reuse: first all info: 0x%08lx\n", St);
+            if (NT_SUCCESS(St))
+            {
+                TOK(AllInfo1->InternalInformation.IndexNumber.QuadPart ==
+                        Internal1.IndexNumber.QuadPart,
+                    "reuse: first all/internal FileId match all=0x%I64x internal=0x%I64x\n",
+                    AllInfo1->InternalInformation.IndexNumber.QuadPart,
+                    Internal1.IndexNumber.QuadPart);
+            }
             ZwClose(h);
 
             UnlinkByPath(L"\\??\\D:\\kmtest_reuse.bin");
@@ -2432,6 +2460,19 @@ LongSuitePhaseB:
                 St = ZwQueryInformationFile(h, &IoSb, &Internal2, sizeof(Internal2),
                                             FileInternalInformation);
                 TOK(NT_SUCCESS(St), "reuse: second internal info: 0x%08lx\n", St);
+
+                RtlZeroMemory(AllInfo2Buffer, sizeof(AllInfo2Buffer));
+                St = ZwQueryInformationFile(h, &IoSb, AllInfo2Buffer, sizeof(AllInfo2Buffer),
+                                            FileAllInformation);
+                TOK(NT_SUCCESS(St), "reuse: second all info: 0x%08lx\n", St);
+                if (NT_SUCCESS(St))
+                {
+                    TOK(AllInfo2->InternalInformation.IndexNumber.QuadPart ==
+                            Internal2.IndexNumber.QuadPart,
+                        "reuse: second all/internal FileId match all=0x%I64x internal=0x%I64x\n",
+                        AllInfo2->InternalInformation.IndexNumber.QuadPart,
+                        Internal2.IndexNumber.QuadPart);
+                }
                 ZwClose(h);
             }
         }
@@ -2440,7 +2481,6 @@ LongSuitePhaseB:
             Internal1.IndexNumber.QuadPart, Internal2.IndexNumber.QuadPart);
     }
     UnlinkByPath(L"\\??\\D:\\kmtest_reuse.bin");
-
     /*
      * ==========================================================
      * 10.23 FileBasicInformation sentinel values (-1 = no-change)

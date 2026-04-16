@@ -182,6 +182,321 @@ NtfslxBuildSiblingFullPath(
 }
 
 static
+BOOLEAN
+NtfslxPathPrefixEqualsInsensitive(
+    _In_reads_(PrefixLength) PCWSTR Path,
+    _In_ ULONG PathLength,
+    _In_reads_(PrefixLength) PCWSTR Prefix,
+    _In_ ULONG PrefixLength)
+{
+    ULONG Index;
+
+    if (Path == NULL || Prefix == NULL || PathLength < PrefixLength)
+    {
+        return FALSE;
+    }
+
+    for (Index = 0; Index < PrefixLength; ++Index)
+    {
+        if (RtlUpcaseUnicodeChar(Path[Index]) !=
+            RtlUpcaseUnicodeChar(Prefix[Index]))
+        {
+            return FALSE;
+        }
+    }
+
+    return TRUE;
+}
+
+static
+NTSTATUS
+NtfslxBuildChildFullPath(
+    _In_ PCUNICODE_STRING DirectoryPath,
+    _In_reads_(RelativePathLength) PCWSTR RelativePath,
+    _In_ ULONG RelativePathLength,
+    _Out_writes_(BufferCount) PWCHAR Buffer,
+    _In_ ULONG BufferCount,
+    _Out_ PUNICODE_STRING FullPath)
+{
+    ULONG DirectoryChars;
+    ULONG PrefixChars;
+    ULONG TotalChars;
+
+    if (DirectoryPath == NULL ||
+        DirectoryPath->Buffer == NULL ||
+        DirectoryPath->Length < sizeof(WCHAR) ||
+        DirectoryPath->Buffer[0] != L'\\' ||
+        RelativePath == NULL ||
+        RelativePathLength == 0 ||
+        RelativePath[0] == L'\\' ||
+        Buffer == NULL ||
+        BufferCount == 0 ||
+        FullPath == NULL)
+    {
+        return STATUS_INVALID_PARAMETER;
+    }
+
+    DirectoryChars = DirectoryPath->Length / sizeof(WCHAR);
+    PrefixChars = DirectoryChars;
+    TotalChars = DirectoryChars + RelativePathLength;
+    if (!(DirectoryChars == 1 && DirectoryPath->Buffer[0] == L'\\'))
+    {
+        TotalChars += 1;
+    }
+
+    if (TotalChars >= BufferCount)
+    {
+        return STATUS_BUFFER_OVERFLOW;
+    }
+
+    RtlCopyMemory(Buffer, DirectoryPath->Buffer, DirectoryPath->Length);
+    if (!(DirectoryChars == 1 && DirectoryPath->Buffer[0] == L'\\'))
+    {
+        Buffer[PrefixChars++] = L'\\';
+    }
+
+    RtlCopyMemory(&Buffer[PrefixChars], RelativePath, RelativePathLength * sizeof(WCHAR));
+    Buffer[TotalChars] = UNICODE_NULL;
+
+    FullPath->Buffer = Buffer;
+    FullPath->Length = (USHORT)(TotalChars * sizeof(WCHAR));
+    FullPath->MaximumLength = (USHORT)(BufferCount * sizeof(WCHAR));
+    return STATUS_SUCCESS;
+}
+
+static
+NTSTATUS
+NtfslxSplitFullPath(
+    _In_ PCUNICODE_STRING FullPath,
+    _Out_ PUNICODE_STRING ParentPath,
+    _Out_ PUNICODE_STRING FinalComponent)
+{
+    USHORT LastBackslash;
+    USHORT Index;
+
+    if (FullPath == NULL ||
+        FullPath->Buffer == NULL ||
+        FullPath->Length < 2 * sizeof(WCHAR) ||
+        FullPath->Buffer[0] != L'\\' ||
+        ParentPath == NULL ||
+        FinalComponent == NULL)
+    {
+        return STATUS_INVALID_PARAMETER;
+    }
+
+    LastBackslash = 0;
+    for (Index = 0; Index < FullPath->Length / sizeof(WCHAR); ++Index)
+    {
+        if (FullPath->Buffer[Index] == L'\\')
+        {
+            LastBackslash = Index;
+        }
+    }
+
+    if (LastBackslash == (FullPath->Length / sizeof(WCHAR)) - 1)
+    {
+        return STATUS_OBJECT_NAME_INVALID;
+    }
+
+    if (LastBackslash == 0)
+    {
+        ParentPath->Buffer = FullPath->Buffer;
+        ParentPath->Length = sizeof(WCHAR);
+        ParentPath->MaximumLength = sizeof(WCHAR);
+
+        FinalComponent->Buffer = FullPath->Buffer + 1;
+        FinalComponent->Length = FullPath->Length - sizeof(WCHAR);
+        FinalComponent->MaximumLength = FinalComponent->Length;
+    }
+    else
+    {
+        ParentPath->Buffer = FullPath->Buffer;
+        ParentPath->Length = LastBackslash * sizeof(WCHAR);
+        ParentPath->MaximumLength = ParentPath->Length;
+
+        FinalComponent->Buffer = FullPath->Buffer + LastBackslash + 1;
+        FinalComponent->Length = FullPath->Length - (LastBackslash + 1) * sizeof(WCHAR);
+        FinalComponent->MaximumLength = FinalComponent->Length;
+    }
+
+    if (FinalComponent->Length == 0)
+    {
+        return STATUS_OBJECT_NAME_INVALID;
+    }
+
+    return STATUS_SUCCESS;
+}
+
+static
+NTSTATUS
+NtfslxNormalizeRenameDestinationPath(
+    _In_ PNTFSLX_DEVICE_EXTENSION DeviceExtension,
+    _In_ PNTFSLX_FILE_CONTEXT FileContext,
+    _In_ PFILE_RENAME_INFORMATION RenameInfo,
+    _In_ KPROCESSOR_MODE RequestorMode,
+    _Out_writes_(BufferCount) PWCHAR Buffer,
+    _In_ ULONG BufferCount,
+    _Out_ PUNICODE_STRING FullPath)
+{
+    NTSTATUS Status;
+    UNICODE_STRING DosName;
+    PFILE_OBJECT RootFileObject;
+    PNTFSLX_FILE_CONTEXT RootContext;
+    PCWSTR Name;
+    ULONG NameLength;
+
+    if (DeviceExtension == NULL ||
+        FileContext == NULL ||
+        RenameInfo == NULL ||
+        Buffer == NULL ||
+        BufferCount == 0 ||
+        FullPath == NULL ||
+        RenameInfo->FileNameLength == 0)
+    {
+        return STATUS_INVALID_PARAMETER;
+    }
+
+    RtlZeroMemory(&DosName, sizeof(DosName));
+    RootFileObject = NULL;
+    RootContext = NULL;
+    Name = RenameInfo->FileName;
+    NameLength = RenameInfo->FileNameLength / sizeof(WCHAR);
+
+    if (RenameInfo->RootDirectory != NULL)
+    {
+        if (Name[0] == L'\\')
+        {
+            return STATUS_OBJECT_NAME_INVALID;
+        }
+
+        Status = ObReferenceObjectByHandle(RenameInfo->RootDirectory,
+                                           0,
+                                           *IoFileObjectType,
+                                           RequestorMode,
+                                           (PVOID *)&RootFileObject,
+                                           NULL);
+        if (!NT_SUCCESS(Status))
+        {
+            goto Cleanup;
+        }
+
+        Status = NtfslxValidateOpenFileObject(RootFileObject, &RootContext);
+        if (!NT_SUCCESS(Status))
+        {
+            goto Cleanup;
+        }
+
+        if (!RootContext->IsDirectory)
+        {
+            Status = STATUS_NOT_A_DIRECTORY;
+            goto Cleanup;
+        }
+
+        if (RootContext->DeviceExtension != DeviceExtension)
+        {
+            Status = STATUS_NOT_SAME_DEVICE;
+            goto Cleanup;
+        }
+
+        Status = NtfslxBuildChildFullPath(&RootContext->FullPath,
+                                          Name,
+                                          NameLength,
+                                          Buffer,
+                                          BufferCount,
+                                          FullPath);
+        goto Cleanup;
+    }
+
+    if (NameLength >= 4 &&
+        Name[0] == L'\\' &&
+        Name[1] == L'?' &&
+        Name[2] == L'?' &&
+        Name[3] == L'\\')
+    {
+        Name += 4;
+        NameLength -= 4;
+    }
+
+    if (NameLength >= 2 &&
+        (((Name[0] >= L'A') && (Name[0] <= L'Z')) ||
+         ((Name[0] >= L'a') && (Name[0] <= L'z'))) &&
+        Name[1] == L':')
+    {
+        ULONG DosChars;
+
+        Status = IoVolumeDeviceToDosName(DeviceExtension->StorageDevice,
+                                         &DosName);
+        if (!NT_SUCCESS(Status))
+        {
+            goto Cleanup;
+        }
+
+        DosChars = DosName.Length / sizeof(WCHAR);
+        if (DosChars == 0 ||
+            !NtfslxPathPrefixEqualsInsensitive(Name,
+                                               NameLength,
+                                               DosName.Buffer,
+                                               DosChars))
+        {
+            Status = STATUS_NOT_SAME_DEVICE;
+            goto Cleanup;
+        }
+
+        if (NameLength == DosChars || Name[DosChars] != L'\\')
+        {
+            Status = STATUS_OBJECT_NAME_INVALID;
+            goto Cleanup;
+        }
+
+        Name += DosChars;
+        NameLength -= DosChars;
+    }
+
+    if (NameLength == 0)
+    {
+        Status = STATUS_OBJECT_NAME_INVALID;
+        goto Cleanup;
+    }
+
+    if (Name[0] == L'\\')
+    {
+        if (NameLength >= BufferCount)
+        {
+            Status = STATUS_BUFFER_OVERFLOW;
+            goto Cleanup;
+        }
+
+        RtlCopyMemory(Buffer, Name, NameLength * sizeof(WCHAR));
+        Buffer[NameLength] = UNICODE_NULL;
+        FullPath->Buffer = Buffer;
+        FullPath->Length = (USHORT)(NameLength * sizeof(WCHAR));
+        FullPath->MaximumLength = (USHORT)(BufferCount * sizeof(WCHAR));
+        Status = STATUS_SUCCESS;
+        goto Cleanup;
+    }
+
+    Status = NtfslxBuildSiblingFullPath(FileContext,
+                                        Name,
+                                        NameLength,
+                                        Buffer,
+                                        BufferCount,
+                                        FullPath);
+
+Cleanup:
+    if (RootFileObject != NULL)
+    {
+        ObDereferenceObject(RootFileObject);
+    }
+
+    if (DosName.Buffer != NULL)
+    {
+        ExFreePool(DosName.Buffer);
+    }
+
+    return Status;
+}
+
+static
 PCSTR
 NtfslxDirectoryInfoClassName(
     _In_ FILE_INFORMATION_CLASS FileInformationClass)
@@ -982,15 +1297,25 @@ NtfslxCreate(
     ULONG StreamNameLength;
     ULONG AttributeType;
     ULONGLONG MftIndex;
+    ULONGLONG ExistingMftIndex;
     BOOLEAN HadTrailingBackslash;
     BOOLEAN NotifyCreated;
+    BOOLEAN OpenTargetDirectory;
+    ULONG_PTR CreateResult;
+    UNICODE_STRING TargetParentPath;
+    UNICODE_STRING TargetLeafName;
     NTSTATUS Status;
 
     HadTrailingBackslash = FALSE;
     NotifyCreated = FALSE;
+    OpenTargetDirectory = FALSE;
+    CreateResult = FILE_OPENED;
+    RtlZeroMemory(&TargetParentPath, sizeof(TargetParentPath));
+    RtlZeroMemory(&TargetLeafName, sizeof(TargetLeafName));
 
     Stack = IoGetCurrentIrpStackLocation(Irp);
     DeviceExtension = DeviceObject->DeviceExtension;
+    OpenTargetDirectory = BooleanFlagOn(Stack->Flags, SL_OPEN_TARGET_DIRECTORY);
 
     if (Stack->FileObject == NULL)
     {
@@ -1052,6 +1377,67 @@ NtfslxCreate(
         DbgPrint("ntfslx: Create normalized trailing slash name='%wZ' base='%wZ'\n",
                  &Stack->FileObject->FileName,
                  &BasePath);
+    }
+
+    if (OpenTargetDirectory)
+    {
+        if (BasePath.Length <= sizeof(WCHAR) &&
+            BasePath.Buffer[0] == L'\\')
+        {
+            return NtfslxCompleteRequest(Irp, STATUS_INVALID_PARAMETER, 0);
+        }
+
+        Status = NtfslxSplitFullPath(&BasePath,
+                                     &TargetParentPath,
+                                     &TargetLeafName);
+        if (!NT_SUCCESS(Status))
+        {
+            DbgPrint("ntfslx: Create target-dir split failed target='%wZ' status=0x%08lx\n",
+                     &BasePath,
+                     Status);
+            return NtfslxCompleteRequest(Irp, Status, 0);
+        }
+
+        Status = NtfslxResolvePathToMftIndex(DeviceExtension,
+                                             &TargetParentPath,
+                                             &MftIndex);
+        if (!NT_SUCCESS(Status))
+        {
+            DbgPrint("ntfslx: Create target-dir resolve parent failed parent='%wZ' status=0x%08lx\n",
+                     &TargetParentPath,
+                     Status);
+            return NtfslxCompleteRequest(Irp, Status, 0);
+        }
+
+        Status = NtfslxResolvePathToMftIndex(DeviceExtension,
+                                             &BasePath,
+                                             &ExistingMftIndex);
+        if (NT_SUCCESS(Status))
+        {
+            CreateResult = FILE_EXISTS;
+        }
+        else if (Status == STATUS_OBJECT_NAME_NOT_FOUND ||
+                 Status == STATUS_OBJECT_PATH_NOT_FOUND)
+        {
+            CreateResult = FILE_DOES_NOT_EXIST;
+            Status = STATUS_SUCCESS;
+        }
+        else
+        {
+            DbgPrint("ntfslx: Create target-dir probe failed target='%wZ' status=0x%08lx\n",
+                     &BasePath,
+                     Status);
+            return NtfslxCompleteRequest(Irp, Status, 0);
+        }
+
+        DbgPrint("ntfslx: Create target-dir target='%wZ' parent='%wZ' leaf='%wZ' result=%Iu\n",
+                 &BasePath,
+                 &TargetParentPath,
+                 &TargetLeafName,
+                 CreateResult);
+
+        BasePath = TargetParentPath;
+        goto OpenByIndex;
     }
 
     Status = NtfslxResolvePathToMftIndex(DeviceExtension,
@@ -1306,6 +1692,10 @@ OpenByIndex:
         {
             Status = STATUS_NOT_A_DIRECTORY;
         }
+        else if (OpenTargetDirectory && !FileContext->IsDirectory)
+        {
+            Status = STATUS_NOT_A_DIRECTORY;
+        }
         else if (FlagOn(Stack->Parameters.Create.Options, FILE_DIRECTORY_FILE) &&
                  !FileContext->IsDirectory)
         {
@@ -1376,7 +1766,6 @@ OpenByIndex:
      */
     {
         ULONG CreateDisposition = (Stack->Parameters.Create.Options >> 24) & 0xFF;
-        ULONG CreateResult = FILE_OPENED;
 
         if (FlagOn(Stack->Parameters.Create.Options, FILE_DELETE_ON_CLOSE))
         {
@@ -3027,130 +3416,171 @@ NtfslxSetInformation(
         }
         {
             PFILE_RENAME_INFORMATION RenameInfo = SystemBuffer;
-            PCWSTR RawName;
-            ULONG RawNameLen;
-            ULONGLONG ParentMft;
             WCHAR OldName[256];
+            WCHAR NewFullBuffer[512];
             ULONG OldNameLen;
+            ULONGLONG OldParentMft;
+            ULONGLONG NewParentMft;
+            ULONGLONG ExistingMft;
+            ULONGLONG NewParentReference;
             PNTFSLX_ATTR_RECORD FnAttr;
             PNTFSLX_FILE_NAME_ATTRIBUTE FnValue;
+            PNTFSLX_MFT_RECORD NewParentRecord;
+            UNICODE_STRING NewFullPath;
+            UNICODE_STRING NewParentPath;
+            UNICODE_STRING NewLeafName;
+            LARGE_INTEGER Now;
             ULONG NewValueLength;
             ULONG NewAttrLength;
-            LARGE_INTEGER Now;
-            ULONG I;
-            BOOLEAN ContainsSlash = FALSE;
+            ULONG NotifyFilter;
 
-            if (Length < FIELD_OFFSET(FILE_RENAME_INFORMATION, FileName) +
-                         RenameInfo->FileNameLength)
+            NewParentRecord = NULL;
+            RtlZeroMemory(&NewFullPath, sizeof(NewFullPath));
+            RtlZeroMemory(&NewParentPath, sizeof(NewParentPath));
+            RtlZeroMemory(&NewLeafName, sizeof(NewLeafName));
+
+            do
             {
-                Status = STATUS_INFO_LENGTH_MISMATCH;
-                break;
-            }
-
-            if (RenameInfo->RootDirectory != NULL)
-            {
-                DbgPrint("ntfslx: Rename with RootDirectory handle not supported\n");
-                Status = STATUS_NOT_IMPLEMENTED;
-                break;
-            }
-
-            RawName = RenameInfo->FileName;
-            RawNameLen = RenameInfo->FileNameLength / sizeof(WCHAR);
-
-            /* Strip leading backslash if present (absolute path). */
-            if (RawNameLen > 0 && RawName[0] == L'\\')
-            {
-                RawName++;
-                RawNameLen--;
-            }
-
-            /* Same-directory only: new name must not contain a backslash. */
-            for (I = 0; I < RawNameLen; I++)
-            {
-                if (RawName[I] == L'\\')
+                if (Length < FIELD_OFFSET(FILE_RENAME_INFORMATION, FileName) +
+                             RenameInfo->FileNameLength)
                 {
-                    ContainsSlash = TRUE;
+                    Status = STATUS_INFO_LENGTH_MISMATCH;
                     break;
                 }
-            }
-            if (ContainsSlash || RawNameLen == 0 || RawNameLen > 255)
-            {
-                DbgPrint("ntfslx: Rename: cross-directory or invalid name (len=%lu slash=%u)\n",
-                         RawNameLen, ContainsSlash);
-                Status = STATUS_NOT_IMPLEMENTED;
-                break;
-            }
 
-            /*
-             * Prefer the parent MFT index cached at Create time. It was
-             * resolved from the split parent path while the UNICODE_STRING
-             * from the caller was still on hand, so it isn't affected by
-             * stale on-disk $FILE_NAME fields or hardlink aliasing. Only
-             * fall back to the record-extracted path for unusual opens
-             * that never populated the cache.
-             */
-            ParentMft = FileContext->ParentMftIndex;
-            Status = STATUS_SUCCESS;
-            if (ParentMft == NTFSLX_FILE_ROOT &&
-                FileContext->MftIndex != NTFSLX_FILE_ROOT)
-            {
-                ULONGLONG RecordParent = NTFSLX_FILE_ROOT;
-                NTSTATUS LookupStatus =
-                    NtfslxLookupParentIndexFromRecord(FileContext->FileRecord,
-                                                      &RecordParent);
-                if (NT_SUCCESS(LookupStatus) && RecordParent != NTFSLX_FILE_ROOT)
-                {
-                    ParentMft = RecordParent;
-                }
-                else if (!NT_SUCCESS(LookupStatus))
-                {
-                    DbgPrint("ntfslx: Rename: LookupParentIndex fallback failed 0x%08lx\n",
-                             LookupStatus);
-                    Status = LookupStatus;
-                    break;
-                }
-            }
-
-            Status = NtfslxExtractPrimaryFileName(FileContext->FileRecord,
-                                                   OldName, &OldNameLen);
-            if (!NT_SUCCESS(Status))
-            {
-                DbgPrint("ntfslx: Rename: ExtractPrimaryFileName failed 0x%08lx\n", Status);
-                break;
-            }
-
-            DbgPrint("ntfslx: Rename mft=%I64u parent=%I64u '%.*S' -> '%.*S'\n",
-                     FileContext->MftIndex, ParentMft,
-                     OldNameLen, OldName, RawNameLen, RawName);
-
-            /* If the new name equals the old name, nothing to do. */
-            if (RawNameLen == OldNameLen &&
-                RtlCompareMemory(RawName, OldName, RawNameLen * sizeof(WCHAR)) ==
-                    RawNameLen * sizeof(WCHAR))
-            {
-                DbgPrint("ntfslx: Rename: identical name, no-op\n");
-                Status = STATUS_SUCCESS;
-                break;
-            }
-
-            /*
-             * Collision check BEFORE mutating anything. Build the new
-             * absolute path and try to resolve it.
-             */
-            {
-                UNICODE_STRING NewFullPath;
-                WCHAR NewFullBuffer[260];
-                ULONGLONG ExistingMft;
-
-                Status = NtfslxBuildSiblingFullPath(FileContext,
-                                                    RawName,
-                                                    RawNameLen,
-                                                    NewFullBuffer,
-                                                    RTL_NUMBER_OF(NewFullBuffer),
-                                                    &NewFullPath);
+                Status = NtfslxNormalizeRenameDestinationPath(DeviceExtension,
+                                                              FileContext,
+                                                              RenameInfo,
+                                                              Irp->RequestorMode,
+                                                              NewFullBuffer,
+                                                              RTL_NUMBER_OF(NewFullBuffer),
+                                                              &NewFullPath);
                 if (!NT_SUCCESS(Status))
                 {
-                    DbgPrint("ntfslx: Rename: build sibling path failed 0x%08lx\n", Status);
+                    DbgPrint("ntfslx: Rename: normalize target failed 0x%08lx len=%lu root=%p\n",
+                             Status,
+                             RenameInfo->FileNameLength,
+                             RenameInfo->RootDirectory);
+                    break;
+                }
+
+                Status = NtfslxSplitFullPath(&NewFullPath,
+                                             &NewParentPath,
+                                             &NewLeafName);
+                if (!NT_SUCCESS(Status))
+                {
+                    DbgPrint("ntfslx: Rename: split target '%wZ' failed 0x%08lx\n",
+                             &NewFullPath,
+                             Status);
+                    break;
+                }
+
+                OldParentMft = FileContext->ParentMftIndex;
+                if (OldParentMft == NTFSLX_FILE_ROOT &&
+                    FileContext->MftIndex != NTFSLX_FILE_ROOT)
+                {
+                    ULONGLONG RecordParent = NTFSLX_FILE_ROOT;
+                    NTSTATUS LookupStatus;
+
+                    LookupStatus = NtfslxLookupParentIndexFromRecord(FileContext->FileRecord,
+                                                                     &RecordParent);
+                    if (NT_SUCCESS(LookupStatus) &&
+                        RecordParent != NTFSLX_FILE_ROOT)
+                    {
+                        OldParentMft = RecordParent;
+                    }
+                    else if (!NT_SUCCESS(LookupStatus))
+                    {
+                        DbgPrint("ntfslx: Rename: LookupParentIndex fallback failed 0x%08lx\n",
+                                 LookupStatus);
+                        Status = LookupStatus;
+                        break;
+                    }
+                }
+
+                Status = NtfslxResolvePathToMftIndex(DeviceExtension,
+                                                     &NewParentPath,
+                                                     &NewParentMft);
+                if (!NT_SUCCESS(Status))
+                {
+                    DbgPrint("ntfslx: Rename: resolve parent '%wZ' failed 0x%08lx\n",
+                             &NewParentPath,
+                             Status);
+                    break;
+                }
+
+                if (FileContext->IsDirectory &&
+                    FileContext->FullPath.Buffer != NULL &&
+                    RtlPrefixUnicodeString(&FileContext->FullPath,
+                                           &NewParentPath,
+                                           TRUE) &&
+                    (NewParentPath.Length == FileContext->FullPath.Length ||
+                     NewParentPath.Buffer[FileContext->FullPath.Length / sizeof(WCHAR)] == L'\\'))
+                {
+                    DbgPrint("ntfslx: Rename: refusing to move directory '%wZ' into '%wZ'\n",
+                             &FileContext->FullPath,
+                             &NewParentPath);
+                    Status = STATUS_ACCESS_DENIED;
+                    break;
+                }
+
+                NewParentRecord = ExAllocatePoolWithTag(NonPagedPool,
+                                                        DeviceExtension->VolumeInfo.BytesPerFileRecord,
+                                                        NTFSLX_TAG);
+                if (NewParentRecord == NULL)
+                {
+                    Status = STATUS_INSUFFICIENT_RESOURCES;
+                    break;
+                }
+
+                Status = NtfslxReadMftRecord(DeviceExtension->StorageDevice,
+                                             &DeviceExtension->VolumeInfo,
+                                             DeviceExtension->MftRunlist,
+                                             NewParentMft,
+                                             NewParentRecord);
+                if (!NT_SUCCESS(Status))
+                {
+                    DbgPrint("ntfslx: Rename: read new parent %I64u failed 0x%08lx\n",
+                             NewParentMft,
+                             Status);
+                    break;
+                }
+
+                if ((NewParentRecord->Flags & NTFSLX_MFT_RECORD_IS_DIRECTORY) == 0)
+                {
+                    Status = STATUS_NOT_A_DIRECTORY;
+                    break;
+                }
+
+                NewParentReference = MK_MREF(NewParentMft,
+                                             NewParentRecord->SequenceNumber);
+
+                Status = NtfslxExtractPrimaryFileName(FileContext->FileRecord,
+                                                      OldName,
+                                                      &OldNameLen);
+                if (!NT_SUCCESS(Status))
+                {
+                    DbgPrint("ntfslx: Rename: ExtractPrimaryFileName failed 0x%08lx\n",
+                             Status);
+                    break;
+                }
+
+                DbgPrint("ntfslx: Rename mft=%I64u oldParent=%I64u newParent=%I64u old='%.*S' new='%wZ'\n",
+                         FileContext->MftIndex,
+                         OldParentMft,
+                         NewParentMft,
+                         OldNameLen,
+                         OldName,
+                         &NewFullPath);
+
+                if (FileContext->FullPath.Buffer != NULL &&
+                    FileContext->FullPath.Length == NewFullPath.Length &&
+                    RtlCompareMemory(FileContext->FullPath.Buffer,
+                                     NewFullPath.Buffer,
+                                     NewFullPath.Length) == NewFullPath.Length)
+                {
+                    DbgPrint("ntfslx: Rename: identical full path, no-op\n");
+                    Status = STATUS_SUCCESS;
                     break;
                 }
 
@@ -3159,46 +3589,63 @@ NtfslxSetInformation(
                                                      &ExistingMft);
                 if (NT_SUCCESS(Status))
                 {
-                    if (!RenameInfo->ReplaceIfExists)
+                    if (ExistingMft != FileContext->MftIndex)
                     {
-                        DbgPrint("ntfslx: Rename collision: target '%wZ' mft=%I64u and ReplaceIfExists=FALSE\n",
-                                 &NewFullPath, ExistingMft);
-                        Status = STATUS_OBJECT_NAME_COLLISION;
-                        break;
-                    }
-                    /* ReplaceIfExists: delete the target first. */
-                    {
-                        PNTFSLX_MFT_RECORD VictimRecord = NULL;
-                        VictimRecord = ExAllocatePoolWithTag(NonPagedPool,
-                                          DeviceExtension->VolumeInfo.BytesPerFileRecord,
-                                          NTFSLX_TAG);
-                        if (VictimRecord == NULL)
+                        if (!RenameInfo->ReplaceIfExists)
                         {
-                            Status = STATUS_INSUFFICIENT_RESOURCES;
+                            DbgPrint("ntfslx: Rename collision: target '%wZ' mft=%I64u and ReplaceIfExists=FALSE\n",
+                                     &NewFullPath,
+                                     ExistingMft);
+                            Status = STATUS_OBJECT_NAME_COLLISION;
                             break;
                         }
-                        Status = NtfslxReadMftRecord(DeviceExtension->StorageDevice,
-                                                     &DeviceExtension->VolumeInfo,
-                                                     DeviceExtension->MftRunlist,
-                                                     ExistingMft, VictimRecord);
-                        if (NT_SUCCESS(Status))
+
                         {
-                            ULONGLONG VictimParent;
-                            Status = NtfslxLookupParentIndexFromRecord(VictimRecord,
-                                                                         &VictimParent);
+                            PNTFSLX_MFT_RECORD VictimRecord;
+
+                            VictimRecord = ExAllocatePoolWithTag(NonPagedPool,
+                                                                 DeviceExtension->VolumeInfo.BytesPerFileRecord,
+                                                                 NTFSLX_TAG);
+                            if (VictimRecord == NULL)
+                            {
+                                Status = STATUS_INSUFFICIENT_RESOURCES;
+                                break;
+                            }
+
+                            Status = NtfslxReadMftRecord(DeviceExtension->StorageDevice,
+                                                         &DeviceExtension->VolumeInfo,
+                                                         DeviceExtension->MftRunlist,
+                                                         ExistingMft,
+                                                         VictimRecord);
                             if (NT_SUCCESS(Status))
                             {
-                                Status = NtfslxDeleteFile(DeviceExtension, VictimParent,
-                                                          ExistingMft, RawName, RawNameLen);
-                                DbgPrint("ntfslx: Rename: victim delete mft=%I64u result=0x%08lx\n",
-                                         ExistingMft, Status);
+                                ULONGLONG VictimParent;
+
+                                Status = NtfslxLookupParentIndexFromRecord(VictimRecord,
+                                                                           &VictimParent);
+                                if (NT_SUCCESS(Status))
+                                {
+                                    Status = NtfslxDeleteFile(DeviceExtension,
+                                                              VictimParent,
+                                                              ExistingMft,
+                                                              NewLeafName.Buffer,
+                                                              NewLeafName.Length / sizeof(WCHAR));
+                                    DbgPrint("ntfslx: Rename: victim delete mft=%I64u result=0x%08lx\n",
+                                             ExistingMft,
+                                             Status);
+                                }
+                            }
+
+                            ExFreePoolWithTag(VictimRecord, NTFSLX_TAG);
+                            if (!NT_SUCCESS(Status))
+                            {
+                                break;
                             }
                         }
-                        ExFreePoolWithTag(VictimRecord, NTFSLX_TAG);
-                        if (!NT_SUCCESS(Status))
-                        {
-                            break;
-                        }
+                    }
+                    else
+                    {
+                        DbgPrint("ntfslx: Rename: target resolves to the same MFT, continuing as case/update rename\n");
                     }
                 }
                 else if (Status != STATUS_OBJECT_NAME_NOT_FOUND &&
@@ -3207,128 +3654,118 @@ NtfslxSetInformation(
                     DbgPrint("ntfslx: Rename: collision check failed 0x%08lx\n", Status);
                     break;
                 }
-                /* Not found is the expected happy-path; reset Status. */
+
                 Status = STATUS_SUCCESS;
-            }
 
-            /*
-             * Step 1: remove the old entry from the parent's $I30. If the
-             * old entry lives in the allocation path, this still works
-             * because NtfslxIndexRemoveFileName now walks both.
-             */
-            Status = NtfslxIndexRemoveFileName(DeviceExtension, ParentMft,
-                                               OldName, OldNameLen);
-            if (!NT_SUCCESS(Status))
-            {
-                DbgPrint("ntfslx: Rename: IndexRemove old failed 0x%08lx\n", Status);
-                break;
-            }
-
-            /*
-             * Step 2: rewrite the file's own $FILE_NAME attribute(s). We
-             * only maintain the primary (WIN32_AND_DOS) entry here; any DOS
-             * short-name entries are left untouched.
-             */
-            Status = NtfslxFindAttribute(FileContext->FileRecord,
-                                         NTFSLX_ATTRIBUTE_FILE_NAME,
-                                         NULL, 0, &FnAttr);
-            if (!NT_SUCCESS(Status))
-            {
-                DbgPrint("ntfslx: Rename: FindAttribute($FILE_NAME) failed 0x%08lx\n", Status);
-                break;
-            }
-
-            NewValueLength = (ULONG)sizeof(NTFSLX_FILE_NAME_ATTRIBUTE) +
-                             RawNameLen * sizeof(WCHAR);
-            NewAttrLength = ROUND_UP(FnAttr->Data.Resident.ValueOffset +
-                                     NewValueLength, 8);
-
-            if (NewAttrLength != FnAttr->Length)
-            {
-                Status = NtfslxResizeAttributeRecord(FileContext->FileRecord,
-                                                      FnAttr, NewAttrLength);
+                Status = NtfslxIndexRemoveFileName(DeviceExtension,
+                                                   OldParentMft,
+                                                   OldName,
+                                                   OldNameLen);
                 if (!NT_SUCCESS(Status))
                 {
-                    DbgPrint("ntfslx: Rename: ResizeAttributeRecord to %lu failed 0x%08lx\n",
-                             NewAttrLength, Status);
+                    DbgPrint("ntfslx: Rename: IndexRemove old failed 0x%08lx\n", Status);
                     break;
                 }
-            }
 
-            FnValue = (PNTFSLX_FILE_NAME_ATTRIBUTE)
-                ((PUCHAR)FnAttr + FnAttr->Data.Resident.ValueOffset);
-            FnAttr->Data.Resident.ValueLength = NewValueLength;
-            FnValue->FileNameLength = (UCHAR)RawNameLen;
-            FnValue->FileNameType = NTFSLX_FILE_NAME_WIN32_AND_DOS;
-            RtlCopyMemory((PUCHAR)FnValue + sizeof(NTFSLX_FILE_NAME_ATTRIBUTE),
-                          RawName, RawNameLen * sizeof(WCHAR));
-
-            Status = NtfslxWriteMftRecord(DeviceExtension->StorageDevice,
-                                          &DeviceExtension->VolumeInfo,
-                                          DeviceExtension->MftRunlist,
-                                          FileContext->MftIndex,
-                                          FileContext->FileRecord);
-            if (!NT_SUCCESS(Status))
-            {
-                DbgPrint("ntfslx: Rename: WriteMftRecord failed 0x%08lx\n", Status);
-                break;
-            }
-
-            /* Step 3: insert the new entry into the parent's $I30. */
-            KeQuerySystemTime(&Now);
-            Status = NtfslxIndexInsertFileName(
-                DeviceExtension, ParentMft,
-                RawName, RawNameLen,
-                NTFSLX_FILE_NAME_WIN32_AND_DOS,
-                MK_MREF(FileContext->MftIndex,
-                        FileContext->FileRecord->SequenceNumber),
-                FileContext->IsDirectory ? FILE_ATTRIBUTE_DIRECTORY
-                                         : FILE_ATTRIBUTE_NORMAL,
-                FileContext->DataSize,
-                FileContext->AllocationSize,
-                &Now, &Now, &Now, &Now);
-            if (!NT_SUCCESS(Status))
-            {
-                DbgPrint("ntfslx: Rename: IndexInsert new failed 0x%08lx\n", Status);
-                break;
-            }
-
-            DbgPrint("ntfslx: Rename: success mft=%I64u new='%.*S'\n",
-                     FileContext->MftIndex, RawNameLen, RawName);
-
-            /*
-             * Fire the old-name notification with the PREVIOUS FullPath,
-             * then update FullPath, then fire the new-name notification.
-             * Same-directory only, so the leaf substitution is straight
-             * replacement in the existing FullPath.
-             */
-            NtfslxNotifyReportChange(DeviceExtension, FileContext,
-                                     FILE_NOTIFY_CHANGE_FILE_NAME,
-                                     FILE_ACTION_RENAMED_OLD_NAME);
-
-            {
-                UNICODE_STRING NewFullPath;
-                WCHAR NewFullBuf[260];
-
-                Status = NtfslxBuildSiblingFullPath(FileContext,
-                                                    RawName,
-                                                    RawNameLen,
-                                                    NewFullBuf,
-                                                    RTL_NUMBER_OF(NewFullBuf),
-                                                    &NewFullPath);
+                Status = NtfslxFindAttribute(FileContext->FileRecord,
+                                             NTFSLX_ATTRIBUTE_FILE_NAME,
+                                             NULL,
+                                             0,
+                                             &FnAttr);
                 if (!NT_SUCCESS(Status))
                 {
-                    DbgPrint("ntfslx: Rename: build notify path failed 0x%08lx\n", Status);
+                    DbgPrint("ntfslx: Rename: FindAttribute($FILE_NAME) failed 0x%08lx\n", Status);
+                    break;
                 }
-                else
-                {
-                    (VOID)NtfslxSetFileContextFullPath(FileContext, &NewFullPath);
-                }
-            }
 
-            NtfslxNotifyReportChange(DeviceExtension, FileContext,
-                                     FILE_NOTIFY_CHANGE_FILE_NAME,
-                                     FILE_ACTION_RENAMED_NEW_NAME);
+                NewValueLength = (ULONG)sizeof(NTFSLX_FILE_NAME_ATTRIBUTE) +
+                                 NewLeafName.Length;
+                NewAttrLength = ROUND_UP(FnAttr->Data.Resident.ValueOffset +
+                                         NewValueLength,
+                                         8);
+
+                if (NewAttrLength != FnAttr->Length)
+                {
+                    Status = NtfslxResizeAttributeRecord(FileContext->FileRecord,
+                                                         FnAttr,
+                                                         NewAttrLength);
+                    if (!NT_SUCCESS(Status))
+                    {
+                        DbgPrint("ntfslx: Rename: ResizeAttributeRecord to %lu failed 0x%08lx\n",
+                                 NewAttrLength,
+                                 Status);
+                        break;
+                    }
+                }
+
+                FnValue = (PNTFSLX_FILE_NAME_ATTRIBUTE)
+                    ((PUCHAR)FnAttr + FnAttr->Data.Resident.ValueOffset);
+                FnAttr->Data.Resident.ValueLength = NewValueLength;
+                FnValue->ParentDirectory = NewParentReference;
+                FnValue->FileNameLength = (UCHAR)(NewLeafName.Length / sizeof(WCHAR));
+                FnValue->FileNameType = NTFSLX_FILE_NAME_WIN32_AND_DOS;
+                RtlCopyMemory((PUCHAR)FnValue + sizeof(NTFSLX_FILE_NAME_ATTRIBUTE),
+                              NewLeafName.Buffer,
+                              NewLeafName.Length);
+
+                Status = NtfslxWriteMftRecord(DeviceExtension->StorageDevice,
+                                              &DeviceExtension->VolumeInfo,
+                                              DeviceExtension->MftRunlist,
+                                              FileContext->MftIndex,
+                                              FileContext->FileRecord);
+                if (!NT_SUCCESS(Status))
+                {
+                    DbgPrint("ntfslx: Rename: WriteMftRecord failed 0x%08lx\n", Status);
+                    break;
+                }
+
+                KeQuerySystemTime(&Now);
+                Status = NtfslxIndexInsertFileName(DeviceExtension,
+                                                  NewParentMft,
+                                                  NewLeafName.Buffer,
+                                                  NewLeafName.Length / sizeof(WCHAR),
+                                                  NTFSLX_FILE_NAME_WIN32_AND_DOS,
+                                                  MK_MREF(FileContext->MftIndex,
+                                                          FileContext->FileRecord->SequenceNumber),
+                                                  FileContext->IsDirectory ? FILE_ATTRIBUTE_DIRECTORY
+                                                                           : FILE_ATTRIBUTE_NORMAL,
+                                                  FileContext->DataSize,
+                                                  FileContext->AllocationSize,
+                                                  &Now,
+                                                  &Now,
+                                                  &Now,
+                                                  &Now);
+                if (!NT_SUCCESS(Status))
+                {
+                    DbgPrint("ntfslx: Rename: IndexInsert new failed 0x%08lx\n", Status);
+                    break;
+                }
+
+                FileContext->ParentMftIndex = NewParentMft;
+                DbgPrint("ntfslx: Rename: success mft=%I64u new='%wZ'\n",
+                         FileContext->MftIndex,
+                         &NewFullPath);
+
+                NotifyFilter = FileContext->IsDirectory
+                    ? FILE_NOTIFY_CHANGE_DIR_NAME
+                    : FILE_NOTIFY_CHANGE_FILE_NAME;
+                NtfslxNotifyReportChange(DeviceExtension,
+                                         FileContext,
+                                         NotifyFilter,
+                                         FILE_ACTION_RENAMED_OLD_NAME);
+                (VOID)NtfslxSetFileContextFullPath(FileContext,
+                                                   &NewFullPath);
+                NtfslxNotifyReportChange(DeviceExtension,
+                                         FileContext,
+                                         NotifyFilter,
+                                         FILE_ACTION_RENAMED_NEW_NAME);
+            }
+            while (0);
+
+            if (NewParentRecord != NULL)
+            {
+                ExFreePoolWithTag(NewParentRecord, NTFSLX_TAG);
+            }
         }
         break;
 
