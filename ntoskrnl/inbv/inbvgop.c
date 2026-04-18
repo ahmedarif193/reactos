@@ -8,12 +8,10 @@
 #include <ntoskrnl.h>
 #define NDEBUG
 #include <debug.h>
-#include <reactos/arc/arc.h>
 #include <drivers/bootvid/bootvid.h>
 #include "logo.h"
 #include "resource.h"
 #include "inbvgop.h"
-#include "reactos_gop_logo.h"
 
 extern BOOLEAN ShowProgressBar;
 
@@ -160,8 +158,6 @@ InbvGopComputeWordmarkRect(
     _In_ ULONG ScreenHeight,
     _Out_ PINBV_GOP_RECT Rect)
 {
-    const ULONG BitmapFileHeaderSize = 14;
-    PUCHAR Bitmap = (PUCHAR)g_ReactOSGopLogoBmp + BitmapFileHeaderSize;
     PBITMAPINFOHEADER Header;
     ULONG SrcWidth, SrcHeight;
     ULONG DstWidth, DstHeight;
@@ -169,7 +165,7 @@ InbvGopComputeWordmarkRect(
     if (!Rect)
         return FALSE;
 
-    Header = (PBITMAPINFOHEADER)Bitmap;
+    Header = (PBITMAPINFOHEADER)InbvGetResourceAddress(IDB_REACTOS_GOP_LOGO);
     if (!Header || Header->biPlanes != 1 || Header->biBitCount != 4)
         return FALSE;
 
@@ -537,8 +533,7 @@ InbvGopDrawWordmark(
     _In_ ULONG ScreenHeight,
     _In_opt_ const INBV_GOP_RECT *WordmarkRectOverride)
 {
-    const ULONG BitmapFileHeaderSize = 14;
-    PUCHAR Bitmap = (PUCHAR)g_ReactOSGopLogoBmp + BitmapFileHeaderSize;
+    PUCHAR Bitmap;
     PBITMAPINFOHEADER Header;
     ULONG SrcWidth, SrcHeight;
     INBV_GOP_RECT WordmarkRect;
@@ -550,6 +545,7 @@ InbvGopDrawWordmark(
     ULONG RedShift = 0, GreenShift = 0, BlueShift = 0;
     ULONG RedMax = 0, GreenMax = 0, BlueMax = 0;
 
+    Bitmap = InbvGetResourceAddress(IDB_REACTOS_GOP_LOGO);
     Header = (PBITMAPINFOHEADER)Bitmap;
     if (!Header || Header->biPlanes != 1 || Header->biBitCount != 4)
         return FALSE;
@@ -697,12 +693,8 @@ InbvGopHandleBootBitmap(
 
     if (TextMode)
     {
-        InbvSetTextColor(BV_COLOR_WHITE);
-        InbvSolidColorFill(0, 0, Width - 1, Height - 1, BV_COLOR_BLACK);
-        InbvSetScrollRegion(0, 0, Width - 1, Height - 1);
-        ShowProgressBar = FALSE;
-        InbvEnableDisplayString(TRUE);
-        return TRUE;
+        InbvResetDisplay();
+        return FALSE;
     }
 
     InbvSetTextColor(BV_COLOR_WHITE);
