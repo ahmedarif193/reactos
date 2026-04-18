@@ -1,8 +1,8 @@
 /*
  * PROJECT:     ReactOS Kernel
  * LICENSE:     GPL-2.0-or-later (https://spdx.org/licenses/GPL-2.0-or-later)
- * PURPOSE:     UEFI GOP-specific boot UI helpers (kept separate from legacy path)
- * Copyright : Ahmed ARIF <arif.ing@outlook.com>
+ * PURPOSE:     UEFI GOP-specific boot UI helpers
+ * COPYRIGHT:   Copyright 2026 Ahmed ARIF (arif.ing@outlook.com)
  */
 
 #pragma once
