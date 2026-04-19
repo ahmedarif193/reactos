@@ -28,6 +28,9 @@ typedef enum _FRLDR_SETUP_ACTION
     ActionCustomBoot,
 #endif
     ActionReboot,
+#ifdef UEFIBOOT
+    ActionFirmwareSetup,
+#endif
     ActionBackToPrevMenu,
 } FRLDR_SETUP_ACTION;
 
@@ -50,6 +53,9 @@ static FRLDR_OPTIONS FrLdrOptions[] = // OptionsMenuList
     {ActionCustomBoot,      "Custom Boot"},
 #endif
     {ActionReboot,          "Reboot"},
+#ifdef UEFIBOOT
+    {ActionFirmwareSetup,   "Reboot to Firmware Setup"},
+#endif
     {ActionBackToPrevMenu,  "Return to OS Choices menu"},
 };
 
@@ -88,6 +94,11 @@ FreeLdrSetupMenu(
             continue;
 #ifdef HAS_OPTION_MENU_EDIT_CMDLINE
         if ((FrLdrOptions[i].Id == ActionEditBootCmdLine) && !OperatingSystem)
+            continue;
+#endif
+#ifdef UEFIBOOT
+        /* Hide the firmware setup option when the firmware does not support it */
+        if ((FrLdrOptions[i].Id == ActionFirmwareSetup) && !UefiFirmwareSetupSupported())
             continue;
 #endif
         MenuActionsMap[MenuItemCount] = FrLdrOptions[i].Id;
@@ -139,6 +150,11 @@ doMenu:
         case ActionReboot:
             OptionMenuReboot();
             return;
+#ifdef UEFIBOOT
+        case ActionFirmwareSetup:
+            UefiBootToFirmware();
+            break;
+#endif
         case ActionBackToPrevMenu:
             // if (OperatingSystem)
             return; /* Just return to the caller */
