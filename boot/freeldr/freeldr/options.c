@@ -16,48 +16,15 @@
 
 /* GLOBALS ********************************************************************/
 
-/* Named menu IDs */
-typedef enum _FRLDR_SETUP_ACTION
+typedef enum _FREELDR_SETUP_ACTION
 {
-    ActionSeparator = -1,
-    ActionDebugging,
-#ifdef HAS_OPTION_MENU_EDIT_CMDLINE
-    ActionEditBootCmdLine,
-#endif
-#ifdef HAS_OPTION_MENU_CUSTOM_BOOT
-    ActionCustomBoot,
-#endif
-    ActionReboot,
-#ifdef UEFIBOOT
-    ActionFirmwareSetup,
-#endif
-    ActionBackToPrevMenu,
-} FRLDR_SETUP_ACTION;
-
-typedef struct _FRLDR_OPTIONS
-{
-    ULONG Id;
-    PCSTR Item;
-} FRLDR_OPTIONS;
-
-static FRLDR_OPTIONS FrLdrOptions[] = // OptionsMenuList
-{
-    {ActionDebugging,       "FreeLdr debugging"},
-
-    {ActionSeparator, NULL},
-
-#ifdef HAS_OPTION_MENU_EDIT_CMDLINE
-    {ActionEditBootCmdLine, "Edit Boot Command Line (F10)"},
-#endif
-#ifdef HAS_OPTION_MENU_CUSTOM_BOOT
-    {ActionCustomBoot,      "Custom Boot"},
-#endif
-    {ActionReboot,          "Reboot"},
-#ifdef UEFIBOOT
-    {ActionFirmwareSetup,   "Reboot to Firmware Setup"},
-#endif
-    {ActionBackToPrevMenu,  "Return to OS Choices menu"},
-};
+    FreeldrSetupActionDebug,
+    FreeldrSetupActionSeparator,
+    FreeldrSetupActionEditCmdLine,
+    FreeldrSetupActionCustomBoot,
+    FreeldrSetupActionReboot,
+    FreeldrSetupActionFirmwareSetup,
+} FREELDR_SETUP_ACTION;
 
 static PCSTR FrldrDbgMsg =
     "Enable FreeLdr debug channels\n"
@@ -81,10 +48,10 @@ VOID
 FreeLdrSetupMenu(
     _In_opt_ OperatingSystemItem* OperatingSystem)
 {
-    FRLDR_SETUP_ACTION MenuActionsMap[RTL_NUMBER_OF(FrLdrOptions)];
-    PCSTR OptionsMenuList[RTL_NUMBER_OF(FrLdrOptions)]; // FIXME!
-    ULONG i, MenuItemCount;
+    PCSTR OptionsMenuList[6];
+    FREELDR_SETUP_ACTION OptionsMenuActions[RTL_NUMBER_OF(OptionsMenuList)];
     ULONG SelectedMenuItem = 0;
+    ULONG MenuItemCount;
 
     /* Build the menu, filtering out any item that may not be applicable */
     for (i = 0, MenuItemCount = 0; i < RTL_NUMBER_OF(FrLdrOptions); ++i)
@@ -106,6 +73,40 @@ FreeLdrSetupMenu(
     }
 
 doMenu:
+    MenuItemCount = 0;
+
+    OptionsMenuList[MenuItemCount] = "FreeLdr debugging";
+    OptionsMenuActions[MenuItemCount++] = FreeldrSetupActionDebug;
+
+    OptionsMenuList[MenuItemCount] = NULL;
+    OptionsMenuActions[MenuItemCount++] = FreeldrSetupActionSeparator;
+
+#ifdef HAS_OPTION_MENU_EDIT_CMDLINE
+    OptionsMenuList[MenuItemCount] = "Edit Boot Command Line (F10)";
+    OptionsMenuActions[MenuItemCount++] = FreeldrSetupActionEditCmdLine;
+#endif
+#ifdef HAS_OPTION_MENU_CUSTOM_BOOT
+    OptionsMenuList[MenuItemCount] = "Custom Boot";
+    OptionsMenuActions[MenuItemCount++] = FreeldrSetupActionCustomBoot;
+#endif
+#ifdef HAS_OPTION_MENU_REBOOT
+    OptionsMenuList[MenuItemCount] = "Reboot";
+    OptionsMenuActions[MenuItemCount++] = FreeldrSetupActionReboot;
+#endif
+#ifdef UEFIBOOT
+    if (UefiFirmwareSetupSupported())
+    {
+        OptionsMenuList[MenuItemCount] = "Reboot to Firmware Setup";
+        OptionsMenuActions[MenuItemCount++] = FreeldrSetupActionFirmwareSetup;
+    }
+#endif
+
+    if ((SelectedMenuItem >= MenuItemCount) ||
+        (OptionsMenuList[SelectedMenuItem] == NULL))
+    {
+        SelectedMenuItem = 0;
+    }
+
     /* Clear the backdrop */
     UiDrawBackdrop(UiGetScreenHeight());
 
@@ -122,9 +123,9 @@ doMenu:
         return;
     }
 
-    switch (MenuActionsMap[SelectedMenuItem])
+    switch (OptionsMenuActions[SelectedMenuItem])
     {
-        case ActionDebugging:
+        case FreeldrSetupActionDebug:
         {
             CHAR DebugChannelString[100] = "";
             // DebugChannelString[0] = ANSI_NULL;
@@ -136,29 +137,28 @@ doMenu:
             }
             break;
         }
-#ifdef HAS_OPTION_MENU_EDIT_CMDLINE
-        case ActionEditBootCmdLine:
+        case FreeldrSetupActionEditCmdLine:
             if (OperatingSystem)
                 EditOperatingSystemEntry(OperatingSystem);
             break;
-#endif
-#ifdef HAS_OPTION_MENU_CUSTOM_BOOT
-        case ActionCustomBoot:
+        case FreeldrSetupActionCustomBoot:
             OptionMenuCustomBoot();
             break;
-#endif
-        case ActionReboot:
+        case FreeldrSetupActionReboot:
             OptionMenuReboot();
             return;
 #ifdef UEFIBOOT
         case ActionFirmwareSetup:
             UefiBootToFirmware();
             break;
+#ifdef UEFIBOOT
+        case FreeldrSetupActionFirmwareSetup:
+            UefiBootToFirmware();
+            break;
 #endif
-        case ActionBackToPrevMenu:
-            // if (OperatingSystem)
-            return; /* Just return to the caller */
-        DEFAULT_UNREACHABLE;
+        case FreeldrSetupActionSeparator:
+        default:
+            break;
     }
     goto doMenu;
 }
