@@ -247,7 +247,7 @@ ReturnFar:
     popfq
 
     /* Return far */
-    retf
+    .byte HEX(48), HEX(CB)
 
 .ENDP
 
@@ -328,5 +328,4 @@ RaiseStatus:
 
 
 END
-
 
