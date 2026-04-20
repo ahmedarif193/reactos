@@ -29,6 +29,8 @@
     #include <roapi.h>
 #endif
 
+#include <pseh/pseh2.h>
+
 _CRT_BEGIN_C_HEADER
 
 #define _DEFINE_SET_FUNCTION(function_name, type, variable_name) \

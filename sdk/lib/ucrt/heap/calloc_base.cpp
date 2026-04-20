@@ -6,9 +6,9 @@
 // Implementation of _calloc_base().  This is defined in a different source file
 // from the calloc() function to allow calloc() to be replaced by the user.
 //
+#include <new.h>
 #include <corecrt_internal.h>
 #include <malloc.h>
-#include <new.h>
 
 // This function implements the logic of calloc().
 //
