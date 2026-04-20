@@ -238,7 +238,7 @@ __inline
 VOID
 Ext2SetFlag(PULONG Flags, ULONG FlagBit)
 {
-    ULONG _ret = InterlockedOr(Flags, FlagBit);
+    ULONG _ret = (ULONG)InterlockedOr((volatile LONG*)Flags, (LONG)FlagBit);
     ASSERT(*Flags == (_ret | FlagBit));
 }
 
@@ -249,14 +249,14 @@ __inline
 VOID
 Ext2ClearFlag(PULONG Flags, ULONG FlagBit)
 {
-    ULONG _ret = InterlockedAnd(Flags, ~FlagBit);
+    ULONG _ret = (ULONG)InterlockedAnd((volatile LONG*)Flags, ~((LONG)FlagBit));
     ASSERT(*Flags == (_ret & (~FlagBit)));
 }
 
 #else
 
-#define SetLongFlag(_F,_SF)       InterlockedOr(&(_F), (ULONG)(_SF))
-#define ClearLongFlag(_F,_SF)     InterlockedAnd(&(_F), ~((ULONG)(_SF)))
+#define SetLongFlag(_F,_SF)       InterlockedOr((volatile LONG *)&(_F), (LONG)((ULONG)(_SF)))
+#define ClearLongFlag(_F,_SF)     InterlockedAnd((volatile LONG *)&(_F), ~((LONG)((ULONG)(_SF))))
 
 #endif  /* release */
 
