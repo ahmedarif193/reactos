@@ -1,7 +1,4 @@
 
-remove_definitions(-D_WIN32_WINNT=0x502)
-add_definitions(-D_WIN32_WINNT=0x600)
-
 include_directories(
     concfg
     consrv)
@@ -53,6 +50,11 @@ else()
 endif()
 
 add_library(consrv ${CONSRV_SOURCE})
+if(MSVC)
+    target_compile_options(consrv PRIVATE /U_WIN32_WINNT /D_WIN32_WINNT=0x600)
+else()
+    target_compile_options(consrv PRIVATE -U_WIN32_WINNT -D_WIN32_WINNT=0x600)
+endif()
 target_link_libraries(consrv pseh)
 add_dependencies(consrv psdk)
 add_pch(consrv consrv/consrv.h CONSRV_SOURCE)
