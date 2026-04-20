@@ -6,8 +6,8 @@
 // Definition of _set_new_mode and _query_new_mode, which provide access to the
 // _newmode global flag.
 //
-#include <corecrt_internal.h>
 #include <new.h>
+#include <corecrt_internal.h>
 
 
 
