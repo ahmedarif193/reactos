@@ -10,6 +10,11 @@ list(APPEND USERSRV_SOURCE
     usersrv/usersrv.h)
 
 add_library(usersrv ${USERSRV_SOURCE})
+if(MSVC)
+    target_compile_options(usersrv PRIVATE /U_WIN32_WINNT /D_WIN32_WINNT=0x600)
+else()
+    target_compile_options(usersrv PRIVATE -U_WIN32_WINNT -D_WIN32_WINNT=0x600)
+endif()
 target_link_libraries(usersrv pseh)
 add_dependencies(usersrv xdk)
 add_pch(usersrv usersrv/usersrv.h USERSRV_SOURCE)
