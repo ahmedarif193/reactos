@@ -925,33 +925,38 @@ HalpSetupAcpiPhase0(IN PLOADER_PARAMETER_BLOCK LoaderBlock)
         }
 
         /* Print the ACPI version */
-        DPRINT1("ACPI v");
-        if (AcpiVersion == NULL)
         {
-            // Unknown past values, or newer than v6.6 (documented as 6.5).
-            DbgPrint("Unknown_%u_%u", Fadt->Header.Revision, Fadt->minor_revision);
-        }
-        else
-        {
-            DbgPrint("%s", AcpiVersion);
-        }
-        DbgPrint(" detected. Tables:");
+            CHAR AcpiLine[512];
+            PCHAR p = AcpiLine;
 
-        /* List cached tables */
-        for (NextEntry = HalpAcpiTableCacheList.Flink;
-             NextEntry != &HalpAcpiTableCacheList;
-             NextEntry = NextEntry->Flink)
-        {
-            PACPI_CACHED_TABLE CachedTable = CONTAINING_RECORD(NextEntry, ACPI_CACHED_TABLE, Links);
+            p += sprintf(p, "ACPI v");
+            if (AcpiVersion == NULL)
+            {
+                // Unknown past values, or newer than v6.6 (documented as 6.5).
+                p += sprintf(p, "Unknown_%u_%u", Fadt->Header.Revision, Fadt->minor_revision);
+            }
+            else
+            {
+                p += sprintf(p, "%s", AcpiVersion);
+            }
+            p += sprintf(p, " detected. Tables:");
 
-            /* Print the table signature */
-            DbgPrint(" [%c%c%c%c]",
-                      CachedTable->Header.Signature & 0x000000FF,
-                     (CachedTable->Header.Signature & 0x0000FF00) >>  8,
-                     (CachedTable->Header.Signature & 0x00FF0000) >> 16,
-                     (CachedTable->Header.Signature & 0xFF000000) >> 24);
+            /* List cached tables */
+            for (NextEntry = HalpAcpiTableCacheList.Flink;
+                 NextEntry != &HalpAcpiTableCacheList;
+                 NextEntry = NextEntry->Flink)
+            {
+                PACPI_CACHED_TABLE CachedTable = CONTAINING_RECORD(NextEntry, ACPI_CACHED_TABLE, Links);
+
+                /* Print the table signature */
+                p += sprintf(p, " [%c%c%c%c]",
+                             CachedTable->Header.Signature & 0x000000FF,
+                             (CachedTable->Header.Signature & 0x0000FF00) >>  8,
+                             (CachedTable->Header.Signature & 0x00FF0000) >> 16,
+                             (CachedTable->Header.Signature & 0xFF000000) >> 24);
+            }
+            DPRINT1("%s\n", AcpiLine);
         }
-        DbgPrint("\n");
     }
 
     /* Return success */
@@ -965,6 +970,11 @@ HalpInitializePciBus(VOID)
 {
     /* Setup the PCI stub support */
     HalpInitializePciStubs();
+
+    /* Initialize PCIe extended config via ACPI MCFG/ECAM (later we will use APIC in x86) */
+#ifdef _M_AMD64
+    HalpAcpiPcieInitializeExtendedConfig();
+#endif
 
     /* Set the NMI crash flag */
     HalpGetNMICrashFlag();

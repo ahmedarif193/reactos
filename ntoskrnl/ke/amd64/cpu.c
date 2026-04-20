@@ -363,62 +363,67 @@ KiReportCpuFeatures(IN PKPRCB Prcb)
         CpuFeatures = CpuInfo.Edx;
     }
 
-    DPRINT1("Supported CPU features:");
+    {
+        CHAR FeaturesLine[1024];
+        PCHAR p = FeaturesLine;
 
-#define print_kf_bit(kf_value) if (FeatureBits & kf_value) DbgPrint(" " #kf_value)
-    print_kf_bit(KF_SMEP);
-    print_kf_bit(KF_RDTSC);
-    print_kf_bit(KF_CR4);
-    print_kf_bit(KF_CMOV);
-    print_kf_bit(KF_GLOBAL_PAGE);
-    print_kf_bit(KF_LARGE_PAGE);
-    print_kf_bit(KF_MTRR);
-    print_kf_bit(KF_CMPXCHG8B);
-    print_kf_bit(KF_MMX);
-    print_kf_bit(KF_DTS);
-    print_kf_bit(KF_PAT);
-    print_kf_bit(KF_FXSR);
-    print_kf_bit(KF_FAST_SYSCALL);
-    print_kf_bit(KF_XMMI);
-    print_kf_bit(KF_3DNOW);
-    print_kf_bit(KF_XSAVEOPT);
-    print_kf_bit(KF_XMMI64);
-    print_kf_bit(KF_BRANCH);
-    print_kf_bit(KF_00040000);
-    print_kf_bit(KF_SSE3);
-    print_kf_bit(KF_CMPXCHG16B);
-    print_kf_bit(KF_AUTHENTICAMD);
-    print_kf_bit(KF_ACNT2);
-    print_kf_bit(KF_XSTATE);
-    print_kf_bit(KF_GENUINE_INTEL);
-    print_kf_bit(KF_SLAT);
-    print_kf_bit(KF_VIRT_FIRMWARE_ENABLED);
-    print_kf_bit(KF_RDWRFSGSBASE);
-    print_kf_bit(KF_NX_BIT);
-    print_kf_bit(KF_NX_DISABLED);
-    print_kf_bit(KF_NX_ENABLED);
-    print_kf_bit(KF_RDRAND);
-    print_kf_bit(KF_SMAP);
-    print_kf_bit(KF_RDTSCP);
-    print_kf_bit(KF_HUGEPAGE);
-    print_kf_bit(KF_XSAVES);
-    print_kf_bit(KF_FPU_LEAKAGE);
-    print_kf_bit(KF_CAT);
-    print_kf_bit(KF_CET_SS);
-    print_kf_bit(KF_SSSE3);
-    print_kf_bit(KF_SSE4_1);
-    print_kf_bit(KF_SSE4_2);
-    print_kf_bit(KF_AVX);
-    print_kf_bit(KF_AVX2);
-    print_kf_bit(KF_AVX512F);
+        p += sprintf(p, "Supported CPU features:");
+
+#define print_kf_bit(kf_value) if (FeatureBits & kf_value) p += sprintf(p, " " #kf_value)
+        print_kf_bit(KF_SMEP);
+        print_kf_bit(KF_RDTSC);
+        print_kf_bit(KF_CR4);
+        print_kf_bit(KF_CMOV);
+        print_kf_bit(KF_GLOBAL_PAGE);
+        print_kf_bit(KF_LARGE_PAGE);
+        print_kf_bit(KF_MTRR);
+        print_kf_bit(KF_CMPXCHG8B);
+        print_kf_bit(KF_MMX);
+        print_kf_bit(KF_DTS);
+        print_kf_bit(KF_PAT);
+        print_kf_bit(KF_FXSR);
+        print_kf_bit(KF_FAST_SYSCALL);
+        print_kf_bit(KF_XMMI);
+        print_kf_bit(KF_3DNOW);
+        print_kf_bit(KF_XSAVEOPT);
+        print_kf_bit(KF_XMMI64);
+        print_kf_bit(KF_BRANCH);
+        print_kf_bit(KF_00040000);
+        print_kf_bit(KF_SSE3);
+        print_kf_bit(KF_CMPXCHG16B);
+        print_kf_bit(KF_AUTHENTICAMD);
+        print_kf_bit(KF_ACNT2);
+        print_kf_bit(KF_XSTATE);
+        print_kf_bit(KF_GENUINE_INTEL);
+        print_kf_bit(KF_SLAT);
+        print_kf_bit(KF_VIRT_FIRMWARE_ENABLED);
+        print_kf_bit(KF_RDWRFSGSBASE);
+        print_kf_bit(KF_NX_BIT);
+        print_kf_bit(KF_NX_DISABLED);
+        print_kf_bit(KF_NX_ENABLED);
+        print_kf_bit(KF_RDRAND);
+        print_kf_bit(KF_SMAP);
+        print_kf_bit(KF_RDTSCP);
+        print_kf_bit(KF_HUGEPAGE);
+        print_kf_bit(KF_XSAVES);
+        print_kf_bit(KF_FPU_LEAKAGE);
+        print_kf_bit(KF_CAT);
+        print_kf_bit(KF_CET_SS);
+        print_kf_bit(KF_SSSE3);
+        print_kf_bit(KF_SSE4_1);
+        print_kf_bit(KF_SSE4_2);
+        print_kf_bit(KF_AVX);
+        print_kf_bit(KF_AVX2);
+        print_kf_bit(KF_AVX512F);
 #undef print_kf_bit
 
-#define print_cf(cpu_flag) if (CpuFeatures & cpu_flag) DbgPrint(" " #cpu_flag)
-    print_cf(X86_FEATURE_PAE);
-    print_cf(X86_FEATURE_HT);
+#define print_cf(cpu_flag) if (CpuFeatures & cpu_flag) p += sprintf(p, " " #cpu_flag)
+        print_cf(X86_FEATURE_PAE);
+        print_cf(X86_FEATURE_HT);
 #undef print_cf
 
-    DbgPrint("\n");
+        DPRINT1("%s\n", FeaturesLine);
+    }
 }
 #endif // DBG
 

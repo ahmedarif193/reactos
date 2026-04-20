@@ -11,7 +11,10 @@ list(APPEND HAL_ACPI_SOURCE
 if(ARCH STREQUAL "amd64")
     list(APPEND HAL_ACPI_SOURCE
         acpi/msi.c
-        apic/msivec.c)
+        apic/msivec.c
+        acpi/pcidiscovery.c
+        ${CMAKE_CURRENT_BINARY_DIR}/pci_classes.c
+        ${CMAKE_CURRENT_BINARY_DIR}/pci_vendors.c)
 endif()
 
 # Needed to compile while using ACPICA

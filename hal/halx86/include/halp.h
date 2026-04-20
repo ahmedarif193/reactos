@@ -583,6 +583,15 @@ HalpDebugPciDumpBus(
 );
 
 #ifdef _M_AMD64
+CODE_SEG("INIT")
+VOID
+NTAPI
+HalpAcpiPcieInitializeExtendedConfig(
+    VOID
+);
+#endif
+
+#ifdef _M_AMD64
 /* MSI/MSI-X Capability Functions */
 
 UCHAR
