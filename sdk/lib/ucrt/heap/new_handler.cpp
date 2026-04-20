@@ -5,8 +5,8 @@
 //
 // Implementation of the new handler and related functions..
 //
-#include <corecrt_internal.h>
 #include <new.h>
+#include <corecrt_internal.h>
 
 // The global new handler.  This pointer should only be accessed via the
 // functions defined in this source file.
