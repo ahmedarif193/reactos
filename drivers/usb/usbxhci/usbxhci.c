@@ -3,7 +3,7 @@
  * LICENSE:     GPL-2.0+ (https://spdx.org/licenses/GPL-2.0+)
  * COPYRIGHT:   Copyright 2025 Ahmed ARIF <arif.ing@outlook.com>
  */
-    
+
 #include "usbxhci.h"
 
 #if defined(__GNUC__) && !defined(__cplusplus)
@@ -1010,7 +1010,7 @@ XHCI_AckPortChangeInternal(
         return;
 
     OldValue = XHCI_READ_REGISTER_ULONG(PortStatusReg);
-    
+
     /*
      * "Clean Slate" Safe Write for Modern Intel xHCI (Ice/Tiger/Alder Lake):
      * 1. Preserve ONLY the Read/Write (RW) bits that hold configuration state.
@@ -1022,11 +1022,11 @@ XHCI_AckPortChangeInternal(
      * 3. Unacknowledged Change bits must be 0 (writing 1 clears them).
      * 4. Speed is Read-Only, writing back is harmless/ignored.
      */
-    ValueToWrite = OldValue & (XHCI_PORTSC_PP | 
-                               XHCI_PORTSC_PLS_MASK | 
-                               XHCI_PORTSC_PIC_MASK | 
-                               XHCI_PORTSC_WCE | 
-                               XHCI_PORTSC_WDE | 
+    ValueToWrite = OldValue & (XHCI_PORTSC_PP |
+                               XHCI_PORTSC_PLS_MASK |
+                               XHCI_PORTSC_PIC_MASK |
+                               XHCI_PORTSC_WCE |
+                               XHCI_PORTSC_WDE |
                                XHCI_PORTSC_WOE);
 
     /* 5. Set the Change Bits we explicitly want to ACK (Write-1-to-Clear) */
@@ -1064,11 +1064,11 @@ XHCI_ModifyPortBits(
      * "Clean Slate" Safe Write:
      * Start with only the preserved configuration state from the current value.
      */
-    NewValue = Value & (XHCI_PORTSC_PP | 
-                        XHCI_PORTSC_PLS_MASK | 
-                        XHCI_PORTSC_PIC_MASK | 
-                        XHCI_PORTSC_WCE | 
-                        XHCI_PORTSC_WDE | 
+    NewValue = Value & (XHCI_PORTSC_PP |
+                        XHCI_PORTSC_PLS_MASK |
+                        XHCI_PORTSC_PIC_MASK |
+                        XHCI_PORTSC_WCE |
+                        XHCI_PORTSC_WDE |
                         XHCI_PORTSC_WOE);
 
     /* Apply caller's modifications to the preserved state */
@@ -1080,7 +1080,7 @@ XHCI_ModifyPortBits(
      * If the caller EXPLICITLY set an action bit in SetMask, allow it.
      * Otherwise, ensure they remain 0. (The Clean Slate init above acts as the default 0).
      */
-    
+
     /* PED: Only allow 1 if explicitly setting it (implies Disable) */
     if (!(SetMask & XHCI_PORTSC_PED))
     {
@@ -1125,15 +1125,15 @@ XHCI_SetPortLinkState(
         return MP_STATUS_ERROR;
 
     Value = XHCI_READ_REGISTER_ULONG(PortStatusReg);
-    
+
     /* Clear PLS field */
     NewValue = Value & ~XHCI_PORTSC_PLS_MASK;
-    
+
     /* Set new PLS and LWS (Link Write Strobe) to activate it */
     NewValue |= XHCI_PORTSC_PLS(LinkState);
     NewValue |= XHCI_PORTSC_LWS;
-    
-    /* 
+
+    /*
      * Safety: Mask out PED to prevent accidental disable.
      * Mask out PR/WPR to prevent accidental reset.
      */
@@ -2300,7 +2300,7 @@ XHCI_AllocateTransferRing(
     if (UseCommonBuffer)
     {
         // The caller should assign Ring->Base and Ring->PhysicalAddress directly.
-        
+
     }
 
     LowAddress.QuadPart = 0;
@@ -4336,9 +4336,9 @@ XHCI_UpdateEp0MaxPacketSize(
 
     if (!Slot || !Slot->InUse)
         return MP_STATUS_ERROR;
-    
+
     // Safety check: Ensure the context sizes are consistent to prevent overflow
-    if (Extension->ContextSize == 0 || 
+    if (Extension->ContextSize == 0 ||
         Slot->InputContext.Length < Extension->ContextSize * 33 || // simplified check, typically 33 contexts max
         Slot->DeviceContext.Length < Extension->ContextSize * 32)
     {
@@ -4495,7 +4495,7 @@ XHCI_HandleEnumerationTransfer(
             {
                 PUSB_DEVICE_DESCRIPTOR DevDesc = (PUSB_DEVICE_DESCRIPTOR)Buffer;
 
-                
+
                 if (Endpoint->EndpointProperties.DeviceSpeed < UsbSuperSpeed &&
                     Endpoint->EndpointProperties.MaxPacketSize != DevDesc->bMaxPacketSize0 &&
                     DevDesc->bMaxPacketSize0 != 0)
@@ -7415,7 +7415,7 @@ XHCI_InitializeScratchpads(
     if (Extension->ScratchpadCount == 0)
     {
         Extension->Dcbaa[0] = 0;
-        
+
     }
 
     BufferBase = Extension->ScratchpadBuffersPhysical.QuadPart;
@@ -7759,7 +7759,7 @@ XHCI_BringupDefaultControlEndpoint(
         Slot->EndpointTable[Endpoint->EndpointId] = Endpoint;
 
 	    XHCI_UpdateDeviceAddressMap(Extension, Slot, 0);
-	
+
 	    return MP_STATUS_SUCCESS;
 	}
 
@@ -9379,7 +9379,7 @@ XHCI_ResetController(
                          XHCI_USBSTS_HSE |
                          XHCI_USBSTS_PCD |
                          XHCI_USBSTS_EINT);
-    
+
     return MP_STATUS_SUCCESS;
 }
 
@@ -11465,7 +11465,7 @@ XHCI_PerformEndpointOpen(PXHCI_EXTENSION Extension,
 
                 DPRINT("usbxhci: deferred EP0 bring-up from IRQL=%lu\n",
                        KeGetCurrentIrql());
-                
+
             }
 
             DPRINT1("usbxhci: unable to schedule EP0 bring-up (no callback)\n");
@@ -13457,7 +13457,7 @@ XHCI_RunController(
         }
 #endif
         Extension->ControllerRunning = TRUE;
-        
+
     }
 
     Command |= XHCI_USBCMD_RS;
@@ -13511,7 +13511,7 @@ XHCI_HaltController(
                                      TimeoutUs ? TimeoutUs : XHCI_WAIT_HALT_US))
         {
             Extension->ControllerRunning = FALSE;
-            
+
         }
 
         DPRINT1("usbxhci: controller already halted but status not updating\n");
@@ -13802,14 +13802,14 @@ XHCI_RH_UpdatePortStatusFields(
 
     if (PortValue & XHCI_PORTSC_PED)
         PortStatus->PortStatus.AsUshort16 |= USB_PORT_STATUS_ENABLE;
-    
+
     if (Protocol >= 3)
         PortStatus30->PortEnabledDisabled = (PortValue & XHCI_PORTSC_PED) ? 1 : 0;
 
     LinkState = (PortValue & XHCI_PORTSC_PLS_MASK) >> XHCI_PORTSC_PLS_SHIFT;
     if (LinkState == PORT_LINK_STATE_U3)
         PortStatus->PortStatus.AsUshort16 |= USB_PORT_STATUS_SUSPEND;
-    
+
     if (Protocol >= 3)
         PortStatus30->PortLinkState = (USHORT)LinkState;
 
