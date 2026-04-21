@@ -41,7 +41,11 @@ static const char * const debug_classes[] = { "fixme", "err", "warn", "trace" };
 
 #define MAX_DEBUG_OPTIONS 256
 
+#if DBG
 static unsigned char default_flags = (1 << __WINE_DBCL_ERR) | (1 << __WINE_DBCL_FIXME);
+#else
+static unsigned char default_flags = 0;
+#endif
 static int nb_debug_options = -1;
 static struct __wine_debug_channel debug_options[MAX_DEBUG_OPTIONS];
 
@@ -261,6 +265,7 @@ static void debug_init(void)
 /* varargs wrapper for funcs.dbg_vprintf */
 int wine_dbg_printf( const char *format, ... )
 {
+#if DBG
     int ret;
     va_list valist;
 
@@ -268,6 +273,10 @@ int wine_dbg_printf( const char *format, ... )
     ret = funcs.dbg_vprintf( format, valist );
     va_end(valist);
     return ret;
+#else
+    (void)format;
+    return -1;
+#endif
 }
 
 /* printf with temp buffer allocation */

@@ -381,14 +381,25 @@ static inline const char *wine_dbgstr_variant( const VARIANT *v )
 #define WINE_ERR_(ch)              __WINE_DPRINTF(_ERR,&__wine_dbch_##ch)
 #define WINE_ERR_ON(ch)            __WINE_IS_DEBUG_ON(_ERR,&__wine_dbch_##ch)
 
+#if DBG
+#define __WINE_DEFAULT_DEBUG_FLAGS ((unsigned char)~0)
+#else
+#define __WINE_DEFAULT_DEBUG_FLAGS 0
+#endif
+
 #define WINE_DECLARE_DEBUG_CHANNEL(ch) \
-    static struct __wine_debug_channel __wine_dbch_##ch = { (unsigned char)~0, #ch }
+    static struct __wine_debug_channel __wine_dbch_##ch = { __WINE_DEFAULT_DEBUG_FLAGS, #ch }
 #define WINE_DEFAULT_DEBUG_CHANNEL(ch) \
-    static struct __wine_debug_channel __wine_dbch_##ch = { (unsigned char)~0, #ch }; \
+    static struct __wine_debug_channel __wine_dbch_##ch = { __WINE_DEFAULT_DEBUG_FLAGS, #ch }; \
     static struct __wine_debug_channel * const __wine_dbch___default = &__wine_dbch_##ch
 
+#if DBG
 #define WINE_DPRINTF               wine_dbg_printf
 #define WINE_MESSAGE               wine_dbg_printf
+#else
+#define WINE_DPRINTF(...)          do { if (0) wine_dbg_printf(__VA_ARGS__); } while (0)
+#define WINE_MESSAGE(...)          do { if (0) wine_dbg_printf(__VA_ARGS__); } while (0)
+#endif
 
 /* Wine uses shorter names that are very likely to conflict with other software */
 
