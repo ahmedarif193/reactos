@@ -1,6 +1,5 @@
 spec2def(libtirpc.dll libtirpc/libtirpc.spec ADD_IMPORTLIB)
 
-add_definitions(-D_WIN32_WINNT=0x600)
 add_definitions(-DUNICODE -D_WIN32 -DPORTMAP -D_CRT_NONSTDC_NO_DEPRECATE=1)
 
 include_directories(${REACTOS_SOURCE_DIR}/dll/3rdparty/libtirpc/tirpc)

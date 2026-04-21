@@ -1,8 +1,6 @@
 
 include_directories(${SHIMLIB_DIR})
 
-remove_definitions(-D_WIN32_WINNT=0x600 -DWINVER=0x600)
-add_definitions(-D_WIN32_WINNT=0x601 -DWINVER=0x601)
 #add_definitions(-DSDBAPI_DEBUG_ALLOC)
 
 spec2def(apphelp.dll apphelp.spec ADD_IMPORTLIB)
