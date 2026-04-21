@@ -1443,7 +1443,7 @@ IopInitializeBootDrivers(VOID)
      */
     PnPBootDriversLoaded = TRUE;
 
-    DbgPrint("BOOT DRIVERS LOADED\n");
+    DPRINT1("BOOT DRIVERS LOADED\n");
 
     PiQueueDeviceAction(IopRootDeviceNode->PhysicalDeviceObject,
                         PiActionEnumDeviceTree,
