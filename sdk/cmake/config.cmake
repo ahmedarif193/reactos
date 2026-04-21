@@ -68,27 +68,42 @@ set(GDB FALSE CACHE BOOL
 Mainly used for cloud-based ReactOS development using Gitpod and Docker.
 If you don't use GDB, don't enable this.")
 
-if(CMAKE_BUILD_TYPE STREQUAL "Release")
-    set(DBG FALSE CACHE BOOL
-"Whether to compile for debugging.")
+if(CMAKE_BUILD_TYPE STREQUAL "Debug")
+    set(_REACTOS_DEFAULT_DBG TRUE)
 else()
-    set(DBG TRUE CACHE BOOL
-"Whether to compile for debugging.")
+    set(_REACTOS_DEFAULT_DBG FALSE)
 endif()
+
+set(DBG ${_REACTOS_DEFAULT_DBG} CACHE BOOL
+"Whether to compile for debugging.")
+
+set(SEPARATE_DBG FALSE CACHE BOOL
+"Whether to generate separate debug symbol files.")
+
+if(CMAKE_BUILD_TYPE STREQUAL "Debug" OR
+   CMAKE_BUILD_TYPE STREQUAL "RelWithDebInfo" OR
+   SEPARATE_DBG)
+    set(_REACTOS_DEFAULT_DEBUG_SYMBOLS TRUE)
+else()
+    set(_REACTOS_DEFAULT_DEBUG_SYMBOLS FALSE)
+endif()
+
+set(WITH_DEBUG_SYMBOLS ${_REACTOS_DEFAULT_DEBUG_SYMBOLS} CACHE BOOL
+"Whether to compile debug information.")
 
 if(MSVC)
     set(KDBG FALSE CACHE BOOL
 "Whether to compile in the integrated kernel debugger.")
-    if(CMAKE_BUILD_TYPE STREQUAL "Release")
-        set(_WINKD_ FALSE CACHE BOOL "Whether to compile with the KD protocol.")
-    else()
+    if(DBG)
         set(_WINKD_ TRUE CACHE BOOL "Whether to compile with the KD protocol.")
+    else()
+        set(_WINKD_ FALSE CACHE BOOL "Whether to compile with the KD protocol.")
     endif()
 else()
-    if(CMAKE_BUILD_TYPE STREQUAL "Release")
-        set(KDBG FALSE CACHE BOOL "Whether to compile in the integrated kernel debugger.")
-    else()
+    if(DBG)
         set(KDBG TRUE CACHE BOOL "Whether to compile in the integrated kernel debugger.")
+    else()
+        set(KDBG FALSE CACHE BOOL "Whether to compile in the integrated kernel debugger.")
     endif()
     set(_WINKD_ FALSE CACHE BOOL "Whether to compile with the KD protocol.")
 endif()
