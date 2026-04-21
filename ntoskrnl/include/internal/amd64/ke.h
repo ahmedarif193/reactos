@@ -381,11 +381,13 @@ Ki386PerfEnd(VOID)
 {
     extern ULONGLONG BootCyclesEnd, BootCycles;
     BootCyclesEnd = __rdtsc();
+#if DBG
     DbgPrint("Boot took %I64u cycles!\n", BootCyclesEnd - BootCycles);
     DbgPrint("Interrupts: %u System Calls: %u Context Switches: %u\n",
              KeGetCurrentPrcb()->InterruptCount,
              KeGetCurrentPrcb()->KeSystemCalls,
              KeGetContextSwitches(KeGetCurrentPrcb()));
+#endif
 }
 
 struct _KPCR;

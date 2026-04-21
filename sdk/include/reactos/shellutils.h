@@ -26,6 +26,7 @@ extern "C" {
 static inline ULONG
 Win32DbgPrint(const char *filename, int line, const char *lpFormat, ...)
 {
+#if DBG
     char szMsg[512];
     char *szMsgStart;
     const char *fname;
@@ -51,13 +52,22 @@ Win32DbgPrint(const char *filename, int line, const char *lpFormat, ...)
     va_end(vl);
 
     OutputDebugStringA(szMsg);
+#else
+    (void)filename;
+    (void)line;
+    (void)lpFormat;
+#endif
 
     /* Return STATUS_SUCCESS, since we are supposed to mimic DbgPrint */
     return 0;
 }
 
+#if DBG
 #define DbgPrint(fmt, ...) \
     Win32DbgPrint(__FILE__, __LINE__, fmt, ##__VA_ARGS__)
+#else
+#define DbgPrint(...) do { if (0) Win32DbgPrint(__FILE__, __LINE__, __VA_ARGS__); } while (0)
+#endif
 
 #ifdef __cplusplus
 #   define IID_PPV_ARG(Itype, ppType) IID_##Itype, reinterpret_cast<void**>((static_cast<Itype**>(ppType)))
@@ -73,7 +83,7 @@ static inline HRESULT HResultFromWin32(DWORD hr)
     return HRESULT_FROM_WIN32(hr);
 }
 
-#if 1
+#if DBG
 
 static inline BOOL _ROS_FAILED_HELPER(HRESULT hr, const char* expr, const char* filename, int line)
 {
