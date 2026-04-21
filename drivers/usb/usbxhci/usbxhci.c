@@ -11788,8 +11788,8 @@ XHCI_StartController(PVOID MiniPortExtension,
     Extension->OperationalRegisters =
         (PXHCI_OPERATIONAL_REGISTERS)(Base + Extension->CapabilityLength);
 
-    DbOffset = Extension->CapabilityRegisters->DbOff & ~0x3UL;
-    RtOffset = Extension->CapabilityRegisters->Rtsoff & ~0x1FUL;
+    DbOffset = XHCI_READ_REGISTER_ULONG(&Extension->CapabilityRegisters->DbOff) & ~0x3UL;
+    RtOffset = XHCI_READ_REGISTER_ULONG(&Extension->CapabilityRegisters->Rtsoff) & ~0x1FUL;
 
     Extension->DoorbellArray = (PXHCI_DOORBELL_ARRAY)(Base + DbOffset);
     Extension->RuntimeRegisters = (PXHCI_RUNTIME_REGISTERS)(Base + RtOffset);
