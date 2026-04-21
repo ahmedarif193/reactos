@@ -20,6 +20,7 @@
 #include <fs/fat.h>
 #include <disk.h>
 #include <arch/archwsup.h>
+#include "part_mbr.h"
 
 #if defined(__GNUC__)
 extern VOID
