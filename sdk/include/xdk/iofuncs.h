@@ -304,7 +304,13 @@ UCHAR
 READ_REGISTER_UCHAR(
   IN volatile UCHAR *Register)
 {
+#if defined(__GNUC__)
+  UCHAR Value;
+  __asm__ __volatile__("movb %1, %0" : "=q"(Value) : "m"(*Register) : "memory");
+  return Value;
+#else
   return *Register;
+#endif
 }
 
 FORCEINLINE
@@ -312,7 +318,13 @@ ULONG
 READ_REGISTER_ULONG(
   IN volatile ULONG *Register)
 {
+#if defined(__GNUC__)
+  ULONG Value;
+  __asm__ __volatile__("movl %1, %0" : "=r"(Value) : "m"(*Register) : "memory");
+  return Value;
+#else
   return *Register;
+#endif
 }
 
 FORCEINLINE
@@ -320,7 +332,13 @@ USHORT
 READ_REGISTER_USHORT(
   IN volatile USHORT *Register)
 {
+#if defined(__GNUC__)
+  USHORT Value;
+  __asm__ __volatile__("movw %1, %0" : "=r"(Value) : "m"(*Register) : "memory");
+  return Value;
+#else
   return *Register;
+#endif
 }
 
 FORCEINLINE
@@ -423,7 +441,11 @@ WRITE_REGISTER_UCHAR(
   IN UCHAR Value)
 {
   LONG Synch;
+#if defined(__GNUC__)
+  __asm__ __volatile__("movb %1, %0" : "=m"(*Register) : "q"(Value) : "memory");
+#else
   *Register = Value;
+#endif
   InterlockedOr(&Synch, 1);
 }
 
@@ -434,7 +456,11 @@ WRITE_REGISTER_ULONG(
   IN ULONG Value)
 {
   LONG Synch;
+#if defined(__GNUC__)
+  __asm__ __volatile__("movl %1, %0" : "=m"(*Register) : "r"(Value) : "memory");
+#else
   *Register = Value;
+#endif
   InterlockedOr(&Synch, 1);
 }
 
@@ -445,7 +471,11 @@ WRITE_REGISTER_USHORT(
   IN USHORT Value)
 {
   LONG Sync;
+#if defined(__GNUC__)
+  __asm__ __volatile__("movw %1, %0" : "=m"(*Register) : "r"(Value) : "memory");
+#else
   *Register = Value;
+#endif
   InterlockedOr(&Sync, 1);
 }
 #endif
