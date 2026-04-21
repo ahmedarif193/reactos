@@ -12,7 +12,7 @@ if(NOT DEFINED SEPARATE_DBG)
 endif()
 
 # Dwarf based builds (no rsym)
-if(CMAKE_BUILD_TYPE STREQUAL "Release")
+if(NOT WITH_DEBUG_SYMBOLS)
     set(NO_ROSSYM TRUE)
 elseif(NOT ARCH STREQUAL "i386")
     set(NO_ROSSYM TRUE)
@@ -154,7 +154,7 @@ elseif(CMAKE_C_COMPILER_ID STREQUAL "Clang")
 endif()
 
 # Debugging
-if(NOT CMAKE_BUILD_TYPE STREQUAL "Release")
+if(WITH_DEBUG_SYMBOLS)
     if(SEPARATE_DBG)
         add_compile_options(-gdwarf-2 -ggdb)
     else()
@@ -169,7 +169,7 @@ endif()
 add_compile_options(-march=${OARCH} -mtune=${TUNE})
 
 # Warnings, errors
-if((NOT CMAKE_BUILD_TYPE STREQUAL "Release") AND (NOT CMAKE_BUILD_TYPE STREQUAL "RelWithDebInfo") AND (NOT CMAKE_C_COMPILER_ID STREQUAL Clang))
+if(DBG AND (NOT CMAKE_C_COMPILER_ID STREQUAL Clang))
     add_compile_options(-Werror)
 endif()
 
@@ -207,8 +207,12 @@ endif()
 
 # Optimizations
 # FIXME: Revisit this to see if we even need these levels
-if(CMAKE_BUILD_TYPE STREQUAL "Release")
+if(CMAKE_BUILD_TYPE STREQUAL "Release" OR CMAKE_BUILD_TYPE STREQUAL "RelWithDebInfo")
     add_compile_options(-O2 -DNDEBUG=)
+    add_compile_options(-Wno-unused-variable)
+    add_compile_options(-Wno-unused-but-set-variable)
+elseif(CMAKE_BUILD_TYPE STREQUAL "MinSizeRel")
+    add_compile_options(-Os -DNDEBUG=)
     add_compile_options(-Wno-unused-variable)
     add_compile_options(-Wno-unused-but-set-variable)
 else()
