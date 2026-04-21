@@ -10,6 +10,8 @@
 
 #include <stdio.h>
 #include <malloc.h>
+#include <pseh/pseh2.h>
+#include <pseh/pseh_cpp_aliases.h>
 
 #ifndef ALIGN
 #define ALIGN 64
