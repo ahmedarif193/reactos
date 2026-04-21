@@ -1,6 +1,4 @@
 
-add_definitions(-D_WIN32_WINNT=0x600)
-
 include_directories(
     ${REACTOS_SOURCE_DIR}/sdk/include/reactos/libs/zlib
     ${REACTOS_SOURCE_DIR}/sdk/lib/3rdparty/zlib/contrib)
