@@ -1,5 +1,5 @@
 
-remove_definitions(-D_WIN32_WINNT=0x600)
+remove_definitions(-D_WIN32_WINNT=${REACTOS_TARGET_NT} -DWINVER=${REACTOS_TARGET_NT})
 
 list(APPEND SOURCE
     adsp.cpp

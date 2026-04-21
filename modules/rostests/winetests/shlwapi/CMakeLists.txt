@@ -1,7 +1,5 @@
 
 include_directories(BEFORE ${REACTOS_SOURCE_DIR}/sdk/include/wine)
-remove_definitions(-DWINVER=0x600 -D_WIN32_WINNT=0x600)
-add_definitions(-DWINVER=0x0600 -D_WIN32_WINNT=0x0600 -DNTDDI_VERSION=0x06000100)
 
 add_definitions(
     -DUSE_WINE_TODOS
