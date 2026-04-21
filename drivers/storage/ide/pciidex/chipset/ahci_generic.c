@@ -383,6 +383,9 @@ AtaAhciCreateChannelData(
         ChanData->SetTransferMode = SataSetTransferMode;
         ChanData->TransferModeSupported = SATA_ALL;
 
+        KeInitializeTimer(&ChanData->PollingTimer);
+        KeInitializeDpc(&ChanData->PollingTimerDpc, AtaAhciPollingTimerDpc, ChanData);
+
         ChanData->IoBase = AHCI_PORT_BASE(Controller->IoBase, i);
 
         ChanData->EnableInterrupts(ChanData, FALSE);
