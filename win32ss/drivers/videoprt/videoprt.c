@@ -57,6 +57,45 @@ IntIsVgaSaveDriver(
     return RtlEqualUnicodeString(&VgaSave, &DriverObject->DriverName, TRUE);
 }
 
+static BOOLEAN
+IntIsUefiFbDriver(
+    _In_ PDRIVER_OBJECT DriverObject)
+{
+    static const UNICODE_STRING UefiFb = RTL_CONSTANT_STRING(L"\\Driver\\uefifb");
+    return RtlEqualUnicodeString(&UefiFb, &DriverObject->DriverName, TRUE);
+}
+
+static BOOLEAN
+IntVideoPortHasEarlierVideoDevice(
+    _In_ ULONG DeviceNumber)
+{
+    ULONG i;
+
+    for (i = 0; i < DeviceNumber; ++i)
+    {
+        WCHAR DeviceBuffer[20];
+        UNICODE_STRING DeviceName;
+        PFILE_OBJECT FileObject;
+        PDEVICE_OBJECT DeviceObject;
+        NTSTATUS Status;
+
+        swprintf(DeviceBuffer, L"\\Device\\Video%lu", i);
+        RtlInitUnicodeString(&DeviceName, DeviceBuffer);
+        Status = IoGetDeviceObjectPointer(&DeviceName,
+                                          FILE_READ_DATA,
+                                          &FileObject,
+                                          &DeviceObject);
+        if (NT_SUCCESS(Status))
+        {
+            UNREFERENCED_PARAMETER(DeviceObject);
+            ObDereferenceObject(FileObject);
+            return TRUE;
+        }
+    }
+
+    return FALSE;
+}
+
 ULONG
 NTAPI
 DriverEntry(
@@ -509,6 +548,13 @@ IntVideoPortFindAdapter(
     if (LegacyDetection)
     {
         ULONG BusNumber;
+
+        if (IntIsUefiFbDriver(DriverObject) &&
+            IntVideoPortHasEarlierVideoDevice(DeviceExtension->DeviceNumber))
+        {
+            Status = STATUS_UNSUCCESSFUL;
+            goto Failure;
+        }
 
         /* Suppose first we may not find any suitable device */
         vpStatus = ERROR_DEV_NOT_EXIST; // ERROR_NO_MORE_DEVICES;
