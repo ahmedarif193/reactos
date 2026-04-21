@@ -28,7 +28,9 @@ EfiEntry(
 {
     PCSTR CmdLine = ""; // FIXME: Determine a command-line from UEFI boot options
 
+#if DBG
     SystemTable->ConOut->OutputString(SystemTable->ConOut, L"UEFI EntryPoint: Starting freeldr from UEFI");
+#endif
     GlobalImageHandle = ImageHandle;
     GlobalSystemTable = SystemTable;
 
