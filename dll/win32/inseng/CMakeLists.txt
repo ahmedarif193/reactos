@@ -1,6 +1,4 @@
 
-add_definitions(-D_WIN32_WINNT=0x600)
-
 add_definitions(
     -Dstrcasecmp=_stricmp
     -Dstrncasecmp=_strnicmp

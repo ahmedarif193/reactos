@@ -1,5 +1,5 @@
 
-remove_definitions(-DWINVER=0x600 -D_WIN32_IE=0x600 -D_WIN32_WINNT=0x600)
+remove_definitions(-DWINVER=${REACTOS_TARGET_NT} -D_WIN32_WINNT=${REACTOS_TARGET_NT})
 
 list(APPEND SOURCE
     bitmap.c

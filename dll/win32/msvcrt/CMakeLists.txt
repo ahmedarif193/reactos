@@ -6,10 +6,6 @@
 # Use conforming swprintfs
 remove_definitions(-D_CRT_NON_CONFORMING_SWPRINTFS)
 
-# This requires NT6
-remove_definitions(-D_WIN32_WINNT=0x600 -DWINVER=0x600)
-add_definitions(-D_WIN32_WINNT=0x601 -DWINVER=0x601)
-
 # Replace the global CRT include directory with the msvcrt include directory
 get_property(INCLUDE_DIRS DIRECTORY . PROPERTY INCLUDE_DIRECTORIES)
 list(REMOVE_ITEM INCLUDE_DIRS "${REACTOS_SOURCE_DIR}/sdk/include/crt")
