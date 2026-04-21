@@ -1,7 +1,6 @@
 
 
 spec2def(portcls.sys portcls.spec ADD_IMPORTLIB)
-add_definitions(-D_WIN32_WINNT=0x600)
 
 list(APPEND SOURCE
     adapter.cpp

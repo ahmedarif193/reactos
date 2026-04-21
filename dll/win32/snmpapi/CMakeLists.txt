@@ -1,6 +1,4 @@
 
-add_definitions(-D_WIN32_WINNT=0x600)
-
 spec2def(snmpapi.dll snmpapi.spec ADD_IMPORTLIB)
 
 list(APPEND SOURCE

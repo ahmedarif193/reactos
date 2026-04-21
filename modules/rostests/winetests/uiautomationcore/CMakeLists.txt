@@ -1,6 +1,5 @@
 
-remove_definitions(-D_WIN32_WINNT=0x502)
-add_definitions(-D_WIN32_WINNT=0x600)
+remove_definitions(-D_CRT_NON_CONFORMING_SWPRINTFS)
 
 add_executable(uiautomationcore_winetest uiautomation.c testlist.c)
 add_dependencies(uiautomationcore_winetest wineheaders)

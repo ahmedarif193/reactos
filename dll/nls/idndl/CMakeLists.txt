@@ -1,7 +1,4 @@
 
-remove_definitions(-DWINVER=0x600)
-add_definitions(-DWINVER=0x600)
-
 spec2def(idndl.dll idndl.spec)
 
 add_library(idndl MODULE

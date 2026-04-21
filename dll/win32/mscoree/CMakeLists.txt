@@ -1,5 +1,5 @@
 
-add_definitions(-D_WIN32_WINNT=0x600 -DUSE_NEW_WINE_REGISTER_RESOURCES)
+add_definitions(-DUSE_NEW_WINE_REGISTER_RESOURCES)
 
 spec2def(mscoree.dll mscoree.spec)
 

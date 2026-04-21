@@ -1,6 +1,4 @@
 
-add_definitions(-D_WIN32_WINNT=0x600)
-
 add_definitions(
     -D_ATL_VER=_ATL_VER_100)
 

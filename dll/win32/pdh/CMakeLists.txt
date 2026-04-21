@@ -1,6 +1,4 @@
 
-add_definitions(-D_WIN32_WINNT=0x600)
-
 spec2def(pdh.dll pdh.spec ADD_IMPORTLIB)
 
 list(APPEND SOURCE

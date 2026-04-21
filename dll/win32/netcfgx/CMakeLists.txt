@@ -1,6 +1,4 @@
 
-add_definitions(-D_WIN32_WINNT=0x600)
-
 spec2def(netcfgx.dll netcfgx.spec)
 
 list(APPEND SOURCE

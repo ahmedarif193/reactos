@@ -1,5 +1,5 @@
 
-remove_definitions(-D_WIN32_WINNT=0x600 -D_WIN32_IE=0x600)
+remove_definitions(-D_WIN32_WINNT=${REACTOS_TARGET_NT} -DWINVER=${REACTOS_TARGET_NT})
 
 add_definitions(-D__ROS_LONG64__)
 add_definitions(-DUSE_WINE_TODOS -DWINETEST_USE_DBGSTR_LONGLONG)

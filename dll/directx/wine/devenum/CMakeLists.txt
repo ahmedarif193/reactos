@@ -13,12 +13,6 @@ add_library(devenum MODULE
     devenum.rc
     ${CMAKE_CURRENT_BINARY_DIR}/devenum.def)
 
-if(MSVC)
-    target_compile_options(devenum PRIVATE /UWINVER /DWINVER=0x600 /U_WIN32_WINNT /D_WIN32_WINNT=0x600)
-else()
-    target_compile_options(devenum PRIVATE -UWINVER -DWINVER=0x600 -U_WIN32_WINNT -D_WIN32_WINNT=0x600)
-endif()
-
 set_source_files_properties(devenum.rc PROPERTIES OBJECT_DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/devenum_classes.rgs)
 set_module_type(devenum win32dll UNICODE)
 target_link_libraries(devenum strmiids uuid wine)
