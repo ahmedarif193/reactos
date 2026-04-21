@@ -1,6 +1,4 @@
 
-add_definitions(-D_WIN32_WINNT=0x600)
-
 spec2def(wshom.ocx wshom.ocx.spec)
 add_idl_headers(wshom_idlheader wshom.idl)
 add_typelib(wshom.idl)

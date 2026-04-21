@@ -1,5 +1,5 @@
 
-remove_definitions(-D_WIN32_WINNT=0x600)
+remove_definitions(-D_WIN32_WINNT=${REACTOS_TARGET_NT})
 add_definitions(-D_WIN32_WINNT=0x603)
 
 include_directories(${REACTOS_SOURCE_DIR}/drivers/filesystems/btrfs)
