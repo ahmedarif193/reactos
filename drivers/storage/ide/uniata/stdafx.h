@@ -5,6 +5,8 @@ extern "C" {
 #include <ntddk.h>
 
 };
+#include <pseh/pseh2.h>
+#include <pseh/pseh_cpp_aliases.h>
 #include "stddef.h"
 #include "stdarg.h"
 
@@ -30,4 +32,3 @@ extern "C" {
 #endif //UNIATA_CORE
 
 #include "badblock.h"
-

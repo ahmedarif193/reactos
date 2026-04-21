@@ -113,6 +113,9 @@ extern "C" {
 #endif //_CONSOLE
 
 #include <pseh/pseh2.h>
+#ifdef __cplusplus
+#include <pseh/pseh_cpp_aliases.h>
+#endif
 
 #include "Include/check_env.h"
 
@@ -380,4 +383,3 @@ extern CCHAR   DefLetter[];
 #include <ddk/mountmgr.h>
 
 #endif  // _UDF_UDF_H_
-

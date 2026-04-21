@@ -13,7 +13,7 @@
 #include <excpt.h>
 #include <stdlib.h>
 #include <intrin.h>
-#include <pseh/pseh2.h>
+#include <pseh/pseh_cpp_push.h>
 
 // Defined in winnt.h
 #define FAST_FAIL_FATAL_APP_EXIT 7
@@ -87,3 +87,4 @@ static __declspec(noinline) int __cdecl __commonCRTStartup()
 
     exit(exitCode);
 }
+#include <pseh/pseh_cpp_pop.h>
