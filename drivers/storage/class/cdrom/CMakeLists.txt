@@ -1,5 +1,5 @@
 
-remove_definitions(-D_WIN32_WINNT=0x600)
+remove_definitions(-D_WIN32_WINNT=${REACTOS_TARGET_NT} -DWINVER=${REACTOS_TARGET_NT})
 
 list(APPEND SOURCE
     aacs.c
@@ -29,8 +29,10 @@ if(CMAKE_C_COMPILER_ID STREQUAL "Clang")
     target_compile_options(cdrom PRIVATE -Wno-enum-conversion -Wno-tautological-constant-compare)
 endif()
 
-target_compile_definitions(cdrom PRIVATE DEBUG_USE_KDPRINT 
-    WDF_DEVICE_NO_WDMSEC_H _WIN32_WINNT=0x603 NTDDI_VERSION=0x06030000)
+target_compile_definitions(cdrom PRIVATE DEBUG_USE_KDPRINT WDF_DEVICE_NO_WDMSEC_H)
+target_compile_options(cdrom PRIVATE
+    -U_WIN32_WINNT -D_WIN32_WINNT=0x603
+    -UNTDDI_VERSION -DNTDDI_VERSION=0x06030000)
 
 target_link_libraries(cdrom ntoskrnl_vista libcntpr ${PSEH_LIB})
 add_importlibs(cdrom wdfldr ntoskrnl hal)

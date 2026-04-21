@@ -41,12 +41,6 @@ add_library(quartz MODULE
     ${CMAKE_CURRENT_BINARY_DIR}/quartz.def
     version.rc)
 
-if(MSVC)
-    target_compile_options(quartz PRIVATE /U_WIN32_WINNT /D_WIN32_WINNT=0x600)
-else()
-    target_compile_options(quartz PRIVATE -U_WIN32_WINNT -D_WIN32_WINNT=0x600)
-endif()
-
 add_idl_headers(quartz_idlheader fil_data.idl)
 add_typelib(control_tlb.idl)
 
