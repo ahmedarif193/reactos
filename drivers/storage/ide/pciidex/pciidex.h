@@ -344,6 +344,8 @@ typedef struct _CHANNEL_DATA_AHCI
     UCHAR LastPmpDeviceNumber;
     UCHAR LastFbsDeviceNumber;
     ULONG TotalPortCount;
+    KTIMER PollingTimer;
+    KDPC PollingTimerDpc;
     CHANNEL_INFO_AHCI Mem;
 } CHANNEL_DATA_AHCI, *PCHANNEL_DATA_AHCI;
 
@@ -626,6 +628,7 @@ CHANNEL_START_IO AtaAhciStartIo;
 CHANNEL_PREPARE_IO AtaAhciPrepareIo;
 CHANNEL_PREPARE_PRD_TABLE AtaAhciPreparePrdTable;
 CHANNEL_ALLOCATE_SLOT AtaAhciAllocateSlot;
+KDEFERRED_ROUTINE AtaAhciPollingTimerDpc;
 KSERVICE_ROUTINE AtaAhciHbaIsr;
 
 /* pata_generic.c *************************************************************/
