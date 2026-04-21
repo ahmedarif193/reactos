@@ -68,10 +68,11 @@ static char *alloc_buffer(size_t size)
     return (char*)(buffer + 1);
 }
 
+#if DBG
 static void free_buffers(void)
 {
     int slot = find_thread_slot();
-    if (slot != -1)
+    if (slot == -1)
     {
         return;
     }
@@ -87,6 +88,7 @@ static void free_buffers(void)
     s_alloactions[slot].allocations = NULL;
     s_alloactions[slot].thread = NULL;
 }
+#endif
 
 const char *wine_dbg_vsprintf(const char *format, va_list valist)
 {
@@ -146,6 +148,7 @@ static int default_dbg_vprintf( const char *format, va_list args )
 
 int wine_dbg_printf(const char *format, ... )
 {
+#if DBG
     int ret;
     va_list valist;
 
@@ -154,6 +157,10 @@ int wine_dbg_printf(const char *format, ... )
     va_end(valist);
     free_buffers();
     return ret;
+#else
+    (void)format;
+    return -1;
+#endif
 }
 
 static int winefmt_default_dbg_vlog( enum __wine_debug_class cls, struct __wine_debug_channel *channel,
@@ -169,8 +176,13 @@ static int winefmt_default_dbg_vlog( enum __wine_debug_class cls, struct __wine_
     return ret;
 }
 
+#if DBG
 #define __wine_dbg_get_channel_flags(channel) \
     ((channel) ? (channel)->flags : 0)
+#else
+#define __wine_dbg_get_channel_flags(channel) \
+    ((void)(channel), 0)
+#endif
 
 int ros_dbg_log( enum __wine_debug_class cls, struct __wine_debug_channel *channel,
                   const char *file, const char *func, const int line, const char *format, ... )
