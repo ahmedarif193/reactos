@@ -17,6 +17,8 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <eh.h>
+#include <pseh/pseh2.h>
+#include <pseh/pseh_cpp_aliases.h>
 
 int FGenSEHException;
 

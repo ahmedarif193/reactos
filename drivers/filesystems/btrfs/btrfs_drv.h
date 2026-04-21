@@ -48,6 +48,7 @@
 #include <rtlfuncs.h>
 #include <iotypes.h>
 #include <pseh/pseh2.h>
+#include <pseh/pseh_cpp_aliases.h>
 #endif /* __REACTOS__ */
 #include <windef.h>
 #include <wdm.h>

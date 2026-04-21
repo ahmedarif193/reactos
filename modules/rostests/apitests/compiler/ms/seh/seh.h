@@ -16,6 +16,7 @@
 #else
 
 #include <pseh/pseh2.h>
+#include <pseh/pseh_cpp_aliases.h>
 
 #define try     _SEH2_TRY
 #define except  _SEH2_EXCEPT

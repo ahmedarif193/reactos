@@ -8,7 +8,7 @@
 
 #include <vcruntime.h>
 
-#if !defined(RC_INVOKED) && !defined(__cplusplus)
+#if !defined(RC_INVOKED)
 #include <pseh/pseh2.h>
 #endif
 

@@ -29,7 +29,7 @@
     #include <roapi.h>
 #endif
 
-#include <pseh/pseh2.h>
+#include <pseh/pseh_cpp_aliases.h>
 
 _CRT_BEGIN_C_HEADER
 

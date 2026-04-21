@@ -181,12 +181,8 @@ extern const IMAGE_TLS_DIRECTORY _tls_used;
 #ifdef __cplusplus
 } // extern "C"
 
-#pragma push_macro("__try")
-#pragma push_macro("__except")
-#pragma push_macro("__finally")
-#pragma push_macro("__endtry")
-#pragma push_macro("__leave")
 #include <pseh/pseh2.h>
+#include <pseh/pseh_cpp_push.h>
 
 template<typename T>
 __forceinline
@@ -352,9 +348,5 @@ using __crt_scoped_stack_ptr = __crt_unique_heap_ptr<T, __crt_malloca_free_polic
 #define _recalloc_crt_t(t, p, n) (__crt_unique_heap_ptr<t>(static_cast<t*>(_recalloc_crt(p, (n), sizeof(t)))))
 #define _malloca_crt_t(t, n) (__crt_scoped_stack_ptr<t>(static_cast<t*>(_malloca_crt((n) * sizeof(t)))))
 
-#pragma pop_macro("__leave")
-#pragma pop_macro("__endtry")
-#pragma pop_macro("__finally")
-#pragma pop_macro("__except")
-#pragma pop_macro("__try")
+#include <pseh/pseh_cpp_pop.h>
 #endif // __cplusplus
