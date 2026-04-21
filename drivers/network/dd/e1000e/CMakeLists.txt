@@ -48,6 +48,7 @@ target_compile_options(e1000e PRIVATE
     -Wno-address
     -Wno-enum-compare)
 
+target_link_libraries(e1000e wdmguid)
 add_importlibs(e1000e ndis ntoskrnl hal)
 add_cd_file(TARGET e1000e DESTINATION reactos/system32/drivers FOR all)
 add_driver_inf(e1000e nete1000e.inf)
