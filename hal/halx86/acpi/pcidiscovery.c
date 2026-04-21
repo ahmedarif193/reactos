@@ -38,6 +38,8 @@ typedef struct _MCFG_ALLOCATION {
 
 /* PRIVATE FUNCTIONS **********************************************************/
 
+#if DBG
+
 CODE_SEG("INIT")
 static
 VOID
@@ -905,5 +907,17 @@ HalpAcpiPcieInitializeExtendedConfig(VOID)
     /* Print footer */
     DbgPrint("\n====== END PCIe EXTENDED CONFIG INIT =======\n\n");
 }
+
+#else /* !DBG */
+
+CODE_SEG("INIT")
+VOID
+NTAPI
+HalpAcpiPcieInitializeExtendedConfig(VOID)
+{
+    /* Release builds skip the PCIe enumeration dump. */
+}
+
+#endif /* DBG */
 
 /* EOF */
