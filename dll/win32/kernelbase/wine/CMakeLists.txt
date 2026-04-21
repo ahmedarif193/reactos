@@ -1,4 +1,4 @@
-add_definitions(-D__WINESRC__ -D_KERNEL32_ -DWINVER=0x601 -D_WIN32_WINNT=0x601)
+add_definitions(-D__WINESRC__ -D_KERNEL32_)
 add_definitions(
     -D__WINESRC__
     -D_WINE

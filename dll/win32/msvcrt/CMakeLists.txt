@@ -3,9 +3,8 @@
 # Global compile options
 ###############################################################################
 
-# This requires NT6
-remove_definitions(-D_WIN32_WINNT=0x600 -DWINVER=0x600)
-add_definitions(-D_WIN32_WINNT=0x601 -DWINVER=0x601)
+# Use conforming swprintfs
+remove_definitions(-D_CRT_NON_CONFORMING_SWPRINTFS)
 
 # Replace the global CRT include directory with the msvcrt include directory
 get_property(INCLUDE_DIRS DIRECTORY . PROPERTY INCLUDE_DIRECTORIES)

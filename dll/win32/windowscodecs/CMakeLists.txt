@@ -4,7 +4,6 @@ add_definitions(
     -DPROXY_DELEGATION
     -DWINE_REGISTER_DLL)
 
-add_definitions(-D_WIN32_WINNT=0x600)
 remove_definitions(-D_CRT_NON_CONFORMING_SWPRINTFS)
 
 include_directories(
