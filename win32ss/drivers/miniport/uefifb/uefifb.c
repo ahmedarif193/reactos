@@ -7,10 +7,7 @@
  * COPYRIGHT:   Copyright 2026 Ahmed Arif <arif193@gmail.com>
  *
  * This driver is intentionally non-PnP: the GOP framebuffer is a pre-boot
- * firmware resource, not a bus-enumerated device. It is loaded through the
- * legacy videoport service registration (Group "Video Save", Tag 1) so it
- * binds before vga.sys / VgaSave, and claims \Device\Video0 when
- * InbvGetGopFrameBufferInfo reports a valid handoff.
+ * firmware resource, not a bus-enumerated device.
  */
 
 #include "uefifb.h"

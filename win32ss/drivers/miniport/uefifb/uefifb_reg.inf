@@ -5,21 +5,14 @@
 ; via InbvGetGopFrameBufferInfo). The PnP manager instantiates a synthetic
 ; root PDO ("ROOT\LEGACY_UEFIFB\0000") through the legacy driver bridge in
 ; IopCreateDeviceNode when the service is started.
-;
-; Ordering:
-;   Start = SERVICE_BOOT_START (0) and Tag = 1 (< VgaSave's Tag = 2 in the
-;   "Video Save" group) so uefifb binds before vga.sys on UEFI systems and
-;   claims \Device\Video0 with the live firmware framebuffer. On BIOS boots
-;   UefiFbFindAdapter returns ERROR_DEV_NOT_EXIST (no GOP handoff), the
-;   miniport silently unloads, and VgaSave takes over as usual.
 
 [AddReg]
 HKLM,"SYSTEM\CurrentControlSet\Services\uefifb","ErrorControl",0x00010001,0x00000000
 HKLM,"SYSTEM\CurrentControlSet\Services\uefifb","Group",0x00000000,"Video Save"
 HKLM,"SYSTEM\CurrentControlSet\Services\uefifb","ImagePath",0x00020000,"system32\drivers\uefifb.sys"
-HKLM,"SYSTEM\CurrentControlSet\Services\uefifb","Start",0x00010001,0x00000000
+HKLM,"SYSTEM\CurrentControlSet\Services\uefifb","Start",0x00010001,0x00000001
 HKLM,"SYSTEM\CurrentControlSet\Services\uefifb","Type",0x00010001,0x00000001
-HKLM,"SYSTEM\CurrentControlSet\Services\uefifb","Tag",0x00010001,0x00000001
+HKLM,"SYSTEM\CurrentControlSet\Services\uefifb","Tag",0x00010001,0x00000003
 HKLM,"SYSTEM\CurrentControlSet\Services\uefifb\Video","Service",0x00000000,"uefifb"
 
 HKLM,"SYSTEM\CurrentControlSet\Services\uefifb\Device0","InstalledDisplayDrivers",0x00010000,"framebuf"
