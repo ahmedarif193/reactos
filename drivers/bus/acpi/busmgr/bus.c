@@ -1668,6 +1668,39 @@ acpi_bus_init (void)
 	}
 
 	/*
+	 * Inform the firmware that the OS is using the IOAPIC. This switches
+	 * the _PRT routing returned by Link objects from PIC-mode legacy ISA
+	 * IRQs (0-15) to the IOAPIC input numbers (16+ for PIRQA..D on a
+	 * PIIX/ICH south bridge). Without this call, a kernel running in
+	 * APIC mode receives _PRT entries that do not correspond to the
+	 * IOAPIC pins where the virtual (and real) PCH actually asserts
+	 * PCI INTx, and level-triggered PCI interrupts are never delivered.
+	 *
+	 * A missing _PIC method is not fatal; some firmwares do not expose
+	 * it and default to returning APIC-ready routing unconditionally.
+	 */
+	{
+		ACPI_OBJECT_LIST ArgList;
+		ACPI_OBJECT Arg;
+
+		Arg.Type = ACPI_TYPE_INTEGER;
+		Arg.Integer.Value = 1; /* APIC interrupt model */
+		ArgList.Count = 1;
+		ArgList.Pointer = &Arg;
+
+		status = AcpiEvaluateObject(NULL, "\\_PIC", &ArgList, NULL);
+		if (status == AE_NOT_FOUND) {
+			DPRINT1("ACPI: _PIC method not present; firmware assumed APIC-ready\n");
+		} else if (ACPI_FAILURE(status)) {
+			DPRINT1("ACPI: _PIC(1) evaluation failed (0x%X)\n", status);
+		} else {
+			DPRINT1("ACPI: _PIC(1) OK - firmware switched to APIC routing\n");
+		}
+		/* Reset status so a non-fatal _PIC failure does not stop init. */
+		status = AE_OK;
+	}
+
+	/*
 	 * Maybe EC region is required at bus_scan/acpi_get_devices. So it
 	 * is necessary to enable it as early as possible.
 	 */
