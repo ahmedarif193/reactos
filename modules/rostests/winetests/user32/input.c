@@ -1853,6 +1853,15 @@ static void test_GetMouseMovePointsEx_process(void)
     HDESK desk0, desk1;
     HWINSTA winstation0, winstation1;
 
+#ifdef __REACTOS__
+    if (is_reactos())
+    {
+        ok(FALSE, "Broken on ReactOS\n");
+        skip("Skipping test_GetMouseMovePointsEx_process due to CORE-20552\n");
+        return;
+    }
+#endif
+
     memset( out, 0, sizeof(out) );
     memset( out2, 0, sizeof(out2) );
 
@@ -3637,7 +3646,11 @@ static void test_keyboard_layout_name(void)
 
         for (j = 0; layouts_preload[j]; ++j)
         {
+#ifdef __REACTOS__
+            swprintf( tmpklid, KL_NAMELENGTH, L"%08X", HandleToUlong(layouts_preload[j]) );
+#else
             swprintf( tmpklid, KL_NAMELENGTH, L"%08X", layouts_preload[j] );
+#endif
             if (!wcscmp( tmpklid, klid )) break;
         }
         ok(j < len, "Could not find keyboard layout %s in preload list\n", wine_dbgstr_w(klid));
