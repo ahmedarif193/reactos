@@ -1,0 +1,38 @@
+## Summary
+
+While doing local Clang/LLVM 21 amd64 LiveCD bring-up work, libc++ started
+pulling in `TryAcquireSRWLockExclusive` and `TryAcquireSRWLockShared` from C++
+code built for a ReactOS pre-Win7 user-mode export surface.
+
+Those APIs are Win7-era exports, so adding them to the public NT 5.2 or NT 6.0
+`kernel32`/Vista compatibility import libraries would make those export
+surfaces less accurate. This instead keeps the compatibility handling inside a
+static `llvmcompat` library that is only added for Clang builds targeting an
+export surface older than Win7.
+
+## Details
+
+Add Clang-only static shims for the SRW try-lock APIs used by llvm-mingw's
+libc++. The implementations operate directly on the SRW lock value using the
+same bit layout already used by the RTL SRW helpers, and also provide the
+corresponding `__imp_` symbols expected by MinGW-style imports.
+
+This fixes the Clang/llvm-mingw link failure without exporting Win7 APIs from
+older ReactOS DLL export surfaces and without changing GCC or MSVC builds.
+
+The NT 6.0 compatibility import surface can be reviewed separately as follow-up
+work; this change intentionally provides only a static Clang compatibility path
+for pre-Win7 targets.
+
+## Testing
+
+Validated in the local Clang/LLVM 21 amd64 release build used for LiveCD
+bring-up:
+
+```
+timeout 50s ninja -C output-Clang-amd64-release fltmc
+timeout 50s ninja -C output-Clang-amd64-release livecd
+```
+
+The LiveCD image was generated successfully after the SRW try-lock symbols were
+provided.
