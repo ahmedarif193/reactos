@@ -273,4 +273,3 @@ KiSystemService(IN PKTHREAD Thread,
     UNIMPLEMENTED;
     __debugbreak();
 }
-
