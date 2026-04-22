@@ -1,8 +1,13 @@
+
 #define _KERNEL32_
 
 #define WIN32_NO_STATUS
 #include <windef.h>
 #include <winbase.h>
+
+#if !defined(_WIN32_WINNT) || (_WIN32_WINNT < 0x0600)
+typedef RTL_SRWLOCK SRWLOCK, *PSRWLOCK;
+#endif
 
 #ifdef _WIN64
 #define RTL_SRWLOCK_ONE 1LL
