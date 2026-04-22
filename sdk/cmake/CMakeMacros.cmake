@@ -43,6 +43,8 @@ function(add_message_headers _type)
         set(_mc_depends "${_converted_file}")
         if(TARGET ${CMAKE_MC_COMPILER})
             list(APPEND _mc_depends ${CMAKE_MC_COMPILER})
+        elseif(IS_ABSOLUTE "${CMAKE_MC_COMPILER}")
+            list(APPEND _mc_depends "${CMAKE_MC_COMPILER}")
         endif()
         utf16le_convert(${_source_file} ${_converted_file} nobom)
         add_custom_command(
