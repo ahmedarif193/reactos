@@ -65,26 +65,26 @@ function(add_asm16_bin _target _binary_file _base_address)
     set_source_files_properties(${_concatenated_asm_file} PROPERTIES GENERATED TRUE)
 
     if(CMAKE_C_COMPILER_ID STREQUAL "Clang")
-        # Step 1: CPP preprocess via Clang. We feed the result to GNU `as`,
-        # not Clang's integrated assembler, so undefine __clang__ to keep
-        # asm.inc on the GAS path (otherwise it adds case-only aliases that
-        # collide under MinGW GAS's case-insensitive macro names).
+        if(_base_address MATCHES "^0[xX]")
+            set(_base_address_arg ${_base_address})
+        else()
+            set(_base_address_arg 0x${_base_address})
+        endif()
+
         add_custom_command(
             OUTPUT ${_preprocessed_file}
-            COMMAND ${CMAKE_ASM_COMPILER} -E -x assembler-with-cpp -U__clang__ -o ${_preprocessed_file} -I${REACTOS_SOURCE_DIR}/sdk/include/asm -I${REACTOS_BINARY_DIR}/sdk/include/asm ${_directory_includes} ${_source_file_defines} ${_directory_defines} -D__ASM__ ${_concatenated_asm_file}
+            COMMAND ${CMAKE_ASM_COMPILER} -E -x assembler-with-cpp -o ${_preprocessed_file} -I${REACTOS_SOURCE_DIR}/sdk/include/asm -I${REACTOS_BINARY_DIR}/sdk/include/asm ${_directory_includes} ${_source_file_defines} ${_directory_defines} -D__ASM__ ${_concatenated_asm_file}
             DEPENDS ${_concatenated_asm_file})
 
-        # Step 2: Assemble with GNU as (handles 16-bit relocations).
         add_custom_command(
             OUTPUT ${_object_file}
-            COMMAND ${ASM16_GAS} ${_preprocessed_file} -o ${_object_file}
+            COMMAND ${CMAKE_ASM_COMPILER} -target i386-unknown-elf -x assembler -c ${_preprocessed_file} -o ${_object_file}
             DEPENDS ${_preprocessed_file})
 
-        # Step 3: Flatten to a raw binary at the expected real-mode load address
         add_custom_command(
             OUTPUT ${_binary_file}
-            COMMAND native-obj2bin ${_object_file} ${_binary_file} ${_base_address}
-            DEPENDS ${_object_file} native-obj2bin)
+            COMMAND ${CMAKE_LINKER} -m elf_i386 --image-base=0 -Ttext=${_base_address_arg} --oformat=binary -o ${_binary_file} ${_object_file}
+            DEPENDS ${_object_file})
     else()
         ##
         ## All this part is the same as CreateBootSectorTarget

@@ -5,10 +5,6 @@
 
 if(_REACTOS_CLANG_BUILD_CONFIG)
 
-if(POLICY CMP0116)
-    cmake_policy(SET CMP0116 NEW)
-endif()
-
 # =============================================================================
 # Build Configuration (included from CMakeLists.txt after project())
 # =============================================================================
@@ -71,12 +67,12 @@ endif()
 # The case for C++ is handled through the reactos_c++ INTERFACE library
 add_compile_options("$<$<NOT:$<COMPILE_LANGUAGE:CXX>>:-nostdlibinc>")
 
-# Add Clang's builtin include path for compiler-provided headers such as
-# xmmintrin.h and mmintrin.h.  Keep it explicit because -nostdlibinc and
-# -nobuiltininc are used below, but mark it as a system include so diagnostics
-# from Clang's own headers don't pollute ReactOS builds.
+# Add Clang's builtin include path (intrinsics headers like xmmintrin.h, mmintrin.h, etc.)
+# before everything else. ReactOS ships its own versions of these in sdk/include/vcruntime
+# that use GCC-specific __builtin_ia32_* builtins which don't exist in Clang.
+# Injected into CMAKE_C/CXX_COMPILE_OBJECT before <INCLUDES> so Clang's own
+# intrinsics headers are found before ReactOS's GCC-specific versions.
 execute_process(COMMAND ${CMAKE_C_COMPILER} -print-resource-dir OUTPUT_VARIABLE CLANG_RESOURCE_DIR OUTPUT_STRIP_TRAILING_WHITESPACE)
-set(CLANG_RESOURCE_INCLUDE_FLAG "-isystem ${CLANG_RESOURCE_DIR}/include")
 
 # Clang-specific options
 add_compile_options("$<$<COMPILE_LANGUAGE:C>:-Wno-microsoft>")
@@ -118,11 +114,14 @@ add_compile_options(-Wall -Wpointer-arith -Wunused-result)
 # Disable some overzealous warnings
 add_compile_options(
     -Wno-unknown-warning-option
+    -Wno-char-subscripts
     -Wno-multichar
+    -Wno-unused-value
     -Wno-unused-const-variable
     -Wno-unused-local-typedefs
     -Wno-deprecated
-    -Wno-missing-braces
+    -Wno-unused-result # FIXME To be removed when CORE-17637 is resolved
+    -Wno-format
     -Wno-error=implicit-function-declaration
     -Wno-error=incompatible-library-redeclaration
     -Wno-error=incompatible-pointer-types
@@ -137,6 +136,7 @@ endif()
 if(CMAKE_BUILD_TYPE STREQUAL "Release")
     add_compile_options(-O2 -DNDEBUG=)
     add_compile_options(-Wno-unused-variable)
+    add_compile_options(-Wno-unused-but-set-variable)
 else()
     if(OPTIMIZE STREQUAL "1")
         add_compile_options(-Os)
@@ -275,9 +275,9 @@ set(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS_INIT} -Wl,--disable-stdcall
 set(CMAKE_SHARED_LINKER_FLAGS "${CMAKE_SHARED_LINKER_FLAGS_INIT} -Wl,--disable-stdcall-fixup")
 set(CMAKE_MODULE_LINKER_FLAGS "${CMAKE_MODULE_LINKER_FLAGS_INIT} -Wl,--disable-stdcall-fixup")
 
-set(CMAKE_C_COMPILE_OBJECT "<CMAKE_C_COMPILER> <DEFINES> ${_compress_debug_sections_flag} ${CLANG_RESOURCE_INCLUDE_FLAG} <INCLUDES> <FLAGS> -o <OBJECT> -c <SOURCE>")
+set(CMAKE_C_COMPILE_OBJECT "<CMAKE_C_COMPILER> <DEFINES> ${_compress_debug_sections_flag} -I${CLANG_RESOURCE_DIR}/include <INCLUDES> <FLAGS> -o <OBJECT> -c <SOURCE>")
 set(_reactos_cppstl_pre_include_flags "")
-set(CMAKE_CXX_COMPILE_OBJECT "<CMAKE_CXX_COMPILER> <DEFINES>${_reactos_cppstl_pre_include_flags} ${CLANG_RESOURCE_INCLUDE_FLAG} <INCLUDES> <FLAGS> -o <OBJECT> -c <SOURCE>")
+set(CMAKE_CXX_COMPILE_OBJECT "<CMAKE_CXX_COMPILER> <DEFINES>${_reactos_cppstl_pre_include_flags} -I${CLANG_RESOURCE_DIR}/include <INCLUDES> <FLAGS> -o <OBJECT> -c <SOURCE>")
 set(CMAKE_ASM_COMPILE_OBJECT "<CMAKE_ASM_COMPILER> ${_compress_debug_sections_flag} -x assembler-with-cpp -o <OBJECT> -I${REACTOS_SOURCE_DIR}/sdk/include/asm -I${REACTOS_BINARY_DIR}/sdk/include/asm <INCLUDES> <FLAGS> <DEFINES> -D__ASM__ -c <SOURCE>")
 
 set(_rc_target_flag)
@@ -470,7 +470,6 @@ set(PSEH_LIB "pseh")
 function(CreateBootSectorTarget _target_name _asm_file _binary_file _base_address)
     set(_object_file ${_binary_file}.o)
     set(_preprocessed_file ${_binary_file}.pp.s)
-    set(_preprocessed_depfile ${_preprocessed_file}.d)
 
     get_defines(_defines)
     get_includes(_includes)
@@ -482,9 +481,8 @@ function(CreateBootSectorTarget _target_name _asm_file _binary_file _base_addres
     # Step 1: Preprocess with Clang
     add_custom_command(
         OUTPUT ${_preprocessed_file}
-        COMMAND ${CMAKE_ASM_COMPILER} -E -x assembler-with-cpp -MMD -MF ${_preprocessed_depfile} -MT ${_preprocessed_file} -o ${_preprocessed_file} -I${REACTOS_SOURCE_DIR}/sdk/include/asm -I${REACTOS_BINARY_DIR}/sdk/include/asm ${_includes} ${_defines} -D__ASM__ ${_asm_file}
-        DEPENDS ${_asm_file}
-        DEPFILE ${_preprocessed_depfile})
+        COMMAND ${CMAKE_ASM_COMPILER} -E -x assembler-with-cpp -o ${_preprocessed_file} -I${REACTOS_SOURCE_DIR}/sdk/include/asm -I${REACTOS_BINARY_DIR}/sdk/include/asm ${_includes} ${_defines} -D__ASM__ ${_asm_file}
+        DEPENDS ${_asm_file})
 
     # Step 2: Assemble with Clang (produces ELF objects)
     add_custom_command(
@@ -913,7 +911,7 @@ else()
     target_compile_definitions(libstdc++ INTERFACE "$<$<COMPILE_LANGUAGE:CXX>:PAL_STDCPP_COMPAT>")
 endif()
 
-set(CMAKE_CXX_COMPILE_OBJECT "<CMAKE_CXX_COMPILER> <DEFINES>${_reactos_cppstl_pre_include_flags} ${CLANG_RESOURCE_INCLUDE_FLAG} <INCLUDES> <FLAGS> -o <OBJECT> -c <SOURCE>")
+set(CMAKE_CXX_COMPILE_OBJECT "<CMAKE_CXX_COMPILER> <DEFINES>${_reactos_cppstl_pre_include_flags} -I${CLANG_RESOURCE_DIR}/include <INCLUDES> <FLAGS> -o <OBJECT> -c <SOURCE>")
 
 # Create our alias libraries
 add_library(cppstl ALIAS libstdc++)
