@@ -315,7 +315,7 @@ VidBufferToScreenBlt(
      * should be written directly to the framebuffer without passing through
      * the legacy 4bpp indexed-color helper.
      */
-    if (VidBufferToScreenBltNative(Buffer, Left, Top, Width, Height, Delta))
+    if (VidBufferToScreenBltNative(Buffer, Left, Top, Width, Height, Stride))
         return;
 #endif
 

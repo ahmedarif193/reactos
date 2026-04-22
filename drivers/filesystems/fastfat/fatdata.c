@@ -1573,4 +1573,3 @@ Return Value:
                                    &Fcb->FullFileName,
                                    Thread);
 }
-
