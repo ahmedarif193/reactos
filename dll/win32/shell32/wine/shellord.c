@@ -2630,6 +2630,8 @@ HRESULT WINAPI SHStartNetConnectionDialog(HWND hwnd, LPCSTR pszRemoteName, DWORD
     return S_OK;
 #endif
 }
+
+#ifndef __REACTOS__ /* See ../utils.cpp */
 /*************************************************************************
  *              SHSetLocalizedName (SHELL32.@)
  */
@@ -2639,6 +2641,7 @@ HRESULT WINAPI SHSetLocalizedName(LPCWSTR pszPath, LPCWSTR pszResModule, int ids
 
     return S_OK;
 }
+#endif
 
 #ifndef __REACTOS__ // See ../utils.cpp
 /*************************************************************************
