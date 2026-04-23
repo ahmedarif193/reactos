@@ -2640,6 +2640,7 @@ HRESULT WINAPI SHSetLocalizedName(LPCWSTR pszPath, LPCWSTR pszResModule, int ids
     return S_OK;
 }
 
+#ifndef __REACTOS__ // See ../utils.cpp
 /*************************************************************************
  *              LinkWindow_RegisterClass (SHELL32.258)
  */
@@ -2657,6 +2658,7 @@ BOOL WINAPI LinkWindow_UnregisterClass(DWORD dwUnused)
     FIXME("()\n");
     return TRUE;
 }
+#endif
 
 /*************************************************************************
  *              SHFlushSFCache (SHELL32.526)

@@ -2189,3 +2189,31 @@ SHELL32_AliasTranslatePidl(
 {
     return SHELL32_ReparentAsAliasPidl(NULL, NULL, pidl, ppidlNew, dwFlags) ? S_OK : E_FAIL;
 }
+
+/*************************************************************************
+ *              LinkWindow_RegisterClass (SHELL32.258)
+ *
+ * https://learn.microsoft.com/en-us/windows/win32/shell/linkwindow-registerclass
+ */
+EXTERN_C BOOL WINAPI LinkWindow_RegisterClass(VOID)
+{
+    INITCOMMONCONTROLSEX iccx = { sizeof(iccx), ICC_LINK_CLASS };
+    InitCommonControlsEx(&iccx);
+
+    WNDCLASSEXW wcx = { sizeof(wcx) };
+    if (!GetClassInfoExW(NULL, L"SysLink", &wcx))
+        return FALSE;
+
+    /* Superclassing! */
+    wcx.lpszClassName = L"Link Window";
+    return RegisterClassExW(&wcx) || (GetLastError() == ERROR_CLASS_ALREADY_EXISTS);
+}
+
+/*************************************************************************
+ *              LinkWindow_UnregisterClass (SHELL32.259)
+ */
+EXTERN_C BOOL WINAPI LinkWindow_UnregisterClass(_In_ DWORD dwUnused)
+{
+    /* Do nothing. This is correct. */
+    return TRUE;
+}
