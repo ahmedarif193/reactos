@@ -1,0 +1,6 @@
+; SD Storage Function Protocol driver — registry entries
+[AddReg]
+HKLM,"SYSTEM\CurrentControlSet\Services\sffp_sd","ErrorControl",0x00010001,0x00000001
+HKLM,"SYSTEM\CurrentControlSet\Services\sffp_sd","ImagePath",0x00020000,"system32\drivers\sffp_sd.sys"
+HKLM,"SYSTEM\CurrentControlSet\Services\sffp_sd","Start",0x00010001,0x00000003
+HKLM,"SYSTEM\CurrentControlSet\Services\sffp_sd","Type",0x00010001,0x00000001

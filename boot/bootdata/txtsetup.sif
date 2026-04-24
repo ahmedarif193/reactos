@@ -214,7 +214,6 @@ atapi = atapi.sys
 ;uniata = uniata.sys
 atapi = atapi.sys
 buslogic = buslogic.sys
-storahci = storahci.sys
 disk = disk.sys
 
 [MouseDrivers.Load]

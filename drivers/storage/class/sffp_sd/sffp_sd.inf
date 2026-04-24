@@ -1,0 +1,72 @@
+;
+; PROJECT:     ReactOS SD/SDIO/eMMC Driver Stack
+; LICENSE:     GPL-2.0-or-later (https://spdx.org/licenses/GPL-2.0-or-later)
+; PURPOSE:     SD Storage Function Protocol Driver INF
+; COPYRIGHT:   Copyright 2026 Ahmed ARIF <arif.ing@outlook.com>
+;
+
+[Version]
+Signature  = "$Windows NT$"
+Class      = SFProtocol
+ClassGUID  = {d3a5e393-4a5c-4b6f-8e72-1d0b8c4a5f2e}
+Provider   = %ROS%
+DriverVer  = 04/21/2026,10.0.0.1
+CatalogFile = sffp_sd.cat
+
+[SourceDisksNames]
+1 = %DiskName%,,,
+
+[SourceDisksFiles]
+sffp_sd.sys = 1
+
+[DestinationDirs]
+DefaultDestDir = 12 ; DIRID_DRIVERS
+
+[ClassInstall32.NT]
+AddReg = SFProtocol_Class_AddReg
+
+[SFProtocol_Class_AddReg]
+HKR, , ,               0, %SFProtocolClassName%
+HKR, , NoInstallClass, 0, 1
+HKR, , SilentInstall,  0, 1
+
+[Manufacturer]
+%GenManufacturer% = SD_Protocol_Devices,NT
+
+[SD_Protocol_Devices]
+
+[SD_Protocol_Devices.NT]
+%SD_Protocol.DeviceDesc%  = sffp_sd_Inst, SD\FUNC_SDMEM
+%SD_Protocol.DeviceDesc%  = sffp_sd_Inst, SD\FUNC_MMCMEM
+
+[ControlFlags]
+ExcludeFromSelect = *
+
+[sffp_sd_Inst]
+CopyFiles = sffp_sd_CopyFiles
+
+[sffp_sd_CopyFiles]
+sffp_sd.sys,,,1
+
+[sffp_sd_Inst.Services]
+AddService = sffp_sd, %SPSVCINST_ASSOCSERVICE%, sffp_sd_Service_Inst
+
+[sffp_sd_Service_Inst]
+DisplayName    = %ServiceDesc%
+ServiceType    = %SERVICE_KERNEL_DRIVER%
+StartType      = %SERVICE_DEMAND_START%
+ErrorControl   = %SERVICE_ERROR_NORMAL%
+ServiceBinary  = %12%\sffp_sd.sys
+
+[Strings]
+ROS                      = "ReactOS"
+DiskName                 = "ReactOS SD Function Protocol Driver Installation Disk"
+SFProtocolClassName      = "SD Storage Function Protocol"
+GenManufacturer          = "(Standard SD Function Protocols)"
+ServiceDesc              = "SD Storage Function Protocol Driver"
+SD_Protocol.DeviceDesc   = "SD/MMC Storage Function Protocol"
+
+SPSVCINST_ASSOCSERVICE = 0x00000002
+SERVICE_KERNEL_DRIVER  = 1
+SERVICE_DEMAND_START   = 3
+SERVICE_ERROR_NORMAL   = 1
