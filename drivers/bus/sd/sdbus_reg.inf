@@ -1,0 +1,7 @@
+; SD Bus Driver — registry entries for boot-time loading
+[AddReg]
+HKLM,"SYSTEM\CurrentControlSet\Services\sdbus","ErrorControl",0x00010001,0x00000001
+HKLM,"SYSTEM\CurrentControlSet\Services\sdbus","Group",0x00000000,"System Bus Extender"
+HKLM,"SYSTEM\CurrentControlSet\Services\sdbus","ImagePath",0x00020000,"system32\drivers\sdbus.sys"
+HKLM,"SYSTEM\CurrentControlSet\Services\sdbus","Start",0x00010001,0x00000000
+HKLM,"SYSTEM\CurrentControlSet\Services\sdbus","Type",0x00010001,0x00000001
