@@ -1,0 +1,5 @@
+#define REACTOS_VERSION_DLL
+#define REACTOS_STR_FILE_DESCRIPTION  "SD Memory Card Function Protocol Driver"
+#define REACTOS_STR_INTERNAL_NAME     "sffp_sd"
+#define REACTOS_STR_ORIGINAL_FILENAME "sffp_sd.sys"
+#include <reactos/version.rc>
