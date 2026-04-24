@@ -1,0 +1,7 @@
+; SD Port driver — registry entries
+[AddReg]
+HKLM,"SYSTEM\CurrentControlSet\Services\sdport","ErrorControl",0x00010001,0x00000001
+HKLM,"SYSTEM\CurrentControlSet\Services\sdport","Group",0x00000000,"System Bus Extender"
+HKLM,"SYSTEM\CurrentControlSet\Services\sdport","ImagePath",0x00020000,"system32\drivers\sdport.sys"
+HKLM,"SYSTEM\CurrentControlSet\Services\sdport","Start",0x00010001,0x00000000
+HKLM,"SYSTEM\CurrentControlSet\Services\sdport","Type",0x00010001,0x00000001

@@ -1121,6 +1121,36 @@ HalpScatterGatherAdapterControl(IN PDEVICE_OBJECT DeviceObject,
                                      0);
 }
 
+static
+PROS_MAP_REGISTER_ENTRY
+NTAPI
+HalpFindMapRegisterEntryForLogicalAddress(
+    _In_opt_ PROS_MAP_REGISTER_ENTRY MapRegisterBase,
+    _In_ ULONG MapRegisterCount,
+    _In_ PHYSICAL_ADDRESS LogicalAddress)
+{
+    ULONG Index;
+    ULONGLONG Address = LogicalAddress.QuadPart;
+
+    if (MapRegisterBase == NULL || MapRegisterCount == 0)
+    {
+        return NULL;
+    }
+
+    for (Index = 0; Index < MapRegisterCount; Index++)
+    {
+        ULONGLONG Start = MapRegisterBase[Index].PhysicalAddress.QuadPart;
+        ULONGLONG End = Start + PAGE_SIZE;
+
+        if (Address >= Start && Address < End)
+        {
+            return &MapRegisterBase[Index];
+        }
+    }
+
+    return NULL;
+}
+
 /**
  * @name HalPutScatterGatherList
  *
@@ -1146,13 +1176,39 @@ HalpScatterGatherAdapterControl(IN PDEVICE_OBJECT DeviceObject,
 						 IN BOOLEAN WriteToDevice)
 {
     PSCATTER_GATHER_CONTEXT AdapterControlContext = (PSCATTER_GATHER_CONTEXT)ScatterGather->Reserved;
+    PROS_MAP_REGISTER_ENTRY RealMapRegisterBase;
+    ULONG_PTR MapRegisterFlags;
 	ULONG i;
+
+    UNREFERENCED_PARAMETER(WriteToDevice);
+
+    RealMapRegisterBase = (PROS_MAP_REGISTER_ENTRY)
+        ((ULONG_PTR)AdapterControlContext->MapRegisterBase & ~MAP_BASE_SW_SG);
+    MapRegisterFlags = (ULONG_PTR)AdapterControlContext->MapRegisterBase & MAP_BASE_SW_SG;
 
 	for (i = 0; i < ScatterGather->NumberOfElements; i++)
 	{
-	     IoFlushAdapterBuffers(AdapterObject,
+        PVOID FlushMapRegisterBase = AdapterControlContext->MapRegisterBase;
+
+        if (!(MapRegisterFlags & MAP_BASE_SW_SG) &&
+            RealMapRegisterBase != NULL &&
+            AdapterControlContext->MapRegisterCount != 0)
+        {
+            PROS_MAP_REGISTER_ENTRY Entry;
+
+            Entry = HalpFindMapRegisterEntryForLogicalAddress(
+                RealMapRegisterBase,
+                AdapterControlContext->MapRegisterCount,
+                ScatterGather->Elements[i].Address);
+            if (Entry != NULL)
+            {
+                FlushMapRegisterBase = (PVOID)((ULONG_PTR)Entry | MapRegisterFlags);
+            }
+        }
+
+		 IoFlushAdapterBuffers(AdapterObject,
 		                       AdapterControlContext->Mdl,
-							   AdapterControlContext->MapRegisterBase,
+							   FlushMapRegisterBase,
 							   AdapterControlContext->CurrentVa,
 							   ScatterGather->Elements[i].Length,
 							   AdapterControlContext->WriteToDevice);
