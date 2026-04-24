@@ -223,16 +223,16 @@
 223 stdcall -noname SHGlobalCounterGetValue(long)
 224 stdcall -noname SHGlobalCounterIncrement(long)
 225 stdcall -noname SHStripMneumonicW(wstr)
-226 stub -noname ZoneCheckPathA
-227 stub -noname ZoneCheckPathW
-228 stub -noname ZoneCheckUrlA
-229 stub -noname ZoneCheckUrlW
-230 stub -noname ZoneCheckUrlExA
-231 stdcall -noname ZoneCheckUrlExW(wstr ptr long long long long long long)
-232 stub -noname ZoneCheckUrlExCacheA
-233 stub -noname ZoneCheckUrlExCacheW
-234 stub -noname ZoneCheckHost
-235 stub -noname ZoneCheckHostEx
+226 stdcall -noname ZoneCheckPathA(str long long ptr)
+227 stdcall -noname ZoneCheckPathW(wstr long long ptr)
+228 stdcall -noname ZoneCheckUrlA(str long long ptr)
+229 stdcall -noname ZoneCheckUrlW(wstr long long ptr)
+230 stdcall -noname ZoneCheckUrlExA(str ptr long ptr long long long ptr)
+231 stdcall -noname ZoneCheckUrlExW(wstr ptr long ptr long long long ptr)
+232 stdcall -noname ZoneCheckUrlExCacheA(str ptr long ptr long long long ptr ptr)
+233 stdcall -noname ZoneCheckUrlExCacheW(wstr ptr long ptr long long long ptr ptr)
+234 stdcall -noname ZoneCheckHost(ptr wstr long)
+235 stdcall -noname ZoneCheckHostEx(ptr ptr long ptr long wstr long)
 236 stdcall -noname SHPinDllOfCLSID(ptr)
 237 stdcall -noname SHRegisterClassW(ptr)
 238 stdcall -noname SHUnregisterClassesA(ptr ptr long)
