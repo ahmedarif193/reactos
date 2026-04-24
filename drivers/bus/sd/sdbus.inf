@@ -1,0 +1,165 @@
+;
+; PROJECT:     ReactOS SD/SDIO/eMMC Driver Stack
+; LICENSE:     GPL-2.0-or-later (https://spdx.org/licenses/GPL-2.0-or-later)
+; PURPOSE:     SD Bus Driver INF — installs on SD Host Controller (PCI Class 08/05)
+; COPYRIGHT:   Copyright 2026 Ahmed ARIF <arif.ing@outlook.com>
+;
+
+[Version]
+Signature  = "$Windows NT$"
+Class      = SDHost
+ClassGUID  = {a0a588a4-c46f-4b37-b7ea-c82fe89870c6}
+Provider   = %ROS%
+DriverVer  = 04/21/2026,10.0.0.1
+CatalogFile = sdbus.cat
+
+[SourceDisksNames]
+1 = %DiskName%,,,
+
+[SourceDisksFiles]
+sdbus.sys = 1
+
+[DestinationDirs]
+DefaultDestDir = 12 ; DIRID_DRIVERS
+
+;
+; SD Host class registration (if not already present)
+;
+[ClassInstall32.NT]
+AddReg = SDHost_Class_AddReg
+
+[SDHost_Class_AddReg]
+HKR, , ,               0, %SDHostClassName%
+HKR, , Icon,           0, "-9"
+HKR, , NoInstallClass, 0, 1
+HKR, , SilentInstall,  0, 1
+
+;
+; Manufacturer section
+;
+[Manufacturer]
+%GenManufacturer% = SDHost_Devices,NT
+
+[SDHost_Devices]
+
+[SDHost_Devices.NT]
+; Standard SD Host Controller (PCI Class 08 Subclass 05)
+%SD_HOST_STD.DeviceDesc%  = sdbus_Inst, PCI\CC_0805
+%SD_HOST_STD.DeviceDesc%  = sdbus_Inst, PCI\CC_080500
+%SD_HOST_STD.DeviceDesc%  = sdbus_Inst, PCI\CC_080501
+
+; Ricoh SD controllers
+%Ricoh_SD.DeviceDesc%     = sdbus_Inst, PCI\VEN_1180&DEV_E822
+%Ricoh_SD.DeviceDesc%     = sdbus_Inst, PCI\VEN_1180&DEV_E823
+%Ricoh_SD.DeviceDesc%     = sdbus_Inst, PCI\VEN_1180&DEV_E832
+%Ricoh_SD.DeviceDesc%     = sdbus_Inst, PCI\VEN_1180&DEV_0822
+%Ricoh_SD.DeviceDesc%     = sdbus_Inst, PCI\VEN_1180&DEV_0843
+
+; O2Micro SD controllers
+%O2Micro_SD.DeviceDesc%   = sdbus_Inst, PCI\VEN_1217&DEV_8520
+%O2Micro_SD.DeviceDesc%   = sdbus_Inst, PCI\VEN_1217&DEV_8521
+%O2Micro_SD.DeviceDesc%   = sdbus_Inst, PCI\VEN_1217&DEV_8620
+%O2Micro_SD.DeviceDesc%   = sdbus_Inst, PCI\VEN_1217&DEV_8621
+
+; Realtek SD controllers (common in laptops)
+%Realtek_SD.DeviceDesc%   = sdbus_Inst, PCI\VEN_10EC&DEV_5209
+%Realtek_SD.DeviceDesc%   = sdbus_Inst, PCI\VEN_10EC&DEV_5227
+%Realtek_SD.DeviceDesc%   = sdbus_Inst, PCI\VEN_10EC&DEV_5229
+%Realtek_SD.DeviceDesc%   = sdbus_Inst, PCI\VEN_10EC&DEV_522A
+%Realtek_SD.DeviceDesc%   = sdbus_Inst, PCI\VEN_10EC&DEV_525A
+
+; Genesys Logic SD controllers
+%GL_SD.DeviceDesc%        = sdbus_Inst, PCI\VEN_17A0&DEV_9750
+%GL_SD.DeviceDesc%        = sdbus_Inst, PCI\VEN_17A0&DEV_9755
+
+; Intel SD controllers (Bay Trail, Cherry Trail, Apollo Lake, etc.)
+%Intel_SD.DeviceDesc%     = sdbus_Inst, PCI\VEN_8086&DEV_0F14
+%Intel_SD.DeviceDesc%     = sdbus_Inst, PCI\VEN_8086&DEV_0F15
+%Intel_SD.DeviceDesc%     = sdbus_Inst, PCI\VEN_8086&DEV_0F16
+%Intel_SD.DeviceDesc%     = sdbus_Inst, PCI\VEN_8086&DEV_0F50
+%Intel_SD.DeviceDesc%     = sdbus_Inst, PCI\VEN_8086&DEV_2294
+%Intel_SD.DeviceDesc%     = sdbus_Inst, PCI\VEN_8086&DEV_2295
+%Intel_SD.DeviceDesc%     = sdbus_Inst, PCI\VEN_8086&DEV_2296
+%Intel_SD.DeviceDesc%     = sdbus_Inst, PCI\VEN_8086&DEV_5ACA
+%Intel_SD.DeviceDesc%     = sdbus_Inst, PCI\VEN_8086&DEV_5ACC
+%Intel_SD.DeviceDesc%     = sdbus_Inst, PCI\VEN_8086&DEV_5AD0
+%Intel_SD.DeviceDesc%     = sdbus_Inst, PCI\VEN_8086&DEV_31CC
+%Intel_SD.DeviceDesc%     = sdbus_Inst, PCI\VEN_8086&DEV_31D0
+%Intel_SD.DeviceDesc%     = sdbus_Inst, PCI\VEN_8086&DEV_9D2B
+%Intel_SD.DeviceDesc%     = sdbus_Inst, PCI\VEN_8086&DEV_9D2C
+%Intel_SD.DeviceDesc%     = sdbus_Inst, PCI\VEN_8086&DEV_9D2D
+%Intel_SD.DeviceDesc%     = sdbus_Inst, PCI\VEN_8086&DEV_9DC4
+%Intel_SD.DeviceDesc%     = sdbus_Inst, PCI\VEN_8086&DEV_A0C5
+%Intel_SD.DeviceDesc%     = sdbus_Inst, PCI\VEN_8086&DEV_34C4
+%Intel_SD.DeviceDesc%     = sdbus_Inst, PCI\VEN_8086&DEV_4B47
+%Intel_SD.DeviceDesc%     = sdbus_Inst, PCI\VEN_8086&DEV_4DC4
+%Intel_SD.DeviceDesc%     = sdbus_Inst, PCI\VEN_8086&DEV_54C4
+
+; QEMU SDHCI (virtio SD host controller)
+%QEMU_SD.DeviceDesc%     = sdbus_Inst, PCI\VEN_1B36&DEV_0007
+
+%SD_HOST_ACPI.DeviceDesc% = sdbus_Inst, ACPI\PNP0D40
+%SD_HOST_ACPI.DeviceDesc% = sdbus_Inst, ACPI\PNP0FFF
+%Intel_BYT_SD.DeviceDesc% = sdbus_Inst, ACPI\INT33BB
+%Intel_BYT_SD.DeviceDesc% = sdbus_Inst, ACPI\INT33C6
+%Intel_BYT_SD.DeviceDesc% = sdbus_Inst, ACPI\80860F14
+%Intel_APL_SD.DeviceDesc% = sdbus_Inst, ACPI\80865ACA
+%Intel_GLK_SD.DeviceDesc% = sdbus_Inst, ACPI\80864B47
+
+[ControlFlags]
+ExcludeFromSelect = *
+
+;
+; Install section
+;
+[sdbus_Inst]
+CopyFiles = sdbus_CopyFiles
+
+[sdbus_CopyFiles]
+sdbus.sys,,,1
+
+[sdbus_Inst.Services]
+AddService = sdbus, %SPSVCINST_ASSOCSERVICE%, sdbus_Service_Inst, sdbus_EventLog_Inst
+
+[sdbus_Service_Inst]
+DisplayName    = %ServiceDesc%
+ServiceType    = %SERVICE_KERNEL_DRIVER%
+StartType      = %SERVICE_BOOT_START%
+ErrorControl   = %SERVICE_ERROR_NORMAL%
+ServiceBinary  = %12%\sdbus.sys
+LoadOrderGroup = System Bus Extender
+
+[sdbus_EventLog_Inst]
+AddReg = sdbus_EventLog_AddReg
+
+[sdbus_EventLog_AddReg]
+HKR, , EventMessageFile, %REG_EXPAND_SZ%, "%%SystemRoot%%\System32\IoLogMsg.dll"
+HKR, , TypesSupported, %REG_DWORD%, 7
+
+;
+; Strings
+;
+[Strings]
+ROS                     = "ReactOS"
+DiskName                = "ReactOS SD Bus Driver Installation Disk"
+SDHostClassName         = "SD Host Controllers"
+GenManufacturer         = "(Standard SD Host Controllers)"
+ServiceDesc             = "SD Bus Driver"
+SD_HOST_STD.DeviceDesc  = "Standard SD Host Controller"
+Ricoh_SD.DeviceDesc     = "Ricoh SD Host Controller"
+O2Micro_SD.DeviceDesc   = "O2Micro SD Host Controller"
+Realtek_SD.DeviceDesc   = "Realtek SD Host Controller"
+GL_SD.DeviceDesc        = "Genesys Logic SD Host Controller"
+Intel_SD.DeviceDesc     = "Intel SD Host Controller"
+QEMU_SD.DeviceDesc      = "QEMU SDHCI Controller"
+SD_HOST_ACPI.DeviceDesc = "Standard SD Host Controller (ACPI)"
+Intel_BYT_SD.DeviceDesc = "Intel Bay Trail SD/SDIO Host Controller"
+Intel_APL_SD.DeviceDesc = "Intel Apollo Lake SD Host Controller"
+Intel_GLK_SD.DeviceDesc = "Intel Gemini Lake SD Host Controller"
+
+SPSVCINST_ASSOCSERVICE = 0x00000002
+SERVICE_KERNEL_DRIVER  = 1
+SERVICE_BOOT_START     = 0
+SERVICE_ERROR_NORMAL   = 1
+REG_EXPAND_SZ          = 0x00020000
+REG_DWORD              = 0x00010001

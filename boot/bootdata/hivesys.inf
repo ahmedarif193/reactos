@@ -110,6 +110,26 @@ HKLM,"SYSTEM\CurrentControlSet\Control\CriticalDeviceDatabase\PCI#CC_0300","Clas
 HKLM,"SYSTEM\CurrentControlSet\Control\CriticalDeviceDatabase\PCI#CC_0301","Service",0x00000000,"vga"
 HKLM,"SYSTEM\CurrentControlSet\Control\CriticalDeviceDatabase\PCI#CC_0301","ClassGUID",0x00000000,"{4D36E968-E325-11CE-BFC1-08002BE10318}"
 
+; SD Host Controller support (PCI Class 08, Subclass 05)
+HKLM,"SYSTEM\CurrentControlSet\Control\CriticalDeviceDatabase\PCI#CC_0805","Service",0x00000000,"sdbus"
+HKLM,"SYSTEM\CurrentControlSet\Control\CriticalDeviceDatabase\PCI#CC_0805","ClassGUID",0x00000000,"{a0a588a4-c46f-4b37-b7ea-c82fe89870c6}"
+HKLM,"SYSTEM\CurrentControlSet\Control\CriticalDeviceDatabase\PCI#CC_080500","Service",0x00000000,"sdbus"
+HKLM,"SYSTEM\CurrentControlSet\Control\CriticalDeviceDatabase\PCI#CC_080500","ClassGUID",0x00000000,"{a0a588a4-c46f-4b37-b7ea-c82fe89870c6}"
+HKLM,"SYSTEM\CurrentControlSet\Control\CriticalDeviceDatabase\PCI#CC_080501","Service",0x00000000,"sdbus"
+HKLM,"SYSTEM\CurrentControlSet\Control\CriticalDeviceDatabase\PCI#CC_080501","ClassGUID",0x00000000,"{a0a588a4-c46f-4b37-b7ea-c82fe89870c6}"
+; QEMU SDHCI controller
+HKLM,"SYSTEM\CurrentControlSet\Control\CriticalDeviceDatabase\PCI#VEN_1B36&DEV_0007","Service",0x00000000,"sdbus"
+HKLM,"SYSTEM\CurrentControlSet\Control\CriticalDeviceDatabase\PCI#VEN_1B36&DEV_0007","ClassGUID",0x00000000,"{a0a588a4-c46f-4b37-b7ea-c82fe89870c6}"
+; SD card class driver (loaded on sdbus child PDOs)
+HKLM,"SYSTEM\CurrentControlSet\Control\CriticalDeviceDatabase\SD#CLASS_MEMORY","Service",0x00000000,"sffdisk"
+HKLM,"SYSTEM\CurrentControlSet\Control\CriticalDeviceDatabase\SD#CLASS_MEMORY","ClassGUID",0x00000000,"{4D36E967-E325-11CE-BFC1-08002BE10318}"
+HKLM,"SYSTEM\CurrentControlSet\Control\CriticalDeviceDatabase\SD#CLASS_MMC","Service",0x00000000,"sffdisk"
+HKLM,"SYSTEM\CurrentControlSet\Control\CriticalDeviceDatabase\SD#CLASS_MMC","ClassGUID",0x00000000,"{4D36E967-E325-11CE-BFC1-08002BE10318}"
+HKLM,"SYSTEM\CurrentControlSet\Control\CriticalDeviceDatabase\SD#CLASS_EMMC","Service",0x00000000,"sffdisk"
+HKLM,"SYSTEM\CurrentControlSet\Control\CriticalDeviceDatabase\SD#CLASS_EMMC","ClassGUID",0x00000000,"{4D36E967-E325-11CE-BFC1-08002BE10318}"
+HKLM,"SYSTEM\CurrentControlSet\Control\CriticalDeviceDatabase\SD#CLASS_COMBO","Service",0x00000000,"sffdisk"
+HKLM,"SYSTEM\CurrentControlSet\Control\CriticalDeviceDatabase\SD#CLASS_COMBO","ClassGUID",0x00000000,"{4D36E967-E325-11CE-BFC1-08002BE10318}"
+
 HKLM,"SYSTEM\CurrentControlSet\Control\CriticalDeviceDatabase\*PNP0303","Service",0x00000000,"i8042prt"
 HKLM,"SYSTEM\CurrentControlSet\Control\CriticalDeviceDatabase\*PNP0303","ClassGUID",0x00000000,"{4D36E96B-E325-11CE-BFC1-08002BE10318}"
 
@@ -377,6 +397,18 @@ HKLM,"SYSTEM\CurrentControlSet\Control\Class\{36FC9E60-C465-11CF-8056-4445535400
 HKLM,"SYSTEM\CurrentControlSet\Control\Class\{36FC9E60-C465-11CF-8056-444553540000}","Class",0x00000000,"USB"
 HKLM,"SYSTEM\CurrentControlSet\Control\Class\{36FC9E60-C465-11CF-8056-444553540000}","Icon",0x00000000,"-20"
 HKLM,"SYSTEM\CurrentControlSet\Control\Class\{36FC9E60-C465-11CF-8056-444553540000}","NoInstallClass",0x00000000,"1"
+
+HKLM,"SYSTEM\CurrentControlSet\Control\Class\{a0a588a4-c46f-4b37-b7ea-c82fe89870c6}",,0x00000000,"SD Host Controllers"
+HKLM,"SYSTEM\CurrentControlSet\Control\Class\{a0a588a4-c46f-4b37-b7ea-c82fe89870c6}","Class",0x00000000,"SDHost"
+HKLM,"SYSTEM\CurrentControlSet\Control\Class\{a0a588a4-c46f-4b37-b7ea-c82fe89870c6}","Icon",0x00000000,"-9"
+HKLM,"SYSTEM\CurrentControlSet\Control\Class\{a0a588a4-c46f-4b37-b7ea-c82fe89870c6}","NoInstallClass",0x00000000,"1"
+HKLM,"SYSTEM\CurrentControlSet\Control\Class\{a0a588a4-c46f-4b37-b7ea-c82fe89870c6}","SilentInstall",0x00000000,"1"
+
+HKLM,"SYSTEM\CurrentControlSet\Control\Class\{4D36E96A-E325-11CE-BFC1-08002BE10318}",,0x00000000,"Hard disk controllers"
+HKLM,"SYSTEM\CurrentControlSet\Control\Class\{4D36E96A-E325-11CE-BFC1-08002BE10318}","Class",0x00000000,"HDC"
+HKLM,"SYSTEM\CurrentControlSet\Control\Class\{4D36E96A-E325-11CE-BFC1-08002BE10318}","Icon",0x00000000,"-9"
+HKLM,"SYSTEM\CurrentControlSet\Control\Class\{4D36E96A-E325-11CE-BFC1-08002BE10318}","Installer32",0x00000000,"syssetup.dll,HdcClassInstaller"
+HKLM,"SYSTEM\CurrentControlSet\Control\Class\{4D36E96A-E325-11CE-BFC1-08002BE10318}","EnumPropPages32",0x00000000,"storprop.dll,HwPropPageProvider"
 
 HKLM,"SYSTEM\CurrentControlSet\Control\Class\{4D36E965-E325-11CE-BFC1-08002BE10318}",,0x00000000,"DVD/CD-ROM drives"
 HKLM,"SYSTEM\CurrentControlSet\Control\Class\{4D36E965-E325-11CE-BFC1-08002BE10318}","Class",0x00000000,"CDROM"
@@ -1866,6 +1898,74 @@ HKLM,"SYSTEM\CurrentControlSet\Services\usbccgp","Group",0x00000000,"Boot Bus Ex
 HKLM,"SYSTEM\CurrentControlSet\Services\usbccgp","ImagePath",0x00020000,"system32\drivers\usbccgp.sys"
 HKLM,"SYSTEM\CurrentControlSet\Services\usbccgp","Start",0x00010001,0x00000000
 HKLM,"SYSTEM\CurrentControlSet\Services\usbccgp","Type",0x00010001,0x00000001
+
+; Include PCI IDE drivers for AMD64 installations
+; pciide driver
+;HKLM,"SYSTEM\CurrentControlSet\Services\pciide","ErrorControl",0x00010001,0x00000001
+;HKLM,"SYSTEM\CurrentControlSet\Services\pciide","Group",0x00000000,"System Bus Extender"
+;HKLM,"SYSTEM\CurrentControlSet\Services\pciide","ImagePath",0x00020000,"system32\drivers\pciide.sys"
+;HKLM,"SYSTEM\CurrentControlSet\Services\pciide","Start",0x00010001,0x00000000
+;HKLM,"SYSTEM\CurrentControlSet\Services\pciide","Type",0x00010001,0x00000001
+
+; pciidex driver
+;HKLM,"SYSTEM\CurrentControlSet\Services\pciidex","ErrorControl",0x00010001,0x00000001
+;HKLM,"SYSTEM\CurrentControlSet\Services\pciidex","Group",0x00000000,"System Bus Extender"
+;HKLM,"SYSTEM\CurrentControlSet\Services\pciidex","ImagePath",0x00020000,"system32\drivers\pciidex.sys"
+;HKLM,"SYSTEM\CurrentControlSet\Services\pciidex","Start",0x00010001,0x00000000
+;HKLM,"SYSTEM\CurrentControlSet\Services\pciidex","Type",0x00010001,0x00000001
+
+; atapi driver
+;HKLM,"SYSTEM\CurrentControlSet\Services\atapi","ErrorControl",0x00010001,0x00000001
+;HKLM,"SYSTEM\CurrentControlSet\Services\atapi","Group",0x00000000,"SCSI Miniport"
+;HKLM,"SYSTEM\CurrentControlSet\Services\atapi","ImagePath",0x00020000,"system32\drivers\atapi.sys"
+;HKLM,"SYSTEM\CurrentControlSet\Services\atapi","Start",0x00010001,0x00000000
+;HKLM,"SYSTEM\CurrentControlSet\Services\atapi","Type",0x00010001,0x00000001
+; SD Bus driver (bus FDO on SD Host Controller, creates child PDOs for cards)
+HKLM,"SYSTEM\CurrentControlSet\Services\sdbus","ErrorControl",0x00010001,0x00000001
+HKLM,"SYSTEM\CurrentControlSet\Services\sdbus","Group",0x00000000,"System Bus Extender"
+HKLM,"SYSTEM\CurrentControlSet\Services\sdbus","ImagePath",0x00020000,"system32\drivers\sdbus.sys"
+HKLM,"SYSTEM\CurrentControlSet\Services\sdbus","Start",0x00010001,0x00000000
+HKLM,"SYSTEM\CurrentControlSet\Services\sdbus","Type",0x00010001,0x00000001
+
+; SD Flash Disk class driver (block I/O on SD/MMC/eMMC card PDOs)
+HKLM,"SYSTEM\CurrentControlSet\Services\sffdisk","ErrorControl",0x00010001,0x00000001
+HKLM,"SYSTEM\CurrentControlSet\Services\sffdisk","Group",0x00000000,"SCSI Class"
+HKLM,"SYSTEM\CurrentControlSet\Services\sffdisk","ImagePath",0x00020000,"system32\drivers\sffdisk.sys"
+HKLM,"SYSTEM\CurrentControlSet\Services\sffdisk","Start",0x00010001,0x00000000
+HKLM,"SYSTEM\CurrentControlSet\Services\sffdisk","Type",0x00010001,0x00000001
+
+; SD Port driver (port/miniport framework, alternative to sdbus direct access)
+HKLM,"SYSTEM\CurrentControlSet\Services\sdport","ErrorControl",0x00010001,0x00000001
+HKLM,"SYSTEM\CurrentControlSet\Services\sdport","Group",0x00000000,"System Bus Extender"
+HKLM,"SYSTEM\CurrentControlSet\Services\sdport","ImagePath",0x00020000,"system32\drivers\sdport.sys"
+HKLM,"SYSTEM\CurrentControlSet\Services\sdport","Start",0x00010001,0x00000003
+HKLM,"SYSTEM\CurrentControlSet\Services\sdport","Type",0x00010001,0x00000001
+
+; SDHCI miniport (registers with sdport, alternative stack)
+HKLM,"SYSTEM\CurrentControlSet\Services\sdhc","ErrorControl",0x00010001,0x00000001
+HKLM,"SYSTEM\CurrentControlSet\Services\sdhc","Group",0x00000000,"System Bus Extender"
+HKLM,"SYSTEM\CurrentControlSet\Services\sdhc","ImagePath",0x00020000,"system32\drivers\sdhc.sys"
+HKLM,"SYSTEM\CurrentControlSet\Services\sdhc","Start",0x00010001,0x00000003
+HKLM,"SYSTEM\CurrentControlSet\Services\sdhc","Type",0x00010001,0x00000001
+
+; SD Storage Function Protocol driver (boot-start for eMMC boot support)
+HKLM,"SYSTEM\CurrentControlSet\Services\sffp_sd","ErrorControl",0x00010001,0x00000001
+HKLM,"SYSTEM\CurrentControlSet\Services\sffp_sd","Group",0x00000000,"SCSI Class"
+HKLM,"SYSTEM\CurrentControlSet\Services\sffp_sd","ImagePath",0x00020000,"system32\drivers\sffp_sd.sys"
+HKLM,"SYSTEM\CurrentControlSet\Services\sffp_sd","Start",0x00010001,0x00000000
+HKLM,"SYSTEM\CurrentControlSet\Services\sffp_sd","Type",0x00010001,0x00000001
+
+; UniATA: disable legacy detection to avoid pre-PnP IDE claiming
+HKLM,"SYSTEM\CurrentControlSet\Services\UniATA\Parameters","LegacyDetection",0x00010001,0x00000000
+
+; pci driver (critical for device enumeration)
+HKLM,"SYSTEM\CurrentControlSet\Services\pci","ErrorControl",0x00010001,0x00000001
+HKLM,"SYSTEM\CurrentControlSet\Services\pci","Group",0x00000000,"Boot Bus Extender"
+HKLM,"SYSTEM\CurrentControlSet\Services\pci","ImagePath",0x00020000,"system32\drivers\pci.sys"
+HKLM,"SYSTEM\CurrentControlSet\Services\pci","Start",0x00010001,0x00000000
+HKLM,"SYSTEM\CurrentControlSet\Services\pci","Tag",0x00010001,0x00000002
+HKLM,"SYSTEM\CurrentControlSet\Services\pci","Type",0x00010001,0x00000001
+; End AMD64 PCI IDE driver entries
 
 ; MountMgr driver
 HKLM,"SYSTEM\CurrentControlSet\Services\MountMgr","ErrorControl",0x00010001,0x00000001

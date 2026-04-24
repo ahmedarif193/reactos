@@ -1,0 +1,196 @@
+/**
+ * This file has no copyright assigned and is placed in the Public Domain.
+ * This file is part of the ReactOS PSDK package.
+ * No warranty is given; refer to the file DISCLAIMER within this package.
+ */
+
+#pragma once
+
+#ifndef __SFFDISK_H__
+#define __SFFDISK_H__
+
+#ifdef __cplusplus
+extern "C" {
+#endif
+
+#define IOCTL_SFFDISK_QUERY_DEVICE_PROTOCOL \
+    CTL_CODE(FILE_DEVICE_DISK, 0x7a0, METHOD_BUFFERED, FILE_ANY_ACCESS)
+
+#define IOCTL_SFFDISK_DEVICE_COMMAND \
+    CTL_CODE(FILE_DEVICE_DISK, 0x7a1, METHOD_BUFFERED, FILE_WRITE_ACCESS)
+
+#define IOCTL_SFFDISK_DEVICE_PASSWORD \
+    CTL_CODE(FILE_DEVICE_DISK, 0x7a2, METHOD_BUFFERED, FILE_WRITE_ACCESS)
+
+#define IOCTL_SFFDISK_PARTITION_ACCESS \
+    CTL_CODE(FILE_DEVICE_DISK, 0x7a3, METHOD_BUFFERED, FILE_ANY_ACCESS)
+
+#define IOCTL_SFFDISK_MMC_SOFT_RESET \
+    CTL_CODE(FILE_DEVICE_DISK, 0x7a4, METHOD_BUFFERED, FILE_ANY_ACCESS)
+
+#define IOCTL_SFFDISK_MMC_QUERY_EXT_CSD \
+    CTL_CODE(FILE_DEVICE_DISK, 0x7a5, METHOD_BUFFERED, FILE_ANY_ACCESS)
+
+#define IOCTL_SFFDISK_MMC_QUERY_BKOPS_STATE \
+    CTL_CODE(FILE_DEVICE_DISK, 0x7a6, METHOD_BUFFERED, FILE_ANY_ACCESS)
+
+#define GUID_SFF_PROTOCOL_SD \
+    { 0xAD7536A8, 0xD055, 0x4C40, { 0xAA, 0x4D, 0x96, 0x31, 0x2D, 0xDB, 0x6B, 0x38 } }
+
+#define GUID_SFF_PROTOCOL_MMC \
+    { 0x77274D3F, 0x2365, 0x4491, { 0xA0, 0x30, 0x8B, 0xB4, 0x4A, 0xE6, 0x00, 0x97 } }
+
+typedef struct _SFFDISK_QUERY_DEVICE_PROTOCOL_DATA {
+    USHORT Size;
+    USHORT Reserved;
+    GUID ProtocolGUID;
+} SFFDISK_QUERY_DEVICE_PROTOCOL_DATA, *PSFFDISK_QUERY_DEVICE_PROTOCOL_DATA;
+
+typedef enum _SFFDISK_DCMD {
+    SFFDISK_DC_GET_VERSION = 0,
+    SFFDISK_DC_LOCK_CHANNEL,
+    SFFDISK_DC_UNLOCK_CHANNEL,
+    SFFDISK_DC_DEVICE_COMMAND,
+} SFFDISK_DCMD;
+
+#define SFFDISK_DEVCMD_FLAG_APPEND_CMD_SEQ 0x0001
+#define SFFDISK_DEVCMD_FLAG_LONG_OPERATION 0x0002
+#define SFFDISK_DEVCMD_VALID_FLAGS \
+    (SFFDISK_DEVCMD_FLAG_APPEND_CMD_SEQ | SFFDISK_DEVCMD_FLAG_LONG_OPERATION)
+
+typedef struct _SFFDISK_DEVICE_COMMAND_DATA {
+    USHORT HeaderSize;
+    USHORT Flags;
+    SFFDISK_DCMD Command;
+    USHORT ProtocolArgumentSize;
+    ULONG DeviceDataBufferSize;
+    ULONG_PTR Information;
+    UCHAR Data[0];
+} SFFDISK_DEVICE_COMMAND_DATA, *PSFFDISK_DEVICE_COMMAND_DATA;
+
+typedef enum _SFFDISK_DPCMD {
+    SFFDISK_DP_IS_SUPPORTED = 0,
+    SFFDISK_DP_SET_PASSWORD,
+    SFFDISK_DP_LOCK_DEVICE,
+    SFFDISK_DP_UNLOCK_DEVICE,
+    SFFDISK_DP_RESET_DEVICE_ALL_DATA
+} SFFDISK_DPCMD;
+
+typedef struct _SFFDISK_DEVICE_PASSWORD_DATA {
+    USHORT Size;
+    USHORT Reserved;
+    SFFDISK_DPCMD Command;
+    ULONG_PTR Information;
+    UCHAR PasswordLength;
+    UCHAR NewPasswordLength;
+    UCHAR Data[0];
+} SFFDISK_DEVICE_PASSWORD_DATA, *PSFFDISK_DEVICE_PASSWORD_DATA;
+
+typedef enum _SFFDISK_PARTITION_ACCESS {
+    SFFDISK_RPMB_IS_SUPPORTED = 0x00000000,
+    SFFDISK_RPMB_PROGRAM_AUTH_KEY = 0x00000001,
+    SFFDISK_RPMB_QUERY_WRITE_COUNTER = 0x00000002,
+    SFFDISK_RPMB_AUTHENTICATED_WRITE = 0x00000003,
+    SFFDISK_RPMB_AUTHENTICATED_READ = 0x00000004,
+    SFFDISK_GPP_IS_SUPPORTED = 0x00010000,
+    SFFDISK_GPP_READ = 0x00010001,
+    SFFDISK_GPP_WRITE = 0x00010002,
+} SFFDISK_PARTITION_ACCESS;
+
+#define EMMC_USER_DATA_AREA              0
+#define EMMC_BOOT_PARTITION_1            1
+#define EMMC_BOOT_PARTITION_2            2
+#define EMMC_RPMB_PARTITION              3
+#define EMMC_GENERAL_PURPOSE_PARTITION_1 4
+#define EMMC_GENERAL_PURPOSE_PARTITION_2 5
+#define EMMC_GENERAL_PURPOSE_PARTITION_3 6
+#define EMMC_GENERAL_PURPOSE_PARTITION_4 7
+
+#include <pshpack1.h>
+
+typedef struct _SFFDISK_DEVICE_RPMB_DATA_FRAME {
+    UCHAR Stuff[196];
+    UCHAR KeyOrMAC[32];
+    UCHAR Data[256];
+    UCHAR Nonce[16];
+    UCHAR WriteCounter[4];
+    UCHAR Address[2];
+    UCHAR BlockCount[2];
+    UCHAR OperationResult[2];
+    UCHAR RequestOrResponseType[2];
+} SFFDISK_DEVICE_RPMB_DATA_FRAME, *PSFFDISK_DEVICE_RPMB_DATA_FRAME;
+
+#include <poppack.h>
+
+typedef struct _SFFDISK_DEVICE_PARTITION_ACCESS_DATA {
+    ULONG Size;
+    SFFDISK_PARTITION_ACCESS Command;
+    ULONG Reserved[2];
+    union {
+        struct {
+            ULONG SizeInBytes;
+            ULONG MaxReliableWriteSizeInBytes;
+        } RpmbIsSupported;
+        struct {
+            ULONG Reserved[4];
+            SFFDISK_DEVICE_RPMB_DATA_FRAME ResultFrame;
+            SFFDISK_DEVICE_RPMB_DATA_FRAME ProgramAuthKeyFrame;
+        } RpmbProgramAuthKey;
+        struct {
+            ULONG Reserved[4];
+            SFFDISK_DEVICE_RPMB_DATA_FRAME ResultFrame;
+            SFFDISK_DEVICE_RPMB_DATA_FRAME QueryWriteCounterFrame;
+        } RpmbQueryWriteCounter;
+        struct {
+            ULONG CountToWrite;
+            ULONG Reserved[3];
+            SFFDISK_DEVICE_RPMB_DATA_FRAME ResultFrame;
+            SFFDISK_DEVICE_RPMB_DATA_FRAME FrameDataToWrite[1];
+        } RpmbAuthenticatedWrite;
+        struct {
+            ULONG CountToRead;
+            ULONG Reserved[3];
+            SFFDISK_DEVICE_RPMB_DATA_FRAME AuthenticatedReadFrame;
+            SFFDISK_DEVICE_RPMB_DATA_FRAME ReturnedFrameData[1];
+        } RpmbAuthenticatedRead;
+        struct {
+            ULONGLONG Gpp_1_SizeInBytes;
+            ULONGLONG Gpp_2_SizeInBytes;
+            ULONGLONG Gpp_3_SizeInBytes;
+            ULONGLONG Gpp_4_SizeInBytes;
+            ULONG GppBlockSize;
+        } GppIsSupported;
+        struct {
+            ULONG GppPartitionId;
+            ULONG Length;
+            ULONGLONG Offset;
+            UCHAR Data[1024];
+        } GppReadWrite;
+    } Parameters;
+} SFFDISK_DEVICE_PARTITION_ACCESS_DATA, *PSFFDISK_DEVICE_PARTITION_ACCESS_DATA;
+
+DEFINE_GUID(GUID_DEVINTERFACE_EMMC_PARTITION_ACCESS_RPMB,
+    0x27447C21, 0xBCC3, 0x4D07, 0xA0, 0x5B, 0xA3, 0x39, 0x5B, 0xB4, 0xEE, 0xE7);
+
+DEFINE_GUID(GUID_DEVINTERFACE_EMMC_PARTITION_ACCESS_GPP,
+    0x2E0E2E39, 0x1F19, 0x4595, 0xA9, 0x06, 0x88, 0x78, 0x82, 0xE7, 0x39, 0x03);
+
+#define SFFDISK_BKOPS_IS_SUPPORTED 0x00000001
+#define SFFDISK_BKOPS_IS_ENABLED   0x00000001
+
+#define SFFDISK_BKOPS_NO_OPERATIONS_NEEDED                        0x00000000
+#define SFFDISK_BKOPS_OPERATIONS_OUTSTANDING_NON_CRITICAL         0x00000001
+#define SFFDISK_BKOPS_OPERATIONS_OUTSTANDING_PERFORMANCE_IMPACTED 0x00000002
+#define SFFDISK_BKOPS_OPERATIONS_OUTSTANDING_CRITICAL             0x00000003
+
+typedef struct _SFFDISK_BKOPS_STATUS_DATA {
+    UCHAR BkopsIsSupported;
+    UCHAR BkopsIsEnabled;
+    UCHAR BkopsStatus;
+} SFFDISK_BKOPS_STATUS_DATA, *PSFFDISK_BKOPS_STATUS_DATA;
+
+#ifdef __cplusplus
+}
+#endif
+
+#endif /* __SFFDISK_H__ */
