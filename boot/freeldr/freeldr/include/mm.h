@@ -20,7 +20,10 @@
 #pragma once
 
 extern char __ImageBase;
-#ifdef __GNUC__
+#ifdef __clang__
+/* .text, .rdata, .buildid, .data, .pdata and .reloc */
+#define FREELDR_SECTION_COUNT 6
+#elif defined(__GNUC__)
   /* .text/.data/.rdata, .edata and .bss */
   #define FREELDR_SECTION_COUNT 3
 #else

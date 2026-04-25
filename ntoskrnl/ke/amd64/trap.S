@@ -59,8 +59,13 @@ MACRO(UnexpectedVectorStub, Vector)
     nop
     /* This is a push instruction with 8bit operand. Since the instruction
        sign extends the value to 32 bits, we need to offset it */
+#ifdef _USE_ML
 PUBLIC KxUnexpectedInterrupt&Vector
 KxUnexpectedInterrupt&Vector:
+#else
+PUBLIC KxUnexpectedInterrupt\Vector
+KxUnexpectedInterrupt\Vector:
+#endif
     push (Vector - 128)
     jmp KiUnexpectedInterrupt
 ENDM
@@ -75,6 +80,7 @@ ENDR
 PUBLIC KiUnexpectedRangeEnd
 KiUnexpectedRangeEnd:
 
+ALIGN 16
 PUBLIC KiInterruptDispatchTemplate
 KiInterruptDispatchTemplate:
     /* This instruction pushes the return address on the stack, which is the
@@ -344,7 +350,11 @@ FUNC KiDoubleFaultAbort
 
     /* Bugcheck */
     Fatal 8 // EXCEPTION_DOUBLE_FAULT
+#ifdef _USE_ML
     jmp $
+#else
+9:  jmp 9b
+#endif
 ENDFUNC
 
 
@@ -356,7 +366,11 @@ FUNC KiNpxSegmentOverrunAbort
     /* Bugcheck */
     Fatal EXCEPTION_NPX_OVERRUN
 
+#ifdef _USE_ML
     jmp $
+#else
+9:  jmp 9b
+#endif
 ENDFUNC
 
 
@@ -367,7 +381,11 @@ FUNC KiInvalidTssFault
 
     /* Bugcheck */
     Fatal EXCEPTION_INVALID_TSS
+#ifdef _USE_ML
     jmp $
+#else
+9:  jmp 9b
+#endif
 ENDFUNC
 
 
@@ -378,7 +396,11 @@ FUNC KiSegmentNotPresentFault
 
     /* Bugcheck */
     Fatal EXCEPTION_SEGMENT_NOT_PRESENT
+#ifdef _USE_ML
     jmp $
+#else
+9:  jmp 9b
+#endif
 ENDFUNC
 
 
@@ -389,7 +411,11 @@ FUNC KiStackFault
 
     /* Bugcheck */
     Fatal EXCEPTION_STACK_FAULT
+#ifdef _USE_ML
     jmp $
+#else
+9:  jmp 9b
+#endif
 ENDFUNC
 
 
@@ -524,7 +550,7 @@ PageFaultReturn:
     mov [rcx + ThTrapFrame], rdx
 
     /* Return */
-    ExitTrap (TF_SAVE_ALL or TF_CHECKUSERAPC)
+    ExitTrap (TF_SAVE_ALL OR TF_CHECKUSERAPC)
 
 KernelStackOverflow:
     /* Use the original faulting frame so the bugcheck points at the real cause */
@@ -533,7 +559,11 @@ KernelStackOverflow:
     mov [rax + ThTrapFrame], rdx
     mov ecx, HEX(0E)
     call KiSystemFatalException
+#ifdef _USE_ML
     jmp $
+#else
+9:  jmp 9b
+#endif
 ENDFUNC
 
 
@@ -542,7 +572,7 @@ FUNC KiFloatingErrorFault
     /* Push pseudo error code */
     EnterTrap TF_SAVE_ALL
 
-    UNIMPLEMENTED KiFloatingErrorFault
+    UNIMPLEMENTED(KiFloatingErrorFault)
     int 3
 
     /* Return */
@@ -557,7 +587,11 @@ FUNC KiAlignmentFault
 
     /* Bugcheck */
     Fatal EXCEPTION_ALIGNMENT_CHECK
+#ifdef _USE_ML
     jmp $
+#else
+9:  jmp 9b
+#endif
 ENDFUNC
 
 
@@ -568,7 +602,11 @@ FUNC KiMcheckAbort
 
     /* Bugcheck */
     Fatal HEX(12)
+#ifdef _USE_ML
     jmp $
+#else
+9:  jmp 9b
+#endif
 ENDFUNC
 
 
@@ -633,7 +671,7 @@ ENDFUNC
 PUBLIC KiApcInterrupt
 .PROC KiApcInterrupt
    /* No error code */
-    EnterTrap (TF_SAVE_ALL or TF_IRQL)
+    EnterTrap (TF_SAVE_ALL OR TF_IRQL)
 
     /* Raise to APC_LEVEL */
     mov rax, APC_LEVEL
@@ -660,7 +698,7 @@ PUBLIC KiApcInterrupt
     mov cr8, rax
 
     /* Return */
-    ExitTrap (TF_SAVE_ALL or TF_IRQL)
+    ExitTrap (TF_SAVE_ALL OR TF_IRQL)
 .ENDP
 
 /*
@@ -702,20 +740,20 @@ PUBLIC KiRetireDpcListInDpcStack
 PUBLIC KiDpcInterrupt
 .PROC KiDpcInterrupt
    /* No error code */
-    EnterTrap (TF_SAVE_ALL or TF_IRQL)
+    EnterTrap (TF_SAVE_ALL OR TF_IRQL)
 
     /* Call the worker routine */
     call KiDpcInterruptHandler
 
     /* Return, but don't send an EOI! */
-    ExitTrap (TF_SAVE_ALL or TF_IRQL)
+    ExitTrap (TF_SAVE_ALL OR TF_IRQL)
 .ENDP
 
 
 PUBLIC KiIpiInterrupt
 .PROC KiIpiInterrupt
    /* No error code */
-    EnterTrap (TF_SAVE_ALL or TF_IRQL)
+    EnterTrap (TF_SAVE_ALL OR TF_IRQL)
 
     /* Raise to IPI_LEVEL */
     mov rax, IPI_LEVEL
@@ -727,7 +765,7 @@ PUBLIC KiIpiInterrupt
     int 3
 
     /* Return */
-    ExitTrap (TF_SAVE_ALL or TF_IRQL)
+    ExitTrap (TF_SAVE_ALL OR TF_IRQL)
 .ENDP
 
 
@@ -745,7 +783,11 @@ FUNC KiUnexpectedInterrupt
     sub rsp, 8
     mov [rbp + KTRAP_FRAME_P5 + 8], rbp // trap frame
     call KeBugCheckWithTf
+#ifdef _USE_ML
     jmp $
+#else
+9:  jmp 9b
+#endif
 #endif
     /* Return */
     ExitTrap TF_SAVE_ALL
@@ -754,7 +796,7 @@ ENDFUNC
 PUBLIC KiInterruptDispatch
 FUNC KiInterruptDispatch
     /* The error code is a pointer to the interrupt object's code */
-    EnterTrap (TF_HAS_ERROR_CODE or TF_SAVE_ALL or TF_IRQL)
+    EnterTrap (TF_HAS_ERROR_CODE OR TF_SAVE_ALL OR TF_IRQL)
 
     /* Increase interrupt count */
     inc dword ptr gs:[PcInterruptCount];
@@ -817,7 +859,7 @@ FUNC KiInterruptDispatch
     mov rsi, [rbp + KTRAP_FRAME_Rsi]
 
     /* Return */
-    ExitTrap (TF_SAVE_ALL or TF_SEND_EOI)
+    ExitTrap (TF_SAVE_ALL OR TF_SEND_EOI)
 ENDFUNC
 
 EXTERN KiSystemCallHandler:PROC
@@ -867,7 +909,7 @@ PUBLIC KiSystemCallEntry64
     mov [rsp + MAX_SYSCALL_PARAM_SIZE + KTRAP_FRAME_Rsp], rax
 
     /* Set sane segments */
-    mov ax, (KGDT64_R3_DATA or RPL_MASK)
+    mov ax, (KGDT64_R3_DATA OR RPL_MASK)
     mov ds, ax
     mov es, ax
 
@@ -1032,7 +1074,7 @@ PUBLIC KiServiceExit3
 
     /* Return */
     mov rbp, rsp
-    ExitTrap (TF_SEGMENTS or TF_CHECKUSERAPC)
+    ExitTrap (TF_SEGMENTS OR TF_CHECKUSERAPC)
 .ENDP
 
 
@@ -1285,7 +1327,7 @@ PUBLIC KiInitiateUserApc
 
 PUBLIC KiInitializeSegments
 KiInitializeSegments:
-    mov ax, KGDT64_R3_DATA or RPL_MASK
+    mov ax, KGDT64_R3_DATA OR RPL_MASK
     mov gs, ax
     swapgs
     mov gs, ax
