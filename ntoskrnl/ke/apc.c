@@ -88,6 +88,7 @@ KiInsertQueueApc(IN PKAPC Apc,
     PKTHREAD Thread = Apc->Thread;
     PKAPC_STATE ApcState;
     KPROCESSOR_MODE ApcMode;
+    UCHAR ApcModeIndex;
     PLIST_ENTRY ListHead, NextEntry;
     PKAPC QueuedApc;
     PKGATE Gate;
@@ -107,6 +108,8 @@ KiInsertQueueApc(IN PKAPC Apc,
     /* Get the APC State for this Index, and the mode too */
     ApcState = Thread->ApcStatePointer[(UCHAR)Apc->ApcStateIndex];
     ApcMode = Apc->ApcMode;
+    ASSERT((ApcMode == KernelMode) || (ApcMode == UserMode));
+    ApcModeIndex = (UCHAR)ApcMode;
 
     /* The APC must be "inserted" already */
     ASSERT(Apc->Inserted == TRUE);
@@ -126,20 +129,20 @@ KiInsertQueueApc(IN PKAPC Apc,
             Thread->ApcState.UserApcPending = TRUE;
 
             /* Insert it at the top of the list */
-            InsertHeadList(&ApcState->ApcListHead[ApcMode],
+            InsertHeadList(&ApcState->ApcListHead[ApcModeIndex],
                            &Apc->ApcListEntry);
         }
         else
         {
             /* Regular user or kernel Normal APC */
-            InsertTailList(&ApcState->ApcListHead[ApcMode],
+            InsertTailList(&ApcState->ApcListHead[ApcModeIndex],
                            &Apc->ApcListEntry);
         }
     }
     else
     {
         /* Special APC, find the last one in the list */
-        ListHead = &ApcState->ApcListHead[ApcMode];
+        ListHead = &ApcState->ApcListHead[ApcModeIndex];
         NextEntry = ListHead->Blink;
         while (NextEntry != ListHead)
         {
@@ -517,19 +520,22 @@ RepairList(IN PLIST_ENTRY Original,
            IN PLIST_ENTRY Copy,
            IN KPROCESSOR_MODE Mode)
 {
+    UCHAR ModeIndex = (UCHAR)Mode;
+    ASSERT((Mode == KernelMode) || (Mode == UserMode));
+
     /* Check if the list for this mode is empty */
-    if (IsListEmpty(&Original[Mode]))
+    if (IsListEmpty(&Original[ModeIndex]))
     {
         /* It is, all we need to do is initialize it */
-        InitializeListHead(&Copy[Mode]);
+        InitializeListHead(&Copy[ModeIndex]);
     }
     else
     {
         /* Copy the lists */
-        Copy[Mode].Flink = Original[Mode].Flink;
-        Copy[Mode].Blink = Original[Mode].Blink;
-        Original[Mode].Flink->Blink = &Copy[Mode];
-        Original[Mode].Blink->Flink = &Copy[Mode];
+        Copy[ModeIndex].Flink = Original[ModeIndex].Flink;
+        Copy[ModeIndex].Blink = Original[ModeIndex].Blink;
+        Original[ModeIndex].Flink->Blink = &Copy[ModeIndex];
+        Original[ModeIndex].Blink->Flink = &Copy[ModeIndex];
     }
 }
 
@@ -796,6 +802,7 @@ KeFlushQueueApc(IN PKTHREAD Thread,
     PKAPC Apc;
     PLIST_ENTRY FirstEntry, CurrentEntry;
     KLOCK_QUEUE_HANDLE ApcLock;
+    UCHAR PreviousModeIndex;
     ASSERT_IRQL_LESS_OR_EQUAL(DISPATCH_LEVEL);
 
     /* Check if this was user mode */
@@ -814,6 +821,8 @@ KeFlushQueueApc(IN PKTHREAD Thread,
     }
     else
     {
+        PreviousMode = KernelMode;
+
         /* Select kernel list and check if it's empty */
         if (IsListEmpty( &Thread->ApcState.ApcListHead[KernelMode]))
         {
@@ -825,9 +834,11 @@ KeFlushQueueApc(IN PKTHREAD Thread,
         KiAcquireApcLockRaiseToSynch(Thread, &ApcLock);
     }
 
+    PreviousModeIndex = (UCHAR)PreviousMode;
+
     /* Get the first entry and check if the list is empty now */
-    FirstEntry = Thread->ApcState.ApcListHead[PreviousMode].Flink;
-    if (FirstEntry == &Thread->ApcState.ApcListHead[PreviousMode])
+    FirstEntry = Thread->ApcState.ApcListHead[PreviousModeIndex].Flink;
+    if (FirstEntry == &Thread->ApcState.ApcListHead[PreviousModeIndex])
     {
         /* It is, clear the returned entry */
         FirstEntry = NULL;
@@ -835,7 +846,7 @@ KeFlushQueueApc(IN PKTHREAD Thread,
     else
     {
         /* It's not, remove the first entry */
-        RemoveEntryList(&Thread->ApcState.ApcListHead[PreviousMode]);
+        RemoveEntryList(&Thread->ApcState.ApcListHead[PreviousModeIndex]);
 
         /* Loop all the entries */
         CurrentEntry = FirstEntry;
@@ -850,7 +861,7 @@ KeFlushQueueApc(IN PKTHREAD Thread,
         } while (CurrentEntry != FirstEntry);
 
         /* Re-initialize the list */
-        InitializeListHead(&Thread->ApcState.ApcListHead[PreviousMode]);
+        InitializeListHead(&Thread->ApcState.ApcListHead[PreviousModeIndex]);
     }
 
     /* Release the lock */

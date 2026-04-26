@@ -108,7 +108,7 @@ AtaDeviceHandleRequestSense(
         /* Copy the sense data from the local buffer */
         RtlCopyMemory(Srb->SenseInfoBuffer,
                       DevExt->Device.LocalBuffer,
-                      min(Srb->SenseInfoBufferLength, ATA_LOCAL_BUFFER_SIZE));
+                      Srb->SenseInfoBufferLength);
 
         Srb->ScsiStatus = SCSISTAT_CHECK_CONDITION;
         FailedRequest->SrbStatus = SRB_STATUS_ERROR | SRB_STATUS_AUTOSENSE_VALID;
@@ -575,7 +575,7 @@ AtaDeviceGenericRecovery(
     _In_ PATAPORT_DEVICE_EXTENSION DevExt)
 {
     PATA_DEVICE_REQUEST Request = PortData->Worker.FailedRequest;
-    NTSTATUS Status;
+    NTSTATUS Status = STATUS_SUCCESS;
 
     switch (Request->SrbStatus)
     {
