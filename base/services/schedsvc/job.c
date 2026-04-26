@@ -74,7 +74,8 @@ GetNextJobTimeout(HANDLE hTimer)
         return;
     }
 
-    LocalFileTimeToFileTime(&DueTime, &NextJobStartTime);
+    if (!LocalFileTimeToFileTime(&NextJobStartTime, &DueTime))
+        return;
 
     SetWaitableTimer(hTimer,
                      (PLARGE_INTEGER)&DueTime,

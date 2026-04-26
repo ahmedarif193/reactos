@@ -481,7 +481,8 @@ static BOOL is_guid(parse_buffer* buf)
   buf->buffer += pos;
   buf->rem_bytes -= pos;
 
-  ret = sscanf(tmp, CLSIDFMT, &class_id.Data1, tab, tab+1, tab+2, tab+3, tab+4, tab+5, tab+6, tab+7, tab+8, tab+9);
+  ret = sscanf(tmp, "<%08X-%04lX-%04lX-%02lX%02lX-%02lX%02lX%02lX%02lX%02lX%02lX>",
+                &class_id.Data1, tab, tab+1, tab+2, tab+3, tab+4, tab+5, tab+6, tab+7, tab+8, tab+9);
   if (ret != 11)
   {
     TRACE("Wrong guid %s (%d)\n", tmp, pos);
@@ -588,7 +589,7 @@ static BOOL is_integer(parse_buffer* buf)
   buf->buffer += pos;
   buf->rem_bytes -= pos;
 
-  sscanf(tmp, "%d", &integer);
+  sscanf(tmp, "%lu", &integer);
 
   TRACE("Found integer %s - %d\n", tmp, integer);
 

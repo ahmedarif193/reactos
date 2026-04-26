@@ -1069,13 +1069,13 @@ static NTSTATUS BasicSupportHandler(PPCPROPERTY_REQUEST PropertyRequest)
 				switch (PropertyRequest->Node) {
 					case KSNODE_TOPO_AUX_VOLUME:
 						Range->Bounds.SignedMaximum = 0;
-						Range->Bounds.SignedMinimum = (-60 << 16);
+						Range->Bounds.SignedMinimum = (int)(-60u << 16);
 						Range->SteppingDelta        = (4 << 16);
 						ntStatus = STATUS_SUCCESS;
 						break;
 					case KSNODE_TOPO_MICIN_VOLUME:
 						Range->Bounds.SignedMaximum = 0;
-						Range->Bounds.SignedMinimum = (-56 << 16);
+						Range->Bounds.SignedMinimum = (int)(-56u << 16);
 						Range->SteppingDelta        = (8 << 16);
 						ntStatus = STATUS_SUCCESS;
 						break;
@@ -1169,9 +1169,9 @@ NTSTATUS NTAPI PropertyHandler_Level(PPCPROPERTY_REQUEST PropertyRequest)
 					}
 				} else
 				if (PropertyRequest->Verb & KSPROPERTY_TYPE_SET) {
-					if (*Level <= (-30 << 16)) {
+					if (*Level <= (int)(-30u << 16)) {
 						mixerValue = 0;
-						that->NodeCache[(2*PropertyRequest->Node)+channel] = -30 << 16;
+						that->NodeCache[(2*PropertyRequest->Node)+channel] = (int)(-30u << 16);
 					} else
 					if (*Level >= 0) {
 						mixerValue = 0x0F;
@@ -1199,9 +1199,9 @@ NTSTATUS NTAPI PropertyHandler_Level(PPCPROPERTY_REQUEST PropertyRequest)
 						that->NodeCache[(2*PropertyRequest->Node)] = *Level;
 					}
 				} else if (PropertyRequest->Verb & KSPROPERTY_TYPE_SET) {
-					if (*Level <= (-56 << 16)) {
+					if (*Level <= (int)(-56u << 16)) {
 						mixerValue = 0;
-						that->NodeCache[(2*PropertyRequest->Node)] = -56 << 16;
+						that->NodeCache[(2*PropertyRequest->Node)] = (int)(-56u << 16);
 					} else if (*Level >= 0) {
 						mixerValue = 0x07;
 						that->NodeCache[(2*PropertyRequest->Node)] = 0;
