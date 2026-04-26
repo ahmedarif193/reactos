@@ -273,8 +273,8 @@ HalppDumpInterruptRouting(
         Gsi = InterruptLine;
     }
 
-    DbgPrint("    Interrupt: line %u -> GSI %u from firmware"
-             " (seg 0 bus %u dev 255 fn 255 pin IN?)\n",
+    DbgPrint("    Interrupt: line %lu -> GSI %lu from firmware"
+             " (seg 0 bus %lu dev 255 fn 255 pin IN?)\n",
              InterruptLine, Gsi, Bus);
 }
 
@@ -525,7 +525,7 @@ HalppDumpCapabilities(
                                   CapPtr + 2, sizeof(USHORT));
                 Mmc = 1 << ((MsgCtrl >> 1) & 0x7);
                 Mme = 1 << ((MsgCtrl >> 4) & 0x7);
-                DbgPrint("    Capabilities: [%02x] MSI: Enable%c Count=%d/%d"
+                DbgPrint("    Capabilities: [%02x] MSI: Enable%c Count=%ld/%ld"
                          " Maskable%c 64bit%c\n",
                          CapPtr,
                          (MsgCtrl & 0x0001) ? '+' : '-',

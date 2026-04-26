@@ -600,7 +600,6 @@ T1_InvertButton(
                 cxWidth = pT1->cxWidth48;
                 break;
             case T1K_ENTER:
-                pT1 = pT1;
                 cxWidth = pT1->cxWidth50;
                 cyHeight = pT1->cyHeight50;
                 break;
@@ -1459,6 +1458,7 @@ C1_SetData(
     HFONT hFont;
     RECT rc;
     LOGFONTW lf;
+    const WORD (*wCode)[256] = (const WORD (*)[256])pData->wCode;
 
     if (pData->uCount != 2)
         return 0;
@@ -1483,8 +1483,8 @@ C1_SetData(
     hFontOld = SelectObject(hMemDC, hFont);
     for (iKey = C1K_OEM_3; iKey < C1K_BACKSPACE; ++iKey)
     {
-        pC1->Data[1][iKey] = pData->wCode[0][(BYTE)gC1K2VK[iKey]];
-        pC1->Data[0][iKey] = pData->wCode[1][(BYTE)gC1K2VK[iKey]];
+        pC1->Data[1][iKey] = wCode[0][(BYTE)gC1K2VK[iKey]];
+        pC1->Data[0][iKey] = wCode[1][(BYTE)gC1K2VK[iKey]];
     }
 
     SetBkColor(hMemDC, RGB(191, 191, 191));

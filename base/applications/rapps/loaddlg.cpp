@@ -406,7 +406,7 @@ CertGetSubjectAndIssuer(HINTERNET hFile, CLocalPtr<char> &subjectInfo, CLocalPtr
         return FALSE;
     }
 
-    if (!flags & SECURITY_FLAG_SECURE)
+    if (!(flags & SECURITY_FLAG_SECURE))
     {
         return FALSE;
     }

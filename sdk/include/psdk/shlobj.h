@@ -1545,23 +1545,23 @@ _Check_return_ HRESULT WINAPI SHGetMalloc(_Outptr_ LPMALLOC *lpmal);
 
 typedef struct
 {
-    BOOL  fShowAllObjects : 1;
-    BOOL  fShowExtensions : 1;
+    UINT  fShowAllObjects : 1;
+    UINT  fShowExtensions : 1;
     BOOL  fNoConfirmRecycle : 1;
 
     BOOL  fShowSysFiles : 1;
-    BOOL  fShowCompColor : 1;
-    BOOL  fDoubleClickInWebView : 1;
+    UINT  fShowCompColor : 1;
+    UINT  fDoubleClickInWebView : 1;
     BOOL  fDesktopHTML : 1;
     BOOL  fWin95Classic : 1;
     BOOL  fDontPrettyPath : 1;
-    BOOL  fShowAttribCol : 1;
+    UINT  fShowAttribCol : 1;
     BOOL  fMapNetDrvBtn : 1;
-    BOOL  fShowInfoTip : 1;
+    UINT  fShowInfoTip : 1;
     BOOL  fHideIcons : 1;
     BOOL  fWebView : 1;
     BOOL  fFilter : 1;
-    BOOL  fShowSuperHidden : 1;
+    UINT  fShowSuperHidden : 1;
     BOOL  fNoNetCrawling : 1;
 
     UINT  :15; /* Required for proper binary layout with gcc */
@@ -2393,14 +2393,14 @@ typedef struct {
     WORD cLength;
     WORD nVersion;
     BOOL fFullPathTitle:1;
-    BOOL fSaveLocalView:1;
+    UINT fSaveLocalView:1;
     BOOL fNotShell:1;
-    BOOL fSimpleDefault:1;
+    UINT fSimpleDefault:1;
     BOOL fDontShowDescBar:1;
     BOOL fNewWindowMode:1;
     BOOL fShowCompColor:1;
     BOOL fDontPrettyNames:1;
-    BOOL fAdminsCreateCommonGroups:1;
+    UINT fAdminsCreateCommonGroups:1;
     UINT fUnusedFlags:7;
     UINT :15; /* Required for proper binary layout with gcc */
     UINT fMenuEnumFilter;

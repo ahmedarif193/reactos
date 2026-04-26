@@ -344,7 +344,7 @@ ULONG
 ViaGetSerrOffset(
     _In_ PATA_CONTROLLER Controller)
 {
-    if ((Controller->Pci.DeviceID == PCI_DEV_VT8237S_SATA_RAID))
+    if (Controller->Pci.DeviceID == PCI_DEV_VT8237S_SATA_RAID)
         return VIA_REG_SERROR_VT8237;
 
     return VIA_REG_SERROR;
