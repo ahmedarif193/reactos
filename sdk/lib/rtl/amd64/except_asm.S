@@ -141,6 +141,40 @@ PUBLIC RtlpRestoreContextInternal
     /* Load rdx restore value into r9 */
     mov r9, [rcx + CxRdx]
 
+    /* Check if we go to user mode */
+    test byte ptr [rcx + CxSegCs], MODE_MASK
+    jnz RestoreLegacyState
+
+    /* Restore MXCSR */
+    ldmxcsr [rcx + CxMxCsr]
+
+    /* Restore xmm registers */
+    movaps xmm0, [rcx + CxXmm0]
+    movaps xmm1, [rcx + CxXmm1]
+    movaps xmm2, [rcx + CxXmm2]
+    movaps xmm3, [rcx + CxXmm3]
+    movaps xmm4, [rcx + CxXmm4]
+    movaps xmm5, [rcx + CxXmm5]
+    movaps xmm6, [rcx + CxXmm6]
+    movaps xmm7, [rcx + CxXmm7]
+    movaps xmm8, [rcx + CxXmm8]
+    movaps xmm9, [rcx + CxXmm9]
+    movaps xmm10, [rcx + CxXmm10]
+    movaps xmm11, [rcx + CxXmm11]
+    movaps xmm12, [rcx + CxXmm12]
+    movaps xmm13, [rcx + CxXmm13]
+    movaps xmm14, [rcx + CxXmm14]
+    movaps xmm15, [rcx + CxXmm15]
+
+    jmp RestoreStateDone
+
+RestoreLegacyState:
+
+    /* Restore MXCSR, legacy floating point, MMX and XMM registers */
+    fxrstor [rcx + CxFltSave]
+
+RestoreStateDone:
+
     /* Copy Return address (now in r8) to the target stack */
     mov [rdx - 2 * 8], r8
 
@@ -172,40 +206,6 @@ PUBLIC RtlpRestoreContextInternal
     /* Restore the registers we used */
     mov r8,  [rcx + CxR8]
     mov r9,  [rcx + CxR9]
-
-    /* Check if we go to user mode */
-    test byte ptr [rcx + CxSegCs], MODE_MASK
-    jnz RtlRestoreContextUM
-
-    /* Restore MXCSR */
-    ldmxcsr [rcx + CxMxCsr]
-
-    /* Restore xmm registers */
-    movaps xmm0, [rcx + CxXmm0]
-    movaps xmm1, [rcx + CxXmm1]
-    movaps xmm2, [rcx + CxXmm2]
-    movaps xmm3, [rcx + CxXmm3]
-    movaps xmm4, [rcx + CxXmm4]
-    movaps xmm5, [rcx + CxXmm5]
-    movaps xmm6, [rcx + CxXmm6]
-    movaps xmm7, [rcx + CxXmm7]
-    movaps xmm8, [rcx + CxXmm8]
-    movaps xmm9, [rcx + CxXmm9]
-    movaps xmm10, [rcx + CxXmm10]
-    movaps xmm11, [rcx + CxXmm11]
-    movaps xmm12, [rcx + CxXmm12]
-    movaps xmm13, [rcx + CxXmm13]
-    movaps xmm14, [rcx + CxXmm14]
-    movaps xmm15, [rcx + CxXmm15]
-
-    jmp RtlRestoreContextExit
-
-RtlRestoreContextUM:
-
-    /* Restore MXCSR, legacy floating point, MMX and XMM registers */
-    fxrstor [rcx + CxFltSave]
-
-RtlRestoreContextExit:
 
     /* Check if we go to a different cs */
     mov ax, cs
