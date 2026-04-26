@@ -56,6 +56,7 @@ typedef struct
 {
     PBOCHS_SIZE AvailableModeInfo;
     ULONG AvailableModeCount;
+    ULONG AvailableModeCapacity;
     USHORT CurrentMode;
 
     BOCHS_ADDRESS_RANGE FrameBuffer;
@@ -65,5 +66,26 @@ typedef struct
     ULONG MaxYResolution;
     ULONG VramSize64K;
 } BOCHS_DEVICE_EXTENSION, *PBOCHS_DEVICE_EXTENSION;
+
+/* Mirror of LOADER_PARAMETER_FRAMEBUFFER (sdk/include/reactos/arc/arc.h);
+ * keep layout in sync. */
+typedef struct _BOCHSMP_GOP_INFO
+{
+    PHYSICAL_ADDRESS FrameBufferBase;
+    ULONG            FrameBufferSize;
+    ULONG            HorizontalResolution;
+    ULONG            VerticalResolution;
+    ULONG            PixelsPerScanLine;
+    ULONG            PixelFormat;
+    ULONG            RedMask;
+    ULONG            GreenMask;
+    ULONG            BlueMask;
+    ULONG            Reserved;
+} BOCHSMP_GOP_INFO, *PBOCHSMP_GOP_INFO;
+
+BOOLEAN
+NTAPI
+InbvGetGopFrameBufferInfo(
+    _Out_ PBOCHSMP_GOP_INFO FrameBufferInfo);
 
 #endif //BOCHS_H
