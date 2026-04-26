@@ -127,7 +127,7 @@ FsRtlDoesDbcsContainWildCards(IN PANSI_STRING Name)
         {
             i++;
         }
-        else if (FsRtlIsAnsiCharacterWild(Name->Buffer[i]))
+        else if (FsRtlIsAnsiCharacterWild((UCHAR)Name->Buffer[i]))
         {
             /* Now return if it has a wildcard */
             return TRUE;
@@ -539,7 +539,7 @@ FsRtlIsFatDbcsLegal(IN ANSI_STRING DbcsName,
                 i++;
             }
             /* Then check for bad characters */
-            else if (!FsRtlIsAnsiCharacterLegalFat(DbcsName.Buffer[i], TRUE))
+            else if (!FsRtlIsAnsiCharacterLegalFat((UCHAR)DbcsName.Buffer[i], TRUE))
             {
                 return FALSE;
             }
@@ -570,7 +570,7 @@ FsRtlIsFatDbcsLegal(IN ANSI_STRING DbcsName,
             continue;
         }
         /* Then check for bad characters */
-        else if (!FsRtlIsAnsiCharacterLegalFat(DbcsName.Buffer[i], WildCardsPermissible))
+        else if (!FsRtlIsAnsiCharacterLegalFat((UCHAR)DbcsName.Buffer[i], WildCardsPermissible))
         {
             return FALSE;
         }
@@ -713,7 +713,7 @@ FsRtlIsHpfsDbcsLegal(IN ANSI_STRING DbcsName,
             i++;
         }
         /* Then check for bad characters */
-        else if (!FsRtlIsAnsiCharacterLegalHpfs(DbcsName.Buffer[i], WildCardsPermissible))
+        else if (!FsRtlIsAnsiCharacterLegalHpfs((UCHAR)DbcsName.Buffer[i], WildCardsPermissible))
         {
             return FALSE;
         }
