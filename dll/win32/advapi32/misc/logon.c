@@ -1179,6 +1179,7 @@ LogonUserExW(
     ULONG_PTR Ptr;
     TOKEN_SOURCE TokenSource;
     PTOKEN_GROUPS TokenGroups = NULL;
+    PSID_AND_ATTRIBUTES Groups;
     PMSV1_0_INTERACTIVE_PROFILE ProfileBuffer = NULL;
     ULONG ProfileBufferLength = 0;
     LUID Luid = {0, 0};
@@ -1338,12 +1339,13 @@ LogonUserExW(
     }
 
     TokenGroups->GroupCount = 2;
-    TokenGroups->Groups[0].Sid = LogonSid;
-    TokenGroups->Groups[0].Attributes = SE_GROUP_MANDATORY | SE_GROUP_ENABLED |
-                                        SE_GROUP_ENABLED_BY_DEFAULT | SE_GROUP_LOGON_ID;
-    TokenGroups->Groups[1].Sid = LocalSid;
-    TokenGroups->Groups[1].Attributes = SE_GROUP_MANDATORY | SE_GROUP_ENABLED |
-                                        SE_GROUP_ENABLED_BY_DEFAULT;
+    Groups = TokenGroups->Groups;
+    Groups[0].Sid = LogonSid;
+    Groups[0].Attributes = SE_GROUP_MANDATORY | SE_GROUP_ENABLED |
+                           SE_GROUP_ENABLED_BY_DEFAULT | SE_GROUP_LOGON_ID;
+    Groups[1].Sid = LocalSid;
+    Groups[1].Attributes = SE_GROUP_MANDATORY | SE_GROUP_ENABLED |
+                           SE_GROUP_ENABLED_BY_DEFAULT;
 
     /* Set the token source */
     RtlCopyMemory(TokenSource.SourceName,

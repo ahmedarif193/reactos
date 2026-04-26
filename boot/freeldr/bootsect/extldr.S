@@ -52,7 +52,7 @@ ExtLdrEntryPoint:
     jz .FSkip2
 
     mov di, offset FreeLdrFileName                                      // Load target filename address
-    mov cx, offset FreeLdrFileNameEnd - FreeLdrFileName                 // Length of filename to compare
+    mov cx, 11                                                          // Length of "freeldr.sys"
     cmp byte ptr ds:[si + EXT_DIRECTORY_ENTRY_NAME_LENGTH_OFFSET], cl   // Compare if both names have the same length
     jnz .FSkip2                                                         // Skip this entry if not
     add si, EXT_DIRECTORY_ENTRY_NAME_OFFSET                             // Move to filename in entry
