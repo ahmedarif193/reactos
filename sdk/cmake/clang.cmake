@@ -113,7 +113,7 @@ add_compile_options(-march=${OARCH} -mtune=${TUNE})
 
 # Warnings, errors
 # Clang builds don't use -Werror
-add_compile_options(-Wall -Wpointer-arith)
+add_compile_options(-Wall -Wpointer-arith -Wunused-result)
 
 # Disable some overzealous warnings
 add_compile_options(
