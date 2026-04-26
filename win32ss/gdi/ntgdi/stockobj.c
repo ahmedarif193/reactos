@@ -103,7 +103,7 @@ static
 HPEN
 FASTCALL
 IntCreateStockPen(DWORD dwPenStyle,
-                  DWORD dwWidth,
+                  LONG lWidth,
                   ULONG ulBrushStyle,
                   ULONG ulColor)
 {
@@ -113,10 +113,10 @@ IntCreateStockPen(DWORD dwPenStyle,
     pbrushPen = PEN_AllocPenWithHandle();
     if (pbrushPen == NULL) return NULL;
 
-    if ((dwPenStyle & PS_STYLE_MASK) == PS_NULL) dwWidth = 1;
+    if ((dwPenStyle & PS_STYLE_MASK) == PS_NULL) lWidth = 1;
 
     pbrushPen->iHatch = 0;
-    pbrushPen->lWidth = abs(dwWidth);
+    pbrushPen->lWidth = (lWidth < 0) ? -lWidth : lWidth;
     FLOATOBJ_SetLong(&pbrushPen->eWidth, pbrushPen->lWidth);
     pbrushPen->ulPenStyle = dwPenStyle;
     pbrushPen->BrushAttr.lbColor = ulColor;

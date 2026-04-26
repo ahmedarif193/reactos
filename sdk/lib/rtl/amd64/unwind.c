@@ -280,14 +280,6 @@ SetXmmRegFromStackValue(
     }
 }
 
-static
-__inline
-M128A
-GetXmmReg(PCONTEXT Context, BYTE Reg)
-{
-    return ((M128A*)(&Context->Xmm0))[Reg];
-}
-
 /*! RtlpTryToUnwindEpilog
  * \brief Helper function that tries to unwind epilog instructions.
  * \return TRUE if we have been in an epilog and it could be unwound.

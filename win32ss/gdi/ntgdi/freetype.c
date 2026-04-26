@@ -4097,7 +4097,7 @@ IntRequestFontSizeEx(FT_Face face, const LOGFONTW *plf)
     LONG lfHeight = plf->lfHeight, lfWidth = plf->lfWidth;
     FT_WinFNT_HeaderRec WinFNT;
     LONG Ascent, Descent, Sum, EmHeight;
-    LONG tmAscent, tmDescent, tmHeight, tmInternalLeading;
+    LONG tmAscent, tmDescent, tmHeight = 0, tmInternalLeading = 0;
 
     lfWidth = abs(lfWidth);
     if (lfHeight == 0)

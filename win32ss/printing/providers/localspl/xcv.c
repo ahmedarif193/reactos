@@ -10,7 +10,7 @@
 static DWORD
 _HandleAddPort(HANDLE hXcv, PBYTE pInputData, PDWORD pcbOutputNeeded, DWORD* pdwStatus)
 {
-    DWORD res;
+    DWORD res = ERROR_INVALID_FUNCTION;
     PLOCAL_PRINT_MONITOR pPrintMonitor;
     PLOCAL_XCV_HANDLE pXcv;
     PLOCAL_HANDLE pHandle = (PLOCAL_HANDLE)hXcv;
@@ -68,7 +68,7 @@ Cleanup:
 static DWORD
 _HandleDeletePort(HANDLE hXcv, PBYTE pInputData, PDWORD pcbOutputNeeded, DWORD* pdwStatus)
 {
-    DWORD res;
+    DWORD res = ERROR_INVALID_FUNCTION;
     PLOCAL_PRINT_MONITOR pPrintMonitor;
     PLOCAL_XCV_HANDLE pXcv;
     PLOCAL_PORT pPort;
@@ -139,7 +139,7 @@ Cleanup:
 BOOL WINAPI
 LocalXcvData(HANDLE hXcv, const WCHAR* pszDataName, BYTE* pInputData, DWORD cbInputData, BYTE* pOutputData, DWORD cbOutputData, DWORD* pcbOutputNeeded, DWORD* pdwStatus)
 {
-    DWORD res;
+    DWORD res = ERROR_INVALID_FUNCTION;
     PLOCAL_PRINT_MONITOR pPrintMonitor;
     PLOCAL_XCV_HANDLE pXcv;
     PLOCAL_HANDLE pHandle = (PLOCAL_HANDLE)hXcv;

@@ -529,7 +529,7 @@ LocalmonEndDocPort(HANDLE hPort)
 BOOL WINAPI
 LocalmonEnumPorts(HANDLE hMonitor, PWSTR pName, DWORD Level, PBYTE pPorts, DWORD cbBuf, PDWORD pcbNeeded, PDWORD pcReturned)
 {
-    DWORD dwErrorCode;
+    DWORD dwErrorCode = ERROR_SUCCESS;
     PBYTE pPortInfoEnd;
     PLIST_ENTRY pEntry;
     PLOCALMON_HANDLE pLocalmon = (PLOCALMON_HANDLE)hMonitor;
@@ -843,7 +843,7 @@ BOOL WINAPI
 LocalmonReadPort(HANDLE hPort, PBYTE pBuffer, DWORD cbBuffer, PDWORD pcbRead)
 {
     BOOL bOpenedPort = FALSE;
-    DWORD dwErrorCode;
+    DWORD dwErrorCode = ERROR_SUCCESS;
     PLOCALMON_PORT pPort = (PLOCALMON_PORT)hPort;
 
     TRACE("LocalmonReadPort(%p, %p, %lu, %p)\n", hPort, pBuffer, cbBuffer, pcbRead);

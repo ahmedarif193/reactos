@@ -2049,7 +2049,7 @@ static bfd_vma start_pc;
  * The function returns the length of this instruction in bytes.
  */
 
-static char intel_syntax;
+static int intel_syntax;
 static char open_char;
 static char close_char;
 static char separator_char;
@@ -2097,7 +2097,7 @@ print_insn (bfd_vma pc, disassemble_info *info)
   mode_64bit = (info->mach == bfd_mach_x86_64_intel_syntax
 		|| info->mach == bfd_mach_x86_64);
 
-  if (intel_syntax == (char) -1)
+  if (intel_syntax == -1)
     intel_syntax = (info->mach == bfd_mach_i386_i386_intel_syntax
 		    || info->mach == bfd_mach_x86_64_intel_syntax);
 

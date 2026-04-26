@@ -707,7 +707,7 @@ LRESULT CBaseBarSite::OnCustomDraw(LPNMCUSTOMDRAW pnmcd)
                 DWORD index;
                 UINT pad = GetSystemMetrics(SM_CXEDGE), leftpad = max(pad * 2, 4);
                 UINT btnw = 20, btnh = 18, btnarea = 1 + btnw + 1;
-                HFONT newFont, oldFont;
+                HFONT newFont, oldFont = NULL;
 
                 index = SendMessage(RB_IDTOINDEX, fCurrentActiveBar->fBandID , 0);
                 ZeroMemory(&info, sizeof(info));
@@ -730,7 +730,8 @@ LRESULT CBaseBarSite::OnCustomDraw(LPNMCUSTOMDRAW pnmcd)
                 COLORREF orgclrtxt = SetTextColor(pnmcd->hdc, GetSysColor(COLOR_BTNTEXT));
                 DrawText(pnmcd->hdc, info.lpText, -1, &rt, DT_SINGLELINE | DT_LEFT | DT_VCENTER);
                 SetTextColor(pnmcd->hdc, orgclrtxt);
-                SelectObject(pnmcd->hdc, oldFont);
+                if (oldFont)
+                    SelectObject(pnmcd->hdc, oldFont);
                 DeleteObject(newFont);
                 return CDRF_SKIPDEFAULT;
             }

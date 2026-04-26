@@ -348,7 +348,7 @@ unsigned long TConsole::WriteText(const char *pszString, unsigned long cbString)
 
 // Formerly ConWriteString (Paul Brannan 6/28/98)
 unsigned long TConsole::WriteStringFast(const char* pszString, unsigned long cbString) {
-	DWORD Result;
+	DWORD Result = 0;
 
 	SetConsoleTextAttribute(hConsole, wAttributes);
 

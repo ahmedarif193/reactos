@@ -87,36 +87,36 @@ RtlRaiseStatus(IN NTSTATUS Status)
     EXCEPTION_RECORD ExceptionRecord;
     CONTEXT Context;
 
-    /* Capture the context */
-    RtlCaptureContext(&Context);
-
-    /* Create an exception record */
-    ExceptionRecord.ExceptionAddress = _ReturnAddress();
-    ExceptionRecord.ExceptionCode  = Status;
-    ExceptionRecord.ExceptionRecord = NULL;
-    ExceptionRecord.NumberParameters = 0;
-    ExceptionRecord.ExceptionFlags = EXCEPTION_NONCONTINUABLE;
-
-    /* Write the context flag */
-    Context.ContextFlags = CONTEXT_FULL;
-
-    /* Check if user mode debugger is active */
-    if (RtlpCheckForActiveDebugger())
+    for (;;)
     {
-        /* Raise an exception immediately */
-        ZwRaiseException(&ExceptionRecord, &Context, TRUE);
-    }
-    else
-    {
-        /* Dispatch the exception */
-        RtlDispatchException(&ExceptionRecord, &Context);
+        /* Capture the context */
+        RtlCaptureContext(&Context);
 
-        /* Raise exception if we got here */
-        Status = ZwRaiseException(&ExceptionRecord, &Context, FALSE);
-    }
+        /* Create an exception record */
+        ExceptionRecord.ExceptionAddress = _ReturnAddress();
+        ExceptionRecord.ExceptionCode  = Status;
+        ExceptionRecord.ExceptionRecord = NULL;
+        ExceptionRecord.NumberParameters = 0;
+        ExceptionRecord.ExceptionFlags = EXCEPTION_NONCONTINUABLE;
 
-    /* If we returned, raise a status */
-    RtlRaiseStatus(Status);
+        /* Write the context flag */
+        Context.ContextFlags = CONTEXT_FULL;
+
+        /* Check if user mode debugger is active */
+        if (RtlpCheckForActiveDebugger())
+        {
+            /* Raise an exception immediately */
+            ZwRaiseException(&ExceptionRecord, &Context, TRUE);
+        }
+        else
+        {
+            /* Dispatch the exception */
+            RtlDispatchException(&ExceptionRecord, &Context);
+
+            /* Raise exception if we got here */
+            Status = ZwRaiseException(&ExceptionRecord, &Context, FALSE);
+        }
+    }
 }
 
 #ifdef _MSC_VER

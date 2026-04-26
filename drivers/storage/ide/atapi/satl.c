@@ -785,7 +785,7 @@ AtaReqCompleteReadCapacity(
     else // SCSIOP_READ_CAPACITY16
     {
         PREAD_CAPACITY16_DATA CapacityData;
-        ULONG LogicalPerPhysicalExponent, LogicalSectorsPerPhysicalSector;
+        ULONG LogicalPerPhysicalExponent = 0, LogicalSectorsPerPhysicalSector;
         ULONG LogicalSectorAlignment, LowestAlignedBlock;
         ULONG64 MaximumLba;
 

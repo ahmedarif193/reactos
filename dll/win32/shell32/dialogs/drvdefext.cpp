@@ -425,7 +425,7 @@ CDrvDefExt::InitGeneralPage(HWND hwndDlg)
             break;
         case DRIVE_CDROM: IconId = IDI_SHELL_CDROM; TypeStrId = IDS_DRIVE_CDROM; break;
         case DRIVE_REMOTE: IconId = IDI_SHELL_NETDRIVE; TypeStrId = IDS_DRIVE_NETWORK; break;
-        case DRIVE_RAMDISK: IconId = IDI_SHELL_RAMDISK; break;
+        case DRIVE_RAMDISK: IconId = IDI_SHELL_RAMDISK; TypeStrId = IDS_DRIVE_FIXED; break;
         default: IconId = IDI_SHELL_DRIVE; TypeStrId = IDS_DRIVE_FIXED;
     }
 

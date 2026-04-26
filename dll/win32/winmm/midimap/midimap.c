@@ -202,7 +202,7 @@ static BOOL	MIDIMAP_LoadSettingsScheme(MIDIMAPDATA* mom, const WCHAR* scheme)
 
 static BOOL	MIDIMAP_LoadSettings(MIDIMAPDATA* mom)
 {
-    HKEY 	hUserKey, hKey;
+    HKEY 	hUserKey, hKey = NULL;
     DWORD   err;
     BOOL	ret;
 
@@ -259,7 +259,8 @@ static BOOL	MIDIMAP_LoadSettings(MIDIMAPDATA* mom)
 	    }
 	}
     }
-    RegCloseKey(hKey);
+    if (hKey)
+        RegCloseKey(hKey);
 
     if (ret && TRACE_ON(msacm))
     {

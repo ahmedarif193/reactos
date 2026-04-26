@@ -256,6 +256,8 @@ static HRESULT AVISplitter_next_request(AVISplitterImpl *This, DWORD streamnumbe
         {
             ERR("CAN'T PLAY WITHOUT AN INDEX! SOS! SOS! SOS!\n");
             assert(0);
+            IMediaSample_Release(sample);
+            return E_FAIL;
         }
 
         if (rtSampleStart != rtSampleStop)

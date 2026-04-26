@@ -484,7 +484,7 @@ VOID
 NTAPI
 KiSystemStartup(IN PLOADER_PARAMETER_BLOCK LoaderBlock)
 {
-    CCHAR Cpu;
+    ULONG Cpu;
     PKTHREAD InitialThread;
     ULONG64 InitialStack;
     PKIPCR Pcr;

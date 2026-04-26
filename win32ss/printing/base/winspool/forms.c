@@ -273,7 +273,7 @@ Cleanup:
 BOOL WINAPI
 GetFormA(HANDLE hPrinter, PSTR pFormName, DWORD Level, PBYTE pForm, DWORD cbBuf, PDWORD pcbNeeded)
 {
-    DWORD dwErrorCode, len;
+    DWORD dwErrorCode = ERROR_SUCCESS, len;
     LPWSTR FormNameW = NULL;
     PFORM_INFO_1W pfi1w = (PFORM_INFO_1W)pForm;
     PFORM_INFO_2W pfi2w = (PFORM_INFO_2W)pForm;

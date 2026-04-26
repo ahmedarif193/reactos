@@ -132,9 +132,9 @@ CreateDefaultProcessSecurityCommon(
 {
     NTSTATUS Status;
     BOOL Success;
-    PACL Dacl;
+    PACL Dacl = NULL;
     PTOKEN_OWNER OwnerOfToken;
-    PTOKEN_PRIMARY_GROUP PrimaryGroupOfToken;
+    PTOKEN_PRIMARY_GROUP PrimaryGroupOfToken = NULL;
     SECURITY_DESCRIPTOR AbsoluteSd;
     ULONG DaclSize, TokenOwnerSize, PrimaryGroupSize, RelativeSDSize = 0;
     PSID OwnerSid = NULL, SystemSid = NULL, PrimaryGroupSid = NULL;
