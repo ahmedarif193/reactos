@@ -2078,7 +2078,6 @@ CTipbarAccessible::CTipbarAccessible(CTipbarAccItem *pItem)
 
 CTipbarAccessible::~CTipbarAccessible()
 {
-    m_pTypeInfo = m_pTypeInfo;
     if (m_pTypeInfo)
     {
         m_pTypeInfo->Release();

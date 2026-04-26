@@ -441,6 +441,7 @@ ScmEnableBackupRestorePrivileges(
     _In_ BOOL bEnable)
 {
     PTOKEN_PRIVILEGES pTokenPrivileges = NULL;
+    PLUID_AND_ATTRIBUTES Privileges;
     DWORD dwSize;
     BOOL bRet = FALSE;
 
@@ -455,12 +456,13 @@ ScmEnableBackupRestorePrivileges(
     }
 
     pTokenPrivileges->PrivilegeCount = 2;
-    pTokenPrivileges->Privileges[0].Luid.LowPart = SE_BACKUP_PRIVILEGE;
-    pTokenPrivileges->Privileges[0].Luid.HighPart = 0;
-    pTokenPrivileges->Privileges[0].Attributes = (bEnable ? SE_PRIVILEGE_ENABLED : 0);
-    pTokenPrivileges->Privileges[1].Luid.LowPart = SE_RESTORE_PRIVILEGE;
-    pTokenPrivileges->Privileges[1].Luid.HighPart = 0;
-    pTokenPrivileges->Privileges[1].Attributes = (bEnable ? SE_PRIVILEGE_ENABLED : 0);
+    Privileges = pTokenPrivileges->Privileges;
+    Privileges[0].Luid.LowPart = SE_BACKUP_PRIVILEGE;
+    Privileges[0].Luid.HighPart = 0;
+    Privileges[0].Attributes = (bEnable ? SE_PRIVILEGE_ENABLED : 0);
+    Privileges[1].Luid.LowPart = SE_RESTORE_PRIVILEGE;
+    Privileges[1].Luid.HighPart = 0;
+    Privileges[1].Attributes = (bEnable ? SE_PRIVILEGE_ENABLED : 0);
 
     bRet = AdjustTokenPrivileges(hToken, FALSE, pTokenPrivileges, 0, NULL, NULL);
     if (!bRet)

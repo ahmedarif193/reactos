@@ -950,10 +950,10 @@ HalpSetupAcpiPhase0(IN PLOADER_PARAMETER_BLOCK LoaderBlock)
 
                 /* Print the table signature */
                 p += sprintf(p, " [%c%c%c%c]",
-                             CachedTable->Header.Signature & 0x000000FF,
-                             (CachedTable->Header.Signature & 0x0000FF00) >>  8,
-                             (CachedTable->Header.Signature & 0x00FF0000) >> 16,
-                             (CachedTable->Header.Signature & 0xFF000000) >> 24);
+                             (UCHAR)(CachedTable->Header.Signature & 0x000000FF),
+                             (UCHAR)((CachedTable->Header.Signature & 0x0000FF00) >>  8),
+                             (UCHAR)((CachedTable->Header.Signature & 0x00FF0000) >> 16),
+                             (UCHAR)((CachedTable->Header.Signature & 0xFF000000) >> 24));
             }
             DPRINT1("%s\n", AcpiLine);
         }
