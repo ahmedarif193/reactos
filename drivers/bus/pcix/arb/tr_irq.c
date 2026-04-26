@@ -50,8 +50,8 @@ tranirq_Constructor(IN PVOID DeviceExtension,
                     IN PINTERFACE Interface)
 {
     PPCI_FDO_EXTENSION FdoExtension = (PPCI_FDO_EXTENSION)DeviceExtension;
-    ULONG BaseBus, ParentBus;
-    INTERFACE_TYPE ParentInterface;
+    ULONG BaseBus, ParentBus = 0;
+    INTERFACE_TYPE ParentInterface = PCIBus;
     ASSERT_FDO(FdoExtension);
 
     UNREFERENCED_PARAMETER(Instance);

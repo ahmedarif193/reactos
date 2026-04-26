@@ -586,9 +586,6 @@ l_ReadHeaderFromFile:
 
         if(RTL_CONTAINS_FIELD(pioh64OptHeader, cbOptHeaderSize, SizeOfImage))
         {
-            if(pioh64OptHeader->SizeOfImage > MAXULONG_PTR)
-                DIE(("SizeOfImage exceeds the address space\n"));
-
             ImageSectionObject->ImageInformation.ImageFileSize = pioh64OptHeader->SizeOfImage;
         }
 
