@@ -448,21 +448,21 @@ RndisMiniportInitializeEx(
         goto Cleanup;
     }
 
-    /*
-     * Get device objects from MiniportHandle.
-     * In NDIS 6.x, NdisMiniportHandle is actually a DeviceObject.
-     * The PDO is stored in DeviceExtension[1].
-     */
-    DeviceObject = (PDEVICE_OBJECT)NdisMiniportHandle;
-    if (DeviceObject != NULL && DeviceObject->DeviceExtension != NULL)
+    PhysicalDeviceObject = NULL;
+    DeviceObject         = NULL;
+    LowerDeviceObject    = NULL;
+
+    NdisMGetDeviceProperty(NdisMiniportHandle,
+                           &PhysicalDeviceObject,
+                           &DeviceObject,
+                           &LowerDeviceObject,
+                           NULL,
+                           NULL);
+
+    if (PhysicalDeviceObject == NULL || LowerDeviceObject == NULL)
     {
-        PhysicalDeviceObject = ((PVOID*)DeviceObject->DeviceExtension)[1];
-        LowerDeviceObject = IoGetAttachedDeviceReference(PhysicalDeviceObject);
-        ObDereferenceObject(LowerDeviceObject);  /* Balance reference from IoGetAttachedDeviceReference */
-    }
-    else
-    {
-        DPRINT1("USBRNDIS: Failed to get device objects from MiniportHandle\n");
+        DPRINT1("USBRNDIS: NdisMGetDeviceProperty returned PDO=%p FDO=%p NextDO=%p\n",
+                PhysicalDeviceObject, DeviceObject, LowerDeviceObject);
         NdisStatus = NDIS_STATUS_FAILURE;
         goto Cleanup;
     }
