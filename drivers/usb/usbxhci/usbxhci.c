@@ -67,7 +67,7 @@
 
 #define XHCI_INVALID_LINK_STATE 0xFF
 #define USBPORT_NO_HUB_ADDRESS 0xFFFF
-#define XHCI_TRANSFER_POLL_INTERVAL_US 500
+#define XHCI_TRANSFER_POLL_INTERVAL_US 1000
 #define XHCI_EP0_STALL_RESET_TIMEOUT_MS 200
 #define XHCI_EP0_STALL_RESET_POLL_MS 1
 
@@ -13115,25 +13115,23 @@ XHCI_AbortTransfer(PVOID MiniPortExtension,
                                      XHCI_TAG);
         if (!Work)
         {
-            DPRINT1("usbxhci: AbortTransfer fallback to synchronous reset (alloc failed)\n");
-            Irql = PASSIVE_LEVEL;
-        }
-        else
-        {
-            InterlockedIncrement(&Endpoint->PendingWorkCount);
-            Work->Extension = Extension;
-            Work->Endpoint = Endpoint;
-            Work->RingDoorbell = TRUE;
-            Work->ClearStallResetFlags = FALSE;
-            ExInitializeWorkItem(&Work->Item,
-                                 XHCI_EndpointResetWorker,
-                                 Work);
-            ExQueueWorkItem(&Work->Item, DelayedWorkQueue);
-            DPRINT1("usbxhci: AbortTransfer queued reset work for slot %u ep %u\n",
-                    Endpoint->SlotId,
-                    Endpoint->EndpointId);
+            DPRINT1("usbxhci: AbortTransfer cannot queue async reset at DISPATCH_LEVEL (alloc failed) - USBPORT will handle timeout\n");
             return;
         }
+
+        InterlockedIncrement(&Endpoint->PendingWorkCount);
+        Work->Extension = Extension;
+        Work->Endpoint = Endpoint;
+        Work->RingDoorbell = TRUE;
+        Work->ClearStallResetFlags = FALSE;
+        ExInitializeWorkItem(&Work->Item,
+                             XHCI_EndpointResetWorker,
+                             Work);
+        ExQueueWorkItem(&Work->Item, DelayedWorkQueue);
+        DPRINT1("usbxhci: AbortTransfer queued reset work for slot %u ep %u\n",
+                Endpoint->SlotId,
+                Endpoint->EndpointId);
+        return;
     }
 
     InterlockedIncrement(&Endpoint->PendingWorkCount);
@@ -13251,15 +13249,17 @@ XHCI_SetEndpointStatus(PVOID MiniPortExtension,
     /*
      * Clear-stall path: reset endpoint state and re-sync dequeue.
      *
-     * Always perform the reset synchronously, even at DISPATCH_LEVEL.
-     * XHCI_SendCommand handles DISPATCH_LEVEL with bounded busy-polling
-     * (RESET_EP/SET_TR_DEQUEUE: max 50ms each, typically < 1ms on real HW).
+     * Always perform the reset synchronously, even at DISPATCH_LEVEL
+     * (bounded polling via XHCI_SendCommand: RESET_EP/SET_TR_DEQUEUE
+     * max 50ms each, typically < 1ms on real HW).
      *
-     * Previously this path queued async work at DISPATCH_LEVEL, but that
-     * caused a race: SetEndpointStatus returned immediately, USBPORT/USBSTOR
-     * submitted new transfers, and the async reset worker then wiped the
-     * ring (destroying the new TRBs) and NULLed ActiveTransfer, causing
-     * "has no active transfer" stalls.
+     * This MUST remain synchronous at all IRQLs. The xHCI ring is shared
+     * memory: once we return, USBPORT/USBSTOR may immediately submit new
+     * transfers (adding TRBs to the ring). An async worker that later
+     * wipes the ring via XHCI_ResetEndpointRing would destroy those new
+     * TRBs and NULL ActiveTransfer, causing "has no active transfer" stalls.
+     * AbortTransfer avoids this by queueing work at DISPATCH_LEVEL only
+     * when there is no active transfer, so no new TRBs can appear.
      */
     DPRINT1("usbxhci: SetEndpointStatus synchronous reset for slot %u ep %u (IRQL=%lu)\n",
             Endpoint->SlotId,
