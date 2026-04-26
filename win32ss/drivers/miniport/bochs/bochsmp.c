@@ -7,6 +7,26 @@
 
 #include "bochsmp.h"
 
+/* Local declarations to avoid pulling in ndk/ntddk; values match the
+ * standard NT definitions. */
+#ifndef REG_DWORD
+#define REG_DWORD 4
+#endif
+#ifndef RTL_REGISTRY_SERVICES
+#define RTL_REGISTRY_SERVICES 1
+#endif
+
+NTSYSAPI
+NTSTATUS
+NTAPI
+RtlWriteRegistryValue(
+    _In_ ULONG RelativeTo,
+    _In_ PCWSTR Path,
+    _In_ PCWSTR ValueName,
+    _In_ ULONG ValueType,
+    _In_reads_bytes_opt_(ValueLength) PVOID ValueData,
+    _In_ ULONG ValueLength);
+
 static const BOCHS_SIZE BochsAvailableResolutions[] = {
     { 640, 480 },   // VGA
     { 800, 600 },   // SVGA
@@ -118,6 +138,82 @@ BochsInitializeSuitableModeInfo(
 
     DeviceExtension->AvailableModeCount = ModeCount;
     return TRUE;
+}
+
+CODE_SEG("PAGE")
+static VOID
+BochsApplyGopPreferredMode(
+    _Inout_ PBOCHS_DEVICE_EXTENSION DeviceExtension)
+{
+    BOCHSMP_GOP_INFO Fb;
+    BOCHS_SIZE GopSize;
+    ULONG i, j;
+    ULONG xRes, yRes;
+
+    if (!InbvGetGopFrameBufferInfo(&Fb))
+        return;
+
+    if (Fb.HorizontalResolution == 0 || Fb.VerticalResolution == 0)
+        return;
+    if (Fb.HorizontalResolution > 0xFFFF || Fb.VerticalResolution > 0xFFFF)
+        return;
+    if (Fb.HorizontalResolution > DeviceExtension->MaxXResolution)
+        return;
+    if (Fb.VerticalResolution > DeviceExtension->MaxYResolution)
+        return;
+    if (Fb.HorizontalResolution * Fb.VerticalResolution * 4 >
+        DeviceExtension->VramSize64K * 64 * 1024)
+        return;
+
+    GopSize.XResolution = (USHORT)Fb.HorizontalResolution;
+    GopSize.YResolution = (USHORT)Fb.VerticalResolution;
+
+    /* Drop any existing entry that already matches GOP res */
+    for (i = 0; i < DeviceExtension->AvailableModeCount; i++)
+    {
+        if (DeviceExtension->AvailableModeInfo[i].XResolution == GopSize.XResolution &&
+            DeviceExtension->AvailableModeInfo[i].YResolution == GopSize.YResolution)
+        {
+            for (j = i; j + 1 < DeviceExtension->AvailableModeCount; j++)
+                DeviceExtension->AvailableModeInfo[j] = DeviceExtension->AvailableModeInfo[j + 1];
+            DeviceExtension->AvailableModeCount--;
+            break;
+        }
+    }
+
+    /* Prepend GOP res as mode 0 if there's room */
+    if (DeviceExtension->AvailableModeCount < DeviceExtension->AvailableModeCapacity)
+    {
+        for (i = DeviceExtension->AvailableModeCount; i > 0; i--)
+            DeviceExtension->AvailableModeInfo[i] = DeviceExtension->AvailableModeInfo[i - 1];
+        DeviceExtension->AvailableModeInfo[0] = GopSize;
+        DeviceExtension->AvailableModeCount++;
+    }
+    else
+    {
+        DeviceExtension->AvailableModeInfo[DeviceExtension->AvailableModeCapacity - 1] = GopSize;
+        for (i = DeviceExtension->AvailableModeCapacity - 1; i > 0; i--)
+        {
+            BOCHS_SIZE Tmp = DeviceExtension->AvailableModeInfo[i];
+            DeviceExtension->AvailableModeInfo[i] = DeviceExtension->AvailableModeInfo[i - 1];
+            DeviceExtension->AvailableModeInfo[i - 1] = Tmp;
+        }
+    }
+
+    /* Persist GOP res as the device's DefaultSettings so win32k picks it
+     * as the initial mode on next probe. */
+    xRes = Fb.HorizontalResolution;
+    yRes = Fb.VerticalResolution;
+    (VOID)RtlWriteRegistryValue(RTL_REGISTRY_SERVICES,
+                                L"bochsmp\\Device0",
+                                L"DefaultSettings.XResolution",
+                                REG_DWORD, &xRes, sizeof(xRes));
+    (VOID)RtlWriteRegistryValue(RTL_REGISTRY_SERVICES,
+                                L"bochsmp\\Device0",
+                                L"DefaultSettings.YResolution",
+                                REG_DWORD, &yRes, sizeof(yRes));
+
+    VideoDebugPrint((Info, "Bochs: GOP-preferred mode %lux%lu applied\n", xRes, yRes));
 }
 
 CODE_SEG("PAGE")
@@ -525,9 +621,10 @@ BochsInitialize(
     }
 
     PotentialModeCount = ARRAYSIZE(BochsAvailableResolutions);
+    DeviceExtension->AvailableModeCapacity = PotentialModeCount + 1; /* +1 reserved for GOP-preferred mode */
     DeviceExtension->AvailableModeInfo = VideoPortAllocatePool(HwDeviceExtension,
                                                                VpPagedPool,
-                                                               PotentialModeCount * sizeof(BOCHS_SIZE),
+                                                               DeviceExtension->AvailableModeCapacity * sizeof(BOCHS_SIZE),
                                                                BOCHS_TAG);
     if (!DeviceExtension->AvailableModeInfo)
     {
@@ -541,6 +638,8 @@ BochsInitialize(
         BochsFreeResources(DeviceExtension);
         return FALSE;
     }
+
+    BochsApplyGopPreferredMode(DeviceExtension);
 
     return TRUE;
 }
