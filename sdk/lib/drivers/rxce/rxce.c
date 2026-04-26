@@ -545,7 +545,7 @@ RxAllocateObject(
 {
     ULONG Tag, ObjectSize;
     PVOID Object, *Extension;
-    PRX_PREFIX_ENTRY PrefixEntry;
+    PRX_PREFIX_ENTRY PrefixEntry = NULL;
     USHORT StructSize, ExtensionSize;
 
     PAGED_CODE();

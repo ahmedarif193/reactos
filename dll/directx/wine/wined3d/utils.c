@@ -3024,13 +3024,13 @@ static BOOL init_format_texture_info(struct wined3d_adapter *adapter, struct win
 
 static BOOL color_match(DWORD c1, DWORD c2, BYTE max_diff)
 {
-    if (abs((c1 & 0xff) - (c2 & 0xff)) > max_diff) return FALSE;
+    if (abs((INT)(c1 & 0xff) - (INT)(c2 & 0xff)) > max_diff) return FALSE;
     c1 >>= 8; c2 >>= 8;
-    if (abs((c1 & 0xff) - (c2 & 0xff)) > max_diff) return FALSE;
+    if (abs((INT)(c1 & 0xff) - (INT)(c2 & 0xff)) > max_diff) return FALSE;
     c1 >>= 8; c2 >>= 8;
-    if (abs((c1 & 0xff) - (c2 & 0xff)) > max_diff) return FALSE;
+    if (abs((INT)(c1 & 0xff) - (INT)(c2 & 0xff)) > max_diff) return FALSE;
     c1 >>= 8; c2 >>= 8;
-    if (abs((c1 & 0xff) - (c2 & 0xff)) > max_diff) return FALSE;
+    if (abs((INT)(c1 & 0xff) - (INT)(c2 & 0xff)) > max_diff) return FALSE;
     return TRUE;
 }
 

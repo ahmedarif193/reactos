@@ -1032,14 +1032,14 @@ static BOOL HLPFILE_RtfAddBitmap(struct RtfData* rd, HLPFILE* file, const BYTE* 
     if (!HLPFILE_RtfAddControl(rd, "{\\pict")) goto done;
     if (type == 0x06)
     {
-        sprintf(tmp, "\\dibitmap0\\picw%d\\pich%d",
+        sprintf(tmp, "\\dibitmap0\\picw%ld\\pich%ld",
                 bi->bmiHeader.biWidth, bi->bmiHeader.biHeight);
         if (!HLPFILE_RtfAddControl(rd, tmp)) goto done;
         if (!HLPFILE_RtfAddHexBytes(rd, bi, sizeof(*bi) + nc * sizeof(RGBQUAD))) goto done;
     }
     else
     {
-        sprintf(tmp, "\\wbitmap0\\wbmbitspixel%d\\wbmplanes%d\\picw%d\\pich%d",
+        sprintf(tmp, "\\wbitmap0\\wbmbitspixel%d\\wbmplanes%d\\picw%ld\\pich%ld",
                 bi->bmiHeader.biBitCount, bi->bmiHeader.biPlanes,
                 bi->bmiHeader.biWidth, bi->bmiHeader.biHeight);
         if (!HLPFILE_RtfAddControl(rd, tmp)) goto done;

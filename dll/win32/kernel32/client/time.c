@@ -570,7 +570,7 @@ GetSystemTimes(OUT LPFILETIME lpIdleTime OPTIONAL,
         {
             for (i = 0; i < BaseStaticServerData->SysInfo.NumberOfProcessors; i++)
             {
-                TotalIdleTime.QuadPart += ProcPerfInfo[i].IdleTime.QuadPart;
+                TotalIdleTime.QuadPart += ProcPerfInfo[(unsigned char)i].IdleTime.QuadPart;
             }
 
             lpIdleTime->dwLowDateTime = TotalIdleTime.LowPart;
@@ -581,7 +581,7 @@ GetSystemTimes(OUT LPFILETIME lpIdleTime OPTIONAL,
         {
             for (i = 0; i < BaseStaticServerData->SysInfo.NumberOfProcessors; i++)
             {
-                TotalKernTime.QuadPart += ProcPerfInfo[i].KernelTime.QuadPart;
+                TotalKernTime.QuadPart += ProcPerfInfo[(unsigned char)i].KernelTime.QuadPart;
             }
 
             lpKernelTime->dwLowDateTime = TotalKernTime.LowPart;
@@ -592,7 +592,7 @@ GetSystemTimes(OUT LPFILETIME lpIdleTime OPTIONAL,
         {
             for (i = 0; i < BaseStaticServerData->SysInfo.NumberOfProcessors; i++)
             {
-                TotalUserTime.QuadPart += ProcPerfInfo[i].UserTime.QuadPart;
+                TotalUserTime.QuadPart += ProcPerfInfo[(unsigned char)i].UserTime.QuadPart;
             }
 
             lpUserTime->dwLowDateTime = TotalUserTime.LowPart;

@@ -414,6 +414,7 @@ HRESULT GetDiaogTextureBrush(HTHEME theme, HWND hwnd, HDC hdc, HBRUSH* result, B
         BOOL hasImageAlpha;
         HRESULT hr;
 
+        GetClientRect(hwnd, &dummy);
         hr = UXTHEME_LoadImage(theme, 0, TABP_BODY, 0, &dummy, FALSE, &hbmp, &bmpRect, &hasImageAlpha);
         if (FAILED(hr))
             return hr;

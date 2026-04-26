@@ -588,7 +588,7 @@ static const char *debugstr_dispid(DISPID dispid)
     }
 #undef CASE_DISPID
 
-    sprintf(buf, "%d", dispid);
+    sprintf(buf, "%ld", dispid);
     return buf;
 }
 

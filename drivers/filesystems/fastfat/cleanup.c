@@ -1049,7 +1049,7 @@ Return Value:
             IoRemoveShareAccess( FileObject, ShareAccess );
         }
 
-        if ((TypeOfOpen == UserFileOpen)
+        if (TypeOfOpen == UserFileOpen
 #if (NTDDI_VERSION >= NTDDI_WIN8)
             ||
             (TypeOfOpen == UserDirectoryOpen)

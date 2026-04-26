@@ -374,7 +374,7 @@ static inline UINT get_palette_index(BYTE r, BYTE g, BYTE b, BYTE a, ColorPalett
     */
     for(i=0;i<palette->Count;i++) {
         ARGB color=palette->Entries[i];
-        distance=abs(b-(color & 0xff)) + abs(g-(color>>8 & 0xff)) + abs(r-(color>>16 & 0xff)) + abs(a-(color>>24 & 0xff));
+        distance=abs((INT)b-(INT)(color & 0xff)) + abs((INT)g-(INT)(color>>8 & 0xff)) + abs((INT)r-(INT)(color>>16 & 0xff)) + abs((INT)a-(INT)(color>>24 & 0xff));
         if (distance<best_distance) {
             best_distance=distance;
             index=i;

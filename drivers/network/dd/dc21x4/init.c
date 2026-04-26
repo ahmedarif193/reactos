@@ -761,7 +761,9 @@ DcInitializeAdapterResources(
         Adapter->Flags |= DC_IO_MAPPED;
     }
     if (Status != NDIS_STATUS_SUCCESS)
+    {
         goto Cleanup;
+    }
 
     INFO("IO Base %p\n", Adapter->IoBase);
     INFO("IRQ Level %u, Vector %u\n",
@@ -833,7 +835,9 @@ DcGetBusModeParameters(
     DefaultMode = DC_BUS_MODE_CACHE_ALIGNMENT_16 | DC_BUS_MODE_BURST_LENGTH_NO_LIMIT;
 
     if (!(Adapter->Features & DC_ENABLE_PCI_COMMANDS))
+    {
         return DefaultMode;
+    }
 
     INFO("PCI Cache Line Size %u\n", PciData->CacheLineSize * 4);
     INFO("PCI Command %04lx\n", PciData->Command);

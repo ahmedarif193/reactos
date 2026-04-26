@@ -909,7 +909,7 @@ static int ext4_ext_split(void *icb, handle_t *handle, struct inode *inode,
 		struct ext4_extent *ex;
 		ex = EXT_FIRST_EXTENT(neh);
 		memmove(ex, path[depth].p_ext, sizeof(struct ext4_extent) * m);
-		le16_add_cpu(&neh->eh_entries, m);
+		neh->eh_entries = cpu_to_le16(le16_to_cpu(neh->eh_entries) + m);
 	}
 
 	ext4_extent_block_csum_set(inode, neh);
@@ -987,7 +987,7 @@ static int ext4_ext_split(void *icb, handle_t *handle, struct inode *inode,
 		if (m) {
 			memmove(++fidx, path[i].p_idx,
 					sizeof(struct ext4_extent_idx) * m);
-			le16_add_cpu(&neh->eh_entries, m);
+			neh->eh_entries = cpu_to_le16(le16_to_cpu(neh->eh_entries) + m);
 		}
 		ext4_extent_block_csum_set(inode, neh);
 		set_buffer_uptodate(bh);
@@ -1102,7 +1102,7 @@ static int ext4_ext_grow_indepth(void *icb, handle_t *handle, struct inode *inod
 			(EXT_FIRST_INDEX(neh)->ei_block),
 			ext4_idx_pblock(EXT_FIRST_INDEX(neh)));
 
-	le16_add_cpu(&neh->eh_depth, 1);
+	neh->eh_depth = cpu_to_le16(le16_to_cpu(neh->eh_depth) + 1);
 	ext4_mark_inode_dirty(icb, handle, inode);
 out:
 	extents_brelse(bh);
@@ -1563,7 +1563,7 @@ static int ext4_ext_try_to_merge_right(struct inode *inode,
 				* sizeof(struct ext4_extent);
 			memmove(ex + 1, ex + 2, len);
 		}
-		le16_add_cpu(&eh->eh_entries, -1);
+		eh->eh_entries = cpu_to_le16(le16_to_cpu(eh->eh_entries) - 1);
 		merge_done = 1;
 		if (!eh->eh_entries)
 			EXT4_ERROR_INODE(inode, "eh->eh_entries = 0!");
@@ -1845,7 +1845,7 @@ has_space:
 		}
 	}
 
-	le16_add_cpu(&eh->eh_entries, 1);
+	eh->eh_entries = cpu_to_le16(le16_to_cpu(eh->eh_entries) + 1);
 	path[depth].p_ext = nearex;
 	nearex->ee_block = newext->ee_block;
 	ext4_ext_store_pblock(nearex, ext4_ext_pblock(newext));

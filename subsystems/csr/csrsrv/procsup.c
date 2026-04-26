@@ -461,7 +461,9 @@ CsrCreateProcess(IN HANDLE hProcess,
 
     /* Inherit the Process Data */
     CurrentProcess = CurrentThread->Process;
-    ProcessData = &CsrProcess->ServerData[CSR_SERVER_DLL_MAX];
+    ProcessData = (PVOID)((ULONG_PTR)CsrProcess +
+                          FIELD_OFFSET(CSR_PROCESS, ServerData) +
+                          CSR_SERVER_DLL_MAX * sizeof(PVOID));
     for (i = 0; i < CSR_SERVER_DLL_MAX; i++)
     {
         /* Get the current Server */

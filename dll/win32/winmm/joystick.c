@@ -95,14 +95,14 @@ static	void	CALLBACK	JOY_Timer(HWND hWnd, UINT wMsg, UINT_PTR wTimer, DWORD dwTi
 	pos = MAKELONG(ji.wXpos, ji.wYpos);
 
 	if (!joy->bChanged ||
-	    abs(joy->ji.wXpos - ji.wXpos) > joy->threshold ||
-	    abs(joy->ji.wYpos - ji.wYpos) > joy->threshold) {
+	    abs((INT)joy->ji.wXpos - (INT)ji.wXpos) > joy->threshold ||
+	    abs((INT)joy->ji.wYpos - (INT)ji.wYpos) > joy->threshold) {
 	    SendMessageA(joy->hCapture, MM_JOY1MOVE + i, ji.wButtons, pos);
 	    joy->ji.wXpos = ji.wXpos;
 	    joy->ji.wYpos = ji.wYpos;
 	}
 	if (!joy->bChanged ||
-	    abs(joy->ji.wZpos - ji.wZpos) > joy->threshold) {
+	    abs((INT)joy->ji.wZpos - (INT)ji.wZpos) > joy->threshold) {
 	    SendMessageA(joy->hCapture, MM_JOY1ZMOVE + i, ji.wButtons, pos);
 	    joy->ji.wZpos = ji.wZpos;
 	}

@@ -30,8 +30,8 @@ typedef struct _WINSTATION_OBJECT
     DWORD          cNumClipFormats;
     INT            iClipSerialNumber;
     INT            iClipSequenceNumber;
-    INT            fClipboardChanged : 1;
-    INT            fInDelayedRendering : 1;
+    UINT           fClipboardChanged : 1;
+    UINT           fInDelayedRendering : 1;
 
     PWND           spwndClipboardListener;
     LUID           luidEndSession;

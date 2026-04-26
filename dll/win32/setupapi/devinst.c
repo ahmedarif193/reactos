@@ -1262,6 +1262,7 @@ SetupDiCreateDeviceInfoListExW(const GUID *ClassGuid,
         PVOID Reserved)
 {
     struct DeviceInfoSet *list = NULL;
+    LPWSTR MachineNameData;
     DWORD size = FIELD_OFFSET(struct DeviceInfoSet, szData);
     DWORD rc;
     CONFIGRET cr;
@@ -1314,9 +1315,10 @@ SetupDiCreateDeviceInfoListExW(const GUID *ClassGuid,
             goto cleanup;
         }
 
-        list->szData[0] = list->szData[1] = '\\';
-        strcpyW(list->szData + 2, MachineName);
-        list->MachineName = list->szData;
+        MachineNameData = (LPWSTR)((ULONG_PTR)list + FIELD_OFFSET(struct DeviceInfoSet, szData));
+        MachineNameData[0] = MachineNameData[1] = '\\';
+        strcpyW(MachineNameData + 2, MachineName);
+        list->MachineName = MachineNameData;
     }
     else
     {

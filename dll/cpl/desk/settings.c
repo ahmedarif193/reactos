@@ -851,10 +851,10 @@ FindBestElement(
     /* Find the best entry in the list */
     for (Current = pDevice->Settings; Current; Current = Current->Flink)
     {
-        Distance = 0x100000 * labs(Current->dmBitsPerPel       - Request->dmBitsPerPel      ) +
-                      0x100 * labs(Current->dmPelsWidth        - Request->dmPelsWidth       ) +
-                      0x100 * labs(Current->dmPelsHeight       - Request->dmPelsHeight      ) +
-                              labs(Current->dmDisplayFrequency - Request->dmDisplayFrequency);
+        Distance = 0x100000 * labs((LONG)Current->dmBitsPerPel       - (LONG)Request->dmBitsPerPel      ) +
+                      0x100 * labs((LONG)Current->dmPelsWidth        - (LONG)Request->dmPelsWidth       ) +
+                      0x100 * labs((LONG)Current->dmPelsHeight       - (LONG)Request->dmPelsHeight      ) +
+                              labs((LONG)Current->dmDisplayFrequency - (LONG)Request->dmDisplayFrequency);
         if (Distance == 0)
             return Current;
 

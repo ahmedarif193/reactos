@@ -746,12 +746,12 @@ PciIdeAssignLegacyResources(
             {
                 if (IsNEC_98 && (ResourcesTranslated->List[0].PartialResourceList.Count >= 12))
                 {
-                    if ((Desc->u.Port.Start.QuadPart == 0x640))
+                    if (Desc->u.Port.Start.QuadPart == 0x640)
                     {
                         CommandPortDesc = Desc;
                         ChanData->ChanInfo |= CHANNEL_FLAG_CBUS;
                     }
-                    else if ((Desc->u.Port.Start.QuadPart == 0x74C))
+                    else if (Desc->u.Port.Start.QuadPart == 0x74C)
                     {
                         ControlPortDesc = Desc;
                         ChanData->ChanInfo |= CHANNEL_FLAG_CBUS;
