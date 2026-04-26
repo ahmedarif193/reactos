@@ -13,6 +13,14 @@
 #define NDEBUG
 #include <debug.h>
 
+#if defined(_M_AMD64)
+NTHALAPI
+NTSTATUS
+NTAPI
+HalpGetMessageRoutingInfo(
+    _Inout_ PHAL_MESSAGE_ROUTING_INFO RoutingInfo);
+#endif
+
 /* FUNCTIONS *****************************************************************/
 
 /*
@@ -367,10 +375,34 @@ IopConnectInterruptExMessageBased(
         }
 
         MsgEntry = &Table->MessageInfo[MessageIdx];
-        MsgEntry->MessageAddress.QuadPart = 0;    /* set by the hardware */
+        MsgEntry->MessageAddress.QuadPart = 0;
+        MsgEntry->MessageData              = (USHORT)MessageIdx;
+#if defined(_M_AMD64)
+        {
+            HAL_MESSAGE_ROUTING_INFO RoutingInfo;
+            NTSTATUS RoutingStatus;
+
+            RtlZeroMemory(&RoutingInfo, sizeof(RoutingInfo));
+            RoutingInfo.Version          = HAL_MESSAGE_ROUTING_INFO_VERSION;
+            RoutingInfo.Vector           = d->u.Interrupt.Vector;
+            RoutingInfo.Irql             = (KIRQL)d->u.Interrupt.Level;
+            RoutingInfo.TargetProcessors = d->u.Interrupt.Affinity;
+
+            RoutingStatus = HalpGetMessageRoutingInfo(&RoutingInfo);
+            if (NT_SUCCESS(RoutingStatus))
+            {
+                MsgEntry->MessageAddress = RoutingInfo.MessageAddress;
+                MsgEntry->MessageData    = RoutingInfo.MessageData;
+            }
+            else
+            {
+                DPRINT1("IoConnectInterruptEx: HalpGetMessageRoutingInfo failed 0x%lx vec=0x%lx\n",
+                        RoutingStatus, d->u.Interrupt.Vector);
+            }
+        }
+#endif
         MsgEntry->TargetProcessorSet       = d->u.Interrupt.Affinity;
         MsgEntry->InterruptObject          = InterruptObject;
-        MsgEntry->MessageData              = MessageIdx;
         MsgEntry->Vector                   = d->u.Interrupt.Vector;
         MsgEntry->Irql                     = (KIRQL)d->u.Interrupt.Level;
         MsgEntry->Mode                     = (d->Flags & CM_RESOURCE_INTERRUPT_LATCHED)
