@@ -939,7 +939,7 @@ SetDIBitsToDevice(
     /* Calculation of ScanLines for NtGdiSetDIBitsToDeviceInternal */
     if (YDest >= 0)
     {
-        ScanLines = min(abs(Height), ScanLines);
+        ScanLines = min(Height, ScanLines);
         if (YSrc > 0)
             ScanLines += YSrc;
     }
@@ -984,7 +984,7 @@ SetDIBitsToDevice(
 
     if (YDest >= 0)
     {
-        ScanLines = min(abs(Height), ScanLines);
+        ScanLines = min(Height, ScanLines);
         if (YSrc > 0)
         {
             ScanLines += YSrc;

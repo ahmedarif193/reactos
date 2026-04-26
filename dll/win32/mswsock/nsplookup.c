@@ -576,7 +576,7 @@ DecodeServEntFromString(IN PCHAR ServiceString,
         SKIPWS(ServiceString, break);
         if (*ServiceString)
         {
-            SKIPWS(ServiceString, ;);
+            SKIPWS(ServiceString, {});
             if (strlen(ServiceString))
             {
                 //WS_DbgPrint(MAX_TRACE, ("Alias: %s\n", ServiceString));

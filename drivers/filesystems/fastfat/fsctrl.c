@@ -5373,7 +5373,7 @@ Return Value:
 
             (VOID)FatAcquireExclusiveFcb( IrpContext, FcbOrDcb );
         }
-    } else if ((TypeOfOpen == UserVolumeOpen )) {
+    } else if (TypeOfOpen == UserVolumeOpen) {
 
         if ((Ccb == NULL) || !FlagOn( Ccb->Flags, CCB_FLAG_MANAGE_VOLUME_ACCESS )) {
 
@@ -5428,7 +5428,7 @@ Return Value:
             AllocationSize = FcbOrDcb->Header.AllocationSize.LowPart;
             McbToUse = &FcbOrDcb->Mcb;
 
-        } else if ((TypeOfOpen == UserVolumeOpen )) {
+        } else if (TypeOfOpen == UserVolumeOpen) {
 
             FatQuickVerifyVcb( IrpContext, Vcb );
 
@@ -5614,7 +5614,7 @@ Return Value:
         if( (TypeOfOpen == UserFileOpen) || (TypeOfOpen == UserDirectoryOpen) ) {
 
             FatReleaseFcb( IrpContext, FcbOrDcb );
-        } else if ((TypeOfOpen == UserVolumeOpen )) {
+        } else if (TypeOfOpen == UserVolumeOpen) {
 
             FatReleaseVcb(IrpContext, Vcb);
         }

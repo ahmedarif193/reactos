@@ -553,7 +553,7 @@ IntMultiByteToWideCharUTF8(DWORD Flags,
                 TrailLength--;
             }
 
-            if (!CharIsValid || WideChar < UTF8LBound[UTF8Length[Char - 0x80]])
+            if (!CharIsValid || WideChar < UTF8LBound[UTF8Length[(unsigned char)Char - 0x80]])
             {
                 MultiByteString = MbsPtrSave;
             }
@@ -623,7 +623,7 @@ IntMultiByteToWideCharUTF8(DWORD Flags,
             TrailLength--;
         }
 
-        if (CharIsValid && UTF8LBound[UTF8Length[Char - 0x80]] <= WideChar)
+        if (CharIsValid && UTF8LBound[UTF8Length[(unsigned char)Char - 0x80]] <= WideChar)
         {
             /* Check for UTF-16 surrogate pair */
             if (WideChar > 0xFFFF)

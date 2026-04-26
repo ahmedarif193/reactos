@@ -1254,12 +1254,12 @@ static BOOL PRINTDLG_ChangePrinterA(HWND hDlg, char *name, PRINT_PTRA *PrintStru
 		    {
 			if(dpiX == Resolutions[i])
 			    IsDefault = TRUE;
-			sprintf(buf, "%d dpi", Resolutions[i]);
+			sprintf(buf, "%ld dpi", Resolutions[i]);
 		    } else
 		    {
 			if(dpiX == Resolutions[i] && dpiY == Resolutions[i+1])
 			    IsDefault = TRUE;
-			sprintf(buf, "%d dpi x %d dpi", Resolutions[i], Resolutions[i+1]);
+			sprintf(buf, "%ld dpi x %ld dpi", Resolutions[i], Resolutions[i+1]);
 		    }
 
 		    Index = SendMessageA(hQuality, CB_ADDSTRING, 0, (LPARAM)buf);

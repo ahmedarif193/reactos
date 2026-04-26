@@ -359,7 +359,7 @@ static BOOL load_persistent_cookie(substr_t domain, substr_t path)
         pbeg = strchr(pend+1, '\n');
         if(!pbeg)
             break;
-        sscanf(pbeg, "%u %u %u %u %u", &flags, &expiry.dwLowDateTime, &expiry.dwHighDateTime,
+        sscanf(pbeg, "%lu %lu %lu %lu %lu", &flags, &expiry.dwLowDateTime, &expiry.dwHighDateTime,
                 &create.dwLowDateTime, &create.dwHighDateTime);
 
         /* skip "*\n" */
@@ -485,7 +485,7 @@ static BOOL save_persistent_cookie(cookie_container_t *container)
         }
         heap_free(dyn_buf);
 
-        sprintf(buf, "\n%u\n%u\n%u\n%u\n%u\n*\n", cookie_container->flags,
+        sprintf(buf, "\n%lu\n%lu\n%lu\n%lu\n%lu\n*\n", cookie_container->flags,
                 cookie_container->expiry.dwLowDateTime, cookie_container->expiry.dwHighDateTime,
                 cookie_container->create.dwLowDateTime, cookie_container->create.dwHighDateTime);
         if(!WriteFile(cookie_handle, buf, strlen(buf), &bytes_written, NULL)) {

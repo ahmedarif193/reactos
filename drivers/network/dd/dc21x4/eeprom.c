@@ -1498,7 +1498,9 @@ DcReadEeprom(
     }
 
     if (Status != NDIS_STATUS_SUCCESS)
+    {
         return Status;
+    }
 
     INFO("MAC: %02x:%02x:%02x:%02x:%02x:%02x\n",
          Adapter->PermanentMacAddress[0],

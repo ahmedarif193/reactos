@@ -310,7 +310,9 @@ CsrSbCreateSession(IN PSB_API_MSG ApiMessage)
     CsrSetBackgroundPriority(CsrProcess);
 
     /* Get the first data location */
-    ProcessData = &CsrProcess->ServerData[CSR_SERVER_DLL_MAX];
+    ProcessData = (PVOID)((ULONG_PTR)CsrProcess +
+                          FIELD_OFFSET(CSR_PROCESS, ServerData) +
+                          CSR_SERVER_DLL_MAX * sizeof(PVOID));
 
     /* Loop every DLL */
     for (i = 0; i < CSR_SERVER_DLL_MAX; i++)

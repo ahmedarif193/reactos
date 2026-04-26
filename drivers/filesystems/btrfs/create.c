@@ -21,6 +21,7 @@
 #include "btrfs_drv.h"
 #include "crc32c.h"
 #include <ntddstor.h>
+#include <ndk/psfuncs.h>
 
 extern PDEVICE_OBJECT master_devobj;
 extern tFsRtlGetEcpListFromIrp fFsRtlGetEcpListFromIrp;

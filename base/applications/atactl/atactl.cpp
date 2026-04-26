@@ -1031,7 +1031,7 @@ ata_adapter_info(
             if(AdapterInfo->AdapterInterfaceType == Isa) {
                 printf("  ISA Bus\n");
             }
-            printf("  IRQ: %ld\n", AdapterInfo->BusInterruptLevel);
+            printf("  IRQ: %lu\n", AdapterInfo->BusInterruptLevel);
         }
     }
     ata_close_dev(h);
@@ -1607,7 +1607,7 @@ ata_bblk(
         while(len >= sizeof(LONGLONG)*2) {
             tmp_bb_lba = ((LONGLONG*)bblist)[i*2+0];
             tmp_bb_len = ((LONGLONG*)bblist)[i*2+1] - tmp_bb_lba;
-            b = sprintf(BB_Msg, "%I64u\t%I64u\n", tmp_bb_lba, tmp_bb_len);
+            b = sprintf(BB_Msg, "%I64d\t%I64d\n", tmp_bb_lba, tmp_bb_len);
             WriteFile(hf, BB_Msg, b, &returned, NULL);
             i++;
             len -= sizeof(LONGLONG)*2;

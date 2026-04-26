@@ -100,7 +100,7 @@ HRESULT WINAPI CreateILockBytesOnHGlobal(HGLOBAL global, BOOL delete_on_release,
   lockbytes = HeapAlloc(GetProcessHeap(), 0, sizeof(HGLOBALLockBytesImpl));
   if (!lockbytes) return E_OUTOFMEMORY;
 
-  lockbytes->ILockBytes_iface.lpVtbl = &HGLOBALLockBytesImpl_Vtbl;
+  lockbytes->ILockBytes_iface.lpVtbl = (ILockBytesVtbl*)&HGLOBALLockBytesImpl_Vtbl;
   lockbytes->ref = 1;
 
   /*
