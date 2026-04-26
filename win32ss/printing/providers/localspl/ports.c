@@ -361,7 +361,7 @@ BOOL WINAPI
 LocalConfigurePort(PWSTR pName, HWND hWnd, PWSTR pPortName)
 {
     LONG lres;
-    DWORD res;
+    DWORD res = FALSE;
     PLOCAL_PORT pPrintPort;
     PLOCAL_PRINT_MONITOR pPrintMonitor;
 

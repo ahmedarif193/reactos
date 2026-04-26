@@ -325,7 +325,7 @@ CmpValidateValueListByCount(
 
             /* Decrease the list count and go to the next value */
             ListCount--;
-            *ValuesRemoved++;
+            (*ValuesRemoved)++;
             DPRINT1("Damaged value removed, continuing with the next value...\n");
             continue;
         }
@@ -345,7 +345,7 @@ CmpValidateValueListByCount(
 
             /* Decrease the list count and go to the next value */
             ListCount--;
-            *ValuesRemoved++;
+            (*ValuesRemoved)++;
             DPRINT1("Damaged value removed, continuing with the next value...\n");
             continue;
         }
@@ -378,7 +378,7 @@ CmpValidateValueListByCount(
 
             /* Decrease the list count and go to the next value */
             ListCount--;
-            *ValuesRemoved++;
+            (*ValuesRemoved)++;
             DPRINT1("Damaged value removed, continuing with the next value...\n");
             continue;
         }
@@ -415,7 +415,7 @@ CmpValidateValueListByCount(
 
                     /* Decrease the list count and go to the next value */
                     ListCount--;
-                    *ValuesRemoved++;
+                    (*ValuesRemoved)++;
                     DPRINT1("Damaged value removed, continuing with the next value...\n");
                     continue;
                 }
@@ -436,7 +436,7 @@ CmpValidateValueListByCount(
 
                     /* Decrease the list count and go to the next value */
                     ListCount--;
-                    *ValuesRemoved++;
+                    (*ValuesRemoved)++;
                     DPRINT1("Damaged value removed, continuing with the next value...\n");
                     continue;
                 }
@@ -461,7 +461,7 @@ CmpValidateValueListByCount(
 
             /* Decrease the list count and go to the next value */
             ListCount--;
-            *ValuesRemoved++;
+            (*ValuesRemoved)++;
             DPRINT1("Damaged value removed, continuing with the next value...\n");
             continue;
         }

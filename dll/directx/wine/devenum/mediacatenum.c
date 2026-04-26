@@ -126,9 +126,9 @@ static HRESULT WINAPI DEVENUM_IPropertyBag_Read(
     DWORD type = 0;
     RegPropBagImpl *This = impl_from_IPropertyBag(iface);
     HRESULT res = S_OK;
-    LONG reswin32 = ERROR_SUCCESS;
+    LONG reswin32 = ERROR_NOT_FOUND;
     WCHAR name[80];
-    HKEY hkey;
+    HKEY hkey = NULL;
 
     TRACE("(%p)->(%s, %p, %p)\n", This, debugstr_w(pszPropName), pVar, pErrorLog);
 

@@ -677,8 +677,8 @@ BOOL WINAPI IsCompositionActive(void)
             return FALSE;
         }
 
-        pDwmIsCompositionEnabled = (DWMISCOMPOSITIONENABLED)GetProcAddress(hdwmapi, "DwmIsCompositionEnabled");
     }
+    pDwmIsCompositionEnabled = (DWMISCOMPOSITIONENABLED)GetProcAddress(hdwmapi, "DwmIsCompositionEnabled");
     if (!pDwmIsCompositionEnabled)
         return FALSE;
     

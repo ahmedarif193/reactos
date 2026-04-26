@@ -376,6 +376,7 @@ MiBalancerThread(PVOID Unused)
             ULONG InitialTarget = 0;
             ULONG Target;
             ULONG NrFreedPages;
+            ULONG AvailablePagesDeficit;
 
             do
             {
@@ -388,7 +389,10 @@ MiBalancerThread(PVOID Unused)
                 }
 
                 /* Trim cache */
-                Target = max(InitialTarget, abs(MiMinimumAvailablePages - MmAvailablePages));
+                AvailablePagesDeficit = (MmAvailablePages < MiMinimumAvailablePages) ?
+                                        MiMinimumAvailablePages - (ULONG)MmAvailablePages :
+                                        0;
+                Target = max(InitialTarget, AvailablePagesDeficit);
                 if (Target)
                 {
                     CcRosTrimCache(Target, &NrFreedPages);
