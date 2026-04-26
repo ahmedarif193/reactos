@@ -140,7 +140,7 @@ Run:
     mov word ptr FIELD(NextCmd, CmdLineSeg), ds
     mov word ptr FIELD(NextCmd, CmdLineOff), offset CmdLine
     mov word ptr FIELD(NextCmd, AppNameSeg), ds
-    mov word ptr FIELD(NextCmd, AppNameOff), offset PgmName
+    mov word ptr FIELD(NextCmd, AppNameOff), offset CmdLine + (1 + DOS_CMDLINE_LENGTH)
 
     /* Wait for the next command */
 #ifndef NDEBUG

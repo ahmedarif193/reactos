@@ -162,7 +162,9 @@ int __cdecl _inp(unsigned short);
 unsigned long __cdecl _inpd(unsigned short);
 unsigned short __cdecl _inpw(unsigned short);
 void _m_prefetch(void *);
+#ifndef __clang__
 void _m_prefetchw(void *);
+#endif
 
 void _mm_mfence(void);
 void _mm_lfence(void);
