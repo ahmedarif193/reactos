@@ -93,8 +93,6 @@ IntGdiExtCreatePen(
     static ULONG aulStyleDashDotDot[] = { 3, 1, 1, 1, 1, 1 };
     ULONG i;
 
-    dwWidth = abs(dwWidth);
-
     if ( (dwPenStyle & PS_STYLE_MASK) == PS_NULL)
     {
         return StockObjects[NULL_PEN];
@@ -367,7 +365,7 @@ NtGdiCreatePen(
     }
 
     return IntGdiExtCreatePen(PenStyle,
-                              Width,
+                              abs(Width),
                               BS_SOLID,
                               Color,
                               0,

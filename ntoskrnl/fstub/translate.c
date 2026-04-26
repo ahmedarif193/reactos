@@ -43,11 +43,13 @@ FstubTranslateResource(IN OUT PVOID Context OPTIONAL,
     KIRQL Irql;
     KAFFINITY Affinity;
     ULONG MinimumVector, Vector, k;
+    INTERFACE_TYPE InterfaceType;
     PIO_RESOURCE_DESCRIPTOR Alternative;
     NTSTATUS Status = STATUS_UNSUCCESSFUL;
     PAGED_CODE();
 
     ASSERT(Source->Type == CmResourceTypeInterrupt);
+    InterfaceType = (INTERFACE_TYPE)PtrToUlong(Context);
 
     /* Copy common information */
     Target->Type = Source->Type;
@@ -57,7 +59,7 @@ FstubTranslateResource(IN OUT PVOID Context OPTIONAL,
     if (Direction == TranslateChildToParent)
     {
         /* Get IRQL, affinity & system vector for the device vector */
-        Target->u.Interrupt.Vector = HalGetInterruptVector((INTERFACE_TYPE)Context, 0,
+        Target->u.Interrupt.Vector = HalGetInterruptVector(InterfaceType, 0,
                                                            Source->u.Interrupt.Vector,
                                                            Source->u.Interrupt.Vector,
                                                            &Irql, &Affinity);
@@ -81,7 +83,7 @@ FstubTranslateResource(IN OUT PVOID Context OPTIONAL,
             while (MinimumVector <= Alternative->u.Interrupt.MaximumVector)
             {
                 /* Translate the vector */
-                Vector = HalGetInterruptVector((INTERFACE_TYPE)Context, 0,
+                Vector = HalGetInterruptVector(InterfaceType, 0,
                                                MinimumVector,
                                                MinimumVector,
                                                &Irql, &Affinity);
@@ -118,9 +120,11 @@ FstubTranslateRequirement(IN OUT PVOID Context OPTIONAL,
 {
     KIRQL Irql;
     KAFFINITY Affinity;
+    INTERFACE_TYPE InterfaceType;
     PAGED_CODE();
 
     ASSERT(Source->Type == CmResourceTypeInterrupt);
+    InterfaceType = (INTERFACE_TYPE)PtrToUlong(Context);
 
     /* Allocate output buffer */
     *Target = ExAllocatePoolWithTag(PagedPool, sizeof(IO_RESOURCE_DESCRIPTOR), 'btsF');
@@ -134,13 +138,13 @@ FstubTranslateRequirement(IN OUT PVOID Context OPTIONAL,
     *TargetCount = 1;
 
     /* Translate minimum interrupt vector */
-    (*Target)->u.Interrupt.MinimumVector = HalGetInterruptVector((INTERFACE_TYPE)Context, 0,
+    (*Target)->u.Interrupt.MinimumVector = HalGetInterruptVector(InterfaceType, 0,
                                                                  Source->u.Interrupt.MinimumVector,
                                                                  Source->u.Interrupt.MinimumVector,
                                                                  &Irql, &Affinity);
 
     /* Translate maximum interrupt vector */
-    (*Target)->u.Interrupt.MaximumVector = HalGetInterruptVector((INTERFACE_TYPE)Context, 0,
+    (*Target)->u.Interrupt.MaximumVector = HalGetInterruptVector(InterfaceType, 0,
                                                                  Source->u.Interrupt.MaximumVector,
                                                                  Source->u.Interrupt.MaximumVector,
                                                                  &Irql, &Affinity);

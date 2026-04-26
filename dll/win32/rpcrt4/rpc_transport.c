@@ -127,7 +127,7 @@ static DWORD
 rpcrt4_create_pipe_security(PSECURITY_DESCRIPTOR *SecDesc)
 {
     DWORD ErrCode;
-    PACL Dacl;
+    PACL Dacl = NULL;
     ULONG DaclSize, RelSDSize = 0;
     PSID EveryoneSid = NULL, AnonymousSid = NULL, AdminsSid = NULL;
     PSECURITY_DESCRIPTOR AbsSD = NULL, RelSD = NULL;

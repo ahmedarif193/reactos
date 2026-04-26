@@ -118,7 +118,7 @@ PspDumpProcessInfoClassName(
         return ProcessInfoClasses[ProcessInformationClass];
     }
 
-    sprintf(UnknownClassName, "%lu", ProcessInformationClass);
+    sprintf(UnknownClassName, "%lu", (ULONG)ProcessInformationClass);
     return UnknownClassName;
 }
 
@@ -196,7 +196,7 @@ PspDumpThreadInfoClassName(
         return ThreadInfoClasses[ThreadInformationClass];
     }
 
-    sprintf(UnknownClassName, "%lu", ThreadInformationClass);
+    sprintf(UnknownClassName, "%lu", (ULONG)ThreadInformationClass);
     return UnknownClassName;
 }
 #endif // #if DBG

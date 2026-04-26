@@ -186,7 +186,7 @@ OnHScroll(
 {
     MIXERCONTROLDETAILS_UNSIGNED Details;
     DWORD dwControlID = 0, dwStep, dwPosition;
-    DWORD dwMaximum, dwMinimum;
+    DWORD dwMaximum = 0, dwMinimum = 0;
 
     if (dwCtrlID != IDC_ADV_BASS_SLIDER &&
         dwCtrlID != IDC_ADV_TREBLE_SLIDER)
