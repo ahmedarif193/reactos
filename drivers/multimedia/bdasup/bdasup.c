@@ -363,7 +363,7 @@ BdaCreatePin(
     PKSFILTERFACTORY FilterFactory;
     PBDA_FILTER_INSTANCE_ENTRY InstanceEntry;
     NTSTATUS Status;
-    ULONG PinId;
+    ULONG PinId = 0;
     PKSPIN_DESCRIPTOR_EX NewPinDescriptor;
 
     DPRINT("BdaCreatePin\n");

@@ -583,7 +583,7 @@ RxAllocateObject(
 
         default:
             ASSERT(FALSE);
-            break;
+            return NULL;
     }
 
     /* Now, allocate the object */

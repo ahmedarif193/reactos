@@ -868,7 +868,7 @@ static INT_PTR CALLBACK AddToFavoritesDlgProc(HWND hWnd, UINT uMsg, WPARAM wPara
             {
                 case IDOK:
                     {
-                        LPWSTR path;
+                        LPWSTR path = NULL;
                         HKEY hKey;
                         DWORD err;
                         if (!GetWindowTextW(hName, name, _countof(name)))

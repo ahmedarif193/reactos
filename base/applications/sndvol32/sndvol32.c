@@ -801,7 +801,7 @@ MixerControlChangeCallback(PSND_MIXER Mixer, DWORD LineID, LPMIXERLINE Line, PVO
                 {
                     /* update dialog control */
                     DWORD volumePosition, volumeStep, maxVolume, i;
-                    DWORD balancePosition, balanceStep;
+                    DWORD balancePosition = BALANCE_CENTER, balanceStep;
 
                     volumeStep = (Control[Index].Bounds.dwMaximum - Control[Index].Bounds.dwMinimum) / (VOLUME_MAX - VOLUME_MIN);
 

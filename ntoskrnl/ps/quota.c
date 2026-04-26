@@ -24,6 +24,16 @@ static KSPIN_LOCK PspQuotaLock;
 
 /* PRIVATE FUNCTIONS *******************************************************/
 
+static __inline
+POOL_TYPE
+PspQuotaTypeToPoolType(
+    _In_ PS_QUOTA_TYPE QuotaType)
+{
+    ASSERT(QuotaType < PsPageFile);
+
+    return (QuotaType == PsNonPagedPool) ? NonPagedPool : PagedPool;
+}
+
 /**
  * @brief
  * Returns pool quotas back to the Memory Manager
@@ -67,7 +77,7 @@ PspReturnQuotasOnDestroy(
     {
         /* The amount needed to return to Mm is the limit and return fields */
         QuotaToReturn = QuotaBlock->QuotaEntry[PsQuotaTypeIndex].Limit + QuotaBlock->QuotaEntry[PsQuotaTypeIndex].Return;
-        MmReturnPoolQuota(PsQuotaTypeIndex, QuotaToReturn);
+        MmReturnPoolQuota(PspQuotaTypeToPoolType(PsQuotaTypeIndex), QuotaToReturn);
     }
 }
 
@@ -110,6 +120,7 @@ PspReturnExcessQuotas(
      * as we should be under a spin lock.
      */
     ASSERT_IRQL_EQUAL(DISPATCH_LEVEL);
+    ASSERT(QuotaType < PsPageFile);
 
     /*
      * Loop over the quota block lists and reap
@@ -152,7 +163,7 @@ PspReturnExcessQuotas(
 
     /* Invoke Mm to return quotas */
     DPRINT("PspReturnExcessQuotas(): Amount of quota released -- %lu\n", AmountToReturn);
-    MmReturnPoolQuota(QuotaType, AmountToReturn);
+    MmReturnPoolQuota(PspQuotaTypeToPoolType(QuotaType), AmountToReturn);
     *ReturnedQuotas = AmountToReturn;
 }
 
@@ -228,7 +239,7 @@ PspChargeProcessQuotaSpecifiedPool(
          * in this scenario is to attempt to raise (expand) the
          * quota limit charges of the block.
          */
-        if (!MmRaisePoolQuota(QuotaType,
+        if (!MmRaisePoolQuota(PspQuotaTypeToPoolType(QuotaType),
                               QuotaBlock->QuotaEntry[QuotaType].Limit,
                               &UpdatedLimit))
         {
@@ -250,7 +261,7 @@ PspChargeProcessQuotaSpecifiedPool(
             }
 
             /* Try to raise the quota limits again */
-            MmRaisePoolQuota(QuotaType,
+            MmRaisePoolQuota(PspQuotaTypeToPoolType(QuotaType),
                              QuotaBlock->QuotaEntry[QuotaType].Limit,
                              &UpdatedLimit);
         }
@@ -399,8 +410,8 @@ PspReturnProcessQuotaSpecifiedPool(
          */
         if (QuotaBlock->QuotaEntry[QuotaType].Return > ReturnThreshold)
         {
-            MmReturnPoolQuota(QuotaType, QuotaBlock->QuotaEntry[QuotaType].Return);
-            InterlockedExchangeSizeT(QuotaBlock->QuotaEntry[QuotaType].Return, 0);
+            MmReturnPoolQuota(PspQuotaTypeToPoolType(QuotaType), QuotaBlock->QuotaEntry[QuotaType].Return);
+            InterlockedExchangeSizeT(&QuotaBlock->QuotaEntry[QuotaType].Return, 0);
         }
 
         /* And try to trim the limit */
@@ -496,8 +507,8 @@ PspInheritQuota(
         QuotaBlock = &PspDefaultQuotaBlock;
     }
 
-    InterlockedIncrementSizeT(&QuotaBlock->ProcessCount);
-    InterlockedIncrementSizeT(&QuotaBlock->ReferenceCount);
+    InterlockedIncrementUL(&QuotaBlock->ProcessCount);
+    InterlockedIncrementUL(&QuotaBlock->ReferenceCount);
 
     Process->QuotaBlock = QuotaBlock;
 }
@@ -708,7 +719,7 @@ PsChargeSharedPoolQuota(
     }
 
     /* We have charged the quotas of an object, increment the reference */
-    InterlockedIncrementSizeT(&Process->QuotaBlock->ReferenceCount);
+    InterlockedIncrementUL(&Process->QuotaBlock->ReferenceCount);
 
     DPRINT("PsChargeSharedPoolQuota(): Amount charged (paged %lu --  non paged %lu)\n", AmountToChargePaged, AmountToChargeNonPaged);
     return Process->QuotaBlock;

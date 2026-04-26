@@ -1185,7 +1185,7 @@ NtGdiExtFloodFill(
     Pt.y = YStart;
     IntLPtoDP(dc, (LPPOINT)&Pt, 1);
 
-    DC_vPrepareDCsForBlit(dc, &DestRect, NULL, NULL);
+    DC_vPrepareDCsForBlit(dc, NULL, NULL, NULL);
 
     psurf = dc->dclevel.pSurface;
 

@@ -118,7 +118,7 @@ CreateWinstaSecurity(
     PSECURITY_DESCRIPTOR RelativeSd = NULL;
     PSID WinlogonSid = NULL, AdminsSid = NULL, NetworkServiceSid = NULL; /* NetworkServiceSid is a HACK, see the comment below for information */
     DWORD DaclSize;
-    PACL Dacl;
+    PACL Dacl = NULL;
 
     /* Create the Winlogon SID */
     if (!AllocateAndInitializeSid(&NtAuthority,
@@ -365,7 +365,7 @@ CreateApplicationDesktopSecurity(
     PSECURITY_DESCRIPTOR RelativeSd = NULL;
     PSID WinlogonSid = NULL, AdminsSid = NULL, NetworkServiceSid = NULL; /* NetworkServiceSid is a HACK, see the comment in CreateWinstaSecurity for information */
     DWORD DaclSize;
-    PACL Dacl;
+    PACL Dacl = NULL;
 
     /* Create the Winlogon SID */
     if (!AllocateAndInitializeSid(&NtAuthority,
@@ -547,7 +547,7 @@ CreateWinlogonDesktopSecurity(
     PSECURITY_DESCRIPTOR RelativeSd = NULL;
     PSID WinlogonSid = NULL, AdminsSid = NULL;
     DWORD DaclSize;
-    PACL Dacl;
+    PACL Dacl = NULL;
 
     /* Create the Winlogon SID */
     if (!AllocateAndInitializeSid(&NtAuthority,
@@ -696,7 +696,7 @@ CreateScreenSaverSecurity(
     PSECURITY_DESCRIPTOR RelativeSd = NULL;
     PSID WinlogonSid = NULL, AdminsSid = NULL, InteractiveSid = NULL;
     DWORD DaclSize;
-    PACL Dacl;
+    PACL Dacl = NULL;
 
     /* Create the Winlogon SID */
     if (!AllocateAndInitializeSid(&NtAuthority,
@@ -882,7 +882,7 @@ AllowWinstaAccessToUser(
     PSID WinlogonSid = NULL, AdminsSid = NULL, InteractiveSid = NULL, NetworkServiceSid = NULL; /* NetworkServiceSid is a HACK, see the comment in CreateWinstaSecurity for information */
     SECURITY_INFORMATION SecurityInformation;
     DWORD DaclSize;
-    PACL Dacl;
+    PACL Dacl = NULL;
 
     /* Create the Winlogon SID */
     if (!AllocateAndInitializeSid(&NtAuthority,
@@ -1173,7 +1173,7 @@ AllowDesktopAccessToUser(
     PSID WinlogonSid = NULL, AdminsSid = NULL, InteractiveSid = NULL, NetworkServiceSid = NULL; /* NetworkServiceSid is a HACK, see the comment in CreateWinstaSecurity for information */
     SECURITY_INFORMATION SecurityInformation;
     DWORD DaclSize;
-    PACL Dacl;
+    PACL Dacl = NULL;
 
     /* Create the Winlogon SID */
     if (!AllocateAndInitializeSid(&NtAuthority,
@@ -1395,7 +1395,7 @@ AllowAccessOnSession(
     BOOL Success = FALSE;
     DWORD Index, SidLength, GroupsLength = 0;
     PTOKEN_GROUPS TokenGroup = NULL;
-    PSID LogonSid;
+    PSID LogonSid = NULL;
 
     /* Get required buffer size and allocate the TOKEN_GROUPS buffer */
     if (!GetTokenInformation(Session->UserToken,
@@ -1438,6 +1438,12 @@ AllowAccessOnSession(
             LogonSid = TokenGroup->Groups[Index].Sid;
             break;
         }
+    }
+
+    if (LogonSid == NULL)
+    {
+        ERR("AllowAccessOnSession(): Failed to find logon SID!\n");
+        goto Quit;
     }
 
     /* Allow window station access to this user within this session */

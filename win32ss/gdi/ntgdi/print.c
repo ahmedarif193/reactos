@@ -90,7 +90,7 @@ NtGdiExtEscape(
    LPVOID   SafeInData = NULL;
    LPVOID   SafeOutData = NULL;
    NTSTATUS Status = STATUS_SUCCESS;
-   INT      Result;
+   INT      Result = -1;
    PPDEVOBJ ppdev;
    PSURFACE psurf;
 

@@ -1442,7 +1442,7 @@ PWINDOWLIST FASTCALL IntBuildHwndList(PWND pwnd, DWORD dwFlags, PTHREADINFO pti)
         if (!pwl)
             return NULL;
 
-        pwl->phwndEnd = &pwl->ahwnd[INITIAL_COUNT];
+        pwl->phwndEnd = (HWND *)((LPBYTE)pwl + cbWL);
 #undef INITIAL_COUNT
     }
 

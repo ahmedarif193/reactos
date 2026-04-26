@@ -341,7 +341,7 @@ CreatePnpInstallEventSecurity(
     _Out_ PSECURITY_DESCRIPTOR *EventSd)
 {
     DWORD ErrCode;
-    PACL Dacl;
+    PACL Dacl = NULL;
     ULONG DaclSize;
     SECURITY_DESCRIPTOR AbsoluteSd;
     ULONG Size = 0;

@@ -44,7 +44,7 @@ KiAttachProcess(IN PKTHREAD Thread,
     ASSERT(Process != Thread->ApcState.Process);
 
     /* Increase Stack Count */
-    ASSERT(Process->StackCount != MAXULONG_PTR);
+    ASSERT(Process->StackCount != MAXULONG);
     Process->StackCount++;
 
     /* Swap the APC Environment */

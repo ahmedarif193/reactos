@@ -218,7 +218,7 @@ MiLoadImageSection(_Inout_ PSECTION *SectionPtr,
 #define RVA(m, b) ((PVOID)((ULONG_PTR)(b) + (ULONG_PTR)(m)))
 #endif
 
-USHORT
+ULONG
 NTAPI
 NameToOrdinal(
     _In_ PCSTR ExportName,
@@ -231,7 +231,7 @@ NameToOrdinal(
 
     /* Fail if no names */
     if (!NumberOfNames)
-        return -1;
+        return MAXULONG;
 
     /* Do a binary search */
     Low = Mid = 0;
@@ -262,7 +262,7 @@ NameToOrdinal(
 
     /* Check if we couldn't find it */
     if (High < Low)
-        return -1;
+        return MAXULONG;
 
     /* Otherwise, this is the ordinal */
     return OrdinalTable[Mid];
@@ -317,7 +317,7 @@ RtlpFindExportedRoutineByName(
     PULONG NameTable;
     PUSHORT OrdinalTable;
     ULONG ExportSize;
-    USHORT Ordinal;
+    ULONG Ordinal;
     PULONG ExportTable;
     ULONG_PTR FunctionAddress;
 
@@ -343,7 +343,7 @@ RtlpFindExportedRoutineByName(
                             OrdinalTable);
 
     /* Check if we couldn't find it */
-    if (Ordinal == -1)
+    if (Ordinal == MAXULONG)
         return NotFoundStatus;
 
     /* Validate the ordinal */
@@ -755,7 +755,7 @@ MiSnapThunk(IN PVOID DllBase,
             OUT PCHAR *MissingApi)
 {
     BOOLEAN IsOrdinal;
-    USHORT Ordinal;
+    ULONG Ordinal;
     PULONG NameTable;
     PUSHORT OrdinalTable;
     PIMAGE_IMPORT_BY_NAME NameImport;
@@ -821,7 +821,7 @@ MiSnapThunk(IN PVOID DllBase,
                                     OrdinalTable);
 
             /* Check if we couldn't find it */
-            if (Ordinal == -1)
+            if (Ordinal == MAXULONG)
             {
                 DPRINT1("Warning: Driver failed to load, %s not found\n", NameImport->Name);
                 return STATUS_DRIVER_ENTRYPOINT_NOT_FOUND;

@@ -901,6 +901,7 @@ GetServiceMainFunctions (
     /* Convert the expandable path into an absolute path */
     ExpandEnvironmentStringsW(lpData, szDllBuffer, MAX_PATH);
     SvchostCharLowerW(szDllBuffer);
+    pszDllPath = szDllBuffer;
 
     /* Check if the service has a manifest file associated with it */
     cbData = MAX_PATH * sizeof(WCHAR) + sizeof(UNICODE_NULL);

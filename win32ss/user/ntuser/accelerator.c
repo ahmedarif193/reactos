@@ -238,7 +238,7 @@ NtUserCreateAcceleratorTable(
     UserEnterExclusive();
 
     if (Entries == NULL || EntriesCount == 0 ||
-        EntriesCount > MAXULONG_PTR / sizeof(*Entries))
+        EntriesCount > MAXULONG / sizeof(*Entries))
     {
         goto Exit; // Return NULL
     }

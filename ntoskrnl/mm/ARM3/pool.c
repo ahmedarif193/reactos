@@ -1282,7 +1282,7 @@ MiInitializeSessionPool(VOID)
     PMM_SESSION_SPACE SessionGlobal;
     PMM_PAGED_POOL_INFO PagedPoolInfo;
     NTSTATUS Status;
-    ULONG Index, PoolSize, BitmapSize;
+    ULONG PoolSize, BitmapSize;
     PAGED_CODE();
 
     /* Lock session pool */
@@ -1332,12 +1332,17 @@ MiInitializeSessionPool(VOID)
                                       TRUE);
     ASSERT(NT_SUCCESS(Status) == TRUE);
 
-    /* Initialize the first page table */
-    Index = (ULONG_PTR)MmSessionSpace->PagedPoolStart - (ULONG_PTR)MmSessionBase;
-    Index >>= 22;
 #ifndef _M_AMD64 // FIXME
-    ASSERT(MmSessionSpace->PageTables[Index].u.Long == 0);
-    MmSessionSpace->PageTables[Index] = *PointerPde;
+    /* Initialize the first page table */
+    {
+        ULONG Index;
+
+        Index = (ULONG_PTR)MmSessionSpace->PagedPoolStart - (ULONG_PTR)MmSessionBase;
+        Index >>= 22;
+
+        ASSERT(MmSessionSpace->PageTables[Index].u.Long == 0);
+        MmSessionSpace->PageTables[Index] = *PointerPde;
+    }
 #endif
 
     /* Bump up counters */
