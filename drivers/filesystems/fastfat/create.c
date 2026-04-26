@@ -4980,7 +4980,7 @@ Return Value:
     PDIRENT FirstPageDirent = 0;
 
     PBCB SecondPageBcb = NULL;
-    ULONG SecondPageOffset;
+    ULONG SecondPageOffset = 0;
     PDIRENT SecondPageDirent = NULL;
 
     BOOLEAN DirentFromPool = FALSE;
