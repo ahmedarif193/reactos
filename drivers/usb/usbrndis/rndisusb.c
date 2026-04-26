@@ -1783,11 +1783,20 @@ RndisInterruptComplete(
                     /*
                      * Use download (DL) bit rate as link speed.
                      * NDIS 6.x uses bps units for link speed.
+                     * Per CDC ECM 1.2 §6.3.5, DLBitRate=0 or 0xFFFFFFFF
+                     * means "unknown" — ignore and keep the current value.
                      */
                     NewLinkSpeed = SpeedChange->DLBitRate;
 
                     DPRINT1("USBRNDIS: CDC SPEED_CHANGE notification: DL=%lu bps, UL=%lu bps\n",
                             SpeedChange->DLBitRate, SpeedChange->ULBitRate);
+
+                    if (NewLinkSpeed == 0 || NewLinkSpeed == 0xFFFFFFFF)
+                    {
+                        DPRINT1("USBRNDIS: SPEED_CHANGE reports unknown speed, keeping %lu bps\n",
+                                Adapter->LinkSpeed);
+                        break;
+                    }
 
                     if (Adapter->LinkSpeed != NewLinkSpeed)
                     {
