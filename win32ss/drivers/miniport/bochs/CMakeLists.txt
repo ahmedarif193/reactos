@@ -4,7 +4,7 @@ list(APPEND SOURCE
 
 add_library(bochsmp MODULE ${SOURCE} bochsmp.rc)
 set_module_type(bochsmp kernelmodedriver)
-add_importlibs(bochsmp videoprt)
+add_importlibs(bochsmp ntoskrnl videoprt)
 target_link_libraries(bochsmp libcntpr)
 add_pch(bochsmp bochsmp.h SOURCE)
 add_cd_file(TARGET bochsmp DESTINATION reactos/system32/drivers FOR all)
