@@ -178,15 +178,19 @@ KeAlertThread(IN PKTHREAD Thread,
 {
     BOOLEAN PreviousState;
     KLOCK_QUEUE_HANDLE ApcLock;
+    UCHAR AlertModeIndex;
     ASSERT_THREAD(Thread);
     ASSERT_IRQL_LESS_OR_EQUAL(DISPATCH_LEVEL);
+
+    ASSERT((AlertMode == KernelMode) || (AlertMode == UserMode));
+    AlertModeIndex = (UCHAR)AlertMode;
 
     /* Lock the Dispatcher Database and the APC Queue */
     KiAcquireApcLockRaiseToSynch(Thread, &ApcLock);
     KiAcquireDispatcherLockAtSynchLevel();
 
     /* Save the Previous State */
-    PreviousState = Thread->Alerted[AlertMode];
+    PreviousState = Thread->Alerted[AlertModeIndex];
 
     /* Check if it's already alerted */
     if (!PreviousState)
@@ -202,7 +206,7 @@ KeAlertThread(IN PKTHREAD Thread,
         else
         {
             /* Otherwise, merely set the alerted state */
-            Thread->Alerted[AlertMode] = TRUE;
+            Thread->Alerted[AlertModeIndex] = TRUE;
         }
     }
 
@@ -550,7 +554,7 @@ KeStartThread(IN OUT PKTHREAD Thread)
     InsertTailList(&Process->ThreadListHead, &Thread->ThreadListEntry);
 
     /* Increase the stack count */
-    ASSERT(Process->StackCount != MAXULONG_PTR);
+    ASSERT(Process->StackCount != MAXULONG);
     Process->StackCount++;
 
     /* Release locks and return */
@@ -724,20 +728,24 @@ KeTestAlertThread(IN KPROCESSOR_MODE AlertMode)
     PKTHREAD Thread = KeGetCurrentThread();
     BOOLEAN OldState;
     KLOCK_QUEUE_HANDLE ApcLock;
+    UCHAR AlertModeIndex;
     ASSERT_THREAD(Thread);
     ASSERT_IRQL_LESS_OR_EQUAL(DISPATCH_LEVEL);
+
+    ASSERT((AlertMode == KernelMode) || (AlertMode == UserMode));
+    AlertModeIndex = (UCHAR)AlertMode;
 
     /* Lock the Dispatcher Database and the APC Queue */
     KiAcquireApcLockRaiseToSynch(Thread, &ApcLock);
 
     /* Save the old State */
-    OldState = Thread->Alerted[AlertMode];
+    OldState = Thread->Alerted[AlertModeIndex];
 
     /* Check the Thread is alerted */
     if (OldState)
     {
         /* Disable alert for this mode */
-        Thread->Alerted[AlertMode] = FALSE;
+        Thread->Alerted[AlertModeIndex] = FALSE;
     }
     else if ((AlertMode != KernelMode) &&
              (!IsListEmpty(&Thread->ApcState.ApcListHead[UserMode])))

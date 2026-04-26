@@ -390,7 +390,7 @@ static uint64_t find_chunk_offset(uint64_t size, uint64_t offset, btrfs_dev* dev
 }
 
 static btrfs_chunk* add_chunk(LIST_ENTRY* chunks, uint64_t flags, btrfs_root* chunk_root, btrfs_dev* dev, btrfs_root* dev_root, BTRFS_UUID* chunkuuid, uint32_t sector_size) {
-    uint64_t off, size;
+    uint64_t off, size = 0;
     uint16_t stripes, i;
     btrfs_chunk* c;
     LIST_ENTRY* le;
