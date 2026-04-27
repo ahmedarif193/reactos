@@ -140,6 +140,12 @@ UefiConvertToFreeldrDesc(EFI_MEMORY_TYPE EfiMemoryType)
     return LoaderReserve;
 }
 
+/*
+ * Number of pages reserved below 1 MiB for the SMP AP startup trampoline.
+ * Must match HAL's HALP_LOW_STUB_SIZE_IN_PAGES.
+ */
+#define UEFI_AP_LOW_STUB_PAGES  5
+
 PFREELDR_MEMORY_DESCRIPTOR
 UefiMemGetMemoryMap(ULONG *MemoryMapSize)
 {
@@ -151,6 +157,7 @@ UefiMemGetMemoryMap(ULONG *MemoryMapSize)
     UINTN MapSize;
     UINTN MapKey;
     UINT32 Index;
+    EFI_PHYSICAL_ADDRESS LowStubBase;
 
     EFI_GUID EfiLoadedImageProtocol = EFI_LOADED_IMAGE_PROTOCOL_GUID;
     PFREELDR_MEMORY_DESCRIPTOR FreeldrMem = NULL;
@@ -172,6 +179,31 @@ UefiMemGetMemoryMap(ULONG *MemoryMapSize)
     PublicBootHandle = LoadedImage->DeviceHandle;
     EfiMemoryMap = NULL;
 
+    /*
+     * Reserve a low-memory region (below 1 MiB) for the SMP AP startup
+     * trampoline. APs come up in real mode, so the bootstrap code must
+     * be reachable there. UEFI firmware typically marks all memory
+     * below 1 MiB as reserved or boot-services-only, leaving HAL with
+     * nothing to allocate. Force UEFI to give us a region here, so the
+     * loader memory map exposes it as LoaderFirmwareTemporary further
+     * below — that's what HalpAllocPhysicalMemory looks for.
+     */
+    LowStubBase = 0x100000;
+    Status = GlobalSystemTable->BootServices->AllocatePages(AllocateMaxAddress,
+                                                            EfiLoaderData,
+                                                            UEFI_AP_LOW_STUB_PAGES,
+                                                            &LowStubBase);
+    if (EFI_ERROR(Status))
+    {
+        WARN("Could not reserve low-memory AP stub region (status 0x%lx); "
+             "SMP startup may fall back to UP\n", Status);
+        LowStubBase = 0;
+    }
+    else
+    {
+        TRACE("Reserved low-memory AP stub at 0x%llx\n", LowStubBase);
+    }
+
     TRACE("UefiMemGetMemoryMap: Gather memory map\n");
     PUEFI_LoadMemoryMap(&MapKey,
                         &MapSize,
@@ -185,7 +217,12 @@ UefiMemGetMemoryMap(ULONG *MemoryMapSize)
 
     EntryCount = (MapSize / DescriptorSize);
 
-    FreeldrMemMapSize = (sizeof(FREELDR_MEMORY_DESCRIPTOR) * EntryCount);
+    /*
+     * Reserve a few extra descriptor slots: post-loop UefiSetMemory()
+     * calls (low stub override, first-page reservation) can split
+     * existing descriptors, growing the list beyond EntryCount.
+     */
+    FreeldrMemMapSize = sizeof(FREELDR_MEMORY_DESCRIPTOR) * (EntryCount + 8);
     Status = GlobalSystemTable->BootServices->AllocatePool(EfiLoaderData,
                                                            FreeldrMemMapSize,
                                                            (void**)&FreeldrMem);
@@ -224,6 +261,19 @@ UefiMemGetMemoryMap(ULONG *MemoryMapSize)
         }
 
         MapEntry = NEXT_MEMORY_DESCRIPTOR(MapEntry, DescriptorSize);
+    }
+
+    /*
+     * Reclassify our pre-allocated AP stub region as LoaderFirmwareTemporary
+     * so HAL's HalpAllocPhysicalMemory will find it. AddMemoryDescriptor
+     * splits the surrounding LoaderLoadedProgram descriptor as needed.
+     */
+    if (LowStubBase != 0)
+    {
+        UefiSetMemory(FreeldrMem,
+                      LowStubBase,
+                      UEFI_AP_LOW_STUB_PAGES,
+                      LoaderFirmwareTemporary);
     }
 
     /* Windows expects the first page to be reserved, otherwise it asserts.
