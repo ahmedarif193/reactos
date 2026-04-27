@@ -1895,7 +1895,7 @@ MiFlushTbAndCapture(IN PMMVAD FoundVad,
     // Flush the TLB
     //
     ASSERT(PreviousPte.u.Hard.Valid == 1);
-    KeFlushCurrentTb();
+    KeFlushSingleTb(MiPteToAddress(PointerPte), TRUE);
     ASSERT(PreviousPte.u.Hard.Valid == 1);
 
     //
@@ -1931,6 +1931,7 @@ MiRemoveMappedPtes(IN PVOID BaseAddress,
     PMMPDE PointerPde, SystemMapPde;
     PMMPFN Pfn1, Pfn2;
     MMPTE PteContents;
+    ULONG OriginalNumberOfPtes = NumberOfPtes;
     KIRQL OldIrql;
     DPRINT("Removing mapped view at: 0x%p\n", BaseAddress);
 
@@ -2009,7 +2010,7 @@ MiRemoveMappedPtes(IN PVOID BaseAddress,
     }
 
     /* Flush the TLB */
-    KeFlushCurrentTb();
+    KeFlushRangeTb(BaseAddress, OriginalNumberOfPtes, FALSE);
 
     /* Acquire the PFN lock */
     OldIrql = MiAcquirePfnLock();

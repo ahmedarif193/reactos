@@ -60,7 +60,7 @@ MiArchCreateProcessAddressSpace(
     MI_MAKE_DIRTY_PAGE(&PdePte);
     *PointerPte = PdePte;
     /* We changed the page! */
-    __invlpg(PteTable);
+    KeFlushSingleTb(PteTable, FALSE);
 
     /* Now get the page directory (which we'll double map, so call it a page table) */
     PteTable = MiPteToAddress(PointerPte);

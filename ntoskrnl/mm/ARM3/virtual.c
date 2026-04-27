@@ -278,6 +278,7 @@ MiDeleteSystemPageableVm(IN PMMPTE PointerPte,
                          OUT PPFN_NUMBER ValidPages)
 {
     PFN_COUNT ActualPages = 0;
+    PFN_NUMBER OriginalPageCount = PageCount;
     PETHREAD CurrentThread = PsGetCurrentThread();
     PMMPFN Pfn1, Pfn2;
     PFN_NUMBER PageFrameIndex, PageTableIndex;
@@ -357,8 +358,8 @@ MiDeleteSystemPageableVm(IN PMMPTE PointerPte,
     /* Release the working set */
     MiUnlockWorkingSet(CurrentThread, &MmSystemCacheWs);
 
-    /* Flush the entire TLB */
-    KeFlushEntireTb(TRUE, TRUE);
+    /* Flush the TLB */
+    KeFlushRangeTb(MiPteToAddress(PointerPte - OriginalPageCount), OriginalPageCount, TRUE);
 
     /* Done */
     return ActualPages;
@@ -522,7 +523,7 @@ MiDeletePte(IN PMMPTE PointerPte,
     }
 
     /* Flush the TLB */
-    KeFlushCurrentTb();
+    KeFlushSingleTb(MiPteToAddress(PointerPte), FALSE);
 }
 
 VOID
@@ -2386,11 +2387,7 @@ MiProtectVirtualMemory(IN PEPROCESS Process,
                     MiDecrementShareCount(Pfn1, PFN_FROM_PTE(&PteContents));
                     // FIXME: remove the page from the WS
                     MI_WRITE_INVALID_PTE(PointerPte, PteContents);
-#ifdef CONFIG_SMP
-                    // FIXME: Should invalidate entry in every CPU TLB
-                    ASSERT(KeNumberProcessors == 1);
-#endif
-                    KeInvalidateTlbEntry(MiPteToAddress(PointerPte));
+                    KeFlushSingleTb(MiPteToAddress(PointerPte), TRUE);
 
                     /* We are done for this PTE */
                     MiReleasePfnLock(OldIrql);
@@ -2581,9 +2578,10 @@ MiProcessValidPteList(IN PMMPTE *ValidPteList,
 
     //
     // All the PTEs have been dereferenced and made invalid, flush the TLB now
-    // and then release the PFN lock
+    // and then release the PFN lock. Since the PTEs are non-contiguous in the
+    // list, use a full flush rather than a range flush.
     //
-    KeFlushCurrentTb();
+    KeFlushEntireTb(TRUE, TRUE);
     MiReleasePfnLock(OldIrql);
 }
 
@@ -5720,6 +5718,5 @@ MmGetPhysicalAddress(PVOID Address)
     PhysicalAddress.QuadPart = 0;
     return PhysicalAddress;
 }
-
 
 /* EOF */

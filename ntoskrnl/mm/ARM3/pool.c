@@ -62,7 +62,7 @@ MiProtectFreeNonPagedPool(IN PVOID VirtualAddress,
     } while (++PointerPte < LastPte);
 
     /* Flush the TLB */
-    KeFlushEntireTb(TRUE, TRUE);
+    KeFlushRangeTb(VirtualAddress, PageCount, TRUE);
 }
 
 BOOLEAN
@@ -646,7 +646,7 @@ MiAllocatePoolPages(IN POOL_TYPE PoolType,
         //
         // Flush the TLB
         //
-        KeFlushEntireTb(TRUE, TRUE);
+        KeFlushRangeTb(BaseVa, SizeInPages, TRUE);
 
         /* Setup a demand-zero writable PTE */
         MI_MAKE_SOFTWARE_PTE(&TempPte, MM_READWRITE);

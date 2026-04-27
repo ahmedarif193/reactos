@@ -98,6 +98,18 @@ HalStartNextProcessor(
     if (HalpStartedProcessorCount == HalpApicInfoTable.ProcessorCount)
         return FALSE;
 
+    /*
+     * The low stub must have been allocated below 1MB during HAL init.
+     * If allocation failed, AP startup is impossible: bail out instead
+     * of dereferencing a NULL pointer in the bootstrap path.
+     */
+    if (HalpLowStub == NULL)
+    {
+        DPRINT1("Cannot start AP %lu: low stub not allocated\n",
+                HalpStartedProcessorCount);
+        return FALSE;
+    }
+
     /* Clean up low stub from any previous data */
     RtlZeroMemory(HalpLowStub, HALP_LOW_STUB_SIZE_IN_PAGES * PAGE_SIZE);
 

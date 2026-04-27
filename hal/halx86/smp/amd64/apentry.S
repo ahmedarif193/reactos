@@ -8,7 +8,30 @@
 #include <asm.inc>
 #include <ksamd64.inc>
 
-#define ZERO_OFFSET(f) (offset f - offset HalpAPEntry16)
+/*
+ * Compute the byte offset of a label relative to HalpAPEntry16.
+ *
+ *   - MASM (ml64.exe, _USE_ML) accepts "offset f - offset HalpAPEntry16"
+ *     inline inside a memory operand.
+ *   - Clang's integrated assembler does not: it refuses (sym - sym)
+ *     there ("cannot use more than one symbol in memory operand").
+ *
+ * For the non-MASM path we predefine each offset as a constant via .set,
+ * which the assembler folds before parsing the addressing mode.
+ */
+#ifdef _USE_ML
+#define ZERO_OFFSET(f) (OFF(f) - OFF(HalpAPEntry16))
+#else
+.set ZO_APEntry32,    APEntry32    - HalpAPEntry16
+.set ZO_APEntry64,    APEntry64    - HalpAPEntry16
+.set ZO_TempGdt,      TempGdt      - HalpAPEntry16
+.set ZO_TempGdtr,     TempGdtr     - HalpAPEntry16
+.set ZO_TempGdtr_Base, TempGdtr_Base - HalpAPEntry16
+.set ZO_Jump32Offset, Jump32Offset - HalpAPEntry16
+.set ZO_Jump64Offset, Jump64Offset - HalpAPEntry16
+.set ZO_ProcessorState, ProcessorState - HalpAPEntry16
+#define ZERO_OFFSET(f) ZO_##f
+#endif
 
 PUBLIC HalpAPEntry16
 PUBLIC HalpAPEntryData

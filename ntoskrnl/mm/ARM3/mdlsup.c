@@ -1834,7 +1834,7 @@ MmUnmapReservedMapping(
     RtlZeroMemory(PointerPte, PageCount * sizeof(MMPTE));
 
     // Flush the TLB
-    KeFlushEntireTb(TRUE, TRUE);
+    KeFlushRangeTb(BaseAddress, PageCount, TRUE);
 
     // Remove flags
     Mdl->MdlFlags &= ~(MDL_MAPPED_TO_SYSTEM_VA |

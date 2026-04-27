@@ -226,7 +226,7 @@ MmUnmapIoSpace(IN PVOID BaseAddress,
         //
         // Blow the TLB
         //
-        KeFlushEntireTb(TRUE, TRUE);
+        KeFlushRangeTb(MiPteToAddress(PointerPte), PageCount, TRUE);
     }
 
     //

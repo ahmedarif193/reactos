@@ -612,8 +612,7 @@ MmFreeSpecialPool(PVOID P)
         MI_ERASE_PTE(PointerPte);
 
         /* Flush the TLB */
-        //FIXME: Use KeFlushSingleTb() instead
-        KeFlushEntireTb(TRUE, TRUE);
+        KeFlushSingleTb(MiPteToAddress(PointerPte), TRUE);
     }
     else
     {
