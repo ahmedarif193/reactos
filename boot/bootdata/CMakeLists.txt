@@ -49,14 +49,13 @@ if(EXISTS ${CMAKE_CURRENT_SOURCE_DIR}/welcome_config/)
 endif()
 
 # freeldr.ini
-add_cd_file(FILE ${CMAKE_CURRENT_SOURCE_DIR}/bootcd.ini DESTINATION root NO_CAB NOT_IN_HYBRIDCD NAME_ON_CD freeldr.ini FOR bootcd regtest)
-add_cd_file(FILE ${CMAKE_CURRENT_SOURCE_DIR}/livecd.ini DESTINATION root NOT_IN_HYBRIDCD NAME_ON_CD freeldr.ini FOR livecd)
-add_cd_file(FILE ${CMAKE_CURRENT_SOURCE_DIR}/hybridcd.ini DESTINATION root NAME_ON_CD freeldr.ini FOR hybridcd)
+add_cd_file(FILE ${CMAKE_CURRENT_SOURCE_DIR}/bootcd.ini DESTINATION root NO_CAB NAME_ON_CD freeldr.ini FOR bootcd)
+add_cd_file(FILE ${CMAKE_CURRENT_SOURCE_DIR}/bootcd_regtest.ini DESTINATION root NO_CAB NAME_ON_CD freeldr.ini FOR regtest)
 add_cd_file(FILE ${CMAKE_CURRENT_SOURCE_DIR}/preinstall.ini DESTINATION root NAME_ON_CD freeldr.ini FOR preinstall)
+
+# Unattend
 add_cd_file(FILE ${CMAKE_CURRENT_SOURCE_DIR}/bootcd/unattend.inf DESTINATION reactos NO_CAB FOR bootcd)
 add_cd_file(FILE ${CMAKE_CURRENT_SOURCE_DIR}/bootcdregtest/unattend.inf DESTINATION reactos NO_CAB FOR regtest)
-
-=======
 add_cd_file(FILE ${CMAKE_CURRENT_SOURCE_DIR}/livecd/unattend.inf DESTINATION reactos NO_CAB FOR livecd)
 add_cd_file(FILE ${CMAKE_CURRENT_SOURCE_DIR}/preinstall/unattend.inf DESTINATION reactos FOR preinstall)
 
