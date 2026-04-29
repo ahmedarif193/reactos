@@ -962,7 +962,7 @@ function(create_registry_hives)
             FILE ${CMAKE_BINARY_DIR}/boot/bootdata/BCD
             TARGET bcd_hive
             DESTINATION efi/boot
-            NO_CAB FOR bootcd regtest)
+            NO_CAB FOR bootcd regtest livecd)
     endif()
 
 endfunction()

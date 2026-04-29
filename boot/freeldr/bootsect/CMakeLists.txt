@@ -38,9 +38,9 @@ if(ARCH STREQUAL "i386" OR ARCH STREQUAL "amd64")
     add_cd_file(TARGET fat FILE ${CMAKE_CURRENT_BINARY_DIR}/fat.bin DESTINATION loader NO_CAB FOR bootcd regtest)
     add_cd_file(TARGET fat32 FILE ${CMAKE_CURRENT_BINARY_DIR}/fat32.bin DESTINATION loader NO_CAB FOR bootcd regtest)
     add_cd_file(TARGET ntfsvbr FILE ${CMAKE_CURRENT_BINARY_DIR}/ntfs.bin DESTINATION loader NO_CAB FOR bootcd regtest)
-    add_cd_file(TARGET isoboot FILE ${CMAKE_CURRENT_BINARY_DIR}/isoboot.bin DESTINATION loader NO_CAB FOR bootcd)
+    add_cd_file(TARGET isoboot FILE ${CMAKE_CURRENT_BINARY_DIR}/isoboot.bin DESTINATION loader NO_CAB FOR bootcd livecd)
     add_cd_file(TARGET isobtrt FILE ${CMAKE_CURRENT_BINARY_DIR}/isobtrt.bin DESTINATION loader NO_CAB FOR bootcd regtest)
-    add_cd_file(TARGET isombr FILE ${CMAKE_CURRENT_BINARY_DIR}/isombr.bin DESTINATION loader NO_CAB FOR bootcd)
+    add_cd_file(TARGET isombr FILE ${CMAKE_CURRENT_BINARY_DIR}/isombr.bin DESTINATION loader NO_CAB FOR bootcd livecd)
 elseif(ARCH STREQUAL "arm")
     add_custom_target(fat
         COMMAND exit 1
