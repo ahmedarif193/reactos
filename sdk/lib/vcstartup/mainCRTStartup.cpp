@@ -16,3 +16,5 @@ extern "C" unsigned long mainCRTStartup(void*)
 
     return __commonCRTStartup<decltype(main)>();
 }
+
+extern "C" void __main(void) { }

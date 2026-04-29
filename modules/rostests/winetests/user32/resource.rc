@@ -234,7 +234,6 @@ CAPTION "Custom Test Dialog"
 FONT 8, "MS Sans Serif"
 {
 #ifdef __REACTOS__
-    /* llvm-rc doesn't support control raw data blocks */
     CONTROL "evenlengthtext", -1, "TESTCONTROL", WS_CHILD|WS_VISIBLE|WS_BORDER|WS_TABSTOP, 10,10,100,50
     CONTROL "oddlengthtext", -1, "TESTCONTROL", WS_CHILD|WS_VISIBLE|WS_BORDER|WS_TABSTOP, 10,60,100,50
 #else
