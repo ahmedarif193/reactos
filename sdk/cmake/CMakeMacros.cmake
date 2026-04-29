@@ -43,8 +43,6 @@ function(add_message_headers _type)
         set(_mc_depends "${_converted_file}")
         if(TARGET ${CMAKE_MC_COMPILER})
             list(APPEND _mc_depends ${CMAKE_MC_COMPILER})
-        elseif(IS_ABSOLUTE "${CMAKE_MC_COMPILER}")
-            list(APPEND _mc_depends "${CMAKE_MC_COMPILER}")
         endif()
         utf16le_convert(${_source_file} ${_converted_file} nobom)
         add_custom_command(
@@ -453,10 +451,8 @@ endif()
 
     # Write the BootCD file list
     get_property(_filelist GLOBAL PROPERTY BOOTCD_FILE_LIST)
-    if(_filelist)
-        string(REPLACE ";" "\n" _filelist "${_filelist}")
-        file(APPEND ${REACTOS_BINARY_DIR}/boot/bootcd.cmake.lst "${_filelist}\n")
-    endif()
+    string(REPLACE ";" "\n" _filelist "${_filelist}")
+    file(APPEND ${REACTOS_BINARY_DIR}/boot/bootcd.cmake.lst "${_filelist}")
     unset(_filelist)
     # Also, append the file contents list of the LiveImage to the BootCD file list
     file(APPEND ${REACTOS_BINARY_DIR}/boot/bootcd.cmake.lst "\n")
@@ -467,26 +463,7 @@ endif()
          OUTPUT ${REACTOS_BINARY_DIR}/boot/bootcd.$<CONFIG>.lst
          INPUT ${REACTOS_BINARY_DIR}/boot/bootcd.cmake.lst)
 
-    get_property(_filelist GLOBAL PROPERTY LIVECD_FILE_LIST)
-    if(_filelist)
-        string(REPLACE ";" "\n" _filelist "${_filelist}")
-        file(APPEND ${REACTOS_BINARY_DIR}/boot/livecd.cmake.lst "${_filelist}\n")
-    endif()
-    unset(_filelist)
-    file(GENERATE
-         OUTPUT ${REACTOS_BINARY_DIR}/boot/livecd.$<CONFIG>.lst
-         INPUT ${REACTOS_BINARY_DIR}/boot/livecd.cmake.lst)
-
-    get_property(_filelist GLOBAL PROPERTY HYBRIDCD_FILE_LIST)
-    if(_filelist)
-        string(REPLACE ";" "\n" _filelist "${_filelist}")
-        file(APPEND ${REACTOS_BINARY_DIR}/boot/hybridcd.cmake.lst "${_filelist}\n")
-    endif()
-    unset(_filelist)
-    file(GENERATE
-         OUTPUT ${REACTOS_BINARY_DIR}/boot/hybridcd.$<CONFIG>.lst
-         INPUT ${REACTOS_BINARY_DIR}/boot/hybridcd.cmake.lst)
-
+    # Write the BootCDRegTest file list
     get_property(_filelist GLOBAL PROPERTY BOOTCDREGTEST_FILE_LIST)
     if(_filelist)
         string(REPLACE ";" "\n" _filelist "${_filelist}")
