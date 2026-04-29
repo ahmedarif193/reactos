@@ -8,6 +8,17 @@
 #define INCLUDED_ASM
 #include "ext.S"
 
+#ifdef __clang__
+.macro call_indirect_ss_bp disp
+    .byte HEX(36), HEX(FF), HEX(56), \disp
+.endm
+
+.macro call_indirect_cs_table table
+    .byte HEX(2E), HEX(FF), HEX(96)
+    .word \table
+.endm
+#endif
+
 ExtLdrEntryPoint:
     // Clear segment registers
     xor eax, eax
@@ -16,7 +27,11 @@ ExtLdrEntryPoint:
 
     // Read root directory Inode
     mov al, EXT_ROOT_INODE
+#ifdef __clang__
+    call_indirect_ss_bp -ExtReadInodeOffset
+#else
     call ExtReadInode
+#endif
 
     // Set file base address and search for freeldr
     mov dword ptr BP_REL(ExtFileAddress), FREELDR_BASE
@@ -156,7 +171,11 @@ ExtSafeReadBlock:
     jz .NullBlk
 
     // Read the block safely
+#ifdef __clang__
+    call_indirect_ss_bp -ExtReadBlockOffset
+#else
     call ExtReadBlock
+#endif
     jmp .RBDone
 .NullBlk:
     // If the block is 0 then just clear the block
@@ -355,9 +374,17 @@ ExtReadEntireFileExtentsLevelX:
     shl bp, 1
 
     // Call the segment and level functions
+#ifdef __clang__
+    call_indirect_cs_table ExtExtentsLevelSegmentFunctionTable
+#else
     call word ptr cs:ExtExtentsLevelSegmentFunctionTable[bp]
+#endif
     call ExtSafeReadBlock
+#ifdef __clang__
+    call_indirect_cs_table ExtExtentsLevelFunctionTable
+#else
     call word ptr cs:ExtExtentsLevelFunctionTable[bp]
+#endif
 
     // Restore state and continue loop
     popad
@@ -509,12 +536,20 @@ LoadFreeLdr:
     // Show output loading status
     push si
     mov si, offset msgLoadingFreeLdr
+#ifdef __clang__
+    call_indirect_ss_bp -PutCharsOffset
+#else
     call PutChars
+#endif
     pop si
 
     // Load Inode at directory entry
     mov eax, dword ptr es:[si]
+#ifdef __clang__
+    call_indirect_ss_bp -ExtReadInodeOffset
+#else
     call ExtReadInode
+#endif
     mov si, word ptr BP_REL(ExtReadInodeIndexOffset)
 
     // Get Inode type
