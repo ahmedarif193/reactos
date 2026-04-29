@@ -151,11 +151,8 @@ if(_wimage_threads EQUAL 0)
     endif()
 endif()
 
-set(_capture_wim "${OUTPUT_WIM}.capture")
-file(REMOVE "${_capture_wim}")
-
 execute_process(
-    COMMAND "${WIMAGE_EXE}" capture "${STAGE_DIR}" "${_capture_wim}" "ReactOS LiveCD"
+    COMMAND "${WIMAGE_EXE}" capture "${STAGE_DIR}" "${OUTPUT_WIM}" "ReactOS LiveCD"
             --compress=xpress --boot --threads=${_wimage_threads}
     RESULT_VARIABLE _wimage_rc
     OUTPUT_VARIABLE _wimage_out
@@ -165,25 +162,8 @@ if(NOT _wimage_rc EQUAL 0)
     message(FATAL_ERROR "make_livecd_wim.cmake: wimage capture failed (rc=${_wimage_rc}):\n${_wimage_out}")
 endif()
 
-if(NOT EXISTS "${_capture_wim}")
-    message(FATAL_ERROR "make_livecd_wim.cmake: wimage reported success but ${_capture_wim} does not exist")
-endif()
-
-file(REMOVE "${OUTPUT_WIM}")
-execute_process(
-    COMMAND "${CMAKE_COMMAND}" -E copy "${_capture_wim}" "${OUTPUT_WIM}"
-    RESULT_VARIABLE _copy_rc
-    OUTPUT_VARIABLE _copy_out
-    ERROR_VARIABLE _copy_out)
-
-if(NOT _copy_rc EQUAL 0)
-    message(FATAL_ERROR "make_livecd_wim.cmake: copying ${_capture_wim} to ${OUTPUT_WIM} failed (rc=${_copy_rc}):\n${_copy_out}")
-endif()
-
-file(REMOVE "${_capture_wim}")
-
 if(NOT EXISTS "${OUTPUT_WIM}")
-    message(FATAL_ERROR "make_livecd_wim.cmake: copied WIM ${OUTPUT_WIM} does not exist")
+    message(FATAL_ERROR "make_livecd_wim.cmake: wimage reported success but ${OUTPUT_WIM} does not exist")
 endif()
 
 file(STRINGS "${SOURCE_FREELDR_INI}" _ini_lines ENCODING UTF-8)

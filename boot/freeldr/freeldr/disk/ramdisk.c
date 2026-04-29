@@ -20,6 +20,7 @@
 #include <fs/fat.h>
 #include <disk.h>
 #include <arch/archwsup.h>
+#include "part_mbr.h"
 
 #if defined(__GNUC__)
 extern VOID
@@ -32,10 +33,11 @@ AddReactOSArcDiskInfo(
 #elif defined(_MSC_VER)
 VOID
 AddReactOSArcDiskInfoStub(
-    IN PSTR ArcName,
-    IN ULONG Signature,
-    IN ULONG Checksum,
-    IN BOOLEAN ValidPartitionTable)
+    _In_ PCSTR ArcName,
+    _In_opt_ PGUID GptDiskGuid,
+    _In_ ULONG Signature,
+    _In_ ULONG Checksum,
+    _In_ BOOLEAN ValidPartitionTable)
 {
     UNREFERENCED_PARAMETER(ArcName);
     UNREFERENCED_PARAMETER(GptDiskGuid);
@@ -310,6 +312,7 @@ typedef struct _RAMDISK_PROGRESS_CONTEXT
     PCSTR ActivityPrefix;
     PCSTR CompletionText;
 } RAMDISK_PROGRESS_CONTEXT, *PRAMDISK_PROGRESS_CONTEXT;
+
 typedef struct _ISO_COPY_CONTEXT
 {
     PISO_SOURCE Source;
@@ -1272,6 +1275,7 @@ IsoCopyDirectoryRecursive(
             Offset = NextOffset;
             continue;
         }
+
         {
             size_t Need = strlen(DestinationPath) + 1 + strlen(NameBuffer) + 1;
 
@@ -2865,7 +2869,6 @@ RamDiskInitialize(
                 goto WritableReady;
 
             if (RamDiskRequestedSize != 0 && StreamIsoSize != 0 && !StreamSourceIsWim)
-            if (RamDiskRequestedSize != 0 && StreamIsoSize != 0 && !StreamSourceIsWim)
             {
                 ULONGLONG IsoSize = StreamIsoSize;
                 ULONGLONG ResidentIsoBytes;
@@ -2932,6 +2935,7 @@ RamDiskInitialize(
             BOOLEAN WimSource;
             ULONGLONG ExtraBytes;
             ULONGLONG TotalTarget;
+
             IsoImageBase = (PVOID)((ULONG_PTR)OriginalBase + RamDiskImageOffset);
             IsoImageLength = RamDiskFileSize - RamDiskImageOffset;
 
