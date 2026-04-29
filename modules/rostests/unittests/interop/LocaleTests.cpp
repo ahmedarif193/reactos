@@ -6,14 +6,14 @@
  *              Copyright 2024 Katayama Hirofumi MZ <katayama.hirofumi.mz@gmail.com>
  */
 
+#include <set>
+#include <map>
+
 #include "interop.h"
 
 #include <winnls.h>
 #include <strsafe.h>
 #include <shlwapi.h>
-
-#include <set>
-#include <map>
 
 enum E_MODULE
 {
@@ -220,7 +220,7 @@ static void TEST_NumParts(void)
         LoadStringWrapW(mod[m], p.second.id, szBuffer, _countof(szBuffer));
         p.second.gotParts = CountParts(szBuffer);
 
-        ok(p.second.nParts == p.second.gotParts, "Locale 0x%lX: Num parts mismatch %d - expected %lu, got %lu\n",
+        ok(p.second.nParts == p.second.gotParts, "Locale 0x%lX: Num parts mismatch %d - expected %Iu, got %Iu\n",
            curLcid, p.first, p.second.nParts, p.second.gotParts);
     }
 }
