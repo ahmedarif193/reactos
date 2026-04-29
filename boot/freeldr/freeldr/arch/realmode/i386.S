@@ -8,6 +8,31 @@
 
 .code16
 
+#ifdef __clang__
+.macro call target:vararg
+    .byte HEX(E8)
+    .word \target - (. + 2)
+.endm
+
+.macro ret
+    .byte HEX(C3)
+.endm
+
+.macro call_far32 address
+    .byte HEX(FF), HEX(1E)
+    .word \address
+.endm
+
+.macro call_far32_ss_bp displacement
+    .byte HEX(FF), HEX(5E), \displacement
+.endm
+
+.macro call_near16_indirect_bx table
+    .byte HEX(FF), HEX(97)
+    .word \table
+.endm
+#endif
+
 /* FAT helper code */
 #include "fathelp.inc"
 
@@ -110,7 +135,11 @@ inrmode:
 
     /* Do the callback, specified by bx */
     shl bx, 1
+#ifdef __clang__
+    call_near16_indirect_bx CallbackTable
+#else
     call word ptr ds:CallbackTable[bx]
+#endif
 
 
 /*
