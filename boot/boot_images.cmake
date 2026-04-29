@@ -263,6 +263,6 @@ add_dependencies(reactosvhd preinstall_partition)
 
 if(DEFINED EFI_PLATFORM_ID)
     # For devices such as USB drives, add also the EFI boot image into efi/boot.
-    add_cd_file(TARGET efisys FILE ${CMAKE_CURRENT_BINARY_DIR}/efisys.bin DESTINATION loader NO_CAB FOR bootcd regtest)
-    add_cd_file(TARGET uefildr DESTINATION efi/boot NO_CAB NAME_ON_CD boot${EFI_PLATFORM_ID}.efi FOR bootcd regtest preinstall)
+    add_cd_file(TARGET efisys FILE ${CMAKE_CURRENT_BINARY_DIR}/efisys.bin DESTINATION loader NO_CAB FOR bootcd livecd regtest)
+    add_cd_file(TARGET uefildr DESTINATION efi/boot NO_CAB NAME_ON_CD boot${EFI_PLATFORM_ID}.efi FOR bootcd livecd regtest preinstall)
 endif()
