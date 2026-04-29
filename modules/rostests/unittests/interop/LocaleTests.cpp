@@ -6,14 +6,14 @@
  *              Copyright 2024 Katayama Hirofumi MZ <katayama.hirofumi.mz@gmail.com>
  */
 
+#include <set>
+#include <map>
+
 #include "interop.h"
 
 #include <winnls.h>
 #include <strsafe.h>
 #include <shlwapi.h>
-
-#include <set>
-#include <map>
 
 enum E_MODULE
 {
@@ -224,7 +224,7 @@ static void TEST_NumParts(void)
         p.second.gotParts = CountParts(szBuffer);
 
         ok(p.second.gotParts == p.second.nParts,
-           "Locale 0x%04lX, num parts mismatch s%02d, expected %lu got %lu. Will skip related checks.\n",
+           "Locale 0x%04lX, num parts mismatch s%02d, expected %Iu got %Iu. Will skip related checks.\n",
            curLcid, p.first, p.second.nParts, p.second.gotParts);
     }
 }
