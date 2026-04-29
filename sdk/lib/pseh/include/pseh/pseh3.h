@@ -8,6 +8,7 @@
 /* For additional information see pseh3.c in the related library. */
 
 #pragma once
+#ifndef _PSEH3_H_
 #define _PSEH3_H_
 
 #include <excpt.h>
@@ -513,4 +514,6 @@ void __stdcall _SEH3$_longjmp_unwind(_JUMP_BUFFER* _Buf);
 
 #ifdef __cplusplus
 }; // extern "C"
+#endif
+
 #endif
