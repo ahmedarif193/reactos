@@ -543,7 +543,7 @@ static void inflight_free(WimBlobInflight* b)
 
 static int commit_blob(WimCtx* ctx, WimBlobInflight* b)
 {
-    uint64_t blob_offset = (uint64_t)ftello(ctx->file);
+    uint64_t blob_offset = (uint64_t)wim_ftello(ctx->file);
     uint64_t written_size = 0;
 
     if (blob_is_failed(b))
@@ -1103,7 +1103,7 @@ static int write_metadata(WimCtx* ctx, int image_idx)
 
 static int write_lookup_table(WimCtx* ctx)
 {
-    uint64_t offset = (uint64_t)ftello(ctx->file);
+    uint64_t offset = (uint64_t)wim_ftello(ctx->file);
 
     for (size_t i = 0; i < ctx->blob_count; i++) {
         WimLookupEntry entry;
@@ -1268,7 +1268,7 @@ static int write_xml_data(WimCtx* ctx)
     }
     free(xml);
 
-    uint64_t offset = (uint64_t)ftello(ctx->file);
+    uint64_t offset = (uint64_t)wim_ftello(ctx->file);
 
     /* Write BOM */
     uint16_t bom = 0xFEFF;
@@ -1306,7 +1306,7 @@ static int write_integrity_table(WimCtx* ctx)
         return -1;
     }
 
-    fseeko(ctx->file, (off_t)data_start, SEEK_SET);
+    wim_fseeko(ctx->file, (wim_off_t)data_start, SEEK_SET);
     uint64_t remaining = data_size;
 
     for (uint32_t i = 0; i < num_chunks; i++) {
@@ -1326,8 +1326,8 @@ static int write_integrity_table(WimCtx* ctx)
     free(read_buf);
 
     /* Seek to end of file (after XML data) to write integrity table */
-    fseeko(ctx->file, 0, SEEK_END);
-    uint64_t integ_offset = (uint64_t)ftello(ctx->file);
+    wim_fseeko(ctx->file, 0, SEEK_END);
+    uint64_t integ_offset = (uint64_t)wim_ftello(ctx->file);
 
     /* Table header: size, num_entries, chunk_size */
     uint32_t table_size = 12 + num_chunks * 20;
@@ -1347,7 +1347,7 @@ static int write_integrity_table(WimCtx* ctx)
 
 static int write_header(WimCtx* ctx)
 {
-    fseeko(ctx->file, 0, SEEK_SET);
+    wim_fseeko(ctx->file, 0, SEEK_SET);
     if (fwrite(&ctx->header, sizeof(WimHeader), 1, ctx->file) != 1)
         return -1;
     return 0;

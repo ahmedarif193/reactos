@@ -53,25 +53,6 @@ FreeLdrSetupMenu(
     ULONG SelectedMenuItem = 0;
     ULONG MenuItemCount;
 
-    /* Build the menu, filtering out any item that may not be applicable */
-    for (i = 0, MenuItemCount = 0; i < RTL_NUMBER_OF(FrLdrOptions); ++i)
-    {
-        /* Hide the "Return to OS Choices" item if no OS entry is selected */
-        if ((FrLdrOptions[i].Id == ActionBackToPrevMenu) && !OperatingSystem)
-            continue;
-#ifdef HAS_OPTION_MENU_EDIT_CMDLINE
-        if ((FrLdrOptions[i].Id == ActionEditBootCmdLine) && !OperatingSystem)
-            continue;
-#endif
-#ifdef UEFIBOOT
-        /* Hide the firmware setup option when the firmware does not support it */
-        if ((FrLdrOptions[i].Id == ActionFirmwareSetup) && !UefiFirmwareSetupSupported())
-            continue;
-#endif
-        MenuActionsMap[MenuItemCount] = FrLdrOptions[i].Id;
-        OptionsMenuList[MenuItemCount++] = FrLdrOptions[i].Item;
-    }
-
 doMenu:
     MenuItemCount = 0;
 
@@ -147,10 +128,6 @@ doMenu:
         case FreeldrSetupActionReboot:
             OptionMenuReboot();
             return;
-#ifdef UEFIBOOT
-        case ActionFirmwareSetup:
-            UefiBootToFirmware();
-            break;
 #ifdef UEFIBOOT
         case FreeldrSetupActionFirmwareSetup:
             UefiBootToFirmware();
