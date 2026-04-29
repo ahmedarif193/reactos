@@ -35,7 +35,7 @@ jobs:
     - name: Compute RosBE bootstrap SHA
       id: rosbe_spec
       run: |
-        curl -fsSL https://raw.githubusercontent.com/ahmedarif193/winget-rosbe/main/rosbe-linux-bootstrap.sh -o /tmp/rosbe-bootstrap.sh
+        curl -fsSL https://raw.githubusercontent.com/ahmedarif193/winget-rosbe/main/rosbe-unix-bootstrap.sh -o /tmp/rosbe-bootstrap.sh
         echo "sha=$(sha1sum /tmp/rosbe-bootstrap.sh | awk '{print $1}')" >> "$GITHUB_OUTPUT"
 
     - name: Cache RosBE
