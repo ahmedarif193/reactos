@@ -1673,7 +1673,7 @@ todo_wine {
     if (conv_unicode && (!client_unicode || !server_unicode))  /* W->A mapping -> wrong cmd */
     {
 #ifdef __REACTOS__
-        ok(!hdata || broken(hdata) /* WS03 */, "DdeClientTransaction returned %p, error %lx\n", hdata, err);
+        ok(!hdata || broken(hdata != 0) /* WS03 */, "DdeClientTransaction returned %p, error %lx\n", hdata, err);
         ok(ret == DDE_FNOTPROCESSED || broken(ret == DDE_FACKREQ) /* WS03 */, "wrong status code %04lx\n", ret);
         ok(err == DMLERR_NOTPROCESSED || broken(err == DMLERR_NO_ERROR) /* WS03 */, "DdeClientTransaction returned error %lx\n", err);
 #else
@@ -1719,7 +1719,7 @@ todo_wine {
     else  /* no mapping */
     {
 #ifdef __REACTOS__
-        ok(!hdata || broken(hdata) /* WS03 */, "DdeClientTransaction returned %p, error %lx\n", hdata, err);
+        ok(!hdata || broken(hdata != 0) /* WS03 */, "DdeClientTransaction returned %p, error %lx\n", hdata, err);
         ok(ret == DDE_FNOTPROCESSED || broken(ret == DDE_FACKREQ) /* WS03 */, "wrong status code %04lx\n", ret);
         ok(err == DMLERR_NOTPROCESSED || broken(err == DMLERR_NO_ERROR) /* WS03 */, "DdeClientTransaction returned error %lx\n", err);
 #else
