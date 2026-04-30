@@ -13,36 +13,30 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#ifndef _WIN32
 #include <dirent.h>
 #include <fcntl.h>
-#include <sys/mman.h>
 #include <sys/stat.h>
 #include <sys/types.h>
+#ifndef _WIN32
+#include <sys/mman.h>
 #include <unistd.h>
 #else
-#include <sys/stat.h>
-#include <sys/types.h>
+#include <io.h>
+#define lstat stat
+#ifndef ssize_t
+typedef intptr_t ssize_t;
 #endif
-
-#ifdef _WIN32
-/* Capture not yet supported on Windows */
-int wim_capture_dir(const char* source_dir, WimDentry* root,
-                    wim_blob_writer_fn writer, void* user)
-{
-    (void)source_dir; (void)root; (void)writer; (void)user;
-    fprintf(stderr, "Error: capture is not supported on Windows\n");
-    return -1;
-}
-#else
+#endif
 
 #define MMAP_CAPTURE_THRESHOLD (1u << 20)
 
 /* Buffer deleters for the ownership-transfer callback. */
+#ifndef _WIN32
 static void cap_free_munmap(void* p, size_t sz)
 {
     munmap(p, sz);
 }
+#endif
 
 static void cap_free_plain(void* p, size_t sz)
 {
@@ -72,7 +66,11 @@ static int capture_regular_file(const char* full_path, off_t file_size,
     if ((uint64_t)file_size > SIZE_MAX)
         return -1;
 
-    fd = open(full_path, O_RDONLY);
+    fd = open(full_path, O_RDONLY
+#ifdef _WIN32
+                        | O_BINARY
+#endif
+    );
     if (fd < 0) {
         fprintf(stderr, "Warning: Cannot read '%s', skipping\n", full_path);
         return 0;
@@ -93,7 +91,11 @@ static int capture_regular_file(const char* full_path, off_t file_size,
             return ret;
         }
         /* mmap failed; fall back to the read path. */
-        fd = open(full_path, O_RDONLY);
+        fd = open(full_path, O_RDONLY
+#ifdef _WIN32
+                        | O_BINARY
+#endif
+    );
         if (fd < 0) {
             fprintf(stderr, "Warning: Cannot re-open '%s' after mmap failure\n", full_path);
             return 0;
@@ -271,5 +273,3 @@ int wim_capture_dir(const char* source_dir, WimDentry* root,
 
     return 0;
 }
-
-#endif /* !_WIN32 */
