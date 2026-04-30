@@ -86,12 +86,47 @@ function(setup_host_tools)
             -DCMAKE_CXX_COMPILER=cl)
     endif()
 
+    if(HOST_TOOLS_C_COMPILER)
+        list(APPEND CMAKE_HOST_TOOLS_EXTRA_ARGS
+            -DCMAKE_C_COMPILER:FILEPATH=${HOST_TOOLS_C_COMPILER})
+    endif()
+    if(HOST_TOOLS_CXX_COMPILER)
+        list(APPEND CMAKE_HOST_TOOLS_EXTRA_ARGS
+            -DCMAKE_CXX_COMPILER:FILEPATH=${HOST_TOOLS_CXX_COMPILER})
+    endif()
+    if(HOST_TOOLS_MAKE_PROGRAM)
+        list(APPEND CMAKE_HOST_TOOLS_EXTRA_ARGS
+            -DCMAKE_MAKE_PROGRAM:FILEPATH=${HOST_TOOLS_MAKE_PROGRAM})
+    endif()
+    if(HOST_TOOLS_BISON_EXECUTABLE)
+        list(APPEND CMAKE_HOST_TOOLS_EXTRA_ARGS
+            -DBISON_EXECUTABLE:FILEPATH=${HOST_TOOLS_BISON_EXECUTABLE})
+    endif()
+    if(HOST_TOOLS_FLEX_EXECUTABLE)
+        list(APPEND CMAKE_HOST_TOOLS_EXTRA_ARGS
+            -DFLEX_EXECUTABLE:FILEPATH=${HOST_TOOLS_FLEX_EXECUTABLE})
+    endif()
+
     if (MSVC_IDE)
         # Required for Bison/Flex wrappers created by /CMakeLists.txt.
         list(APPEND CMAKE_HOST_TOOLS_EXTRA_ARGS
             -DROS_SAVED_BISON_PKGDATADIR=${ROS_SAVED_BISON_PKGDATADIR}
             -DROS_SAVED_M4=${ROS_SAVED_M4}
             )
+    endif()
+
+    if(HOST_TOOLS_PATH_DIRS)
+        if(CMAKE_HOST_WIN32)
+            file(TO_NATIVE_PATH "${HOST_TOOLS_PATH_DIRS}" HOST_TOOLS_ENV_PATH)
+            set(HOST_TOOLS_CMAKE_WRAPPER "${REACTOS_BINARY_DIR}/host-tools/cmake_env.cmd")
+            file(WRITE "${HOST_TOOLS_CMAKE_WRAPPER}"
+                "@echo off\r\n"
+                "set \"PATH=${HOST_TOOLS_ENV_PATH};%PATH%\"\r\n"
+                "\"${HOST_TOOLS_CMAKE_COMMAND}\" %*\r\n")
+            set(HOST_TOOLS_CMAKE_COMMAND "${HOST_TOOLS_CMAKE_WRAPPER}")
+        else()
+            message(FATAL_ERROR "HOST_TOOLS_PATH_DIRS is only supported on Windows hosts")
+        endif()
     endif()
 
     if(NOT DEFINED HOST_BUILD_TYPE)
@@ -111,6 +146,7 @@ function(setup_host_tools)
             -DTARGET_COMPILER_ID=${CMAKE_C_COMPILER_ID}
             -DTARGET_BUILD_TYPE=${CMAKE_BUILD_TYPE}
             -DCMAKE_BUILD_TYPE=${HOST_BUILD_TYPE}
+            -DUSE_DUMMY_PSEH:BOOL=${USE_DUMMY_PSEH}
             ${CMAKE_HOST_TOOLS_EXTRA_ARGS}
         BUILD_ALWAYS TRUE
         INSTALL_COMMAND ${CMAKE_COMMAND} -E true
