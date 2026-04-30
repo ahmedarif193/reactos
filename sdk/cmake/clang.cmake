@@ -297,7 +297,7 @@ set(CMAKE_DEPFILE_FLAGS_RC "--preprocessor=\"${CMAKE_C_COMPILER}\" ${RC_PREPROCE
 # Optional 3rd parameter: stdcall stack bytes
 function(set_entrypoint MODULE ENTRYPOINT)
     if(${ENTRYPOINT} STREQUAL "0")
-        target_link_options(${MODULE} PRIVATE "-Wl,--entry=" "-Wl,-Xlink=/noentry")
+        target_link_options(${MODULE} PRIVATE "-Wl,--entry=" "-Wl,-Xlink=/noentry" "-Wl,-Xlink=/dll")
     elseif(ARCH STREQUAL "i386")
         set(_entrysymbol _${ENTRYPOINT})
         if(${ARGC} GREATER 2)
