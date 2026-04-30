@@ -4,4 +4,4 @@ list(APPEND SOURCE
 
 add_library(sptilib ${SOURCE})
 target_link_libraries(sptilib PRIVATE ${PSEH_LIB})
-add_dependencies(sptilib xdk)
+add_dependencies(sptilib bugcodes xdk)
