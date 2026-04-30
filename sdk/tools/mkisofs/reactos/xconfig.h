@@ -25,7 +25,7 @@
 #define HAVE_STRING_H 1
 #define STDC_HEADERS 1
 
-#ifndef _WIN32
+#if !defined(_WIN32) || defined(__MINGW32__)
     #define HAVE_UNISTD_H 1
 #endif
 
@@ -117,7 +117,7 @@
 #define HAVE_STRCASECMP 1
 #define HAVE_STRNCASECMP 1
 
-#ifndef _WIN32
+#if !defined(_WIN32) || defined(__MINGW32__)
     #define HAVE_USLEEP 1
 #endif
 
