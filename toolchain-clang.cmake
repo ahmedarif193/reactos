@@ -90,7 +90,6 @@ endfunction()
 set(CMAKE_TRY_COMPILE_PLATFORM_VARIABLES
     ARCH
     CLANG_VERSION
-    REACTOS_CLANG_GCC_TOOLCHAIN
     REACTOS_CLANG_LLVM_MINGW_ROOT)
 set(CMAKE_SYSTEM_NAME Windows)
 
@@ -143,21 +142,11 @@ if(NOT DEFINED CLANG_VERSION)
     string(REGEX MATCH "^[0-9]+" LLVM_TOOL_VERSION "${_clang_version}")
 endif()
 
-if(NOT DEFINED REACTOS_CLANG_GCC_TOOLCHAIN OR NOT REACTOS_CLANG_GCC_TOOLCHAIN)
-    _detect_rosbe_gcc_toolchain(_rosbe_gcc_toolchain)
-    if(_rosbe_gcc_toolchain)
-        set(REACTOS_CLANG_GCC_TOOLCHAIN "${_rosbe_gcc_toolchain}" CACHE PATH
-            "Auxiliary MinGW-w64 GCC toolchain root used to provide runtime libraries for Clang builds")
-    endif()
-endif()
-
 if(NOT DEFINED CMAKE_SYSROOT OR NOT CMAKE_SYSROOT)
     if(REACTOS_CLANG_LLVM_MINGW_ROOT AND EXISTS "${REACTOS_CLANG_LLVM_MINGW_ROOT}/${triplet}/lib")
         set(CMAKE_SYSROOT "${REACTOS_CLANG_LLVM_MINGW_ROOT}")
     elseif(DEFINED ENV{_ROSBE_ROSSCRIPTDIR})
         set(CMAKE_SYSROOT "$ENV{_ROSBE_ROSSCRIPTDIR}/$ENV{ROS_ARCH}")
-    elseif(REACTOS_CLANG_GCC_TOOLCHAIN AND EXISTS "${REACTOS_CLANG_GCC_TOOLCHAIN}/${triplet}/sysroot")
-        set(CMAKE_SYSROOT "${REACTOS_CLANG_GCC_TOOLCHAIN}/${triplet}/sysroot")
     endif()
 endif()
 
@@ -166,15 +155,7 @@ set(CMAKE_CXX_COMPILER_TARGET ${triplet})
 set(CMAKE_ASM_COMPILER_TARGET ${triplet})
 set(CMAKE_ASM_COMPILER_ID Clang)
 
-set(_mingw_tool_bin_hints)
-if(REACTOS_CLANG_GCC_TOOLCHAIN)
-    list(APPEND _mingw_tool_bin_hints "${REACTOS_CLANG_GCC_TOOLCHAIN}/bin")
-endif()
-
-find_program(CMAKE_MC_COMPILER NAMES ${triplet}-windmc native-windmc windmc HINTS ${_mingw_tool_bin_hints} ${_llvm_tool_bin_hints})
-if(NOT CMAKE_MC_COMPILER)
-    message(FATAL_ERROR "${triplet}-windmc or native-windmc not found")
-endif()
+set(CMAKE_MC_COMPILER native-windmc)
 require_llvm_program(CMAKE_RC_COMPILER llvm-windres)
 require_llvm_program(CMAKE_AR llvm-ar)
 require_llvm_program(CMAKE_DLLTOOL llvm-dlltool)
