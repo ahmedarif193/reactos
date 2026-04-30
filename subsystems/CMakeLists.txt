@@ -1,4 +1,6 @@
 
 add_subdirectory(csr)
-add_subdirectory(mvdm)
+if(NOT CMAKE_C_COMPILER_ID STREQUAL "Clang")
+    add_subdirectory(mvdm)
+endif()
 add_subdirectory(win)
