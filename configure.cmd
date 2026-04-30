@@ -160,9 +160,8 @@ if not defined ROS_ARCH if not defined VCINSTALLDIR (
             echo. & echo Error: /clang requested but clang.exe is missing under !_ROSBE_LLVM_BIN!.
             goto quit
         )
-        REM Clang first; keep mingw-gcc on PATH for windres / windmc / sysroot.
-        set "PATH=!_ROSBE_LLVM_BIN!;!_ROSBE_GCC_BIN!;!_ROSBE_CMAKE_BIN!;!_ROSBE_NINJA_DIR!;!_ROSBE_WFB_DIR!;!PATH!"
-        set "ROSBE_CMAKE_EXTRA=!ROSBE_CMAKE_EXTRA! -DREACTOS_CLANG_LLVM_MINGW_ROOT:PATH=!ROSBE_ROOT!\llvm-mingw -DREACTOS_CLANG_GCC_TOOLCHAIN:PATH=!ROSBE_ROOT!\mingw-gcc\!_ROSBE_TRIPLET! -DCMAKE_MC_COMPILER:FILEPATH=!_ROSBE_GCC_BIN!\!_ROSBE_TRIPLET!-windmc.exe"
+        set "PATH=!_ROSBE_LLVM_BIN!;!_ROSBE_CMAKE_BIN!;!_ROSBE_NINJA_DIR!;!_ROSBE_WFB_DIR!;!PATH!"
+        set "ROSBE_CMAKE_EXTRA=!ROSBE_CMAKE_EXTRA! -DREACTOS_CLANG_LLVM_MINGW_ROOT:PATH=!ROSBE_ROOT!\llvm-mingw"
         echo Auto-detected RosBE at !ROSBE_ROOT! ^(/clang: llvm-mingw, !_ARCH!^)
     ) else (
         set "PATH=!_ROSBE_GCC_BIN!;!_ROSBE_CMAKE_BIN!;!_ROSBE_NINJA_DIR!;!_ROSBE_WFB_DIR!;!_ROSBE_LLVM_BIN!;!PATH!"
