@@ -175,7 +175,7 @@ add_user_profile_dirs(${CMAKE_CURRENT_BINARY_DIR}/livecd.cmake.lst "Profiles" "D
 set(_livecd_stage_dir  ${CMAKE_CURRENT_BINARY_DIR}/livecd_wim_stage)
 set(_livecd_boot_wim   ${CMAKE_CURRENT_BINARY_DIR}/boot.wim)
 set(_livecd_wim_lst    ${CMAKE_CURRENT_BINARY_DIR}/livecd_wim.$<CONFIG>.lst)
-set(_livecd_ini_src    ${REACTOS_SOURCE_DIR}/boot/bootdata/livecd.ini)
+set(_livecd_ini_src    ${REACTOS_SOURCE_DIR}/boot/bootdata/wim/livecd_wim.ini)
 set(_livecd_wim_ini    ${CMAKE_CURRENT_BINARY_DIR}/livecd_wim.freeldr.ini)
 set(_livecd_wim_script ${REACTOS_SOURCE_DIR}/boot/bootdata/wim/make_livecd_wim.cmake)
 
