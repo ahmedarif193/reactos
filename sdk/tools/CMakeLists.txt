@@ -2,6 +2,11 @@
 function(add_host_tool _tool)
     add_executable(${_tool} ${ARGN})
     set_target_properties(${_tool} PROPERTIES RUNTIME_OUTPUT_DIRECTORY ${TOOLS_FOLDER})
+    if(CMAKE_HOST_WIN32 AND CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
+        target_link_options(${_tool} PRIVATE
+            "$<$<LINK_LANGUAGE:CXX>:-static-libstdc++>"
+            "$<$<LINK_LANGUAGE:CXX>:-static-libgcc>")
+    endif()
 endfunction()
 
 function(add_host_module _module)

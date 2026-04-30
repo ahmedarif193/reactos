@@ -247,7 +247,7 @@ public:
 
         wchar_t c = get_wchar_t();
 
-        while (!inputfile.eof())
+        while (c != wchar_t(-1))
         {
             buffer[0] = c & 0xff;
             buffer[1] = (c >> 8) & 0xff; // create utf16-le char

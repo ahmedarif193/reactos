@@ -11,6 +11,7 @@
 #include <list>
 #include <vector>
 #include <map>
+#include <cstring>
 
 #include <typedefs.h>
 #include <guiddef.h>
@@ -23,6 +24,60 @@ namespace tinyxml2
 class XMLHandle;
 }
 using tinyxml2::XMLHandle;
+
+#if defined(_LIBCPP_VERSION)
+namespace std
+{
+template<>
+struct char_traits<unsigned short>
+{
+    typedef unsigned short char_type;
+    typedef int            int_type;
+    typedef streamoff      off_type;
+    typedef streampos      pos_type;
+    typedef mbstate_t      state_type;
+
+    static void assign(char_type& c1, const char_type& c2) noexcept { c1 = c2; }
+    static bool eq(char_type c1, char_type c2) noexcept { return c1 == c2; }
+    static bool lt(char_type c1, char_type c2) noexcept { return c1 < c2; }
+
+    static int compare(const char_type* s1, const char_type* s2, size_t n)
+    {
+        for (; n; --n, ++s1, ++s2) {
+            if (lt(*s1, *s2)) return -1;
+            if (lt(*s2, *s1)) return 1;
+        }
+        return 0;
+    }
+    static size_t length(const char_type* s)
+    {
+        size_t l = 0; while (*s++) ++l; return l;
+    }
+    static const char_type* find(const char_type* s, size_t n, const char_type& a)
+    {
+        for (; n; --n, ++s) if (eq(*s, a)) return s;
+        return nullptr;
+    }
+    static char_type* move(char_type* s1, const char_type* s2, size_t n)
+    {
+        return (char_type*)memmove(s1, s2, n * sizeof(char_type));
+    }
+    static char_type* copy(char_type* s1, const char_type* s2, size_t n)
+    {
+        return (char_type*)memcpy(s1, s2, n * sizeof(char_type));
+    }
+    static char_type* assign(char_type* s, size_t n, char_type a)
+    {
+        for (char_type* p = s; n; --n, ++p) *p = a; return s;
+    }
+    static constexpr int_type  not_eof(int_type c) noexcept { return eq_int_type(c, eof()) ? 0 : c; }
+    static constexpr char_type to_char_type(int_type c) noexcept { return (char_type)c; }
+    static constexpr int_type  to_int_type(char_type c) noexcept { return (int_type)c; }
+    static constexpr bool      eq_int_type(int_type c1, int_type c2) noexcept { return c1 == c2; }
+    static constexpr int_type  eof() noexcept { return -1; }
+};
+}
+#endif
 
 typedef std::basic_string<WCHAR> sdbstring;
 
