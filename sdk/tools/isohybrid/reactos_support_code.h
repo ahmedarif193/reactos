@@ -38,7 +38,7 @@ int fsync(int fd);
 int getppid(void);
 #endif
 
-#ifdef _MSC_VER
+#ifdef _WIN32
 #define fseeko _fseeki64
 #define ftruncate _chsize
 #endif
