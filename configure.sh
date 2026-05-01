@@ -2,7 +2,40 @@
 
 REACTOS_SOURCE_DIR=$(cd "$(dirname "$0")" && pwd)
 
-ROSBE_ROOT="$HOME/.local/opt/rosbe"
+# RosBE installation precedence:
+#   1. ROSBE_DOCKER_ACTIVE=1 (set by `rosbe enable` from the docker bootstrap):
+#      use the rosbe-builder container, paths at /opt/rosbe/*. The output
+#      dir gets a "-docker" suffix as a reminder that this build tree only
+#      works in an `rosbe enable`-d shell.
+#   2. ~/.local/opt/rosbe (the host-installed bootstrap):
+#      use local toolchain, validate -x as before.
+#   3. Neither: print install instructions and exit.
+ROSBE_OUTPUT_SUFFIX=""
+if [ "${ROSBE_DOCKER_ACTIVE:-0}" = "1" ]; then
+	ROSBE_ROOT="/opt/rosbe"
+	ROSBE_SKIP_HOST_CHECK=1
+	ROSBE_OUTPUT_SUFFIX="-docker"
+elif [ -d "$HOME/.local/opt/rosbe/llvm-mingw" ] || [ -d "$HOME/.local/opt/rosbe/mingw-gcc" ]; then
+	ROSBE_ROOT="$HOME/.local/opt/rosbe"
+	ROSBE_SKIP_HOST_CHECK=0
+else
+	cat >&2 <<'NO_ROSBE'
+configure.sh: no RosBE installation found.
+
+Install one of:
+
+  - Local RosBE (compiles run on the host):
+      curl -fsSL https://raw.githubusercontent.com/ahmedarif193/winget-rosbe/main/rosbe-linux-bootstrap.sh | sh
+
+  - Docker RosBE (compiles run in a rootless container):
+      curl -fsSL https://raw.githubusercontent.com/ahmedarif193/winget-rosbe/main/rosbe-linux-docker-bootstrap.sh | sh
+      # then open a new shell and:
+      rosbe enable
+
+Then re-run configure.sh.
+NO_ROSBE
+	exit 1
+fi
 ROSBE_LLVM_ROOT="$ROSBE_ROOT/llvm-mingw"
 ROSBE_GCC_ROOT="$ROSBE_ROOT/mingw-gcc"
 
@@ -86,6 +119,11 @@ gcc_triplet_for_arch() {
 target_windmc_for_arch() {
 	case "$1" in
 		amd64|i386)
+			# In container mode the binary lives in the image; skip the host -x test.
+			if [ "$ROSBE_SKIP_HOST_CHECK" = "1" ]; then
+				echo "$GCC_TOOLCHAIN_ROOT/bin/$GCC_TRIPLET-windmc"
+				return
+			fi
 			if [ -x "$GCC_TOOLCHAIN_ROOT/bin/$GCC_TRIPLET-windmc" ]; then
 				echo "$GCC_TOOLCHAIN_ROOT/bin/$GCC_TRIPLET-windmc"
 				return
@@ -97,6 +135,10 @@ target_windmc_for_arch() {
 }
 
 host_windmc() {
+	if [ "$ROSBE_SKIP_HOST_CHECK" = "1" ]; then
+		echo "$ROSBE_GCC_ROOT/x86_64-w64-mingw32/bin/x86_64-w64-mingw32-windmc"
+		return
+	fi
 	for candidate in \
 		"$ROSBE_GCC_ROOT/x86_64-w64-mingw32/bin/x86_64-w64-mingw32-windmc" \
 		"$ROSBE_GCC_ROOT/i686-w64-mingw32/bin/i686-w64-mingw32-windmc"
@@ -178,8 +220,10 @@ if [ "$USE_CLANG" -eq 1 ]; then
 	BUILD_ENVIRONMENT=Clang
 	TOOLCHAIN_FILE=toolchain-clang.cmake
 
-	[ -x "$ROSBE_LLVM_ROOT/bin/clang" ] || fail "missing RosBE LLVM toolchain at $ROSBE_LLVM_ROOT"
-	[ -x "$ROSBE_LLVM_ROOT/bin/clang++" ] || fail "missing RosBE LLVM clang++ at $ROSBE_LLVM_ROOT/bin"
+	if [ "$ROSBE_SKIP_HOST_CHECK" != "1" ]; then
+		[ -x "$ROSBE_LLVM_ROOT/bin/clang" ] || fail "missing RosBE LLVM toolchain at $ROSBE_LLVM_ROOT"
+		[ -x "$ROSBE_LLVM_ROOT/bin/clang++" ] || fail "missing RosBE LLVM clang++ at $ROSBE_LLVM_ROOT/bin"
+	fi
 	MC_COMPILER=$(target_windmc_for_arch "$ARCH" || host_windmc) || fail "missing RosBE windmc in $ROSBE_GCC_ROOT"
 
 	export REACTOS_CLANG_LLVM_MINGW_ROOT="$ROSBE_LLVM_ROOT"
@@ -188,7 +232,7 @@ if [ "$USE_CLANG" -eq 1 ]; then
 
 	ROS_CMAKEOPTS=$ROS_CMAKEOPTS" -DREACTOS_CLANG_LLVM_MINGW_ROOT:PATH=$ROSBE_LLVM_ROOT"
 	ROS_CMAKEOPTS=$ROS_CMAKEOPTS" -DCMAKE_MC_COMPILER:FILEPATH=$MC_COMPILER"
-	if [ -d "$GCC_TOOLCHAIN_ROOT/bin" ]; then
+	if [ "$ROSBE_SKIP_HOST_CHECK" = "1" ] || [ -d "$GCC_TOOLCHAIN_ROOT/bin" ]; then
 		export PATH="$GCC_TOOLCHAIN_ROOT/bin:$PATH"
 		ROS_CMAKEOPTS=$ROS_CMAKEOPTS" -DREACTOS_CLANG_GCC_TOOLCHAIN:PATH=$GCC_TOOLCHAIN_ROOT"
 	fi
@@ -196,21 +240,26 @@ else
 	BUILD_ENVIRONMENT=GCC
 	TOOLCHAIN_FILE=toolchain-gcc.cmake
 
-	[ -x "$GCC_TOOLCHAIN_ROOT/bin/$GCC_TRIPLET-gcc" ] || fail "missing RosBE GCC toolchain for $ARCH at $GCC_TOOLCHAIN_ROOT"
-	[ -x "$GCC_TOOLCHAIN_ROOT/bin/$GCC_TRIPLET-g++" ] || fail "missing RosBE GCC g++ for $ARCH at $GCC_TOOLCHAIN_ROOT/bin"
+	if [ "$ROSBE_SKIP_HOST_CHECK" != "1" ]; then
+		[ -x "$GCC_TOOLCHAIN_ROOT/bin/$GCC_TRIPLET-gcc" ] || fail "missing RosBE GCC toolchain for $ARCH at $GCC_TOOLCHAIN_ROOT"
+		[ -x "$GCC_TOOLCHAIN_ROOT/bin/$GCC_TRIPLET-g++" ] || fail "missing RosBE GCC g++ for $ARCH at $GCC_TOOLCHAIN_ROOT/bin"
+	fi
 	MC_COMPILER=$(target_windmc_for_arch "$ARCH") || fail "missing RosBE windmc for $ARCH at $GCC_TOOLCHAIN_ROOT/bin"
 
 	export PATH="$GCC_TOOLCHAIN_ROOT/bin:$PATH"
 	ROS_CMAKEOPTS=$ROS_CMAKEOPTS" -DCMAKE_MC_COMPILER:FILEPATH=$MC_COMPILER"
 fi
 
-REACTOS_OUTPUT_PATH=output-$BUILD_ENVIRONMENT-$ARCH-$BUILD_TYPE_SUFFIX
+REACTOS_OUTPUT_PATH=output-$BUILD_ENVIRONMENT-$ARCH-$BUILD_TYPE_SUFFIX$ROSBE_OUTPUT_SUFFIX
 BUILD_HINT_PATH="$REACTOS_SOURCE_DIR/$REACTOS_OUTPUT_PATH"
 
 echo "Configuring a new ReactOS build on:"
 uname -srvpio
 echo
 echo "RosBE root:    $ROSBE_ROOT"
+if [ "$ROSBE_SKIP_HOST_CHECK" = "1" ]; then
+	echo "RosBE mode:    container (${ROSBE_DOCKER_IMAGE:-rosbe-builder})"
+fi
 echo "Compiler:      $BUILD_ENVIRONMENT"
 echo "Architecture:  $ARCH"
 echo "Build type:    $BUILD_TYPE"
