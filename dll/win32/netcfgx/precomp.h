@@ -25,6 +25,7 @@
 #include <cfgmgr32.h>
 
 #include <netcfgx_undoc.h>
+#include <netcfgn_undoc.h>
 
 #include <wine/debug.h>
 

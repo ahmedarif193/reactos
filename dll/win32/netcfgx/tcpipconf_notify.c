@@ -100,6 +100,7 @@ typedef struct
     const INetCfgComponentControl *lpVtbl;
     const INetCfgComponentPropertyUi *lpVtblCompPropertyUi;
     const INetCfgComponentSetup *lpVtblCompSetup;
+    const ITcpipProperties *lpVtblTcpipProperties;
     LONG ref;
     IUnknown *pUnknown;
     INetCfg *pNCfg;
@@ -157,6 +158,11 @@ static __inline LPTcpipConfNotifyImpl impl_from_INetCfgComponentPropertyUi(INetC
 static __inline LPTcpipConfNotifyImpl impl_from_INetCfgComponentSetup(INetCfgComponentSetup *iface)
 {
     return (TcpipConfNotifyImpl*)((char *)iface - FIELD_OFFSET(TcpipConfNotifyImpl, lpVtblCompSetup));
+}
+
+static __inline LPTcpipConfNotifyImpl impl_from_ITcpipProperties(ITcpipProperties *iface)
+{
+    return (TcpipConfNotifyImpl*)((char *)iface - FIELD_OFFSET(TcpipConfNotifyImpl, lpVtblTcpipProperties));
 }
 
 INT GetSelectedItem(HWND hDlgCtrl);
@@ -3602,6 +3608,12 @@ INetCfgComponentControl_fnQueryInterface(
         INetCfgComponentControl_AddRef(iface);
         return S_OK;
     }
+    else if (IsEqualIID(iid, &IID_ITcpipProperties))
+    {
+        *ppvObj = (LPVOID*)&This->lpVtblTcpipProperties;
+        INetCfgComponentControl_AddRef(iface);
+        return S_OK;
+    }
 
     return E_NOINTERFACE;
 }
@@ -4185,6 +4197,63 @@ static const INetCfgComponentSetupVtbl vt_NetCfgComponentSetup =
     INetCfgComponentSetup_fnRemoving
 };
 
+
+/***************************************************************
+ * ITcpipProperties interface
+ */
+
+HRESULT
+WINAPI
+ITcpipProperties_fnQueryInterface(
+    ITcpipProperties *iface,
+    REFIID iid,
+    LPVOID *ppvObj)
+{
+    TRACE("ITcpipProperties_fnQueryInterface()\n");
+    TcpipConfNotifyImpl *This = impl_from_ITcpipProperties(iface);
+    return INetCfgComponentControl_QueryInterface((INetCfgComponentControl*)This, iid, ppvObj);
+}
+
+ULONG
+WINAPI
+ITcpipProperties_fnAddRef(
+    ITcpipProperties *iface)
+{
+    TRACE("ITcpipProperties_fnAddRef()\n");
+    TcpipConfNotifyImpl *This = impl_from_ITcpipProperties(iface);
+    return INetCfgComponentControl_AddRef((INetCfgComponentControl*)This);
+}
+
+ULONG
+WINAPI
+ITcpipProperties_fnRelease(
+    ITcpipProperties *iface)
+{
+    TRACE("ITcpipProperties_fnRelease()\n");
+    TcpipConfNotifyImpl *This = impl_from_ITcpipProperties(iface);
+    return INetCfgComponentControl_Release((INetCfgComponentControl*)This);
+}
+
+HRESULT
+WINAPI
+ITcpipProperties_fnUnknown1(
+    ITcpipProperties *iface,
+    DWORD dwParam1,
+    DWORD dwParam2)
+{
+    ERR("ITcpipProperties_fnUnknown1(0x%lx 0x%lx)\n", dwParam1, dwParam2);
+//    TcpipConfNotifyImpl *This = impl_from_ITcpipProperties(iface);
+    return S_OK;
+}
+
+static const ITcpipPropertiesVtbl vt_TcpipProperties =
+{
+    ITcpipProperties_fnQueryInterface,
+    ITcpipProperties_fnAddRef,
+    ITcpipProperties_fnRelease,
+    ITcpipProperties_fnUnknown1,
+};
+
 HRESULT
 WINAPI
 TcpipConfigNotify_Constructor (IUnknown * pUnkOuter, REFIID riid, LPVOID * ppv)
@@ -4202,6 +4271,7 @@ TcpipConfigNotify_Constructor (IUnknown * pUnkOuter, REFIID riid, LPVOID * ppv)
     This->lpVtbl = (const INetCfgComponentControl*)&vt_NetCfgComponentControl;
     This->lpVtblCompPropertyUi = (const INetCfgComponentPropertyUi*)&vt_NetCfgComponentPropertyUi;
     This->lpVtblCompSetup = (const INetCfgComponentSetup*)&vt_NetCfgComponentSetup;
+    This->lpVtblTcpipProperties = (const ITcpipProperties*)&vt_TcpipProperties;
     This->pNCfg = NULL;
     This->pUnknown = NULL;
     This->pNComp = NULL;

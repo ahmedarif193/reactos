@@ -223,10 +223,27 @@ WINAPI
 INetCfgComponentPrivate_fnUnknown1(
     INetCfgComponentPrivate *iface,
     REFIID iid,
-    DWORD dwParam2)
+    LPVOID *ppvObj)
 {
-//    INetCfgComponentImpl *This = impl_from_INetCfgComponentPrivate(iface);
-    ERR("INetCfgComponentPrivate_fnUnknown1(%p %s %lx)\n", iface, wine_dbgstr_guid(iid), dwParam2);
+    HRESULT hr;
+
+    TRACE("INetCfgComponentPrivate_fnUnknown1(%p %s %p)\n", iface, wine_dbgstr_guid(iid), ppvObj);
+
+    INetCfgComponentImpl *This = impl_from_INetCfgComponentPrivate(iface);
+    hr = CreateNotifyObject(This, (INetCfgComponent*)This);
+    if (FAILED(hr))
+        return hr;
+
+    TRACE("This->pItem %p\n", This->pItem);
+    if (This->pItem)
+    {
+        TRACE("This->pItem->pControl %p\n", This->pItem->pControl);
+        if (This->pItem->pControl)
+        {
+            return INetCfgComponentControl_QueryInterface(This->pItem->pControl, iid, ppvObj);
+        }
+    }
+
     return S_OK;
 }
 

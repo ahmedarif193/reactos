@@ -448,6 +448,27 @@ IUnknown_QueryServiceForWebBrowserApp(
     _In_ REFGUID riid,
     _Out_ LPVOID *lppOut);
 
+typedef INT_PTR (CALLBACK *SHDIALOGPROC)(
+    PVOID  pThis,
+    HWND   hWnd,
+    UINT   uMsg,
+    WPARAM wParam,
+    LPARAM lParam);
+
+typedef struct tagSHDIALOG
+{
+    SHDIALOGPROC fn;
+    PVOID pThis;
+} SHDIALOG, *PSHDIALOG, *LPSHDIALOG;
+
+INT_PTR WINAPI
+SHDialogBox(
+    _In_opt_ HINSTANCE hInstance,
+    _In_ PCSTR lpTemplateName,
+    _In_opt_ HWND hWndParent,
+    _In_opt_ SHDIALOGPROC fn,
+    _In_opt_ PVOID pThis);
+
 /*****************************************************************************
  * IAssociationElementOld interface
  *
