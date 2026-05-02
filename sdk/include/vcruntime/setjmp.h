@@ -196,7 +196,7 @@ typedef struct __JUMP_BUFFER {
 #define _setjmpex __intrinsic_setjmpex
 #endif
 
-#ifdef USE_MINGW_SETJMP_TWO_ARGS
+#if defined(USE_MINGW_SETJMP_TWO_ARGS) && (defined(__x86_64) || defined(_X86_))
 #if defined(__x86_64)
 # define mingw_getsp() \
   ({ void* value; __asm__ __volatile__("movq %%rsp, %[value]" : [value] "=r" (value)); value; })

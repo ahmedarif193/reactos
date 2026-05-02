@@ -6,6 +6,8 @@
  * PROGRAMMERS:     ReactOS Portable Systems Group
  */
 
+#pragma once
+
 //
 // ACPI BIOS Registry Component Configuration Data
 //
@@ -18,6 +20,7 @@ typedef struct _ACPI_E820_ENTRY
 
 typedef struct _ACPI_BIOS_MULTI_NODE
 {
+    PHYSICAL_ADDRESS RsdpAddress;
     PHYSICAL_ADDRESS RsdtAddress;
     ULONGLONG Count;
     ACPI_E820_ENTRY E820Entry[1];
@@ -36,10 +39,13 @@ typedef struct _ACPI_BIOS_MULTI_NODE
 #define PSDT_SIGNATURE 0x54445350               // "PSDT"
 #define SBST_SIGNATURE 0x54534253               // "SBST"
 #define DBGP_SIGNATURE 0x50474244               // "DBGP"
+#define MCFG_SIGNATURE 'GFCM'                   // "MCFG"
+#define HPET_SIGNATURE 0x54455048               // "HPET"
 #define XSDT_SIGNATURE 'TDSX'
 #define BOOT_SIGNATURE 'TOOB'
 #define SRAT_SIGNATURE 'TARS'
 #define WDRT_SIGNATURE 'TRDW'
+#define WAET_SIGNATURE 0x54454157               // "WAET"
 #define BGRT_SIGNATURE  0x54524742      	// "BGRT"
 
 //
@@ -70,7 +76,11 @@ typedef struct _GEN_ADDR
     UCHAR AddressSpaceID;
     UCHAR BitWidth;
     UCHAR BitOffset;
-    UCHAR Reserved;
+    union
+    {
+        UCHAR AccessSize;
+        UCHAR Reserved;
+    } DUMMYUNIONNAME;
     PHYSICAL_ADDRESS Address;
 } GEN_ADDR, *PGEN_ADDR;
 

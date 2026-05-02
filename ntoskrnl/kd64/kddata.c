@@ -19,7 +19,7 @@ VOID NTAPI RtlpBreakWithStatusInstruction(VOID);
 //
 // Apply the KIPCR WDK workaround for x86 and AMD64
 //
-#if defined(_M_IX86) || defined(_M_AMD64)
+#if defined(_M_IX86) || defined(_M_AMD64) || defined(_M_ARM64)
 #define KPCR KIPCR
 #endif
 
@@ -42,6 +42,16 @@ VOID NTAPI RtlpBreakWithStatusInstruction(VOID);
 #define KPCR_STACK_LIMIT_OFFSET        0
 #define KPRCB_PCR_PAGE_OFFSET          0
 #define CBSTACK_FRAME_POINTER          Rbp
+
+#elif defined(_M_ARM64)
+
+#define KPCR_SELF_PCR_OFFSET           FIELD_OFFSET(KIPCR, Self)
+#define KPCR_CURRENT_PRCB_OFFSET       FIELD_OFFSET(KIPCR, CurrentPrcb)
+#define KPCR_CONTAINED_PRCB_OFFSET     FIELD_OFFSET(KIPCR, Prcb)
+#define KPCR_INITIAL_STACK_OFFSET      0
+#define KPCR_STACK_LIMIT_OFFSET        0
+#define KPRCB_PCR_PAGE_OFFSET          0
+#define CBSTACK_FRAME_POINTER          Fp
 
 #elif defined(_M_ARM)
 

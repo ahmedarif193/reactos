@@ -1833,6 +1833,9 @@ typedef struct _KTHREAD
 #endif // ]
 #if defined(__REACTOS__) && defined(_M_AMD64) // HACK!
     XSAVE_FORMAT* StateSaveArea;
+#elif defined(__REACTOS__) && defined(_M_ARM64)
+    PVOID StateSaveArea;
+    PVOID Arm64FpState;
 #endif
 } KTHREAD;
 
@@ -1862,6 +1865,9 @@ typedef struct _KTHREAD
     ULONG ExpectedRunTime;
     PVOID KernelStack;
     XSAVE_FORMAT* StateSaveArea;
+#if defined(__REACTOS__) && defined(_M_ARM64)
+    PVOID Arm64FpState;
+#endif
     struct _KSCHEDULING_GROUP* SchedulingGroup;
     KWAIT_STATUS_REGISTER WaitRegister;
     BOOLEAN Running;
@@ -2271,7 +2277,10 @@ typedef struct _KPROCESS
 {
     DISPATCHER_HEADER Header;
     LIST_ENTRY ProfileListHead;
-#if (NTDDI_VERSION >= NTDDI_LONGHORN)
+#if defined(_M_ARM64) || defined(__aarch64__)
+    ULONG_PTR DirectoryTableBase[2];
+    ULONG_PTR Unused0;
+#elif (NTDDI_VERSION >= NTDDI_LONGHORN)
     ULONG_PTR DirectoryTableBase;
     ULONG_PTR Unused0;
 #else

@@ -15,6 +15,8 @@ const WCHAR wszCurrentEnvironment[] =
     L"Windows x64";
 #elif defined(_ARM_)
     L"Windows ARM";
+#elif defined(_M_ARM64) || defined(__aarch64__)
+    L"Windows ARM64";
 #else
     #error Unsupported architecture
 #endif
