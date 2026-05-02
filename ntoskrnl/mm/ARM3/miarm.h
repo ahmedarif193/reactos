@@ -150,6 +150,12 @@ C_ASSERT(SYSTEM_PD_SIZE == PAGE_SIZE);
 #define PTE_DISABLE_CACHE       0x10
 #define PTE_WRITECOMBINED_CACHE 0x10
 #define PTE_PROTECT_MASK        0x610
+#elif defined(_M_ARM64)
+/* ARM64 PTE definitions are supplied by ntoskrnl/arch/arm64/include/mm.h. */
+#include <arch/arm64/include/arm3_compat.h>
+#ifndef PTE_PROTECT_MASK
+#error Missing ARM64 PTE definitions
+#endif
 #else
 #error Define these please!
 #endif
@@ -858,7 +864,7 @@ MI_MAKE_HARDWARE_PTE_USER(IN PMMPTE NewPte,
     NewPte->u.Long |= MmProtectToPteMask[ProtectionMask];
 }
 
-#ifndef _M_AMD64
+#if !defined(_M_AMD64) && !defined(_M_ARM64)
 //
 // Builds a Prototype PTE for the address of the PTE
 //
@@ -953,6 +959,7 @@ MI_MAKE_TRANSITION_PTE(_Out_ PMMPTE NewPte,
 // Returns if the page is physically resident (ie: a large page)
 // FIXFIX: CISC/x86 only?
 //
+#ifndef MI_HAS_ARCH_IS_PHYSICAL_ADDRESS
 FORCEINLINE
 BOOLEAN
 MI_IS_PHYSICAL_ADDRESS(IN PVOID Address)
@@ -963,6 +970,7 @@ MI_IS_PHYSICAL_ADDRESS(IN PVOID Address)
     PointerPde = MiAddressToPde(Address);
     return ((PointerPde->u.Hard.LargePage) && (PointerPde->u.Hard.Valid));
 }
+#endif
 
 //
 // Writes a valid PTE

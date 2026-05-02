@@ -194,6 +194,7 @@ __longjmp_noframe(
     int _Value);
 #endif
 
+#if defined(_M_IX86) || defined(_M_AMD64)
 __declspec(noreturn)
 void
 longjmp(
@@ -206,10 +207,9 @@ longjmp(
     __longjmp_nounwind(JumpBuffer, (_Value == 0) ? 1 : _Value);
 #elif defined(_M_AMD64)
     __longjmp_noframe(JumpBuffer, (_Value == 0) ? 1 : _Value);
-#else
-#error Unsupported UEFI FreeType longjmp target architecture
 #endif
 }
+#endif
 
 __declspec(noreturn)
 void

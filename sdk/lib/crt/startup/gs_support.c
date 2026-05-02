@@ -38,6 +38,10 @@ typedef union
 } FT;
 
 #ifndef _MSC_VER
+#if defined(_WIN64) && !defined(_M_ARM64) && !defined(__aarch64__)
+NTSYSAPI PRUNTIME_FUNCTION WINAPI RtlLookupFunctionEntry(ULONG_PTR, ULONG_PTR*, PUNWIND_HISTORY_TABLE);
+NTSYSAPI PEXCEPTION_ROUTINE WINAPI RtlVirtualUnwind(ULONG, ULONG_PTR, ULONG_PTR, PRUNTIME_FUNCTION, CONTEXT*, void**, ULONG_PTR*, PKNONVOLATILE_CONTEXT_POINTERS);
+#endif
 static EXCEPTION_RECORD GS_ExceptionRecord;
 static CONTEXT GS_ContextRecord;
 
@@ -110,6 +114,7 @@ __report_gsfailure (ULONG_PTR StackCookie)
 {
   volatile UINT_PTR cookie[2] __MINGW_ATTRIB_UNUSED;
 #ifdef _WIN64
+#if !defined(_M_ARM64) && !defined(__aarch64__)
   ULONG64 controlPC, imgBase, establisherFrame;
   PRUNTIME_FUNCTION fctEntry;
   PVOID hndData;
@@ -123,11 +128,17 @@ __report_gsfailure (ULONG_PTR StackCookie)
 			&GS_ContextRecord, &hndData, &establisherFrame, NULL);
     }
   else
+#endif /* !_M_ARM64 */
 #endif /* _WIN64 */
     {
 #ifdef _WIN64
+#if defined(_M_ARM64) || defined(__aarch64__)
+      GS_ContextRecord.Pc = (ULONGLONG) _ReturnAddress();
+      GS_ContextRecord.Sp = (ULONGLONG) _AddressOfReturnAddress() + 8;
+#else
       GS_ContextRecord.Rip = (ULONGLONG) _ReturnAddress();
       GS_ContextRecord.Rsp = (ULONGLONG) _AddressOfReturnAddress() + 8;
+#endif
 #else
       GS_ContextRecord.Eip = (DWORD) _ReturnAddress();
       GS_ContextRecord.Esp = (DWORD) _AddressOfReturnAddress() + 4;
@@ -135,8 +146,13 @@ __report_gsfailure (ULONG_PTR StackCookie)
     }
 
 #ifdef _WIN64
+#if defined(_M_ARM64) || defined(__aarch64__)
+  GS_ExceptionRecord.ExceptionAddress = (PVOID) GS_ContextRecord.Pc;
+  GS_ContextRecord.X0 = StackCookie;
+#else
   GS_ExceptionRecord.ExceptionAddress = (PVOID) GS_ContextRecord.Rip;
   GS_ContextRecord.Rcx = StackCookie;
+#endif
 #else
   GS_ExceptionRecord.ExceptionAddress = (PVOID) GS_ContextRecord.Eip;
   GS_ContextRecord.Ecx = StackCookie;

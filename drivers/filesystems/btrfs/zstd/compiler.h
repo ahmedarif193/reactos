@@ -111,7 +111,9 @@
 #  define PREFETCH_L2(ptr)  (void)(ptr)  /* disabled */
 #else
 #  if defined(_MSC_VER) && (defined(_M_X64) || defined(_M_I86))  /* _mm_prefetch() is not defined outside of x86/x64 */
-#    include <mmintrin.h>   /* https://learn.microsoft.com/fr-fr/previous-versions/visualstudio/visual-studio-2008/84szxsww(v=vs.90) */
+#if !defined(_M_ARM64) && !defined(__aarch64__)
+#    include <mmintrin.h>
+#endif   /* https://learn.microsoft.com/fr-fr/previous-versions/visualstudio/visual-studio-2008/84szxsww(v=vs.90) */
 #    define PREFETCH_L1(ptr)  _mm_prefetch((const char*)(ptr), _MM_HINT_T0)
 #    define PREFETCH_L2(ptr)  _mm_prefetch((const char*)(ptr), _MM_HINT_T1)
 #    elif defined(__aarch64__)
@@ -164,7 +166,9 @@
 
 /* disable warnings */
 #ifdef _MSC_VER    /* Visual Studio */
-#  include <intrin.h>                    /* For Visual 2005 */
+#if !defined(_M_ARM64) && !defined(__aarch64__)
+#  include <intrin.h>
+#endif                    /* For Visual 2005 */
 #  pragma warning(disable : 4100)        /* disable: C4100: unreferenced formal parameter */
 #  pragma warning(disable : 4127)        /* disable: C4127: conditional expression is constant */
 #  pragma warning(disable : 4204)        /* disable: C4204: non-constant aggregate initializer */

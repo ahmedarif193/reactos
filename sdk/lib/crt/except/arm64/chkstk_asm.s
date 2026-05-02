@@ -1,19 +1,14 @@
+    .text
+    .align 2
+    .global __chkstk
+__chkstk:
+    ret
 
-/* INCLUDES ******************************************************************/
+    .align 2
+    .global __alloca_probe
+__alloca_probe:
+    ret
 
-/* We need one of these first! */
-/* #include <kxarm64.h> */
-
-/* CODE **********************************************************************/
-    TEXTAREA
-
-    LEAF_ENTRY __chkstk
-    /* TODO: add an assert fail call, as this is unimplemented */
-    LEAF_END __chkstk
-
-    LEAF_ENTRY __alloca_probe
-    /* TODO: add an assert fail call, as this is unimplemented */
-    LEAF_END __alloca_probe
-
-    END
-/* EOF */
+    .section .drectve,"yn"
+    .ascii " -export:__chkstk"
+    .ascii " -export:__alloca_probe"

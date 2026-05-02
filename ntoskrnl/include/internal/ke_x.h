@@ -11,7 +11,7 @@ extern "C"
 {
 #endif
 
-#ifndef _M_ARM
+#if !defined(_M_ARM) && !defined(_M_ARM64)
 FORCEINLINE
 KPROCESSOR_MODE
 KeGetPreviousMode(VOID)

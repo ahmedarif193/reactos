@@ -40,6 +40,8 @@ list(APPEND UEFILDR_ARC_SOURCE
     arch/uefi/uefisetup.c
     arch/uefi/uefiutil.c
     arch/uefi/uefivid.c
+    arch/uefi/uefisym.c
+    arch/uefi/uefibacktrace.c
     arch/vidfb.c
     arch/vgafont.c)
 
@@ -58,7 +60,10 @@ elseif(ARCH STREQUAL "arm")
         arch/arm/debug.c)
     #TBD
 elseif(ARCH STREQUAL "arm64")
-    #TBD
+    list(APPEND UEFILDR_ARC_SOURCE
+        arch/uefi/arm64/early_uart.c)
+    list(APPEND UEFILDR_COMMON_ASM_SOURCE
+        arch/uefi/arm64/uefiasm.S)
 else()
     #TBD
 endif()
@@ -96,6 +101,9 @@ elseif(ARCH STREQUAL "amd64")
 elseif(ARCH STREQUAL "arm")
     list(APPEND FREELDR_NTLDR_SOURCE
         ntldr/arch/arm/winldr.c)
+elseif(ARCH STREQUAL "arm64")
+    list(APPEND FREELDR_NTLDR_SOURCE
+        ntldr/arch/arm64/winldr.c)
 else()
     #TBD
 endif()
@@ -113,7 +121,8 @@ target_link_libraries(uefifreeldr_common setjmp freetype)
 
 target_compile_definitions(uefifreeldr_common PRIVATE _FRLDRLIB_ UEFIBOOT)
 
-if(CMAKE_C_COMPILER_ID STREQUAL "GNU" OR CMAKE_C_COMPILER_ID STREQUAL "Clang")
+if((CMAKE_C_COMPILER_ID STREQUAL "GNU" OR CMAKE_C_COMPILER_ID STREQUAL "Clang") AND
+   (ARCH STREQUAL "i386" OR ARCH STREQUAL "amd64"))
     # Prevent using SSE (no support in freeldr)
     target_compile_options(uefifreeldr_common PUBLIC -mno-sse)
 endif()

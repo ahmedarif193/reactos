@@ -29,6 +29,21 @@ Author:
 
 #ifndef NTOS_MODE_USER
 
+#if defined(_M_ARM64) || defined(__aarch64__)
+typedef struct _HAL_ARM64_TIMER_CONFIG
+{
+    ULONG Vector;
+    BOOLEAN UseVirtual;
+    KINTERRUPT_MODE Mode;
+} HAL_ARM64_TIMER_CONFIG, *PHAL_ARM64_TIMER_CONFIG;
+
+NTHALAPI
+BOOLEAN
+NTAPI
+HalQueryArm64TimerConfig(
+    _Out_ PHAL_ARM64_TIMER_CONFIG Config);
+#endif
+
 //
 // Private HAL Callbacks
 //

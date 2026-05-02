@@ -4,9 +4,9 @@
 @ fastcall -arch=i386 ExAcquireFastMutex(ptr) ntoskrnl.ExiAcquireFastMutex
 @ fastcall -arch=i386 ExReleaseFastMutex(ptr) ntoskrnl.ExiReleaseFastMutex
 @ fastcall -arch=i386 ExTryToAcquireFastMutex(ptr) ntoskrnl.ExiTryToAcquireFastMutex
-@ stdcall -arch=x86_64 ExAcquireFastMutex(ptr) ntoskrnl.ExAcquireFastMutex
-@ stdcall -arch=x86_64 ExReleaseFastMutex(ptr) ntoskrnl.ExReleaseFastMutex
-@ stdcall -arch=x86_64 ExTryToAcquireFastMutex(ptr) ntoskrnl.ExTryToAcquireFastMutex
+@ stdcall -arch=x86_64,arm64 ExAcquireFastMutex(ptr) ntoskrnl.ExAcquireFastMutex
+@ stdcall -arch=x86_64,arm64 ExReleaseFastMutex(ptr) ntoskrnl.ExReleaseFastMutex
+@ stdcall -arch=x86_64,arm64 ExTryToAcquireFastMutex(ptr) ntoskrnl.ExTryToAcquireFastMutex
 @ stdcall HalAcquireDisplayOwnership(ptr)
 @ stdcall HalAdjustResourceList(ptr)
 @ stdcall HalAllProcessorsStarted()
@@ -20,7 +20,7 @@
 @ stdcall -version=0x0601+ HalQueryEnvironmentVariableInfoEx(long ptr ptr ptr)
 @ stdcall -version=0x0601+ HalBugCheckSystem(ptr ptr)
 @ stdcall HalAssignSlotResources(ptr ptr ptr ptr long long long ptr)
-@ stdcall -arch=i386,arm,x86_64 HalBeginSystemInterrupt(long long ptr)
+@ stdcall -arch=i386,arm,arm64,x86_64 HalBeginSystemInterrupt(long long ptr)
 @ stdcall HalCalibratePerformanceCounter(ptr long long)
 ;@ stdcall -arch=x86_64 HalCallBios()
 @ fastcall HalClearSoftwareInterrupt(long)
@@ -29,7 +29,7 @@
 @ stdcall HalDisplayString(str)
 @ stdcall -version=0x0601+ HalEnableInterrupt(ptr)
 @ stdcall HalEnableSystemInterrupt(long long long)
-@ stdcall -arch=i386,arm,x86_64 HalEndSystemInterrupt(long long)
+@ stdcall -arch=i386,arm,arm64,x86_64 HalEndSystemInterrupt(long long)
 @ stdcall HalFlushCommonBuffer(long long long long long)
 @ stdcall HalFreeCommonBuffer(ptr long long long ptr long)
 @ stdcall HalGetAdapter(ptr ptr)
@@ -80,8 +80,8 @@
 @ stdcall HalpRegisterPciRouteQuery(ptr)
 @ stdcall HalpSetPciRoutingMap(ptr long)
 @ stdcall HalpRecordPciMaxGsi(ptr)
-@ stdcall -arch=x86_64 HalpGetInterruptTargetInformation(ptr)
-@ stdcall -arch=x86_64 HalpGetMessageRoutingInfo(ptr)
+@ stdcall -arch=x86_64,arm64 HalpGetInterruptTargetInformation(ptr)
+@ stdcall -arch=x86_64,arm64 HalpGetMessageRoutingInfo(ptr)
 @ stdcall -arch=i386,x86_64 IoAssignDriveLetters(ptr str ptr ptr) HalpAssignDriveLetters
 @ stdcall IoFlushAdapterBuffers(ptr ptr ptr ptr long long)
 @ stdcall IoFreeAdapterChannel(ptr)
@@ -97,55 +97,62 @@
 @ fastcall -arch=i386,arm KeAcquireQueuedSpinLockRaiseToSynch(ptr)
 @ stdcall -arch=i386,arm KeAcquireSpinLock(ptr ptr)
 @ fastcall -arch=i386,arm KeAcquireSpinLockRaiseToSynch(ptr)
-@ stdcall -arch=x86_64 KeAcquireInStackQueuedSpinLock(ptr ptr) ntoskrnl.KeAcquireInStackQueuedSpinLock
-@ stdcall -arch=x86_64 KeAcquireInStackQueuedSpinLockRaiseToSynch(ptr ptr) ntoskrnl.KeAcquireInStackQueuedSpinLockRaiseToSynch
-@ stdcall -arch=x86_64 KeAcquireQueuedSpinLock(ptr) ntoskrnl.KeAcquireQueuedSpinLock
-@ stdcall -arch=x86_64 KeAcquireQueuedSpinLockRaiseToSynch(ptr) ntoskrnl.KeAcquireQueuedSpinLockRaiseToSynch
+@ stdcall -arch=x86_64,arm64 KeAcquireInStackQueuedSpinLock(ptr ptr) ntoskrnl.KeAcquireInStackQueuedSpinLock
+@ stdcall -arch=x86_64,arm64 KeAcquireInStackQueuedSpinLockRaiseToSynch(ptr ptr) ntoskrnl.KeAcquireInStackQueuedSpinLockRaiseToSynch
+@ stdcall -arch=x86_64,arm64 KeAcquireQueuedSpinLock(ptr) ntoskrnl.KeAcquireQueuedSpinLock
+@ stdcall -arch=x86_64,arm64 KeAcquireQueuedSpinLockRaiseToSynch(ptr) ntoskrnl.KeAcquireQueuedSpinLockRaiseToSynch
 @ stdcall -arch=x86_64 KeAcquireSpinLock(ptr ptr)
-@ stdcall -arch=x86_64 KeAcquireSpinLockRaiseToSynch(ptr) ntoskrnl.KeAcquireSpinLockRaiseToSynch
+@ stdcall -arch=arm64 KeAcquireSpinLock(ptr ptr) ntoskrnl.KeAcquireSpinLock
+@ stdcall -arch=x86_64,arm64 KeAcquireSpinLockRaiseToSynch(ptr) ntoskrnl.KeAcquireSpinLockRaiseToSynch
 @ stdcall KeFlushWriteBuffer()
 @ stdcall -arch=i386,arm KeGetCurrentIrql()
 @ stdcall -arch=x86_64 KeGetCurrentIrql()
+@ stdcall -arch=arm64 KeGetCurrentIrql() ntoskrnl.KeGetCurrentIrql
 @ stdcall -arch=i386,arm KeLowerIrql(long)
-@ stdcall -arch=x86_64 KeLowerIrql(long) ntoskrnl.KeLowerIrql
+@ stdcall -arch=x86_64,arm64 KeLowerIrql(long) ntoskrnl.KeLowerIrql
 @ stdcall KeQueryPerformanceCounter(ptr)
 @ stdcall -arch=i386,arm KeRaiseIrql(long ptr)
 @ stdcall -arch=x86_64 KeRaiseIrql(long ptr)
+@ stdcall -arch=arm64 KeRaiseIrql(long ptr) ntoskrnl.KeRaiseIrql
 @ stdcall -arch=i386,arm KeRaiseIrqlToDpcLevel()
-@ stdcall -arch=x86_64 KeRaiseIrqlToDpcLevel() ntoskrnl.KeRaiseIrqlToDpcLevel
+@ stdcall -arch=x86_64,arm64 KeRaiseIrqlToDpcLevel() ntoskrnl.KeRaiseIrqlToDpcLevel
 @ stdcall -arch=i386,arm KeRaiseIrqlToSynchLevel()
 @ stdcall -arch=x86_64 KeRaiseIrqlToSynchLevel()
+@ stdcall -arch=arm64 KeRaiseIrqlToSynchLevel() ntoskrnl.KeRaiseIrqlToSynchLevel
 @ fastcall -arch=i386,arm KeReleaseInStackQueuedSpinLock(ptr)
 @ fastcall -arch=i386,arm KeReleaseQueuedSpinLock(ptr long)
 @ stdcall -arch=i386,arm KeReleaseSpinLock(ptr long)
-@ stdcall -arch=x86_64 KeReleaseInStackQueuedSpinLock(ptr) ntoskrnl.KeReleaseInStackQueuedSpinLock
-@ stdcall -arch=x86_64 KeReleaseQueuedSpinLock(ptr long) ntoskrnl.KeReleaseQueuedSpinLock
-@ stdcall -arch=x86_64 KeReleaseSpinLock(ptr long) ntoskrnl.KeReleaseSpinLock
+@ stdcall -arch=x86_64,arm64 KeReleaseInStackQueuedSpinLock(ptr) ntoskrnl.KeReleaseInStackQueuedSpinLock
+@ stdcall -arch=x86_64,arm64 KeReleaseQueuedSpinLock(ptr long) ntoskrnl.KeReleaseQueuedSpinLock
+@ stdcall -arch=x86_64,arm64 KeReleaseSpinLock(ptr long) ntoskrnl.KeReleaseSpinLock
 @ stdcall KeStallExecutionProcessor(long)
 @ fastcall -arch=i386,arm KeTryToAcquireQueuedSpinLock(long ptr)
 @ fastcall -arch=i386,arm KeTryToAcquireQueuedSpinLockRaiseToSynch(long ptr)
-@ stdcall -arch=x86_64 KeTryToAcquireQueuedSpinLock(long ptr) ntoskrnl.KeTryToAcquireQueuedSpinLock
-@ stdcall -arch=x86_64 KeTryToAcquireQueuedSpinLockRaiseToSynch(long ptr) ntoskrnl.KeTryToAcquireQueuedSpinLockRaiseToSynch
+@ stdcall -arch=x86_64,arm64 KeTryToAcquireQueuedSpinLock(long ptr) ntoskrnl.KeTryToAcquireQueuedSpinLock
+@ stdcall -arch=x86_64,arm64 KeTryToAcquireQueuedSpinLockRaiseToSynch(long ptr) ntoskrnl.KeTryToAcquireQueuedSpinLockRaiseToSynch
 @ fastcall -arch=i386,arm KfAcquireSpinLock(ptr)
 @ fastcall -arch=i386,arm KfLowerIrql(long)
 @ fastcall -arch=i386,arm KfRaiseIrql(long)
 @ fastcall -arch=i386,arm KfReleaseSpinLock(ptr long)
 @ stdcall -arch=x86_64 KfAcquireSpinLock(ptr)
+@ stdcall -arch=arm64 KfAcquireSpinLock(ptr) ntoskrnl.KfAcquireSpinLock
 @ stdcall -arch=x86_64 KfLowerIrql(long)
-@ stdcall -arch=x86_64 KfRaiseIrql(long) ntoskrnl.KfRaiseIrql
+@ stdcall -arch=arm64 KfLowerIrql(long) ntoskrnl.KfLowerIrql
+@ stdcall -arch=x86_64,arm64 KfRaiseIrql(long) ntoskrnl.KfRaiseIrql
 @ stdcall -arch=x86_64 KfReleaseSpinLock(ptr long)
-@ stdcall -arch=i386,arm,x86_64 READ_PORT_BUFFER_UCHAR(ptr ptr long)
-@ stdcall -arch=i386,arm,x86_64 READ_PORT_BUFFER_ULONG(ptr ptr long)
-@ stdcall -arch=i386,arm,x86_64 READ_PORT_BUFFER_USHORT(ptr ptr long)
-@ stdcall -arch=i386,arm,x86_64 READ_PORT_UCHAR(ptr)
-@ stdcall -arch=i386,arm,x86_64 READ_PORT_ULONG(ptr)
-@ stdcall -arch=i386,arm,x86_64 READ_PORT_USHORT(ptr)
-@ stdcall -arch=i386,arm,x86_64 WRITE_PORT_BUFFER_UCHAR(ptr ptr long)
-@ stdcall -arch=i386,arm,x86_64 WRITE_PORT_BUFFER_ULONG(ptr ptr long)
-@ stdcall -arch=i386,arm,x86_64 WRITE_PORT_BUFFER_USHORT(ptr ptr long)
-@ stdcall -arch=i386,arm,x86_64 WRITE_PORT_UCHAR(ptr long)
-@ stdcall -arch=i386,arm,x86_64 WRITE_PORT_ULONG(ptr long)
-@ stdcall -arch=i386,arm,x86_64 WRITE_PORT_USHORT(ptr long)
+@ stdcall -arch=arm64 KfReleaseSpinLock(ptr long) ntoskrnl.KfReleaseSpinLock
+@ stdcall -arch=i386,arm,arm64,x86_64 READ_PORT_BUFFER_UCHAR(ptr ptr long)
+@ stdcall -arch=i386,arm,arm64,x86_64 READ_PORT_BUFFER_ULONG(ptr ptr long)
+@ stdcall -arch=i386,arm,arm64,x86_64 READ_PORT_BUFFER_USHORT(ptr ptr long)
+@ stdcall -arch=i386,arm,arm64,x86_64 READ_PORT_UCHAR(ptr)
+@ stdcall -arch=i386,arm,arm64,x86_64 READ_PORT_ULONG(ptr)
+@ stdcall -arch=i386,arm,arm64,x86_64 READ_PORT_USHORT(ptr)
+@ stdcall -arch=i386,arm,arm64,x86_64 WRITE_PORT_BUFFER_UCHAR(ptr ptr long)
+@ stdcall -arch=i386,arm,arm64,x86_64 WRITE_PORT_BUFFER_ULONG(ptr ptr long)
+@ stdcall -arch=i386,arm,arm64,x86_64 WRITE_PORT_BUFFER_USHORT(ptr ptr long)
+@ stdcall -arch=i386,arm,arm64,x86_64 WRITE_PORT_UCHAR(ptr long)
+@ stdcall -arch=i386,arm,arm64,x86_64 WRITE_PORT_ULONG(ptr long)
+@ stdcall -arch=i386,arm,arm64,x86_64 WRITE_PORT_USHORT(ptr long)
 @ stdcall -version=0x0502 -arch=x86_64 x86BiosAllocateBuffer(ptr ptr ptr)
 @ stdcall -version=0x0600+ -arch=i386,x86_64 x86BiosAllocateBuffer(ptr ptr ptr)
 @ stdcall -version=0x0502 -arch=x86_64 x86BiosCall(long ptr)
@@ -156,3 +163,17 @@
 @ stdcall -version=0x0600+ -arch=i386,x86_64 x86BiosReadMemory(long long ptr long)
 @ stdcall -version=0x0502 -arch=x86_64 x86BiosWriteMemory(long long ptr long)
 @ stdcall -version=0x0600+ -arch=i386,x86_64 x86BiosWriteMemory(long long ptr long)
+
+; ARM64 HAL exports
+@ fastcall -arch=arm64 HalSweepIcache()
+@ fastcall -arch=arm64 HalSweepDcache()
+@ fastcall -arch=arm64 HalSetGicPriorityMask(long)
+@ fastcall -arch=arm64 HalGetGicPriorityMask()
+@ fastcall -arch=arm64 HalGetInterruptSource()
+
+; Internal kernel entry points needed by early ARM64 HAL code.
+@ stdcall -arch=arm64 KxSaveFloatingPointState(ptr) ntoskrnl.KxSaveFloatingPointState
+@ stdcall -arch=arm64 KxRestoreFloatingPointState(ptr) ntoskrnl.KxRestoreFloatingPointState
+@ stdcall -arch=arm64 IopReserveIrqVectors(long long ptr)
+
+@ stdcall -arch=arm64 VideoPortQuerySystemTime(ptr)

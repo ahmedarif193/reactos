@@ -86,6 +86,9 @@ static NTSTATUS
 static BOOLEAN
 IntInitializeX86Emu(VOID)
 {
+#ifdef _M_ARM64
+    return FALSE;
+#else
 #if (NTDDI_VERSION < NTDDI_VISTA) && (DLL_EXPORT_VERSION < _WIN32_WINNT_VISTA)
     UNICODE_STRING ImportName;
 #define LOAD_IMPORT(func) \
@@ -106,6 +109,7 @@ IntInitializeX86Emu(VOID)
 #endif
 
     return TRUE;
+#endif /* _M_ARM64 */
 }
 
 #ifdef _M_IX86
@@ -304,12 +308,20 @@ IntInt10AllocateBufferEmu(
     _Out_ PUSHORT Off,
     _Inout_ PULONG Length)
 {
+#ifdef _M_ARM64
+    UNREFERENCED_PARAMETER(Context);
+    UNREFERENCED_PARAMETER(Seg);
+    UNREFERENCED_PARAMETER(Off);
+    UNREFERENCED_PARAMETER(Length);
+    return ERROR_INVALID_FUNCTION;
+#else
     NTSTATUS Status;
 
     UNREFERENCED_PARAMETER(Context);
 
     Status = x86BiosAllocateBuffer(Length, Seg, Off);
     return (NT_SUCCESS(Status) ? NO_ERROR : ERROR_NOT_ENOUGH_MEMORY);
+#endif
 }
 
 #ifdef _M_IX86
@@ -400,12 +412,19 @@ IntInt10FreeBufferEmu(
     _In_ USHORT Seg,
     _In_ USHORT Off)
 {
+#ifdef _M_ARM64
+    UNREFERENCED_PARAMETER(Context);
+    UNREFERENCED_PARAMETER(Seg);
+    UNREFERENCED_PARAMETER(Off);
+    return ERROR_INVALID_FUNCTION;
+#else
     NTSTATUS Status;
 
     UNREFERENCED_PARAMETER(Context);
 
     Status = x86BiosFreeBuffer(Seg, Off);
     return (NT_SUCCESS(Status) ? NO_ERROR : ERROR_INVALID_PARAMETER);
+#endif
 }
 
 #ifdef _M_IX86
@@ -463,12 +482,21 @@ IntInt10ReadMemoryEmu(
     _Out_writes_bytes_(Length) PVOID Buffer,
     _In_ ULONG Length)
 {
+#ifdef _M_ARM64
+    UNREFERENCED_PARAMETER(Context);
+    UNREFERENCED_PARAMETER(Seg);
+    UNREFERENCED_PARAMETER(Off);
+    UNREFERENCED_PARAMETER(Buffer);
+    UNREFERENCED_PARAMETER(Length);
+    return ERROR_INVALID_FUNCTION;
+#else
     NTSTATUS Status;
 
     UNREFERENCED_PARAMETER(Context);
 
     Status = x86BiosReadMemory(Seg, Off, Buffer, Length);
     return (NT_SUCCESS(Status) ? NO_ERROR : ERROR_INVALID_PARAMETER);
+#endif
 }
 
 #ifdef _M_IX86
@@ -530,12 +558,21 @@ IntInt10WriteMemoryEmu(
     _In_reads_bytes_(Length) PVOID Buffer,
     _In_ ULONG Length)
 {
+#ifdef _M_ARM64
+    UNREFERENCED_PARAMETER(Context);
+    UNREFERENCED_PARAMETER(Seg);
+    UNREFERENCED_PARAMETER(Off);
+    UNREFERENCED_PARAMETER(Buffer);
+    UNREFERENCED_PARAMETER(Length);
+    return ERROR_INVALID_FUNCTION;
+#else
     NTSTATUS Status;
 
     UNREFERENCED_PARAMETER(Context);
 
     Status = x86BiosWriteMemory(Seg, Off, Buffer, Length);
     return (NT_SUCCESS(Status) ? NO_ERROR : ERROR_INVALID_PARAMETER);
+#endif
 }
 
 #ifdef _M_IX86
@@ -594,6 +631,11 @@ IntInt10CallBiosEmu(
     _In_ PVOID Context,
     _Inout_ PINT10_BIOS_ARGUMENTS BiosArguments)
 {
+#ifdef _M_ARM64
+    UNREFERENCED_PARAMETER(Context);
+    UNREFERENCED_PARAMETER(BiosArguments);
+    return ERROR_INVALID_FUNCTION;
+#else
     X86_BIOS_REGISTERS BiosContext;
     BOOLEAN Success;
 
@@ -647,6 +689,7 @@ IntInt10CallBiosEmu(
     BiosArguments->SegEs = (USHORT)BiosContext.SegEs;
 
     return (Success ? NO_ERROR : ERROR_INVALID_PARAMETER);
+#endif
 }
 
 #ifdef _M_IX86

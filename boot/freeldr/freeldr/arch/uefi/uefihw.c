@@ -9,6 +9,9 @@
 
 #include <uefildr.h>
 #include "../vidfb.h"
+#if defined(_M_IX86) || defined(_M_AMD64)
+#include <arch/pc/pcbios.h>
+#endif
 
 #include <debug.h>
 DBG_DEFAULT_CHANNEL(HWDETECT);
@@ -22,6 +25,10 @@ extern EFI_HANDLE GlobalImageHandle;
 extern ULONG_PTR VramAddress;
 extern ULONG VramSize;
 extern PCM_FRAMEBUF_DEVICE_DATA FrameBufferData;
+
+#ifndef TAG_HW_RESOURCE_LIST
+#define TAG_HW_RESOURCE_LIST    'lRwH'
+#endif
 
 BOOLEAN AcpiPresent = FALSE;
 static EFI_EVENT IdleTimerEvent = NULL;
@@ -147,7 +154,7 @@ DetectAcpiBios(PCONFIGURATION_COMPONENT_DATA SystemKey, ULONG *BusNumber)
     PCM_PARTIAL_RESOURCE_LIST PartialResourceList;
     PCM_PARTIAL_RESOURCE_DESCRIPTOR PartialDescriptor;
     PRSDP_DESCRIPTOR Rsdp;
-    PACPI_BIOS_DATA AcpiBiosData;
+    PACPI_BIOS_MULTI_NODE AcpiBiosData;
     ULONG TableSize, Size;
 
     Rsdp = FindAcpiBios();
@@ -158,7 +165,7 @@ DetectAcpiBios(PCONFIGURATION_COMPONENT_DATA SystemKey, ULONG *BusNumber)
         AcpiPresent = TRUE;
 
         /* Calculate the table size */
-        TableSize = sizeof(ACPI_BIOS_DATA);
+        TableSize = sizeof(ACPI_BIOS_MULTI_NODE);
 
         /* Set 'Configuration Data' value */
         Size = FIELD_OFFSET(CM_PARTIAL_RESOURCE_LIST, PartialDescriptors[1]) + TableSize;
@@ -180,17 +187,17 @@ DetectAcpiBios(PCONFIGURATION_COMPONENT_DATA SystemKey, ULONG *BusNumber)
         PartialDescriptor->u.DeviceSpecificData.DataSize = TableSize;
 
         /* Fill the table */
-        AcpiBiosData = (PACPI_BIOS_DATA)(PartialDescriptor + 1);
+        AcpiBiosData = (PACPI_BIOS_MULTI_NODE)(PartialDescriptor + 1);
 
         if (Rsdp->revision > 0)
         {
             TRACE("ACPI >1.0, using XSDT address\n");
-            AcpiBiosData->RSDTAddress.QuadPart = Rsdp->xsdt_physical_address;
+            AcpiBiosData->RsdtAddress.QuadPart = Rsdp->xsdt_physical_address;
         }
         else
         {
             TRACE("ACPI 1.0, using RSDT address\n");
-            AcpiBiosData->RSDTAddress.LowPart = Rsdp->rsdt_physical_address;
+            AcpiBiosData->RsdtAddress.LowPart = Rsdp->rsdt_physical_address;
         }
 
         AcpiBiosData->Count = 0;
