@@ -156,11 +156,6 @@ WimExtractFile(
         ERR("WimLoader: decompression of '%s' failed\n", FullPath);
         State->Failures++;
     }
-    else
-    {
-        TRACE("WimLoader: extracted file '%s' (%lu bytes)\n", FullPath, Size);
-    }
-
     State->CurrentPath = NULL;
     return TRUE;
 }
@@ -204,7 +199,6 @@ WimWalkTree(
 
         if (Child->attributes & WIM_FILE_ATTRIBUTE_DIRECTORY)
         {
-            TRACE("WimLoader: mkdir '%s'\n", PathAccum);
             if (!Fat32CreateDirectory(State->Writer, PathAccum))
             {
                 WARN("WimLoader: Fat32CreateDirectory failed for '%s'\n", PathAccum);
