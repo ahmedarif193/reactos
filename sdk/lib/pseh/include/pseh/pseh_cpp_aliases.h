@@ -10,9 +10,13 @@
 #undef __finally
 #undef __endtry
 #undef __leave
+#ifdef _SEH2_NATIVE_SEH
+#define __endtry
+#else
 #define __try _SEH2_TRY
 #define __except _SEH2_EXCEPT
 #define __finally _SEH2_FINALLY
 #define __endtry _SEH2_END
 #define __leave _SEH2_LEAVE
+#endif
 #endif
