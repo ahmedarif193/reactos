@@ -30,7 +30,6 @@ FsRecGetDeviceSectors(IN PDEVICE_OBJECT DeviceObject,
     KEVENT Event;
     PIRP Irp;
     NTSTATUS Status;
-    ULONG Remainder;
     PAGED_CODE();
 
     /* Only needed for disks */
@@ -69,9 +68,7 @@ FsRecGetDeviceSectors(IN PDEVICE_OBJECT DeviceObject,
     if (!NT_SUCCESS(Status)) return FALSE;
 
     /* Otherwise, return the number of sectors */
-    *SectorCount = RtlExtendedLargeIntegerDivide(PartitionInfo.PartitionLength,
-                                                 SectorSize,
-                                                 &Remainder);
+    SectorCount->QuadPart = PartitionInfo.PartitionLength.QuadPart / SectorSize;
     return TRUE;
 }
 

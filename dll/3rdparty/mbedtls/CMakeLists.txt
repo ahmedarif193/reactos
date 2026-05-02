@@ -92,6 +92,7 @@ add_library(mbedtls MODULE
     ${CMAKE_CURRENT_BINARY_DIR}/mbedtls.def)
 
 set_module_type(mbedtls win32dll)
+target_compile_definitions(mbedtls PRIVATE _WIN32)
 if(NOT MSVC)
     target_link_libraries(mbedtls libgcc)
 endif()
