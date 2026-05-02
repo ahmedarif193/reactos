@@ -30,9 +30,13 @@
 #ifdef __REACTOS__
 #define __cpuidex __cpuidex_ // prevent redeclaration
 #endif
+#if !defined(_M_ARM64) && !defined(__aarch64__)
 #include <cpuid.h>
+#endif
 #else
+#if !defined(_M_ARM64) && !defined(__aarch64__)
 #include <intrin.h>
+#endif
 #endif
 
 

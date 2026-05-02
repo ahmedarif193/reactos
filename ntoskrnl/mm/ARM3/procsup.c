@@ -16,7 +16,7 @@
 #include <mm/ARM3/miarm.h>
 
 /* DirectoryTableBase compatibility: single value at Vista+, array pre-Vista */
-#if (NTDDI_VERSION >= NTDDI_LONGHORN)
+#if (NTDDI_VERSION >= NTDDI_LONGHORN) && !defined(_M_ARM64)
 #define DTB0 DirectoryTableBase
 #define DTB1 Unused0
 #else
@@ -145,7 +145,7 @@ MmDeleteTeb(IN PEPROCESS Process,
     KeAttachProcess(&Process->Pcb);
 
     /* Lock the process address space */
-    #if (NTDDI_VERSION >= NTDDI_LONGHORN)
+    #if (NTDDI_VERSION >= NTDDI_LONGHORN) && !defined(_M_ARM64)
     /*
      * Vista+ converted AddressCreationLock from KGUARDED_MUTEX to EX_PUSH_LOCK.
      * KeAcquireGuardedMutex implicitly entered a guarded region, so APCs were
@@ -198,7 +198,7 @@ MmDeleteTeb(IN PEPROCESS Process,
     }
 
     /* Release the address space lock */
-    #if (NTDDI_VERSION >= NTDDI_LONGHORN)
+    #if (NTDDI_VERSION >= NTDDI_LONGHORN) && !defined(_M_ARM64)
     ExReleasePushLockExclusive(&Process->AddressCreationLock);
     KeLeaveGuardedRegion();
 #else
@@ -994,7 +994,7 @@ MmInitializeProcessAddressSpace(IN PEPROCESS Process,
     Process->AddressSpaceInitialized = 2;
 
     /* Initialize the Addresss Space lock */
-    #if (NTDDI_VERSION >= NTDDI_LONGHORN)
+    #if (NTDDI_VERSION >= NTDDI_LONGHORN) && !defined(_M_ARM64)
     ExInitializePushLock(&Process->AddressCreationLock);
 #else
     KeInitializeGuardedMutex(&Process->AddressCreationLock);
@@ -1163,7 +1163,7 @@ MmInitializeHandBuiltProcess(IN PEPROCESS Process,
     DirectoryTableBase[1] = PsGetCurrentProcess()->Pcb.DTB1;
 
     /* Initialize the Addresss Space */
-    #if (NTDDI_VERSION >= NTDDI_LONGHORN)
+    #if (NTDDI_VERSION >= NTDDI_LONGHORN) && !defined(_M_ARM64)
     ExInitializePushLock(&Process->AddressCreationLock);
 #else
     KeInitializeGuardedMutex(&Process->AddressCreationLock);
@@ -1211,7 +1211,9 @@ MmCreateProcessAddressSpace(IN ULONG MinWs,
     ASSERT(Process->WorkingSetPage == 0);
 
     /* Choose a process color */
-    #if (NTDDI_VERSION >= NTDDI_LONGHORN)
+    #if (NTDDI_VERSION >= NTDDI_LONGHORN) && !defined(_M_ARM64)
+    Process->Spare7 =
+#elif defined(_M_ARM64)
     Process->Spare7 =
 #else
     Process->NextPageColor =

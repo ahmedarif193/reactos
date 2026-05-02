@@ -72,7 +72,8 @@ target_compile_definitions(freeldr_wimcore PRIVATE
     _NTHAL_
     _BLDR_
     _NTSYSTEM_)
-if(CMAKE_C_COMPILER_ID STREQUAL "GNU" OR CMAKE_C_COMPILER_ID STREQUAL "Clang")
+if((CMAKE_C_COMPILER_ID STREQUAL "GNU" OR CMAKE_C_COMPILER_ID STREQUAL "Clang") AND
+   (ARCH STREQUAL "i386" OR ARCH STREQUAL "amd64"))
     target_compile_options(freeldr_wimcore PUBLIC -mno-sse)
 endif()
 
@@ -117,6 +118,25 @@ elseif(ARCH STREQUAL "amd64")
 
 elseif(ARCH STREQUAL "arm")
     #TBD
+elseif(ARCH STREQUAL "arm64")
+    list(APPEND FREELDR_BOOTLIB_SOURCE
+        lib/math_stubs.c
+        lib/unwind_stubs.c)
+
+    list(APPEND FREELDR_COMMON_ASM_SOURCE
+        arch/arm64/entry.S
+        arch/arm64/except.S
+        arch/arm64/kernel_jump.S
+        arch/arm64/misc.S
+        arch/arm64/cache_v2.S)
+
+    list(APPEND FREELDR_ARC_SOURCE
+        arch/arm64/macharm64.c
+        arch/arm64/stubs.c
+        arch/arm64/mmu_v2.c
+        arch/arm64/gic.c
+        arch/arm64/timer.c
+        arch/arm64/trap.c)
 else()
     #TBD
 endif()
@@ -132,8 +152,10 @@ if(ARCH STREQUAL "i386" OR ARCH STREQUAL "amd64")
         ${CMAKE_CURRENT_BINARY_DIR}/freeldr.def)
 endif()
 
-include(pcat.cmake)
-include(rosload.cmake)
+if(FREELDR_HAS_BIOS_BOOT)
+    include(pcat.cmake)
+    include(rosload.cmake)
+endif()
 if(NOT ARCH STREQUAL "i386" OR NOT (SARCH STREQUAL "pc98" OR SARCH STREQUAL "xbox"))
     include(uefi.cmake)
 endif()

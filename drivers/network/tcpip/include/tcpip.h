@@ -54,6 +54,10 @@
 #include <titypes.h>
 #include <ticonsts.h>
 
+#if defined(_M_ARM64) || defined(__aarch64__)
+#include <ndk/arm64/mmtypes.h>
+#endif
+
 /* Macros */
 
 #define MIN(value1, value2) \
@@ -65,7 +69,7 @@
 #define NDIS_BUFFER_TAG FOURCC('n','b','u','f')
 #define NDIS_PACKET_TAG FOURCC('n','p','k','t')
 
-#if defined(i386) || defined(_AMD64_) || defined(_ARM_)
+#if defined(i386) || defined(_AMD64_) || defined(_ARM_) || defined(_M_ARM64) || defined(__aarch64__)
 
 /* DWORD network to host byte order conversion for i386 */
 #define DN2H(dw) \

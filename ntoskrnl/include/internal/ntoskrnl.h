@@ -154,7 +154,7 @@
 /* for x86 and x86-64 the MSB is 1 so we can simply test on that */
 #define IsPointerOffset(Ptr) ((LONG_PTR)(Ptr) >= 0)
 
-#elif defined(_IA64_)
+#elif defined(_IA64_) || defined(_M_ARM64) || defined(__aarch64__)
 
 /* on Itanium if the 24 most significant bits are set, we're not dealing with
    offsets anymore. */

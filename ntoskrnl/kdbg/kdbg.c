@@ -118,7 +118,11 @@ KdSendPacket(
             }
 
             Result = KdbEnterDebuggerException(&KdbgExceptionRecord,
+#ifdef _M_ARM64
+                                               ((KdbgContext.Cpsr >> 2) & 3) == 0 ? UserMode : KernelMode,
+#else
                                                KdbgContext.SegCs & 1,
+#endif
                                                &KdbgContext,
                                                KdbgFirstChanceException);
 #if 0

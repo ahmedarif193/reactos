@@ -16,6 +16,19 @@ extern "C" {
 #define MM_ALLOCATION_GRANULARITY         0x10000
 #define MM_ALLOCATION_GRANULARITY_SHIFT   16L
 #define MM_PAGE_FRAME_NUMBER_SIZE         20
+#define MM_SHARED_USER_DATA_VA            0x7FFE0000ULL
+
+/* User space range limit */
+#define MI_HIGHEST_USER_ADDRESS           (PVOID)0x000007FFFFFEFFFFULL
+
+#if !defined(RC_INVOKED)
+extern NTSYSAPI ULONG64 MmUserProbeAddress;
+#define MM_USER_PROBE_ADDRESS MmUserProbeAddress
+extern NTSYSAPI PVOID MmSystemRangeStart;
+#define MM_SYSTEM_RANGE_START MmSystemRangeStart
+extern NTSYSAPI PVOID MmHighestUserAddress;
+#define MM_HIGHEST_USER_ADDRESS MmHighestUserAddress
+#endif
 
 /* Following structs are based on WoA symbols */
 typedef struct _HARDWARE_PTE
@@ -88,7 +101,7 @@ typedef struct _MMPTE_PROTOTYPE
     ULONG64 Prototype:1;
     ULONG64 DemandFillProto:1;
     ULONG64 RsvdZ1:4;
-    ULONG64 ProtoAddress:48;
+    LONG64 ProtoAddress:48;
 } MMPTE_PROTOTYPE;
 
 typedef struct _MMPTE_SUBSECTION
@@ -101,7 +114,12 @@ typedef struct _MMPTE_SUBSECTION
     ULONG64 Prototype:1;
     ULONG64 ColdPage:1;
     ULONG64 RsvdZ2:4;
-    ULONG64 SubsectionAddress:48;
+    /*
+     * SubsectionAddress must be LONG64 (signed) so that when it's read and
+     * cast back to a pointer, the sign extension from bit 47 restores the
+     * canonical kernel address form (e.g., 0xFFFF... for kernel space).
+     */
+    LONG64 SubsectionAddress:48;
 } MMPTE_SUBSECTION;
 
 typedef struct _MMPTE_TIMESTAMP
@@ -142,7 +160,14 @@ typedef struct _MMPTE
         MMPTE_SUBSECTION Subsect;
         MMPTE_LIST List;
     } u;
-} MMPTE, *PMMPTE;
+} MMPTE, *PMMPTE,
+  MMPDE, *PMMPDE,
+  MMPPE, *PMMPPE,
+  MMPXE, *PMMPXE;
+
+#define PTE_PER_PAGE 512
+#define PDE_PER_PAGE 512
+#define PPE_PER_PAGE 512
 
 #ifdef __cplusplus
 }; // extern "C"

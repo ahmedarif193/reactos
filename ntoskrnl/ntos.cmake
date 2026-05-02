@@ -388,12 +388,60 @@ elseif(ARCH STREQUAL "arm")
         ${REACTOS_SOURCE_DIR}/ntoskrnl/mm/ARM3/arm/init.c
         ${REACTOS_SOURCE_DIR}/ntoskrnl/ps/arm/psctx.c
         ${REACTOS_SOURCE_DIR}/ntoskrnl/rtl/arm/rtlexcpt.c)
+elseif(ARCH STREQUAL "arm64")
+    set(NTOS_ARCH_DIR "${REACTOS_SOURCE_DIR}/ntoskrnl/arch/arm64")
+    include_directories(${NTOS_ARCH_DIR}/include)
+    list(REMOVE_ITEM SOURCE ${REACTOS_SOURCE_DIR}/ntoskrnl/ke/ipi.c)
+    list(APPEND ASM_SOURCE
+        ${NTOS_ARCH_DIR}/ke/earlyvec.S
+        ${NTOS_ARCH_DIR}/ke/trapvec.S
+        ${NTOS_ARCH_DIR}/ke/trapret.S
+        ${NTOS_ARCH_DIR}/ke/ctxswitch.S
+        ${NTOS_ARCH_DIR}/ke/usercall_asm.S
+        ${NTOS_ARCH_DIR}/ke/bootstack.S)
+    list(APPEND SOURCE
+        ${NTOS_ARCH_DIR}/config/cmhardwr.c
+        ${NTOS_ARCH_DIR}/ex/init.c
+        ${NTOS_ARCH_DIR}/ex/probe.c
+        ${NTOS_ARCH_DIR}/ex/ioport.c
+        ${NTOS_ARCH_DIR}/kd64/kdarm64.c
+        ${NTOS_ARCH_DIR}/kd/kdfallback.c
+        ${NTOS_ARCH_DIR}/ke/atomics.c
+        ${NTOS_ARCH_DIR}/ke/boot.c
+        ${NTOS_ARCH_DIR}/ke/context.c
+        ${NTOS_ARCH_DIR}/ke/cpu.c
+        ${NTOS_ARCH_DIR}/ke/early_uart.c
+        ${NTOS_ARCH_DIR}/ke/exceptinit.c
+        ${NTOS_ARCH_DIR}/ke/exp.c
+        ${NTOS_ARCH_DIR}/ke/floatstubs.c
+        ${NTOS_ARCH_DIR}/ke/freeze.c
+        ${NTOS_ARCH_DIR}/ke/interrupt.c
+        ${NTOS_ARCH_DIR}/ke/ipi.c
+        ${NTOS_ARCH_DIR}/ke/irql.c
+        ${NTOS_ARCH_DIR}/ke/kiinit.c
+        ${NTOS_ARCH_DIR}/ke/rtlshim.c
+        ${NTOS_ARCH_DIR}/ke/spinlock.c
+        ${NTOS_ARCH_DIR}/ke/stubs.c
+        ${NTOS_ARCH_DIR}/ke/thrdini.c
+        ${NTOS_ARCH_DIR}/ke/trapc.c
+        ${NTOS_ARCH_DIR}/ke/trapdump.c
+        ${NTOS_ARCH_DIR}/ke/usercall.c
+        ${NTOS_ARCH_DIR}/ke/vidstubs.c
+        ${NTOS_ARCH_DIR}/mm/page.c
+        ${NTOS_ARCH_DIR}/mm/section.c
+        ${NTOS_ARCH_DIR}/mm/procsup.c
+        ${NTOS_ARCH_DIR}/mm/ARM3/init.c
+        ${NTOS_ARCH_DIR}/mm/ARM3/maputils.c
+        ${NTOS_ARCH_DIR}/ps/psctx.c
+        ${NTOS_ARCH_DIR}/rtl/ehandler.c
+        ${NTOS_ARCH_DIR}/rtl/rtlexcpt.c
+        ${NTOS_ARCH_DIR}/rtl/rtlstubs.c)
 endif()
 
 if(NOT _WINKD_)
-    if(KDBG)
-        add_definitions(-DKDBG)
-    endif()
+if(KDBG AND NOT ARCH STREQUAL "arm64")
+    add_definitions(-DKDBG)
+endif()
 
     if(ARCH STREQUAL "i386")
         list(APPEND SOURCE ${REACTOS_SOURCE_DIR}/ntoskrnl/kd/i386/kdserial.c)
@@ -409,9 +457,15 @@ if(NOT _WINKD_)
         endif()
     elseif(ARCH STREQUAL "arm")
         list(APPEND SOURCE ${REACTOS_SOURCE_DIR}/ntoskrnl/kd/arm/kdserial.c)
+    elseif(ARCH STREQUAL "arm64")
+        list(APPEND SOURCE ${NTOS_ARCH_DIR}/kd/kdserial.c)
+        if(KDBG)
+            list(APPEND ASM_SOURCE ${NTOS_ARCH_DIR}/kdbg/kdb_help.S)
+            list(APPEND SOURCE ${NTOS_ARCH_DIR}/kdbg/arm64-dis.c ${NTOS_ARCH_DIR}/kdbg/kdb_shim.c)
+        endif()
     endif()
 
-    if(KDBG)
+    if(KDBG AND NOT ARCH STREQUAL "arm64")
         list(APPEND SOURCE
             ${REACTOS_SOURCE_DIR}/ntoskrnl/kdbg/kdbg.c
             ${REACTOS_SOURCE_DIR}/ntoskrnl/kdbg/kdb.c

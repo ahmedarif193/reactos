@@ -43,7 +43,9 @@
 #include "include/limits.h"
 #include "include/locale.h"
 #include "include/math.h"
+#if defined(_M_IX86) || defined(_M_X64) || defined(_M_AMD64)
 #include <xmmintrin.h>
+#endif
 
 #include "msvcrt.h"
 #include "winternl.h"

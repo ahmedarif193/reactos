@@ -1092,7 +1092,7 @@ PciPdoEnableMsi(
     ULONG MessageCount;
     KAFFINITY Affinity;
     ULONG Vector;
-#if defined(_M_AMD64) || (NTDDI_VERSION >= NTDDI_WIN7)
+#if defined(_M_AMD64) || defined(_M_ARM64) || (NTDDI_VERSION >= NTDDI_WIN7)
     HAL_MESSAGE_ROUTING_INFO RoutingInfo;
     HAL_INTERRUPT_TARGET_INFORMATION TargetInfo;
     NTSTATUS Status;
@@ -1224,7 +1224,7 @@ PciPdoEnableMsix(
     ULONG ProgramCount;
     ULONG i;
     USHORT Control;
-#if defined(_M_AMD64) || (NTDDI_VERSION >= NTDDI_WIN7)
+#if defined(_M_AMD64) || defined(_M_ARM64) || (NTDDI_VERSION >= NTDDI_WIN7)
     NTSTATUS Status;
 #endif
 
@@ -1258,7 +1258,7 @@ PciPdoEnableMsix(
         USHORT Data;
         KAFFINITY MsgAffinity;
         ULONG MsgVector;
-#if defined(_M_AMD64) || (NTDDI_VERSION >= NTDDI_WIN7)
+#if defined(_M_AMD64) || defined(_M_ARM64) || (NTDDI_VERSION >= NTDDI_WIN7)
         HAL_MESSAGE_ROUTING_INFO RoutingInfo;
         HAL_INTERRUPT_TARGET_INFORMATION TargetInfo;
 #endif

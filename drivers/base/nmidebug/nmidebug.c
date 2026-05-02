@@ -41,12 +41,12 @@ NmiDbgCallback(IN PVOID Context,
     /* Clear the NMI flag */
     NmiClearFlag();
 
+#ifdef _M_IX86
     /* Get NMI status signature */
     __indwordstring(0x80, (PULONG)NmiBegin, 1);
     ((void(*)())&KiBugCheckData[4])();
 
     /* Handle the NMI safely */
-#ifdef _M_IX86
     KiEnableTimerWatchdog = (RtlCompareMemory(NmiBegin, NmiBegin + 4, 4) != 4);
 #endif
     return TRUE;

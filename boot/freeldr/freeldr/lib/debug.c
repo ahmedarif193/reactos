@@ -22,12 +22,12 @@
 
 #if DBG
 
-// #define DEBUG_ALL
+#define DEBUG_ALL
 // #define DEBUG_WARN
 // #define DEBUG_ERR
 // #define DEBUG_INIFILE
 // #define DEBUG_REACTOS
-//#define DEBUG_CUSTOM      /* DPRINT_DISK + DPRINT_FILESYSTEM at full trace */
+#define DEBUG_CUSTOM      /* DPRINT_DISK + DPRINT_FILESYSTEM at full trace */
 // #define DEBUG_NONE
 
 #define DBG_DEFAULT_LEVELS (ERR_LEVEL|FIXME_LEVEL)

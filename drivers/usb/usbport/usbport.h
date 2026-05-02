@@ -619,7 +619,7 @@ USBPORT_IsKernelPointer(IN PVOID Ptr)
   if (!Ptr)
     return FALSE;
 
-  return ((ULONG_PTR)Ptr) >= (ULONG_PTR)MmSystemRangeStart;
+  return (Ptr != NULL);
 }
 
 typedef struct _USBPORT_ASYNC_CALLBACK_DATA {

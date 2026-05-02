@@ -50,7 +50,7 @@ if(USE_DUMMY_PSEH)
     add_definitions(-D_USE_DUMMY_PSEH=1)
 endif()
 
-if(ARCH STREQUAL "amd64" AND NOT USE_DUMMY_PSEH)
+if((ARCH STREQUAL "amd64" OR ARCH STREQUAL "arm64") AND NOT USE_DUMMY_PSEH)
     add_definitions(-D_USE_NATIVE_SEH=1)
 endif()
 
@@ -285,6 +285,13 @@ if(ARCH STREQUAL "i386")
     set(_rc_target_flag "--target=pe-i386")
 elseif(ARCH STREQUAL "amd64")
     set(_rc_target_flag "--target=pe-x86-64")
+elseif(ARCH STREQUAL "arm64")
+    # FIXME: llvm-windres --target=pe-aarch64 fails at codegen (LLVM 21.1.7
+    # backend missing). Use the aarch64-named symlink which picks the correct
+    # default BFD target via its invocation name. Switch to --target=pe-aarch64
+    # once LLVM supports it.
+    get_filename_component(_rc_dir ${CMAKE_RC_COMPILER} DIRECTORY)
+    set(CMAKE_RC_COMPILER "${_rc_dir}/aarch64-w64-mingw32-windres" CACHE FILEPATH "" FORCE)
 endif()
 
 set(CMAKE_RC_COMPILE_OBJECT "<CMAKE_RC_COMPILER> ${_rc_target_flag} -O coff <INCLUDES> <FLAGS> -DRC_INVOKED -D__WIN32__=1 -D__FLAT__=1 ${I18N_DEFS} <DEFINES> <SOURCE> <OBJECT>")
@@ -743,7 +750,7 @@ if(_use_llvm_mingw_runtime)
 
     add_library(libunwind STATIC IMPORTED GLOBAL)
     set_target_properties(libunwind PROPERTIES IMPORTED_LOCATION ${_llvm_libunwind})
-    target_link_libraries(libunwind INTERFACE libkernel32)
+    target_link_libraries(libunwind INTERFACE libkernel32 libntdll)
     if(DLL_EXPORT_VERSION LESS 0x601)
         target_link_libraries(libunwind INTERFACE llvmcompat)
     endif()

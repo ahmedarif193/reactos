@@ -14,8 +14,53 @@
 #define NDEBUG
 #include <debug.h>
 
+#if defined(_M_ARM64)
+static __inline unsigned char
+RtlpInterlockedCompareExchange128(
+    _Interlocked_operand_ volatile __int64 *Destination,
+    __int64 ExchangeHigh,
+    __int64 ExchangeLow,
+    __int64 *ComparandResult)
+{
+    ULONGLONG OldLow, OldHigh;
+    ULONGLONG ExpLow = (ULONGLONG)ComparandResult[0];
+    ULONGLONG ExpHigh = (ULONGLONG)ComparandResult[1];
+    ULONG Status;
+
+    for (;;)
+    {
+        __asm__ __volatile__("ldaxp %0, %1, [%2]"
+                             : "=&r"(OldLow), "=&r"(OldHigh)
+                             : "r"(Destination)
+                             : "memory");
+
+        if ((OldLow != ExpLow) || (OldHigh != ExpHigh))
+        {
+            ComparandResult[0] = (__int64)OldLow;
+            ComparandResult[1] = (__int64)OldHigh;
+            __asm__ __volatile__("clrex" ::: "memory");
+            return 0;
+        }
+
+        __asm__ __volatile__("stlxp %w0, %1, %2, [%3]"
+                             : "=&r"(Status)
+                             : "r"((ULONGLONG)ExchangeLow),
+                               "r"((ULONGLONG)ExchangeHigh),
+                               "r"(Destination)
+                             : "memory");
+
+        if (Status == 0)
+            return 1;
+    }
+}
+#define _InterlockedCompareExchange128 RtlpInterlockedCompareExchange128
+#endif
+
 #ifdef _WIN64
 BOOLEAN RtlpUse16ByteSLists = -1;
+
+#define RTL_SLIST_ENCODE_NEXT16(_Entry) ((ULONGLONG)((ULONG_PTR)(_Entry) >> 4))
+#define RTL_SLIST_DECODE_NEXT16(_Header) ((PSLIST_ENTRY)((ULONG_PTR)((_Header).Header16.NextEntry) << 4))
 #endif
 
 /* FUNCTIONS ***************************************************************/
@@ -38,11 +83,25 @@ RtlInitializeSListHead(
     /* On Itanium we store the region in the list head */
     SListHead->Region = (ULONG_PTR)SListHead & VRN_MASK;
 #else
-    /* On amd64 we don't need to store anything */
+    /* On amd64 and ARM64 we must initialize both fields to zero */
     SListHead->Region = 0;
 #endif /* _IA64_ */
+
+#if defined(_M_ARM64)
+    /* ARM64 always uses 16-byte SLIST headers. */
+    if (RtlpUse16ByteSLists == (BOOLEAN)-1)
+    {
+        RtlpUse16ByteSLists = TRUE;
+    }
+#endif
 #endif /* _WIN64 */
 
+    /*
+     * CRITICAL: On ARM64 and AMD64, the SLIST_HEADER is a 16-byte structure
+     * with separate Alignment and Region fields. Setting only Alignment = 0
+     * is insufficient because Region is a separate 64-bit field that must
+     * also be explicitly zeroed (already done above for _WIN64).
+     */
     SListHead->Alignment = 0;
 }
 
@@ -55,7 +114,7 @@ RtlFirstEntrySList(
     /* Check if the header is initialized as 16 byte header */
     if (SListHead->Header16.HeaderType)
     {
-        return (PVOID)(SListHead->Region & ~0xFLL);
+        return RTL_SLIST_DECODE_NEXT16((*SListHead));
     }
     else
     {
@@ -120,14 +179,14 @@ RtlInterlockedPushListSList(
             OldSListHead = *SListHead;
 
             /* Link the last list entry */
-            FirstEntry = (PSLIST_ENTRY)(SListHead->Region & ~0xFLL);
+            FirstEntry = RTL_SLIST_DECODE_NEXT16(OldSListHead);
             ListEnd->Next = FirstEntry;
 
             /* Set up new SListHead */
             NewSListHead = OldSListHead;
             NewSListHead.Header16.Depth += Count;
             NewSListHead.Header16.Sequence++;
-            NewSListHead.Region = (ULONG64)List;
+            NewSListHead.Header16.NextEntry = RTL_SLIST_ENCODE_NEXT16(List);
             NewSListHead.Header16.HeaderType = 1;
             NewSListHead.Header16.Init = 1;
 
@@ -224,6 +283,180 @@ RtlInterlockedPushListSListEx(
 #if !defined(_M_IX86) && !defined(_M_AMD64)
 
 _WARN("C based S-List functions can bugcheck, if not handled properly in kernel")
+
+#if defined(_M_ARM64)
+
+PSLIST_ENTRY
+NTAPI
+RtlInterlockedPushEntrySList(
+    _Inout_ PSLIST_HEADER SListHead,
+    _Inout_ __drv_aliasesMem PSLIST_ENTRY SListEntry)
+{
+    SLIST_HEADER OldHeader, NewHeader;
+    PSLIST_ENTRY FirstEntry;
+    BOOLEAN exchanged;
+
+    /*
+     * ARM64 CRITICAL: Check for NULL parameters before any operations.
+     */
+    if (SListHead == NULL)
+    {
+        USHORT Frames;
+        PVOID Stack[8];
+        USHORT i;
+
+        Frames = RtlCaptureStackBackTrace(1, RTL_NUMBER_OF(Stack), Stack, NULL);
+        DPRINT1("RtlInterlockedPushEntrySList: NULL SListHead passed - caller bug!\n");
+        DPRINT1("    SListEntry=%p\n", SListEntry);
+        DPRINT1("    Backtrace (%u frames):\n", Frames);
+        for (i = 0; i < Frames; i++)
+        {
+            DPRINT1("      [%u] %p\n", i, Stack[i]);
+        }
+        return NULL;
+    }
+    if (SListEntry == NULL)
+    {
+        DPRINT1("RtlInterlockedPushEntrySList: NULL SListEntry passed - caller bug!\n");
+        DPRINT1("    SListHead=%p\n", SListHead);
+        return NULL;
+    }
+
+    ASSERT(((ULONG_PTR)SListHead & 0xF) == 0);
+    ASSERT(((ULONG_PTR)SListEntry & 0xF) == 0);
+
+    if (RtlpUse16ByteSLists == (BOOLEAN)-1)
+    {
+        RtlpUse16ByteSLists = TRUE;
+    }
+
+    do
+    {
+        OldHeader = *SListHead;
+        FirstEntry = RTL_SLIST_DECODE_NEXT16(OldHeader);
+        SListEntry->Next = FirstEntry;
+
+        NewHeader = OldHeader;
+        NewHeader.Header16.Depth++;
+        NewHeader.Header16.Sequence++;
+        NewHeader.Header16.NextEntry = RTL_SLIST_ENCODE_NEXT16(SListEntry);
+        NewHeader.Header16.HeaderType = 1;
+        NewHeader.Header16.Init = 1;
+
+        exchanged = _InterlockedCompareExchange128((PLONG64)SListHead,
+                                                   NewHeader.Region,
+                                                   NewHeader.Alignment,
+                                                   (PLONG64)&OldHeader);
+    } while (!exchanged);
+
+    return FirstEntry;
+}
+
+PSLIST_ENTRY
+NTAPI
+RtlInterlockedPopEntrySList(
+    _Inout_ PSLIST_HEADER SListHead)
+{
+    SLIST_HEADER OldHeader, NewHeader;
+    PSLIST_ENTRY FirstEntry, NextEntry;
+    BOOLEAN exchanged;
+
+    /*
+     * ARM64 CRITICAL: Check for NULL SListHead before any operations.
+     * This can happen if lookaside lists are not properly initialized
+     * or if there's corruption in the PRCB lookaside pointer arrays.
+     */
+    if (SListHead == NULL)
+    {
+        DPRINT1("RtlInterlockedPopEntrySList: NULL SListHead passed - caller bug!\n");
+        return NULL;
+    }
+
+    ASSERT(((ULONG_PTR)SListHead & 0xF) == 0);
+
+    if (RtlpUse16ByteSLists == (BOOLEAN)-1)
+    {
+        RtlpUse16ByteSLists = TRUE;
+    }
+
+    do
+    {
+        OldHeader = *SListHead;
+        FirstEntry = RTL_SLIST_DECODE_NEXT16(OldHeader);
+        if (FirstEntry == NULL)
+        {
+            return NULL;
+        }
+
+        NextEntry = FirstEntry->Next;
+
+        NewHeader = OldHeader;
+        NewHeader.Header16.Depth--;
+        NewHeader.Header16.Sequence++;
+        NewHeader.Header16.NextEntry = RTL_SLIST_ENCODE_NEXT16(NextEntry);
+        NewHeader.Header16.HeaderType = 1;
+        NewHeader.Header16.Init = 1;
+
+        exchanged = _InterlockedCompareExchange128((PLONG64)SListHead,
+                                                   NewHeader.Region,
+                                                   NewHeader.Alignment,
+                                                   (PLONG64)&OldHeader);
+    } while (!exchanged);
+
+    return FirstEntry;
+}
+
+PSLIST_ENTRY
+NTAPI
+RtlInterlockedFlushSList(
+    _Inout_ PSLIST_HEADER SListHead)
+{
+    SLIST_HEADER OldHeader, NewHeader;
+    PSLIST_ENTRY FirstEntry;
+    BOOLEAN exchanged;
+
+    /*
+     * ARM64 CRITICAL: Check for NULL SListHead before any operations.
+     */
+    if (SListHead == NULL)
+    {
+        DPRINT1("RtlInterlockedFlushSList: NULL SListHead passed - caller bug!\n");
+        return NULL;
+    }
+
+    ASSERT(((ULONG_PTR)SListHead & 0xF) == 0);
+
+    if (RtlpUse16ByteSLists == (BOOLEAN)-1)
+    {
+        RtlpUse16ByteSLists = TRUE;
+    }
+
+    do
+    {
+        OldHeader = *SListHead;
+        FirstEntry = RTL_SLIST_DECODE_NEXT16(OldHeader);
+        if (FirstEntry == NULL)
+        {
+            return NULL;
+        }
+
+        NewHeader = OldHeader;
+        NewHeader.Header16.Depth = 0;
+        NewHeader.Header16.Sequence++;
+        NewHeader.Header16.NextEntry = 0;
+        NewHeader.Header16.HeaderType = 1;
+        NewHeader.Header16.Init = 1;
+
+        exchanged = _InterlockedCompareExchange128((PLONG64)SListHead,
+                                                   NewHeader.Region,
+                                                   NewHeader.Alignment,
+                                                   (PLONG64)&OldHeader);
+    } while (!exchanged);
+
+    return FirstEntry;
+}
+
+#else /* !_M_ARM64 */
 
 #ifdef _WIN64
 #error "No generic S-List functions for WIN64!"
@@ -365,15 +598,21 @@ RtlInterlockedFlushSList(
 
 }
 
+#endif /* _M_ARM64 */
+
 #ifdef _MSC_VER
 #pragma comment(linker, "/alternatename:ExpInterlockedPopEntrySList=RtlInterlockedPopEntrySList")
 #pragma comment(linker, "/alternatename:ExpInterlockedPushEntrySList=RtlInterlockedPushEntrySList")
 #pragma comment(linker, "/alternatename:ExpInterlockedFlushSList=RtlInterlockedFlushSList")
-#else
+#elif !defined(_M_ARM64)
+/*
+ * ARM64: Don't use #pragma redefine_extname - it behaves differently between
+ * GCC (renames symbol entirely) and clang (doesn't work on COFF targets).
+ * Instead, the kernel provides explicit ExpInterlocked*SList wrappers.
+ */
 #pragma redefine_extname RtlInterlockedPopEntrySList ExpInterlockedPopEntrySList
 #pragma redefine_extname RtlInterlockedPushEntrySList ExpInterlockedPushEntrySList
 #pragma redefine_extname RtlInterlockedFlushSList ExpInterlockedFlushSList
 #endif
 
 #endif
-

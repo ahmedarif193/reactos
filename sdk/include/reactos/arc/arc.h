@@ -785,6 +785,29 @@ typedef struct _ARM_LOADER_BLOCK
 #endif
 } ARM_LOADER_BLOCK, *PARM_LOADER_BLOCK;
 
+typedef struct _ARM64_LOADER_BLOCK
+{
+#if defined(_ARM64_) || defined(__aarch64__) || defined(__arm64__)
+    ULONG FirstLevelDcacheSize;
+    ULONG FirstLevelDcacheFillSize;
+    ULONG FirstLevelIcacheSize;
+    ULONG FirstLevelIcacheFillSize;
+    ULONG SecondLevelDcacheSize;
+    ULONG SecondLevelDcacheFillSize;
+    ULONG SecondLevelIcacheSize;
+    ULONG SecondLevelIcacheFillSize;
+    ULONG PsciConduit;
+    ULONG PsciFlags;
+    ULONG_PTR PanicStack;
+    ULONG_PTR InterruptStack;
+    ULONG_PTR PcrPage;
+    ULONG_PTR PdrPage;
+    ULONGLONG EarlyUartAddress;
+#else
+    ULONG PlaceHolder;
+#endif
+} ARM64_LOADER_BLOCK, *PARM64_LOADER_BLOCK;
+
 //
 // Firmware information block (NT6+)
 //
@@ -906,6 +929,7 @@ typedef struct _LOADER_PARAMETER_BLOCK
         IA64_LOADER_BLOCK IA64;
         PPC_LOADER_BLOCK PowerPC;
         ARM_LOADER_BLOCK Arm;
+        ARM64_LOADER_BLOCK Arm64;
     } u;
 #if (NTDDI_VERSION >= NTDDI_LONGHORN)
     FIRMWARE_INFORMATION_LOADER_BLOCK FirmwareInformation;

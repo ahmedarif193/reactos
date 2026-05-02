@@ -691,9 +691,7 @@ static VOID XHCI_DetectHardwareQuirks(PXHCI_EXTENSION Extension);
 static ULONG XHCI_FindExtendedCapability(PXHCI_EXTENSION Extension, UCHAR CapabilityId);
 static MPSTATUS XHCI_DisableLegacySupport(PXHCI_EXTENSION Extension);
 static VOID XHCI_ProbeMsiMsix(PXHCI_EXTENSION Extension);
-#if !defined(_M_ARM64)
 static BOOLEAN XHCI_WritePciConfig(PXHCI_EXTENSION Extension, ULONG Offset, PVOID Buffer, ULONG Length);
-#endif
 static VOID XHCI_BuildProtocolPortMap(PXHCI_EXTENSION Extension);
 static volatile ULONG *XHCI_GetPortPowerRegister(PXHCI_EXTENSION Extension, USHORT Port);
 static VOID XHCI_ConfigurePortLpm(PXHCI_EXTENSION Extension, USHORT Port);
@@ -8515,7 +8513,6 @@ XHCI_ReadPciConfig(
                                                       Length) == MP_STATUS_SUCCESS);
 }
 
-#if !defined(_M_ARM64)
 static BOOLEAN
 XHCI_WritePciConfig(
     _In_ PXHCI_EXTENSION Extension,
@@ -8533,7 +8530,6 @@ XHCI_WritePciConfig(
                                                       Offset,
                                                       Length) == MP_STATUS_SUCCESS);
 }
-#endif /* !_M_ARM64 */
 
 static BOOLEAN
 XHCI_EnablePciBusMaster(

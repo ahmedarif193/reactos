@@ -64,6 +64,9 @@ typedef struct _HAL_ACPI_PCI_ROOT_INFO
     BOOLEAN BusRangePresent;
     ULONG BusStart;
     ULONG BusEnd;
+    BOOLEAN ConfigSpaceBasePresent;
+    UCHAR Reserved0[3];
+    ULONGLONG ConfigSpaceBase;
     HAL_ACPI_PCI_WINDOW IoWindow;
     HAL_ACPI_PCI_WINDOW MemoryWindow;
     HAL_ACPI_PCI_WINDOW PrefetchWindow;
@@ -140,6 +143,59 @@ VOID
 NTAPI
 HalpRecordPciMaxGsi(
     _In_ const HAL_ACPI_PCI_ROUTE_ENTRY *Entry
+    );
+
+NTHALAPI
+BOOLEAN
+NTAPI
+HalIsPciMsiSupported(
+    VOID
+    );
+
+NTHALAPI
+BOOLEAN
+NTAPI
+HalQueryPciMsiSupport(
+    _In_ ULONG Segment,
+    _In_ UCHAR Bus,
+    _Out_opt_ PBOOLEAN Supported,
+    _Out_opt_ PULONG OscStatusFlags,
+    _Out_opt_ PULONG OscControlGranted,
+    _Out_opt_ PUSHORT EffectiveSegment,
+    _Out_opt_ PULONG OscMaskedControls
+    );
+
+NTHALAPI
+BOOLEAN
+NTAPI
+HalGetMsiMessageAddress(
+    _In_ ULONGLONG Vector,
+    _In_ ULONGLONG Affinity,
+    _Out_ PULONG AddressLow,
+    _Out_opt_ PULONG AddressHigh,
+    _Out_ PUSHORT Data
+    );
+
+#if defined(_M_ARM64) || defined(__aarch64__)
+NTHALAPI
+BOOLEAN
+NTAPI
+HalGetMsiMessageAddressEx(
+    _In_ USHORT RequesterId,
+    _In_ ULONGLONG Vector,
+    _In_ ULONGLONG Affinity,
+    _Out_ PULONG AddressLow,
+    _Out_opt_ PULONG AddressHigh,
+    _Out_ PUSHORT Data
+    );
+#endif
+
+NTHALAPI
+BOOLEAN
+NTAPI
+HalGetMsiVectorRange(
+    _Out_ PULONG BaseVector,
+    _Out_ PULONG VectorCount
     );
 
 #ifdef __cplusplus
