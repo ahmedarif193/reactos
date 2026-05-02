@@ -1006,7 +1006,7 @@ USBPORT_DoneTransfer(IN PUSBPORT_TRANSFER Transfer)
     Urb = Transfer->Urb;
     Irp = Transfer->Irp;
 
-    if (!Urb || (ULONG_PTR)Urb < (ULONG_PTR)MmSystemRangeStart)
+if (!Urb)
     {
         DPRINT1("USBPORT_DoneTransfer: invalid Urb=%p Transfer=%p\n", Urb, Transfer);
         USBPORT_CleanupTransferOnBadUrb(Transfer, Transfer->USBDStatus);
@@ -2597,8 +2597,7 @@ USBPORT_MiniportCompleteTransfer(IN PVOID MiniPortExtension,
      * a garbage Transfer pointer, and accessing Transfer->Flags or
      * Transfer->Urb would crash with a page fault.
      */
-    if (!TransferParameters ||
-        (ULONG_PTR)TransferParameters < (ULONG_PTR)MmSystemRangeStart)
+    if (!TransferParameters)
     {
         DPRINT1("USBPORT_MiniportCompleteTransfer: invalid TransferParameters=%p USBDStatus=%x\n",
                 TransferParameters, USBDStatus);
@@ -3034,7 +3033,7 @@ USBPORT_CleanupTransferOnBadUrb(IN PUSBPORT_TRANSFER Transfer,
             DmaOperations = FdoExtension->DmaAdapter->DmaOperations;
 
             Mdl = Transfer->TransferBufferMDL;
-            if (Mdl && (ULONG_PTR)Mdl >= (ULONG_PTR)MmSystemRangeStart)
+            if (Mdl)
             {
                 WriteToDevice = Transfer->Direction == USBPORT_DMA_DIRECTION_TO_DEVICE;
                 CurrentVa = (ULONG_PTR)MmGetMdlVirtualAddress(Mdl);
@@ -3088,7 +3087,7 @@ USBPORT_CleanupTransferOnBadUrb(IN PUSBPORT_TRANSFER Transfer,
     if (Transfer->Flags & TRANSFER_FLAG_ALLOCATED_MDL)
     {
         if (Transfer->TransferBufferMDL &&
-            (ULONG_PTR)Transfer->TransferBufferMDL >= (ULONG_PTR)MmSystemRangeStart)
+            Transfer->TransferBufferMDL != NULL)
         {
             IoFreeMdl(Transfer->TransferBufferMDL);
         }
@@ -3112,7 +3111,7 @@ USBPORT_CompleteTransferSafe(IN PUSBPORT_TRANSFER Transfer,
         return;
 
     Urb = Transfer->Urb;
-    if (!Urb || (ULONG_PTR)Urb < (ULONG_PTR)MmSystemRangeStart)
+if (!Urb)
     {
         USBPORT_CleanupTransferOnBadUrb(Transfer, TransferStatus);
         return;
@@ -3146,7 +3145,7 @@ USBPORT_CompleteTransfer(IN PURB Urb,
            Urb,
            TransferStatus);
 
-    if (!Urb || (ULONG_PTR)Urb < (ULONG_PTR)MmSystemRangeStart)
+if (!Urb)
     {
         DPRINT1("USBPORT_CompleteTransfer: invalid Urb=%p Status=%X\n",
                 Urb, TransferStatus);

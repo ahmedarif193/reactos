@@ -1271,7 +1271,7 @@ NtQueryInformationProcess(
                                                NULL);
             if (!NT_SUCCESS(Status)) break;
 
-#ifdef _WIN64
+#if defined(_WIN64) && defined(_M_AMD64)
             /* Make sure the process isn't dying */
             if (ExAcquireRundownProtection(&Process->RundownProtect))
             {
