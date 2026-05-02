@@ -70,8 +70,6 @@ static BOOLEAN IsoSearchDirectoryBufferForFile(PVOID DirectoryBuffer, ULONG Dire
     ULONG i;
     CHAR Name[32];
 
-    TRACE("IsoSearchDirectoryBufferForFile() DirectoryBuffer = 0x%x DirectoryLength = %d FileName = %s\n", DirectoryBuffer, DirectoryLength, FileName);
-
     Offset = 0;
     Record = (PDIR_RECORD)DirectoryBuffer;
     while (TRUE)
@@ -90,18 +88,17 @@ static BOOLEAN IsoSearchDirectoryBufferForFile(PVOID DirectoryBuffer, ULONG Dire
 
         if (Record->FileIdLength == 1 && Record->FileId[0] == 0)
         {
-            TRACE("Name '.'\n");
+            /* '.' entry */
         }
         else if (Record->FileIdLength == 1 && Record->FileId[0] == 1)
         {
-            TRACE("Name '..'\n");
+            /* '..' entry */
         }
         else
         {
             for (i = 0; i < Record->FileIdLength && Record->FileId[i] != ';'; i++)
                 Name[i] = Record->FileId[i];
             Name[i] = ANSI_NULL;
-            TRACE("Name '%s'\n", Name);
 
             if (_stricmp(FileName, Name) == 0)
             {
@@ -134,15 +131,11 @@ static ARC_STATUS IsoBufferDirectory(ULONG DeviceId, ULONG DirectoryStartSector,
     ULONG Count;
     ARC_STATUS Status;
 
-    TRACE("IsoBufferDirectory() DirectoryStartSector = %d DirectoryLength = %d\n", DirectoryStartSector, DirectoryLength);
-
     SectorCount = ROUND_UP(DirectoryLength, SECTORSIZE) / SECTORSIZE;
-    TRACE("Trying to read (DirectoryCount) %d sectors.\n", SectorCount);
 
     //
     // Attempt to allocate memory for directory buffer
     //
-    TRACE("Trying to allocate (DirectoryLength) %d bytes.\n", DirectoryLength);
     DirectoryBuffer = FrLdrTempAlloc(DirectoryLength, TAG_ISO_BUFFER);
     if (!DirectoryBuffer)
         return ENOMEM;
@@ -188,8 +181,6 @@ static ARC_STATUS IsoLookupFile(PCSTR FileName, ULONG DeviceId, PISO_FILE_INFO I
     ARC_STATUS Status;
     BOOLEAN DoFullLookup;
     UCHAR FileAttributes;
-
-    TRACE("IsoLookupFile() FileName = %s\n", FileName);
 
     Volume = IsoVolumes[DeviceId];
 
@@ -341,9 +332,6 @@ ARC_STATUS IsoGetFileInformation(ULONG FileId, FILEINFORMATION* Information)
     RtlCopyMemory(Information->FileName, FileHandle->FileName, Information->FileNameLength);
     Information->FileName[Information->FileNameLength] = ANSI_NULL;
 
-    TRACE("IsoGetFileInformation(%lu) -> FileSize = %lu, FilePointer = 0x%lx\n",
-          FileId, Information->EndingAddress.LowPart, Information->CurrentAddress.LowPart);
-
     return ESUCCESS;
 }
 
@@ -358,8 +346,6 @@ ARC_STATUS IsoOpen(CHAR* Path, OPENMODE OpenMode, ULONG* FileId)
         return EACCES;
 
     DeviceId = FsGetDeviceId(*FileId);
-
-    TRACE("IsoOpen() FileName = %s\n", Path);
 
     FileHandle = FrLdrTempAlloc(sizeof(*FileHandle), TAG_ISO_FILE);
     if (!FileHandle)
@@ -389,8 +375,6 @@ ARC_STATUS IsoRead(ULONG FileId, VOID* Buffer, ULONG N, ULONG* Count)
     ULONG LengthInSector;
     ULONG NumberOfSectors;
     ULONG BytesRead;
-
-    TRACE("IsoRead() Buffer = %p, N = %lu\n", Buffer, N);
 
     DeviceId = FsGetDeviceId(FileId);
     *Count = 0;
@@ -537,8 +521,6 @@ ARC_STATUS IsoRead(ULONG FileId, VOID* Buffer, ULONG N, ULONG* Count)
         *Count += N;
         FileHandle->FilePointer += N;
     }
-
-    TRACE("IsoRead() done\n");
 
     return ESUCCESS;
 }

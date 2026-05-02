@@ -25,8 +25,6 @@ DiskReadBootRecord(
     IN ULONGLONG LogicalSectorNumber,
     OUT PMASTER_BOOT_RECORD BootRecord)
 {
-    ULONG Index;
-
     /* Read master boot record */
     if (!MachDiskReadLogicalSectors(DriveNumber, LogicalSectorNumber, 1, DiskReadBuffer))
     {
@@ -34,25 +32,8 @@ DiskReadBootRecord(
     }
     RtlCopyMemory(BootRecord, DiskReadBuffer, sizeof(MASTER_BOOT_RECORD));
 
-    TRACE("Dumping partition table for drive 0x%x:\n", DriveNumber);
-    TRACE("Boot record logical start sector = %d\n", LogicalSectorNumber);
-    TRACE("sizeof(MASTER_BOOT_RECORD) = 0x%x.\n", sizeof(MASTER_BOOT_RECORD));
-
-    for (Index = 0; Index < 4; Index++)
-    {
-        TRACE("-------------------------------------------\n");
-        TRACE("Partition %d\n", (Index + 1));
-        TRACE("BootIndicator: 0x%x\n", BootRecord->PartitionTable[Index].BootIndicator);
-        TRACE("StartHead: 0x%x\n", BootRecord->PartitionTable[Index].StartHead);
-        TRACE("StartSector (Plus 2 cylinder bits): 0x%x\n", BootRecord->PartitionTable[Index].StartSector);
-        TRACE("StartCylinder: 0x%x\n", BootRecord->PartitionTable[Index].StartCylinder);
-        TRACE("SystemIndicator: 0x%x\n", BootRecord->PartitionTable[Index].SystemIndicator);
-        TRACE("EndHead: 0x%x\n", BootRecord->PartitionTable[Index].EndHead);
-        TRACE("EndSector (Plus 2 cylinder bits): 0x%x\n", BootRecord->PartitionTable[Index].EndSector);
-        TRACE("EndCylinder: 0x%x\n", BootRecord->PartitionTable[Index].EndCylinder);
-        TRACE("SectorCountBeforePartition: 0x%x\n", BootRecord->PartitionTable[Index].SectorCountBeforePartition);
-        TRACE("PartitionSectorCount: 0x%x\n", BootRecord->PartitionTable[Index].PartitionSectorCount);
-    }
+    TRACE("Read MBR for drive 0x%x at sector %lld (magic 0x%x)\n",
+          DriveNumber, LogicalSectorNumber, BootRecord->MasterBootRecordMagic);
 
     /* Check the partition table magic value */
     return (BootRecord->MasterBootRecordMagic == 0xaa55);
