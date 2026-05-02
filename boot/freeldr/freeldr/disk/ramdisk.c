@@ -613,7 +613,6 @@ RamDiskProgressAdvance(
         }
 
         RamDiskProgressDisplay(Context, Percent);
-        TRACE("RamDiskProgress: %s\n", Context->ProgressMessage);
         Context->LastPercentShown = Percent;
     }
 }
