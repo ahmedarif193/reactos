@@ -20,9 +20,13 @@
 #include <freeldr.h>
 #include <debug.h>
 
+#if defined(UEFIBOOT) && (defined(_M_ARM64) || defined(_ARM64_) || defined(__aarch64__) || defined(__arm64__))
+#include <reactos/arm64/early_uart.h>
+#endif
+
 #if DBG
 
-#define DEBUG_ALL
+//#define DEBUG_ALL
 // #define DEBUG_WARN
 // #define DEBUG_ERR
 // #define DEBUG_INIFILE
@@ -177,12 +181,17 @@ DebugInit(
 Done:
     Initialized = TRUE;
 
+#if defined(UEFIBOOT) && (defined(_M_ARM64) || defined(_ARM64_) || defined(__aarch64__) || defined(__arm64__))
+    EarlyUartInitialize(0);
+    DebugPort |= RS232;
+#else
     /* Try to initialize the port; if it fails, remove the corresponding flag */
     if (DebugPort & RS232)
     {
         if (!Rs232PortInitialize(ComPortAddress, ComPortBaudRate))
             DebugPort &= ~RS232;
     }
+#endif
 }
 
 VOID DebugPrintChar(UCHAR Character)
@@ -192,10 +201,17 @@ VOID DebugPrintChar(UCHAR Character)
 
     if (DebugPort & RS232)
     {
+#if defined(UEFIBOOT) && (defined(_M_ARM64) || defined(_ARM64_) || defined(__aarch64__) || defined(__arm64__))
+        if (Character == '\n')
+            EarlyUartPutc('\r');
+
+        EarlyUartPutc(Character);
+#else
         if (Character == '\n')
             Rs232PortPutByte('\r');
 
         Rs232PortPutByte(Character);
+#endif
     }
     if (DebugPort & BOCHS)
     {
