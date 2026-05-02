@@ -464,8 +464,6 @@ PVOID FatBufferDirectory(PFAT_VOLUME_INFO Volume, ULONG DirectoryStartCluster, U
     PDIRECTORY_BUFFER DirectoryBuffer;
     PLIST_ENTRY Entry;
 
-    TRACE("FatBufferDirectory() DirectoryStartCluster = %d RootDirectory = %s\n", DirectoryStartCluster, (RootDirectory ? "TRUE" : "FALSE"));
-
     /*
      * For FAT32, the root directory is nothing special. We can treat it the same
      * as a subdirectory.
@@ -487,7 +485,6 @@ PVOID FatBufferDirectory(PFAT_VOLUME_INFO Volume, ULONG DirectoryStartCluster, U
         if ((DirectoryBuffer->Volume == Volume) &&
             (DirectoryBuffer->DirectoryStartCluster == DirectoryStartCluster))
         {
-            TRACE("Found cached buffer\n");
             *DirectorySize = DirectoryBuffer->DirectorySize;
             return DirectoryBuffer->Data;
         }
@@ -508,7 +505,6 @@ PVOID FatBufferDirectory(PFAT_VOLUME_INFO Volume, ULONG DirectoryStartCluster, U
     //
     // Attempt to allocate memory for directory buffer
     //
-    TRACE("Trying to allocate (DirectorySize) %d bytes.\n", *DirectorySize);
     DirectoryBuffer = FrLdrTempAlloc(*DirectorySize + sizeof(DIRECTORY_BUFFER),
                                      TAG_FAT_BUFFER);
 
@@ -559,8 +555,6 @@ static BOOLEAN FatSearchDirectoryBufferForFile(PFAT_VOLUME_INFO Volume, PVOID Di
     PLFN_DIRENTRY    LfnDirEntry = &OurLfnDirEntry;
 
     EntryCount = DirectorySize / sizeof(DIRENTRY);
-
-    TRACE("FatSearchDirectoryBufferForFile() DirectoryBuffer = 0x%x EntryCount = %d FileName = %s\n", DirectoryBuffer, EntryCount, FileName);
 
     RtlZeroMemory(ShortNameBuffer, 13 * sizeof(CHAR));
     RtlZeroMemory(LfnNameBuffer, 261 * sizeof(CHAR));
@@ -722,23 +716,6 @@ static BOOLEAN FatSearchDirectoryBufferForFile(PFAT_VOLUME_INFO Volume, PVOID Di
             FatFileInfoPointer->CurrentCluster = StartCluster;
             FatFileInfoPointer->StartCluster = StartCluster;
 
-            TRACE("MSDOS Directory Entry:\n");
-            TRACE("FileName[11] = %c%c%c%c%c%c%c%c%c%c%c\n",
-                  DirEntry->FileName[0], DirEntry->FileName[1], DirEntry->FileName[2], DirEntry->FileName[3], DirEntry->FileName[4],
-                  DirEntry->FileName[5], DirEntry->FileName[6], DirEntry->FileName[7], DirEntry->FileName[8], DirEntry->FileName[9], DirEntry->FileName[10]);
-            TRACE("Attr = 0x%x\n", DirEntry->Attr);
-            TRACE("ReservedNT = 0x%x\n", DirEntry->ReservedNT);
-            TRACE("TimeInTenths = %d\n", DirEntry->TimeInTenths);
-            TRACE("CreateTime = %d\n", DirEntry->CreateTime);
-            TRACE("CreateDate = %d\n", DirEntry->CreateDate);
-            TRACE("LastAccessDate = %d\n", DirEntry->LastAccessDate);
-            TRACE("ClusterHigh = 0x%x\n", DirEntry->ClusterHigh);
-            TRACE("Time = %d\n", DirEntry->Time);
-            TRACE("Date = %d\n", DirEntry->Date);
-            TRACE("ClusterLow = 0x%x\n", DirEntry->ClusterLow);
-            TRACE("Size = %d\n", DirEntry->Size);
-            TRACE("StartCluster = 0x%x\n", StartCluster);
-
             return TRUE;
         }
 
@@ -761,8 +738,6 @@ static BOOLEAN FatXSearchDirectoryBufferForFile(PFAT_VOLUME_INFO Volume, PVOID D
     PFATX_DIRENTRY    DirEntry = &OurDirEntry;
 
     EntryCount = DirectorySize / sizeof(FATX_DIRENTRY);
-
-    TRACE("FatXSearchDirectoryBufferForFile() DirectoryBuffer = 0x%x EntryCount = %d FileName = %s\n", DirectoryBuffer, EntryCount, FileName);
 
     FileNameLen = strlen(FileName);
 
@@ -790,18 +765,6 @@ static BOOLEAN FatXSearchDirectoryBufferForFile(PFAT_VOLUME_INFO Volume, PVOID D
             FatFileInfoPointer->CurrentCluster = DirEntry->StartCluster;
             FatFileInfoPointer->StartCluster = DirEntry->StartCluster;
 
-            TRACE("FATX Directory Entry:\n");
-            TRACE("FileNameSize = %d\n", DirEntry->FileNameSize);
-            TRACE("Attr = 0x%x\n", DirEntry->Attr);
-            TRACE("StartCluster = 0x%x\n", DirEntry->StartCluster);
-            TRACE("Size = %d\n", DirEntry->Size);
-            TRACE("Time = %d\n", DirEntry->Time);
-            TRACE("Date = %d\n", DirEntry->Date);
-            TRACE("CreateTime = %d\n", DirEntry->CreateTime);
-            TRACE("CreateDate = %d\n", DirEntry->CreateDate);
-            TRACE("LastAccessTime = %d\n", DirEntry->LastAccessTime);
-            TRACE("LastAccessDate = %d\n", DirEntry->LastAccessDate);
-
             return TRUE;
         }
     }
@@ -825,7 +788,6 @@ ARC_STATUS FatLookupFile(PFAT_VOLUME_INFO Volume, PCSTR FileName, PFAT_FILE_INFO
     ULONG        DirectorySize;
     FAT_FILE_INFO    FatFileInfo;
 
-    TRACE("FatLookupFile() FileName = %s\n", FileName);
 
     RtlZeroMemory(FatFileInfoPointer, sizeof(FAT_FILE_INFO));
 
@@ -1002,10 +964,6 @@ PUCHAR FatGetFatSector(PFAT_VOLUME_INFO Volume, UINT32 FatSectorNumber)
 
         TRACE("FAT cache miss: read sector 0x%x from disk\n", SectorNumAbsolute);
     }
-    else
-    {
-        TRACE("FAT cache hit: sector 0x%x present\n", SectorNumAbsolute);
-    }
 
     return &Volume->FatCache[CacheIndex * Volume->BytesPerSector];
 }
@@ -1020,8 +978,6 @@ BOOLEAN FatGetFatEntry(PFAT_VOLUME_INFO Volume, UINT32 Cluster, PUINT32 ClusterP
     UINT32 FatOffset, ThisFatSecNum, ThisFatEntOffset, fat;
     PUCHAR ReadBuffer;
 
-    TRACE("FatGetFatEntry() Retrieving FAT entry for cluster %d.\n", Cluster);
-
     switch(Volume->FatType)
     {
     case FAT12:
@@ -1029,10 +985,6 @@ BOOLEAN FatGetFatEntry(PFAT_VOLUME_INFO Volume, UINT32 Cluster, PUINT32 ClusterP
         FatOffset = Cluster + (Cluster / 2);
         ThisFatSecNum = FatOffset / Volume->BytesPerSector;
         ThisFatEntOffset = (FatOffset % Volume->BytesPerSector);
-
-        TRACE("FatOffset: %d\n", FatOffset);
-        TRACE("ThisFatSecNum: %d\n", ThisFatSecNum);
-        TRACE("ThisFatEntOffset: %d\n", ThisFatEntOffset);
 
         // The cluster pointer can span within two sectors, but the FatGetFatSector function
         // reads 4 sectors most times, except when we are at the edge of FAT cache
@@ -1097,8 +1049,6 @@ BOOLEAN FatGetFatEntry(PFAT_VOLUME_INFO Volume, UINT32 Cluster, PUINT32 ClusterP
         return FALSE;
     }
 
-    TRACE("FAT entry is 0x%x.\n", fat);
-
     *ClusterPointer = fat;
 
     return TRUE;
@@ -1108,8 +1058,6 @@ static
 ULONG FatCountClustersInChain(PFAT_VOLUME_INFO Volume, UINT32 StartCluster)
 {
     ULONG    ClusterCount = 0;
-
-    TRACE("FatCountClustersInChain() StartCluster = %d\n", StartCluster);
 
     while (1)
     {
@@ -1135,7 +1083,6 @@ ULONG FatCountClustersInChain(PFAT_VOLUME_INFO Volume, UINT32 StartCluster)
         }
     }
 
-    TRACE("FatCountClustersInChain() ClusterCount = %d\n", ClusterCount);
 
     return ClusterCount;
 }
@@ -1192,8 +1139,6 @@ static
 BOOLEAN FatReadClusterChain(PFAT_VOLUME_INFO Volume, UINT32 StartClusterNumber, UINT32 NumberOfClusters, PVOID Buffer, PUINT32 LastClusterNumber)
 {
     UINT32 ClustersRead, NextClusterNumber, ClustersLeft = NumberOfClusters;
-
-    TRACE("FatReadClusterChain() StartClusterNumber = %d NumberOfClusters = %d Buffer = 0x%x\n", StartClusterNumber, NumberOfClusters, Buffer);
 
     ASSERT(NumberOfClusters > 0);
 
@@ -1264,8 +1209,6 @@ BOOLEAN FatReadFile(PFAT_FILE_INFO FatFileInfo, ULONG BytesToRead, ULONG* BytesR
 {
     PFAT_VOLUME_INFO Volume = FatFileInfo->Volume;
     UINT32 NextClusterNumber, BytesPerCluster;
-
-    TRACE("FatReadFile() BytesToRead = %d Buffer = 0x%x\n", BytesToRead, Buffer);
 
     if (BytesRead != NULL)
     {
@@ -1358,7 +1301,6 @@ BOOLEAN FatReadFile(PFAT_FILE_INFO FatFileInfo, ULONG BytesToRead, ULONG* BytesR
             }
 
             FatFileInfo->CurrentCluster = NextClusterNumber;
-            TRACE("FatReadFile() FatFileInfo->CurrentCluster = 0x%x\n", FatFileInfo->CurrentCluster);
         }
     }
 
@@ -1371,8 +1313,6 @@ BOOLEAN FatReadFile(PFAT_FILE_INFO FatFileInfo, ULONG BytesToRead, ULONG* BytesR
         // Determine how many full clusters we need to read
         //
         UINT32 NumberOfClusters = BytesToRead / BytesPerCluster;
-
-        TRACE("Going to read: %u clusters\n", NumberOfClusters);
 
         if (NumberOfClusters > 0)
         {
@@ -1396,7 +1336,6 @@ BOOLEAN FatReadFile(PFAT_FILE_INFO FatFileInfo, ULONG BytesToRead, ULONG* BytesR
 
             FatFileInfo->FilePointer += BytesReadHere;
             FatFileInfo->CurrentCluster = NextClusterNumber;
-            TRACE("FatReadFile() FatFileInfo->CurrentCluster = 0x%x\n", FatFileInfo->CurrentCluster);
         }
     }
 
@@ -1504,7 +1443,6 @@ ARC_STATUS FatOpen(CHAR* Path, OPENMODE OpenMode, ULONG* FileId)
     DeviceId = FsGetDeviceId(*FileId);
     FatVolume = FatVolumes[DeviceId];
 
-    TRACE("FatOpen() FileName = %s\n", Path);
 
     RtlZeroMemory(&TempFileInfo, sizeof(TempFileInfo));
     Status = FatLookupFile(FatVolume, Path, &TempFileInfo);
@@ -1567,13 +1505,9 @@ ARC_STATUS FatSeek(ULONG FileId, LARGE_INTEGER* Position, SEEKMODE SeekMode)
     if (NewPosition.LowPart >= FileHandle->FileSize)
         return EINVAL;
 
-    TRACE("FatSeek() NewPosition = %u, OldPointer = %u, SeekMode = %d\n", NewPosition.LowPart, FileHandle->FilePointer, SeekMode);
-
     {
         UINT32 OldClusterIdx = FileHandle->FilePointer / (Volume->SectorsPerCluster * Volume->BytesPerSector);
         UINT32 NewClusterIdx = NewPosition.LowPart / (Volume->SectorsPerCluster * Volume->BytesPerSector);
-
-        TRACE("FatSeek() OldClusterIdx: %u, NewClusterIdx: %u\n", OldClusterIdx, NewClusterIdx);
 
         if (NewClusterIdx != OldClusterIdx)
         {

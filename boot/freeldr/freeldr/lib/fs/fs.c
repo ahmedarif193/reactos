@@ -228,9 +228,6 @@ ARC_STATUS ArcOpen(CHAR* Path, OPENMODE OpenMode, ULONG* FileId)
     OPENMODE DeviceOpenMode;
     ULONG DeviceId;
 
-    /* Print status message */
-    TRACE("Opening file '%s'...\n", Path);
-
     *FileId = INVALID_FILE_ID;
 
     /* Search last ')', which delimits device and path */
@@ -631,8 +628,6 @@ ULONG FsGetNumPathParts(PCSTR Path)
     }
     num++;
 
-    TRACE("FsGetNumPathParts() Path = %s NumPathParts = %d\n", Path, num);
-
     return num;
 }
 
@@ -665,8 +660,6 @@ VOID FsGetFirstNameFromPath(PCHAR Buffer, PCSTR Path)
     }
 
     Buffer[i] = 0;
-
-    TRACE("FsGetFirstNameFromPath() Path = %s FirstName = %s\n", Path, Buffer);
 }
 
 BOOLEAN
