@@ -21,7 +21,9 @@
 #include "mem.h"
 
 #ifdef _MSC_VER
-#include <intrin.h>
+#if !defined(_M_ARM64) && !defined(__aarch64__)
+#  include <intrin.h>
+#endif
 #endif
 
 typedef struct {
