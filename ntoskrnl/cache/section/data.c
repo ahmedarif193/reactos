@@ -276,14 +276,14 @@ MmFinalizeSegment(PMM_SECTION_SEGMENT Segment)
 
     MmLockSectionSegment(Segment);
     RemoveEntryList(&Segment->ListOfSegments);
-    if (Segment->Flags & MM_DATAFILE_SEGMENT) {
+    if (*Segment->Flags & MM_DATAFILE_SEGMENT) {
         KeAcquireSpinLock(&Segment->FileObject->IrpListLock, &OldIrql);
-        if (Segment->Flags & MM_SEGMENT_FINALIZE) {
+        if (*Segment->Flags & MM_SEGMENT_FINALIZE) {
             KeReleaseSpinLock(&Segment->FileObject->IrpListLock, OldIrql);
             MmUnlockSectionSegment(Segment);
             return;
         }
-        Segment->Flags |= MM_SEGMENT_FINALIZE;
+        *Segment->Flags |= MM_SEGMENT_FINALIZE;
         DPRINTC("Finalizing data file segment %p\n", Segment);
 
         Segment->FileObject->SectionObjectPointer->DataSectionObject = NULL;

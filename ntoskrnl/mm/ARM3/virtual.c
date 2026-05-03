@@ -19,6 +19,8 @@
 #define MI_POOL_COPY_BYTES    512
 #define MI_MAX_TRANSFER_SIZE  64 * 1024
 
+static SIZE_T MiTotalCommitCharge;
+
 NTSTATUS NTAPI
 MiProtectVirtualMemory(IN PEPROCESS Process,
                        IN OUT PVOID *BaseAddress,
@@ -36,6 +38,62 @@ MiFlushTbAndCapture(IN PMMVAD FoundVad,
 
 
 /* PRIVATE FUNCTIONS **********************************************************/
+
+static
+NTSTATUS
+MiChargeProcessCommitment(
+    _In_ PEPROCESS Process,
+    _In_ SIZE_T PageCount)
+{
+    SIZE_T OldTotalCommit, NewTotalCommit;
+    SIZE_T OldProcessCommit, NewProcessCommit;
+
+    if (PageCount == 0)
+        return STATUS_SUCCESS;
+
+    OldTotalCommit = MiTotalCommitCharge;
+    for (;;)
+    {
+        NewTotalCommit = OldTotalCommit + PageCount;
+        if ((NewTotalCommit < OldTotalCommit) ||
+            (NewTotalCommit > MmTotalCommitLimit))
+        {
+            return STATUS_COMMITMENT_LIMIT;
+        }
+
+        if (InterlockedCompareExchangeSizeT(&MiTotalCommitCharge,
+                                            NewTotalCommit,
+                                            OldTotalCommit) == OldTotalCommit)
+        {
+            break;
+        }
+
+        OldTotalCommit = MiTotalCommitCharge;
+    }
+
+    OldProcessCommit = InterlockedExchangeAddSizeT(&Process->CommitCharge, PageCount);
+    NewProcessCommit = OldProcessCommit + PageCount;
+    if (NewProcessCommit > Process->CommitChargePeak)
+    {
+        Process->CommitChargePeak = NewProcessCommit;
+    }
+
+    return STATUS_SUCCESS;
+}
+
+static
+VOID
+MiReturnProcessCommitment(
+    _In_ PEPROCESS Process,
+    _In_ SIZE_T PageCount)
+{
+    if (PageCount == 0)
+        return;
+
+    ASSERT(Process->CommitCharge >= PageCount);
+    InterlockedExchangeAddSizeT(&Process->CommitCharge, -(LONG_PTR)PageCount);
+    InterlockedExchangeAddSizeT(&MiTotalCommitCharge, -(LONG_PTR)PageCount);
+}
 
 ULONG
 NTAPI
@@ -67,7 +125,8 @@ MiCalculatePageCommitment(IN ULONG_PTR StartingAddress,
      * and count the individually decommitted pages.
      * In case it is not, assume the range is not committed and count the individually committed pages.
      */
-    ULONG_PTR CommittedPages = Vad->u.VadFlags.MemCommit ? BYTES_TO_PAGES(EndingAddress - StartingAddress) : 0;
+    ULONG_PTR PageCount = BYTES_TO_PAGES(EndingAddress - StartingAddress + 1);
+    ULONG_PTR CommittedPages = Vad->u.VadFlags.MemCommit ? PageCount : 0;
 
     while (PointerPte <= LastPte)
     {
@@ -174,7 +233,7 @@ MiCalculatePageCommitment(IN ULONG_PTR StartingAddress,
     }
 
     /* Make sure we didn't mess this up */
-    ASSERT(CommittedPages <= BYTES_TO_PAGES(EndingAddress - StartingAddress));
+    ASSERT(CommittedPages <= PageCount);
     return CommittedPages;
 }
 
@@ -2738,6 +2797,58 @@ MiDecommitPages(IN PVOID StartingAddress,
     return CommitReduction;
 }
 
+static
+VOID
+MiResetPrivatePages(
+    _In_ ULONG_PTR StartingAddress,
+    _In_ ULONG_PTR EndingAddress,
+    _In_ PEPROCESS Process)
+{
+    ULONG_PTR CurrentAddress;
+    PMMPTE PointerPte, LastPte;
+    PMMPDE PointerPde;
+    MMPTE TempPte;
+    KIRQL OldIrql;
+    PETHREAD CurrentThread = PsGetCurrentThread();
+
+    MiLockProcessWorkingSetUnsafe(Process, CurrentThread);
+
+    PointerPde = MiAddressToPde(StartingAddress);
+    MiMakePdeExistAndMakeValid(PointerPde, Process, MM_NOIRQL);
+
+    CurrentAddress = StartingAddress;
+    PointerPte = MiAddressToPte(StartingAddress);
+    LastPte = MiAddressToPte(EndingAddress);
+
+    while (PointerPte <= LastPte)
+    {
+        if (MiIsPteOnPdeBoundary(PointerPte))
+        {
+            PointerPde = MiPteToPde(PointerPte);
+            MiMakePdeExistAndMakeValid(PointerPde, Process, MM_NOIRQL);
+        }
+
+        if (PointerPte->u.Hard.Valid)
+        {
+            TempPte.u.Long = 0;
+            TempPte.u.Soft.Protection = MiMakeProtectionMask(MiGetPageProtection(PointerPte));
+            ASSERT(TempPte.u.Long != 0);
+
+            OldIrql = MiAcquirePfnLock();
+            MiDeletePte(PointerPte, (PVOID)CurrentAddress, Process, NULL);
+            MiReleasePfnLock(OldIrql);
+
+            MiIncrementPageTableReferences((PVOID)CurrentAddress);
+            MI_WRITE_INVALID_PTE(PointerPte, TempPte);
+        }
+
+        PointerPte++;
+        CurrentAddress += PAGE_SIZE;
+    }
+
+    MiUnlockProcessWorkingSetUnsafe(Process, CurrentThread);
+}
+
 /* PUBLIC FUNCTIONS ***********************************************************/
 
 /*
@@ -4473,7 +4584,9 @@ NtAllocateVirtualMemory(IN HANDLE ProcessHandle,
     PETHREAD CurrentThread = PsGetCurrentThread();
     KAPC_STATE ApcState;
     ULONG ProtectionMask, QuotaCharge = 0, QuotaFree = 0;
+    SIZE_T CommitCharge = 0;
     BOOLEAN Attached = FALSE, ChangeProtection = FALSE, QuotaCharged = FALSE;
+    BOOLEAN CommitCharged = FALSE;
     MMPTE TempPte;
     PMMPTE PointerPte, LastPte;
     PMMPDE PointerPde;
@@ -4481,7 +4594,7 @@ NtAllocateVirtualMemory(IN HANDLE ProcessHandle,
     PAGED_CODE();
 
     /* Check for valid Zero bits */
-    if (ZeroBits > MI_MAX_ZERO_BITS)
+    if (ZeroBits > 21)
     {
         DPRINT1("Too many zero bits\n");
         return STATUS_INVALID_PARAMETER_3;
@@ -4603,6 +4716,12 @@ NtAllocateVirtualMemory(IN HANDLE ProcessHandle,
         return STATUS_INVALID_PARAMETER_4;
     }
 
+    if (PRegionSize >= MAXULONG)
+    {
+        DPRINT1("Region size is too large\n");
+        return STATUS_INVALID_PARAMETER_4;
+    }
+
     /* Make sure there's a size specified */
     if (!PRegionSize)
     {
@@ -4664,7 +4783,8 @@ NtAllocateVirtualMemory(IN HANDLE ProcessHandle,
         Status = STATUS_INVALID_PARAMETER;
         goto FailPathNoLock;
     }
-    if ((AllocationType & MEM_PHYSICAL) == MEM_PHYSICAL)
+    if (((AllocationType & MEM_PHYSICAL) == MEM_PHYSICAL) &&
+        ((AllocationType & MEM_RESERVE) == 0))
     {
         DPRINT1("MEM_PHYSICAL not supported\n");
         Status = STATUS_INVALID_PARAMETER;
@@ -4710,15 +4830,17 @@ NtAllocateVirtualMemory(IN HANDLE ProcessHandle,
             //
             if (ZeroBits != 0)
             {
+                if (ZeroBits >= 20)
+                {
+                    Status = STATUS_NO_MEMORY;
+                    goto FailPathNoLock;
+                }
+
                 //
                 // Calculate the highest address and check if it's valid
                 //
-                HighestAddress = MAXULONG_PTR >> ZeroBits;
-                if (HighestAddress > (ULONG_PTR)MM_HIGHEST_VAD_ADDRESS)
-                {
-                    Status = STATUS_INVALID_PARAMETER_3;
-                    goto FailPathNoLock;
-                }
+                HighestAddress = min(MAXULONG_PTR >> ZeroBits,
+                                     (ULONG_PTR)MM_HIGHEST_VAD_ADDRESS);
             }
         }
         else
@@ -4731,6 +4853,19 @@ NtAllocateVirtualMemory(IN HANDLE ProcessHandle,
             EndingAddress = ((ULONG_PTR)PBaseAddress + PRegionSize - 1) | (PAGE_SIZE - 1);
             PRegionSize = EndingAddress + 1 - ROUND_DOWN((ULONG_PTR)PBaseAddress, _64K);
             StartingAddress = (ULONG_PTR)PBaseAddress;
+        }
+
+        if (AllocationType & MEM_COMMIT)
+        {
+            CommitCharge = BYTES_TO_PAGES(PRegionSize);
+            Status = MiChargeProcessCommitment(Process, CommitCharge);
+            if (!NT_SUCCESS(Status))
+            {
+                DPRINT1("Commit limit exceeded.\n");
+                goto FailPathNoLock;
+            }
+
+            CommitCharged = TRUE;
         }
 
         // Charge quotas for the VAD
@@ -4844,8 +4979,11 @@ NtAllocateVirtualMemory(IN HANDLE ProcessHandle,
 
     if ((AllocationType & MEM_RESET) == MEM_RESET)
     {
-        /// @todo HACK: pretend success
-        DPRINT("MEM_RESET not supported\n");
+        if (FoundVad->u.VadFlags.PrivateMemory)
+        {
+            MiResetPrivatePages(StartingAddress, EndingAddress, Process);
+        }
+
         Status = STATUS_SUCCESS;
         goto FailPath;
     }
@@ -5031,16 +5169,26 @@ NtAllocateVirtualMemory(IN HANDLE ProcessHandle,
     LastPte = MiAddressToPte(EndingAddress);
 
     //
-    // Update the commit charge in the VAD as well as in the process, and check
-    // if this commit charge was now higher than the last recorded peak, in which
-    // case we also update the peak
+    // Count pages that are not already committed, then charge the VAD and
+    // process before making any PTE changes.
     //
-    FoundVad->u.VadFlags.CommitCharge += (1 + LastPte - PointerPte);
-    Process->CommitCharge += (1 + LastPte - PointerPte);
-    if (Process->CommitCharge > Process->CommitChargePeak)
+    MiLockProcessWorkingSetUnsafe(Process, CurrentThread);
+    CommitCharge = (1 + LastPte - PointerPte) -
+                   MiCalculatePageCommitment(StartingAddress,
+                                             EndingAddress,
+                                             FoundVad,
+                                             Process);
+    MiUnlockProcessWorkingSetUnsafe(Process, CurrentThread);
+
+    Status = MiChargeProcessCommitment(Process, CommitCharge);
+    if (!NT_SUCCESS(Status))
     {
-        Process->CommitChargePeak = Process->CommitCharge;
+        DPRINT1("Commit limit exceeded.\n");
+        goto FailPath;
     }
+
+    CommitCharged = TRUE;
+    FoundVad->u.VadFlags.CommitCharge += CommitCharge;
 
     //
     // Lock the working set while we play with user pages and page tables
@@ -5129,6 +5277,12 @@ FailPath:
         {
             ExFreePoolWithTag(Vad, 'SdaV');
         }
+
+        if (CommitCharged)
+        {
+            MiReturnProcessCommitment(Process, CommitCharge);
+            CommitCharged = FALSE;
+        }
     }
 
     //
@@ -5176,9 +5330,17 @@ FailPathNoLock:
         }
         _SEH2_END;
     }
-    else if (QuotaCharged)
+    else
     {
-        PsReturnProcessNonPagedPoolQuota(Process, sizeof(MMVAD_LONG));
+        if (QuotaCharged)
+        {
+            PsReturnProcessNonPagedPoolQuota(Process, sizeof(MMVAD_LONG));
+        }
+
+        if (CommitCharged)
+        {
+            MiReturnProcessCommitment(Process, CommitCharge);
+        }
     }
 
     return Status;
@@ -5400,6 +5562,7 @@ NtFreeVirtualMemory(IN HANDLE ProcessHandle,
             ASSERT(Process->VadRoot.NumberGenericTableElements >= 1);
             MiRemoveNode((PMMADDRESS_NODE)Vad, &Process->VadRoot);
             PsReturnProcessNonPagedPoolQuota(Process, sizeof(MMVAD_LONG));
+            CommitReduction = Vad->u.VadFlags.CommitCharge;
         }
         else
         {
@@ -5433,6 +5596,7 @@ NtFreeVirtualMemory(IN HANDLE ProcessHandle,
                     ASSERT(Process->VadRoot.NumberGenericTableElements >= 1);
                     MiRemoveNode((PMMADDRESS_NODE)Vad, &Process->VadRoot);
                     PsReturnProcessNonPagedPoolQuota(Process, sizeof(MMVAD_LONG));
+                    CommitReduction = Vad->u.VadFlags.CommitCharge;
                 }
                 else
                 {
@@ -5578,7 +5742,7 @@ FinalPath:
         // Update the process counters
         //
         PRegionSize = EndingAddress - StartingAddress + 1;
-        Process->CommitCharge -= CommitReduction;
+        MiReturnProcessCommitment(Process, CommitReduction);
         if (FreeType & MEM_RELEASE) Process->VirtualSize -= PRegionSize;
 
         //

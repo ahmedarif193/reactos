@@ -145,6 +145,7 @@ typedef ULONG_PTR SWAPENTRY;
      PAGE_EXECUTE_READWRITE | \
      PAGE_EXECUTE_WRITECOPY | \
      PAGE_NOACCESS | \
+     PAGE_GUARD | \
      PAGE_NOCACHE | \
      PAGE_WRITECOMBINE)
 
@@ -201,6 +202,7 @@ typedef struct _MM_SECTION_SEGMENT
 {
     LONG64 RefCount;
     PFILE_OBJECT FileObject;
+    LIST_ENTRY FileObjectList;
 
     FAST_MUTEX Lock;		/* lock which protects the page directory */
     LARGE_INTEGER RawLength;		/* length of the segment which is part of the mapped file */
@@ -245,6 +247,7 @@ typedef struct _MM_IMAGE_SECTION_OBJECT
 #define MM_SEGMENT_INDELETE                 (0x4)
 #define MM_SEGMENT_INCREATE                 (0x8)
 #define MM_IMAGE_SECTION_FLUSH_DELETE       (0x10)
+#define MM_DATAFILE_SEGMENT_FILE_REF        (0x20)
 
 
 #define MA_GetStartingAddress(_MemoryArea) ((_MemoryArea)->VadNode.StartingVpn << PAGE_SHIFT)
