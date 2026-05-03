@@ -265,6 +265,91 @@ SimpleAllocation(VOID)
 
 static
 VOID
+CommitAccountingChecks(VOID)
+{
+    NTSTATUS Status;
+    PEPROCESS Process = PsGetCurrentProcess();
+    SIZE_T InitialCommit = Process->CommitCharge;
+    PVOID Base = NULL;
+    PVOID CommitBase;
+    SIZE_T RegionSize;
+
+    RegionSize = 3 * PAGE_SIZE;
+    Status = ZwAllocateVirtualMemory(NtCurrentProcess(),
+                                     &Base,
+                                     0,
+                                     &RegionSize,
+                                     MEM_RESERVE,
+                                     PAGE_READWRITE);
+    ok_eq_hex(Status, STATUS_SUCCESS);
+    if (!NT_SUCCESS(Status))
+        return;
+
+    ok_eq_size(Process->CommitCharge, InitialCommit);
+
+    CommitBase = Base;
+    RegionSize = PAGE_SIZE;
+    Status = ZwAllocateVirtualMemory(NtCurrentProcess(),
+                                     &CommitBase,
+                                     0,
+                                     &RegionSize,
+                                     MEM_COMMIT,
+                                     PAGE_READWRITE);
+    ok_eq_hex(Status, STATUS_SUCCESS);
+    ok_eq_size(Process->CommitCharge, InitialCommit + 1);
+
+    CommitBase = Base;
+    RegionSize = PAGE_SIZE;
+    Status = ZwAllocateVirtualMemory(NtCurrentProcess(),
+                                     &CommitBase,
+                                     0,
+                                     &RegionSize,
+                                     MEM_COMMIT,
+                                     PAGE_READONLY);
+    ok_eq_hex(Status, STATUS_SUCCESS);
+    ok_eq_size(Process->CommitCharge, InitialCommit + 1);
+
+    CommitBase = Base;
+    RegionSize = 2 * PAGE_SIZE;
+    Status = ZwAllocateVirtualMemory(NtCurrentProcess(),
+                                     &CommitBase,
+                                     0,
+                                     &RegionSize,
+                                     MEM_COMMIT,
+                                     PAGE_READWRITE);
+    ok_eq_hex(Status, STATUS_SUCCESS);
+    ok_eq_size(Process->CommitCharge, InitialCommit + 2);
+
+    CommitBase = (PUCHAR)Base + 2 * PAGE_SIZE;
+    RegionSize = PAGE_SIZE;
+    Status = ZwFreeVirtualMemory(NtCurrentProcess(),
+                                 &CommitBase,
+                                 &RegionSize,
+                                 MEM_DECOMMIT);
+    ok_eq_hex(Status, STATUS_SUCCESS);
+    ok_eq_size(Process->CommitCharge, InitialCommit + 2);
+
+    CommitBase = Base;
+    RegionSize = 3 * PAGE_SIZE;
+    Status = ZwFreeVirtualMemory(NtCurrentProcess(),
+                                 &CommitBase,
+                                 &RegionSize,
+                                 MEM_DECOMMIT);
+    ok_eq_hex(Status, STATUS_SUCCESS);
+    ok_eq_size(Process->CommitCharge, InitialCommit);
+
+    RegionSize = 0;
+    Status = ZwFreeVirtualMemory(NtCurrentProcess(),
+                                 &Base,
+                                 &RegionSize,
+                                 MEM_RELEASE);
+    ok_eq_hex(Status, STATUS_SUCCESS);
+    ok_eq_size(Process->CommitCharge, InitialCommit);
+}
+
+
+static
+VOID
 CustomBaseAllocation(VOID)
 {
     NTSTATUS Status;
@@ -502,11 +587,21 @@ START_TEST(ZwAllocateVirtualMemory)
     CustomBaseAllocation();
 
     Status = StressTesting(MEM_RESERVE);
+#ifdef _M_AMD64
+    ok_eq_hex(Status, STATUS_SUCCESS);
+#else
     ok_eq_hex(Status, STATUS_NO_MEMORY);
+#endif
 
     Status = STATUS_SUCCESS;
     Status = StressTesting(MEM_COMMIT);
+#ifdef _M_AMD64
+    ok_eq_hex(Status, STATUS_COMMITMENT_LIMIT);
+#else
     ok_eq_hex(Status, STATUS_NO_MEMORY);
+#endif
+
+    CommitAccountingChecks();
 
     SystemProcessTest();
 }
