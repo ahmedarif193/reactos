@@ -22,6 +22,19 @@ PRTLP_UNHANDLED_EXCEPTION_FILTER RtlpUnhandledExceptionFilter;
 
 /* FUNCTIONS ***************************************************************/
 
+#if defined(_M_AMD64)
+FORCEINLINE
+ULONG64
+RtlpGetCallerFramePointer(VOID)
+{
+#if defined(_MSC_VER)
+    return *(PULONG64)((ULONG_PTR)_AddressOfReturnAddress() - sizeof(PVOID));
+#else
+    return *(PULONG64)__builtin_frame_address(0);
+#endif
+}
+#endif
+
 #if !defined(_M_IX86) && !defined(_M_AMD64)
 
 /*
@@ -99,6 +112,17 @@ RtlRaiseStatus(IN NTSTATUS Status)
 
     /* Write the context flag */
     Context.ContextFlags = CONTEXT_FULL;
+
+#if defined(_M_AMD64)
+    /*
+     * Raise from the caller's machine frame. RtlCaptureContext records this
+     * helper's RIP/RSP, which makes amd64 unwind start in RtlRaiseStatus
+     * itself and can miss the caller's SEH scope.
+     */
+    Context.Rip = (ULONG64)_ReturnAddress();
+    Context.Rsp = (ULONG64)_AddressOfReturnAddress() + sizeof(PVOID);
+    Context.Rbp = RtlpGetCallerFramePointer();
+#endif
 
     /* Check if user mode debugger is active */
     if (RtlpCheckForActiveDebugger())

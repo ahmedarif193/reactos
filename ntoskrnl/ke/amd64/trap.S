@@ -135,6 +135,9 @@ FUNC InternalDispatchException
     call KiDispatchException
 
     /* Restore registers */
+    mov rbx, [rsp + KEXCEPTION_FRAME_Rbx]
+    mov rdi, [rsp + KEXCEPTION_FRAME_Rdi]
+    mov rsi, [rsp + KEXCEPTION_FRAME_Rsi]
     mov r12, [rsp + KEXCEPTION_FRAME_R12]
     mov r13, [rsp + KEXCEPTION_FRAME_R13]
     mov r14, [rsp + KEXCEPTION_FRAME_R14]
@@ -480,6 +483,11 @@ IntsDisabled:
     jmp PageFaultReturn
 
 PageFaultError:
+
+    /* Exception dispatch may unwind without ever reaching PageFaultReturn */
+    mov rcx, gs:[PcCurrentThread]
+    mov rdx, [rbp + KTRAP_FRAME_TrapFrame]
+    mov [rcx + ThTrapFrame], rdx
 
     /* Set parameter 1 to write/execute flag.
        See https://learn.microsoft.com/en-us/windows/win32/api/winnt/ns-winnt-exception_record */
@@ -893,6 +901,11 @@ PUBLIC KiSystemCallEntry64
 #endif
 
 GLOBAL_LABEL KiSystemCall64Again
+
+    /* Pass the trap frame pointer explicitly. Recovering it from
+     * _AddressOfReturnAddress() relies on compiler-specific frame layout
+     * at this assembly-to-C boundary. */
+    lea rcx, [rsp + MAX_SYSCALL_PARAM_SIZE]
 
     /* Call the C-handler (will enable interrupts) */
     call KiSystemCallHandler
