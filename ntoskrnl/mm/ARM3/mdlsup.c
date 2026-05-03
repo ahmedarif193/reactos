@@ -68,12 +68,6 @@ MiMapLockedPagesInUserSpace(
     IsIoMapping = (Mdl->MdlFlags & MDL_IO_SPACE) != 0;
     CacheAttribute = MiPlatformCacheAttributes[IsIoMapping][CacheType];
 
-    /* Large pages are always cached, make sure we're not asking for those */
-    if (CacheAttribute != MiCached)
-    {
-        DPRINT1("FIXME: Need to check for large pages\n");
-    }
-
     Status = PsChargeProcessNonPagedPoolQuota(Process, sizeof(MMVAD_LONG));
     if (!NT_SUCCESS(Status))
     {
@@ -1686,11 +1680,13 @@ MmMapLockedPagesWithReservedMapping(
     }
 
     // If the mapping isn't big enough, fail
-    if (PointerPte[0].u.List.NextEntry - 2 < PageCount)
+    if ((PointerPte[0].u.List.NextEntry < 2) ||
+        (PointerPte[0].u.List.NextEntry - 2 < PageCount))
     {
         DPRINT1("Reserved mapping too small. Need %Iu pages, have %Iu\n",
-                        PageCount,
-                        PointerPte[0].u.List.NextEntry - 2);
+                PageCount,
+                (PointerPte[0].u.List.NextEntry >= 2) ?
+                    (SIZE_T)(PointerPte[0].u.List.NextEntry - 2) : 0);
         return NULL;
     }
     // Skip our two helper PTEs

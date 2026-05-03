@@ -49,7 +49,7 @@ CcGetFileObjectFromBcb (
 
     CCTRACE(CC_API_DEBUG, "Bcb=%p\n", Bcb);
 
-    return iBcb->Vacb->SharedCacheMap->FileObject;
+    return iBcb->SharedCacheMap->FileObject;
 }
 
 /*
@@ -377,6 +377,8 @@ CcUninitializeCacheMap (
     if (TruncateSize != NULL &&
         FileObject->SectionObjectPointer->SharedCacheMap != NULL)
     {
+        CcFlushCache(FileObject->SectionObjectPointer, NULL, 0, NULL);
+
         SharedCacheMap = FileObject->SectionObjectPointer->SharedCacheMap;
         KeAcquireSpinLock(&SharedCacheMap->CacheMapLock, &OldIrql);
         if (SharedCacheMap->FileSize.QuadPart > TruncateSize->QuadPart)
