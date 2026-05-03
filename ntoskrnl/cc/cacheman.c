@@ -117,9 +117,6 @@ CcShutdownSystem(VOID)
     /* NOTHING TO DO */
 }
 
-/*
- * @unimplemented
- */
 LARGE_INTEGER
 NTAPI
 CcGetFlushedValidData (
@@ -127,12 +124,24 @@ CcGetFlushedValidData (
     IN BOOLEAN BcbListHeld
     )
 {
-	LARGE_INTEGER i;
+    KIRQL OldIrql;
+    LARGE_INTEGER FlushedValidData = {{0}};
+    PROS_SHARED_CACHE_MAP SharedCacheMap;
 
-	UNIMPLEMENTED;
+    SharedCacheMap = SectionObjectPointer->SharedCacheMap;
+    if (SharedCacheMap == NULL)
+        return FlushedValidData;
 
-	i.QuadPart = 0;
-	return i;
+    KeAcquireSpinLock(&SharedCacheMap->CacheMapLock, &OldIrql);
+
+    if (SharedCacheMap->DirtyPages == 0)
+    {
+        FlushedValidData = SharedCacheMap->ValidDataLength;
+    }
+
+    KeReleaseSpinLock(&SharedCacheMap->CacheMapLock, OldIrql);
+
+    return FlushedValidData;
 }
 
 /*
@@ -319,6 +328,10 @@ CcSetBcbOwnerPointer (
     }
 
     ExSetResourceOwnerPointer(&iBcb->Lock, Owner);
+    if (iBcb->ExclusivePinCount != 0)
+    {
+        iBcb->ExclusiveOwner = (ERESOURCE_THREAD)Owner;
+    }
 }
 
 /*

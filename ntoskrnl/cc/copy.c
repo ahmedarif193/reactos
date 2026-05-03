@@ -461,23 +461,31 @@ CcCanIWrite (
 }
 
 static
-int
-CcpCheckInvalidUserBuffer(PEXCEPTION_POINTERS Except, PVOID Buffer, ULONG Length)
+BOOLEAN
+CcpEnsureVacbResidentForCopy(
+    _In_ PROS_VACB Vacb,
+    _In_ BOOLEAN Wait,
+    _In_ ULONG Offset,
+    _In_ ULONG Length)
 {
-    ULONG_PTR ExceptionAddress;
-    ULONG_PTR BeginAddress = (ULONG_PTR)Buffer;
-    ULONG_PTR EndAddress = (ULONG_PTR)Buffer + Length;
+    PROS_SHARED_CACHE_MAP SharedCacheMap = Vacb->SharedCacheMap;
+    LONGLONG FileOffset = Vacb->FileOffset.QuadPart + Offset;
 
-    if (Except->ExceptionRecord->ExceptionCode != STATUS_ACCESS_VIOLATION)
-        return EXCEPTION_CONTINUE_SEARCH;
-    if (Except->ExceptionRecord->NumberParameters < 2)
-        return EXCEPTION_CONTINUE_SEARCH;
+    ASSERT((Offset + Length) <= VACB_MAPPING_GRANULARITY);
 
-    ExceptionAddress = Except->ExceptionRecord->ExceptionInformation[1];
-    if ((ExceptionAddress >= BeginAddress) && (ExceptionAddress < EndAddress))
-        return EXCEPTION_EXECUTE_HANDLER;
+    if (Wait)
+    {
+        return CcRosEnsureVacbResident(Vacb, TRUE, FALSE, Offset, Length);
+    }
 
-    return EXCEPTION_CONTINUE_SEARCH;
+    if (!MmIsDataSectionResident(SharedCacheMap->FileObject->SectionObjectPointer,
+                                 FileOffset,
+                                 Length))
+    {
+        return FALSE;
+    }
+
+    return TRUE;
 }
 
 /*
@@ -494,11 +502,21 @@ CcCopyRead (
     OUT PIO_STATUS_BLOCK IoStatus)
 {
     PROS_VACB Vacb;
-    PROS_SHARED_CACHE_MAP SharedCacheMap = FileObject->SectionObjectPointer->SharedCacheMap;
+    PROS_SHARED_CACHE_MAP SharedCacheMap;
     NTSTATUS Status;
     LONGLONG CurrentOffset;
-    LONGLONG ReadEnd = FileOffset->QuadPart + Length;
+    LONGLONG ReadEnd;
     ULONG ReadLength = 0;
+
+    if (FileObject == NULL)
+        ExRaiseAccessViolation();
+    if (FileOffset == NULL)
+        ExRaiseAccessViolation();
+    if (IoStatus == NULL)
+        ExRaiseAccessViolation();
+
+    SharedCacheMap = FileObject->SectionObjectPointer->SharedCacheMap;
+    ReadEnd = FileOffset->QuadPart + Length;
 
     CCTRACE(CC_API_DEBUG, "FileObject=%p FileOffset=%I64d Length=%lu Wait=%d\n",
         FileObject, FileOffset->QuadPart, Length, Wait);
@@ -517,6 +535,10 @@ CcCopyRead (
     CurrentOffset = FileOffset->QuadPart;
     while(CurrentOffset < ReadEnd)
     {
+        ULONG VacbOffset = CurrentOffset % VACB_MAPPING_GRANULARITY;
+        ULONG VacbLength = min(Length, VACB_MAPPING_GRANULARITY - VacbOffset);
+        SIZE_T CopyLength = VacbLength;
+
         Status = CcRosGetVacb(SharedCacheMap, CurrentOffset, &Vacb);
         if (!NT_SUCCESS(Status))
         {
@@ -524,63 +546,73 @@ CcCopyRead (
             return FALSE;
         }
 
-        _SEH2_TRY
-        {
-            ULONG VacbOffset = CurrentOffset % VACB_MAPPING_GRANULARITY;
-            ULONG VacbLength = min(Length, VACB_MAPPING_GRANULARITY - VacbOffset);
-            SIZE_T CopyLength = VacbLength;
-
-            if (!CcRosEnsureVacbResident(Vacb, Wait, FALSE, VacbOffset, VacbLength))
-                return FALSE;
-
-            _SEH2_TRY
-            {
-                RtlCopyMemory(Buffer, (PUCHAR)Vacb->BaseAddress + VacbOffset, CopyLength);
-            }
-            _SEH2_EXCEPT(CcpCheckInvalidUserBuffer(_SEH2_GetExceptionInformation(), Buffer, VacbLength))
-            {
-                ExRaiseStatus(STATUS_INVALID_USER_BUFFER);
-            }
-            _SEH2_END;
-
-            ReadLength += VacbLength;
-
-            Buffer = (PVOID)((ULONG_PTR)Buffer + VacbLength);
-            CurrentOffset += VacbLength;
-            Length -= VacbLength;
-        }
-        _SEH2_FINALLY
+        if (!CcpEnsureVacbResidentForCopy(Vacb, Wait, VacbOffset, VacbLength))
         {
             CcRosReleaseVacb(SharedCacheMap, Vacb, FALSE, FALSE);
+            return FALSE;
+        }
+
+        if ((Buffer == NULL) && (VacbLength != 0))
+        {
+            CcRosReleaseVacb(SharedCacheMap, Vacb, FALSE, FALSE);
+            ExRaiseStatus(STATUS_INVALID_USER_BUFFER);
+        }
+
+        _SEH2_TRY
+        {
+            RtlCopyMemory(Buffer, (PUCHAR)Vacb->BaseAddress + VacbOffset, CopyLength);
+        }
+        _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
+        {
+            CcRosReleaseVacb(SharedCacheMap, Vacb, FALSE, FALSE);
+            ExRaiseStatus(STATUS_INVALID_USER_BUFFER);
         }
         _SEH2_END;
+
+        CcRosReleaseVacb(SharedCacheMap, Vacb, FALSE, FALSE);
+        ReadLength += VacbLength;
+
+        Buffer = (PVOID)((ULONG_PTR)Buffer + VacbLength);
+        CurrentOffset += VacbLength;
+        Length -= VacbLength;
     }
 
     IoStatus->Status = STATUS_SUCCESS;
     IoStatus->Information = ReadLength;
 
-#if 0
-    /* If that was a successful sync read operation, let's handle read ahead */
+    /* Update read-ahead state after a successful synchronous read. */
     if (Length == 0 && Wait)
     {
-        PPRIVATE_CACHE_MAP PrivateCacheMap = FileObject->PrivateCacheMap;
+        KIRQL OldIrql;
+        PPRIVATE_CACHE_MAP PrivateCacheMap;
 
-        /* If file isn't random access and next read may get us cross VACB boundary,
-         * schedule next read
-         */
-        if (!BooleanFlagOn(FileObject->Flags, FO_RANDOM_ACCESS) &&
-            (CurrentOffset - 1) / VACB_MAPPING_GRANULARITY != (CurrentOffset + ReadLength - 1) / VACB_MAPPING_GRANULARITY)
+        OldIrql = KeAcquireQueuedSpinLock(LockQueueMasterLock);
+        PrivateCacheMap = FileObject->PrivateCacheMap;
+        if (PrivateCacheMap != NULL)
         {
-            CcScheduleReadAhead(FileObject, FileOffset, ReadLength);
-        }
+            /* Schedule read-ahead when a sequential read crosses a VACB boundary. */
+            if (!BooleanFlagOn(FileObject->Flags, FO_RANDOM_ACCESS) &&
+                (CurrentOffset - 1) / VACB_MAPPING_GRANULARITY !=
+                (CurrentOffset + ReadLength - 1) / VACB_MAPPING_GRANULARITY)
+            {
+                KeReleaseQueuedSpinLock(LockQueueMasterLock, OldIrql);
+                CcScheduleReadAhead(FileObject, FileOffset, ReadLength);
+                OldIrql = KeAcquireQueuedSpinLock(LockQueueMasterLock);
+                PrivateCacheMap = FileObject->PrivateCacheMap;
+            }
 
-        /* And update read history in private cache map */
-        PrivateCacheMap->FileOffset1.QuadPart = PrivateCacheMap->FileOffset2.QuadPart;
-        PrivateCacheMap->BeyondLastByte1.QuadPart = PrivateCacheMap->BeyondLastByte2.QuadPart;
-        PrivateCacheMap->FileOffset2.QuadPart = FileOffset->QuadPart;
-        PrivateCacheMap->BeyondLastByte2.QuadPart = FileOffset->QuadPart + ReadLength;
+            if (PrivateCacheMap != NULL)
+            {
+                KeAcquireSpinLockAtDpcLevel(&PrivateCacheMap->ReadAheadSpinLock);
+                PrivateCacheMap->FileOffset1.QuadPart = PrivateCacheMap->FileOffset2.QuadPart;
+                PrivateCacheMap->BeyondLastByte1.QuadPart = PrivateCacheMap->BeyondLastByte2.QuadPart;
+                PrivateCacheMap->FileOffset2.QuadPart = FileOffset->QuadPart;
+                PrivateCacheMap->BeyondLastByte2.QuadPart = FileOffset->QuadPart + ReadLength;
+                KeReleaseSpinLockFromDpcLevel(&PrivateCacheMap->ReadAheadSpinLock);
+            }
+        }
+        KeReleaseQueuedSpinLock(LockQueueMasterLock, OldIrql);
     }
-#endif
 
     return TRUE;
 }
@@ -622,6 +654,7 @@ CcCopyWrite (
     CurrentOffset = FileOffset->QuadPart;
     while(CurrentOffset < WriteEnd)
     {
+        BOOLEAN Dirty = FALSE;
         ULONG VacbOffset = CurrentOffset % VACB_MAPPING_GRANULARITY;
         ULONG VacbLength = min(WriteEnd - CurrentOffset, VACB_MAPPING_GRANULARITY - VacbOffset);
 
@@ -632,39 +665,42 @@ CcCopyWrite (
             return FALSE;
         }
 
+        if (!CcpEnsureVacbResidentForCopy(Vacb, Wait, VacbOffset, VacbLength))
+        {
+            CcRosReleaseVacb(SharedCacheMap, Vacb, FALSE, FALSE);
+            return FALSE;
+        }
+
+        if ((Buffer == NULL) && (VacbLength != 0))
+        {
+            CcRosReleaseVacb(SharedCacheMap, Vacb, FALSE, FALSE);
+            ExRaiseStatus(STATUS_INVALID_USER_BUFFER);
+        }
+
         _SEH2_TRY
         {
-            if (!CcRosEnsureVacbResident(Vacb, Wait, FALSE, VacbOffset, VacbLength))
-            {
-                return FALSE;
-            }
-
-            _SEH2_TRY
-            {
-                RtlCopyMemory((PVOID)((ULONG_PTR)Vacb->BaseAddress + VacbOffset), Buffer, VacbLength);
-            }
-            _SEH2_EXCEPT(CcpCheckInvalidUserBuffer(_SEH2_GetExceptionInformation(), Buffer, VacbLength))
-            {
-                ExRaiseStatus(STATUS_INVALID_USER_BUFFER);
-            }
-            _SEH2_END;
-
-            Buffer = (PVOID)((ULONG_PTR)Buffer + VacbLength);
-            CurrentOffset += VacbLength;
-
-            /* Tell Mm */
-            Status = MmMakeSegmentDirty(FileObject->SectionObjectPointer,
-                                        Vacb->FileOffset.QuadPart + VacbOffset,
-                                        VacbLength);
-            if (!NT_SUCCESS(Status))
-                ExRaiseStatus(Status);
+            RtlCopyMemory((PVOID)((ULONG_PTR)Vacb->BaseAddress + VacbOffset), Buffer, VacbLength);
         }
-        _SEH2_FINALLY
+        _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
         {
-            /* Do not mark the VACB as dirty if an exception was raised */
-            CcRosReleaseVacb(SharedCacheMap, Vacb, !_SEH2_AbnormalTermination(), FALSE);
+            CcRosReleaseVacb(SharedCacheMap, Vacb, FALSE, FALSE);
+            ExRaiseStatus(STATUS_INVALID_USER_BUFFER);
         }
         _SEH2_END;
+
+        Buffer = (PVOID)((ULONG_PTR)Buffer + VacbLength);
+        CurrentOffset += VacbLength;
+
+        /* Tell Mm */
+        Status = MmMakeSegmentDirty(FileObject->SectionObjectPointer,
+                                    Vacb->FileOffset.QuadPart + VacbOffset,
+                                    VacbLength);
+        if (NT_SUCCESS(Status))
+            Dirty = TRUE;
+
+        CcRosReleaseVacb(SharedCacheMap, Vacb, Dirty, FALSE);
+        if (!NT_SUCCESS(Status))
+            ExRaiseStatus(Status);
     }
 
     /* Flush if needed */
@@ -892,6 +928,7 @@ CcZeroData (
 
     while(WriteOffset.QuadPart < EndOffset->QuadPart)
     {
+        BOOLEAN VacbResident = TRUE;
         ULONG VacbOffset = WriteOffset.QuadPart % VACB_MAPPING_GRANULARITY;
         ULONG VacbLength = min(Length, VACB_MAPPING_GRANULARITY - VacbOffset);
 
@@ -906,7 +943,8 @@ CcZeroData (
         {
             if (!CcRosEnsureVacbResident(Vacb, Wait, FALSE, VacbOffset, VacbLength))
             {
-                return FALSE;
+                VacbResident = FALSE;
+                _SEH2_LEAVE;
             }
 
             RtlZeroMemory((PVOID)((ULONG_PTR)Vacb->BaseAddress + VacbOffset), VacbLength);
@@ -927,6 +965,9 @@ CcZeroData (
             CcRosReleaseVacb(SharedCacheMap, Vacb, !_SEH2_AbnormalTermination(), FALSE);
         }
         _SEH2_END;
+
+        if (!VacbResident)
+            return FALSE;
     }
 
     /* Flush if needed */
