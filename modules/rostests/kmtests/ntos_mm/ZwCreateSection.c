@@ -323,12 +323,10 @@ SimpleErrorChecks(HANDLE FileHandleReadOnly, HANDLE FileHandleWriteOnly, HANDLE 
     MaximumSize.QuadPart = 0;
     CREATE_SECTION(Section, SECTION_ALL_ACCESS, NULL, MaximumSize, PAGE_READWRITE, SEC_COMMIT, NULL, STATUS_INVALID_PARAMETER_4, IGNORE);
 
-    //division by zero in ROS
-    if (!skip(SharedUserData->LargePageMinimum > 0, "LargePageMinimum is 0\n"))
-    {
-        MaximumSize.QuadPart = (_4mb / SharedUserData->LargePageMinimum) * SharedUserData->LargePageMinimum; //4mb
-        CREATE_SECTION(Section, SECTION_ALL_ACCESS, NULL, MaximumSize, PAGE_READWRITE, (SEC_LARGE_PAGES | SEC_COMMIT), NULL, STATUS_SUCCESS, STATUS_SUCCESS);
-    }
+    MaximumSize.QuadPart = SharedUserData->LargePageMinimum > 0 ?
+        (_4mb / SharedUserData->LargePageMinimum) * SharedUserData->LargePageMinimum :
+        _4mb;
+    CREATE_SECTION(Section, SECTION_ALL_ACCESS, NULL, MaximumSize, PAGE_READWRITE, (SEC_LARGE_PAGES | SEC_COMMIT), NULL, STATUS_SUCCESS, STATUS_SUCCESS);
 
     MaximumSize.QuadPart = TestStringSize;
 
