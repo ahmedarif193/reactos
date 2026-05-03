@@ -221,7 +221,7 @@ PinInAnotherThread(IN PVOID Context)
     Ret = CcPinRead(TestFileObject, &Offset, TestContext->Length, PIN_WAIT, &Bcb, (PVOID *)&Buffer);
     KmtEndSeh(STATUS_SUCCESS);
 
-    if (!skip(Ret == TRUE, "CcPinRead failed\n"))
+    if (ok(Ret == TRUE, "CcPinRead failed\n"))
     {
         ok_bcb(Bcb, 12288, Offset.QuadPart);
         ok_eq_pointer(Bcb, TestContext->Bcb);
@@ -234,7 +234,7 @@ PinInAnotherThread(IN PVOID Context)
     Ret = CcPinRead(TestFileObject, &Offset, TestContext->Length, PIN_WAIT | PIN_IF_BCB, &Bcb, (PVOID *)&Buffer);
     KmtEndSeh(STATUS_SUCCESS);
 
-    if (!skip(Ret == TRUE, "CcPinRead failed\n"))
+    if (ok(Ret == TRUE, "CcPinRead failed\n"))
     {
         ok_bcb(Bcb, 12288, Offset.QuadPart);
         ok_eq_pointer(Bcb, TestContext->Bcb);
@@ -247,7 +247,7 @@ PinInAnotherThread(IN PVOID Context)
     Ret = CcPinRead(TestFileObject, &Offset, TestContext->Length, PIN_EXCLUSIVE, &Bcb, (PVOID *)&Buffer);
     KmtEndSeh(STATUS_SUCCESS);
 
-    if (!skip(Ret == TRUE, "CcPinRead failed\n"))
+    if (ok(Ret == TRUE, "CcPinRead failed\n"))
     {
         ok_bcb(Bcb, 12288, Offset.QuadPart);
         ok_eq_pointer(Bcb, TestContext->Bcb);
@@ -260,7 +260,7 @@ PinInAnotherThread(IN PVOID Context)
     Ret = CcMapData(TestFileObject, &Offset, TestContext->Length, MAP_WAIT, &Bcb, (PVOID *)&Buffer);
     KmtEndSeh(STATUS_SUCCESS);
 
-    if (!skip(Ret == TRUE, "CcMapData failed\n"))
+    if (ok(Ret == TRUE, "CcMapData failed\n"))
     {
         ok(Bcb != TestContext->Bcb, "Returned same BCB!\n");
         ok_eq_pointer(Buffer, TestContext->Buffer);
@@ -275,7 +275,7 @@ PinInAnotherThread(IN PVOID Context)
     Ret = CcPinRead(TestFileObject, &Offset, TestContext->Length, PIN_WAIT | PIN_IF_BCB, &Bcb, (PVOID *)&Buffer);
     KmtEndSeh(STATUS_SUCCESS);
 
-    if (!skip(Ret == TRUE, "CcPinRead failed\n"))
+    if (ok(Ret == TRUE, "CcPinRead failed\n"))
     {
         ok_bcb(Bcb, 12288, 4096);
         ok_eq_pointer(Bcb, TestContext->Bcb);
@@ -288,7 +288,7 @@ PinInAnotherThread(IN PVOID Context)
     Ret = CcPinRead(TestFileObject, &Offset, TestContext->Length, PIN_WAIT, &Bcb, (PVOID *)&Buffer);
     KmtEndSeh(STATUS_SUCCESS);
 
-    if (!skip(Ret == TRUE, "CcPinRead failed\n"))
+    if (ok(Ret == TRUE, "CcPinRead failed\n"))
     {
         ok_bcb(Bcb, 12288, 4096);
         ok_eq_pointer(Bcb, TestContext->Bcb);
@@ -301,7 +301,7 @@ PinInAnotherThread(IN PVOID Context)
     Ret = CcPinRead(TestFileObject, &Offset, TestContext->Length, PIN_EXCLUSIVE, &Bcb, (PVOID *)&Buffer);
     KmtEndSeh(STATUS_SUCCESS);
 
-    if (!skip(Ret == TRUE, "CcPinRead failed\n"))
+    if (ok(Ret == TRUE, "CcPinRead failed\n"))
     {
         ok_bcb(Bcb, 12288, 4096);
         ok_eq_pointer(Bcb, TestContext->Bcb);
@@ -349,7 +349,7 @@ PinInAnotherThreadExclusive(IN PVOID Context)
     Ret = CcMapData(TestFileObject, &Offset, TestContext->Length, 0, &Bcb, (PVOID *)&Buffer);
     KmtEndSeh(STATUS_SUCCESS);
 
-    if (!skip(Ret == TRUE, "CcMapData failed\n"))
+    if (ok(Ret == TRUE, "CcMapData failed\n"))
     {
         ok(Bcb != TestContext->Bcb, "Returned same BCB!\n");
         ok_eq_pointer(Buffer, TestContext->Buffer);
@@ -384,7 +384,7 @@ PinInAnotherThreadExclusive(IN PVOID Context)
     Ret = CcMapData(TestFileObject, &Offset, TestContext->Length, 0, &Bcb, (PVOID *)&Buffer);
     KmtEndSeh(STATUS_SUCCESS);
 
-    if (!skip(Ret == TRUE, "CcMapData failed\n"))
+    if (ok(Ret == TRUE, "CcMapData failed\n"))
     {
         ok(Bcb != TestContext->Bcb, "Returned same BCB!\n");
         ok_eq_pointer(Buffer, (PVOID)((ULONG_PTR)TestContext->Buffer + 0x500));
@@ -449,7 +449,7 @@ PerformTest(
                     Ret = CcPinRead(TestFileObject, &Offset, FileSizes.FileSize.QuadPart - Offset.QuadPart, PIN_WAIT, &Bcb, (PVOID *)&Buffer);
                     KmtEndSeh(STATUS_SUCCESS);
 
-                    if (!skip(Ret == TRUE, "CcPinRead failed\n"))
+                    if (ok(Ret == TRUE, "CcPinRead failed\n"))
                     {
                         ok_bcb(Bcb, ((4 - TestId) * 4096), Offset.QuadPart);
                         ok_eq_ulong(Buffer[(0x3000 - TestId * 0x1000) / sizeof(ULONG)], 0xDEADBABE);
@@ -481,7 +481,7 @@ PerformTest(
                         Ret = CcPinRead(TestFileObject, &Offset, FileSizes.FileSize.QuadPart - Offset.QuadPart, PIN_WAIT, &TestContext->Bcb, &TestContext->Buffer);
                         KmtEndSeh(STATUS_SUCCESS);
 
-                        if (!skip(Ret == TRUE, "CcPinRead failed\n"))
+                        if (ok(Ret == TRUE, "CcPinRead failed\n"))
                         {
                             PKTHREAD ThreadHandle;
 
@@ -527,7 +527,7 @@ PerformTest(
                         Ret = CcPinRead(TestFileObject, &Offset, FileSizes.FileSize.QuadPart - Offset.QuadPart, PIN_WAIT | PIN_EXCLUSIVE, &TestContext->Bcb, &TestContext->Buffer);
                         KmtEndSeh(STATUS_SUCCESS);
 
-                        if (!skip(Ret == TRUE, "CcPinRead failed\n"))
+                        if (ok(Ret == TRUE, "CcPinRead failed\n"))
                         {
                             PKTHREAD ThreadHandle;
 
@@ -551,7 +551,7 @@ PerformTest(
                     Ret = CcPinRead(TestFileObject, &Offset, FileSizes.FileSize.QuadPart - Offset.QuadPart, PIN_WAIT, &Bcb, (PVOID *)&Buffer);
                     KmtEndSeh(STATUS_SUCCESS);
 
-                    if (!skip(Ret == TRUE, "CcPinRead failed\n"))
+                    if (ok(Ret == TRUE, "CcPinRead failed\n"))
                     {
                         ok_bcb(Bcb, 12288, Offset.QuadPart);
                         ok_eq_ulong(Buffer[0x2000 / sizeof(ULONG)], 0);
@@ -671,7 +671,7 @@ PerformTest(
                     Ret = CcPinRead(TestFileObject, &Offset, FileSizes.FileSize.QuadPart, PIN_WAIT, &Bcb, (PVOID *)&Buffer);
                     KmtEndSeh(STATUS_SUCCESS);
 
-                    if (!skip(Ret == TRUE, "CcPinRead failed\n"))
+                    if (ok(Ret == TRUE, "CcPinRead failed\n"))
                     {
                         ok_bcb(Bcb, PAGE_SIZE * 4, Offset.QuadPart);
                         RtlFillMemory(Buffer, 0xbd, FileSizes.FileSize.LowPart);
