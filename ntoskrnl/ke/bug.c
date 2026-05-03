@@ -58,6 +58,7 @@ KiPcToFileHeader(IN PVOID Pc,
     /* Assume no */
     *InKernel = FALSE;
 
+SearchList:
     /* Set list pointers and make sure it's valid */
     NextEntry = ListHead->Flink;
     if (NextEntry)
@@ -98,6 +99,17 @@ KiPcToFileHeader(IN PVOID Pc,
                 break;
             }
         }
+    }
+
+    /*
+     * Boot loader entries do not contain drivers loaded after boot. Fall back
+     * to the live module list so AMD64 exception dispatch can find driver
+     * unwind metadata.
+     */
+    if ((PcBase == NULL) && (ListHead != &PsLoadedModuleList))
+    {
+        ListHead = &PsLoadedModuleList;
+        goto SearchList;
     }
 
     /* Return the base address */
