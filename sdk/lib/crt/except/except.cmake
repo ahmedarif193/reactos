@@ -8,6 +8,7 @@ elseif(ARCH STREQUAL "amd64")
         except/amd64/ehandler.c
     )
     list(APPEND LIBCNTPR_EXCEPT_ASM_SOURCE
+        except/amd64/ehandler_asm.s
         except/amd64/chkstk_ms.s
     )
     if(NOT USE_DUMMY_PSEH)
