@@ -1435,9 +1435,6 @@ MiCreatePagingFileMap(OUT PSEGMENT *Segment,
     PSUBSECTION Subsection;
     PAGED_CODE();
 
-    /* No large pages in ARM3 yet */
-    ASSERT((AllocationAttributes & SEC_LARGE_PAGES) == 0);
-
     /* Pagefile-backed sections need a known size */
     if (MaximumSize == 0)
         return STATUS_INVALID_PARAMETER_4;
@@ -2305,14 +2302,11 @@ MmCreateArm3Section(OUT PVOID *SectionObject,
         /* A handle must be supplied with SEC_IMAGE, as this is the no-handle path */
         if (AllocationAttributes & SEC_IMAGE) return STATUS_INVALID_FILE_FOR_SECTION;
 
-        /* Not yet supported */
-        ASSERT((AllocationAttributes & SEC_LARGE_PAGES) == 0);
-
         /* So this must be a pagefile-backed section, create the mappings needed */
         Status = MiCreatePagingFileMap(&NewSegment,
                                        InputMaximumSize->QuadPart,
                                        ProtectionMask,
-                                       AllocationAttributes);
+                                       AllocationAttributes & ~SEC_LARGE_PAGES);
         if (!NT_SUCCESS(Status)) return Status;
 
         /* Set the size here, and read the control area */
@@ -2561,11 +2555,11 @@ MmMapViewOfArm3Section(IN PVOID SectionObject,
     ASSERT(Section->u.Flags.WriteCombined == 0);
     ASSERT(ControlArea->u.Flags.PhysicalMemory == 0);
 
-    /* FIXME */
+    /* One can only reserve a file-based mapping, not shared memory. */
     if ((AllocationType & MEM_RESERVE) != 0)
     {
-        DPRINT1("MmMapViewOfArm3Section called with MEM_RESERVE, this is not implemented yet!!!\n");
-        return STATUS_NOT_IMPLEMENTED;
+        if (ControlArea->FilePointer == NULL)
+            return STATUS_INVALID_PARAMETER_9;
     }
 
     /* Check if the mapping protection is compatible with the create */
@@ -3360,19 +3354,29 @@ NtMapViewOfSection(IN HANDLE SectionHandle,
     /* Check for invalid zero bits */
     if (ZeroBits)
     {
-        if (ZeroBits > MI_MAX_ZERO_BITS)
+        if (ZeroBits == MAXULONG_PTR)
+        {
+            ZeroBits = 0;
+        }
+        else if (ZeroBits > 21)
+        {
+            DPRINT1("Invalid zero bits\n");
+            return STATUS_INVALID_PARAMETER_4;
+        }
+        else if ((SafeBaseAddress == NULL) && (ZeroBits >= 20))
+        {
+            return STATUS_NO_MEMORY;
+        }
+
+        if (ZeroBits &&
+            ((((ULONG_PTR)SafeBaseAddress << ZeroBits) >> ZeroBits) != (ULONG_PTR)SafeBaseAddress))
         {
             DPRINT1("Invalid zero bits\n");
             return STATUS_INVALID_PARAMETER_4;
         }
 
-        if ((((ULONG_PTR)SafeBaseAddress << ZeroBits) >> ZeroBits) != (ULONG_PTR)SafeBaseAddress)
-        {
-            DPRINT1("Invalid zero bits\n");
-            return STATUS_INVALID_PARAMETER_4;
-        }
-
-        if (((((ULONG_PTR)SafeBaseAddress + SafeViewSize) << ZeroBits) >> ZeroBits) != ((ULONG_PTR)SafeBaseAddress + SafeViewSize))
+        if (ZeroBits &&
+            (((((ULONG_PTR)SafeBaseAddress + SafeViewSize) << ZeroBits) >> ZeroBits) != ((ULONG_PTR)SafeBaseAddress + SafeViewSize)))
         {
             DPRINT1("Invalid zero bits\n");
             return STATUS_INVALID_PARAMETER_4;
@@ -3431,6 +3435,27 @@ NtMapViewOfSection(IN HANDLE SectionHandle,
             ObDereferenceObject(Process);
             return STATUS_MAPPED_ALIGNMENT;
         }
+    }
+
+    if ((AllocationType & MEM_RESERVE) &&
+        MiIsRosSectionObject(Section) &&
+        !Section->u.Flags.Image &&
+        !(Section->InitialPageProtection & (PAGE_READWRITE | PAGE_EXECUTE_READWRITE)))
+    {
+        ObDereferenceObject(Section);
+        ObDereferenceObject(Process);
+        return STATUS_SECTION_PROTECTION;
+    }
+
+    if (CommitSize &&
+        (SafeViewSize == 0) &&
+        !(AllocationType & MEM_RESERVE) &&
+        MiIsRosSectionObject(Section) &&
+        !Section->u.Flags.Image)
+    {
+        ObDereferenceObject(Section);
+        ObDereferenceObject(Process);
+        return STATUS_INVALID_PARAMETER_5;
     }
 
     /* Now do the actual mapping */

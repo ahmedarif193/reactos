@@ -201,7 +201,7 @@ MapInAnotherThread(IN PVOID Context)
     Ret = CcMapData(TestFileObject, &Offset, TestContext->Length, MAP_WAIT, &Bcb, (PVOID *)&Buffer);
     KmtEndSeh(STATUS_SUCCESS);
 
-    if (!skip(Ret == TRUE, "CcMapData failed\n"))
+    if (ok(Ret == TRUE, "CcMapData failed\n"))
     {
         ok_eq_pointer(Bcb, TestContext->Bcb);
         ok_eq_pointer(Buffer, TestContext->Buffer);
@@ -213,7 +213,7 @@ MapInAnotherThread(IN PVOID Context)
     Ret = CcPinRead(TestFileObject, &Offset, TestContext->Length, 0, &Bcb, (PVOID *)&Buffer);
     KmtEndSeh(STATUS_SUCCESS);
 
-    if (!skip(Ret == TRUE, "CcPinRead failed\n"))
+    if (ok(Ret == TRUE, "CcPinRead failed\n"))
     {
         ok(Bcb != TestContext->Bcb, "Returned same BCB!\n");
         ok_eq_pointer(Buffer, TestContext->Buffer);
@@ -235,7 +235,7 @@ MapInAnotherThread(IN PVOID Context)
     Ret = CcPinRead(TestFileObject, &Offset, TestContext->Length, PIN_EXCLUSIVE, &Bcb, (PVOID *)&Buffer);
     KmtEndSeh(STATUS_SUCCESS);
 
-    if (!skip(Ret == TRUE, "CcPinRead failed\n"))
+    if (ok(Ret == TRUE, "CcPinRead failed\n"))
     {
         ok(Bcb != TestContext->Bcb, "Returned same BCB!\n");
         ok_eq_pointer(Buffer, TestContext->Buffer);
@@ -250,7 +250,7 @@ MapInAnotherThread(IN PVOID Context)
     Ret = CcMapData(TestFileObject, &Offset, TestContext->Length, MAP_WAIT, &Bcb, (PVOID *)&Buffer);
     KmtEndSeh(STATUS_SUCCESS);
 
-    if (!skip(Ret == TRUE, "CcMapData failed\n"))
+    if (ok(Ret == TRUE, "CcMapData failed\n"))
     {
         ok_eq_pointer(Bcb, TestContext->Bcb);
         ok_eq_pointer(Buffer, (PVOID)((ULONG_PTR)TestContext->Buffer + 0x500));
@@ -306,7 +306,7 @@ PerformTest(
                     Ret = CcMapData(TestFileObject, &Offset, FileSizes.FileSize.QuadPart - Offset.QuadPart, MAP_WAIT, &Bcb, (PVOID *)&Buffer);
                     KmtEndSeh(STATUS_SUCCESS);
 
-                    if (!skip(Ret == TRUE, "CcMapData failed\n"))
+                    if (ok(Ret == TRUE, "CcMapData failed\n"))
                     {
                         ok_eq_ulong(Buffer[(0x3000 - TestId * 0x1000) / sizeof(ULONG)], 0xDEADBABE);
 
@@ -326,7 +326,7 @@ PerformTest(
                         Ret = CcMapData(TestFileObject, &Offset, FileSizes.FileSize.QuadPart - Offset.QuadPart, MAP_WAIT, &TestContext->Bcb, &TestContext->Buffer);
                         KmtEndSeh(STATUS_SUCCESS);
 
-                        if (!skip(Ret == TRUE, "CcMapData failed\n"))
+                        if (ok(Ret == TRUE, "CcMapData failed\n"))
                         {
                             PKTHREAD ThreadHandle;
 
@@ -440,6 +440,18 @@ PerformTest(
 
                     if (Ret)
                     {
+                        volatile UCHAR *MappedBuffer = (volatile UCHAR *)Buffer;
+
+                        /* Verify the full requested range is accessible across the VACB boundary. */
+                        KmtStartSeh();
+                        MappedBuffer[0] = 0x5a;
+                        MappedBuffer[VACB_MAPPING_GRANULARITY] = 0xa5;
+                        MappedBuffer[VACB_MAPPING_GRANULARITY + 0xfff] = 0x3c;
+                        ok_eq_uint(MappedBuffer[0], 0x5a);
+                        ok_eq_uint(MappedBuffer[VACB_MAPPING_GRANULARITY], 0xa5);
+                        ok_eq_uint(MappedBuffer[VACB_MAPPING_GRANULARITY + 0xfff], 0x3c);
+                        KmtEndSeh(STATUS_SUCCESS);
+
                         CcUnpinData(Bcb);
                     }
                 }
