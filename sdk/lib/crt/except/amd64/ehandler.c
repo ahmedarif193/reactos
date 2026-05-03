@@ -8,6 +8,22 @@
 #include <precomp.h>
 #include <winnt.h>
 
+ULONG_PTR
+__cdecl
+__C_specific_handler_call_handler(
+    _In_ PVOID Handler,
+    _In_ struct _CONTEXT *ContextRecord,
+    _In_ PVOID Parameter1,
+    _In_ PVOID Parameter2);
+
+static __inline PVOID
+CshGetFuncletFrame(
+    _In_ PVOID EstablisherFrame,
+    _In_ struct _DISPATCHER_CONTEXT *DispatcherContext)
+{
+    UNREFERENCED_PARAMETER(DispatcherContext);
+    return EstablisherFrame;
+}
 
 _CRTIMP
 EXCEPTION_DISPOSITION
@@ -25,10 +41,14 @@ __C_specific_handler(
     PTERMINATION_HANDLER TerminationHandler;
     PEXCEPTION_FILTER ExceptionFilter;
     LONG FilterResult;
+    PVOID FuncletFrame;
 
     /* Set up the EXCEPTION_POINTERS */
     ExceptionPointers.ExceptionRecord = ExceptionRecord;
     ExceptionPointers.ContextRecord = ContextRecord;
+
+    FuncletFrame = CshGetFuncletFrame(EstablisherFrame,
+                                      DispatcherContext);
 
     /* Get the image base */
     ImageBase = (ULONG64)DispatcherContext->ImageBase;
@@ -76,7 +96,10 @@ __C_specific_handler(
                 /* Call the handler */
                 Handler = ScopeTable->ScopeRecord[i].HandlerAddress;
                 TerminationHandler = (PTERMINATION_HANDLER)(ImageBase + Handler);
-                TerminationHandler(TRUE, EstablisherFrame);
+                __C_specific_handler_call_handler(TerminationHandler,
+                                                  ContextRecord,
+                                                  (PVOID)TRUE,
+                                                  FuncletFrame);
             }
             else if (ScopeTable->ScopeRecord[i].JumpTarget == TargetIpOffset)
             {
@@ -104,7 +127,10 @@ __C_specific_handler(
             {
                 /* Otherwise we need to call the handler */
                 ExceptionFilter = (PEXCEPTION_FILTER)(ImageBase + Handler);
-                FilterResult = ExceptionFilter(&ExceptionPointers, EstablisherFrame);
+                FilterResult = (LONG)__C_specific_handler_call_handler(ExceptionFilter,
+                                                                      ContextRecord,
+                                                                      &ExceptionPointers,
+                                                                      FuncletFrame);
             }
 
             if (FilterResult < 0 /* EXCEPTION_CONTINUE_EXECUTION */)
