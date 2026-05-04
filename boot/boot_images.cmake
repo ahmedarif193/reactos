@@ -250,37 +250,50 @@ set(PREINSTALL_IMAGE_SIZE_MB 1024 CACHE STRING "Pre-installed disk image size in
 # Partition starts at sector 2048 (1MB alignment), rest is partition
 math(EXPR _preinstall_partition_sectors "(${PREINSTALL_IMAGE_SIZE_MB} - 1) * 2048")
 
-set(_dosmbr_file ${CMAKE_CURRENT_BINARY_DIR}/freeldr/bootsect/dosmbr.bin)
-set(_fat32_file  ${CMAKE_CURRENT_BINARY_DIR}/freeldr/bootsect/fat32.bin)
+# BIOS boot-sector binaries (x86/x64 only). UEFI-only platforms (e.g. arm64)
+# rely on firmware to discover \EFI\BOOT\boot<arch>.efi inside the EFI System
+# Partition, so neither the FAT32 VBR boot code nor the DOS MBR is needed.
+set(_preinstall_partition_boot_args)
+set(_preinstall_partition_deps native-fatten freeldr)
+set(_reactosimg_mbr_args)
+set(_reactosimg_deps native-mkdiskimg)
+if(FREELDR_HAS_BIOS_BOOT)
+    set(_dosmbr_file ${CMAKE_CURRENT_BINARY_DIR}/freeldr/bootsect/dosmbr.bin)
+    set(_fat32_file  ${CMAKE_CURRENT_BINARY_DIR}/freeldr/bootsect/fat32.bin)
+    list(APPEND _preinstall_partition_boot_args -boot ${_fat32_file})
+    list(APPEND _preinstall_partition_deps fat32)
+    list(APPEND _reactosimg_mbr_args -mbr ${_dosmbr_file})
+    list(APPEND _reactosimg_deps dosmbr)
+endif()
 
 add_custom_target(preinstall_partition
     COMMAND native-fatten ${_preinstall_partition_file}
         -format ${_preinstall_partition_sectors}
-        -boot ${_fat32_file}
+        ${_preinstall_partition_boot_args}
         -addfiles ${CMAKE_CURRENT_BINARY_DIR}/preinstall.$<CONFIG>.lst
-    DEPENDS native-fatten fat32 freeldr
+    DEPENDS ${_preinstall_partition_deps}
     VERBATIM)
 
 add_custom_target(reactosimg
     COMMAND native-mkdiskimg
         -o ${_preinstall_image_file}
-        -mbr ${_dosmbr_file}
+        ${_reactosimg_mbr_args}
         -partition ${_preinstall_partition_file}
         -start 2048
         -type ${_preinstall_partition_type}
-    DEPENDS native-mkdiskimg dosmbr
+    DEPENDS ${_reactosimg_deps}
     VERBATIM)
 add_dependencies(reactosimg preinstall_partition)
 
 add_custom_target(reactosvhd
     COMMAND native-mkdiskimg
         -o ${_preinstall_vhd_file}
-        -mbr ${_dosmbr_file}
+        ${_reactosimg_mbr_args}
         -partition ${_preinstall_partition_file}
         -start 2048
         -type ${_preinstall_partition_type}
         -vhd
-    DEPENDS native-mkdiskimg dosmbr
+    DEPENDS ${_reactosimg_deps}
     VERBATIM)
 add_dependencies(reactosvhd preinstall_partition)
 

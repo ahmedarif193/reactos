@@ -380,6 +380,13 @@ PspCreateProcess(OUT PHANDLE ProcessHandle,
     PSTRACE(PS_PROCESS_DEBUG,
             "ProcessHandle: %p Parent: %p\n", ProcessHandle, ParentProcess);
 
+#if defined(_M_ARM64)
+    DPRINT("[arm64][ps] PspCreateProcess: begin parent=%p section=%p flags=0x%lx\n",
+            ParentProcess,
+            SectionHandle,
+            Flags);
+#endif
+
     /* Validate flags */
     if (Flags & ~PROCESS_CREATE_FLAGS_LEGAL_MASK) return STATUS_INVALID_PARAMETER;
 
@@ -427,6 +434,11 @@ PspCreateProcess(OUT PHANDLE ProcessHandle,
                             0,
                             0,
                             (PVOID*)&Process);
+#if defined(_M_ARM64)
+    DPRINT("[arm64][ps] PspCreateProcess: ObCreateObject status=0x%08lx process=%p\n",
+            Status,
+            Process);
+#endif
     if (!NT_SUCCESS(Status)) goto Cleanup;
 
     /* Clean up the Object */
@@ -569,8 +581,17 @@ PspCreateProcess(OUT PHANDLE ProcessHandle,
     else
     {
         /* Otherwise, we are the boot process, we're already semi-initialized */
+#if defined(_M_ARM64)
+        DPRINT("[arm64][ps] PspCreateProcess: MmInitializeHandBuiltProcess\n");
+#endif
         Process->ObjectTable = CurrentProcess->ObjectTable;
         Status = MmInitializeHandBuiltProcess(Process, DirectoryTableBase);
+#if defined(_M_ARM64)
+        DPRINT("[arm64][ps] PspCreateProcess: MmInitializeHandBuiltProcess status=0x%08lx dtb=%p/%p\n",
+                Status,
+                (PVOID)DirectoryTableBase[0],
+                (PVOID)DirectoryTableBase[1]);
+#endif
         if (!NT_SUCCESS(Status)) goto CleanupWithRef;
     }
 
@@ -590,6 +611,10 @@ PspCreateProcess(OUT PHANDLE ProcessHandle,
 
     /* Duplicate Parent Token */
     Status = PspInitializeProcessSecurity(Process, Parent);
+#if defined(_M_ARM64)
+    DPRINT("[arm64][ps] PspCreateProcess: PspInitializeProcessSecurity status=0x%08lx\n",
+            Status);
+#endif
     if (!NT_SUCCESS(Status)) goto CleanupWithRef;
 
     /* Set default priority class */
@@ -615,7 +640,14 @@ PspCreateProcess(OUT PHANDLE ProcessHandle,
     else
     {
         /* Do the second part of the boot process memory setup */
+#if defined(_M_ARM64)
+        DPRINT("[arm64][ps] PspCreateProcess: MmInitializeHandBuiltProcess2\n");
+#endif
         Status = MmInitializeHandBuiltProcess2(Process);
+#if defined(_M_ARM64)
+        DPRINT("[arm64][ps] PspCreateProcess: MmInitializeHandBuiltProcess2 status=0x%08lx\n",
+                Status);
+#endif
         if (!NT_SUCCESS(Status)) goto CleanupWithRef;
     }
 
@@ -696,6 +728,10 @@ PspCreateProcess(OUT PHANDLE ProcessHandle,
     CidEntry.Object = Process;
     CidEntry.GrantedAccess = 0;
     Process->UniqueProcessId = ExCreateHandle(PspCidTable, &CidEntry);
+#if defined(_M_ARM64)
+    DPRINT("[arm64][ps] PspCreateProcess: UniqueProcessId=%p\n",
+            Process->UniqueProcessId);
+#endif
     if (!Process->UniqueProcessId)
     {
         /* Fail */
@@ -761,15 +797,27 @@ PspCreateProcess(OUT PHANDLE ProcessHandle,
                                    &AuxData,
                                    DesiredAccess,
                                    &PsProcessType->TypeInfo.GenericMapping);
+#if defined(_M_ARM64)
+    DPRINT("[arm64][ps] PspCreateProcess: SeCreateAccessStateEx status=0x%08lx\n",
+            Status);
+#endif
     if (!NT_SUCCESS(Status)) goto CleanupWithRef;
 
     /* Insert the Process into the Object Directory */
+#if defined(_M_ARM64)
+    DPRINT("[arm64][ps] PspCreateProcess: ObInsertObject\n");
+#endif
     Status = ObInsertObject(Process,
                             AccessState,
                             DesiredAccess,
                             1,
                             NULL,
                             &hProcess);
+#if defined(_M_ARM64)
+    DPRINT("[arm64][ps] PspCreateProcess: ObInsertObject status=0x%08lx handle=%p\n",
+            Status,
+            hProcess);
+#endif
 
     /* Free the access state */
     if (AccessState) SeDeleteAccessState(AccessState);

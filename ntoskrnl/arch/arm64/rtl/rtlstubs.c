@@ -68,21 +68,6 @@ VOID NTAPI RtlRestoreContext(PCONTEXT Context, PEXCEPTION_RECORD ExceptionRecord
     (VOID)ExceptionRecord;
 }
 
-LARGE_INTEGER NTAPI RtlExtendedLargeIntegerDivide(LARGE_INTEGER Dividend, ULONG Divisor, PULONG Remainder)
-{
-    LARGE_INTEGER r;
-    r.QuadPart = Dividend.QuadPart / Divisor;
-    if (Remainder) *Remainder = (ULONG)(Dividend.QuadPart % Divisor);
-    return r;
-}
-
-VOID NTAPI RtlFillMemoryUlong(PVOID Destination, SIZE_T Length, ULONG Fill)
-{
-    PULONG p = (PULONG)Destination;
-    for (SIZE_T i = 0; i < Length / sizeof(ULONG); i++) p[i] = Fill;
-}
-
-
 void _local_unwind2(void) {}
 void _global_unwind2(void) {}
 int _except_handler2(void) { return 1; }

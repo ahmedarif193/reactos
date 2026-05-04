@@ -29,38 +29,6 @@
 #include <debug.h>
 
 /*
- * Early UART breadcrumb output for pre-KD tracing.
- * Uses HAL-local UART base initialized from loader block in halarm64.c.
- */
-#define HAL_GIC_PL011_FR_TXFF  (1U << 5)
-
-extern volatile UINT64 HalUartBase;
-extern volatile BOOLEAN HalUartReady;
-
-FORCEINLINE VOID
-HalRawPuts(const char *Str)
-{
-    ULONG_PTR Va;
-    volatile UINT32 *Uart;
-
-    if (!HalUartReady || HalUartBase == 0)
-        return;
-
-    Va = (ULONG_PTR)(0xFFFF800000000000ULL + HalUartBase);
-    Uart = (volatile UINT32 *)Va;
-    while (*Str)
-    {
-        if (*Str == '\n')
-        {
-            while (Uart[0x18 / sizeof(UINT32)] & HAL_GIC_PL011_FR_TXFF) {}
-            Uart[0] = '\r';
-        }
-        while (Uart[0x18 / sizeof(UINT32)] & HAL_GIC_PL011_FR_TXFF) {}
-        Uart[0] = (UINT32)(UCHAR)*Str++;
-    }
-}
-
-/*
  * ============================================================================
  * GIC Default Physical Addresses (QEMU virt platform)
  * ============================================================================

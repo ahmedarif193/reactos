@@ -647,19 +647,8 @@ VOID Arm64MachInit(const char *CmdLine)
     MachVtbl.InitializeBootDevices = UefiInitializeBootDevices;
     MachVtbl.GetTime = UefiGetTime;
 
-    /* TRACE("ARM64: Machine abstraction layer initialized\n"); - Skip TRACE for now */
-
-    /* Note: UefiInitializeVideo() will be called from the common UEFI path in uefisetup.c */
-    /* Don't call it here to avoid double initialization */
-
-    /* Skip hardware detection here - it will be called when needed */
-    /* Arm64HwDetect(NULL); */
-
-    /* TRACE("ARM64: Machine vtable configured\n"); - Skip TRACE for now */
-
-    /* Initialize GOP (Graphics Output Protocol) for ARM64 */
-    /* REMOVED: GOP initialization is deferred until first use in UefiVideoSetDisplayMode */
-    /* This avoids issues with double initialization and ensures proper sequencing */
+    /* GOP is brought up by UefiInitializeVideo() in MachInit() (uefisetup.c)
+     * after this function returns. Hardware detection runs lazily later. */
 
     /* Use the debug channel to avoid warning */
 #if DBG

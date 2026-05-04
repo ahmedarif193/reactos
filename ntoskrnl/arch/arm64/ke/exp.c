@@ -351,17 +351,6 @@ KiDispatchException(_In_ PEXCEPTION_RECORD ExceptionRecord,
 
     KeTrapFrameToContext(TrapFrame, ExceptionFrame, &Context);
 
-    DPRINT1("[arm64][EXC] KiDispatchException: Code=0x%08lx FirstChance=%lu Mode=%s PC=%p LR=%p SP=%p Addr=%p P0=%p P1=%p\n",
-            ExceptionRecord->ExceptionCode,
-            (ULONG)FirstChance,
-            (PreviousMode == KernelMode) ? "K" : "U",
-            (PVOID)(ULONG_PTR)Context.Pc,
-            (PVOID)(ULONG_PTR)Context.Lr,
-            (PVOID)(ULONG_PTR)Context.Sp,
-            ExceptionRecord->ExceptionAddress,
-            (ExceptionRecord->NumberParameters >= 1) ? (PVOID)ExceptionRecord->ExceptionInformation[0] : NULL,
-            (ExceptionRecord->NumberParameters >= 2) ? (PVOID)ExceptionRecord->ExceptionInformation[1] : NULL);
-
     switch (ExceptionRecord->ExceptionCode)
     {
         case STATUS_BREAKPOINT:
@@ -411,10 +400,6 @@ KiDispatchException(_In_ PEXCEPTION_RECORD ExceptionRecord,
         }
 
 #ifdef KDBG
-        /*
-         * If no KD host is attached, fall back to the integrated KDBG CLI
-         * to allow local interactive debugging (e.g. bt).
-         */
         if (!KdDebuggerEnabled || KdDebuggerNotPresent)
         {
             EXCEPTION_RECORD64 Rec64;

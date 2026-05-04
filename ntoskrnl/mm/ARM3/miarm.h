@@ -759,6 +759,10 @@ MiDetermineUserGlobalPteMask(IN PVOID PointerPte)
     /* Make it valid and accessed */
     TempPte.u.Hard.Valid = TRUE;
     MI_MAKE_ACCESSED_PAGE(&TempPte);
+#if defined(_M_ARM64)
+    TempPte.u.Hard.NotLargePage = TRUE;
+    TempPte.u.Hard.Shareability = 3;
+#endif
 
     /* Is this for user-mode? */
     if (
@@ -802,11 +806,17 @@ MI_MAKE_HARDWARE_PTE_KERNEL(IN PMMPTE NewPte,
     ASSERT(ProtectionMask != MM_OUTSWAPPED_KSTACK && ((ProtectionMask & ~MM_OUTSWAPPED_KSTACK) == 0));
 
     /* Start fresh */
+#if defined(_M_ARM64)
+    NewPte->u.Long = ValidKernelPte.u.Long;
+    NewPte->u.Long &= ~PTE_PROTECT_MASK;
+    NewPte->u.Long |= MmProtectToPteMaskKernel[ProtectionMask];
+#else
     NewPte->u.Long = 0;
 
     /* Set the protection and page */
-    NewPte->u.Hard.PageFrameNumber = PageFrameNumber;
     NewPte->u.Long |= MmProtectToPteMask[ProtectionMask];
+#endif
+    NewPte->u.Hard.PageFrameNumber = PageFrameNumber;
 
     /* Make this valid & global */
 #ifdef _GLOBAL_PAGES_ARE_AWESOME_
@@ -814,6 +824,11 @@ MI_MAKE_HARDWARE_PTE_KERNEL(IN PMMPTE NewPte,
         NewPte->u.Hard.Global = 1;
 #endif
     NewPte->u.Hard.Valid = 1;
+#if defined(_M_ARM64)
+    NewPte->u.Hard.NotLargePage = 1;
+    NewPte->u.Hard.Accessed = 1;
+    NewPte->u.Hard.Shareability = 3;
+#endif
 }
 
 //
@@ -835,6 +850,11 @@ MI_MAKE_HARDWARE_PTE(IN PMMPTE NewPte,
     NewPte->u.Long = MiDetermineUserGlobalPteMask(MappingPte);
     NewPte->u.Long |= MmProtectToPteMask[ProtectionMask];
     NewPte->u.Hard.PageFrameNumber = PageFrameNumber;
+#if defined(_M_ARM64)
+    NewPte->u.Hard.NotLargePage = 1;
+    NewPte->u.Hard.Accessed = 1;
+    NewPte->u.Hard.Shareability = 3;
+#endif
 }
 
 //
@@ -860,6 +880,11 @@ MI_MAKE_HARDWARE_PTE_USER(IN PMMPTE NewPte,
 
     NewPte->u.Hard.Valid = TRUE;
     NewPte->u.Hard.Owner = TRUE;
+#if defined(_M_ARM64)
+    NewPte->u.Hard.NotLargePage = TRUE;
+    NewPte->u.Hard.Accessed = TRUE;
+    NewPte->u.Hard.Shareability = 3;
+#endif
     NewPte->u.Hard.PageFrameNumber = PageFrameNumber;
     NewPte->u.Long |= MmProtectToPteMask[ProtectionMask];
 }
@@ -980,6 +1005,10 @@ VOID
 MI_WRITE_VALID_PTE(IN PMMPTE PointerPte,
                    IN MMPTE TempPte)
 {
+#if defined(_M_ARM64)
+    ULONG_PTR EntryAddress = (ULONG_PTR)PointerPte;
+#endif
+
     /* Write the valid PTE */
     ASSERT(PointerPte->u.Hard.Valid == 0);
     ASSERT(TempPte.u.Hard.Valid == 1);
@@ -987,7 +1016,40 @@ MI_WRITE_VALID_PTE(IN PMMPTE PointerPte,
     ASSERT(!MI_IS_PAGE_TABLE_ADDRESS(MiPteToAddress(PointerPte)) ||
            (TempPte.u.Hard.NoExecute == 0));
 #endif
+#if defined(_M_ARM64)
+    /*
+     * Windows/ARM64 keeps table descriptors distinct from L3 leaf descriptors.
+     * Common ARM3 creates demand-zero page-table pages through this helper; when
+     * the target is a PXE/PPE/PDE slot, publish a clean table descriptor and keep
+     * leaf permission bits out of the hardware walk.
+     */
+    if (((EntryAddress >= PXE_BASE) && (EntryAddress <= PXE_TOP)) ||
+        ((EntryAddress >= PPE_BASE) && (EntryAddress <= PPE_TOP)) ||
+        ((EntryAddress >= PDE_BASE) && (EntryAddress <= PDE_TOP)))
+    {
+        MMPTE TablePte;
+
+        TablePte.u.Long = ValidKernelPde.u.Long;
+        TablePte.u.Hard.PageFrameNumber = TempPte.u.Hard.PageFrameNumber;
+        TempPte = TablePte;
+    }
+#endif
     *PointerPte = TempPte;
+#if defined(_M_ARM64)
+    {
+        ULONG_PTR Va = (ULONG_PTR)MiPteToAddress(PointerPte) >> PAGE_SHIFT;
+
+        if (EntryAddress >= PXE_BASE && EntryAddress <= PXE_TOP)
+        {
+            MiArm64SyncPxeWrite(PointerPte);
+        }
+
+        __asm__ __volatile__("dsb ishst" ::: "memory");
+        __asm__ __volatile__("tlbi vaae1is, %0" :: "r"(Va) : "memory");
+        __asm__ __volatile__("dsb ish" ::: "memory");
+        __asm__ __volatile__("isb" ::: "memory");
+    }
+#endif
 }
 
 //

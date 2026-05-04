@@ -803,6 +803,7 @@ typedef struct _ARM64_LOADER_BLOCK
     ULONG_PTR PcrPage;
     ULONG_PTR PdrPage;
     ULONGLONG EarlyUartAddress;
+    ULONG EarlyUartInterface;
 #else
     ULONG PlaceHolder;
 #endif

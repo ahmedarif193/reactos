@@ -247,7 +247,6 @@ DebugService2(
     {
         case BREAKPOINT_LOAD_SYMBOLS:
         case BREAKPOINT_UNLOAD_SYMBOLS:
-            DPRINT1("[arm64] DebugService2: calling KdpSymbol Service=%lu\n", Service);
             KdpSymbol((PSTRING)Argument1,
                       (PKD_SYMBOLS_INFO)Argument2,
                       (Service == BREAKPOINT_UNLOAD_SYMBOLS),
@@ -255,7 +254,6 @@ DebugService2(
                       &LocalContext,
                       TrapFrame,
                       NULL);
-            DPRINT1("[arm64] DebugService2: KdpSymbol returned\n");
             break;
 
         case BREAKPOINT_COMMAND_STRING:

@@ -42,12 +42,20 @@ BOOLEAN
 NTAPI
 RtlDispatchException(
     _In_ PEXCEPTION_RECORD ExceptionRecord,
-    _In_ PCONTEXT Context)
+    _In_ PCONTEXT ContextRecord)
 {
-    UNREFERENCED_PARAMETER(ExceptionRecord);
-    UNREFERENCED_PARAMETER(Context);
+    if (RtlCallVectoredExceptionHandlers(ExceptionRecord, ContextRecord))
+    {
+        RtlCallVectoredContinueHandlers(ExceptionRecord, ContextRecord);
+        return TRUE;
+    }
 
-    ASSERT(FALSE);
+    /*
+     * Full ARM64 table-based SEH dispatch is not wired in this RTL yet.
+     * Returning FALSE is the correct no-handler result: kernel callers then
+     * continue to second-chance KD/KDB instead of recursively asserting here.
+     */
+    RtlCallVectoredContinueHandlers(ExceptionRecord, ContextRecord);
     return FALSE;
 }
 

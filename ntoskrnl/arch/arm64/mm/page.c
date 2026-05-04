@@ -32,7 +32,6 @@ BOOLEAN
 MiIsPageTablePresent(
     _In_ PVOID Address);
 
-#if defined(_M_ARM64) || defined(__aarch64__)
 BOOLEAN
 MiArm64ReadUserPtePhysically(
     _In_ PVOID Address,
@@ -263,28 +262,8 @@ MiArm64TraceUserTableStore(
         MiArm64TraceUserTableStore((_Site), (_Address), (_Level), (_Index), __OldEntry, (ULONG64)(_Value64)); \
         (_Table)[(_Index)].u.Long = (ULONG64)(_Value64); \
     } while (0)
-#endif
 
-/*
- * MiArm64ReadUserPtePhysically - Walk TTBR0's page tables via KSEG0 and read PTE.
- *
- * This function walks the user page table hierarchy PHYSICALLY using KSEG0
- * direct mapping. It NEVER accesses TTBR0 alias addresses, avoiding all
- * nested fault issues that plague the TTBR0 alias approach.
- *
- * Parameters:
- *   Address   - User-space virtual address to look up
- *   OutPte    - If non-NULL, receives the L3 PTE value (or 0 if not mapped)
- *   OutDepth  - If non-NULL, receives the depth reached:
- *               0 = Invalid TTBR0 or L0 invalid
- *               1 = L0 valid, L1 invalid
- *               2 = L1 valid (or block), L2 invalid
- *               3 = L2 valid (or block), L3 reached
- *               4 = L3 is valid page descriptor
- *
- * Returns:
- *   TRUE if the address is mapped (page exists), FALSE otherwise.
- */
+/* Walk the active TTBR0 hierarchy via KSEG0 and return the L3 PTE state. */
 BOOLEAN
 MiArm64ReadUserPtePhysically(
     _In_ PVOID Address,
@@ -393,15 +372,14 @@ MiArm64ReadUserPtePhysically(
  *
  * Cache coherency on ARM64 requires careful handling depending on data direction:
  *
- * INCOMING data (DMA/ramdisk populated page, read fault):
+ * Incoming data (DMA/ramdisk populated page, read fault):
  *   The data source (device, ramdisk) has already written to RAM.
- *   CPU cache may have stale/garbage data for the VA.
- *   Use DC IVAC (Invalidate only) - discard cache lines without writeback.
- *   CRITICAL: DC CIVAC is WRONG - it writes back garbage to RAM first!
+ *   CPU cache may have stale data for the VA.
+ *   Use DC IVAC to discard cache lines without writeback.
  *
- * OUTGOING data (CPU wrote, needs visibility to DMA/other observers):
+ * Outgoing data (CPU wrote, needs visibility to DMA/other observers):
  *   CPU has written data that may still be in cache.
- *   Use DC CIVAC (Clean & Invalidate) - write back dirty lines first.
+ *   Use DC CIVAC to write back dirty lines first.
  *
  * CTR_EL0 layout:
  *   Bits [3:0]   = IminLine (I-cache line size as log2(words))
@@ -1246,21 +1224,7 @@ MmCreateVirtualMappingUnsafeEx(
         PpeIndex = (((ULONG64)Address >> PPI_SHIFT) & 0x1FF);
         PdeIndex = (((ULONG64)Address >> PDI_SHIFT) & 0x1FF);
 
-        /*
-         * Level 0 (PXE) - CRITICAL: We must map the CURRENTLY ACTIVE TTBR0
-         * table, not DirectoryTableBase. On ARM64:
-         *
-         * - TTBR0 controls user address translation (addresses < 0x0000FFFFFFFFFFFF)
-         * - TTBR1 controls kernel address translation (addresses >= 0xFFFF...)
-         * - DirectoryTableBase[0] for System/Idle process is set from TTBR1 during
-         *   boot, which means it points to KERNEL page tables, not user tables!
-         *
-         * The CPU uses TTBR0 to translate user addresses, so we MUST write our
-         * page table entries to the TTBR0 hierarchy, not DirectoryTableBase.
-         *
-         * Note: MiAddressToPxe() returns a self-mapping address in TTBR1 (kernel
-         * space) which cannot access user page tables in TTBR0.
-         */
+        /* User mappings are installed in the active TTBR0 root. */
         {
             ULONG64 Ttbr0Actual;
             __asm__ __volatile__("mrs %0, ttbr0_el1" : "=r"(Ttbr0Actual));
@@ -1325,32 +1289,7 @@ MmCreateVirtualMappingUnsafeEx(
             ASSERT((MappedPage[PxeIndex].u.Long & 0x3ULL) == 0x3ULL);
             __asm__ __volatile__("dsb ishst" ::: "memory");
 
-            /*
-             * Keep the merged PXE root coherent for the current process.
-             * Self-map walks (MiAddressToPxe/Pte) read through this merged page.
-             */
-            if (MiArm64PxeMergedPfn[0] != 0)
-            {
-                volatile ULONG64 *MergedL0;
-                ULONG64 OldMergedEntry;
-                MergedL0 = (volatile ULONG64 *)(KSEG0_BASE |
-                                                ((ULONG64)MiArm64PxeMergedPfn[0] << PAGE_SHIFT));
-                OldMergedEntry = MergedL0[PxeIndex];
-                MiArm64TraceUserTableStore("MmCreateVirtualMappingUnsafeEx.MergedL0",
-                                           Address,
-                                           0,
-                                           PxeIndex,
-                                           OldMergedEntry,
-                                           TempPte.u.Long);
-                MergedL0[PxeIndex] = TempPte.u.Long;
-                ASSERT((MergedL0[PxeIndex] & 0x3ULL) == 0x3ULL);
-                __asm__ __volatile__("dsb ishst" ::: "memory");
-            }
-
-            /*
-             * Bug #44: Track new L1 table in L0's UsedPageTableEntries.
-             * MiDeletePde cascade will decrement this during process teardown.
-             */
+            /* Track the new L1 table in the parent L0 PFN entry. */
             {
                 PMMPFN PfnL0 = MI_PFN_ELEMENT(PxePfn);
                 PfnL0->OriginalPte.u.Soft.UsedPageTableEntries++;
@@ -1439,10 +1378,7 @@ MmCreateVirtualMappingUnsafeEx(
                                        TempPte);
             ASSERT((MappedPage[PpeIndex].u.Long & 0x3ULL) == 0x3ULL);
 
-            /*
-             * Bug #44: Track new L2 table in L1's UsedPageTableEntries.
-             * MiDeletePde cascade will decrement this during process teardown.
-             */
+            /* Track the new L2 table in the parent L1 PFN entry. */
             {
                 PMMPFN PfnL1 = MI_PFN_ELEMENT(PpePfn);
                 PfnL1->OriginalPte.u.Soft.UsedPageTableEntries++;

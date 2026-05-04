@@ -80,5 +80,10 @@ ExArchPostHalInitSystemPhase0(
     VOID)
 {
     KiHalInitialized = TRUE;
-    KeReenableTimerInterrupt();
+    /*
+     * Defer timer re-enable until after MM init (MmArmInitSystem).
+     * At this point KSEG0 on-demand mappings are not yet available
+     * and the timer ISR may fault if it accesses HW registers via
+     * KSEG0 before the page-table hierarchy is in place.
+     */
 }

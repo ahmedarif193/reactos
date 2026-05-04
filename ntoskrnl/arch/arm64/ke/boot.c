@@ -1322,6 +1322,14 @@ KiSystemStartup(_Inout_ PLOADER_PARAMETER_BLOCK LoaderBlock)
     if (LoaderBlock && LoaderBlock->u.Arm64.EarlyUartAddress != 0)
     {
         EarlyUartBaseAddress = LoaderBlock->u.Arm64.EarlyUartAddress;
+        EarlyUartInterface = (ARM64_UART_INTERFACE)LoaderBlock->u.Arm64.EarlyUartInterface;
+        if (EarlyUartInterface == Arm64UartUnknown ||
+            EarlyUartInterface >= Arm64UartMax)
+        {
+            EarlyUartInterface = EarlyUartInferInterfaceFromAddress(EarlyUartBaseAddress);
+        }
+        if (EarlyUartInterface == Arm64UartUnknown)
+            EarlyUartInterface = Arm64UartPl011;
         EarlyUartPlatformId = Arm64PlatformGenericAcpi;
         EarlyUartInitialized = TRUE;
     }
@@ -1330,6 +1338,7 @@ KiSystemStartup(_Inout_ PLOADER_PARAMETER_BLOCK LoaderBlock)
         /* Fallback to QEMU default if loader didn't provide address */
         EarlyUartBaseAddress = 0x09000000ULL;
         EarlyUartPlatformId = Arm64PlatformQemuVirt;
+        EarlyUartInterface = Arm64UartPl011;
         EarlyUartInitialized = TRUE;
     }
 

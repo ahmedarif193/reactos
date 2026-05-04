@@ -20,6 +20,36 @@
 
 /* FUNCTIONS *****************************************************************/
 
+#if defined(_M_ARM64)
+static
+ULONGLONG
+KdpArm64QueryCounterTime(VOID)
+{
+    ULONGLONG Counter;
+    ULONGLONG Frequency;
+    ULONGLONG Seconds;
+    ULONGLONG Remainder;
+
+#if defined(__clang__) || defined(__GNUC__)
+    __asm__ __volatile__("mrs %0, cntpct_el0" : "=r"(Counter));
+    __asm__ __volatile__("mrs %0, cntfrq_el0" : "=r"(Frequency));
+#else
+    return 0;
+#endif
+
+    if ((Frequency == 0) || (Frequency > 10000000000ULL))
+    {
+        return 0;
+    }
+
+    Seconds = Counter / Frequency;
+    Remainder = Counter % Frequency;
+
+    return (Seconds * KD_100NS_PER_SECOND) +
+           ((Remainder * KD_100NS_PER_SECOND) / Frequency);
+}
+#endif
+
 static
 USHORT
 NTAPI
@@ -36,6 +66,22 @@ KdpBuildTimestampPrefix(
         return 0;
 
     InterruptTime = KeQueryInterruptTime();
+#if defined(_M_ARM64)
+    {
+        ULONGLONG CounterTime = KdpArm64QueryCounterTime();
+
+        /*
+         * ARM64 keeps GIC Group 1 delivery masked during early MM bring-up, so
+         * SharedUserData->InterruptTime remains zero until the clock ISR can run.
+         * The architectural counter is already live and gives useful monotonic
+         * debug timestamps without enabling interrupts too early.
+         */
+        if (CounterTime > InterruptTime)
+        {
+            InterruptTime = CounterTime;
+        }
+    }
+#endif
     Seconds = InterruptTime / KD_100NS_PER_SECOND;
     Microseconds = (InterruptTime % KD_100NS_PER_SECOND) /
                    KD_100NS_PER_MICROSECOND;
@@ -270,6 +316,9 @@ KdpCommandString(IN PSTRING NameString,
 
     /* Check if we need to do anything */
     if ((PreviousMode != KernelMode) || (KdDebuggerNotPresent)) return;
+#if defined(_M_ARM64)
+    if (TrapFrame == NULL) return;
+#endif
 
     /* Enter the debugger */
     Enable = KdEnterDebugger(TrapFrame, ExceptionFrame);
@@ -310,6 +359,9 @@ KdpSymbol(IN PSTRING DllPath,
 
     /* Check if we need to do anything */
     if ((PreviousMode != KernelMode) || (KdDebuggerNotPresent)) return;
+#if defined(_M_ARM64)
+    if (TrapFrame == NULL) return;
+#endif
 
     /* Enter the debugger */
     Enable = KdEnterDebugger(TrapFrame, ExceptionFrame);

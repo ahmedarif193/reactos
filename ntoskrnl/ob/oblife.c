@@ -14,8 +14,17 @@
 /* INCLUDES ******************************************************************/
 
 #include <ntoskrnl.h>
+#include <reactos/unaligned.h>
 #define NDEBUG
 #include <debug.h>
+
+#if defined(_M_ARM64) && !defined(ARM64_OB_TRACE)
+#define ARM64_OB_TRACE 0
+#endif
+
+#if defined(_M_ARM64)
+#define ARM64_OB_DPRINT(...) do { if (ARM64_OB_TRACE) DPRINT1(__VA_ARGS__); } while (0)
+#endif
 
 extern ULONG NtGlobalFlag;
 
@@ -399,8 +408,12 @@ ObpCaptureObjectName(IN OUT PUNICODE_STRING CapturedName,
         }
         else
         {
-            /* No probing needed */
-            LocalName = *ObjectName;
+            PUCHAR RawName = (PUCHAR)ObjectName;
+
+            /* No probing needed, but the caller's stack copy may be unaligned. */
+            LocalName.Length = ReadUnalignedU16((const unsigned short*)RawName);
+            LocalName.MaximumLength = ReadUnalignedU16((const unsigned short*)(RawName + sizeof(USHORT)));
+            LocalName.Buffer = (PWCHAR)(ULONG_PTR)ReadUnalignedUlongPtr((const ULONG_PTR*)(RawName + FIELD_OFFSET(UNICODE_STRING, Buffer)));
         }
 
         /* Make sure there really is a string */
@@ -460,14 +473,42 @@ ObpCaptureObjectCreateInformation(IN POBJECT_ATTRIBUTES ObjectAttributes,
                                   OUT PUNICODE_STRING ObjectName)
 {
     ULONG SdCharge, QuotaInfoSize;
+    ULONG LocalLength, LocalAttributes;
     NTSTATUS Status = STATUS_SUCCESS;
     PSECURITY_DESCRIPTOR SecurityDescriptor;
     PSECURITY_QUALITY_OF_SERVICE SecurityQos;
     PUNICODE_STRING LocalObjectName = NULL;
+    PUCHAR RawAttributes, RawQos;
     PAGED_CODE();
 
+#ifdef _M_ARM64
+    ARM64_OB_DPRINT("[arm64][ob] ObpCaptureObjectCreateInformation: entry attrs=%p access=%d creator=%d info=%p outName=%p\n",
+            ObjectAttributes, AccessMode, CreatorMode, ObjectCreateInfo, ObjectName);
+#endif
+
     /* Zero out the Capture Data */
+#ifdef _M_ARM64
+    ARM64_OB_DPRINT("[arm64][ob] ObpCaptureObjectCreateInformation: zero begin\n");
+    ObjectCreateInfo->Attributes = 0;
+    ObjectCreateInfo->RootDirectory = NULL;
+    ObjectCreateInfo->ParseContext = NULL;
+    ObjectCreateInfo->ProbeMode = 0;
+    ObjectCreateInfo->PagedPoolCharge = 0;
+    ObjectCreateInfo->NonPagedPoolCharge = 0;
+    ObjectCreateInfo->SecurityDescriptorCharge = 0;
+    ObjectCreateInfo->SecurityDescriptor = NULL;
+    ObjectCreateInfo->SecurityQos = NULL;
+    ObjectCreateInfo->SecurityQualityOfService.Length = 0;
+    ObjectCreateInfo->SecurityQualityOfService.ImpersonationLevel = 0;
+    ObjectCreateInfo->SecurityQualityOfService.ContextTrackingMode = 0;
+    ObjectCreateInfo->SecurityQualityOfService.EffectiveOnly = FALSE;
+#else
     RtlZeroMemory(ObjectCreateInfo, sizeof(OBJECT_CREATE_INFORMATION));
+#endif
+
+#ifdef _M_ARM64
+    ARM64_OB_DPRINT("[arm64][ob] ObpCaptureObjectCreateInformation: zeroed\n");
+#endif
 
     /* SEH everything here for protection */
     _SEH2_TRY
@@ -484,25 +525,53 @@ ObpCaptureObjectCreateInformation(IN POBJECT_ATTRIBUTES ObjectAttributes,
                              sizeof(ULONG));
             }
 
+            RawAttributes = (PUCHAR)ObjectAttributes;
+            LocalLength = ReadUnalignedU32((const unsigned long*)
+                                           (RawAttributes + FIELD_OFFSET(OBJECT_ATTRIBUTES, Length)));
+            LocalAttributes = ReadUnalignedU32((const unsigned long*)
+                                               (RawAttributes + FIELD_OFFSET(OBJECT_ATTRIBUTES, Attributes)));
+
+#ifdef _M_ARM64
+            ARM64_OB_DPRINT("[arm64][ob] ObpCaptureObjectCreateInformation: length=%lu attrs=0x%08lx\n",
+                    LocalLength, LocalAttributes);
+#endif
+
             /* Validate the Size and Attributes */
-            if ((ObjectAttributes->Length != sizeof(OBJECT_ATTRIBUTES)) ||
-                (ObjectAttributes->Attributes & ~OBJ_VALID_KERNEL_ATTRIBUTES))
+            if ((LocalLength != sizeof(OBJECT_ATTRIBUTES)) ||
+                (LocalAttributes & ~OBJ_VALID_KERNEL_ATTRIBUTES))
             {
                 /* Invalid combination, fail */
                 _SEH2_YIELD(return STATUS_INVALID_PARAMETER);
             }
 
             /* Set some Create Info and do not allow user-mode kernel handles */
-            ObjectCreateInfo->RootDirectory = ObjectAttributes->RootDirectory;
-            ObjectCreateInfo->Attributes = ObjectAttributes->Attributes & OBJ_VALID_KERNEL_ATTRIBUTES;
+            ObjectCreateInfo->RootDirectory = (HANDLE)(ULONG_PTR)ReadUnalignedUlongPtr((const ULONG_PTR*)
+                                                   (RawAttributes + FIELD_OFFSET(OBJECT_ATTRIBUTES, RootDirectory)));
+            ObjectCreateInfo->Attributes = LocalAttributes & OBJ_VALID_KERNEL_ATTRIBUTES;
             if (CreatorMode != KernelMode) ObjectCreateInfo->Attributes &= ~OBJ_KERNEL_HANDLE;
-            LocalObjectName = ObjectAttributes->ObjectName;
-            SecurityDescriptor = ObjectAttributes->SecurityDescriptor;
-            SecurityQos = ObjectAttributes->SecurityQualityOfService;
+            LocalObjectName = (PUNICODE_STRING)(ULONG_PTR)ReadUnalignedUlongPtr((const ULONG_PTR*)
+                              (RawAttributes + FIELD_OFFSET(OBJECT_ATTRIBUTES, ObjectName)));
+            SecurityDescriptor = (PSECURITY_DESCRIPTOR)(ULONG_PTR)ReadUnalignedUlongPtr((const ULONG_PTR*)
+                                 (RawAttributes + FIELD_OFFSET(OBJECT_ATTRIBUTES, SecurityDescriptor)));
+            SecurityQos = (PSECURITY_QUALITY_OF_SERVICE)(ULONG_PTR)ReadUnalignedUlongPtr((const ULONG_PTR*)
+                          (RawAttributes + FIELD_OFFSET(OBJECT_ATTRIBUTES, SecurityQualityOfService)));
+
+#ifdef _M_ARM64
+            ARM64_OB_DPRINT("[arm64][ob] ObpCaptureObjectCreateInformation: root=%p name=%p sd=%p qos=%p ciAttrs=0x%08lx\n",
+                    ObjectCreateInfo->RootDirectory,
+                    LocalObjectName,
+                    SecurityDescriptor,
+                    SecurityQos,
+                    ObjectCreateInfo->Attributes);
+#endif
 
             /* Check if we have a security descriptor */
             if (SecurityDescriptor)
             {
+#ifdef _M_ARM64
+                ARM64_OB_DPRINT("[arm64][ob] ObpCaptureObjectCreateInformation: capture SD begin\n");
+#endif
+
                 /* Capture it. Note: This has an implicit memory barrier due
                    to the function call, so cleanup is safe here.) */
                 Status = SeCaptureSecurityDescriptor(SecurityDescriptor,
@@ -534,11 +603,20 @@ ObpCaptureObjectCreateInformation(IN POBJECT_ATTRIBUTES ObjectAttributes,
                 /* Save the probe mode and security descriptor size */
                 ObjectCreateInfo->SecurityDescriptorCharge = SdCharge;
                 ObjectCreateInfo->ProbeMode = AccessMode;
+
+#ifdef _M_ARM64
+                ARM64_OB_DPRINT("[arm64][ob] ObpCaptureObjectCreateInformation: capture SD end charge=%lu\n",
+                        SdCharge);
+#endif
             }
 
             /* Check if we have QoS */
             if (SecurityQos)
             {
+#ifdef _M_ARM64
+                ARM64_OB_DPRINT("[arm64][ob] ObpCaptureObjectCreateInformation: qos begin\n");
+#endif
+
                 /* Check if we came from user mode */
                 if (AccessMode != KernelMode)
                 {
@@ -549,15 +627,36 @@ ObpCaptureObjectCreateInformation(IN POBJECT_ATTRIBUTES ObjectAttributes,
                 }
 
                 /* Save Info */
-                ObjectCreateInfo->SecurityQualityOfService = *SecurityQos;
+                RawQos = (PUCHAR)SecurityQos;
+                ObjectCreateInfo->SecurityQualityOfService.Length =
+                    ReadUnalignedU32((const unsigned long*)
+                                     (RawQos + FIELD_OFFSET(SECURITY_QUALITY_OF_SERVICE, Length)));
+                ObjectCreateInfo->SecurityQualityOfService.ImpersonationLevel =
+                    (SECURITY_IMPERSONATION_LEVEL)ReadUnalignedU32((const unsigned long*)
+                        (RawQos + FIELD_OFFSET(SECURITY_QUALITY_OF_SERVICE, ImpersonationLevel)));
+                ObjectCreateInfo->SecurityQualityOfService.ContextTrackingMode =
+                    *(RawQos + FIELD_OFFSET(SECURITY_QUALITY_OF_SERVICE, ContextTrackingMode));
+                ObjectCreateInfo->SecurityQualityOfService.EffectiveOnly =
+                    *(RawQos + FIELD_OFFSET(SECURITY_QUALITY_OF_SERVICE, EffectiveOnly));
                 ObjectCreateInfo->SecurityQos =
                     &ObjectCreateInfo->SecurityQualityOfService;
+
+#ifdef _M_ARM64
+                ARM64_OB_DPRINT("[arm64][ob] ObpCaptureObjectCreateInformation: qos end len=%lu level=%d tracking=%u effective=%u\n",
+                        ObjectCreateInfo->SecurityQualityOfService.Length,
+                        ObjectCreateInfo->SecurityQualityOfService.ImpersonationLevel,
+                        ObjectCreateInfo->SecurityQualityOfService.ContextTrackingMode,
+                        ObjectCreateInfo->SecurityQualityOfService.EffectiveOnly);
+#endif
             }
         }
         else
         {
             /* We don't have a name */
             LocalObjectName = NULL;
+#ifdef _M_ARM64
+            ARM64_OB_DPRINT("[arm64][ob] ObpCaptureObjectCreateInformation: no attrs\n");
+#endif
         }
     }
     _SEH2_EXCEPT(ExSystemExceptionFilter())
@@ -571,10 +670,20 @@ ObpCaptureObjectCreateInformation(IN POBJECT_ATTRIBUTES ObjectAttributes,
     /* Now check if the Object Attributes had an Object Name */
     if (LocalObjectName)
     {
+#ifdef _M_ARM64
+        ARM64_OB_DPRINT("[arm64][ob] ObpCaptureObjectCreateInformation: capture name begin name=%p\n",
+                LocalObjectName);
+#endif
+
         Status = ObpCaptureObjectName(ObjectName,
                                       LocalObjectName,
                                       AccessMode,
                                       AllocateFromLookaside);
+
+#ifdef _M_ARM64
+        ARM64_OB_DPRINT("[arm64][ob] ObpCaptureObjectCreateInformation: capture name end status=0x%08lx len=%hu buffer=%p\n",
+                Status, ObjectName->Length, ObjectName->Buffer);
+#endif
     }
     else
     {
@@ -587,6 +696,11 @@ ObpCaptureObjectCreateInformation(IN POBJECT_ATTRIBUTES ObjectAttributes,
             Status = STATUS_OBJECT_NAME_INVALID;
         }
     }
+
+#ifdef _M_ARM64
+    ARM64_OB_DPRINT("[arm64][ob] ObpCaptureObjectCreateInformation: return status=0x%08lx\n",
+            Status);
+#endif
 
     /* Cleanup if we failed */
     if (!NT_SUCCESS(Status))
@@ -720,7 +834,21 @@ ObpAllocateObject(IN POBJECT_CREATE_INFORMATION ObjectCreateInfo,
                 FIELD_OFFSET(OBJECT_HEADER, Body);
 
     /* Allocate memory for the Object and Header */
+#if defined(_M_ARM64)
+    ARM64_OB_DPRINT("[arm64][ob] ObpAllocateObject: poolType=%u tag=0x%08lx final=%lu object=%lu q/h/n/c=%lu/%lu/%lu/%lu\n",
+            PoolType,
+            Tag,
+            FinalSize,
+            ObjectSize,
+            QuotaSize,
+            HandleSize,
+            NameSize,
+            CreatorSize);
+#endif
     Header = ExAllocatePoolWithTag(PoolType, FinalSize + ObjectSize, Tag);
+#if defined(_M_ARM64)
+    ARM64_OB_DPRINT("[arm64][ob] ObpAllocateObject: pool header=%p\n", Header);
+#endif
     if (!Header) return STATUS_INSUFFICIENT_RESOURCES;
 
     /* Check if we have a quota header */
@@ -749,7 +877,15 @@ ObpAllocateObject(IN POBJECT_CREATE_INFORMATION ObjectCreateInfo,
     {
         /* Initialize the Object Name Info */
         NameInfo = (POBJECT_HEADER_NAME_INFO)Header;
-        NameInfo->Name = *ObjectName;
+#if defined(_M_ARM64)
+        ARM64_OB_DPRINT("[arm64][ob] ObpAllocateObject: nameInfo=%p objectName=%p len=%hu\n",
+                NameInfo,
+                ObjectName->Buffer,
+                ObjectName->Length);
+#endif
+        NameInfo->Name.Length = ObjectName->Length;
+        NameInfo->Name.MaximumLength = ObjectName->MaximumLength;
+        NameInfo->Name.Buffer = ObjectName->Buffer;
         NameInfo->Directory = NULL;
         NameInfo->QueryReferences = 1;
 
@@ -764,6 +900,9 @@ ObpAllocateObject(IN POBJECT_CREATE_INFORMATION ObjectCreateInfo,
 
         /* Set the header pointer */
         Header = (POBJECT_HEADER)(NameInfo + 1);
+#if defined(_M_ARM64)
+        ARM64_OB_DPRINT("[arm64][ob] ObpAllocateObject: name header done header=%p\n", Header);
+#endif
     }
 
     /* Check if we have a creator header */
@@ -771,10 +910,16 @@ ObpAllocateObject(IN POBJECT_CREATE_INFORMATION ObjectCreateInfo,
     {
         /* Initialize Creator Info */
         CreatorInfo = (POBJECT_HEADER_CREATOR_INFO)Header;
+#if defined(_M_ARM64)
+        ARM64_OB_DPRINT("[arm64][ob] ObpAllocateObject: creatorInfo=%p\n", CreatorInfo);
+#endif
         CreatorInfo->CreatorBackTraceIndex = 0;
         CreatorInfo->CreatorUniqueProcess = PsGetCurrentProcessId();
         InitializeListHead(&CreatorInfo->TypeList);
         Header = (POBJECT_HEADER)(CreatorInfo + 1);
+#if defined(_M_ARM64)
+        ARM64_OB_DPRINT("[arm64][ob] ObpAllocateObject: creator header done header=%p\n", Header);
+#endif
     }
 
     /* Check for quota information */
@@ -828,6 +973,11 @@ ObpAllocateObject(IN POBJECT_CREATE_INFORMATION ObjectCreateInfo,
     if (HandleSize) Header->Flags |= OB_FLAG_SINGLE_PROCESS;
 
     /* Initialize the object header */
+#if defined(_M_ARM64)
+    ARM64_OB_DPRINT("[arm64][ob] ObpAllocateObject: init object header=%p type=%p\n",
+            Header,
+            ObjectType);
+#endif
     Header->PointerCount = 1;
     Header->HandleCount = 0;
     Header->Type = ObjectType;
@@ -854,6 +1004,10 @@ ObpAllocateObject(IN POBJECT_CREATE_INFORMATION ObjectCreateInfo,
     /* Check if we have a type */
     if (ObjectType)
     {
+#if defined(_M_ARM64)
+        ARM64_OB_DPRINT("[arm64][ob] ObpAllocateObject: increment type counters type=%p\n",
+                ObjectType);
+#endif
         /* Increase the number of objects of this type */
         InterlockedIncrement((PLONG)&ObjectType->TotalNumberOfObjects);
 
@@ -865,6 +1019,9 @@ ObpAllocateObject(IN POBJECT_CREATE_INFORMATION ObjectCreateInfo,
     }
 
     /* Return Header */
+#if defined(_M_ARM64)
+    ARM64_OB_DPRINT("[arm64][ob] ObpAllocateObject: return header=%p\n", Header);
+#endif
     *ObjectHeader = Header;
     return STATUS_SUCCESS;
 }
@@ -1051,8 +1208,18 @@ ObCreateObject(IN KPROCESSOR_MODE ProbeMode OPTIONAL,
     UNICODE_STRING ObjectName;
     POBJECT_HEADER Header;
 
+#if defined(_M_ARM64)
+    ARM64_OB_DPRINT("[arm64][ob] ObCreateObject: begin type=%p attrs=%p size=%lu\n",
+            Type,
+            ObjectAttributes,
+            ObjectSize);
+#endif
+
     /* Allocate a capture buffer */
     ObjectCreateInfo = ObpAllocateObjectCreateInfoBuffer(LookasideCreateInfoList);
+#if defined(_M_ARM64)
+    ARM64_OB_DPRINT("[arm64][ob] ObCreateObject: createInfo=%p\n", ObjectCreateInfo);
+#endif
     if (!ObjectCreateInfo) return STATUS_INSUFFICIENT_RESOURCES;
 
     /* Capture all the info */
@@ -1062,9 +1229,20 @@ ObCreateObject(IN KPROCESSOR_MODE ProbeMode OPTIONAL,
                                                FALSE,
                                                ObjectCreateInfo,
                                                &ObjectName);
+#if defined(_M_ARM64)
+    ARM64_OB_DPRINT("[arm64][ob] ObCreateObject: capture status=0x%08lx name=%p len=%hu\n",
+            Status,
+            ObjectName.Buffer,
+            ObjectName.Length);
+#endif
     if (NT_SUCCESS(Status))
     {
         /* Validate attributes */
+#if defined(_M_ARM64)
+        ARM64_OB_DPRINT("[arm64][ob] ObCreateObject: validate typeInfo invalid=0x%08lx attrs=0x%08lx\n",
+                Type->TypeInfo.InvalidAttributes,
+                ObjectCreateInfo->Attributes);
+#endif
         if (Type->TypeInfo.InvalidAttributes & ObjectCreateInfo->Attributes)
         {
             /* Fail */
@@ -1072,6 +1250,13 @@ ObCreateObject(IN KPROCESSOR_MODE ProbeMode OPTIONAL,
         }
         else
         {
+#if defined(_M_ARM64)
+            ARM64_OB_DPRINT("[arm64][ob] ObCreateObject: charges input paged=%lu nonpaged=%lu defaults=%lu/%lu\n",
+                    PagedPoolCharge,
+                    NonPagedPoolCharge,
+                    Type->TypeInfo.DefaultPagedPoolCharge,
+                    Type->TypeInfo.DefaultNonPagedPoolCharge);
+#endif
             /* Check if we have a paged charge */
             if (!PagedPoolCharge)
             {
@@ -1089,22 +1274,53 @@ ObCreateObject(IN KPROCESSOR_MODE ProbeMode OPTIONAL,
             /* Write the pool charges */
             ObjectCreateInfo->PagedPoolCharge = PagedPoolCharge;
             ObjectCreateInfo->NonPagedPoolCharge = NonPagedPoolCharge;
+#if defined(_M_ARM64)
+            ARM64_OB_DPRINT("[arm64][ob] ObCreateObject: charges set paged=%lu nonpaged=%lu\n",
+                    ObjectCreateInfo->PagedPoolCharge,
+                    ObjectCreateInfo->NonPagedPoolCharge);
+#endif
 
             /* Allocate the Object */
+#if defined(_M_ARM64)
+            ARM64_OB_DPRINT("[arm64][ob] ObCreateObject: allocating object type=%p size=%lu\n",
+                    Type,
+                    ObjectSize);
+#endif
             Status = ObpAllocateObject(ObjectCreateInfo,
                                        &ObjectName,
                                        Type,
                                        ObjectSize,
                                        AccessMode,
                                        &Header);
+#if defined(_M_ARM64)
+            ARM64_OB_DPRINT("[arm64][ob] ObCreateObject: ObpAllocateObject status=0x%08lx header=%p\n",
+                    Status,
+                    Header);
+#endif
             if (NT_SUCCESS(Status))
             {
+#if defined(_M_ARM64)
+                ARM64_OB_DPRINT("[arm64][ob] ObCreateObject: storing object out=%p body=%p flags=0x%02x\n",
+                        Object,
+                        &Header->Body,
+                        Header->Flags);
+#endif
                 /* Return the Object */
+#if defined(_M_ARM64)
+                WriteUnalignedUlongPtr((ULONG_PTR*)Object, (ULONG_PTR)&Header->Body);
+#else
                 *Object = &Header->Body;
+#endif
+#if defined(_M_ARM64)
+                ARM64_OB_DPRINT("[arm64][ob] ObCreateObject: object stored\n");
+#endif
 
                 /* Check if this is a permanent object */
                 if (Header->Flags & OB_FLAG_PERMANENT)
                 {
+#if defined(_M_ARM64)
+                    ARM64_OB_DPRINT("[arm64][ob] ObCreateObject: permanent privilege check\n");
+#endif
                     /* Do the privilege check */
                     if (!SeSinglePrivilegeCheck(SeCreatePermanentPrivilege,
                                                 ProbeMode))
@@ -1113,9 +1329,17 @@ ObCreateObject(IN KPROCESSOR_MODE ProbeMode OPTIONAL,
                         ObpDeallocateObject(*Object);
                         Status = STATUS_PRIVILEGE_NOT_HELD;
                     }
+#if defined(_M_ARM64)
+                    ARM64_OB_DPRINT("[arm64][ob] ObCreateObject: permanent path status=0x%08lx\n",
+                            Status);
+#endif
                 }
 
                 /* Return status */
+#if defined(_M_ARM64)
+                ARM64_OB_DPRINT("[arm64][ob] ObCreateObject: return status=0x%08lx\n",
+                        Status);
+#endif
                 return Status;
             }
         }

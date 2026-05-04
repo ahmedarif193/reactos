@@ -8,6 +8,7 @@
 /* INCLUDES ******************************************************************/
 
 #include <uefildr.h>
+#include <DevicePath.h>
 
 #include <debug.h>
 DBG_DEFAULT_CHANNEL(DISK);
@@ -70,6 +71,7 @@ static ULONG UefiBootRootIndex = 0;
 static ULONG PublicBootArcDisk = 0;
 static INTERNAL_UEFI_DISK* InternalUefiDisk = NULL;
 static EFI_GUID BlockIoGuid = BLOCK_IO_PROTOCOL;
+static EFI_GUID DevicePathProtocolGuid = EFI_DEVICE_PATH_PROTOCOL_GUID;
 static EFI_HANDLE* handles = NULL;
 static ULONG HandleCount = 0;
 
@@ -235,6 +237,169 @@ UefiReadBlocksChunked(
     }
 
     return EFI_SUCCESS;
+}
+
+static
+BOOLEAN
+UefiDetectIsoVolume(
+    _In_ EFI_BLOCK_IO* BlockIo)
+{
+    EFI_STATUS Status;
+    VOID* ReadBuffer = NULL;
+    UINT32 BlockSize;
+    UINT64 IsoOffsetBytes;
+    UINT64 ReadLba;
+    UINTN DescriptorOffset;
+    UINTN ReadSize;
+    UINTN BlockCount;
+    PUCHAR Descriptor;
+    BOOLEAN IsIso = FALSE;
+
+    if (!BlockIo || !BlockIo->Media ||
+        !BlockIo->Media->MediaPresent ||
+        BlockIo->Media->BlockSize == 0)
+    {
+        return FALSE;
+    }
+
+    BlockSize = BlockIo->Media->BlockSize;
+    IsoOffsetBytes = 16ULL * 2048ULL;
+    ReadLba = IsoOffsetBytes / BlockSize;
+    DescriptorOffset = (UINTN)(IsoOffsetBytes % BlockSize);
+    ReadSize = DescriptorOffset + 2048;
+
+    if (ReadSize % BlockSize)
+        ReadSize = ((ReadSize + BlockSize - 1) / BlockSize) * BlockSize;
+
+    BlockCount = ReadSize / BlockSize;
+    if (BlockIo->Media->LastBlock < ReadLba + BlockCount - 1)
+        return FALSE;
+
+    Status = GlobalSystemTable->BootServices->AllocatePool(EfiLoaderData,
+                                                           ReadSize,
+                                                           &ReadBuffer);
+    if (EFI_ERROR(Status) || !ReadBuffer)
+        return FALSE;
+
+    Status = BlockIo->ReadBlocks(BlockIo,
+                                 BlockIo->Media->MediaId,
+                                 ReadLba,
+                                 ReadSize,
+                                 ReadBuffer);
+    if (!EFI_ERROR(Status))
+    {
+        Descriptor = (PUCHAR)ReadBuffer + DescriptorOffset;
+        IsIso = (Descriptor[0] == 0x01 &&
+                 Descriptor[1] == 'C' &&
+                 Descriptor[2] == 'D' &&
+                 Descriptor[3] == '0' &&
+                 Descriptor[4] == '0' &&
+                 Descriptor[5] == '1');
+    }
+
+    GlobalSystemTable->BootServices->FreePool(ReadBuffer);
+    return IsIso;
+}
+
+static
+BOOLEAN
+UefiDevicePathHasCdRomNode(
+    _In_ EFI_HANDLE Handle)
+{
+    EFI_DEVICE_PATH_PROTOCOL* DevicePath = NULL;
+
+    if (EFI_ERROR(GlobalSystemTable->BootServices->HandleProtocol(
+            Handle,
+            &DevicePathProtocolGuid,
+            (VOID**)&DevicePath)) ||
+        !DevicePath)
+    {
+        return FALSE;
+    }
+
+    while (!IsDevicePathEnd(DevicePath))
+    {
+        if (DevicePath->Type == MEDIA_DEVICE_PATH &&
+            DevicePath->SubType == MEDIA_CDROM_DP)
+        {
+            return TRUE;
+        }
+
+        DevicePath = NextDevicePathNode(DevicePath);
+    }
+
+    return FALSE;
+}
+
+static
+BOOLEAN
+UefiDevicePathMatchesParentDisk(
+    _In_ EFI_DEVICE_PATH_PROTOCOL* CandidateDiskPath,
+    _In_ EFI_DEVICE_PATH_PROTOCOL* PartitionPath)
+{
+    EFI_DEVICE_PATH_PROTOCOL* DiskNode = CandidateDiskPath;
+    EFI_DEVICE_PATH_PROTOCOL* PartNode = PartitionPath;
+
+    if (!CandidateDiskPath || !PartitionPath)
+        return FALSE;
+
+    while (!IsDevicePathEnd(PartNode))
+    {
+        if (PartNode->Type == MEDIA_DEVICE_PATH &&
+            PartNode->SubType == MEDIA_HARDDRIVE_DP)
+        {
+            return IsDevicePathEnd(DiskNode);
+        }
+
+        if (IsDevicePathEnd(DiskNode))
+            return FALSE;
+
+        if (DevicePathNodeLength(PartNode) != DevicePathNodeLength(DiskNode))
+            return FALSE;
+
+        if (memcmp(PartNode, DiskNode, DevicePathNodeLength(PartNode)) != 0)
+        {
+            return FALSE;
+        }
+
+        PartNode = NextDevicePathNode(PartNode);
+        DiskNode = NextDevicePathNode(DiskNode);
+    }
+
+    return FALSE;
+}
+
+static
+BOOLEAN
+UefiIsCdRomHandle(
+    _In_ EFI_HANDLE Handle)
+{
+    EFI_BLOCK_IO* BlockIo = NULL;
+
+    if (!Handle)
+        return FALSE;
+
+    if (UefiDevicePathHasCdRomNode(Handle))
+        return TRUE;
+
+    if (EFI_ERROR(GlobalSystemTable->BootServices->HandleProtocol(
+            Handle,
+            &BlockIoGuid,
+            (VOID**)&BlockIo)) ||
+        !BlockIo ||
+        !BlockIo->Media ||
+        !BlockIo->Media->MediaPresent)
+    {
+        return FALSE;
+    }
+
+    if (BlockIo->Media->RemovableMedia && BlockIo->Media->BlockSize == 2048)
+        return TRUE;
+
+    if (BlockIo->Media->ReadOnly && !BlockIo->Media->LogicalPartition)
+        return TRUE;
+
+    return (!BlockIo->Media->LogicalPartition && UefiDetectIsoVolume(BlockIo));
 }
 
 /* GPT Support Functions *****************************************************/
@@ -973,10 +1138,19 @@ UefiSetupBlockDevices(VOID)
 
         if (!EFI_ERROR(Status) && BlockIo != NULL && BlockIo->Media->LogicalPartition)
         {
+            EFI_DEVICE_PATH_PROTOCOL* BootPath = NULL;
             TRACE("Boot handle is a logical partition, searching for parent root device\n");
             TRACE("Boot partition: BlockSize=%lu, RemovableMedia=%s\n",
                 BlockIo->Media->BlockSize,
                 BlockIo->Media->RemovableMedia ? "TRUE" : "FALSE");
+
+            if (EFI_ERROR(GlobalSystemTable->BootServices->HandleProtocol(
+                    handles[UefiBootRootIndex],
+                    &DevicePathProtocolGuid,
+                    (VOID**)&BootPath)))
+            {
+                BootPath = NULL;
+            }
 
             /* Find the root device that matches the boot partition's characteristics */
             /* For CD-ROMs: match BlockSize=2048 and RemovableMedia=TRUE */
@@ -985,6 +1159,7 @@ UefiSetupBlockDevices(VOID)
             for (i = 0; i < BlockDeviceIndex; i++)
             {
                 EFI_BLOCK_IO* RootBlockIo;
+                EFI_DEVICE_PATH_PROTOCOL* RootPath = NULL;
                 Status = GlobalSystemTable->BootServices->HandleProtocol(
                     InternalUefiDisk[i].Handle,
                     &BlockIoGuid,
@@ -992,6 +1167,30 @@ UefiSetupBlockDevices(VOID)
 
                 if (EFI_ERROR(Status) || RootBlockIo == NULL)
                     continue;
+
+                if (BootPath &&
+                    !EFI_ERROR(GlobalSystemTable->BootServices->HandleProtocol(
+                        InternalUefiDisk[i].Handle,
+                        &DevicePathProtocolGuid,
+                        (VOID**)&RootPath)) &&
+                    UefiDevicePathMatchesParentDisk(RootPath, BootPath))
+                {
+                    PublicBootArcDisk = i;
+                    InternalUefiDisk[i].IsThisTheBootDrive = TRUE;
+                    FoundBootDevice = TRUE;
+                    TRACE("Found boot parent device by device path at ARC drive index %lu\n", i);
+                    break;
+                }
+
+                if (UefiDevicePathHasCdRomNode(handles[UefiBootRootIndex]) &&
+                    UefiIsCdRomHandle(InternalUefiDisk[i].Handle))
+                {
+                    PublicBootArcDisk = i;
+                    InternalUefiDisk[i].IsThisTheBootDrive = TRUE;
+                    FoundBootDevice = TRUE;
+                    TRACE("Found CD-ROM boot parent by device path at ARC drive index %lu\n", i);
+                    break;
+                }
 
                 /* For CD-ROM: match BlockSize=2048 and RemovableMedia */
                 if (BlockIo->Media->BlockSize == 2048 && BlockIo->Media->RemovableMedia)
@@ -1041,8 +1240,10 @@ BOOLEAN
 UefiSetBootpath(VOID)
 {
     EFI_BLOCK_IO* BootBlockIo = NULL;
+    EFI_BLOCK_IO* RootBlockIo = NULL;
     EFI_STATUS Status;
     ULONG ArcDriveIndex;
+    BOOLEAN TreatAsCd = FALSE;
 
     TRACE("UefiSetBootpath: Setting up boot path\n");
 
@@ -1060,21 +1261,54 @@ UefiSetBootpath(VOID)
     }
 
     Status = GlobalSystemTable->BootServices->HandleProtocol(
-        handles[UefiBootRootIndex],
+        PublicBootHandle,
         &BlockIoGuid,
         (VOID**)&BootBlockIo);
 
     if (EFI_ERROR(Status) || BootBlockIo == NULL)
     {
-        ERR("Failed to get Block I/O protocol for boot handle\n");
+        TRACE("Failed to get Block I/O protocol for loaded boot handle, using root handle\n");
+        BootBlockIo = NULL;
+    }
+
+    Status = GlobalSystemTable->BootServices->HandleProtocol(
+        InternalUefiDisk[ArcDriveIndex].Handle,
+        &BlockIoGuid,
+        (VOID**)&RootBlockIo);
+
+    if (EFI_ERROR(Status) || RootBlockIo == NULL)
+    {
+        ERR("Failed to get Block I/O protocol for boot root handle\n");
         return FALSE;
     }
 
     FrldrBootDrive = (FIRST_BIOS_DISK + ArcDriveIndex);
 
-    /* Check if booting from CD-ROM by checking the boot handle properties.
-     * CD-ROMs have BlockSize=2048 and RemovableMedia=TRUE. */
-    if (BootBlockIo->Media->RemovableMedia == TRUE && BootBlockIo->Media->BlockSize == 2048)
+    if (UefiIsCdRomHandle(PublicBootHandle) ||
+        UefiIsCdRomHandle(InternalUefiDisk[ArcDriveIndex].Handle))
+    {
+        TreatAsCd = TRUE;
+    }
+
+    if (!TreatAsCd && BootBlockIo && BootBlockIo->Media &&
+        BootBlockIo->Media->LogicalPartition &&
+        RootBlockIo->Media &&
+        !RootBlockIo->Media->LogicalPartition &&
+        UefiDetectIsoVolume(RootBlockIo))
+    {
+        TRACE("Boot handle is a logical partition on ISO9660 media, using CD-ROM ARC path\n");
+        TreatAsCd = TRUE;
+    }
+
+    if (!TreatAsCd && RootBlockIo->Media &&
+        RootBlockIo->Media->ReadOnly &&
+        !RootBlockIo->Media->LogicalPartition)
+    {
+        TRACE("Boot root media is read-only, using CD-ROM ARC path\n");
+        TreatAsCd = TRUE;
+    }
+
+    if (TreatAsCd)
     {
         /* Boot Partition 0xFF is the magic value that indicates booting from CD-ROM */
         FrldrBootPartition = 0xFF;
@@ -1088,7 +1322,7 @@ UefiSetBootpath(VOID)
 
         /* This is a hard disk */
         /* If boot handle is a logical partition, we need to determine which partition number */
-        if (BootBlockIo->Media->LogicalPartition)
+        if (BootBlockIo && BootBlockIo->Media && BootBlockIo->Media->LogicalPartition)
         {
             /* For logical partitions, we need to find the partition number.
              * This is tricky - we'll use partition 1 as default for now. */
@@ -1166,7 +1400,9 @@ UefiInitializeBootDevices(VOID)
         return FALSE;
     }
 
-    if (BlockIo->Media->RemovableMedia == TRUE && BlockIo->Media->BlockSize == 2048)
+    if (FrldrBootPartition == 0xFF ||
+        UefiIsCdRomHandle(InternalUefiDisk[ArcDriveIndex].Handle) ||
+        (BlockIo->Media->RemovableMedia == TRUE && BlockIo->Media->BlockSize == 2048))
     {
         ARC_STATUS Status;
 

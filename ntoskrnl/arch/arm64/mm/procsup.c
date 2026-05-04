@@ -1,6 +1,6 @@
 /*
  * PROJECT:         ReactOS Kernel (ARM64)
- * PURPOSE:         Process address space bring-up stubs
+ * PURPOSE:         ARM64 process address space initialization
  */
 
 #include <ntoskrnl.h>

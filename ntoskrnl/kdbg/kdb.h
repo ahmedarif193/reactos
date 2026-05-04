@@ -33,7 +33,7 @@ typedef struct _KDB_BREAKPOINT
    PVOID                  Condition;
    union {
       /* KdbBreakPointSoftware */
-      UCHAR               SavedInstruction;
+      KD_BREAKPOINT_TYPE  SavedInstruction;
       /* KdbBreakPointHardware */
       struct {
          UCHAR            DebugReg : 2;

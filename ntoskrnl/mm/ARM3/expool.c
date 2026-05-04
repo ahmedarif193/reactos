@@ -1974,7 +1974,10 @@ ExAllocatePoolWithTag(IN POOL_TYPE PoolType,
     OriginalType = PoolType;
     PoolType = PoolType & BASE_POOL_TYPE_MASK;
     PoolDesc = PoolVector[PoolType];
+#if !defined(_M_ARM64)
     ASSERT(PoolDesc != NULL);
+#endif
+    if (!PoolDesc) return NULL;
 
     //
     // Check if this is a big page allocation

@@ -9,6 +9,7 @@
 /* INCLUDES *****************************************************************/
 
 #include <rtl.h>
+#include <reactos/unaligned.h>
 
 #define NDEBUG
 #include <debug.h>
@@ -37,6 +38,20 @@ USHORT NlsUnicodeDefaultChar = 0;
 
 
 /* FUNCTIONS *****************************************************************/
+
+static
+VOID
+RtlpCopyNlsHeaderBytes(
+    _Out_writes_bytes_(Length) PUCHAR Destination,
+    _In_reads_bytes_(Length) const UCHAR *Source,
+    _In_ SIZE_T Length)
+{
+    while (Length != 0)
+    {
+        *Destination++ = *Source++;
+        Length--;
+    }
+}
 
 /*
  * @unimplemented
@@ -155,32 +170,34 @@ VOID NTAPI
 RtlInitCodePageTable(IN PUSHORT TableBase,
                      OUT PCPTABLEINFO CodePageTable)
 {
-    PNLS_FILE_HEADER NlsFileHeader;
+    const UCHAR *TableBytes;
+    USHORT HeaderSize;
 
     PAGED_CODE_RTL();
 
     DPRINT("RtlInitCodePageTable() called\n");
 
-    NlsFileHeader = (PNLS_FILE_HEADER)TableBase;
+    TableBytes = (const UCHAR *)TableBase;
+    HeaderSize = ReadUnalignedU16((const USHORT *)(TableBytes + FIELD_OFFSET(NLS_FILE_HEADER, HeaderSize)));
 
     /* Copy header fields first */
-    CodePageTable->CodePage = NlsFileHeader->CodePage;
-    CodePageTable->MaximumCharacterSize = NlsFileHeader->MaximumCharacterSize;
-    CodePageTable->DefaultChar = NlsFileHeader->DefaultChar;
-    CodePageTable->UniDefaultChar = NlsFileHeader->UniDefaultChar;
-    CodePageTable->TransDefaultChar = NlsFileHeader->TransDefaultChar;
-    CodePageTable->TransUniDefaultChar = NlsFileHeader->TransUniDefaultChar;
+    CodePageTable->CodePage = ReadUnalignedU16((const USHORT *)(TableBytes + FIELD_OFFSET(NLS_FILE_HEADER, CodePage)));
+    CodePageTable->MaximumCharacterSize = ReadUnalignedU16((const USHORT *)(TableBytes + FIELD_OFFSET(NLS_FILE_HEADER, MaximumCharacterSize)));
+    CodePageTable->DefaultChar = ReadUnalignedU16((const USHORT *)(TableBytes + FIELD_OFFSET(NLS_FILE_HEADER, DefaultChar)));
+    CodePageTable->UniDefaultChar = ReadUnalignedU16((const USHORT *)(TableBytes + FIELD_OFFSET(NLS_FILE_HEADER, UniDefaultChar)));
+    CodePageTable->TransDefaultChar = ReadUnalignedU16((const USHORT *)(TableBytes + FIELD_OFFSET(NLS_FILE_HEADER, TransDefaultChar)));
+    CodePageTable->TransUniDefaultChar = ReadUnalignedU16((const USHORT *)(TableBytes + FIELD_OFFSET(NLS_FILE_HEADER, TransUniDefaultChar)));
 
-    RtlCopyMemory(&CodePageTable->LeadByte,
-                  &NlsFileHeader->LeadByte,
-                  MAXIMUM_LEADBYTES);
+    RtlpCopyNlsHeaderBytes(CodePageTable->LeadByte,
+                           TableBytes + FIELD_OFFSET(NLS_FILE_HEADER, LeadByte),
+                           MAXIMUM_LEADBYTES);
 
     /* Offset to wide char table is after the header */
     CodePageTable->WideCharTable =
-        TableBase + NlsFileHeader->HeaderSize + 1 + TableBase[NlsFileHeader->HeaderSize];
+        TableBase + HeaderSize + 1 + TableBase[HeaderSize];
 
     /* Then multibyte table (256 wchars) follows */
-    CodePageTable->MultiByteTable = TableBase + NlsFileHeader->HeaderSize + 1;
+    CodePageTable->MultiByteTable = TableBase + HeaderSize + 1;
 
     /* Check the presence of glyph table (256 wchars) */
     if (!CodePageTable->MultiByteTable[256])

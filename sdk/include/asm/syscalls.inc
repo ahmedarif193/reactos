@@ -55,6 +55,7 @@ $ZwFuncEndName
      * (KTHREAD.PreviousMode offset, see ksx.template.h OFFSET macro).
      */
     .equ ThPreviousMode, 0x153
+    .equ PcCurrentThread, 0xd48
 
     .macro STUB_K Name, ArgCount
     .align 2
@@ -135,7 +136,8 @@ Zw\Name:
 
     /* Load current thread pointer from per-CPU PCR (tpidr_el1) */
     mrs     x19, tpidr_el1
-    ldr     x19, [x19, #0xd40] /* PcCurrentThread offset in KIPCR */
+    add     x19, x19, #PcCurrentThread
+    ldr     x19, [x19]
     cbz     x19, .LZw\Name\()_call
 
     /* Save old PreviousMode and set to KernelMode (0) */
@@ -173,7 +175,8 @@ Zw\Name:
 
     /* Load current thread pointer from per-CPU PCR (tpidr_el1) */
     mrs     x19, tpidr_el1
-    ldr     x19, [x19, #0xd40] /* PcCurrentThread offset in KIPCR */
+    add     x19, x19, #PcCurrentThread
+    ldr     x19, [x19]
     cbz     x19, .LZw\Name\()_call
 
     /* Save old PreviousMode and set to KernelMode (0) */

@@ -9,6 +9,7 @@
 /* INCLUDES *******************************************************************/
 
 #include <ntoskrnl.h>
+#include <reactos/unaligned.h>
 #define NDEBUG
 #include <debug.h>
 
@@ -3236,13 +3237,22 @@ NtProtectVirtualMemory(IN HANDLE ProcessHandle,
             //
             ProbeForWritePointer(UnsafeBaseAddress);
             ProbeForWriteSize_t(UnsafeNumberOfBytesToProtect);
+#if defined(_M_ARM64)
+            ProbeForWrite(UnsafeOldAccessProtection, sizeof(ULONG), 1);
+#else
             ProbeForWriteUlong(UnsafeOldAccessProtection);
+#endif
 
             //
             // Capture them
             //
+#if defined(_M_ARM64)
+            BaseAddress = (PVOID)(ULONG_PTR)ReadUnalignedUlongPtr((const ULONG_PTR*)UnsafeBaseAddress);
+            NumberOfBytesToProtect = (SIZE_T)ReadUnalignedUlongPtr((const ULONG_PTR*)UnsafeNumberOfBytesToProtect);
+#else
             BaseAddress = *UnsafeBaseAddress;
             NumberOfBytesToProtect = *UnsafeNumberOfBytesToProtect;
+#endif
         }
         _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
         {
@@ -3258,8 +3268,13 @@ NtProtectVirtualMemory(IN HANDLE ProcessHandle,
         //
         // Capture directly
         //
+#if defined(_M_ARM64)
+        BaseAddress = (PVOID)(ULONG_PTR)ReadUnalignedUlongPtr((const ULONG_PTR*)UnsafeBaseAddress);
+        NumberOfBytesToProtect = (SIZE_T)ReadUnalignedUlongPtr((const ULONG_PTR*)UnsafeNumberOfBytesToProtect);
+#else
         BaseAddress = *UnsafeBaseAddress;
         NumberOfBytesToProtect = *UnsafeNumberOfBytesToProtect;
+#endif
     }
 
     //
@@ -3333,9 +3348,15 @@ NtProtectVirtualMemory(IN HANDLE ProcessHandle,
         //
         // Return data to user
         //
+#if defined(_M_ARM64)
+        WriteUnalignedU32((unsigned long*)UnsafeOldAccessProtection, OldAccessProtection);
+        WriteUnalignedUlongPtr((ULONG_PTR*)UnsafeBaseAddress, (ULONG_PTR)BaseAddress);
+        WriteUnalignedUlongPtr((ULONG_PTR*)UnsafeNumberOfBytesToProtect, (ULONG_PTR)NumberOfBytesToProtect);
+#else
         *UnsafeOldAccessProtection = OldAccessProtection;
         *UnsafeBaseAddress = BaseAddress;
         *UnsafeNumberOfBytesToProtect = NumberOfBytesToProtect;
+#endif
     }
     _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
     {

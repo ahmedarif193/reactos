@@ -312,6 +312,12 @@ MmCreateKernelStack(IN BOOLEAN GuiStack,
     ULONG i;
     PSLIST_ENTRY SListEntry;
 
+#if defined(_M_ARM64)
+    DPRINT("[arm64][mm] MmCreateKernelStack: begin gui=%u node=%u\n",
+            GuiStack,
+            Node);
+#endif
+
     //
     // Calculate pages needed
     //
@@ -350,12 +356,23 @@ MmCreateKernelStack(IN BOOLEAN GuiStack,
     // Reserve stack pages, plus a guard page
     //
     StackPte = MiReserveSystemPtes(StackPtes + 1, SystemPteSpace);
+#if defined(_M_ARM64)
+    DPRINT("[arm64][mm] MmCreateKernelStack: MiReserveSystemPtes count=%lu pte=%p\n",
+            (ULONG)(StackPtes + 1),
+            StackPte);
+#endif
     if (!StackPte) return NULL;
 
     //
     // Get the stack address
     //
     BaseAddress = MiPteToAddress(StackPte + StackPtes + 1);
+#if defined(_M_ARM64)
+    DPRINT("[arm64][mm] MmCreateKernelStack: base=%p stackPtes=%lu stackPages=%lu\n",
+            BaseAddress,
+            (ULONG)StackPtes,
+            (ULONG)StackPages);
+#endif
 
     //
     // Select the right PTE address where we actually start committing pages
@@ -375,6 +392,9 @@ MmCreateKernelStack(IN BOOLEAN GuiStack,
     // Acquire the PFN DB lock
     //
     OldIrql = MiAcquirePfnLock();
+#if defined(_M_ARM64)
+    DPRINT("[arm64][mm] MmCreateKernelStack: PFN lock acquired\n");
+#endif
 
     //
     // Loop each stack page
@@ -390,6 +410,14 @@ MmCreateKernelStack(IN BOOLEAN GuiStack,
         MI_SET_USAGE(MI_USAGE_KERNEL_STACK);
         MI_SET_PROCESS2(PsGetCurrentProcess()->ImageFileName);
         PageFrameIndex = MiRemoveAnyPage(MI_GET_NEXT_COLOR());
+#if defined(_M_ARM64)
+        if (i == 0)
+        {
+            DPRINT("[arm64][mm] MmCreateKernelStack: first page pfn=0x%Ix pte=%p\n",
+                    PageFrameIndex,
+                    PointerPte);
+        }
+#endif
         MI_WRITE_INVALID_PTE(PointerPte, InvalidPte);
 
         /* Initialize the PFN entry for this page */
@@ -404,6 +432,9 @@ MmCreateKernelStack(IN BOOLEAN GuiStack,
     // Release the PFN lock
     //
     MiReleasePfnLock(OldIrql);
+#if defined(_M_ARM64)
+    DPRINT("[arm64][mm] MmCreateKernelStack: end base=%p\n", BaseAddress);
+#endif
 
     //
     // Return the stack address
@@ -994,7 +1025,7 @@ MmInitializeProcessAddressSpace(IN PEPROCESS Process,
     Process->AddressSpaceInitialized = 2;
 
     /* Initialize the Addresss Space lock */
-    #if (NTDDI_VERSION >= NTDDI_LONGHORN) && !defined(_M_ARM64)
+#if (NTDDI_VERSION >= NTDDI_LONGHORN)
     ExInitializePushLock(&Process->AddressCreationLock);
 #else
     KeInitializeGuardedMutex(&Process->AddressCreationLock);
@@ -1163,7 +1194,7 @@ MmInitializeHandBuiltProcess(IN PEPROCESS Process,
     DirectoryTableBase[1] = PsGetCurrentProcess()->Pcb.DTB1;
 
     /* Initialize the Addresss Space */
-    #if (NTDDI_VERSION >= NTDDI_LONGHORN) && !defined(_M_ARM64)
+#if (NTDDI_VERSION >= NTDDI_LONGHORN)
     ExInitializePushLock(&Process->AddressCreationLock);
 #else
     KeInitializeGuardedMutex(&Process->AddressCreationLock);

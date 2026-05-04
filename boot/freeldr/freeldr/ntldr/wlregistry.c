@@ -228,6 +228,46 @@ LoadAlternateHive:
     return TRUE;
 }
 
+static const PCWSTR WinLdrLegacyBootServices[] =
+{
+    L"Floppy",
+    L"Vga",
+    L"VgaSave",
+    L"Sacdrv",
+    L"BusLogic",
+    L"usbuhci",
+};
+
+static
+VOID
+WinLdrDisableLegacyBootDriversForUefi(VOID)
+{
+    WCHAR ServiceKeyPath[64];
+    HKEY ServiceKey;
+    ULONG StartValue;
+    ULONG BufferSize;
+
+    for (ULONG Index = 0; Index < RTL_NUMBER_OF(WinLdrLegacyBootServices); Index++)
+    {
+        RtlStringCbPrintfW(ServiceKeyPath,
+                           sizeof(ServiceKeyPath),
+                           L"Services\\%s",
+                           WinLdrLegacyBootServices[Index]);
+
+        if (RegOpenKey(CurrentControlSetKey, ServiceKeyPath, &ServiceKey) != ERROR_SUCCESS)
+            continue;
+
+        BufferSize = sizeof(StartValue);
+        if (RegQueryValue(ServiceKey, L"Start", NULL, (PUCHAR)&StartValue, &BufferSize) == ERROR_SUCCESS &&
+            StartValue != SERVICE_DISABLED)
+        {
+            RegSetValueDword(ServiceKey, L"Start", SERVICE_DISABLED);
+        }
+
+        RegCloseKey(ServiceKey);
+    }
+}
+
 BOOLEAN WinLdrScanSystemHive(IN OUT PLOADER_PARAMETER_BLOCK LoaderBlock,
                              IN PCSTR SystemRoot)
 {
@@ -237,6 +277,19 @@ BOOLEAN WinLdrScanSystemHive(IN OUT PLOADER_PARAMETER_BLOCK LoaderBlock,
     DECLARE_UNICODE_STRING_SIZE(LangFileName, MAX_PATH); // CaseTable
     DECLARE_UNICODE_STRING_SIZE(OemHalFileName, MAX_PATH);
     CHAR SearchPath[1024];
+
+#if defined(UEFIBOOT) || defined(_M_ARM64) || defined(_ARM64_) || defined(__aarch64__) || defined(__arm64__)
+    if (LoaderBlock->Extension && LoaderBlock->Extension->BootViaEFI)
+    {
+        WinLdrDisableLegacyBootDriversForUefi();
+    }
+#if defined(_M_ARM64) || defined(_ARM64_) || defined(__aarch64__) || defined(__arm64__)
+    else
+    {
+        WinLdrDisableLegacyBootDriversForUefi();
+    }
+#endif
+#endif
 
     /* Scan registry and prepare boot drivers list */
     Success = WinLdrScanRegistry(&LoaderBlock->BootDriverListHead);
@@ -751,8 +804,7 @@ WinLdrAddDriverToList(
          * where we instead need to use the same (hive) allocator as the
          * one used by CmpAddDriverToList(), for interoperability purposes.
          */
-        RtlCreateUnicodeString(&GroupString, GroupName);
-        if (!GroupString.Buffer)
+        if (!RtlCreateUnicodeString(&GroupString, GroupName))
             goto Failure;
     }
     else

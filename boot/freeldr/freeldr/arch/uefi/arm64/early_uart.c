@@ -32,6 +32,7 @@
  */
 volatile UINT64 EarlyUartBaseAddress = 0;
 volatile ARM64_PLATFORM_ID EarlyUartPlatformId = Arm64PlatformUnknown;
+volatile ARM64_UART_INTERFACE EarlyUartInterface = Arm64UartUnknown;
 volatile BOOLEAN EarlyUartInitialized = FALSE;
 
 /* External UEFI globals */
@@ -113,10 +114,13 @@ EarlyUartLocateRsdp(VOID)
  * Returns the UART base address if found, 0 otherwise.
  */
 static UINT64
-EarlyUartLocateSpcrAddress(VOID)
+EarlyUartLocateSpcrAddress(_Out_opt_ ARM64_UART_INTERFACE *UartInterface)
 {
     PRSDP Rsdp;
     PSPCR_TABLE Spcr = NULL;
+
+    if (UartInterface)
+        *UartInterface = Arm64UartUnknown;
 
     Rsdp = EarlyUartLocateRsdp();
     if (!Rsdp)
@@ -178,8 +182,17 @@ EarlyUartLocateSpcrAddress(VOID)
         return 0;
 
     /* Validate SPCR for PL011-compatible UART */
-    if (Spcr->InterfaceType != SPCR_INTERFACE_ARM_PL011 &&
-        Spcr->InterfaceType != SPCR_INTERFACE_16550)
+    if (Spcr->InterfaceType == SPCR_INTERFACE_ARM_PL011)
+    {
+        if (UartInterface)
+            *UartInterface = Arm64UartPl011;
+    }
+    else if (Spcr->InterfaceType == SPCR_INTERFACE_16550)
+    {
+        if (UartInterface)
+            *UartInterface = Arm64UartNs16550;
+    }
+    else
     {
         /* Unknown interface type, but try anyway if it's memory-mapped */
     }
@@ -492,13 +505,19 @@ EarlyUartDetectPlatform(VOID)
     UINT64 SpcrAddress;
     ARM64_PLATFORM_ID Platform;
     UINT64 ProbeAddress = 0;
+    ARM64_UART_INTERFACE UartInterface = Arm64UartUnknown;
 
     /* Method 1: ACPI SPCR table */
-    SpcrAddress = EarlyUartLocateSpcrAddress();
+    SpcrAddress = EarlyUartLocateSpcrAddress(&UartInterface);
     if (SpcrAddress != 0)
     {
         /* SPCR found - determine platform from address */
         EarlyUartBaseAddress = SpcrAddress;
+        EarlyUartInterface = (UartInterface != Arm64UartUnknown) ?
+                             UartInterface :
+                             EarlyUartInferInterfaceFromAddress(SpcrAddress);
+        if (EarlyUartInterface == Arm64UartUnknown)
+            EarlyUartInterface = Arm64UartPl011;
 
         /* Match address to known platform */
         if (SpcrAddress == ARM64_UART_QEMU_VIRT)
@@ -532,6 +551,9 @@ EarlyUartDetectPlatform(VOID)
     {
         EarlyUartPlatformId = Platform;
         EarlyUartBaseAddress = EarlyUartGetAddressForPlatform(Platform);
+        EarlyUartInterface = EarlyUartInferInterfaceFromAddress(EarlyUartBaseAddress);
+        if (EarlyUartInterface == Arm64UartUnknown)
+            EarlyUartInterface = Arm64UartPl011;
         return EarlyUartPlatformId;
     }
 
@@ -541,12 +563,16 @@ EarlyUartDetectPlatform(VOID)
     {
         EarlyUartPlatformId = Platform;
         EarlyUartBaseAddress = ProbeAddress;
+        EarlyUartInterface = EarlyUartInferInterfaceFromAddress(ProbeAddress);
+        if (EarlyUartInterface == Arm64UartUnknown)
+            EarlyUartInterface = Arm64UartPl011;
         return EarlyUartPlatformId;
     }
 
     /* Method 4: Default to QEMU virt for development */
     EarlyUartPlatformId = Arm64PlatformQemuVirt;
     EarlyUartBaseAddress = ARM64_UART_DEFAULT;
+    EarlyUartInterface = Arm64UartPl011;
 
     return EarlyUartPlatformId;
 }
@@ -557,6 +583,14 @@ EarlyUartDetectPlatform(VOID)
 BOOLEAN
 EarlyUartInitialize(UINT64 UartBaseOverride)
 {
+    return EarlyUartInitializeWithInterface(UartBaseOverride, Arm64UartUnknown);
+}
+
+BOOLEAN
+EarlyUartInitializeWithInterface(
+    UINT64 UartBaseOverride,
+    ARM64_UART_INTERFACE UartInterfaceOverride)
+{
     if (EarlyUartInitialized)
         return TRUE;
 
@@ -565,6 +599,9 @@ EarlyUartInitialize(UINT64 UartBaseOverride)
         /* Use provided address (e.g., from loader block in kernel) */
         EarlyUartBaseAddress = UartBaseOverride;
         EarlyUartPlatformId = Arm64PlatformGenericAcpi;  /* Unknown specific platform */
+        EarlyUartInterface = (UartInterfaceOverride != Arm64UartUnknown) ?
+                             UartInterfaceOverride :
+                             EarlyUartInferInterfaceFromAddress(UartBaseOverride);
     }
     else
     {
@@ -577,7 +614,11 @@ EarlyUartInitialize(UINT64 UartBaseOverride)
         /* Detection failed, use default */
         EarlyUartBaseAddress = ARM64_UART_DEFAULT;
         EarlyUartPlatformId = Arm64PlatformQemuVirt;
+        EarlyUartInterface = Arm64UartPl011;
     }
+
+    if (EarlyUartInterface == Arm64UartUnknown)
+        EarlyUartInterface = Arm64UartPl011;
 
     EarlyUartInitialized = TRUE;
 

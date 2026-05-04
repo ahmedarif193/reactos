@@ -47,18 +47,14 @@ KiArm64TtbrToPa(
 
 #define ARM64_STUB() UNIMPLEMENTED_DBGBREAK()
 
-/* Raw UART output for early boot debugging before KD is initialized */
-FORCEINLINE VOID KiArm64RawPuts(const char *str) {
-    volatile ULONG *uart = (volatile ULONG *)KI_ARM64_PL011_VA;
-    while (*str) {
-        /* Convert \n to \r\n for proper serial terminal line handling */
-        if (*str == '\n') {
-            while (uart[0x18 / sizeof(ULONG)] & KI_ARM64_PL011_FR_TXFF) {}
-            uart[0] = '\r';
-        }
-        while (uart[0x18 / sizeof(ULONG)] & KI_ARM64_PL011_FR_TXFF) {}
-        uart[0] = *str++;
-    }
+VOID KiArm64RawPuts(const char *str) {
+    volatile UCHAR *u = (volatile UCHAR *)0xFFFF800009000000ULL;
+    while (*str) *u = *str++;
+}
+
+FORCEINLINE VOID KiArm64RawPutHex(ULONG64 value, ULONG width) {
+    UNREFERENCED_PARAMETER(value);
+    UNREFERENCED_PARAMETER(width);
 }
 
 VOID
@@ -427,8 +423,11 @@ KiInitializePcr(_In_ ULONG ProcessorNumber,
     UNREFERENCED_PARAMETER(PanicStack);
     UNREFERENCED_PARAMETER(InterruptStack);
 
+    KiArm64RawPuts("[InitPcr] entry\n");
+    KiArm64RawPuts("[InitPcr] zeroing Pcr struct\n");
     EntryPcr = KeGetPcr();
     RtlZeroMemory(Pcr, sizeof(*Pcr));
+    KiArm64RawPuts("[InitPcr] Pcr zeroed\n");
 
     if (SetCurrentPcr)
     {
@@ -437,8 +436,10 @@ KiInitializePcr(_In_ ULONG ProcessorNumber,
          * KeGetPcr(). This path is only valid when we are bringing up the
          * currently running CPU.
          */
+        KiArm64RawPuts("[InitPcr] writing TPIDR_EL1 = Pcr\n");
         __asm__ __volatile__("msr tpidr_el1, %0" : : "r"(Pcr) : "memory");
         __asm__ __volatile__("isb" ::: "memory");
+        KiArm64RawPuts("[InitPcr] TPIDR_EL1 set + ISB\n");
 
         /* Verify TPIDR_EL1 was set correctly (diagnostic check) */
         {
@@ -448,6 +449,7 @@ KiInitializePcr(_In_ ULONG ProcessorNumber,
                     ProcessorNumber, Pcr, VerifyPcr);
             if (VerifyPcr != Pcr)
             {
+                KiArm64RawPuts("[InitPcr] FATAL: TPIDR_EL1 readback mismatch\n");
                 KeBugCheckEx(PHASE0_INITIALIZATION_FAILED,
                              ('A' << 24) | ('R' << 16) | ('M' << 8) | '6',
                              (ULONG_PTR)Pcr,
@@ -455,6 +457,7 @@ KiInitializePcr(_In_ ULONG ProcessorNumber,
                              1);
             }
         }
+        KiArm64RawPuts("[InitPcr] TPIDR_EL1 readback OK\n");
 
         /*
          * Set global early-boot current CPU state.
@@ -466,6 +469,7 @@ KiInitializePcr(_In_ ULONG ProcessorNumber,
          */
         if (ProcessorNumber == 0)
         {
+            KiArm64RawPuts("[InitPcr] BSP: setting Arm64 globals\n");
             KeArm64CurrentPcr = Pcr;
             KeArm64CurrentIrql = PASSIVE_LEVEL;
             KeArm64DpcRoutineActive = FALSE;
@@ -479,6 +483,7 @@ KiInitializePcr(_In_ ULONG ProcessorNumber,
         ASSERT(KeGetPcr() == EntryPcr);
     }
 
+    KiArm64RawPuts("[InitPcr] populating Pcr fields\n");
     Pcr->Self = (struct _KPCR *)Pcr;
     Pcr->CurrentPrcb = &Pcr->Prcb;
     Pcr->CurrentIrql = PASSIVE_LEVEL;
@@ -499,8 +504,11 @@ KiInitializePcr(_In_ ULONG ProcessorNumber,
     Pcr->Prcb.Number = (UCHAR)ProcessorNumber;
     Pcr->Prcb.SetMember = 1ULL << ProcessorNumber;
     Pcr->Prcb.MultiThreadProcessorSet = Pcr->Prcb.SetMember;
+    KiArm64RawPuts("[InitPcr] reading KeNodeBlock[0]\n");
     Pcr->Prcb.ParentNode = KeNodeBlock[0];
+    KiArm64RawPuts("[InitPcr] writing ParentNode->ProcessorMask\n");
     Pcr->Prcb.ParentNode->ProcessorMask |= Pcr->Prcb.SetMember;
+    KiArm64RawPuts("[InitPcr] ParentNode wired\n");
 
     Pcr->Prcb.CurrentThread = IdleThread;
     Pcr->Prcb.IdleThread = IdleThread;
@@ -512,10 +520,12 @@ KiInitializePcr(_In_ ULONG ProcessorNumber,
     Pcr->SecondLevelCacheSize = 0;
     Pcr->SecondLevelCacheAssociativity = 0;
 
+    KiArm64RawPuts("[InitPcr] reading KeLoaderBlock->u.Arm64\n");
     Arm64Block = (KeLoaderBlock != NULL) ? &KeLoaderBlock->u.Arm64 : NULL;
 
     if (Arm64Block != NULL)
     {
+        KiArm64RawPuts("[InitPcr] LoaderBlock->u.Arm64 present, applying caches\n");
         if (Arm64Block->SecondLevelDcacheSize != 0)
         {
             Pcr->SecondLevelCacheSize = Arm64Block->SecondLevelDcacheSize;
@@ -585,8 +595,13 @@ KiInitializePcr(_In_ ULONG ProcessorNumber,
             CacheCount++;
         }
     }
+    else
+    {
+        KiArm64RawPuts("[InitPcr] WARNING: KeLoaderBlock->u.Arm64 is NULL\n");
+    }
 
     Pcr->Prcb.CacheCount = CacheCount;
+    KiArm64RawPuts("[InitPcr] returning, CacheCount set\n");
 }
 
 VOID
@@ -792,6 +807,24 @@ KiInitializeSystem(_Inout_ PLOADER_PARAMETER_BLOCK LoaderBlock)
         __asm__ __volatile__("mrs %0, id_aa64pfr1_el1" : "=r"(Pfr1));
         __asm__ __volatile__("mrs %0, id_aa64mmfr1_el1" : "=r"(Mmfr1));
 
+        /*
+         * NT code expects ordinary unaligned data accesses to normal memory to
+         * work on ARM64. Keep stack alignment checking, but force SCTLR_EL1.A off
+         * in case firmware or the loader left strict alignment checking enabled.
+         */
+        {
+            ULONG64 Sctlr;
+
+            __asm__ __volatile__("mrs %0, sctlr_el1" : "=r"(Sctlr));
+            if (Sctlr & (1ULL << 1))
+            {
+                KiArm64RawPuts("[KiInitSys] clearing SCTLR_EL1.A\n");
+                Sctlr &= ~(1ULL << 1);
+                __asm__ __volatile__("msr sctlr_el1, %0" :: "r"(Sctlr) : "memory");
+                __asm__ __volatile__("isb" ::: "memory");
+            }
+        }
+
         /* Check bits [35:32] of PFR0 for SVE support */
         HasSve = ((Pfr0 >> 32) & 0xF) != 0;
 
@@ -938,6 +971,23 @@ KiInitializeSystem(_Inout_ PLOADER_PARAMETER_BLOCK LoaderBlock)
         __asm__ __volatile__("mrs %0, id_aa64mmfr1_el1" : "=r"(Mmfr1));
 
         /*
+         * Match BSP alignment policy. Ordinary unaligned data accesses are
+         * permitted; SP alignment checking remains controlled by SCTLR_EL1.SA.
+         */
+        {
+            ULONG64 Sctlr;
+
+            __asm__ __volatile__("mrs %0, sctlr_el1" : "=r"(Sctlr));
+            if (Sctlr & (1ULL << 1))
+            {
+                KiArm64RawPuts("[KiInitSys] AP clearing SCTLR_EL1.A\n");
+                Sctlr &= ~(1ULL << 1);
+                __asm__ __volatile__("msr sctlr_el1, %0" :: "r"(Sctlr) : "memory");
+                __asm__ __volatile__("isb" ::: "memory");
+            }
+        }
+
+        /*
          * PAN: Disable on this AP (same as BSP).
          * Without this, kernel accesses to user addresses fault with DFSC=0xB.
          */
@@ -1011,9 +1061,6 @@ KiInitializeSystem(_Inout_ PLOADER_PARAMETER_BLOCK LoaderBlock)
     KfRaiseIrql(HIGH_LEVEL);
     KiArm64RawPuts("[KiInitSys] KfRaiseIrql done\n");
 
-    KiArm64RawPuts("[KiInitSys] calling HalDisplayString\n");
-    HalDisplayString("[KiInitSys] Raised to HIGH_LEVEL\r\n");
-    KiArm64RawPuts("[KiInitSys] HalDisplayString done\n");
     if (ProcessorNumber == 0)
     {
         KiArm64RawPuts("[KiInitSys] Pre-seed core modules\n");
@@ -1063,17 +1110,6 @@ KiInitializeSystem(_Inout_ PLOADER_PARAMETER_BLOCK LoaderBlock)
             DbgBreakPointWithStatus(DBG_STATUS_CONTROL_C);
         }
     }
-
-    KiArm64RawPuts("[KiInitSys] unmasking IRQ/FIQ (daifclr)\n");
-    /*
-     * Unmask IRQ and FIQ (bits 1, 2) but keep SError masked (bit 3) for now.
-     * SErrors can be stale from UEFI/FreeLdr and we don't want them delivered
-     * until we're ready to handle them properly.
-     * DAIF immediate bits: D=3, A=2, I=1, F=0 -> clear I+F = 0x3
-     */
-    __asm__ __volatile__("msr daifclr, #0x3" ::: "memory");
-    __asm__ volatile("isb");
-    KiArm64RawPuts("[KiInitSys] daifclr done\n");
 
     KiArm64RawPuts("[KiInitSys] lowering IRQL to DISPATCH_LEVEL\n");
     KfLowerIrql(DISPATCH_LEVEL);

@@ -60,7 +60,8 @@ extern KIRQL KeArm64CurrentIrql;
  *   2. Kernel PE loader resolves imports from HAL.DLL
  *   3. Early kernel init (PCR setup, etc.) - KiHalInitialized = FALSE
  *   4. HalInitSystem(0) is called and returns successfully
- *   5. Phase1InitializationDiscard sets KiHalInitialized = TRUE (see ex/init.c)
+ *   5. ExpInitializeExecutive calls ExArchPostHalInitSystemPhase0 and sets
+ *      KiHalInitialized = TRUE before the generic post-HAL _enable()
  *   6. GIC priority masking becomes available
  *
  * Until KiHalInitialized is TRUE, we use DAIF masking exclusively.
@@ -70,6 +71,7 @@ extern KIRQL KeArm64CurrentIrql;
  */
 BOOLEAN KiHalInitialized = FALSE;
 static LONG KiArm64SerrorPolicyTraceCount;
+static LONG KiArm64LowerDispatchTraceBudget = 32;
 
 #undef KeLowerIrql
 #undef KeRaiseIrql
@@ -148,9 +150,9 @@ KiTraceSerrorPolicy(
 }
 
 /*
- * KiHalInitialized flag is set by the kernel's Phase1InitializationDiscard()
- * right after HalInitSystem(0) returns successfully. This ensures HAL exports
- * are available before we start using GIC priority masking.
+ * KiHalInitialized is set by the kernel's ARM64 post-HAL phase-0 hook right
+ * after HalInitSystem(0) returns successfully. This ensures HAL exports are
+ * available before we start using GIC priority masking.
  *
  * Prior design (REMOVED): HAL called KeArmInitializeGicSupport() to flip this flag.
  * This created a circular import dependency (HAL imports kernel, kernel imports HAL).
@@ -306,10 +308,9 @@ KiApplyIrqMaskForIrqlTransition(
      * an unresolved address (0 or garbage), causing an immediate crash.
      *
      * Until KiHalInitialized is TRUE, we use the legacy binary DAIF masking
-     * (all IRQs on/off). This is safe because:
-     *   1. During early boot, interrupts should remain masked (HIGH_LEVEL)
-     *   2. HalInitSystem(0) completes and kernel sets KiHalInitialized = TRUE
-     *   3. After that point, timer interrupts can preempt DPC/device code
+     * (all IRQs on/off). Early boot may lower the logical IRQL before HAL
+     * phase 0, but IRQ/FIQ delivery must stay masked until the GIC is
+     * configured and the executive explicitly enables interrupts after HAL.
      */
     if (!KiHalInitialized)
     {
@@ -322,9 +323,13 @@ KiApplyIrqMaskForIrqlTransition(
         }
         else if (OldIrql >= HIGH_LEVEL && NewIrql < HIGH_LEVEL)
         {
-            /* Apply SError policy when lowering from HIGH_LEVEL */
-            KiUpdateDaifForIrql(NewIrql, FALSE);
-            KiTraceSerrorPolicy("early-drop", OldIrql, NewIrql);
+            /*
+             * Before HAL phase 0, lowering IRQL is only a logical transition.
+             * Keep IRQ/FIQ masked until ExpInitializeExecutive has completed
+             * HalInitSystem(0), re-enabled the timer PPI, and called _enable().
+             */
+            KiUpdateSerrorMaskOnlyForIrql(NewIrql);
+            KiTraceSerrorPolicy("early-drop-masked", OldIrql, NewIrql);
         }
         else if (NewIrql != OldIrql)
         {
@@ -639,6 +644,23 @@ KfLowerIrql(
 
         if (NeedDispatch)
         {
+            if (KiArm64LowerDispatchTraceBudget > 0)
+            {
+                LONG OldBudget = InterlockedDecrement(&KiArm64LowerDispatchTraceBudget);
+                if (OldBudget >= 0)
+                {
+                    DPRINT1("[arm64][IRQL] lower dispatch old=%u new=%u dpcReq=%u timer=%p dpcDepth=%lu quantum=%u next=%p cur=%p\n",
+                            OldIrql,
+                            NewIrql,
+                            Prcb->DpcInterruptRequested ? 1U : 0U,
+                            Prcb->TimerRequest,
+                            Prcb->DpcData[0].DpcQueueDepth,
+                            Prcb->QuantumEnd ? 1U : 0U,
+                            Prcb->NextThread,
+                            Prcb->CurrentThread);
+                }
+            }
+
             /*
              * Clear the DpcInterruptRequested flag FIRST to prevent re-delivery.
              * Note: TimerRequest is cleared by KiDispatchInterrupt itself.

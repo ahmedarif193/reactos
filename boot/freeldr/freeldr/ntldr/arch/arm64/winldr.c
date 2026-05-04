@@ -109,12 +109,16 @@ static VOID Arm64PopulatePsciConfiguration(PLOADER_PARAMETER_BLOCK LoaderBlock);
 /* -------------------------------------------------------------------------- */
 /*
  * PCR allocation size.
- * The KIPCR structure on ARM64 is approximately 15KB (0x3AC0 bytes) because
- * it contains an embedded KPRCB which includes large arrays like
- * DispatcherReadyListHead[32], LockQueue[], PPLookasideList[], etc.
- * We allocate 4 pages (16KB) to be safe with alignment.
+ * The KIPCR structure on ARM64 is currently 0x50D0 bytes (~20.6 KB) because
+ * it embeds a KPRCB that contains large arrays (DispatcherReadyListHead[32],
+ * LockQueue[], PPLookasideList[], etc.). We allocate 8 pages (32 KB) so the
+ * mapped kernel-data block fully covers the kernel's
+ * RtlZeroMemory(Pcr, sizeof(*Pcr)) at KiInitializePcr entry, leaving slack
+ * for future struct growth. Undersizing this writes past the end of the
+ * KSEG0-mapped KernelDataBlock and faults the kernel before its first PCR
+ * field is set up.
  */
-#define PCR_ALLOCATION_SIZE     (4 * PAGE_SIZE)
+#define PCR_ALLOCATION_SIZE     (8 * PAGE_SIZE)
 
 typedef struct _ARM64_KERNEL_DATA
 {
@@ -490,6 +494,7 @@ Arm64SetupForNt(
 
     /* Pass the detected UART address to the kernel */
     LoaderBlock->u.Arm64.EarlyUartAddress = EarlyUartBaseAddress;
+    LoaderBlock->u.Arm64.EarlyUartInterface = (ULONG)EarlyUartInterface;
 
     /* Ensure memory is properly prepared */
     if (!Arm64InitializeMemory(LoaderBlock))
