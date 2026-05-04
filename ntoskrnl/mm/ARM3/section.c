@@ -376,7 +376,7 @@ MiInsertInSystemSpace(IN PMMSESSION Session,
     NT_ASSERT(((ULONG_PTR)Base & (MI_SYSTEM_VIEW_BUCKET_SIZE - 1)) == 0);
 
     /* Get the hash entry for this allocation */
-    Entry = (ULONG_PTR)Base + Buckets;
+    Entry = ((ULONG_PTR)Base & ~((ULONG_PTR)(MI_SYSTEM_VIEW_BUCKET_SIZE - 1))) + Buckets;
     Hash = (Entry >> 16) % Session->SystemSpaceHashKey;
 
     /* Loop hash entries until a free one is found */
@@ -1291,7 +1291,13 @@ MiMapViewOfDataSection(
     Vad->ControlArea = ControlArea;
     Vad->u.VadFlags.CommitCharge = 0;
     Vad->u.VadFlags.Protection = ProtectionMask;
-    Vad->u2.VadFlags2.FileOffset = (ULONG)(SectionOffset->QuadPart >> 16);
+    {
+        volatile ULONG *OffsetParts = (volatile ULONG *)SectionOffset;
+        ULONG OffsetLow = OffsetParts[0];
+        ULONG OffsetHigh = OffsetParts[1];
+
+        Vad->u2.VadFlags2.FileOffset = (OffsetLow >> 16) | (OffsetHigh << 16);
+    }
     Vad->u2.VadFlags2.Inherit = (InheritDisposition == ViewShare);
     if ((AllocationType & SEC_NO_CHANGE) || (Section->u.Flags.NoChange))
     {

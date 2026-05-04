@@ -33,6 +33,14 @@ extern EFI_HANDLE GlobalImageHandle;
 EFI_MEMORY_DESCRIPTOR* EfiMemoryMap = NULL;
 UINT32 FreeldrDescCount;
 PVOID OsLoaderBase;
+
+/*
+ * Set TRUE the moment ExitBootServices succeeds. Volatile + non-static so
+ * other translation units (mmu_v2, timer.c, …) can gate firmware-callback
+ * code paths and fall back to direct hardware access. Mirrors the working
+ * fork at reactosv2_arm64dev.
+ */
+volatile BOOLEAN BootServicesExitedFlag;
 SIZE_T OsLoaderSize;
 EFI_HANDLE PublicBootHandle;
 PVOID ExitStack;
@@ -243,15 +251,39 @@ UefiExitBootServices(VOID)
     UINT32 DescriptorVersion;
 
     TRACE("Attempting to exit bootsevices\n");
+
+    /*
+     * Disable the firmware watchdog *before* ExitBootServices. The UEFI
+     * spec is supposed to disarm it as a side-effect of EBS, but several
+     * firmware implementations leave the timer armed and then dispatch a
+     * stale callback after EBS — which triggers a synchronous abort once
+     * the firmware code is no longer mapped. Doing it explicitly is cheap
+     * insurance.
+     */
+    if (GlobalSystemTable && GlobalSystemTable->BootServices)
+    {
+        GlobalSystemTable->BootServices->SetWatchdogTimer(0, 0, 0, NULL);
+    }
+
     PUEFI_LoadMemoryMap(&MapKey,
                         &MapSize,
                         &DescriptorSize,
                         &DescriptorVersion);
 
     Status = GlobalSystemTable->BootServices->ExitBootServices(GlobalImageHandle, MapKey);
-    /* UEFI spec demands twice! */
+    /*
+     * UEFI spec permits one retry — but the map key is invalidated as a side
+     * effect, so we must refetch the map (and a fresh key) before retrying,
+     * not just call EBS twice with the same stale key.
+     */
     if (Status != EFI_SUCCESS)
+    {
+        PUEFI_LoadMemoryMap(&MapKey,
+                            &MapSize,
+                            &DescriptorSize,
+                            &DescriptorVersion);
         Status = GlobalSystemTable->BootServices->ExitBootServices(GlobalImageHandle, MapKey);
+    }
 
     if (Status != EFI_SUCCESS)
     {
@@ -265,6 +297,7 @@ UefiExitBootServices(VOID)
     else
     {
         TRACE("Exited bootservices\n");
+        BootServicesExitedFlag = TRUE;
     }
 }
 

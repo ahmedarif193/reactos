@@ -649,20 +649,40 @@ MiAllocatePoolPages(IN POOL_TYPE PoolType,
         KeFlushEntireTb(TRUE, TRUE);
 
         /* Setup a demand-zero writable PTE */
+#if defined(_M_ARM64)
+        TempPte = ValidKernelPte;
+#else
         MI_MAKE_SOFTWARE_PTE(&TempPte, MM_READWRITE);
+#endif
 
         //
         // Find the first and last PTE, then loop them all
         //
         PointerPte = MiAddressToPte(BaseVa);
         StartPte = PointerPte + SizeInPages;
+#if defined(_M_ARM64)
+        OldIrql = MiAcquirePfnLock();
+#endif
         do
         {
             //
             // Write the demand zero PTE and keep going
             //
+#if defined(_M_ARM64)
+            PageFrameNumber = MiRemoveAnyPage(MI_GET_NEXT_COLOR());
+            TempPte.u.Hard.PageFrameNumber = PageFrameNumber;
+            MI_WRITE_VALID_PTE(PointerPte, TempPte);
+            MiInitializePfnForOtherProcess(PageFrameNumber,
+                                           PointerPte,
+                                           PFN_FROM_PTE(MiAddressToPde(BaseVa)));
+#else
             MI_WRITE_INVALID_PTE(PointerPte, TempPte);
+#endif
         } while (++PointerPte < StartPte);
+#if defined(_M_ARM64)
+        MiReleasePfnLock(OldIrql);
+        RtlZeroMemory(BaseVa, SizeInPages << PAGE_SHIFT);
+#endif
 
         //
         // Return the allocation address to the caller
@@ -713,7 +733,16 @@ MiAllocatePoolPages(IN POOL_TYPE PoolType,
             // Grab the entry and see if it can handle our allocation
             //
             FreeEntry = CONTAINING_RECORD(NextEntry, MMFREE_POOL_ENTRY, List);
+#if defined(_M_ARM64)
+            if (FreeEntry->Signature != MM_FREE_POOL_SIGNATURE)
+            {
+                /* ARM64 bringup: pool not built yet, skip this entry */
+                NextEntry = NextEntry->Flink;
+                continue;
+            }
+#else
             ASSERT(FreeEntry->Signature == MM_FREE_POOL_SIGNATURE);
+#endif
             if (FreeEntry->Size >= SizeInPages)
             {
                 //
@@ -769,6 +798,47 @@ MiAllocatePoolPages(IN POOL_TYPE PoolType,
                 //
                 // Now mark it as the beginning of an allocation
                 //
+#if defined(_M_ARM64)
+                if (Pfn1->u3.e1.StartOfAllocation != 0)
+                {
+                    PFN_NUMBER BadPfn = PFN_FROM_PTE(PointerPte);
+                    ULONG Matches = 0;
+
+                    DbgPrint("[arm64][pool] StartOfAllocation set before alloc: BaseVa=%p SizeInPages=%lu Pte=%p\n",
+                             BaseVa,
+                             SizeInPages,
+                             PointerPte);
+                    DbgPrint("[arm64][pool] Pfn=%I64x PfnEntry=%p Ref=%u Share=%I64x Start=%u End=%u Loc=%u Ver=%u\n",
+                             (ULONGLONG)BadPfn,
+                             Pfn1,
+                             Pfn1->u3.e2.ReferenceCount,
+                             (ULONGLONG)Pfn1->u2.ShareCount,
+                             Pfn1->u3.e1.StartOfAllocation,
+                             Pfn1->u3.e1.EndOfAllocation,
+                             Pfn1->u3.e1.PageLocation,
+                             (ULONG)Pfn1->u4.VerifierAllocation);
+                    DbgPrint("[arm64][pool] PoolStart=%p PoolEnd0=%p Expansion=%p FreeEntry=%p FreeSize=%lu\n",
+                             MmNonPagedPoolStart,
+                             MmNonPagedPoolEnd0,
+                             MmNonPagedPoolExpansionStart,
+                             FreeEntry,
+                             FreeEntry->Size);
+
+                    for (PMMPTE ScanPte = MiAddressToPte(MmNonPagedPoolStart);
+                         ScanPte <= MiAddressToPte((PVOID)((ULONG_PTR)MmNonPagedPoolEnd0 - 1));
+                         ScanPte++)
+                    {
+                        if ((ScanPte->u.Hard.Valid) &&
+                            (PFN_FROM_PTE(ScanPte) == BadPfn))
+                        {
+                            DbgPrint("[arm64][pool] duplicate PFN VA=%p PTE=%p\n",
+                                     MiPteToAddress(ScanPte),
+                                     ScanPte);
+                            if (++Matches == 8) break;
+                        }
+                    }
+                }
+#endif
                 ASSERT(Pfn1->u3.e1.StartOfAllocation == 0);
                 Pfn1->u3.e1.StartOfAllocation = 1;
 

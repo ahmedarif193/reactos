@@ -560,21 +560,6 @@ KiSystemService(
     _Inout_ PKTRAP_FRAME TrapFrame,
     _In_ ULONG Instruction);
 
-/*
- * NOTE: MiArm64UpdateTtbr0AliasAndHyperspace was removed.
- *
- * It previously overwrote TTBR1's L0[494] on every context switch to point
- * directly to the raw TTBR0 L0 page. This conflicts with the per-CPU merged
- * PXE page design (Bug #37) where L0[494] must remain pointing to the merged
- * page allocated during MiInitMachineDependent. The merged page contains both
- * user (TTBR0, indices 0-255) and kernel (TTBR1, indices 256-511) L0 entries,
- * which is required for the NT self-map to correctly traverse both address
- * space halves.
- *
- * KiSwapProcess now uses KiArm64WriteUserTtbr() which handles the full
- * TTBR0 switch + per-CPU merged page sync + correct TLBI ordering.
- */
-
 VOID
 NTAPI
 KiSwapProcess(_Inout_ PKPROCESS NewProcess,
@@ -615,92 +600,6 @@ KiSwapProcess(_Inout_ PKPROCESS NewProcess,
     ASSERT(NewProcess->DirectoryTableBase[0] != 0);
     ASSERT(NewProcess->DirectoryTableBase[1] != 0);
 
-    /*
-     * ARM64 TTBR Switch + Merged PXE Page Sync
-     *
-     * Use the centralized KiArm64WriteUserTtbr which handles:
-     * 1. TTBR1+TTBR0 register updates
-     * 2. Per-CPU merged PXE page sync (copies new TTBR0 L0 entries)
-     * 3. Correct TLBI ordering (copy -> dsb ishst -> tlbi -> dsb ish -> isb)
-     * 4. Interrupt masking across the entire transition
-     *
-     * IMPORTANT: Do NOT call MiArm64UpdateTtbr0AliasAndHyperspace here.
-     * That function overwrites L0[494] to point directly to the TTBR0 L0 page,
-     * which destroys the merged PXE page setup from MiInitMachineDependent.
-     * L0[494] must remain pointing to the per-CPU merged page so the self-map
-     * can see both user (0-255) and kernel (256-511) L0 entries.
-     *
-     * Note: L0[492] (hyperspace) is patched here to the target process's
-     * DirectoryTableBase[1] root while TTBR1 itself remains global.
-     */
-    {
-        ULONGLONG Ttbr1;
-        volatile ULONGLONG *KernelL0;
-        volatile ULONGLONG *MergedL0 = NULL;
-        ULONGLONG OldKernelHyper;
-        ULONGLONG OldMergedHyper = 0;
-        MMPDE HyperRootEntry = ValidKernelPde;
-
-        __asm__ __volatile__("mrs %0, ttbr1_el1" : "=r"(Ttbr1));
-        KernelL0 = (volatile ULONGLONG *)(KSEG0_BASE | (Ttbr1 & 0x0000FFFFFFFFF000ULL));
-        if (MiArm64PxeMergedPfn[0] != 0)
-        {
-            MergedL0 = (volatile ULONGLONG *)(KSEG0_BASE | ((ULONGLONG)MiArm64PxeMergedPfn[0] << PAGE_SHIFT));
-        }
-
-        HyperRootEntry.u.Hard.PageFrameNumber = NewProcess->DirectoryTableBase[1] >> PAGE_SHIFT;
-        OldKernelHyper = KernelL0[MiAddressToPxi((PVOID)HYPER_SPACE)];
-        KernelL0[MiAddressToPxi((PVOID)HYPER_SPACE)] = HyperRootEntry.u.Long;
-        DPRINT("[arm64][TTBR] KiSwapProcess hyperspace slot kernel L0[%lu] 0x%llx -> 0x%llx "
-               "NewProc=%p(%.16s) OldProc=%p(%.16s) CPU=%lu\n",
-                (ULONG)MiAddressToPxi((PVOID)HYPER_SPACE),
-                (unsigned long long)OldKernelHyper,
-                (unsigned long long)HyperRootEntry.u.Long,
-                NewProcess,
-                ((PEPROCESS)NewProcess)->ImageFileName,
-                OldProcess,
-                OldProcess ? ((PEPROCESS)OldProcess)->ImageFileName : "<none>",
-                KeGetCurrentProcessorNumber());
-        if (MergedL0 != NULL)
-        {
-            /*
-             * Keep the self-map merged L0 coherent with TTBR1's hyperspace slot.
-             * MiAddressToPte/MiAddressToPde walk through this merged root.
-             */
-            OldMergedHyper = MergedL0[MiAddressToPxi((PVOID)HYPER_SPACE)];
-            MergedL0[MiAddressToPxi((PVOID)HYPER_SPACE)] = HyperRootEntry.u.Long;
-            DPRINT("[arm64][TTBR] KiSwapProcess hyperspace slot merged L0[%lu] 0x%llx -> 0x%llx CPU=%lu\n",
-                    (ULONG)MiAddressToPxi((PVOID)HYPER_SPACE),
-                    (unsigned long long)OldMergedHyper,
-                    (unsigned long long)HyperRootEntry.u.Long,
-                    KeGetCurrentProcessorNumber());
-        }
-
-        /*
-         * Update the TTBR0 self-map alias (L0[494]) to point to the new process's
-         * user-space L0 root. Without this, MiAddressToPte() for user addresses
-         * would modify the page tables of the process that was active when
-         * MiArm64InitializeTtbr0Alias was called (the System process).
-         */
-        {
-            UINT64 AliasEntry = (NewProcess->DirectoryTableBase[0] & ARM64_PTE_ADDR_MASK) | ARM64_PTE_TYPE_TABLE | ((UINT64)MI_ARM64_MAIR_NORMAL_WB_IDX << 2);
-            KernelL0[PXE_TTBR0_ALIAS_INDEX] = AliasEntry;
-            if (MergedL0 != NULL)
-            {
-                MergedL0[PXE_TTBR0_ALIAS_INDEX] = AliasEntry;
-            }
-        }
-    }
-
-    DPRINT("[arm64][TTBR] KiSwapProcess write-user-ttbr NewTTBR0=0x%llx NewTTBR1=0x%llx "
-           "NewProc=%p(%.16s) OldProc=%p(%.16s) CPU=%lu\n",
-            (unsigned long long)NewProcess->DirectoryTableBase[0],
-            (unsigned long long)NewProcess->DirectoryTableBase[1],
-            NewProcess,
-            ((PEPROCESS)NewProcess)->ImageFileName,
-            OldProcess,
-            OldProcess ? ((PEPROCESS)OldProcess)->ImageFileName : "<none>",
-            KeGetCurrentProcessorNumber());
     KiArm64WriteUserTtbr(NewProcess->DirectoryTableBase[0],
                          NewProcess->DirectoryTableBase[1]);
 }
@@ -1077,7 +976,7 @@ KiArm64BugCheckSynchronousException(
         ExceptionRecord64.ExceptionAddress = Context->State.Elr;
 
         RtlZeroMemory(&KdbContext, sizeof(KdbContext));
-        KdbContext.ContextFlags = CONTEXT_FULL | CONTEXT_ARM64;
+        KdbContext.ContextFlags = CONTEXT_CONTROL | CONTEXT_INTEGER | CONTEXT_ARM64;
         KeTrapFrameToContext(&TrapFrame, NULL, &KdbContext);
 
         KdbEnterDebuggerException(&ExceptionRecord64, KernelMode, &KdbContext, FALSE);
@@ -1628,7 +1527,6 @@ KiArm64HandleSynchronousException(
 
                 Mode = KiArm64PreviousModeFromContext(Context->State.Spsr, Context->State.Elr);
 
-
                 RtlZeroMemory(&ExceptionRecord, sizeof(ExceptionRecord));
                 ExceptionRecord.ExceptionCode = STATUS_DATATYPE_MISALIGNMENT;
                 ExceptionRecord.ExceptionFlags = 0;
@@ -1639,7 +1537,9 @@ KiArm64HandleSynchronousException(
                 ExceptionRecord.ExceptionInformation[1] = (ULONG_PTR)Context->State.FaultAddress;
 
                 if (!KdDebuggerEnabled || KdDebuggerNotPresent)
+                {
                     KiArm64ReportUnhandledSyncException(Context, Esr);
+                }
 
                 KiDispatchException(&ExceptionRecord,
                                     Context->ExceptionFramePointer,
@@ -1733,12 +1633,6 @@ KiArm64HandleSynchronousException(
                     ULONG FaultCodeArg = KiArm64BuildFaultCode(FaultStatus, WriteAccess, FALSE, PreviousMode);
                     PVOID AddressArg = (PVOID)(ULONG_PTR)Context->State.FaultAddress;
 
-                    /* Trace user faults during SMSS init (address < 0x200000) */
-                    DPRINT("[arm64][DA-SMSS] far=%p dfsc=0x%x wr=%d mode=%d elr=%p fc=0x%x cpu=%lu\n",
-                           AddressArg, FaultStatus, WriteAccess, PreviousMode,
-                           (PVOID)(ULONG_PTR)Context->State.Elr,
-                           FaultCodeArg, ProcessorIndex);
-
                     /*
                      * ARM64: Access Flag faults (DFSC 0x9/0xA/0xB) must be fixed up by
                      * setting AF in the faulting descriptor. Some early boot mappings
@@ -1804,10 +1698,6 @@ KiArm64HandleSynchronousException(
                     }
 
                     Status = MmAccessFault(FaultCodeArg, AddressArg, PreviousMode, TrapFrame);
-
-                    /* Trace MmAccessFault return for SMSS user faults */
-                    DPRINT("[arm64][DA-SMSS] MmAccessFault returned 0x%lx for far=%p cpu=%lu\n",
-                           Status, AddressArg, ProcessorIndex);
                 }
 
                 if (OwnsAbortGuard)
@@ -2125,7 +2015,7 @@ KiArm64HandleSynchronousException(
                 ExceptionRecord64.ExceptionInformation[1] = (ULONG_PTR)Context->State.FaultAddress;
 
                 RtlZeroMemory(&KdbContext, sizeof(KdbContext));
-                KdbContext.ContextFlags = CONTEXT_FULL | CONTEXT_ARM64;
+                KdbContext.ContextFlags = CONTEXT_CONTROL | CONTEXT_INTEGER | CONTEXT_ARM64;
 
                 KeTrapFrameToContext(TrapFrame, Context->ExceptionFramePointer, &KdbContext);
 
@@ -2313,7 +2203,7 @@ KiArm64HandleSynchronousException(
 
                 /* Build CONTEXT from trap frame for KDBG */
                 RtlZeroMemory(&KdbContext, sizeof(KdbContext));
-                KdbContext.ContextFlags = CONTEXT_FULL | CONTEXT_ARM64;
+                KdbContext.ContextFlags = CONTEXT_CONTROL | CONTEXT_INTEGER | CONTEXT_ARM64;
                 KeTrapFrameToContext(TrapFrame, Context->ExceptionFramePointer, &KdbContext);
 
                 /* Call KDBG to handle the breakpoint */
@@ -2380,10 +2270,6 @@ KiArm64HandleSynchronousException(
                 ExceptionRecord.ExceptionAddress = (PVOID)(ULONG_PTR)Context->State.Elr;
                 ExceptionRecord.NumberParameters = 1;
                 ExceptionRecord.ExceptionInformation[0] = (ULONG_PTR)Context->State.Elr;
-
-                KI_ARM64_STAGE_LOGF("[arm64] TrapDiag: forwarding BRK to KD esr=0x%lx elr=%p",
-                                    Esr,
-                                    (PVOID)(ULONG_PTR)Context->State.Elr);
 
                 KiDispatchException(&ExceptionRecord,
                                     Context->ExceptionFramePointer,

@@ -76,11 +76,11 @@ HalpInitGicv3CpuInterface(VOID)
     HalpWriteIccBpr1(0);
     HalpWriteIccIgrpen1(1);
 
-    /* [CYCLE33] Verify registers were actually set */
+    /* Verify registers were actually set. */
     {
         ULONG Pmr = HalpReadIccPmr();
         ULONG Igrpen1 = HalpReadIccIgrpen1();
-        DPRINT1("[CYCLE33][GICv3] CPU interface initialized: SRE=0x%x PMR=0x%x IGRPEN1=0x%x\n", Sre, Pmr, Igrpen1);
+        DPRINT1("[arm64][GICv3] CPU interface initialized: SRE=0x%x PMR=0x%x IGRPEN1=0x%x\n", Sre, Pmr, Igrpen1);
     }
 }
 

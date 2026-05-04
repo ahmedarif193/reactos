@@ -8,87 +8,58 @@
 #include <ntoskrnl.h>
 #define NDEBUG
 #include <debug.h>
-#include <reactos/libs/cportlib/cportlib.h>
 #include "../include/arm64pl011.h"
 
 CPPORT DefaultPort = {0};
 extern BOOLEAN KdDebuggerNotPresent;
-
-#define PL011_DR_OFFSET     0x00
-#define PL011_FR_OFFSET     0x18
-#define PL011_FR_RXFE       0x10
-
-static
-VOID
-KdArm64DrainReceiveFifo(
-    _In_opt_ PUCHAR Base)
-{
-    ULONG Guard;
-
-    if (Base == NULL)
-    {
-        return;
-    }
-
-    for (Guard = 2048; Guard > 0; Guard--)
-    {
-        ULONG Flags = READ_REGISTER_ULONG((PULONG)((ULONG_PTR)Base + PL011_FR_OFFSET));
-
-        if (Flags & PL011_FR_RXFE)
-        {
-            break;
-        }
-
-        (VOID)READ_REGISTER_ULONG((PULONG)((ULONG_PTR)Base + PL011_DR_OFFSET));
-    }
-}
+extern VOID KiArm64RawPuts(const char *str);
 
 /*
- * ARM64 KD serial transport over PL011 (MMIO)
- * Platform-specific UART addresses are defined in arm64pl011.h.
- * The default is RPi5 at 0x107d001000; QEMU virt uses 0x09000000.
- * Later we can query ACPI SPCR for runtime detection.
+ * ARM64 KD serial transport over the runtime-detected early UART.
+ * FreeLdr detects the UART address and passes it through the loader block;
+ * the kernel early UART layer owns the target-specific address selection.
  */
 BOOLEAN
 NTAPI
 KdPortInitializeEx(_Inout_ PCPPORT PortInformation,
                    _In_ ULONG ComPortNumber)
 {
-    NTSTATUS Status;
     PUCHAR Base;
-    /* Avoid MmMapIoSpace at phase 0; use direct KSEG0 mapping */
     ULONG Baud;
 
-    if (ComPortNumber == 0 && PortInformation->Address)
+    KiArm64RawPuts("[KDPORT] KdPortInitializeEx entry\n");
+
+    if (!EarlyUartIsInitialized() || EarlyUartGetBaseAddress() == 0)
     {
-        Base = PortInformation->Address;
-    }
-    else
-    {
-        if (ComPortNumber == 1)
-            Base = (PUCHAR)KI_ARM64_PL011_VA; /* QEMU virt PL011 via KSEG0 identity map */
-        else
-            Base = NULL;
+        EarlyUartInitialize(0);
     }
 
+    Base = (EarlyUartIsInitialized() && EarlyUartGetBaseAddress() != 0) ?
+           (PUCHAR)(ULONG_PTR)EarlyUartPhysToVa(EarlyUartGetBaseAddress()) :
+           NULL;
     Baud = (PortInformation->BaudRate != 0) ? PortInformation->BaudRate : 115200;
 
     PortInformation->Address = Base;
-    if (EarlyUartInitialized && (EarlyUartBaseAddress != 0))
-        PortInformation->Flags |= CPPORT_FLAG_KEEP_BAUD;
-    Status = CpInitialize(PortInformation, Base, Baud);
-    if (!NT_SUCCESS(Status))
+    PortInformation->BaudRate = Baud;
+    PortInformation->Flags |= CPPORT_FLAG_KEEP_BAUD;
+    if (Base == NULL)
     {
+        KiArm64RawPuts("[KDPORT] no PL011 base, before HalDisplayString\n");
         HalDisplayString("\r\nKernel Debugger: Serial port not found!\r\n\r\n");
+        KiArm64RawPuts("[KDPORT] no PL011 base, after HalDisplayString\n");
         return FALSE;
     }
+    KiArm64RawPuts("[KDPORT] PL011 port accepted\n");
 
     /* Make sure no stale characters are queued before kdcom starts listening */
-    KdArm64DrainReceiveFifo(Base);
+    KiArm64RawPuts("[KDPORT] before drain FIFO\n");
+    EarlyUartDrainReceiveFifo();
+    KiArm64RawPuts("[KDPORT] after drain FIFO\n");
 
     /* Transport is live; record transport-present bit.
      * Parity flip of NotPresent is done post-banner in kdinit to avoid stalls. */
     SharedUserData->KdDebuggerEnabled |= 0x00000002;
+    KiArm64RawPuts("[KDPORT] transport present bit set\n");
 
 #ifndef NDEBUG
     {
@@ -103,6 +74,7 @@ KdPortInitializeEx(_Inout_ PCPPORT PortInformation,
     }
 #endif
 
+    KiArm64RawPuts("[KDPORT] KdPortInitializeEx return TRUE\n");
     return TRUE;
 }
 
@@ -111,7 +83,8 @@ NTAPI
 KdPortGetByteEx(_Inout_ PCPPORT PortInformation,
                 _Out_ PUCHAR ByteReceived)
 {
-    return (CpGetByte(PortInformation, ByteReceived, FALSE, FALSE) == CP_GET_SUCCESS);
+    UNREFERENCED_PARAMETER(PortInformation);
+    return EarlyUartGetc(ByteReceived);
 }
 
 VOID
@@ -119,5 +92,6 @@ NTAPI
 KdPortPutByteEx(_Inout_ PCPPORT PortInformation,
                 _In_ UCHAR ByteToSend)
 {
-    CpPutByte(PortInformation, ByteToSend);
+    UNREFERENCED_PARAMETER(PortInformation);
+    EarlyUartPutc((CHAR)ByteToSend);
 }

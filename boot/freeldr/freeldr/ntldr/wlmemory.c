@@ -143,6 +143,14 @@ MempSetupPagingForRegion(
 
         /* Pages not in use */
         case LoaderFree:
+#if defined(_M_ARM64) || defined(_ARM64_) || defined(__aarch64__) || defined(__arm64__)
+            /*
+             * ARM64 uses a direct KSEG0 physical-memory window. Map free
+             * pages too so the kernel can touch them during early PFN setup.
+             */
+            Status = MempSetupPaging(BasePage, PageCount, TRUE);
+            break;
+#endif
         case LoaderBad:
             break;
 
@@ -307,11 +315,16 @@ WinLdrSetupMemoryLayout(IN OUT PLOADER_PARAMETER_BLOCK LoaderBlock)
 
     BiosMemoryMapEntryCount = MmGetBiosMemoryMap(&BiosMemoryMap);
 
+    TRACE("WinLdrSetupMemoryLayout: LoaderPagesSpanned=0x%Ix, HighestPhysicalPage=0x%lx, BiosMapCount=%lu\n",
+          MmGetLoaderPagesSpanned(),
+          MmGetHighestPhysicalPage(),
+          BiosMemoryMapEntryCount);
+
     /* Now we need to add high descriptors from the bios memory map */
     for (i = 0; i < BiosMemoryMapEntryCount; i++)
     {
         /* Check if its higher than the lookup table */
-        if (BiosMemoryMap[i].BasePage > MmGetHighestPhysicalPage())
+        if (BiosMemoryMap[i].BasePage >= MmGetHighestPhysicalPage())
         {
             /* Copy this descriptor */
             MempAddMemoryBlock(LoaderBlock,
@@ -325,7 +338,7 @@ WinLdrSetupMemoryLayout(IN OUT PLOADER_PARAMETER_BLOCK LoaderBlock)
 
     WinLdrpDumpMemoryDescriptors(LoaderBlock); //FIXME: Delete!
 
-#ifdef UEFIBOOT
+#if defined(UEFIBOOT) && !defined(_M_ARM64) && !defined(_ARM64_) && !defined(__aarch64__) && !defined(__arm64__)
     extern PVOID OsLoaderBase;
     extern SIZE_T OsLoaderSize;
     /* UEFILDR can be above the 2GB-ish range, we don't want to map the whole area */

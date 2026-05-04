@@ -737,12 +737,6 @@ static __inline PKIPCR KeGetPcr(VOID)
 {
     PKIPCR Pcr;
     __asm__ __volatile__("mrs %0, tpidr_el1" : "=r"(Pcr));
-#if defined(_NTOSKRNL_)
-    if (Pcr == NULL)
-    {
-        Pcr = KeArm64CurrentPcr;
-    }
-#endif
     return Pcr;
 }
 #else
@@ -758,8 +752,20 @@ static __inline PKPRCB KeGetCurrentPrcb(VOID)
 {
     PKIPCR Pcr = KeGetPcr();
     if (Pcr == NULL)
+    {
+#if defined(_NTOSKRNL_)
+        return KeArm64CurrentPcr ? &KeArm64CurrentPcr->Prcb : NULL;
+#else
         return NULL;
-    return Pcr->CurrentPrcb ? Pcr->CurrentPrcb : &Pcr->Prcb;
+#endif
+    }
+
+    /*
+     * The ARM64 bring-up uses the embedded PRCB in KPCR.  Do not trust
+     * KPCR.CurrentPrcb here: stale loader PCR state or early memory scribbles
+     * can redirect queued-spinlock users into an unmapped direct-map address.
+     */
+    return &Pcr->Prcb;
 }
 #define PRIMARY_VECTOR_BASE            0x00
 
