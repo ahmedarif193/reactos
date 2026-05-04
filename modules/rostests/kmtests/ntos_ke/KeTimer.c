@@ -14,8 +14,20 @@
     PLIST_ENTRY TheEntry;                                                       \
     PKTHREAD TheThread;                                                         \
     ok_eq_uint((Timer)->Header.Type, ExpectedType);                             \
-    ok_eq_uint((Timer)->Header.Hand, sizeof *(Timer) / sizeof(ULONG));          \
-    ok_eq_hex((Timer)->Header.Lock & 0xFF00FF00L, 0x00005500L);                 \
+    /* Win7+ KeInitializeTimerEx zeros Header.Hand and the masked Lock bits;   \
+     * NT 5.x leaves Hand at sizeof(KTIMER)/sizeof(ULONG) (10 on i386) and     \
+     * preserves the 0x5500 in bits 8-15 of Lock. */                            \
+    if (GetNTVersion() >= _WIN32_WINNT_WIN7)                                    \
+    {                                                                           \
+        ok_eq_uint((Timer)->Header.Hand, 0);                                    \
+        ok_eq_hex((Timer)->Header.Lock & 0xFF00FF00L, 0x00000000L);             \
+    }                                                                           \
+    else                                                                        \
+    {                                                                           \
+        ok_eq_uint((Timer)->Header.Hand,                                        \
+                   sizeof *(Timer) / sizeof(ULONG));                            \
+        ok_eq_hex((Timer)->Header.Lock & 0xFF00FF00L, 0x00005500L);             \
+    }                                                                           \
     ok_eq_long((Timer)->Header.SignalState, State);                             \
     TheEntry = (Timer)->Header.WaitListHead.Flink;                              \
     for (TheIndex = 0; TheIndex < (ThreadCount); ++TheIndex)                    \

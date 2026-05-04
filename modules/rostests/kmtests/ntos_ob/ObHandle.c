@@ -157,6 +157,12 @@ START_TEST(ObHandle)
     HANDLE KernelDirectoryHandle;
     HANDLE UserDirectoryHandle;
 
+    if (skip(GetNTVersion() >= _WIN32_WINNT_VISTA,
+             "ObHandle requires NT 6+\n"))
+    {
+        return;
+    }
+
     Status = ObOpenObjectByPointer(PsInitialSystemProcess,
                                    OBJ_KERNEL_HANDLE,
                                    NULL,

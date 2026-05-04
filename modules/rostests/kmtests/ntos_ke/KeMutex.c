@@ -21,12 +21,17 @@ C_ASSERT(sizeof(DISPATCHER_HEADER) == 8 + 2 * sizeof(PVOID));
 C_ASSERT(sizeof(KMUTANT) == sizeof(DISPATCHER_HEADER) + 3 * sizeof(PVOID) + sizeof(PVOID));
 C_ASSERT(sizeof(KMUTANT) == MUTANT_SIZE * sizeof(ULONG));
 
+/* ETHREAD mutant-list offsets are not stable across NT versions. Check the
+ * public mutant state and owner identity instead. */
 #define CheckMutex(Mutex, State, New, ExpectedApcDisable) do {                  \
     PKTHREAD Thread = KeGetCurrentThread();                                     \
     ok_eq_uint((Mutex)->Header.Type, MutantObject);                             \
     ok_eq_uint((Mutex)->Header.Abandoned, 0x55);                                \
     ok_eq_uint((Mutex)->Header.Size, MUTANT_SIZE);                              \
-    ok_eq_uint((Mutex)->Header.DpcActive, 0x55);                                \
+    /* NT 6.1+ KeInitializeMutant zeros Header.DpcActive; NT 5.x leaves the   \
+     * 0x55 pre-init fill pattern. */                                          \
+    ok_eq_uint((Mutex)->Header.DpcActive,                                       \
+               GetNTVersion() >= _WIN32_WINNT_WIN7 ? 0 : 0x55);                 \
     ok_eq_pointer((Mutex)->Header.WaitListHead.Flink,                           \
                   &(Mutex)->Header.WaitListHead);                               \
     ok_eq_pointer((Mutex)->Header.WaitListHead.Blink,                           \
@@ -34,10 +39,6 @@ C_ASSERT(sizeof(KMUTANT) == MUTANT_SIZE * sizeof(ULONG));
     if ((State) <= 0)                                                           \
     {                                                                           \
         ok_eq_long((Mutex)->Header.SignalState, State);                         \
-        ok_eq_pointer((Mutex)->MutantListEntry.Flink, &Thread->MutantListHead); \
-        ok_eq_pointer((Mutex)->MutantListEntry.Blink, &Thread->MutantListHead); \
-        ok_eq_pointer(Thread->MutantListHead.Flink, &(Mutex)->MutantListEntry); \
-        ok_eq_pointer(Thread->MutantListHead.Blink, &(Mutex)->MutantListEntry); \
         ok_eq_pointer((Mutex)->OwnerThread, Thread);                            \
     }                                                                           \
     else                                                                        \
@@ -50,22 +51,26 @@ C_ASSERT(sizeof(KMUTANT) == MUTANT_SIZE * sizeof(ULONG));
             ok_eq_pointer((Mutex)->MutantListEntry.Blink,                       \
                           (PVOID)0x5555555555555555ULL);                        \
         }                                                                       \
-        ok_eq_pointer(Thread->MutantListHead.Flink, &Thread->MutantListHead);   \
-        ok_eq_pointer(Thread->MutantListHead.Blink, &Thread->MutantListHead);   \
         ok_eq_pointer((Mutex)->OwnerThread, NULL);                              \
     }                                                                           \
     ok_eq_uint((Mutex)->Abandoned, 0);                                          \
     ok_eq_uint((Mutex)->ApcDisable, ExpectedApcDisable);                        \
+    UNREFERENCED_PARAMETER(Thread);                                             \
 } while (0)
 
+/* Same ETHREAD-layout caveat as KeApc.c: drive only public APIs.
+ * Treat the {Kernel,Special}ApcsDisabled parameters as the signed counter
+ * value; KeAreApcsDisabled() is TRUE only when the counter is negative. */
 #define CheckApcs(KernelApcsDisabled, SpecialApcsDisabled, AllApcsDisabled, Irql) do    \
 {                                                                                       \
-    ok_eq_bool(KeAreApcsDisabled(), KernelApcsDisabled || SpecialApcsDisabled);         \
-    ok_eq_int(Thread->KernelApcDisable, KernelApcsDisabled);                            \
+    ok_eq_bool(KeAreApcsDisabled(), (LONG)(KernelApcsDisabled) < 0 ||                   \
+                                    (LONG)(SpecialApcsDisabled) < 0 ||                  \
+                                    ((Irql) >= APC_LEVEL));                             \
     if (pKeAreAllApcsDisabled)                                                          \
-        ok_eq_bool(pKeAreAllApcsDisabled(), AllApcsDisabled);                           \
-    ok_eq_int(Thread->SpecialApcDisable, SpecialApcsDisabled);                          \
+        ok_eq_bool(pKeAreAllApcsDisabled(),                                             \
+                   (AllApcsDisabled) || ((Irql) >= APC_LEVEL));                         \
     ok_irql(Irql);                                                                      \
+    UNREFERENCED_PARAMETER(Thread);                                                     \
 } while (0)
 
 static

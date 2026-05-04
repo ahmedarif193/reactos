@@ -27,8 +27,9 @@ SetParameters(
 
 #define NoResponse 27
 
-#define CheckHardError(ErrStatus, UnicodeStringMask, ResponseOption,    \
+#define CheckHardErrorEx(ErrStatus, UnicodeStringMask, ResponseOption,  \
                         ExpectedStatus, ExpectedResponse,               \
+                        CheckResponse,                                  \
                         NumberOfParameters, ...) do                     \
 {                                                                       \
     SetParameters(HardErrorParameters, NumberOfParameters, __VA_ARGS__);\
@@ -44,8 +45,17 @@ SetParameters(
         Status = _SEH2_GetExceptionCode();                              \
     } _SEH2_END;                                                        \
     ok_eq_hex(Status, ExpectedStatus);                                  \
-    ok_eq_ulong(Response, (ULONG)ExpectedResponse);                     \
+    if (CheckResponse)                                                  \
+        ok_eq_ulong(Response, (ULONG)ExpectedResponse);                 \
 } while (0)
+
+#define CheckHardError(ErrStatus, UnicodeStringMask, ResponseOption,    \
+                        ExpectedStatus, ExpectedResponse,               \
+                        NumberOfParameters, ...)                        \
+    CheckHardErrorEx(ErrStatus, UnicodeStringMask, ResponseOption,      \
+                     ExpectedStatus, ExpectedResponse,                  \
+                     TRUE,                                              \
+                     NumberOfParameters, __VA_ARGS__)
 
 #define CheckInformationalHardError(ErrStatus, String, Thread,          \
                                         ExpectedStatus, ExpectedRet) do \
@@ -104,13 +114,16 @@ TestHardError(
         }
         else
         {
-            CheckHardError(0x40000004,                  0, OptionShutdownSystem,    STATUS_PRIVILEGE_NOT_HELD, ResponseReturnToCaller,     0, 0);
+            /* Response is not meaningful when privilege validation fails before
+             * the hard error is raised. */
+            CheckHardErrorEx(0x40000004,                0, OptionShutdownSystem,    STATUS_PRIVILEGE_NOT_HELD, ResponseReturnToCaller, FALSE, 0, 0);
         }
 #else
-        // Return value is also a random large value on 32-bit 8+
+        /* Response is not meaningful when privilege validation fails before
+         * the hard error is raised. */
         if (GetNTVersion() < _WIN32_WINNT_WIN8)
         {
-            CheckHardError(0x40000004,                  0, OptionShutdownSystem,    STATUS_PRIVILEGE_NOT_HELD, ResponseReturnToCaller,     0, 0);
+            CheckHardErrorEx(0x40000004,                0, OptionShutdownSystem,    STATUS_PRIVILEGE_NOT_HELD, ResponseReturnToCaller, FALSE, 0, 0);
         }
 #endif
     }
@@ -136,12 +149,19 @@ TestHardError(
     CheckHardError(0x40000013,                  0, OptionYesNoCancel,       STATUS_SUCCESS,            ResponseNo,             0, 0);                          // outputs a box :|
     CheckHardError(0x40000013,                  0, OptionYesNoCancel,       STATUS_SUCCESS,            ResponseCancel,         0, 0);                          // outputs a box :|
     }
-    CheckHardError(0x40000009,                  0, 9,                       STATUS_SUCCESS,            ResponseReturnToCaller,     0, 0);
-    CheckHardError(0x4000000a,                  0, 10,                      STATUS_SUCCESS,            ResponseReturnToCaller,     0, 0);
-    CheckHardError(0x4000000b,                  0, 11,                      STATUS_SUCCESS,            ResponseReturnToCaller,     0, 0);
-    CheckHardError(0x4000000c,                  0, 12,                      STATUS_SUCCESS,            ResponseReturnToCaller,     0, 0);
-    CheckHardError(0x4000000d,                  0, MAXULONG / 2 + 1,        STATUS_SUCCESS,            ResponseReturnToCaller,     0, 0);
-    CheckHardError(0x4000000d,                  0, MAXULONG,                STATUS_SUCCESS,            ResponseReturnToCaller,     0, 0);
+    /* Unknown response options return ResponseNotHandled on NT 6.1+ and
+     * ResponseReturnToCaller on older kernels. */
+    {
+        HARDERROR_RESPONSE _UnknownResp = (GetNTVersion() >= _WIN32_WINNT_WIN7)
+                                            ? ResponseNotHandled
+                                            : ResponseReturnToCaller;
+        CheckHardError(0x40000009,                  0, 9,                       STATUS_SUCCESS,            _UnknownResp,         0, 0);
+        CheckHardError(0x4000000a,                  0, 10,                      STATUS_SUCCESS,            _UnknownResp,         0, 0);
+        CheckHardError(0x4000000b,                  0, 11,                      STATUS_SUCCESS,            _UnknownResp,         0, 0);
+        CheckHardError(0x4000000c,                  0, 12,                      STATUS_SUCCESS,            _UnknownResp,         0, 0);
+        CheckHardError(0x4000000d,                  0, MAXULONG / 2 + 1,        STATUS_SUCCESS,            _UnknownResp,         0, 0);
+        CheckHardError(0x4000000d,                  0, MAXULONG,                STATUS_SUCCESS,            _UnknownResp,         0, 0);
+    }
 
     if (InteractivePart2)
     {

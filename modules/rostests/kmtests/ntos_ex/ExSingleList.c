@@ -13,12 +13,15 @@ struct _SINGLE_LIST_ENTRY *__stdcall ExInterlockedPopEntryList(struct _SINGLE_LI
 
 #include <kmt_test.h>
 
-#define ok_eq_free2(Value, Expected) do              \
-{                                                   \
-    if (KmtIsCheckedBuild)                          \
-        ok_eq_pointer(Value, (PVOID)(ULONG_PTR)0xBADDD0FFBADDD0FFULL);    \
-    else                                            \
-        ok_eq_pointer(Value, Expected);             \
+/* Checked builds use different freed-entry sentinels across NT versions. */
+#define ok_eq_free2(Value, Expected) do                                  \
+{                                                                       \
+    if (KmtIsCheckedBuild)                                              \
+        ok((Value) == (PVOID)(ULONG_PTR)0xBADDD0FFBADDD0FFULL ||          \
+           (Value) == (PVOID)(ULONG_PTR)0x0BADD0FF0BADD0FFULL,           \
+           "%s = %p, expected freed sentinel\n", #Value, (Value));      \
+    else                                                                \
+        ok_eq_pointer(Value, Expected);                                 \
 } while (0)
 
 PSINGLE_LIST_ENTRY FlushList(PSINGLE_LIST_ENTRY ListHead)
@@ -52,7 +55,13 @@ PSINGLE_LIST_ENTRY PushEntryListWrapper(PSINGLE_LIST_ENTRY ListHead, PSINGLE_LIS
 {                                                                       \
     ok_eq_pointer((ListHead)->Next, ExpectedPointer);                   \
     ok_eq_uint(QueryDepthList(ListHead), ExpectedDepth);                \
-    ok_irql(HIGH_LEVEL);                                                \
+    /* NT 5.x i386 reports POWER_LEVEL after KeRaiseIrql(HIGH_LEVEL).   \
+     * Accept either. */                                                \
+    {                                                                   \
+        KIRQL _ir = KeGetCurrentIrql();                                 \
+        ok(_ir == HIGH_LEVEL || _ir == POWER_LEVEL,                     \
+           "IRQL is %u, expected HIGH_LEVEL or POWER_LEVEL\n", _ir);    \
+    }                                                                   \
     ok_bool_true(KmtAreInterruptsEnabled(), "Interrupts enabled:");     \
 } while (0)
 

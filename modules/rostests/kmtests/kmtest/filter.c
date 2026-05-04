@@ -14,7 +14,60 @@
 
 #define SERVICE_ACCESS (SERVICE_START | SERVICE_STOP | DELETE)
 
+typedef HRESULT (WINAPI *PFNFILTERLOAD)(LPCWSTR);
+typedef HRESULT (WINAPI *PFNFILTERUNLOAD)(LPCWSTR);
+typedef HRESULT (WINAPI *PFNFILTERCONNECTCOMMUNICATIONPORT)(LPCWSTR, DWORD, LPCVOID, WORD, LPSECURITY_ATTRIBUTES, HANDLE *);
+typedef HRESULT (WINAPI *PFNFILTERSENDMESSAGE)(HANDLE, LPVOID, DWORD, LPVOID, DWORD, LPDWORD);
+typedef HRESULT (WINAPI *PFNFILTERGETMESSAGE)(HANDLE, PFILTER_MESSAGE_HEADER, DWORD, LPOVERLAPPED);
+typedef HRESULT (WINAPI *PFNFILTERREPLYMESSAGE)(HANDLE, PFILTER_REPLY_HEADER, DWORD);
 
+static HMODULE g_FltLib = NULL;
+static PFNFILTERLOAD                       pFilterLoad = NULL;
+static PFNFILTERUNLOAD                     pFilterUnload = NULL;
+static PFNFILTERCONNECTCOMMUNICATIONPORT   pFilterConnectCommunicationPort = NULL;
+static PFNFILTERSENDMESSAGE                pFilterSendMessage = NULL;
+static PFNFILTERGETMESSAGE                 pFilterGetMessage = NULL;
+static PFNFILTERREPLYMESSAGE               pFilterReplyMessage = NULL;
+
+static
+BOOL
+KmtpEnsureFltLib(VOID)
+{
+    if (g_FltLib != NULL)
+        return TRUE;
+
+    g_FltLib = LoadLibraryW(L"fltlib.dll");
+    if (g_FltLib == NULL)
+        return FALSE;
+
+    pFilterLoad = (PFNFILTERLOAD)(ULONG_PTR)
+        GetProcAddress(g_FltLib, "FilterLoad");
+    pFilterUnload = (PFNFILTERUNLOAD)(ULONG_PTR)
+        GetProcAddress(g_FltLib, "FilterUnload");
+    pFilterConnectCommunicationPort =
+        (PFNFILTERCONNECTCOMMUNICATIONPORT)(ULONG_PTR)
+        GetProcAddress(g_FltLib, "FilterConnectCommunicationPort");
+    pFilterSendMessage = (PFNFILTERSENDMESSAGE)(ULONG_PTR)
+        GetProcAddress(g_FltLib, "FilterSendMessage");
+    pFilterGetMessage = (PFNFILTERGETMESSAGE)(ULONG_PTR)
+        GetProcAddress(g_FltLib, "FilterGetMessage");
+    pFilterReplyMessage = (PFNFILTERREPLYMESSAGE)(ULONG_PTR)
+        GetProcAddress(g_FltLib, "FilterReplyMessage");
+
+    if (pFilterLoad == NULL ||
+        pFilterUnload == NULL ||
+        pFilterConnectCommunicationPort == NULL ||
+        pFilterSendMessage == NULL ||
+        pFilterGetMessage == NULL ||
+        pFilterReplyMessage == NULL)
+    {
+        FreeLibrary(g_FltLib);
+        g_FltLib = NULL;
+        return FALSE;
+    }
+
+    return TRUE;
+}
 
 /**
  * @name KmtFltLoad
@@ -35,7 +88,10 @@ KmtFltLoad(
 
     assert(ServiceName);
 
-    hResult = FilterLoad(ServiceName);
+    if (!KmtpEnsureFltLib())
+        return ERROR_NOT_SUPPORTED;
+
+    hResult = pFilterLoad(ServiceName);
     Error = SCODE_CODE(hResult);
 
     return Error;
@@ -126,12 +182,15 @@ KmtFltConnect(
     assert(ServiceName);
     assert(hPort);
 
-    hResult = FilterConnectCommunicationPort(ServiceName,
-                                             0,
-                                             NULL,
-                                             0,
-                                             NULL,
-                                             hPort);
+    if (!KmtpEnsureFltLib())
+        return ERROR_NOT_SUPPORTED;
+
+    hResult = pFilterConnectCommunicationPort(ServiceName,
+                                              0,
+                                              NULL,
+                                              0,
+                                              NULL,
+                                              hPort);
     Error = SCODE_CODE(hResult);
 
     return Error;
@@ -140,7 +199,7 @@ KmtFltConnect(
 /**
  * @name KmtFltDisconnect
  *
- * Disconenct from the comms port
+ * Disconnect from the comms port
  *
  * @param hPort
  *        Handle to the filter's comms port
@@ -166,7 +225,7 @@ KmtFltDisconnect(
 /**
  * @name KmtFltSendMessage
  *
- * Sneds a message to a filter driver
+ * Sends a message to a filter driver
  *
  * @param hPort
  *        Handle to the filter's comms port
@@ -202,12 +261,15 @@ KmtFltSendMessage(
 
     if (BytesReturned) *BytesReturned = 0;
 
-    hResult = FilterSendMessage(hPort,
-                                InBuffer,
-                                InBufferSize,
-                                OutBuffer,
-                                OutBufferSize,
-                                &BytesRet);
+    if (!KmtpEnsureFltLib())
+        return ERROR_NOT_SUPPORTED;
+
+    hResult = pFilterSendMessage(hPort,
+                                 InBuffer,
+                                 InBufferSize,
+                                 OutBuffer,
+                                 OutBufferSize,
+                                 &BytesRet);
 
     Error = SCODE_CODE(hResult);
     if (Error == ERROR_SUCCESS)
@@ -250,10 +312,13 @@ KmtFltGetMessage(
     assert(hPort);
     assert(MessageBuffer);
 
-    hResult = FilterGetMessage(hPort,
-                               MessageBuffer,
-                               MessageBufferSize,
-                               Overlapped);
+    if (!KmtpEnsureFltLib())
+        return ERROR_NOT_SUPPORTED;
+
+    hResult = pFilterGetMessage(hPort,
+                                MessageBuffer,
+                                MessageBufferSize,
+                                Overlapped);
     Error = SCODE_CODE(hResult);
     return Error;
 }
@@ -281,9 +346,12 @@ KmtFltReplyMessage(
     HRESULT hResult;
     DWORD Error;
 
-    hResult = FilterReplyMessage(hPort,
-                                 ReplyBuffer,
-                                 ReplyBufferSize);
+    if (!KmtpEnsureFltLib())
+        return ERROR_NOT_SUPPORTED;
+
+    hResult = pFilterReplyMessage(hPort,
+                                  ReplyBuffer,
+                                  ReplyBufferSize);
     Error = SCODE_CODE(hResult);
     return Error;
 }
@@ -296,7 +364,7 @@ KmtFltReplyMessage(
 * @param hPort
 *        Handle to the filter's comms port
 * @Overlapped
-*        Pointer to the overlapped structure usdd in the IO
+*        Pointer to the overlapped structure used in the IO
 * @BytesTransferred
 *        Number of bytes transferred in the IO
 *
@@ -341,7 +409,10 @@ KmtFltUnload(
 
     assert(ServiceName);
 
-    hResult = FilterUnload(ServiceName);
+    if (!KmtpEnsureFltLib())
+        return ERROR_NOT_SUPPORTED;
+
+    hResult = pFilterUnload(ServiceName);
     Error = SCODE_CODE(hResult);
 
     return Error;

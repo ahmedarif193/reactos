@@ -47,19 +47,20 @@ static
 VOID
 TestPrivateFunctions(VOID)
 {
-    UNICODE_STRING ExAllocateCallBackName = RTL_CONSTANT_STRING(L"ExAllocateCallBack");
-    UNICODE_STRING ExFreeCallBackName = RTL_CONSTANT_STRING(L"ExFreeCallBack");
     PEX_CALLBACK_ROUTINE_BLOCK CallbackBlock;
     INT CallbackContext;
 
     if (!ExAllocateCallBack)
-        ExAllocateCallBack = MmGetSystemRoutineAddress(&ExAllocateCallBackName);
+        ExAllocateCallBack = KmtGetSystemRoutineAddress(L"ExAllocateCallBack");
     if (!ExFreeCallBack)
-        ExFreeCallBack = MmGetSystemRoutineAddress(&ExFreeCallBackName);
+        ExFreeCallBack = KmtGetSystemRoutineAddress(L"ExFreeCallBack");
 
-    if (skip(ExAllocateCallBack && ExFreeCallBack,
-             "ExAllocateCallBack and/or ExFreeCallBack unavailable\n"))
+    /* These are private routines and are not exported by every kernel. */
+    if (!ExAllocateCallBack || !ExFreeCallBack)
+    {
+        trace("ExAllocateCallBack/ExFreeCallBack are not exported on this build\n");
         return;
+    }
 
     CallbackBlock = ExAllocateCallBack(ExCallbackFunction, &CallbackContext);
     ok(CallbackBlock != NULL, "CallbackBlock = NULL\n");

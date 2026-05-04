@@ -7,6 +7,12 @@
 
 #include <kmt_test.h>
 
+/* KeEnterGuardedRegion / KeLeaveGuardedRegion landed in NT 5.2 SP1 along
+ * with KGUARDED_MUTEX. Resolve them dynamically so the test driver still
+ * loads on older NT 5.x kernels, then fall back to the critical-region pair
+ * where the guarded variant is missing. */
+typedef VOID (NTAPI *PFNKEGUARDEDREGION)(VOID);
+
 START_TEST(PsQuota)
 {
     NTSTATUS Status;
@@ -14,9 +20,19 @@ START_TEST(PsQuota)
     QUOTA_LIMITS QuotaLimits;
     SIZE_T NonPagedUsage, PagedUsage;
     PEPROCESS Process = PsGetCurrentProcess();
+    PFNKEGUARDEDREGION pKeEnterGuardedRegion;
+    PFNKEGUARDEDREGION pKeLeaveGuardedRegion;
 
-    /* Guard the quota operations in a guarded region */
-    KeEnterGuardedRegion();
+    pKeEnterGuardedRegion = (PFNKEGUARDEDREGION)KmtGetSystemRoutineAddress(L"KeEnterGuardedRegion");
+    pKeLeaveGuardedRegion = (PFNKEGUARDEDREGION)KmtGetSystemRoutineAddress(L"KeLeaveGuardedRegion");
+
+    /* Guard the quota operations. On NT 5.x RTM the guarded variant is
+     * absent, but KeEnterCriticalRegion is functionally sufficient for
+     * what this test needs (nothing wakes us with a special APC). */
+    if (pKeEnterGuardedRegion != NULL)
+        pKeEnterGuardedRegion();
+    else
+        KeEnterCriticalRegion();
 
     /* Report the current process' quota limits */
     Status = ZwQueryInformationProcess(NtCurrentProcess(),
@@ -129,5 +145,8 @@ START_TEST(PsQuota)
     trace("Process page file quota peak -- %lu\n\n", VmCounters.PeakPagefileUsage);
 
     /* We're done, leave the region */
-    KeLeaveGuardedRegion();
+    if (pKeLeaveGuardedRegion != NULL)
+        pKeLeaveGuardedRegion();
+    else
+        KeLeaveCriticalRegion();
 }
