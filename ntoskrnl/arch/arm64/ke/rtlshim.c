@@ -159,38 +159,11 @@ DebugService(
     _In_ PVOID Argument3,
     _In_ PVOID Argument4)
 {
-    /*
-     * ARM64 FIX: Guard against uninitialized KD.
-     *
-     * During early boot (HalInitializeProcessor, GIC init), DPRINT1/DbgPrint
-     * calls arrive before KdInitSystem has configured the debug transport.
-     * On real hardware (RPi5), attempting to send through an uninitialized
-     * port causes an infinite hang in the TX-ready busy-wait.
-     * QEMU's virtual UART never blocks, masking this bug.
-     */
     if (!KdDebuggerEnabled)
         return (ULONG)STATUS_SUCCESS;
 
-    /*
-     * ARM64 FIX: Always use KernelMode for DebugService.
-     *
-     * DebugService is only called from kernel code (via DbgPrint,
-     * vDbgPrintExWithPrefixInternal, etc.). On amd64, DebugService uses
-     * int 0x2D (KiDebugServiceTrap) which determines the mode from the
-     * trap frame. On ARM64, this is a C function.
-     *
-     * Using KeGetPreviousMode() is WRONG here because it returns the
-     * thread's PreviousMode from the originating syscall. When a kernel
-     * DbgPrint happens during a user-mode syscall handler (e.g., DPRINT1
-     * in InitProcessCallback called from PsConvertToGuiThread during
-     * NtGdiInit), KeGetPreviousMode() returns UserMode. This causes
-     * KdpPrint to take the user-mode path (KdpPrintFromUser) and probe
-     * the kernel-mode format string as a user buffer, crashing with
-     * ExRaiseDatatypeMisalignment or ExRaiseAccessViolation.
-     */
     KPROCESSOR_MODE PreviousMode = KernelMode;
-    PKTHREAD Thread = KeGetCurrentThread();
-    PKTRAP_FRAME TrapFrame = Thread ? Thread->TrapFrame : NULL;
+    PKTRAP_FRAME TrapFrame = NULL;
     ULONG_PTR Arg2Value = (ULONG_PTR)Argument2;
     ULONG_PTR Arg3Value = (ULONG_PTR)Argument3;
     ULONG_PTR Arg4Value = (ULONG_PTR)Argument4;
@@ -234,10 +207,8 @@ DebugService2(
     _In_ PVOID Argument2,
     _In_ ULONG Service)
 {
-    /* ARM64 FIX: Same as DebugService - always KernelMode (see comment there) */
     KPROCESSOR_MODE PreviousMode = KernelMode;
-    PKTHREAD Thread = KeGetCurrentThread();
-    PKTRAP_FRAME TrapFrame = Thread ? Thread->TrapFrame : NULL;
+    PKTRAP_FRAME TrapFrame = NULL;
     CONTEXT LocalContext;
 
     RtlZeroMemory(&LocalContext, sizeof(LocalContext));
