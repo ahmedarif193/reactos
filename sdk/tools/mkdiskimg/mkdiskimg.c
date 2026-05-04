@@ -66,9 +66,10 @@ typedef struct _PARTITION_ENTRY
 
 static void print_usage(const char* name)
 {
-    printf("Usage: %s -o <output> -mbr <mbr.bin> -partition <part.img> [-start <sector>] [-type <hex>] [-format <raw|vhd>] [-vhd]\n\n", name);
+    printf("Usage: %s -o <output> -partition <part.img> [-mbr <mbr.bin>] [-start <sector>] [-type <hex>] [-format <raw|vhd>] [-vhd]\n\n", name);
     printf("  -o <output>         Output image file\n");
-    printf("  -mbr <mbr.bin>      MBR boot code binary (first 440 bytes used)\n");
+    printf("  -mbr <mbr.bin>      MBR boot code binary (first 440 bytes used).\n");
+    printf("                      Optional; omit on UEFI-only platforms to leave the boot code area zeroed.\n");
     printf("  -partition <img>    Raw FAT32 partition image\n");
     printf("  -start <sector>     Partition start sector (default: %d)\n", DEFAULT_START_SECTOR);
     printf("  -type <hex>         Partition type ID (default: 0x%02X)\n", DEFAULT_PARTITION_TYPE);
@@ -518,32 +519,35 @@ int main(int argc, char* argv[])
         }
     }
 
-    if (!output_path || !mbr_path || !partition_path)
+    if (!output_path || !partition_path)
     {
         fprintf(stderr, "Error: Missing required arguments.\n");
         print_usage(argv[0]);
         return 1;
     }
 
-    /* Read MBR boot code */
-    f_mbr = fopen(mbr_path, "rb");
-    if (!f_mbr)
-    {
-        fprintf(stderr, "Error: Cannot open MBR file '%s'.\n", mbr_path);
-        goto cleanup;
-    }
-
-    /* Initialize MBR sector to zero */
+    /* Initialize MBR sector to zero (boot code area stays zero on UEFI-only builds) */
     memset(mbr_sector, 0, SECTOR_SIZE);
 
-    /* Read boot code (up to 440 bytes) */
-    if (fread(mbr_sector, 1, MBR_BOOT_CODE_SIZE, f_mbr) != MBR_BOOT_CODE_SIZE)
+    /* Read MBR boot code if provided */
+    if (mbr_path)
     {
-        fprintf(stderr, "Error: Cannot read MBR boot code from '%s'.\n", mbr_path);
-        goto cleanup;
+        f_mbr = fopen(mbr_path, "rb");
+        if (!f_mbr)
+        {
+            fprintf(stderr, "Error: Cannot open MBR file '%s'.\n", mbr_path);
+            goto cleanup;
+        }
+
+        /* Read boot code (up to 440 bytes) */
+        if (fread(mbr_sector, 1, MBR_BOOT_CODE_SIZE, f_mbr) != MBR_BOOT_CODE_SIZE)
+        {
+            fprintf(stderr, "Error: Cannot read MBR boot code from '%s'.\n", mbr_path);
+            goto cleanup;
+        }
+        fclose(f_mbr);
+        f_mbr = NULL;
     }
-    fclose(f_mbr);
-    f_mbr = NULL;
 
     /* Get partition image size */
     f_partition = fopen(partition_path, "rb");

@@ -3656,12 +3656,6 @@ HalpDebugPciDumpCapabilitiesAcpi(
         return;
     }
 
-#if defined(_M_ARM64)
-    /* Skip extended capability reads on ARM64 - they can hang if ECAM doesn't support extended config space */
-    DbgPrint("[arm64][PCI] Skipping extended capability reads for device %02x:%02x.%x\n",
-             BusNumber, PciSlot.u.bits.DeviceNumber, PciSlot.u.bits.FunctionNumber);
-    return;
-#else
     {
         USHORT Offset;
         ULONG ExtVisited[32];
@@ -3772,7 +3766,6 @@ HalpDebugPciDumpCapabilitiesAcpi(
             Offset = NextOffset;
         }
     }
-#endif /* !_M_ARM64 */
 }
 
 /* Enhanced PCI device enumeration with rich output */
@@ -4228,9 +4221,6 @@ HalpAcpiEnumeratePciBusDebug(VOID)
 #if defined(HALP_ARM64)
     if (!HalpArm64HasPciConfigSpaceBackend())
     {
-        DbgPrint("[arm64][PCI] No standard PCI config-space backend is available during early HAL scan.\n");
-        DbgPrint("[arm64][PCI] Deferring PCI detection until firmware publishes MCFG or an ACPI root bridge _CBA.\n");
-        DbgPrint("[arm64][PCI] Enumeration complete, calling HalpPciLogEcamCoverage\n");
         HalpPciLogEcamCoverage();
         DbgPrint("\n====== END PCI BUS DETECTION =======\n\n");
         return;
@@ -4241,10 +4231,6 @@ HalpAcpiEnumeratePciBusDebug(VOID)
     for (BusNumber = 0; BusNumber < 256; BusNumber++)
     {
         BOOLEAN BusHadAnyDevice = FALSE;
-
-#if defined(_M_ARM64)
-        DbgPrint("[arm64][PCI] Starting bus %u scan\n", BusNumber);
-#endif
 
         /* Try to read from bus - if it fails, still try all slots for bus 0 */
         PciSlot.u.AsULONG = 0;
@@ -4288,9 +4274,6 @@ HalpAcpiEnumeratePciBusDebug(VOID)
             /* If not bus 0, assume no more buses and stop */
             if (BusNumber != 0)
             {
-#if defined(_M_ARM64)
-                DbgPrint("[arm64][PCI] No devices on bus %u, stopping enumeration\n", BusNumber);
-#endif
                 break;
             }
             /* For bus 0, continue scanning all devices/functions to see if anyone responds */
@@ -4375,9 +4358,6 @@ HalpAcpiEnumeratePciBusDebug(VOID)
         }
     }
 
-#if defined(_M_ARM64)
-    DbgPrint("[arm64][PCI] Enumeration complete, calling HalpPciLogEcamCoverage\n");
-#endif
     HalpPciLogEcamCoverage();
     DbgPrint("\n====== END PCI BUS DETECTION =======\n\n");
 }

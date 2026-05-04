@@ -82,23 +82,4 @@ KxKdbFilterLoadSymbols(
  * - kdb_expr.c (expression evaluation)
  */
 
-NTSTATUS
-KdbpSafeReadMemory(
-    _Out_ PVOID Dest,
-    _In_ PVOID Src,
-    _In_ ULONG Length)
-{
-    RtlCopyMemory(Dest, Src, Length);
-    return STATUS_SUCCESS;
-}
-
-VOID
-__cdecl
-KdbpPrint(
-    _In_ PSTR Format,
-    ...)
-{
-    (VOID)Format;
-}
-
 /* EOF */

@@ -440,6 +440,11 @@ KeRundownQueue(IN PKQUEUE Queue)
     PLIST_ENTRY FirstEntry, NextEntry;
     PKTHREAD Thread;
     KIRQL OldIrql;
+#if defined(_M_ARM64)
+    DPRINT1("[arm64][queue] KeRundownQueue: queue=%p irql=%u\n",
+            Queue,
+            KeGetCurrentIrql());
+#endif
     ASSERT_QUEUE(Queue);
     ASSERT_IRQL_LESS_OR_EQUAL(DISPATCH_LEVEL);
     ASSERT(IsListEmpty(&Queue->Header.WaitListHead));

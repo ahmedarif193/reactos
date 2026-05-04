@@ -15,6 +15,11 @@
 
 #include <drivers/bootvid/framebuf.h> // For CM_FRAMEBUF_DEVICE_DATA
 
+#if defined(_M_ARM64)
+#include <arch/arm64/arm64.h>          // For Arm64ClearIdentityMappings
+#include <reactos/arm64/early_uart.h>  // For EarlyUart* (post-ExitBootServices logging)
+#endif
+
 #include <debug.h>
 DBG_DEFAULT_CHANNEL(WINDOWS);
 
@@ -1597,6 +1602,20 @@ LoadAndBootWindowsCommon(
     WinLdrpDumpBootDriver(LoaderBlockVA);
 #ifndef _M_AMD64
     WinLdrpDumpArcDisks(LoaderBlockVA);
+#endif
+
+#if !defined(_M_ARM64)
+    TRACE("[winldr] jumping to kernel %p, LoaderBlockVA %p\n",
+          KiSystemStartup, LoaderBlockVA);
+#endif
+
+#if defined(_M_ARM64)
+    /* Drop stale TTBR0 identity mappings before handing off to the kernel.
+     * The kernel expects user-space (TTBR0) to be a clean slate; leaving the
+     * 4 TB identity windows we used while bringing up the MMU confuses the
+     * kernel's PTE tracking and faults the first MM allocation. The kernel
+     * itself runs from TTBR1/KSEG0 and is unaffected by clearing TTBR0. */
+    Arm64ClearIdentityMappings();
 #endif
 
     /* Pass control */
