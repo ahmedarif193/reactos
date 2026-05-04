@@ -127,7 +127,7 @@ static PVOID     RamDiskWritableBase = NULL;
 static ULONGLONG RamDiskWritableSize = 0;
 static BOOLEAN   RamDiskErrorShown = FALSE;
 
-#if defined(_M_AMD64) || defined(__x86_64__)
+#if defined(_M_AMD64) || defined(__x86_64__) || defined(_M_ARM64) || defined(_ARM64_) || defined(__aarch64__) || defined(__arm64__)
 #ifndef MM_MAX_PAGE_LOADER_MAPPED
 #define MM_MAX_PAGE_LOADER_MAPPED MM_MAX_PAGE_LOADER
 #endif
@@ -2478,7 +2478,7 @@ RamDiskLoadVirtualFile(
     }
 
     /* Enforce the legacy 4GB limit on 32-bit builds */
-#if !defined(_M_AMD64) && !defined(__x86_64__)
+#if !defined(_M_AMD64) && !defined(__x86_64__) && !defined(_M_ARM64) && !defined(_ARM64_) && !defined(__aarch64__) && !defined(__arm64__)
     if (Information.EndingAddress.HighPart != 0)
     {
         ArcClose(RamFileId);
@@ -2489,7 +2489,7 @@ RamDiskLoadVirtualFile(
 #endif
 
     RamDiskFileSize = Information.EndingAddress.QuadPart;
-#if !defined(_M_AMD64) && !defined(__x86_64__)
+#if !defined(_M_AMD64) && !defined(__x86_64__) && !defined(_M_ARM64) && !defined(_ARM64_) && !defined(__aarch64__) && !defined(__arm64__)
     ASSERT(RamDiskFileSize < 0x100000000); // Legacy limit on 32-bit builds.
 #endif
 
@@ -2509,7 +2509,7 @@ RamDiskLoadVirtualFile(
     if (ChunkSize == 0)
         ChunkSize = ISO_SECTOR_SIZE;
 
-#if defined(_M_AMD64) || defined(__x86_64__)
+#if defined(_M_AMD64) || defined(__x86_64__) || defined(_M_ARM64) || defined(_ARM64_) || defined(__aarch64__) || defined(__arm64__)
     /* Use LoaderXIPRom for unique identification by IopStartRamdisk */
     RamDiskBase = MmAllocateMemoryWithType(RamDiskFileSize, LoaderXIPRom);
     if (!RamDiskBase)

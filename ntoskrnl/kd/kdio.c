@@ -766,7 +766,7 @@ KdReceivePacket(
     KdIoPrintString("\n", 1);
     KdIoPuts(KdbPromptStr.Buffer); // Alternatively, use "Input> "
 
-    if (!(KdbDebugState & KD_DEBUG_KDSERIAL))
+    if (!KdTermSerial)
         KbdDisableMouse();
 
     /*
@@ -781,7 +781,7 @@ KdReceivePacket(
         (USHORT)KdIoReadLine(ResponseString.Buffer,
                              ResponseString.MaximumLength);
 
-    if (!(KdbDebugState & KD_DEBUG_KDSERIAL))
+    if (!KdTermSerial)
         KbdEnableMouse();
 
     /* Adjust and return the string length */

@@ -318,7 +318,6 @@ MiInsertVadEx(
                                                    &Parent,
                                                    &StartingAddress);
         }
-
         /* Get the ending address, which is the last piece we need for the VAD */
         EndingAddress = StartingAddress + ViewSize - 1;
 
@@ -911,4 +910,3 @@ MiCheckSecuredVad(IN PMMVAD Vad,
 }
 
 /* EOF */
-

@@ -11,7 +11,7 @@
 
 /* NOTE: The ARM64 trap frame mirrors the hardware-saved volatile registers
  * (x0-x18, FP/LR, SP, PC) while the exception frame carries the non-volatile
- * bank (x19-x28, FP/LR).  The helpers below translate between the user visible
+ * bank (x19-x28).  The helpers below translate between the user visible
  * CONTEXT record and those internal frames.  They run at APC_LEVEL to make
  * sure the state cannot be pre-empted while partially updated. */
 
@@ -64,8 +64,6 @@ KeContextToTrapFrame(_In_ PCONTEXT Context,
         ExceptionFrame->X26 = Context->X[26];
         ExceptionFrame->X27 = Context->X[27];
         ExceptionFrame->X28 = Context->X[28];
-        ExceptionFrame->Fp = Context->Fp;
-        ExceptionFrame->Lr = Context->Lr;
     }
 
     if (ContextFlags & CONTEXT_CONTROL)
@@ -80,10 +78,18 @@ KeContextToTrapFrame(_In_ PCONTEXT Context,
 
     if (ContextFlags & CONTEXT_DEBUG_REGISTERS)
     {
-        RtlCopyMemory(TrapFrame->Bcr, Context->Bcr, sizeof(TrapFrame->Bcr));
-        RtlCopyMemory(TrapFrame->Bvr, Context->Bvr, sizeof(TrapFrame->Bvr));
-        RtlCopyMemory(TrapFrame->Wcr, Context->Wcr, sizeof(TrapFrame->Wcr));
-        RtlCopyMemory(TrapFrame->Wvr, Context->Wvr, sizeof(TrapFrame->Wvr));
+        for (Index = 0; Index < RTL_NUMBER_OF(TrapFrame->Bcr); Index++)
+        {
+            TrapFrame->Bcr[Index] = Context->Bcr[Index];
+            TrapFrame->Bvr[Index] = Context->Bvr[Index];
+        }
+
+        for (Index = 0; Index < RTL_NUMBER_OF(TrapFrame->Wcr); Index++)
+        {
+            TrapFrame->Wcr[Index] = Context->Wcr[Index];
+            TrapFrame->Wvr[Index] = Context->Wvr[Index];
+        }
+
         TrapFrame->DebugRegistersValid = TRUE;
     }
 
@@ -156,8 +162,6 @@ KeTrapFrameToContext(_In_ PKTRAP_FRAME TrapFrame,
         Context->X[26] = ExceptionFrame->X26;
         Context->X[27] = ExceptionFrame->X27;
         Context->X[28] = ExceptionFrame->X28;
-        Context->Fp = ExceptionFrame->Fp;
-        Context->Lr = ExceptionFrame->Lr;
     }
 
     if (ContextFlags & CONTEXT_CONTROL)
@@ -167,12 +171,19 @@ KeTrapFrameToContext(_In_ PKTRAP_FRAME TrapFrame,
         Context->Cpsr = TrapFrame->Spsr;
     }
 
-    if (ContextFlags & CONTEXT_DEBUG_REGISTERS)
+    if ((ContextFlags & CONTEXT_DEBUG_REGISTERS) && TrapFrame->DebugRegistersValid)
     {
-        RtlCopyMemory(Context->Bcr, TrapFrame->Bcr, sizeof(Context->Bcr));
-        RtlCopyMemory(Context->Bvr, TrapFrame->Bvr, sizeof(Context->Bvr));
-        RtlCopyMemory(Context->Wcr, TrapFrame->Wcr, sizeof(Context->Wcr));
-        RtlCopyMemory(Context->Wvr, TrapFrame->Wvr, sizeof(Context->Wvr));
+        for (Index = 0; Index < RTL_NUMBER_OF(Context->Bcr); Index++)
+        {
+            Context->Bcr[Index] = TrapFrame->Bcr[Index];
+            Context->Bvr[Index] = TrapFrame->Bvr[Index];
+        }
+
+        for (Index = 0; Index < RTL_NUMBER_OF(Context->Wcr); Index++)
+        {
+            Context->Wcr[Index] = TrapFrame->Wcr[Index];
+            Context->Wvr[Index] = TrapFrame->Wvr[Index];
+        }
     }
 
     /* Floating point/NEON state: provide a view from the per-CPU snapshot.
@@ -204,7 +215,13 @@ KiGetTrapContextInternal(_In_ PKTRAP_FRAME TrapFrame,
     ASSERT(TrapFrame != NULL);
     ASSERT(Context != NULL);
 
-    Context->ContextFlags = CONTEXT_FULL | CONTEXT_ARM64;
+    /*
+     * Keep bugcheck/KD trap capture to the state that is actually present in
+     * the trap frame. CONTEXT_FULL includes CONTEXT_FLOATING_POINT on ARM64,
+     * which currently has to be synthesized from per-CPU PRCB state and can
+     * fault again while we are already handling a fatal trap.
+     */
+    Context->ContextFlags = CONTEXT_CONTROL | CONTEXT_INTEGER | CONTEXT_ARM64;
     KeTrapFrameToContext(TrapFrame, NULL, Context);
 }
 

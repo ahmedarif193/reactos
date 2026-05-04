@@ -14,6 +14,7 @@
 /* Global UART state - set from loader block during kernel init */
 volatile UINT64 EarlyUartBaseAddress = 0;
 volatile ARM64_PLATFORM_ID EarlyUartPlatformId = Arm64PlatformUnknown;
+volatile ARM64_UART_INTERFACE EarlyUartInterface = Arm64UartUnknown;
 volatile BOOLEAN EarlyUartInitialized = FALSE;
 
 ARM64_PLATFORM_ID
@@ -26,6 +27,14 @@ EarlyUartDetectPlatform(VOID)
 
 BOOLEAN
 EarlyUartInitialize(UINT64 UartBaseOverride)
+{
+    return EarlyUartInitializeWithInterface(UartBaseOverride, Arm64UartUnknown);
+}
+
+BOOLEAN
+EarlyUartInitializeWithInterface(
+    UINT64 UartBaseOverride,
+    ARM64_UART_INTERFACE UartInterfaceOverride)
 {
     if (EarlyUartInitialized)
         return TRUE;
@@ -50,6 +59,12 @@ EarlyUartInitialize(UINT64 UartBaseOverride)
         EarlyUartBaseAddress = ARM64_UART_DEFAULT;
         EarlyUartPlatformId = Arm64PlatformQemuVirt;
     }
+
+    EarlyUartInterface = (UartInterfaceOverride != Arm64UartUnknown) ?
+                         UartInterfaceOverride :
+                         EarlyUartInferInterfaceFromAddress(EarlyUartBaseAddress);
+    if (EarlyUartInterface == Arm64UartUnknown)
+        EarlyUartInterface = Arm64UartPl011;
 
     EarlyUartInitialized = TRUE;
     return TRUE;

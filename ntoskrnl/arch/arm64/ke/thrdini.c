@@ -42,19 +42,11 @@ VOID
 NTAPI
 KiThreadStartup(VOID);
 
-static ULONG KiArm64IdleTraceBudget = 0;
-
 static
 BOOLEAN
 KiArm64ShouldTraceIdle(VOID)
 {
-    if (KiArm64IdleTraceBudget == 0)
-    {
-        return FALSE;
-    }
-
-    KiArm64IdleTraceBudget--;
-    return TRUE;
+    return FALSE;
 }
 
 static
@@ -569,10 +561,17 @@ KiSwapContextResume(
 
     if (KiArm64ShouldTraceIdle())
     {
+        ULONG64 TpidrEl1;
+
+        __asm__ __volatile__("mrs %0, tpidr_el1" : "=r"(TpidrEl1));
+
         DbgPrintEx(DPFLTR_DEFAULT_ID,
                    DPFLTR_ERROR_LEVEL,
-                   "[arm64][CTX] Resume exit: return FALSE CurThread=%p\n",
-                   KeGetCurrentThread());
+                   "[arm64][CTX] Resume exit: return FALSE CurThread=%p tpidr=%p pcr=%p fallbackThread=%p\n",
+                   KeGetCurrentThread(),
+                   (PVOID)(ULONG_PTR)TpidrEl1,
+                   KeArm64CurrentPcr,
+                   KeArm64CurrentThread);
     }
 
     return FALSE;

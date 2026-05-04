@@ -29,6 +29,12 @@ MmArmInitSystem(
     IN PLOADER_PARAMETER_BLOCK LoaderBlock
 );
 
+#if defined(_M_ARM64)
+VOID
+NTAPI
+ExArchPostHalInitSystemPhase0(VOID);
+#endif
+
 typedef struct _INIT_BUFFER
 {
     WCHAR DebugBuffer[256];
@@ -60,6 +66,10 @@ ULONG CmNtCSDVersion;
 ULONG CmNtCSDReleaseType;
 UNICODE_STRING CmVersionString;
 UNICODE_STRING CmCSDVersionString;
+#if defined(_M_ARM64)
+static WCHAR ExpArm64CsdVersionBuffer[256];
+static WCHAR ExpArm64VersionBuffer[64];
+#endif
 
 CHAR NtBuildLab[] = KERNEL_VERSION_BUILD_STR "."
                     REACTOS_COMPILER_NAME "_" REACTOS_COMPILER_VERSION;
@@ -247,12 +257,12 @@ VOID
 NTAPI
 ExpInitNls(IN PLOADER_PARAMETER_BLOCK LoaderBlock)
 {
-    LARGE_INTEGER SectionSize;
+    LARGE_INTEGER DECLSPEC_ALIGN(8) SectionSize;
     NTSTATUS Status;
     HANDLE NlsSection;
     PVOID SectionBase = NULL;
     SIZE_T ViewSize = 0;
-    LARGE_INTEGER SectionOffset = {{0, 0}};
+    LARGE_INTEGER DECLSPEC_ALIGN(8) SectionOffset = {{0, 0}};
     PLIST_ENTRY ListHead, NextEntry;
     PMEMORY_ALLOCATION_DESCRIPTOR MdBlock;
     ULONG NlsTablesEncountered = 0;
@@ -319,6 +329,10 @@ ExpInitNls(IN PLOADER_PARAMETER_BLOCK LoaderBlock)
                           NlsTableSizes[1]),
                           LoaderBlock->NlsData->UnicodeCodePageData,
                           NlsTableSizes[2]);
+
+            ExpAnsiCodePageDataOffset = 0;
+            ExpOemCodePageDataOffset = (ULONG)NlsTableSizes[0];
+            ExpUnicodeCaseTableDataOffset = (ULONG)(NlsTableSizes[0] + NlsTableSizes[1]);
             /* End of Hack */
         }
 
@@ -1115,6 +1129,10 @@ ExpInitializeExecutive(IN ULONG Cpu,
         KeBugCheck(HAL_INITIALIZATION_FAILED);
     }
 
+#if defined(_M_ARM64)
+    ExArchPostHalInitSystemPhase0();
+#endif
+
     /* Make sure interrupts are active now */
     _enable();
 
@@ -1126,7 +1144,6 @@ ExpInitializeExecutive(IN ULONG Cpu,
     NtGlobalFlag |= FLG_ENABLE_CLOSE_EXCEPTIONS |
                     FLG_ENABLE_KDEBUG_SYMBOL_LOAD;
 #endif
-
     /* Setup NT System Root Path */
     sprintf(Buffer, "C:%s", LoaderBlock->NtBootPathName);
 
@@ -1138,14 +1155,11 @@ ExpInitializeExecutive(IN ULONG Cpu,
     RtlInitEmptyUnicodeString(&NtSystemRoot,
                               SharedUserData->NtSystemRoot,
                               sizeof(SharedUserData->NtSystemRoot));
-
     /* Now fill it in */
     Status = RtlAnsiStringToUnicodeString(&NtSystemRoot, &AnsiPath, FALSE);
     if (!NT_SUCCESS(Status)) KeBugCheck(SESSION3_INITIALIZATION_FAILED);
-
     /* Setup bugcheck messages */
     KiInitializeBugCheck();
-
     /* Setup initial system settings */
     CmGetSystemControlValues(LoaderBlock->RegistryBase, CmControlVector);
 
@@ -1178,7 +1192,6 @@ ExpInitializeExecutive(IN ULONG Cpu,
         /* Setup headless terminal settings */
         HeadlessInit(LoaderBlock);
     }
-
     /* Set system ranges */
 #ifdef _M_AMD64
     SharedUserData->Reserved1 = MM_HIGHEST_USER_ADDRESS_WOW64;
@@ -1304,9 +1317,18 @@ ExpInitializeExecutive(IN ULONG Cpu,
 
     /* Now setup the final string */
     RtlInitAnsiString(&CSDString, Buffer);
+#if defined(_M_ARM64)
+    RtlInitEmptyUnicodeString(&CmCSDVersionString,
+                              ExpArm64CsdVersionBuffer,
+                              sizeof(ExpArm64CsdVersionBuffer));
+    Status = RtlAnsiStringToUnicodeString(&CmCSDVersionString,
+                                          &CSDString,
+                                          FALSE);
+#else
     Status = RtlAnsiStringToUnicodeString(&CmCSDVersionString,
                                           &CSDString,
                                           TRUE);
+#endif
     if (!NT_SUCCESS(Status))
     {
         /* Fail */
@@ -1326,7 +1348,21 @@ ExpInitializeExecutive(IN ULONG Cpu,
     }
 
     /* Build the final version string */
+#if defined(_M_ARM64)
+    RtlInitAnsiString(&CSDString, VersionBuffer);
+    RtlInitEmptyUnicodeString(&CmVersionString,
+                              ExpArm64VersionBuffer,
+                              sizeof(ExpArm64VersionBuffer));
+    Status = RtlAnsiStringToUnicodeString(&CmVersionString,
+                                          &CSDString,
+                                          FALSE);
+    if (!NT_SUCCESS(Status))
+    {
+        KeBugCheckEx(PHASE0_INITIALIZATION_FAILED, Status, 0, 0, 0);
+    }
+#else
     RtlCreateUnicodeStringFromAsciiz(&CmVersionString, VersionBuffer);
+#endif
 
     /* Check if the user wants a kernel stack trace database */
     if (NtGlobalFlag & FLG_KERNEL_STACK_TRACE_DB)
@@ -1445,8 +1481,6 @@ Phase1InitializationDiscard(IN PVOID Context)
 
     /* Do Phase 1 HAL Initialization */
     if (!HalInitSystem(1, LoaderBlock)) KeBugCheck(HAL1_INITIALIZATION_FAILED);
-
-    /* Get the command line and upcase it */
     CommandLine = (LoaderBlock->LoadOptions ? _strupr(LoaderBlock->LoadOptions) : NULL);
 
     /* Check if GUI Boot is enabled */
@@ -1487,6 +1521,18 @@ Phase1InitializationDiscard(IN PVOID Context)
     NtosEntry = CONTAINING_RECORD(LoaderBlock->LoadOrderListHead.Flink,
                                   LDR_DATA_TABLE_ENTRY,
                                   InLoadOrderLinks);
+#if defined(_M_ARM64)
+    /* ARM64: FreeLDR may store list links as raw physical offsets that get
+     * sign-extended to 64-bit.  Mask to 48-bit PA and convert to KSEG0 VA. */
+    {
+        ULONG_PTR Raw = (ULONG_PTR)LoaderBlock->LoadOrderListHead.Flink;
+        ULONG_PTR Kva = KSEG0_BASE | (Raw & 0x0000FFFFFFFFFFFFULL);
+        LoaderBlock->LoadOrderListHead.Flink = (PLIST_ENTRY)Kva;
+        NtosEntry = CONTAINING_RECORD(LoaderBlock->LoadOrderListHead.Flink,
+                                      LDR_DATA_TABLE_ENTRY,
+                                      InLoadOrderLinks);
+    }
+#endif
 
     /* Find the banner message */
     MsgStatus = RtlFindMessage(NtosEntry->DllBase,

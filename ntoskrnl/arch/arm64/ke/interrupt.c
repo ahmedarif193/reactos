@@ -37,25 +37,32 @@ static KSPIN_LOCK KiArm64DpcLock;
 static KINTERRUPT KiArm64ApcInterrupt;
 static KSPIN_LOCK KiArm64ApcLock;
 static BOOLEAN KiArm64UseVirtualTimer = TRUE; /* Use virtual timer - physical timer doesn't work under HVF */
+static KTRAP_FRAME KiArm64InterruptTrapFrame[MAXIMUM_PROCESSORS];
+static PKTRAP_FRAME KiArm64CurrentInterruptTrapFrame[MAXIMUM_PROCESSORS];
 
-/* CYCLE 30: Global diagnostic counters for timer ISR debugging */
-ULONG KiTimerIsrCallCount = 0;        /* Incremented in ISR */
-ULONG KiInitInterruptsCallCount = 0;  /* Set to 1 when KeInitInterrupts runs */
-ULONG KiTimerStartedFlag = 0;         /* Set to 1 when timer is started */
-ULONG KiTimerCtlReadback = 0;         /* Timer control register readback */
+ULONG KiTimerIsrCallCount = 0;
+ULONG KiInitInterruptsCallCount = 0;
+ULONG KiTimerStartedFlag = 0;
+ULONG KiTimerCtlReadback = 0;
 
-/* Raw UART for early boot debugging before KD is initialized */
-static inline void KiRawDebugPuts(const char *str) {
-    volatile ULONG *uart = (volatile ULONG *)KI_ARM64_PL011_VA;
-    while (*str) {
-        /* Convert \n to \r\n for proper serial terminal line handling */
-        if (*str == '\n') {
-            while (uart[0x18 / sizeof(ULONG)] & KI_ARM64_PL011_FR_TXFF) {}
-            uart[0] = '\r';
-        }
-        while (uart[0x18 / sizeof(ULONG)] & KI_ARM64_PL011_FR_TXFF) {}
-        uart[0] = *str++;
+static
+PKTRAP_FRAME
+KiArm64GetCurrentInterruptTrapFrame(VOID)
+{
+    ULONG Cpu = KeGetCurrentProcessorNumber();
+
+    if (Cpu >= MAXIMUM_PROCESSORS)
+    {
+        Cpu = 0;
     }
+
+    return KiArm64CurrentInterruptTrapFrame[Cpu] ?
+           KiArm64CurrentInterruptTrapFrame[Cpu] :
+           &KiArm64InterruptTrapFrame[Cpu];
+}
+
+static inline void KiRawDebugPuts(const char *str) {
+    UNREFERENCED_PARAMETER(str);
 }
 
 BOOLEAN
@@ -193,23 +200,7 @@ KiArm64TimerIsr(
     ULONG Increment;
     UNREFERENCED_PARAMETER(Interrupt);
 
-    /* CYCLE 30: Increment ISR call counter for diagnostics */
     KiTimerIsrCallCount++;
-
-    /*
-     * VM monitor heartbeat: keep the serial log moving even when user-mode is
-     * quiet. Use a single raw UART byte write (no locks, no FIFO polling).
-     *
-     * NOTE: Rate-limit to ~10Hz (100Hz timer).
-     */
-#ifdef KDBG
-    if ((KiTimerIsrCallCount % 10) == 0)
-    {
-        volatile UCHAR *Uart = (volatile UCHAR *)KI_ARM64_PL011_VA;
-        *Uart = '~';
-        *Uart = '\n';
-    }
-#endif /* KDBG */
 
     /* Reload next tick FIRST to minimize jitter */
     if (KiArm64UseVirtualTimer)
@@ -238,23 +229,11 @@ KiArm64TimerIsr(
      * - Check for timer expirations
      * - Handle debugger break-in
      *
-     * ARM64 FIX: Pass a non-NULL value for TrapFrame!
-     *
-     * KiCheckForTimerExpiration sets Prcb->TimerRequest = (ULONG_PTR)TrapFrame.
-     * If TrapFrame is NULL, TimerRequest is set to 0, which is interpreted as
-     * "no timer request pending" by KfLowerIrql and KiDispatchInterrupt.
-     *
-     * This causes waiting threads (KeDelayExecutionThread, KeWaitForSingleObject
-     * with timeout, etc.) to NEVER wake up because timer expirations are not
-     * processed.
-     *
-     * We pass -1 (0xFFFFFFFFFFFFFFFF) as a sentinel value to indicate that a timer
-     * request is pending but no trap frame is available. KiTimerExpiration will
-     * handle this correctly - it only uses TrapFrame for profiling which we don't
-     * support yet.
+     * The common clock path dereferences the trap frame for previous-mode
+     * accounting. Keep this as a real frame, not a sentinel pointer.
      */
 
-    KeUpdateSystemTime((PKTRAP_FRAME)(ULONG_PTR)-1, Increment, CLOCK_LEVEL);
+    KeUpdateSystemTime(KiArm64GetCurrentInterruptTrapFrame(), Increment, CLOCK_LEVEL);
 
     return TRUE;
 }
@@ -378,7 +357,6 @@ KiArm64StartTimer(VOID)
         DPRINT1("[arm64] CNTP_CTL_EL0 = 0x%lx (ENABLE=%lu, IMASK=%lu, ISTATUS=%lu)\n",
                 ctl, ctl & 1, (ctl >> 1) & 1, (ctl >> 2) & 1);
     }
-    /* CYCLE 30: Store readback value and set flag */
     KiTimerCtlReadback = ctl;
     KiTimerStartedFlag = 1;
 }
@@ -389,7 +367,6 @@ NTAPI
 KeInitInterrupts(VOID)
 {
     KiRawDebugPuts("[KeInitInterrupts] ENTRY\n");
-    /* CYCLE 30: Set diagnostic flag */
     KiInitInterruptsCallCount = 1;
 
     KiRawDebugPuts("[KeInitInterrupts] KeInitializeSpinLock IntTableLock\n");
@@ -488,39 +465,16 @@ KeInitInterrupts(VOID)
         KiRawDebugPuts("[KeInitInterrupts] Timer KeConnectInterrupt\n");
         if (KeConnectInterrupt(&KiArm64TimerInterrupt))
         {
-            ULONGLONG daif_before, daif_after;
-
             KiRawDebugPuts("[KeInitInterrupts] Timer connect OK, starting timer\n");
             KiArm64StartTimer();
             KiRawDebugPuts("[KeInitInterrupts] Timer started\n");
 
             /*
-             * ARM64 CRITICAL: Enable GIC Group 1 interrupt delivery.
-             *
-             * ICC_IGRPEN1_EL1 controls whether the GIC delivers Group 1 interrupts
-             * to the CPU. This MUST be enabled before interrupts can be received.
-             *
-             * NOTE: The HAL already enables ICC_IGRPEN1_EL1 during GICv3 CPU interface
-             * initialization. Do NOT enable it again here as it may cause issues
-             * under certain hypervisors (e.g., Apple HVF) if accessed when not
-             * properly configured or when ICC_SRE_EL1.SRE is not set.
-             *
-             * The HAL's HalpInitGicv3CpuInterface() is called during HalInitializeProcessor(),
-             * which runs before this code. So ICC_IGRPEN1_EL1 should already be enabled.
+             * KeInitInterrupts runs before HAL phase 0 configures the GIC.
+             * Do not unmask DAIF or touch ICC_IGRPEN1_EL1 here; the executive
+             * enables CPU interrupt delivery after HalInitSystem(0) completes.
              */
-            KiRawDebugPuts("[KeInitInterrupts] Skipping ICC_IGRPEN1_EL1 (HAL already set)\n");
-
-            KiRawDebugPuts("[KeInitInterrupts] Enabling IRQ\n");
-            /*
-             * Enable IRQ delivery at the CPU by clearing the I bit in DAIF.
-             * This allows the GIC to deliver interrupts to this CPU.
-             * The timer will now start firing at 100 Hz.
-             */
-            __asm__ __volatile__("mrs %0, daif" : "=r"(daif_before));
-            __asm__ __volatile__("msr daifclr, #2" ::: "memory");
-            __asm__ __volatile__("isb" ::: "memory");
-            __asm__ __volatile__("mrs %0, daif" : "=r"(daif_after));
-            KiRawDebugPuts("[KeInitInterrupts] IRQ enabled\n");
+            KiRawDebugPuts("[KeInitInterrupts] IRQ delivery remains masked until HAL phase 0\n");
         }
     }
     KiRawDebugPuts("[KeInitInterrupts] EXIT\n");
@@ -635,9 +589,11 @@ VOID
 KiArm64InterruptDispatchEntry(_In_ ULONG VectorId)
 {
     ULONG IntId;
+    ULONG Cpu;
     KIRQL OldIrql;
     KIRQL RequestIrql = DISPATCH_LEVEL;
     PKINTERRUPT Head;
+    PKTRAP_FRAME TrapFrame;
     BOOLEAN Begun;
 
     /* Ask HAL for current INTID */
@@ -653,14 +609,27 @@ KiArm64InterruptDispatchEntry(_In_ ULONG VectorId)
     if (!Begun)
         return;
 
+    Cpu = KeGetCurrentProcessorNumber();
+    if (Cpu >= MAXIMUM_PROCESSORS)
+    {
+        Cpu = 0;
+    }
+
+    TrapFrame = &KiArm64InterruptTrapFrame[Cpu];
+    TrapFrame->PreviousMode = (VectorId >= 8) ? UserMode : KernelMode;
+    TrapFrame->PreviousIrql = OldIrql;
+    KiArm64CurrentInterruptTrapFrame[Cpu] = TrapFrame;
+
     if (Head == NULL)
     {
+        KiArm64CurrentInterruptTrapFrame[Cpu] = NULL;
         HalEndSystemInterrupt(OldIrql, NULL);
         return;
     }
 
     /* Dispatch to kernel's ISR chain */
     KiArm64DispatchChain(IntId, OldIrql);
+    KiArm64CurrentInterruptTrapFrame[Cpu] = NULL;
 
     UNREFERENCED_PARAMETER(VectorId);
 }

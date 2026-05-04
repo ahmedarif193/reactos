@@ -46,24 +46,41 @@ KiPcToFileHeader(IN PVOID Pc,
                  IN BOOLEAN DriversOnly,
                  OUT PBOOLEAN InKernel)
 {
-    ULONG i = 0;
+    ULONG i;
     PVOID ImageBase, PcBase = NULL;
     PLDR_DATA_TABLE_ENTRY Entry;
     PLIST_ENTRY ListHead, NextEntry;
+    PLIST_ENTRY ListHeads[2];
+    ULONG ListCount = 0, ListIndex;
 
-    /* Check which list we should use */
-    ListHead = (KeLoaderBlock) ? &KeLoaderBlock->LoadOrderListHead :
-                                 &PsLoadedModuleList;
+    if ((PsLoadedModuleList.Flink != NULL) &&
+        (PsLoadedModuleList.Blink != NULL) &&
+        (PsLoadedModuleList.Flink != &PsLoadedModuleList))
+    {
+        ListHeads[ListCount++] = &PsLoadedModuleList;
+    }
+
+    if (KeLoaderBlock)
+    {
+        ListHeads[ListCount++] = &KeLoaderBlock->LoadOrderListHead;
+    }
 
     /* Assume no */
     *InKernel = FALSE;
 
-SearchList:
-    /* Set list pointers and make sure it's valid */
-    NextEntry = ListHead->Flink;
-    if (NextEntry)
+    for (ListIndex = 0; ListIndex < ListCount; ListIndex++)
     {
+        ListHead = ListHeads[ListIndex];
+
+        /* Set list pointers and make sure it's valid */
+        NextEntry = ListHead->Flink;
+        if (!NextEntry)
+        {
+            continue;
+        }
+
         /* Start loop */
+        i = 0;
         while (NextEntry != ListHead)
         {
             /* Increase entry */
@@ -99,17 +116,11 @@ SearchList:
                 break;
             }
         }
-    }
 
-    /*
-     * Boot loader entries do not contain drivers loaded after boot. Fall back
-     * to the live module list so AMD64 exception dispatch can find driver
-     * unwind metadata.
-     */
-    if ((PcBase == NULL) && (ListHead != &PsLoadedModuleList))
-    {
-        ListHead = &PsLoadedModuleList;
-        goto SearchList;
+        if (PcBase)
+        {
+            break;
+        }
     }
 
     /* Return the base address */
@@ -576,6 +587,12 @@ KiDumpParameterImages(IN PCHAR Message,
                                      &InSystem);
         if (!ImageBase)
         {
+            if ((Parameters[i] == 0) ||
+                (Parameters[i] < (ULONG_PTR)MmSystemRangeStart))
+            {
+                continue;
+            }
+
             /* FIXME: Add code to check for unloaded drivers */
             DPRINT1("Potentially unloaded driver!\n");
             continue;

@@ -285,7 +285,9 @@ FORCEINLINE
 PKSPIN_LOCK_QUEUE
 KiAcquireTimerLock(IN ULONG Hand)
 {
+#ifndef _M_ARM64
     ASSERT(KeGetCurrentIrql() >= DISPATCH_LEVEL);
+#endif
 
     /* Nothing to do on UP */
     UNREFERENCED_PARAMETER(Hand);
@@ -296,7 +298,9 @@ FORCEINLINE
 VOID
 KiReleaseTimerLock(IN PKSPIN_LOCK_QUEUE LockQueue)
 {
+#ifndef _M_ARM64
     ASSERT(KeGetCurrentIrql() >= DISPATCH_LEVEL);
+#endif
 
     /* Nothing to do on UP */
     UNREFERENCED_PARAMETER(LockQueue);

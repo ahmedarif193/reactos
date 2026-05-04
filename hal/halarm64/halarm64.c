@@ -20,61 +20,6 @@
 #include <debug.h>
 
 /*
- * PL011 UART early debug helpers for pre-KD initialization tracing.
- * These are used for early HAL debugging before the kernel debugger is ready.
- *
- * Platform-specific UART physical addresses:
- *   - QEMU virt:    0x09000000
- *   - Raspberry Pi 5 (BCM2712): 0x107d001000 (UART0 on debug header)
- *   - Raspberry Pi 4 (BCM2711): 0xFE201000
- */
-#define HAL_ARM64_PL011_FR_TXFF  (1U << 5)
-
-/*
- * HAL-local UART state. Initialized from loader block in HalInitializeProcessor.
- * Default to QEMU virt so early calls before init still work on QEMU.
- */
-volatile UINT64 HalUartBase = 0x09000000ULL;
-volatile BOOLEAN HalUartReady = TRUE;
-
-static VOID
-HalUartInitFromLoaderBlock(_In_ PLOADER_PARAMETER_BLOCK LoaderBlock)
-{
-    if (LoaderBlock && LoaderBlock->u.Arm64.EarlyUartAddress)
-    {
-        HalUartBase = LoaderBlock->u.Arm64.EarlyUartAddress;
-    }
-    HalUartReady = (HalUartBase != 0);
-}
-
-/*
- * HalRawPuts - Raw UART string output for pre-KD breadcrumb tracing.
- * Uses runtime-detected UART address so it works on all platforms.
- */
-FORCEINLINE VOID
-HalRawPuts(const char *Str)
-{
-    ULONG_PTR Va;
-    volatile UINT32 *Uart;
-
-    if (!HalUartReady || HalUartBase == 0)
-        return;
-
-    Va = (ULONG_PTR)(0xFFFF800000000000ULL + HalUartBase);
-    Uart = (volatile UINT32 *)Va;
-    while (*Str)
-    {
-        if (*Str == '\n')
-        {
-            while (Uart[0x18 / sizeof(UINT32)] & HAL_ARM64_PL011_FR_TXFF) {}
-            Uart[0] = '\r';
-        }
-        while (Uart[0x18 / sizeof(UINT32)] & HAL_ARM64_PL011_FR_TXFF) {}
-        Uart[0] = (UINT32)(UCHAR)*Str++;
-    }
-}
-
-/*
  * GICv4 VLPI/vPE support forward declarations
  * These are defined in gic/gic_internal.h and implemented in gic module
  */
@@ -4063,7 +4008,7 @@ HalpInitGicRedistributor(_In_ ULONG Cpu)
             (ULONG)((Typer >> 32) & 0xFFFFFFFF));
 
     /*
-     * [CYCLE36] Wake redistributor and wait for ChildrenAsleep to clear
+     * Wake redistributor and wait for ChildrenAsleep to clear.
      *
      * GICR_WAKER register is implementation-defined in GICv3:
      *   - Some use bit 1 for ProcessorSleep, bit 2 for ChildrenAsleep
@@ -4074,12 +4019,12 @@ HalpInitGicRedistributor(_In_ ULONG Cpu)
      */
     volatile ULONG *Waker = HalpMmio(Base, GICR_WAKER);
     ULONG W = *Waker;
-    DPRINT1("[CYCLE36][GICR] WAKER before wake: 0x%08lx\n", W);
+    DPRINT1("[arm64][GICR] WAKER before wake: 0x%08lx\n", W);
 
     /* If WAKER is not implemented (reads as 0), skip wakeup sequence */
     if (W == 0)
     {
-        DPRINT1("[CYCLE36][GICR] WAKER reads as 0 - redistributor may not implement power management, continuing\n");
+        DPRINT1("[arm64][GICR] WAKER reads as 0 - redistributor may not implement power management, continuing\n");
     }
     else
     {
@@ -4102,11 +4047,11 @@ HalpInitGicRedistributor(_In_ ULONG Cpu)
         }
 
         W = *Waker;
-        DPRINT1("[CYCLE36][GICR] WAKER after wake: 0x%08lx (spins left=%lu)\n", W, Spins);
+        DPRINT1("[arm64][GICR] WAKER after wake: 0x%08lx (spins left=%lu)\n", W, Spins);
 
         if (Spins == 0)
         {
-            DPRINT1("[CYCLE36][GICR] WARNING: GICR wakeup timeout for CPU %lu (WAKER still 0x%08lx)\n", Cpu, W);
+            DPRINT1("[arm64][GICR] WARNING: GICR wakeup timeout for CPU %lu (WAKER still 0x%08lx)\n", Cpu, W);
             /* Continue anyway - redistributor might still work */
         }
     }
@@ -4115,9 +4060,9 @@ HalpInitGicRedistributor(_In_ ULONG Cpu)
     *HalpMmio(SgiBase, GICR_ICPENDR0) = 0xFFFFFFFF;
 
     /*
-     * [CYCLE36] CRITICAL FIX: Configure interrupts as Group 1 Non-Secure
+     * Configure interrupts as Group 1 Non-Secure.
      *
-     * GICv3 uses TWO registers to determine interrupt group:
+     * GICv3 uses two registers to determine interrupt group:
      * - GICR_IGROUPR0: Group bit (0=Group0, 1=Group1)
      * - GICR_IGRPMODR0: Modifier bit (determines Secure/NonSecure for Group1)
      *
@@ -4133,14 +4078,12 @@ HalpInitGicRedistributor(_In_ ULONG Cpu)
      * - Interrupts must be Group 1 Non-Secure
      * - Delivered via ICC_IAR1_EL1 (not ICC_IAR0_EL1)
      * - Enabled via ICC_IGRPEN1_EL1.Enable
-     */
+    */
     *HalpMmio(SgiBase, GICR_IGROUPR0) = 0xFFFFFFFF;  /* All Group 1 */
     *HalpMmio(SgiBase, GICR_IGRPMODR0) = 0x00000000; /* Non-Secure (not Secure) */
-    DPRINT1("[CYCLE36][GICR] Configured all SGI/PPI as Group 1 Non-Secure\n");
+    DPRINT1("[arm64][GICR] Configured all SGI/PPI as Group 1 Non-Secure\n");
 
     /*
-     * [CYCLE36] CRITICAL FIX: Priority masking issue
-     *
      * Set priorities to 0x00 (highest priority) for all SGI/PPI.
      *
      * The ICC_PMR_EL1 reads back as 0xF8 (not 0xFF as written), indicating
@@ -4152,7 +4095,7 @@ HalpInitGicRedistributor(_In_ ULONG Cpu)
      * Old value 0xA0 was being masked (0xA0 < 0xF8), causing spurious
      * interrupt returns (IntId=1023) when timer fired.
      *
-     * Fix: Use 0x00 for highest priority, ensuring interrupts pass PMR mask.
+     * Use 0x00 for highest priority, ensuring interrupts pass PMR mask.
      */
     for (ULONG i = 0; i < 32; i += 4)
     {
@@ -4190,7 +4133,7 @@ HalpInitGicRedistributor(_In_ ULONG Cpu)
      */
 
     /*
-     * [CYCLE36] Configure PPI trigger modes in GICR_ICFGR1
+     * Configure PPI trigger modes in GICR_ICFGR1.
      *
      * ICFGR1 controls PPIs 16-31 (2 bits per interrupt):
      *   Bits [2n+1:2n] for PPI (16+n)
@@ -4208,16 +4151,10 @@ HalpInitGicRedistributor(_In_ ULONG Cpu)
     /* Clear edge trigger bits for PPI 27 and 30 (set to level-sensitive) */
     Icfgr1 &= ~((1u << 23) | (1u << 29)); /* PPI 27 bit 23, PPI 30 bit 29 */
     *HalpMmio(SgiBase, GICR_ICFGR1) = Icfgr1;
-    DPRINT1("[CYCLE36][GICR] ICFGR1=0x%08lx (PPI 27,30 set to level-sensitive)\n", Icfgr1);
+    DPRINT1("[arm64][GICR] ICFGR1=0x%08lx (PPI 27,30 set to level-sensitive)\n", Icfgr1);
 
     /*
-     * [CYCLE35] CRITICAL FIX: Only disable SGIs, NOT PPIs!
-     *
-     * The comment above correctly states we should disable SGIs (0-15),
-     * but the old code was disabling ALL interrupts including PPIs (16-31).
-     * This prevented the timer PPI (30) from ever being enabled.
-     *
-     * Fix: Only write to the SGI bits (0-15), leaving PPI bits (16-31) alone.
+     * Only write to the SGI bits (0-15), leaving PPI bits (16-31) alone.
      * PPIs will be enabled later by HalEnableSystemInterrupt when needed.
      */
     *HalpMmio(SgiBase, GICR_ICENABLER0) = 0x0000FFFF; /* Disable only SGIs (0-15) */
@@ -4241,7 +4178,7 @@ HalpInitGicRedistributor(_In_ ULONG Cpu)
 
     /* Verify final state */
     ULONG IsEnabler = *HalpMmio(SgiBase, GICR_ISENABLER0);
-    DPRINT1("[CYCLE35][GICR] Final ISENABLER0=0x%08lx (IPI SGI enabled)\n", IsEnabler);
+    DPRINT1("[arm64][GICR] Final ISENABLER0=0x%08lx (IPI SGI enabled)\n", IsEnabler);
     DPRINT1("[arm64][GICR] Redistributor initialization complete for CPU %lu\n", Cpu);
 }
 
@@ -4717,48 +4654,34 @@ HalpArm64DiscoverGicFromMadt(_In_opt_ PLOADER_PARAMETER_BLOCK LoaderBlock)
     BOOLEAN FoundGiccBase = FALSE;
     ULONG Cpu = KeGetCurrentProcessorNumber();
 
-
-    HalRawPuts("[GIC] DiscMadt ENTRY\n");
-
     if (HalpGicParsedMadt)
     {
-        HalRawPuts("[GIC] DiscMadt already done\n");
         return;
     }
 
     HalpGicParsedMadt = TRUE;
     if (!LoaderBlock)
     {
-        HalRawPuts("[GIC] DiscMadt no LdrBlk\n");
         return;
     }
-
-    HalRawPuts("[GIC] DiscMadt ACPI parse\n");
     Mpidr = HalpReadMpidr();
     HalpAcpiDiscoverArm64Tables(LoaderBlock);
-    HalRawPuts("[GIC] DiscMadt ACPI done\n");
-
-    HalRawPuts("[GIC] DiscMadt chk GICD\n");
     if (HalpArm64GicInfo.GicdBase)
     {
         HalpGicdBase = HalpArm64GicInfo.GicdBase;
         FoundGicd = TRUE;
     }
-    HalRawPuts("[GIC] DiscMadt chk GICR\n");
     if (HalpArm64GicInfo.GicrBase)
     {
         HalpGicrRegionBase = HalpArm64GicInfo.GicrBase;
         HalpGicrRegionLength = HalpArm64GicInfo.GicrLength;
         FoundGicr = TRUE;
     }
-    HalRawPuts("[GIC] DiscMadt chk GICC\n");
     if (HalpArm64GicInfo.GiccBase)
     {
         HalpGiccBase = HalpArm64GicInfo.GiccBase;
         FoundGiccBase = TRUE;
     }
-
-    HalRawPuts("[GIC] DiscMadt chk GiccEntries\n");
     if (HalpArm64GicInfo.GiccEntryCount)
     {
         FoundGiccEntry = TRUE;
@@ -4799,8 +4722,6 @@ HalpArm64DiscoverGicFromMadt(_In_opt_ PLOADER_PARAMETER_BLOCK LoaderBlock)
             }
         }
     }
-
-    HalRawPuts("[GIC] DiscMadt chk ITS\n");
     if (HalpArm64GicInfo.ItsCount)
     {
         ULONG ItsNodeIdx = 0;
@@ -4848,8 +4769,6 @@ HalpArm64DiscoverGicFromMadt(_In_opt_ PLOADER_PARAMETER_BLOCK LoaderBlock)
         DPRINT1("[arm64][HAL] ITS: Initialized %lu ITS nodes (ItsCount=%lu)\n",
                 ItsNodeIdx, HalpArm64GicInfo.ItsCount);
     }
-
-    HalRawPuts("[GIC] DiscMadt chk MSI\n");
     if (HalpArm64GicInfo.MsiFrameCount)
     {
         for (ULONG Index = 0; Index < HalpArm64GicInfo.MsiFrameCount; ++Index)
@@ -4867,8 +4786,6 @@ HalpArm64DiscoverGicFromMadt(_In_opt_ PLOADER_PARAMETER_BLOCK LoaderBlock)
             }
         }
     }
-
-    HalRawPuts("[GIC] DiscMadt results\n");
     if (FoundGicd)
     {
         DPRINT1("[arm64][HAL] MADT: GICD @0x%llx\n", HalpGicdBase);
@@ -4889,10 +4806,8 @@ HalpArm64DiscoverGicFromMadt(_In_opt_ PLOADER_PARAMETER_BLOCK LoaderBlock)
     {
         HalpGiccPresent = TRUE;
     }
-    HalRawPuts("[GIC] DiscMadt chk CpuGicr\n");
     if (!FoundCpuGicr && FoundGicr && HalpGicrRegionBase)
     {
-        HalRawPuts("[GIC] DiscMadt FindGicrForMpidr\n");
         ULONG_PTR Base = HalpArm64FindGicrForMpidr(Mpidr);
         if (Base && Cpu < RTL_NUMBER_OF(HalpGicrCpuBase))
         {
@@ -4920,8 +4835,6 @@ HalpArm64DiscoverGicFromMadt(_In_opt_ PLOADER_PARAMETER_BLOCK LoaderBlock)
                 (ULONG)(HalpGicMsiSpiBase + HalpGicMsiSpiCount - 1),
                 HalpGicMsiFlags);
     }
-
-    HalRawPuts("[GIC] DiscMadt EXIT\n");
 }
 
 static VOID
@@ -4932,34 +4845,27 @@ HalpArm64SelectGicInterface(_In_opt_ PLOADER_PARAMETER_BLOCK LoaderBlock)
     ULONGLONG midr = 0;
     UCHAR implementer = 0;
 
-    HalRawPuts("[GIC] SelectIf ENTRY\n");
-
     if (HalpGicInterfaceSelected)
     {
-        HalRawPuts("[GIC] SelectIf already done\n");
         return;
     }
 
     HalpGicInterfaceSelected = TRUE;
-    HalRawPuts("[GIC] SelectIf first call\n");
 
     /* Check for boot options that force GIC interface selection */
     if (LoaderBlock && LoaderBlock->LoadOptions)
     {
-        HalRawPuts("[GIC] SelectIf chk boot opts\n");
         if (HalpHasLoaderOption(LoaderBlock->LoadOptions, "GICV3") ||
             HalpHasLoaderOption(LoaderBlock->LoadOptions, "GICSYSREG"))
         {
             HalpForceSysRegs = TRUE;
             HalpForceLegacyGic = FALSE;
-            HalRawPuts("[GIC] boot opt: force v3\n");
         }
         else if (HalpHasLoaderOption(LoaderBlock->LoadOptions, "GICV2") ||
                  HalpHasLoaderOption(LoaderBlock->LoadOptions, "NOGICSYSREG") ||
                  HalpHasLoaderOption(LoaderBlock->LoadOptions, "LEGACYGIC"))
         {
             HalpForceLegacyGic = TRUE;
-            HalRawPuts("[GIC] boot opt: force legacy\n");
         }
 
         if (HalpHasLoaderOption(LoaderBlock->LoadOptions, "GICV2GROUP0") ||
@@ -4967,19 +4873,14 @@ HalpArm64SelectGicInterface(_In_opt_ PLOADER_PARAMETER_BLOCK LoaderBlock)
         {
             HalpGicv2ForceGroup0 = TRUE;
             HalpGicv2GroupModeLocked = TRUE;
-            HalRawPuts("[GIC] boot opt: v2 grp0\n");
         }
         else if (HalpHasLoaderOption(LoaderBlock->LoadOptions, "GICV2GROUP1"))
         {
             HalpGicv2ForceGroup0 = FALSE;
             HalpGicv2GroupModeLocked = TRUE;
-            HalRawPuts("[GIC] boot opt: v2 grp1\n");
         }
     }
-
-    HalRawPuts("[GIC] SelectIf pre-MADT\n");
     HalpArm64DiscoverGicFromMadt(LoaderBlock);
-    HalRawPuts("[GIC] SelectIf post-MADT\n");
 
     /* Apple HVF quirk */
     if (!HalpForceSysRegs && !HalpForceLegacyGic && HalpGiccPresent)
@@ -4990,13 +4891,11 @@ HalpArm64SelectGicInterface(_In_opt_ PLOADER_PARAMETER_BLOCK LoaderBlock)
         {
             HalpForceLegacyGic = TRUE;
             HalpGicv2ForceGroup0 = TRUE;
-            HalRawPuts("[GIC] Apple -> legacy+grp0\n");
         }
     }
 
     if (!HalpGiccPresent)
     {
-        HalRawPuts("[GIC] no GICC -> sysregs\n");
         HalpForceLegacyGic = FALSE;
         HalpForceSysRegs = TRUE;
         HalpGicv2ForceGroup0 = FALSE;
@@ -5015,17 +4914,12 @@ HalpArm64SelectGicInterface(_In_opt_ PLOADER_PARAMETER_BLOCK LoaderBlock)
         HalpGiccBase == HAL_ARM64_GICC_BASE_DEFAULT)
     {
         HalpGicv2ForceGroup0 = TRUE;
-        HalRawPuts("[GIC] QEMU virt -> grp0\n");
     }
-
-    HalRawPuts("[GIC] SelectIf read PFR0\n");
     pfr0 = HalpReadPfr0();
     pfr0_gic = (ULONG)((pfr0 >> 24) & 0xF);
-    HalRawPuts("[GIC] SelectIf PFR0 done\n");
 
     if (HalpForceSysRegs)
     {
-        HalRawPuts("[GIC] trying SRE (forced)\n");
         ULONG sre = HalpReadIccSre();
         sre |= 0x1;
         HalpWriteIccSre(sre);
@@ -5033,17 +4927,14 @@ HalpArm64SelectGicInterface(_In_opt_ PLOADER_PARAMETER_BLOCK LoaderBlock)
         if (sre & 0x1)
         {
             HalpGicUseSysRegs = TRUE;
-            HalRawPuts("[GIC] SRE=1 sysregs\n");
         }
         else
         {
             HalpGicUseSysRegs = FALSE;
-            HalRawPuts("[GIC] SRE fail\n");
         }
     }
     else if (!HalpForceLegacyGic && pfr0_gic >= 1)
     {
-        HalRawPuts("[GIC] auto-detect SRE\n");
         ULONG sre = HalpReadIccSre();
         sre |= 0x1;
         HalpWriteIccSre(sre);
@@ -5051,21 +4942,16 @@ HalpArm64SelectGicInterface(_In_opt_ PLOADER_PARAMETER_BLOCK LoaderBlock)
         if (sre & 0x1)
         {
             HalpGicUseSysRegs = TRUE;
-            HalRawPuts("[GIC] auto SRE=1 sysregs\n");
         }
         else
         {
             HalpGicUseSysRegs = FALSE;
-            HalRawPuts("[GIC] auto SRE=0 legacy\n");
         }
     }
     else
     {
         HalpGicUseSysRegs = FALSE;
-        HalRawPuts("[GIC] no SRE -> legacy\n");
     }
-
-    HalRawPuts("[GIC] SelectIf EXIT\n");
 }
 
 static VOID
@@ -5206,10 +5092,7 @@ HalInitSystem(
             }
 
             /*
-             * [CYCLE37] Phase 1: Enable GIC CPU interface Group 1 delivery
-             *
-             * For GICv3: enable ICC_IGRPEN1_EL1 (was kept disabled in Phase 0
-             * to prevent spurious interrupt crashes during MM init).
+             * For GICv3, enable Group 1 delivery after phase 0 has finished.
              *
              * For GICv2: GICC_CTLR was already enabled in Phase 0 with the
              * appropriate group configuration.  No additional work needed.
@@ -5256,7 +5139,7 @@ HalInitSystem(
      *   1. Kernel entry, PE loader resolves HAL imports
      *   2. Early kernel init - KiHalInitialized = FALSE (binary DAIF masking)
      *   3. HalInitSystem(0) called and completes
-     *   4. Kernel sets KiHalInitialized = TRUE in Phase1InitializationDiscard
+     *   4. Kernel sets KiHalInitialized = TRUE in ExArchPostHalInitSystemPhase0
      *   5. GIC priority masking becomes active for IRQL transitions
      *
      * The HAL no longer needs to call back into the kernel to enable GIC support.
@@ -5305,7 +5188,6 @@ HalInitSystem(
         ULONGLONG pfr0 = 0;
         ULONG pfr0_gic = 0;
         ULONG pidr2 = 0;
-
         pfr0 = HalpReadPfr0();
         pfr0_gic = (ULONG)((pfr0 >> 24) & 0xF);
 
@@ -5338,7 +5220,6 @@ HalInitSystem(
 
     /* Disable distributor while we (re)configure */
     *HalpMmio((ULONG_PTR)HalpGicdBase, GICD_CTLR) = 0;
-    DPRINT1("[arm64][HAL] HalInitSystem: GICD disabled\n");
 
     /* How many interrupt lines? */
     typer = *HalpMmio((ULONG_PTR)HalpGicdBase, GICD_TYPER);
@@ -5377,7 +5258,7 @@ HalInitSystem(
     DPRINT1("[arm64][HAL] HalInitSystem: GICD groups/disable done\n");
 
     /*
-     * [CYCLE36] Set priorities to 0x00 (highest) for all SPIs.
+     * Set priorities to 0x00 (highest) for all SPIs.
      * This matches the PPI priority fix and ensures interrupts pass the PMR mask.
      */
     for (i = 32; i < lines; i += 4)
@@ -5400,7 +5281,6 @@ HalInitSystem(
             *HalpMmio((ULONG_PTR)HalpGicdBase, GICD_ITARGETSR + (i & ~3))  = 0x01010101; /* CPU0 */
         }
     }
-
     DPRINT1("[arm64][HAL] HalInitSystem: GICD priorities/targets done\n");
 
     /*
@@ -5442,7 +5322,7 @@ HalInitSystem(
             HalpGicv2ForceGroup0 ? 0x00000000 : 0xFFFFFFFF;
 
         /*
-         * [CYCLE36] Set SGI/PPI priorities to 0x00 (highest).
+         * Set SGI/PPI priorities to 0x00 (highest).
          * Matches the GICv3 fix for priority masking.
          */
         for (ULONG i = 0; i < 32; i += 4)
@@ -5488,12 +5368,11 @@ HalInitSystem(
      *   - SPIs are configured as Group 1 (GICD_IGROUPR)
      *   - PPIs are configured as Group 1 in redistributor (GICR_IGROUPR0)
      *   - ICC_IGRPEN1_EL1 is enabled for Group 1 interrupt delivery
-     * [CYCLE34] Fix: Enable Group 1 for GICv3 to allow PPI timer delivery
      */
     if (HalpGicUseSysRegs)
     {
         *HalpMmio((ULONG_PTR)HalpGicdBase, GICD_CTLR) = 0x13; /* EnableGrp0 | EnableGrp1NS | ARE_NS */
-        DPRINT1("[CYCLE34] GICD_CTLR set to 0x13 (Group0+Group1+ARE for GICv3)\n");
+        DPRINT1("[arm64][HAL] GICD_CTLR set to 0x13 (Group0+Group1+ARE for GICv3)\n");
     }
     else
     {
@@ -5516,41 +5395,25 @@ HalInitSystem(
     if (HalpGicUseSysRegs)
     {
         ULONG Sre, Pmr;
-
-        /* [CYCLE37] Enable system register access and configure priority mask */
+        /* Enable system register access and configure priority mask. */
         Sre = HalpReadIccSre();
         Sre |= 0x1; /* SRE bit */
         HalpWriteIccSre(Sre);
         Sre = HalpReadIccSre();
-
         HalpWriteIccPmr(0xFF); /* allow all priorities */
         HalpWriteIccBpr1(0);
 
         /*
-         * [CYCLE37] DO NOT enable ICC_IGRPEN1_EL1 in Phase 0!
-         *
-         * CRITICAL: We must keep ICC_IGRPEN1_EL1=0 during Phase 0 to prevent
-         * spurious interrupts from being delivered during early MM initialization.
-         *
-         * Even though IRQL=HIGH_LEVEL masks IRQs via DAIF.I=1, there are brief
-         * windows during IRQL transitions where interrupts can be delivered.
-         * If a spurious interrupt (IntId=1023) arrives during MmArmInitSystem
-         * Phase 0, the interrupt handler may dereference NULL pointers or access
-         * uninitialized structures, causing crashes.
-         *
-         * The timer is already configured but won't fire yet (ISTATUS=0), so
-         * spurious IntId=1023 is expected. By keeping IGRPEN1=0, we prevent
-         * these spurious interrupts from reaching the CPU until the system is
-         * fully initialized.
-         *
-         * ICC_IGRPEN1_EL1 will be enabled in Phase 1 after MM initialization.
+         * Keep Group 1 delivery disabled in phase 0. The executive enables CPU
+         * IRQ delivery after HalInitSystem(0), and HAL phase 1 enables Group 1
+         * after memory initialization has completed.
          */
         HalpWriteIccIgrpen1(0); /* KEEP DISABLED in Phase 0 */
 
-        /* [CYCLE37] Read back and verify */
+        /* Read back and verify. */
         Pmr = HalpReadIccPmr();
-        DPRINT1("[CYCLE37] HalInitSystem Phase0: GICv3 CPU IF: SRE=0x%x PMR=0x%x IGRPEN1=DISABLED\n", Sre, Pmr);
-        DPRINT1("[CYCLE37] ICC_IGRPEN1_EL1 will be enabled in Phase 1 after MM init\n");
+        DPRINT1("[arm64][HAL] Phase0: GICv3 CPU IF: SRE=0x%x PMR=0x%x IGRPEN1=DISABLED\n", Sre, Pmr);
+        DPRINT1("[arm64][HAL] ICC_IGRPEN1_EL1 will be enabled in Phase 1 after MM init\n");
     }
     else
     {
@@ -5604,7 +5467,6 @@ HalInitSystem(
             DPRINT1("[arm64][HAL] GICv2 legacy CPU interface initialized with barriers\n");
         }
     }
-
     DPRINT1("[arm64][HAL] HalInitSystem: CPU interface configured\n");
 
     /*
@@ -7572,33 +7434,21 @@ HalInitializeProcessor(
     _In_ ULONG ProcessorNumber,
     _In_ PLOADER_PARAMETER_BLOCK LoaderBlock)
 {
-    HalUartInitFromLoaderBlock(LoaderBlock);
-    HalRawPuts("[HAL] HalInitProc ENTRY\n");
-    HalRawPuts("[HAL] pre-SelectGic\n");
     HalpArm64SelectGicInterface(LoaderBlock);
-    HalRawPuts("[HAL] post-SelectGic\n");
-
-    HalRawPuts("[HAL] HalInitProc SelectGic done\n");
 
     if (HalpGicUseSysRegs)
     {
-        HalRawPuts("[HAL] HalInitProc GICv3 path\n");
 
         /* GIC-v3: Find and use per-CPU redistributor */
         if (ProcessorNumber < RTL_NUMBER_OF(HalpGicrCpuBase) &&
             !HalpGicrCpuBase[ProcessorNumber] &&
             HalpGicrRegionBase)
         {
-            HalRawPuts("[HAL] HalInitProc FindGICR\n");
             ULONG_PTR Base = HalpArm64FindGicrForMpidr(HalpReadMpidr());
             if (Base)
                 HalpGicrCpuBase[ProcessorNumber] = Base;
-            HalRawPuts("[HAL] HalInitProc FindGICR done\n");
         }
-
-        HalRawPuts("[HAL] HalInitProc InitRedist\n");
         HalpInitGicRedistributor(ProcessorNumber);
-        HalRawPuts("[HAL] HalInitProc InitRedist done\n");
 
         /*
          * GICv3 CPU interface init for APs.
@@ -7622,8 +7472,6 @@ HalInitializeProcessor(
         {
             ULONG Sre;
 
-            HalRawPuts("[HAL] HalInitProc AP GICv3 CPU IF\n");
-
             /* Ensure system register interface is enabled */
             Sre = HalpReadIccSre();
             Sre |= 0x1; /* SRE = 1 */
@@ -7641,13 +7489,10 @@ HalInitializeProcessor(
 
             __asm__ __volatile__("dsb sy" ::: "memory");
             __asm__ __volatile__("isb" ::: "memory");
-
-            HalRawPuts("[HAL] HalInitProc AP GICv3 CPU IF done\n");
         }
     }
     else
     {
-        HalRawPuts("[HAL] HalInitProc GICv2 path\n");
 
         /*
          * GIC-v2: Initialize the per-CPU GICC (CPU interface) for this processor.
@@ -7663,23 +7508,16 @@ HalInitializeProcessor(
         if (HalpGiccBase != 0)
         {
             ULONG GiccCtlr = HalpGicv2ForceGroup0 ? 0x1 : 0x3;
-
-            HalRawPuts("[HAL] HalInitProc GICC programming\n");
             *HalpMmio((ULONG_PTR)HalpGiccBase, GICC_PMR) = 0xFF;
-            HalRawPuts("[HAL] HalInitProc GICC PMR ok\n");
             *HalpMmio((ULONG_PTR)HalpGiccBase, GICC_BPR) = 0x0;
-            HalRawPuts("[HAL] HalInitProc GICC BPR ok\n");
             *HalpMmio((ULONG_PTR)HalpGiccBase, GICC_CTLR) = GiccCtlr;
-            HalRawPuts("[HAL] HalInitProc GICC CTLR ok\n");
 
             /* Memory barrier to ensure GICC configuration takes effect */
             __asm__ __volatile__("dsb sy" ::: "memory");
             __asm__ __volatile__("isb" ::: "memory");
-            HalRawPuts("[HAL] HalInitProc GICC programmed\n");
         }
         else
         {
-            HalRawPuts("[HAL] HalInitProc GICC=0 unavail\n");
         }
     }
 
@@ -7687,15 +7525,11 @@ HalInitializeProcessor(
     if (HalpGicItsInitialized && HalpGicItsEnabled &&
         ProcessorNumber < RTL_NUMBER_OF(HalpGicItsCollectionMapped))
     {
-        HalRawPuts("[HAL] HalInitProc ITS init\n");
         HalpGicItsCollectionMapped[ProcessorNumber] = FALSE;
         if (!HalpGicItsEnsureCollection(ProcessorNumber))
         {
-            HalRawPuts("[HAL] HalInitProc ITS FAIL\n");
         }
     }
-
-    HalRawPuts("[HAL] HalInitProc EXIT\n");
 }
 
 BOOLEAN

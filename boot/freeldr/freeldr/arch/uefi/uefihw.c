@@ -343,7 +343,7 @@ UefiHwDetect(
     FldrCreateSystemKey(&SystemKey, "AT/AT COMPATIBLE");
 #elif defined(_M_IA64)
     FldrCreateSystemKey(&SystemKey, "Intel Itanium processor family");
-#elif defined(_M_ARM) || defined(_M_ARM64)
+#elif defined(_M_ARM) || defined(_M_ARM64) || defined(_ARM64_) || defined(__aarch64__) || defined(__arm64__)
     FldrCreateSystemKey(&SystemKey, "ARM processor family");
 #else
     #error Please define a system key for your architecture

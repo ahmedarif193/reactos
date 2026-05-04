@@ -72,6 +72,12 @@ RegQueryValue(
     _Out_opt_ PUCHAR Data,
     _Inout_opt_ PULONG DataSize);
 
+LONG
+RegSetValueDword(
+    _In_ HKEY Key,
+    _In_z_ PCWSTR ValueName,
+    _In_ ULONG Data);
+
 #if 0
 LONG
 RegEnumValue(

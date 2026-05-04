@@ -115,27 +115,21 @@ HalpArm64DiscoverGicFromMadt(
     ULONG Cpu = KeGetCurrentProcessorNumber();
     ULONG Index;
 
-    HalRawPuts("[GIC] DiscoverMadt ENTRY\n");
-
     if (HalpGicParsedMadt)
     {
-        HalRawPuts("[GIC] DiscoverMadt already done\n");
         return;
     }
 
     HalpGicParsedMadt = TRUE;
     if (!LoaderBlock)
     {
-        HalRawPuts("[GIC] DiscoverMadt no LoaderBlock\n");
         return;
     }
 
     Mpidr = HalpReadMpidr();
 
     /* Parse ACPI tables for ARM64 GIC information */
-    HalRawPuts("[GIC] DiscoverMadt ACPI parse\n");
     HalpAcpiDiscoverArm64Tables(LoaderBlock);
-    HalRawPuts("[GIC] DiscoverMadt ACPI done\n");
 
     /* Extract GICD (Distributor) base */
     if (HalpArm64GicInfo.GicdBase)
@@ -321,8 +315,6 @@ HalpArm64DiscoverGicFromMadt(
                 (ULONG)(HalpGicMsiSpiBase + HalpGicMsiSpiCount - 1),
                 HalpGicMsiFlags);
     }
-
-    HalRawPuts("[GIC] DiscoverMadt EXIT\n");
 }
 
 /*
@@ -353,11 +345,8 @@ HalpArm64SelectGicInterface(
     ULONGLONG Midr = 0;
     UCHAR Implementer = 0;
 
-    HalRawPuts("[GIC] SelectIf ENTRY\n");
-
     if (HalpGicInterfaceSelected)
     {
-        HalRawPuts("[GIC] SelectIf already done\n");
         return;
     }
 
@@ -383,9 +372,7 @@ HalpArm64SelectGicInterface(
     }
 
     /* Discover GIC components from MADT */
-    HalRawPuts("[GIC] SelectIf MADT parse\n");
     HalpArm64DiscoverGicFromMadt(LoaderBlock);
-    HalRawPuts("[GIC] SelectIf MADT done\n");
 
     /*
      * Apple HVF quirk: Apple's Hypervisor Framework has issues with GICv3

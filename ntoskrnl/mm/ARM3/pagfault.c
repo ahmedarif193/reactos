@@ -28,6 +28,44 @@ BOOLEAN UserPdeFault = FALSE;
 
 /* PRIVATE FUNCTIONS **********************************************************/
 
+#if defined(_M_ARM64)
+static
+VOID
+MiArm64CompleteFaultPteUpdate(
+    _In_ PVOID FaultAddress,
+    _In_ PMMPTE ValidPte)
+{
+    PVOID PageAddress;
+    ULONG64 Ctr;
+    ULONG ILine;
+    ULONG_PTR Start, End, Addr;
+
+    PageAddress = PAGE_ALIGN(FaultAddress);
+
+    /*
+     * MI_WRITE_VALID_PTE can only derive the VA from the PTE address. That is
+     * correct for actual page-table PTEs but wrong for prototype-PTE writes.
+     * Fault completion must publish the faulting VA after the final leaf PTE
+     * becomes valid, otherwise ARM64 can keep replaying a cached translation
+     * fault for the System View address.
+     */
+    KeInvalidateTlbEntry(PageAddress);
+
+    if (MI_IS_PAGE_EXECUTABLE(ValidPte))
+    {
+        __asm__ __volatile__("mrs %0, ctr_el0" : "=r"(Ctr));
+        ILine = 4u << (Ctr & 0xF);
+        Start = (ULONG_PTR)PageAddress & ~(ULONG_PTR)(ILine - 1);
+        End = (ULONG_PTR)PageAddress + PAGE_SIZE;
+        for (Addr = Start; Addr < End; Addr += ILine)
+        {
+            __asm__ __volatile__("ic ivau, %0" :: "r"(Addr) : "memory");
+        }
+        __asm__ __volatile__("dsb ish\n\tisb" ::: "memory");
+    }
+}
+#endif
+
 static
 NTSTATUS
 NTAPI
@@ -751,6 +789,17 @@ MiResolveDemandZeroFault(IN PVOID Address,
     /* Write it */
     MI_WRITE_VALID_PTE(PointerPte, TempPte);
 
+#if defined(_M_ARM64)
+    if (MI_IS_PAGE_TABLE_ADDRESS(PointerPte))
+    {
+        MiArm64CompleteFaultPteUpdate(Address, &TempPte);
+    }
+    else
+    {
+        __asm__ __volatile__("dsb ishst" ::: "memory");
+    }
+#endif
+
     /* Did we manually acquire the lock */
     if (HaveLock)
     {
@@ -885,6 +934,10 @@ MiCompleteProtoPteFault(IN BOOLEAN StoreInstruction,
 
     /* Write the PTE */
     MI_WRITE_VALID_PTE(PointerPte, TempPte);
+
+#if defined(_M_ARM64)
+    MiArm64CompleteFaultPteUpdate(Address, &TempPte);
+#endif
 
     /* Reset the protection if needed */
     if (OriginalProtection) Protection = MM_ZERO_ACCESS;
@@ -1772,6 +1825,15 @@ MmArmAccessFault(IN ULONG FaultCode,
         ASSERT(MI_IS_PAGE_LARGE(PointerPde) == FALSE);
         ASSERT((!MI_IS_NOT_PRESENT_FAULT(FaultCode) && MI_IS_PAGE_COPY_ON_WRITE(PointerPte)) == FALSE);
 
+#if defined(_M_ARM64)
+        if ((PointerPte->u.Hard.Valid != 0) &&
+            (PointerPte->u.Hard.Accessed == 0))
+        {
+            PointerPte->u.Hard.Accessed = 1;
+            KeInvalidateTlbEntry(Address);
+        }
+#endif
+
         /* Check if this was a write */
         if (MI_IS_WRITE_ACCESS(FaultCode))
         {
@@ -1841,6 +1903,15 @@ MmArmAccessFault(IN ULONG FaultCode,
                 TempPte = *PointerPte;
                 if (TempPte.u.Hard.Valid)
                 {
+#if defined(_M_ARM64)
+                    if (TempPte.u.Hard.Accessed == 0)
+                    {
+                        TempPte.u.Hard.Accessed = 1;
+                        MI_UPDATE_VALID_PTE(PointerPte, TempPte);
+                        KeInvalidateTlbEntry(Address);
+                    }
+#endif
+
                     /* Check if this was a write */
                     if (MI_IS_WRITE_ACCESS(FaultCode))
                     {
@@ -1953,6 +2024,15 @@ RetryKernel:
         TempPte = *PointerPte;
         if (TempPte.u.Hard.Valid == 1)
         {
+#if defined(_M_ARM64)
+            if (TempPte.u.Hard.Accessed == 0)
+            {
+                TempPte.u.Hard.Accessed = 1;
+                MI_UPDATE_VALID_PTE(PointerPte, TempPte);
+                KeInvalidateTlbEntry(Address);
+            }
+#endif
+
             /* Check if this was a write */
             if (MI_IS_WRITE_ACCESS(FaultCode))
             {

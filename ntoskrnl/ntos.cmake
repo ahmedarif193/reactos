@@ -439,7 +439,7 @@ elseif(ARCH STREQUAL "arm64")
 endif()
 
 if(NOT _WINKD_)
-if(KDBG AND NOT ARCH STREQUAL "arm64")
+if(KDBG)
     add_definitions(-DKDBG)
 endif()
 
@@ -465,7 +465,7 @@ endif()
         endif()
     endif()
 
-    if(KDBG AND NOT ARCH STREQUAL "arm64")
+    if(KDBG)
         list(APPEND SOURCE
             ${REACTOS_SOURCE_DIR}/ntoskrnl/kdbg/kdbg.c
             ${REACTOS_SOURCE_DIR}/ntoskrnl/kdbg/kdb.c
