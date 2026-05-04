@@ -126,12 +126,6 @@ HalpAcpiDiscoverWaetTable(
 CODE_SEG("INIT")
 VOID
 NTAPI
-HalpAcpiReserveRootTables(
-    _In_ PLOADER_PARAMETER_BLOCK LoaderBlock);
-
-CODE_SEG("INIT")
-VOID
-NTAPI
 HalpAcpiLogRootTablesOrdered(
     _In_ PLOADER_PARAMETER_BLOCK LoaderBlock,
     _In_ PFADT Fadt);

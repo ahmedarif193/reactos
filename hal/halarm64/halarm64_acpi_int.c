@@ -25,7 +25,7 @@
 #include <debug.h>
 
 /*
- * Note: The main implementation is in hal/arch/common/acpi/arm64.c
+ * Note: The main implementation is in hal/halarm64/acpi/arm64.c
  * This file can be used for additional HAL-specific interrupt routing
  * logic that doesn't belong in the common ACPI code.
  *

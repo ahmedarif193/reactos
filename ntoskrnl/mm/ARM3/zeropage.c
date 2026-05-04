@@ -39,21 +39,12 @@ MmZeroPageThread(VOID)
     PVOID StartAddress, EndAddress;
     PVOID WaitObjects[2];
 
-#if defined(_M_ARM64)
-    DPRINT1("[arm64][zero] MmZeroPageThread: entry thread=%p irql=%u\n",
-            Thread,
-            KeGetCurrentIrql());
-#endif
-
     /* Get the discardable sections to free them */
     MiFindInitializationCode(&StartAddress, &EndAddress);
     if (StartAddress) MiFreeInitializationCode(StartAddress, EndAddress);
     DPRINT("Free pages: %lx\n", MmAvailablePages);
 
     /* Set our priority to 0 */
-#if defined(_M_ARM64)
-    DPRINT1("[arm64][zero] MmZeroPageThread: lowering priority\n");
-#endif
     Thread->BasePriority = 0;
     KeSetPriorityThread(Thread, 0);
 
@@ -65,10 +56,6 @@ MmZeroPageThread(VOID)
     {
         KIRQL OldIrql;
 
-#if defined(_M_ARM64)
-        DPRINT1("[arm64][zero] MmZeroPageThread: waiting event=%p\n",
-                WaitObjects[0]);
-#endif
         KeWaitForMultipleObjects(1, // 2
                                  WaitObjects,
                                  WaitAny,
