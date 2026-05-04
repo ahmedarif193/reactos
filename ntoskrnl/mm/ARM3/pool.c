@@ -733,16 +733,7 @@ MiAllocatePoolPages(IN POOL_TYPE PoolType,
             // Grab the entry and see if it can handle our allocation
             //
             FreeEntry = CONTAINING_RECORD(NextEntry, MMFREE_POOL_ENTRY, List);
-#if defined(_M_ARM64)
-            if (FreeEntry->Signature != MM_FREE_POOL_SIGNATURE)
-            {
-                /* ARM64 bringup: pool not built yet, skip this entry */
-                NextEntry = NextEntry->Flink;
-                continue;
-            }
-#else
             ASSERT(FreeEntry->Signature == MM_FREE_POOL_SIGNATURE);
-#endif
             if (FreeEntry->Size >= SizeInPages)
             {
                 //
@@ -798,47 +789,6 @@ MiAllocatePoolPages(IN POOL_TYPE PoolType,
                 //
                 // Now mark it as the beginning of an allocation
                 //
-#if defined(_M_ARM64)
-                if (Pfn1->u3.e1.StartOfAllocation != 0)
-                {
-                    PFN_NUMBER BadPfn = PFN_FROM_PTE(PointerPte);
-                    ULONG Matches = 0;
-
-                    DbgPrint("[arm64][pool] StartOfAllocation set before alloc: BaseVa=%p SizeInPages=%lu Pte=%p\n",
-                             BaseVa,
-                             SizeInPages,
-                             PointerPte);
-                    DbgPrint("[arm64][pool] Pfn=%I64x PfnEntry=%p Ref=%u Share=%I64x Start=%u End=%u Loc=%u Ver=%u\n",
-                             (ULONGLONG)BadPfn,
-                             Pfn1,
-                             Pfn1->u3.e2.ReferenceCount,
-                             (ULONGLONG)Pfn1->u2.ShareCount,
-                             Pfn1->u3.e1.StartOfAllocation,
-                             Pfn1->u3.e1.EndOfAllocation,
-                             Pfn1->u3.e1.PageLocation,
-                             (ULONG)Pfn1->u4.VerifierAllocation);
-                    DbgPrint("[arm64][pool] PoolStart=%p PoolEnd0=%p Expansion=%p FreeEntry=%p FreeSize=%lu\n",
-                             MmNonPagedPoolStart,
-                             MmNonPagedPoolEnd0,
-                             MmNonPagedPoolExpansionStart,
-                             FreeEntry,
-                             FreeEntry->Size);
-
-                    for (PMMPTE ScanPte = MiAddressToPte(MmNonPagedPoolStart);
-                         ScanPte <= MiAddressToPte((PVOID)((ULONG_PTR)MmNonPagedPoolEnd0 - 1));
-                         ScanPte++)
-                    {
-                        if ((ScanPte->u.Hard.Valid) &&
-                            (PFN_FROM_PTE(ScanPte) == BadPfn))
-                        {
-                            DbgPrint("[arm64][pool] duplicate PFN VA=%p PTE=%p\n",
-                                     MiPteToAddress(ScanPte),
-                                     ScanPte);
-                            if (++Matches == 8) break;
-                        }
-                    }
-                }
-#endif
                 ASSERT(Pfn1->u3.e1.StartOfAllocation == 0);
                 Pfn1->u3.e1.StartOfAllocation = 1;
 
