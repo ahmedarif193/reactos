@@ -404,7 +404,9 @@ TestResourceWithThreads(
     Status = StartThread(&ThreadDataShared2, NULL, FALSE, TRUE);
     ok_eq_hex(Status, STATUS_SUCCESS);
     CheckResourceStatus(Res, FALSE, 0LU, 0LU, 0LU);
-    if (GetNTVersion() <= _WIN32_WINNT_WS03)
+    /* On NT 5.x (incl. patched WS03 reporting 0x503) ActiveCount tracks
+     * acquisitions directly; Vista+ split this into ActiveCount + ActiveEntries. */
+    if (GetNTVersion() < _WIN32_WINNT_VISTA)
     {
         ok_eq_int(Res->ActiveCount, 2);
     }
@@ -450,7 +452,9 @@ TestResourceWithThreads(
     Status = StartThread(&ThreadDataSharedStarve, NULL, TRUE, TRUE);
     ok_eq_hex(Status, STATUS_SUCCESS);
     CheckResourceStatus(Res, FALSE, 0LU, 1LU, 0LU);
-    if (GetNTVersion() <= _WIN32_WINNT_WS03)
+    /* On NT 5.x (incl. patched WS03 reporting 0x503) ActiveCount tracks
+     * acquisitions directly; Vista+ split this into ActiveCount + ActiveEntries. */
+    if (GetNTVersion() < _WIN32_WINNT_VISTA)
     {
         ok_eq_int(Res->ActiveCount, 2);
     }
