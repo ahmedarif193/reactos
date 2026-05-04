@@ -139,8 +139,18 @@ void TestsSeQueryInformationToken(PACCESS_TOKEN Token)
 
     Buffer = NULL;
     Status = SeQueryInformationToken(Token, TokenGroupsAndPrivileges, &Buffer);
-    ok(Status == STATUS_INVALID_INFO_CLASS, "SQIT with TokenGroupsAndPrivileges failed with Status 0x%08X; expected STATUS_INVALID_INFO_CLASS\n", Status);
-    ok(Buffer == NULL, "Wrong. SQIT call failed. But Buffer != NULL\n");
+    /* NT 6.1+ supports TokenGroupsAndPrivileges here; NT 5.x rejects it. */
+    if (GetNTVersion() >= _WIN32_WINNT_WIN7)
+    {
+        ok(Status == STATUS_SUCCESS, "SQIT with TokenGroupsAndPrivileges failed with Status 0x%08X; expected STATUS_SUCCESS\n", Status);
+        ok(Buffer != NULL, "SQIT with TokenGroupsAndPrivileges succeeded but Buffer == NULL\n");
+    }
+    else
+    {
+        ok(Status == STATUS_INVALID_INFO_CLASS, "SQIT with TokenGroupsAndPrivileges failed with Status 0x%08X; expected STATUS_INVALID_INFO_CLASS\n", Status);
+        ok(Buffer == NULL, "Wrong. SQIT call failed. But Buffer != NULL\n");
+    }
+    if (Buffer) ExFreePool(Buffer);
 
     Buffer = NULL;
     Status = SeQueryInformationToken(Token, TokenRestrictedSids, &Buffer);

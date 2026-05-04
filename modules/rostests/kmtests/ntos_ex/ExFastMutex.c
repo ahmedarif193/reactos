@@ -58,10 +58,15 @@ TestFastMutex(
     ExReleaseFastMutex(Mutex);
     CheckMutex(Mutex, 1L, NULL, 0LU, OriginalIrql, OriginalIrql);
 
-    /* ntoskrnl's fastcall version */
-    if (!skip(pExiAcquireFastMutex &&
+    /* Exi*FastMutex uses the x86 fastcall ABI and is not exported on x64.
+     * Some pre-Vista kernels export incompatible entry points, so only probe
+     * this private path on Vista+ x86. */
+#ifndef _M_AMD64
+    if (!skip(GetNTVersion() >= _WIN32_WINNT_VISTA &&
+              pExiAcquireFastMutex &&
               pExiReleaseFastMutex &&
-              pExiTryToAcquireFastMutex, "No fastcall fast mutex functions\n"))
+              pExiTryToAcquireFastMutex,
+              "Compatible fastcall fast mutex functions unavailable\n"))
     {
         pExiAcquireFastMutex(Mutex);
         CheckMutex(Mutex, 0L, Thread, 0LU, OriginalIrql, APC_LEVEL);
@@ -70,6 +75,7 @@ TestFastMutex(
         pExiReleaseFastMutex(Mutex);
         CheckMutex(Mutex, 1L, NULL, 0LU, OriginalIrql, OriginalIrql);
     }
+#endif
 
     /* try to acquire */
     ok_bool_true(ExTryToAcquireFastMutex(Mutex), "ExTryToAcquireFastMutex returned");
@@ -113,9 +119,11 @@ TestFastMutex(
         CheckMutex(Mutex, 1L, NULL, 0LU, PASSIVE_LEVEL, OriginalIrql);
     }
 
-    if (!KmtIsCheckedBuild)
+    if (!KmtIsCheckedBuild &&
+        GetNTVersion() >= _WIN32_WINNT_VISTA &&
+        GetNTVersion() < _WIN32_WINNT_WIN7)
     {
-        /* release without acquire */
+        /* Keep the unowned-release probe to kernels that return from it. */
         ExReleaseFastMutexUnsafe(Mutex);
         CheckMutex(Mutex, 2L, NULL, 0LU, PASSIVE_LEVEL, OriginalIrql);
         --Mutex->Count;
@@ -252,13 +260,19 @@ TestFastMutexConcurrent(
     THREAD_DATA ThreadData2;
     THREAD_DATA ThreadDataUnsafe;
     THREAD_DATA ThreadDataTry;
+    BOOLEAN IsVistaOrLater = (GetNTVersion() >= _WIN32_WINNT_VISTA);
+    LONG OneWaiterCount = IsVistaOrLater ? 4L : -1L;
+    LONG TwoWaiterCount = IsVistaOrLater ? 8L : -2L;
     LARGE_INTEGER Timeout;
     Timeout.QuadPart = -50 * MILLISECOND;
 
 #ifdef _M_AMD64
-    if (skip(FALSE, "ROSTESTS-367: Skipping TestFastMutexConcurrent() because it hangs on Windows Server 2003 x64-Testbot.\n"))
+    /* ROSTESTS-367: TestFastMutexConcurrent() hangs on WS03 x64. Vista+
+     * stores the waiter count shifted left by two while the mutex is held. */
+    if (skip(GetNTVersion() != _WIN32_WINNT_WS03, "ROSTESTS-367: TestFastMutexConcurrent() hangs on Windows Server 2003 x64-Testbot.\n"))
 #else
-    if (skip(GetNTVersion() < _WIN32_WINNT_VISTA, "TestFastMutexConcurrent() doesn't work on Vista+.\n"))
+    if (skip(GetNTVersion() >= _WIN32_WINNT_VISTA,
+             "TestFastMutexConcurrent() requires NT 6+\n"))
 #endif
         return;
 
@@ -280,7 +294,7 @@ TestFastMutexConcurrent(
     /* have another thread acquire it -- should block */
     Status = StartThread(&ThreadData2, &Timeout, APC_LEVEL, FALSE, FALSE);
     ok_eq_hex(Status, STATUS_TIMEOUT);
-    CheckMutex(Mutex, -1L, ThreadData.Thread, 1LU, PASSIVE_LEVEL, PASSIVE_LEVEL);
+    CheckMutex(Mutex, OneWaiterCount, ThreadData.Thread, 1LU, PASSIVE_LEVEL, PASSIVE_LEVEL);
 
     /* finish the first thread -- now the second should become available */
     FinishThread(&ThreadData);
@@ -291,17 +305,17 @@ TestFastMutexConcurrent(
     /* block two more threads */
     Status = StartThread(&ThreadDataUnsafe, &Timeout, APC_LEVEL, FALSE, FALSE);
     ok_eq_hex(Status, STATUS_TIMEOUT);
-    CheckMutex(Mutex, -1L, ThreadData2.Thread, 2LU, APC_LEVEL, PASSIVE_LEVEL);
+    CheckMutex(Mutex, OneWaiterCount, ThreadData2.Thread, 2LU, APC_LEVEL, PASSIVE_LEVEL);
 
     Status = StartThread(&ThreadData, &Timeout, PASSIVE_LEVEL, FALSE, FALSE);
     ok_eq_hex(Status, STATUS_TIMEOUT);
-    CheckMutex(Mutex, -2L, ThreadData2.Thread, 3LU, APC_LEVEL, PASSIVE_LEVEL);
+    CheckMutex(Mutex, TwoWaiterCount, ThreadData2.Thread, 3LU, APC_LEVEL, PASSIVE_LEVEL);
 
     /* finish 1 */
     FinishThread(&ThreadData2);
     Status = KeWaitForSingleObject(&ThreadDataUnsafe.OutEvent, Executive, KernelMode, FALSE, NULL);
     ok_eq_hex(Status, STATUS_SUCCESS);
-    CheckMutex(Mutex, -1L, ThreadDataUnsafe.Thread, 3LU, APC_LEVEL, PASSIVE_LEVEL);
+    CheckMutex(Mutex, OneWaiterCount, ThreadDataUnsafe.Thread, 3LU, APC_LEVEL, PASSIVE_LEVEL);
 
     /* finish 2 */
     FinishThread(&ThreadDataUnsafe);
@@ -319,6 +333,12 @@ START_TEST(ExFastMutex)
 {
     FAST_MUTEX Mutex;
     KIRQL Irql;
+
+    if (skip(GetNTVersion() >= _WIN32_WINNT_VISTA,
+             "ExFastMutex requires NT 6+\n"))
+    {
+        return;
+    }
 
     pExEnterCriticalRegionAndAcquireFastMutexUnsafe = KmtGetSystemRoutineAddress(L"ExEnterCriticalRegionAndAcquireFastMutexUnsafe");
     pExReleaseFastMutexUnsafeAndLeaveCriticalRegion = KmtGetSystemRoutineAddress(L"ExReleaseFastMutexUnsafeAndLeaveCriticalRegion");

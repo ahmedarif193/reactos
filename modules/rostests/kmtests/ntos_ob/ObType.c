@@ -378,6 +378,8 @@ ObtClose(
 
         Status = ZwClose(DirectoryHandle);
         ok_eq_hex(Status, STATUS_SUCCESS);
+        if (NT_SUCCESS(Status))
+            DirectoryHandle = NULL;
     }
 
     /* we don't delete the object types we created. It makes Windows unstable.
