@@ -1,17 +1,8 @@
 #include <ntddk.h>
 
-VOID NTAPI HalSweepIcache(VOID) { __asm__ volatile("ic iallu\n\tdsb ish\n\tisb" ::: "memory"); }
-VOID NTAPI HalSweepDcache(VOID) { __asm__ volatile("dsb ish" ::: "memory"); }
-VOID NTAPI HalSetGicPriorityMask(KIRQL P) { (VOID)P; }
-KIRQL NTAPI HalGetInterruptSource(VOID) { return 0; }
 VOID NTAPI HalpGetInterruptTargetInformation(PVOID p) { (VOID)p; }
 VOID NTAPI HalpGetMessageRoutingInfo(PVOID p) { (VOID)p; }
 NTSTATUS NTAPI IopReserveIrqVectors(ULONG c, ULONG a, PKINTERRUPT *i) { (VOID)c;(VOID)a;(VOID)i; return 0; }
-
-#undef READ_PORT_UCHAR
-#undef WRITE_PORT_UCHAR
-UCHAR NTAPI READ_PORT_UCHAR(PUCHAR p) { return *(volatile UCHAR*)p; }
-VOID NTAPI WRITE_PORT_UCHAR(PUCHAR p, UCHAR v) { *(volatile UCHAR*)p=v; }
 
 VOID NTAPI ScsiPortWritePortUchar(PUCHAR p, UCHAR v) { WRITE_PORT_UCHAR(p,v); }
 UCHAR NTAPI ScsiPortReadPortUchar(PUCHAR p) { return READ_PORT_UCHAR(p); }
@@ -21,10 +12,6 @@ PHYSICAL_ADDRESS NTAPI ScsiPortConvertUlongToPhysicalAddress(ULONG_PTR a) { PHYS
 VOID NTAPI VideoPortQuerySystemTime(PLARGE_INTEGER t) { t->QuadPart = 0; }
 
 /* Additional HAL exports */
-#undef READ_PORT_USHORT
-#undef READ_PORT_ULONG
-#undef WRITE_PORT_USHORT
-#undef WRITE_PORT_ULONG
 #undef READ_PORT_BUFFER_UCHAR
 #undef READ_PORT_BUFFER_USHORT
 #undef READ_PORT_BUFFER_ULONG
@@ -37,11 +24,6 @@ VOID NTAPI VideoPortQuerySystemTime(PLARGE_INTEGER t) { t->QuadPart = 0; }
 #undef WRITE_REGISTER_UCHAR
 #undef WRITE_REGISTER_USHORT
 #undef WRITE_REGISTER_ULONG
-
-USHORT NTAPI READ_PORT_USHORT(PUSHORT p) { return *(volatile USHORT*)p; }
-ULONG NTAPI READ_PORT_ULONG(PULONG p) { return *(volatile ULONG*)p; }
-VOID NTAPI WRITE_PORT_USHORT(PUSHORT p, USHORT v) { *(volatile USHORT*)p=v; }
-VOID NTAPI WRITE_PORT_ULONG(PULONG p, ULONG v) { *(volatile ULONG*)p=v; }
 
 VOID NTAPI ScsiPortWritePortUlong(PULONG p, ULONG v) { WRITE_PORT_ULONG(p,v); }
 VOID NTAPI ScsiPortWritePortUshort(PUSHORT p, USHORT v) { WRITE_PORT_USHORT(p,v); }
