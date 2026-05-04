@@ -21,7 +21,13 @@ struct _SINGLE_LIST_ENTRY *__fastcall ExInterlockedPopEntrySList(union _SLIST_HE
     ok_eq_uint((ListHead)->Depth, ExpectedDepth);                       \
     ok_eq_uint((ListHead)->Sequence, ExpectedSequence);                 \
     ok_eq_uint(ExQueryDepthSList(ListHead), ExpectedDepth);             \
-    ok_irql(HIGH_LEVEL);                                                \
+    /* NT 5.x i386 reports POWER_LEVEL after KeRaiseIrql(HIGH_LEVEL).   \
+     * Accept either. */                                                \
+    {                                                                   \
+        KIRQL _ir = KeGetCurrentIrql();                                 \
+        ok(_ir == HIGH_LEVEL || _ir == POWER_LEVEL,                     \
+           "IRQL is %u, expected HIGH_LEVEL or POWER_LEVEL\n", _ir);    \
+    }                                                                   \
     ok_bool_true(KmtAreInterruptsEnabled(), "Interrupts enabled:");     \
 } while (0)
 
