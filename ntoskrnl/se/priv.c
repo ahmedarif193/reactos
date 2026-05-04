@@ -746,10 +746,20 @@ SeSinglePrivilegeCheck(
     _In_ KPROCESSOR_MODE PreviousMode)
 {
     SECURITY_SUBJECT_CONTEXT SubjectContext;
-    PRIVILEGE_SET Priv;
+    PRIVILEGE_SET DECLSPEC_ALIGN(8) Priv;
     BOOLEAN Result;
 
     PAGED_CODE();
+
+    if (PreviousMode == KernelMode)
+    {
+        return TRUE;
+    }
+
+#ifdef _M_ARM64
+    DPRINT1("[arm64][se] SeSinglePrivilegeCheck: capture privilege=%lu mode=%d\n",
+            PrivilegeValue.LowPart, PreviousMode);
+#endif
 
     SeCaptureSubjectContext(&SubjectContext);
 
@@ -807,7 +817,7 @@ SeCheckPrivilegedObject(
     _In_ KPROCESSOR_MODE PreviousMode)
 {
     SECURITY_SUBJECT_CONTEXT SubjectContext;
-    PRIVILEGE_SET Priv;
+    PRIVILEGE_SET DECLSPEC_ALIGN(8) Priv;
     BOOLEAN Result;
 
     PAGED_CODE();
