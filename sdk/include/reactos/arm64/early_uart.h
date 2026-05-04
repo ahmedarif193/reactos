@@ -35,6 +35,19 @@ typedef enum _ARM64_PLATFORM_ID
 } ARM64_PLATFORM_ID;
 
 /*
+ * UART register interface type.
+ * Detected at runtime from ACPI SPCR where available, otherwise inferred
+ * from known platform addresses.
+ */
+typedef enum _ARM64_UART_INTERFACE
+{
+    Arm64UartUnknown = 0,
+    Arm64UartPl011,
+    Arm64UartNs16550,
+    Arm64UartMax
+} ARM64_UART_INTERFACE;
+
+/*
  * Known UART base addresses for various platforms.
  * These are physical addresses.
  */
@@ -63,6 +76,15 @@ typedef enum _ARM64_PLATFORM_ID
 #define ARM64_PL011_FR_BUSY         (1U << 3)   /* UART Busy */
 
 /*
+ * NS16550-compatible UART register offsets and bits.
+ */
+#define ARM64_NS16550_RBR           0x000   /* Receive Buffer Register */
+#define ARM64_NS16550_THR           0x000   /* Transmit Holding Register */
+#define ARM64_NS16550_LSR           0x005   /* Line Status Register */
+#define ARM64_NS16550_LSR_DR        0x01    /* Data Ready */
+#define ARM64_NS16550_LSR_THRE      0x20    /* Transmit Holding Register Empty */
+
+/*
  * Global runtime-detected UART state.
  * These are set during early boot by the detection code.
  *
@@ -73,6 +95,7 @@ typedef enum _ARM64_PLATFORM_ID
  */
 extern volatile UINT64 EarlyUartBaseAddress;
 extern volatile ARM64_PLATFORM_ID EarlyUartPlatformId;
+extern volatile ARM64_UART_INTERFACE EarlyUartInterface;
 extern volatile BOOLEAN EarlyUartInitialized;
 
 /*
@@ -106,6 +129,36 @@ extern volatile BOOLEAN EarlyUartInitialized;
 #define EARLY_UART_WRITE(offset, value) \
     (*(volatile UINT32*)(ULONG_PTR)(EarlyUartPhysToVa(EarlyUartBaseAddress) + (offset)) = (value))
 
+#define EARLY_UART_READ8(offset) \
+    (*(volatile UCHAR*)(ULONG_PTR)(EarlyUartPhysToVa(EarlyUartBaseAddress) + (offset)))
+
+#define EARLY_UART_WRITE8(offset, value) \
+    (*(volatile UCHAR*)(ULONG_PTR)(EarlyUartPhysToVa(EarlyUartBaseAddress) + (offset)) = (UCHAR)(value))
+
+static __inline ARM64_UART_INTERFACE
+EarlyUartInferInterfaceFromAddress(UINT64 Address)
+{
+    switch (Address)
+    {
+        case ARM64_UART_QEMU_VIRT:
+        case ARM64_UART_RPI3_BCM2837:
+        case ARM64_UART_RPI4_BCM2711:
+        case ARM64_UART_RPI5_BCM2712:
+            return Arm64UartPl011;
+
+        default:
+            return Arm64UartUnknown;
+    }
+}
+
+static __inline BOOLEAN
+EarlyUartReady(VOID)
+{
+    return EarlyUartInitialized &&
+           EarlyUartBaseAddress != 0 &&
+           EarlyUartInterface != Arm64UartUnknown;
+}
+
 /*
  * EarlyUartPutc - Output a single character to the early UART.
  * Waits for transmit FIFO to have space.
@@ -113,18 +166,71 @@ extern volatile BOOLEAN EarlyUartInitialized;
 static __inline VOID
 EarlyUartPutc(CHAR Ch)
 {
-    if (!EarlyUartInitialized || EarlyUartBaseAddress == 0)
+    if (!EarlyUartReady())
         return;
 
-    /* Wait until transmit FIFO is not full */
-    while (EARLY_UART_READ(ARM64_PL011_FR) & ARM64_PL011_FR_TXFF)
+    if (EarlyUartInterface == Arm64UartNs16550)
     {
-        /* Yield to reduce power consumption while waiting */
-        __asm__ __volatile__("yield");
+        while (!(EARLY_UART_READ8(ARM64_NS16550_LSR) & ARM64_NS16550_LSR_THRE))
+        {
+            __asm__ __volatile__("yield");
+        }
+
+        EARLY_UART_WRITE8(ARM64_NS16550_THR, (UCHAR)Ch);
+    }
+    else
+    {
+        while (EARLY_UART_READ(ARM64_PL011_FR) & ARM64_PL011_FR_TXFF)
+        {
+            __asm__ __volatile__("yield");
+        }
+
+        EARLY_UART_WRITE(ARM64_PL011_DR, (UINT32)(UCHAR)Ch);
+    }
+}
+
+/*
+ * EarlyUartGetc - Poll one character from the early UART.
+ * Returns TRUE when a byte was read, FALSE if no byte is available.
+ */
+static __inline BOOLEAN
+EarlyUartGetc(_Out_ UCHAR *Byte)
+{
+    if (!EarlyUartReady() || Byte == NULL)
+        return FALSE;
+
+    if (EarlyUartInterface == Arm64UartNs16550)
+    {
+        if (!(EARLY_UART_READ8(ARM64_NS16550_LSR) & ARM64_NS16550_LSR_DR))
+            return FALSE;
+
+        *Byte = EARLY_UART_READ8(ARM64_NS16550_RBR);
+    }
+    else
+    {
+        if (EARLY_UART_READ(ARM64_PL011_FR) & ARM64_PL011_FR_RXFE)
+            return FALSE;
+
+        *Byte = (UCHAR)(EARLY_UART_READ(ARM64_PL011_DR) & 0xFF);
     }
 
-    /* Write the character */
-    EARLY_UART_WRITE(ARM64_PL011_DR, (UINT32)(UCHAR)Ch);
+    return TRUE;
+}
+
+/*
+ * EarlyUartDrainReceiveFifo - Drop stale input before a protocol takes over.
+ */
+static __inline VOID
+EarlyUartDrainReceiveFifo(VOID)
+{
+    UCHAR Byte;
+    ULONG Guard;
+
+    for (Guard = 2048; Guard > 0; Guard--)
+    {
+        if (!EarlyUartGetc(&Byte))
+            break;
+    }
 }
 
 /*
@@ -134,7 +240,7 @@ EarlyUartPutc(CHAR Ch)
 static __inline VOID
 EarlyUartPuts(const CHAR *String)
 {
-    if (!EarlyUartInitialized || EarlyUartBaseAddress == 0 || !String)
+    if (!EarlyUartReady() || !String)
         return;
 
     while (*String)
@@ -155,7 +261,7 @@ EarlyUartPutHex(UINT64 Value, UINT32 Nibbles)
     static const CHAR HexDigits[] = "0123456789ABCDEF";
     INT32 Index;
 
-    if (!EarlyUartInitialized || EarlyUartBaseAddress == 0)
+    if (!EarlyUartReady())
         return;
 
     if (Nibbles > 16)
@@ -177,7 +283,7 @@ EarlyUartPutDec(UINT32 Value)
     CHAR Buffer[12];  /* Max 10 digits for 32-bit + sign + null */
     UINT32 Pos = 0;
 
-    if (!EarlyUartInitialized || EarlyUartBaseAddress == 0)
+    if (!EarlyUartReady())
         return;
 
     if (Value == 0)
@@ -236,6 +342,11 @@ EarlyUartDetectPlatform(VOID);
 BOOLEAN
 EarlyUartInitialize(UINT64 UartBaseOverride);
 
+BOOLEAN
+EarlyUartInitializeWithInterface(
+    UINT64 UartBaseOverride,
+    ARM64_UART_INTERFACE UartInterfaceOverride);
+
 /*
  * EarlyUartGetBaseAddress - Get the detected UART base address.
  * Returns 0 if not yet detected or detection failed.
@@ -253,6 +364,12 @@ static __inline ARM64_PLATFORM_ID
 EarlyUartGetPlatformId(VOID)
 {
     return EarlyUartPlatformId;
+}
+
+static __inline ARM64_UART_INTERFACE
+EarlyUartGetInterface(VOID)
+{
+    return EarlyUartInterface;
 }
 
 /*

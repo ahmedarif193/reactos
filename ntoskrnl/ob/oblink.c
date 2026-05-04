@@ -25,7 +25,8 @@ ObpProcessDosDeviceSymbolicLink(IN POBJECT_SYMBOLIC_LINK SymbolicLink,
                                 IN BOOLEAN DeleteLink)
 {
     PDEVICE_MAP DeviceMap;
-    UNICODE_STRING TargetPath, LocalTarget;
+    UNICODE_STRING DECLSPEC_ALIGN(8) TargetPath;
+    UNICODE_STRING DECLSPEC_ALIGN(8) LocalTarget;
     POBJECT_DIRECTORY NameDirectory, DirectoryObject;
     ULONG MaxReparse;
     OBP_LOOKUP_CONTEXT LookupContext;
@@ -112,7 +113,9 @@ ReparseTargetPath:
             }
 
             /* Remember the current component of the target path */
-            TargetPath = LocalTarget;
+            TargetPath.Length = LocalTarget.Length;
+            TargetPath.MaximumLength = LocalTarget.MaximumLength;
+            TargetPath.Buffer = LocalTarget.Buffer;
 
             /* Move forward to the next component of the target path */
             if (LocalTarget.Length != 0)

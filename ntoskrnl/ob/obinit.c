@@ -11,8 +11,13 @@
 /* INCLUDES ******************************************************************/
 
 #include <ntoskrnl.h>
+#include <reactos/unaligned.h>
 #define NDEBUG
 #include <debug.h>
+
+#ifdef _M_ARM64
+extern VOID KiArm64RawPuts(const char *s);
+#endif
 
 /* GLOBALS *******************************************************************/
 
@@ -69,6 +74,10 @@ ObpCreateKernelObjectsSD(OUT PSECURITY_DESCRIPTOR *SecurityDescriptor)
     ULONG AclSize, SdSize;
     NTSTATUS Status;
 
+#ifdef _M_ARM64
+    KiArm64RawPuts("[obinit] KernelObjectsSD begin\n");
+#endif
+
     AclSize = sizeof(ACL) +
               sizeof(ACE) + RtlLengthSid(SeWorldSid) +
               sizeof(ACE) + RtlLengthSid(SeAliasAdminsSid) +
@@ -78,6 +87,9 @@ ObpCreateKernelObjectsSD(OUT PSECURITY_DESCRIPTOR *SecurityDescriptor)
 
     /* Allocate the SD and ACL */
     Sd = ExAllocatePoolWithTag(PagedPool, SdSize, TAG_SD);
+#ifdef _M_ARM64
+    KiArm64RawPuts("[obinit] KernelObjectsSD allocated\n");
+#endif
     if (Sd == NULL)
     {
         return STATUS_INSUFFICIENT_RESOURCES;
@@ -86,6 +98,9 @@ ObpCreateKernelObjectsSD(OUT PSECURITY_DESCRIPTOR *SecurityDescriptor)
     /* Initialize the SD */
     Status = RtlCreateSecurityDescriptor(Sd,
                                          SECURITY_DESCRIPTOR_REVISION);
+#ifdef _M_ARM64
+    KiArm64RawPuts("[obinit] KernelObjectsSD descriptor created\n");
+#endif
     if (!NT_SUCCESS(Status))
         goto done;
 
@@ -93,32 +108,55 @@ ObpCreateKernelObjectsSD(OUT PSECURITY_DESCRIPTOR *SecurityDescriptor)
 
     /* Initialize the DACL */
     RtlCreateAcl(Dacl, AclSize, ACL_REVISION);
+#ifdef _M_ARM64
+    KiArm64RawPuts("[obinit] KernelObjectsSD acl created\n");
+#endif
 
     /* Add the ACEs */
     RtlAddAccessAllowedAce(Dacl,
                            ACL_REVISION,
                            GENERIC_READ,
                            SeWorldSid);
+#ifdef _M_ARM64
+    KiArm64RawPuts("[obinit] KernelObjectsSD world ace added\n");
+#endif
 
     RtlAddAccessAllowedAce(Dacl,
                            ACL_REVISION,
                            GENERIC_ALL,
                            SeAliasAdminsSid);
+#ifdef _M_ARM64
+    KiArm64RawPuts("[obinit] KernelObjectsSD admins ace added\n");
+#endif
 
     RtlAddAccessAllowedAce(Dacl,
                            ACL_REVISION,
                            GENERIC_ALL,
                            SeLocalSystemSid);
+#ifdef _M_ARM64
+    KiArm64RawPuts("[obinit] KernelObjectsSD system ace added\n");
+#endif
 
     /* Attach the DACL to the SD */
     Status = RtlSetDaclSecurityDescriptor(Sd,
                                           TRUE,
                                           Dacl,
                                           FALSE);
+#ifdef _M_ARM64
+    KiArm64RawPuts("[obinit] KernelObjectsSD dacl attached\n");
+#endif
     if (!NT_SUCCESS(Status))
         goto done;
 
+#ifdef _M_ARM64
+    WriteUnalignedUlongPtr((ULONG_PTR*)SecurityDescriptor, (ULONG_PTR)Sd);
+#else
     *SecurityDescriptor = Sd;
+#endif
+
+#ifdef _M_ARM64
+    KiArm64RawPuts("[obinit] KernelObjectsSD output stored\n");
+#endif
 
 done:
     if (!NT_SUCCESS(Status))
@@ -310,8 +348,16 @@ ObInitSystem(VOID)
 
 ObPostPhase0:
 
+#ifdef _M_ARM64
+    KiArm64RawPuts("[obinit] phase1 begin\n");
+#endif
+
     /* Re-initialize lookaside lists */
     ObInit2();
+
+#ifdef _M_ARM64
+    KiArm64RawPuts("[obinit] lookaside ready\n");
+#endif
 
     /* Initialize Object Types directory attributes */
     RtlInitUnicodeString(&Name, L"\\");
@@ -322,26 +368,50 @@ ObPostPhase0:
                                SePublicDefaultUnrestrictedSd);
 
     /* Create the directory */
+#ifdef _M_ARM64
+    KiArm64RawPuts("[obinit] create root directory\n");
+#endif
     Status = NtCreateDirectoryObject(&Handle,
                                      DIRECTORY_ALL_ACCESS,
                                      &ObjectAttributes);
+#ifdef _M_ARM64
+    KiArm64RawPuts("[obinit] create root directory returned\n");
+#endif
     if (!NT_SUCCESS(Status)) return FALSE;
 
     /* Get a handle to it */
+#ifdef _M_ARM64
+    KiArm64RawPuts("[obinit] reference root directory\n");
+#endif
     Status = ObReferenceObjectByHandle(Handle,
                                        0,
                                        ObpDirectoryObjectType,
                                        KernelMode,
                                        (PVOID*)&ObpRootDirectoryObject,
                                        NULL);
+#ifdef _M_ARM64
+    KiArm64RawPuts("[obinit] reference root directory returned\n");
+#endif
     if (!NT_SUCCESS(Status)) return FALSE;
 
     /* Close the extra handle */
+#ifdef _M_ARM64
+    KiArm64RawPuts("[obinit] close root handle\n");
+#endif
     Status = NtClose(Handle);
+#ifdef _M_ARM64
+    KiArm64RawPuts("[obinit] close root handle returned\n");
+#endif
     if (!NT_SUCCESS(Status)) return FALSE;
 
     /* Create a custom security descriptor for the KernelObjects directory */
+#ifdef _M_ARM64
+    KiArm64RawPuts("[obinit] create KernelObjects SD\n");
+#endif
     Status = ObpCreateKernelObjectsSD(&KernelObjectsSD);
+#ifdef _M_ARM64
+    KiArm64RawPuts("[obinit] create KernelObjects SD returned\n");
+#endif
     if (!NT_SUCCESS(Status))
         return FALSE;
 
@@ -354,14 +424,26 @@ ObPostPhase0:
                                KernelObjectsSD);
 
     /* Create the directory */
+#ifdef _M_ARM64
+    KiArm64RawPuts("[obinit] create KernelObjects directory\n");
+#endif
     Status = NtCreateDirectoryObject(&Handle,
                                      DIRECTORY_ALL_ACCESS,
                                      &ObjectAttributes);
+#ifdef _M_ARM64
+    KiArm64RawPuts("[obinit] create KernelObjects directory returned\n");
+#endif
     ExFreePoolWithTag(KernelObjectsSD, TAG_SD);
     if (!NT_SUCCESS(Status)) return FALSE;
 
     /* Close the extra handle */
+#ifdef _M_ARM64
+    KiArm64RawPuts("[obinit] close KernelObjects handle\n");
+#endif
     Status = NtClose(Handle);
+#ifdef _M_ARM64
+    KiArm64RawPuts("[obinit] close KernelObjects handle returned\n");
+#endif
     if (!NT_SUCCESS(Status)) return FALSE;
 
     /* Initialize ObjectTypes directory attributes */
@@ -373,25 +455,46 @@ ObPostPhase0:
                                NULL);
 
     /* Create the directory */
+#ifdef _M_ARM64
+    KiArm64RawPuts("[obinit] create ObjectTypes directory\n");
+#endif
     Status = NtCreateDirectoryObject(&Handle,
                                      DIRECTORY_ALL_ACCESS,
                                      &ObjectAttributes);
+#ifdef _M_ARM64
+    KiArm64RawPuts("[obinit] create ObjectTypes directory returned\n");
+#endif
     if (!NT_SUCCESS(Status)) return FALSE;
 
     /* Get a handle to it */
+#ifdef _M_ARM64
+    KiArm64RawPuts("[obinit] reference ObjectTypes directory\n");
+#endif
     Status = ObReferenceObjectByHandle(Handle,
                                        0,
                                        ObpDirectoryObjectType,
                                        KernelMode,
                                        (PVOID*)&ObpTypeDirectoryObject,
                                        NULL);
+#ifdef _M_ARM64
+    KiArm64RawPuts("[obinit] reference ObjectTypes directory returned\n");
+#endif
     if (!NT_SUCCESS(Status)) return FALSE;
 
     /* Close the extra handle */
+#ifdef _M_ARM64
+    KiArm64RawPuts("[obinit] close ObjectTypes handle\n");
+#endif
     Status = NtClose(Handle);
+#ifdef _M_ARM64
+    KiArm64RawPuts("[obinit] close ObjectTypes handle returned\n");
+#endif
     if (!NT_SUCCESS(Status)) return FALSE;
 
     /* Initialize the lookup context and lock it */
+#ifdef _M_ARM64
+    KiArm64RawPuts("[obinit] insert object types begin\n");
+#endif
     ObpInitializeLookupContext(&Context);
     ObpAcquireLookupContextLock(&Context, ObpTypeDirectoryObject);
 
@@ -433,8 +536,18 @@ ObPostPhase0:
     /* Cleanup after lookup */
     ObpReleaseLookupContext(&Context);
 
+#ifdef _M_ARM64
+    KiArm64RawPuts("[obinit] insert object types end\n");
+#endif
+
     /* Initialize DOS Devices Directory and related Symbolic Links */
+#ifdef _M_ARM64
+    KiArm64RawPuts("[obinit] create DOS devices begin\n");
+#endif
     Status = ObpCreateDosDevicesDirectory();
+#ifdef _M_ARM64
+    KiArm64RawPuts("[obinit] create DOS devices returned\n");
+#endif
     if (!NT_SUCCESS(Status)) return FALSE;
     return TRUE;
 }

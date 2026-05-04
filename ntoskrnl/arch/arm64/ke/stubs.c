@@ -222,7 +222,13 @@ MMPDE ValidKernelPde = {
 };
 MMPTE DemandZeroPte = {.u.Long = (MM_READWRITE << MM_PTE_SOFTWARE_PROTECTION_BITS)};
 MMPDE DemandZeroPde = {.u.Long = (MM_READWRITE << MM_PTE_SOFTWARE_PROTECTION_BITS)};
-MMPTE PrototypePte = {.u.Long = (MM_READWRITE << MM_PTE_SOFTWARE_PROTECTION_BITS) | PTE_PROTOTYPE | (MI_PTE_LOOKUP_NEEDED << PAGE_SHIFT)};
+MMPTE PrototypePte = {
+    .u.Soft = {
+        .Protection = MM_READWRITE,
+        .Prototype = 1,
+        .PageFileHigh = MI_PTE_LOOKUP_NEEDED,
+    }
+};
 MMPTE ValidKernelPteLocal = {
     .u.Hard = {
         .Valid = 1,
@@ -344,23 +350,6 @@ KeRaiseUserException(
         OldPc = TrapFrame->Pc;
         TrapFrame->Pc = (ULONG64)(ULONG_PTR)UserRaiseExceptionDispatcher;
         return (NTSTATUS)OldPc;
-    }
-}
-
-VOID
-NTAPI
-RtlGetCallersAddress(
-    _Out_opt_ PVOID *CallersAddress,
-    _Out_opt_ PVOID *CallersCaller)
-{
-    if (CallersAddress != NULL)
-    {
-        *CallersAddress = NULL;
-    }
-
-    if (CallersCaller != NULL)
-    {
-        *CallersCaller = NULL;
     }
 }
 
