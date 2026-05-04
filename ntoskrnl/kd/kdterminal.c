@@ -50,6 +50,8 @@ static CHAR KdTermNextKey = ANSI_NULL; /* 1-character input queue buffer */
 BOOLEAN
 KdpInitTerminal(VOID)
 {
+    BOOLEAN QuerySerialTerminal;
+
     /* Determine whether the controlling terminal is a serial terminal:
      * serial output is enabled *and* KDSERIAL is set (i.e. user input
      * through serial). */
@@ -63,11 +65,12 @@ KdpInitTerminal(VOID)
     KdpDebugMode.Serial &&
     ((KdbDebugState & KD_DEBUG_KDSERIAL) || !KdpDebugMode.Screen);
 #endif
+    QuerySerialTerminal = ((KdbDebugState & KD_DEBUG_KDSERIAL) != 0);
 
     /* Flush the input buffer */
     KdpFlushTerminalInput();
 
-    if (KdTermSerial)
+    if (KdTermSerial && QuerySerialTerminal)
     {
         ULONG Length;
 
@@ -98,7 +101,7 @@ KdpInitTerminal(VOID)
     }
     else
     {
-        /* Terminal is not serial, assume it's *not* connected */
+        /* No terminal probe is possible, assume it's *not* connected */
         KdTermConnected = FALSE;
     }
     return KdTermConnected;
@@ -197,7 +200,7 @@ VOID
 KdpFlushTerminalInput(VOID)
 {
     KdTermNextKey = ANSI_NULL;
-    if (KdbDebugState & KD_DEBUG_KDSERIAL)
+    if (KdTermSerial)
     {
         while (KdbpTryGetCharSerial(1) != -1);
     }
@@ -221,7 +224,7 @@ KdpReadTermKey(
 
     *ScanCode = 0;
 
-    if (KdbDebugState & KD_DEBUG_KDSERIAL)
+    if (KdTermSerial)
     {
         Key = (!KdTermNextKey ? KdbpGetCharSerial() : KdTermNextKey);
         KdTermNextKey = ANSI_NULL;
@@ -262,7 +265,7 @@ KdpReadTermKey(
          */
         KeStallExecutionProcessor(100000);
 
-        if (KdbDebugState & KD_DEBUG_KDSERIAL)
+        if (KdTermSerial)
             KdTermNextKey = KdbpTryGetCharSerial(5);
         else
             KdTermNextKey = KdbpTryGetCharKeyboard(ScanCode, 5);

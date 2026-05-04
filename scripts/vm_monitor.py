@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 VM Monitor Script
-Builds livecd, starts VM (VirtualBox or QEMU) and monitors for stalls.
+Builds reactosimg, starts VM (VirtualBox or QEMU) and monitors for stalls.
 If log stops updating for more than 6 seconds, or total runtime exceeds 30 seconds,
 forcefully stops the VM.
 
@@ -22,15 +22,15 @@ import atexit
 import argparse
 import shutil
 import platform
+import re
+import bisect
+import glob
 
 # Configuration (never change those values)
-LOG_FILE = "/tmp/v.log"
-STALL_TIMEOUT = 6   # Log inactivity timeout
-HARD_TIMEOUT = 20   # Total maximum runtime seconds
-VM_NAME = "testWin11"
-BOOT_SUCCESS_MARKER = "Attempting to call RegisterClassNameW in comctl32.dll"
-BOOT_SUCCESS_STATUS = "BOOT_SUCCESS"
-BOOT_FAILURE_STATUS = "BOOT_FAILURE"
+LOG_FILE = "/tmp/freeldr_arm64.log"
+STALL_TIMEOUT = int(os.environ.get("ROS_VM_STALL_TIMEOUT", "10"))
+HARD_TIMEOUT = int(os.environ.get("ROS_VM_HARD_TIMEOUT", "30"))
+VM_NAME = os.environ.get("ROS_VM_NAME", "ROS11")
 
 def get_build_dir():
     """
@@ -53,6 +53,7 @@ def get_build_dir():
 
 BUILD_DIR = get_build_dir()
 FAT32_IMG = os.path.join(BUILD_DIR, "fat32.img")
+REACTOS_IMG = os.path.realpath(os.path.join(BUILD_DIR, "ReactOS.img"))
 
 # UEFI firmware paths - architecture dependent
 OVMF_ENV_CODE_VARS = ["REACTOS_OVMF_CODE", "OVMF_CODE"]
@@ -205,6 +206,134 @@ def create_fat32_img():
         return False
 
 
+def resolve_process_path(path, process_cwd):
+    """Resolve a path as the target process would have resolved it."""
+    if os.path.isabs(path):
+        return os.path.realpath(path)
+    if process_cwd:
+        return os.path.realpath(os.path.join(process_cwd, path))
+    return os.path.realpath(path)
+
+
+def qemu_cmdline_uses_image(cmdline, image_path, process_cwd=None):
+    """Return True if a QEMU command line references the exact image path."""
+    if not cmdline:
+        return False
+
+    exe_name = os.path.basename(cmdline[0])
+    if not exe_name.startswith("qemu-system-"):
+        return False
+
+    image_real = os.path.realpath(image_path)
+    for arg in cmdline[1:]:
+        if arg == image_path or resolve_process_path(arg, process_cwd) == image_real:
+            return True
+
+        for item in arg.split(","):
+            if item.startswith("file="):
+                candidate = item.split("=", 1)[1]
+                if resolve_process_path(candidate, process_cwd) == image_real:
+                    return True
+
+            if item.startswith("file:"):
+                candidate = item.split(":", 1)[1]
+                if resolve_process_path(candidate, process_cwd) == image_real:
+                    return True
+
+        if arg.startswith("-drive") and f"file={image_path}" in arg:
+            for item in arg.split(","):
+                if item.startswith("file=") and resolve_process_path(item.split("=", 1)[1], process_cwd) == image_real:
+                    return True
+
+        if arg.startswith("-hda=") or arg.startswith("-cdrom="):
+            candidate = arg.split("=", 1)[1]
+            if resolve_process_path(candidate, process_cwd) == image_real:
+                return True
+
+    return False
+
+
+def read_process_cmdline(pid):
+    """Read a process command line from /proc, returning [] if unavailable."""
+    try:
+        with open(f"/proc/{pid}/cmdline", "rb") as f:
+            raw = f.read()
+    except OSError:
+        return []
+
+    return [part.decode(errors="replace") for part in raw.split(b"\0") if part]
+
+
+def read_process_cwd(pid):
+    """Read a process cwd from /proc, returning None if unavailable."""
+    try:
+        return os.readlink(f"/proc/{pid}/cwd")
+    except OSError:
+        return None
+
+
+def find_qemu_pids_for_image(image_path):
+    """Find QEMU processes that use the specified OS image."""
+    pids = []
+    proc_root = "/proc"
+    if not os.path.isdir(proc_root):
+        return pids
+
+    current_pid = os.getpid()
+    for entry in os.listdir(proc_root):
+        if not entry.isdigit():
+            continue
+
+        pid = int(entry)
+        if pid == current_pid:
+            continue
+
+        cmdline = read_process_cmdline(pid)
+        process_cwd = read_process_cwd(pid)
+        if qemu_cmdline_uses_image(cmdline, image_path, process_cwd):
+            pids.append((pid, cmdline))
+
+    return pids
+
+
+def process_is_running(pid):
+    try:
+        os.kill(pid, 0)
+        return True
+    except OSError:
+        return False
+
+
+def kill_qemu_for_image(image_path, reason):
+    """Kill only QEMU processes that are using the ReactOS image for this build."""
+    matches = find_qemu_pids_for_image(image_path)
+    if not matches:
+        print(f"No existing QEMU process found for {image_path}.")
+        return
+
+    print(f"Stopping {len(matches)} QEMU process(es) for {image_path} ({reason})...")
+    for pid, cmdline in matches:
+        print(f"  PID {pid}: {' '.join(cmdline)}")
+        try:
+            os.kill(pid, signal.SIGTERM)
+        except OSError as e:
+            print(f"  Warning: failed to terminate PID {pid}: {e}")
+
+    deadline = time.time() + 5
+    while time.time() < deadline:
+        if not any(process_is_running(pid) for pid, _ in matches):
+            return
+        time.sleep(0.1)
+
+    for pid, _ in matches:
+        if process_is_running(pid):
+            try:
+                print(f"  PID {pid} did not exit; sending SIGKILL")
+                os.kill(pid, signal.SIGKILL)
+            except OSError as e:
+                print(f"  Warning: failed to kill PID {pid}: {e}")
+
+
 def force_kill_vm():
     """Forcefully kill VM - called on exit."""
     global qemu_process, use_qemu
@@ -219,11 +348,7 @@ def force_kill_vm():
                     qemu_process.kill()
                 except Exception:
                     pass
-        try:
-            subprocess.run(["pkill", "-9", "-f", "qemu-system.*livecd.iso"],
-                          stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=5)
-        except Exception:
-            pass
+        kill_qemu_for_image(REACTOS_IMG, "monitor cleanup")
     else:
         try:
             subprocess.run(
@@ -236,12 +361,20 @@ def force_kill_vm():
             pass
 
 
-def build_livecd():
-    """Build livecd using ninja before starting VM."""
-    print(f"Building livecd in {BUILD_DIR}...")
+def build_reactosimg():
+    """Build reactosimg using ninja before starting VM."""
+    global target_arch
+
+    # Detect architecture first if not set
+    if target_arch == "amd64":
+        build_dir_lower = BUILD_DIR.lower()
+        if "arm64" in build_dir_lower or "aarch64" in build_dir_lower:
+            target_arch = "arm64"
+
+    print(f"Building reactosimg in {BUILD_DIR}...")
     try:
         result = subprocess.run(
-            ["ninja", "livecd"],
+            ["ninja", "reactosimg"],
             cwd=BUILD_DIR,
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
@@ -249,20 +382,22 @@ def build_livecd():
         )
         if result.returncode != 0:
             print(f"Build failed with return code {result.returncode}")
+            if result.stdout:
+                print(result.stdout.decode(errors="replace"))
             return False
         print("Build completed successfully.")
         return True
     except Exception as e:
-        print(f"Error building livecd: {e}")
+        print(f"Error building reactosimg: {e}")
         return False
 
 
-def start_qemu(rpi_mode=False, smp_cores=1):
+def start_qemu(rpi_mode=False, smp=4):
     """Start QEMU based on architecture."""
     global qemu_process, target_arch
 
-    livecd_path = os.path.join(BUILD_DIR, "livecd.iso")
-    
+    img_path = REACTOS_IMG
+
     # Reset log file
     try:
         open(LOG_FILE, 'w').close()
@@ -274,101 +409,108 @@ def start_qemu(rpi_mode=False, smp_cores=1):
     if target_arch == "arm64":
         is_darwin = platform.system() == "Darwin"
         if rpi_mode:
-            mode_str = "RPI emulation (cortex-a76)"
+            mode_str = f"RPI emulation (cortex-a76, {smp} cores)"
         else:
-            mode_str = "HVF accelerated (max)" if is_darwin else "CPU max"
+            mode_str = f"HVF accelerated (max, {smp} cores)" if is_darwin else f"CPU max ({smp} cores)"
         print(f"Starting QEMU (ARM64 - {mode_str})...")
-        print(f"  SMP cores: {smp_cores}")
 
         # Darwin-specific configuration (macOS)
         if is_darwin:
             if rpi_mode:
                 # Raspberry Pi emulation mode (cortex-a76, no HVF)
+                # Use -serial stdio with stdout redirect instead of -serial file:
+                # because -serial file: has buffering issues on macOS QEMU
                 qemu_cmd = [
                     "qemu-system-aarch64",
-                    "-smp", str(smp_cores),
+                    "-smp", str(smp),
                     "-device", "ramfb",
                     "-machine", "virt,gic-version=3",
                     "-cpu", "cortex-a76",
                     "-m", "4G",
                     "-drive", "if=pflash,format=raw,readonly=on,file=/opt/homebrew/share/qemu/edk2-aarch64-code.fd",
-                    "-drive", f"if=virtio,media=cdrom,readonly=on,file={livecd_path}",
+                    "-drive", f"file={img_path}",
                     "-boot", "order=d,menu=on",
                     "-display", "none",
-                    "-serial", f"file:{LOG_FILE}",
-                    "-device", "qemu-xhci,id=xhci",
-                    "-device", "usb-kbd,bus=xhci.0",
-                    "-device", "usb-mouse,bus=xhci.0"
+                    "-serial", "stdio"
                 ]
             else:
                 # HVF accelerated mode (max CPU features)
                 qemu_cmd = [
                     "qemu-system-aarch64",
                     "-accel", "hvf",
-                    "-smp", str(smp_cores),
+                    "-smp", str(smp),
                     "-device", "ramfb",
                     "-machine", "virt,gic-version=3",
                     "-cpu", "max",
                     "-m", "4G",
                     "-drive", "if=pflash,format=raw,readonly=on,file=/opt/homebrew/share/qemu/edk2-aarch64-code.fd",
-                    "-drive", f"if=virtio,media=cdrom,readonly=on,file={livecd_path}",
+                    "-drive", f"file={img_path}",
                     "-boot", "order=d,menu=on",
                     "-display", "none",
-                    "-serial", f"file:{LOG_FILE}",
-                    "-device", "qemu-xhci,id=xhci",
-                    "-device", "usb-kbd,bus=xhci.0",
-                    "-device", "usb-mouse,bus=xhci.0"
+                    "-serial", f"file:{LOG_FILE}"
                 ]
         else:
             # Linux/other systems
+            # Dual-attach strategy:
+            #   1. VirtIO drive  → UEFI can enumerate and boot from it
+            #   2. AHCI + ide-cd → storahci.sys is a BOOT driver; it creates
+            #      \Device\CdRom0 during IopInitializeBootDrivers, so
+            #      IopCreateArcNames can map the ARC name and \SystemRoot
+            #      is resolved before system drivers try to load.
+            # Without the virtio drive UEFI has nothing to boot from.
+            # Without the AHCI drive ReactOS has no boot-class CD driver →
+            # deadlock (virtio-blk.sys is SYSTEM-start, not BOOT-start).
             if rpi_mode:
-                # Raspberry Pi emulation mode
+                # Raspberry Pi emulation mode (cortex-a76, no KVM)
                 qemu_cmd = [
                     "qemu-system-aarch64",
-                    "-smp", str(smp_cores),
+                    "-smp", str(smp),
                     "-device", "ramfb",
                     "-machine", "virt,gic-version=3",
                     "-cpu", "cortex-a76",
                     "-m", "4G",
                     "-bios", "/usr/share/qemu-efi-aarch64/QEMU_EFI.fd",
-                    "-drive", f"if=virtio,media=cdrom,readonly=on,file={livecd_path}",
-                    "-boot", "order=d,menu=on",
+                    "-drive", f"file={img_path}",
                     "-display", "none",
-                    "-serial", f"file:{LOG_FILE}",
-                    "-device", "qemu-xhci,id=xhci",
-                    "-device", "usb-kbd,bus=xhci.0",
-                    "-device", "usb-mouse,bus=xhci.0"
+                    "-serial", "stdio"
                 ]
             else:
                 # Default accelerated mode
                 qemu_cmd = [
                     "qemu-system-aarch64",
-                    "-smp", str(smp_cores),
+                    "-smp", str(smp),
                     "-device", "ramfb",
                     "-machine", "virt,gic-version=3",
                     "-cpu", "max",
                     "-m", "4G",
                     "-bios", "/usr/share/qemu-efi-aarch64/QEMU_EFI.fd",
-                    "-drive", f"if=virtio,media=cdrom,readonly=on,file={livecd_path}",
-                    "-boot", "order=d,menu=on",
+                    "-drive", f"file={img_path}",
                     "-display", "none",
-                    "-serial", f"file:{LOG_FILE}",
-                    "-device", "qemu-xhci,id=xhci",
-                    "-device", "usb-kbd,bus=xhci.0",
-                    "-device", "usb-mouse,bus=xhci.0"
+                    "-serial", f"file:{LOG_FILE}"
                 ]
 
         print(f"  Command: {' '.join(qemu_cmd)}")
 
         try:
-            # Output stdout/stderr to console, but serial is redirected via the command argument
-            qemu_process = subprocess.Popen(
-                qemu_cmd,
-                cwd=BUILD_DIR,
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.STDOUT,
-                stdin=subprocess.DEVNULL
-            )
+            if rpi_mode:
+                # RPI mode: serial goes to stdio, redirect stdout to log file
+                log_fd = open(LOG_FILE, 'w')
+                qemu_process = subprocess.Popen(
+                    qemu_cmd,
+                    cwd=BUILD_DIR,
+                    stdout=log_fd,
+                    stderr=subprocess.STDOUT,
+                    stdin=subprocess.DEVNULL
+                )
+            else:
+                # Other ARM64 modes: serial goes directly to file via QEMU
+                qemu_process = subprocess.Popen(
+                    qemu_cmd,
+                    cwd=BUILD_DIR,
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.STDOUT,
+                    stdin=subprocess.DEVNULL
+                )
             print(f"QEMU ARM64 started with PID {qemu_process.pid}")
             return True
         except Exception as e:
@@ -376,13 +518,14 @@ def start_qemu(rpi_mode=False, smp_cores=1):
             return False
 
     # ---------------- X86 / X64 CONFIGURATION ----------------
-    # Linux amd64 uses a fixed legacy-style command profile; i386 uses BIOS; macOS amd64 keeps UEFI path.
-    qemu_binary = "qemu-system-i386" if target_arch == "i386" else "qemu-system-x86_64"
-    is_darwin = platform.system() == "Darwin"
-    amd64_linux_custom = (target_arch == "amd64" and not is_darwin)
-    use_uefi = (target_arch != "i386") and not amd64_linux_custom
+    # i386 uses BIOS boot (no UEFI needed), amd64 uses UEFI
+    use_uefi = (target_arch != "i386")
     ovmf_code = None
     ovmf_vars = None
+
+    # Select architecture-specific settings
+    qemu_binary = "qemu-system-i386" if target_arch == "i386" else "qemu-system-x86_64"
+    is_darwin = platform.system() == "Darwin"
     darwin_amd64_simple = use_uefi and is_darwin and target_arch == "amd64"
 
     if use_uefi:
@@ -390,18 +533,14 @@ def start_qemu(rpi_mode=False, smp_cores=1):
 
     print(f"Starting QEMU ({target_arch}) with xHCI USB...")
     print(f"  QEMU binary: {qemu_binary}")
-    if amd64_linux_custom:
-        print("  Boot mode: Legacy/Custom (Linux amd64)")
-    else:
-        print(f"  Boot mode: {'UEFI' if use_uefi else 'BIOS'}")
-    print(f"  SMP cores: {smp_cores}")
+    print(f"  Boot mode: {'UEFI' if use_uefi else 'BIOS'}")
     if use_uefi:
         print(f"  OVMF CODE: {ovmf_code}")
         if darwin_amd64_simple:
             print("  OVMF VARS: (not used on macOS amd64)")
         else:
             print(f"  OVMF VARS: {ovmf_vars}")
-    print(f"  LiveCD: {livecd_path}")
+    print(f"  Disk image: {img_path}")
     print(f"  FAT32 USB disk: {FAT32_IMG}")
     print(f"  Serial output: {LOG_FILE}")
 
@@ -420,39 +559,16 @@ def start_qemu(rpi_mode=False, smp_cores=1):
     try:
         log_fd = None
 
-        if amd64_linux_custom:
-            # Linux amd64 path requested by user:
-            # qemu-system-x86_64 -enable-kvm -M q35 -no-shutdown -no-reboot -smp N -m 8G ...
-            log_fd = open(LOG_FILE, 'w')
-            qemu_cmd = [
-                qemu_binary,
-                "-M", "q35",
-                "-no-shutdown",
-                "-no-reboot",
-                "-smp", str(smp_cores),
-                "-m", "8G",
-                "-drive", "file=livecd.iso",
-                "-device", "qemu-xhci,id=xhci",
-                "-drive", "if=none,id=usbdisk,file=fat32.img",
-                "-device", "usb-storage,drive=usbdisk",
-                "-serial", "stdio",
-                "-display", "none",
-                "-device", "usb-kbd",
-                "-device", "usb-tablet",
-                "-netdev", "user,id=net0",
-                "-device", "virtio-net-pci,netdev=net0,bus=pcie.0"
-            ]
-        elif use_uefi:
+        if use_uefi:
             # Open log file for stdout redirection (UEFI uses serial stdio)
             log_fd = open(LOG_FILE, 'w')
             if darwin_amd64_simple:
-                # macOS amd64: Homebrew EDK2 code-only + IDE CD-ROM
+                # macOS amd64: Homebrew EDK2 code-only
                 qemu_cmd = [
                     qemu_binary,
                     "-M", "q35",
-                    "-smp", str(smp_cores),
                     "-m", "3G",
-                    "-drive", f"file={livecd_path},format=raw,if=ide,index=0,media=cdrom",
+                    "-drive", f"file={img_path}",
                     "-drive", f"if=pflash,format=raw,readonly=on,file={ovmf_code}",
                     "-serial", "stdio",
                     "-device", "qemu-xhci,id=usbxhci",
@@ -464,12 +580,11 @@ def start_qemu(rpi_mode=False, smp_cores=1):
                 # UEFI boot for amd64 (non-macOS defaults)
                 qemu_cmd = [
                     qemu_binary,
-                    "-smp", str(smp_cores),
+                    "-smp", "1",
                     "-m", "3G",
                     "-M", "q35",
                     "-drive", f"if=pflash,format=raw,readonly=on,file={ovmf_code}",
-                    "-cdrom", livecd_path,
-                    "-boot", "d",  # Boot from CD-ROM
+                    "-drive", f"file={img_path}",
                     "-serial", "stdio",
                     "-display", "none",
                     "-no-reboot",
@@ -485,10 +600,8 @@ def start_qemu(rpi_mode=False, smp_cores=1):
             qemu_cmd = [
                 qemu_binary,
                 "-M", "q35",
-                "-smp", str(smp_cores),
                 "-m", "3G",
-                "-drive", f"file={livecd_path},format=raw,if=ide,index=0,media=cdrom",
-                "-boot", "order=d",
+                "-drive", f"file={img_path}",
                 "-serial", f"file:{LOG_FILE}",
                 "-device", "qemu-xhci,id=xhci",
                 "-device", "usb-kbd,bus=xhci.0",
@@ -506,8 +619,8 @@ def start_qemu(rpi_mode=False, smp_cores=1):
 
         print(f"  Command: {' '.join(qemu_cmd)}")
 
-        if use_uefi or amd64_linux_custom:
-            # stdio serial mode: redirect host stdio to log file
+        if use_uefi:
+            # UEFI mode: serial goes to stdio, redirect to log file
             qemu_process = subprocess.Popen(
                 qemu_cmd,
                 cwd=BUILD_DIR,
@@ -549,10 +662,10 @@ def start_vbox():
         return False
 
 
-def start_vm(rpi_mode=False, smp_cores=1):
+def start_vm(rpi_mode=False, smp=4):
     """Start the VM (QEMU or VirtualBox)."""
     if use_qemu:
-        return start_qemu(rpi_mode, smp_cores)
+        return start_qemu(rpi_mode, smp=smp)
     else:
         return start_vbox()
 
@@ -575,55 +688,426 @@ def check_log_contents(filepath):
         return False, False
 
 
-def append_line_to_log(filepath, line):
+def append_to_log(filepath, message):
     try:
         with open(filepath, 'a') as f:
-            f.write(f"{line}\n")
+            f.write(f"\n{'='*60}\n")
+            f.write(f"{message}\n")
+            f.write(f"{'='*60}\n")
         return True
     except Exception:
         return False
 
 
-def sanitize_log_file(filepath):
-    """Remove noisy runtime lines that should not be part of result logs."""
+def find_binary(module_name):
+    """Find the binary file for a given module name."""
+    # Remove extension for directory matching
+    base_name = os.path.splitext(module_name)[0]
+    module_lower = module_name.lower()
+
+    # Search paths
+    search_paths = [
+        os.path.join(BUILD_DIR, f"symbols/{module_name}"),
+        os.path.join(BUILD_DIR, f"symbols/{module_lower}"),
+        os.path.join(BUILD_DIR, f"{base_name}/{module_name}"),
+        os.path.join(BUILD_DIR, f"ntoskrnl/{module_name}"),
+        os.path.join(BUILD_DIR, f"win32ss/{module_name}"),
+        os.path.join(BUILD_DIR, f"drivers/win32k/{module_name}"),
+        os.path.join(BUILD_DIR, f"drivers/{base_name}/{module_name}"),
+        os.path.join(BUILD_DIR, module_name),
+    ]
+
+    for path in search_paths:
+        if os.path.exists(path):
+            return path
+
+    return None
+
+
+# Global symbol cache: module_name -> list of (rva, name) sorted by rva
+_symbol_cache = {}
+_image_base_cache = {}
+_tool_cache = {}
+
+
+def _tool_sort_key(path):
+    """Sort LLVM tool paths by version descending."""
+    match = re.search(r'/llvm-(\d+)/', path)
+    if match:
+        return int(match.group(1))
+    return 0
+
+
+def find_tool(tool_name):
+    """Find an executable tool path with LLVM versioned fallbacks."""
+    if tool_name in _tool_cache:
+        return _tool_cache[tool_name]
+
+    candidates = [tool_name]
+    for version in (21, 20, 19, 18, 17, 16, 15, 14, 13, 12):
+        candidates.append(f"{tool_name}-{version}")
+
+    for candidate in candidates:
+        tool_path = shutil.which(candidate)
+        if tool_path:
+            _tool_cache[tool_name] = tool_path
+            return tool_path
+
+    globbed = sorted(
+        glob.glob(f"/usr/lib/llvm-*/bin/{tool_name}"),
+        key=_tool_sort_key,
+        reverse=True
+    )
+    if globbed:
+        _tool_cache[tool_name] = globbed[0]
+        return globbed[0]
+
+    _tool_cache[tool_name] = None
+    return None
+
+
+def get_image_base(binary_path):
+    """Get ImageBase from PE header using llvm-readobj."""
+    if binary_path in _image_base_cache:
+        return _image_base_cache[binary_path]
+
+    # Try llvm-readobj
+    try:
+        llvm_readobj = find_tool('llvm-readobj')
+        if not llvm_readobj:
+            raise FileNotFoundError("llvm-readobj not found")
+        result = subprocess.run(
+            [llvm_readobj, '--file-headers', binary_path],
+            capture_output=True, text=True, timeout=5
+        )
+        if result.returncode == 0:
+            for line in result.stdout.split('\n'):
+                if 'ImageBase:' in line:
+                    match = re.search(r'ImageBase:\s*(0x[0-9A-Fa-f]+|\d+)', line)
+                    if match:
+                        val = match.group(1)
+                        base = int(val, 16) if val.startswith('0x') else int(val)
+                        _image_base_cache[binary_path] = base
+                        return base
+    except (subprocess.TimeoutExpired, FileNotFoundError):
+        pass
+
+    # Fallback to known values
+    known = {'ntoskrnl.exe': 0x400000, 'win32k.sys': 0x10000}
+    base = known.get(os.path.basename(binary_path), 0x10000)
+    _image_base_cache[binary_path] = base
+    return base
+
+
+def load_symbols(module_name):
+    """Load symbols for a module using llvm-nm --defined-only -n."""
+    if module_name in _symbol_cache:
+        return _symbol_cache[module_name]
+
+    binary_path = find_binary(module_name)
+    if not binary_path:
+        _symbol_cache[module_name] = []
+        return []
+
+    image_base = get_image_base(binary_path)
+
+    try:
+        llvm_nm = find_tool('llvm-nm')
+        if not llvm_nm:
+            raise FileNotFoundError("llvm-nm not found")
+        result = subprocess.run(
+            [llvm_nm, '--defined-only', '-n', binary_path],
+            capture_output=True, text=True, timeout=30
+        )
+        if result.returncode != 0:
+            _symbol_cache[module_name] = []
+            return []
+
+        symbols = []
+        for line in result.stdout.split('\n'):
+            line = line.strip()
+            if not line:
+                continue
+            parts = line.split(None, 2)
+            if len(parts) >= 3:
+                vma_str, sym_type, name = parts
+                # Only include text/function symbols, skip data/absolute/section
+                if sym_type not in ('T', 't'):
+                    continue
+                # Skip ARM mapping symbols ($x, $d, $t)
+                if name.startswith('$'):
+                    continue
+                try:
+                    vma = int(vma_str, 16)
+                    rva = vma - image_base
+                    if rva >= 0:
+                        symbols.append((rva, name))
+                except ValueError:
+                    continue
+
+        symbols.sort(key=lambda x: x[0])
+        _symbol_cache[module_name] = symbols
+        if symbols:
+            print(f"  Loaded {len(symbols)} symbols for {module_name} from {binary_path}")
+        return symbols
+
+    except (subprocess.TimeoutExpired, FileNotFoundError) as e:
+        print(f"  Warning: Could not load symbols for {module_name}: {e}")
+        _symbol_cache[module_name] = []
+        return []
+
+
+def lookup_symbol(module_name, offset, symbols=None):
+    """Look up the nearest symbol for a given RVA offset using bisect."""
+    if symbols is None:
+        symbols = load_symbols(module_name)
+    if not symbols:
+        return None
+
+    rvas = [s[0] for s in symbols]
+    idx = bisect.bisect_right(rvas, offset) - 1
+
+    if idx < 0:
+        return None
+
+    rva, name = symbols[idx]
+    delta = offset - rva
+
+    # If too far from any symbol, likely noise
+    if delta > 0x10000:
+        return None
+
+    if delta == 0:
+        return name
+    return f"{name}+0x{delta:x}"
+
+
+def translate_address_with_addr2line(binary_path, offset):
+    """Use llvm-addr2line to translate an address to function name and source location."""
+    try:
+        # Try llvm-addr2line first (better for ARM64)
+        llvm_addr2line = find_tool('llvm-addr2line')
+        if not llvm_addr2line:
+            raise FileNotFoundError("llvm-addr2line not found")
+        result = subprocess.run(
+            [llvm_addr2line, '-e', binary_path, '-f', '-C', hex(offset)],
+            capture_output=True,
+            text=True,
+            timeout=2
+        )
+        if result.returncode == 0:
+            lines = result.stdout.strip().split('\n')
+            if len(lines) >= 2 and lines[0] != '??':
+                func_name = lines[0]
+                source_loc = lines[1] if len(lines) > 1 else '??:0'
+                return func_name, source_loc
+    except (subprocess.TimeoutExpired, FileNotFoundError):
+        pass
+
+    # Try regular addr2line as fallback
+    try:
+        addr2line = shutil.which('addr2line')
+        if not addr2line:
+            raise FileNotFoundError("addr2line not found")
+        result = subprocess.run(
+            [addr2line, '-e', binary_path, '-f', '-C', hex(offset)],
+            capture_output=True,
+            text=True,
+            timeout=2
+        )
+        if result.returncode == 0:
+            lines = result.stdout.strip().split('\n')
+            if len(lines) >= 2 and lines[0] != '??':
+                func_name = lines[0]
+                source_loc = lines[1] if len(lines) > 1 else '??:0'
+                return func_name, source_loc
+    except (subprocess.TimeoutExpired, FileNotFoundError):
+        pass
+
+    return None, None
+
+
+def get_function_name(module, offset):
+    """Get function name based on known offsets."""
+    # Specific known functions (from manual analysis)
+    specific_functions = {
+        'ntoskrnl.exe': {
+            0x15dee0: 'ExLockHandleTableEntry',
+            0x9a2c8: 'ExAllocatePoolWithTag',
+            0x9ad78: 'ExAllocatePoolWithTag',
+            0x9b508: 'ExAllocatePool',
+            0x15a7d0: 'MiAllocatePoolPages',
+            0x9ec0c: 'KiSystemCallEntry64',
+            0x9ed44: 'KiSystemServiceRepeat',
+            0x42ec: 'KiExceptionDispatch',
+            0x187b18: 'ObpCreateHandle',
+            0x34c0c: 'ObCreateObject',
+            0x318ec: 'ObpAllocateObject',
+            0x982dc: 'MiAllocateWsle',
+            0x15d628: 'MiAllocatePoolPages',
+            0x186b90: 'ExpAllocateHandleTableEntry',
+            0x186cc0: 'ExpAllocateHandleTableEntrySlow',
+            0x186e58: 'ExpAllocateLowLevelTable',
+            0x13df78: 'KiSystemServiceCopyEnd',
+            0x1605bc: 'KiSystemServiceRepeat',
+            0x15f1b4: 'KiFastCallEntry',
+            0x6830: 'KiExceptionDispatchContinue',
+            0xfe148: 'MmTrimUserMemory',
+            0x187ad8: 'ObpCloseHandle',
+            0x9ee48: 'KiSystemServiceHandler',
+            0x1600f0: 'KiSystemServiceStart',
+            0x160688: 'KiSystemServiceExit',
+            0x10419c: 'NtClose',
+            0xccf28: 'ObCloseHandle',
+            0x104a5c: 'NtCreateFile',
+            0xc55d0: 'IopCreateFile',
+            0xefe2c: 'IopParseDevice',
+            0xf0338: 'IopParseFile',
+            0xf566c: 'ObpLookupObjectName',
+            0x16016c: 'KiServiceExit2',
+        },
+        'win32k.sys': {
+            0x1f178: 'NtUserCallOneParam',
+            0x1f414: 'Win32kSystemServiceDispatch',
+            0xc2108: 'UserGetProcessWindowStation',
+            0xc2280: 'IntGetAndReferenceClass',
+            0xc22c4: 'UserSetProcessWindowStation',
+            0xc2360: 'CheckWinstaAttributeAccess',
+            0xc2418: 'ONEPARAM_ROUTINE_SETPROCDEFLAYOUT',
+        }
+    }
+
+    if module in specific_functions and offset in specific_functions[module]:
+        return specific_functions[module][offset]
+
+    return None
+
+
+def sanitize_log_content(log_content):
+    """Strip ANSI/control escape sequences to improve backtrace parsing."""
+    content = re.sub(r'\x1B\[[0-?]*[ -/]*[@-~]', '', log_content)
+    content = re.sub(r'\x1B[@-_]', '', content)
+    content = content.replace('\u241b', '')
+    return content
+
+
+def parse_backtrace_frames(log_content):
+    """Extract frame tuples as (frame_addr, module, offset, offset_text)."""
+    module_offset_pattern = re.compile(
+        r'<\s*([A-Za-z0-9_.-]+\.(?:exe|sys|dll))\s*:\s*(0x[0-9A-Fa-f]+|[0-9A-Fa-f]+)\s*>',
+        re.IGNORECASE
+    )
+    frame_addr_pattern = re.compile(r'~?\[([0-9A-Fa-f]{8,16})\]')
+
+    frames = []
+    for raw_line in sanitize_log_content(log_content).splitlines():
+        line = raw_line.strip()
+        if not line:
+            continue
+
+        frame_match = frame_addr_pattern.search(line)
+        frame_addr = frame_match.group(1) if frame_match else "????????????????"
+
+        for mod_match in module_offset_pattern.finditer(line):
+            module_name = mod_match.group(1).lower()
+            offset_text = mod_match.group(2)
+            try:
+                offset_value = int(offset_text, 16)
+            except ValueError:
+                continue
+            frames.append((frame_addr, module_name, offset_value, offset_text))
+
+    return frames
+
+
+def normalize_offset(module_name, offset, symbols):
+    """Normalize module offset to an RVA if a VA was provided."""
+    if not symbols:
+        return offset
+
+    max_rva = symbols[-1][0]
+    if offset <= (max_rva + 0x10000):
+        return offset
+
+    binary_path = find_binary(module_name)
+    if not binary_path:
+        return offset
+
+    image_base = get_image_base(binary_path)
+    if offset < image_base:
+        return offset
+
+    candidate_rva = offset - image_base
+    if 0 <= candidate_rva <= (max_rva + 0x10000):
+        return candidate_rva
+
+    return offset
+
+
+def translate_backtrace(log_content):
+    """
+    Parse and translate backtraces found in the log content.
+    Returns a translated backtrace string or None if no backtrace found.
+    """
+    frames = parse_backtrace_frames(log_content)
+    if not frames:
+        return None
+
+    result = []
+    result.append("\nBACKTRACE TRANSLATION")
+    result.append("Backtrace:")
+
+    for addr, module, offset, offset_text in frames:
+        symbols = load_symbols(module)
+        normalized = normalize_offset(module, offset, symbols)
+
+        # Try llvm-nm symbols first, then hardcoded table
+        sym = lookup_symbol(module, normalized, symbols)
+        if not sym:
+            sym = get_function_name(module, normalized)
+
+        binary_path = find_binary(module)
+        source = None
+        if binary_path:
+            image_base = get_image_base(binary_path)
+            va = normalized + image_base
+            _, source = translate_address_with_addr2line(binary_path, va)
+            if source in ("??:0", "??:?"):
+                source = None
+
+        if sym:
+            if source:
+                result.append(f"  [{addr}] <{module}:{offset_text}> {sym} ({source})")
+            else:
+                result.append(f"  [{addr}] <{module}:{offset_text}> {sym}")
+        else:
+            result.append(f"  [{addr}] <{module}:{offset_text}>")
+
+    result.append("")  # Empty line at end
+
+    return "\n".join(result)
+
+
+def check_and_translate_backtrace(filepath):
+    """
+    Check if log contains a backtrace and translate it if found.
+    Appends translation to the log file.
+    """
     try:
         with open(filepath, 'r', errors='ignore') as f:
-            lines = f.readlines()
-    except Exception:
-        return False
+            content = f.read()
 
-    filtered = []
-    for line in lines:
-        lower = line.lower()
-        if "qemu-system-" in lower and "terminating on signal" in lower:
-            continue
-        if "stall detected after" in lower:
-            continue
-        if "ected after" in lower and "xhci=" in lower and "usb=" in lower:
-            continue
-        filtered.append(line)
+        translation = translate_backtrace(content)
+        if translation:
+            # Check if we already added translation
+            if "BACKTRACE TRANSLATION" not in content:
+                append_to_log(filepath, translation)
+                print("\n" + translation)
+                return True
+    except Exception as e:
+        print(f"Error translating backtrace: {e}")
 
-    try:
-        with open(filepath, 'w') as f:
-            f.writelines(filtered)
-        return True
-    except Exception:
-        return False
-
-
-def emit_boot_status(success):
-    status = BOOT_SUCCESS_STATUS if success else BOOT_FAILURE_STATUS
-    line = f"[{status}]"
-    print(line)
-    append_line_to_log(LOG_FILE, line)
-
-
-def has_boot_success_marker(filepath):
-    try:
-        with open(filepath, 'r', errors='ignore') as f:
-            return BOOT_SUCCESS_MARKER in f.read()
-    except Exception:
-        return False
+    return False
 
 
 def monitor_log():
@@ -668,12 +1152,16 @@ def monitor_log():
             total_runtime = time.time() - overall_start_time
             if total_runtime > HARD_TIMEOUT:
                 print(f"HARD TIMEOUT REACHED! Running for {total_runtime:.1f} seconds.")
+                # Try to translate any backtrace before exiting
+                check_and_translate_backtrace(LOG_FILE)
                 force_kill_vm()
                 return
 
             # 2. Check Process Status (QEMU only)
             if use_qemu and qemu_process and qemu_process.poll() is not None:
                 print(f"QEMU exited with code {qemu_process.returncode}")
+                # Try to translate any backtrace before exiting
+                check_and_translate_backtrace(LOG_FILE)
                 return
 
             # 3. Check Log Stall
@@ -688,9 +1176,13 @@ def monitor_log():
 
                 if stall_duration >= STALL_TIMEOUT:
                     print(f"STALL DETECTED! Log unchanged for {stall_duration:.1f} seconds")
-                    
+
+                    # Try to translate any backtrace before logging stall
+                    check_and_translate_backtrace(LOG_FILE)
+
                     has_xhci, has_usb = check_log_contents(LOG_FILE)
-                    print(f"Stall details: XHCI={has_xhci}, USB={has_usb}")
+                    stall_msg = f"Stall detected after {stall_duration:.1f}s. XHCI={has_xhci}, USB={has_usb}"
+                    append_to_log(LOG_FILE, stall_msg)
 
                     force_kill_vm()
                     return
@@ -711,11 +1203,8 @@ def main():
     parser.add_argument('--qemu', action='store_true', help='Use QEMU instead of VirtualBox')
     parser.add_argument('--vbox', action='store_true', help='Use VirtualBox (default behavior)')
     parser.add_argument('--rpi', action='store_true', help='Use Raspberry Pi emulation mode (cortex-a76, no HVF)')
-    parser.add_argument('--smp', type=int, default=1, help='Number of virtual CPU cores for QEMU (default: 1)')
+    parser.add_argument('--smp', type=int, default=4, help='Number of CPU cores (default: 4)')
     args = parser.parse_args()
-
-    if args.smp < 1:
-        parser.error("--smp must be >= 1")
 
     # --vbox is explicit but same as default (no --qemu)
     use_qemu = args.qemu and not args.vbox
@@ -739,53 +1228,27 @@ def main():
     print(f"Build directory: {BUILD_DIR}")
     print("="*60 + "\n")
 
-    if not build_livecd():
+    if not build_reactosimg():
         sys.exit(1)
 
-    # Cleanup: Stop previous QEMU instances (skip on darwin/macOS)
+    # Cleanup: Stop only previous QEMU instances using this build's OS image.
     is_darwin = platform.system() == "Darwin"
 
-    if not is_darwin:
-        if target_arch != "arm64":
-            print("Ensuring previous QEMU instances are stopped...")
-            try:
-                subprocess.run("sudo kill -9 $(pidof qemu-system-x86_64)", shell=True,
-                              stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-                subprocess.run("sudo kill -9 $(pidof qemu-system-i386)", shell=True,
-                              stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-            except Exception:
-                pass
-        else:
-            # Simple cleanup for aarch64
-            try:
-                subprocess.run("pkill -9 -f qemu-system-aarch64", shell=True,
-                              stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-            except Exception:
-                pass
+    if use_qemu and not is_darwin:
+        kill_qemu_for_image(REACTOS_IMG, "before start")
 
     if use_qemu and target_arch != "arm64":
         if not create_fat32_img():
             print("Warning: Could not create FAT32 image...")
 
-    if not start_vm(rpi_mode=args.rpi, smp_cores=args.smp):
+    if not start_vm(rpi_mode=args.rpi, smp=args.smp):
         sys.exit(1)
 
     time.sleep(2)
 
     monitor_log()
 
-    boot_succeeded = True
-    if use_qemu:
-        boot_succeeded = has_boot_success_marker(LOG_FILE)
-
     force_kill_vm()
-    sanitize_log_file(LOG_FILE)
-
-    if use_qemu:
-        emit_boot_status(boot_succeeded)
-
-    if use_qemu and not boot_succeeded:
-        sys.exit(1)
 
 
 if __name__ == "__main__":

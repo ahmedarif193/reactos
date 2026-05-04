@@ -69,7 +69,7 @@ MmMapIoSpace(IN PHYSICAL_ADDRESS PhysicalAddress,
     // FIXME: This doesn't respect PAE, but we currently don't
     // define a PAE build flag since there is no such build.
     //
-#if !defined(_M_AMD64)
+#if !defined(_M_AMD64) && !defined(_M_ARM64)
     ASSERT(PhysicalAddress.HighPart == 0);
 #endif
 
@@ -132,6 +132,12 @@ MmMapIoSpace(IN PHYSICAL_ADDRESS PhysicalAddress,
             //
             MI_PAGE_DISABLE_CACHE(&TempPte);
             MI_PAGE_WRITE_THROUGH(&TempPte);
+#if defined(_M_ARM64)
+            if (IsIoMapping)
+            {
+                MI_SET_PTE_ATTR_INDEX(&TempPte, MI_ARM64_MAIR_DEVICE_nGnRnE_IDX);
+            }
+#endif
             break;
 
         case MiCached:

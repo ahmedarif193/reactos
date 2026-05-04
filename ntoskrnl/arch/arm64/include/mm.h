@@ -41,7 +41,13 @@ extern NTKERNELAPI ULONG64 MmUserProbeAddress;
 #define PTE_EXECUTE_WRITECOPY   (ARM64_PTE_PXN | ARM64_PTE_COPY_ON_WRITE)
 #define PTE_PROTOTYPE           0x0000000000000400ULL
 
-#define PTE_ENABLE_CACHE        0x0000000000000000ULL
+/*
+ * ARM64 AttrIndx 0 is not the "cached" default: this port programs MAIR slot 0
+ * as Device-nGnRnE and slot 4 as Normal WB. Keep the generic protection masks
+ * using PTE_ENABLE_CACHE mapped to Normal WB so ordinary ARM3 mappings, kernel
+ * stacks included, do not become Device memory.
+ */
+#define PTE_ENABLE_CACHE        ARM64_PTE_CACHE_WB
 #define PTE_DISABLE_CACHE       ARM64_PTE_CACHE_UC
 #define PTE_WRITECOMBINED_CACHE ARM64_PTE_CACHE_WC
 #define PTE_PROTECT_MASK        (ARM64_PTE_PXN | ARM64_PTE_UXN | ARM64_PTE_WRITE | ARM64_PTE_COPY_ON_WRITE | ARM64_PTE_CACHE_MASK)
@@ -54,6 +60,7 @@ extern NTKERNELAPI ULONG64 MmUserProbeAddress;
 #define ARM64_PTE_TYPE_BLOCK    0x0000000000000001ULL
 #define ARM64_PTE_TYPE_PAGE     0x0000000000000003ULL
 #define ARM64_PTE_TYPE_TABLE    0x0000000000000003ULL
+#define ARM64_PTE_ADDR_MASK     0x0000FFFFFFFFF000ULL
 
 #define MI_IS_PTE_VALID_ARM64(Pte) (((Pte).u.Long & ARM64_PTE_TYPE_MASK) == ARM64_PTE_TYPE_PAGE)
 #define MI_IS_TABLE_VALID_ARM64(Pde) (((Pde).u.Long & ARM64_PTE_TYPE_MASK) == ARM64_PTE_TYPE_TABLE)
@@ -65,27 +72,10 @@ extern NTKERNELAPI ULONG64 MmUserProbeAddress;
  * kernel addresses (0xFFFF...) are translated via TTBR1_EL1. The NT Memory
  * Manager's self-map is built into TTBR1's hierarchy at L0 index 493.
  *
- * PROBLEM: MiAddressToPte(UserAddress) returns a VA in TTBR1's self-map space,
- * but that doesn't map TTBR0's page tables. The self-map only covers TTBR1.
- *
- * SOLUTION: Reserve L0 index 494 in TTBR1's hierarchy as a "TTBR0 Alias" slot.
- * This slot's L0 entry points to the current process's TTBR0 L0 page table.
- * On context switch (KiSwapProcess), we update this alias entry.
- *
- * Layout:
- *   L0[493] = Self-map recursive entry (points to TTBR1's own L0)
- *   L0[494] = TTBR0 alias entry (points to current TTBR0's L0)
- *
- * When accessing PTEs for user addresses:
- *   - Original self-map formula returns addresses in 0xFFFFF68000000000 range
- *   - We detect user-range PTEs and redirect to 0xFFFFF70000000000 range
- *   - The L0[494] alias ensures we actually walk TTBR0's page tables
- *
- * Self-map L0 index: 493 (0x1ED)
- * TTBR0 alias L0 index: 494 (0x1EE)
+ * ReactOS uses one process L0 root for both TTBR0 and TTBR1. L0[493] points
+ * back to that root and L0[494] is hyperspace, matching Windows ARM64.
  */
 #define PXE_SELFMAP_INDEX   493
-#define PXE_TTBR0_ALIAS_INDEX 494
 
 #define PXE_BASE    0xFFFFF6FB7DBED000ULL
 #define PXE_SELFMAP 0xFFFFF6FB7DBEDF68ULL
@@ -96,47 +86,6 @@ extern NTKERNELAPI ULONG64 MmUserProbeAddress;
 #define PPE_TOP     0xFFFFF6FB7DBFFFFFULL
 #define PDE_TOP     0xFFFFF6FB7FFFFFFFULL
 #define PTE_TOP     0xFFFFF6FFFFFFFFFFULL
-
-/*
- * TTBR0 Alias Self-Map Bases
- *
- * These addresses correspond to viewing TTBR0's page tables through the
- * TTBR0 alias slot at L0[494]. The derivation uses the L0-index delta from
- * the self-map base addresses.
- *
- * Derivation:
- *   delta = (PXE_TTBR0_ALIAS_INDEX - PXE_SELFMAP_INDEX) << 39
- *         = (494 - 493) << 39
- *         = 1 << 39
- *         = 0x8000000000 (512 GB)
- *
- *   PTE_BASE_TTBR0 = PTE_BASE + delta
- *                  = 0xFFFFF68000000000 + 0x8000000000
- *                  = 0xFFFFF70000000000
- *
- *   PDE_BASE_TTBR0 = PDE_BASE + delta
- *                  = 0xFFFFF6FB40000000 + 0x8000000000
- *                  = 0xFFFFF6FBC0000000
- *
- *   PPE_BASE_TTBR0 = PPE_BASE + delta
- *                  = 0xFFFFF6FB7DA00000 + 0x8000000000
- *                  = 0xFFFFF6FBFDA00000
- *
- *   PXE_BASE_TTBR0 = PXE_BASE + delta
- *                  = 0xFFFFF6FB7DBED000 + 0x8000000000
- *                  = 0xFFFFF6FBFDBED000
- *
- * For user addresses 0x0000... through 0x0000FFFFFFFFFFFF:
- *   PTE for user VA = PTE_BASE_TTBR0 + (VA >> 9)
- *
- * Note: L0[494] must be updated in KiSwapProcess to point to the new
- * process's TTBR0 L0 page table.
- */
-#define TTBR0_ALIAS_DELTA       (1ULL << 39)  /* 512 GB = (494 - 493) << 39 */
-#define PTE_BASE_TTBR0  (PTE_BASE + TTBR0_ALIAS_DELTA)  /* 0xFFFFF70000000000 */
-#define PDE_BASE_TTBR0  (PDE_BASE + TTBR0_ALIAS_DELTA)  /* 0xFFFFF6FBC0000000 */
-#define PPE_BASE_TTBR0  (PPE_BASE + TTBR0_ALIAS_DELTA)  /* 0xFFFFF6FBFDA00000 */
-#define PXE_BASE_TTBR0  (PXE_BASE + TTBR0_ALIAS_DELTA)  /* 0xFFFFF6FBFDBED000 */
 
 #define KSEG0_BASE  0xFFFF800000000000ULL
 
@@ -151,27 +100,8 @@ extern NTKERNELAPI ULONG64 MmUserProbeAddress;
 #define MI_USER_PROBE_ADDRESS           (PVOID)0x000007FFFFFE0000ULL
 #define MI_DEFAULT_SYSTEM_RANGE_START   (PVOID)0xFFFF800000000000ULL
 #define MI_REAL_SYSTEM_RANGE_START             0xFFFF800000000000ULL
-/*
- * ARM64 HYPER_SPACE Location Fix:
- *
- * PROBLEM: The original HYPER_SPACE at 0xFFFFF70000000000 overlapped with
- * PTE_BASE_TTBR0 (the TTBR0 alias region at L0[494]). This caused hyperspace
- * PTEs to be inaccessible because the self-map only properly covers L0[493].
- *
- * When MiMapPageInHyperSpace accessed MiAddressToPte(HYPER_SPACE), the
- * resulting PTE address was in a region without valid intermediate page tables,
- * causing Data Abort crashes.
- *
- * SOLUTION: Relocate HYPER_SPACE to 0xFFFFF60000000000, which is at the start
- * of L0[493] (the normal kernel self-map region). This ensures hyperspace PTEs
- * are accessible through the standard self-map mechanism.
- *
- * Memory layout change:
- *   Old: HYPER_SPACE = 0xFFFFF70000000000 (L0[494], TTBR0 alias - BROKEN)
- *   New: HYPER_SPACE = 0xFFFFF60000000000 (L0[493], normal self-map - WORKING)
- */
-#define HYPER_SPACE                            0xFFFFF60000000000ULL
-#define HYPER_SPACE_END                        0xFFFFF67FFFFFFFFFULL
+#define HYPER_SPACE                            0xFFFFF70000000000ULL
+#define HYPER_SPACE_END                        0xFFFFF77FFFFFFFFFULL
 #define MI_SYSTEM_CACHE_WS_START               0xFFFFF78000001000ULL
 #define MI_SYSTEM_SPACE_START                  0xFFFFF88000000000ULL
 #define MI_DEBUG_MAPPING                (PVOID)0xFFFFF89FFFFFF000ULL
@@ -389,61 +319,6 @@ MiIsUserPpe(PVOID Address)
     return MiIsUserAddress(Address);
 }
 
-/*
- * MiAddressToPteTtbr0 - Get PTE address for a user-space address via TTBR0 alias
- *
- * This function returns the PTE address for a user-space virtual address,
- * routed through the TTBR0 alias slot at L0[494]. This ensures we're actually
- * accessing the page tables in TTBR0's hierarchy, not TTBR1's self-map.
- *
- * IMPORTANT: L0[494] must be initialized to point to the current process's
- * TTBR0 L0 page before calling this function.
- */
-FORCEINLINE
-PMMPTE
-MiAddressToPteTtbr0(PVOID Address)
-{
-    ULONG64 Offset = (ULONG64)Address >> (PTI_SHIFT - 3);
-    Offset &= 0xFFFFFFFFFULL << 3;  /* Mask to 36-bit entry offset (512GB space) */
-    return (PMMPTE)(PTE_BASE_TTBR0 + Offset);
-}
-
-/*
- * MiAddressToPdeTtbr0 - Get PDE address for a user-space address via TTBR0 alias
- */
-FORCEINLINE
-PMMPTE
-MiAddressToPdeTtbr0(PVOID Address)
-{
-    ULONG64 Offset = (ULONG64)Address >> (PDI_SHIFT - 3);
-    Offset &= 0x7FFFFFFULL << 3;  /* Mask to 27-bit entry offset */
-    return (PMMPTE)(PDE_BASE_TTBR0 + Offset);
-}
-
-/*
- * MiAddressToPpeTtbr0 - Get PPE address for a user-space address via TTBR0 alias
- */
-FORCEINLINE
-PMMPTE
-MiAddressToPpeTtbr0(PVOID Address)
-{
-    ULONG64 Offset = (ULONG64)Address >> (PPI_SHIFT - 3);
-    Offset &= 0x3FFFFULL << 3;  /* Mask to 18-bit entry offset */
-    return (PMMPTE)(PPE_BASE_TTBR0 + Offset);
-}
-
-/*
- * MiAddressToPxeTtbr0 - Get PXE address for a user-space address via TTBR0 alias
- */
-FORCEINLINE
-PMMPTE
-MiAddressToPxeTtbr0(PVOID Address)
-{
-    ULONG64 Offset = (ULONG64)Address >> (PXI_SHIFT - 3);
-    Offset &= PXI_MASK << 3;  /* Mask to 9-bit entry offset */
-    return (PMMPTE)(PXE_BASE_TTBR0 + Offset);
-}
-
 FORCEINLINE
 PVOID
 MiPteToAddress(PMMPTE PointerPte)
@@ -535,31 +410,7 @@ MiPdeToPxe(PMMPDE PointerPde)
 #define MiIsPteOnPxeBoundary(PointerPte) \
     ((((ULONG_PTR)PointerPte) & (PPE_PER_PAGE * PDE_PER_PAGE * PAGE_SIZE - 1)) == 0)
 
-/*
- * MiIsPdeForAddressValid - Check if all page table levels are valid for an address.
- *
- * This function checks if the PXE, PPE, and PDE for a given address are all
- * valid (present) in the page table hierarchy. It does NOT cause page faults
- * and is safe to call during page fault handling.
- *
- * ARM64 uses 4 levels of page tables (PXE -> PPE -> PDE -> PTE), so we must
- * check all three upper levels before accessing the PTE.
- *
- * CRITICAL FIX: On ARM64, we CANNOT use the self-map addresses (MiAddressToPxe,
- * MiAddressToPpe, MiAddressToPde) directly because the self-map page table entries
- * themselves may not be initialized. Accessing an uninitialized self-map address
- * during page fault handling causes a double fault (recursive page fault).
- *
- * For example, when checking if address 0xFFFFF98000004008 is valid:
- * - MiAddressToPde(0xFFFFF98000004008) returns 0xFFFFF6FB7DBF3000
- * - But the self-map entry for 0xFFFFF6FB7DBF3000 may not be present
- * - Accessing it causes another page fault, leading to infinite recursion
- *
- * Solution: Walk the page table hierarchy via physical addresses using KSEG0
- * (the identity-mapped physical memory region at 0xFFFF800000000000). This
- * approach reads the page tables directly from physical memory without relying
- * on the self-map being initialized.
- */
+/* Check whether the TTBR1 hierarchy for a kernel VA has a valid PDE. */
 FORCEINLINE
 BOOLEAN
 MiIsPdeForAddressValid(PVOID Address)
@@ -569,6 +420,8 @@ MiIsPdeForAddressValid(PVOID Address)
     volatile UINT64 *L0, *L1, *L2;
     UINT64 E0, E1, E2;
     ULONG L0Index, L1Index, L2Index;
+
+    ASSERT(Address >= MmSystemRangeStart);
 
     /* Mask for extracting physical address from page table entry (bits 47:12) */
     #define ARM64_PTE_ADDR_MASK_LOCAL 0x0000FFFFFFFFF000ULL
@@ -616,20 +469,8 @@ MiIsPdeForAddressValid(PVOID Address)
 /*
  * MiArm64SyncPxeWrite - Propagate PXE-level self-map writes to real L0 pages.
  *
- * The recursive self-map through the merged PXE page means that writes to
- * PXE-level entries (addresses in [PXE_BASE..PXE_TOP]) modify the merged
- * page, NOT the real TTBR0/TTBR1 L0 page. This function reads back the
- * current value from the merged page and propagates it to the appropriate
- * real L0 page so the hardware TLB walker sees the change.
- *
- * For user indices (0-255): write to TTBR0's L0 via KSEG0
- * For kernel indices (256-511, except 493): write to TTBR1's L0 via KSEG0
- * Index 493 (the self-map entry) is NOT propagated - it only exists in the
- * merged page and must NOT overwrite the real L0[493] which also points to
- * the merged page.
- *
- * Called after every PTE write operation (MI_WRITE_VALID_PTE, etc.) when the
- * target address falls in the PXE self-map range.
+ * PXE_BASE writes already update the current process root through the recursive
+ * slot. This helper mirrors the write to the active TTBR root used by hardware.
  */
 FORCEINLINE
 VOID
@@ -637,33 +478,33 @@ MiArm64SyncPxeWrite(
     _In_ PMMPTE PointerPxe)
 {
     ULONG_PTR Addr = (ULONG_PTR)PointerPxe;
-    ULONG Index;
-    UINT64 Ttbr;
-    volatile UINT64 *RealL0;
+    ULONG_PTR Index;
+    ULONG64 Root;
+    volatile ULONG64 *RootL0;
 
     /* Only act on PXE-level self-map entries */
     if (Addr < PXE_BASE || Addr > PXE_TOP)
         return;
 
-    Index = (ULONG)((Addr - PXE_BASE) / sizeof(MMPTE));
-
-    /* Don't propagate the self-referential entry - it only lives in merged page */
-    if (Index == PXE_SELFMAP_INDEX)
+    Index = (Addr - PXE_BASE) / sizeof(MMPTE);
+    if (Index >= PXE_PER_PAGE)
         return;
 
-    if (Index < 256)
+    if (Index < (PXE_PER_PAGE / 2))
     {
-        /* User L0 entry - propagate to TTBR0's real L0 */
-        __asm__ __volatile__("mrs %0, ttbr0_el1" : "=r"(Ttbr));
+        __asm__ __volatile__("mrs %0, ttbr0_el1" : "=r"(Root));
     }
     else
     {
-        /* Kernel L0 entry - propagate to TTBR1's real L0 */
-        __asm__ __volatile__("mrs %0, ttbr1_el1" : "=r"(Ttbr));
+        __asm__ __volatile__("mrs %0, ttbr1_el1" : "=r"(Root));
     }
 
-    RealL0 = (volatile UINT64 *)(KSEG0_BASE | (Ttbr & 0x0000FFFFFFFFF000ULL));
-    RealL0[Index] = PointerPxe->u.Long;
+    Root &= ARM64_PTE_ADDR_MASK;
+    if (Root == 0)
+        return;
+
+    RootL0 = (volatile ULONG64 *)(KSEG0_BASE | Root);
+    RootL0[Index] = PointerPxe->u.Long;
     __asm__ __volatile__("dsb ishst" ::: "memory");
 }
 
@@ -750,12 +591,12 @@ MiArm64KernelPpeKseg0(_In_ PVOID Address)
     ASSERT(Address >= MmSystemRangeStart);
 
     __asm__ __volatile__("mrs %0, ttbr1_el1" : "=r"(Ttbr1));
-    L0 = (PULONG64)(KSEG0_BASE | (Ttbr1 & 0x0000FFFFFFFFF000ULL));
+    L0 = (PULONG64)(KSEG0_BASE | (Ttbr1 & ARM64_PTE_ADDR_MASK));
 
     E0 = L0[((ULONG_PTR)Address >> PXI_SHIFT) & PXI_MASK];
     if ((E0 & 3) != 3) return NULL;
 
-    L1 = (PULONG64)(KSEG0_BASE | (E0 & 0x0000FFFFFFFFF000ULL));
+    L1 = (PULONG64)(KSEG0_BASE | (E0 & ARM64_PTE_ADDR_MASK));
     return (PMMPTE)&L1[((ULONG_PTR)Address >> PPI_SHIFT) & PPI_MASK];
 }
 
@@ -771,16 +612,16 @@ MiArm64KernelPdeKseg0(_In_ PVOID Address)
     ASSERT(Address >= MmSystemRangeStart);
 
     __asm__ __volatile__("mrs %0, ttbr1_el1" : "=r"(Ttbr1));
-    L0 = (PULONG64)(KSEG0_BASE | (Ttbr1 & 0x0000FFFFFFFFF000ULL));
+    L0 = (PULONG64)(KSEG0_BASE | (Ttbr1 & ARM64_PTE_ADDR_MASK));
 
     E0 = L0[((ULONG_PTR)Address >> PXI_SHIFT) & PXI_MASK];
     if ((E0 & 3) != 3) return NULL;
 
-    L1 = (PULONG64)(KSEG0_BASE | (E0 & 0x0000FFFFFFFFF000ULL));
+    L1 = (PULONG64)(KSEG0_BASE | (E0 & ARM64_PTE_ADDR_MASK));
     E1 = L1[((ULONG_PTR)Address >> PPI_SHIFT) & PPI_MASK];
     if ((E1 & 3) != 3) return NULL;
 
-    L2 = (PULONG64)(KSEG0_BASE | (E1 & 0x0000FFFFFFFFF000ULL));
+    L2 = (PULONG64)(KSEG0_BASE | (E1 & ARM64_PTE_ADDR_MASK));
     return (PMMPTE)&L2[((ULONG_PTR)Address >> PDI_SHIFT) & PDI_MASK_ARM64];
 }
 
@@ -879,20 +720,20 @@ MiArm64KernelPteKseg0(
     ASSERT(Address >= MmSystemRangeStart);
 
     __asm__ __volatile__("mrs %0, ttbr1_el1" : "=r"(Ttbr1));
-    L0 = (PULONG64)(KSEG0_BASE | (Ttbr1 & 0x0000FFFFFFFFF000ULL));
+    L0 = (PULONG64)(KSEG0_BASE | (Ttbr1 & ARM64_PTE_ADDR_MASK));
 
     E0 = L0[((ULONG_PTR)Address >> PXI_SHIFT) & PXI_MASK];
     if ((E0 & 3) != 3) return NULL;
 
-    L1 = (PULONG64)(KSEG0_BASE | (E0 & 0x0000FFFFFFFFF000ULL));
+    L1 = (PULONG64)(KSEG0_BASE | (E0 & ARM64_PTE_ADDR_MASK));
     E1 = L1[((ULONG_PTR)Address >> PPI_SHIFT) & PPI_MASK];
     if ((E1 & 3) != 3) return NULL;
 
-    L2 = (PULONG64)(KSEG0_BASE | (E1 & 0x0000FFFFFFFFF000ULL));
+    L2 = (PULONG64)(KSEG0_BASE | (E1 & ARM64_PTE_ADDR_MASK));
     E2 = L2[((ULONG_PTR)Address >> PDI_SHIFT) & PDI_MASK_ARM64];
     if ((E2 & 3) != 3) return NULL;
 
-    L3 = (PULONG64)(KSEG0_BASE | (E2 & 0x0000FFFFFFFFF000ULL));
+    L3 = (PULONG64)(KSEG0_BASE | (E2 & ARM64_PTE_ADDR_MASK));
     return (PMMPTE)&L3[((ULONG_PTR)Address >> PTI_SHIFT) & PTI_MASK_ARM64];
 }
 
@@ -917,11 +758,7 @@ MiArm64SyncKernelLeafPteWrite(
         ((ULONG_PTR)PointerPte > PTE_TOP))
         return;
 
-    PteForAddr = PointerPte;
-    if ((ULONG_PTR)PteForAddr >= PTE_BASE_TTBR0)
-        return;
-
-    VirtualAddress = MiPteToAddress(PteForAddr);
+    VirtualAddress = MiPteToAddress(PointerPte);
     if (((ULONG_PTR)VirtualAddress < (ULONG_PTR)MmSystemRangeStart) ||
         (((ULONG_PTR)VirtualAddress >= PTE_BASE) &&
          ((ULONG_PTR)VirtualAddress <= HYPER_SPACE_END)))
@@ -993,151 +830,6 @@ MiArm64SyncKernelHierarchyEntryWrite(
     __asm__ __volatile__("dsb ishst" ::: "memory");
 }
 
-/*
- * MiArm64UserPteSelfMapForPfn — Self-map based PTE lookup for user addresses.
- *
- * Equivalent to MiArm64UserPteKseg0ForPfn but uses the recursive self-map
- * (MiAddressToPxe/Ppe/Pde/Pte) instead of KSEG0 physical walks.
- * Returns NULL if any page table level is not yet allocated.
- * The L3 table PFN is extracted from the PDE (which points to the L3 table).
- */
-FORCEINLINE
-PMMPTE
-MiArm64UserPteSelfMapForPfn(
-    _In_ PVOID Address,
-    _Out_ PFN_NUMBER *L3TablePfn)
-{
-    PMMPTE PointerPxe, PointerPpe, PointerPde;
-
-    *L3TablePfn = 0;
-
-    PointerPxe = MiAddressToPxe(Address);
-    if (PointerPxe->u.Hard.Valid == 0) return NULL;
-
-    PointerPpe = MiAddressToPpe(Address);
-    if (PointerPpe->u.Hard.Valid == 0) return NULL;
-
-    PointerPde = MiAddressToPde(Address);
-    if (PointerPde->u.Hard.Valid == 0) return NULL;
-
-    *L3TablePfn = PFN_FROM_PTE(PointerPde);
-    return MiAddressToPte(Address);
-}
-
-/*
- * MiArm64WriteValidUserPte - Write a valid PTE for a user address via KSEG0.
- *
- * Bypasses the TTBR1 recursive self-map entirely: reads TTBR0_EL1 and walks
- * L0->L1->L2 physical page tables through KSEG0 to locate the L3 PTE slot,
- * then writes TempPte directly into the hardware page table.
- *
- * TLB coherency: DSB ISHST -> TLBI VAAE1IS -> DSB ISH -> ISB after the write.
- *
- * Use the all-ASID/global-targeted invalidation here because early bring-up
- * created some EL0 mappings as global entries. That stale-TLB history must be
- * flushed even after the software PTE has been corrected to NonGlobal=1.
- *
- * Race check: if the PTE slot already contains the exact same value (another
- * CPU or earlier path raced us), the write and TLBI are skipped.
- *
- * On NULL return from the KSEG0 walk (page table hierarchy incomplete),
- * KeBugCheckEx is issued -- the caller asserts that hierarchy exists.
- *
- * @param UserAddress   User virtual address (must be < MmSystemRangeStart)
- * @param TempPte       The valid PTE value to write
- */
-FORCEINLINE
-VOID
-MiArm64WriteValidUserPte(
-    _In_ PVOID UserAddress,
-    _In_ MMPTE TempPte)
-{
-    PMMPTE Kseg0Pte;
-    ULONG64 OldValue;
-
-    /* Assert user address and valid PTE */
-    ASSERT((ULONG_PTR)UserAddress < MI_REAL_SYSTEM_RANGE_START);
-    ASSERT(TempPte.u.Hard.Valid == 1);
-
-    /* Walk TTBR0 page tables via KSEG0 to get the L3 PTE pointer */
-    Kseg0Pte = MiArm64UserPteKseg0(UserAddress);
-    if (Kseg0Pte == NULL)
-    {
-        KeBugCheckEx(MEMORY_MANAGEMENT, 0xBAD00001,
-                     (ULONG_PTR)UserAddress, 0, 0);
-    }
-
-    /* DMB ISH: ensure all prior stores are visible before reading old PTE */
-    __asm__ __volatile__("dmb ish" ::: "memory");
-
-    /* Race check: skip if exact same value already present */
-    OldValue = *(volatile ULONG64 *)Kseg0Pte;
-    if (OldValue == TempPte.u.Long)
-        return;
-
-    /* Write the PTE through KSEG0 (directly into hardware page table) */
-    *(volatile ULONG64 *)Kseg0Pte = TempPte.u.Long;
-
-    /* Flush the user VA regardless of stale global/all-ASID history */
-    __asm__ __volatile__("dsb ishst" ::: "memory");
-    __asm__ __volatile__("tlbi vaae1is, %0" :: "r"((ULONG_PTR)UserAddress >> PAGE_SHIFT) : "memory");
-    __asm__ __volatile__("dsb ish" ::: "memory");
-    __asm__ __volatile__("isb" ::: "memory");
-}
-
-/*
- * MiArm64UpdateValidUserPte - Update permissions on an already-valid user PTE.
- *
- * Similar to MiArm64WriteValidUserPte but for permission changes on an
- * already-mapped page. Asserts that the old PTE is valid and that the PFN
- * is unchanged (only permission/attribute bits may differ).
- *
- * @param UserAddress   User virtual address (must be < MmSystemRangeStart)
- * @param TempPte       The new valid PTE value (same PFN, different permissions)
- */
-FORCEINLINE
-VOID
-MiArm64UpdateValidUserPte(
-    _In_ PVOID UserAddress,
-    _In_ MMPTE TempPte)
-{
-    PMMPTE Kseg0Pte;
-    MMPTE OldPte;
-
-    /* Assert user address and valid PTE */
-    ASSERT((ULONG_PTR)UserAddress < MI_REAL_SYSTEM_RANGE_START);
-    ASSERT(TempPte.u.Hard.Valid == 1);
-
-    /* Walk TTBR0 page tables via KSEG0 to get the L3 PTE pointer */
-    Kseg0Pte = MiArm64UserPteKseg0(UserAddress);
-    if (Kseg0Pte == NULL)
-    {
-        KeBugCheckEx(MEMORY_MANAGEMENT, 0xBAD00001,
-                     (ULONG_PTR)UserAddress, 0, 0);
-    }
-
-    /* DMB ISH: ensure all prior stores are visible before reading old PTE */
-    __asm__ __volatile__("dmb ish" ::: "memory");
-
-    /* Read old PTE and assert it is valid with unchanged PFN */
-    OldPte.u.Long = *(volatile ULONG64 *)Kseg0Pte;
-    ASSERT(OldPte.u.Hard.Valid == 1);
-    ASSERT(OldPte.u.Hard.PageFrameNumber == TempPte.u.Hard.PageFrameNumber);
-
-    /* Race check: skip if exact same value already present */
-    if (OldPte.u.Long == TempPte.u.Long)
-        return;
-
-    /* Write the updated PTE through KSEG0 */
-    *(volatile ULONG64 *)Kseg0Pte = TempPte.u.Long;
-
-    /* Flush the user VA regardless of stale global/all-ASID history */
-    __asm__ __volatile__("dsb ishst" ::: "memory");
-    __asm__ __volatile__("tlbi vaae1is, %0" :: "r"((ULONG_PTR)UserAddress >> PAGE_SHIFT) : "memory");
-    __asm__ __volatile__("dsb ish" ::: "memory");
-    __asm__ __volatile__("isb" ::: "memory");
-}
-
 //
 // Decodes a Prototype PTE into the underlying PTE
 // Must shift the entire 64-bit value to ensure sign extension from bit 47
@@ -1148,10 +840,8 @@ MiArm64UpdateValidUserPte(
 //
 // Builds a Prototype PTE for the address of the PTE
 //
-// CRITICAL: This must use the shift-based approach, NOT bitfield assignment.
-// ARM64 canonical kernel addresses have bits 48-63 all set to 1 (sign extension
-// from bit 47). If we use bitfield assignment (ProtoAddress:48), the upper 16
-// bits get truncated and cannot be recovered by sign extension.
+// ARM64 canonical kernel addresses need signed shift encoding. Bitfield storage
+// truncates the upper 16 address bits before decode can sign-extend them.
 //
 // The shift-based approach:
 // 1. Shifts the address left by 16 bits: 0xFFFFF8A0...BA0 << 16 = 0xF8A0...BA00000
@@ -1215,7 +905,7 @@ MI_MAKE_PROTOTYPE_PTE(
 //                                       = 0xF8A000007C300400
 //   Decoded:  (INT64)0xF8A000007C300400 >> 16 = 0xFFFFF8A000007C30 (sign-extended)
 //
-// CRITICAL: Must use signed right-shift (INT64) to preserve high bits for kernel addresses.
+// Use a signed right shift so kernel prototype PTE addresses stay canonical.
 //
 #define MI_PROTO_PTE_ADDRESS(Pte) \
     ((PMMPTE)(((INT64)(Pte)->u.Long) >> 16))
@@ -1269,32 +959,17 @@ MI_IS_PHYSICAL_ADDRESS(
 
     if (MiIsUserAddress(Address))
     {
-        PointerPde = MiArm64UserPdeKseg0(Address);
-    }
-    else
-    {
-        if (((ULONG_PTR)Address < (ULONG_PTR)MmSystemRangeStart) &&
-            ((ULONG_PTR)Address < (ULONG_PTR)PTE_BASE))
-        {
-            return FALSE;
-        }
-
-        PointerPde = MiArm64KernelPdeKseg0(Address);
-    }
-
-    if (PointerPde == NULL)
         return FALSE;
+    }
 
-    return (PointerPde->u.Hard.Valid && !PointerPde->u.Hard.NotLargePage);
+    if ((ULONG_PTR)Address < (ULONG_PTR)MmSystemRangeStart)
+    {
+        return FALSE;
+    }
+
+    PointerPde = MiAddressToPde(Address);
+    return (PointerPde->u.Hard.Valid && MI_IS_PAGE_LARGE(PointerPde));
 }
-
-//
-// ARM64-specific MM diagnostics and helper functions
-//
-VOID
-MiArm64CheckSystemViewSpacePte(
-    _In_z_ PCSTR Location
-);
 
 /*
  * ARM64 MAIR (Memory Attribute Indirection Register) Index Constants
@@ -1504,62 +1179,6 @@ MiArm64HandleUserAccessFlagFault(
     if (FaultLevel == 3) { if (!(Entry & 1ULL)) return FALSE; Table[Idx] = Entry | (1ULL << 10); return TRUE; }
 
     return FALSE;
-}
-
-/**
- * MiArm64ClearTtbr0Entry - Clear a TTBR0 page table entry at the specified level.
- *
- * Walks TTBR0 via KSEG0 to the specified level and zeros the entry.
- * Issues TLBI + barriers to ensure coherency.
- *
- * @param UserVa   User virtual address identifying the entry
- * @param Level    Which level to clear: 0=L0, 1=L1, 2=L2
- */
-FORCEINLINE
-VOID
-MiArm64ClearTtbr0Entry(
-    _In_ PVOID UserVa,
-    _In_ ULONG Level)
-{
-    ULONG64 Ttbr0Pa;
-    volatile ULONG64 *Table;
-    ULONG64 Entry;
-
-    __asm__ __volatile__("mrs %0, ttbr0_el1" : "=r"(Ttbr0Pa));
-    Ttbr0Pa &= 0x0000FFFFFFFFF000ULL;
-    if (Ttbr0Pa == 0) return;
-
-    Table = (volatile ULONG64 *)(KSEG0_BASE | Ttbr0Pa);
-
-    if (Level == 0)
-    {
-        /* Clear L0 entry */
-        Table[((ULONG64)(ULONG_PTR)UserVa >> 39) & 0x1FF] = 0;
-    }
-    else
-    {
-        Entry = Table[((ULONG64)(ULONG_PTR)UserVa >> 39) & 0x1FF];
-        if ((Entry & 0x3ULL) != 0x3ULL) return;
-        Table = (volatile ULONG64 *)(KSEG0_BASE | (Entry & 0x0000FFFFFFFFF000ULL));
-
-        if (Level == 1)
-        {
-            /* Clear L1 entry */
-            Table[((ULONG64)(ULONG_PTR)UserVa >> 30) & 0x1FF] = 0;
-        }
-        else
-        {
-            Entry = Table[((ULONG64)(ULONG_PTR)UserVa >> 30) & 0x1FF];
-            if ((Entry & 0x3ULL) != 0x3ULL) return;
-            Table = (volatile ULONG64 *)(KSEG0_BASE | (Entry & 0x0000FFFFFFFFF000ULL));
-            /* Clear L2 entry */
-            Table[((ULONG64)(ULONG_PTR)UserVa >> 21) & 0x1FF] = 0;
-        }
-    }
-
-    __asm__ __volatile__("dsb ishst" ::: "memory");
-    __asm__ __volatile__("tlbi vaale1is, %0" :: "r"((ULONG_PTR)UserVa >> PAGE_SHIFT) : "memory");
-    __asm__ __volatile__("dsb ish\n\tisb" ::: "memory");
 }
 
 FORCEINLINE
