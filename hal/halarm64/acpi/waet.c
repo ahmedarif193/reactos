@@ -1,7 +1,7 @@
 /*
  * PROJECT:         ReactOS HAL
  * LICENSE:         BSD - See COPYING.ARM in the top level directory
- * FILE:            hal/arch/common/acpi/waet.c
+ * FILE:            hal/halarm64/acpi/waet.c
  * PURPOSE:         WAET ACPI Table Discovery (stub for future integration)
  * PROGRAMMERS:     ReactOS Portable Systems Group
  */

@@ -1,7 +1,7 @@
 /*
  * PROJECT:         ReactOS HAL
  * LICENSE:         BSD - See COPYING.ARM in the top level directory
- * FILE:            hal/arch/common/acpi/arm64.c
+ * FILE:            hal/halarm64/acpi/arm64.c
  * PURPOSE:         ARM64 ACPI table discovery helpers
  */
 

@@ -60,12 +60,12 @@ list(APPEND GIC_SOURCES
 #####################################
 
 list(APPEND SOURCES
-    ${HAL_COMMON_DIR}/acpi/halacpi.c
-    ${HAL_COMMON_DIR}/acpi/halpnpdd.c
-    ${HAL_COMMON_DIR}/acpi/rsdt.c
-    ${HAL_COMMON_DIR}/acpi/hpet.c
-    ${HAL_COMMON_DIR}/acpi/waet.c
-    ${HAL_COMMON_DIR}/acpi/arm64.c
+    ${HAL_ARM64_SOURCE_DIR}/acpi/halacpi.c
+    ${HAL_ARM64_SOURCE_DIR}/acpi/halpnpdd.c
+    ${HAL_ARM64_SOURCE_DIR}/acpi/rsdt.c
+    ${HAL_ARM64_SOURCE_DIR}/acpi/hpet.c
+    ${HAL_ARM64_SOURCE_DIR}/acpi/waet.c
+    ${HAL_ARM64_SOURCE_DIR}/acpi/arm64.c
     ${HAL_COMMON_DIR}/generic/sysinfo_stubs.c
     ${HAL_ARM64_SOURCE_DIR}/halarm64.c
     ${HAL_ARM64_SOURCE_DIR}/halarm64_acpi_int.c
@@ -89,7 +89,7 @@ add_library(halmacpi MODULE
 reactos_hal_setup(halmacpi 0)
 
 # Ensure the PCI data headers are generated before compiling halacpi.c
-set_source_files_properties(${HAL_COMMON_DIR}/acpi/halacpi.c PROPERTIES
+set_source_files_properties(${HAL_ARM64_SOURCE_DIR}/acpi/halacpi.c PROPERTIES
     OBJECT_DEPENDS "${CMAKE_CURRENT_BINARY_DIR}/pci_classes.h;${CMAKE_CURRENT_BINARY_DIR}/pci_vendors.h")
 
 # DWARF sections are preserved directly in the binary for rossym_new to parse

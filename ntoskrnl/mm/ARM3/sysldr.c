@@ -2249,14 +2249,8 @@ MiInitializeLoadedModuleList(IN PLOADER_PARAMETER_BLOCK LoaderBlock)
     PLDR_DATA_TABLE_ENTRY LdrEntry, NewEntry;
     PLIST_ENTRY ListHead, NextEntry;
     ULONG EntrySize;
-#if defined(_M_ARM64)
-    ULONG Arm64ModuleCount = 0;
-#endif
 
     /* Setup the loaded module list and locks */
-#if defined(_M_ARM64)
-    DPRINT("[arm64][sysldr] MiInitializeLoadedModuleList: begin\n");
-#endif
     ExInitializeResourceLite(&PsLoadedModuleResource);
     KeInitializeSpinLock(&PsLoadedModuleSpinLock);
     InitializeListHead(&PsLoadedModuleList);
@@ -2267,90 +2261,36 @@ MiInitializeLoadedModuleList(IN PLOADER_PARAMETER_BLOCK LoaderBlock)
     LdrEntry = CONTAINING_RECORD(NextEntry,
                                  LDR_DATA_TABLE_ENTRY,
                                  InLoadOrderLinks);
-#if defined(_M_ARM64)
-    DPRINT("[arm64][sysldr] first loader entry=%p dllbase=%p flink=%p blink=%p\n",
-             LdrEntry,
-             LdrEntry->DllBase,
-             LdrEntry->InLoadOrderLinks.Flink,
-             LdrEntry->InLoadOrderLinks.Blink);
-#endif
     PsNtosImageBase = (ULONG_PTR)LdrEntry->DllBase;
 
     /* Locate resource section, pool code, and system pte code */
-#if defined(_M_ARM64)
-    DPRINT("[arm64][sysldr] locating kernel sections\n");
-#endif
     MiLocateKernelSections(LdrEntry);
-#if defined(_M_ARM64)
-    DPRINT("[arm64][sysldr] kernel sections located\n");
-#endif
 
     /* Loop the loader block */
     while (NextEntry != ListHead)
     {
-#if defined(_M_ARM64)
-        if (++Arm64ModuleCount > 128)
-        {
-            DPRINT("[arm64][sysldr] loader module list exceeded 128 entries, stopping traversal at %p\n",
-                     NextEntry);
-            break;
-        }
-#endif
         /* Get the loader entry */
         LdrEntry = CONTAINING_RECORD(NextEntry,
                                      LDR_DATA_TABLE_ENTRY,
                                      InLoadOrderLinks);
-#if defined(_M_ARM64)
-        DPRINT("[arm64][sysldr] module %lu entry=%p dllbase=%p full=%wZ base=%wZ next=%p\n",
-                 Arm64ModuleCount,
-                 LdrEntry,
-                 LdrEntry->DllBase,
-                 &LdrEntry->FullDllName,
-                 &LdrEntry->BaseDllName,
-                 LdrEntry->InLoadOrderLinks.Flink);
-#endif
 
         /* FIXME: ROS HACK. Make sure this is a driver */
-#if defined(_M_ARM64)
-        DPRINT("[arm64][sysldr] checking image header for module %lu\n",
-                 Arm64ModuleCount);
-#endif
         if (!RtlImageNtHeader(LdrEntry->DllBase))
         {
             /* Skip this entry */
-#if defined(_M_ARM64)
-            DPRINT("[arm64][sysldr] module %lu has no image header, skipping\n",
-                     Arm64ModuleCount);
-#endif
             NextEntry = NextEntry->Flink;
             continue;
         }
-#if defined(_M_ARM64)
-        DPRINT("[arm64][sysldr] image header ok for module %lu\n",
-                 Arm64ModuleCount);
-#endif
 
         /* Calculate the size we'll need and allocate a copy */
         EntrySize = sizeof(LDR_DATA_TABLE_ENTRY) +
                     LdrEntry->BaseDllName.MaximumLength +
                     sizeof(UNICODE_NULL);
-#if defined(_M_ARM64)
-        DPRINT("[arm64][sysldr] allocating module entry copy size=%lu\n",
-                 EntrySize);
-#endif
         NewEntry = ExAllocatePoolWithTag(NonPagedPool, EntrySize, TAG_MODULE_OBJECT);
         if (!NewEntry) return FALSE;
-#if defined(_M_ARM64)
-        DPRINT("[arm64][sysldr] module entry copy allocated %p\n",
-                 NewEntry);
-#endif
 
         /* Copy the entry over */
         *NewEntry = *LdrEntry;
-#if defined(_M_ARM64)
-        DPRINT("[arm64][sysldr] allocating full dll name bytes=%u\n",
-                 LdrEntry->FullDllName.MaximumLength + sizeof(UNICODE_NULL));
-#endif
 
         /* Allocate the name */
         NewEntry->FullDllName.Buffer =
@@ -2363,19 +2303,11 @@ MiInitializeLoadedModuleList(IN PLOADER_PARAMETER_BLOCK LoaderBlock)
             ExFreePoolWithTag(NewEntry, TAG_MODULE_OBJECT);
             return FALSE;
         }
-#if defined(_M_ARM64)
-        DPRINT("[arm64][sysldr] full dll name allocated %p\n",
-                 NewEntry->FullDllName.Buffer);
-#endif
 
         /* Set the base name */
         NewEntry->BaseDllName.Buffer = (PVOID)(NewEntry + 1);
 
         /* Copy the full and base name */
-#if defined(_M_ARM64)
-        DPRINT("[arm64][sysldr] copying names for module %lu\n",
-                 Arm64ModuleCount);
-#endif
         RtlCopyMemory(NewEntry->FullDllName.Buffer,
                       LdrEntry->FullDllName.Buffer,
                       LdrEntry->FullDllName.MaximumLength);
@@ -2389,22 +2321,11 @@ MiInitializeLoadedModuleList(IN PLOADER_PARAMETER_BLOCK LoaderBlock)
 
         /* Insert the entry into the list */
         InsertTailList(&PsLoadedModuleList, &NewEntry->InLoadOrderLinks);
-#if defined(_M_ARM64)
-        DPRINT("[arm64][sysldr] module %lu inserted\n",
-                 Arm64ModuleCount);
-#endif
         NextEntry = NextEntry->Flink;
     }
 
     /* Build the import lists for the boot drivers */
-#if defined(_M_ARM64)
-    DPRINT("[arm64][sysldr] building boot driver imports, modules=%lu\n",
-             Arm64ModuleCount);
-#endif
     MiBuildImportsForBootDrivers();
-#if defined(_M_ARM64)
-    DPRINT("[arm64][sysldr] boot driver imports built\n");
-#endif
 
     /* We're done */
     return TRUE;

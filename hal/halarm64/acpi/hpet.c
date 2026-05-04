@@ -1,7 +1,7 @@
 /*
  * PROJECT:         ReactOS HAL
  * LICENSE:         BSD - See COPYING.ARM in the top level directory
- * FILE:            hal/arch/common/acpi/hpet.c
+ * FILE:            hal/halarm64/acpi/hpet.c
  * PURPOSE:         HPET (High Precision Event Timer) support for HAL
  * PROGRAMMERS:     ReactOS Portable Systems Group
  *

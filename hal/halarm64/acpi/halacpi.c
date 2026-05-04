@@ -1,7 +1,7 @@
 /*
  * PROJECT:         ReactOS HAL
  * LICENSE:         BSD - See COPYING.ARM in the top level directory
- * FILE:            hal/arch/common/acpi/halacpi.c
+ * FILE:            hal/halarm64/acpi/halacpi.c
  * PURPOSE:         HAL ACPI Code
  * PROGRAMMERS:     ReactOS Portable Systems Group
  */
@@ -103,6 +103,8 @@ PHYSICAL_ADDRESS HalpAcpiRootTablePhysicalAddress;
 PHALP_ACPI_MCFG HalpAcpiMcfgTable;
 PHALP_ACPI_MCFG_ALLOCATION HalpAcpiMcfgAllocations;
 ULONG HalpAcpiMcfgAllocationCount;
+#define HALP_ACPI_MAX_MCFG_ALLOCATIONS 32
+static HALP_ACPI_MCFG_ALLOCATION HalpAcpiMcfgAllocationStorage[HALP_ACPI_MAX_MCFG_ALLOCATIONS];
 PUCHAR HalpAcpiMcfgSegDisabled;
 ULONG HalpAcpiMcfgSegDisabledCount;
 volatile LONG HalpAcpiEcamCoverageFlags;
@@ -2622,9 +2624,6 @@ HalpSetupAcpiPhase0(IN PLOADER_PARAMETER_BLOCK LoaderBlock)
     HalpAcpiDiscoverHpetTable(LoaderBlock);
     HalpAcpiDiscoverWaetTable(LoaderBlock);
 
-    /* Log reservation for all root-referenced tables like Linux */
-    HalpAcpiReserveRootTables(LoaderBlock);
-
     /* Cache the PCI Express MMCONFIG information if present */
     {
         PHALP_ACPI_MCFG Mcfg;
@@ -2762,10 +2761,27 @@ HalpSetupAcpiPhase0(IN PLOADER_PARAMETER_BLOCK LoaderBlock)
                 {
                     ULONG Index;
 
-                    HalpAcpiMcfgTable = Mcfg;
-                    HalpAcpiMcfgAllocations =
+                    PHALP_ACPI_MCFG_ALLOCATION SourceAllocations;
+                    ULONG CopyCount;
+
+                    SourceAllocations =
                         (PHALP_ACPI_MCFG_ALLOCATION)((PUCHAR)Mcfg + sizeof(*Mcfg));
-                    HalpAcpiMcfgAllocationCount = EntryCount;
+                    CopyCount = min(EntryCount, HALP_ACPI_MAX_MCFG_ALLOCATIONS);
+
+                    RtlCopyMemory(HalpAcpiMcfgAllocationStorage,
+                                  SourceAllocations,
+                                  CopyCount * sizeof(HALP_ACPI_MCFG_ALLOCATION));
+
+                    HalpAcpiMcfgTable = Mcfg;
+                    HalpAcpiMcfgAllocations = HalpAcpiMcfgAllocationStorage;
+                    HalpAcpiMcfgAllocationCount = CopyCount;
+
+                    if (EntryCount > HALP_ACPI_MAX_MCFG_ALLOCATIONS)
+                    {
+                        DPRINT1("HAL: ACPI MCFG has %lu allocations; using first %lu\n",
+                                EntryCount,
+                                CopyCount);
+                    }
 
                     /* Defer per-allocation disable-map allocation to Phase 1 (pool ready) */
                     HalpAcpiMcfgSegDisabled = NULL;

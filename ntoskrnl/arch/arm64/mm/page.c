@@ -38,31 +38,135 @@ MiArm64ReadUserPtePhysically(
     _Out_opt_ PULONG64 OutPte,
     _Out_opt_ PULONG OutDepth);
 
+typedef struct _MI_ARM64_USER_PTE_WALK
+{
+    volatile ULONG64 *PointerPte;
+    ULONG64 PteValue;
+    ULONG Depth;
+} MI_ARM64_USER_PTE_WALK, *PMI_ARM64_USER_PTE_WALK;
+
+static
+BOOLEAN
+MiArm64GetUserPteAddress(
+    _In_ PVOID Address,
+    _Out_ PMI_ARM64_USER_PTE_WALK Walk);
+
+static
+MMPTE
+MiArm64ClearKernelPte(
+    _In_ PVOID Address,
+    _Inout_ PMMPTE PointerPte);
+
+static
+MMPTE
+MiArm64ClearUserPte(
+    _In_ PVOID Address,
+    _In_ PMI_ARM64_USER_PTE_WALK Walk);
+
+static
+BOOLEAN
+MiArm64ConsumeDirtyState(
+    _In_ MMPTE OldPte,
+    _In_ BOOLEAN IsPhysical);
+
+static
+VOID
+MiArm64PreserveDirtyStateForProtect(
+    _In_ MMPTE OldPte,
+    _In_ MMPTE NewPte);
+
+static
+VOID
+MiArm64ReleaseMappedPageReference(
+    _In_ PFN_NUMBER PageFrameNumber);
+
+static
+VOID
+MiArm64ReleaseUserPageTableReference(
+    _In_ PEPROCESS Process,
+    _In_ PVOID Address);
+
 static LONG MiArm64UserMapTraceCount;
 static LONG MiArm64UserPublishTraceCount;
 static LONG MiArm64MapCacheSyncTraceCount;
+
+typedef enum _MI_ARM64_DCACHE_OPERATION
+{
+    MiArm64DcacheInvalidate,
+    MiArm64DcacheCleanInvalidate
+} MI_ARM64_DCACHE_OPERATION;
+
+FORCEINLINE
+VOID
+MiArm64CacheLineSizes(
+    _Out_ PULONG DcacheLineSize,
+    _Out_ PULONG IcacheLineSize)
+{
+    ULONG64 Ctr;
+
+    __asm__ __volatile__("mrs %0, ctr_el0" : "=r"(Ctr));
+    *DcacheLineSize = 4u << ((Ctr >> 16) & 0xF);
+    *IcacheLineSize = 4u << (Ctr & 0xF);
+}
+
+FORCEINLINE
+VOID
+MiArm64MaintainPageCache(
+    _In_ PVOID Address,
+    _In_ MI_ARM64_DCACHE_OPERATION DcacheOperation,
+    _In_ BOOLEAN SweepIcache)
+{
+    ULONG DcacheLineSize;
+    ULONG IcacheLineSize;
+    ULONG_PTR Va;
+
+    MiArm64CacheLineSizes(&DcacheLineSize, &IcacheLineSize);
+    Va = (ULONG_PTR)Address & ~(ULONG_PTR)(PAGE_SIZE - 1);
+
+    __asm__ __volatile__("dsb sy" ::: "memory");
+    for (ULONG_PTR Offset = 0; Offset < PAGE_SIZE; Offset += DcacheLineSize)
+    {
+        if (DcacheOperation == MiArm64DcacheCleanInvalidate)
+        {
+            __asm__ __volatile__("dc civac, %0" :: "r"(Va + Offset) : "memory");
+        }
+        else
+        {
+            __asm__ __volatile__("dc ivac, %0" :: "r"(Va + Offset) : "memory");
+        }
+    }
+    __asm__ __volatile__("dsb sy" ::: "memory");
+
+    if (SweepIcache)
+    {
+        for (ULONG_PTR Offset = 0; Offset < PAGE_SIZE; Offset += IcacheLineSize)
+        {
+            __asm__ __volatile__("ic ivau, %0" :: "r"(Va + Offset) : "memory");
+        }
+        __asm__ __volatile__("dsb sy" ::: "memory");
+    }
+
+    __asm__ __volatile__("isb" ::: "memory");
+}
+
+FORCEINLINE
+VOID
+MiArm64CleanInvalidateCacheLine(
+    _In_ PVOID Address)
+{
+    __asm__ __volatile__("dmb ish" ::: "memory");
+    __asm__ __volatile__("dc civac, %0" :: "r"(Address) : "memory");
+    __asm__ __volatile__("dsb ish" ::: "memory");
+}
 
 FORCEINLINE
 VOID
 MiArm64InvalidatePageByPfnAlias(
     _In_ PFN_NUMBER PageFrameNumber)
 {
-    ULONG64 Ctr;
-    ULONG DcacheLineSize;
-    ULONG_PTR AliasVa;
-
-    AliasVa = (ULONG_PTR)KSEG0_BASE + ((ULONG_PTR)PageFrameNumber << PAGE_SHIFT);
-
-    __asm__ __volatile__("mrs %0, ctr_el0" : "=r"(Ctr));
-    DcacheLineSize = 4u << ((Ctr >> 16) & 0xF);
-
-    __asm__ __volatile__("dsb sy" ::: "memory");
-    for (ULONG_PTR Offset = 0; Offset < PAGE_SIZE; Offset += DcacheLineSize)
-    {
-        __asm__ __volatile__("dc ivac, %0" :: "r"(AliasVa + Offset) : "memory");
-    }
-    __asm__ __volatile__("dsb sy" ::: "memory");
-    __asm__ __volatile__("isb" ::: "memory");
+    MiArm64MaintainPageCache((PVOID)(KSEG0_BASE + ((ULONG_PTR)PageFrameNumber << PAGE_SHIFT)),
+                             MiArm64DcacheInvalidate,
+                             FALSE);
 }
 
 FORCEINLINE
@@ -71,34 +175,9 @@ MiArm64PublishPageByPfnAlias(
     _In_ PFN_NUMBER PageFrameNumber,
     _In_ BOOLEAN SweepIcache)
 {
-    ULONG64 Ctr;
-    ULONG DcacheLineSize;
-    ULONG IcacheLineSize;
-    ULONG_PTR AliasVa;
-
-    AliasVa = (ULONG_PTR)KSEG0_BASE + ((ULONG_PTR)PageFrameNumber << PAGE_SHIFT);
-
-    __asm__ __volatile__("mrs %0, ctr_el0" : "=r"(Ctr));
-    DcacheLineSize = 4u << ((Ctr >> 16) & 0xF);
-    IcacheLineSize = 4u << (Ctr & 0xF);
-
-    __asm__ __volatile__("dsb sy" ::: "memory");
-    for (ULONG_PTR Offset = 0; Offset < PAGE_SIZE; Offset += DcacheLineSize)
-    {
-        __asm__ __volatile__("dc civac, %0" :: "r"(AliasVa + Offset) : "memory");
-    }
-    __asm__ __volatile__("dsb sy" ::: "memory");
-
-    if (SweepIcache)
-    {
-        for (ULONG_PTR Offset = 0; Offset < PAGE_SIZE; Offset += IcacheLineSize)
-        {
-            __asm__ __volatile__("ic ivau, %0" :: "r"(AliasVa + Offset) : "memory");
-        }
-        __asm__ __volatile__("dsb sy" ::: "memory");
-    }
-
-    __asm__ __volatile__("isb" ::: "memory");
+    MiArm64MaintainPageCache((PVOID)(KSEG0_BASE + ((ULONG_PTR)PageFrameNumber << PAGE_SHIFT)),
+                             MiArm64DcacheCleanInvalidate,
+                             SweepIcache);
 }
 
 FORCEINLINE
@@ -263,6 +342,91 @@ MiArm64TraceUserTableStore(
         (_Table)[(_Index)].u.Long = (ULONG64)(_Value64); \
     } while (0)
 
+static
+BOOLEAN
+MiArm64GetUserPteAddress(
+    _In_ PVOID Address,
+    _Out_ PMI_ARM64_USER_PTE_WALK Walk)
+{
+    ULONG64 Ttbr0, RootPa;
+    volatile ULONG64 *L0Table, *L1Table, *L2Table, *L3Table;
+    ULONG L0Idx, L1Idx, L2Idx, L3Idx;
+    ULONG64 L0Entry, L1Entry, L2Entry;
+
+    Walk->PointerPte = NULL;
+    Walk->PteValue = 0;
+    Walk->Depth = 0;
+
+    if (Address >= MmSystemRangeStart)
+    {
+        return FALSE;
+    }
+
+    __asm__ __volatile__("mrs %0, ttbr0_el1" : "=r"(Ttbr0));
+    RootPa = Ttbr0 & ARM64_PTE_ADDR_MASK;
+    if (RootPa == 0)
+    {
+        return FALSE;
+    }
+
+    L0Idx = ((ULONG64)(ULONG_PTR)Address >> 39) & 0x1FF;
+    L1Idx = ((ULONG64)(ULONG_PTR)Address >> 30) & 0x1FF;
+    L2Idx = ((ULONG64)(ULONG_PTR)Address >> 21) & 0x1FF;
+    L3Idx = ((ULONG64)(ULONG_PTR)Address >> 12) & 0x1FF;
+
+    L0Table = (volatile ULONG64 *)(KSEG0_BASE | RootPa);
+    L0Entry = L0Table[L0Idx];
+    if ((L0Entry & 0x3ULL) != 0x3ULL)
+    {
+        return FALSE;
+    }
+    Walk->Depth = 1;
+
+    L1Table = (volatile ULONG64 *)(KSEG0_BASE | (L0Entry & ARM64_PTE_ADDR_MASK));
+    L1Entry = L1Table[L1Idx];
+    if ((L1Entry & 0x1ULL) == 0)
+    {
+        return FALSE;
+    }
+    if ((L1Entry & 0x3ULL) == 0x1ULL)
+    {
+        Walk->PteValue = L1Entry;
+        return FALSE;
+    }
+    if ((L1Entry & 0x3ULL) != 0x3ULL)
+    {
+        return FALSE;
+    }
+    Walk->Depth = 2;
+
+    L2Table = (volatile ULONG64 *)(KSEG0_BASE | (L1Entry & ARM64_PTE_ADDR_MASK));
+    L2Entry = L2Table[L2Idx];
+    if ((L2Entry & 0x1ULL) == 0)
+    {
+        return FALSE;
+    }
+    if ((L2Entry & 0x3ULL) == 0x1ULL)
+    {
+        Walk->PteValue = L2Entry;
+        return FALSE;
+    }
+    if ((L2Entry & 0x3ULL) != 0x3ULL)
+    {
+        return FALSE;
+    }
+    Walk->Depth = 3;
+
+    L3Table = (volatile ULONG64 *)(KSEG0_BASE | (L2Entry & ARM64_PTE_ADDR_MASK));
+    Walk->PointerPte = &L3Table[L3Idx];
+    Walk->PteValue = L3Table[L3Idx];
+    if ((Walk->PteValue & 0x3ULL) == 0x3ULL)
+    {
+        Walk->Depth = 4;
+    }
+
+    return TRUE;
+}
+
 /* Walk the active TTBR0 hierarchy via KSEG0 and return the L3 PTE state. */
 BOOLEAN
 MiArm64ReadUserPtePhysically(
@@ -270,259 +434,234 @@ MiArm64ReadUserPtePhysically(
     _Out_opt_ PULONG64 OutPte,
     _Out_opt_ PULONG OutDepth)
 {
-    ULONG64 Ttbr0, RootPa;
-    volatile ULONG64 *L0Table, *L1Table, *L2Table, *L3Table;
-    ULONG L0Idx, L1Idx, L2Idx, L3Idx;
-    ULONG64 L0Entry, L1Entry, L2Entry, L3Entry;
+    MI_ARM64_USER_PTE_WALK Walk;
 
-    /* Initialize outputs */
-    if (OutPte) *OutPte = 0;
-    if (OutDepth) *OutDepth = 0;
-
-    /* Must be a user address */
-    if (Address >= MmSystemRangeStart)
-        return FALSE;
-
-    /* Read TTBR0 to get the user page table root */
-    __asm__ __volatile__("mrs %0, ttbr0_el1" : "=r"(Ttbr0));
-    RootPa = Ttbr0 & ARM64_PTE_ADDR_MASK;  /* Extract PA, mask ASID bits */
-    if (RootPa == 0)
-        return FALSE;
-
-    /* Calculate indices for each level */
-    L0Idx = ((ULONG64)(ULONG_PTR)Address >> 39) & 0x1FF;
-    L1Idx = ((ULONG64)(ULONG_PTR)Address >> 30) & 0x1FF;
-    L2Idx = ((ULONG64)(ULONG_PTR)Address >> 21) & 0x1FF;
-    L3Idx = ((ULONG64)(ULONG_PTR)Address >> 12) & 0x1FF;
-
-    /* Access L0 table via KSEG0 direct mapping */
-    L0Table = (volatile ULONG64 *)(KSEG0_BASE | RootPa);
-    L0Entry = L0Table[L0Idx];
-
-    /* Check L0 entry validity - must be a table descriptor (bits[1:0]=0b11) */
-    if ((L0Entry & 0x3ULL) != 0x3ULL)
-        return FALSE;
-
-    if (OutDepth) *OutDepth = 1;
-
-    /* Access L1 table */
-    L1Table = (volatile ULONG64 *)(KSEG0_BASE | (L0Entry & ARM64_PTE_ADDR_MASK));
-    L1Entry = L1Table[L1Idx];
-
-    /*
-     * L1 could be a 1GB block (bits[1:0]=0b01) or table (0b11) or invalid.
-     *
-     * ARM64 Critical: Block descriptors (1GB/2MB) in user space are from FreeLoader's
-     * identity mapping, NOT from the Memory Manager. We must NOT treat them as
-     * "present" pages because:
-     * 1. They point to wrong physical memory (old identity-mapped addresses)
-     * 2. ReactOS MM creates only 4KB page mappings for user addresses
-     * 3. Section views need proper L3 PTEs to work correctly
-     *
-     * Return FALSE for blocks - callers like MmIsPagePresent need to know that
-     * no proper MM-created mapping exists at this address.
-     */
-    if ((L1Entry & 0x1ULL) == 0)
-        return FALSE;  /* L1 invalid */
-    if ((L1Entry & 0x3ULL) == 0x1ULL)
+    if (!MiArm64GetUserPteAddress(Address, &Walk))
     {
-        /* L1 is 1GB block - FreeLoader identity mapping, treat as not present */
-        if (OutPte) *OutPte = L1Entry;
-        if (OutDepth) *OutDepth = 1;  /* Stopped at L1 block, not a proper page */
+        if (OutPte) *OutPte = Walk.PteValue;
+        if (OutDepth) *OutDepth = Walk.Depth;
         return FALSE;
     }
 
-    if (OutDepth) *OutDepth = 2;
+    if (OutPte) *OutPte = Walk.PteValue;
+    if (OutDepth) *OutDepth = Walk.Depth;
+    return ((Walk.PteValue & 0x3ULL) == 0x3ULL);
+}
 
-    /* L1 is table, access L2 */
-    L2Table = (volatile ULONG64 *)(KSEG0_BASE | (L1Entry & ARM64_PTE_ADDR_MASK));
-    L2Entry = L2Table[L2Idx];
+FORCEINLINE
+VOID
+MiArm64InvalidateUserAddress(
+    _In_ PVOID Address)
+{
+    __asm__ __volatile__("dsb ishst" ::: "memory");
+    __asm__ __volatile__("tlbi vaale1is, %0" :: "r"((ULONG_PTR)Address >> PAGE_SHIFT) : "memory");
+    __asm__ __volatile__("dsb ish" ::: "memory");
+    __asm__ __volatile__("isb" ::: "memory");
+}
 
-    /* L2 could be a 2MB block or table or invalid */
-    if ((L2Entry & 0x1ULL) == 0)
-        return FALSE;  /* L2 invalid */
-    if ((L2Entry & 0x3ULL) == 0x1ULL)
+static
+MMPTE
+MiArm64ClearKernelPte(
+    _In_ PVOID Address,
+    _Inout_ PMMPTE PointerPte)
+{
+    MMPTE OldPte;
+
+    OldPte.u.Long = PointerPte->u.Long;
+    if (OldPte.u.Hard.Valid)
     {
-        /* L2 is 2MB block - FreeLoader identity mapping, treat as not present */
-        if (OutPte) *OutPte = L2Entry;
-        if (OutDepth) *OutDepth = 2;  /* Stopped at L2 block, not a proper page */
+        MiArm64MaintainPageCache(Address, MiArm64DcacheCleanInvalidate, TRUE);
+    }
+
+    PointerPte->u.Long = 0;
+    MiArm64SyncKernelLeafPteWrite(PointerPte);
+    __asm__ __volatile__("dsb ishst" ::: "memory");
+    KeInvalidateTlbEntry(Address);
+
+    return OldPte;
+}
+
+static
+MMPTE
+MiArm64ClearUserPte(
+    _In_ PVOID Address,
+    _In_ PMI_ARM64_USER_PTE_WALK Walk)
+{
+    MMPTE OldPte;
+
+    OldPte.u.Long = Walk->PteValue;
+    if (OldPte.u.Hard.Valid)
+    {
+        MiArm64MaintainPageCache(Address, MiArm64DcacheCleanInvalidate, TRUE);
+        __atomic_store_n(Walk->PointerPte, 0, __ATOMIC_SEQ_CST);
+        MiArm64InvalidateUserAddress(Address);
+    }
+
+    return OldPte;
+}
+
+static
+BOOLEAN
+MiArm64ConsumeDirtyState(
+    _In_ MMPTE OldPte,
+    _In_ BOOLEAN IsPhysical)
+{
+    PFN_NUMBER PageFrameNumber;
+    PMMPFN PfnEntry;
+    KIRQL OldIrql;
+    BOOLEAN Dirty;
+
+    if (!OldPte.u.Hard.Valid)
+    {
         return FALSE;
     }
 
-    if (OutDepth) *OutDepth = 3;
-
-    /* L2 is table, access L3 */
-    L3Table = (volatile ULONG64 *)(KSEG0_BASE | (L2Entry & ARM64_PTE_ADDR_MASK));
-    L3Entry = L3Table[L3Idx];
-
-    if (OutPte) *OutPte = L3Entry;
-
-    /* L3 entry: page descriptor (bits[1:0]=0b11) means page is present (proper 4KB mapping) */
-    if ((L3Entry & 0x3ULL) == 0x3ULL)
+    if (MI_IS_PAGE_DIRTY(&OldPte))
     {
-        if (OutDepth) *OutDepth = 4;
         return TRUE;
     }
 
-    return FALSE;
+    if (IsPhysical)
+    {
+        return FALSE;
+    }
+
+    PageFrameNumber = OldPte.u.Hard.PageFrameNumber;
+    if ((PageFrameNumber == 0) || (PageFrameNumber > MmHighestPhysicalPage))
+    {
+        return FALSE;
+    }
+
+    Dirty = FALSE;
+    OldIrql = MiAcquirePfnLock();
+    PfnEntry = MiGetPfnEntry(PageFrameNumber);
+    if ((PfnEntry != NULL) && PfnEntry->u3.e1.Modified)
+    {
+        PfnEntry->u3.e1.Modified = 0;
+        Dirty = TRUE;
+    }
+    MiReleasePfnLock(OldIrql);
+
+    return Dirty;
 }
 
-/*
- * ARM64 Cache Invalidation Functions
- *
- * Cache coherency on ARM64 requires careful handling depending on data direction:
- *
- * Incoming data (DMA/ramdisk populated page, read fault):
- *   The data source (device, ramdisk) has already written to RAM.
- *   CPU cache may have stale data for the VA.
- *   Use DC IVAC to discard cache lines without writeback.
- *
- * Outgoing data (CPU wrote, needs visibility to DMA/other observers):
- *   CPU has written data that may still be in cache.
- *   Use DC CIVAC to write back dirty lines first.
- *
- * CTR_EL0 layout:
- *   Bits [3:0]   = IminLine (I-cache line size as log2(words))
- *   Bits [19:16] = DminLine (D-cache line size as log2(words))
- *   Line size = 4 << field_value (in bytes)
- */
+static
+VOID
+MiArm64PreserveDirtyStateForProtect(
+    _In_ MMPTE OldPte,
+    _In_ MMPTE NewPte)
+{
+    PFN_NUMBER PageFrameNumber;
+    PMMPFN PfnEntry;
+    KIRQL OldIrql;
 
-/*
- * MiInvalidateDCachePageIncoming - Invalidate D-cache for INCOMING data.
- *
- * Use this when the page has been populated by an external source (DMA, ramdisk,
- * PIO) and the CPU needs to see fresh data. This DISCARDS any stale cache
- * contents without writing them back.
- *
- * WARNING: Using this on pages with valid CPU-written data will LOSE that data!
- */
+    if (!OldPte.u.Hard.Valid ||
+        !MI_IS_PAGE_DIRTY(&OldPte) ||
+        MI_IS_PAGE_DIRTY(&NewPte))
+    {
+        return;
+    }
+
+    PageFrameNumber = OldPte.u.Hard.PageFrameNumber;
+    if ((PageFrameNumber == 0) || (PageFrameNumber > MmHighestPhysicalPage))
+    {
+        return;
+    }
+
+    OldIrql = MiAcquirePfnLock();
+    PfnEntry = MiGetPfnEntry(PageFrameNumber);
+    if (PfnEntry != NULL)
+    {
+        PfnEntry->u3.e1.Modified = 1;
+    }
+    MiReleasePfnLock(OldIrql);
+}
+
+static
+VOID
+MiArm64ReleaseMappedPageReference(
+    _In_ PFN_NUMBER PageFrameNumber)
+{
+    KIRQL OldIrql;
+    PMMPFN PfnEntry;
+
+    if ((PageFrameNumber == 0) || (PageFrameNumber > MmHighestPhysicalPage))
+    {
+        return;
+    }
+
+    OldIrql = MiAcquirePfnLock();
+    PfnEntry = MiGetPfnEntry(PageFrameNumber);
+    if ((PfnEntry != NULL) && (PfnEntry->u2.ShareCount > 0))
+    {
+        if (--PfnEntry->u2.ShareCount == 0)
+        {
+            PfnEntry->u3.e1.PageLocation = TransitionPage;
+        }
+    }
+    MiReleasePfnLock(OldIrql);
+}
+
+static
+VOID
+MiArm64ReleaseUserPageTableReference(
+    _In_ PEPROCESS Process,
+    _In_ PVOID Address)
+{
+    PFN_NUMBER L3Pfn;
+    KIRQL OldIrql;
+    PMMPFN PfnEntry;
+
+    L3Pfn = MiArm64GetUserL3PfnSafe(Address);
+    if (L3Pfn == 0)
+    {
+        return;
+    }
+
+    OldIrql = MiAcquirePfnLock();
+    PfnEntry = MiGetPfnEntry(L3Pfn);
+    if (PfnEntry != NULL)
+    {
+        if (PfnEntry->u2.ShareCount > 0)
+        {
+            MiDecrementShareCount(PfnEntry, L3Pfn);
+        }
+
+        if (PfnEntry->OriginalPte.u.Soft.UsedPageTableEntries > 0)
+        {
+            PfnEntry->OriginalPte.u.Soft.UsedPageTableEntries--;
+        }
+        else
+        {
+            DPRINT1("[arm64][UPTE] MmDeleteVirtualMappingEx: UsedPTE already 0 for VA=%p "
+                    "L3Pfn=%lx Proc=%s\n",
+                    Address, (ULONG)L3Pfn, Process->ImageFileName);
+        }
+    }
+    MiReleasePfnLock(OldIrql);
+}
+
 VOID
 MiInvalidateDCachePageIncoming(
     _In_ PVOID Address)
 {
-    ULONG64 Ctr;
-    ULONG DcacheLineSize, IcacheLineSize;
-    ULONG_PTR Va;
-
-    /* Read CTR_EL0 to get cache line sizes */
-    __asm__ __volatile__("mrs %0, ctr_el0" : "=r"(Ctr));
-    DcacheLineSize = 4u << ((Ctr >> 16) & 0xF);  /* Bits [19:16] = DminLine */
-    IcacheLineSize = 4u << (Ctr & 0xF);          /* Bits [3:0] = IminLine */
-
-    /* Align address to page boundary */
-    Va = (ULONG_PTR)Address & ~(ULONG_PTR)(PAGE_SIZE - 1);
-
-    /* Ensure all prior memory operations complete before cache invalidation */
-    __asm__ __volatile__("dsb sy" ::: "memory");
-
-    /*
-     * DC IVAC (Invalidate by VA to PoC) - invalidate only, no writeback.
-     * This is correct for incoming data: discard stale cache, read fresh RAM.
-     *
-     * Note: DC IVAC is permitted at EL1 regardless of SCTLR_EL1.UCI setting.
-     * The UCI bit only affects EL0 access to cache maintenance instructions.
-     */
-    for (ULONG_PTR offset = 0; offset < PAGE_SIZE; offset += DcacheLineSize)
-    {
-        __asm__ __volatile__("dc ivac, %0" :: "r"(Va + offset) : "memory");
-    }
-
-    /* Ensure D-cache invalidation completes before I-cache ops */
-    __asm__ __volatile__("dsb sy" ::: "memory");
-
-    /*
-     * IC IVAU (Invalidate I-cache by VA to PoU).
-     * For executable pages, also invalidate I-cache using correct line size.
-     */
-    for (ULONG_PTR offset = 0; offset < PAGE_SIZE; offset += IcacheLineSize)
-    {
-        __asm__ __volatile__("ic ivau, %0" :: "r"(Va + offset) : "memory");
-    }
-
-    /* Ensure I-cache operations complete and synchronize instruction stream */
-    __asm__ __volatile__("dsb sy" ::: "memory");
-    __asm__ __volatile__("isb" ::: "memory");
+    MiArm64MaintainPageCache(Address, MiArm64DcacheInvalidate, TRUE);
 }
 
-/*
- * MiInvalidateDCachePageOutgoing - Clean & Invalidate D-cache for OUTGOING data.
- *
- * Use this when the CPU has written data that needs to be visible to external
- * observers (DMA, other CPUs). This writes back dirty cache lines to RAM first,
- * then invalidates them.
- */
 VOID
 MiInvalidateDCachePageOutgoing(
     _In_ PVOID Address)
 {
-    ULONG64 Ctr;
-    ULONG DcacheLineSize, IcacheLineSize;
-    ULONG_PTR Va;
-
-    /* Read CTR_EL0 to get cache line sizes */
-    __asm__ __volatile__("mrs %0, ctr_el0" : "=r"(Ctr));
-    DcacheLineSize = 4u << ((Ctr >> 16) & 0xF);  /* Bits [19:16] = DminLine */
-    IcacheLineSize = 4u << (Ctr & 0xF);          /* Bits [3:0] = IminLine */
-
-    /* Align address to page boundary */
-    Va = (ULONG_PTR)Address & ~(ULONG_PTR)(PAGE_SIZE - 1);
-
-    /* Ensure all prior stores complete before cache operations */
-    __asm__ __volatile__("dsb sy" ::: "memory");
-
-    /*
-     * DC CIVAC (Clean and Invalidate by VA to PoC).
-     * Writes back any dirty data to RAM, then invalidates the cache line.
-     * This ensures CPU writes reach main memory before DMA/others read.
-     */
-    for (ULONG_PTR offset = 0; offset < PAGE_SIZE; offset += DcacheLineSize)
-    {
-        __asm__ __volatile__("dc civac, %0" :: "r"(Va + offset) : "memory");
-    }
-
-    /* Ensure D-cache operations complete before I-cache ops */
-    __asm__ __volatile__("dsb sy" ::: "memory");
-
-    /*
-     * IC IVAU (Invalidate I-cache by VA to PoU).
-     * For self-modifying code scenarios, invalidate I-cache using correct line size.
-     */
-    for (ULONG_PTR offset = 0; offset < PAGE_SIZE; offset += IcacheLineSize)
-    {
-        __asm__ __volatile__("ic ivau, %0" :: "r"(Va + offset) : "memory");
-    }
-
-    /* Ensure I-cache operations complete and synchronize instruction stream */
-    __asm__ __volatile__("dsb sy" ::: "memory");
-    __asm__ __volatile__("isb" ::: "memory");
+    MiArm64MaintainPageCache(Address, MiArm64DcacheCleanInvalidate, TRUE);
 }
 
-/*
- * MiInvalidateDCachePage - Legacy wrapper, uses CIVAC (outgoing) semantics.
- *
- * This maintains backward compatibility with existing callers.
- * New code should use MiInvalidateDCachePageIncoming or MiInvalidateDCachePageOutgoing
- * explicitly based on the data flow direction.
- */
 VOID
 MiInvalidateDCachePage(
     _In_ PVOID Address)
 {
-    /* Default to outgoing semantics for backward compatibility */
     MiInvalidateDCachePageOutgoing(Address);
 }
 
-/*
- * ARM64-specific helper to get PFN for user addresses by walking the
- * TTBR0 page table hierarchy directly using system PTEs.
- *
- * On ARM64 with TTBR0/TTBR1 split, the kernel's self-mapping (in TTBR1)
- * cannot access user page tables (in TTBR0). We must use the CURRENTLY
- * ACTIVE TTBR0 register to walk the hierarchy, not DirectoryTableBase
- * (which may point to kernel tables for the System process).
- *
- * Returns 0 if the page is not mapped.
- */
 static
 PFN_NUMBER
 MiArm64GetUserPfn(
@@ -538,17 +677,7 @@ MiArm64GetUserPfn(
     ASSERT(Address < MmSystemRangeStart);
     ASSERT(Process != NULL);
 
-    /*
-     * Get the root table PFN.
-     *
-     * BUG #52 FIX: For a DIFFERENT process (e.g., during KeStackAttachProcess or
-     * timer DPC), we must use DirectoryTableBase[0], not TTBR0.
-     *
-     * BUG #52b FIX (SMP): For the CURRENT process, DirectoryTableBase[0] may be
-     * stale or point to different page tables than what TTBR0_EL1 actually uses.
-     * MmCreateVirtualMappingUnsafeEx writes via TTBR0, so readback must also
-     * use TTBR0 to see the same page tables. Use TTBR0 when Process is current.
-     */
+    /* Use active TTBR0 for the current process and the saved root otherwise. */
     if (Process == PsGetCurrentProcess())
     {
         ULONG64 Ttbr0Val;
@@ -625,441 +754,6 @@ Cleanup:
     MiReleaseSystemPtes(MappingPte, 1, SystemPteSpace);
 
     return PagePfn;
-}
-
-/*
- * ARM64-specific helper to create page table entries in TTBR0's hierarchy
- * and write a demand-zero PTE for a user address.
- *
- * This is necessary because on ARM64 with TTBR0/TTBR1 split:
- * - The self-mapping (via MiAddressToPte) is in TTBR1's hierarchy
- * - User addresses are translated via TTBR0's hierarchy
- * - Writing a PTE via self-mapping only updates TTBR1, not TTBR0
- *
- * This function walks TTBR0 directly and creates page tables as needed,
- * then writes the demand-zero PTE. It also writes to TTBR1's self-mapping
- * to keep it in sync for subsequent kernel operations.
- *
- * Returns TRUE if successful, FALSE on failure.
- */
-BOOLEAN
-MiArm64WriteDemandZeroPteToTtbr0(
-    _In_ PEPROCESS Process,
-    _In_ PVOID Address,
-    _In_ MMPTE DemandZeroPte)
-{
-    PFN_NUMBER RootPfn, L1Pfn, L2Pfn, L3Pfn;
-    PFN_NUMBER NewPagePfn;
-    PMMPTE MappingPte;
-    PMMPTE MappedPage;
-    MMPTE MapPte, TempPte, NewTableEntry;
-    ULONG L0Index, L1Index, L2Index, L3Index;
-    ULONG64 Ttbr0;
-    KIRQL OldIrql;
-    ULONG Color;
-    BOOLEAN Success = FALSE;
-
-    UNREFERENCED_PARAMETER(Process);
-    ASSERT(Address < MmSystemRangeStart);
-
-    /* Get the root table PFN from current TTBR0 */
-    __asm__ __volatile__("mrs %0, ttbr0_el1" : "=r"(Ttbr0));
-    RootPfn = (Ttbr0 & ~(ULONG64)0xFFF) >> PAGE_SHIFT;
-    if (RootPfn == 0)
-        return FALSE;
-
-    /* Calculate indices for each level */
-    L0Index = MiAddressToPxi(Address);
-    L1Index = (((ULONG64)Address >> PPI_SHIFT) & 0x1FF);
-    L2Index = (((ULONG64)Address >> PDI_SHIFT) & 0x1FF);
-    L3Index = MiAddressToPti(Address);
-
-    /* Reserve a system PTE for mapping */
-    MappingPte = MiReserveSystemPtes(1, SystemPteSpace);
-    if (!MappingPte)
-        return FALSE;
-
-    /* Build the PTE template for mapping physical pages into kernel space */
-    MI_MAKE_HARDWARE_PTE_KERNEL(&MapPte, MappingPte, MM_READWRITE, RootPfn);
-    MI_MAKE_DIRTY_PAGE(&MapPte);
-
-    /* Build the table entry template for new page table descriptors */
-    NewTableEntry.u.Long = 0;
-    NewTableEntry.u.Hard.Valid = 1;
-    NewTableEntry.u.Hard.NotLargePage = 1;  /* Table descriptor */
-    NewTableEntry.u.Hard.Accessed = 1;
-    NewTableEntry.u.Hard.Shareability = 3;  /* Inner Shareable */
-    MI_SET_PTE_ATTR_INDEX(&NewTableEntry, MI_ARM64_MAIR_NORMAL_WB_IDX);
-
-    /*
-     * Walk TTBR0 page tables and create missing levels.
-     * We work from L0 (root) down to L3 (page table).
-     */
-
-    /* === L0 -> L1 === */
-    MI_WRITE_VALID_PTE(MappingPte, MapPte);
-    MappedPage = MiPteToAddress(MappingPte);
-
-    if (!(MappedPage[L0Index].u.Long & 1))
-    {
-        /* L1 table doesn't exist - create it */
-        OldIrql = MiAcquirePfnLock();
-        Color = MI_GET_NEXT_COLOR();
-        NewPagePfn = MiRemoveZeroPageSafe(Color);
-        if (!NewPagePfn)
-        {
-            NewPagePfn = MiRemoveAnyPage(Color);
-            MiReleasePfnLock(OldIrql);
-            if (!NewPagePfn)
-                goto Cleanup;
-            MiZeroPhysicalPage(NewPagePfn);
-        }
-        else
-        {
-            MiReleasePfnLock(OldIrql);
-        }
-
-        /* Write L0 entry pointing to new L1 table */
-        TempPte = NewTableEntry;
-        TempPte.u.Hard.PageFrameNumber = NewPagePfn;
-        MI_ARM64_STORE_TABLE_ENTRY("MiArm64WriteDemandZeroPteToTtbr0.L0",
-                                   Address,
-                                   0,
-                                   MappedPage,
-                                   L0Index,
-                                   TempPte);
-        ASSERT((MappedPage[L0Index].u.Long & 0x3ULL) == 0x3ULL);
-        __asm__ __volatile__("dsb sy" ::: "memory");
-    }
-    L1Pfn = MappedPage[L0Index].u.Hard.PageFrameNumber;
-
-    /* === L1 -> L2 === */
-    MI_WRITE_INVALID_PTE(MappingPte, MmDecommittedPte);
-    KeInvalidateTlbEntry(MappedPage);
-    MapPte.u.Hard.PageFrameNumber = L1Pfn;
-    MI_WRITE_VALID_PTE(MappingPte, MapPte);
-    MappedPage = MiPteToAddress(MappingPte);
-
-    if (!(MappedPage[L1Index].u.Long & 1))
-    {
-        /* L2 table doesn't exist - create it */
-        OldIrql = MiAcquirePfnLock();
-        Color = MI_GET_NEXT_COLOR();
-        NewPagePfn = MiRemoveZeroPageSafe(Color);
-        if (!NewPagePfn)
-        {
-            NewPagePfn = MiRemoveAnyPage(Color);
-            MiReleasePfnLock(OldIrql);
-            if (!NewPagePfn)
-                goto Cleanup;
-            MiZeroPhysicalPage(NewPagePfn);
-        }
-        else
-        {
-            MiReleasePfnLock(OldIrql);
-        }
-
-        /* Write L1 entry pointing to new L2 table */
-        TempPte = NewTableEntry;
-        TempPte.u.Hard.PageFrameNumber = NewPagePfn;
-        MI_ARM64_STORE_TABLE_ENTRY("MiArm64WriteDemandZeroPteToTtbr0.L1",
-                                   Address,
-                                   1,
-                                   MappedPage,
-                                   L1Index,
-                                   TempPte);
-        ASSERT((MappedPage[L1Index].u.Long & 0x3ULL) == 0x3ULL);
-        __asm__ __volatile__("dsb sy" ::: "memory");
-
-    }
-    L2Pfn = MappedPage[L1Index].u.Hard.PageFrameNumber;
-
-    /* === L2 -> L3 === */
-    MI_WRITE_INVALID_PTE(MappingPte, MmDecommittedPte);
-    KeInvalidateTlbEntry(MappedPage);
-    MapPte.u.Hard.PageFrameNumber = L2Pfn;
-    MI_WRITE_VALID_PTE(MappingPte, MapPte);
-    MappedPage = MiPteToAddress(MappingPte);
-
-    if (!(MappedPage[L2Index].u.Long & 1))
-    {
-        /* L3 table doesn't exist - create it */
-        OldIrql = MiAcquirePfnLock();
-        Color = MI_GET_NEXT_COLOR();
-        NewPagePfn = MiRemoveZeroPageSafe(Color);
-        if (!NewPagePfn)
-        {
-            NewPagePfn = MiRemoveAnyPage(Color);
-            MiReleasePfnLock(OldIrql);
-            if (!NewPagePfn)
-                goto Cleanup;
-            MiZeroPhysicalPage(NewPagePfn);
-        }
-        else
-        {
-            MiReleasePfnLock(OldIrql);
-        }
-
-        /* Write L2 entry pointing to new L3 table */
-        TempPte = NewTableEntry;
-        TempPte.u.Hard.PageFrameNumber = NewPagePfn;
-        MI_ARM64_STORE_TABLE_ENTRY("MiArm64WriteDemandZeroPteToTtbr0.L2",
-                                   Address,
-                                   2,
-                                   MappedPage,
-                                   L2Index,
-                                   TempPte);
-        ASSERT((MappedPage[L2Index].u.Long & 0x3ULL) == 0x3ULL);
-        __asm__ __volatile__("dsb sy" ::: "memory");
-
-    }
-    L3Pfn = MappedPage[L2Index].u.Hard.PageFrameNumber;
-
-    /* === Write final PTE to L3 === */
-    MI_WRITE_INVALID_PTE(MappingPte, MmDecommittedPte);
-    KeInvalidateTlbEntry(MappedPage);
-    MapPte.u.Hard.PageFrameNumber = L3Pfn;
-    MI_WRITE_VALID_PTE(MappingPte, MapPte);
-    MappedPage = MiPteToAddress(MappingPte);
-
-    /* Write the demand-zero PTE */
-    if (MappedPage[L3Index].u.Long == 0)
-    {
-        MI_ARM64_STORE_TABLE_ENTRY("MiArm64WriteDemandZeroPteToTtbr0.L3",
-                                   Address,
-                                   3,
-                                   MappedPage,
-                                   L3Index,
-                                   DemandZeroPte);
-        __asm__ __volatile__("dsb sy" ::: "memory");
-        Success = TRUE;
-
-    }
-
-Cleanup:
-    /* Cleanup */
-    MI_WRITE_INVALID_PTE(MappingPte, MmDecommittedPte);
-    KeInvalidateTlbEntry(MappedPage);
-    MiReleaseSystemPtes(MappingPte, 1, SystemPteSpace);
-
-    /* TLB flush for the user address */
-    __asm__ __volatile__("dsb sy" ::: "memory");
-    __asm__ __volatile__("tlbi vmalle1is" ::: "memory");
-    __asm__ __volatile__("dsb sy" ::: "memory");
-    __asm__ __volatile__("isb" ::: "memory");
-
-    return Success;
-}
-
-/*
- * ARM64-specific helper to write a PTE value to a user address's page table
- * entry directly in TTBR0's hierarchy.
- *
- * This is needed because on ARM64:
- * - The self-mapping (MiAddressToPte, etc.) is in TTBR1's hierarchy
- * - User addresses are translated via TTBR0's hierarchy
- * - Writing to self-mapping only updates TTBR1, not TTBR0
- *
- * This function walks TTBR0, finds the L3 page table entry for the given
- * user address, and writes the PTE value to it.
- *
- * Returns TRUE on success, FALSE on failure (e.g., page tables don't exist).
- */
-BOOLEAN
-MiArm64WritePteToTtbr0(
-    _In_ PVOID UserVirtualAddress,
-    _In_ MMPTE PteValue)
-{
-    PFN_NUMBER RootPfn, L1Pfn, L2Pfn, L3Pfn;
-    PFN_NUMBER NewPagePfn;
-    PMMPTE MappingPte;
-    PMMPTE MappedPage;
-    MMPTE MapPte, TempPte, NewTableEntry;
-    ULONG L0Index, L1Index, L2Index, L3Index;
-    ULONG64 Ttbr0;
-    KIRQL OldIrql;
-    ULONG Color;
-    BOOLEAN Success = FALSE;
-
-    ASSERT(UserVirtualAddress < MmSystemRangeStart);
-
-    /* Get the root table PFN from current TTBR0 */
-    __asm__ __volatile__("mrs %0, ttbr0_el1" : "=r"(Ttbr0));
-    RootPfn = (Ttbr0 & ~(ULONG64)0xFFF) >> PAGE_SHIFT;
-    if (RootPfn == 0)
-        return FALSE;
-
-    /* Calculate indices for each level */
-    L0Index = MiAddressToPxi(UserVirtualAddress);
-    L1Index = (((ULONG64)UserVirtualAddress >> PPI_SHIFT) & 0x1FF);
-    L2Index = (((ULONG64)UserVirtualAddress >> PDI_SHIFT) & 0x1FF);
-    L3Index = MiAddressToPti(UserVirtualAddress);
-
-    /* Reserve a system PTE for mapping */
-    MappingPte = MiReserveSystemPtes(1, SystemPteSpace);
-    if (!MappingPte)
-        return FALSE;
-
-    /* Build the PTE template for mapping physical pages into kernel space */
-    MI_MAKE_HARDWARE_PTE_KERNEL(&MapPte, MappingPte, MM_READWRITE, RootPfn);
-    MI_MAKE_DIRTY_PAGE(&MapPte);
-
-    /* Build the table entry template for new page table descriptors */
-    NewTableEntry.u.Long = 0;
-    NewTableEntry.u.Hard.Valid = 1;
-    NewTableEntry.u.Hard.NotLargePage = 1;  /* Table descriptor */
-    NewTableEntry.u.Hard.Accessed = 1;
-    NewTableEntry.u.Hard.Shareability = 3;  /* Inner Shareable */
-    MI_SET_PTE_ATTR_INDEX(&NewTableEntry, MI_ARM64_MAIR_NORMAL_WB_IDX);
-
-    /*
-     * Walk TTBR0 page tables and create missing levels.
-     * We work from L0 (root) down to L3 (page table).
-     */
-
-    /* === L0 -> L1 === */
-    MI_WRITE_VALID_PTE(MappingPte, MapPte);
-    MappedPage = MiPteToAddress(MappingPte);
-
-    if (!(MappedPage[L0Index].u.Long & 1))
-    {
-        /* L1 table doesn't exist - create it */
-        OldIrql = MiAcquirePfnLock();
-        Color = MI_GET_NEXT_COLOR();
-        NewPagePfn = MiRemoveZeroPageSafe(Color);
-        if (!NewPagePfn)
-        {
-            NewPagePfn = MiRemoveAnyPage(Color);
-            MiReleasePfnLock(OldIrql);
-            if (!NewPagePfn)
-                goto Cleanup;
-            MiZeroPhysicalPage(NewPagePfn);
-        }
-        else
-        {
-            MiReleasePfnLock(OldIrql);
-        }
-
-        TempPte = NewTableEntry;
-        TempPte.u.Hard.PageFrameNumber = NewPagePfn;
-        MI_ARM64_STORE_TABLE_ENTRY("MiArm64WritePteToTtbr0.L0",
-                                   UserVirtualAddress,
-                                   0,
-                                   MappedPage,
-                                   L0Index,
-                                   TempPte);
-        ASSERT((MappedPage[L0Index].u.Long & 0x3ULL) == 0x3ULL);
-        __asm__ __volatile__("dsb sy" ::: "memory");
-    }
-    L1Pfn = MappedPage[L0Index].u.Hard.PageFrameNumber;
-
-    /* === L1 -> L2 === */
-    MI_WRITE_INVALID_PTE(MappingPte, MmDecommittedPte);
-    KeInvalidateTlbEntry(MappedPage);
-    MapPte.u.Hard.PageFrameNumber = L1Pfn;
-    MI_WRITE_VALID_PTE(MappingPte, MapPte);
-    MappedPage = MiPteToAddress(MappingPte);
-
-    if (!(MappedPage[L1Index].u.Long & 1))
-    {
-        /* L2 table doesn't exist - create it */
-        OldIrql = MiAcquirePfnLock();
-        Color = MI_GET_NEXT_COLOR();
-        NewPagePfn = MiRemoveZeroPageSafe(Color);
-        if (!NewPagePfn)
-        {
-            NewPagePfn = MiRemoveAnyPage(Color);
-            MiReleasePfnLock(OldIrql);
-            if (!NewPagePfn)
-                goto Cleanup;
-            MiZeroPhysicalPage(NewPagePfn);
-        }
-        else
-        {
-            MiReleasePfnLock(OldIrql);
-        }
-
-        TempPte = NewTableEntry;
-        TempPte.u.Hard.PageFrameNumber = NewPagePfn;
-        MI_ARM64_STORE_TABLE_ENTRY("MiArm64WritePteToTtbr0.L1",
-                                   UserVirtualAddress,
-                                   1,
-                                   MappedPage,
-                                   L1Index,
-                                   TempPte);
-        ASSERT((MappedPage[L1Index].u.Long & 0x3ULL) == 0x3ULL);
-        __asm__ __volatile__("dsb sy" ::: "memory");
-    }
-    L2Pfn = MappedPage[L1Index].u.Hard.PageFrameNumber;
-
-    /* === L2 -> L3 === */
-    MI_WRITE_INVALID_PTE(MappingPte, MmDecommittedPte);
-    KeInvalidateTlbEntry(MappedPage);
-    MapPte.u.Hard.PageFrameNumber = L2Pfn;
-    MI_WRITE_VALID_PTE(MappingPte, MapPte);
-    MappedPage = MiPteToAddress(MappingPte);
-
-    if (!(MappedPage[L2Index].u.Long & 1))
-    {
-        /* L3 table doesn't exist - create it */
-        OldIrql = MiAcquirePfnLock();
-        Color = MI_GET_NEXT_COLOR();
-        NewPagePfn = MiRemoveZeroPageSafe(Color);
-        if (!NewPagePfn)
-        {
-            NewPagePfn = MiRemoveAnyPage(Color);
-            MiReleasePfnLock(OldIrql);
-            if (!NewPagePfn)
-                goto Cleanup;
-            MiZeroPhysicalPage(NewPagePfn);
-        }
-        else
-        {
-            MiReleasePfnLock(OldIrql);
-        }
-
-        TempPte = NewTableEntry;
-        TempPte.u.Hard.PageFrameNumber = NewPagePfn;
-        MI_ARM64_STORE_TABLE_ENTRY("MiArm64WritePteToTtbr0.L2",
-                                   UserVirtualAddress,
-                                   2,
-                                   MappedPage,
-                                   L2Index,
-                                   TempPte);
-        ASSERT((MappedPage[L2Index].u.Long & 0x3ULL) == 0x3ULL);
-        __asm__ __volatile__("dsb sy" ::: "memory");
-    }
-    L3Pfn = MappedPage[L2Index].u.Hard.PageFrameNumber;
-
-    /* === Write PTE to L3 === */
-    MI_WRITE_INVALID_PTE(MappingPte, MmDecommittedPte);
-    KeInvalidateTlbEntry(MappedPage);
-    MapPte.u.Hard.PageFrameNumber = L3Pfn;
-    MI_WRITE_VALID_PTE(MappingPte, MapPte);
-    MappedPage = MiPteToAddress(MappingPte);
-
-    /* Write the PTE value */
-    MI_ARM64_STORE_TABLE_ENTRY("MiArm64WritePteToTtbr0.L3",
-                               UserVirtualAddress,
-                               3,
-                               MappedPage,
-                               L3Index,
-                               PteValue);
-    __asm__ __volatile__("dsb sy" ::: "memory");
-    Success = TRUE;
-
-Cleanup:
-    MI_WRITE_INVALID_PTE(MappingPte, MmDecommittedPte);
-    KeInvalidateTlbEntry(MappedPage);
-    MiReleaseSystemPtes(MappingPte, 1, SystemPteSpace);
-
-    /* TLB flush for the user address */
-    __asm__ __volatile__("dsb sy" ::: "memory");
-    __asm__ __volatile__("tlbi vmalle1is" ::: "memory");
-    __asm__ __volatile__("dsb sy" ::: "memory");
-    __asm__ __volatile__("isb" ::: "memory");
-
-    return Success;
 }
 
 static
@@ -1486,10 +1180,7 @@ MmCreateVirtualMappingUnsafeEx(
                                        TempPte);
             ASSERT((MappedPage[PdeIndex].u.Long & 0x3ULL) == 0x3ULL);
 
-            /*
-             * Bug #44: Track new L3 table in L2's UsedPageTableEntries.
-             * MiDeletePde cascade will decrement this during process teardown.
-             */
+            /* Track the new L3 table in the parent L2 PFN entry. */
             {
                 PMMPFN PfnL2 = MI_PFN_ELEMENT(PdePfn);
                 PfnL2->OriginalPte.u.Soft.UsedPageTableEntries++;
@@ -1523,27 +1214,7 @@ MmCreateVirtualMappingUnsafeEx(
             OldUserPte = MappedPage[PteIndex].u.Long;
             MiArm64TraceUserMapState("l3-before", Process, Address, Page, Protection, OldUserPte);
 
-            /*
-             * Build the final PTE for the user page.
-             *
-             * CRITICAL ARM64 FIX: We cannot use MI_MAKE_HARDWARE_PTE directly because
-             * it calls MiDetermineUserGlobalPteMask() which checks if the PTE address
-             * is in user PTE space to set the Owner bit. However, we are writing to
-             * user page tables via a SYSTEM PTE (MappedPage), so the PTE address is
-             * in kernel space, and MiDetermineUserGlobalPteMask would NOT set Owner=1.
-             *
-             * Without Owner=1 (AP[0]=1), the ARM64 MMU treats the page as EL1-only,
-             * preventing user mode (EL0) from accessing it. This causes writes to
-             * appear to fail (reads return garbage/0xAA poison bytes).
-             *
-             * Solution: Manually build the PTE with proper user-accessible attributes:
-             * - Valid=1, NotLargePage=1 for L3 page descriptor (bits [1:0]=0b11)
-             * - Owner=1 for user access (AP[0]=1 allows EL0 access)
-             * - NonGlobal=1 so the mapping stays process-local in the TLB
-             * - NotDirty=0 for writable pages (AP[1]=0 allows writes)
-             * - Accessed=1 (AF bit) required by ARM64
-             * - Protection mask for cache and execute permissions
-             */
+            /* Build an EL0 L3 page descriptor in the active TTBR0 hierarchy. */
             FinalPte.u.Long = 0;
             FinalPte.u.Hard.Valid = 1;
             FinalPte.u.Hard.NotLargePage = 1;  /* ARM64 L3 page descriptor */
@@ -1554,28 +1225,13 @@ MmCreateVirtualMappingUnsafeEx(
             FinalPte.u.Hard.PageFrameNumber = Page;
             FinalPte.u.Long |= MmProtectToPteMask[ProtectionMask];
 
-            /*
-             * ARM64 Dirty Bit Management:
-             *
-             * On ARM64, the NotDirty bit (bit 7, AP[1]) controls both write permission
-             * and dirty tracking:
-             * - NotDirty=0 (AP[1]=0): Page is read-write, considered "dirty"
-             * - NotDirty=1 (AP[1]=1): Page is read-only, considered "not dirty"
-             *
-             * For WRITABLE pages: Set NotDirty=0 to allow writes.
-             * For READ-ONLY pages: Set NotDirty=1 to mark as clean. This is CRITICAL
-             * because MmDeleteVirtualMapping checks NotDirty to determine if the page
-             * was written to. If we leave NotDirty=0 for read-only pages, they will
-             * incorrectly report as dirty when unmapped, causing assertions in
-             * MmUnsharePageEntrySectionSegment.
-             */
+            /* NotDirty encodes write permission and dirty state on ARM64. */
             if (FinalPte.u.Hard.Writable)
             {
-                MI_MAKE_DIRTY_PAGE(&FinalPte);  /* NotDirty=0 for writable */
+                MI_MAKE_DIRTY_PAGE(&FinalPte);
             }
             else
             {
-                /* Read-only page: set NotDirty=1 to mark as clean */
                 FinalPte.u.Hard.NotDirty = 1;
             }
 
@@ -1618,21 +1274,7 @@ MmCreateVirtualMappingUnsafeEx(
                 MiReleasePfnLock(PfnOldIrql);
             }
 
-            /*
-             * Check for mapping collision.
-             *
-             * ARM64 Cycle 57: FreeLoader creates identity mappings in user space (TTBR0)
-             * for its own use during boot. When the kernel starts, these identity mappings
-             * may still exist. If a section view is mapped at a VA that has an existing
-             * identity mapping, we must clear the old PTE before installing the new one.
-             *
-             * This handles the case where:
-             * - FreeLoader identity-mapped physical address 0xFF000000
-             * - Kernel maps ntdll.dll section view at VA 0xFF000000
-             * - Old PTE would cause reads to return identity-mapped (stale) data
-             *
-             * Solution: Invalidate TLB and clear the existing PTE before writing the new one.
-             */
+            /* Replace any valid boot-time user mapping at this VA. */
             if (OldUserPte != 0)
             {
                 MMPTE OldPteContents;
@@ -1648,7 +1290,6 @@ MmCreateVirtualMappingUnsafeEx(
                     DPRINT("[arm64] Clearing stale valid PTE at %p (old PTE=0x%llx)\n",
                             Address, OldUserPte);
 
-                    /* Invalidate TLB for this VA first - use VAALE1IS to flush ALL ASIDs including Global entries */
                     __asm__ __volatile__("tlbi vaale1is, %0" :: "r"((ULONG_PTR)Address >> PAGE_SHIFT) : "memory");
                     __asm__ __volatile__("dsb ish" ::: "memory");
                     __asm__ __volatile__("isb" ::: "memory");
@@ -1661,7 +1302,6 @@ MmCreateVirtualMappingUnsafeEx(
                      */
                     MiArm64InvalidatePageByPfnAlias(OldPteContents.u.Hard.PageFrameNumber);
 
-                    /* Now clear the old valid PTE */
                     MI_ARM64_STORE_TABLE_ENTRY64("MmCreateVirtualMappingUnsafeEx.L3ClearOld",
                                                  Address,
                                                  3,
@@ -1673,23 +1313,7 @@ MmCreateVirtualMappingUnsafeEx(
                 }
             }
 
-            /*
-             * ARM64 cache maintenance for user-space section mappings.
-             *
-             * DC CIVAC requires write permission at the current EL. For read-only
-             * pages (e.g., .rdata sections containing DLL export tables), the user
-             * PTE has NotDirty=1 (AP[1]=1, EL1 read-only), so DC CIVAC through
-             * the user VA would fault or silently fail on QEMU, leaving stale
-             * cache data that causes non-deterministic import resolution failures
-             * (LdrpNameToOrdinal reads garbage from the export name table).
-             *
-             * Solution: write the final user PTE, release the temporary page-table
-             * mapping, then publish the data page through its stable KSEG0 PFN alias.
-             * That alias is EL1 read-write and does not depend on the freshly
-             * created EL0 mapping, so cache maintenance stays off the user VA.
-             */
-
-            /* Step 1: Write the final PTE to the L3 table (through system PTE) */
+            /* Write the final PTE before publishing the page through its PFN alias. */
             MI_ARM64_STORE_TABLE_ENTRY("MmCreateVirtualMappingUnsafeEx.L3Final",
                                        Address,
                                        3,
@@ -1699,30 +1323,7 @@ MmCreateVirtualMappingUnsafeEx(
             ASSERT(MappedPage[PteIndex].u.Long == FinalPte.u.Long);
             __asm__ __volatile__("dsb sy" ::: "memory");
 
-            /*
-             * Bug #60 FIX: Increment UsedPageTableEntries for the L3 page table.
-             *
-             * MiDecrementPageTableReferences (called from MiDeleteVirtualAddresses
-             * and NtFreeVirtualMemory) decrements UsedPageTableEntries for every
-             * non-zero PTE it removes. Without a matching increment here, the
-             * count underflows to (USHORT)-1 and MiDeletePde never fires (or
-             * worse, the count wraps through zero and triggers premature page
-             * table freeing, causing L2e/L3e=0x0 translation faults).
-             *
-             * Only increment for genuinely NEW entries (OldUserPte == 0).
-             * Replacement entries (OldUserPte != 0) were either:
-             * (a) FreeLoader identity mappings (never tracked, cleared above), or
-             * (b) Previous MmCreateVirtualMappingUnsafeEx entries (already tracked).
-             * Case (b) is already counted, so incrementing again would leak.
-             * Case (a) is rare (only during early process setup); the FreeLoader
-             * PTE is cleared at line ~1390 but never decremented, so incrementing
-             * once for the replacement PTE correctly accounts for the eventual
-             * decrement in MiDeleteVirtualAddresses.
-             *
-             * We increment directly on the PFN using PtePfn (already known from
-             * the page table walk above) to avoid a redundant KSEG0 walk that
-             * MiIncrementPageTableReferences would perform.
-             */
+            /* Balance the teardown decrement for newly created user PTEs. */
             if (OldUserPte == 0)
             {
                 PMMPFN PtePfn1 = MiGetPfnEntry(PtePfn);
@@ -1733,12 +1334,11 @@ MmCreateVirtualMappingUnsafeEx(
                 }
             }
 
-            /* Step 2: Release L3 table mapping from system PTE */
             MI_WRITE_INVALID_PTE(MappingPte, MmDecommittedPte);
             KeInvalidateTlbEntry(MappedPage);
             MiReleaseSystemPtes(MappingPte, 1, SystemPteSpace);
 
-            /* Step 3: Publish the newly mapped page through its stable PFN alias */
+            /* Publish cache state through the stable PFN alias. */
             {
                 BOOLEAN SweepIcache = (FinalPte.u.Hard.UserNoExecute == 0);
 
@@ -1760,31 +1360,8 @@ MmCreateVirtualMappingUnsafeEx(
                 }
             }
 
-            /*
-             * ARM64 requires aggressive TLB invalidation after modifying page tables.
-             * The CPU can cache "negative" translation results (translation faults),
-             * so we must ensure all levels of the page table walk are re-fetched.
-             *
-             * Use a full EL1 TLB flush (vmalle1is) to invalidate all cached translations
-             * including any cached translation fault entries from the earlier page fault.
-             * The sequence is:
-             * 1. DSB SY - Ensure all page table writes are complete
-             * 2. TLBI VMALLE1IS - Broadcast full TLB invalidation to all cores
-             * 3. DSB SY - Wait for TLB invalidation to complete
-             * 4. ISB - Synchronize instruction stream
-             */
-            __asm__ __volatile__("dsb sy" ::: "memory");
-            __asm__ __volatile__("tlbi vmalle1is" ::: "memory");
-            __asm__ __volatile__("dsb sy" ::: "memory");
-            __asm__ __volatile__("isb" ::: "memory");
+            MiArm64InvalidateUserAddress(Address);
             MiArm64TraceUserMapState("done", Process, Address, Page, Protection, OldUserPte);
-
-            /*
-             * No TTBR0 switch needed - we now write page tables directly to the
-             * TTBR0 hierarchy (read at the start of this function). This ensures
-             * the mapping is immediately visible to the CPU for user address
-             * translation without needing to switch TTBR0.
-             */
 
             MiUnlockProcessWorkingSet(Process, PsGetCurrentThread());
         }
@@ -1810,133 +1387,14 @@ MmCreateVirtualMappingUnsafeEx(
         MiReleasePfnLock(OldIrql);
     }
 
-    /*
-     * ARM64 Cache Coherency for Kernel Mappings - CRITICAL FIX (Cycle 39).
-     *
-     * For REMAPPINGS (old PTE != 0), we must invalidate the cache before
-     * writing the new PTE, because the cache may contain stale data from
-     * the previous physical page that was mapped at this VA.
-     *
-     * For NEW mappings (old PTE == 0), we MUST NOT use DC CIVAC because:
-     * 1. The VA has no valid translation - DC CIVAC will cause a Data Abort
-     * 2. There's no stale cache data for an unmapped VA anyway
-     *
-     * Original problem this fixed:
-     * When mapping ramdisk pages that were written by the bootloader, if the VA
-     * was previously mapped to a DIFFERENT physical page, the cache could have
-     * stale data for this VA. This caused "Invalid image DOS signature" errors.
-     *
-     * DC CIVAC (Clean and Invalidate by VA to PoC):
-     * - Writes back any dirty data (preserves previous mappings' writes)
-     * - Invalidates cache lines for this VA
-     * - Forces subsequent reads to fetch from physical memory
-     * - REQUIRES a valid VA translation - faults on unmapped addresses!
-     *
-     * Order of operations:
-     * 1. Check if current PTE is valid (remapping case)
-     * 2. If valid: DC CIVAC (invalidate cache for VA) - BEFORE PTE write
-     * 3. DSB ISH (ensure cache ops complete)
-     * 4. Write new PTE (make mapping valid)
-     * 5. TLBI (invalidate TLB)
-     * 6. Return to faulting instruction which will now see correct data
-     */
+    if (PointerPte->u.Hard.Valid)
     {
-        MMPTE OldPte;
-        PMMPTE CheckPte;
-
-        /*
-         * Read the current PTE to check if this is a remapping.
-         * For user addresses, walk TTBR0 physically via KSEG0 (the TTBR0
-         * alias can be stale after context switches - Bug #48).
-         * For kernel addresses, we can use the self-map.
-         */
-        if (Address < MmSystemRangeStart)
-        {
-            ULONG64 OldPteVal;
-            MiArm64ReadUserPtePhysically(Address, &OldPteVal, NULL);
-            OldPte.u.Long = OldPteVal;
-        }
-        else
-        {
-            CheckPte = PointerPte;
-            OldPte.u.Long = CheckPte->u.Long;
-        }
-
-        /*
-         * Only perform cache invalidation if there's an existing valid mapping.
-         * DC CIVAC requires a valid VA translation - it will fault on unmapped addresses!
-         */
-        if (OldPte.u.Long != 0 && OldPte.u.Hard.Valid)
-        {
-            ULONG64 Ctr;
-            ULONG DcacheLineSize;
-            ULONG_PTR Va;
-
-            /* Read CTR_EL0 to get D-cache line size */
-            __asm__ __volatile__("mrs %0, ctr_el0" : "=r"(Ctr));
-            DcacheLineSize = 4u << ((Ctr >> 16) & 0xF);
-
-            /* Invalidate D-cache for the target virtual address */
-            Va = (ULONG_PTR)Address & ~(ULONG_PTR)(PAGE_SIZE - 1);
-
-            /* Invalidate each cache line in the page */
-            for (ULONG_PTR offset = 0; offset < PAGE_SIZE; offset += DcacheLineSize)
-            {
-                __asm__ __volatile__("dc civac, %0" :: "r"(Va + offset) : "memory");
-            }
-
-            /* Ensure cache operations complete BEFORE writing PTE */
-            __asm__ __volatile__("dsb ish" ::: "memory");
-        }
+        MiArm64MaintainPageCache(Address, MiArm64DcacheCleanInvalidate, FALSE);
     }
 
-    /*
-     * ARM64 TTBR0 Alias Fix: Write user-space PTEs via TTBR0 alias.
-     *
-     * On ARM64, user addresses use TTBR0's page tables while kernel addresses
-     * use TTBR1's page tables. The self-map at PTE_BASE is in TTBR1's hierarchy.
-     *
-     * L0[494] in TTBR1 now points to TTBR0's L0 page (the "TTBR0 alias").
-     * For user addresses, MiAddressToPteTtbr0() goes through this alias to
-     * correctly access TTBR0's page table hierarchy.
-     *
-     * This replaces the old MiArm64WritePteToTtbr0() workaround.
-     */
-    if (Address < MmSystemRangeStart)
     {
-        /*
-         * ARM64 FIX (Bug #48): User PTE was already written correctly via
-         * KSEG0 physical mapping in MiArm64MapUserPage (system PTE approach).
-         *
-         * Previously this code also wrote the PTE through the TTBR0 alias
-         * (MiAddressToPteTtbr0), but that alias can be stale after context
-         * switches, causing cross-process PTE corruption. Since the PTE is
-         * already written to the correct physical L3 table page above, this
-         * second write is both redundant and dangerous. Skip it on ARM64.
-         */
-    }
-    else
-    {
-        ULONG_PTR OldPteValue;
+        ULONG_PTR OldPteValue = PointerPte->u.Long;
 
-        /*
-         * Kernel address: Self-Map is valid for TTBR1.
-         *
-         * ARM64 FIX: Cannot use InterlockedExchangePte (LDXR/STXR) here.
-         * The self-map reinterprets TABLE descriptors as PAGE descriptors at
-         * the final level, resulting in incorrect memory attributes (AttrIndex
-         * from "Ignored" TABLE bits = 0, likely Device memory). Exclusive
-        * monitors (LDXR/STXR) are UNPREDICTABLE on Device memory, causing
-        * infinite STXR failures under HVF hardware virtualization.
-        *
-         * Regular aligned 64-bit stores are naturally atomic on ARM64 and
-         * work correctly on any memory type. But the self-map leaf is only an
-         * alias: the hardware TTBR1 walker may still be reading the real L3
-         * page table page through KSEG0. Mirror the leaf into the TTBR1 walk
-         * after the self-map store so section/system-cache faults publish a
-         * real hardware-visible mapping, not just a recursive alias update.
-         */
-        OldPteValue = PointerPte->u.Long;
         PointerPte->u.Long = TempPte.u.Long;
         MiArm64SyncKernelLeafPteWrite(PointerPte);
         __asm__ __volatile__("dsb ishst" ::: "memory");
@@ -1948,12 +1406,6 @@ MmCreateVirtualMappingUnsafeEx(
         }
     }
 
-    /*
-     * ARM64: Invalidate the TLB entry for this address.
-     * Even for new mappings (where old PTE was 0), the CPU might have a
-     * "negative" TLB entry cached from the page fault that triggered this
-     * mapping. We must invalidate it so the CPU picks up the new mapping.
-     */
     KeInvalidateTlbEntry(Address);
 
     return STATUS_SUCCESS;
@@ -1991,7 +1443,6 @@ MmDeleteVirtualMappingEx(
     _In_ BOOLEAN IsPhysical)
 {
     MMPTE OldPte;
-    BOOLEAN ValidPde = FALSE;
 
     OldPte.u.Long = 0;
 
@@ -2001,185 +1452,29 @@ MmDeleteVirtualMappingEx(
     {
         ASSERT(Address >= MmSystemRangeStart);
 
-        /*
-         * For kernel addresses, check if the page table hierarchy is valid.
-         * We cannot call MiMakeSystemAddressValid(Address) here because:
-         * 1. This function is used during page fault cleanup/unmapping
-         * 2. MiMakeSystemAddressValid would try to fault in the address
-         * 3. This would cause infinite recursion
-         *
-         * Instead, use MiIsPdeForAddressValid to check without faulting.
-         * If page tables don't exist, there's nothing to delete.
-         */
-        ValidPde = MiIsPdeForAddressValid(Address);
-        if (ValidPde)
+        if (MiIsPdeForAddressValid(Address))
         {
-            PMMPTE PointerPte = MiAddressToPte(Address);
-
-            OldPte.u.Long = PointerPte->u.Long;
-            if (OldPte.u.Hard.Valid)
-            {
-                MiInvalidateDCachePage(Address);
-            }
-            /*
-             * ARM64: Use simple store instead of InterlockedExchangePte
-             * (LDXR/STXR) for self-map PTE access. See LDXR/STXR comment
-             * in MmCreateVirtualMappingUnsafeEx kernel path.
-             */
-            OldPte.u.Long = PointerPte->u.Long;
-            PointerPte->u.Long = 0;
-            __asm__ __volatile__("dsb ishst" ::: "memory");
-            KeInvalidateTlbEntry(Address);
+            OldPte = MiArm64ClearKernelPte(Address, MiAddressToPte(Address));
         }
     }
     else
     {
+        MI_ARM64_USER_PTE_WALK Walk;
+
         ASSERT(Address < MmSystemRangeStart);
         ASSERT(Process == PsGetCurrentProcess());
 
-        /*
-         * ARM64 TTBR0 Alias Avoidance: Delete user PTEs via physical walking.
-         *
-         * The TTBR0 alias addresses are broken on ARM64. We must access
-         * user page tables via KSEG0 direct physical mapping.
-         */
+        if (MiArm64GetUserPteAddress(Address, &Walk))
         {
-            ULONG64 PteValue;
-            ULONG Depth;
-
-            /* Walk TTBR0 page tables physically and get the L3 PTE */
-            if (MiArm64ReadUserPtePhysically(Address, &PteValue, &Depth) && Depth >= 3)
-            {
-                OldPte.u.Long = PteValue;
-                ValidPde = TRUE;
-
-                /* If PTE is valid, clear it via physical memory */
-                if (OldPte.u.Hard.Valid)
-                {
-                    ULONG64 RootPa;
-                    volatile ULONG64 *L0Table, *L1Table, *L2Table, *L3Table;
-                    ULONG L0Idx, L1Idx, L2Idx, L3Idx;
-                    ULONG64 L0Entry, L1Entry, L2Entry;
-
-                    /* Invalidate D-cache before clearing PTE */
-                    MiInvalidateDCachePage(Address);
-
-                    /*
-                     * CRITICAL FIX: Use TTBR0 register (not DirectoryTableBase[0])
-                     * to find the user page table root.
-                     *
-                     * DirectoryTableBase[0] for the System process may point to
-                     * TTBR1 (kernel page tables) instead of TTBR0 (user page tables).
-                     * Using the wrong root means we'd clear a PTE in the wrong tree,
-                     * leaving the REAL PTE in TTBR0's tree still valid.
-                     *
-                     * This was the root cause of SMP driver image corruption:
-                     * section view PTEs were never actually cleared during unmap,
-                     * so the next driver mapped at the same VA would read stale data
-                     * from the previous driver's physical pages.
-                     */
-                    {
-                        ULONG64 Ttbr0Val;
-                        __asm__ __volatile__("mrs %0, ttbr0_el1" : "=r"(Ttbr0Val));
-                        RootPa = Ttbr0Val & ARM64_PTE_ADDR_MASK;
-                    }
-                    if (RootPa != 0)
-                    {
-                        L0Idx = ((ULONG64)(ULONG_PTR)Address >> 39) & 0x1FF;
-                        L1Idx = ((ULONG64)(ULONG_PTR)Address >> 30) & 0x1FF;
-                        L2Idx = ((ULONG64)(ULONG_PTR)Address >> 21) & 0x1FF;
-                        L3Idx = ((ULONG64)(ULONG_PTR)Address >> 12) & 0x1FF;
-
-                        L0Table = (volatile ULONG64 *)(KSEG0_BASE | RootPa);
-                        L0Entry = L0Table[L0Idx];
-                        L1Table = (volatile ULONG64 *)(KSEG0_BASE | (L0Entry & ARM64_PTE_ADDR_MASK));
-                        L1Entry = L1Table[L1Idx];
-
-                        /* Check for 1GB block (shouldn't happen for user space) */
-                        if ((L1Entry & 0x3ULL) == 0x3ULL)
-                        {
-                            L2Table = (volatile ULONG64 *)(KSEG0_BASE | (L1Entry & ARM64_PTE_ADDR_MASK));
-                            L2Entry = L2Table[L2Idx];
-
-                            /* Check for 2MB block */
-                            if ((L2Entry & 0x3ULL) == 0x3ULL)
-                            {
-                                L3Table = (volatile ULONG64 *)(KSEG0_BASE | (L2Entry & ARM64_PTE_ADDR_MASK));
-
-                                /* Clear the L3 PTE atomically */
-                                __atomic_exchange_n(&L3Table[L3Idx], 0, __ATOMIC_SEQ_CST);
-
-                                /* Full barrier and TLB invalidation */
-                                __asm__ __volatile__("dsb ish" ::: "memory");
-                                __asm__ __volatile__("tlbi vaale1is, %0" :: "r"((ULONG_PTR)Address >> 12) : "memory");
-                                __asm__ __volatile__("dsb ish" ::: "memory");
-                                __asm__ __volatile__("isb" ::: "memory");
-                            }
-                        }
-                    }
-                }
-            }
-            else if (Depth >= 3)
-            {
-                /* Page table exists but PTE is not valid - nothing to delete */
-                OldPte.u.Long = PteValue;
-                ValidPde = TRUE;
-            }
+            OldPte = MiArm64ClearUserPte(Address, &Walk);
         }
-    }
-
-    if (ValidPde && OldPte.u.Hard.Valid)
-    {
-        /* Full cache and TLB flush for coherency */
-        __asm__ __volatile__("ic ialluis" ::: "memory");
-        __asm__ __volatile__("dsb ish" ::: "memory");
-        __asm__ __volatile__("tlbi vmalle1is" ::: "memory");
-        __asm__ __volatile__("dsb ish" ::: "memory");
-        __asm__ __volatile__("isb" ::: "memory");
     }
 
     if (OldPte.u.Long != 0)
     {
         if (WasDirty)
         {
-            /*
-             * ARM64 FIX (Bug #47): Check both hardware dirty bit AND PFN Modified flag.
-             *
-             * On ARM64, the hardware dirty bit (NotDirty, AP[2]) is combined with
-             * the write-permission bit. When MmSetPageProtect changes a page from
-             * writable to read-only, NotDirty is set to 1, losing the dirty state.
-             *
-             * MmSetPageProtect saves the dirty state in PFN.u3.e1.Modified when
-             * this happens. We check both sources here to correctly identify pages
-             * that were modified but later had their protection downgraded.
-             *
-             * This prevents data loss in the page eviction path: without this check,
-             * private COW pages (e.g., DLL IAT pages that were resolved then
-             * re-protected as read-only) would be evicted without being saved to
-             * the pagefile, causing resolved imports to revert to unresolved
-             * hint/name RVAs on re-fault.
-             */
-            BOOLEAN HwDirty = (OldPte.u.Hard.Valid && (OldPte.u.Hard.NotDirty == 0));
-            BOOLEAN PfnDirty = FALSE;
-
-            if (!HwDirty && OldPte.u.Hard.Valid && !IsPhysical)
-            {
-                PFN_NUMBER DirtyCheckPfn = OldPte.u.Hard.PageFrameNumber;
-                if (DirtyCheckPfn != 0 && DirtyCheckPfn <= MmHighestPhysicalPage)
-                {
-                    KIRQL DirtyIrql = MiAcquirePfnLock();
-                    PMMPFN PfnEntry = MiGetPfnEntry(DirtyCheckPfn);
-                    if (PfnEntry != NULL && PfnEntry->u3.e1.Modified)
-                    {
-                        PfnDirty = TRUE;
-                        /* Clear the Modified flag since we're reporting it now */
-                        PfnEntry->u3.e1.Modified = 0;
-                    }
-                    MiReleasePfnLock(DirtyIrql);
-                }
-            }
-
-            *WasDirty = HwDirty || PfnDirty;
+            *WasDirty = MiArm64ConsumeDirtyState(OldPte, IsPhysical);
         }
         if (Page)
             *Page = OldPte.u.Hard.PageFrameNumber;
@@ -2192,88 +1487,14 @@ MmDeleteVirtualMappingEx(
             *Page = 0;
     }
 
-    /*
-     * ARM64: Decrement ARM3 PFN ShareCount for both kernel and user pages.
-     * MmCreateVirtualMappingUnsafeEx increments ShareCount for all non-physical
-     * pages (both kernel and user paths). MmDeleteVirtualMapping must match.
-     *
-     * Previously only done for Process != NULL (user pages), causing stale
-     * ShareCount=1 on freed kernel section pages (Cc cache). When those PFNs
-     * were reallocated for user section pages, the stale ShareCount propagated
-     * indefinitely since MmAllocPage didn't reset it.
-     */
     if (!IsPhysical && OldPte.u.Hard.Valid)
     {
-        PFN_NUMBER DeletePfn = OldPte.u.Hard.PageFrameNumber;
-        if (DeletePfn != 0 && DeletePfn <= MmHighestPhysicalPage)
-        {
-            KIRQL OldIrql = MiAcquirePfnLock();
-            PMMPFN Pfn1 = MiGetPfnEntry(DeletePfn);
-
-            if (Pfn1->u2.ShareCount > 0)
-            {
-                if (--Pfn1->u2.ShareCount == 0)
-                    Pfn1->u3.e1.PageLocation = TransitionPage;
-            }
-
-            MiReleasePfnLock(OldIrql);
-        }
+        MiArm64ReleaseMappedPageReference(OldPte.u.Hard.PageFrameNumber);
     }
 
     if (Process != NULL && !IsPhysical && OldPte.u.Hard.Valid)
     {
-        /*
-         * Decrement the L3 page table's ShareCount for this removed PTE.
-         *
-         * MmCreateVirtualMappingUnsafeEx increments L3 ShareCount when
-         * writing a PTE. We must match that decrement here for the RosMM
-         * teardown path (MmFreeMemoryArea -> MmDeleteVirtualMapping).
-         *
-         * The ARM3 teardown path (MiDeleteVirtualAddresses -> MiDeletePte)
-         * has its own L3 ShareCount decrement via MiDecrementShareCount,
-         * so this code path is only reached by RosMM cleanup.
-         *
-         * Use MiArm64GetUserL3PfnSafe to walk TTBR0 via KSEG0 and find
-         * the L3 page table PFN. The 'Safe' variant checks that the PFN
-         * is still ActiveAndValid (not already freed by MiDeletePde).
-         */
-        PFN_NUMBER L3Pfn = MiArm64GetUserL3PfnSafe(Address);
-        if (L3Pfn != 0)
-        {
-            KIRQL PtIrql = MiAcquirePfnLock();
-            PMMPFN L3PfnEntry = MiGetPfnEntry(L3Pfn);
-            if (L3PfnEntry->u2.ShareCount > 0)
-            {
-                MiDecrementShareCount(L3PfnEntry, L3Pfn);
-            }
-
-            /*
-             * Bug #60 FIX: Decrement UsedPageTableEntries for the removed PTE.
-             *
-             * MmCreateVirtualMappingUnsafeEx now increments UsedPageTableEntries
-             * when writing a new user PTE. This decrement balances that for the
-             * RosMM teardown path (MmFreeMemoryArea -> MmDeleteVirtualMapping).
-             *
-             * The ARM3 teardown path (MiDeleteVirtualAddresses) has its own
-             * decrement via MiDecrementPageTableReferences, so this only fires
-             * for RosMM-cleaned pages. The two paths are mutually exclusive:
-             * MiDeleteVirtualAddresses checks TempPte.u.Long and skips zero PTEs,
-             * so it won't double-decrement if MmDeleteVirtualMapping ran first.
-             */
-            if (L3PfnEntry->OriginalPte.u.Soft.UsedPageTableEntries > 0)
-            {
-                L3PfnEntry->OriginalPte.u.Soft.UsedPageTableEntries--;
-            }
-            else
-            {
-                DPRINT1("[arm64][BUG60] MmDeleteVirtualMappingEx: UsedPTE already 0 for VA=%p "
-                        "L3Pfn=%lx Proc=%s\n",
-                        Address, (ULONG)L3Pfn,
-                        Process->ImageFileName);
-            }
-
-            MiReleasePfnLock(PtIrql);
-        }
+        MiArm64ReleaseUserPageTableReference(Process, Address);
     }
 
     return OldPte.u.Long != 0;
@@ -2292,53 +1513,17 @@ MmCreatePageFileMapping(
 
     MiLockProcessWorkingSetUnsafe(Process, PsGetCurrentThread());
 
-    /*
-     * ARM64 FIX (Bug #48): Walk TTBR0 via KSEG0 to find and modify L3 PTE.
-     * Same rationale as MmSetPageProtect - self-map aliases can be stale.
-     */
     {
-        ULONG64 Ttbr0, RootPa;
-        volatile ULONG64 *L0Table, *L1Table, *L2Table, *L3Table;
-        ULONG L0Idx, L1Idx, L2Idx, L3Idx;
-        ULONG64 L0Entry, L1Entry, L2Entry, PteVal;
+        MI_ARM64_USER_PTE_WALK Walk;
         MMPTE NewPte;
 
-        __asm__ __volatile__("mrs %0, ttbr0_el1" : "=r"(Ttbr0));
-        RootPa = Ttbr0 & ARM64_PTE_ADDR_MASK;
-
-        L0Idx = ((ULONG64)(ULONG_PTR)Address >> 39) & 0x1FF;
-        L1Idx = ((ULONG64)(ULONG_PTR)Address >> 30) & 0x1FF;
-        L2Idx = ((ULONG64)(ULONG_PTR)Address >> 21) & 0x1FF;
-        L3Idx = ((ULONG64)(ULONG_PTR)Address >> 12) & 0x1FF;
-
-        L0Table = (volatile ULONG64 *)(KSEG0_BASE | RootPa);
-        L0Entry = L0Table[L0Idx];
-        if ((L0Entry & 0x3ULL) != 0x3ULL)
-        {
-            MiUnlockProcessWorkingSetUnsafe(Process, PsGetCurrentThread());
-            return STATUS_SUCCESS; /* No page table = no conflict */
-        }
-
-        L1Table = (volatile ULONG64 *)(KSEG0_BASE | (L0Entry & ARM64_PTE_ADDR_MASK));
-        L1Entry = L1Table[L1Idx];
-        if ((L1Entry & 0x3ULL) != 0x3ULL)
+        if (!MiArm64GetUserPteAddress(Address, &Walk))
         {
             MiUnlockProcessWorkingSetUnsafe(Process, PsGetCurrentThread());
             return STATUS_SUCCESS;
         }
 
-        L2Table = (volatile ULONG64 *)(KSEG0_BASE | (L1Entry & ARM64_PTE_ADDR_MASK));
-        L2Entry = L2Table[L2Idx];
-        if ((L2Entry & 0x3ULL) != 0x3ULL)
-        {
-            MiUnlockProcessWorkingSetUnsafe(Process, PsGetCurrentThread());
-            return STATUS_SUCCESS;
-        }
-
-        L3Table = (volatile ULONG64 *)(KSEG0_BASE | (L2Entry & ARM64_PTE_ADDR_MASK));
-        PteVal = L3Table[L3Idx];
-
-        if (PteVal & 0x1ULL) /* Valid bit set */
+        if (Walk.PteValue & 0x1ULL)
         {
             MiUnlockProcessWorkingSetUnsafe(Process, PsGetCurrentThread());
             return STATUS_CONFLICTING_ADDRESSES;
@@ -2350,7 +1535,7 @@ MmCreatePageFileMapping(
         NewPte.u.Soft.Prototype = 0;
         NewPte.u.Soft.Protection = MM_READWRITE;
 
-        __atomic_store_n(&L3Table[L3Idx], NewPte.u.Long, __ATOMIC_SEQ_CST);
+        __atomic_store_n(Walk.PointerPte, NewPte.u.Long, __ATOMIC_SEQ_CST);
     }
 
     MiUnlockProcessWorkingSetUnsafe(Process, PsGetCurrentThread());
@@ -2371,53 +1556,17 @@ MmDeletePageFileMapping(
 
     MiLockProcessWorkingSetUnsafe(Process, PsGetCurrentThread());
 
-    /*
-     * ARM64 FIX (Bug #48): Walk TTBR0 via KSEG0 to find and clear L3 PTE.
-     * Same rationale as MmSetPageProtect - self-map aliases can be stale.
-     */
     {
-        ULONG64 Ttbr0, RootPa;
-        volatile ULONG64 *L0Table, *L1Table, *L2Table, *L3Table;
-        ULONG L0Idx, L1Idx, L2Idx, L3Idx;
-        ULONG64 L0Entry, L1Entry, L2Entry;
+        MI_ARM64_USER_PTE_WALK Walk;
 
-        __asm__ __volatile__("mrs %0, ttbr0_el1" : "=r"(Ttbr0));
-        RootPa = Ttbr0 & ARM64_PTE_ADDR_MASK;
-
-        L0Idx = ((ULONG64)(ULONG_PTR)Address >> 39) & 0x1FF;
-        L1Idx = ((ULONG64)(ULONG_PTR)Address >> 30) & 0x1FF;
-        L2Idx = ((ULONG64)(ULONG_PTR)Address >> 21) & 0x1FF;
-        L3Idx = ((ULONG64)(ULONG_PTR)Address >> 12) & 0x1FF;
-
-        L0Table = (volatile ULONG64 *)(KSEG0_BASE | RootPa);
-        L0Entry = L0Table[L0Idx];
-        if ((L0Entry & 0x3ULL) != 0x3ULL)
+        if (!MiArm64GetUserPteAddress(Address, &Walk))
         {
             *SwapEntry = 0;
             MiUnlockProcessWorkingSetUnsafe(Process, PsGetCurrentThread());
             return;
         }
 
-        L1Table = (volatile ULONG64 *)(KSEG0_BASE | (L0Entry & ARM64_PTE_ADDR_MASK));
-        L1Entry = L1Table[L1Idx];
-        if ((L1Entry & 0x3ULL) != 0x3ULL)
-        {
-            *SwapEntry = 0;
-            MiUnlockProcessWorkingSetUnsafe(Process, PsGetCurrentThread());
-            return;
-        }
-
-        L2Table = (volatile ULONG64 *)(KSEG0_BASE | (L1Entry & ARM64_PTE_ADDR_MASK));
-        L2Entry = L2Table[L2Idx];
-        if ((L2Entry & 0x3ULL) != 0x3ULL)
-        {
-            *SwapEntry = 0;
-            MiUnlockProcessWorkingSetUnsafe(Process, PsGetCurrentThread());
-            return;
-        }
-
-        L3Table = (volatile ULONG64 *)(KSEG0_BASE | (L2Entry & ARM64_PTE_ADDR_MASK));
-        OldPte.u.Long = __atomic_exchange_n(&L3Table[L3Idx], 0, __ATOMIC_SEQ_CST);
+        OldPte.u.Long = __atomic_exchange_n(Walk.PointerPte, 0, __ATOMIC_SEQ_CST);
     }
 
     if (!FlagOn(OldPte.u.Long, 0x800) || OldPte.u.Hard.Valid)
@@ -2444,33 +1593,20 @@ MmGetPageFileMapping(
 
     if (Address < MmSystemRangeStart)
     {
-        /*
-         * ARM64 TTBR0 Alias Avoidance: Walk TTBR0 physically via KSEG0.
-         *
-         * The TTBR0 alias (L0[494]) can fault if intermediate page table
-         * pages do not exist yet for the given user address range. Instead
-         * of dereferencing a potentially unmapped self-map alias address,
-         * walk the physical page tables directly via KSEG0.
-         *
-         * If the page table hierarchy is incomplete (no L1/L2/L3 for this
-         * address), the PTE is effectively zero, meaning no page file
-         * mapping exists.
-         */
-        ULONG64 PteValue;
+        MI_ARM64_USER_PTE_WALK Walk;
 
         MiLockProcessWorkingSetShared(Process, PsGetCurrentThread());
 
-        if (!MiArm64ReadUserPtePhysically(Address, &PteValue, NULL))
+        if (!MiArm64GetUserPteAddress(Address, &Walk))
         {
-            /* Page table hierarchy incomplete - no mapping */
             *SwapEntry = 0;
         }
         else
         {
             MMPTE TempPte;
-            TempPte.u.Long = PteValue;
+            TempPte.u.Long = Walk.PteValue;
 
-            if (!FlagOn(PteValue, 0x800) || TempPte.u.Hard.Valid)
+            if (!FlagOn(Walk.PteValue, 0x800) || TempPte.u.Hard.Valid)
                 *SwapEntry = 0;
             else
                 *SwapEntry = (SWAPENTRY)(((ULONG64)TempPte.u.Soft.PageFileHigh << 4) |
@@ -2481,7 +1617,6 @@ MmGetPageFileMapping(
     }
     else
     {
-        /* Kernel addresses: use the TTBR1 self-map directly */
         PMMPTE PointerPte;
 
         MiLockProcessWorkingSetShared(Process, PsGetCurrentThread());
@@ -2531,93 +1666,7 @@ MmIsPagePresent(
     ASSERT(Process != NULL);
     ASSERT(Process == PsGetCurrentProcess());
 
-    /*
-     * ARM64 TTBR0 Alias Avoidance Fix:
-     *
-     * PROBLEM: The TTBR0 alias addresses (PTE_BASE_TTBR0, etc.) are fundamentally
-     * broken. Accessing them causes nested page faults that lead to WS lock
-     * recursion and assertion failures.
-     *
-     * SOLUTION: Walk TTBR0's page tables PHYSICALLY via KSEG0 direct mapping.
-     * This avoids all TTBR0 alias addresses and cannot cause nested faults.
-     *
-     * We don't need any locks for this because:
-     * 1. We're only reading page table entries (no modification)
-     * 2. Physical memory access via KSEG0 doesn't involve page table walks
-     * 3. Even if the page tables change during our read, we'll get a consistent
-     *    snapshot (either old or new state, both valid)
-     */
-    {
-        ULONG64 Ttbr0, RootPa;
-        volatile ULONG64 *L0Table, *L1Table, *L2Table, *L3Table;
-        ULONG L0Idx, L1Idx, L2Idx, L3Idx;
-        ULONG64 L0Entry, L1Entry, L2Entry, L3Entry;
-
-        /* Read TTBR0 to get the user page table root */
-        __asm__ __volatile__("mrs %0, ttbr0_el1" : "=r"(Ttbr0));
-        RootPa = Ttbr0 & ARM64_PTE_ADDR_MASK;  /* Extract PA, mask ASID bits */
-        if (RootPa == 0)
-            return FALSE;
-
-        /* Calculate indices for each level */
-        L0Idx = ((ULONG64)(ULONG_PTR)Address >> 39) & 0x1FF;
-        L1Idx = ((ULONG64)(ULONG_PTR)Address >> 30) & 0x1FF;
-        L2Idx = ((ULONG64)(ULONG_PTR)Address >> 21) & 0x1FF;
-        L3Idx = ((ULONG64)(ULONG_PTR)Address >> 12) & 0x1FF;
-
-        /* Access L0 table via KSEG0 direct mapping */
-        L0Table = (volatile ULONG64 *)(KSEG0_BASE | RootPa);
-        L0Entry = L0Table[L0Idx];
-
-        /* Check L0 entry validity - must be a table descriptor (bits[1:0]=0b11) */
-        if ((L0Entry & 0x3ULL) != 0x3ULL)
-            return FALSE;
-
-        /* Access L1 table */
-        L1Table = (volatile ULONG64 *)(KSEG0_BASE | (L0Entry & ARM64_PTE_ADDR_MASK));
-        L1Entry = L1Table[L1Idx];
-
-        /*
-         * L1 could be a 1GB block (bits[1:0]=0b01) or table (0b11) or invalid.
-         *
-         * ARM64 Critical Fix: Block descriptors (1GB or 2MB) in user space are
-         * from FreeLoader's identity mapping, NOT from the Memory Manager.
-         * ReactOS MM creates only 4KB page mappings for user addresses.
-         *
-         * We MUST return FALSE for block descriptors so that:
-         * 1. MmNotPresentFaultSectionView will create proper section mappings
-         * 2. The section data gets loaded instead of reading stale identity-mapped memory
-         *
-         * The old code returned TRUE for blocks, which caused fs_rec.sys loading to fail
-         * because MmNotPresentFaultSectionView thought the page was already present.
-         */
-        if ((L1Entry & 0x1ULL) == 0)
-            return FALSE;  /* L1 invalid */
-        if ((L1Entry & 0x3ULL) == 0x1ULL)
-            return FALSE;  /* L1 is 1GB block - FreeLoader identity map, treat as not present */
-
-        /* L1 is table, access L2 */
-        L2Table = (volatile ULONG64 *)(KSEG0_BASE | (L1Entry & ARM64_PTE_ADDR_MASK));
-        L2Entry = L2Table[L2Idx];
-
-        /* L2 could be a 2MB block or table or invalid */
-        if ((L2Entry & 0x1ULL) == 0)
-            return FALSE;  /* L2 invalid */
-        if ((L2Entry & 0x3ULL) == 0x1ULL)
-            return FALSE;  /* L2 is 2MB block - FreeLoader identity map, treat as not present */
-
-        /* L2 is table, access L3 */
-        L3Table = (volatile ULONG64 *)(KSEG0_BASE | (L2Entry & ARM64_PTE_ADDR_MASK));
-        L3Entry = L3Table[L3Idx];
-
-        /* L3 entry: page descriptor (bits[1:0]=0b11) means page is present (proper 4KB mapping) */
-        {
-            BOOLEAN Result = (L3Entry & 0x3ULL) == 0x3ULL;
-
-            /* Debug logging for MmIsPagePresent - stripped for performance */
-            return Result;
-        }
-    }
+    return MiArm64ReadUserPtePhysically(Address, NULL, NULL);
 }
 
 BOOLEAN
@@ -2635,13 +1684,6 @@ MmIsDisabledPage(
     ASSERT(Process != NULL);
     ASSERT(Process == PsGetCurrentProcess());
 
-    /*
-     * ARM64 TTBR0 Alias Avoidance: Walk TTBR0 physically via KSEG0.
-     *
-     * "Disabled page" means: Valid && !Writable && !CopyOnWrite
-     * This is a read-only non-COW mapping - typically a private data section
-     * that cannot be written.
-     */
     {
         ULONG64 PteValue;
         MMPTE TempPte;
@@ -2672,25 +1714,14 @@ MmIsPageSwapEntry(
     ASSERT(Process != NULL);
     ASSERT(Process == PsGetCurrentProcess());
 
-    /*
-     * ARM64 TTBR0 Alias Avoidance: Walk TTBR0 physically via KSEG0.
-     *
-     * Swap entry check: !Valid && bit 0x800 is set (swap entry marker).
-     * We need the raw PTE value to check these bits.
-     */
     {
-        ULONG64 PteValue;
-        ULONG Depth;
+        MI_ARM64_USER_PTE_WALK Walk;
 
-        /* Get the PTE value by walking physically */
-        MiArm64ReadUserPtePhysically(Address, &PteValue, &Depth);
-
-        /* If we didn't reach L3 level (depth < 3), no PTE exists */
-        if (Depth < 3)
+        if (!MiArm64GetUserPteAddress(Address, &Walk))
             return FALSE;
 
-        /* Check for swap entry: !Valid && bit 0x800 set */
-        return ((PteValue & 0x3ULL) != 0x3ULL) && ((PteValue & 0x800ULL) != 0);
+        return ((Walk.PteValue & 0x3ULL) != 0x3ULL) &&
+               ((Walk.PteValue & 0x800ULL) != 0);
     }
 }
 
@@ -2723,9 +1754,6 @@ MmGetPageProtect(
     ASSERT(Process != NULL);
     ASSERT(Process == PsGetCurrentProcess());
 
-    /*
-     * ARM64 TTBR0 Alias Avoidance: Walk TTBR0 physically via KSEG0.
-     */
     {
         ULONG64 PteValue;
         MMPTE TempPte;
@@ -2757,71 +1785,17 @@ MmSetPageProtect(
 
     MiLockProcessWorkingSetUnsafe(Process, PsGetCurrentThread());
 
-    /*
-     * ARM64 FIX (Bug #48): Walk TTBR0 page tables via KSEG0 physical mapping
-     * instead of using the TTBR1 self-map alias.
-     *
-     * PROBLEM: The self-map (MiAddressToPteSafe) returns a pointer through
-     * TTBR1 aliases that can be STALE after context switches. When stale,
-     * the pointer refers to a DIFFERENT process's L3 page table page:
-     * 1. Reading PointerPte->PageFrameNumber gives the WRONG PFN
-     * 2. InterlockedExchangePte writes to the WRONG process's PTE
-     * 3. The current process's PTE is left unchanged
-     * 4. The other process's PTE gets corrupted with a wrong PFN
-     *
-     * This caused non-deterministic crashes: process A's MmSetPageProtect
-     * would corrupt process B's page table entries, leading to process B
-     * reading wrong physical pages (corrupted DLL names like "MZx.DLL",
-     * invalid pointer dereferences, translation faults on valid VAs).
-     *
-     * Fix: Walk TTBR0 directly via KSEG0 to find the L3 PTE, read/write
-     * through the KSEG0-mapped physical address. This always accesses the
-     * correct process's page table regardless of self-map state.
-     */
     {
-        ULONG64 Ttbr0, RootPa;
-        volatile ULONG64 *L0Table, *L1Table, *L2Table, *L3Table;
-        ULONG L0Idx, L1Idx, L2Idx, L3Idx;
-        ULONG64 L0Entry, L1Entry, L2Entry;
+        MI_ARM64_USER_PTE_WALK Walk;
 
-        __asm__ __volatile__("mrs %0, ttbr0_el1" : "=r"(Ttbr0));
-        RootPa = Ttbr0 & ARM64_PTE_ADDR_MASK;
-
-        L0Idx = ((ULONG64)(ULONG_PTR)Address >> 39) & 0x1FF;
-        L1Idx = ((ULONG64)(ULONG_PTR)Address >> 30) & 0x1FF;
-        L2Idx = ((ULONG64)(ULONG_PTR)Address >> 21) & 0x1FF;
-        L3Idx = ((ULONG64)(ULONG_PTR)Address >> 12) & 0x1FF;
-
-        L0Table = (volatile ULONG64 *)(KSEG0_BASE | RootPa);
-        L0Entry = L0Table[L0Idx];
-        if ((L0Entry & 0x3ULL) != 0x3ULL)
+        if (!MiArm64GetUserPteAddress(Address, &Walk))
         {
             MiUnlockProcessWorkingSetUnsafe(Process, PsGetCurrentThread());
             return;
         }
 
-        L1Table = (volatile ULONG64 *)(KSEG0_BASE | (L0Entry & ARM64_PTE_ADDR_MASK));
-        L1Entry = L1Table[L1Idx];
-        if ((L1Entry & 0x3ULL) != 0x3ULL)
-        {
-            MiUnlockProcessWorkingSetUnsafe(Process, PsGetCurrentThread());
-            return;
-        }
+        OldPte.u.Long = Walk.PteValue;
 
-        L2Table = (volatile ULONG64 *)(KSEG0_BASE | (L1Entry & ARM64_PTE_ADDR_MASK));
-        L2Entry = L2Table[L2Idx];
-        if ((L2Entry & 0x3ULL) != 0x3ULL)
-        {
-            MiUnlockProcessWorkingSetUnsafe(Process, PsGetCurrentThread());
-            return;
-        }
-
-        L3Table = (volatile ULONG64 *)(KSEG0_BASE | (L2Entry & ARM64_PTE_ADDR_MASK));
-
-        /* Read the current L3 PTE */
-        OldPte.u.Long = L3Table[L3Idx];
-
-        /* Build new PTE with requested protection */
         TempPte.u.Long = 0;
         TempPte.u.Long |= MmProtectToPteMask[ProtectionMask];
         TempPte.u.Hard.PageFrameNumber = OldPte.u.Hard.PageFrameNumber;
@@ -2834,49 +1808,18 @@ MmSetPageProtect(
         if (OldPte.u.Hard.Accessed)
             TempPte.u.Hard.Accessed = 1;
 
-        /* Set NotLargePage=1 for valid L3 page descriptor (bits [1:0]=0b11) */
         if (TempPte.u.Hard.Valid)
             TempPte.u.Hard.NotLargePage = 1;
 
-        /*
-         * ARM64: Set NotDirty based on the NEW protection's writability.
-         * NotDirty=0 (AP[2]=0): writable/dirty
-         * NotDirty=1 (AP[2]=1): read-only/clean
-         */
         if (TempPte.u.Hard.Writable)
             MI_MAKE_DIRTY_PAGE(&TempPte);
         else
             MI_MAKE_CLEAN_PAGE(&TempPte);
 
-        /* Atomically exchange the PTE via KSEG0 */
-        OldPte.u.Long = __atomic_exchange_n(&L3Table[L3Idx], TempPte.u.Long, __ATOMIC_SEQ_CST);
+        OldPte.u.Long = __atomic_exchange_n(Walk.PointerPte, TempPte.u.Long, __ATOMIC_SEQ_CST);
 
-        /*
-         * ARM64 FIX (Bug #47): Preserve dirty state in PFN when hardware dirty
-         * bit is cleared due to protection downgrade (writable -> read-only).
-         *
-         * On ARM64, NotDirty controls both dirty tracking and write permission.
-         * When changing from writable (NotDirty=0) to read-only (NotDirty=1),
-         * the "page was written to" information is lost. Save it in PFN Modified
-         * so MmDeleteVirtualMappingEx can report correct dirty state during eviction.
-         */
-        if (OldPte.u.Hard.Valid && (OldPte.u.Hard.NotDirty == 0) &&
-            TempPte.u.Hard.NotDirty == 1)
-        {
-            PFN_NUMBER PagePfn = OldPte.u.Hard.PageFrameNumber;
-            if (PagePfn != 0 && PagePfn <= MmHighestPhysicalPage)
-            {
-                KIRQL PfnOldIrql = MiAcquirePfnLock();
-                PMMPFN Pfn1 = MiGetPfnEntry(PagePfn);
-                if (Pfn1 != NULL)
-                {
-                    Pfn1->u3.e1.Modified = 1;
-                }
-                MiReleasePfnLock(PfnOldIrql);
-            }
-        }
+        MiArm64PreserveDirtyStateForProtect(OldPte, TempPte);
 
-        /* TLB invalidation */
         if (OldPte.u.Long != TempPte.u.Long)
         {
             __asm__ __volatile__("dsb ishst" ::: "memory");
@@ -2902,45 +1845,14 @@ MmSetDirtyBit(
 
     MiLockProcessWorkingSetUnsafe(Process, PsGetCurrentThread());
 
-    /*
-     * ARM64 FIX (Bug #48): Walk TTBR0 page tables via KSEG0 physical mapping
-     * instead of using the TTBR1 self-map alias, same rationale as MmSetPageProtect.
-     * The self-map can be stale after context switches, causing modifications to
-     * the wrong process's page table entries.
-     */
     {
-        ULONG64 Ttbr0, RootPa;
-        volatile ULONG64 *L0Table, *L1Table, *L2Table, *L3Table;
-        ULONG L0Idx, L1Idx, L2Idx, L3Idx;
-        ULONG64 L0Entry, L1Entry, L2Entry, PteVal;
+        MI_ARM64_USER_PTE_WALK Walk;
         MMPTE TempPte;
 
-        __asm__ __volatile__("mrs %0, ttbr0_el1" : "=r"(Ttbr0));
-        RootPa = Ttbr0 & ARM64_PTE_ADDR_MASK;
-
-        L0Idx = ((ULONG64)(ULONG_PTR)Address >> 39) & 0x1FF;
-        L1Idx = ((ULONG64)(ULONG_PTR)Address >> 30) & 0x1FF;
-        L2Idx = ((ULONG64)(ULONG_PTR)Address >> 21) & 0x1FF;
-        L3Idx = ((ULONG64)(ULONG_PTR)Address >> 12) & 0x1FF;
-
-        L0Table = (volatile ULONG64 *)(KSEG0_BASE | RootPa);
-        L0Entry = L0Table[L0Idx];
-        if ((L0Entry & 0x3ULL) != 0x3ULL)
+        if (!MiArm64GetUserPteAddress(Address, &Walk))
             goto DirtyBitDone;
 
-        L1Table = (volatile ULONG64 *)(KSEG0_BASE | (L0Entry & ARM64_PTE_ADDR_MASK));
-        L1Entry = L1Table[L1Idx];
-        if ((L1Entry & 0x3ULL) != 0x3ULL)
-            goto DirtyBitDone;
-
-        L2Table = (volatile ULONG64 *)(KSEG0_BASE | (L1Entry & ARM64_PTE_ADDR_MASK));
-        L2Entry = L2Table[L2Idx];
-        if ((L2Entry & 0x3ULL) != 0x3ULL)
-            goto DirtyBitDone;
-
-        L3Table = (volatile ULONG64 *)(KSEG0_BASE | (L2Entry & ARM64_PTE_ADDR_MASK));
-        PteVal = L3Table[L3Idx];
-        TempPte.u.Long = PteVal;
+        TempPte.u.Long = Walk.PteValue;
 
         if (!TempPte.u.Hard.Valid)
             goto DirtyBitDone;
@@ -2950,8 +1862,7 @@ MmSetDirtyBit(
         else
             MI_MAKE_CLEAN_PAGE(&TempPte);
 
-        /* Write back modified PTE via KSEG0 */
-        __atomic_store_n(&L3Table[L3Idx], TempPte.u.Long, __ATOMIC_SEQ_CST);
+        __atomic_store_n(Walk.PointerPte, TempPte.u.Long, __ATOMIC_SEQ_CST);
 
         if (!Dirty)
         {
@@ -2997,18 +1908,6 @@ MmGetPfnForProcess(
     }
 
     ASSERT(Process != NULL);
-    /* Note: Process might not equal PsGetCurrentProcess() during cross-process
-     * faults (e.g., timer DPC, KeStackAttachProcess). MiArm64GetUserPfn handles
-     * this by using Process->Pcb.DirectoryTableBase[0] instead of TTBR0. */
-
-    /*
-     * ARM64: Use MiArm64GetUserPfn to walk user page tables directly.
-     *
-     * On ARM64 with TTBR0/TTBR1 split architecture, the kernel's self-mapping
-     * (accessible via MiAddressToPxe/Ppe/Pde/Pte) is in TTBR1 and cannot access
-     * user page tables which are in TTBR0. We must walk the user's page table
-     * hierarchy using the process's DirectoryTableBase.
-     */
     return MiArm64GetUserPfn(Process, Address);
 }
 
@@ -3033,108 +1932,44 @@ MiIsPageTablePresent(
            (PsGetCurrentThread()->OwnsProcessWorkingSetShared));
     ASSERT(KeGetCurrentIrql() < DISPATCH_LEVEL);
 
-    /*
-     * ARM64: For user-space addresses, we cannot safely use the TTBR0 alias
-     * while holding the WS lock, as accessing the alias addresses may fault
-     * and cause lock re-entry issues.
-     *
-     * Instead, we rely on the UsedPageTableEntries counters in MmWorkingSetList.
-     * These counters track which page directory entries have been allocated.
-     *
-     * Note: This is a conservative check. If we can't determine page table
-     * presence safely, we return FALSE (page not present).
-     */
     if (Address < MmSystemRangeStart)
     {
-        /*
-         * Use UsedPageTableEntries to check if there's a PDE for this address.
-         * This doesn't access TTBR0 alias addresses and is safe while holding WS lock.
-         *
-         * For now, use a simple check: if there are no page table entries used
-         * at the PDE offset for this address, the page table doesn't exist.
-         */
-        ULONG PdeOffset = MiGetPdeOffset(Address);
-        if (MmWorkingSetList != NULL)
-        {
-            if (MmWorkingSetList->UsedPageTableEntries[PdeOffset] == 0)
-                return FALSE;
-        }
-        else
-        {
-            /* WorkingSetList not available - assume page table doesn't exist */
-            return FALSE;
-        }
-
-        /*
-         * UsedPageTableEntries says there's a page table at this PDE.
-         * The full page table hierarchy should exist.
-         */
-        return TRUE;
+        MI_ARM64_USER_PTE_WALK Walk;
+        return MiArm64GetUserPteAddress(Address, &Walk);
     }
-
-    /*
-     * ARM64/ReactOS Fix: Check actual page table validity instead of
-     * UsedPageTableEntries counters.
-     *
-     * The ReactOS section view code path (MmCreateVirtualMapping ->
-     * MiMakePdeExistAndMakeValid) creates page tables via kernel-mode
-     * fault handling, which doesn't properly increment the UsedPageTableEntries
-     * counters at PXE/PPE levels. This causes MiIsPageTablePresent to
-     * incorrectly return FALSE even when the page tables are valid.
-     *
-     * The fix is to check the actual validity of each level of the page
-     * table hierarchy. If all levels (PXE, PPE, PDE) are valid, then the
-     * page table is present. If any level is invalid or in transition,
-     * we fault it in and continue.
-     */
 
 #if _MI_PAGING_LEVELS == 4
     PointerPxe = MiAddressToPxe(Address);
 
-    /* If PXE is not valid and not in transition, page table cannot be present */
     if (PointerPxe->u.Hard.Valid == 0 && PointerPxe->u.Soft.Transition == 0)
     {
-        /* Check if there are any pending entries (non-zero soft PTE) */
         if (PointerPxe->u.Long == 0)
             return FALSE;
-        /* There's a soft PTE, page table might exist - continue checking */
     }
 
-    /* Ensure PXE is valid before accessing PPE */
     if (PointerPxe->u.Hard.Valid == 0)
         MiMakeSystemAddressValid(MiPteToAddress(PointerPxe), PsGetCurrentProcess());
 #endif
 
     PointerPpe = MiAddressToPpe(Address);
 
-    /* If PPE is not valid and not in transition, page table cannot be present */
     if (PointerPpe->u.Hard.Valid == 0 && PointerPpe->u.Soft.Transition == 0)
     {
-        /* Check if there are any pending entries (non-zero soft PTE) */
         if (PointerPpe->u.Long == 0)
             return FALSE;
-        /* There's a soft PTE, page table might exist - continue checking */
     }
 
-    /* Ensure PPE is valid before accessing PDE */
     if (PointerPpe->u.Hard.Valid == 0)
         MiMakeSystemAddressValid(MiPteToAddress(PointerPpe), PsGetCurrentProcess());
 
     PointerPde = MiAddressToPde(Address);
 
-    /*
-     * The page table for this address exists if the PDE is valid.
-     * We don't rely on UsedPageTableEntries counters here because
-     * they may not be properly maintained by the ROS section view path.
-     */
     if (PointerPde->u.Hard.Valid == 1)
         return TRUE;
 
-    /* PDE is not valid - check if it's in transition or has soft PTE data */
     if (PointerPde->u.Soft.Transition == 1)
         return TRUE;
 
-    /* PDE is completely empty - no page table present */
     return PointerPde->u.Long != 0;
 #endif
 }
@@ -3155,22 +1990,127 @@ MiProtectionFromPte(
     return PAGE_NOACCESS;
 }
 
-/*
- * ARM64 Cycle 57: Clear stale user-space PTEs from FreeLoader's identity mapping.
- *
- * FreeLoader creates identity mappings in user space (TTBR0) during boot.
- * These mappings cover physical addresses up to 4GB. When the kernel maps
- * section views at user addresses that overlap with this identity mapping,
- * reads would return identity-mapped data instead of section data.
- *
- * This function walks the TTBR0 page table hierarchy for the specified VA range
- * and invalidates any valid PTEs found. This ensures page faults occur when
- * the section is accessed, allowing proper demand-loading of section data.
- *
- * @param StartVa   Starting virtual address of the range to clear
- * @param Size      Size of the range in bytes
- * @param Process   Process whose user page tables should be cleared
- */
+FORCEINLINE
+ULONG64
+MiArm64NextVaRange(
+    _In_ ULONG64 Va,
+    _In_ ULONG64 RangeSize)
+{
+    return (Va + RangeSize) & ~(RangeSize - 1);
+}
+
+FORCEINLINE
+VOID
+MiArm64ClearUserDescriptor(
+    _Inout_ volatile ULONG64 *Entry)
+{
+    __atomic_store_n(Entry, 0, __ATOMIC_SEQ_CST);
+    MiArm64CleanInvalidateCacheLine((PVOID)Entry);
+}
+
+static
+BOOLEAN
+MiArm64ClearBootUserMappingAtVa(
+    _In_ ULONG64 Va,
+    _Out_ PULONG64 NextVa,
+    _Out_ PULONG ClearedPages)
+{
+    ULONG64 Ttbr0;
+    ULONG64 RootPa;
+    ULONG64 L0Entry, L1Entry, L2Entry, L3Entry;
+    volatile ULONG64 *L0Table;
+    volatile ULONG64 *L1Table;
+    volatile ULONG64 *L2Table;
+    volatile ULONG64 *L3Table;
+    ULONG L0Idx, L1Idx, L2Idx, L3Idx;
+
+    *NextVa = Va + PAGE_SIZE;
+    *ClearedPages = 0;
+
+    __asm__ __volatile__("mrs %0, ttbr0_el1" : "=r"(Ttbr0));
+    RootPa = Ttbr0 & ARM64_PTE_ADDR_MASK;
+    if (RootPa == 0)
+    {
+        return FALSE;
+    }
+
+    L0Idx = (Va >> 39) & 0x1FF;
+    L1Idx = (Va >> 30) & 0x1FF;
+    L2Idx = (Va >> 21) & 0x1FF;
+    L3Idx = (Va >> 12) & 0x1FF;
+
+    L0Table = (volatile ULONG64 *)(KSEG0_BASE | RootPa);
+    L0Entry = L0Table[L0Idx];
+    if ((L0Entry & 0x3ULL) != 0x3ULL)
+    {
+        *NextVa = MiArm64NextVaRange(Va, 1ULL << 39);
+        return FALSE;
+    }
+
+    L1Table = (volatile ULONG64 *)(KSEG0_BASE | (L0Entry & ARM64_PTE_ADDR_MASK));
+    L1Entry = L1Table[L1Idx];
+    if ((L1Entry & 0x1ULL) == 0)
+    {
+        *NextVa = MiArm64NextVaRange(Va, 1ULL << 30);
+        return FALSE;
+    }
+
+    if ((L1Entry & 0x3ULL) == 0x1ULL)
+    {
+        MiArm64ClearUserDescriptor(&L1Table[L1Idx]);
+        MiArm64InvalidateUserAddress((PVOID)Va);
+        *NextVa = MiArm64NextVaRange(Va, 1ULL << 30);
+        *ClearedPages = (1ULL << 30) >> PAGE_SHIFT;
+        return TRUE;
+    }
+
+    if ((L1Entry & 0x3ULL) != 0x3ULL)
+    {
+        *NextVa = MiArm64NextVaRange(Va, 1ULL << 30);
+        return FALSE;
+    }
+
+    L2Table = (volatile ULONG64 *)(KSEG0_BASE | (L1Entry & ARM64_PTE_ADDR_MASK));
+    L2Entry = L2Table[L2Idx];
+    if ((L2Entry & 0x1ULL) == 0)
+    {
+        *NextVa = MiArm64NextVaRange(Va, 1ULL << 21);
+        return FALSE;
+    }
+
+    if ((L2Entry & 0x3ULL) == 0x1ULL)
+    {
+        MiArm64ClearUserDescriptor(&L2Table[L2Idx]);
+        MiArm64InvalidateUserAddress((PVOID)Va);
+        *NextVa = MiArm64NextVaRange(Va, 1ULL << 21);
+        *ClearedPages = (1ULL << 21) >> PAGE_SHIFT;
+        return TRUE;
+    }
+
+    if ((L2Entry & 0x3ULL) != 0x3ULL)
+    {
+        *NextVa = MiArm64NextVaRange(Va, 1ULL << 21);
+        return FALSE;
+    }
+
+    L3Table = (volatile ULONG64 *)(KSEG0_BASE | (L2Entry & ARM64_PTE_ADDR_MASK));
+    L3Entry = L3Table[L3Idx];
+    if ((L3Entry & 0x1ULL) == 0)
+    {
+        return FALSE;
+    }
+
+    if ((L3Entry & 0x3ULL) == 0x3ULL)
+    {
+        MiArm64InvalidatePageByPfnAlias((PFN_NUMBER)((L3Entry & ARM64_PTE_ADDR_MASK) >> PAGE_SHIFT));
+    }
+
+    MiArm64ClearUserDescriptor(&L3Table[L3Idx]);
+    MiArm64InvalidateUserAddress((PVOID)Va);
+    *ClearedPages = 1;
+    return TRUE;
+}
+
 VOID
 NTAPI
 MiArm64ClearStaleUserPtes(
@@ -3178,244 +2118,30 @@ MiArm64ClearStaleUserPtes(
     _In_ SIZE_T Size,
     _In_ PEPROCESS Process)
 {
-    ULONG64 Ttbr0;
-    PFN_NUMBER L0Pfn, L1Pfn, L2Pfn, L3Pfn;
-    PMMPTE L0Table, L1Table, L2Table, L3Table;
-    PMMPTE MappingPte;
     ULONG64 Va, EndVa;
-    ULONG L0Idx, L1Idx, L2Idx, L3Idx;
     ULONG ClearedCount = 0;
 
-    /* Only for user-space addresses */
+    ASSERT(Process == PsGetCurrentProcess());
+    UNREFERENCED_PARAMETER(Process);
+
     if ((ULONG_PTR)StartVa >= (ULONG_PTR)MmSystemRangeStart)
         return;
 
-    /* Get TTBR0 (user page table root) */
-    __asm__ __volatile__("mrs %0, ttbr0_el1" : "=r"(Ttbr0));
-    L0Pfn = (Ttbr0 >> PAGE_SHIFT) & ((1ULL << 36) - 1);  /* Get PA without ASID bits */
-
     EndVa = (ULONG64)StartVa + Size;
+    if (EndVa > (ULONG64)(ULONG_PTR)MmSystemRangeStart)
+    {
+        EndVa = (ULONG64)(ULONG_PTR)MmSystemRangeStart;
+    }
     Va = (ULONG64)StartVa;
 
     while (Va < EndVa)
     {
-        L0Idx = (Va >> 39) & 0x1FF;
-        L1Idx = (Va >> 30) & 0x1FF;
-        L2Idx = (Va >> 21) & 0x1FF;
-        L3Idx = (Va >> 12) & 0x1FF;
+        ULONG64 NextVa;
+        ULONG ClearedPages;
 
-        /* Map L0 table */
-        MappingPte = MiReserveSystemPtes(1, SystemPteSpace);
-        if (!MappingPte)
-        {
-            DPRINT1("[arm64] MiArm64ClearStaleUserPtes: Failed to get system PTE\n");
-            return;
-        }
-
-        MI_WRITE_VALID_PTE(MappingPte, ValidKernelPte);
-        MappingPte->u.Hard.PageFrameNumber = L0Pfn;
-        KeInvalidateTlbEntry(MiPteToAddress(MappingPte));
-        __asm__ __volatile__("dsb ish" ::: "memory");
-
-        L0Table = (PMMPTE)MiPteToAddress(MappingPte);
-
-        /* Check if L0 entry is valid */
-        if (!(L0Table[L0Idx].u.Long & 1))
-        {
-            /* No L0 entry, skip this 512GB range */
-            MI_WRITE_INVALID_PTE(MappingPte, MmDecommittedPte);
-            KeInvalidateTlbEntry(L0Table);
-            MiReleaseSystemPtes(MappingPte, 1, SystemPteSpace);
-            Va = (Va + (1ULL << 39)) & ~((1ULL << 39) - 1);
-            continue;
-        }
-
-        L1Pfn = L0Table[L0Idx].u.Hard.PageFrameNumber;
-        MI_WRITE_INVALID_PTE(MappingPte, MmDecommittedPte);
-        KeInvalidateTlbEntry(L0Table);
-
-        /* Map L1 table */
-        MI_WRITE_VALID_PTE(MappingPte, ValidKernelPte);
-        MappingPte->u.Hard.PageFrameNumber = L1Pfn;
-        KeInvalidateTlbEntry(MiPteToAddress(MappingPte));
-        __asm__ __volatile__("dsb ish" ::: "memory");
-
-        L1Table = (PMMPTE)MiPteToAddress(MappingPte);
-
-        /* Check if L1 entry is valid */
-        if (!(L1Table[L1Idx].u.Long & 1))
-        {
-            /* No L1 entry, skip this 1GB range */
-            MI_WRITE_INVALID_PTE(MappingPte, MmDecommittedPte);
-            KeInvalidateTlbEntry(L1Table);
-            MiReleaseSystemPtes(MappingPte, 1, SystemPteSpace);
-            Va = (Va + (1ULL << 30)) & ~((1ULL << 30) - 1);
-            continue;
-        }
-
-        L2Pfn = L1Table[L1Idx].u.Hard.PageFrameNumber;
-        MI_WRITE_INVALID_PTE(MappingPte, MmDecommittedPte);
-        KeInvalidateTlbEntry(L1Table);
-
-        /* Map L2 table */
-        MI_WRITE_VALID_PTE(MappingPte, ValidKernelPte);
-        MappingPte->u.Hard.PageFrameNumber = L2Pfn;
-        KeInvalidateTlbEntry(MiPteToAddress(MappingPte));
-        __asm__ __volatile__("dsb ish" ::: "memory");
-
-        L2Table = (PMMPTE)MiPteToAddress(MappingPte);
-
-        /* Check if L2 entry is valid */
-        if (!(L2Table[L2Idx].u.Long & 1))
-        {
-            /* No L2 entry, skip this 2MB range */
-            MI_WRITE_INVALID_PTE(MappingPte, MmDecommittedPte);
-            KeInvalidateTlbEntry(L2Table);
-            MiReleaseSystemPtes(MappingPte, 1, SystemPteSpace);
-            Va = (Va + (1ULL << 21)) & ~((1ULL << 21) - 1);
-            continue;
-        }
-
-        /* L2 entry is valid - but is it a block descriptor or table descriptor? */
-        /* bits [1:0] = 0b01 for block, 0b11 for table */
-        {
-            ULONG64 L2Entry = L2Table[L2Idx].u.Long;
-            if ((L2Entry & 0x3) == 0x1)
-            {
-                /*
-                 * Block descriptor (2MB page) - this is a FreeLoader identity mapping!
-                 * We need to CLEAR this block descriptor to ensure page faults occur.
-                 */
-                DPRINT("[arm64] MiArm64ClearStaleUserPtes: L2 entry at idx=%lu is BLOCK (2MB) entry=0x%llx - CLEARING IT\n",
-                        (ULONG)L2Idx, L2Entry);
-
-                /*
-                 * Invalidate TLB entries for the 2MB block.
-                 * We use TLBI ASIDE1 to invalidate by ASID, which is more efficient
-                 * than invalidating each page individually.
-                 * But for simplicity, just invalidate everything with TLBI VMALLE1.
-                 */
-                __asm__ __volatile__("tlbi vmalle1" ::: "memory");
-                __asm__ __volatile__("dsb ish" ::: "memory");
-                __asm__ __volatile__("isb" ::: "memory");
-
-                /*
-                 * NOTE: We intentionally do NOT invalidate D-cache for the entire 2MB block here.
-                 * D-cache invalidation for user VAs at this point can cause issues:
-                 * 1. The VAs are no longer mapped (we just cleared the L2 block)
-                 * 2. DC IVAC on unmapped VAs may cause issues on some implementations
-                 * 3. The next access will fault anyway and bring in fresh data
-                 *
-                 * The TLB invalidation above is sufficient - cache lines will be naturally
-                 * evicted or will return stale data on next access, which will fault.
-                 */
-
-                /* Clear the L2 block descriptor */
-                {
-                    ULONG_PTR PteAddr = (ULONG_PTR)&L2Table[L2Idx];
-                    L2Table[L2Idx].u.Long = 0;
-                    __asm__ __volatile__("dmb ish" ::: "memory");
-                    __asm__ __volatile__("dc civac, %0" :: "r"(PteAddr) : "memory");
-                    __asm__ __volatile__("dsb ish" ::: "memory");
-                }
-
-                /* Verify the L2 entry was cleared */
-                if (L2Table[L2Idx].u.Long != 0)
-                {
-                    DPRINT1("[arm64] MiArm64ClearStaleUserPtes: WARNING! L2 BLOCK entry NOT cleared! Still=0x%llx\n",
-                            L2Table[L2Idx].u.Long);
-                }
-                else
-                {
-                    DPRINT("[arm64] MiArm64ClearStaleUserPtes: Successfully cleared L2 BLOCK entry for 2MB at VA=%p\n",
-                            (PVOID)(Va & ~((1ULL << 21) - 1)));
-                }
-
-                MI_WRITE_INVALID_PTE(MappingPte, MmDecommittedPte);
-                KeInvalidateTlbEntry(L2Table);
-                MiReleaseSystemPtes(MappingPte, 1, SystemPteSpace);
-
-                /* Skip the entire 2MB block */
-                ClearedCount += (1ULL << 21) >> PAGE_SHIFT;  /* Count as 512 pages */
-                Va = (Va + (1ULL << 21)) & ~((1ULL << 21) - 1);
-                continue;
-            }
-            /* Table descriptor pointing to L3 table — walk it below */
-        }
-
-        L3Pfn = L2Table[L2Idx].u.Hard.PageFrameNumber;
-        MI_WRITE_INVALID_PTE(MappingPte, MmDecommittedPte);
-        KeInvalidateTlbEntry(L2Table);
-
-        /* Map L3 table */
-        MI_WRITE_VALID_PTE(MappingPte, ValidKernelPte);
-        MappingPte->u.Hard.PageFrameNumber = L3Pfn;
-        KeInvalidateTlbEntry(MiPteToAddress(MappingPte));
-        __asm__ __volatile__("dsb ish" ::: "memory");
-
-        L3Table = (PMMPTE)MiPteToAddress(MappingPte);
-
-        /* Check if L3 entry (PTE) has bit 0 set (potentially valid) */
-        if (L3Table[L3Idx].u.Long & 1)
-        {
-            ULONG64 OldPte = L3Table[L3Idx].u.Long;
-
-            /* Found a PTE with Valid bit set - clear it. */
-            DPRINT("[arm64] MiArm64ClearStaleUserPtes: Clearing stale PTE at VA=%p (PTE=0x%llx) L3TableVA=%p L3Idx=%lu L3Pfn=0x%llx\n",
-                   (PVOID)Va, OldPte, L3Table, (ULONG)L3Idx, (ULONG64)L3Pfn);
-            DPRINT("[arm64]   Page table walk: L0Pfn=0x%llx L1Pfn=0x%llx L2Pfn=0x%llx L3Pfn=0x%llx\n",
-                   (ULONG64)L0Pfn, (ULONG64)L1Pfn, (ULONG64)L2Pfn, (ULONG64)L3Pfn);
-            DPRINT("[arm64]   Indices: L0=%lu L1=%lu L2=%lu L3=%lu\n",
-                   (ULONG)L0Idx, (ULONG)L1Idx, (ULONG)L2Idx, (ULONG)L3Idx);
-
-            /* Invalidate TLB for this VA - use VAALE1IS to flush ALL ASIDs including Global entries.
-             * FreeLoader may have created Global mappings (nG bit not set), so VAE1 (current ASID only)
-             * would NOT flush them. VAALE1IS = VA, All ASIDs, Last-level, EL1, Inner Shareable */
-            __asm__ __volatile__("tlbi vaale1is, %0" :: "r"(Va >> PAGE_SHIFT) : "memory");
-            __asm__ __volatile__("dsb ish" ::: "memory");
-
-            /*
-             * Same rule as the stale-user remap path above: avoid invalidating
-             * through the user alias we are about to retire.
-             */
-            MiArm64InvalidatePageByPfnAlias(L3Table[L3Idx].u.Hard.PageFrameNumber);
-
-            /* Clear the PTE with proper cache maintenance */
-            {
-                ULONG_PTR PteAddr = (ULONG_PTR)&L3Table[L3Idx];
-
-                /* Write the zero value */
-                L3Table[L3Idx].u.Long = 0;
-
-                /* Data memory barrier before cache op */
-                __asm__ __volatile__("dmb ish" ::: "memory");
-
-                /* Clean and invalidate this cache line to PoC - ensure write reaches memory */
-                __asm__ __volatile__("dc civac, %0" :: "r"(PteAddr) : "memory");
-
-                /* DSB to ensure cache op completes */
-                __asm__ __volatile__("dsb ish" ::: "memory");
-
-                /* Re-read to verify (need to invalidate cache first to get fresh read) */
-                __asm__ __volatile__("dc ivac, %0" :: "r"(PteAddr) : "memory");
-                __asm__ __volatile__("dsb ish" ::: "memory");
-            }
-
-            /* Verify the PTE was actually cleared */
-            if (L3Table[L3Idx].u.Long != 0)
-            {
-                DPRINT1("[arm64] MiArm64ClearStaleUserPtes: WARNING! PTE at VA=%p was NOT cleared! Still=0x%llx\n",
-                        (PVOID)Va, L3Table[L3Idx].u.Long);
-            }
-
-            ClearedCount++;
-        }
-
-        MI_WRITE_INVALID_PTE(MappingPte, MmDecommittedPte);
-        KeInvalidateTlbEntry(L3Table);
-        MiReleaseSystemPtes(MappingPte, 1, SystemPteSpace);
-
-        Va += PAGE_SIZE;
+        MiArm64ClearBootUserMappingAtVa(Va, &NextVa, &ClearedPages);
+        ClearedCount += ClearedPages;
+        Va = (NextVa < EndVa) ? NextVa : EndVa;
     }
 
     if (ClearedCount > 0)
