@@ -1,0 +1,41 @@
+; RP1.INF
+;
+; Installation file for Raspberry Pi 5 RP1 Southbridge
+
+[Version]
+Signature  = "$Windows NT$"
+LayoutFile = layout.inf
+Class      = System
+ClassGUID  = {4D36E97D-E325-11CE-BFC1-08002BE10318}
+Provider   = %ReactOS%
+DriverVer  = 01/01/2026,1.00
+
+[DestinationDirs]
+DefaultDestDir = 12
+
+[Manufacturer]
+%Rp1Mfg% = Rp1Mfg
+
+[Rp1Mfg]
+%PCI\VEN_1DE4&DEV_0001.DeviceDesc% = RP1_Inst,PCI\VEN_1DE4&DEV_0001
+
+[RP1_Inst.NT]
+CopyFiles = RP1_CopyFiles.NT
+
+[RP1_CopyFiles.NT]
+rp1.sys
+
+[RP1_Inst.NT.Services]
+AddService = rp1, 0x00000002, rp1_Service_Inst
+
+[rp1_Service_Inst]
+ServiceType   = 1
+StartType     = 0
+ErrorControl  = 1
+ServiceBinary = %12%\rp1.sys
+LoadOrderGroup = System Bus Extender
+
+[Strings]
+ReactOS = "ReactOS Project"
+Rp1Mfg = "Raspberry Pi"
+PCI\VEN_1DE4&DEV_0001.DeviceDesc = "RP1 Southbridge (Raspberry Pi 5)"
