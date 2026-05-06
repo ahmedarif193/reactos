@@ -6,8 +6,14 @@ If log stops updating for more than 6 seconds, or total runtime exceeds 30 secon
 forcefully stops the VM.
 
 Usage:
-  # Run from within your build directory (e.g., output-arm64)
-  python3 ../vm_monitor.py
+	  # Run from within your build directory (e.g., output-arm64)
+	  python3 ../vm_monitor.py
+
+	  # Build and boot LiveCD ISO
+	  python3 ../vm_monitor.py --livecd
+
+	  # Boot an existing ISO
+	  python3 ../vm_monitor.py --iso path/to/livecd.iso
   
   # Or if script is in the build dir:
   python3 vm_monitor.py
@@ -25,12 +31,19 @@ import platform
 import re
 import bisect
 import glob
+import socket
 
 # Configuration (never change those values)
 LOG_FILE = "/tmp/freeldr_arm64.log"
 STALL_TIMEOUT = int(os.environ.get("ROS_VM_STALL_TIMEOUT", "10"))
 HARD_TIMEOUT = int(os.environ.get("ROS_VM_HARD_TIMEOUT", "30"))
 VM_NAME = os.environ.get("ROS_VM_NAME", "ROS11")
+ENABLE_GDB_DUMP = os.environ.get("ROS_VM_GDB_DUMP", "1") != "0"
+QEMU_GDB_PORT = int(os.environ.get("ROS_QEMU_GDB_PORT", "1234"))
+KERNEL_TEXT_ADDRESS = (
+    int(os.environ["ROS_KERNEL_TEXT"], 0)
+    if "ROS_KERNEL_TEXT" in os.environ else None
+)
 
 def get_build_dir():
     """
@@ -54,6 +67,7 @@ def get_build_dir():
 BUILD_DIR = get_build_dir()
 FAT32_IMG = os.path.join(BUILD_DIR, "fat32.img")
 REACTOS_IMG = os.path.realpath(os.path.join(BUILD_DIR, "ReactOS.img"))
+LIVECD_ISO = os.path.realpath(os.path.join(BUILD_DIR, "livecd.iso"))
 
 # UEFI firmware paths - architecture dependent
 OVMF_ENV_CODE_VARS = ["REACTOS_OVMF_CODE", "OVMF_CODE"]
@@ -97,6 +111,8 @@ OVMF_IA32_VARS_CANDIDATES = [
 qemu_process = None
 use_qemu = False
 target_arch = "amd64" 
+boot_media = "disk"
+boot_image_path = REACTOS_IMG
 
 
 def detect_target_arch():
@@ -225,12 +241,25 @@ def qemu_cmdline_uses_image(cmdline, image_path, process_cwd=None):
         return False
 
     image_real = os.path.realpath(image_path)
-    for arg in cmdline[1:]:
+    args = cmdline[1:]
+    for index, arg in enumerate(args):
         if arg == image_path or resolve_process_path(arg, process_cwd) == image_real:
             return True
 
+        if arg in ("-cdrom", "-hda", "-drive") and index + 1 < len(args):
+            candidate_arg = args[index + 1]
+            if arg in ("-cdrom", "-hda"):
+                if resolve_process_path(candidate_arg, process_cwd) == image_real:
+                    return True
+            else:
+                for item in candidate_arg.split(","):
+                    if item.startswith("file=") or item.startswith("file.filename="):
+                        candidate = item.split("=", 1)[1]
+                        if resolve_process_path(candidate, process_cwd) == image_real:
+                            return True
+
         for item in arg.split(","):
-            if item.startswith("file="):
+            if item.startswith("file=") or item.startswith("file.filename="):
                 candidate = item.split("=", 1)[1]
                 if resolve_process_path(candidate, process_cwd) == image_real:
                     return True
@@ -334,9 +363,32 @@ def kill_qemu_for_image(image_path, reason):
                 print(f"  Warning: failed to kill PID {pid}: {e}")
 
 
+def port_is_available(port):
+    """Return True if a local TCP port is currently free."""
+    try:
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+            sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            sock.bind(("127.0.0.1", port))
+        return True
+    except OSError:
+        return False
+
+
+def add_qemu_gdb_server(qemu_cmd):
+    """Expose QEMU's GDB stub when the monitor is configured to dump state."""
+    if not ENABLE_GDB_DUMP:
+        return
+
+    if not port_is_available(QEMU_GDB_PORT):
+        print(f"Warning: GDB port {QEMU_GDB_PORT} is busy; VM state dumps disabled.")
+        return
+
+    qemu_cmd.extend(["-gdb", f"tcp::{QEMU_GDB_PORT}"])
+
+
 def force_kill_vm():
     """Forcefully kill VM - called on exit."""
-    global qemu_process, use_qemu
+    global qemu_process, use_qemu, boot_image_path
 
     if use_qemu:
         if qemu_process:
@@ -348,7 +400,7 @@ def force_kill_vm():
                     qemu_process.kill()
                 except Exception:
                     pass
-        kill_qemu_for_image(REACTOS_IMG, "monitor cleanup")
+        kill_qemu_for_image(boot_image_path, "monitor cleanup")
     else:
         try:
             subprocess.run(
@@ -361,8 +413,8 @@ def force_kill_vm():
             pass
 
 
-def build_reactosimg():
-    """Build reactosimg using ninja before starting VM."""
+def build_ninja_target(target):
+    """Build a Ninja target before starting VM."""
     global target_arch
 
     # Detect architecture first if not set
@@ -371,10 +423,10 @@ def build_reactosimg():
         if "arm64" in build_dir_lower or "aarch64" in build_dir_lower:
             target_arch = "arm64"
 
-    print(f"Building reactosimg in {BUILD_DIR}...")
+    print(f"Building {target} in {BUILD_DIR}...")
     try:
         result = subprocess.run(
-            ["ninja", "reactosimg"],
+            ["ninja", target],
             cwd=BUILD_DIR,
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
@@ -388,15 +440,39 @@ def build_reactosimg():
         print("Build completed successfully.")
         return True
     except Exception as e:
-        print(f"Error building reactosimg: {e}")
+        print(f"Error building {target}: {e}")
         return False
+
+
+def build_reactosimg():
+    """Build reactosimg using ninja before starting VM."""
+    return build_ninja_target("reactosimg")
+
+
+def qemu_iso_drive_args(image_path):
+    """Return generic QEMU args for booting an ISO as optical media."""
+    return [
+        "-drive", f"file={image_path},media=cdrom,readonly=on",
+        "-boot", "order=d,menu=on",
+    ]
+
+
+def qemu_ahci_iso_args(image_path):
+    """Return QEMU q35/AHCI optical media args."""
+    return [
+        "-device", "ich9-ahci,id=ahci",
+        "-drive", f"if=none,id=cdrom0,media=cdrom,readonly=on,file={image_path}",
+        "-device", "ide-cd,drive=cdrom0,bus=ahci.0",
+        "-boot", "order=d,menu=on",
+    ]
 
 
 def start_qemu(rpi_mode=False, smp=4):
     """Start QEMU based on architecture."""
-    global qemu_process, target_arch
+    global qemu_process, target_arch, boot_media, boot_image_path
 
-    img_path = REACTOS_IMG
+    img_path = boot_image_path
+    is_iso_boot = (boot_media == "iso")
 
     # Reset log file
     try:
@@ -408,6 +484,11 @@ def start_qemu(rpi_mode=False, smp=4):
     # ---------------- ARM64 CONFIGURATION ----------------
     if target_arch == "arm64":
         is_darwin = platform.system() == "Darwin"
+        arm64_usb_devices = [
+            "-device", "qemu-xhci",
+            "-device", "usb-kbd",
+            "-device", "usb-tablet",
+        ]
         if rpi_mode:
             mode_str = f"RPI emulation (cortex-a72, {smp} cores)"
         else:
@@ -424,12 +505,15 @@ def start_qemu(rpi_mode=False, smp=4):
                     "qemu-system-aarch64",
                     "-smp", str(smp),
                     "-device", "ramfb",
+                    *arm64_usb_devices,
                     "-machine", "virt,gic-version=3",
                     "-cpu", "cortex-a72",
                     "-m", "4G",
                     "-drive", "if=pflash,format=raw,readonly=on,file=/opt/homebrew/share/qemu/edk2-aarch64-code.fd",
-                    "-drive", f"file={img_path}",
-                    "-boot", "order=d,menu=on",
+                    *(qemu_iso_drive_args(img_path) if is_iso_boot else [
+                        "-drive", f"file={img_path}",
+                        "-boot", "order=d,menu=on",
+                    ]),
                     "-display", "none",
                     "-serial", "stdio"
                 ]
@@ -440,37 +524,44 @@ def start_qemu(rpi_mode=False, smp=4):
                     "-accel", "hvf",
                     "-smp", str(smp),
                     "-device", "ramfb",
+                    *arm64_usb_devices,
                     "-machine", "virt,gic-version=3",
                     "-cpu", "max",
                     "-m", "4G",
                     "-drive", "if=pflash,format=raw,readonly=on,file=/opt/homebrew/share/qemu/edk2-aarch64-code.fd",
-                    "-drive", f"file={img_path}",
-                    "-boot", "order=d,menu=on",
+                    *(qemu_iso_drive_args(img_path) if is_iso_boot else [
+                        "-drive", f"file={img_path}",
+                        "-boot", "order=d,menu=on",
+                    ]),
                     "-display", "none",
                     "-serial", f"file:{LOG_FILE}"
                 ]
         else:
             # Linux/other systems
             # Dual-attach strategy:
-            #   1. VirtIO drive  → UEFI can enumerate and boot from it
-            #   2. AHCI + ide-cd → storahci.sys is a BOOT driver; it creates
-            #      \Device\CdRom0 during IopInitializeBootDrivers, so
-            #      IopCreateArcNames can map the ARC name and \SystemRoot
-            #      is resolved before system drivers try to load.
-            # Without the virtio drive UEFI has nothing to boot from.
-            # Without the AHCI drive ReactOS has no boot-class CD driver →
-            # deadlock (virtio-blk.sys is SYSTEM-start, not BOOT-start).
+            #   1. VirtIO drive -> UEFI can enumerate and boot from it.
+            #   2. AHCI + IDE disk -> ReactOS has a boot-start storage path that
+            #      can create \Device\Harddisk0\Partition1 for the ARC name.
+            # Without the virtio drive UEFI has nothing to boot from on this
+            # setup. Without the AHCI drive the kernel only sees virtio-blk,
+            # which is not available early enough for the boot volume.
             if rpi_mode:
                 # Raspberry Pi emulation mode (cortex-a72, no KVM)
                 qemu_cmd = [
                     "qemu-system-aarch64",
                     "-smp", str(smp),
                     "-device", "ramfb",
+                    *arm64_usb_devices,
                     "-machine", "virt,gic-version=3",
                     "-cpu", "cortex-a72",
                     "-m", "4G",
                     "-bios", "/usr/share/qemu-efi-aarch64/QEMU_EFI.fd",
-                    "-drive", f"file={img_path}",
+                    *(qemu_iso_drive_args(img_path) if is_iso_boot else [
+                        "-drive", f"file.driver=file,file.filename={img_path},file.locking=off,format=raw",
+                        "-device", "ich9-ahci,id=ahci",
+                        "-drive", f"if=none,id=ahcidisk,format=raw,file.driver=file,file.filename={img_path},file.locking=off",
+                        "-device", "ide-hd,drive=ahcidisk,bus=ahci.0",
+                    ]),
                     "-display", "none",
                     "-serial", "stdio"
                 ]
@@ -480,15 +571,22 @@ def start_qemu(rpi_mode=False, smp=4):
                     "qemu-system-aarch64",
                     "-smp", str(smp),
                     "-device", "ramfb",
+                    *arm64_usb_devices,
                     "-machine", "virt,gic-version=3",
                     "-cpu", "max",
                     "-m", "4G",
                     "-bios", "/usr/share/qemu-efi-aarch64/QEMU_EFI.fd",
-                    "-drive", f"file={img_path}",
+                    *(qemu_iso_drive_args(img_path) if is_iso_boot else [
+                        "-drive", f"file.driver=file,file.filename={img_path},file.locking=off,format=raw",
+                        "-device", "ich9-ahci,id=ahci",
+                        "-drive", f"if=none,id=ahcidisk,format=raw,file.driver=file,file.filename={img_path},file.locking=off",
+                        "-device", "ide-hd,drive=ahcidisk,bus=ahci.0",
+                    ]),
                     "-display", "none",
                     "-serial", f"file:{LOG_FILE}"
                 ]
 
+        add_qemu_gdb_server(qemu_cmd)
         print(f"  Command: {' '.join(qemu_cmd)}")
 
         try:
@@ -540,8 +638,9 @@ def start_qemu(rpi_mode=False, smp=4):
             print("  OVMF VARS: (not used on macOS amd64)")
         else:
             print(f"  OVMF VARS: {ovmf_vars}")
-    print(f"  Disk image: {img_path}")
-    print(f"  FAT32 USB disk: {FAT32_IMG}")
+    print(f"  {'ISO image' if is_iso_boot else 'Disk image'}: {img_path}")
+    if not is_iso_boot:
+        print(f"  FAT32 USB disk: {FAT32_IMG}")
     print(f"  Serial output: {LOG_FILE}")
 
     # Verify OVMF firmware exists (only for UEFI boot)
@@ -568,7 +667,9 @@ def start_qemu(rpi_mode=False, smp=4):
                     qemu_binary,
                     "-M", "q35",
                     "-m", "3G",
-                    "-drive", f"file={img_path}",
+                    *(qemu_iso_drive_args(img_path) if is_iso_boot else [
+                        "-drive", f"file={img_path}",
+                    ]),
                     "-drive", f"if=pflash,format=raw,readonly=on,file={ovmf_code}",
                     "-serial", "stdio",
                     "-device", "qemu-xhci,id=usbxhci",
@@ -584,7 +685,9 @@ def start_qemu(rpi_mode=False, smp=4):
                     "-m", "3G",
                     "-M", "q35",
                     "-drive", f"if=pflash,format=raw,readonly=on,file={ovmf_code}",
-                    "-drive", f"file={img_path}",
+                    *(qemu_ahci_iso_args(img_path) if is_iso_boot else [
+                        "-drive", f"file={img_path}",
+                    ]),
                     "-serial", "stdio",
                     "-display", "none",
                     "-no-reboot",
@@ -592,8 +695,10 @@ def start_qemu(rpi_mode=False, smp=4):
                     "-device", "qemu-xhci,id=xhci",
                     "-device", "usb-kbd,bus=xhci.0",
                     "-device", "usb-mouse,bus=xhci.0",
-                    "-drive", f"if=none,id=usbdisk,format=raw,file={FAT32_IMG}",
-                    "-device", "usb-storage,bus=xhci.0,drive=usbdisk"
+                    *([] if is_iso_boot else [
+                        "-drive", f"if=none,id=usbdisk,format=raw,file={FAT32_IMG}",
+                        "-device", "usb-storage,bus=xhci.0,drive=usbdisk",
+                    ])
                 ]
         else:
             # BIOS boot for i386
@@ -601,13 +706,17 @@ def start_qemu(rpi_mode=False, smp=4):
                 qemu_binary,
                 "-M", "q35",
                 "-m", "3G",
-                "-drive", f"file={img_path}",
+                *(qemu_ahci_iso_args(img_path) if is_iso_boot else [
+                    "-drive", f"file={img_path}",
+                ]),
                 "-serial", f"file:{LOG_FILE}",
                 "-device", "qemu-xhci,id=xhci",
                 "-device", "usb-kbd,bus=xhci.0",
                 "-device", "usb-mouse,bus=xhci.0",
-                "-drive", f"if=none,id=usbdisk,format=raw,file={FAT32_IMG}",
-                "-device", "usb-storage,bus=xhci.0,drive=usbdisk"
+                *([] if is_iso_boot else [
+                    "-drive", f"if=none,id=usbdisk,format=raw,file={FAT32_IMG}",
+                    "-device", "usb-storage,bus=xhci.0,drive=usbdisk",
+                ])
             ]
 
         # Add acceleration: TCG on macOS, KVM on Linux
@@ -617,6 +726,7 @@ def start_qemu(rpi_mode=False, smp=4):
         else:
             qemu_cmd.insert(1, "-enable-kvm")
 
+        add_qemu_gdb_server(qemu_cmd)
         print(f"  Command: {' '.join(qemu_cmd)}")
 
         if use_uefi:
@@ -724,9 +834,25 @@ def find_binary(module_name):
     return None
 
 
+def find_debug_binary(module_name):
+    """Find the split debug file for a module, if the build produced one."""
+    module_lower = module_name.lower()
+    candidates = [
+        os.path.join(BUILD_DIR, "symbols", module_name),
+        os.path.join(BUILD_DIR, "symbols", module_lower),
+    ]
+
+    for path in candidates:
+        if os.path.exists(path):
+            return path
+
+    return None
+
+
 # Global symbol cache: module_name -> list of (rva, name) sorted by rva
 _symbol_cache = {}
 _image_base_cache = {}
+_section_vma_cache = {}
 _tool_cache = {}
 
 
@@ -797,6 +923,74 @@ def get_image_base(binary_path):
     base = known.get(os.path.basename(binary_path), 0x10000)
     _image_base_cache[binary_path] = base
     return base
+
+
+def get_section_vma(binary_path, section_name):
+    """Return the preferred VMA for a PE section using llvm-readobj."""
+    cache_key = (binary_path, section_name)
+    if cache_key in _section_vma_cache:
+        return _section_vma_cache[cache_key]
+
+    llvm_readobj = find_tool('llvm-readobj')
+    if not llvm_readobj:
+        return None
+
+    try:
+        result = subprocess.run(
+            [llvm_readobj, '--sections', binary_path],
+            capture_output=True, text=True, timeout=5
+        )
+    except (subprocess.TimeoutExpired, FileNotFoundError):
+        return None
+
+    if result.returncode != 0:
+        return None
+
+    image_base = get_image_base(binary_path)
+    current_name = None
+    for line in result.stdout.splitlines():
+        name_match = re.search(r'Name:\s+([^ ]+)', line)
+        if name_match:
+            current_name = name_match.group(1)
+            continue
+
+        if current_name == section_name:
+            va_match = re.search(r'VirtualAddress:\s+(0x[0-9A-Fa-f]+|\d+)', line)
+            if va_match:
+                value = va_match.group(1)
+                section_vma = image_base + (int(value, 16) if value.startswith('0x') else int(value))
+                _section_vma_cache[cache_key] = section_vma
+                return section_vma
+
+    return None
+
+
+def get_symbol_vma(binary_path, symbol_name):
+    """Return the preferred VMA for a symbol using llvm-nm."""
+    llvm_nm = find_tool('llvm-nm')
+    if not llvm_nm:
+        return None
+
+    try:
+        result = subprocess.run(
+            [llvm_nm, '--defined-only', '-n', binary_path],
+            capture_output=True, text=True, timeout=30
+        )
+    except (subprocess.TimeoutExpired, FileNotFoundError):
+        return None
+
+    if result.returncode != 0:
+        return None
+
+    for line in result.stdout.splitlines():
+        parts = line.strip().split(None, 2)
+        if len(parts) == 3 and parts[2] == symbol_name:
+            try:
+                return int(parts[0], 16)
+            except ValueError:
+                return None
+
+    return None
 
 
 def load_symbols(module_name):
@@ -885,32 +1079,11 @@ def lookup_symbol(module_name, offset, symbols=None):
 def translate_address_with_addr2line(binary_path, offset):
     """Use llvm-addr2line to translate an address to function name and source location."""
     try:
-        # Try llvm-addr2line first (better for ARM64)
         llvm_addr2line = find_tool('llvm-addr2line')
         if not llvm_addr2line:
             raise FileNotFoundError("llvm-addr2line not found")
         result = subprocess.run(
             [llvm_addr2line, '-e', binary_path, '-f', '-C', hex(offset)],
-            capture_output=True,
-            text=True,
-            timeout=2
-        )
-        if result.returncode == 0:
-            lines = result.stdout.strip().split('\n')
-            if len(lines) >= 2 and lines[0] != '??':
-                func_name = lines[0]
-                source_loc = lines[1] if len(lines) > 1 else '??:0'
-                return func_name, source_loc
-    except (subprocess.TimeoutExpired, FileNotFoundError):
-        pass
-
-    # Try regular addr2line as fallback
-    try:
-        addr2line = shutil.which('addr2line')
-        if not addr2line:
-            raise FileNotFoundError("addr2line not found")
-        result = subprocess.run(
-            [addr2line, '-e', binary_path, '-f', '-C', hex(offset)],
             capture_output=True,
             text=True,
             timeout=2
@@ -1110,6 +1283,112 @@ def check_and_translate_backtrace(filepath):
     return False
 
 
+def find_gdb():
+    """Find a GDB that can talk to QEMU's multi-arch remote stub."""
+    for candidate in ("gdb-multiarch", "aarch64-w64-mingw32-gdb", "gdb"):
+        path = shutil.which(candidate)
+        if path:
+            return path
+    return None
+
+
+def capture_gdb_dump(reason):
+    """Capture a concise live QEMU/GDB state dump on stall/timeout."""
+    if not ENABLE_GDB_DUMP or not use_qemu:
+        return False
+    if not qemu_process or qemu_process.poll() is not None:
+        return False
+
+    gdb = find_gdb()
+    if not gdb:
+        print("GDB state dump skipped: gdb-multiarch not found.")
+        return False
+
+    ntoskrnl_symbols = find_debug_binary("ntoskrnl.exe")
+    if not ntoskrnl_symbols:
+        print("GDB state dump skipped: symbols/ntoskrnl.exe not found.")
+        return False
+
+    gdb_script = f"/tmp/vm_monitor_gdb_dump_{qemu_process.pid}.gdb"
+    commands = [
+        "set pagination off",
+        "set confirm off",
+        "set debuginfod enabled off",
+    ]
+
+    if target_arch == "arm64":
+        text_vma = get_section_vma(ntoskrnl_symbols, ".text")
+        pvec_vma = get_section_vma(ntoskrnl_symbols, ".pvec")
+        vector_vma = get_symbol_vma(ntoskrnl_symbols, "KiArm64VectorTable")
+        if not text_vma or not pvec_vma or not vector_vma:
+            print("GDB state dump skipped: could not derive ARM64 kernel section VMAs.")
+            return False
+
+        commands.append("set architecture aarch64")
+    else:
+        text_vma = None
+        pvec_vma = None
+        vector_vma = None
+
+    commands.extend([
+        f"target remote 127.0.0.1:{QEMU_GDB_PORT}",
+    ])
+
+    if target_arch == "arm64":
+        if KERNEL_TEXT_ADDRESS is not None:
+            commands.append(f"set $nt_text = {KERNEL_TEXT_ADDRESS:#x}")
+        else:
+            commands.append(f"set $nt_text = $VBAR - {vector_vma:#x} + {text_vma:#x}")
+        commands.append("p/x $nt_text")
+        commands.append(
+            f'eval "add-symbol-file {ntoskrnl_symbols} 0x%lx -s .pvec 0x%lx", '
+            f"$nt_text, ($nt_text - {text_vma:#x} + {pvec_vma:#x})"
+        )
+    else:
+        commands.append(f"symbol-file {ntoskrnl_symbols}")
+
+    commands.extend([
+        "monitor info status",
+        "monitor info cpus",
+        "info registers",
+        "x/8i $pc",
+        "bt",
+        "thread apply all bt 8",
+        "detach",
+        "quit",
+    ])
+
+    try:
+        with open(gdb_script, "w") as f:
+            f.write("\n".join(commands))
+            f.write("\n")
+
+        print(f"Capturing GDB state dump using {ntoskrnl_symbols}...")
+        result = subprocess.run(
+            [gdb, "-nx", "-q", "-batch", "-x", gdb_script],
+            cwd=BUILD_DIR,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+            timeout=12
+        )
+
+        output = result.stdout or ""
+        dump = (
+            f"GDB STATE DUMP ({reason})\n"
+            f"Command file: {gdb_script}\n"
+            f"Symbols: {ntoskrnl_symbols}\n"
+            f"Return code: {result.returncode}\n\n"
+            f"{output}"
+        )
+        append_to_log(LOG_FILE, dump)
+        print("\n" + dump)
+        return True
+    except Exception as e:
+        print(f"GDB state dump failed: {e}")
+        return False
+
+
 def monitor_log():
     """Monitor log file for stalls and enforce hard timeout."""
     global qemu_process, use_qemu
@@ -1152,6 +1431,7 @@ def monitor_log():
             total_runtime = time.time() - overall_start_time
             if total_runtime > HARD_TIMEOUT:
                 print(f"HARD TIMEOUT REACHED! Running for {total_runtime:.1f} seconds.")
+                capture_gdb_dump("hard timeout")
                 # Try to translate any backtrace before exiting
                 check_and_translate_backtrace(LOG_FILE)
                 force_kill_vm()
@@ -1177,6 +1457,8 @@ def monitor_log():
                 if stall_duration >= STALL_TIMEOUT:
                     print(f"STALL DETECTED! Log unchanged for {stall_duration:.1f} seconds")
 
+                    capture_gdb_dump("serial stall")
+
                     # Try to translate any backtrace before logging stall
                     check_and_translate_backtrace(LOG_FILE)
 
@@ -1197,13 +1479,16 @@ def signal_handler(sig, frame):
 
 
 def main():
-    global use_qemu, target_arch
+    global use_qemu, target_arch, boot_media, boot_image_path
 
     parser = argparse.ArgumentParser(description='VM Monitor Script')
     parser.add_argument('--qemu', action='store_true', help='Use QEMU instead of VirtualBox')
     parser.add_argument('--vbox', action='store_true', help='Use VirtualBox (default behavior)')
     parser.add_argument('--rpi', action='store_true', help='Use Raspberry Pi emulation mode (cortex-a72, no HVF)')
     parser.add_argument('--smp', type=int, default=4, help='Number of CPU cores (default: 4)')
+    parser.add_argument('--livecd', action='store_true', help='Build and boot livecd.iso instead of ReactOS.img')
+    parser.add_argument('--iso', nargs='?', const=LIVECD_ISO, default=None,
+                        help='Boot an ISO path with QEMU; no path means build/livecd.iso')
     args = parser.parse_args()
 
     # --vbox is explicit but same as default (no --qemu)
@@ -1211,6 +1496,19 @@ def main():
 
     # Detect target architecture from CWD
     target_arch = detect_target_arch()
+
+    build_target = "reactosimg"
+    boot_media = "disk"
+    boot_image_path = REACTOS_IMG
+
+    if args.livecd or args.iso is not None:
+        boot_media = "iso"
+        boot_image_path = os.path.realpath(args.iso if args.iso is not None else LIVECD_ISO)
+        use_qemu = True
+        if boot_image_path == LIVECD_ISO:
+            build_target = "livecd"
+        else:
+            build_target = None
     
     # Force QEMU for ARM64 (VirtualBox does not exist for arm64)
     if target_arch == "arm64":
@@ -1226,18 +1524,24 @@ def main():
     print("="*60)
     print(f"VM Monitor Script ({vm_type})")
     print(f"Build directory: {BUILD_DIR}")
+    print(f"Boot media: {boot_media}")
+    print(f"Boot image: {boot_image_path}")
     print("="*60 + "\n")
 
-    if not build_reactosimg():
+    if build_target:
+        if not build_ninja_target(build_target):
+            sys.exit(1)
+    elif not os.path.exists(boot_image_path):
+        print(f"Error: ISO image not found: {boot_image_path}")
         sys.exit(1)
 
     # Cleanup: Stop only previous QEMU instances using this build's OS image.
     is_darwin = platform.system() == "Darwin"
 
     if use_qemu and not is_darwin:
-        kill_qemu_for_image(REACTOS_IMG, "before start")
+        kill_qemu_for_image(boot_image_path, "before start")
 
-    if use_qemu and target_arch != "arm64":
+    if use_qemu and target_arch != "arm64" and boot_media != "iso":
         if not create_fat32_img():
             print("Warning: Could not create FAT32 image...")
 
