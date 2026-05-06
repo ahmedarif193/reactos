@@ -543,6 +543,12 @@ AtaAhciPostRequestPolled(
 
     AHCI_PORT_WRITE(ChanData->IoBase, PxSataError, 0xFFFFFFFF);
 
+    /*
+     * The internal command FIS/header were just written through normal memory.
+     * Ensure they are visible to the HBA before ringing PxCI.
+     */
+    KeMemoryBarrier();
+
     AHCI_PORT_WRITE(ChanData->IoBase, PxCommandIssue, 1 << AHCI_INTERNAL_SLOT);
     if (!AtaAhciPollRegister(ChanData->IoBase,
                              PxCommandIssue,

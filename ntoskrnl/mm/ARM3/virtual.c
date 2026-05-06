@@ -22,6 +22,48 @@
 
 static SIZE_T MiTotalCommitCharge;
 
+#if defined(_M_ARM64)
+static
+BOOLEAN
+MiArm64GetPhysicalAddress(
+    _In_ PVOID Address,
+    _Out_ PPHYSICAL_ADDRESS PhysicalAddress)
+{
+    ULONG_PTR Va = (ULONG_PTR)Address;
+    ULONG64 Par;
+
+    PhysicalAddress->QuadPart = 0;
+
+    if (MiIsUserAddress(Address))
+    {
+        __asm__ __volatile__(
+            "at s1e0r, %1\n\t"
+            "isb\n\t"
+            "mrs %0, par_el1"
+            : "=r"(Par)
+            : "r"(Va)
+            : "memory");
+    }
+    else
+    {
+        __asm__ __volatile__(
+            "at s1e1r, %1\n\t"
+            "isb\n\t"
+            "mrs %0, par_el1"
+            : "=r"(Par)
+            : "r"(Va)
+            : "memory");
+    }
+
+    if (Par & 1ULL)
+        return FALSE;
+
+    PhysicalAddress->QuadPart =
+        (Par & ARM64_PTE_ADDR_MASK) | (Va & (PAGE_SIZE - 1));
+    return TRUE;
+}
+#endif
+
 NTSTATUS NTAPI
 MiProtectVirtualMemory(IN PEPROCESS Process,
                        IN OUT PVOID *BaseAddress,
@@ -5866,8 +5908,17 @@ NTAPI
 MmGetPhysicalAddress(PVOID Address)
 {
     PHYSICAL_ADDRESS PhysicalAddress;
+#if !defined(_M_ARM64)
     MMPDE TempPde;
     MMPTE TempPte;
+#endif
+
+#if defined(_M_ARM64)
+    if (MiArm64GetPhysicalAddress(Address, &PhysicalAddress))
+    {
+        return PhysicalAddress;
+    }
+#else
 
     /* Check if the PXE/PPE/PDE is valid */
     if (
@@ -5899,6 +5950,7 @@ MmGetPhysicalAddress(PVOID Address)
             return PhysicalAddress;
         }
     }
+#endif
 
     KeRosDumpStackFrames(NULL, 20);
     DPRINT1("MM:MmGetPhysicalAddressFailed base address was %p\n", Address);

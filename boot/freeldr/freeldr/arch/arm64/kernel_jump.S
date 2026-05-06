@@ -28,6 +28,19 @@ Arm64JumpToKernel:
     mov x20, x1     /* LoaderBlock */
     mov x21, x2     /* Kernel stack */
 
+    /*
+     * Continue through the loader's KSEG0 alias before dropping TTBR0.  The
+     * loader was entered through identity mappings, but real hardware faults as
+     * soon as those mappings are invalidated while PC/SP still depend on them.
+     */
+    adr x16, .Lkseg0_handoff
+    movz x17, #0xFFFF, lsl #48
+    movk x17, #0x8000, lsl #32
+    orr x16, x16, x17
+    br x16
+
+.Lkseg0_handoff:
+
     /* Ensure all memory accesses complete */
     dsb ish
     isb
@@ -46,6 +59,12 @@ Arm64JumpToKernel:
 
     /* Flush caches to ensure kernel sees consistent memory */
     bl Arm64CompleteCacheMaintenance
+
+    /*
+     * Now PC and SP are both in TTBR1/KSEG0 space, so clearing TTBR0 can no
+     * longer kill the loader return path before the kernel receives control.
+     */
+    bl Arm64ClearIdentityMappings
 
     /* Debug: Check TTBR1 and TCR right before jump */
     mrs x4, ttbr1_el1
