@@ -409,7 +409,7 @@ def start_qemu(rpi_mode=False, smp=4):
     if target_arch == "arm64":
         is_darwin = platform.system() == "Darwin"
         if rpi_mode:
-            mode_str = f"RPI emulation (cortex-a76, {smp} cores)"
+            mode_str = f"RPI emulation (cortex-a72, {smp} cores)"
         else:
             mode_str = f"HVF accelerated (max, {smp} cores)" if is_darwin else f"CPU max ({smp} cores)"
         print(f"Starting QEMU (ARM64 - {mode_str})...")
@@ -417,7 +417,7 @@ def start_qemu(rpi_mode=False, smp=4):
         # Darwin-specific configuration (macOS)
         if is_darwin:
             if rpi_mode:
-                # Raspberry Pi emulation mode (cortex-a76, no HVF)
+                # Raspberry Pi emulation mode (cortex-a72, no HVF)
                 # Use -serial stdio with stdout redirect instead of -serial file:
                 # because -serial file: has buffering issues on macOS QEMU
                 qemu_cmd = [
@@ -425,7 +425,7 @@ def start_qemu(rpi_mode=False, smp=4):
                     "-smp", str(smp),
                     "-device", "ramfb",
                     "-machine", "virt,gic-version=3",
-                    "-cpu", "cortex-a76",
+                    "-cpu", "cortex-a72",
                     "-m", "4G",
                     "-drive", "if=pflash,format=raw,readonly=on,file=/opt/homebrew/share/qemu/edk2-aarch64-code.fd",
                     "-drive", f"file={img_path}",
@@ -461,13 +461,13 @@ def start_qemu(rpi_mode=False, smp=4):
             # Without the AHCI drive ReactOS has no boot-class CD driver →
             # deadlock (virtio-blk.sys is SYSTEM-start, not BOOT-start).
             if rpi_mode:
-                # Raspberry Pi emulation mode (cortex-a76, no KVM)
+                # Raspberry Pi emulation mode (cortex-a72, no KVM)
                 qemu_cmd = [
                     "qemu-system-aarch64",
                     "-smp", str(smp),
                     "-device", "ramfb",
                     "-machine", "virt,gic-version=3",
-                    "-cpu", "cortex-a76",
+                    "-cpu", "cortex-a72",
                     "-m", "4G",
                     "-bios", "/usr/share/qemu-efi-aarch64/QEMU_EFI.fd",
                     "-drive", f"file={img_path}",
@@ -1202,7 +1202,7 @@ def main():
     parser = argparse.ArgumentParser(description='VM Monitor Script')
     parser.add_argument('--qemu', action='store_true', help='Use QEMU instead of VirtualBox')
     parser.add_argument('--vbox', action='store_true', help='Use VirtualBox (default behavior)')
-    parser.add_argument('--rpi', action='store_true', help='Use Raspberry Pi emulation mode (cortex-a76, no HVF)')
+    parser.add_argument('--rpi', action='store_true', help='Use Raspberry Pi emulation mode (cortex-a72, no HVF)')
     parser.add_argument('--smp', type=int, default=4, help='Number of CPU cores (default: 4)')
     args = parser.parse_args()
 

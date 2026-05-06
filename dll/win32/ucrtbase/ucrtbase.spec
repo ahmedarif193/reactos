@@ -2475,8 +2475,8 @@
 @ cdecl log2(double)
 @ cdecl log2f(float)
 @ cdecl log2l(double) log2
-@ cdecl -stub logb(double)
-@ cdecl -stub logbf(float)
+@ cdecl logb(double)
+@ cdecl logbf(float)
 @ cdecl logbl(double) logb
 @ cdecl -arch=!i386 logf(float)
 @ cdecl longjmp(ptr long)

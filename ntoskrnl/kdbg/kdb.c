@@ -1230,7 +1230,9 @@ KdbpInternalEnter(
     PVOID SavedInitialStack, SavedStackBase, SavedKernelStack;
     ULONG SavedStackLimit;
 
+#ifndef _M_ARM64
     KbdDisableMouse();
+#endif
 
     /* Take control of the display */
     if (KdpDebugMode.Screen)
@@ -1260,7 +1262,9 @@ KdbpInternalEnter(
     if (KdpDebugMode.Screen)
         KdpScreenRelease();
 
+#ifndef _M_ARM64
     KbdEnableMouse();
+#endif
 }
 
 static ULONG

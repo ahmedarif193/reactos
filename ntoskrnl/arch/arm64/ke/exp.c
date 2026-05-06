@@ -354,11 +354,7 @@ KiDispatchException(_In_ PEXCEPTION_RECORD ExceptionRecord,
     switch (ExceptionRecord->ExceptionCode)
     {
         case STATUS_BREAKPOINT:
-            /* BRK consumes 4 bytes on ARM64.  Rewind so the debugger sees it. */
-            if (Context.Pc >= 4)
-            {
-                Context.Pc -= 4;
-            }
+            /* ELR already points at the BRK instruction on ARM64. */
             break;
 
         case KI_EXCEPTION_ACCESS_VIOLATION:
@@ -420,7 +416,7 @@ KiDispatchException(_In_ PEXCEPTION_RECORD ExceptionRecord,
             if (KdbEnterDebuggerException(&Rec64,
                                           PreviousMode,
                                           &Context,
-                                          FALSE) == kdHandleException)
+                                          FALSE) == kdContinue)
             {
                 Handled = TRUE;
                 goto HandledExit;

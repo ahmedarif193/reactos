@@ -29,9 +29,9 @@ typedef struct _KFLOATING_SAVE
 #define PAUSE_PROCESSOR YieldProcessor();
 
 /*
- * ARM64 kernel stack size: 24KB (0x6000), matching AMD64.
+ * ARM64 kernel stack size: 64KB (0x10000).
  *
- * The original 12KB (0x3000) stack is too small for ARM64 due to:
+ * Smaller stacks are too tight for ARM64 due to:
  *  1. Larger trap frames (~912 bytes vs AMD64's ~640)
  *  2. Deep call chains in filesystem/cache/memory manager
  *  3. Nested exception handling requiring additional stack space
@@ -39,8 +39,8 @@ typedef struct _KFLOATING_SAVE
  * Example problematic path: FatMountVolume -> CcMapData ->
  * MmMakeDataSectionResident -> paging I/O -> page fault handler
  */
-#define KERNEL_STACK_SIZE                   0x6000   /* 24KB */
-#define KERNEL_LARGE_STACK_SIZE             0xF000   /* 60KB */
+#define KERNEL_STACK_SIZE                   0x10000  /* 64KB */
+#define KERNEL_LARGE_STACK_SIZE             0x10000  /* 64KB */
 #define KERNEL_LARGE_STACK_COMMIT KERNEL_STACK_SIZE
 
 #define EXCEPTION_READ_FAULT    0

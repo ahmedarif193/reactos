@@ -800,7 +800,8 @@ static __inline PKPRCB KeGetCurrentPrcb(VOID)
 #define _KeGetCurrentThread() \
     __extension__ ({ \
         PKIPCR _ct_pcr = KeGetPcr(); \
-        (_ct_pcr != NULL) ? _ct_pcr->Prcb.CurrentThread : KeArm64CurrentThread; \
+        PKTHREAD _ct_thread = (_ct_pcr != NULL) ? _ct_pcr->Prcb.CurrentThread : NULL; \
+        (_ct_thread != NULL) ? _ct_thread : KeArm64CurrentThread; \
     })
 #define _KeGetPreviousMode() \
     __extension__ ({ \

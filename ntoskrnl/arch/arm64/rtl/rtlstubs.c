@@ -6,7 +6,74 @@
 
 #include <ntoskrnl.h>
 
-typedef struct _RUNTIME_FUNCTION { ULONG BeginAddress; ULONG EndAddress; ULONG UnwindData; } RUNTIME_FUNCTION, *PRUNTIME_FUNCTION;
+typedef struct _RUNTIME_FUNCTION
+{
+    ULONG BeginAddress;
+    ULONG UnwindData;
+} RUNTIME_FUNCTION, *PRUNTIME_FUNCTION;
+
+NTSYSAPI
+PVOID
+NTAPI
+RtlPcToFileHeader(
+    _In_ PVOID PcValue,
+    _Out_ PVOID *BaseOfImage);
+
+#define ARM64_UNWIND_FLAG_MASK 0x3UL
+#define ARM64_PACKED_FUNCTION_LENGTH_SHIFT 2
+#define ARM64_PACKED_FUNCTION_LENGTH_MASK 0x7FFUL
+#define ARM64_XDATA_FUNCTION_LENGTH_MASK 0x3FFFFUL
+
+static
+ULONG
+RtlpArm64FunctionLength(
+    _In_ ULONG_PTR ImageBase,
+    _In_ PRUNTIME_FUNCTION FunctionEntry)
+{
+    ULONG UnwindData;
+    PULONG Xdata;
+
+    UnwindData = FunctionEntry->UnwindData;
+    if ((UnwindData & ARM64_UNWIND_FLAG_MASK) != 0)
+    {
+        return ((UnwindData >> ARM64_PACKED_FUNCTION_LENGTH_SHIFT) &
+                ARM64_PACKED_FUNCTION_LENGTH_MASK) * sizeof(ULONG);
+    }
+
+    Xdata = (PULONG)(ImageBase + UnwindData);
+    return (Xdata[0] & ARM64_XDATA_FUNCTION_LENGTH_MASK) * sizeof(ULONG);
+}
+
+static
+PRUNTIME_FUNCTION
+NTAPI
+RtlLookupFunctionTable(
+    _In_ ULONG64 ControlPc,
+    _Out_ PULONG64 ImageBase,
+    _Out_ PULONG Length)
+{
+    PVOID Table;
+    ULONG Size;
+
+    if (!RtlPcToFileHeader((PVOID)(ULONG_PTR)ControlPc, (PVOID *)ImageBase))
+    {
+        *Length = 0;
+        return NULL;
+    }
+
+    Table = RtlImageDirectoryEntryToData((PVOID)(ULONG_PTR)*ImageBase,
+                                         TRUE,
+                                         IMAGE_DIRECTORY_ENTRY_EXCEPTION,
+                                         &Size);
+    if (Table == NULL)
+    {
+        *Length = 0;
+        return NULL;
+    }
+
+    *Length = Size / sizeof(RUNTIME_FUNCTION);
+    return Table;
+}
 
 PRUNTIME_FUNCTION
 NTAPI
@@ -15,9 +82,44 @@ RtlLookupFunctionEntry(
     _Out_ PDWORD64 ImageBase,
     _Inout_opt_ PVOID HistoryTable)
 {
-    (VOID)ControlPc;
-    if (ImageBase) *ImageBase = 0;
+    PRUNTIME_FUNCTION FunctionTable, FunctionEntry;
+    ULONG TableLength;
+    ULONG_PTR ControlRva;
+    ULONG IndexLow, IndexHigh, IndexMid;
+    ULONG FunctionLength;
+
     (VOID)HistoryTable;
+
+    FunctionTable = RtlLookupFunctionTable(ControlPc, ImageBase, &TableLength);
+    if (FunctionTable == NULL)
+        return NULL;
+
+    ControlRva = (ULONG_PTR)ControlPc - (ULONG_PTR)*ImageBase;
+    IndexLow = 0;
+    IndexHigh = TableLength;
+
+    while (IndexHigh > IndexLow)
+    {
+        IndexMid = (IndexLow + IndexHigh) / 2;
+        FunctionEntry = &FunctionTable[IndexMid];
+
+        if (ControlRva < FunctionEntry->BeginAddress)
+        {
+            IndexHigh = IndexMid;
+            continue;
+        }
+
+        FunctionLength = RtlpArm64FunctionLength((ULONG_PTR)*ImageBase,
+                                                FunctionEntry);
+        if (ControlRva >= (FunctionEntry->BeginAddress + FunctionLength))
+        {
+            IndexLow = IndexMid + 1;
+            continue;
+        }
+
+        return FunctionEntry;
+    }
+
     return NULL;
 }
 
@@ -37,9 +139,20 @@ RtlVirtualUnwind(
     (VOID)ImageBase;
     (VOID)ControlPc;
     (VOID)FunctionEntry;
-    (VOID)ContextRecord;
     if (HandlerData) *HandlerData = NULL;
-    if (EstablisherFrame) *EstablisherFrame = 0;
+
+    if (ContextRecord != NULL)
+    {
+        PCONTEXT Context = (PCONTEXT)ContextRecord;
+
+        if (EstablisherFrame) *EstablisherFrame = Context->Fp;
+        Context->Pc = Context->Lr;
+    }
+    else if (EstablisherFrame)
+    {
+        *EstablisherFrame = 0;
+    }
+
     (VOID)ContextPointers;
     return NULL;
 }

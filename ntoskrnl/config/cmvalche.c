@@ -823,13 +823,13 @@ CmpCompareNewValueDataAgainstKCBCache(IN PCM_KEY_CONTROL_BLOCK Kcb,
 
 Quickie:
     /* Release the value cell */
-    if (ValueCellToRelease) HvReleaseCell(Kcb->KeyHive, ValueCellToRelease);
+    if (ValueCellToRelease != HCELL_NIL) HvReleaseCell(Kcb->KeyHive, ValueCellToRelease);
 
     /* Free the buffer */
     if (BufferAllocated) CmpFree(Buffer, 0);
 
     /* Free the cell */
-    if (CellToRelease) HvReleaseCell(Kcb->KeyHive, CellToRelease);
+    if (CellToRelease != HCELL_NIL) HvReleaseCell(Kcb->KeyHive, CellToRelease);
 
     /* Return the search result */
     return SearchResult;

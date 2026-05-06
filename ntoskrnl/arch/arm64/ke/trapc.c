@@ -21,8 +21,20 @@
 #define ARM64_PTE_ADDR_MASK 0x0000FFFFFFFFF000ULL
 #endif
 
+#define ESR_EC_BRK 0x3C
+
 /* Forward declaration for SError handler */
 BOOLEAN NTAPI KiSErrorHandler(_In_ PKTRAP_FRAME TrapFrame);
+extern PVOID KiArm64PanicStack;
+DECLSPEC_NORETURN
+VOID
+KiArm64BugCheckOnPanicStack(
+    _In_ PVOID PanicStack,
+    _In_ ULONG BugCheckCode,
+    _In_ ULONG_PTR BugCheckParameter1,
+    _In_ ULONG_PTR BugCheckParameter2,
+    _In_ ULONG_PTR BugCheckParameter3,
+    _In_ ULONG_PTR BugCheckParameter4);
 
 static LONG KiArm64UserIAbortTraceCount;
 
@@ -1031,17 +1043,12 @@ KiArm64HandleSynchronousException(
         KPROCESSOR_MODE FaultMode = KiArm64PreviousModeFromContext(
             Context->State.Spsr, Context->State.Elr);
 
-        if (CpuIndex < MAXIMUM_PROCESSORS && FaultMode == KernelMode)
+        if ((EsrClass != ESR_EC_BRK) &&
+            (CpuIndex < MAXIMUM_PROCESSORS) &&
+            (FaultMode == KernelMode))
         {
             if (InterlockedCompareExchange(&KiArm64TrapActive[CpuIndex], 1, 0) != 0)
             {
-                DbgPrintEx(DPFLTR_DEFAULT_ID, DPFLTR_ERROR_LEVEL,
-                        "[TRAPC] REENTRY! ESR=0x%lx EC=0x%lx ELR=%p FAR=%p SPSR=0x%lx\n",
-                        (ULONG)(Context->State.ExceptionSyndrome & 0xFFFFFFFFULL),
-                        (ULONG)((Context->State.ExceptionSyndrome >> 26) & 0x3FULL),
-                        (PVOID)(ULONG_PTR)Context->State.Elr,
-                        (PVOID)(ULONG_PTR)Context->State.FaultAddress,
-                        (ULONG)Context->State.Spsr);
                 KiArm64BugCheckSynchronousException(Context);
                 return TRUE; /* not reached */
             }
@@ -1560,19 +1567,42 @@ KiArm64HandleSynchronousException(
             /* Check for stack exhaustion early */
             __asm__ __volatile__("mov %0, sp" : "=r"(CurrentSp));
             CurrentThread = PsGetCurrentThread();
+            if (CurrentThread == NULL)
+            {
+                if (KiArm64PanicStack != NULL)
+                {
+                    KiArm64BugCheckOnPanicStack(KiArm64PanicStack,
+                                                KERNEL_SECURITY_CHECK_FAILURE,
+                                                CurrentSp,
+                                                0,
+                                                Context->State.FaultAddress,
+                                                0xBAD7A11);
+                }
+
+                for (;;)
+                {
+                    __asm__ __volatile__("wfe");
+                }
+            }
+
             StackLimit = (PVOID)CurrentThread->Tcb.StackLimit;
 
             if (CurrentSp < (ULONG64)StackLimit + 0x800)
             {
-                /* Stack exhausted - bugcheck before we overflow */
-                DbgPrintEx(DPFLTR_DEFAULT_ID, DPFLTR_ERROR_LEVEL,
-                           "[arm64] DataAbort: STACK EXHAUSTED! SP=%p StackLimit=%p FAR=%p\n",
-                           (PVOID)CurrentSp, StackLimit, (PVOID)(ULONG_PTR)Context->State.FaultAddress);
-                KeBugCheckEx(KERNEL_STACK_INPAGE_ERROR,
-                             CurrentSp,
-                             (ULONG_PTR)StackLimit,
-                             Context->State.FaultAddress,
-                             0xDEAD5743);
+                if (KiArm64PanicStack != NULL)
+                {
+                    KiArm64BugCheckOnPanicStack(KiArm64PanicStack,
+                                                KERNEL_STACK_INPAGE_ERROR,
+                                                CurrentSp,
+                                                (ULONG_PTR)StackLimit,
+                                                Context->State.FaultAddress,
+                                                0xDEAD5743);
+                }
+
+                for (;;)
+                {
+                    __asm__ __volatile__("wfe");
+                }
             }
 
 
@@ -2122,9 +2152,6 @@ KiArm64HandleSynchronousException(
         {
             KPROCESSOR_MODE Mode = KiArm64PreviousModeFromContext(Context->State.Spsr, Context->State.Elr);
             ULONG BrkImm = Esr & 0xFFFF;
-#ifdef KDBG
-            KD_CONTINUE_TYPE KdbResult = kdHandleException;
-#endif
 
             /*
              * BRK #0xF003: Debug service request from user-mode or kernel-mode.
@@ -2178,88 +2205,6 @@ KiArm64HandleSynchronousException(
             TrapFrame = &Context->TrapFrame;
             KiArm64InitializeTrapFrame(Context, TrapFrame);
 
-#ifdef KDBG
-            /*
-             * When KDBG is compiled in, call KdbEnterDebuggerException to
-             * handle the breakpoint interactively. KDBG provides a built-in
-             * debugger that works even when no external debugger is attached.
-             *
-             * If KdbEnterDebuggerException returns kdContinue, the breakpoint
-             * was handled and we should skip past the BRK instruction.
-             * If it returns kdHandleException, we need to dispatch through
-             * the normal exception path for an external debugger.
-             */
-            {
-                EXCEPTION_RECORD64 ExceptionRecord64;
-                CONTEXT KdbContext;
-
-                /* Build EXCEPTION_RECORD64 for KDBG */
-                RtlZeroMemory(&ExceptionRecord64, sizeof(ExceptionRecord64));
-                ExceptionRecord64.ExceptionCode = STATUS_BREAKPOINT;
-                ExceptionRecord64.ExceptionFlags = 0;
-                ExceptionRecord64.ExceptionAddress = Context->State.Elr;
-                ExceptionRecord64.NumberParameters = 1;
-                ExceptionRecord64.ExceptionInformation[0] = Context->State.Elr;
-
-                /* Build CONTEXT from trap frame for KDBG */
-                RtlZeroMemory(&KdbContext, sizeof(KdbContext));
-                KdbContext.ContextFlags = CONTEXT_CONTROL | CONTEXT_INTEGER | CONTEXT_ARM64;
-                KeTrapFrameToContext(TrapFrame, Context->ExceptionFramePointer, &KdbContext);
-
-                /* Call KDBG to handle the breakpoint */
-                KdbResult = KdbEnterDebuggerException(&ExceptionRecord64,
-                                                      Mode,
-                                                      &KdbContext,
-                                                      TRUE);
-
-                /*
-                 * If KDBG handled the breakpoint (kdContinue), propagate any
-                 * PC changes from KdbContext back to TrapFrame. KDBG may have
-                 * advanced PC past the BRK instruction.
-                 */
-                if (KdbResult == kdContinue)
-                {
-                    KeContextToTrapFrame(&KdbContext,
-                                         Context->ExceptionFramePointer,
-                                         TrapFrame,
-                                         KdbContext.ContextFlags,
-                                         Mode);
-
-                    /*
-                     * Ensure PC is advanced past the BRK instruction.
-                     * KdbEnterDebuggerException should have done this, but
-                     * verify and fix if needed to prevent infinite loops.
-                     */
-                    if (TrapFrame->Pc == Context->State.Elr)
-                    {
-                        TrapFrame->Pc += 4;
-                    }
-                    Context->State.Elr = TrapFrame->Pc;
-                    Context->TrapFramePointer = TrapFrame;
-                    Context->ExceptionFramePointer = &Context->ExceptionFrame;
-                    KiArm64ClearTrapActive();
-                    return TRUE;
-                }
-            }
-#endif /* KDBG */
-
-            /*
-             * KDBG did not handle the breakpoint (or KDBG is not compiled in).
-             * Check if we should skip the breakpoint or dispatch to an external
-             * debugger.
-             */
-            if (!KdDebuggerEnabled || KdDebuggerNotPresent)
-            {
-                /* No external debugger - skip the BRK instruction */
-                TrapFrame->Pc = (ULONG64)((ULONG_PTR)Context->State.Elr + 4);
-                Context->State.Elr += 4;
-                Context->TrapFramePointer = TrapFrame;
-                Context->ExceptionFramePointer = &Context->ExceptionFrame;
-                KiArm64ClearTrapActive();
-                return TRUE;
-            }
-
-            /* External debugger attached - dispatch through normal path */
             {
                 EXCEPTION_RECORD ExceptionRecord;
 
@@ -2268,8 +2213,10 @@ KiArm64HandleSynchronousException(
                 ExceptionRecord.ExceptionFlags = 0;
                 ExceptionRecord.ExceptionRecord = NULL;
                 ExceptionRecord.ExceptionAddress = (PVOID)(ULONG_PTR)Context->State.Elr;
-                ExceptionRecord.NumberParameters = 1;
-                ExceptionRecord.ExceptionInformation[0] = (ULONG_PTR)Context->State.Elr;
+                ExceptionRecord.NumberParameters = 3;
+                ExceptionRecord.ExceptionInformation[0] = BREAKPOINT_BREAK;
+                ExceptionRecord.ExceptionInformation[1] = 0;
+                ExceptionRecord.ExceptionInformation[2] = 0;
 
                 KiDispatchException(&ExceptionRecord,
                                     Context->ExceptionFramePointer,
