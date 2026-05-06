@@ -34,6 +34,7 @@ NTSYSAPI NTSTATUS NTAPI NtShutdownSystem(_In_ SHUTDOWN_ACTION Action);
 
 #if defined(_M_ARM64) || defined(__aarch64__)
 #define HALP_ARM64 1
+#define HALP_ARM64_KSEG0_BASE 0xFFFF800000000000ULL
 #endif
 
 #ifndef _ARC_
@@ -1036,6 +1037,19 @@ HalpAcpiCopyBiosTable(IN PLOADER_PARAMETER_BLOCK LoaderBlock,
         {
             /* Map it */
             CachedTable = HalpMapPhysicalMemory64(PhysAddress, PageCount);
+#if defined(HALP_ARM64)
+            /*
+             * Keep Phase 0 ACPI cache nodes in the stable kernel alias.
+             * Identity mappings are dropped in HAL Phase 1, but the cache
+             * list is still used by ACPI and firmware PnP enumeration.
+             */
+            if ((CachedTable != NULL) &&
+                ((ULONG_PTR)CachedTable < HALP_ARM64_KSEG0_BASE))
+            {
+                CachedTable = (PACPI_CACHED_TABLE)(ULONG_PTR)(HALP_ARM64_KSEG0_BASE |
+                                                              PhysAddress.QuadPart);
+            }
+#endif
         }
         else
         {
