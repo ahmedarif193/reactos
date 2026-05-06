@@ -8,10 +8,14 @@
 #include <ntoskrnl.h>
 #include <ndk/rtltypes.h>
 
-typedef struct _RUNTIME_FUNCTION {
-    ULONG BeginAddress;
-    ULONG EndAddress;
-    ULONG UnwindData;
+/*
+ * ARM64 .pdata entries are 8 bytes (2 x DWORD):
+ *   DWORD BeginAddress;
+ *   DWORD UnwindData;
+ */
+typedef struct _IMAGE_ARM64_RUNTIME_FUNCTION_ENTRY {
+    DWORD BeginAddress;
+    DWORD UnwindData;
 } RUNTIME_FUNCTION, *PRUNTIME_FUNCTION;
 
 #define NDEBUG
@@ -79,10 +83,11 @@ RtlpCaptureStackLimits(IN ULONG_PTR FramePointer,
 }
 
 /*
- * RtlpSafeReadMemory - Safe memory read for stack walking
+ * RtlpSafeReadMemory - Safe memory read for stack walking.
  *
- * This is a minimal safe read that doesn't rely on SEH or complex
- * exception handling, designed to be safe during nested exceptions.
+ * Keep this path independent from SEH: the debugger uses it while reporting
+ * exceptions, so taking and handling another exception here can corrupt the
+ * interrupted context before the original fault is printed.
  */
 static
 BOOLEAN
@@ -91,6 +96,19 @@ RtlpSafeReadMemory(
     IN PVOID Src,
     IN SIZE_T Size)
 {
+    ULONG_PTR Start, End;
+
+    if (Size == 0)
+        return TRUE;
+
+    if (Src == NULL)
+        return FALSE;
+
+    Start = (ULONG_PTR)Src;
+    End = Start + Size - 1;
+    if (End < Start)
+        return FALSE;
+
     /*
      * On ARM64, we need to verify the address is mapped before reading.
      * We use MmIsAddressValid which is safe to call at any IRQL.
@@ -100,25 +118,11 @@ RtlpSafeReadMemory(
     if (!MmIsAddressValid(Src))
         return FALSE;
 
-    if (Size > 1 && !MmIsAddressValid((PCHAR)Src + Size - 1))
+    if (!MmIsAddressValid((PVOID)End))
         return FALSE;
 
-    /*
-     * Use volatile to prevent compiler from optimizing away the read,
-     * and ensure proper memory ordering on ARM64's relaxed memory model.
-     */
-    _SEH2_TRY
-    {
-        RtlCopyMemory(Dest, Src, Size);
-        _SEH2_YIELD(return TRUE);
-    }
-    _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
-    {
-        _SEH2_YIELD(return FALSE);
-    }
-    _SEH2_END;
-
-    return FALSE;
+    RtlCopyMemory(Dest, Src, Size);
+    return TRUE;
 }
 
 ULONG
@@ -129,14 +133,11 @@ RtlWalkFrameChain(OUT PVOID *Callers,
 {
     CONTEXT Context;
     ULONG64 StackBegin = 0, StackEnd = 0;
-    ULONG64 ControlPc, ImageBase, EstablisherFrame;
-    PVOID HandlerData;
+    ULONG64 ControlPc;
     ULONG FramesToSkip, Captured = 0, i;
-    PRUNTIME_FUNCTION FunctionEntry;
     BOOLEAN StackLimitsOk;
     const ULONG64 MinKernelAddress = 0xFFFF000000000000ULL;
     ULONG ProcessorNumber;
-    BOOLEAN SkipRtlLookup = FALSE;
 
     if (!Callers || Count == 0) return 0;
 
@@ -170,13 +171,13 @@ RtlWalkFrameChain(OUT PVOID *Callers,
     }
 
     /*
-     * Check if we're already at very high IRQL - if so, avoid calling
-     * RtlLookupFunctionEntry as it may access paged memory.
+     * Do not use table-driven PE unwinding from the debugger stack walker yet.
+     * The ARM64 unwinder can touch .pdata/.xdata and saved registers while the
+     * exception system is already active; if that faults, the handled exception
+     * path can resume the original trap frame with a bogus PC during phase 1.
+     * FP walking gives KDB a stable best-effort trace without creating a
+     * second exception while reporting the first one.
      */
-    if (KeGetCurrentIrql() > DISPATCH_LEVEL)
-    {
-        SkipRtlLookup = TRUE;
-    }
 
     FramesToSkip = Flags >> 8;
 
@@ -192,115 +193,61 @@ RtlWalkFrameChain(OUT PVOID *Callers,
         StackEnd = Context.Sp + KERNEL_STACK_SIZE;
     }
 
-    _SEH2_TRY
+    for (i = 0; i < FramesToSkip + Count; i++)
     {
-        for (i = 0; i < FramesToSkip + Count; i++)
+        ULONG64 NewFp, NewPc;
+
+        if (ControlPc < MinKernelAddress)
+            break;
+
+        /*
+         * FP-based unwinding fallback.
+         * Use safe memory reads to avoid faulting on invalid FP.
+         */
+        if (Context.Fp < StackBegin ||
+            Context.Fp >= StackEnd ||
+            (Context.Fp & 0x7))
         {
-            BOOLEAN Unwound = FALSE;
+            break;
+        }
 
-            if (ControlPc < MinKernelAddress)
-                break;
+        /* Use validated reads instead of raw frame-pointer dereferences. */
+        if (!RtlpSafeReadMemory(&NewFp, (PVOID)Context.Fp, sizeof(ULONG64)))
+            break;
 
-            /*
-             * Only attempt RtlLookupFunctionEntry if we're not in a
-             * high-IRQL or recursive scenario. RtlLookupFunctionEntry
-             * can access PE headers which may not be mapped, causing
-             * page faults that lead to recursive exceptions.
-             */
-            if (!SkipRtlLookup)
+        if (!RtlpSafeReadMemory(&NewPc, (PVOID)(Context.Fp + sizeof(ULONG_PTR)), sizeof(ULONG64)))
+            break;
+
+        /* Validate NewFp points up the stack (or is 0 for end of chain) */
+        if (NewFp != 0 && (NewFp <= Context.Fp || NewFp >= StackEnd))
+            break;
+
+        /* Validate NewPc is a valid kernel address */
+        if (NewPc != 0 && NewPc < MinKernelAddress)
+            break;
+
+        Context.Sp = Context.Fp + (2 * sizeof(ULONG_PTR));
+        Context.Fp = NewFp;
+        Context.Pc = NewPc;
+
+        /* If we hit end of FP chain, stop */
+        if (NewFp == 0)
+        {
+            if (i >= FramesToSkip && NewPc >= MinKernelAddress)
             {
-                FunctionEntry = (PRUNTIME_FUNCTION)(ULONG_PTR)RtlLookupFunctionEntry(ControlPc, (PULONG_PTR)&ImageBase, NULL);
-                if (FunctionEntry)
-                {
-                    CONTEXT TempContext = Context;
-
-                    RtlVirtualUnwind(0,
-                                     ImageBase,
-                                     ControlPc,
-                                     FunctionEntry,
-                                     &TempContext,
-                                     &HandlerData,
-                                     &EstablisherFrame,
-                                     NULL);
-
-                    if (TempContext.Pc != ControlPc &&
-                        TempContext.Sp >= Context.Sp &&
-                        TempContext.Sp >= StackBegin &&
-                        TempContext.Sp < StackEnd)
-                    {
-                        Context = TempContext;
-                        Unwound = TRUE;
-                    }
-                }
+                Callers[Captured++] = (PVOID)NewPc;
             }
+            break;
+        }
 
-            if (!Unwound)
-            {
-                ULONG64 NewFp, NewPc;
-
-                /*
-                 * FP-based unwinding fallback.
-                 * Use safe memory reads to avoid faulting on invalid FP.
-                 */
-                if (Context.Fp < StackBegin ||
-                    Context.Fp >= StackEnd ||
-                    (Context.Fp & 0x7))
-                {
-                    break;
-                }
-
-                /*
-                 * Use safe memory read instead of direct pointer dereference.
-                 * This prevents page faults from propagating as exceptions.
-                 */
-                if (!RtlpSafeReadMemory(&NewFp, (PVOID)Context.Fp, sizeof(ULONG64)))
-                    break;
-
-                if (!RtlpSafeReadMemory(&NewPc, (PVOID)(Context.Fp + sizeof(ULONG_PTR)), sizeof(ULONG64)))
-                    break;
-
-                /* Validate NewFp points up the stack (or is 0 for end of chain) */
-                if (NewFp != 0 && (NewFp <= Context.Fp || NewFp >= StackEnd))
-                    break;
-
-                /* Validate NewPc is a valid kernel address */
-                if (NewPc != 0 && NewPc < MinKernelAddress)
-                    break;
-
-                Context.Sp = Context.Fp + (2 * sizeof(ULONG_PTR));
-                Context.Fp = NewFp;
-                Context.Pc = NewPc;
-
-                /* If we hit end of FP chain, stop */
-                if (NewFp == 0)
-                {
-                    if (i >= FramesToSkip && NewPc >= MinKernelAddress)
-                    {
-                        Callers[Captured++] = (PVOID)NewPc;
-                    }
-                    break;
-                }
-            }
-
-            ControlPc = Context.Pc;
-            if (ControlPc < MinKernelAddress)
-                break;
-            if (i >= FramesToSkip)
-            {
-                Callers[Captured++] = (PVOID)ControlPc;
-            }
+        ControlPc = Context.Pc;
+        if (ControlPc < MinKernelAddress)
+            break;
+        if (i >= FramesToSkip)
+        {
+            Callers[Captured++] = (PVOID)ControlPc;
         }
     }
-    _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
-    {
-        /*
-         * If we get here, something went wrong during stack walking.
-         * Keep whatever frames we already captured rather than
-         * discarding everything.
-         */
-        DPRINT1("RtlWalkFrameChain: Exception during stack walk, captured %lu frames\n", Captured);
-    }
-    _SEH2_END;
 
     /* Release reentrancy guard */
     InterlockedExchange(&g_RtlWalkFrameChainActive[ProcessorNumber], 0);

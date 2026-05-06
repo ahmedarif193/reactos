@@ -427,7 +427,7 @@ elseif(ARCH STREQUAL "arm64")
         ${NTOS_ARCH_DIR}/ke/trapc.c
         ${NTOS_ARCH_DIR}/ke/trapdump.c
         ${NTOS_ARCH_DIR}/ke/usercall.c
-        ${NTOS_ARCH_DIR}/ke/vidstubs.c
+
         ${NTOS_ARCH_DIR}/mm/page.c
         ${NTOS_ARCH_DIR}/mm/section.c
         ${NTOS_ARCH_DIR}/mm/procsup.c

@@ -759,8 +759,15 @@ UefiDiskRead(ULONG FileId, VOID *Buffer, ULONG N, ULONG *Count)
     EFI_BLOCK_IO* BlockIo;
     EFI_STATUS Status;
     ULONG ArcDriveIndex;
+    ULONG IoAlign;
 
     ASSERT(DiskReadBufferSize > 0);
+
+    if (N == 0)
+    {
+        *Count = 0;
+        return ESUCCESS;
+    }
 
     TotalSectors = (N + Context->SectorSize - 1) / Context->SectorSize;
     MaxSectors   = UefiGetMaxChunkSectors(Context->SectorSize);
@@ -798,7 +805,35 @@ UefiDiskRead(ULONG FileId, VOID *Buffer, ULONG N, ULONG *Count)
         return EIO;
     }
 
-    if (!UefiEnsureDiskReadBufferAligned(BlockIo->Media->IoAlign))
+    IoAlign = BlockIo->Media->IoAlign;
+
+    /*
+     * Large RAM disk loads pass a page-aligned destination and sector-aligned
+     * sizes. In that case read directly into the caller's buffer instead of
+     * bouncing every chunk through DiskReadBuffer.
+     */
+    if ((N % Context->SectorSize) == 0 &&
+        UefiIsAlignedPointer(Buffer, (IoAlign == 0) ? 1 : IoAlign))
+    {
+        Status = UefiReadBlocksChunked(BlockIo,
+                                       SectorOffset,
+                                       Context->SectorSize,
+                                       Buffer,
+                                       TotalSectors);
+        if (EFI_ERROR(Status))
+        {
+            ERR("ReadBlocks failed: DriveNumber=%d, SectorNumber=%llu, SectorCount=%lu, Status=0x%lx\n",
+                Context->DriveNumber, SectorOffset, TotalSectors, (ULONG)Status);
+            *Count = 0;
+            return EIO;
+        }
+
+        *Count = N;
+        Context->SectorNumber = SectorOffset + TotalSectors - Context->SectorOffset;
+        return ESUCCESS;
+    }
+
+    if (!UefiEnsureDiskReadBufferAligned(IoAlign))
     {
         ERR("Failed to align disk read buffer\n");
         *Count = 0;

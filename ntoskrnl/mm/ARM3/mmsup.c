@@ -173,6 +173,9 @@ BOOLEAN
 NTAPI
 MmIsAddressValid(IN PVOID VirtualAddress)
 {
+#if defined(_M_ARM64)
+    return MiArm64IsAddressValid(VirtualAddress);
+#else
 #if _MI_PAGING_LEVELS >= 4
     /* Check if the PXE is valid */
     if (MiAddressToPxe(VirtualAddress)->u.Hard.Valid == 0) return FALSE;
@@ -194,6 +197,7 @@ MmIsAddressValid(IN PVOID VirtualAddress)
     /* This address is valid now, but it will only stay so if the caller holds
      * the PFN lock */
     return TRUE;
+#endif
 }
 
 /*

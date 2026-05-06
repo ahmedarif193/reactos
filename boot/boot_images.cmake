@@ -1,4 +1,7 @@
 
+# Include ARM64 hardware boot media configuration.
+include(${CMAKE_SOURCE_DIR}/media/boot/arm64_boot_media.cmake)
+
 # EFI platform ID - Used for naming the EFI boot image on supported platforms.
 if(ARCH STREQUAL "i386")
     if(NOT (SARCH STREQUAL "pc98" OR SARCH STREQUAL "xbox"))
@@ -197,29 +200,39 @@ file(APPEND ${CMAKE_CURRENT_BINARY_DIR}/livecd.cmake.lst "reactos/TEMP=${CMAKE_C
 add_allusers_profile_dirs(${CMAKE_CURRENT_BINARY_DIR}/livecd.cmake.lst "Profiles")
 add_user_profile_dirs(${CMAKE_CURRENT_BINARY_DIR}/livecd.cmake.lst "Profiles" "Default User")
 
-set(_livecd_stage_dir  ${CMAKE_CURRENT_BINARY_DIR}/livecd_wim_stage)
-set(_livecd_boot_wim   ${CMAKE_CURRENT_BINARY_DIR}/boot.wim)
-set(_livecd_wim_lst    ${CMAKE_CURRENT_BINARY_DIR}/livecd_wim.$<CONFIG>.lst)
-set(_livecd_ini_src    ${REACTOS_SOURCE_DIR}/boot/bootdata/wim/livecd_wim.ini)
-set(_livecd_wim_ini    ${CMAKE_CURRENT_BINARY_DIR}/livecd_wim.freeldr.ini)
-set(_livecd_wim_script ${REACTOS_SOURCE_DIR}/boot/bootdata/wim/make_livecd_wim.cmake)
+if(FREELDR_WIM_RAMDISK)
+    set(_livecd_stage_dir  ${CMAKE_CURRENT_BINARY_DIR}/livecd_wim_stage)
+    set(_livecd_boot_wim   ${CMAKE_CURRENT_BINARY_DIR}/boot.wim)
+    set(_livecd_wim_lst    ${CMAKE_CURRENT_BINARY_DIR}/livecd_wim.$<CONFIG>.lst)
+    set(_livecd_ini_src    ${REACTOS_SOURCE_DIR}/boot/bootdata/wim/livecd_wim.ini)
+    set(_livecd_wim_ini    ${CMAKE_CURRENT_BINARY_DIR}/livecd_wim.freeldr.ini)
+    set(_livecd_wim_script ${REACTOS_SOURCE_DIR}/boot/bootdata/wim/make_livecd_wim.cmake)
 
-add_custom_target(livecd
-    COMMAND ${CMAKE_COMMAND}
-        -DINPUT_LIST=${CMAKE_CURRENT_BINARY_DIR}/livecd.$<CONFIG>.lst
-        -DSTAGE_DIR=${_livecd_stage_dir}
-        -DOUTPUT_WIM=${_livecd_boot_wim}
-        -DOUTPUT_LIST=${_livecd_wim_lst}
-        -DWIMAGE_EXE=$<TARGET_FILE:native-wimage>
-        -DSOURCE_FREELDR_INI=${_livecd_ini_src}
-        -DOUTPUT_FREELDR_INI=${_livecd_wim_ini}
-        -P ${_livecd_wim_script}
-    COMMAND native-mkisofs -quiet -o ${REACTOS_BINARY_DIR}/livecd.iso
-        ${ISO_COMMON_OPTIONS} ${ISO_BOOT_OPTIONS} ${ISO_BOOT_FILES_OPTIONS} ${ISO_LAYOUT_OPTIONS}
-        -path-list ${_livecd_wim_lst}
-    ${ISOHYBRID_LIVECD_COMMAND}
-    DEPENDS ${ISOHYBRID_DEPENDS} native-mkisofs native-wimage ${_livecd_ini_src} ${_livecd_wim_script}
-    VERBATIM)
+    add_custom_target(livecd
+        COMMAND ${CMAKE_COMMAND}
+            -DINPUT_LIST=${CMAKE_CURRENT_BINARY_DIR}/livecd.$<CONFIG>.lst
+            -DSTAGE_DIR=${_livecd_stage_dir}
+            -DOUTPUT_WIM=${_livecd_boot_wim}
+            -DOUTPUT_LIST=${_livecd_wim_lst}
+            -DWIMAGE_EXE=$<TARGET_FILE:native-wimage>
+            -DSOURCE_FREELDR_INI=${_livecd_ini_src}
+            -DOUTPUT_FREELDR_INI=${_livecd_wim_ini}
+            -P ${_livecd_wim_script}
+        COMMAND native-mkisofs -quiet -o ${REACTOS_BINARY_DIR}/livecd.iso
+            ${ISO_COMMON_OPTIONS} ${ISO_BOOT_OPTIONS} ${ISO_BOOT_FILES_OPTIONS} ${ISO_LAYOUT_OPTIONS}
+            -path-list ${_livecd_wim_lst}
+        ${ISOHYBRID_LIVECD_COMMAND}
+        DEPENDS ${ISOHYBRID_DEPENDS} native-mkisofs native-wimage ${_livecd_ini_src} ${_livecd_wim_script}
+        VERBATIM)
+else()
+    add_custom_target(livecd
+        COMMAND native-mkisofs -quiet -o ${REACTOS_BINARY_DIR}/livecd.iso
+            ${ISO_COMMON_OPTIONS} ${ISO_BOOT_OPTIONS} ${ISO_BOOT_FILES_OPTIONS} ${ISO_LAYOUT_OPTIONS}
+            -path-list ${CMAKE_CURRENT_BINARY_DIR}/livecd.$<CONFIG>.lst
+        ${ISOHYBRID_LIVECD_COMMAND}
+        DEPENDS ${ISOHYBRID_DEPENDS} native-mkisofs
+        VERBATIM)
+endif()
 
 
 ## ReactOSImg
@@ -246,7 +259,12 @@ add_allusers_profile_dirs(${CMAKE_CURRENT_BINARY_DIR}/preinstall.cmake.lst "Prof
 add_user_profile_dirs(${CMAKE_CURRENT_BINARY_DIR}/preinstall.cmake.lst "Profiles" "Default User")
 
 # Disk image size configuration (in MB)
-set(PREINSTALL_IMAGE_SIZE_MB 1024 CACHE STRING "Pre-installed disk image size in MB")
+if(ARCH STREQUAL "arm64")
+    set(_preinstall_image_size_default 400)
+else()
+    set(_preinstall_image_size_default 1024)
+endif()
+set(PREINSTALL_IMAGE_SIZE_MB ${_preinstall_image_size_default} CACHE STRING "Pre-installed disk image size in MB")
 # Partition starts at sector 2048 (1MB alignment), rest is partition
 math(EXPR _preinstall_partition_sectors "(${PREINSTALL_IMAGE_SIZE_MB} - 1) * 2048")
 
@@ -267,6 +285,7 @@ if(FREELDR_HAS_BIOS_BOOT)
 endif()
 
 add_custom_target(preinstall_partition
+    COMMAND ${CMAKE_COMMAND} -E rm -f ${_preinstall_partition_file}
     COMMAND native-fatten ${_preinstall_partition_file}
         -format ${_preinstall_partition_sectors}
         ${_preinstall_partition_boot_args}
@@ -275,6 +294,7 @@ add_custom_target(preinstall_partition
     VERBATIM)
 
 add_custom_target(reactosimg
+    COMMAND ${CMAKE_COMMAND} -E rm -f ${_preinstall_image_file}
     COMMAND native-mkdiskimg
         -o ${_preinstall_image_file}
         ${_reactosimg_mbr_args}
@@ -286,6 +306,7 @@ add_custom_target(reactosimg
 add_dependencies(reactosimg preinstall_partition)
 
 add_custom_target(reactosvhd
+    COMMAND ${CMAKE_COMMAND} -E rm -f ${_preinstall_vhd_file}
     COMMAND native-mkdiskimg
         -o ${_preinstall_vhd_file}
         ${_reactosimg_mbr_args}

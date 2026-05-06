@@ -131,6 +131,7 @@ elseif(ARCH STREQUAL "arm")
 elseif(ARCH STREQUAL "arm64")
     list(APPEND SOURCE
         arm64/except.c
+        arm64/unwind.c
         byteswap.c
         mem.c)
 endif()

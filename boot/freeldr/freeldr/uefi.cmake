@@ -120,6 +120,9 @@ add_library(uefifreeldr_common
 target_link_libraries(uefifreeldr_common setjmp freetype)
 
 target_compile_definitions(uefifreeldr_common PRIVATE _FRLDRLIB_ UEFIBOOT)
+if(FREELDR_WIM_RAMDISK)
+    target_compile_definitions(uefifreeldr_common PRIVATE FREELDR_WIM_RAMDISK=1)
+endif()
 
 if((CMAKE_C_COMPILER_ID STREQUAL "GNU" OR CMAKE_C_COMPILER_ID STREQUAL "Clang") AND
    (ARCH STREQUAL "i386" OR ARCH STREQUAL "amd64"))
@@ -195,7 +198,10 @@ endif()
 
 set_entrypoint(uefildr EfiEntry)
 
-target_link_libraries(uefildr uefifreeldr_common freeldr_wimcore cportlib blcmlib blrtl libcntpr)
+target_link_libraries(uefildr uefifreeldr_common cportlib blcmlib blrtl libcntpr)
+if(FREELDR_WIM_RAMDISK)
+    target_link_libraries(uefildr freeldr_wimcore)
+endif()
 if(CMAKE_C_COMPILER_ID STREQUAL "Clang")
     target_link_libraries(uefildr setjmp)
 endif()

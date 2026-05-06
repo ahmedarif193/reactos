@@ -1563,9 +1563,16 @@ KiArm64HandleSynchronousException(
 
             TrapFrame = &Context->TrapFrame;
             KiArm64InitializeTrapFrame(Context, TrapFrame);
+            PreviousMode = KiArm64PreviousModeFromContext(Context->State.Spsr,
+                                                          Context->State.Elr);
 
-            /* Check for stack exhaustion early */
-            __asm__ __volatile__("mov %0, sp" : "=r"(CurrentSp));
+            /*
+             * Check the interrupted kernel SP, not this C handler's SP. The
+             * vector/common handler and this function allocate a large frame
+             * before reaching this point, so using the current SP can falsely
+             * turn an ordinary kernel data abort into KERNEL_STACK_INPAGE_ERROR.
+             */
+            CurrentSp = Context->State.Registers.Sp;
             CurrentThread = PsGetCurrentThread();
             if (CurrentThread == NULL)
             {
@@ -1587,7 +1594,8 @@ KiArm64HandleSynchronousException(
 
             StackLimit = (PVOID)CurrentThread->Tcb.StackLimit;
 
-            if (CurrentSp < (ULONG64)StackLimit + 0x800)
+            if ((PreviousMode == KernelMode) &&
+                (CurrentSp < (ULONG64)StackLimit + 0x800))
             {
                 if (KiArm64PanicStack != NULL)
                 {
@@ -1606,7 +1614,6 @@ KiArm64HandleSynchronousException(
             }
 
 
-            PreviousMode = KiArm64PreviousModeFromContext(Context->State.Spsr, Context->State.Elr);
             WriteAccess = (Iss & (1u << 6)) != 0;
 
             /* ARM64: skip accessed-bit fast path to avoid dereferencing
