@@ -66,6 +66,8 @@ extern ULONGLONG KdpTimeStampOffsetMicroseconds;
 extern BOOLEAN KdDebuggerNotPresent;
 extern BOOLEAN RtlpUse16ByteSLists;
 extern VOID NTAPI ExInitPoolLookasidePointers(VOID);
+extern PVOID KiArm64P0BootStack;
+extern PVOID KiArm64P0BootStackLimit;
 
 KINTERRUPT KxUnexpectedInterrupt;
 ULONG KeNumberProcessIds;
@@ -75,6 +77,8 @@ PKIPCR KeArm64CurrentPcr;
 PKTHREAD KeArm64CurrentThread;
 KIRQL KeArm64CurrentIrql;
 BOOLEAN KeArm64DpcRoutineActive;
+PVOID KiArm64PanicStack;
+PVOID KiArm64InterruptStack;
 
 static KIPCR KiArm64PcrStub;
 static KIPCR KiArm64BootPcr;
@@ -334,6 +338,13 @@ KiInitializeKernel(_Inout_ PKPROCESS InitProcess,
                        NULL,
                        IdleStack);
 
+    if ((IdleStack == KiArm64P0BootStack) && (KiArm64P0BootStackLimit != NULL))
+    {
+        InitThread->InitialStack = KiArm64P0BootStack;
+        InitThread->StackBase = KiArm64P0BootStack;
+        InitThread->StackLimit = (ULONG_PTR)KiArm64P0BootStackLimit;
+    }
+
     InitThread->NextProcessor = Number;
     InitThread->Priority = HIGH_PRIORITY;
     InitThread->State = Running;
@@ -346,6 +357,7 @@ KiInitializeKernel(_Inout_ PKPROCESS InitProcess,
     Prcb->CurrentThread = InitThread;
     Prcb->NextThread = NULL;
     Prcb->IdleThread = InitThread;
+    KeArm64CurrentThread = InitThread;
     /* quiet */
 
     /* Clear SP_EL0 to a known value so we can detect if it's being used */
@@ -420,14 +432,28 @@ KiInitializePcr(_In_ ULONG ProcessorNumber,
     PCACHE_DESCRIPTOR Cache;
     PKIPCR EntryPcr;
 
-    UNREFERENCED_PARAMETER(PanicStack);
-    UNREFERENCED_PARAMETER(InterruptStack);
-
     KiArm64RawPuts("[InitPcr] entry\n");
     KiArm64RawPuts("[InitPcr] zeroing Pcr struct\n");
     EntryPcr = KeGetPcr();
     RtlZeroMemory(Pcr, sizeof(*Pcr));
     KiArm64RawPuts("[InitPcr] Pcr zeroed\n");
+
+    Pcr->Self = (struct _KPCR *)Pcr;
+    Pcr->CurrentPrcb = &Pcr->Prcb;
+    Pcr->CurrentIrql = PASSIVE_LEVEL;
+    Pcr->Prcb.CurrentThread = IdleThread;
+    Pcr->Prcb.IdleThread = IdleThread;
+    Pcr->Prcb.NextThread = NULL;
+    if (KeLoaderBlock != NULL)
+    {
+        Pcr->Prcb.RspBase = (UINT64)(ULONG_PTR)KeLoaderBlock->KernelStack;
+    }
+
+    if (SetCurrentPcr)
+    {
+        KiArm64PanicStack = PanicStack;
+        KiArm64InterruptStack = InterruptStack;
+    }
 
     if (SetCurrentPcr)
     {

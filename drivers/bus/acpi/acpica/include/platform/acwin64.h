@@ -71,6 +71,10 @@
 
 #define ACPI_MACHINE_WIDTH          64
 
+#if defined(_M_ARM64)
+#define ACPI_MISALIGNMENT_NOT_SUPPORTED
+#endif
+
 /*
  * Map low I/O functions for MS. This allows us to disable MS language
  * extensions for maximum portability.
@@ -124,7 +128,7 @@
 
 #else /* __REACTOS__ */
 
-#ifdef ACPI_APPLICATION
+#if defined(ACPI_APPLICATION) || defined(_M_ARM64)
 #define ACPI_FLUSH_CPU_CACHE()
 #else
 #define ACPI_FLUSH_CPU_CACHE()  __wbinvd()

@@ -766,8 +766,10 @@ KdReceivePacket(
     KdIoPrintString("\n", 1);
     KdIoPuts(KdbPromptStr.Buffer); // Alternatively, use "Input> "
 
+#ifndef _M_ARM64
     if (!KdTermSerial)
         KbdDisableMouse();
+#endif
 
     /*
      * Read a NULL-terminated line of user input and retrieve its length.
@@ -781,8 +783,10 @@ KdReceivePacket(
         (USHORT)KdIoReadLine(ResponseString.Buffer,
                              ResponseString.MaximumLength);
 
+#ifndef _M_ARM64
     if (!KdTermSerial)
         KbdEnableMouse();
+#endif
 
     /* Adjust and return the string length */
     *DataLength = min(ResponseString.Length + sizeof(ANSI_NULL),

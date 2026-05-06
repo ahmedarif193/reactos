@@ -19,10 +19,6 @@
 
 POBJECT_TYPE ObpDirectoryObjectType = NULL;
 
-#ifdef _M_ARM64
-extern VOID KiArm64RawPuts(const char *s);
-#endif
-
 /* PRIVATE FUNCTIONS ******************************************************/
 
 /*++
@@ -805,14 +801,10 @@ NtCreateDirectoryObject(OUT PHANDLE DirectoryHandle,
                             0,
                             0,
                             (PVOID*)&Directory);
-#ifdef _M_ARM64
-    KiArm64RawPuts("[obdir] ObCreateObject returned\n");
-#endif
     if (!NT_SUCCESS(Status)) return Status;
 
     /* Setup the object */
 #ifdef _M_ARM64
-    KiArm64RawPuts("[obdir] init directory begin\n");
     for (i = 0; i < NUMBER_HASH_BUCKETS; i++)
     {
         Directory->HashBuckets[i] = NULL;
@@ -828,23 +820,14 @@ NtCreateDirectoryObject(OUT PHANDLE DirectoryHandle,
 #endif
     ExInitializePushLock(&Directory->Lock);
     Directory->SessionId = -1;
-#ifdef _M_ARM64
-    KiArm64RawPuts("[obdir] init directory end\n");
-#endif
 
     /* Insert it into the handle table */
-#ifdef _M_ARM64
-    KiArm64RawPuts("[obdir] insert begin\n");
-#endif
     Status = ObInsertObject((PVOID)Directory,
                             NULL,
                             DesiredAccess,
                             0,
                             NULL,
                             &NewHandle);
-#ifdef _M_ARM64
-    KiArm64RawPuts("[obdir] insert returned\n");
-#endif
 
     /* Enter SEH to protect write */
     _SEH2_TRY

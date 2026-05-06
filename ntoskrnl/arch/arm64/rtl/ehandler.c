@@ -8,7 +8,6 @@
 
 typedef struct _RUNTIME_FUNCTION {
     ULONG BeginAddress;
-    ULONG EndAddress;
     ULONG UnwindData;
 } RUNTIME_FUNCTION, *PRUNTIME_FUNCTION;
 
@@ -174,6 +173,13 @@ __C_specific_handler(
             if (FilterResult > 0)
             {
                 JumpTarget = ImageBase + ScopeTable->ScopeRecord[i].JumpTarget;
+
+                if ((ExceptionRecord->ExceptionFlags & EXCEPTION_UNWIND) == 0)
+                {
+                    ContextRecord->Pc = JumpTarget;
+                    ContextRecord->X[0] = ExceptionRecord->ExceptionCode;
+                    return ExceptionContinueExecution;
+                }
 
                 RtlUnwindEx(EstablisherFrame,
                             (PVOID)JumpTarget,

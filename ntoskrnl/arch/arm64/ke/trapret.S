@@ -189,5 +189,24 @@ KiArm64BugCheckEntry:
     br      x16
     .seh_endproc
 
+    .align 4
+    .global KiArm64BugCheckOnPanicStack
+    .seh_proc KiArm64BugCheckOnPanicStack
+KiArm64BugCheckOnPanicStack:
+    /* x0 = panic stack top, x1 = code, x2-x5 = bugcheck parameters */
+    .seh_endprologue
+    mov     sp, x0
+    mov     x0, x1
+    mov     x1, x2
+    mov     x2, x3
+    mov     x3, x4
+    mov     x4, x5
+    ldr     x16, =KeBugCheckEx
+    blr     x16
+1:
+    wfe
+    b       1b
+    .seh_endproc
+
     .data
     .ltorg

@@ -27,16 +27,6 @@ void LdrInitializeThunk(ULONG Unknown1, ULONG Unknown2, ULONG Unknown3, ULONG Un
     for (;;) { __asm__ volatile("wfi"); }
 }
 
-void __cdecl KiUserExceptionDispatcher(PEXCEPTION_RECORD ExceptionRecord, PCONTEXT Context)
-{
-    for (;;) { __asm__ volatile("wfi"); }
-}
-
-void __cdecl KiUserCallbackDispatcher(ULONG_PTR Unknown1, ULONG_PTR Unknown2, ULONG_PTR Unknown3)
-{
-    for (;;) { __asm__ volatile("wfi"); }
-}
-
 unsigned __int64 __ull_rshift(unsigned __int64 value, int shift)
 {
     return value >> shift;
@@ -64,7 +54,6 @@ void RtlRestoreContext(CONTEXT *Ctx, EXCEPTION_RECORD *Rec) { (void)Ctx;(void)Re
 void RtlAddFunctionTable(RUNTIME_FUNCTION *Tbl, ULONG N, unsigned long long Base) { (void)Tbl;(void)N;(void)Base; }
 void RtlDeleteFunctionTable(RUNTIME_FUNCTION *Tbl) { (void)Tbl; }
 RUNTIME_FUNCTION *RtlLookupFunctionTable(unsigned long long Base, unsigned long long *Len, ULONG *Unused) { if(Len)*Len=0;(void)Unused;(void)Base; return 0; }
-VOID NTAPI RtlFillMemoryUlong(PVOID Destination, SIZE_T Length, ULONG Fill) { PULONG p = (PULONG)Destination; SIZE_T i; for (i = 0; i < Length / sizeof(ULONG); ++i) p[i] = Fill; }
 void _local_unwind(void) {}
 
 PSLIST_ENTRY ExpInterlockedPopEntrySListEnd(PSLIST_HEADER H) { (void)H; return 0; }

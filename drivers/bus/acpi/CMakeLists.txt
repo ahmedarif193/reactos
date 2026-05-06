@@ -5,7 +5,7 @@ include_directories(
     include
     acpica/include)
 
-if(ARCH STREQUAL "amd64")
+if(ARCH STREQUAL "amd64" OR ARCH STREQUAL "arm64")
     add_definitions(-DWIN64)
 endif()
 
@@ -184,6 +184,9 @@ add_library(acpica
 
 add_pch(acpica acpica/include/acpi.h "${ACPICA_PCH_SKIP_SOURCE}")
 set_target_properties(acpica PROPERTIES COMPILE_DEFINITIONS "ACPI_USE_LOCAL_CACHE;ACPI_USE_SYSTEM_INTTYPES")
+if(ARCH STREQUAL "arm64")
+    target_compile_options(acpica PRIVATE -mstrict-align)
+endif()
 add_dependencies(acpica bugcodes xdk)
 
 list(APPEND ACPI_SOURCE
@@ -213,6 +216,9 @@ add_library(acpi MODULE
     acpi.rc)
 
 set_module_type(acpi kernelmodedriver)
+if(ARCH STREQUAL "arm64")
+    target_compile_options(acpi PRIVATE -mstrict-align)
+endif()
 target_link_libraries(acpi wdmguid acpica memcmp strtol ${PSEH_LIB})
 add_importlibs(acpi ntoskrnl hal)
 add_pch(acpi precomp.h ACPI_SOURCE)

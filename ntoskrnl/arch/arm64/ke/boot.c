@@ -228,9 +228,16 @@ typedef struct _ARM64_BOOT_CONTEXT
     UINT64 MairEl1;
 } ARM64_BOOT_CONTEXT, *PARM64_BOOT_CONTEXT;
 
-/* Boot stack (CPU0): mirror amd64 boot stack handoff behavior */
-UCHAR DECLSPEC_ALIGN(16) KiArm64P0BootStackData[KERNEL_STACK_SIZE] = {0};
-PVOID KiArm64P0BootStack = &KiArm64P0BootStackData[KERNEL_STACK_SIZE];
+/*
+ * Boot stack (CPU0): Win11 ARM64 advertises a 0x80000 stack reserve
+ * for the loader-provided initial kernel stack. Keep this bootstrap
+ * stack separate from the normal per-thread kernel stack size.
+ */
+#define ARM64_P0_BOOT_STACK_SIZE 0x80000
+
+UCHAR DECLSPEC_ALIGN(PAGE_SIZE) KiArm64P0BootStackData[ARM64_P0_BOOT_STACK_SIZE] = {0};
+PVOID KiArm64P0BootStackLimit = &KiArm64P0BootStackData[0];
+PVOID KiArm64P0BootStack = &KiArm64P0BootStackData[ARM64_P0_BOOT_STACK_SIZE];
 
 /* Assembly helper that switches SP then branches into the C wrapper */
 DECLSPEC_NORETURN VOID KiArm64SwitchToBootStack(ULONG_PTR InitialStack,
@@ -1056,6 +1063,23 @@ KiArm64EnsureMairNormalNc(_In_ UINT64 CurrentMair,
 
 CODE_SEG("INIT")
 static UINT64
+KiArm64EnsureMairNormalWt(_In_ UINT64 CurrentMair,
+                          _In_ UINT64 AttrIndex)
+{
+    const UINT64 AttributeMask = 0xFFULL << (AttrIndex * 8);
+    UINT64 Updated = (CurrentMair & ~AttributeMask) | (0x88ULL << (AttrIndex * 8));
+
+    if (Updated != CurrentMair)
+    {
+        __asm__ __volatile__("msr mair_el1, %0" :: "r"(Updated));
+        __asm__ __volatile__("isb");
+    }
+
+    return Updated;
+}
+
+CODE_SEG("INIT")
+static UINT64
 KiArm64AlignUp(_In_ UINT64 Value,
                _In_ UINT64 Alignment)
 {
@@ -1233,7 +1257,7 @@ KiArm64EnsureIdentityMapping(_Inout_ PARM64_BOOT_CONTEXT BootContext)
     /* Program MAIR for Normal-WB, Normal-NC, and Device-nGnRnE attributes */
     UpdatedMair = KiArm64EnsureMairNormalWb(BootContext->MairEl1);
     UpdatedMair = KiArm64EnsureMairNormalNc(UpdatedMair, ARM64_MEM_ATTR_NORMAL_NC);
-    UpdatedMair = KiArm64EnsureMairNormalNc(UpdatedMair, ARM64_MEM_ATTR_NORMAL_WC);
+    UpdatedMair = KiArm64EnsureMairNormalWt(UpdatedMair, ARM64_MEM_ATTR_NORMAL_WC);
     UpdatedMair = KiArm64EnsureMairDeviceNgnrne(UpdatedMair);
     BootContext->MairEl1 = UpdatedMair;
 

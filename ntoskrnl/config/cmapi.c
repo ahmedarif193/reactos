@@ -1288,7 +1288,7 @@ DoAgain:
     {
         /* Cleanup state */
         ASSERT(CellToRelease2 == HCELL_NIL);
-        if (CellToRelease)
+        if (CellToRelease != HCELL_NIL)
         {
             HvReleaseCell(Hive, CellToRelease);
             CellToRelease = HCELL_NIL;
@@ -1325,9 +1325,9 @@ DoAgain:
         if (Result == SearchNeedExclusiveLock)
         {
             /* Cleanup state */
-            if (CellToRelease2) HvReleaseCell(Hive, CellToRelease2);
+            if (CellToRelease2 != HCELL_NIL) HvReleaseCell(Hive, CellToRelease2);
             HvReleaseCell(Hive, Kcb->KeyCell);
-            if (CellToRelease) HvReleaseCell(Hive, CellToRelease);
+            if (CellToRelease != HCELL_NIL) HvReleaseCell(Hive, CellToRelease);
 
             /* Try with exclusive KCB lock */
             CmpConvertKcbSharedToExclusive(Kcb);

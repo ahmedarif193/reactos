@@ -77,7 +77,7 @@ endif()
 set(DBG ${_REACTOS_DEFAULT_DBG} CACHE BOOL
 "Whether to compile for debugging.")
 
-set(SEPARATE_DBG FALSE CACHE BOOL
+set(SEPARATE_DBG TRUE CACHE BOOL
 "Whether to generate separate debug symbol files.")
 
 if(CMAKE_BUILD_TYPE STREQUAL "Debug" OR

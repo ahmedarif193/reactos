@@ -22,6 +22,19 @@ VOID NTAPI PspDumpThreads(BOOLEAN SystemThreads);
 
 /* PRIVATE FUNCTIONS *********************************************************/
 
+#if defined(_M_ARM64)
+static volatile LONG KdpArm64DebuggerNestedDepth;
+
+static
+BOOLEAN
+KdpArm64DebuggerLockOwnedByCurrentThread(VOID)
+{
+    return (((KSPIN_LOCK)KeGetCurrentThread() | 1) == KdpDebuggerLock);
+}
+#else
+#define KdpArm64DebuggerLockOwnedByCurrentThread() FALSE
+#endif
+
 VOID
 NTAPI
 KdpMoveMemory(
@@ -1900,6 +1913,14 @@ KdEnterDebugger(IN PKTRAP_FRAME TrapFrame,
 {
     BOOLEAN Enable;
 
+#if defined(_M_ARM64)
+    if (KdEnteredDebugger || KdpArm64DebuggerLockOwnedByCurrentThread())
+    {
+        InterlockedIncrement(&KdpArm64DebuggerNestedDepth);
+        return FALSE;
+    }
+#endif
+
     /* Check if we have a trap frame */
     if (TrapFrame)
     {
@@ -1951,6 +1972,14 @@ NTAPI
 KdExitDebugger(IN BOOLEAN Enable)
 {
     ULONG TimeSlip;
+
+#if defined(_M_ARM64)
+    if (KdpArm64DebuggerNestedDepth > 0)
+    {
+        InterlockedDecrement(&KdpArm64DebuggerNestedDepth);
+        return;
+    }
+#endif
 
     /* Reset the debugger entered flag, restore the port state and unlock it */
     KdEnteredDebugger = FALSE;
