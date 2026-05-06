@@ -1604,22 +1604,27 @@ LoadAndBootWindowsCommon(
     WinLdrpDumpArcDisks(LoaderBlockVA);
 #endif
 
-#if !defined(_M_ARM64)
+#if defined(_M_ARM64)
+    EarlyUartPuts("[winldr] jumping to kernel 0x");
+    EarlyUartPutHex((UINT64)(ULONG_PTR)KiSystemStartup, 16);
+    EarlyUartPuts(" LoaderBlockVA 0x");
+    EarlyUartPutHex((UINT64)(ULONG_PTR)LoaderBlockVA, 16);
+    EarlyUartPuts(" KernelStack 0x");
+    EarlyUartPutHex((UINT64)LoaderBlockVA->KernelStack, 16);
+    EarlyUartPutc('\n');
+#else
     TRACE("[winldr] jumping to kernel %p, LoaderBlockVA %p\n",
           KiSystemStartup, LoaderBlockVA);
 #endif
 
 #if defined(_M_ARM64)
-    /* Drop stale TTBR0 identity mappings before handing off to the kernel.
-     * The kernel expects user-space (TTBR0) to be a clean slate; leaving the
-     * 4 TB identity windows we used while bringing up the MMU confuses the
-     * kernel's PTE tracking and faults the first MM allocation. The kernel
-     * itself runs from TTBR1/KSEG0 and is unaffected by clearing TTBR0. */
-    Arm64ClearIdentityMappings();
-#endif
-
+    Arm64JumpToKernel((ULONGLONG)(ULONG_PTR)KiSystemStartup,
+                      (ULONGLONG)(ULONG_PTR)LoaderBlockVA,
+                      (ULONGLONG)LoaderBlockVA->KernelStack);
+#else
     /* Pass control */
     (*KiSystemStartup)(LoaderBlockVA);
+#endif
 
     UNREACHABLE; // return ESUCCESS;
 }

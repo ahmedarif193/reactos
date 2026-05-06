@@ -217,6 +217,14 @@ extern NTKERNELAPI ULONG64 MmUserProbeAddress;
 #define MI_WRITE_VALID_PXE MI_WRITE_VALID_PDE
 #define ValidKernelPpe ValidKernelPde
 
+#if defined(_M_ARM64)
+extern BOOLEAN MiArm64SelfMapReady;
+
+VOID
+MiArm64MapKseg0Page(
+    _In_ PFN_NUMBER PageFrameNumber);
+#endif
+
 FORCEINLINE
 PMMPTE
 _MiAddressToPte(PVOID Address)
@@ -464,6 +472,110 @@ MiIsPdeForAddressValid(PVOID Address)
     #undef ARM64_PTE_ADDR_MASK_LOCAL
 
     return TRUE;
+}
+
+FORCEINLINE
+BOOLEAN
+MiArm64IsAddressValid(
+    _In_ PVOID Address)
+{
+    ULONG64 Ttbr;
+    ULONG64 RootPa;
+    volatile ULONG64 *Table;
+    ULONG64 Entry;
+    ULONG_PTR Va;
+
+    Va = (ULONG_PTR)Address;
+
+    if ((MiArm64SelfMapReady) &&
+        (Va >= (ULONG_PTR)MmSystemRangeStart))
+    {
+        Entry = ((volatile MMPTE *)MiAddressToPxe(Address))->u.Long;
+        if ((Entry & ARM64_PTE_TYPE_MASK) == ARM64_PTE_TYPE_BLOCK)
+        {
+            return TRUE;
+        }
+        if ((Entry & ARM64_PTE_TYPE_MASK) != ARM64_PTE_TYPE_TABLE)
+        {
+            return FALSE;
+        }
+
+        Entry = ((volatile MMPTE *)MiAddressToPpe(Address))->u.Long;
+        if ((Entry & ARM64_PTE_TYPE_MASK) == ARM64_PTE_TYPE_BLOCK)
+        {
+            return TRUE;
+        }
+        if ((Entry & ARM64_PTE_TYPE_MASK) != ARM64_PTE_TYPE_TABLE)
+        {
+            return FALSE;
+        }
+
+        Entry = ((volatile MMPTE *)MiAddressToPde(Address))->u.Long;
+        if ((Entry & ARM64_PTE_TYPE_MASK) == ARM64_PTE_TYPE_BLOCK)
+        {
+            return TRUE;
+        }
+        if ((Entry & ARM64_PTE_TYPE_MASK) != ARM64_PTE_TYPE_TABLE)
+        {
+            return FALSE;
+        }
+
+        Entry = ((volatile MMPTE *)MiAddressToPte(Address))->u.Long;
+        return ((Entry & ARM64_PTE_TYPE_MASK) == ARM64_PTE_TYPE_PAGE);
+    }
+
+    if (MiIsUserAddress(Address))
+    {
+        __asm__ __volatile__("mrs %0, ttbr0_el1" : "=r"(Ttbr));
+    }
+    else if (Va >= (ULONG_PTR)MmSystemRangeStart)
+    {
+        __asm__ __volatile__("mrs %0, ttbr1_el1" : "=r"(Ttbr));
+    }
+    else
+    {
+        return FALSE;
+    }
+
+    RootPa = Ttbr & ARM64_PTE_ADDR_MASK;
+    if (RootPa == 0)
+    {
+        return FALSE;
+    }
+
+    Table = (volatile ULONG64 *)(KSEG0_BASE | RootPa);
+    Entry = Table[(Va >> PXI_SHIFT) & PXI_MASK];
+    if ((Entry & ARM64_PTE_TYPE_MASK) != ARM64_PTE_TYPE_TABLE)
+    {
+        return FALSE;
+    }
+
+    Table = (volatile ULONG64 *)(KSEG0_BASE | (Entry & ARM64_PTE_ADDR_MASK));
+    Entry = Table[(Va >> PPI_SHIFT) & PPI_MASK];
+    if ((Entry & ARM64_PTE_TYPE_MASK) == ARM64_PTE_TYPE_BLOCK)
+    {
+        return TRUE;
+    }
+    if ((Entry & ARM64_PTE_TYPE_MASK) != ARM64_PTE_TYPE_TABLE)
+    {
+        return FALSE;
+    }
+
+    Table = (volatile ULONG64 *)(KSEG0_BASE | (Entry & ARM64_PTE_ADDR_MASK));
+    Entry = Table[(Va >> PDI_SHIFT) & PDI_MASK_ARM64];
+    if ((Entry & ARM64_PTE_TYPE_MASK) == ARM64_PTE_TYPE_BLOCK)
+    {
+        return TRUE;
+    }
+    if ((Entry & ARM64_PTE_TYPE_MASK) != ARM64_PTE_TYPE_TABLE)
+    {
+        return FALSE;
+    }
+
+    Table = (volatile ULONG64 *)(KSEG0_BASE | (Entry & ARM64_PTE_ADDR_MASK));
+    Entry = Table[(Va >> PTI_SHIFT) & PTI_MASK_ARM64];
+
+    return ((Entry & ARM64_PTE_TYPE_MASK) == ARM64_PTE_TYPE_PAGE);
 }
 
 /*

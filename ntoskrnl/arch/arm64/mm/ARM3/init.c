@@ -21,6 +21,7 @@
 #define MI_ARM64_TTBR_TO_PA(_Ttbr) ((UINT64)(_Ttbr) & ARM64_PTE_ADDR_MASK)
 
 BOOLEAN MiArm64PfnFinalizePending = FALSE;
+BOOLEAN MiArm64SelfMapReady = FALSE;
 BOOLEAN ExpArm64PoolBootstrapMode = FALSE;
 VOID MiArm64FinalizePfnDatabase(_Inout_ PLOADER_PARAMETER_BLOCK LoaderBlock);
 static VOID MiBuildNonPagedPool(VOID);
@@ -171,11 +172,14 @@ MiArm64SyncL0ToRoot(ULONG L0Index, UINT64 Desc)
 #define ARM64_TCR_TSZ_MASK          0x3FULL
 #define ARM64_TCR_T1SZ_SHIFT        16
 #define ARM64_PTE_TABLE_COMPAT      (ARM64_PTE_AF | ARM64_PTE_SH_INNER)
-#define ARM64_SELFMAP_ENTRY_BITS    (ARM64_PTE_TYPE_TABLE | ((UINT64)MI_ARM64_MAIR_NORMAL_WB_IDX << 2))
-#define MI_ARM64_MAKE_TABLE_DESC(Pfn) (((UINT64)(Pfn) << PAGE_SHIFT) | ARM64_SELFMAP_ENTRY_BITS)
+#define ARM64_TABLE_DESC_BITS \
+    (ARM64_PTE_TYPE_TABLE | ARM64_PTE_TABLE_COMPAT | \
+     ((UINT64)MI_ARM64_MAIR_NORMAL_WB_IDX << 2))
+#define MI_ARM64_MAKE_TABLE_DESC(Pfn) \
+    (((UINT64)(Pfn) << PAGE_SHIFT) | ARM64_TABLE_DESC_BITS)
 
 #define MI_ARM64_MAKE_SELFMAP_DESC(Pfn) \
-    (((UINT64)(Pfn) << PAGE_SHIFT) | ARM64_PTE_TYPE_TABLE | ARM64_PTE_AF | ARM64_PTE_SH_INNER | ((UINT64)MI_ARM64_MAIR_NORMAL_WB_IDX << 2))
+    MI_ARM64_MAKE_TABLE_DESC(Pfn)
 
 static __inline PVOID
 MiArm64PhysToKseg0(UINT64 Phys)
@@ -187,6 +191,71 @@ static __inline PVOID
 MiArm64PfnToKseg0(PFN_NUMBER Pfn)
 {
     return MiArm64PhysToKseg0(((UINT64)Pfn) << PAGE_SHIFT);
+}
+
+static
+BOOLEAN
+MiArm64MapKseg0IdentityBlocks(
+    _In_ ULONG_PTR StartVa,
+    _In_ ULONG_PTR EndVa)
+{
+    ULONG_PTR StartBlock, EndBlock, Va;
+    BOOLEAN MappedAny = FALSE;
+
+    StartBlock = ALIGN_DOWN_BY(StartVa, 1ULL << PDI_SHIFT);
+    EndBlock = ALIGN_DOWN_BY(EndVa, 1ULL << PDI_SHIFT);
+
+    for (Va = StartBlock; ; Va += (1ULL << PDI_SHIFT))
+    {
+        PMMPDE PointerPde;
+
+        MiMapPPEs((PVOID)Va, (PVOID)Va);
+        PointerPde = MiAddressToPde((PVOID)Va);
+
+        if ((PointerPde->u.Long & ARM64_PTE_TYPE_MASK) == ARM64_PTE_TYPE_TABLE)
+        {
+            return FALSE;
+        }
+
+        if (Va == EndBlock)
+        {
+            break;
+        }
+    }
+
+    for (Va = StartBlock; ; Va += (1ULL << PDI_SHIFT))
+    {
+        PMMPDE PointerPde;
+        UINT64 Entry;
+        UINT64 BlockPa;
+
+        PointerPde = MiAddressToPde((PVOID)Va);
+        Entry = PointerPde->u.Long;
+        if ((Entry & ARM64_PTE_TYPE_MASK) == ARM64_PTE_TYPE_INVALID)
+        {
+            BlockPa = Va - (ULONG_PTR)KSEG0_BASE;
+            PointerPde->u.Long = (BlockPa & ARM64_PTE_ADDR_MASK) |
+                                 ARM64_PTE_TYPE_BLOCK |
+                                 ((UINT64)MI_ARM64_MAIR_NORMAL_WB_IDX << 2) |
+                                 ARM64_PTE_SH_INNER |
+                                 ARM64_PTE_AF |
+                                 ARM64_PTE_PXN |
+                                 ARM64_PTE_UXN;
+            MappedAny = TRUE;
+        }
+
+        if (Va == EndBlock)
+        {
+            break;
+        }
+    }
+
+    if (MappedAny)
+    {
+        __asm__ __volatile__("dsb ishst\n\ttlbi vmalle1is\n\tdsb ish\n\tisb" ::: "memory");
+    }
+
+    return TRUE;
 }
 
 static
@@ -211,6 +280,14 @@ MiArm64MapKseg0IdentityRangeWithAttr(
     {
         StartVa += (ULONG_PTR)KSEG0_BASE;
         EndVa += (ULONG_PTR)KSEG0_BASE;
+    }
+
+    if (AttrIndex == MI_ARM64_MAIR_NORMAL_WB_IDX)
+    {
+        if (MiArm64MapKseg0IdentityBlocks(StartVa, EndVa))
+        {
+            return;
+        }
     }
 
     MiMapPPEs((PVOID)StartVa, (PVOID)EndVa);
@@ -252,6 +329,14 @@ MiArm64MapKseg0IdentityRange(
     MiArm64MapKseg0IdentityRangeWithAttr(BaseAddress,
                                          Size,
                                          MI_ARM64_MAIR_NORMAL_WB_IDX);
+}
+
+VOID
+MiArm64MapKseg0Page(
+    _In_ PFN_NUMBER PageFrameNumber)
+{
+    MiArm64MapKseg0IdentityRange((PVOID)(ULONG_PTR)(((UINT64)PageFrameNumber) << PAGE_SHIFT),
+                                 PAGE_SIZE);
 }
 
 static
@@ -875,6 +960,10 @@ MiArm64InitializeKernelSelfMap(VOID)
     }
 
     RootPfn = (PFN_NUMBER)(RootPa >> PAGE_SHIFT);
+    /*
+     * FreeLDR seeds the recursive entry before handoff. Use that window here:
+     * the active TTBR1 root may live above the initial KSEG0 direct-map coverage.
+     */
     RootL0 = (volatile UINT64 *)PXE_BASE;
     SelfDesc = MI_ARM64_MAKE_SELFMAP_DESC(RootPfn);
 
@@ -942,10 +1031,12 @@ MiArm64CanTouchSystemPageTables(VOID)
     if (Faulted)
     {
         MiArm64SelfMapProbe = 0;
+        MiArm64SelfMapReady = FALSE;
         return FALSE;
     }
 
     MiArm64SelfMapProbe = 1;
+    MiArm64SelfMapReady = TRUE;
 
 #if DBG
     {

@@ -5,6 +5,8 @@ else()
     set(FREELDR_HAS_BIOS_BOOT FALSE)
 endif()
 
+option(FREELDR_WIM_RAMDISK "Enable FreeLDR boot.wim ramdisk decompression support" ON)
+
 include(boot_images.cmake)
 
 add_subdirectory(bootdata)

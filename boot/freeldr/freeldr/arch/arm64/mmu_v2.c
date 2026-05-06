@@ -194,6 +194,15 @@ static inline void tlbi_va_range(ULONGLONG start, ULONGLONG end)
  *   - Bits [63:59,58:52] have specific meanings (APTable, XNTable, etc.)
  */
 #define PTE_TABLE_ATTRS         (PTE_TYPE_VALID | PTE_TYPE_TABLE)
+/*
+ * The recursive L0 entry is also seen by hardware as the final L3 descriptor
+ * when accessing PXE_SELFMAP. Keep the table type bits, but include leaf
+ * attributes so that final translation does not raise an AF fault.
+ */
+#define PTE_SELFREF_ATTRS       (PTE_TABLE_ATTRS | \
+                                 PTE_BLOCK_MEMTYPE(ARM64_MEM_ATTR_NORMAL_WB) | \
+                                 PTE_BLOCK_INNER_SHARE | \
+                                 PTE_BLOCK_AF)
 
 #define PTE_BLOCK_MEMTYPE_MASK  (7ULL << 2)
 
@@ -605,6 +614,7 @@ static VOID ensure_page_tables_initialized(VOID);
 static VOID set_ttbr_tcr_mair(int el, UINT64 table0, UINT64 table1, UINT64 tcr, UINT64 attr);
 static VOID debug_dump_static_mapping(UINT64 va);
 static BOOLEAN Arm64MapPageTableAllocationsIntoKseg0(VOID);
+static BOOLEAN Arm64MapEarlyUart(VOID);
 
 static BOOLEAN map_region_hierarchical(UINT64 va, UINT64 pa, UINT64 size, UINT64 attrs);
 static UINT64* ensure_l2_table(BOOLEAN is_kernel, UINT64 l0_slot, UINT64 *l1_table, UINT64 l1_index, UINT64 va);
@@ -1851,10 +1861,10 @@ static BOOLEAN Arm64SetupSelfMapWindows(VOID)
 {
     const UINT64 self_idx = (ARM64_SELF_PXE_BASE >> ARM64_PXI_SHIFT) & ARM64_PX_MASK;
     const UINT64 root_pa = phys_from_ptr(arm64_kernel_l0_table);
-    const UINT64 desired = root_pa | PTE_TABLE_ATTRS;
+    const UINT64 desired = root_pa | PTE_SELFREF_ATTRS;
     UINT64 current = arm64_kernel_l0_table[self_idx];
 
-    if ((current & ~0xFFFULL) != root_pa)
+    if (current != desired)
     {
         pte_write(&arm64_kernel_l0_table[self_idx], desired);
     }
@@ -2070,6 +2080,39 @@ static BOOLEAN map_region_hierarchical(UINT64 va, UINT64 pa, UINT64 size, UINT64
         }
     }
     return TRUE;
+}
+
+static BOOLEAN
+Arm64MapEarlyUart(VOID)
+{
+    UINT64 uart_pa = EarlyUartBaseAddress;
+    UINT64 uart_attrs = PTE_BLOCK_MEMTYPE(ARM64_MEM_ATTR_DEVICE_nGnRnE) |
+                        PTE_BLOCK_OUTER_SHARE |
+                        PTE_BLOCK_AF |
+                        PTE_BLOCK_PXN |
+                        PTE_BLOCK_UXN;
+    BOOLEAN ok = TRUE;
+
+    if (uart_pa == 0)
+        uart_pa = ARM64_UART_DEFAULT;
+
+    uart_pa &= ~(PAGE_SIZE - 1ULL);
+
+    if (!map_region_hierarchical(uart_pa, uart_pa, PAGE_SIZE, uart_attrs))
+    {
+        Pl011RawPuts("[PT] FAILED to map early UART identity\n");
+        ok = FALSE;
+    }
+
+    if (!map_region_hierarchical(ARM64_KSEG0_BASE | uart_pa, uart_pa, PAGE_SIZE, uart_attrs))
+    {
+        Pl011RawPuts("[PT] FAILED to map early UART KSEG0\n");
+        ok = FALSE;
+    }
+
+    ARM64_DSB_ISHST();
+    ARM64_ISB();
+    return ok;
 }
 
 static VOID
@@ -2754,7 +2797,7 @@ static VOID setup_pgtables(VOID)
         const UINT64 self_idx = (ARM64_SELF_PXE_BASE >> ARM64_PXI_SHIFT) & ARM64_PX_MASK;
         const UINT64 root_pa = phys_from_ptr(arm64_kernel_l0_table);
         /* Self-map entry: points the page table root back to itself. */
-        const UINT64 self_entry = root_pa | PTE_TABLE_ATTRS;
+        const UINT64 self_entry = root_pa | PTE_SELFREF_ATTRS;
 
         pte_write(&arm64_kernel_l0_table[self_idx], self_entry);
 
@@ -2765,9 +2808,9 @@ static VOID setup_pgtables(VOID)
 
         {
             UINT64 verify_entry = arm64_kernel_l0_table[self_idx];
-            if ((verify_entry & ~0xFFFULL) != root_pa) {
+            if (verify_entry != self_entry) {
                 pte_write(&arm64_kernel_l0_table[self_idx],
-                          root_pa | PTE_TABLE_ATTRS);
+                          self_entry);
             }
         }
     }
@@ -2814,6 +2857,8 @@ static VOID setup_pgtables(VOID)
             }
         }
     }
+
+    Arm64MapEarlyUart();
 
     /*
      * Post-EBS: skip the bulk identity-mapping pre-reservation. UefiMemGetMemoryMap
@@ -3006,49 +3051,6 @@ static VOID setup_pgtables(VOID)
             return;
         }
 
-        /* Explicitly map PL011 UART for early debug (Identity + KSEG0) */
-        {
-            /*
-             * Use runtime-detected UART address from early_uart.h.
-             * EarlyUartBaseAddress is set by EarlyUartInitialize() which is called
-             * before page table setup (in uefimain or early boot code).
-             */
-            UINT64 uart_pa = EarlyUartBaseAddress;
-            UINT64 uart_attrs = PTE_BLOCK_MEMTYPE(ARM64_MEM_ATTR_DEVICE_nGnRnE) |
-                                PTE_BLOCK_OUTER_SHARE | PTE_BLOCK_AF | PTE_BLOCK_PXN | PTE_BLOCK_UXN;
-
-            /* Sanity check - if UART not initialized, fall back to QEMU default */
-            if (uart_pa == 0)
-            {
-                uart_pa = 0x09000000;
-            }
-
-            /* Identity mapping for bootloader use (VA == PA) */
-            if (!map_region_hierarchical(uart_pa, uart_pa, PAGE_SIZE, uart_attrs))
-            {
-                Pl011RawPuts("[PT] FAILED to map PL011 UART (identity)\n");
-            }
-            else
-            {
-            }
-
-            /*
-             * KSEG0 mapping for kernel use.
-             * The kernel accesses UART via: VA = ARM64_KSEG0_BASE + uart_pa
-             * This mapping MUST exist or the kernel will fault on first UART access.
-             */
-            {
-                UINT64 uart_kseg0_va = ARM64_KSEG0_BASE | uart_pa;
-                if (!map_region_hierarchical(uart_kseg0_va, uart_pa, PAGE_SIZE, uart_attrs))
-                {
-                    Pl011RawPuts("[PT] FAILED to map PL011 UART (KSEG0)\n");
-                }
-                else
-                {
-                }
-            }
-        }
-
         if (!Arm64MappingPlanApply(&Plan, Arm64MappingIdentity))
         {
             Pl011RawPuts("[PT] FAILED to apply identity mapping\n");
@@ -3210,6 +3212,8 @@ VOID Arm64EnablePageTables(VOID)
     UINT64 sctlr = 0;
 
 
+    Pl011RawPuts("[PT_EN] entry\n");
+
     if (!page_tables_initialized)
         ensure_page_tables_initialized();
     Arm64ApplyImageSectionProtections();
@@ -3234,6 +3238,7 @@ VOID Arm64EnablePageTables(VOID)
 
     /* Compose TCR after ensuring final EL */
     tcr = get_tcr(NULL, NULL);
+    Pl011RawPuts("[PT_EN] tcr\n");
 
     /* 1. Read current SCTLR and Disable MMU (M) and Cache (C) */
     // TRACE("ARM64: PT_EN: Reading SCTLR\n");
@@ -3268,6 +3273,7 @@ VOID Arm64EnablePageTables(VOID)
         __asm__ volatile("msr sctlr_el2, %0" :: "r"(sctlr_off) : "memory");
     }
     ARM64_ISB();
+    Pl011RawPuts("[PT_EN] mmu-off\n");
     // TRACE("ARM64: PT_EN: MMU Disabled\n");
 
     /* 2. Update Translation Registers (MAIR first, then TCR, then TTBRs) */
@@ -3375,6 +3381,7 @@ VOID Arm64EnablePageTables(VOID)
 
     ARM64_DSB_ISH();
     ARM64_ISB();
+    Pl011RawPuts("[PT_EN] ttbr\n");
     // TRACE("ARM64: PT_EN: TLB Invalidated\n");
 
     /*
@@ -3409,9 +3416,14 @@ VOID Arm64EnablePageTables(VOID)
         {
             UINT64 pc_2mb_base = pc_val & ~((1ULL << 21) - 1);
             map_region_hierarchical(pc_2mb_base, pc_2mb_base, 2 * 1024 * 1024, code_attrs);
+            map_region_hierarchical(ARM64_KSEG0_BASE | pc_2mb_base, pc_2mb_base,
+                                    2 * 1024 * 1024, code_attrs);
             /* Also map next 2MB block in case we're near a boundary */
             map_region_hierarchical(pc_2mb_base + (2*1024*1024), pc_2mb_base + (2*1024*1024),
                                     2*1024*1024, code_attrs);
+            map_region_hierarchical(ARM64_KSEG0_BASE | (pc_2mb_base + (2*1024*1024)),
+                                    pc_2mb_base + (2*1024*1024), 2*1024*1024,
+                                    code_attrs);
         }
 
         /* Map SP region (2MB aligned) */
@@ -3419,6 +3431,8 @@ VOID Arm64EnablePageTables(VOID)
             UINT64 sp_2mb_base = sp_val & ~((1ULL << 21) - 1);
             if (sp_2mb_base != (pc_val & ~((1ULL << 21) - 1))) {
                 map_region_hierarchical(sp_2mb_base, sp_2mb_base, 2 * 1024 * 1024, code_attrs);
+                map_region_hierarchical(ARM64_KSEG0_BASE | sp_2mb_base, sp_2mb_base,
+                                        2 * 1024 * 1024, code_attrs);
             }
         }
 
@@ -3429,15 +3443,19 @@ VOID Arm64EnablePageTables(VOID)
             UINT64 sp_2mb_base = sp_val & ~((1ULL << 21) - 1);
             if (vbar_2mb_base != pc_2mb_base && vbar_2mb_base != sp_2mb_base) {
                 map_region_hierarchical(vbar_2mb_base, vbar_2mb_base, 2 * 1024 * 1024, code_attrs);
+                map_region_hierarchical(ARM64_KSEG0_BASE | vbar_2mb_base, vbar_2mb_base,
+                                        2 * 1024 * 1024, code_attrs);
             }
         }
 
+        Arm64MapEarlyUart();
 
         /* Clean dcache to ensure page table writes are visible to the table walker */
         __asm_dcache_all(0);
         ARM64_DSB_ISH();
     }
     /* ========== END CRITICAL REGION MAPPING ========== */
+    Pl011RawPuts("[PT_EN] critical-mapped\n");
 
     /* ========== DIAGNOSTIC: Verify identity mapping before MMU enable ========== */
     /*
@@ -3525,6 +3543,7 @@ VOID Arm64EnablePageTables(VOID)
         __asm__ volatile("msr sctlr_el2, %0" :: "r"(sctlr_on) : "memory");
     }
     ARM64_ISB();
+    Pl011RawPuts("[PT_EN] mmu-on\n");
 
     // TRACE("ARM64: Page tables enabled (SCTLR=0x%llx)\n", (unsigned long long)sctlr_on);
     // TRACE("ARM64: PT_EN: End\n");
@@ -3626,11 +3645,12 @@ VOID Arm64SetupKernelHandoffMMU(VOID)
     {
         const UINT64 self_idx = (ARM64_SELF_PXE_BASE >> ARM64_PXI_SHIFT) & ARM64_PX_MASK;
         const UINT64 root_pa = phys_from_ptr(arm64_kernel_l0_table);
+        const UINT64 desired = root_pa | PTE_SELFREF_ATTRS;
         UINT64 entry = arm64_kernel_l0_table[self_idx];
 
         /* Verify and repair recursive mapping if needed */
-        if ((entry & ~0xFFFULL) != root_pa) {
-            pte_write(&arm64_kernel_l0_table[self_idx], root_pa | PTE_TABLE_ATTRS);
+        if (entry != desired) {
+            pte_write(&arm64_kernel_l0_table[self_idx], desired);
         }
     }
 

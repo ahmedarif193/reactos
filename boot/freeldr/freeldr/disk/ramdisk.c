@@ -71,7 +71,9 @@ VOID FatFlushCacheStub(VOID)
 #endif
 #include <ramdisk_fatwrite.h>
 #include <ramdisk_signature.h>
+#ifdef FREELDR_WIM_RAMDISK
 #include <wim.h>
+#endif
 #include "../ntldr/ntldropts.h"
 
 DBG_DEFAULT_CHANNEL(DISK);
@@ -1457,6 +1459,7 @@ RamDiskPopulateFatFromIso(
     return TRUE;
 }
 
+#ifdef FREELDR_WIM_RAMDISK
 /*
  * Overlay the remaining CD-ROM content into the FAT32 volume AFTER the
  * WIM payload has been unpacked.
@@ -1588,7 +1591,9 @@ Cleanup:
     RamDiskCloseIsoSource(&CdSource);
     return Result;
 }
+#endif
 
+#ifdef FREELDR_WIM_RAMDISK
 static
 BOOLEAN
 RamDiskSourceHasSignature(
@@ -1609,6 +1614,7 @@ RamDiskSourceHasSignature(
 
     return (memcmp(Buffer, Signature, Length) == 0);
 }
+#endif
 
 /*
  * Returns TRUE when Source looks like a WIM archive (MSWIM magic at byte 0).
@@ -1620,11 +1626,17 @@ BOOLEAN
 RamDiskSourceIsWim(
     _In_ PISO_SOURCE Source)
 {
+#ifdef FREELDR_WIM_RAMDISK
     static const UCHAR WimMagic[8] = { 'M', 'S', 'W', 'I', 'M', 0, 0, 0 };
 
     return RamDiskSourceHasSignature(Source, WimMagic, sizeof(WimMagic));
+#else
+    UNREFERENCED_PARAMETER(Source);
+    return FALSE;
+#endif
 }
 
+#ifdef FREELDR_WIM_RAMDISK
 static
 ARC_STATUS
 RamDiskWimOpenSelectedImage(
@@ -1791,6 +1803,7 @@ RamDiskPopulateFatFromWim(
     TRACE("RamDiskPopulateFatFromWim: unpack complete\n");
     return TRUE;
 }
+#endif
 
 BOOLEAN
 RamDiskBuildWritableImage(
@@ -1814,6 +1827,7 @@ RamDiskBuildWritableImage(
     SourceSize = Source->Size;
     WimSource = RamDiskSourceIsWim(Source);
 
+#ifdef FREELDR_WIM_RAMDISK
     if (WimSource)
     {
         WIM_LOADER_IMAGE_STATS WimStats;
@@ -1847,6 +1861,7 @@ RamDiskBuildWritableImage(
               RequiredSize);
     }
     else
+#endif
     {
         /* Leave some slack to account for ISO9660 metadata and future writes */
         RequiredSize = RequestedSize;
@@ -1928,6 +1943,7 @@ RamDiskBuildWritableImage(
         VolumeBase = (PUCHAR)WritableBase + VolumeOffset;
         VolumeSize = WritableSize - VolumeOffset;
 
+#ifdef FREELDR_WIM_RAMDISK
         if (WimSource)
         {
             TRACE("RamDiskBuildWritableImage: source is a WIM archive, using WIM populator\n");
@@ -1941,6 +1957,7 @@ RamDiskBuildWritableImage(
             }
         }
         else
+#endif
         {
             if (!RamDiskPopulateFatFromIso(VolumeBase,
                                            VolumeSize,

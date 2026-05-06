@@ -309,8 +309,21 @@ KiIdleLoop(VOID)
          *
          * TODO: Investigate if there's a QEMU HVF flag or configuration to fix this.
          */
+        /*
+         * KiInitializeKernel enters the idle loop after raising to HIGH_LEVEL.
+         * On ARM64, clearing DAIF.I alone is not enough because the GIC PMR may
+         * still be masking every interrupt. Drop the logical IRQL before opening
+         * the idle interrupt window so timer/device interrupts can schedule work.
+         */
+        if (KeGetCurrentIrql() > PASSIVE_LEVEL)
+        {
+            KeLowerIrql(PASSIVE_LEVEL);
+        }
+
+        _enable();
         KeStallExecutionProcessor(1000); /* 1ms delay */
         __asm__ __volatile__("yield" ::: "memory");
+        _disable();
     }
 }
 
