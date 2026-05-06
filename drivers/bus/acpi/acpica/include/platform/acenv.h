@@ -224,11 +224,11 @@
 #elif defined(_CYGWIN)
 #include "accygwin.h"
 
+#elif defined(WIN64) || defined(_WIN64)
+#include "acwin64.h"
+
 #elif defined(WIN32)
 #include "acwin.h"
-
-#elif defined(WIN64)
-#include "acwin64.h"
 
 #elif defined(_WRS_LIB_BUILD)
 #include "acvxworks.h"

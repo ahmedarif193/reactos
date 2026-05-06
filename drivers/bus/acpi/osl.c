@@ -36,6 +36,61 @@ KeFindConfigurationNextEntry(
 
 static ACPI_TABLE_RSDP *AcpiLoaderRsdp = NULL;
 
+#if defined(_M_ARM64)
+static
+BOOLEAN
+AcpiGetLoaderRsdpMapping(
+    _In_ ACPI_PHYSICAL_ADDRESS PhysicalAddress,
+    _In_ ACPI_SIZE Length,
+    _Out_ PVOID *Mapping)
+{
+    PHYSICAL_ADDRESS RsdpPhysical;
+    ULONGLONG Base;
+    ULONGLONG Offset;
+
+    *Mapping = NULL;
+    if ((AcpiLoaderRsdp == NULL) || (Length > sizeof(*AcpiLoaderRsdp)))
+        return FALSE;
+
+    RsdpPhysical = MmGetPhysicalAddress(AcpiLoaderRsdp);
+    Base = (ULONGLONG)RsdpPhysical.QuadPart;
+    if (((ULONGLONG)PhysicalAddress < Base) ||
+        ((ULONGLONG)PhysicalAddress >= Base + sizeof(*AcpiLoaderRsdp)))
+    {
+        return FALSE;
+    }
+
+    Offset = (ULONGLONG)PhysicalAddress - Base;
+    if ((ULONGLONG)Length > sizeof(*AcpiLoaderRsdp) - Offset)
+        return FALSE;
+
+    *Mapping = (PUCHAR)AcpiLoaderRsdp + Offset;
+    return TRUE;
+}
+
+static
+BOOLEAN
+AcpiIsLoaderRsdpMapping(
+    _In_ const VOID *VirtualAddress,
+    _In_ ACPI_SIZE Length)
+{
+    ULONG_PTR Base;
+    ULONG_PTR Address;
+    ULONG_PTR Offset;
+
+    if ((AcpiLoaderRsdp == NULL) || (Length > sizeof(*AcpiLoaderRsdp)))
+        return FALSE;
+
+    Base = (ULONG_PTR)AcpiLoaderRsdp;
+    Address = (ULONG_PTR)VirtualAddress;
+    if ((Address < Base) || (Address >= Base + sizeof(*AcpiLoaderRsdp)))
+        return FALSE;
+
+    Offset = Address - Base;
+    return ((ULONGLONG)Length <= sizeof(*AcpiLoaderRsdp) - Offset);
+}
+#endif
+
 static
 UCHAR
 AcpiChecksumBuffer(
@@ -307,6 +362,11 @@ AcpiOsMapMemory (
 
     DPRINT("AcpiOsMapMemory(phys 0x%p  size 0x%X)\n", phys, length);
 
+#if defined(_M_ARM64)
+    if (AcpiGetLoaderRsdpMapping(phys, length, &Ptr))
+        return Ptr;
+#endif
+
     /* ACPI tables can reside above 4 GB on amd64, so keep the full address. */
     Address.QuadPart = (ULONGLONG)phys;
     CacheType = MmNonCached;
@@ -330,6 +390,11 @@ AcpiOsUnmapMemory (
     DPRINT("AcpiOsMapMemory(phys 0x%p  size 0x%X)\n", virt, length);
 
     ASSERT(virt);
+
+#if defined(_M_ARM64)
+    if (AcpiIsLoaderRsdpMapping(virt, length))
+        return;
+#endif
 
     MmUnmapIoSpace(virt, length);
 }

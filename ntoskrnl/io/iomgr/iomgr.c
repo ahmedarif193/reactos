@@ -560,6 +560,19 @@ IoInitSystem(IN PLOADER_PARAMETER_BLOCK LoaderBlock)
     /* Call back drivers that asked for */
     IopReinitializeBootDrivers();
 
+    /*
+     * Boot-start bus drivers may have attached to critical PDOs during
+     * IopInitializeBootDrivers. Walk the tree synchronously now so their child
+     * boot devices exist before ARC names and the boot partition are resolved.
+     */
+    Status = PiPerformSyncDeviceAction(IopRootDeviceNode->PhysicalDeviceObject,
+                                       PiActionEnumDeviceTree);
+    if (!NT_SUCCESS(Status))
+    {
+        DPRINT1("Boot PnP device-tree enumeration failed: %lx\n", Status);
+        return FALSE;
+    }
+
     /* Check if this was a ramdisk boot */
     if (!_strnicmp(LoaderBlock->ArcBootDeviceName, "ramdisk(0)", 10))
     {
