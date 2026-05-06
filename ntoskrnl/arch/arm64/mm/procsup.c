@@ -56,6 +56,18 @@ MiArchCreateProcessAddressSpace(
         MiReleasePfnLock(OldIrql);
     }
 
+    /*
+     * The new root is copied from the current kernel half below. Ensure the
+     * freshly allocated process page-table pages are reachable through KSEG0
+     * before taking that copy, otherwise a later TTBR switch can leave the
+     * debugger and ARM64 table walkers unable to inspect the active root.
+     */
+    MiArm64MapKseg0Page(RootPfn);
+    MiArm64MapKseg0Page(HyperPfn);
+    MiArm64MapKseg0Page(HyperPdPfn);
+    MiArm64MapKseg0Page(HyperPtPfn);
+    MiArm64MapKseg0Page(Process->WorkingSetPage);
+
     MappingPte = MiReserveSystemPtes(1, SystemPteSpace);
     if (!MappingPte)
     {

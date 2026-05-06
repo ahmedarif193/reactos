@@ -178,6 +178,13 @@ AtaAhciStartIo(
         AHCI_PORT_WRITE(IoBase, PxFisSwitchingControl, Control);
     }
 
+    /*
+     * The HBA fetches the command header/table from system memory after PxCI
+     * is written. On weakly ordered architectures the normal-memory writes in
+     * AtaAhciPrepareIo() must be ordered before the MMIO doorbell.
+     */
+    KeMemoryBarrier();
+
     AHCI_PORT_WRITE(IoBase, PxCommandIssue, IssueSlot);
 
     AtaAhciQueuePollingTimer(ChanData);
