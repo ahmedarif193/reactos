@@ -18,6 +18,18 @@
 #define KD_100NS_PER_SECOND 10000000ULL
 #define KD_100NS_PER_MICROSECOND 10ULL
 
+#if defined(_M_ARM64)
+static
+BOOLEAN
+KdpArm64DebuggerLockOwnedByCurrentThread(VOID)
+{
+    PKTHREAD Thread = KeGetCurrentThread();
+    return (((KSPIN_LOCK)Thread | 1) == KdpDebuggerLock);
+}
+#else
+#define KdpArm64DebuggerLockOwnedByCurrentThread() FALSE
+#endif
+
 /* FUNCTIONS *****************************************************************/
 
 #if defined(_M_ARM64)
@@ -614,6 +626,14 @@ KdpPrint(
         *Handled = TRUE;
         return STATUS_DEVICE_NOT_CONNECTED;
     }
+
+#if defined(_M_ARM64)
+    if (KdEnteredDebugger || KdpArm64DebuggerLockOwnedByCurrentThread())
+    {
+        *Handled = TRUE;
+        return STATUS_SUCCESS;
+    }
+#endif
 
     /* Enter the debugger */
     Enable = KdEnterDebugger(TrapFrame, ExceptionFrame);

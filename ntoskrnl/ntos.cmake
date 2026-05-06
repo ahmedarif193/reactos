@@ -393,6 +393,7 @@ elseif(ARCH STREQUAL "arm64")
     include_directories(${NTOS_ARCH_DIR}/include)
     list(REMOVE_ITEM SOURCE ${REACTOS_SOURCE_DIR}/ntoskrnl/ke/ipi.c)
     list(APPEND ASM_SOURCE
+        ${NTOS_ARCH_DIR}/ke/chkstk.S
         ${NTOS_ARCH_DIR}/ke/earlyvec.S
         ${NTOS_ARCH_DIR}/ke/trapvec.S
         ${NTOS_ARCH_DIR}/ke/trapret.S

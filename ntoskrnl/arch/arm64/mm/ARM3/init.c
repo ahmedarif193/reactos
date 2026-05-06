@@ -35,6 +35,8 @@ extern PVOID MiSystemViewStart;
 PVOID MiSystemPteSpaceStart;
 PVOID MiSystemPteSpaceEnd;
 
+extern PKTHREAD KeArm64CurrentThread;
+
 static LONG MiArm64SelfMapProbe = -1;
 /* Control whether MiMapPTEs zeroes newly allocated leaf pages (data pages). */
 static volatile BOOLEAN MiArm64ZeroLeafPages = TRUE;
@@ -1370,15 +1372,35 @@ MiInitMachineDependent(_Inout_ PLOADER_PARAMETER_BLOCK LoaderBlock)
                 :: "r"(RootPa)
                 : "memory");
 
-            PsGetCurrentProcess()->Pcb.DirectoryTableBase[0] =
-                (ULONG_PTR)RootPa;
-            PsGetCurrentProcess()->Pcb.DirectoryTableBase[1] =
-                (ULONG_PTR)RootPa;
-            if ((PsIdleProcess != NULL) &&
-                (PsIdleProcess != PsGetCurrentProcess()))
             {
-                PsIdleProcess->Pcb.DirectoryTableBase[0] = (ULONG_PTR)RootPa;
-                PsIdleProcess->Pcb.DirectoryTableBase[1] = (ULONG_PTR)RootPa;
+                PKTHREAD CurrentThread = KeGetCurrentThread();
+                PEPROCESS CurrentProcess;
+
+                if (CurrentThread == NULL)
+                {
+                    CurrentThread = KeArm64CurrentThread;
+                }
+
+                if ((CurrentThread == NULL) ||
+                    (CurrentThread->ApcState.Process == NULL))
+                {
+                    KeBugCheckEx(PROCESS_INITIALIZATION_FAILED,
+                                 (ULONG_PTR)CurrentThread,
+                                 (ULONG_PTR)KeArm64CurrentThread,
+                                 (ULONG_PTR)LoaderBlock->Thread,
+                                 (ULONG_PTR)RootPa);
+                }
+
+                CurrentProcess = (PEPROCESS)CurrentThread->ApcState.Process;
+                CurrentProcess->Pcb.DirectoryTableBase[0] = (ULONG_PTR)RootPa;
+                CurrentProcess->Pcb.DirectoryTableBase[1] = (ULONG_PTR)RootPa;
+
+                if ((PsIdleProcess != NULL) &&
+                    (PsIdleProcess != CurrentProcess))
+                {
+                    PsIdleProcess->Pcb.DirectoryTableBase[0] = (ULONG_PTR)RootPa;
+                    PsIdleProcess->Pcb.DirectoryTableBase[1] = (ULONG_PTR)RootPa;
+                }
             }
 
         }
