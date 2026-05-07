@@ -276,18 +276,10 @@ MiInsertVadEx(
     CurrentProcess = PsGetCurrentProcess();
 
     /* Acquire the address creation lock and make sure the process is alive */
-    #if (NTDDI_VERSION >= NTDDI_LONGHORN)
-    ExAcquirePushLockExclusive(&CurrentProcess->AddressCreationLock);
-#else
-    KeAcquireGuardedMutex(&CurrentProcess->AddressCreationLock);
-#endif
+    MmLockAddressSpace(&CurrentProcess->Vm);
     if (CurrentProcess->VmDeleted)
     {
-        #if (NTDDI_VERSION >= NTDDI_LONGHORN)
-    ExReleasePushLockExclusive(&CurrentProcess->AddressCreationLock);
-#else
-    KeReleaseGuardedMutex(&CurrentProcess->AddressCreationLock);
-#endif
+        MmUnlockAddressSpace(&CurrentProcess->Vm);
         DPRINT1("The process is dying\n");
         return STATUS_PROCESS_IS_TERMINATING;
     }
@@ -325,11 +317,7 @@ MiInsertVadEx(
         if ((Result == TableFoundNode) || (EndingAddress > HighestAddress))
         {
             DPRINT1("Not enough free space to insert this VAD node!\n");
-            #if (NTDDI_VERSION >= NTDDI_LONGHORN)
-    ExReleasePushLockExclusive(&CurrentProcess->AddressCreationLock);
-#else
-    KeReleaseGuardedMutex(&CurrentProcess->AddressCreationLock);
-#endif
+            MmUnlockAddressSpace(&CurrentProcess->Vm);
             return STATUS_NO_MEMORY;
         }
 
@@ -351,11 +339,7 @@ MiInsertVadEx(
         if (Result == TableFoundNode)
         {
             DPRINT("Given address conflicts with existing node\n");
-            #if (NTDDI_VERSION >= NTDDI_LONGHORN)
-    ExReleasePushLockExclusive(&CurrentProcess->AddressCreationLock);
-#else
-    KeReleaseGuardedMutex(&CurrentProcess->AddressCreationLock);
-#endif
+            MmUnlockAddressSpace(&CurrentProcess->Vm);
             return STATUS_CONFLICTING_ADDRESSES;
         }
     }
@@ -405,11 +389,7 @@ MiInsertVadEx(
     }
 
     /* Unlock the address space */
-    #if (NTDDI_VERSION >= NTDDI_LONGHORN)
-    ExReleasePushLockExclusive(&CurrentProcess->AddressCreationLock);
-#else
-    KeReleaseGuardedMutex(&CurrentProcess->AddressCreationLock);
-#endif
+    MmUnlockAddressSpace(&CurrentProcess->Vm);
 
     *BaseAddress = StartingAddress;
     return STATUS_SUCCESS;

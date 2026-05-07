@@ -2584,6 +2584,7 @@ NTAPI
 LdrpInitFailure(NTSTATUS Status)
 {
     ULONG Response;
+    ULONG_PTR ErrorParameters[1];
     PPEB Peb = NtCurrentPeb();
 
     /* Print a debug message */
@@ -2593,7 +2594,8 @@ LdrpInitFailure(NTSTATUS Status)
     /* Raise a hard error */
     if (!LdrpFatalHardErrorCount)
     {
-        ZwRaiseHardError(STATUS_APP_INIT_FAILURE, 1, 0, (PULONG_PTR)&Status, OptionOk, &Response);
+        ErrorParameters[0] = (ULONG_PTR)Status;
+        ZwRaiseHardError(STATUS_APP_INIT_FAILURE, 1, 0, ErrorParameters, OptionOk, &Response);
     }
 }
 

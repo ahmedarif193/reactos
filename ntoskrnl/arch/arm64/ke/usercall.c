@@ -83,6 +83,7 @@ C_ASSERT(RTL_NUMBER_OF(KiSyscallHandlers) == 0x12);
 static LONG KiArm64UserApcTraceCount;
 static LONG KiArm64UserApcPrefaultTraceCount;
 static LONG KiArm64UserApcCopyTraceCount;
+static LONG KiArm64UserCallbackTraceCount;
 
 static
 NTSTATUS
@@ -324,7 +325,13 @@ KiSystemService(
         Prcb->KeSystemCalls++;
     }
 
-    ServiceTable = (ULONG_PTR)(PVOID)KeServiceDescriptorTable;
+#if defined(_WIN64) && (NTDDI_VERSION >= NTDDI_LONGHORN)
+    ServiceTable = (ULONG_PTR)(Thread->GuiThread ?
+                               (PVOID)KeServiceDescriptorTableShadow :
+                               (PVOID)KeServiceDescriptorTable);
+#else
+    ServiceTable = (ULONG_PTR)(PVOID)Thread->ServiceTable;
+#endif
     TableIndex = (Instruction >> SERVICE_TABLE_SHIFT) & SERVICE_TABLE_MASK;
     DescriptorTable = (PKSERVICE_TABLE_DESCRIPTOR)(ServiceTable + TableIndex);
 
@@ -352,8 +359,13 @@ KiSystemService(
          *
          * Then retry the service lookup with the new shadow table.
          */
-        if (TableIndex == SERVICE_TABLE_TEST &&
-            (PVOID)KeServiceDescriptorTable == KeServiceDescriptorTable)
+        if ((TableIndex == SERVICE_TABLE_TEST) &&
+#if defined(_WIN64) && (NTDDI_VERSION >= NTDDI_LONGHORN)
+            !Thread->GuiThread
+#else
+            (Thread->ServiceTable == KeServiceDescriptorTable)
+#endif
+            )
         {
             /* Only convert if win32k callouts are registered */
             if (PspW32ProcessCallout != NULL && PspW32ThreadCallout != NULL)
@@ -379,7 +391,13 @@ KiSystemService(
                     TrapFrame = Thread->TrapFrame;
 
                     /* Retry with the new service table */
-                    ServiceTable = (ULONG_PTR)(PVOID)KeServiceDescriptorTable;
+#if defined(_WIN64) && (NTDDI_VERSION >= NTDDI_LONGHORN)
+                    ServiceTable = (ULONG_PTR)(Thread->GuiThread ?
+                                               (PVOID)KeServiceDescriptorTableShadow :
+                                               (PVOID)KeServiceDescriptorTable);
+#else
+                    ServiceTable = (ULONG_PTR)(PVOID)Thread->ServiceTable;
+#endif
                     DescriptorTable =
                         (PKSERVICE_TABLE_DESCRIPTOR)(ServiceTable + TableIndex);
 
@@ -677,17 +695,33 @@ KiUserModeCallout(
     _Out_ PKCALLOUT_FRAME CalloutFrame)
 {
     PKTHREAD CurrentThread;
+    PEPROCESS Process;
     PKTRAP_FRAME TrapFrame;
     KTRAP_FRAME CallbackTrapFrame;
     PKIPCR Pcr;
+    PVOID UserCallbackDispatcher;
     ULONG_PTR InitialStack;
     NTSTATUS Status;
 
     CurrentThread = KeGetCurrentThread();
+    Process = (PEPROCESS)CurrentThread->ApcState.Process;
 
     ASSERT(KeGetCurrentIrql() == PASSIVE_LEVEL);
     ASSERT((CurrentThread->ApcStateIndex == OriginalApcEnvironment) &&
            (CurrentThread->CombinedApcDisable == 0));
+
+    UserCallbackDispatcher = KiConvertSystemDllAddressToUser(KeUserCallbackDispatcher, Process);
+    if (!UserCallbackDispatcher &&
+        (KeUserCallbackDispatcher != NULL) &&
+        ((ULONG_PTR)KeUserCallbackDispatcher < (ULONG_PTR)MmSystemRangeStart))
+    {
+        UserCallbackDispatcher = KeUserCallbackDispatcher;
+    }
+
+    if (!UserCallbackDispatcher)
+    {
+        return STATUS_PROCEDURE_NOT_FOUND;
+    }
 
     InitialStack = (ULONG_PTR)ALIGN_DOWN_POINTER_BY(CalloutFrame, 16);
 
@@ -720,7 +754,9 @@ KiUserModeCallout(
         Pcr->Prcb.RspBase = InitialStack;
     }
 
-    CallbackTrapFrame.Pc = (ULONG_PTR)KeUserCallbackDispatcher;
+    CallbackTrapFrame.Pc = (ULONG_PTR)UserCallbackDispatcher;
+    CallbackTrapFrame.Lr = (ULONG_PTR)UserCallbackDispatcher;
+    CallbackTrapFrame.X18 = (ULONG_PTR)CurrentThread->Teb;
 
     _enable();
 
@@ -765,10 +801,40 @@ KeUserModeCallback(
     UserStackPointer = KiGetUserModeStackAddress();
     OldStack = *UserStackPointer;
 
+    {
+        LONG TraceIndex = InterlockedIncrement(&KiArm64UserCallbackTraceCount);
+        if (TraceIndex <= 32)
+        {
+            DPRINT1("[arm64][UCB] enter[%ld] proc=%.16s idx=%lu arg=%p len=%lu oldsp=%p tf=%p pc=%p lr=%p x18=%p\n",
+                    TraceIndex,
+                    PsGetCurrentProcess()->ImageFileName,
+                    RoutineIndex,
+                    Argument,
+                    ArgumentLength,
+                    (PVOID)OldStack,
+                    KeGetCurrentThread()->TrapFrame,
+                    (PVOID)(ULONG_PTR)KeGetCurrentThread()->TrapFrame->Pc,
+                    (PVOID)(ULONG_PTR)KeGetCurrentThread()->TrapFrame->Lr,
+                    (PVOID)(ULONG_PTR)KeGetCurrentThread()->TrapFrame->X18);
+        }
+    }
+
     _SEH2_TRY
     {
         UserArguments = (PUCHAR)ALIGN_DOWN_POINTER_BY(OldStack - ArgumentLength, 16);
         CalloutFrame = ((PUCALLOUT_FRAME)UserArguments) - 1;
+
+        {
+            LONG TraceIndex = KiArm64UserCallbackTraceCount;
+            if (TraceIndex <= 32)
+            {
+                DPRINT1("[arm64][UCB] frame[%ld] userargs=%p callout=%p size=0x%Ix\n",
+                        TraceIndex,
+                        UserArguments,
+                        CalloutFrame,
+                        sizeof(*CalloutFrame) + ArgumentLength);
+            }
+        }
 
         ProbeForWrite(CalloutFrame,
                       sizeof(*CalloutFrame) + ArgumentLength,
@@ -784,8 +850,31 @@ KeUserModeCallback(
 
         Teb = KeGetCurrentThread()->Teb;
 
+        /*
+         * ARM64 ntdll currently uses the generic C callback dispatcher, which
+         * receives its arguments in x0-x2. The stack UCALLOUT_FRAME is still
+         * kept for NtCallbackReturn and debugger/unwind state, but unlike
+         * amd64 there is no assembly dispatcher reading arguments from it.
+         */
+        KeGetCurrentThread()->TrapFrame->X0 = RoutineIndex;
+        KeGetCurrentThread()->TrapFrame->X1 = (ULONG_PTR)UserArguments;
+        KeGetCurrentThread()->TrapFrame->X2 = ArgumentLength;
+        KeGetCurrentThread()->TrapFrame->X18 = (ULONG_PTR)Teb;
+
         *UserStackPointer = (ULONG_PTR)CalloutFrame;
         CallbackStatus = KiCallUserMode(Result, ResultLength);
+        {
+            LONG TraceIndex = KiArm64UserCallbackTraceCount;
+            if (TraceIndex <= 32)
+            {
+                DPRINT1("[arm64][UCB] return[%ld] status=0x%08lx out=%p outlen=%p userSpNow=%p\n",
+                        TraceIndex,
+                        CallbackStatus,
+                        Result ? *Result : NULL,
+                        ResultLength ? (PVOID)(ULONG_PTR)*ResultLength : NULL,
+                        (PVOID)*UserStackPointer);
+            }
+        }
         if (CallbackStatus == STATUS_CALLBACK_POP_STACK)
         {
             OldStack = *UserStackPointer;
@@ -823,6 +912,20 @@ NtCallbackReturn(
 
     CurrentThread = KeGetCurrentThread();
     CalloutFrame = CurrentThread->CallbackStack;
+    {
+        LONG TraceIndex = InterlockedIncrement(&KiArm64UserCallbackTraceCount);
+        if (TraceIndex <= 32)
+        {
+            DPRINT1("[arm64][UCB] cbret[%ld] proc=%.16s result=%p len=%lu status=0x%08lx cb=%p tf=%p\n",
+                    TraceIndex,
+                    PsGetCurrentProcess()->ImageFileName,
+                    Result,
+                    ResultLength,
+                    CallbackStatus,
+                    CalloutFrame,
+                    CurrentThread->TrapFrame);
+        }
+    }
     if (CalloutFrame == NULL)
     {
         return STATUS_NO_CALLBACK_ACTIVE;

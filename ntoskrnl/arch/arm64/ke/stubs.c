@@ -166,51 +166,18 @@ MMPTE ValidKernelPte = {
     .u.Hard = {
         .Valid = 1,
         .NotLargePage = 1,   /* ensure type==table/page (0b11) */
+        .OsAvailable2 = 1,   /* AttrIndx bit 2: Normal WB (index 4) */
+        .Shareability = 3,   /* Inner Shareable */
         .Accessed = 1,       /* AF=1 for leaf PTEs */
         .Writable = 1,
         .Owner = 0,
     }
 };
-/*
- * Ensure leaf PTEs default to Normal WB (MAIR index MI_ARM64_MAIR_NORMAL_WB_IDX)
- * and Inner Shareable. Uses the named constant from mm.h instead of a magic number.
- */
-__attribute__((constructor))
-static void KeArm64InitValidKernelPte(void)
-{
-    /*
-     * Set AttrIndx (bits [4:2]) and SH (bits [9:8]) using clear-then-set
-     * to be idempotent regardless of the initial bitfield state.  Plain OR
-     * only works when the field starts at zero; clear-then-set is robust
-     * against future changes to the static initializer or duplicate calls.
-     */
-
-    /* AttrIndx = MI_ARM64_MAIR_NORMAL_WB_IDX (Normal Write-Back) */
-    ValidKernelPte.u.Long &= ~((ULONGLONG)ARM64_PTE_CACHE_MASK);
-    ValidKernelPte.u.Long |= ((ULONGLONG)MI_ARM64_MAIR_NORMAL_WB_IDX << ARM64_PTE_CACHE_SHIFT);
-    /* SH = Inner Shareable (3) */
-    ValidKernelPte.u.Long &= ~(3ULL << 8);
-    ValidKernelPte.u.Long |= (3ULL << 8);
-
-    ValidKernelPteLocal.u.Long &= ~((ULONGLONG)ARM64_PTE_CACHE_MASK);
-    ValidKernelPteLocal.u.Long |= ((ULONGLONG)MI_ARM64_MAIR_NORMAL_WB_IDX << ARM64_PTE_CACHE_SHIFT);
-    ValidKernelPteLocal.u.Long &= ~(3ULL << 8);
-    ValidKernelPteLocal.u.Long |= (3ULL << 8);
-
-    ValidKernelPde.u.Long &= ~((ULONGLONG)ARM64_PTE_CACHE_MASK);
-    ValidKernelPde.u.Long |= ((ULONGLONG)MI_ARM64_MAIR_NORMAL_WB_IDX << ARM64_PTE_CACHE_SHIFT);
-    ValidKernelPde.u.Long &= ~(3ULL << 8);
-    ValidKernelPde.u.Long |= (3ULL << 8);
-
-    ValidKernelPdeLocal.u.Long &= ~((ULONGLONG)ARM64_PTE_CACHE_MASK);
-    ValidKernelPdeLocal.u.Long |= ((ULONGLONG)MI_ARM64_MAIR_NORMAL_WB_IDX << ARM64_PTE_CACHE_SHIFT);
-    ValidKernelPdeLocal.u.Long &= ~(3ULL << 8);
-    ValidKernelPdeLocal.u.Long |= (3ULL << 8);
-}
 MMPDE ValidKernelPde = {
     .u.Hard = {
         .Valid = 1,
         .NotLargePage = 1,
+        .OsAvailable2 = 1,
         .Shareability = 3,   /* Inner Shareable - required for self-map coherence */
         .Accessed = 1,       /* AF=1: on ARM64 with recursive self-map, PDEs are also
                               * readable as L3 page descriptors. Without AF, CPUs that
@@ -233,12 +200,22 @@ MMPTE ValidKernelPteLocal = {
     .u.Hard = {
         .Valid = 1,
         .NotLargePage = 1,
+        .OsAvailable2 = 1,
+        .Shareability = 3,
         .Accessed = 1,
         .Writable = 1,
         .Owner = 0
     }
 };
-MMPDE ValidKernelPdeLocal = {.u.Hard.Valid = 1, .u.Hard.NotLargePage = 1, .u.Hard.Shareability = 3, .u.Hard.Accessed = 1};
+MMPDE ValidKernelPdeLocal = {
+    .u.Hard = {
+        .Valid = 1,
+        .NotLargePage = 1,
+        .OsAvailable2 = 1,
+        .Shareability = 3,
+        .Accessed = 1
+    }
+};
 
 /* Template PTE for decommitted page.
  * CRITICAL: Must use MM_DECOMMIT, NOT MM_READWRITE!
@@ -438,19 +415,27 @@ KeSwitchKernelStack(
     LONG_PTR StackOffset;
     SIZE_T StackSize;
     PKIPCR Pcr;
+    ULONG_PTR OldStackLimit;
+    ULONG_PTR OldStackTop;
+    ULONG_PTR FramePointer;
+    ULONG_PTR CopiedFrame;
+    ULONG_PTR SavedFrame;
+    ULONG FrameDepth;
 
     /* Get the current thread */
     CurrentThread = KeGetCurrentThread();
 
     /* Save the old stack base for return value */
     OldStackBase = CurrentThread->StackBase;
+    OldStackLimit = CurrentThread->StackLimit;
+    OldStackTop = (ULONG_PTR)OldStackBase;
 
     /* Compute size of current stack contents */
-    StackSize = (ULONG_PTR)CurrentThread->StackBase - CurrentThread->StackLimit;
+    StackSize = OldStackTop - OldStackLimit;
     ASSERT(StackSize <= (ULONG_PTR)StackBase - (ULONG_PTR)StackLimit);
 
     /* Calculate the offset between old and new stacks */
-    StackOffset = (PUCHAR)StackBase - (PUCHAR)CurrentThread->StackBase;
+    StackOffset = (PUCHAR)StackBase - (PUCHAR)OldStackBase;
 
     /*
      * Mask ALL exception/interrupt sources (DAIF: Debug, SError, IRQ, FIQ)
@@ -474,8 +459,39 @@ KeSwitchKernelStack(
 
     /* Copy the entire current stack to the new stack */
     RtlCopyMemory((PUCHAR)StackBase - StackSize,
-                  (PVOID)CurrentThread->StackLimit,
+                  (PVOID)OldStackLimit,
                   StackSize);
+
+    /*
+     * The copied AArch64 frame records still contain previous-FP links into
+     * the old stack. Function epilogues restore x29 from these records, so the
+     * chain must be translated before the old stack can be freed.
+     */
+    __asm__ __volatile__("mov %0, x29" : "=r"(FramePointer));
+    for (FrameDepth = 0; FrameDepth < 256; FrameDepth++)
+    {
+        if ((FramePointer < OldStackLimit) ||
+            (FramePointer > (OldStackTop - (2 * sizeof(ULONG_PTR)))) ||
+            ((FramePointer & (sizeof(ULONG_PTR) - 1)) != 0))
+        {
+            break;
+        }
+
+        CopiedFrame = FramePointer + (ULONG_PTR)StackOffset;
+        SavedFrame = *(PULONG_PTR)CopiedFrame;
+
+        if ((SavedFrame < OldStackLimit) ||
+            (SavedFrame > (OldStackTop - (2 * sizeof(ULONG_PTR)))) ||
+            ((SavedFrame & (sizeof(ULONG_PTR) - 1)) != 0) ||
+            (SavedFrame <= FramePointer))
+        {
+            break;
+        }
+
+        *(PULONG_PTR)CopiedFrame = SavedFrame + (ULONG_PTR)StackOffset;
+
+        FramePointer = SavedFrame;
+    }
 
     /* Adjust thread trap frame pointer to new stack */
     if (CurrentThread->TrapFrame != NULL)
@@ -531,11 +547,8 @@ KeSwitchKernelStack(
      *   Without adjusting FP, all frame-pointer-relative accesses in
      *   the ENTIRE call chain above us would access the old (freed) stack.
      *
-     * The frame pointer chain (each FP on the stack points to the previous
-     * frame) will contain stale old-stack addresses after the copy, but
-     * that only matters for stack unwinding/debugging, not for execution
-     * correctness. What matters is that the CURRENT X29 points to the
-     * correct frame on the new stack.
+     * The copied frame records were translated above, otherwise the epilogue
+     * below would restore an old-stack x29 into the caller.
      */
     __asm__ __volatile__(
         "mov x16, sp\n\t"
