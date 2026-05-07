@@ -649,25 +649,20 @@ static DWORD CALLBACK RPCRT4_server_thread(LPVOID the_arg)
   BOOL set_ready_event = FALSE;
 
   TRACE("(the_arg == ^%p)\n", the_arg);
-  FIXME("[arm64][RPC] server_thread start ps=%p\n", cps);
   SetThreadDescription(GetCurrentThread(), L"wine_rpcrt4_server");
 
   for (;;) {
     objs = cps->ops->get_wait_array(cps, objs, &count);
-    FIXME("[arm64][RPC] server_thread wait_array ps=%p objs=%p count=%u set_ready=%u std=%d\n",
-          cps, objs, count, set_ready_event, std_listen);
 
     if (set_ready_event)
     {
         /* signal to function that changed state that we are now sync'ed */
-        FIXME("[arm64][RPC] server_thread SetEvent ready=%p\n", cps->server_ready_event);
         SetEvent(cps->server_ready_event);
         set_ready_event = FALSE;
     }
 
     /* start waiting */
     res = cps->ops->wait_for_new_connection(cps, count, objs);
-    FIXME("[arm64][RPC] server_thread wait result ps=%p res=%d std=%d\n", cps, res, std_listen);
 
     if (res == -1 || (res == 0 && !std_listen))
     {
@@ -714,22 +709,17 @@ static DWORD CALLBACK RPCRT4_server_thread(LPVOID the_arg)
  * make the changes */
 static void RPCRT4_sync_with_server_thread(RpcServerProtseq *ps)
 {
-  FIXME("[arm64][RPC] sync begin ps=%p mutex=%p ready=%p\n", ps, ps->mgr_mutex, ps->server_ready_event);
   /* make sure we are the only thread sync'ing the server state, otherwise
    * there is a race with the server thread setting an older state and setting
    * the server_ready_event when the new state hasn't yet been applied */
   WaitForSingleObject(ps->mgr_mutex, INFINITE);
-  FIXME("[arm64][RPC] sync got mutex ps=%p\n", ps);
 
   ps->ops->signal_state_changed(ps);
-  FIXME("[arm64][RPC] sync signaled state ps=%p\n", ps);
 
   /* wait for server thread to make the requested changes before returning */
   WaitForSingleObject(ps->server_ready_event, INFINITE);
-  FIXME("[arm64][RPC] sync got ready ps=%p\n", ps);
 
   ReleaseMutex(ps->mgr_mutex);
-  FIXME("[arm64][RPC] sync done ps=%p\n", ps);
 }
 
 static RPC_STATUS RPCRT4_start_listen_protseq(RpcServerProtseq *ps, BOOL auto_listen)
@@ -741,13 +731,9 @@ static RPC_STATUS RPCRT4_start_listen_protseq(RpcServerProtseq *ps, BOOL auto_li
 
   if (!ps->mgr_mutex) ps->mgr_mutex = CreateMutexW(NULL, FALSE, NULL);
   if (!ps->server_ready_event) ps->server_ready_event = CreateEventW(NULL, FALSE, FALSE, NULL);
-  FIXME("[arm64][RPC] start_listen_protseq ps=%p thread=%p mutex=%p ready=%p auto=%d\n",
-        ps, ps->server_thread, ps->mgr_mutex, ps->server_ready_event, auto_listen);
   ps->server_thread = CreateThread(NULL, 0, RPCRT4_server_thread, ps, 0, NULL);
   if (!ps->server_thread)
     status = RPC_S_OUT_OF_RESOURCES;
-  FIXME("[arm64][RPC] start_listen_protseq created ps=%p thread=%p status=%lu\n",
-        ps, ps->server_thread, status);
 
 done:
   LeaveCriticalSection(&listen_cs);

@@ -1345,15 +1345,11 @@ HalpInitDma(VOID)
             if (RcEntry->CacheCoherent & 0x1)
             {
                 HalpArm64DmaCoherency.RootComplexCoherent[Index] = TRUE;
-                DPRINT1("[arm64][DMA] Root Complex %lu (segment %lu) is cache-coherent\n",
-                        Index, RcEntry->PciSegmentNumber);
             }
             else
             {
                 HalpArm64DmaCoherency.RootComplexCoherent[Index] = FALSE;
                 AllCoherent = FALSE;
-                DPRINT1("[arm64][DMA] Root Complex %lu (segment %lu) is NOT cache-coherent\n",
-                        Index, RcEntry->PciSegmentNumber);
             }
         }
 
@@ -1364,10 +1360,6 @@ HalpInitDma(VOID)
         }
 
         HalpArm64DmaCoherency.SystemCoherent = AllCoherent;
-
-        DPRINT1("[arm64][DMA] System cache coherency: %s (cache line %lu bytes)\n",
-                AllCoherent ? "COHERENT" : "NON-COHERENT",
-                HalpArm64DmaCoherency.CacheLineSize);
     }
     else
     {
@@ -1377,7 +1369,6 @@ HalpInitDma(VOID)
          * the system doesn't provide coherency information.
          */
         HalpArm64DmaCoherency.SystemCoherent = FALSE;
-        DPRINT1("[arm64][DMA] No IORT present, assuming non-coherent DMA\n");
     }
 
     /*
@@ -1399,9 +1390,6 @@ HalpInitDma(VOID)
         HalpArm64SmmuState.Span = SmmuEntry->Span;
         HalpArm64SmmuState.BypassMode = TRUE;
 
-        DPRINT1("[arm64][DMA] SMMU detected: Model=%lu Base=0x%llx Span=0x%llx\n",
-                SmmuEntry->Model, SmmuEntry->BaseAddress, SmmuEntry->Span);
-
         /*
          * SMMU bypass mode configuration.
          *
@@ -1411,15 +1399,9 @@ HalpInitDma(VOID)
          * Full SMMU programming is deferred to HalpArm64SmmuInitialize().
          * For now, we rely on firmware leaving SMMU in bypass mode.
          */
-        DPRINT1("[arm64][DMA] SMMU configured for bypass mode (identity mapping)\n");
-    }
-    else
-    {
-        DPRINT1("[arm64][DMA] No SMMU detected, using identity-mapped DMA\n");
     }
 
     HalpArm64DmaInitialized = TRUE;
-    DPRINT1("[arm64][DMA] DMA subsystem initialized\n");
 }
 
 /*
@@ -5026,8 +5008,6 @@ HalInitSystem(
     {
         KIRQL SwitchIrql;
 
-        DPRINT1("[arm64][HAL] Phase1 entry\n");
-
         /*
          * CRITICAL: Transition from identity-mapped PA to proper kernel VA
          * for all GIC MMIO accesses.
@@ -5054,8 +5034,7 @@ HalInitSystem(
          *   4. Full barrier (DSB SY + ISB).
          *   5. Lower IRQL.
          *
-         * For GICv3, the CPU interface uses system registers (no MMIO),
-         * but GICD reads in the diagnostic code below still need KSEG0.
+         * For GICv3, the CPU interface uses system registers (no MMIO).
          */
         if (!HalpGicUseSysRegs)
         {
@@ -5073,24 +5052,9 @@ HalInitSystem(
         __asm__ __volatile__("isb" ::: "memory");
         KfLowerIrql(SwitchIrql);
 
-        DPRINT1("[arm64][HAL] Phase1: identity mapping disabled (GicdBase=0x%llx GiccBase=0x%llx)\n",
-                HalpGicdBase, HalpGiccBase);
-
         if (!HalpLoggedGicOnce)
         {
             HalpLoggedGicOnce = TRUE;
-
-            DPRINT1("[arm64][HAL] Phase1: probing GIC state\n");
-            {
-                ULONGLONG pfr0 = HalpReadPfr0();
-                ULONG pfr0_gic = (ULONG)((pfr0 >> 24) & 0xF);
-                ULONG pidr2 = *HalpMmio((ULONG_PTR)HalpGicdBase, 0xFE8);
-                DPRINT1("[arm64][HAL] GIC probe: PFR0.GIC=%lu SRE=%lu PIDR2=0x%08lx ARCHREV=%lu\n",
-                        pfr0_gic,
-                        HalpGicUseSysRegs ? 1UL : 0UL,
-                        pidr2,
-                        HalpGicArchRev);
-            }
 
             /*
              * For GICv3, enable Group 1 delivery after phase 0 has finished.
@@ -5101,20 +5065,12 @@ HalInitSystem(
             if (HalpGicUseSysRegs)
             {
                 KIRQL OldIrql;
-                ULONG Igrpen1;
 
                 OldIrql = KfRaiseIrql(HIGH_LEVEL);
                 HalpWriteIccIgrpen1(1); /* Enable Group1 interrupt delivery */
                 __asm__ __volatile__("dsb sy" ::: "memory");
                 __asm__ __volatile__("isb" ::: "memory");
-                Igrpen1 = HalpReadIccIgrpen1();
                 KfLowerIrql(OldIrql);
-
-                DPRINT1("[arm64][HAL] Phase1: ICC_IGRPEN1_EL1=0x%x (Group1 enabled)\n", Igrpen1);
-            }
-            else
-            {
-                DPRINT1("[arm64][HAL] Phase1: GICv2 legacy CPU IF already enabled in Phase 0\n");
             }
         }
 
@@ -5145,8 +5101,6 @@ HalInitSystem(
      *
      * The HAL no longer needs to call back into the kernel to enable GIC support.
      */
-
-    DPRINT1("[arm64][HAL] HalInitSystem: phase0 begin\n");
 
     KeInitializeSpinLock(&HalpPCIConfigLock);
     KeInitializeSpinLock(&HalpGicItsLock);
@@ -5179,45 +5133,19 @@ HalInitSystem(
      * at which point interrupts can safely be processed.
      */
     OldIrql = KfRaiseIrql(HIGH_LEVEL);
-    DPRINT1("[arm64][HAL] HalInitSystem: raised IRQL from %u to %u for GIC init\n",
-            OldIrql, KeGetCurrentIrql());
 
     HalpArm64SelectGicInterface(LoaderBlock);
 
     /* Probe GIC capabilities before touching CPU IF */
     {
-        ULONGLONG pfr0 = 0;
-        ULONG pfr0_gic = 0;
         ULONG pidr2 = 0;
-        pfr0 = HalpReadPfr0();
-        pfr0_gic = (ULONG)((pfr0 >> 24) & 0xF);
 
         /* Identify distributor architecture revision */
         pidr2 = *HalpMmio((ULONG_PTR)HalpGicdBase, 0xFE8); /* GICD_PIDR2 */
         HalpGicArchRev = ((pidr2 >> 4) & 0xF);
         if (HalpGicArchRev == 0)
             HalpGicArchRev = HalpGicUseSysRegs ? 3 : 2;
-
-        DbgPrintEx(DPFLTR_DEFAULT_ID, DPFLTR_TRACE_LEVEL,
-                   "[arm64][HAL] GIC probe: PFR0.GIC=%lu SRE=%lu PIDR2=0x%08lx ARCHREV=%lu\n",
-                   pfr0_gic,
-                   HalpGicUseSysRegs ? 1UL : 0UL,
-                   pidr2,
-                   HalpGicArchRev);
-        DbgPrintEx(DPFLTR_DEFAULT_ID, DPFLTR_TRACE_LEVEL,
-                   "[arm64][HAL] Using %s CPU interface\n",
-                   HalpGicUseSysRegs ? "GICv3 system-register" : "GICv2 legacy (GICC)");
     }
-
-    DPRINT1("[arm64][HAL] HalInitSystem: GIC probe done (useSys=%lu arch=%lu)\n",
-            HalpGicUseSysRegs ? 1UL : 0UL,
-            HalpGicArchRev);
-
-    /* Log MSI state (MADT parsing happened earlier in HalInitializeProcessor) */
-    DPRINT1("[arm64][HAL] HalInitSystem: MSI state: ITS=%d (Base=0x%llx) GICv2m=%d (Base=0x%llx SPI[%u..%u])\n",
-            (int)HalpGicItsPresent, HalpGicItsBase,
-            (int)HalpGicMsiPresent, HalpGicMsiFrameBase,
-            HalpGicMsiSpiBase, (ULONG)(HalpGicMsiSpiBase + HalpGicMsiSpiCount - 1));
 
     /* Disable distributor while we (re)configure */
     *HalpMmio((ULONG_PTR)HalpGicdBase, GICD_CTLR) = 0;
@@ -5227,10 +5155,6 @@ HalInitSystem(
     lines = 32 * ((typer & 0x1F) + 1);
     if (lines > 1020) lines = 1020;
     nregs = (lines + 31) / 32;
-    DPRINT1("[arm64][HAL] HalInitSystem: GICD typer=0x%08lx lines=%lu nregs=%lu\n",
-            typer,
-            lines,
-            nregs);
 
     /*
      * Configure SPI interrupt groups and clear pending.
@@ -5256,8 +5180,6 @@ HalInitSystem(
         }
     }
 
-    DPRINT1("[arm64][HAL] HalInitSystem: GICD groups/disable done\n");
-
     /*
      * Set priorities to 0x00 (highest) for all SPIs.
      * This matches the PPI priority fix and ensures interrupts pass the PMR mask.
@@ -5282,8 +5204,6 @@ HalInitSystem(
             *HalpMmio((ULONG_PTR)HalpGicdBase, GICD_ITARGETSR + (i & ~3))  = 0x01010101; /* CPU0 */
         }
     }
-    DPRINT1("[arm64][HAL] HalInitSystem: GICD priorities/targets done\n");
-
     /*
      * GIC-v2: Configure SGI/PPI bank (interrupts 0-31) BEFORE enabling distributor.
      *
@@ -5309,7 +5229,6 @@ HalInitSystem(
          * but PPIs (bits 16-31) need to be preserved if already enabled.
          */
         SavedEnables = *HalpMmio((ULONG_PTR)HalpGicdBase, GICD_ISENABLER + 0);
-        DPRINT1("[arm64][HAL] HalInitSystem: GICv2 saved PPI enables: 0x%08lx\n", SavedEnables);
 
         /* Clear pending interrupts but do NOT disable - we will restore enables */
         *HalpMmio((ULONG_PTR)HalpGicdBase, GICD_ICPENDR + 0) = 0xFFFFFFFF;
@@ -5339,10 +5258,7 @@ HalInitSystem(
         if (SavedEnables != 0)
         {
             *HalpMmio((ULONG_PTR)HalpGicdBase, GICD_ISENABLER + 0) = SavedEnables;
-            DPRINT1("[arm64][HAL] HalInitSystem: GICv2 restored PPI enables: 0x%08lx\n", SavedEnables);
         }
-
-        DPRINT1("[arm64][HAL] HalInitSystem: GICv2 SGI/PPI configured with preserved enables\n");
     }
 
     /*
@@ -5350,8 +5266,6 @@ HalInitSystem(
      * is complete before we enable interrupt delivery.
      */
     __asm__ __volatile__("dsb sy" ::: "memory");
-
-    DPRINT1("[arm64][HAL] HalInitSystem: about to enable GICD\n");
 
     /*
      * Enable the distributor.
@@ -5373,19 +5287,14 @@ HalInitSystem(
     if (HalpGicUseSysRegs)
     {
         *HalpMmio((ULONG_PTR)HalpGicdBase, GICD_CTLR) = 0x13; /* EnableGrp0 | EnableGrp1NS | ARE_NS */
-        DPRINT1("[arm64][HAL] GICD_CTLR set to 0x13 (Group0+Group1+ARE for GICv3)\n");
     }
     else
     {
         *HalpMmio((ULONG_PTR)HalpGicdBase, GICD_CTLR) = HalpGicv2ForceGroup0 ? 0x1 : 0x3;
-        DPRINT1("[arm64][HAL] HalInitSystem: GICv2 distributor mode=%s\n",
-                HalpGicv2ForceGroup0 ? "Group0-only (HVF quirk)" : "Group0+Group1");
     }
 
     /* Barrier to ensure GICD enable completes before CPU interface configuration */
     __asm__ __volatile__("dsb sy" ::: "memory");
-
-    DPRINT1("[arm64][HAL] HalInitSystem: GICD enabled\n");
 
     if (HalpGicUseSysRegs)
     {
@@ -5395,12 +5304,12 @@ HalInitSystem(
     /* CPU interface: system registers (v3+) or legacy GICC (v2) */
     if (HalpGicUseSysRegs)
     {
-        ULONG Sre, Pmr;
+        ULONG Sre;
+
         /* Enable system register access and configure priority mask. */
         Sre = HalpReadIccSre();
         Sre |= 0x1; /* SRE bit */
         HalpWriteIccSre(Sre);
-        Sre = HalpReadIccSre();
         HalpWriteIccPmr(0xFF); /* allow all priorities */
         HalpWriteIccBpr1(0);
 
@@ -5410,11 +5319,6 @@ HalInitSystem(
          * after memory initialization has completed.
          */
         HalpWriteIccIgrpen1(0); /* KEEP DISABLED in Phase 0 */
-
-        /* Read back and verify. */
-        Pmr = HalpReadIccPmr();
-        DPRINT1("[arm64][HAL] Phase0: GICv3 CPU IF: SRE=0x%x PMR=0x%x IGRPEN1=DISABLED\n", Sre, Pmr);
-        DPRINT1("[arm64][HAL] ICC_IGRPEN1_EL1 will be enabled in Phase 1 after MM init\n");
     }
     else
     {
@@ -5464,11 +5368,8 @@ HalInitSystem(
              */
             __asm__ __volatile__("dsb sy" ::: "memory");
             __asm__ __volatile__("isb" ::: "memory");
-
-            DPRINT1("[arm64][HAL] GICv2 legacy CPU interface initialized with barriers\n");
         }
     }
-    DPRINT1("[arm64][HAL] HalInitSystem: CPU interface configured\n");
 
     /*
      * Initialize system time increment values for the scheduler tick.
@@ -5477,7 +5378,6 @@ HalInitSystem(
      * This matches the configuration in KiArm64StartTimer().
      */
     KeSetTimeIncrement(100000, 10000);
-    DPRINT1("[arm64][HAL] HalInitSystem: KeSetTimeIncrement configured (10ms tick)\n");
 
     /*
      * Set up HAL dispatch table callbacks.
@@ -5492,17 +5392,6 @@ HalInitSystem(
     HalInitPnpDriver = HaliInitPnpDriver;
     HalQuerySystemInformation = HaliQuerySystemInformation;
     HalSetSystemInformation = HaliSetSystemInformation;
-    DPRINT1("[arm64][HAL] HalInitSystem: HAL dispatch table callbacks set (PnP, QuerySysInfo, SetSysInfo)\n");
-
-    /* Debug: dump GIC state at end of HAL init */
-    {
-        ULONG gicd_ctlr = *HalpMmio((ULONG_PTR)HalpGicdBase, GICD_CTLR);
-        ULONG gicd_isenabler0 = *HalpMmio((ULONG_PTR)HalpGicdBase, GICD_ISENABLER + 0);
-        ULONG gicc_ctlr = HalpGiccBase ? *HalpMmio((ULONG_PTR)HalpGiccBase, GICC_CTLR) : 0;
-        ULONG gicc_pmr = HalpGiccBase ? *HalpMmio((ULONG_PTR)HalpGiccBase, GICC_PMR) : 0;
-        DPRINT1("[arm64][HAL] HalInitSystem END: GICD_CTLR=0x%08lx GICD_ISENABLER0=0x%08lx GICC_CTLR=0x%08lx GICC_PMR=0x%08lx\n",
-                gicd_ctlr, gicd_isenabler0, gicc_ctlr, gicc_pmr);
-    }
 
     /*
      * CRITICAL: Lower IRQL back to the original level before returning.
@@ -5512,8 +5401,6 @@ HalInitSystem(
      * Now that the GIC is configured, we MUST restore the original IRQL.
      */
     KeLowerIrql(OldIrql);
-    DPRINT1("[arm64][HAL] HalInitSystem: phase0 complete, lowered IRQL from %u to %u\n",
-            HIGH_LEVEL, KeGetCurrentIrql());
 
     return TRUE;
 }
@@ -5669,9 +5556,6 @@ HalAllocateAdapterChannel(
     AdapterObject->MapRegisterBase = MapRegisterBase;
     AdapterObject->NumberOfMapRegisters = NumberOfMapRegisters;
 
-    DPRINT("[arm64][DMA] HalAllocateAdapterChannel: Allocated %lu map registers at %p\n",
-           NumberOfMapRegisters, MapRegisterBase);
-
     /*
      * On ARM64, we don't have a DMA controller to arbitrate, so we can
      * immediately call the execution routine.
@@ -5680,12 +5564,10 @@ HalAllocateAdapterChannel(
     if (OldIrql < DISPATCH_LEVEL)
         KeRaiseIrql(DISPATCH_LEVEL, &OldIrql);
 
-    DPRINT1("[arm64][DMA] HalAllocateAdapterChannel: calling ExecutionRoutine %p\n", ExecutionRoutine);
     Action = ExecutionRoutine(Wcb->DeviceObject,
                               Wcb->CurrentIrp,
                               MapRegisterBase,
                               Wcb->DeviceContext);
-    DPRINT1("[arm64][DMA] HalAllocateAdapterChannel: ExecutionRoutine returned %d\n", Action);
 
     if (OldIrql < DISPATCH_LEVEL)
         KeLowerIrql(OldIrql);
@@ -5782,11 +5664,6 @@ HalAllocateCommonBuffer(
                 MmCached :
                 MmNonCached;
 
-    DPRINT1("[arm64][DMA] AllocCommonBuffer: len=%lu high=0x%I64x 64bit=%d cache=%d\n",
-            Length, HighAddress.QuadPart,
-            AdapterObject ? AdapterObject->Dma64BitAddresses : -1,
-            (int)CacheType);
-
     /* Allocate physically contiguous memory */
     VirtualAddress = MmAllocateContiguousMemorySpecifyCache(Length,
                                                              LowAddress,
@@ -5833,9 +5710,6 @@ HalAllocateCommonBuffer(
         InsertTailList(&HalpArm64CommonBufferList, &BufferEntry->ListEntry);
         KeReleaseSpinLock(&HalpArm64CommonBufferLock, OldIrql);
     }
-
-    DPRINT("[arm64][DMA] HalAllocateCommonBuffer: VA=%p PA=0x%llx Len=%lu\n",
-           VirtualAddress, LogicalAddress->QuadPart, Length);
 
     return VirtualAddress;
 }
@@ -6533,10 +6407,6 @@ HalFreeCommonBuffer(
         /* Use the tracked length and cache type */
         CacheType = BufferEntry->CacheEnabled ? MmCached : MmNonCached;
 
-        DPRINT("[arm64][DMA] HalFreeCommonBuffer: VA=%p Len=%lu Cache=%s\n",
-               VirtualAddress, BufferEntry->Length,
-               CacheType == MmCached ? "Yes" : "No");
-
         /* Free the contiguous memory */
         MmFreeContiguousMemorySpecifyCache(BufferEntry->RawAllocation,
                                            BufferEntry->Length,
@@ -6551,7 +6421,6 @@ HalFreeCommonBuffer(
          * Buffer not found in tracking list - try to free anyway
          * using provided parameters (legacy fallback)
          */
-        DPRINT("[arm64][DMA] HalFreeCommonBuffer: Buffer not in tracking list, using provided params\n");
         CacheType = CacheEnabled ? MmCached : MmNonCached;
         MmFreeContiguousMemorySpecifyCache(VirtualAddress, Length, CacheType);
     }
@@ -7054,15 +6923,6 @@ HalGetAdapter(
         return NULL;
     }
 
-    DPRINT1("[arm64][HAL] HalGetAdapter: InterfaceType=%d Master=%d ScatterGather=%d "
-            "Dma32BitAddresses=%d Dma64BitAddresses=%d MaxLength=%lu\n",
-            DeviceDescription->InterfaceType,
-            DeviceDescription->Master,
-            DeviceDescription->ScatterGather,
-            DeviceDescription->Dma32BitAddresses,
-            DeviceDescription->Dma64BitAddresses,
-            DeviceDescription->MaximumLength);
-
     /*
      * ARM64 doesn't have ISA/EISA DMA controllers, so we only support
      * bus-master devices.
@@ -7141,8 +7001,6 @@ HalGetAdapter(
         HalpArm64DmaAdapter.ChannelNumber = 0xFF; /* Mark as system adapter */
 
         HalpArm64DmaAdapterInitialized = TRUE;
-
-        DPRINT1("[arm64][HAL] HalGetAdapter: initialized ARM64 DMA adapter\n");
     }
 
     /* Update the map registers count */
@@ -7155,9 +7013,6 @@ HalGetAdapter(
     {
         *NumberOfMapRegisters = MapRegisters;
     }
-
-    DPRINT1("[arm64][HAL] HalGetAdapter: returning adapter with %lu map registers\n",
-            MapRegisters);
 
     return &HalpArm64DmaAdapter;
 }
@@ -8433,7 +8288,6 @@ IoFreeAdapterChannel(
     AdapterObject->MapRegisterBase = NULL;
     AdapterObject->NumberOfMapRegisters = 0;
 
-    DPRINT("[arm64][DMA] IoFreeAdapterChannel: Adapter %p released\n", AdapterObject);
 }
 
 /*
@@ -8496,8 +8350,6 @@ IoFreeMapRegisters(
     Base->Signature = 0;
     ExFreePoolWithTag(Base, TAG_DMA_MAP);
 
-    DPRINT("[arm64][DMA] IoFreeMapRegisters: Freed %lu map registers at %p\n",
-           NumberOfMapRegisters, MapRegisterBase);
 }
 
 /*
@@ -8729,15 +8581,6 @@ IoMapTransfer(
 
     /* Return the actual transfer length */
     *Length = TransferLength;
-
-    /* Trace large transfers for DMA debugging */
-    if (TransferLength >= 4096 || TransferLength == 0)
-    {
-        DPRINT1("[arm64][HAL] IoMapTransfer: VA=%p PA=%I64x Len=%lu MapIdx=%lu W2D=%u\n",
-                CurrentVa, ReturnAddress.QuadPart, TransferLength,
-                MapRegisterBase ? ((PHAL_ARM64_MAP_REGISTER_BASE)MapRegisterBase)->CurrentIndex : 0,
-                WriteToDevice);
-    }
 
     return ReturnAddress;
 }
