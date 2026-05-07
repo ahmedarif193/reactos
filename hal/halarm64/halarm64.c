@@ -408,6 +408,7 @@ static ULONG HalpArm64PciRootBridgeCount = 0;
 #define TAG_DMA_MAP  'PMAD'
 #define TAG_DMA_BUF  'BMAD'
 #define TAG_DMA_CMN  'CMAD'
+#define TAG_DMA_SGL  'GSAD'
 
 /* Maximum map registers per adapter */
 #define HAL_ARM64_MAX_MAP_REGISTERS 256
@@ -5770,10 +5771,16 @@ HalAllocateCommonBuffer(
      * cache and never reach DRAM — the xHCI reads stale zeros and never
      * processes commands (seen as NOOP/Enable Slot timeout on RPi5 RP1).
      *
+     * Cache-coherent platforms can honor a cached common-buffer request: the
+     * interconnect keeps CPU caches and DMA masters coherent, and the cached
+     * allocation path avoids remapping every small buffer as noncached.
+     *
      * MmNonCached maps as Normal Non-Cacheable (not Device memory), which
-     * allows the contiguous allocator to work from nonpaged pool.
+     * remains required for non-coherent systems.
      */
-    CacheType = MmNonCached;
+    CacheType = (CacheEnabled && HalpArm64DmaCoherency.SystemCoherent) ?
+                MmCached :
+                MmNonCached;
 
     DPRINT1("[arm64][DMA] AllocCommonBuffer: len=%lu high=0x%I64x 64bit=%d cache=%d\n",
             Length, HighAddress.QuadPart,
@@ -6564,12 +6571,35 @@ static DMA_OPERATIONS HalpArm64DmaOperations;
 static ADAPTER_OBJECT HalpArm64DmaAdapter;
 static BOOLEAN HalpArm64DmaAdapterInitialized = FALSE;
 
+typedef struct _HAL_ARM64_SCATTER_GATHER_CONTEXT
+{
+    BOOLEAN UsingUserBuffer;
+    NTSTATUS Status;
+    PADAPTER_OBJECT AdapterObject;
+    PMDL Mdl;
+    PVOID CurrentVa;
+    ULONG Length;
+    ULONG MapRegisterCount;
+    PDRIVER_LIST_CONTROL AdapterListControlRoutine;
+    PVOID AdapterListControlContext;
+    BOOLEAN WriteToDevice;
+    PVOID MapRegisterBase;
+    WAIT_CONTEXT_BLOCK Wcb;
+} HAL_ARM64_SCATTER_GATHER_CONTEXT, *PHAL_ARM64_SCATTER_GATHER_CONTEXT;
+
 /*
  * DMA operation wrapper functions.
  * These adapt between PDMA_ADAPTER (used by DMA_OPERATIONS) and
  * PADAPTER_OBJECT (used by the HAL's Io* functions).
  * Since ADAPTER_OBJECT starts with DMA_ADAPTER, we can safely cast.
  */
+static VOID NTAPI
+HalpArm64PutDmaAdapter(
+    _In_ PDMA_ADAPTER DmaAdapter)
+{
+    UNREFERENCED_PARAMETER(DmaAdapter);
+}
+
 static NTSTATUS NTAPI
 HalpArm64AllocateAdapterChannel(
     _In_ PDMA_ADAPTER DmaAdapter,
@@ -6683,6 +6713,303 @@ HalpArm64GetDmaAlignment(
     return HalpArm64GetCacheLineSize();
 }
 
+static ULONG NTAPI
+HalpArm64ReadDmaCounter(
+    _In_ PDMA_ADAPTER DmaAdapter)
+{
+    UNREFERENCED_PARAMETER(DmaAdapter);
+    return 0;
+}
+
+static NTSTATUS NTAPI
+HalpArm64CalculateScatterGatherListSize(
+    _In_ PDMA_ADAPTER DmaAdapter,
+    _In_opt_ PMDL Mdl,
+    _In_ PVOID CurrentVa,
+    _In_ ULONG Length,
+    _Out_ PULONG ScatterGatherListSize,
+    _Out_opt_ PULONG NumberOfMapRegisters)
+{
+    ULONG_PTR Offset;
+    ULONG MapRegisters;
+
+    UNREFERENCED_PARAMETER(DmaAdapter);
+
+    if (!ScatterGatherListSize || Length == 0)
+    {
+        if (NumberOfMapRegisters) *NumberOfMapRegisters = 0;
+        return STATUS_INVALID_PARAMETER;
+    }
+
+    if (CurrentVa)
+        Offset = (ULONG_PTR)CurrentVa & (PAGE_SIZE - 1);
+    else if (Mdl)
+        Offset = Mdl->ByteOffset;
+    else
+        Offset = 0;
+
+    MapRegisters = (ULONG)((Offset + Length + PAGE_SIZE - 1) >> PAGE_SHIFT);
+    if (MapRegisters == 0)
+        MapRegisters = 1;
+
+    if (MapRegisters > HAL_ARM64_MAX_MAP_REGISTERS)
+        return STATUS_INSUFFICIENT_RESOURCES;
+
+    /*
+     * This buffer is used for our private context. The public S/G list is
+     * allocated when map registers are granted, matching the existing x86 HAL
+     * contract used by ReactOS NDIS.
+     */
+    *ScatterGatherListSize = sizeof(HAL_ARM64_SCATTER_GATHER_CONTEXT);
+    if (NumberOfMapRegisters) *NumberOfMapRegisters = MapRegisters;
+
+    return STATUS_SUCCESS;
+}
+
+static IO_ALLOCATION_ACTION NTAPI
+HalpArm64ScatterGatherAdapterControl(
+    _In_ PDEVICE_OBJECT DeviceObject,
+    _In_opt_ PIRP Irp,
+    _In_ PVOID MapRegisterBase,
+    _In_ PVOID Context)
+{
+    PHAL_ARM64_SCATTER_GATHER_CONTEXT SgContext = Context;
+    PSCATTER_GATHER_LIST ScatterGatherList;
+    ULONG ScatterGatherListSize;
+    ULONG ElementCount = 0;
+    ULONG RemainingLength;
+    PUCHAR CurrentVa;
+
+    if (!SgContext)
+        return DeallocateObject;
+
+    SgContext->MapRegisterBase = MapRegisterBase;
+    SgContext->Status = STATUS_SUCCESS;
+
+    ScatterGatherListSize = FIELD_OFFSET(SCATTER_GATHER_LIST, Elements) +
+                            SgContext->MapRegisterCount * sizeof(SCATTER_GATHER_ELEMENT);
+
+    ScatterGatherList = ExAllocatePoolWithTag(NonPagedPool,
+                                              ScatterGatherListSize,
+                                              TAG_DMA_SGL);
+    if (!ScatterGatherList)
+    {
+        SgContext->Status = STATUS_INSUFFICIENT_RESOURCES;
+        return DeallocateObject;
+    }
+
+    RtlZeroMemory(ScatterGatherList, ScatterGatherListSize);
+
+    RemainingLength = SgContext->Length;
+    CurrentVa = SgContext->CurrentVa;
+
+    while (RemainingLength != 0 && ElementCount < SgContext->MapRegisterCount)
+    {
+        PHYSICAL_ADDRESS Address;
+        ULONG MappedLength = RemainingLength;
+
+        Address = IoMapTransfer(SgContext->AdapterObject,
+                                SgContext->Mdl,
+                                MapRegisterBase,
+                                CurrentVa,
+                                &MappedLength,
+                                SgContext->WriteToDevice);
+        if (MappedLength == 0 || Address.QuadPart == 0)
+        {
+            SgContext->Status = STATUS_INSUFFICIENT_RESOURCES;
+            ExFreePoolWithTag(ScatterGatherList, TAG_DMA_SGL);
+            return DeallocateObject;
+        }
+
+        ScatterGatherList->Elements[ElementCount].Address = Address;
+        ScatterGatherList->Elements[ElementCount].Length = MappedLength;
+        ScatterGatherList->Elements[ElementCount].Reserved = 0;
+
+        RemainingLength -= MappedLength;
+        CurrentVa += MappedLength;
+        ElementCount++;
+    }
+
+    if (RemainingLength != 0)
+    {
+        SgContext->Status = STATUS_INSUFFICIENT_RESOURCES;
+        ExFreePoolWithTag(ScatterGatherList, TAG_DMA_SGL);
+        return DeallocateObject;
+    }
+
+    ScatterGatherList->NumberOfElements = ElementCount;
+    ScatterGatherList->Reserved = (ULONG_PTR)SgContext;
+
+    SgContext->AdapterListControlRoutine(DeviceObject,
+                                         Irp,
+                                         ScatterGatherList,
+                                         SgContext->AdapterListControlContext);
+
+    return DeallocateObjectKeepRegisters;
+}
+
+static NTSTATUS NTAPI
+HalpArm64BuildScatterGatherList(
+    _In_ PDMA_ADAPTER DmaAdapter,
+    _In_ PDEVICE_OBJECT DeviceObject,
+    _In_ PMDL Mdl,
+    _In_ PVOID CurrentVa,
+    _In_ ULONG Length,
+    _In_ PDRIVER_LIST_CONTROL ExecutionRoutine,
+    _In_ PVOID Context,
+    _In_ BOOLEAN WriteToDevice,
+    _In_opt_ PVOID ScatterGatherBuffer,
+    _In_ ULONG ScatterGatherLength)
+{
+    NTSTATUS Status;
+    ULONG ContextSize;
+    ULONG NumberOfMapRegisters;
+    PHAL_ARM64_SCATTER_GATHER_CONTEXT SgContext;
+    BOOLEAN UsingUserBuffer;
+
+    if (!DmaAdapter || !DeviceObject || !Mdl || !ExecutionRoutine || Length == 0)
+        return STATUS_INVALID_PARAMETER;
+
+    Status = HalpArm64CalculateScatterGatherListSize(DmaAdapter,
+                                                     Mdl,
+                                                     CurrentVa,
+                                                     Length,
+                                                     &ContextSize,
+                                                     &NumberOfMapRegisters);
+    if (!NT_SUCCESS(Status))
+        return Status;
+
+    if (ScatterGatherBuffer)
+    {
+        if (ScatterGatherLength < ContextSize)
+            return STATUS_BUFFER_TOO_SMALL;
+
+        SgContext = ScatterGatherBuffer;
+        UsingUserBuffer = TRUE;
+    }
+    else
+    {
+        SgContext = ExAllocatePoolWithTag(NonPagedPool, ContextSize, TAG_DMA_SGL);
+        if (!SgContext)
+            return STATUS_INSUFFICIENT_RESOURCES;
+
+        UsingUserBuffer = FALSE;
+    }
+
+    RtlZeroMemory(SgContext, ContextSize);
+    SgContext->UsingUserBuffer = UsingUserBuffer;
+    SgContext->Status = STATUS_SUCCESS;
+    SgContext->AdapterObject = (PADAPTER_OBJECT)DmaAdapter;
+    SgContext->Mdl = Mdl;
+    SgContext->CurrentVa = CurrentVa;
+    SgContext->Length = Length;
+    SgContext->MapRegisterCount = NumberOfMapRegisters;
+    SgContext->AdapterListControlRoutine = ExecutionRoutine;
+    SgContext->AdapterListControlContext = Context;
+    SgContext->WriteToDevice = WriteToDevice;
+    SgContext->Wcb.DeviceObject = DeviceObject;
+    SgContext->Wcb.DeviceContext = SgContext;
+    SgContext->Wcb.CurrentIrp = DeviceObject->CurrentIrp;
+
+    Status = HalAllocateAdapterChannel((PADAPTER_OBJECT)DmaAdapter,
+                                       &SgContext->Wcb,
+                                       NumberOfMapRegisters,
+                                       HalpArm64ScatterGatherAdapterControl);
+    if (!NT_SUCCESS(Status))
+    {
+        if (!UsingUserBuffer)
+            ExFreePoolWithTag(SgContext, TAG_DMA_SGL);
+        return Status;
+    }
+
+    Status = SgContext->Status;
+    if (!NT_SUCCESS(Status) && !UsingUserBuffer)
+        ExFreePoolWithTag(SgContext, TAG_DMA_SGL);
+
+    return Status;
+}
+
+static NTSTATUS NTAPI
+HalpArm64GetScatterGatherList(
+    _In_ PDMA_ADAPTER DmaAdapter,
+    _In_ PDEVICE_OBJECT DeviceObject,
+    _In_ PMDL Mdl,
+    _In_ PVOID CurrentVa,
+    _In_ ULONG Length,
+    _In_ PDRIVER_LIST_CONTROL ExecutionRoutine,
+    _In_ PVOID Context,
+    _In_ BOOLEAN WriteToDevice)
+{
+    return HalpArm64BuildScatterGatherList(DmaAdapter,
+                                           DeviceObject,
+                                           Mdl,
+                                           CurrentVa,
+                                           Length,
+                                           ExecutionRoutine,
+                                           Context,
+                                           WriteToDevice,
+                                           NULL,
+                                           0);
+}
+
+static VOID NTAPI
+HalpArm64PutScatterGatherList(
+    _In_ PDMA_ADAPTER DmaAdapter,
+    _In_ PSCATTER_GATHER_LIST ScatterGather,
+    _In_ BOOLEAN WriteToDevice)
+{
+    PHAL_ARM64_SCATTER_GATHER_CONTEXT SgContext;
+    ULONG i;
+
+    UNREFERENCED_PARAMETER(WriteToDevice);
+
+    if (!DmaAdapter || !ScatterGather)
+        return;
+
+    SgContext = (PHAL_ARM64_SCATTER_GATHER_CONTEXT)ScatterGather->Reserved;
+    if (SgContext)
+    {
+        PUCHAR CurrentVa = SgContext->CurrentVa;
+
+        for (i = 0; i < ScatterGather->NumberOfElements; i++)
+        {
+            IoFlushAdapterBuffers((PADAPTER_OBJECT)DmaAdapter,
+                                  SgContext->Mdl,
+                                  SgContext->MapRegisterBase,
+                                  CurrentVa,
+                                  ScatterGather->Elements[i].Length,
+                                  SgContext->WriteToDevice);
+            CurrentVa += ScatterGather->Elements[i].Length;
+        }
+
+        IoFreeMapRegisters((PADAPTER_OBJECT)DmaAdapter,
+                           SgContext->MapRegisterBase,
+                           SgContext->MapRegisterCount);
+    }
+
+    ExFreePoolWithTag(ScatterGather, TAG_DMA_SGL);
+
+    if (SgContext && !SgContext->UsingUserBuffer)
+        ExFreePoolWithTag(SgContext, TAG_DMA_SGL);
+}
+
+static NTSTATUS NTAPI
+HalpArm64BuildMdlFromScatterGatherList(
+    _In_ PDMA_ADAPTER DmaAdapter,
+    _In_ PSCATTER_GATHER_LIST ScatterGather,
+    _In_ PMDL OriginalMdl,
+    _Out_ PMDL *TargetMdl)
+{
+    UNREFERENCED_PARAMETER(DmaAdapter);
+    UNREFERENCED_PARAMETER(ScatterGather);
+    UNREFERENCED_PARAMETER(OriginalMdl);
+
+    if (TargetMdl)
+        *TargetMdl = NULL;
+
+    return STATUS_NOT_IMPLEMENTED;
+}
+
 PADAPTER_OBJECT
 NTAPI
 HalGetAdapter(
@@ -6780,7 +7107,7 @@ HalGetAdapter(
 
         /* Set up the DMA operations structure */
         HalpArm64DmaOperations.Size = sizeof(DMA_OPERATIONS);
-        HalpArm64DmaOperations.PutDmaAdapter = NULL; /* TODO */
+        HalpArm64DmaOperations.PutDmaAdapter = HalpArm64PutDmaAdapter;
         HalpArm64DmaOperations.AllocateCommonBuffer = HalpArm64AllocateCommonBuffer;
         HalpArm64DmaOperations.FreeCommonBuffer = HalpArm64FreeCommonBuffer;
         HalpArm64DmaOperations.AllocateAdapterChannel = HalpArm64AllocateAdapterChannel;
@@ -6789,7 +7116,12 @@ HalGetAdapter(
         HalpArm64DmaOperations.FreeMapRegisters = HalpArm64FreeMapRegisters;
         HalpArm64DmaOperations.MapTransfer = HalpArm64MapTransfer;
         HalpArm64DmaOperations.GetDmaAlignment = HalpArm64GetDmaAlignment;
-        HalpArm64DmaOperations.ReadDmaCounter = NULL; /* TODO */
+        HalpArm64DmaOperations.ReadDmaCounter = HalpArm64ReadDmaCounter;
+        HalpArm64DmaOperations.GetScatterGatherList = HalpArm64GetScatterGatherList;
+        HalpArm64DmaOperations.PutScatterGatherList = HalpArm64PutScatterGatherList;
+        HalpArm64DmaOperations.CalculateScatterGatherList = HalpArm64CalculateScatterGatherListSize;
+        HalpArm64DmaOperations.BuildScatterGatherList = HalpArm64BuildScatterGatherList;
+        HalpArm64DmaOperations.BuildMdlFromScatterGatherList = HalpArm64BuildMdlFromScatterGatherList;
 
         /* Set up the adapter object */
         HalpArm64DmaAdapter.DmaHeader.Size = sizeof(ADAPTER_OBJECT);
@@ -7129,6 +7461,24 @@ HalGetInterruptVector(
                 IntTrigger = Override->TriggerMode;
             }
         }
+    }
+
+    /*
+     * Legacy bus line interrupts are distributor interrupts on ARM64. ACPI/QEMU
+     * may describe PCI INTA as GSI 0, and storage drivers can still ask for ISA
+     * IRQ 14/15. Translating those values as CPU-local INTIDs returns SGI/PPI
+     * vectors, so the resource connect path appears to succeed while no device
+     * interrupt can be delivered. Move legacy bus IRQs into the SPI range before
+     * the common GSI helper; keep Internal interrupts on the CPU-local path.
+     */
+    if (((InterfaceType == PCIBus) ||
+         (InterfaceType == Isa) ||
+         (InterfaceType == PNPISABus)) &&
+        (Gsi < HAL_ARM64_SPI_BASE))
+    {
+        DPRINT("[arm64] HalGetInterruptVector: legacy GSI %lu -> SPI INTID %lu\n",
+               Gsi, Gsi + HAL_ARM64_SPI_BASE);
+        Gsi += HAL_ARM64_SPI_BASE;
     }
 
     /* Translate GSI to GIC INTID, applying SystemVectorBase */

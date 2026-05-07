@@ -1119,6 +1119,20 @@ UserServerHardError(
         // (Message->UnicodeStringParameterMask & 0x3)
     }
 
+#ifdef _M_ARM64
+    DPRINT1("[arm64][harderr] usersrv clientPid=%p clientTid=%p status=0x%08lx params=%lu mask=0x%lx opts=%lu p0=%p p1=%p p2=%p activeThread=%p\n",
+            ThreadData ? ThreadData->ClientId.UniqueProcess : NULL,
+            ThreadData ? ThreadData->ClientId.UniqueThread : NULL,
+            Message->Status,
+            Message->NumberOfParameters,
+            Message->UnicodeStringParameterMask,
+            Message->ValidResponseOptions,
+            (Message->NumberOfParameters > 0) ? (PVOID)Message->Parameters[0] : NULL,
+            (Message->NumberOfParameters > 1) ? (PVOID)Message->Parameters[1] : NULL,
+            (Message->NumberOfParameters > 2) ? (PVOID)Message->Parameters[2] : NULL,
+            NtCurrentThread());
+#endif
+
     Status = NtUserSetInformationThread(NtCurrentThread(),
                                         UserThreadUseActiveDesktop,
                                         NULL,
