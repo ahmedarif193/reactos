@@ -1431,8 +1431,24 @@ MiInitMachineDependent(_Inout_ PLOADER_PARAMETER_BLOCK LoaderBlock)
     MiArm64SelfMapCacheInitialized = TRUE;
 
     extern MMPTE ValidKernelPte;
-    ValidKernelPte.u.Long &= ~((ULONGLONG)ARM64_PTE_CACHE_MASK);
-    ValidKernelPte.u.Long |= ((ULONGLONG)MI_ARM64_MAIR_NORMAL_WB_IDX << ARM64_PTE_CACHE_SHIFT);
+    extern MMPTE ValidKernelPteLocal;
+    extern MMPDE ValidKernelPde;
+    extern MMPDE ValidKernelPdeLocal;
+
+#define MI_ARM64_SET_TEMPLATE_NORMAL_WB(Template)                                      \
+    do                                                                                 \
+    {                                                                                  \
+        (Template).u.Long &= ~((ULONGLONG)ARM64_PTE_CACHE_MASK);                       \
+        (Template).u.Long |= ((ULONGLONG)MI_ARM64_MAIR_NORMAL_WB_IDX << ARM64_PTE_CACHE_SHIFT); \
+        (Template).u.Long &= ~(3ULL << 8);                                             \
+        (Template).u.Long |= (3ULL << 8);                                              \
+    } while (0)
+
+    MI_ARM64_SET_TEMPLATE_NORMAL_WB(ValidKernelPte);
+    MI_ARM64_SET_TEMPLATE_NORMAL_WB(ValidKernelPteLocal);
+    MI_ARM64_SET_TEMPLATE_NORMAL_WB(ValidKernelPde);
+    MI_ARM64_SET_TEMPLATE_NORMAL_WB(ValidKernelPdeLocal);
+#undef MI_ARM64_SET_TEMPLATE_NORMAL_WB
 
     {
         UINT64 MairVal;
