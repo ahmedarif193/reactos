@@ -227,6 +227,12 @@ ClientThreadSetupHelper(BOOL IsCallback)
     PCLIENTINFO ClientInfo = GetWin32ClientInfo();
     BOOLEAN IsFirstThread = _InterlockedExchange8((PCHAR)&gfFirstThread, FALSE);
 
+#ifdef _M_ARM64
+    ERR("[arm64][user32] ClientThreadSetupHelper cb=%u server=%u first=%u ci=%p flags=0x%lx gpsi=%p ght=%p\n",
+            IsCallback, gfServerProcess, IsFirstThread, ClientInfo,
+            ClientInfo ? ClientInfo->CI_flags : 0, gpsi, gHandleTable);
+#endif
+
     TRACE("In ClientThreadSetup(IsCallback == %s, gfServerProcess = %s, IsFirstThread = %s)\n",
           IsCallback ? "TRUE" : "FALSE", gfServerProcess ? "TRUE" : "FALSE", IsFirstThread ? "TRUE" : "FALSE");
 
@@ -237,6 +243,10 @@ ClientThreadSetupHelper(BOOL IsCallback)
     if (ClientInfo->CI_flags & CI_INITTHREAD)
     {
         ERR("ClientThreadSetup: Thread already initialized.\n");
+#ifdef _M_ARM64
+        ERR("[arm64][user32] ClientThreadSetupHelper failed: already initialized flags=0x%lx\n",
+                ClientInfo->CI_flags);
+#endif
         return FALSE;
     }
 
@@ -261,7 +271,14 @@ ClientThreadSetupHelper(BOOL IsCallback)
         Status = NtUserProcessConnect(NtCurrentProcess(),
                                       &UserCon,
                                       sizeof(UserCon));
-        if (!NT_SUCCESS(Status)) return FALSE;
+        if (!NT_SUCCESS(Status))
+        {
+#ifdef _M_ARM64
+            ERR("[arm64][user32] ClientThreadSetupHelper NtUserProcessConnect failed 0x%08lx\n",
+                    Status);
+#endif
+            return FALSE;
+        }
 
         /* Retrieve data */
         g_ppi = ClientInfo->ppi; // Snapshot PI, used as pointer only!
@@ -278,6 +295,9 @@ ClientThreadSetupHelper(BOOL IsCallback)
     if (!RegisterClientPFN())
     {
         ERR("RegisterClientPFN failed\n");
+#ifdef _M_ARM64
+        ERR("[arm64][user32] ClientThreadSetupHelper failed: RegisterClientPFN\n");
+#endif
         return FALSE;
     }
 
@@ -292,7 +312,12 @@ ClientThreadSetupHelper(BOOL IsCallback)
         /* Allocate an index for user32 thread local data */
         User32TlsIndex = TlsAlloc();
         if (User32TlsIndex == TLS_OUT_OF_INDEXES)
+        {
+#ifdef _M_ARM64
+            ERR("[arm64][user32] ClientThreadSetupHelper failed: TlsAlloc\n");
+#endif
             return FALSE;
+        }
 
         // HAAAAAAAAAACK!!!!!!
         // ASSERT(gpsi);
@@ -311,12 +336,24 @@ ClientThreadSetupHelper(BOOL IsCallback)
                 LoadAppInitDlls();
                 return TRUE;
             }
+#ifdef _M_ARM64
+            ERR("[arm64][user32] ClientThreadSetupHelper failed: MenuInit\n");
+#endif
             MessageCleanup();
         }
+#ifdef _M_ARM64
+        else
+        {
+            ERR("[arm64][user32] ClientThreadSetupHelper failed: MessageInit\n");
+        }
+#endif
 
         TlsFree(User32TlsIndex);
         return FALSE;
         }
+#ifdef _M_ARM64
+        ERR("[arm64][user32] ClientThreadSetupHelper failed: gpsi is NULL\n");
+#endif
     }
 
     return TRUE;
@@ -410,7 +447,14 @@ Init(PUSERCONNECT UserCon /*PUSERSRV_API_CONNECTINFO*/)
             Status = NtUserProcessConnect(NtCurrentProcess(),
                                           UserCon,
                                           sizeof(*UserCon));
-            if (!NT_SUCCESS(Status)) return FALSE;
+            if (!NT_SUCCESS(Status))
+            {
+#ifdef _M_ARM64
+                ERR("[arm64][user32] Init NtUserProcessConnect failed 0x%08lx\n",
+                        Status);
+#endif
+                return FALSE;
+            }
         }
 
         //
@@ -423,6 +467,11 @@ Init(PUSERCONNECT UserCon /*PUSERSRV_API_CONNECTINFO*/)
         gpsi = gSharedInfo.psi;
         gHandleTable = gSharedInfo.aheList;
         /* ReactOS-Specific! */ gHandleEntries = SharedPtrToUser(gHandleTable->handles);
+#ifdef _M_ARM64
+        ERR("[arm64][user32] Init connected ppi=%p psi=%p ght=%p entries=%p sharedDelta=%p\n",
+                g_ppi, gpsi, gHandleTable, gHandleEntries,
+                (PVOID)gSharedInfo.ulSharedDelta);
+#endif
     }
 
     // FIXME: Yet another hack... This call should normally not be done here, but
@@ -431,6 +480,9 @@ Init(PUSERCONNECT UserCon /*PUSERSRV_API_CONNECTINFO*/)
     if (!ClientThreadSetupHelper(FALSE))
     {
         TRACE("Init-ClientThreadSetupHelper hack failed!\n");
+#ifdef _M_ARM64
+        ERR("[arm64][user32] Init failed: ClientThreadSetupHelper\n");
+#endif
         return FALSE;
     }
 
@@ -527,7 +579,12 @@ DllMain(
             /* Finish initialization */
             TRACE("Checkpoint (call Init)\n");
             if (!Init(&ConnectInfo))
+            {
+#ifdef _M_ARM64
+                ERR("[arm64][user32] DllMain failed: Init\n");
+#endif
                 return FALSE;
+            }
 
             if (!gfServerProcess)
             {
@@ -542,7 +599,13 @@ DllMain(
                 }
 
                 if (!IMM_FN(ImmRegisterClient)(&gSharedInfo, hImm32))
+                {
+#ifdef _M_ARM64
+                    ERR("[arm64][user32] DllMain failed: ImmRegisterClient psi=%p ght=%p hImm32=%p flags=0x%lx\n",
+                            gpsi, gHandleTable, hImm32, gpsi ? gpsi->dwSRVIFlags : 0);
+#endif
                     return FALSE;
+                }
             }
             break;
         }
@@ -558,7 +621,16 @@ DllMain(
     }
 
     /* Finally, initialize GDI */
-    return GdiDllInitialize(hDll, dwReason, pReserved);
+    if (!GdiDllInitialize(hDll, dwReason, pReserved))
+    {
+#ifdef _M_ARM64
+        ERR("[arm64][user32] DllMain failed: GdiDllInitialize reason=%lu\n",
+                dwReason);
+#endif
+        return FALSE;
+    }
+
+    return TRUE;
 }
 
 NTSTATUS

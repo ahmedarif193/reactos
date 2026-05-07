@@ -37,6 +37,7 @@ typedef struct _NO_DRIVER_ID_ENTRY
 static PNO_DRIVER_ID_ENTRY NoDriverIdCache;
 static CRITICAL_SECTION NoDriverIdCacheLock;
 static BOOL NoDriverIdCacheReady;
+static LONG NoDriverIdCacheBatchDepth;
 
 static BOOL
 SearchDriver(
@@ -110,6 +111,9 @@ NoDriverCacheRemember(
     IN LPCWSTR HardwareIds OPTIONAL,
     IN LPCWSTR CompatibleIds OPTIONAL)
 {
+    if (NoDriverIdCacheBatchDepth == 0)
+        return;
+
     NoDriverCacheAddList(HardwareIds);
     NoDriverCacheAddList(CompatibleIds);
 }
@@ -141,7 +145,7 @@ NoDriverCacheAllIdsKnown(
     BOOL SawId = FALSE;
     BOOL AllKnown = TRUE;
 
-    if (!NoDriverIdCacheReady)
+    if (!NoDriverIdCacheReady || NoDriverIdCacheBatchDepth == 0)
         return FALSE;
 
     EnterCriticalSection(&NoDriverIdCacheLock);
@@ -199,7 +203,7 @@ GetDeviceMultiSzProperty(
 }
 
 static VOID
-FreeNoDriverCache(VOID)
+NoDriverCacheClear(VOID)
 {
     PNO_DRIVER_ID_ENTRY Entry, Next;
 
@@ -217,6 +221,32 @@ FreeNoDriverCache(VOID)
         HeapFree(GetProcessHeap(), 0, Entry);
         Entry = Next;
     }
+}
+
+static VOID
+NoDriverCacheBeginBatch(VOID)
+{
+    if (NoDriverIdCacheReady)
+        InterlockedIncrement(&NoDriverIdCacheBatchDepth);
+}
+
+static VOID
+NoDriverCacheEndBatch(VOID)
+{
+    if (!NoDriverIdCacheReady)
+        return;
+
+    if (InterlockedDecrement(&NoDriverIdCacheBatchDepth) == 0)
+        NoDriverCacheClear();
+}
+
+static VOID
+FreeNoDriverCache(VOID)
+{
+    if (!NoDriverIdCacheReady)
+        return;
+
+    NoDriverCacheClear();
 
     DeleteCriticalSection(&NoDriverIdCacheLock);
     NoDriverIdCacheReady = FALSE;
@@ -1296,6 +1326,7 @@ ClientSideInstallBatchW(
     PWSTR DeviceInstance = NULL;
     PWSTR InstallEventName = NULL;
     HANDLE hInstallEvent;
+    BOOL CacheBatchActive = FALSE;
 
     /* Open the pipe */
     hPipe = CreateFileW(lpNamedPipeName, GENERIC_READ, 0, NULL, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
@@ -1341,6 +1372,9 @@ ClientSideInstallBatchW(
     }
 
     TRACE("ClientSideInstallBatchW: processing %lu device(s)\n", DeviceCount);
+
+    NoDriverCacheBeginBatch();
+    CacheBatchActive = TRUE;
 
     for (i = 0; i < DeviceCount; i++)
     {
@@ -1402,6 +1436,9 @@ cleanup:
 
     if (DeviceInstance)
         HeapFree(GetProcessHeap(), 0, DeviceInstance);
+
+    if (CacheBatchActive)
+        NoDriverCacheEndBatch();
 
     return ReturnValue;
 }
