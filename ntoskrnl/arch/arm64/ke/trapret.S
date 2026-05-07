@@ -148,13 +148,19 @@ KiTrapReturn:
     isb
 
     /*
-     * ERET restores PC/PSTATE, but it does not restore the stack pointer.
-     * For EL0 returns SP_EL0 was programmed on the user path above. For
-     * same-EL returns we must install the saved stack pointer ourselves
-     * after popping KiTrapReturn's temporary stack slot and before x26 is
-     * restored from the exception frame.
+     * ERET restores PC/PSTATE, but it does not restore stack pointers.
+     *
+     * For EL0 returns, SP_EL0 was programmed on the user path above and the
+     * current EL1 SP becomes the hardware entry stack for the next exception
+     * from user mode. This is ARM64's equivalent of amd64's TSS.Rsp0. Use the
+     * thread's InitialStack here; user callbacks temporarily set InitialStack
+     * to the callback entry stack and restore it in NtCallbackReturn.
+     *
+     * For same-EL returns we must reinstall the interrupted EL1 SP from the
+     * trap frame.
      */
     and     w27, w27, #0xF
+    cbz     w27, .Lrestore_el0_kernel_sp
     cmp     w27, #0x4            /* EL1t */
     b.ne    .Lrestore_el1h_sp
     msr     sp_el0, x26
@@ -163,6 +169,15 @@ KiTrapReturn:
     cmp     w27, #0x5            /* EL1h */
     b.ne    .Lrestore_exception_frame
     mov     sp, x26
+    b       .Lrestore_exception_frame
+.Lrestore_el0_kernel_sp:
+    mrs     x28, tpidr_el1
+    cbz     x28, .Lrestore_exception_frame
+    ldr     x28, [x28, #PcCurrentThread]
+    cbz     x28, .Lrestore_exception_frame
+    ldr     x28, [x28, #ThInitialStack]
+    cbz     x28, .Lrestore_exception_frame
+    mov     sp, x28
 .Lrestore_exception_frame:
 
     /* Restore non-volatiles from exception frame (if present).

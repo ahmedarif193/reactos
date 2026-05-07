@@ -20,23 +20,6 @@ unsigned __int64 __ll_rshift(unsigned __int64 value, int shift)
 unsigned __int64 __ll_lshift(unsigned __int64 value, int shift)
 { return value << shift; }
 
-EXCEPTION_DISPOSITION
-__cdecl
-__C_specific_handler(
-    struct _EXCEPTION_RECORD *ExceptionRecord,
-    void *EstablisherFrame,
-    struct _CONTEXT *ContextRecord,
-    struct _DISPATCHER_CONTEXT *DispatcherContext)
-{
-    (VOID)ExceptionRecord;
-    (VOID)EstablisherFrame;
-    (VOID)ContextRecord;
-    (VOID)DispatcherContext;
-    return ExceptionContinueSearch;
-}
-
-void _local_unwind(void) {}
-
 double cos(double x) { (VOID)x; return 1.0; }
 double fabs(double x) { return (x < 0) ? -x : x; }
 double sin(double x) { (VOID)x; return 0.0; }
