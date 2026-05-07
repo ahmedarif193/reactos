@@ -853,8 +853,9 @@ KiArm64PermVectorFiqSpx_Handler:
  * and eret back to EL0, the CPU would use the WRONG SP_EL0 — causing
  * the non-deterministic SP corruption observed in smss.exe.
  *
- * Fix: Expand frame from 0xD0 to 0xE0, save SP_EL0 at entry [sp+0xD0],
- * restore it before eret.
+ * Save the interrupted GPRs before reading SP_EL0 through a scratch GPR,
+ * otherwise the scratch register itself is corrupted on return to EL0.
+ * Restore SP_EL0 before restoring the saved GPRs.
  */
     .global KiArm64PermVectorIrqLowerA64_Handler
     .seh_proc KiArm64PermVectorIrqLowerA64_Handler
@@ -869,8 +870,6 @@ KiArm64PermVectorIrqLowerA64_Handler:
     mrs x20, elr_el1
     mrs x21, spsr_el1
     stp x20, x21, [sp, #0xC0]
-    mrs x9, sp_el0
-    str x9, [sp, #0xD0]           /* Save user SP_EL0 */
     stp x0,  x1,  [sp, #0x00]
     stp x2,  x3,  [sp, #0x10]
     stp x4,  x5,  [sp, #0x20]
@@ -881,6 +880,8 @@ KiArm64PermVectorIrqLowerA64_Handler:
     stp x14, x15, [sp, #0x70]
     stp x16, x17, [sp, #0x80]
     stp x18, x19, [sp, #0x90]
+    mrs x9, sp_el0
+    str x9, [sp, #0xD0]           /* Save user SP_EL0 after preserving x9 */
     ARM64_SAVE_NEON sp, ARM64_IRQ_NEON
     ARM64_SAVE_FP_CONTROL ARM64_IRQ_FPCR, ARM64_IRQ_FPSR
 
@@ -960,8 +961,6 @@ KiArm64PermVectorFiqLowerA64_Handler:
     mrs x20, elr_el1
     mrs x21, spsr_el1
     stp x20, x21, [sp, #0xC0]
-    mrs x9, sp_el0
-    str x9, [sp, #0xD0]           /* Save user SP_EL0 */
     stp x0,  x1,  [sp, #0x00]
     stp x2,  x3,  [sp, #0x10]
     stp x4,  x5,  [sp, #0x20]
@@ -972,6 +971,8 @@ KiArm64PermVectorFiqLowerA64_Handler:
     stp x14, x15, [sp, #0x70]
     stp x16, x17, [sp, #0x80]
     stp x18, x19, [sp, #0x90]
+    mrs x9, sp_el0
+    str x9, [sp, #0xD0]           /* Save user SP_EL0 after preserving x9 */
     ARM64_SAVE_NEON sp, ARM64_IRQ_NEON
     ARM64_SAVE_FP_CONTROL ARM64_IRQ_FPCR, ARM64_IRQ_FPSR
 
@@ -1022,8 +1023,6 @@ KiArm64PermVectorIrqLowerA32_Handler:
     mrs x20, elr_el1
     mrs x21, spsr_el1
     stp x20, x21, [sp, #0xC0]
-    mrs x9, sp_el0
-    str x9, [sp, #0xD0]           /* Save user SP_EL0 */
     stp x0,  x1,  [sp, #0x00]
     stp x2,  x3,  [sp, #0x10]
     stp x4,  x5,  [sp, #0x20]
@@ -1034,6 +1033,8 @@ KiArm64PermVectorIrqLowerA32_Handler:
     stp x14, x15, [sp, #0x70]
     stp x16, x17, [sp, #0x80]
     stp x18, x19, [sp, #0x90]
+    mrs x9, sp_el0
+    str x9, [sp, #0xD0]           /* Save user SP_EL0 after preserving x9 */
     ARM64_SAVE_NEON sp, ARM64_IRQ_NEON
     ARM64_SAVE_FP_CONTROL ARM64_IRQ_FPCR, ARM64_IRQ_FPSR
     dsb sy
@@ -1083,8 +1084,6 @@ KiArm64PermVectorFiqLowerA32_Handler:
     mrs x20, elr_el1
     mrs x21, spsr_el1
     stp x20, x21, [sp, #0xC0]
-    mrs x9, sp_el0
-    str x9, [sp, #0xD0]           /* Save user SP_EL0 */
     stp x0,  x1,  [sp, #0x00]
     stp x2,  x3,  [sp, #0x10]
     stp x4,  x5,  [sp, #0x20]
@@ -1095,6 +1094,8 @@ KiArm64PermVectorFiqLowerA32_Handler:
     stp x14, x15, [sp, #0x70]
     stp x16, x17, [sp, #0x80]
     stp x18, x19, [sp, #0x90]
+    mrs x9, sp_el0
+    str x9, [sp, #0xD0]           /* Save user SP_EL0 after preserving x9 */
     ARM64_SAVE_NEON sp, ARM64_IRQ_NEON
     ARM64_SAVE_FP_CONTROL ARM64_IRQ_FPCR, ARM64_IRQ_FPSR
     dsb sy

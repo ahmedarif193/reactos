@@ -1073,6 +1073,8 @@ Return Value:
 --*/
 
 {
+    LARGE_INTEGER FatSystemJanOne1980;
+
     PAGED_CODE();
 
     UNREFERENCED_PARAMETER( FileObject );
@@ -1110,6 +1112,27 @@ Return Value:
         Buffer->LastWriteTime = Fcb->LastWriteTime;
         Buffer->CreationTime = Fcb->CreationTime;
         Buffer->LastAccessTime = Fcb->LastAccessTime;
+    }
+
+    ExLocalTimeToSystemTime( &FatJanOne1980,
+                             &FatSystemJanOne1980 );
+
+    if ((Buffer->LastWriteTime.QuadPart != 0) &&
+        (Buffer->LastWriteTime.QuadPart < FatSystemJanOne1980.QuadPart)) {
+
+        Buffer->LastWriteTime = FatSystemJanOne1980;
+    }
+
+    if ((Buffer->CreationTime.QuadPart != 0) &&
+        (Buffer->CreationTime.QuadPart < FatSystemJanOne1980.QuadPart)) {
+
+        Buffer->CreationTime = FatSystemJanOne1980;
+    }
+
+    if ((Buffer->LastAccessTime.QuadPart != 0) &&
+        (Buffer->LastAccessTime.QuadPart < FatSystemJanOne1980.QuadPart)) {
+
+        Buffer->LastAccessTime = FatSystemJanOne1980;
     }
 
     Buffer->FileAttributes = Fcb->DirentFatFlags;
@@ -5182,5 +5205,4 @@ FatDeleteFile (
         FatDeleteFcb( IrpContext, &Fcb );
     } _SEH2_END;
 }
-
 
