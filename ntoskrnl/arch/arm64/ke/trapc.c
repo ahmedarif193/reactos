@@ -566,6 +566,51 @@ MmAccessFault(
     _In_ KPROCESSOR_MODE Mode,
     _In_ PVOID TrapInformation);
 
+static
+KIRQL
+KiArm64EnterMmFaultIrql(VOID)
+{
+    KIRQL OldIrql = KeGetCurrentIrql();
+
+    if (OldIrql > APC_LEVEL)
+    {
+        KiSetCurrentIrql(APC_LEVEL);
+        KiApplyIrqMaskForIrqlTransition(OldIrql, APC_LEVEL);
+    }
+
+    return OldIrql;
+}
+
+static
+VOID
+KiArm64LeaveMmFaultIrql(
+    _In_ KIRQL OldIrql)
+{
+    if (OldIrql > APC_LEVEL)
+    {
+        KiApplyIrqMaskForIrqlTransition(APC_LEVEL, OldIrql);
+        KiSetCurrentIrql(OldIrql);
+    }
+}
+
+static
+NTSTATUS
+KiArm64MmAccessFaultAtApc(
+    _In_ ULONG FaultCode,
+    _In_ PVOID Address,
+    _In_ KPROCESSOR_MODE Mode,
+    _In_ PVOID TrapInformation)
+{
+    KIRQL OldIrql;
+    NTSTATUS Status;
+
+    OldIrql = KiArm64EnterMmFaultIrql();
+    Status = MmAccessFault(FaultCode, Address, Mode, TrapInformation);
+    KiArm64LeaveMmFaultIrql(OldIrql);
+
+    return Status;
+}
+
 VOID
 KiSystemService(
     _Inout_ PKTHREAD Thread,
@@ -638,7 +683,7 @@ C_ASSERT(sizeof(ARM64_EARLY_TRAP_STATE) == 0x138);  /* State should end at 0x138
 C_ASSERT(FIELD_OFFSET(ARM64_EARLY_SYNC_CONTEXT, TrapFramePointer) == 0x138);
 C_ASSERT(FIELD_OFFSET(ARM64_EARLY_SYNC_CONTEXT, ExceptionFramePointer) == 0x140);
 C_ASSERT(FIELD_OFFSET(ARM64_EARLY_SYNC_CONTEXT, TrapFrame) == 0x148);
-#define ARM64_EARLY_SYNC_CONTEXT_ALLOC_SIZE 0x380
+#define ARM64_EARLY_SYNC_CONTEXT_ALLOC_SIZE 0x590
 C_ASSERT(sizeof(ARM64_EARLY_SYNC_CONTEXT) <= ARM64_EARLY_SYNC_CONTEXT_ALLOC_SIZE);
 
 /*
@@ -1322,13 +1367,14 @@ KiArm64HandleSynchronousException(
                 }
             }
 
-            Status = MmAccessFault(KiArm64BuildFaultCode(FaultStatus,
-                                                         WriteAccess,
-                                                         TRUE,
-                                                         PreviousMode),
-                                   (PVOID)(ULONG_PTR)Context->State.FaultAddress,
-                                   PreviousMode,
-                                   TrapFrame);
+            Status = KiArm64MmAccessFaultAtApc(
+                KiArm64BuildFaultCode(FaultStatus,
+                                      WriteAccess,
+                                      TRUE,
+                                      PreviousMode),
+                (PVOID)(ULONG_PTR)Context->State.FaultAddress,
+                PreviousMode,
+                TrapFrame);
 
             if (PreviousMode == UserMode)
             {
@@ -1868,7 +1914,10 @@ KiArm64HandleSynchronousException(
                                    (PVOID)MiArm64SessionWsStage);
                     }
 
-                    Status = MmAccessFault(FaultCodeArg, AddressArg, PreviousMode, TrapFrame);
+                    Status = KiArm64MmAccessFaultAtApc(FaultCodeArg,
+                                                       AddressArg,
+                                                       PreviousMode,
+                                                       TrapFrame);
 
                     if ((MmSessionSpace != NULL) &&
                         ((ULONG_PTR)AddressArg >= (ULONG_PTR)MmSessionSpace) &&
@@ -2120,6 +2169,34 @@ KiArm64HandleSynchronousException(
                                     "[DABORT-DIAG] %s KSEG0[%03x]=0x%016I64x %016I64x\n",
                                     DiagNames[dv], PageOff & ~7U, Kseg[0], Kseg[1]);
                             }
+                        }
+
+                        if ((Context->State.FaultAddress == 0) &&
+                            (KiArm64ShouldTraceSystemDllAddress(CurrentProcess, Context->State.Elr)))
+                        {
+                            ULONG64 X1 = TrapFrame->X[1];
+                            ULONG64 Fp = TrapFrame->Fp;
+                            DbgPrintEx(DPFLTR_DEFAULT_ID, DPFLTR_ERROR_LEVEL,
+                                "[DABORT-DIAG] ntdll-null x1=%p fp=%p sp=%p lr=%p\n",
+                                (PVOID)X1,
+                                (PVOID)Fp,
+                                (PVOID)TrapFrame->Sp,
+                                (PVOID)TrapFrame->Lr);
+                            KiArm64DumpUserAliasQwords("ntdll-null-x1",
+                                                       X1,
+                                                       (ULONG)(X1 & (PAGE_SIZE - 1)),
+                                                       (ULONG)((X1 + 8) & (PAGE_SIZE - 1)),
+                                                       (ULONG)((X1 + 16) & (PAGE_SIZE - 1)));
+                            KiArm64DumpUserAliasQwords("ntdll-null-fp",
+                                                       Fp,
+                                                       (ULONG)(Fp & (PAGE_SIZE - 1)),
+                                                       (ULONG)((Fp + 8) & (PAGE_SIZE - 1)),
+                                                       (ULONG)((Fp + 16) & (PAGE_SIZE - 1)));
+                            KiArm64DumpUserAliasQwords("ntdll-null-sp-copy",
+                                                       TrapFrame->Sp,
+                                                       (ULONG)((TrapFrame->Sp + 64) & (PAGE_SIZE - 1)),
+                                                       (ULONG)((TrapFrame->Sp + 72) & (PAGE_SIZE - 1)),
+                                                       (ULONG)((TrapFrame->Sp + 80) & (PAGE_SIZE - 1)));
                         }
 
                         /*

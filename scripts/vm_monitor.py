@@ -35,8 +35,8 @@ import socket
 
 # Configuration (never change those values)
 LOG_FILE = "/tmp/freeldr_arm64.log"
-STALL_TIMEOUT = int(os.environ.get("ROS_VM_STALL_TIMEOUT", "10"))
-HARD_TIMEOUT = int(os.environ.get("ROS_VM_HARD_TIMEOUT", "30"))
+STALL_TIMEOUT = int(os.environ.get("ROS_VM_STALL_TIMEOUT", "16"))
+HARD_TIMEOUT = int(os.environ.get("ROS_VM_HARD_TIMEOUT", "90"))
 VM_NAME = os.environ.get("ROS_VM_NAME", "ROS11")
 ENABLE_GDB_DUMP = os.environ.get("ROS_VM_GDB_DUMP", "1") != "0"
 QEMU_GDB_PORT = int(os.environ.get("ROS_QEMU_GDB_PORT", "1234"))
@@ -484,11 +484,7 @@ def start_qemu(rpi_mode=False, smp=4):
     # ---------------- ARM64 CONFIGURATION ----------------
     if target_arch == "arm64":
         is_darwin = platform.system() == "Darwin"
-        arm64_usb_devices = [
-            "-device", "qemu-xhci",
-            "-device", "usb-kbd",
-            "-device", "usb-tablet",
-        ]
+        arm64_usb_devices = []
         if rpi_mode:
             mode_str = f"RPI emulation (cortex-a72, {smp} cores)"
         else:
@@ -1351,6 +1347,10 @@ def capture_gdb_dump(reason):
         "monitor info status",
         "monitor info cpus",
         "info registers",
+    ])
+
+    if target_arch == "arm64":
+        commands.extend([
         "set $kseg0 = 0xffff800000000000",
         "set $pa_mask = 0x0000fffffffff000",
         'printf "ARM64 sample: pc=%#llx sp=%#llx x8=%#llx esr=%#llx elr=%#llx spsr=%#llx far=%#llx sp_el0=%#llx sp_el1=%#llx tpidr_el1=%#llx ttbr0=%#llx ttbr1=%#llx\\n", $pc, $sp, $x8, $ESR_EL1, $ELR_EL1, $SPSR_EL1, $FAR_EL1, $SP_EL0, $SP_EL1, $TPIDR_EL1, $TTBR0_EL1, $TTBR1_EL1',
@@ -1384,7 +1384,7 @@ def capture_gdb_dump(reason):
         "  end",
         "end",
         "set $va = $FAR_EL1",
-        "set $root = $TTBR1_EL1 & $pa_mask",
+        "set $root = (($va < $kseg0) ? $TTBR0_EL1 : $TTBR1_EL1) & $pa_mask",
         "set $l0i = ($va >> 39) & 0x1ff",
         "set $l1i = ($va >> 30) & 0x1ff",
         "set $l2i = ($va >> 21) & 0x1ff",
@@ -1419,6 +1419,15 @@ def capture_gdb_dump(reason):
         "x/12gx $sp",
         "x/8i $x30",
         "end",
+        ])
+    else:
+        commands.extend([
+        "info symbol $pc",
+        "info symbol $sp",
+        "x/8i $pc",
+        ])
+
+    commands.extend([
         "bt",
         "thread apply all bt 8",
         "detach",

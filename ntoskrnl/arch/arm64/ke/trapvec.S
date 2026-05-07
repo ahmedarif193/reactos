@@ -21,7 +21,105 @@
 .equ ARM64_EARLY_STATE_TRAP_PTR,      0x138
 .equ ARM64_EARLY_STATE_EXC_PTR,       0x140
 .equ ARM64_EARLY_STATE_TRAP_FRAME,    0x148
-.equ ARM64_EARLY_STATE_SIZE,          0x380
+.equ ARM64_EARLY_STATE_NEON,          0x380
+.equ ARM64_EARLY_STATE_FPCR,          0x580
+.equ ARM64_EARLY_STATE_FPSR,          0x588
+.equ ARM64_EARLY_STATE_SIZE,          0x590
+
+.equ ARM64_IRQ_NEON,                  0xE0
+.equ ARM64_IRQ_FPCR,                  0x2E0
+.equ ARM64_IRQ_FPSR,                  0x2E8
+.equ ARM64_IRQ_FRAME_SIZE,            0x2F0
+
+/*
+ * The ARM64 compiler can use FP/SIMD registers for ordinary C struct copies and
+ * zeroing. Preserve Q0-Q31 plus FPCR/FPSR around exception/interrupt C handlers
+ * so an asynchronous kernel entry cannot corrupt interrupted user or kernel
+ * SIMD state.
+ */
+.macro ARM64_SAVE_NEON Base, Offset
+    str q0,  [\Base, #(\Offset + 0x000)]
+    str q1,  [\Base, #(\Offset + 0x010)]
+    str q2,  [\Base, #(\Offset + 0x020)]
+    str q3,  [\Base, #(\Offset + 0x030)]
+    str q4,  [\Base, #(\Offset + 0x040)]
+    str q5,  [\Base, #(\Offset + 0x050)]
+    str q6,  [\Base, #(\Offset + 0x060)]
+    str q7,  [\Base, #(\Offset + 0x070)]
+    str q8,  [\Base, #(\Offset + 0x080)]
+    str q9,  [\Base, #(\Offset + 0x090)]
+    str q10, [\Base, #(\Offset + 0x0A0)]
+    str q11, [\Base, #(\Offset + 0x0B0)]
+    str q12, [\Base, #(\Offset + 0x0C0)]
+    str q13, [\Base, #(\Offset + 0x0D0)]
+    str q14, [\Base, #(\Offset + 0x0E0)]
+    str q15, [\Base, #(\Offset + 0x0F0)]
+    str q16, [\Base, #(\Offset + 0x100)]
+    str q17, [\Base, #(\Offset + 0x110)]
+    str q18, [\Base, #(\Offset + 0x120)]
+    str q19, [\Base, #(\Offset + 0x130)]
+    str q20, [\Base, #(\Offset + 0x140)]
+    str q21, [\Base, #(\Offset + 0x150)]
+    str q22, [\Base, #(\Offset + 0x160)]
+    str q23, [\Base, #(\Offset + 0x170)]
+    str q24, [\Base, #(\Offset + 0x180)]
+    str q25, [\Base, #(\Offset + 0x190)]
+    str q26, [\Base, #(\Offset + 0x1A0)]
+    str q27, [\Base, #(\Offset + 0x1B0)]
+    str q28, [\Base, #(\Offset + 0x1C0)]
+    str q29, [\Base, #(\Offset + 0x1D0)]
+    str q30, [\Base, #(\Offset + 0x1E0)]
+    str q31, [\Base, #(\Offset + 0x1F0)]
+.endm
+
+.macro ARM64_RESTORE_NEON Base, Offset
+    ldr q0,  [\Base, #(\Offset + 0x000)]
+    ldr q1,  [\Base, #(\Offset + 0x010)]
+    ldr q2,  [\Base, #(\Offset + 0x020)]
+    ldr q3,  [\Base, #(\Offset + 0x030)]
+    ldr q4,  [\Base, #(\Offset + 0x040)]
+    ldr q5,  [\Base, #(\Offset + 0x050)]
+    ldr q6,  [\Base, #(\Offset + 0x060)]
+    ldr q7,  [\Base, #(\Offset + 0x070)]
+    ldr q8,  [\Base, #(\Offset + 0x080)]
+    ldr q9,  [\Base, #(\Offset + 0x090)]
+    ldr q10, [\Base, #(\Offset + 0x0A0)]
+    ldr q11, [\Base, #(\Offset + 0x0B0)]
+    ldr q12, [\Base, #(\Offset + 0x0C0)]
+    ldr q13, [\Base, #(\Offset + 0x0D0)]
+    ldr q14, [\Base, #(\Offset + 0x0E0)]
+    ldr q15, [\Base, #(\Offset + 0x0F0)]
+    ldr q16, [\Base, #(\Offset + 0x100)]
+    ldr q17, [\Base, #(\Offset + 0x110)]
+    ldr q18, [\Base, #(\Offset + 0x120)]
+    ldr q19, [\Base, #(\Offset + 0x130)]
+    ldr q20, [\Base, #(\Offset + 0x140)]
+    ldr q21, [\Base, #(\Offset + 0x150)]
+    ldr q22, [\Base, #(\Offset + 0x160)]
+    ldr q23, [\Base, #(\Offset + 0x170)]
+    ldr q24, [\Base, #(\Offset + 0x180)]
+    ldr q25, [\Base, #(\Offset + 0x190)]
+    ldr q26, [\Base, #(\Offset + 0x1A0)]
+    ldr q27, [\Base, #(\Offset + 0x1B0)]
+    ldr q28, [\Base, #(\Offset + 0x1C0)]
+    ldr q29, [\Base, #(\Offset + 0x1D0)]
+    ldr q30, [\Base, #(\Offset + 0x1E0)]
+    ldr q31, [\Base, #(\Offset + 0x1F0)]
+.endm
+
+.macro ARM64_SAVE_FP_CONTROL FpcrOffset, FpsrOffset
+    mrs x9, fpcr
+    str x9, [sp, #\FpcrOffset]
+    mrs x9, fpsr
+    str x9, [sp, #\FpsrOffset]
+.endm
+
+.macro ARM64_RESTORE_FP_CONTROL FpcrOffset, FpsrOffset
+    ldr x9, [sp, #\FpcrOffset]
+    msr fpcr, x9
+    ldr x9, [sp, #\FpsrOffset]
+    msr fpsr, x9
+.endm
 
 /*
  * ============================================================================
@@ -109,6 +207,9 @@ KiArm64SyncVectorCommon:
 
     /* Allocate space for early state */
     sub sp, sp, #ARM64_EARLY_STATE_SIZE
+
+    ARM64_SAVE_NEON sp, ARM64_EARLY_STATE_NEON
+    ARM64_SAVE_FP_CONTROL ARM64_EARLY_STATE_FPCR, ARM64_EARLY_STATE_FPSR
 
     /* Store vector ID */
     str x28, [sp, #ARM64_EARLY_STATE_VECTORID]
@@ -262,6 +363,18 @@ KiArm64SyncVectorCommon:
      */
     msr daifset, #0xF
     isb
+
+    ldr x9, [sp, #ARM64_EARLY_STATE_ESR]
+    lsr x9, x9, #26
+    cmp x9, #0x07                  /* FP/ASIMD trap: handler owns restored state */
+    b.eq .Lsync_skip_neon_restore
+    cmp x9, #0x19                  /* SVE trap */
+    b.eq .Lsync_skip_neon_restore
+    cmp x9, #0x1D                  /* SME trap */
+    b.eq .Lsync_skip_neon_restore
+    ARM64_RESTORE_FP_CONTROL ARM64_EARLY_STATE_FPCR, ARM64_EARLY_STATE_FPSR
+    ARM64_RESTORE_NEON sp, ARM64_EARLY_STATE_NEON
+.Lsync_skip_neon_restore:
 
     add sp, sp, #ARM64_EARLY_STATE_SIZE
 
@@ -497,8 +610,8 @@ KiArm64PermVectorSErrorLowerA32_Handler:
     .global KiArm64PermVectorIrqSp0_Handler
     .seh_proc KiArm64PermVectorIrqSp0_Handler
 KiArm64PermVectorIrqSp0_Handler:
-    sub sp, sp, #0xD0
-    .seh_stackalloc 0xD0
+    sub sp, sp, #ARM64_IRQ_FRAME_SIZE
+    .seh_stackalloc ARM64_IRQ_FRAME_SIZE
     stp x20, x21, [sp, #0xA0]
     .seh_save_regp x20, 0xA0
     stp x29, x30, [sp, #0xB0]
@@ -517,6 +630,8 @@ KiArm64PermVectorIrqSp0_Handler:
     stp x14, x15, [sp, #0x70]
     stp x16, x17, [sp, #0x80]
     stp x18, x19, [sp, #0x90]
+    ARM64_SAVE_NEON sp, ARM64_IRQ_NEON
+    ARM64_SAVE_FP_CONTROL ARM64_IRQ_FPCR, ARM64_IRQ_FPSR
     dsb sy
     isb
     mov w0, #1
@@ -529,9 +644,11 @@ KiArm64PermVectorIrqSp0_Handler:
      * ELR_EL1/SPSR_EL1 with the current context, losing the return-to-user
      * values. The nested handler's eret would return here, but our subsequent
      * eret would use wrong ELR/SPSR — causing return to a garbage address.
-     */
+    */
     msr daifset, #0xF
     isb
+    ARM64_RESTORE_FP_CONTROL ARM64_IRQ_FPCR, ARM64_IRQ_FPSR
+    ARM64_RESTORE_NEON sp, ARM64_IRQ_NEON
     ldp x18, x19, [sp, #0x90]
     ldp x16, x17, [sp, #0x80]
     ldp x14, x15, [sp, #0x70]
@@ -547,7 +664,7 @@ KiArm64PermVectorIrqSp0_Handler:
     msr elr_el1, x20
     msr spsr_el1, x21
     ldp x20, x21, [sp, #0xA0]
-    add sp, sp, #0xD0
+    add sp, sp, #ARM64_IRQ_FRAME_SIZE
     dsb sy
     isb
     eret
@@ -557,8 +674,8 @@ KiArm64PermVectorIrqSp0_Handler:
     .global KiArm64PermVectorFiqSp0_Handler
     .seh_proc KiArm64PermVectorFiqSp0_Handler
 KiArm64PermVectorFiqSp0_Handler:
-    sub sp, sp, #0xD0
-    .seh_stackalloc 0xD0
+    sub sp, sp, #ARM64_IRQ_FRAME_SIZE
+    .seh_stackalloc ARM64_IRQ_FRAME_SIZE
     stp x20, x21, [sp, #0xA0]
     .seh_save_regp x20, 0xA0
     stp x29, x30, [sp, #0xB0]
@@ -577,6 +694,8 @@ KiArm64PermVectorFiqSp0_Handler:
     stp x14, x15, [sp, #0x70]
     stp x16, x17, [sp, #0x80]
     stp x18, x19, [sp, #0x90]
+    ARM64_SAVE_NEON sp, ARM64_IRQ_NEON
+    ARM64_SAVE_FP_CONTROL ARM64_IRQ_FPCR, ARM64_IRQ_FPSR
     dsb sy
     isb
     mov w0, #2
@@ -585,6 +704,8 @@ KiArm64PermVectorFiqSp0_Handler:
     isb
     msr daifset, #0xF
     isb
+    ARM64_RESTORE_FP_CONTROL ARM64_IRQ_FPCR, ARM64_IRQ_FPSR
+    ARM64_RESTORE_NEON sp, ARM64_IRQ_NEON
     ldp x18, x19, [sp, #0x90]
     ldp x16, x17, [sp, #0x80]
     ldp x14, x15, [sp, #0x70]
@@ -600,7 +721,7 @@ KiArm64PermVectorFiqSp0_Handler:
     msr elr_el1, x20
     msr spsr_el1, x21
     ldp x20, x21, [sp, #0xA0]
-    add sp, sp, #0xD0
+    add sp, sp, #ARM64_IRQ_FRAME_SIZE
     dsb sy
     isb
     eret
@@ -610,8 +731,8 @@ KiArm64PermVectorFiqSp0_Handler:
     .global KiArm64PermVectorIrqSpx_Handler
     .seh_proc KiArm64PermVectorIrqSpx_Handler
 KiArm64PermVectorIrqSpx_Handler:
-    sub sp, sp, #0xD0
-    .seh_stackalloc 0xD0
+    sub sp, sp, #ARM64_IRQ_FRAME_SIZE
+    .seh_stackalloc ARM64_IRQ_FRAME_SIZE
     stp x20, x21, [sp, #0xA0]
     .seh_save_regp x20, 0xA0
     stp x29, x30, [sp, #0xB0]
@@ -630,6 +751,8 @@ KiArm64PermVectorIrqSpx_Handler:
     stp x14, x15, [sp, #0x70]
     stp x16, x17, [sp, #0x80]
     stp x18, x19, [sp, #0x90]
+    ARM64_SAVE_NEON sp, ARM64_IRQ_NEON
+    ARM64_SAVE_FP_CONTROL ARM64_IRQ_FPCR, ARM64_IRQ_FPSR
     dsb sy
     isb
     mov w0, #5
@@ -638,6 +761,8 @@ KiArm64PermVectorIrqSpx_Handler:
     isb
     msr daifset, #0xF
     isb
+    ARM64_RESTORE_FP_CONTROL ARM64_IRQ_FPCR, ARM64_IRQ_FPSR
+    ARM64_RESTORE_NEON sp, ARM64_IRQ_NEON
     ldp x18, x19, [sp, #0x90]
     ldp x16, x17, [sp, #0x80]
     ldp x14, x15, [sp, #0x70]
@@ -653,7 +778,7 @@ KiArm64PermVectorIrqSpx_Handler:
     msr elr_el1, x20
     msr spsr_el1, x21
     ldp x20, x21, [sp, #0xA0]
-    add sp, sp, #0xD0
+    add sp, sp, #ARM64_IRQ_FRAME_SIZE
     dsb sy
     isb
     eret
@@ -663,8 +788,8 @@ KiArm64PermVectorIrqSpx_Handler:
     .global KiArm64PermVectorFiqSpx_Handler
     .seh_proc KiArm64PermVectorFiqSpx_Handler
 KiArm64PermVectorFiqSpx_Handler:
-    sub sp, sp, #0xD0
-    .seh_stackalloc 0xD0
+    sub sp, sp, #ARM64_IRQ_FRAME_SIZE
+    .seh_stackalloc ARM64_IRQ_FRAME_SIZE
     stp x20, x21, [sp, #0xA0]
     .seh_save_regp x20, 0xA0
     stp x29, x30, [sp, #0xB0]
@@ -683,6 +808,8 @@ KiArm64PermVectorFiqSpx_Handler:
     stp x14, x15, [sp, #0x70]
     stp x16, x17, [sp, #0x80]
     stp x18, x19, [sp, #0x90]
+    ARM64_SAVE_NEON sp, ARM64_IRQ_NEON
+    ARM64_SAVE_FP_CONTROL ARM64_IRQ_FPCR, ARM64_IRQ_FPSR
     dsb sy
     isb
     mov w0, #6
@@ -691,6 +818,8 @@ KiArm64PermVectorFiqSpx_Handler:
     isb
     msr daifset, #0xF
     isb
+    ARM64_RESTORE_FP_CONTROL ARM64_IRQ_FPCR, ARM64_IRQ_FPSR
+    ARM64_RESTORE_NEON sp, ARM64_IRQ_NEON
     ldp x18, x19, [sp, #0x90]
     ldp x16, x17, [sp, #0x80]
     ldp x14, x15, [sp, #0x70]
@@ -706,7 +835,7 @@ KiArm64PermVectorFiqSpx_Handler:
     msr elr_el1, x20
     msr spsr_el1, x21
     ldp x20, x21, [sp, #0xA0]
-    add sp, sp, #0xD0
+    add sp, sp, #ARM64_IRQ_FRAME_SIZE
     dsb sy
     isb
     eret
@@ -730,8 +859,8 @@ KiArm64PermVectorFiqSpx_Handler:
     .global KiArm64PermVectorIrqLowerA64_Handler
     .seh_proc KiArm64PermVectorIrqLowerA64_Handler
 KiArm64PermVectorIrqLowerA64_Handler:
-    sub sp, sp, #0xE0
-    .seh_stackalloc 0xE0
+    sub sp, sp, #ARM64_IRQ_FRAME_SIZE
+    .seh_stackalloc ARM64_IRQ_FRAME_SIZE
     stp x20, x21, [sp, #0xA0]
     .seh_save_regp x20, 0xA0
     stp x29, x30, [sp, #0xB0]
@@ -752,6 +881,8 @@ KiArm64PermVectorIrqLowerA64_Handler:
     stp x14, x15, [sp, #0x70]
     stp x16, x17, [sp, #0x80]
     stp x18, x19, [sp, #0x90]
+    ARM64_SAVE_NEON sp, ARM64_IRQ_NEON
+    ARM64_SAVE_FP_CONTROL ARM64_IRQ_FPCR, ARM64_IRQ_FPSR
 
 #ifdef KDBG
     /* DEBUG: One-shot marker for first IRQ-from-EL0 entry (vector 9). */
@@ -782,6 +913,8 @@ KiArm64PermVectorIrqLowerA64_Handler:
     isb
     msr daifset, #0xF
     isb
+    ARM64_RESTORE_FP_CONTROL ARM64_IRQ_FPCR, ARM64_IRQ_FPSR
+    ARM64_RESTORE_NEON sp, ARM64_IRQ_NEON
     ldr x9, [sp, #0xD0]           /* Restore user SP_EL0 BEFORE GPRs */
     msr sp_el0, x9
     ldp x18, x19, [sp, #0x90]
@@ -799,7 +932,7 @@ KiArm64PermVectorIrqLowerA64_Handler:
     msr elr_el1, x20
     msr spsr_el1, x21
     ldp x20, x21, [sp, #0xA0]
-    add sp, sp, #0xE0
+    add sp, sp, #ARM64_IRQ_FRAME_SIZE
     dsb sy
     isb
     eret
@@ -817,8 +950,8 @@ KiArm64IrqLowerOnce:
     .global KiArm64PermVectorFiqLowerA64_Handler
     .seh_proc KiArm64PermVectorFiqLowerA64_Handler
 KiArm64PermVectorFiqLowerA64_Handler:
-    sub sp, sp, #0xE0
-    .seh_stackalloc 0xE0
+    sub sp, sp, #ARM64_IRQ_FRAME_SIZE
+    .seh_stackalloc ARM64_IRQ_FRAME_SIZE
     stp x20, x21, [sp, #0xA0]
     .seh_save_regp x20, 0xA0
     stp x29, x30, [sp, #0xB0]
@@ -839,6 +972,8 @@ KiArm64PermVectorFiqLowerA64_Handler:
     stp x14, x15, [sp, #0x70]
     stp x16, x17, [sp, #0x80]
     stp x18, x19, [sp, #0x90]
+    ARM64_SAVE_NEON sp, ARM64_IRQ_NEON
+    ARM64_SAVE_FP_CONTROL ARM64_IRQ_FPCR, ARM64_IRQ_FPSR
 
     dsb sy
     isb
@@ -848,6 +983,8 @@ KiArm64PermVectorFiqLowerA64_Handler:
     isb
     msr daifset, #0xF
     isb
+    ARM64_RESTORE_FP_CONTROL ARM64_IRQ_FPCR, ARM64_IRQ_FPSR
+    ARM64_RESTORE_NEON sp, ARM64_IRQ_NEON
     ldr x9, [sp, #0xD0]           /* Restore user SP_EL0 BEFORE GPRs */
     msr sp_el0, x9
     ldp x18, x19, [sp, #0x90]
@@ -865,7 +1002,7 @@ KiArm64PermVectorFiqLowerA64_Handler:
     msr elr_el1, x20
     msr spsr_el1, x21
     ldp x20, x21, [sp, #0xA0]
-    add sp, sp, #0xE0
+    add sp, sp, #ARM64_IRQ_FRAME_SIZE
     dsb sy
     isb
     eret
@@ -875,8 +1012,8 @@ KiArm64PermVectorFiqLowerA64_Handler:
     .global KiArm64PermVectorIrqLowerA32_Handler
     .seh_proc KiArm64PermVectorIrqLowerA32_Handler
 KiArm64PermVectorIrqLowerA32_Handler:
-    sub sp, sp, #0xE0
-    .seh_stackalloc 0xE0
+    sub sp, sp, #ARM64_IRQ_FRAME_SIZE
+    .seh_stackalloc ARM64_IRQ_FRAME_SIZE
     stp x20, x21, [sp, #0xA0]
     .seh_save_regp x20, 0xA0
     stp x29, x30, [sp, #0xB0]
@@ -897,6 +1034,8 @@ KiArm64PermVectorIrqLowerA32_Handler:
     stp x14, x15, [sp, #0x70]
     stp x16, x17, [sp, #0x80]
     stp x18, x19, [sp, #0x90]
+    ARM64_SAVE_NEON sp, ARM64_IRQ_NEON
+    ARM64_SAVE_FP_CONTROL ARM64_IRQ_FPCR, ARM64_IRQ_FPSR
     dsb sy
     isb
     mov w0, #13
@@ -905,6 +1044,8 @@ KiArm64PermVectorIrqLowerA32_Handler:
     isb
     msr daifset, #0xF
     isb
+    ARM64_RESTORE_FP_CONTROL ARM64_IRQ_FPCR, ARM64_IRQ_FPSR
+    ARM64_RESTORE_NEON sp, ARM64_IRQ_NEON
     ldr x9, [sp, #0xD0]           /* Restore user SP_EL0 BEFORE GPRs */
     msr sp_el0, x9
     ldp x18, x19, [sp, #0x90]
@@ -922,7 +1063,7 @@ KiArm64PermVectorIrqLowerA32_Handler:
     msr elr_el1, x20
     msr spsr_el1, x21
     ldp x20, x21, [sp, #0xA0]
-    add sp, sp, #0xE0
+    add sp, sp, #ARM64_IRQ_FRAME_SIZE
     dsb sy
     isb
     eret
@@ -932,8 +1073,8 @@ KiArm64PermVectorIrqLowerA32_Handler:
     .global KiArm64PermVectorFiqLowerA32_Handler
     .seh_proc KiArm64PermVectorFiqLowerA32_Handler
 KiArm64PermVectorFiqLowerA32_Handler:
-    sub sp, sp, #0xE0
-    .seh_stackalloc 0xE0
+    sub sp, sp, #ARM64_IRQ_FRAME_SIZE
+    .seh_stackalloc ARM64_IRQ_FRAME_SIZE
     stp x20, x21, [sp, #0xA0]
     .seh_save_regp x20, 0xA0
     stp x29, x30, [sp, #0xB0]
@@ -954,6 +1095,8 @@ KiArm64PermVectorFiqLowerA32_Handler:
     stp x14, x15, [sp, #0x70]
     stp x16, x17, [sp, #0x80]
     stp x18, x19, [sp, #0x90]
+    ARM64_SAVE_NEON sp, ARM64_IRQ_NEON
+    ARM64_SAVE_FP_CONTROL ARM64_IRQ_FPCR, ARM64_IRQ_FPSR
     dsb sy
     isb
     mov w0, #14
@@ -962,6 +1105,8 @@ KiArm64PermVectorFiqLowerA32_Handler:
     isb
     msr daifset, #0xF
     isb
+    ARM64_RESTORE_FP_CONTROL ARM64_IRQ_FPCR, ARM64_IRQ_FPSR
+    ARM64_RESTORE_NEON sp, ARM64_IRQ_NEON
     ldr x9, [sp, #0xD0]           /* Restore user SP_EL0 BEFORE GPRs */
     msr sp_el0, x9
     ldp x18, x19, [sp, #0x90]
@@ -979,7 +1124,7 @@ KiArm64PermVectorFiqLowerA32_Handler:
     msr elr_el1, x20
     msr spsr_el1, x21
     ldp x20, x21, [sp, #0xA0]
-    add sp, sp, #0xE0
+    add sp, sp, #ARM64_IRQ_FRAME_SIZE
     dsb sy
     isb
     eret

@@ -5,6 +5,7 @@
 
     .extern LdrpInit
     .extern NtContinue
+    .extern RtlExitUserThread
     .extern RtlRaiseStatus
 
     .global LdrInitializeThunk
@@ -49,4 +50,15 @@ KiUserApcDispatcher:
     mov     w0, w19
     bl      RtlRaiseStatus
     b       1b
+    .seh_endproc
+
+    .global RtlUserThreadStart
+    .seh_proc RtlUserThreadStart
+RtlUserThreadStart:
+    .seh_endprologue
+    mov     x16, x0
+    mov     x0, x1
+    blr     x16
+    bl      RtlExitUserThread
+    brk     #0
     .seh_endproc

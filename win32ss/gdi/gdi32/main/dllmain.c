@@ -112,6 +112,9 @@ GdiDllInitialize(
             return TRUE;
         }
 
+        case DLL_THREAD_DETACH:
+            return TRUE;
+
         default:
             return FALSE;
     }

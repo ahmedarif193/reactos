@@ -325,8 +325,11 @@ RamdiskEnsureBootPfnTable(IN PRAMDISK_DRIVE_EXTENSION DriveExtension)
         return TRUE;
     }
 
-    /* Writable boot ramdisk (overlay) uses a contiguous allocation built by FreeLdr.
-       Avoid PFN table heuristics and map directly from BasePage + DiskOffset. */
+    /*
+     * FreeLDR boot ramdisks are handed to the kernel as one contiguous
+     * LoaderXIPRom descriptor. Do not require the legacy PFN-list format for
+     * writable disks: they can be mapped directly from BasePage + DiskOffset.
+     */
     if (!DriveExtension->DiskOptions.Readonly)
     {
         DriveExtension->BootPfnInitialized = TRUE;
@@ -394,12 +397,17 @@ RamdiskEnsureBootPfnTable(IN PRAMDISK_DRIVE_EXTENSION DriveExtension)
     {
 #if DBG
         DbgPrintEx(DPFLTR_DEFAULT_ID,
-                   DPFLTR_ERROR_LEVEL,
-                   "RamdiskEnsureBootPfnTable: failed to locate PFN table (entries=%lu)\n",
+                   DPFLTR_TRACE_LEVEL,
+                   "RamdiskEnsureBootPfnTable: no legacy PFN table (entries=%lu), using contiguous boot mapping\n",
                    EntryCount);
 #endif
         RamdiskReleaseBootPfnTable(DriveExtension);
-        return FALSE;
+        DriveExtension->BootPfnInitialized = TRUE;
+        DriveExtension->BootPfnUsesList = FALSE;
+        DriveExtension->BootPfnMappingOwned = FALSE;
+        DriveExtension->BootPfnArray = NULL;
+        DriveExtension->BootPfnCount = 0;
+        return TRUE;
     }
 
 #if DBG

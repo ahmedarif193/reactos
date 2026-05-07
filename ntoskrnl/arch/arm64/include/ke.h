@@ -379,6 +379,11 @@ KiSetCurrentIrql(
     _In_ KIRQL Irql);
 
 VOID
+KiApplyIrqMaskForIrqlTransition(
+    _In_ KIRQL OldIrql,
+    _In_ KIRQL NewIrql);
+
+VOID
 NTAPI
 KeReenableTimerInterrupt(
     VOID);

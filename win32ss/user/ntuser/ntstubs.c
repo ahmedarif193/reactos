@@ -478,7 +478,7 @@ NtUserProcessConnect(
     OUT PUSERCONNECT pUserConnect,
     IN  ULONG Size)
 {
-    NTSTATUS Status;
+    NTSTATUS Status = STATUS_SUCCESS;
     PEPROCESS Process = NULL;
     PPROCESSINFO W32Process;
 

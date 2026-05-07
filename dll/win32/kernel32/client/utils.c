@@ -750,6 +750,7 @@ BaseInitializeContext(IN PCONTEXT Context,
     Context->X0 = (ULONG_PTR)StartAddress;
     Context->X1 = (ULONG_PTR)Parameter;
     Context->Sp = (ULONG_PTR)StackAddress;
+    Context->Lr = (ULONG_PTR)ExitThread;
 
     if (ContextType == 1)      /* For Threads */
     {
