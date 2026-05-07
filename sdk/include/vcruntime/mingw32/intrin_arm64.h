@@ -11,6 +11,13 @@
 
 #define _ReturnAddress() (__builtin_return_address(0))
 
+#if !HAS_BUILTIN(__break)
+__INTRIN_INLINE void __break(int value)
+{
+    __asm__ __volatile__("brk %0" : : "i"(value));
+}
+#endif
+
 #if !HAS_BUILTIN(_ReadWriteBarrier)
 __INTRIN_INLINE void _ReadWriteBarrier(void)
 {

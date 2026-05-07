@@ -23,7 +23,8 @@
 
 #ifndef attribute_align_arg
 
-#if defined(__GNUC__) && (__GNUC__ > 4 || __GNUC__ == 4 && __GNUC_MINOR__>1)
+#if defined(__GNUC__) && (__GNUC__ > 4 || __GNUC__ == 4 && __GNUC_MINOR__>1) && \
+    !defined(__aarch64__) && !defined(__arm64__)
 #    define attribute_align_arg __attribute__((force_align_arg_pointer))
 /* The gcc that can align the stack does not need the check... nor does it work with gcc 4.3+, anyway. */
 #else
