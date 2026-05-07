@@ -1665,12 +1665,13 @@ RtlUnwindEx(
     _In_ PCONTEXT ContextRecord,
     _In_opt_ struct _UNWIND_HISTORY_TABLE *HistoryTable)
 {
+    EXCEPTION_RECORD LocalExceptionRecord;
     DISPATCHER_CONTEXT DispatcherContext;
     PEXCEPTION_ROUTINE ExceptionRoutine;
     EXCEPTION_DISPOSITION Disposition;
     PRUNTIME_FUNCTION FunctionEntry;
     ULONG64 ImageBase, EstablisherFrame;
-    CONTEXT UnwindContext;
+    CONTEXT UnwindContext, FrameContext;
     ULONG_PTR StackLow, StackHigh;
     ULONG FrameCount;
     BOOLEAN HaveTarget;
@@ -1683,6 +1684,20 @@ RtlUnwindEx(
     {
         RtlRaiseStatus(STATUS_INVALID_PARAMETER);
         return;
+    }
+
+    if (ExceptionRecord == NULL)
+    {
+        RtlZeroMemory(&LocalExceptionRecord, sizeof(LocalExceptionRecord));
+        LocalExceptionRecord.ExceptionCode = STATUS_UNWIND;
+        LocalExceptionRecord.ExceptionAddress = (PVOID)(ULONG_PTR)ContextRecord->Pc;
+        ExceptionRecord = &LocalExceptionRecord;
+    }
+
+    ExceptionRecord->ExceptionFlags = EXCEPTION_UNWINDING;
+    if (TargetFrame == NULL)
+    {
+        ExceptionRecord->ExceptionFlags |= EXCEPTION_EXIT_UNWIND;
     }
 
     UnwindContext = *ContextRecord;
@@ -1738,6 +1753,7 @@ RtlUnwindEx(
             continue;
         }
 
+        FrameContext = UnwindContext;
         DispatcherContext.ControlPc = UnwindContext.Pc;
 
         ExceptionRoutine = RtlVirtualUnwind(UNW_FLAG_UHANDLER,
@@ -1812,7 +1828,13 @@ RtlUnwindEx(
 
         if (HaveTarget && EstablisherFrame == (ULONG64)(ULONG_PTR)TargetFrame)
         {
-            *ContextRecord = UnwindContext;
+            if (TargetIp != NULL)
+            {
+                FrameContext.Pc = (ULONG64)(ULONG_PTR)TargetIp;
+            }
+
+            FrameContext.X[0] = (ULONG64)(ULONG_PTR)ReturnValue;
+            *ContextRecord = FrameContext;
             return;
         }
 
