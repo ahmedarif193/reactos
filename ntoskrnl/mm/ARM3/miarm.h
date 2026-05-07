@@ -1422,6 +1422,22 @@ MiLockWorkingSet(IN PETHREAD Thread,
     ASSERT(MI_IS_SESSION_ADDRESS((PVOID)WorkingSet) == FALSE);
 
     /* Thread shouldn't already be owning something */
+#if defined(_M_ARM64)
+    if (MM_ANY_WS_LOCK_HELD(Thread))
+    {
+        DPRINT1("[arm64][WSLOCK] nested exclusive caller=%p thread=%p ws=%p "
+                "sys=%u/%u session=%u/%u process=%u/%u\n",
+                _ReturnAddress(),
+                Thread,
+                WorkingSet,
+                Thread->OwnsSystemWorkingSetExclusive,
+                Thread->OwnsSystemWorkingSetShared,
+                Thread->OwnsSessionWorkingSetExclusive,
+                Thread->OwnsSessionWorkingSetShared,
+                Thread->OwnsProcessWorkingSetExclusive,
+                Thread->OwnsProcessWorkingSetShared);
+    }
+#endif
     ASSERT(!MM_ANY_WS_LOCK_HELD(Thread));
 
     /* Lock this working set */
@@ -1464,6 +1480,22 @@ MiLockWorkingSetShared(
     ASSERT(MI_IS_SESSION_ADDRESS((PVOID)WorkingSet) == FALSE);
 
     /* Thread shouldn't already be owning something */
+#if defined(_M_ARM64)
+    if (MM_ANY_WS_LOCK_HELD(Thread))
+    {
+        DPRINT1("[arm64][WSLOCK] nested shared caller=%p thread=%p ws=%p "
+                "sys=%u/%u session=%u/%u process=%u/%u\n",
+                _ReturnAddress(),
+                Thread,
+                WorkingSet,
+                Thread->OwnsSystemWorkingSetExclusive,
+                Thread->OwnsSystemWorkingSetShared,
+                Thread->OwnsSessionWorkingSetExclusive,
+                Thread->OwnsSessionWorkingSetShared,
+                Thread->OwnsProcessWorkingSetExclusive,
+                Thread->OwnsProcessWorkingSetShared);
+    }
+#endif
     ASSERT(!MM_ANY_WS_LOCK_HELD(Thread));
 
     /* Lock this working set */
