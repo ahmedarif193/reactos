@@ -5097,6 +5097,28 @@ ResetDevice(
 }
 
 static BOOL
+HasAssociatedService(
+        IN HDEVINFO DeviceInfoSet,
+        IN PSP_DEVINFO_DATA DeviceInfoData)
+{
+    WCHAR ServiceName[MAX_PATH];
+    DWORD RegType, RequiredSize;
+
+    if (SetupDiGetDeviceRegistryPropertyW(DeviceInfoSet,
+                                          DeviceInfoData,
+                                          SPDRP_SERVICE,
+                                          &RegType,
+                                          (PBYTE)ServiceName,
+                                          sizeof(ServiceName),
+                                          &RequiredSize))
+    {
+        return RegType == REG_SZ && ServiceName[0] != UNICODE_NULL;
+    }
+
+    return GetLastError() == ERROR_INSUFFICIENT_BUFFER;
+}
+
+static BOOL
 StopDevice(
         IN HDEVINFO DeviceInfoSet,
         IN PSP_DEVINFO_DATA DeviceInfoData)
@@ -5715,11 +5737,17 @@ SetupDiInstallDevice(
        goto cleanup;
     }
 
-    /* Start the device */
-    if (!RebootRequired && !(InstallParams.Flags & (DI_NEEDRESTART | DI_NEEDREBOOT | DI_DONOTCALLCONFIGMG)))
+    /* Start the device only when INF processing associated a function service. */
+    if (HasAssociatedService(DeviceInfoSet, DeviceInfoData) &&
+        !RebootRequired &&
+        !(InstallParams.Flags & (DI_NEEDRESTART | DI_NEEDREBOOT | DI_DONOTCALLCONFIGMG)))
+    {
         ret = ResetDevice(DeviceInfoSet, DeviceInfoData);
+    }
     else
+    {
         ret = TRUE;
+    }
 
 cleanup:
     /* End of installation */
