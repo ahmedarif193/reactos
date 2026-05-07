@@ -88,7 +88,7 @@ PspArm64PrimeUserInstructionPage(
     Address = (ULONG_PTR)UserPage;
     ASSERT(Address < (ULONG_PTR)MmSystemRangeStart);
 
-    Status = MmAccessFault(FALSE, UserPage, UserMode, NULL);
+    Status = MmAccessFaultEx(FALSE, UserPage, UserMode, NULL, FALSE);
     if (NT_SUCCESS(Status))
     {
         __asm__ __volatile__("dsb ishst" ::: "memory");

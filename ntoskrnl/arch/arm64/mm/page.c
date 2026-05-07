@@ -836,6 +836,7 @@ MmCreateVirtualMappingUnsafeEx(
     PMMPTE PointerPte;
     MMPTE TempPte;
     ULONG ProtectionMask;
+    PETHREAD CurrentThread = PsGetCurrentThread();
 
     ASSERT(((ULONG_PTR)Address & (PAGE_SIZE - 1)) == 0);
 
@@ -857,21 +858,13 @@ MmCreateVirtualMappingUnsafeEx(
         ASSERT(ProtectionMask != MM_EXECUTE_WRITECOPY);
 
         /*
-         * For kernel address mappings, we need to ensure the page table entry
-         * (PTE) for the target address is accessible. This means the page table
-         * page containing the PTE must be valid.
-         *
-         * NOTE: We pass MiAddressToPte(Address) - the PTE's virtual address -
-         * NOT the target Address itself. MiMakeSystemAddressValid is designed
-         * to fault in PAGE TABLE addresses, not arbitrary addresses.
-         *
-         * If we passed Address here, it would cause infinite recursion during
-         * page fault handling for section views:
-         *   MmNotPresentFaultSectionView -> MmCreateVirtualMapping ->
-         *   MiMakeSystemAddressValid(Address) -> MmAccessFault(Address) ->
-         *   MmNotPresentFaultSectionView -> ... (infinite loop)
+         * MiMakeSystemAddressValid may have to fault in the page table page
+         * containing this PTE. Kernel page-table VAs are protected by the
+         * system working set, so satisfy that helper's lock contract here.
          */
+        MiLockWorkingSet(CurrentThread, &MmSystemCacheWs);
         MiMakeSystemAddressValid(MiAddressToPte(Address), PsGetCurrentProcess());
+        MiUnlockWorkingSet(CurrentThread, &MmSystemCacheWs);
     }
     else
     {
@@ -1371,7 +1364,7 @@ MmCreateVirtualMappingUnsafeEx(
 
     /* Kernel address path - uses self-mapping */
     PointerPte = MiAddressToPte(Address);
-    MI_MAKE_HARDWARE_PTE(&TempPte, PointerPte, ProtectionMask, Page);
+    MI_MAKE_HARDWARE_PTE_KERNEL(&TempPte, PointerPte, ProtectionMask, Page);
 
     if (!IsPhysical)
     {

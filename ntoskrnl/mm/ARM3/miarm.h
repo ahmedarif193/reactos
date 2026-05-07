@@ -1100,6 +1100,11 @@ VOID
 MI_WRITE_VALID_PDE(IN PMMPDE PointerPde,
                    IN MMPDE TempPde)
 {
+#if defined(_M_ARM64)
+    ULONG_PTR EntryAddress = (ULONG_PTR)PointerPde;
+    PVOID FlushAddress = NULL;
+#endif
+
     /* Write the valid PDE */
     ASSERT(PointerPde->u.Hard.Valid == 0);
 #ifdef _M_AMD64
@@ -1107,6 +1112,35 @@ MI_WRITE_VALID_PDE(IN PMMPDE PointerPde,
 #endif
     ASSERT(TempPde.u.Hard.Valid == 1);
     *PointerPde = TempPde;
+#if defined(_M_ARM64)
+    MiArm64SyncKernelHierarchyEntryWrite((PMMPTE)PointerPde);
+
+    if ((EntryAddress >= PXE_BASE) && (EntryAddress <= PXE_TOP))
+    {
+        FlushAddress = MiPxeToAddress((PMMPTE)PointerPde);
+    }
+    else if ((EntryAddress >= PPE_BASE) && (EntryAddress <= PPE_TOP))
+    {
+        FlushAddress = MiPpeToAddress((PMMPTE)PointerPde);
+    }
+    else if ((EntryAddress >= PDE_BASE) && (EntryAddress <= PDE_TOP))
+    {
+        FlushAddress = MiPdeToAddress((PMMPTE)PointerPde);
+    }
+
+    if ((FlushAddress != NULL) &&
+        ((ULONG_PTR)FlushAddress >= (ULONG_PTR)MmSystemRangeStart) &&
+        !(((ULONG_PTR)FlushAddress >= PTE_BASE) &&
+          ((ULONG_PTR)FlushAddress <= HYPER_SPACE_END)))
+    {
+        ULONG_PTR Va = (ULONG_PTR)FlushAddress >> PAGE_SHIFT;
+
+        __asm__ __volatile__("dsb ishst" ::: "memory");
+        __asm__ __volatile__("tlbi vaae1is, %0" :: "r"(Va) : "memory");
+        __asm__ __volatile__("dsb ish" ::: "memory");
+        __asm__ __volatile__("isb" ::: "memory");
+    }
+#endif
 }
 
 //
@@ -1117,6 +1151,11 @@ VOID
 MI_WRITE_INVALID_PDE(IN PMMPDE PointerPde,
                      IN MMPDE InvalidPde)
 {
+#if defined(_M_ARM64)
+    ULONG_PTR EntryAddress = (ULONG_PTR)PointerPde;
+    PVOID FlushAddress = NULL;
+#endif
+
     /* Write the invalid PDE */
     ASSERT(InvalidPde.u.Hard.Valid == 0);
     ASSERT(InvalidPde.u.Long != 0);
@@ -1124,6 +1163,35 @@ MI_WRITE_INVALID_PDE(IN PMMPDE PointerPde,
     ASSERT(InvalidPde.u.Soft.Protection == MM_EXECUTE_READWRITE);
 #endif
     *PointerPde = InvalidPde;
+#if defined(_M_ARM64)
+    MiArm64SyncKernelHierarchyEntryWrite((PMMPTE)PointerPde);
+
+    if ((EntryAddress >= PXE_BASE) && (EntryAddress <= PXE_TOP))
+    {
+        FlushAddress = MiPxeToAddress((PMMPTE)PointerPde);
+    }
+    else if ((EntryAddress >= PPE_BASE) && (EntryAddress <= PPE_TOP))
+    {
+        FlushAddress = MiPpeToAddress((PMMPTE)PointerPde);
+    }
+    else if ((EntryAddress >= PDE_BASE) && (EntryAddress <= PDE_TOP))
+    {
+        FlushAddress = MiPdeToAddress((PMMPTE)PointerPde);
+    }
+
+    if ((FlushAddress != NULL) &&
+        ((ULONG_PTR)FlushAddress >= (ULONG_PTR)MmSystemRangeStart) &&
+        !(((ULONG_PTR)FlushAddress >= PTE_BASE) &&
+          ((ULONG_PTR)FlushAddress <= HYPER_SPACE_END)))
+    {
+        ULONG_PTR Va = (ULONG_PTR)FlushAddress >> PAGE_SHIFT;
+
+        __asm__ __volatile__("dsb ishst" ::: "memory");
+        __asm__ __volatile__("tlbi vaae1is, %0" :: "r"(Va) : "memory");
+        __asm__ __volatile__("dsb ish" ::: "memory");
+        __asm__ __volatile__("isb" ::: "memory");
+    }
+#endif
 }
 
 //

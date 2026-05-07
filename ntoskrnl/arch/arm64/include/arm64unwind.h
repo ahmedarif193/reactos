@@ -31,10 +31,10 @@
 #define ARM64_PACKED_REGF_MASK                 0x7UL
 #define ARM64_PACKED_REGI_SHIFT                16
 #define ARM64_PACKED_REGI_MASK                 0xFUL
-#define ARM64_PACKED_HOME_PARAMS               (1UL << 22)
-#define ARM64_PACKED_CR_SHIFT                  23
+#define ARM64_PACKED_HOME_PARAMS               (1UL << 20)
+#define ARM64_PACKED_CR_SHIFT                  21
 #define ARM64_PACKED_CR_MASK                   0x3UL
-#define ARM64_PACKED_FRAMESZ_SHIFT             25
+#define ARM64_PACKED_FRAMESZ_SHIFT             23
 #define ARM64_PACKED_FRAMESZ_MASK              0x1FFUL
 
 /* CR values */
