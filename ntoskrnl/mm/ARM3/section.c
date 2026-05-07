@@ -943,7 +943,7 @@ MiSessionCommitPageTables(IN PVOID StartVa,
     Index = ((ULONG_PTR)StartVa - (ULONG_PTR)MmSessionBase) >> 22;
     while (StartPde <= EndPde)
     {
-#ifndef _M_AMD64
+#if (_MI_PAGING_LEVELS < 3)
         /* If we don't already have a page table for it, increment count */
         if (MmSessionSpace->PageTables[Index].u.Long == 0) PageCount++;
 #endif
@@ -962,8 +962,8 @@ MiSessionCommitPageTables(IN PVOID StartVa,
     /* Loop each PDE while holding the working set lock */
 //  MiLockWorkingSet(PsGetCurrentThread(),
 //                   &MmSessionSpace->GlobalVirtualAddress->Vm);
-#ifdef _M_AMD64
-_WARN("MiSessionCommitPageTables halfplemented for amd64")
+#if (_MI_PAGING_LEVELS >= 3)
+_WARN("MiSessionCommitPageTables halfplemented for 3+ paging levels")
     DBG_UNREFERENCED_LOCAL_VARIABLE(OldIrql);
     DBG_UNREFERENCED_LOCAL_VARIABLE(Color);
     DBG_UNREFERENCED_LOCAL_VARIABLE(Index);

@@ -222,7 +222,7 @@ MiReleaseProcessReferenceToSessionDataPage(IN PMM_SESSION_SPACE SessionGlobal)
     DPRINT1("Last process in session %lu going down!!!\n", SessionId);
 
     /* Free the session page tables */
-#ifndef _M_AMD64
+#if (_MI_PAGING_LEVELS < 3)
     ExFreePoolWithTag(SessionGlobal->PageTables, 'tHmM');
 #endif
     ASSERT(!MI_IS_PHYSICAL_ADDRESS(SessionGlobal));
@@ -466,7 +466,7 @@ MiSessionInitializeWorkingSetList(VOID)
     MMPTE TempPte;
     MMPDE TempPde;
     ULONG Color;
-#ifndef _M_AMD64
+#if (_MI_PAGING_LEVELS < 3)
     ULONG Index;
 #endif
     PFN_NUMBER PageFrameIndex;
@@ -530,7 +530,7 @@ MiSessionInitializeWorkingSetList(VOID)
         MI_WRITE_VALID_PDE(PointerPde, TempPde);
 
         /* Add this into the list */
-#ifndef _M_AMD64
+#if (_MI_PAGING_LEVELS < 3)
         Index = ((ULONG_PTR)WorkingSetList - (ULONG_PTR)MmSessionBase) >> 22;
         MmSessionSpace->PageTables[Index] = TempPde;
 #endif
@@ -788,7 +788,7 @@ MiSessionCreateInternal(OUT PULONG SessionId)
     MmSessionSpace->Color = Color;
     MmSessionSpace->NonPageablePages = MiSessionCreateCharge;
     MmSessionSpace->CommittedPages = MiSessionCreateCharge;
-#ifndef _M_AMD64
+#if (_MI_PAGING_LEVELS < 3)
     MmSessionSpace->PageTables = PageTables;
     MmSessionSpace->PageTables[PointerPde - MiAddressToPde(MmSessionBase)] = *PointerPde;
 #endif

@@ -24,7 +24,7 @@ NTSTATUS
 NTAPI
 MmpAccessFault(KPROCESSOR_MODE Mode,
                ULONG_PTR Address,
-               BOOLEAN FromMdl,
+               BOOLEAN AddressSpaceLocked,
                ULONG FaultCode)
 {
     PMMSUPPORT AddressSpace;
@@ -67,7 +67,7 @@ MmpAccessFault(KPROCESSOR_MODE Mode,
         AddressSpace = &PsGetCurrentProcess()->Vm;
     }
 
-    if (!FromMdl)
+    if (!AddressSpaceLocked)
     {
         MmLockAddressSpace(AddressSpace);
     }
@@ -76,7 +76,7 @@ MmpAccessFault(KPROCESSOR_MODE Mode,
         MemoryArea = MmLocateMemoryAreaByAddress(AddressSpace, (PVOID)Address);
         if (MemoryArea == NULL || MemoryArea->DeleteInProgress)
         {
-            if (!FromMdl)
+            if (!AddressSpaceLocked)
             {
                 MmUnlockAddressSpace(AddressSpace);
             }
@@ -89,16 +89,16 @@ MmpAccessFault(KPROCESSOR_MODE Mode,
             Status = MmAccessFaultSectionView(AddressSpace,
                                               MemoryArea,
                                               (PVOID)Address,
-                                              !FromMdl);
+                                              TRUE);
             break;
 #ifdef NEWCC
         case MEMORY_AREA_CACHE:
             // This code locks for itself to keep from having to break a lock
             // passed in.
-            if (!FromMdl)
+            if (!AddressSpaceLocked)
                 MmUnlockAddressSpace(AddressSpace);
-            Status = MmAccessFaultCacheSection(Mode, Address, FromMdl);
-            if (!FromMdl)
+            Status = MmAccessFaultCacheSection(Mode, Address, AddressSpaceLocked);
+            if (!AddressSpaceLocked)
                 MmLockAddressSpace(AddressSpace);
             break;
 #endif
@@ -110,7 +110,7 @@ MmpAccessFault(KPROCESSOR_MODE Mode,
     while (Status == STATUS_MM_RESTART_OPERATION);
 
     DPRINT("Completed page fault handling\n");
-    if (!FromMdl)
+    if (!AddressSpaceLocked)
     {
         MmUnlockAddressSpace(AddressSpace);
     }
@@ -121,7 +121,7 @@ NTSTATUS
 NTAPI
 MmNotPresentFault(KPROCESSOR_MODE Mode,
                   ULONG_PTR Address,
-                  BOOLEAN FromMdl)
+                  BOOLEAN AddressSpaceLocked)
 {
     PMMSUPPORT AddressSpace;
     MEMORY_AREA* MemoryArea;
@@ -155,7 +155,7 @@ MmNotPresentFault(KPROCESSOR_MODE Mode,
         AddressSpace = &PsGetCurrentProcess()->Vm;
     }
 
-    if (!FromMdl)
+    if (!AddressSpaceLocked)
     {
         MmLockAddressSpace(AddressSpace);
     }
@@ -168,7 +168,7 @@ MmNotPresentFault(KPROCESSOR_MODE Mode,
         MemoryArea = MmLocateMemoryAreaByAddress(AddressSpace, (PVOID)Address);
         if (MemoryArea == NULL || MemoryArea->DeleteInProgress)
         {
-            if (!FromMdl)
+            if (!AddressSpaceLocked)
             {
                 MmUnlockAddressSpace(AddressSpace);
             }
@@ -181,16 +181,16 @@ MmNotPresentFault(KPROCESSOR_MODE Mode,
             Status = MmNotPresentFaultSectionView(AddressSpace,
                                                   MemoryArea,
                                                   (PVOID)Address,
-                                                  !FromMdl);
+                                                  TRUE);
             break;
 #ifdef NEWCC
         case MEMORY_AREA_CACHE:
             // This code locks for itself to keep from having to break a lock
             // passed in.
-            if (!FromMdl)
+            if (!AddressSpaceLocked)
                 MmUnlockAddressSpace(AddressSpace);
-            Status = MmNotPresentFaultCacheSection(Mode, Address, FromMdl);
-            if (!FromMdl)
+            Status = MmNotPresentFaultCacheSection(Mode, Address, AddressSpaceLocked);
+            if (!AddressSpaceLocked)
                 MmLockAddressSpace(AddressSpace);
             break;
 #endif
@@ -202,7 +202,7 @@ MmNotPresentFault(KPROCESSOR_MODE Mode,
     while (Status == STATUS_MM_RESTART_OPERATION);
 
     DPRINT("Completed page fault handling\n");
-    if (!FromMdl)
+    if (!AddressSpaceLocked)
     {
         MmUnlockAddressSpace(AddressSpace);
     }
@@ -217,10 +217,11 @@ MmRebalanceMemoryConsumersAndWait(VOID);
 
 NTSTATUS
 NTAPI
-MmAccessFault(IN ULONG FaultCode,
-              IN PVOID Address,
-              IN KPROCESSOR_MODE Mode,
-              IN PVOID TrapInformation)
+MmAccessFaultEx(IN ULONG FaultCode,
+                IN PVOID Address,
+                IN KPROCESSOR_MODE Mode,
+                IN PVOID TrapInformation,
+                IN BOOLEAN AddressSpaceLocked)
 {
     PMMVAD Vad = NULL;
     NTSTATUS Status;
@@ -296,12 +297,12 @@ Retry:
     if (!MI_IS_NOT_PRESENT_FAULT(FaultCode))
     {
         /* Call access fault */
-        Status = MmpAccessFault(Mode, (ULONG_PTR)Address, TrapInformation ? FALSE : TRUE, FaultCode);
+        Status = MmpAccessFault(Mode, (ULONG_PTR)Address, AddressSpaceLocked, FaultCode);
     }
     else
     {
         /* Call not present */
-        Status = MmNotPresentFault(Mode, (ULONG_PTR)Address, TrapInformation ? FALSE : TRUE);
+        Status = MmNotPresentFault(Mode, (ULONG_PTR)Address, AddressSpaceLocked);
     }
 
     if (Status == STATUS_NO_MEMORY)
@@ -313,3 +314,16 @@ Retry:
     return Status;
 }
 
+NTSTATUS
+NTAPI
+MmAccessFault(IN ULONG FaultCode,
+              IN PVOID Address,
+              IN KPROCESSOR_MODE Mode,
+              IN PVOID TrapInformation)
+{
+    return MmAccessFaultEx(FaultCode,
+                           Address,
+                           Mode,
+                           TrapInformation,
+                           TrapInformation ? FALSE : TRUE);
+}

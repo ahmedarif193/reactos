@@ -287,6 +287,8 @@ MiMakeSystemAddressValid(IN PVOID PageTableVirtualAddress,
 {
     NTSTATUS Status;
     BOOLEAN WsShared = FALSE, WsSafe = FALSE, LockChange = FALSE;
+    BOOLEAN ProcessWs;
+    PMMSUPPORT WorkingSet;
     PETHREAD CurrentThread = PsGetCurrentThread();
 
     /* Must be a non-pool page table, since those are double-mapped already */
@@ -300,11 +302,44 @@ MiMakeSystemAddressValid(IN PVOID PageTableVirtualAddress,
     /* Check if the page table is valid */
     while (!MmIsAddressValid(PageTableVirtualAddress))
     {
-        /* Release the working set lock */
-        MiUnlockProcessWorkingSetForFault(CurrentProcess,
-                                          CurrentThread,
-                                          &WsSafe,
-                                          &WsShared);
+        ProcessWs = FALSE;
+        WorkingSet = NULL;
+
+        if (CurrentThread->OwnsSystemWorkingSetExclusive ||
+            CurrentThread->OwnsSystemWorkingSetShared)
+        {
+            WorkingSet = &MmSystemCacheWs;
+            WsShared = CurrentThread->OwnsSystemWorkingSetShared;
+        }
+        else if (CurrentThread->OwnsSessionWorkingSetExclusive ||
+                 CurrentThread->OwnsSessionWorkingSetShared)
+        {
+            WorkingSet = &MmSessionSpace->GlobalVirtualAddress->Vm;
+            WsShared = CurrentThread->OwnsSessionWorkingSetShared;
+        }
+        else
+        {
+            ASSERT(CurrentProcess != NULL);
+            ASSERT(MI_WS_OWNER(CurrentProcess));
+            ProcessWs = TRUE;
+        }
+
+        if (ProcessWs)
+        {
+            /* Release the process working set lock */
+            MiUnlockProcessWorkingSetForFault(CurrentProcess,
+                                              CurrentThread,
+                                              &WsSafe,
+                                              &WsShared);
+        }
+        else
+        {
+            ASSERT(WorkingSet != NULL);
+            if (WsShared)
+                MiUnlockWorkingSetShared(CurrentThread, WorkingSet);
+            else
+                MiUnlockWorkingSet(CurrentThread, WorkingSet);
+        }
 
         /* Fault it in */
         Status = MmAccessFault(FALSE, PageTableVirtualAddress, KernelMode, NULL);
@@ -319,10 +354,20 @@ MiMakeSystemAddressValid(IN PVOID PageTableVirtualAddress,
         }
 
         /* Lock the working set again */
-        MiLockProcessWorkingSetForFault(CurrentProcess,
-                                        CurrentThread,
-                                        WsSafe,
-                                        WsShared);
+        if (ProcessWs)
+        {
+            MiLockProcessWorkingSetForFault(CurrentProcess,
+                                            CurrentThread,
+                                            WsSafe,
+                                            WsShared);
+        }
+        else
+        {
+            if (WsShared)
+                MiLockWorkingSetShared(CurrentThread, WorkingSet);
+            else
+                MiLockWorkingSet(CurrentThread, WorkingSet);
+        }
 
         /* This flag will be useful later when we do better locking */
         LockChange = TRUE;
@@ -1671,7 +1716,7 @@ MiQueryAddressState(IN PVOID Va,
     if (ValidPte)
     {
         /* FIXME: watch out for large pages */
-        ASSERT(PointerPde->u.Hard.LargePage == FALSE);
+        ASSERT(MI_IS_PAGE_LARGE(PointerPde) == FALSE);
 
         /* Capture the PTE */
         TempPte = *PointerPte;

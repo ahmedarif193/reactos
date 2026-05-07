@@ -1352,7 +1352,7 @@ MiInitializeSessionPool(VOID)
                                       TRUE);
     ASSERT(NT_SUCCESS(Status) == TRUE);
 
-#ifndef _M_AMD64 // FIXME
+#if (_MI_PAGING_LEVELS < 3)
     /* Initialize the first page table */
     {
         ULONG Index;

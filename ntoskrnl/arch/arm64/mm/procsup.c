@@ -158,9 +158,5 @@ MiArchCreateProcessAddressSpace(
     /* Remember the hyper table PFN in the directory base */
     DirectoryTableBase[1] = HyperPfn << PAGE_SHIFT;
 
-    OldIrql = MiAcquireExpansionLock();
-    InsertTailList(&MmProcessList, &Process->MmProcessLinks);
-    MiReleaseExpansionLock(OldIrql);
-
     return TRUE;
 }

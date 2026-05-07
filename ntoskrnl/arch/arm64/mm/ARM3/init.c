@@ -133,6 +133,7 @@ static VOID MiMapPTEs(PVOID StartAddress, PVOID EndAddress);
 static VOID MiArm64MapKseg0IdentityRange(PVOID BaseAddress, SIZE_T Size);
 static VOID MiArm64MapKseg0IdentityRangeWithAttr(PVOID BaseAddress, SIZE_T Size, ULONG AttrIndex);
 static VOID MiArm64MapLoaderProcessorState(PLOADER_PARAMETER_BLOCK LoaderBlock);
+static VOID MiArm64MapLoaderPhysicalMemory(PLOADER_PARAMETER_BLOCK LoaderBlock);
 
 static __inline VOID
 MiArm64FlushTranslationChanges(VOID)
@@ -337,6 +338,99 @@ MiArm64MapKseg0Page(
 {
     MiArm64MapKseg0IdentityRange((PVOID)(ULONG_PTR)(((UINT64)PageFrameNumber) << PAGE_SHIFT),
                                  PAGE_SIZE);
+}
+
+static
+BOOLEAN
+MiArm64ShouldMapKseg0Descriptor(
+    _In_ TYPE_OF_MEMORY MemoryType)
+{
+    if ((MemoryType == LoaderBad) || MiIsMemoryTypeInvisible(MemoryType))
+    {
+        return FALSE;
+    }
+
+    return TRUE;
+}
+
+static
+VOID
+MiArm64MapKseg0PhysicalRange(
+    _In_ PFN_NUMBER BasePage,
+    _In_ PFN_NUMBER PageCount)
+{
+    PFN_NUMBER LastPage;
+    ULONG_PTR Current;
+    ULONG_PTR End;
+
+    if (PageCount == 0)
+    {
+        return;
+    }
+
+    if (BasePage > MmHighestPhysicalPage)
+    {
+        return;
+    }
+
+    LastPage = BasePage + PageCount - 1;
+    if ((LastPage < BasePage) || (LastPage > MmHighestPhysicalPage))
+    {
+        LastPage = MmHighestPhysicalPage;
+    }
+
+    Current = (ULONG_PTR)BasePage << PAGE_SHIFT;
+    End = ((ULONG_PTR)LastPage << PAGE_SHIFT) + PAGE_SIZE - 1;
+
+    while (Current <= End)
+    {
+        ULONG_PTR ChunkEnd;
+        ULONG_PTR BlockEnd;
+
+        BlockEnd = ALIGN_DOWN_BY(Current, 1ULL << PDI_SHIFT) +
+                   (1ULL << PDI_SHIFT) - 1;
+        ChunkEnd = min(BlockEnd, End);
+
+        MiArm64MapKseg0IdentityRange((PVOID)Current, ChunkEnd - Current + 1);
+
+        if (ChunkEnd == End)
+        {
+            break;
+        }
+
+        Current = ChunkEnd + 1;
+    }
+}
+
+static
+VOID
+MiArm64MapLoaderPhysicalMemory(
+    _In_ PLOADER_PARAMETER_BLOCK LoaderBlock)
+{
+    PLIST_ENTRY NextEntry;
+
+    if (LoaderBlock == NULL)
+    {
+        return;
+    }
+
+    NextEntry = LoaderBlock->MemoryDescriptorListHead.Flink;
+    while (NextEntry != &LoaderBlock->MemoryDescriptorListHead)
+    {
+        PMEMORY_ALLOCATION_DESCRIPTOR Descriptor;
+
+        Descriptor = CONTAINING_RECORD(NextEntry,
+                                       MEMORY_ALLOCATION_DESCRIPTOR,
+                                       ListEntry);
+
+        if (MiArm64ShouldMapKseg0Descriptor(Descriptor->MemoryType))
+        {
+            MiArm64MapKseg0PhysicalRange(Descriptor->BasePage,
+                                         Descriptor->PageCount);
+        }
+
+        NextEntry = Descriptor->ListEntry.Flink;
+    }
 }
 
 static
@@ -1504,6 +1598,7 @@ MiInitMachineDependent(_Inout_ PLOADER_PARAMETER_BLOCK LoaderBlock)
          */
         MiArm64MapLoaderProcessorState(LoaderBlock);
         MiArm64MapPxeAlias();
+        MiArm64MapLoaderPhysicalMemory(LoaderBlock);
 
         {
             PVOID PfnDbStart = (PVOID)MmPfnDatabase;
@@ -1586,7 +1681,6 @@ MiInitMachineDependent(_Inout_ PLOADER_PARAMETER_BLOCK LoaderBlock)
             PVOID SessionSpaceEnd = (PUCHAR)MiSessionSpaceEnd - 1;
 
             MiMapPPEs(MmSessionBase, SessionSpaceEnd);
-            MiMapPDEs(MmSessionBase, SessionSpaceEnd);
         }
 
         MiMapPPEs(MmSystemCacheStart, (PVOID)MI_SYSTEM_CACHE_END);
