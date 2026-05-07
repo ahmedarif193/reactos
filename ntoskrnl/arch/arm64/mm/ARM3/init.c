@@ -1311,49 +1311,67 @@ MiArm64RegisterPageTablePfn(
     _In_ PVOID PteAddress,
     _In_ PFN_NUMBER PteFrame)
 {
+    KIRQL OldIrql;
+    BOOLEAN UsePfnLock;
     PMMPFN PfnEntry;
+    PMMPFN ParentPfn;
 
     if (PageTablePfn > MmHighestPhysicalPage)
     {
         return;
     }
 
-    PfnEntry = MiGetPfnEntry(PageTablePfn);
-    if ((PfnEntry == NULL) ||
-        (PfnEntry->u3.e1.PageLocation == ActiveAndValid))
+    UsePfnLock = MiArm64PfnDatabaseReady || MiArm64PfnFreeListsReady;
+    if (UsePfnLock)
     {
+        OldIrql = MiAcquirePfnLock();
+    }
+
+    PfnEntry = MI_PFN_ELEMENT(PageTablePfn);
+    if (PfnEntry->u3.e1.PageLocation == ActiveAndValid)
+    {
+        if (UsePfnLock) MiReleasePfnLock(OldIrql);
         return;
     }
 
-    if (PfnEntry->u3.e2.ReferenceCount == 0)
+    if ((PfnEntry->u3.e1.PageLocation == FreePageList) ||
+        (PfnEntry->u3.e1.PageLocation == ZeroedPageList))
     {
-        MiInitializePfnForOtherProcess(PageTablePfn, PteAddress, PteFrame);
-        return;
-    }
+        ASSERT(PfnEntry->u3.e2.ReferenceCount == 0);
 
-    if (((PfnEntry->u3.e1.PageLocation == FreePageList) ||
-         (PfnEntry->u3.e1.PageLocation == ZeroedPageList)) &&
-        (PfnEntry->u1.Flink == 0) &&
-        (PfnEntry->u2.Blink == 0))
-    {
-        PMMPFN ParentPfn;
-
-        PfnEntry->u3.e2.ReferenceCount = 1;
-        PfnEntry->u2.ShareCount = 1;
-        PfnEntry->u3.e1.PageLocation = ActiveAndValid;
-        PfnEntry->u3.e1.Modified = 1;
-        PfnEntry->u4.PteFrame = PteFrame;
-        PfnEntry->PteAddress = PteAddress;
-
-        ParentPfn = (PteFrame != 0) ? MiGetPfnEntry(PteFrame) : NULL;
-        if (ParentPfn != NULL)
+        if (MiArm64PfnFreeListsReady)
         {
+            MiUnlinkFreeOrZeroedPage(PfnEntry);
+            PfnEntry = MI_PFN_ELEMENT(PageTablePfn);
+        }
+    }
+    else if (PfnEntry->u3.e2.ReferenceCount != 0)
+    {
+        ASSERT(FALSE);
+        if (UsePfnLock) MiReleasePfnLock(OldIrql);
+        return;
+    }
+
+    PfnEntry->PteAddress = PteAddress;
+    MI_MAKE_SOFTWARE_PTE(&PfnEntry->OriginalPte, MM_READWRITE);
+    PfnEntry->u1.Flink = 0;
+    PfnEntry->u2.ShareCount = 1;
+    PfnEntry->u3.e2.ReferenceCount = 1;
+    PfnEntry->u3.e1.PageLocation = ActiveAndValid;
+    PfnEntry->u3.e1.Modified = TRUE;
+    PfnEntry->u4.EntireFrame = 0;
+    PfnEntry->u4.PteFrame = PteFrame;
+
+    if (PteFrame != 0)
+    {
+        if (PteFrame <= MmHighestPhysicalPage)
+        {
+            ParentPfn = MI_PFN_ELEMENT(PteFrame);
             ParentPfn->u2.ShareCount++;
         }
-        return;
     }
 
-    MiInitializePfnForOtherProcess(PageTablePfn, PteAddress, PteFrame);
+    if (UsePfnLock) MiReleasePfnLock(OldIrql);
 }
 
 static
@@ -1670,6 +1688,8 @@ MiInitMachineDependent(_Inout_ PLOADER_PARAMETER_BLOCK LoaderBlock)
             }
         }
 
+        MiArm64RegisterFreeLdrPageTables();
+
         MiInitializePfnDatabase(LoaderBlock);
 
         if (MiArm64PfnFinalizePending)
@@ -1677,9 +1697,8 @@ MiInitMachineDependent(_Inout_ PLOADER_PARAMETER_BLOCK LoaderBlock)
             MiArm64FinalizePfnDatabase(LoaderBlock);
         }
 
+        MiArm64PfnFreeListsReady = TRUE;
         MiArm64PfnDatabaseReady = TRUE;
-
-        MiArm64RegisterFreeLdrPageTables();
 
         {
             PVOID PagedPoolEnd = (PVOID)(((ULONG_PTR)MmPagedPoolStart +
