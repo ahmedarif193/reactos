@@ -120,7 +120,7 @@ KiArm64CopyToCurrentUserBuffer(
             ChunkSize = RemainingSize;
         }
 
-        Status = MmAccessFault(FALSE, PageAddress, UserMode, NULL);
+        Status = MmAccessFaultEx(FALSE, PageAddress, UserMode, NULL, FALSE);
         if (!NT_SUCCESS(Status))
         {
             return Status;
@@ -282,7 +282,7 @@ KiArm64PrefaultUserApcPage(
      * speculative/cache-visible EL1 accesses to fresh user aliases can surface
      * later as deferred SErrors on the first ERET.
      */
-    Status = MmAccessFault(FALSE, PAGE_ALIGN(UserVa), UserMode, NULL);
+    Status = MmAccessFaultEx(FALSE, PAGE_ALIGN(UserVa), UserMode, NULL, FALSE);
 
     /*
      * The executable system-DLL mapping path already publishes instruction

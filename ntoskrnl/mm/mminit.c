@@ -78,6 +78,22 @@ MiInitSystemMemoryAreas(VOID)
     // The loader mappings. The only Executable area.
     MiCreateArm3StaticMemoryArea((PVOID)KSEG0_BASE, MmBootImageSize, TRUE);
 
+#ifdef _M_ARM64
+    /*
+     * KSEG0 is the ARM64 PFN alias used by the kernel table walkers, cache
+     * maintenance paths, and debugger. Keep the rest of that VA band out of
+     * the generic memory-area allocator; cache views and other dynamic kernel
+     * mappings must not consume physical-alias addresses.
+     */
+    if (((ULONG_PTR)KSEG0_BASE + MmBootImageSize) < (ULONG_PTR)PTE_BASE)
+    {
+        MiCreateArm3StaticMemoryArea((PVOID)((ULONG_PTR)KSEG0_BASE + MmBootImageSize),
+                                     (ULONG_PTR)PTE_BASE -
+                                         ((ULONG_PTR)KSEG0_BASE + MmBootImageSize),
+                                     FALSE);
+    }
+#endif
+
     // The PTE base
     MiCreateArm3StaticMemoryArea((PVOID)PTE_BASE, PTE_TOP - PTE_BASE + 1, FALSE);
 

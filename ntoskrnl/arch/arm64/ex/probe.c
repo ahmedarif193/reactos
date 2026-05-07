@@ -46,11 +46,11 @@ ExArchProbeForWrite(
                     break;
                 }
 
-                Status = MmAccessFault(0x3, (PVOID)Page, KernelMode, (PVOID)1);
+                Status = MmAccessFaultEx(0x3, (PVOID)Page, KernelMode, NULL, FALSE);
             }
             else
             {
-                Status = MmAccessFault(0x2, (PVOID)Page, KernelMode, (PVOID)1);
+                Status = MmAccessFaultEx(0x2, (PVOID)Page, KernelMode, NULL, FALSE);
             }
 
             if (!NT_SUCCESS(Status))
