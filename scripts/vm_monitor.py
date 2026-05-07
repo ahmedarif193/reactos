@@ -35,8 +35,8 @@ import socket
 
 # Configuration (never change those values)
 LOG_FILE = "/tmp/freeldr_arm64.log"
-STALL_TIMEOUT = int(os.environ.get("ROS_VM_STALL_TIMEOUT", "16"))
-HARD_TIMEOUT = int(os.environ.get("ROS_VM_HARD_TIMEOUT", "90"))
+STALL_TIMEOUT = int(os.environ.get("ROS_VM_STALL_TIMEOUT", "30"))
+HARD_TIMEOUT = int(os.environ.get("ROS_VM_HARD_TIMEOUT", "130"))
 VM_NAME = os.environ.get("ROS_VM_NAME", "ROS11")
 ENABLE_GDB_DUMP = os.environ.get("ROS_VM_GDB_DUMP", "1") != "0"
 QEMU_GDB_PORT = int(os.environ.get("ROS_QEMU_GDB_PORT", "1234"))
