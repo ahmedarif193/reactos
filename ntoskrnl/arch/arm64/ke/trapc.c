@@ -769,6 +769,51 @@ static volatile LONG KiArm64TrapActive[MAXIMUM_PROCESSORS] = {0};
 
 static
 VOID
+KiArm64DeliverPendingUserApc(
+    _Inout_ PKEXCEPTION_FRAME ExceptionFrame,
+    _Inout_ PKTRAP_FRAME TrapFrame)
+{
+    PKTHREAD Thread;
+    KIRQL OldIrql;
+    BOOLEAN Raised = FALSE;
+
+    if (TrapFrame->PreviousMode != UserMode)
+    {
+        return;
+    }
+
+    Thread = KeGetCurrentThread();
+    if (!Thread->ApcState.UserApcPending)
+    {
+        return;
+    }
+
+    OldIrql = KeGetCurrentIrql();
+    if (OldIrql > APC_LEVEL)
+    {
+        return;
+    }
+
+    Thread->Alerted[KernelMode] = FALSE;
+
+    if (OldIrql < APC_LEVEL)
+    {
+        KeRaiseIrql(APC_LEVEL, &OldIrql);
+        Raised = TRUE;
+    }
+
+    _enable();
+    KiDeliverApc(UserMode, ExceptionFrame, TrapFrame);
+    _disable();
+
+    if (Raised)
+    {
+        KeLowerIrql(OldIrql);
+    }
+}
+
+static
+VOID
 KiArm64ReleaseWorkingSetsForBugCheck(VOID)
 {
     PETHREAD Thread = PsGetCurrentThread();
@@ -1180,6 +1225,8 @@ KiArm64HandleSynchronousException(
              * the linked list (TrapFrame->TrapFrame).
              */
             TrapFrame = Thread->TrapFrame;
+            KiArm64DeliverPendingUserApc(&Context->ExceptionFrame,
+                                         TrapFrame);
             Thread->TrapFrame = KiGetLinkedTrapFrame(TrapFrame);
 
             /*

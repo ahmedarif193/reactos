@@ -1026,6 +1026,8 @@ static int rpcrt4_protseq_np_wait_for_new_connection(RpcServerProtseq *protseq, 
     if (!objs)
         return -1;
 
+    FIXME("[arm64][RPC-NP] wait enter protseq=%p count=%u mgr=%p first=%p\n",
+          protseq, count, objs[0], count > 1 ? objs[1] : NULL);
     do
     {
         /* an alertable wait isn't strictly necessary, but due to our
@@ -1033,6 +1035,7 @@ static int rpcrt4_protseq_np_wait_for_new_connection(RpcServerProtseq *protseq, 
          * by the file user APC being called, even if no completion routine was
          * specified at the time of starting the async operation */
         res = WaitForMultipleObjectsEx(count, objs, FALSE, INFINITE, TRUE);
+        FIXME("[arm64][RPC-NP] wait returned res=0x%lx count=%u\n", res, count);
     } while (res == WAIT_IO_COMPLETION);
 
     if (res == WAIT_OBJECT_0)

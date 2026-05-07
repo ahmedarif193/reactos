@@ -412,15 +412,11 @@ KeSwitchKernelStack(
 {
     PKTHREAD CurrentThread;
     PVOID OldStackBase;
+    ULONG_PTR OldStackLimit;
+    ULONG_PTR OldFramePointer;
     LONG_PTR StackOffset;
     SIZE_T StackSize;
     PKIPCR Pcr;
-    ULONG_PTR OldStackLimit;
-    ULONG_PTR OldStackTop;
-    ULONG_PTR FramePointer;
-    ULONG_PTR CopiedFrame;
-    ULONG_PTR SavedFrame;
-    ULONG FrameDepth;
 
     /* Get the current thread */
     CurrentThread = KeGetCurrentThread();
@@ -428,14 +424,14 @@ KeSwitchKernelStack(
     /* Save the old stack base for return value */
     OldStackBase = CurrentThread->StackBase;
     OldStackLimit = CurrentThread->StackLimit;
-    OldStackTop = (ULONG_PTR)OldStackBase;
+    __asm__ __volatile__("mov %0, x29" : "=r"(OldFramePointer));
 
     /* Compute size of current stack contents */
-    StackSize = OldStackTop - OldStackLimit;
+    StackSize = (ULONG_PTR)CurrentThread->StackBase - OldStackLimit;
     ASSERT(StackSize <= (ULONG_PTR)StackBase - (ULONG_PTR)StackLimit);
 
     /* Calculate the offset between old and new stacks */
-    StackOffset = (PUCHAR)StackBase - (PUCHAR)OldStackBase;
+    StackOffset = (PUCHAR)StackBase - (PUCHAR)CurrentThread->StackBase;
 
     /*
      * Mask ALL exception/interrupt sources (DAIF: Debug, SError, IRQ, FIQ)
@@ -463,34 +459,39 @@ KeSwitchKernelStack(
                   StackSize);
 
     /*
-     * The copied AArch64 frame records still contain previous-FP links into
-     * the old stack. Function epilogues restore x29 from these records, so the
-     * chain must be translated before the old stack can be freed.
+     * Relocate the saved frame-pointer chain inside the copied stack.
+     *
+     * The live x29 is adjusted below, but every caller will later restore its
+     * own x29 from the copied frame record. If those saved records still point
+     * at the old stack, frame-pointer-relative local accesses after returning
+     * from this routine will use freed stack memory.
      */
-    __asm__ __volatile__("mov %0, x29" : "=r"(FramePointer));
-    for (FrameDepth = 0; FrameDepth < 256; FrameDepth++)
     {
-        if ((FramePointer < OldStackLimit) ||
-            (FramePointer > (OldStackTop - (2 * sizeof(ULONG_PTR)))) ||
-            ((FramePointer & (sizeof(ULONG_PTR) - 1)) != 0))
+        ULONG_PTR FramePointer = OldFramePointer;
+        ULONG_PTR FramesLeft = StackSize / sizeof(PVOID);
+
+        while ((FramesLeft-- != 0) &&
+               (FramePointer >= OldStackLimit) &&
+               (FramePointer < (ULONG_PTR)OldStackBase))
         {
-            break;
+            ULONG_PTR NewFramePointer = FramePointer + StackOffset;
+            ULONG_PTR PreviousFramePointer = *(PULONG_PTR)NewFramePointer;
+
+            if ((PreviousFramePointer < OldStackLimit) ||
+                (PreviousFramePointer >= (ULONG_PTR)OldStackBase))
+            {
+                break;
+            }
+
+            *(PULONG_PTR)NewFramePointer = PreviousFramePointer + StackOffset;
+
+            if (PreviousFramePointer <= FramePointer)
+            {
+                break;
+            }
+
+            FramePointer = PreviousFramePointer;
         }
-
-        CopiedFrame = FramePointer + (ULONG_PTR)StackOffset;
-        SavedFrame = *(PULONG_PTR)CopiedFrame;
-
-        if ((SavedFrame < OldStackLimit) ||
-            (SavedFrame > (OldStackTop - (2 * sizeof(ULONG_PTR)))) ||
-            ((SavedFrame & (sizeof(ULONG_PTR) - 1)) != 0) ||
-            (SavedFrame <= FramePointer))
-        {
-            break;
-        }
-
-        *(PULONG_PTR)CopiedFrame = SavedFrame + (ULONG_PTR)StackOffset;
-
-        FramePointer = SavedFrame;
     }
 
     /* Adjust thread trap frame pointer to new stack */
@@ -547,8 +548,8 @@ KeSwitchKernelStack(
      *   Without adjusting FP, all frame-pointer-relative accesses in
      *   the ENTIRE call chain above us would access the old (freed) stack.
      *
-     * The copied frame records were translated above, otherwise the epilogue
-     * below would restore an old-stack x29 into the caller.
+     * The saved frame pointer chain was relocated above so each caller restores
+     * a frame pointer in the new stack as this function unwinds.
      */
     __asm__ __volatile__(
         "mov x16, sp\n\t"
