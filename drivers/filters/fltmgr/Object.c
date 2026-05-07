@@ -321,20 +321,13 @@ FltpGetObjectName(_In_ PVOID Object,
 ULONG
 FltpObjectPointerReference(_In_ PFLT_OBJECT Object)
 {
-    PULONG Result;
-
-    /* Store the old count and increment */
-    Result = &Object->PointerCount;
-    InterlockedIncrementSizeT(&Object->PointerCount);
-
-    /* Return the initial value */
-    return *Result;
+    return (ULONG)InterlockedIncrement((volatile LONG *)&Object->PointerCount);
 }
 
 VOID
 FltpObjectPointerDereference(_In_ PFLT_OBJECT Object)
 {
-    if (InterlockedDecrementSizeT(&Object->PointerCount) == 0)
+    if (InterlockedDecrement((volatile LONG *)&Object->PointerCount) == 0)
     {
         // Cleanup
         FLT_ASSERT(FALSE);

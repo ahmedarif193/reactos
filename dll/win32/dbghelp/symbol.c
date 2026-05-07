@@ -69,7 +69,7 @@ int CDECL symt_cmp_addr(const void* p1, const void* p2)
 
 DWORD             symt_ptr2index(struct module* module, const struct symt* sym)
 {
-#ifdef __x86_64__
+#if defined(__x86_64__) || defined(__aarch64__) || defined(__arm64__)
     const struct symt** c;
     int len = vector_length(&module->vsymt);
     struct hash_table_iter hti;
@@ -111,7 +111,7 @@ DWORD             symt_ptr2index(struct module* module, const struct symt* sym)
 
 struct symt*      symt_index2ptr(struct module* module, DWORD id)
 {
-#if defined(__x86_64__) || defined(__arm64__)
+#if defined(__x86_64__) || defined(__aarch64__) || defined(__arm64__)
     if (!id-- || id >= vector_length(&module->vsymt)) return NULL;
     return *(struct symt**)vector_at(&module->vsymt, id);
 #else
