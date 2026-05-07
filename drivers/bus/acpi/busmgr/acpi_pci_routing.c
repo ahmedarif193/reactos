@@ -10,12 +10,6 @@
 
 #define ACPI_PRT_POOL_TAG 'TRPA'
 
-#if defined(__GNUC__) || defined(__clang__)
-#define ACPI_ROUTE_UNUSED __attribute__((unused))
-#else
-#define ACPI_ROUTE_UNUSED
-#endif
-
 typedef struct _PRT_MAP_ENTRY
 {
     ULONG Segment;
@@ -342,7 +336,7 @@ AcpiPrtBuildForHandle(
     return AE_OK;
 }
 
-static ACPI_ROUTE_UNUSED
+static
 BOOLEAN
 NTAPI
 HalPciRouteProvider(
@@ -431,11 +425,8 @@ acpi_pci_link_init(VOID)
     (void)AcpiGetDevices("PNP0A03", AcpiEnumRootBridgeCallback, NULL, NULL);
     (void)AcpiGetDevices("PNP0A08", AcpiEnumRootBridgeCallback, NULL, NULL);
 
-    /* HalpRegisterPciRouteQuery / HalpSetPciRoutingMap are leftover stubs
-     * from a partial cherry-pick — the HAL side never landed. Skipping
-     * the registration is harmless for MSI/MSI-X work; legacy IRQ
-     * routing falls back to the PIC/IOAPIC defaults. */
-    DPRINT1("ACPI: PCI routing provider registration skipped (%lu entries available, HAL hooks not implemented)\n",
+    HalpRegisterPciRouteQuery(HalPciRouteProvider);
+    DPRINT1("ACPI: PCI routing provider registered (%lu entries available)\n",
             PrtCacheCount);
 
     return 0;
@@ -444,6 +435,6 @@ acpi_pci_link_init(VOID)
 void
 acpi_pci_link_exit(VOID)
 {
-    /* HalpRegisterPciRouteQuery(NULL); -- HAL hook not implemented (see above) */
+    HalpRegisterPciRouteQuery(NULL);
     AcpiPrtResetCache();
 }
