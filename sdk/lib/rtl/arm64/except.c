@@ -46,10 +46,14 @@ RtlVirtualUnwind(
 
 static
 BOOLEAN
-RtlpArm64IsKernelPointer(
-    _In_ ULONG_PTR Pointer)
+RtlpArm64IsStackPointerValid(
+    _In_ ULONG_PTR Pointer,
+    _In_ ULONG_PTR StackLow,
+    _In_ ULONG_PTR StackHigh)
 {
-    return Pointer >= 0xFFFF000000000000ULL;
+    return (Pointer >= StackLow) &&
+           (Pointer < StackHigh) &&
+           ((Pointer & (sizeof(ULONG64) - 1)) == 0);
 }
 
 static
@@ -128,24 +132,6 @@ RtlpArm64GetExceptionHandler(
 
 VOID
 NTAPI
-RtlCaptureContext(
-    _Out_ PCONTEXT ContextRecord)
-{
-    ULONG64 StackPointer;
-
-    RtlZeroMemory(ContextRecord, sizeof(*ContextRecord));
-
-    __asm__ __volatile__("mov %0, sp" : "=r"(StackPointer));
-
-    ContextRecord->ContextFlags = CONTEXT_FULL;
-    ContextRecord->Sp = StackPointer;
-    ContextRecord->Fp = (ULONG64)__builtin_frame_address(0);
-    ContextRecord->Lr = (ULONG64)_ReturnAddress();
-    ContextRecord->Pc = (ULONG64)_ReturnAddress();
-}
-
-VOID
-NTAPI
 RtlGetCallersAddress(
     _Out_ PVOID *CallersAddress,
     _Out_ PVOID *CallersCaller)
@@ -169,6 +155,8 @@ RtlDispatchException(
     EXCEPTION_DISPOSITION Disposition;
     ULONG Frames;
     ULONG64 EstablisherFrame;
+    ULONG_PTR StackLow;
+    ULONG_PTR StackHigh;
 
     if (RtlCallVectoredExceptionHandlers(ExceptionRecord, ContextRecord))
     {
@@ -177,6 +165,7 @@ RtlDispatchException(
     }
 
     UnwindContext = *ContextRecord;
+    RtlpGetStackLimits(&StackLow, &StackHigh);
 
     for (Frames = 0; Frames < 64; Frames++)
     {
@@ -229,6 +218,8 @@ RtlDispatchException(
             if (!UsingVu)
             {
                 ULONG64 FrameFp = UnwindContext.Fp;
+                ULONG64 NextFp;
+                ULONG64 NextLr;
 
                 HandlerData = NULL;
                 ExceptionRoutine = NULL;
@@ -241,18 +232,33 @@ RtlDispatchException(
                     HandlerData = NULL;
                 }
 
-                if (!RtlpArm64IsKernelPointer((ULONG_PTR)UnwindContext.Fp) ||
-                    (UnwindContext.Fp & (sizeof(ULONG64) - 1)))
+                if (!RtlpArm64IsStackPointerValid((ULONG_PTR)FrameFp,
+                                                  StackLow,
+                                                  StackHigh) ||
+                    !RtlpArm64IsStackPointerValid((ULONG_PTR)(FrameFp + sizeof(ULONG64)),
+                                                  StackLow,
+                                                  StackHigh))
                 {
                     break;
                 }
 
                 EstablisherFrame = FrameFp;
-                UnwindContext.Lr = *(PULONG64)(ULONG_PTR)(UnwindContext.Fp + sizeof(ULONG64));
-                UnwindContext.Sp = UnwindContext.Fp + (2 * sizeof(ULONG64));
-                UnwindContext.Fp = *(PULONG64)(ULONG_PTR)UnwindContext.Fp;
-                if (UnwindContext.Lr == 0)
+                NextFp = *(PULONG64)(ULONG_PTR)FrameFp;
+                NextLr = *(PULONG64)(ULONG_PTR)(FrameFp + sizeof(ULONG64));
+
+                if ((NextLr == 0) ||
+                    ((NextFp != 0) &&
+                     (!RtlpArm64IsStackPointerValid((ULONG_PTR)NextFp,
+                                                    StackLow,
+                                                    StackHigh) ||
+                      (NextFp <= FrameFp))))
+                {
                     break;
+                }
+
+                UnwindContext.Lr = NextLr;
+                UnwindContext.Sp = UnwindContext.Fp + (2 * sizeof(ULONG64));
+                UnwindContext.Fp = NextFp;
                 UnwindContext.Pc = UnwindContext.Lr;
 
             }
