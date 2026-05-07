@@ -1197,6 +1197,23 @@ KiArm64HandleSynchronousException(
             Context = CONTAINING_RECORD(TrapFrame,
                                         ARM64_EARLY_SYNC_CONTEXT,
                                         TrapFrame);
+            if ((TrapFrame->Pc < 0x10000) || ((TrapFrame->Spsr & 0xF) != 0))
+            {
+                DPRINT1("[arm64][SVC-RET] instr=0x%lx tf=%p ef=%p pc=%p lr=%p fp=%p sp=%p "
+                        "spsr=0x%lx x0=%p x8=%p linked=%p threadtf=%p\n",
+                        Instruction,
+                        TrapFrame,
+                        &Context->ExceptionFrame,
+                        (PVOID)(ULONG_PTR)TrapFrame->Pc,
+                        (PVOID)(ULONG_PTR)TrapFrame->Lr,
+                        (PVOID)(ULONG_PTR)TrapFrame->Fp,
+                        (PVOID)(ULONG_PTR)TrapFrame->Sp,
+                        TrapFrame->Spsr,
+                        (PVOID)(ULONG_PTR)TrapFrame->X0,
+                        (PVOID)(ULONG_PTR)TrapFrame->X8,
+                        (PVOID)(ULONG_PTR)TrapFrame->TrapFrame,
+                        Thread->TrapFrame);
+            }
             Context->TrapFramePointer = TrapFrame;
             Context->ExceptionFramePointer = &Context->ExceptionFrame;
             return TRUE;
@@ -1298,24 +1315,54 @@ KiArm64HandleSynchronousException(
                  * stack via KSEG0 to find the return chain that led to the
                  * bad call.
                  */
-                if (Context->State.FaultAddress < 0x10000 && PreviousMode == UserMode)
+                if (Context->State.FaultAddress < 0x10000)
                 {
                     PETHREAD CurEThread = PsGetCurrentThread();
+                    PKTRAP_FRAME ThreadTrapFrame = CurEThread->Tcb.TrapFrame;
                     DbgPrintEx(DPFLTR_DEFAULT_ID, DPFLTR_ERROR_LEVEL,
-                            "[IABORT-NEAR0] PC=%p LR=%p SP=%p FP=%p\n",
+                            "[IABORT-NEAR0] PC=%p LR=%p SP=%p FP=%p Mode=%d SPSR=0x%lx ESR=0x%lx Vec=%p\n",
                             (PVOID)TrapFrame->Pc, (PVOID)TrapFrame->Lr,
-                            (PVOID)TrapFrame->Sp, (PVOID)TrapFrame->Fp);
+                            (PVOID)TrapFrame->Sp, (PVOID)TrapFrame->Fp,
+                            PreviousMode,
+                            TrapFrame->Spsr,
+                            TrapFrame->Esr,
+                            (PVOID)(ULONG_PTR)Context->State.VectorId);
                     DbgPrintEx(DPFLTR_DEFAULT_ID, DPFLTR_ERROR_LEVEL,
-                            "[IABORT-NEAR0] X0=%p X1=%p X2=%p X3=%p X8=%p X16=%p X17=%p\n",
+                            "[IABORT-NEAR0] X0=%p X1=%p X2=%p X3=%p X8=%p X16=%p X17=%p X18=%p\n",
                             (PVOID)TrapFrame->X0, (PVOID)TrapFrame->X1,
                             (PVOID)TrapFrame->X2, (PVOID)TrapFrame->X3,
                             (PVOID)TrapFrame->X8,
-                            (PVOID)TrapFrame->X16, (PVOID)TrapFrame->X17);
+                            (PVOID)TrapFrame->X16, (PVOID)TrapFrame->X17,
+                            (PVOID)TrapFrame->X18);
                     DbgPrintEx(DPFLTR_DEFAULT_ID, DPFLTR_ERROR_LEVEL,
-                            "[IABORT-NEAR0] ThreadStart=%p Win32Start=%p TID=%p\n",
+                            "[IABORT-NEAR0] ThreadStart=%p Win32Start=%p TID=%p ThreadTF=%p\n",
                             CurEThread->StartAddress,
                             CurEThread->Win32StartAddress,
-                            CurEThread->Cid.UniqueThread);
+                            CurEThread->Cid.UniqueThread,
+                            ThreadTrapFrame);
+                    if (ThreadTrapFrame != NULL)
+                    {
+                        DbgPrintEx(DPFLTR_DEFAULT_ID, DPFLTR_ERROR_LEVEL,
+                                "[IABORT-NEAR0] ThreadTF pc=%p lr=%p fp=%p sp=%p spsr=0x%lx linked=%p\n",
+                                (PVOID)ThreadTrapFrame->Pc,
+                                (PVOID)ThreadTrapFrame->Lr,
+                                (PVOID)ThreadTrapFrame->Fp,
+                                (PVOID)ThreadTrapFrame->Sp,
+                                ThreadTrapFrame->Spsr,
+                                (PVOID)ThreadTrapFrame->TrapFrame);
+                    }
+
+                    if (TrapFrame->Sp >= (ULONG_PTR)MmSystemRangeStart)
+                    {
+                        volatile ULONG64 *Stack = (volatile ULONG64 *)TrapFrame->Sp;
+                        for (ULONG StackIndex = 0; StackIndex < 24; StackIndex++)
+                        {
+                            DbgPrintEx(DPFLTR_DEFAULT_ID, DPFLTR_ERROR_LEVEL,
+                                    "[IABORT-NEAR0]   KSP+%02lx = %p\n",
+                                    StackIndex * sizeof(ULONG64),
+                                    (PVOID)Stack[StackIndex]);
+                        }
+                    }
 
                     /*
                      * Dump the caller instruction at LR-4. This distinguishes
