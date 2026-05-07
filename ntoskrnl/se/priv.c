@@ -756,11 +756,6 @@ SeSinglePrivilegeCheck(
         return TRUE;
     }
 
-#ifdef _M_ARM64
-    DPRINT1("[arm64][se] SeSinglePrivilegeCheck: capture privilege=%lu mode=%d\n",
-            PrivilegeValue.LowPart, PreviousMode);
-#endif
-
     SeCaptureSubjectContext(&SubjectContext);
 
     Priv.PrivilegeCount = 1;

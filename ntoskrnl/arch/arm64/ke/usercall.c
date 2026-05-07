@@ -81,8 +81,6 @@ static const PKI_SYSCALL_PARAM_HANDLER KiSyscallHandlers[] =
 C_ASSERT(RTL_NUMBER_OF(KiSyscallHandlers) == 0x12);
 
 static LONG KiArm64UserApcTraceCount;
-static LONG KiArm64UserApcPrefaultTraceCount;
-static LONG KiArm64UserApcCopyTraceCount;
 static LONG KiArm64UserCallbackTraceCount;
 
 static
@@ -95,11 +93,10 @@ KiArm64CopyToCurrentUserBuffer(
 {
     ULONG_PTR CurrentVa;
     SIZE_T RemainingSize;
-    PFN_NUMBER FirstPfn = 0;
-    PFN_NUMBER LastPfn = 0;
-    BOOLEAN HavePfns = FALSE;
     EXCEPTION_RECORD ExceptionRecord;
     NTSTATUS Status = STATUS_SUCCESS;
+
+    UNREFERENCED_PARAMETER(Tag);
 
     CurrentVa = (ULONG_PTR)TargetAddress;
     RemainingSize = BufferSize;
@@ -111,7 +108,6 @@ KiArm64CopyToCurrentUserBuffer(
         SIZE_T ChunkSize;
         PMMPTE PointerPte;
         PFN_NUMBER PteFrame = 0;
-        PFN_NUMBER DataPfn;
 
         PageAddress = PAGE_ALIGN((PVOID)CurrentVa);
         PageOffset = BYTE_OFFSET(CurrentVa);
@@ -132,14 +128,6 @@ KiArm64CopyToCurrentUserBuffer(
         {
             return STATUS_UNSUCCESSFUL;
         }
-
-        DataPfn = PFN_FROM_PTE(PointerPte);
-        if (!HavePfns)
-        {
-            FirstPfn = DataPfn;
-            HavePfns = TRUE;
-        }
-        LastPfn = DataPfn;
 
         CurrentVa += ChunkSize;
         RemainingSize -= ChunkSize;
@@ -165,97 +153,10 @@ KiArm64CopyToCurrentUserBuffer(
 
     if (!NT_SUCCESS(Status))
     {
-        DPRINT1("[arm64][APC-WR] %s target=%p size=0x%Ix status=0x%08lx\n",
-                Tag,
-                TargetAddress,
-                BufferSize,
-                Status);
         return Status;
     }
 
-    if (HavePfns)
-    {
-        LONG TraceIndex = InterlockedIncrement(&KiArm64UserApcCopyTraceCount);
-        if (TraceIndex <= 16)
-        {
-            DPRINT1("[arm64][APC-WR] %s target=%p size=0x%Ix first=%Ix last=%Ix\n",
-                    Tag,
-                    TargetAddress,
-                    BufferSize,
-                    (ULONG_PTR)FirstPfn,
-                    (ULONG_PTR)LastPfn);
-        }
-    }
-
     return STATUS_SUCCESS;
-}
-
-FORCEINLINE
-ULONG
-KiArm64GetPteAttrIndex(
-    _In_ MMPTE Pte)
-{
-    return (ULONG)(Pte.u.Hard.CacheType |
-                   (Pte.u.Hard.OsAvailable2 << 2));
-}
-
-static
-VOID
-KiArm64LogUserApcPrefault(
-    _In_z_ PCSTR Tag,
-    _In_ PVOID UserVa,
-    _In_ NTSTATUS Status,
-    _In_ BOOLEAN SweepIcache)
-{
-    LONG TraceIndex;
-    PFN_NUMBER PteFrame = 0;
-    PMMPTE PointerPte = NULL;
-    MMPTE HwPte;
-    PVOID Page;
-
-    TraceIndex = InterlockedIncrement(&KiArm64UserApcPrefaultTraceCount);
-    if (TraceIndex > 48)
-    {
-        return;
-    }
-
-    Page = PAGE_ALIGN(UserVa);
-    if ((ULONG_PTR)Page < (ULONG_PTR)MmSystemRangeStart)
-    {
-        PointerPte = MiArm64UserPteKseg0ForPfn(Page, &PteFrame);
-        if (PointerPte != NULL)
-        {
-            HwPte.u.Long = PointerPte->u.Long;
-        }
-        else
-        {
-            HwPte.u.Long = 0;
-        }
-    }
-    else
-    {
-        HwPte.u.Long = 0;
-    }
-
-    DPRINT1("[arm64][APC-PF] %s[%ld] va=%p page=%p status=0x%lx ic=%u "
-            "pte=%p val=0x%016llx pteframe=%Ix sh=%u attr=%u ng=%u pxn=%u "
-            "uxn=%u ro=%u us=%u\n",
-            Tag,
-            TraceIndex,
-            UserVa,
-            Page,
-            Status,
-            SweepIcache ? 1u : 0u,
-            PointerPte,
-            (unsigned long long)HwPte.u.Long,
-            (ULONG_PTR)PteFrame,
-            HwPte.u.Hard.Shareability,
-            KiArm64GetPteAttrIndex(HwPte),
-            HwPte.u.Hard.NonGlobal,
-            HwPte.u.Hard.PrivilegedNoExecute,
-            HwPte.u.Hard.UserNoExecute,
-            HwPte.u.Hard.NotDirty,
-            HwPte.u.Hard.Owner);
 }
 
 static
@@ -265,7 +166,7 @@ KiArm64PrefaultUserApcPage(
     _In_opt_ PVOID UserVa,
     _In_ BOOLEAN SweepIcache)
 {
-    NTSTATUS Status = STATUS_SUCCESS;
+    UNREFERENCED_PARAMETER(Tag);
 
     if (UserVa == NULL)
     {
@@ -283,7 +184,7 @@ KiArm64PrefaultUserApcPage(
      * speculative/cache-visible EL1 accesses to fresh user aliases can surface
      * later as deferred SErrors on the first ERET.
      */
-    Status = MmAccessFaultEx(FALSE, PAGE_ALIGN(UserVa), UserMode, NULL, FALSE);
+    (VOID)MmAccessFaultEx(FALSE, PAGE_ALIGN(UserVa), UserMode, NULL, FALSE);
 
     /*
      * The executable system-DLL mapping path already publishes instruction
@@ -293,8 +194,6 @@ KiArm64PrefaultUserApcPage(
      * async aborts.
      */
     UNREFERENCED_PARAMETER(SweepIcache);
-
-    KiArm64LogUserApcPrefault(Tag, UserVa, Status, FALSE);
 }
 
 VOID

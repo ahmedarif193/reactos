@@ -34,7 +34,18 @@ typedef struct _NO_DRIVER_ID_ENTRY
     WCHAR Id[1];
 } NO_DRIVER_ID_ENTRY, *PNO_DRIVER_ID_ENTRY;
 
+typedef struct _DRIVER_MATCH_CACHE_ENTRY
+{
+    struct _DRIVER_MATCH_CACHE_ENTRY *Next;
+    SIZE_T HardwareIdsSize;
+    SIZE_T CompatibleIdsSize;
+    BOOL NullDriver;
+    WCHAR InfFileName[MAX_PATH];
+    BYTE Ids[1];
+} DRIVER_MATCH_CACHE_ENTRY, *PDRIVER_MATCH_CACHE_ENTRY;
+
 static PNO_DRIVER_ID_ENTRY NoDriverIdCache;
+static PDRIVER_MATCH_CACHE_ENTRY DriverMatchCache;
 static CRITICAL_SECTION NoDriverIdCacheLock;
 static BOOL NoDriverIdCacheReady;
 static LONG NoDriverIdCacheBatchDepth;
@@ -58,6 +69,156 @@ NoDriverCacheContainsLocked(
     }
 
     return FALSE;
+}
+
+static SIZE_T
+MultiSzSize(
+    IN LPCWSTR IdList OPTIONAL)
+{
+    LPCWSTR Id;
+
+    if (!IdList)
+        return 0;
+
+    for (Id = IdList; *Id; Id += lstrlenW(Id) + 1)
+    {
+    }
+
+    return (Id - IdList + 1) * sizeof(WCHAR);
+}
+
+static BOOL
+DriverMatchCacheEntryMatches(
+    IN PDRIVER_MATCH_CACHE_ENTRY Entry,
+    IN LPCWSTR HardwareIds OPTIONAL,
+    IN SIZE_T HardwareIdsSize,
+    IN LPCWSTR CompatibleIds OPTIONAL,
+    IN SIZE_T CompatibleIdsSize)
+{
+    if (Entry->HardwareIdsSize != HardwareIdsSize ||
+        Entry->CompatibleIdsSize != CompatibleIdsSize)
+    {
+        return FALSE;
+    }
+
+    if (HardwareIdsSize &&
+        memcmp(Entry->Ids, HardwareIds, HardwareIdsSize))
+    {
+        return FALSE;
+    }
+
+    if (CompatibleIdsSize &&
+        memcmp(Entry->Ids + HardwareIdsSize, CompatibleIds, CompatibleIdsSize))
+    {
+        return FALSE;
+    }
+
+    return TRUE;
+}
+
+static BOOL
+DriverMatchCacheLookup(
+    IN LPCWSTR HardwareIds OPTIONAL,
+    IN LPCWSTR CompatibleIds OPTIONAL,
+    OUT LPWSTR InfFileName,
+    IN DWORD InfFileNameCch,
+    OUT BOOL *NullDriver)
+{
+    PDRIVER_MATCH_CACHE_ENTRY Entry;
+    SIZE_T HardwareIdsSize, CompatibleIdsSize;
+    BOOL Found = FALSE;
+
+    if (!NoDriverIdCacheReady || NoDriverIdCacheBatchDepth == 0)
+        return FALSE;
+
+    HardwareIdsSize = MultiSzSize(HardwareIds);
+    CompatibleIdsSize = MultiSzSize(CompatibleIds);
+    if (HardwareIdsSize == 0 && CompatibleIdsSize == 0)
+        return FALSE;
+
+    EnterCriticalSection(&NoDriverIdCacheLock);
+
+    for (Entry = DriverMatchCache; Entry; Entry = Entry->Next)
+    {
+        if (DriverMatchCacheEntryMatches(Entry,
+                                         HardwareIds,
+                                         HardwareIdsSize,
+                                         CompatibleIds,
+                                         CompatibleIdsSize))
+        {
+            lstrcpynW(InfFileName, Entry->InfFileName, InfFileNameCch);
+            *NullDriver = Entry->NullDriver;
+            Found = TRUE;
+            break;
+        }
+    }
+
+    LeaveCriticalSection(&NoDriverIdCacheLock);
+    return Found;
+}
+
+static BOOL
+DriverMatchCacheRemember(
+    IN LPCWSTR HardwareIds OPTIONAL,
+    IN LPCWSTR CompatibleIds OPTIONAL,
+    IN LPCWSTR InfFileName,
+    IN BOOL NullDriver)
+{
+    PDRIVER_MATCH_CACHE_ENTRY Entry;
+    SIZE_T HardwareIdsSize, CompatibleIdsSize, Size;
+    BOOL Ret = TRUE;
+
+    if (!NoDriverIdCacheReady || NoDriverIdCacheBatchDepth == 0 ||
+        !InfFileName || !*InfFileName)
+    {
+        return TRUE;
+    }
+
+    HardwareIdsSize = MultiSzSize(HardwareIds);
+    CompatibleIdsSize = MultiSzSize(CompatibleIds);
+    if (HardwareIdsSize == 0 && CompatibleIdsSize == 0)
+        return TRUE;
+
+    EnterCriticalSection(&NoDriverIdCacheLock);
+
+    for (Entry = DriverMatchCache; Entry; Entry = Entry->Next)
+    {
+        if (DriverMatchCacheEntryMatches(Entry,
+                                         HardwareIds,
+                                         HardwareIdsSize,
+                                         CompatibleIds,
+                                         CompatibleIdsSize))
+        {
+            LeaveCriticalSection(&NoDriverIdCacheLock);
+            return TRUE;
+        }
+    }
+
+    Size = FIELD_OFFSET(DRIVER_MATCH_CACHE_ENTRY, Ids) +
+           HardwareIdsSize + CompatibleIdsSize;
+    Entry = HeapAlloc(GetProcessHeap(), 0, Size);
+    if (!Entry)
+    {
+        Ret = FALSE;
+    }
+    else
+    {
+        Entry->HardwareIdsSize = HardwareIdsSize;
+        Entry->CompatibleIdsSize = CompatibleIdsSize;
+        Entry->NullDriver = NullDriver;
+        lstrcpynW(Entry->InfFileName,
+                  InfFileName,
+                  sizeof(Entry->InfFileName) / sizeof(Entry->InfFileName[0]));
+        if (HardwareIdsSize)
+            memcpy(Entry->Ids, HardwareIds, HardwareIdsSize);
+        if (CompatibleIdsSize)
+            memcpy(Entry->Ids + HardwareIdsSize, CompatibleIds, CompatibleIdsSize);
+        Entry->Next = DriverMatchCache;
+        DriverMatchCache = Entry;
+    }
+
+    LeaveCriticalSection(&NoDriverIdCacheLock);
+    return Ret;
 }
 
 static BOOL
@@ -206,6 +367,7 @@ static VOID
 NoDriverCacheClear(VOID)
 {
     PNO_DRIVER_ID_ENTRY Entry, Next;
+    PDRIVER_MATCH_CACHE_ENTRY MatchEntry, MatchNext;
 
     if (!NoDriverIdCacheReady)
         return;
@@ -213,6 +375,8 @@ NoDriverCacheClear(VOID)
     EnterCriticalSection(&NoDriverIdCacheLock);
     Entry = NoDriverIdCache;
     NoDriverIdCache = NULL;
+    MatchEntry = DriverMatchCache;
+    DriverMatchCache = NULL;
     LeaveCriticalSection(&NoDriverIdCacheLock);
 
     while (Entry)
@@ -220,6 +384,13 @@ NoDriverCacheClear(VOID)
         Next = Entry->Next;
         HeapFree(GetProcessHeap(), 0, Entry);
         Entry = Next;
+    }
+
+    while (MatchEntry)
+    {
+        MatchNext = MatchEntry->Next;
+        HeapFree(GetProcessHeap(), 0, MatchEntry);
+        MatchEntry = MatchNext;
     }
 }
 
@@ -543,6 +714,260 @@ SearchDriver(
     }
 
     return TRUE;
+}
+
+static BOOL
+GetCurrentDriverInfoDetail(
+    IN PDEVINSTDATA DevInstData,
+    OUT PSP_DRVINFO_DETAIL_DATA_W *DriverInfoDetail)
+{
+    PSP_DRVINFO_DETAIL_DATA_W Details;
+    DWORD RequiredSize = 0;
+    BOOL Ret;
+
+    *DriverInfoDetail = NULL;
+
+    SetupDiGetDriverInfoDetailW(DevInstData->hDevInfo,
+                                &DevInstData->devInfoData,
+                                &DevInstData->drvInfoData,
+                                NULL,
+                                0,
+                                &RequiredSize);
+    if (RequiredSize < sizeof(SP_DRVINFO_DETAIL_DATA_W))
+        return FALSE;
+
+    Details = HeapAlloc(GetProcessHeap(), 0, RequiredSize);
+    if (!Details)
+        return FALSE;
+
+    Details->cbSize = sizeof(SP_DRVINFO_DETAIL_DATA_W);
+    Ret = SetupDiGetDriverInfoDetailW(DevInstData->hDevInfo,
+                                      &DevInstData->devInfoData,
+                                      &DevInstData->drvInfoData,
+                                      Details,
+                                      RequiredSize,
+                                      NULL);
+    if (!Ret)
+    {
+        HeapFree(GetProcessHeap(), 0, Details);
+        return FALSE;
+    }
+
+    *DriverInfoDetail = Details;
+    return TRUE;
+}
+
+static BOOL
+GetCurrentDriverInfFileName(
+    IN PDEVINSTDATA DevInstData,
+    OUT LPWSTR InfFileName,
+    IN DWORD InfFileNameCch)
+{
+    PSP_DRVINFO_DETAIL_DATA_W Details;
+    BOOL Ret = FALSE;
+
+    if (InfFileNameCch == 0)
+        return FALSE;
+
+    InfFileName[0] = UNICODE_NULL;
+
+    if (GetCurrentDriverInfoDetail(DevInstData, &Details))
+    {
+        if (Details->InfFileName[0])
+        {
+            lstrcpynW(InfFileName, Details->InfFileName, InfFileNameCch);
+            Ret = TRUE;
+        }
+
+        HeapFree(GetProcessHeap(), 0, Details);
+    }
+
+    return Ret;
+}
+
+static BOOL
+InfSectionIsEmpty(
+    IN HINF InfHandle,
+    IN LPCWSTR SectionName)
+{
+    INFCONTEXT Context;
+
+    return !SetupFindFirstLineW(InfHandle, SectionName, NULL, &Context);
+}
+
+static BOOL
+AppendSectionSuffix(
+    IN OUT LPWSTR SectionName,
+    IN DWORD SectionNameCch,
+    IN LPCWSTR Suffix)
+{
+    DWORD Length = lstrlenW(SectionName);
+    DWORD SuffixLength = lstrlenW(Suffix);
+
+    if (Length + SuffixLength + 1 > SectionNameCch)
+        return FALSE;
+
+    lstrcatW(SectionName, Suffix);
+    return TRUE;
+}
+
+static BOOL
+InfServicesSectionIsNull(
+    IN HINF InfHandle,
+    IN LPCWSTR SectionName)
+{
+    static const WCHAR AddService[] = L"AddService";
+    INFCONTEXT Context;
+    WCHAR Key[LINE_LEN];
+    WCHAR ServiceName[MAX_PATH];
+
+    if (!SetupFindFirstLineW(InfHandle, SectionName, NULL, &Context))
+        return TRUE;
+
+    do
+    {
+        Key[0] = UNICODE_NULL;
+        if (!SetupGetStringFieldW(&Context,
+                                  0,
+                                  Key,
+                                  sizeof(Key) / sizeof(Key[0]),
+                                  NULL) ||
+            lstrcmpiW(Key, AddService))
+        {
+            return FALSE;
+        }
+
+        ServiceName[0] = UNICODE_NULL;
+        SetupGetStringFieldW(&Context,
+                             1,
+                             ServiceName,
+                             sizeof(ServiceName) / sizeof(ServiceName[0]),
+                             NULL);
+        if (ServiceName[0] != UNICODE_NULL)
+            return FALSE;
+    } while (SetupFindNextLine(&Context, &Context));
+
+    return TRUE;
+}
+
+static BOOL
+DeviceHasAssociatedService(
+    IN PDEVINSTDATA DevInstData)
+{
+    WCHAR ServiceName[MAX_PATH];
+    DWORD RegType, RequiredSize;
+
+    if (SetupDiGetDeviceRegistryPropertyW(DevInstData->hDevInfo,
+                                          &DevInstData->devInfoData,
+                                          SPDRP_SERVICE,
+                                          &RegType,
+                                          (PBYTE)ServiceName,
+                                          sizeof(ServiceName),
+                                          &RequiredSize))
+    {
+        return RegType == REG_SZ && ServiceName[0] != UNICODE_NULL;
+    }
+
+    return GetLastError() == ERROR_INSUFFICIENT_BUFFER;
+}
+
+static BOOL
+IsCurrentDriverNullInstall(
+    IN PDEVINSTDATA DevInstData)
+{
+    static const WCHAR DotHW[] = L".HW";
+    static const WCHAR DotServices[] = L".Services";
+    static const WCHAR DotCoInstallers[] = L".CoInstallers";
+    static const WCHAR DotInterfaces[] = L".Interfaces";
+    PSP_DRVINFO_DETAIL_DATA_W Details;
+    WCHAR SectionName[MAX_PATH];
+    WCHAR TestSection[MAX_PATH];
+    DWORD SectionNameLength;
+    HINF InfHandle;
+    BOOL Ret = FALSE;
+
+    if (DeviceHasAssociatedService(DevInstData))
+        return FALSE;
+
+    if (!GetCurrentDriverInfoDetail(DevInstData, &Details))
+        return FALSE;
+
+    InfHandle = SetupOpenInfFileW(Details->InfFileName, NULL, INF_STYLE_WIN4, NULL);
+    if (InfHandle == INVALID_HANDLE_VALUE)
+        goto cleanup_details;
+
+    if (!SetupDiGetActualSectionToInstallW(InfHandle,
+                                           Details->SectionName,
+                                           SectionName,
+                                           sizeof(SectionName) / sizeof(SectionName[0]),
+                                           &SectionNameLength,
+                                           NULL))
+    {
+        goto cleanup_inf;
+    }
+
+    if (!InfSectionIsEmpty(InfHandle, SectionName))
+        goto cleanup_inf;
+
+    lstrcpyW(TestSection, SectionName);
+    if (!AppendSectionSuffix(TestSection,
+                             sizeof(TestSection) / sizeof(TestSection[0]),
+                             DotHW) ||
+        !InfSectionIsEmpty(InfHandle, TestSection))
+    {
+        goto cleanup_inf;
+    }
+
+    lstrcpyW(TestSection, SectionName);
+    if (!AppendSectionSuffix(TestSection,
+                             sizeof(TestSection) / sizeof(TestSection[0]),
+                             DotCoInstallers) ||
+        !InfSectionIsEmpty(InfHandle, TestSection))
+    {
+        goto cleanup_inf;
+    }
+
+    lstrcpyW(TestSection, SectionName);
+    if (!AppendSectionSuffix(TestSection,
+                             sizeof(TestSection) / sizeof(TestSection[0]),
+                             DotInterfaces) ||
+        !InfSectionIsEmpty(InfHandle, TestSection))
+    {
+        goto cleanup_inf;
+    }
+
+    lstrcpyW(TestSection, SectionName);
+    if (!AppendSectionSuffix(TestSection,
+                             sizeof(TestSection) / sizeof(TestSection[0]),
+                             DotServices) ||
+        !InfServicesSectionIsNull(InfHandle, TestSection))
+    {
+        goto cleanup_inf;
+    }
+
+    Ret = TRUE;
+
+cleanup_inf:
+    SetupCloseInfFile(InfHandle);
+cleanup_details:
+    HeapFree(GetProcessHeap(), 0, Details);
+    return Ret;
+}
+
+static BOOL
+InstallNullDriver(
+    IN PDEVINSTDATA DevInstData)
+{
+    BOOL Ret;
+
+    Ret = SetupDiCallClassInstaller(DIF_SELECTBESTCOMPATDRV,
+                                    DevInstData->hDevInfo,
+                                    &DevInstData->devInfoData);
+    if (!Ret)
+        return FALSE;
+
+    return SetupDiInstallDevice(DevInstData->hDevInfo,
+                                &DevInstData->devInfoData);
 }
 
 static BOOL
@@ -881,8 +1306,12 @@ DevInstallW(
     PDEVINSTDATA DevInstData = NULL;
     PWSTR HardwareIds = NULL;
     PWSTR CompatibleIds = NULL;
+    WCHAR CachedInfFile[MAX_PATH];
+    WCHAR InstalledInfFile[MAX_PATH];
     BOOL ret;
     DWORD config_flags;
+    BOOL CachedNullDriver = FALSE;
+    BOOL UseDriverMatchCache = FALSE;
     BOOL retval = FALSE;
 
     TRACE("(%p, %p, %s, %d)\n", hWndParent, hInstance, debugstr_w(InstanceId), Show);
@@ -985,6 +1414,7 @@ DevInstallW(
 
     if (Show == SW_HIDE && !DevInstData->bUpdate)
     {
+        UseDriverMatchCache = TRUE;
         HardwareIds = GetDeviceMultiSzProperty(DevInstData, SPDRP_HARDWAREID);
         CompatibleIds = GetDeviceMultiSzProperty(DevInstData, SPDRP_COMPATIBLEIDS);
 
@@ -994,6 +1424,26 @@ DevInstallW(
             NewDevSetFailedInstall(DevInstData->hDevInfo, &DevInstData->devInfoData, TRUE);
             SetLastError(ERROR_FILE_NOT_FOUND);
             goto cleanup;
+        }
+
+        if (DriverMatchCacheLookup(HardwareIds,
+                                   CompatibleIds,
+                                   CachedInfFile,
+                                   sizeof(CachedInfFile) / sizeof(CachedInfFile[0]),
+                                   &CachedNullDriver))
+        {
+            if (SearchDriver(DevInstData, NULL, CachedInfFile))
+            {
+                if (CachedNullDriver)
+                    retval = InstallNullDriver(DevInstData);
+                else
+                    retval = InstallCurrentDriver(DevInstData);
+                TRACE("Cached driver install returned %d\n", retval);
+                goto cleanup;
+            }
+
+            TRACE("Cached driver INF %ls no longer matches %s\n",
+                  CachedInfFile, debugstr_w(InstanceId));
         }
     }
 
@@ -1008,6 +1458,17 @@ DevInstallW(
         /* Driver found ; install it */
         retval = InstallCurrentDriver(DevInstData);
         TRACE("InstallCurrentDriver() returned %d\n", retval);
+        if (retval && UseDriverMatchCache &&
+            GetCurrentDriverInfFileName(DevInstData,
+                                        InstalledInfFile,
+                                        sizeof(InstalledInfFile) / sizeof(InstalledInfFile[0])))
+        {
+            DriverMatchCacheRemember(HardwareIds,
+                                     CompatibleIds,
+                                     InstalledInfFile,
+                                     IsCurrentDriverNullInstall(DevInstData));
+        }
+
         if (retval && Show != SW_HIDE)
         {
             /* Should we display the 'Need to reboot' page? */

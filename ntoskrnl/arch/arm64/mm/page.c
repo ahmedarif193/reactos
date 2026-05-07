@@ -47,6 +47,13 @@ typedef struct _MI_ARM64_USER_PTE_WALK
 
 static
 BOOLEAN
+MiArm64GetUserPteAddressForProcess(
+    _In_ PEPROCESS Process,
+    _In_ PVOID Address,
+    _Out_ PMI_ARM64_USER_PTE_WALK Walk);
+
+static
+BOOLEAN
 MiArm64GetUserPteAddress(
     _In_ PVOID Address,
     _Out_ PMI_ARM64_USER_PTE_WALK Walk);
@@ -344,11 +351,12 @@ MiArm64TraceUserTableStore(
 
 static
 BOOLEAN
-MiArm64GetUserPteAddress(
+MiArm64GetUserPteAddressForProcess(
+    _In_ PEPROCESS Process,
     _In_ PVOID Address,
     _Out_ PMI_ARM64_USER_PTE_WALK Walk)
 {
-    ULONG64 Ttbr0, RootPa;
+    ULONG64 RootPa;
     volatile ULONG64 *L0Table, *L1Table, *L2Table, *L3Table;
     ULONG L0Idx, L1Idx, L2Idx, L3Idx;
     ULONG64 L0Entry, L1Entry, L2Entry;
@@ -362,8 +370,19 @@ MiArm64GetUserPteAddress(
         return FALSE;
     }
 
-    __asm__ __volatile__("mrs %0, ttbr0_el1" : "=r"(Ttbr0));
-    RootPa = Ttbr0 & ARM64_PTE_ADDR_MASK;
+    ASSERT(Process != NULL);
+    if (Process == PsGetCurrentProcess())
+    {
+        ULONG64 Ttbr0;
+
+        __asm__ __volatile__("mrs %0, ttbr0_el1" : "=r"(Ttbr0));
+        RootPa = Ttbr0 & ARM64_PTE_ADDR_MASK;
+    }
+    else
+    {
+        RootPa = Process->Pcb.DirectoryTableBase[0] & ARM64_PTE_ADDR_MASK;
+    }
+
     if (RootPa == 0)
     {
         return FALSE;
@@ -425,6 +444,15 @@ MiArm64GetUserPteAddress(
     }
 
     return TRUE;
+}
+
+static
+BOOLEAN
+MiArm64GetUserPteAddress(
+    _In_ PVOID Address,
+    _Out_ PMI_ARM64_USER_PTE_WALK Walk)
+{
+    return MiArm64GetUserPteAddressForProcess(PsGetCurrentProcess(), Address, Walk);
 }
 
 /* Walk the active TTBR0 hierarchy via KSEG0 and return the L3 PTE state. */
@@ -804,92 +832,19 @@ MiArm64GetUserPfn(
     _In_ PEPROCESS Process,
     _In_ PVOID Address)
 {
-    PFN_NUMBER RootPfn, PpePfn, PdePfn, PtePfn, PagePfn = 0;
-    PMMPTE MappingPte;
-    PMMPTE MappedPage;
-    MMPTE MapPte;
-    ULONG PxeIndex, PpeIndex, PdeIndex, PteIndex;
+    MI_ARM64_USER_PTE_WALK Walk;
+    MMPTE Pte;
 
     ASSERT(Address < MmSystemRangeStart);
     ASSERT(Process != NULL);
 
-    /* Use active TTBR0 for the current process and the saved root otherwise. */
-    if (Process == PsGetCurrentProcess())
+    if (!MiArm64GetUserPteAddressForProcess(Process, Address, &Walk))
     {
-        ULONG64 Ttbr0Val;
-        __asm__ __volatile__("mrs %0, ttbr0_el1" : "=r"(Ttbr0Val));
-        RootPfn = (Ttbr0Val & ~(ULONG64)0xFFF) >> PAGE_SHIFT;
-    }
-    else
-    {
-        RootPfn = (Process->Pcb.DirectoryTableBase[0] >> PAGE_SHIFT);
-    }
-    if (RootPfn == 0)
         return 0;
+    }
 
-    /* Calculate indices */
-    PxeIndex = MiAddressToPxi(Address);
-    PpeIndex = (((ULONG64)Address >> PPI_SHIFT) & 0x1FF);
-    PdeIndex = (((ULONG64)Address >> PDI_SHIFT) & 0x1FF);
-    PteIndex = MiAddressToPti(Address);
-
-    /* Reserve a system PTE for mapping */
-    MappingPte = MiReserveSystemPtes(1, SystemPteSpace);
-    if (!MappingPte)
-        return 0;
-
-    /* Map the root table (L0) */
-    MI_MAKE_HARDWARE_PTE_KERNEL(&MapPte, MappingPte, MM_READWRITE, RootPfn);
-    MI_MAKE_DIRTY_PAGE(&MapPte);
-    MI_WRITE_VALID_PTE(MappingPte, MapPte);
-    MappedPage = MiPteToAddress(MappingPte);
-
-    /* Check L0 (PXE) */
-    if (!MappedPage[PxeIndex].u.Hard.Valid)
-        goto Cleanup;
-    PpePfn = MappedPage[PxeIndex].u.Hard.PageFrameNumber;
-
-    /* Remap to L1 (PPE table) */
-    MI_WRITE_INVALID_PTE(MappingPte, MmDecommittedPte);
-    KeInvalidateTlbEntry(MappedPage);
-    MapPte.u.Hard.PageFrameNumber = PpePfn;
-    MI_WRITE_VALID_PTE(MappingPte, MapPte);
-    MappedPage = MiPteToAddress(MappingPte);
-
-    /* Check L1 (PPE) */
-    if (!MappedPage[PpeIndex].u.Hard.Valid)
-        goto Cleanup;
-    PdePfn = MappedPage[PpeIndex].u.Hard.PageFrameNumber;
-
-    /* Remap to L2 (PDE table) */
-    MI_WRITE_INVALID_PTE(MappingPte, MmDecommittedPte);
-    KeInvalidateTlbEntry(MappedPage);
-    MapPte.u.Hard.PageFrameNumber = PdePfn;
-    MI_WRITE_VALID_PTE(MappingPte, MapPte);
-    MappedPage = MiPteToAddress(MappingPte);
-
-    /* Check L2 (PDE) */
-    if (!MappedPage[PdeIndex].u.Hard.Valid)
-        goto Cleanup;
-    PtePfn = MappedPage[PdeIndex].u.Hard.PageFrameNumber;
-
-    /* Remap to L3 (PTE table) */
-    MI_WRITE_INVALID_PTE(MappingPte, MmDecommittedPte);
-    KeInvalidateTlbEntry(MappedPage);
-    MapPte.u.Hard.PageFrameNumber = PtePfn;
-    MI_WRITE_VALID_PTE(MappingPte, MapPte);
-    MappedPage = MiPteToAddress(MappingPte);
-
-    /* Check L3 (PTE) and get the page PFN */
-    if (MappedPage[PteIndex].u.Hard.Valid)
-        PagePfn = MappedPage[PteIndex].u.Hard.PageFrameNumber;
-
-Cleanup:
-    MI_WRITE_INVALID_PTE(MappingPte, MmDecommittedPte);
-    KeInvalidateTlbEntry(MappedPage);
-    MiReleaseSystemPtes(MappingPte, 1, SystemPteSpace);
-
-    return PagePfn;
+    Pte.u.Long = Walk.PteValue;
+    return Pte.u.Hard.Valid ? Pte.u.Hard.PageFrameNumber : 0;
 }
 
 static
@@ -1087,6 +1042,8 @@ MmCreateVirtualMappingUnsafeEx(
                 MiReleasePfnLock(OldIrql);
             }
 
+            MiArm64MapKseg0Page(PpePfn);
+
             /*
              * Use MiInitializePfnForOtherProcess because we can't use MiInitializePfn -
              * it would try to dereference the self-mapping address to read OriginalPte,
@@ -1181,6 +1138,8 @@ MmCreateVirtualMappingUnsafeEx(
             {
                 if (ReleasePfnLock) MiReleasePfnLock(OldIrql);
             }
+
+            MiArm64MapKseg0Page(PdePfn);
 
             /*
              * Use MiInitializePfnForOtherProcess - the PTE address is the self-mapping
@@ -1289,6 +1248,8 @@ MmCreateVirtualMappingUnsafeEx(
             {
                 MiReleasePfnLock(OldIrql);
             }
+
+            MiArm64MapKseg0Page(PtePfn);
 
             /*
              * Use MiInitializePfnForOtherProcess - the PTE address is the self-mapping
