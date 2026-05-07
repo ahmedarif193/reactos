@@ -58,7 +58,9 @@ list(APPEND PCH_SKIP_SOURCE
     ${CMAKE_CURRENT_BINARY_DIR}/ntdll_stubs.c)
 
 if(ARCH STREQUAL "arm64")
-    list(APPEND SOURCE arm64/stubs.c)
+    list(APPEND SOURCE
+        arm64/ehandler.c
+        arm64/stubs.c)
 endif()
 
 add_library(ntdll MODULE

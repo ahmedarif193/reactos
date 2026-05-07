@@ -102,10 +102,14 @@ static const WCHAR strCC32SubclassInfo[] = {
 #define VERSION    L"6.0.2600.2982"
 #define PUBLIC_KEY L"6595b64144ccf1df"
 
-#ifdef __i386__
-#define ARCH L"x86"
-#elif defined __x86_64__
+#if defined(_M_ARM64) || defined(_ARM64_) || defined(__aarch64__) || defined(__arm64__)
+#define ARCH L"arm64"
+#elif defined(_M_ARM) || defined(_ARM_) || defined(__arm__)
+#define ARCH L"arm"
+#elif defined(_M_AMD64) || defined(_M_X64) || defined(__x86_64__)
 #define ARCH L"amd64"
+#elif defined(_M_IX86) || defined(_X86_) || defined(__i386__)
+#define ARCH L"x86"
 #else
 #define ARCH L"none"
 #endif

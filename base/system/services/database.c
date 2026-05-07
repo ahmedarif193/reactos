@@ -1558,6 +1558,10 @@ ScmSendControlPacket(
 
     DPRINT("ScmSendControlPacket(%p, %lu, %p) called\n",
            hControlPipe, dwControlPacketSize, pControlPacket);
+#if defined(_M_ARM64)
+    DPRINT1("[arm64][SCM] send control begin service=%S control=%lu pipe=%p size=%lu\n",
+            pServiceName, dwControl, hControlPipe, dwControlPacketSize);
+#endif
 
     /* Acquire the service control critical section, to synchronize requests */
     EnterCriticalSection(&ControlServiceCriticalSection);
@@ -1569,6 +1573,10 @@ ScmSendControlPacket(
                                 sizeof(ReplyPacket),
                                 &dwReadCount,
                                 &Overlapped);
+#if defined(_M_ARM64)
+    DPRINT1("[arm64][SCM] TransactNamedPipe service=%S control=%lu result=%d last=%lu read=%lu\n",
+            pServiceName, dwControl, bResult, bResult ? 0 : GetLastError(), dwReadCount);
+#endif
     if (!bResult)
     {
         /* Fail for any error other than pending IO */
@@ -1580,9 +1588,17 @@ ScmSendControlPacket(
         }
 
         DPRINT("TransactNamedPipe(%S, %d) returned ERROR_IO_PENDING\n", pServiceName, dwControl);
+#if defined(_M_ARM64)
+        DPRINT1("[arm64][SCM] wait control reply begin service=%S control=%lu timeout=%lu\n",
+                pServiceName, dwControl, PipeTimeout);
+#endif
 
         dwError = WaitForSingleObject(hControlPipe, PipeTimeout);
         DPRINT("WaitForSingleObject(%S, %d) returned %lu\n", pServiceName, dwControl, dwError);
+#if defined(_M_ARM64)
+        DPRINT1("[arm64][SCM] wait control reply end service=%S control=%lu result=%lu\n",
+                pServiceName, dwControl, dwError);
+#endif
 
         if (dwError == WAIT_TIMEOUT)
         {
@@ -1613,6 +1629,11 @@ Done:
 
     if (dwReadCount == sizeof(ReplyPacket))
         dwError = ReplyPacket.dwError;
+
+#if defined(_M_ARM64)
+    DPRINT1("[arm64][SCM] send control done service=%S control=%lu error=%lu read=%lu\n",
+            pServiceName, dwControl, dwError, dwReadCount);
+#endif
 
     return dwError;
 }
@@ -1781,9 +1802,20 @@ ScmWaitForServiceConnect(PSERVICE Service)
 #endif
 
     DPRINT("ScmWaitForServiceConnect()\n");
+#if defined(_M_ARM64)
+    DPRINT1("[arm64][SCM] connect begin service=%S image=%S pid=%lu pipe=%p\n",
+            Service->lpServiceName,
+            Service->lpImage ? Service->lpImage->pszImagePath : L"(null)",
+            Service->lpImage ? Service->lpImage->dwProcessId : 0,
+            Service->lpImage ? Service->lpImage->hControlPipe : NULL);
+#endif
 
     bResult = ConnectNamedPipe(Service->lpImage->hControlPipe,
                                &Overlapped);
+#if defined(_M_ARM64)
+    DPRINT1("[arm64][SCM] ConnectNamedPipe service=%S result=%d last=%lu\n",
+            Service->lpServiceName, bResult, bResult ? 0 : GetLastError());
+#endif
     if (bResult == FALSE)
     {
         DPRINT("ConnectNamedPipe() returned FALSE\n");
@@ -1792,10 +1824,18 @@ ScmWaitForServiceConnect(PSERVICE Service)
         if (dwError == ERROR_IO_PENDING)
         {
             DPRINT("dwError: ERROR_IO_PENDING\n");
+#if defined(_M_ARM64)
+            DPRINT1("[arm64][SCM] connect wait begin service=%S timeout=%lu\n",
+                    Service->lpServiceName, PipeTimeout);
+#endif
 
             dwError = WaitForSingleObject(Service->lpImage->hControlPipe,
                                           PipeTimeout);
             DPRINT("WaitForSingleObject() returned %lu\n", dwError);
+#if defined(_M_ARM64)
+            DPRINT1("[arm64][SCM] connect wait end service=%S result=%lu\n",
+                    Service->lpServiceName, dwError);
+#endif
 
             if (dwError == WAIT_TIMEOUT)
             {
@@ -1844,6 +1884,9 @@ ScmWaitForServiceConnect(PSERVICE Service)
     }
 
     DPRINT("Control pipe connected\n");
+#if defined(_M_ARM64)
+    DPRINT1("[arm64][SCM] pipe connected service=%S\n", Service->lpServiceName);
+#endif
 
     Overlapped.hEvent = NULL;
 
@@ -1853,6 +1896,10 @@ ScmWaitForServiceConnect(PSERVICE Service)
                        sizeof(DWORD),
                        &dwRead,
                        &Overlapped);
+#if defined(_M_ARM64)
+    DPRINT1("[arm64][SCM] ReadFile pid service=%S result=%d last=%lu read=%lu pid=%lu\n",
+            Service->lpServiceName, bResult, bResult ? 0 : GetLastError(), dwRead, dwProcessId);
+#endif
     if (bResult == FALSE)
     {
         DPRINT("ReadFile() returned FALSE\n");
@@ -1861,9 +1908,17 @@ ScmWaitForServiceConnect(PSERVICE Service)
         if (dwError == ERROR_IO_PENDING)
         {
             DPRINT("dwError: ERROR_IO_PENDING\n");
+#if defined(_M_ARM64)
+            DPRINT1("[arm64][SCM] pid read wait begin service=%S timeout=%lu\n",
+                    Service->lpServiceName, PipeTimeout);
+#endif
 
             dwError = WaitForSingleObject(Service->lpImage->hControlPipe,
                                           PipeTimeout);
+#if defined(_M_ARM64)
+            DPRINT1("[arm64][SCM] pid read wait end service=%S result=%lu\n",
+                    Service->lpServiceName, dwError);
+#endif
             if (dwError == WAIT_TIMEOUT)
             {
                 DPRINT("WaitForSingleObject() returned WAIT_TIMEOUT\n");
@@ -1938,6 +1993,10 @@ ScmWaitForServiceConnect(PSERVICE Service)
     }
 
     DPRINT("ScmWaitForServiceConnect() done\n");
+#if defined(_M_ARM64)
+    DPRINT1("[arm64][SCM] connect done service=%S read_pid=%lu image_pid=%lu\n",
+            Service->lpServiceName, dwProcessId, Service->lpImage->dwProcessId);
+#endif
 
     return ERROR_SUCCESS;
 }
@@ -1955,6 +2014,12 @@ ScmStartUserModeService(PSERVICE Service,
     DWORD dwError = ERROR_SUCCESS;
 
     DPRINT("ScmStartUserModeService(%p)\n", Service);
+#if defined(_M_ARM64)
+    DPRINT1("[arm64][SCM] user service begin service=%S image=%S run_count=%lu\n",
+            Service->lpServiceName,
+            Service->lpImage ? Service->lpImage->pszImagePath : L"(null)",
+            Service->lpImage ? Service->lpImage->dwImageRunCount : 0);
+#endif
 
     /* If the image is already running, just send a start command */
     if (Service->lpImage->dwImageRunCount > 1)
@@ -2027,6 +2092,10 @@ ScmStartUserModeService(PSERVICE Service,
 
         if (!ScmIsSecurityService(Service->lpImage))
         {
+#if defined(_M_ARM64)
+            DPRINT1("[arm64][SCM] CreateProcessW begin service=%S image=%S\n",
+                    Service->lpServiceName, Service->lpImage->pszImagePath);
+#endif
             Result = CreateProcessW(NULL,
                                     Service->lpImage->pszImagePath,
                                     NULL,
@@ -2037,6 +2106,11 @@ ScmStartUserModeService(PSERVICE Service,
                                     NULL,
                                     &StartupInfo,
                                     &ProcessInformation);
+#if defined(_M_ARM64)
+            DPRINT1("[arm64][SCM] CreateProcessW end service=%S result=%d error=%lu pid=%lu tid=%lu\n",
+                    Service->lpServiceName, Result, Result ? 0 : GetLastError(),
+                    ProcessInformation.dwProcessId, ProcessInformation.dwThreadId);
+#endif
             if (!Result)
                 dwError = GetLastError();
         }
@@ -2069,7 +2143,14 @@ ScmStartUserModeService(PSERVICE Service,
     Service->lpImage->dwProcessId = ProcessInformation.dwProcessId;
 
     /* Resume the main thread and close its handle */
+#if defined(_M_ARM64)
+    DPRINT1("[arm64][SCM] ResumeThread begin service=%S thread=%p\n",
+            Service->lpServiceName, ProcessInformation.hThread);
+#endif
     ResumeThread(ProcessInformation.hThread);
+#if defined(_M_ARM64)
+    DPRINT1("[arm64][SCM] ResumeThread done service=%S\n", Service->lpServiceName);
+#endif
     CloseHandle(ProcessInformation.hThread);
 
     /* Connect control pipe */
@@ -2083,13 +2164,18 @@ ScmStartUserModeService(PSERVICE Service,
 
 Quit:
     /* Send the start command and return */
-    return ScmControlServiceEx(Service->lpImage->hControlPipe,
-                               Service->lpServiceName,
-                               (Service->Status.dwServiceType & SERVICE_WIN32_OWN_PROCESS)
-                                  ? SERVICE_CONTROL_START_OWN : SERVICE_CONTROL_START_SHARE,
-                               (SERVICE_STATUS_HANDLE)Service,
-                               Service->dwServiceTag,
-                               argc, argv);
+    dwError = ScmControlServiceEx(Service->lpImage->hControlPipe,
+                                  Service->lpServiceName,
+                                  (Service->Status.dwServiceType & SERVICE_WIN32_OWN_PROCESS)
+                                     ? SERVICE_CONTROL_START_OWN : SERVICE_CONTROL_START_SHARE,
+                                  (SERVICE_STATUS_HANDLE)Service,
+                                  Service->dwServiceTag,
+                                  argc, argv);
+#if defined(_M_ARM64)
+    DPRINT1("[arm64][SCM] user service done service=%S error=%lu\n",
+            Service->lpServiceName, dwError);
+#endif
+    return dwError;
 }
 
 
@@ -2105,6 +2191,14 @@ ScmLoadService(PSERVICE Service,
 
     DPRINT("ScmLoadService() called\n");
     DPRINT("Start Service %p (%S)\n", Service, Service->lpServiceName);
+#if defined(_M_ARM64)
+    DPRINT1("[arm64][SCM] load begin service=%S type=0x%lx start=%lu tag=%lu group=%S\n",
+            Service->lpServiceName,
+            Service->Status.dwServiceType,
+            Service->dwStartType,
+            Service->dwTag,
+            Service->lpGroup ? Service->lpGroup->lpGroupName : L"(none)");
+#endif
 
     if (Service->Status.dwCurrentState != SERVICE_STOPPED)
     {
@@ -2129,7 +2223,19 @@ ScmLoadService(PSERVICE Service,
     else // if (Service->Status.dwServiceType & (SERVICE_WIN32 | SERVICE_INTERACTIVE_PROCESS))
     {
         /* Start user-mode service */
+#if defined(_M_ARM64)
+        DPRINT1("[arm64][SCM] image create/reference begin service=%S\n",
+                Service->lpServiceName);
+#endif
         dwError = ScmCreateOrReferenceServiceImage(Service);
+#if defined(_M_ARM64)
+        DPRINT1("[arm64][SCM] image create/reference done service=%S error=%lu image=%p path=%S run_count=%lu\n",
+                Service->lpServiceName,
+                dwError,
+                Service->lpImage,
+                Service->lpImage ? Service->lpImage->pszImagePath : L"(null)",
+                Service->lpImage ? Service->lpImage->dwImageRunCount : 0);
+#endif
         if (dwError == ERROR_SUCCESS)
         {
             dwError = ScmStartUserModeService(Service, argc, argv);
@@ -2152,6 +2258,10 @@ ScmLoadService(PSERVICE Service,
     }
 
     DPRINT("ScmLoadService() done (Error %lu)\n", dwError);
+#if defined(_M_ARM64)
+    DPRINT1("[arm64][SCM] load done service=%S error=%lu state=%lu\n",
+            Service->lpServiceName, dwError, Service->Status.dwCurrentState);
+#endif
 
     if (dwError == ERROR_SUCCESS)
     {
@@ -2323,7 +2433,20 @@ ScmAutoStartServices(VOID)
                     (CurrentService->dwTag == CurrentGroup->TagArray[i]))
                 {
                     CurrentService->ServiceVisited = TRUE;
+#if defined(_M_ARM64)
+                    DPRINT1("[arm64][SCM] autostart group/tag begin group=%S tag=%lu service=%S\n",
+                            CurrentGroup->lpGroupName,
+                            CurrentGroup->TagArray[i],
+                            CurrentService->lpServiceName);
+#endif
                     ScmLoadService(CurrentService, 0, NULL);
+#if defined(_M_ARM64)
+                    DPRINT1("[arm64][SCM] autostart group/tag done group=%S tag=%lu service=%S state=%lu\n",
+                            CurrentGroup->lpGroupName,
+                            CurrentGroup->TagArray[i],
+                            CurrentService->lpServiceName,
+                            CurrentService->Status.dwCurrentState);
+#endif
                 }
 
                 ServiceEntry = ServiceEntry->Flink;
@@ -2341,7 +2464,19 @@ ScmAutoStartServices(VOID)
                 (CurrentService->ServiceVisited == FALSE))
             {
                 CurrentService->ServiceVisited = TRUE;
+#if defined(_M_ARM64)
+                DPRINT1("[arm64][SCM] autostart group begin group=%S service=%S tag=%lu\n",
+                        CurrentGroup->lpGroupName,
+                        CurrentService->lpServiceName,
+                        CurrentService->dwTag);
+#endif
                 ScmLoadService(CurrentService, 0, NULL);
+#if defined(_M_ARM64)
+                DPRINT1("[arm64][SCM] autostart group done group=%S service=%S state=%lu\n",
+                        CurrentGroup->lpGroupName,
+                        CurrentService->lpServiceName,
+                        CurrentService->Status.dwCurrentState);
+#endif
             }
 
             ServiceEntry = ServiceEntry->Flink;
@@ -2361,7 +2496,18 @@ ScmAutoStartServices(VOID)
             (CurrentService->ServiceVisited == FALSE))
         {
             CurrentService->ServiceVisited = TRUE;
+#if defined(_M_ARM64)
+            DPRINT1("[arm64][SCM] autostart missing-group begin group=%S service=%S tag=%lu\n",
+                    CurrentService->lpGroup ? CurrentService->lpGroup->lpGroupName : L"(none)",
+                    CurrentService->lpServiceName,
+                    CurrentService->dwTag);
+#endif
             ScmLoadService(CurrentService, 0, NULL);
+#if defined(_M_ARM64)
+            DPRINT1("[arm64][SCM] autostart missing-group done service=%S state=%lu\n",
+                    CurrentService->lpServiceName,
+                    CurrentService->Status.dwCurrentState);
+#endif
         }
 
         ServiceEntry = ServiceEntry->Flink;
@@ -2378,7 +2524,17 @@ ScmAutoStartServices(VOID)
             (CurrentService->ServiceVisited == FALSE))
         {
             CurrentService->ServiceVisited = TRUE;
+#if defined(_M_ARM64)
+            DPRINT1("[arm64][SCM] autostart no-group begin service=%S tag=%lu\n",
+                    CurrentService->lpServiceName,
+                    CurrentService->dwTag);
+#endif
             ScmLoadService(CurrentService, 0, NULL);
+#if defined(_M_ARM64)
+            DPRINT1("[arm64][SCM] autostart no-group done service=%S state=%lu\n",
+                    CurrentService->lpServiceName,
+                    CurrentService->Status.dwCurrentState);
+#endif
         }
 
         ServiceEntry = ServiceEntry->Flink;

@@ -608,36 +608,172 @@ MiArm64ReleaseUserPageTableReference(
     _In_ PEPROCESS Process,
     _In_ PVOID Address)
 {
-    PFN_NUMBER L3Pfn;
+    ULONG64 Ttbr0, RootPa;
+    volatile ULONG64 *L0Table, *L1Table, *L2Table;
+    ULONG L0Idx, L1Idx, L2Idx;
+    ULONG64 L0Entry, L1Entry, L2Entry;
+    PFN_NUMBER RootPfn, L1Pfn, L2Pfn, L3Pfn;
     KIRQL OldIrql;
-    PMMPFN PfnEntry;
+    PMMPFN PfnRoot, PfnL1, PfnL2, PfnL3;
 
-    L3Pfn = MiArm64GetUserL3PfnSafe(Address);
-    if (L3Pfn == 0)
+    __asm__ __volatile__("mrs %0, ttbr0_el1" : "=r"(Ttbr0));
+    RootPa = Ttbr0 & ARM64_PTE_ADDR_MASK;
+    if (RootPa == 0)
     {
         return;
     }
 
-    OldIrql = MiAcquirePfnLock();
-    PfnEntry = MiGetPfnEntry(L3Pfn);
-    if (PfnEntry != NULL)
-    {
-        if (PfnEntry->u2.ShareCount > 0)
-        {
-            MiDecrementShareCount(PfnEntry, L3Pfn);
-        }
+    L0Idx = ((ULONG64)(ULONG_PTR)Address >> PXI_SHIFT) & PXI_MASK;
+    L1Idx = ((ULONG64)(ULONG_PTR)Address >> PPI_SHIFT) & PPI_MASK;
+    L2Idx = ((ULONG64)(ULONG_PTR)Address >> PDI_SHIFT) & PDI_MASK_ARM64;
 
-        if (PfnEntry->OriginalPte.u.Soft.UsedPageTableEntries > 0)
-        {
-            PfnEntry->OriginalPte.u.Soft.UsedPageTableEntries--;
-        }
-        else
-        {
-            DPRINT1("[arm64][UPTE] MmDeleteVirtualMappingEx: UsedPTE already 0 for VA=%p "
-                    "L3Pfn=%lx Proc=%s\n",
-                    Address, (ULONG)L3Pfn, Process->ImageFileName);
-        }
+    RootPfn = RootPa >> PAGE_SHIFT;
+    L0Table = (volatile ULONG64 *)(KSEG0_BASE | RootPa);
+    L0Entry = L0Table[L0Idx];
+    if ((L0Entry & 0x3ULL) != 0x3ULL)
+        return;
+
+    L1Pfn = (L0Entry & ARM64_PTE_ADDR_MASK) >> PAGE_SHIFT;
+    L1Table = (volatile ULONG64 *)(KSEG0_BASE | (L0Entry & ARM64_PTE_ADDR_MASK));
+    L1Entry = L1Table[L1Idx];
+    if ((L1Entry & 0x3ULL) != 0x3ULL)
+        return;
+
+    L2Pfn = (L1Entry & ARM64_PTE_ADDR_MASK) >> PAGE_SHIFT;
+    L2Table = (volatile ULONG64 *)(KSEG0_BASE | (L1Entry & ARM64_PTE_ADDR_MASK));
+    L2Entry = L2Table[L2Idx];
+    if ((L2Entry & 0x3ULL) != 0x3ULL)
+        return;
+
+    L3Pfn = (L2Entry & ARM64_PTE_ADDR_MASK) >> PAGE_SHIFT;
+
+    OldIrql = MiAcquirePfnLock();
+    PfnRoot = MiGetPfnEntry(RootPfn);
+    PfnL1 = MiGetPfnEntry(L1Pfn);
+    PfnL2 = MiGetPfnEntry(L2Pfn);
+    PfnL3 = MiGetPfnEntry(L3Pfn);
+
+    if (PfnL3 == NULL || PfnL2 == NULL || PfnL1 == NULL || PfnRoot == NULL)
+    {
+        MiReleasePfnLock(OldIrql);
+        return;
     }
+
+    if (PfnL3->u2.ShareCount > 0)
+    {
+        MiDecrementShareCount(PfnL3, L3Pfn);
+    }
+
+    if (PfnL3->OriginalPte.u.Soft.UsedPageTableEntries > 0)
+    {
+        PfnL3->OriginalPte.u.Soft.UsedPageTableEntries--;
+    }
+    else
+    {
+        DPRINT1("[arm64][UPTE] MmDeleteVirtualMappingEx: UsedPTE already 0 for VA=%p "
+                "L3Pfn=%lx Proc=%s\n",
+                Address, (ULONG)L3Pfn, Process->ImageFileName);
+        MiReleasePfnLock(OldIrql);
+        return;
+    }
+
+    if (PfnL3->OriginalPte.u.Soft.UsedPageTableEntries != 0)
+    {
+        MiReleasePfnLock(OldIrql);
+        return;
+    }
+
+    if (PfnL3->u2.ShareCount != 1)
+    {
+        DPRINT1("[arm64][UPTE] Empty L3 has unexpected share count VA=%p "
+                "L3Pfn=%lx share=%lu Proc=%s\n",
+                Address, (ULONG)L3Pfn, PfnL3->u2.ShareCount, Process->ImageFileName);
+        MiReleasePfnLock(OldIrql);
+        return;
+    }
+
+    __atomic_store_n(&L2Table[L2Idx], 0, __ATOMIC_SEQ_CST);
+    MiArm64InvalidateUserAddress(Address);
+    MiDecrementShareCount(PfnL2, L2Pfn);
+    MI_SET_PFN_DELETED(PfnL3);
+    MiDecrementShareCount(PfnL3, L3Pfn);
+
+    if (PfnL2->OriginalPte.u.Soft.UsedPageTableEntries > 0)
+    {
+        PfnL2->OriginalPte.u.Soft.UsedPageTableEntries--;
+    }
+    else
+    {
+        DPRINT1("[arm64][UPTE] UsedPTE already 0 for L2 VA=%p L2Pfn=%lx Proc=%s\n",
+                Address, (ULONG)L2Pfn, Process->ImageFileName);
+        MiReleasePfnLock(OldIrql);
+        return;
+    }
+
+    if (PfnL2->OriginalPte.u.Soft.UsedPageTableEntries != 0)
+    {
+        MiReleasePfnLock(OldIrql);
+        return;
+    }
+
+    if (PfnL2->u2.ShareCount != 1)
+    {
+        DPRINT1("[arm64][UPTE] Empty L2 has unexpected share count VA=%p "
+                "L2Pfn=%lx share=%lu Proc=%s\n",
+                Address, (ULONG)L2Pfn, PfnL2->u2.ShareCount, Process->ImageFileName);
+        MiReleasePfnLock(OldIrql);
+        return;
+    }
+
+    __atomic_store_n(&L1Table[L1Idx], 0, __ATOMIC_SEQ_CST);
+    MiArm64InvalidateUserAddress(Address);
+    MiDecrementShareCount(PfnL1, L1Pfn);
+    MI_SET_PFN_DELETED(PfnL2);
+    MiDecrementShareCount(PfnL2, L2Pfn);
+
+    if (PfnL1->OriginalPte.u.Soft.UsedPageTableEntries > 0)
+    {
+        PfnL1->OriginalPte.u.Soft.UsedPageTableEntries--;
+    }
+    else
+    {
+        DPRINT1("[arm64][UPTE] UsedPTE already 0 for L1 VA=%p L1Pfn=%lx Proc=%s\n",
+                Address, (ULONG)L1Pfn, Process->ImageFileName);
+        MiReleasePfnLock(OldIrql);
+        return;
+    }
+
+    if (PfnL1->OriginalPte.u.Soft.UsedPageTableEntries != 0)
+    {
+        MiReleasePfnLock(OldIrql);
+        return;
+    }
+
+    if (PfnL1->u2.ShareCount != 1)
+    {
+        DPRINT1("[arm64][UPTE] Empty L1 has unexpected share count VA=%p "
+                "L1Pfn=%lx share=%lu Proc=%s\n",
+                Address, (ULONG)L1Pfn, PfnL1->u2.ShareCount, Process->ImageFileName);
+        MiReleasePfnLock(OldIrql);
+        return;
+    }
+
+    __atomic_store_n(&L0Table[L0Idx], 0, __ATOMIC_SEQ_CST);
+    MiArm64InvalidateUserAddress(Address);
+    MiDecrementShareCount(PfnRoot, RootPfn);
+    MI_SET_PFN_DELETED(PfnL1);
+    MiDecrementShareCount(PfnL1, L1Pfn);
+
+    if (PfnRoot->OriginalPte.u.Soft.UsedPageTableEntries > 0)
+    {
+        PfnRoot->OriginalPte.u.Soft.UsedPageTableEntries--;
+    }
+    else
+    {
+        DPRINT1("[arm64][UPTE] UsedPTE already 0 for L0 VA=%p RootPfn=%lx Proc=%s\n",
+                Address, (ULONG)RootPfn, Process->ImageFileName);
+    }
+
     MiReleasePfnLock(OldIrql);
 }
 

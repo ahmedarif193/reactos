@@ -311,6 +311,7 @@ KiSystemService(
     ULONG ArgumentCount;
     ULONG Index;
     PVOID KernelArguments[RTL_NUMBER_OF(KiSyscallHandlers)];
+    ULONG_PTR RegisterArguments[8];
     PVOID *UserArguments = NULL;
     PVOID SystemCall;
     KIRQL OldIrql;
@@ -323,6 +324,11 @@ KiSystemService(
     if (Prcb != NULL)
     {
         Prcb->KeSystemCalls++;
+    }
+
+    for (Index = 0; Index < RTL_NUMBER_OF(RegisterArguments); Index++)
+    {
+        RegisterArguments[Index] = TrapFrame->X[Index];
     }
 
 #if defined(_WIN64) && (NTDDI_VERSION >= NTDDI_LONGHORN)
@@ -389,6 +395,10 @@ KiSystemService(
                      * KeSwitchKernelStack, so the linked list is correct.
                      */
                     TrapFrame = Thread->TrapFrame;
+                    for (Index = 0; Index < RTL_NUMBER_OF(RegisterArguments); Index++)
+                    {
+                        TrapFrame->X[Index] = RegisterArguments[Index];
+                    }
 
                     /* Retry with the new service table */
 #if defined(_WIN64) && (NTDDI_VERSION >= NTDDI_LONGHORN)

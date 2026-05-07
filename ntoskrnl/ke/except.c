@@ -29,6 +29,21 @@ KiContinuePreviousModeUser(
     RtlCopyMemory(&LocalContext, Context, sizeof(CONTEXT));
     Context = &LocalContext;
 
+#ifdef _M_ARM64
+    if ((LocalContext.Pc < 0x10000) ||
+        (LocalContext.Lr < 0x10000))
+    {
+        DPRINT1("[arm64][CONTINUE] suspicious user context pc=%p lr=%p sp=%p fp=%p flags=0x%lx x0=%p x1=%p\n",
+                (PVOID)(ULONG_PTR)LocalContext.Pc,
+                (PVOID)(ULONG_PTR)LocalContext.Lr,
+                (PVOID)(ULONG_PTR)LocalContext.Sp,
+                (PVOID)(ULONG_PTR)LocalContext.Fp,
+                LocalContext.ContextFlags,
+                (PVOID)(ULONG_PTR)LocalContext.X0,
+                (PVOID)(ULONG_PTR)LocalContext.X1);
+    }
+#endif
+
     /* Convert the context into Exception/Trap Frames */
     KeContextToTrapFrame(&LocalContext,
                          ExceptionFrame,

@@ -28,11 +28,199 @@
 /* Global variables */
 HINSTANCE hDllInstance;
 
+typedef struct _NO_DRIVER_ID_ENTRY
+{
+    struct _NO_DRIVER_ID_ENTRY *Next;
+    WCHAR Id[1];
+} NO_DRIVER_ID_ENTRY, *PNO_DRIVER_ID_ENTRY;
+
+static PNO_DRIVER_ID_ENTRY NoDriverIdCache;
+static CRITICAL_SECTION NoDriverIdCacheLock;
+static BOOL NoDriverIdCacheReady;
+
 static BOOL
 SearchDriver(
     IN PDEVINSTDATA DevInstData,
     IN LPCWSTR Directory OPTIONAL,
     IN LPCWSTR InfFile OPTIONAL);
+
+static BOOL
+NoDriverCacheContainsLocked(
+    IN LPCWSTR Id)
+{
+    PNO_DRIVER_ID_ENTRY Entry;
+
+    for (Entry = NoDriverIdCache; Entry; Entry = Entry->Next)
+    {
+        if (!lstrcmpiW(Entry->Id, Id))
+            return TRUE;
+    }
+
+    return FALSE;
+}
+
+static BOOL
+NoDriverCacheAdd(
+    IN LPCWSTR Id)
+{
+    PNO_DRIVER_ID_ENTRY Entry;
+    SIZE_T Size;
+    BOOL Ret = TRUE;
+
+    if (!NoDriverIdCacheReady || !Id || !*Id)
+        return TRUE;
+
+    EnterCriticalSection(&NoDriverIdCacheLock);
+
+    if (!NoDriverCacheContainsLocked(Id))
+    {
+        Size = FIELD_OFFSET(NO_DRIVER_ID_ENTRY, Id) + (lstrlenW(Id) + 1) * sizeof(WCHAR);
+        Entry = HeapAlloc(GetProcessHeap(), 0, Size);
+        if (!Entry)
+        {
+            Ret = FALSE;
+        }
+        else
+        {
+            Entry->Next = NoDriverIdCache;
+            lstrcpyW(Entry->Id, Id);
+            NoDriverIdCache = Entry;
+        }
+    }
+
+    LeaveCriticalSection(&NoDriverIdCacheLock);
+    return Ret;
+}
+
+static VOID
+NoDriverCacheAddList(
+    IN LPCWSTR IdList OPTIONAL)
+{
+    LPCWSTR Id;
+
+    if (!IdList)
+        return;
+
+    for (Id = IdList; *Id; Id += lstrlenW(Id) + 1)
+        NoDriverCacheAdd(Id);
+}
+
+static VOID
+NoDriverCacheRemember(
+    IN LPCWSTR HardwareIds OPTIONAL,
+    IN LPCWSTR CompatibleIds OPTIONAL)
+{
+    NoDriverCacheAddList(HardwareIds);
+    NoDriverCacheAddList(CompatibleIds);
+}
+
+static VOID
+NoDriverCacheCheckListLocked(
+    IN LPCWSTR IdList OPTIONAL,
+    IN OUT BOOL *SawId,
+    IN OUT BOOL *AllKnown)
+{
+    LPCWSTR Id;
+
+    if (!IdList)
+        return;
+
+    for (Id = IdList; *Id && *AllKnown; Id += lstrlenW(Id) + 1)
+    {
+        *SawId = TRUE;
+        if (!NoDriverCacheContainsLocked(Id))
+            *AllKnown = FALSE;
+    }
+}
+
+static BOOL
+NoDriverCacheAllIdsKnown(
+    IN LPCWSTR HardwareIds OPTIONAL,
+    IN LPCWSTR CompatibleIds OPTIONAL)
+{
+    BOOL SawId = FALSE;
+    BOOL AllKnown = TRUE;
+
+    if (!NoDriverIdCacheReady)
+        return FALSE;
+
+    EnterCriticalSection(&NoDriverIdCacheLock);
+    NoDriverCacheCheckListLocked(HardwareIds, &SawId, &AllKnown);
+    NoDriverCacheCheckListLocked(CompatibleIds, &SawId, &AllKnown);
+    LeaveCriticalSection(&NoDriverIdCacheLock);
+
+    return SawId && AllKnown;
+}
+
+static PWSTR
+GetDeviceMultiSzProperty(
+    IN PDEVINSTDATA DevInstData,
+    IN DWORD Property)
+{
+    PWSTR Buffer;
+    DWORD DataType;
+    DWORD RequiredSize = 0;
+
+    if (SetupDiGetDeviceRegistryPropertyW(DevInstData->hDevInfo,
+                                          &DevInstData->devInfoData,
+                                          Property,
+                                          &DataType,
+                                          NULL,
+                                          0,
+                                          &RequiredSize))
+    {
+        return NULL;
+    }
+
+    if (GetLastError() != ERROR_INSUFFICIENT_BUFFER || RequiredSize == 0)
+        return NULL;
+
+    Buffer = HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY, RequiredSize + sizeof(WCHAR));
+    if (!Buffer)
+    {
+        SetLastError(ERROR_NOT_ENOUGH_MEMORY);
+        return NULL;
+    }
+
+    if (!SetupDiGetDeviceRegistryPropertyW(DevInstData->hDevInfo,
+                                           &DevInstData->devInfoData,
+                                           Property,
+                                           &DataType,
+                                           (PBYTE)Buffer,
+                                           RequiredSize,
+                                           &RequiredSize) ||
+        DataType != REG_MULTI_SZ)
+    {
+        HeapFree(GetProcessHeap(), 0, Buffer);
+        return NULL;
+    }
+
+    return Buffer;
+}
+
+static VOID
+FreeNoDriverCache(VOID)
+{
+    PNO_DRIVER_ID_ENTRY Entry, Next;
+
+    if (!NoDriverIdCacheReady)
+        return;
+
+    EnterCriticalSection(&NoDriverIdCacheLock);
+    Entry = NoDriverIdCache;
+    NoDriverIdCache = NULL;
+    LeaveCriticalSection(&NoDriverIdCacheLock);
+
+    while (Entry)
+    {
+        Next = Entry->Next;
+        HeapFree(GetProcessHeap(), 0, Entry);
+        Entry = Next;
+    }
+
+    DeleteCriticalSection(&NoDriverIdCacheLock);
+    NoDriverIdCacheReady = FALSE;
+}
 
 /*
 * @implemented
@@ -661,6 +849,8 @@ DevInstallW(
     IN INT Show)
 {
     PDEVINSTDATA DevInstData = NULL;
+    PWSTR HardwareIds = NULL;
+    PWSTR CompatibleIds = NULL;
     BOOL ret;
     DWORD config_flags;
     BOOL retval = FALSE;
@@ -763,6 +953,20 @@ DevInstallW(
 
     TRACE("Installing %s (%s)\n", debugstr_w((PCWSTR)DevInstData->buffer), debugstr_w(InstanceId));
 
+    if (Show == SW_HIDE && !DevInstData->bUpdate)
+    {
+        HardwareIds = GetDeviceMultiSzProperty(DevInstData, SPDRP_HARDWAREID);
+        CompatibleIds = GetDeviceMultiSzProperty(DevInstData, SPDRP_COMPATIBLEIDS);
+
+        if (NoDriverCacheAllIdsKnown(HardwareIds, CompatibleIds))
+        {
+            TRACE("No driver cached for %s\n", debugstr_w(InstanceId));
+            NewDevSetFailedInstall(DevInstData->hDevInfo, &DevInstData->devInfoData, TRUE);
+            SetLastError(ERROR_FILE_NOT_FOUND);
+            goto cleanup;
+        }
+    }
+
     /* Search driver in default location and removable devices */
     if (!PrepareFoldersToScan(DevInstData, FALSE, FALSE, NULL))
     {
@@ -797,6 +1001,15 @@ DevInstallW(
     {
         /* We can't show the wizard. Fail the install */
         TRACE("No wizard\n");
+        if (!DevInstData->bUpdate)
+        {
+            if (!NewDevSetFailedInstall(DevInstData->hDevInfo, &DevInstData->devInfoData, TRUE))
+            {
+                TRACE("NewDevSetFailedInstall() failed with error 0x%lx\n", GetLastError());
+            }
+            NoDriverCacheRemember(HardwareIds, CompatibleIds);
+        }
+        SetLastError(ERROR_FILE_NOT_FOUND);
         goto cleanup;
     }
 
@@ -817,6 +1030,8 @@ cleanup:
             if (!SetupDiDestroyDeviceInfoList(DevInstData->hDevInfo))
                 TRACE("SetupDiDestroyDeviceInfoList() failed with error 0x%lx\n", GetLastError());
         }
+        HeapFree(GetProcessHeap(), 0, HardwareIds);
+        HeapFree(GetProcessHeap(), 0, CompatibleIds);
         HeapFree(GetProcessHeap(), 0, DevInstData->buffer);
         HeapFree(GetProcessHeap(), 0, DevInstData);
     }
@@ -1203,11 +1418,17 @@ DllMain(
         INITCOMMONCONTROLSEX InitControls;
 
         DisableThreadLibraryCalls(hInstance);
+        InitializeCriticalSection(&NoDriverIdCacheLock);
+        NoDriverIdCacheReady = TRUE;
 
         InitControls.dwSize = sizeof(INITCOMMONCONTROLSEX);
         InitControls.dwICC = ICC_PROGRESS_CLASS;
         InitCommonControlsEx(&InitControls);
         hDllInstance = hInstance;
+    }
+    else if (dwReason == DLL_PROCESS_DETACH)
+    {
+        FreeNoDriverCache();
     }
 
     return TRUE;

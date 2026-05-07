@@ -1417,10 +1417,36 @@ MmDeleteProcessAddressSpace(IN PEPROCESS Process)
         Pfn1 = MiGetPfnEntry(Process->WorkingSetPage);
         Pfn2 = MiGetPfnEntry(Pfn1->u4.PteFrame);
 
+#ifdef _M_ARM64
+        DPRINT1("[arm64][PFNDEL] ws proc=%.16s ws=%Ix pteFrame=%Ix "
+                "pfn(ref=%u share=%lu loc=%u pte=%p) parent(ref=%u share=%lu loc=%u pte=%p)\n",
+                Process->ImageFileName,
+                Process->WorkingSetPage,
+                Pfn1->u4.PteFrame,
+                (ULONG)Pfn1->u3.e2.ReferenceCount,
+                Pfn1->u2.ShareCount,
+                (ULONG)Pfn1->u3.e1.PageLocation,
+                Pfn1->PteAddress,
+                (ULONG)Pfn2->u3.e2.ReferenceCount,
+                Pfn2->u2.ShareCount,
+                (ULONG)Pfn2->u3.e1.PageLocation,
+                Pfn2->PteAddress);
+#endif
+
         /* Nuke it */
         MI_SET_PFN_DELETED(Pfn1);
         MiDecrementShareCount(Pfn2, Pfn1->u4.PteFrame);
         MiDecrementShareCount(Pfn1, Process->WorkingSetPage);
+#ifdef _M_ARM64
+        DPRINT1("[arm64][PFNDEL] ws-after proc=%.16s ws=%Ix ref=%u share=%lu loc=%u parentRef=%u parentShare=%lu\n",
+                Process->ImageFileName,
+                Process->WorkingSetPage,
+                (ULONG)Pfn1->u3.e2.ReferenceCount,
+                Pfn1->u2.ShareCount,
+                (ULONG)Pfn1->u3.e1.PageLocation,
+                (ULONG)Pfn2->u3.e2.ReferenceCount,
+                Pfn2->u2.ShareCount);
+#endif
         ASSERT((Pfn1->u3.e2.ReferenceCount == 0) || (Pfn1->u3.e1.WriteInProgress));
 
         /* Now map hyperspace and its page table */
@@ -1428,18 +1454,64 @@ MmDeleteProcessAddressSpace(IN PEPROCESS Process)
         Pfn1 = MiGetPfnEntry(PageFrameIndex);
         Pfn2 = MiGetPfnEntry(Pfn1->u4.PteFrame);
 
+#ifdef _M_ARM64
+        DPRINT1("[arm64][PFNDEL] dtb1 proc=%.16s pfn=%Ix pteFrame=%Ix "
+                "pfn(ref=%u share=%lu loc=%u pte=%p) parent(ref=%u share=%lu loc=%u pte=%p)\n",
+                Process->ImageFileName,
+                PageFrameIndex,
+                Pfn1->u4.PteFrame,
+                (ULONG)Pfn1->u3.e2.ReferenceCount,
+                Pfn1->u2.ShareCount,
+                (ULONG)Pfn1->u3.e1.PageLocation,
+                Pfn1->PteAddress,
+                (ULONG)Pfn2->u3.e2.ReferenceCount,
+                Pfn2->u2.ShareCount,
+                (ULONG)Pfn2->u3.e1.PageLocation,
+                Pfn2->PteAddress);
+#endif
+
         /* Nuke it */
         MI_SET_PFN_DELETED(Pfn1);
         MiDecrementShareCount(Pfn2, Pfn1->u4.PteFrame);
         MiDecrementShareCount(Pfn1, PageFrameIndex);
+#ifdef _M_ARM64
+        DPRINT1("[arm64][PFNDEL] dtb1-after proc=%.16s pfn=%Ix ref=%u share=%lu loc=%u parentRef=%u parentShare=%lu\n",
+                Process->ImageFileName,
+                PageFrameIndex,
+                (ULONG)Pfn1->u3.e2.ReferenceCount,
+                Pfn1->u2.ShareCount,
+                (ULONG)Pfn1->u3.e1.PageLocation,
+                (ULONG)Pfn2->u3.e2.ReferenceCount,
+                Pfn2->u2.ShareCount);
+#endif
         ASSERT((Pfn1->u3.e2.ReferenceCount == 0) || (Pfn1->u3.e1.WriteInProgress));
 
         /* Finally, nuke the PDE itself */
         PageFrameIndex = Process->Pcb.DTB0 >> PAGE_SHIFT;
         Pfn1 = MiGetPfnEntry(PageFrameIndex);
+#ifdef _M_ARM64
+        DPRINT1("[arm64][PFNDEL] dtb0 proc=%.16s pfn=%Ix ref=%u share=%lu loc=%u pte=%p pteFrame=%Ix\n",
+                Process->ImageFileName,
+                PageFrameIndex,
+                (ULONG)Pfn1->u3.e2.ReferenceCount,
+                Pfn1->u2.ShareCount,
+                (ULONG)Pfn1->u3.e1.PageLocation,
+                Pfn1->PteAddress,
+                Pfn1->u4.PteFrame);
+#endif
         MI_SET_PFN_DELETED(Pfn1);
         MiDecrementShareCount(Pfn1, PageFrameIndex);
         MiDecrementShareCount(Pfn1, PageFrameIndex);
+#ifdef _M_ARM64
+        DPRINT1("[arm64][PFNDEL] dtb0-after proc=%.16s pfn=%Ix ref=%u share=%lu loc=%u pte=%p pteFrame=%Ix\n",
+                Process->ImageFileName,
+                PageFrameIndex,
+                (ULONG)Pfn1->u3.e2.ReferenceCount,
+                Pfn1->u2.ShareCount,
+                (ULONG)Pfn1->u3.e1.PageLocation,
+                Pfn1->PteAddress,
+                Pfn1->u4.PteFrame);
+#endif
 
         /* Page table is now dead. Bye bye... */
         ASSERT((Pfn1->u3.e2.ReferenceCount == 0) || (Pfn1->u3.e1.WriteInProgress));
