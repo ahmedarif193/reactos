@@ -313,4 +313,5 @@ RtlInitializeContext(
     ThreadContext->Pc = (ULONG64)ThreadStartAddress;
     ThreadContext->Sp = ALIGN_DOWN_BY((ULONG64)InitialStack, 16);
     ThreadContext->X0 = (ULONG64)ThreadStartParam;
+    ThreadContext->Lr = (ULONG64)RtlExitUserThread;
 }
