@@ -1512,12 +1512,17 @@ USBPORT_ReopenPipe(IN PDEVICE_OBJECT FdoDevice,
     USBPORT_ENDPOINT_REQUIREMENTS EndpointRequirements = {0};
     PUSBPORT_REGISTRATION_PACKET Packet;
     KIRQL MiniportOldIrql;
+    BOOLEAN IsDefaultControlPipe;
     NTSTATUS Status;
 
     DPRINT("USBPORT_ReopenPipe ... \n");
 
     FdoExtension = FdoDevice->DeviceExtension;
     Packet = &FdoExtension->MiniPortInterface->Packet;
+    IsDefaultControlPipe =
+        (Packet->MiniPortFlags & USB_MINIPORT_FLAGS_USB3) &&
+        Endpoint->EndpointProperties.TransferType == USBPORT_TRANSFER_TYPE_CONTROL &&
+        Endpoint->EndpointProperties.EndpointAddress == 0;
 
     while (TRUE)
     {
@@ -1538,7 +1543,16 @@ USBPORT_ReopenPipe(IN PDEVICE_OBJECT FdoDevice,
     KeReleaseSpinLockFromDpcLevel(&FdoExtension->MiniportSpinLock);
     KeReleaseSpinLock(&Endpoint->EndpointSpinLock, Endpoint->EndpointOldIrql);
 
-    USBPORT_Wait(FdoDevice, 2);
+    /*
+     * The USB3 default control pipe is slot-owned on xHCI and stays on the
+     * static EP0 ring while the packet size is updated. There is no asynchronous
+     * remove transition to settle before CloseEndpoint/OpenEndpoint rebuilds
+     * the software endpoint view.
+     */
+    if (!IsDefaultControlPipe)
+    {
+        USBPORT_Wait(FdoDevice, 2);
+    }
 
         MiniportCloseEndpoint(FdoDevice, Endpoint);
 

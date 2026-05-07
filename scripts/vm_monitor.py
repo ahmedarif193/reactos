@@ -484,7 +484,11 @@ def start_qemu(rpi_mode=False, smp=4):
     # ---------------- ARM64 CONFIGURATION ----------------
     if target_arch == "arm64":
         is_darwin = platform.system() == "Darwin"
-        arm64_usb_devices = []
+        arm64_usb_devices = [
+            "-device", "qemu-xhci",
+            "-device", "usb-kbd",
+            "-device", "usb-tablet",
+        ]
         if rpi_mode:
             mode_str = f"RPI emulation (cortex-a72, {smp} cores)"
         else:
