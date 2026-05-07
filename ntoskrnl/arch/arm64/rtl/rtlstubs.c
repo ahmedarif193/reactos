@@ -380,6 +380,37 @@ RtlpArm64InstructionSize(
     }
 }
 
+static
+ULONG
+RtlpArm64GetSequenceSize(
+    _In_ PUCHAR UnwindCodes,
+    _In_ ULONG UnwindBytes,
+    _In_ ULONG StartIndex,
+    _In_ BOOLEAN IncludeEnd)
+{
+    ULONG Size = 0;
+    ULONG ci = StartIndex;
+
+    while (ci < UnwindBytes)
+    {
+        ARM64_UNWIND_CODE Code;
+
+        RtlpArm64DecodeCode(UnwindCodes, ci, &Code);
+        if (Code.OpcodeId == ARM64_UWOP_END ||
+            Code.OpcodeId == ARM64_UWOP_END_C)
+        {
+            if (IncludeEnd)
+                Size += RtlpArm64InstructionSize(&Code);
+            break;
+        }
+
+        Size += RtlpArm64InstructionSize(&Code);
+        ci += Code.TotalBytes;
+    }
+
+    return Size;
+}
+
 /* ------------------------------------------------------------------ *
  *  Register access helpers for ARM64 CONTEXT
  * ------------------------------------------------------------------ */
@@ -514,95 +545,345 @@ RtlpArm64DecodePacked(
                        ARM64_PACKED_FRAMESZ_MASK) * 16;
 }
 
-/*
- * RtlpArm64SynthesizePackedCodes
- *
- * Given packed unwind info, write the corresponding unwind code bytes.
- * Returns the number of bytes written (must be <= buffer size).
- *
- * This synthesizes codes from the canonical prolog table in the MS spec.
- */
 static
 ULONG
-RtlpArm64SynthesizePackedCodes(
-    _In_ PARM64_PACKED_INFO Info,
-    _Out_ PUCHAR CodeBuffer,
-    _In_ ULONG BufferSize)
+RtlpArm64AlignUp(
+    _In_ ULONG Value,
+    _In_ ULONG Alignment)
 {
-    ULONG Offset = 0;
-    ULONG StackUnits;
+    return (Value + Alignment - 1) & ~(Alignment - 1);
+}
+
+static
+VOID
+RtlpArm64NormalizeLr(
+    _Inout_ PCONTEXT Context)
+{
+    ULONG64 Pc = Context->Lr & ((1ULL << 48) - 1);
 
     /*
-     * Packed records describe canonical functions without handlers.  For
-     * debugger/backtrace use the critical state is SP/FP/LR, so synthesize a
-     * conservative unwind sequence in the same order real .xdata uses: the
-     * order operations must be undone.  Do not byte-reverse this buffer;
-     * ARM64 unwind opcodes are variable length.
+     * PAC bits occupy the non-canonical high bits.  ReactOS ARM64 currently
+     * uses a 48-bit VA layout, so strip PAC/tag bits and restore the canonical
+     * sign-extension from bit 47.
      */
-    if (Info->CR == ARM64_CR_CHAINED || Info->CR == ARM64_CR_CHAINED_PAC)
+    if (Pc & (1ULL << 47))
+        Pc |= 0xFFFFULL << 48;
+
+    Context->Lr = Pc;
+}
+
+static
+BOOLEAN
+RtlpArm64RestoreIntRegs(
+    _Inout_ PCONTEXT Context,
+    _In_ ULONG Reg,
+    _In_ ULONG Count,
+    _In_ LONG Position)
+{
+    ULONG i;
+    ULONG Offset = (Position > 0) ? (ULONG)Position : 0;
+    ULONG64 Value;
+
+    if (Reg + Count > 31)
+        return FALSE;
+
+    for (i = 0; i < Count; i++)
     {
-        if (Info->FrameSize == 0)
-            return 0;
-
-        if (Offset + 1 > BufferSize)
-            return 0;
-        CodeBuffer[Offset++] = 0xE1; /* set_fp */
-
-        if (Info->CR == ARM64_CR_CHAINED_PAC)
+        if (!RtlpArm64Read64(&Value,
+                             (ULONG_PTR)(Context->Sp + (Offset + i) * sizeof(ULONG64))))
         {
-            if (Offset + 1 > BufferSize)
-                return 0;
-            CodeBuffer[Offset++] = 0xFC; /* pac_sign_lr */
+            return FALSE;
         }
 
-        if (Info->FrameSize <= 512)
+        RtlpArm64SetIntReg(Context, Reg + i, Value);
+    }
+
+    if (Position < 0)
+        Context->Sp += (ULONG64)(-Position) * sizeof(ULONG64);
+
+    return TRUE;
+}
+
+static
+BOOLEAN
+RtlpArm64RestoreFpRegs(
+    _Inout_ PCONTEXT Context,
+    _In_ ULONG Reg,
+    _In_ ULONG Count,
+    _In_ LONG Position)
+{
+    ULONG i;
+    ULONG Offset = (Position > 0) ? (ULONG)Position : 0;
+    ULONG64 Value;
+
+    if (Reg + Count > 32)
+        return FALSE;
+
+    for (i = 0; i < Count; i++)
+    {
+        if (!RtlpArm64Read64(&Value,
+                             (ULONG_PTR)(Context->Sp + (Offset + i) * sizeof(ULONG64))))
         {
-            if (Offset + 1 > BufferSize)
-                return 0;
-            CodeBuffer[Offset++] = 0x80 | (UCHAR)((Info->FrameSize / 8 - 1) & 0x3F);
+            return FALSE;
         }
-        else
+
+        RtlpArm64SetFpReg(Context, Reg + i, Value, 0);
+    }
+
+    if (Position < 0)
+        Context->Sp += (ULONG64)(-Position) * sizeof(ULONG64);
+
+    return TRUE;
+}
+
+static
+BOOLEAN
+RtlpArm64UnwindPacked(
+    _In_ ULONG UnwindFlag,
+    _In_ PARM64_PACKED_INFO Info,
+    _In_ ULONG CodeOffset,
+    _Inout_ PCONTEXT Context)
+{
+    ULONG IntSize;
+    ULONG FpSize;
+    ULONG RegSave;
+    ULONG LocalSize;
+    ULONG IntRegs;
+    ULONG FpRegs;
+    ULONG SavedRegs;
+    ULONG LocalSizeRegs;
+    ULONG FunctionLengthInstr;
+    ULONG InstrOffset;
+    ULONG HomeInstrs;
+    ULONG Len;
+    ULONG Skip = 0;
+    ULONG Pos = 0;
+    ULONG PairCount;
+    ULONG PairIndex;
+
+    IntSize = Info->RegI * sizeof(ULONG64);
+    FpSize = Info->RegF * sizeof(ULONG64);
+    HomeInstrs = Info->HomesParams ? 4 : 0;
+
+    if (Info->CR == ARM64_CR_UNCHAINED_SAVED_LR)
+        IntSize += sizeof(ULONG64);
+    if (Info->RegF != 0)
+        FpSize += sizeof(ULONG64);
+
+    RegSave = RtlpArm64AlignUp(IntSize + FpSize +
+                               (Info->HomesParams ? 8 * sizeof(ULONG64) : 0),
+                               16);
+    if (Info->FrameSize < RegSave)
+        return FALSE;
+
+    LocalSize = Info->FrameSize - RegSave;
+    IntRegs = IntSize / sizeof(ULONG64);
+    FpRegs = FpSize / sizeof(ULONG64);
+    SavedRegs = RegSave / sizeof(ULONG64);
+    LocalSizeRegs = LocalSize / sizeof(ULONG64);
+    FunctionLengthInstr = Info->FunctionLength / sizeof(ULONG);
+    InstrOffset = CodeOffset / sizeof(ULONG);
+
+    if (UnwindFlag == 1)
+    {
+        Len = (IntSize + 8) / 16 + (FpSize + 8) / 16;
+
+        switch (Info->CR)
         {
-            if (Offset + 1 > BufferSize)
-                return 0;
-            CodeBuffer[Offset++] = 0x40; /* save_fplr at [fp] */
+            case ARM64_CR_CHAINED_PAC:
+                Len++; /* pacibsp */
+                /* fall through */
+            case ARM64_CR_CHAINED:
+                Len++; /* mov x29, sp */
+                Len++; /* save <x29, lr> */
+                if (LocalSize <= 512)
+                    break;
+                /* fall through */
+            case ARM64_CR_UNCHAINED:
+            case ARM64_CR_UNCHAINED_SAVED_LR:
+                if (LocalSize != 0)
+                    Len++;
+                if (LocalSize > 4088)
+                    Len++;
+                break;
         }
+
+        if (InstrOffset < Len + HomeInstrs)
+        {
+            Skip = Len + HomeInstrs - InstrOffset;
+        }
+        else if (FunctionLengthInstr >= Len + 1 &&
+                 InstrOffset >= FunctionLengthInstr - (Len + 1))
+        {
+            Skip = InstrOffset - (FunctionLengthInstr - (Len + 1));
+            HomeInstrs = 0;
+        }
+    }
+
+    if (Skip == 0)
+    {
+        if (Info->CR == ARM64_CR_CHAINED ||
+            Info->CR == ARM64_CR_CHAINED_PAC)
+        {
+            Context->Sp = Context->Fp;
+            if (!RtlpArm64RestoreIntRegs(Context, 29, 2, 0))
+                return FALSE;
+        }
+
+        Context->Sp += LocalSize;
+
+        if (FpSize != 0 &&
+            !RtlpArm64RestoreFpRegs(Context, 8, FpRegs, IntRegs))
+        {
+            return FALSE;
+        }
+
+        if (Info->CR == ARM64_CR_UNCHAINED_SAVED_LR &&
+            !RtlpArm64RestoreIntRegs(Context, 30, 1, IntRegs - 1))
+        {
+            return FALSE;
+        }
+
+        if (!RtlpArm64RestoreIntRegs(Context, 19, Info->RegI, -(LONG)SavedRegs))
+            return FALSE;
     }
     else
     {
-        StackUnits = Info->FrameSize / 16;
-        if (StackUnits == 0)
-            return 0;
+        switch (Info->CR)
+        {
+            case ARM64_CR_CHAINED:
+            case ARM64_CR_CHAINED_PAC:
+                if (Pos++ >= Skip)
+                    Context->Sp = Context->Fp;
 
-        if (StackUnits < 32)
-        {
-            if (Offset + 1 > BufferSize)
-                return 0;
-            CodeBuffer[Offset++] = (UCHAR)StackUnits;
+                if (LocalSize <= 512)
+                {
+                    if (Pos++ >= Skip &&
+                        !RtlpArm64RestoreIntRegs(Context, 29, 2, -(LONG)LocalSizeRegs))
+                    {
+                        return FALSE;
+                    }
+                    break;
+                }
+
+                if (Pos++ >= Skip &&
+                    !RtlpArm64RestoreIntRegs(Context, 29, 2, 0))
+                {
+                    return FALSE;
+                }
+                /* fall through */
+
+            case ARM64_CR_UNCHAINED:
+            case ARM64_CR_UNCHAINED_SAVED_LR:
+                if (LocalSize == 0)
+                    break;
+
+                if (Pos++ >= Skip)
+                    Context->Sp += ((LocalSize - 1) % 4088) + 1;
+                if (LocalSize > 4088 && Pos++ >= Skip)
+                    Context->Sp += 4088;
+                break;
         }
-        else if (StackUnits < 2048)
+
+        Pos += HomeInstrs;
+
+        if (FpSize != 0)
         {
-            if (Offset + 2 > BufferSize)
-                return 0;
-            CodeBuffer[Offset++] = 0xC0 | (UCHAR)((StackUnits >> 8) & 7);
-            CodeBuffer[Offset++] = (UCHAR)(StackUnits & 0xFF);
+            if ((Info->RegF % 2) == 0)
+            {
+                if (Pos++ >= Skip &&
+                    !RtlpArm64RestoreFpRegs(Context,
+                                            8 + Info->RegF,
+                                            1,
+                                            IntRegs + FpRegs - 1))
+                {
+                    return FALSE;
+                }
+            }
+
+            for (PairCount = (Info->RegF + 1) / 2; PairCount > 0; PairCount--)
+            {
+                PairIndex = PairCount - 1;
+                if (Pos++ < Skip)
+                    continue;
+
+                if (PairIndex == 0 && IntSize == 0)
+                {
+                    if (!RtlpArm64RestoreFpRegs(Context, 8, 2, -(LONG)SavedRegs))
+                        return FALSE;
+                }
+                else
+                {
+                    if (!RtlpArm64RestoreFpRegs(Context,
+                                                8 + 2 * PairIndex,
+                                                2,
+                                                IntRegs + 2 * PairIndex))
+                    {
+                        return FALSE;
+                    }
+                }
+            }
         }
-        else
+
+        if (Info->RegI % 2)
         {
-            if (Offset + 4 > BufferSize)
-                return 0;
-            CodeBuffer[Offset++] = 0xE0;
-            CodeBuffer[Offset++] = (UCHAR)((StackUnits >> 16) & 0xFF);
-            CodeBuffer[Offset++] = (UCHAR)((StackUnits >> 8) & 0xFF);
-            CodeBuffer[Offset++] = (UCHAR)(StackUnits & 0xFF);
+            if (Pos++ >= Skip)
+            {
+                if (Info->CR == ARM64_CR_UNCHAINED_SAVED_LR &&
+                    !RtlpArm64RestoreIntRegs(Context, 30, 1, IntRegs - 1))
+                {
+                    return FALSE;
+                }
+
+                if (!RtlpArm64RestoreIntRegs(Context,
+                                             18 + Info->RegI,
+                                             1,
+                                             (Info->RegI > 1) ? (LONG)(Info->RegI - 1) : -(LONG)SavedRegs))
+                {
+                    return FALSE;
+                }
+            }
+        }
+        else if (Info->CR == ARM64_CR_UNCHAINED_SAVED_LR)
+        {
+            if (Pos++ >= Skip &&
+                !RtlpArm64RestoreIntRegs(Context,
+                                         30,
+                                         1,
+                                         Info->RegI ? (LONG)(IntRegs - 1) : -(LONG)SavedRegs))
+            {
+                return FALSE;
+            }
+        }
+
+        for (PairCount = Info->RegI / 2; PairCount > 0; PairCount--)
+        {
+            PairIndex = PairCount - 1;
+            if (Pos++ < Skip)
+                continue;
+
+            if (PairIndex != 0)
+            {
+                if (!RtlpArm64RestoreIntRegs(Context,
+                                             19 + 2 * PairIndex,
+                                             2,
+                                             2 * PairIndex))
+                {
+                    return FALSE;
+                }
+            }
+            else
+            {
+                if (!RtlpArm64RestoreIntRegs(Context, 19, 2, -(LONG)SavedRegs))
+                    return FALSE;
+            }
         }
     }
 
-    if (Offset + 1 > BufferSize)
-        return 0;
-    CodeBuffer[Offset++] = 0xE4; /* end */
+    if (Info->CR == ARM64_CR_CHAINED_PAC)
+        RtlpArm64NormalizeLr(Context);
 
-    return Offset;
+    return TRUE;
 }
 
 /* ------------------------------------------------------------------ *
@@ -626,15 +907,15 @@ RtlVirtualUnwind(
     PUCHAR UnwindCodes;
     ULONG UnwindBytes;
     ULONG CodeIdx;
-        ULONG CodeOffsetInEpilog;
+    ULONG CodeOffsetInEpilog;
     ULONG64 SavedFp;
     ULONG PrologSize = 0;
+    ULONG EpilogSize = 0;
     BOOLEAN InProlog = FALSE;
     BOOLEAN InEpilog = FALSE;
     BOOLEAN ChainedFunction;
     ARM64_XDATA_INFO XdataInfo;
     ARM64_PACKED_INFO PackedInfo;
-    UCHAR SynthesizedCodes[128];
     PULONG Xdata;
     PULONG LanguageHandler;
     BOOLEAN HasPackedFormat;
@@ -671,53 +952,21 @@ RtlVirtualUnwind(
 
         CodeOffset = ControlRva - FunctionEntry->BeginAddress;
 
-        /* Synthesize unwind codes from packed format */
-        UnwindBytes = RtlpArm64SynthesizePackedCodes(&PackedInfo, SynthesizedCodes, sizeof(SynthesizedCodes));
-        UnwindCodes = SynthesizedCodes;
-
-        /* For packed format, flag=10 means NO prolog/epilog (separated fragments) */
-        if ((UnwindData & ARM64_UNWIND_FLAG_MASK) == 2)
-        {
-            InProlog = FALSE;
-            InEpilog = FALSE;
-        }
-        else
-        {
-            /* Compute prolog size from synthesized codes */
-            PrologSize = 0;
-            {
-                ULONG ci = 0;
-                while (ci < UnwindBytes)
-                {
-                    ARM64_UNWIND_CODE Code;
-                    RtlpArm64DecodeCode(UnwindCodes, ci, &Code);
-                    if (Code.OpcodeId == ARM64_UWOP_END || Code.OpcodeId == ARM64_UWOP_END_C)
-                    {
-                        PrologSize += RtlpArm64InstructionSize(&Code);
-                        ci += Code.TotalBytes;
-                        break;
-                    }
-                    PrologSize += RtlpArm64InstructionSize(&Code);
-                    ci += Code.TotalBytes;
-                }
-            }
-
-            if (CodeOffset < PrologSize)
-            {
-                InProlog = TRUE;
-            }
-
-            if (CodeOffset >= PackedInfo.FunctionLength - PrologSize)
-            {
-                InEpilog = TRUE;
-            }
-        }
-
         ChainedFunction = (PackedInfo.CR == ARM64_CR_CHAINED ||
                            PackedInfo.CR == ARM64_CR_CHAINED_PAC);
-        HasSetFpCode = ChainedFunction;
 
-        Xdata = NULL;
+        *EstablisherFrame = ChainedFunction ? Context->Fp : Context->Sp;
+
+        if (!RtlpArm64UnwindPacked(UnwindData & ARM64_UNWIND_FLAG_MASK,
+                                   &PackedInfo,
+                                   CodeOffset,
+                                   Context))
+        {
+            return NULL;
+        }
+
+        Context->Pc = Context->Lr;
+        return NULL;
     }
     else
     {
@@ -736,19 +985,8 @@ RtlVirtualUnwind(
         UnwindCodes = XdataInfo.UnwindCodes;
         UnwindBytes = XdataInfo.CodeWords * 4;
 
-        /* Compute prolog size from .xdata unwind codes */
-        {
-            ULONG ci = 0;
-            while (ci < UnwindBytes)
-            {
-                ARM64_UNWIND_CODE Code;
-                RtlpArm64DecodeCode(UnwindCodes, ci, &Code);
-                ci += Code.TotalBytes;
-                PrologSize += RtlpArm64InstructionSize(&Code);
-                if (Code.OpcodeId == ARM64_UWOP_END || Code.OpcodeId == ARM64_UWOP_END_C)
-                    break;
-            }
-        }
+        /* Compute prolog size from .xdata unwind codes. */
+        PrologSize = RtlpArm64GetSequenceSize(UnwindCodes, UnwindBytes, 0, FALSE);
 
         if (CodeOffset < PrologSize)
         {
@@ -764,12 +1002,30 @@ RtlVirtualUnwind(
                 ULONG Scope = XdataInfo.EpilogScopes[i];
                 ULONG EpilogStartOffset = (Scope & 0x3FFFF) * 4;
                 ULONG EpilogStartIdx = (Scope >> 22) & 0x3FF;
+                ULONG ScopeSize = RtlpArm64GetSequenceSize(UnwindCodes,
+                                                           UnwindBytes,
+                                                           EpilogStartIdx,
+                                                           TRUE);
 
-                if (EpilogStartOffset <= CodeOffset)
+                if (EpilogStartOffset <= CodeOffset &&
+                    CodeOffset < EpilogStartOffset + ScopeSize)
                 {
                     InEpilog = TRUE;
                     CodeIdx = EpilogStartIdx;
                 }
+            }
+        }
+        else if (!InProlog && XdataInfo.EpilogPacked)
+        {
+            EpilogSize = RtlpArm64GetSequenceSize(UnwindCodes,
+                                                  UnwindBytes,
+                                                  XdataInfo.EpilogStartIndex,
+                                                  TRUE);
+            if (XdataInfo.FunctionLength >= EpilogSize &&
+                CodeOffset >= XdataInfo.FunctionLength - EpilogSize)
+            {
+                InEpilog = TRUE;
+                CodeIdx = XdataInfo.EpilogStartIndex;
             }
         }
 
@@ -848,6 +1104,15 @@ RtlVirtualUnwind(
             CodeOffsetInEpilog = CodeOffset -
                 (PackedInfo.FunctionLength - PrologSize);
         }
+        else if (XdataInfo.EpilogPacked)
+        {
+            EpilogSize = RtlpArm64GetSequenceSize(UnwindCodes,
+                                                  UnwindBytes,
+                                                  XdataInfo.EpilogStartIndex,
+                                                  TRUE);
+            EpilogBaseIndex = XdataInfo.EpilogStartIndex;
+            CodeOffsetInEpilog = CodeOffset - (XdataInfo.FunctionLength - EpilogSize);
+        }
         else if (!XdataInfo.EpilogPacked && XdataInfo.EpilogCount > 0)
         {
             ULONG i;
@@ -856,8 +1121,13 @@ RtlVirtualUnwind(
                 ULONG Scope = XdataInfo.EpilogScopes[i];
                 ULONG ScopeStart = (Scope & 0x3FFFF) * 4;
                 ULONG ScopeIdx = (Scope >> 22) & 0x3FF;
+                ULONG ScopeSize = RtlpArm64GetSequenceSize(UnwindCodes,
+                                                           UnwindBytes,
+                                                           ScopeIdx,
+                                                           TRUE);
 
-                if (ScopeStart <= CodeOffset)
+                if (ScopeStart <= CodeOffset &&
+                    CodeOffset < ScopeStart + ScopeSize)
                 {
                     EpilogBaseIndex = ScopeIdx;
                     CodeOffsetInEpilog = CodeOffset - ScopeStart;
@@ -899,13 +1169,31 @@ RtlVirtualUnwind(
 
     if (InProlog)
     {
-        /*
-         * Partial prolog unwinding needs reverse-order slicing of a
-         * variable-length code stream. Until that path is complete, fail
-         * closed so callers can use the FP-chain fallback instead of
-         * corrupting the debugger stack walk.
-         */
-        return NULL;
+        ULONG BytesToSkip = PrologSize - CodeOffset;
+        ULONG SkippedBytes = 0;
+
+        CodeIdx = 0;
+        while (CodeIdx < UnwindBytes && SkippedBytes < BytesToSkip)
+        {
+            ARM64_UNWIND_CODE Code;
+            ULONG InstructionSize;
+
+            RtlpArm64DecodeCode(UnwindCodes, CodeIdx, &Code);
+            if (Code.OpcodeId == ARM64_UWOP_END ||
+                Code.OpcodeId == ARM64_UWOP_END_C)
+            {
+                break;
+            }
+
+            InstructionSize = RtlpArm64InstructionSize(&Code);
+            if (SkippedBytes + InstructionSize > BytesToSkip)
+                break;
+
+            SkippedBytes += InstructionSize;
+            CodeIdx += Code.TotalBytes;
+        }
+
+        goto ExecuteCodes;
     }
 
     /*
@@ -1250,22 +1538,7 @@ ExecuteCodes:
             break;
 
         case ARM64_UWOP_PAC_SIGN_LR:
-            /* pac_sign_lr: strip PAC signature from LR */
-            {
-                /* Strip the PAC from the return address.
-                   On ARM64, the PAC bits are in the top byte(s) of the address.
-                   We clear bits [55:48] which contain the PAC code. */
-                ULONG64 Pc = Context->Lr;
-                /* Clear the PAC authentication code bits */
-                Pc &= ~(0xFFULL << 48);
-                /* Fix the address for tagged pointers */
-                if ((Pc & (1ULL << 55)) == 0)
-                {
-                    /* Clear the tag */
-                    Pc |= 0xFFFFULL << 48;
-                }
-                Context->Lr = Pc;
-            }
+            RtlpArm64NormalizeLr(Context);
             break;
 
         /* ------------------------------------------------------------ */
@@ -1327,6 +1600,13 @@ ExecuteCodes:
         {
             Context->Pc = Context->Lr;
         }
+    }
+
+    if (InProlog || InEpilog)
+    {
+        if (HandlerData)
+            *HandlerData = NULL;
+        return NULL;
     }
 
     /*
@@ -1446,17 +1726,15 @@ RtlUnwindEx(
         FunctionEntry = RtlLookupFunctionEntry(UnwindContext.Pc, &ImageBase, NULL);
         if (FunctionEntry == NULL)
         {
-            /* Leaf function: pop return address from stack. */
-            if (UnwindContext.Sp != 0 && UnwindContext.Sp < StackHigh)
-            {
-                if (!RtlpArm64Read64(&UnwindContext.Pc, (ULONG_PTR)UnwindContext.Sp))
-                    break;
-                UnwindContext.Sp += sizeof(ULONG64);
-            }
-            else
-            {
+            /*
+             * ARM64 leaf functions do not push a return address; the caller PC
+             * is the live LR.  If PC already equals LR, there is no useful leaf
+             * unwind left to perform.
+             */
+            if (UnwindContext.Lr == 0 || UnwindContext.Lr == UnwindContext.Pc)
                 break;
-            }
+
+            UnwindContext.Pc = UnwindContext.Lr;
             continue;
         }
 
