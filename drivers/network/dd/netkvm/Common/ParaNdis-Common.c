@@ -459,6 +459,7 @@ static BOOLEAN GetAdapterResources(NDIS_HANDLE MiniportHandle, PNDIS_RESOURCE_LI
     UINT i;
     int read, bar = -1;
     PCI_COMMON_HEADER pci_config;
+    BOOLEAN InterruptFound = FALSE;
     NdisZeroMemory(pResources, sizeof(*pResources));
 
     // read the PCI config space header
@@ -507,11 +508,12 @@ static BOOLEAN GetAdapterResources(NDIS_HANDLE MiniportHandle, PNDIS_RESOURCE_LI
             pResources->Level = RList->PartialDescriptors[i].u.Interrupt.Level;
             pResources->Affinity = RList->PartialDescriptors[i].u.Interrupt.Affinity;
             pResources->InterruptFlags = RList->PartialDescriptors[i].Flags;
+            InterruptFound = TRUE;
             DPrintf(0, ("Found Interrupt vector %d, level %d, affinity %X, flags %X",
                 pResources->Vector, pResources->Level, (ULONG)pResources->Affinity, pResources->InterruptFlags));
         }
     }
-    return bar >= 0 && pResources->Vector;
+    return bar >= 0 && InterruptFound;
 }
 
 static void DumpVirtIOFeatures(PARANDIS_ADAPTER *pContext)
@@ -888,7 +890,8 @@ NDIS_STATUS ParaNdis_InitializeContext(
         pContext->bHasHardwareFilters = TRUE;
     }
 
-    status = FinalizeFeatures(pContext);
+    if (status == NDIS_STATUS_SUCCESS)
+        status = FinalizeFeatures(pContext);
 
     pContext->ReuseBufferProc = (tReuseReceiveBufferProc)ReuseReceiveBufferRegular;
 
