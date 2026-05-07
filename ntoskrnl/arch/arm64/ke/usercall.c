@@ -315,6 +315,7 @@ KiSystemService(
     PVOID *UserArguments = NULL;
     PVOID SystemCall;
     KIRQL OldIrql;
+    ULONG GdiBatchCount = 0;
 
     ASSERT(Thread != NULL);
     ASSERT(TrapFrame != NULL);
@@ -425,6 +426,26 @@ KiSystemService(
     }
 
 ServiceDispatch:
+
+    if ((KiGetPreviousMode(TrapFrame) == UserMode) &&
+        (TableIndex == SERVICE_TABLE_TEST) &&
+        (KeGdiFlushUserBatch != NULL))
+    {
+        _SEH2_TRY
+        {
+            GdiBatchCount = Thread->Teb->GdiBatchCount;
+        }
+        _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
+        {
+            GdiBatchCount = 0;
+        }
+        _SEH2_END;
+
+        if (GdiBatchCount != 0)
+        {
+            KeGdiFlushUserBatch();
+        }
+    }
 
     SystemCall = (PVOID)DescriptorTable->Base[ServiceNumber];
     ArgumentCount = DescriptorTable->Number[ServiceNumber] / sizeof(ULONG_PTR);

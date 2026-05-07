@@ -415,6 +415,7 @@ KiArm64DumpUserAliasQwords(
 
     DataPfn = PFN_FROM_PTE(PointerPte);
     AliasVa = (ULONG_PTR)KSEG0_BASE + ((ULONG_PTR)DataPfn << PAGE_SHIFT);
+    AliasVa += BYTE_OFFSET(Va);
     Qword0 = *(volatile ULONG64 *)(AliasVa + Offset0);
     Qword1 = *(volatile ULONG64 *)(AliasVa + Offset1);
     Qword2 = *(volatile ULONG64 *)(AliasVa + Offset2);
