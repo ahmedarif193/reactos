@@ -147,6 +147,24 @@ KiTrapReturn:
     dsb     sy
     isb
 
+    /*
+     * ERET restores PC/PSTATE, but it does not restore the stack pointer.
+     * For EL0 returns SP_EL0 was programmed on the user path above. For
+     * same-EL returns we must install the saved stack pointer ourselves
+     * after popping KiTrapReturn's temporary stack slot and before x26 is
+     * restored from the exception frame.
+     */
+    and     w27, w27, #0xF
+    cmp     w27, #0x4            /* EL1t */
+    b.ne    .Lrestore_el1h_sp
+    msr     sp_el0, x26
+    b       .Lrestore_exception_frame
+.Lrestore_el1h_sp:
+    cmp     w27, #0x5            /* EL1h */
+    b.ne    .Lrestore_exception_frame
+    mov     sp, x26
+.Lrestore_exception_frame:
+
     /* Restore non-volatiles from exception frame (if present).
      * This restores x19-x30, x27 to their correct pre-exception values.
      * SPSR_EL1/ELR_EL1 are already set above, so clobbering GPRs is fine. */

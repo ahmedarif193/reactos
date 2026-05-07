@@ -752,7 +752,14 @@ KiArm64InitializeTrapFrame(
 }
 
 static LONG KiArm64SyncExceptionLogBudget = 128;
+static LONG KiArm64SessionFaultLogBudget = 16;
 static volatile LONG KiArm64DataAbortOwner[MAXIMUM_PROCESSORS];
+extern volatile ULONG_PTR MiArm64SessionWsStage;
+extern volatile ULONG_PTR MiArm64SessionWsFp;
+extern volatile ULONG_PTR MiArm64SessionWsLr;
+extern volatile ULONG_PTR MiArm64SessionWsSavedFp;
+extern volatile ULONG_PTR MiArm64SessionWsSavedLr;
+extern volatile ULONG_PTR MiArm64SessionWsSp;
 /*
  * One-shot trap guard per CPU to prevent recursive exception storms before
  * the debugger is fully operational. Set on first entry; any re-entry while
@@ -1351,6 +1358,14 @@ KiArm64HandleSynchronousException(
                                 ThreadTrapFrame->Spsr,
                                 (PVOID)ThreadTrapFrame->TrapFrame);
                     }
+                    DbgPrintEx(DPFLTR_DEFAULT_ID, DPFLTR_ERROR_LEVEL,
+                            "[IABORT-NEAR0] SessWs stage=%p fp=%p lr=%p sp=%p savedfp=%p savedlr=%p\n",
+                            (PVOID)MiArm64SessionWsStage,
+                            (PVOID)MiArm64SessionWsFp,
+                            (PVOID)MiArm64SessionWsLr,
+                            (PVOID)MiArm64SessionWsSp,
+                            (PVOID)MiArm64SessionWsSavedFp,
+                            (PVOID)MiArm64SessionWsSavedLr);
 
                     if (TrapFrame->Sp >= (ULONG_PTR)MmSystemRangeStart)
                     {
@@ -1781,7 +1796,55 @@ KiArm64HandleSynchronousException(
                         InterlockedExchange(&KiArm64DataAbortOwner[ProcessorIndex], 0);
                     }
 
+                    if ((MmSessionSpace != NULL) &&
+                        ((ULONG_PTR)AddressArg >= (ULONG_PTR)MmSessionSpace) &&
+                        ((ULONG_PTR)AddressArg < ((ULONG_PTR)MmSessionSpace + PAGE_SIZE)) &&
+                        (InterlockedDecrement(&KiArm64SessionFaultLogBudget) >= 0))
+                    {
+                        DbgPrintEx(DPFLTR_DEFAULT_ID, DPFLTR_ERROR_LEVEL,
+                                   "[arm64][SESSION-DA] pre va=%p elr=%p esr=0x%lx dfsc=0x%lx write=%d "
+                                   "tf=%p ef=%p sp=%p fp=%p lr=%p x8=%p x10=%p x11=%p prev=%d stage=%p\n",
+                                   AddressArg,
+                                   (PVOID)(ULONG_PTR)Context->State.Elr,
+                                   Esr,
+                                   (ULONG)FaultStatus,
+                                   (int)WriteAccess,
+                                   TrapFrame,
+                                   &Context->ExceptionFrame,
+                                   (PVOID)TrapFrame->Sp,
+                                   (PVOID)TrapFrame->Fp,
+                                   (PVOID)TrapFrame->Lr,
+                                   (PVOID)TrapFrame->X8,
+                                   (PVOID)TrapFrame->X10,
+                                   (PVOID)TrapFrame->X11,
+                                   (int)PreviousMode,
+                                   (PVOID)MiArm64SessionWsStage);
+                    }
+
                     Status = MmAccessFault(FaultCodeArg, AddressArg, PreviousMode, TrapFrame);
+
+                    if ((MmSessionSpace != NULL) &&
+                        ((ULONG_PTR)AddressArg >= (ULONG_PTR)MmSessionSpace) &&
+                        ((ULONG_PTR)AddressArg < ((ULONG_PTR)MmSessionSpace + PAGE_SIZE)) &&
+                        (KiArm64SessionFaultLogBudget >= 0))
+                    {
+                        DbgPrintEx(DPFLTR_DEFAULT_ID, DPFLTR_ERROR_LEVEL,
+                                   "[arm64][SESSION-DA] post status=0x%lx tfpc=%p tffp=%p tflr=%p tfsp=%p "
+                                   "x19=%p x20=%p x21=%p x29=%p x30=%p stage=%p savedfp=%p savedlr=%p\n",
+                                   Status,
+                                   (PVOID)TrapFrame->Pc,
+                                   (PVOID)TrapFrame->Fp,
+                                   (PVOID)TrapFrame->Lr,
+                                   (PVOID)TrapFrame->Sp,
+                                   (PVOID)Context->ExceptionFrame.X19,
+                                   (PVOID)Context->ExceptionFrame.X20,
+                                   (PVOID)Context->ExceptionFrame.X21,
+                                   (PVOID)TrapFrame->Fp,
+                                   (PVOID)TrapFrame->Lr,
+                                   (PVOID)MiArm64SessionWsStage,
+                                   (PVOID)MiArm64SessionWsSavedFp,
+                                   (PVOID)MiArm64SessionWsSavedLr);
+                    }
                 }
 
                 if (OwnsAbortGuard)
@@ -1800,70 +1863,13 @@ KiArm64HandleSynchronousException(
             if (NT_SUCCESS(Status))
             {
                 /*
-                 * ARM64 CRITICAL: Cache Invalidation After Page Fault
-                 *
-                 * After successfully handling a page fault, we MUST invalidate the
-                 * D-cache for the faulting address BEFORE returning to retry the
-                 * instruction.
-                 *
-                 * Cache Invalidation Strategy:
-                 *
-                 * For INCOMING data (read faults, DMA/PIO populated pages):
-                 *   Use DC IVAC (Invalidate by VA to PoC) - just discard cache lines.
-                 *   The data source (ramdisk, disk, DMA) has already written to RAM.
-                 *   We want to discard any stale cache data so CPU reads fresh RAM.
-                 *
-                 *   CRITICAL: DC CIVAC (Clean & Invalidate) is WRONG for incoming data!
-                 *   CIVAC writes back dirty cache lines before invalidating. If the
-                 *   cache has garbage (uninitialized or from previous mapping), CIVAC
-                 *   writes that garbage to RAM, overwriting the good data.
-                 *   Example: Cache has 0xE53F, RAM has "MZ" -> CIVAC writes 0xE53F to RAM!
-                 *
-                 * For OUTGOING data (CPU wrote, DMA needs to read):
-                 *   Use DC CIVAC (Clean & Invalidate) - write back dirty lines first.
-                 *   We want to ensure CPU writes reach RAM before DMA reads.
-                 *
-                 * Read faults (data abort, not write) = INCOMING data = DC IVAC
-                 * Write faults for COW/demand-zero = page is zeroed, then INCOMING = DC IVAC
-                 *
-                 * NOTE: DC IVAC may trap at EL0 if SCTLR_EL1.UCI is not set.
-                 * Since we're in EL1 (kernel mode), DC IVAC is always permitted.
-                 *
-                 * Order of operations:
-                 * 1. MmAccessFault creates the mapping (PTE now valid)
-                 * 2. DSB ISHST + TLBI + DSB ISH + ISB (already done in fault handler)
-                 * 3. DC IVAC for entire page (invalidate stale cache)
-                 * 4. DSB ISH (ensure cache ops complete)
-                 * 5. Return to retry instruction (will read fresh data)
+                 * Do not do generic D-cache invalidation here. A resolved data
+                 * abort can be a write/access-flag fault on a normal cached page
+                 * that already contains dirty CPU data. DC IVAC would discard those
+                 * dirty lines and corrupt unrelated data in the same page. Cache
+                 * maintenance for DMA/PIO buffers belongs at the device mapping
+                 * boundary, not in the generic page-fault return path.
                  */
-                {
-                    ULONG_PTR Va;
-
-                    /* Align fault address to page boundary */
-                    Va = (ULONG_PTR)Context->State.FaultAddress & ~(ULONG_PTR)(PAGE_SIZE - 1);
-
-                    /*
-                     * Data-abort maintenance: only do kernel VA D-cache invalidation.
-                     * User data faults do not need I-cache maintenance on this path.
-                     */
-                    if (Va >= (ULONG_PTR)MmSystemRangeStart)
-                    {
-                        ULONG64 Ctr;
-                        ULONG DcacheLineSize;
-
-                        __asm__ __volatile__("mrs %0, ctr_el0" : "=r"(Ctr));
-                        DcacheLineSize = 4u << ((Ctr >> 16) & 0xF);
-
-                        for (ULONG_PTR offset = 0; offset < PAGE_SIZE; offset += DcacheLineSize)
-                        {
-                            __asm__ __volatile__("dc ivac, %0" :: "r"(Va + offset) : "memory");
-                        }
-
-                        __asm__ __volatile__("dsb ish" ::: "memory");
-                        __asm__ __volatile__("isb" ::: "memory");
-                    }
-                }
-
                 Context->TrapFramePointer = TrapFrame;
                 Context->ExceptionFramePointer = &Context->ExceptionFrame;
                 KiArm64ClearTrapActive();
@@ -1871,6 +1877,75 @@ KiArm64HandleSynchronousException(
             }
 
             /* Not resolved by Mm - unhandled data abort. */
+            if (PreviousMode == KernelMode)
+            {
+                ULONG InstWord = 0, PrevInstWord = 0;
+                NTSTATUS InstReadStatus = STATUS_SUCCESS;
+
+                _SEH2_TRY
+                {
+                    InstWord = *(volatile ULONG *)(ULONG_PTR)Context->State.Elr;
+                    if (Context->State.Elr >= sizeof(ULONG))
+                    {
+                        PrevInstWord = *(volatile ULONG *)(ULONG_PTR)(Context->State.Elr - sizeof(ULONG));
+                    }
+                }
+                _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
+                {
+                    InstReadStatus = _SEH2_GetExceptionCode();
+                }
+                _SEH2_END;
+
+                DbgPrintEx(DPFLTR_DEFAULT_ID, DPFLTR_ERROR_LEVEL,
+                    "[DABORT-KERNEL] FAIL VA=%p ELR=%p Status=0x%lx DFSC=0x%lx Write=%d Vec=%p Proc=%s\n",
+                    (PVOID)(ULONG_PTR)Context->State.FaultAddress,
+                    (PVOID)(ULONG_PTR)Context->State.Elr,
+                    (ULONG)Status,
+                    (ULONG)FaultStatus,
+                    (int)WriteAccess,
+                    (PVOID)(ULONG_PTR)Context->State.VectorId,
+                    (PCSTR)((PEPROCESS)KeGetCurrentThread()->ApcState.Process)->ImageFileName);
+                DbgPrintEx(DPFLTR_DEFAULT_ID, DPFLTR_ERROR_LEVEL,
+                    "[DABORT-KERNEL] insn prev=0x%08lx cur=0x%08lx read=0x%lx sp=%p fp=%p lr=%p spsr=0x%lx\n",
+                    PrevInstWord,
+                    InstWord,
+                    InstReadStatus,
+                    (PVOID)TrapFrame->Sp,
+                    (PVOID)TrapFrame->Fp,
+                    (PVOID)TrapFrame->Lr,
+                    TrapFrame->Spsr);
+                DbgPrintEx(DPFLTR_DEFAULT_ID, DPFLTR_ERROR_LEVEL,
+                    "[DABORT-KERNEL] X0=%p X1=%p X8=%p X10=%p X11=%p X16=%p X17=%p X18=%p\n",
+                    (PVOID)TrapFrame->X0,
+                    (PVOID)TrapFrame->X1,
+                    (PVOID)TrapFrame->X8,
+                    (PVOID)TrapFrame->X10,
+                    (PVOID)TrapFrame->X11,
+                    (PVOID)TrapFrame->X16,
+                    (PVOID)TrapFrame->X17,
+                    (PVOID)TrapFrame->X18);
+                DbgPrintEx(DPFLTR_DEFAULT_ID, DPFLTR_ERROR_LEVEL,
+                    "[DABORT-KERNEL] X19=%p X20=%p X21=%p X22=%p X23=%p X24=%p X25=%p X26=%p X27=%p X28=%p\n",
+                    (PVOID)Context->ExceptionFrame.X19,
+                    (PVOID)Context->ExceptionFrame.X20,
+                    (PVOID)Context->ExceptionFrame.X21,
+                    (PVOID)Context->ExceptionFrame.X22,
+                    (PVOID)Context->ExceptionFrame.X23,
+                    (PVOID)Context->ExceptionFrame.X24,
+                    (PVOID)Context->ExceptionFrame.X25,
+                    (PVOID)Context->ExceptionFrame.X26,
+                    (PVOID)Context->ExceptionFrame.X27,
+                    (PVOID)Context->ExceptionFrame.X28);
+                DbgPrintEx(DPFLTR_DEFAULT_ID, DPFLTR_ERROR_LEVEL,
+                    "[DABORT-KERNEL] SessWs stage=%p fp=%p lr=%p sp=%p savedfp=%p savedlr=%p\n",
+                    (PVOID)MiArm64SessionWsStage,
+                    (PVOID)MiArm64SessionWsFp,
+                    (PVOID)MiArm64SessionWsLr,
+                    (PVOID)MiArm64SessionWsSp,
+                    (PVOID)MiArm64SessionWsSavedFp,
+                    (PVOID)MiArm64SessionWsSavedLr);
+            }
+
             if (PreviousMode == UserMode)
             {
                 PKTHREAD CurrentThread = KeGetCurrentThread();
@@ -1912,13 +1987,18 @@ KiArm64HandleSynchronousException(
                     "[DABORT-USER] X14=%p X15=%p X16=%p X17=%p X19=%p X20=%p\n",
                     (PVOID)TrapFrame->X[14], (PVOID)TrapFrame->X[15],
                     (PVOID)TrapFrame->X[16], (PVOID)TrapFrame->X[17],
-                    (PVOID)TrapFrame->X[19], (PVOID)TrapFrame->X[20]);
+                    (PVOID)Context->ExceptionFrame.X19,
+                    (PVOID)Context->ExceptionFrame.X20);
                 DbgPrintEx(DPFLTR_DEFAULT_ID, DPFLTR_ERROR_LEVEL,
                     "[DABORT-USER] X21=%p X22=%p X23=%p X24=%p X25=%p X26=%p X27=%p X28=%p\n",
-                    (PVOID)TrapFrame->X[21], (PVOID)TrapFrame->X[22],
-                    (PVOID)TrapFrame->X[23], (PVOID)TrapFrame->X[24],
-                    (PVOID)TrapFrame->X[25], (PVOID)TrapFrame->X[26],
-                    (PVOID)TrapFrame->X[27], (PVOID)TrapFrame->X[28]);
+                    (PVOID)Context->ExceptionFrame.X21,
+                    (PVOID)Context->ExceptionFrame.X22,
+                    (PVOID)Context->ExceptionFrame.X23,
+                    (PVOID)Context->ExceptionFrame.X24,
+                    (PVOID)Context->ExceptionFrame.X25,
+                    (PVOID)Context->ExceptionFrame.X26,
+                    (PVOID)Context->ExceptionFrame.X27,
+                    (PVOID)Context->ExceptionFrame.X28);
                 DbgPrintEx(DPFLTR_DEFAULT_ID, DPFLTR_ERROR_LEVEL,
                     "[DABORT-USER] StartAddr=%p Win32StartAddr=%p\n",
                     (PVOID)EThread->StartAddress,
@@ -2220,29 +2300,88 @@ KiArm64HandleSynchronousException(
                 TrapFrame = &Context->TrapFrame;
                 KiArm64InitializeTrapFrame(Context, TrapFrame);
 
-                if (DebugService == BREAKPOINT_PRINT)
+                switch (DebugService)
                 {
-                    BOOLEAN Handled = FALSE;
-                    NTSTATUS PrintStatus;
+                    case BREAKPOINT_PRINT:
+                    {
+                        BOOLEAN Handled = FALSE;
+                        NTSTATUS PrintStatus;
 
-                    PrintStatus = KdpPrint(
-                        (ULONG)Context->State.Registers.X[3],   /* ComponentId */
-                        (ULONG)Context->State.Registers.X[4],   /* Level */
-                        (PCHAR)Context->State.Registers.X[1],   /* String */
-                        (USHORT)Context->State.Registers.X[2],  /* Length */
-                        Mode,
-                        TrapFrame,
-                        NULL,
-                        &Handled);
+                        PrintStatus = KdpPrint(
+                            (ULONG)Context->State.Registers.X[3],   /* ComponentId */
+                            (ULONG)Context->State.Registers.X[4],   /* Level */
+                            (PCHAR)Context->State.Registers.X[1],   /* String */
+                            (USHORT)Context->State.Registers.X[2],  /* Length */
+                            Mode,
+                            TrapFrame,
+                            &Context->ExceptionFrame,
+                            &Handled);
 
-                    /* Return the status to the caller in X0 */
-                    Context->State.Registers.X[0] = (UINT64)PrintStatus;
-                    TrapFrame->X[0] = (UINT64)PrintStatus;
-                }
-                else
-                {
-                    Context->State.Registers.X[0] = (UINT64)STATUS_NOT_IMPLEMENTED;
-                    TrapFrame->X[0] = (UINT64)STATUS_NOT_IMPLEMENTED;
+                        Context->State.Registers.X[0] = (UINT64)PrintStatus;
+                        TrapFrame->X[0] = (UINT64)PrintStatus;
+                        break;
+                    }
+
+                    case BREAKPOINT_PROMPT:
+                    {
+                        USHORT ReturnLength;
+
+                        ReturnLength = KdpPrompt(
+                            (PCHAR)Context->State.Registers.X[1],
+                            (USHORT)Context->State.Registers.X[2],
+                            (PCHAR)Context->State.Registers.X[3],
+                            (USHORT)Context->State.Registers.X[4],
+                            Mode,
+                            TrapFrame,
+                            &Context->ExceptionFrame);
+
+                        Context->State.Registers.X[0] = (UINT64)ReturnLength;
+                        TrapFrame->X[0] = (UINT64)ReturnLength;
+                        break;
+                    }
+
+                    case BREAKPOINT_LOAD_SYMBOLS:
+                    case BREAKPOINT_UNLOAD_SYMBOLS:
+                    {
+                        CONTEXT LocalContext;
+
+                        RtlZeroMemory(&LocalContext, sizeof(LocalContext));
+                        LocalContext.ContextFlags = CONTEXT_CONTROL | CONTEXT_INTEGER | CONTEXT_ARM64;
+                        KeTrapFrameToContext(TrapFrame, &Context->ExceptionFrame, &LocalContext);
+                        KdpSymbol((PSTRING)Context->State.Registers.X[1],
+                                  (PKD_SYMBOLS_INFO)Context->State.Registers.X[2],
+                                  (DebugService == BREAKPOINT_UNLOAD_SYMBOLS),
+                                  Mode,
+                                  &LocalContext,
+                                  TrapFrame,
+                                  &Context->ExceptionFrame);
+                        Context->State.Registers.X[0] = (UINT64)STATUS_SUCCESS;
+                        TrapFrame->X[0] = (UINT64)STATUS_SUCCESS;
+                        break;
+                    }
+
+                    case BREAKPOINT_COMMAND_STRING:
+                    {
+                        CONTEXT LocalContext;
+
+                        RtlZeroMemory(&LocalContext, sizeof(LocalContext));
+                        LocalContext.ContextFlags = CONTEXT_CONTROL | CONTEXT_INTEGER | CONTEXT_ARM64;
+                        KeTrapFrameToContext(TrapFrame, &Context->ExceptionFrame, &LocalContext);
+                        KdpCommandString((PSTRING)Context->State.Registers.X[1],
+                                         (PSTRING)Context->State.Registers.X[2],
+                                         Mode,
+                                         &LocalContext,
+                                         TrapFrame,
+                                         &Context->ExceptionFrame);
+                        Context->State.Registers.X[0] = (UINT64)STATUS_SUCCESS;
+                        TrapFrame->X[0] = (UINT64)STATUS_SUCCESS;
+                        break;
+                    }
+
+                    default:
+                        Context->State.Registers.X[0] = (UINT64)STATUS_NOT_IMPLEMENTED;
+                        TrapFrame->X[0] = (UINT64)STATUS_NOT_IMPLEMENTED;
+                        break;
                 }
 
                 /* Advance PC past the BRK instruction */
@@ -2296,13 +2435,53 @@ KiArm64HandleSynchronousException(
             Mode = KiArm64PreviousModeFromContext(Context->State.Spsr, Context->State.Elr);
 
             DbgPrintEx(DPFLTR_DEFAULT_ID, DPFLTR_ERROR_LEVEL,
-                    "[arm64] UNHANDLED ESR class=0x%lx ISS=0x%lx ELR=%p FAR=%p SPSR=0x%lx Mode=%d Proc=%s\n",
+                    "[arm64] UNHANDLED ESR class=0x%lx ISS=0x%lx Vec=%p ELR=%p FAR=%p SPSR=0x%lx Mode=%d Proc=%s\n",
                     (ULONG)EsrClass, (ULONG)Iss,
+                    (PVOID)(ULONG_PTR)Context->State.VectorId,
                     (PVOID)(ULONG_PTR)Context->State.Elr,
                     (PVOID)(ULONG_PTR)Context->State.FaultAddress,
                     (ULONG)Context->State.Spsr,
                     (int)Mode,
                     (PCSTR)((PEPROCESS)KeGetCurrentThread()->ApcState.Process)->ImageFileName);
+            DbgPrintEx(DPFLTR_DEFAULT_ID, DPFLTR_ERROR_LEVEL,
+                    "[arm64] UNHANDLED regs sp=%p fp=%p lr=%p x19=%p x20=%p x21=%p x22=%p x28=%p "
+                    "sessstage=%p sessfp=%p sesslr=%p sesssp=%p savedfp=%p savedlr=%p\n",
+                    (PVOID)TrapFrame->Sp,
+                    (PVOID)TrapFrame->Fp,
+                    (PVOID)TrapFrame->Lr,
+                    (PVOID)Context->ExceptionFrame.X19,
+                    (PVOID)Context->ExceptionFrame.X20,
+                    (PVOID)Context->ExceptionFrame.X21,
+                    (PVOID)Context->ExceptionFrame.X22,
+                    (PVOID)Context->ExceptionFrame.X28,
+                    (PVOID)MiArm64SessionWsStage,
+                    (PVOID)MiArm64SessionWsFp,
+                    (PVOID)MiArm64SessionWsLr,
+                    (PVOID)MiArm64SessionWsSp,
+                    (PVOID)MiArm64SessionWsSavedFp,
+                    (PVOID)MiArm64SessionWsSavedLr);
+
+            if (Context->State.Elr >= (ULONG_PTR)MmSystemRangeStart)
+            {
+                ULONG InstWord = 0;
+                NTSTATUS ReadStatus = STATUS_SUCCESS;
+
+                _SEH2_TRY
+                {
+                    InstWord = *(volatile ULONG *)(ULONG_PTR)Context->State.Elr;
+                }
+                _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
+                {
+                    ReadStatus = _SEH2_GetExceptionCode();
+                }
+                _SEH2_END;
+
+                DbgPrintEx(DPFLTR_DEFAULT_ID, DPFLTR_ERROR_LEVEL,
+                        "[arm64] UNHANDLED kernel-insn ELR=%p word=0x%08lx status=0x%lx\n",
+                        (PVOID)(ULONG_PTR)Context->State.Elr,
+                        InstWord,
+                        ReadStatus);
+            }
 
             /* Try to read the instruction word at the faulting address */
             if (Context->State.Elr != 0 && Context->State.Elr < (ULONG_PTR)MmSystemRangeStart)

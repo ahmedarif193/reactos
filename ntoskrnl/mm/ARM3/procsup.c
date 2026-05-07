@@ -145,19 +145,7 @@ MmDeleteTeb(IN PEPROCESS Process,
     KeAttachProcess(&Process->Pcb);
 
     /* Lock the process address space */
-    #if (NTDDI_VERSION >= NTDDI_LONGHORN) && !defined(_M_ARM64)
-    /*
-     * Vista+ converted AddressCreationLock from KGUARDED_MUTEX to EX_PUSH_LOCK.
-     * KeAcquireGuardedMutex implicitly entered a guarded region, so APCs were
-     * disabled; ExAcquirePushLockExclusive does NOT, so downstream callers such
-     * as MiLockProcessWorkingSetUnsafe would see APCs still enabled. Enter a
-     * guarded region explicitly to match the Win7 contract.
-     */
-    KeEnterGuardedRegion();
-    ExAcquirePushLockExclusive(&Process->AddressCreationLock);
-#else
-    KeAcquireGuardedMutex(&Process->AddressCreationLock);
-#endif
+    MmLockAddressSpace(&Process->Vm);
 
     /* Find the VAD, make sure it's a TEB VAD */
     Vad = MiLocateAddress(Teb);
@@ -198,12 +186,7 @@ MmDeleteTeb(IN PEPROCESS Process,
     }
 
     /* Release the address space lock */
-    #if (NTDDI_VERSION >= NTDDI_LONGHORN) && !defined(_M_ARM64)
-    ExReleasePushLockExclusive(&Process->AddressCreationLock);
-    KeLeaveGuardedRegion();
-#else
-    KeReleaseGuardedMutex(&Process->AddressCreationLock);
-#endif
+    MmUnlockAddressSpace(&Process->Vm);
 
     /* Detach */
     KeDetachProcess();

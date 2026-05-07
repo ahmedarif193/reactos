@@ -40,7 +40,7 @@ typedef struct _KFLOATING_SAVE
  * MmMakeDataSectionResident -> paging I/O -> page fault handler
  */
 #define KERNEL_STACK_SIZE                   0x10000  /* 64KB */
-#define KERNEL_LARGE_STACK_SIZE             0x10000  /* 64KB */
+#define KERNEL_LARGE_STACK_SIZE             0x20000  /* 128KB reserve for GUI callbacks */
 #define KERNEL_LARGE_STACK_COMMIT KERNEL_STACK_SIZE
 
 #define EXCEPTION_READ_FAULT    0

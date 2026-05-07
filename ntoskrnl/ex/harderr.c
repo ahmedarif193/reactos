@@ -113,6 +113,20 @@ ExpRaiseHardError(IN NTSTATUS ErrorStatus,
 
     PAGED_CODE();
 
+#ifdef _M_ARM64
+    DPRINT1("[arm64][harderr] raise proc=%s status=0x%08lx params=%lu mask=0x%lx opts=%lu mode=%d ready=%u disabled=%u p0=%p p1=%p\n",
+            Process->ImageFileName,
+            ErrorStatus,
+            NumberOfParameters,
+            UnicodeStringParameterMask,
+            ValidResponseOptions,
+            PreviousMode,
+            ExReadyForErrors,
+            Thread->HardErrorsAreDisabled,
+            (NumberOfParameters > 0 && Parameters) ? (PVOID)Parameters[0] : NULL,
+            (NumberOfParameters > 1 && Parameters) ? (PVOID)Parameters[1] : NULL);
+#endif
+
     /* Check if this error will shutdown the system */
     if (ValidResponseOptions == OptionShutdownSystem)
     {
@@ -243,6 +257,15 @@ ExpRaiseHardError(IN NTSTATUS ErrorStatus,
     Message->UnicodeStringParameterMask = UnicodeStringParameterMask;
     Message->NumberOfParameters = NumberOfParameters;
     KeQuerySystemTime(&Message->ErrorTime);
+
+#ifdef _M_ARM64
+    DPRINT1("[arm64][harderr] send proc=%s port=%p status=0x%08lx params=%lu opts=%lu\n",
+            Process->ImageFileName,
+            PortHandle,
+            Message->Status,
+            Message->NumberOfParameters,
+            Message->ValidResponseOptions);
+#endif
 
     /* Copy the parameters */
     if (Parameters)

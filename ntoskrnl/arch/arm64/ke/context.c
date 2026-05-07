@@ -66,6 +66,13 @@ KeContextToTrapFrame(_In_ PCONTEXT Context,
         ExceptionFrame->X28 = Context->X[28];
     }
 
+    if ((ContextFlags & (CONTEXT_INTEGER | CONTEXT_CONTROL)) &&
+        (ExceptionFrame != NULL))
+    {
+        ExceptionFrame->Fp = Context->Fp;
+        ExceptionFrame->Lr = Context->Lr;
+    }
+
     if (ContextFlags & CONTEXT_CONTROL)
     {
         TrapFrame->Pc = Context->Pc;

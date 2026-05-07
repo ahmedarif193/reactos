@@ -32,6 +32,32 @@ LIST_ENTRY MmWorkingSetExpansionHead;
 KSPIN_LOCK MmExpansionLock;
 PETHREAD MiExpansionLockOwner;
 
+#if defined(_M_ARM64)
+volatile ULONG_PTR MiArm64SessionWsStage;
+volatile ULONG_PTR MiArm64SessionWsFp;
+volatile ULONG_PTR MiArm64SessionWsLr;
+volatile ULONG_PTR MiArm64SessionWsSavedFp;
+volatile ULONG_PTR MiArm64SessionWsSavedLr;
+volatile ULONG_PTR MiArm64SessionWsSp;
+
+#define MI_ARM64_SESSION_WS_MARK(StageValue)                             \
+    do                                                                   \
+    {                                                                    \
+        ULONG_PTR _Fp, _Lr, _Sp;                                         \
+        __asm__ __volatile__("mov %0, x29" : "=r"(_Fp));                \
+        __asm__ __volatile__("mov %0, x30" : "=r"(_Lr));                \
+        __asm__ __volatile__("mov %0, sp" : "=r"(_Sp));                 \
+        MiArm64SessionWsStage = (StageValue);                            \
+        MiArm64SessionWsFp = _Fp;                                        \
+        MiArm64SessionWsLr = _Lr;                                        \
+        MiArm64SessionWsSp = _Sp;                                        \
+        MiArm64SessionWsSavedFp = ((volatile ULONG_PTR *)_Fp)[0];        \
+        MiArm64SessionWsSavedLr = ((volatile ULONG_PTR *)_Fp)[1];        \
+    } while (0)
+#else
+#define MI_ARM64_SESSION_WS_MARK(StageValue) do { } while (0)
+#endif
+
 
 /* PRIVATE FUNCTIONS **********************************************************/
 
@@ -477,6 +503,7 @@ MiSessionInitializeWorkingSetList(VOID)
     /* Get pointers to session global and the session working set list */
     SessionGlobal = MmSessionSpace->GlobalVirtualAddress;
     WorkingSetList = (PMMWSL)MiSessionSpaceWs;
+    MI_ARM64_SESSION_WS_MARK(1);
 
     /* Fill out the two pointers */
     MmSessionSpace->Vm.VmWorkingSetList = WorkingSetList;
@@ -563,9 +590,11 @@ MiSessionInitializeWorkingSetList(VOID)
 
     /* Initialize the working set list page */
     MiInitializePfnAndMakePteValid(PageFrameIndex, PointerPte, TempPte);
+    MI_ARM64_SESSION_WS_MARK(2);
 
     /* Now we can release the PFN database lock */
     MiReleasePfnLock(OldIrql);
+    MI_ARM64_SESSION_WS_MARK(3);
 
     /* Fill out the working set structure */
     MmSessionSpace->Vm.Flags.SessionSpace = 1;
@@ -575,9 +604,11 @@ MiSessionInitializeWorkingSetList(VOID)
     WorkingSetList->HashTable = NULL;
     WorkingSetList->HashTableSize = 0;
     WorkingSetList->Wsle = MmSessionSpace->Wsle;
+    MI_ARM64_SESSION_WS_MARK(4);
 
     /* Acquire the expansion lock while touching the session */
     OldIrql = MiAcquireExpansionLock();
+    MI_ARM64_SESSION_WS_MARK(5);
 
     /* Handle list insertions */
     ASSERT(SessionGlobal->WsListEntry.Flink == NULL);
@@ -588,12 +619,15 @@ MiSessionInitializeWorkingSetList(VOID)
     ASSERT(SessionGlobal->Vm.WorkingSetExpansionLinks.Blink == NULL);
     InsertTailList(&MmWorkingSetExpansionHead,
                    &SessionGlobal->Vm.WorkingSetExpansionLinks);
+    MI_ARM64_SESSION_WS_MARK(6);
 
     /* Release the lock again */
     MiReleaseExpansionLock(OldIrql);
+    MI_ARM64_SESSION_WS_MARK(7);
 
     /* All done, return */
     //MmUnlockPageableImageSection(ExPageLockHandle);
+    MI_ARM64_SESSION_WS_MARK(8);
     return STATUS_SUCCESS;
 }
 

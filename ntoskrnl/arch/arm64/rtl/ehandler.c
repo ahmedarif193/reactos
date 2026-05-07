@@ -174,13 +174,6 @@ __C_specific_handler(
             {
                 JumpTarget = ImageBase + ScopeTable->ScopeRecord[i].JumpTarget;
 
-                if ((ExceptionRecord->ExceptionFlags & EXCEPTION_UNWIND) == 0)
-                {
-                    ContextRecord->Pc = JumpTarget;
-                    ContextRecord->X[0] = ExceptionRecord->ExceptionCode;
-                    return ExceptionContinueExecution;
-                }
-
                 RtlUnwindEx(EstablisherFrame,
                             (PVOID)JumpTarget,
                             ExceptionRecord,
@@ -188,7 +181,9 @@ __C_specific_handler(
                             DispatcherContext->ContextRecord,
                             DispatcherContext->HistoryTable);
 
-                return ExceptionContinueSearch;
+                DispatcherContext->ContextRecord->Pc = JumpTarget;
+                DispatcherContext->ContextRecord->X[0] = ExceptionRecord->ExceptionCode;
+                return ExceptionContinueExecution;
             }
         }
     }
