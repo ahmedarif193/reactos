@@ -297,14 +297,14 @@ RtlInitializeContext(
     _Out_ PCONTEXT ThreadContext,
     _In_opt_ PVOID ThreadStartParam,
     _In_ PTHREAD_START_ROUTINE ThreadStartAddress,
-    _In_ PINITIAL_TEB StackBase)
+    _In_ PINITIAL_TEB InitialStack)
 {
     UNREFERENCED_PARAMETER(ProcessHandle);
-    UNREFERENCED_PARAMETER(ThreadStartParam);
 
     RtlZeroMemory(ThreadContext, sizeof(*ThreadContext));
 
-    ThreadContext->ContextFlags = CONTEXT_FULL;
+    ThreadContext->ContextFlags = CONTEXT_CONTROL | CONTEXT_INTEGER | CONTEXT_ARM64;
     ThreadContext->Pc = (ULONG64)ThreadStartAddress;
-    ThreadContext->Sp = (ULONG64)StackBase->StackBase;
+    ThreadContext->Sp = ALIGN_DOWN_BY((ULONG64)InitialStack, 16);
+    ThreadContext->X0 = (ULONG64)ThreadStartParam;
 }
