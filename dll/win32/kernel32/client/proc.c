@@ -495,16 +495,27 @@ BasePushProcessParameters(IN ULONG ParameterFlags,
                           IN ULONG AppCompatDataSize)
 {
     WCHAR FullPath[MAX_PATH + 5];
-    PWCHAR Remaining, DllPathString, ScanChar;
+    PWCHAR Remaining, DllPathString;
     PRTL_USER_PROCESS_PARAMETERS ProcessParameters, RemoteParameters;
     PVOID RemoteAppCompatData;
     UNICODE_STRING DllPath, ImageName, CommandLine, CurrentDirectory;
     UNICODE_STRING Desktop, Shell, Runtime, Title;
     NTSTATUS Status;
-    ULONG EnviroSize;
+    SIZE_T EnviroSize;
     SIZE_T Size;
     BOOLEAN HavePebLock = FALSE, Result;
     PPEB Peb = NtCurrentPeb();
+
+    EnviroSize = 0;
+    if (lpEnvironment)
+    {
+        Status = BasepQueryEnvironmentSizeW(lpEnvironment, &EnviroSize);
+        if (!NT_SUCCESS(Status))
+        {
+            BaseSetLastNTError(Status);
+            return FALSE;
+        }
+    }
 
     /* Get the full path name */
     Size = GetFullPathNameW(ApplicationPathName,
@@ -619,16 +630,15 @@ BasePushProcessParameters(IN ULONG ParameterFlags,
         HavePebLock = TRUE;
         RtlAcquirePebLock();
         lpEnvironment = Peb->ProcessParameters->Environment;
+        if (lpEnvironment)
+        {
+            Status = BasepQueryEnvironmentSizeW(lpEnvironment, &EnviroSize);
+            if (!NT_SUCCESS(Status)) goto FailPath;
+        }
     }
 
-    /* Save pointer and start lookup */
-    ScanChar = lpEnvironment;
     if (lpEnvironment)
     {
-        /* Find the environment size */
-        while (*ScanChar++) while (*ScanChar++);
-        EnviroSize = (ULONG)((ULONG_PTR)ScanChar - (ULONG_PTR)lpEnvironment);
-
         /* Allocate and Initialize new Environment Block */
         Size = EnviroSize;
         ProcessParameters->Environment = NULL;
@@ -2133,7 +2143,6 @@ CreateProcessInternalW(IN HANDLE hUserToken,
     //
     // Variables used for command-line and argument parsing
     //
-    PCHAR pcScan;
     SIZE_T n;
     WCHAR SaveChar;
     ULONG Length, FileAttribs, CmdQuoteLength;
@@ -2361,15 +2370,25 @@ CreateProcessInternalW(IN HANDLE hUserToken,
                                               CREATE_SEPARATE_WOW_VDM;
     }
 
-    /* Convert the environment */
-    if ((lpEnvironment) && !(dwCreationFlags & CREATE_UNICODE_ENVIRONMENT))
+    /* Validate and convert the caller-provided environment. */
+    if (lpEnvironment && (dwCreationFlags & CREATE_UNICODE_ENVIRONMENT))
     {
-        /* Scan the environment to calculate its Unicode size */
-        AnsiEnv.Buffer = pcScan = (PCHAR)lpEnvironment;
-        while ((*pcScan) || (*(pcScan + 1))) ++pcScan;
+        Status = BasepQueryEnvironmentSizeW((PCWSTR)lpEnvironment, &EnvironmentLength);
+        if (!NT_SUCCESS(Status))
+        {
+            BaseSetLastNTError(Status);
+            return FALSE;
+        }
+    }
+    else if (lpEnvironment)
+    {
+        Status = BasepQueryEnvironmentSizeA((PCSTR)lpEnvironment, &EnvironmentLength);
+        if (!NT_SUCCESS(Status))
+        {
+            BaseSetLastNTError(Status);
+            return FALSE;
+        }
 
-        /* Make sure the environment is not too large */
-        EnvironmentLength = (pcScan + sizeof(ANSI_NULL) - (PCHAR)lpEnvironment);
         if (EnvironmentLength > MAXUSHORT)
         {
             /* Fail */
@@ -2378,8 +2397,9 @@ CreateProcessInternalW(IN HANDLE hUserToken,
         }
 
         /* Create our ANSI String */
-        AnsiEnv.Length = (USHORT)EnvironmentLength;
-        AnsiEnv.MaximumLength = AnsiEnv.Length + sizeof(ANSI_NULL);
+        AnsiEnv.Buffer = (PCHAR)lpEnvironment;
+        AnsiEnv.Length = (USHORT)(EnvironmentLength - sizeof(ANSI_NULL));
+        AnsiEnv.MaximumLength = (USHORT)EnvironmentLength;
 
         /* Allocate memory for the Unicode Environment */
         UnicodeEnv.Buffer = NULL;

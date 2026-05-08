@@ -293,28 +293,33 @@ LPSTR
 WINAPI
 GetEnvironmentStringsA(VOID)
 {
-    ULONG Length, Size;
+    ULONG Size;
+    SIZE_T EnvironmentSize;
     NTSTATUS Status;
-    PWCHAR Environment, p;
+    PWCHAR Environment;
     PCHAR Buffer = NULL;
 
     RtlAcquirePebLock();
-    p = Environment = NtCurrentPeb()->ProcessParameters->Environment;
+    Environment = NtCurrentPeb()->ProcessParameters->Environment;
 
-    do
+    Status = BasepQueryEnvironmentSizeW(Environment, &EnvironmentSize);
+    if (NT_SUCCESS(Status) && EnvironmentSize > MAXULONG)
+        Status = STATUS_INVALID_PARAMETER;
+
+    if (!NT_SUCCESS(Status))
     {
-        p += wcslen(p) + 1;
-    } while (*p);
+        BaseSetLastNTError(Status);
+        RtlReleasePebLock();
+        return NULL;
+    }
 
-    Length = p - Environment + 1;
-
-    Status = RtlUnicodeToMultiByteSize(&Size, Environment, Length * sizeof(WCHAR));
+    Status = RtlUnicodeToMultiByteSize(&Size, Environment, (ULONG)EnvironmentSize);
     if (NT_SUCCESS(Status))
     {
         Buffer = RtlAllocateHeap(RtlGetProcessHeap(), 0, Size);
         if (Buffer)
         {
-            Status = RtlUnicodeToOemN(Buffer, Size, 0, Environment, Length * sizeof(WCHAR));
+            Status = RtlUnicodeToOemN(Buffer, Size, 0, Environment, (ULONG)EnvironmentSize);
             if (!NT_SUCCESS(Status))
             {
                 RtlFreeHeap(RtlGetProcessHeap(), 0, Buffer);
@@ -345,23 +350,25 @@ WINAPI
 GetEnvironmentStringsW(VOID)
 {
     PWCHAR Environment, p;
-    ULONG Length;
+    SIZE_T EnvironmentSize;
+    NTSTATUS Status;
 
     RtlAcquirePebLock();
 
-    p = Environment = NtCurrentPeb()->ProcessParameters->Environment;
+    Environment = NtCurrentPeb()->ProcessParameters->Environment;
 
-    do
+    Status = BasepQueryEnvironmentSizeW(Environment, &EnvironmentSize);
+    if (!NT_SUCCESS(Status))
     {
-        p += wcslen(p) + 1;
-    } while (*p);
+        BaseSetLastNTError(Status);
+        RtlReleasePebLock();
+        return NULL;
+    }
 
-    Length = p - Environment + 1;
-
-    p = RtlAllocateHeap(RtlGetProcessHeap(), 0, Length * sizeof(WCHAR));
+    p = RtlAllocateHeap(RtlGetProcessHeap(), 0, EnvironmentSize);
     if (p)
     {
-        RtlCopyMemory(p, Environment, Length * sizeof(WCHAR));
+        RtlCopyMemory(p, Environment, EnvironmentSize);
     }
     else
     {
