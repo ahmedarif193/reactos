@@ -175,9 +175,6 @@ KeUpdateSystemTime(
     IN ULONG Increment,
     IN KIRQL Irql);
 
-/* From ntoskrnl/ke/clock.c - default time increment (100ns units) */
-extern ULONG KeTimeIncrement;
-
 /*
  * ARM64 Timer ISR - Called at CLOCK_LEVEL/DISPATCH_LEVEL on each tick.
  *
@@ -198,11 +195,13 @@ KiArm64TimerIsr(
 {
     ULONGLONG period = (ServiceContext) ? *(volatile ULONGLONG*)ServiceContext : KiArm64TimerPeriodTicks;
     ULONG Increment;
+    PKTRAP_FRAME TrapFrame;
+    ULONG Cpu;
     UNREFERENCED_PARAMETER(Interrupt);
 
     KiTimerIsrCallCount++;
 
-    /* Reload next tick FIRST to minimize jitter */
+    /* Reload next tick first to minimize jitter. */
     if (KiArm64UseVirtualTimer)
         KiArm64WriteCntvTval(period);
     else
@@ -210,10 +209,11 @@ KiArm64TimerIsr(
 
     /*
      * Calculate the time increment in 100-nanosecond units.
-     * Default: 10ms = 100,000 units (100 Hz timer).
-     * Use KeTimeIncrement if available, otherwise compute from period.
+     * ARM64 currently runs the generic timer at the HAL maximum increment.
+     * Lower timer resolutions are not applied until the ARM64 HAL has a fully
+     * validated dynamic clock-rate path.
      */
-    Increment = KeTimeIncrement;
+    Increment = KeQueryTimeIncrement();
     if (Increment == 0)
     {
         /* Fallback: 10ms at 100 Hz */
@@ -232,8 +232,27 @@ KiArm64TimerIsr(
      * The common clock path dereferences the trap frame for previous-mode
      * accounting. Keep this as a real frame, not a sentinel pointer.
      */
+    TrapFrame = KiArm64GetCurrentInterruptTrapFrame();
+    Cpu = KeGetCurrentProcessorNumber();
 
-    KeUpdateSystemTime(KiArm64GetCurrentInterruptTrapFrame(), Increment, CLOCK_LEVEL);
+    /*
+     * KeUpdateRunTime accounts kernel/user/idle/DPC/interrupt time from the
+     * interrupted context. Match the HAL clock contract used by the other
+     * architectures: pass the IRQL that was active before the timer interrupt,
+     * not CLOCK_LEVEL itself.
+     *
+     * On SMP, only the boot CPU advances global time. Other CPUs run their
+     * local architected timer for per-CPU runtime and quantum accounting,
+     * matching the x86 APIC clock + clock-IPI split.
+     */
+    if (Cpu == 0)
+    {
+        KeUpdateSystemTime(TrapFrame, Increment, TrapFrame->PreviousIrql);
+    }
+    else
+    {
+        KeUpdateRunTime(TrapFrame, TrapFrame->PreviousIrql);
+    }
 
     return TRUE;
 }
@@ -295,10 +314,12 @@ KiArm64ApcIsr(
  * For 100 Hz timer with 24.576 MHz counter: TVAL = 24576000 / 100 = 245760 ticks
  * For 100 Hz timer with 100 MHz counter:    TVAL = 100000000 / 100 = 1000000 ticks
  */
-static VOID
-KiArm64StartTimer(VOID)
+static
+VOID
+KiArm64StartLocalTimer(VOID)
 {
     ULONGLONG frq;
+    ULONG Increment;
     ULONG ctl;
 
     /* Read counter frequency from CNTFRQ_EL0 */
@@ -317,14 +338,20 @@ KiArm64StartTimer(VOID)
         frq = 100000000ULL;
     }
 
-    /*
-     * Calculate ticks per 10ms period (100 Hz).
-     * This gives us the reload value for TVAL.
-     */
-    KiArm64TimerPeriodTicks = frq / 100ULL;
+    Increment = KeQueryTimeIncrement();
+    if (Increment == 0)
+    {
+        Increment = 100000;
+    }
 
-    DPRINT1("[arm64] Timer: freq=%llu Hz, period=%llu ticks (10ms), using %s timer\n",
-            frq, KiArm64TimerPeriodTicks,
+    KiArm64TimerPeriodTicks = (frq * Increment) / 10000000ULL;
+    if (KiArm64TimerPeriodTicks == 0)
+    {
+        KiArm64TimerPeriodTicks = 1;
+    }
+
+    DPRINT1("[arm64] Timer: freq=%llu Hz, period=%llu ticks increment=%lu, using %s timer\n",
+            frq, KiArm64TimerPeriodTicks, Increment,
             KiArm64UseVirtualTimer ? "virtual (CNTV)" : "physical (CNTP)");
 
     if (KiArm64UseVirtualTimer)
@@ -359,6 +386,21 @@ KiArm64StartTimer(VOID)
     }
     KiTimerCtlReadback = ctl;
     KiTimerStartedFlag = 1;
+}
+
+VOID
+NTAPI
+KeStartArm64ProcessorTimer(VOID)
+{
+    ULONG TimerIntId = KiArm64UseVirtualTimer ? 27 : 30;
+
+    /*
+     * The ARM generic timer is a per-CPU PPI. The interrupt object is
+     * connected once on the BSP, but every processor must enable its own PPI
+     * bank and program its own local timer registers.
+     */
+    HalEnableSystemInterrupt(TimerIntId, CLOCK_LEVEL, LevelSensitive);
+    KiArm64StartLocalTimer();
 }
 
 CODE_SEG("INIT")
@@ -466,7 +508,7 @@ KeInitInterrupts(VOID)
         if (KeConnectInterrupt(&KiArm64TimerInterrupt))
         {
             KiRawDebugPuts("[KeInitInterrupts] Timer connect OK, starting timer\n");
-            KiArm64StartTimer();
+            KiArm64StartLocalTimer();
             KiRawDebugPuts("[KeInitInterrupts] Timer started\n");
 
             /*
@@ -512,6 +554,7 @@ KeReenableTimerInterrupt(VOID)
      * enable the PPI in the redistributor's ISENABLER0 register.
      */
     HalEnableSystemInterrupt(TimerIntId, CLOCK_LEVEL, LevelSensitive);
+    KiArm64StartLocalTimer();
 
     DPRINT1("[arm64] KeReenableTimerInterrupt: Timer PPI re-enabled\n");
 }

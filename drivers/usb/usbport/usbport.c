@@ -1514,6 +1514,15 @@ USBPORT_InterruptService(IN PKINTERRUPT Interrupt,
 
         if (Result)
         {
+            /*
+             * Level-triggered controllers can keep the interrupt line asserted
+             * until the miniport DPC drains the hardware source. Mask the
+             * miniport interrupt source before queuing the DPC; USBPORT_IsrDpc
+             * passes InterruptEnable=TRUE while USBPORT_FLAG_INTERRUPT_ENABLED
+             * remains set, so the miniport re-enables interrupts after the DPC
+             * has serviced the controller.
+             */
+            Packet->DisableInterrupts(FdoExtension->MiniPortExt);
             KeInsertQueueDpc(&FdoExtension->IsrDpc, NULL, NULL);
         }
     }
