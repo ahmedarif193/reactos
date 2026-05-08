@@ -57,6 +57,51 @@ RtlpArm64IsStackPointerValid(
 }
 
 static
+BOOLEAN
+RtlpArm64UnwindFrameChain(
+    _Inout_ PCONTEXT Context,
+    _In_ ULONG_PTR StackLow,
+    _In_ ULONG_PTR StackHigh,
+    _Out_opt_ PULONG64 EstablisherFrame)
+{
+    ULONG64 FrameFp = Context->Fp;
+    ULONG64 NextFp;
+    ULONG64 NextLr;
+
+    if (!RtlpArm64IsStackPointerValid((ULONG_PTR)FrameFp,
+                                      StackLow,
+                                      StackHigh) ||
+        !RtlpArm64IsStackPointerValid((ULONG_PTR)(FrameFp + sizeof(ULONG64)),
+                                      StackLow,
+                                      StackHigh))
+    {
+        return FALSE;
+    }
+
+    NextFp = *(PULONG64)(ULONG_PTR)FrameFp;
+    NextLr = *(PULONG64)(ULONG_PTR)(FrameFp + sizeof(ULONG64));
+
+    if ((NextLr == 0) ||
+        ((NextFp != 0) &&
+         (!RtlpArm64IsStackPointerValid((ULONG_PTR)NextFp,
+                                        StackLow,
+                                        StackHigh) ||
+          (NextFp <= FrameFp))))
+    {
+        return FALSE;
+    }
+
+    if (EstablisherFrame != NULL)
+        *EstablisherFrame = FrameFp;
+
+    Context->Lr = NextLr;
+    Context->Sp = FrameFp + (2 * sizeof(ULONG64));
+    Context->Fp = NextFp;
+    Context->Pc = NextLr;
+    return TRUE;
+}
+
+static
 PULONG
 RtlpArm64Xdata(
     _In_ ULONG_PTR ImageBase,
@@ -178,6 +223,14 @@ RtlDispatchException(
             if ((UnwindContext.Lr == 0) ||
                 (UnwindContext.Lr == UnwindContext.Pc))
             {
+                if (RtlpArm64UnwindFrameChain(&UnwindContext,
+                                              StackLow,
+                                              StackHigh,
+                                              &EstablisherFrame))
+                {
+                    continue;
+                }
+
                 break;
             }
             UnwindContext.Pc = UnwindContext.Lr;
