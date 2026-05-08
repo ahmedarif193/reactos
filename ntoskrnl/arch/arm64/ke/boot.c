@@ -36,14 +36,15 @@ KiArm64EarlyVectorHandler(_In_ UINT64 VectorId,
 #define ARM64_MEM_ATTR_NORMAL_NC     0x1ULL
 #define ARM64_MEM_ATTR_NORMAL_WC     0x2ULL
 #define ARM64_MEM_ATTR_NORMAL_WB     0x4ULL
-#define ARM64_PTE_TYPE_BLOCK        0x1ULL
-#define ARM64_PTE_TYPE_TABLE        0x3ULL
 #define ARM64_PTE_BLOCK_ATTR_INDEX_SHIFT 2
 #define ARM64_PTE_BLOCK_INNER_SHARE (3ULL << 8)
 #define ARM64_PTE_BLOCK_AF          (1ULL << 10)
 #define ARM64_PTE_BLOCK_PXN         (1ULL << 53)
 #define ARM64_PTE_BLOCK_UXN         (1ULL << 54)
-#define ARM64_PTE_TABLE_NSTABLE     (1ULL << 63)
+#define ARM64_PTE_TABLE_ATTRS       (ARM64_PTE_TYPE_TABLE | \
+                                      (ARM64_MEM_ATTR_NORMAL_WB << ARM64_PTE_BLOCK_ATTR_INDEX_SHIFT) | \
+                                      ARM64_PTE_BLOCK_INNER_SHARE | \
+                                      ARM64_PTE_BLOCK_AF)
 #define ARM64_IDENTITY_DEFAULT_ATTRS (ARM64_PTE_TYPE_BLOCK | \
                                       (ARM64_MEM_ATTR_NORMAL_WB << ARM64_PTE_BLOCK_ATTR_INDEX_SHIFT) | \
                                       ARM64_PTE_BLOCK_INNER_SHARE | \
@@ -61,6 +62,7 @@ KiArm64EarlyVectorHandler(_In_ UINT64 VectorId,
 #define ARM64_IDENTITY_L0_ENTRIES   512
 #define ARM64_IDENTITY_L1_ENTRIES   512
 #define ARM64_IDENTITY_L2_ENTRIES   (512 * 512)
+C_ASSERT(ARM64_PTE_TABLE_ATTRS == 0x713ULL);
 
 /* Backing storage for identity tables; pointers are aligned at runtime. */
 static UINT64 KiArm64IdentityL0Backing[ARM64_IDENTITY_L0_ENTRIES +
@@ -915,8 +917,7 @@ KiArm64EnsureL1Entry(_In_ UINT64 Index)
 
         UINT64 L2Physical = KiArm64VirtualToPhysical((ULONG_PTR)&KiArm64IdentityL2[Index][0]);
         KiArm64IdentityL1[Index] = (L2Physical & ~((UINT64)PAGE_SIZE - 1ULL)) |
-                                   ARM64_PTE_TYPE_TABLE |
-                                   ARM64_PTE_TABLE_NSTABLE;
+                                   ARM64_PTE_TABLE_ATTRS;
     }
 }
 
@@ -1216,7 +1217,8 @@ KiArm64EnsureIdentityMapping(_Inout_ PARM64_BOOT_CONTEXT BootContext)
                       ARM64_PTE_BLOCK_PXN;
 
     TablePhysical = KiArm64VirtualToPhysical((ULONG_PTR)KiArm64IdentityL1);
-    KiArm64IdentityL0[0] = (TablePhysical & ~((UINT64)PAGE_SIZE - 1ULL)) | ARM64_PTE_TYPE_TABLE;
+    KiArm64IdentityL0[0] = (TablePhysical & ~((UINT64)PAGE_SIZE - 1ULL)) |
+                           ARM64_PTE_TABLE_ATTRS;
 
     if (LoaderBlock)
     {
