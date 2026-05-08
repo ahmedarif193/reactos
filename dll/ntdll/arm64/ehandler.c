@@ -152,19 +152,6 @@ __C_specific_handler(
             {
                 JumpTarget = ImageBase + ScopeTable->ScopeRecord[Index].JumpTarget;
 
-                DPRINT1("[arm64][SEH] handling code=0x%08lx image=%p scope=%lu "
-                        "control=%p targetFrame=%p jump=%p before pc=%p sp=%p fp=%p lr=%p\n",
-                        ExceptionRecord->ExceptionCode,
-                        (PVOID)(ULONG_PTR)ImageBase,
-                        Index,
-                        (PVOID)(ULONG_PTR)Arm64DispatcherContext->ControlPc,
-                        EstablisherFrame,
-                        (PVOID)(ULONG_PTR)JumpTarget,
-                        (PVOID)(ULONG_PTR)Arm64DispatcherContext->ContextRecord->Pc,
-                        (PVOID)(ULONG_PTR)Arm64DispatcherContext->ContextRecord->Sp,
-                        (PVOID)(ULONG_PTR)Arm64DispatcherContext->ContextRecord->Fp,
-                        (PVOID)(ULONG_PTR)Arm64DispatcherContext->ContextRecord->Lr);
-
                 RtlUnwindEx(EstablisherFrame,
                             (PVOID)JumpTarget,
                             ExceptionRecord,
@@ -172,26 +159,12 @@ __C_specific_handler(
                             Arm64DispatcherContext->ContextRecord,
                             Arm64DispatcherContext->HistoryTable);
 
-                DPRINT1("[arm64][SEH] after unwind jump=%p pc=%p sp=%p fp=%p lr=%p x0=%p\n",
-                        (PVOID)(ULONG_PTR)JumpTarget,
-                        (PVOID)(ULONG_PTR)Arm64DispatcherContext->ContextRecord->Pc,
-                        (PVOID)(ULONG_PTR)Arm64DispatcherContext->ContextRecord->Sp,
-                        (PVOID)(ULONG_PTR)Arm64DispatcherContext->ContextRecord->Fp,
-                        (PVOID)(ULONG_PTR)Arm64DispatcherContext->ContextRecord->Lr,
-                        (PVOID)(ULONG_PTR)Arm64DispatcherContext->ContextRecord->X0);
-
                 /*
                  * The ARM64 user-mode unwinder currently returns after target
                  * unwind. Resume at the selected handler explicitly.
                  */
                 Arm64DispatcherContext->ContextRecord->Pc = JumpTarget;
                 Arm64DispatcherContext->ContextRecord->X0 = ExceptionRecord->ExceptionCode;
-                DPRINT1("[arm64][SEH] continue pc=%p sp=%p fp=%p lr=%p x0=%p\n",
-                        (PVOID)(ULONG_PTR)Arm64DispatcherContext->ContextRecord->Pc,
-                        (PVOID)(ULONG_PTR)Arm64DispatcherContext->ContextRecord->Sp,
-                        (PVOID)(ULONG_PTR)Arm64DispatcherContext->ContextRecord->Fp,
-                        (PVOID)(ULONG_PTR)Arm64DispatcherContext->ContextRecord->Lr,
-                        (PVOID)(ULONG_PTR)Arm64DispatcherContext->ContextRecord->X0);
                 return ExceptionContinueExecution;
             }
         }
