@@ -47,6 +47,28 @@ typedef struct _MI_ARM64_USER_PTE_WALK
 
 static
 BOOLEAN
+MiArm64EnsureTablePageMapped(
+    _In_ ULONG64 TablePa)
+{
+    PFN_NUMBER Pfn;
+
+    if ((TablePa & (PAGE_SIZE - 1)) != 0)
+    {
+        return FALSE;
+    }
+
+    Pfn = (PFN_NUMBER)(TablePa >> PAGE_SHIFT);
+    if ((Pfn == 0) || (Pfn > MmHighestPhysicalPage))
+    {
+        return FALSE;
+    }
+
+    MiArm64MapKseg0Page(Pfn);
+    return TRUE;
+}
+
+static
+BOOLEAN
 MiArm64GetUserPteAddressForProcess(
     _In_ PEPROCESS Process,
     _In_ PVOID Address,
@@ -356,7 +378,7 @@ MiArm64GetUserPteAddressForProcess(
     _In_ PVOID Address,
     _Out_ PMI_ARM64_USER_PTE_WALK Walk)
 {
-    ULONG64 RootPa;
+    ULONG64 RootPa, L1Pa, L2Pa, L3Pa;
     volatile ULONG64 *L0Table, *L1Table, *L2Table, *L3Table;
     ULONG L0Idx, L1Idx, L2Idx, L3Idx;
     ULONG64 L0Entry, L1Entry, L2Entry;
@@ -393,6 +415,11 @@ MiArm64GetUserPteAddressForProcess(
     L2Idx = ((ULONG64)(ULONG_PTR)Address >> 21) & 0x1FF;
     L3Idx = ((ULONG64)(ULONG_PTR)Address >> 12) & 0x1FF;
 
+    if (!MiArm64EnsureTablePageMapped(RootPa))
+    {
+        return FALSE;
+    }
+
     L0Table = (volatile ULONG64 *)(KSEG0_BASE | RootPa);
     L0Entry = L0Table[L0Idx];
     if ((L0Entry & 0x3ULL) != 0x3ULL)
@@ -401,7 +428,13 @@ MiArm64GetUserPteAddressForProcess(
     }
     Walk->Depth = 1;
 
-    L1Table = (volatile ULONG64 *)(KSEG0_BASE | (L0Entry & ARM64_PTE_ADDR_MASK));
+    L1Pa = L0Entry & ARM64_PTE_ADDR_MASK;
+    if (!MiArm64EnsureTablePageMapped(L1Pa))
+    {
+        return FALSE;
+    }
+
+    L1Table = (volatile ULONG64 *)(KSEG0_BASE | L1Pa);
     L1Entry = L1Table[L1Idx];
     if ((L1Entry & 0x1ULL) == 0)
     {
@@ -418,7 +451,13 @@ MiArm64GetUserPteAddressForProcess(
     }
     Walk->Depth = 2;
 
-    L2Table = (volatile ULONG64 *)(KSEG0_BASE | (L1Entry & ARM64_PTE_ADDR_MASK));
+    L2Pa = L1Entry & ARM64_PTE_ADDR_MASK;
+    if (!MiArm64EnsureTablePageMapped(L2Pa))
+    {
+        return FALSE;
+    }
+
+    L2Table = (volatile ULONG64 *)(KSEG0_BASE | L2Pa);
     L2Entry = L2Table[L2Idx];
     if ((L2Entry & 0x1ULL) == 0)
     {
@@ -435,7 +474,13 @@ MiArm64GetUserPteAddressForProcess(
     }
     Walk->Depth = 3;
 
-    L3Table = (volatile ULONG64 *)(KSEG0_BASE | (L2Entry & ARM64_PTE_ADDR_MASK));
+    L3Pa = L2Entry & ARM64_PTE_ADDR_MASK;
+    if (!MiArm64EnsureTablePageMapped(L3Pa))
+    {
+        return FALSE;
+    }
+
+    L3Table = (volatile ULONG64 *)(KSEG0_BASE | L3Pa);
     Walk->PointerPte = &L3Table[L3Idx];
     Walk->PteValue = L3Table[L3Idx];
     if ((Walk->PteValue & 0x3ULL) == 0x3ULL)
@@ -637,7 +682,7 @@ MiArm64ReleaseUserPageTableReference(
     _In_ PEPROCESS Process,
     _In_ PVOID Address)
 {
-    ULONG64 RootPa;
+    ULONG64 RootPa, L1Pa, L2Pa;
     volatile ULONG64 *L0Table, *L1Table, *L2Table;
     ULONG L0Idx, L1Idx, L2Idx;
     ULONG64 L0Entry, L1Entry, L2Entry;
@@ -657,19 +702,30 @@ MiArm64ReleaseUserPageTableReference(
     L2Idx = ((ULONG64)(ULONG_PTR)Address >> PDI_SHIFT) & PDI_MASK_ARM64;
 
     RootPfn = RootPa >> PAGE_SHIFT;
+    if (!MiArm64EnsureTablePageMapped(RootPa))
+        return;
+
     L0Table = (volatile ULONG64 *)(KSEG0_BASE | RootPa);
     L0Entry = L0Table[L0Idx];
     if ((L0Entry & 0x3ULL) != 0x3ULL)
         return;
 
-    L1Pfn = (L0Entry & ARM64_PTE_ADDR_MASK) >> PAGE_SHIFT;
-    L1Table = (volatile ULONG64 *)(KSEG0_BASE | (L0Entry & ARM64_PTE_ADDR_MASK));
+    L1Pa = L0Entry & ARM64_PTE_ADDR_MASK;
+    if (!MiArm64EnsureTablePageMapped(L1Pa))
+        return;
+
+    L1Pfn = L1Pa >> PAGE_SHIFT;
+    L1Table = (volatile ULONG64 *)(KSEG0_BASE | L1Pa);
     L1Entry = L1Table[L1Idx];
     if ((L1Entry & 0x3ULL) != 0x3ULL)
         return;
 
-    L2Pfn = (L1Entry & ARM64_PTE_ADDR_MASK) >> PAGE_SHIFT;
-    L2Table = (volatile ULONG64 *)(KSEG0_BASE | (L1Entry & ARM64_PTE_ADDR_MASK));
+    L2Pa = L1Entry & ARM64_PTE_ADDR_MASK;
+    if (!MiArm64EnsureTablePageMapped(L2Pa))
+        return;
+
+    L2Pfn = L2Pa >> PAGE_SHIFT;
+    L2Table = (volatile ULONG64 *)(KSEG0_BASE | L2Pa);
     L2Entry = L2Table[L2Idx];
     if ((L2Entry & 0x3ULL) != 0x3ULL)
         return;
