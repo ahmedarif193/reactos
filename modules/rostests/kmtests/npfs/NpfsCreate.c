@@ -55,8 +55,16 @@ TestCreateNamedPipe(VOID)
                           MaxInstances,
                           InQuota,
                           OutQuota);
-    ok_eq_hex(Status, STATUS_OBJECT_NAME_INVALID);
-    ok_eq_pointer(ServerHandle, INVALID_HANDLE_VALUE);
+    if (GetNTVersion() >= _WIN32_WINNT_VISTA)
+    {
+        ok_eq_hex(Status, STATUS_SUCCESS);
+        ok(ServerHandle != NULL && ServerHandle != INVALID_HANDLE_VALUE, "ServerHandle = %p\n", ServerHandle);
+    }
+    else
+    {
+        ok_eq_hex(Status, STATUS_OBJECT_NAME_INVALID);
+        ok_eq_pointer(ServerHandle, INVALID_HANDLE_VALUE);
+    }
     if (ServerHandle != NULL && ServerHandle != INVALID_HANDLE_VALUE)
         ObCloseHandle(ServerHandle, KernelMode);
 

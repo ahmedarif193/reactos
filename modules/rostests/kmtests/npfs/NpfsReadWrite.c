@@ -485,7 +485,8 @@ TestReadWrite(
     ok_eq_hex(Status, STATUS_SUCCESS);
     NpCheckClientPipe(ClientHandle,
                       BYTE_STREAM, QUEUE, BYTE_STREAM, DUPLEX,
-                      MAX_INSTANCES, 1,
+                      MAX_INSTANCES,
+                      GetNTVersion() >= _WIN32_WINNT_VISTA ? 0 : 1,
                       IN_QUOTA, 1,
                       OUT_QUOTA, OUT_QUOTA,
                       FILE_PIPE_CLOSING_STATE);

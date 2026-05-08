@@ -16,6 +16,56 @@ static UNICODE_STRING SystemRootFoobarFoobar = RTL_CONSTANT_STRING(L"\\SystemRoo
 static UNICODE_STRING FoobarFoobar = RTL_CONSTANT_STRING(L"foobar\\foobar.exe");
 
 static
+BOOLEAN
+IoCreateFileHasPrerequisites(VOID)
+{
+    NTSTATUS Status;
+    IO_STATUS_BLOCK IoStatusBlock;
+    OBJECT_ATTRIBUTES ObjectAttributes;
+    HANDLE Handle;
+
+    InitializeObjectAttributes(&ObjectAttributes,
+                               &SystemRootRegedit,
+                               OBJ_CASE_INSENSITIVE | OBJ_KERNEL_HANDLE,
+                               NULL, NULL);
+    Status = ZwOpenFile(&Handle,
+                        FILE_READ_DATA | SYNCHRONIZE,
+                        &ObjectAttributes,
+                        &IoStatusBlock,
+                        FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+                        FILE_NON_DIRECTORY_FILE | FILE_SYNCHRONOUS_IO_NONALERT);
+    if (skip(NT_SUCCESS(Status),
+             "\\SystemRoot\\regedit.exe is unavailable: 0x%08lx\n", Status))
+    {
+        return FALSE;
+    }
+    ObCloseHandle(Handle, KernelMode);
+
+    InitializeObjectAttributes(&ObjectAttributes,
+                               &SystemRootFoobar,
+                               OBJ_CASE_INSENSITIVE | OBJ_KERNEL_HANDLE,
+                               NULL, NULL);
+    Status = ZwCreateFile(&Handle,
+                          GENERIC_WRITE | DELETE | SYNCHRONIZE,
+                          &ObjectAttributes,
+                          &IoStatusBlock,
+                          NULL,
+                          FILE_ATTRIBUTE_NORMAL,
+                          FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+                          FILE_SUPERSEDE,
+                          FILE_NON_DIRECTORY_FILE | FILE_DELETE_ON_CLOSE | FILE_SYNCHRONOUS_IO_NONALERT,
+                          NULL,
+                          0);
+    if (skip(NT_SUCCESS(Status),
+             "\\SystemRoot is not writable for IoCreateFile scratch files: 0x%08lx\n", Status))
+    {
+        return FALSE;
+    }
+    ObCloseHandle(Handle, KernelMode);
+    return TRUE;
+}
+
+static
 VOID
 NTAPI
 KernelModeTest(IN PVOID Context)
@@ -873,7 +923,13 @@ START_TEST(IoCreateFile)
 {
     PKTHREAD ThreadHandle;
 
-    TestSymlinks();
+    if (!IoCreateFileHasPrerequisites())
+        return;
+
+    if (GetNTVersion() >= _WIN32_WINNT_VISTA)
+        TestSymlinks();
+    else
+        skip(FALSE, "IO_REPARSE_TAG_SYMLINK is a Vista+ reparse contract\n");
 
     /* Justify the next comment/statement */
     UserModeTest();

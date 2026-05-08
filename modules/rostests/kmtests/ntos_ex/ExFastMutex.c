@@ -33,9 +33,12 @@ static BOOLEAN (FASTCALL *pExiTryToAcquireFastMutex)(IN OUT PFAST_MUTEX FastMute
                    ExpectedIrql) do                                     \
 {                                                                       \
     ok_eq_long((Mutex)->Count, ExpectedCount);                          \
-    ok_eq_pointer((Mutex)->Owner, ExpectedOwner);                       \
+    /* NT 5.x does not expose Vista-compatible Owner/OldIrql values. */  \
+    if (GetNTVersion() >= _WIN32_WINNT_VISTA)                           \
+        ok_eq_pointer((Mutex)->Owner, ExpectedOwner);                   \
     ok_eq_ulong((Mutex)->Contention, ExpectedContention);               \
-    ok_eq_ulong((Mutex)->OldIrql, (ULONG)ExpectedOldIrql);              \
+    if (GetNTVersion() >= _WIN32_WINNT_VISTA)                           \
+        ok_eq_ulong((Mutex)->OldIrql, (ULONG)ExpectedOldIrql);          \
     ok_bool_false(KeAreApcsDisabled(), "KeAreApcsDisabled returned");   \
     ok_irql(ExpectedIrql);                                              \
 } while (0)
@@ -101,22 +104,25 @@ TestFastMutex(
         ExReleaseFastMutexUnsafe(Mutex);
         CheckMutex(Mutex, 1L, NULL, 0LU, OriginalIrql, OriginalIrql);
 
-        /* mismatched acquire/release */
-        ExAcquireFastMutex(Mutex);
-        CheckMutex(Mutex, 0L, Thread, 0LU, OriginalIrql, APC_LEVEL);
-        ExReleaseFastMutexUnsafe(Mutex);
-        CheckMutex(Mutex, 1L, NULL, 0LU, OriginalIrql, APC_LEVEL);
-        KmtSetIrql(OriginalIrql);
-        CheckMutex(Mutex, 1L, NULL, 0LU, OriginalIrql, OriginalIrql);
+        if (GetNTVersion() >= _WIN32_WINNT_VISTA)
+        {
+            /* mismatched acquire/release */
+            ExAcquireFastMutex(Mutex);
+            CheckMutex(Mutex, 0L, Thread, 0LU, OriginalIrql, APC_LEVEL);
+            ExReleaseFastMutexUnsafe(Mutex);
+            CheckMutex(Mutex, 1L, NULL, 0LU, OriginalIrql, APC_LEVEL);
+            KmtSetIrql(OriginalIrql);
+            CheckMutex(Mutex, 1L, NULL, 0LU, OriginalIrql, OriginalIrql);
 
-        Mutex->OldIrql = 0x55555555LU;
-        ExAcquireFastMutexUnsafe(Mutex);
-        CheckMutex(Mutex, 0L, Thread, 0LU, 0x55555555LU, OriginalIrql);
-        Mutex->OldIrql = PASSIVE_LEVEL;
-        ExReleaseFastMutex(Mutex);
-        CheckMutex(Mutex, 1L, NULL, 0LU, PASSIVE_LEVEL, PASSIVE_LEVEL);
-        KmtSetIrql(OriginalIrql);
-        CheckMutex(Mutex, 1L, NULL, 0LU, PASSIVE_LEVEL, OriginalIrql);
+            Mutex->OldIrql = 0x55555555LU;
+            ExAcquireFastMutexUnsafe(Mutex);
+            CheckMutex(Mutex, 0L, Thread, 0LU, 0x55555555LU, OriginalIrql);
+            Mutex->OldIrql = PASSIVE_LEVEL;
+            ExReleaseFastMutex(Mutex);
+            CheckMutex(Mutex, 1L, NULL, 0LU, PASSIVE_LEVEL, PASSIVE_LEVEL);
+            KmtSetIrql(OriginalIrql);
+            CheckMutex(Mutex, 1L, NULL, 0LU, PASSIVE_LEVEL, OriginalIrql);
+        }
     }
 
     if (!KmtIsCheckedBuild &&
@@ -271,8 +277,8 @@ TestFastMutexConcurrent(
      * stores the waiter count shifted left by two while the mutex is held. */
     if (skip(GetNTVersion() != _WIN32_WINNT_WS03, "ROSTESTS-367: TestFastMutexConcurrent() hangs on Windows Server 2003 x64-Testbot.\n"))
 #else
-    if (skip(GetNTVersion() >= _WIN32_WINNT_VISTA,
-             "TestFastMutexConcurrent() requires NT 6+\n"))
+    if (skip(GetNTVersion() < _WIN32_WINNT_VISTA,
+             "TestFastMutexConcurrent() doesn't work on Vista+.\n"))
 #endif
         return;
 
@@ -333,12 +339,6 @@ START_TEST(ExFastMutex)
 {
     FAST_MUTEX Mutex;
     KIRQL Irql;
-
-    if (skip(GetNTVersion() >= _WIN32_WINNT_VISTA,
-             "ExFastMutex requires NT 6+\n"))
-    {
-        return;
-    }
 
     pExEnterCriticalRegionAndAcquireFastMutexUnsafe = KmtGetSystemRoutineAddress(L"ExEnterCriticalRegionAndAcquireFastMutexUnsafe");
     pExReleaseFastMutexUnsafeAndLeaveCriticalRegion = KmtGetSystemRoutineAddress(L"ExReleaseFastMutexUnsafeAndLeaveCriticalRegion");
