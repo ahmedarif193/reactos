@@ -520,7 +520,8 @@ MiArm64ClearUserPte(
     OldPte.u.Long = Walk->PteValue;
     if (OldPte.u.Hard.Valid)
     {
-        MiArm64MaintainPageCache(Address, MiArm64DcacheCleanInvalidate, TRUE);
+        MiArm64PublishPageByPfnAlias(OldPte.u.Hard.PageFrameNumber,
+                                     OldPte.u.Hard.UserNoExecute == 0);
         __atomic_store_n(Walk->PointerPte, 0, __ATOMIC_SEQ_CST);
         MiArm64InvalidateUserAddress(Address);
     }
@@ -636,7 +637,7 @@ MiArm64ReleaseUserPageTableReference(
     _In_ PEPROCESS Process,
     _In_ PVOID Address)
 {
-    ULONG64 Ttbr0, RootPa;
+    ULONG64 RootPa;
     volatile ULONG64 *L0Table, *L1Table, *L2Table;
     ULONG L0Idx, L1Idx, L2Idx;
     ULONG64 L0Entry, L1Entry, L2Entry;
@@ -644,8 +645,8 @@ MiArm64ReleaseUserPageTableReference(
     KIRQL OldIrql;
     PMMPFN PfnRoot, PfnL1, PfnL2, PfnL3;
 
-    __asm__ __volatile__("mrs %0, ttbr0_el1" : "=r"(Ttbr0));
-    RootPa = Ttbr0 & ARM64_PTE_ADDR_MASK;
+    ASSERT(Process != NULL);
+    RootPa = Process->Pcb.DirectoryTableBase[0] & ARM64_PTE_ADDR_MASK;
     if (RootPa == 0)
     {
         return;
@@ -1533,6 +1534,7 @@ MmDeleteVirtualMappingEx(
     _In_ BOOLEAN IsPhysical)
 {
     MMPTE OldPte;
+    BOOLEAN ProcessWorkingSetLocked = FALSE;
 
     OldPte.u.Long = 0;
 
@@ -1553,6 +1555,9 @@ MmDeleteVirtualMappingEx(
 
         ASSERT(Address < MmSystemRangeStart);
         ASSERT(Process == PsGetCurrentProcess());
+
+        MiLockProcessWorkingSetUnsafe(Process, PsGetCurrentThread());
+        ProcessWorkingSetLocked = TRUE;
 
         if (MiArm64GetUserPteAddress(Address, &Walk))
         {
@@ -1585,6 +1590,11 @@ MmDeleteVirtualMappingEx(
     if (Process != NULL && !IsPhysical && OldPte.u.Hard.Valid)
     {
         MiArm64ReleaseUserPageTableReference(Process, Address);
+    }
+
+    if (ProcessWorkingSetLocked)
+    {
+        MiUnlockProcessWorkingSetUnsafe(Process, PsGetCurrentThread());
     }
 
     return OldPte.u.Long != 0;
