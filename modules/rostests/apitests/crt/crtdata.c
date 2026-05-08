@@ -75,7 +75,7 @@ void Test___badioinfo(void)
     ok(__badioinfo[0] != NULL, "__badioinfo is NULL\n");
 }
 
-#ifndef _M_ARM
+#if !defined(_M_ARM) && !defined(_M_ARM64)
 void Test___initenv(void)
 {
     _CRTIMP extern char** __initenv;
@@ -160,7 +160,7 @@ void Test___pioinfo(void)
 
 }
 
-#ifndef _M_ARM
+#if !defined(_M_ARM) && !defined(_M_ARM64)
 void Test___setlc_active(void)
 {
     _CRTIMP extern unsigned int __setlc_active;
@@ -197,7 +197,7 @@ void Test___wargv(void)
 #endif
 }
 
-#ifndef _M_ARM
+#if !defined(_M_ARM) && !defined(_M_ARM64)
 void Test___winitenv(void)
 {
     _CRTIMP extern wchar_t** __winitenv;
@@ -320,7 +320,7 @@ void Test__daylight(void)
     }
 }
 
-#ifndef _M_ARM
+#if !defined(_M_ARM) && !defined(_M_ARM64)
 void Test__dstbias(void)
 {
     void* p = &_dstbias;
@@ -444,7 +444,7 @@ void Test__mbctype(void)
 #endif
 }
 
-#ifndef _M_ARM
+#if !defined(_M_ARM) && !defined(_M_ARM64)
 void Test__osplatform(void)
 {
     ok_int(_osplatform, s_osvi.dwPlatformId);
@@ -548,7 +548,7 @@ void Test__wcmdln(void)
 #endif
 }
 
-#ifndef _M_ARM
+#if !defined(_M_ARM) && !defined(_M_ARM64)
 void Test__wenviron(void)
 {
     void* p = &_wenviron;
@@ -602,7 +602,7 @@ void Test__winminor(void)
     }
 }
 
-#ifndef _M_ARM
+#if !defined(_M_ARM) && !defined(_M_ARM64)
 void Test__winver(void)
 {
     ok_int(_winver, (s_osvi.dwMajorVersion << 8) | s_osvi.dwMinorVersion);
@@ -684,7 +684,7 @@ START_TEST(crtdata)
     Test___argc();
     Test___argv();
     Test___badioinfo();
-#ifndef _M_ARM
+#if !defined(_M_ARM) && !defined(_M_ARM64)
     Test___initenv();
     Test___lc_codepage();
     Test___lc_collate_cp();
@@ -692,12 +692,12 @@ START_TEST(crtdata)
     Test___lc_handle();
     Test___mb_cur_max();
     Test___pioinfo();
-#ifndef _M_ARM
+#if !defined(_M_ARM) && !defined(_M_ARM64)
     Test___setlc_active();
     Test___unguarded_readlc_active();
 #endif
     Test___wargv();
-#ifndef _M_ARM
+#if !defined(_M_ARM) && !defined(_M_ARM64)
     Test___winitenv();
 #endif
     Test__acmdln();
@@ -708,7 +708,7 @@ START_TEST(crtdata)
     Test__commode();
     Test__ctype();
     Test__daylight();
-#ifndef _M_ARM
+#if !defined(_M_ARM) && !defined(_M_ARM64)
     Test__dstbias();
     Test__environ();
     Test__fileinfo();
@@ -717,7 +717,7 @@ START_TEST(crtdata)
     Test__iob();
     Test__mbcasemap();
     Test__mbctype();
-#ifndef _M_ARM
+#if !defined(_M_ARM) && !defined(_M_ARM64)
     Test__osplatform();
 #endif
     Test__osver();
@@ -728,12 +728,12 @@ START_TEST(crtdata)
     Test__tzname();
     Test__wcmdln();
     Test__wctype();
-#ifndef _M_ARM
+#if !defined(_M_ARM) && !defined(_M_ARM64)
     Test__wenviron();
 #endif
     Test__winmajor();
     Test__winminor();
-#ifndef _M_ARM
+#if !defined(_M_ARM) && !defined(_M_ARM64)
     Test__winver();
 #endif
     Test__wpgmptr();
