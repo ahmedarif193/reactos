@@ -17,6 +17,70 @@
 
 /* INTERNAL FUNCTIONS *******************************************************/
 
+static
+NTSTATUS
+NTAPI
+RtlpQueryEnvironmentSize(
+    _In_ PCWSTR Environment,
+    _Out_ PSIZE_T EnvironmentSize)
+{
+    MEMORY_BASIC_INFORMATION MemoryInfo;
+    ULONG_PTR BaseAddress, EnvironmentAddress;
+    SIZE_T MaximumSize, MaximumLength, Offset, Index;
+    NTSTATUS Status;
+    BOOLEAN Found = FALSE;
+
+    if (!Environment || !EnvironmentSize)
+        return STATUS_INVALID_PARAMETER;
+
+    Status = NtQueryVirtualMemory(NtCurrentProcess(),
+                                  (PVOID)Environment,
+                                  MemoryBasicInformation,
+                                  &MemoryInfo,
+                                  sizeof(MemoryInfo),
+                                  NULL);
+    if (!NT_SUCCESS(Status))
+        return Status;
+
+    BaseAddress = (ULONG_PTR)MemoryInfo.BaseAddress;
+    EnvironmentAddress = (ULONG_PTR)Environment;
+    if (EnvironmentAddress < BaseAddress)
+        return STATUS_INVALID_PARAMETER;
+
+    Offset = EnvironmentAddress - BaseAddress;
+    if (Offset >= MemoryInfo.RegionSize)
+        return STATUS_INVALID_PARAMETER;
+
+    MaximumSize = MemoryInfo.RegionSize - Offset;
+    MaximumLength = MaximumSize / sizeof(WCHAR);
+    if (MaximumLength < 2)
+        return STATUS_INVALID_PARAMETER;
+
+    _SEH2_TRY
+    {
+        for (Index = 0; Index + 1 < MaximumLength; ++Index)
+        {
+            if (Environment[Index] == UNICODE_NULL &&
+                Environment[Index + 1] == UNICODE_NULL)
+            {
+                *EnvironmentSize = (Index + 2) * sizeof(WCHAR);
+                Found = TRUE;
+                break;
+            }
+        }
+    }
+    _SEH2_EXCEPT(_SEH2_GetExceptionCode() == STATUS_ACCESS_VIOLATION)
+    {
+        Status = STATUS_ACCESS_VIOLATION;
+    }
+    _SEH2_END;
+
+    if (Found)
+        return STATUS_SUCCESS;
+
+    return NT_SUCCESS(Status) ? STATUS_INVALID_PARAMETER : Status;
+}
+
 NTSTATUS
 NTAPI
 RtlpMapFile(PUNICODE_STRING ImageFileName,
@@ -101,11 +165,9 @@ RtlpInitEnvironment(HANDLE ProcessHandle,
     /* Find the end of the Enviroment Block */
     if ((Environment = (PWCHAR)ProcessParameters->Environment))
     {
-        while (*Environment++) while (*Environment++);
-
-        /* Calculate the size of the block */
-        EnviroSize = (ULONG)((ULONG_PTR)Environment -
-                             (ULONG_PTR)ProcessParameters->Environment);
+        Status = RtlpQueryEnvironmentSize(Environment, &EnviroSize);
+        if (!NT_SUCCESS(Status))
+            return Status;
 
         /* Allocate and Initialize new Environment Block */
         Size = EnviroSize;

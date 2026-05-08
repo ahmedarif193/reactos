@@ -289,6 +289,18 @@ ULONG
 NTAPI
 BasepAnsiStringToUnicodeSize(IN PANSI_STRING String);
 
+NTSTATUS
+NTAPI
+BasepQueryEnvironmentSizeA(
+    _In_ PCSTR Environment,
+    _Out_ PSIZE_T EnvironmentSize);
+
+NTSTATUS
+NTAPI
+BasepQueryEnvironmentSizeW(
+    _In_ PCWSTR Environment,
+    _Out_ PSIZE_T EnvironmentSize);
+
 extern PRTL_CONVERT_STRING Basep8BitStringToUnicodeString;
 extern PRTL_CONVERT_STRINGA BasepUnicodeStringTo8BitString;
 extern PRTL_COUNT_STRING BasepUnicodeStringTo8BitSize;
