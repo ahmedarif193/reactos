@@ -10,7 +10,7 @@ const struct test winetest_testlist[] =
 {
     { "floatconv", func_floatconv },
 #ifndef __VS_PROJECT__
-#if !(defined(__GNUC__) && defined(_M_AMD64))
+#if defined(_MSC_VER) || defined(_M_IX86)
     { "ms-seh", func_ms_seh },
 #endif
     { "pseh", func_pseh },

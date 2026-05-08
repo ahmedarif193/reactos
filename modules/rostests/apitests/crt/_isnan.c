@@ -5,7 +5,7 @@
  * COPYRIGHT:   Copyright 2025 Timo Kreuzer <timo.kreuzer@reactos.org>
  */
 
-#if !defined(_CRTBLD) && !defined(_M_IX86)
+#if !defined(_CRTBLD) && defined(_M_AMD64)
 #define _CRTBLD // we don't want inline _isnanf!
 #endif
 #include "math_helpers.h"
@@ -58,7 +58,7 @@ void Test__isnan(void)
     }
 }
 
-#ifndef _M_IX86
+#ifdef _M_AMD64
 static TESTENTRY_FLT s_isnanf_tests[] =
 {
     /* Special values */
@@ -105,12 +105,12 @@ void Test__isnanf(void)
         ok(r == s_isnanf_tests[i].result, "Wrong result for %f [0x%08lx]. Expected %d, got %d\n", x, s_isnanf_tests[i].x, s_isnanf_tests[i].result, r);
     }
 }
-#endif // !_MIX86
+#endif // _M_AMD64
 
 START_TEST(_isnan)
 {
     Test__isnan();
-#ifndef _M_IX86
+#ifdef _M_AMD64
     Test__isnanf();
-#endif // !_MIX86
+#endif // _M_AMD64
 }

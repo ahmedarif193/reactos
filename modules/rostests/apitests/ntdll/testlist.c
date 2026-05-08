@@ -38,7 +38,9 @@ extern void func_NtAdjustPrivilegesToken(void);
 extern void func_NtAllocateVirtualMemory(void);
 extern void func_NtApphelpCacheControl(void);
 extern void func_NtCompareTokens(void);
+#if defined(_M_IX86) || defined(_M_AMD64)
 extern void func_NtContinue(void);
+#endif
 extern void func_NtCreateFile(void);
 extern void func_NtCreateKey(void);
 extern void func_NtCreateProfile(void);
@@ -135,7 +137,9 @@ extern void func_RtlxUnicodeStringToAnsiSize(void);
 extern void func_RtlxUnicodeStringToOemSize(void);
 extern void func_StackOverflow(void);
 extern void func_TimerResolution(void);
+#if defined(_M_IX86) || defined(_M_AMD64)
 extern void func_UserModeException(void);
+#endif
 
 const struct test winetest_testlist[] =
 {
@@ -176,7 +180,9 @@ const struct test winetest_testlist[] =
     { "NtAllocateVirtualMemory",        func_NtAllocateVirtualMemory },
     { "NtApphelpCacheControl",          func_NtApphelpCacheControl },
     { "NtCompareTokens",                func_NtCompareTokens },
+#if defined(_M_IX86) || defined(_M_AMD64)
     { "NtContinue",                     func_NtContinue },
+#endif
     { "NtCreateFile",                   func_NtCreateFile },
     { "NtCreateKey",                    func_NtCreateKey },
     { "NtCreateProfile",                func_NtCreateProfile },
@@ -270,7 +276,9 @@ const struct test winetest_testlist[] =
     { "RtlValidateUnicodeString",       func_RtlValidateUnicodeString },
     { "StackOverflow",                  func_StackOverflow },
     { "TimerResolution",                func_TimerResolution },
+#if defined(_M_IX86) || defined(_M_AMD64)
     { "UserModeException",              func_UserModeException },
+#endif
 #ifdef _M_IX86
     { "RtlUnwind",                      func_RtlUnwind },
 #endif
