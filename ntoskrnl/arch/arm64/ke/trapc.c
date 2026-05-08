@@ -47,6 +47,48 @@ KiArm64DumpKernelWalk(
 
 static
 BOOLEAN
+KiArm64IsKernelAddressMappedNoFault(
+    _In_ ULONG_PTR Va)
+{
+    ULONG64 Ttbr1;
+    ULONG64 RootPa;
+    volatile ULONG64 *Table;
+    ULONG64 Entry;
+
+    if (Va < (ULONG_PTR)MmSystemRangeStart)
+        return FALSE;
+
+    __asm__ __volatile__("mrs %0, ttbr1_el1" : "=r"(Ttbr1));
+    RootPa = Ttbr1 & ARM64_PTE_ADDR_MASK;
+    if (RootPa == 0)
+        return FALSE;
+
+    Table = (volatile ULONG64 *)(KSEG0_BASE | RootPa);
+    Entry = Table[(Va >> PXI_SHIFT) & PXI_MASK];
+    if ((Entry & ARM64_PTE_TYPE_MASK) != ARM64_PTE_TYPE_TABLE)
+        return FALSE;
+
+    Table = (volatile ULONG64 *)(KSEG0_BASE | (Entry & ARM64_PTE_ADDR_MASK));
+    Entry = Table[(Va >> PPI_SHIFT) & PPI_MASK];
+    if ((Entry & ARM64_PTE_TYPE_MASK) == ARM64_PTE_TYPE_BLOCK)
+        return TRUE;
+    if ((Entry & ARM64_PTE_TYPE_MASK) != ARM64_PTE_TYPE_TABLE)
+        return FALSE;
+
+    Table = (volatile ULONG64 *)(KSEG0_BASE | (Entry & ARM64_PTE_ADDR_MASK));
+    Entry = Table[(Va >> PDI_SHIFT) & PDI_MASK_ARM64];
+    if ((Entry & ARM64_PTE_TYPE_MASK) == ARM64_PTE_TYPE_BLOCK)
+        return TRUE;
+    if ((Entry & ARM64_PTE_TYPE_MASK) != ARM64_PTE_TYPE_TABLE)
+        return FALSE;
+
+    Table = (volatile ULONG64 *)(KSEG0_BASE | (Entry & ARM64_PTE_ADDR_MASK));
+    Entry = Table[(Va >> PTI_SHIFT) & PTI_MASK_ARM64];
+    return ((Entry & ARM64_PTE_TYPE_MASK) == ARM64_PTE_TYPE_PAGE);
+}
+
+static
+BOOLEAN
 KiArm64ValidatePoolHeader(
     _In_ PVOID BaseVa,
     _In_ PPOOL_HEADER Entry,
@@ -104,6 +146,15 @@ KiArm64DumpPagedPoolPageByPfnAlias(
     PageVa = (ULONG_PTR)PAGE_ALIGN(Far);
     FaultOffset = BYTE_OFFSET(Far);
     QwordOffset = BYTE_OFFSET(ALIGN_DOWN_BY(Far, sizeof(ULONG64)));
+
+    if (!KiArm64IsKernelAddressMappedNoFault(AliasPage))
+    {
+        DPRINT1("[arm64][SErrorPoolQ] page=%p pfn=%Ix alias=%p not mapped in KSEG0\n",
+                (PVOID)PageVa,
+                (ULONG_PTR)DataPfn,
+                (PVOID)AliasPage);
+        return;
+    }
 
     PrevQword = *(volatile ULONG64 *)(AliasPage + ((QwordOffset >= sizeof(ULONG64)) ?
                                                    (QwordOffset - sizeof(ULONG64)) :
@@ -413,7 +464,21 @@ KiArm64DumpUserAliasQwords(
 
     DataPfn = PFN_FROM_PTE(PointerPte);
     AliasVa = (ULONG_PTR)KSEG0_BASE + ((ULONG_PTR)DataPfn << PAGE_SHIFT);
-    AliasVa += BYTE_OFFSET(Va);
+    Offset0 = ALIGN_DOWN_BY(Offset0 & (PAGE_SIZE - 1), sizeof(ULONG64));
+    Offset1 = ALIGN_DOWN_BY(Offset1 & (PAGE_SIZE - 1), sizeof(ULONG64));
+    Offset2 = ALIGN_DOWN_BY(Offset2 & (PAGE_SIZE - 1), sizeof(ULONG64));
+
+    if (!KiArm64IsKernelAddressMappedNoFault(AliasVa))
+    {
+        DPRINT1("[arm64][UALIAS] %s va=%p pfn=%Ix pteframe=%Ix alias=%p not mapped in KSEG0\n",
+                Tag,
+                (PVOID)(ULONG_PTR)Va,
+                (ULONG_PTR)DataPfn,
+                (ULONG_PTR)PteFrame,
+                (PVOID)AliasVa);
+        return;
+    }
+
     Qword0 = *(volatile ULONG64 *)(AliasVa + Offset0);
     Qword1 = *(volatile ULONG64 *)(AliasVa + Offset1);
     Qword2 = *(volatile ULONG64 *)(AliasVa + Offset2);
@@ -2606,9 +2671,9 @@ KiSErrorHandler(
             KiArm64DumpUserWalk("far", Far);
             KiArm64DumpUserAliasQwords("far-base",
                                        Far,
-                                       0x000,
-                                       0x008,
-                                       0x0F8);
+                                       BYTE_OFFSET(Far),
+                                       (BYTE_OFFSET(Far) + 0x008) & (PAGE_SIZE - 1),
+                                       (BYTE_OFFSET(Far) + 0x0F8) & (PAGE_SIZE - 1));
         }
         KiArm64DumpUserWalk("elr", Elr);
         KiArm64DumpUserWalk("sp", TrapFrame->Sp);

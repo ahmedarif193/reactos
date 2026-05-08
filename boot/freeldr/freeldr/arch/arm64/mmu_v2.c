@@ -1468,9 +1468,6 @@ static UINT64* ensure_l2_table(BOOLEAN is_kernel, UINT64 l0_slot, UINT64 *l1_tab
                     }
                     else
                     {
-                        ERR("ARM64: L2 table pool exhausted for kernel L0 slot %llu (limit %u)\n",
-                            (unsigned long long)l0_slot,
-                            ARM64_L2_TABLES_PER_L1);
                         split_table = allocate_pt_pages(1, "TTBR1 L2 (kernel spill split)");
                         if (!split_table)
                             return NULL;
@@ -1489,8 +1486,6 @@ static UINT64* ensure_l2_table(BOOLEAN is_kernel, UINT64 l0_slot, UINT64 *l1_tab
                         }
                         else
                         {
-                            ERR("ARM64: Extra L2 table pool exhausted for L0 slot %llu (limit %u)\n",
-                                (unsigned long long)l0_slot, ARM64_EXTRA_L2_PER_SLOT);
                             split_table = allocate_pt_pages(1, "TTBR1 L2 (extra spill split)");
                             if (!split_table)
                                 return NULL;
@@ -1515,9 +1510,6 @@ static UINT64* ensure_l2_table(BOOLEAN is_kernel, UINT64 l0_slot, UINT64 *l1_tab
                 }
                 else
                 {
-                    ERR("ARM64: L2 table pool exhausted for user L0 slot %llu (limit %u)\n",
-                        (unsigned long long)l0_slot,
-                        ARM64_L2_TABLES_PER_L1);
                     split_table = allocate_pt_pages(1, "TTBR0 L2 (user spill split)");
                     if (!split_table)
                         return NULL;
@@ -1557,8 +1549,6 @@ static UINT64* ensure_l2_table(BOOLEAN is_kernel, UINT64 l0_slot, UINT64 *l1_tab
             }
             else
             {
-                ERR("ARM64: L2 table pool exhausted for kernel L0 slot %llu (limit %u)\n",
-                    (unsigned long long)l0_slot, ARM64_L2_TABLES_PER_L1);
                 new_table = allocate_pt_pages(1, "TTBR1 L2 (kernel spill)");
                 if (!new_table)
                     return NULL;
@@ -1584,8 +1574,6 @@ static UINT64* ensure_l2_table(BOOLEAN is_kernel, UINT64 l0_slot, UINT64 *l1_tab
                 }
                 else
                 {
-                    ERR("ARM64: Extra L2 table pool exhausted for L0 slot %llu (limit %u)\n",
-                        (unsigned long long)l0_slot, ARM64_EXTRA_L2_PER_SLOT);
                     new_table = allocate_pt_pages(1, "TTBR1 L2 (extra spill)");
                     if (!new_table)
                         return NULL;
@@ -1620,8 +1608,6 @@ static UINT64* ensure_l2_table(BOOLEAN is_kernel, UINT64 l0_slot, UINT64 *l1_tab
     }
     else
     {
-        ERR("ARM64: L2 table pool exhausted for user L0 slot %llu (limit %u)\n",
-            (unsigned long long)l0_slot, ARM64_L2_TABLES_PER_L1);
         new_table = allocate_pt_pages(1, "TTBR0 L2 (user spill)");
         if (!new_table)
             return NULL;
@@ -1658,7 +1644,6 @@ static __attribute__((unused)) UINT64 get_l2_slot_index(BOOLEAN is_kernel, UINT6
  */
 static UINT64* alloc_kernel_l3_from_flat_pool(UINT64 l0_slot)
 {
-    char buf[256];
     UINT64 flat_idx = arm64_l3_next_index[l0_slot];
 
     /* Debug: check if arm64_kernel_l3_tables is NULL */
@@ -1670,12 +1655,6 @@ static UINT64* alloc_kernel_l3_from_flat_pool(UINT64 l0_slot)
 
     if (flat_idx >= ARM64_L3_TABLES_PER_L0)
     {
-        RtlStringCbPrintfA(buf, sizeof(buf),
-            "[L3] Kernel L3 pool exhausted for L0=%llu flat_idx=%llu limit=%u\n",
-            (unsigned long long)l0_slot,
-            (unsigned long long)flat_idx,
-            ARM64_L3_TABLES_PER_L0);
-        Pl011RawPuts(buf);
         return allocate_pt_pages(1, "TTBR1 L3 (kernel spill)");
     }
 
@@ -1700,13 +1679,6 @@ static UINT64* alloc_user_l3_from_flat_pool(UINT64 l0_slot)
     UINT64 flat_idx = arm64_user_l3_next_index[l0_slot];
     if (flat_idx >= ARM64_L3_TABLES_PER_L0)
     {
-        char buf[256];
-        RtlStringCbPrintfA(buf, sizeof(buf),
-            "[L3] User L3 pool exhausted for L0=%llu flat_idx=%llu limit=%u\n",
-            (unsigned long long)l0_slot,
-            (unsigned long long)flat_idx,
-            ARM64_L3_TABLES_PER_L0);
-        Pl011RawPuts(buf);
         return allocate_pt_pages(1, "TTBR0 L3 (user spill)");
     }
 
@@ -1752,12 +1724,6 @@ static UINT64* alloc_extra_l3_from_flat_pool(UINT64 extra_slot)
 
     if (flat_idx >= ARM64_EXTRA_L3_PER_SLOT)
     {
-        RtlStringCbPrintfA(buf, sizeof(buf),
-            "[L3] Extra L3 pool exhausted for extra_slot=%llu flat_idx=%llu limit=%u\n",
-            (unsigned long long)extra_slot,
-            (unsigned long long)flat_idx,
-            ARM64_EXTRA_L3_PER_SLOT);
-        Pl011RawPuts(buf);
         return allocate_pt_pages(1, "TTBR1 L3 (extra spill)");
     }
 
