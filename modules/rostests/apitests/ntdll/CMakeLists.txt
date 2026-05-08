@@ -52,7 +52,6 @@ list(APPEND SOURCE
     NtAllocateVirtualMemory.c
     NtApphelpCacheControl.c
     NtCompareTokens.c
-    NtContinue.c
     NtCreateFile.c
     NtCreateKey.c
     NtCreateProfile.c
@@ -146,9 +145,14 @@ list(APPEND SOURCE
     RtlxUnicodeStringToOemSize.c
     StackOverflow.c
     SystemInfo.c
-    UserModeException.c
     Timer.c
     precomp.h)
+
+if(ARCH STREQUAL "i386" OR ARCH STREQUAL "amd64")
+    list(APPEND SOURCE
+        NtContinue.c
+        UserModeException.c)
+endif()
 
 if(ARCH STREQUAL "i386")
     add_asm_files(ntdll_apitest_asm

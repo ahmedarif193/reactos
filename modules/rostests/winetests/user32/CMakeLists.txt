@@ -43,7 +43,7 @@ if(MSVC)
     remove_target_compile_option(user32_winetest "/we4477")
 endif()
 
-if(CMAKE_C_COMPILER_ID STREQUAL "GNU")
+if(NOT MSVC)
     target_compile_options(user32_winetest PRIVATE
     -UNTDDI_VERSION -DNTDDI_VERSION=0x0A000005
     -U_WIN32_WINNT -D_WIN32_WINNT=0x0A00
