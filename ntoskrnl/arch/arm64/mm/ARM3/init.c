@@ -166,21 +166,14 @@ MiArm64SyncL0ToRoot(ULONG L0Index, UINT64 Desc)
     __asm__ __volatile__("dsb ishst" ::: "memory");
 }
 
-#define ARM64_PTE_AF                (1ULL << 10)  /* Access Flag - required for L3 page entries */
-#define ARM64_PTE_SH_INNER          (3ULL << 8)   /* Inner Shareable */
+#define ARM64_PTE_AF                PTE_ACCESSED  /* Access Flag - required for L3 page entries */
 #define ARM64_PTE_AP_RW_EL1         (0ULL << 6)   /* EL1 R/W, EL0 no access */
 #define ARM64_TCR_HA                (1ULL << 39)  /* Hardware Access Flag update */
 #define ARM64_TCR_TSZ_MASK          0x3FULL
 #define ARM64_TCR_T1SZ_SHIFT        16
-#define ARM64_PTE_TABLE_COMPAT      (ARM64_PTE_AF | ARM64_PTE_SH_INNER)
-#define ARM64_TABLE_DESC_BITS \
-    (ARM64_PTE_TYPE_TABLE | ARM64_PTE_TABLE_COMPAT | \
-     ((UINT64)MI_ARM64_MAIR_NORMAL_WB_IDX << 2))
+#define ARM64_TABLE_DESC_BITS       ARM64_PTE_TABLE_DESCRIPTOR_ATTRS
 #define MI_ARM64_MAKE_TABLE_DESC(Pfn) \
-    (((UINT64)(Pfn) << PAGE_SHIFT) | ARM64_TABLE_DESC_BITS)
-
-#define MI_ARM64_MAKE_SELFMAP_DESC(Pfn) \
-    MI_ARM64_MAKE_TABLE_DESC(Pfn)
+    ARM64_MAKE_TABLE_DESCRIPTOR(Pfn)
 
 static __inline PVOID
 MiArm64PhysToKseg0(UINT64 Phys)
@@ -815,6 +808,15 @@ MiArm64PublishAndZeroTableDesc(
     __asm__ __volatile__("dsb ishst" ::: "memory");
 }
 
+static __inline BOOLEAN
+MiArm64SelfMapEntryMatchesRoot(
+    _In_ UINT64 Entry,
+    _In_ PFN_NUMBER RootPfn)
+{
+    return (((Entry & ARM64_PTE_ADDR_MASK) == ((UINT64)RootPfn << PAGE_SHIFT)) &&
+            ((Entry & ~ARM64_PTE_ADDR_MASK) == ARM64_PTE_TABLE_DESCRIPTOR_ATTRS));
+}
+
 static
 PFN_NUMBER
 MiArm64AllocatePageTablePage(VOID)
@@ -1044,7 +1046,7 @@ MiArm64InitializeKernelSelfMap(VOID)
     UINT64 RootPa;
     PFN_NUMBER RootPfn;
     volatile UINT64 *RootL0;
-    UINT64 SelfDesc;
+    UINT64 SelfEntry;
 
     __asm__ __volatile__("mrs %0, ttbr1_el1" : "=r"(Ttbr1));
     RootPa = MI_ARM64_TTBR_TO_PA(Ttbr1);
@@ -1055,16 +1057,16 @@ MiArm64InitializeKernelSelfMap(VOID)
 
     RootPfn = (PFN_NUMBER)(RootPa >> PAGE_SHIFT);
     /*
-     * FreeLDR seeds the recursive entry before handoff. Use that window here:
-     * the active TTBR1 root may live above the initial KSEG0 direct-map coverage.
+     * A Windows-style ARM64 loader owns the TTBR1 hierarchy at handoff. The
+     * kernel validates and adopts the recursive slot instead of rebuilding it:
+     * touching PXE_BASE is only safe when L0[493] already points back to TTBR1.
      */
     RootL0 = (volatile UINT64 *)PXE_BASE;
-    SelfDesc = MI_ARM64_MAKE_SELFMAP_DESC(RootPfn);
+    SelfEntry = RootL0[PXE_SELFMAP_INDEX];
 
-    if (RootL0[PXE_SELFMAP_INDEX] != SelfDesc)
+    if (!MiArm64SelfMapEntryMatchesRoot(SelfEntry, RootPfn))
     {
-        RootL0[PXE_SELFMAP_INDEX] = SelfDesc;
-        MiArm64FlushTranslationChanges();
+        return FALSE;
     }
 
     return TRUE;
@@ -1561,8 +1563,6 @@ MiInitMachineDependent(_Inout_ PLOADER_PARAMETER_BLOCK LoaderBlock)
         {
             UINT64 Ttbr1;
             UINT64 RootPa;
-            volatile UINT64 *RootL0;
-            ULONG Index;
 
             __asm__ __volatile__("mrs %0, ttbr1_el1" : "=r"(Ttbr1));
             RootPa = MI_ARM64_TTBR_TO_PA(Ttbr1);
@@ -1575,25 +1575,12 @@ MiInitMachineDependent(_Inout_ PLOADER_PARAMETER_BLOCK LoaderBlock)
                              0);
             }
 
-            RootL0 = (volatile UINT64 *)PXE_BASE;
-            for (Index = 0; Index < (PXE_PER_PAGE / 2); Index++)
-            {
-                RootL0[Index] = 0;
-            }
-            __asm__ __volatile__("dsb ishst" ::: "memory");
-
-            __asm__ __volatile__(
-                "msr ttbr0_el1, %0\n\t"
-                "isb\n\t"
-                "tlbi vmalle1is\n\t"
-                "dsb ish\n\t"
-                "isb"
-                :: "r"(RootPa)
-                : "memory");
-
             {
                 PKTHREAD CurrentThread = KeGetCurrentThread();
                 PEPROCESS CurrentProcess;
+                UINT64 Ttbr0;
+                volatile UINT64 *RootL0;
+                ULONG Index;
 
                 if (CurrentThread == NULL)
                 {
@@ -1611,6 +1598,19 @@ MiInitMachineDependent(_Inout_ PLOADER_PARAMETER_BLOCK LoaderBlock)
                 }
 
                 CurrentProcess = (PEPROCESS)CurrentThread->ApcState.Process;
+                /*
+                 * Preserve the loader-installed TTBR1 root and recursive slot,
+                 * but do not keep the firmware/loader TTBR0 identity root live.
+                 * ARM3's current-process bookkeeping below records RootPa in
+                 * DTB0, so hardware TTBR0 must be synchronized to that root
+                 * before early user allocations start faulting in pages.
+                 */
+                RootL0 = (volatile UINT64 *)PXE_BASE;
+                for (Index = 0; Index < (PXE_PER_PAGE / 2); Index++)
+                {
+                    RootL0[Index] = 0;
+                }
+
                 CurrentProcess->Pcb.DirectoryTableBase[0] = (ULONG_PTR)RootPa;
                 CurrentProcess->Pcb.DirectoryTableBase[1] = (ULONG_PTR)RootPa;
 
@@ -1620,6 +1620,22 @@ MiInitMachineDependent(_Inout_ PLOADER_PARAMETER_BLOCK LoaderBlock)
                     PsIdleProcess->Pcb.DirectoryTableBase[0] = (ULONG_PTR)RootPa;
                     PsIdleProcess->Pcb.DirectoryTableBase[1] = (ULONG_PTR)RootPa;
                 }
+
+                __asm__ __volatile__("mrs %0, ttbr0_el1" : "=r"(Ttbr0));
+                if (MI_ARM64_TTBR_TO_PA(Ttbr0) != RootPa)
+                {
+                    DPRINT1("[arm64][MMINIT] switching TTBR0 from loader root "
+                            "0x%016llx to System DTB0 0x%016llx\n",
+                            (unsigned long long)MI_ARM64_TTBR_TO_PA(Ttbr0),
+                            (unsigned long long)RootPa);
+                }
+
+                __asm__ __volatile__("dsb ishst" ::: "memory");
+                __asm__ __volatile__("msr ttbr0_el1, %0" :: "r"(RootPa) : "memory");
+                __asm__ __volatile__("isb" ::: "memory");
+                __asm__ __volatile__("tlbi vmalle1is" ::: "memory");
+                __asm__ __volatile__("dsb ish" ::: "memory");
+                __asm__ __volatile__("isb" ::: "memory");
             }
 
         }

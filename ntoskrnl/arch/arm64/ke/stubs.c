@@ -152,11 +152,11 @@ ULONG_PTR MmGlobalKernelPageDirectory[4096];
 
 /*
  * IMPORTANT: On ARM64, page table descriptors must use the correct type bits.
- * - Table descriptors (L0/L1/L2 pointers) require bits[1:0] = 0b11 and AF=0.
- *   In our abstract HARDWARE_PTE, this corresponds to Valid=1 and
- *   NotLargePage=1, with Accessed cleared.
+ * - Table descriptors (L0/L1/L2 pointers) require bits[1:0] = 0b11.
+ * - NT also exposes those same descriptor values through recursive PTE-shaped
+ *   aliases, so the kernel table template must match the loader ABI exactly:
+ *   0x713 = table, Normal-WB, Inner Shareable, Accessed.
  * - Page descriptors (leaf L3 entries) also use bits[1:0] = 0b11 with AF=1.
- *   We model that by setting Valid=1, NotLargePage=1 and Accessed=1.
  *
  * The previous stub values only set Valid/Accessed, which made table
  * descriptors look like invalid/leaf entries to the hardware. That caused
@@ -174,18 +174,7 @@ MMPTE ValidKernelPte = {
     }
 };
 MMPDE ValidKernelPde = {
-    .u.Hard = {
-        .Valid = 1,
-        .NotLargePage = 1,
-        .OsAvailable2 = 1,
-        .Shareability = 3,   /* Inner Shareable - required for self-map coherence */
-        .Accessed = 1,       /* AF=1: on ARM64 with recursive self-map, PDEs are also
-                              * readable as L3 page descriptors. Without AF, CPUs that
-                              * lack hardware AF management (TCR.HA=0, e.g. Cortex-A72)
-                              * fault with an Access Flag fault, causing an infinite loop
-                              * in MiMakeSystemAddressValid. AF and SH bits are ignored
-                              * in table descriptors (ARMv8 D5.3.3) so this is safe. */
-    }
+    .u.Long = ARM64_PTE_TABLE_DESCRIPTOR_ATTRS
 };
 MMPTE DemandZeroPte = {.u.Long = (MM_READWRITE << MM_PTE_SOFTWARE_PROTECTION_BITS)};
 MMPDE DemandZeroPde = {.u.Long = (MM_READWRITE << MM_PTE_SOFTWARE_PROTECTION_BITS)};
@@ -208,13 +197,7 @@ MMPTE ValidKernelPteLocal = {
     }
 };
 MMPDE ValidKernelPdeLocal = {
-    .u.Hard = {
-        .Valid = 1,
-        .NotLargePage = 1,
-        .OsAvailable2 = 1,
-        .Shareability = 3,
-        .Accessed = 1
-    }
+    .u.Long = ARM64_PTE_TABLE_DESCRIPTOR_ATTRS
 };
 
 /* Template PTE for decommitted page.
