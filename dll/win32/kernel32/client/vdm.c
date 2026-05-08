@@ -754,7 +754,8 @@ BaseCreateVDMEnvironment(IN PWCHAR lpEnvironment,
 
     BOOL Success = FALSE;
     NTSTATUS Status;
-    ULONG EnvironmentSize = 0;
+    SIZE_T EnvironmentSize = 0;
+    SIZE_T EnvironmentSizeInBytes = 0;
     SIZE_T RegionSize;
     PWCHAR Environment, NewEnvironment = NULL;
     ENV_NAME_TYPE NameType;
@@ -794,10 +795,18 @@ BaseCreateVDMEnvironment(IN PWCHAR lpEnvironment,
      * Count how much space the whole environment takes. The environment block is
      * doubly NULL-terminated (NULL from last string and final NULL terminator).
      */
-    SourcePtr = Environment;
-    while (!(*SourcePtr++ == UNICODE_NULL && *SourcePtr == UNICODE_NULL))
-        ++EnvironmentSize;
-    EnvironmentSize += 2; // Add the two terminating NULLs
+    Status = BasepQueryEnvironmentSizeW(Environment, &EnvironmentSizeInBytes);
+    if (!NT_SUCCESS(Status))
+    {
+        SetLastError(ERROR_BAD_ENVIRONMENT);
+        goto Cleanup;
+    }
+    EnvironmentSize = EnvironmentSizeInBytes / sizeof(WCHAR);
+    if (EnvironmentSize > (MAXULONG_PTR / sizeof(WCHAR)) - MAX_PATH)
+    {
+        SetLastError(ERROR_BAD_ENVIRONMENT);
+        goto Cleanup;
+    }
 
     /*
      * Allocate a new copy large enough to hold all the environment with paths
