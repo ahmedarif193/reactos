@@ -449,6 +449,100 @@ static void CmSecurity_Win8(PSID TerminalServerSid)
                         ACCESS_ALLOWED_ACE_TYPE,                     0, SeExports->SeAllAppPackagesSid, KEY_READ);
 }
 
+static BOOLEAN
+CmSecurityIsWinPE(VOID)
+{
+    NTSTATUS Status;
+    UNICODE_STRING KeyNameString;
+    OBJECT_ATTRIBUTES ObjectAttributes;
+    HANDLE KeyHandle;
+
+    RtlInitUnicodeString(&KeyNameString,
+                         L"\\REGISTRY\\MACHINE\\SYSTEM\\CurrentControlSet\\Control\\MiniNT");
+    InitializeObjectAttributes(&ObjectAttributes,
+                               &KeyNameString,
+                               OBJ_KERNEL_HANDLE | OBJ_CASE_INSENSITIVE,
+                               NULL,
+                               NULL);
+
+    Status = ZwOpenKey(&KeyHandle, KEY_READ, &ObjectAttributes);
+    if (NT_SUCCESS(Status))
+    {
+        ObCloseHandle(KeyHandle, KernelMode);
+        return TRUE;
+    }
+
+    return FALSE;
+}
+
+static BOOLEAN
+CmSecurityHasRegistryAclBaseline(VOID)
+{
+    NTSTATUS Status;
+    UNICODE_STRING KeyNameString;
+    OBJECT_ATTRIBUTES ObjectAttributes;
+    HANDLE KeyHandle;
+    PSECURITY_DESCRIPTOR SecurityDescriptor;
+    ULONG SecurityDescriptorSize;
+    PSID Owner = NULL;
+    PSID Group = NULL;
+    BOOLEAN Defaulted;
+    BOOLEAN HasBaseline = FALSE;
+
+    RtlInitUnicodeString(&KeyNameString, L"\\REGISTRY");
+    InitializeObjectAttributes(&ObjectAttributes,
+                               &KeyNameString,
+                               OBJ_KERNEL_HANDLE,
+                               NULL,
+                               NULL);
+
+    Status = ZwOpenKey(&KeyHandle, READ_CONTROL, &ObjectAttributes);
+    if (!NT_SUCCESS(Status))
+        return FALSE;
+
+    Status = ZwQuerySecurityObject(KeyHandle,
+                                   OWNER_SECURITY_INFORMATION | GROUP_SECURITY_INFORMATION,
+                                   NULL,
+                                   0,
+                                   &SecurityDescriptorSize);
+    if (Status != STATUS_BUFFER_TOO_SMALL)
+    {
+        ObCloseHandle(KeyHandle, KernelMode);
+        return FALSE;
+    }
+
+    SecurityDescriptor = ExAllocatePoolWithTag(PagedPool,
+                                               SecurityDescriptorSize,
+                                               'dSmK');
+    if (SecurityDescriptor == NULL)
+    {
+        ObCloseHandle(KeyHandle, KernelMode);
+        return FALSE;
+    }
+
+    Status = ZwQuerySecurityObject(KeyHandle,
+                                   OWNER_SECURITY_INFORMATION | GROUP_SECURITY_INFORMATION,
+                                   SecurityDescriptor,
+                                   SecurityDescriptorSize,
+                                   &SecurityDescriptorSize);
+    if (NT_SUCCESS(Status) &&
+        NT_SUCCESS(RtlGetOwnerSecurityDescriptor(SecurityDescriptor,
+                                                 &Owner,
+                                                 &Defaulted)) &&
+        NT_SUCCESS(RtlGetGroupSecurityDescriptor(SecurityDescriptor,
+                                                 &Group,
+                                                 &Defaulted)) &&
+        RtlEqualSid(Owner, SeExports->SeAliasAdminsSid) &&
+        RtlEqualSid(Group, SeExports->SeLocalSystemSid))
+    {
+        HasBaseline = TRUE;
+    }
+
+    ExFreePoolWithTag(SecurityDescriptor, 'dSmK');
+    ObCloseHandle(KeyHandle, KernelMode);
+    return HasBaseline;
+}
+
 START_TEST(CmSecurity)
 {
     SID_IDENTIFIER_AUTHORITY NtSidAuthority = {SECURITY_NT_AUTHORITY};
@@ -461,6 +555,18 @@ START_TEST(CmSecurity)
     {
         RtlInitializeSid(TerminalServerSid, &NtSidAuthority, 1);
         *RtlSubAuthoritySid(TerminalServerSid, 0) = SECURITY_TERMINAL_SERVER_RID;
+    }
+
+    if (skip(!CmSecurityIsWinPE(),
+             "CmSecurity requires an installed Windows registry, not WinPE\n"))
+    {
+        goto Cleanup;
+    }
+
+    if (skip(CmSecurityHasRegistryAclBaseline(),
+             "CmSecurity requires the installed Windows registry ACL baseline\n"))
+    {
+        goto Cleanup;
     }
 
     switch (GetNTVersion())
@@ -478,9 +584,9 @@ START_TEST(CmSecurity)
             CmSecurity_Win8(TerminalServerSid);
             break;
         default:
-            if (GetNTVersion() < _WIN32_WINNT_WS03)
+            if (GetNTVersion() < _WIN32_WINNT_VISTA)
             {
-                trace("Unknown NT version (0x%X < 0x%X), running WS03 tests...\n", GetNTVersion(), _WIN32_WINNT_WS03);
+                trace("Unknown NT 5.x version (0x%X), running WS03 tests...\n", GetNTVersion());
                 CmSecurity_WS03(TerminalServerSid);
             }
             else
@@ -491,6 +597,7 @@ START_TEST(CmSecurity)
             break;
     }
 
+Cleanup:
     if (TerminalServerSid != NULL)
     {
         ExFreePoolWithTag(TerminalServerSid, 'iSmK');

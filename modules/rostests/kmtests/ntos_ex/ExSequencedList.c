@@ -14,6 +14,9 @@ struct _SINGLE_LIST_ENTRY *__fastcall ExInterlockedPopEntrySList(union _SLIST_HE
 
 /* TODO: SLIST_HEADER is a lot different for x64 */
 #ifndef _M_AMD64
+/* i386 NT 5.x collapses HIGH_LEVEL and POWER_LEVEL, reporting
+ * POWER_LEVEL (30) after KeRaiseIrql(HIGH_LEVEL=31). All other
+ * platforms / versions report HIGH_LEVEL correctly. */
 #define CheckSListHeader(ListHead, ExpectedPointer, ExpectedDepth) do   \
 {                                                                       \
     ok_eq_pointer((ListHead)->Next.Next, ExpectedPointer);              \
@@ -21,12 +24,12 @@ struct _SINGLE_LIST_ENTRY *__fastcall ExInterlockedPopEntrySList(union _SLIST_HE
     ok_eq_uint((ListHead)->Depth, ExpectedDepth);                       \
     ok_eq_uint((ListHead)->Sequence, ExpectedSequence);                 \
     ok_eq_uint(ExQueryDepthSList(ListHead), ExpectedDepth);             \
-    /* NT 5.x i386 reports POWER_LEVEL after KeRaiseIrql(HIGH_LEVEL).   \
-     * Accept either. */                                                \
     {                                                                   \
         KIRQL _ir = KeGetCurrentIrql();                                 \
-        ok(_ir == HIGH_LEVEL || _ir == POWER_LEVEL,                     \
-           "IRQL is %u, expected HIGH_LEVEL or POWER_LEVEL\n", _ir);    \
+        KIRQL _expect = HIGH_LEVEL;                                     \
+        if (KmtIsNt5I386())                                           \
+            _expect = POWER_LEVEL;                                      \
+        ok_eq_uint(_ir, _expect);                                       \
     }                                                                   \
     ok_bool_true(KmtAreInterruptsEnabled(), "Interrupts enabled:");     \
 } while (0)

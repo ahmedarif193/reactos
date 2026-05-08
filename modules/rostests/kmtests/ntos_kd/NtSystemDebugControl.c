@@ -115,9 +115,16 @@ START_TEST(NtSystemDebugControl)
     {
         Status = TestSystemDebugControl((SYSDBG_COMMAND)Command);
         if (!IsVistaOrHigher || IsDebuggerActive)
-            ok_neq_hex_test(Command, Status, STATUS_INVALID_INFO_CLASS);
+        {
+            if (!IsVistaOrHigher && Command == SysDbgQueryModuleInformation)
+                ok_eq_hex_test(Command, Status, STATUS_INVALID_INFO_CLASS);
+            else
+                ok_neq_hex_test(Command, Status, STATUS_INVALID_INFO_CLASS);
+        }
         else
+        {
             ok_eq_hex_test(Command, Status, STATUS_DEBUGGER_INACTIVE);
+        }
     }
 
     /* Test SysDbgBreakPoint (6) only when the debugger is inactive
@@ -126,7 +133,11 @@ START_TEST(NtSystemDebugControl)
         "NtSystemDebugControl(SysDbgBreakPoint) skipped because the debugger is active\n"))
     {
         Status = TestSystemDebugControl(SysDbgBreakPoint /* 6 */);
-        if (!SharedUserData->KdDebuggerEnabled /*&& (!IsVistaOrHigher || IsDebuggerActive)*/)
+        if (IsVistaOrHigher && !IsDebuggerActive)
+        {
+            ok_eq_hex_test(Command, Status, STATUS_DEBUGGER_INACTIVE);
+        }
+        else if (!SharedUserData->KdDebuggerEnabled)
         {
             ok_eq_hex_test(Command, Status, STATUS_UNSUCCESSFUL);
         }
@@ -162,7 +173,19 @@ START_TEST(NtSystemDebugControl)
     {
         Status = TestSystemDebugControl((SYSDBG_COMMAND)Command);
         if (!IsVistaOrHigher || IsDebuggerActive)
-            ok_eq_hex_test(Command, Status, STATUS_NOT_IMPLEMENTED);
+        {
+            if (!IsVistaOrHigher)
+            {
+                if (Command == SysDbgCheckLowMemory)
+                    ok_eq_hex_test(Command, Status, STATUS_NOT_IMPLEMENTED);
+                else
+                    ok_eq_hex_test(Command, Status, STATUS_INFO_LENGTH_MISMATCH);
+            }
+            else
+            {
+                ok_eq_hex_test(Command, Status, STATUS_NOT_IMPLEMENTED);
+            }
+        }
         else
             ok_eq_hex_test(Command, Status, STATUS_DEBUGGER_INACTIVE);
     }
@@ -233,9 +256,26 @@ START_TEST(NtSystemDebugControl)
     {
         Status = TestSystemDebugControl((SYSDBG_COMMAND)Command);
         if (!IsVistaOrHigher || IsDebuggerActive)
-            ok_neq_hex_test(Command, Status, STATUS_INVALID_INFO_CLASS);
+        {
+            if (!IsVistaOrHigher)
+            {
+                if (Command <= 28)
+                    ok_eq_hex_test(Command, Status, STATUS_INFO_LENGTH_MISMATCH);
+                else
+                    ok_eq_hex_test(Command, Status, STATUS_INVALID_INFO_CLASS);
+            }
+            else
+            {
+                ok_neq_hex_test(Command, Status, STATUS_INVALID_INFO_CLASS);
+            }
+        }
         else
-            ok_eq_hex_test(Command, Status, STATUS_DEBUGGER_INACTIVE);
+        {
+            if (Command == SysDbgGetTriageDump)
+                ok_eq_hex_test(Command, Status, STATUS_INFO_LENGTH_MISMATCH);
+            else
+                ok_eq_hex_test(Command, Status, STATUS_DEBUGGER_INACTIVE);
+        }
     }
 
     /* These are Vista+ and depend on the OS version */

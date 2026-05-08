@@ -225,7 +225,13 @@ TestConnect(
     /* Close server */
     Status = ObCloseHandle(ServerHandle, KernelMode);
     ok_eq_hex(Status, STATUS_SUCCESS);
-    CheckClient(ClientHandle, FILE_PIPE_CLOSING_STATE);
+    NpCheckClientPipe(ClientHandle,
+                      BYTE_STREAM, QUEUE, BYTE_STREAM, DUPLEX,
+                      MAX_INSTANCES,
+                      GetNTVersion() >= _WIN32_WINNT_VISTA ? 0 : 1,
+                      IN_QUOTA, 0,
+                      OUT_QUOTA, OUT_QUOTA,
+                      FILE_PIPE_CLOSING_STATE);
 
     /* Close client */
     if (ClientHandle)

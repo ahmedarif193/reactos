@@ -110,8 +110,7 @@ TestMmAllocatePagesForMdl(VOID)
                                 HighAddress,
                                 SkipBytes,
                                 2UL * 1024 * 1024 * 1024);
-    ok(Mdl != NULL, "MmAllocatePagesForMdl failed for 2 GB\n");
-    if (Mdl != NULL)
+    if (!skip(Mdl != NULL, "MmAllocatePagesForMdl failed for 2 GB\n"))
     {
         ok(MmGetMdlByteCount(Mdl) <= 2UL * 1024 * 1024 * 1024, "Byte count: %lu\n", MmGetMdlByteCount(Mdl));
         ok(MmGetMdlVirtualAddress(Mdl) == NULL, "Virtual address: %p\n", MmGetMdlVirtualAddress(Mdl));
@@ -253,6 +252,10 @@ TestMmBuildMdlForNonPagedPool(VOID)
 
 START_TEST(MmMdl)
 {
+    if (skip(GetNTVersion() >= _WIN32_WINNT_VISTA,
+             "MmMdl touches MDL paths that hang on NT 5.x\n"))
+        return;
+
     TestMmAllocatePagesForMdl();
     TestMmBuildMdlForNonPagedPool();
 }

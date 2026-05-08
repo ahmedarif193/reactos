@@ -5,50 +5,45 @@
  * PROGRAMMER:      Aleksey Bragin <aleksey@reactos.org>
  */
 
-/* TODO: this test doesn't process any test results; it also takes very long */
-
 #include <kmt_test.h>
 
 #define NDEBUG
 #include <debug.h>
 
-static VOID KeStallExecutionProcessorTest(VOID)
+#define STALL_SECONDS 10
+
+static
+VOID
+CheckStallDuration(
+    _In_z_ PCSTR Description,
+    _In_ ULONG MicroSeconds,
+    _In_ ULONG Iterations)
 {
     ULONG i;
     LARGE_INTEGER TimeStart, TimeFinish;
+    LONGLONG ExpectedSeconds, ElapsedSeconds;
 
-    DPRINT1("Waiting for 30 secs with 50us stalls...\n");
+    DPRINT1("Waiting for %d secs with %s...\n", STALL_SECONDS, Description);
     KeQuerySystemTime(&TimeStart);
-    for (i = 0; i < (30*1000*20); i++)
+    for (i = 0; i < Iterations; i++)
     {
-        KeStallExecutionProcessor(50);
+        KeStallExecutionProcessor(MicroSeconds);
     }
     KeQuerySystemTime(&TimeFinish);
-    DPRINT1("Time elapsed: %d secs\n", (TimeFinish.QuadPart - TimeStart.QuadPart) / 10000000); // 30
 
-    DPRINT1("Waiting for 30 secs with 1000us stalls...\n");
-    KeQuerySystemTime(&TimeStart);
-    for (i = 0; i < (30*1000); i++)
-    {
-        KeStallExecutionProcessor(1000);
-    }
-    KeQuerySystemTime(&TimeFinish);
-    DPRINT1("Time elapsed: %d secs\n", (TimeFinish.QuadPart - TimeStart.QuadPart) / 10000000); // 30
+    ExpectedSeconds = ((LONGLONG)MicroSeconds * Iterations) / 1000000;
+    ElapsedSeconds = (TimeFinish.QuadPart - TimeStart.QuadPart) / 10000000;
+    ok(ElapsedSeconds >= ExpectedSeconds - 1,
+       "%s returned too early: %I64d seconds, expected at least %I64d seconds\n",
+       Description, ElapsedSeconds, ExpectedSeconds - 1);
+}
 
-    DPRINT1("Waiting for 30 secs with 1us stalls...\n");
-    KeQuerySystemTime(&TimeStart);
-    for (i = 0; i < (30*1000*1000); i++)
-    {
-        KeStallExecutionProcessor(1);
-    }
-    KeQuerySystemTime(&TimeFinish);
-    DPRINT1("Time elapsed: %d secs\n", (TimeFinish.QuadPart - TimeStart.QuadPart) / 10000000); // 43
-
-    DPRINT1("Waiting for 30 secs with one huge stall...\n");
-    KeQuerySystemTime(&TimeStart);
-    KeStallExecutionProcessor(30*1000000);
-    KeQuerySystemTime(&TimeFinish);
-    DPRINT1("Time elapsed: %d secs\n", (TimeFinish.QuadPart - TimeStart.QuadPart) / 10000000); // 30
+static VOID KeStallExecutionProcessorTest(VOID)
+{
+    CheckStallDuration("50us stalls", 50, STALL_SECONDS * 1000 * 20);
+    CheckStallDuration("1000us stalls", 1000, STALL_SECONDS * 1000);
+    CheckStallDuration("1us stalls", 1, STALL_SECONDS * 1000 * 1000);
+    CheckStallDuration("one huge stall", STALL_SECONDS * 1000000, 1);
 }
 
 START_TEST(KeProcessor)

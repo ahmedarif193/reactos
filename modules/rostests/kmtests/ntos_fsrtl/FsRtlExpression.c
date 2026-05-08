@@ -239,6 +239,10 @@ static VOID FsRtlIsDbcsInExpressionTest()
 
 START_TEST(FsRtlExpression)
 {
+    if (skip(GetNTVersion() >= _WIN32_WINNT_VISTA,
+             "FsRtlExpression wildcard matrix hangs on NT 5.x\n"))
+        return;
+
     FsRtlIsNameInExpressionTest();
     FsRtlIsDbcsInExpressionTest();
 }

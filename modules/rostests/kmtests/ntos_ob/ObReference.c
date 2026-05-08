@@ -172,6 +172,7 @@ START_TEST(ObReference)
         { L"\\YayDirectory7",   OBJ_CASE_INSENSITIVE | OBJ_KERNEL_HANDLE | OBJ_PERMANENT,   1 },
     };
     HANDLE ObjectTypeHandle = NULL;
+    BOOLEAN ObDirectoryObjectTypeReferenced = FALSE;
 
     /* ObReferenceObjectByName needs the object type... so get it... */
     RtlInitUnicodeString(&Name, L"\\ObjectTypes\\Directory");
@@ -193,6 +194,7 @@ START_TEST(ObReference)
         Status = ObReferenceObjectByHandle(ObjectTypeHandle, 0, NULL, KernelMode, (PVOID)&ObDirectoryObjectType, NULL);
         ok_eq_hex(Status, STATUS_SUCCESS);
         ok(ObDirectoryObjectType != NULL, "ObDirectoryObjectType = NULL\n");
+        ObDirectoryObjectTypeReferenced = NT_SUCCESS(Status) && ObDirectoryObjectType != NULL;
         Status = ZwClose(ObjectTypeHandle);
         ok_eq_hex(Status, STATUS_SUCCESS);
     }
@@ -283,7 +285,8 @@ START_TEST(ObReference)
 
     if (ObDirectoryObjectType)
     {
-        ObDereferenceObject(ObDirectoryObjectType);
+        if (ObDirectoryObjectTypeReferenced)
+            ObDereferenceObject(ObDirectoryObjectType);
         ObDirectoryObjectType = NULL;
     }
 }

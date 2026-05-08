@@ -66,7 +66,7 @@ TestStackWalk4(VOID)
         ExceptionStatus = _SEH2_GetExceptionCode();
     }
     _SEH2_END;
-    if (GetNTVersion() == _WIN32_WINNT_WS03)
+    if (GetNTVersion() < _WIN32_WINNT_VISTA)
         ok_eq_hex(ExceptionStatus, STATUS_ACCESS_VIOLATION);
     else
         ok_eq_hex(ExceptionStatus, STATUS_SUCCESS);

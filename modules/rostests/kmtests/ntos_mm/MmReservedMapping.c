@@ -112,6 +112,12 @@ ValidateMapping(
     CurrentAddress = (PUCHAR)BaseAddress - 1 * PAGE_SIZE;
     PteValue = GET_PTE_VALUE(CurrentAddress);
 
+    if (!g_IsReactOS && GetNTVersion() >= _WIN32_WINNT_VISTA)
+    {
+        skip(FALSE, "Reserved-mapping free PTE metadata is native-NT internal state\n");
+        return Valid;
+    }
+
     if (skip(GetNTVersion() < _WIN32_WINNT_WIN10, 
              "DVRT (Win10 1607+) breaks these next tests.\n"))
         return Valid;

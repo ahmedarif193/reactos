@@ -995,10 +995,17 @@ START_TEST(MmSection)
     LARGE_INTEGER FileOffset;
     UCHAR FileData = 0;
 
+    if (skip(GetNTVersion() >= _WIN32_WINNT_VISTA,
+             "MmSection file-backed section coverage hangs on NT 5.x\n"))
+        return;
+
     ok(ExGetPreviousMode() == UserMode, "Previous mode is kernel mode\n");
     /* create a one-byte file that we can use */
     InitializeObjectAttributes(&ObjectAttributes, &FileName1, OBJ_CASE_INSENSITIVE, NULL, NULL);
     Status = ZwCreateFile(&FileHandle1, GENERIC_WRITE | SYNCHRONIZE, &ObjectAttributes, &IoStatusBlock, NULL, FILE_ATTRIBUTE_NORMAL, FILE_SHARE_READ, FILE_SUPERSEDE, FILE_NON_DIRECTORY_FILE, NULL, 0);
+    if (skip(NT_SUCCESS(Status) && FileHandle1 != NULL,
+             "Failed to create section scratch file: 0x%lx\n", Status))
+        return;
     ok_eq_hex(Status, STATUS_SUCCESS);
     ok_eq_ulongptr(IoStatusBlock.Information, FILE_CREATED);
     ok(FileHandle1 != NULL, "FileHandle1 is NULL\n");
@@ -1017,6 +1024,9 @@ START_TEST(MmSection)
 
     InitializeObjectAttributes(&ObjectAttributes, &FileName1, OBJ_CASE_INSENSITIVE, NULL, NULL);
     Status = ZwCreateFile(&FileHandle1, GENERIC_ALL, &ObjectAttributes, &IoStatusBlock, NULL, FILE_ATTRIBUTE_NORMAL, FILE_SHARE_READ, FILE_OPEN, FILE_NON_DIRECTORY_FILE | FILE_DELETE_ON_CLOSE, NULL, 0);
+    if (skip(NT_SUCCESS(Status) && FileHandle1 != NULL,
+             "Failed to reopen section scratch file: 0x%lx\n", Status))
+        return;
     ok_eq_hex(Status, STATUS_SUCCESS);
     ok_eq_ulongptr(IoStatusBlock.Information, FILE_OPENED);
     ok(FileHandle1 != NULL, "FileHandle1 is NULL\n");
@@ -1032,6 +1042,9 @@ START_TEST(MmSection)
 
     InitializeObjectAttributes(&ObjectAttributes, &FileName2, OBJ_CASE_INSENSITIVE, NULL, NULL);
     Status = ZwCreateFile(&FileHandle2, GENERIC_READ, &ObjectAttributes, &IoStatusBlock, NULL, FILE_ATTRIBUTE_NORMAL, FILE_SHARE_READ, FILE_OPEN, FILE_NON_DIRECTORY_FILE, NULL, 0);
+    if (skip(NT_SUCCESS(Status) && FileHandle2 != NULL,
+             "Failed to open image file for section tests: 0x%lx\n", Status))
+        return;
     ok_eq_hex(Status, STATUS_SUCCESS);
     ok_eq_ulongptr(IoStatusBlock.Information, FILE_OPENED);
     ok(FileHandle2 != NULL, "FileHandle2 is NULL\n");

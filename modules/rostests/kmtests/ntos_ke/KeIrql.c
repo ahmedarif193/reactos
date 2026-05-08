@@ -18,15 +18,15 @@ __declspec(dllimport) void __stdcall KeLowerIrql(unsigned char);
 #define NDEBUG
 #include <debug.h>
 
-/* On i386 NT 5.x the HAL collapses HIGH_LEVEL (31) and POWER_LEVEL (30) into
- * a single hardware mask level on UP, so KeGetCurrentIrql() reports 30 after
- * a successful KeRaiseIrql(HIGH_LEVEL). Accept either when the test asks for
- * HIGH_LEVEL specifically. */
+/* i386 NT 5.x collapses HIGH_LEVEL (31) and POWER_LEVEL (30) into
+ * a single hardware mask level, reporting POWER_LEVEL after
+ * KeRaiseIrql(HIGH_LEVEL). All other platforms/versions report HIGH_LEVEL. */
 #define ok_irql_high() do {                                                     \
-    KIRQL _cur = KeGetCurrentIrql();                                            \
-    ok(_cur == HIGH_LEVEL || _cur == POWER_LEVEL,                               \
-       "IRQL is %u, expected HIGH_LEVEL (%u) or POWER_LEVEL (%u)\n",             \
-       _cur, HIGH_LEVEL, POWER_LEVEL);                                          \
+    KIRQL _expect = HIGH_LEVEL;                                                 \
+    /* i386 NT 5.x reports POWER_LEVEL for a HIGH_LEVEL raise. */               \
+    if (KmtIsNt5I386())                                                        \
+        _expect = POWER_LEVEL;                                                  \
+    ok_eq_uint(KeGetCurrentIrql(), _expect);                                     \
 } while (0)
 
 #define ok_irql_compat(Expected) do {                                           \
@@ -136,14 +136,19 @@ START_TEST(KeIrql)
     KeLowerIrql(PASSIVE_LEVEL);
 
     /* test KeRaiseIrqlToSynchLevel
-     * Win7 returns DISPATCH_LEVEL (2) here on this single-CPU QEMU path even
-     * when KmtIsMultiProcessorBuild is reported true (ReactOS hard-coded
-     * IPI_LEVEL-2 = 12). Probe the real SYNCH_LEVEL at runtime instead. */
+     * UP: always DISPATCH_LEVEL. MP: x64 uses DISPATCH_LEVEL, x86 uses
+     * IPI_LEVEL-2 (the HAL determines the actual SYNCH_LEVEL). */
     ok_irql(PASSIVE_LEVEL);
     Irql = KeRaiseIrqlToSynchLevel();
     SynchIrql = KeGetCurrentIrql();
-    ok(SynchIrql == DISPATCH_LEVEL || SynchIrql == IPI_LEVEL - 2,
-       "SynchIrql is %u, expected DISPATCH_LEVEL or IPI_LEVEL-2\n", SynchIrql);
+    if (KmtIsMultiProcessorBuild)
+#ifdef _M_AMD64
+        ok_eq_uint(SynchIrql, DISPATCH_LEVEL);
+#else
+        ok_eq_uint(SynchIrql, IPI_LEVEL - 2);
+#endif
+    else
+        ok_eq_uint(SynchIrql, DISPATCH_LEVEL);
     ok_eq_uint(Irql, PASSIVE_LEVEL);
     Irql = KeRaiseIrqlToSynchLevel();
     ok_irql(SynchIrql);

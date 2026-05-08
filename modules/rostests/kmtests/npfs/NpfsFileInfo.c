@@ -81,7 +81,10 @@ TestFileInfo(
     ok_eq_longlong(FileAllInfo.PositionInformation.CurrentByteOffset.QuadPart, 0);
     ok_eq_ulong(FileAllInfo.ModeInformation.Mode, FILE_SYNCHRONOUS_IO_NONALERT);
     ok_eq_ulong(FileAllInfo.AlignmentInformation.AlignmentRequirement, 0);
-    ok_eq_ulong(FileAllInfo.NameInformation.FileNameLength, sizeof(PIPE_NAME) - sizeof(WCHAR));
+    if (GetNTVersion() < _WIN32_WINNT_VISTA)
+        ok_eq_ulong(FileAllInfo.NameInformation.FileNameLength, 6 * sizeof(WCHAR));
+    else
+        ok_eq_ulong(FileAllInfo.NameInformation.FileNameLength, sizeof(PIPE_NAME) - sizeof(WCHAR));
     ok_eq_size(RtlCompareMemory(FileAllInfo.NameInformation.FileName, PIPE_NAME, 6 * sizeof(WCHAR)), (6 * sizeof(WCHAR)));
     ok_eq_wchar(FileAllInfo.NameInformation.FileName[6], 0xFFFF);
     ok_eq_ulong(IoStatusBlock.Information, (FIELD_OFFSET(FILE_ALL_INFORMATION, NameInformation.FileName) + 6 * sizeof(WCHAR)));
@@ -92,6 +95,14 @@ TestFileInfo(
                                     &FileAllInfo,
                                     sizeof(FILE_ALL_INFORMATION) - 4,
                                     FileAllInformation);
+    if (GetNTVersion() < _WIN32_WINNT_VISTA)
+    {
+        ok_eq_hex(Status, STATUS_INFO_LENGTH_MISMATCH);
+        ok_eq_hex(IoStatusBlock.Status, STATUS_BUFFER_OVERFLOW);
+        ok_eq_ulong(IoStatusBlock.Information, sizeof(FILE_ALL_INFORMATION) + 8);
+        return;
+    }
+
     ok_eq_hex(Status, STATUS_BUFFER_OVERFLOW);
     ok_eq_hex(IoStatusBlock.Status, STATUS_BUFFER_OVERFLOW);
     ok_eq_longlong(FileAllInfo.BasicInformation.CreationTime.QuadPart, 0);

@@ -16,16 +16,22 @@ struct _LIST_ENTRY *__stdcall ExInterlockedRemoveHeadList(struct _LIST_ENTRY *, 
 
 LIST_ENTRY Entries[5];
 
-/* Win7+ checked builds fill removed list-entry pointers with
- * 0xBADDD0FFBADDD0FF; NT 5.x checked builds use 0x0BADD0FF instead.
- * Accept either as the "freed" sentinel so we test the same invariant
- * across versions. */
+/* Checked-build freed sentinels: Vista+ strictly uses 0xBADDD0FFBADDD0FF.
+ * Pre-Vista (2000/XP/2003) may use either 0x0BADD0FF (RTM) or
+ * 0xBADDD0FF (SP2+ / later hotfix); the transition is mid-XP-cycle,
+ * so accept both below Vista. */
 #define ok_eq_free(Value, Expected) do                                  \
 {                                                                       \
     if (KmtIsCheckedBuild)                                              \
-        ok((Value) == (PVOID)(ULONG_PTR)0xBADDD0FFBADDD0FFULL ||         \
-           (Value) == (PVOID)(ULONG_PTR)0x0BADD0FF0BADD0FFULL,          \
-           "%s = %p, expected freed sentinel\n", #Value, (Value));     \
+    {                                                                   \
+        if (GetNTVersion() >= _WIN32_WINNT_VISTA)                       \
+            ok_eq_pointer(Value,                                        \
+                (PVOID)(ULONG_PTR)0xBADDD0FFBADDD0FFULL);               \
+        else                                                            \
+            ok((Value) == (PVOID)(ULONG_PTR)0xBADDD0FFBADDD0FFULL ||      \
+               (Value) == (PVOID)(ULONG_PTR)0x0BADD0FF0BADD0FFULL,       \
+               "%s = %p, expected freed sentinel\n", #Value, (Value));  \
+    }                                                                   \
     else                                                                \
         ok_eq_pointer(Value, Expected);                                 \
 } while (0)
@@ -33,9 +39,15 @@ LIST_ENTRY Entries[5];
 #define ok_eq_free2(Value, Expected) do                                 \
 {                                                                       \
     if (KmtIsCheckedBuild)                                              \
-        ok((Value) == (PVOID)(ULONG_PTR)0xBADDD0FFBADDD0FFULL ||         \
-           (Value) == (PVOID)(ULONG_PTR)0x0BADD0FF0BADD0FFULL,          \
-           "%s = %p, expected freed sentinel\n", #Value, (Value));     \
+    {                                                                   \
+        if (GetNTVersion() >= _WIN32_WINNT_VISTA)                       \
+            ok_eq_pointer(Value,                                        \
+                (PVOID)(ULONG_PTR)0xBADDD0FFBADDD0FFULL);               \
+        else                                                            \
+            ok((Value) == (PVOID)(ULONG_PTR)0xBADDD0FFBADDD0FFULL ||      \
+               (Value) == (PVOID)(ULONG_PTR)0x0BADD0FF0BADD0FFULL,       \
+               "%s = %p, expected freed sentinel\n", #Value, (Value));  \
+    }                                                                   \
     else                                                                \
         ok_eq_pointer(Value, Expected);                                 \
 } while (0)

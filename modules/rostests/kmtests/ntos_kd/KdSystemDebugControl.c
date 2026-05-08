@@ -100,6 +100,13 @@ START_TEST(KdSystemDebugControl)
 
     trace("Debugger is %s\n", IsDebuggerActive ? "active" : "inactive");
 
+    Status = TestSystemDebugControl(SysDbgQueryVersion);
+    if (skip(Status != STATUS_ACCESS_DENIED,
+             "KdSystemDebugControl denied by system debugger policy\n"))
+    {
+        return;
+    }
+
     /* Unsupported commands */
     for (Command = 0; Command <= 6; ++Command)
     {

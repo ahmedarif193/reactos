@@ -31,9 +31,9 @@
          * CONTAINING_RECORD(TheEntry, KTHREAD, WaitBlock[0].WaitListEntry)     \
          * recovers a pointer 0x10 bytes off the real thread. Recover the       \
          * thread via KWAIT_BLOCK::Thread instead - KWAIT_BLOCK has a stable   \
-         * layout (WaitListEntry at 0x00, Thread at 0x10 on x64) across NT      \
-         * versions through Win7, so this is version-agnostic and avoids       \
-         * depending on the visible KTHREAD shape entirely. */                  \
+         * layout (WaitListEntry at 0x00, Thread at 0x10 on x64) from NT 5.x   \
+         * through Win7. Win8+ has a different KWAIT_BLOCK layout and is       \
+         * skipped below. */                                                   \
         TheThread = CONTAINING_RECORD(TheEntry, KWAIT_BLOCK,                    \
                                       WaitListEntry)->Thread;                   \
         ok_eq_pointer(TheThread, (ThreadList)[TheIndex]);                       \
@@ -179,6 +179,10 @@ TestEventConcurrent(
 
     LongTimeout.QuadPart = -100 * MILLISECOND;
     ShortTimeout.QuadPart = -1 * MILLISECOND;
+
+    if (skip(GetNTVersion() < _WIN32_WINNT_WIN8,
+             "TestEventConcurrent() wait-block layout is only validated through Win7.\n"))
+        return;
 
     KeInitializeEvent(Event, Type, FALSE);
 

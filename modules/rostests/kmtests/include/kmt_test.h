@@ -166,6 +166,12 @@ extern BOOLEAN KmtIsVirtualMachine;
 extern PCSTR KmtMajorFunctionNames[];
 extern PDRIVER_OBJECT KmtDriverObject;
 
+#ifdef _M_IX86
+#define KmtIsNt5I386() (GetNTVersion() < _WIN32_WINNT_VISTA)
+#else
+#define KmtIsNt5I386() FALSE
+#endif
+
 VOID KmtSetIrql(IN KIRQL NewIrql);
 BOOLEAN KmtAreInterruptsEnabled(VOID);
 ULONG KmtGetPoolTag(PVOID Memory);
@@ -406,6 +412,10 @@ VOID KmtFinishTest(PCSTR TestName)
                                     ResultBuffer->Failures,
                                     ResultBuffer->Skipped);
     KmtAddToLogBuffer(ResultBuffer, MessageBuffer, MessageLength);
+
+#ifdef KMT_USER_MODE
+    OutputDebugStringA(MessageBuffer);
+#endif
 }
 
 BOOLEAN KmtVOk(INT Condition, PCSTR FileAndLine, PCSTR Format, va_list Arguments)

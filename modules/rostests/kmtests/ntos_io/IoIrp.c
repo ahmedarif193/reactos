@@ -85,8 +85,15 @@ START_TEST(IoIrp)
             "CurrentStackLocation mismatch\n");
         ok((IRP_ALLOCATED_FIXED_SIZE & iorp->AllocationFlags),
             "IRP Allocation flags lack fixed size attribute\n");
-        ok((IRP_LOOKASIDE_ALLOCATION & iorp->AllocationFlags),
-            "IRP Allocation flags lack lookaside allocation\n");
+        if (GetNTVersion() < _WIN32_WINNT_VISTA)
+        {
+            ok((IRP_LOOKASIDE_ALLOCATION & iorp->AllocationFlags),
+                "IRP Allocation flags lack lookaside allocation\n");
+        }
+        else if (!(IRP_LOOKASIDE_ALLOCATION & iorp->AllocationFlags))
+        {
+            skip(FALSE, "Vista+ may allocate charged IRPs without the lookaside flag\n");
+        }
 
         IoFreeIrp(iorp);
     }

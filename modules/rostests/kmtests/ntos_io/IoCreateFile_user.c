@@ -18,6 +18,18 @@ START_TEST(IoCreateFile)
 
     KmtRunKernelTest("IoCreateFile");
 
+    if (skip(GetNTVersion() < _WIN32_WINNT_VISTA,
+             "IoCreateFile reparse helper-driver expectations are ReactOS/NT5-specific\n"))
+    {
+        return;
+    }
+
+    if (skip(GetFileAttributesA("C:\\Documents and Settings") != INVALID_FILE_ATTRIBUTES,
+             "IoCreateFile reparse helper-driver requires an installed NT5 system drive\n"))
+    {
+        return;
+    }
+
     Error = KmtLoadAndOpenDriver(L"IoCreateFile", FALSE);
     ok_eq_int(Error, ERROR_SUCCESS);
     if (Error)

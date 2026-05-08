@@ -41,12 +41,16 @@ VOID
         ok_eq_bool(pKeAreAllApcsDisabled(),                                             \
                    (LONG)(SpecialApcsDisabled) != 0 ||                                  \
                    ((Irql) >= APC_LEVEL));                                              \
-    /* NT 5.x i386 reports IRQL = POWER_LEVEL (30) after KeRaiseIrql(HIGH_LEVEL=31)    \
-     * because the HAL collapses both into a single hardware mask level on UP.        \
-     * Accept either when the test asked for HIGH_LEVEL. */                            \
-    if ((Irql) == HIGH_LEVEL)                                                           \
-        ok(KeGetCurrentIrql() == HIGH_LEVEL || KeGetCurrentIrql() == POWER_LEVEL,       \
-           "IRQL is %u, expected HIGH_LEVEL or POWER_LEVEL\n", KeGetCurrentIrql());     \
+    /* i386 NT 5.x reports POWER_LEVEL (30) after                         \
+     * KeRaiseIrql(HIGH_LEVEL=31); all other configs report HIGH_LEVEL.    \
+     * Resolve the exact expected IRQL at runtime. */                      \
+    if ((Irql) == HIGH_LEVEL)                                              \
+    {                                                                      \
+        KIRQL _expect = HIGH_LEVEL;                                        \
+        if (KmtIsNt5I386())                                              \
+            _expect = POWER_LEVEL;                                         \
+        ok_eq_uint(KeGetCurrentIrql(), _expect);                           \
+    }                                                                      \
     else                                                                                \
         ok_irql(Irql);                                                                  \
     UNREFERENCED_PARAMETER(Thread);                                                     \
