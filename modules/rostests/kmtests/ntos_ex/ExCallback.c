@@ -56,11 +56,9 @@ TestPrivateFunctions(VOID)
         ExFreeCallBack = KmtGetSystemRoutineAddress(L"ExFreeCallBack");
 
     /* These are private routines and are not exported by every kernel. */
-    if (!ExAllocateCallBack || !ExFreeCallBack)
-    {
-        trace("ExAllocateCallBack/ExFreeCallBack are not exported on this build\n");
+    if (skip(ExAllocateCallBack && ExFreeCallBack,
+             "ExAllocateCallBack/ExFreeCallBack are not exported on this build\n"))
         return;
-    }
 
     CallbackBlock = ExAllocateCallBack(ExCallbackFunction, &CallbackContext);
     ok(CallbackBlock != NULL, "CallbackBlock = NULL\n");

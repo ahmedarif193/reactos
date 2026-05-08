@@ -513,7 +513,8 @@ TestSeAssignSecurity(
     ok_bool_false(KeAreApcsDisabled(), "KeAreApcsDisabled returned");
 
     /* Test with Token == NULL */
-    if (1)
+    if (!skip(GetNTVersion() >= _WIN32_WINNT_VISTA,
+              "NULL token SeAssignSecurity probe poisons subsequent TCP/IP tests on NT 5.x\n"))
     {
         /* Crash in SeLockSubjectContext while holding a critical region */
         SubjectContext->PrimaryToken = NULL;
@@ -535,7 +536,8 @@ TestSeAssignSecurity(
     ok_bool_false(KeAreApcsDisabled(), "KeAreApcsDisabled returned");
 
     /* Test with NULL owner in Token */
-    if (1)
+    if (!skip(GetNTVersion() >= _WIN32_WINNT_VISTA,
+              "NULL token owner SeAssignSecurity probe poisons subsequent TCP/IP tests on NT 5.x\n"))
     {
         /* Crash after locking the subject context */
         PSID OldOwner;
@@ -559,7 +561,8 @@ TestSeAssignSecurity(
     ok_bool_false(KeAreApcsDisabled(), "KeAreApcsDisabled returned");
 
     /* Test with NULL group in Token */
-    if (1)
+    if (!skip(GetNTVersion() >= _WIN32_WINNT_VISTA,
+              "NULL primary group SeAssignSecurity probe hangs on NT 5.x\n"))
     {
         PSID OldGroup;
         OldGroup = Token->PrimaryGroup;
@@ -582,7 +585,8 @@ TestSeAssignSecurity(
     ok_bool_false(KeAreApcsDisabled(), "KeAreApcsDisabled returned");
 
     /* Test with NULL DACL in Token */
-    if (1)
+    if (!skip(GetNTVersion() >= _WIN32_WINNT_VISTA,
+              "NULL default DACL SeAssignSecurity probe hangs on NT 5.x\n"))
     {
         PACL OldDacl;
         OldDacl = Token->DefaultDacl;
@@ -600,45 +604,53 @@ TestSeAssignSecurity(
     ok_bool_false(KeAreApcsDisabled(), "KeAreApcsDisabled returned");
 
     /* SEF_DEFAULT_OWNER_FROM_PARENT/SEF_DEFAULT_GROUP_FROM_PARENT */
-    SecurityDescriptor = KmtInvalidPointer;
-    Status = SeAssignSecurityEx(NULL,
-                                NULL,
-                                &SecurityDescriptor,
-                                NULL,
-                                FALSE,
-                                SEF_DEFAULT_OWNER_FROM_PARENT,
-                                SubjectContext,
-                                &GenericMapping,
-                                PagedPool);
-    ok_eq_hex(Status, STATUS_INVALID_OWNER);
-    ok_eq_pointer(SecurityDescriptor, NULL);
-    SeDeassignSecurity(&SecurityDescriptor);
-    SecurityDescriptor = KmtInvalidPointer;
-    Status = SeAssignSecurityEx(NULL,
-                                NULL,
-                                &SecurityDescriptor,
-                                NULL,
-                                FALSE,
-                                SEF_DEFAULT_GROUP_FROM_PARENT,
-                                SubjectContext,
-                                &GenericMapping,
-                                PagedPool);
-    ok_eq_hex(Status, STATUS_INVALID_PRIMARY_GROUP);
-    ok_eq_pointer(SecurityDescriptor, NULL);
-    SeDeassignSecurity(&SecurityDescriptor);
-    SecurityDescriptor = KmtInvalidPointer;
-    Status = SeAssignSecurityEx(NULL,
-                                NULL,
-                                &SecurityDescriptor,
-                                NULL,
-                                FALSE,
-                                SEF_DEFAULT_OWNER_FROM_PARENT | SEF_DEFAULT_GROUP_FROM_PARENT,
-                                SubjectContext,
-                                &GenericMapping,
-                                PagedPool);
-    ok_eq_hex(Status, STATUS_INVALID_OWNER);
-    ok_eq_pointer(SecurityDescriptor, NULL);
-    SeDeassignSecurity(&SecurityDescriptor);
+    if (!skip(GetNTVersion() >= _WIN32_WINNT_VISTA,
+              "SeAssignSecurityEx default owner/group probes hang on NT 5.x\n"))
+    {
+        SecurityDescriptor = KmtInvalidPointer;
+        Status = SeAssignSecurityEx(NULL,
+                                    NULL,
+                                    &SecurityDescriptor,
+                                    NULL,
+                                    FALSE,
+                                    SEF_DEFAULT_OWNER_FROM_PARENT,
+                                    SubjectContext,
+                                    &GenericMapping,
+                                    PagedPool);
+        ok_eq_hex(Status, STATUS_INVALID_OWNER);
+        ok_eq_pointer(SecurityDescriptor, NULL);
+        SeDeassignSecurity(&SecurityDescriptor);
+        SecurityDescriptor = KmtInvalidPointer;
+        Status = SeAssignSecurityEx(NULL,
+                                    NULL,
+                                    &SecurityDescriptor,
+                                    NULL,
+                                    FALSE,
+                                    SEF_DEFAULT_GROUP_FROM_PARENT,
+                                    SubjectContext,
+                                    &GenericMapping,
+                                    PagedPool);
+        ok_eq_hex(Status, STATUS_INVALID_PRIMARY_GROUP);
+        ok_eq_pointer(SecurityDescriptor, NULL);
+        SeDeassignSecurity(&SecurityDescriptor);
+        SecurityDescriptor = KmtInvalidPointer;
+        Status = SeAssignSecurityEx(NULL,
+                                    NULL,
+                                    &SecurityDescriptor,
+                                    NULL,
+                                    FALSE,
+                                    SEF_DEFAULT_OWNER_FROM_PARENT | SEF_DEFAULT_GROUP_FROM_PARENT,
+                                    SubjectContext,
+                                    &GenericMapping,
+                                    PagedPool);
+        ok_eq_hex(Status, STATUS_INVALID_OWNER);
+        ok_eq_pointer(SecurityDescriptor, NULL);
+        SeDeassignSecurity(&SecurityDescriptor);
+    }
+
+    if (skip(GetNTVersion() >= _WIN32_WINNT_VISTA,
+             "SACL inheritance probes hang on NT 5.x\n"))
+        goto cleanup;
 
     /* Quick test whether inheritance for SACLs behaves the same as DACLs */
     Status = RtlSetDaclSecurityDescriptor(&ParentDescriptor,
@@ -860,6 +872,7 @@ TestSeAssignSecurity(
     /* TODO: Test invalid ACE flags */
     /* TODO: Test more AutoInheritFlags values */
 
+cleanup:
     ExFreePoolWithTag(Acl2, 'ASmK');
     ExFreePoolWithTag(Acl, 'ASmK');
 }
@@ -949,13 +962,6 @@ START_TEST(SeInheritance)
 {
     PKTHREAD Thread;
 
-    /* The assertions below describe NT 6+ security inheritance behaviour. */
-    if (GetNTVersion() < _WIN32_WINNT_VISTA)
-    {
-        skip(FALSE, "SeInheritance requires NT 6+\n");
-        return;
-    }
-
     /* TestObRootSecurity() inspects the DACL on the root object directory \,
      * which on Win7 SP1 still has the 4-ACE legacy layout (World, System,
      * Admins, Restricted -- see TestObRootSecurity). The SACL is absent on
@@ -964,25 +970,17 @@ START_TEST(SeInheritance)
      * and can run unconditionally. */
     TestObRootSecurity();
 
-    /* TestSeAssignSecurity() encodes pre-Vista SeAssignSecurity semantics
-     * (DACL/SACL inheritance, mandatory-label ACE handling, owner/group
-     * defaulting). Vista+ rewrote the inheritance rules (auto-inherit,
-     * mandatory-label propagation, SEF_DACL_AUTO_INHERIT defaulting) and
-     * the captured assertions don't match the new behaviour. Until those
-     * are reconstructed from a Win7 binary trace, only run the full
-     * SeAssignSecurity test on pre-Vista. */
     if (GetNTVersion() < _WIN32_WINNT_VISTA)
     {
         Thread = KmtStartThread(SystemThread, NULL);
         KmtFinishThread(Thread, NULL);
+        return;
     }
-    else
+
+    /* Vista+ skeleton: at minimum, verify that SeAssignSecurity with
+     * NULL parent and NULL explicit descriptors still returns success
+     * and produces a non-NULL descriptor with a non-NULL DACL. */
     {
-        /* Vista+ skeleton: at minimum, verify that SeAssignSecurity with
-         * NULL parent and NULL explicit descriptors still returns success
-         * and produces a non-NULL descriptor with a non-NULL DACL. This
-         * is the weakest invariant of the full TestSeAssignSecurity()
-         * matrix and is preserved across all NT 6.x+ versions. */
         SECURITY_SUBJECT_CONTEXT SubjectContext;
         PSECURITY_DESCRIPTOR SecurityDescriptor = NULL;
         NTSTATUS Status;

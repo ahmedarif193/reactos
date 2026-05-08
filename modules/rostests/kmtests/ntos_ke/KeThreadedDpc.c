@@ -3,9 +3,9 @@
  * LICENSE:     LGPL-2.1+ (https://spdx.org/licenses/LGPL-2.1+)
  * PURPOSE:     Threaded DPC test
  *
- * Threaded DPCs run inside a system worker thread at PASSIVE_LEVEL. The
- * distinguishing contract is the dispatch context, not merely that the
- * initializer is exported.
+ * Threaded DPCs normally run inside a system worker thread at PASSIVE_LEVEL.
+ * When threaded DPCs are disabled, Windows can dispatch them as ordinary DPCs
+ * at DISPATCH_LEVEL, so the test accepts both documented dispatch contexts.
  */
 
 #include <kmt_test.h>
@@ -29,6 +29,7 @@ typedef VOID (NTAPI *PKE_INIT_THREADED_DPC)(
 static volatile LONG ThreadedDpcRanCount;
 static volatile KIRQL ThreadedDpcIrql;
 static volatile PKTHREAD ThreadedDpcThread;
+static KDPC ThreadedDpc;
 static KEVENT ThreadedDpcDoneEvent;
 
 static KDEFERRED_ROUTINE ThreadedDpcRoutine;
@@ -59,22 +60,16 @@ ThreadedDpcRoutine(
 START_TEST(KeThreadedDpc)
 {
     PKE_INIT_THREADED_DPC pKeInitializeThreadedDpc;
-    KDPC Dpc;
     BOOLEAN Inserted;
     NTSTATUS Status;
     LARGE_INTEGER Timeout;
+    PKTHREAD QueueingThread;
 
     pKeInitializeThreadedDpc =
         (PKE_INIT_THREADED_DPC)KmtGetSystemRoutineAddress(L"KeInitializeThreadedDpc");
 
-    if (skip(GetNTVersion() >= _WIN32_WINNT_VISTA,
-             "Threaded DPCs require NT 6+\n"))
-    {
-        return;
-    }
-
     if (skip(pKeInitializeThreadedDpc != NULL,
-             "KeInitializeThreadedDpc not exported (pre-Vista kernel)\n"))
+             "KeInitializeThreadedDpc not exported\n"))
     {
         return;
     }
@@ -88,16 +83,17 @@ START_TEST(KeThreadedDpc)
     KeInitializeEvent(&ThreadedDpcDoneEvent, NotificationEvent, FALSE);
 
     /* Pre-fill so we can confirm the init writes the right Type byte. */
-    memset(&Dpc, 0xAA, sizeof(Dpc));
-    pKeInitializeThreadedDpc(&Dpc, ThreadedDpcRoutine, NULL);
+    memset(&ThreadedDpc, 0xAA, sizeof(ThreadedDpc));
+    pKeInitializeThreadedDpc(&ThreadedDpc, ThreadedDpcRoutine, NULL);
 
-    ok_eq_uint(Dpc.Type, KMT_THREADED_DPC_TYPE);
-    ok_eq_pointer(Dpc.DeferredRoutine, ThreadedDpcRoutine);
-    ok_eq_pointer(Dpc.DeferredContext, NULL);
+    ok_eq_uint(ThreadedDpc.Type, KMT_THREADED_DPC_TYPE);
+    ok_eq_pointer(ThreadedDpc.DeferredRoutine, ThreadedDpcRoutine);
+    ok_eq_pointer(ThreadedDpc.DeferredContext, NULL);
 
     /* Queue from PASSIVE_LEVEL. */
     ok_irql(PASSIVE_LEVEL);
-    Inserted = KeInsertQueueDpc(&Dpc, (PVOID)0xCAFE1, (PVOID)0xCAFE2);
+    QueueingThread = KeGetCurrentThread();
+    Inserted = KeInsertQueueDpc(&ThreadedDpc, (PVOID)0xCAFE1, (PVOID)0xCAFE2);
     ok_bool_true(Inserted, "KeInsertQueueDpc on threaded DPC");
 
     /* Wait up to 5 seconds for the worker thread to dispatch us. */
@@ -109,18 +105,28 @@ START_TEST(KeThreadedDpc)
                                    &Timeout);
     ok_eq_hex(Status, STATUS_SUCCESS);
 
+    if (Status != STATUS_SUCCESS && Inserted)
+        KeRemoveQueueDpc(&ThreadedDpc);
+
     if (skip(Status == STATUS_SUCCESS, "Threaded DPC never ran\n"))
         return;
 
     ok_eq_long(ThreadedDpcRanCount, 1L);
 
-    ok(ThreadedDpcIrql == PASSIVE_LEVEL,
-       "Threaded DPC ran at IRQL %u, expected PASSIVE_LEVEL (0)\n",
+    ok(ThreadedDpcIrql == PASSIVE_LEVEL || ThreadedDpcIrql == DISPATCH_LEVEL,
+       "Threaded DPC ran at IRQL %u, expected PASSIVE_LEVEL (0) or DISPATCH_LEVEL (2)\n",
        ThreadedDpcIrql);
-    ok(ThreadedDpcThread != KeGetCurrentThread(),
-       "Threaded DPC ran on the queueing thread %p (should be a worker)\n",
-       ThreadedDpcThread);
+    if (ThreadedDpcIrql == PASSIVE_LEVEL)
+    {
+        ok(ThreadedDpcThread != QueueingThread,
+           "Threaded DPC ran on the queueing thread %p (should be a worker)\n",
+           ThreadedDpcThread);
+    }
+    else
+    {
+        trace("Threaded DPC dispatched as an ordinary DPC at DISPATCH_LEVEL\n");
+    }
 
     trace("Threaded DPC ran on thread %p at IRQL %u (queueing thread = %p)\n",
-          ThreadedDpcThread, ThreadedDpcIrql, KeGetCurrentThread());
+          ThreadedDpcThread, ThreadedDpcIrql, QueueingThread);
 }
