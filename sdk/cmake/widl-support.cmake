@@ -189,6 +189,25 @@ function(add_idl_reg_scripts TARGET TYPE)
         message(FATAL_ERROR "Please pass either winrt, registry or regtypelib as argument to add_idl_reg_scripts")
     endif()
     set(IDL_REGTARGETNAME ${TARGET}${__suffix})
+
+    # Determine the windres PE target for converting .res to .o,
+    # so that the object matches the target architecture even when
+    # the host machine is a different CPU (e.g., ARM64 macOS building
+    # for x86_64).
+    if(ARCH STREQUAL "i386")
+        set(_rc_target_flag "--target=pe-i386")
+    elseif(ARCH STREQUAL "amd64")
+        set(_rc_target_flag "--target=pe-x86-64")
+    elseif(ARCH STREQUAL "arm64")
+        # The ARM64 toolchain uses the triplet-named llvm-windres wrapper.
+        # Passing --target=pe-aarch64 fails with LLVM 21.x.
+        set(_rc_target_flag "")
+    elseif(ARCH STREQUAL "arm")
+        set(_rc_target_flag "--target=pe-arm")
+    else()
+        set(_rc_target_flag "")
+    endif()
+
     foreach(IDL_FILE ${ARGN})
         get_filename_component(NAME ${IDL_FILE} NAME_WE)
         add_custom_command(
