@@ -164,9 +164,13 @@ set_target_properties(uefildr PROPERTIES SUFFIX ".efi")
 
 target_compile_definitions(uefildr PRIVATE UEFIBOOT)
 
-# On AMD64 we only map 1GB with freeloader, tell UEFI to keep us low!
+# On AMD64 we only map 1GB with freeloader, tell UEFI to keep us low.
+# On ARM64, match the Windows boot manager preferred base to keep PE metadata
+# and early VA/PA assumptions close to the platform loader this path emulates.
 if(ARCH STREQUAL "amd64")
     set_image_base(uefildr 0x10000)
+elseif(ARCH STREQUAL "arm64")
+    set_image_base(uefildr 0x10000000)
 endif()
 
 if(MSVC)
@@ -180,7 +184,11 @@ endif()
     # We don't need hotpatching
     remove_target_compile_option(uefildr "/hotpatch")
 else()
-    target_link_options(uefildr PRIVATE -Wl,--exclude-all-symbols,--file-alignment,0x200,--section-alignment,0x200)
+    if(ARCH STREQUAL "arm64")
+        target_link_options(uefildr PRIVATE -Wl,--exclude-all-symbols,--file-alignment,0x200,--section-alignment,0x1000)
+    else()
+        target_link_options(uefildr PRIVATE -Wl,--exclude-all-symbols,--file-alignment,0x200,--section-alignment,0x200)
+    endif()
     # Strip everything, including rossym data
     add_custom_command(TARGET uefildr
                     POST_BUILD
@@ -191,7 +199,16 @@ endif()
 if(MSVC)
     set_subsystem(uefildr EFI_APPLICATION)
 elseif(CMAKE_C_COMPILER_ID STREQUAL "Clang")
-    set_subsystem(uefildr efi_application)
+    if(ARCH STREQUAL "arm64")
+        target_link_options(uefildr PRIVATE
+            -Wl,--subsystem,efi_application:1.00
+            -Wl,--major-os-version,0
+            -Wl,--minor-os-version,0
+            -Wl,--major-subsystem-version,1
+            -Wl,--minor-subsystem-version,0)
+    else()
+        set_subsystem(uefildr efi_application)
+    endif()
 else()
     set_subsystem(uefildr 10)
 endif()
