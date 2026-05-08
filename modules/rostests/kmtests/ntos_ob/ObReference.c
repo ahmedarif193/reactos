@@ -171,21 +171,65 @@ START_TEST(ObReference)
         { L"\\YayDirectory6",   OBJ_KERNEL_HANDLE | OBJ_PERMANENT,                          1 },
         { L"\\YayDirectory7",   OBJ_CASE_INSENSITIVE | OBJ_KERNEL_HANDLE | OBJ_PERMANENT,   1 },
     };
-    HANDLE ObjectTypeHandle;
+    HANDLE ObjectTypeHandle = NULL;
+    BOOLEAN ObDirectoryObjectTypeReferenced = FALSE;
 
     /* ObReferenceObjectByName needs the object type... so get it... */
     RtlInitUnicodeString(&Name, L"\\ObjectTypes\\Directory");
     InitializeObjectAttributes(&ObjectAttributes, &Name, OBJ_KERNEL_HANDLE, NULL, NULL);
     Status = ObOpenObjectByName(&ObjectAttributes, NULL, KernelMode, NULL, 0, NULL, &ObjectTypeHandle);
-    ok_eq_hex(Status, STATUS_SUCCESS);
-    ok(ObjectTypeHandle != NULL, "ObjectTypeHandle = NULL\n");
-    if (!skip(Status == STATUS_SUCCESS && ObjectTypeHandle, "No handle\n"))
+    /* Vista+ blocks opening object types through ObOpenObjectByName. */
+    if (GetNTVersion() >= _WIN32_WINNT_VISTA)
+    {
+        ok_eq_hex(Status, STATUS_INVALID_PARAMETER);
+        ok(ObjectTypeHandle == NULL, "ObjectTypeHandle = %p, expected NULL on Vista+\n", ObjectTypeHandle);
+    }
+    else
+    {
+        ok_eq_hex(Status, STATUS_SUCCESS);
+        ok(ObjectTypeHandle != NULL, "ObjectTypeHandle = NULL\n");
+    }
+    if (Status == STATUS_SUCCESS && ObjectTypeHandle)
     {
         Status = ObReferenceObjectByHandle(ObjectTypeHandle, 0, NULL, KernelMode, (PVOID)&ObDirectoryObjectType, NULL);
         ok_eq_hex(Status, STATUS_SUCCESS);
         ok(ObDirectoryObjectType != NULL, "ObDirectoryObjectType = NULL\n");
+        ObDirectoryObjectTypeReferenced = NT_SUCCESS(Status) && ObDirectoryObjectType != NULL;
         Status = ZwClose(ObjectTypeHandle);
         ok_eq_hex(Status, STATUS_SUCCESS);
+    }
+    else if (GetNTVersion() >= _WIN32_WINNT_VISTA)
+    {
+        /* On Vista+, \ObjectTypes\Directory cannot be opened through
+         * ObOpenObjectByName. Resolve ObGetObjectType dynamically and recover
+         * the type from a root-directory object reference instead. */
+        POBJECT_TYPE (NTAPI *pObGetObjectType)(PVOID Object) =
+            KmtGetSystemRoutineAddress(L"ObGetObjectType");
+        if (!skip(pObGetObjectType != NULL, "ObGetObjectType not exported\n"))
+        {
+            HANDLE RootDirHandle = NULL;
+            PVOID RootDir = NULL;
+            UNICODE_STRING RootName;
+            OBJECT_ATTRIBUTES RootAttr;
+            RtlInitUnicodeString(&RootName, L"\\");
+            InitializeObjectAttributes(&RootAttr, &RootName, OBJ_KERNEL_HANDLE,
+                                       NULL, NULL);
+            Status = ZwOpenDirectoryObject(&RootDirHandle, DIRECTORY_QUERY,
+                                           &RootAttr);
+            if (NT_SUCCESS(Status))
+            {
+                Status = ObReferenceObjectByHandle(RootDirHandle, 0, NULL,
+                                                   KernelMode, &RootDir, NULL);
+                if (NT_SUCCESS(Status))
+                {
+                    ObDirectoryObjectType = pObGetObjectType(RootDir);
+                    ObDereferenceObject(RootDir);
+                }
+                ZwClose(RootDirHandle);
+            }
+            ok(ObDirectoryObjectType != NULL,
+               "ObDirectoryObjectType (via ObGetObjectType) = NULL\n");
+        }
     }
 
     for (i = 0; i < sizeof Tests / sizeof Tests[0]; ++i)
@@ -241,7 +285,8 @@ START_TEST(ObReference)
 
     if (ObDirectoryObjectType)
     {
-        ObDereferenceObject(ObDirectoryObjectType);
+        if (ObDirectoryObjectTypeReferenced)
+            ObDereferenceObject(ObDirectoryObjectType);
         ObDirectoryObjectType = NULL;
     }
 }

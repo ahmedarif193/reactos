@@ -18,6 +18,7 @@ list(APPEND COMMON_SOURCE
     example/GuardedMemory.c
     rtl/RtlAvlTree.c
     rtl/RtlException.c
+    rtl/RtlGetVersion.c
     ../apitests/rtl/RtlIntSafe.c
     rtl/RtlMemory.c
     rtl/RtlRegistry.c
@@ -90,9 +91,12 @@ list(APPEND KMTEST_DRV_SOURCE
     ntos_ke/KeGuardedMutex.c
     ntos_ke/KeIrql.c
     ntos_ke/KeMutex.c
+    ntos_ke/KePcr.c
     ntos_ke/KeProcessor.c
     ntos_ke/KeSpinLock.c
+    ntos_ke/KeThreadedDpc.c
     ntos_ke/KeTimer.c
+    ntos_mm/MmAllocateContiguousNode.c
     ntos_mm/MmMdl.c
     ntos_mm/MmReservedMapping.c
     ntos_mm/MmSection.c
@@ -196,7 +200,9 @@ list(APPEND KMTEST_SOURCE
 add_executable(kmtest ${KMTEST_SOURCE})
 set_module_type(kmtest win32cui)
 target_link_libraries(kmtest ${PSEH_LIB})
-add_importlibs(kmtest fltlib advapi32 ws2_32 msvcrt kernel32 ntdll)
+# kmtest/filter.c resolves fltlib.dll at runtime so kmtest_ still starts on
+# NT 5.x systems without Filter Manager.
+add_importlibs(kmtest advapi32 ws2_32 msvcrt kernel32 ntdll)
 target_compile_definitions(kmtest PRIVATE KMT_USER_MODE NTDDI_VERSION=NTDDI_WS03SP1)
 #add_pch(kmtest include/kmt_test.h)
 set_target_properties(kmtest PROPERTIES OUTPUT_NAME "kmtest_")

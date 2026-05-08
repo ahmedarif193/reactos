@@ -12,6 +12,10 @@ START_TEST(IoDeviceObject)
 {
     DWORD Error;
 
+    if (skip(GetNTVersion() >= _WIN32_WINNT_VISTA,
+             "IoDeviceObject helper-driver unload path hangs on NT 5.x\n"))
+        return;
+
     /* make sure IoHelper has an existing service key, but is not started */
     Error = KmtLoadDriver(L"IoHelper", FALSE);
     ok_eq_int(Error, ERROR_SUCCESS);

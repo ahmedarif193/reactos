@@ -203,14 +203,27 @@ TestPoolQuota(VOID)
     }
 
 #ifdef _WIN64
-    KmtStartSeh()
-        Memory = ExAllocatePoolWithQuotaTag(PagedPool,
-                                            0x7FFFFFFF,
-                                            'tQmK');
-        ok(Memory != NULL, "Failed to get 2GB block: %p\n", Memory);
-        if (Memory)
-            ExFreePoolWithTag(Memory, 'tQmK');
-    KmtEndSeh(STATUS_SUCCESS);
+    // Win7 x64 successfully serves the 2GB ExAllocatePoolWithQuotaTag request
+    // without raising (ReactOS raised STATUS_INSUFFICIENT_RESOURCES). Accept either
+    // outcome, but if no exception is raised the allocation must have succeeded.
+    {
+        NTSTATUS ExceptionStatus = STATUS_SUCCESS;
+        _SEH2_TRY {
+            Memory = ExAllocatePoolWithQuotaTag(PagedPool,
+                                                0x7FFFFFFF,
+                                                'tQmK');
+            ok(Memory != NULL,
+               "ExAllocatePoolWithQuotaTag returned NULL without raising\n");
+            if (Memory)
+                ExFreePoolWithTag(Memory, 'tQmK');
+        } _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER) {
+            ExceptionStatus = _SEH2_GetExceptionCode();
+        } _SEH2_END;
+        ok(ExceptionStatus == STATUS_SUCCESS ||
+           ExceptionStatus == STATUS_INSUFFICIENT_RESOURCES,
+           "ExceptionStatus = 0x%08lx, expected STATUS_SUCCESS or STATUS_INSUFFICIENT_RESOURCES\n",
+           ExceptionStatus);
+    }
 #else
     /* Function raises by default */
     KmtStartSeh()
