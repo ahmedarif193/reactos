@@ -12,7 +12,7 @@
 // char (*__kaboom1)[FIELD_OFFSET(IO_STACK_LOCATION, Parameters.Create.EaLength)] = 1;
 // Taken from https://stackoverflow.com/a/35261673
 
-#if !defined(_AMD64_)
+#if !defined(_WIN64)
 
 C_ASSERT(sizeof(IO_STACK_LOCATION) == 36);
 

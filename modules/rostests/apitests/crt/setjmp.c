@@ -199,6 +199,8 @@ static void TEST_setjmp_zero_longjmp_check(void)
     }
 }
 
+#if defined(_M_IX86) || defined(_M_AMD64)
+
 void call_setjmp(_JUMP_BUFFER *Buf);
 ULONG_PTR get_sp(void);
 extern char setjmp_return_address;
@@ -330,6 +332,8 @@ static void TEST_buffer_contents(void)
     ok_eq_hex(buf.UnwindFunc, 0xCCCCCCCC);
 #endif
 }
+
+#endif /* defined(_M_IX86) || defined(_M_AMD64) */
 
 #ifdef _M_IX86
 
@@ -564,7 +568,11 @@ START_TEST(setjmp)
     TEST_setjmp_return_check();
     TEST_setjmp_longjmp_integration();
     TEST_setjmp_zero_longjmp_check();
+#if defined(_M_IX86) || defined(_M_AMD64)
     TEST_buffer_contents();
+#else
+    skip("setjmp buffer layout checks are only implemented for x86/x64.\n");
+#endif
 #ifdef _M_IX86
     Test_setjmp1_longjmp_inside_SEH();
     Test_setjmp1_external_inside_SEH();

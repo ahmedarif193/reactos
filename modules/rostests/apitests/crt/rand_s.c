@@ -17,6 +17,7 @@ rand_s_t *p_rand_s;
 
 void test_rand_s_performance(void)
 {
+#if defined(_M_IX86) || defined(_M_AMD64)
     unsigned long long start, end;
     unsigned int val;
     int i;
@@ -28,6 +29,7 @@ void test_rand_s_performance(void)
     }
     end = __rdtsc();
     printf("rand_s took %I64u cycles\n", end - start);
+#endif
 }
 
 START_TEST(rand_s)

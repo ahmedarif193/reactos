@@ -12,8 +12,8 @@ struct _SINGLE_LIST_ENTRY *__fastcall ExInterlockedPopEntrySList(union _SLIST_HE
 
 #include <kmt_test.h>
 
-/* TODO: SLIST_HEADER is a lot different for x64 */
-#ifndef _M_AMD64
+/* TODO: SLIST_HEADER is a lot different for 64-bit architectures */
+#ifndef _WIN64
 /* i386 NT 5.x collapses HIGH_LEVEL and POWER_LEVEL, reporting
  * POWER_LEVEL (30) after KeRaiseIrql(HIGH_LEVEL=31). All other
  * platforms / versions report HIGH_LEVEL correctly. */
@@ -52,7 +52,7 @@ struct _SINGLE_LIST_ENTRY *__fastcall ExInterlockedPopEntrySList(union _SLIST_HE
 
 START_TEST(ExSequencedList)
 {
-#ifndef _M_AMD64
+#ifndef _WIN64
     PSLIST_HEADER ListHead;
     KSPIN_LOCK SpinLock;
     USHORT ExpectedSequence = 0;
