@@ -885,27 +885,6 @@ KiArm64PermVectorIrqLowerA64_Handler:
     ARM64_SAVE_NEON sp, ARM64_IRQ_NEON
     ARM64_SAVE_FP_CONTROL ARM64_IRQ_FPCR, ARM64_IRQ_FPSR
 
-#ifdef KDBG
-    /* DEBUG: One-shot marker for first IRQ-from-EL0 entry (vector 9). */
-    adrp x9, KiArm64IrqLowerOnce
-    ldr  w10, [x9, #:lo12:KiArm64IrqLowerOnce]
-    cbnz w10, 1f
-    mov  w10, #1
-    str  w10, [x9, #:lo12:KiArm64IrqLowerOnce]
-    ldr  x9, =0xFFFF800009000000
-    mov  w10, #'I'
-    strb w10, [x9]
-    mov  w10, #'R'
-    strb w10, [x9]
-    mov  w10, #'Q'
-    strb w10, [x9]
-    mov  w10, #'9'
-    strb w10, [x9]
-    mov  w10, #'\n'
-    strb w10, [x9]
-1:
-#endif /* KDBG */
-
     dsb sy
     isb
     mov w0, #9
@@ -938,14 +917,6 @@ KiArm64PermVectorIrqLowerA64_Handler:
     isb
     eret
     .seh_endproc
-
-#ifdef KDBG
-    .bss
-    .align 4
-KiArm64IrqLowerOnce:
-    .word 0
-    .text
-#endif /* KDBG */
 
 /* FIQ handler: FiqLowerA64 (vector 10) — save/restore SP_EL0 (see vector 9) */
     .global KiArm64PermVectorFiqLowerA64_Handler
