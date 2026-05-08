@@ -40,8 +40,17 @@ namespace
 static wchar_t const* __cdecl find_end_of_double_null_terminated_sequence(wchar_t const* const first) throw()
 {
     wchar_t const* last = first;
-    for (; *last != '\0'; last += wcslen(last) + 1)
+
+    // Use volatile reads so Clang does not fold this startup scan into
+    // wcslen(), which belongs to the CRT that is still initializing.
+    while (*reinterpret_cast<wchar_t const volatile*>(last) != '\0')
     {
+        while (*reinterpret_cast<wchar_t const volatile*>(last) != '\0')
+        {
+            ++last;
+        }
+
+        ++last;
     }
 
     return last + 1; // Return the pointer one-past-the-end of the double null terminator
