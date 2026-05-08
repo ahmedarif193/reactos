@@ -7877,8 +7877,13 @@ HalSetTimeIncrement(
     _In_ ULONG Increment)
 {
     UNREFERENCED_PARAMETER(Increment);
-    UNIMPLEMENTED_STUB();
-    return Increment;
+
+    /*
+     * The ARM64 generic timer path is currently programmed at the fixed HAL
+     * maximum increment. Report the actual achieved resolution so callers do
+     * not believe a 1 ms request changed the interrupt cadence.
+     */
+    return KeQueryTimeIncrement();
 }
 
 BOOLEAN

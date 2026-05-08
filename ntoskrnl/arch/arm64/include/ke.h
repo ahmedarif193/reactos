@@ -388,6 +388,11 @@ NTAPI
 KeReenableTimerInterrupt(
     VOID);
 
+VOID
+NTAPI
+KeStartArm64ProcessorTimer(
+    VOID);
+
 ULONG
 FASTCALL
 HalGetGicPriorityMask(VOID);
