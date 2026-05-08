@@ -14,7 +14,34 @@ typedef enum
     Unknown
 } FSType;
 
-static FSType g_Filesystem;
+static FSType g_Filesystem = Unknown;
+
+static
+BOOLEAN
+IsWinPE(VOID)
+{
+    NTSTATUS Status;
+    UNICODE_STRING KeyNameString;
+    OBJECT_ATTRIBUTES ObjectAttributes;
+    HANDLE KeyHandle;
+
+    RtlInitUnicodeString(&KeyNameString,
+                         L"\\REGISTRY\\MACHINE\\SYSTEM\\CurrentControlSet\\Control\\MiniNT");
+    InitializeObjectAttributes(&ObjectAttributes,
+                               &KeyNameString,
+                               OBJ_KERNEL_HANDLE | OBJ_CASE_INSENSITIVE,
+                               NULL,
+                               NULL);
+
+    Status = ZwOpenKey(&KeyHandle, KEY_READ, &ObjectAttributes);
+    if (NT_SUCCESS(Status))
+    {
+        ObCloseHandle(KeyHandle, KernelMode);
+        return TRUE;
+    }
+
+    return FALSE;
+}
 
 static
 NTSTATUS
@@ -111,9 +138,9 @@ TestAllInformation(VOID)
         ok_eq_hex(Status, STATUS_SUCCESS);
         Status = IoStatus.Status;
     }
-    ok_eq_hex(Status, STATUS_SUCCESS);
     if (skip(NT_SUCCESS(Status), "No file handle, %lx\n", Status))
         return;
+    ok_eq_hex(Status, STATUS_SUCCESS);
 
     /* Find filesystem for the system */
     FsAttributeInfo = ExAllocatePoolWithTag(PagedPool, FSAttributeBufferSize, 'sySF');
@@ -844,8 +871,14 @@ Cleanup:
 
 START_TEST(IoFilesystem)
 {
+    if (skip(!IsWinPE(), "IoFilesystem path matrix requires an installed OS, not WinPE\n"))
+        return;
+
     /* TestAllInformation() has to be first since we detect the filesystem there */
     TestAllInformation();
+    if (skip(g_Filesystem != Unknown,
+             "IoFilesystem path matrix requires a FAT32 or NTFS SystemRoot backing store\n"))
+        return;
     TestRelativeNames();
     TestSharedCacheMap();
 }

@@ -60,11 +60,11 @@ C_ASSERT(sizeof(KMUTANT) == MUTANT_SIZE * sizeof(ULONG));
 
 /* Same ETHREAD-layout caveat as KeApc.c: drive only public APIs.
  * Treat the {Kernel,Special}ApcsDisabled parameters as the signed counter
- * value; KeAreApcsDisabled() is TRUE only when the counter is negative. */
+ * value; KeAreApcsDisabled() is TRUE when either counter is non-zero. */
 #define CheckApcs(KernelApcsDisabled, SpecialApcsDisabled, AllApcsDisabled, Irql) do    \
 {                                                                                       \
-    ok_eq_bool(KeAreApcsDisabled(), (LONG)(KernelApcsDisabled) < 0 ||                   \
-                                    (LONG)(SpecialApcsDisabled) < 0 ||                  \
+    ok_eq_bool(KeAreApcsDisabled(), (LONG)(KernelApcsDisabled) != 0 ||                  \
+                                    (LONG)(SpecialApcsDisabled) != 0 ||                 \
                                     ((Irql) >= APC_LEVEL));                             \
     if (pKeAreAllApcsDisabled)                                                          \
         ok_eq_bool(pKeAreAllApcsDisabled(),                                             \
