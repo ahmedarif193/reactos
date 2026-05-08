@@ -205,7 +205,7 @@ function(add_idl_reg_scripts TARGET TYPE)
             # convert the .res file into a .o file for GCC/Clang using windres
             add_custom_command(
                 OUTPUT ${CMAKE_CURRENT_BINARY_DIR}/${NAME}${__suffix}.o
-                COMMAND ${CMAKE_RC_COMPILER} -O coff -i ${CMAKE_CURRENT_BINARY_DIR}/${NAME}${__suffix}.res -o ${CMAKE_CURRENT_BINARY_DIR}/${NAME}${__suffix}.o
+                COMMAND ${CMAKE_RC_COMPILER} ${_rc_target_flag} -O coff -i ${CMAKE_CURRENT_BINARY_DIR}/${NAME}${__suffix}.res -o ${CMAKE_CURRENT_BINARY_DIR}/${NAME}${__suffix}.o
                 DEPENDS ${CMAKE_CURRENT_BINARY_DIR}/${NAME}${__suffix}.res
                 WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR})
             set_source_files_properties(${CMAKE_CURRENT_BINARY_DIR}/${NAME}${__suffix}.o PROPERTIES
