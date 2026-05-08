@@ -54,39 +54,6 @@ function(_detect_llvm_mingw_root _outvar)
     set(${_outvar} "" PARENT_SCOPE)
 endfunction()
 
-function(_detect_rosbe_gcc_toolchain _outvar)
-    if(ARCH STREQUAL "i386")
-        set(_rosbe_gcc_dir gcc-i686)
-    elseif(ARCH STREQUAL "amd64")
-        set(_rosbe_gcc_dir gcc-x86_64)
-    else()
-        set(${_outvar} "" PARENT_SCOPE)
-        return()
-    endif()
-
-    set(_candidate_roots)
-    if(DEFINED ENV{_ROSBE_PREFIX})
-        list(APPEND _candidate_roots "$ENV{_ROSBE_PREFIX}/${_rosbe_gcc_dir}")
-    endif()
-
-    list(APPEND _candidate_roots
-        "/opt/rosbe-linux/${_rosbe_gcc_dir}"
-        "${CMAKE_CURRENT_LIST_DIR}/../RosBE/RosBE-Linux/${_rosbe_gcc_dir}")
-
-    file(GLOB _rosbe_build_candidates LIST_DIRECTORIES TRUE
-        "${CMAKE_CURRENT_LIST_DIR}/../RosBE/RosBE-Linux/builddir/*/opt/rosbe-linux/${_rosbe_gcc_dir}")
-    list(APPEND _candidate_roots ${_rosbe_build_candidates})
-
-    foreach(_candidate IN LISTS _candidate_roots)
-        if(EXISTS "${_candidate}/bin")
-            set(${_outvar} "${_candidate}" PARENT_SCOPE)
-            return()
-        endif()
-    endforeach()
-
-    set(${_outvar} "" PARENT_SCOPE)
-endfunction()
-
 set(CMAKE_TRY_COMPILE_PLATFORM_VARIABLES
     ARCH
     CLANG_VERSION
@@ -111,7 +78,7 @@ if(NOT DEFINED REACTOS_CLANG_LLVM_MINGW_ROOT OR NOT REACTOS_CLANG_LLVM_MINGW_ROO
     _detect_llvm_mingw_root(_llvm_mingw_root)
     if(_llvm_mingw_root)
         set(REACTOS_CLANG_LLVM_MINGW_ROOT "${_llvm_mingw_root}" CACHE PATH
-            "Preferred llvm-mingw toolchain root used to provide the native Clang Windows GNU sysroot")
+            "Preferred llvm-mingw toolchain root used to provide the native Clang Windows sysroot")
     endif()
 endif()
 
@@ -156,7 +123,17 @@ set(CMAKE_ASM_COMPILER_TARGET ${triplet})
 set(CMAKE_ASM_COMPILER_ID Clang)
 
 set(CMAKE_MC_COMPILER native-windmc)
-require_llvm_program(CMAKE_RC_COMPILER llvm-windres)
+if(ARCH STREQUAL "arm64")
+    # llvm-windres --target=pe-aarch64 currently fails at codegen with
+    # LLVM 21.1.7. Use llvm-mingw's triplet-named symlink from the selected
+    # llvm-mingw root.
+    find_program(CMAKE_RC_COMPILER NAMES aarch64-w64-mingw32-windres HINTS ${_llvm_tool_bin_hints} NO_DEFAULT_PATH)
+    if(NOT CMAKE_RC_COMPILER)
+        message(FATAL_ERROR "aarch64-w64-mingw32-windres not found in llvm-mingw root")
+    endif()
+else()
+    require_llvm_program(CMAKE_RC_COMPILER llvm-windres)
+endif()
 require_llvm_program(CMAKE_AR llvm-ar)
 require_llvm_program(CMAKE_DLLTOOL llvm-dlltool)
 require_llvm_program(CMAKE_STRIP llvm-strip)
@@ -172,8 +149,9 @@ set(CMAKE_ASM_CREATE_STATIC_LIBRARY ${CMAKE_C_CREATE_STATIC_LIBRARY})
 set(CMAKE_C_STANDARD_LIBRARIES "" CACHE STRING "Standard C Libraries")
 set(CMAKE_CXX_STANDARD_LIBRARIES "" CACHE STRING "Standard C++ Libraries")
 
-set(CMAKE_SHARED_LINKER_FLAGS_INIT "-nostdlib -fuse-ld=lld -Wl,--enable-auto-image-base,--disable-auto-import")
-set(CMAKE_MODULE_LINKER_FLAGS_INIT "-nostdlib -fuse-ld=lld -Wl,--enable-auto-image-base,--disable-auto-import")
-set(CMAKE_EXE_LINKER_FLAGS_INIT "-nostdlib -fuse-ld=lld -Wl,--enable-auto-image-base,--disable-auto-import")
+set(REACTOS_CLANG_BASE_LINKER_FLAGS "-nostdlib -fuse-ld=lld -Wl,--enable-auto-image-base,--disable-auto-import")
+set(CMAKE_SHARED_LINKER_FLAGS_INIT "${REACTOS_CLANG_BASE_LINKER_FLAGS}")
+set(CMAKE_MODULE_LINKER_FLAGS_INIT "${REACTOS_CLANG_BASE_LINKER_FLAGS}")
+set(CMAKE_EXE_LINKER_FLAGS_INIT "${REACTOS_CLANG_BASE_LINKER_FLAGS}")
 
 set(CMAKE_USER_MAKE_RULES_OVERRIDE "${CMAKE_CURRENT_LIST_DIR}/overrides-gcc.cmake")

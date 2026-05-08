@@ -37,7 +37,6 @@ NO_ROSBE
 	exit 1
 fi
 ROSBE_LLVM_ROOT="$ROSBE_ROOT/llvm-mingw"
-ROSBE_GCC_ROOT="$ROSBE_ROOT/mingw-gcc"
 
 CMAKE_GENERATOR="Ninja"
 USE_CLANG=0
@@ -116,42 +115,6 @@ gcc_triplet_for_arch() {
 	esac
 }
 
-target_windmc_for_arch() {
-	case "$1" in
-		amd64|i386)
-			# In container mode the binary lives in the image; skip the host -x test.
-			if [ "$ROSBE_SKIP_HOST_CHECK" = "1" ]; then
-				echo "$GCC_TOOLCHAIN_ROOT/bin/$GCC_TRIPLET-windmc"
-				return
-			fi
-			if [ -x "$GCC_TOOLCHAIN_ROOT/bin/$GCC_TRIPLET-windmc" ]; then
-				echo "$GCC_TOOLCHAIN_ROOT/bin/$GCC_TRIPLET-windmc"
-				return
-			fi
-			;;
-	esac
-
-	return 1
-}
-
-host_windmc() {
-	if [ "$ROSBE_SKIP_HOST_CHECK" = "1" ]; then
-		echo "$ROSBE_GCC_ROOT/x86_64-w64-mingw32/bin/x86_64-w64-mingw32-windmc"
-		return
-	fi
-	for candidate in \
-		"$ROSBE_GCC_ROOT/x86_64-w64-mingw32/bin/x86_64-w64-mingw32-windmc" \
-		"$ROSBE_GCC_ROOT/i686-w64-mingw32/bin/i686-w64-mingw32-windmc"
-	do
-		if [ -x "$candidate" ]; then
-			echo "$candidate"
-			return
-		fi
-	done
-
-	return 1
-}
-
 remember_cmake_arg() {
 	ROS_CMAKEOPTS=$ROS_CMAKEOPTS" $1"
 	case "$1" in
@@ -213,9 +176,6 @@ if [ "$USER_BUILD_TYPE" -eq 0 ]; then
 	ROS_CMAKEOPTS=$ROS_CMAKEOPTS" -DCMAKE_BUILD_TYPE:STRING=$BUILD_TYPE"
 fi
 
-GCC_TRIPLET=$(gcc_triplet_for_arch "$ARCH")
-GCC_TOOLCHAIN_ROOT="$ROSBE_GCC_ROOT/$GCC_TRIPLET"
-
 if [ "$USE_CLANG" -eq 1 ]; then
 	BUILD_ENVIRONMENT=Clang
 	TOOLCHAIN_FILE=toolchain-clang.cmake
@@ -224,30 +184,25 @@ if [ "$USE_CLANG" -eq 1 ]; then
 		[ -x "$ROSBE_LLVM_ROOT/bin/clang" ] || fail "missing RosBE LLVM toolchain at $ROSBE_LLVM_ROOT"
 		[ -x "$ROSBE_LLVM_ROOT/bin/clang++" ] || fail "missing RosBE LLVM clang++ at $ROSBE_LLVM_ROOT/bin"
 	fi
-	MC_COMPILER=$(target_windmc_for_arch "$ARCH" || host_windmc) || fail "missing RosBE windmc in $ROSBE_GCC_ROOT"
 
 	export REACTOS_CLANG_LLVM_MINGW_ROOT="$ROSBE_LLVM_ROOT"
 	export LLVM_MINGW_ROOT="$ROSBE_LLVM_ROOT"
 	export PATH="$ROSBE_LLVM_ROOT/bin:$PATH"
 
 	ROS_CMAKEOPTS=$ROS_CMAKEOPTS" -DREACTOS_CLANG_LLVM_MINGW_ROOT:PATH=$ROSBE_LLVM_ROOT"
-	ROS_CMAKEOPTS=$ROS_CMAKEOPTS" -DCMAKE_MC_COMPILER:FILEPATH=$MC_COMPILER"
-	if [ "$ROSBE_SKIP_HOST_CHECK" = "1" ] || [ -d "$GCC_TOOLCHAIN_ROOT/bin" ]; then
-		export PATH="$GCC_TOOLCHAIN_ROOT/bin:$PATH"
-		ROS_CMAKEOPTS=$ROS_CMAKEOPTS" -DREACTOS_CLANG_GCC_TOOLCHAIN:PATH=$GCC_TOOLCHAIN_ROOT"
-	fi
 else
 	BUILD_ENVIRONMENT=GCC
 	TOOLCHAIN_FILE=toolchain-gcc.cmake
+	ROSBE_GCC_ROOT="$ROSBE_ROOT/mingw-gcc"
+	GCC_TRIPLET=$(gcc_triplet_for_arch "$ARCH")
+	GCC_TOOLCHAIN_ROOT="$ROSBE_GCC_ROOT/$GCC_TRIPLET"
 
 	if [ "$ROSBE_SKIP_HOST_CHECK" != "1" ]; then
 		[ -x "$GCC_TOOLCHAIN_ROOT/bin/$GCC_TRIPLET-gcc" ] || fail "missing RosBE GCC toolchain for $ARCH at $GCC_TOOLCHAIN_ROOT"
 		[ -x "$GCC_TOOLCHAIN_ROOT/bin/$GCC_TRIPLET-g++" ] || fail "missing RosBE GCC g++ for $ARCH at $GCC_TOOLCHAIN_ROOT/bin"
 	fi
-	MC_COMPILER=$(target_windmc_for_arch "$ARCH") || fail "missing RosBE windmc for $ARCH at $GCC_TOOLCHAIN_ROOT/bin"
 
 	export PATH="$GCC_TOOLCHAIN_ROOT/bin:$PATH"
-	ROS_CMAKEOPTS=$ROS_CMAKEOPTS" -DCMAKE_MC_COMPILER:FILEPATH=$MC_COMPILER"
 fi
 
 REACTOS_OUTPUT_PATH=output-$BUILD_ENVIRONMENT-$ARCH-$BUILD_TYPE_SUFFIX$ROSBE_OUTPUT_SUFFIX
@@ -274,7 +229,13 @@ if [ "$REACTOS_SOURCE_DIR" = "$PWD" ]; then
 	cd "$REACTOS_OUTPUT_PATH" || exit 1
 fi
 
+rm -rf CMakeFiles host-tools/CMakeFiles
 rm -f CMakeCache.txt host-tools/CMakeCache.txt
+
+# Do not let host package-manager flags leak into target compiler/linker search
+# paths. Target-specific options should be passed through CMake arguments.
+unset CFLAGS CXXFLAGS CPPFLAGS LDFLAGS
+unset CPATH LIBRARY_PATH C_INCLUDE_PATH CPLUS_INCLUDE_PATH
 
 cmake -G "$CMAKE_GENERATOR" \
 	-DENABLE_CCACHE:BOOL=0 \
