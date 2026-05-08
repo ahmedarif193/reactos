@@ -14,7 +14,7 @@ FilterToken(VOID)
 {
     NTSTATUS Status;
     PSECURITY_SUBJECT_CONTEXT SubjectContext;
-    PACCESS_TOKEN Token, FilteredToken;
+    PACCESS_TOKEN Token, FilteredToken = NULL;
     TOKEN_GROUPS SidsToDisable, RestrictedGroups;
     TOKEN_PRIVILEGES Privilege;
 
@@ -44,8 +44,11 @@ FilterToken(VOID)
                            &FilteredToken);
     ok_irql(PASSIVE_LEVEL);
     ok_eq_hex(Status, STATUS_SUCCESS);
+    if (NT_SUCCESS(Status))
+        ObDereferenceObject(FilteredToken);
 
     /* Disable all the privileges */
+    FilteredToken = NULL;
     Status = SeFilterToken(Token,
                            DISABLE_MAX_PRIVILEGE,
                            NULL,
@@ -54,12 +57,15 @@ FilterToken(VOID)
                            &FilteredToken);
     ok_irql(PASSIVE_LEVEL);
     ok_eq_hex(Status, STATUS_SUCCESS);
+    if (NT_SUCCESS(Status))
+        ObDereferenceObject(FilteredToken);
 
     /* Disable a SID */
     SidsToDisable.GroupCount = 1;
     SidsToDisable.Groups[0].Attributes = 0;
     SidsToDisable.Groups[0].Sid = SeExports->SeWorldSid;
 
+    FilteredToken = NULL;
     Status = SeFilterToken(Token,
                            0,
                            &SidsToDisable,
@@ -68,6 +74,8 @@ FilterToken(VOID)
                            &FilteredToken);
     ok_irql(PASSIVE_LEVEL);
     ok_eq_hex(Status, STATUS_SUCCESS);
+    if (NT_SUCCESS(Status))
+        ObDereferenceObject(FilteredToken);
 
     /*
      * Add a restricted SID but we're going to fail...
@@ -78,6 +86,7 @@ FilterToken(VOID)
     RestrictedGroups.Groups[0].Attributes = SE_GROUP_ENABLED;
     RestrictedGroups.Groups[0].Sid = SeExports->SeDialupSid;
 
+    FilteredToken = NULL;
     Status = SeFilterToken(Token,
                            0,
                            NULL,
@@ -87,11 +96,16 @@ FilterToken(VOID)
     ok_irql(PASSIVE_LEVEL);
     ok_eq_hex(Status, STATUS_INVALID_PARAMETER);
 
+    if (skip(GetNTVersion() >= _WIN32_WINNT_VISTA,
+             "Restricted SID SeFilterToken probe poisons subsequent process creation on NT 5.x\n"))
+        goto done;
+
     /* Add a restricted SID now */
     RestrictedGroups.GroupCount = 1;
     RestrictedGroups.Groups[0].Attributes = 0;
     RestrictedGroups.Groups[0].Sid = SeExports->SeDialupSid;
 
+    FilteredToken = NULL;
     Status = SeFilterToken(Token,
                            0,
                            NULL,
@@ -100,9 +114,13 @@ FilterToken(VOID)
                            &FilteredToken);
     ok_irql(PASSIVE_LEVEL);
     ok_eq_hex(Status, STATUS_SUCCESS);
+    if (NT_SUCCESS(Status))
+        ObDereferenceObject(FilteredToken);
 
+done:
     /* We're done */
     SeUnlockSubjectContext(SubjectContext);
+    SeReleaseSubjectContext(SubjectContext);
     if (SubjectContext)
         ExFreePool(SubjectContext);
 }

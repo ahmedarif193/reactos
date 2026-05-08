@@ -204,14 +204,16 @@ TestPoolQuota(VOID)
 
 #ifdef _WIN64
     // Win7 x64 successfully serves the 2GB ExAllocatePoolWithQuotaTag request
-    // without raising (ReactOS raised STATUS_INSUFFICIENT_RESOURCES). Accept either:
-    // a successful allocation (no exception) or the historical raise.
+    // without raising (ReactOS raised STATUS_INSUFFICIENT_RESOURCES). Accept either
+    // outcome, but if no exception is raised the allocation must have succeeded.
     {
         NTSTATUS ExceptionStatus = STATUS_SUCCESS;
         _SEH2_TRY {
             Memory = ExAllocatePoolWithQuotaTag(PagedPool,
                                                 0x7FFFFFFF,
                                                 'tQmK');
+            ok(Memory != NULL,
+               "ExAllocatePoolWithQuotaTag returned NULL without raising\n");
             if (Memory)
                 ExFreePoolWithTag(Memory, 'tQmK');
         } _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER) {

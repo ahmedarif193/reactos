@@ -85,6 +85,9 @@ KmtInitTestFiles(PHANDLE ReadOnlyFile, PHANDLE WriteOnlyFile, PHANDLE Executable
     //INIT THE WRITE-ONLY FILE
     //TODO: Delete the file when the tests are all executed
     Status = ZwCreateFile(WriteOnlyFile, (GENERIC_WRITE | SYNCHRONIZE), &KmtestFileObject, &IoStatusBlock, NULL, FILE_ATTRIBUTE_NORMAL, FILE_SHARE_WRITE, FILE_SUPERSEDE, (FILE_NON_DIRECTORY_FILE | FILE_DELETE_ON_CLOSE), NULL, 0);
+    if (skip(NT_SUCCESS(Status) && *WriteOnlyFile != NULL,
+             "Could not create writable section test file: 0x%lx\n", Status))
+        return;
     ok_eq_hex(Status, STATUS_SUCCESS);
     ok_eq_ulongptr(IoStatusBlock.Information, FILE_CREATED);
     ok(*WriteOnlyFile != NULL, "WriteOnlyFile is NULL\n");
@@ -641,10 +644,14 @@ START_TEST(ZwMapViewOfSection)
 
     KmtInitTestFiles(&FileHandleReadOnly, &FileHandleWriteOnly, &ExecutableFileHandle);
 
-    SimpleErrorChecks(FileHandleReadOnly, FileHandleWriteOnly, ExecutableFileHandle);
-    AdvancedErrorChecks(FileHandleReadOnly, FileHandleWriteOnly);
-    BehaviorChecks(FileHandleReadOnly, FileHandleWriteOnly);
-    PageFileBehaviorChecks();
+    if (!skip(FileHandleReadOnly && FileHandleWriteOnly && ExecutableFileHandle,
+              "Missing one or more file handles\n"))
+    {
+        SimpleErrorChecks(FileHandleReadOnly, FileHandleWriteOnly, ExecutableFileHandle);
+        AdvancedErrorChecks(FileHandleReadOnly, FileHandleWriteOnly);
+        BehaviorChecks(FileHandleReadOnly, FileHandleWriteOnly);
+        PageFileBehaviorChecks();
+    }
 
     if (FileHandleReadOnly)
         ZwClose(FileHandleReadOnly);

@@ -28,6 +28,7 @@ KMT_TESTFUNC Test_PoIrp;
 KMT_TESTFUNC Test_RtlAvlTree;
 KMT_TESTFUNC Test_RtlCaptureContext;
 KMT_TESTFUNC Test_RtlException;
+KMT_TESTFUNC Test_RtlGetVersion;
 KMT_TESTFUNC Test_RtlIntSafe;
 KMT_TESTFUNC Test_RtlMemory;
 KMT_TESTFUNC Test_RtlRegistry;
@@ -63,6 +64,7 @@ const KMT_TEST TestList[] =
     { "PoIrp",                        Test_PoIrp },
     { "RtlAvlTree",                   Test_RtlAvlTree },
     { "RtlException",                 Test_RtlException },
+    { "RtlGetVersion",                Test_RtlGetVersion },
     { "RtlIntSafe",                   Test_RtlIntSafe },
     { "RtlMemory",                    Test_RtlMemory },
     { "RtlRegistry",                  Test_RtlRegistry },
