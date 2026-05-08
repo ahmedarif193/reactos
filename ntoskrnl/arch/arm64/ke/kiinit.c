@@ -1182,5 +1182,10 @@ KiInitializeSystem(_Inout_ PLOADER_PARAMETER_BLOCK LoaderBlock)
         }
     }
 
+    if (ProcessorNumber != 0)
+    {
+        KeStartArm64ProcessorTimer();
+    }
+
     KiIdleLoop();
 }
