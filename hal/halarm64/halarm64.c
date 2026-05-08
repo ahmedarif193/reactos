@@ -4171,7 +4171,11 @@ HalpInitGicRedistributor(_In_ ULONG Cpu)
  * This offset-by-one encoding avoids the sentinel conflict where INTID 0
  * (a valid SGI used for IPI) would be indistinguishable from "no interrupt".
  */
+#define HAL_ARM64_ACTIVE_INTID_STACK_DEPTH 16
+
 static ULONG HalpArm64ActiveIntId[MAXIMUM_PROCESSORS];
+static ULONG HalpArm64ActiveIntIdStack[MAXIMUM_PROCESSORS][HAL_ARM64_ACTIVE_INTID_STACK_DEPTH];
+static UCHAR HalpArm64ActiveIntIdDepth[MAXIMUM_PROCESSORS];
 
 /* GIC detection: system-register interface (GICv3+) vs legacy CPU IF (GICv2)
  * HalpGicUseSysRegs, HalpForceLegacyGic, and HalpGicArchRev are declared
@@ -5812,10 +5816,27 @@ HalBeginSystemInterrupt(
 
     /*
      * Save the active INTID for this CPU so HalEndSystemInterrupt can EOI it.
-     * This handles the case where multiple interrupts are nested - we track
-     * per-CPU to ensure the correct INTID is EOI'd.
+     * Interrupts can nest by priority on ARM64, so a single per-CPU INTID slot
+     * is not enough: a timer interrupt taken inside a device ISR would overwrite
+     * the device INTID and leave the device active in the GIC forever.
      */
-    if (cpu < MAXIMUM_PROCESSORS) HalpArm64ActiveIntId[cpu] = intid + 1;
+    if (cpu < MAXIMUM_PROCESSORS)
+    {
+        UCHAR depth = HalpArm64ActiveIntIdDepth[cpu];
+
+        if (depth < HAL_ARM64_ACTIVE_INTID_STACK_DEPTH)
+        {
+            HalpArm64ActiveIntIdStack[cpu][depth] = intid + 1;
+            HalpArm64ActiveIntIdDepth[cpu] = depth + 1;
+            HalpArm64ActiveIntId[cpu] = intid + 1;
+        }
+        else
+        {
+            DPRINT1("[arm64][GIC] Active INTID stack overflow on CPU %lu, INTID %lu\n",
+                    cpu,
+                    intid);
+        }
+    }
 
     return TRUE;
 }
@@ -6106,7 +6127,8 @@ HalEndSystemInterrupt(
     _In_ PKTRAP_FRAME TrapFrame)
 {
     ULONG cpu = KeGetCurrentProcessorNumber();
-    ULONG stored = (cpu < MAXIMUM_PROCESSORS) ? HalpArm64ActiveIntId[cpu] : 0;
+    ULONG stored = 0;
+    UCHAR depth = 0;
 
     /*
      * CRITICAL: Lower IRQL BEFORE sending EOI to prevent nested interrupts.
@@ -6115,6 +6137,26 @@ HalEndSystemInterrupt(
      * causing incorrect IRQL transitions and potential deadlocks.
      */
     KeLowerIrql(Irql);
+
+    if (cpu < MAXIMUM_PROCESSORS)
+    {
+        depth = HalpArm64ActiveIntIdDepth[cpu];
+        if (depth != 0)
+        {
+            depth--;
+            stored = HalpArm64ActiveIntIdStack[cpu][depth];
+            HalpArm64ActiveIntIdStack[cpu][depth] = 0;
+            HalpArm64ActiveIntIdDepth[cpu] = depth;
+            HalpArm64ActiveIntId[cpu] = (depth != 0) ?
+                                       HalpArm64ActiveIntIdStack[cpu][depth - 1] :
+                                       0;
+        }
+        else
+        {
+            stored = HalpArm64ActiveIntId[cpu];
+            HalpArm64ActiveIntId[cpu] = 0;
+        }
+    }
 
     if (stored)
     {
@@ -6139,7 +6181,6 @@ HalEndSystemInterrupt(
             if (HalpGiccBase != 0)
                 *HalpMmio((ULONG_PTR)HalpGiccBase, GICC_EOIR) = intid;
         }
-        if (cpu < MAXIMUM_PROCESSORS) HalpArm64ActiveIntId[cpu] = 0;
     }
     UNREFERENCED_PARAMETER(TrapFrame);
 }
