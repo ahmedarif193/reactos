@@ -106,8 +106,6 @@ KiArm64CopyToCurrentUserBuffer(
         PVOID PageAddress;
         SIZE_T PageOffset;
         SIZE_T ChunkSize;
-        PMMPTE PointerPte;
-        PFN_NUMBER PteFrame = 0;
 
         PageAddress = PAGE_ALIGN((PVOID)CurrentVa);
         PageOffset = BYTE_OFFSET(CurrentVa);
@@ -121,12 +119,6 @@ KiArm64CopyToCurrentUserBuffer(
         if (!NT_SUCCESS(Status))
         {
             return Status;
-        }
-
-        PointerPte = MiArm64UserPteKseg0ForPfn(PageAddress, &PteFrame);
-        if ((PointerPte == NULL) || (PointerPte->u.Hard.Valid == 0))
-        {
-            return STATUS_UNSUCCESSFUL;
         }
 
         CurrentVa += ChunkSize;
