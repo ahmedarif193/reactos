@@ -45,7 +45,7 @@ DBG_DEFAULT_CHANNEL(WARNING);
 #define ARM64_ALIGN_DOWN(value, alignment) \
     ((value) & ~((alignment) - 1ULL))
 
-#define ARM64_DEFAULT_SECONDARY_COLORS   8ULL /* FIXME: keep in sync with MmSecondaryColors (MiInitSystem) */
+#define ARM64_DEFAULT_SECONDARY_COLORS   64ULL
 #define ARM64_MINIMUM_NONPAGED_POOL_SIZE (256ULL * 1024ULL)
 #define ARM64_DEFAULT_MAX_NONPAGED_POOL  (1024ULL * 1024ULL)
 #define ARM64_MIN_ADDITION_NONPAGED_PER_MB (32ULL * 1024ULL)
@@ -56,6 +56,9 @@ DBG_DEFAULT_CHANNEL(WARNING);
 
 #define ARM64_SIZEOF_MMPFN             0x58ULL /* FIXME: update if sizeof(MMPFN) changes (ntoskrnl/include/internal/mm.h) */
 #define ARM64_SIZEOF_MMCOLOR_TABLES    0x18ULL
+
+typedef char arm64_secondary_colors_must_match_nt[
+    (ARM64_DEFAULT_SECONDARY_COLORS == 64ULL) ? 1 : -1];
 
 #define ARM64_DEBUG_MAPPING_BYTES  PAGE_SIZE
 
@@ -184,25 +187,22 @@ static inline void tlbi_va_range(ULONGLONG start, ULONGLONG end)
 #define PTE_BLOCK_RO            (1ULL << 7)
 
 /*
- * PTE_TABLE_ATTRS: Standard attributes for table descriptors (L0/L1/L2).
- * NOTE: AF bit is only valid for LEAF entries (blocks/pages), not for table
- * descriptors. The AF bit (bit 10) in table descriptors is reserved/ignored.
- * Table descriptor format:
- *   - Bits [1:0] = 0b11 (table type)
- *   - Bits [11:2] are ignored by hardware
- *   - Bits [47:12] = next-level table address
- *   - Bits [63:59,58:52] have specific meanings (APTable, XNTable, etc.)
+ * Windows/NT self-map compatibility: every upper-level table descriptor can be
+ * read back through PXE/PPE/PDE aliases, where the same 64-bit value is consumed
+ * by hardware as a final L3 descriptor for the table page. Keep the table type
+ * bits, but seed AF/cache/shareability bits so CPUs without reliable hardware
+ * AF update do not fault while the kernel inspects the recursive windows.
  */
-#define PTE_TABLE_ATTRS         (PTE_TYPE_VALID | PTE_TYPE_TABLE)
-/*
- * The recursive L0 entry is also seen by hardware as the final L3 descriptor
- * when accessing PXE_SELFMAP. Keep the table type bits, but include leaf
- * attributes so that final translation does not raise an AF fault.
- */
-#define PTE_SELFREF_ATTRS       (PTE_TABLE_ATTRS | \
+#define PTE_TABLE_ATTRS         (PTE_TYPE_VALID | PTE_TYPE_TABLE | \
                                  PTE_BLOCK_MEMTYPE(ARM64_MEM_ATTR_NORMAL_WB) | \
                                  PTE_BLOCK_INNER_SHARE | \
                                  PTE_BLOCK_AF)
+#define PTE_SELFREF_ATTRS       PTE_TABLE_ATTRS
+
+typedef char arm64_selfmap_index_must_match_nt[
+    (((ARM64_SELF_PXE_BASE >> ARM64_PXI_SHIFT) & ARM64_PX_MASK) == 493ULL) ? 1 : -1];
+typedef char arm64_table_attrs_must_match_nt[
+    (PTE_TABLE_ATTRS == 0x713ULL) ? 1 : -1];
 
 #define PTE_BLOCK_MEMTYPE_MASK  (7ULL << 2)
 
@@ -228,9 +228,9 @@ sanitize_block_attrs(UINT64 attrs)
 /* Descriptor classification helpers */
 #define DESC_VALID(e)     (((e) & PTE_TYPE_VALID) != 0)
 #define DESC_TYPE(e)      ((e) & PTE_TYPE_MASK)
-/* Table: valid && type==3 && !AF (AF is leaf-only) */
+/* At L0/L1/L2, type==3 is a table descriptor. AF may be set for self-map ABI. */
 #define DESC_IS_TABLE(e) \
-    (DESC_VALID(e) && (DESC_TYPE(e) == PTE_TYPE_TABLE) && !((e) & PTE_BLOCK_AF))
+    (DESC_VALID(e) && (DESC_TYPE(e) == PTE_TYPE_TABLE))
 /* Leaf (block or page) */
 #define DESC_IS_BLOCK(e)  (DESC_VALID(e) && (DESC_TYPE(e) == PTE_TYPE_BLOCK))
 #define DESC_IS_PAGE(e) \
@@ -296,15 +296,15 @@ static BOOLEAN page_tables_initialized = FALSE;
 /* Page table bookkeeping */
 #define ARM64_PT_ENTRIES           512U
 #define ARM64_PT_BYTES             (ARM64_PT_ENTRIES * sizeof(UINT64))
-#define ARM64_L2_TABLES_PER_L1     16U   /* accommodate identity maps >4GiB after ExitBootServices */
+#define ARM64_L2_TABLES_PER_L1     2U
 /*
  * L3 table pool sizing:
- * - Total L3 tables per L0 slot = L2_TABLES_PER_L1 * L3_TABLES_PER_L2
- * - For 8GB kernel mapping: need 8 L2 tables * 512 L3 per L2 = 4096 L3 tables
- * - We use a FLAT pool per L0 slot to avoid per-L2 slot exhaustion issues
- * - Each L0 slot covers 512GB, but we only map first 16GB (L2_TABLES_PER_L1 * 1GB)
+ * Keep only a compact seed pool inside the EFI image. The mapper spills to
+ * AllocatePages(), or the post-EBS static arena, when a slot needs more tables.
+ * This keeps uefildr's PE SizeOfImage near the real loader size instead of
+ * reserving hundreds of MiB of BSS for worst-case page-table coverage.
  */
-#define ARM64_L3_TABLES_PER_L2     512U  /* L3 tables per L2 slot (for array sizing) */
+#define ARM64_L3_TABLES_PER_L2     8U
 #define ARM64_L3_TABLES_PER_L0     (ARM64_L2_TABLES_PER_L1 * ARM64_L3_TABLES_PER_L2)  /* Total L3 tables per L0 slot */
 
 /*
@@ -323,9 +323,9 @@ static BOOLEAN page_tables_initialized = FALSE;
 #define ARM64_EXTRA_L0_SLOT_PFNDB      501U  /* 0x1F5 - PFN Database */
 
 #define ARM64_EXTRA_KERNEL_SLOTS       4U    /* Number of extra kernel L0 slots */
-#define ARM64_EXTRA_L2_PER_SLOT        4U    /* L2 tables per extra slot */
-#define ARM64_EXTRA_L3_PER_L2          512U  /* L3 tables per L2 in extra slots (flat pool) */
-#define ARM64_EXTRA_L3_PER_SLOT        (ARM64_EXTRA_L2_PER_SLOT * ARM64_EXTRA_L3_PER_L2)  /* Total L3 tables per extra slot (2048) */
+#define ARM64_EXTRA_L2_PER_SLOT        1U
+#define ARM64_EXTRA_L3_PER_L2          32U
+#define ARM64_EXTRA_L3_PER_SLOT        (ARM64_EXTRA_L2_PER_SLOT * ARM64_EXTRA_L3_PER_L2)
 
 /* Page tables allocated from low memory so VA==PA during boot */
 static UINT64                *arm64_l0_page_table;
@@ -366,7 +366,7 @@ static const UINT64 arm64_extra_kernel_l0_slots[ARM64_EXTRA_KERNEL_SLOTS] = {
     ARM64_EXTRA_L0_SLOT_SELFMAP,    /* 493 */
     ARM64_EXTRA_L0_SLOT_HYPERSPACE, /* 494 */
     ARM64_EXTRA_L0_SLOT_PAGEDPOOL,  /* 497 */
-    ARM64_EXTRA_L0_SLOT_PFNDB       /* 502 */
+    ARM64_EXTRA_L0_SLOT_PFNDB       /* 501 */
 };
 
 /* Page tables for extra kernel slots - pointers set during allocation */
@@ -459,7 +459,7 @@ static UINT8 arm64_extra_l3_tables_storage_raw[
     ARM64_EXTRA_KERNEL_SLOTS * ARM64_EXTRA_L2_PER_SLOT * ARM64_EXTRA_L3_PER_L2 * ARM64_PT_BYTES + PAGE_SIZE]
     __attribute__((aligned(4096)));
 
-#define ARM64_STATIC_EXTRA_PT_PAGES 4096
+#define ARM64_STATIC_EXTRA_PT_PAGES 1024
 static UINT8 arm64_static_extra_pt_arena[ARM64_STATIC_EXTRA_PT_PAGES * PAGE_SIZE]
     __attribute__((aligned(4096)));
 static UINT64 arm64_static_extra_pt_offset = 0;
@@ -471,7 +471,7 @@ typedef struct _ARM64_PT_ALLOCATION
     UINTN Pages;
 } ARM64_PT_ALLOCATION;
 
-#define ARM64_PT_ALLOCATION_MAX 64
+#define ARM64_PT_ALLOCATION_MAX 2048
 static ARM64_PT_ALLOCATION Arm64PtAllocations[ARM64_PT_ALLOCATION_MAX];
 static UINTN Arm64PtAllocationCount = 0;
 static BOOLEAN Arm64PtAllocationsApplied = FALSE;
@@ -1461,14 +1461,20 @@ static UINT64* ensure_l2_table(BOOLEAN is_kernel, UINT64 l0_slot, UINT64 *l1_tab
             {
                 if (l0_slot < ARM64_KERNEL_L1_TABLES)
                 {
-                    if (arm64_l2_next_index[l0_slot] >= ARM64_L2_TABLES_PER_L1) {
+                    if (arm64_l2_next_index[l0_slot] < ARM64_L2_TABLES_PER_L1)
+                    {
+                        UINT64 index = arm64_l2_next_index[l0_slot]++;
+                        split_table = arm64_kernel_l2_tables[l0_slot][index];
+                    }
+                    else
+                    {
                         ERR("ARM64: L2 table pool exhausted for kernel L0 slot %llu (limit %u)\n",
                             (unsigned long long)l0_slot,
                             ARM64_L2_TABLES_PER_L1);
-                        return NULL;
+                        split_table = allocate_pt_pages(1, "TTBR1 L2 (kernel spill split)");
+                        if (!split_table)
+                            return NULL;
                     }
-                    UINT64 index = arm64_l2_next_index[l0_slot]++;
-                    split_table = arm64_kernel_l2_tables[l0_slot][index];
                 }
                 else
                 {
@@ -1476,13 +1482,19 @@ static UINT64* ensure_l2_table(BOOLEAN is_kernel, UINT64 l0_slot, UINT64 *l1_tab
                     UINT64 extra_slot = get_extra_kernel_slot_index(l0_slot);
                     if (extra_slot < ARM64_EXTRA_KERNEL_SLOTS && arm64_extra_l2_tables)
                     {
-                        if (arm64_extra_l2_next_index[extra_slot] >= ARM64_EXTRA_L2_PER_SLOT) {
+                        if (arm64_extra_l2_next_index[extra_slot] < ARM64_EXTRA_L2_PER_SLOT)
+                        {
+                            UINT64 index = arm64_extra_l2_next_index[extra_slot]++;
+                            split_table = arm64_extra_l2_tables[extra_slot][index];
+                        }
+                        else
+                        {
                             ERR("ARM64: Extra L2 table pool exhausted for L0 slot %llu (limit %u)\n",
                                 (unsigned long long)l0_slot, ARM64_EXTRA_L2_PER_SLOT);
-                            return NULL;
+                            split_table = allocate_pt_pages(1, "TTBR1 L2 (extra spill split)");
+                            if (!split_table)
+                                return NULL;
                         }
-                        UINT64 index = arm64_extra_l2_next_index[extra_slot]++;
-                        split_table = arm64_extra_l2_tables[extra_slot][index];
                     }
                     else
                     {
@@ -1496,14 +1508,20 @@ static UINT64* ensure_l2_table(BOOLEAN is_kernel, UINT64 l0_slot, UINT64 *l1_tab
             else
             {
                 if (l0_slot >= ARM64_USER_L1_TABLES) return NULL;
-                if (arm64_user_l2_next_index[l0_slot] >= ARM64_L2_TABLES_PER_L1) {
+                if (arm64_user_l2_next_index[l0_slot] < ARM64_L2_TABLES_PER_L1)
+                {
+                    UINT64 index = arm64_user_l2_next_index[l0_slot]++;
+                    split_table = arm64_user_l2_tables[l0_slot][index];
+                }
+                else
+                {
                     ERR("ARM64: L2 table pool exhausted for user L0 slot %llu (limit %u)\n",
                         (unsigned long long)l0_slot,
                         ARM64_L2_TABLES_PER_L1);
-                    return NULL;
+                    split_table = allocate_pt_pages(1, "TTBR0 L2 (user spill split)");
+                    if (!split_table)
+                        return NULL;
                 }
-                UINT64 index = arm64_user_l2_next_index[l0_slot]++;
-                split_table = arm64_user_l2_tables[l0_slot][index];
             }
 
             RtlZeroMemory(split_table, PAGE_SIZE);
@@ -1530,14 +1548,22 @@ static UINT64* ensure_l2_table(BOOLEAN is_kernel, UINT64 l0_slot, UINT64 *l1_tab
     if (is_kernel) {
         if (l0_slot < ARM64_KERNEL_L1_TABLES)
         {
-            if (arm64_l2_next_index[l0_slot] >= ARM64_L2_TABLES_PER_L1) {
+            UINT64 *new_table;
+
+            if (arm64_l2_next_index[l0_slot] < ARM64_L2_TABLES_PER_L1)
+            {
+                UINT64 index = arm64_l2_next_index[l0_slot]++;
+                new_table = arm64_kernel_l2_tables[l0_slot][index];
+            }
+            else
+            {
                 ERR("ARM64: L2 table pool exhausted for kernel L0 slot %llu (limit %u)\n",
                     (unsigned long long)l0_slot, ARM64_L2_TABLES_PER_L1);
-                return NULL;
+                new_table = allocate_pt_pages(1, "TTBR1 L2 (kernel spill)");
+                if (!new_table)
+                    return NULL;
             }
 
-            UINT64 index = arm64_l2_next_index[l0_slot]++;
-            UINT64 *new_table = arm64_kernel_l2_tables[l0_slot][index];
             RtlZeroMemory(new_table, PAGE_SIZE);
             pte_write(&l1_table[l1_index],
                       (phys_from_ptr(new_table) | PTE_TABLE_ATTRS));
@@ -1549,13 +1575,22 @@ static UINT64* ensure_l2_table(BOOLEAN is_kernel, UINT64 l0_slot, UINT64 *l1_tab
             UINT64 extra_slot = get_extra_kernel_slot_index(l0_slot);
             if (extra_slot < ARM64_EXTRA_KERNEL_SLOTS && arm64_extra_l2_tables)
             {
-                if (arm64_extra_l2_next_index[extra_slot] >= ARM64_EXTRA_L2_PER_SLOT) {
+                UINT64 *new_table;
+
+                if (arm64_extra_l2_next_index[extra_slot] < ARM64_EXTRA_L2_PER_SLOT)
+                {
+                    UINT64 index = arm64_extra_l2_next_index[extra_slot]++;
+                    new_table = arm64_extra_l2_tables[extra_slot][index];
+                }
+                else
+                {
                     ERR("ARM64: Extra L2 table pool exhausted for L0 slot %llu (limit %u)\n",
                         (unsigned long long)l0_slot, ARM64_EXTRA_L2_PER_SLOT);
-                    return NULL;
+                    new_table = allocate_pt_pages(1, "TTBR1 L2 (extra spill)");
+                    if (!new_table)
+                        return NULL;
                 }
-                UINT64 index = arm64_extra_l2_next_index[extra_slot]++;
-                UINT64 *new_table = arm64_extra_l2_tables[extra_slot][index];
+
                 RtlZeroMemory(new_table, PAGE_SIZE);
                 pte_write(&l1_table[l1_index],
                           (phys_from_ptr(new_table) | PTE_TABLE_ATTRS));
@@ -1576,14 +1611,22 @@ static UINT64* ensure_l2_table(BOOLEAN is_kernel, UINT64 l0_slot, UINT64 *l1_tab
     }
 
     if (l0_slot >= ARM64_USER_L1_TABLES) return NULL;
-    if (arm64_user_l2_next_index[l0_slot] >= ARM64_L2_TABLES_PER_L1) {
+    UINT64 *new_table;
+
+    if (arm64_user_l2_next_index[l0_slot] < ARM64_L2_TABLES_PER_L1)
+    {
+        UINT64 index = arm64_user_l2_next_index[l0_slot]++;
+        new_table = arm64_user_l2_tables[l0_slot][index];
+    }
+    else
+    {
         ERR("ARM64: L2 table pool exhausted for user L0 slot %llu (limit %u)\n",
             (unsigned long long)l0_slot, ARM64_L2_TABLES_PER_L1);
-        return NULL;
+        new_table = allocate_pt_pages(1, "TTBR0 L2 (user spill)");
+        if (!new_table)
+            return NULL;
     }
 
-    UINT64 index = arm64_user_l2_next_index[l0_slot]++;
-    UINT64 *new_table = arm64_user_l2_tables[l0_slot][index];
     RtlZeroMemory(new_table, PAGE_SIZE);
     pte_write(&l1_table[l1_index],
               (phys_from_ptr(new_table) | PTE_TABLE_ATTRS));
@@ -1621,8 +1664,8 @@ static UINT64* alloc_kernel_l3_from_flat_pool(UINT64 l0_slot)
     /* Debug: check if arm64_kernel_l3_tables is NULL */
     if (!arm64_kernel_l3_tables)
     {
-        Pl011RawPuts("[L3] FATAL: arm64_kernel_l3_tables is NULL\n");
-        return NULL;
+        Pl011RawPuts("[L3] kernel L3 seed pool is NULL; allocating spill table\n");
+        return allocate_pt_pages(1, "TTBR1 L3 (kernel no-pool spill)");
     }
 
     if (flat_idx >= ARM64_L3_TABLES_PER_L0)
@@ -1633,7 +1676,7 @@ static UINT64* alloc_kernel_l3_from_flat_pool(UINT64 l0_slot)
             (unsigned long long)flat_idx,
             ARM64_L3_TABLES_PER_L0);
         Pl011RawPuts(buf);
-        return NULL;
+        return allocate_pt_pages(1, "TTBR1 L3 (kernel spill)");
     }
 
     /* Convert flat index to [l2_slot][index] for array access */
@@ -1644,8 +1687,8 @@ static UINT64* alloc_kernel_l3_from_flat_pool(UINT64 l0_slot)
 
     if (!result)
     {
-        Pl011RawPuts("[L3] FATAL: result is NULL from array\n");
-        return NULL;
+        Pl011RawPuts("[L3] kernel L3 seed entry is NULL; allocating spill table\n");
+        return allocate_pt_pages(1, "TTBR1 L3 (kernel null spill)");
     }
 
     arm64_l3_next_index[l0_slot]++;
@@ -1664,14 +1707,21 @@ static UINT64* alloc_user_l3_from_flat_pool(UINT64 l0_slot)
             (unsigned long long)flat_idx,
             ARM64_L3_TABLES_PER_L0);
         Pl011RawPuts(buf);
-        return NULL;
+        return allocate_pt_pages(1, "TTBR0 L3 (user spill)");
     }
 
     UINT64 l2_slot_for_alloc = flat_idx / ARM64_L3_TABLES_PER_L2;
     UINT64 idx_in_l2_slot = flat_idx % ARM64_L3_TABLES_PER_L2;
 
+    UINT64 *result = arm64_user_l3_tables[l0_slot][l2_slot_for_alloc][idx_in_l2_slot];
+    if (!result)
+    {
+        Pl011RawPuts("[L3] user L3 seed entry is NULL; allocating spill table\n");
+        return allocate_pt_pages(1, "TTBR0 L3 (user null spill)");
+    }
+
     arm64_user_l3_next_index[l0_slot]++;
-    return arm64_user_l3_tables[l0_slot][l2_slot_for_alloc][idx_in_l2_slot];
+    return result;
 }
 
 /*
@@ -1694,8 +1744,8 @@ static UINT64* alloc_extra_l3_from_flat_pool(UINT64 extra_slot)
 
     if (!arm64_extra_l3_tables)
     {
-        Pl011RawPuts("[L3] FATAL: arm64_extra_l3_tables is NULL\n");
-        return NULL;
+        Pl011RawPuts("[L3] extra L3 seed pool is NULL; allocating spill table\n");
+        return allocate_pt_pages(1, "TTBR1 L3 (extra no-pool spill)");
     }
 
     UINT64 flat_idx = arm64_extra_l3_next_index[extra_slot];
@@ -1708,7 +1758,7 @@ static UINT64* alloc_extra_l3_from_flat_pool(UINT64 extra_slot)
             (unsigned long long)flat_idx,
             ARM64_EXTRA_L3_PER_SLOT);
         Pl011RawPuts(buf);
-        return NULL;
+        return allocate_pt_pages(1, "TTBR1 L3 (extra spill)");
     }
 
     /* Convert flat index to [l2_slot][index] for array access */
@@ -1725,7 +1775,7 @@ static UINT64* alloc_extra_l3_from_flat_pool(UINT64 extra_slot)
             (unsigned long long)l2_slot_for_alloc,
             (unsigned long long)idx_in_l2_slot);
         Pl011RawPuts(buf);
-        return NULL;
+        return allocate_pt_pages(1, "TTBR1 L3 (extra null spill)");
     }
 
     arm64_extra_l3_next_index[extra_slot]++;
@@ -2374,8 +2424,7 @@ Arm64EnsureRangeTables(
                 {
                     UINT64 slot = l0_idx - ARM64_KSEG0_L0_INDEX;
                     pte_write(&l0_table[l0_idx],
-                              phys_from_ptr(&arm64_kernel_l1_tables[slot][0]) | PTE_TYPE_VALID
-                              | PTE_TYPE_TABLE);
+                              phys_from_ptr(&arm64_kernel_l1_tables[slot][0]) | PTE_TABLE_ATTRS);
                     l1_table = arm64_kernel_l1_tables[slot];
                 }
                 else
@@ -2392,8 +2441,7 @@ Arm64EnsureRangeTables(
             else
             {
                 pte_write(&l0_table[l0_idx],
-                          phys_from_ptr(&arm64_l1_page_tables[l0_idx][0]) | PTE_TYPE_VALID
-                          | PTE_TYPE_TABLE);
+                          phys_from_ptr(&arm64_l1_page_tables[l0_idx][0]) | PTE_TABLE_ATTRS);
                 l1_table = arm64_l1_page_tables[l0_idx];
             }
         }
