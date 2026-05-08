@@ -31,6 +31,7 @@ extern NTKERNELAPI ULONG64 MmUserProbeAddress;
 #define ARM64_PTE_UXN                (1ULL << 54)
 #define ARM64_PTE_WRITE              (1ULL << 55)
 #define ARM64_PTE_COPY_ON_WRITE      (1ULL << 56)
+#define ARM64_PTE_SH_INNER           (3ULL << 8)
 
 #define PTE_READONLY            (ARM64_PTE_PXN | ARM64_PTE_UXN)
 #define PTE_EXECUTE             ARM64_PTE_PXN
@@ -62,6 +63,16 @@ extern NTKERNELAPI ULONG64 MmUserProbeAddress;
 #define ARM64_PTE_TYPE_TABLE    0x0000000000000003ULL
 #define ARM64_PTE_ADDR_MASK     0x0000FFFFFFFFF000ULL
 
+/*
+ * Windows ARM64 exposes upper-level table entries through the recursive
+ * PXE/PPE/PDE views. Keep the table descriptor bits identical to the loader
+ * ABI: valid table, Normal-WB, Inner Shareable, Accessed.
+ */
+#define ARM64_PTE_TABLE_DESCRIPTOR_ATTRS \
+    (ARM64_PTE_TYPE_TABLE | PTE_ENABLE_CACHE | ARM64_PTE_SH_INNER | PTE_ACCESSED)
+#define ARM64_MAKE_TABLE_DESCRIPTOR(Pfn) \
+    ((((ULONG64)(Pfn)) << PAGE_SHIFT) | ARM64_PTE_TABLE_DESCRIPTOR_ATTRS)
+
 #define MI_IS_PTE_VALID_ARM64(Pte) (((Pte).u.Long & ARM64_PTE_TYPE_MASK) == ARM64_PTE_TYPE_PAGE)
 #define MI_IS_TABLE_VALID_ARM64(Pde) (((Pde).u.Long & ARM64_PTE_TYPE_MASK) == ARM64_PTE_TYPE_TABLE)
 
@@ -72,8 +83,8 @@ extern NTKERNELAPI ULONG64 MmUserProbeAddress;
  * kernel addresses (0xFFFF...) are translated via TTBR1_EL1. The NT Memory
  * Manager's self-map is built into TTBR1's hierarchy at L0 index 493.
  *
- * ReactOS uses one process L0 root for both TTBR0 and TTBR1. L0[493] points
- * back to that root and L0[494] is hyperspace, matching Windows ARM64.
+ * L0[493] points back to the active TTBR1 root and L0[494] is hyperspace,
+ * matching the Windows ARM64 contract expected by boot loaders and ARM3.
  */
 #define PXE_SELFMAP_INDEX   493
 
@@ -86,6 +97,14 @@ extern NTKERNELAPI ULONG64 MmUserProbeAddress;
 #define PPE_TOP     0xFFFFF6FB7DBFFFFFULL
 #define PDE_TOP     0xFFFFF6FB7FFFFFFFULL
 #define PTE_TOP     0xFFFFF6FFFFFFFFFFULL
+
+C_ASSERT(PXE_SELFMAP_INDEX == 493);
+C_ASSERT((((PXE_BASE >> PXI_SHIFT) & PXI_MASK) == PXE_SELFMAP_INDEX));
+C_ASSERT((((PPE_BASE >> PXI_SHIFT) & PXI_MASK) == PXE_SELFMAP_INDEX));
+C_ASSERT((((PDE_BASE >> PXI_SHIFT) & PXI_MASK) == PXE_SELFMAP_INDEX));
+C_ASSERT((((PTE_BASE >> PXI_SHIFT) & PXI_MASK) == PXE_SELFMAP_INDEX));
+C_ASSERT(PXE_SELFMAP == (PXE_BASE + (PXE_SELFMAP_INDEX * 8ULL)));
+C_ASSERT(ARM64_PTE_TABLE_DESCRIPTOR_ATTRS == 0x713ULL);
 
 #define KSEG0_BASE  0xFFFF800000000000ULL
 
@@ -156,6 +175,7 @@ extern NTKERNELAPI ULONG64 MmUserProbeAddress;
 #define MI_MIN_SECONDARY_COLORS                 8
 #define MI_SECONDARY_COLORS                     64
 #define MI_MAX_SECONDARY_COLORS                 1024
+C_ASSERT(MI_SECONDARY_COLORS == 64);
 #define MI_NUMBER_SYSTEM_PTES                   50000
 #define MI_MAX_FREE_PAGE_LISTS                  4
 #define MI_HYPERSPACE_PTES                     256
@@ -579,10 +599,11 @@ MiArm64IsAddressValid(
 }
 
 /*
- * MiArm64SyncPxeWrite - Propagate PXE-level self-map writes to real L0 pages.
+ * MiArm64SyncPxeWrite - Propagate PXE-level self-map writes to the TTBR1 root.
  *
- * PXE_BASE writes already update the current process root through the recursive
- * slot. This helper mirrors the write to the active TTBR root used by hardware.
+ * PXE_BASE is the kernel recursive view. User page tables are reached through
+ * TTBR0 physical walks, so PXE writes must never be redirected to TTBR0 based
+ * on the entry index.
  */
 FORCEINLINE
 VOID
@@ -602,14 +623,7 @@ MiArm64SyncPxeWrite(
     if (Index >= PXE_PER_PAGE)
         return;
 
-    if (Index < (PXE_PER_PAGE / 2))
-    {
-        __asm__ __volatile__("mrs %0, ttbr0_el1" : "=r"(Root));
-    }
-    else
-    {
-        __asm__ __volatile__("mrs %0, ttbr1_el1" : "=r"(Root));
-    }
+    __asm__ __volatile__("mrs %0, ttbr1_el1" : "=r"(Root));
 
     Root &= ARM64_PTE_ADDR_MASK;
     if (Root == 0)
