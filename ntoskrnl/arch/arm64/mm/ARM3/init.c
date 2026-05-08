@@ -1713,6 +1713,8 @@ MiInitMachineDependent(_Inout_ PLOADER_PARAMETER_BLOCK LoaderBlock)
             MiArm64FinalizePfnDatabase(LoaderBlock);
         }
 
+        MmInitializeBalancer((ULONG)MmAvailablePages, 0);
+
         MiArm64PfnFreeListsReady = TRUE;
         MiArm64PfnDatabaseReady = TRUE;
 
