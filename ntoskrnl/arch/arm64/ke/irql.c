@@ -70,8 +70,6 @@ extern KIRQL KeArm64CurrentIrql;
  * This avoids circular import dependencies between kernel and HAL.
  */
 BOOLEAN KiHalInitialized = FALSE;
-static LONG KiArm64SerrorPolicyTraceCount;
-static LONG KiArm64LowerDispatchTraceBudget = 32;
 
 #undef KeLowerIrql
 #undef KeRaiseIrql
@@ -122,31 +120,9 @@ KiTraceSerrorPolicy(
     _In_ KIRQL OldIrql,
     _In_ KIRQL NewIrql)
 {
-    ULONG64 Daif;
-    LONG TraceIndex;
-
-    if ((NewIrql != PASSIVE_LEVEL) && (OldIrql < HIGH_LEVEL))
-    {
-        return;
-    }
-
-    TraceIndex = InterlockedIncrement(&KiArm64SerrorPolicyTraceCount);
-    if (TraceIndex > 16)
-    {
-        return;
-    }
-
-    __asm__ __volatile__("mrs %0, daif" : "=r"(Daif));
-    DPRINT1("[arm64][IRQL] %s[%ld] old=%u new=%u daif=0x%llx A=%llu I=%llu F=%llu hal=%u\n",
-            Site,
-            TraceIndex,
-            OldIrql,
-            NewIrql,
-            Daif,
-            (Daif >> 8) & 1ULL,
-            (Daif >> 7) & 1ULL,
-            (Daif >> 6) & 1ULL,
-            KiHalInitialized ? 1U : 0U);
+    UNREFERENCED_PARAMETER(Site);
+    UNREFERENCED_PARAMETER(OldIrql);
+    UNREFERENCED_PARAMETER(NewIrql);
 }
 
 /*
@@ -644,23 +620,6 @@ KfLowerIrql(
 
         if (NeedDispatch)
         {
-            if (KiArm64LowerDispatchTraceBudget > 0)
-            {
-                LONG OldBudget = InterlockedDecrement(&KiArm64LowerDispatchTraceBudget);
-                if (OldBudget >= 0)
-                {
-                    DPRINT1("[arm64][IRQL] lower dispatch old=%u new=%u dpcReq=%u timer=%p dpcDepth=%lu quantum=%u next=%p cur=%p\n",
-                            OldIrql,
-                            NewIrql,
-                            Prcb->DpcInterruptRequested ? 1U : 0U,
-                            Prcb->TimerRequest,
-                            Prcb->DpcData[0].DpcQueueDepth,
-                            Prcb->QuantumEnd ? 1U : 0U,
-                            Prcb->NextThread,
-                            Prcb->CurrentThread);
-                }
-            }
-
             /*
              * Clear the DpcInterruptRequested flag FIRST to prevent re-delivery.
              * Note: TimerRequest is cleared by KiDispatchInterrupt itself.
