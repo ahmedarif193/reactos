@@ -40,6 +40,9 @@
 #define ISO9660_SIGNATURE                         "CD001"
 #define ISO9660_SIGNATURE_LENGTH                  5
 #define ISO9660_PROBE_LENGTH                      2048
+#define RAMDISK_BOOT_PFN_INVALID                  0x0FFFFFFF
+#define RAMDISK_BOOT_PFN_PROBE_LIMIT              256
+#define RAMDISK_BOOT_PFN_REQUIRED_RUN             4
 
 #include <pshpack1.h>
 typedef struct _RAMDISK_MBR_PARTITION_ENTRY
@@ -217,6 +220,16 @@ RamdiskMapBootPfn(IN PRAMDISK_DRIVE_EXTENSION DeviceExtension,
                   OUT PULONG MappingLength);
 
 static
+BOOLEAN
+RamdiskUseContiguousBootMapping(IN PRAMDISK_DRIVE_EXTENSION DriveExtension);
+
+static
+BOOLEAN
+RamdiskBootPfnCandidateLooksValid(IN PULONG Candidate,
+                                  IN ULONG AvailableEntries,
+                                  IN ULONG RequiredEntries);
+
+static
 NTSTATUS
 RamdiskBuildRegistrySubKey(IN PRAMDISK_DRIVE_EXTENSION DriveExtension,
                            _Out_writes_(BufferChars) PWSTR Buffer,
@@ -288,6 +301,63 @@ RamdiskEnsureRegistryPath(IN PRAMDISK_DRIVE_EXTENSION DriveExtension)
 
 static
 BOOLEAN
+RamdiskUseContiguousBootMapping(IN PRAMDISK_DRIVE_EXTENSION DriveExtension)
+{
+    RamdiskReleaseBootPfnTable(DriveExtension);
+    DriveExtension->BootPfnInitialized = TRUE;
+    DriveExtension->BootPfnUsesList = FALSE;
+    DriveExtension->BootPfnMappingOwned = FALSE;
+    DriveExtension->BootPfnArray = NULL;
+    DriveExtension->BootPfnCount = 0;
+    return TRUE;
+}
+
+static
+BOOLEAN
+RamdiskBootPfnCandidateLooksValid(IN PULONG Candidate,
+                                  IN ULONG AvailableEntries,
+                                  IN ULONG RequiredEntries)
+{
+    ULONG Index;
+    ULONG ProbeEntries;
+    ULONG ValidEntries = 0;
+
+    ProbeEntries = AvailableEntries;
+    if (ProbeEntries > RequiredEntries)
+    {
+        ProbeEntries = RequiredEntries;
+    }
+    if (ProbeEntries > RAMDISK_BOOT_PFN_PROBE_LIMIT)
+    {
+        ProbeEntries = RAMDISK_BOOT_PFN_PROBE_LIMIT;
+    }
+    if (ProbeEntries < RAMDISK_BOOT_PFN_REQUIRED_RUN)
+    {
+        return FALSE;
+    }
+
+    for (Index = 0; Index < ProbeEntries; Index++)
+    {
+        ULONG Pfn = Candidate[Index];
+
+        if (Pfn == 0 || Pfn == RAMDISK_BOOT_PFN_INVALID)
+        {
+            continue;
+        }
+
+        if (Pfn > RAMDISK_BOOT_PFN_INVALID)
+        {
+            return FALSE;
+        }
+
+        ValidEntries++;
+    }
+
+    return ValidEntries >= RAMDISK_BOOT_PFN_REQUIRED_RUN;
+}
+
+static
+BOOLEAN
 RamdiskEnsureBootPfnTable(IN PRAMDISK_DRIVE_EXTENSION DriveExtension)
 {
     PHYSICAL_ADDRESS TablePhysical;
@@ -299,7 +369,7 @@ RamdiskEnsureBootPfnTable(IN PRAMDISK_DRIVE_EXTENSION DriveExtension)
     SIZE_T SpanBytes;
     ULONG SpanWords;
     ULONG Index;
-    const ULONG RequiredRun = 4;
+    const ULONG RequiredRun = RAMDISK_BOOT_PFN_REQUIRED_RUN;
 
     if (DriveExtension->BootPfnInitialized)
     {
@@ -332,12 +402,7 @@ RamdiskEnsureBootPfnTable(IN PRAMDISK_DRIVE_EXTENSION DriveExtension)
      */
     if (!DriveExtension->DiskOptions.Readonly)
     {
-        DriveExtension->BootPfnInitialized = TRUE;
-        DriveExtension->BootPfnUsesList = FALSE;
-        DriveExtension->BootPfnMappingOwned = FALSE;
-        DriveExtension->BootPfnArray = NULL;
-        DriveExtension->BootPfnCount = 0;
-        return TRUE;
+        return RamdiskUseContiguousBootMapping(DriveExtension);
     }
 
     TotalBytes = DriveExtension->DiskOffset + DriveExtension->DiskLength.QuadPart;
@@ -366,12 +431,12 @@ RamdiskEnsureBootPfnTable(IN PRAMDISK_DRIVE_EXTENSION DriveExtension)
     DriveExtension->BootPfnTableOffset = 0;
     DriveExtension->BootPfnMappingOwned = TRUE;
 
-    for (Index = 0; Index + RequiredRun < SpanWords; Index++)
+    for (Index = 0; Index + RequiredRun <= SpanWords; Index++)
     {
         ULONG Value = Table[Index];
         ULONG Run;
 
-        if (Value == 0)
+        if (Value == 0 || Value > (RAMDISK_BOOT_PFN_INVALID - RequiredRun))
         {
             continue;
         }
@@ -401,13 +466,7 @@ RamdiskEnsureBootPfnTable(IN PRAMDISK_DRIVE_EXTENSION DriveExtension)
                    "RamdiskEnsureBootPfnTable: no legacy PFN table (entries=%lu), using contiguous boot mapping\n",
                    EntryCount);
 #endif
-        RamdiskReleaseBootPfnTable(DriveExtension);
-        DriveExtension->BootPfnInitialized = TRUE;
-        DriveExtension->BootPfnUsesList = FALSE;
-        DriveExtension->BootPfnMappingOwned = FALSE;
-        DriveExtension->BootPfnArray = NULL;
-        DriveExtension->BootPfnCount = 0;
-        return TRUE;
+        return RamdiskUseContiguousBootMapping(DriveExtension);
     }
 
 #if DBG
@@ -493,6 +552,19 @@ RamdiskEnsureBootPfnTable(IN PRAMDISK_DRIVE_EXTENSION DriveExtension)
         return FALSE;
     }
 
+    if (!RamdiskBootPfnCandidateLooksValid(DriveExtension->BootPfnArray,
+                                           SpanWords - DriveExtension->BootPfnTableOffset,
+                                           EntryCount))
+    {
+#if DBG
+        DbgPrintEx(DPFLTR_DEFAULT_ID,
+                   DPFLTR_WARNING_LEVEL,
+                   "RamdiskEnsureBootPfnTable: rejected bogus PFN table at offset %lu, using contiguous boot mapping\n",
+                   DriveExtension->BootPfnTableOffset);
+#endif
+        return RamdiskUseContiguousBootMapping(DriveExtension);
+    }
+
 #if DBG
     DbgPrintEx(DPFLTR_DEFAULT_ID,
                DPFLTR_ERROR_LEVEL,
@@ -511,7 +583,6 @@ RamdiskEnsureBootPfnTable(IN PRAMDISK_DRIVE_EXTENSION DriveExtension)
      * markers for zero pages.
      */
     {
-        const ULONG InvalidPfnMarker = 0x0FFFFFFF;
         const ULONG PfnsPerMapPage = PAGE_SIZE / sizeof(ULONG);  /* 1024 */
         BOOLEAN IsTwoLevel = FALSE;
         ULONG MapPageCount = 0;
@@ -519,7 +590,7 @@ RamdiskEnsureBootPfnTable(IN PRAMDISK_DRIVE_EXTENSION DriveExtension)
 
         /* Check if first PFN is much smaller than BasePage (heuristic for two-level) */
         if (DriveExtension->BootPfnArray[0] != 0 &&
-            DriveExtension->BootPfnArray[0] < InvalidPfnMarker &&
+            DriveExtension->BootPfnArray[0] < RAMDISK_BOOT_PFN_INVALID &&
             DriveExtension->BootPfnArray[0] < DriveExtension->BasePage)
         {
             IsTwoLevel = TRUE;
@@ -531,7 +602,7 @@ RamdiskEnsureBootPfnTable(IN PRAMDISK_DRIVE_EXTENSION DriveExtension)
             for (i = 0; i < DriveExtension->BootPfnCount && i < 256; i++)
             {
                 ULONG Pfn = DriveExtension->BootPfnArray[i];
-                if (Pfn != 0 && Pfn < InvalidPfnMarker)
+                if (Pfn != 0 && Pfn < RAMDISK_BOOT_PFN_INVALID)
                 {
                     MapPageCount++;
                 }
@@ -584,7 +655,7 @@ RamdiskEnsureBootPfnTable(IN PRAMDISK_DRIVE_EXTENSION DriveExtension)
                     PHYSICAL_ADDRESS MapPhysical;
                     PULONG MapPage;
 
-                    if (MapPfn == 0 || MapPfn >= InvalidPfnMarker)
+                    if (MapPfn == 0 || MapPfn >= RAMDISK_BOOT_PFN_INVALID)
                     {
                         continue;
                     }
@@ -715,7 +786,6 @@ RamdiskMapBootPfn(IN PRAMDISK_DRIVE_EXTENSION DeviceExtension,
                   OUT PULONG OutputLength,
                   OUT PULONG MappingLength)
 {
-    const ULONG InvalidPfnMarker = 0x0FFFFFFF;
     ULONGLONG AbsoluteStart;
     ULONGLONG AbsoluteEnd;
     ULONGLONG Remaining;
@@ -830,7 +900,7 @@ RamdiskMapBootPfn(IN PRAMDISK_DRIVE_EXTENSION DeviceExtension,
     }
 
     /* Check for invalid PFN */
-    if (!UseDirectMapping && (PfnEntry == 0 || PfnEntry >= InvalidPfnMarker))
+    if (!UseDirectMapping && (PfnEntry == 0 || PfnEntry >= RAMDISK_BOOT_PFN_INVALID))
     {
         /* Invalid PFN - return zero page */
         if (!DeviceExtension->BootZeroPage)
