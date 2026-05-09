@@ -10,8 +10,7 @@
  *   The UART base address is detected at runtime by the bootloader and
  *   passed to the kernel via the loader block extension.
  *
- *   In the kernel, the UART is accessed via KSEG0 mapping:
- *     VA = 0xFFFF800000000000 + PhysicalAddress
+ *   In the kernel, the UART is accessed via the private physical map.
  */
 
 #pragma once
@@ -42,12 +41,11 @@
     (EarlyUartInitialized ? EarlyUartBaseAddress : KI_ARM64_PL011_BASE_DEFAULT)
 
 /*
- * KI_ARM64_PL011_VA - Get the UART virtual address via KSEG0 mapping.
- * The KSEG0 base is 0xFFFF800000000000, which identity-maps the first
- * portion of physical memory into the kernel address space.
+ * KI_ARM64_PL011_VA - Get the UART virtual address via the private
+ * physical map.
  */
 #define KI_ARM64_PL011_VA \
-    (ARM64_KSEG0_BASE_VA + KI_ARM64_PL011_BASE)
+    (ARM64_PHYS_MAP_BASE_VA + KI_ARM64_PL011_BASE)
 
 /*
  * Kernel UART output macros.

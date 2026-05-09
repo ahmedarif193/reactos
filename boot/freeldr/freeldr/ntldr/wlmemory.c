@@ -143,14 +143,6 @@ MempSetupPagingForRegion(
 
         /* Pages not in use */
         case LoaderFree:
-#if defined(_M_ARM64) || defined(_ARM64_) || defined(__aarch64__) || defined(__arm64__)
-            /*
-             * ARM64 uses a direct KSEG0 physical-memory window. Map free
-             * pages too so the kernel can touch them during early PFN setup.
-             */
-            Status = MempSetupPaging(BasePage, PageCount, TRUE);
-            break;
-#endif
         case LoaderBad:
             break;
 
@@ -338,11 +330,32 @@ WinLdrSetupMemoryLayout(IN OUT PLOADER_PARAMETER_BLOCK LoaderBlock)
 
     WinLdrpDumpMemoryDescriptors(LoaderBlock); //FIXME: Delete!
 
-#if defined(UEFIBOOT) && !defined(_M_ARM64) && !defined(_ARM64_) && !defined(__aarch64__) && !defined(__arm64__)
+#if defined(UEFIBOOT)
     extern PVOID OsLoaderBase;
     extern SIZE_T OsLoaderSize;
     /* UEFILDR can be above the 2GB-ish range, we don't want to map the whole area */
     Status = MempSetupPaging((ULONG_PTR)OsLoaderBase / PAGE_SIZE, OsLoaderSize / PAGE_SIZE, FALSE);
+    if (!Status)
+    {
+        ERR("Error during MempSetupPaging of UEFI loader image\n");
+        return FALSE;
+    }
+#endif
+
+#if defined(_M_ARM64) || defined(_ARM64_) || defined(__aarch64__) || defined(__arm64__)
+    {
+        PFN_NUMBER StartPage = (ULONG_PTR)WinLdrSystemBlock >> PAGE_SHIFT;
+        PFN_NUMBER EndPage = ((ULONG_PTR)WinLdrSystemBlock +
+                              sizeof(*WinLdrSystemBlock) +
+                              PAGE_SIZE - 1) >> PAGE_SHIFT;
+
+        Status = MempSetupPaging(StartPage, EndPage - StartPage, TRUE);
+        if (!Status)
+        {
+            ERR("Error during MempSetupPaging of ARM64 loader system block\n");
+            return FALSE;
+        }
+    }
 #endif
 
     // Map our loader image, so we can continue running

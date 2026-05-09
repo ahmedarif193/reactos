@@ -66,26 +66,26 @@ KiArm64IsKernelAddressMappedNoFault(
     if (RootPa == 0)
         return FALSE;
 
-    Table = (volatile ULONG64 *)(KSEG0_BASE | RootPa);
+    Table = (volatile ULONG64 *)MI_ARM64_PHYS_TO_VA(RootPa);
     Entry = Table[(Va >> PXI_SHIFT) & PXI_MASK];
     if ((Entry & ARM64_PTE_TYPE_MASK) != ARM64_PTE_TYPE_TABLE)
         return FALSE;
 
-    Table = (volatile ULONG64 *)(KSEG0_BASE | (Entry & ARM64_PTE_ADDR_MASK));
+    Table = (volatile ULONG64 *)MI_ARM64_PHYS_TO_VA(Entry & ARM64_PTE_ADDR_MASK);
     Entry = Table[(Va >> PPI_SHIFT) & PPI_MASK];
     if ((Entry & ARM64_PTE_TYPE_MASK) == ARM64_PTE_TYPE_BLOCK)
         return TRUE;
     if ((Entry & ARM64_PTE_TYPE_MASK) != ARM64_PTE_TYPE_TABLE)
         return FALSE;
 
-    Table = (volatile ULONG64 *)(KSEG0_BASE | (Entry & ARM64_PTE_ADDR_MASK));
+    Table = (volatile ULONG64 *)MI_ARM64_PHYS_TO_VA(Entry & ARM64_PTE_ADDR_MASK);
     Entry = Table[(Va >> PDI_SHIFT) & PDI_MASK_ARM64];
     if ((Entry & ARM64_PTE_TYPE_MASK) == ARM64_PTE_TYPE_BLOCK)
         return TRUE;
     if ((Entry & ARM64_PTE_TYPE_MASK) != ARM64_PTE_TYPE_TABLE)
         return FALSE;
 
-    Table = (volatile ULONG64 *)(KSEG0_BASE | (Entry & ARM64_PTE_ADDR_MASK));
+    Table = (volatile ULONG64 *)MI_ARM64_PHYS_TO_VA(Entry & ARM64_PTE_ADDR_MASK);
     Entry = Table[(Va >> PTI_SHIFT) & PTI_MASK_ARM64];
     return ((Entry & ARM64_PTE_TYPE_MASK) == ARM64_PTE_TYPE_PAGE);
 }
@@ -170,7 +170,7 @@ KiArm64DumpPagedPoolPageByPfnAlias(
         return;
 
     DataPfn = (PFN_NUMBER)((PteValue & ARM64_PTE_ADDR_MASK) >> PAGE_SHIFT);
-    AliasPage = (ULONG_PTR)KSEG0_BASE + ((ULONG_PTR)DataPfn << PAGE_SHIFT);
+    AliasPage = MI_ARM64_PFN_TO_VA(DataPfn);
     PageVa = (ULONG_PTR)PAGE_ALIGN(Far);
     FaultOffset = BYTE_OFFSET(Far);
     QwordOffset = BYTE_OFFSET(ALIGN_DOWN_BY(Far, sizeof(ULONG64)));
@@ -287,12 +287,12 @@ KiArm64DumpKernelWalk(
     if (RootPa == 0)
         goto Dump;
 
-    Table = (volatile ULONG64 *)(KSEG0_BASE | RootPa);
+    Table = (volatile ULONG64 *)MI_ARM64_PHYS_TO_VA(RootPa);
     L0Entry = Table[MiAddressToPxi((PVOID)(ULONG_PTR)Va)];
     if ((L0Entry & 1ULL) == 0)
         goto Dump;
 
-    Table = (volatile ULONG64 *)(KSEG0_BASE | (L0Entry & ARM64_PTE_ADDR_MASK));
+    Table = (volatile ULONG64 *)MI_ARM64_PHYS_TO_VA(L0Entry & ARM64_PTE_ADDR_MASK);
     L1Entry = Table[((ULONG_PTR)Va >> PPI_SHIFT) & PPI_MASK];
     if ((L1Entry & 1ULL) == 0)
         goto Dump;
@@ -304,7 +304,7 @@ KiArm64DumpKernelWalk(
         goto Dump;
     }
 
-    Table = (volatile ULONG64 *)(KSEG0_BASE | (L1Entry & ARM64_PTE_ADDR_MASK));
+    Table = (volatile ULONG64 *)MI_ARM64_PHYS_TO_VA(L1Entry & ARM64_PTE_ADDR_MASK);
     L2Entry = Table[MiAddressToPdi((PVOID)(ULONG_PTR)Va)];
     if ((L2Entry & 1ULL) == 0)
         goto Dump;
@@ -316,7 +316,7 @@ KiArm64DumpKernelWalk(
         goto Dump;
     }
 
-    Table = (volatile ULONG64 *)(KSEG0_BASE | (L2Entry & ARM64_PTE_ADDR_MASK));
+    Table = (volatile ULONG64 *)MI_ARM64_PHYS_TO_VA(L2Entry & ARM64_PTE_ADDR_MASK);
     L3Entry = Table[MiAddressToPti((PVOID)(ULONG_PTR)Va)];
     if ((L3Entry & 1ULL) != 0)
     {
@@ -404,13 +404,13 @@ KiArm64DumpUserWalk(
         RootPa = Ttbr0 & ARM64_PTE_ADDR_MASK;
         if (RootPa != 0)
         {
-            Table = (volatile ULONG64 *)(KSEG0_BASE | RootPa);
+            Table = (volatile ULONG64 *)MI_ARM64_PHYS_TO_VA(RootPa);
             Index = ((ULONG_PTR)Va >> 39) & 0x1FF;
             L0Entry = Table[Index];
             if ((L0Entry & 0x3ULL) == 0x3ULL)
             {
                 Depth = 1;
-                Table = (volatile ULONG64 *)(KSEG0_BASE | (L0Entry & ARM64_PTE_ADDR_MASK));
+                Table = (volatile ULONG64 *)MI_ARM64_PHYS_TO_VA(L0Entry & ARM64_PTE_ADDR_MASK);
                 Index = ((ULONG_PTR)Va >> 30) & 0x1FF;
                 L1Entry = Table[Index];
                 if ((L1Entry & 0x1ULL) != 0)
@@ -418,7 +418,7 @@ KiArm64DumpUserWalk(
                     Depth = 2;
                     if ((L1Entry & 0x3ULL) == 0x3ULL)
                     {
-                        Table = (volatile ULONG64 *)(KSEG0_BASE | (L1Entry & ARM64_PTE_ADDR_MASK));
+                        Table = (volatile ULONG64 *)MI_ARM64_PHYS_TO_VA(L1Entry & ARM64_PTE_ADDR_MASK);
                         Index = ((ULONG_PTR)Va >> 21) & 0x1FF;
                         L2Entry = Table[Index];
                         if ((L2Entry & 0x1ULL) != 0)
@@ -426,7 +426,7 @@ KiArm64DumpUserWalk(
                             Depth = 3;
                             if ((L2Entry & 0x3ULL) == 0x3ULL)
                             {
-                                Table = (volatile ULONG64 *)(KSEG0_BASE | (L2Entry & ARM64_PTE_ADDR_MASK));
+                                Table = (volatile ULONG64 *)MI_ARM64_PHYS_TO_VA(L2Entry & ARM64_PTE_ADDR_MASK);
                                 Index = ((ULONG_PTR)Va >> 12) & 0x1FF;
                                 L3Entry = Table[Index];
                                 if ((L3Entry & 0x3ULL) == 0x3ULL)
@@ -491,7 +491,7 @@ KiArm64DumpUserAliasQwords(
     }
 
     DataPfn = PFN_FROM_PTE(PointerPte);
-    AliasVa = (ULONG_PTR)KSEG0_BASE + ((ULONG_PTR)DataPfn << PAGE_SHIFT);
+    AliasVa = MI_ARM64_PFN_TO_VA(DataPfn);
     Offset0 = ALIGN_DOWN_BY(Offset0 & (PAGE_SIZE - 1), sizeof(ULONG64));
     Offset1 = ALIGN_DOWN_BY(Offset1 & (PAGE_SIZE - 1), sizeof(ULONG64));
     Offset2 = ALIGN_DOWN_BY(Offset2 & (PAGE_SIZE - 1), sizeof(ULONG64));
@@ -564,12 +564,12 @@ KiArm64FixupUserAccessFlagFault(
     L2Idx = ((ULONG64)(ULONG_PTR)FaultAddress >> 21) & 0x1FF;
     L3Idx = ((ULONG64)(ULONG_PTR)FaultAddress >> 12) & 0x1FF;
 
-    L0Table = (volatile ULONG64 *)(KSEG0_BASE | RootPa);
+    L0Table = (volatile ULONG64 *)MI_ARM64_PHYS_TO_VA(RootPa);
     L0Entry = L0Table[L0Idx];
     if ((L0Entry & 0x3ULL) != 0x3ULL)
         return FALSE;
 
-    L1Table = (volatile ULONG64 *)(KSEG0_BASE | (L0Entry & ARM64_PTE_ADDR_MASK));
+    L1Table = (volatile ULONG64 *)MI_ARM64_PHYS_TO_VA(L0Entry & ARM64_PTE_ADDR_MASK);
     L1Entry = L1Table[L1Idx];
     if ((L1Entry & 0x1ULL) == 0)
         return FALSE;
@@ -582,7 +582,7 @@ KiArm64FixupUserAccessFlagFault(
     if ((L1Entry & 0x3ULL) != 0x3ULL)
         return FALSE;
 
-    L2Table = (volatile ULONG64 *)(KSEG0_BASE | (L1Entry & ARM64_PTE_ADDR_MASK));
+    L2Table = (volatile ULONG64 *)MI_ARM64_PHYS_TO_VA(L1Entry & ARM64_PTE_ADDR_MASK);
     L2Entry = L2Table[L2Idx];
     if ((L2Entry & 0x1ULL) == 0)
         return FALSE;
@@ -595,7 +595,7 @@ KiArm64FixupUserAccessFlagFault(
     if ((L2Entry & 0x3ULL) != 0x3ULL)
         return FALSE;
 
-    L3Table = (volatile ULONG64 *)(KSEG0_BASE | (L2Entry & ARM64_PTE_ADDR_MASK));
+    L3Table = (volatile ULONG64 *)MI_ARM64_PHYS_TO_VA(L2Entry & ARM64_PTE_ADDR_MASK);
     L3Entry = L3Table[L3Idx];
     if ((FaultStatus == 0xB) && ((L3Entry & 0x3ULL) == 0x3ULL))
     {
@@ -2025,21 +2025,21 @@ KiArm64HandleSynchronousException(
                         {
                             ULONG64 Va = DiagVAs[dv];
                             ULONG64 Root = Ttbr0 & 0x0000FFFFFFFFF000ULL;
-                            volatile ULONG64 *L0 = (volatile ULONG64 *)(0xFFFF800000000000ULL | Root);
+                            volatile ULONG64 *L0 = (volatile ULONG64 *)MI_ARM64_PHYS_TO_VA(Root);
                             ULONG L0i = (Va >> 39) & 0x1FF;
                             ULONG64 L0e = (L0i < 512) ? L0[L0i] : 0;
                             ULONG64 L1e = 0, L2e = 0, L3e = 0;
                             PFN_NUMBER DataPfn = 0;
                             if ((L0e & 0x3) == 0x3) {
-                                volatile ULONG64 *L1 = (volatile ULONG64 *)(0xFFFF800000000000ULL | (L0e & 0x0000FFFFFFFFF000ULL));
+                                volatile ULONG64 *L1 = (volatile ULONG64 *)MI_ARM64_PHYS_TO_VA(L0e & 0x0000FFFFFFFFF000ULL);
                                 ULONG L1i = (Va >> 30) & 0x1FF;
                                 L1e = L1[L1i];
                                 if ((L1e & 0x3) == 0x3) {
-                                    volatile ULONG64 *L2 = (volatile ULONG64 *)(0xFFFF800000000000ULL | (L1e & 0x0000FFFFFFFFF000ULL));
+                                    volatile ULONG64 *L2 = (volatile ULONG64 *)MI_ARM64_PHYS_TO_VA(L1e & 0x0000FFFFFFFFF000ULL);
                                     ULONG L2i = (Va >> 21) & 0x1FF;
                                     L2e = L2[L2i];
                                     if ((L2e & 0x3) == 0x3) {
-                                        volatile ULONG64 *L3 = (volatile ULONG64 *)(0xFFFF800000000000ULL | (L2e & 0x0000FFFFFFFFF000ULL));
+                                        volatile ULONG64 *L3 = (volatile ULONG64 *)MI_ARM64_PHYS_TO_VA(L2e & 0x0000FFFFFFFFF000ULL);
                                         ULONG L3i = (Va >> 12) & 0x1FF;
                                         L3e = L3[L3i];
                                         if ((L3e & 0x3) == 0x3) {
@@ -2055,7 +2055,7 @@ KiArm64HandleSynchronousException(
                             if (DataPfn != 0)
                             {
                                 ULONG PageOff = (ULONG)(Va & 0xFFF);
-                                volatile ULONG64 *Kseg = (volatile ULONG64 *)(0xFFFF800000000000ULL | ((ULONG64)DataPfn << PAGE_SHIFT) | (PageOff & ~7ULL));
+                                volatile ULONG64 *Kseg = (volatile ULONG64 *)MI_ARM64_PHYS_TO_VA(((ULONG64)DataPfn << PAGE_SHIFT) | (PageOff & ~7ULL));
                                 DbgPrintEx(DPFLTR_DEFAULT_ID, DPFLTR_ERROR_LEVEL,
                                     "[DABORT-DIAG] %s KSEG0[%03x]=0x%016I64x %016I64x\n",
                                     DiagNames[dv], PageOff & ~7U, Kseg[0], Kseg[1]);
@@ -2109,18 +2109,18 @@ KiArm64HandleSynchronousException(
                             {
                                 ULONG64 PVa = ProbeVAs[pv];
                                 ULONG64 PRoot = Ttbr0 & 0x0000FFFFFFFFF000ULL;
-                                volatile ULONG64 *PL0 = (volatile ULONG64 *)(0xFFFF800000000000ULL | PRoot);
+                                volatile ULONG64 *PL0 = (volatile ULONG64 *)MI_ARM64_PHYS_TO_VA(PRoot);
                                 ULONG PL0i = (PVa >> 39) & 0x1FF;
                                 ULONG64 PL0e = PL0[PL0i];
                                 PFN_NUMBER PPfn = 0;
                                 if ((PL0e & 3) == 3) {
-                                    volatile ULONG64 *PL1 = (volatile ULONG64 *)(0xFFFF800000000000ULL | (PL0e & 0x0000FFFFFFFFF000ULL));
+                                    volatile ULONG64 *PL1 = (volatile ULONG64 *)MI_ARM64_PHYS_TO_VA(PL0e & 0x0000FFFFFFFFF000ULL);
                                     ULONG64 PL1e = PL1[(PVa >> 30) & 0x1FF];
                                     if ((PL1e & 3) == 3) {
-                                        volatile ULONG64 *PL2 = (volatile ULONG64 *)(0xFFFF800000000000ULL | (PL1e & 0x0000FFFFFFFFF000ULL));
+                                        volatile ULONG64 *PL2 = (volatile ULONG64 *)MI_ARM64_PHYS_TO_VA(PL1e & 0x0000FFFFFFFFF000ULL);
                                         ULONG64 PL2e = PL2[(PVa >> 21) & 0x1FF];
                                         if ((PL2e & 3) == 3) {
-                                            volatile ULONG64 *PL3 = (volatile ULONG64 *)(0xFFFF800000000000ULL | (PL2e & 0x0000FFFFFFFFF000ULL));
+                                            volatile ULONG64 *PL3 = (volatile ULONG64 *)MI_ARM64_PHYS_TO_VA(PL2e & 0x0000FFFFFFFFF000ULL);
                                             ULONG64 PL3e = PL3[(PVa >> 12) & 0x1FF];
                                             if ((PL3e & 3) == 3)
                                                 PPfn = (PFN_NUMBER)((PL3e >> 12) & 0xFFFFFFFFFULL);
@@ -2128,7 +2128,7 @@ KiArm64HandleSynchronousException(
                                     }
                                 }
                                 if (PPfn != 0) {
-                                    volatile ULONG64 *PK = (volatile ULONG64 *)(0xFFFF800000000000ULL | ((ULONG64)PPfn << 12));
+                                    volatile ULONG64 *PK = (volatile ULONG64 *)MI_ARM64_PFN_TO_VA(PPfn);
                                     DbgPrintEx(DPFLTR_DEFAULT_ID, DPFLTR_ERROR_LEVEL,
                                         "[RSRC-DIAG] VA=%p PFN=0x%lx data[0..3]=0x%016I64x 0x%016I64x 0x%016I64x 0x%016I64x\n",
                                         (PVOID)PVa, (ULONG)PPfn, PK[0], PK[1], PK[2], PK[3]);
@@ -2142,17 +2142,17 @@ KiArm64HandleSynchronousException(
                             for (ULONG64 ScanVa = 0xFF2A0000ULL; ScanVa < 0xFF2AC000ULL; ScanVa += 0x1000ULL)
                             {
                                 ULONG64 SRoot = Ttbr0 & 0x0000FFFFFFFFF000ULL;
-                                volatile ULONG64 *SL0 = (volatile ULONG64 *)(0xFFFF800000000000ULL | SRoot);
+                                volatile ULONG64 *SL0 = (volatile ULONG64 *)MI_ARM64_PHYS_TO_VA(SRoot);
                                 ULONG64 SL0e = SL0[(ScanVa >> 39) & 0x1FF];
                                 PFN_NUMBER SPfn = 0;
                                 if ((SL0e & 3) == 3) {
-                                    volatile ULONG64 *SL1 = (volatile ULONG64 *)(0xFFFF800000000000ULL | (SL0e & 0x0000FFFFFFFFF000ULL));
+                                    volatile ULONG64 *SL1 = (volatile ULONG64 *)MI_ARM64_PHYS_TO_VA(SL0e & 0x0000FFFFFFFFF000ULL);
                                     ULONG64 SL1e = SL1[(ScanVa >> 30) & 0x1FF];
                                     if ((SL1e & 3) == 3) {
-                                        volatile ULONG64 *SL2 = (volatile ULONG64 *)(0xFFFF800000000000ULL | (SL1e & 0x0000FFFFFFFFF000ULL));
+                                        volatile ULONG64 *SL2 = (volatile ULONG64 *)MI_ARM64_PHYS_TO_VA(SL1e & 0x0000FFFFFFFFF000ULL);
                                         ULONG64 SL2e = SL2[(ScanVa >> 21) & 0x1FF];
                                         if ((SL2e & 3) == 3) {
-                                            volatile ULONG64 *SL3 = (volatile ULONG64 *)(0xFFFF800000000000ULL | (SL2e & 0x0000FFFFFFFFF000ULL));
+                                            volatile ULONG64 *SL3 = (volatile ULONG64 *)MI_ARM64_PHYS_TO_VA(SL2e & 0x0000FFFFFFFFF000ULL);
                                             ULONG64 SL3e = SL3[(ScanVa >> 12) & 0x1FF];
                                             if ((SL3e & 3) == 3)
                                                 SPfn = (PFN_NUMBER)((SL3e >> 12) & 0xFFFFFFFFFULL);
@@ -2160,7 +2160,7 @@ KiArm64HandleSynchronousException(
                                     }
                                 }
                                 if (SPfn != 0) {
-                                    volatile ULONG64 *SK = (volatile ULONG64 *)(0xFFFF800000000000ULL | ((ULONG64)SPfn << 12));
+                                    volatile ULONG64 *SK = (volatile ULONG64 *)MI_ARM64_PFN_TO_VA(SPfn);
                                     DbgPrintEx(DPFLTR_DEFAULT_ID, DPFLTR_ERROR_LEVEL,
                                         "[RSRC-SCAN] VA=%p PFN=0x%lx d[0]=0x%016I64x d[1]=0x%016I64x\n",
                                         (PVOID)ScanVa, (ULONG)SPfn, SK[0], SK[1]);
@@ -2526,19 +2526,19 @@ KiArm64HandleSynchronousException(
                     /* Walk L0 → L1 → L2 → L3 */
                     if (Pa != 0)
                     {
-                        Table = (volatile ULONG64 *)(0xFFFF800000000000ULL | Pa);
+                        Table = (volatile ULONG64 *)MI_ARM64_PHYS_TO_VA(Pa);
                         Entry = Table[(Elr >> 39) & 0x1FF];
                         if ((Entry & 0x3ULL) == 0x3ULL) /* L0 valid */
                         {
-                            Table = (volatile ULONG64 *)(0xFFFF800000000000ULL | (Entry & 0x0000FFFFFFFFF000ULL));
+                            Table = (volatile ULONG64 *)MI_ARM64_PHYS_TO_VA(Entry & 0x0000FFFFFFFFF000ULL);
                             Entry = Table[(Elr >> 30) & 0x1FF];
                             if ((Entry & 0x3ULL) == 0x3ULL) /* L1 valid */
                             {
-                                Table = (volatile ULONG64 *)(0xFFFF800000000000ULL | (Entry & 0x0000FFFFFFFFF000ULL));
+                                Table = (volatile ULONG64 *)MI_ARM64_PHYS_TO_VA(Entry & 0x0000FFFFFFFFF000ULL);
                                 Entry = Table[(Elr >> 21) & 0x1FF];
                                 if ((Entry & 0x3ULL) == 0x3ULL) /* L2 valid → L3 table */
                                 {
-                                    Table = (volatile ULONG64 *)(0xFFFF800000000000ULL | (Entry & 0x0000FFFFFFFFF000ULL));
+                                    Table = (volatile ULONG64 *)MI_ARM64_PHYS_TO_VA(Entry & 0x0000FFFFFFFFF000ULL);
                                     L3Entry = Table[(Elr >> 12) & 0x1FF];
                                 }
                             }
@@ -2554,12 +2554,12 @@ KiArm64HandleSynchronousException(
                         /* L3 entry is a valid page descriptor — read through KSEG0 */
                         ULONG64 PhysPage = L3Entry & 0x0000FFFFFFFFF000ULL;
                         ULONG PageOffset = (ULONG)(Elr & 0xFFF);
-                        volatile ULONG *Kseg0Ptr = (volatile ULONG *)(0xFFFF800000000000ULL | PhysPage | PageOffset);
+                        volatile ULONG *Kseg0Ptr = (volatile ULONG *)MI_ARM64_PHYS_TO_VA(PhysPage | PageOffset);
                         ULONG Kseg0Word = *Kseg0Ptr;
 
                         /* Also read 8 words around the fault point through KSEG0 */
                         ULONG PageBase = PageOffset & ~0x1F; /* 32-byte aligned */
-                        volatile ULONG *Base = (volatile ULONG *)(0xFFFF800000000000ULL | PhysPage | PageBase);
+                        volatile ULONG *Base = (volatile ULONG *)MI_ARM64_PHYS_TO_VA(PhysPage | PageBase);
 
                         DbgPrintEx(DPFLTR_DEFAULT_ID, DPFLTR_ERROR_LEVEL,
                                 "[arm64] UNHANDLED: PhysAddr=0x%llx Kseg0Word=0x%08lx UserWord=0x%08lx %s\n",
