@@ -279,10 +279,18 @@ KiIdleLoop(VOID)
                            OldThread,
                            OldThread ? OldThread->Priority : -1,
                            OldThread ? OldThread->WaitIrql : 0xFF,
+#if (NTDDI_VERSION >= NTDDI_WIN7)
+                           0,
+#else
                            OldThread ? OldThread->SwapBusy : 0xFF,
+#endif
                            NewThread,
                            NewThread ? NewThread->Priority : -1,
+#if (NTDDI_VERSION >= NTDDI_WIN7)
+                           0);
+#else
                            NewThread ? NewThread->SwapBusy : 0xFF);
+#endif
             }
 
             Prcb->NextThread = NULL;
@@ -426,11 +434,19 @@ KiSwapContextResume(
                    OldThread,
                    OldThread->State,
                    OldThread->Priority,
+#if (NTDDI_VERSION >= NTDDI_WIN7)
+                   0,
+#else
                    OldThread->SwapBusy,
+#endif
                    NewThread,
                    NewThread->State,
                    NewThread->Priority,
+#if (NTDDI_VERSION >= NTDDI_WIN7)
+                   0);
+#else
                    NewThread->SwapBusy);
+#endif
     }
 
     /*
@@ -466,7 +482,9 @@ KiSwapContextResume(
     KeArm64CurrentThread = NewThread;
 #endif
 
+#if (NTDDI_VERSION < NTDDI_WIN7)
     OldThread->SwapBusy = FALSE;
+#endif
 
     /*
      * ARM64: Switch address space (TTBR0) when moving to a different process.

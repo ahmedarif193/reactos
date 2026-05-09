@@ -99,6 +99,7 @@ list(APPEND KMTEST_DRV_SOURCE
     ntos_mm/MmAllocateContiguousNode.c
     ntos_mm/MmMdl.c
     ntos_mm/MmReservedMapping.c
+    ntos_mm/MmSelfMap.c
     ntos_mm/MmSection.c
     ntos_mm/ZwAllocateVirtualMemory.c
     ntos_mm/ZwCreateSection.c
