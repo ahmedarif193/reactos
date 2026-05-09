@@ -2471,6 +2471,7 @@ MiSetSystemCodeProtection(
         /* Update the protection */
         TempPte.u.Hard.Write = BooleanFlagOn(Protection, IMAGE_SCN_MEM_WRITE);
 #if defined(_M_ARM64)
+        TempPte.u.Hard.NotDirty = !TempPte.u.Hard.Writable;
         if (BooleanFlagOn(Protection, IMAGE_SCN_MEM_EXECUTE))
         {
             TempPte.u.Hard.PrivilegedNoExecute = 0;
