@@ -30,7 +30,10 @@ KiArm64EarlyVectorHandler(_In_ UINT64 VectorId,
                           _In_ UINT64 FaultAddress,
                           _In_opt_ PARM64_EARLY_GPRS Registers);
 
-#define ARM64_KSEG0_BASE            0xFFFF800000000000ULL
+#define ARM64_SYSTEM_RANGE_BASE     0xFFFF800000000000ULL
+#define ARM64_KERNEL_IMAGE_BASE     0xFFFFF80000000000ULL
+#define ARM64_PHYS_MAP_BASE         0xFFFFFC0000000000ULL
+#define ARM64_KSEG0_BASE            ARM64_KERNEL_IMAGE_BASE
 /* Memory attribute indices in MAIR_EL1 */
 #define ARM64_MEM_ATTR_DEVICE_nGnRnE 0x1ULL
 #define ARM64_MEM_ATTR_NORMAL_NC     0x2ULL
@@ -1010,8 +1013,14 @@ CODE_SEG("INIT")
 static UINT64
 KiArm64VirtualToPhysical(_In_ UINT64 Virtual)
 {
-    if (Virtual >= ARM64_KSEG0_BASE)
-        return Virtual - ARM64_KSEG0_BASE;
+    if (Virtual >= ARM64_PHYS_MAP_BASE)
+        return Virtual - ARM64_PHYS_MAP_BASE;
+
+    if (Virtual >= ARM64_KERNEL_IMAGE_BASE)
+        return Virtual - ARM64_KERNEL_IMAGE_BASE;
+
+    if (Virtual >= ARM64_SYSTEM_RANGE_BASE)
+        return Virtual - ARM64_SYSTEM_RANGE_BASE;
 
     return Virtual;
 }

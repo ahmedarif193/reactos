@@ -99,18 +99,18 @@ extern volatile ARM64_UART_INTERFACE EarlyUartInterface;
 extern volatile BOOLEAN EarlyUartInitialized;
 
 /*
- * KSEG0 base address for kernel virtual address calculation.
- * The kernel maps physical memory starting at this VA.
+ * Private ARM64 physical-map base for kernel virtual address calculation.
  */
 #define ARM64_KSEG0_BASE_VA         0xFFFF800000000000ULL
+#define ARM64_PHYS_MAP_BASE_VA      0xFFFFFC0000000000ULL
 
 /*
  * EarlyUartPhysToVa - Convert physical UART address to kernel virtual address.
- * In the kernel context, UART is accessed via KSEG0 mapping.
+ * In the kernel context, UART is accessed via the private physical map.
  * In the bootloader context (pre-MMU or identity mapped), VA == PA.
  */
 #if defined(_NTOSKRNL_) || defined(_NTOS_)
-#define EarlyUartPhysToVa(PhysAddr) (ARM64_KSEG0_BASE_VA + (PhysAddr))
+#define EarlyUartPhysToVa(PhysAddr) (ARM64_PHYS_MAP_BASE_VA + (PhysAddr))
 #else
 /* Bootloader uses identity mapping or pre-MMU access */
 #define EarlyUartPhysToVa(PhysAddr) (PhysAddr)

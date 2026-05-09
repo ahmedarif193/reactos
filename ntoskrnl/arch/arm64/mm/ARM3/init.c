@@ -179,7 +179,7 @@ MiArm64SyncL0ToRoot(ULONG L0Index, UINT64 Desc)
 static __inline PVOID
 MiArm64PhysToKseg0(UINT64 Phys)
 {
-    return (PVOID)(ULONG_PTR)(KSEG0_BASE | (Phys & ARM64_PTE_ADDR_MASK));
+    return (PVOID)MI_ARM64_PHYS_TO_VA(Phys);
 }
 
 static __inline PVOID
@@ -228,7 +228,7 @@ MiArm64MapKseg0IdentityBlocks(
         Entry = PointerPde->u.Long;
         if ((Entry & ARM64_PTE_TYPE_MASK) == ARM64_PTE_TYPE_INVALID)
         {
-            BlockPa = Va - (ULONG_PTR)KSEG0_BASE;
+            BlockPa = Va - (ULONG_PTR)MI_ARM64_PHYS_MAP_BASE;
             PointerPde->u.Long = (BlockPa & ARM64_PTE_ADDR_MASK) |
                                  ARM64_PTE_TYPE_BLOCK |
                                  ((UINT64)MI_ARM64_MAIR_NORMAL_WB_IDX << 2) |
@@ -271,11 +271,24 @@ MiArm64MapKseg0IdentityRangeWithAttr(
     StartVa = ALIGN_DOWN_BY((ULONG_PTR)BaseAddress, PAGE_SIZE);
     EndVa = ALIGN_DOWN_BY((ULONG_PTR)BaseAddress + Size - 1, PAGE_SIZE);
 
-    if (StartVa < (ULONG_PTR)KSEG0_BASE)
+    if (StartVa >= (ULONG_PTR)MI_ARM64_PHYS_MAP_BASE)
     {
-        StartVa += (ULONG_PTR)KSEG0_BASE;
-        EndVa += (ULONG_PTR)KSEG0_BASE;
+        StartVa -= (ULONG_PTR)MI_ARM64_PHYS_MAP_BASE;
+        EndVa -= (ULONG_PTR)MI_ARM64_PHYS_MAP_BASE;
     }
+    else if (StartVa >= (ULONG_PTR)MI_ARM64_BOOT_IMAGE_BASE)
+    {
+        StartVa -= (ULONG_PTR)MI_ARM64_BOOT_IMAGE_BASE;
+        EndVa -= (ULONG_PTR)MI_ARM64_BOOT_IMAGE_BASE;
+    }
+    else if (StartVa >= (ULONG_PTR)KSEG0_BASE)
+    {
+        StartVa -= (ULONG_PTR)KSEG0_BASE;
+        EndVa -= (ULONG_PTR)KSEG0_BASE;
+    }
+
+    StartVa += (ULONG_PTR)MI_ARM64_PHYS_MAP_BASE;
+    EndVa += (ULONG_PTR)MI_ARM64_PHYS_MAP_BASE;
 
     if (AttrIndex == MI_ARM64_MAIR_NORMAL_WB_IDX)
     {
@@ -292,7 +305,7 @@ MiArm64MapKseg0IdentityRangeWithAttr(
     {
         PMMPTE PointerPte = MiAddressToPte((PVOID)Va);
         MMPTE Pte = ValidKernelPte;
-        PFN_NUMBER Pfn = (PFN_NUMBER)((Va - (ULONG_PTR)KSEG0_BASE) >> PAGE_SHIFT);
+        PFN_NUMBER Pfn = (PFN_NUMBER)((Va - (ULONG_PTR)MI_ARM64_PHYS_MAP_BASE) >> PAGE_SHIFT);
 
         Pte.u.Hard.PageFrameNumber = Pfn;
         MI_SET_PTE_ATTR_INDEX(&Pte, AttrIndex);
