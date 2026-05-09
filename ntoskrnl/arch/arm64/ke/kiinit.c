@@ -348,10 +348,18 @@ KiInitializeKernel(_Inout_ PKPROCESS InitProcess,
     InitThread->NextProcessor = Number;
     InitThread->Priority = HIGH_PRIORITY;
     InitThread->State = Running;
+#if (NTDDI_VERSION >= NTDDI_WIN7)
+    InitThread->Affinity.Mask = ((KAFFINITY)1 << Number);
+#else
     InitThread->Affinity = ((KAFFINITY)1 << Number);
+#endif
     InitThread->WaitIrql = DISPATCH_LEVEL;
     InitProcess->ActiveProcessors |= ((KAFFINITY)1 << Number);
+#if (NTDDI_VERSION >= NTDDI_LONGHORN)
+    ((PETHREAD)InitThread)->Tcb.Process = InitProcess;
+#else
     ((PETHREAD)InitThread)->ThreadsProcess = (PEPROCESS)InitProcess;
+#endif
     /* quiet */
 
     Prcb->CurrentThread = InitThread;
@@ -385,16 +393,29 @@ KiInitializeKernel(_Inout_ PKPROCESS InitProcess,
     }
 
     /*
-     * ARM64: Raise to SYNCH_LEVEL (not DISPATCH_LEVEL) for scheduler operations.
-     * On x86/amd64, SYNCH_LEVEL == DISPATCH_LEVEL == 2, so this doesn't matter.
-     * On ARM64, SYNCH_LEVEL (12) > DISPATCH_LEVEL (2). The dispatcher lock
-     * (KiAcquireDispatcherLockAtSynchLevel) asserts IRQL >= SYNCH_LEVEL.
-     * KeSetPriorityThread internally acquires the dispatcher lock.
+     * ExpInitializeExecutive may run the first system thread before returning
+     * here. Re-read the boot idle thread from the current PRCB instead of using
+     * the original argument state after that scheduler handoff.
      */
-    KiArm64RawPuts("[KiInitKernel] raising to SYNCH_LEVEL\n");
-    KfRaiseIrql(SYNCH_LEVEL);
+    Prcb = KeGetCurrentPrcb();
+    Thread = (Prcb != NULL) ? Prcb->IdleThread : NULL;
+    if ((Thread == NULL) && (Prcb != NULL))
+    {
+        Thread = Prcb->CurrentThread;
+    }
+    if (Thread == NULL)
+    {
+        Thread = KeArm64CurrentThread;
+    }
+    if (Thread == NULL)
+    {
+        Thread = InitThread;
+    }
+
+    KiArm64RawPuts("[KiInitKernel] raising to DISPATCH_LEVEL\n");
+    KfRaiseIrql(DISPATCH_LEVEL);
     KiArm64RawPuts("[KiInitKernel] calling KeSetPriorityThread\n");
-    KeSetPriorityThread(InitThread, 0);
+    KeSetPriorityThread(Thread, 0);
     KiArm64RawPuts("[KiInitKernel] KeSetPriorityThread done\n");
 
     KiAcquirePrcbLock(Prcb);

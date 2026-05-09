@@ -22,6 +22,9 @@
 #endif
 
 #define ESR_EC_BRK 0x3C
+#define ARM64_PREVIOUS_MODE_COOKIE 0x50564D00UL
+#define ARM64_PREVIOUS_MODE_MASK   0xFFFFFF00UL
+#define ARM64_PREVIOUS_MODE_VALUE  0x000000FFUL
 
 /* Forward declaration for SError handler */
 BOOLEAN NTAPI KiSErrorHandler(_In_ PKTRAP_FRAME TrapFrame);
@@ -85,6 +88,31 @@ KiArm64IsKernelAddressMappedNoFault(
     Table = (volatile ULONG64 *)(KSEG0_BASE | (Entry & ARM64_PTE_ADDR_MASK));
     Entry = Table[(Va >> PTI_SHIFT) & PTI_MASK_ARM64];
     return ((Entry & ARM64_PTE_TYPE_MASK) == ARM64_PTE_TYPE_PAGE);
+}
+
+static
+VOID
+KiArm64SavePreviousModeForTrap(
+    _Inout_ PKTHREAD Thread,
+    _Inout_ PKTRAP_FRAME TrapFrame)
+{
+    TrapFrame->Reserved = ARM64_PREVIOUS_MODE_COOKIE |
+                          ((ULONG)Thread->PreviousMode & ARM64_PREVIOUS_MODE_VALUE);
+    Thread->PreviousMode = KiGetPreviousMode(TrapFrame);
+}
+
+static
+VOID
+KiArm64RestorePreviousModeFromTrap(
+    _Inout_ PKTHREAD Thread,
+    _In_ PKTRAP_FRAME TrapFrame)
+{
+    ULONG PreviousMode = TrapFrame->Reserved;
+
+    if ((PreviousMode & ARM64_PREVIOUS_MODE_MASK) == ARM64_PREVIOUS_MODE_COOKIE)
+    {
+        Thread->PreviousMode = (CHAR)(PreviousMode & ARM64_PREVIOUS_MODE_VALUE);
+    }
 }
 
 static
@@ -1264,6 +1292,7 @@ KiArm64HandleSynchronousException(
              * self-link; we override it here with the proper previous frame.
              */
             Thread = KeGetCurrentThread();
+            KiArm64SavePreviousModeForTrap(Thread, TrapFrame);
             TrapFrame->TrapFrame = (ULONG64)(ULONG_PTR)Thread->TrapFrame;
             Thread->TrapFrame = TrapFrame;
 
@@ -1336,6 +1365,7 @@ KiArm64HandleSynchronousException(
             TrapFrame = Thread->TrapFrame;
             KiArm64DeliverPendingUserApc(&Context->ExceptionFrame,
                                          TrapFrame);
+            KiArm64RestorePreviousModeFromTrap(Thread, TrapFrame);
             Thread->TrapFrame = KiGetLinkedTrapFrame(TrapFrame);
 
             /*
@@ -1360,7 +1390,7 @@ KiArm64HandleSynchronousException(
             Context = CONTAINING_RECORD(TrapFrame,
                                         ARM64_EARLY_SYNC_CONTEXT,
                                         TrapFrame);
-            if ((TrapFrame->Pc < 0x10000) || ((TrapFrame->Spsr & 0xF) != 0))
+            if (TrapFrame->Pc < 0x10000)
             {
                 DPRINT1("[arm64][SVC-RET] instr=0x%lx tf=%p ef=%p pc=%p lr=%p fp=%p sp=%p "
                         "spsr=0x%lx x0=%p x8=%p linked=%p threadtf=%p\n",
