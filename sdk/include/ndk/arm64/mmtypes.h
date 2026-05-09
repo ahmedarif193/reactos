@@ -19,7 +19,7 @@ extern "C" {
 #define MM_SHARED_USER_DATA_VA            0x7FFE0000ULL
 
 /* User space range limit */
-#define MI_HIGHEST_USER_ADDRESS           (PVOID)0x000007FFFFFEFFFFULL
+#define MI_HIGHEST_USER_ADDRESS           (PVOID)0x00007FFFFFFEFFFFULL
 
 #if !defined(RC_INVOKED)
 extern NTSYSAPI ULONG64 MmUserProbeAddress;

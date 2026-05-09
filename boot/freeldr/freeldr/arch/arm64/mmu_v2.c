@@ -16,10 +16,10 @@ DBG_DEFAULT_CHANNEL(WARNING);
 /* Page-table view (self-map) & core layout constants                         */
 /* -------------------------------------------------------------------------- */
 
-#define ARM64_SELF_PTE_BASE   0xFFFFF68000000000ULL
-#define ARM64_SELF_PDE_BASE   0xFFFFF6FB40000000ULL
-#define ARM64_SELF_PPE_BASE   0xFFFFF6FB7DA00000ULL
-#define ARM64_SELF_PXE_BASE   0xFFFFF6FB7DBED000ULL
+#define ARM64_SELF_PTE_BASE   0xFFFFE48000000000ULL
+#define ARM64_SELF_PDE_BASE   0xFFFFE4F240000000ULL
+#define ARM64_SELF_PPE_BASE   0xFFFFE4F279200000ULL
+#define ARM64_SELF_PXE_BASE   0xFFFFE4F2793C9000ULL
 
 #define ARM64_PFN_DB_BASE          0xFFFFFA8000000000ULL
 #define ARM64_PFN_DB_RESERVE_SIZE  (512ULL << 20) /* 512MB for PFN DB + metadata */
@@ -173,6 +173,7 @@ static inline void tlbi_va_range(ULONGLONG start, ULONGLONG end)
 #define PTE_TYPE_PAGE           (3ULL << 0)  /* leaf at L3 */
 #define PTE_TYPE_BLOCK          (1ULL << 0)  /* leaf at L1/L2 */
 #define PTE_TYPE_VALID          (1ULL << 0)
+#define PTE_ADDR_MASK           0x0000FFFFFFFFF000ULL
 
 /* Block/Page attributes */
 #define PTE_BLOCK_MEMTYPE(x)    ((x) << 2)
@@ -185,24 +186,26 @@ static inline void tlbi_va_range(ULONGLONG start, ULONGLONG end)
 #define PTE_BLOCK_PXN           (1ULL << 53)
 #define PTE_BLOCK_UXN           (1ULL << 54)
 #define PTE_BLOCK_RO            (1ULL << 7)
+#define PTE_TABLE_NT_FLAGS      (PTE_BLOCK_NG | PTE_BLOCK_PXN | PTE_BLOCK_UXN)
+#define PTE_BLOCK_ADDR_MASK_1G  (PTE_ADDR_MASK & ~ARM64_BLOCK_MASK_1G)
+#define PTE_BLOCK_ADDR_MASK_2M  (PTE_ADDR_MASK & ~ARM64_BLOCK_MASK_2M)
 
 /*
- * Windows/NT self-map compatibility: every upper-level table descriptor can be
- * read back through PXE/PPE/PDE aliases, where the same 64-bit value is consumed
- * by hardware as a final L3 descriptor for the table page. Keep the table type
- * bits, but seed AF/cache/shareability bits so CPUs without reliable hardware
- * AF update do not fault while the kernel inspects the recursive windows.
+ * Windows/NT self-map compatibility: every upper-level table descriptor is
+ * visible through PXE/PPE/PDE aliases. Preserve the NT-observed ignored table
+ * policy bits while keeping address extraction strictly masked by PTE_ADDR_MASK.
  */
 #define PTE_TABLE_ATTRS         (PTE_TYPE_VALID | PTE_TYPE_TABLE | \
                                  PTE_BLOCK_MEMTYPE(ARM64_MEM_ATTR_NORMAL_WB) | \
                                  PTE_BLOCK_INNER_SHARE | \
-                                 PTE_BLOCK_AF)
+                                 PTE_BLOCK_AF | \
+                                 PTE_TABLE_NT_FLAGS)
 #define PTE_SELFREF_ATTRS       PTE_TABLE_ATTRS
 
 typedef char arm64_selfmap_index_must_match_nt[
-    (((ARM64_SELF_PXE_BASE >> ARM64_PXI_SHIFT) & ARM64_PX_MASK) == 493ULL) ? 1 : -1];
+    (((ARM64_SELF_PXE_BASE >> ARM64_PXI_SHIFT) & ARM64_PX_MASK) == 457ULL) ? 1 : -1];
 typedef char arm64_table_attrs_must_match_nt[
-    (PTE_TABLE_ATTRS == 0x713ULL) ? 1 : -1];
+    (PTE_TABLE_ATTRS == 0x0060000000000F13ULL) ? 1 : -1];
 
 #define PTE_BLOCK_MEMTYPE_MASK  (7ULL << 2)
 
@@ -239,11 +242,16 @@ sanitize_block_attrs(UINT64 attrs)
 
 /* ---------- MAIR / memory types ---------- */
 
-#define MEMORY_ATTRIBUTES       ((0x00ULL << (ARM64_MEM_ATTR_DEVICE_nGnRnE * 8)) |  \
-                                (0x04ULL << (ARM64_MEM_ATTR_DEVICE_nGnRE * 8)) |    \
-                                (0x0CULL << (ARM64_MEM_ATTR_DEVICE_GRE * 8)) |      \
+#define MEMORY_ATTRIBUTES       ((0xFFULL << (0U * 8)) |                            \
+                                (0x00ULL << (ARM64_MEM_ATTR_DEVICE_nGnRnE * 8)) |   \
                                 (0x44ULL << (ARM64_MEM_ATTR_NORMAL_NC * 8)) |       \
-                                (0xFFULL << (ARM64_MEM_ATTR_NORMAL_WB * 8)))
+                                (0x44ULL << (ARM64_MEM_ATTR_NORMAL_WC * 8)) |       \
+                                (0xFFULL << (ARM64_MEM_ATTR_NORMAL_WB * 8)) |       \
+                                (0x00ULL << (5U * 8)) |                            \
+                                (0x44ULL << (6U * 8)) |                            \
+                                (0x44ULL << (7U * 8)))
+typedef char arm64_mair_must_match_nt[
+    (MEMORY_ATTRIBUTES == 0x444400FF444400FFULL) ? 1 : -1];
 
 /* ---------- TCR helpers ---------- */
 #define TCR_T0SZ(x)             ((64ULL - (x)) << 0)
@@ -312,12 +320,12 @@ static BOOLEAN page_tables_initialized = FALSE;
  * These need pre-allocated page tables since they are mapped after ExitBootServices.
  *
  * L0 indices for special kernel regions:
- *   - 493 (0x1ED): Self-map (ARM64_SELF_PXE_BASE)
+ *   - 457 (0x1C9): Self-map (ARM64_SELF_PXE_BASE)
  *   - 494 (0x1EE): Hyperspace (ARM64_HYPERSPACE_BASE)
  *   - 497 (0x1F1): Paged Pool / Debug mapping
  *   - 501 (0x1F5): PFN Database
  */
-#define ARM64_EXTRA_L0_SLOT_SELFMAP    493U  /* 0x1ED - Self-map region */
+#define ARM64_EXTRA_L0_SLOT_SELFMAP    457U  /* 0x1C9 - Self-map region */
 #define ARM64_EXTRA_L0_SLOT_HYPERSPACE 494U  /* 0x1EE - Hyperspace */
 #define ARM64_EXTRA_L0_SLOT_PAGEDPOOL  497U  /* 0x1F1 - Paged pool / Debug */
 #define ARM64_EXTRA_L0_SLOT_PFNDB      501U  /* 0x1F5 - PFN Database */
@@ -363,7 +371,7 @@ static UINT64 arm64_user_l3_next_index[ARM64_USER_L1_TABLES] = {0};  /* FLAT: pe
  * These are pre-allocated to avoid needing Boot Services during kernel mapping.
  */
 static const UINT64 arm64_extra_kernel_l0_slots[ARM64_EXTRA_KERNEL_SLOTS] = {
-    ARM64_EXTRA_L0_SLOT_SELFMAP,    /* 493 */
+    ARM64_EXTRA_L0_SLOT_SELFMAP,    /* 457 */
     ARM64_EXTRA_L0_SLOT_HYPERSPACE, /* 494 */
     ARM64_EXTRA_L0_SLOT_PAGEDPOOL,  /* 497 */
     ARM64_EXTRA_L0_SLOT_PFNDB       /* 501 */
@@ -664,37 +672,37 @@ Arm64TranslateKernelKseg0Va(UINT64 Va, UINT64 *PhysicalAddress)
     if (!DESC_IS_TABLE(entry))
         return FALSE;
 
-    l1_table = (UINT64 *)PA_TO_VA(entry & ~0xFFFULL);
+    l1_table = (UINT64 *)PA_TO_VA(entry & PTE_ADDR_MASK);
     l1 = (Va >> 30) & ARM64_PX_MASK;
     entry = l1_table[l1];
     if (DESC_IS_BLOCK(entry))
     {
-        *PhysicalAddress = (entry & ~ARM64_BLOCK_MASK_1G) |
+        *PhysicalAddress = (entry & PTE_BLOCK_ADDR_MASK_1G) |
                            (Va & ARM64_BLOCK_MASK_1G);
         return TRUE;
     }
     if (!DESC_IS_TABLE(entry))
         return FALSE;
 
-    l2_table = (UINT64 *)PA_TO_VA(entry & ~0xFFFULL);
+    l2_table = (UINT64 *)PA_TO_VA(entry & PTE_ADDR_MASK);
     l2 = (Va >> 21) & ARM64_PX_MASK;
     entry = l2_table[l2];
     if (DESC_IS_BLOCK(entry))
     {
-        *PhysicalAddress = (entry & ~ARM64_BLOCK_MASK_2M) |
+        *PhysicalAddress = (entry & PTE_BLOCK_ADDR_MASK_2M) |
                            (Va & ARM64_BLOCK_MASK_2M);
         return TRUE;
     }
     if (!DESC_IS_TABLE(entry))
         return FALSE;
 
-    l3_table = (UINT64 *)PA_TO_VA(entry & ~0xFFFULL);
+    l3_table = (UINT64 *)PA_TO_VA(entry & PTE_ADDR_MASK);
     l3 = (Va >> 12) & ARM64_PX_MASK;
     entry = l3_table[l3];
     if (!DESC_IS_PAGE(entry))
         return FALSE;
 
-    *PhysicalAddress = (entry & ~0xFFFULL) | (Va & 0xFFFULL);
+    *PhysicalAddress = (entry & PTE_ADDR_MASK) | (Va & 0xFFFULL);
     return TRUE;
 }
 
@@ -1395,9 +1403,8 @@ static UINT64 get_tcr(UINT64 *pips, UINT64 *pva_bits)
     tcr |= TCR_T1SZ(48) | TCR_SHARED1_INNER | TCR_ORGN1_WBWA | TCR_IRGN1_WBWA | TCR_TG1_4K
             | TCR_A1;
 
-    /* Allow hardware to set Access Flag on first use. This is important for
-     * self-map windows whose L3 entries may start with AF=0. */
-    tcr |= TCR_HA;
+    /* Keep hardware Access Flag updates disabled; ReactOS seeds AF in entries
+     * and handles AF faults in software, matching the NT ARM64 TCR contract. */
 
     if (pips) *pips = ips_desired;
     if (pva_bits) *pva_bits = va_bits;
@@ -1449,11 +1456,11 @@ static UINT64* ensure_l2_table(BOOLEAN is_kernel, UINT64 l0_slot, UINT64 *l1_tab
 
     if (DESC_VALID(entry)) {
         if (DESC_IS_TABLE(entry))
-            return (UINT64 *)PA_TO_VA(entry & ~0xFFFULL);
+            return (UINT64 *)PA_TO_VA(entry & PTE_ADDR_MASK);
 
         if (DESC_IS_LEAF(entry))
         {
-            UINT64 block_base = entry & ~ARM64_BLOCK_MASK_1G;
+            UINT64 block_base = entry & PTE_BLOCK_ADDR_MASK_1G;
             UINT64 block_attrs = sanitize_block_attrs(entry & ~((UINT64)ARM64_BLOCK_MASK_1G | PTE_TYPE_MASK));
             UINT64 *split_table;
 
@@ -1760,11 +1767,11 @@ static UINT64* ensure_l3_table(BOOLEAN is_kernel, UINT64 l0_slot, UINT64 *l2_tab
     /* Debug: check the pool selection */
     if (DESC_VALID(entry)) {
         if (DESC_IS_TABLE(entry))
-            return (UINT64 *)PA_TO_VA(entry & ~0xFFFULL);
+            return (UINT64 *)PA_TO_VA(entry & PTE_ADDR_MASK);
 
         if (DESC_IS_LEAF(entry))
         {
-            UINT64 block_base = entry & ~ARM64_BLOCK_MASK_2M;
+            UINT64 block_base = entry & PTE_BLOCK_ADDR_MASK_2M;
             UINT64 block_attrs = sanitize_block_attrs(entry & ~((UINT64)ARM64_BLOCK_MASK_2M | PTE_TYPE_MASK));
             UINT64 *split_table;
 
@@ -1989,7 +1996,7 @@ static BOOLEAN map_region_hierarchical(UINT64 va, UINT64 pa, UINT64 size, UINT64
                      * allocated earlier. PA_TO_VA is identity, works under UEFI
                      * identity mapping for allocated memory.
                      */
-                    l1_table = (UINT64 *)PA_TO_VA(l0_table[l0_idx] & ~0xFFFULL);
+                    l1_table = (UINT64 *)PA_TO_VA(l0_table[l0_idx] & PTE_ADDR_MASK);
                 }
             }
         } else {
@@ -2003,7 +2010,7 @@ static BOOLEAN map_region_hierarchical(UINT64 va, UINT64 pa, UINT64 size, UINT64
         /*
          * Block mappings policy:
          *
-         * For kernel space (TTBR1): Always use 4KB pages. The self-map at L0[493]
+         * For kernel space (TTBR1): Always use 4KB pages. The self-map at L0[457]
          * requires all intermediate entries to be TABLE descriptors to allow
          * PTE access via the recursive self-map structure.
          *
@@ -2420,7 +2427,7 @@ Arm64EnsureRangeTables(
         else
         {
             if (KernelSpace)
-                l1_table = (UINT64 *)PA_TO_VA(l0_table[l0_idx] & ~0xFFFULL);
+                l1_table = (UINT64 *)PA_TO_VA(l0_table[l0_idx] & PTE_ADDR_MASK);
             else
                 l1_table = arm64_l1_page_tables[l0_idx];
         }
@@ -2619,7 +2626,7 @@ Arm64UpdateMappingAttributes(ULONGLONG Va, ULONGLONG Size, UINT64 set_mask, UINT
             if (in_pool)
                 l1_table = arm64_kernel_l1_tables[l0_idx - ARM64_KSEG0_L0_INDEX];
             else
-                l1_table = (UINT64 *)PA_TO_VA(l0_table[l0_idx] & ~0xFFFULL);
+                l1_table = (UINT64 *)PA_TO_VA(l0_table[l0_idx] & PTE_ADDR_MASK);
         }
         else
         {
@@ -2831,8 +2838,8 @@ static VOID setup_pgtables(VOID)
 
     /* Pre-seed TTBR1 L0 slots for extra kernel regions using pre-allocated tables.
      * This ensures we don't need Boot Services allocations during kernel mapping.
-     * The extra L0 slots (493, 494, 497, 502) map to:
-     *   - 493: Self-map (ARM64_SELF_PXE_BASE)
+     * The extra L0 slots (457, 494, 497, 501) map to:
+     *   - 457: Self-map (ARM64_SELF_PXE_BASE)
      *   - 494: Hyperspace (ARM64_HYPERSPACE_BASE)
      *   - 497: Paged Pool / Debug mapping
      *   - 502: PFN Database
@@ -3123,7 +3130,7 @@ Arm64VerifyIdentityMapping(UINT64 va, UINT64 *out_pa, UINT64 *out_attrs)
     }
 
     /* Get L1 table */
-    table = (UINT64 *)PA_TO_VA(entry & ~0xFFFULL);
+    table = (UINT64 *)PA_TO_VA(entry & PTE_ADDR_MASK);
 
     entry = table[l1_idx];
 
@@ -3135,7 +3142,7 @@ Arm64VerifyIdentityMapping(UINT64 va, UINT64 *out_pa, UINT64 *out_attrs)
     /* Check for 1GB block */
     if (DESC_IS_BLOCK(entry))
     {
-        UINT64 block_pa = entry & ~0x3FFFFFFFULL;
+        UINT64 block_pa = entry & PTE_BLOCK_ADDR_MASK_1G;
         UINT64 offset = va & 0x3FFFFFFFULL;
         if (out_pa) *out_pa = block_pa + offset;
         if (out_attrs) *out_attrs = entry & 0xFFF0000000000FFFULL;
@@ -3148,7 +3155,7 @@ Arm64VerifyIdentityMapping(UINT64 va, UINT64 *out_pa, UINT64 *out_attrs)
     }
 
     /* Get L2 table */
-    table = (UINT64 *)PA_TO_VA(entry & ~0xFFFULL);
+    table = (UINT64 *)PA_TO_VA(entry & PTE_ADDR_MASK);
 
     entry = table[l2_idx];
 
@@ -3160,7 +3167,7 @@ Arm64VerifyIdentityMapping(UINT64 va, UINT64 *out_pa, UINT64 *out_attrs)
     /* Check for 2MB block */
     if (DESC_IS_BLOCK(entry))
     {
-        UINT64 block_pa = entry & ~0x1FFFFFULL;
+        UINT64 block_pa = entry & PTE_BLOCK_ADDR_MASK_2M;
         UINT64 offset = va & 0x1FFFFFULL;
         if (out_pa) *out_pa = block_pa + offset;
         if (out_attrs) *out_attrs = entry & 0xFFF0000000000FFFULL;
@@ -3173,7 +3180,7 @@ Arm64VerifyIdentityMapping(UINT64 va, UINT64 *out_pa, UINT64 *out_attrs)
     }
 
     /* Get L3 table */
-    table = (UINT64 *)PA_TO_VA(entry & ~0xFFFULL);
+    table = (UINT64 *)PA_TO_VA(entry & PTE_ADDR_MASK);
 
     entry = table[l3_idx];
 
@@ -3189,7 +3196,7 @@ Arm64VerifyIdentityMapping(UINT64 va, UINT64 *out_pa, UINT64 *out_attrs)
 
     /* 4KB page */
     {
-        UINT64 page_pa = entry & ~0xFFFULL;
+        UINT64 page_pa = entry & PTE_ADDR_MASK;
         UINT64 offset = va & 0xFFFULL;
         if (out_pa) *out_pa = page_pa + offset;
         if (out_attrs) *out_attrs = entry & 0xFFF0000000000FFFULL;
@@ -4154,7 +4161,7 @@ BOOLEAN Arm64UnmapVirtualMemory(ULONGLONG VirtualAddress, ULONGLONG Size)
             return FALSE;
         }
 
-        UINT64 *l2_table = (UINT64 *)PA_TO_VA(l1_entry & ~0xFFFULL);
+        UINT64 *l2_table = (UINT64 *)PA_TO_VA(l1_entry & PTE_ADDR_MASK);
         UINT64 l2_entry = l2_table[l2_idx];
         if (DESC_IS_BLOCK(l2_entry))
         {
@@ -4177,7 +4184,7 @@ BOOLEAN Arm64UnmapVirtualMemory(ULONGLONG VirtualAddress, ULONGLONG Size)
             return FALSE;
         }
 
-        UINT64 *l3_table = (UINT64 *)PA_TO_VA(l2_entry & ~0xFFFULL);
+        UINT64 *l3_table = (UINT64 *)PA_TO_VA(l2_entry & PTE_ADDR_MASK);
         UINT64 pte = l3_table[l3_idx];
         if (!DESC_IS_PAGE(pte))
         {
@@ -4225,23 +4232,23 @@ ULONGLONG Arm64GetPhysicalAddress(ULONGLONG VirtualAddress)
     UINT64 l1 = (va >> 30) & 0x1FF;
     UINT64 pte1 = arm64_kernel_l1_tables[slot][l1];
     if (DESC_IS_BLOCK(pte1)) {
-        return (pte1 & ~0x3FFFFFFFULL) | (va & 0x3FFFFFFFULL); /* 1GiB */
+        return (pte1 & PTE_BLOCK_ADDR_MASK_1G) | (va & 0x3FFFFFFFULL); /* 1GiB */
     }
     if (!DESC_IS_TABLE(pte1)) return va;
 
-    UINT64 *l2tbl = (UINT64 *)PA_TO_VA(pte1 & ~0xFFFULL);
+    UINT64 *l2tbl = (UINT64 *)PA_TO_VA(pte1 & PTE_ADDR_MASK);
     UINT64 l2 = (va >> 21) & 0x1FF;
     UINT64 pte2 = l2tbl[l2];
     if (DESC_IS_BLOCK(pte2)) {
-        return (pte2 & ~0x1FFFFFULL) | (va & 0x1FFFFFULL);     /* 2MiB */
+        return (pte2 & PTE_BLOCK_ADDR_MASK_2M) | (va & 0x1FFFFFULL);     /* 2MiB */
     }
     if (!DESC_IS_TABLE(pte2)) return va;
 
-    UINT64 *l3tbl = (UINT64 *)PA_TO_VA(pte2 & ~0xFFFULL);
+    UINT64 *l3tbl = (UINT64 *)PA_TO_VA(pte2 & PTE_ADDR_MASK);
     UINT64 l3 = (va >> 12) & 0x1FF;
     UINT64 pte3 = l3tbl[l3];
     if (DESC_IS_PAGE(pte3)) {
-        return (pte3 & ~0xFFFULL) | (va & 0xFFFULL);           /* 4KiB */
+        return (pte3 & PTE_ADDR_MASK) | (va & 0xFFFULL);           /* 4KiB */
     }
     return va;
 }
@@ -4375,7 +4382,7 @@ static VOID debug_dump_static_mapping(UINT64 va)
         return;
     }
 
-    UINT64 *l1_table = (UINT64 *)PA_TO_VA(entry & ~0xFFFULL);
+    UINT64 *l1_table = (UINT64 *)PA_TO_VA(entry & PTE_ADDR_MASK);
     UartPuts("  L1 table @ 0x");
     UartPutHex64((UINT64)(uintptr_t)l1_table);
     UartPuts(", idx=");
@@ -4394,7 +4401,7 @@ static VOID debug_dump_static_mapping(UINT64 va)
     }
     if (DESC_IS_BLOCK(entry)) {
         UartPuts("  L1 block mapping -> PA 0x");
-        UartPutHex64(entry & 0xFFFFFFFFF000ULL);
+        UartPutHex64(entry & PTE_BLOCK_ADDR_MASK_1G);
         UartPuts("\n");
         TRACE("ARM64: debug map VA=0x%llx -> block L1[%llx]=0x%llx\n",
               (unsigned long long)va, (unsigned long long)l1_idx,
@@ -4409,7 +4416,7 @@ static VOID debug_dump_static_mapping(UINT64 va)
         return;
     }
 
-    UINT64 *l2_table = (UINT64 *)PA_TO_VA(entry & ~0xFFFULL);
+    UINT64 *l2_table = (UINT64 *)PA_TO_VA(entry & PTE_ADDR_MASK);
     UartPuts("  L2 table @ 0x");
     UartPutHex64((UINT64)(uintptr_t)l2_table);
     UartPuts(", idx=");
@@ -4428,7 +4435,7 @@ static VOID debug_dump_static_mapping(UINT64 va)
     }
     if (DESC_IS_BLOCK(entry)) {
         UartPuts("  L2 block mapping -> PA 0x");
-        UartPutHex64(entry & 0xFFFFFFFFF000ULL);
+        UartPutHex64(entry & PTE_BLOCK_ADDR_MASK_2M);
         UartPuts("\n");
         TRACE("ARM64: debug map VA=0x%llx -> block L2[%llx]=0x%llx\n",
               (unsigned long long)va, (unsigned long long)l2_idx,
@@ -4443,7 +4450,7 @@ static VOID debug_dump_static_mapping(UINT64 va)
         return;
     }
 
-    UINT64 *l3_table = (UINT64 *)PA_TO_VA(entry & ~0xFFFULL);
+    UINT64 *l3_table = (UINT64 *)PA_TO_VA(entry & PTE_ADDR_MASK);
     UartPuts("  L3 table @ 0x");
     UartPutHex64((UINT64)(uintptr_t)l3_table);
     UartPuts(", idx=");
@@ -4455,7 +4462,7 @@ static VOID debug_dump_static_mapping(UINT64 va)
 
     if (DESC_VALID(entry)) {
         UartPuts(" -> PA 0x");
-        UartPutHex64(entry & 0xFFFFFFFFF000ULL);
+        UartPutHex64(entry & PTE_ADDR_MASK);
     } else {
         UartPuts(" INVALID");
     }

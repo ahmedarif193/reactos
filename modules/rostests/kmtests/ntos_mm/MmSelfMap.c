@@ -39,27 +39,37 @@ VOID Test_MmSelfMap(VOID);
 #define ARM64_TEST_LEVEL_PTE        3
 
 /*
- * These constants describe today's legacy ReactOS ARM64 self-map layout.
- * They are trace references only. The executable contract follows NT/Win11:
- * discover the recursive slot dynamically and derive every self-map address
- * from that slot.
+ * These constants describe the NT-style ARM64 self-map layout ReactOS now
+ * exposes. The executable contract still discovers the recursive slot
+ * dynamically and derives all addresses from that slot; the constants are
+ * reference probes so the log shows when ReactOS drifts from the Win11 dump.
  */
-#define ARM64_TEST_PXE_SELFMAP_INDEX 493ULL
+#define ARM64_TEST_PXE_SELFMAP_INDEX 457ULL
 #define ARM64_TEST_NO_SELFMAP_INDEX  ((ULONGLONG)-1)
 
-#define ARM64_TEST_PXE_BASE         0xFFFFF6FB7DBED000ULL
-#define ARM64_TEST_PXE_SELFMAP      0xFFFFF6FB7DBEDF68ULL
-#define ARM64_TEST_PPE_BASE         0xFFFFF6FB7DA00000ULL
-#define ARM64_TEST_PDE_BASE         0xFFFFF6FB40000000ULL
-#define ARM64_TEST_PTE_BASE         0xFFFFF68000000000ULL
+#define ARM64_TEST_PXE_BASE         0xFFFFE4F2793C9000ULL
+#define ARM64_TEST_PXE_SELFMAP      0xFFFFE4F2793C9E48ULL
+#define ARM64_TEST_PPE_BASE         0xFFFFE4F279200000ULL
+#define ARM64_TEST_PDE_BASE         0xFFFFE4F240000000ULL
+#define ARM64_TEST_PTE_BASE         0xFFFFE48000000000ULL
 #define ARM64_TEST_KSEG0_BASE       0xFFFF800000000000ULL
 #define ARM64_TEST_L2_SPAN          (1ULL << ARM64_TEST_PDI_SHIFT)
+
+#define ARM64_TEST_LEGACY_PXE_SELFMAP_INDEX 493ULL
+#define ARM64_TEST_LEGACY_PXE_BASE         0xFFFFF6FB7DBED000ULL
+#define ARM64_TEST_LEGACY_PPE_BASE         0xFFFFF6FB7DA00000ULL
+#define ARM64_TEST_LEGACY_PDE_BASE         0xFFFFF6FB40000000ULL
+#define ARM64_TEST_LEGACY_PTE_BASE         0xFFFFF68000000000ULL
 
 #define ARM64_TEST_WIN11_HIGHEST_USER       0x00007FFFFFFEFFFFULL
 #define ARM64_TEST_WIN11_USER_PROBE         0x00007FFFFFFF0000ULL
 #define ARM64_TEST_WIN11_KUSER_SHARED_DATA  0xFFFFF78000000000ULL
+#define ARM64_TEST_OBSERVED_KSEG0_FAULT_LOW  0xFFFF8000427BE000ULL
+#define ARM64_TEST_OBSERVED_KSEG0_FAULT_HIGH 0xFFFF8000428E2000ULL
 
 #define ARM64_TEST_POOL_TAG         'fSmM'
+
+static volatile ULONG Arm64SelfMapWritableProbe = 0x13572468;
 
 static
 ULONGLONG
@@ -296,6 +306,27 @@ Arm64PfnFromEntry(
     _In_ ULONGLONG Entry)
 {
     return (Entry & ARM64_TEST_PTE_ADDR_MASK) >> PAGE_SHIFT;
+}
+
+static
+PVOID
+Arm64PageBase(
+    _In_ PVOID Address)
+{
+    return (PVOID)((ULONG_PTR)Address & ~(ULONG_PTR)(PAGE_SIZE - 1));
+}
+
+static
+PVOID
+Arm64Kseg0AliasForPhysicalAddress(
+    _In_ PHYSICAL_ADDRESS PhysicalAddress,
+    _In_ ULONG_PTR PageOffset)
+{
+    ULONGLONG PhysicalPage = (ULONGLONG)PhysicalAddress.QuadPart &
+                             ARM64_TEST_PTE_ADDR_MASK;
+
+    return (PVOID)(ARM64_TEST_KSEG0_BASE | PhysicalPage |
+                   (PageOffset & (PAGE_SIZE - 1)));
 }
 
 static
@@ -792,6 +823,141 @@ TestWin11LeafDescriptorPolicy(
 
 static
 VOID
+TestLeafDescriptorStableAcrossWrite(
+    _In_z_ PCSTR Name,
+    _In_ ULONGLONG Before,
+    _In_ ULONGLONG After)
+{
+    dump_trace("[arm64][MmSelfMap] write-stable %s before=0x%I64x after=0x%I64x\n",
+          Name,
+          Before,
+          After);
+
+    ok_eq_ulonglong(Arm64PfnFromEntry(After), Arm64PfnFromEntry(Before));
+    ok_eq_ulonglong(Arm64DescriptorAp(After), Arm64DescriptorAp(Before));
+    ok_eq_ulonglong(Arm64DescriptorShareability(After),
+                    Arm64DescriptorShareability(Before));
+    ok_eq_ulonglong(!!Arm64DescriptorHasFlag(After, ARM64_TEST_PTE_VALID),
+                    !!Arm64DescriptorHasFlag(Before, ARM64_TEST_PTE_VALID));
+    ok_eq_ulonglong(!!Arm64DescriptorHasFlag(After, ARM64_TEST_PTE_AF),
+                    !!Arm64DescriptorHasFlag(Before, ARM64_TEST_PTE_AF));
+    ok_eq_ulonglong(!!Arm64DescriptorHasFlag(After, ARM64_TEST_PTE_PXN),
+                    !!Arm64DescriptorHasFlag(Before, ARM64_TEST_PTE_PXN));
+    ok_eq_ulonglong(!!Arm64DescriptorHasFlag(After, ARM64_TEST_PTE_UXN),
+                    !!Arm64DescriptorHasFlag(Before, ARM64_TEST_PTE_UXN));
+}
+
+static
+VOID
+TestWritableByteLeafMutationContract(
+    _In_ ULONGLONG SelfMapIndex,
+    _Inout_ volatile UCHAR *Address,
+    _In_z_ PCSTR Name)
+{
+    UCHAR OldValue;
+    UCHAR NewValue;
+    ULONGLONG Before;
+    ULONGLONG After;
+
+    if (!ReadDynamicPte(SelfMapIndex, (PVOID)Address, Name, &Before))
+        return;
+
+    TestWin11LeafDescriptorPolicy(Name, Before);
+    ok_eq_ulonglong(Arm64DescriptorAp(Before), ARM64_TEST_AP_KERNEL_RW);
+    ok(Arm64DescriptorHasFlag(Before, ARM64_TEST_PTE_PXN),
+       "%s writable leaf is executable before write: 0x%I64x\n",
+       Name,
+       Before);
+
+    OldValue = *Address;
+    NewValue = (UCHAR)(OldValue ^ 0x5a);
+    *Address = NewValue;
+    KeMemoryBarrier();
+    ok_eq_ulong((ULONG)*Address, (ULONG)NewValue);
+
+    if (ReadDynamicPte(SelfMapIndex, (PVOID)Address, Name, &After))
+        TestLeafDescriptorStableAcrossWrite(Name, Before, After);
+
+    *Address = OldValue;
+    KeMemoryBarrier();
+}
+
+static
+VOID
+TestPhysicalAddressOffsetContract(
+    _In_ PVOID Address,
+    _In_z_ PCSTR Name)
+{
+    PHYSICAL_ADDRESS PhysicalAddress;
+
+    PhysicalAddress = MmGetPhysicalAddress(Address);
+    dump_trace("[arm64][MmSelfMap] pa-offset %s va=%p pa=0x%I64x\n",
+          Name,
+          Address,
+          (ULONGLONG)PhysicalAddress.QuadPart);
+
+    ok_eq_hex64((ULONGLONG)PhysicalAddress.QuadPart & (PAGE_SIZE - 1),
+                (ULONGLONG)(ULONG_PTR)Address & (PAGE_SIZE - 1));
+}
+
+static
+VOID
+TestMappedPageSpanContract(
+    _In_ ULONGLONG SelfMapIndex,
+    _In_ PUCHAR Page,
+    _In_z_ PCSTR Name)
+{
+    PUCHAR PageBase = Arm64PageBase(Page);
+    PUCHAR PageTail = PageBase + PAGE_SIZE - 1;
+    PUCHAR NextPage = PageBase + PAGE_SIZE;
+    ULONGLONG FirstPteAddress;
+    ULONGLONG TailPteAddress;
+    ULONGLONG NextPteAddress;
+    ULONGLONG FirstEntry;
+    ULONGLONG TailEntry;
+    ULONGLONG NextEntry;
+    PHYSICAL_ADDRESS NextPhysical;
+
+    FirstPteAddress = Arm64SelfMapAddressToPte(SelfMapIndex, PageBase);
+    TailPteAddress = Arm64SelfMapAddressToPte(SelfMapIndex, PageTail);
+    NextPteAddress = Arm64SelfMapAddressToPte(SelfMapIndex, NextPage);
+
+    dump_trace("[arm64][MmSelfMap] page-span %s base=%p tail=%p next=%p pte=%p/%p/%p\n",
+          Name,
+          PageBase,
+          PageTail,
+          NextPage,
+          (PVOID)FirstPteAddress,
+          (PVOID)TailPteAddress,
+          (PVOID)NextPteAddress);
+
+    ok_eq_hex64(TailPteAddress, FirstPteAddress);
+    ok_eq_hex64(NextPteAddress - FirstPteAddress, (ULONGLONG)sizeof(ULONGLONG));
+
+    TestPhysicalAddressOffsetContract(PageBase, Name);
+    TestPhysicalAddressOffsetContract(PageTail, Name);
+    TestPhysicalAddressOffsetContract(NextPage, Name);
+
+    if (ReadDynamicPte(SelfMapIndex, PageBase, Name, &FirstEntry) &&
+        ReadDynamicPte(SelfMapIndex, PageTail, Name, &TailEntry))
+    {
+        TestWin11LeafDescriptorPolicy(Name, FirstEntry);
+        TestWin11LeafDescriptorPolicy(Name, TailEntry);
+        ok_eq_ulonglong(Arm64PfnFromEntry(TailEntry),
+                        Arm64PfnFromEntry(FirstEntry));
+    }
+
+    if (ReadDynamicPte(SelfMapIndex, NextPage, Name, &NextEntry))
+    {
+        NextPhysical = MmGetPhysicalAddress(NextPage);
+        TestWin11LeafDescriptorPolicy(Name, NextEntry);
+        ok_eq_ulonglong(Arm64PfnFromEntry(NextEntry),
+                        (ULONGLONG)NextPhysical.QuadPart >> PAGE_SHIFT);
+    }
+}
+
+static
+VOID
 TestMappedHierarchyDescriptorPolicy(
     _In_ ULONGLONG SelfMapIndex,
     _In_ PVOID Address,
@@ -1029,9 +1195,15 @@ TestInvalidAtL1SelfMapAddress(
     _In_ PVOID Address,
     _In_z_ PCSTR Name)
 {
+    static const ULONG LowerLevels[] =
+    {
+        ARM64_TEST_LEVEL_PDE,
+        ARM64_TEST_LEVEL_PTE
+    };
     ULONGLONG EntryAddress;
     ULONGLONG Entry = 0;
     NTSTATUS Status;
+    ULONG i;
 
     Status = ProbeSelfMapLevel(SelfMapIndex,
                                Address,
@@ -1040,7 +1212,13 @@ TestInvalidAtL1SelfMapAddress(
                                &Entry);
     ok_eq_hex(Status, STATUS_SUCCESS);
     if (NT_SUCCESS(Status))
-        TestWin11TableDescriptorPolicy(Name, Entry);
+    {
+        dump_trace("[arm64][MmSelfMap] invalid-l1 %s PXE=%p entry=0x%I64x\n",
+              Name,
+              (PVOID)EntryAddress,
+              Entry);
+        TestWin11TableDescriptorPolicy("PXE", Entry);
+    }
 
     Status = ProbeSelfMapLevel(SelfMapIndex,
                                Address,
@@ -1050,26 +1228,22 @@ TestInvalidAtL1SelfMapAddress(
     ok_eq_hex(Status, STATUS_SUCCESS);
     if (NT_SUCCESS(Status))
     {
-        dump_trace("[arm64][MmSelfMap] invalid-l1 %s ppe=%p entry=0x%I64x\n",
+        dump_trace("[arm64][MmSelfMap] invalid-l1 %s PPE=%p entry=0x%I64x\n",
               Name,
               (PVOID)EntryAddress,
               Entry);
         ok_eq_hex64(Entry, 0ULL);
     }
 
-    Status = ProbeSelfMapLevel(SelfMapIndex,
-                               Address,
-                               ARM64_TEST_LEVEL_PDE,
-                               &EntryAddress,
-                               &Entry);
-    ok_eq_hex(Status, STATUS_ACCESS_VIOLATION);
-
-    Status = ProbeSelfMapLevel(SelfMapIndex,
-                               Address,
-                               ARM64_TEST_LEVEL_PTE,
-                               &EntryAddress,
-                               &Entry);
-    ok_eq_hex(Status, STATUS_ACCESS_VIOLATION);
+    for (i = 0; i < RTL_NUMBER_OF(LowerLevels); i++)
+    {
+        Status = ProbeSelfMapLevel(SelfMapIndex,
+                                   Address,
+                                   LowerLevels[i],
+                                   &EntryAddress,
+                                   &Entry);
+        ok_eq_hex(Status, STATUS_ACCESS_VIOLATION);
+    }
 }
 
 static
@@ -1113,23 +1287,23 @@ VOID
 TestLegacyReactOSSelfMapConstantsContract(
     _In_ ULONGLONG SelfMapIndex)
 {
-    ok(SelfMapIndex != ARM64_TEST_PXE_SELFMAP_INDEX,
+    ok(SelfMapIndex != ARM64_TEST_LEGACY_PXE_SELFMAP_INDEX,
        "Win11 ARM64 self-map used the legacy ReactOS fixed slot %I64u\n",
-       ARM64_TEST_PXE_SELFMAP_INDEX);
-    if (SelfMapIndex == ARM64_TEST_PXE_SELFMAP_INDEX)
+       ARM64_TEST_LEGACY_PXE_SELFMAP_INDEX);
+    if (SelfMapIndex == ARM64_TEST_LEGACY_PXE_SELFMAP_INDEX)
         return;
 
     TestInvalidAtL0SelfMapAddress(SelfMapIndex,
-                                  (PVOID)ARM64_TEST_PTE_BASE,
+                                  (PVOID)ARM64_TEST_LEGACY_PTE_BASE,
                                   "legacy PTE_BASE");
     TestInvalidAtL0SelfMapAddress(SelfMapIndex,
-                                  (PVOID)ARM64_TEST_PDE_BASE,
+                                  (PVOID)ARM64_TEST_LEGACY_PDE_BASE,
                                   "legacy PDE_BASE");
     TestInvalidAtL0SelfMapAddress(SelfMapIndex,
-                                  (PVOID)ARM64_TEST_PPE_BASE,
+                                  (PVOID)ARM64_TEST_LEGACY_PPE_BASE,
                                   "legacy PPE_BASE");
     TestInvalidAtL0SelfMapAddress(SelfMapIndex,
-                                  (PVOID)ARM64_TEST_PXE_BASE,
+                                  (PVOID)ARM64_TEST_LEGACY_PXE_BASE,
                                   "legacy PXE_BASE");
 }
 
@@ -1241,9 +1415,134 @@ TestNtKseg0Contract(
           PxeEntry);
     TraceDescriptorFields("KSEG0 PXE", PxeEntry);
 
-    ok(!Arm64IsTableDescriptor(PxeEntry),
-       "NT ARM64 does not expose KSEG0 as a valid TTBR1 table mapping: PXE=0x%I64x\n",
-       PxeEntry);
+    ok_eq_hex64(PxeEntry, 0ULL);
+}
+
+static
+VOID
+TestKseg0AliasInvalidForMappedAddress(
+    _In_ ULONGLONG SelfMapIndex,
+    _In_ PVOID Address,
+    _In_z_ PCSTR Name)
+{
+    PHYSICAL_ADDRESS PhysicalAddress;
+    PVOID Kseg0Alias;
+
+    PhysicalAddress = MmGetPhysicalAddress(Address);
+    Kseg0Alias = Arm64Kseg0AliasForPhysicalAddress(
+                     PhysicalAddress,
+                     (ULONG_PTR)Address & (PAGE_SIZE - 1));
+
+    dump_trace("[arm64][MmSelfMap] kseg0-alias %s va=%p pa=0x%I64x alias=%p\n",
+          Name,
+          Address,
+          (ULONGLONG)PhysicalAddress.QuadPart,
+          Kseg0Alias);
+    TraceAddressIndices(Name, Address);
+    TraceAddressIndices("kseg0 alias", Kseg0Alias);
+
+    TestInvalidAtL0SelfMapAddress(SelfMapIndex, Kseg0Alias, Name);
+}
+
+static
+VOID
+TestObservedKseg0FaultAddressContract(
+    _In_ ULONGLONG SelfMapIndex)
+{
+    TestInvalidAtL0SelfMapAddress(SelfMapIndex,
+                                  (PVOID)(ARM64_TEST_OBSERVED_KSEG0_FAULT_LOW - PAGE_SIZE),
+                                  "observed KSEG0 fault low previous");
+    TestInvalidAtL0SelfMapAddress(SelfMapIndex,
+                                  (PVOID)ARM64_TEST_OBSERVED_KSEG0_FAULT_LOW,
+                                  "observed KSEG0 fault low");
+    TestInvalidAtL0SelfMapAddress(SelfMapIndex,
+                                  (PVOID)(ARM64_TEST_OBSERVED_KSEG0_FAULT_LOW + PAGE_SIZE),
+                                  "observed KSEG0 fault low next");
+    TestInvalidAtL0SelfMapAddress(SelfMapIndex,
+                                  (PVOID)(ARM64_TEST_OBSERVED_KSEG0_FAULT_HIGH - PAGE_SIZE),
+                                  "observed KSEG0 fault high previous");
+    TestInvalidAtL0SelfMapAddress(SelfMapIndex,
+                                  (PVOID)ARM64_TEST_OBSERVED_KSEG0_FAULT_HIGH,
+                                  "observed KSEG0 fault high");
+    TestInvalidAtL0SelfMapAddress(SelfMapIndex,
+                                  (PVOID)(ARM64_TEST_OBSERVED_KSEG0_FAULT_HIGH + PAGE_SIZE),
+                                  "observed KSEG0 fault high next");
+}
+
+static
+VOID
+TestKseg0WindowInvalidContract(
+    _In_ ULONGLONG SelfMapIndex)
+{
+    static const ULONGLONG Addresses[] =
+    {
+        ARM64_TEST_KSEG0_BASE,
+        ARM64_TEST_KSEG0_BASE + PAGE_SIZE,
+        ARM64_TEST_KSEG0_BASE + ARM64_TEST_L2_SPAN - PAGE_SIZE,
+        ARM64_TEST_KSEG0_BASE + ARM64_TEST_L2_SPAN,
+        ARM64_TEST_KSEG0_BASE + (1ULL << ARM64_TEST_PPI_SHIFT) - PAGE_SIZE,
+        ARM64_TEST_KSEG0_BASE + (1ULL << ARM64_TEST_PPI_SHIFT),
+    };
+    ULONG i;
+
+    for (i = 0; i < RTL_NUMBER_OF(Addresses); i++)
+    {
+        dump_trace("[arm64][MmSelfMap] kseg0-window address=%p\n",
+              (PVOID)Addresses[i]);
+        TraceAddressIndices("KSEG0 invalid window", (PVOID)Addresses[i]);
+        TestInvalidAtL0SelfMapAddress(SelfMapIndex,
+                                      (PVOID)Addresses[i],
+                                      "KSEG0 invalid window");
+    }
+}
+
+static
+VOID
+TestKseg0AliasInvalidContract(
+    _In_ ULONGLONG SelfMapIndex,
+    _In_ PVOID StackPage,
+    _In_opt_ PVOID PoolPage)
+{
+    TestNtKseg0Contract(SelfMapIndex);
+    TestKseg0WindowInvalidContract(SelfMapIndex);
+    TestObservedKseg0FaultAddressContract(SelfMapIndex);
+    TestKseg0AliasInvalidForMappedAddress(SelfMapIndex,
+                                          Arm64PageBase((PVOID)Test_MmSelfMap),
+                                          "code KSEG0 alias");
+    TestKseg0AliasInvalidForMappedAddress(SelfMapIndex,
+                                          (PVOID)((ULONG_PTR)Test_MmSelfMap + 0x10),
+                                          "code offset KSEG0 alias");
+    TestKseg0AliasInvalidForMappedAddress(SelfMapIndex,
+                                          Arm64PageBase((PVOID)&KmtDriverObject),
+                                          "data KSEG0 alias");
+    TestKseg0AliasInvalidForMappedAddress(SelfMapIndex,
+                                          (PVOID)((ULONG_PTR)&KmtDriverObject + sizeof(PVOID) - 1),
+                                          "data offset KSEG0 alias");
+    TestKseg0AliasInvalidForMappedAddress(SelfMapIndex,
+                                          StackPage,
+                                          "stack KSEG0 alias");
+    TestKseg0AliasInvalidForMappedAddress(SelfMapIndex,
+                                          (PUCHAR)StackPage + PAGE_SIZE - 1,
+                                          "stack tail KSEG0 alias");
+    TestKseg0AliasInvalidForMappedAddress(SelfMapIndex,
+                                          (PVOID)KI_USER_SHARED_DATA,
+                                          "KUSER_SHARED_DATA KSEG0 alias");
+    TestKseg0AliasInvalidForMappedAddress(SelfMapIndex,
+                                          (PVOID)(KI_USER_SHARED_DATA + PAGE_SIZE - sizeof(ULONG)),
+                                          "KUSER_SHARED_DATA tail KSEG0 alias");
+
+    if (PoolPage != NULL)
+    {
+        TestKseg0AliasInvalidForMappedAddress(SelfMapIndex,
+                                              PoolPage,
+                                              "nonpaged-pool KSEG0 alias");
+        TestKseg0AliasInvalidForMappedAddress(SelfMapIndex,
+                                              (PUCHAR)PoolPage + PAGE_SIZE,
+                                              "nonpaged-pool second KSEG0 alias");
+        TestKseg0AliasInvalidForMappedAddress(SelfMapIndex,
+                                              (PUCHAR)PoolPage + PAGE_SIZE - 1,
+                                              "nonpaged-pool tail KSEG0 alias");
+    }
 }
 
 static
@@ -1319,6 +1618,39 @@ TestDynamicPagedPoolUpperLevelAllocation(
     TestPoolLeafDescriptorContract(SelfMapIndex,
                                    LastPage,
                                    "paged-pool last");
+    TestWritableByteLeafMutationContract(SelfMapIndex,
+                                         Allocation,
+                                         "paged-pool first writable");
+    TestWritableByteLeafMutationContract(SelfMapIndex,
+                                         BoundaryPage - 1,
+                                         "paged-pool pre-boundary writable");
+    TestWritableByteLeafMutationContract(SelfMapIndex,
+                                         BoundaryPage,
+                                         "paged-pool boundary writable");
+    TestWritableByteLeafMutationContract(SelfMapIndex,
+                                         LastPage,
+                                         "paged-pool last writable");
+    TestMappedPageSpanContract(SelfMapIndex,
+                               Allocation,
+                               "paged-pool first span");
+    TestMappedPageSpanContract(SelfMapIndex,
+                               BoundaryPage - PAGE_SIZE,
+                               "paged-pool pre-boundary span");
+    TestMappedPageSpanContract(SelfMapIndex,
+                               BoundaryPage,
+                               "paged-pool boundary span");
+    TestKseg0AliasInvalidForMappedAddress(SelfMapIndex,
+                                          Allocation,
+                                          "paged-pool first KSEG0 alias");
+    TestKseg0AliasInvalidForMappedAddress(SelfMapIndex,
+                                          BoundaryPage - 1,
+                                          "paged-pool pre-boundary KSEG0 alias");
+    TestKseg0AliasInvalidForMappedAddress(SelfMapIndex,
+                                          BoundaryPage,
+                                          "paged-pool boundary KSEG0 alias");
+    TestKseg0AliasInvalidForMappedAddress(SelfMapIndex,
+                                          LastPage,
+                                          "paged-pool last KSEG0 alias");
 
     ExFreePoolWithTag(Allocation, ARM64_TEST_POOL_TAG);
 }
@@ -1678,7 +2010,7 @@ TraceSelfMapSurvey(
     TraceAddressIndices("UserAfterHighest", UserAfterHighest);
     TraceAddressIndices("SystemBeforeStart", SystemBeforeStart);
     TraceAddressIndices("ARM64_TEST_KSEG0_BASE", (PVOID)ARM64_TEST_KSEG0_BASE);
-    TraceSelfMapLayoutForIndex("reactos-constant", ARM64_TEST_PXE_SELFMAP_INDEX);
+    TraceSelfMapLayoutForIndex("compiled-contract", ARM64_TEST_PXE_SELFMAP_INDEX);
 
     SelfMapIndex = TraceSelfMapCandidates();
     if (SelfMapIndex == ARM64_TEST_NO_SELFMAP_INDEX)
@@ -1690,10 +2022,10 @@ TraceSelfMapSurvey(
             return SelfMapIndex;
         }
 
-        dump_trace("[arm64][MmSelfMap] no TTBR1-root recursive slot found; tracing ReactOS constant %I64u as fallback only\n",
+        dump_trace("[arm64][MmSelfMap] no TTBR1-root recursive slot found; tracing compiled contract %I64u as fallback only\n",
               ARM64_TEST_PXE_SELFMAP_INDEX);
-        TraceSelfMapLayoutForIndex("reactos-fallback", ARM64_TEST_PXE_SELFMAP_INDEX);
-        TraceProbeEntry("reactos fallback self-entry", ARM64_TEST_PXE_SELFMAP);
+        TraceSelfMapLayoutForIndex("compiled-fallback", ARM64_TEST_PXE_SELFMAP_INDEX);
+        TraceProbeEntry("compiled fallback self-entry", ARM64_TEST_PXE_SELFMAP);
         TracePoolSurvey(SelfMapIndex);
         return SelfMapIndex;
     }
@@ -1772,6 +2104,9 @@ START_TEST(MmSelfMap)
                                         StackPage,
                                         "stack");
     TestKernelLeafProtectionContract(SelfMapIndex, StackPage);
+    TestWritableByteLeafMutationContract(SelfMapIndex,
+                                         (volatile UCHAR *)&Arm64SelfMapWritableProbe,
+                                         "global writable data");
     TestKUserSharedDataContract(SelfMapIndex);
 
     PoolPage = ExAllocatePoolWithTag(NonPagedPool,
@@ -1802,11 +2137,32 @@ START_TEST(MmSelfMap)
         TestPoolLeafDescriptorContract(SelfMapIndex,
                                        PoolPage + PAGE_SIZE,
                                        "nonpaged-pool second");
+        TestWritableByteLeafMutationContract(SelfMapIndex,
+                                             PoolPage,
+                                             "nonpaged-pool first writable");
+        TestWritableByteLeafMutationContract(SelfMapIndex,
+                                             PoolPage + PAGE_SIZE - 1,
+                                             "nonpaged-pool first tail writable");
+        TestWritableByteLeafMutationContract(SelfMapIndex,
+                                             PoolPage + PAGE_SIZE,
+                                             "nonpaged-pool second writable");
+        TestMappedPageSpanContract(SelfMapIndex,
+                                   PoolPage,
+                                   "nonpaged-pool first span");
+        TestKseg0AliasInvalidForMappedAddress(SelfMapIndex,
+                                              PoolPage,
+                                              "nonpaged-pool first KSEG0 alias");
+        TestKseg0AliasInvalidForMappedAddress(SelfMapIndex,
+                                              PoolPage + PAGE_SIZE - 1,
+                                              "nonpaged-pool first tail KSEG0 alias");
+        TestKseg0AliasInvalidForMappedAddress(SelfMapIndex,
+                                              PoolPage + PAGE_SIZE,
+                                              "nonpaged-pool second KSEG0 alias");
         ExFreePoolWithTag(PoolPage, ARM64_TEST_POOL_TAG);
     }
 
     TestDynamicPagedPoolUpperLevelAllocation(SelfMapIndex);
-    TestNtKseg0Contract(SelfMapIndex);
+    TestKseg0AliasInvalidContract(SelfMapIndex, StackPage, NULL);
 }
 
 #else

@@ -43,10 +43,11 @@ VOID Arm64FlushTlbRange(ULONGLONG VirtualAddress, ULONGLONG Size);
 VOID Arm64ClearIdentityMappings(VOID);
 
 /* Mapping attribute helpers */
-#define ARM64_MEM_ATTR_DEVICE_nGnRnE   0U
-#define ARM64_MEM_ATTR_DEVICE_nGnRE    1U
-#define ARM64_MEM_ATTR_DEVICE_GRE      2U
-#define ARM64_MEM_ATTR_NORMAL_NC       3U
+#define ARM64_MEM_ATTR_DEVICE_nGnRnE   1U
+#define ARM64_MEM_ATTR_DEVICE_nGnRE    ARM64_MEM_ATTR_DEVICE_nGnRnE
+#define ARM64_MEM_ATTR_DEVICE_GRE      ARM64_MEM_ATTR_DEVICE_nGnRnE
+#define ARM64_MEM_ATTR_NORMAL_NC       2U
+#define ARM64_MEM_ATTR_NORMAL_WC       3U
 #define ARM64_MEM_ATTR_NORMAL_WB       4U
 
 #define ARM64_MAP_ATTR_EXECUTE         0x00000100U
@@ -228,12 +229,12 @@ VOID Arm64RegisterIrqHandler(ULONG IntId, ARM64_IRQ_HANDLER Handler);
 #define ARM64_EL3              3
 
 /* Memory types for MAIR_EL1 */
-#define ARM64_MT_DEVICE_nGnRnE  0
-#define ARM64_MT_DEVICE_nGnRE   1
-#define ARM64_MT_DEVICE_GRE     2
-#define ARM64_MT_NORMAL_NC      3
+#define ARM64_MT_DEVICE_nGnRnE  1
+#define ARM64_MT_DEVICE_nGnRE   ARM64_MT_DEVICE_nGnRnE
+#define ARM64_MT_DEVICE_GRE     ARM64_MT_DEVICE_nGnRnE
+#define ARM64_MT_NORMAL_NC      2
 #define ARM64_MT_NORMAL         4
-#define ARM64_MT_NORMAL_WT      5
+#define ARM64_MT_NORMAL_WT      3
 
 /* Page table entry bits */
 #define ARM64_PTE_VALID         (1ULL << 0)

@@ -1,13 +1,16 @@
 #!/usr/bin/env python3
 """
 VM Monitor Script
-Builds reactosimg, starts VM (VirtualBox or QEMU) and monitors for stalls.
+Builds the selected boot image, starts VM (VirtualBox or QEMU) and monitors for stalls.
 If log stops updating for more than 6 seconds, or total runtime exceeds 30 seconds,
 forcefully stops the VM.
 
 Usage:
 	  # Run from within your build directory (e.g., output-arm64)
 	  python3 ../vm_monitor.py
+
+	  # ARM64 QEMU path: build livecd and boot livecd.iso
+	  python3 ../vm_monitor.py --qemu
 
 	  # Build and boot LiveCD ISO
 	  python3 ../vm_monitor.py --livecd
@@ -35,8 +38,8 @@ import socket
 
 # Configuration (never change those values)
 LOG_FILE = "/tmp/freeldr_arm64.log"
-STALL_TIMEOUT = int(os.environ.get("ROS_VM_STALL_TIMEOUT", "30"))
-HARD_TIMEOUT = int(os.environ.get("ROS_VM_HARD_TIMEOUT", "130"))
+STALL_TIMEOUT = int(os.environ.get("ROS_VM_STALL_TIMEOUT", "15"))
+HARD_TIMEOUT = int(os.environ.get("ROS_VM_HARD_TIMEOUT", "60"))
 VM_NAME = os.environ.get("ROS_VM_NAME", "ROS11")
 ENABLE_GDB_DUMP = os.environ.get("ROS_VM_GDB_DUMP", "1") != "0"
 QEMU_GDB_PORT = int(os.environ.get("ROS_QEMU_GDB_PORT", "1234"))
@@ -425,9 +428,15 @@ def build_ninja_target(target):
 
     print(f"Building {target} in {BUILD_DIR}...")
     try:
+        build_env = os.environ.copy()
+        cached_clang = "/Users/mac/.local/opt/rosbe/llvm-mingw/bin"
+        if os.path.isdir(cached_clang):
+            build_env["PATH"] = cached_clang + os.pathsep + build_env.get("PATH", "")
+
         result = subprocess.run(
             ["ninja", target],
             cwd=BUILD_DIR,
+            env=build_env,
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
             timeout=600
@@ -453,6 +462,14 @@ def qemu_iso_drive_args(image_path):
     """Return generic QEMU args for booting an ISO as optical media."""
     return [
         "-drive", f"file={image_path},media=cdrom,readonly=on",
+        "-boot", "order=d,menu=on",
+    ]
+
+
+def qemu_arm64_iso_drive_args(image_path):
+    """Return ARM64 virt optical media args matching the tested Win/ReactOS path."""
+    return [
+        "-drive", f"if=virtio,media=cdrom,readonly=on,file={image_path}",
         "-boot", "order=d,menu=on",
     ]
 
@@ -485,9 +502,9 @@ def start_qemu(rpi_mode=False, smp=4):
     if target_arch == "arm64":
         is_darwin = platform.system() == "Darwin"
         arm64_usb_devices = [
-            "-device", "qemu-xhci",
-            "-device", "usb-kbd",
-            "-device", "usb-tablet",
+            "-device", "qemu-xhci,id=xhci",
+            "-device", "usb-kbd,bus=xhci.0",
+            "-device", "usb-tablet,bus=xhci.0",
         ]
         if rpi_mode:
             mode_str = f"RPI emulation (cortex-a72, {smp} cores)"
@@ -510,7 +527,7 @@ def start_qemu(rpi_mode=False, smp=4):
                     "-cpu", "cortex-a72",
                     "-m", "4G",
                     "-drive", "if=pflash,format=raw,readonly=on,file=/opt/homebrew/share/qemu/edk2-aarch64-code.fd",
-                    *(qemu_iso_drive_args(img_path) if is_iso_boot else [
+                    *(qemu_arm64_iso_drive_args(img_path) if is_iso_boot else [
                         "-drive", f"file={img_path}",
                         "-boot", "order=d,menu=on",
                     ]),
@@ -529,7 +546,7 @@ def start_qemu(rpi_mode=False, smp=4):
                     "-cpu", "max",
                     "-m", "4G",
                     "-drive", "if=pflash,format=raw,readonly=on,file=/opt/homebrew/share/qemu/edk2-aarch64-code.fd",
-                    *(qemu_iso_drive_args(img_path) if is_iso_boot else [
+                    *(qemu_arm64_iso_drive_args(img_path) if is_iso_boot else [
                         "-drive", f"file={img_path}",
                         "-boot", "order=d,menu=on",
                     ]),
@@ -556,7 +573,7 @@ def start_qemu(rpi_mode=False, smp=4):
                     "-cpu", "cortex-a72",
                     "-m", "4G",
                     "-bios", "/usr/share/qemu-efi-aarch64/QEMU_EFI.fd",
-                    *(qemu_iso_drive_args(img_path) if is_iso_boot else [
+                    *(qemu_arm64_iso_drive_args(img_path) if is_iso_boot else [
                         "-drive", f"file.driver=file,file.filename={img_path},file.locking=off,format=raw",
                         "-device", "ich9-ahci,id=ahci",
                         "-drive", f"if=none,id=ahcidisk,format=raw,file.driver=file,file.filename={img_path},file.locking=off",
@@ -576,7 +593,7 @@ def start_qemu(rpi_mode=False, smp=4):
                     "-cpu", "max",
                     "-m", "4G",
                     "-bios", "/usr/share/qemu-efi-aarch64/QEMU_EFI.fd",
-                    *(qemu_iso_drive_args(img_path) if is_iso_boot else [
+                    *(qemu_arm64_iso_drive_args(img_path) if is_iso_boot else [
                         "-drive", f"file.driver=file,file.filename={img_path},file.locking=off,format=raw",
                         "-device", "ich9-ahci,id=ahci",
                         "-drive", f"if=none,id=ahcidisk,format=raw,file.driver=file,file.filename={img_path},file.locking=off",
@@ -1562,7 +1579,8 @@ def main():
     global use_qemu, target_arch, boot_media, boot_image_path
 
     parser = argparse.ArgumentParser(description='VM Monitor Script')
-    parser.add_argument('--qemu', action='store_true', help='Use QEMU instead of VirtualBox')
+    parser.add_argument('--qemu', action='store_true',
+                        help='Use QEMU instead of VirtualBox; ARM64 builds and boots livecd.iso')
     parser.add_argument('--vbox', action='store_true', help='Use VirtualBox (default behavior)')
     parser.add_argument('--rpi', action='store_true', help='Use Raspberry Pi emulation mode (cortex-a72, no HVF)')
     parser.add_argument('--smp', type=int, default=4, help='Number of CPU cores (default: 4)')
@@ -1593,6 +1611,12 @@ def main():
     # Force QEMU for ARM64 (VirtualBox does not exist for arm64)
     if target_arch == "arm64":
         use_qemu = True
+        # Match the tested ARM64 QEMU path: build livecd and boot it as optical media.
+        if args.qemu and not args.livecd and args.iso is None:
+            boot_media = "iso"
+            boot_image_path = LIVECD_ISO
+            build_target = "livecd"
+            args.rpi = True
 
     atexit.register(force_kill_vm)
     signal.signal(signal.SIGINT, signal_handler)

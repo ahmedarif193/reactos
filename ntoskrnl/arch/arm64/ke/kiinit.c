@@ -856,18 +856,20 @@ KiInitializeSystem(_Inout_ PLOADER_PARAMETER_BLOCK LoaderBlock)
 
         /*
          * NT code expects ordinary unaligned data accesses to normal memory to
-         * work on ARM64. Keep stack alignment checking, but force SCTLR_EL1.A off
-         * in case firmware or the loader left strict alignment checking enabled.
+         * work on ARM64. Keep EL1/EL0 stack alignment checking, but force
+         * SCTLR_EL1.A off in case firmware or the loader left strict alignment
+         * checking enabled.
          */
         {
             ULONG64 Sctlr;
+            ULONG64 NewSctlr;
 
             __asm__ __volatile__("mrs %0, sctlr_el1" : "=r"(Sctlr));
-            if (Sctlr & (1ULL << 1))
+            NewSctlr = (Sctlr & ~(1ULL << 1)) | (1ULL << 3) | (1ULL << 4);
+            if (NewSctlr != Sctlr)
             {
-                KiArm64RawPuts("[KiInitSys] clearing SCTLR_EL1.A\n");
-                Sctlr &= ~(1ULL << 1);
-                __asm__ __volatile__("msr sctlr_el1, %0" :: "r"(Sctlr) : "memory");
+                KiArm64RawPuts("[KiInitSys] normalizing SCTLR_EL1 alignment bits\n");
+                __asm__ __volatile__("msr sctlr_el1, %0" :: "r"(NewSctlr) : "memory");
                 __asm__ __volatile__("isb" ::: "memory");
             }
         }
@@ -918,27 +920,18 @@ KiInitializeSystem(_Inout_ PLOADER_PARAMETER_BLOCK LoaderBlock)
         }
 
         /*
-         * Hardware Access Flag (HA) capability detection and enablement.
-         *
-         * Check ID_AA64MMFR1_EL1.HAFDBS (bits [3:0]) to determine if the CPU
-         * supports hardware-managed Access Flags. Only enable TCR.HA if supported.
-         *
-         * Without HA, the CPU generates Access Flag faults (FSC=0x09/0x0A/0x0B)
-         * on first access to pages with AF=0. With HA, the CPU automatically sets
-         * AF=1, eliminating most AF faults.
+         * Keep TCR.HA disabled. Windows ARM64 leaves AF management visible to
+         * software, and the ARM64 fault path handles AF faults when any mapping
+         * is missing AF despite the boot/kernel seeding.
          */
         {
             ULONG Hafdbs = (ULONG)(Mmfr1 & 0xFULL);
-            BOOLEAN HasHardwareAF = (Hafdbs >= 1); /* 0x1 or 0x2 = HA supported */
+            ULONG64 CurrentTcr;
 
-            if (HasHardwareAF)
+            __asm__ __volatile__("mrs %0, tcr_el1" : "=r"(CurrentTcr));
+            if (CurrentTcr & (1ULL << 39))
             {
-                ULONG64 CurrentTcr;
-                __asm__ __volatile__("mrs %0, tcr_el1" : "=r"(CurrentTcr));
-
-                /* Enable TCR.HA (bit 39) */
-                CurrentTcr |= (1ULL << 39);
-
+                CurrentTcr &= ~(1ULL << 39);
                 __asm__ __volatile__("dsb ish" ::: "memory");
                 __asm__ __volatile__("msr tcr_el1, %0" :: "r"(CurrentTcr) : "memory");
                 __asm__ __volatile__("isb" ::: "memory");
@@ -946,17 +939,10 @@ KiInitializeSystem(_Inout_ PLOADER_PARAMETER_BLOCK LoaderBlock)
                 __asm__ __volatile__("dsb ish" ::: "memory");
                 __asm__ __volatile__("isb" ::: "memory");
 
-                DPRINT1("ARM64: Hardware Access Flag management ENABLED (HAFDBS=0x%lx, TCR.HA=1)\n", Hafdbs);
             }
-            else
-            {
-                /*
-                 * HA not supported - CPU will continue generating AF faults.
-                 * The fault handler in pagfault.c must handle these (FSC=0x09/0x0A/0x0B).
-                 */
-                DPRINT1("ARM64: Hardware Access Flag management NOT supported (HAFDBS=0x%lx, TCR.HA=0)\n", Hafdbs);
-                DPRINT1("       AF faults will be handled in software (expect higher fault rate)\n");
-            }
+
+            DPRINT1("ARM64: Hardware Access Flag management disabled (HAFDBS=0x%lx, TCR.HA=0)\n",
+                    Hafdbs);
         }
 
         /* Read current CPACR_EL1 */
@@ -1019,17 +1005,18 @@ KiInitializeSystem(_Inout_ PLOADER_PARAMETER_BLOCK LoaderBlock)
 
         /*
          * Match BSP alignment policy. Ordinary unaligned data accesses are
-         * permitted; SP alignment checking remains controlled by SCTLR_EL1.SA.
+         * permitted; EL1/EL0 SP alignment checking remains enabled.
          */
         {
             ULONG64 Sctlr;
+            ULONG64 NewSctlr;
 
             __asm__ __volatile__("mrs %0, sctlr_el1" : "=r"(Sctlr));
-            if (Sctlr & (1ULL << 1))
+            NewSctlr = (Sctlr & ~(1ULL << 1)) | (1ULL << 3) | (1ULL << 4);
+            if (NewSctlr != Sctlr)
             {
-                KiArm64RawPuts("[KiInitSys] AP clearing SCTLR_EL1.A\n");
-                Sctlr &= ~(1ULL << 1);
-                __asm__ __volatile__("msr sctlr_el1, %0" :: "r"(Sctlr) : "memory");
+                KiArm64RawPuts("[KiInitSys] AP normalizing SCTLR_EL1 alignment bits\n");
+                __asm__ __volatile__("msr sctlr_el1, %0" :: "r"(NewSctlr) : "memory");
                 __asm__ __volatile__("isb" ::: "memory");
             }
         }
@@ -1052,16 +1039,14 @@ KiInitializeSystem(_Inout_ PLOADER_PARAMETER_BLOCK LoaderBlock)
             __asm__ __volatile__("isb" ::: "memory");
         }
 
-        /*
-         * Hardware Access Flag: Enable on this AP if the CPU supports it.
-         */
+        /* Keep TCR.HA disabled on APs too. */
         {
-            ULONG Hafdbs = (ULONG)(Mmfr1 & 0xFULL);
-            if (Hafdbs >= 1)
+            ULONG64 CurrentTcr;
+
+            __asm__ __volatile__("mrs %0, tcr_el1" : "=r"(CurrentTcr));
+            if (CurrentTcr & (1ULL << 39))
             {
-                ULONG64 CurrentTcr;
-                __asm__ __volatile__("mrs %0, tcr_el1" : "=r"(CurrentTcr));
-                CurrentTcr |= (1ULL << 39); /* TCR.HA = 1 */
+                CurrentTcr &= ~(1ULL << 39);
                 __asm__ __volatile__("dsb ish" ::: "memory");
                 __asm__ __volatile__("msr tcr_el1, %0" :: "r"(CurrentTcr) : "memory");
                 __asm__ __volatile__("isb" ::: "memory");
