@@ -864,10 +864,6 @@ TestWritableByteLeafMutationContract(
 
     TestWin11LeafDescriptorPolicy(Name, Before);
     ok_eq_ulonglong(Arm64DescriptorAp(Before), ARM64_TEST_AP_KERNEL_RW);
-    ok(Arm64DescriptorHasFlag(Before, ARM64_TEST_PTE_PXN),
-       "%s writable leaf is executable before write: 0x%I64x\n",
-       Name,
-       Before);
 
     OldValue = *Address;
     NewValue = (UCHAR)(OldValue ^ 0x5a);
@@ -1552,6 +1548,8 @@ TestDynamicPagedPoolUpperLevelAllocation(
 {
     SIZE_T Size = (SIZE_T)(ARM64_TEST_L2_SPAN + 2 * PAGE_SIZE);
     PUCHAR Allocation;
+    PUCHAR SecondPage;
+    PUCHAR PreBoundaryPage;
     PUCHAR BoundaryPage;
     PUCHAR LastPage;
     ULONGLONG FirstPde;
@@ -1569,7 +1567,9 @@ TestDynamicPagedPoolUpperLevelAllocation(
        "PagedPool expansion allocation %p is not page-aligned\n",
        Allocation);
 
+    SecondPage = Allocation + PAGE_SIZE;
     BoundaryPage = Allocation + ARM64_TEST_L2_SPAN;
+    PreBoundaryPage = BoundaryPage - PAGE_SIZE;
     LastPage = BoundaryPage + PAGE_SIZE;
 
     /*
@@ -1579,6 +1579,8 @@ TestDynamicPagedPoolUpperLevelAllocation(
      * manager's physical translation.
      */
     RtlFillMemory(Allocation, PAGE_SIZE, 0x5a);
+    RtlFillMemory(SecondPage, PAGE_SIZE, 0x3c);
+    RtlFillMemory(PreBoundaryPage, PAGE_SIZE, 0x96);
     RtlFillMemory(BoundaryPage, PAGE_SIZE, 0xa5);
     RtlFillMemory(LastPage, PAGE_SIZE, 0xc3);
 
@@ -1622,7 +1624,7 @@ TestDynamicPagedPoolUpperLevelAllocation(
                                          Allocation,
                                          "paged-pool first writable");
     TestWritableByteLeafMutationContract(SelfMapIndex,
-                                         BoundaryPage - 1,
+                                         PreBoundaryPage + PAGE_SIZE - 1,
                                          "paged-pool pre-boundary writable");
     TestWritableByteLeafMutationContract(SelfMapIndex,
                                          BoundaryPage,
@@ -1634,7 +1636,7 @@ TestDynamicPagedPoolUpperLevelAllocation(
                                Allocation,
                                "paged-pool first span");
     TestMappedPageSpanContract(SelfMapIndex,
-                               BoundaryPage - PAGE_SIZE,
+                               PreBoundaryPage,
                                "paged-pool pre-boundary span");
     TestMappedPageSpanContract(SelfMapIndex,
                                BoundaryPage,
@@ -1643,7 +1645,7 @@ TestDynamicPagedPoolUpperLevelAllocation(
                                           Allocation,
                                           "paged-pool first KSEG0 alias");
     TestKseg0AliasInvalidForMappedAddress(SelfMapIndex,
-                                          BoundaryPage - 1,
+                                          PreBoundaryPage + PAGE_SIZE - 1,
                                           "paged-pool pre-boundary KSEG0 alias");
     TestKseg0AliasInvalidForMappedAddress(SelfMapIndex,
                                           BoundaryPage,

@@ -152,7 +152,11 @@ MmAddVerifierThunks(IN PVOID ThunkBuffer,
     //
     // Don't allow hooking the kernel or HAL
     //
+#ifdef _M_ARM64
+    if (ModuleBase < (PVOID)(MI_ARM64_BOOT_IMAGE_BASE + MmBootImageSize))
+#else
     if (ModuleBase < (PVOID)(KSEG0_BASE + MmBootImageSize))
+#endif
     {
         //
         // Fail

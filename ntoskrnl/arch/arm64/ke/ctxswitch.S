@@ -125,7 +125,7 @@ KiThreadStartup:
 
 .Lbad_sysroutine:
     /* x21 was NULL - print error and hang */
-    ldr     x9, =0xFFFF800009000000
+    ldr     x9, =0xFFFFFC0009000000
     mov     w10, #'N'
     strb    w10, [x9]
     mov     w10, #'U'

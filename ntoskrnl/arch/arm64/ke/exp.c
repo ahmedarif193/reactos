@@ -188,22 +188,22 @@ KiDispatchExceptionToUser(
             ULONG64 E;
 
             /* L0 */
-            T = (volatile ULONG64 *)(0xFFFF800000000000ULL | RootPa);
+            T = (volatile ULONG64 *)MI_ARM64_PHYS_TO_VA(RootPa);
             E = T[(ChkPage >> 39) & 0x1FF];
             if ((E & 0x3ULL) != 0x3ULL) { BadPage = ChkPage; goto StackNotMapped; }
 
             /* L1 */
-            T = (volatile ULONG64 *)(0xFFFF800000000000ULL | (E & 0x0000FFFFFFFFF000ULL));
+            T = (volatile ULONG64 *)MI_ARM64_PHYS_TO_VA(E & 0x0000FFFFFFFFF000ULL);
             E = T[(ChkPage >> 30) & 0x1FF];
             if ((E & 0x3ULL) != 0x3ULL) { BadPage = ChkPage; goto StackNotMapped; }
 
             /* L2 */
-            T = (volatile ULONG64 *)(0xFFFF800000000000ULL | (E & 0x0000FFFFFFFFF000ULL));
+            T = (volatile ULONG64 *)MI_ARM64_PHYS_TO_VA(E & 0x0000FFFFFFFFF000ULL);
             E = T[(ChkPage >> 21) & 0x1FF];
             if ((E & 0x3ULL) != 0x3ULL) { BadPage = ChkPage; goto StackNotMapped; }
 
             /* L3 */
-            T = (volatile ULONG64 *)(0xFFFF800000000000ULL | (E & 0x0000FFFFFFFFF000ULL));
+            T = (volatile ULONG64 *)MI_ARM64_PHYS_TO_VA(E & 0x0000FFFFFFFFF000ULL);
             E = T[(ChkPage >> 12) & 0x1FF];
             if ((E & 0x3ULL) != 0x3ULL) { BadPage = ChkPage; goto StackNotMapped; }
         }

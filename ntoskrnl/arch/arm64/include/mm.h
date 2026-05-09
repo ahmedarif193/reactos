@@ -109,6 +109,13 @@ C_ASSERT(PXE_SELFMAP == (PXE_BASE + (PXE_SELFMAP_INDEX * 8ULL)));
 C_ASSERT(ARM64_PTE_TABLE_DESCRIPTOR_ATTRS == 0x0060000000000F13ULL);
 
 #define KSEG0_BASE  0xFFFF800000000000ULL
+#define MI_ARM64_BOOT_IMAGE_BASE       0xFFFFF80000000000ULL
+#define MI_ARM64_PHYS_MAP_BASE         0xFFFFFC0000000000ULL
+#define MI_ARM64_PHYS_ADDR_MASK        0x0000FFFFFFFFFFFFULL
+#define MI_ARM64_PHYS_TO_VA(Phys) \
+    ((ULONG_PTR)(MI_ARM64_PHYS_MAP_BASE | ((ULONG64)(Phys) & MI_ARM64_PHYS_ADDR_MASK)))
+#define MI_ARM64_PFN_TO_VA(Pfn) \
+    MI_ARM64_PHYS_TO_VA(((ULONG64)(Pfn)) << PAGE_SHIFT)
 
 #define _MI_PAGING_LEVELS 4
 #define _MI_HAS_NO_EXECUTE 1
@@ -137,6 +144,14 @@ C_ASSERT(ARM64_PTE_TABLE_DESCRIPTOR_ATTRS == 0x0060000000000F13ULL);
 #ifndef MM_LOWEST_USER_ADDRESS
 #define MM_LOWEST_USER_ADDRESS         ((PVOID)0x0000000000010000ULL)
 #endif
+
+/*
+ * Keep blind user allocations out of the first and last TTBR0 L1 slots.
+ * These slots remain available for explicit callers, but Windows ARM64 does
+ * not populate them with ordinary process setup allocations.
+ */
+#define MI_LOWEST_AUTOMATIC_USER_ADDRESS  0x0000000040000000ULL
+#define MI_HIGHEST_AUTOMATIC_USER_ADDRESS 0x00007FFFBFFFFFFFULL
 
 /* WOW64 compatibility. */
 #define MM_HIGHEST_USER_ADDRESS_WOW64   0x7FFEFFFF
@@ -463,7 +478,7 @@ MiIsPdeForAddressValid(PVOID Address)
     RootPa = Ttbr1 & ARM64_PTE_ADDR_MASK_LOCAL;
 
     /* Map root table via KSEG0 (identity-mapped physical memory) */
-    L0 = (volatile UINT64 *)(KSEG0_BASE | RootPa);
+    L0 = (volatile UINT64 *)MI_ARM64_PHYS_TO_VA(RootPa);
 
     /* Calculate indices for each level */
     L0Index = MiAddressToPxi(Address);
@@ -476,7 +491,7 @@ MiIsPdeForAddressValid(PVOID Address)
         return FALSE;
 
     /* Map L1 table via KSEG0 */
-    L1 = (volatile UINT64 *)(KSEG0_BASE | (E0 & ARM64_PTE_ADDR_MASK_LOCAL));
+    L1 = (volatile UINT64 *)MI_ARM64_PHYS_TO_VA(E0 & ARM64_PTE_ADDR_MASK_LOCAL);
 
     /* Check L1 (PPE) */
     E1 = L1[L1Index];
@@ -484,7 +499,7 @@ MiIsPdeForAddressValid(PVOID Address)
         return FALSE;
 
     /* Map L2 table via KSEG0 */
-    L2 = (volatile UINT64 *)(KSEG0_BASE | (E1 & ARM64_PTE_ADDR_MASK_LOCAL));
+    L2 = (volatile UINT64 *)MI_ARM64_PHYS_TO_VA(E1 & ARM64_PTE_ADDR_MASK_LOCAL);
 
     /* Check L2 (PDE) */
     E2 = L2[L2Index];
@@ -565,14 +580,14 @@ MiArm64IsAddressValid(
         return FALSE;
     }
 
-    Table = (volatile ULONG64 *)(KSEG0_BASE | RootPa);
+    Table = (volatile ULONG64 *)MI_ARM64_PHYS_TO_VA(RootPa);
     Entry = Table[(Va >> PXI_SHIFT) & PXI_MASK];
     if ((Entry & ARM64_PTE_TYPE_MASK) != ARM64_PTE_TYPE_TABLE)
     {
         return FALSE;
     }
 
-    Table = (volatile ULONG64 *)(KSEG0_BASE | (Entry & ARM64_PTE_ADDR_MASK));
+    Table = (volatile ULONG64 *)MI_ARM64_PHYS_TO_VA(Entry & ARM64_PTE_ADDR_MASK);
     Entry = Table[(Va >> PPI_SHIFT) & PPI_MASK];
     if ((Entry & ARM64_PTE_TYPE_MASK) == ARM64_PTE_TYPE_BLOCK)
     {
@@ -583,7 +598,7 @@ MiArm64IsAddressValid(
         return FALSE;
     }
 
-    Table = (volatile ULONG64 *)(KSEG0_BASE | (Entry & ARM64_PTE_ADDR_MASK));
+    Table = (volatile ULONG64 *)MI_ARM64_PHYS_TO_VA(Entry & ARM64_PTE_ADDR_MASK);
     Entry = Table[(Va >> PDI_SHIFT) & PDI_MASK_ARM64];
     if ((Entry & ARM64_PTE_TYPE_MASK) == ARM64_PTE_TYPE_BLOCK)
     {
@@ -594,7 +609,7 @@ MiArm64IsAddressValid(
         return FALSE;
     }
 
-    Table = (volatile ULONG64 *)(KSEG0_BASE | (Entry & ARM64_PTE_ADDR_MASK));
+    Table = (volatile ULONG64 *)MI_ARM64_PHYS_TO_VA(Entry & ARM64_PTE_ADDR_MASK);
     Entry = Table[(Va >> PTI_SHIFT) & PTI_MASK_ARM64];
 
     return ((Entry & ARM64_PTE_TYPE_MASK) == ARM64_PTE_TYPE_PAGE);
@@ -631,7 +646,7 @@ MiArm64SyncPxeWrite(
     if (Root == 0)
         return;
 
-    RootL0 = (volatile ULONG64 *)(KSEG0_BASE | Root);
+    RootL0 = (volatile ULONG64 *)MI_ARM64_PHYS_TO_VA(Root);
     RootL0[Index] = PointerPxe->u.Long;
     __asm__ __volatile__("dsb ishst" ::: "memory");
 }
@@ -667,20 +682,20 @@ MiArm64UserPteKseg0(_In_ PVOID Address)
     ULONG64 E0, E1, E2;
 
     __asm__ __volatile__("mrs %0, ttbr0_el1" : "=r"(Ttbr0));
-    L0 = (PULONG64)(KSEG0_BASE | (Ttbr0 & 0x0000FFFFFFFFF000ULL));
+    L0 = (PULONG64)MI_ARM64_PHYS_TO_VA(Ttbr0 & 0x0000FFFFFFFFF000ULL);
 
     E0 = L0[((ULONG_PTR)Address >> PXI_SHIFT) & PXI_MASK];
     if ((E0 & 3) != 3) return NULL;
 
-    L1 = (PULONG64)(KSEG0_BASE | (E0 & 0x0000FFFFFFFFF000ULL));
+    L1 = (PULONG64)MI_ARM64_PHYS_TO_VA(E0 & 0x0000FFFFFFFFF000ULL);
     E1 = L1[((ULONG_PTR)Address >> PPI_SHIFT) & PPI_MASK];
     if ((E1 & 3) != 3) return NULL;
 
-    L2 = (PULONG64)(KSEG0_BASE | (E1 & 0x0000FFFFFFFFF000ULL));
+    L2 = (PULONG64)MI_ARM64_PHYS_TO_VA(E1 & 0x0000FFFFFFFFF000ULL);
     E2 = L2[((ULONG_PTR)Address >> PDI_SHIFT) & PDI_MASK_ARM64];
     if ((E2 & 3) != 3) return NULL;
 
-    L3 = (PULONG64)(KSEG0_BASE | (E2 & 0x0000FFFFFFFFF000ULL));
+    L3 = (PULONG64)MI_ARM64_PHYS_TO_VA(E2 & 0x0000FFFFFFFFF000ULL);
     return (PMMPTE)&L3[((ULONG_PTR)Address >> PTI_SHIFT) & PTI_MASK_ARM64];
 }
 
@@ -694,16 +709,16 @@ MiArm64UserPdeKseg0(_In_ PVOID Address)
     ULONG64 E0, E1;
 
     __asm__ __volatile__("mrs %0, ttbr0_el1" : "=r"(Ttbr0));
-    L0 = (PULONG64)(KSEG0_BASE | (Ttbr0 & 0x0000FFFFFFFFF000ULL));
+    L0 = (PULONG64)MI_ARM64_PHYS_TO_VA(Ttbr0 & 0x0000FFFFFFFFF000ULL);
 
     E0 = L0[((ULONG_PTR)Address >> PXI_SHIFT) & PXI_MASK];
     if ((E0 & 3) != 3) return NULL;
 
-    L1 = (PULONG64)(KSEG0_BASE | (E0 & 0x0000FFFFFFFFF000ULL));
+    L1 = (PULONG64)MI_ARM64_PHYS_TO_VA(E0 & 0x0000FFFFFFFFF000ULL);
     E1 = L1[((ULONG_PTR)Address >> PPI_SHIFT) & PPI_MASK];
     if ((E1 & 3) != 3) return NULL;
 
-    L2 = (PULONG64)(KSEG0_BASE | (E1 & 0x0000FFFFFFFFF000ULL));
+    L2 = (PULONG64)MI_ARM64_PHYS_TO_VA(E1 & 0x0000FFFFFFFFF000ULL);
     return (PMMPTE)&L2[((ULONG_PTR)Address >> PDI_SHIFT) & PDI_MASK_ARM64];
 }
 
@@ -719,12 +734,12 @@ MiArm64KernelPpeKseg0(_In_ PVOID Address)
     ASSERT(Address >= MmSystemRangeStart);
 
     __asm__ __volatile__("mrs %0, ttbr1_el1" : "=r"(Ttbr1));
-    L0 = (PULONG64)(KSEG0_BASE | (Ttbr1 & ARM64_PTE_ADDR_MASK));
+    L0 = (PULONG64)MI_ARM64_PHYS_TO_VA(Ttbr1 & ARM64_PTE_ADDR_MASK);
 
     E0 = L0[((ULONG_PTR)Address >> PXI_SHIFT) & PXI_MASK];
     if ((E0 & 3) != 3) return NULL;
 
-    L1 = (PULONG64)(KSEG0_BASE | (E0 & ARM64_PTE_ADDR_MASK));
+    L1 = (PULONG64)MI_ARM64_PHYS_TO_VA(E0 & ARM64_PTE_ADDR_MASK);
     return (PMMPTE)&L1[((ULONG_PTR)Address >> PPI_SHIFT) & PPI_MASK];
 }
 
@@ -740,16 +755,16 @@ MiArm64KernelPdeKseg0(_In_ PVOID Address)
     ASSERT(Address >= MmSystemRangeStart);
 
     __asm__ __volatile__("mrs %0, ttbr1_el1" : "=r"(Ttbr1));
-    L0 = (PULONG64)(KSEG0_BASE | (Ttbr1 & ARM64_PTE_ADDR_MASK));
+    L0 = (PULONG64)MI_ARM64_PHYS_TO_VA(Ttbr1 & ARM64_PTE_ADDR_MASK);
 
     E0 = L0[((ULONG_PTR)Address >> PXI_SHIFT) & PXI_MASK];
     if ((E0 & 3) != 3) return NULL;
 
-    L1 = (PULONG64)(KSEG0_BASE | (E0 & ARM64_PTE_ADDR_MASK));
+    L1 = (PULONG64)MI_ARM64_PHYS_TO_VA(E0 & ARM64_PTE_ADDR_MASK);
     E1 = L1[((ULONG_PTR)Address >> PPI_SHIFT) & PPI_MASK];
     if ((E1 & 3) != 3) return NULL;
 
-    L2 = (PULONG64)(KSEG0_BASE | (E1 & ARM64_PTE_ADDR_MASK));
+    L2 = (PULONG64)MI_ARM64_PHYS_TO_VA(E1 & ARM64_PTE_ADDR_MASK);
     return (PMMPTE)&L2[((ULONG_PTR)Address >> PDI_SHIFT) & PDI_MASK_ARM64];
 }
 
@@ -775,20 +790,20 @@ MiArm64UserL3BaseKseg0(_In_ PVOID Address)
     ULONG64 E0, E1, E2;
 
     __asm__ __volatile__("mrs %0, ttbr0_el1" : "=r"(Ttbr0));
-    L0 = (PULONG64)(KSEG0_BASE | (Ttbr0 & 0x0000FFFFFFFFF000ULL));
+    L0 = (PULONG64)MI_ARM64_PHYS_TO_VA(Ttbr0 & 0x0000FFFFFFFFF000ULL);
 
     E0 = L0[((ULONG_PTR)Address >> PXI_SHIFT) & PXI_MASK];
     if ((E0 & 3) != 3) return NULL;
 
-    L1 = (PULONG64)(KSEG0_BASE | (E0 & 0x0000FFFFFFFFF000ULL));
+    L1 = (PULONG64)MI_ARM64_PHYS_TO_VA(E0 & 0x0000FFFFFFFFF000ULL);
     E1 = L1[((ULONG_PTR)Address >> PPI_SHIFT) & PPI_MASK];
     if ((E1 & 3) != 3) return NULL;
 
-    L2 = (PULONG64)(KSEG0_BASE | (E1 & 0x0000FFFFFFFFF000ULL));
+    L2 = (PULONG64)MI_ARM64_PHYS_TO_VA(E1 & 0x0000FFFFFFFFF000ULL);
     E2 = L2[((ULONG_PTR)Address >> PDI_SHIFT) & PDI_MASK_ARM64];
     if ((E2 & 3) != 3) return NULL;
 
-    return (PMMPTE)(KSEG0_BASE | (E2 & 0x0000FFFFFFFFF000ULL));
+    return (PMMPTE)MI_ARM64_PHYS_TO_VA(E2 & 0x0000FFFFFFFFF000ULL);
 }
 
 /*
@@ -811,21 +826,21 @@ MiArm64UserPteKseg0ForPfn(
     *L3TablePfn = 0;
 
     __asm__ __volatile__("mrs %0, ttbr0_el1" : "=r"(Ttbr0));
-    L0 = (PULONG64)(KSEG0_BASE | (Ttbr0 & 0x0000FFFFFFFFF000ULL));
+    L0 = (PULONG64)MI_ARM64_PHYS_TO_VA(Ttbr0 & 0x0000FFFFFFFFF000ULL);
 
     E0 = L0[((ULONG_PTR)Address >> PXI_SHIFT) & PXI_MASK];
     if ((E0 & 3) != 3) return NULL;
 
-    L1 = (PULONG64)(KSEG0_BASE | (E0 & 0x0000FFFFFFFFF000ULL));
+    L1 = (PULONG64)MI_ARM64_PHYS_TO_VA(E0 & 0x0000FFFFFFFFF000ULL);
     E1 = L1[((ULONG_PTR)Address >> PPI_SHIFT) & PPI_MASK];
     if ((E1 & 3) != 3) return NULL;
 
-    L2 = (PULONG64)(KSEG0_BASE | (E1 & 0x0000FFFFFFFFF000ULL));
+    L2 = (PULONG64)MI_ARM64_PHYS_TO_VA(E1 & 0x0000FFFFFFFFF000ULL);
     E2 = L2[((ULONG_PTR)Address >> PDI_SHIFT) & PDI_MASK_ARM64];
     if ((E2 & 3) != 3) return NULL;
 
     *L3TablePfn = (PFN_NUMBER)((E2 & 0x0000FFFFFFFFF000ULL) >> PAGE_SHIFT);
-    L3 = (PULONG64)(KSEG0_BASE | (E2 & 0x0000FFFFFFFFF000ULL));
+    L3 = (PULONG64)MI_ARM64_PHYS_TO_VA(E2 & 0x0000FFFFFFFFF000ULL);
     return (PMMPTE)&L3[((ULONG_PTR)Address >> PTI_SHIFT) & PTI_MASK_ARM64];
 }
 
@@ -848,20 +863,20 @@ MiArm64KernelPteKseg0(
     ASSERT(Address >= MmSystemRangeStart);
 
     __asm__ __volatile__("mrs %0, ttbr1_el1" : "=r"(Ttbr1));
-    L0 = (PULONG64)(KSEG0_BASE | (Ttbr1 & ARM64_PTE_ADDR_MASK));
+    L0 = (PULONG64)MI_ARM64_PHYS_TO_VA(Ttbr1 & ARM64_PTE_ADDR_MASK);
 
     E0 = L0[((ULONG_PTR)Address >> PXI_SHIFT) & PXI_MASK];
     if ((E0 & 3) != 3) return NULL;
 
-    L1 = (PULONG64)(KSEG0_BASE | (E0 & ARM64_PTE_ADDR_MASK));
+    L1 = (PULONG64)MI_ARM64_PHYS_TO_VA(E0 & ARM64_PTE_ADDR_MASK);
     E1 = L1[((ULONG_PTR)Address >> PPI_SHIFT) & PPI_MASK];
     if ((E1 & 3) != 3) return NULL;
 
-    L2 = (PULONG64)(KSEG0_BASE | (E1 & ARM64_PTE_ADDR_MASK));
+    L2 = (PULONG64)MI_ARM64_PHYS_TO_VA(E1 & ARM64_PTE_ADDR_MASK);
     E2 = L2[((ULONG_PTR)Address >> PDI_SHIFT) & PDI_MASK_ARM64];
     if ((E2 & 3) != 3) return NULL;
 
-    L3 = (PULONG64)(KSEG0_BASE | (E2 & ARM64_PTE_ADDR_MASK));
+    L3 = (PULONG64)MI_ARM64_PHYS_TO_VA(E2 & ARM64_PTE_ADDR_MASK);
     return (PMMPTE)&L3[((ULONG_PTR)Address >> PTI_SHIFT) & PTI_MASK_ARM64];
 }
 
@@ -1280,7 +1295,7 @@ MiArm64HandleUserAccessFlagFault(
     ULONG64 RootPa = Ttbr0 & 0x0000FFFFFFFFF000ULL;
     if (RootPa == 0) return FALSE;
 
-    Table = (PULONG64)(KSEG0_BASE | RootPa);
+    Table = (PULONG64)MI_ARM64_PHYS_TO_VA(RootPa);
 
     /* L0 */
     Idx = ((ULONG_PTR)Address >> PXI_SHIFT) & PXI_MASK;
@@ -1289,21 +1304,21 @@ MiArm64HandleUserAccessFlagFault(
     if ((Entry & 3ULL) != 3ULL) return FALSE;
 
     /* L1 */
-    Table = (PULONG64)(KSEG0_BASE | (Entry & 0x0000FFFFFFFFF000ULL));
+    Table = (PULONG64)MI_ARM64_PHYS_TO_VA(Entry & 0x0000FFFFFFFFF000ULL);
     Idx = ((ULONG_PTR)Address >> PPI_SHIFT) & PPI_MASK;
     Entry = Table[Idx];
     if (FaultLevel == 1) { if (!(Entry & 1ULL)) return FALSE; Table[Idx] = Entry | (1ULL << 10); return TRUE; }
     if ((Entry & 3ULL) != 3ULL) return FALSE;
 
     /* L2 */
-    Table = (PULONG64)(KSEG0_BASE | (Entry & 0x0000FFFFFFFFF000ULL));
+    Table = (PULONG64)MI_ARM64_PHYS_TO_VA(Entry & 0x0000FFFFFFFFF000ULL);
     Idx = ((ULONG_PTR)Address >> PDI_SHIFT) & PDI_MASK_ARM64;
     Entry = Table[Idx];
     if (FaultLevel == 2) { if (!(Entry & 1ULL)) return FALSE; Table[Idx] = Entry | (1ULL << 10); return TRUE; }
     if ((Entry & 3ULL) != 3ULL) return FALSE;
 
     /* L3 */
-    Table = (PULONG64)(KSEG0_BASE | (Entry & 0x0000FFFFFFFFF000ULL));
+    Table = (PULONG64)MI_ARM64_PHYS_TO_VA(Entry & 0x0000FFFFFFFFF000ULL);
     Idx = ((ULONG_PTR)Address >> PTI_SHIFT) & PTI_MASK_ARM64;
     Entry = Table[Idx];
     if (FaultLevel == 3) { if (!(Entry & 1ULL)) return FALSE; Table[Idx] = Entry | (1ULL << 10); return TRUE; }

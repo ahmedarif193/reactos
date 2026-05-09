@@ -1478,6 +1478,7 @@ LoadAndBootWindowsCommon(
     BOOLEAN Success;
     PLDR_DATA_TABLE_ENTRY KernelDTE;
     KERNEL_ENTRY_POINT KiSystemStartup;
+    PFN_NUMBER FinalLoaderPagesSpanned;
 
     TRACE("LoadAndBootWindowsCommon()\n");
 
@@ -1544,9 +1545,6 @@ LoadAndBootWindowsCommon(
     KiSystemStartup = (KERNEL_ENTRY_POINT)KernelDTE->EntryPoint;
     LoaderBlockVA = PaToVa(LoaderBlock);
 
-    /* "Stop all motors", change videomode */
-    MachPrepareForReactOS();
-
     /* Show the "debug mode" notice if needed */
     /* Match KdInitSystem() conditions */
     if (!NtLdrGetOption(BootOptions, "CRASHDEBUG") &&
@@ -1577,31 +1575,57 @@ LoadAndBootWindowsCommon(
     /* Debugging... */
     //DumpMemoryAllocMap();
 
+#if defined(_M_ARM64)
+    /*
+     * ARM64 needs the final loader allocations and memory descriptor list
+     * before ExitBootServices so the handoff TTBRs can cover loader data.
+     */
+    WinLdrSetupMachineDependent(LoaderBlock);
+    WinLdrSetupMemoryLayout(LoaderBlock);
+    extern VOID Arm64PreparePageTables(VOID);
+    Arm64PreparePageTables();
+
+    /* Exit firmware services after the final loader layout is mapped. */
+    MachPrepareForReactOS();
+#else
+    /* "Stop all motors", change videomode */
+    MachPrepareForReactOS();
+
     /* Do the machine specific initialization */
     WinLdrSetupMachineDependent(LoaderBlock);
 
     /* Map pages and create memory descriptors */
     WinLdrSetupMemoryLayout(LoaderBlock);
+#endif
+
+    FinalLoaderPagesSpanned = MmGetLoaderPagesSpanned();
 
     /* Set processor context */
     WinLdrSetProcessorContext(OperatingSystemVersion);
+    EarlyUartPuts("[winldr] after context\n");
 
     /* Save final value of LoaderPagesSpanned */
-    LoaderBlock->Extension->LoaderPagesSpanned = MmGetLoaderPagesSpanned();
+    EarlyUartPuts("[winldr] before pages spanned\n");
+    WinLdrSystemBlock->Extension.LoaderPagesSpanned = FinalLoaderPagesSpanned;
+    EarlyUartPuts("[winldr] after pages spanned\n");
 
     TRACE("Hello from paged mode, KiSystemStartup %p, LoaderBlockVA %p!\n",
           KiSystemStartup, LoaderBlockVA);
 
     /* Zero KI_USER_SHARED_DATA page */
     {
+        EarlyUartPuts("[winldr] before shared data zero\n");
         PVOID UserSharedData = (PVOID)KI_USER_SHARED_DATA;
         RtlZeroMemory(UserSharedData, MM_PAGE_SIZE);
+        EarlyUartPuts("[winldr] after shared data zero\n");
     }
 
+#if !defined(_M_ARM64)
     WinLdrpDumpMemoryDescriptors(LoaderBlockVA);
     WinLdrpDumpBootDriver(LoaderBlockVA);
 #ifndef _M_AMD64
     WinLdrpDumpArcDisks(LoaderBlockVA);
+#endif
 #endif
 
 #if defined(_M_ARM64)
@@ -1610,7 +1634,7 @@ LoadAndBootWindowsCommon(
     EarlyUartPuts(" LoaderBlockVA 0x");
     EarlyUartPutHex((UINT64)(ULONG_PTR)LoaderBlockVA, 16);
     EarlyUartPuts(" KernelStack 0x");
-    EarlyUartPutHex((UINT64)LoaderBlockVA->KernelStack, 16);
+    EarlyUartPutHex((UINT64)LoaderBlock->KernelStack, 16);
     EarlyUartPutc('\n');
 #else
     TRACE("[winldr] jumping to kernel %p, LoaderBlockVA %p\n",
@@ -1620,7 +1644,7 @@ LoadAndBootWindowsCommon(
 #if defined(_M_ARM64)
     Arm64JumpToKernel((ULONGLONG)(ULONG_PTR)KiSystemStartup,
                       (ULONGLONG)(ULONG_PTR)LoaderBlockVA,
-                      (ULONGLONG)LoaderBlockVA->KernelStack);
+                      (ULONGLONG)LoaderBlock->KernelStack);
 #else
     /* Pass control */
     (*KiSystemStartup)(LoaderBlockVA);

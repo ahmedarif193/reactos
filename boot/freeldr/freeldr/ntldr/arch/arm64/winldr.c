@@ -530,6 +530,10 @@ WinLdrSetupMachineDependent(
 /* ARM64 specific memory & CPU setup                                          */
 /* -------------------------------------------------------------------------- */
 
+extern VOID Arm64PreparePageTables(VOID);
+extern VOID Arm64EnablePageTables(VOID);
+extern VOID Arm64ClearIdentityMappings(VOID);
+
 BOOLEAN
 Arm64InitializeMemory(
     IN PLOADER_PARAMETER_BLOCK LoaderBlock)
@@ -540,9 +544,6 @@ Arm64InitializeMemory(
     Arm64ApplyDeferredPageTableMemoryTypes();
     return TRUE;
 }
-
-extern VOID Arm64EnablePageTables(VOID);
-extern VOID Arm64ClearIdentityMappings(VOID);
 
 static VOID
 Arm64ConfigureProcessorContext(USHORT OperatingSystemVersion)
@@ -557,6 +558,7 @@ Arm64ConfigureProcessorContext(USHORT OperatingSystemVersion)
     /* Avoid firmware serial callbacks once we swap translation tables. */
     UefiSerialDisableFirmware();
     Arm64EnablePageTables();
+    EarlyUartPuts("[PT_EN] returned\n");
 
     /*
      * NOTE: We do NOT clear TTBR0 identity mappings here because:

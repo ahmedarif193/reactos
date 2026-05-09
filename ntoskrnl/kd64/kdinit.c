@@ -23,6 +23,24 @@
 #define DbgPrint(fmt, ...) (KdpDprintf(fmt, ##__VA_ARGS__), 0)
 #define DbgPrintEx(cmpid, lvl, fmt, ...) (KdpDprintf(fmt, ##__VA_ARGS__), 0)
 
+#if defined(_M_ARM64)
+extern VOID KiArm64RawPuts(const char *str);
+
+static
+VOID
+KdpArm64RawPutHex(_In_ ULONG_PTR Value)
+{
+    static const CHAR Hex[] = "0123456789ABCDEF";
+    volatile UCHAR *Uart = (volatile UCHAR *)0xFFFFFC0009000000ULL;
+    ULONG Shift;
+
+    for (Shift = (sizeof(ULONG_PTR) * 8) - 4; Shift < (sizeof(ULONG_PTR) * 8); Shift -= 4)
+    {
+        *Uart = Hex[(Value >> Shift) & 0xF];
+    }
+}
+#endif
+
 /* UTILITY FUNCTIONS *********************************************************/
 
 #include <mm/ARM3/miarm.h> // For MiIsMemoryTypeInvisible()
@@ -168,6 +186,18 @@ KdInitSystem(
     BOOLEAN EnableKd, DisableKdAfterInit = FALSE, BlockEnable = FALSE;
     PLDR_DATA_TABLE_ENTRY LdrEntry;
     ULONG i;
+
+#if defined(_M_ARM64)
+    KiArm64RawPuts("[arm64][kdinit] entry phase=");
+    KdpArm64RawPutHex(BootPhase);
+    KiArm64RawPuts(" loader=");
+    KdpArm64RawPutHex((ULONG_PTR)LoaderBlock);
+    KiArm64RawPuts(" lr=");
+    KdpArm64RawPutHex((ULONG_PTR)__builtin_return_address(0));
+    KiArm64RawPuts(" caller=");
+    KdpArm64RawPutHex((ULONG_PTR)__builtin_return_address(1));
+    KiArm64RawPuts("\n");
+#endif
 
     /* Check if this is Phase 1 */
     if (BootPhase)
@@ -439,6 +469,15 @@ KdInitSystem(
                                              LDR_DATA_TABLE_ENTRY,
                                              InLoadOrderLinks);
 
+#if defined(_M_ARM64)
+                DbgPrint("[arm64][kdinit] sym[%lu] entry=%p base=%p size=0x%lx nameLen=%hu name=%p\n",
+                         i,
+                         LdrEntry,
+                         LdrEntry->DllBase,
+                         LdrEntry->SizeOfImage,
+                         LdrEntry->FullDllName.Length,
+                         LdrEntry->FullDllName.Buffer);
+#endif
                 /* Generate the image name */
                 Name = LdrEntry->FullDllName.Buffer;
                 Length = LdrEntry->FullDllName.Length / sizeof(WCHAR);
@@ -457,6 +496,9 @@ KdInitSystem(
                 DbgLoadImageSymbols(&ImageName,
                                     LdrEntry->DllBase,
                                     (ULONG_PTR)PsGetCurrentProcessId());
+#if defined(_M_ARM64)
+                DbgPrint("[arm64][kdinit] sym[%lu] done\n", i);
+#endif
             }
 
             /* Check for incoming break-in and break on symbol load
