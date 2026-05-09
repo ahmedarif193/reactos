@@ -70,26 +70,28 @@ MiInitSystemMemoryAreas(VOID)
 
     MmLockAddressSpace(MmGetKernelAddressSpace());
 
-#ifdef _M_AMD64
+#if defined(_M_AMD64) || defined(_M_ARM64)
     // Reserved range FFFF800000000000 - FFFFF68000000000
     MiCreateArm3StaticMemoryArea((PVOID)MI_REAL_SYSTEM_RANGE_START, PTE_BASE - MI_REAL_SYSTEM_RANGE_START, FALSE);
-#endif /* _M_AMD64 */
+#endif
 
     // The loader mappings. The only Executable area.
+#ifdef _M_ARM64
+    MiCreateArm3StaticMemoryArea((PVOID)MI_ARM64_BOOT_IMAGE_BASE, MmBootImageSize, TRUE);
+#else
     MiCreateArm3StaticMemoryArea((PVOID)KSEG0_BASE, MmBootImageSize, TRUE);
+#endif
 
 #ifdef _M_ARM64
     /*
-     * KSEG0 is the ARM64 PFN alias used by the kernel table walkers, cache
-     * maintenance paths, and debugger. Keep the rest of that VA band out of
-     * the generic memory-area allocator; cache views and other dynamic kernel
-     * mappings must not consume physical-alias addresses.
+     * The boot image lives in the first Win64-style loader slot. Keep the
+     * rest of that slot out of the generic memory-area allocator.
      */
-    if (((ULONG_PTR)KSEG0_BASE + MmBootImageSize) < (ULONG_PTR)PTE_BASE)
+    if ((MI_ARM64_BOOT_IMAGE_BASE + MmBootImageSize) < MI_SYSTEM_SPACE_START)
     {
-        MiCreateArm3StaticMemoryArea((PVOID)((ULONG_PTR)KSEG0_BASE + MmBootImageSize),
-                                     (ULONG_PTR)PTE_BASE -
-                                         ((ULONG_PTR)KSEG0_BASE + MmBootImageSize),
+        MiCreateArm3StaticMemoryArea((PVOID)(MI_ARM64_BOOT_IMAGE_BASE + MmBootImageSize),
+                                     MI_SYSTEM_SPACE_START -
+                                         (MI_ARM64_BOOT_IMAGE_BASE + MmBootImageSize),
                                      FALSE);
     }
 #endif
@@ -151,8 +153,13 @@ MiDbgDumpAddressSpace(VOID)
     // Print the memory layout
     //
     DPRINT1("          0x%p - 0x%p\t%s\n",
+#ifdef _M_ARM64
+            (PVOID)(ULONG_PTR)MI_ARM64_BOOT_IMAGE_BASE,
+            (PVOID)(ULONG_PTR)(MI_ARM64_BOOT_IMAGE_BASE + MmBootImageSize),
+#else
             KSEG0_BASE,
             (ULONG_PTR)KSEG0_BASE + MmBootImageSize,
+#endif
             "Boot Loaded Image");
 #ifdef _M_IX86
     DPRINT1("          0x%p - 0x%p\t%s\n",
