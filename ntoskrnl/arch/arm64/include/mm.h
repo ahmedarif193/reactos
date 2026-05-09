@@ -521,11 +521,14 @@ MiArm64IsAddressValid(
     volatile ULONG64 *Table;
     ULONG64 Entry;
     ULONG_PTR Va;
+    BOOLEAN IsPageTableAddress;
 
     Va = (ULONG_PTR)Address;
+    IsPageTableAddress = (Va >= PTE_BASE) && (Va <= PTE_TOP);
 
     if ((MiArm64SelfMapReady) &&
-        (Va >= (ULONG_PTR)MmSystemRangeStart))
+        (Va >= (ULONG_PTR)MmSystemRangeStart) &&
+        !IsPageTableAddress)
     {
         Entry = ((volatile MMPTE *)MiAddressToPxe(Address))->u.Long;
         if ((Entry & ARM64_PTE_TYPE_MASK) == ARM64_PTE_TYPE_BLOCK)
