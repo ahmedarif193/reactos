@@ -2221,7 +2221,11 @@ MmArmInitSystem(IN ULONG Phase,
         MiInitializeSessionSpaceLayout();
 
         /* Set the based section highest address */
+#ifdef _M_ARM64
+        MmHighSectionBase = (PVOID)((ULONG_PTR)MI_HIGHEST_AUTOMATIC_USER_ADDRESS - 0x800000);
+#else
         MmHighSectionBase = (PVOID)((ULONG_PTR)MmHighestUserAddress - 0x800000);
+#endif
 
         /* Loop all 8 standby lists */
         for (i = 0; i < 8; i++)
