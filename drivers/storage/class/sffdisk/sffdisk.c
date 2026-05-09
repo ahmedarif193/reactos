@@ -651,7 +651,10 @@ SffdiskAddDevice(
     DiskNumber = ConfigInfo->DiskCount;
     ConfigInfo->DiskCount++;
 
-    swprintf(DirNameBuf, L"\\Device\\Harddisk%lu", DiskNumber);
+    swprintf(DirNameBuf,
+             RTL_NUMBER_OF(DirNameBuf),
+             L"\\Device\\Harddisk%lu",
+             DiskNumber);
     RtlInitUnicodeString(&DirName, DirNameBuf);
 
     InitializeObjectAttributes(&ObjAttrs,
@@ -677,7 +680,11 @@ SffdiskAddDevice(
      * Step 2: Create the FDO with a proper device name
      * \\Device\\HarddiskN\\DRN (same convention as disk.sys).
      */
-    swprintf(DevNameBuf, L"\\Device\\Harddisk%lu\\DR%lu", DiskNumber, DiskNumber);
+    swprintf(DevNameBuf,
+             RTL_NUMBER_OF(DevNameBuf),
+             L"\\Device\\Harddisk%lu\\DR%lu",
+             DiskNumber,
+             DiskNumber);
     RtlInitUnicodeString(&DevName, DevNameBuf);
 
     Status = IoCreateDevice(DriverObject,
