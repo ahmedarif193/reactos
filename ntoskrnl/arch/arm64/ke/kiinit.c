@@ -21,6 +21,10 @@ KiArm64TtbrToPa(
     return Ttbr & 0x0000FFFFFFFFF000ULL;
 }
 
+#ifndef KE_ARM64_TTBR1_L0_OFFSET
+#define KE_ARM64_TTBR1_L0_OFFSET 0x800ULL
+#endif
+
 #ifndef PCR_MAJOR_VERSION
 #define PCR_MAJOR_VERSION 1
 #endif
@@ -48,7 +52,7 @@ KiArm64TtbrToPa(
 #define ARM64_STUB() UNIMPLEMENTED_DBGBREAK()
 
 VOID KiArm64RawPuts(const char *str) {
-    volatile UCHAR *u = (volatile UCHAR *)0xFFFF800009000000ULL;
+    volatile UCHAR *u = (volatile UCHAR *)0xFFFFFC0009000000ULL;
     while (*str) *u = *str++;
 }
 
@@ -243,34 +247,71 @@ KiInitializeKernel(_Inout_ PKPROCESS InitProcess,
         }
 
         /*
-         * ARM64 CRITICAL: Configure TCR_EL1.T0SZ for 48-bit user VA.
-         *
-         * T0SZ (bits [5:0]) controls TTBR0 (user) VA size: VA_bits = 64 - T0SZ.
-         * The bootloader preserves firmware's T0SZ because it runs from identity-
-         * mapped (TTBR0) addresses. Now that we're running entirely from TTBR1
-         * (kernel addresses), we can safely reconfigure T0SZ for user mode.
+         * Match the NT ARM64 translation contract: a shared 4 KB L0 root is
+         * split between 47-bit TTBR0 and TTBR1 walks. TTBR0 starts at the page
+         * base and TTBR1 starts at the upper-half L0 slot offset.
          */
         {
             ULONG64 TcrEl1;
             ULONG64 T0sz;
+            ULONG64 T1sz;
+            ULONG64 Ips;
             ULONG64 NewTcr;
+            ULONG64 Ttbr1;
+            ULONG64 Ttbr1Root;
 
             __asm__ __volatile__("mrs %0, tcr_el1" : "=r"(TcrEl1));
             T0sz = TcrEl1 & 0x3FULL;
+            T1sz = (TcrEl1 >> 16) & 0x3FULL;
+            Ips = (TcrEl1 >> 32) & 0x7ULL;
 
-            if (T0sz != 16)
+            if ((T0sz != 17) || (T1sz != 17) || (Ips != 5))
             {
-                /* Build new TCR with T0SZ = 16 for 48-bit user VA */
-                NewTcr = TcrEl1 & ~0x3FULL;
-                NewTcr |= 16ULL;
+                __asm__ __volatile__("mrs %0, ttbr1_el1" : "=r"(Ttbr1));
+                Ttbr1Root = KiArm64TtbrToPa(Ttbr1);
 
-                /* Ensure proper TTBR0 attributes for 4KB granule, 48-bit VA */
+                if ((Ttbr1Root != 0) && (T1sz != 17))
+                {
+                    ULONG64 Ttbr1Upper = Ttbr1Root + KE_ARM64_TTBR1_L0_OFFSET;
+
+                    __asm__ __volatile__("dsb ishst" ::: "memory");
+                    __asm__ __volatile__("msr ttbr1_el1, %0" :: "r"(Ttbr1Upper) : "memory");
+                    __asm__ __volatile__("isb" ::: "memory");
+                }
+
+                NewTcr = TcrEl1;
+
+                /* T0SZ/T1SZ = 17 gives the Win11-visible 47-bit VA geometry. */
+                NewTcr &= ~0x3FULL;
+                NewTcr |= 17ULL;
+                NewTcr &= ~(0x3FULL << 16);
+                NewTcr |= (17ULL << 16);
+
+                /* IPS = 0b101 exposes a 48-bit physical address size. */
+                NewTcr &= ~(0x7ULL << 32);
+                NewTcr |= (5ULL << 32);
+
+                /* Ensure proper TTBR0 attributes for 4KB granule. */
                 NewTcr &= ~(0x3ULL << 14);   /* TG0 = 0b00 (4KB) */
                 NewTcr |= (0x3ULL << 12);    /* SH0 = Inner Shareable */
                 NewTcr &= ~(0x3ULL << 10);
                 NewTcr |= (0x1ULL << 10);    /* ORGN0 = Write-Back Write-Allocate */
                 NewTcr &= ~(0x3ULL << 8);
                 NewTcr |= (0x1ULL << 8);     /* IRGN0 = Write-Back Write-Allocate */
+                NewTcr &= ~(0x3ULL << 30);   /* TG1 = 0b10 (4KB) */
+                NewTcr |= (0x2ULL << 30);
+                NewTcr &= ~(0x3ULL << 28);
+                NewTcr |= (0x3ULL << 28);    /* SH1 = Inner Shareable */
+                NewTcr &= ~(0x3ULL << 26);
+                NewTcr |= (0x1ULL << 26);    /* ORGN1 = Write-Back Write-Allocate */
+                NewTcr &= ~(0x3ULL << 24);
+                NewTcr |= (0x1ULL << 24);    /* IRGN1 = Write-Back Write-Allocate */
+                NewTcr |= (1ULL << 22);      /* A1: TTBR1 ASID selector */
+                NewTcr &= ~((1ULL << 36) |   /* AS */
+                            (1ULL << 37) |   /* TBI0 */
+                            (1ULL << 38) |   /* TBI1 */
+                            (1ULL << 39) |   /* HA */
+                            (1ULL << 40));   /* HD */
 
                 /*
                  * Hardware Access Flag management (ARMv8.1+ optional feature).

@@ -13,6 +13,8 @@
 #define KE_ARM64_KSEG0_BASE 0xFFFF800000000000ULL
 #endif
 
+#define KE_ARM64_TTBR1_L0_OFFSET 0x800ULL
+
 #define ARM64_SYNC_BARRIER() do { __dmb(_ARM64_BARRIER_SY); __isb(_ARM64_BARRIER_SY); } while (0)
 
 typedef struct _KSWITCHFRAME
@@ -144,15 +146,25 @@ KiArm64WriteUserTtbr(
      * use targeted TLBI (aside1is), and properly manage ASID allocation.
      */
     ULONGLONG RootBase = UserDirectoryBase & ~((ULONGLONG)PAGE_SIZE - 1ULL);
+    ULONGLONG KernelRootBase = RootBase;
+    ULONGLONG TcrEl1;
+    ULONGLONG T1sz;
     ULONGLONG SavedDaif;
     UNREFERENCED_PARAMETER(KernelDirectoryBase);
+
+    __asm__ __volatile__("mrs %0, tcr_el1" : "=r"(TcrEl1));
+    T1sz = (TcrEl1 >> 16) & 0x3FULL;
+    if (T1sz == 17)
+    {
+        KernelRootBase += KE_ARM64_TTBR1_L0_OFFSET;
+    }
 
     __asm__ __volatile__("mrs %0, daif" : "=r"(SavedDaif));
     __asm__ __volatile__("msr daifset, #0xF" ::: "memory");
 
     __asm__ __volatile__("msr ttbr0_el1, %0" :: "r"(RootBase) : "memory");
     __asm__ __volatile__("isb" ::: "memory");
-    __asm__ __volatile__("msr ttbr1_el1, %0" :: "r"(RootBase) : "memory");
+    __asm__ __volatile__("msr ttbr1_el1, %0" :: "r"(KernelRootBase) : "memory");
     __asm__ __volatile__("isb" ::: "memory");
 
     __asm__ __volatile__("dsb ishst" ::: "memory");

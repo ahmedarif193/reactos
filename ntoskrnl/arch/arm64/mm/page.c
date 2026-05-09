@@ -193,7 +193,7 @@ VOID
 MiArm64InvalidatePageByPfnAlias(
     _In_ PFN_NUMBER PageFrameNumber)
 {
-    MiArm64MaintainPageCache((PVOID)(KSEG0_BASE + ((ULONG_PTR)PageFrameNumber << PAGE_SHIFT)),
+    MiArm64MaintainPageCache((PVOID)MI_ARM64_PFN_TO_VA(PageFrameNumber),
                              MiArm64DcacheInvalidate,
                              FALSE);
 }
@@ -204,7 +204,7 @@ MiArm64PublishPageByPfnAlias(
     _In_ PFN_NUMBER PageFrameNumber,
     _In_ BOOLEAN SweepIcache)
 {
-    MiArm64MaintainPageCache((PVOID)(KSEG0_BASE + ((ULONG_PTR)PageFrameNumber << PAGE_SHIFT)),
+    MiArm64MaintainPageCache((PVOID)MI_ARM64_PFN_TO_VA(PageFrameNumber),
                              MiArm64DcacheCleanInvalidate,
                              SweepIcache);
 }
@@ -420,7 +420,7 @@ MiArm64GetUserPteAddressForProcess(
         return FALSE;
     }
 
-    L0Table = (volatile ULONG64 *)(KSEG0_BASE | RootPa);
+    L0Table = (volatile ULONG64 *)MI_ARM64_PHYS_TO_VA(RootPa);
     L0Entry = L0Table[L0Idx];
     if ((L0Entry & 0x3ULL) != 0x3ULL)
     {
@@ -434,7 +434,7 @@ MiArm64GetUserPteAddressForProcess(
         return FALSE;
     }
 
-    L1Table = (volatile ULONG64 *)(KSEG0_BASE | L1Pa);
+    L1Table = (volatile ULONG64 *)MI_ARM64_PHYS_TO_VA(L1Pa);
     L1Entry = L1Table[L1Idx];
     if ((L1Entry & 0x1ULL) == 0)
     {
@@ -457,7 +457,7 @@ MiArm64GetUserPteAddressForProcess(
         return FALSE;
     }
 
-    L2Table = (volatile ULONG64 *)(KSEG0_BASE | L2Pa);
+    L2Table = (volatile ULONG64 *)MI_ARM64_PHYS_TO_VA(L2Pa);
     L2Entry = L2Table[L2Idx];
     if ((L2Entry & 0x1ULL) == 0)
     {
@@ -480,7 +480,7 @@ MiArm64GetUserPteAddressForProcess(
         return FALSE;
     }
 
-    L3Table = (volatile ULONG64 *)(KSEG0_BASE | L3Pa);
+    L3Table = (volatile ULONG64 *)MI_ARM64_PHYS_TO_VA(L3Pa);
     Walk->PointerPte = &L3Table[L3Idx];
     Walk->PteValue = L3Table[L3Idx];
     if ((Walk->PteValue & 0x3ULL) == 0x3ULL)
@@ -705,7 +705,7 @@ MiArm64ReleaseUserPageTableReference(
     if (!MiArm64EnsureTablePageMapped(RootPa))
         return;
 
-    L0Table = (volatile ULONG64 *)(KSEG0_BASE | RootPa);
+    L0Table = (volatile ULONG64 *)MI_ARM64_PHYS_TO_VA(RootPa);
     L0Entry = L0Table[L0Idx];
     if ((L0Entry & 0x3ULL) != 0x3ULL)
         return;
@@ -715,7 +715,7 @@ MiArm64ReleaseUserPageTableReference(
         return;
 
     L1Pfn = L1Pa >> PAGE_SHIFT;
-    L1Table = (volatile ULONG64 *)(KSEG0_BASE | L1Pa);
+    L1Table = (volatile ULONG64 *)MI_ARM64_PHYS_TO_VA(L1Pa);
     L1Entry = L1Table[L1Idx];
     if ((L1Entry & 0x3ULL) != 0x3ULL)
         return;
@@ -725,7 +725,7 @@ MiArm64ReleaseUserPageTableReference(
         return;
 
     L2Pfn = L2Pa >> PAGE_SHIFT;
-    L2Table = (volatile ULONG64 *)(KSEG0_BASE | L2Pa);
+    L2Table = (volatile ULONG64 *)MI_ARM64_PHYS_TO_VA(L2Pa);
     L2Entry = L2Table[L2Idx];
     if ((L2Entry & 0x3ULL) != 0x3ULL)
         return;
@@ -2195,7 +2195,7 @@ MiArm64ClearBootUserMappingAtVa(
     L2Idx = (Va >> 21) & 0x1FF;
     L3Idx = (Va >> 12) & 0x1FF;
 
-    L0Table = (volatile ULONG64 *)(KSEG0_BASE | RootPa);
+    L0Table = (volatile ULONG64 *)MI_ARM64_PHYS_TO_VA(RootPa);
     L0Entry = L0Table[L0Idx];
     if ((L0Entry & 0x3ULL) != 0x3ULL)
     {
@@ -2203,7 +2203,7 @@ MiArm64ClearBootUserMappingAtVa(
         return FALSE;
     }
 
-    L1Table = (volatile ULONG64 *)(KSEG0_BASE | (L0Entry & ARM64_PTE_ADDR_MASK));
+    L1Table = (volatile ULONG64 *)MI_ARM64_PHYS_TO_VA(L0Entry & ARM64_PTE_ADDR_MASK);
     L1Entry = L1Table[L1Idx];
     if ((L1Entry & 0x1ULL) == 0)
     {
@@ -2226,7 +2226,7 @@ MiArm64ClearBootUserMappingAtVa(
         return FALSE;
     }
 
-    L2Table = (volatile ULONG64 *)(KSEG0_BASE | (L1Entry & ARM64_PTE_ADDR_MASK));
+    L2Table = (volatile ULONG64 *)MI_ARM64_PHYS_TO_VA(L1Entry & ARM64_PTE_ADDR_MASK);
     L2Entry = L2Table[L2Idx];
     if ((L2Entry & 0x1ULL) == 0)
     {
@@ -2249,7 +2249,7 @@ MiArm64ClearBootUserMappingAtVa(
         return FALSE;
     }
 
-    L3Table = (volatile ULONG64 *)(KSEG0_BASE | (L2Entry & ARM64_PTE_ADDR_MASK));
+    L3Table = (volatile ULONG64 *)MI_ARM64_PHYS_TO_VA(L2Entry & ARM64_PTE_ADDR_MASK);
     L3Entry = L3Table[L3Idx];
     if ((L3Entry & 0x1ULL) == 0)
     {

@@ -406,6 +406,40 @@ ULONG MmThrottleBottom;
 
 /* PRIVATE FUNCTIONS **********************************************************/
 
+#if defined(_M_ARM64)
+static
+PVOID
+MiArm64LoaderPfnToMappedVa(
+    _In_ TYPE_OF_MEMORY MemoryType,
+    _In_ PFN_NUMBER PageFrameIndex)
+{
+    switch (MemoryType)
+    {
+        case LoaderExceptionBlock:
+        case LoaderSystemBlock:
+        case LoaderSystemCode:
+        case LoaderHalCode:
+        case LoaderBootDriver:
+        case LoaderConsoleInDriver:
+        case LoaderConsoleOutDriver:
+        case LoaderStartupDpcStack:
+        case LoaderStartupKernelStack:
+        case LoaderStartupPanicStack:
+        case LoaderStartupPcrPage:
+        case LoaderStartupPdrPage:
+        case LoaderRegistryData:
+        case LoaderMemoryData:
+        case LoaderNlsData:
+        case LoaderXIPRom:
+        case LoaderOsloaderHeap:
+            return (PVOID)(MI_ARM64_BOOT_IMAGE_BASE + (PageFrameIndex << PAGE_SHIFT));
+
+        default:
+            return (PVOID)MI_ARM64_PFN_TO_VA(PageFrameIndex);
+    }
+}
+#endif
+
 VOID
 NTAPI
 MiScanMemoryDescriptors(IN PLOADER_PARAMETER_BLOCK LoaderBlock)
@@ -997,12 +1031,20 @@ MiBuildPfnDatabaseFromLoaderBlock(IN PLOADER_PARAMETER_BLOCK LoaderBlock)
             default:
 
                 /* Map these pages with the KSEG0 mapping that adds 0x80000000 */
+#ifdef _M_ARM64
+                PointerPte = MiAddressToPte(MiArm64LoaderPfnToMappedVa(MdBlock->MemoryType, PageFrameIndex));
+#else
                 PointerPte = MiAddressToPte(KSEG0_BASE + (PageFrameIndex << PAGE_SHIFT));
+#endif
                 Pfn1 = MiGetPfnEntry(PageFrameIndex);
                 while (PageCount--)
                 {
                     /* Check if the page is really unused */
+#ifdef _M_ARM64
+                    PointerPde = MiAddressToPde(MiArm64LoaderPfnToMappedVa(MdBlock->MemoryType, PageFrameIndex));
+#else
                     PointerPde = MiAddressToPde(KSEG0_BASE + (PageFrameIndex << PAGE_SHIFT));
+#endif
                     if (!Pfn1->u3.e2.ReferenceCount)
                     {
                         /* Mark it as being in-use */

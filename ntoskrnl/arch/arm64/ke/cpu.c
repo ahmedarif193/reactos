@@ -625,7 +625,7 @@ KeFlushIoBuffers(_Inout_ PMDL Mdl,
             ULONG_PTR AliasVa;
 
             ChunkLength = min(RemainingLength, (ULONG)(PAGE_SIZE - ByteOffset));
-            AliasVa = (ULONG_PTR)KSEG0_BASE + ((ULONG_PTR)MdlPages[PageIndex] << PAGE_SHIFT);
+            AliasVa = MI_ARM64_PFN_TO_VA(MdlPages[PageIndex]);
             StartAddress = (AliasVa + ByteOffset) & ~((ULONG_PTR)CacheLineSize - 1);
             EndAddress = (AliasVa + ByteOffset + ChunkLength + CacheLineSize - 1) &
                          ~((ULONG_PTR)CacheLineSize - 1);

@@ -98,9 +98,10 @@ FORCEINLINE VOID HalpWriteIccIgrpen1(unsigned int v)
 }
 
 /*
- * KSEG0 base for identity mapping
+ * Private physical alias used by the ARM64 kernel/HAL direct map.
  */
 #define HAL_ARM64_KSEG0_BASE 0xFFFF800000000000ULL
+#define HAL_ARM64_PHYS_MAP_BASE 0xFFFFFC0000000000ULL
 
 /*
  * HAL_ARM64_AP_TRAMPOLINE_DATA - Configuration data for AP startup
@@ -272,10 +273,10 @@ HalpArm64BuildIdmapPageTable(
     L1Pa = L0Pa + PAGE_SIZE;
     L2Pa = L1Pa + PAGE_SIZE;
 
-    /* Map via KSEG0 for BSP access */
-    L0Va = (PUINT64)(ULONG_PTR)(L0Pa + HAL_ARM64_KSEG0_BASE);
-    L1Va = (PUINT64)(ULONG_PTR)(L1Pa + HAL_ARM64_KSEG0_BASE);
-    L2Va = (PUINT64)(ULONG_PTR)(L2Pa + HAL_ARM64_KSEG0_BASE);
+    /* Map via the private physical alias for BSP access. */
+    L0Va = (PUINT64)(ULONG_PTR)(L0Pa + HAL_ARM64_PHYS_MAP_BASE);
+    L1Va = (PUINT64)(ULONG_PTR)(L1Pa + HAL_ARM64_PHYS_MAP_BASE);
+    L2Va = (PUINT64)(ULONG_PTR)(L2Pa + HAL_ARM64_PHYS_MAP_BASE);
 
     /* Zero all tables */
     RtlZeroMemory(L0Va, PAGE_SIZE);
@@ -363,9 +364,9 @@ HalpArm64InitApTrampoline(
 
     /*
      * Map the allocated pages.
-     * Use KSEG0 mapping since identity map is set up by boot.
+     * Use the private physical alias; FFFF8000... is not a direct map.
      */
-    AllocVa = (PVOID)(ULONG_PTR)(AllocPa.QuadPart + HAL_ARM64_KSEG0_BASE);
+    AllocVa = (PVOID)(ULONG_PTR)(AllocPa.QuadPart + HAL_ARM64_PHYS_MAP_BASE);
 
     /* Set up trampoline page */
     HalpApTrampolinePa.QuadPart = AllocPa.QuadPart;
@@ -504,11 +505,11 @@ HalpArm64WaitForApSync(
         __asm__ __volatile__("yield");
     }
 
-    /* Read AP progress via KSEG0 to diagnose where AP got stuck */
+    /* Read AP progress via the private physical alias. */
     {
         volatile PHAL_ARM64_AP_TRAMPOLINE_DATA DataKseg0 =
             (volatile PHAL_ARM64_AP_TRAMPOLINE_DATA)(
-                (ULONG_PTR)(HalpApDataPa.QuadPart + HAL_ARM64_KSEG0_BASE));
+                (ULONG_PTR)(HalpApDataPa.QuadPart + HAL_ARM64_PHYS_MAP_BASE));
         __asm__ __volatile__("dsb sy" ::: "memory");
         DPRINT1("[arm64][HAL] AP sync timeout after %lu iterations, Progress=0x%x\n",
                 Iterations, DataKseg0->Progress);
@@ -595,7 +596,7 @@ HalpArm64WakeParkedCpu(
     if (ParkedCpu->ParkingVersion == 0 || ParkedCpu->ParkedAddress == 0)
         return FALSE;
 
-    Mailbox = (volatile UINT64 *)(ULONG_PTR)(ParkedCpu->ParkedAddress + HAL_ARM64_KSEG0_BASE);
+    Mailbox = (volatile UINT64 *)(ULONG_PTR)(ParkedCpu->ParkedAddress + HAL_ARM64_PHYS_MAP_BASE);
 
     if (Mailbox[0] != ParkedCpu->Mpidr)
     {
