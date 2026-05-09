@@ -184,65 +184,7 @@ AssignDriveLetter(
     _In_ WCHAR DriveLetter)
 {
     DPRINT1("AssignDriveLetter(%S %c)\n", DeviceName, DriveLetter);
-
-    DeviceNameLength = wcslen(DeviceName) * sizeof(WCHAR);
-
-    _swprintf(DosDeviceName, L"\\DosDevices\\%c:", DriveLetter);
-    DosDeviceNameLength = wcslen(DosDeviceName) * sizeof(WCHAR);
-
-    /* Allocate the input buffer for the MountMgr */
-    InputBufferLength = DosDeviceNameLength + DeviceNameLength + sizeof(MOUNTMGR_CREATE_POINT_INPUT);
-    InputBuffer = RtlAllocateHeap(RtlGetProcessHeap(), HEAP_ZERO_MEMORY, InputBufferLength);
-    if (InputBuffer == NULL)
-    {
-        DPRINT1("InputBuffer allocation failed!\n");
-        return FALSE;
-    }
-
-    /* Fill the input buffer */
-    InputBuffer->SymbolicLinkNameOffset = sizeof(MOUNTMGR_CREATE_POINT_INPUT);
-    InputBuffer->SymbolicLinkNameLength = DosDeviceNameLength;
-    InputBuffer->DeviceNameOffset = DosDeviceNameLength + sizeof(MOUNTMGR_CREATE_POINT_INPUT);
-    InputBuffer->DeviceNameLength = DeviceNameLength;
-    RtlCopyMemory((PVOID)((ULONG_PTR)InputBuffer + sizeof(MOUNTMGR_CREATE_POINT_INPUT)),
-                  DosDeviceName,
-                  DosDeviceNameLength);
-    RtlCopyMemory((PVOID)((ULONG_PTR)InputBuffer + InputBuffer->DeviceNameOffset),
-                  DeviceName,
-                  DeviceNameLength);
-
-    Status = OpenMountManager(&MountMgrHandle, GENERIC_READ | GENERIC_WRITE);
-    if (!NT_SUCCESS(Status))
-    {
-        DPRINT1("OpenMountManager() failed (Status 0x%08lx)\n", Status);
-        Ret = FALSE;
-        goto done;
-    }
-
-    Status = NtDeviceIoControlFile(MountMgrHandle,
-                                   NULL,
-                                   NULL,
-                                   NULL,
-                                   &Iosb,
-                                   IOCTL_MOUNTMGR_CREATE_POINT,
-                                   InputBuffer,
-                                   InputBufferLength,
-                                   NULL,
-                                   0);
-    if (!NT_SUCCESS(Status))
-    {
-        DPRINT1("NtDeviceIoControlFile() failed (Status 0x%08lx)\n", Status);
-        Ret = FALSE;
-        goto done;
-    }
-
-done:
-    if (MountMgrHandle)
-        NtClose(MountMgrHandle);
-
-    RtlFreeHeap(RtlGetProcessHeap(), 0, InputBuffer);
-
-    return Ret;
+    return StorageUtilAssignDriveLetter(DeviceName, DriveLetter);
 }
 
 
@@ -261,70 +203,5 @@ DeleteDriveLetter(
     _In_ WCHAR DriveLetter)
 {
     DPRINT("DeleteDriveLetter(%c)\n", DriveLetter);
-
-    /* Setup the device name of the letter to delete */
-    _swprintf(DosDeviceName, L"\\DosDevices\\%c:", DriveLetter);
-    DosDeviceNameLength = wcslen(DosDeviceName) * sizeof(WCHAR);
-
-    /* Allocate the input buffer for MountMgr */
-    InputBufferLength = DosDeviceNameLength + sizeof(MOUNTMGR_MOUNT_POINT);
-    InputBuffer = RtlAllocateHeap(RtlGetProcessHeap(), HEAP_ZERO_MEMORY, InputBufferLength);
-    if (InputBuffer == NULL)
-    {
-        DPRINT1("InputBuffer allocation failed!\n");
-        return FALSE;
-    }
-
-    /* Fill it in */
-    InputBuffer->SymbolicLinkNameOffset = sizeof(MOUNTMGR_MOUNT_POINT);
-    InputBuffer->SymbolicLinkNameLength = DosDeviceNameLength;
-    RtlCopyMemory(&InputBuffer[1], DosDeviceName, DosDeviceNameLength);
-
-    /* Allocate big enough output buffer (we don't care about the output) */
-    OutputBuffer = RtlAllocateHeap(GetProcessHeap(), HEAP_ZERO_MEMORY, OutputBufferLength);
-    if (OutputBuffer == NULL)
-    {
-        DPRINT1("OutputBuffer allocation failed!\n");
-        Ret = FALSE;
-        goto done;
-    }
-
-    OutputBuffer->Size = OutputBufferLength;
-
-    Status = OpenMountManager(&MountMgrHandle, GENERIC_READ | GENERIC_WRITE);
-    if (!NT_SUCCESS(Status))
-    {
-        DPRINT1("OpenMountManager() failed (Status 0x%08lx)\n", Status);
-        Ret = FALSE;
-        goto done;
-    }
-
-    Status = NtDeviceIoControlFile(MountMgrHandle,
-                                   NULL,
-                                   NULL,
-                                   NULL,
-                                   &Iosb,
-                                   IOCTL_MOUNTMGR_DELETE_POINTS,
-                                   InputBuffer,
-                                   InputBufferLength,
-                                   OutputBuffer,
-                                   OutputBufferLength);
-    if (!NT_SUCCESS(Status))
-    {
-        DPRINT1("NtDeviceIoControlFile() failed (Status 0x%08lx)\n", Status);
-        Ret = FALSE;
-        goto done;
-    }
-
-done:
-    if (MountMgrHandle)
-        NtClose(MountMgrHandle);
-
-    if (InputBuffer)
-        RtlFreeHeap(RtlGetProcessHeap(), 0, InputBuffer);
-
-    if (OutputBuffer)
-        RtlFreeHeap(RtlGetProcessHeap(), 0, OutputBuffer);
-
-    return Ret;
+    return StorageUtilDeleteDriveLetter(DriveLetter);
 }
