@@ -2,7 +2,7 @@
  * Kernel internal memory management definitions for arm64
  *
  * The layout follows the Windows 11 ARM64 split where user space occupies
- * the lower 48 bits and kernel space begins at 0xFFFF0000`00000000.
+ * the lower 47-bit window and kernel space begins at 0xFFFF8000`00000000.
  */
 #pragma once
 
@@ -25,8 +25,9 @@ extern NTKERNELAPI ULONG64 MmUserProbeAddress;
 #define ARM64_PTE_CACHE_SHIFT        2
 #define ARM64_PTE_CACHE_MASK         (7ULL << ARM64_PTE_CACHE_SHIFT)
 #define ARM64_PTE_CACHE_WB           (4ULL << ARM64_PTE_CACHE_SHIFT)
-#define ARM64_PTE_CACHE_UC           (1ULL << ARM64_PTE_CACHE_SHIFT)
-#define ARM64_PTE_CACHE_WC           (2ULL << ARM64_PTE_CACHE_SHIFT)
+#define ARM64_PTE_CACHE_UC           (2ULL << ARM64_PTE_CACHE_SHIFT)
+#define ARM64_PTE_CACHE_WC           (3ULL << ARM64_PTE_CACHE_SHIFT)
+#define ARM64_PTE_NG                 (1ULL << 11)
 #define ARM64_PTE_PXN                (1ULL << 53)
 #define ARM64_PTE_UXN                (1ULL << 54)
 #define ARM64_PTE_WRITE              (1ULL << 55)
@@ -43,10 +44,10 @@ extern NTKERNELAPI ULONG64 MmUserProbeAddress;
 #define PTE_PROTOTYPE           0x0000000000000400ULL
 
 /*
- * ARM64 AttrIndx 0 is not the "cached" default: this port programs MAIR slot 0
- * as Device-nGnRnE and slot 4 as Normal WB. Keep the generic protection masks
- * using PTE_ENABLE_CACHE mapped to Normal WB so ordinary ARM3 mappings, kernel
- * stacks included, do not become Device memory.
+ * Match the Win11 ARM64 MAIR layout visible to kernel debuggers:
+ * slot 0 and 4 are Normal WB, slot 1 is Device-nGnRnE, and slots 2/3
+ * are Normal NC. Keep ordinary ARM3 mappings on slot 4 so existing PTEs
+ * stay Normal WB.
  */
 #define PTE_ENABLE_CACHE        ARM64_PTE_CACHE_WB
 #define PTE_DISABLE_CACHE       ARM64_PTE_CACHE_UC
@@ -62,14 +63,15 @@ extern NTKERNELAPI ULONG64 MmUserProbeAddress;
 #define ARM64_PTE_TYPE_PAGE     0x0000000000000003ULL
 #define ARM64_PTE_TYPE_TABLE    0x0000000000000003ULL
 #define ARM64_PTE_ADDR_MASK     0x0000FFFFFFFFF000ULL
+#define ARM64_PTE_TABLE_NT_FLAGS (ARM64_PTE_NG | ARM64_PTE_PXN | ARM64_PTE_UXN)
 
 /*
  * Windows ARM64 exposes upper-level table entries through the recursive
- * PXE/PPE/PDE views. Keep the table descriptor bits identical to the loader
- * ABI: valid table, Normal-WB, Inner Shareable, Accessed.
+ * PXE/PPE/PDE views. Preserve the NT-observed ignored table policy bits while
+ * software walkers mask physical addresses with ARM64_PTE_ADDR_MASK.
  */
 #define ARM64_PTE_TABLE_DESCRIPTOR_ATTRS \
-    (ARM64_PTE_TYPE_TABLE | PTE_ENABLE_CACHE | ARM64_PTE_SH_INNER | PTE_ACCESSED)
+    (ARM64_PTE_TYPE_TABLE | PTE_ENABLE_CACHE | ARM64_PTE_SH_INNER | PTE_ACCESSED | ARM64_PTE_TABLE_NT_FLAGS)
 #define ARM64_MAKE_TABLE_DESCRIPTOR(Pfn) \
     ((((ULONG64)(Pfn)) << PAGE_SHIFT) | ARM64_PTE_TABLE_DESCRIPTOR_ATTRS)
 
@@ -81,30 +83,30 @@ extern NTKERNELAPI ULONG64 MmUserProbeAddress;
  *
  * On ARM64, user addresses (0x0000...) are translated via TTBR0_EL1 and
  * kernel addresses (0xFFFF...) are translated via TTBR1_EL1. The NT Memory
- * Manager's self-map is built into TTBR1's hierarchy at L0 index 493.
+ * Manager's self-map is built into TTBR1's hierarchy at L0 index 457.
  *
- * L0[493] points back to the active TTBR1 root and L0[494] is hyperspace,
+ * L0[457] points back to the active TTBR1 root and L0[494] is hyperspace,
  * matching the Windows ARM64 contract expected by boot loaders and ARM3.
  */
-#define PXE_SELFMAP_INDEX   493
+#define PXE_SELFMAP_INDEX   457
 
-#define PXE_BASE    0xFFFFF6FB7DBED000ULL
-#define PXE_SELFMAP 0xFFFFF6FB7DBEDF68ULL
-#define PPE_BASE    0xFFFFF6FB7DA00000ULL
-#define PDE_BASE    0xFFFFF6FB40000000ULL
-#define PTE_BASE    0xFFFFF68000000000ULL
-#define PXE_TOP     0xFFFFF6FB7DBEDFFFULL
-#define PPE_TOP     0xFFFFF6FB7DBFFFFFULL
-#define PDE_TOP     0xFFFFF6FB7FFFFFFFULL
-#define PTE_TOP     0xFFFFF6FFFFFFFFFFULL
+#define PXE_BASE    0xFFFFE4F2793C9000ULL
+#define PXE_SELFMAP 0xFFFFE4F2793C9E48ULL
+#define PPE_BASE    0xFFFFE4F279200000ULL
+#define PDE_BASE    0xFFFFE4F240000000ULL
+#define PTE_BASE    0xFFFFE48000000000ULL
+#define PXE_TOP     0xFFFFE4F2793C9FFFULL
+#define PPE_TOP     0xFFFFE4F2793FFFFFULL
+#define PDE_TOP     0xFFFFE4F27FFFFFFFULL
+#define PTE_TOP     0xFFFFE4FFFFFFFFFFULL
 
-C_ASSERT(PXE_SELFMAP_INDEX == 493);
+C_ASSERT(PXE_SELFMAP_INDEX == 457);
 C_ASSERT((((PXE_BASE >> PXI_SHIFT) & PXI_MASK) == PXE_SELFMAP_INDEX));
 C_ASSERT((((PPE_BASE >> PXI_SHIFT) & PXI_MASK) == PXE_SELFMAP_INDEX));
 C_ASSERT((((PDE_BASE >> PXI_SHIFT) & PXI_MASK) == PXE_SELFMAP_INDEX));
 C_ASSERT((((PTE_BASE >> PXI_SHIFT) & PXI_MASK) == PXE_SELFMAP_INDEX));
 C_ASSERT(PXE_SELFMAP == (PXE_BASE + (PXE_SELFMAP_INDEX * 8ULL)));
-C_ASSERT(ARM64_PTE_TABLE_DESCRIPTOR_ATTRS == 0x713ULL);
+C_ASSERT(ARM64_PTE_TABLE_DESCRIPTOR_ATTRS == 0x0060000000000F13ULL);
 
 #define KSEG0_BASE  0xFFFF800000000000ULL
 
@@ -116,7 +118,7 @@ C_ASSERT(ARM64_PTE_TABLE_DESCRIPTOR_ATTRS == 0x713ULL);
  * must start at or below that address and have bit 47 set for valid canonical
  * upper-half addresses on ARM64 with 48-bit VAs.
  */
-#define MI_USER_PROBE_ADDRESS           (PVOID)0x000007FFFFFE0000ULL
+#define MI_USER_PROBE_ADDRESS           (PVOID)0x00007FFFFFFF0000ULL
 #define MI_DEFAULT_SYSTEM_RANGE_START   (PVOID)0xFFFF800000000000ULL
 #define MI_REAL_SYSTEM_RANGE_START             0xFFFF800000000000ULL
 #define HYPER_SPACE                            0xFFFFF70000000000ULL
@@ -1105,12 +1107,14 @@ MI_IS_PHYSICAL_ADDRESS(
  * kernel (boot.c KiArm64EnsureMairNormalWb) program MAIR_EL1 with the
  * following layout:
  *
- *   Index 0: Device-nGnRnE  (0x00)
- *   Index 1: Normal-NC      (0x44) -- also used as Device-nGnRE in loader
- *   Index 2: Normal-WC      (0x44) -- also used as Device-GRE in loader
+ *   Index 0: Normal WB      (0xFF)
+ *   Index 1: Device-nGnRnE  (0x00)
+ *   Index 2: Normal-NC      (0x44)
  *   Index 3: Normal-NC      (0x44)
- *   Index 4: Normal WB      (0xFF) -- Inner/Outer Write-Back, Read/Write Allocate
- *   Index 5-7: unused / reserved
+ *   Index 4: Normal WB      (0xFF)
+ *   Index 5: Device-nGnRnE  (0x00)
+ *   Index 6: Normal-NC      (0x44)
+ *   Index 7: Normal-NC      (0x44)
  *
  * All code that constructs AttrIndx fields in PTEs MUST use these constants
  * instead of hardcoding the numeric index. The AttrIndx field occupies bits
@@ -1118,9 +1122,9 @@ MI_IS_PHYSICAL_ADDRESS(
  *
  * Usage:  pte |= ((ULONG64)MI_ARM64_MAIR_NORMAL_WB_IDX << 2);
  */
-#define MI_ARM64_MAIR_DEVICE_nGnRnE_IDX    0
-#define MI_ARM64_MAIR_NORMAL_NC_IDX         1
-#define MI_ARM64_MAIR_NORMAL_WC_IDX         2
+#define MI_ARM64_MAIR_DEVICE_nGnRnE_IDX    1
+#define MI_ARM64_MAIR_NORMAL_NC_IDX         2
+#define MI_ARM64_MAIR_NORMAL_WC_IDX         3
 #define MI_ARM64_MAIR_NORMAL_WB_IDX         4
 
 /*
