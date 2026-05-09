@@ -43,6 +43,9 @@ HKLM,"SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\Shell Folders","Common 
 HKCU,"SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\User Shell Folders","Desktop",0x00020000,"%SystemDrive%\Profiles\Default User\Desktop"
 HKCU,"SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\User Shell Folders","Personal",0x00020000,"%SystemDrive%\Profiles\Default User\My Documents"
 
+; ARM64 self-map/MMU kmtest. Explorer runs this after the shell reaches the desktop.
+HKCU,"SOFTWARE\Microsoft\Windows\CurrentVersion\Run","Arm64MmSelfMapKmtest",0x00020000,"%SystemRoot%\system32\cmd.exe /c if exist ""%SystemRoot%\bin\kmtest_.exe"" ""%SystemRoot%\bin\kmtest_.exe"" MmSelfMap"
+
 ; ComDlg32
 HKCU,"SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\ComDlg32",,0x00000012
 HKCU,"SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\ComDlg32\LastVisitedMRU",,0x00000012
