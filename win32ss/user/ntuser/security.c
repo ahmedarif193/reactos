@@ -97,19 +97,22 @@ PVOID
 IntAllocateSecurityBuffer(
     _In_ SIZE_T Length)
 {
-    NTSTATUS Status;
-    PVOID Buffer = NULL;
+    PVOID Buffer;
 
-    /* Allocate the buffer in UM memory space */
-    Status = ZwAllocateVirtualMemory(ZwCurrentProcess(),
-                                     &Buffer,
-                                     0,
-                                     &Length,
-                                     MEM_COMMIT,
-                                     PAGE_READWRITE);
-    if (!NT_SUCCESS(Status))
+    /*
+     * CRITICAL FIX (Bug #49): Allocate in kernel pool instead of user-mode memory.
+     *
+     * The old code allocated in user-mode via ZwAllocateVirtualMemory, which caused
+     * memory corruption when multiple allocations were made. The memory manager would
+     * unmap/remap user-mode regions, corrupting previously allocated buffers that
+     * IntResolveDesktop was using (ObjectAttributes/ObjectName).
+     *
+     * Kernel pool is stable and immune to user-mode memory manager operations.
+     */
+    Buffer = ExAllocatePoolWithTag(PagedPool, Length, TAG_WINSTA);
+    if (!Buffer)
     {
-        ERR("IntAllocateSecurityBuffer(): Failed to allocate the buffer (Status 0x%08lx)\n", Status);
+        ERR("IntAllocateSecurityBuffer(): Failed to allocate buffer (Length=%lu)\n", (ULONG)Length);
         return NULL;
     }
 
@@ -118,13 +121,11 @@ IntAllocateSecurityBuffer(
 
 /**
  * @brief
- * Frees an allocated security buffer from UM
- * memory that is been previously allocated by
- * IntAllocateSecurityBuffer function.
+ * Frees an allocated security buffer from kernel pool
+ * that was previously allocated by IntAllocateSecurityBuffer.
  *
  * @param[in] Buffer
- * A pointer to a buffer whose contents are
- * arbitrary, to be freed from UM memory space.
+ * A pointer to a buffer to be freed from kernel pool.
  *
  * @return
  * Nothing.
@@ -133,12 +134,8 @@ VOID
 IntFreeSecurityBuffer(
     _In_ PVOID Buffer)
 {
-    SIZE_T Size = 0;
-
-    ZwFreeVirtualMemory(ZwCurrentProcess(),
-                        &Buffer,
-                        &Size,
-                        MEM_RELEASE);
+    /* Free from kernel pool (matches the allocation in IntAllocateSecurityBuffer) */
+    ExFreePoolWithTag(Buffer, TAG_WINSTA);
 }
 
 /**

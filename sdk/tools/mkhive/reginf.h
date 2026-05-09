@@ -21,10 +21,13 @@
  * PROJECT:         ReactOS hive maker
  * FILE:            tools/mkhive/reginf.h
  * PURPOSE:         Inf file import code
- * PROGRAMMER:      Hervé Poussineau
+ * PROGRAMMER:      Hervï¿½ Poussineau
  */
 
 #pragma once
+
+/* Target architecture suffix for arch-specific INF sections (e.g. "arm64") */
+extern WCHAR ArchSuffix[];
 
 BOOL
 ImportRegistryFile(PCHAR Filename);

@@ -927,6 +927,12 @@ NtUserDisableThreadIme(_In_ DWORD dwThreadID)
     if (dwThreadID == INVALID_THREAD_ID)
     {
         ppi = ptiCurrent->ppi;
+        if (!ppi)
+        {
+            ERR("Process Win32 structure not initialized\n");
+            EngSetLastError(ERROR_INVALID_ACCESS);
+            goto Quit;
+        }
         ppi->W32PF_flags |= W32PF_DISABLEIME;
 
 Retry:

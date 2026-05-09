@@ -283,7 +283,7 @@ DEFINE_FRAMEDYN_ALIAS(__ZN8Provider5FlushEv, ?Flush@Provider@@MAEXXZ)
 DEFINE_FRAMEDYN_ALIAS(__ZN8Provider21ValidateDeletionFlagsEl, ?ValidateDeletionFlags@Provider@@MAEJJ@Z)
 DEFINE_FRAMEDYN_ALIAS(__ZN8Provider19ValidateMethodFlagsEl, ?ValidateMethodFlags@Provider@@MAEJJ@Z)
 DEFINE_FRAMEDYN_ALIAS(__ZN8Provider18ValidateQueryFlagsEl, ?ValidateQueryFlags@Provider@@MAEJJ@Z)
-#elif defined(_M_AMD64)
+#elif defined(_M_AMD64) || defined(_M_ARM64)
 DEFINE_FRAMEDYN_ALIAS(_ZN8CHString16AllocBeforeWriteEi, ?AllocBeforeWrite@CHString@@IEAAXH@Z) // protected: void __thiscall CHString::AllocBeforeWrite(int)
 DEFINE_FRAMEDYN_ALIAS(_ZN8CHString11AllocBufferEi, ?AllocBuffer@CHString@@IEAAXH@Z) // protected: void __thiscall CHString::AllocBuffer(int)
 DEFINE_FRAMEDYN_ALIAS(_ZNK8CHString9AllocCopyERS_iii, ?AllocCopy@CHString@@IEBAXAEAV1@HHH@Z) // protected: void __thiscall CHString::AllocCopy(class CHString &,int,int,int)const

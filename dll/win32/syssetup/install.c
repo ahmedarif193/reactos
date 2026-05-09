@@ -1134,6 +1134,10 @@ InstallLiveCD(VOID)
         SetupStartService(L"Dnscache", FALSE);
     }
 
+    /* Create temp directories needed by COM DLL registration (advpack uses GetTempPath) */
+    CreateTempDir(L"TEMP");
+    CreateTempDir(L"TMP");
+
     /* Register components */
     _SEH2_TRY
     {
@@ -1149,7 +1153,8 @@ InstallLiveCD(VOID)
     }
     _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
     {
-        DPRINT1("Catching exception\n");
+        DPRINT1("Catching exception during registration (code=0x%lx)\n",
+                _SEH2_GetExceptionCode());
     }
     _SEH2_END;
 

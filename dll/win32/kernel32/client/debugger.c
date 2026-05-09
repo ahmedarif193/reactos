@@ -692,6 +692,31 @@ VOID
 WINAPI
 OutputDebugStringA(IN LPCSTR _OutputString)
 {
+#if defined(__aarch64__) || defined(_M_ARM64)
+    /*
+     * ARM64: PSEH2 is a dummy (label-based) implementation that cannot
+     * catch software-raised exceptions. On x86/amd64, the _SEH2_EXCEPT
+     * block below catches DBG_PRINTEXCEPTION_C when no debugger handles
+     * it, allowing the fallback path to run. On ARM64, the exception
+     * would propagate unhandled and kill the process.
+     *
+     * Fix: only raise the exception when a debugger is attached (it will
+     * intercept DBG_PRINTEXCEPTION_C). Otherwise, fall through directly
+     * to the DBMon / kernel-debugger fallback path.
+     */
+    if (NtCurrentPeb()->BeingDebugged)
+    {
+        ULONG_PTR a_nArgs[2];
+
+        a_nArgs[0] = (ULONG_PTR)(strlen(_OutputString) + 1);
+        a_nArgs[1] = (ULONG_PTR)_OutputString;
+
+        RaiseException(DBG_PRINTEXCEPTION_C, 0, 2, a_nArgs);
+
+        /* If the debugger handled it, we're done */
+        return;
+    }
+#else
     _SEH2_TRY
     {
         ULONG_PTR a_nArgs[2];
@@ -704,6 +729,7 @@ OutputDebugStringA(IN LPCSTR _OutputString)
     }
     _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
     {
+#endif
         /* no user-mode debugger: try the systemwide debug message monitor, or the
            kernel debugger as a last resort */
 
@@ -896,8 +922,10 @@ OutputDebugStringA(IN LPCSTR _OutputString)
                 ReleaseMutex(hDBMonMutex);
         }
         _SEH2_END;
+#if !defined(__aarch64__) && !defined(_M_ARM64)
     }
     _SEH2_END;
+#endif
 }
 
 /*

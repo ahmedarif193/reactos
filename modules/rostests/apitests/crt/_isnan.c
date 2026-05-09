@@ -58,7 +58,7 @@ void Test__isnan(void)
     }
 }
 
-#ifndef _M_IX86
+#if !defined(_M_IX86) && !defined(_M_ARM64)
 static TESTENTRY_FLT s_isnanf_tests[] =
 {
     /* Special values */
@@ -94,6 +94,7 @@ static TESTENTRY_FLT s_isnanf_tests[] =
     { 0xe62a0d22 /* -2.007611e+023 */, 0 },
 };
 
+#if !defined(_M_ARM64)
 void Test__isnanf(void)
 {
     int i;
@@ -105,12 +106,13 @@ void Test__isnanf(void)
         ok(r == s_isnanf_tests[i].result, "Wrong result for %f [0x%08lx]. Expected %d, got %d\n", x, s_isnanf_tests[i].x, s_isnanf_tests[i].result, r);
     }
 }
-#endif // !_MIX86
+#endif // !_M_ARM64
+#endif // !_M_IX86 && !_M_ARM64
 
 START_TEST(_isnan)
 {
     Test__isnan();
-#ifndef _M_IX86
+#if !defined(_M_IX86) && !defined(_M_ARM64)
     Test__isnanf();
 #endif // !_MIX86
 }

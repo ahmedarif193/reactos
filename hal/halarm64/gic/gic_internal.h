@@ -29,6 +29,38 @@
 #include <debug.h>
 
 /*
+ * Early UART breadcrumb output for pre-KD tracing.
+ * Uses HAL-local UART base initialized from loader block in halarm64.c.
+ */
+#define HAL_GIC_PL011_FR_TXFF  (1U << 5)
+
+extern volatile UINT64 HalUartBase;
+extern volatile BOOLEAN HalUartReady;
+
+FORCEINLINE VOID
+HalRawPuts(const char *Str)
+{
+    ULONG_PTR Va;
+    volatile UINT32 *Uart;
+
+    if (!HalUartReady || HalUartBase == 0)
+        return;
+
+    Va = (ULONG_PTR)(0xFFFF800000000000ULL + HalUartBase);
+    Uart = (volatile UINT32 *)Va;
+    while (*Str)
+    {
+        if (*Str == '\n')
+        {
+            while (Uart[0x18 / sizeof(UINT32)] & HAL_GIC_PL011_FR_TXFF) {}
+            Uart[0] = '\r';
+        }
+        while (Uart[0x18 / sizeof(UINT32)] & HAL_GIC_PL011_FR_TXFF) {}
+        Uart[0] = (UINT32)(UCHAR)*Str++;
+    }
+}
+
+/*
  * ============================================================================
  * GIC Default Physical Addresses (QEMU virt platform)
  * ============================================================================
@@ -868,6 +900,9 @@ extern KAFFINITY HalpDefaultInterruptAffinity;
 /* Memory mapping mode */
 extern BOOLEAN HalpUseIdentityMapping;
 
+/* GICv2 group mode control (defined in halarm64.c) */
+extern BOOLEAN HalpGicv2ForceGroup0;
+
 /*
  * ============================================================================
  * IRQ Affinity Tracking State (GICv3 Dynamic Affinity Routing)
@@ -894,42 +929,16 @@ extern volatile LONG HalpGicOnlineCpuCount;
 
 /*
  * ============================================================================
- * MMIO Helper Functions (defined in gic_common.c)
+ * MMIO Helper Functions (defined in halarm64.c)
  * ============================================================================
+ * IMPORTANT: These are declared but NOT defined here. The correct implementation
+ * is in halarm64.c which properly handles HalpUseIdentityMapping and KSEG0 translation.
+ * GIC code MUST use the halarm64.c versions to avoid data aborts after phase 1.
  */
 
-FORCEINLINE
-volatile ULONG *
-HalpMmio(
-    _In_ ULONG_PTR Base,
-    _In_ ULONG Offset)
-{
-    return (volatile ULONG *)(Base + Offset);
-}
-
-FORCEINLINE
-ULONGLONG
-HalpMmioRead64(
-    _In_ ULONG_PTR Base,
-    _In_ ULONG Offset)
-{
-    volatile ULONG *Ptr = HalpMmio(Base, Offset);
-    ULONGLONG Low = Ptr[0];
-    ULONGLONG High = Ptr[1];
-    return Low | (High << 32);
-}
-
-FORCEINLINE
-VOID
-HalpMmioWrite64(
-    _In_ ULONG_PTR Base,
-    _In_ ULONG Offset,
-    _In_ ULONGLONG Value)
-{
-    volatile ULONG *Ptr = HalpMmio(Base, Offset);
-    Ptr[0] = (ULONG)(Value & 0xFFFFFFFFu);
-    Ptr[1] = (ULONG)(Value >> 32);
-}
+extern volatile ULONG *HalpMmio(ULONG_PTR Base, ULONG Offset);
+extern ULONGLONG HalpMmioRead64(ULONG_PTR Base, ULONG Offset);
+extern VOID HalpMmioWrite64(ULONG_PTR Base, ULONG Offset, ULONGLONG Value);
 
 /*
  * ============================================================================

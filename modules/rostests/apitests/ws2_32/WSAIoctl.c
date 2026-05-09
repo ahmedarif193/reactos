@@ -70,7 +70,7 @@ void Test_WSAIoctl_GetInterfaceList()
 {
     WSADATA wdata;
     INT iResult;
-    SOCKET sck;
+    SOCKET sck = 0;
     ULONG buflen, BytesReturned, BCastAddr;
     ULONG infoCount, i1, j1, iiFlagsExpected;
     BYTE* buf = NULL;

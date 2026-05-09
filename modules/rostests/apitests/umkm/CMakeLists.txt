@@ -1,4 +1,6 @@
 
+if(ARCH STREQUAL "i386" OR ARCH STREQUAL "amd64")
+
 set(CMAKE_CXX_STANDARD 17)
 
 include_directories(${REACTOS_SOURCE_DIR}/ntoskrnl/include)
@@ -41,3 +43,4 @@ add_dependencies(umkm_apitest psdk load_notifications)
 
 add_rostests_file(TARGET umkm_apitest)
 
+endif()

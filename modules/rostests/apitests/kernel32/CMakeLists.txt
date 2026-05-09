@@ -37,12 +37,16 @@ list(APPEND SOURCE
     SetComputerNameExW.c
     SetConsoleWindowInfo.c
     SetCurrentDirectory.c
-    SetUnhandledExceptionFilter.c
     SystemFirmware.c
     TerminateProcess.c
     TunnelCache.c
     UEFIFirmware.c
     WideCharToMultiByte.c)
+
+if(NOT ARCH STREQUAL "arm64")
+    list(APPEND SOURCE
+        SetUnhandledExceptionFilter.c)
+endif()
 
 list(APPEND PCH_SKIP_SOURCE
     testlist.c)

@@ -3100,21 +3100,18 @@ NtUserSwitchDesktop(HDESK hdesk)
     Status = IntValidateDesktopHandle(hdesk, UserMode, 0, &pdesk);
     if (!NT_SUCCESS(Status))
     {
-        ERR("Validation of desktop handle 0x%p failed\n", hdesk);
         goto Exit; // Return FALSE
     }
 
     if (PsGetCurrentProcessSessionId() != pdesk->rpwinstaParent->dwSessionId)
     {
         ObDereferenceObject(pdesk);
-        ERR("NtUserSwitchDesktop called for a desktop of a different session\n");
         goto Exit; // Return FALSE
     }
 
     if (pdesk == gpdeskInputDesktop)
     {
         ObDereferenceObject(pdesk);
-        WARN("NtUserSwitchDesktop called for active desktop\n");
         Ret = TRUE;
         goto Exit;
     }
@@ -3142,8 +3139,6 @@ NtUserSwitchDesktop(HDESK hdesk)
               desktop such as Winlogon or Screen-Saver */
     /* FIXME: Connect to input device */
 
-    TRACE("Switching from desktop 0x%p to 0x%p\n", gpdeskInputDesktop, pdesk);
-
     bRedrawDesktop = FALSE;
 
     /* The first time SwitchDesktop is called, gpdeskInputDesktop is NULL */
@@ -3165,13 +3160,11 @@ NtUserSwitchDesktop(HDESK hdesk)
     /* Show the new desktop window */
     co_IntShowDesktop(pdesk, UserGetSystemMetrics(SM_CXSCREEN), UserGetSystemMetrics(SM_CYSCREEN), bRedrawDesktop);
 
-    TRACE("SwitchDesktop gpdeskInputDesktop 0x%p\n", gpdeskInputDesktop);
     ObDereferenceObject(pdesk);
 
     Ret = TRUE;
 
 Exit:
-    TRACE("Leave NtUserSwitchDesktop, ret=%i\n", Ret);
     UserLeave();
     return Ret;
 }
@@ -3434,7 +3427,6 @@ IntSetThreadDesktop(IN HDESK hDesktop,
         Status = IntValidateDesktopHandle(hDesktop, UserMode, 0, &pdesk);
         if (!NT_SUCCESS(Status))
         {
-            ERR("Validation of desktop handle 0x%p failed\n", hDesktop);
             return FALSE;
         }
 
@@ -3451,7 +3443,6 @@ IntSetThreadDesktop(IN HDESK hDesktop,
     {
         if (pdesk)
             ObDereferenceObject(pdesk);
-        ERR("Attempted to change thread desktop although the thread has windows!\n");
         EngSetLastError(ERROR_BUSY);
         return FALSE;
     }
@@ -3469,7 +3460,6 @@ IntSetThreadDesktop(IN HDESK hDesktop,
         Status = IntMapDesktopView(pdesk);
         if (!NT_SUCCESS(Status))
         {
-            ERR("Failed to map desktop heap!\n");
             ObDereferenceObject(pdesk);
             SetLastNtError(Status);
             return FALSE;
@@ -3478,7 +3468,6 @@ IntSetThreadDesktop(IN HDESK hDesktop,
         pctiNew = DesktopHeapAlloc(pdesk, sizeof(CLIENTTHREADINFO));
         if (pctiNew == NULL)
         {
-            ERR("Failed to allocate new pcti\n");
             IntUnmapDesktopView(pdesk);
             ObDereferenceObject(pdesk);
             EngSetLastError(ERROR_NOT_ENOUGH_MEMORY);
@@ -3512,9 +3501,6 @@ IntSetThreadDesktop(IN HDESK hDesktop,
     if (!(pti->TIF_flags & (TIF_SYSTEMTHREAD | TIF_CSRSSTHREAD)) &&
         pti->ppi->rpdeskStartup == NULL && hDesktop != NULL)
     {
-        ERR("The process 0x%p '%s' didn't have an assigned startup desktop before, assigning it now!\n",
-            pti->ppi->peProcess, pti->ppi->peProcess->ImageFileName);
-
         pti->ppi->hdeskStartup = hDesktop;
         pti->ppi->rpdeskStartup = pdesk;
     }
@@ -3524,7 +3510,6 @@ IntSetThreadDesktop(IN HDESK hDesktop,
     {
         if (!IntCheckProcessDesktopClasses(pti->rpdesk, FreeOnFailure))
         {
-            ERR("Failed to move process classes to shared heap!\n");
             if (pdesk)
             {
                 DesktopHeapFree(pdesk, pctiNew);

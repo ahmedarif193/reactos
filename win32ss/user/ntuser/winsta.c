@@ -388,6 +388,14 @@ BOOL FASTCALL
 CheckWinstaAttributeAccess(ACCESS_MASK DesiredAccess)
 {
     PPROCESSINFO ppi = PsGetCurrentProcessWin32Process();
+
+    if (!ppi)
+    {
+        ERR("Process Win32 structure not initialized\n");
+        EngSetLastError(ERROR_ACCESS_DENIED);
+        return FALSE;
+    }
+
     if ( gpidLogon != PsGetCurrentProcessId() )
     {
         if (!(ppi->W32PF_flags & W32PF_IOWINSTA))
@@ -410,9 +418,19 @@ CheckWinstaAttributeAccess(ACCESS_MASK DesiredAccess)
 PWINSTATION_OBJECT FASTCALL
 IntGetProcessWindowStation(HWINSTA *phWinSta OPTIONAL)
 {
-    PWINSTATION_OBJECT pWinSta;
+    PWINSTATION_OBJECT pWinSta = NULL;
     PPROCESSINFO ppi = GetW32ProcessInfo();
-    HWINSTA hWinSta = ppi->hwinsta;
+    HWINSTA hWinSta;
+
+    if (!ppi)
+    {
+        ERR("Process Win32 structure not initialized\n");
+        if (phWinSta)
+            *phWinSta = NULL;
+        return NULL;
+    }
+
+    hWinSta = ppi->hwinsta;
     if (phWinSta)
         *phWinSta = hWinSta;
     IntValidateWindowStationHandle(hWinSta, UserMode, 0, &pWinSta, 0);
@@ -476,9 +494,18 @@ IntCreateWindowStation(
     ASSERT(phWinSta);
     *phWinSta = NULL;
 
+    /*
+     * CRITICAL: ObjectAttributes is always a kernel-mode address (on the kernel
+     * stack or in kernel pool). Even when called from user-mode (NtUserCreateWindowStation),
+     * the attributes have been captured to kernel memory by the caller.
+     *
+     * ObOpenObjectByName will ProbeForRead the ObjectAttributes if AccessMode is UserMode,
+     * causing a page fault when trying to probe a kernel address. Always use KernelMode
+     * here since ObjectAttributes is kernel memory.
+     */
     Status = ObOpenObjectByName(ObjectAttributes,
                                 ExWindowStationObjectType,
-                                AccessMode,
+                                KernelMode,
                                 NULL,
                                 dwDesiredAccess,
                                 NULL,
@@ -495,8 +522,11 @@ IntCreateWindowStation(
      * No existing window station found, try to create a new one.
      */
 
-    /* Create the window station object */
-    Status = ObCreateObject(AccessMode,
+    /*
+     * CRITICAL: Same as ObOpenObjectByName above - ObjectAttributes is kernel memory,
+     * so AccessMode must be KernelMode to avoid ProbeForRead faults.
+     */
+    Status = ObCreateObject(KernelMode,
                             ExWindowStationObjectType,
                             ObjectAttributes,
                             OwnerMode,
@@ -527,7 +557,6 @@ IntCreateWindowStation(
         SetLastNtError(Status);
         return Status;
     }
-
     Status = ObInsertObject(WindowStation,
                             NULL,
                             dwDesiredAccess,
@@ -554,10 +583,8 @@ IntCreateWindowStation(
         WindowStation->Flags &= ~WSS_NOIO;
 
         InitCursorImpl();
-
         UserCreateSystemThread(ST_DESKTOP_THREAD);
         UserCreateSystemThread(ST_RIT);
-
         /* Desktop functions require the desktop thread running so wait for it to initialize */
         UserLeaveCo();
         KeWaitForSingleObject(gpDesktopThreadStartedEvent,
@@ -762,6 +789,7 @@ NtUserCreateWindowStation(
     {
         ProbeForRead(ObjectAttributes, sizeof(OBJECT_ATTRIBUTES), sizeof(ULONG));
         LocalObjectAttributes = *ObjectAttributes;
+
         if (LocalObjectAttributes.Length != sizeof(OBJECT_ATTRIBUTES))
         {
             ERR("Invalid ObjectAttributes length!\n");
@@ -812,11 +840,12 @@ NtUserCreateWindowStation(
         return NULL;
     }
 
+
     UserEnterExclusive();
 
     /* Create the window station */
     Status = IntCreateWindowStation(&hWinSta,
-                                    ObjectAttributes,
+                                    &LocalObjectAttributes,
                                     UserMode,
                                     OwnerMode,
                                     dwDesiredAccess,
@@ -830,13 +859,13 @@ NtUserCreateWindowStation(
     if (NT_SUCCESS(Status))
     {
         TRACE("NtUserCreateWindowStation created window station '%wZ' with handle 0x%p\n",
-              ObjectAttributes->ObjectName, hWinSta);
+              LocalObjectAttributes.ObjectName, hWinSta);
     }
     else
     {
         ASSERT(hWinSta == NULL);
         ERR("NtUserCreateWindowStation failed to create window station '%wZ', Status 0x%08lx\n",
-            ObjectAttributes->ObjectName, Status);
+            LocalObjectAttributes.ObjectName, Status);
     }
 
     /* Try to restore the user's ObjectAttributes and release the window station name */
@@ -1365,6 +1394,12 @@ UserGetProcessWindowStation(VOID)
 {
     PPROCESSINFO ppi = PsGetCurrentProcessWin32Process();
 
+    if (!ppi)
+    {
+        ERR("Process Win32 structure not initialized\n");
+        return NULL;
+    }
+
     return ppi->hwinsta;
 }
 
@@ -1399,6 +1434,13 @@ UserSetProcessWindowStation(HWINSTA hWindowStation)
     HWINSTA hCacheWinSta;
 
     ppi = PsGetCurrentProcessWin32Process();
+
+    if (!ppi)
+    {
+        ERR("Process Win32 structure not initialized\n");
+        SetLastNtError(STATUS_UNSUCCESSFUL);
+        return FALSE;
+    }
 
     /* Reference the new window station */
     if (hWindowStation != NULL)

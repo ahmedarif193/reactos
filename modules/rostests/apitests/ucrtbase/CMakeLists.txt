@@ -37,6 +37,10 @@ elseif(ARCH STREQUAL "amd64")
     add_asm_files(ucrtbase_apitest_asm
         ../crt/amd64/setjmp_helper.s
     )
+elseif(ARCH STREQUAL "arm64")
+    add_asm_files(ucrtbase_apitest_asm
+        ../crt/arm64/setjmp_helper.s
+    )
 endif()
 
 add_executable(ucrtbase_apitest ${SOURCE} ${ucrtbase_apitest_asm})

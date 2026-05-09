@@ -1664,7 +1664,21 @@ static void test_ThreadErrorMode(void)
     pSetThreadErrorMode(oldmode, NULL);
 }
 
-#if (defined(__GNUC__) && (defined(__i386__) || defined(__x86_64__))) || (defined(_MSC_VER) && defined(__i386__))
+#if (defined(__GNUC__) && (defined(__i386__) || defined(__x86_64__) || defined(__aarch64__))) || (defined(_MSC_VER) && defined(__i386__))
+#if defined(__aarch64__)
+static inline void set_fpu_cw(WORD cw)
+{
+    ULONG_PTR fpcr = cw;
+    __asm__ __volatile__( "msr fpcr, %0" : : "r" (fpcr) );
+}
+
+static inline WORD get_fpu_cw(void)
+{
+    ULONG_PTR cw;
+    __asm__ __volatile__( "mrs %0, fpcr" : "=r" (cw) );
+    return (WORD)cw;
+}
+#else
 static inline void set_fpu_cw(WORD cw)
 {
 #ifdef _MSC_VER
@@ -1685,6 +1699,7 @@ static inline WORD get_fpu_cw(void)
 #endif
     return cw;
 }
+#endif
 
 struct fpu_thread_ctx
 {
@@ -2100,14 +2115,14 @@ static void test_thread_info(void)
 #endif
 
         case ThreadTimes:
-todo_wine
+            todo_wine
             ok(status == STATUS_SUCCESS, "for info %u expected STATUS_SUCCESS, got %08x (ret_len %u)\n", i, status, ret_len);
             break;
 
         case ThreadAffinityMask:
         case ThreadQuerySetWin32StartAddress:
         case ThreadIsIoPending:
-todo_wine
+            todo_wine
             ok(status == STATUS_ACCESS_DENIED, "for info %u expected STATUS_ACCESS_DENIED, got %08x (ret_len %u)\n", i, status, ret_len);
             break;
 
@@ -2228,7 +2243,7 @@ START_TEST(thread)
    test_TLS();
    test_FLS();
    test_ThreadErrorMode();
-#if (defined(__GNUC__) && (defined(__i386__) || defined(__x86_64__))) || (defined(_MSC_VER) && defined(__i386__))
+#if (defined(__GNUC__) && (defined(__i386__) || defined(__x86_64__) || defined(__aarch64__))) || (defined(_MSC_VER) && defined(__i386__))
    test_thread_fpu_cw();
 #endif
    test_thread_actctx();

@@ -561,7 +561,7 @@ IntReorderKeyboardLayouts(
 {
     PKL pOldKL = gspklBaseLayout;
 
-    if ((pWinSta->Flags & WSS_NOIO) || pNewKL == pOldKL)
+    if (!pWinSta || (pWinSta->Flags & WSS_NOIO) || pNewKL == pOldKL)
         return;
 
     pNewKL->pklPrev->pklNext = pNewKL->pklNext;
@@ -894,7 +894,7 @@ co_IntLoadKeyboardLayoutEx(
 
     UNREFERENCED_PARAMETER(hSafeFile);
 
-    if (hNewKL == NULL || (pWinSta->Flags & WSS_NOIO))
+    if (!pWinSta || hNewKL == NULL || (pWinSta->Flags & WSS_NOIO))
         return NULL;
 
     /* If hOldKL is specified, unload it and load new layput as default */

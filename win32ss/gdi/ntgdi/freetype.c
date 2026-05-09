@@ -1034,13 +1034,14 @@ InitFontSupport(VOID)
     ulError = FT_Init_FreeType(&g_FreeTypeLibrary);
     if (ulError)
     {
-        DPRINT1("FT_Init_FreeType failed with error code 0x%x\n", ulError);
+
+
         return FALSE;
     }
 
     if (!IntLoadFontsInRegistry())
     {
-        DPRINT1("Fonts registry is empty.\n");
+
 
         /* Load font(s) with writing registry */
         IntLoadSystemFonts();
@@ -2777,6 +2778,10 @@ IntGdiCleanupPrivateFontsForProcess(VOID)
     PFONT_ENTRY_COLL_MEM EntryCollection;
 
     DPRINT("IntGdiCleanupPrivateFontsForProcess()\n");
+
+    if (!Win32Process)
+        return;
+
     do {
         Entry = NULL;
         EntryCollection = NULL;

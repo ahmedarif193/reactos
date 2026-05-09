@@ -1443,6 +1443,11 @@ HKLM,"SYSTEM\CurrentControlSet\Control\Print\Environments\Windows x64","Director
 HKLM,"SYSTEM\CurrentControlSet\Control\Print\Environments\Windows x64\Print Processors",,0x00000010
 HKLM,"SYSTEM\CurrentControlSet\Control\Print\Environments\Windows x64\Print Processors\winprint","Driver",,"winprint.dll"
 
+[AddReg.NTarm64]
+HKLM,"SYSTEM\CurrentControlSet\Control\Print\Environments\Windows ARM64","Directory",,"ARM64"
+HKLM,"SYSTEM\CurrentControlSet\Control\Print\Environments\Windows ARM64\Print Processors",,0x00000010
+HKLM,"SYSTEM\CurrentControlSet\Control\Print\Environments\Windows ARM64\Print Processors\winprint","Driver",,"winprint.dll"
+
 [AddReg]
 
 HKLM,"SYSTEM\CurrentControlSet\Control\Print\Monitors",,0x00000010
@@ -2436,7 +2441,8 @@ HKLM,"SYSTEM\Setup","SystemSetupInProgress",0x00010001,0x00000001
 
 ; Winsrv configuration
 HKLM,"SYSTEM\CurrentControlSet\Control\PriorityControl",,0x00000012
-HKLM,"SYSTEM\CurrentControlSet\Control\PriorityControl","Win32PrioritySeparation",0x00010001,0x2
+; Use variable short quantums with foreground boost (Windows desktop default).
+HKLM,"SYSTEM\CurrentControlSet\Control\PriorityControl","Win32PrioritySeparation",0x00010001,0x26
 
 ; FontLink settings
 HKLM,"SYSTEM\CurrentControlSet\Control\FontAssoc\Associated Charset","ANSI(00)",0x00000000,"NO"

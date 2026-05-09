@@ -1458,6 +1458,12 @@ IntGetAndReferenceClass(PUNICODE_STRING ClassName, HINSTANCE hInstance, BOOL bDe
    else
        pti = PsGetCurrentThreadWin32Thread();
 
+   if (!pti->ppi)
+   {
+      ERR("Process Win32 structure not initialized\n");
+      return NULL;
+   }
+
    if ( !(pti->ppi->W32PF_flags & W32PF_CLASSESREGISTERED ))
    {
       UserRegisterSystemClasses();
@@ -2345,6 +2351,12 @@ UserRegisterSystemClasses(VOID)
     HBRUSH hBrush;
     DWORD Flags = 0;
 
+    if (!ppi)
+    {
+       ERR("Process Win32 structure not initialized\n");
+       return FALSE;
+    }
+
     if (ppi->W32PF_flags & W32PF_CLASSESREGISTERED)
        return TRUE;
 
@@ -2393,7 +2405,6 @@ UserRegisterSystemClasses(VOID)
         {
             if (SYSTEMCUR(ARROW) == NULL)
             {
-                ERR("SYSTEMCUR(ARROW) == NULL, should not happen!!\n");
             }
             else
             {
@@ -2419,6 +2430,7 @@ UserRegisterSystemClasses(VOID)
                                  Flags,
                                  NULL,
                                  ppi);
+
         if (Class != NULL)
         {
             Class->pclsNext = ppi->pclsPublicList;
@@ -2470,6 +2482,13 @@ NtUserRegisterClassExWOW(
     {
         ERR("NtUserRegisterClassExWOW Bad Flags!\n");
         EngSetLastError(ERROR_INVALID_FLAGS);
+        return Ret;
+    }
+
+    if (!ppi)
+    {
+        ERR("Process Win32 structure not initialized\n");
+        EngSetLastError(ERROR_INVALID_ACCESS);
         return Ret;
     }
 
@@ -2825,6 +2844,14 @@ NtUserGetClassInfo(
     UserEnterExclusive();
 
     ppi = GetW32ProcessInfo();
+    if (!ppi)
+    {
+        ERR("Process Win32 structure not initialized\n");
+        EngSetLastError(ERROR_INVALID_ACCESS);
+        UserLeave();
+        return FALSE;
+    }
+
     if (!(ppi->W32PF_flags & W32PF_CLASSESREGISTERED))
     {
         UserRegisterSystemClasses();

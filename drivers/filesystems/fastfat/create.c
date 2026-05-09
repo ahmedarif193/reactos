@@ -29,6 +29,7 @@ Abstract:
 #define Dbg                              (DEBUG_TRACE_CREATE)
 
 
+
 //
 //  Macros for incrementing performance counters.
 //
@@ -330,6 +331,7 @@ Return Value:
     }
 
     TimerStart(Dbg);
+
 
     DebugTrace(+1, Dbg, "FatFsdCreate\n", 0);
 

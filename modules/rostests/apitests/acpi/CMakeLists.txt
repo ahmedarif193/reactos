@@ -1,4 +1,10 @@
 
+# TODO(ARM64): ACPI test includes driver source files directly which have
+# missing declarations and type errors when compiled for arm64
+if(ARCH STREQUAL "arm64")
+    return()
+endif()
+
 include_directories(${REACTOS_SOURCE_DIR}/drivers/bus/acpi/acpica/include)
 
 list(APPEND SOURCE

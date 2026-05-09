@@ -129,7 +129,11 @@
     #define MAX_LEVEL ERR_LEVEL | FIXME_LEVEL | WARN_LEVEL | TRACE_LEVEL
 
     #define DBG_GET_PPI ((PPROCESSINFO)PsGetCurrentProcessWin32Process())
+    #if defined(__GNUC__) || defined(__clang__)
+    #define DBG_DEFAULT_CHANNEL(x) static int DbgDefaultChannel __attribute__((unused)) = DbgCh##x;
+    #else
     #define DBG_DEFAULT_CHANNEL(x) static int DbgDefaultChannel = DbgCh##x;
+    #endif
 
     #define DBG_ENABLE_CHANNEL(ppi,ch,level) ((ppi)->DbgChannelLevel[ch] |= level)
     #define DBG_DISABLE_CHANNEL(ppi,ch,level) ((ppi)->DbgChannelLevel[ch] &= ~level)

@@ -207,7 +207,9 @@ NtUserInitialize(
 
     /* Initialize various GDI stuff (DirectX, fonts, language ID etc.) */
     if (!InitializeGreCSRSS())
+    {
         return STATUS_UNSUCCESSFUL;
+    }
 
     /* Initialize USER */
     Status = UserInitialize();

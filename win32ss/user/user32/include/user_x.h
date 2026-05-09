@@ -55,8 +55,7 @@ GetThreadDesktopInfo(VOID)
 static __inline BOOL
 IsCallProcHandle(IN WNDPROC lpWndProc)
 {
-    /* FIXME - check for 64 bit architectures... */
-    return ((ULONG_PTR)lpWndProc & 0xFFFF0000) == 0xFFFF0000;
+    return ((ULONG_PTR)lpWndProc & ~(ULONG_PTR)0xFFFF) == ~(ULONG_PTR)0xFFFF;
 }
 
 #define STATIC_UISTATE_GWL_OFFSET (sizeof(HFONT)+sizeof(HICON))// see UISTATE_GWL_OFFSET in static.c

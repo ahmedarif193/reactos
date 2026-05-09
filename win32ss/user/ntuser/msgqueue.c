@@ -2161,6 +2161,9 @@ BOOL FASTCALL
 MsqIsHung(PTHREADINFO pti, DWORD TimeOut)
 {
     DWORD dwTimeStamp = EngGetTickCount32();
+    if (!pti->ppi)
+        return FALSE;
+
     if (dwTimeStamp - pti->pcti->timeLastRead > TimeOut &&
        !(pti->pcti->fsWakeMask & QS_INPUT) &&
        !PsGetThreadFreezeCount(pti->pEThread) &&

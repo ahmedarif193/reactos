@@ -429,7 +429,7 @@
 @ cdecl _close(long)
 @ cdecl _commit(long)
 @ extern _commode
-@ cdecl -arch=i386,x86_64 _control87(long long)
+@ cdecl _control87(long long)
 @ cdecl _controlfp(long long)
 @ cdecl -version=0x600+ _controlfp_s(ptr long long)
 @ cdecl _copysign( double double )
@@ -951,6 +951,8 @@
 @ cdecl _set_error_mode(long)
 @ stub -version=0x600+ _set_fileinfo
 @ stub -version=0x600+ _set_fmode
+@ cdecl _set_invalid_parameter_handler(ptr)
+@ cdecl _get_invalid_parameter_handler()
 @ stub -version=0x600+ _set_output_format
 @ cdecl _set_sbh_threshold(long)
 @ cdecl _seterrormode(long)
@@ -1233,7 +1235,7 @@
 @ extern _winmajor
 @ extern _winminor
 @ stub -version=0x600+ _winput_s
-@ extern -arch=i386,x86_64 _winver
+@ extern _winver
 @ cdecl _wmakepath(ptr wstr wstr wstr wstr)
 @ stub -version=0x600+ _wmakepath_s
 @ cdecl _wmkdir(wstr)

@@ -67,7 +67,7 @@ BOOL get_module_version(
 {
     BOOL res = FALSE;
     HRSRC hResInfo;
-    char *errmsg;
+    char *errmsg = "VerQueryValueW failed";
     DWORD dwSize, errcode = 0;
     UINT uLen;
     HGLOBAL hResData = 0;

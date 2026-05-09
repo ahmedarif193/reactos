@@ -430,7 +430,16 @@ static unsigned int get_stack_size( const var_t *var, int *by_value )
     case TGT_UNION:
     case TGT_USER_TYPE:
         stack_size = type_memsize( var->type );
-        by_val = (pointer_size < 8 || stack_size <= pointer_size); /* FIXME: should be platform-specific */
+        /* On x86-64, the ABI passes structs > 8 bytes by hidden
+         * pointer, so the stack slot is pointer-sized and the format
+         * string should use IsSimpleRef. On ARM64 (AAPCS64), structs
+         * up to 16 bytes are passed by value (including in varargs),
+         * so the stack contains the inline struct and the format
+         * string must use IsByValue with the full struct size. */
+        if (target_cpu == CPU_ARM64)
+            by_val = (stack_size <= 2 * pointer_size);
+        else
+            by_val = (pointer_size < 8 || stack_size <= pointer_size);
         break;
     default:
         by_val = 0;

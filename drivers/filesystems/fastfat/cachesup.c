@@ -435,6 +435,7 @@ Arguments:
         FatRaiseStatus( IrpContext, STATUS_CANT_WAIT );
     }
 
+
     DbgDoit( IrpContext->PinCount += 1 )
 
     *Status = STATUS_SUCCESS;

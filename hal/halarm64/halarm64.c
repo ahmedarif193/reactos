@@ -27,16 +27,51 @@
  *   - Raspberry Pi 5 (BCM2712): 0x107d001000 (UART0 on debug header)
  *   - Raspberry Pi 4 (BCM2711): 0xFE201000
  */
-#if defined(TARGET_QEMU_VIRT)
-#define HAL_ARM64_PL011_BASE     0x09000000ULL
-#elif defined(TARGET_RPI4)
-#define HAL_ARM64_PL011_BASE     0xFE201000ULL
-#else
-/* Default to Raspberry Pi 5 (BCM2712) */
-#define HAL_ARM64_PL011_BASE     0x107D001000ULL
-#endif
-#define HAL_ARM64_PL011_VA       (0xFFFF800000000000ULL + HAL_ARM64_PL011_BASE)
 #define HAL_ARM64_PL011_FR_TXFF  (1U << 5)
+
+/*
+ * HAL-local UART state. Initialized from loader block in HalInitializeProcessor.
+ * Default to QEMU virt so early calls before init still work on QEMU.
+ */
+volatile UINT64 HalUartBase = 0x09000000ULL;
+volatile BOOLEAN HalUartReady = TRUE;
+
+static VOID
+HalUartInitFromLoaderBlock(_In_ PLOADER_PARAMETER_BLOCK LoaderBlock)
+{
+    if (LoaderBlock && LoaderBlock->u.Arm64.EarlyUartAddress)
+    {
+        HalUartBase = LoaderBlock->u.Arm64.EarlyUartAddress;
+    }
+    HalUartReady = (HalUartBase != 0);
+}
+
+/*
+ * HalRawPuts - Raw UART string output for pre-KD breadcrumb tracing.
+ * Uses runtime-detected UART address so it works on all platforms.
+ */
+FORCEINLINE VOID
+HalRawPuts(const char *Str)
+{
+    ULONG_PTR Va;
+    volatile UINT32 *Uart;
+
+    if (!HalUartReady || HalUartBase == 0)
+        return;
+
+    Va = (ULONG_PTR)(0xFFFF800000000000ULL + HalUartBase);
+    Uart = (volatile UINT32 *)Va;
+    while (*Str)
+    {
+        if (*Str == '\n')
+        {
+            while (Uart[0x18 / sizeof(UINT32)] & HAL_ARM64_PL011_FR_TXFF) {}
+            Uart[0] = '\r';
+        }
+        while (Uart[0x18 / sizeof(UINT32)] & HAL_ARM64_PL011_FR_TXFF) {}
+        Uart[0] = (UINT32)(UCHAR)*Str++;
+    }
+}
 
 /*
  * GICv4 VLPI/vPE support forward declarations
@@ -1565,6 +1600,8 @@ PUCHAR KdComPortInUse = NULL;
 #define GITS_CMD_MAPD     0x08
 #define GITS_CMD_MAPC     0x09
 #define GITS_CMD_MAPTI    0x0A
+#define GITS_CMD_INV      0x0C
+#define GITS_CMD_INVALL   0x0D
 
 #define GITS_TYPER_ITT_ENTRY_SIZE_SHIFT 4
 #define GITS_TYPER_ITT_ENTRY_SIZE_MASK  0xFULL
@@ -1787,9 +1824,9 @@ static BOOLEAN HalpGicItsCollectionMapped[MAXIMUM_PROCESSORS];
 /* Default interrupt affinity - defined in gic/gic_common.c */
 extern KAFFINITY HalpDefaultInterruptAffinity;
 
-static __inline volatile ULONG *HalpMmio(ULONG_PTR Base, ULONG Offset);
-static __inline ULONGLONG HalpMmioRead64(ULONG_PTR Base, ULONG Offset);
-static __inline VOID HalpMmioWrite64(ULONG_PTR Base, ULONG Offset, ULONGLONG Value);
+volatile ULONG *HalpMmio(ULONG_PTR Base, ULONG Offset);
+ULONGLONG HalpMmioRead64(ULONG_PTR Base, ULONG Offset);
+VOID HalpMmioWrite64(ULONG_PTR Base, ULONG Offset, ULONGLONG Value);
 static __inline ULONG_PTR HalpGicrBase(_In_ ULONG Cpu);
 
 /* ARM64 system register accessors - forward declarations */
@@ -2186,16 +2223,37 @@ HalpGicItsInitLpiTables(VOID)
     return TRUE;
 }
 
+/* Forward declaration */
+static BOOLEAN HalpGicItsSendInvall(_In_ ULONG CollectionId);
+
 static VOID
 HalpGicItsEnableLpi(_In_ ULONG EventId)
 {
+    ULONG Cpu;
+    ULONG LpiNum;
+
     if (!HalpGicLpiConfig || EventId >= HalpGicLpiCount)
+    {
+        DPRINT1("[arm64][ITS] HalpGicItsEnableLpi: FAILED EventId=%lu (LpiConfig=%p Count=%lu)\n",
+                EventId, HalpGicLpiConfig, HalpGicLpiCount);
         return;
+    }
+
+    LpiNum = HAL_ARM64_LPI_BASE + EventId;
+    DPRINT1("[arm64][ITS] HalpGicItsEnableLpi: Enabling LPI %lu (EventId=%lu)\n", LpiNum, EventId);
 
     HalpGicLpiConfig[EventId] = (UCHAR)(HAL_ARM64_LPI_PROP_PRIO_DEFAULT |
                                        HAL_ARM64_LPI_PROP_GROUP1 |
                                        HAL_ARM64_LPI_PROP_ENABLED);
     HalpArm64CleanDcacheRange(&HalpGicLpiConfig[EventId], sizeof(UCHAR));
+
+    /* Send INVALL to invalidate cached configuration */
+    Cpu = KeGetCurrentProcessorNumber();
+    __asm__ __volatile__("dsb sy" ::: "memory");
+    HalpGicItsSendInvall(Cpu);
+
+    DPRINT1("[arm64][ITS] HalpGicItsEnableLpi: LPI %lu enabled, config=0x%02x\n",
+            LpiNum, HalpGicLpiConfig[EventId]);
 }
 
 static BOOLEAN
@@ -2459,6 +2517,42 @@ HalpGicItsSendMapti(
     return HalpGicItsPostCommand(Sync);
 }
 
+static VOID
+HalpGicItsBuildInvallCmd(
+    _Out_writes_(4) UINT64 *Cmd,
+    _In_ ULONG CollectionId)
+{
+    RtlZeroMemory(Cmd, HAL_ARM64_ITS_CMD_ENTRY_SIZE);
+
+    Cmd[0] = (UINT64)GITS_CMD_INVALL;
+    Cmd[0] |= ((UINT64)CollectionId) << 16;  /* ICID at bits 31:16 */
+}
+
+static BOOLEAN
+HalpGicItsSendInvall(_In_ ULONG CollectionId)
+{
+    UINT64 Cmd[4];
+    UINT64 Sync[4];
+    ULONGLONG TargetAddress;
+
+    /* Get redistributor base address for this CPU */
+    TargetAddress = (ULONGLONG)HalpGicrBase(CollectionId);
+    if (TargetAddress == 0)
+    {
+        DPRINT1("[arm64][ITS] INVALL: No redistributor base for CPU %lu\n", CollectionId);
+        return FALSE;
+    }
+
+    /* Send INVALL command */
+    HalpGicItsBuildInvallCmd(Cmd, CollectionId);
+    if (!HalpGicItsPostCommand(Cmd))
+        return FALSE;
+
+    /* Send SYNC to ensure INVALL is processed before continuing */
+    HalpGicItsBuildSyncCmd(Sync, TargetAddress);
+    return HalpGicItsPostCommand(Sync);
+}
+
 static PHALP_ARM64_ITS_DEVICE
 HalpGicItsFindDevice(_In_ USHORT RequesterId)
 {
@@ -2643,6 +2737,33 @@ HalpGicItsInitialize(VOID)
 
     if (HalpGicItsInitialized)
         return TRUE;
+
+    /*
+     * QEMU HVF workaround: GIC ITS LPI interrupt delivery crashes QEMU HVF
+     * (exit code -6 / SIGABRT) when MSI-X interrupts fire through the ITS.
+     * The ITS command queue works correctly (MAPC, MAPD, MAPTI all succeed),
+     * but actual LPI delivery through the HVF hypervisor is broken.
+     *
+     * Disable ITS until QEMU HVF GIC ITS support is fixed or we switch to
+     * real hardware / QEMU TCG. Devices will fall back to legacy SPI interrupts.
+     *
+     * TODO: Remove this when QEMU HVF GIC ITS LPI delivery is working.
+     */
+    DPRINT1("[arm64][ITS] HalpGicItsInitialize: ITS disabled (QEMU HVF LPI workaround)\n");
+    HalpGicItsInitFailed = TRUE;
+    return FALSE;
+
+    /*
+     * ITS initialization requires memory allocations (MmAllocateContiguousMemorySpecifyCache,
+     * ExAllocatePoolWithTag) that need IRQL <= APC_LEVEL for the slow path.
+     * If called at elevated IRQL, bail out rather than risk bugcheck.
+     */
+    if (KeGetCurrentIrql() > APC_LEVEL)
+    {
+        DPRINT1("[arm64][ITS] HalpGicItsInitialize: IRQL %u > APC_LEVEL, deferring\n",
+                (ULONG)KeGetCurrentIrql());
+        return FALSE;
+    }
 
     State = InterlockedCompareExchange(&HalpGicItsInitState, 1, 0);
     if (State == 2)
@@ -3202,7 +3323,7 @@ HalpUnmapVirtualAddress(
     MmUnmapIoSpace(Base, NumberPages << PAGE_SHIFT);
 }
 
-static __inline volatile ULONG *HalpMmio(ULONG_PTR Base, ULONG Offset)
+volatile ULONG *HalpMmio(ULONG_PTR Base, ULONG Offset)
 {
     /*
      * Convert physical address to the appropriate virtual address based on
@@ -3215,9 +3336,10 @@ static __inline volatile ULONG *HalpMmio(ULONG_PTR Base, ULONG Offset)
      *     are only mapped in TTBR0's identity page tables.
      *
      * After boot (HalpUseIdentityMapping == FALSE):
-     *   - Convert physical addresses to KSEG0 virtual addresses (TTBR1)
-     *     by adding HAL_ARM64_KSEG0_BASE.
-     *   - At this point, MmMapIoSpace should be used for MMIO mappings.
+     *   - If the base address was already remapped by MmMapIoSpace
+     *     (i.e., it's in high kernel VA space), use it directly.
+     *   - Otherwise, convert physical addresses to KSEG0 virtual addresses
+     *     (TTBR1) by adding HAL_ARM64_KSEG0_BASE.
      */
     ULONG_PTR Va = Base;
 
@@ -3234,7 +3356,7 @@ static __inline volatile ULONG *HalpMmio(ULONG_PTR Base, ULONG Offset)
     return (volatile ULONG *)(Va + Offset);
 }
 
-static __inline ULONGLONG HalpMmioRead64(ULONG_PTR Base, ULONG Offset)
+ULONGLONG HalpMmioRead64(ULONG_PTR Base, ULONG Offset)
 {
     volatile ULONG *Ptr = HalpMmio(Base, Offset);
     ULONGLONG Low = Ptr[0];
@@ -3242,11 +3364,66 @@ static __inline ULONGLONG HalpMmioRead64(ULONG_PTR Base, ULONG Offset)
     return Low | (High << 32);
 }
 
-static __inline VOID HalpMmioWrite64(ULONG_PTR Base, ULONG Offset, ULONGLONG Value)
+VOID HalpMmioWrite64(ULONG_PTR Base, ULONG Offset, ULONGLONG Value)
 {
     volatile ULONG *Ptr = HalpMmio(Base, Offset);
     Ptr[0] = (ULONG)(Value & 0xFFFFFFFFu);
     Ptr[1] = (ULONG)(Value >> 32);
+}
+
+static
+BOOLEAN
+HalpMapRuntimeMmioWindow(
+    _Inout_ PULONGLONG BaseAddress,
+    _In_ SIZE_T Length,
+    _In_ PCSTR Name)
+{
+    PHYSICAL_ADDRESS Pa;
+    PVOID MappedVa;
+    ULONGLONG Physical;
+
+    if (!BaseAddress || *BaseAddress == 0)
+        return TRUE;
+
+    if (*BaseAddress >= HAL_ARM64_KSEG0_BASE)
+        return TRUE;
+
+    Physical = *BaseAddress;
+    Pa.QuadPart = Physical;
+    MappedVa = MmMapIoSpace(Pa, Length, MmNonCached);
+    if (!MappedVa)
+    {
+        DPRINT1("[arm64][HAL] Phase1: MmMapIoSpace failed for %s PA=0x%llx len=0x%llx\n",
+                Name ? Name : "MMIO",
+                Physical,
+                (ULONGLONG)Length);
+        return FALSE;
+    }
+
+    *BaseAddress = (ULONGLONG)(ULONG_PTR)MappedVa;
+    DPRINT1("[arm64][HAL] Phase1: mapped %s PA=0x%llx -> VA=%p len=0x%llx\n",
+            Name ? Name : "MMIO",
+            Physical,
+            MappedVa,
+            (ULONGLONG)Length);
+    return TRUE;
+}
+
+static
+BOOLEAN
+HalpMapGicv2RuntimeMmioWindows(VOID)
+{
+    /*
+     * Runtime GICv2 paths (ACK/EOI/PMR/enable) still use MMIO.
+     * Map their frames explicitly before disabling identity mapping.
+     */
+    if (!HalpMapRuntimeMmioWindow(&HalpGicdBase, PAGE_SIZE, "GICD"))
+        return FALSE;
+
+    if (!HalpMapRuntimeMmioWindow(&HalpGiccBase, PAGE_SIZE, "GICC"))
+        return FALSE;
+
+    return TRUE;
 }
 
 static __inline ULONG_PTR HalpGicrBase(_In_ ULONG Cpu)
@@ -3587,21 +3764,43 @@ HalpInitGicRedistributor(_In_ ULONG Cpu)
      */
     *HalpMmio(SgiBase, GICR_ICENABLER0) = 0x0000FFFF; /* Disable only SGIs (0-15) */
 
+    /*
+     * Re-enable SGIs needed for inter-processor interrupts.
+     *
+     * SGI 0 (HAL_ARM64_SGI_IPI) is used by KxFreezeExecution to freeze
+     * target CPUs for debugger entry (KdEnterDebugger). Without this,
+     * HalRequestIpi sends the SGI but the redistributor drops it because
+     * ISENABLER0 bit 0 is clear, causing KiArm64WaitForFrozenTargets
+     * to spin forever.
+     *
+     * Always enable IPI SGI regardless of UP/SMP - it's harmless in UP
+     * mode and required for SMP kernel debugger synchronization.
+     */
+    *HalpMmio(SgiBase, GICR_ISENABLER0) = (1u << HAL_ARM64_SGI_IPI);
+
     /* Memory barrier after redistributor configuration */
     __asm__ __volatile__("dsb sy" ::: "memory");
 
     /* Verify final state */
     ULONG IsEnabler = *HalpMmio(SgiBase, GICR_ISENABLER0);
-    DPRINT1("[CYCLE35][GICR] Final ISENABLER0=0x%08lx (SGIs disabled, PPIs ready for enable)\n", IsEnabler);
+    DPRINT1("[CYCLE35][GICR] Final ISENABLER0=0x%08lx (IPI SGI enabled)\n", IsEnabler);
     DPRINT1("[arm64][GICR] Redistributor initialization complete for CPU %lu\n", Cpu);
 }
 
+/*
+ * Per-CPU active interrupt ID tracking (stored as intid + 1).
+ * Value 0 = no active interrupt, 1 = INTID 0 (SGI IPI), 2 = INTID 1, etc.
+ * This offset-by-one encoding avoids the sentinel conflict where INTID 0
+ * (a valid SGI used for IPI) would be indistinguishable from "no interrupt".
+ */
 static ULONG HalpArm64ActiveIntId[MAXIMUM_PROCESSORS];
 
 /* GIC detection: system-register interface (GICv3+) vs legacy CPU IF (GICv2)
  * HalpGicUseSysRegs, HalpForceLegacyGic, and HalpGicArchRev are declared
  * as extern at the top of this file and defined in gic_common.c. */
 static BOOLEAN HalpLoggedGicOnce = FALSE; /* One-time post-KD log */
+BOOLEAN HalpGicv2ForceGroup0 = FALSE; /* HVF quirk mode for legacy GIC */
+BOOLEAN HalpGicv2GroupModeLocked = FALSE; /* Explicit boot option override */
 
 FORCEINLINE ULONGLONG HalpReadMidr(void)
 {
@@ -4061,41 +4260,47 @@ HalpArm64DiscoverGicFromMadt(_In_opt_ PLOADER_PARAMETER_BLOCK LoaderBlock)
     ULONG Cpu = KeGetCurrentProcessorNumber();
 
 
+    HalRawPuts("[GIC] DiscMadt ENTRY\n");
+
     if (HalpGicParsedMadt)
     {
-        DPRINT1("[arm64][HAL] HalpArm64DiscoverGicFromMadt: already parsed\n");
+        HalRawPuts("[GIC] DiscMadt already done\n");
         return;
     }
 
     HalpGicParsedMadt = TRUE;
     if (!LoaderBlock)
     {
-        DPRINT1("[arm64][HAL] HalpArm64DiscoverGicFromMadt: no LoaderBlock\n");
+        HalRawPuts("[GIC] DiscMadt no LdrBlk\n");
         return;
     }
 
-    DPRINT1("[arm64][HAL] HalpArm64DiscoverGicFromMadt: parsing MADT\n");
+    HalRawPuts("[GIC] DiscMadt ACPI parse\n");
     Mpidr = HalpReadMpidr();
     HalpAcpiDiscoverArm64Tables(LoaderBlock);
-    DPRINT1("[arm64][HAL] HalpArm64DiscoverGicFromMadt: ACPI parse done\n");
+    HalRawPuts("[GIC] DiscMadt ACPI done\n");
 
+    HalRawPuts("[GIC] DiscMadt chk GICD\n");
     if (HalpArm64GicInfo.GicdBase)
     {
         HalpGicdBase = HalpArm64GicInfo.GicdBase;
         FoundGicd = TRUE;
     }
+    HalRawPuts("[GIC] DiscMadt chk GICR\n");
     if (HalpArm64GicInfo.GicrBase)
     {
         HalpGicrRegionBase = HalpArm64GicInfo.GicrBase;
         HalpGicrRegionLength = HalpArm64GicInfo.GicrLength;
         FoundGicr = TRUE;
     }
+    HalRawPuts("[GIC] DiscMadt chk GICC\n");
     if (HalpArm64GicInfo.GiccBase)
     {
         HalpGiccBase = HalpArm64GicInfo.GiccBase;
         FoundGiccBase = TRUE;
     }
 
+    HalRawPuts("[GIC] DiscMadt chk GiccEntries\n");
     if (HalpArm64GicInfo.GiccEntryCount)
     {
         FoundGiccEntry = TRUE;
@@ -4137,6 +4342,7 @@ HalpArm64DiscoverGicFromMadt(_In_opt_ PLOADER_PARAMETER_BLOCK LoaderBlock)
         }
     }
 
+    HalRawPuts("[GIC] DiscMadt chk ITS\n");
     if (HalpArm64GicInfo.ItsCount)
     {
         ULONG ItsNodeIdx = 0;
@@ -4185,6 +4391,7 @@ HalpArm64DiscoverGicFromMadt(_In_opt_ PLOADER_PARAMETER_BLOCK LoaderBlock)
                 ItsNodeIdx, HalpArm64GicInfo.ItsCount);
     }
 
+    HalRawPuts("[GIC] DiscMadt chk MSI\n");
     if (HalpArm64GicInfo.MsiFrameCount)
     {
         for (ULONG Index = 0; Index < HalpArm64GicInfo.MsiFrameCount; ++Index)
@@ -4203,6 +4410,7 @@ HalpArm64DiscoverGicFromMadt(_In_opt_ PLOADER_PARAMETER_BLOCK LoaderBlock)
         }
     }
 
+    HalRawPuts("[GIC] DiscMadt results\n");
     if (FoundGicd)
     {
         DPRINT1("[arm64][HAL] MADT: GICD @0x%llx\n", HalpGicdBase);
@@ -4223,8 +4431,10 @@ HalpArm64DiscoverGicFromMadt(_In_opt_ PLOADER_PARAMETER_BLOCK LoaderBlock)
     {
         HalpGiccPresent = TRUE;
     }
-    if (!FoundCpuGicr && HalpGicrRegionBase)
+    HalRawPuts("[GIC] DiscMadt chk CpuGicr\n");
+    if (!FoundCpuGicr && FoundGicr && HalpGicrRegionBase)
     {
+        HalRawPuts("[GIC] DiscMadt FindGicrForMpidr\n");
         ULONG_PTR Base = HalpArm64FindGicrForMpidr(Mpidr);
         if (Base && Cpu < RTL_NUMBER_OF(HalpGicrCpuBase))
         {
@@ -4252,6 +4462,8 @@ HalpArm64DiscoverGicFromMadt(_In_opt_ PLOADER_PARAMETER_BLOCK LoaderBlock)
                 (ULONG)(HalpGicMsiSpiBase + HalpGicMsiSpiCount - 1),
                 HalpGicMsiFlags);
     }
+
+    HalRawPuts("[GIC] DiscMadt EXIT\n");
 }
 
 static VOID
@@ -4261,40 +4473,57 @@ HalpArm64SelectGicInterface(_In_opt_ PLOADER_PARAMETER_BLOCK LoaderBlock)
     ULONG pfr0_gic = 0;
     ULONGLONG midr = 0;
     UCHAR implementer = 0;
-    static volatile LONG CallCount = 0;
-    LONG ThisCall = InterlockedIncrement(&CallCount);
 
-    DPRINT1("[arm64][HAL] HalpArm64SelectGicInterface: ENTRY call#%ld flag=%d\n",
-            ThisCall, (int)HalpGicInterfaceSelected);
+    HalRawPuts("[GIC] SelectIf ENTRY\n");
 
     if (HalpGicInterfaceSelected)
+    {
+        HalRawPuts("[GIC] SelectIf already done\n");
         return;
+    }
 
     HalpGicInterfaceSelected = TRUE;
-    DPRINT1("[arm64][HAL] HalpArm64SelectGicInterface: call#%ld SELECTED\n", ThisCall);
+    HalRawPuts("[GIC] SelectIf first call\n");
 
     /* Check for boot options that force GIC interface selection */
     if (LoaderBlock && LoaderBlock->LoadOptions)
     {
+        HalRawPuts("[GIC] SelectIf chk boot opts\n");
         if (HalpHasLoaderOption(LoaderBlock->LoadOptions, "GICV3") ||
             HalpHasLoaderOption(LoaderBlock->LoadOptions, "GICSYSREG"))
         {
             HalpForceSysRegs = TRUE;
             HalpForceLegacyGic = FALSE;
-            DPRINT1("[arm64][HAL] Forcing GICv3 system-register interface via boot option\n");
+            HalRawPuts("[GIC] boot opt: force v3\n");
         }
         else if (HalpHasLoaderOption(LoaderBlock->LoadOptions, "GICV2") ||
                  HalpHasLoaderOption(LoaderBlock->LoadOptions, "NOGICSYSREG") ||
                  HalpHasLoaderOption(LoaderBlock->LoadOptions, "LEGACYGIC"))
         {
             HalpForceLegacyGic = TRUE;
-            DPRINT1("[arm64][HAL] Forcing legacy GIC interface via boot option\n");
+            HalRawPuts("[GIC] boot opt: force legacy\n");
+        }
+
+        if (HalpHasLoaderOption(LoaderBlock->LoadOptions, "GICV2GROUP0") ||
+            HalpHasLoaderOption(LoaderBlock->LoadOptions, "HVFGICV2"))
+        {
+            HalpGicv2ForceGroup0 = TRUE;
+            HalpGicv2GroupModeLocked = TRUE;
+            HalRawPuts("[GIC] boot opt: v2 grp0\n");
+        }
+        else if (HalpHasLoaderOption(LoaderBlock->LoadOptions, "GICV2GROUP1"))
+        {
+            HalpGicv2ForceGroup0 = FALSE;
+            HalpGicv2GroupModeLocked = TRUE;
+            HalRawPuts("[GIC] boot opt: v2 grp1\n");
         }
     }
 
+    HalRawPuts("[GIC] SelectIf pre-MADT\n");
     HalpArm64DiscoverGicFromMadt(LoaderBlock);
+    HalRawPuts("[GIC] SelectIf post-MADT\n");
 
-    /* Apple HVF host mode tends to mis-handle GICv3 sysreg IRQ delivery. Prefer legacy GICC unless forced. */
+    /* Apple HVF quirk */
     if (!HalpForceSysRegs && !HalpForceLegacyGic && HalpGiccPresent)
     {
         midr = HalpReadMidr();
@@ -4302,25 +4531,43 @@ HalpArm64SelectGicInterface(_In_opt_ PLOADER_PARAMETER_BLOCK LoaderBlock)
         if (implementer == 0x61) /* Apple */
         {
             HalpForceLegacyGic = TRUE;
-            DPRINT1("[arm64][HAL] Apple MIDR detected; preferring legacy GIC CPU interface for HVF compatibility\n");
+            HalpGicv2ForceGroup0 = TRUE;
+            HalRawPuts("[GIC] Apple -> legacy+grp0\n");
         }
     }
 
     if (!HalpGiccPresent)
     {
-        if (HalpForceLegacyGic)
-        {
-            DPRINT1("[arm64][HAL] Legacy GIC forced but MADT reports no GICC; using sysregs\n");
-        }
+        HalRawPuts("[GIC] no GICC -> sysregs\n");
         HalpForceLegacyGic = FALSE;
         HalpForceSysRegs = TRUE;
+        HalpGicv2ForceGroup0 = FALSE;
     }
 
+    /*
+     * QEMU virt quirk:
+     * Legacy GICv2 Group1 delivery can stall very early during IRQL unmasking.
+     * Keep Group0-only by default on this machine profile unless user override
+     * explicitly requested GICV2GROUP1/GICV2GROUP0.
+     */
+    if (!HalpForceSysRegs &&
+        HalpGiccPresent &&
+        !HalpGicv2GroupModeLocked &&
+        HalpGicdBase == HAL_ARM64_GICD_BASE_DEFAULT &&
+        HalpGiccBase == HAL_ARM64_GICC_BASE_DEFAULT)
+    {
+        HalpGicv2ForceGroup0 = TRUE;
+        HalRawPuts("[GIC] QEMU virt -> grp0\n");
+    }
+
+    HalRawPuts("[GIC] SelectIf read PFR0\n");
     pfr0 = HalpReadPfr0();
     pfr0_gic = (ULONG)((pfr0 >> 24) & 0xF);
+    HalRawPuts("[GIC] SelectIf PFR0 done\n");
 
     if (HalpForceSysRegs)
     {
+        HalRawPuts("[GIC] trying SRE (forced)\n");
         ULONG sre = HalpReadIccSre();
         sre |= 0x1;
         HalpWriteIccSre(sre);
@@ -4328,22 +4575,17 @@ HalpArm64SelectGicInterface(_In_opt_ PLOADER_PARAMETER_BLOCK LoaderBlock)
         if (sre & 0x1)
         {
             HalpGicUseSysRegs = TRUE;
+            HalRawPuts("[GIC] SRE=1 sysregs\n");
         }
         else
         {
             HalpGicUseSysRegs = FALSE;
-            if (!HalpGiccPresent)
-            {
-                DPRINT1("[arm64][HAL] GICV3 forced but SRE enable failed and no GICC present\n");
-            }
-            else
-            {
-                DPRINT1("[arm64][HAL] GICV3 forced but SRE enable failed, falling back to legacy\n");
-            }
+            HalRawPuts("[GIC] SRE fail\n");
         }
     }
     else if (!HalpForceLegacyGic && pfr0_gic >= 1)
     {
+        HalRawPuts("[GIC] auto-detect SRE\n");
         ULONG sre = HalpReadIccSre();
         sre |= 0x1;
         HalpWriteIccSre(sre);
@@ -4351,16 +4593,21 @@ HalpArm64SelectGicInterface(_In_opt_ PLOADER_PARAMETER_BLOCK LoaderBlock)
         if (sre & 0x1)
         {
             HalpGicUseSysRegs = TRUE;
+            HalRawPuts("[GIC] auto SRE=1 sysregs\n");
         }
         else
         {
             HalpGicUseSysRegs = FALSE;
+            HalRawPuts("[GIC] auto SRE=0 legacy\n");
         }
     }
     else
     {
         HalpGicUseSysRegs = FALSE;
+        HalRawPuts("[GIC] no SRE -> legacy\n");
     }
+
+    HalRawPuts("[GIC] SelectIf EXIT\n");
 }
 
 static VOID
@@ -4432,10 +4679,63 @@ HalInitSystem(
 
     if (BootPhase != 0)
     {
+        KIRQL SwitchIrql;
+
+        DPRINT1("[arm64][HAL] Phase1 entry\n");
+
+        /*
+         * CRITICAL: Transition from identity-mapped PA to proper kernel VA
+         * for all GIC MMIO accesses.
+         *
+         * By Phase 1, the kernel MM has completed initialization and the TTBR0
+         * identity mapping (PA == VA) that was used during early boot may have
+         * been torn down.  Any MMIO access through HalpMmio() that still uses
+         * the identity-mapping path will fault.
+         *
+         * For GICv2, timer PPI interrupts are already firing at 100Hz.  The
+         * interrupt handler calls HalpGicv2AcknowledgeInterrupt() which reads
+         * GICC_IAR via HalpMmio().  If we do not remap GICC/GICD BEFORE the
+         * identity mapping becomes invalid, interrupt handling will data-abort.
+         *
+         * Strategy:
+         *   1. Map GIC MMIO frames via MmMapIoSpace() (for GICv2).
+         *      MmMapIoSpace() overwrites HalpGicdBase/HalpGiccBase with
+         *      kernel-VA values.  HalpMmio() handles high-VA addresses
+         *      correctly even while HalpUseIdentityMapping is still TRUE,
+         *      because it checks (Va >= KSEG0_BASE) first.  This makes the
+         *      swap safe against concurrent interrupts.
+         *   2. Raise to HIGH_LEVEL (masks all interrupts via DAIF.I).
+         *   3. Set HalpUseIdentityMapping = FALSE atomically.
+         *   4. Full barrier (DSB SY + ISB).
+         *   5. Lower IRQL.
+         *
+         * For GICv3, the CPU interface uses system registers (no MMIO),
+         * but GICD reads in the diagnostic code below still need KSEG0.
+         */
+        if (!HalpGicUseSysRegs)
+        {
+            if (!HalpMapGicv2RuntimeMmioWindows())
+            {
+                DPRINT1("[arm64][HAL] Phase1: MmMapIoSpace failed for GICv2 MMIO; "
+                        "GICC/GICD addresses may be stale\n");
+            }
+        }
+
+        /* Disable identity mapping for BOTH GICv2 and GICv3 */
+        SwitchIrql = KfRaiseIrql(HIGH_LEVEL);
         HalpUseIdentityMapping = FALSE;
+        __asm__ __volatile__("dsb sy" ::: "memory");
+        __asm__ __volatile__("isb" ::: "memory");
+        KfLowerIrql(SwitchIrql);
+
+        DPRINT1("[arm64][HAL] Phase1: identity mapping disabled (GicdBase=0x%llx GiccBase=0x%llx)\n",
+                HalpGicdBase, HalpGiccBase);
+
         if (!HalpLoggedGicOnce)
         {
             HalpLoggedGicOnce = TRUE;
+
+            DPRINT1("[arm64][HAL] Phase1: probing GIC state\n");
             {
                 ULONGLONG pfr0 = HalpReadPfr0();
                 ULONG pfr0_gic = (ULONG)((pfr0 >> 24) & 0xF);
@@ -4446,24 +4746,15 @@ HalInitSystem(
                         pidr2,
                         HalpGicArchRev);
             }
-            DPRINT1("[arm64][HAL] Using %s CPU interface\n",
-                    HalpGicUseSysRegs ? "GICv3 system-register" : "GICv2 legacy (GICC)");
 
             /*
              * [CYCLE37] Phase 1: Enable GIC CPU interface Group 1 delivery
              *
-             * Now that MM initialization is complete and the system is stable,
-             * we can safely enable ICC_IGRPEN1_EL1 to allow Group 1 interrupts
-             * (including the timer PPI) to be delivered to the CPU.
+             * For GICv3: enable ICC_IGRPEN1_EL1 (was kept disabled in Phase 0
+             * to prevent spurious interrupt crashes during MM init).
              *
-             * This was kept disabled in Phase 0 to prevent spurious interrupts
-             * from causing crashes during early MM initialization.
-             *
-             * CRITICAL: We must raise IRQL to HIGH_LEVEL before enabling ICC_IGRPEN1_EL1
-             * to prevent interrupts from being delivered while we're in the middle of
-             * the enable sequence. At PASSIVE_LEVEL, DAIF.I=0 so IRQs are unmasked.
-             * If a spurious interrupt arrives during the ICC write, it can corrupt
-             * the return address and cause a crash.
+             * For GICv2: GICC_CTLR was already enabled in Phase 0 with the
+             * appropriate group configuration.  No additional work needed.
              */
             if (HalpGicUseSysRegs)
             {
@@ -4472,29 +4763,29 @@ HalInitSystem(
 
                 OldIrql = KfRaiseIrql(HIGH_LEVEL);
                 HalpWriteIccIgrpen1(1); /* Enable Group1 interrupt delivery */
-
-                /* Barrier to ensure the enable takes effect */
                 __asm__ __volatile__("dsb sy" ::: "memory");
                 __asm__ __volatile__("isb" ::: "memory");
-
-                /* Verify it was enabled */
                 Igrpen1 = HalpReadIccIgrpen1();
-                DPRINT1("[CYCLE37] HalInitSystem Phase1: ICC_IGRPEN1_EL1=0x%x (interrupts now ENABLED)\n", Igrpen1);
-
-                /* Lower IRQL - interrupts can now be delivered */
                 KfLowerIrql(OldIrql);
-                DPRINT1("[CYCLE37] HalInitSystem Phase1: Lowered IRQL from %u to %u, interrupts ACTIVE\n",
-                        HIGH_LEVEL, KeGetCurrentIrql());
+
+                DPRINT1("[arm64][HAL] Phase1: ICC_IGRPEN1_EL1=0x%x (Group1 enabled)\n", Igrpen1);
             }
             else
             {
-                /*
-                 * For GICv2 legacy interface, GICC_CTLR was already enabled
-                 * in Phase 0 (EnableGrp0=1). No additional enablement needed.
-                 */
-                DPRINT1("[CYCLE37] HalInitSystem Phase1: GICv2 legacy CPU IF already enabled\n");
+                DPRINT1("[arm64][HAL] Phase1: GICv2 legacy CPU IF already enabled in Phase 0\n");
             }
         }
+
+        /*
+         * NOTE: GIC ITS initialization is intentionally NOT done here in Phase 1.
+         * While Phase 1 runs at PASSIVE_LEVEL (ideal for memory allocations),
+         * enabling LPIs on the redistributor (GICR_CTLR.EnableLPIs) during early
+         * boot causes the timer interrupt (PPI 27) to stop firing on QEMU HVF,
+         * leading to a system hang. ITS initialization is deferred to
+         * HalGetMsiVectorRange() with an IRQL guard to prevent crashes when
+         * called at elevated IRQL during PnP resource assignment.
+         */
+
         return TRUE;
     }
 
@@ -4602,8 +4893,8 @@ HalInitSystem(
      * Configure SPI interrupt groups and clear pending.
      *
      * For GIC-v3 with system registers: Use Group 1 (non-secure) as standard.
-     * For GIC-v2 (MMIO interface): Use Group 0 because QEMU HVF has a bug
-     * where enabling Group 1 via GICD_CTLR causes a hang.
+     * For GIC-v2 (MMIO interface): default to Group 1 (Windows-compatible),
+     * with optional Group 0 fallback for known HVF quirk platforms.
      *
      * Group 0 interrupts are delivered via IRQ (not FIQ) when the CPU is in
      * non-secure mode and GICC_CTLR.EOImodeNS=0, which is our configuration.
@@ -4612,7 +4903,7 @@ HalInitSystem(
     {
         *HalpMmio((ULONG_PTR)HalpGicdBase, GICD_ICENABLER + i * 4) = 0xFFFFFFFF;
         *HalpMmio((ULONG_PTR)HalpGicdBase, GICD_ICPENDR   + i * 4) = 0xFFFFFFFF;
-        if (HalpGicUseSysRegs)
+        if (HalpGicUseSysRegs || !HalpGicv2ForceGroup0)
         {
             *HalpMmio((ULONG_PTR)HalpGicdBase, GICD_IGROUPR + i * 4) = 0xFFFFFFFF; /* G1 */
         }
@@ -4682,11 +4973,12 @@ HalInitSystem(
         *HalpMmio((ULONG_PTR)HalpGicdBase, GICD_ICPENDR + 0) = 0xFFFFFFFF;
 
         /*
-         * Set SGIs/PPIs to Group 0 for GIC-v2.
-         * QEMU HVF has a bug where enabling Group 1 via GICD_CTLR hangs.
-         * Group 0 interrupts are still delivered as IRQ in non-secure mode.
+         * Configure SGI/PPI groups for GIC-v2:
+         * - Default: Group 1 non-secure (Windows-compatible behavior)
+         * - HVF quirk mode: Group 0 only
          */
-        *HalpMmio((ULONG_PTR)HalpGicdBase, GICD_IGROUPR + 0) = 0x00000000; /* G0 */
+        *HalpMmio((ULONG_PTR)HalpGicdBase, GICD_IGROUPR + 0) =
+            HalpGicv2ForceGroup0 ? 0x00000000 : 0xFFFFFFFF;
 
         /*
          * [CYCLE36] Set SGI/PPI priorities to 0x00 (highest).
@@ -4727,9 +5019,9 @@ HalInitSystem(
      *   Bit 1: EnableGrp1 - Group 1 (non-secure) interrupts
      *   Bit 4: ARE_NS - Affinity Routing Enable (GICv3 only)
      *
-     * For GIC-v2 on QEMU with Apple HVF, enabling Group 1 (bit 1) causes a hang.
-     * This appears to be a QEMU HVF GIC-v2 emulation bug. As a workaround, we
-     * configure all interrupts as Group 0 and only enable Group 0 here.
+     * For GIC-v2, default to enabling both groups (Group0 + Group1) to match
+     * non-secure Windows-style interrupt delivery. On known HVF quirk setups,
+     * fallback to Group0-only mode.
      *
      * For GIC-v3, we MUST enable BOTH Group 0 and Group 1 because:
      *   - SPIs are configured as Group 1 (GICD_IGROUPR)
@@ -4744,7 +5036,9 @@ HalInitSystem(
     }
     else
     {
-        *HalpMmio((ULONG_PTR)HalpGicdBase, GICD_CTLR) = 0x1; /* EnableGrp0 only for GICv2 */
+        *HalpMmio((ULONG_PTR)HalpGicdBase, GICD_CTLR) = HalpGicv2ForceGroup0 ? 0x1 : 0x3;
+        DPRINT1("[arm64][HAL] HalInitSystem: GICv2 distributor mode=%s\n",
+                HalpGicv2ForceGroup0 ? "Group0-only (HVF quirk)" : "Group0+Group1");
     }
 
     /* Barrier to ensure GICD enable completes before CPU interface configuration */
@@ -4805,6 +5099,8 @@ HalInitSystem(
         }
         else
         {
+            ULONG GiccCtlr;
+
             /*
              * GIC-v2 Legacy CPU Interface (GICC) Initialization
              *
@@ -4815,15 +5111,13 @@ HalInitSystem(
              * Configure GICC (CPU Interface):
              * - PMR = 0xFF: Allow all priority levels
              * - BPR = 0x0: No preemption grouping
-             * - CTLR = 0x1: Enable Group0 interrupts only
-             *
-             * NOTE: We only enable Group 0 because QEMU HVF has a bug where
-             * enabling Group 1 causes a hang. All interrupts are configured
-             * as Group 0 via GICD_IGROUPR.
+             * - CTLR = 0x3: Enable both Group0 and Group1 (default path)
+             * - CTLR = 0x1: Group0-only in HVF quirk mode
              */
+            GiccCtlr = HalpGicv2ForceGroup0 ? 0x1 : 0x3;
             *HalpMmio((ULONG_PTR)HalpGiccBase, GICC_PMR) = 0xFF;
             *HalpMmio((ULONG_PTR)HalpGiccBase, GICC_BPR) = 0x0;
-            *HalpMmio((ULONG_PTR)HalpGiccBase, GICC_CTLR) = 0x1; /* EnableGrp0 only */
+            *HalpMmio((ULONG_PTR)HalpGiccBase, GICC_CTLR) = GiccCtlr;
 
             /*
              * CRITICAL: Memory barrier after GICC configuration.
@@ -5269,16 +5563,32 @@ HalBeginSystemInterrupt(
 {
     ULONG cpu = KeGetCurrentProcessorNumber();
     ULONG intid = Vector;
+    static ULONG s_IntCount = 0;
+
+    /* Debug: Log ALL interrupts (first 50 + LPIs + every 100th) */
+    if (s_IntCount < 50 ||
+        (intid >= HAL_ARM64_LPI_BASE && intid < HAL_ARM64_LPI_BASE + 10) ||
+        (s_IntCount % 100 == 0))
+    {
+        if (intid >= HAL_ARM64_LPI_BASE)
+            DPRINT("[arm64][INT#%lu] BeginSystemInterrupt LPI %lu IRQL=%u\n", s_IntCount, intid, Irql);
+        else if (intid >= 32)
+            DPRINT("[arm64][INT#%lu] BeginSystemInterrupt SPI %lu IRQL=%u\n", s_IntCount, intid, Irql);
+        else if (intid >= 16)
+            DPRINT("[arm64][INT#%lu] BeginSystemInterrupt PPI %lu IRQL=%u\n", s_IntCount, intid, Irql);
+        else
+            DPRINT("[arm64][INT#%lu] BeginSystemInterrupt SGI %lu IRQL=%u\n", s_IntCount, intid, Irql);
+    }
+    s_IntCount++;
 
     /*
      * CRITICAL: Check for spurious interrupts BEFORE raising IRQL.
      * GICv2: INTID 1023 = spurious
      * GICv3: INTID 1023 = spurious, 1020-1023 are special
-     * INTID 0 is reserved and should never be delivered
+     *
+     * NOTE: INTID 0 IS a valid SGI (HAL_ARM64_SGI_IPI) and must NOT
+     * be rejected. The kernel uses SGI 0 for inter-processor interrupts.
      */
-    if (intid == 0)
-        return FALSE;
-
     if ((intid >= 1020) && (intid < HAL_ARM64_LPI_BASE))
         return FALSE;
 
@@ -5303,7 +5613,7 @@ HalBeginSystemInterrupt(
      * This handles the case where multiple interrupts are nested - we track
      * per-CPU to ensure the correct INTID is EOI'd.
      */
-    if (cpu < MAXIMUM_PROCESSORS) HalpArm64ActiveIntId[cpu] = intid;
+    if (cpu < MAXIMUM_PROCESSORS) HalpArm64ActiveIntId[cpu] = intid + 1;
 
     return TRUE;
 }
@@ -5357,10 +5667,38 @@ HalDisableSystemInterrupt(
         /* PPI (16-31): disable via redistributor */
         *HalpMmio(HalpGicrSgiBase(KeGetCurrentProcessorNumber()), GICR_ICENABLER0) = (1u << bit);
     }
+    else if (Vector >= HAL_ARM64_LPI_BASE)
+    {
+        /* LPI (8192+): Disable via ITS configuration table */
+        ULONG LpiIndex = Vector - HAL_ARM64_LPI_BASE;
+
+        DPRINT1("[arm64][LPI] Disabling LPI %lu (index %lu)\n", Vector, LpiIndex);
+
+        if (!HalpGicLpiConfig || LpiIndex >= HalpGicLpiCount)
+        {
+            DPRINT1("[arm64][LPI] ERROR: Invalid LPI %lu (index %lu >= count %lu)\n",
+                    Vector, LpiIndex, HalpGicLpiCount);
+            return;
+        }
+
+        /* Clear enable bit in LPI configuration table */
+        HalpGicLpiConfig[LpiIndex] = (UCHAR)(HAL_ARM64_LPI_PROP_PRIO_DEFAULT |
+                                             HAL_ARM64_LPI_PROP_GROUP1);
+
+        /* Clean cache to ensure configuration table update is visible */
+        HalpArm64CleanDcacheRange(&HalpGicLpiConfig[LpiIndex], sizeof(UCHAR));
+
+        __asm__ __volatile__("dsb sy" ::: "memory");
+    }
+    else if (Vector < 1020)
+    {
+        /* SPI (32-1019): disable via distributor */
+        *HalpMmio((ULONG_PTR)HalpGicdBase, GICD_ICENABLER + reg * 4) = (1u << bit);
+    }
     else
     {
-        /* SPI (32+): disable via distributor */
-        *HalpMmio((ULONG_PTR)HalpGicdBase, GICD_ICENABLER + reg * 4) = (1u << bit);
+        /* Reserved range (1020-8191): no-op */
+        DPRINT1("[arm64] HalDisableSystemInterrupt: Invalid vector %lu (reserved range)\n", Vector);
     }
 }
 
@@ -5480,9 +5818,43 @@ HalEnableSystemInterrupt(
             __asm__ __volatile__("dsb sy" ::: "memory");
         }
     }
-    else
+    else if (Vector >= HAL_ARM64_LPI_BASE)
     {
-        /* SPI (32+): use Distributor registers */
+        /* LPI (8192+): Enable via ITS configuration table */
+        ULONG LpiIndex = Vector - HAL_ARM64_LPI_BASE;
+        ULONG Cpu = KeGetCurrentProcessorNumber();
+        UCHAR Config;
+
+        DPRINT1("[arm64][LPI] Enabling LPI %lu (index %lu)\n", Vector, LpiIndex);
+
+        if (!HalpGicLpiConfig || LpiIndex >= HalpGicLpiCount)
+        {
+            DPRINT1("[arm64][LPI] ERROR: Invalid LPI %lu (index %lu >= count %lu)\n",
+                    Vector, LpiIndex, HalpGicLpiCount);
+            return FALSE;
+        }
+
+        /* Set priority and enable in LPI configuration table */
+        Config = (UCHAR)((priority & 0xFC) |  /* Priority in bits 7:2 */
+                        HAL_ARM64_LPI_PROP_GROUP1 |
+                        HAL_ARM64_LPI_PROP_ENABLED);
+        HalpGicLpiConfig[LpiIndex] = Config;
+
+        /* Clean cache to ensure configuration table update is visible to redistributor */
+        HalpArm64CleanDcacheRange(&HalpGicLpiConfig[LpiIndex], sizeof(UCHAR));
+
+        /* Memory barrier */
+        __asm__ __volatile__("dsb sy" ::: "memory");
+
+        /* Send INVALL command to invalidate cached LPI configuration */
+        if (!HalpGicItsSendInvall(Cpu))
+        {
+            DPRINT1("[arm64][LPI] WARNING: INVALL command failed for CPU %lu\n", Cpu);
+        }
+    }
+    else if (Vector < 1020)
+    {
+        /* SPI (32-1019): use Distributor registers */
         ULONG IsEnablerBefore, IsEnablerAfter;
 
         DPRINT("[arm64][SPI] Enabling SPI %lu\n", Vector);
@@ -5512,6 +5884,12 @@ HalEnableSystemInterrupt(
         DPRINT("[arm64][SPI]   ISENABLER before: 0x%08lx after: 0x%08lx (bit %lu = %lu)\n",
                IsEnablerBefore, IsEnablerAfter, bit, (IsEnablerAfter >> bit) & 1);
     }
+    else
+    {
+        /* Reserved range (1020-8191): error */
+        DPRINT1("[arm64] HalEnableSystemInterrupt: Invalid vector %lu (reserved range)\n", Vector);
+        return FALSE;
+    }
 
     DPRINT1("[arm64] HalEnableSystemInterrupt: Vector=%lu IRQL=%u GICPriority=0x%02X COMPLETE\n",
             Vector, Irql, priority);
@@ -5526,7 +5904,7 @@ HalEndSystemInterrupt(
     _In_ PKTRAP_FRAME TrapFrame)
 {
     ULONG cpu = KeGetCurrentProcessorNumber();
-    ULONG intid = (cpu < MAXIMUM_PROCESSORS) ? HalpArm64ActiveIntId[cpu] : 0;
+    ULONG stored = (cpu < MAXIMUM_PROCESSORS) ? HalpArm64ActiveIntId[cpu] : 0;
 
     /*
      * CRITICAL: Lower IRQL BEFORE sending EOI to prevent nested interrupts.
@@ -5536,10 +5914,19 @@ HalEndSystemInterrupt(
      */
     KeLowerIrql(Irql);
 
-    if (intid)
+    if (stored)
     {
+        /* Decode actual INTID (stored as intid + 1 to avoid sentinel conflict with INTID 0) */
+        ULONG intid = stored - 1;
+
         /* Memory barrier to ensure all interrupt processing is visible */
         __asm__ __volatile__("dsb sy" ::: "memory");
+
+        /* Debug: Log LPI EOIs */
+        if (intid >= HAL_ARM64_LPI_BASE)
+        {
+            DPRINT1("[arm64][LPI] EOI LPI %lu\n", intid);
+        }
 
         if (HalpGicUseSysRegs)
         {
@@ -6715,24 +7102,83 @@ HalInitializeProcessor(
     _In_ ULONG ProcessorNumber,
     _In_ PLOADER_PARAMETER_BLOCK LoaderBlock)
 {
+    HalUartInitFromLoaderBlock(LoaderBlock);
+    HalRawPuts("[HAL] HalInitProc ENTRY\n");
+    HalRawPuts("[HAL] pre-SelectGic\n");
     HalpArm64SelectGicInterface(LoaderBlock);
+    HalRawPuts("[HAL] post-SelectGic\n");
+
+    HalRawPuts("[HAL] HalInitProc SelectGic done\n");
 
     if (HalpGicUseSysRegs)
     {
+        HalRawPuts("[HAL] HalInitProc GICv3 path\n");
+
         /* GIC-v3: Find and use per-CPU redistributor */
         if (ProcessorNumber < RTL_NUMBER_OF(HalpGicrCpuBase) &&
             !HalpGicrCpuBase[ProcessorNumber] &&
             HalpGicrRegionBase)
         {
+            HalRawPuts("[HAL] HalInitProc FindGICR\n");
             ULONG_PTR Base = HalpArm64FindGicrForMpidr(HalpReadMpidr());
             if (Base)
                 HalpGicrCpuBase[ProcessorNumber] = Base;
+            HalRawPuts("[HAL] HalInitProc FindGICR done\n");
         }
 
+        HalRawPuts("[HAL] HalInitProc InitRedist\n");
         HalpInitGicRedistributor(ProcessorNumber);
+        HalRawPuts("[HAL] HalInitProc InitRedist done\n");
+
+        /*
+         * GICv3 CPU interface init for APs.
+         *
+         * The BSP's CPU interface (ICC_SRE, ICC_PMR, ICC_BPR1, ICC_IGRPEN1)
+         * is configured in HalInitSystem Phase 0/1. But those are per-CPU
+         * system registers, so APs start with defaults:
+         *   - ICC_PMR = 0 (all interrupts masked by priority)
+         *   - ICC_BPR1 = default
+         *   - ICC_IGRPEN1 = 0 (Group 1 interrupts DISABLED)
+         *
+         * Without this, APs cannot receive ANY interrupts (including SGI IPI
+         * for debugger freeze), causing KxFreezeExecution to hang forever
+         * in KiArm64WaitForFrozenTargets.
+         *
+         * Unlike the BSP, we can enable IGRPEN1 immediately because by the
+         * time APs start, the system is past Phase 1 (MM initialized,
+         * interrupt handlers registered).
+         */
+        if (ProcessorNumber > 0)
+        {
+            ULONG Sre;
+
+            HalRawPuts("[HAL] HalInitProc AP GICv3 CPU IF\n");
+
+            /* Ensure system register interface is enabled */
+            Sre = HalpReadIccSre();
+            Sre |= 0x1; /* SRE = 1 */
+            HalpWriteIccSre(Sre);
+            __asm__ __volatile__("isb" ::: "memory");
+
+            /* Set priority mask to allow all interrupts */
+            HalpWriteIccPmr(0xFF);
+
+            /* Binary point = 0 for finest priority grouping */
+            HalpWriteIccBpr1(0);
+
+            /* Enable Group 1 interrupt delivery */
+            HalpWriteIccIgrpen1(1);
+
+            __asm__ __volatile__("dsb sy" ::: "memory");
+            __asm__ __volatile__("isb" ::: "memory");
+
+            HalRawPuts("[HAL] HalInitProc AP GICv3 CPU IF done\n");
+        }
     }
     else
     {
+        HalRawPuts("[HAL] HalInitProc GICv2 path\n");
+
         /*
          * GIC-v2: Initialize the per-CPU GICC (CPU interface) for this processor.
          *
@@ -6746,13 +7192,24 @@ HalInitializeProcessor(
          */
         if (HalpGiccBase != 0)
         {
+            ULONG GiccCtlr = HalpGicv2ForceGroup0 ? 0x1 : 0x3;
+
+            HalRawPuts("[HAL] HalInitProc GICC programming\n");
             *HalpMmio((ULONG_PTR)HalpGiccBase, GICC_PMR) = 0xFF;
+            HalRawPuts("[HAL] HalInitProc GICC PMR ok\n");
             *HalpMmio((ULONG_PTR)HalpGiccBase, GICC_BPR) = 0x0;
-            *HalpMmio((ULONG_PTR)HalpGiccBase, GICC_CTLR) = 0x1; /* EnableGrp0 only */
+            HalRawPuts("[HAL] HalInitProc GICC BPR ok\n");
+            *HalpMmio((ULONG_PTR)HalpGiccBase, GICC_CTLR) = GiccCtlr;
+            HalRawPuts("[HAL] HalInitProc GICC CTLR ok\n");
 
             /* Memory barrier to ensure GICC configuration takes effect */
             __asm__ __volatile__("dsb sy" ::: "memory");
             __asm__ __volatile__("isb" ::: "memory");
+            HalRawPuts("[HAL] HalInitProc GICC programmed\n");
+        }
+        else
+        {
+            HalRawPuts("[HAL] HalInitProc GICC=0 unavail\n");
         }
     }
 
@@ -6760,13 +7217,15 @@ HalInitializeProcessor(
     if (HalpGicItsInitialized && HalpGicItsEnabled &&
         ProcessorNumber < RTL_NUMBER_OF(HalpGicItsCollectionMapped))
     {
+        HalRawPuts("[HAL] HalInitProc ITS init\n");
         HalpGicItsCollectionMapped[ProcessorNumber] = FALSE;
         if (!HalpGicItsEnsureCollection(ProcessorNumber))
         {
-            DPRINT1("[arm64][HAL] ITS: failed to initialize CPU %lu tables\n",
-                    ProcessorNumber);
+            HalRawPuts("[HAL] HalInitProc ITS FAIL\n");
         }
     }
+
+    HalRawPuts("[HAL] HalInitProc EXIT\n");
 }
 
 BOOLEAN

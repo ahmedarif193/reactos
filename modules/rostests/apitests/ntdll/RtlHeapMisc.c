@@ -59,7 +59,6 @@ TestRtlZeroHeapFreeOnly(void)
     PVOID Heap;
     PUCHAR Buf1, Buf2, Buf3;
     SIZE_T Size = 0x40;
-    NTSTATUS Status;
     BOOLEAN Ok;
     HANDLE Destroyed;
 

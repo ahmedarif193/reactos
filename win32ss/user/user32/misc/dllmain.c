@@ -38,6 +38,28 @@ HICON hIconSmWindows = NULL, hIconWindows = NULL;
 
 WCHAR szAppInit[KEY_LENGTH];
 
+static BOOLEAN
+User32IsCsrssProcess(VOID)
+{
+    static const UNICODE_STRING CsrssFileName = RTL_CONSTANT_STRING(L"csrss.exe");
+    PRTL_USER_PROCESS_PARAMETERS ProcessParameters;
+    UNICODE_STRING BaseName;
+    PWSTR NameStart;
+
+    ProcessParameters = NtCurrentPeb()->ProcessParameters;
+    if (!ProcessParameters || !ProcessParameters->ImagePathName.Buffer)
+        return FALSE;
+
+    NameStart = wcsrchr(ProcessParameters->ImagePathName.Buffer, L'\\');
+    if (NameStart)
+        ++NameStart;
+    else
+        NameStart = ProcessParameters->ImagePathName.Buffer;
+
+    RtlInitUnicodeString(&BaseName, NameStart);
+    return RtlEqualUnicodeString(&BaseName, &CsrssFileName, TRUE);
+}
+
 BOOL
 GetDllList(VOID)
 {
@@ -360,10 +382,7 @@ ClientThreadSetup(VOID)
     // continue as normal.
     //
 
-    // FIXME: Disabling this call is a HACK!! See also User32CallClientThreadSetupFromKernel...
-    // return ClientThreadSetupHelper(FALSE);
-    TRACE("ClientThreadSetup is not implemented\n");
-    return TRUE;
+    return ClientThreadSetupHelper(FALSE);
 }
 
 BOOL
@@ -380,7 +399,7 @@ Init(PUSERCONNECT UserCon /*PUSERSRV_API_CONNECTINFO*/)
     NtCurrentPeb()->PostProcessInitRoutine = NULL;
 
     // This is a HACK!! //
-    gfServerProcess = FALSE;
+    gfServerProcess = User32IsCsrssProcess();
     gfFirstThread   = TRUE;
     //// End of HACK!! ///
 
@@ -422,16 +441,28 @@ Init(PUSERCONNECT UserCon /*PUSERSRV_API_CONNECTINFO*/)
         gSharedInfo = UserCon->siClient;
         gpsi = gSharedInfo.psi;
         gHandleTable = gSharedInfo.aheList;
+
         /* ReactOS-Specific! */ gHandleEntries = SharedPtrToUser(gHandleTable->handles);
     }
 
-    // FIXME: Yet another hack... This call should normally not be done here, but
-    // instead in ClientThreadSetup, and in User32CallClientThreadSetupFromKernel as well.
-    TRACE("HACK: Using Init-ClientThreadSetupHelper hack!!\n");
-    if (!ClientThreadSetupHelper(FALSE))
+    /*
+     * CSRSS runs this code while WINSRV is being loaded under loader lock.
+     * Defer thread setup to CSRSRV!CsrConnectToUser -> user32!ClientThreadSetup.
+     */
+    if (gfServerProcess)
     {
-        TRACE("Init-ClientThreadSetupHelper hack failed!\n");
-        return FALSE;
+        TRACE("Deferring CSRSS thread setup to ClientThreadSetup\n");
+    }
+    else
+    {
+        // FIXME: Yet another hack... This call should normally not be done here, but
+        // instead in ClientThreadSetup, and in User32CallClientThreadSetupFromKernel as well.
+        TRACE("HACK: Using Init-ClientThreadSetupHelper hack!!\n");
+        if (!ClientThreadSetupHelper(FALSE))
+        {
+            TRACE("Init-ClientThreadSetupHelper hack failed!\n");
+            return FALSE;
+        }
     }
 
     TRACE("<-- user32::Init()\n");

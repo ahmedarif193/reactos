@@ -353,6 +353,13 @@ NtUserCallOneParam(
             if (Param & LAYOUT_ORIENTATIONMASK || Param == LAYOUT_LTR)
             {
                 ppi = PsGetCurrentProcessWin32Process();
+                if (!ppi)
+                {
+                    ERR("Process Win32 structure not initialized\n");
+                    EngSetLastError(ERROR_INVALID_ACCESS);
+                    Result = FALSE;
+                    break;
+                }
                 ppi->dwLayout = Param;
                 Result = TRUE;
                 break;
@@ -376,6 +383,14 @@ NtUserCallOneParam(
             }
 
             ppi = PsGetCurrentProcessWin32Process();
+            if (!ppi)
+            {
+                ERR("Process Win32 structure not initialized\n");
+                EngSetLastError(ERROR_INVALID_ACCESS);
+                Result = FALSE;
+                break;
+            }
+
             _SEH2_TRY
             {
                pdwLayout = (PDWORD)Param;

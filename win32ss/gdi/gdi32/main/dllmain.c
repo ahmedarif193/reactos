@@ -58,7 +58,15 @@ GdiProcessSetup(VOID)
         GdiHandleCache = (PGDIHANDLECACHE)NtCurrentTeb()->ProcessEnvironmentBlock->GdiHandleBuffer;
         RtlInitializeCriticalSection(&semLocal);
         InitializeCriticalSection(&gcsClientObjLinks);
-        GdiInitializeLanguagePack(0);
+
+        /*
+         * Don't load LPK for native subsystem processes (e.g. csrss.exe).
+         * LPK_ApplyMirroring() calls GetFileVersionInfoW and
+         * SetProcessDefaultLayout which are unsafe during early csrss
+         * initialization before CsrServerInitialization completes.
+         */
+        if (NtCurrentPeb()->ImageSubsystem != IMAGE_SUBSYSTEM_NATIVE)
+            GdiInitializeLanguagePack(0);
     }
 }
 

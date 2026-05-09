@@ -7339,6 +7339,9 @@ XHCI_PrepareDefaultControlContext(
     MaxPacketSize = EndpointProperties->MaxPacketSize ?
                     EndpointProperties->MaxPacketSize : 8;
 
+    DPRINT1("usbxhci: XHCI_PrepareDefaultControlContext: SlotId=%u Speed=%u RequestedMPS=%u\n",
+            Slot->SlotId, SpeedCode, MaxPacketSize);
+
     /*
      * USBPORT is typically responsible for programming a spec‑compliant EP0 MPS.
      * However, during initial enumerations (Address Device), USBPORT might not
@@ -9042,11 +9045,23 @@ XHCI_SendCommand(
             }
         }
 
+        LARGE_INTEGER StartTick, EndTick;
+        KeQueryTickCount(&StartTick);
         Status = XHCI_WaitForCommandCompletion(Extension,
                                                EffectiveTimeout,
                                                &CommandContext,
                                                SlotIdOut,
                                                CompletionCodeOut);
+        KeQueryTickCount(&EndTick);
+        
+        if (TrbType == XHCI_TRB_TYPE_ENABLE_SLOT ||
+            TrbType == XHCI_TRB_TYPE_ADDRESS_DEV)
+        {
+             DPRINT1("usbxhci: SendCommand type=%lu completed Status=%ld Code=%lu Duration=%I64u ticks\n",
+                     TrbType, Status,
+                     CompletionCodeOut ? *CompletionCodeOut : 0,
+                     EndTick.QuadPart - StartTick.QuadPart);
+        }
         if (Status == MP_STATUS_SUCCESS)
             break;
 

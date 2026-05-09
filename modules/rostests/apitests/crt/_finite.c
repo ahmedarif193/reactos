@@ -58,7 +58,7 @@ void Test__finite(void)
     }
 }
 
-#ifndef _M_IX86
+#if defined(_M_AMD64)
 static TESTENTRY_FLT s_finitef_tests[] =
 {
     /* Special values */
@@ -105,12 +105,12 @@ void Test__finitef(void)
         ok(r == s_finitef_tests[i].result, "Wrong result for %f [0x%08lx]. Expected %d, got %d\n", x, s_finitef_tests[i].x, s_finitef_tests[i].result, r);
     }
 }
-#endif // !_MIX86
+#endif // _M_AMD64
 
 START_TEST(_finite)
 {
     Test__finite();
-#ifndef _M_IX86
+#if defined(_M_AMD64)
     Test__finitef();
-#endif // !_MIX86
+#endif // _M_AMD64
 }

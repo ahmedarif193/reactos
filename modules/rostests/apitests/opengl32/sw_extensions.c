@@ -2,7 +2,7 @@
  * PROJECT:         ReactOS api tests
  * LICENSE:         BSD - See COPYING.ARM in the top level directory
  * PURPOSE:         Tests extensions exposed by the software implementation
- * PROGRAMMERS:     Jérôme Gardou
+ * PROGRAMMERS:     Jï¿½rï¿½me Gardou
  */
 
 #include <windows.h>
@@ -16,7 +16,7 @@ START_TEST(sw_extensions)
     BITMAPINFO biDst;
     HDC hdcDst = CreateCompatibleDC(0);
     HBITMAP bmpDst, bmpOld;
-    INT nFormats, iPixelFormat, res, i;
+    INT nFormats, iPixelFormat = 0, res, i;
     PIXELFORMATDESCRIPTOR pfd;
     const char* output;
     HGLRC Context;

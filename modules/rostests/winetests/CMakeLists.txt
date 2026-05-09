@@ -6,10 +6,16 @@ if(MSVC)
         /wd4189 # C4189: 'x': local variable is initialized but not referenced
         /wd4267 # C4267: '=': conversion from 'size_t' to 'int', possible loss of data
         /wd4305) # C4305: '=': truncation from 'double' to 'FLOAT'
-    if(ARCH STREQUAL "amd64")
+    if(ARCH STREQUAL "amd64" OR ARCH STREQUAL "arm64")
         add_compile_options(
             /wd4312 # C4312: 'type cast': conversion from 'unsigned int' to 'char *' of greater size
             )
+    endif()
+else()
+    if(ARCH STREQUAL "arm64")
+        # ARM64 GCC is stricter about misleading indentation in Wine's todo_if macro
+        # and reports false positives for uninitialized variables in Wine macro expansions
+        add_compile_options(-Wno-misleading-indentation -Wno-maybe-uninitialized)
     endif()
 endif()
 

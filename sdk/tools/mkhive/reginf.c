@@ -22,7 +22,7 @@
  * FILE:            tools/mkhive/reginf.c
  * PURPOSE:         Inf file import code
  * PROGRAMMERS:     Eric Kohl
- *                  Hervé Poussineau
+ *                  Hervï¿½ Poussineau
  */
 
 /* INCLUDES *****************************************************************/
@@ -68,6 +68,9 @@ static const WCHAR BCDPath[] = {'\\','R','e','g','i','s','t','r','y','\\','M','a
 
 static const WCHAR AddReg[] = {'A','d','d','R','e','g',0};
 static const WCHAR DelReg[] = {'D','e','l','R','e','g',0};
+
+/* Target architecture suffix set by -a: command line option */
+WCHAR ArchSuffix[32] = {0};
 
 /* FUNCTIONS ****************************************************************/
 
@@ -512,6 +515,26 @@ ImportRegistryFile(PCHAR FileName)
         DPRINT1("registry_callback() for AddReg failed\n");
         InfHostCloseFile(hInf);
         return FALSE;
+    }
+
+    /* Process architecture-specific AddReg section (e.g. "AddReg.NTarm64") */
+    if (ArchSuffix[0] != 0)
+    {
+        WCHAR ArchAddReg[64];
+        WCHAR NTPrefix[] = {'.','N','T',0};
+        int i = 0, j;
+
+        /* Build "AddReg.NT<arch>" */
+        for (j = 0; AddReg[j]; j++)
+            ArchAddReg[i++] = AddReg[j];
+        for (j = 0; NTPrefix[j]; j++)
+            ArchAddReg[i++] = NTPrefix[j];
+        for (j = 0; ArchSuffix[j]; j++)
+            ArchAddReg[i++] = ArchSuffix[j];
+        ArchAddReg[i] = 0;
+
+        /* This section is optional - don't fail if it doesn't exist */
+        registry_callback(hInf, ArchAddReg, FALSE);
     }
 
     InfHostCloseFile(hInf);

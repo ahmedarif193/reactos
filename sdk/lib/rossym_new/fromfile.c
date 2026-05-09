@@ -26,12 +26,16 @@ RosSymCreateFromFile(PVOID FileContext, PROSSYM_INFO *RosSymInfo)
     unsigned SectionIndex;
     unsigned SymbolTable, NumSymbols;
 
+    DPRINT("RosSymCreateFromFile: ENTRY (rossym_new)\n");
     /* Load DOS header */
+    DPRINT("RosSymCreateFromFile: Seeking to start of file\n");
     if (! RosSymSeekFile(FileContext, 0))
     {
+        DPRINT("RosSymCreateFromFile: Seek to 0 failed\n");
         werrstr("Could not rewind file\n");
         return FALSE;
     }
+    DPRINT("RosSymCreateFromFile: Seek to 0 succeeded, reading DOS header\n");
     if (! RosSymReadFile(FileContext, &DosHeader, sizeof(IMAGE_DOS_HEADER)))
     {
         werrstr("Failed to read DOS header %x\n", RosSymStatus);

@@ -12,8 +12,13 @@
 #include <strsafe.h>
 #include <shlwapi.h>
 
+/* Wine's test.h defines 'ok' as a macro, which conflicts with
+   codecvt_base::ok in C++ STL headers. Temporarily undefine it. */
+#pragma push_macro("ok")
+#undef ok
 #include <set>
 #include <map>
+#pragma pop_macro("ok")
 
 enum E_MODULE
 {

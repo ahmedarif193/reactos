@@ -54,12 +54,10 @@ DxDdStartupDxGraphics(  ULONG ulc1,
 
     /* Loading the kernel interface of DirectX for win32k */
 
-    DPRINT1("Warning: trying loading xp/2003/windows7/reactos dxg.sys\n");
     ghDxGraphics = EngLoadImage(L"\\SystemRoot\\System32\\drivers\\dxg.sys");
     if ( ghDxGraphics == NULL)
     {
         Status = STATUS_DLL_NOT_FOUND;
-        DPRINT1("Warning: no ReactX or DirectX kernel driver found\n");
     }
     else
     {
@@ -81,6 +79,7 @@ DxDdStartupDxGraphics(  ULONG ulc1,
                                              &DxgDrv,
                                              &gdwDirectDrawContext,
                                              Proc );
+
         }
 
         /* Check if we manage loading the data and execute the dxStartupDxGraphics if it is successful */
@@ -93,7 +92,6 @@ DxDdStartupDxGraphics(  ULONG ulc1,
                 EngUnloadImage( ghDxGraphics);
                 ghDxGraphics = NULL;
             }
-            DPRINT1("Warning: DirectX graphics interface can not be initialized\n");
         }
         else
         {
@@ -109,7 +107,6 @@ DxDdStartupDxGraphics(  ULONG ulc1,
                 gpDxFuncs[lstDrvFN[t].iFunc].pfn =lstDrvFN[t].pfn;
             }
 
-            DPRINT("DirectX interface is activated\n");
         }
     }
 

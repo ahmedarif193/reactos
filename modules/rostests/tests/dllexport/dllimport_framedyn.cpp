@@ -33,7 +33,7 @@ public:
         Format(L"Format %x", 123);// ?Format@CHString@@QAAXPBGZZ(long wstr long)
         FormatMessageW(1, 123);// ?FormatMessageW@CHString@@QAAXIZZ(long long long)
         FormatMessageW(L"Format %x", 123);// ?FormatMessageW@CHString@@QAAXPBGZZ(long ptr long)
-        FormatV(L"Format %x", NULL);// ?FormatV@CHString@@QAEXPBGPAD@Z(wstr long)
+        { va_list args = {}; FormatV(L"Format %x", args); }// ?FormatV@CHString@@QAEXPBGPAD@Z(wstr long)
         FreeExtra();// ?FreeExtra@CHString@@QAEXXZ()
         GetAllocLength();// ?GetAllocLength@CHString@@QBEHXZ()
         GetAt(0);// ?GetAt@CHString@@QBEGH@Z(long)

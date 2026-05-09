@@ -2086,6 +2086,15 @@ SkipBootSectorProbe:
             DriveExtension->Cylinders++;
         }
 
+        /*
+         * Clear DO_DEVICE_INITIALIZING before inserting into the disk list.
+         * PnP's BusRelations query walks this list and asserts that child
+         * device objects do not have DO_DEVICE_INITIALIZING set (devaction.c:2141).
+         * Clearing after insertion creates a window where PnP can see the
+         * device before the flag is cleared, causing assertion failures.
+         */
+        DeviceObject->Flags &= ~DO_DEVICE_INITIALIZING;
+
         /* Acquire the disk lock */
         KeEnterCriticalRegion();
         ExAcquireFastMutex(&DeviceExtension->DiskListLock);
@@ -2122,14 +2131,6 @@ SkipBootSectorProbe:
         /* Load any persisted state (must occur after list insertion) */
         RamdiskRestoreDiskState(DriveExtension);
         RamdiskPersistDiskState(DriveExtension);
-
-        /* Clear init flag */
-        DeviceObject->Flags &= ~DO_DEVICE_INITIALIZING;
-        DbgPrintEx(DPFLTR_DEFAULT_ID,
-                   DPFLTR_TRACE_LEVEL,
-                   "RamdiskCreateDiskDevice: GUID %wZ assigned drive %wc\n",
-                   &DriveExtension->GuidString,
-                   DriveExtension->DriveLetter ? DriveExtension->DriveLetter : L'-');
         return STATUS_SUCCESS;
     }
 

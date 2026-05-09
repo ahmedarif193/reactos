@@ -7,7 +7,9 @@
 
 #include "intelppm.h"
 
+#if defined(_M_IX86) || defined(_M_AMD64)
 #include <intrin.h>
+#endif
 
 #define NDEBUG
 #include <debug.h>
@@ -33,6 +35,7 @@
 #define MSR_IA32_HWP_CAPABILITIES       0x00000771
 #define MSR_IA32_HWP_REQUEST            0x00000774
 
+#if defined(_M_IX86) || defined(_M_AMD64)
 /* Cached HWP detection result: -1 = not checked, 0 = no, 1 = yes */
 static volatile LONG AcpiprocHwpActive = -1;
 
@@ -129,6 +132,7 @@ AcpiprocWriteHwpRequest(
     DPRINT("HWP: target=%u highest=%u lowest=%u EPP=%u\n",
            TargetRatio, Highest, Lowest, Epp);
 }
+#endif /* _M_IX86 || _M_AMD64 */
 
 #pragma pack(push, 1)
 typedef struct _ACPIPROC_PCT_GENERIC_REGISTER_DESCRIPTOR {

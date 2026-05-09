@@ -112,7 +112,6 @@ typedef struct _ACPI_MADT_GENERIC_INTERRUPT
     ULONGLONG GicvBaseAddress;
     ULONGLONG GichBaseAddress;
     ULONG VgicMaintenanceInterrupt;
-    ULONG Reserved2;
     ULONGLONG GicrBaseAddress;
     ULONGLONG Mpidr;
 } ACPI_MADT_GENERIC_INTERRUPT, *PACPI_MADT_GENERIC_INTERRUPT;
@@ -318,7 +317,6 @@ HalpAcpiDiscoverArm64Tables(
     if (HalpArm64AcpiParsed)
         return;
 
-    HalpArm64AcpiParsed = TRUE;
     RtlZeroMemory(&HalpArm64GicInfo, sizeof(HalpArm64GicInfo));
     RtlZeroMemory(&HalpArm64GtdtInfo, sizeof(HalpArm64GtdtInfo));
     RtlZeroMemory(&HalpArm64SpcrInfo, sizeof(HalpArm64SpcrInfo));
@@ -327,7 +325,17 @@ HalpAcpiDiscoverArm64Tables(
     RtlZeroMemory(&HalpArm64PpttInfo, sizeof(HalpArm64PpttInfo));
 
     Madt = HalAcpiGetTable(LoaderBlock, APIC_SIGNATURE);
-    if (Madt && Madt->Header.Length >= sizeof(*Madt))
+    if (!Madt || Madt->Header.Length < sizeof(*Madt))
+    {
+        /* ACPI tables not available yet; allow retry on next call */
+        DPRINT1("[arm64][ACPI] MADT not available yet, will retry\n");
+        return;
+    }
+
+    /* MADT found, mark as parsed so we don't re-parse */
+    HalpArm64AcpiParsed = TRUE;
+
+    if (Madt->Header.Length >= sizeof(*Madt))
     {
         ULONG_PTR TableEnd = (ULONG_PTR)Madt + Madt->Header.Length;
         PACPI_SUBTABLE_HEADER Entry =
@@ -526,6 +534,8 @@ HalpAcpiDiscoverArm64Tables(
                             Out->GiccBase = HalpReadUnalignedU64(&Gicc->BaseAddress);
                             Out->Flags = Gicc->Flags;
                             HalpArm64GicInfo.GiccEntryCount++;
+                            DPRINT1("[arm64][ACPI] MADT GICC[%lu]: MPIDR=0x%llx Flags=0x%lx GicrBase=0x%llx GiccBase=0x%llx\n",
+                                    Index, Out->Mpidr, Out->Flags, Out->GicrBase, Out->GiccBase);
                         }
 
                         if (HalpReadUnalignedU64(&Gicc->BaseAddress))
@@ -613,8 +623,13 @@ HalpAcpiDiscoverArm64Tables(
     if (Fadt)
     {
         HalpArm64PsciInfo.ArmBootArch = Fadt->arm_boot_arch;
-        HalpArm64PsciInfo.Present = (Fadt->flags & ACPI_FADT_PSCI_COMPLIANT) != 0;
-        HalpArm64PsciInfo.UseHvc = (Fadt->flags & ACPI_FADT_PSCI_USE_HVC) != 0;
+        /* PSCI flags are in arm_boot_arch (ACPI 5.1+), NOT in the general flags field */
+        HalpArm64PsciInfo.Present = (Fadt->arm_boot_arch & ACPI_FADT_PSCI_COMPLIANT) != 0;
+        HalpArm64PsciInfo.UseHvc = (Fadt->arm_boot_arch & ACPI_FADT_PSCI_USE_HVC) != 0;
+        DPRINT1("[arm64][ACPI] FADT: arm_boot_arch=0x%x flags=0x%lx PSCI=%s conduit=%s\n",
+                Fadt->arm_boot_arch, Fadt->flags,
+                HalpArm64PsciInfo.Present ? "yes" : "no",
+                HalpArm64PsciInfo.UseHvc ? "HVC" : "SMC");
     }
 
     /*

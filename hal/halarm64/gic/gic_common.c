@@ -25,12 +25,22 @@
  * ============================================================================
  */
 
-/* GIC base addresses */
+/*
+ * GIC base addresses.
+ *
+ * GICD and GICC are initialized to QEMU virt defaults so that early Phase 0
+ * code works before MADT parsing.  HalpArm64DiscoverGicFromMadt() overwrites
+ * these with ACPI-provided values.
+ *
+ * GICR (redistributor) is GICv3-only.  Initializing it to a non-zero default
+ * is dangerous on GICv2 systems because stale addresses could trigger MMIO
+ * faults.  Leave it at 0; MADT parsing populates it when a GICR entry exists.
+ */
 ULONGLONG HalpGicdBase = HAL_ARM64_GICD_BASE_DEFAULT;
 ULONGLONG HalpGiccBase = HAL_ARM64_GICC_BASE_DEFAULT;
-ULONGLONG HalpGicrRegionBase = HAL_ARM64_GICR_BASE_DEFAULT;  /* Legacy: first region */
-ULONGLONG HalpGicrRegionLength = 0;                          /* Legacy: first region */
-ULONG HalpGicrStride = HAL_ARM64_GICR_STRIDE_DEFAULT;        /* Legacy: fixed stride */
+ULONGLONG HalpGicrRegionBase = 0;                            /* Populated from MADT GICR entries */
+ULONGLONG HalpGicrRegionLength = 0;
+ULONG HalpGicrStride = HAL_ARM64_GICR_STRIDE_DEFAULT;
 ULONG HalpGicrSgiOffset = HAL_ARM64_GICR_SGI_OFFSET_DEFAULT;
 ULONG_PTR HalpGicrCpuBase[MAXIMUM_PROCESSORS] = {0};
 

@@ -119,7 +119,7 @@ IntEndPage(
 
     DocumentEventEx(NULL, pldc->hPrinter, hdc, DOCUMENTEVENT_ENDPAGE, 0, NULL, 0, NULL);
 
-    ((PW32CLIENTINFO)NtCurrentTeb()->Win32ClientInfo)->cSpins = 0;
+    W32SetClientSpins(0);
 
     if ( NtGdiEndPage(hdc) )
     {
@@ -330,7 +330,7 @@ AbortDoc(
 
     DocumentEventEx(NULL, pldc->hPrinter, hdc, DOCUMENTEVENT_ABORTDOC, 0, NULL, 0, NULL);
 
-    ((PW32CLIENTINFO)NtCurrentTeb()->Win32ClientInfo)->cSpins = 0;
+    W32SetClientSpins(0);
 
     if ( pldc->Flags & LDC_META_PRINT)
     {
@@ -391,7 +391,7 @@ EndDoc(
 
         DocumentEventEx(NULL, pldc->hPrinter, hdc, DOCUMENTEVENT_ENDDOC, 0, NULL, 0, NULL);
 
-        ((PW32CLIENTINFO)NtCurrentTeb()->Win32ClientInfo)->cSpins = 0;
+        W32SetClientSpins(0);
 
         Good = NtGdiEndDoc(hdc);
 
@@ -677,7 +677,7 @@ StartPage(
     {
         pldc->Flags |= LDC_INIT_PAGE;
 
-        ((PW32CLIENTINFO)NtCurrentTeb()->Win32ClientInfo)->cSpins = 0;
+        W32SetClientSpins(0);
 
         if (StartPagePrinterEx(NULL, pldc->hPrinter))
         {

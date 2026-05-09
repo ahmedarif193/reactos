@@ -29,6 +29,7 @@ extern VOID UefiVideoRefreshBootLogo(VOID);
 DBG_DEFAULT_CHANNEL(WINDOWS);
 
 #if defined(_M_ARM64)
+#include <arch/arm64/arm64.h>
 #include <reactos/arm64/early_uart.h>
 #endif
 
@@ -1817,6 +1818,11 @@ LoadAndBootWindowsCommon(
     EarlyUartPutc('\n');
 #else
     TRACE("[winldr] jumping to kernel %p, LoaderBlockVA %p\n", KiSystemStartup, LoaderBlockVA);
+#endif
+
+#if defined(_M_ARM64)
+    /* Drop stale TTBR0 identity mappings before handing off to the kernel. */
+    Arm64ClearIdentityMappings();
 #endif
 
     /* Pass control */

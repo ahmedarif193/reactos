@@ -265,9 +265,10 @@ TestInterlockedFunctional(VOID)
     PKSPIN_LOCK pSpinLock = &SpinLock;
     PROCESSOR_STATE OldState, NewState;
 
-    /* on x86, most of these are supported intrinsically and don't need a spinlock! */
-#if defined _M_IX86 || defined _M_AMD64
+    /* on x86/amd64/arm64, most of these are supported intrinsically and don't need a spinlock! */
+#if defined _M_IX86 || defined _M_AMD64 || defined _M_ARM64
     pSpinLock = NULL;
+    DBG_UNREFERENCED_LOCAL_VARIABLE(pSpinLock);
 #endif
 
     /* CompareExchange */

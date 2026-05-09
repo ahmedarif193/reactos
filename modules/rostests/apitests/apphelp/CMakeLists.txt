@@ -23,6 +23,10 @@ add_custom_command(OUTPUT ${CMAKE_CURRENT_BINARY_DIR}/testdb.sdb
 
 add_rc_deps(testdata.rc ${CMAKE_CURRENT_BINARY_DIR}/testdb.sdb)
 add_executable(apphelp_apitest ${SOURCE})
+if(NOT MSVC AND ARCH STREQUAL "arm64")
+    set_source_files_properties(env.c apphelp.c PROPERTIES COMPILE_OPTIONS "-Wno-unused-function;-Wno-unused-but-set-variable")
+    set_source_files_properties(db.cpp PROPERTIES COMPILE_OPTIONS "-Wno-unused-function")
+endif()
 set_module_type(apphelp_apitest win32cui)
 target_link_libraries(apphelp_apitest ${PSEH_LIB} cpprt atl_classes)
 add_importlibs(apphelp_apitest advapi32 userenv version shlwapi msvcrt kernel32 ntdll)

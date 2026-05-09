@@ -189,16 +189,6 @@ C_ASSERT(PD_COUNT == 1);
 /* TODO: Free this variable (for offset from the pointer to the PDE) */
 #define MiGetPdeOffset MiAddressToPdeOffset
 
-/*
- * MiAddressToPteSafe / MiAddressToPdeSafe
- *
- * On i386, user and kernel page tables share the same self-map, so
- * these are just aliases for the regular macros. On ARM64, these need
- * to select between TTBR0 and TTBR1 aliases based on address range.
- */
-#define MiAddressToPteSafe(x) MiAddressToPte(x)
-#define MiAddressToPdeSafe(x) MiAddressToPde(x)
-
 /* Convert a PTE/PDE into a corresponding address */
 #define MiPteToAddress(_Pte) ((PVOID)((ULONG)(_Pte) << 10))
 #define MiPdeToAddress(_Pde) ((PVOID)((ULONG)(_Pde) << 20))

@@ -123,25 +123,6 @@ if(NOT TOOLCHAIN_PREFIX)
     endif()
 endif()
 
-# ROS_GNU_MINGW_TOOLCHAIN_PATH: Optional path to GNU MinGW toolchain
-# Only used for ARM64 builds that need GNU ld instead of LLD
-# For i386/amd64, LLD from TOOLCHAIN_PATH is used for consistency across platforms
-if(ARCH STREQUAL "arm64")
-    if(NOT DEFINED ROS_GNU_MINGW_TOOLCHAIN_PATH OR ROS_GNU_MINGW_TOOLCHAIN_PATH STREQUAL "")
-        if(DEFINED ENV{ROS_GNU_MINGW_TOOLCHAIN_PATH} AND NOT "$ENV{ROS_GNU_MINGW_TOOLCHAIN_PATH}" STREQUAL "")
-            set(ROS_GNU_MINGW_TOOLCHAIN_PATH "$ENV{ROS_GNU_MINGW_TOOLCHAIN_PATH}"
-                CACHE PATH "Path to GNU MinGW toolchain (bin) for ARM64")
-        elseif(DEFINED ENV{HOME} AND NOT "$ENV{HOME}" STREQUAL "")
-            set(_ros_gnu_toolchain_bin "$ENV{HOME}/mingw-toolchains/${TOOLCHAIN_PREFIX}/bin")
-            if(EXISTS "${_ros_gnu_toolchain_bin}")
-                set(ROS_GNU_MINGW_TOOLCHAIN_PATH "${_ros_gnu_toolchain_bin}"
-                    CACHE PATH "Path to GNU MinGW toolchain (bin) for ARM64")
-            endif()
-            unset(_ros_gnu_toolchain_bin)
-        endif()
-    endif()
-endif()
-
 # Toolchain file
 if(NOT CMAKE_TOOLCHAIN_FILE)
     set(CMAKE_TOOLCHAIN_FILE "${CMAKE_CURRENT_LIST_DIR}/toolchain-gcc.cmake" CACHE FILEPATH "Path to toolchain file" FORCE)
@@ -166,6 +147,11 @@ if(NOT DEFINED ENABLE_CCACHE)
     set(ENABLE_CCACHE OFF CACHE BOOL "Enable ccache for faster rebuilds" FORCE)
 endif()
 
+# Build separate debug symbol files
+if(NOT DEFINED SEPARATE_DBG)
+    set(SEPARATE_DBG OFF CACHE BOOL "Build separate debug symbols (.dbg files)")
+endif()
+
 # Additional CMake options
 set(REACTOS_CMAKE_OPTIONS "" CACHE STRING "Additional CMake options")
 
@@ -185,6 +171,7 @@ message(STATUS "  Toolchain Prefix: ${TOOLCHAIN_PREFIX}")
 message(STATUS "  Toolchain File: ${CMAKE_TOOLCHAIN_FILE}")
 message(STATUS "  WOW64 multilib: ${WOW64_MULTILIB}")
 message(STATUS "  Enable ccache: ${ENABLE_CCACHE}")
+message(STATUS "  Separate debug symbols: ${SEPARATE_DBG}")
 if(BUILD_ENVIRONMENT STREQUAL "Clang")
     message(STATUS "  Clang Version: ${CLANG_VERSION}")
 endif()

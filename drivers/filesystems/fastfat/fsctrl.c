@@ -2627,8 +2627,6 @@ Return Value:
     BOOLEAN Result;
     BIOS_PARAMETER_BLOCK Bpb = {0};
 
-    DbgPrint("[FatIsBootSectorFat] Entry, BootSector=%p\n", BootSector);
-
     DebugTrace(+1, Dbg, "FatIsBootSectorFat, BootSector = %p\n", BootSector);
 
     //
@@ -2750,6 +2748,9 @@ Return Value:
         Result = FALSE;
     }
 
+    DbgPrint("[FatIsBootSectorFat] Result=%d Jump=0x%02x BPS=%u SPC=%u\n",
+             (int)Result, (ULONG)BootSector->Jump[0],
+             (ULONG)Bpb.BytesPerSector, (ULONG)Bpb.SectorsPerCluster);
     DebugTrace(-1, Dbg, "FatIsBootSectorFat -> %08lx\n", Result);
 
     return Result;

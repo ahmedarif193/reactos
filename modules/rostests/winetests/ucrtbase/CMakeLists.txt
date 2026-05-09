@@ -60,6 +60,10 @@ add_executable(ucrtbase_winetest ${SOURCE})
 if(NOT MSVC)
     #set_target_properties(ucrtbase_winetest PROPERTIES LINK_FLAGS "-Wl,--major-os-version,6")
     target_compile_options(ucrtbase_winetest PRIVATE -Wno-format)
+    if(ARCH STREQUAL "arm64")
+        # GCC ARM64 builtins for exec* return int, ucrt/process.h declares intptr_t
+        target_compile_options(ucrtbase_winetest PRIVATE -Wno-builtin-declaration-mismatch)
+    endif()
 endif()
 set_module_type(ucrtbase_winetest win32cui)
 

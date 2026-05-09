@@ -86,6 +86,9 @@ else()
     endif()
     if(NOT CMAKE_C_COMPILER_ID STREQUAL "Clang")
         target_link_options(msvcrt PRIVATE "-Wl,--exclude-libs,libmsvcrt.a")
+    else()
+        # lld doesn't support --exclude-libs, but we already prevent
+        # circular dependency by not adding libmsvcrt to msvcrt target
     endif()
     target_link_options(msvcrt PRIVATE "-Wl,--allow-multiple-definition")
 endif()

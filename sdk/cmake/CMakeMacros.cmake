@@ -258,7 +258,8 @@ macro(dir_to_num dir var)
         set(${var} 79)
     elseif(${dir} STREQUAL reactos/winsxs/arm64_microsoft.windows.gdiplus_6595b64144ccf1df_1.0.14393.0_none_deadbeef)
         set(${var} 81)
-
+    elseif(${dir} STREQUAL reactos/system32/spool/prtprocs/ARM64)
+        set(${var} 82)
 
     else()
         message(FATAL_ERROR "Wrong destination: ${dir}")
@@ -881,6 +882,19 @@ endfunction()
 
 function(create_registry_hives)
 
+    # Map ARCH to INF section suffix (e.g. AddReg.NTarm64)
+    if(ARCH STREQUAL "i386")
+        set(_mkhive_arch_flag "-a:x86")
+    elseif(ARCH STREQUAL "amd64")
+        set(_mkhive_arch_flag "-a:amd64")
+    elseif(ARCH STREQUAL "arm")
+        set(_mkhive_arch_flag "-a:arm")
+    elseif(ARCH STREQUAL "arm64")
+        set(_mkhive_arch_flag "-a:arm64")
+    else()
+        set(_mkhive_arch_flag "")
+    endif()
+
     # Shortcut to the registry.inf file
     set(_registry_inf "${CMAKE_BINARY_DIR}/boot/bootdata/registry.inf")
 
@@ -911,7 +925,7 @@ function(create_registry_hives)
     # BootCD setup system hive
     add_custom_command(
         OUTPUT ${CMAKE_BINARY_DIR}/boot/bootdata/SETUPREG.HIV
-        COMMAND native-mkhive -h:SETUPREG -u -d:${CMAKE_BINARY_DIR}/boot/bootdata ${_registry_inf} ${CMAKE_SOURCE_DIR}/boot/bootdata/setupreg.inf
+        COMMAND native-mkhive -h:SETUPREG -u ${_mkhive_arch_flag} -d:${CMAKE_BINARY_DIR}/boot/bootdata ${_registry_inf} ${CMAKE_SOURCE_DIR}/boot/bootdata/setupreg.inf
         DEPENDS native-mkhive ${_registry_inf})
 
     add_custom_target(bootcd_hives
@@ -947,7 +961,7 @@ function(create_registry_hives)
                ${CMAKE_BINARY_DIR}/boot/bootdata/default
                ${CMAKE_BINARY_DIR}/boot/bootdata/sam
                ${CMAKE_BINARY_DIR}/boot/bootdata/security
-        COMMAND native-mkhive -h:SYSTEM,SOFTWARE,DEFAULT,SAM,SECURITY -d:${CMAKE_BINARY_DIR}/boot/bootdata ${_livecd_inf_files}
+        COMMAND native-mkhive -h:SYSTEM,SOFTWARE,DEFAULT,SAM,SECURITY ${_mkhive_arch_flag} -d:${CMAKE_BINARY_DIR}/boot/bootdata ${_livecd_inf_files}
         DEPENDS native-mkhive ${_livecd_inf_files})
 
     add_custom_target(livecd_hives
@@ -994,7 +1008,7 @@ function(create_registry_hives)
                ${CMAKE_BINARY_DIR}/boot/bootdata/liveimg/sam
                ${CMAKE_BINARY_DIR}/boot/bootdata/liveimg/security
         COMMAND ${CMAKE_COMMAND} -E make_directory ${CMAKE_BINARY_DIR}/boot/bootdata/liveimg
-        COMMAND native-mkhive -h:SYSTEM,SOFTWARE,DEFAULT,SAM,SECURITY -d:${CMAKE_BINARY_DIR}/boot/bootdata/liveimg ${_liveimg_inf_files}
+        COMMAND native-mkhive -h:SYSTEM,SOFTWARE,DEFAULT,SAM,SECURITY ${_mkhive_arch_flag} -d:${CMAKE_BINARY_DIR}/boot/bootdata/liveimg ${_liveimg_inf_files}
         DEPENDS native-mkhive ${_liveimg_inf_files})
 
     add_custom_target(liveimg_hives

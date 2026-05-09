@@ -739,42 +739,60 @@ void UserDbgAssertThreadInfo(BOOL showCaller)
     PCLIENTINFO pci;
     PTHREADINFO pti;
 
-    ppi = PsGetCurrentProcessWin32Process();
     pti = PsGetCurrentThreadWin32Thread();
+    if (!pti || !pti->pClientInfo)
+        return;
+
+    ppi = PsGetCurrentProcessWin32Process();
     Teb = NtCurrentTeb();
     pci = GetWin32ClientInfo();
 
     ASSERT(Teb);
-    ASSERT(pti);
     ASSERT(pti->ppi == ppi);
     ASSERT(pti->pClientInfo == pci);
     ASSERT(Teb->Win32ThreadInfo == pti);
     ASSERT(pci->ppi == ppi);
     ASSERT(pci->fsHooks == pti->fsHooks);
-    ASSERT(pci->ulClientDelta == DesktopHeapGetUserDelta());
+
+    {
+        ULONG_PTR CurrentDelta = DesktopHeapGetUserDelta();
+        if (pci->ulClientDelta != CurrentDelta)
+        {
+            ERR("ulClientDelta MISMATCH: pci->ulClientDelta=0x%Ix DesktopHeapGetUserDelta()=0x%Ix "
+                "rpdesk=%p pheapDesktop=%p pid=%p tid=%p\n",
+                pci->ulClientDelta, CurrentDelta,
+                pti->rpdesk,
+                pti->rpdesk ? (PVOID)pti->rpdesk->pheapDesktop : NULL,
+                PsGetCurrentProcessId(), PsGetCurrentThreadId());
+            
+            if (showCaller)
+            {
+                DbgPrint("ulClientDelta mismatch stack:\n");
+                KeRosDumpStackFrames(NULL, 16);
+            }
+        }
+        ASSERT(pci->ulClientDelta == CurrentDelta);
+    }
+
     if (pti->pcti && pci->pDeskInfo)
-        ASSERT(pci->pClientThreadInfo == (PVOID)((ULONG_PTR)pti->pcti - pci->ulClientDelta));
+    {
+        PVOID Expected = (PVOID)((ULONG_PTR)pti->pcti - pci->ulClientDelta);
+        if (pci->pClientThreadInfo != Expected)
+        {
+            ERR("pClientThreadInfo MISMATCH: pci->pClientThreadInfo=%p expected=%p "
+                "pti->pcti=%p ulClientDelta=0x%Ix\n",
+                pci->pClientThreadInfo, Expected,
+                pti->pcti, pci->ulClientDelta);
+        }
+        ASSERT(pci->pClientThreadInfo == Expected);
+    }
+
     if (pti->KeyboardLayout)
         ASSERT(pci->hKL == pti->KeyboardLayout->hkl);
-    if(pti->rpdesk != NULL)
+
+    if (pti->rpdesk != NULL)
         ASSERT(pti->pDeskInfo == pti->rpdesk->pDeskInfo);
 
-    /*too bad we still get this assertion*/
-
-    // Why? Not all flags are passed to the user and doing so could crash the system........
-
-    /* ASSERT(pci->dwTIFlags == pti->TIF_flags); */
-/*    if(pci->dwTIFlags != pti->TIF_flags)
-    {
-        ERR("pci->dwTIFlags(0x%x) doesn't match pti->TIF_flags(0x%x)\n", pci->dwTIFlags, pti->TIF_flags);
-        if(showCaller)
-        {
-            DbgPrint("Caller:\n");
-            KeRosDumpStackFrames(NULL, 10);
-        }
-        pci->dwTIFlags = pti->TIF_flags;
-    }
-*/
 #endif
     DBG_UNREFERENCED_PARAMETER(showCaller);
 }
@@ -783,6 +801,26 @@ void
 NTAPI
 UserDbgPreServiceHook(ULONG ulSyscallId, PULONG_PTR pulArguments)
 {
+    DBG_UNREFERENCED_PARAMETER(pulArguments);
+#if DBG
+    {
+        PTEB Teb = NtCurrentTeb();
+        PCLIENTINFO pci = GetWin32ClientInfo();
+        ULONG_PTR CurrentDelta = DesktopHeapGetUserDelta();
+        if (pci && Teb && (pci->ulClientDelta != CurrentDelta))
+        {
+            ERR("PreSvc mismatch: SysId=0x%lx Teb=%p GdiBatch.Offset=0x%lx GdiBatch.HDC=%p "
+                "GdiBatchCount=%lu pciDelta=0x%Ix curDelta=0x%Ix\n",
+                ulSyscallId,
+                Teb,
+                Teb->GdiTebBatch.Offset,
+                Teb->GdiTebBatch.HDC,
+                Teb->GdiBatchCount,
+                pci->ulClientDelta,
+                CurrentDelta);
+        }
+    }
+#endif
     UserDbgAssertThreadInfo(FALSE);
 }
 

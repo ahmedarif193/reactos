@@ -6,12 +6,21 @@
 
 #include <kmt_test.h>
 
+#include <initguid.h>
 #include <mountdev.h>
 #include <mountmgr.h>
 #include <ntdddisk.h>
 #include <ntddstor.h>
 #include <ntddscsi.h>
+#include <ntddvol.h>
+#include <scsi.h>
 #include <reactos/drivers/ntddrdsk.h>
+
+#define ok_ntstatus ok_eq_hex
+
+DEFINE_GUID(RamdiskDiskInterface,
+            0x31D909F0, 0x2CDF, 0x4A20,
+            0x9E, 0xD4, 0x7D, 0x65, 0x47, 0x6C, 0xA7, 0x68);
 
 #define IGNORE_INFORMATION ((ULONG)-1)
 
@@ -129,7 +138,7 @@ START_TEST(RamdiskIoctl)
     HANDLE DiskHandle;
     NTSTATUS Status;
     DISK_GEOMETRY Geometry = {0};
-    GET_LENGTH_INFORMATION Length = {{0}};
+    GET_LENGTH_INFORMATION Length = {0};
     VOLUME_GET_GPT_ATTRIBUTES_INFORMATION GptAttributes = {0};
     BOOLEAN IsReadOnly;
     ULONGLONG DiskLength;

@@ -754,9 +754,12 @@ LRESULT co_UserFreeWindow(PWND Window,
 
    /* dereference the class */
    NT_ASSERT(Window->head.pti != NULL);
-   IntDereferenceClass(Window->pcls,
-                       Window->head.pti->pDeskInfo,
-                       Window->head.pti->ppi);
+   if (Window->head.pti->ppi)
+   {
+       IntDereferenceClass(Window->pcls,
+                           Window->head.pti->pDeskInfo,
+                           Window->head.pti->ppi);
+   }
    Window->pcls = NULL;
 
    if (Window->hrgnClip)
@@ -1202,7 +1205,7 @@ co_IntSetParent(PWND Wnd, PWND WndNewParent)
    WasVisible = co_WinPosShowWindow(Wnd, SW_HIDE);
 
    /* Window must belong to current process */
-   if (Wnd->head.pti->ppi != PsGetCurrentProcessWin32Process())
+   if (!Wnd->head.pti->ppi || Wnd->head.pti->ppi != PsGetCurrentProcessWin32Process())
    {
       ERR("IntSetParent Window must belong to current process!\n");
       return NULL;
@@ -1842,7 +1845,7 @@ PWND FASTCALL IntCreateWindow(CREATESTRUCTW* Cs,
          */
          if ( Class->fnid != FNID_DIALOG )
          {
-            if (pti->ppi->dwLayout & LAYOUT_RTL)
+            if (pti->ppi && (pti->ppi->dwLayout & LAYOUT_RTL))
             {
                Cs->dwExStyle |= WS_EX_LAYOUTRTL;
             }
@@ -2035,7 +2038,7 @@ PWND FASTCALL IntCreateWindow(CREATESTRUCTW* Cs,
    /* BugBoy Comments: if the window being created is a edit control, ATOM 0xCxxx,
       then my testing shows that windows (2k and XP) creates a CallProc for it immediately
       Dont understand why it does this. */
-   if (Class->atomClassName == gpsi->atomSysClass[ICLS_EDIT])
+   if (Class->atomClassName == gpsi->atomSysClass[ICLS_EDIT] && pWnd->head.pti->ppi)
    {
       PCALLPROCDATA CallProc;
       CallProc = CreateCallProc(pWnd->head.rpdesk, pWnd->lpfnWndProc, pWnd->Unicode , pWnd->head.pti->ppi);
@@ -2247,7 +2250,7 @@ co_UserCreateWindowEx(CREATESTRUCTW* Cs,
               Cs->lpszClass != (LPCWSTR)MAKEINTATOM(gpsi->atomSysClass[ICLS_HWNDMESSAGE]) ||
               _wcsicmp(Cs->lpszClass, L"Message") != 0))
     {
-        if (pti->ppi->dwLayout & LAYOUT_RTL)
+        if (pti->ppi && (pti->ppi->dwLayout & LAYOUT_RTL))
         {
             Cs->dwExStyle |= WS_EX_LAYOUTRTL;
         }
@@ -2582,7 +2585,7 @@ co_UserCreateWindowEx(CREATESTRUCTW* Cs,
    /* Set the hotkey */
    if (!(Window->style & (WS_POPUP | WS_CHILD)) || (Window->ExStyle & WS_EX_APPWINDOW))
    {
-       if (pti->ppi->dwHotkey)
+       if (pti->ppi && pti->ppi->dwHotkey)
        {
           co_IntSendMessage(UserHMGetHandle(Window), WM_SETHOTKEY, pti->ppi->dwHotkey, 0);
           pti->ppi->dwHotkey = 0; /* Only the first suitable window gets the hotkey */
@@ -2599,7 +2602,7 @@ cleanup:
        /* If the window was created, the class will be dereferenced by co_UserDestroyWindow */
        if (Window)
             co_UserDestroyWindow(Window);
-       else if (Class)
+       else if (Class && pti->ppi)
            IntDereferenceClass(Class, pti->pDeskInfo, pti->ppi);
    }
 
@@ -3525,7 +3528,7 @@ NtUserGetComboBoxInfo(
    }
 
    ppi = PsGetCurrentProcessWin32Process();
-   NotSameppi = ppi != Wnd->head.pti->ppi;
+   NotSameppi = ppi && Wnd->head.pti->ppi && (ppi != Wnd->head.pti->ppi);
    if (NotSameppi)
    {
       KeAttachProcess(&Wnd->head.pti->ppi->peProcess->Pcb);
@@ -3616,7 +3619,7 @@ NtUserGetListBoxInfo(
 
    // wine lisbox:test_GetListBoxInfo lb_getlistboxinfo = 0, should not send a message!
    ppi = PsGetCurrentProcessWin32Process();
-   NotSameppi = ppi != Wnd->head.pti->ppi;
+   NotSameppi = ppi && Wnd->head.pti->ppi && (ppi != Wnd->head.pti->ppi);
    if (NotSameppi)
    {
       KeAttachProcess(&Wnd->head.pti->ppi->peProcess->Pcb);
@@ -3988,7 +3991,8 @@ co_IntSetWindowLongPtr(HWND hWnd, DWORD Index, LONG_PTR NewValue, BOOL Ansi, ULO
 
          case GWLP_WNDPROC: // LONG_PTR
          {
-            if ( Window->head.pti->ppi != PsGetCurrentProcessWin32Process() ||
+            if ( !Window->head.pti->ppi ||
+                 Window->head.pti->ppi != PsGetCurrentProcessWin32Process() ||
                  Window->fnid & FNID_FREED)
             {
                EngSetLastError(ERROR_ACCESS_DENIED);

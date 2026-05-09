@@ -268,6 +268,7 @@ BOOL UserCreateSystemThread(DWORD Type)
                         NULL,
                         CSR_CREATE_API_NUMBER(USERSRV_SERVERDLL_INDEX, UserpCreateSystemThreads),
                         sizeof(USER_CREATE_SYSTEM_THREAD));
+
     if (!NT_SUCCESS(ApiMessage.Status))
     {
         ERR("Csr call failed!\n");

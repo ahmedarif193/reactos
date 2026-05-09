@@ -46,7 +46,8 @@
 #define AP_DATA_SYNC_OFF        0x50
 #define AP_DATA_CPU_NUM_OFF     0x58
 #define AP_DATA_GICR_BASE_OFF   0x60
-#define AP_DATA_SIZE            0x68
+#define AP_DATA_PROGRESS_OFF    0x68
+#define AP_DATA_SIZE            0x70
 
 /*
  * GICv3 Redistributor register offsets
@@ -96,6 +97,11 @@ HalpArm64ApTrampolineEntry:
     ldr     x19, [x19]              /* Load the data structure physical address */
     cbz     x19, .Lap_halt          /* Safety: halt if no data */
 
+    /* Progress 0x11: Data pointer loaded successfully */
+    mov     w1, #0x11
+    str     w1, [x19, #AP_DATA_PROGRESS_OFF]
+    dsb     sy
+
     /*
      * Phase 2: Initialize GICv3 Redistributor
      *
@@ -128,6 +134,11 @@ HalpArm64ApTrampolineEntry:
     isb
 
 .Lap_skip_gicr:
+    /* Progress 0x22: GICR init done */
+    mov     w1, #0x22
+    str     w1, [x19, #AP_DATA_PROGRESS_OFF]
+    dsb     sy
+
     /*
      * Phase 3: Configure MMU
      *
@@ -151,6 +162,11 @@ HalpArm64ApTrampolineEntry:
     msr     tcr_el1, x0
     isb
 
+    /* Progress 0x33: TLB/MAIR/TCR configured */
+    mov     w1, #0x33
+    str     w1, [x19, #AP_DATA_PROGRESS_OFF]
+    dsb     sy
+
     /* Load and set TTBR0_EL1 (user space / identity map) */
     ldr     x0, [x19, #AP_DATA_TTBR0_OFF]
     msr     ttbr0_el1, x0
@@ -160,6 +176,11 @@ HalpArm64ApTrampolineEntry:
     ldr     x0, [x19, #AP_DATA_TTBR1_OFF]
     msr     ttbr1_el1, x0
     isb
+
+    /* Progress 0x44: TTBR0/TTBR1 loaded */
+    mov     w1, #0x44
+    str     w1, [x19, #AP_DATA_PROGRESS_OFF]
+    dsb     sy
 
     /*
      * Phase 4: Enable MMU
@@ -177,10 +198,20 @@ HalpArm64ApTrampolineEntry:
     dsb     sy
     isb
 
+    /* Progress 0x55: About to enable MMU */
+    mov     w1, #0x55
+    str     w1, [x19, #AP_DATA_PROGRESS_OFF]
+    dsb     sy
+
     /* Load and set SCTLR_EL1 (enable MMU, caches) */
     ldr     x0, [x19, #AP_DATA_SCTLR_OFF]
     msr     sctlr_el1, x0
     isb
+
+    /* Progress 0x66: MMU enabled successfully (identity map works!) */
+    mov     w1, #0x66
+    str     w1, [x19, #AP_DATA_PROGRESS_OFF]
+    dsb     sy
 
     /*
      * Phase 5: Set up exception vectors
@@ -190,6 +221,11 @@ HalpArm64ApTrampolineEntry:
     ldr     x0, [x19, #AP_DATA_VBAR_OFF]
     msr     vbar_el1, x0
     isb
+
+    /* Progress 0x77: VBAR set */
+    mov     w1, #0x77
+    str     w1, [x19, #AP_DATA_PROGRESS_OFF]
+    dsb     sy
 
     /*
      * Phase 6: Switch to kernel stack and entry point
@@ -202,9 +238,20 @@ HalpArm64ApTrampolineEntry:
     ldr     x0, [x19, #AP_DATA_STACK_OFF]
     mov     sp, x0
 
+    /* Progress 0x88: Stack set */
+    mov     w1, #0x88
+    str     w1, [x19, #AP_DATA_PROGRESS_OFF]
+    dsb     sy
+
     /* Signal that we're about to enter kernel code */
     ldr     x0, [x19, #AP_DATA_SYNC_OFF]
     cbz     x0, .Lap_no_sync
+
+    /* Progress 0x99: About to signal sync */
+    mov     w1, #0x99
+    str     w1, [x19, #AP_DATA_PROGRESS_OFF]
+    dsb     sy
+
     mov     w1, #1
     stlr    w1, [x0]                /* Release store: signal BSP */
     dsb     sy

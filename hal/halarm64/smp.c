@@ -133,6 +133,10 @@ typedef struct _HAL_ARM64_AP_TRAMPOLINE_DATA
 
     /* GIC redistributor */
     UINT64 GicrBase;           /* 0x60: Per-CPU GICR base address (physical) */
+
+    /* Debug progress tracking (written by AP, read by BSP after timeout) */
+    volatile UINT32 Progress;  /* 0x68: AP progress breadcrumb */
+    UINT32 ProgressPad;        /* 0x6C: Alignment padding */
 } HAL_ARM64_AP_TRAMPOLINE_DATA, *PHAL_ARM64_AP_TRAMPOLINE_DATA;
 
 /* External references to assembly trampoline */
@@ -148,6 +152,9 @@ static PHYSICAL_ADDRESS HalpApTrampolinePa = {0};
 static PHAL_ARM64_AP_TRAMPOLINE_DATA HalpApDataVa = NULL;
 static PHYSICAL_ADDRESS HalpApDataPa = {0};
 static volatile UINT32 HalpApSyncFlag = 0;
+
+/* Identity-map page table for AP trampoline TTBR0 */
+static UINT64 HalpApIdmapTtbr0Pa = 0;
 
 /* SMP processor startup tracking - exported for halarm64.c */
 ULONG HalpStartedProcessorCount = 1;  /* BSP is already started */
@@ -217,6 +224,92 @@ HalpArm64ReadVbarEl1(VOID)
     UINT64 Value;
     __asm__ __volatile__("mrs %0, vbar_el1" : "=r"(Value));
     return Value;
+}
+
+/*
+ * ARM64 page table descriptor bits for identity map
+ */
+#define IDMAP_TABLE_DESC    0x3ULL          /* Valid table descriptor */
+#define IDMAP_BLOCK_DESC    0x1ULL          /* Valid block descriptor (L1/L2) */
+#define IDMAP_AF            (1ULL << 10)    /* Access Flag */
+#define IDMAP_SH_INNER      (3ULL << 8)     /* Inner Shareable */
+#define IDMAP_MAIR_WB_IDX   4               /* Normal Write-Back (MI_ARM64_MAIR_NORMAL_WB_IDX) */
+#define IDMAP_ATTRINDX(n)   ((UINT64)(n) << 2)
+
+/*
+ * HalpArm64BuildIdmapPageTable - Build minimal identity-map page table
+ *
+ * Creates L0→L1→L2 page tables with a single 2MB block descriptor
+ * that identity-maps the physical region containing the trampoline.
+ * This is used as TTBR0 for APs so they can continue executing
+ * after enabling the MMU (the kernel's TTBR0 no longer has the
+ * identity map by the time APs start).
+ *
+ * Returns the physical address of the L0 table (for use as TTBR0).
+ */
+static UINT64
+HalpArm64BuildIdmapPageTable(
+    _In_ PLOADER_PARAMETER_BLOCK LoaderBlock,
+    _In_ UINT64 TrampolinePa)
+{
+    PHYSICAL_ADDRESS AllocPa;
+    PUINT64 L0Va, L1Va, L2Va;
+    UINT64 L0Pa, L1Pa, L2Pa;
+    ULONG L0Idx, L1Idx, L2Idx;
+    UINT64 BlockPa;
+
+    /* Allocate 3 contiguous pages for L0, L1, L2 tables */
+    AllocPa.QuadPart = HalpAllocPhysicalMemory(LoaderBlock,
+                                                0xFFFFFFFFFFFFFFFFULL,
+                                                3, TRUE);
+    if (AllocPa.QuadPart == 0)
+    {
+        DPRINT1("[arm64][HAL] Failed to allocate identity-map page tables\n");
+        return 0;
+    }
+
+    L0Pa = AllocPa.QuadPart;
+    L1Pa = L0Pa + PAGE_SIZE;
+    L2Pa = L1Pa + PAGE_SIZE;
+
+    /* Map via KSEG0 for BSP access */
+    L0Va = (PUINT64)(ULONG_PTR)(L0Pa + HAL_ARM64_KSEG0_BASE);
+    L1Va = (PUINT64)(ULONG_PTR)(L1Pa + HAL_ARM64_KSEG0_BASE);
+    L2Va = (PUINT64)(ULONG_PTR)(L2Pa + HAL_ARM64_KSEG0_BASE);
+
+    /* Zero all tables */
+    RtlZeroMemory(L0Va, PAGE_SIZE);
+    RtlZeroMemory(L1Va, PAGE_SIZE);
+    RtlZeroMemory(L2Va, PAGE_SIZE);
+
+    /* Decompose trampoline PA into table indices (4KB granule, 48-bit VA) */
+    L0Idx = (ULONG)((TrampolinePa >> 39) & 0x1FF);
+    L1Idx = (ULONG)((TrampolinePa >> 30) & 0x1FF);
+    L2Idx = (ULONG)((TrampolinePa >> 21) & 0x1FF);
+    BlockPa = TrampolinePa & ~0x1FFFFFULL;  /* 2MB-aligned */
+
+    /* L0[idx] → L1 table */
+    L0Va[L0Idx] = L1Pa | IDMAP_TABLE_DESC;
+
+    /* L1[idx] → L2 table */
+    L1Va[L1Idx] = L2Pa | IDMAP_TABLE_DESC;
+
+    /* L2[idx] → 2MB block mapping PA=VA */
+    L2Va[L2Idx] = BlockPa |
+                  IDMAP_BLOCK_DESC |
+                  IDMAP_AF |
+                  IDMAP_SH_INNER |
+                  IDMAP_ATTRINDX(IDMAP_MAIR_WB_IDX);
+
+    /* Clean cache so AP sees the tables from main memory */
+    HalpArm64CleanDcacheRange(L0Va, PAGE_SIZE);
+    HalpArm64CleanDcacheRange(L1Va, PAGE_SIZE);
+    HalpArm64CleanDcacheRange(L2Va, PAGE_SIZE);
+
+    DPRINT1("[arm64][HAL] Identity-map page table: L0[%lu]→L1[%lu]→L2[%lu] block=0x%llx (trampoline PA=0x%llx)\n",
+            L0Idx, L1Idx, L2Idx, BlockPa, TrampolinePa);
+
+    return L0Pa;
 }
 
 /*
@@ -304,8 +397,17 @@ HalpArm64InitApTrampoline(
     HalpArm64CleanDcacheRange(HalpApDataVa, PAGE_SIZE);
     __asm__ __volatile__("ic iallu\n\tdsb sy\n\tisb" ::: "memory");
 
-    DPRINT1("[arm64][HAL] AP trampoline initialized at PA=0x%llx VA=%p size=%lu\n",
-            HalpApTrampolinePa.QuadPart, HalpApTrampolineVa, TrampolineSize);
+    /* Build identity-map page table for AP's TTBR0 */
+    HalpApIdmapTtbr0Pa = HalpArm64BuildIdmapPageTable(LoaderBlock,
+                                                       HalpApTrampolinePa.QuadPart);
+    if (HalpApIdmapTtbr0Pa == 0)
+    {
+        DPRINT1("[arm64][HAL] Failed to build identity-map page table for AP trampoline\n");
+        return FALSE;
+    }
+
+    DPRINT1("[arm64][HAL] AP trampoline initialized at PA=0x%llx VA=%p size=%lu idmap_ttbr0=0x%llx\n",
+            HalpApTrampolinePa.QuadPart, HalpApTrampolineVa, TrampolineSize, HalpApIdmapTtbr0Pa);
 
     HalpApTrampolineInitialized = TRUE;
     return TRUE;
@@ -325,8 +427,13 @@ HalpArm64PrepareApData(
     if (!HalpApDataVa)
         return;
 
-    /* Capture current BSP system register values */
-    HalpApDataVa->Ttbr0El1 = HalpArm64ReadTtbr0El1();
+    /*
+     * Use the dedicated identity-map page table for TTBR0.
+     * The BSP's TTBR0 no longer has an identity map by the time APs start
+     * (it was torn down during HAL Phase1). The AP trampoline needs an
+     * identity map to continue executing after enabling the MMU.
+     */
+    HalpApDataVa->Ttbr0El1 = HalpApIdmapTtbr0Pa;
     HalpApDataVa->Ttbr1El1 = HalpArm64ReadTtbr1El1();
     HalpApDataVa->MairEl1 = HalpArm64ReadMairEl1();
     HalpApDataVa->TcrEl1 = HalpArm64ReadTcrEl1();
@@ -346,8 +453,19 @@ HalpArm64PrepareApData(
     HalpApDataVa->SyncFlag = &HalpApSyncFlag;
     HalpApDataVa->CpuNumber = ProcessorNumber;
 
-    /* Set up GICR base */
-    HalpApDataVa->GicrBase = GicrBase;
+    /*
+     * GICR init: skip in trampoline (set GicrBase=0).
+     *
+     * The trampoline runs with MMU off and no VBAR_EL1 set. If the GICR
+     * MMIO access causes a data abort (e.g., QEMU access ordering), the AP
+     * crashes silently. The HAL's HalInitializeProcessor handles GICR
+     * initialization later with proper exception handling in place.
+     */
+    HalpApDataVa->GicrBase = 0;
+
+    /* Initialize progress tracking */
+    HalpApDataVa->Progress = 0;
+    HalpApDataVa->ProgressPad = 0;
 
     /* Ensure all writes are visible */
     HalpArm64CleanDcacheRange(HalpApDataVa, sizeof(HAL_ARM64_AP_TRAMPOLINE_DATA));
@@ -355,6 +473,11 @@ HalpArm64PrepareApData(
 
     DPRINT1("[arm64][HAL] AP data prepared: CPU=%lu entry=0x%llx stack=0x%llx GICR=0x%llx\n",
             ProcessorNumber, EntryPoint, StackPointer, GicrBase);
+    DPRINT1("[arm64][HAL] AP sysregs: SCTLR=0x%llx TCR=0x%llx MAIR=0x%llx VBAR=0x%llx\n",
+            HalpApDataVa->SctlrEl1, HalpApDataVa->TcrEl1,
+            HalpApDataVa->MairEl1, HalpApDataVa->VbarEl1);
+    DPRINT1("[arm64][HAL] AP TTBR0=0x%llx (idmap) TTBR1=0x%llx (kernel) SyncFlag=%p\n",
+            HalpApDataVa->Ttbr0El1, HalpApDataVa->Ttbr1El1, HalpApDataVa->SyncFlag);
 }
 
 /*
@@ -381,7 +504,17 @@ HalpArm64WaitForApSync(
         __asm__ __volatile__("yield");
     }
 
-    DPRINT1("[arm64][HAL] AP sync timeout after %lu iterations\n", Iterations);
+    /* Read AP progress via KSEG0 to diagnose where AP got stuck */
+    {
+        volatile PHAL_ARM64_AP_TRAMPOLINE_DATA DataKseg0 =
+            (volatile PHAL_ARM64_AP_TRAMPOLINE_DATA)(
+                (ULONG_PTR)(HalpApDataPa.QuadPart + HAL_ARM64_KSEG0_BASE));
+        __asm__ __volatile__("dsb sy" ::: "memory");
+        DPRINT1("[arm64][HAL] AP sync timeout after %lu iterations, Progress=0x%x\n",
+                Iterations, DataKseg0->Progress);
+        DPRINT1("[arm64][HAL]   Expected: 0x11=data_loaded 0x22=gicr_done 0x33=tlb_mair_tcr "
+                "0x44=ttbr_done 0x55=pre_mmu 0x66=mmu_on 0x77=vbar_set 0x88=stack_set 0x99=pre_sync\n");
+    }
     return FALSE;
 }
 

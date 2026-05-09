@@ -7,7 +7,6 @@ if(CMAKE_C_COMPILER_ID STREQUAL "GNU" OR CMAKE_C_COMPILER_ID STREQUAL "Clang")
 endif()
 
 list(APPEND SOURCE_CRT_TESTS
-    ../crt/fpcontrol.c
     ../crt/_finite.c
     ../crt/_isnan.c
     ../crt/_mbsncmp.c
@@ -25,7 +24,6 @@ list(APPEND SOURCE_CRT_TESTS
     ../crt/atexit.c
     ../crt/ceil.c
     ../crt/cos.c
-    ../crt/crtdata.c
     ../crt/exp.c
     ../crt/fabs.c
     ../crt/floor.c
@@ -33,7 +31,6 @@ list(APPEND SOURCE_CRT_TESTS
     ../crt/log10.c
     ../crt/mbstowcs.c
     ../crt/mbtowc.c
-    ../crt/rand_s.c
     ../crt/setjmp.c
     ../crt/sin.c
     ../crt/sqrt.c
@@ -61,12 +58,23 @@ elseif(ARCH STREQUAL "amd64")
     list(APPEND ASM_SOURCE_CRT_TESTS
         ../crt/amd64/setjmp_helper.s
     )
+elseif(ARCH STREQUAL "arm64")
+    list(APPEND ASM_SOURCE_CRT_TESTS
+        ../crt/arm64/setjmp_helper.s
+    )
 elseif(ARCH STREQUAL "arm")
     list(APPEND SOURCE_CRT_TESTS
         ../crt/__rt_div.c
         ../crt/__fto64.c
         ../crt/__64tof.c
     )
+endif()
+
+if(NOT ARCH STREQUAL "arm64")
+    list(APPEND SOURCE_CRT_TESTS
+        ../crt/fpcontrol.c
+        ../crt/crtdata.c
+        ../crt/rand_s.c)
 endif()
 add_asm_files(crt_asm ${ASM_SOURCE_CRT_TESTS})
 

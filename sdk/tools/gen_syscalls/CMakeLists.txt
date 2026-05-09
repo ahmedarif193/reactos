@@ -20,8 +20,30 @@ endif()
 if(DEFINED ROS_RUSTUP_HOME AND NOT "${ROS_RUSTUP_HOME}" STREQUAL "")
     list(APPEND _gen_syscalls_env "RUSTUP_HOME=${ROS_RUSTUP_HOME}")
 endif()
+
+set(_gen_syscalls_rustup_toolchain "")
 if(DEFINED ROS_RUSTUP_TOOLCHAIN_DEFAULT AND NOT "${ROS_RUSTUP_TOOLCHAIN_DEFAULT}" STREQUAL "")
-    list(APPEND _gen_syscalls_env "RUSTUP_TOOLCHAIN=${ROS_RUSTUP_TOOLCHAIN_DEFAULT}")
+    set(_gen_syscalls_rustup_toolchain "${ROS_RUSTUP_TOOLCHAIN_DEFAULT}")
+elseif(NOT "$ENV{RUSTUP_TOOLCHAIN}" STREQUAL "")
+    set(_gen_syscalls_rustup_toolchain "$ENV{RUSTUP_TOOLCHAIN}")
+else()
+    execute_process(
+        COMMAND ${GEN_SYSCALLS_CARGO_EXECUTABLE} --version
+        RESULT_VARIABLE _gen_syscalls_cargo_version_rv
+        OUTPUT_VARIABLE _gen_syscalls_cargo_version_out
+        ERROR_VARIABLE _gen_syscalls_cargo_version_err
+        OUTPUT_STRIP_TRAILING_WHITESPACE
+        ERROR_STRIP_TRAILING_WHITESPACE)
+
+    if((NOT _gen_syscalls_cargo_version_rv EQUAL 0) AND
+       (_gen_syscalls_cargo_version_err MATCHES "no default is configured"))
+        set(_gen_syscalls_rustup_toolchain "stable")
+        message(STATUS "cargo has no rustup default; using RUSTUP_TOOLCHAIN='stable' for gen_syscalls.")
+    endif()
+endif()
+
+if(NOT "${_gen_syscalls_rustup_toolchain}" STREQUAL "")
+    list(APPEND _gen_syscalls_env "RUSTUP_TOOLCHAIN=${_gen_syscalls_rustup_toolchain}")
 endif()
 set(_gen_syscalls_cargo_cmd ${GEN_SYSCALLS_CARGO_EXECUTABLE})
 if(_gen_syscalls_env)

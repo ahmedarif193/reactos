@@ -1,4 +1,9 @@
 
+# TODO(ARM64): win32knt_apitest needs win32u syscall stubs which are not yet built for arm64
+if(ARCH STREQUAL "arm64")
+    return()
+endif()
+
 add_definitions(-D_DLL -D__USE_CRTIMP)
 include_directories(${REACTOS_SOURCE_DIR}/win32ss/include ../gditools)
 
@@ -89,7 +94,8 @@ add_importlibs(win32knt_apitest
     msvcrt
     kernel32
     ntdll)
-add_delay_importlibs(win32knt_apitest win32u imm32)
+add_delay_importlibs(win32knt_apitest win32u)
+add_delay_importlibs(win32knt_apitest imm32)
 add_dependencies(win32knt_apitest xdk)
 add_pch(win32knt_apitest win32nt.h "${PCH_SKIP_SOURCE}")
 add_rostests_file(TARGET win32knt_apitest)

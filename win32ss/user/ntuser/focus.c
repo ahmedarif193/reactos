@@ -419,7 +419,8 @@ IntActivateWindow(PWND Wnd, PTHREADINFO pti, HANDLE tid, DWORD Type)
       {
            // Not the same message queue so clear flags for foreground switching.
            pti->TIF_flags &= ~TIF_ALLOWFOREGROUNDACTIVATE;
-           pti->ppi->W32PF_flags &= ~W32PF_ALLOWFOREGROUNDACTIVATE;
+           if (pti->ppi)
+               pti->ppi->W32PF_flags &= ~W32PF_ALLOWFOREGROUNDACTIVATE;
       }
    }
 }
@@ -714,6 +715,9 @@ ToggleFGActivate(PTHREADINFO pti)
    BOOL Ret;
    PPROCESSINFO ppi = pti->ppi;
 
+   if (!ppi)
+      return FALSE;
+
    Ret = !!(pti->TIF_flags & TIF_ALLOWFOREGROUNDACTIVATE);
    if (Ret)
    {
@@ -750,6 +754,9 @@ IsAllowedFGActive(PTHREADINFO pti, PWND Wnd)
 BOOL FASTCALL
 CanForceFG(PPROCESSINFO ppi)
 {
+   if (!ppi)
+       return FALSE;
+
    if (!ptiLastInput ||
         ptiLastInput->ppi == ppi ||
        !gptiForeground ||
@@ -1368,7 +1375,8 @@ co_UserSetFocus(PWND Window)
             //ERR("SetFocus: Set Foreground!\n");
             if (!(pwndTop->style & WS_VISIBLE))
             {
-                pti->ppi->W32PF_flags |= W32PF_ALLOWFOREGROUNDACTIVATE;
+                if (pti->ppi)
+                    pti->ppi->W32PF_flags |= W32PF_ALLOWFOREGROUNDACTIVATE;
             }
             if (!co_IntSetForegroundAndFocusWindow(pwndTop, FALSE, TRUE))
             {

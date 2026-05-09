@@ -48,6 +48,10 @@ elseif(ARCH STREQUAL "amd64")
     list(APPEND ASM_SOURCE_STATIC
         amd64/setjmp_helper.s
     )
+elseif(ARCH STREQUAL "arm64")
+    list(APPEND ASM_SOURCE_STATIC
+        arm64/setjmp_helper.s
+    )
 endif()
 add_asm_files(crt_test_asm ${ASM_SOURCE_STATIC})
 

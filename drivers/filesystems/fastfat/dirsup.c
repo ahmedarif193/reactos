@@ -1248,6 +1248,7 @@ Return Value:
     *ByteOffset = (OffsetToStartSearchFrom +  (sizeof(DIRENT) - 1))
                                            & ~(sizeof(DIRENT) - 1);
 
+
     _SEH2_TRY {
 
         while ( TRUE ) {

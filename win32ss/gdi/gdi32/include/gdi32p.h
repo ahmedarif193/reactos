@@ -89,6 +89,7 @@ extern LPKGTEP LpkGetTextExtentExPoint;
 #define RCAST(_Type, _Value)   (*((_Type*)&_Value))
 
 
+
 /* TYPES *********************************************************************/
 
 // Based on wmfapi.h and Wine.
@@ -410,6 +411,7 @@ GdiAllocBatchCommand(
 {
     PTEB pTeb;
     USHORT cjSize;
+    ULONG NewOffset;
     PGDIBATCHHDR pHdr;
 
     /* Get a pointer to the TEB */
@@ -456,13 +458,22 @@ GdiAllocBatchCommand(
         {
             if (!pTeb->GdiTebBatch.HDC) pTeb->GdiTebBatch.HDC = hdc;
         }
+
     }
 
     /* Get the head of the entry */
     pHdr = (PVOID)((PUCHAR)pTeb->GdiTebBatch.Buffer + pTeb->GdiTebBatch.Offset);
 
     /* Update Offset and batch count */
-    pTeb->GdiTebBatch.Offset += cjSize;
+    NewOffset = pTeb->GdiTebBatch.Offset + (ULONG)cjSize;
+    if (NewOffset > GDIBATCHBUFSIZE)
+    {
+        pTeb->GdiTebBatch.Offset = 0;
+        pTeb->GdiBatchCount = 0;
+        pTeb->GdiTebBatch.HDC = 0;
+        return NULL;
+    }
+    pTeb->GdiTebBatch.Offset = NewOffset;
     pTeb->GdiBatchCount++;
 
     /* Fill in the core fields */

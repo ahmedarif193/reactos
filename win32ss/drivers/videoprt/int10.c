@@ -199,9 +199,13 @@ NTSTATUS
 NTAPI
 IntInitializeVideoAddressSpace(VOID)
 {
-    UNIMPLEMENTED;
-    NT_ASSERT(FALSE);
-    return STATUS_NOT_IMPLEMENTED;
+    /*
+     * ARM64: No VGA BIOS or V86 mode exists. The video address space
+     * initialization (INT 10h / V86 support) is not needed.
+     * Return success so the video port driver continues initialization
+     * and CsrProcess remains valid for win32k system thread creation.
+     */
+    return STATUS_SUCCESS;
 }
 #endif
 

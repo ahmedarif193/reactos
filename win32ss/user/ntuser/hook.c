@@ -34,6 +34,12 @@ IntLoadHookModule(int iHookID, HHOOK hHook, BOOL Unload)
 
    ppi = PsGetCurrentProcessWin32Process();
 
+   if (!ppi)
+   {
+       ERR("Process Win32 structure not initialized\n");
+       return FALSE;
+   }
+
    TRACE("IntLoadHookModule. Client PID: %p\n", PsGetProcessId(ppi->peProcess));
 
     /* Check if this is the api hook */

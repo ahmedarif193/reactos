@@ -19,16 +19,22 @@ extern void func_atan(void);
 extern void func_atexit(void);
 extern void func_ceil(void);
 extern void func_cos(void);
+#if !defined(_M_ARM64)
 extern void func_crtdata(void);
+#endif
 extern void func_exp(void);
 extern void func_fabs(void);
 extern void func_floor(void);
+#if !defined(_M_ARM64)
 extern void func_fpcontrol(void);
+#endif
 extern void func_log(void);
 extern void func_log10(void);
 extern void func_mbstowcs(void);
 extern void func_mbtowc(void);
+#if !defined(_M_ARM64)
 extern void func_rand_s(void);
+#endif
 extern void func_setjmp(void);
 extern void func_sin(void);
 extern void func_sqrt(void);
@@ -75,7 +81,9 @@ const struct test winetest_testlist[] =
     { "atexit", func_atexit },
     { "ceil", func_ceil },
     { "cos", func_cos },
+#if !defined(_M_ARM64)
     { "crtdata", func_crtdata },
+#endif
     { "exp", func_exp },
     { "fabs", func_fabs },
     { "floor", func_floor },
@@ -83,7 +91,9 @@ const struct test winetest_testlist[] =
     { "log10", func_log10 },
     { "mbstowcs", func_mbstowcs },
     { "mbtowc", func_mbtowc },
+#if !defined(_M_ARM64)
     { "rand_s", func_rand_s },
+#endif
     { "setjmp", func_setjmp },
     { "sin", func_sin },
     { "sqrt", func_sqrt },

@@ -31,7 +31,9 @@ extern void func_NtAdjustPrivilegesToken(void);
 extern void func_NtAllocateVirtualMemory(void);
 extern void func_NtApphelpCacheControl(void);
 extern void func_NtCompareTokens(void);
+#if !defined(_M_ARM64)
 extern void func_NtContinue(void);
+#endif
 extern void func_NtCreateFile(void);
 extern void func_NtCreateKey(void);
 extern void func_NtCreateProfile(void);
@@ -97,7 +99,9 @@ extern void func_RtlGetFullPathName_UstrEx(void);
 extern void func_RtlGetLengthWithoutLastFullDosOrNtPathElement(void);
 extern void func_RtlGetLengthWithoutTrailingPathSeperators(void);
 extern void func_RtlGetLongestNtPathLength(void);
+#if !defined(_M_ARM64)
 extern void func_RtlGetNtProductType(void);
+#endif
 extern void func_RtlGetProcessHeaps(void);
 extern void func_RtlGetUnloadEventTrace(void);
 extern void func_RtlHandle(void);
@@ -123,9 +127,13 @@ extern void func_RtlUpcaseUnicodeStringToCountedOemString(void);
 extern void func_RtlValidateUnicodeString(void);
 extern void func_RtlxUnicodeStringToAnsiSize(void);
 extern void func_RtlxUnicodeStringToOemSize(void);
+#if !defined(_M_ARM64)
 extern void func_StackOverflow(void);
+#endif
 extern void func_TimerResolution(void);
+#if !defined(_M_ARM64)
 extern void func_UserModeException(void);
+#endif
 
 const struct test winetest_testlist[] =
 {
@@ -159,7 +167,9 @@ const struct test winetest_testlist[] =
     { "NtAllocateVirtualMemory",        func_NtAllocateVirtualMemory },
     { "NtApphelpCacheControl",          func_NtApphelpCacheControl },
     { "NtCompareTokens",                func_NtCompareTokens },
+#if !defined(_M_ARM64)
     { "NtContinue",                     func_NtContinue },
+#endif
     { "NtCreateFile",                   func_NtCreateFile },
     { "NtCreateKey",                    func_NtCreateKey },
     { "NtCreateProfile",                func_NtCreateProfile },
@@ -224,7 +234,9 @@ const struct test winetest_testlist[] =
     { "RtlGetLengthWithoutLastFullDosOrNtPathElement", func_RtlGetLengthWithoutLastFullDosOrNtPathElement },
     { "RtlGetLengthWithoutTrailingPathSeperators", func_RtlGetLengthWithoutTrailingPathSeperators },
     { "RtlGetLongestNtPathLength",      func_RtlGetLongestNtPathLength },
+#if !defined(_M_ARM64)
     { "RtlGetNtProductType",            func_RtlGetNtProductType },
+#endif
     { "RtlGetProcessHeaps",             func_RtlGetProcessHeaps },
     { "RtlGetUnloadEventTrace",         func_RtlGetUnloadEventTrace },
     { "RtlHandle",                      func_RtlHandle },
@@ -249,9 +261,13 @@ const struct test winetest_testlist[] =
     { "RtlUnicodeToOemN",               func_RtlUnicodeToOemN },
     { "RtlUpcaseUnicodeStringToCountedOemString", func_RtlUpcaseUnicodeStringToCountedOemString },
     { "RtlValidateUnicodeString",       func_RtlValidateUnicodeString },
+#if !defined(_M_ARM64)
     { "StackOverflow",                  func_StackOverflow },
+#endif
     { "TimerResolution",                func_TimerResolution },
+#if !defined(_M_ARM64)
     { "UserModeException",              func_UserModeException },
+#endif
 #ifdef _M_IX86
     { "RtlUnwind",                      func_RtlUnwind },
 #endif

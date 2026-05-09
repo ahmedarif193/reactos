@@ -658,7 +658,6 @@ GreOpenDCW(
     ppdev = EngpGetPDEV(pustrDevice);
     if (!ppdev)
     {
-        DPRINT1("Didn't find a suitable PDEV\n");
         return NULL;
     }
 
@@ -675,6 +674,7 @@ GreOpenDCW(
 
     /* Lock ppdev and initialize the new DC */
     DC_vInitDc(pdc, iType, ppdev);
+
     if (pUMdhpdev) *pUMdhpdev = ppdev->dhpdev;
     /* FIXME: HACK! */
     DC_InitHack(pdc);

@@ -192,7 +192,7 @@ if(CMAKE_BUILD_TYPE STREQUAL "Debug" OR CMAKE_BUILD_TYPE STREQUAL "RelWithDebInf
         add_compile_options(-gdwarf-2 -ggdb)
     else()
         if(MINIMAL_DEBUG_INFO)
-            add_compile_options(-g1 -gstrict-dwarf)
+            add_compile_options(-gdwarf-2 -gline-tables-only)
         else()
             add_compile_options(-gdwarf-2 -gstrict-dwarf)
         endif()
@@ -216,6 +216,14 @@ if(ARCH STREQUAL "arm64")
     # for intermediate values, causing incorrect addresses on retry.
     add_compile_options(-fno-builtin-memcpy)
     add_compile_options(-fno-builtin-memmove)
+
+    # ARM64 FIX (Bug #21): Prevent Clang from inlining memset with NEON
+    # instructions (STP Q0,Q0 = 128-bit store pairs requiring 16-byte
+    # alignment). ReactOS heap structures are only 8-byte aligned, so
+    # inline NEON zeroing causes STATUS_DATATYPE_MISALIGNMENT (0x80000002).
+    # Force the compiler to call our SDK memset (memset_asm.S) which uses
+    # integer-only STP XZR,XZR (only requires 8-byte alignment).
+    add_compile_options(-fno-builtin-memset)
 endif()
 
 # Warnings, errors

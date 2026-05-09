@@ -7,10 +7,14 @@ endif()
 
 list(APPEND SOURCE
     floatconv.c
-    pseh.c
-    pseh_cpp.cpp
     psehtest2.c
     testlist.c)
+
+if(NOT ARCH STREQUAL "arm64")
+    list(APPEND SOURCE
+        pseh.c
+        pseh_cpp.cpp)
+endif()
 
 add_executable(compiler_apitest ${SOURCE})
 if (MSVC OR ARCH STREQUAL "i386")

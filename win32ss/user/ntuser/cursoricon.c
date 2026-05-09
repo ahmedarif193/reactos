@@ -151,6 +151,12 @@ IntLoadSystenIcons(HICON hcur, DWORD id)
 
         ppi = PsGetCurrentProcessWin32Process();
 
+        if (!ppi)
+        {
+            ERR("Process Win32 structure not initialized\n");
+            return;
+        }
+
         if (!(ppi->W32PF_flags & W32PF_CREATEDWINORDC))
            return;
 

@@ -55,7 +55,6 @@ static VOID FatFlushCacheStub(VOID)
 #endif
 #endif
 #include "lib/fatfs/ff.h"
-#include <ramdisk_fatfs.h>
 #include <ramdisk_signature.h>
 #include "../ntldr/ntldropts.h"
 
@@ -298,7 +297,6 @@ get_fattime(VOID)
 }
 
 #define ISO_SECTOR_SIZE 2048
-#define ISO_DIRECTORY_MAX_SIZE    (32 * 1024 * 1024)
 
 typedef struct _ISO_SOURCE
 {
@@ -308,40 +306,6 @@ typedef struct _ISO_SOURCE
     ULONGLONG ArcOffset;
     ULONGLONG ArcPosition;
 } ISO_SOURCE, *PISO_SOURCE;
-
-typedef struct _ISO_COPY_CONTEXT
-{
-    PISO_SOURCE Source;
-    FATFS FatFs;
-    PUCHAR ScratchBuffer;
-    ULONG ScratchBufferSize;
-    ULONG ScratchPreferred;
-    PUCHAR DirectoryBuffer;
-    ULONG DirectoryBufferSize;
-    BOOLEAN DirectoryBufferBusy;
-    BOOLEAN ProgressActive;
-    ULONGLONG TotalBytes;
-    ULONGLONG BytesCopied;
-    ULONG ProgressStartTime;
-    ULONG LastProgressUpdate;
-    ULONG LastPercentShown;
-    CHAR ProgressMessage[64];
-    ULONGLONG AverageRateBytesPerSec;
-    ULONGLONG LastSampleBytes;
-    ULONG LastSampleTime;
-    ULONGLONG PendingSampleBytes;
-    ULONGLONG ProgressStartMicros;
-    ULONGLONG LastProgressMicros;
-    ULONGLONG LastSampleMicros;
-    ULONGLONG AvgMicrosPerPercent;
-} ISO_COPY_CONTEXT, *PISO_COPY_CONTEXT;
-
-#define ISO_SCRATCH_MIN_SIZE     (1024 * 1024)
-#define ISO_SCRATCH_MAX_SIZE     (8 * 1024 * 1024)
-#define ISO_SCRATCH_FLOOR_SIZE   (128 * 1024)
-#define ISO_STREAM_FALLBACK_CHUNK (1024 * 1024)
-#define TAG_ISO_BUFFER 'BosI'
-#define ISO_PROGRESS_SMOOTH_SHIFT 2U
 
 static
 ULONG
@@ -363,636 +327,6 @@ RamDiskQueryMicroseconds(VOID)
         return Micros;
 
     return (ULONGLONG)RamDiskGetRelativeTime() * 1000000ULL;
-}
-
-static
-ULONG
-IsoGetPreferredChunkSize(VOID)
-{
-    ULONGLONG Preferred = ISO_STREAM_FALLBACK_CHUNK;
-
-    if (DiskReadBufferSize != 0)
-    {
-        ULONGLONG Candidate = (ULONGLONG)DiskReadBufferSize;
-        if (Candidate > ISO_SCRATCH_MAX_SIZE)
-            Candidate = ISO_SCRATCH_MAX_SIZE;
-        Preferred = Candidate;
-    }
-
-    if (Preferred < ISO_SCRATCH_MIN_SIZE)
-        Preferred = ISO_SCRATCH_MIN_SIZE;
-
-    if (Preferred > ISO_SCRATCH_MAX_SIZE)
-        Preferred = ISO_SCRATCH_MAX_SIZE;
-
-    Preferred = ALIGN_UP_BY_ULL(Preferred, ISO_SECTOR_SIZE);
-    Preferred = ALIGN_UP_BY_ULL(Preferred, MM_PAGE_SIZE);
-
-    if (Preferred > ISO_SCRATCH_MAX_SIZE)
-        Preferred = ISO_SCRATCH_MAX_SIZE;
-
-    return (ULONG)Preferred;
-}
-
-static
-ULONG
-IsoAlignScratchSize(
-    _In_ ULONGLONG Value)
-{
-    ULONGLONG Result;
-
-    if (Value < ISO_SECTOR_SIZE)
-        Value = ISO_SECTOR_SIZE;
-
-    Result = ALIGN_UP_BY_ULL(Value, ISO_SECTOR_SIZE);
-    Result = ALIGN_UP_BY_ULL(Result, MM_PAGE_SIZE);
-
-    if (Result > ISO_SCRATCH_MAX_SIZE)
-        Result = ISO_SCRATCH_MAX_SIZE;
-
-    return (ULONG)Result;
-}
-
-static
-BOOLEAN
-IsoEnsureScratchBuffer(
-    _Inout_ PISO_COPY_CONTEXT Context,
-    _In_ ULONGLONG RequiredSize)
-{
-    ULONG Preferred;
-    ULONG Floor;
-    ULONG Target;
-    ULONG Attempt;
-    ULONG Previous;
-    PVOID NewBuffer = NULL;
-
-    if (!Context)
-        return FALSE;
-
-    Preferred = IsoGetPreferredChunkSize();
-    Floor = IsoAlignScratchSize(ISO_SCRATCH_FLOOR_SIZE);
-
-    if (Context->ScratchPreferred != 0 && Preferred > Context->ScratchPreferred)
-        Preferred = Context->ScratchPreferred;
-
-    if (Context->ScratchBuffer && Context->ScratchBufferSize > Preferred)
-        Preferred = Context->ScratchBufferSize;
-
-    if (Preferred < Floor)
-        Preferred = Floor;
-
-    if (RequiredSize == 0)
-        RequiredSize = ISO_SECTOR_SIZE;
-
-    if (RequiredSize > ISO_SCRATCH_MAX_SIZE)
-        RequiredSize = ISO_SCRATCH_MAX_SIZE;
-
-    Target = IsoAlignScratchSize(RequiredSize);
-
-    if (Target < Floor)
-        Target = Floor;
-
-    if (Target > Preferred)
-        Target = Preferred;
-
-    if (Context->ScratchBuffer && Context->ScratchBufferSize >= Target)
-    {
-        Context->ScratchPreferred = Context->ScratchBufferSize;
-        return TRUE;
-    }
-
-    Attempt = Target;
-    Previous = 0;
-
-    while (Attempt >= Floor && Attempt != Previous)
-    {
-        if (Context->ScratchBuffer && Context->ScratchBufferSize >= Attempt)
-            return TRUE;
-
-        NewBuffer = FrLdrTempAlloc(Attempt, TAG_ISO_BUFFER);
-        if (NewBuffer)
-            break;
-
-        Previous = Attempt;
-
-        if (Attempt == Floor)
-            break;
-
-        Attempt /= 2;
-        if (Attempt < Floor)
-            Attempt = Floor;
-
-        Attempt = IsoAlignScratchSize(Attempt);
-    }
-
-    if (!NewBuffer)
-    {
-        if (Context->ScratchBuffer && Context->ScratchBufferSize >= Floor)
-        {
-            Context->ScratchPreferred = Context->ScratchBufferSize;
-            return TRUE;
-        }
-
-        return FALSE;
-    }
-
-    if (Context->ScratchBuffer)
-    {
-        FrLdrTempFree(Context->ScratchBuffer, TAG_ISO_BUFFER);
-    }
-
-    Context->ScratchBuffer = NewBuffer;
-    Context->ScratchBufferSize = Attempt;
-    Context->ScratchPreferred = Attempt;
-    return TRUE;
-}
-
-static
-VOID
-IsoProgressDisplay(
-    _Inout_ PISO_COPY_CONTEXT Context,
-    _In_ ULONG Percent)
-{
-    if (!Context)
-        return;
-
-    if (UiIsProgressBarVisible())
-        UiUpdateProgressBar(Percent, Context->ProgressMessage);
-    else
-        UiDrawStatusText(Context->ProgressMessage);
-}
-
-static
-VOID
-IsoProgressInitialize(
-    _Inout_ PISO_COPY_CONTEXT Context)
-{
-    if (!Context || !Context->Source || Context->Source->Size == 0)
-        return;
-
-    Context->TotalBytes = Context->Source->Size;
-    Context->BytesCopied = 0;
-    Context->ProgressStartTime = RamDiskGetRelativeTime();
-    Context->LastProgressUpdate = Context->ProgressStartTime;
-    Context->LastPercentShown = (ULONG)-1;
-    Context->ProgressActive = TRUE;
-    Context->AverageRateBytesPerSec = 0;
-    Context->LastSampleBytes = 0;
-    Context->LastSampleTime = Context->ProgressStartTime;
-    Context->PendingSampleBytes = 0;
-    Context->ProgressStartMicros = RamDiskQueryMicroseconds();
-    Context->LastProgressMicros = Context->ProgressStartMicros;
-    Context->LastSampleMicros = Context->ProgressStartMicros;
-    Context->AvgMicrosPerPercent = 0;
-
-    RtlStringCbPrintfA(Context->ProgressMessage,
-                       sizeof(Context->ProgressMessage),
-                       "Copying files...");
-    IsoProgressDisplay(Context, 0);
-}
-
-static
-VOID
-IsoProgressAdvance(
-    _Inout_ PISO_COPY_CONTEXT Context,
-    _In_ ULONGLONG Bytes)
-{
-    ULONG Percent;
-    ULONG EstimatedSeconds = 0;
-    ULONG CurrentTime;
-    ULONG KiloRate;
-    ULONGLONG CurrentMicros;
-    ULONGLONG ElapsedMicros;
-    ULONGLONG SampleDeltaMicros;
-    ULONGLONG SampleDeltaBytes;
-    ULONGLONG InstantRate;
-    ULONGLONG LongTermRate;
-    ULONGLONG RateBytesPerSecond;
-    ULONGLONG PercentEstimateMicros = 0;
-    ULONGLONG RemainingBytes;
-
-    if (!Context || !Context->ProgressActive || Context->TotalBytes == 0)
-        return;
-
-    Context->BytesCopied += Bytes;
-    if (Context->BytesCopied > Context->TotalBytes)
-        Context->BytesCopied = Context->TotalBytes;
-
-    Percent = (ULONG)((Context->BytesCopied * 100ULL) / Context->TotalBytes);
-    if (Percent > 100)
-        Percent = 100;
-
-    CurrentTime = RamDiskGetRelativeTime();
-    CurrentMicros = RamDiskQueryMicroseconds();
-    if (CurrentMicros < Context->ProgressStartMicros)
-        CurrentMicros = Context->ProgressStartMicros;
-
-    ElapsedMicros = CurrentMicros - Context->ProgressStartMicros;
-    if (ElapsedMicros == 0)
-        ElapsedMicros = 1;
-
-    Context->PendingSampleBytes += Bytes;
-    SampleDeltaMicros = (CurrentMicros > Context->LastSampleMicros)
-                        ? (CurrentMicros - Context->LastSampleMicros)
-                        : 0;
-    SampleDeltaBytes = Context->PendingSampleBytes;
-
-    if (SampleDeltaMicros > 0 && SampleDeltaBytes > 0)
-    {
-        InstantRate = (SampleDeltaBytes * 1000000ULL) / SampleDeltaMicros;
-        if (InstantRate > 0)
-        {
-            if (Context->AverageRateBytesPerSec == 0)
-            {
-                Context->AverageRateBytesPerSec = InstantRate;
-            }
-            else
-            {
-                Context->AverageRateBytesPerSec =
-                    ((Context->AverageRateBytesPerSec * ((1U << ISO_PROGRESS_SMOOTH_SHIFT) - 1U)) + InstantRate) >> ISO_PROGRESS_SMOOTH_SHIFT;
-            }
-        }
-
-        Context->PendingSampleBytes = 0;
-        Context->LastSampleBytes = Context->BytesCopied;
-        Context->LastSampleMicros = CurrentMicros;
-        Context->LastSampleTime = CurrentTime;
-    }
-
-    RateBytesPerSecond = Context->AverageRateBytesPerSec;
-    LongTermRate = (Context->BytesCopied * 1000000ULL) / ElapsedMicros;
-    if (LongTermRate == 0)
-        LongTermRate = 1;
-
-    if (RateBytesPerSecond == 0)
-    {
-        RateBytesPerSecond = LongTermRate;
-    }
-    else
-    {
-        RateBytesPerSecond = (RateBytesPerSecond * 3ULL + LongTermRate) / 4ULL;
-        if (RateBytesPerSecond == 0)
-            RateBytesPerSecond = LongTermRate;
-    }
-
-    if (Percent < 100)
-    {
-        ULONG PercentRemaining = 100 - Percent;
-
-        if (Context->AvgMicrosPerPercent != 0)
-        {
-            PercentEstimateMicros = Context->AvgMicrosPerPercent * PercentRemaining;
-        }
-        else if (Percent != 0)
-        {
-            PercentEstimateMicros = (ElapsedMicros * PercentRemaining) / Percent;
-        }
-
-        if (PercentEstimateMicros != 0)
-            EstimatedSeconds = (ULONG)((PercentEstimateMicros + 999999ULL) / 1000000ULL);
-
-        RemainingBytes = (Context->BytesCopied >= Context->TotalBytes)
-                         ? 0
-                         : (Context->TotalBytes - Context->BytesCopied);
-
-        if (RateBytesPerSecond > 0 && RemainingBytes > 0)
-        {
-            ULONG TimeFromRate = (ULONG)((RemainingBytes + RateBytesPerSecond - 1ULL) / RateBytesPerSecond);
-
-            if (EstimatedSeconds == 0 || TimeFromRate < EstimatedSeconds)
-                EstimatedSeconds = TimeFromRate;
-        }
-    }
-
-    if (Percent != Context->LastPercentShown ||
-        CurrentTime != Context->LastProgressUpdate)
-    {
-        ULONG PercentDelta;
-        ULONGLONG CopiedKB;
-        ULONGLONG TotalKB;
-        ULONGLONG DeltaMicros;
-
-        if (Context->LastPercentShown == (ULONG)-1)
-            PercentDelta = Percent;
-        else if (Percent > Context->LastPercentShown)
-            PercentDelta = Percent - Context->LastPercentShown;
-        else
-            PercentDelta = 0;
-
-        DeltaMicros = (CurrentMicros > Context->LastProgressMicros)
-                       ? (CurrentMicros - Context->LastProgressMicros)
-                       : 0;
-
-        CopiedKB = Context->BytesCopied / 1024ULL;
-        TotalKB = (Context->TotalBytes + 1023ULL) / 1024ULL;
-
-        if (Percent >= 100)
-        {
-            RtlStringCbPrintfA(Context->ProgressMessage,
-                               sizeof(Context->ProgressMessage),
-                               "Copy complete");
-        }
-        else
-        {
-            KiloRate = (ULONG)((RateBytesPerSecond + 1023ULL) / 1024ULL);
-            if (KiloRate == 0)
-                KiloRate = 1;
-
-            RtlStringCbPrintfA(Context->ProgressMessage,
-                               sizeof(Context->ProgressMessage),
-                               "Ramdisk loading %u%% (%llu/%llu KB, %u KB/s, %us left)",
-                               Percent,
-                               CopiedKB,
-                               TotalKB,
-                               KiloRate,
-                               EstimatedSeconds);
-        }
-
-        IsoProgressDisplay(Context, Percent);
-        TRACE("IsoProgress: %s\n", Context->ProgressMessage);
-        Context->LastPercentShown = Percent;
-        Context->LastProgressUpdate = CurrentTime;
-        Context->LastProgressMicros = CurrentMicros;
-
-        if (PercentDelta > 0 && Percent < 100 && DeltaMicros != 0)
-        {
-            ULONGLONG MicroPerPercent = DeltaMicros / PercentDelta;
-
-            if (MicroPerPercent != 0)
-            {
-                if (Context->AvgMicrosPerPercent == 0)
-                {
-                    Context->AvgMicrosPerPercent = MicroPerPercent;
-                }
-                else
-                {
-                    Context->AvgMicrosPerPercent =
-                        (Context->AvgMicrosPerPercent * ((1U << ISO_PROGRESS_SMOOTH_SHIFT) - 1U) + MicroPerPercent) >> ISO_PROGRESS_SMOOTH_SHIFT;
-                }
-            }
-        }
-    }
-}
-
-static
-VOID
-IsoProgressComplete(
-    _Inout_ PISO_COPY_CONTEXT Context)
-{
-    if (!Context || !Context->ProgressActive)
-        return;
-
-    Context->BytesCopied = Context->TotalBytes;
-    Context->ProgressActive = FALSE;
-    Context->LastPercentShown = 100;
-
-    RtlStringCbPrintfA(Context->ProgressMessage,
-                       sizeof(Context->ProgressMessage),
-                       "Copy complete");
-    IsoProgressDisplay(Context, 100);
-}
-
-static
-BOOLEAN
-FatPreallocateFile(
-    _Inout_ FIL *FileObject,
-    _In_ ULONGLONG FileSize)
-{
-    FRESULT Result;
-    UINT BytesWritten;
-    BYTE Zero = 0;
-
-    if (!FileObject || FileSize == 0)
-        return TRUE;
-
-    if (FileSize > ULONG_MAX)
-        /* FatFs API uses 32-bit offsets; reject larger files intentionally. */
-        return FALSE;
-
-    Result = f_lseek(FileObject, (DWORD)(FileSize - 1));
-    if (Result != FR_OK)
-    {
-        TRACE("f_lseek preallocate failed: %u size=%llu\\n",
-              Result,
-              FileSize);
-        return FALSE;
-    }
-
-    Result = f_write(FileObject, &Zero, 1, &BytesWritten);
-    if (Result != FR_OK || BytesWritten != 1)
-    {
-        TRACE("f_write preallocate failed: res=%u bytes=%u size=%llu\\n",
-              Result,
-              BytesWritten,
-              FileSize);
-        return FALSE;
-    }
-
-    Result = f_lseek(FileObject, 0);
-    if (Result != FR_OK)
-    {
-        TRACE("f_lseek rewind failed: %u\\n", Result);
-        return FALSE;
-    }
-
-    return TRUE;
-}
-
-static
-BOOLEAN
-IsoSourceRead(
-    _Inout_ PISO_SOURCE Source,
-    _In_ ULONGLONG Offset,
-    _Out_writes_(Size) PVOID Buffer,
-    _In_ ULONG Size)
-{
-    ULONGLONG AbsoluteStart;
-    const ULONG SectorMask = ISO_SECTOR_SIZE - 1;
-    ULONG MaxChunkBytesTmp;
-    ULONG MaxChunkBytes;
-    PUCHAR Out;
-    ULONG Remaining;
-    ARC_STATUS Status;
-    ULONG BytesRead;
-    LARGE_INTEGER Position;
-    UCHAR Bounce[ISO_SECTOR_SIZE];
-    ULONGLONG CurrentPos;
-
-    if (Size == 0)
-        return TRUE;
-
-    if (!Source || !Buffer)
-        return FALSE;
-
-    if (Source->MemoryBase)
-    {
-        if (Offset + Size > Source->Size)
-            return FALSE;
-
-        RtlCopyMemory(Buffer, Source->MemoryBase + Offset, Size);
-        return TRUE;
-    }
-
-    if (Source->ArcFileId == INVALID_FILE_ID)
-        return FALSE;
-
-    if (Offset > Source->Size || Offset + Size > Source->Size)
-        return FALSE;
-
-    AbsoluteStart = Source->ArcOffset + Offset;
-    MaxChunkBytesTmp = IsoGetPreferredChunkSize();
-
-    if (Size > MaxChunkBytesTmp)
-    {
-        ULONGLONG Candidate = ALIGN_UP_BY_ULL(Size, ISO_SECTOR_SIZE);
-
-        if (Candidate > ISO_SCRATCH_MAX_SIZE)
-            Candidate = ISO_SCRATCH_MAX_SIZE;
-
-        if (Candidate > ULONG_MAX)
-            Candidate = ULONG_MAX & ~((ULONGLONG)ISO_SECTOR_SIZE - 1ULL);
-
-        if (Candidate > MaxChunkBytesTmp)
-            MaxChunkBytesTmp = (ULONG)Candidate;
-    }
-
-    MaxChunkBytesTmp &= ~SectorMask;
-    MaxChunkBytes = (MaxChunkBytesTmp == 0) ? ISO_SECTOR_SIZE : MaxChunkBytesTmp;
-
-    Out = (PUCHAR)Buffer;
-    Remaining = Size;
-    CurrentPos = Source->ArcPosition;
-
-    /* Handle head misalignment */
-    if ((AbsoluteStart & SectorMask) != 0)
-    {
-        ULONG CopyLength;
-        ULONGLONG SectorStart;
-
-        CopyLength = ISO_SECTOR_SIZE - (ULONG)(AbsoluteStart & SectorMask);
-        if (CopyLength > Remaining)
-            CopyLength = Remaining;
-
-        SectorStart = AbsoluteStart - (AbsoluteStart & SectorMask);
-        if (CurrentPos != SectorStart)
-        {
-            Position.QuadPart = SectorStart;
-            Status = ArcSeek(Source->ArcFileId, &Position, SeekAbsolute);
-            if (Status != ESUCCESS)
-            {
-                WARN("IsoSourceRead: ArcSeek failed (status %lu) at offset %I64u\n",
-                     Status,
-                     Position.QuadPart);
-                return FALSE;
-            }
-            CurrentPos = SectorStart;
-        }
-
-        Status = ArcRead(Source->ArcFileId, Bounce, ISO_SECTOR_SIZE, &BytesRead);
-        if (Status != ESUCCESS || BytesRead != ISO_SECTOR_SIZE)
-        {
-            WARN("IsoSourceRead: ArcRead failed (status %lu) at offset %I64u (head)\n",
-                 Status,
-                 SectorStart);
-            return FALSE;
-        }
-
-        CurrentPos += ISO_SECTOR_SIZE;
-        RtlCopyMemory(Out, Bounce + (AbsoluteStart & SectorMask), CopyLength);
-        Out += CopyLength;
-        Remaining -= CopyLength;
-    }
-
-    /* Handle middle aligned region */
-    if (Remaining >= ISO_SECTOR_SIZE)
-    {
-        ULONGLONG Consumed;
-        ULONGLONG AlignedOffset;
-        ULONG AlignedBytes;
-
-        Consumed = Size - Remaining;
-        AlignedOffset = (AbsoluteStart + Consumed) & ~((ULONGLONG)SectorMask);
-        AlignedBytes = Remaining & ~SectorMask;
-
-        if (AlignedBytes)
-        {
-            if (CurrentPos != AlignedOffset)
-            {
-                Position.QuadPart = AlignedOffset;
-                Status = ArcSeek(Source->ArcFileId, &Position, SeekAbsolute);
-                if (Status != ESUCCESS)
-                {
-                    WARN("IsoSourceRead: ArcSeek failed (status %lu) at offset %I64u\n",
-                         Status,
-                         Position.QuadPart);
-                    return FALSE;
-                }
-                CurrentPos = AlignedOffset;
-            }
-
-            while (AlignedBytes > 0)
-            {
-                ULONG Chunk = (AlignedBytes > MaxChunkBytes) ? MaxChunkBytes : AlignedBytes;
-
-                Status = ArcRead(Source->ArcFileId, Out, Chunk, &BytesRead);
-                if (Status != ESUCCESS || BytesRead != Chunk)
-                {
-                    WARN("IsoSourceRead: ArcRead failed (status %lu) at offset %I64u (aligned chunk %lu)\n",
-                         Status,
-                         CurrentPos,
-                         Chunk);
-                    return FALSE;
-                }
-
-                Out += Chunk;
-                AlignedBytes -= Chunk;
-                CurrentPos += Chunk;
-            }
-
-            Remaining &= SectorMask;
-        }
-    }
-
-    /* Handle tail */
-    if (Remaining > 0)
-    {
-        ULONGLONG TailStart;
-        ULONGLONG SectorStart;
-        ULONG OffsetInSector;
-
-        TailStart = AbsoluteStart + Size - Remaining;
-        SectorStart = TailStart & ~((ULONGLONG)SectorMask);
-        OffsetInSector = (ULONG)(TailStart & SectorMask);
-
-        if (CurrentPos != SectorStart)
-        {
-            Position.QuadPart = SectorStart;
-            Status = ArcSeek(Source->ArcFileId, &Position, SeekAbsolute);
-            if (Status != ESUCCESS)
-            {
-                WARN("IsoSourceRead: ArcSeek failed (status %lu) at offset %I64u (tail)\n",
-                     Status,
-                     Position.QuadPart);
-                return FALSE;
-            }
-            CurrentPos = SectorStart;
-        }
-
-        Status = ArcRead(Source->ArcFileId, Bounce, ISO_SECTOR_SIZE, &BytesRead);
-        if (Status != ESUCCESS || BytesRead != ISO_SECTOR_SIZE)
-        {
-            WARN("IsoSourceRead: ArcRead failed (status %lu) at offset %I64u (tail)\n",
-                 Status,
-                 SectorStart);
-            return FALSE;
-        }
-
-        CurrentPos += ISO_SECTOR_SIZE;
-        RtlCopyMemory(Out, Bounce + OffsetInSector, Remaining);
-    }
-
-    Source->ArcPosition = CurrentPos;
-    return TRUE;
 }
 
 static
@@ -1131,559 +465,6 @@ RamDiskCloseIsoSource(
     }
 }
 
-
-static
-BOOLEAN
-IsoExtractName(
-    _In_ PDIR_RECORD Record,
-    _Out_writes_(NameBufferSize) PCHAR NameBuffer,
-    _In_ SIZE_T NameBufferSize)
-{
-    SIZE_T Index;
-
-    if (!Record || !NameBuffer || NameBufferSize == 0)
-        return FALSE;
-
-    /* Skip '.' and '..' entries early */
-    if (Record->FileIdLength == 1 && (Record->FileId[0] == 0 || Record->FileId[0] == 1))
-        return FALSE;
-
-    for (Index = 0; Index < Record->FileIdLength && Index < NameBufferSize - 1; ++Index)
-    {
-        CHAR Character = Record->FileId[Index];
-
-        if (Character == ';')
-            break;
-
-        NameBuffer[Index] = Character;
-    }
-
-    NameBuffer[Index] = '\0';
-
-    /* Remove trailing dot, if any (appears on directory records) */
-    while (Index > 0 && NameBuffer[Index - 1] == '.')
-    {
-        NameBuffer[Index - 1] = '\0';
-        --Index;
-    }
-
-    if (Index == 0)
-        return FALSE;
-
-    return TRUE;
-}
-
-static
-BOOLEAN
-FatEnsureDirectoryExists(
-    _In_ PCSTR Path)
-{
-    FRESULT Result;
-    FRESULT StatResult;
-    FILINFO Info;
-
-    if (!Path)
-        return FALSE;
-
-    StatResult = f_stat(Path, &Info);
-    if (StatResult == FR_OK)
-    {
-        if (Info.fattrib & AM_DIR)
-            return TRUE;
-
-        WARN("FatEnsureDirectoryExists: '%s' exists as a file, replacing with directory\n",
-             Path);
-        if (f_unlink(Path) != FR_OK)
-        {
-            WARN("FatEnsureDirectoryExists: failed to remove file '%s'\n", Path);
-            return FALSE;
-        }
-    }
-
-    Result = f_mkdir(Path);
-    if (Result == FR_OK || Result == FR_EXIST)
-        return TRUE;
-
-    WARN("f_mkdir('%s') failed: %u\n", Path, Result);
-    return FALSE;
-}
-
-static
-BOOLEAN
-FatCopyFileFromIso(
-    _In_ PISO_COPY_CONTEXT Context,
-    _In_ PDIR_RECORD Record,
-    _In_ PCSTR DestinationPath)
-{
-    ULONGLONG Remaining;
-    ULONGLONG FileOffset;
-    FIL FileObject;
-    FRESULT Result;
-    UINT BytesWritten;
-    FILINFO ExistingInfo;
-
-    if (!Context || !Context->Source || !Record || !DestinationPath)
-        return FALSE;
-
-    if (Record->FileFlags & 0x02)
-        return FALSE;
-
-    FileOffset = (ULONGLONG)Record->ExtentLocationL * ISO_SECTOR_SIZE;
-    Remaining = Record->DataLengthL;
-
-    if (FileOffset + Remaining > Context->Source->Size)
-        return FALSE;
-
-    if (!IsoEnsureScratchBuffer(Context, Remaining))
-    {
-        WARN("IsoEnsureScratchBuffer failed for '%s' size %lu\n",
-             DestinationPath,
-             Record->DataLengthL);
-        return FALSE;
-    }
-
-    Result = f_open(&FileObject, DestinationPath, FA_WRITE | FA_READ | FA_CREATE_ALWAYS);
-    if (Result == FR_DENIED)
-    {
-        FRESULT StatResult;
-
-        StatResult = f_stat(DestinationPath, &ExistingInfo);
-        if (StatResult == FR_OK && (ExistingInfo.fattrib & AM_DIR))
-        {
-            WARN("FatCopyFileFromIso: destination '%s' refers to an existing directory, skipping file copy\n",
-                 DestinationPath);
-            return TRUE;
-        }
-
-#if DBG
-        {
-            FRESULT ChmodResult;
-            FRESULT UnlinkResult;
-            ChmodResult = f_chmod(DestinationPath, 0, AM_RDO | AM_ARC | AM_HID | AM_SYS);
-            UnlinkResult = f_unlink(DestinationPath);
-            WARN("FatCopyFileFromIso: retry clearing attrs for '%s' (chmod=%u unlink=%u)\n",
-                 DestinationPath,
-                 ChmodResult,
-                 UnlinkResult);
-        }
-#else
-        f_chmod(DestinationPath, 0, AM_RDO | AM_ARC | AM_HID | AM_SYS);
-        f_unlink(DestinationPath);
-#endif
-
-        Result = f_open(&FileObject, DestinationPath, FA_WRITE | FA_READ | FA_CREATE_ALWAYS);
-    }
-
-    if (Result != FR_OK)
-    {
-        WARN("f_open('%s') failed: %u\n", DestinationPath, Result);
-
-        if (strstr(DestinationPath, "/efi/boot/BCD"))
-        {
-            WARN("FatCopyFileFromIso: skipping '%s' on legacy BIOS path\n",
-                 DestinationPath);
-            return TRUE;
-        }
-
-        return FALSE;
-    }
-
-    if (_stricmp(DestinationPath, "0:/reactos/system32/drivers/ks.sys") == 0)
-    {
-        TRACE("FatCopyFileFromIso: writing KS.SYS extent=%lu len=%lu\n",
-              Record->ExtentLocationL,
-              Record->DataLengthL);
-    }
-
-    if (Remaining >= ISO_SECTOR_SIZE)
-    {
-        if (!FatPreallocateFile(&FileObject, Remaining))
-        {
-            WARN("FatPreallocateFile failed for '%s', continuing without preallocation\n",
-                 DestinationPath);
-            (void)f_lseek(&FileObject, 0);
-        }
-    }
-
-    while (Remaining > 0)
-    {
-        ULONG Chunk = (Remaining > Context->ScratchBufferSize)
-                        ? Context->ScratchBufferSize
-                        : (ULONG)Remaining;
-
-        if (!IsoSourceRead(Context->Source, FileOffset, Context->ScratchBuffer, Chunk))
-        {
-            f_close(&FileObject);
-            WARN("IsoSourceRead failed while copying '%s' at offset %I64u len %lu\n",
-                 DestinationPath,
-                 FileOffset,
-                 Chunk);
-            return FALSE;
-        }
-
-        Result = f_write(&FileObject, Context->ScratchBuffer, Chunk, &BytesWritten);
-        if (Result != FR_OK || BytesWritten != Chunk)
-        {
-            f_close(&FileObject);
-            WARN("f_write('%s') failed: res=%u wrote=%u expected=%lu\n",
-                 DestinationPath,
-                 Result,
-                 BytesWritten,
-                 Chunk);
-            return FALSE;
-        }
-
-        FileOffset += Chunk;
-        Remaining -= Chunk;
-
-        IsoProgressAdvance(Context, Chunk);
-    }
-
-    if (_stricmp(DestinationPath, "0:/reactos/system32/drivers/ks.sys") == 0 &&
-        FileObject.dir_ptr != NULL &&
-        FileObject.fs != NULL)
-    {
-        /*
-         * FIXME: FatFs rewrites 8.3 aliases in-place without clearing the remainder of
-         * the directory slot. If a prior entry used more characters than
-         * "KS     SYS", the leftover byte survives and we persist "KSL.SYS" to
-         * disk. Debug builds hide this because the buffer happens to be zeroed.
-         * Here we sync the sector, overwrite the alias with the canonical
-         * "KS     SYS", mark the cache dirty, and sync again so future scans see
-         * the corrected bytes. The proper fix is to teach FatFs to blank the slot
-         * (or regenerate the alias) before writing and then flush the sector.
-         * Until that lands, keep this guard in FreeLDR so Release boots stay
-         * reliable and downstream log noise stays manageable.
-         */
-        static const BYTE ShortName[11] = { 'K','S',' ',' ',' ',' ',' ',' ','S','Y','S' };
-        const ptrdiff_t DirOffset = FileObject.dir_ptr - FileObject.fs->win;
-
-        if (DirOffset < 0)
-        {
-            WARN("FatCopyFileFromIso: ks.sys dir_ptr offset invalid (%td)\n", DirOffset);
-        }
-        else
-        {
-            FRESULT SyncResult = f_sync(&FileObject);
-
-            if (SyncResult != FR_OK)
-            {
-                WARN("FatCopyFileFromIso: pre-rewrite f_sync failed %u\n", SyncResult);
-            }
-            else
-            {
-                BYTE *Entry = FileObject.fs->win + DirOffset;
-
-                memcpy(Entry, ShortName, sizeof(ShortName));
-                FileObject.fs->wflag = 1;
-
-                FileObject.flag |= FA__WRITTEN;
-                SyncResult = f_sync(&FileObject);
-                if (SyncResult != FR_OK)
-                {
-                    WARN("FatCopyFileFromIso: post-rewrite f_sync failed %u\n", SyncResult);
-                }
-            }
-        }
-    }
-
-    f_close(&FileObject);
-
-    if (_stricmp(DestinationPath, "0:/reactos/system32/drivers/ks.sys") == 0)
-    {
-        TRACE("FatCopyFileFromIso: ks.sys short name forced to 'KS     SYS'\n");
-    }
-
-    return TRUE;
-}
-
-static
-BOOLEAN
-IsoCopyDirectoryRecursive(
-    _In_ PISO_COPY_CONTEXT Context,
-    _In_ ULONG StartSector,
-    _In_ ULONG DirectoryLength,
-    _In_ PCSTR DestinationPath)
-{
-    ULONGLONG DirectoryOffset;
-    ULONG Offset = 0;
-    PUCHAR DirectoryBuffer = NULL;
-    BOOLEAN UseSharedBuffer = FALSE;
-    BOOLEAN AllocatedBuffer = FALSE;
-    BOOLEAN Result = FALSE;
-
-    if (!Context || !Context->Source || !DestinationPath)
-        return FALSE;
-
-    DirectoryOffset = (ULONGLONG)StartSector * ISO_SECTOR_SIZE;
-
-    if (DirectoryOffset >= Context->Source->Size ||
-        DirectoryOffset + DirectoryLength > Context->Source->Size)
-        return FALSE;
-
-    if (DirectoryLength > ISO_DIRECTORY_MAX_SIZE)
-    {
-        WARN("IsoCopyDirectoryRecursive: directory length %lu exceeds safety cap\n",
-             DirectoryLength);
-        return FALSE;
-    }
-
-    if (!Context->DirectoryBufferBusy)
-    {
-        if (!Context->DirectoryBuffer ||
-            Context->DirectoryBufferSize < DirectoryLength)
-        {
-            if (Context->DirectoryBuffer)
-            {
-                FrLdrTempFree(Context->DirectoryBuffer, TAG_ISO_BUFFER);
-                Context->DirectoryBuffer = NULL;
-                Context->DirectoryBufferSize = 0;
-            }
-
-            Context->DirectoryBuffer = FrLdrTempAlloc(DirectoryLength, TAG_ISO_BUFFER);
-            if (!Context->DirectoryBuffer)
-                return FALSE;
-
-            Context->DirectoryBufferSize = DirectoryLength;
-        }
-
-        DirectoryBuffer = Context->DirectoryBuffer;
-        Context->DirectoryBufferBusy = TRUE;
-        UseSharedBuffer = TRUE;
-    }
-    else
-    {
-        DirectoryBuffer = FrLdrTempAlloc(DirectoryLength, TAG_ISO_BUFFER);
-        if (!DirectoryBuffer)
-            return FALSE;
-
-        AllocatedBuffer = TRUE;
-    }
-
-    if (!IsoSourceRead(Context->Source, DirectoryOffset, DirectoryBuffer, DirectoryLength))
-    {
-        WARN("IsoSourceRead failed reading directory at sector %lu length %lu\n",
-             StartSector,
-             DirectoryLength);
-        goto Cleanup;
-    }
-
-    TRACE("IsoCopyDirectoryRecursive: sector %lu length %lu -> %s\n",
-          StartSector,
-          DirectoryLength,
-          DestinationPath);
-
-    while (Offset < DirectoryLength)
-    {
-        PDIR_RECORD Record = (PDIR_RECORD)(DirectoryBuffer + Offset);
-        ULONG NextOffset;
-        CHAR NameBuffer[256];
-        CHAR ChildPath[512];
-        BOOLEAN IsDirectory;
-
-        if (Record->RecordLength == 0)
-        {
-            Offset = ROUND_UP(Offset, ISO_SECTOR_SIZE);
-            continue;
-        }
-
-        NextOffset = Offset + Record->RecordLength;
-
-        IsDirectory = !!(Record->FileFlags & 0x02);
-        if (!IsoExtractName(Record, NameBuffer, sizeof(NameBuffer)))
-        {
-            Offset = NextOffset;
-            continue;
-        }
-
-        if (_stricmp(NameBuffer, "ks.sys") == 0)
-        {
-            TRACE("IsoCopyDirectoryRecursive: encountered KS.SYS (flags=0x%02X len=%lu extent=%lu)\n",
-                  Record->FileFlags,
-                  Record->DataLengthL,
-                  Record->ExtentLocationL);
-        }
-
-        {
-            size_t Need = strlen(DestinationPath) + 1 + strlen(NameBuffer) + 1;
-
-            if (Need >= sizeof(ChildPath))
-            {
-                WARN("Destination path too long (%zu >= %zu): '%s' + '%s'\n",
-                     Need,
-                     sizeof(ChildPath),
-                     DestinationPath,
-                     NameBuffer);
-                goto Cleanup;
-            }
-
-            if (!NT_SUCCESS(RtlStringCbPrintfA(ChildPath,
-                                               sizeof(ChildPath),
-                                               "%s/%s",
-                                               DestinationPath,
-                                               NameBuffer)))
-            {
-                WARN("RtlStringCbPrintfA failed while building path '%s/%s'\n",
-                     DestinationPath,
-                     NameBuffer);
-                goto Cleanup;
-            }
-        }
-
-#ifndef UEFIBOOT
-        if (strlen(ChildPath) >= 6 &&
-            ChildPath[0] == '0' && ChildPath[1] == ':' && ChildPath[2] == '/' &&
-            (ChildPath[3] == 'e' || ChildPath[3] == 'E') &&
-            (ChildPath[4] == 'f' || ChildPath[4] == 'F') &&
-            (ChildPath[5] == 'i' || ChildPath[5] == 'I'))
-        {
-            TRACE("IsoCopyDirectoryRecursive: skipping legacy-only path %s\n", ChildPath);
-            Offset = NextOffset;
-            continue;
-        }
-#endif
-
-        if (IsDirectory)
-        {
-            if (!FatEnsureDirectoryExists(ChildPath))
-            {
-                goto Cleanup;
-            }
-
-            if (!IsoCopyDirectoryRecursive(Context,
-                                           Record->ExtentLocationL,
-                                           Record->DataLengthL,
-                                           ChildPath))
-            {
-                WARN("IsoCopyDirectoryRecursive failed for '%s' (sector %lu length %lu)\n",
-                     ChildPath,
-                     Record->ExtentLocationL,
-                     Record->DataLengthL);
-                goto Cleanup;
-            }
-        }
-        else
-        {
-            // TRACE("IsoCopyDirectoryRecursive: copying file %s (%lu bytes, %lu KB)\n",
-            //       ChildPath,
-            //       Record->DataLengthL,
-            //       (Record->DataLengthL + 1023UL) / 1024UL);
-            if (_stricmp(NameBuffer, "ks.sys") == 0)
-            {
-                TRACE("IsoCopyDirectoryRecursive: copying KS.SYS to %s\n", ChildPath);
-            }
-            if (!FatCopyFileFromIso(Context, Record, ChildPath))
-            {
-                WARN("FatCopyFileFromIso failed for '%s'\n", ChildPath);
-                goto Cleanup;
-            }
-
-        }
-
-        Offset = NextOffset;
-    }
-
-    Result = TRUE;
-
-Cleanup:
-    if (UseSharedBuffer)
-    {
-        Context->DirectoryBufferBusy = FALSE;
-    }
-    else if (AllocatedBuffer && DirectoryBuffer)
-    {
-        FrLdrTempFree(DirectoryBuffer, TAG_ISO_BUFFER);
-    }
-
-    return Result;
-}
-
-static
-BOOLEAN
-RamDiskPopulateFatFromIso(
-    _In_ PVOID FatBase,
-    _In_ ULONGLONG FatSize,
-    _Inout_ PISO_SOURCE Source,
-    _In_ ULONG BytesPerSector)
-{
-    ISO_COPY_CONTEXT Context;
-    PPVD PrimaryVolumeDescriptor;
-    FATFS *FatFs;
-    UCHAR DescriptorBuffer[ISO_SECTOR_SIZE];
-    FRESULT Result;
-
-    if (!FatBase || !Source || Source->Size < (16 * ISO_SECTOR_SIZE) || BytesPerSector == 0)
-        return FALSE;
-
-    if (!IsoSourceRead(Source,
-                       (ULONGLONG)16 * ISO_SECTOR_SIZE,
-                       DescriptorBuffer,
-                       sizeof(DescriptorBuffer)))
-        return FALSE;
-
-    PrimaryVolumeDescriptor = (PPVD)DescriptorBuffer;
-
-    if (PrimaryVolumeDescriptor->VdType != 1 ||
-        !RtlEqualMemory(PrimaryVolumeDescriptor->StandardId, "CD001", 5) ||
-        PrimaryVolumeDescriptor->VdVersion != 1)
-    {
-        return FALSE;
-    }
-
-    TRACE("RamDiskPopulateFatFromIso: FAT size %llu bytes, ISO size %llu bytes\\n",
-          FatSize,
-          Source->Size);
-
-    RtlZeroMemory(&Context, sizeof(Context));
-    Context.Source = Source;
-    FatFs = &Context.FatFs;
-
-    RtlZeroMemory(FatFs, sizeof(*FatFs));
-    RamDiskFatFsAttach(FatBase, FatSize, BytesPerSector);
-
-    IsoProgressInitialize(&Context);
-
-    TRACE("RamDiskPopulateFatFromIso: mounting FatFs context\\n");
-
-    Result = f_mount(FatFs, "0:", 1);
-    if (Result != FR_OK)
-    {
-        RamDiskFatFsDetach();
-        return FALSE;
-    }
-
-    TRACE("RamDiskPopulateFatFromIso: traversing ISO root (sector %lu size %lu)\\n",
-          PrimaryVolumeDescriptor->RootDirRecord.ExtentLocationL,
-          PrimaryVolumeDescriptor->RootDirRecord.DataLengthL);
-
-    if (!IsoCopyDirectoryRecursive(&Context,
-                                   PrimaryVolumeDescriptor->RootDirRecord.ExtentLocationL,
-                                   PrimaryVolumeDescriptor->RootDirRecord.DataLengthL,
-                                   "0:"))
-    {
-        f_mount(NULL, "0:", 0);
-        RamDiskFatFsDetach();
-        if (Context.ScratchBuffer)
-            FrLdrTempFree(Context.ScratchBuffer, TAG_ISO_BUFFER);
-        if (Context.DirectoryBuffer)
-            FrLdrTempFree(Context.DirectoryBuffer, TAG_ISO_BUFFER);
-        return FALSE;
-    }
-
-    f_mount(NULL, "0:", 0);
-    RamDiskFatFsDetach();
-
-    IsoProgressComplete(&Context);
-
-    if (Context.ScratchBuffer)
-        FrLdrTempFree(Context.ScratchBuffer, TAG_ISO_BUFFER);
-    if (Context.DirectoryBuffer)
-        FrLdrTempFree(Context.DirectoryBuffer, TAG_ISO_BUFFER);
-
-    TRACE("RamDiskPopulateFatFromIso: copy complete\\n");
-    return TRUE;
-}
-
 BOOLEAN
 RamDiskBuildWritableImage(
     IN PISO_SOURCE Source,
@@ -1695,19 +476,19 @@ RamDiskBuildWritableImage(
     PVOID WritableBase = NULL;
     ULONGLONG WritableSize = 0;
     ULONGLONG RequiredSize;
-    ULONGLONG IsoSize;
-    ULONGLONG ResidentIsoBytes = 0;
-    RAMDISK_FAT32_LAYOUT Layout;
+    ULONGLONG SourceSize;
+    ULONGLONG ResidentBytes = 0;
+    ULONGLONG BytesToCopy;
 
     if (!Source || !NewBase || !NewSize || Source->Size == 0)
         return FALSE;
 
-    IsoSize = Source->Size;
+    SourceSize = Source->Size;
 
-    /* Leave some slack to account for ISO9660 metadata and future writes */
+    /* Buffer = source data + extra writable headroom (min 64 MiB) */
     RequiredSize = RequestedSize;
-    if (RequiredSize < IsoSize + (64ULL * 1024ULL * 1024ULL))
-        RequiredSize = IsoSize + (64ULL * 1024ULL * 1024ULL);
+    if (RequiredSize < SourceSize + (64ULL * 1024ULL * 1024ULL))
+        RequiredSize = SourceSize + (64ULL * 1024ULL * 1024ULL);
 
     if (RequiredSize + RAMDISK_SAFETY_SLACK > RAMDISK_LOW_ALLOC_MAX)
     {
@@ -1723,17 +504,17 @@ RamDiskBuildWritableImage(
     }
 
     if (Source->MemoryBase)
-        ResidentIsoBytes = ALIGN_UP_BY_ULL(IsoSize, RAMDISK_ALLOCATION_ALIGNMENT);
+        ResidentBytes = ALIGN_UP_BY_ULL(SourceSize, RAMDISK_ALLOCATION_ALIGNMENT);
 
-    if ((RequiredSize + ResidentIsoBytes + RAMDISK_SAFETY_SLACK) > RAMDISK_LOW_ALLOC_MAX)
+    if ((RequiredSize + ResidentBytes + RAMDISK_SAFETY_SLACK) > RAMDISK_LOW_ALLOC_MAX)
     {
-        WARN("RamDiskBuildWritableImage: %llu-byte ISO plus %llu-byte writable buffer exceed low-memory budget %llu\n",
-             IsoSize,
+        WARN("RamDiskBuildWritableImage: %llu-byte source plus %llu-byte writable buffer exceed low-memory budget %llu\n",
+             SourceSize,
              RequiredSize,
              RAMDISK_LOW_ALLOC_MAX);
         if (!RamDiskErrorShown && !OptionalRamDisk)
         {
-            UiMessageBox("Writable RAM disk request uses too much low memory to keep the ISO resident.");
+            UiMessageBox("Writable RAM disk request uses too much low memory.");
             RamDiskErrorShown = TRUE;
         }
         return FALSE;
@@ -1743,10 +524,8 @@ RamDiskBuildWritableImage(
     if (RequiredSize == 0 || RequiredSize > MAXULONG)
         return FALSE;
 
-    TRACE("RamDiskBuildWritableImage: ISO=%llu requested=%llu align=%llu\n",
-          IsoSize,
-          RequestedSize,
-          RequiredSize);
+    TRACE("RamDiskBuildWritableImage: source=%llu requested=%llu align=%llu\n",
+          SourceSize, RequestedSize, RequiredSize);
 
     if (!RamDiskReserveWritableBuffer(RequiredSize, OptionalRamDisk))
         return FALSE;
@@ -1757,81 +536,160 @@ RamDiskBuildWritableImage(
     if (WritableSize > MAXULONG)
         WritableSize = MAXULONG;
 
-    TRACE("RamDiskBuildWritableImage: formatting FAT32 (%llu bytes)\n", WritableSize);
+    /*
+     * Raw-copy the source medium (ISO or FAT) into the writable buffer.
+     * The source's own filesystem structure is preserved as-is; FreeLDR's
+     * filesystem detection (IsoMount / FatMount) handles both transparently.
+     */
+    BytesToCopy = SourceSize;
+    if (BytesToCopy > WritableSize)
+        BytesToCopy = WritableSize;
 
-    if (!RamDiskFormatFat32(WritableBase, WritableSize, &Layout))
+    TRACE("RamDiskBuildWritableImage: copying %llu bytes from source into %llu-byte buffer\n",
+          BytesToCopy, WritableSize);
+
+    UiDrawProgressBarCenter("Copying source to writable RAM disk...");
+
     {
-        RamDiskReleaseMemory(WritableBase, WritableSize);
-        return FALSE;
-    }
+        ULONGLONG TotalDone = 0;
+        ULONG CopyChunk = 8 * 1024 * 1024;
+        ULONG LastPercent = 0;
+        ULONGLONG StartMicros = RamDiskQueryMicroseconds();
+        ULONGLONG LastUpdateMicros = StartMicros;
+        ULONG TotalMB = (ULONG)((BytesToCopy + (1024ULL * 1024 - 1)) / (1024ULL * 1024));
+        CHAR ProgressMsg[128];
+        BOOLEAN IsArcRead = FALSE;
 
-    TRACE("RamDiskBuildWritableImage: populating ramdisk from ISO\n");
-
-    {
-        ULONGLONG VolumeOffset;
-        PVOID VolumeBase;
-        ULONGLONG VolumeSize;
-
-        VolumeOffset = (ULONGLONG)Layout.HiddenSectors * Layout.BytesPerSector;
-        if (VolumeOffset >= WritableSize)
+        if (Source->MemoryBase)
         {
-            RamDiskReleaseMemory(WritableBase, WritableSize);
-            return FALSE;
+            /* Memory-to-memory copy path */
         }
-
-        VolumeBase = (PUCHAR)WritableBase + VolumeOffset;
-        VolumeSize = WritableSize - VolumeOffset;
-
-        if (!RamDiskPopulateFatFromIso(VolumeBase,
-                                       VolumeSize,
-                                       Source,
-                                       Layout.BytesPerSector))
+        else if (Source->ArcFileId != INVALID_FILE_ID)
         {
-            RamDiskReleaseMemory(WritableBase, WritableSize);
-            return FALSE;
-        }
-
-        RamDiskSetVisibleRegion(VolumeOffset, VolumeSize);
-
-#if DBG
-        {
-            PFN_NUMBER BasePfn = RamDiskPointerToPfn(WritableBase);
-            PFN_NUMBER EndPfn = RamDiskPointerToPfn((const VOID *)((ULONG_PTR)WritableBase + (ULONG_PTR)(WritableSize - 1)));
-            PVOID VolumePointer = (PUCHAR)WritableBase + VolumeOffset;
-            TRACE("RamDiskBuildWritableImage: PFN span %lx-%lx hidden=%lu reserved=%lu fat=%lu data=%lu\n",
-                  BasePfn,
-                  EndPfn,
-                  Layout.HiddenSectors,
-                  Layout.ReservedSectors,
-                  Layout.FatSizeSectors,
-                  Layout.FirstDataSector);
-            RamDiskTraceSample("  writable[boot]", WritableBase);
-            RamDiskTraceSample("  writable[volume]", VolumePointer);
-
-            if (Layout.ReservedSectors < WritableSize / Layout.BytesPerSector)
+            LARGE_INTEGER SeekPos;
+            SeekPos.QuadPart = Source->ArcOffset;
+            if (ArcSeek(Source->ArcFileId, &SeekPos, SeekAbsolute) != ESUCCESS)
             {
-                ULONGLONG FatOffset = VolumeOffset + ((ULONGLONG)Layout.ReservedSectors * Layout.BytesPerSector);
-                if (FatOffset + (16 * sizeof(ULONG)) <= WritableSize)
+                RamDiskReleaseMemory(WritableBase, WritableSize);
+                return FALSE;
+            }
+            IsArcRead = TRUE;
+        }
+        else
+        {
+            RamDiskReleaseMemory(WritableBase, WritableSize);
+            return FALSE;
+        }
+
+        for (TotalDone = 0; TotalDone < BytesToCopy; )
+        {
+            ULONG CurrentChunk = CopyChunk;
+            ULONG Percent;
+            ULONGLONG NowMicros;
+
+            if ((BytesToCopy - TotalDone) < CurrentChunk)
+                CurrentChunk = (ULONG)(BytesToCopy - TotalDone);
+
+            if (IsArcRead)
+            {
+                ULONG Count;
+                if (ArcRead(Source->ArcFileId,
+                            (PVOID)((ULONG_PTR)WritableBase + (ULONG_PTR)TotalDone),
+                            CurrentChunk, &Count) != ESUCCESS ||
+                    Count != CurrentChunk)
                 {
-                    const ULONG *FatWords = (const ULONG *)((PUCHAR)WritableBase + FatOffset);
-                    TRACE("  writable[FAT0..7]=%08lX %08lX %08lX %08lX %08lX %08lX %08lX %08lX\n",
-                          FatWords[0], FatWords[1], FatWords[2], FatWords[3],
-                          FatWords[4], FatWords[5], FatWords[6], FatWords[7]);
+                    RamDiskReleaseMemory(WritableBase, WritableSize);
+                    return FALSE;
                 }
             }
-
-            if (Source->MemoryBase)
+            else
             {
-                PFN_NUMBER SourceBasePfn = RamDiskPointerToPfn(Source->MemoryBase);
-                TRACE("  source: base=%p size=%llu basePFN=%lx\n",
-                      Source->MemoryBase,
-                      Source->Size,
-                      SourceBasePfn);
-                RamDiskTraceSample("  source[0]", Source->MemoryBase);
+                RtlCopyMemory((PVOID)((ULONG_PTR)WritableBase + (ULONG_PTR)TotalDone),
+                              (PVOID)((ULONG_PTR)Source->MemoryBase + (ULONG_PTR)TotalDone),
+                              CurrentChunk);
+            }
+
+            TotalDone += CurrentChunk;
+            Percent = (ULONG)((TotalDone * 100) / BytesToCopy);
+            NowMicros = RamDiskQueryMicroseconds();
+
+            /* Update TUI every ~500ms or on percent change */
+            if (Percent != LastPercent ||
+                (NowMicros - LastUpdateMicros) >= 500000ULL)
+            {
+                ULONG DoneMB = (ULONG)(TotalDone / (1024ULL * 1024));
+                ULONGLONG ElapsedMicros = NowMicros - StartMicros;
+                ULONG SpeedMBs = 0;
+                ULONG SecsLeft = 0;
+
+                if (ElapsedMicros > 0)
+                {
+                    /* Speed in MB/s: (bytes / elapsed_us) * 1000000 / 1048576 */
+                    SpeedMBs = (ULONG)((TotalDone * 1000000ULL) /
+                                       (ElapsedMicros * 1048576ULL));
+                    if (SpeedMBs == 0)
+                        SpeedMBs = 1;
+                    if (TotalDone < BytesToCopy)
+                    {
+                        ULONGLONG Remaining = BytesToCopy - TotalDone;
+                        /* seconds = remaining_bytes / (total_bytes / elapsed_s) */
+                        SecsLeft = (ULONG)((Remaining * ElapsedMicros) /
+                                           (TotalDone * 1000000ULL));
+                    }
+                }
+
+                RtlStringCbPrintfA(ProgressMsg, sizeof(ProgressMsg),
+                                   "Ramdisk %u%% (%u/%u MB, %u MB/s, %us left)",
+                                   Percent, DoneMB, TotalMB,
+                                   SpeedMBs, SecsLeft);
+                UiUpdateProgressBar(Percent, ProgressMsg);
+                TRACE("RamDiskBuildWritableImage: %s\n", ProgressMsg);
+                LastPercent = Percent;
+                LastUpdateMicros = NowMicros;
             }
         }
-#endif
+
+        /* Final update */
+        {
+            ULONGLONG ElapsedMicros = RamDiskQueryMicroseconds() - StartMicros;
+            ULONG ElapsedSecs = (ULONG)(ElapsedMicros / 1000000ULL);
+            ULONG AvgMBs = 0;
+            if (ElapsedSecs > 0)
+                AvgMBs = (ULONG)(TotalMB / ElapsedSecs);
+
+            RtlStringCbPrintfA(ProgressMsg, sizeof(ProgressMsg),
+                               "Ramdisk copy complete (%u MB in %us, %u MB/s)",
+                               TotalMB, ElapsedSecs, AvgMBs);
+            UiUpdateProgressBar(100, ProgressMsg);
+            TRACE("RamDiskBuildWritableImage: %s\n", ProgressMsg);
+        }
     }
+
+    /* Zero space beyond the source data */
+    if (BytesToCopy < WritableSize)
+    {
+        RtlZeroMemory((PVOID)((ULONG_PTR)WritableBase + (ULONG_PTR)BytesToCopy),
+                      (SIZE_T)(WritableSize - BytesToCopy));
+    }
+
+    /* Expose the full buffer; filesystem detection handles the format */
+    RamDiskSetVisibleRegion(0, WritableSize);
+
+#if DBG
+    {
+        PFN_NUMBER BasePfn = RamDiskPointerToPfn(WritableBase);
+        PFN_NUMBER EndPfn = RamDiskPointerToPfn((const VOID *)((ULONG_PTR)WritableBase + (ULONG_PTR)(WritableSize - 1)));
+        TRACE("RamDiskBuildWritableImage: PFN span %lx-%lx source=%llu buffer=%llu\n",
+              BasePfn, EndPfn, BytesToCopy, WritableSize);
+        RamDiskTraceSample("  writable[0]", WritableBase);
+        if (Source->MemoryBase)
+        {
+            PFN_NUMBER SourceBasePfn = RamDiskPointerToPfn(Source->MemoryBase);
+            TRACE("  source: base=%p size=%llu basePFN=%lx\n",
+                  Source->MemoryBase, Source->Size, SourceBasePfn);
+        }
+    }
+#endif
 
     *NewBase = WritableBase;
     *NewSize = WritableSize;
@@ -2832,8 +1690,11 @@ RamDiskInitialize(
                         RamDiskErrorShown = TRUE;
                     }
                     RamDiskRequestedSize = 0;
-                    TRACE("RamDiskInitialize: continuing with read-only ISO because writable buffer allocation failed\n");
+                    TRACE("RamDiskInitialize: continuing with read-only copy because writable buffer allocation failed\n");
                     RamDiskBase = OriginalBase;
+                    /* Ensure RamDiskImageLength is set so the visible region covers the loaded data */
+                    if (!RamDiskImageLength)
+                        RamDiskImageLength = RamDiskFileSize - RamDiskImageOffset;
                     RamDiskVolumeOffset = 0;
                     RamDiskVolumeLength = 0;
                     goto WritableFallback;

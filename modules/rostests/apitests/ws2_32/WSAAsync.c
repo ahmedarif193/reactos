@@ -27,7 +27,7 @@ START_TEST(WSAAsync)
     int addrsize, len;
     WSAEVENT fEvents[2];
     SOCKET fSockets[2];
-    SOCKET sockaccept;
+    SOCKET sockaccept = INVALID_SOCKET;
     WSANETWORKEVENTS WsaNetworkEvents;
     ULONG ulValue = 1;
     DWORD dwWait;

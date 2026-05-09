@@ -45,7 +45,6 @@ list(APPEND SOURCE
     NtAllocateVirtualMemory.c
     NtApphelpCacheControl.c
     NtCompareTokens.c
-    NtContinue.c
     NtCreateFile.c
     NtCreateKey.c
     NtCreateProfile.c
@@ -110,7 +109,6 @@ list(APPEND SOURCE
     RtlGetLengthWithoutLastFullDosOrNtPathElement.c
     RtlGetLengthWithoutTrailingPathSeperators.c
     RtlGetLongestNtPathLength.c
-    RtlGetNtProductType.c
     RtlGetProcessHeaps.c
     RtlGetUnloadEventTrace.c
     RtlHandle.c
@@ -134,11 +132,17 @@ list(APPEND SOURCE
     RtlValidateUnicodeString.c
     RtlxUnicodeStringToAnsiSize.c
     RtlxUnicodeStringToOemSize.c
-    StackOverflow.c
     SystemInfo.c
-    UserModeException.c
     Timer.c
     precomp.h)
+
+if(NOT ARCH STREQUAL "arm64")
+    list(APPEND SOURCE
+        NtContinue.c
+        RtlGetNtProductType.c
+        StackOverflow.c
+        UserModeException.c)
+endif()
 
 if(ARCH STREQUAL "i386")
     add_asm_files(ntdll_apitest_asm
@@ -149,6 +153,10 @@ elseif(ARCH STREQUAL "amd64")
     add_asm_files(ntdll_apitest_asm
         ../crt/amd64/setjmp_helper.s
         amd64/NtContinue.S
+    )
+elseif(ARCH STREQUAL "arm64")
+    add_asm_files(ntdll_apitest_asm
+        ../crt/arm64/setjmp_helper.s
     )
 endif()
 

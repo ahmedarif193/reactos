@@ -37,7 +37,7 @@ START_TEST(_wsystem)
     SetEnvironmentVariableW(L"COMSPEC", NULL);
     errno = 0xDEADBEEF;
     ret = _wsystem(L"echo This is a test");
-    ok_int(errno, (_winver >= _WIN32_WINNT_VISTA) ? 0xdeadbeef : 0);
+    ok_int(errno, (GetNTVersion() >= _WIN32_WINNT_VISTA) ? 0xdeadbeef : 0);
     ok_int(ret, 0);
 
     SetEnvironmentVariableW(L"COMSPEC", L"InvalidComSpec");

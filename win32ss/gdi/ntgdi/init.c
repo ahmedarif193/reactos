@@ -46,7 +46,8 @@ NTSTATUS
 GdiProcessDestroy(PEPROCESS Process)
 {
     PPROCESSINFO ppiCurrent = PsGetProcessWin32Process(Process);
-    ASSERT(ppiCurrent);
+    if (!ppiCurrent)
+        return STATUS_SUCCESS;
     ASSERT(ppiCurrent->peProcess == Process);
 
     IntGdiCleanupPrivateFontsForProcess();
@@ -78,13 +79,16 @@ GdiThreadDestroy(PETHREAD Thread)
 BOOL
 InitializeGreCSRSS(VOID)
 {
+    NTSTATUS Status;
+    BOOL ret;
+
     /* Initialize Dxgkrnl interfaces and run startup routine */
     DxStartupDxgkInt();
 
     /* Initialize Legacy DirectX graphics driver */
-    if (DxDdStartupDxGraphics(0, NULL, 0, NULL, NULL, gpepCSRSS) != STATUS_SUCCESS)
+    Status = DxDdStartupDxGraphics(0, NULL, 0, NULL, NULL, gpepCSRSS);
+    if (Status != STATUS_SUCCESS)
     {
-        ERR("Unable to initialize DirectX graphics\n");
         return FALSE;
     }
 
@@ -92,9 +96,9 @@ InitializeGreCSRSS(VOID)
     gusLanguageID = UserGetLanguageID();
 
     /* Initialize FreeType library */
-    if (!InitFontSupport())
+    ret = InitFontSupport();
+    if (!ret)
     {
-        ERR("Unable to initialize font support\n");
         return FALSE;
     }
 

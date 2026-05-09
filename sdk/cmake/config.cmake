@@ -79,6 +79,9 @@ if(NOT CMAKE_CONFIGURATION_TYPES)
     endif()
 endif()
 
+set(SEPARATE_DBG OFF CACHE BOOL
+"Whether to split debug symbols into separate .dbg files.")
+
 set(DBG ${_ROS_DEFAULT_DBG} CACHE BOOL
 "Whether to compile for debugging.")
 

@@ -78,7 +78,7 @@ HKLM,"SYSTEM\Setup","CmdLine",0x00020000,"setup -mini"
 
 ; Keep setup marked in-progress so winlogon runs minis-setup once, then it resets the flags
 HKLM,"SYSTEM\Setup","SystemSetupInProgress",0x00010001,0x00000001
-HKLM,"SYSTEM\Setup","SetupType",0x00010001,0x00000001
+HKLM,"SYSTEM\Setup","SetupType",0x00010001,0x00000000
 
 ; Option 2 (prebuilt image argument): rely on winlogon to bootstrap defaults once.
 ; TODO: Later replace this with a first-boot wizard that personalizes username, password, locale,

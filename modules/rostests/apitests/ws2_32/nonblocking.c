@@ -21,7 +21,7 @@ START_TEST(nonblocking)
     struct sockaddr_in addr_con_loc;
     int nConRes, err;
     int addrsize;
-    SOCKET sockaccept;
+    SOCKET sockaccept = INVALID_SOCKET;
     ULONG ulValue = 1;
     DWORD dwFlags = 0, dwLen, dwAddrLen;
     fd_set readfds, writefds, exceptfds;

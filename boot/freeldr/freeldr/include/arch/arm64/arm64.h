@@ -40,6 +40,7 @@ BOOLEAN Arm64MapUserSharedDataPage(ULONGLONG VirtualAddress, ULONGLONG PhysicalA
 ULONGLONG Arm64GetPhysicalAddress(ULONGLONG VirtualAddress);
 ULONG Arm64GetMemoryAttributes(ULONGLONG Address);
 VOID Arm64FlushTlbRange(ULONGLONG VirtualAddress, ULONGLONG Size);
+VOID Arm64ClearIdentityMappings(VOID);
 
 /* Mapping attribute helpers */
 #define ARM64_MEM_ATTR_DEVICE_nGnRnE   0U

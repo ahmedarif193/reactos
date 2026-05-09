@@ -618,9 +618,12 @@ UserGetDCEx(PWND Wnd OPTIONAL, HANDLE ClipRegion, ULONG Flags)
    if (Dce->DCXFlags & DCX_PROCESSOWNED)
    {
       ppi = PsGetCurrentProcessWin32Process();
-      ppi->W32PF_flags |= W32PF_OWNDCCLEANUP;
-      Dce->ptiOwner = NULL;
-      Dce->ppiOwner = ppi;
+      if (ppi)
+      {
+          ppi->W32PF_flags |= W32PF_OWNDCCLEANUP;
+          Dce->ptiOwner = NULL;
+          Dce->ppiOwner = ppi;
+      }
    }
 
    return(Dce->hDC);

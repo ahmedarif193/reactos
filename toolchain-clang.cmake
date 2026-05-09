@@ -338,8 +338,21 @@ _clang_mingw_require_tool(_CLANG_MINGW_NM "nm")
 set(CMAKE_NM ${_CLANG_MINGW_NM} CACHE FILEPATH "MinGW nm" FORCE)
 _clang_mingw_require_tool(_CLANG_MINGW_RANLIB "ranlib")
 set(CMAKE_RANLIB ${_CLANG_MINGW_RANLIB} CACHE FILEPATH "MinGW ranlib" FORCE)
-_clang_mingw_require_tool(_CLANG_MINGW_STRIP "strip")
-set(CMAKE_STRIP ${_CLANG_MINGW_STRIP} CACHE FILEPATH "MinGW strip" FORCE)
+# When using GNU ld, we must use GNU strip - llvm-strip fails with
+# "invalid SymbolTableIndex" on COFF symbol tables produced by GNU ld.
+if(NOT MINGW_LINKER_IS_LLD AND DEFINED ROS_GNU_MINGW_TOOLCHAIN_PATH AND NOT "${ROS_GNU_MINGW_TOOLCHAIN_PATH}" STREQUAL "")
+    set(_clang_gnu_strip "${ROS_GNU_MINGW_TOOLCHAIN_PATH}/${_CLANG_MINGW_PREFIX}strip${_CLANG_MINGW_SUFFIX}")
+    if(EXISTS "${_clang_gnu_strip}")
+        set(CMAKE_STRIP "${_clang_gnu_strip}" CACHE FILEPATH "MinGW strip" FORCE)
+    else()
+        _clang_mingw_require_tool(_CLANG_MINGW_STRIP "strip")
+        set(CMAKE_STRIP ${_CLANG_MINGW_STRIP} CACHE FILEPATH "MinGW strip" FORCE)
+    endif()
+    unset(_clang_gnu_strip)
+else()
+    _clang_mingw_require_tool(_CLANG_MINGW_STRIP "strip")
+    set(CMAKE_STRIP ${_CLANG_MINGW_STRIP} CACHE FILEPATH "MinGW strip" FORCE)
+endif()
 
 set(CMAKE_USER_MAKE_RULES_OVERRIDE "${CMAKE_CURRENT_LIST_DIR}/overrides-gcc.cmake")
 

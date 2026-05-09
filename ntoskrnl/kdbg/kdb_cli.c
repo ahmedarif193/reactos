@@ -61,6 +61,7 @@ static BOOLEAN KdbpCmdEvalExpression(ULONG Argc, PCHAR Argv[]);
 static BOOLEAN KdbpCmdDisassembleX(ULONG Argc, PCHAR Argv[]);
 static BOOLEAN KdbpCmdWriteMemory(ULONG Argc, PCHAR Argv[]);
 static BOOLEAN KdbpCmdRegs(ULONG Argc, PCHAR Argv[]);
+static BOOLEAN KdbpCmdContextRecord(ULONG Argc, PCHAR Argv[]);
 static BOOLEAN KdbpCmdBackTrace(ULONG Argc, PCHAR Argv[]);
 
 static BOOLEAN KdbpCmdContinue(ULONG Argc, PCHAR Argv[]);
@@ -401,6 +402,7 @@ static const struct
     { "cregs", "cregs", "Display control, descriptor table and task segment registers.", KdbpCmdRegs },
     { "sregs", "sregs", "Display status registers.", KdbpCmdRegs },
     { "dregs", "dregs", "Display debug registers.", KdbpCmdRegs },
+    { ".cxr", ".cxr [address]", "Set or reset context record. With address: display context at address. Without: reset to current trap frame.", KdbpCmdContextRecord },
     { "bt", "bt [*frameaddr|thread id]", "Prints current backtrace or from given frame address.", KdbpCmdBackTrace },
 #ifdef __ROS_DWARF__
     { "dt", "dt [mod] [type] [addr]", "Print a struct. The address is optional.", KdbpCmdPrintStruct },
@@ -1339,6 +1341,139 @@ KdbpCmdRegs(
                   Context->Dr6, Context->Dr7);
 #endif
     }
+
+    return TRUE;
+}
+
+/*!\brief Implements the ".cxr" (set/reset context record) command.
+ *
+ * With an address argument: reads a CONTEXT structure from the given
+ * address and makes it the active context for register display, backtrace,
+ * and expression evaluation (like WinDbg's .cxr command).
+ *
+ * Without arguments: resets back to the original trap frame context.
+ */
+static BOOLEAN
+KdbpCmdContextRecord(
+    ULONG Argc,
+    PCHAR Argv[])
+{
+    static CONTEXT KdbSavedContextRecord;
+    static BOOLEAN KdbContextRecordActive = FALSE;
+    static PKDB_KTRAP_FRAME KdbSavedTrapFrame = NULL;
+    ULONG_PTR Address;
+    NTSTATUS Status;
+
+    if (Argc < 2)
+    {
+        /* No argument: reset to original trap frame */
+        if (KdbContextRecordActive)
+        {
+            KdbCurrentTrapFrame = KdbSavedTrapFrame;
+            KdbSavedTrapFrame = NULL;
+            KdbContextRecordActive = FALSE;
+            KdbpPrint("Resetting default context.\n");
+        }
+        else
+        {
+            KdbpPrint("No context record is currently active.\n"
+                      "Usage: .cxr <address>  - Set context to CONTEXT at address\n"
+                      "       .cxr            - Reset to current trap frame\n");
+        }
+        return TRUE;
+    }
+
+    /* Parse the address argument */
+    if (!KdbpGetHexNumber(Argv[1], &Address))
+    {
+        KdbpPrint("Invalid address: %s\n", Argv[1]);
+        return TRUE;
+    }
+
+    if (Address == 0)
+    {
+        KdbpPrint("Invalid context record address 0.\n");
+        return TRUE;
+    }
+
+    /* Read the CONTEXT structure from the specified address */
+    Status = KdbpSafeReadMemory(&KdbSavedContextRecord,
+                                (PVOID)Address,
+                                sizeof(CONTEXT));
+    if (!NT_SUCCESS(Status))
+    {
+        KdbpPrint("Failed to read CONTEXT at 0x%p: status 0x%08x\n",
+                  (PVOID)Address, Status);
+        return TRUE;
+    }
+
+    /* Basic sanity check: ContextFlags should have at least CONTEXT_CONTROL set */
+    if ((KdbSavedContextRecord.ContextFlags & CONTEXT_CONTROL) == 0)
+    {
+        KdbpPrint("WARNING: ContextFlags (0x%08x) does not include CONTEXT_CONTROL.\n"
+                  "         The data at 0x%p may not be a valid CONTEXT record.\n",
+                  KdbSavedContextRecord.ContextFlags, (PVOID)Address);
+    }
+
+    /* Save the current trap frame pointer and switch to the loaded context */
+    if (!KdbContextRecordActive)
+        KdbSavedTrapFrame = KdbCurrentTrapFrame;
+    KdbCurrentTrapFrame = (PKDB_KTRAP_FRAME)&KdbSavedContextRecord;
+    KdbContextRecordActive = TRUE;
+
+    /* Display the context */
+#ifdef _M_IX86
+    KdbpPrint("Context record @ 0x%08x:\n"
+              "CS:EIP  0x%04x:0x%08x\n"
+              "SS:ESP  0x%04x:0x%08x\n"
+              "   EAX  0x%08x   EBX  0x%08x\n"
+              "   ECX  0x%08x   EDX  0x%08x\n"
+              "   ESI  0x%08x   EDI  0x%08x\n"
+              "   EBP  0x%08x\n"
+              "EFLAGS  0x%08x\n",
+              Address,
+              KdbSavedContextRecord.SegCs & 0xFFFF, KdbSavedContextRecord.Eip,
+              KdbSavedContextRecord.SegSs, KdbSavedContextRecord.Esp,
+              KdbSavedContextRecord.Eax, KdbSavedContextRecord.Ebx,
+              KdbSavedContextRecord.Ecx, KdbSavedContextRecord.Edx,
+              KdbSavedContextRecord.Esi, KdbSavedContextRecord.Edi,
+              KdbSavedContextRecord.Ebp,
+              KdbSavedContextRecord.EFlags);
+#elif defined(_M_AMD64)
+    KdbpPrint("Context record @ 0x%p:\n"
+              "CS:RIP  0x%04x:0x%p\n"
+              "SS:RSP  0x%04x:0x%p\n"
+              "   RAX  0x%p     RBX  0x%p\n"
+              "   RCX  0x%p     RDX  0x%p\n"
+              "   RSI  0x%p     RDI  0x%p\n"
+              "   RBP  0x%p\n"
+              "EFLAGS  0x%08x\n",
+              (PVOID)Address,
+              KdbSavedContextRecord.SegCs & 0xFFFF, KdbSavedContextRecord.Rip,
+              KdbSavedContextRecord.SegSs, KdbSavedContextRecord.Rsp,
+              KdbSavedContextRecord.Rax, KdbSavedContextRecord.Rbx,
+              KdbSavedContextRecord.Rcx, KdbSavedContextRecord.Rdx,
+              KdbSavedContextRecord.Rsi, KdbSavedContextRecord.Rdi,
+              KdbSavedContextRecord.Rbp,
+              KdbSavedContextRecord.EFlags);
+#elif defined(_M_ARM64)
+    KdbpPrint("Context record @ 0x%p:\n"
+              "    PC  0x%016llx      SP  0x%016llx\n"
+              "    LR  0x%016llx      FP  0x%016llx\n"
+              "    X0  0x%016llx      X1  0x%016llx\n"
+              "    X2  0x%016llx      X3  0x%016llx\n"
+              "    X4  0x%016llx      X5  0x%016llx\n"
+              "    X6  0x%016llx      X7  0x%016llx\n"
+              " CPSR   0x%08x\n",
+              (PVOID)Address,
+              (ULONGLONG)KdbSavedContextRecord.Pc, (ULONGLONG)KdbSavedContextRecord.Sp,
+              (ULONGLONG)KdbSavedContextRecord.Lr, (ULONGLONG)KdbSavedContextRecord.Fp,
+              (ULONGLONG)KdbSavedContextRecord.X0, (ULONGLONG)KdbSavedContextRecord.X1,
+              (ULONGLONG)KdbSavedContextRecord.X2, (ULONGLONG)KdbSavedContextRecord.X3,
+              (ULONGLONG)KdbSavedContextRecord.X4, (ULONGLONG)KdbSavedContextRecord.X5,
+              (ULONGLONG)KdbSavedContextRecord.X6, (ULONGLONG)KdbSavedContextRecord.X7,
+              KdbSavedContextRecord.Cpsr);
+#endif
 
     return TRUE;
 }

@@ -1014,6 +1014,36 @@ __ASM_GLOBAL_FUNC( NdrClientCall2,
                    __ASM_CFI(".cfi_adjust_cfa_offset -0x28\n\t")
                    "ret" );
 
+#elif defined(__aarch64__)
+
+/*
+ * ARM64: Save vararg registers (x2-x7) contiguously on the stack so that
+ * StackTop points to a flat array of arguments, matching the NDR format
+ * string's stack_offset layout.  The saved area flows directly into the
+ * caller's stack overflow arguments, keeping the whole arg block contiguous.
+ *
+ * Stack layout after prologue:
+ *   sp+0x00: saved x29, x30
+ *   sp+0x10: saved x2  (1st vararg = 1st RPC arg)  <-- stack_top
+ *   sp+0x18: saved x3  (2nd RPC arg)
+ *   sp+0x20: saved x4  (3rd RPC arg)
+ *   sp+0x28: saved x5  (4th RPC arg)
+ *   sp+0x30: saved x6  (5th RPC arg)
+ *   sp+0x38: saved x7  (6th RPC arg)
+ *   sp+0x40: caller's overflow args (7th+ RPC args) -- contiguous!
+ */
+__ASM_GLOBAL_FUNC( NdrClientCall2,
+                   "stp x29, x30, [sp, #-0x40]!\n\t"
+                   "mov x29, sp\n\t"
+                   "stp x2, x3, [sp, #0x10]\n\t"
+                   "stp x4, x5, [sp, #0x20]\n\t"
+                   "stp x6, x7, [sp, #0x30]\n\t"
+                   "add x2, sp, #0x10\n\t"       /* x2 = stack_top */
+                   "mov x3, xzr\n\t"             /* x3 = fpu_stack = NULL */
+                   "bl " __ASM_NAME("ndr_client_call") "\n\t"
+                   "ldp x29, x30, [sp], #0x40\n\t"
+                   "ret" );
+
 #else  /* __x86_64__ */
 
 /***********************************************************************
@@ -1187,15 +1217,16 @@ __ASM_GLOBAL_FUNC( call_server_func,
                    "str x4, [sp, x2]\n\t"
                    "cbnz x2, 1b\n"
                    "2:\tmov x8, x0\n\t"
-                   "cbz x3, 3f\n\t"
+                   "mov x9, x3\n\t"           /* save slot count in x9 */
+                   "cbz x9, 3f\n\t"
                    "ldp x0, x1, [sp], #16\n\t"
-                   "cmp x3, #1\n\t"
+                   "cmp x9, #1\n\t"
                    "b.le 3f\n\t"
                    "ldp x2, x3, [sp], #16\n\t"
-                   "cmp x3, #2\n\t"
+                   "cmp x9, #2\n\t"
                    "b.le 3f\n\t"
                    "ldp x4, x5, [sp], #16\n\t"
-                   "cmp x3, #3\n\t"
+                   "cmp x9, #3\n\t"
                    "b.le 3f\n\t"
                    "ldp x6, x7, [sp], #16\n"
                    "3:\tblr x8\n\t"
@@ -1920,6 +1951,21 @@ __ASM_GLOBAL_FUNC( NdrAsyncClientCall,
                    "call " __ASM_NAME("ndr_async_client_call") "\n\t"
                    "addq $0x28,%rsp\n\t"
                    __ASM_CFI(".cfi_adjust_cfa_offset -0x28\n\t")
+                   "ret" );
+
+#elif defined(__aarch64__)
+
+/* ARM64: Same treatment as NdrClientCall2 - save vararg registers
+ * contiguously so ndr_async_client_call gets a valid stack_top pointer. */
+__ASM_GLOBAL_FUNC( NdrAsyncClientCall,
+                   "stp x29, x30, [sp, #-0x40]!\n\t"
+                   "mov x29, sp\n\t"
+                   "stp x2, x3, [sp, #0x10]\n\t"
+                   "stp x4, x5, [sp, #0x20]\n\t"
+                   "stp x6, x7, [sp, #0x30]\n\t"
+                   "add x2, sp, #0x10\n\t"       /* x2 = stack_top */
+                   "bl " __ASM_NAME("ndr_async_client_call") "\n\t"
+                   "ldp x29, x30, [sp], #0x40\n\t"
                    "ret" );
 
 #else  /* __x86_64__ */

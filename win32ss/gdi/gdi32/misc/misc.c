@@ -744,8 +744,11 @@ GdiFixUpHandle(HGDIOBJ hGdiObj)
 
     Entry = GdiHandleTable + GDI_HANDLE_GET_INDEX(hGdiObj);
 
-    /* Rebuild handle for Object */
-    return (HGDIOBJ)(((ULONG_PTR)(hGdiObj)) | (Entry->Type << GDI_ENTRY_UPPER_SHIFT));
+    /* Rebuild handle for Object.
+     * Cast Entry->Type to ULONG before shifting to prevent sign-extension
+     * on 64-bit: LONG shift can produce a negative int that gets
+     * sign-extended to 0xFFFFFFFFxxxxxxxx when promoted to ULONG_PTR. */
+    return (HGDIOBJ)(((ULONG_PTR)(hGdiObj)) | ((ULONG_PTR)(ULONG)Entry->Type << GDI_ENTRY_UPPER_SHIFT));
 }
 
 /*
@@ -764,7 +767,7 @@ BOOL GdiGetHandleUserData(HGDIOBJ hGdiObj, DWORD ObjectType, PVOID *UserData)
 
     /* Check if twe have the correct type */
     if (GDI_HANDLE_GET_TYPE(hGdiObj) != ObjectType ||
-        ((Entry->Type << GDI_ENTRY_UPPER_SHIFT) & GDI_HANDLE_TYPE_MASK) != ObjectType ||
+        (((ULONG)Entry->Type << GDI_ENTRY_UPPER_SHIFT) & GDI_HANDLE_TYPE_MASK) != ObjectType ||
         (Entry->Type & GDI_ENTRY_BASETYPE_MASK) != (ObjectType & GDI_ENTRY_BASETYPE_MASK))
     {
         return FALSE;

@@ -484,6 +484,38 @@ InitThreadCallback(PETHREAD Thread)
     /* Initialize the THREADINFO */
     ptiCurrent->pEThread = Thread;
     ptiCurrent->ppi = PsGetProcessWin32Process(Process);
+
+    if (!ptiCurrent->ppi)
+    {
+        /*
+         * Process Win32 structure not initialized yet. The thread callback can
+         * be called before the process callback when a DLL's DLL_PROCESS_ATTACH
+         * makes a Win32 syscall during process initialization.
+         * Call the process callback ourselves to ensure the process structure exists.
+         */
+
+        Status = InitProcessCallback(Process);
+        if (!NT_SUCCESS(Status) && Status != STATUS_ALREADY_WIN32)
+        {
+            ERR_CH(UserThread, "Failed to initialize process structure, Status=0x%x\n", Status);
+            /* Clear the Win32 thread pointer since initialization failed */
+            PsSetThreadWin32Thread(Thread, NULL, ptiCurrent);
+            UserDereferenceObject(ptiCurrent);
+            return Status;
+        }
+
+        /* Re-get the process info after initialization */
+        ptiCurrent->ppi = PsGetProcessWin32Process(Process);
+        if (!ptiCurrent->ppi)
+        {
+            ERR_CH(UserThread, "Process Win32 structure still NULL after init!\n");
+            PsSetThreadWin32Thread(Thread, NULL, ptiCurrent);
+            UserDereferenceObject(ptiCurrent);
+            SetLastNtError(STATUS_UNSUCCESSFUL);
+            return STATUS_UNSUCCESSFUL;
+        }
+    }
+
     IntReferenceProcessInfo(ptiCurrent->ppi);
     pTeb->Win32ThreadInfo = ptiCurrent;
     ptiCurrent->pClientInfo = (PCLIENTINFO)pTeb->Win32ClientInfo;
@@ -544,7 +576,9 @@ InitThreadCallback(PETHREAD Thread)
 
     /* CSRSS threads have some special features */
     if (Process == gpepCSRSS || !gpepCSRSS)
+    {
         ptiCurrent->TIF_flags = TIF_CSRSSTHREAD | TIF_DONTATTACHQUEUE;
+    }
 
     /* Initialize the CLIENTINFO */
     pci = (PCLIENTINFO)pTeb->Win32ClientInfo;

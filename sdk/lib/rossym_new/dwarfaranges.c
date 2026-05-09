@@ -112,10 +112,62 @@ dwarfbuildaddrcache(Dwarf *d)
             entries[nentries].highpc = compunit.attrs.highpc;
             entries[nentries].unit = off;
             nentries++;
+        } else if (compunit.attrs.have.ranges && d->ranges.data && d->ranges.len > 0) {
+            /*
+             * CU uses DW_AT_ranges for non-contiguous address ranges.
+             * Parse the .debug_ranges section at the specified offset.
+             * Format: pairs of (start, end) addresses, terminated by (0, 0).
+             */
+            ULONG_PTR rangeoff = compunit.attrs.ranges;
+            ULONG_PTR baseaddr = compunit.attrs.have.lowpc ? compunit.attrs.lowpc : 0;
+
+            if (rangeoff < d->ranges.len) {
+                DwarfBuf rb;
+                memset(&rb, 0, sizeof(rb));
+                rb.d = d;
+                rb.p = d->ranges.data + rangeoff;
+                rb.ep = d->ranges.data + d->ranges.len;
+                rb.addrsize = compunit.b.addrsize;
+
+                while (rb.p && rb.p < rb.ep) {
+                    ULONG_PTR rstart = dwarfgetaddr(&rb);
+                    ULONG_PTR rend = dwarfgetaddr(&rb);
+                    if (rb.p == nil) break;
+
+                    /* End of list */
+                    if (rstart == 0 && rend == 0) break;
+
+                    /* Base address selector */
+                    if (rstart == (ULONG_PTR)-1 || (rb.addrsize == 4 && rstart == 0xFFFFFFFF)) {
+                        baseaddr = rend;
+                        continue;
+                    }
+
+                    /* Grow array if needed */
+                    if (nentries >= capacity) {
+                        int newcap = capacity * 2;
+                        DwarfAddrRangeEntry *newentries = mallocz(newcap * sizeof(DwarfAddrRangeEntry), 1);
+                        if (!newentries) {
+                            free(entries);
+                            d->addrcache.built = -1;
+                            return -1;
+                        }
+                        RtlCopyMemory(newentries, entries, nentries * sizeof(DwarfAddrRangeEntry));
+                        free(entries);
+                        entries = newentries;
+                        capacity = newcap;
+                    }
+
+                    entries[nentries].lowpc = baseaddr + rstart;
+                    entries[nentries].highpc = baseaddr + rend;
+                    entries[nentries].unit = off;
+                    nentries++;
+                }
+            }
         } else {
             /*
-             * Unit has no direct range - search subprograms.
-             * This handles units with non-contiguous code (low_pc=0).
+             * Unit has no direct range or ranges - search subprograms.
+             * This handles units with non-contiguous code.
              */
             DwarfSym sym;
             memset(&sym, 0, sizeof(sym));

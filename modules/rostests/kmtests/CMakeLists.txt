@@ -129,6 +129,11 @@ if(ARCH STREQUAL "i386" OR ARCH STREQUAL "amd64")
         hal/HalPortIo.c)
 endif()
 
+if(NOT MSVC AND ARCH STREQUAL "arm64")
+    set_source_files_properties(ntos_mm/ZwMapViewOfSection.c PROPERTIES COMPILE_OPTIONS "-Wno-int-in-bool-context")
+    set_source_files_properties(rtl/RtlStrSafe.c PROPERTIES COMPILE_OPTIONS "-Wno-maybe-uninitialized")
+endif()
+
 add_library(kmtest_drv MODULE ${KMTEST_DRV_SOURCE})
 set_module_type(kmtest_drv kernelmodedriver)
 target_link_libraries(kmtest_drv kmtest_printf chkstk memcmp ntoskrnl_vista ${PSEH_LIB})

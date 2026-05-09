@@ -94,7 +94,7 @@ dwarfpctoline(Dwarf *d, DwarfSym *proc, ULONG_PTR pc, char **file, char **dir, c
 
     b.ep = b.p+len;
     vers = dwarfget2(&b);
-    if(vers != 2){
+    if(vers < 2 || vers > 4){
         werrstr("bad dwarf version 0x%x", vers);
         return -1;
     }
@@ -107,6 +107,8 @@ dwarfpctoline(Dwarf *d, DwarfSym *proc, ULONG_PTR pc, char **file, char **dir, c
     prog = b.p+len;
 
     quantum = dwarfget1(&b);
+    if(vers >= 4)
+        dwarfget1(&b);		/* maximum_operations_per_instruction (DWARF 4) */
     isstmt = dwarfget1(&b);
     linebase = (schar)dwarfget1(&b);  /* line_base is signed per DWARF spec */
     linerange = (int)dwarfget1(&b);   /* line_range is unsigned in DWARF, keep signed math */

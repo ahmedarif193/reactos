@@ -12,7 +12,7 @@
 #include "rossympriv.h"
 #include <ntimage.h>
 
-#define NDEBUG
+#undef NDEBUG
 #include <debug.h>
 
 BOOLEAN
@@ -25,7 +25,9 @@ RosSymCreateFromFile(PVOID FileContext, PROSSYM_INFO *RosSymInfo)
   char SectionName[IMAGE_SIZEOF_SHORT_NAME];
   ROSSYM_HEADER RosSymHeader;
 
+  DPRINT1("RosSymCreateFromFile: ENTRY\n");
   /* Load DOS header */
+  DPRINT1("RosSymCreateFromFile: Reading DOS header\n");
   if (! RosSymReadFile(FileContext, &DosHeader, sizeof(IMAGE_DOS_HEADER)))
     {
       DPRINT1("Failed to read DOS header\n");

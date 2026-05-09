@@ -412,12 +412,19 @@ BaseCreateStack(
 
     /* Reserve memory for the stack */
     Stack = 0;
-    Status = NtAllocateVirtualMemory(hProcess,
-                                     (PVOID*)&Stack,
-                                     0,
-                                     &StackReserve,
-                                     MEM_RESERVE,
-                                     PAGE_READWRITE);
+    {
+        ULONG AllocationType = MEM_RESERVE;
+#if defined(_WIN64)
+        /* Match NT behavior: prefer high addresses for stacks on 64-bit. */
+        AllocationType |= MEM_TOP_DOWN;
+#endif
+        Status = NtAllocateVirtualMemory(hProcess,
+                                         (PVOID*)&Stack,
+                                         0,
+                                         &StackReserve,
+                                         AllocationType,
+                                         PAGE_READWRITE);
+    }
     if (!NT_SUCCESS(Status))
     {
         DPRINT1("Failure to reserve stack: %lx\n", Status);
@@ -669,6 +676,14 @@ BaseInitializeContext(IN PCONTEXT Context,
     {
         Context->Pc = (ULONG_PTR)BaseProcessStartup;
     }
+
+    /*
+     * ARM64: Set LR to ExitThread as a safety net. BaseThreadStartup and
+     * BaseProcessStartup are DECLSPEC_NORETURN and call ExitThread internally,
+     * so LR should never be used. But if something goes wrong (e.g., SEH2
+     * falls through), this prevents a crash at PC=0 due to LR being zero.
+     */
+    Context->Lr = (ULONG_PTR)ExitThread;
 
     /* Set the Context Flags */
     Context->ContextFlags = CONTEXT_FULL;

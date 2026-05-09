@@ -15,9 +15,9 @@
  *   or as a fallback when GICv3 mode fails (e.g., Apple Hypervisor Framework).
  *
  * COMPATIBILITY NOTES:
- *   - QEMU with Apple HVF has a bug where enabling Group 1 via GICD_CTLR
- *     causes a hang. As a workaround, this implementation uses Group 0
- *     for all interrupts when running with GICv2.
+ *   - Default mode: Group 1 non-secure for Windows-compatible interrupt delivery.
+ *   - HVF quirk mode (HalpGicv2ForceGroup0=TRUE): All interrupts use Group 0
+ *     because QEMU Apple HVF has a bug where enabling Group 1 causes a hang.
  *   - Group 0 interrupts are delivered as IRQ (not FIQ) in non-secure mode
  *     when GICC_CTLR.EOImodeNS=0, which is our configuration.
  *
@@ -58,15 +58,20 @@ HalpInitGicv2CpuInterface(VOID)
      * Configure GICC (CPU Interface):
      * - PMR = 0xFF: Allow all priority levels
      * - BPR = 0x0: No preemption grouping (all 8 priority bits used)
-     * - CTLR = 0x1: Enable Group0 interrupts only
+     * - CTLR: Enable Group0 only when HalpGicv2ForceGroup0 is set (HVF quirk),
+     *         otherwise enable both Group0 and Group1 for Windows-style delivery.
      *
-     * NOTE: We only enable Group 0 because QEMU HVF has a bug where
-     * enabling Group 1 causes a hang. All interrupts are configured
-     * as Group 0 via GICD_IGROUPR.
+     * Group 0 interrupts are delivered as IRQ (not FIQ) in non-secure mode
+     * when GICC_CTLR.EOImodeNS=0, which is our configuration.
      */
-    *HalpMmio((ULONG_PTR)HalpGiccBase, GICC_PMR) = 0xFF;
-    *HalpMmio((ULONG_PTR)HalpGiccBase, GICC_BPR) = 0x0;
-    *HalpMmio((ULONG_PTR)HalpGiccBase, GICC_CTLR) = GICC_CTLR_ENABLE_GRP0;
+    {
+        ULONG GiccCtlr = HalpGicv2ForceGroup0
+            ? GICC_CTLR_ENABLE_GRP0
+            : (GICC_CTLR_ENABLE_GRP0 | GICC_CTLR_ENABLE_GRP1);
+        *HalpMmio((ULONG_PTR)HalpGiccBase, GICC_PMR) = 0xFF;
+        *HalpMmio((ULONG_PTR)HalpGiccBase, GICC_BPR) = 0x0;
+        *HalpMmio((ULONG_PTR)HalpGiccBase, GICC_CTLR) = GiccCtlr;
+    }
 
     /*
      * CRITICAL: Memory barrier after GICC configuration.
@@ -81,7 +86,8 @@ HalpInitGicv2CpuInterface(VOID)
     __asm__ __volatile__("dsb sy" ::: "memory");
     __asm__ __volatile__("isb" ::: "memory");
 
-    DPRINT1("[arm64][GICv2] CPU interface initialized (PMR=0xFF, CTLR=0x1)\n");
+    DPRINT1("[arm64][GICv2] CPU interface initialized (PMR=0xFF, CTLR=0x%x)\n",
+            HalpGicv2ForceGroup0 ? 0x1 : 0x3);
 }
 
 /*
@@ -90,7 +96,7 @@ HalpInitGicv2CpuInterface(VOID)
  * Configures interrupts 0-31 (SGIs and PPIs) in the distributor:
  * - Preserves already-enabled PPIs (e.g., timer)
  * - Clears pending interrupts
- * - Sets all SGI/PPI to Group 0
+ * - Sets SGI/PPI group based on HalpGicv2ForceGroup0 flag
  * - Sets medium priority (0xA0) for all
  *
  * IMPORTANT: This function preserves PPIs that were enabled by
@@ -117,11 +123,15 @@ HalpInitGicv2SgiPpi(VOID)
     *HalpMmio((ULONG_PTR)HalpGicdBase, GICD_ICPENDR) = 0xFFFFFFFF;
 
     /*
-     * Set SGIs/PPIs to Group 0 for GIC-v2.
-     * QEMU HVF has a bug where enabling Group 1 via GICD_CTLR hangs.
-     * Group 0 interrupts are still delivered as IRQ in non-secure mode.
+     * Configure SGI/PPI groups for GIC-v2:
+     * - Default: Group 1 non-secure (Windows-compatible behavior)
+     * - HVF quirk mode (HalpGicv2ForceGroup0): Group 0 only
+     *
+     * Group 0 interrupts are still delivered as IRQ in non-secure mode
+     * when GICC_CTLR.EOImodeNS=0.
      */
-    *HalpMmio((ULONG_PTR)HalpGicdBase, GICD_IGROUPR) = 0x00000000;
+    *HalpMmio((ULONG_PTR)HalpGicdBase, GICD_IGROUPR) =
+        HalpGicv2ForceGroup0 ? 0x00000000 : 0xFFFFFFFF;
 
     /* Set SGI/PPI priorities to medium (0xA0) */
     for (i = 0; i < 32; i += 4)

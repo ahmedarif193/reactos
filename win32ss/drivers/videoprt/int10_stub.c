@@ -8,7 +8,11 @@ NTSTATUS
 NTAPI
 IntInitializeVideoAddressSpace(VOID)
 {
-    return STATUS_NOT_IMPLEMENTED;
+    /*
+     * ARM64: No VGA BIOS or V86 mode. Return success so the video port
+     * driver continues initialization and CsrProcess stays valid.
+     */
+    return STATUS_SUCCESS;
 }
 
 VP_STATUS
