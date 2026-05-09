@@ -275,11 +275,13 @@ Bus_PlugInDevice (
     {
         index = 0;
         index += swprintf(&temp[index],
+                          RTL_NUMBER_OF(temp) - index,
                           L"ACPI\\%hs",
                           Device->pnp.hardware_id);
         temp[index++] = UNICODE_NULL;
 
         index += swprintf(&temp[index],
+                          RTL_NUMBER_OF(temp) - index,
                           L"*%hs",
                           Device->pnp.hardware_id);
         temp[index++] = UNICODE_NULL;
