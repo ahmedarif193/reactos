@@ -1893,7 +1893,13 @@ PUCHAR KdComPortInUse = NULL;
 #define HAL_ARM64_GICR_BASE_DEFAULT   0x080A0000ULL
 #define HAL_ARM64_GICR_STRIDE_DEFAULT 0x20000ULL
 #define HAL_ARM64_GICR_SGI_OFFSET_DEFAULT 0x10000ULL
-#define HAL_ARM64_KSEG0_BASE 0xFFFF800000000000ULL
+#define HAL_ARM64_SYSTEM_RANGE_BASE 0xFFFF800000000000ULL
+#define HAL_ARM64_KSEG0_BASE HAL_ARM64_SYSTEM_RANGE_BASE
+#define HAL_ARM64_PHYS_MAP_BASE 0xFFFFFC0000000000ULL
+#define HAL_ARM64_PHYS_ADDR_MASK 0x0000FFFFFFFFFFFFULL
+#define HAL_ARM64_GICD_MAP_LENGTH 0x10000ULL
+#define HAL_ARM64_GICR_FRAME_LENGTH 0x20000ULL
+#define HAL_ARM64_ITS_MAP_LENGTH 0x20000ULL
 #define HAL_ARM64_GICV2M_SETSPI 0x40
 #define HAL_ARM64_LPI_BASE 8192u
 #define HAL_ARM64_LPI_COUNT 1024u
@@ -2074,7 +2080,7 @@ static ULONG_PTR HalpGicrCpuBase[MAXIMUM_PROCESSORS];
  *
  * HalpGicLpiCount, HalpForceSysRegs, HalpGicParsedMadt, HalpGicInterfaceSelected,
  * and HalpGiccPresent are now declared as extern at the top of this file. */
-/* Use identity map until the kernel's KSEG0 direct map is fully established. */
+/* Use identity map until the kernel's private physical alias is established. */
 static BOOLEAN HalpUseIdentityMapping = TRUE;
 static ULONG HalpUsedAllocDescriptors;
 static MEMORY_ALLOCATION_DESCRIPTOR HalpAllocationDescriptorArray[64];
@@ -3140,12 +3146,11 @@ HalpGicItsInitialize(VOID)
         goto Exit;
 
     /*
-     * Convert ITS physical address to KSEG0 virtual address.
-     * After early boot, identity mapping is disabled and we must use
-     * the kernel's KSEG0 region for accessing physical device memory.
-     * Store in static variable so helper functions can use it.
+     * Convert ITS physical address to the private physical alias. The public
+     * FFFF8000... system range is not a direct map on ARM64.
      */
-    HalpGicItsVa = (ULONG_PTR)(HalpGicItsBase | HAL_ARM64_KSEG0_BASE);
+    HalpGicItsVa = (ULONG_PTR)(HAL_ARM64_PHYS_MAP_BASE |
+                               (HalpGicItsBase & HAL_ARM64_PHYS_ADDR_MASK));
     DPRINT1("[arm64][HAL] HalpGicItsInitialize: ITS PA=0x%llx VA=0x%p\n",
             HalpGicItsBase, (PVOID)HalpGicItsVa);
 
@@ -3534,13 +3539,14 @@ static __inline PVOID HalpPhysToKseg0(ULONGLONG Physical)
     if (Physical == 0)
         return NULL;
 
-    if (Physical >= HAL_ARM64_KSEG0_BASE)
+    if (Physical >= HAL_ARM64_SYSTEM_RANGE_BASE)
         return (PVOID)(ULONG_PTR)Physical;
 
     if (HalpUseIdentityMapping)
         return (PVOID)(ULONG_PTR)Physical;
 
-    return (PVOID)(ULONG_PTR)(Physical | HAL_ARM64_KSEG0_BASE);
+    return (PVOID)(ULONG_PTR)(HAL_ARM64_PHYS_MAP_BASE |
+                              (Physical & HAL_ARM64_PHYS_ADDR_MASK));
 }
 
 ULONG64
@@ -3721,24 +3727,22 @@ volatile ULONG *HalpMmio(ULONG_PTR Base, ULONG Offset)
      *   - This is critical for MMIO regions above 4GB (like GICR) that
      *     are only mapped in TTBR0's identity page tables.
      *
-     * After boot (HalpUseIdentityMapping == FALSE):
-     *   - If the base address was already remapped by MmMapIoSpace
-     *     (i.e., it's in high kernel VA space), use it directly.
-     *   - Otherwise, convert physical addresses to KSEG0 virtual addresses
-     *     (TTBR1) by adding HAL_ARM64_KSEG0_BASE.
+     * After boot (HalpUseIdentityMapping == FALSE), physical MMIO uses the
+     * private ARM64 physical alias. The public FFFF8000... system range is
+     * reserved for NT-visible kernel VA contracts and is not a direct map.
      */
     ULONG_PTR Va = Base;
 
     /* Don't modify addresses that are already in high VA space */
-    if (Va >= HAL_ARM64_KSEG0_BASE)
+    if (Va >= HAL_ARM64_SYSTEM_RANGE_BASE)
         return (volatile ULONG *)(Va + Offset);
 
     /* During early boot, use identity mapping (PA == VA) via TTBR0 */
     if (HalpUseIdentityMapping)
         return (volatile ULONG *)(Va + Offset);
 
-    /* After boot, convert to KSEG0 VA via TTBR1 */
-    Va |= HAL_ARM64_KSEG0_BASE;
+    /* After boot, convert to the private physical alias via TTBR1 */
+    Va = HAL_ARM64_PHYS_MAP_BASE | (Va & HAL_ARM64_PHYS_ADDR_MASK);
     return (volatile ULONG *)(Va + Offset);
 }
 
@@ -3771,7 +3775,7 @@ HalpMapRuntimeMmioWindow(
     if (!BaseAddress || *BaseAddress == 0)
         return TRUE;
 
-    if (*BaseAddress >= HAL_ARM64_KSEG0_BASE)
+    if (*BaseAddress >= HAL_ARM64_SYSTEM_RANGE_BASE)
         return TRUE;
 
     Physical = *BaseAddress;
@@ -3808,6 +3812,87 @@ HalpMapGicv2RuntimeMmioWindows(VOID)
 
     if (!HalpMapRuntimeMmioWindow(&HalpGiccBase, PAGE_SIZE, "GICC"))
         return FALSE;
+
+    return TRUE;
+}
+
+static
+VOID
+HalpRewriteGicrCpuBases(
+    _In_ ULONGLONG OldBase,
+    _In_ ULONGLONG NewBase,
+    _In_ SIZE_T Length)
+{
+    ULONGLONG End;
+
+    if ((OldBase == 0) || (NewBase == OldBase) || (Length == 0))
+        return;
+
+    End = OldBase + Length;
+    for (ULONG Cpu = 0; Cpu < RTL_NUMBER_OF(HalpGicrCpuBase); ++Cpu)
+    {
+        ULONG_PTR Base = HalpGicrCpuBase[Cpu];
+
+        if (((ULONGLONG)Base >= OldBase) && ((ULONGLONG)Base < End))
+            HalpGicrCpuBase[Cpu] = (ULONG_PTR)(NewBase + ((ULONGLONG)Base - OldBase));
+    }
+}
+
+static
+BOOLEAN
+HalpMapGicv3RuntimeMmioWindows(VOID)
+{
+    ULONGLONG OldGicrBase;
+    SIZE_T GicrLength;
+
+    if (!HalpMapRuntimeMmioWindow(&HalpGicdBase, HAL_ARM64_GICD_MAP_LENGTH, "GICD"))
+        return FALSE;
+
+    OldGicrBase = HalpGicrRegionBase;
+    GicrLength = (SIZE_T)HalpGicrRegionLength;
+    if (GicrLength == 0)
+        GicrLength = HAL_ARM64_GICR_FRAME_LENGTH * MAXIMUM_PROCESSORS;
+
+    if (HalpGicrRegionBase &&
+        !HalpMapRuntimeMmioWindow(&HalpGicrRegionBase, GicrLength, "GICR"))
+    {
+        return FALSE;
+    }
+
+    HalpRewriteGicrCpuBases(OldGicrBase, HalpGicrRegionBase, GicrLength);
+
+    for (ULONG Cpu = 0; Cpu < RTL_NUMBER_OF(HalpGicrCpuBase); ++Cpu)
+    {
+        ULONGLONG CpuBase = HalpGicrCpuBase[Cpu];
+
+        if ((CpuBase == 0) || (CpuBase >= HAL_ARM64_SYSTEM_RANGE_BASE))
+            continue;
+
+        if (!HalpMapRuntimeMmioWindow(&CpuBase,
+                                      HAL_ARM64_GICR_FRAME_LENGTH,
+                                      "GICR-CPU"))
+        {
+            return FALSE;
+        }
+
+        HalpGicrCpuBase[Cpu] = (ULONG_PTR)CpuBase;
+    }
+
+    if (HalpGicItsPresent && HalpGicItsBase)
+    {
+        ULONGLONG ItsBase = HalpGicItsBase;
+
+        if (!HalpMapRuntimeMmioWindow(&ItsBase, HAL_ARM64_ITS_MAP_LENGTH, "GITS"))
+            return FALSE;
+
+        HalpGicItsVa = (ULONG_PTR)ItsBase;
+
+        for (ULONG Index = 0; Index < HalpGicItsNodeCount; ++Index)
+        {
+            if (HalpGicItsNodes[Index].PhysicalBase.QuadPart == HalpGicItsBase)
+                HalpGicItsNodes[Index].VirtualBase = (ULONG_PTR)ItsBase;
+        }
+    }
 
     return TRUE;
 }
@@ -5040,7 +5125,15 @@ HalInitSystem(
          *
          * For GICv3, the CPU interface uses system registers (no MMIO).
          */
-        if (!HalpGicUseSysRegs)
+        if (HalpGicUseSysRegs)
+        {
+            if (!HalpMapGicv3RuntimeMmioWindows())
+            {
+                DPRINT1("[arm64][HAL] Phase1: MmMapIoSpace failed for GICv3 MMIO; "
+                        "GICD/GICR addresses may be stale\n");
+            }
+        }
+        else
         {
             if (!HalpMapGicv2RuntimeMmioWindows())
             {
@@ -8276,7 +8369,7 @@ IoFlushAdapterBuffers(
                 PPFN_NUMBER Pfns = MmGetMdlPfnArray(Mdl);
                 if (Pfns)
                 {
-                    ULONG_PTR KsegVa = 0xFFFF800000000000ULL |
+                    ULONG_PTR KsegVa = HAL_ARM64_PHYS_MAP_BASE |
                                        ((ULONG_PTR)Pfns[0] << PAGE_SHIFT) |
                                        ((ULONG_PTR)CurrentVa & (PAGE_SIZE - 1));
                     volatile UCHAR *KsegPtr = (volatile UCHAR *)KsegVa;
@@ -8598,14 +8691,14 @@ IoMapTransfer(
 
     /*
      * Perform cache maintenance for non-coherent DMA.
-     * Use KSEG0 alias (0xFFFF800000000000 | PA) for cache operations
-     * instead of CurrentVa, which may not be mapped in the current
-     * address space (e.g., user-mode MDL pages during DPC-level I/O).
-     * KSEG0 is always identity-mapped to physical memory.
+     * Use the private physical alias for cache operations instead of
+     * CurrentVa, which may not be mapped in the current address space
+     * (e.g. user-mode MDL pages during DPC-level I/O).
      */
     if (!HalpArm64DmaCoherency.SystemCoherent && TransferLength > 0)
     {
-        ULONG_PTR KsegVa = 0xFFFF800000000000ULL | PhysicalAddress.QuadPart;
+        ULONG_PTR KsegVa = HAL_ARM64_PHYS_MAP_BASE |
+                            (PhysicalAddress.QuadPart & HAL_ARM64_PHYS_ADDR_MASK);
         ULONG_PTR Aligned = KsegVa & ~63ULL;
         ULONG_PTR End = KsegVa + TransferLength;
 

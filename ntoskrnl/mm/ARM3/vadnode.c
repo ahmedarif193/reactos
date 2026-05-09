@@ -289,6 +289,9 @@ MiInsertVadEx(
     {
         /* Make sure HighestAddress is not too large */
         HighestAddress = min(HighestAddress, (ULONG_PTR)MM_HIGHEST_VAD_ADDRESS);
+#ifdef _M_ARM64
+        HighestAddress = min(HighestAddress, (ULONG_PTR)MI_HIGHEST_AUTOMATIC_USER_ADDRESS);
+#endif
 
         /* Which way should we search? */
         if ((AllocationType & MEM_TOP_DOWN) || CurrentProcess->VmTopDown)
@@ -523,6 +526,18 @@ MiFindEmptyAddressRangeInTree(IN SIZE_T Length,
     PageCount = BYTES_TO_PAGES(Length);
     AlignmentVpn = Alignment >> PAGE_SHIFT;
     LowVpn = ALIGN_UP_BY((ULONG_PTR)MM_LOWEST_USER_ADDRESS >> PAGE_SHIFT, AlignmentVpn);
+#ifdef _M_ARM64
+    {
+        ULONG_PTR MinimumAutoVpn;
+
+        MinimumAutoVpn = ALIGN_UP_BY(MI_LOWEST_AUTOMATIC_USER_ADDRESS >> PAGE_SHIFT,
+                                     AlignmentVpn);
+        if (LowVpn < MinimumAutoVpn)
+        {
+            LowVpn = MinimumAutoVpn;
+        }
+    }
+#endif
 
     /* Check for kernel mode table (memory areas) */
     if (Table->Unused == 1)
