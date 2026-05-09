@@ -651,6 +651,8 @@ MiAllocatePoolPages(IN POOL_TYPE PoolType,
         /* Setup a demand-zero writable PTE */
 #if defined(_M_ARM64)
         TempPte = ValidKernelPte;
+        TempPte.u.Hard.PrivilegedNoExecute = 1;
+        TempPte.u.Hard.UserNoExecute = 1;
 #else
         MI_MAKE_SOFTWARE_PTE(&TempPte, MM_READWRITE);
 #endif
@@ -886,6 +888,10 @@ MiAllocatePoolPages(IN POOL_TYPE PoolType,
     // Loop the pages
     //
     TempPte = ValidKernelPte;
+#if defined(_M_ARM64)
+    TempPte.u.Hard.PrivilegedNoExecute = 1;
+    TempPte.u.Hard.UserNoExecute = 1;
+#endif
     do
     {
         /* Allocate a page */
