@@ -10,6 +10,7 @@
 #include "wim_capture.h"
 #include "wim_io.h"
 
+#include <limits.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -22,10 +23,39 @@
 #include <unistd.h>
 #else
 #include <io.h>
-#define lstat stat
-#ifndef ssize_t
-typedef intptr_t ssize_t;
 #endif
+
+#ifdef _WIN32
+typedef struct _stat64 capture_stat_t;
+typedef __int64 capture_off_t;
+typedef int capture_read_t;
+
+static unsigned int capture_read_size(size_t size)
+{
+    return (size > UINT_MAX) ? UINT_MAX : (unsigned int)size;
+}
+
+#define capture_lstat(path, st) _stat64((path), (st))
+#define capture_stat(path, st) _stat64((path), (st))
+#define capture_open(path) _open((path), _O_RDONLY | _O_BINARY)
+#define capture_read(fd, buffer, size) _read((fd), (buffer), capture_read_size(size))
+#define capture_close(fd) _close(fd)
+#define capture_is_dir(mode) (((mode) & _S_IFMT) == _S_IFDIR)
+#define capture_is_reg(mode) (((mode) & _S_IFMT) == _S_IFREG)
+#define capture_strdup(string) _strdup(string)
+#else
+typedef struct stat capture_stat_t;
+typedef off_t capture_off_t;
+typedef ssize_t capture_read_t;
+
+#define capture_lstat(path, st) lstat((path), (st))
+#define capture_stat(path, st) stat((path), (st))
+#define capture_open(path) open((path), O_RDONLY)
+#define capture_read(fd, buffer, size) read((fd), (buffer), (size))
+#define capture_close(fd) close(fd)
+#define capture_is_dir(mode) S_ISDIR(mode)
+#define capture_is_reg(mode) S_ISREG(mode)
+#define capture_strdup(string) strdup(string)
 #endif
 
 #define MMAP_CAPTURE_THRESHOLD (1u << 20)
@@ -55,7 +85,7 @@ static int dentry_name_cmp(const void* a, const void* b)
     return strcmp(da->name_utf8, db->name_utf8);
 }
 
-static int capture_regular_file(const char* full_path, off_t file_size,
+static int capture_regular_file(const char* full_path, capture_off_t file_size,
                                 WimDentry* dentry, wim_blob_writer_fn writer, void* user)
 {
     int fd;
@@ -66,11 +96,7 @@ static int capture_regular_file(const char* full_path, off_t file_size,
     if ((uint64_t)file_size > SIZE_MAX)
         return -1;
 
-    fd = open(full_path, O_RDONLY
-#ifdef _WIN32
-                        | O_BINARY
-#endif
-    );
+    fd = capture_open(full_path);
     if (fd < 0) {
         fprintf(stderr, "Warning: Cannot read '%s', skipping\n", full_path);
         return 0;
@@ -79,7 +105,7 @@ static int capture_regular_file(const char* full_path, off_t file_size,
 #ifndef _WIN32
     if ((uint64_t)file_size >= MMAP_CAPTURE_THRESHOLD) {
         void* map = mmap(NULL, (size_t)file_size, PROT_READ, MAP_PRIVATE, fd, 0);
-        close(fd); /* mmap retains its own reference, safe to close fd now */
+        capture_close(fd); /* mmap retains its own reference, safe to close fd now */
         if (map != MAP_FAILED) {
 #ifdef POSIX_MADV_SEQUENTIAL
             (void)posix_madvise(map, (size_t)file_size, POSIX_MADV_SEQUENTIAL);
@@ -91,11 +117,7 @@ static int capture_regular_file(const char* full_path, off_t file_size,
             return ret;
         }
         /* mmap failed; fall back to the read path. */
-        fd = open(full_path, O_RDONLY
-#ifdef _WIN32
-                        | O_BINARY
-#endif
-    );
+        fd = capture_open(full_path);
         if (fd < 0) {
             fprintf(stderr, "Warning: Cannot re-open '%s' after mmap failure\n", full_path);
             return 0;
@@ -108,17 +130,17 @@ static int capture_regular_file(const char* full_path, off_t file_size,
         size_t total = 0;
 
         if (!data) {
-            close(fd);
+            capture_close(fd);
             return -1;
         }
 
         while (total < (size_t)file_size) {
-            ssize_t nread = read(fd, data + total, (size_t)file_size - total);
+            capture_read_t nread = capture_read(fd, data + total, (size_t)file_size - total);
             if (nread <= 0)
                 break;
             total += (size_t)nread;
         }
-        close(fd);
+        capture_close(fd);
 
         if (total != (size_t)file_size) {
             fprintf(stderr, "Warning: Short read on '%s'\n", full_path);
@@ -136,20 +158,20 @@ static int capture_regular_file(const char* full_path, off_t file_size,
 static int capture_recursive(const char* full_path, const char* name,
                              WimDentry* dentry, wim_blob_writer_fn writer, void* user)
 {
-    struct stat st;
-    if (lstat(full_path, &st) != 0) {
+    capture_stat_t st;
+    if (capture_lstat(full_path, &st) != 0) {
         fprintf(stderr, "Warning: Cannot stat '%s', skipping\n", full_path);
         return 0;
     }
 
     wim_dentry_init(dentry);
-    dentry->name_utf8 = strdup(name);
+    dentry->name_utf8 = capture_strdup(name);
     utf8_to_utf16le(name, &dentry->name_utf16, &dentry->name_utf16_len);
     dentry->creation_time = unix_to_filetime(st.st_ctime);
     dentry->last_access_time = unix_to_filetime(st.st_atime);
     dentry->last_write_time = unix_to_filetime(st.st_mtime);
 
-    if (S_ISDIR(st.st_mode)) {
+    if (capture_is_dir(st.st_mode)) {
         dentry->attributes = WIM_FILE_ATTRIBUTE_DIRECTORY;
 
         DIR* dir = opendir(full_path);
@@ -193,7 +215,7 @@ static int capture_recursive(const char* full_path, const char* name,
             qsort(dentry->children, dentry->child_count,
                   sizeof(WimDentry), dentry_name_cmp);
         }
-    } else if (S_ISREG(st.st_mode)) {
+    } else if (capture_is_reg(st.st_mode)) {
         dentry->attributes = WIM_FILE_ATTRIBUTE_ARCHIVE;
         dentry->file_size = (uint64_t)st.st_size;
 
@@ -214,8 +236,8 @@ static int capture_recursive(const char* full_path, const char* name,
 int wim_capture_dir(const char* source_dir, WimDentry* root,
                     wim_blob_writer_fn writer, void* user)
 {
-    struct stat st;
-    if (stat(source_dir, &st) != 0) {
+    capture_stat_t st;
+    if (capture_stat(source_dir, &st) != 0) {
         fprintf(stderr, "Error: Cannot stat '%s'\n", source_dir);
         return -1;
     }
