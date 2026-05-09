@@ -32,10 +32,11 @@ KiArm64EarlyVectorHandler(_In_ UINT64 VectorId,
 
 #define ARM64_KSEG0_BASE            0xFFFF800000000000ULL
 /* Memory attribute indices in MAIR_EL1 */
-#define ARM64_MEM_ATTR_DEVICE_nGnRnE 0x0ULL
-#define ARM64_MEM_ATTR_NORMAL_NC     0x1ULL
-#define ARM64_MEM_ATTR_NORMAL_WC     0x2ULL
+#define ARM64_MEM_ATTR_DEVICE_nGnRnE 0x1ULL
+#define ARM64_MEM_ATTR_NORMAL_NC     0x2ULL
+#define ARM64_MEM_ATTR_NORMAL_WC     0x3ULL
 #define ARM64_MEM_ATTR_NORMAL_WB     0x4ULL
+#define ARM64_NT_MAIR_VALUE          0x444400FF444400FFULL
 #define ARM64_PTE_BLOCK_ATTR_INDEX_SHIFT 2
 #define ARM64_PTE_BLOCK_INNER_SHARE (3ULL << 8)
 #define ARM64_PTE_BLOCK_AF          (1ULL << 10)
@@ -1017,66 +1018,15 @@ KiArm64VirtualToPhysical(_In_ UINT64 Virtual)
 
 CODE_SEG("INIT")
 static UINT64
-KiArm64EnsureMairNormalWb(_In_ UINT64 CurrentMair)
+KiArm64EnsureMairNtLayout(_In_ UINT64 CurrentMair)
 {
-    const UINT64 AttributeMask = 0xFFULL << (ARM64_MEM_ATTR_NORMAL_WB * 8);
-
-    if ((CurrentMair & AttributeMask) == AttributeMask)
-        return CurrentMair;
-
-    UINT64 Updated = (CurrentMair & ~AttributeMask) | (0xFFULL << (ARM64_MEM_ATTR_NORMAL_WB * 8));
-    __asm__ __volatile__("msr mair_el1, %0" :: "r"(Updated));
-    __asm__ __volatile__("isb");
-    return Updated;
-}
-
-CODE_SEG("INIT")
-static UINT64
-KiArm64EnsureMairDeviceNgnrne(_In_ UINT64 CurrentMair)
-{
-    /* Ensure MAIR attr index 0 encodes Device-nGnRnE (0x00) */
-    const UINT64 AttributeMask = 0xFFULL << (ARM64_MEM_ATTR_DEVICE_nGnRnE * 8);
-    UINT64 Updated = (CurrentMair & ~AttributeMask) | (0x00ULL << (ARM64_MEM_ATTR_DEVICE_nGnRnE * 8));
-    if (Updated != CurrentMair)
+    if (CurrentMair != ARM64_NT_MAIR_VALUE)
     {
-        __asm__ __volatile__("msr mair_el1, %0" :: "r"(Updated));
-        __asm__ __volatile__("isb");
-    }
-    return Updated;
-}
-
-CODE_SEG("INIT")
-static UINT64
-KiArm64EnsureMairNormalNc(_In_ UINT64 CurrentMair,
-                          _In_ UINT64 AttrIndex)
-{
-    const UINT64 AttributeMask = 0xFFULL << (AttrIndex * 8);
-    UINT64 Updated = (CurrentMair & ~AttributeMask) | (0x44ULL << (AttrIndex * 8));
-
-    if (Updated != CurrentMair)
-    {
-        __asm__ __volatile__("msr mair_el1, %0" :: "r"(Updated));
+        __asm__ __volatile__("msr mair_el1, %0" :: "r"(ARM64_NT_MAIR_VALUE));
         __asm__ __volatile__("isb");
     }
 
-    return Updated;
-}
-
-CODE_SEG("INIT")
-static UINT64
-KiArm64EnsureMairNormalWt(_In_ UINT64 CurrentMair,
-                          _In_ UINT64 AttrIndex)
-{
-    const UINT64 AttributeMask = 0xFFULL << (AttrIndex * 8);
-    UINT64 Updated = (CurrentMair & ~AttributeMask) | (0x88ULL << (AttrIndex * 8));
-
-    if (Updated != CurrentMair)
-    {
-        __asm__ __volatile__("msr mair_el1, %0" :: "r"(Updated));
-        __asm__ __volatile__("isb");
-    }
-
-    return Updated;
+    return ARM64_NT_MAIR_VALUE;
 }
 
 CODE_SEG("INIT")
@@ -1256,11 +1206,8 @@ KiArm64EnsureIdentityMapping(_Inout_ PARM64_BOOT_CONTEXT BootContext)
         KiArm64MapIdentityRange(0, ARM64_IDENTITY_MIN_BYTES, BlockAttributes);
     }
 
-    /* Program MAIR for Normal-WB, Normal-NC, and Device-nGnRnE attributes */
-    UpdatedMair = KiArm64EnsureMairNormalWb(BootContext->MairEl1);
-    UpdatedMair = KiArm64EnsureMairNormalNc(UpdatedMair, ARM64_MEM_ATTR_NORMAL_NC);
-    UpdatedMair = KiArm64EnsureMairNormalWt(UpdatedMair, ARM64_MEM_ATTR_NORMAL_WC);
-    UpdatedMair = KiArm64EnsureMairDeviceNgnrne(UpdatedMair);
+    /* Program the Win11 ARM64-visible MAIR layout. */
+    UpdatedMair = KiArm64EnsureMairNtLayout(BootContext->MairEl1);
     BootContext->MairEl1 = UpdatedMair;
 
     UINT64 DeviceBlockAttrs = ARM64_PTE_TYPE_BLOCK |
