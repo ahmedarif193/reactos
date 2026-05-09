@@ -48,14 +48,9 @@ $ZwFuncEndName
 
 #elif defined(_M_ARM64) || defined(_ARM64_) || defined(__aarch64__) || defined(__arm64__)
 
-    .set SyscallId, 0
+#include <ksarm64.h>
 
-    /*
-     * Must match ThPreviousMode from generated ksarm64.h
-     * (KTHREAD.PreviousMode offset, see ksx.template.h OFFSET macro).
-     */
-    .equ ThPreviousMode, 0x153
-    .equ PcCurrentThread, 0xd48
+    .set SyscallId, 0
 
     .macro STUB_K Name, ArgCount
     .align 2
@@ -161,41 +156,15 @@ Zw\Name:
     ret
     .seh_endproc
 .else
-    /* <=8 args: full save/restore with standard frame (no stack args to relocate) */
-
-    /* SEH unwind: begin procedure */
+    /*
+     * <=8 args: enter through the ARM64 SVC path so the syscall handler builds
+     * and links a trap frame before calling Nt\Name.  NtRaiseException and
+     * NtContinue require that frame even when reached through a kernel Zw call.
+     */
     .seh_proc Zw\Name
-    stp     x29, x30, [sp, #-32]!
-    .seh_save_fplr_x 32
-    stp     x19, x20, [sp, #16]
-    .seh_save_regp x19, 16
-    mov     x29, sp
-    .seh_set_fp
     .seh_endprologue
-
-    /* Load current thread pointer from per-CPU PCR (tpidr_el1) */
-    mrs     x19, tpidr_el1
-    add     x19, x19, #PcCurrentThread
-    ldr     x19, [x19]
-    cbz     x19, .LZw\Name\()_call
-
-    /* Save old PreviousMode and set to KernelMode (0) */
-    ldrb    w20, [x19, #ThPreviousMode]
-    strb    wzr, [x19, #ThPreviousMode]
-
-.LZw\Name\()_call:
-    /* Call the Nt function via indirect branch (unlimited range) */
-    adrp    x16, Nt\Name
-    add     x16, x16, #:lo12:Nt\Name
-    blr     x16
-
-    /* Restore PreviousMode if thread pointer was valid */
-    cbz     x19, .LZw\Name\()_ret
-    strb    w20, [x19, #ThPreviousMode]
-
-.LZw\Name\()_ret:
-    ldp     x19, x20, [sp, #16]
-    ldp     x29, x30, [sp], #32
+    mov     x8, #SyscallId
+    svc     #0
     ret
     .seh_endproc
 .endif
