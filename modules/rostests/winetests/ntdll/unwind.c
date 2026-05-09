@@ -3438,7 +3438,7 @@ START_TEST(unwind)
 
 #ifdef __arm__
     test_virtual_unwind_arm();
-#elif defined(__aarch64__)
+#elif defined(__aarch64__) && !defined(__REACTOS__)
     test_virtual_unwind_arm64();
 #elif defined(__x86_64__)
     test_virtual_unwind_x86();

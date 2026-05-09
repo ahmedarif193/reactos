@@ -57,6 +57,7 @@ KMT_TESTFUNC Test_MmAllocateContiguousNode;
 KMT_TESTFUNC Test_MmMdl;
 KMT_TESTFUNC Test_MmSection;
 KMT_TESTFUNC Test_MmReservedMapping;
+KMT_TESTFUNC Test_MmSelfMap;
 KMT_TESTFUNC Test_NpfsConnect;
 KMT_TESTFUNC Test_NpfsCreate;
 KMT_TESTFUNC Test_NpfsFileInfo;
@@ -148,6 +149,7 @@ const KMT_TEST TestList[] =
     { "MmMdl",                              Test_MmMdl },
     { "MmSection",                          Test_MmSection },
     { "MmReservedMapping",                  Test_MmReservedMapping },
+    { "MmSelfMap",                          Test_MmSelfMap },
     { "NpfsConnect",                        Test_NpfsConnect },
     { "NpfsCreate",                         Test_NpfsCreate },
     { "NpfsFileInfo",                       Test_NpfsFileInfo },

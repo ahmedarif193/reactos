@@ -2317,12 +2317,17 @@ Bus_PDO_QueryDeviceId(
         }
         else if (Device && Device->pnp.hardware_id)
         {
-            length = (ULONG)swprintf(temp, L"ACPI\\%hs", Device->pnp.hardware_id);
+            length = (ULONG)swprintf(temp,
+                                     RTL_NUMBER_OF(temp),
+                                     L"ACPI\\%hs",
+                                     Device->pnp.hardware_id);
         }
         else
         {
             /* Fixed feature button => use generic ACPI FixedButton ID */
-            length = (ULONG)swprintf(temp, L"ACPI\\FixedButton");
+            length = (ULONG)swprintf(temp,
+                                     RTL_NUMBER_OF(temp),
+                                     L"ACPI\\FixedButton");
         }
 
         temp[length++] = UNICODE_NULL;
@@ -2348,7 +2353,10 @@ Bus_PDO_QueryDeviceId(
         if (length == 0)
         {
             /* Fallback */
-            length = (ULONG)swprintf(temp, L"%ls", L"0");
+            length = (ULONG)swprintf(temp,
+                                     RTL_NUMBER_OF(temp),
+                                     L"%ls",
+                                     L"0");
         }
         temp[length++] = UNICODE_NULL;
 
@@ -2384,10 +2392,16 @@ Bus_PDO_QueryDeviceId(
             }
             else
             {
-                length += (ULONG)swprintf(&temp[length], L"ACPI\\%hs", Device->pnp.hardware_id);
+                length += (ULONG)swprintf(&temp[length],
+                                          RTL_NUMBER_OF(temp) - length,
+                                          L"ACPI\\%hs",
+                                          Device->pnp.hardware_id);
                 temp[length++] = UNICODE_NULL;
 
-                length += (ULONG)swprintf(&temp[length], L"*%hs", Device->pnp.hardware_id);
+                length += (ULONG)swprintf(&temp[length],
+                                          RTL_NUMBER_OF(temp) - length,
+                                          L"*%hs",
+                                          Device->pnp.hardware_id);
                 temp[length++] = UNICODE_NULL;
                 temp[length++] = UNICODE_NULL;
                 src = temp;
@@ -2405,10 +2419,14 @@ Bus_PDO_QueryDeviceId(
         else if (!DeviceData->AcpiHandle)
         {
             /* FixedFeatureButton */
-            length += (ULONG)swprintf(&temp[length], L"ACPI\\FixedButton");
+            length += (ULONG)swprintf(&temp[length],
+                                      RTL_NUMBER_OF(temp) - length,
+                                      L"ACPI\\FixedButton");
             temp[length++] = UNICODE_NULL;
 
-            length += (ULONG)swprintf(&temp[length], L"*FixedButton");
+            length += (ULONG)swprintf(&temp[length],
+                                      RTL_NUMBER_OF(temp) - length,
+                                      L"*FixedButton");
             temp[length++] = UNICODE_NULL;
             temp[length++] = UNICODE_NULL;
             src = temp;
@@ -2441,10 +2459,16 @@ Bus_PDO_QueryDeviceId(
 
             if (strcmp(Device->pnp.hardware_id, "Processor") == 0)
             {
-                length += (ULONG)swprintf(&temp[length], L"ACPI\\%hs", Device->pnp.hardware_id);
+                length += (ULONG)swprintf(&temp[length],
+                                          RTL_NUMBER_OF(temp) - length,
+                                          L"ACPI\\%hs",
+                                          Device->pnp.hardware_id);
                 temp[length++] = UNICODE_NULL;
 
-                length += (ULONG)swprintf(&temp[length], L"*%hs", Device->pnp.hardware_id);
+                length += (ULONG)swprintf(&temp[length],
+                                          RTL_NUMBER_OF(temp) - length,
+                                          L"*%hs",
+                                          Device->pnp.hardware_id);
                 temp[length++] = UNICODE_NULL;
                 temp[length++] = UNICODE_NULL;
             }
@@ -2453,13 +2477,15 @@ Bus_PDO_QueryDeviceId(
                 for (i = 0; i < Device->pnp.cid_list->Count; i++)
                 {
                     length += (ULONG)swprintf(&temp[length],
-                                       L"ACPI\\%hs",
-                                       Device->pnp.cid_list->Ids[i].String);
+                                              RTL_NUMBER_OF(temp) - length,
+                                              L"ACPI\\%hs",
+                                              Device->pnp.cid_list->Ids[i].String);
                     temp[length++] = UNICODE_NULL;
 
                     length += (ULONG)swprintf(&temp[length],
-                                       L"*%hs",
-                                       Device->pnp.cid_list->Ids[i].String);
+                                              RTL_NUMBER_OF(temp) - length,
+                                              L"*%hs",
+                                              Device->pnp.cid_list->Ids[i].String);
                     temp[length++] = UNICODE_NULL;
                 }
                 temp[length++] = UNICODE_NULL;
