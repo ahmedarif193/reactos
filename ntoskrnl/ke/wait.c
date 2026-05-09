@@ -232,6 +232,13 @@ KiExitDispatcher(IN KIRQL OldIrql)
     NextThread = Prcb->NextThread;
     Thread = Prcb->CurrentThread;
 
+#if defined(_M_ARM64)
+    if ((Thread == Prcb->IdleThread) && (Thread->State == Initialized))
+    {
+        Thread->State = Running;
+    }
+#endif
+
     /* Set current thread's swap busy to true */
     KiSetThreadSwapBusy(Thread);
 

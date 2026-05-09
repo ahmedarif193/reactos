@@ -36,6 +36,7 @@ extern PVOID MiSystemViewStart;
 PVOID MiSystemPteSpaceStart;
 PVOID MiSystemPteSpaceEnd;
 
+extern PKIPCR KeArm64CurrentPcr;
 extern PKTHREAD KeArm64CurrentThread;
 
 static LONG MiArm64SelfMapProbe = -1;
@@ -1576,6 +1577,7 @@ MiInitMachineDependent(_Inout_ PLOADER_PARAMETER_BLOCK LoaderBlock)
             }
 
             {
+                PKIPCR CurrentPcr = KeGetPcr();
                 PKTHREAD CurrentThread = KeGetCurrentThread();
                 PEPROCESS CurrentProcess;
                 UINT64 Ttbr0;
@@ -1585,6 +1587,53 @@ MiInitMachineDependent(_Inout_ PLOADER_PARAMETER_BLOCK LoaderBlock)
                 if (CurrentThread == NULL)
                 {
                     CurrentThread = KeArm64CurrentThread;
+                }
+
+                if ((CurrentThread == NULL) &&
+                    (LoaderBlock != NULL) &&
+                    (LoaderBlock->Thread != 0))
+                {
+                    CurrentThread = (PKTHREAD)(ULONG_PTR)LoaderBlock->Thread;
+                }
+
+                if (CurrentThread != NULL)
+                {
+                    if (KeArm64CurrentThread == NULL)
+                    {
+                        KeArm64CurrentThread = CurrentThread;
+                    }
+
+                    if (CurrentPcr != NULL)
+                    {
+                        CurrentPcr->Prcb.CurrentThread = CurrentThread;
+                        if (CurrentPcr->Prcb.IdleThread == NULL)
+                        {
+                            CurrentPcr->Prcb.IdleThread = CurrentThread;
+                        }
+                    }
+
+                    if ((KeArm64CurrentPcr != NULL) &&
+                        (KeArm64CurrentPcr != CurrentPcr))
+                    {
+                        KeArm64CurrentPcr->Prcb.CurrentThread = CurrentThread;
+                        if (KeArm64CurrentPcr->Prcb.IdleThread == NULL)
+                        {
+                            KeArm64CurrentPcr->Prcb.IdleThread = CurrentThread;
+                        }
+                    }
+
+                    if ((CurrentThread->ApcState.Process == NULL) &&
+                        (LoaderBlock != NULL) &&
+                        (LoaderBlock->Process != 0))
+                    {
+                        CurrentProcess = (PEPROCESS)(ULONG_PTR)LoaderBlock->Process;
+                        CurrentThread->ApcState.Process = (PKPROCESS)CurrentProcess;
+#if (NTDDI_VERSION >= NTDDI_LONGHORN)
+                        ((PETHREAD)CurrentThread)->Tcb.Process = (PKPROCESS)CurrentProcess;
+#else
+                        ((PETHREAD)CurrentThread)->ThreadsProcess = CurrentProcess;
+#endif
+                    }
                 }
 
                 if ((CurrentThread == NULL) ||

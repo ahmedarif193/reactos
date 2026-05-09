@@ -139,6 +139,27 @@ KiTrapReturn:
     /* Pop trap frame pointer from stack (saved at entry) */
     ldr     x29, [sp], #16
 
+    /*
+     * Restore KTHREAD.PreviousMode for ARM64 kernel Zw calls.  The SVC handler
+     * stores the pre-syscall value in TrapFrame->Reserved with a cookie because
+     * NtRaiseException/NtContinue can leave through KiExceptionExit instead of
+     * returning to the Zw wrapper.
+     */
+    ldr     w27, [x29, #TfReserved]
+    lsr     w28, w27, #8
+    movz    w27, #0x564D
+    movk    w27, #0x50, lsl #16
+    cmp     w28, w27
+    b.ne    .Lprevious_mode_done
+    ldr     w27, [x29, #TfReserved]
+    and     w27, w27, #0xFF
+    mrs     x28, tpidr_el1
+    cbz     x28, .Lprevious_mode_done
+    ldr     x28, [x28, #PcCurrentThread]
+    cbz     x28, .Lprevious_mode_done
+    strb    w27, [x28, #ThPreviousMode]
+.Lprevious_mode_done:
+
     /* Load SPSR and ELR from trap frame, set system registers */
     ldr     w27, [x29, #TfSpsr]
     ldr     x28, [x29, #TfPc]
