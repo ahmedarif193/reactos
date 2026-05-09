@@ -35,7 +35,7 @@ Arm64JumpToKernel:
      */
     adr x16, .Lkseg0_handoff
     movz x17, #0xFFFF, lsl #48
-    movk x17, #0x8000, lsl #32
+    movk x17, #0xF800, lsl #32
     orr x16, x16, x17
     br x16
 
@@ -76,9 +76,10 @@ Arm64JumpToKernel:
     isb
 
     /* Try AT instruction to test translation */
-    movz x7, #0x8000, lsl #48   /* Load 0xFFFF800000000000 */
+    movz x7, #0xFFFF, lsl #48   /* Load 0xFFFFF80000000000 */
+    movk x7, #0xF800, lsl #32
     movk x7, #0x4216, lsl #16   /* Add 0x42160000 */
-    movk x7, #0x0800, lsl #0    /* Final: 0xFFFF800042160800 */
+    movk x7, #0x0800, lsl #0    /* Final: 0xFFFFF80042160800 */
 
     /* Use AT S1E1R to check if address translates */
     /* at s1e1r, x7 - commented out for now as it might cause exception */
