@@ -296,32 +296,8 @@ RtlInterlockedPushEntrySList(
     PSLIST_ENTRY FirstEntry;
     BOOLEAN exchanged;
 
-    /*
-     * ARM64 CRITICAL: Check for NULL parameters before any operations.
-     */
-    if (SListHead == NULL)
-    {
-        USHORT Frames;
-        PVOID Stack[8];
-        USHORT i;
-
-        Frames = RtlCaptureStackBackTrace(1, RTL_NUMBER_OF(Stack), Stack, NULL);
-        DPRINT1("RtlInterlockedPushEntrySList: NULL SListHead passed - caller bug!\n");
-        DPRINT1("    SListEntry=%p\n", SListEntry);
-        DPRINT1("    Backtrace (%u frames):\n", Frames);
-        for (i = 0; i < Frames; i++)
-        {
-            DPRINT1("      [%u] %p\n", i, Stack[i]);
-        }
-        return NULL;
-    }
-    if (SListEntry == NULL)
-    {
-        DPRINT1("RtlInterlockedPushEntrySList: NULL SListEntry passed - caller bug!\n");
-        DPRINT1("    SListHead=%p\n", SListHead);
-        return NULL;
-    }
-
+    ASSERT(SListHead != NULL);
+    ASSERT(SListEntry != NULL);
     ASSERT(((ULONG_PTR)SListHead & 0xF) == 0);
     ASSERT(((ULONG_PTR)SListEntry & 0xF) == 0);
 
@@ -361,17 +337,7 @@ RtlInterlockedPopEntrySList(
     PSLIST_ENTRY FirstEntry, NextEntry;
     BOOLEAN exchanged;
 
-    /*
-     * ARM64 CRITICAL: Check for NULL SListHead before any operations.
-     * This can happen if lookaside lists are not properly initialized
-     * or if there's corruption in the PRCB lookaside pointer arrays.
-     */
-    if (SListHead == NULL)
-    {
-        DPRINT1("RtlInterlockedPopEntrySList: NULL SListHead passed - caller bug!\n");
-        return NULL;
-    }
-
+    ASSERT(SListHead != NULL);
     ASSERT(((ULONG_PTR)SListHead & 0xF) == 0);
 
     if (RtlpUse16ByteSLists == (BOOLEAN)-1)
@@ -415,15 +381,7 @@ RtlInterlockedFlushSList(
     PSLIST_ENTRY FirstEntry;
     BOOLEAN exchanged;
 
-    /*
-     * ARM64 CRITICAL: Check for NULL SListHead before any operations.
-     */
-    if (SListHead == NULL)
-    {
-        DPRINT1("RtlInterlockedFlushSList: NULL SListHead passed - caller bug!\n");
-        return NULL;
-    }
-
+    ASSERT(SListHead != NULL);
     ASSERT(((ULONG_PTR)SListHead & 0xF) == 0);
 
     if (RtlpUse16ByteSLists == (BOOLEAN)-1)

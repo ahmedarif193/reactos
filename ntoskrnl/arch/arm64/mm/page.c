@@ -1114,7 +1114,7 @@ MmCreateVirtualMappingUnsafeEx(
             Process->NumberOfPrivatePages++;
 
             /* Write PXE entry into the mapped user root table */
-            TempPte = ValidKernelPte;
+            TempPte = ValidKernelPde;
             TempPte.u.Hard.PageFrameNumber = PpePfn;
             TempPte.u.Hard.Owner = 0;  /* No APTable restriction */
             MI_ARM64_STORE_TABLE_ENTRY("MmCreateVirtualMappingUnsafeEx.L0",
@@ -1206,7 +1206,7 @@ MmCreateVirtualMappingUnsafeEx(
             Process->NumberOfPrivatePages++;
 
             /* Write PPE entry into the mapped page */
-            TempPte = ValidKernelPte;
+            TempPte = ValidKernelPde;
             TempPte.u.Hard.PageFrameNumber = PdePfn;
             TempPte.u.Hard.Owner = 0;  /* No APTable restriction */
             MI_ARM64_STORE_TABLE_ENTRY("MmCreateVirtualMappingUnsafeEx.L1",
@@ -1316,7 +1316,7 @@ MmCreateVirtualMappingUnsafeEx(
             Process->NumberOfPrivatePages++;
 
             /* Write PDE entry */
-            TempPte = ValidKernelPte;
+            TempPte = ValidKernelPde;
             TempPte.u.Hard.PageFrameNumber = PtePfn;
             TempPte.u.Hard.Owner = 0;  /* No APTable restriction */
             MI_ARM64_STORE_TABLE_ENTRY("MmCreateVirtualMappingUnsafeEx.L2",
