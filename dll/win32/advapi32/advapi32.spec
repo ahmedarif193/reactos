@@ -492,6 +492,8 @@
 @ stdcall RegDeleteKeyA(long str)
 @ stdcall RegDeleteKeyExA(long str long long)
 @ stdcall RegDeleteKeyExW(long wstr long long)
+@ stdcall -version=0x600+ RegDeleteKeyValueA(long str str)
+@ stdcall -version=0x600+ RegDeleteKeyValueW(long wstr wstr)
 @ stdcall RegDeleteKeyW(long wstr)
 @ stdcall -version=0x600+ RegDeleteTreeA(long str)
 @ stdcall -version=0x600+ RegDeleteTreeW(long wstr)

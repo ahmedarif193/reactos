@@ -39,6 +39,7 @@ interface INetConnection : IUnknown
         NCCF_ALLOW_DUPLICATION  = 0x0002,
         NCCF_ALLOW_REMOVAL      = 0x0004,
         NCCF_ALLOW_RENAME       = 0x0008,
+        NCCF_SHOW_ICON          = 0x0010,
         NCCF_INCOMING_ONLY      = 0x0020,
         NCCF_OUTGOING_ONLY      = 0x0040,
         NCCF_BRANDED            = 0x0080,
@@ -107,6 +108,9 @@ interface INetConnection : IUnknown
         CLSID             clsidThisObject;
         CLSID             clsidUiObject;
     } NETCON_PROPERTIES;
+
+cpp_quote("VOID WINAPI NcFreeNetconProperties(NETCON_PROPERTIES *pProps);")
+cpp_quote("BOOL WINAPI NcIsValidConnectionName(PCWSTR pszwName);")
 
     HRESULT Connect();
 

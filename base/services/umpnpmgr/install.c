@@ -398,7 +398,9 @@ InstallDevicesBatch(PCWSTR MultiSzDeviceList, DWORD DeviceCount)
 
     /* Random UUID for the pipe/event names (same pattern as InstallDevice) */
     UuidCreate(&RandomUuid);
-    swprintf(UuidString, L"{%08X-%04X-%04X-%02X%02X-%02X%02X%02X%02X%02X%02X}",
+    swprintf(UuidString,
+        RTL_NUMBER_OF(UuidString),
+        L"{%08X-%04X-%04X-%02X%02X-%02X%02X%02X%02X%02X%02X}",
         RandomUuid.Data1, RandomUuid.Data2, RandomUuid.Data3,
         RandomUuid.Data4[0], RandomUuid.Data4[1], RandomUuid.Data4[2],
         RandomUuid.Data4[3], RandomUuid.Data4[4], RandomUuid.Data4[5],

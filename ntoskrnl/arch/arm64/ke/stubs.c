@@ -786,11 +786,19 @@ KeStartAllProcessors(
                  Entry = Entry->Flink)
             {
                 Thread = CONTAINING_RECORD(Entry, KTHREAD, ThreadListEntry);
+#if (NTDDI_VERSION >= NTDDI_WIN7)
+                if (Thread->Affinity.Mask == OldAffinity)
+                {
+                    Thread->Affinity.Mask = FullAffinity;
+                    Thread->UserAffinity.Mask = FullAffinity;
+                }
+#else
                 if (Thread->Affinity == OldAffinity)
                 {
                     Thread->Affinity = FullAffinity;
                     Thread->UserAffinity = FullAffinity;
                 }
+#endif
             }
 
             DPRINT1("[arm64] KeStartAllProcessors: System process affinity 0x%Ix -> 0x%Ix\n",

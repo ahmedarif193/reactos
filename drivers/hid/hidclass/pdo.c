@@ -357,7 +357,10 @@ HidClassPDO_HandleQueryInstanceId(
     //
     // Prepare suffix: &ColXXXX
     //
-    swprintf(SuffixBuffer, L"&Col%04x", PDODeviceExtension->CollectionNumber);
+    swprintf(SuffixBuffer,
+             RTL_NUMBER_OF(SuffixBuffer),
+             L"&Col%04x",
+             PDODeviceExtension->CollectionNumber);
 
     //
     // Calculate required size

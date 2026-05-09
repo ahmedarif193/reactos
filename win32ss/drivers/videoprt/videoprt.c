@@ -79,7 +79,10 @@ IntVideoPortHasEarlierVideoDevice(
         PDEVICE_OBJECT DeviceObject;
         NTSTATUS Status;
 
-        swprintf(DeviceBuffer, L"\\Device\\Video%lu", i);
+        swprintf(DeviceBuffer,
+                 RTL_NUMBER_OF(DeviceBuffer),
+                 L"\\Device\\Video%lu",
+                 i);
         RtlInitUnicodeString(&DeviceName, DeviceBuffer);
         Status = IoGetDeviceObjectPointer(&DeviceName,
                                           FILE_READ_DATA,
