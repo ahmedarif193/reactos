@@ -828,6 +828,7 @@ MI_MAKE_HARDWARE_PTE_KERNEL(IN PMMPTE NewPte,
     NewPte->u.Hard.NotLargePage = 1;
     NewPte->u.Hard.Accessed = 1;
     NewPte->u.Hard.Shareability = 3;
+    NewPte->u.Hard.NotDirty = (NewPte->u.Hard.Writable == 0);
 #endif
 }
 
