@@ -1,0 +1,11 @@
+[AddReg]
+
+; Raspberry Pi 5 RP1 southbridge bus driver
+HKLM,"SYSTEM\CurrentControlSet\Control\CriticalDeviceDatabase\PCI#VEN_1DE4&DEV_0001","Service",0x00000000,"rp1"
+HKLM,"SYSTEM\CurrentControlSet\Control\CriticalDeviceDatabase\PCI#VEN_1DE4&DEV_0001","ClassGUID",0x00000000,"{4D36E97D-E325-11CE-BFC1-08002BE10318}"
+
+HKLM,"SYSTEM\CurrentControlSet\Services\rp1","ErrorControl",0x00010001,0x00000001
+HKLM,"SYSTEM\CurrentControlSet\Services\rp1","Group",0x00000000,"System Bus Extender"
+HKLM,"SYSTEM\CurrentControlSet\Services\rp1","ImagePath",0x00020000,"system32\drivers\rp1.sys"
+HKLM,"SYSTEM\CurrentControlSet\Services\rp1","Start",0x00010001,0x00000000
+HKLM,"SYSTEM\CurrentControlSet\Services\rp1","Type",0x00010001,0x00000001
