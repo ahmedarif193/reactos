@@ -158,21 +158,18 @@ MiArm64FlushTranslationChanges(VOID)
 static __inline VOID
 MiArm64SyncL0ToRoot(ULONG L0Index, UINT64 Desc)
 {
-    UINT64 Root;
     volatile UINT64 *RootL0;
 
-    __asm__ __volatile__("mrs %0, ttbr1_el1" : "=r"(Root));
+    ASSERT(L0Index < PXE_PER_PAGE);
 
-    Root = MI_ARM64_TTBR_TO_PA(Root);
-    if (Root != 0)
-    {
-        RootL0 = (volatile UINT64 *)MiArm64PhysToKseg0(Root);
-        RootL0[L0Index] = Desc;
-        MiArm64FlushTranslationChanges();
-        return;
-    }
-
-    __asm__ __volatile__("dsb ishst" ::: "memory");
+    /*
+     * PXE_BASE is the recursive view of the active TTBR1 root. Keep L0
+     * updates on the self-map path instead of relying on early physical-map
+     * coverage for the root page, which can live high in large-memory boots.
+     */
+    RootL0 = (volatile UINT64 *)PXE_BASE;
+    RootL0[L0Index] = Desc;
+    MiArm64FlushTranslationChanges();
 }
 
 #define ARM64_PTE_AF                PTE_ACCESSED  /* Access Flag - required for L3 page entries */
