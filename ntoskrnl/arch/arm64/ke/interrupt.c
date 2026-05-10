@@ -40,6 +40,14 @@ static BOOLEAN KiArm64UseVirtualTimer = TRUE; /* Use virtual timer - physical ti
 static KTRAP_FRAME KiArm64InterruptTrapFrame[MAXIMUM_PROCESSORS];
 static PKTRAP_FRAME KiArm64CurrentInterruptTrapFrame[MAXIMUM_PROCESSORS];
 
+static inline
+PKINTERRUPT
+KiArm64LoadInterruptHeadAcquire(
+    _In_ ULONG IntId)
+{
+    return (PKINTERRUPT)ReadPointerAcquire((PVOID const volatile *)&KiArm64IntTable[IntId]);
+}
+
 ULONG KiTimerIsrCallCount = 0;
 ULONG KiInitInterruptsCallCount = 0;
 ULONG KiTimerStartedFlag = 0;
@@ -571,10 +579,8 @@ KiArm64DispatchChain(_In_ ULONG IntId,
 
     if (IntId >= ARM64_MAX_INTID) goto Done;
 
-    /* Snapshot head without holding the global lock for long */
-    Head = (PKINTERRUPT)InterlockedCompareExchangePointer((PVOID *)&KiArm64IntTable[IntId],
-                                                          (PVOID)KiArm64IntTable[IntId],
-                                                          (PVOID)KiArm64IntTable[IntId]);
+    /* Snapshot head without taking the global lock on every interrupt. */
+    Head = KiArm64LoadInterruptHeadAcquire(IntId);
     if (!Head) goto Done;
 
     ListHead = &Head->InterruptListEntry;
