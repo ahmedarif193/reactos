@@ -113,287 +113,6 @@ BOOLEAN ExpRealTimeIsUniversal;
 
 /* FUNCTIONS ****************************************************************/
 
-#if defined(_M_ARM64)
-BOOLEAN
-MiArm64ReadUserPtePhysically(
-    _In_ PVOID Address,
-    _Out_opt_ PULONG64 OutPte,
-    _Out_opt_ PULONG OutDepth);
-
-static CODE_SEG("INIT")
-VOID
-ExpArm64TraceAddressSpace(
-    _In_z_ PCSTR Site)
-{
-    PETHREAD Thread;
-    PEPROCESS CurrentProcess;
-    PEPROCESS ApcProcess;
-    PEPROCESS SavedApcProcess;
-    ULONG64 Ttbr0;
-    ULONG64 Ttbr1;
-    ULONG64 Tcr;
-    ULONG64 Sctlr;
-    ULONG64 Mair;
-
-    Thread = PsGetCurrentThread();
-    CurrentProcess = PsGetCurrentProcess();
-    ApcProcess = Thread ? (PEPROCESS)Thread->Tcb.ApcState.Process : NULL;
-    SavedApcProcess = Thread ? (PEPROCESS)Thread->Tcb.SavedApcState.Process : NULL;
-
-    __asm__ __volatile__("mrs %0, ttbr0_el1" : "=r"(Ttbr0));
-    __asm__ __volatile__("mrs %0, ttbr1_el1" : "=r"(Ttbr1));
-    __asm__ __volatile__("mrs %0, tcr_el1" : "=r"(Tcr));
-    __asm__ __volatile__("mrs %0, sctlr_el1" : "=r"(Sctlr));
-    __asm__ __volatile__("mrs %0, mair_el1" : "=r"(Mair));
-
-    DPRINT1("[arm64][INITPP] %s cpu=%lu irql=%lu thread=%p apcidx=%lu "
-            "cur=%p(%.16s) apc=%p(%.16s) saved=%p(%.16s)\n",
-            Site,
-            KeGetCurrentProcessorNumber(),
-            KeGetCurrentIrql(),
-            Thread,
-            Thread ? (ULONG)Thread->Tcb.ApcStateIndex : 0,
-            CurrentProcess,
-            CurrentProcess ? CurrentProcess->ImageFileName : "<none>",
-            ApcProcess,
-            ApcProcess ? ApcProcess->ImageFileName : "<none>",
-            SavedApcProcess,
-            SavedApcProcess ? SavedApcProcess->ImageFileName : "<none>");
-
-    DPRINT1("[arm64][INITPP] %s ttbr0=0x%016llx root0=0x%016llx "
-            "ttbr1=0x%016llx root1=0x%016llx tcr=0x%016llx "
-            "sctlr=0x%016llx mair=0x%016llx\n",
-            Site,
-            (unsigned long long)Ttbr0,
-            (unsigned long long)(Ttbr0 & ARM64_PTE_ADDR_MASK),
-            (unsigned long long)Ttbr1,
-            (unsigned long long)(Ttbr1 & ARM64_PTE_ADDR_MASK),
-            (unsigned long long)Tcr,
-            (unsigned long long)Sctlr,
-            (unsigned long long)Mair);
-
-    if (CurrentProcess != NULL)
-    {
-        DPRINT1("[arm64][INITPP] %s cur-dtb[0]=0x%016Ix cur-dtb[1]=0x%016Ix "
-                "vm=%p vadRoot=%p\n",
-                Site,
-                CurrentProcess->Pcb.DirectoryTableBase[0],
-                CurrentProcess->Pcb.DirectoryTableBase[1],
-                &CurrentProcess->Vm,
-                CurrentProcess->VadRoot.BalancedRoot.RightChild);
-    }
-
-    if ((ApcProcess != NULL) && (ApcProcess != CurrentProcess))
-    {
-        DPRINT1("[arm64][INITPP] %s apc-dtb[0]=0x%016Ix apc-dtb[1]=0x%016Ix\n",
-                Site,
-                ApcProcess->Pcb.DirectoryTableBase[0],
-                ApcProcess->Pcb.DirectoryTableBase[1]);
-    }
-}
-
-static CODE_SEG("INIT")
-VOID
-ExpArm64TraceUserVa(
-    _In_z_ PCSTR Site,
-    _In_z_ PCSTR Name,
-    _In_opt_ PVOID Address)
-{
-    ULONG64 PteValue = 0;
-    ULONG Depth = 0;
-    BOOLEAN Present;
-    ULONG_PTR Va = (ULONG_PTR)Address;
-
-    if (Address == NULL)
-    {
-        DPRINT1("[arm64][INITPP] %s %s va=(null)\n", Site, Name);
-        return;
-    }
-
-    if (Va >= (ULONG_PTR)MmSystemRangeStart)
-    {
-        DPRINT1("[arm64][INITPP] %s %s va=%p kernel-range skip-user-walk\n",
-                Site,
-                Name,
-                Address);
-        return;
-    }
-
-    Present = MiArm64ReadUserPtePhysically(Address, &PteValue, &Depth);
-    DPRINT1("[arm64][INITPP] %s %s va=%p present=%u depth=%lu "
-            "pte=0x%016llx idx=%03Ix/%03Ix/%03Ix/%03Ix pageoff=0x%03Ix\n",
-            Site,
-            Name,
-            Address,
-            Present ? 1 : 0,
-            Depth,
-            (unsigned long long)PteValue,
-            (Va >> PXI_SHIFT) & PXI_MASK,
-            (Va >> PPI_SHIFT) & PPI_MASK,
-            (Va >> PDI_SHIFT) & PDI_MASK_ARM64,
-            (Va >> PTI_SHIFT) & PTI_MASK_ARM64,
-            Va & (PAGE_SIZE - 1));
-}
-
-static CODE_SEG("INIT")
-BOOLEAN
-ExpArm64SnapshotUnicodeString(
-    _In_ PCUNICODE_STRING Source,
-    _Out_ PUNICODE_STRING Snapshot,
-    _Out_ PNTSTATUS ReadStatus)
-{
-    *ReadStatus = STATUS_SUCCESS;
-    RtlZeroMemory(Snapshot, sizeof(*Snapshot));
-
-    _SEH2_TRY
-    {
-        *Snapshot = *Source;
-    }
-    _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
-    {
-        *ReadStatus = _SEH2_GetExceptionCode();
-    }
-    _SEH2_END;
-
-    return NT_SUCCESS(*ReadStatus);
-}
-
-static CODE_SEG("INIT")
-VOID
-ExpArm64TraceUnicodeOperand(
-    _In_z_ PCSTR Site,
-    _In_z_ PCSTR Name,
-    _In_ PCUNICODE_STRING String)
-{
-    UNICODE_STRING Snapshot;
-    NTSTATUS ReadStatus;
-    BOOLEAN ReadOk;
-
-    ReadOk = ExpArm64SnapshotUnicodeString(String, &Snapshot, &ReadStatus);
-    DPRINT1("[arm64][INITPP] %s %s us=%p read=%u status=0x%08lx "
-            "len=%hu max=%hu buf=%p\n",
-            Site,
-            Name,
-            String,
-            ReadOk ? 1 : 0,
-            ReadStatus,
-            Snapshot.Length,
-            Snapshot.MaximumLength,
-            Snapshot.Buffer);
-
-    ExpArm64TraceUserVa(Site, Name, (PVOID)String);
-    if (ReadOk)
-    {
-        ExpArm64TraceUserVa(Site, "unicode-buffer", Snapshot.Buffer);
-    }
-}
-
-static CODE_SEG("INIT")
-VOID
-ExpArm64TraceUnicodeCopy(
-    _In_z_ PCSTR Site,
-    _In_ PCUNICODE_STRING Destination,
-    _In_ PCUNICODE_STRING Source)
-{
-    ExpArm64TraceAddressSpace(Site);
-    ExpArm64TraceUnicodeOperand(Site, "dst", Destination);
-    ExpArm64TraceUnicodeOperand(Site, "src", Source);
-}
-
-static CODE_SEG("INIT")
-VOID
-ExpArm64TraceProcessParams(
-    _In_z_ PCSTR Site,
-    _In_opt_ PRTL_USER_PROCESS_PARAMETERS ProcessParams,
-    _In_ SIZE_T AllocationSize)
-{
-    NTSTATUS ReadStatus = STATUS_SUCCESS;
-    ULONG Length = 0;
-    ULONG MaximumLength = 0;
-    ULONG Flags = 0;
-    PVOID Environment = NULL;
-    UNICODE_STRING CurrentDirectory = {0};
-    UNICODE_STRING DllPath = {0};
-    UNICODE_STRING ImagePathName = {0};
-    UNICODE_STRING CommandLine = {0};
-    BOOLEAN ReadOk = TRUE;
-
-    ExpArm64TraceAddressSpace(Site);
-
-    if (ProcessParams == NULL)
-    {
-        DPRINT1("[arm64][INITPP] %s params=(null) alloc=0x%Ix\n",
-                Site,
-                AllocationSize);
-        return;
-    }
-
-    _SEH2_TRY
-    {
-        Length = ProcessParams->Length;
-        MaximumLength = ProcessParams->MaximumLength;
-        Flags = ProcessParams->Flags;
-        Environment = ProcessParams->Environment;
-        CurrentDirectory = ProcessParams->CurrentDirectory.DosPath;
-        DllPath = ProcessParams->DllPath;
-        ImagePathName = ProcessParams->ImagePathName;
-        CommandLine = ProcessParams->CommandLine;
-    }
-    _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
-    {
-        ReadStatus = _SEH2_GetExceptionCode();
-        ReadOk = FALSE;
-    }
-    _SEH2_END;
-
-    DPRINT1("[arm64][INITPP] %s params=%p alloc=0x%Ix read=%u status=0x%08lx "
-            "len=0x%lx max=0x%lx flags=0x%lx env=%p\n",
-            Site,
-            ProcessParams,
-            AllocationSize,
-            ReadOk ? 1 : 0,
-            ReadStatus,
-            Length,
-            MaximumLength,
-            Flags,
-            Environment);
-
-    DPRINT1("[arm64][INITPP] %s cd{len=%hu max=%hu buf=%p} "
-            "dll{len=%hu max=%hu buf=%p} img{len=%hu max=%hu buf=%p} "
-            "cmd{len=%hu max=%hu buf=%p}\n",
-            Site,
-            CurrentDirectory.Length,
-            CurrentDirectory.MaximumLength,
-            CurrentDirectory.Buffer,
-            DllPath.Length,
-            DllPath.MaximumLength,
-            DllPath.Buffer,
-            ImagePathName.Length,
-            ImagePathName.MaximumLength,
-            ImagePathName.Buffer,
-            CommandLine.Length,
-            CommandLine.MaximumLength,
-            CommandLine.Buffer);
-
-    ExpArm64TraceUserVa(Site, "params-base", ProcessParams);
-    if (AllocationSize != 0)
-    {
-        ExpArm64TraceUserVa(Site,
-                            "params-end",
-                            (PVOID)((ULONG_PTR)ProcessParams + AllocationSize - 1));
-    }
-
-    if (ReadOk)
-    {
-        ExpArm64TraceUserVa(Site, "env", Environment);
-        ExpArm64TraceUserVa(Site, "cd-buf", CurrentDirectory.Buffer);
-        ExpArm64TraceUserVa(Site, "dll-buf", DllPath.Buffer);
-        ExpArm64TraceUserVa(Site, "img-buf", ImagePathName.Buffer);
-        ExpArm64TraceUserVa(Site, "cmd-buf", CommandLine.Buffer);
-    }
-}
-#endif
-
 static
 PCHAR
 ExpFindBootOption(
@@ -730,7 +449,6 @@ ExpLoadInitialProcess(IN PINIT_BUFFER InitBuffer,
 {
     NTSTATUS Status;
     SIZE_T Size;
-    SIZE_T ProcessParamsSize = 0;
     PWSTR p;
     UNICODE_STRING NullString = RTL_CONSTANT_STRING(L"");
     UNICODE_STRING SmssName, Environment, SystemDriveString, DebugString;
@@ -743,46 +461,14 @@ ExpLoadInitialProcess(IN PINIT_BUFFER InitBuffer,
     /* Use the initial buffer, after the strings */
     ProcessInformation = &InitBuffer->ProcessInfo;
 
-#if defined(_M_ARM64)
-    DPRINT1("[arm64][INITPP] enter InitBuffer=%p ProcessParametersOut=%p "
-            "ProcessEnvironmentOut=%p NtSystemRoot len=%hu max=%hu buf=%p "
-            "InitialUser len=%lu type=%lu buffer=%p\n",
-            InitBuffer,
-            ProcessParameters,
-            ProcessEnvironment,
-            NtSystemRoot.Length,
-            NtSystemRoot.MaximumLength,
-            NtSystemRoot.Buffer,
-            NtInitialUserProcessBufferLength,
-            NtInitialUserProcessBufferType,
-            NtInitialUserProcessBuffer);
-    ExpArm64TraceAddressSpace("enter");
-    ExpArm64TraceUserVa("enter", "NtSystemRoot.Buffer", NtSystemRoot.Buffer);
-#endif
-
     /* Allocate memory for the process parameters */
     Size = sizeof(*ProcessParams) + ((MAX_WIN32_PATH * 6) * sizeof(WCHAR));
-#if defined(_M_ARM64)
-    DPRINT1("[arm64][INITPP] before-param-alloc requested=0x%Ix "
-            "sizeof(params)=0x%Ix\n",
-            Size,
-            sizeof(*ProcessParams));
-#endif
     Status = ZwAllocateVirtualMemory(NtCurrentProcess(),
                                      (PVOID*)&ProcessParams,
                                      0,
                                      &Size,
                                      MEM_RESERVE | MEM_COMMIT,
                                      PAGE_READWRITE);
-    ProcessParamsSize = Size;
-#if defined(_M_ARM64)
-    DPRINT1("[arm64][INITPP] after-param-alloc status=0x%08lx "
-            "ProcessParams=%p actualSize=0x%Ix\n",
-            Status,
-            ProcessParams,
-            Size);
-    ExpArm64TraceProcessParams("after-param-alloc", ProcessParams, Size);
-#endif
     if (!NT_SUCCESS(Status))
     {
         /* Failed, display error */
@@ -802,35 +488,15 @@ ExpLoadInitialProcess(IN PINIT_BUFFER InitBuffer,
     ProcessParams->MaximumLength = (ULONG)Size;
     ProcessParams->Flags = RTL_USER_PROCESS_PARAMETERS_NORMALIZED |
                            RTL_USER_PROCESS_PARAMETERS_RESERVE_1MB;
-#if defined(_M_ARM64)
-    ExpArm64TraceProcessParams("after-param-header", ProcessParams, Size);
-#endif
 
     /* Allocate a page for the environment */
     Size = PAGE_SIZE;
-#if defined(_M_ARM64)
-    DPRINT1("[arm64][INITPP] before-env-alloc requested=0x%Ix "
-            "EnvironmentPtr=%p\n",
-            Size,
-            EnvironmentPtr);
-#endif
     Status = ZwAllocateVirtualMemory(NtCurrentProcess(),
                                      &EnvironmentPtr,
                                      0,
                                      &Size,
                                      MEM_RESERVE | MEM_COMMIT,
                                      PAGE_READWRITE);
-#if defined(_M_ARM64)
-    DPRINT1("[arm64][INITPP] after-env-alloc status=0x%08lx "
-            "EnvironmentPtr=%p actualSize=0x%Ix\n",
-            Status,
-            EnvironmentPtr,
-            Size);
-    ExpArm64TraceUserVa("after-env-alloc", "env-base", EnvironmentPtr);
-    ExpArm64TraceUserVa("after-env-alloc",
-                        "env-end",
-                        (PVOID)((ULONG_PTR)EnvironmentPtr + Size - 1));
-#endif
     if (!NT_SUCCESS(Status))
     {
         /* Failed, display error */
@@ -847,81 +513,33 @@ ExpLoadInitialProcess(IN PINIT_BUFFER InitBuffer,
 
     /* Write the pointer */
     ProcessParams->Environment = EnvironmentPtr;
-#if defined(_M_ARM64)
-    ExpArm64TraceProcessParams("after-env-store", ProcessParams, ProcessParamsSize);
-#endif
 
     /* Make a buffer for the DOS path */
     p = (PWSTR)(ProcessParams + 1);
-#if defined(_M_ARM64)
-    DPRINT1("[arm64][INITPP] setup-current-directory expectedBuf=%p "
-            "expectedMax=0x%Ix sourceNtSystemRootBuf=%p sourceLen=%hu\n",
-            p,
-            MAX_WIN32_PATH * sizeof(WCHAR),
-            NtSystemRoot.Buffer,
-            NtSystemRoot.Length);
-#endif
     ProcessParams->CurrentDirectory.DosPath.Buffer = p;
     ProcessParams->CurrentDirectory.DosPath.MaximumLength = MAX_WIN32_PATH *
                                                             sizeof(WCHAR);
-#if defined(_M_ARM64)
-    ExpArm64TraceProcessParams("before-copy-current-directory", ProcessParams, ProcessParamsSize);
-    ExpArm64TraceUnicodeCopy("copy-current-directory",
-                             &ProcessParams->CurrentDirectory.DosPath,
-                             &NtSystemRoot);
-#endif
 
     /* Copy the DOS path */
     RtlCopyUnicodeString(&ProcessParams->CurrentDirectory.DosPath,
                          &NtSystemRoot);
-#if defined(_M_ARM64)
-    ExpArm64TraceProcessParams("after-copy-current-directory", ProcessParams, ProcessParamsSize);
-#endif
 
     /* Make a buffer for the DLL Path */
     p = (PWSTR)((PCHAR)ProcessParams->CurrentDirectory.DosPath.Buffer +
                 ProcessParams->CurrentDirectory.DosPath.MaximumLength);
-#if defined(_M_ARM64)
-    DPRINT1("[arm64][INITPP] setup-dll-path expectedBuf=%p expectedMax=0x%Ix\n",
-            p,
-            MAX_WIN32_PATH * sizeof(WCHAR));
-#endif
     ProcessParams->DllPath.Buffer = p;
     ProcessParams->DllPath.MaximumLength = MAX_WIN32_PATH * sizeof(WCHAR);
-#if defined(_M_ARM64)
-    ExpArm64TraceProcessParams("before-copy-dll-path", ProcessParams, ProcessParamsSize);
-    ExpArm64TraceUnicodeCopy("copy-dll-path",
-                             &ProcessParams->DllPath,
-                             &ProcessParams->CurrentDirectory.DosPath);
-#endif
 
     /* Copy the DLL path and append the system32 directory */
     RtlCopyUnicodeString(&ProcessParams->DllPath,
                          &ProcessParams->CurrentDirectory.DosPath);
-#if defined(_M_ARM64)
-    ExpArm64TraceProcessParams("after-copy-dll-path", ProcessParams, ProcessParamsSize);
-    ExpArm64TraceUnicodeOperand("before-append-dll-system32",
-                                "dll",
-                                &ProcessParams->DllPath);
-#endif
     RtlAppendUnicodeToString(&ProcessParams->DllPath, L"\\System32");
-#if defined(_M_ARM64)
-    ExpArm64TraceProcessParams("after-append-dll-system32", ProcessParams, ProcessParamsSize);
-#endif
 
     /* Make a buffer for the image name */
     p = (PWSTR)((PCHAR)ProcessParams->DllPath.Buffer +
                 ProcessParams->DllPath.MaximumLength);
-#if defined(_M_ARM64)
-    DPRINT1("[arm64][INITPP] setup-image-path expectedBuf=%p expectedMax=0x%Ix\n",
-            p,
-            MAX_WIN32_PATH * sizeof(WCHAR));
-#endif
     ProcessParams->ImagePathName.Buffer = p;
     ProcessParams->ImagePathName.MaximumLength = MAX_WIN32_PATH * sizeof(WCHAR);
-#if defined(_M_ARM64)
-    ExpArm64TraceProcessParams("after-image-setup", ProcessParams, ProcessParamsSize);
-#endif
 
     /* Make sure the buffer is a valid string which within the given length */
     if ((NtInitialUserProcessBufferType != REG_SZ) ||
@@ -945,13 +563,6 @@ ExpLoadInitialProcess(IN PINIT_BUFFER InitBuffer,
     /* Set the image path length */
     ProcessParams->ImagePathName.Length =
         (USHORT)((PCHAR)p - (PCHAR)NtInitialUserProcessBuffer);
-#if defined(_M_ARM64)
-    DPRINT1("[arm64][INITPP] before-copy-image pathLen=%hu src=%p dst=%p\n",
-            ProcessParams->ImagePathName.Length,
-            NtInitialUserProcessBuffer,
-            ProcessParams->ImagePathName.Buffer);
-    ExpArm64TraceProcessParams("before-copy-image", ProcessParams, ProcessParamsSize);
-#endif
 
     /* Copy the actual buffer */
     RtlCopyMemory(ProcessParams->ImagePathName.Buffer,
@@ -961,109 +572,46 @@ ExpLoadInitialProcess(IN PINIT_BUFFER InitBuffer,
     /* Null-terminate it */
     ProcessParams->ImagePathName.Buffer[ProcessParams->ImagePathName.Length /
                                         sizeof(WCHAR)] = UNICODE_NULL;
-#if defined(_M_ARM64)
-    ExpArm64TraceProcessParams("after-copy-image", ProcessParams, ProcessParamsSize);
-#endif
 
     /* Make a buffer for the command line */
     p = (PWSTR)((PCHAR)ProcessParams->ImagePathName.Buffer +
                 ProcessParams->ImagePathName.MaximumLength);
-#if defined(_M_ARM64)
-    DPRINT1("[arm64][INITPP] setup-command-line expectedBuf=%p expectedMax=0x%Ix\n",
-            p,
-            MAX_WIN32_PATH * sizeof(WCHAR));
-#endif
     ProcessParams->CommandLine.Buffer = p;
     ProcessParams->CommandLine.MaximumLength = MAX_WIN32_PATH * sizeof(WCHAR);
-#if defined(_M_ARM64)
-    ExpArm64TraceProcessParams("before-append-command-line", ProcessParams, ProcessParamsSize);
-#endif
 
     /* Add the image name to the command line */
     RtlAppendUnicodeToString(&ProcessParams->CommandLine,
                              NtInitialUserProcessBuffer);
-#if defined(_M_ARM64)
-    ExpArm64TraceProcessParams("after-append-command-line", ProcessParams, ProcessParamsSize);
-#endif
 
     /* Create the environment string */
     RtlInitEmptyUnicodeString(&Environment,
                               ProcessParams->Environment,
                               (USHORT)Size);
-#if defined(_M_ARM64)
-    DPRINT1("[arm64][INITPP] environment-string init len=%hu max=%hu buf=%p\n",
-            Environment.Length,
-            Environment.MaximumLength,
-            Environment.Buffer);
-    ExpArm64TraceUserVa("environment-init", "environment-buffer", Environment.Buffer);
-#endif
 
     /* Append the DLL path to it */
-#if defined(_M_ARM64)
-    ExpArm64TraceUnicodeOperand("before-env-append-path", "dll", &ProcessParams->DllPath);
-#endif
     RtlAppendUnicodeToString(&Environment, L"Path=");
     RtlAppendUnicodeStringToString(&Environment, &ProcessParams->DllPath);
     RtlAppendUnicodeStringToString(&Environment, &NullString);
-#if defined(_M_ARM64)
-    DPRINT1("[arm64][INITPP] after-env-append-path env len=%hu max=%hu buf=%p\n",
-            Environment.Length,
-            Environment.MaximumLength,
-            Environment.Buffer);
-#endif
 
     /* Create the system drive string */
     SystemDriveString = NtSystemRoot;
     SystemDriveString.Length = 2 * sizeof(WCHAR);
-#if defined(_M_ARM64)
-    DPRINT1("[arm64][INITPP] system-drive len=%hu max=%hu buf=%p "
-            "NtSystemRoot len=%hu max=%hu buf=%p\n",
-            SystemDriveString.Length,
-            SystemDriveString.MaximumLength,
-            SystemDriveString.Buffer,
-            NtSystemRoot.Length,
-            NtSystemRoot.MaximumLength,
-            NtSystemRoot.Buffer);
-#endif
 
     /* Append it to the environment */
     RtlAppendUnicodeToString(&Environment, L"SystemDrive=");
     RtlAppendUnicodeStringToString(&Environment, &SystemDriveString);
     RtlAppendUnicodeStringToString(&Environment, &NullString);
-#if defined(_M_ARM64)
-    DPRINT1("[arm64][INITPP] after-env-append-drive env len=%hu max=%hu buf=%p\n",
-            Environment.Length,
-            Environment.MaximumLength,
-            Environment.Buffer);
-#endif
 
     /* Append the system root to the environment */
     RtlAppendUnicodeToString(&Environment, L"SystemRoot=");
     RtlAppendUnicodeStringToString(&Environment, &NtSystemRoot);
     RtlAppendUnicodeStringToString(&Environment, &NullString);
-#if defined(_M_ARM64)
-    DPRINT1("[arm64][INITPP] after-env-append-root env len=%hu max=%hu buf=%p\n",
-            Environment.Length,
-            Environment.MaximumLength,
-            Environment.Buffer);
-    ExpArm64TraceProcessParams("before-create-user-process", ProcessParams, ProcessParamsSize);
-#endif
 
     /* Prepare the prefetcher */
     //CcPfBeginBootPhase(150);
 
     /* Create SMSS process */
     SmssName = ProcessParams->ImagePathName;
-#if defined(_M_ARM64)
-    DPRINT1("[arm64][INITPP] create-smss SmssName len=%hu max=%hu buf=%p "
-            "ProcessParams=%p EnvironmentPtr=%p\n",
-            SmssName.Length,
-            SmssName.MaximumLength,
-            SmssName.Buffer,
-            ProcessParams,
-            EnvironmentPtr);
-    ExpArm64TraceUnicodeOperand("create-smss", "smss", &SmssName);
-#endif
     Status = RtlCreateUserProcess(&SmssName,
                                   OBJ_CASE_INSENSITIVE,
                                   RtlDeNormalizeProcessParams(ProcessParams),
@@ -1074,15 +622,6 @@ ExpLoadInitialProcess(IN PINIT_BUFFER InitBuffer,
                                   NULL,
                                   NULL,
                                   ProcessInformation);
-#if defined(_M_ARM64)
-    DPRINT1("[arm64][INITPP] after-create-smss status=0x%08lx "
-            "ProcessHandle=%p ThreadHandle=%p ClientId=(%p,%p)\n",
-            Status,
-            ProcessInformation->ProcessHandle,
-            ProcessInformation->ThreadHandle,
-            ProcessInformation->ClientId.UniqueProcess,
-            ProcessInformation->ClientId.UniqueThread);
-#endif
     if (!NT_SUCCESS(Status))
     {
         /* Failed, display error */
@@ -1098,14 +637,7 @@ ExpLoadInitialProcess(IN PINIT_BUFFER InitBuffer,
     }
 
     /* Resume the thread */
-#if defined(_M_ARM64)
-    DPRINT1("[arm64][INITPP] before-resume ThreadHandle=%p\n",
-            ProcessInformation->ThreadHandle);
-#endif
     Status = ZwResumeThread(ProcessInformation->ThreadHandle, NULL);
-#if defined(_M_ARM64)
-    DPRINT1("[arm64][INITPP] after-resume status=0x%08lx\n", Status);
-#endif
     if (!NT_SUCCESS(Status))
     {
         /* Failed, display error */
