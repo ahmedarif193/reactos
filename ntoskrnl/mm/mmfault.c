@@ -18,6 +18,116 @@
 
 extern MM_AVL_TABLE MiRosKernelVadRoot;
 
+typedef enum _MI_FAULT_WS_TYPE
+{
+    MiFaultWsNone,
+    MiFaultWsProcess,
+    MiFaultWsSystem,
+    MiFaultWsSession
+} MI_FAULT_WS_TYPE;
+
+typedef struct _MI_FAULT_WS_STATE
+{
+    MI_FAULT_WS_TYPE Type;
+    PEPROCESS Process;
+    PMMSUPPORT WorkingSet;
+    BOOLEAN Safe;
+    BOOLEAN Shared;
+} MI_FAULT_WS_STATE, *PMI_FAULT_WS_STATE;
+
+FORCEINLINE
+VOID
+MiUnlockWorkingSetForFault(
+    _Out_ PMI_FAULT_WS_STATE State)
+{
+#if defined(_M_ARM64)
+    PETHREAD Thread = PsGetCurrentThread();
+#endif
+
+    State->Type = MiFaultWsNone;
+    State->Process = NULL;
+    State->WorkingSet = NULL;
+    State->Safe = FALSE;
+    State->Shared = FALSE;
+
+#if defined(_M_ARM64)
+    if (!MM_ANY_WS_LOCK_HELD(Thread))
+        return;
+
+    if (Thread->OwnsProcessWorkingSetExclusive ||
+        Thread->OwnsProcessWorkingSetShared)
+    {
+        State->Type = MiFaultWsProcess;
+        State->Process = PsGetCurrentProcess();
+        MiUnlockProcessWorkingSetForFault(State->Process,
+                                          Thread,
+                                          &State->Safe,
+                                          &State->Shared);
+        return;
+    }
+
+    if (Thread->OwnsSystemWorkingSetExclusive ||
+        Thread->OwnsSystemWorkingSetShared)
+    {
+        State->Type = MiFaultWsSystem;
+        State->WorkingSet = &MmSystemCacheWs;
+        State->Shared = Thread->OwnsSystemWorkingSetShared;
+    }
+    else if (Thread->OwnsSessionWorkingSetExclusive ||
+             Thread->OwnsSessionWorkingSetShared)
+    {
+        State->Type = MiFaultWsSession;
+        State->WorkingSet = &MmSessionSpace->GlobalVirtualAddress->Vm;
+        State->Shared = Thread->OwnsSessionWorkingSetShared;
+    }
+    else
+    {
+        ASSERT(FALSE);
+        return;
+    }
+
+    if (State->Shared)
+        MiUnlockWorkingSetShared(Thread, State->WorkingSet);
+    else
+        MiUnlockWorkingSet(Thread, State->WorkingSet);
+#endif
+}
+
+FORCEINLINE
+VOID
+MiRelockWorkingSetForFault(
+    _In_ PMI_FAULT_WS_STATE State)
+{
+#if defined(_M_ARM64)
+    PETHREAD Thread = PsGetCurrentThread();
+
+    switch (State->Type)
+    {
+        case MiFaultWsNone:
+            return;
+
+        case MiFaultWsProcess:
+            MiLockProcessWorkingSetForFault(State->Process,
+                                            Thread,
+                                            State->Safe,
+                                            State->Shared);
+            return;
+
+        case MiFaultWsSystem:
+        case MiFaultWsSession:
+            if (State->Shared)
+                MiLockWorkingSetShared(Thread, State->WorkingSet);
+            else
+                MiLockWorkingSet(Thread, State->WorkingSet);
+            return;
+    }
+
+    ASSERT(FALSE);
+#else
+    UNREFERENCED_PARAMETER(State);
+#endif
+}
+
 /* PRIVATE FUNCTIONS **********************************************************/
 
 NTSTATUS
@@ -226,6 +336,7 @@ MmAccessFaultEx(IN ULONG FaultCode,
     PMMVAD Vad = NULL;
     NTSTATUS Status;
     BOOLEAN IsArm3Fault = FALSE;
+    MI_FAULT_WS_STATE FaultWsState;
 
     /* Cute little hack for ROS */
     if ((ULONG_PTR)Address >= (ULONG_PTR)MmSystemRangeStart)
@@ -240,13 +351,16 @@ MmAccessFaultEx(IN ULONG FaultCode,
 #endif
     }
 
+    MiUnlockWorkingSetForFault(&FaultWsState);
+
     /* Handle shared user page / page table, which don't have a VAD / MemoryArea */
     if ((PAGE_ALIGN(Address) == (PVOID)MM_SHARED_USER_DATA_VA) ||
         MI_IS_PAGE_TABLE_ADDRESS(Address))
     {
         /* This is an ARM3 fault */
         DPRINT("ARM3 fault %p\n", Address);
-        return MmArmAccessFault(FaultCode, Address, Mode, TrapInformation);
+        Status = MmArmAccessFault(FaultCode, Address, Mode, TrapInformation);
+        goto Exit;
     }
 
     /* Is there a ReactOS address space yet? */
@@ -289,7 +403,8 @@ MmAccessFaultEx(IN ULONG FaultCode,
     {
         /* This is an ARM3 fault */
         DPRINT("ARM3 fault %p\n", Vad);
-        return MmArmAccessFault(FaultCode, Address, Mode, TrapInformation);
+        Status = MmArmAccessFault(FaultCode, Address, Mode, TrapInformation);
+        goto Exit;
     }
 
 Retry:
@@ -311,6 +426,8 @@ Retry:
         goto Retry;
     }
 
+Exit:
+    MiRelockWorkingSetForFault(&FaultWsState);
     return Status;
 }
 
