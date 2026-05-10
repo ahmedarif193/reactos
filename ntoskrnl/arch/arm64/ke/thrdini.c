@@ -449,21 +449,6 @@ KiSwapContextResume(
 #endif
     }
 
-    /*
-     * Hook for FP/SIMD state handling and trap-on-first-use mediation.
-     *
-     * DISABLED: Acquiring/releasing spinlocks during context switch manipulates
-     * IRQL via KfRaiseIrql/KfLowerIrql. On ARM64 with SMP, the AP idle loops
-     * can corrupt KeArm64CurrentIrql via KiSetCurrentIrql. Together with the
-     * spinlock IRQL dance here, this can cause IRQL state corruption and stalls.
-     *
-     * TODO: Re-enable once IRQL is fully per-CPU and spinlocks are safe in
-     * the context switch path.
-     */
-#if 0
-    KiArm64SaveFpState(OldThread);
-#endif
-
     Prcb = KeGetCurrentPrcb();
 
     NewThread->ContextSwitches++;
@@ -512,39 +497,9 @@ KiSwapContextResume(
     }
 
     /*
-     * Re-arm trap-on-first-use for the incoming thread context.
-     * This must happen after the process switch so CPACR_EL1 state matches
-     * the currently scheduled thread.
-     *
-     * DISABLED: Same rationale as KiArm64SaveFpState above — the CPACR
-     * write and spinlock interactions are unsafe during SMP context switch
-     * while IRQL is still per-global rather than per-CPU.
-     *
-     * TODO: Re-enable once IRQL is fully per-CPU and spinlocks are safe in
-     * the context switch path.
+     * FP/SIMD trap-on-first-use remains deferred until the ARM64 context-switch
+     * path has validated IRQL-safe state handling.
      */
-#if 0
-    KiArm64ConfigureFpTrap();
-#endif
-
-#if 0 /* Disabled along with KiArm64ConfigureFpTrap above */
-    {
-        ULONG64 Cpacr;
-        __asm__ __volatile__("mrs %0, cpacr_el1" : "=r"(Cpacr));
-        ASSERT((Cpacr & CPACR_EL1_FPEN_MASK) == CPACR_EL1_FPEN_EL0_TRAP);
-        if (KiArm64HasSve)
-            ASSERT((Cpacr & CPACR_EL1_ZEN_MASK) == CPACR_EL1_ZEN_EL0_TRAP);
-        if (KiArm64HasSme)
-            ASSERT((Cpacr & CPACR_EL1_SMEN_MASK) == CPACR_EL1_SMEN_EL0_TRAP);
-    }
-#endif
-
-    if (KiArm64ShouldTraceIdle())
-    {
-        DbgPrintEx(DPFLTR_DEFAULT_ID,
-                   DPFLTR_ERROR_LEVEL,
-                   "[arm64][CTX] Resume: KiArm64ConfigureFpTrap done\n");
-    }
 
     /*
      * ARM64 ABI: Do NOT set x18=TEB or tpidr_el0=TEB here.
