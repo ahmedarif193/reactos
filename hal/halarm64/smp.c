@@ -422,8 +422,7 @@ HalpArm64PrepareApData(
     _In_ ULONG ProcessorNumber,
     _In_ UINT64 EntryPoint,
     _In_ UINT64 StackPointer,
-    _In_ UINT64 Arg0,
-    _In_ UINT64 GicrBase)
+    _In_ UINT64 Arg0)
 {
     if (!HalpApDataVa)
         return;
@@ -472,8 +471,8 @@ HalpArm64PrepareApData(
     HalpArm64CleanDcacheRange(HalpApDataVa, sizeof(HAL_ARM64_AP_TRAMPOLINE_DATA));
     __asm__ __volatile__("dsb sy" ::: "memory");
 
-    DPRINT1("[arm64][HAL] AP data prepared: CPU=%lu entry=0x%llx stack=0x%llx GICR=0x%llx\n",
-            ProcessorNumber, EntryPoint, StackPointer, GicrBase);
+    DPRINT1("[arm64][HAL] AP data prepared: CPU=%lu entry=0x%llx stack=0x%llx GICR=disabled\n",
+            ProcessorNumber, EntryPoint, StackPointer);
     DPRINT1("[arm64][HAL] AP sysregs: SCTLR=0x%llx TCR=0x%llx MAIR=0x%llx VBAR=0x%llx\n",
             HalpApDataVa->SctlrEl1, HalpApDataVa->TcrEl1,
             HalpApDataVa->MairEl1, HalpApDataVa->VbarEl1);
