@@ -66,175 +66,182 @@ FdoEnumerateDevices(
     NTSTATUS Status;
 
     DeviceExtension = (PFDO_DEVICE_EXTENSION)DeviceObject->DeviceExtension;
-    DPRINT("PCI: FdoEnumerateDevices called (bus %lu-%lu)\n",
+    DPRINT("PCI: FdoEnumerateDevices called (bus %lu, range %lu-%lu)\n",
+           DeviceExtension->BusNumber,
            DeviceExtension->BusRangeStart, DeviceExtension->BusRangeEnd);
 
     DeviceExtension->DeviceListCount = 0;
 
-    /* Enumerate devices across the root's bus window */
-    for (Bus = DeviceExtension->BusRangeStart; Bus <= DeviceExtension->BusRangeEnd; Bus++)
+    /*
+     * A PCI FDO owns and enumerates exactly one bus.  BusRangeStart/End is
+     * kept for routing and arbitration, but subordinate buses are enumerated
+     * by the FDO attached to the PCI-to-PCI bridge that owns them.
+     */
+    Bus = DeviceExtension->BusNumber;
+    if (!PciIsBusInRange(DeviceExtension, Bus))
     {
-        if (!PciIsBusInRange(DeviceExtension, Bus))
-        {
-            continue;
-        }
+        DPRINT1("PCI: Bus %lu is outside FDO range %lu-%lu\n",
+                Bus,
+                DeviceExtension->BusRangeStart,
+                DeviceExtension->BusRangeEnd);
+        return STATUS_INVALID_PARAMETER;
+    }
 
+    /*
+     * Early Bus Termination Optimization:
+     *
+     * Per PCI specification, if device 0 function 0 does not exist on a bus,
+     * the entire bus is empty. This is because PCI-to-PCI bridges that create
+     * subordinate buses must be enumerated starting from device 0.
+     *
+     * By checking device 0 function 0 first and skipping empty buses, we
+     * reduce the scan to only populated buses, typically around 64 reads total.
+     */
+    SlotNumber.u.AsULONG = 0;
+    RtlZeroMemory(&PciConfig, sizeof(PCI_COMMON_CONFIG));
+
+    Size = HalGetBusData(PCIConfiguration,
+                         Bus,
+                         SlotNumber.u.AsULONG,
+                         &PciConfig,
+                         PCI_COMMON_HDR_LENGTH);
+
+    if (Size != PCI_COMMON_HDR_LENGTH ||
+        PciConfig.VendorID == PCI_INVALID_VENDORID ||
+        PciConfig.VendorID == 0)
+    {
         /*
-         * Early Bus Termination Optimization:
+         * No device at slot 0 function 0.
          *
-         * Per PCI specification, if device 0 function 0 does not exist on a bus,
-         * the entire bus is empty. This is because PCI-to-PCI bridges that create
-         * subordinate buses must be enumerated starting from device 0.
+         * NOTE: The PCI specification states that if device 0 does not exist,
+         * the entire bus is empty. However, some hypervisors (like VirtualBox)
+         * do NOT follow this convention and may have devices starting at
+         * non-zero device numbers. We cannot use the early bus termination
+         * optimization in these cases.
          *
-         * By checking device 0 function 0 first and skipping empty buses, we
-         * reduce the scan to only populated buses, typically around 64 reads total.
+         * For compatibility, we only skip the bus if we're scanning a
+         * secondary/subordinate bus (bus > 0). For bus 0 (root bus), we
+         * must scan all device numbers because the root complex may have
+         * integrated devices at any slot.
          */
-        SlotNumber.u.AsULONG = 0;
-        RtlZeroMemory(&PciConfig, sizeof(PCI_COMMON_CONFIG));
-
-        Size = HalGetBusData(PCIConfiguration,
-                             Bus,
-                             SlotNumber.u.AsULONG,
-                             &PciConfig,
-                             PCI_COMMON_HDR_LENGTH);
-
-        if (Size != PCI_COMMON_HDR_LENGTH ||
-            PciConfig.VendorID == PCI_INVALID_VENDORID ||
-            PciConfig.VendorID == 0)
+        if (Bus > 0)
         {
-            /*
-             * No device at slot 0 function 0.
-             *
-             * NOTE: The PCI specification states that if device 0 does not exist,
-             * the entire bus is empty. However, some hypervisors (like VirtualBox)
-             * do NOT follow this convention and may have devices starting at
-             * non-zero device numbers. We cannot use the early bus termination
-             * optimization in these cases.
-             *
-             * For compatibility, we only skip the bus if we're scanning a
-             * secondary/subordinate bus (bus > 0). For bus 0 (root bus), we
-             * must scan all device numbers because the root complex may have
-             * integrated devices at any slot.
-             */
-            if (Bus > 0)
-            {
-                DPRINT("Bus %lu: No device at slot 0, skipping entire bus\n", Bus);
-                continue;
-            }
-            DPRINT1("PCI: Bus %lu slot 0 empty (Size=%lu VendorID=0x%04hx), but scanning root bus anyway\n",
-                   Bus, Size, PciConfig.VendorID);
+            DPRINT("Bus %lu: No device at slot 0, skipping entire bus\n", Bus);
+            return STATUS_SUCCESS;
         }
+        DPRINT1("PCI: Bus %lu slot 0 empty (Size=%lu VendorID=0x%04hx), but scanning root bus anyway\n",
+               Bus, Size, PciConfig.VendorID);
+    }
 
-        /* Bus has at least one device, enumerate all devices on this bus */
-        for (DeviceNumber = 0; DeviceNumber < PCI_MAX_DEVICES; DeviceNumber++)
+    /* Enumerate devices on this bus */
+    for (DeviceNumber = 0; DeviceNumber < PCI_MAX_DEVICES; DeviceNumber++)
+    {
+        SlotNumber.u.bits.DeviceNumber = DeviceNumber;
+        for (FunctionNumber = 0; FunctionNumber < PCI_MAX_FUNCTION; FunctionNumber++)
         {
-            SlotNumber.u.bits.DeviceNumber = DeviceNumber;
-            for (FunctionNumber = 0; FunctionNumber < PCI_MAX_FUNCTION; FunctionNumber++)
-            {
-                SlotNumber.u.bits.FunctionNumber = FunctionNumber;
+            SlotNumber.u.bits.FunctionNumber = FunctionNumber;
 
-                /*
-                 * For device 0 function 0, we already have the config data from
-                 * the early bus termination check above. Reuse it to avoid a
-                 * redundant config space read.
-                 */
-                if (DeviceNumber == 0 && FunctionNumber == 0)
+            /*
+             * For device 0 function 0, we already have the config data from
+             * the early bus termination check above. Reuse it to avoid a
+             * redundant config space read.
+             */
+            if (DeviceNumber == 0 && FunctionNumber == 0)
+            {
+                /* PciConfig already populated from the bus check above */
+            }
+            else
+            {
+                RtlZeroMemory(&PciConfig,
+                              sizeof(PCI_COMMON_CONFIG));
+
+                Size = HalGetBusData(PCIConfiguration,
+                                     Bus,
+                                     SlotNumber.u.AsULONG,
+                                     &PciConfig,
+                                     PCI_COMMON_HDR_LENGTH);
+            }
+
+            if (Size != PCI_COMMON_HDR_LENGTH ||
+                PciConfig.VendorID == PCI_INVALID_VENDORID ||
+                PciConfig.VendorID == 0)
+            {
+                if (FunctionNumber == 0)
                 {
-                    /* PciConfig already populated from the bus check above */
+                    /* No device at this slot, try next device number */
+                    break;
                 }
                 else
                 {
-                    RtlZeroMemory(&PciConfig,
-                                  sizeof(PCI_COMMON_CONFIG));
-
-                    Size = HalGetBusData(PCIConfiguration,
-                                         Bus,
-                                         SlotNumber.u.AsULONG,
-                                         &PciConfig,
-                                         PCI_COMMON_HDR_LENGTH);
+                    /* No function at this number, try next function */
+                    continue;
                 }
+            }
 
-                if (Size != PCI_COMMON_HDR_LENGTH ||
-                    PciConfig.VendorID == PCI_INVALID_VENDORID ||
-                    PciConfig.VendorID == 0)
+            DPRINT1("PCI: Found Bus %1lu  Device %2lu  Func %1lu  VenID 0x%04hx  DevID 0x%04hx\n",
+                   Bus,
+                   DeviceNumber,
+                   FunctionNumber,
+                   PciConfig.VendorID,
+                   PciConfig.DeviceID);
+
+            Status = FdoLocateChildDevice(&Device, DeviceExtension, Bus, SlotNumber, &PciConfig);
+            if (!NT_SUCCESS(Status))
+            {
+                Device = ExAllocatePoolWithTag(NonPagedPool, sizeof(PCI_DEVICE), TAG_PCI);
+                if (!Device)
                 {
-                    if (FunctionNumber == 0)
-                    {
-                        /* No device at this slot, try next device number */
-                        break;
-                    }
-                    else
-                    {
-                        /* No function at this number, try next function */
-                        continue;
-                    }
+                    /* FIXME: Cleanup resources for already discovered devices */
+                    return STATUS_INSUFFICIENT_RESOURCES;
                 }
 
-                DPRINT1("PCI: Found Bus %1lu  Device %2lu  Func %1lu  VenID 0x%04hx  DevID 0x%04hx\n",
-                       Bus,
-                       DeviceNumber,
-                       FunctionNumber,
-                       PciConfig.VendorID,
-                       PciConfig.DeviceID);
+                RtlZeroMemory(Device,
+                              sizeof(PCI_DEVICE));
 
-                Status = FdoLocateChildDevice(&Device, DeviceExtension, Bus, SlotNumber, &PciConfig);
-                if (!NT_SUCCESS(Status))
+                Device->BusNumber = Bus;
+
+                if (PciIsDeviceDebugging(Bus, SlotNumber))
                 {
-                    Device = ExAllocatePoolWithTag(NonPagedPool, sizeof(PCI_DEVICE), TAG_PCI);
-                    if (!Device)
+                    Device->IsDebuggingDevice = TRUE;
+
+                    /*
+                     * ReactOS-specific: apply a hack
+                     * to prevent driver installation for the debugging device.
+                     * NOTE: Nothing to do for IEEE 1394 devices; NT5.1 and NT5.2
+                     * support IEEE 1394 debugging.
+                     *
+                     * FIXME: We should set the device problem code
+                     * CM_PROB_USED_BY_DEBUGGER instead.
+                     */
+                    if (PciConfig.BaseClass != PCI_CLASS_SERIAL_BUS_CTLR ||
+                        PciConfig.SubClass != PCI_SUBCLASS_SB_IEEE1394)
                     {
-                        /* FIXME: Cleanup resources for already discovered devices */
-                        return STATUS_INSUFFICIENT_RESOURCES;
+                        PciConfig.VendorID = 0xDEAD;
+                        PciConfig.DeviceID = 0xBEEF;
                     }
-
-                    RtlZeroMemory(Device,
-                                  sizeof(PCI_DEVICE));
-
-                    Device->BusNumber = Bus;
-
-                    if (PciIsDeviceDebugging(Bus, SlotNumber))
-                    {
-                        Device->IsDebuggingDevice = TRUE;
-
-                        /*
-                         * ReactOS-specific: apply a hack
-                         * to prevent driver installation for the debugging device.
-                         * NOTE: Nothing to do for IEEE 1394 devices; NT5.1 and NT5.2
-                         * support IEEE 1394 debugging.
-                         *
-                         * FIXME: We should set the device problem code
-                         * CM_PROB_USED_BY_DEBUGGER instead.
-                         */
-                        if (PciConfig.BaseClass != PCI_CLASS_SERIAL_BUS_CTLR ||
-                            PciConfig.SubClass != PCI_SUBCLASS_SB_IEEE1394)
-                        {
-                            PciConfig.VendorID = 0xDEAD;
-                            PciConfig.DeviceID = 0xBEEF;
-                        }
-                    }
-
-                    RtlCopyMemory(&Device->SlotNumber,
-                                  &SlotNumber,
-                                  sizeof(PCI_SLOT_NUMBER));
-
-                    RtlCopyMemory(&Device->PciConfig,
-                                  &PciConfig,
-                                  sizeof(PCI_COMMON_CONFIG));
-
-                    ExInterlockedInsertTailList(
-                        &DeviceExtension->DeviceListHead,
-                        &Device->ListEntry,
-                        &DeviceExtension->DeviceListLock);
                 }
 
-                DeviceExtension->DeviceListCount++;
+                RtlCopyMemory(&Device->SlotNumber,
+                              &SlotNumber,
+                              sizeof(PCI_SLOT_NUMBER));
 
-                /* Skip to next device if the current one is not a multifunction device */
-                if ((FunctionNumber == 0) &&
-                    ((PciConfig.HeaderType & 0x80) == 0))
-                {
-                    break;
-                }
+                RtlCopyMemory(&Device->PciConfig,
+                              &PciConfig,
+                              sizeof(PCI_COMMON_CONFIG));
+
+                ExInterlockedInsertTailList(
+                    &DeviceExtension->DeviceListHead,
+                    &Device->ListEntry,
+                    &DeviceExtension->DeviceListLock);
+            }
+
+            DeviceExtension->DeviceListCount++;
+
+            /* Skip to next device if the current one is not a multifunction device */
+            if ((FunctionNumber == 0) &&
+                ((PciConfig.HeaderType & 0x80) == 0))
+            {
+                break;
             }
         }
     }
