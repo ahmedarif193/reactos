@@ -60,8 +60,6 @@ KiArm64EarlyVectorHandler(_In_ UINT64 VectorId,
 #define ARM64_L2_BLOCK_SHIFT        21
 #define ARM64_L2_BLOCK_SIZE         (1ULL << ARM64_L2_BLOCK_SHIFT)
 #define ARM64_L1_MAX_ENTRIES        512
-#define ARM64_GICR_STRIDE_DEFAULT   0x20000ULL
-#define ARM64_GICR_MAX_MAP_BYTES    (64ULL << 20)
 
 #define ARM64_IDENTITY_L0_ENTRIES   512
 #define ARM64_IDENTITY_L1_ENTRIES   512
@@ -82,86 +80,6 @@ static UINT64 *KiArm64IdentityL0;
 static UINT64 *KiArm64IdentityL1;
 static UINT64 (*KiArm64IdentityL2)[512];
 static BOOLEAN KiArm64IdentityMapActive;
-
-#define ACPI_MADT_TYPE_GENERIC_INTERRUPT      0x0B
-#define ACPI_MADT_TYPE_GENERIC_DISTRIBUTOR    0x0C
-#define ACPI_MADT_TYPE_GENERIC_MSI_FRAME      0x0D
-#define ACPI_MADT_TYPE_GENERIC_REDISTRIBUTOR  0x0E
-#define ACPI_MADT_TYPE_GENERIC_TRANSLATOR     0x0F
-
-typedef struct _ACPI_SUBTABLE_HEADER
-{
-    UCHAR Type;
-    UCHAR Length;
-} ACPI_SUBTABLE_HEADER, *PACPI_SUBTABLE_HEADER;
-
-#include <pshpack1.h>
-typedef struct _ACPI_MADT
-{
-    DESCRIPTION_HEADER Header;
-    ULONG LocalApicAddress;
-    ULONG Flags;
-} ACPI_MADT, *PACPI_MADT;
-
-typedef struct _ACPI_MADT_GENERIC_DISTRIBUTOR
-{
-    ACPI_SUBTABLE_HEADER Header;
-    USHORT Reserved;
-    ULONG GicId;
-    ULONGLONG BaseAddress;
-    ULONG SystemVectorBase;
-    UCHAR GicVersion;
-    UCHAR Reserved2[3];
-} ACPI_MADT_GENERIC_DISTRIBUTOR, *PACPI_MADT_GENERIC_DISTRIBUTOR;
-
-typedef struct _ACPI_MADT_GENERIC_INTERRUPT
-{
-    ACPI_SUBTABLE_HEADER Header;
-    USHORT Reserved;
-    ULONG CpuInterfaceNumber;
-    ULONG AcpiProcessorUid;
-    ULONG Flags;
-    ULONG ParkingProtocolVersion;
-    ULONG PerformanceInterrupt;
-    ULONGLONG ParkedAddress;
-    ULONGLONG BaseAddress;
-    ULONGLONG GicvBaseAddress;
-    ULONGLONG GichBaseAddress;
-    ULONG VgicMaintenanceInterrupt;
-    ULONG Reserved2;
-    ULONGLONG GicrBaseAddress;
-    ULONGLONG Mpidr;
-} ACPI_MADT_GENERIC_INTERRUPT, *PACPI_MADT_GENERIC_INTERRUPT;
-
-typedef struct _ACPI_MADT_GENERIC_REDISTRIBUTOR
-{
-    ACPI_SUBTABLE_HEADER Header;
-    USHORT Reserved;
-    ULONGLONG BaseAddress;
-    ULONG Length;
-    ULONG Reserved2;
-} ACPI_MADT_GENERIC_REDISTRIBUTOR, *PACPI_MADT_GENERIC_REDISTRIBUTOR;
-
-typedef struct _ACPI_MADT_GENERIC_MSI_FRAME
-{
-    ACPI_SUBTABLE_HEADER Header;
-    USHORT Reserved;
-    ULONG MsiFrameId;
-    ULONGLONG BaseAddress;
-    ULONG Flags;
-    USHORT SpiCount;
-    USHORT SpiBase;
-} ACPI_MADT_GENERIC_MSI_FRAME, *PACPI_MADT_GENERIC_MSI_FRAME;
-
-typedef struct _ACPI_MADT_GENERIC_TRANSLATOR
-{
-    ACPI_SUBTABLE_HEADER Header;
-    USHORT Reserved;
-    ULONG TranslationId;
-    ULONGLONG BaseAddress;
-    ULONG Reserved2;
-} ACPI_MADT_GENERIC_TRANSLATOR, *PACPI_MADT_GENERIC_TRANSLATOR;
-#include <poppack.h>
 
 typedef struct _ARM64_EARLY_TRAP_STATE
 {
@@ -426,88 +344,6 @@ KiArm64FindRsdp(_In_opt_ PLOADER_PARAMETER_BLOCK LoaderBlock)
     return Rsdp;
 }
 
-CODE_SEG("INIT")
-static PDESCRIPTION_HEADER
-KiArm64GetAcpiTable(_In_opt_ PRSDP Rsdp,
-                    _In_ ULONG Signature)
-{
-    ULONG Count;
-    ULONG Index;
-
-    if (!Rsdp)
-        return NULL;
-
-    if (!KiArm64IdentityMapActive)
-        return NULL;
-
-    if ((Rsdp->Revision >= 2) && (Rsdp->XsdtAddress.QuadPart != 0))
-    {
-        UINT64 XsdtPa = Rsdp->XsdtAddress.QuadPart;
-        KiArm64MapIdentityAcpiRange(XsdtPa, sizeof(DESCRIPTION_HEADER));
-        PXSDT Xsdt = (PXSDT)(ULONG_PTR)XsdtPa;
-        ULONG Length = Xsdt->Header.Length;
-
-        if ((Xsdt->Header.Signature != XSDT_SIGNATURE) ||
-            (Length < sizeof(DESCRIPTION_HEADER)))
-        {
-            return NULL;
-        }
-
-        KiArm64MapIdentityAcpiRange(XsdtPa, Length);
-        Count = (Length - sizeof(DESCRIPTION_HEADER)) / sizeof(PHYSICAL_ADDRESS);
-        for (Index = 0; Index < Count; ++Index)
-        {
-            ULONGLONG TablePa = KiArm64ReadUnalignedU64(&Xsdt->Tables[Index]);
-            PDESCRIPTION_HEADER Header;
-
-            if (TablePa == 0)
-                continue;
-
-            KiArm64MapIdentityAcpiRange(TablePa, sizeof(DESCRIPTION_HEADER));
-            Header = (PDESCRIPTION_HEADER)(ULONG_PTR)TablePa;
-            if (Header->Signature == Signature)
-            {
-                KiArm64MapIdentityAcpiRange(TablePa, Header->Length);
-                return Header;
-            }
-        }
-    }
-    else if (Rsdp->RsdtAddress != 0)
-    {
-        UINT64 RsdtPa = (UINT64)Rsdp->RsdtAddress;
-        KiArm64MapIdentityAcpiRange(RsdtPa, sizeof(DESCRIPTION_HEADER));
-        PRSDT Rsdt = (PRSDT)(ULONG_PTR)RsdtPa;
-        ULONG Length = Rsdt->Header.Length;
-
-        if ((Rsdt->Header.Signature != RSDT_SIGNATURE) ||
-            (Length < sizeof(DESCRIPTION_HEADER)))
-        {
-            return NULL;
-        }
-
-        KiArm64MapIdentityAcpiRange(RsdtPa, Length);
-        Count = (Length - sizeof(DESCRIPTION_HEADER)) / sizeof(ULONG);
-        for (Index = 0; Index < Count; ++Index)
-        {
-            ULONG TablePa = Rsdt->Tables[Index];
-            PDESCRIPTION_HEADER Header;
-
-            if (TablePa == 0)
-                continue;
-
-            KiArm64MapIdentityAcpiRange(TablePa, sizeof(DESCRIPTION_HEADER));
-            Header = (PDESCRIPTION_HEADER)(ULONG_PTR)TablePa;
-            if (Header->Signature == Signature)
-            {
-                KiArm64MapIdentityAcpiRange(TablePa, Header->Length);
-                return Header;
-            }
-        }
-    }
-
-    return NULL;
-}
-
 /*
  * KiArm64MapAllAcpiTables
  *
@@ -676,150 +512,33 @@ KiArm64MapIdentityDeviceRange(_In_opt_ PLOADER_PARAMETER_BLOCK LoaderBlock,
 }
 
 CODE_SEG("INIT")
-static BOOLEAN
-KiArm64MapGicMmioFromMadt(_In_opt_ PLOADER_PARAMETER_BLOCK LoaderBlock,
-                          _In_ UINT64 Attributes)
+static VOID
+KiArm64MapEarlyDeviceRanges(_In_opt_ PLOADER_PARAMETER_BLOCK LoaderBlock,
+                            _In_ UINT64 Attributes)
 {
-    PRSDP Rsdp;
-    PACPI_MADT Madt;
-    ULONG Offset;
-    ULONG TotalLength;
-    BOOLEAN Mapped = FALSE;
-    BOOLEAN MappedGicd = FALSE;
-    BOOLEAN MappedGicc = FALSE;
-    BOOLEAN HasGicrEntry = FALSE;
+    ULONG Count;
 
-    Rsdp = KiArm64FindRsdp(LoaderBlock);
-    if (!Rsdp)
-        return FALSE;
-
-    Madt = (PACPI_MADT)KiArm64GetAcpiTable(Rsdp, APIC_SIGNATURE);
-    if (!Madt)
-        return FALSE;
-
-    TotalLength = Madt->Header.Length;
-    if (TotalLength < sizeof(ACPI_MADT))
-        return FALSE;
-
-    Offset = sizeof(ACPI_MADT);
-    while (Offset + sizeof(ACPI_SUBTABLE_HEADER) <= TotalLength)
+    if (!LoaderBlock)
     {
-        PACPI_SUBTABLE_HEADER Entry = (PACPI_SUBTABLE_HEADER)((ULONG_PTR)Madt + Offset);
-
-        if (Entry->Length < sizeof(ACPI_SUBTABLE_HEADER))
-            break;
-
-        if (Offset + Entry->Length > TotalLength)
-            break;
-
-        switch (Entry->Type)
-        {
-            case ACPI_MADT_TYPE_GENERIC_DISTRIBUTOR:
-            {
-                if (!MappedGicd && Entry->Length >= sizeof(ACPI_MADT_GENERIC_DISTRIBUTOR))
-                {
-                    PACPI_MADT_GENERIC_DISTRIBUTOR Dist =
-                        (PACPI_MADT_GENERIC_DISTRIBUTOR)Entry;
-                    UINT64 Base = KiArm64ReadUnalignedU64(&Dist->BaseAddress);
-
-                    if (Base)
-                    {
-                        KiArm64MapIdentityDeviceBlock(LoaderBlock, Base, Attributes);
-                        Mapped = TRUE;
-                        MappedGicd = TRUE;
-                    }
-                }
-                break;
-            }
-            case ACPI_MADT_TYPE_GENERIC_REDISTRIBUTOR:
-            {
-                if (Entry->Length >= sizeof(ACPI_MADT_GENERIC_REDISTRIBUTOR))
-                {
-                    PACPI_MADT_GENERIC_REDISTRIBUTOR Redist =
-                        (PACPI_MADT_GENERIC_REDISTRIBUTOR)Entry;
-                    UINT64 Base = KiArm64ReadUnalignedU64(&Redist->BaseAddress);
-                    ULONG Length;
-
-                    RtlCopyMemory(&Length, &Redist->Length, sizeof(Length));
-                    if (Base)
-                    {
-                        UINT64 MapLength = Length ? (UINT64)Length :
-                            (UINT64)MAXIMUM_PROCESSORS * ARM64_GICR_STRIDE_DEFAULT;
-
-                        if (MapLength > ARM64_GICR_MAX_MAP_BYTES)
-                            MapLength = ARM64_GICR_MAX_MAP_BYTES;
-
-                        KiArm64MapIdentityDeviceRange(LoaderBlock, Base, MapLength, Attributes);
-                        Mapped = TRUE;
-                    }
-                    HasGicrEntry = TRUE;
-                }
-                break;
-            }
-            case ACPI_MADT_TYPE_GENERIC_TRANSLATOR:
-            {
-                if (Entry->Length >= sizeof(ACPI_MADT_GENERIC_TRANSLATOR))
-                {
-                    PACPI_MADT_GENERIC_TRANSLATOR Its =
-                        (PACPI_MADT_GENERIC_TRANSLATOR)Entry;
-                    UINT64 Base = KiArm64ReadUnalignedU64(&Its->BaseAddress);
-
-                    if (Base)
-                    {
-                        KiArm64MapIdentityDeviceBlock(LoaderBlock, Base, Attributes);
-                        Mapped = TRUE;
-                    }
-                }
-                break;
-            }
-            case ACPI_MADT_TYPE_GENERIC_MSI_FRAME:
-            {
-                if (Entry->Length >= sizeof(ACPI_MADT_GENERIC_MSI_FRAME))
-                {
-                    PACPI_MADT_GENERIC_MSI_FRAME Frame =
-                        (PACPI_MADT_GENERIC_MSI_FRAME)Entry;
-                    UINT64 Base = KiArm64ReadUnalignedU64(&Frame->BaseAddress);
-
-                    if (Base)
-                    {
-                        KiArm64MapIdentityDeviceBlock(LoaderBlock, Base, Attributes);
-                        Mapped = TRUE;
-                    }
-                }
-                break;
-            }
-            case ACPI_MADT_TYPE_GENERIC_INTERRUPT:
-            {
-                if (!MappedGicc && Entry->Length >= sizeof(ACPI_MADT_GENERIC_INTERRUPT))
-                {
-                    PACPI_MADT_GENERIC_INTERRUPT Gicc =
-                        (PACPI_MADT_GENERIC_INTERRUPT)Entry;
-                    UINT64 Base = KiArm64ReadUnalignedU64(&Gicc->BaseAddress);
-                    UINT64 GicrBase = KiArm64ReadUnalignedU64(&Gicc->GicrBaseAddress);
-
-                    if (Base)
-                    {
-                        KiArm64MapIdentityDeviceBlock(LoaderBlock, Base, Attributes);
-                        Mapped = TRUE;
-                        MappedGicc = TRUE;
-                    }
-
-                    if (!HasGicrEntry && GicrBase)
-                    {
-                        KiArm64MapIdentityDeviceBlock(LoaderBlock, GicrBase, Attributes);
-                        Mapped = TRUE;
-                    }
-                }
-                break;
-            }
-            default:
-                break;
-        }
-
-        Offset += Entry->Length;
+        return;
     }
 
-    return Mapped;
+    Count = LoaderBlock->u.Arm64.EarlyDeviceRangeCount;
+    if (Count > ARM64_LOADER_MAX_EARLY_DEVICE_RANGES)
+    {
+        Count = ARM64_LOADER_MAX_EARLY_DEVICE_RANGES;
+    }
+
+    for (ULONG Index = 0; Index < Count; ++Index)
+    {
+        PARM64_LOADER_EARLY_DEVICE_RANGE Range;
+
+        Range = &LoaderBlock->u.Arm64.EarlyDeviceRanges[Index];
+        KiArm64MapIdentityDeviceRange(LoaderBlock,
+                                      Range->BaseAddress,
+                                      Range->Length,
+                                      Attributes);
+    }
 }
 
 CODE_SEG("INIT")
@@ -1239,33 +958,7 @@ KiArm64EnsureIdentityMapping(_Inout_ PARM64_BOOT_CONTEXT BootContext)
     BootContext->MmuEnabled = TRUE;
     KiArm64IdentityMapActive = TRUE;
 
-    /* Map GIC MMIO windows based on MADT, fallback to QEMU virt defaults. */
-    if (!KiArm64MapGicMmioFromMadt(LoaderBlock, DeviceBlockAttrs))
-    {
-        /*
-         * Map the QEMU virt default GIC regions:
-         *   - GICD: 0x08000000
-         *   - GICC: 0x08010000
-         *   - GICH/GICV: 0x08030000-0x08050000
-         */
-        const UINT64 GicStart = 0x08000000ULL & ~(ARM64_L2_BLOCK_SIZE - 1ULL);
-        const UINT64 GicEnd = GicStart + (8 * ARM64_L2_BLOCK_SIZE);
-
-        KiArm64MapIdentityRange(GicStart, GicEnd, DeviceBlockAttrs);
-    }
-
-    /*
-     * QEMU GICv3 redistributor region is typically at 0x80a0000 for highmem=off,
-     * but at 0x100000000 (4GB) for highmem=on or when using TCG emulation with
-     * more than 4GB RAM. Always map the 4GB GICR region to handle both cases.
-     * Note: The HAL now detects when ACPI reports highmem GICR addresses that
-     * don't match actual hardware and falls back to the lowmem region.
-     */
-    {
-        const UINT64 GicrHighStart = 0x100000000ULL;
-        const UINT64 GicrHighEnd = GicrHighStart + (64ULL << 20);  /* 64MB for GICR */
-        KiArm64MapIdentityRange(GicrHighStart, GicrHighEnd, DeviceBlockAttrs);
-    }
+    KiArm64MapEarlyDeviceRanges(LoaderBlock, DeviceBlockAttrs);
 
     __asm__ __volatile__("dsb ishst" ::: "memory");
     __asm__ __volatile__("tlbi vmalle1is" ::: "memory");

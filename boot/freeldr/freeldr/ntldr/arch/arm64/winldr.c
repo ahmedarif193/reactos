@@ -16,6 +16,7 @@
 #include <arch/arm64/arm64.h>
 #include <uefildr.h>
 #include <drivers/acpi/acpi.h>
+#include <reactos/arm64/acpi.h>
 #include <reactos/arm64/early_uart.h>
 extern EFI_SYSTEM_TABLE *GlobalSystemTable;
 #include <debug.h>
@@ -82,7 +83,9 @@ DBG_DEFAULT_CHANNEL(WINDOWS);
 #endif
 
 static PRSDP Arm64LocateRsdp(VOID);
+static PDESCRIPTION_HEADER Arm64LocateAcpiTable(ULONG Signature, ULONG MinimumLength);
 static PFADT Arm64LocateFadt(VOID);
+static VOID Arm64PopulateEarlyDeviceRanges(PLOADER_PARAMETER_BLOCK LoaderBlock);
 static VOID Arm64PopulatePsciConfiguration(PLOADER_PARAMETER_BLOCK LoaderBlock);
 
 /* -------------------------------------------------------------------------- */
@@ -140,6 +143,12 @@ static BOOLEAN Arm64AllocateKernelDataStructures(VOID);
 
 /* Low-level mapper provided by the platform */
 extern BOOLEAN Arm64MapVirtualMemory(ULONGLONG Va, ULONGLONG Pa, ULONGLONG Size, ULONG Attrs);
+
+#define ARM64_EARLY_DEVICE_GICD_LENGTH      0x10000ULL
+#define ARM64_EARLY_DEVICE_GICC_LENGTH      0x10000ULL
+#define ARM64_EARLY_DEVICE_GICR_LENGTH      0x20000ULL
+#define ARM64_EARLY_DEVICE_GIC_MSI_LENGTH   0x10000ULL
+#define ARM64_EARLY_DEVICE_GIC_ITS_LENGTH   0x20000ULL
 
 static
 BOOLEAN
@@ -324,38 +333,38 @@ Arm64LocateRsdp(VOID)
 }
 
 static
-PFADT
-Arm64LocateFadt(VOID)
+PDESCRIPTION_HEADER
+Arm64LocateAcpiTable(ULONG Signature, ULONG MinimumLength)
 {
     PRSDP Rsdp = Arm64LocateRsdp();
     if (!Rsdp)
         return NULL;
 
-    /* Prefer XSDT if available (ACPI 2.0+) */
     if (Rsdp->Revision >= 2 && Rsdp->XsdtAddress.QuadPart != 0)
     {
         PXSDT Xsdt = (PXSDT)(ULONG_PTR)Rsdp->XsdtAddress.QuadPart;
-        if (!Xsdt)
-            return NULL;
-
         ULONG EntryCount = 0;
-        if (Xsdt->Header.Length > sizeof(DESCRIPTION_HEADER))
-            EntryCount = (Xsdt->Header.Length - sizeof(DESCRIPTION_HEADER)) / sizeof(PHYSICAL_ADDRESS);
+
+        if (Xsdt && Xsdt->Header.Length > sizeof(DESCRIPTION_HEADER))
+            EntryCount = (Xsdt->Header.Length - sizeof(DESCRIPTION_HEADER)) /
+                         sizeof(PHYSICAL_ADDRESS);
 
         for (ULONG i = 0; i < EntryCount; ++i)
         {
             ULONGLONG TablePa = Xsdt->Tables[i].QuadPart;
+            PDESCRIPTION_HEADER Header;
+
             if (TablePa == 0)
                 continue;
 
-            PFADT Fadt = (PFADT)(ULONG_PTR)TablePa;
-            if (!Fadt)
+            Header = (PDESCRIPTION_HEADER)(ULONG_PTR)TablePa;
+            if (!Header)
                 continue;
 
-            if (Fadt->Header.Signature == FADT_SIGNATURE)
+            if ((Header->Signature == Signature) &&
+                (Header->Length >= MinimumLength))
             {
-                if (Fadt->Header.Length >= FIELD_OFFSET(FADT, minor_revision) + sizeof(Fadt->minor_revision))
-                    return Fadt;
+                return Header;
             }
         }
     }
@@ -363,32 +372,217 @@ Arm64LocateFadt(VOID)
     if (Rsdp->RsdtAddress != 0)
     {
         PRSDT Rsdt = (PRSDT)(ULONG_PTR)Rsdp->RsdtAddress;
-        if (!Rsdt)
-            return NULL;
-
         ULONG EntryCount = 0;
-        if (Rsdt->Header.Length > sizeof(DESCRIPTION_HEADER))
-            EntryCount = (Rsdt->Header.Length - sizeof(DESCRIPTION_HEADER)) / sizeof(ULONG);
+
+        if (Rsdt && Rsdt->Header.Length > sizeof(DESCRIPTION_HEADER))
+            EntryCount = (Rsdt->Header.Length - sizeof(DESCRIPTION_HEADER)) /
+                         sizeof(ULONG);
 
         for (ULONG i = 0; i < EntryCount; ++i)
         {
             ULONG TablePa = Rsdt->Tables[i];
+            PDESCRIPTION_HEADER Header;
+
             if (TablePa == 0)
                 continue;
 
-            PFADT Fadt = (PFADT)(ULONG_PTR)TablePa;
-            if (!Fadt)
+            Header = (PDESCRIPTION_HEADER)(ULONG_PTR)TablePa;
+            if (!Header)
                 continue;
 
-            if (Fadt->Header.Signature == FADT_SIGNATURE)
+            if ((Header->Signature == Signature) &&
+                (Header->Length >= MinimumLength))
             {
-                if (Fadt->Header.Length >= FIELD_OFFSET(FADT, minor_revision) + sizeof(Fadt->minor_revision))
-                    return Fadt;
+                return Header;
             }
         }
     }
 
     return NULL;
+}
+
+static
+PFADT
+Arm64LocateFadt(VOID)
+{
+    return (PFADT)Arm64LocateAcpiTable(FADT_SIGNATURE,
+                                       FIELD_OFFSET(FADT, minor_revision) +
+                                       sizeof(((PFADT)0)->minor_revision));
+}
+
+static
+VOID
+Arm64ResetEarlyDeviceRanges(PLOADER_PARAMETER_BLOCK LoaderBlock)
+{
+    if (!LoaderBlock)
+        return;
+
+    LoaderBlock->u.Arm64.EarlyDeviceRangeCount = 0;
+    RtlZeroMemory(LoaderBlock->u.Arm64.EarlyDeviceRanges,
+                  sizeof(LoaderBlock->u.Arm64.EarlyDeviceRanges));
+}
+
+static
+VOID
+Arm64AddEarlyDeviceRange(
+    PLOADER_PARAMETER_BLOCK LoaderBlock,
+    ULONGLONG BaseAddress,
+    ULONGLONG Length)
+{
+    ULONG Count;
+
+    if (!LoaderBlock || (BaseAddress == 0) || (Length == 0))
+        return;
+
+    Count = LoaderBlock->u.Arm64.EarlyDeviceRangeCount;
+    if (Count > ARM64_LOADER_MAX_EARLY_DEVICE_RANGES)
+        Count = ARM64_LOADER_MAX_EARLY_DEVICE_RANGES;
+
+    for (ULONG Index = 0; Index < Count; ++Index)
+    {
+        PARM64_LOADER_EARLY_DEVICE_RANGE Range;
+
+        Range = &LoaderBlock->u.Arm64.EarlyDeviceRanges[Index];
+        if ((Range->BaseAddress == BaseAddress) &&
+            (Range->Length == Length))
+        {
+            return;
+        }
+    }
+
+    if (Count == ARM64_LOADER_MAX_EARLY_DEVICE_RANGES)
+        return;
+
+    LoaderBlock->u.Arm64.EarlyDeviceRanges[Count].BaseAddress = BaseAddress;
+    LoaderBlock->u.Arm64.EarlyDeviceRanges[Count].Length = Length;
+    LoaderBlock->u.Arm64.EarlyDeviceRangeCount = Count + 1;
+}
+
+static
+VOID
+Arm64PopulateEarlyDeviceRanges(PLOADER_PARAMETER_BLOCK LoaderBlock)
+{
+    PARM64_ACPI_MADT Madt;
+    PUCHAR Current;
+    PUCHAR End;
+
+    if (!LoaderBlock)
+        return;
+
+    Arm64ResetEarlyDeviceRanges(LoaderBlock);
+
+    Arm64AddEarlyDeviceRange(LoaderBlock,
+                             LoaderBlock->u.Arm64.EarlyUartAddress,
+                             PAGE_SIZE);
+
+    Madt = (PARM64_ACPI_MADT)Arm64LocateAcpiTable(APIC_SIGNATURE,
+                                                  sizeof(*Madt));
+    if (!Madt)
+        return;
+
+    Current = (PUCHAR)(Madt + 1);
+    End = (PUCHAR)Madt + Madt->Header.Length;
+
+    while (Current + sizeof(ARM64_ACPI_MADT_SUBTABLE) <= End)
+    {
+        PARM64_ACPI_MADT_SUBTABLE Header;
+
+        Header = (PARM64_ACPI_MADT_SUBTABLE)Current;
+
+        if ((Header->Length < sizeof(*Header)) ||
+            (Current + Header->Length > End))
+        {
+            break;
+        }
+
+        switch (Header->Type)
+        {
+            case ARM64_ACPI_MADT_TYPE_GENERIC_INTERRUPT:
+            {
+                PARM64_ACPI_MADT_GENERIC_INTERRUPT Gicc;
+
+                Gicc = (PARM64_ACPI_MADT_GENERIC_INTERRUPT)Header;
+
+                if (Header->Length >= FIELD_OFFSET(ARM64_ACPI_MADT_GENERIC_INTERRUPT,
+                                                   BaseAddress) +
+                                      sizeof(Gicc->BaseAddress))
+                {
+                    Arm64AddEarlyDeviceRange(LoaderBlock,
+                                             Gicc->BaseAddress,
+                                             ARM64_EARLY_DEVICE_GICC_LENGTH);
+                }
+
+                if (Header->Length >= FIELD_OFFSET(ARM64_ACPI_MADT_GENERIC_INTERRUPT,
+                                                   GicrBaseAddress) +
+                                      sizeof(Gicc->GicrBaseAddress))
+                {
+                    Arm64AddEarlyDeviceRange(LoaderBlock,
+                                             Gicc->GicrBaseAddress,
+                                             ARM64_EARLY_DEVICE_GICR_LENGTH);
+                }
+                break;
+            }
+
+            case ARM64_ACPI_MADT_TYPE_GENERIC_DISTRIBUTOR:
+            {
+                PARM64_ACPI_MADT_GENERIC_DISTRIBUTOR Gicd;
+
+                if (Header->Length >= sizeof(*Gicd))
+                {
+                    Gicd = (PARM64_ACPI_MADT_GENERIC_DISTRIBUTOR)Header;
+                    Arm64AddEarlyDeviceRange(LoaderBlock,
+                                             Gicd->BaseAddress,
+                                             ARM64_EARLY_DEVICE_GICD_LENGTH);
+                }
+                break;
+            }
+
+            case ARM64_ACPI_MADT_TYPE_GENERIC_MSI_FRAME:
+            {
+                PARM64_ACPI_MADT_GENERIC_MSI_FRAME Frame;
+
+                if (Header->Length >= sizeof(*Frame))
+                {
+                    Frame = (PARM64_ACPI_MADT_GENERIC_MSI_FRAME)Header;
+                    Arm64AddEarlyDeviceRange(LoaderBlock,
+                                             Frame->BaseAddress,
+                                             ARM64_EARLY_DEVICE_GIC_MSI_LENGTH);
+                }
+                break;
+            }
+
+            case ARM64_ACPI_MADT_TYPE_GENERIC_REDISTRIBUTOR:
+            {
+                PARM64_ACPI_MADT_GENERIC_REDISTRIBUTOR Gicr;
+
+                if (Header->Length >= sizeof(*Gicr))
+                {
+                    Gicr = (PARM64_ACPI_MADT_GENERIC_REDISTRIBUTOR)Header;
+                    Arm64AddEarlyDeviceRange(LoaderBlock,
+                                             Gicr->BaseAddress,
+                                             Gicr->Length ? Gicr->Length :
+                                             ARM64_EARLY_DEVICE_GICR_LENGTH);
+                }
+                break;
+            }
+
+            case ARM64_ACPI_MADT_TYPE_GENERIC_TRANSLATOR:
+            {
+                PARM64_ACPI_MADT_GENERIC_TRANSLATOR Its;
+
+                if (Header->Length >= sizeof(*Its))
+                {
+                    Its = (PARM64_ACPI_MADT_GENERIC_TRANSLATOR)Header;
+                    Arm64AddEarlyDeviceRange(LoaderBlock,
+                                             Its->BaseAddress,
+                                             ARM64_EARLY_DEVICE_GIC_ITS_LENGTH);
+                }
+                break;
+            }
+        }
+
+        Current += Header->Length;
+    }
 }
 
 static
@@ -495,6 +689,7 @@ Arm64SetupForNt(
     /* Pass the detected UART address to the kernel */
     LoaderBlock->u.Arm64.EarlyUartAddress = EarlyUartBaseAddress;
     LoaderBlock->u.Arm64.EarlyUartInterface = (ULONG)EarlyUartInterface;
+    Arm64PopulateEarlyDeviceRanges(LoaderBlock);
 
     /* Ensure memory is properly prepared */
     if (!Arm64InitializeMemory(LoaderBlock))

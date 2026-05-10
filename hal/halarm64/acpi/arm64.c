@@ -9,6 +9,7 @@
 #include <halacpi.h>
 #include <halacpi_arm64.h>
 #include <ntifs.h>
+#include <reactos/arm64/acpi.h>
 #define NDEBUG
 #include <debug.h>
 
@@ -25,18 +26,6 @@
 #define PPTT_SIGNATURE 0x54545050 /* "PPTT" */
 #endif
 
-/*
- * MADT subtable types for ARM64 GIC structures
- * Types 0x0B-0x0F are ARM64-specific GIC entries
- */
-#define ACPI_MADT_TYPE_INTERRUPT_OVERRIDE     0x02  /* Interrupt source override */
-#define ACPI_MADT_TYPE_NMI_SOURCE             0x03  /* NMI source */
-#define ACPI_MADT_TYPE_GENERIC_INTERRUPT      0x0B  /* GIC CPU Interface (GICC) */
-#define ACPI_MADT_TYPE_GENERIC_DISTRIBUTOR    0x0C  /* GIC Distributor (GICD) */
-#define ACPI_MADT_TYPE_GENERIC_MSI_FRAME      0x0D  /* GIC MSI Frame */
-#define ACPI_MADT_TYPE_GENERIC_REDISTRIBUTOR  0x0E  /* GIC Redistributor (GICR) */
-#define ACPI_MADT_TYPE_GENERIC_TRANSLATOR     0x0F  /* GIC Interrupt Translation Service (ITS) */
-
 #ifndef ACPI_FADT_PSCI_COMPLIANT
 #define ACPI_FADT_PSCI_COMPLIANT 0x00000001
 #endif
@@ -45,102 +34,6 @@
 #endif
 
 #include <pshpack1.h>
-typedef struct _ACPI_SUBTABLE_HEADER
-{
-    UCHAR Type;
-    UCHAR Length;
-} ACPI_SUBTABLE_HEADER, *PACPI_SUBTABLE_HEADER;
-
-typedef struct _ACPI_MADT
-{
-    DESCRIPTION_HEADER Header;
-    ULONG LocalApicAddress;
-    ULONG Flags;
-} ACPI_MADT, *PACPI_MADT;
-
-typedef struct _ACPI_MADT_GENERIC_DISTRIBUTOR
-{
-    ACPI_SUBTABLE_HEADER Header;
-    USHORT Reserved;
-    ULONG GicId;
-    ULONGLONG BaseAddress;
-    ULONG SystemVectorBase;
-    UCHAR GicVersion;
-    UCHAR Reserved2[3];
-} ACPI_MADT_GENERIC_DISTRIBUTOR, *PACPI_MADT_GENERIC_DISTRIBUTOR;
-
-typedef struct _ACPI_MADT_GENERIC_REDISTRIBUTOR
-{
-    ACPI_SUBTABLE_HEADER Header;
-    USHORT Reserved;
-    ULONGLONG BaseAddress;
-    ULONG Length;
-    ULONG Reserved2;
-} ACPI_MADT_GENERIC_REDISTRIBUTOR, *PACPI_MADT_GENERIC_REDISTRIBUTOR;
-
-typedef struct _ACPI_MADT_GENERIC_MSI_FRAME
-{
-    ACPI_SUBTABLE_HEADER Header;
-    USHORT Reserved;
-    ULONG MsiFrameId;
-    ULONGLONG BaseAddress;
-    ULONG Flags;
-    USHORT SpiCount;
-    USHORT SpiBase;
-} ACPI_MADT_GENERIC_MSI_FRAME, *PACPI_MADT_GENERIC_MSI_FRAME;
-
-typedef struct _ACPI_MADT_GENERIC_TRANSLATOR
-{
-    ACPI_SUBTABLE_HEADER Header;
-    USHORT Reserved;
-    ULONG TranslationId;
-    ULONGLONG BaseAddress;
-    ULONG Reserved2;
-} ACPI_MADT_GENERIC_TRANSLATOR, *PACPI_MADT_GENERIC_TRANSLATOR;
-
-typedef struct _ACPI_MADT_GENERIC_INTERRUPT
-{
-    ACPI_SUBTABLE_HEADER Header;
-    USHORT Reserved;
-    ULONG CpuInterfaceNumber;
-    ULONG AcpiProcessorUid;
-    ULONG Flags;
-    ULONG ParkingProtocolVersion;
-    ULONG PerformanceInterrupt;
-    ULONGLONG ParkedAddress;
-    ULONGLONG BaseAddress;
-    ULONGLONG GicvBaseAddress;
-    ULONGLONG GichBaseAddress;
-    ULONG VgicMaintenanceInterrupt;
-    ULONGLONG GicrBaseAddress;
-    ULONGLONG Mpidr;
-} ACPI_MADT_GENERIC_INTERRUPT, *PACPI_MADT_GENERIC_INTERRUPT;
-
-/*
- * Interrupt Source Override structure (Type 0x02)
- * Used on ARM64 to redirect platform interrupts to different GSIs
- * with specific polarity and trigger mode settings.
- */
-typedef struct _ACPI_MADT_INTERRUPT_OVERRIDE
-{
-    ACPI_SUBTABLE_HEADER Header;
-    UCHAR Bus;                      /* Bus type (0 = system/ISA) */
-    UCHAR SourceIrq;                /* Original IRQ number */
-    ULONG GlobalSystemInterrupt;    /* Target GSI */
-    USHORT IntiFlags;               /* Polarity (bits 0-1) and Trigger (bits 2-3) */
-} ACPI_MADT_INTERRUPT_OVERRIDE, *PACPI_MADT_INTERRUPT_OVERRIDE;
-
-/*
- * NMI Source structure (Type 0x03)
- * Describes platform Non-Maskable Interrupt sources.
- */
-typedef struct _ACPI_MADT_NMI_SOURCE
-{
-    ACPI_SUBTABLE_HEADER Header;
-    USHORT IntiFlags;               /* Polarity (bits 0-1) and Trigger (bits 2-3) */
-    ULONG GlobalSystemInterrupt;    /* GSI for this NMI */
-} ACPI_MADT_NMI_SOURCE, *PACPI_MADT_NMI_SOURCE;
-
 typedef struct _ACPI_TABLE_GTDT
 {
     DESCRIPTION_HEADER Header;
@@ -309,7 +202,7 @@ NTAPI
 HalpAcpiDiscoverArm64Tables(
     _In_ PLOADER_PARAMETER_BLOCK LoaderBlock)
 {
-    PACPI_MADT Madt;
+    PARM64_ACPI_MADT Madt;
     PACPI_TABLE_GTDT Gtdt;
     PACPI_TABLE_SPCR Spcr;
     PFADT Fadt;
@@ -338,8 +231,8 @@ HalpAcpiDiscoverArm64Tables(
     if (Madt->Header.Length >= sizeof(*Madt))
     {
         ULONG_PTR TableEnd = (ULONG_PTR)Madt + Madt->Header.Length;
-        PACPI_SUBTABLE_HEADER Entry =
-            (PACPI_SUBTABLE_HEADER)((ULONG_PTR)Madt + sizeof(*Madt));
+        PARM64_ACPI_MADT_SUBTABLE Entry =
+            (PARM64_ACPI_MADT_SUBTABLE)((ULONG_PTR)Madt + sizeof(*Madt));
 
         DPRINT1("[arm64][ACPI] MADT: Parsing table at %p, length=%lu\n",
                 Madt, Madt->Header.Length);
@@ -356,10 +249,10 @@ HalpAcpiDiscoverArm64Tables(
 
             switch (Entry->Type)
             {
-                case ACPI_MADT_TYPE_GENERIC_DISTRIBUTOR:
+                case ARM64_ACPI_MADT_TYPE_GENERIC_DISTRIBUTOR:
                 {
-                    PACPI_MADT_GENERIC_DISTRIBUTOR Dist =
-                        (PACPI_MADT_GENERIC_DISTRIBUTOR)Entry;
+                    PARM64_ACPI_MADT_GENERIC_DISTRIBUTOR Dist =
+                        (PARM64_ACPI_MADT_GENERIC_DISTRIBUTOR)Entry;
                     if (Entry->Length >= sizeof(*Dist))
                     {
                         ULONGLONG Base = HalpReadUnalignedU64(&Dist->BaseAddress);
@@ -373,14 +266,14 @@ HalpAcpiDiscoverArm64Tables(
                     }
                     break;
                 }
-                case ACPI_MADT_TYPE_INTERRUPT_OVERRIDE:
+                case ARM64_ACPI_MADT_TYPE_INTERRUPT_OVERRIDE:
                 {
                     /*
                      * Interrupt Source Override - remaps source IRQ to GSI
                      * with specified polarity and trigger mode.
                      */
-                    PACPI_MADT_INTERRUPT_OVERRIDE Override =
-                        (PACPI_MADT_INTERRUPT_OVERRIDE)Entry;
+                    PARM64_ACPI_MADT_INTERRUPT_OVERRIDE Override =
+                        (PARM64_ACPI_MADT_INTERRUPT_OVERRIDE)Entry;
                     if (Entry->Length >= sizeof(*Override))
                     {
                         ULONG Index = HalpArm64GicInfo.IntOverrideCount;
@@ -404,14 +297,14 @@ HalpAcpiDiscoverArm64Tables(
                     }
                     break;
                 }
-                case ACPI_MADT_TYPE_NMI_SOURCE:
+                case ARM64_ACPI_MADT_TYPE_NMI_SOURCE:
                 {
                     /*
                      * NMI Source - identifies GSIs that should be treated as NMIs.
                      * On ARM64 with GIC, these would be configured with priority 0
                      * (highest/non-maskable).
                      */
-                    PACPI_MADT_NMI_SOURCE NmiSrc = (PACPI_MADT_NMI_SOURCE)Entry;
+                    PARM64_ACPI_MADT_NMI_SOURCE NmiSrc = (PARM64_ACPI_MADT_NMI_SOURCE)Entry;
                     if (Entry->Length >= sizeof(*NmiSrc))
                     {
                         ULONG Index = HalpArm64GicInfo.NmiSourceCount;
@@ -430,15 +323,15 @@ HalpAcpiDiscoverArm64Tables(
                     }
                     break;
                 }
-                case ACPI_MADT_TYPE_GENERIC_REDISTRIBUTOR:
+                case ARM64_ACPI_MADT_TYPE_GENERIC_REDISTRIBUTOR:
                 {
                     /*
                      * Parse ALL GICR (redistributor) entries from MADT.
                      * Multi-socket ARM64 systems may have multiple regions.
                      * This follows Linux's gic_acpi_parse_madt_redist() approach.
                      */
-                    PACPI_MADT_GENERIC_REDISTRIBUTOR Redist =
-                        (PACPI_MADT_GENERIC_REDISTRIBUTOR)Entry;
+                    PARM64_ACPI_MADT_GENERIC_REDISTRIBUTOR Redist =
+                        (PARM64_ACPI_MADT_GENERIC_REDISTRIBUTOR)Entry;
                     if (Entry->Length >= sizeof(*Redist))
                     {
                         ULONGLONG Base = HalpReadUnalignedU64(&Redist->BaseAddress);
@@ -476,10 +369,10 @@ HalpAcpiDiscoverArm64Tables(
                     }
                     break;
                 }
-                case ACPI_MADT_TYPE_GENERIC_MSI_FRAME:
+                case ARM64_ACPI_MADT_TYPE_GENERIC_MSI_FRAME:
                 {
-                    PACPI_MADT_GENERIC_MSI_FRAME Frame =
-                        (PACPI_MADT_GENERIC_MSI_FRAME)Entry;
+                    PARM64_ACPI_MADT_GENERIC_MSI_FRAME Frame =
+                        (PARM64_ACPI_MADT_GENERIC_MSI_FRAME)Entry;
                     if (Entry->Length >= sizeof(*Frame))
                     {
                         ULONG Index = HalpArm64GicInfo.MsiFrameCount;
@@ -498,10 +391,10 @@ HalpAcpiDiscoverArm64Tables(
                     }
                     break;
                 }
-                case ACPI_MADT_TYPE_GENERIC_TRANSLATOR:
+                case ARM64_ACPI_MADT_TYPE_GENERIC_TRANSLATOR:
                 {
-                    PACPI_MADT_GENERIC_TRANSLATOR Its =
-                        (PACPI_MADT_GENERIC_TRANSLATOR)Entry;
+                    PARM64_ACPI_MADT_GENERIC_TRANSLATOR Its =
+                        (PARM64_ACPI_MADT_GENERIC_TRANSLATOR)Entry;
                     if (Entry->Length >= sizeof(*Its))
                     {
                         ULONG Index = HalpArm64GicInfo.ItsCount;
@@ -517,11 +410,11 @@ HalpAcpiDiscoverArm64Tables(
                     }
                     break;
                 }
-                case ACPI_MADT_TYPE_GENERIC_INTERRUPT:
+                case ARM64_ACPI_MADT_TYPE_GENERIC_INTERRUPT:
                 {
-                    PACPI_MADT_GENERIC_INTERRUPT Gicc =
-                        (PACPI_MADT_GENERIC_INTERRUPT)Entry;
-                    if (Entry->Length >= FIELD_OFFSET(ACPI_MADT_GENERIC_INTERRUPT, Mpidr) +
+                    PARM64_ACPI_MADT_GENERIC_INTERRUPT Gicc =
+                        (PARM64_ACPI_MADT_GENERIC_INTERRUPT)Entry;
+                    if (Entry->Length >= FIELD_OFFSET(ARM64_ACPI_MADT_GENERIC_INTERRUPT, Mpidr) +
                         sizeof(ULONGLONG))
                     {
                         ULONG Index = HalpArm64GicInfo.GiccEntryCount;
@@ -551,7 +444,7 @@ HalpAcpiDiscoverArm64Tables(
                     break;
             }
 
-            Entry = (PACPI_SUBTABLE_HEADER)((ULONG_PTR)Entry + Entry->Length);
+            Entry = (PARM64_ACPI_MADT_SUBTABLE)((ULONG_PTR)Entry + Entry->Length);
         }
     }
 

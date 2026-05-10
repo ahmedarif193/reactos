@@ -2,7 +2,7 @@
 """
 VM Monitor Script
 Builds the selected boot image, starts VM (VirtualBox or QEMU) and monitors for stalls.
-If log stops updating for more than 6 seconds, or total runtime exceeds 30 seconds,
+If log stops updating for more than 15 seconds, or total runtime exceeds 60 seconds,
 forcefully stops the VM.
 
 Usage:
@@ -43,6 +43,7 @@ HARD_TIMEOUT = int(os.environ.get("ROS_VM_HARD_TIMEOUT", "60"))
 VM_NAME = os.environ.get("ROS_VM_NAME", "ROS11")
 ENABLE_GDB_DUMP = os.environ.get("ROS_VM_GDB_DUMP", "1") != "0"
 QEMU_GDB_PORT = int(os.environ.get("ROS_QEMU_GDB_PORT", "1234"))
+QEMU_ARM64_GIC_VERSION = os.environ.get("ROS_QEMU_GIC_VERSION", "auto")
 KERNEL_TEXT_ADDRESS = (
     int(os.environ["ROS_KERNEL_TEXT"], 0)
     if "ROS_KERNEL_TEXT" in os.environ else None
@@ -474,6 +475,21 @@ def qemu_arm64_iso_drive_args(image_path):
     ]
 
 
+def resolve_qemu_arm64_gic_version(rpi_mode):
+    """Return the QEMU virt GIC version to use for ARM64."""
+    requested = str(QEMU_ARM64_GIC_VERSION).strip().lower()
+    valid_versions = {"auto", "2", "3", "4", "host", "max"}
+
+    if requested not in valid_versions:
+        print(f"Invalid ARM64 GIC version '{QEMU_ARM64_GIC_VERSION}', using auto.")
+        requested = "auto"
+
+    if requested != "auto":
+        return requested
+
+    return "2" if rpi_mode else "max"
+
+
 def qemu_ahci_iso_args(image_path):
     """Return QEMU q35/AHCI optical media args."""
     return [
@@ -501,15 +517,21 @@ def start_qemu(rpi_mode=False, smp=4):
     # ---------------- ARM64 CONFIGURATION ----------------
     if target_arch == "arm64":
         is_darwin = platform.system() == "Darwin"
+        gic_version = resolve_qemu_arm64_gic_version(rpi_mode)
+        machine_arg = f"virt,gic-version={gic_version}"
         arm64_usb_devices = [
             "-device", "qemu-xhci,id=xhci",
             "-device", "usb-kbd,bus=xhci.0",
             "-device", "usb-tablet,bus=xhci.0",
         ]
         if rpi_mode:
-            mode_str = f"RPI emulation (cortex-a72, {smp} cores)"
+            mode_str = f"RPI emulation (cortex-a72, {smp} cores, GICv{gic_version})"
         else:
-            mode_str = f"HVF accelerated (max, {smp} cores)" if is_darwin else f"CPU max ({smp} cores)"
+            mode_str = (
+                f"HVF accelerated (max, {smp} cores, GIC {gic_version})"
+                if is_darwin else
+                f"CPU max ({smp} cores, GIC {gic_version})"
+            )
         print(f"Starting QEMU (ARM64 - {mode_str})...")
 
         # Darwin-specific configuration (macOS)
@@ -523,7 +545,7 @@ def start_qemu(rpi_mode=False, smp=4):
                     "-smp", str(smp),
                     "-device", "ramfb",
                     *arm64_usb_devices,
-                    "-machine", "virt,gic-version=3",
+                    "-machine", machine_arg,
                     "-cpu", "cortex-a72",
                     "-m", "4G",
                     "-drive", "if=pflash,format=raw,readonly=on,file=/opt/homebrew/share/qemu/edk2-aarch64-code.fd",
@@ -542,7 +564,7 @@ def start_qemu(rpi_mode=False, smp=4):
                     "-smp", str(smp),
                     "-device", "ramfb",
                     *arm64_usb_devices,
-                    "-machine", "virt,gic-version=3",
+                    "-machine", machine_arg,
                     "-cpu", "max",
                     "-m", "4G",
                     "-drive", "if=pflash,format=raw,readonly=on,file=/opt/homebrew/share/qemu/edk2-aarch64-code.fd",
@@ -569,7 +591,7 @@ def start_qemu(rpi_mode=False, smp=4):
                     "-smp", str(smp),
                     "-device", "ramfb",
                     *arm64_usb_devices,
-                    "-machine", "virt,gic-version=3",
+                    "-machine", machine_arg,
                     "-cpu", "cortex-a72",
                     "-m", "4G",
                     "-bios", "/usr/share/qemu-efi-aarch64/QEMU_EFI.fd",
@@ -589,7 +611,7 @@ def start_qemu(rpi_mode=False, smp=4):
                     "-smp", str(smp),
                     "-device", "ramfb",
                     *arm64_usb_devices,
-                    "-machine", "virt,gic-version=3",
+                    "-machine", machine_arg,
                     "-cpu", "max",
                     "-m", "4G",
                     "-bios", "/usr/share/qemu-efi-aarch64/QEMU_EFI.fd",
@@ -1576,7 +1598,7 @@ def signal_handler(sig, frame):
 
 
 def main():
-    global use_qemu, target_arch, boot_media, boot_image_path
+    global use_qemu, target_arch, boot_media, boot_image_path, QEMU_ARM64_GIC_VERSION
 
     parser = argparse.ArgumentParser(description='VM Monitor Script')
     parser.add_argument('--qemu', action='store_true',
@@ -1587,7 +1609,11 @@ def main():
     parser.add_argument('--livecd', action='store_true', help='Build and boot livecd.iso instead of ReactOS.img')
     parser.add_argument('--iso', nargs='?', const=LIVECD_ISO, default=None,
                         help='Boot an ISO path with QEMU; no path means build/livecd.iso')
+    parser.add_argument('--gic-version', '--gic', choices=('auto', '2', '3', '4', 'host', 'max'),
+                        default=QEMU_ARM64_GIC_VERSION,
+                        help='ARM64 QEMU virt GIC version (default: auto; env: ROS_QEMU_GIC_VERSION)')
     args = parser.parse_args()
+    QEMU_ARM64_GIC_VERSION = args.gic_version
 
     # --vbox is explicit but same as default (no --qemu)
     use_qemu = args.qemu and not args.vbox
