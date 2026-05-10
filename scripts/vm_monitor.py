@@ -44,9 +44,17 @@ VM_NAME = os.environ.get("ROS_VM_NAME", "ROS11")
 ENABLE_GDB_DUMP = os.environ.get("ROS_VM_GDB_DUMP", "1") != "0"
 QEMU_GDB_PORT = int(os.environ.get("ROS_QEMU_GDB_PORT", "1234"))
 QEMU_ARM64_GIC_VERSION = os.environ.get("ROS_QEMU_GIC_VERSION", "auto")
+QEMU_ARM64_MEMORY = os.environ.get("ROS_QEMU_ARM64_MEMORY", "24G")
 KERNEL_TEXT_ADDRESS = (
     int(os.environ["ROS_KERNEL_TEXT"], 0)
     if "ROS_KERNEL_TEXT" in os.environ else None
+)
+CRASH_LOG_MARKERS = (
+    "*** Fatal System Error:",
+    "*** Assertion failed:",
+    "Entered debugger on embedded breakpoint",
+    "Entered debugger on last-chance exception",
+    "Break repeatedly, break Once",
 )
 
 def get_build_dir():
@@ -475,7 +483,7 @@ def qemu_arm64_iso_drive_args(image_path):
     ]
 
 
-def resolve_qemu_arm64_gic_version(rpi_mode):
+def resolve_qemu_arm64_gic_version(rpi_mode, is_darwin=False):
     """Return the QEMU virt GIC version to use for ARM64."""
     requested = str(QEMU_ARM64_GIC_VERSION).strip().lower()
     valid_versions = {"auto", "2", "3", "4", "host", "max"}
@@ -487,7 +495,24 @@ def resolve_qemu_arm64_gic_version(rpi_mode):
     if requested != "auto":
         return requested
 
-    return "2" if rpi_mode else "max"
+    if rpi_mode:
+        return "2"
+
+    return None if is_darwin else "max"
+
+
+def qemu_arm64_machine_arg(rpi_mode, is_darwin=False):
+    """Return the QEMU virt machine argument for ARM64."""
+    machine_parts = ["virt"]
+    gic_version = resolve_qemu_arm64_gic_version(rpi_mode, is_darwin)
+
+    if is_darwin and not rpi_mode:
+        machine_parts.append("accel=hvf")
+
+    if gic_version:
+        machine_parts.append(f"gic-version={gic_version}")
+
+    return ",".join(machine_parts), gic_version
 
 
 def qemu_ahci_iso_args(image_path):
@@ -517,22 +542,22 @@ def start_qemu(rpi_mode=False, smp=4):
     # ---------------- ARM64 CONFIGURATION ----------------
     if target_arch == "arm64":
         is_darwin = platform.system() == "Darwin"
-        gic_version = resolve_qemu_arm64_gic_version(rpi_mode)
-        machine_arg = f"virt,gic-version={gic_version}"
+        machine_arg, gic_version = qemu_arm64_machine_arg(rpi_mode, is_darwin)
         arm64_usb_devices = [
             "-device", "qemu-xhci,id=xhci",
             "-device", "usb-kbd,bus=xhci.0",
             "-device", "usb-tablet,bus=xhci.0",
         ]
+        gic_desc = f", GIC {gic_version}" if gic_version else ""
         if rpi_mode:
-            mode_str = f"RPI emulation (cortex-a72, {smp} cores, GICv{gic_version})"
+            mode_str = f"RPI emulation (cortex-a72, {smp} cores{gic_desc})"
         else:
             mode_str = (
-                f"HVF accelerated (max, {smp} cores, GIC {gic_version})"
+                f"HVF accelerated (max, {smp} cores{gic_desc})"
                 if is_darwin else
-                f"CPU max ({smp} cores, GIC {gic_version})"
+                f"CPU max ({smp} cores{gic_desc})"
             )
-        print(f"Starting QEMU (ARM64 - {mode_str})...")
+        print(f"Starting QEMU (ARM64 - {mode_str}, {QEMU_ARM64_MEMORY} RAM)...")
 
         # Darwin-specific configuration (macOS)
         if is_darwin:
@@ -547,7 +572,7 @@ def start_qemu(rpi_mode=False, smp=4):
                     *arm64_usb_devices,
                     "-machine", machine_arg,
                     "-cpu", "cortex-a72",
-                    "-m", "4G",
+                    "-m", QEMU_ARM64_MEMORY,
                     "-drive", "if=pflash,format=raw,readonly=on,file=/opt/homebrew/share/qemu/edk2-aarch64-code.fd",
                     *(qemu_arm64_iso_drive_args(img_path) if is_iso_boot else [
                         "-drive", f"file={img_path}",
@@ -560,13 +585,12 @@ def start_qemu(rpi_mode=False, smp=4):
                 # HVF accelerated mode (max CPU features)
                 qemu_cmd = [
                     "qemu-system-aarch64",
-                    "-accel", "hvf",
-                    "-smp", str(smp),
                     "-device", "ramfb",
                     *arm64_usb_devices,
                     "-machine", machine_arg,
                     "-cpu", "max",
-                    "-m", "4G",
+                    "-smp", str(smp),
+                    "-m", QEMU_ARM64_MEMORY,
                     "-drive", "if=pflash,format=raw,readonly=on,file=/opt/homebrew/share/qemu/edk2-aarch64-code.fd",
                     *(qemu_arm64_iso_drive_args(img_path) if is_iso_boot else [
                         "-drive", f"file={img_path}",
@@ -593,7 +617,7 @@ def start_qemu(rpi_mode=False, smp=4):
                     *arm64_usb_devices,
                     "-machine", machine_arg,
                     "-cpu", "cortex-a72",
-                    "-m", "4G",
+                    "-m", QEMU_ARM64_MEMORY,
                     "-bios", "/usr/share/qemu-efi-aarch64/QEMU_EFI.fd",
                     *(qemu_arm64_iso_drive_args(img_path) if is_iso_boot else [
                         "-drive", f"file.driver=file,file.filename={img_path},file.locking=off,format=raw",
@@ -613,7 +637,7 @@ def start_qemu(rpi_mode=False, smp=4):
                     *arm64_usb_devices,
                     "-machine", machine_arg,
                     "-cpu", "max",
-                    "-m", "4G",
+                    "-m", QEMU_ARM64_MEMORY,
                     "-bios", "/usr/share/qemu-efi-aarch64/QEMU_EFI.fd",
                     *(qemu_arm64_iso_drive_args(img_path) if is_iso_boot else [
                         "-drive", f"file.driver=file,file.filename={img_path},file.locking=off,format=raw",
@@ -848,6 +872,49 @@ def append_to_log(filepath, message):
         return False
 
 
+def read_log_tail(filepath, max_bytes=65536):
+    """Return the end of a text log without loading very large logs fully."""
+    try:
+        with open(filepath, 'rb') as f:
+            f.seek(0, os.SEEK_END)
+            size = f.tell()
+            f.seek(max(0, size - max_bytes), os.SEEK_SET)
+            return f.read().decode(errors="ignore")
+    except Exception:
+        return ""
+
+
+def log_has_crash_marker(log_text):
+    """Return True if the log tail shows a debugger stop/crash/assertion."""
+    return any(marker in log_text for marker in CRASH_LOG_MARKERS)
+
+
+def extract_interesting_log_addresses(log_text, limit=12):
+    """Extract kernel addresses from crash log fields that are worth symbolizing."""
+    patterns = (
+        ("caller", r'\bcaller=([0-9A-Fa-f]{8,16})'),
+        ("pc", r'\bPC\s+([0-9A-Fa-f]{8,16})'),
+        ("lr", r'\bLR\s+([0-9A-Fa-f]{8,16})'),
+        ("elr", r'\bELR=([0-9A-Fa-f]{8,16})'),
+        ("lr", r'\blr=([0-9A-Fa-f]{8,16})'),
+        ("fault", r'\bAddress\s+([0-9A-Fa-f]{8,16})\s+base'),
+    )
+    seen = set()
+    addresses = []
+
+    for label, pattern in patterns:
+        for match in re.finditer(pattern, log_text):
+            value = int(match.group(1), 16)
+            if value < 0xffff000000000000 or value in seen:
+                continue
+            seen.add(value)
+            addresses.append((label, value))
+            if len(addresses) >= limit:
+                return addresses
+
+    return addresses
+
+
 def find_binary(module_name):
     """Find the binary file for a given module name."""
     # Remove extension for directory matching
@@ -886,6 +953,21 @@ def find_debug_binary(module_name):
             return path
 
     return None
+
+
+def find_gdb_symbol_binary(module_name):
+    """Find the PE image that GDB can relocate and symbolize."""
+    base_name = os.path.splitext(module_name)[0]
+    candidates = [
+        os.path.join(BUILD_DIR, base_name, module_name),
+        os.path.join(BUILD_DIR, module_name),
+    ]
+
+    for path in candidates:
+        if os.path.exists(path):
+            return path
+
+    return find_binary(module_name) or find_debug_binary(module_name)
 
 
 # Global symbol cache: module_name -> list of (rva, name) sorted by rva
@@ -1322,9 +1404,30 @@ def check_and_translate_backtrace(filepath):
     return False
 
 
+def gdb_candidates():
+    """Return GDB executable candidates for the current target."""
+    override = os.environ.get("ROS_GDB")
+    candidates = []
+    if override:
+        candidates.append(override)
+
+    if target_arch == "arm64":
+        candidates.extend((
+            "gdb-multiarch",
+            "aarch64-elf-gdb",
+            "aarch64-w64-mingw32-gdb",
+            "gdb",
+        ))
+    else:
+        candidates.extend(("gdb-multiarch", "gdb"))
+
+    # Preserve order while avoiding duplicate probes.
+    return list(dict.fromkeys(candidates))
+
+
 def find_gdb():
-    """Find a GDB that can talk to QEMU's multi-arch remote stub."""
-    for candidate in ("gdb-multiarch", "aarch64-w64-mingw32-gdb", "gdb"):
+    """Find a GDB that can talk to QEMU's remote stub."""
+    for candidate in gdb_candidates():
         path = shutil.which(candidate)
         if path:
             return path
@@ -1340,12 +1443,12 @@ def capture_gdb_dump(reason):
 
     gdb = find_gdb()
     if not gdb:
-        print("GDB state dump skipped: gdb-multiarch not found.")
+        print(f"GDB state dump skipped: no GDB CLI found. Tried: {', '.join(gdb_candidates())}")
         return False
 
-    ntoskrnl_symbols = find_debug_binary("ntoskrnl.exe")
+    ntoskrnl_symbols = find_gdb_symbol_binary("ntoskrnl.exe")
     if not ntoskrnl_symbols:
-        print("GDB state dump skipped: symbols/ntoskrnl.exe not found.")
+        print("GDB state dump skipped: ntoskrnl.exe not found.")
         return False
 
     gdb_script = f"/tmp/vm_monitor_gdb_dump_{qemu_process.pid}.gdb"
@@ -1374,94 +1477,39 @@ def capture_gdb_dump(reason):
     ])
 
     if target_arch == "arm64":
+        log_addresses = extract_interesting_log_addresses(read_log_tail(LOG_FILE))
         if KERNEL_TEXT_ADDRESS is not None:
             commands.append(f"set $nt_text = {KERNEL_TEXT_ADDRESS:#x}")
         else:
-            commands.append(f"set $nt_text = $VBAR - {vector_vma:#x} + {text_vma:#x}")
+            commands.append(f"set $nt_text = $VBAR_EL1 - {vector_vma:#x} + {text_vma:#x}")
         commands.append("p/x $nt_text")
-        commands.append(
-            f'eval "add-symbol-file {ntoskrnl_symbols} 0x%lx -s .pvec 0x%lx", '
-            f"$nt_text, ($nt_text - {text_vma:#x} + {pvec_vma:#x})"
-        )
+        commands.append(f"set $nt_delta = $nt_text - {text_vma:#x}")
+        add_symbol_parts = [f"add-symbol-file {ntoskrnl_symbols} $nt_text"]
+        for section_name in (".rdata", ".data", ".pdata", ".evec", ".pvec", "INIT", "INITDATA", "PAGE"):
+            section_vma = get_section_vma(ntoskrnl_symbols, section_name)
+            if section_vma:
+                add_symbol_parts.append(f"-s {section_name} ($nt_delta+{section_vma:#x})")
+        commands.append(" ".join(add_symbol_parts))
+        if log_addresses:
+            commands.append('printf "ARM64 serial address symbols:\\n"')
+            for label, address in log_addresses:
+                commands.append(f'printf "  {label} {address:#018x}: "')
+                commands.append(f"info symbol {address:#x}")
     else:
         commands.append(f"symbol-file {ntoskrnl_symbols}")
 
     commands.extend([
         "monitor info status",
         "monitor info cpus",
-        "info registers",
     ])
 
     if target_arch == "arm64":
         commands.extend([
-        "set $kseg0 = 0xffff800000000000",
-        "set $pa_mask = 0x0000fffffffff000",
-        'printf "ARM64 sample: pc=%#llx sp=%#llx x8=%#llx esr=%#llx elr=%#llx spsr=%#llx far=%#llx sp_el0=%#llx sp_el1=%#llx tpidr_el1=%#llx ttbr0=%#llx ttbr1=%#llx\\n", $pc, $sp, $x8, $ESR_EL1, $ELR_EL1, $SPSR_EL1, $FAR_EL1, $SP_EL0, $SP_EL1, $TPIDR_EL1, $TTBR0_EL1, $TTBR1_EL1',
+        'printf "ARM64 selected regs: pc=%#llx sp=%#llx fp=%#llx lr=%#llx esr=%#llx far=%#llx elr=%#llx spsr=%#llx tpidr=%#llx ttbr0=%#llx ttbr1=%#llx vbar=%#llx\\n", $pc, $sp, $x29, $x30, $ESR_EL1, $FAR_EL1, $ELR_EL1, $SPSR_EL1, $TPIDR_EL1, $TTBR0_EL1, $TTBR1_EL1, $VBAR_EL1',
         "info symbol $pc",
         "info symbol $x30",
         "info symbol $ELR_EL1",
         "x/8i $pc",
-        "if ((unsigned long long)$pc >= $kseg0)",
-        "set $thread = *(unsigned long long*)($TPIDR_EL1 + 0xd48)",
-        "set $process = *(unsigned long long*)($thread + 0x68)",
-        "set $trap_frame = *(unsigned long long*)($thread + 0x1c8)",
-        'printf "ARM64 current thread=%#llx stack_limit=%#llx stack_base=%#llx kernel_stack=%#llx\\n", $thread, *(unsigned long long*)($thread + 0x30), *(unsigned long long*)($thread + 0x250), *(unsigned long long*)($thread + 0x38)',
-        'printf "ARM64 current process=%#llx image=%.16s\\n", $process, (char*)($process + 0x258)',
-        'printf "ARM64 thread trap_frame=%#llx tf_pc=%#llx tf_lr=%#llx tf_sp=%#llx tf_x0=%#llx tf_x8=%#llx tf_spsr=%#llx\\n", $trap_frame, *(unsigned long long*)($trap_frame + 0x158), *(unsigned long long*)($trap_frame + 0x148), *(unsigned long long*)($trap_frame + 0xa8), *(unsigned long long*)($trap_frame + 0xb0), *(unsigned long long*)($trap_frame + 0xf0), *(unsigned long long*)($trap_frame + 0xa0)',
-        'printf "ARM64 SP/FAR delta: sp=%#llx far=%#llx sp-far=%#llx\\n", $sp, $FAR_EL1, $sp - $FAR_EL1',
-        "set $stack_limit = *(unsigned long long*)($thread + 0x30)",
-        "set $stack_base = *(unsigned long long*)($thread + 0x250)",
-        "set $arm64_fp = $x29",
-        "set $arm64_frame_index = 0",
-        'printf "ARM64 frame-chain walk from x29=%#llx\\n", $arm64_fp',
-        "while (($arm64_frame_index < 48) && ($arm64_fp >= $stack_limit) && (($arm64_fp + 16) <= $stack_base))",
-        "  set $prevfp = *(unsigned long long*)$arm64_fp",
-        "  set $retaddr = *(unsigned long long*)($arm64_fp + 8)",
-        '  printf "  frame[%02u] fp=%#llx prev=%#llx lr=%#llx ", $arm64_frame_index, $arm64_fp, $prevfp, $retaddr',
-        "  info symbol $retaddr",
-        "  if (($prevfp <= $arm64_fp) || ($prevfp >= $stack_base))",
-        "    set $arm64_frame_index = 48",
-        "  else",
-        "    set $arm64_fp = $prevfp",
-        "    set $arm64_frame_index = $arm64_frame_index + 1",
-        "  end",
-        "end",
-        "set $va = $FAR_EL1",
-        "set $root = (($va < $kseg0) ? $TTBR0_EL1 : $TTBR1_EL1) & $pa_mask",
-        "set $l0i = ($va >> 39) & 0x1ff",
-        "set $l1i = ($va >> 30) & 0x1ff",
-        "set $l2i = ($va >> 21) & 0x1ff",
-        "set $l3i = ($va >> 12) & 0x1ff",
-        "set $l0 = $kseg0 | $root",
-        "set $e0 = *(unsigned long long*)($l0 + ($l0i * 8))",
-        'printf "ARM64 FAR walk: root=%#llx idx=%#llx/%#llx/%#llx/%#llx e0=%#llx\\n", $root, $l0i, $l1i, $l2i, $l3i, $e0',
-        "if (($e0 & 3) == 3)",
-        "  set $l1 = $kseg0 | ($e0 & $pa_mask)",
-        "  set $e1 = *(unsigned long long*)($l1 + ($l1i * 8))",
-        '  printf "ARM64 FAR walk: l1=%#llx e1=%#llx\\n", $l1, $e1',
-        "  if (($e1 & 3) == 3)",
-        "    set $l2 = $kseg0 | ($e1 & $pa_mask)",
-        "    set $e2 = *(unsigned long long*)($l2 + ($l2i * 8))",
-        '    printf "ARM64 FAR walk: l2=%#llx e2=%#llx\\n", $l2, $e2',
-        "    if (($e2 & 3) == 3)",
-        "      set $l3 = $kseg0 | ($e2 & $pa_mask)",
-        "      set $e3 = *(unsigned long long*)($l3 + ($l3i * 8))",
-        '      printf "ARM64 FAR walk: l3=%#llx e3=%#llx\\n", $l3, $e3',
-        "    end",
-        "  end",
-        "end",
-        "else",
-        'printf "ARM64 EL0 sample; skipping KTHREAD and kernel FAR walk dereferences.\\n"',
-        "set $teb = $x18",
-        "set $peb = *(unsigned long long*)($teb + 0x60)",
-        "set $client_pid = *(unsigned long long*)($teb + 0x40)",
-        "set $client_tid = *(unsigned long long*)($teb + 0x48)",
-        "set $image_base = *(unsigned long long*)($peb + 0x10)",
-        "set $process_parameters = *(unsigned long long*)($peb + 0x20)",
-        'printf "ARM64 EL0 teb=%#llx peb=%#llx pid=%#llx tid=%#llx image_base=%#llx process_parameters=%#llx\\n", $teb, $peb, $client_pid, $client_tid, $image_base, $process_parameters',
-        "x/12gx $sp",
-        "x/8i $x30",
-        "end",
         ])
     else:
         commands.extend([
@@ -1471,8 +1519,8 @@ def capture_gdb_dump(reason):
         ])
 
     commands.extend([
-        "bt",
-        "thread apply all bt 8",
+        "bt 24",
+        "thread apply all bt 6",
         "detach",
         "quit",
     ])
@@ -1526,6 +1574,7 @@ def monitor_log():
     while get_file_size(LOG_FILE) <= 0:
         if time.time() - overall_start_time > HARD_TIMEOUT:
             print(f"HARD TIMEOUT ({HARD_TIMEOUT}s) reached waiting for log.")
+            capture_gdb_dump("hard timeout waiting for serial")
             force_kill_vm()
             return
 
@@ -1541,6 +1590,7 @@ def monitor_log():
     print(f"Log file has content. Starting monitor...\n")
     last_size = get_file_size(LOG_FILE)
     last_change_time = time.time()
+    crash_dumped = False
 
     try:
         while True:
@@ -1570,6 +1620,13 @@ def monitor_log():
             if current_size != last_size:
                 last_size = current_size
                 last_change_time = current_time
+                if not crash_dumped and log_has_crash_marker(read_log_tail(LOG_FILE)):
+                    crash_dumped = True
+                    print("Crash/debugger marker detected in serial log.")
+                    capture_gdb_dump("serial crash marker")
+                    check_and_translate_backtrace(LOG_FILE)
+                    force_kill_vm()
+                    return
             else:
                 stall_duration = current_time - last_change_time
 
@@ -1642,7 +1699,6 @@ def main():
             boot_media = "iso"
             boot_image_path = LIVECD_ISO
             build_target = "livecd"
-            args.rpi = True
 
     atexit.register(force_kill_vm)
     signal.signal(signal.SIGINT, signal_handler)
