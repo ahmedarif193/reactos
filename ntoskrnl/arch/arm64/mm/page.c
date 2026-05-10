@@ -115,10 +115,6 @@ MiArm64ReleaseUserPageTableReference(
     _In_ PEPROCESS Process,
     _In_ PVOID Address);
 
-static LONG MiArm64UserMapTraceCount;
-static LONG MiArm64UserPublishTraceCount;
-static LONG MiArm64MapCacheSyncTraceCount;
-
 typedef enum _MI_ARM64_DCACHE_OPERATION
 {
     MiArm64DcacheInvalidate,
@@ -220,7 +216,6 @@ MiArm64SyncMappedPfnCacheAttribute(
     PMMPFN Pfn1;
     MI_PFN_CACHE_ATTRIBUTE OldCache;
     MI_PFN_CACHE_ATTRIBUTE NewCache;
-    LONG TraceIndex;
 
     Pfn1 = MiGetPfnEntry(PageFrameNumber);
     if (Pfn1 == NULL)
@@ -236,138 +231,15 @@ MiArm64SyncMappedPfnCacheAttribute(
     }
 
     Pfn1->u3.e1.CacheAttribute = NewCache;
-
-    TraceIndex = InterlockedIncrement(&MiArm64MapCacheSyncTraceCount);
-    if (TraceIndex <= 96)
-    {
-        DPRINT1("[arm64][MAPCA] sync[%ld] proc=%.16s va=%p page=%Ix old=%u new=%u "
-                "pte=0x%016llx ref=%u share=%u loc=%u\n",
-                TraceIndex,
-                Process ? Process->ImageFileName : "<kernel>",
-                Address,
-                PageFrameNumber,
-                OldCache,
-                NewCache,
-                (unsigned long long)FinalPte.u.Long,
-                (ULONG)Pfn1->u3.e2.ReferenceCount,
-                (ULONG)Pfn1->u2.ShareCount,
-                (ULONG)Pfn1->u3.e1.PageLocation);
-    }
-}
-
-FORCEINLINE
-BOOLEAN
-MiArm64ShouldTraceUserMap(
-    _In_opt_ PEPROCESS Process,
-    _In_ PVOID Address)
-{
-    ULONG_PTR Base;
-    ULONG_PTR Va;
-
-    if ((Process == NULL) || (PspSystemDllBase == NULL))
-        return FALSE;
-
-    Va = (ULONG_PTR)Address;
-    if (Va >= (ULONG_PTR)MmSystemRangeStart)
-        return FALSE;
-
-    Base = (ULONG_PTR)PspSystemDllBase;
-    return ((Va >= Base) && (Va < (Base + 0x200000)));
-}
-
-FORCEINLINE
-VOID
-MiArm64TraceUserMapState(
-    _In_z_ PCSTR Site,
-    _In_opt_ PEPROCESS Process,
-    _In_ PVOID Address,
-    _In_ PFN_NUMBER Page,
-    _In_ ULONG Protection,
-    _In_ ULONG64 OldPte)
-{
-    ULONG64 PteValue = 0;
-    ULONG Depth = 0;
-    LONG TraceIndex;
-
-    if (!MiArm64ShouldTraceUserMap(Process, Address))
-        return;
-
-    TraceIndex = InterlockedIncrement(&MiArm64UserMapTraceCount);
-    if (TraceIndex > 40)
-        return;
-
-    MiArm64ReadUserPtePhysically(Address, &PteValue, &Depth);
-    DPRINT1("[arm64][UVMAP] %s[%ld] proc=%.16s va=%p page=%Ix "
-            "prot=0x%lx old=0x%016llx depth=%lu pte=0x%016llx\n",
-            Site,
-            TraceIndex,
-            Process ? Process->ImageFileName : "<none>",
-            Address,
-            Page,
-            Protection,
-            (unsigned long long)OldPte,
-            Depth,
-            (unsigned long long)PteValue);
-}
-
-FORCEINLINE
-VOID
-MiArm64TraceUserTableStore(
-    _In_z_ PCSTR Site,
-    _In_ PVOID FaultAddress,
-    _In_ ULONG Level,
-    _In_ ULONG Index,
-    _In_ ULONG64 OldValue,
-    _In_ ULONG64 NewValue)
-{
-    PETHREAD Thread;
-    PEPROCESS CurrentProcess;
-    PEPROCESS ApcProcess;
-    PEPROCESS SavedApcProcess;
-    ULONG64 Ttbr0;
-    ULONG64 Ttbr1;
-
-    Thread = PsGetCurrentThread();
-    CurrentProcess = PsGetCurrentProcess();
-    ApcProcess = Thread ? (PEPROCESS)Thread->Tcb.ApcState.Process : NULL;
-    SavedApcProcess = Thread ? (PEPROCESS)Thread->Tcb.SavedApcState.Process : NULL;
-
-    __asm__ __volatile__("mrs %0, ttbr0_el1" : "=r"(Ttbr0));
-    __asm__ __volatile__("mrs %0, ttbr1_el1" : "=r"(Ttbr1));
-
-    DPRINT("[arm64][PTW] %s Va=%p L%lu[%lu] Old=0x%llx New=0x%llx "
-           "Cur=%p(%.16s) ApcIdx=%lu Attached=%u Apc=%p(%.16s) Saved=%p(%.16s) "
-           "TTBR0=0x%llx TTBR1=0x%llx CPU=%lu\n",
-            Site,
-            FaultAddress,
-            Level,
-            Index,
-            (unsigned long long)OldValue,
-            (unsigned long long)NewValue,
-            CurrentProcess,
-            CurrentProcess ? CurrentProcess->ImageFileName : "<none>",
-            Thread ? (ULONG)Thread->Tcb.ApcStateIndex : 0,
-            KeIsAttachedProcess() ? 1u : 0u,
-            ApcProcess,
-            ApcProcess ? ApcProcess->ImageFileName : "<none>",
-            SavedApcProcess,
-            SavedApcProcess ? SavedApcProcess->ImageFileName : "<none>",
-            (unsigned long long)Ttbr0,
-            (unsigned long long)Ttbr1,
-            KeGetCurrentProcessorNumber());
 }
 
 #define MI_ARM64_STORE_TABLE_ENTRY(_Site, _Address, _Level, _Table, _Index, _PteValue) \
     do { \
-        ULONG64 __OldEntry = (_Table)[(_Index)].u.Long; \
-        MiArm64TraceUserTableStore((_Site), (_Address), (_Level), (_Index), __OldEntry, (_PteValue).u.Long); \
         (_Table)[(_Index)] = (_PteValue); \
     } while (0)
 
 #define MI_ARM64_STORE_TABLE_ENTRY64(_Site, _Address, _Level, _Table, _Index, _Value64) \
     do { \
-        ULONG64 __OldEntry = (_Table)[(_Index)].u.Long; \
-        MiArm64TraceUserTableStore((_Site), (_Address), (_Level), (_Index), __OldEntry, (ULONG64)(_Value64)); \
         (_Table)[(_Index)].u.Long = (ULONG64)(_Value64); \
     } while (0)
 
@@ -1073,7 +945,6 @@ MmCreateVirtualMappingUnsafeEx(
         ASSERT(Process == PsGetCurrentProcess());
 
         MiLockProcessWorkingSet(Process, PsGetCurrentThread());
-        MiArm64TraceUserMapState("begin", Process, Address, Page, Protection, 0);
 
         /* Get system PTE for temporary mapping */
         MappingPte = MiReserveSystemPtes(1, SystemPteSpace);
@@ -1388,7 +1259,6 @@ MmCreateVirtualMappingUnsafeEx(
             MappedPage = MiPteToAddress(MappingPte);
 
             OldUserPte = MappedPage[PteIndex].u.Long;
-            MiArm64TraceUserMapState("l3-before", Process, Address, Page, Protection, OldUserPte);
 
             /* Build an EL0 L3 page descriptor in the active TTBR0 hierarchy. */
             FinalPte.u.Long = 0;
@@ -1519,25 +1389,9 @@ MmCreateVirtualMappingUnsafeEx(
                 BOOLEAN SweepIcache = (FinalPte.u.Hard.UserNoExecute == 0);
 
                 MiArm64PublishPageByPfnAlias(Page, SweepIcache);
-
-                if (MiArm64ShouldTraceUserMap(Process, Address))
-                {
-                    LONG TraceIndex = InterlockedIncrement(&MiArm64UserPublishTraceCount);
-                    if (TraceIndex <= 40)
-                    {
-                        DPRINT1("[arm64][UPUB] alias[%ld] proc=%.16s va=%p page=%Ix exec=%u old=0x%016llx\n",
-                                TraceIndex,
-                                Process ? Process->ImageFileName : "<none>",
-                                Address,
-                                Page,
-                                SweepIcache ? 1u : 0u,
-                                (unsigned long long)OldUserPte);
-                    }
-                }
             }
 
             MiArm64InvalidateUserAddress(Address);
-            MiArm64TraceUserMapState("done", Process, Address, Page, Protection, OldUserPte);
 
             MiUnlockProcessWorkingSet(Process, PsGetCurrentThread());
         }

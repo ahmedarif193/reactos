@@ -1668,8 +1668,6 @@ NTSTATUS
 NTAPI
 MiInitMachineDependent(_Inout_ PLOADER_PARAMETER_BLOCK LoaderBlock)
 {
-    DPRINT1("[MMINIT] entry\n");
-
     RtlZeroMemory(MiArm64SelfMapL0Cache, sizeof(MiArm64SelfMapL0Cache));
     RtlZeroMemory(MiArm64SelfMapL1Cache, sizeof(MiArm64SelfMapL1Cache));
     MiArm64SelfMapCacheInitialized = TRUE;
@@ -1803,7 +1801,6 @@ MiInitMachineDependent(_Inout_ PLOADER_PARAMETER_BLOCK LoaderBlock)
                 PKIPCR CurrentPcr = KeGetPcr();
                 PKTHREAD CurrentThread = KeGetCurrentThread();
                 PEPROCESS CurrentProcess;
-                UINT64 Ttbr0;
                 volatile UINT64 *RootL0;
                 ULONG Index;
 
@@ -1902,24 +1899,12 @@ MiInitMachineDependent(_Inout_ PLOADER_PARAMETER_BLOCK LoaderBlock)
                  */
                 MiArm64MapLoaderProcessorState(LoaderBlock);
 
-                __asm__ __volatile__("mrs %0, ttbr0_el1" : "=r"(Ttbr0));
-                if (MI_ARM64_TTBR_TO_PA(Ttbr0) != RootPa)
-                {
-                    DPRINT1("[arm64][MMINIT] switching TTBR0 from loader root "
-                            "0x%016llx to System DTB0 0x%016llx\n",
-                            (unsigned long long)MI_ARM64_TTBR_TO_PA(Ttbr0),
-                            (unsigned long long)RootPa);
-                }
-
                 __asm__ __volatile__("dsb ishst" ::: "memory");
                 __asm__ __volatile__("msr ttbr0_el1, %0" :: "r"(RootPa) : "memory");
                 __asm__ __volatile__("isb" ::: "memory");
                 __asm__ __volatile__("tlbi vmalle1is" ::: "memory");
                 __asm__ __volatile__("dsb ish" ::: "memory");
                 __asm__ __volatile__("isb" ::: "memory");
-                DPRINT1("[MMINIT] TTBR0 switch complete old=0x%016llx new=0x%016llx\n",
-                        (unsigned long long)MI_ARM64_TTBR_TO_PA(Ttbr0),
-                        (unsigned long long)RootPa);
             }
 
         }
@@ -1932,7 +1917,6 @@ MiInitMachineDependent(_Inout_ PLOADER_PARAMETER_BLOCK LoaderBlock)
          */
         MiArm64MapPxeAlias();
         MiArm64MapLoaderPhysicalMemory(LoaderBlock);
-        DPRINT1("[MMINIT] loader mappings complete\n");
 
         {
             PVOID PfnDbStart = (PVOID)MmPfnDatabase;
@@ -1942,7 +1926,6 @@ MiInitMachineDependent(_Inout_ PLOADER_PARAMETER_BLOCK LoaderBlock)
         }
 
         MiMapPfnDatabase(LoaderBlock);
-        DPRINT1("[MMINIT] PFN database mapped\n");
 
         MiInitializeColorTables();
         MiBuildNonPagedPool();
@@ -1953,10 +1936,8 @@ MiInitMachineDependent(_Inout_ PLOADER_PARAMETER_BLOCK LoaderBlock)
         KeInitializeSpinLock(&NonPagedPoolLock);
         KeInitializeSpinLock(&MmNonPagedPoolLock);
         ExpArm64PoolBootstrapMode = FALSE;
-        DPRINT1("[MMINIT] nonpaged pool initialized\n");
 
         MiBuildSystemPteSpace();
-        DPRINT1("[MMINIT] system PTE space ready\n");
 
         MiMapPPEs((PVOID)MI_MAPPING_RANGE_START, (PVOID)MI_MAPPING_RANGE_END);
         MiMapPDEs((PVOID)MI_MAPPING_RANGE_START, (PVOID)MI_MAPPING_RANGE_END);
@@ -2478,11 +2459,6 @@ MiBuildSystemPteSpace(VOID)
                                                     SystemPteSpace);
     RtlZeroMemory(MiFirstReservedZeroingPte, (MI_ZERO_PTES + 1) * sizeof(MMPTE));
     MiFirstReservedZeroingPte->u.Hard.PageFrameNumber = MI_ZERO_PTES;
-    DPRINT1("[SYSPTE] ready start=%p end=%p count=%lu zero=%p\n",
-            MiSystemPteSpaceStart,
-            SystemPteRangeEnd,
-            MmNumberOfSystemPtes,
-            MiFirstReservedZeroingPte);
 }
 
 VOID

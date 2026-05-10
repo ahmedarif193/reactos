@@ -36,7 +36,6 @@ ULONG KiDmaIoCoherency;
 ULONG KeIcacheFlushCount;
 ULONG KeDcacheFlushCount;
 ULONG KeLargestCacheLine = 64;
-static LONG KiArm64IoBufferTraceCount;
 extern PVOID MmPagedPoolStart;
 
 /*
@@ -531,9 +530,7 @@ KeFlushIoBuffers(_Inout_ PMDL Mdl,
     ULONG_PTR CacheAddress;
     ULONG CacheLineSize;
     BOOLEAN MappedByUs = FALSE;
-    BOOLEAN TraceTarget = FALSE;
     BOOLEAN UsePfnAlias = FALSE;
-    PVOID TracePage = NULL;
     PPFN_NUMBER MdlPages = NULL;
     ULONG PageCount = 0;
     ULONG ByteOffset;
@@ -562,20 +559,6 @@ KeFlushIoBuffers(_Inout_ PMDL Mdl,
     Length = Mdl->ByteCount;
     ByteOffset = MmGetMdlByteOffset(Mdl);
 
-    if ((OriginalAddress != NULL) &&
-        (MmPagedPoolStart != NULL))
-    {
-        ULONG_PTR TraceVa = (ULONG_PTR)MmPagedPoolStart + 0xB5000;
-        ULONG_PTR TraceStart = (ULONG_PTR)PAGE_ALIGN(OriginalAddress);
-        ULONG_PTR TraceEnd = (ULONG_PTR)PAGE_ALIGN((PVOID)((ULONG_PTR)OriginalAddress +
-                                                           Length - 1));
-        TraceTarget = ((TraceStart <= TraceVa) && (TraceVa <= TraceEnd));
-        if (TraceTarget)
-        {
-            TracePage = (PVOID)TraceVa;
-        }
-    }
-
     CacheLineSize = KeLargestCacheLine;
     if (CacheLineSize == 0)
     {
@@ -596,23 +579,6 @@ KeFlushIoBuffers(_Inout_ PMDL Mdl,
 
     if (UsePfnAlias)
     {
-        if (TraceTarget)
-        {
-            LONG TraceIndex = InterlockedIncrement(&KiArm64IoBufferTraceCount);
-            if (TraceIndex <= 32)
-            {
-                DPRINT1("[arm64][IOFLUSH] mdl[%ld] va=%p len=0x%lx read=%u dma=%u flags=0x%x alias=kseg0 target=%p firstPfn=%Ix\n",
-                        TraceIndex,
-                        OriginalAddress,
-                        Length,
-                        ReadOperation,
-                        DmaOperation,
-                        Mdl->MdlFlags,
-                        TracePage,
-                        MdlPages[0]);
-            }
-        }
-
         if (ReadOperation)
         {
             __asm__ __volatile__("dsb ish" ::: "memory");
@@ -675,23 +641,6 @@ KeFlushIoBuffers(_Inout_ PMDL Mdl,
     if (VirtualAddress == NULL)
     {
         return;
-    }
-
-    if (TraceTarget)
-    {
-        LONG TraceIndex = InterlockedIncrement(&KiArm64IoBufferTraceCount);
-        if (TraceIndex <= 32)
-        {
-            DPRINT1("[arm64][IOFLUSH] mdl[%ld] va=%p len=0x%lx read=%u dma=%u flags=0x%x alias=va target=%p mapped=%p\n",
-                    TraceIndex,
-                    OriginalAddress,
-                    Length,
-                    ReadOperation,
-                    DmaOperation,
-                    Mdl->MdlFlags,
-                    TracePage,
-                    VirtualAddress);
-        }
     }
 
     StartAddress = (ULONG_PTR)VirtualAddress & ~((ULONG_PTR)CacheLineSize - 1);

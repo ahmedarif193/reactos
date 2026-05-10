@@ -80,9 +80,6 @@ static const PKI_SYSCALL_PARAM_HANDLER KiSyscallHandlers[] =
 
 C_ASSERT(RTL_NUMBER_OF(KiSyscallHandlers) == 0x12);
 
-static LONG KiArm64UserApcTraceCount;
-static LONG KiArm64UserCallbackTraceCount;
-
 static
 NTSTATUS
 KiArm64CopyToCurrentUserBuffer(
@@ -590,25 +587,6 @@ KiInitializeUserApc(
         }
     }
 
-    {
-        LONG TraceIndex = InterlockedIncrement(&KiArm64UserApcTraceCount);
-        if (TraceIndex <= 16)
-        {
-            DPRINT1("[arm64][APC] init[%ld] Proc=%.16s Teb=%p Dispatcher=%p "
-                    "Normal=%p Sys1=%p Sys2=%p NewPc=%p NewSp=%p X18=%p\n",
-                    TraceIndex,
-                    PsGetCurrentProcess()->ImageFileName,
-                    Thread->Teb,
-                    UserApcDispatcher,
-                    UserNormalRoutine,
-                    UserSystemArgument1,
-                    SystemArgument2,
-                    (PVOID)(ULONG_PTR)TrapFrame->Pc,
-                    (PVOID)(ULONG_PTR)TrapFrame->Sp,
-                    (PVOID)(ULONG_PTR)TrapFrame->X18);
-        }
-    }
-
 }
 
 NTSTATUS
@@ -723,40 +701,10 @@ KeUserModeCallback(
     UserStackPointer = KiGetUserModeStackAddress();
     OldStack = *UserStackPointer;
 
-    {
-        LONG TraceIndex = InterlockedIncrement(&KiArm64UserCallbackTraceCount);
-        if (TraceIndex <= 32)
-        {
-            DPRINT1("[arm64][UCB] enter[%ld] proc=%.16s idx=%lu arg=%p len=%lu oldsp=%p tf=%p pc=%p lr=%p x18=%p\n",
-                    TraceIndex,
-                    PsGetCurrentProcess()->ImageFileName,
-                    RoutineIndex,
-                    Argument,
-                    ArgumentLength,
-                    (PVOID)OldStack,
-                    KeGetCurrentThread()->TrapFrame,
-                    (PVOID)(ULONG_PTR)KeGetCurrentThread()->TrapFrame->Pc,
-                    (PVOID)(ULONG_PTR)KeGetCurrentThread()->TrapFrame->Lr,
-                    (PVOID)(ULONG_PTR)KeGetCurrentThread()->TrapFrame->X18);
-        }
-    }
-
     _SEH2_TRY
     {
         UserArguments = (PUCHAR)ALIGN_DOWN_POINTER_BY(OldStack - ArgumentLength, 16);
         CalloutFrame = ((PUCALLOUT_FRAME)UserArguments) - 1;
-
-        {
-            LONG TraceIndex = KiArm64UserCallbackTraceCount;
-            if (TraceIndex <= 32)
-            {
-                DPRINT1("[arm64][UCB] frame[%ld] userargs=%p callout=%p size=0x%Ix\n",
-                        TraceIndex,
-                        UserArguments,
-                        CalloutFrame,
-                        sizeof(*CalloutFrame) + ArgumentLength);
-            }
-        }
 
         ProbeForWrite(CalloutFrame,
                       sizeof(*CalloutFrame) + ArgumentLength,
@@ -785,18 +733,6 @@ KeUserModeCallback(
 
         *UserStackPointer = (ULONG_PTR)CalloutFrame;
         CallbackStatus = KiCallUserMode(Result, ResultLength);
-        {
-            LONG TraceIndex = KiArm64UserCallbackTraceCount;
-            if (TraceIndex <= 32)
-            {
-                DPRINT1("[arm64][UCB] return[%ld] status=0x%08lx out=%p outlen=%p userSpNow=%p\n",
-                        TraceIndex,
-                        CallbackStatus,
-                        Result ? *Result : NULL,
-                        ResultLength ? (PVOID)(ULONG_PTR)*ResultLength : NULL,
-                        (PVOID)*UserStackPointer);
-            }
-        }
         if (CallbackStatus == STATUS_CALLBACK_POP_STACK)
         {
             OldStack = *UserStackPointer;
@@ -834,20 +770,6 @@ NtCallbackReturn(
 
     CurrentThread = KeGetCurrentThread();
     CalloutFrame = CurrentThread->CallbackStack;
-    {
-        LONG TraceIndex = InterlockedIncrement(&KiArm64UserCallbackTraceCount);
-        if (TraceIndex <= 32)
-        {
-            DPRINT1("[arm64][UCB] cbret[%ld] proc=%.16s result=%p len=%lu status=0x%08lx cb=%p tf=%p\n",
-                    TraceIndex,
-                    PsGetCurrentProcess()->ImageFileName,
-                    Result,
-                    ResultLength,
-                    CallbackStatus,
-                    CalloutFrame,
-                    CurrentThread->TrapFrame);
-        }
-    }
     if (CalloutFrame == NULL)
     {
         return STATUS_NO_CALLBACK_ACTIVE;
