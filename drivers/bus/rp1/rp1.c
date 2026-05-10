@@ -1021,8 +1021,8 @@ Rp1PdoQueryCapabilities(
     Caps->EjectSupported = FALSE;
     Caps->SurpriseRemovalOK = FALSE;
 
-    /* Unique ID is provided by instance ID */
-    Caps->UniqueID = TRUE;
+    /* The child index is unique only within its parent RP1 instance. */
+    Caps->UniqueID = FALSE;
 
     /* D-state mapping: always D0 */
     Caps->DeviceState[PowerSystemWorking] = PowerDeviceD0;
