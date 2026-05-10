@@ -1507,7 +1507,10 @@ USBH_SyncGetStringDescriptor(IN PDEVICE_OBJECT DeviceObject,
 {
     struct _URB_CONTROL_DESCRIPTOR_REQUEST * Urb;
     ULONG TransferedLength;
+    ULONG RequestLength;
+    ULONG DescriptorLength;
     NTSTATUS Status;
+    BOOLEAN ProbeHeader;
 
     DPRINT("USBH_SyncGetStringDescriptor: Index - %x, LanguageId - %x\n",
            Index,
@@ -1522,27 +1525,61 @@ USBH_SyncGetStringDescriptor(IN PDEVICE_OBJECT DeviceObject,
         return STATUS_INSUFFICIENT_RESOURCES;
     }
 
-    RtlZeroMemory(Urb, sizeof(struct _URB_CONTROL_DESCRIPTOR_REQUEST));
+    ProbeHeader = IsValidateLength && NumberOfBytes > sizeof(USB_COMMON_DESCRIPTOR);
+    RequestLength = ProbeHeader ? sizeof(USB_COMMON_DESCRIPTOR) : NumberOfBytes;
 
-    Urb->Hdr.Function = URB_FUNCTION_GET_DESCRIPTOR_FROM_DEVICE;
-    Urb->Hdr.Length = sizeof(struct _URB_CONTROL_DESCRIPTOR_REQUEST);
-
-    Urb->TransferBuffer = Descriptor;
-    Urb->TransferBufferLength = NumberOfBytes;
-
-    Urb->Index = Index;
-    Urb->DescriptorType = USB_STRING_DESCRIPTOR_TYPE;
-    Urb->LanguageId = LanguageId;
-
-    Status = USBH_SyncSubmitUrb(DeviceObject, (PURB)Urb);
-
-    if (!NT_SUCCESS(Status))
+    for (;;)
     {
-        ExFreePoolWithTag(Urb, USB_HUB_TAG);
-        return Status;
-    }
+        RtlZeroMemory(Urb, sizeof(struct _URB_CONTROL_DESCRIPTOR_REQUEST));
+        RtlZeroMemory(Descriptor, NumberOfBytes);
 
-    TransferedLength = Urb->TransferBufferLength;
+        Urb->Hdr.Function = URB_FUNCTION_GET_DESCRIPTOR_FROM_DEVICE;
+        Urb->Hdr.Length = sizeof(struct _URB_CONTROL_DESCRIPTOR_REQUEST);
+
+        Urb->TransferBuffer = Descriptor;
+        Urb->TransferBufferLength = RequestLength;
+
+        Urb->Index = Index;
+        Urb->DescriptorType = USB_STRING_DESCRIPTOR_TYPE;
+        Urb->LanguageId = LanguageId;
+
+        Status = USBH_SyncSubmitUrb(DeviceObject, (PURB)Urb);
+
+        if (!NT_SUCCESS(Status))
+        {
+            ExFreePoolWithTag(Urb, USB_HUB_TAG);
+            return Status;
+        }
+
+        TransferedLength = Urb->TransferBufferLength;
+
+        if (!ProbeHeader)
+            break;
+
+        ProbeHeader = FALSE;
+
+        if (TransferedLength < sizeof(USB_COMMON_DESCRIPTOR))
+        {
+            ExFreePoolWithTag(Urb, USB_HUB_TAG);
+            return STATUS_DEVICE_DATA_ERROR;
+        }
+
+        if (Descriptor->bDescriptorType != USB_STRING_DESCRIPTOR_TYPE ||
+            Descriptor->bLength < sizeof(USB_COMMON_DESCRIPTOR))
+        {
+            ExFreePoolWithTag(Urb, USB_HUB_TAG);
+            return STATUS_DEVICE_DATA_ERROR;
+        }
+
+        DescriptorLength = Descriptor->bLength;
+        if (DescriptorLength > NumberOfBytes)
+            DescriptorLength = NumberOfBytes;
+
+        if (DescriptorLength <= RequestLength)
+            break;
+
+        RequestLength = DescriptorLength;
+    }
 
     if (TransferedLength > NumberOfBytes)
     {

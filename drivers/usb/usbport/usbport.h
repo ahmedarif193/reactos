@@ -224,6 +224,10 @@ typedef struct _USBPORT_PIPE_HANDLE {
   ULONG PipeFlags;
   USB_ENDPOINT_DESCRIPTOR EndpointDescriptor;
   UCHAR Padded;
+  BOOLEAN SsCompanionValid;
+  UCHAR SsCompanionMaxBurst;
+  UCHAR SsCompanionAttributes;
+  USHORT SsCompanionBytesPerInterval;
   PUSBPORT_ENDPOINT Endpoint;
   ULONG StreamId;
   ULONG StreamCount;

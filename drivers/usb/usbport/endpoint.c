@@ -1140,6 +1140,21 @@ USBPORT_OpenPipe(IN PDEVICE_OBJECT FdoDevice,
     EndpointProperties->TotalMaxPacketSize = MaxPacketSize *
                                              (AdditionalTransaction + 1);
 
+    if (EndpointProperties->DeviceSpeed == UsbSuperSpeed &&
+        PipeHandle->SsCompanionValid)
+    {
+        EndpointProperties->TransactionPerMicroframe =
+            PipeHandle->SsCompanionMaxBurst + 1;
+        EndpointProperties->TotalMaxPacketSize =
+            MaxPacketSize * EndpointProperties->TransactionPerMicroframe;
+
+        if (PipeHandle->SsCompanionBytesPerInterval)
+        {
+            EndpointProperties->TotalMaxPacketSize =
+                PipeHandle->SsCompanionBytesPerInterval;
+        }
+    }
+
     if (Endpoint->TtExtension)
     {
         EndpointProperties->HubAddr = Endpoint->TtExtension->DeviceAddress;
