@@ -160,6 +160,10 @@ USBPORT_HandleOpenStaticStreams(IN PDEVICE_OBJECT FdoDevice,
         StreamHandle->Flags = PipeHandle->Flags & ~PIPE_HANDLE_FLAG_CLOSED;
         StreamHandle->PipeFlags = PipeHandle->PipeFlags;
         StreamHandle->EndpointDescriptor = PipeHandle->EndpointDescriptor;
+        StreamHandle->SsCompanionValid = PipeHandle->SsCompanionValid;
+        StreamHandle->SsCompanionMaxBurst = PipeHandle->SsCompanionMaxBurst;
+        StreamHandle->SsCompanionAttributes = PipeHandle->SsCompanionAttributes;
+        StreamHandle->SsCompanionBytesPerInterval = PipeHandle->SsCompanionBytesPerInterval;
         StreamHandle->Endpoint = Endpoint;
         StreamHandle->StreamId = ix + 1;
         StreamHandle->StreamCount = 0;
