@@ -762,17 +762,6 @@ MiMapPfnDatabase(IN PLOADER_PARAMETER_BLOCK LoaderBlock)
     /* Get current page data, since we won't be using MxGetNextPage as it would corrupt our state */
     FreePage = MxFreeDescriptor->BasePage;
     FreePageCount = MxFreeDescriptor->PageCount;
-    PagesLeft = 0;
-
-#if defined(_M_ARM64)
-    DPRINT1("[PFNMAP] entry db=%p free=%Ix free_count=%Ix mxalloc=%Ix high=%Ix\n",
-            MmPfnDatabase,
-            FreePage,
-            FreePageCount,
-            MxPfnAllocation,
-            MmHighestPhysicalPage);
-#endif
-
     /* Loop the memory descriptors */
     NextEntry = LoaderBlock->MemoryDescriptorListHead.Flink;
     while (NextEntry != &LoaderBlock->MemoryDescriptorListHead)
@@ -833,7 +822,6 @@ MiMapPfnDatabase(IN PLOADER_PARAMETER_BLOCK LoaderBlock)
                 }
 
                 /* Write out this PTE */
-                PagesLeft++;
 #if defined(_M_ARM64)
                 PerformedMappings = TRUE;
                 *PointerPte = TempPte;
@@ -898,27 +886,16 @@ MiMapPfnDatabase(IN PLOADER_PARAMETER_BLOCK LoaderBlock)
     if (PerformedMappings)
     {
         __asm__ __volatile__("dsb ishst\n\ttlbi vmalle1is\n\tdsb ish\n\tisb" ::: "memory");
-        DPRINT1("[PFNMAP] mapped %Ix PFN database pages\n", PagesLeft);
     }
 
     {
         ULONG Run;
-
-        DPRINT1("[PFNMAP] zero runs=%lu pages=%Ix\n", ZeroRunCount, PagesLeft);
 
         for (Run = 0; Run < ZeroRunCount; Run++)
         {
             SIZE_T RunPages = (ZeroRunEnd[Run] - ZeroRunStart[Run]) + 1;
             PVOID RunBase = MiPteToAddress(ZeroRunStart[Run]);
             SIZE_T PagesDone = 0;
-
-            if ((Run == 0) || (RunPages >= 0x400))
-            {
-                DPRINT1("[PFNMAP] zero run=%lu base=%p pages=%Ix\n",
-                        Run,
-                        RunBase,
-                        RunPages);
-            }
 
             while (PagesDone < RunPages)
             {
@@ -931,18 +908,11 @@ MiMapPfnDatabase(IN PLOADER_PARAMETER_BLOCK LoaderBlock)
         }
     }
 
-    DPRINT1("[PFNMAP] zero complete\n");
 #endif
 
     /* Now update the free descriptors to consume the pages we used up during the PFN allocation loop */
     MxFreeDescriptor->BasePage = FreePage;
     MxFreeDescriptor->PageCount = FreePageCount;
-#if defined(_M_ARM64)
-    DPRINT1("[PFNMAP] exit pages_left=%Ix free=%Ix free_count=%Ix\n",
-            PagesLeft,
-            MxFreeDescriptor->BasePage,
-            MxFreeDescriptor->PageCount);
-#endif
 }
 
 CODE_SEG("INIT")
