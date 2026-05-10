@@ -375,6 +375,46 @@ static LIST_ENTRY HalpArm64CommonBufferList;
 static KSPIN_LOCK HalpArm64CommonBufferLock;
 static BOOLEAN HalpArm64DmaInitialized = FALSE;
 
+static BOOLEAN
+HalpArm64CommonBufferIsCached(
+    _In_ PVOID VirtualAddress)
+{
+    PLIST_ENTRY Entry;
+    KIRQL OldIrql;
+    BOOLEAN CacheEnabled = TRUE;
+    ULONG_PTR Address = (ULONG_PTR)VirtualAddress;
+
+    if (!HalpArm64DmaInitialized)
+    {
+        return TRUE;
+    }
+
+    KeAcquireSpinLock(&HalpArm64CommonBufferLock, &OldIrql);
+
+    for (Entry = HalpArm64CommonBufferList.Flink;
+         Entry != &HalpArm64CommonBufferList;
+         Entry = Entry->Flink)
+    {
+        PHAL_ARM64_COMMON_BUFFER BufferEntry;
+        ULONG_PTR BufferStart;
+        ULONG_PTR BufferEnd;
+
+        BufferEntry = CONTAINING_RECORD(Entry, HAL_ARM64_COMMON_BUFFER, ListEntry);
+        BufferStart = (ULONG_PTR)BufferEntry->VirtualAddress;
+        BufferEnd = BufferStart + BufferEntry->Length;
+
+        if ((Address >= BufferStart) && (Address < BufferEnd))
+        {
+            CacheEnabled = BufferEntry->CacheEnabled;
+            break;
+        }
+    }
+
+    KeReleaseSpinLock(&HalpArm64CommonBufferLock, OldIrql);
+
+    return CacheEnabled;
+}
+
 /*
  * ARM64 PCI Interrupt Routing (ACPI _PRT) State
  *
@@ -2073,8 +2113,7 @@ extern BOOLEAN HalpArm64InitApTrampoline(_In_ PLOADER_PARAMETER_BLOCK LoaderBloc
 extern VOID HalpArm64PrepareApData(_In_ ULONG ProcessorNumber,
                                    _In_ UINT64 EntryPoint,
                                    _In_ UINT64 StackPointer,
-                                   _In_ UINT64 Arg0,
-                                   _In_ UINT64 GicrBase);
+                                   _In_ UINT64 Arg0);
 extern BOOLEAN HalpArm64WaitForApSync(_In_ ULONG TimeoutMs);
 extern UINT64 HalpArm64GetTrampolinePhysicalAddress(VOID);
 extern BOOLEAN HalpArm64IsTrampolineInitialized(VOID);
@@ -4331,7 +4370,7 @@ FORCEINLINE VOID HalpWriteIccSre(unsigned int v)
 
 FORCEINLINE unsigned int HalpReadIccIar1(void)
 {
-    ULONGLONG v; __asm__ __volatile__("mrs %0, icc_iar1_el1" : "=r"(v)); return (unsigned int)(v & 0x3FFu);
+    ULONGLONG v; __asm__ __volatile__("mrs %0, icc_iar1_el1" : "=r"(v)); return (unsigned int)(v & 0xFFFFFFu);
 }
 
 FORCEINLINE VOID HalpWriteIccEoir1(unsigned int id)
@@ -6359,12 +6398,6 @@ HalEndSystemInterrupt(
         /* Memory barrier to ensure all interrupt processing is visible */
         __asm__ __volatile__("dsb sy" ::: "memory");
 
-        /* Debug: Log LPI EOIs */
-        if (intid >= HAL_ARM64_LPI_BASE)
-        {
-            DPRINT1("[arm64][LPI] EOI LPI %lu\n", intid);
-        }
-
         if (HalpGicUseSysRegs)
         {
             HalpWriteIccEoir1(intid);
@@ -6574,6 +6607,12 @@ HalFlushCommonBuffer(
 
     /* Skip cache maintenance on cache-coherent systems */
     if (HalpArm64DmaCoherency.SystemCoherent)
+    {
+        return;
+    }
+
+    /* Noncached common buffers do not have CPU cache state to maintain. */
+    if (!HalpArm64CommonBufferIsCached(VirtualAddress))
     {
         return;
     }
@@ -8060,7 +8099,6 @@ HalStartNextProcessor(
     ULONGLONG TargetMpidr;
     PHYSICAL_ADDRESS EntryPoint;
     UINT64 TrampolinePhys;
-    UINT64 GicrBase;
     LONG PsciResult;
 
     /*
@@ -8132,20 +8170,15 @@ HalStartNextProcessor(
         goto FallbackDirectPsci;
     }
 
-    /* Find the GIC redistributor base for this CPU */
-    GicrBase = 0;
-    if (HalpArm64GicInfo.GiccEntries[ProcessorNumber].GicrBase)
-        GicrBase = HalpArm64GicInfo.GiccEntries[ProcessorNumber].GicrBase;
-    else if (HalpGicrRegionBase)
-        GicrBase = (UINT64)HalpArm64FindGicrForMpidr(TargetMpidr);
-
-    /* Prepare AP data with page tables, entry point, and GICR */
+    /*
+     * Prepare AP data with page tables and entry point. GICR setup is
+     * deliberately left to HalInitializeProcessor after the AP reaches the HAL.
+     */
     HalpArm64PrepareApData(
         ProcessorNumber,
         (UINT64)ProcessorState->ContextFrame.Pc,
         (UINT64)ProcessorState->ContextFrame.Sp,
-        (UINT64)LoaderBlock,
-        GicrBase
+        (UINT64)LoaderBlock
     );
 
     HalpApProcessorState = ProcessorState;
@@ -8423,14 +8456,23 @@ IoFlushAdapterBuffers(
     /* Perform cache maintenance for non-coherent DMA */
     if (!HalpArm64DmaCoherency.SystemCoherent)
     {
+        /*
+         * Ensure DMA writes from the device have committed to memory before
+         * invalidating the CPU cache. A posted PCIe write may still be in
+         * transit otherwise.
+         */
         __asm__ __volatile__("dsb sy" ::: "memory");
 
         if (!HalpArm64FlushMdlDcacheRange(Mdl, CurrentVa, Length, WriteToDevice))
         {
             if (!WriteToDevice)
+            {
                 HalpArm64CleanInvalidateDcacheRange(CurrentVa, Length);
+            }
             else
+            {
                 HalpArm64CleanDcacheRange(CurrentVa, Length);
+            }
         }
 
         /* Ensure cache operations complete before returning */
