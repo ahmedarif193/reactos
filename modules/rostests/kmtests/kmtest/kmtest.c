@@ -238,6 +238,7 @@ OutputResult(
     DWORD BytesWritten;
     DWORD LogBufferLength;
     DWORD Offset = 0;
+    CHAR DebugBlock[8 * 1024 + 1];
     /* A console window can't handle a single
      * huge block of data, so split it up */
     const DWORD BlockSize = 8 * 1024;
@@ -250,6 +251,9 @@ OutputResult(
         DWORD Length = min(LogBufferLength - Offset, BlockSize);
         if (!WriteFile(GetStdHandle(STD_OUTPUT_HANDLE), ResultBuffer->LogBuffer + Offset, Length, &BytesWritten, NULL))
             error(Error);
+        memcpy(DebugBlock, ResultBuffer->LogBuffer + Offset, Length);
+        DebugBlock[Length] = ANSI_NULL;
+        OutputDebugStringA(DebugBlock);
     }
 
     return Error;
