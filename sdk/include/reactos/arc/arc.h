@@ -785,6 +785,14 @@ typedef struct _ARM_LOADER_BLOCK
 #endif
 } ARM_LOADER_BLOCK, *PARM_LOADER_BLOCK;
 
+#define ARM64_LOADER_MAX_EARLY_DEVICE_RANGES 16
+
+typedef struct _ARM64_LOADER_EARLY_DEVICE_RANGE
+{
+    ULONGLONG BaseAddress;
+    ULONGLONG Length;
+} ARM64_LOADER_EARLY_DEVICE_RANGE, *PARM64_LOADER_EARLY_DEVICE_RANGE;
+
 typedef struct _ARM64_LOADER_BLOCK
 {
 #if defined(_ARM64_) || defined(__aarch64__) || defined(__arm64__)
@@ -804,6 +812,8 @@ typedef struct _ARM64_LOADER_BLOCK
     ULONG_PTR PdrPage;
     ULONGLONG EarlyUartAddress;
     ULONG EarlyUartInterface;
+    ULONG EarlyDeviceRangeCount;
+    ARM64_LOADER_EARLY_DEVICE_RANGE EarlyDeviceRanges[ARM64_LOADER_MAX_EARLY_DEVICE_RANGES];
 #else
     ULONG PlaceHolder;
 #endif

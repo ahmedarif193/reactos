@@ -2006,65 +2006,6 @@ PUCHAR KdComPortInUse = NULL;
 #define HAL_ARM64_SGI_APC 1
 #define HAL_ARM64_SGI_DPC 2
 
-/* ACPI MADT subtable types for ARM GIC */
-#define ACPI_MADT_TYPE_GENERIC_INTERRUPT      0x0B
-#define ACPI_MADT_TYPE_GENERIC_DISTRIBUTOR    0x0C
-#define ACPI_MADT_TYPE_GENERIC_REDISTRIBUTOR  0x0E
-
-typedef struct _ACPI_SUBTABLE_HEADER
-{
-    UCHAR Type;
-    UCHAR Length;
-} ACPI_SUBTABLE_HEADER, *PACPI_SUBTABLE_HEADER;
-
-#include <pshpack1.h>
-typedef struct _ACPI_MADT
-{
-    DESCRIPTION_HEADER Header;
-    ULONG LocalApicAddress;
-    ULONG Flags;
-} ACPI_MADT, *PACPI_MADT;
-
-typedef struct _ACPI_MADT_GENERIC_DISTRIBUTOR
-{
-    ACPI_SUBTABLE_HEADER Header;
-    USHORT Reserved;
-    ULONG GicId;
-    ULONGLONG BaseAddress;
-    ULONG SystemVectorBase;
-    UCHAR GicVersion;
-    UCHAR Reserved2[3];
-} ACPI_MADT_GENERIC_DISTRIBUTOR, *PACPI_MADT_GENERIC_DISTRIBUTOR;
-
-typedef struct _ACPI_MADT_GENERIC_REDISTRIBUTOR
-{
-    ACPI_SUBTABLE_HEADER Header;
-    USHORT Reserved;
-    ULONGLONG BaseAddress;
-    ULONG Length;
-    ULONG Reserved2;
-} ACPI_MADT_GENERIC_REDISTRIBUTOR, *PACPI_MADT_GENERIC_REDISTRIBUTOR;
-
-typedef struct _ACPI_MADT_GENERIC_INTERRUPT
-{
-    ACPI_SUBTABLE_HEADER Header;
-    USHORT Reserved;
-    ULONG CpuInterfaceNumber;
-    ULONG AcpiProcessorUid;
-    ULONG Flags;
-    ULONG ParkingProtocolVersion;
-    ULONG PerformanceInterrupt;
-    ULONGLONG ParkedAddress;
-    ULONGLONG BaseAddress;
-    ULONGLONG GicvBaseAddress;
-    ULONGLONG GichBaseAddress;
-    ULONG VgicMaintenanceInterrupt;
-    ULONG Reserved2;
-    ULONGLONG GicrBaseAddress;
-    ULONGLONG Mpidr;
-} ACPI_MADT_GENERIC_INTERRUPT, *PACPI_MADT_GENERIC_INTERRUPT;
-#include <poppack.h>
-
 static ULONGLONG HalpGicdBase = HAL_ARM64_GICD_BASE_DEFAULT;
 static ULONGLONG HalpGiccBase = HAL_ARM64_GICC_BASE_DEFAULT;
 static ULONGLONG HalpGicrRegionBase = HAL_ARM64_GICR_BASE_DEFAULT;
