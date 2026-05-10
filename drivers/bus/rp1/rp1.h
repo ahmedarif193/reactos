@@ -111,7 +111,7 @@
 #define RP1_ACPI_PRT_GSI_INTA   175
 
 /* Maximum number of child devices the bus driver exposes */
-#define RP1_MAX_CHILDREN        1
+#define RP1_MAX_CHILDREN        2
 
 /* Child device indices */
 #define RP1_CHILD_XHCI0         0
