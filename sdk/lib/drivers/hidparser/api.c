@@ -61,6 +61,14 @@ static struct
 
 #define NTOHS(n) (((((unsigned short)(n) & 0xFF)) << 8) | (((unsigned short)(n) & 0xFF00) >> 8))
 
+static
+ULONG
+HidParser_BitsToBytes(
+    _In_ ULONG BitCount)
+{
+    return (BitCount + 7) / 8;
+}
+
 NTSTATUS
 HidParser_GetCollectionUsagePage(
     IN PVOID CollectionContext,
@@ -122,8 +130,7 @@ HidParser_GetReportLength(
         //
         // byte aligned length
         //
-        ASSERT(ReportLength % 8 == 0);
-        return ReportLength / 8;
+        return HidParser_BitsToBytes(ReportLength);
     }
     return ReportLength;
 }
@@ -370,7 +377,7 @@ HidParser_GetUsagesWithReport(
         return HIDP_STATUS_REPORT_DOES_NOT_EXIST;
     }
 
-    if (Report->ReportSize / 8 != (ReportDescriptorLength - 1))
+    if (HidParser_BitsToBytes(Report->ReportSize) != (ReportDescriptorLength - 1))
     {
         //
         // invalid report descriptor length
@@ -574,7 +581,7 @@ HidParser_GetUsageValueWithReport(
         return HIDP_STATUS_REPORT_DOES_NOT_EXIST;
     }
 
-    if (Report->ReportSize / 8 != (ReportDescriptorLength - 1))
+    if (HidParser_BitsToBytes(Report->ReportSize) != (ReportDescriptorLength - 1))
     {
         //
         // invalid report descriptor length
@@ -670,7 +677,7 @@ HidParser_GetScaledUsageValueWithReport(
         return HIDP_STATUS_REPORT_DOES_NOT_EXIST;
     }
 
-    if (Report->ReportSize / 8 != (ReportDescriptorLength - 1))
+    if (HidParser_BitsToBytes(Report->ReportSize) != (ReportDescriptorLength - 1))
     {
         //
         // invalid report descriptor length

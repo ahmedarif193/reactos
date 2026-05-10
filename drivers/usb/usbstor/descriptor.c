@@ -294,21 +294,6 @@ USBSTOR_SelectConfigurationAndInterface(
     // store pipe handle
     DeviceExtension->ConfigurationHandle = Urb->UrbSelectConfiguration.ConfigurationHandle;
 
-    // now prepare interface urb
-    UsbBuildSelectInterfaceRequest(Urb, GET_SELECT_INTERFACE_REQUEST_SIZE(InterfaceDescriptor->bNumEndpoints), DeviceExtension->ConfigurationHandle, InterfaceDescriptor->bInterfaceNumber, InterfaceDescriptor->bAlternateSetting);
-
-    // copy interface information structure back - as offset for SelectConfiguration / SelectInterface request do differ
-    RtlCopyMemory(&Urb->UrbSelectInterface.Interface, DeviceExtension->InterfaceInformation, DeviceExtension->InterfaceInformation->Length);
-
-    // now select the interface
-    Status = USBSTOR_SyncUrbRequest(DeviceExtension->LowerDeviceObject, Urb);
-    if (NT_SUCCESS(Status))
-    {
-        // update configuration info
-        ASSERT(Urb->UrbSelectInterface.Interface.Length == DeviceExtension->InterfaceInformation->Length);
-        RtlCopyMemory(DeviceExtension->InterfaceInformation, &Urb->UrbSelectInterface.Interface, Urb->UrbSelectInterface.Interface.Length);
-    }
-
     FreeItem(InterfaceList);
     ExFreePoolWithTag(Urb, 0);
 

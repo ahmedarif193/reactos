@@ -188,6 +188,12 @@ HidParser_FindReportInCollection(
     ULONG Index;
     NTSTATUS Status;
 
+    if (!Collection)
+    {
+        *OutReport = NULL;
+        return HIDP_STATUS_REPORT_DOES_NOT_EXIST;
+    }
+
     //
     // search in local list
     //
@@ -228,10 +234,23 @@ HidParser_FindReport(
     IN UCHAR ReportID,
     OUT PHID_REPORT *OutReport)
 {
+    PHID_COLLECTION Collection;
+
+    if (!ParserContext || !ParserContext->RootCollection)
+    {
+        *OutReport = NULL;
+        return HIDP_STATUS_REPORT_DOES_NOT_EXIST;
+    }
+
+    Collection = ParserContext->RootCollection;
+    if (Collection->NodeCount)
+        Collection = Collection->Nodes[Collection->NodeCount - 1];
+
     //
-    // search in current top level collection
+    // search in current top level collection, or the root if no top
+    // collection has been opened yet.
     //
-    return HidParser_FindReportInCollection(ParserContext->RootCollection->Nodes[ParserContext->RootCollection->NodeCount-1], ReportType, ReportID, OutReport);
+    return HidParser_FindReportInCollection(Collection, ReportType, ReportID, OutReport);
 }
 
 NTSTATUS
@@ -327,7 +346,7 @@ HidParser_GetReport(
     //
     // try finding existing report
     //
-    Status = HidParser_FindReport(ParserContext, ReportType, ReportID, OutReport);
+    Status = HidParser_FindReportInCollection(Collection, ReportType, ReportID, OutReport);
     if (Status == HIDP_STATUS_SUCCESS || CreateIfNotExists == FALSE)
     {
         //
@@ -633,10 +652,19 @@ HidParser_UpdateCollectionReport(
     IN PHID_REPORT Report,
     IN PHID_REPORT NewReport)
 {
+    PHID_COLLECTION Collection;
+
+    if (!ParserContext || !ParserContext->RootCollection)
+        return FALSE;
+
+    Collection = ParserContext->RootCollection;
+    if (Collection->NodeCount)
+        Collection = Collection->Nodes[Collection->NodeCount - 1];
+
     //
     // update in current collection
     //
-    return HidParser_UpdateCurrentCollectionReport(ParserContext->RootCollection->Nodes[ParserContext->RootCollection->NodeCount-1], Report, NewReport);
+    return HidParser_UpdateCurrentCollectionReport(Collection, Report, NewReport);
 }
 
 
@@ -669,10 +697,18 @@ HidParser_AddMainItem(
     if (NewReport != Report)
     {
         //
-        // update current top level collection
+        // update the collection that owns this report
         //
-        Found = HidParser_UpdateCollectionReport(ParserContext, Report, NewReport);
-        ASSERT(Found);
+        Found = HidParser_UpdateCurrentCollectionReport(Collection, Report, NewReport);
+        if (!Found)
+        {
+            Found = HidParser_UpdateCollectionReport(ParserContext, Report, NewReport);
+        }
+
+        if (!Found)
+        {
+            return HIDP_STATUS_INTERNAL_ERROR;
+        }
     }
 
     //
@@ -886,15 +922,18 @@ HidParser_ParseReportDescriptor(
                 else if (CurrentItem->Tag == ITEM_TAG_MAIN_END_COLLECTION)
                 {
                     //
-                    // assert on ending the root collection
+                    // Some devices emit an unmatched END_COLLECTION. Keep the
+                    // parser state at the synthetic root and let the caller
+                    // decide whether the descriptor is otherwise usable.
                     //
-                    ASSERT(CurrentCollection != ParserContext->RootCollection);
-
-                    //
-                    // use parent of current collection
-                    //
-                    CurrentCollection = CurrentCollection->Root;
-                    ASSERT(CurrentCollection);
+                    if (CurrentCollection != ParserContext->RootCollection)
+                    {
+                        //
+                        // use parent of current collection
+                        //
+                        CurrentCollection = CurrentCollection->Root;
+                        ASSERT(CurrentCollection);
+                    }
                 }
                 else
                 {
@@ -915,38 +954,37 @@ HidParser_ParseReportDescriptor(
 
                         default:
                             DebugFunction("[HIDPARSE] Unknown ReportType Tag %x Type %x Size %x CurrentItemSize %x\n", CurrentItem->Tag, CurrentItem->Type, CurrentItem->Size, CurrentItemSize);
-                            ASSERT(FALSE);
                             break;
                     }
 
-                    if (ReportType == HID_REPORT_TYPE_ANY)
-                        break;
+                    if (ReportType != HID_REPORT_TYPE_ANY)
+                    {
+                        //
+                        // get report
+                        //
+                        Status = HidParser_GetReport(ParserContext, CurrentCollection, ReportType, ParserContext->GlobalItemState.ReportId, TRUE, &Report);
+                        ASSERT(Status == HIDP_STATUS_SUCCESS);
 
-                    //
-                    // get report
-                    //
-                    Status = HidParser_GetReport(ParserContext, CurrentCollection, ReportType, ParserContext->GlobalItemState.ReportId, TRUE, &Report);
-                    ASSERT(Status == HIDP_STATUS_SUCCESS);
+                        // fill in a sensible default if the index isn't set
+                        if (!ParserContext->LocalItemState.DesignatorIndexSet) {
+                            ParserContext->LocalItemState.DesignatorIndex
+                                = ParserContext->LocalItemState.DesignatorMinimum;
+                        }
 
-                    // fill in a sensible default if the index isn't set
-                    if (!ParserContext->LocalItemState.DesignatorIndexSet) {
-                        ParserContext->LocalItemState.DesignatorIndex
-                            = ParserContext->LocalItemState.DesignatorMinimum;
+                        if (!ParserContext->LocalItemState.StringIndexSet)
+                            ParserContext->LocalItemState.StringIndex = ParserContext->LocalItemState.StringMinimum;
+
+                        //
+                        // get main item data
+                        //
+                        MainItemData = (PMAIN_ITEM_DATA)&Data;
+
+                        //
+                        // add states & data to the report
+                        //
+                        Status = HidParser_AddMainItem(ParserContext, Report, &ParserContext->GlobalItemState, &ParserContext->LocalItemState, MainItemData, CurrentCollection);
+                        ASSERT(Status == HIDP_STATUS_SUCCESS);
                     }
-
-                    if (!ParserContext->LocalItemState.StringIndexSet)
-                        ParserContext->LocalItemState.StringIndex = ParserContext->LocalItemState.StringMinimum;
-
-                    //
-                    // get main item data
-                    //
-                    MainItemData = (PMAIN_ITEM_DATA)&Data;
-
-                    //
-                    // add states & data to the report
-                    //
-                    Status = HidParser_AddMainItem(ParserContext, Report, &ParserContext->GlobalItemState, &ParserContext->LocalItemState, MainItemData, CurrentCollection);
-                    ASSERT(Status == HIDP_STATUS_SUCCESS);
                 }
 
                 //
@@ -1366,4 +1404,3 @@ HidParser_GetContextSize(
     Size = HidParser_CalculateContextSize(Collection);
     return Size;
 }
-

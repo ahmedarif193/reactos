@@ -10,6 +10,16 @@
 #define NDEBUG
 #include <debug.h>
 
+#define USB_SUPERSPEED_ENDPOINT_COMPANION_DESCRIPTOR_TYPE 0x30
+
+typedef struct _USB_SUPERSPEED_ENDPOINT_COMPANION_DESCRIPTOR {
+    UCHAR bLength;
+    UCHAR bDescriptorType;
+    UCHAR bMaxBurst;
+    UCHAR bmAttributes;
+    USHORT wBytesPerInterval;
+} USB_SUPERSPEED_ENDPOINT_COMPANION_DESCRIPTOR, *PUSB_SUPERSPEED_ENDPOINT_COMPANION_DESCRIPTOR;
+
 static
 VOID
 USBPORT_FetchBosDescriptor(IN PUSBPORT_DEVICE_HANDLE DeviceHandle,
@@ -18,83 +28,6 @@ USBPORT_FetchBosDescriptor(IN PUSBPORT_DEVICE_HANDLE DeviceHandle,
 static
 VOID
 USBPORT_ComputeLpmPolicy(IN PUSBPORT_DEVICE_HANDLE DeviceHandle);
-
-#if DBG
-#define USBPORT_GUARD_HEAD 0x47445255u /* 'URDG' */
-#define USBPORT_GUARD_TAIL 0x544C4755u /* 'UGLT' */
-#define USBPORT_GUARD_MAX_SIZE 4096u
-
-typedef struct _USBPORT_GUARD_HEADER
-{
-    ULONG Size;
-    ULONG Guard;
-} USBPORT_GUARD_HEADER, *PUSBPORT_GUARD_HEADER;
-
-static
-PUCHAR
-USBPORT_AllocGuardedDescriptor(
-    _In_ ULONG Size,
-    _In_ PCSTR Name)
-{
-    SIZE_T Total = sizeof(USBPORT_GUARD_HEADER) + (SIZE_T)Size + sizeof(ULONG);
-    PUSBPORT_GUARD_HEADER Header;
-    PUCHAR Payload;
-
-    Header = ExAllocatePoolWithTag(NonPagedPool, Total, USB_PORT_TAG);
-    if (!Header)
-        return NULL;
-
-    Header->Size = Size;
-    Header->Guard = USBPORT_GUARD_HEAD;
-    Payload = (PUCHAR)(Header + 1);
-    *(PULONG)(Payload + Size) = USBPORT_GUARD_TAIL;
-    RtlZeroMemory(Payload, Size);
-    DPRINT1("USBPORT_GUARD alloc %s size=%lu buf=%p\n", Name, Size, Payload);
-    return Payload;
-}
-
-static
-VOID
-USBPORT_FreeGuardedDescriptor(
-    _In_opt_ PUCHAR Buffer,
-    _In_ PCSTR Name)
-{
-    PUSBPORT_GUARD_HEADER Header;
-    ULONG Size;
-    ULONG Tail;
-
-    if (!Buffer)
-        return;
-
-    Header = (PUSBPORT_GUARD_HEADER)(Buffer - sizeof(USBPORT_GUARD_HEADER));
-    Size = Header->Size;
-    Tail = 0;
-
-    if (Header->Guard != USBPORT_GUARD_HEAD || Size > USBPORT_GUARD_MAX_SIZE)
-    {
-        DPRINT1("USBPORT_GUARD corrupt %s buf=%p head=%08lx size=%lu\n",
-                Name,
-                Buffer,
-                Header->Guard,
-                Size);
-    }
-    else
-    {
-        Tail = *(PULONG)(Buffer + Size);
-        if (Tail != USBPORT_GUARD_TAIL)
-        {
-            DPRINT1("USBPORT_GUARD corrupt %s buf=%p size=%lu head=%08lx tail=%08lx\n",
-                    Name,
-                    Buffer,
-                    Size,
-                    Header->Guard,
-                    Tail);
-        }
-    }
-
-    ExFreePoolWithTag(Header, USB_PORT_TAG);
-}
-#endif
 
 NTSTATUS
 NTAPI
@@ -120,16 +53,6 @@ USBPORT_SendSetupPacket(IN PUSBPORT_DEVICE_HANDLE DeviceHandle,
            Length,
            TransferedLen,
            pUSBDStatus);
-#if DBG
-    if (SetupPacket &&
-        SetupPacket->bRequest == USB_REQUEST_GET_DESCRIPTOR &&
-        SetupPacket->wValue.HiByte == USB_BOS_DESCRIPTOR_TYPE)
-    {
-        DPRINT1("USBPORT_SendSetupPacket: BOS GET_DESCRIPTOR len=%lu buf=%p\n",
-                Length,
-                Buffer);
-    }
-#endif
 
     KeInitializeEvent(&Event, NotificationEvent, FALSE);
 
@@ -219,38 +142,6 @@ USBPORT_SendSetupPacket(IN PUSBPORT_DEVICE_HANDLE DeviceHandle,
 
             if (pUSBDStatus)
                 *pUSBDStatus = USBDStatus;
-
-            /*
-             * For debug builds, trace the actual payload length and the first
-             * bytes returned for device-descriptor requests. This helps catch
-             * cases where the miniport reports a successful transfer but the
-             * buffer contents seen by USBPORT_CreateDevice do not match the
-             * SW-ENUM logs or expected descriptor layout.
-             */
-#if DBG
-            if (NT_SUCCESS(Status) &&
-                TransferedLen &&
-                Buffer &&
-                SetupPacket &&
-                SetupPacket->bRequest == USB_REQUEST_GET_DESCRIPTOR &&
-                SetupPacket->wValue.HiByte == USB_DEVICE_DESCRIPTOR_TYPE)
-            {
-                ULONG Len = *TransferedLen;
-                const UCHAR *Raw = (const UCHAR *)Buffer;
-
-                DPRINT1("USBPORT_SendSetupPacket: GET_DESCRIPTOR(Device) completed len=%lu, "
-                        "first bytes=%02X %02X %02X %02X %02X %02X %02X %02X\n",
-                        Len,
-                        (Len > 0) ? Raw[0] : 0,
-                        (Len > 1) ? Raw[1] : 0,
-                        (Len > 2) ? Raw[2] : 0,
-                        (Len > 3) ? Raw[3] : 0,
-                        (Len > 4) ? Raw[4] : 0,
-                        (Len > 5) ? Raw[5] : 0,
-                        (Len > 6) ? Raw[6] : 0,
-                        (Len > 7) ? Raw[7] : 0);
-            }
-#endif
 
             /* No additional cache maintenance required after completion */
         }
@@ -536,6 +427,32 @@ USBPORT_OpenInterface(IN PURB Urb,
         RtlCopyMemory(&PipeHandle->EndpointDescriptor,
                       Descriptor,
                       sizeof(USB_ENDPOINT_DESCRIPTOR));
+
+        PipeHandle->SsCompanionValid = FALSE;
+        PipeHandle->SsCompanionMaxBurst = 0;
+        PipeHandle->SsCompanionAttributes = 0;
+        PipeHandle->SsCompanionBytesPerInterval = 0;
+
+        if (DeviceHandle->DeviceSpeed == UsbSuperSpeed)
+        {
+            PUCHAR ConfigStart = (PUCHAR)ConfigHandle->ConfigurationDescriptor;
+            PUCHAR ConfigEnd = ConfigStart + ConfigHandle->ConfigurationDescriptor->wTotalLength;
+            PUSB_COMMON_DESCRIPTOR Common = (PUSB_COMMON_DESCRIPTOR)((PUCHAR)Descriptor +
+                                                                     Descriptor->bLength);
+
+            if (((PUCHAR)Common + sizeof(USB_SUPERSPEED_ENDPOINT_COMPANION_DESCRIPTOR)) <= ConfigEnd &&
+                Common->bDescriptorType == USB_SUPERSPEED_ENDPOINT_COMPANION_DESCRIPTOR_TYPE &&
+                Common->bLength >= sizeof(USB_SUPERSPEED_ENDPOINT_COMPANION_DESCRIPTOR))
+            {
+                PUSB_SUPERSPEED_ENDPOINT_COMPANION_DESCRIPTOR SsCompanion =
+                    (PUSB_SUPERSPEED_ENDPOINT_COMPANION_DESCRIPTOR)Common;
+
+                PipeHandle->SsCompanionValid = TRUE;
+                PipeHandle->SsCompanionMaxBurst = SsCompanion->bMaxBurst;
+                PipeHandle->SsCompanionAttributes = SsCompanion->bmAttributes;
+                PipeHandle->SsCompanionBytesPerInterval = SsCompanion->wBytesPerInterval;
+            }
+        }
 
         PipeHandle->Flags = PIPE_HANDLE_FLAG_CLOSED;
         PipeHandle->PipeFlags = InterfaceInfo->Pipes[ix].PipeFlags;
@@ -1456,15 +1373,9 @@ USBPORT_CreateDevice(IN OUT PUSB_DEVICE_HANDLE *pUsbdDeviceHandle,
     Endpoint = PipeHandle->Endpoint;
 
     /* Allocate enough space for the full device descriptor, not just MPS0. */
-#if DBG
-    DeviceDescriptor = (PUSB_DEVICE_DESCRIPTOR)USBPORT_AllocGuardedDescriptor(
-        sizeof(USB_DEVICE_DESCRIPTOR),
-        "DEV_DESC");
-#else
     DeviceDescriptor = ExAllocatePoolWithTag(NonPagedPool,
                                              sizeof(USB_DEVICE_DESCRIPTOR),
                                              USB_PORT_TAG);
-#endif
 
     if (!DeviceDescriptor)
     {
@@ -1657,11 +1568,7 @@ USBPORT_CreateDevice(IN OUT PUSB_DEVICE_HANDLE *pUsbdDeviceHandle,
 
 PostDescriptor:
 
-#if DBG
-    USBPORT_FreeGuardedDescriptor((PUCHAR)DeviceDescriptor, "DEV_DESC");
-#else
     ExFreePoolWithTag(DeviceDescriptor, USB_PORT_TAG);
-#endif
 
     if (NT_SUCCESS(Status) && (TransferedLen >= DescriptorMinSize))
     {
@@ -1728,23 +1635,6 @@ PostDescriptor:
     DPRINT1("USBPORT_CreateDevice: ERROR!!! TransferedLen - %x, Status - %lx\n",
             TransferedLen,
             Status);
-
-#if DBG
-    {
-        const UCHAR *RawDescriptor = (const UCHAR *)&DeviceHandle->DeviceDescriptor;
-        ULONG ByteIndex;
-
-        DPRINT1("USBPORT_CreateDevice: descriptor bytes (len=%lu)\n",
-                (ULONG)sizeof(USB_DEVICE_DESCRIPTOR));
-
-        for (ByteIndex = 0; ByteIndex < sizeof(USB_DEVICE_DESCRIPTOR); ByteIndex++)
-        {
-            DPRINT1("USBPORT_CreateDevice: desc[%02lu] = %02X\n",
-                    ByteIndex,
-                    RawDescriptor[ByteIndex]);
-        }
-    }
-#endif
 
     /* Keep the structured dump for anyone building with URB tracing enabled */
     USBPORT_DumpingDeviceDescriptor(&DeviceHandle->DeviceDescriptor);
@@ -2096,30 +1986,6 @@ USBPORT_GetUsbDescriptor(IN PUSBPORT_DEVICE_HANDLE DeviceHandle,
                                      ConfigDescSize,
                                      NULL);
 
-#if DBG
-    if (NT_SUCCESS(Status) && ConfigDesc && ConfigDescSize && *ConfigDescSize)
-    {
-        ULONG dumpLen = (*ConfigDescSize < 16) ? *ConfigDescSize : 16;
-
-        DPRINT1("USBPORT_GetUsbDescriptor: completed type=0x%x len=%lu first bytes=%02x %02x %02x %02x %02x %02x\n",
-                Type,
-                *ConfigDescSize,
-                ((PUCHAR)ConfigDesc)[0],
-                dumpLen > 1 ? ((PUCHAR)ConfigDesc)[1] : 0,
-                dumpLen > 2 ? ((PUCHAR)ConfigDesc)[2] : 0,
-                dumpLen > 3 ? ((PUCHAR)ConfigDesc)[3] : 0,
-                dumpLen > 4 ? ((PUCHAR)ConfigDesc)[4] : 0,
-                dumpLen > 5 ? ((PUCHAR)ConfigDesc)[5] : 0);
-    }
-    else
-    {
-        DPRINT1("USBPORT_GetUsbDescriptor: type=0x%x failed Status=0x%08lx len=%lu\n",
-                Type,
-                Status,
-                ConfigDescSize ? *ConfigDescSize : 0);
-    }
-#endif
-
     return Status;
 }
 
@@ -2167,23 +2033,13 @@ USBPORT_FetchBosDescriptor(IN PUSBPORT_DEVICE_HANDLE DeviceHandle,
     }
 
     BosTotalLength = BosHeader.wTotalLength;
-#if DBG
-    DPRINT1("USBPORT_FetchBosDescriptor: BOS total=%lu numcaps=%u headerlen=%lu\n",
-            BosTotalLength,
-            BosHeader.bNumDeviceCaps,
-            Length);
-#endif
 
     if (BosTotalLength > 512)
         BosTotalLength = 512;
 
-#if DBG
-    BosBuffer = USBPORT_AllocGuardedDescriptor(BosTotalLength, "BOS_DESC");
-#else
     BosBuffer = ExAllocatePoolWithTag(NonPagedPool,
                                       BosTotalLength,
                                       USB_PORT_TAG);
-#endif
     if (!BosBuffer)
         return;
 
@@ -2216,7 +2072,6 @@ USBPORT_FetchBosDescriptor(IN PUSBPORT_DEVICE_HANDLE DeviceHandle,
     while (Ptr + sizeof(USB_COMMON_DESCRIPTOR) <= End)
     {
         PUSB_COMMON_DESCRIPTOR Common;
-        UCHAR DevCapType;
 
         Common = (PUSB_COMMON_DESCRIPTOR)Ptr;
 
@@ -2275,18 +2130,11 @@ USBPORT_FetchBosDescriptor(IN PUSBPORT_DEVICE_HANDLE DeviceHandle,
             }
         }
 
-        DevCapType = 0;
-        (void)DevCapType; /* silence unused warning in non-DBG builds */
-
         Ptr += Common->bLength;
     }
 
 Done:
-#if DBG
-    USBPORT_FreeGuardedDescriptor(BosBuffer, "BOS_DESC");
-#else
     ExFreePoolWithTag(BosBuffer, USB_PORT_TAG);
-#endif
 }
 
 static

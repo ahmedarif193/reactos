@@ -1163,6 +1163,11 @@ USBPORT_QueueTransferUrb(IN PURB Urb)
     Parameters->TransferBufferLength = Urb->UrbControlTransfer.TransferBufferLength;
     Parameters->TransferFlags = Urb->UrbControlTransfer.TransferFlags;
 
+    if (Parameters->TransferFlags & USBD_TRANSFER_DIRECTION_IN)
+        Transfer->Direction = USBPORT_DMA_DIRECTION_FROM_DEVICE;
+    else
+        Transfer->Direction = USBPORT_DMA_DIRECTION_TO_DEVICE;
+
     if (Endpoint &&
         (Endpoint->EndpointProperties.TransferType == USBPORT_TRANSFER_TYPE_BULK ||
          Parameters->TransferBufferLength >= 64))
@@ -1179,6 +1184,15 @@ USBPORT_QueueTransferUrb(IN PURB Urb)
     }
 
     Transfer->TransferBufferMDL = Urb->UrbControlTransfer.TransferBufferMDL;
+
+    if (Transfer->TransferBufferMDL &&
+        Parameters->TransferBufferLength &&
+        !(Transfer->Flags & TRANSFER_FLAG_ISO))
+    {
+        KeFlushIoBuffers(Transfer->TransferBufferMDL,
+                         Transfer->Direction == USBPORT_DMA_DIRECTION_FROM_DEVICE,
+                         TRUE);
+    }
 
     if (Endpoint->EndpointProperties.TransferType == USBPORT_TRANSFER_TYPE_CONTROL)
     {
