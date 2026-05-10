@@ -6164,14 +6164,6 @@ HalEndSystemInterrupt(
     ULONG stored = 0;
     UCHAR depth = 0;
 
-    /*
-     * CRITICAL: Lower IRQL BEFORE sending EOI to prevent nested interrupts.
-     * Windows ARM64 convention: IRQL synchronization happens before GIC EOI.
-     * If we EOI first, a higher-priority interrupt can preempt before IRQL drops,
-     * causing incorrect IRQL transitions and potential deadlocks.
-     */
-    KeLowerIrql(Irql);
-
     if (cpu < MAXIMUM_PROCESSORS)
     {
         depth = HalpArm64ActiveIntIdDepth[cpu];
@@ -6213,9 +6205,21 @@ HalEndSystemInterrupt(
         else
         {
             if (HalpGiccBase != 0)
+            {
                 *HalpMmio((ULONG_PTR)HalpGiccBase, GICC_EOIR) = intid;
+                __asm__ __volatile__("dsb sy" ::: "memory");
+            }
         }
     }
+
+    /*
+     * Lower IRQL only after the interrupt is no longer active in the GIC.
+     * KeLowerIrql can deliver pending DPC/timer/quantum work on ARM64; running
+     * that dispatch path before EOI leaves the timer/device interrupt active
+     * while switching threads, which can starve lower-priority GUI/input work.
+     */
+    KeLowerIrql(Irql);
+
     UNREFERENCED_PARAMETER(TrapFrame);
 }
 
