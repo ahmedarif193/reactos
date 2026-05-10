@@ -532,6 +532,35 @@ MiArm64InvalidateUserAddress(
     __asm__ __volatile__("isb" ::: "memory");
 }
 
+FORCEINLINE
+ULONG64
+MiArm64ReadPteEntry(
+    _In_ volatile ULONG64 *Entry)
+{
+    return *Entry;
+}
+
+FORCEINLINE
+VOID
+MiArm64WritePteEntry(
+    _Inout_ volatile ULONG64 *Entry,
+    _In_ ULONG64 Value)
+{
+    *Entry = Value;
+}
+
+FORCEINLINE
+ULONG64
+MiArm64ExchangePteEntry(
+    _Inout_ volatile ULONG64 *Entry,
+    _In_ ULONG64 Value)
+{
+    ULONG64 OldValue = MiArm64ReadPteEntry(Entry);
+
+    *Entry = Value;
+    return OldValue;
+}
+
 static
 MMPTE
 MiArm64ClearKernelPte(
@@ -567,7 +596,7 @@ MiArm64ClearUserPte(
     {
         MiArm64PublishPageByPfnAlias(OldPte.u.Hard.PageFrameNumber,
                                      OldPte.u.Hard.UserNoExecute == 0);
-        __atomic_store_n(Walk->PointerPte, 0, __ATOMIC_SEQ_CST);
+        MiArm64WritePteEntry(Walk->PointerPte, 0);
         MiArm64InvalidateUserAddress(Address);
     }
 
@@ -777,7 +806,7 @@ MiArm64ReleaseUserPageTableReference(
         return;
     }
 
-    __atomic_store_n(&L2Table[L2Idx], 0, __ATOMIC_SEQ_CST);
+    MiArm64WritePteEntry(&L2Table[L2Idx], 0);
     MiArm64InvalidateUserAddress(Address);
     MiDecrementShareCount(PfnL2, L2Pfn);
     MI_SET_PFN_DELETED(PfnL3);
@@ -810,7 +839,7 @@ MiArm64ReleaseUserPageTableReference(
         return;
     }
 
-    __atomic_store_n(&L1Table[L1Idx], 0, __ATOMIC_SEQ_CST);
+    MiArm64WritePteEntry(&L1Table[L1Idx], 0);
     MiArm64InvalidateUserAddress(Address);
     MiDecrementShareCount(PfnL1, L1Pfn);
     MI_SET_PFN_DELETED(PfnL2);
@@ -843,7 +872,7 @@ MiArm64ReleaseUserPageTableReference(
         return;
     }
 
-    __atomic_store_n(&L0Table[L0Idx], 0, __ATOMIC_SEQ_CST);
+    MiArm64WritePteEntry(&L0Table[L0Idx], 0);
     MiArm64InvalidateUserAddress(Address);
     MiDecrementShareCount(PfnRoot, RootPfn);
     MI_SET_PFN_DELETED(PfnL1);
@@ -1691,7 +1720,7 @@ MmCreatePageFileMapping(
         NewPte.u.Soft.Prototype = 0;
         NewPte.u.Soft.Protection = MM_READWRITE;
 
-        __atomic_store_n(Walk.PointerPte, NewPte.u.Long, __ATOMIC_SEQ_CST);
+        MiArm64WritePteEntry(Walk.PointerPte, NewPte.u.Long);
     }
 
     MiUnlockProcessWorkingSetUnsafe(Process, PsGetCurrentThread());
@@ -1722,7 +1751,7 @@ MmDeletePageFileMapping(
             return;
         }
 
-        OldPte.u.Long = __atomic_exchange_n(Walk.PointerPte, 0, __ATOMIC_SEQ_CST);
+        OldPte.u.Long = MiArm64ExchangePteEntry(Walk.PointerPte, 0);
     }
 
     if (!FlagOn(OldPte.u.Long, 0x800) || OldPte.u.Hard.Valid)
@@ -1972,7 +2001,7 @@ MmSetPageProtect(
         else
             MI_MAKE_CLEAN_PAGE(&TempPte);
 
-        OldPte.u.Long = __atomic_exchange_n(Walk.PointerPte, TempPte.u.Long, __ATOMIC_SEQ_CST);
+        OldPte.u.Long = MiArm64ExchangePteEntry(Walk.PointerPte, TempPte.u.Long);
 
         MiArm64PreserveDirtyStateForProtect(OldPte, TempPte);
 
@@ -2018,7 +2047,7 @@ MmSetDirtyBit(
         else
             MI_MAKE_CLEAN_PAGE(&TempPte);
 
-        __atomic_store_n(Walk.PointerPte, TempPte.u.Long, __ATOMIC_SEQ_CST);
+        MiArm64WritePteEntry(Walk.PointerPte, TempPte.u.Long);
 
         if (!Dirty)
         {
@@ -2160,7 +2189,7 @@ VOID
 MiArm64ClearUserDescriptor(
     _Inout_ volatile ULONG64 *Entry)
 {
-    __atomic_store_n(Entry, 0, __ATOMIC_SEQ_CST);
+    MiArm64WritePteEntry(Entry, 0);
     MiArm64CleanInvalidateCacheLine((PVOID)Entry);
 }
 
