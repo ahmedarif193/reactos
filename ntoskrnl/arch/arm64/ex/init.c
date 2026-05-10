@@ -79,11 +79,23 @@ NTAPI
 ExArchPostHalInitSystemPhase0(
     VOID)
 {
-    KiHalInitialized = TRUE;
     /*
-     * Defer timer re-enable until after MM init (MmArmInitSystem).
-     * At this point KSEG0 on-demand mappings are not yet available
-     * and the timer ISR may fault if it accesses HW registers via
-     * KSEG0 before the page-table hierarchy is in place.
+     * HAL phase 0 has initialized enough GIC state for direct HAL use, but
+     * MM phase 0 still runs on bootstrap page tables. Keep ARM64 IRQL
+     * transitions on the DAIF-only path until HAL phase 1 re-enables the
+     * timer PPI after MmArmInitSystem completes.
      */
+}
+
+CODE_SEG("INIT")
+VOID
+NTAPI
+ExArchPostHalInitSystemPhase1(
+    VOID)
+{
+    /*
+     * From this point the MM bootstrap mappings are in place and the timer
+     * PPI has been re-enabled, so IRQL transitions may use HAL's GIC PMR path.
+     */
+    KiHalInitialized = TRUE;
 }

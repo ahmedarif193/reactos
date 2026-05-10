@@ -115,6 +115,7 @@ usbuhci.sys  = 1,,,,,,x,4,,,,1,4
 usbohci.sys  = 1,,,,,,x,4,,,,1,4
 usbehci.sys  = 1,,,,,,x,4,,,,1,4
 usbxhci.sys  = 1,,,,,,x,4,,,,1,4
+rp1.sys      = 1,,,,,,x,4,,,,1,4
 usbstor.sys  = 1,,,,,,x,4,,,,1,4
 kbdhid.sys   = 1,,,,,,,4,,,,1,4
 kbdclass.sys = 1,,,,,,x,4,,,,1,4
@@ -176,6 +177,7 @@ PCI\CC_0C0300 = usbuhci
 PCI\CC_0C0310 = usbohci
 PCI\CC_0C0320 = usbehci
 PCI\CC_0C0330 = usbxhci
+PCI\VEN_1DE4&DEV_0001 = rp1
 USB\Class_08&SubClass_06&Prot_50 = usbstor
 USB\Class_08&SubClass_05&Prot_50 = usbstor
 HID_DEVICE_SYSTEM_KEYBOARD = kbdhid,{4D36E96B-E325-11CE-BFC1-08002BE10318}
@@ -192,6 +194,7 @@ ROOT\SWENUM = swenum
 acpi = acpi.sys
 pci = pci.sys
 isapnp = isapnp.sys
+rp1 = rp1.sys
 
 [InputDevicesSupport.Load]
 usbehci = usbehci.sys

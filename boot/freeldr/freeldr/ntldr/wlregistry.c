@@ -59,6 +59,7 @@ WinLdrLoadSystemHive(
 
     /* Do not setup any bad reason for now */
     *Reason = GoodHive;
+    RtlZeroMemory(&FileInfo, sizeof(FileInfo));
 
     /* Concatenate path and filename to get the full name */
     RtlStringCbCopyA(FullHiveName, sizeof(FullHiveName), DirectoryPath);

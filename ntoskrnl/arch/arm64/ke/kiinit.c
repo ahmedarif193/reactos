@@ -51,16 +51,6 @@ KiArm64TtbrToPa(
 
 #define ARM64_STUB() UNIMPLEMENTED_DBGBREAK()
 
-VOID KiArm64RawPuts(const char *str) {
-    volatile UCHAR *u = (volatile UCHAR *)0xFFFFFC0009000000ULL;
-    while (*str) *u = *str++;
-}
-
-FORCEINLINE VOID KiArm64RawPutHex(ULONG64 value, ULONG width) {
-    UNREFERENCED_PARAMETER(value);
-    UNREFERENCED_PARAMETER(width);
-}
-
 VOID
 KdpDprintf(
     _In_z_ PCSTR Format,
@@ -214,7 +204,6 @@ KiInitializeKernel(_Inout_ PKPROCESS InitProcess,
     ULONG_PTR DirectoryTableBase[2] = {0, 0};
     /* Quiet bring-up: suppress verbose kernel init traces */
 
-    KiArm64RawPuts("[KiInitKernel] ENTRY\n");
 
     if ((InitProcess == NULL) ||
         (InitThread == NULL) ||
@@ -414,7 +403,6 @@ KiInitializeKernel(_Inout_ PKPROCESS InitProcess,
     __asm__ volatile("isb");
 
     ExpInitializeExecutive(Number, LoaderBlock);
-    KiArm64RawPuts("[KiInitKernel] ExpInitializeExecutive done\n");
 
     /*
      * ARM64 parity with amd64: Do NOT invoke Phase1Initialization directly
@@ -453,11 +441,8 @@ KiInitializeKernel(_Inout_ PKPROCESS InitProcess,
         Thread = InitThread;
     }
 
-    KiArm64RawPuts("[KiInitKernel] raising to DISPATCH_LEVEL\n");
     KfRaiseIrql(DISPATCH_LEVEL);
-    KiArm64RawPuts("[KiInitKernel] calling KeSetPriorityThread\n");
     KeSetPriorityThread(Thread, 0);
-    KiArm64RawPuts("[KiInitKernel] KeSetPriorityThread done\n");
 
     KiAcquirePrcbLock(Prcb);
     if (Prcb->NextThread == NULL)
@@ -465,10 +450,8 @@ KiInitializeKernel(_Inout_ PKPROCESS InitProcess,
         KiIdleSummary |= ((KAFFINITY)1 << Number);
     }
     KiReleasePrcbLock(Prcb);
-    KiArm64RawPuts("[KiInitKernel] PrcbLock released\n");
 
     KfRaiseIrql(HIGH_LEVEL);
-    KiArm64RawPuts("[KiInitKernel] raised to HIGH_LEVEL\n");
     LoaderBlock->Prcb = 0;
 
     Thread = KeGetCurrentThread();
@@ -476,7 +459,6 @@ KiInitializeKernel(_Inout_ PKPROCESS InitProcess,
     {
         Thread->WaitIrql = DISPATCH_LEVEL;
     }
-    KiArm64RawPuts("[KiInitKernel] entering KiIdleLoop\n");
     KiIdleLoop();
 }
 
@@ -494,11 +476,8 @@ KiInitializePcr(_In_ ULONG ProcessorNumber,
     PCACHE_DESCRIPTOR Cache;
     PKIPCR EntryPcr;
 
-    KiArm64RawPuts("[InitPcr] entry\n");
-    KiArm64RawPuts("[InitPcr] zeroing Pcr struct\n");
     EntryPcr = KeGetPcr();
     RtlZeroMemory(Pcr, sizeof(*Pcr));
-    KiArm64RawPuts("[InitPcr] Pcr zeroed\n");
 
     Pcr->Self = (struct _KPCR *)Pcr;
     Pcr->CurrentPrcb = &Pcr->Prcb;
@@ -524,10 +503,8 @@ KiInitializePcr(_In_ ULONG ProcessorNumber,
          * KeGetPcr(). This path is only valid when we are bringing up the
          * currently running CPU.
          */
-        KiArm64RawPuts("[InitPcr] writing TPIDR_EL1 = Pcr\n");
         __asm__ __volatile__("msr tpidr_el1, %0" : : "r"(Pcr) : "memory");
         __asm__ __volatile__("isb" ::: "memory");
-        KiArm64RawPuts("[InitPcr] TPIDR_EL1 set + ISB\n");
 
         /* Verify TPIDR_EL1 was set correctly (diagnostic check) */
         {
@@ -537,7 +514,6 @@ KiInitializePcr(_In_ ULONG ProcessorNumber,
                     ProcessorNumber, Pcr, VerifyPcr);
             if (VerifyPcr != Pcr)
             {
-                KiArm64RawPuts("[InitPcr] FATAL: TPIDR_EL1 readback mismatch\n");
                 KeBugCheckEx(PHASE0_INITIALIZATION_FAILED,
                              ('A' << 24) | ('R' << 16) | ('M' << 8) | '6',
                              (ULONG_PTR)Pcr,
@@ -545,7 +521,6 @@ KiInitializePcr(_In_ ULONG ProcessorNumber,
                              1);
             }
         }
-        KiArm64RawPuts("[InitPcr] TPIDR_EL1 readback OK\n");
 
         /*
          * Set global early-boot current CPU state.
@@ -557,7 +532,6 @@ KiInitializePcr(_In_ ULONG ProcessorNumber,
          */
         if (ProcessorNumber == 0)
         {
-            KiArm64RawPuts("[InitPcr] BSP: setting Arm64 globals\n");
             KeArm64CurrentPcr = Pcr;
             KeArm64CurrentIrql = PASSIVE_LEVEL;
             KeArm64DpcRoutineActive = FALSE;
@@ -571,7 +545,6 @@ KiInitializePcr(_In_ ULONG ProcessorNumber,
         ASSERT(KeGetPcr() == EntryPcr);
     }
 
-    KiArm64RawPuts("[InitPcr] populating Pcr fields\n");
     Pcr->Self = (struct _KPCR *)Pcr;
     Pcr->CurrentPrcb = &Pcr->Prcb;
     Pcr->CurrentIrql = PASSIVE_LEVEL;
@@ -592,11 +565,8 @@ KiInitializePcr(_In_ ULONG ProcessorNumber,
     Pcr->Prcb.Number = (UCHAR)ProcessorNumber;
     Pcr->Prcb.SetMember = 1ULL << ProcessorNumber;
     Pcr->Prcb.MultiThreadProcessorSet = Pcr->Prcb.SetMember;
-    KiArm64RawPuts("[InitPcr] reading KeNodeBlock[0]\n");
     Pcr->Prcb.ParentNode = KeNodeBlock[0];
-    KiArm64RawPuts("[InitPcr] writing ParentNode->ProcessorMask\n");
     Pcr->Prcb.ParentNode->ProcessorMask |= Pcr->Prcb.SetMember;
-    KiArm64RawPuts("[InitPcr] ParentNode wired\n");
 
     Pcr->Prcb.CurrentThread = IdleThread;
     Pcr->Prcb.IdleThread = IdleThread;
@@ -608,12 +578,10 @@ KiInitializePcr(_In_ ULONG ProcessorNumber,
     Pcr->SecondLevelCacheSize = 0;
     Pcr->SecondLevelCacheAssociativity = 0;
 
-    KiArm64RawPuts("[InitPcr] reading KeLoaderBlock->u.Arm64\n");
     Arm64Block = (KeLoaderBlock != NULL) ? &KeLoaderBlock->u.Arm64 : NULL;
 
     if (Arm64Block != NULL)
     {
-        KiArm64RawPuts("[InitPcr] LoaderBlock->u.Arm64 present, applying caches\n");
         if (Arm64Block->SecondLevelDcacheSize != 0)
         {
             Pcr->SecondLevelCacheSize = Arm64Block->SecondLevelDcacheSize;
@@ -683,13 +651,7 @@ KiInitializePcr(_In_ ULONG ProcessorNumber,
             CacheCount++;
         }
     }
-    else
-    {
-        KiArm64RawPuts("[InitPcr] WARNING: KeLoaderBlock->u.Arm64 is NULL\n");
-    }
-
     Pcr->Prcb.CacheCount = CacheCount;
-    KiArm64RawPuts("[InitPcr] returning, CacheCount set\n");
 }
 
 VOID
@@ -734,11 +696,9 @@ KiInitializeSystem(_Inout_ PLOADER_PARAMETER_BLOCK LoaderBlock)
 
     BOOLEAN IsBsp;
 
-    KiArm64RawPuts("[KiInitSys] ENTRY\n");
 
     if (LoaderBlock == NULL)
     {
-        KiArm64RawPuts("[KiInitSys] LoaderBlock NULL - BUGCHECK\n");
         KeBugCheckEx(PHASE0_INITIALIZATION_FAILED, 'A64K', 'LDR', 0, 0);
     }
 
@@ -755,7 +715,6 @@ KiInitializeSystem(_Inout_ PLOADER_PARAMETER_BLOCK LoaderBlock)
          * addresses to KSEG0 virtual addresses.
          */
         KiArm64PrepareBootPcr(LoaderBlock);
-        KiArm64RawPuts("[KiInitSys] BSP PrepareBootPcr done\n");
     }
     else
     {
@@ -765,10 +724,8 @@ KiInitializeSystem(_Inout_ PLOADER_PARAMETER_BLOCK LoaderBlock)
          * by KeStartAllProcessors and passed via Arm64Block->PcrPage.
          * Addresses are already in kernel VA space - no KSEG0 conversion needed.
          */
-        KiArm64RawPuts("[KiInitSys] AP path (skip PrepareBootPcr)\n");
     }
 
-    KiArm64RawPuts("[KiInitSys] LoaderBlock OK\n");
     KeLoaderBlock = LoaderBlock;
     Arm64Block = &LoaderBlock->u.Arm64;
 
@@ -827,22 +784,18 @@ KiInitializeSystem(_Inout_ PLOADER_PARAMETER_BLOCK LoaderBlock)
 
     ProcessorNumber = (ULONG)(UCHAR)KeNumberProcessors;
 
-    KiArm64RawPuts("[KiInitSys] getting Pcr\n");
     Pcr = (Arm64Block->PcrPage != 0) ?
           (PKIPCR)(ULONG_PTR)Arm64Block->PcrPage :
           KeArm64CurrentPcr;
 
-    KiArm64RawPuts("[KiInitSys] Pcr obtained\n");
     if (Pcr != NULL)
     {
-        KiArm64RawPuts("[KiInitSys] calling KiInitializePcr\n");
         KiInitializePcr(ProcessorNumber,
                         Pcr,
                         InitialThread,
                         TRUE,
                         (PVOID)(ULONG_PTR)Arm64Block->PanicStack,
                         (PVOID)(ULONG_PTR)Arm64Block->InterruptStack);
-        KiArm64RawPuts("[KiInitSys] KiInitializePcr done\n");
 
         if (LoaderBlock->KernelStack != 0)
         {
@@ -850,9 +803,7 @@ KiInitializeSystem(_Inout_ PLOADER_PARAMETER_BLOCK LoaderBlock)
         }
     }
 
-    KiArm64RawPuts("[KiInitSys] calling ExInitPoolLookasidePointers\n");
     ExInitPoolLookasidePointers();
-    KiArm64RawPuts("[KiInitSys] ExInitPoolLookasidePointers done\n");
 
     if (ProcessorNumber == 0)
     {
@@ -866,12 +817,9 @@ KiInitializeSystem(_Inout_ PLOADER_PARAMETER_BLOCK LoaderBlock)
         }
     }
 
-    KiArm64RawPuts("[KiInitSys] calling HalInitializeProcessor\n");
     HalInitializeProcessor(ProcessorNumber, KeLoaderBlock);
-    KiArm64RawPuts("[KiInitSys] HalInitializeProcessor done\n");
     /* Skip DbgPrintEx for now, KD not yet initialized */
 
-    KiArm64RawPuts("[KiInitSys] CPU features config start\n");
     /*
      * ARM64: Configure CPU features based on hardware capabilities.
      * Use ID registers to detect features before disabling unsupported ones.
@@ -909,7 +857,6 @@ KiInitializeSystem(_Inout_ PLOADER_PARAMETER_BLOCK LoaderBlock)
             NewSctlr = (Sctlr & ~(1ULL << 1)) | (1ULL << 3) | (1ULL << 4);
             if (NewSctlr != Sctlr)
             {
-                KiArm64RawPuts("[KiInitSys] normalizing SCTLR_EL1 alignment bits\n");
                 __asm__ __volatile__("msr sctlr_el1, %0" :: "r"(NewSctlr) : "memory");
                 __asm__ __volatile__("isb" ::: "memory");
             }
@@ -1056,7 +1003,6 @@ KiInitializeSystem(_Inout_ PLOADER_PARAMETER_BLOCK LoaderBlock)
             NewSctlr = (Sctlr & ~(1ULL << 1)) | (1ULL << 3) | (1ULL << 4);
             if (NewSctlr != Sctlr)
             {
-                KiArm64RawPuts("[KiInitSys] AP normalizing SCTLR_EL1 alignment bits\n");
                 __asm__ __volatile__("msr sctlr_el1, %0" :: "r"(NewSctlr) : "memory");
                 __asm__ __volatile__("isb" ::: "memory");
             }
@@ -1121,7 +1067,6 @@ KiInitializeSystem(_Inout_ PLOADER_PARAMETER_BLOCK LoaderBlock)
                 ProcessorNumber);
     }
 
-    KiArm64RawPuts("[KiInitSys] CPU features config done\n");
 
     ProcessorMask = (Pcr != NULL) ?
                     Pcr->Prcb.SetMember :
@@ -1130,13 +1075,10 @@ KiInitializeSystem(_Inout_ PLOADER_PARAMETER_BLOCK LoaderBlock)
     KeActiveProcessors |= ProcessorMask;
     KeNumberProcessors++;
 
-    KiArm64RawPuts("[KiInitSys] calling KfRaiseIrql(HIGH_LEVEL)\n");
     KfRaiseIrql(HIGH_LEVEL);
-    KiArm64RawPuts("[KiInitSys] KfRaiseIrql done\n");
 
     if (ProcessorNumber == 0)
     {
-        KiArm64RawPuts("[KiInitSys] Pre-seed core modules\n");
         /* Pre-seed core modules for KD banner parity (mirror amd64 minimal) */
         {
             PLIST_ENTRY Entry;
@@ -1154,28 +1096,20 @@ KiInitializeSystem(_Inout_ PLOADER_PARAMETER_BLOCK LoaderBlock)
                 InsertTailList(&PsLoadedModuleList, &LdrCoreCopy[i].InLoadOrderLinks);
             }
         }
-        KiArm64RawPuts("[KiInitSys] Pre-seed done\n");
 
-        KiArm64RawPuts("[KiInitSys] calling KeInitInterrupts\n");
         /* Initialize interrupts (arch/HAL stub), then install final vectors */
         KeInitInterrupts();
-        KiArm64RawPuts("[KiInitSys] KeInitInterrupts done\n");
         /* Install final exception vectors and configure traps before KD */
-        KiArm64RawPuts("[KiInitSys] calling KeInitExceptions\n");
         KeInitExceptions();
-        KiArm64RawPuts("[KiInitSys] KeInitExceptions done\n");
 
         /*
          * Initialize debug register counts from ID_AA64DFR0_EL1 before KD init.
          * This must happen before any code path that calls KiSaveProcessorControlState,
          * which occurs during KD symbol loading.
          */
-        KiArm64RawPuts("[KiInitSys] calling KiInitializeDebugRegisterCounts\n");
         KiInitializeDebugRegisterCounts();
-        KiArm64RawPuts("[KiInitSys] calling KdInitSystem\n");
 
         KdInitSystem(0, KeLoaderBlock);
-        KiArm64RawPuts("[KiInitSys] KdInitSystem done\n");
 
         /* KD is present right after banner; continue */
         if (KdPollBreakIn())
@@ -1184,19 +1118,16 @@ KiInitializeSystem(_Inout_ PLOADER_PARAMETER_BLOCK LoaderBlock)
         }
     }
 
-    KiArm64RawPuts("[KiInitSys] lowering IRQL to DISPATCH_LEVEL\n");
     KfLowerIrql(DISPATCH_LEVEL);
     if (Pcr != NULL)
     {
         Pcr->CurrentIrql = DISPATCH_LEVEL;
     }
-    KiArm64RawPuts("[KiInitSys] IRQL lowered\n");
 
     /*
      * Defer FP trap-on-first-use activation until later scheduling paths.
      * Early KiInitializeKernel execution still relies on fully enabled FP.
      */
-    KiArm64RawPuts("[KiInitSys] FP trap-on-first-use deferred\n");
 
     if (Pcr == NULL)
     {
@@ -1205,18 +1136,15 @@ KiInitializeSystem(_Inout_ PLOADER_PARAMETER_BLOCK LoaderBlock)
 
     if ((InitialThread != NULL) && (Pcr != NULL))
     {
-        KiArm64RawPuts("[KiInitSys] calling KiInitializeKernel\n");
         KiInitializeKernel((PKPROCESS)(ULONG_PTR)LoaderBlock->Process,
                            InitialThread,
                            (PVOID)(ULONG_PTR)LoaderBlock->KernelStack,
                            &Pcr->Prcb,
                            (CCHAR)ProcessorNumber,
                            KeLoaderBlock);
-        KiArm64RawPuts("[KiInitSys] KiInitializeKernel returned\n");
     }
     else
     {
-        KiArm64RawPuts("[KiInitSys] SKIP KiInitializeKernel (InitialThread/Pcr NULL)\n");
     }
 
     {

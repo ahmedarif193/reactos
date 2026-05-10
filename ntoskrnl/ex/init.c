@@ -33,6 +33,14 @@ MmArmInitSystem(
 VOID
 NTAPI
 ExArchPostHalInitSystemPhase0(VOID);
+
+VOID
+NTAPI
+ExArchPostHalInitSystemPhase1(VOID);
+
+VOID
+NTAPI
+KeReenableTimerInterrupt(VOID);
 #endif
 
 typedef struct _INIT_BUFFER
@@ -1949,6 +1957,12 @@ Phase1InitializationDiscard(IN PVOID Context)
 
     /* Do Phase 1 HAL Initialization */
     if (!HalInitSystem(1, LoaderBlock)) KeBugCheck(HAL1_INITIALIZATION_FAILED);
+
+#if defined(_M_ARM64)
+    KeReenableTimerInterrupt();
+    ExArchPostHalInitSystemPhase1();
+#endif
+
     CommandLine = (LoaderBlock->LoadOptions ? _strupr(LoaderBlock->LoadOptions) : NULL);
 
     /* Check if GUI Boot is enabled */
