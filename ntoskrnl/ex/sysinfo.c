@@ -682,12 +682,15 @@ QSI_DEF(SystemProcessorInformation)
 QSI_DEF(SystemPerformanceInformation)
 {
     LONG i;
+#if defined(_M_ARM64)
+    ULONGLONG IdleKernel;
+#else
     ULONG IdleUser, IdleKernel;
+    PEPROCESS TheIdleProcess;
+#endif
     PKPRCB Prcb;
     PSYSTEM_PERFORMANCE_INFORMATION Spi
         = (PSYSTEM_PERFORMANCE_INFORMATION) Buffer;
-
-    PEPROCESS TheIdleProcess;
 
     *ReqSize = sizeof(SYSTEM_PERFORMANCE_INFORMATION);
 
@@ -697,10 +700,29 @@ QSI_DEF(SystemPerformanceInformation)
         return STATUS_INFO_LENGTH_MISMATCH;
     }
 
+#if defined(_M_ARM64)
+    /*
+     * ARM64 keeps idle runtime on each per-CPU idle thread. Sample the
+     * monotonic counters directly; this is intentionally not a locked
+     * cross-CPU freeze, matching the racy nature of performance counters.
+     */
+    IdleKernel = 0;
+    for (i = 0; i < KeNumberProcessors; i++)
+    {
+        Prcb = KiProcessorBlock[i];
+        if (Prcb && Prcb->IdleThread)
+        {
+            IdleKernel += ReadULongAcquire(&Prcb->IdleThread->KernelTime);
+        }
+    }
+
+    Spi->IdleProcessTime.QuadPart = (LONGLONG)(IdleKernel * (ULONGLONG)KeMaximumIncrement);
+#else
     TheIdleProcess = PsIdleProcess;
 
     IdleKernel = KeQueryRuntimeProcess(&TheIdleProcess->Pcb, &IdleUser);
     Spi->IdleProcessTime.QuadPart = UInt32x32To64(IdleKernel, KeMaximumIncrement);
+#endif
     Spi->IoReadTransferCount = IoReadTransferCount;
     Spi->IoWriteTransferCount = IoWriteTransferCount;
     Spi->IoOtherTransferCount = IoOtherTransferCount;

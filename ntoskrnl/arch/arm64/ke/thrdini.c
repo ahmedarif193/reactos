@@ -303,21 +303,6 @@ KiIdleLoop(VOID)
         }
 
         /*
-         * ARM64 Idle: Skip WFE/WFI entirely and just yield CPU time.
-         *
-         * Under Apple HVF, both WFE and WFI have issues with timer interrupts:
-         * - WFE: Timer interrupts fire sporadically (once per ~second instead of 100Hz)
-         * - WFI: Same issue - the vCPU timer doesn't wake reliably
-         *
-         * The root cause appears to be that QEMU HVF doesn't properly virtualize
-         * the ARM generic timer when the vCPU is in a low-power state.
-         *
-         * For now, use a simple busy-wait with yield to allow other vCPUs to run.
-         * This consumes more host CPU but ensures timers fire reliably.
-         *
-         * TODO: Investigate if there's a QEMU HVF flag or configuration to fix this.
-         */
-        /*
          * KiInitializeKernel enters the idle loop after raising to HIGH_LEVEL.
          * On ARM64, clearing DAIF.I alone is not enough because the GIC PMR may
          * still be masking every interrupt. Drop the logical IRQL before opening
@@ -329,8 +314,7 @@ KiIdleLoop(VOID)
         }
 
         _enable();
-        KeStallExecutionProcessor(1000); /* 1ms delay */
-        __asm__ __volatile__("yield" ::: "memory");
+        __asm__ __volatile__("wfe" ::: "memory");
         _disable();
     }
 }

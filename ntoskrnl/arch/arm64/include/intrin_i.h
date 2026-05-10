@@ -13,6 +13,14 @@ VOID
 KeSetCurrentIrql(
     _In_ KIRQL NewIrql)
 {
+    PKIPCR Pcr = KeGetPcr();
+
+    if (Pcr != NULL)
+    {
+        Pcr->CurrentIrql = NewIrql;
+        return;
+    }
+
     KeArm64CurrentIrql = NewIrql;
 }
 

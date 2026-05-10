@@ -42,8 +42,8 @@
 
 /*
  * ARM64: IRQL is stored in Pcr->CurrentIrql (read via TPIDR_EL1 by KeGetCurrentIrql macro).
- * KeArm64CurrentIrql is a shadow that KiSetCurrentIrql always writes in parallel,
- * kept so that the irql.c exported function can fall back to it before TPIDR_EL1 init.
+ * KeArm64CurrentIrql is kept only as an early-boot fallback before TPIDR_EL1 points
+ * at the current PCR.
  */
 extern KIRQL KeArm64CurrentIrql;
 
@@ -107,9 +107,10 @@ KiSetCurrentIrql(
     if (Pcr != NULL)
     {
         Pcr->CurrentIrql = Irql;
+        return;
     }
 
-    /* Always update global as fallback for early boot */
+    /* Fallback for very early boot (before TPIDR_EL1 init) */
     KeArm64CurrentIrql = Irql;
 }
 
@@ -158,6 +159,20 @@ KiTraceSerrorPolicy(
  * Until the ARM64 port has validated SError attribution and deliberate recovery
  * behavior, IRQL transitions should only control IRQ/FIQ delivery here.
  */
+FORCEINLINE
+BOOLEAN
+KiIrqlTransitionNeedsGicPmrUpdate(
+    _In_ KIRQL OldIrql,
+    _In_ KIRQL NewIrql)
+{
+    /*
+     * PASSIVE/APC/DISPATCH all use the unmasked GIC PMR value. Avoid the
+     * system-register/MMIO PMR write on normal thread and spinlock transitions,
+     * while still letting the DAIF/SError policy below run.
+     */
+    return !((OldIrql <= DISPATCH_LEVEL) && (NewIrql <= DISPATCH_LEVEL));
+}
+
 FORCEINLINE
 VOID
 KiUpdateDaifForIrql(
@@ -275,6 +290,7 @@ KiApplyIrqMaskForIrqlTransition(
     _In_ KIRQL OldIrql,
     _In_ KIRQL NewIrql)
 {
+    BOOLEAN NeedsPmrUpdate;
 
     /*
      * EARLY BOOT GUARD: Before HAL is initialized, use DAIF masking exclusively.
@@ -415,8 +431,12 @@ KiApplyIrqMaskForIrqlTransition(
      * according to the GIC priority mask. Code that needs interrupts disabled
      * must use proper IRQL raising (KfRaiseIrql to HIGH_LEVEL), not just _disable().
      */
-    HalSetGicPriorityMask(NewIrql);
-    ARM64_SYNC_BARRIER();
+    NeedsPmrUpdate = KiIrqlTransitionNeedsGicPmrUpdate(OldIrql, NewIrql);
+    if (NeedsPmrUpdate)
+    {
+        HalSetGicPriorityMask(NewIrql);
+        ARM64_SYNC_BARRIER();
+    }
 
     /*
      * Enforce SError policy on every non-HIGH_LEVEL transition.
@@ -435,8 +455,11 @@ KiApplyIrqMaskForIrqlTransition(
     }
     else if (NewIrql > OldIrql)
     {
-        KiUpdateSerrorMaskOnlyForIrql(NewIrql);
-        ARM64_SYNC_BARRIER();
+        if (NeedsPmrUpdate)
+        {
+            KiUpdateSerrorMaskOnlyForIrql(NewIrql);
+            ARM64_SYNC_BARRIER();
+        }
         KiTraceSerrorPolicy("raise", OldIrql, NewIrql);
     }
 }
@@ -688,6 +711,8 @@ KfLowerIrql(
      */
     if (NewIrql < APC_LEVEL && OldIrql >= APC_LEVEL)
     {
+        PKTHREAD Thread = KeGetCurrentThread();
+
         /*
          * Only deliver APCs when interrupts are enabled. During
          * KeThawExecution (KdExitDebugger path), KeLowerIrql is called
@@ -696,14 +721,13 @@ KfLowerIrql(
          * Also skip if lowering from HIGH_LEVEL (debugger/freeze context)
          * to avoid re-entrancy in the KD path.
          */
-        ULONG64 Daif;
-        __asm__ __volatile__("mrs %0, daif" : "=r"(Daif));
-        if (!(Daif & (1ULL << 7)))  /* Check DAIF.I (bit 7) - IRQ not masked */
+        if (Thread &&
+            Thread->ApcState.KernelApcPending &&
+            !Thread->SpecialApcDisable)
         {
-            PKTHREAD Thread = KeGetCurrentThread();
-            if (Thread &&
-                Thread->ApcState.KernelApcPending &&
-                !Thread->SpecialApcDisable)
+            ULONG64 Daif;
+            __asm__ __volatile__("mrs %0, daif" : "=r"(Daif));
+            if (!(Daif & (1ULL << 7)))  /* Check DAIF.I (bit 7) - IRQ not masked */
             {
                 /* Deliver kernel APCs at APC_LEVEL */
                 KiSetCurrentIrql(APC_LEVEL);
