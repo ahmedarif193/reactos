@@ -489,6 +489,22 @@ static BOOLEAN Arm64PtAllocationsApplied = FALSE;
 
 VOID Arm64ApplyDeferredPageTableMemoryTypes(VOID);
 
+extern PFN_NUMBER MmLowestPhysicalPage;
+extern PFN_NUMBER MmHighestPhysicalPage;
+
+static BOOLEAN
+Arm64LookupTableCoversPageTableAllocation(EFI_PHYSICAL_ADDRESS Base, UINTN Pages)
+{
+    PFN_NUMBER StartPage = (PFN_NUMBER)(Base >> PAGE_SHIFT);
+    PFN_NUMBER EndPage = StartPage + Pages;
+    PFN_NUMBER LowestPage = MmLowestPhysicalPage;
+    PFN_NUMBER LookupEndPage = LowestPage + MmGetTotalPagesInLookupTable();
+
+    return Pages != 0 &&
+           StartPage >= LowestPage &&
+           EndPage <= LookupEndPage;
+}
+
 static VOID
 Arm64RecordPageTableAllocation(EFI_PHYSICAL_ADDRESS Base, UINTN Pages)
 {
@@ -513,6 +529,15 @@ Arm64RecordPageTableAllocation(EFI_PHYSICAL_ADDRESS Base, UINTN Pages)
         return;
     }
 
+    if (PageLookupTableAddress && Arm64PtAllocationsApplied)
+    {
+        if (Arm64LookupTableCoversPageTableAllocation(Base, Pages))
+        {
+            MmSetMemoryType((PVOID)(ULONG_PTR)Base, Pages * PAGE_SIZE, LoaderMemoryData);
+        }
+        return;
+    }
+
     if (Arm64PtAllocationCount < ARRAYSIZE(Arm64PtAllocations))
     {
         Arm64PtAllocations[Arm64PtAllocationCount].Base = Base;
@@ -524,12 +549,6 @@ Arm64RecordPageTableAllocation(EFI_PHYSICAL_ADDRESS Base, UINTN Pages)
         ERR("ARM64: PT allocation tracking overflow (base=0x%llx pages=%llu)\n",
             (unsigned long long)Base,
             (unsigned long long)Pages);
-    }
-
-    if (PageLookupTableAddress && Arm64PtAllocationsApplied)
-    {
-        MmSetMemoryType((PVOID)(ULONG_PTR)Base, Pages * PAGE_SIZE, LoaderMemoryData);
-        return;
     }
 
     if (PageLookupTableAddress && !Arm64PtAllocationsApplied)
@@ -562,6 +581,12 @@ Arm64ApplyDeferredPageTableMemoryTypes(VOID)
     {
         if (Arm64PtAllocations[i].Pages == 0)
             continue;
+
+        if (!Arm64LookupTableCoversPageTableAllocation(Arm64PtAllocations[i].Base,
+                                                       Arm64PtAllocations[i].Pages))
+        {
+            continue;
+        }
 
         MmSetMemoryType((PVOID)(ULONG_PTR)Arm64PtAllocations[i].Base,
                         Arm64PtAllocations[i].Pages * PAGE_SIZE,
@@ -3316,7 +3341,6 @@ Arm64DumpL2PoolState(VOID)
     }
 }
 
-/* Direct PL011 UART for post-ExitBootServices debugging */
 VOID Arm64EnablePageTables(VOID)
 {
     // TRACE("ARM64: Enabling page tables (Safe Switch: MMU Off -> Update -> MMU On)\n");
@@ -3326,9 +3350,6 @@ VOID Arm64EnablePageTables(VOID)
     int el = get_effective_el();
     BOOLEAN el12 = use_el12_registers();
     UINT64 sctlr = 0;
-
-
-    Pl011RawPuts("[PT_EN] entry\n");
 
     if (!page_tables_initialized)
         ensure_page_tables_initialized();
@@ -3354,7 +3375,6 @@ VOID Arm64EnablePageTables(VOID)
 
     /* Compose TCR after ensuring final EL */
     tcr = get_tcr(NULL, NULL);
-    Pl011RawPuts("[PT_EN] tcr\n");
 
     /* 1. Read current SCTLR and Disable MMU (M) and Cache (C) */
     // TRACE("ARM64: PT_EN: Reading SCTLR\n");
@@ -3389,7 +3409,6 @@ VOID Arm64EnablePageTables(VOID)
         __asm__ volatile("msr sctlr_el2, %0" :: "r"(sctlr_off) : "memory");
     }
     ARM64_ISB();
-    Pl011RawPuts("[PT_EN] mmu-off\n");
     // TRACE("ARM64: PT_EN: MMU Disabled\n");
 
     /* 2. Update Translation Registers (MAIR first, then TCR, then TTBRs) */
@@ -3401,17 +3420,6 @@ VOID Arm64EnablePageTables(VOID)
      */
     if (!arm64_l0_page_table || !arm64_kernel_l0_table)
     {
-        {
-            const char *hex = "0123456789ABCDEF";
-            UINT64 val = (UINT64)(uintptr_t)arm64_l0_page_table;
-            for (int i = 60; i >= 0; i -= 4) Pl011RawPutc(hex[(val >> i) & 0xF]);
-        }
-        {
-            const char *hex = "0123456789ABCDEF";
-            UINT64 val = (UINT64)(uintptr_t)arm64_kernel_l0_table;
-            for (int i = 60; i >= 0; i -= 4) Pl011RawPutc(hex[(val >> i) & 0xF]);
-        }
-
         /*
          * Emergency fallback: use static storage for ALL page tables.
          * We must initialize ALL page table pointers, not just L0 tables,
@@ -3422,13 +3430,6 @@ VOID Arm64EnablePageTables(VOID)
          *   - arm64_kernel_l2_tables, arm64_kernel_l3_tables
          */
         use_static_page_tables();
-
-        {
-            const char *hex = "0123456789ABCDEF";
-            UINT64 val = (UINT64)(uintptr_t)arm64_l0_page_table;
-            for (int i = 60; i >= 0; i -= 4) Pl011RawPutc(hex[(val >> i) & 0xF]);
-        }
-        Pl011RawPuts("\n");
 
         /* If still NULL after fallback, we cannot proceed */
         if (!arm64_l0_page_table || !arm64_kernel_l0_table ||
@@ -3498,7 +3499,6 @@ VOID Arm64EnablePageTables(VOID)
 
     ARM64_DSB_ISH();
     ARM64_ISB();
-    Pl011RawPuts("[PT_EN] ttbr\n");
     // TRACE("ARM64: PT_EN: TLB Invalidated\n");
 
     /*
@@ -3572,7 +3572,6 @@ VOID Arm64EnablePageTables(VOID)
         ARM64_DSB_ISH();
     }
     /* ========== END CRITICAL REGION MAPPING ========== */
-    Pl011RawPuts("[PT_EN] critical-mapped\n");
 
     /* ========== DIAGNOSTIC: Verify identity mapping before MMU enable ========== */
     /*
@@ -3595,43 +3594,11 @@ VOID Arm64EnablePageTables(VOID)
 
         if (!mapping_valid)
         {
-            /* Print the PC value for debugging */
-            const char *hex = "0123456789ABCDEF";
-            for (int i = 60; i >= 0; i -= 4) Pl011RawPutc(hex[(current_pc >> i) & 0xF]);
-            Pl011RawPuts("\n");
             /* Don't proceed - hang here */
             for (;;)
                 __asm__ volatile("wfi");
         }
-        else
-        {
-        }
 
-        /* Also verify exception vector is mapped */
-        {
-            extern UINT8 arm64_exception_vectors[];
-            UINT64 vbar = (UINT64)(uintptr_t)arm64_exception_vectors;
-
-            if (!Arm64VerifyIdentityMapping(vbar, NULL, NULL))
-            {
-            }
-            else
-            {
-            }
-        }
-
-        /* Verify stack pointer is identity-mapped */
-        {
-            UINT64 sp;
-            __asm__ volatile("mov %0, sp" : "=r"(sp));
-
-            if (!Arm64VerifyIdentityMapping(sp, NULL, NULL))
-            {
-            }
-            else
-            {
-            }
-        }
     }
     /* ========== END DIAGNOSTIC ========== */
 
@@ -3660,7 +3627,6 @@ VOID Arm64EnablePageTables(VOID)
         __asm__ volatile("msr sctlr_el2, %0" :: "r"(sctlr_on) : "memory");
     }
     ARM64_ISB();
-    Pl011RawPuts("[PT_EN] mmu-on\n");
 
     // TRACE("ARM64: Page tables enabled (SCTLR=0x%llx)\n", (unsigned long long)sctlr_on);
     // TRACE("ARM64: PT_EN: End\n");

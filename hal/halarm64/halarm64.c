@@ -2025,6 +2025,19 @@ static ULONG_PTR HalpGicrCpuBase[MAXIMUM_PROCESSORS];
 static BOOLEAN HalpUseIdentityMapping = TRUE;
 static ULONG HalpUsedAllocDescriptors;
 static MEMORY_ALLOCATION_DESCRIPTOR HalpAllocationDescriptorArray[64];
+static BOOLEAN HalpGicPhase0Complete;
+
+#define HALP_ARM64_MAX_DEFERRED_INTERRUPTS 32
+
+typedef struct _HALP_ARM64_DEFERRED_INTERRUPT
+{
+    BOOLEAN Valid;
+    ULONG Vector;
+    KIRQL Irql;
+    KINTERRUPT_MODE InterruptMode;
+} HALP_ARM64_DEFERRED_INTERRUPT, *PHALP_ARM64_DEFERRED_INTERRUPT;
+
+static HALP_ARM64_DEFERRED_INTERRUPT HalpArm64DeferredInterrupts[HALP_ARM64_MAX_DEFERRED_INTERRUPTS];
 
 /*
  * PSCI (Power State Coordination Interface) definitions for ARM64.
@@ -2127,6 +2140,7 @@ volatile ULONG *HalpMmio(ULONG_PTR Base, ULONG Offset);
 ULONGLONG HalpMmioRead64(ULONG_PTR Base, ULONG Offset);
 VOID HalpMmioWrite64(ULONG_PTR Base, ULONG Offset, ULONGLONG Value);
 static __inline ULONG_PTR HalpGicrBase(_In_ ULONG Cpu);
+static VOID HalpArm64ApplyDeferredInterruptEnables(VOID);
 
 /* ARM64 system register accessors - forward declarations */
 FORCEINLINE ULONGLONG HalpReadMpidr(void);
@@ -5171,8 +5185,11 @@ HalInitSystem(
      * at which point interrupts can safely be processed.
      */
     OldIrql = KfRaiseIrql(HIGH_LEVEL);
-
     HalpArm64SelectGicInterface(LoaderBlock);
+    DPRINT1("[HAL][INIT0] selected GIC sysregs=%u gicd=0x%llx gicc=0x%llx\n",
+            HalpGicUseSysRegs,
+            HalpGicdBase,
+            HalpGiccBase);
 
     /* Probe GIC capabilities before touching CPU IF */
     {
@@ -5409,6 +5426,10 @@ HalInitSystem(
         }
     }
 
+    HalpGicPhase0Complete = TRUE;
+    HalpArm64ApplyDeferredInterruptEnables();
+    DPRINT1("[HAL][INIT0] phase0 GIC ready\n");
+
     /*
      * Initialize system time increment values for the scheduler tick.
      * ARM64 generic timer targets 100 Hz (10ms period = 100,000 100ns units).
@@ -5416,6 +5437,7 @@ HalInitSystem(
      * This matches the configuration in KiArm64StartTimer().
      */
     KeSetTimeIncrement(100000, 10000);
+    DPRINT1("[HAL][INIT0] KeSetTimeIncrement complete\n");
 
     /*
      * Set up HAL dispatch table callbacks.
@@ -6039,6 +6061,37 @@ HalEnableSystemInterrupt(
     UCHAR priority;
     UNREFERENCED_PARAMETER(InterruptMode);
 
+    if (!HalpGicPhase0Complete)
+    {
+        for (ULONG Index = 0; Index < RTL_NUMBER_OF(HalpArm64DeferredInterrupts); ++Index)
+        {
+            PHALP_ARM64_DEFERRED_INTERRUPT Entry = &HalpArm64DeferredInterrupts[Index];
+
+            if (Entry->Valid && Entry->Vector == Vector)
+            {
+                Entry->Irql = Irql;
+                Entry->InterruptMode = InterruptMode;
+                return TRUE;
+            }
+        }
+
+        for (ULONG Index = 0; Index < RTL_NUMBER_OF(HalpArm64DeferredInterrupts); ++Index)
+        {
+            PHALP_ARM64_DEFERRED_INTERRUPT Entry = &HalpArm64DeferredInterrupts[Index];
+
+            if (!Entry->Valid)
+            {
+                Entry->Vector = Vector;
+                Entry->Irql = Irql;
+                Entry->InterruptMode = InterruptMode;
+                Entry->Valid = TRUE;
+                return TRUE;
+            }
+        }
+
+        return FALSE;
+    }
+
     /*
      * SGIs (0-15) are always enabled in GICv3 and cannot be enabled/disabled.
      * They are configured during redistributor initialization and are permanently enabled.
@@ -6172,6 +6225,30 @@ HalEnableSystemInterrupt(
             Vector, Irql, priority);
 
     return TRUE;
+}
+
+static VOID
+HalpArm64ApplyDeferredInterruptEnables(VOID)
+{
+    for (ULONG Index = 0; Index < RTL_NUMBER_OF(HalpArm64DeferredInterrupts); ++Index)
+    {
+        PHALP_ARM64_DEFERRED_INTERRUPT Entry = &HalpArm64DeferredInterrupts[Index];
+
+        if (!Entry->Valid)
+        {
+            continue;
+        }
+
+        if ((Entry->Vector == 27) || (Entry->Vector == 30))
+        {
+            continue;
+        }
+
+        (VOID)HalEnableSystemInterrupt(Entry->Vector,
+                                       Entry->Irql,
+                                       Entry->InterruptMode);
+        Entry->Valid = FALSE;
+    }
 }
 
 VOID
@@ -7768,7 +7845,7 @@ HalInitializeProcessor(
          * The BSP already configured the distributor's SGI/PPI bank in HalInitSystem.
          * Here we just need to enable this CPU's interface.
          */
-        if (HalpGiccBase != 0)
+        if ((ProcessorNumber != 0) && (HalpGiccBase != 0))
         {
             ULONG GiccCtlr = HalpGicv2ForceGroup0 ? 0x1 : 0x3;
             *HalpMmio((ULONG_PTR)HalpGiccBase, GICC_PMR) = 0xFF;

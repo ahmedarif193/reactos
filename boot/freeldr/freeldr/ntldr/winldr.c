@@ -17,7 +17,6 @@
 
 #if defined(_M_ARM64)
 #include <arch/arm64/arm64.h>          // For Arm64ClearIdentityMappings
-#include <reactos/arm64/early_uart.h>  // For EarlyUart* (post-ExitBootServices logging)
 #endif
 
 #include <debug.h>
@@ -1602,22 +1601,17 @@ LoadAndBootWindowsCommon(
 
     /* Set processor context */
     WinLdrSetProcessorContext(OperatingSystemVersion);
-    EarlyUartPuts("[winldr] after context\n");
 
     /* Save final value of LoaderPagesSpanned */
-    EarlyUartPuts("[winldr] before pages spanned\n");
     WinLdrSystemBlock->Extension.LoaderPagesSpanned = FinalLoaderPagesSpanned;
-    EarlyUartPuts("[winldr] after pages spanned\n");
 
     TRACE("Hello from paged mode, KiSystemStartup %p, LoaderBlockVA %p!\n",
           KiSystemStartup, LoaderBlockVA);
 
     /* Zero KI_USER_SHARED_DATA page */
     {
-        EarlyUartPuts("[winldr] before shared data zero\n");
         PVOID UserSharedData = (PVOID)KI_USER_SHARED_DATA;
         RtlZeroMemory(UserSharedData, MM_PAGE_SIZE);
-        EarlyUartPuts("[winldr] after shared data zero\n");
     }
 
 #if !defined(_M_ARM64)
@@ -1626,19 +1620,6 @@ LoadAndBootWindowsCommon(
 #ifndef _M_AMD64
     WinLdrpDumpArcDisks(LoaderBlockVA);
 #endif
-#endif
-
-#if defined(_M_ARM64)
-    EarlyUartPuts("[winldr] jumping to kernel 0x");
-    EarlyUartPutHex((UINT64)(ULONG_PTR)KiSystemStartup, 16);
-    EarlyUartPuts(" LoaderBlockVA 0x");
-    EarlyUartPutHex((UINT64)(ULONG_PTR)LoaderBlockVA, 16);
-    EarlyUartPuts(" KernelStack 0x");
-    EarlyUartPutHex((UINT64)LoaderBlock->KernelStack, 16);
-    EarlyUartPutc('\n');
-#else
-    TRACE("[winldr] jumping to kernel %p, LoaderBlockVA %p\n",
-          KiSystemStartup, LoaderBlockVA);
 #endif
 
 #if defined(_M_ARM64)

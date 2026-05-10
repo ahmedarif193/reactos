@@ -17,10 +17,51 @@
 #undef MmSystemRangeStart
 
 #if defined(_M_ARM64)
+#define MI_ARM64_PFN_ZERO_RUN_LIMIT 256
+
 VOID
 NTAPI
 MiArm64BuildPfnDatabaseFromPages(
     _In_ PLOADER_PARAMETER_BLOCK LoaderBlock);
+
+static VOID
+MiArm64ZeroMemoryFast(
+    _Out_writes_bytes_all_(Size) PVOID BaseAddress,
+    _In_ SIZE_T Size)
+{
+    ULONG_PTR Address = (ULONG_PTR)BaseAddress;
+    ULONG_PTR End = Address + Size;
+    ULONG_PTR BlockSize;
+    ULONG64 Dczid;
+
+    __asm__ __volatile__("mrs %0, dczid_el0" : "=r"(Dczid));
+    if (Dczid & (1ULL << 4))
+    {
+        RtlZeroMemory(BaseAddress, Size);
+        return;
+    }
+
+    BlockSize = 4UL << (Dczid & 0xFULL);
+
+    while ((Address < End) && ((Address & (BlockSize - 1)) != 0))
+    {
+        *(volatile UCHAR *)Address = 0;
+        Address++;
+    }
+
+    while ((Address + BlockSize) <= End)
+    {
+        __asm__ __volatile__("dc zva, %0" :: "r"(Address) : "memory");
+        Address += BlockSize;
+    }
+
+    if (Address < End)
+    {
+        RtlZeroMemory((PVOID)Address, End - Address);
+    }
+
+    __asm__ __volatile__("dsb ishst" ::: "memory");
+}
 #endif
 
 /* GLOBALS ********************************************************************/
@@ -709,11 +750,28 @@ MiMapPfnDatabase(IN PLOADER_PARAMETER_BLOCK LoaderBlock)
     PMEMORY_ALLOCATION_DESCRIPTOR MdBlock;
     PMMPTE PointerPte, LastPte;
     MMPTE TempPte = ValidKernelPte;
+#if defined(_M_ARM64)
+    BOOLEAN PerformedMappings = FALSE;
+    PMMPTE ZeroRunStart[MI_ARM64_PFN_ZERO_RUN_LIMIT];
+    PMMPTE ZeroRunEnd[MI_ARM64_PFN_ZERO_RUN_LIMIT];
+    PMMPTE CurrentRunStart = NULL;
+    PMMPTE CurrentRunEnd = NULL;
+    ULONG ZeroRunCount = 0;
+#endif
 
     /* Get current page data, since we won't be using MxGetNextPage as it would corrupt our state */
     FreePage = MxFreeDescriptor->BasePage;
     FreePageCount = MxFreeDescriptor->PageCount;
     PagesLeft = 0;
+
+#if defined(_M_ARM64)
+    DPRINT1("[PFNMAP] entry db=%p free=%Ix free_count=%Ix mxalloc=%Ix high=%Ix\n",
+            MmPfnDatabase,
+            FreePage,
+            FreePageCount,
+            MxPfnAllocation,
+            MmHighestPhysicalPage);
+#endif
 
     /* Loop the memory descriptors */
     NextEntry = LoaderBlock->MemoryDescriptorListHead.Flink;
@@ -776,17 +834,41 @@ MiMapPfnDatabase(IN PLOADER_PARAMETER_BLOCK LoaderBlock)
 
                 /* Write out this PTE */
                 PagesLeft++;
+#if defined(_M_ARM64)
+                PerformedMappings = TRUE;
+                *PointerPte = TempPte;
+                if ((CurrentRunStart != NULL) && (PointerPte == (CurrentRunEnd + 1)))
+                {
+                    CurrentRunEnd = PointerPte;
+                }
+                else
+                {
+                    if (CurrentRunStart != NULL)
+                    {
+                        if (ZeroRunCount >= MI_ARM64_PFN_ZERO_RUN_LIMIT)
+                        {
+                            KeBugCheckEx(MEMORY_MANAGEMENT,
+                                         0x50464E52,
+                                         ZeroRunCount,
+                                         (ULONG_PTR)CurrentRunStart,
+                                         (ULONG_PTR)PointerPte);
+                        }
+
+                        ZeroRunStart[ZeroRunCount] = CurrentRunStart;
+                        ZeroRunEnd[ZeroRunCount] = CurrentRunEnd;
+                        ZeroRunCount++;
+                    }
+
+                    CurrentRunStart = PointerPte;
+                    CurrentRunEnd = PointerPte;
+                }
+#else
                 MI_WRITE_VALID_PTE(PointerPte, TempPte);
 
                 /* Zero this page */
                 RtlZeroMemory(MiPteToAddress(PointerPte), PAGE_SIZE);
-            }
-#if defined(_M_ARM64)
-            else
-            {
-                RtlZeroMemory(MiPteToAddress(PointerPte), PAGE_SIZE);
-            }
 #endif
+            }
 
             /* Next! */
             PointerPte++;
@@ -796,9 +878,71 @@ MiMapPfnDatabase(IN PLOADER_PARAMETER_BLOCK LoaderBlock)
         NextEntry = MdBlock->ListEntry.Flink;
     }
 
+#if defined(_M_ARM64)
+    if (CurrentRunStart != NULL)
+    {
+        if (ZeroRunCount >= MI_ARM64_PFN_ZERO_RUN_LIMIT)
+        {
+            KeBugCheckEx(MEMORY_MANAGEMENT,
+                         0x50464E52,
+                         ZeroRunCount,
+                         (ULONG_PTR)CurrentRunStart,
+                         0);
+        }
+
+        ZeroRunStart[ZeroRunCount] = CurrentRunStart;
+        ZeroRunEnd[ZeroRunCount] = CurrentRunEnd;
+        ZeroRunCount++;
+    }
+
+    if (PerformedMappings)
+    {
+        __asm__ __volatile__("dsb ishst\n\ttlbi vmalle1is\n\tdsb ish\n\tisb" ::: "memory");
+        DPRINT1("[PFNMAP] mapped %Ix PFN database pages\n", PagesLeft);
+    }
+
+    {
+        ULONG Run;
+
+        DPRINT1("[PFNMAP] zero runs=%lu pages=%Ix\n", ZeroRunCount, PagesLeft);
+
+        for (Run = 0; Run < ZeroRunCount; Run++)
+        {
+            SIZE_T RunPages = (ZeroRunEnd[Run] - ZeroRunStart[Run]) + 1;
+            PVOID RunBase = MiPteToAddress(ZeroRunStart[Run]);
+            SIZE_T PagesDone = 0;
+
+            if ((Run == 0) || (RunPages >= 0x400))
+            {
+                DPRINT1("[PFNMAP] zero run=%lu base=%p pages=%Ix\n",
+                        Run,
+                        RunBase,
+                        RunPages);
+            }
+
+            while (PagesDone < RunPages)
+            {
+                SIZE_T ChunkPages = min(RunPages - PagesDone, 0x100UL);
+
+                MiArm64ZeroMemoryFast((PVOID)((ULONG_PTR)RunBase + (PagesDone << PAGE_SHIFT)),
+                                      ChunkPages << PAGE_SHIFT);
+                PagesDone += ChunkPages;
+            }
+        }
+    }
+
+    DPRINT1("[PFNMAP] zero complete\n");
+#endif
+
     /* Now update the free descriptors to consume the pages we used up during the PFN allocation loop */
     MxFreeDescriptor->BasePage = FreePage;
     MxFreeDescriptor->PageCount = FreePageCount;
+#if defined(_M_ARM64)
+    DPRINT1("[PFNMAP] exit pages_left=%Ix free=%Ix free_count=%Ix\n",
+            PagesLeft,
+            MxFreeDescriptor->BasePage,
+            MxFreeDescriptor->PageCount);
+#endif
 }
 
 CODE_SEG("INIT")
@@ -1469,7 +1613,10 @@ NTAPI
 MiAddHalIoMappings(VOID)
 {
     PVOID BaseAddress;
-    PMMPDE PointerPde, LastPde;
+    PMMPDE PointerPde;
+#if !defined(_M_ARM64)
+    PMMPDE LastPde;
+#endif
     PMMPTE PointerPte;
     ULONG j;
     PFN_NUMBER PageFrameIndex;

@@ -183,6 +183,8 @@ static ARC_STATUS IsoLookupFile(PCSTR FileName, ULONG DeviceId, PISO_FILE_INFO I
     UCHAR FileAttributes;
 
     Volume = IsoVolumes[DeviceId];
+    if (!Volume)
+        return ENODEV;
 
     /*
      * Extract the file name
