@@ -249,6 +249,8 @@ static VOID NTAPI XHCI_TransferPollDpc(PKDPC Dpc,
                                        PVOID SystemArg1,
                                        PVOID SystemArg2);
 static VOID XHCI_ScheduleTransferPoll(PXHCI_EXTENSION Extension);
+static VOID XHCI_ArmTransferPoll(PXHCI_EXTENSION Extension, PXHCI_TRANSFER Transfer);
+static VOID XHCI_DisarmTransferPoll(PXHCI_EXTENSION Extension, PXHCI_TRANSFER Transfer);
 static VOID XHCI_QueueEp0StallReset(PXHCI_EXTENSION Extension, PXHCI_ENDPOINT Endpoint);
 static MPSTATUS XHCI_WaitForEp0StallReset(PXHCI_EXTENSION Extension, PXHCI_ENDPOINT Endpoint);
 static VOID XHCI_TraceCommandRingState(PXHCI_EXTENSION Extension,
@@ -2261,7 +2263,7 @@ XHCI_GetDmaCacheType(
     if (Extension && (Extension->Quirks & XHCI_QUIRK_NON_COHERENT_DMA))
         return MmNonCached;
 
-    return MmCached;
+    return MmNonCached;
 }
 
 static MPSTATUS
@@ -2907,7 +2909,6 @@ XHCI_ConfigureSlotEndpoint(
      */
     Endpoint->InterruptTarget = 0;
 
-    XHCI_RingEndpointDoorbell(Extension, Slot->SlotId, EndpointId, 0);
     if (ExpandAddFlags)
     {
         UCHAR Id;
@@ -5938,6 +5939,40 @@ XHCI_ScheduleTransferPoll(
 
 static
 VOID
+XHCI_ArmTransferPoll(
+    _Inout_ PXHCI_EXTENSION Extension,
+    _Inout_ PXHCI_TRANSFER Transfer)
+{
+    if (!Extension || !Transfer)
+        return;
+
+    if (Transfer->Flags & XHCI_TRANSFER_FLAG_NEEDS_POLL)
+        return;
+
+    Transfer->Flags |= XHCI_TRANSFER_FLAG_NEEDS_POLL;
+    if (InterlockedIncrement(&Extension->TransferPollCounter) == 1)
+        XHCI_ScheduleTransferPoll(Extension);
+}
+
+static
+VOID
+XHCI_DisarmTransferPoll(
+    _Inout_ PXHCI_EXTENSION Extension,
+    _Inout_ PXHCI_TRANSFER Transfer)
+{
+    if (!Extension || !Transfer)
+        return;
+
+    if (!(Transfer->Flags & XHCI_TRANSFER_FLAG_NEEDS_POLL))
+        return;
+
+    Transfer->Flags &= ~XHCI_TRANSFER_FLAG_NEEDS_POLL;
+    if (InterlockedDecrement(&Extension->TransferPollCounter) <= 0)
+        KeCancelTimer(&Extension->TransferPollTimer);
+}
+
+static
+VOID
 NTAPI
 XHCI_TransferPollDpc(
     _In_ PKDPC Dpc,
@@ -6545,12 +6580,7 @@ XHCI_HandleTransferEvent(
          * state, and cancel the poll timer if needed.
          */
         XHCI_FinalizeBounceBuffer(Transfer);
-        if (Transfer->Flags & XHCI_TRANSFER_FLAG_NEEDS_POLL)
-        {
-            Transfer->Flags &= ~XHCI_TRANSFER_FLAG_NEEDS_POLL;
-            if (InterlockedDecrement(&Extension->TransferPollCounter) <= 0)
-                KeCancelTimer(&Extension->TransferPollTimer);
-        }
+        XHCI_DisarmTransferPoll(Extension, Transfer);
         return;
     }
     XHCI_DBG(XHCI_TRACE_TRANSFERS,
@@ -6760,12 +6790,7 @@ XHCI_HandleTransferEvent(
     Transfer->BytesTransferred = BytesTransferred;
     Transfer->UsbdStatus = UsbdStatus;
     XHCI_FinalizeBounceBuffer(Transfer);
-    if (Transfer->Flags & XHCI_TRANSFER_FLAG_NEEDS_POLL)
-    {
-        Transfer->Flags &= ~XHCI_TRANSFER_FLAG_NEEDS_POLL;
-        if (InterlockedDecrement(&Extension->TransferPollCounter) <= 0)
-            KeCancelTimer(&Extension->TransferPollTimer);
-    }
+    XHCI_DisarmTransferPoll(Extension, Transfer);
 
     if (Transfer->Flags & (XHCI_TRANSFER_FLAG_SET_ADDRESS | XHCI_TRANSFER_FLAG_GET_DESCRIPTOR))
     {
@@ -10666,6 +10691,7 @@ XHCI_SubmitControlTransfer(
             SetupTrbDeferred->Control |= SetupCycleBitDeferred;
         }
 
+        XHCI_ArmTransferPoll(Extension, Transfer);
         KeMemoryBarrier();
         XHCI_RingEndpointDoorbell(Extension,
                                    Endpoint->SlotId,
@@ -10676,33 +10702,11 @@ XHCI_SubmitControlTransfer(
     /*
      * Avoid completing transfers synchronously from SubmitTransfer: USBPORT
      * expects completions to be delivered from the interrupt/DPC path.
-     *
-     * Schedule a poll timer for ALL EP0 control transfers to drain the event
-     * ring in case an MSI interrupt is missed. This was originally limited to
-     * SET_ADDRESS and GET_DESCRIPTOR, but on real hardware (LattePanda Mu with
-     * Intel xHCI), SET_CONFIGURATION hangs indefinitely without polling because
-     * the completion interrupt is not always delivered. EP0 transfers are
-     * sequential and infrequent, so polling overhead is negligible.
      */
-    if (Endpoint->DefaultControl ||
-        (Extension->Quirks & XHCI_QUIRK_POLL_XFERS_MASK))
-    {
-        LONG NewCount;
-        Transfer->Flags |= XHCI_TRANSFER_FLAG_NEEDS_POLL;
-        NewCount = InterlockedIncrement(&Extension->TransferPollCounter);
-        if (NewCount == 1)
-            XHCI_ScheduleTransferPoll(Extension);
-    }
-
     return MP_STATUS_SUCCESS;
 
 Failure:
-    if (Transfer->Flags & XHCI_TRANSFER_FLAG_NEEDS_POLL)
-    {
-        Transfer->Flags &= ~XHCI_TRANSFER_FLAG_NEEDS_POLL;
-        if (InterlockedDecrement(&Extension->TransferPollCounter) <= 0)
-            KeCancelTimer(&Extension->TransferPollTimer);
-    }
+    XHCI_DisarmTransferPoll(Extension, Transfer);
     if (ProgrammedRing)
         XHCI_ResetEndpointRing(Endpoint);
 
@@ -10914,6 +10918,7 @@ XHCI_SubmitSgTransfer(
 
         {
             USHORT DoorbellStreamId = XHCI_SelectDoorbellStreamId(Endpoint, Transfer);
+            XHCI_ArmTransferPoll(Extension, Transfer);
             KeMemoryBarrier();
             XHCI_RingEndpointDoorbell(Extension,
                                        Endpoint->SlotId,
@@ -11155,6 +11160,7 @@ XHCI_SubmitSgTransfer(
 
     {
         USHORT DoorbellStreamId = XHCI_SelectDoorbellStreamId(Endpoint, Transfer);
+        XHCI_ArmTransferPoll(Extension, Transfer);
         KeMemoryBarrier();
         XHCI_RingEndpointDoorbell(Extension,
                                    Endpoint->SlotId,
@@ -11162,24 +11168,11 @@ XHCI_SubmitSgTransfer(
                                    DoorbellStreamId);
     }
 
-    /*
-     * Enable the poll fallback for bulk/interrupt transfers on emulators
-     * where MSI/INTx delivery is unreliable (VirtualBox UEFI, QEMU q35
-     * xHCI). Without this, interrupt-type endpoints such as HID mouse IN
-     * stall until some other DPC drains the event ring, producing very
-     * laggy cursor movement.
-     */
-    if (Extension->Quirks & XHCI_QUIRK_POLL_XFERS_MASK)
-    {
-        Transfer->Flags |= XHCI_TRANSFER_FLAG_NEEDS_POLL;
-        if (InterlockedIncrement(&Extension->TransferPollCounter) == 1)
-            XHCI_ScheduleTransferPoll(Extension);
-    }
-
     return MP_STATUS_SUCCESS;
 
 Failure:
     XHCI_ReleaseBounceBuffer(Transfer);
+    XHCI_DisarmTransferPoll(Extension, Transfer);
     Transfer->UsbdStatus = USBD_STATUS_REQUEST_FAILED;
     KeAcquireSpinLock(&Endpoint->Lock, &OldIrql);
     if (Endpoint->ActiveTransfer == Transfer)
