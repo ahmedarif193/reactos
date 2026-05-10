@@ -16,12 +16,12 @@
 #define RP1_DEVICE_ID       0x0001
 
 /*
- * BCM2712 PCIE2 outbound window: CPU address for PCI MEM access.
- * The firmware's ACPI _CRS declares translation +0, but the actual
- * hardware maps CPU 0x1F00000000 → PCI 0x00000000 (non-prefetchable).
- * When RP1's BAR reads as PCI address X, CPU must access it at
- * 0x1F00000000 + X.
+ * BCM2712 PCIE2 outbound window used by current RPi5 firmware.
+ * Keep bus-relative PCI addresses separate from CPU-visible physical
+ * addresses; firmware currently reports the child window without the
+ * translation ReactOS needs to map it.
  */
+#define BCM2712_PCIE2_PCI_MEM_BASE  0xC0000000ULL
 #define BCM2712_PCIE2_CPU_MEM_BASE  0x1F00000000ULL
 
 /* Pool allocation tag: 'RP1B' */
@@ -39,6 +39,10 @@
 
 #define RP1_XHCI1_OFFSET        0x00300000
 #define RP1_XHCI1_SIZE          0x00100000
+
+#define RP1_XHCI_PCI_PROGIF     0x30  /* xHCI */
+/* Synthetic config-space device IDs, not external PnP hardware IDs. */
+#define RP1_XHCI_PCI_DEVICE_ID_BASE 0x0100
 
 /* RP1 clock controller (within BAR1) */
 #define RP1_CLOCKS_OFFSET       0x00018000
@@ -71,9 +75,6 @@
 /*  Offsets are relative to the DWC3 block base (e.g. BAR1+0x200000)  */
 /* ------------------------------------------------------------------ */
 
-/* DWC3 global registers start at offset 0xC100 from the DWC3 base */
-#define DWC3_GLOBALS_REGS_START     0xC100
-
 /* Global registers (offset from DWC3 base) */
 #define DWC3_GSBUSCFG0              0xC100
 #define DWC3_GCTL                   0xC110  /* Global Control */
@@ -85,7 +86,6 @@
 #define DWC3_GUSB3PIPECTL(n)      (0xC2C0 + ((n) * 4))  /* USB3 Pipe Control */
 
 /* GCTL bits */
-#define DWC3_GCTL_CORESOFTRESET     (1u << 11)
 #define DWC3_GCTL_PRTCAPDIR_MASK    (3u << 12)
 #define DWC3_GCTL_PRTCAP_HOST       (1u << 12)
 #define DWC3_GCTL_PRTCAP_DEVICE     (2u << 12)
@@ -102,13 +102,9 @@
 #define DWC3_GUSB3PIPECTL_SUSPHY    (1u << 17)  /* Suspend SS PHY */
 #define DWC3_GUSB3PIPECTL_UX_EXIT_PX (1u << 27) /* Known PHY bug */
 
-/*
- * RP1 interrupt GSI from ACPI _PRT.
- * The RPi5 firmware DSDT maps INTA on PCI device 0 to GSI 175.
- * Used as fallback when the PCI driver doesn't assign an interrupt
- * (InterruptLine=0 is common on ARM64 where firmware doesn't program it).
- */
-#define RP1_ACPI_PRT_GSI_INTA   175
+#define DWC3_GFLADJ                   0xC630
+#define DWC3_GFLADJ_30MHZ_SDBND_SEL   (1u << 7)
+#define DWC3_GFLADJ_30MHZ_MASK        0x3F
 
 /* Maximum number of child devices the bus driver exposes */
 #define RP1_MAX_CHILDREN        2
@@ -151,8 +147,9 @@ typedef struct _RP1_FDO_EXTENSION
     /* Physical device object we are attached to */
     PDEVICE_OBJECT PhysicalDevice;
 
-    /* BAR1 physical base address (from PCI resources) */
-    PHYSICAL_ADDRESS Bar1Physical;
+    /* BAR1 bus-relative PCI address and CPU-visible physical address */
+    PHYSICAL_ADDRESS Bar1BusAddress;
+    PHYSICAL_ADDRESS Bar1CpuAddress;
 
     /* BAR1 mapped virtual address */
     PVOID Bar1Virtual;
@@ -167,6 +164,7 @@ typedef struct _RP1_FDO_EXTENSION
 
     /* Child PDO array */
     PDEVICE_OBJECT ChildPdo[RP1_MAX_CHILDREN];
+    BOOLEAN ChildPresent[RP1_MAX_CHILDREN];
     ULONG ChildCount;
 
     /* Set when START_DEVICE has completed successfully */
@@ -182,13 +180,17 @@ typedef struct _RP1_PDO_EXTENSION
 {
     RP1_COMMON_EXTENSION Common;
 
+    /* This PDO */
+    PDEVICE_OBJECT Self;
+
     /* Back pointer to the parent FDO */
     PDEVICE_OBJECT ParentFdo;
 
     /* Which child this PDO represents (RP1_CHILD_XHCI0 or RP1_CHILD_XHCI1) */
     ULONG ChildIndex;
 
-    /* MMIO region: physical address and length (from parent BAR1 + offset) */
+    /* MMIO region: bus-relative and CPU-visible address for this child */
+    PHYSICAL_ADDRESS MmioBusAddress;
     PHYSICAL_ADDRESS MmioPhysical;
     ULONG MmioLength;
 
@@ -196,6 +198,12 @@ typedef struct _RP1_PDO_EXTENSION
     ULONG InterruptLevel;
     ULONG InterruptVector;
     KAFFINITY InterruptAffinity;
+
+    /* Mutable fields in the synthetic PCI config view exposed to USBPORT */
+    USHORT PciCommand;
+    UCHAR CacheLineSize;
+    UCHAR LatencyTimer;
+    UCHAR InterruptLine;
 
 } RP1_PDO_EXTENSION, *PRP1_PDO_EXTENSION;
 

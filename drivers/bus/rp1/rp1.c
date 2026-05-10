@@ -119,6 +119,208 @@ Rp1SendIrpSynchronous(
     return Status;
 }
 
+static
+PHYSICAL_ADDRESS
+Rp1TranslateBarAddress(
+    _In_ PHYSICAL_ADDRESS BusAddress)
+{
+    PHYSICAL_ADDRESS CpuAddress;
+
+    CpuAddress = BusAddress;
+
+    if (BusAddress.QuadPart >= BCM2712_PCIE2_PCI_MEM_BASE &&
+        BusAddress.QuadPart < 0x100000000ULL)
+    {
+        CpuAddress.QuadPart = BusAddress.QuadPart -
+                              BCM2712_PCIE2_PCI_MEM_BASE +
+                              BCM2712_PCIE2_CPU_MEM_BASE;
+    }
+
+    return CpuAddress;
+}
+
+static
+VOID
+Rp1BuildSyntheticPciConfig(
+    _In_ PRP1_PDO_EXTENSION PdoExt,
+    _Out_ PPCI_COMMON_CONFIG PciConfig)
+{
+    RtlZeroMemory(PciConfig, sizeof(*PciConfig));
+
+    /*
+     * The RP1 xHCI blocks are not PCI functions.  USBPORT still expects a
+     * small PCI-like config view, so expose only stable controller metadata
+     * and the BAR slice assigned by this bus driver.
+     */
+    PciConfig->VendorID = RP1_VENDOR_ID;
+    PciConfig->DeviceID = (USHORT)(RP1_XHCI_PCI_DEVICE_ID_BASE + PdoExt->ChildIndex);
+    PciConfig->Command = PdoExt->PciCommand;
+    PciConfig->Status = 0;
+    PciConfig->RevisionID = 0;
+    PciConfig->ProgIf = RP1_XHCI_PCI_PROGIF;
+    PciConfig->SubClass = PCI_SUBCLASS_SB_USB;
+    PciConfig->BaseClass = PCI_CLASS_SERIAL_BUS_CTLR;
+    PciConfig->CacheLineSize = PdoExt->CacheLineSize;
+    PciConfig->LatencyTimer = PdoExt->LatencyTimer;
+    PciConfig->HeaderType = PCI_DEVICE_TYPE;
+    PciConfig->u.type0.BaseAddresses[0] =
+        (ULONG)(PdoExt->MmioBusAddress.QuadPart & ~0xFULL);
+    PciConfig->u.type0.SubVendorID = RP1_VENDOR_ID;
+    PciConfig->u.type0.SubSystemID =
+        (USHORT)(RP1_XHCI_PCI_DEVICE_ID_BASE + PdoExt->ChildIndex);
+    PciConfig->u.type0.InterruptLine = PdoExt->InterruptLine;
+    PciConfig->u.type0.InterruptPin = 1;
+}
+
+static
+VOID
+NTAPI
+Rp1BusInterfaceReference(
+    _Inout_opt_ PVOID Context)
+{
+    PRP1_PDO_EXTENSION PdoExt = (PRP1_PDO_EXTENSION)Context;
+
+    if (PdoExt && PdoExt->Self)
+        ObReferenceObject(PdoExt->Self);
+}
+
+static
+VOID
+NTAPI
+Rp1BusInterfaceDereference(
+    _Inout_opt_ PVOID Context)
+{
+    PRP1_PDO_EXTENSION PdoExt = (PRP1_PDO_EXTENSION)Context;
+
+    if (PdoExt && PdoExt->Self)
+        ObDereferenceObject(PdoExt->Self);
+}
+
+static
+BOOLEAN
+NTAPI
+Rp1TranslateBusAddress(
+    _Inout_opt_ PVOID Context,
+    _In_ PHYSICAL_ADDRESS BusAddress,
+    _In_ ULONG Length,
+    _Out_ PULONG AddressSpace,
+    _Out_ PPHYSICAL_ADDRESS TranslatedAddress)
+{
+    PRP1_PDO_EXTENSION PdoExt = (PRP1_PDO_EXTENSION)Context;
+    ULONGLONG Offset;
+
+    if (!PdoExt || !TranslatedAddress || !AddressSpace)
+        return FALSE;
+
+    if (BusAddress.QuadPart >= PdoExt->MmioBusAddress.QuadPart &&
+        BusAddress.QuadPart < PdoExt->MmioBusAddress.QuadPart + PdoExt->MmioLength)
+    {
+        Offset = BusAddress.QuadPart - PdoExt->MmioBusAddress.QuadPart;
+        if (Length > PdoExt->MmioLength - Offset)
+            return FALSE;
+
+        TranslatedAddress->QuadPart = PdoExt->MmioPhysical.QuadPart + Offset;
+        *AddressSpace = 0;
+        return TRUE;
+    }
+
+    if (BusAddress.QuadPart >= PdoExt->MmioPhysical.QuadPart &&
+        BusAddress.QuadPart < PdoExt->MmioPhysical.QuadPart + PdoExt->MmioLength)
+    {
+        *TranslatedAddress = BusAddress;
+        *AddressSpace = 0;
+        return TRUE;
+    }
+
+    return FALSE;
+}
+
+static
+PDMA_ADAPTER
+NTAPI
+Rp1GetDmaAdapter(
+    _Inout_opt_ PVOID Context,
+    _In_ PDEVICE_DESCRIPTION DeviceDescriptor,
+    _Out_ PULONG NumberOfMapRegisters)
+{
+    PRP1_PDO_EXTENSION PdoExt = (PRP1_PDO_EXTENSION)Context;
+    PRP1_FDO_EXTENSION FdoExt;
+
+    if (!PdoExt || !PdoExt->ParentFdo)
+        return NULL;
+
+    FdoExt = (PRP1_FDO_EXTENSION)PdoExt->ParentFdo->DeviceExtension;
+    return IoGetDmaAdapter(FdoExt->PhysicalDevice,
+                           DeviceDescriptor,
+                           NumberOfMapRegisters);
+}
+
+static
+ULONG
+NTAPI
+Rp1GetBusData(
+    _Inout_opt_ PVOID Context,
+    _In_ ULONG DataType,
+    _Inout_updates_bytes_(Length) PVOID Buffer,
+    _In_ ULONG Offset,
+    _In_ ULONG Length)
+{
+    PRP1_PDO_EXTENSION PdoExt = (PRP1_PDO_EXTENSION)Context;
+    PCI_COMMON_CONFIG PciConfig;
+    ULONG Available;
+
+    if (!PdoExt || !Buffer || DataType != PCI_WHICHSPACE_CONFIG)
+        return 0;
+
+    if (Offset >= sizeof(PciConfig))
+        return 0;
+
+    Rp1BuildSyntheticPciConfig(PdoExt, &PciConfig);
+
+    Available = sizeof(PciConfig) - Offset;
+    if (Length > Available)
+        Length = Available;
+
+    RtlCopyMemory(Buffer, (PUCHAR)&PciConfig + Offset, Length);
+    return Length;
+}
+
+static
+ULONG
+NTAPI
+Rp1SetBusData(
+    _Inout_opt_ PVOID Context,
+    _In_ ULONG DataType,
+    _Inout_updates_bytes_(Length) PVOID Buffer,
+    _In_ ULONG Offset,
+    _In_ ULONG Length)
+{
+    PRP1_PDO_EXTENSION PdoExt = (PRP1_PDO_EXTENSION)Context;
+    PCI_COMMON_CONFIG PciConfig;
+    ULONG Available;
+
+    if (!PdoExt || !Buffer || DataType != PCI_WHICHSPACE_CONFIG)
+        return 0;
+
+    if (Offset >= sizeof(PciConfig))
+        return 0;
+
+    Rp1BuildSyntheticPciConfig(PdoExt, &PciConfig);
+
+    Available = sizeof(PciConfig) - Offset;
+    if (Length > Available)
+        Length = Available;
+
+    RtlCopyMemory((PUCHAR)&PciConfig + Offset, Buffer, Length);
+
+    PdoExt->PciCommand = PciConfig.Command;
+    PdoExt->CacheLineSize = PciConfig.CacheLineSize;
+    PdoExt->LatencyTimer = PciConfig.LatencyTimer;
+    PdoExt->InterruptLine = PciConfig.u.type0.InterruptLine;
+
+    return Length;
+}
+
 /* ------------------------------------------------------------------ */
 /*  FDO: IRP_MN_START_DEVICE                                           */
 /*  Parse PCI resources to find BAR1 and map it.                       */
@@ -152,8 +354,7 @@ Rp1FdoStartDevice(
     }
 
     /*
-     * Parse translated resources to find BAR1 (memory) and interrupt.
-     * The PCI bus driver provides the translated (CPU-visible) addresses.
+     * Parse the parent PCI resources to find BAR1 and the shared interrupt.
      */
     AllocatedResourcesTranslated = IrpSp->Parameters.StartDevice.AllocatedResourcesTranslated;
 
@@ -178,7 +379,7 @@ Rp1FdoStartDevice(
                  */
                 if (!FoundMemory || Descriptor->u.Memory.Length > FdoExt->Bar1Length)
                 {
-                    FdoExt->Bar1Physical = Descriptor->u.Memory.Start;
+                    FdoExt->Bar1BusAddress = Descriptor->u.Memory.Start;
                     FdoExt->Bar1Length = Descriptor->u.Memory.Length;
                     FoundMemory = TRUE;
                 }
@@ -206,51 +407,19 @@ Rp1FdoStartDevice(
     }
 
     /*
-     * Fix the BAR physical address.
-     *
-     * The PCI resource translator returns the PCI bus address (0xC0000000)
-     * because the ACPI _CRS declares translation +0.  But the BCM2712
-     * outbound window actually maps:
-     *   CPU 0x1F00000000 → PCI 0xC0000000
-     *
-     * So CPU_PA = PCI_BA - 0xC0000000 + 0x1F00000000.
-     * This is a firmware ACPI bug — _CRS should declare the correct
-     * translation offset.
+     * Current firmware exposes the RP1 PCI memory window without the BCM2712
+     * outbound translation. Keep the original bus address for child config
+     * space and resources, and use the CPU address only for MmMapIoSpace().
      */
-    if (FdoExt->Bar1Physical.QuadPart < 0x100000000ULL)
+    FdoExt->Bar1CpuAddress = Rp1TranslateBarAddress(FdoExt->Bar1BusAddress);
+
+    if (FdoExt->Bar1Length < RP1_BAR1_SIZE)
     {
-        PHYSICAL_ADDRESS CpuAddr;
-        CpuAddr.QuadPart = FdoExt->Bar1Physical.QuadPart
-                           - 0xC0000000ULL
-                           + BCM2712_PCIE2_CPU_MEM_BASE;
-        DPRINT1("RP1: BAR1 PCI=0x%I64x → CPU=0x%I64x length=0x%lx\n",
-                FdoExt->Bar1Physical.QuadPart,
-                CpuAddr.QuadPart,
+        DPRINT1("RP1: BAR1 resource too small: bus=0x%I64x cpu=0x%I64x length=0x%lx\n",
+                FdoExt->Bar1BusAddress.QuadPart,
+                FdoExt->Bar1CpuAddress.QuadPart,
                 FdoExt->Bar1Length);
-        FdoExt->Bar1Physical = CpuAddr;
-    }
-    else
-    {
-        DPRINT1("RP1: BAR1 physical=0x%I64x length=0x%lx (no translation needed)\n",
-                FdoExt->Bar1Physical.QuadPart, FdoExt->Bar1Length);
-    }
-
-    /* Read the raw BAR1 value from PCI config to see the PCI bus address */
-    {
-        PCI_COMMON_CONFIG PciCfg;
-        ULONG BytesRead;
-
-        /* Query raw BAR through the PCI bus interface */
-        BytesRead = HalGetBusDataByOffset(PCIConfiguration, 1, 0, &PciCfg, 0, PCI_COMMON_HDR_LENGTH);
-        if (BytesRead >= PCI_COMMON_HDR_LENGTH)
-        {
-            DPRINT1("RP1: PCI config VID=0x%04x DID=0x%04x BAR0=0x%08lx BAR1=0x%08lx BAR2=0x%08lx BAR3=0x%08lx\n",
-                    PciCfg.VendorID, PciCfg.DeviceID,
-                    PciCfg.u.type0.BaseAddresses[0],
-                    PciCfg.u.type0.BaseAddresses[1],
-                    PciCfg.u.type0.BaseAddresses[2],
-                    PciCfg.u.type0.BaseAddresses[3]);
-        }
+        return STATUS_INSUFFICIENT_RESOURCES;
     }
 
     /*
@@ -258,17 +427,21 @@ Rp1FdoStartDevice(
      * We map the entire 4 MB region; child controllers will use
      * sub-ranges identified by their offsets.
      */
-    FdoExt->Bar1Virtual = MmMapIoSpace(FdoExt->Bar1Physical,
+    FdoExt->Bar1Virtual = MmMapIoSpace(FdoExt->Bar1CpuAddress,
                                         FdoExt->Bar1Length,
                                         MmNonCached);
     if (!FdoExt->Bar1Virtual)
     {
         DPRINT1("RP1: Failed to map BAR1 (phys=0x%I64x, len=0x%lx)\n",
-                FdoExt->Bar1Physical.QuadPart, FdoExt->Bar1Length);
+                FdoExt->Bar1CpuAddress.QuadPart, FdoExt->Bar1Length);
         return STATUS_INSUFFICIENT_RESOURCES;
     }
 
-    DPRINT1("RP1: BAR1 mapped at VA %p\n", FdoExt->Bar1Virtual);
+    DPRINT1("RP1: BAR1 bus=0x%I64x cpu=0x%I64x length=0x%lx VA=%p\n",
+            FdoExt->Bar1BusAddress.QuadPart,
+            FdoExt->Bar1CpuAddress.QuadPart,
+            FdoExt->Bar1Length,
+            FdoExt->Bar1Virtual);
 
     /*
      * Enable USB clock domains.
@@ -324,48 +497,35 @@ Rp1FdoStartDevice(
         /* Small delay for clocks to stabilize */
         KeStallExecutionProcessor(100);
 
-        /* Dump all USB clock registers for debugging */
         DPRINT1("RP1: USB clocks: MF0_CTRL=0x%08lx MF1_CTRL=0x%08lx "
                 "SP0_CTRL=0x%08lx SP1_CTRL=0x%08lx\n",
                 READ_REGISTER_ULONG((PULONG)(ClkBase + RP1_CLK_USBH0_MICROFRAME_CTRL)),
                 READ_REGISTER_ULONG((PULONG)(ClkBase + RP1_CLK_USBH1_MICROFRAME_CTRL)),
                 READ_REGISTER_ULONG((PULONG)(ClkBase + RP1_CLK_USBH0_SUSPEND_CTRL)),
                 READ_REGISTER_ULONG((PULONG)(ClkBase + RP1_CLK_USBH1_SUSPEND_CTRL)));
-
-        /* Also dump raw memory at xHCI0 base to see if it's accessible */
-        {
-            PULONG Probe = (PULONG)((PUCHAR)FdoExt->Bar1Virtual + RP1_XHCI0_OFFSET);
-            DPRINT1("RP1: xHCI0 raw probe: [0x00]=0x%08lx [0x04]=0x%08lx "
-                    "[0xC100]=0x%08lx [0xC110]=0x%08lx [0xC120]=0x%08lx\n",
-                    READ_REGISTER_ULONG(&Probe[0]),
-                    READ_REGISTER_ULONG(&Probe[1]),
-                    READ_REGISTER_ULONG((PULONG)((PUCHAR)Probe + 0xC100)),
-                    READ_REGISTER_ULONG((PULONG)((PUCHAR)Probe + 0xC110)),
-                    READ_REGISTER_ULONG((PULONG)((PUCHAR)Probe + 0xC120)));
-        }
     }
 
     /*
      * Initialize DWC3 USB3 controllers.
      *
-     * The firmware ran XHCI-STOP before OS handoff, leaving the DWC3
-     * cores in an undefined state.  The xHCI registers at offset 0
-     * are only valid after the DWC3 core is soft-reset and set to
-     * host mode.
+     * UEFI leaves the DWC3 cores in host mode but may gate clocks and PHY
+     * suspend bits. Avoid a DWC3 core reset here; the xHCI miniport owns
+     * USBCMD.HCRST once the child controller starts.
      *
-     * Sequence (per Synopsys DWC3 databook and Linux dwc3/core.c):
+     * Sequence:
      *   1. Read GSNPSID to verify core exists
-     *   2. Assert CORESOFTRESET in GCTL
-     *   3. Wait 100ms for internal clocks to synchronize
-     *   4. Deassert CORESOFTRESET
-     *   5. Set PRTCAPDIR to HOST in GCTL
-     *   6. Configure USB2 PHY (GUSB2PHYCFG)
-     *   7. Configure USB3 pipe (GUSB3PIPECTL)
-     *   8. Verify xHCI capability registers at offset 0
+     *   2. Set PRTCAPDIR to HOST in GCTL
+     *   3. Configure USB2 PHY (GUSB2PHYCFG)
+     *   4. Configure USB3 pipe (GUSB3PIPECTL)
+     *   5. Program GFLADJ
+     *   6. Verify xHCI capability registers at offset 0
      */
     {
         static const ULONG DwcOffsets[] = { RP1_XHCI0_OFFSET, RP1_XHCI1_OFFSET };
         ULONG Idx;
+        ULONG PresentCount = 0;
+
+        RtlZeroMemory(FdoExt->ChildPresent, sizeof(FdoExt->ChildPresent));
 
         for (Idx = 0; Idx < RTL_NUMBER_OF(DwcOffsets); Idx++)
         {
@@ -376,8 +536,9 @@ Rp1FdoStartDevice(
             SnpsId = READ_REGISTER_ULONG((PULONG)(DwcBase + DWC3_GSNPSID));
             if (SnpsId == 0 || SnpsId == 0xFFFFFFFF)
             {
-                DPRINT1("RP1: DWC3[%lu] GSNPSID=0x%08lx — core not accessible, skipping\n",
-                        Idx, SnpsId);
+                DPRINT1("RP1: DWC3[%lu] GSNPSID=0x%08lx, core not accessible\n",
+                        Idx,
+                        SnpsId);
                 continue;
             }
             DPRINT1("RP1: DWC3[%lu] GSNPSID=0x%08lx (rev %lu.%02lu%c)\n",
@@ -423,9 +584,6 @@ Rp1FdoStartDevice(
 
             /* Program GFLADJ — required for correct xHCI operation */
             {
-                #define DWC3_GFLADJ 0xC630
-                #define DWC3_GFLADJ_30MHZ_SDBND_SEL (1u << 7)
-                #define DWC3_GFLADJ_30MHZ_MASK 0x3F
                 ULONG Gfladj = READ_REGISTER_ULONG((PULONG)(DwcBase + DWC3_GFLADJ));
                 Gfladj &= ~DWC3_GFLADJ_30MHZ_MASK;
                 Gfladj |= DWC3_GFLADJ_30MHZ_SDBND_SEL | 0x20;
@@ -447,10 +605,22 @@ Rp1FdoStartDevice(
 
                 if (CapLen == 0 || CapLen == 0xFF || HciVer < 0x0100)
                 {
-                    DPRINT1("RP1: DWC3[%lu] xHCI capability header invalid — "
-                            "init may have failed\n", Idx);
+                    DPRINT1("RP1: DWC3[%lu] xHCI capability header invalid\n",
+                            Idx);
+                    continue;
                 }
+
+                FdoExt->ChildPresent[Idx] = TRUE;
+                PresentCount++;
             }
+        }
+
+        if (PresentCount == 0)
+        {
+            DPRINT1("RP1: no usable DWC3 xHCI controllers found\n");
+            MmUnmapIoSpace(FdoExt->Bar1Virtual, FdoExt->Bar1Length);
+            FdoExt->Bar1Virtual = NULL;
+            return STATUS_NO_SUCH_DEVICE;
         }
     }
 
@@ -494,15 +664,23 @@ Rp1FdoQueryBusRelations(
         DPRINT1("RP1: BusRelations queried before START_DEVICE\n");
         Irp->IoStatus.Status = STATUS_SUCCESS;
         Irp->IoStatus.Information = 0;
-        IoSkipCurrentIrpStackLocation(Irp);
-        return IoCallDriver(FdoExt->LowerDevice, Irp);
+        IoCompleteRequest(Irp, IO_NO_INCREMENT);
+        return STATUS_SUCCESS;
     }
 
-    /* Create child PDOs if they don't exist yet */
+    FdoExt->ChildCount = 0;
+
+    /* Create child PDOs for controllers that were verified at START_DEVICE. */
     for (i = 0; i < RP1_MAX_CHILDREN; i++)
     {
-        if (FdoExt->ChildPdo[i])
+        if (!FdoExt->ChildPresent[i])
             continue;
+
+        if (FdoExt->ChildPdo[i])
+        {
+            FdoExt->ChildCount++;
+            continue;
+        }
 
         Status = IoCreateDevice(DeviceObject->DriverObject,
                                 sizeof(RP1_PDO_EXTENSION),
@@ -522,30 +700,40 @@ Rp1FdoQueryBusRelations(
         RtlZeroMemory(PdoExt, sizeof(RP1_PDO_EXTENSION));
 
         PdoExt->Common.IsFdo = FALSE;
+        PdoExt->Self = FdoExt->ChildPdo[i];
         PdoExt->ParentFdo = DeviceObject;
         PdoExt->ChildIndex = i;
 
         /* Compute physical address for this child's MMIO region */
+        PdoExt->MmioBusAddress.QuadPart =
+            FdoExt->Bar1BusAddress.QuadPart + Rp1Children[i].Offset;
         PdoExt->MmioPhysical.QuadPart =
-            FdoExt->Bar1Physical.QuadPart + Rp1Children[i].Offset;
+            FdoExt->Bar1CpuAddress.QuadPart + Rp1Children[i].Offset;
         PdoExt->MmioLength = Rp1Children[i].Length;
 
         /* Pass interrupt info from parent */
         PdoExt->InterruptLevel = FdoExt->InterruptLevel;
         PdoExt->InterruptVector = FdoExt->InterruptVector;
         PdoExt->InterruptAffinity = FdoExt->InterruptAffinity;
+        PdoExt->InterruptLine = FdoExt->InterruptVector ?
+                                (UCHAR)FdoExt->InterruptVector :
+                                0xFF;
+        PdoExt->PciCommand = PCI_ENABLE_MEMORY_SPACE | PCI_ENABLE_BUS_MASTER;
 
         FdoExt->ChildPdo[i]->Flags &= ~DO_DEVICE_INITIALIZING;
 
         FdoExt->ChildCount++;
 
-        DPRINT1("RP1: Created child PDO %lu: MMIO phys=0x%I64x len=0x%lx\n",
-                i, PdoExt->MmioPhysical.QuadPart, PdoExt->MmioLength);
+        DPRINT1("RP1: Created child PDO %lu: MMIO bus=0x%I64x cpu=0x%I64x len=0x%lx\n",
+                i,
+                PdoExt->MmioBusAddress.QuadPart,
+                PdoExt->MmioPhysical.QuadPart,
+                PdoExt->MmioLength);
     }
 
     /* Build DEVICE_RELATIONS structure */
-    Size = sizeof(DEVICE_RELATIONS) +
-           (FdoExt->ChildCount - 1) * sizeof(PDEVICE_OBJECT);
+    Size = FIELD_OFFSET(DEVICE_RELATIONS, Objects) +
+           FdoExt->ChildCount * sizeof(PDEVICE_OBJECT);
 
     Relations = ExAllocatePoolWithTag(PagedPool, Size, RP1_TAG);
     if (!Relations)
@@ -559,7 +747,7 @@ Rp1FdoQueryBusRelations(
     Relations->Count = 0;
     for (i = 0; i < RP1_MAX_CHILDREN; i++)
     {
-        if (FdoExt->ChildPdo[i])
+        if (FdoExt->ChildPresent[i] && FdoExt->ChildPdo[i])
         {
             ObReferenceObject(FdoExt->ChildPdo[i]);
             Relations->Objects[Relations->Count++] = FdoExt->ChildPdo[i];
@@ -569,8 +757,8 @@ Rp1FdoQueryBusRelations(
     Irp->IoStatus.Information = (ULONG_PTR)Relations;
     Irp->IoStatus.Status = STATUS_SUCCESS;
 
-    IoSkipCurrentIrpStackLocation(Irp);
-    return IoCallDriver(FdoExt->LowerDevice, Irp);
+    IoCompleteRequest(Irp, IO_NO_INCREMENT);
+    return STATUS_SUCCESS;
 }
 
 /* ------------------------------------------------------------------ */
@@ -639,7 +827,7 @@ Rp1FdoPnp(
     switch (IrpSp->MinorFunction)
     {
         case IRP_MN_START_DEVICE:
-            DPRINT("RP1: FDO IRP_MN_START_DEVICE\n");
+            DPRINT1("RP1: FDO IRP_MN_START_DEVICE\n");
             Status = Rp1FdoStartDevice(DeviceObject, Irp);
             Irp->IoStatus.Status = Status;
             IoCompleteRequest(Irp, IO_NO_INCREMENT);
@@ -648,14 +836,14 @@ Rp1FdoPnp(
         case IRP_MN_QUERY_DEVICE_RELATIONS:
             if (IrpSp->Parameters.QueryDeviceRelations.Type == BusRelations)
             {
-                DPRINT("RP1: FDO IRP_MN_QUERY_DEVICE_RELATIONS (BusRelations)\n");
+                DPRINT1("RP1: FDO IRP_MN_QUERY_DEVICE_RELATIONS (BusRelations)\n");
                 return Rp1FdoQueryBusRelations(DeviceObject, Irp);
             }
             /* Fall through for other relation types */
             break;
 
         case IRP_MN_REMOVE_DEVICE:
-            DPRINT("RP1: FDO IRP_MN_REMOVE_DEVICE\n");
+            DPRINT1("RP1: FDO IRP_MN_REMOVE_DEVICE\n");
             return Rp1FdoRemoveDevice(DeviceObject, Irp);
 
         case IRP_MN_QUERY_STOP_DEVICE:
@@ -716,10 +904,11 @@ Rp1PdoQueryId(
         case BusQueryDeviceID:
         {
             /*
-             * Device ID: PCI\VEN_1DE4&DEV_0001&CC_0C0330
-             * This uniquely identifies the RP1 xHCI controller.
+             * These are RP1-local children, not independent PCI functions.
+             * Keep the hardware identity on the RP1 bus and use the PCI xHCI
+             * class code only as a compatibility match below.
              */
-            static const WCHAR DeviceId[] = L"PCI\\VEN_1DE4&DEV_0001&CC_0C0330";
+            static const WCHAR DeviceId[] = L"RP1\\XHCI";
 
             Size = sizeof(DeviceId);
             Buffer = ExAllocatePoolWithTag(PagedPool, Size, RP1_TAG);
@@ -728,7 +917,7 @@ Rp1PdoQueryId(
 
             RtlCopyMemory(Buffer, DeviceId, Size);
             Irp->IoStatus.Information = (ULONG_PTR)Buffer;
-            DPRINT("RP1: PDO[%lu] DeviceID: %S\n", PdoExt->ChildIndex, Buffer);
+            DPRINT1("RP1: PDO[%lu] DeviceID: %S\n", PdoExt->ChildIndex, Buffer);
             return STATUS_SUCCESS;
         }
 
@@ -737,14 +926,11 @@ Rp1PdoQueryId(
             /*
              * Hardware IDs: multi-string list (double-null terminated).
              *
-             * Provide a specific RP1 xHCI ID first, then the generic
-             * PCI class code ID that usbport.inf uses to match xHCI.
-             *
-             * The PCI\CC_0C0330 ID matches the [GenericMfg] section
-             * in usbport.inf which installs usbxhci.sys.
+             * Hardware IDs describe the RP1 child itself.  The PCI class
+             * compatible ID is reported separately.
              */
-            static const WCHAR HwId0[] = L"PCI\\VEN_1DE4&DEV_0001&CC_0C0330";
-            static const WCHAR HwId1[] = L"PCI\\CC_0C0330";
+            static const WCHAR HwId0[] = L"RP1\\XHCI&REV_00";
+            static const WCHAR HwId1[] = L"RP1\\XHCI";
 
             Size = sizeof(HwId0) + sizeof(HwId1) + sizeof(WCHAR); /* Extra null */
             Buffer = ExAllocatePoolWithTag(PagedPool, Size, RP1_TAG);
@@ -757,18 +943,17 @@ Rp1PdoQueryId(
             /* Double null terminator is already zero from RtlZeroMemory */
 
             Irp->IoStatus.Information = (ULONG_PTR)Buffer;
-            DPRINT("RP1: PDO[%lu] HardwareIDs: %S ; %S\n",
-                   PdoExt->ChildIndex,
-                   Buffer,
-                   (PWCHAR)((PUCHAR)Buffer + sizeof(HwId0)));
+            DPRINT1("RP1: PDO[%lu] HardwareIDs: %S ; %S\n",
+                    PdoExt->ChildIndex,
+                    Buffer,
+                    (PWCHAR)((PUCHAR)Buffer + sizeof(HwId0)));
             return STATUS_SUCCESS;
         }
 
         case BusQueryCompatibleIDs:
         {
             /*
-             * Compatible IDs: PCI\CC_0C0330 (xHCI class code).
-             * This is the fallback that usbport.inf uses to match.
+             * Compatibility match for the generic xHCI install section.
              */
             static const WCHAR CompatId[] = L"PCI\\CC_0C0330";
 
@@ -781,7 +966,7 @@ Rp1PdoQueryId(
             RtlCopyMemory(Buffer, CompatId, sizeof(CompatId));
 
             Irp->IoStatus.Information = (ULONG_PTR)Buffer;
-            DPRINT("RP1: PDO[%lu] CompatibleIDs: %S\n", PdoExt->ChildIndex, Buffer);
+            DPRINT1("RP1: PDO[%lu] CompatibleIDs: %S\n", PdoExt->ChildIndex, Buffer);
             return STATUS_SUCCESS;
         }
 
@@ -799,7 +984,7 @@ Rp1PdoQueryId(
 
             RtlCopyMemory(Buffer, InstanceId, Size);
             Irp->IoStatus.Information = (ULONG_PTR)Buffer;
-            DPRINT("RP1: PDO[%lu] InstanceID: %S\n", PdoExt->ChildIndex, Buffer);
+            DPRINT1("RP1: PDO[%lu] InstanceID: %S\n", PdoExt->ChildIndex, Buffer);
             return STATUS_SUCCESS;
         }
 
@@ -833,7 +1018,7 @@ Rp1PdoQueryDeviceText(
 
         RtlCopyMemory(Buffer, Description, sizeof(Description));
         Irp->IoStatus.Information = (ULONG_PTR)Buffer;
-        DPRINT("RP1: PDO[%lu] DeviceText: %S\n", PdoExt->ChildIndex, Buffer);
+        DPRINT1("RP1: PDO[%lu] DeviceText: %S\n", PdoExt->ChildIndex, Buffer);
         return STATUS_SUCCESS;
     }
 
@@ -879,7 +1064,7 @@ Rp1PdoQueryResources(
 
     RtlZeroMemory(ResourceList, ListSize);
     ResourceList->Count = 1;
-    ResourceList->List[0].InterfaceType = PCIBus;
+    ResourceList->List[0].InterfaceType = Internal;
     ResourceList->List[0].BusNumber = 0;
 
     PartialList = &ResourceList->List[0].PartialResourceList;
@@ -890,17 +1075,16 @@ Rp1PdoQueryResources(
     /* Memory resource */
     Descriptor = &PartialList->PartialDescriptors[0];
     Descriptor->Type = CmResourceTypeMemory;
-    Descriptor->ShareDisposition = CmResourceShareShared;
+    Descriptor->ShareDisposition = CmResourceShareDeviceExclusive;
     Descriptor->Flags = CM_RESOURCE_MEMORY_READ_WRITE;
     Descriptor->u.Memory.Start = PdoExt->MmioPhysical;
     Descriptor->u.Memory.Length = PdoExt->MmioLength;
 
-    /* Interrupt resource (raw = bus-relative: Level and Vector are both the GSI).
-     *
-     * The parent's translated resources have Level=IRQL and Vector=system vector.
-     * For raw child resources, PnP re-translates via HalGetInterruptVector which
-     * uses the Level field as the GSI. We must pass the GIC SPI number (which is
-     * the parent's system vector, equal to the GSI on ARM64), not the IRQL. */
+    /*
+     * RP1 child controllers share the parent interrupt.  On this ARM64 HAL the
+     * interrupt vector is the GSI value USBPORT needs for its legacy interrupt
+     * fallback, so keep Level and Vector aligned.
+     */
     if (PdoExt->InterruptVector != 0)
     {
         Descriptor++;
@@ -914,11 +1098,12 @@ Rp1PdoQueryResources(
 
     Irp->IoStatus.Information = (ULONG_PTR)ResourceList;
 
-    DPRINT("RP1: PDO[%lu] QueryResources: mem=0x%I64x+0x%lx irq=%lu\n",
-           PdoExt->ChildIndex,
-           PdoExt->MmioPhysical.QuadPart,
-           PdoExt->MmioLength,
-           PdoExt->InterruptVector);
+    DPRINT1("RP1: PDO[%lu] QueryResources: bus=0x%I64x cpu=0x%I64x+0x%lx irq=%lu\n",
+            PdoExt->ChildIndex,
+            PdoExt->MmioBusAddress.QuadPart,
+            PdoExt->MmioPhysical.QuadPart,
+            PdoExt->MmioLength,
+            PdoExt->InterruptVector);
 
     return STATUS_SUCCESS;
 }
@@ -959,7 +1144,7 @@ Rp1PdoQueryResourceRequirements(
 
     RtlZeroMemory(ReqList, ListSize);
     ReqList->ListSize = ListSize;
-    ReqList->InterfaceType = PCIBus;
+    ReqList->InterfaceType = Internal;
     ReqList->BusNumber = 0;
     ReqList->SlotNumber = 0;
     ReqList->AlternativeLists = 1;
@@ -971,7 +1156,7 @@ Rp1PdoQueryResourceRequirements(
     Descriptor = &ReqList->List[0].Descriptors[0];
     Descriptor->Option = IO_RESOURCE_PREFERRED;
     Descriptor->Type = CmResourceTypeMemory;
-    Descriptor->ShareDisposition = CmResourceShareShared;
+    Descriptor->ShareDisposition = CmResourceShareDeviceExclusive;
     Descriptor->Flags = CM_RESOURCE_MEMORY_READ_WRITE;
     Descriptor->u.Memory.Length = PdoExt->MmioLength;
     Descriptor->u.Memory.Alignment = 1;
@@ -993,11 +1178,11 @@ Rp1PdoQueryResourceRequirements(
 
     Irp->IoStatus.Information = (ULONG_PTR)ReqList;
 
-    DPRINT("RP1: PDO[%lu] QueryResourceRequirements: mem=0x%I64x+0x%lx irq=%lu\n",
-           PdoExt->ChildIndex,
-           PdoExt->MmioPhysical.QuadPart,
-           PdoExt->MmioLength,
-           PdoExt->InterruptVector);
+    DPRINT1("RP1: PDO[%lu] QueryResourceRequirements: cpu=0x%I64x+0x%lx irq=%lu\n",
+            PdoExt->ChildIndex,
+            PdoExt->MmioPhysical.QuadPart,
+            PdoExt->MmioLength,
+            PdoExt->InterruptVector);
 
     return STATUS_SUCCESS;
 }
@@ -1013,9 +1198,10 @@ Rp1PdoQueryCapabilities(
     _Inout_ PIRP Irp,
     _In_ PIO_STACK_LOCATION IrpSp)
 {
+    PRP1_PDO_EXTENSION PdoExt;
     PDEVICE_CAPABILITIES Caps;
 
-    UNREFERENCED_PARAMETER(DeviceObject);
+    PdoExt = (PRP1_PDO_EXTENSION)DeviceObject->DeviceExtension;
 
     Caps = IrpSp->Parameters.DeviceCapabilities.Capabilities;
 
@@ -1029,6 +1215,8 @@ Rp1PdoQueryCapabilities(
 
     /* The child index is unique only within its parent RP1 instance. */
     Caps->UniqueID = FALSE;
+    Caps->Address = PdoExt->ChildIndex;
+    Caps->UINumber = MAXULONG;
 
     /* D-state mapping: always D0 */
     Caps->DeviceState[PowerSystemWorking] = PowerDeviceD0;
@@ -1091,15 +1279,10 @@ Rp1PdoQueryBusInformation(
     if (!BusInfo)
         return STATUS_INSUFFICIENT_RESOURCES;
 
-    /*
-     * Report PCIBus as the interface type so that upper drivers
-     * (USBPORT/usbxhci) behave as if attached to a PCI bus.
-     * This is critical for resource arbitration and DMA setup.
-     */
     RtlZeroMemory(BusInfo, sizeof(PNP_BUS_INFORMATION));
-    BusInfo->LegacyBusType = PCIBus;
+    BusInfo->BusTypeGuid = GUID_BUS_TYPE_INTERNAL;
+    BusInfo->LegacyBusType = Internal;
     BusInfo->BusNumber = 0;
-    /* BusTypeGuid left as zero GUID */
 
     Irp->IoStatus.Information = (ULONG_PTR)BusInfo;
     return STATUS_SUCCESS;
@@ -1107,17 +1290,16 @@ Rp1PdoQueryBusInformation(
 
 /* ------------------------------------------------------------------ */
 /*  PDO: IRP_MN_QUERY_INTERFACE (BUS_INTERFACE_STANDARD)               */
-/*  Provides fake PCI bus interface so USBPORT can read "config space" */
+/*  Provides the PCI-like pieces USBPORT still expects for xHCI.        */
 /* ------------------------------------------------------------------ */
 
 /*
  * PDO: IRP_MN_QUERY_INTERFACE (BUS_INTERFACE_STANDARD)
  *
- * Forward the query to the parent RP1 PCI device's PDO.
  * USBPORT needs BUS_INTERFACE_STANDARD to read PCI config space
- * and get a DMA adapter.  Since our xHCI children are sub-devices
- * within the RP1 PCI function, we delegate to RP1's real PCI config
- * space and DMA adapter — no faking needed.
+ * and access a DMA adapter.  RP1 xHCI blocks are BAR slices inside one
+ * PCI function, so expose a synthetic child config view instead of
+ * leaking the parent RP1 PCI config as if it belonged to the child.
  */
 static
 NTSTATUS
@@ -1127,12 +1309,7 @@ Rp1PdoQueryInterface(
     _In_ PIO_STACK_LOCATION IrpSp)
 {
     PRP1_PDO_EXTENSION PdoExt;
-    PRP1_FDO_EXTENSION FdoExt;
-    KEVENT Event;
-    IO_STATUS_BLOCK IoStatusBlock;
-    PIRP SubIrp;
-    PIO_STACK_LOCATION SubIrpSp;
-    NTSTATUS Status;
+    PBUS_INTERFACE_STANDARD BusInterface;
 
     /* Only handle GUID_BUS_INTERFACE_STANDARD */
     if (RtlCompareMemory(IrpSp->Parameters.QueryInterface.InterfaceType,
@@ -1143,41 +1320,29 @@ Rp1PdoQueryInterface(
     }
 
     PdoExt = (PRP1_PDO_EXTENSION)DeviceObject->DeviceExtension;
-    FdoExt = (PRP1_FDO_EXTENSION)PdoExt->ParentFdo->DeviceExtension;
+    if (IrpSp->Parameters.QueryInterface.Version < 1)
+        return STATUS_NOT_SUPPORTED;
 
-    /*
-     * Build a new IRP_MN_QUERY_INTERFACE and send it to the parent
-     * RP1 PCI device's lower device (the PCI PDO).  This returns
-     * RP1's real BUS_INTERFACE_STANDARD with real config space access,
-     * real DMA adapter, and real bus address translation.
-     */
-    KeInitializeEvent(&Event, SynchronizationEvent, FALSE);
+    if (IrpSp->Parameters.QueryInterface.Size < sizeof(BUS_INTERFACE_STANDARD))
+        return STATUS_BUFFER_TOO_SMALL;
 
-    SubIrp = IoBuildSynchronousFsdRequest(IRP_MJ_PNP,
-                                          FdoExt->LowerDevice,
-                                          NULL, 0, NULL,
-                                          &Event, &IoStatusBlock);
-    if (!SubIrp)
-        return STATUS_INSUFFICIENT_RESOURCES;
+    BusInterface = (PBUS_INTERFACE_STANDARD)IrpSp->Parameters.QueryInterface.Interface;
+    if (!BusInterface)
+        return STATUS_INVALID_PARAMETER;
 
-    SubIrp->IoStatus.Status = STATUS_NOT_SUPPORTED;
-    SubIrpSp = IoGetNextIrpStackLocation(SubIrp);
-    SubIrpSp->MinorFunction = IRP_MN_QUERY_INTERFACE;
-    SubIrpSp->Parameters.QueryInterface = IrpSp->Parameters.QueryInterface;
+    RtlZeroMemory(BusInterface, sizeof(*BusInterface));
+    BusInterface->Size = sizeof(BUS_INTERFACE_STANDARD);
+    BusInterface->Version = 1;
+    BusInterface->Context = PdoExt;
+    BusInterface->InterfaceReference = Rp1BusInterfaceReference;
+    BusInterface->InterfaceDereference = Rp1BusInterfaceDereference;
+    BusInterface->TranslateBusAddress = Rp1TranslateBusAddress;
+    BusInterface->GetDmaAdapter = Rp1GetDmaAdapter;
+    BusInterface->SetBusData = Rp1SetBusData;
+    BusInterface->GetBusData = Rp1GetBusData;
 
-    Status = IoCallDriver(FdoExt->LowerDevice, SubIrp);
-    if (Status == STATUS_PENDING)
-    {
-        KeWaitForSingleObject(&Event, Executive, KernelMode, FALSE, NULL);
-        Status = IoStatusBlock.Status;
-    }
-
-    if (NT_SUCCESS(Status))
-    {
-        DPRINT1("RP1: Forwarded PCI bus interface from parent for child PDO\n");
-    }
-
-    return Status;
+    Rp1BusInterfaceReference(PdoExt);
+    return STATUS_SUCCESS;
 }
 
 /* ------------------------------------------------------------------ */
@@ -1197,17 +1362,17 @@ Rp1PdoPnp(
     switch (IrpSp->MinorFunction)
     {
         case IRP_MN_START_DEVICE:
-            DPRINT("RP1: PDO IRP_MN_START_DEVICE\n");
+            DPRINT1("RP1: PDO IRP_MN_START_DEVICE\n");
             Status = STATUS_SUCCESS;
             break;
 
         case IRP_MN_STOP_DEVICE:
-            DPRINT("RP1: PDO IRP_MN_STOP_DEVICE\n");
+            DPRINT1("RP1: PDO IRP_MN_STOP_DEVICE\n");
             Status = STATUS_SUCCESS;
             break;
 
         case IRP_MN_REMOVE_DEVICE:
-            DPRINT("RP1: PDO IRP_MN_REMOVE_DEVICE\n");
+            DPRINT1("RP1: PDO IRP_MN_REMOVE_DEVICE\n");
             Status = STATUS_SUCCESS;
             break;
 
@@ -1262,8 +1427,8 @@ Rp1PdoPnp(
             break;
 
         default:
-            DPRINT("RP1: PDO unhandled IRP_MN_%lu\n",
-                   (ULONG)IrpSp->MinorFunction);
+            DPRINT1("RP1: PDO unhandled IRP_MN_%lu\n",
+                    (ULONG)IrpSp->MinorFunction);
             Status = Irp->IoStatus.Status;
             break;
     }
@@ -1392,7 +1557,7 @@ Rp1Unload(
     _In_ PDRIVER_OBJECT DriverObject)
 {
     UNREFERENCED_PARAMETER(DriverObject);
-    DPRINT("RP1: Unload\n");
+    DPRINT1("RP1: Unload\n");
 }
 
 /* ------------------------------------------------------------------ */
