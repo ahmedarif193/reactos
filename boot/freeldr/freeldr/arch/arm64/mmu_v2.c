@@ -513,12 +513,6 @@ Arm64RecordPageTableAllocation(EFI_PHYSICAL_ADDRESS Base, UINTN Pages)
         return;
     }
 
-    if (PageLookupTableAddress && Arm64PtAllocationsApplied)
-    {
-        MmSetMemoryType((PVOID)(ULONG_PTR)Base, Pages * PAGE_SIZE, LoaderMemoryData);
-        return;
-    }
-
     if (Arm64PtAllocationCount < ARRAYSIZE(Arm64PtAllocations))
     {
         Arm64PtAllocations[Arm64PtAllocationCount].Base = Base;
@@ -530,6 +524,12 @@ Arm64RecordPageTableAllocation(EFI_PHYSICAL_ADDRESS Base, UINTN Pages)
         ERR("ARM64: PT allocation tracking overflow (base=0x%llx pages=%llu)\n",
             (unsigned long long)Base,
             (unsigned long long)Pages);
+    }
+
+    if (PageLookupTableAddress && Arm64PtAllocationsApplied)
+    {
+        MmSetMemoryType((PVOID)(ULONG_PTR)Base, Pages * PAGE_SIZE, LoaderMemoryData);
+        return;
     }
 
     if (PageLookupTableAddress && !Arm64PtAllocationsApplied)
@@ -1001,18 +1001,52 @@ allocate_pt_pages(UINTN pages, const char *label)
         return allocate_static_pt_pages(pages, label);
     }
 
-    addr = 0xFFFFFFFFULL; /* Keep tables within the 32-bit identity window */
+    addr = 0xFFFFFFFFULL;
     status = bs->AllocatePages(AllocateMaxAddress, EfiLoaderData, pages, &addr);
     if (EFI_ERROR(status))
     {
-        ptr = allocate_static_pt_pages(pages, label);
-        if (ptr)
-            return ptr;
+        EFI_STATUS low_status = status;
 
-        ERR("ARM64: AllocatePages failed for %s (%u pages): %lx\n",
-            label, (unsigned)pages, (ULONG_PTR)status);
-        UartPuts("ARM64: ERROR allocating page table memory\n");
-        return NULL;
+        /*
+         * Large-memory ARM64 guests can exhaust or fragment the low 4GB EFI
+         * loader range before all seed and spill page tables are allocated.
+         * UEFI on AArch64 uses identity-addressable loader memory, and the
+         * table descriptors carry real physical addresses, so high loader
+         * pages are valid page-table backing as long as we record them for the
+         * NT memory map handoff.
+         */
+        addr = 0;
+        status = bs->AllocatePages(AllocateAnyPages, EfiLoaderData, pages, &addr);
+        if (EFI_ERROR(status))
+        {
+            /*
+             * UefiMemGetMemoryMap() deliberately converts conventional EFI
+             * memory into FreeLoader-managed memory, so later EFI allocations
+             * can fail even though the loader still owns free pages.
+             */
+            if (PageLookupTableAddress)
+            {
+                ptr = MmAllocateMemoryWithType((SIZE_T)pages * PAGE_SIZE,
+                                               LoaderMemoryData);
+                if (ptr)
+                {
+                    addr = (EFI_PHYSICAL_ADDRESS)(UINT64)(uintptr_t)ptr;
+                    status = EFI_SUCCESS;
+                }
+            }
+
+            if (EFI_ERROR(status))
+            {
+                ptr = allocate_static_pt_pages(pages, label);
+                if (ptr)
+                    return ptr;
+
+                ERR("ARM64: AllocatePages failed for %s (%u pages): low=%lx any=%lx\n",
+                    label, (unsigned)pages, (ULONG_PTR)low_status, (ULONG_PTR)status);
+                UartPuts("ARM64: ERROR allocating page table memory\n");
+                return NULL;
+            }
+        }
     }
 
     /*
