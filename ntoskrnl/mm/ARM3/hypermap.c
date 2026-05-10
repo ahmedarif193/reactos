@@ -141,6 +141,10 @@ MiMapPagesInZeroSpace(IN PMMPFN Pfn1,
     MMPTE TempPte;
     PMMPTE PointerPte;
     PFN_NUMBER Offset, PageFrameIndex;
+#if defined(_M_ARM64)
+    ULONG DcacheLineSize;
+    ULONG64 Ctr;
+#endif
 
     //
     // Sanity checks
@@ -177,9 +181,17 @@ MiMapPagesInZeroSpace(IN PMMPFN Pfn1,
     PointerPte += (Offset + 1);
     TempPte = ValidKernelPte;
 
+#if defined(_M_ARM64)
+    /* Use a Normal-NC alias for normal RAM; Device memory is not valid here. */
+    MI_SET_PTE_ATTR_INDEX(&TempPte, MI_ARM64_MAIR_NORMAL_NC_IDX);
+    __asm__ __volatile__("mrs %0, ctr_el0" : "=r"(Ctr));
+    DcacheLineSize = 4u << ((Ctr >> 16) & 0xF);
+    __asm__ __volatile__("dsb sy" ::: "memory");
+#else
     /* Disable cache. Write through */
     MI_PAGE_DISABLE_CACHE(&TempPte);
     MI_PAGE_WRITE_THROUGH(&TempPte);
+#endif
 
     /* Make sure the list isn't empty and loop it */
     ASSERT(Pfn1 != (PVOID)LIST_HEAD);
@@ -187,6 +199,18 @@ MiMapPagesInZeroSpace(IN PMMPFN Pfn1,
     {
         /* Get the page index for this PFN */
         PageFrameIndex = MiGetPfnEntryIndex(Pfn1);
+
+#if defined(_M_ARM64)
+        {
+            ULONG_PTR Va = (ULONG_PTR)MI_ARM64_PFN_TO_VA(PageFrameIndex);
+            ULONG_PTR CacheOffset;
+
+            for (CacheOffset = 0; CacheOffset < PAGE_SIZE; CacheOffset += DcacheLineSize)
+            {
+                __asm__ __volatile__("dc civac, %0" :: "r"(Va + CacheOffset) : "memory");
+            }
+        }
+#endif
 
         //
         // Write the PFN
@@ -202,6 +226,11 @@ MiMapPagesInZeroSpace(IN PMMPFN Pfn1,
         /* Move to the next PFN */
         Pfn1 = (PMMPFN)Pfn1->u1.Flink;
     }
+
+#if defined(_M_ARM64)
+    __asm__ __volatile__("dsb sy" ::: "memory");
+    __asm__ __volatile__("isb" ::: "memory");
+#endif
 
     //
     // Return the address
