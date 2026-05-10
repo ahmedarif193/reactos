@@ -30,12 +30,18 @@
 
 const RP1_CHILD_DESCRIPTOR Rp1Children[RP1_MAX_CHILDREN] =
 {
-    /* xHCI0 (DWC3 USB 3.0 #0) — only expose xHC0 to avoid xHC1 HCRST
-     * disrupting shared USB PHY and disconnecting devices on xHC0 */
+    /* xHCI0 (DWC3 USB 3.0 #0) */
     {
         RP1_XHCI0_OFFSET,
         RP1_XHCI0_SIZE,
         L"0"
+    },
+
+    /* xHCI1 (DWC3 USB 3.0 #1) */
+    {
+        RP1_XHCI1_OFFSET,
+        RP1_XHCI1_SIZE,
+        L"1"
     },
 };
 
