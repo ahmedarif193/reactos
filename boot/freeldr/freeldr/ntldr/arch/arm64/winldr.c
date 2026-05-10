@@ -638,7 +638,6 @@ Arm64SetupForNt(
     *PcrBasePage = 0;
     *TssBasePage = 0;
 
-
     /* Allocate kernel data structures including stacks */
     if (!Arm64AllocateKernelDataStructures())
     {
@@ -753,7 +752,6 @@ Arm64ConfigureProcessorContext(USHORT OperatingSystemVersion)
     /* Avoid firmware serial callbacks once we swap translation tables. */
     UefiSerialDisableFirmware();
     Arm64EnablePageTables();
-    EarlyUartPuts("[PT_EN] returned\n");
 
     /*
      * NOTE: We do NOT clear TTBR0 identity mappings here because:
