@@ -6004,6 +6004,26 @@ HalpIrqlToGicPriority(
     return 0xF0;
 }
 
+static const UCHAR HalpArm64IrqlToPmr[HIGH_LEVEL + 1] =
+{
+    0xFF, /* PASSIVE_LEVEL */
+    0xFF, /* APC_LEVEL */
+    0xFF, /* DISPATCH_LEVEL */
+    0xC0, /* DEVICE_LEVEL 3 */
+    0xB0,
+    0xA0,
+    0x90,
+    0x80,
+    0x70,
+    0x60,
+    0x50,
+    0x40,
+    0x30, /* DEVICE_LEVEL 12 */
+    0x20, /* CLOCK_LEVEL */
+    0x10, /* IPI_LEVEL */
+    0x00  /* HIGH_LEVEL */
+};
+
 BOOLEAN
 NTAPI
 HalEnableSystemInterrupt(
@@ -7620,50 +7640,9 @@ FASTCALL
 HalSetGicPriorityMask(
     _In_ KIRQL Irql)
 {
-    UCHAR Priority;
-
-    /*
-     * Map IRQL to PMR threshold value.
-     * Remember: interrupts are signaled if their priority is LESS THAN PMR.
-     * Higher IRQL → lower PMR (more restrictive).
-     */
-    if (Irql >= HIGH_LEVEL)
-    {
-        /* HIGH_LEVEL (15): Block everything. PMR=0x00 blocks all (no priority < 0). */
-        Priority = 0x00;
-    }
-    else if (Irql >= IPI_LEVEL)
-    {
-        /* IPI_LEVEL (14): Allow only priorities < 0x10 (i.e., 0x00-0x0F, "NMI-like"). */
-        Priority = 0x10;
-    }
-    else if (Irql >= CLOCK_LEVEL)
-    {
-        /* CLOCK_LEVEL (13): Allow only IPI (priority 0x10 < 0x20). Block timer. */
-        Priority = 0x20;
-    }
-    else if (Irql >= DISPATCH_LEVEL + 1)
-    {
-        /*
-         * DEVICE_LEVEL (3-12): Block devices at this IRQL and below, allow higher devices + timer + IPI.
-         *
-         * IRQL 3  → device priority 0xC0 → set PMR=0xC0 (allow 0x10-0xBF, block 0xC0+)
-         * IRQL 4  → device priority 0xB0 → set PMR=0xB0 (allow 0x10-0xAF, block 0xB0+)
-         * ...
-         * IRQL 12 → device priority 0x30 → set PMR=0x30 (allow 0x10-0x2F, block 0x30+)
-         *
-         * Formula: IRQL 3+N → PMR = 0xC0 - (N * 0x10)
-         */
-        ULONG DeviceOffset = Irql - (DISPATCH_LEVEL + 1);
-        if (DeviceOffset > 9)
-            DeviceOffset = 9;
-        Priority = (UCHAR)(0xC0 - (DeviceOffset * 0x10));
-    }
-    else
-    {
-        /* PASSIVE_LEVEL/DISPATCH_LEVEL (0-2): Allow all interrupts. PMR=0xFF (most permissive). */
-        Priority = 0xFF;
-    }
+    UCHAR Priority = (Irql <= HIGH_LEVEL) ?
+                     HalpArm64IrqlToPmr[Irql] :
+                     HalpArm64IrqlToPmr[HIGH_LEVEL];
 
     /*
      * Write the priority mask to the GIC.
