@@ -52,6 +52,29 @@ $ZwFuncEndName
 
     .set SyscallId, 0
 
+    .macro ARM64_ZW_CALL_NT Name
+    /* Load current thread pointer from per-CPU PCR (tpidr_el1) */
+    mrs     x19, tpidr_el1
+    add     x19, x19, #PcCurrentThread
+    ldr     x19, [x19]
+    cbz     x19, .LZw\Name\()_call
+
+    /* Save old PreviousMode and set to KernelMode (0) */
+    ldrb    w20, [x19, #ThPreviousMode]
+    strb    wzr, [x19, #ThPreviousMode]
+
+.LZw\Name\()_call:
+    /* Call the Nt function via indirect branch (unlimited range) */
+    adrp    x16, Nt\Name
+    add     x16, x16, #:lo12:Nt\Name
+    blr     x16
+
+    /* Restore PreviousMode if thread pointer was valid */
+    cbz     x19, .LZw\Name\()_ret
+    strb    w20, [x19, #ThPreviousMode]
+.LZw\Name\()_ret:
+    .endm
+
     .macro STUB_K Name, ArgCount
     .align 2
     .global Zw\Name
@@ -129,27 +152,7 @@ Zw\Name:
         .set _i, _i + 1
     .endr
 
-    /* Load current thread pointer from per-CPU PCR (tpidr_el1) */
-    mrs     x19, tpidr_el1
-    add     x19, x19, #PcCurrentThread
-    ldr     x19, [x19]
-    cbz     x19, .LZw\Name\()_call
-
-    /* Save old PreviousMode and set to KernelMode (0) */
-    ldrb    w20, [x19, #ThPreviousMode]
-    strb    wzr, [x19, #ThPreviousMode]
-
-.LZw\Name\()_call:
-    /* Call the Nt function via indirect branch (unlimited range) */
-    adrp    x16, Nt\Name
-    add     x16, x16, #:lo12:Nt\Name
-    blr     x16
-
-    /* Restore PreviousMode if thread pointer was valid */
-    cbz     x19, .LZw\Name\()_ret
-    strb    w20, [x19, #ThPreviousMode]
-
-.LZw\Name\()_ret:
+    ARM64_ZW_CALL_NT \Name
     ldp     x19, x20, [sp, #(_save_off + 16)]
     ldp     x29, x30, [sp, #_save_off]
     add     sp, sp, #_frame
@@ -157,14 +160,29 @@ Zw\Name:
     .seh_endproc
 .else
     /*
-     * <=8 args: enter through the ARM64 SVC path so the syscall handler builds
-     * and links a trap frame before calling Nt\Name.  NtRaiseException and
-     * NtContinue require that frame even when reached through a kernel Zw call.
+     * <=8 args path.
+     *
+     * Kernel Zw* calls must not re-enter the SVC path. Same-EL SVC makes the
+     * return path depend on a synthetic trap/exception frame even for ordinary
+     * kernel calls, and a yielding service can resume with a corrupted LR.
+     * Match the >8-argument path: save the caller frame, force KernelMode for
+     * the Nt* body, call it directly, then restore PreviousMode and return.
      */
     .seh_proc Zw\Name
+    sub     sp, sp, #32
+    .seh_stackalloc 32
+    stp     x29, x30, [sp]
+    .seh_save_fplr 0
+    stp     x19, x20, [sp, #16]
+    .seh_save_regp x19, 16
+    add     x29, sp, #0
+    .seh_add_fp 0
     .seh_endprologue
-    mov     x8, #SyscallId
-    svc     #0
+
+    ARM64_ZW_CALL_NT \Name
+    ldp     x19, x20, [sp, #16]
+    ldp     x29, x30, [sp]
+    add     sp, sp, #32
     ret
     .seh_endproc
 .endif
