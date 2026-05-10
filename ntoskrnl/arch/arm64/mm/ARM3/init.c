@@ -38,6 +38,8 @@ PVOID MiSystemPteSpaceEnd;
 
 extern PKIPCR KeArm64CurrentPcr;
 extern PKTHREAD KeArm64CurrentThread;
+extern PVOID KiArm64P0BootStack;
+extern PVOID KiArm64P0BootStackLimit;
 
 static LONG MiArm64SelfMapProbe = -1;
 /* Control whether MiMapPTEs zeroes newly allocated leaf pages (data pages). */
@@ -133,6 +135,12 @@ static VOID MiMapPDEs(PVOID StartAddress, PVOID EndAddress);
 static VOID MiMapPTEs(PVOID StartAddress, PVOID EndAddress);
 static VOID MiArm64MapKseg0IdentityRange(PVOID BaseAddress, SIZE_T Size);
 static VOID MiArm64MapKseg0IdentityRangeWithAttr(PVOID BaseAddress, SIZE_T Size, ULONG AttrIndex);
+static VOID MiArm64MapEarlyAliasRange(PVOID BaseAddress, SIZE_T Size);
+static VOID MiArm64MapEarlyAliasRangeWithAttr(PVOID BaseAddress, SIZE_T Size, ULONG AttrIndex);
+static VOID MiArm64MapEarlyDeviceRange(ULONGLONG BaseAddress, SIZE_T Size);
+static VOID MiArm64MapEarlyDeviceRanges(PARM64_LOADER_BLOCK Arm64Block);
+static VOID MiArm64MapEarlyStackRange(ULONG_PTR StackLimit, ULONG_PTR StackTop);
+static VOID MiArm64MapCurrentStackAlias(VOID);
 static VOID MiArm64MapLoaderProcessorState(PLOADER_PARAMETER_BLOCK LoaderBlock);
 static VOID MiArm64MapLoaderPhysicalMemory(PLOADER_PARAMETER_BLOCK LoaderBlock);
 
@@ -251,6 +259,129 @@ MiArm64MapKseg0IdentityBlocks(
     }
 
     return TRUE;
+}
+
+static
+VOID
+MiArm64MapEarlyAliasRangeWithAttr(
+    _In_ PVOID BaseAddress,
+    _In_ SIZE_T Size,
+    _In_ ULONG AttrIndex)
+{
+    ULONG_PTR StartVa, EndVa, Va, StartPa;
+    BOOLEAN MappedAny = FALSE;
+
+    if ((BaseAddress == NULL) || (Size == 0))
+    {
+        return;
+    }
+
+    StartVa = ALIGN_DOWN_BY((ULONG_PTR)BaseAddress, PAGE_SIZE);
+    EndVa = ALIGN_DOWN_BY((ULONG_PTR)BaseAddress + Size - 1, PAGE_SIZE);
+
+    if (StartVa >= (ULONG_PTR)MI_ARM64_PHYS_MAP_BASE)
+    {
+        StartPa = StartVa - (ULONG_PTR)MI_ARM64_PHYS_MAP_BASE;
+    }
+    else if (StartVa >= (ULONG_PTR)MI_ARM64_BOOT_IMAGE_BASE)
+    {
+        StartPa = StartVa - (ULONG_PTR)MI_ARM64_BOOT_IMAGE_BASE;
+    }
+    else if (StartVa >= (ULONG_PTR)KSEG0_BASE)
+    {
+        StartPa = StartVa - (ULONG_PTR)KSEG0_BASE;
+    }
+    else
+    {
+        StartPa = StartVa;
+    }
+
+    MiMapPPEs((PVOID)StartVa, (PVOID)EndVa);
+    MiMapPDEs((PVOID)StartVa, (PVOID)EndVa);
+
+    for (Va = StartVa; Va <= EndVa; Va += PAGE_SIZE)
+    {
+        PMMPTE PointerPte = MiAddressToPte((PVOID)Va);
+        MMPTE Pte = ValidKernelPte;
+        PFN_NUMBER Pfn = (PFN_NUMBER)((StartPa + (Va - StartVa)) >> PAGE_SHIFT);
+
+        Pte.u.Hard.PageFrameNumber = Pfn;
+        MI_SET_PTE_ATTR_INDEX(&Pte, AttrIndex);
+
+        if (PointerPte->u.Long != Pte.u.Long)
+        {
+            *PointerPte = Pte;
+            MappedAny = TRUE;
+        }
+
+        if (Va == EndVa)
+        {
+            break;
+        }
+    }
+
+    if (MappedAny)
+    {
+        __asm__ __volatile__("dsb ishst\n\ttlbi vmalle1is\n\tdsb ish\n\tisb" ::: "memory");
+    }
+}
+
+static
+VOID
+MiArm64MapEarlyAliasRange(
+    _In_ PVOID BaseAddress,
+    _In_ SIZE_T Size)
+{
+    MiArm64MapEarlyAliasRangeWithAttr(BaseAddress,
+                                      Size,
+                                      MI_ARM64_MAIR_NORMAL_WB_IDX);
+}
+
+static
+VOID
+MiArm64MapEarlyDeviceRange(
+    _In_ ULONGLONG BaseAddress,
+    _In_ SIZE_T Size)
+{
+    if ((BaseAddress == 0) || (Size == 0))
+    {
+        return;
+    }
+
+    MiArm64MapKseg0IdentityRangeWithAttr((PVOID)(ULONG_PTR)BaseAddress,
+                                         Size,
+                                         MI_ARM64_MAIR_DEVICE_nGnRnE_IDX);
+    MiArm64MapEarlyAliasRangeWithAttr((PVOID)(ULONG_PTR)BaseAddress,
+                                      Size,
+                                      MI_ARM64_MAIR_DEVICE_nGnRnE_IDX);
+}
+
+static
+VOID
+MiArm64MapEarlyDeviceRanges(
+    _In_ PARM64_LOADER_BLOCK Arm64Block)
+{
+    ULONG Count;
+
+    if (Arm64Block == NULL)
+    {
+        return;
+    }
+
+    Count = Arm64Block->EarlyDeviceRangeCount;
+    if (Count > ARM64_LOADER_MAX_EARLY_DEVICE_RANGES)
+    {
+        Count = ARM64_LOADER_MAX_EARLY_DEVICE_RANGES;
+    }
+
+    for (ULONG Index = 0; Index < Count; ++Index)
+    {
+        PARM64_LOADER_EARLY_DEVICE_RANGE Range;
+
+        Range = &Arm64Block->EarlyDeviceRanges[Index];
+        MiArm64MapEarlyDeviceRange(Range->BaseAddress,
+                                   (SIZE_T)Range->Length);
+    }
 }
 
 static
@@ -456,6 +587,48 @@ MiArm64MapLoaderPhysicalMemory(
 
 static
 VOID
+MiArm64MapEarlyStackRange(
+    _In_ ULONG_PTR StackLimit,
+    _In_ ULONG_PTR StackTop)
+{
+    SIZE_T StackSize;
+
+    if ((StackLimit == 0) || (StackTop == 0) || (StackLimit >= StackTop))
+    {
+        return;
+    }
+
+    StackLimit = ALIGN_DOWN_BY(StackLimit, PAGE_SIZE);
+    StackTop = ALIGN_UP_BY(StackTop, PAGE_SIZE);
+    StackSize = StackTop - StackLimit;
+
+    MiArm64MapKseg0IdentityRange((PVOID)StackLimit, StackSize);
+    MiArm64MapEarlyAliasRange((PVOID)StackLimit, StackSize);
+}
+
+static
+VOID
+MiArm64MapCurrentStackAlias(VOID)
+{
+    ULONG_PTR CurrentSp;
+    ULONG_PTR StackBase;
+    SIZE_T StackSize;
+
+    __asm__ __volatile__("mov %0, sp" : "=r"(CurrentSp));
+
+    if (CurrentSp <= KERNEL_STACK_SIZE)
+    {
+        return;
+    }
+
+    StackBase = ALIGN_DOWN_BY(CurrentSp - KERNEL_STACK_SIZE, PAGE_SIZE);
+    StackSize = ALIGN_UP_BY((CurrentSp - StackBase) + PAGE_SIZE, PAGE_SIZE);
+
+    MiArm64MapEarlyStackRange(StackBase, StackBase + StackSize);
+}
+
+static
+VOID
 MiArm64MapLoaderProcessorState(
     _In_ PLOADER_PARAMETER_BLOCK LoaderBlock)
 {
@@ -472,6 +645,9 @@ MiArm64MapLoaderProcessorState(
     __asm__ __volatile__("mrs %0, ttbr0_el1" : "=r"(Ttbr0));
     __asm__ __volatile__("mrs %0, ttbr1_el1" : "=r"(Ttbr1));
 
+    MiArm64MapCurrentStackAlias();
+    MiArm64MapEarlyDeviceRanges(Arm64Block);
+
     if (MI_ARM64_TTBR_TO_PA(Ttbr0) != 0)
     {
         MiArm64MapKseg0IdentityRange((PVOID)(ULONG_PTR)MI_ARM64_TTBR_TO_PA(Ttbr0),
@@ -486,34 +662,53 @@ MiArm64MapLoaderProcessorState(
 
     MiArm64MapKseg0IdentityRange((PVOID)(ULONG_PTR)Arm64Block->PcrPage,
                                  8 * PAGE_SIZE);
+    MiArm64MapEarlyAliasRange((PVOID)(ULONG_PTR)Arm64Block->PcrPage,
+                              8 * PAGE_SIZE);
 
     if (LoaderBlock->KernelStack != 0)
     {
-        MiArm64MapKseg0IdentityRange((PVOID)((ULONG_PTR)LoaderBlock->KernelStack -
-                                             KERNEL_STACK_SIZE),
-                                     KERNEL_STACK_SIZE);
+        ULONG_PTR StackTop = (ULONG_PTR)LoaderBlock->KernelStack;
+        ULONG_PTR StackLimit = StackTop - KERNEL_STACK_SIZE;
+
+        if ((StackTop == (ULONG_PTR)KiArm64P0BootStack) &&
+            (KiArm64P0BootStackLimit != NULL) &&
+            ((ULONG_PTR)KiArm64P0BootStackLimit < StackTop))
+        {
+            StackLimit = (ULONG_PTR)KiArm64P0BootStackLimit;
+        }
+
+        MiArm64MapEarlyStackRange(StackLimit, StackTop);
+    }
+
+    if (LoaderBlock->Thread != 0)
+    {
+        PKTHREAD Thread = (PKTHREAD)(ULONG_PTR)LoaderBlock->Thread;
+
+        MiArm64MapEarlyStackRange((ULONG_PTR)Thread->StackLimit,
+                                  (ULONG_PTR)Thread->StackBase);
+
+        if (Thread->KernelStack != NULL)
+        {
+            ULONG_PTR StackTop = (ULONG_PTR)Thread->KernelStack;
+            MiArm64MapEarlyStackRange(StackTop - KERNEL_STACK_SIZE,
+                                      StackTop);
+        }
     }
 
     if (Arm64Block->PanicStack != 0)
     {
-        MiArm64MapKseg0IdentityRange((PVOID)((ULONG_PTR)Arm64Block->PanicStack -
-                                             KERNEL_STACK_SIZE),
-                                     KERNEL_STACK_SIZE);
+        MiArm64MapEarlyStackRange((ULONG_PTR)Arm64Block->PanicStack -
+                                  KERNEL_STACK_SIZE,
+                                  (ULONG_PTR)Arm64Block->PanicStack);
     }
 
     if (Arm64Block->InterruptStack != 0)
     {
-        MiArm64MapKseg0IdentityRange((PVOID)((ULONG_PTR)Arm64Block->InterruptStack -
-                                             KERNEL_STACK_SIZE),
-                                     KERNEL_STACK_SIZE);
+        MiArm64MapEarlyStackRange((ULONG_PTR)Arm64Block->InterruptStack -
+                                  KERNEL_STACK_SIZE,
+                                  (ULONG_PTR)Arm64Block->InterruptStack);
     }
 
-    if (Arm64Block->EarlyUartAddress != 0)
-    {
-        MiArm64MapKseg0IdentityRangeWithAttr((PVOID)(ULONG_PTR)Arm64Block->EarlyUartAddress,
-                                             PAGE_SIZE,
-                                             MI_ARM64_MAIR_DEVICE_nGnRnE_IDX);
-    }
 }
 
 
@@ -1697,6 +1892,15 @@ MiInitMachineDependent(_Inout_ PLOADER_PARAMETER_BLOCK LoaderBlock)
                     PsIdleProcess->Pcb.DirectoryTableBase[1] = (ULONG_PTR)RootPa;
                 }
 
+                /*
+                 * The boot stack, PCR and early device MMIO ranges must be
+                 * reachable through the process root before TTBR0 is
+                 * synchronized to it. An interrupt or exception can arrive
+                 * immediately after the switch and its vector prologue needs
+                 * stack and device access before C code can recover.
+                 */
+                MiArm64MapLoaderProcessorState(LoaderBlock);
+
                 __asm__ __volatile__("mrs %0, ttbr0_el1" : "=r"(Ttbr0));
                 if (MI_ARM64_TTBR_TO_PA(Ttbr0) != RootPa)
                 {
@@ -1722,7 +1926,6 @@ MiInitMachineDependent(_Inout_ PLOADER_PARAMETER_BLOCK LoaderBlock)
          * ARM3 takes over TTBR1, so seed explicit KSEG0 identity mappings
          * instead of depending on loader block mappings that can disappear.
          */
-        MiArm64MapLoaderProcessorState(LoaderBlock);
         MiArm64MapPxeAlias();
         MiArm64MapLoaderPhysicalMemory(LoaderBlock);
 
