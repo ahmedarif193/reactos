@@ -233,7 +233,9 @@ MiReserveAlignedSystemPtes(IN ULONG NumberOfPtes,
     //
     // Flush the TLB
     //
+#if !defined(_M_ARM64)
     KeFlushProcessTb();
+#endif
 
     //
     // Return the reserved PTEs
