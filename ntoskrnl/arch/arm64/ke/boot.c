@@ -293,19 +293,26 @@ KiArm64ReadUnalignedU64(_In_ const VOID *Source)
 }
 
 CODE_SEG("INIT")
-static PRSDP
-KiArm64FindRsdp(_In_opt_ PLOADER_PARAMETER_BLOCK LoaderBlock)
+static BOOLEAN
+KiArm64FindAcpiNode(_In_opt_ PLOADER_PARAMETER_BLOCK LoaderBlock,
+                    _Outptr_result_maybenull_ PACPI_BIOS_MULTI_NODE *AcpiNode)
 {
     PCONFIGURATION_COMPONENT_DATA ComponentEntry;
     PCONFIGURATION_COMPONENT_DATA Next = NULL;
     PCM_PARTIAL_RESOURCE_LIST ResourceList;
     PACPI_BIOS_MULTI_NODE NodeData;
 
+    *AcpiNode = NULL;
+
     if (!KiArm64IdentityMapActive)
-        return NULL;
+    {
+        return FALSE;
+    }
 
     if (!LoaderBlock || !LoaderBlock->ConfigurationRoot)
-        return NULL;
+    {
+        return FALSE;
+    }
 
     ComponentEntry = KeFindConfigurationNextEntry(LoaderBlock->ConfigurationRoot,
                                                   AdapterClass,
@@ -329,12 +336,34 @@ KiArm64FindRsdp(_In_opt_ PLOADER_PARAMETER_BLOCK LoaderBlock)
     }
 
     if (!ComponentEntry || !ComponentEntry->ConfigurationData)
-        return NULL;
+    {
+        return FALSE;
+    }
 
     ResourceList = ComponentEntry->ConfigurationData;
     NodeData = (PACPI_BIOS_MULTI_NODE)(ResourceList + 1);
-    if (!NodeData || !NodeData->RsdpAddress.QuadPart)
+    if (!NodeData)
+    {
+        return FALSE;
+    }
+
+    *AcpiNode = NodeData;
+    return TRUE;
+}
+
+CODE_SEG("INIT")
+static PRSDP
+KiArm64FindRsdp(_In_opt_ PLOADER_PARAMETER_BLOCK LoaderBlock)
+{
+    PACPI_BIOS_MULTI_NODE NodeData;
+
+    if (!KiArm64FindAcpiNode(LoaderBlock, &NodeData))
         return NULL;
+
+    if (!NodeData->RsdpAddress.QuadPart)
+    {
+        return NULL;
+    }
 
     KiArm64MapIdentityAcpiRange(NodeData->RsdpAddress.QuadPart, sizeof(RSDP));
     PRSDP Rsdp = (PRSDP)(ULONG_PTR)NodeData->RsdpAddress.QuadPart;
@@ -353,7 +382,7 @@ KiArm64FindRsdp(_In_opt_ PLOADER_PARAMETER_BLOCK LoaderBlock)
  * mode before Mm is available.
  *
  * Without this, tables like FACP (FADT) would only have their headers
- * mapped during KiArm64GetAcpiTable lookups, causing page faults when the
+ * mapped during early ACPI table probing, causing page faults when the
  * HAL tries to read full table contents.
  */
 CODE_SEG("INIT")
@@ -361,6 +390,9 @@ static VOID
 KiArm64MapAllAcpiTables(_In_opt_ PLOADER_PARAMETER_BLOCK LoaderBlock)
 {
     PRSDP Rsdp;
+    PACPI_BIOS_MULTI_NODE AcpiNode = NULL;
+    UINT64 RootPa = 0;
+    PDESCRIPTION_HEADER Root;
     ULONG Count;
     ULONG Index;
 
@@ -370,14 +402,38 @@ KiArm64MapAllAcpiTables(_In_opt_ PLOADER_PARAMETER_BLOCK LoaderBlock)
     }
 
     Rsdp = KiArm64FindRsdp(LoaderBlock);
-    if (!Rsdp)
+    if (Rsdp)
+    {
+        if ((Rsdp->Revision >= 2) && (Rsdp->XsdtAddress.QuadPart != 0))
+            RootPa = Rsdp->XsdtAddress.QuadPart;
+        else
+            RootPa = (UINT64)Rsdp->RsdtAddress;
+    }
+
+    if (!RootPa &&
+        KiArm64FindAcpiNode(LoaderBlock, &AcpiNode) &&
+        AcpiNode)
+    {
+        RootPa = AcpiNode->RsdtAddress.QuadPart;
+    }
+
+    if (!RootPa)
     {
         return;
     }
 
-    if ((Rsdp->Revision >= 2) && (Rsdp->XsdtAddress.QuadPart != 0))
+    KiArm64MapIdentityAcpiRange(RootPa, sizeof(DESCRIPTION_HEADER));
+    Root = (PDESCRIPTION_HEADER)(ULONG_PTR)RootPa;
+
+    if ((Root->Signature != XSDT_SIGNATURE) &&
+        (Root->Signature != RSDT_SIGNATURE))
     {
-        UINT64 XsdtPa = Rsdp->XsdtAddress.QuadPart;
+        return;
+    }
+
+    if (Root->Signature == XSDT_SIGNATURE)
+    {
+        UINT64 XsdtPa = RootPa;
         PXSDT Xsdt;
         ULONG Length;
 
@@ -417,9 +473,9 @@ KiArm64MapAllAcpiTables(_In_opt_ PLOADER_PARAMETER_BLOCK LoaderBlock)
             }
         }
     }
-    else if (Rsdp->RsdtAddress != 0)
+    else
     {
-        UINT64 RsdtPa = (UINT64)Rsdp->RsdtAddress;
+        UINT64 RsdtPa = RootPa;
         PRSDT Rsdt;
         ULONG Length;
 
@@ -473,15 +529,17 @@ KiArm64MapIdentityDeviceBlock(_In_opt_ PLOADER_PARAMETER_BLOCK LoaderBlock,
                               _In_ UINT64 Attributes)
 {
     UINT64 Start;
+    BOOLEAN DescriptorMapped;
 
     if (Base == 0)
         return;
 
     Start = Base & ~(ARM64_L2_BLOCK_SIZE - 1ULL);
 
-    if (KiArm64IsRangeMappedByDescriptors(LoaderBlock,
-                                          Start,
-                                          Start + ARM64_L2_BLOCK_SIZE))
+    DescriptorMapped = KiArm64IsRangeMappedByDescriptors(LoaderBlock,
+                                                         Start,
+                                                         Start + ARM64_L2_BLOCK_SIZE);
+    if (DescriptorMapped)
     {
         return;
     }

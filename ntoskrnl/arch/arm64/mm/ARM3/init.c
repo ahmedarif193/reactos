@@ -35,6 +35,8 @@ extern MMPTE ValidKernelPte;
 extern PVOID MiSystemViewStart;
 PVOID MiSystemPteSpaceStart;
 PVOID MiSystemPteSpaceEnd;
+extern KSPIN_LOCK NonPagedPoolLock;
+extern KSPIN_LOCK MmNonPagedPoolLock;
 
 extern PKIPCR KeArm64CurrentPcr;
 extern PKTHREAD KeArm64CurrentThread;
@@ -1666,6 +1668,8 @@ NTSTATUS
 NTAPI
 MiInitMachineDependent(_Inout_ PLOADER_PARAMETER_BLOCK LoaderBlock)
 {
+    DPRINT1("[MMINIT] entry\n");
+
     RtlZeroMemory(MiArm64SelfMapL0Cache, sizeof(MiArm64SelfMapL0Cache));
     RtlZeroMemory(MiArm64SelfMapL1Cache, sizeof(MiArm64SelfMapL1Cache));
     MiArm64SelfMapCacheInitialized = TRUE;
@@ -1913,6 +1917,9 @@ MiInitMachineDependent(_Inout_ PLOADER_PARAMETER_BLOCK LoaderBlock)
                 __asm__ __volatile__("tlbi vmalle1is" ::: "memory");
                 __asm__ __volatile__("dsb ish" ::: "memory");
                 __asm__ __volatile__("isb" ::: "memory");
+                DPRINT1("[MMINIT] TTBR0 switch complete old=0x%016llx new=0x%016llx\n",
+                        (unsigned long long)MI_ARM64_TTBR_TO_PA(Ttbr0),
+                        (unsigned long long)RootPa);
             }
 
         }
@@ -1925,6 +1932,7 @@ MiInitMachineDependent(_Inout_ PLOADER_PARAMETER_BLOCK LoaderBlock)
          */
         MiArm64MapPxeAlias();
         MiArm64MapLoaderPhysicalMemory(LoaderBlock);
+        DPRINT1("[MMINIT] loader mappings complete\n");
 
         {
             PVOID PfnDbStart = (PVOID)MmPfnDatabase;
@@ -1934,13 +1942,21 @@ MiInitMachineDependent(_Inout_ PLOADER_PARAMETER_BLOCK LoaderBlock)
         }
 
         MiMapPfnDatabase(LoaderBlock);
+        DPRINT1("[MMINIT] PFN database mapped\n");
 
         MiInitializeColorTables();
         MiBuildNonPagedPool();
 
+        ExpArm64PoolBootstrapMode = TRUE;
+        KeInitializeSpinLock(&MmNonPagedPoolLock);
         InitializePool(NonPagedPool, 0);
+        KeInitializeSpinLock(&NonPagedPoolLock);
+        KeInitializeSpinLock(&MmNonPagedPoolLock);
+        ExpArm64PoolBootstrapMode = FALSE;
+        DPRINT1("[MMINIT] nonpaged pool initialized\n");
 
         MiBuildSystemPteSpace();
+        DPRINT1("[MMINIT] system PTE space ready\n");
 
         MiMapPPEs((PVOID)MI_MAPPING_RANGE_START, (PVOID)MI_MAPPING_RANGE_END);
         MiMapPDEs((PVOID)MI_MAPPING_RANGE_START, (PVOID)MI_MAPPING_RANGE_END);
@@ -2462,6 +2478,11 @@ MiBuildSystemPteSpace(VOID)
                                                     SystemPteSpace);
     RtlZeroMemory(MiFirstReservedZeroingPte, (MI_ZERO_PTES + 1) * sizeof(MMPTE));
     MiFirstReservedZeroingPte->u.Hard.PageFrameNumber = MI_ZERO_PTES;
+    DPRINT1("[SYSPTE] ready start=%p end=%p count=%lu zero=%p\n",
+            MiSystemPteSpaceStart,
+            SystemPteRangeEnd,
+            MmNumberOfSystemPtes,
+            MiFirstReservedZeroingPte);
 }
 
 VOID

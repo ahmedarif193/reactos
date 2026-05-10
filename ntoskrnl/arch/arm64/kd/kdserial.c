@@ -12,7 +12,6 @@
 
 CPPORT DefaultPort = {0};
 extern BOOLEAN KdDebuggerNotPresent;
-extern VOID KiArm64RawPuts(const char *str);
 
 /*
  * ARM64 KD serial transport over the runtime-detected early UART.
@@ -27,7 +26,6 @@ KdPortInitializeEx(_Inout_ PCPPORT PortInformation,
     PUCHAR Base;
     ULONG Baud;
 
-    KiArm64RawPuts("[KDPORT] KdPortInitializeEx entry\n");
 
     if (!EarlyUartIsInitialized() || EarlyUartGetBaseAddress() == 0)
     {
@@ -44,22 +42,16 @@ KdPortInitializeEx(_Inout_ PCPPORT PortInformation,
     PortInformation->Flags |= CPPORT_FLAG_KEEP_BAUD;
     if (Base == NULL)
     {
-        KiArm64RawPuts("[KDPORT] no PL011 base, before HalDisplayString\n");
         HalDisplayString("\r\nKernel Debugger: Serial port not found!\r\n\r\n");
-        KiArm64RawPuts("[KDPORT] no PL011 base, after HalDisplayString\n");
         return FALSE;
     }
-    KiArm64RawPuts("[KDPORT] PL011 port accepted\n");
 
     /* Make sure no stale characters are queued before kdcom starts listening */
-    KiArm64RawPuts("[KDPORT] before drain FIFO\n");
     EarlyUartDrainReceiveFifo();
-    KiArm64RawPuts("[KDPORT] after drain FIFO\n");
 
     /* Transport is live; record transport-present bit.
      * Parity flip of NotPresent is done post-banner in kdinit to avoid stalls. */
     SharedUserData->KdDebuggerEnabled |= 0x00000002;
-    KiArm64RawPuts("[KDPORT] transport present bit set\n");
 
 #ifndef NDEBUG
     {
@@ -74,7 +66,6 @@ KdPortInitializeEx(_Inout_ PCPPORT PortInformation,
     }
 #endif
 
-    KiArm64RawPuts("[KDPORT] KdPortInitializeEx return TRUE\n");
     return TRUE;
 }
 
