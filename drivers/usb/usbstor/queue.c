@@ -91,12 +91,18 @@ USBSTOR_QueueAddIrp(
 
     KeAcquireSpinLock(&FDODeviceExtension->IrpListLock, &OldLevel);
 
-    SrbProcessing = FDODeviceExtension->IrpPendingCount != 0;
+    SrbProcessing = (FDODeviceExtension->IrpPendingCount != 0);
+    ASSERT(!SrbProcessing || FDODeviceExtension->ActiveSrb != NULL);
+    ASSERT(SrbProcessing || FDODeviceExtension->ActiveSrb == NULL);
 
     if (SrbProcessing)
     {
         // add irp to queue
         InsertTailList(&FDODeviceExtension->IrpListHead, &Irp->Tail.Overlay.ListEntry);
+    }
+    else
+    {
+        FDODeviceExtension->ActiveSrb = Request;
     }
 
     FDODeviceExtension->IrpPendingCount++;
@@ -112,15 +118,10 @@ USBSTOR_QueueAddIrp(
 
     if (SrbProcessing)
     {
-        ASSERT(FDODeviceExtension->ActiveSrb != NULL);
-
         OldDriverCancel = IoSetCancelRoutine(Irp, USBSTOR_Cancel);
     }
     else
     {
-        ASSERT(FDODeviceExtension->ActiveSrb == NULL);
-
-        FDODeviceExtension->ActiveSrb = Request;
         OldDriverCancel = IoSetCancelRoutine(Irp, USBSTOR_CancelIo);
     }
 
@@ -138,33 +139,6 @@ USBSTOR_QueueAddIrp(
     DPRINT("IrpListFreeze: %lu IrpPendingCount %lu\n", IrpListFreeze, FDODeviceExtension->IrpPendingCount);
 
     return (IrpListFreeze || SrbProcessing);
-}
-
-PIRP
-USBSTOR_RemoveIrp(
-    IN PDEVICE_OBJECT DeviceObject)
-{
-    KIRQL OldLevel;
-    PFDO_DEVICE_EXTENSION FDODeviceExtension;
-    PLIST_ENTRY Entry;
-    PIRP Irp = NULL;
-
-    FDODeviceExtension = (PFDO_DEVICE_EXTENSION)DeviceObject->DeviceExtension;
-    ASSERT(FDODeviceExtension->Common.IsFDO);
-
-    KeAcquireSpinLock(&FDODeviceExtension->IrpListLock, &OldLevel);
-
-    if (!IsListEmpty(&FDODeviceExtension->IrpListHead))
-    {
-        Entry = RemoveHeadList(&FDODeviceExtension->IrpListHead);
-
-        // get offset to start of irp
-        Irp = (PIRP)CONTAINING_RECORD(Entry, IRP, Tail.Overlay.ListEntry);
-    }
-
-    KeReleaseSpinLock(&FDODeviceExtension->IrpListLock, OldLevel);
-
-    return Irp;
 }
 
 VOID
@@ -227,9 +201,13 @@ USBSTOR_QueueNextRequest(
     PIRP Irp;
     PIO_STACK_LOCATION IoStack;
     PSCSI_REQUEST_BLOCK Request;
+    PLIST_ENTRY Entry;
+    KIRQL OldLevel;
 
     FDODeviceExtension = (PFDO_DEVICE_EXTENSION)DeviceObject->DeviceExtension;
     ASSERT(FDODeviceExtension->Common.IsFDO);
+
+    KeAcquireSpinLock(&FDODeviceExtension->IrpListLock, &OldLevel);
 
     DPRINT("USBSTOR_QueueNextRequest: ActiveSrb=%p Flags=0x%lx PendingCount=%lu\n",
            FDODeviceExtension->ActiveSrb, FDODeviceExtension->Flags, FDODeviceExtension->IrpPendingCount);
@@ -240,26 +218,28 @@ USBSTOR_QueueNextRequest(
     {
         DPRINT("USBSTOR_QueueNextRequest: skipping (ActiveSrb or frozen)\n");
         // no work to do yet
+        KeReleaseSpinLock(&FDODeviceExtension->IrpListLock, OldLevel);
         return;
     }
 
-    // remove first irp from list
-    Irp = USBSTOR_RemoveIrp(DeviceObject);
-
     // is there an irp pending
-    if (!Irp)
+    if (IsListEmpty(&FDODeviceExtension->IrpListHead))
     {
         DPRINT("USBSTOR_QueueNextRequest: no IRP in list, calling IoStartNextPacket\n");
-        // no work to do
+        KeReleaseSpinLock(&FDODeviceExtension->IrpListLock, OldLevel);
         IoStartNextPacket(DeviceObject, TRUE);
         return;
     }
+
+    Entry = RemoveHeadList(&FDODeviceExtension->IrpListHead);
+    Irp = (PIRP)CONTAINING_RECORD(Entry, IRP, Tail.Overlay.ListEntry);
 
     IoStack = IoGetCurrentIrpStackLocation(Irp);
     Request = (PSCSI_REQUEST_BLOCK)IoStack->Parameters.Others.Argument1;
     ASSERT(Request);
 
     FDODeviceExtension->ActiveSrb = Request;
+    KeReleaseSpinLock(&FDODeviceExtension->IrpListLock, OldLevel);
 
     DPRINT("USBSTOR_QueueNextRequest: starting Irp=%p Srb=%p\n", Irp, Request);
 
@@ -277,6 +257,7 @@ USBSTOR_QueueRelease(
     KIRQL OldLevel;
     PIO_STACK_LOCATION IoStack;
     PSCSI_REQUEST_BLOCK Request;
+    PLIST_ENTRY Entry;
 
     FDODeviceExtension = (PFDO_DEVICE_EXTENSION)DeviceObject->DeviceExtension;
     ASSERT(FDODeviceExtension->Common.IsFDO);
@@ -286,18 +267,22 @@ USBSTOR_QueueRelease(
     // clear freezed status
     FDODeviceExtension->Flags &= ~USBSTOR_FDO_FLAGS_IRP_LIST_FREEZE;
 
-    KeReleaseSpinLock(&FDODeviceExtension->IrpListLock, OldLevel);
-
     // grab newest irp
-    Irp = USBSTOR_RemoveIrp(DeviceObject);
-
-    if (!Irp)
+    if (IsListEmpty(&FDODeviceExtension->IrpListHead))
     {
+        FDODeviceExtension->ActiveSrb = NULL;
+        KeReleaseSpinLock(&FDODeviceExtension->IrpListLock, OldLevel);
         return;
     }
 
+    Entry = RemoveHeadList(&FDODeviceExtension->IrpListHead);
+    Irp = (PIRP)CONTAINING_RECORD(Entry, IRP, Tail.Overlay.ListEntry);
+
     IoStack = IoGetCurrentIrpStackLocation(Irp);
     Request = (PSCSI_REQUEST_BLOCK)IoStack->Parameters.Others.Argument1;
+    FDODeviceExtension->ActiveSrb = Request;
+
+    KeReleaseSpinLock(&FDODeviceExtension->IrpListLock, OldLevel);
 
     IoStartPacket(DeviceObject,
                   Irp,
