@@ -2275,6 +2275,76 @@ HalpArm64CleanInvalidateDcacheRange(_In_ PVOID Base, _In_ SIZE_T Length)
     __asm__ __volatile__("dsb ish" ::: "memory");
 }
 
+static BOOLEAN
+HalpArm64FlushMdlDcacheRange(_In_ PMDL Mdl,
+                             _In_ PVOID CurrentVa,
+                             _In_ ULONG Length,
+                             _In_ BOOLEAN WriteToDevice)
+{
+    PPFN_NUMBER PfnArray;
+    ULONG_PTR Offset;
+    ULONG_PTR EndOffset;
+    ULONG PageCount;
+    ULONG PageIndex;
+    ULONG PageOffset;
+
+    if (!Mdl || !CurrentVa || !Mdl->StartVa ||
+        Length == 0 || (Mdl->MdlFlags & MDL_IO_SPACE))
+    {
+        return FALSE;
+    }
+
+    PfnArray = MmGetMdlPfnArray(Mdl);
+    if (!PfnArray)
+        return FALSE;
+
+    if ((ULONG_PTR)CurrentVa < (ULONG_PTR)Mdl->StartVa)
+        return FALSE;
+
+    Offset = (ULONG_PTR)CurrentVa - (ULONG_PTR)Mdl->StartVa;
+    if (Offset < Mdl->ByteOffset)
+        return FALSE;
+
+    EndOffset = (ULONG_PTR)Mdl->ByteOffset + Mdl->ByteCount;
+    if (Offset >= EndOffset)
+        return TRUE;
+
+    if (Length > (EndOffset - Offset))
+        Length = (ULONG)(EndOffset - Offset);
+
+    PageCount = ADDRESS_AND_SIZE_TO_SPAN_PAGES(MmGetMdlVirtualAddress(Mdl),
+                                               Mdl->ByteCount);
+    PageIndex = (ULONG)(Offset >> PAGE_SHIFT);
+    PageOffset = (ULONG)(Offset & (PAGE_SIZE - 1));
+
+    while (Length && PageIndex < PageCount)
+    {
+        ULONG ChunkLength = PAGE_SIZE - PageOffset;
+        PHYSICAL_ADDRESS PhysicalAddress;
+        PVOID AliasVa;
+
+        if (ChunkLength > Length)
+            ChunkLength = Length;
+
+        PhysicalAddress.QuadPart = ((ULONGLONG)PfnArray[PageIndex] << PAGE_SHIFT) +
+                                   PageOffset;
+        AliasVa = (PVOID)(ULONG_PTR)(HAL_ARM64_PHYS_MAP_BASE |
+                                      (PhysicalAddress.QuadPart &
+                                       HAL_ARM64_PHYS_ADDR_MASK));
+
+        if (WriteToDevice)
+            HalpArm64CleanDcacheRange(AliasVa, ChunkLength);
+        else
+            HalpArm64CleanInvalidateDcacheRange(AliasVa, ChunkLength);
+
+        Length -= ChunkLength;
+        PageIndex++;
+        PageOffset = 0;
+    }
+
+    return TRUE;
+}
+
 static ULONG
 HalpGicItsSelectCpuFromAffinity(_In_ ULONGLONG Affinity)
 {
@@ -8353,48 +8423,14 @@ IoFlushAdapterBuffers(
     /* Perform cache maintenance for non-coherent DMA */
     if (!HalpArm64DmaCoherency.SystemCoherent)
     {
-        /* Ensure all DMA writes from the device have committed to memory
-         * before we invalidate the CPU cache. Without this barrier, a
-         * posted PCIe write might still be in transit and we'd invalidate
-         * the cache line before the data arrives. */
         __asm__ __volatile__("dsb sy" ::: "memory");
 
-        if (!WriteToDevice)
+        if (!HalpArm64FlushMdlDcacheRange(Mdl, CurrentVa, Length, WriteToDevice))
         {
-            /* Reading from device (DMA write to memory completed) — invalidate cache */
-            HalpArm64CleanInvalidateDcacheRange(CurrentVa, Length);
-
-            /* Debug: check if DMA data arrived by reading through KSEG0 */
-            if (Length >= 9 && Mdl)
-            {
-                PPFN_NUMBER Pfns = MmGetMdlPfnArray(Mdl);
-                if (Pfns)
-                {
-                    ULONG_PTR KsegVa = HAL_ARM64_PHYS_MAP_BASE |
-                                       ((ULONG_PTR)Pfns[0] << PAGE_SHIFT) |
-                                       ((ULONG_PTR)CurrentVa & (PAGE_SIZE - 1));
-                    volatile UCHAR *KsegPtr = (volatile UCHAR *)KsegVa;
-                    UCHAR CpuByte = *(volatile UCHAR *)CurrentVa;
-                    UCHAR KsegByte = *KsegPtr;
-                    if (CpuByte == 0 && KsegByte != 0)
-                    {
-                        DPRINT1("[arm64][DMA] FlushBuf MISMATCH: VA=%p cpu=0x%02x kseg=0x%02x len=%lu "
-                                "pfn=%Ix (CACHE STALE!)\n",
-                                CurrentVa, CpuByte, KsegByte, Length, Pfns[0]);
-                    }
-                    else if (CpuByte == 0 && KsegByte == 0 && Length >= 44)
-                    {
-                        DPRINT1("[arm64][DMA] FlushBuf BOTH ZERO: VA=%p len=%lu pfn=%Ix "
-                                "(DMA did not write?)\n",
-                                CurrentVa, Length, Pfns[0]);
-                    }
-                }
-            }
-        }
-        else
-        {
-            /* Writing to device (DMA read from memory) — clean cache */
-            HalpArm64CleanDcacheRange(CurrentVa, Length);
+            if (!WriteToDevice)
+                HalpArm64CleanInvalidateDcacheRange(CurrentVa, Length);
+            else
+                HalpArm64CleanDcacheRange(CurrentVa, Length);
         }
 
         /* Ensure cache operations complete before returning */
