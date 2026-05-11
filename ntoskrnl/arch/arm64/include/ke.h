@@ -418,6 +418,24 @@ extern BOOLEAN KiArm64IrqFiqConfigured;
 extern ULONG KiArm64NumBreakpoints;
 extern ULONG KiArm64NumWatchpoints;
 
+/*
+ * CPU feature flags populated from ID_AA64* register reads during
+ * KiInitSystem (BSP path). Used by MM, fault handler, and HAL code
+ * to avoid re-reading system registers or pulling single nibbles out
+ * of 64-bit values at every query site.
+ */
+typedef struct _ARM64_CPU_FEATURES
+{
+    ULONG HafdbsSupported:4;    /* ID_AA64MMFR1_EL1[3:0]  0=none 1=HA 2=HA+HD  */
+    ULONG PanSupported:1;       /* ID_AA64MMFR1_EL1[23:20] PAN present          */
+    ULONG SveSupported:1;       /* ID_AA64PFR0_EL1[35:32]  SVE present           */
+    ULONG SmeSupported:1;       /* ID_AA64PFR1_EL1[27:24]  SME present           */
+    ULONG HaEnabled:1;          /* TCR_EL1.HA committed by BSP                   */
+    ULONG HdEnabled:1;          /* TCR_EL1.HD committed (DBM hardware dirty)     */
+} ARM64_CPU_FEATURES;
+
+extern ARM64_CPU_FEATURES Arm64CpuFeatures;
+
 VOID
 KiInitializeDebugRegisterCounts(VOID);
 
