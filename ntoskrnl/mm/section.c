@@ -2135,6 +2135,8 @@ MmAccessFaultSectionView(PMMSUPPORT AddressSpace,
 
     DPRINT("MmAccessFaultSectionView(%p, %p, %p)\n", AddressSpace, MemoryArea, Address);
 
+    PAddress = MM_ROUND_DOWN(Address, PAGE_SIZE);
+
     /* Get the region for this address */
     Region = MmFindRegion((PVOID)MA_GetStartingAddress(MemoryArea),
                         &MemoryArea->SectionData.RegionListHead,
@@ -2157,7 +2159,7 @@ MmAccessFaultSectionView(PMMSUPPORT AddressSpace,
     /*
      * Check if the page has already been set readwrite
      */
-    if (MmGetPageProtect(Process, Address) & (PAGE_READWRITE | PAGE_EXECUTE_READWRITE))
+    if (MmGetPageProtect(Process, PAddress) & (PAGE_READWRITE | PAGE_EXECUTE_READWRITE))
     {
         DPRINT("Address 0x%p\n", Address);
         return STATUS_SUCCESS;
@@ -2192,7 +2194,6 @@ MmAccessFaultSectionView(PMMSUPPORT AddressSpace,
     /*
      * Find the offset of the page
      */
-    PAddress = MM_ROUND_DOWN(Address, PAGE_SIZE);
     Offset.QuadPart = (ULONG_PTR)PAddress - MA_GetStartingAddress(MemoryArea)
                       + MemoryArea->SectionData.ViewOffset;
 
