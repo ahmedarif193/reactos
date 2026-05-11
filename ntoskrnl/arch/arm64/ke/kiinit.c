@@ -11,6 +11,8 @@
 #include <debug.h>
 #include "../include/arm64pl011.h"
 
+ARM64_CPU_FEATURES Arm64CpuFeatures;
+
 struct _KPCR;
 
 FORCEINLINE
@@ -301,21 +303,6 @@ KiInitializeKernel(_Inout_ PKPROCESS InitProcess,
                             (1ULL << 38) |   /* TBI1 */
                             (1ULL << 39) |   /* HA */
                             (1ULL << 40));   /* HD */
-
-                /*
-                 * Hardware Access Flag management (ARMv8.1+ optional feature).
-                 *
-                 * CRITICAL: We must check ID_AA64MMFR1_EL1.HAFDBS before enabling
-                 * TCR.HA, as not all ARMv8.0 implementations support it.
-                 *
-                 * HAFDBS (bits [3:0] of MMFR1):
-                 *   0b0000 = Not supported
-                 *   0b0001 = Access flag hardware update supported (HA)
-                 *   0b0010 = AF + Dirty state hardware update supported (HA + HD)
-                 *
-                 * We check for this below after reading MMFR1 (at line ~729).
-                 * For now, do NOT unconditionally enable TCR.HA here.
-                 */
 
                 __asm__ __volatile__("dsb ish" ::: "memory");
                 __asm__ __volatile__("msr tcr_el1, %0" :: "r"(NewTcr) : "memory");
@@ -836,12 +823,17 @@ KiInitializeSystem(_Inout_ PLOADER_PARAMETER_BLOCK LoaderBlock)
     if (ProcessorNumber == 0)
     {
         ULONG64 Pfr0, Pfr1, Mmfr1, Cpacr;
-        BOOLEAN HasSve, HasSme;
 
         /* Read Processor Feature Registers to detect hardware capabilities */
         __asm__ __volatile__("mrs %0, id_aa64pfr0_el1" : "=r"(Pfr0));
         __asm__ __volatile__("mrs %0, id_aa64pfr1_el1" : "=r"(Pfr1));
         __asm__ __volatile__("mrs %0, id_aa64mmfr1_el1" : "=r"(Mmfr1));
+
+        /* Cache feature bits in the global struct — one canonical read per boot */
+        Arm64CpuFeatures.HafdbsSupported = (ULONG)(Mmfr1 & 0xFULL);
+        Arm64CpuFeatures.PanSupported = (((Mmfr1 >> 20) & 0xFULL) != 0);
+        Arm64CpuFeatures.SveSupported = ((Pfr0 >> 32) & 0xF) != 0;
+        Arm64CpuFeatures.SmeSupported = ((Pfr1 >> 24) & 0xF) != 0;
 
         /*
          * NT code expects ordinary unaligned data accesses to normal memory to
@@ -862,12 +854,6 @@ KiInitializeSystem(_Inout_ PLOADER_PARAMETER_BLOCK LoaderBlock)
             }
         }
 
-        /* Check bits [35:32] of PFR0 for SVE support */
-        HasSve = ((Pfr0 >> 32) & 0xF) != 0;
-
-        /* Check bits [27:24] of PFR1 for SME support */
-        HasSme = ((Pfr1 >> 24) & 0xF) != 0;
-
         /*
          * PAN (Privileged Access Never):
          *
@@ -880,7 +866,7 @@ KiInitializeSystem(_Inout_ PLOADER_PARAMETER_BLOCK LoaderBlock)
          * Follow-up work should implement proper uaccess enable/disable around
          * all user-pointer dereferences (Windows 10/11 behavior).
          */
-        if (((Mmfr1 >> 20) & 0xFULL) != 0)
+        if (Arm64CpuFeatures.PanSupported)
         {
             ULONG64 PanVal = 0;
             ULONG64 Sctlr;
@@ -907,30 +893,29 @@ KiInitializeSystem(_Inout_ PLOADER_PARAMETER_BLOCK LoaderBlock)
 
         }
 
-        /*
-         * Keep TCR.HA disabled. Windows ARM64 leaves AF management visible to
-         * software, and the ARM64 fault path handles AF faults when any mapping
-         * is missing AF despite the boot/kernel seeding.
-         */
+        /* Enable HA/HD if the CPU advertises FEAT_HAFDBS. */
         {
-            ULONG Hafdbs = (ULONG)(Mmfr1 & 0xFULL);
-            ULONG64 CurrentTcr;
+            BOOLEAN EnableHa = (Arm64CpuFeatures.HafdbsSupported >= 1);
+            BOOLEAN EnableHd = (Arm64CpuFeatures.HafdbsSupported >= 2);
+            ULONG64 CurrentTcr, NewTcr;
 
             __asm__ __volatile__("mrs %0, tcr_el1" : "=r"(CurrentTcr));
-            if (CurrentTcr & (1ULL << 39))
+            NewTcr = CurrentTcr & ~((1ULL << 39) | (1ULL << 40));
+            if (EnableHa)
+                NewTcr |= (1ULL << 39);
+            if (EnableHd)
+                NewTcr |= (1ULL << 40);
+            if (NewTcr != CurrentTcr)
             {
-                CurrentTcr &= ~(1ULL << 39);
                 __asm__ __volatile__("dsb ish" ::: "memory");
-                __asm__ __volatile__("msr tcr_el1, %0" :: "r"(CurrentTcr) : "memory");
+                __asm__ __volatile__("msr tcr_el1, %0" :: "r"(NewTcr) : "memory");
                 __asm__ __volatile__("isb" ::: "memory");
                 __asm__ __volatile__("tlbi vmalle1is" ::: "memory");
                 __asm__ __volatile__("dsb ish" ::: "memory");
                 __asm__ __volatile__("isb" ::: "memory");
-
             }
-
-            DPRINT1("ARM64: Hardware Access Flag management disabled (HAFDBS=0x%lx, TCR.HA=0)\n",
-                    Hafdbs);
+            Arm64CpuFeatures.HaEnabled = EnableHa;
+            Arm64CpuFeatures.HdEnabled = EnableHd;
         }
 
         /* Read current CPACR_EL1 */
@@ -950,7 +935,7 @@ KiInitializeSystem(_Inout_ PLOADER_PARAMETER_BLOCK LoaderBlock)
          * 1. User-mode apps with SVE-optimized libraries can still work
          * 2. We only pay the cost of SVE state for threads that use it
          */
-        if (HasSve)
+        if (Arm64CpuFeatures.SveSupported)
         {
             Cpacr &= ~(3ULL << 16); /* ZEN = 00 (trap SVE -> lazy context switch) */
         }
@@ -962,7 +947,7 @@ KiInitializeSystem(_Inout_ PLOADER_PARAMETER_BLOCK LoaderBlock)
          * 3. PSTATE.SM/ZA bit handling
          * For now, SME traps are handled but state is not preserved.
          */
-        if (HasSme)
+        if (Arm64CpuFeatures.SmeSupported)
         {
             Cpacr &= ~(3ULL << 24); /* SMEN = 00 (trap SME instructions) */
         }
@@ -986,10 +971,7 @@ KiInitializeSystem(_Inout_ PLOADER_PARAMETER_BLOCK LoaderBlock)
          * Feature detection globals (KiArm64HasNeon, KiArm64HasSve, etc.)
          * were set by the BSP and are valid for all CPUs in a homogeneous system.
          */
-        ULONG64 Cpacr, Mmfr1;
-
-        /* Read AP's feature register (should match BSP) */
-        __asm__ __volatile__("mrs %0, id_aa64mmfr1_el1" : "=r"(Mmfr1));
+        ULONG64 Cpacr;
 
         /*
          * Match BSP alignment policy. Ordinary unaligned data accesses are
@@ -1012,7 +994,7 @@ KiInitializeSystem(_Inout_ PLOADER_PARAMETER_BLOCK LoaderBlock)
          * PAN: Disable on this AP (same as BSP).
          * Without this, kernel accesses to user addresses fault with DFSC=0xB.
          */
-        if (((Mmfr1 >> 20) & 0xFULL) != 0)
+        if (Arm64CpuFeatures.PanSupported)
         {
             ULONG64 PanVal = 0;
             ULONG64 Sctlr;
@@ -1026,16 +1008,20 @@ KiInitializeSystem(_Inout_ PLOADER_PARAMETER_BLOCK LoaderBlock)
             __asm__ __volatile__("isb" ::: "memory");
         }
 
-        /* Keep TCR.HA disabled on APs too. */
+        /* Apply the same HA/HD TCR_EL1 bits configured by the BSP. */
         {
-            ULONG64 CurrentTcr;
+            ULONG64 CurrentTcr, NewTcr;
 
             __asm__ __volatile__("mrs %0, tcr_el1" : "=r"(CurrentTcr));
-            if (CurrentTcr & (1ULL << 39))
+            NewTcr = CurrentTcr & ~((1ULL << 39) | (1ULL << 40));
+            if (Arm64CpuFeatures.HaEnabled)
+                NewTcr |= (1ULL << 39);
+            if (Arm64CpuFeatures.HdEnabled)
+                NewTcr |= (1ULL << 40);
+            if (NewTcr != CurrentTcr)
             {
-                CurrentTcr &= ~(1ULL << 39);
                 __asm__ __volatile__("dsb ish" ::: "memory");
-                __asm__ __volatile__("msr tcr_el1, %0" :: "r"(CurrentTcr) : "memory");
+                __asm__ __volatile__("msr tcr_el1, %0" :: "r"(NewTcr) : "memory");
                 __asm__ __volatile__("isb" ::: "memory");
                 __asm__ __volatile__("tlbi vmalle1is" ::: "memory");
                 __asm__ __volatile__("dsb ish" ::: "memory");

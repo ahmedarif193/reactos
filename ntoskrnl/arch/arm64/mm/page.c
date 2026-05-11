@@ -1271,7 +1271,7 @@ MmCreateVirtualMappingUnsafeEx(
             FinalPte.u.Hard.PageFrameNumber = Page;
             FinalPte.u.Long |= MmProtectToPteMask[ProtectionMask];
 
-            /* NotDirty encodes write permission and dirty state on ARM64. */
+            /* NotDirty (AP[2]) encodes write permission and dirty state on ARM64. */
             if (FinalPte.u.Hard.Writable)
             {
                 MI_MAKE_DIRTY_PAGE(&FinalPte);
