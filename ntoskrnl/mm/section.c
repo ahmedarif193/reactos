@@ -2161,6 +2161,10 @@ MmAccessFaultSectionView(PMMSUPPORT AddressSpace,
      */
     if (MmGetPageProtect(Process, PAddress) & (PAGE_READWRITE | PAGE_EXECUTE_READWRITE))
     {
+#if defined(_M_ARM64)
+        if (!Arm64CpuFeatures.HdEnabled)
+            MmSetDirtyPage(Process, PAddress);
+#endif
         DPRINT("Address 0x%p\n", Address);
         return STATUS_SUCCESS;
     }

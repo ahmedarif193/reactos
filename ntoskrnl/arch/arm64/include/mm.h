@@ -30,6 +30,7 @@ extern NTKERNELAPI ULONG64 MmUserProbeAddress;
 #define ARM64_PTE_NG                 (1ULL << 11)
 #define ARM64_PTE_PXN                (1ULL << 53)
 #define ARM64_PTE_UXN                (1ULL << 54)
+#define ARM64_PTE_DBM                (1ULL << 51)
 #define ARM64_PTE_WRITE              (1ULL << 55)
 #define ARM64_PTE_COPY_ON_WRITE      (1ULL << 56)
 #define ARM64_PTE_SH_INNER           (3ULL << 8)
@@ -55,7 +56,7 @@ extern NTKERNELAPI ULONG64 MmUserProbeAddress;
 #define PTE_PROTECT_MASK        (ARM64_PTE_PXN | ARM64_PTE_UXN | ARM64_PTE_WRITE | ARM64_PTE_COPY_ON_WRITE | ARM64_PTE_CACHE_MASK)
 #define PTE_VALID               0x0000000000000001ULL
 #define PTE_ACCESSED            0x0000000000000400ULL
-#define PTE_DIRTY               0ULL
+#define PTE_DIRTY               0ULL   /* ARM64 uses AP[2]+DBM instead of a software dirty bit. */
 
 #define ARM64_PTE_TYPE_MASK     0x0000000000000003ULL
 #define ARM64_PTE_TYPE_INVALID  0x0000000000000000ULL
