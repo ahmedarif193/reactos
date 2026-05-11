@@ -204,6 +204,9 @@ MiLoadImageSection(_Inout_ PSECTION *SectionPtr,
 
     /* Copy the image */
     RtlCopyMemory(DriverBase, Base, PteCount << PAGE_SHIFT);
+#if defined(_M_ARM64)
+    KeSweepICache(DriverBase, PteCount << PAGE_SHIFT);
+#endif
 
     /* Now unmap the view */
     Status = MmUnmapViewOfSection(Process, Base);

@@ -1886,12 +1886,14 @@ MmSetDirtyBit(
 
     {
         MI_ARM64_USER_PTE_WALK Walk;
+        MMPTE OldPte;
         MMPTE TempPte;
 
         if (!MiArm64GetUserPteAddress(Address, &Walk))
             goto DirtyBitDone;
 
-        TempPte.u.Long = Walk.PteValue;
+        OldPte.u.Long = Walk.PteValue;
+        TempPte.u.Long = OldPte.u.Long;
 
         if (!TempPte.u.Hard.Valid)
             goto DirtyBitDone;
@@ -1903,7 +1905,7 @@ MmSetDirtyBit(
 
         MiArm64WritePteEntry(Walk.PointerPte, TempPte.u.Long);
 
-        if (!Dirty)
+        if (OldPte.u.Long != TempPte.u.Long)
         {
             __asm__ __volatile__("dsb ishst" ::: "memory");
             __asm__ __volatile__("tlbi vaale1is, %0" :: "r"((ULONG_PTR)Address >> 12) : "memory");
