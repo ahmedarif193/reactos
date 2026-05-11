@@ -45,7 +45,8 @@ typedef struct _HARDWARE_PTE
     ULONG64 Accessed:1;
     ULONG64 NonGlobal:1;
     ULONG64 PageFrameNumber:36;
-    ULONG64 RsvdZ1:4;
+    ULONG64 RsvdZ1:3;
+    ULONG64 Dbm:1;
     ULONG64 ContigousBit:1;
     ULONG64 PrivilegedNoExecute:1;
     ULONG64 UserNoExecute:1;
