@@ -698,6 +698,96 @@ RtlpInsertUnCommittedPages(PHEAP_SEGMENT Segment,
     Segment->NumberOfUnCommittedRanges++;
 }
 
+/*
+ * Verbose dump for SMP-induced heap-state corruption around the post-commit
+ * GuardEntry inspection in RtlpFindAndCommitPages. This is a recoverable
+ * diagnostic — we DPRINT1 the surrounding state and break into the kernel
+ * debugger so the situation is observable instead of crashing silently.
+ *
+ * Triage matrix:
+ *   - Protect == 0 / State != MEM_COMMIT  -> kernel commit bookkeeping desync
+ *   - Protect == PAGE_READWRITE, raw == 0 -> guard write was lost (PTE bug)
+ *   - Raw bytes look like another HEAP_ENTRY -> UCR list desync
+ *   - Raw bytes look like 0xCC/0xCD pattern -> demand-zero ran post-write
+ */
+static
+VOID
+RtlpHeapDumpCorruptedGuardEntry(
+    PHEAP Heap,
+    PHEAP_SEGMENT Segment,
+    PHEAP_UCR_DESCRIPTOR UcrDescriptor,
+    PVOID Address,
+    SIZE_T CommitSize,
+    PHEAP_ENTRY GuardEntry,
+    PCSTR Where)
+{
+    MEMORY_BASIC_INFORMATION Mbi;
+    SIZE_T MbiResult;
+    NTSTATUS QueryStatus;
+    PUCHAR TailBytes;
+    ULONG i;
+
+    RtlZeroMemory(&Mbi, sizeof(Mbi));
+    MbiResult = 0;
+    QueryStatus = ZwQueryVirtualMemory(NtCurrentProcess(),
+                                       GuardEntry,
+                                       MemoryBasicInformation,
+                                       &Mbi,
+                                       sizeof(Mbi),
+                                       &MbiResult);
+
+    DPRINT1("HEAP-CORRUPT (%s): GuardEntry %p raw=%016I64x\n"
+            "    flags=%02x size=%u prevsize=%u segoff=%u\n",
+            Where,
+            GuardEntry,
+            *(ULONG64 *)GuardEntry,
+            GuardEntry->Flags,
+            GuardEntry->Size,
+            GuardEntry->PreviousSize,
+            GuardEntry->SegmentOffset);
+
+    DPRINT1("HEAP-CORRUPT: NtQueryVirtualMemory status=%08lx Protect=%lx State=%lx\n"
+            "    Type=%lx Base=%p AllocBase=%p RegionSize=%Ix\n",
+            QueryStatus,
+            (ULONG)Mbi.Protect,
+            (ULONG)Mbi.State,
+            (ULONG)Mbi.Type,
+            Mbi.BaseAddress,
+            Mbi.AllocationBase,
+            Mbi.RegionSize);
+
+    DPRINT1("HEAP-CORRUPT: Heap=%p Seg=%p commit-Address=%p commit-Size=%Ix\n"
+            "    UCRsz=%lx UCRaddr=%p UncommittedPages=%lx UncommittedRanges=%lx\n",
+            Heap,
+            Segment,
+            Address,
+            (SIZE_T)CommitSize,
+            UcrDescriptor ? UcrDescriptor->Size : 0,
+            UcrDescriptor ? UcrDescriptor->Address : NULL,
+            Segment->NumberOfUnCommittedPages,
+            Segment->NumberOfUnCommittedRanges);
+
+    /* Hex-dump the trailing 64 bytes of the previous page */
+    TailBytes = (PUCHAR)Address - 64;
+    DPRINT1("HEAP-CORRUPT: tail-of-prev-page %p:\n", TailBytes);
+    for (i = 0; i < 64; i += 16)
+    {
+        DPRINT1("    %02x %02x %02x %02x %02x %02x %02x %02x  "
+                "%02x %02x %02x %02x %02x %02x %02x %02x\n",
+                TailBytes[i + 0], TailBytes[i + 1],
+                TailBytes[i + 2], TailBytes[i + 3],
+                TailBytes[i + 4], TailBytes[i + 5],
+                TailBytes[i + 6], TailBytes[i + 7],
+                TailBytes[i + 8], TailBytes[i + 9],
+                TailBytes[i + 10], TailBytes[i + 11],
+                TailBytes[i + 12], TailBytes[i + 13],
+                TailBytes[i + 14], TailBytes[i + 15]);
+    }
+
+    /* Drop into the kernel debugger so we can poke around */
+    DbgBreakPoint();
+}
+
 static
 PHEAP_FREE_ENTRY
 RtlpFindAndCommitPages(PHEAP Heap,
@@ -722,6 +812,28 @@ RtlpFindAndCommitPages(PHEAP Heap,
         {
             PHEAP_ENTRY GuardEntry, FreeEntry;
             PVOID Address = UcrDescriptor->Address;
+
+            /*
+             * Pre-commit guard validation: the entry just before the
+             * UCR must be a valid guard (LAST_ENTRY | BUSY, Size=1).
+             * If it is already zeroed or otherwise corrupt, we catch it
+             * here before ZwAllocateVirtualMemory writes new PTEs that
+             * would confuse the post-commit triage.
+             */
+            GuardEntry = (PHEAP_ENTRY)Address - 1;
+            if (!(GuardEntry->Flags & HEAP_ENTRY_LAST_ENTRY) ||
+                !(GuardEntry->Flags & HEAP_ENTRY_BUSY) ||
+                (GuardEntry->Size != 1))
+            {
+                RtlpHeapDumpCorruptedGuardEntry(Heap,
+                                                Segment,
+                                                UcrDescriptor,
+                                                Address,
+                                                *Size,
+                                                GuardEntry,
+                                                "pre-commit guard");
+                /* Continue anyway; the post-commit check will also fire */
+            }
 
             /* Commit it */
             if (Heap->CommitRoutine)
@@ -756,9 +868,18 @@ RtlpFindAndCommitPages(PHEAP Heap,
 
             /* Grab the previous guard entry */
             GuardEntry = (PHEAP_ENTRY)Address - 1;
-            ASSERT(GuardEntry->Flags & HEAP_ENTRY_LAST_ENTRY);
-            ASSERT(GuardEntry->Flags & HEAP_ENTRY_BUSY);
-            ASSERT(GuardEntry->Size == 1);
+            if (!(GuardEntry->Flags & HEAP_ENTRY_LAST_ENTRY) ||
+                !(GuardEntry->Flags & HEAP_ENTRY_BUSY) ||
+                (GuardEntry->Size != 1))
+            {
+                RtlpHeapDumpCorruptedGuardEntry(Heap,
+                                                Segment,
+                                                UcrDescriptor,
+                                                Address,
+                                                *Size,
+                                                GuardEntry,
+                                                "post-commit primary guard");
+            }
 
             /* Did we have a double guard entry ? */
             if (GuardEntry->PreviousSize == 1)
@@ -766,9 +887,18 @@ RtlpFindAndCommitPages(PHEAP Heap,
                 /* Use the one before instead */
                 GuardEntry--;
 
-                ASSERT(GuardEntry->Flags & HEAP_ENTRY_LAST_ENTRY);
-                ASSERT(GuardEntry->Flags & HEAP_ENTRY_BUSY);
-                ASSERT(GuardEntry->Size == 1);
+                if (!(GuardEntry->Flags & HEAP_ENTRY_LAST_ENTRY) ||
+                    !(GuardEntry->Flags & HEAP_ENTRY_BUSY) ||
+                    (GuardEntry->Size != 1))
+                {
+                    RtlpHeapDumpCorruptedGuardEntry(Heap,
+                                                    Segment,
+                                                    UcrDescriptor,
+                                                    Address,
+                                                    *Size,
+                                                    GuardEntry,
+                                                    "post-commit double guard");
+                }
 
                 /* We gain one slot more */
                 *Size += HEAP_ENTRY_SIZE;

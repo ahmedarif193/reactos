@@ -43,6 +43,9 @@ IntUserHeapCommitRoutine(
     SIZE_T Delta;
     PVOID UserCommitAddress;
 
+    DPRINT1("IntUserHeapCommitRoutine(Base=%p CommitAddress=%p CommitSize=%Ix)\n",
+           Base, *CommitAddress, *CommitSize);
+
     W32Process = PsGetCurrentProcessWin32Process();
 
     if (W32Process != NULL)

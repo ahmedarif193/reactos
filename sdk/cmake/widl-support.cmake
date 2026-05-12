@@ -202,10 +202,20 @@ function(add_idl_reg_scripts TARGET TYPE)
         if(MSVC)
             list(APPEND RCFILES ${CMAKE_CURRENT_BINARY_DIR}/${NAME}${__suffix}.res)
         else()
-            # convert the .res file into a .o file for GCC/Clang using windres
+            # convert the .res file into a .o file for GCC/Clang using windres.
+            # Force the target arch — llvm-windres on a non-x86_64 host (e.g.
+            # macOS arm64) otherwise defaults to the host arch and produces a
+            # COFF object the linker rejects.
+            if(ARCH STREQUAL "i386")
+                set(__windres_target --target=pe-i386)
+            elseif(ARCH STREQUAL "amd64")
+                set(__windres_target --target=pe-x86-64)
+            else()
+                set(__windres_target)
+            endif()
             add_custom_command(
                 OUTPUT ${CMAKE_CURRENT_BINARY_DIR}/${NAME}${__suffix}.o
-                COMMAND ${CMAKE_RC_COMPILER} -O coff -i ${CMAKE_CURRENT_BINARY_DIR}/${NAME}${__suffix}.res -o ${CMAKE_CURRENT_BINARY_DIR}/${NAME}${__suffix}.o
+                COMMAND ${CMAKE_RC_COMPILER} ${__windres_target} -O coff -i ${CMAKE_CURRENT_BINARY_DIR}/${NAME}${__suffix}.res -o ${CMAKE_CURRENT_BINARY_DIR}/${NAME}${__suffix}.o
                 DEPENDS ${CMAKE_CURRENT_BINARY_DIR}/${NAME}${__suffix}.res
                 WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR})
             set_source_files_properties(${CMAKE_CURRENT_BINARY_DIR}/${NAME}${__suffix}.o PROPERTIES

@@ -1,0 +1,99 @@
+/*
+ * taskmgrv2.rc — Top-level resource script for taskmgrv2.
+ */
+
+#define REACTOS_STR_FILE_DESCRIPTION  "ReactOS Task Manager v2"
+#define REACTOS_STR_INTERNAL_NAME     "taskmgrv2"
+#define REACTOS_STR_ORIGINAL_FILENAME "taskmgrv2.exe"
+#include <reactos/version.rc>
+
+#include <windef.h>
+#include <winuser.h>
+#include "resource.h"
+
+LANGUAGE 0x09, 0x01  /* LANG_ENGLISH, SUBLANG_DEFAULT */
+
+/* -----------------------------------------------------------------------
+ * Application icon
+ * ----------------------------------------------------------------------- */
+IDI_TASKMGRV2   ICON    "res/taskmgrv2.ico"
+
+/* -----------------------------------------------------------------------
+ * Nav icon BMP strip (loaded as RT_BITMAP via IDB_NAV_STRIP)
+ * ----------------------------------------------------------------------- */
+IDB_NAV_STRIP   BITMAP  "res/icons.bmp"
+
+/* -----------------------------------------------------------------------
+ * Accelerators — Performance page (IDA_PERF)
+ * ----------------------------------------------------------------------- */
+IDA_PERF ACCELERATORS
+BEGIN
+    VK_F5,          IDC_CTX_REFRESH,      VIRTKEY
+    "C",            IDC_CTX_COPY,         VIRTKEY, CONTROL
+    "1",            IDC_CTX_MODE_OVERALL, VIRTKEY, CONTROL
+    "2",            IDC_CTX_MODE_LOGICAL, VIRTKEY, CONTROL
+    "3",            IDC_CTX_MODE_NUMA,    VIRTKEY, CONTROL
+    "K",            IDC_CTX_KERNEL,       VIRTKEY, CONTROL
+END
+
+/* -----------------------------------------------------------------------
+ * Main menu (hidden by default in v1; hamburger replaces it)
+ * ----------------------------------------------------------------------- */
+IDR_TASKMGRV2_MENU MENU
+BEGIN
+    POPUP "&File"
+    BEGIN
+        MENUITEM "E&xit",   IDC_CTX_REFRESH  /* placeholder */
+    END
+    POPUP "&View"
+    BEGIN
+        MENUITEM "&Refresh Now\tF5",  IDC_CTX_REFRESH
+    END
+END
+
+/* -----------------------------------------------------------------------
+ * String table
+ * ----------------------------------------------------------------------- */
+STRINGTABLE
+BEGIN
+    IDS_APP_TITLE           "Task Manager"
+    IDS_NAV_PROCESSES       "Processes"
+    IDS_NAV_PERFORMANCE     "Performance"
+    IDS_NAV_APPHISTORY      "App history"
+    IDS_NAV_STARTUP         "Startup apps"
+    IDS_NAV_USERS           "Users"
+    IDS_NAV_DETAILS         "Details"
+    IDS_NAV_SERVICES        "Services"
+    IDS_NAV_SETTINGS        "Settings"
+    IDS_PERFCAT_CPU         "CPU"
+    IDS_PERFCAT_MEMORY      "Memory"
+    IDS_PERFCAT_DISK        "Disk"
+    IDS_PERFCAT_NET         "Ethernet"
+    IDS_PERFCAT_GPU         "GPU"
+    IDS_STAT_UTILIZATION    "Utilization"
+    IDS_STAT_SPEED          "Speed"
+    IDS_STAT_PROCESSES      "Processes"
+    IDS_STAT_THREADS        "Threads"
+    IDS_STAT_HANDLES        "Handles"
+    IDS_STAT_UPTIME         "Up time"
+    IDS_STAT_MAXSPEED       "Maximum speed"
+    IDS_STAT_SOCKETS        "Sockets"
+    IDS_STAT_CORES          "Cores"
+    IDS_STAT_LOGICAL_PROCS  "Logical processors"
+    IDS_STAT_VIRT           "Virtualization"
+    IDS_STAT_L1CACHE        "L1 cache"
+    IDS_STAT_L2CACHE        "L2 cache"
+    IDS_STAT_L3CACHE        "L3 cache"
+    IDS_STUB_PAGE_FMT       "Page not yet implemented"
+    IDS_SETTINGS_THEME      "Theme"
+    IDS_SETTINGS_REFRESH    "Refresh interval"
+    IDS_SETTINGS_DEFPAGE    "Default startup page"
+    IDS_SETTINGS_USERS      "Show full account name on the Users page"
+    IDS_SETTINGS_REALTIME   "Warn before changing a process to Realtime priority"
+    IDS_THEME_LIGHT         "Light"
+    IDS_THEME_DARK          "Dark"
+    IDS_THEME_SYSTEM        "Use system setting"
+    IDS_REFRESH_LOW         "Low (4 seconds)"
+    IDS_REFRESH_MED         "Normal (1 second)"
+    IDS_REFRESH_HIGH        "High (0.25 seconds)"
+END

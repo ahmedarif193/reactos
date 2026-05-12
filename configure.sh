@@ -83,19 +83,6 @@ gcc_triplet_for_arch() {
 	esac
 }
 
-target_windmc_for_arch() {
-	case "$1" in
-		amd64|i386)
-			if [ -x "$GCC_TOOLCHAIN_ROOT/bin/$GCC_TRIPLET-windmc" ]; then
-				echo "$GCC_TOOLCHAIN_ROOT/bin/$GCC_TRIPLET-windmc"
-				return
-			fi
-			;;
-	esac
-
-	return 1
-}
-
 host_windmc() {
 	for candidate in \
 		"$ROSBE_GCC_ROOT/x86_64-w64-mingw32/bin/x86_64-w64-mingw32-windmc" \
@@ -180,14 +167,12 @@ if [ "$USE_CLANG" -eq 1 ]; then
 
 	[ -x "$ROSBE_LLVM_ROOT/bin/clang" ] || fail "missing RosBE LLVM toolchain at $ROSBE_LLVM_ROOT"
 	[ -x "$ROSBE_LLVM_ROOT/bin/clang++" ] || fail "missing RosBE LLVM clang++ at $ROSBE_LLVM_ROOT/bin"
-	MC_COMPILER=$(target_windmc_for_arch "$ARCH" || host_windmc) || fail "missing RosBE windmc in $ROSBE_GCC_ROOT"
 
 	export REACTOS_CLANG_LLVM_MINGW_ROOT="$ROSBE_LLVM_ROOT"
 	export LLVM_MINGW_ROOT="$ROSBE_LLVM_ROOT"
 	export PATH="$ROSBE_LLVM_ROOT/bin:$PATH"
 
 	ROS_CMAKEOPTS=$ROS_CMAKEOPTS" -DREACTOS_CLANG_LLVM_MINGW_ROOT:PATH=$ROSBE_LLVM_ROOT"
-	ROS_CMAKEOPTS=$ROS_CMAKEOPTS" -DCMAKE_MC_COMPILER:FILEPATH=$MC_COMPILER"
 	if [ -d "$GCC_TOOLCHAIN_ROOT/bin" ]; then
 		export PATH="$GCC_TOOLCHAIN_ROOT/bin:$PATH"
 		ROS_CMAKEOPTS=$ROS_CMAKEOPTS" -DREACTOS_CLANG_GCC_TOOLCHAIN:PATH=$GCC_TOOLCHAIN_ROOT"
@@ -198,10 +183,8 @@ else
 
 	[ -x "$GCC_TOOLCHAIN_ROOT/bin/$GCC_TRIPLET-gcc" ] || fail "missing RosBE GCC toolchain for $ARCH at $GCC_TOOLCHAIN_ROOT"
 	[ -x "$GCC_TOOLCHAIN_ROOT/bin/$GCC_TRIPLET-g++" ] || fail "missing RosBE GCC g++ for $ARCH at $GCC_TOOLCHAIN_ROOT/bin"
-	MC_COMPILER=$(target_windmc_for_arch "$ARCH") || fail "missing RosBE windmc for $ARCH at $GCC_TOOLCHAIN_ROOT/bin"
 
 	export PATH="$GCC_TOOLCHAIN_ROOT/bin:$PATH"
-	ROS_CMAKEOPTS=$ROS_CMAKEOPTS" -DCMAKE_MC_COMPILER:FILEPATH=$MC_COMPILER"
 fi
 
 REACTOS_OUTPUT_PATH=output-$BUILD_ENVIRONMENT-$ARCH-$BUILD_TYPE_SUFFIX
