@@ -8019,9 +8019,21 @@ NTAPI
 HalQueryRealTimeClock(
     _Inout_ PTIME_FIELDS TimeFields)
 {
-    UNREFERENCED_PARAMETER(TimeFields);
-    UNIMPLEMENTED_STUB();
-    return FALSE;
+    PHYSICAL_ADDRESS Pl031Phys = { .QuadPart = 0x9010000ULL };
+    PVOID Pl031Va;
+    ULONG Seconds;
+    LARGE_INTEGER SystemTime;
+
+    Pl031Va = MmMapIoSpace(Pl031Phys, PAGE_SIZE, MmNonCached);
+    if (!Pl031Va)
+        return FALSE;
+
+    Seconds = READ_REGISTER_ULONG((PULONG)Pl031Va);
+    MmUnmapIoSpace(Pl031Va, PAGE_SIZE);
+
+    RtlSecondsSince1970ToTime(Seconds, &SystemTime);
+    RtlTimeToTimeFields(&SystemTime, TimeFields);
+    return TRUE;
 }
 
 ULONG
