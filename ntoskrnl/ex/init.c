@@ -1643,6 +1643,7 @@ Phase1InitializationDiscard(IN PVOID Context)
     /* Query the clock */
     if ((ExCmosClockIsSane) && (HalQueryRealTimeClock(&TimeFields)))
     {
+
         /* Check if we're using the Y2K hack */
         if (Y2KHackRequired) TimeFields.Year = (CSHORT)YearHack;
 
