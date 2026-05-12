@@ -158,6 +158,7 @@ typedef struct _ARM64_BOOT_CONTEXT
  * stack separate from the normal per-thread kernel stack size.
  */
 #define ARM64_P0_BOOT_STACK_SIZE 0x80000
+#define ARM64_P0_BOOT_STACK_ENTRY_RESERVE PAGE_SIZE
 
 UCHAR DECLSPEC_ALIGN(PAGE_SIZE) KiArm64P0BootStackData[ARM64_P0_BOOT_STACK_SIZE] = {0};
 PVOID KiArm64P0BootStackLimit = &KiArm64P0BootStackData[0];
@@ -1093,7 +1094,18 @@ KiSystemStartup(_Inout_ PLOADER_PARAMETER_BLOCK LoaderBlock)
     {
         LoaderBlock->KernelStack += ARM64_KSEG0_BASE;
     }
-    KiArm64SwitchToBootStack(LoaderBlock->KernelStack, LoaderBlock);
+
+    /*
+     * Keep KernelStack as the idle-thread stack top, but enter C below the top.
+     * KiInitializeThread later builds the idle startup frame below KernelStack.
+     * This mirrors amd64, where KiSwitchToBootStack subtracts scratch space
+     * before jumping into KiSystemStartupBootStack, keeping live boot frames
+     * separate from the idle thread's synthetic startup frame.
+     */
+    KiArm64SwitchToBootStack(ALIGN_DOWN_BY(LoaderBlock->KernelStack -
+                                           ARM64_P0_BOOT_STACK_ENTRY_RESERVE,
+                                           16),
+                             LoaderBlock);
 
     /* Not reached */
     KiArm64FatalHalt();
