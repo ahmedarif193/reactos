@@ -246,7 +246,6 @@ elseif(ARCH STREQUAL "arm64")
         math/sin.c
         math/sqrt.c
         math/arm64/tan.c
-        math/arm64/shift.c
     )
     list(APPEND CRT_MATH_SOURCE
         math/_hypotf.c
