@@ -46,15 +46,16 @@ $NtFuncEndName
 $ZwFuncEndName
 	MEND
 
-#elif defined(_M_ARM64) || defined(_ARM64_) || defined(__aarch64__) || defined(__arm64__)
+#elif defined(_M_ARM64)
 
 #include <ksarm64.h>
 
     .set SyscallId, 0
 
-    .macro ARM64_ZW_CALL_NT Name
+    .macro ARM64_ZW_CALL_NT Name, CookieOff
     /* Load current thread pointer from per-CPU PCR (tpidr_el1) */
     mrs     x19, tpidr_el1
+    cbz     x19, .LZw\Name\()_call
     add     x19, x19, #PcCurrentThread
     ldr     x19, [x19]
     cbz     x19, .LZw\Name\()_call
@@ -63,8 +64,34 @@ $ZwFuncEndName
     ldrb    w20, [x19, #ThPreviousMode]
     strb    wzr, [x19, #ThPreviousMode]
 
+    /*
+     * Store PreviousMode in Thread->TrapFrame->Reserved with a cookie for
+     * exception-unwind safety.  If Nt\Name raises or unwinds out (e.g.,
+     * NtContinue via KiExceptionExit), the w20-based restore below is
+     * skipped.  The cookie lets KiTrapReturn/trapc.c restore PreviousMode
+     * from the trap frame after unwind.
+     *
+     * Preserve any outer cookie already in Reserved by spilling it to
+     * the extra stack slot at sp + CookieOff.  The adjacent word at
+     * CookieOff + 4 records whether the spill is valid.  On unwind the
+     * slot is freed, but the new cookie survives in Reserved for the
+     * trap-return path.
+     */
+    str     wzr, [sp, #(\CookieOff + 4)]
+    ldr     x16, [x19, #ThTrapFrame]
+    cbz     x16, .LZw\Name\()_no_cookie
+    ldr     w17, [x16, #TfReserved]
+    str     w17, [sp, #\CookieOff]
+    mov     w17, #1
+    str     w17, [sp, #(\CookieOff + 4)]
+    movz    w17, #0x4D00
+    movk    w17, #0x5056, lsl #16
+    orr     w17, w17, w20
+    str     w17, [x16, #TfReserved]
+.LZw\Name\()_no_cookie:
+
 .LZw\Name\()_call:
-    /* Call the Nt function via indirect branch (unlimited range) */
+    /* Call the Nt function via indirect branch, avoiding bl's 128 MB range. */
     adrp    x16, Nt\Name
     add     x16, x16, #:lo12:Nt\Name
     blr     x16
@@ -72,6 +99,14 @@ $ZwFuncEndName
     /* Restore PreviousMode if thread pointer was valid */
     cbz     x19, .LZw\Name\()_ret
     strb    w20, [x19, #ThPreviousMode]
+
+    /* Restore outer cookie to TrapFrame->Reserved */
+    ldr     w17, [sp, #(\CookieOff + 4)]
+    cbz     w17, .LZw\Name\()_ret
+    ldr     x16, [x19, #ThTrapFrame]
+    cbz     x16, .LZw\Name\()_ret
+    ldr     w17, [sp, #\CookieOff]
+    str     w17, [x16, #TfReserved]
 .LZw\Name\()_ret:
     .endm
 
@@ -104,18 +139,20 @@ Zw\Name:
      * visible at [sp+0] for the Nt\Name callee.
      *
      * Strategy:
-     *   1. Lower SP by frame_size = save_off + 32, where
+     *   1. Lower SP by frame_size = save_off + 48, where
      *      save_off = N*8 rounded up to 16-byte alignment.
      *   2. Save x29/x30 and x19/x20 at [sp + save_off] (prolog).
      *   3. Copy each stack argument from [sp + frame_size + i*8]
      *      down to [sp + i*8] (post-prologue, no SEH annotations needed).
-     *   4. Save old PreviousMode, set KernelMode, call, restore, return.
+     *   4. Save old PreviousMode, set KernelMode, store cookie in
+     *      TrapFrame->Reserved, call, restore, return.
      *
      * Frame layout after setup (SP points to the bottom):
      *
      *   old sp + (N-1)*8   : original stack_arg[N-1]  (from caller)
      *   ...
      *   old sp + 0         : original stack_arg[0]
+     *   sp + save_off + 32 : [cookie spill, valid flag]
      *   sp + save_off + 16 : [saved x19, x20]
      *   sp + save_off      : [saved x29, x30]
      *   sp + (N-1)*8       : stack_arg[N-1]  (copied for callee)
@@ -124,12 +161,14 @@ Zw\Name:
      */
     .set _nstk, (\ArgCount - 8)
     .set _save_off, ((_nstk * 8 + 15) & ~15)
-    .set _frame, (_save_off + 32)
+    .set _frame, (_save_off + 48)
+    .set _cookie_off, (_save_off + 32)
 
     /* SEH unwind: begin procedure */
     .seh_proc Zw\Name
 
-    /* Allocate frame: room for copied stack args + register save area */
+    /* Allocate frame: room for copied stack args + register save area
+     * + cookie spill slot */
     sub     sp, sp, #_frame
     .seh_stackalloc _frame
 
@@ -152,7 +191,7 @@ Zw\Name:
         .set _i, _i + 1
     .endr
 
-    ARM64_ZW_CALL_NT \Name
+    ARM64_ZW_CALL_NT \Name, _cookie_off
     ldp     x19, x20, [sp, #(_save_off + 16)]
     ldp     x29, x30, [sp, #_save_off]
     add     sp, sp, #_frame
@@ -167,10 +206,13 @@ Zw\Name:
      * kernel calls, and a yielding service can resume with a corrupted LR.
      * Match the >8-argument path: save the caller frame, force KernelMode for
      * the Nt* body, call it directly, then restore PreviousMode and return.
+     *
+     * Frame layout: x29/x30 at sp+0, x19/x20 at sp+16,
+     * cookie spill/valid flag at sp+32.
      */
     .seh_proc Zw\Name
-    sub     sp, sp, #32
-    .seh_stackalloc 32
+    sub     sp, sp, #48
+    .seh_stackalloc 48
     stp     x29, x30, [sp]
     .seh_save_fplr 0
     stp     x19, x20, [sp, #16]
@@ -179,10 +221,10 @@ Zw\Name:
     .seh_add_fp 0
     .seh_endprologue
 
-    ARM64_ZW_CALL_NT \Name
+    ARM64_ZW_CALL_NT \Name, 32
     ldp     x19, x20, [sp, #16]
     ldp     x29, x30, [sp]
-    add     sp, sp, #32
+    add     sp, sp, #48
     ret
     .seh_endproc
 .endif

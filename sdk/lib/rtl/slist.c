@@ -10,51 +10,10 @@
 /* INCLUDES *****************************************************************/
 
 #include <rtl.h>
+#include <intrin.h>
 
 #define NDEBUG
 #include <debug.h>
-
-#if defined(_M_ARM64)
-static __inline unsigned char
-RtlpInterlockedCompareExchange128(
-    _Interlocked_operand_ volatile __int64 *Destination,
-    __int64 ExchangeHigh,
-    __int64 ExchangeLow,
-    __int64 *ComparandResult)
-{
-    ULONGLONG OldLow, OldHigh;
-    ULONGLONG ExpLow = (ULONGLONG)ComparandResult[0];
-    ULONGLONG ExpHigh = (ULONGLONG)ComparandResult[1];
-    ULONG Status;
-
-    for (;;)
-    {
-        __asm__ __volatile__("ldaxp %0, %1, [%2]"
-                             : "=&r"(OldLow), "=&r"(OldHigh)
-                             : "r"(Destination)
-                             : "memory");
-
-        if ((OldLow != ExpLow) || (OldHigh != ExpHigh))
-        {
-            ComparandResult[0] = (__int64)OldLow;
-            ComparandResult[1] = (__int64)OldHigh;
-            __asm__ __volatile__("clrex" ::: "memory");
-            return 0;
-        }
-
-        __asm__ __volatile__("stlxp %w0, %1, %2, [%3]"
-                             : "=&r"(Status)
-                             : "r"((ULONGLONG)ExchangeLow),
-                               "r"((ULONGLONG)ExchangeHigh),
-                               "r"(Destination)
-                             : "memory");
-
-        if (Status == 0)
-            return 1;
-    }
-}
-#define _InterlockedCompareExchange128 RtlpInterlockedCompareExchange128
-#endif
 
 #ifdef _WIN64
 BOOLEAN RtlpUse16ByteSLists = -1;
