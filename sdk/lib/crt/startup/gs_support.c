@@ -99,13 +99,6 @@ __security_init_cookie (void)
 }
 
 
-#if defined(__GNUC__) /* wrap msvc intrinsics onto gcc builtins */
-#undef  _ReturnAddress
-#undef  _AddressOfReturnAddress
-#define _ReturnAddress()		__builtin_return_address(0)
-#define _AddressOfReturnAddress()	__builtin_frame_address (0)
-#endif /* __GNUC__ */
-
 __declspec(noreturn) void __cdecl __report_gsfailure (ULONG_PTR);
 
 #ifndef _MSC_VER

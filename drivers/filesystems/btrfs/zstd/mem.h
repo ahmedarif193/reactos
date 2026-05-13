@@ -27,9 +27,7 @@ extern "C" {
 ******************************************/
 #if defined(_MSC_VER)   /* Visual Studio */
 #   include <stdlib.h>  /* _byteswap_ulong */
-#if !defined(_M_ARM64) && !defined(__aarch64__)
-#   include <intrin.h>
-#endif  /* _byteswap_* */
+#   include <intrin.h>  /* _byteswap_* */
 #endif
 #if defined(__GNUC__)
 #  define MEM_STATIC static __inline __attribute__((unused))

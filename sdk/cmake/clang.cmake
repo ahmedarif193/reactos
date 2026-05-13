@@ -113,7 +113,7 @@ add_compile_options(-march=${OARCH} -mtune=${TUNE})
 
 # Warnings, errors
 # Clang builds don't use -Werror
-add_compile_options(-Wall -Wpointer-arith -Wunused-result)
+add_compile_options(-Wall -Wpointer-arith)
 
 # Disable some overzealous warnings
 add_compile_options(
@@ -123,6 +123,8 @@ add_compile_options(
     -Wno-unused-local-typedefs
     -Wno-deprecated
     -Wno-missing-braces
+    -Wno-unused-result
+    -Wno-unused-but-set-variable
     -Wno-error=implicit-function-declaration
     -Wno-error=incompatible-library-redeclaration
     -Wno-error=incompatible-pointer-types

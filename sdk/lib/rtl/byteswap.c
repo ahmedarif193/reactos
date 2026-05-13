@@ -37,12 +37,13 @@ FASTCALL
 RtlUshortByteSwap(
     IN USHORT Source)
 {
-#if defined(_M_AMD64)
+#if defined(_M_AMD64) || defined(_M_ARM64)
     return _byteswap_ushort(Source);
 #else
     return (Source >> 8) | (Source << 8);
 #endif
 }
+
 
 
 
@@ -61,7 +62,7 @@ FASTCALL
 RtlUlongByteSwap(
    IN ULONG Source)
 {
-#if defined(_M_AMD64)
+#if defined(_M_AMD64) || defined(_M_ARM64)
     return _byteswap_ulong(Source);
 #else
     return ((ULONG)RtlUshortByteSwap((USHORT)Source) << 16) | RtlUshortByteSwap((USHORT)(Source >> 16));
@@ -86,12 +87,10 @@ ULONGLONG FASTCALL
 RtlUlonglongByteSwap(
     IN ULONGLONG Source)
 {
-#if defined(_M_AMD64)
+#if defined(_M_AMD64) || defined(_M_ARM64)
     return _byteswap_uint64(Source);
 #else
     return ((ULONGLONG) RtlUlongByteSwap (Source) << 32) | RtlUlongByteSwap (Source>>32);
 #endif
 }
-
-
 /* EOF */

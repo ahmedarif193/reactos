@@ -11,19 +11,29 @@ void _global_unwind2(void) {}
 int _except_handler2(void) { return 1; }
 int _except_handler3(void) { return 1; }
 
-unsigned __int64 __ull_rshift(unsigned __int64 value, int shift)
-{ return value >> shift; }
+/*
+ * ExpInterlockedPopEntrySList* entry points.
+ * These are the ABI entry points for the kernel's SList fault/retry handling.
+ * Currently reference-counted by the ntdll export table and matched against the
+ * ARM64 trap handler (KiHandleKernelSListFaultArm64).  Passing through to the
+ * RTL inline implementation which uses _InterlockedCompareExchange128.
+ */
+PSLIST_ENTRY NTAPI ExpInterlockedPopEntrySList(PSLIST_HEADER H)
+{
+    return RtlInterlockedPopEntrySList(H);
+}
 
-unsigned __int64 __ll_rshift(unsigned __int64 value, int shift)
-{ return (unsigned __int64)((long long)value >> shift); }
+PSLIST_ENTRY NTAPI ExpInterlockedPopEntrySListEnd(PSLIST_HEADER H)
+{
+    return RtlInterlockedPopEntrySList(H);
+}
 
-unsigned __int64 __ll_lshift(unsigned __int64 value, int shift)
-{ return value << shift; }
+PSLIST_ENTRY NTAPI ExpInterlockedPopEntrySListFault(PSLIST_HEADER H)
+{
+    return RtlInterlockedPopEntrySList(H);
+}
 
-double cos(double x) { (VOID)x; return 1.0; }
-double fabs(double x) { return (x < 0) ? -x : x; }
-double sin(double x) { (VOID)x; return 0.0; }
-
-PSLIST_ENTRY ExpInterlockedPopEntrySListEnd(PSLIST_HEADER H) { (VOID)H; return NULL; }
-PSLIST_ENTRY ExpInterlockedPopEntrySListFault(PSLIST_HEADER H) { (VOID)H; return NULL; }
-PSLIST_ENTRY ExpInterlockedPopEntrySListResume(PSLIST_HEADER H) { (VOID)H; return NULL; }
+PSLIST_ENTRY NTAPI ExpInterlockedPopEntrySListResume(PSLIST_HEADER H)
+{
+    return RtlInterlockedPopEntrySList(H);
+}
