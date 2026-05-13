@@ -792,12 +792,12 @@ $endif(_WINNT_)
 #define RotateRight32 _rotr
 #define RotateRight64 _rotr64
 
-#if defined(_M_AMD64)
+#if defined(_M_AMD64) || defined(_M_ARM64)
  #define RotateLeft8 _rotl8
  #define RotateLeft16 _rotl16
  #define RotateRight8 _rotr8
  #define RotateRight16 _rotr16
-#endif /* _M_AMD64 */
+#endif /* _M_AMD64 || _M_ARM64 */
 
 /* C_ASSERT Definition */
 #define C_ASSERT(expr) extern char (*c_assert(void)) [(expr) ? 1 : -1]

@@ -9,8 +9,6 @@
 #ifndef __ASM_INC__
 #define __ASM_INC__
 
-#ifndef _M_ARM64
-
 /*
  * Common definitions for the FPO macro.
  * See https://docs.microsoft.com/en-us/windows/desktop/api/winnt/ns-winnt-_fpo_data
@@ -552,7 +550,5 @@ ENDM
 #define CFI_SAME_VALUE .cfi_same_value
 
 #endif
-
-#endif /* !_M_ARM64 */
 
 #endif /* __ASM_INC__ */

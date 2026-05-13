@@ -299,23 +299,6 @@ _enable(VOID)
     __asm__ __volatile__("msr daifclr, #0x2\n\tisb" ::: "memory");
 }
 
-#if !__has_builtin(_rotl)
-unsigned int
-__cdecl
-_rotl(
-    _In_ unsigned int Value,
-    _In_ int Shift)
-{
-    unsigned int Amount = (unsigned int)(Shift & 31);
-    if (!Amount)
-    {
-        return Value;
-    }
-
-    return (Value << Amount) | (Value >> (32 - Amount));
-}
-#endif
-
 KIRQL
 (__cdecl * const __imp_KeGetCurrentIrql)(VOID) = KeGetCurrentIrql;
 

@@ -116,26 +116,6 @@ __aarch64_swp8_sync(
     return __atomic_exchange_n(Destination, Value, __ATOMIC_SEQ_CST);
 }
 
-UCHAR Arm64InterlockedBitTestAndReset(
-    _Inout_ volatile LONG *Base,
-    _In_ LONG Bit)
-{
-    ULONG BitIndex = ((ULONG)Bit) & 31u;
-    ULONG Mask = 1u << BitIndex;
-    ULONG Previous = __atomic_fetch_and(Base, ~Mask, __ATOMIC_SEQ_CST);
-    return (UCHAR)((Previous >> BitIndex) & 1u);
-}
-
-UCHAR Arm64InterlockedBitTestAndSet(
-    _Inout_ volatile LONG *Base,
-    _In_ LONG Bit)
-{
-    ULONG BitIndex = ((ULONG)Bit) & 31u;
-    ULONG Mask = 1u << BitIndex;
-    ULONG Previous = __atomic_fetch_or(Base, Mask, __ATOMIC_SEQ_CST);
-    return (UCHAR)((Previous >> BitIndex) & 1u);
-}
-
 PVOID Arm64InterlockedCompareExchangePointer(
     _Inout_ PVOID volatile *Destination,
     _In_ PVOID Exchange,
@@ -222,11 +202,7 @@ SHORT Arm64InterlockedIncrement16(
 }
 
 #if defined(__GNUC__)
-__asm__(".globl _interlockedbittestandreset\n"
-        "_interlockedbittestandreset = Arm64InterlockedBitTestAndReset\n"
-        ".globl _interlockedbittestandset\n"
-        "_interlockedbittestandset = Arm64InterlockedBitTestAndSet\n"
-        ".globl _InterlockedCompareExchangePointer\n"
+__asm__(".globl _InterlockedCompareExchangePointer\n"
         "_InterlockedCompareExchangePointer = Arm64InterlockedCompareExchangePointer\n"
         ".globl _InterlockedOr\n"
         "_InterlockedOr = Arm64InterlockedOr\n"

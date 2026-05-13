@@ -10,6 +10,7 @@
 #endif
 
 #define _ReturnAddress() (__builtin_return_address(0))
+#define _AddressOfReturnAddress() (__builtin_frame_address(0))
 
 #if !HAS_BUILTIN(__break)
 __INTRIN_INLINE void __break(int value)
@@ -314,6 +315,350 @@ __INTRIN_INLINE short _InterlockedDecrement16(volatile short *Addend)
 __INTRIN_INLINE long long _InterlockedDecrement64(volatile long long *Addend)
 {
     return __sync_sub_and_fetch(Addend, 1);
+}
+#endif
+
+#if !HAS_BUILTIN(_InterlockedCompareExchange128)
+__INTRIN_INLINE unsigned char _InterlockedCompareExchange128(volatile __int64 *Destination, __int64 ExchangeHigh, __int64 ExchangeLow, __int64 *ComparandResult)
+{
+    __int64 xchg[2] = { ExchangeLow, ExchangeHigh };
+    __uint128_t expected = *(__uint128_t *)ComparandResult;
+    __uint128_t desired = *(__uint128_t *)xchg;
+    __uint128_t old = __sync_val_compare_and_swap((__uint128_t *)Destination, expected, desired);
+    if (old == expected)
+        return 1;
+    *(__uint128_t *)ComparandResult = old;
+    return 0;
+}
+#endif
+
+#if !HAS_BUILTIN(_mm_pause)
+__INTRIN_INLINE void _mm_pause(void)
+{
+    __asm__ __volatile__("yield" : : : "memory");
+}
+#endif
+
+#if !HAS_BUILTIN(__nop)
+__INTRIN_INLINE void __nop(void)
+{
+    __asm__ __volatile__("nop");
+}
+#endif
+
+/*** Bit manipulation ***/
+#if !HAS_BUILTIN(_bittest)
+__INTRIN_INLINE unsigned char _bittest(const long *a, long b)
+{
+    return (a[b / (sizeof(long) * 8)] >> (b % (sizeof(long) * 8))) & 1;
+}
+#endif
+
+#if !HAS_BUILTIN(_bittestandset)
+__INTRIN_INLINE unsigned char _bittestandset(long *a, long b)
+{
+    long bit = 1L << (b % (sizeof(long) * 8));
+    long *ptr = &a[b / (sizeof(long) * 8)];
+    unsigned char retval = (*ptr >> (b % (sizeof(long) * 8))) & 1;
+    *ptr |= bit;
+    return retval;
+}
+#endif
+
+#if !HAS_BUILTIN(_bittestandreset)
+__INTRIN_INLINE unsigned char _bittestandreset(long *a, long b)
+{
+    long bit = 1L << (b % (sizeof(long) * 8));
+    long *ptr = &a[b / (sizeof(long) * 8)];
+    unsigned char retval = (*ptr >> (b % (sizeof(long) * 8))) & 1;
+    *ptr &= ~bit;
+    return retval;
+}
+#endif
+
+#if !HAS_BUILTIN(_bittestandcomplement)
+__INTRIN_INLINE unsigned char _bittestandcomplement(long *a, long b)
+{
+    long bit = 1L << (b % (sizeof(long) * 8));
+    long *ptr = &a[b / (sizeof(long) * 8)];
+    unsigned char retval = (*ptr >> (b % (sizeof(long) * 8))) & 1;
+    *ptr ^= bit;
+    return retval;
+}
+#endif
+
+#if !HAS_BUILTIN(_bittest64)
+__INTRIN_INLINE unsigned char _bittest64(const long long *a, long long b)
+{
+    return (a[b / 64] >> (b % 64)) & 1;
+}
+#endif
+
+#if !HAS_BUILTIN(_bittestandset64)
+__INTRIN_INLINE unsigned char _bittestandset64(long long *a, long long b)
+{
+    long long bit = 1LL << (b % 64);
+    long long *ptr = &a[b / 64];
+    unsigned char retval = (*ptr >> (b % 64)) & 1;
+    *ptr |= bit;
+    return retval;
+}
+#endif
+
+#if !HAS_BUILTIN(_bittestandreset64)
+__INTRIN_INLINE unsigned char _bittestandreset64(long long *a, long long b)
+{
+    long long bit = 1LL << (b % 64);
+    long long *ptr = &a[b / 64];
+    unsigned char retval = (*ptr >> (b % 64)) & 1;
+    *ptr &= ~bit;
+    return retval;
+}
+#endif
+
+#if !HAS_BUILTIN(_bittestandcomplement64)
+__INTRIN_INLINE unsigned char _bittestandcomplement64(long long *a, long long b)
+{
+    long long bit = 1LL << (b % 64);
+    long long *ptr = &a[b / 64];
+    unsigned char retval = (*ptr >> (b % 64)) & 1;
+    *ptr ^= bit;
+    return retval;
+}
+#endif
+
+/*** Interlocked bit test ***/
+#if !HAS_BUILTIN(_interlockedbittestandreset)
+__INTRIN_INLINE unsigned char _interlockedbittestandreset(volatile long *a, long b)
+{
+    unsigned int bit = b & 31;
+    long mask = 1L << bit;
+    long old = __sync_fetch_and_and(a, ~mask);
+    return (unsigned char)((old >> bit) & 1);
+}
+#endif
+
+#if !HAS_BUILTIN(_interlockedbittestandset)
+__INTRIN_INLINE unsigned char _interlockedbittestandset(volatile long *a, long b)
+{
+    unsigned int bit = b & 31;
+    long mask = 1L << bit;
+    long old = __sync_fetch_and_or(a, mask);
+    return (unsigned char)((old >> bit) & 1);
+}
+#endif
+
+#if !HAS_BUILTIN(_interlockedbittestandreset64)
+__INTRIN_INLINE unsigned char _interlockedbittestandreset64(volatile long long *a, long long b)
+{
+    unsigned int bit = b & 63;
+    long long mask = 1LL << bit;
+    long long old = __sync_fetch_and_and(a, ~mask);
+    return (unsigned char)((old >> bit) & 1);
+}
+#endif
+
+#if !HAS_BUILTIN(_interlockedbittestandset64)
+__INTRIN_INLINE unsigned char _interlockedbittestandset64(volatile long long *a, long long b)
+{
+    unsigned int bit = b & 63;
+    long long mask = 1LL << bit;
+    long long old = __sync_fetch_and_or(a, mask);
+    return (unsigned char)((old >> bit) & 1);
+}
+#endif
+
+/*** Rotates ***/
+#if !HAS_BUILTIN(_rotl8)
+__INTRIN_INLINE unsigned char __cdecl _rotl8(unsigned char value, unsigned char shift)
+{
+    shift &= 7;
+    if (!shift)
+        return value;
+    return (value << shift) | (value >> (8 - shift));
+}
+#endif
+
+#if !HAS_BUILTIN(_rotl16)
+__INTRIN_INLINE unsigned short __cdecl _rotl16(unsigned short value, unsigned char shift)
+{
+    shift &= 15;
+    if (!shift)
+        return value;
+    return (value << shift) | (value >> (16 - shift));
+}
+#endif
+
+#if !HAS_BUILTIN(_rotl)
+__INTRIN_INLINE unsigned int __cdecl _rotl(unsigned int value, int shift)
+{
+    shift &= 31;
+    if (!shift)
+        return value;
+    return (value << shift) | (value >> (32 - shift));
+}
+#endif
+
+#if !HAS_BUILTIN(_rotl64)
+__INTRIN_INLINE unsigned long long _rotl64(unsigned long long value, int shift)
+{
+    shift &= 63;
+    if (!shift)
+        return value;
+    return (value << shift) | (value >> (64 - shift));
+}
+#endif
+
+#if !HAS_BUILTIN(_rotr8)
+__INTRIN_INLINE unsigned char __cdecl _rotr8(unsigned char value, unsigned char shift)
+{
+    shift &= 7;
+    if (!shift)
+        return value;
+    return (value >> shift) | (value << (8 - shift));
+}
+#endif
+
+#if !HAS_BUILTIN(_rotr16)
+__INTRIN_INLINE unsigned short __cdecl _rotr16(unsigned short value, unsigned char shift)
+{
+    shift &= 15;
+    if (!shift)
+        return value;
+    return (value >> shift) | (value << (16 - shift));
+}
+#endif
+
+#if !HAS_BUILTIN(_rotr)
+__INTRIN_INLINE unsigned int __cdecl _rotr(unsigned int value, int shift)
+{
+    shift &= 31;
+    if (!shift)
+        return value;
+    return (value >> shift) | (value << (32 - shift));
+}
+#endif
+
+#if !HAS_BUILTIN(_rotr64)
+__INTRIN_INLINE unsigned long long _rotr64(unsigned long long value, int shift)
+{
+    shift &= 63;
+    if (!shift)
+        return value;
+    return (value >> shift) | (value << (64 - shift));
+}
+#endif
+
+#if !HAS_BUILTIN(_lrotl)
+__INTRIN_INLINE unsigned long __cdecl _lrotl(unsigned long value, int shift)
+{
+    shift &= 31;
+    if (!shift)
+        return value;
+    return (value << shift) | (value >> (32 - shift));
+}
+#endif
+
+#if !HAS_BUILTIN(_lrotr)
+__INTRIN_INLINE unsigned long __cdecl _lrotr(unsigned long value, int shift)
+{
+    shift &= 31;
+    if (!shift)
+        return value;
+    return (value >> shift) | (value << (32 - shift));
+}
+#endif
+
+/*** 64-bit shifts ***/
+#if !HAS_BUILTIN(__ll_lshift)
+__INTRIN_INLINE unsigned long long __ll_lshift(unsigned long long Mask, int Bit)
+{
+    return Mask << (Bit & 0x3F);
+}
+#endif
+
+#if !HAS_BUILTIN(__ll_rshift)
+__INTRIN_INLINE long long __ll_rshift(long long Mask, int Bit)
+{
+    return Mask >> (Bit & 0x3F);
+}
+#endif
+
+#if !HAS_BUILTIN(__ull_rshift)
+__INTRIN_INLINE unsigned long long __ull_rshift(unsigned long long Mask, int Bit)
+{
+    return Mask >> (Bit & 0x3F);
+}
+#endif
+
+/*** Leading zero count and population count ***/
+#if !HAS_BUILTIN(__lzcnt)
+__INTRIN_INLINE unsigned int __lzcnt(unsigned int value)
+{
+    if (!value)
+        return 32;
+    return __builtin_clz(value);
+}
+#endif
+
+#if !HAS_BUILTIN(__lzcnt16)
+__INTRIN_INLINE unsigned short __lzcnt16(unsigned short value)
+{
+    if (!value)
+        return 16;
+    return (unsigned short)(__builtin_clz((unsigned int)value) - 16);
+}
+#endif
+
+#if !HAS_BUILTIN(__lzcnt64)
+__INTRIN_INLINE unsigned long long __lzcnt64(unsigned long long value)
+{
+    if (!value)
+        return 64;
+    return __builtin_clzll(value);
+}
+#endif
+
+#if !HAS_BUILTIN(__popcnt)
+__INTRIN_INLINE unsigned int __popcnt(unsigned int value)
+{
+    return __builtin_popcount(value);
+}
+#endif
+
+#if !HAS_BUILTIN(__popcnt16)
+__INTRIN_INLINE unsigned short __popcnt16(unsigned short value)
+{
+    return __builtin_popcount(value);
+}
+#endif
+
+#if !HAS_BUILTIN(__popcnt64)
+__INTRIN_INLINE unsigned long long __popcnt64(unsigned long long value)
+{
+    return __builtin_popcountll(value);
+}
+#endif
+
+/*** 64-bit math ***/
+#if !HAS_BUILTIN(__mulh)
+__INTRIN_INLINE long long __mulh(long long a, long long b)
+{
+    return ((__int128)a * (__int128)b) >> 64;
+}
+#endif
+
+#if !HAS_BUILTIN(__umulh)
+__INTRIN_INLINE unsigned long long __umulh(unsigned long long a, unsigned long long b)
+{
+    return ((unsigned __int128)a * (unsigned __int128)b) >> 64;
+}
+#endif
+
+#if !HAS_BUILTIN(_abs64)
+__INTRIN_INLINE long long __cdecl _abs64(long long value)
+{
+    return (value >= 0) ? value : -value;
 }
 #endif
 

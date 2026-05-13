@@ -1989,10 +1989,6 @@ void _local_unwind2(void) {}
 void _global_unwind2(void) {}
 int _except_handler2(void) { return 1; }
 int _except_handler3(void) { return 1; }
-unsigned long long __ull_rshift(unsigned long long v, int s) { return v >> s; }
-unsigned long long __ll_rshift(unsigned long long v, int s) { return (unsigned long long)((long long)v >> s); }
-unsigned long long __ll_lshift(unsigned long long v, int s) { return v << s; }
-
 __asm__(
     ".text\n"
     ".globl _abnormal_termination\n"
