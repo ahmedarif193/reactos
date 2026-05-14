@@ -16,6 +16,13 @@
  * SOFTWARE.
  */
 
+#ifndef _WIN32_WINNT
+#define _WIN32_WINNT 0x600
+#endif
+
+#include <windef.h>
+#include <ws2tcpip.h>
+
 #ifndef IN6ADDRSZ
 #define	IN6ADDRSZ	16
 #endif

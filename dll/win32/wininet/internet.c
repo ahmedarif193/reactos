@@ -2068,7 +2068,11 @@ BOOL WINAPI InternetCrackUrlW(const WCHAR *lpszUrl, DWORD dwUrlLength, DWORD dwF
         dwUrlLength = lstrlenW(lpszUrl);
     else {
         /* Windows stops at a null, regardless of what dwUrlLength says. */
+#ifdef __REACTOS__
+        dwUrlLength = lstrlenW(lpszUrl);
+#else
         dwUrlLength = wcsnlen(lpszUrl, dwUrlLength);
+#endif
     }
 
     if (dwFlags & ICU_DECODE)

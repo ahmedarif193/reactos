@@ -7,7 +7,8 @@ add_definitions(
     -D_WIN32_WINNT=0x600)
 
 add_definitions(
-    -D_WINE)
+    -D_WINE
+    -D_WININET_INTERNAL_)
 
 spec2def(wininet.dll wininet.spec ADD_IMPORTLIB)
 
@@ -17,6 +18,7 @@ list(APPEND SOURCE
     ftp.c
     gopher.c
     http.c
+    inet_ntop.c
     internet.c
     utility.c)
 

@@ -117,8 +117,11 @@ static inline WCHAR *strndupAtoW(const char *str, int len_a, DWORD *len_w)
         size_t len;
         if(len_a < 0)
             len_a = strlen(str);
+#ifdef __REACTOS__
+#else
         else if(len_a > 0)
             len_a = strnlen(str, len_a);
+#endif
         len = MultiByteToWideChar(CP_ACP, 0, str, len_a, NULL, 0);
         ret = malloc((len + 1) * sizeof(WCHAR));
         if(ret) {
