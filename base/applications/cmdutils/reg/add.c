@@ -84,6 +84,22 @@ static BOOL get_regdata(const WCHAR *data, DWORD reg_type, WCHAR separator,
             *(DWORD *)*data_bytes = val;
             break;
         }
+        case REG_QWORD:
+        {
+            WCHAR *rest;
+            UINT64 val;
+
+            val = _wcstoui64(data, &rest, (towlower(data[1]) == 'x') ? 16 : 10);
+            if (*rest || (val == ~0ull && errno == ERANGE))
+            {
+                output_message(STRING_MISSING_NUMBER);
+                return FALSE;
+            }
+            *size_bytes = sizeof(val);
+            *data_bytes = malloc(*size_bytes);
+            *(UINT64 *)*data_bytes = val;
+            break;
+        }
         case REG_BINARY:
         {
             BYTE hex0, hex1, *ptr;
@@ -304,6 +320,6 @@ int reg_add(int argc, WCHAR *argvW[])
 
 invalid:
     output_message(STRING_INVALID_SYNTAX);
-    output_message(STRING_FUNC_HELP, _wcsupr(argvW[1]));
+    output_message(STRING_FUNC_HELP, wcsupr(argvW[1]));
     return 1;
 }
