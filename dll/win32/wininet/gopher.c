@@ -1,6 +1,4 @@
-#ifdef __REACTOS__
-#include "precomp.h"
-#else/*
+/*
  * WININET - Gopher implementation
  *
  * Copyright 2003 Kirill Smelkov
@@ -27,7 +25,6 @@
 #include "wininet.h"
 
 #include "wine/debug.h"
-#endif /* defined(__REACTOS__) */
 
 WINE_DEFAULT_DEBUG_CHANNEL(wininet);
 
@@ -66,7 +63,7 @@ BOOL WINAPI GopherCreateLocatorA(
 
 /***********************************************************************
  *           GopherCreateLocatorW (WININET.@)
- *
+ * 
  * See GopherCreateLocatorA.
  */
 BOOL WINAPI GopherCreateLocatorW(
@@ -139,7 +136,7 @@ HINTERNET WINAPI GopherFindFirstFileW(
  *           GopherGetAttributeA (WININET.@)
  *
  * Retrieves the specific attribute information from the server.
- *
+ * 
  * RETURNS
  *  TRUE on success
  *  FALSE on failure
