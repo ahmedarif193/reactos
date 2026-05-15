@@ -21,11 +21,17 @@ storahci.sys = 1
 DefaultDestDir = 12 ; DIRID_DRIVERS
 
 [Manufacturer]
-%ROS%=STORAHCI,NTx86
+%ROS%=STORAHCI,NTx86,NTamd64,NTarm64
 
 [STORAHCI]
 
 [STORAHCI.NTx86]
+%SATA_AHCI.DeviceDesc%=storahci_Inst, PCI\CC_010601; Standard SATA AHCI Controller
+
+[STORAHCI.NTamd64]
+%SATA_AHCI.DeviceDesc%=storahci_Inst, PCI\CC_010601; Standard SATA AHCI Controller
+
+[STORAHCI.NTarm64]
 %SATA_AHCI.DeviceDesc%=storahci_Inst, PCI\CC_010601; Standard SATA AHCI Controller
 
 [ControlFlags]
