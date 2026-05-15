@@ -5273,6 +5273,14 @@ Return Value:
 
         FatInitializeDirectoryDirent( IrpContext, Dcb, ShortDirent );
 
+        /* Keep the still-pinned dirent in sync with the allocated directory cluster. */
+        ShortDirent->FirstClusterOfFile = (USHORT)Dcb->FirstClusterOfFile;
+        if (FatIsFat32(Vcb))
+        {
+            ShortDirent->FirstClusterOfFileHi = (USHORT)(Dcb->FirstClusterOfFile >> 16);
+        }
+        FatSetDirtyBcb( IrpContext, DirentBcb, Vcb, TRUE );
+
         //
         //  Setup the context and section object pointers, and update
         //  our reference counts.  Note that this call cannot fail.
