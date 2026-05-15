@@ -231,6 +231,16 @@ Zw\Name:
     .set SyscallId, SyscallId + 1
     .endm
 
+    .macro STUB_WRAP Name, ArgCount
+    .align 2
+    .global Zw\Name
+Zw\Name:
+    mov x8, #SyscallId
+    svc #0
+    ret
+    .set SyscallId, SyscallId + 1
+    .endm
+
     .macro STUB_U Name, ArgCount
     .align 2
     .global Nt\Name

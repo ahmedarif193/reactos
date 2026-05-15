@@ -102,6 +102,33 @@ LdrpCallInitRoutine(IN PDLL_INIT_ROUTINE EntryPoint,
                     IN ULONG Reason,
                     IN PVOID Context)
 {
+#if defined(_M_ARM64)
+    PIMAGE_NT_HEADERS NtHeaders;
+    ULONG_PTR EntryPointRva, NativeEntryPointRva;
+
+    NtHeaders = RtlImageNtHeader(BaseAddress);
+    if (NtHeaders && (ULONG_PTR)EntryPoint >= (ULONG_PTR)BaseAddress)
+    {
+        EntryPointRva = (ULONG_PTR)EntryPoint - (ULONG_PTR)BaseAddress;
+        if (EntryPointRva < NtHeaders->OptionalHeader.SizeOfImage)
+        {
+            ChpeRegisterArm64EcImage(BaseAddress);
+
+            if (ChpeGetArm64EcRedirection(BaseAddress,
+                                          EntryPointRva,
+                                          &NativeEntryPointRva))
+            {
+                EntryPoint = (PDLL_INIT_ROUTINE)((ULONG_PTR)BaseAddress +
+                                                 NativeEntryPointRva);
+            }
+            else if (NtHeaders->FileHeader.Machine == IMAGE_FILE_MACHINE_AMD64)
+            {
+                return ChpeCallX64DllMain(EntryPoint, BaseAddress, Reason, Context);
+            }
+        }
+    }
+#endif
+
     /* Call the entry */
     return EntryPoint(BaseAddress, Reason, Context);
 }
@@ -2393,6 +2420,26 @@ LdrpGetProcedureAddress(
         /* Make sure we're OK till here */
         if (NT_SUCCESS(Status))
         {
+#if defined(_M_ARM64)
+            ULONG_PTR FunctionRva, NativeFunctionRva;
+
+            if ((ULONG_PTR)Thunk.u1.Function >= (ULONG_PTR)LdrEntry->DllBase)
+            {
+                FunctionRva = (ULONG_PTR)Thunk.u1.Function -
+                              (ULONG_PTR)LdrEntry->DllBase;
+                ChpeRegisterArm64EcImage(LdrEntry->DllBase);
+
+                if (FunctionRva < LdrEntry->SizeOfImage &&
+                    ChpeGetArm64EcRedirection(LdrEntry->DllBase,
+                                              FunctionRva,
+                                              &NativeFunctionRva))
+                {
+                    Thunk.u1.Function = (ULONG_PTR)LdrEntry->DllBase +
+                                        NativeFunctionRva;
+                }
+            }
+#endif
+
             /* Return the address */
             *ProcedureAddress = (PVOID)Thunk.u1.Function;
         }
