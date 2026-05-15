@@ -65,6 +65,11 @@ ExternalProject_Add(fex-arm64ec-build
         -DCMAKE_C_FLAGS=-D__reactos__
         -DCMAKE_CXX_FLAGS=-D__reactos__
         -DCMAKE_ASM_FLAGS=-D__reactos__
+        # This is a Windows ARM64EC cross-build. FEX's default native tuning
+        # probes Linux /proc/cpuinfo from the build host, which is not useful.
+        -DTUNE_CPU=none
+        # Avoid resolving a host fmt package while cross-compiling.
+        -DCMAKE_DISABLE_FIND_PACKAGE_fmt=ON
         -DREACTOS=ON
         # ARM64EC-clang also defines __x86_64 which confuses FEX's
         # host-arch check. Allow x86_64 host builds.
