@@ -5008,6 +5008,22 @@ XHCI_ServiceEventRing(
 }
 static
 BOOLEAN
+XHCI_MmioUnavailable(
+    _In_ PXHCI_EXTENSION Extension)
+{
+    PXHCI_OPERATIONAL_REGISTERS Ops;
+
+    if (!Extension || !Extension->OperationalRegisters)
+        return TRUE;
+
+    Ops = Extension->OperationalRegisters;
+
+    return XHCI_READ_REGISTER_ULONG(&Ops->UsbCmd) == 0xFFFFFFFF &&
+           XHCI_READ_REGISTER_ULONG(&Ops->UsbSts) == 0xFFFFFFFF;
+}
+
+static
+BOOLEAN
 XHCI_EventRingHasPendingTrb(
     _In_ PXHCI_EXTENSION Extension)
 {
@@ -9412,6 +9428,15 @@ XHCI_HandleControllerError(
     if (!Extension)
         return;
 
+    if (XHCI_MmioUnavailable(Extension))
+    {
+        Extension->FatalError = TRUE;
+        Extension->ControllerRunning = FALSE;
+        Extension->InterruptsEnabled = FALSE;
+        Extension->RhIrqEnabled = FALSE;
+        return;
+    }
+
     DPRINT1("usbxhci: FATAL controller error (USBSTS=%08lx) - dumping controller state\n",
             PendingStatus);
     XHCI_DumpControllerState(Extension, "controller error");
@@ -12517,6 +12542,9 @@ XHCI_InterruptService(PVOID MiniPortExtension)
     if (Extension->FatalError || Extension->StoppingOrRemoved)
     {
         ULONG StsAck;
+
+        if (XHCI_MmioUnavailable(Extension))
+            return TRUE;
 
         /* Clear IMAN.IP on interrupter 0 */
         if (Extension->RuntimeRegisters)
