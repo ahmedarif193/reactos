@@ -64,6 +64,8 @@ add_cd_file(FILE ${CMAKE_CURRENT_SOURCE_DIR}/bootcdregtest/unattend.inf DESTINAT
 add_cd_file(FILE ${CMAKE_CURRENT_SOURCE_DIR}/livecd/unattend.inf DESTINATION reactos NO_CAB FOR livecd)
 add_cd_file(FILE ${CMAKE_CURRENT_SOURCE_DIR}/preinstall/unattend.inf DESTINATION reactos FOR preinstall)
 
+add_cd_file(FILE ${CMAKE_CURRENT_SOURCE_DIR}/livecd_start.cmd DESTINATION "Profiles/Default User/My Documents" FOR livecd)
+
 
 # LiveImage shortcuts
 add_custom_target(livecd_links)
