@@ -2993,9 +2993,12 @@ __pragma(warning(pop))                                                          
 //  );
 //
 
-#define FatNormalizeAndRaiseStatus(IRPCONTEXT,STATUS) {                         \
-    (IRPCONTEXT)->ExceptionStatus = (STATUS);                                   \
-    ExRaiseStatus(FsRtlNormalizeNtstatus((STATUS),STATUS_UNEXPECTED_IO_ERROR)); \
+#define FatNormalizeAndRaiseStatus(IRPCONTEXT,STATUS) {                 \
+    NTSTATUS FatNormalizedStatus;                                       \
+    FatNormalizedStatus = FsRtlNormalizeNtstatus((STATUS),              \
+                                                STATUS_UNEXPECTED_IO_ERROR); \
+    (IRPCONTEXT)->ExceptionStatus = FatNormalizedStatus;                \
+    ExRaiseStatus(FatNormalizedStatus);                                 \
 }
 
 
@@ -3107,5 +3110,3 @@ FatInterpretClusterType (
 #define IsDirectory(FcbOrDcb) ((NodeType((FcbOrDcb)) == FAT_NTC_DCB) || (NodeType((FcbOrDcb)) == FAT_NTC_ROOT_DCB))
 
 #endif // _FATPROCS_
-
-
