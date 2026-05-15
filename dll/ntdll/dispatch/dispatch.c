@@ -29,6 +29,13 @@ KiUserExceptionDispatcher(PEXCEPTION_RECORD ExceptionRecord,
     EXCEPTION_RECORD NestedExceptionRecord;
     NTSTATUS Status;
 
+#if defined(_M_ARM64)
+    if (ChpeIsChpeProcess())
+    {
+        ChpeDispatchException(ExceptionRecord, Context);
+    }
+#endif
+
     /* Dispatch the exception and check the result */
     if (RtlDispatchException(ExceptionRecord, Context))
     {

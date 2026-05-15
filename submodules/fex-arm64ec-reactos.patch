@@ -1,0 +1,197 @@
+diff --git a/FEXCore/Source/Utils/SpinWaitLock.cpp b/FEXCore/Source/Utils/SpinWaitLock.cpp
+index 3dba2d564..1a3d96989 100644
+--- a/FEXCore/Source/Utils/SpinWaitLock.cpp
++++ b/FEXCore/Source/Utils/SpinWaitLock.cpp
+@@ -6,9 +6,13 @@ namespace FEXCore::Utils::SpinWaitLock {
+ constexpr uint64_t NanosecondsInSecond = 1'000'000'000ULL;
+ 
+ static uint64_t GetCycleCounterFrequency() {
++#ifdef __reactos__
++  return NanosecondsInSecond;
++#else
+   uint64_t Result {};
+   __asm("mrs %[Res], CNTFRQ_EL0" : [Res] "=r"(Result));
+   return Result;
++#endif
+ }
+ 
+ static uint64_t CalculateCyclesPerNanosecond() {
+diff --git a/Source/Windows/ARM64EC/CMakeLists.txt b/Source/Windows/ARM64EC/CMakeLists.txt
+index 0c9a57a17..9097a65bd 100644
+--- a/Source/Windows/ARM64EC/CMakeLists.txt
++++ b/Source/Windows/ARM64EC/CMakeLists.txt
+@@ -19,7 +19,11 @@ target_link_libraries(arm64ecfex PRIVATE
+   CommonWindowsRuntime
+   ntdll_ex)
+ 
+-target_link_options(arm64ecfex PRIVATE -static -nostdlib -nostartfiles -nodefaultlibs -lc++ -lc++abi -lunwind)
++if (REACTOS)
++  target_link_options(arm64ecfex PRIVATE -static -nostdlib -nostartfiles -lc++ -lc++abi -lunwind -lucrt -lmingwex)
++else()
++  target_link_options(arm64ecfex PRIVATE -static -nostdlib -nostartfiles -nodefaultlibs -lc++ -lc++abi -lunwind)
++endif()
+ target_link_libraries(arm64ecfex PRIVATE ${LIBGCC_PATH})
+ install(TARGETS arm64ecfex RUNTIME
+   DESTINATION ${CMAKE_INSTALL_LIBDIR}
+diff --git a/Source/Windows/ARM64EC/Module.S b/Source/Windows/ARM64EC/Module.S
+index 365931332..d5eccfe54 100644
+--- a/Source/Windows/ARM64EC/Module.S
++++ b/Source/Windows/ARM64EC/Module.S
+@@ -141,7 +141,11 @@ DIRECT_SYSCALL_WRAPPER("#NtProtectVirtualMemoryNative", WineNtProtectVirtualMemo
+   adrp x17, NtDllRedirectionLUTSize
+   ldr x17, [x17, #:lo12:NtDllRedirectionLUTSize]
+   cmp x16, x17
++#ifdef __reactos__
++  b.hs end
++#else
+   b.hi end
++#endif
+   adrp x17, NtDllRedirectionLUT
+   ldr x17, [x17, #:lo12:NtDllRedirectionLUT]
+   ldr w11, [x17, x16, lsl #2]
+diff --git a/Source/Windows/ARM64EC/Module.cpp b/Source/Windows/ARM64EC/Module.cpp
+index 241da1038..8e23b9cf3 100644
+--- a/Source/Windows/ARM64EC/Module.cpp
++++ b/Source/Windows/ARM64EC/Module.cpp
+@@ -175,15 +175,46 @@ void FillNtDllLUTs(HMODULE NtDll) {
+   ULONG Size;
+   const auto* LoadConfig =
+     reinterpret_cast<_IMAGE_LOAD_CONFIG_DIRECTORY64*>(RtlImageDirectoryEntryToData(NtDll, true, IMAGE_DIRECTORY_ENTRY_LOAD_CONFIG, &Size));
++
++#ifdef __reactos__
++  if (!LoadConfig ||
++      Size < __builtin_offsetof(_IMAGE_LOAD_CONFIG_DIRECTORY64, CHPEMetadataPointer) + sizeof(LoadConfig->CHPEMetadataPointer) ||
++      !LoadConfig->CHPEMetadataPointer) {
++    NtDllRedirectionLUT = nullptr;
++    NtDllRedirectionLUTSize = 0;
++    return;
++  }
++#endif
++
+   const auto* CHPEMetadata = reinterpret_cast<IMAGE_ARM64EC_METADATA*>(LoadConfig->CHPEMetadataPointer);
++
++#ifdef __reactos__
++  if (!CHPEMetadata->RedirectionMetadata || !CHPEMetadata->RedirectionMetadataCount) {
++    NtDllRedirectionLUT = nullptr;
++    NtDllRedirectionLUTSize = 0;
++    return;
++  }
++#endif
++
+   const auto* RedirectionTableBegin = reinterpret_cast<IMAGE_ARM64EC_REDIRECTION_ENTRY*>(NtDllBase + CHPEMetadata->RedirectionMetadata);
+   const auto* RedirectionTableEnd = RedirectionTableBegin + CHPEMetadata->RedirectionMetadataCount;
+ 
+   NtDllRedirectionLUTSize = std::prev(RedirectionTableEnd)->Source + 1;
+ 
+   SIZE_T AllocSize = NtDllRedirectionLUTSize * sizeof(uint32_t);
++#ifdef __reactos__
++  if (NtAllocateVirtualMemoryNative(NtCurrentProcess(), reinterpret_cast<void**>(&NtDllRedirectionLUT), 0, &AllocSize, MEM_COMMIT | MEM_RESERVE,
++                                    PAGE_READWRITE) < 0) {
++    NtDllRedirectionLUT = nullptr;
++    NtDllRedirectionLUTSize = 0;
++    return;
++  }
++
++#else
+   NtAllocateVirtualMemoryNative(NtCurrentProcess(), reinterpret_cast<void**>(&NtDllRedirectionLUT), 0, &AllocSize, MEM_COMMIT | MEM_RESERVE,
+                                 PAGE_READWRITE);
++#endif
++
+   for (auto It = RedirectionTableBegin; It != RedirectionTableEnd; It++) {
+     NtDllRedirectionLUT[It->Source] = It->Destination;
+   }
+@@ -198,10 +229,24 @@ void WriteModuleRVA(HMODULE Module, LONG RVA, T Data) {
+   void* Address = reinterpret_cast<void*>(reinterpret_cast<uintptr_t>(Module) + RVA);
+   void* ProtAddress = Address;
+   SIZE_T ProtSize = sizeof(T);
++#ifdef __reactos__
++  ULONG Prot {};
++  if (NtProtectVirtualMemory(NtCurrentProcess(), &ProtAddress, &ProtSize, PAGE_READWRITE, &Prot) < 0) {
++    return;
++  }
++
++  *reinterpret_cast<T*>(Address) = Data;
++
++  ProtAddress = Address;
++  ProtSize = sizeof(T);
++  ULONG Ignored;
++  NtProtectVirtualMemory(NtCurrentProcess(), &ProtAddress, &ProtSize, Prot, &Ignored);
++#else
+   ULONG Prot;
+   NtProtectVirtualMemoryNative(NtCurrentProcess(), &ProtAddress, &ProtSize, PAGE_READWRITE, &Prot);
+   *reinterpret_cast<T*>(Address) = Data;
+   NtProtectVirtualMemoryNative(NtCurrentProcess(), &ProtAddress, &ProtSize, Prot, nullptr);
++#endif
+ }
+ 
+ void PatchCallChecker() {
+@@ -625,7 +670,16 @@ NTSTATUS ProcessInit() {
+   *reinterpret_cast<uint8_t*>(X64ReturnInstr) = 0xc3;
+ 
+   const uintptr_t KiUserExceptionDispatcherFFS = reinterpret_cast<uintptr_t>(GetProcAddress(NtDll, "KiUserExceptionDispatcher"));
++#ifdef __reactos__
++  const uintptr_t KiUserExceptionDispatcherRVA = KiUserExceptionDispatcherFFS - NtDllBase;
++  if (NtDllRedirectionLUT && KiUserExceptionDispatcherRVA < NtDllRedirectionLUTSize) {
++    Exception::KiUserExceptionDispatcher = NtDllRedirectionLUT[KiUserExceptionDispatcherRVA] + NtDllBase;
++  } else {
++    Exception::KiUserExceptionDispatcher = KiUserExceptionDispatcherFFS;
++  }
++#else
+   Exception::KiUserExceptionDispatcher = NtDllRedirectionLUT[KiUserExceptionDispatcherFFS - NtDllBase] + NtDllBase;
++#endif
+ 
+   FEX_CONFIG_OPT(TSOEnabled, TSOENABLED);
+   if (TSOEnabled()) {
+diff --git a/Source/Windows/Common/CRT/Misc.cpp b/Source/Windows/Common/CRT/Misc.cpp
+index 76f8b997b..0117f89e0 100644
+--- a/Source/Windows/Common/CRT/Misc.cpp
++++ b/Source/Windows/Common/CRT/Misc.cpp
+@@ -51,6 +51,7 @@ void InitEnv() {
+ __attribute__((used, section(".CRT$FEXB"))) void (*_InitEnv)(void) = InitEnv;
+ } // namespace
+ 
++#ifndef __reactos__
+ char*** __p__environ() {
+   return &EnvArray;
+ }
+@@ -72,11 +73,13 @@ char* getenv(const char* VarName) {
+ 
+   return Ret;
+ }
++#endif
+ 
+ int atexit(void (*)(void)) {
+   return 0;
+ }
+ 
++#ifndef __reactos__
+ #pragma push_macro("abort")
+ #undef abort
+ void abort(void) {
+@@ -87,14 +90,17 @@ void abort(void) {
+ int getpid(void) {
+   return static_cast<int>(GetCurrentProcessId());
+ }
++#endif
+ 
+ void exit(int _Code) {
+   UNIMPLEMENTED();
+ }
+ 
++#ifndef __reactos__
+ DLLEXPORT_FUNC(void, _assert, (const char* message, const char* file, unsigned line)) {
+   UNIMPLEMENTED();
+ }
++#endif
+ 
+ DLLEXPORT_FUNC(
+   uintptr_t, _beginthreadex,
+@@ -102,6 +108,8 @@ DLLEXPORT_FUNC(
+   UNIMPLEMENTED();
+ }
+ 
++#ifndef __reactos__
+ DLLEXPORT_FUNC(int*, __sys_nerr, (void)) {
+   UNIMPLEMENTED();
+ }
++#endif

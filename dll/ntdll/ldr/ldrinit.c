@@ -537,6 +537,17 @@ LdrpInitializeThread(IN PCONTEXT Context)
     /* Allocate TLS */
     LdrpAllocateTls();
 
+#if defined(_M_ARM64)
+    if (ChpeIsChpeProcess())
+    {
+        Status = ChpeInitializeThread();
+        if (!NT_SUCCESS(Status))
+        {
+            DPRINT1("[CHPE] ldrinit: ThreadInit failed, Status = 0x%08lx\n", Status);
+        }
+    }
+#endif
+
     /* Start at the beginning */
     ListHead = &Peb->Ldr->InMemoryOrderModuleList;
     NextEntry = ListHead->Flink;
@@ -1082,6 +1093,14 @@ LdrShutdownProcess(VOID)
 
     /* FIXME: Do Heap detection and Etw final shutdown */
 
+#if defined(_M_ARM64)
+    /* CHPE: notify the emulator that this process is terminating */
+    if (ChpeIsChpeProcess())
+    {
+        ChpeCleanupProcess(NtCurrentProcess(), 0);
+    }
+#endif
+
     /* Release the lock */
     RtlLeaveCriticalSection(&LdrpLoaderLock);
     DPRINT("LdrpShutdownProcess() done\n");
@@ -1273,6 +1292,15 @@ LdrShutdownThread(VOID)
 
     /* Free the activation context stack */
     RtlFreeThreadActivationContextStack();
+
+#if defined(_M_ARM64)
+    /* CHPE: notify the emulator that this thread is terminating */
+    if (ChpeIsChpeProcess())
+    {
+        ChpeCleanupThread(NtCurrentThread(), 0);
+    }
+#endif
+
     DPRINT("LdrShutdownThread() done\n");
 
     return STATUS_SUCCESS;
@@ -2290,6 +2318,18 @@ LdrpInitializeProcess(IN PCONTEXT Context,
     /* Processing done, insert it */
     LdrpNtDllDataTableEntry = NtLdrEntry;
     LdrpInsertMemoryTableEntry(NtLdrEntry);
+
+#if defined(_M_ARM64)
+    if (ChpeIsChpeProcess())
+    {
+        Status = ChpeInitializeProcess();
+        if (!NT_SUCCESS(Status))
+        {
+            DPRINT1("LDR: CHPE process init failed, Status = 0x%08lx\n", Status);
+            return Status;
+        }
+    }
+#endif
 
     /* Let the world know */
     if (ShowSnaps)

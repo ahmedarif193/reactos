@@ -25,6 +25,7 @@ extern void func_wcstoul(void);
 extern void func_wcstombs(void);
 
 extern void func_DllLoadNotification(void);
+extern void func_arm64_chpe(void);
 extern void func_LdrEnumResources(void);
 extern void func_LdrFindResource_U(void);
 extern void func_LdrLoadDll(void);
@@ -167,6 +168,7 @@ const struct test winetest_testlist[] =
     { "wcstombs", func_wcstombs },
 
     { "DllLoadNotification",            func_DllLoadNotification },
+    { "arm64_chpe",                     func_arm64_chpe },
     { "LdrEnumResources",               func_LdrEnumResources },
     { "LdrFindResource_U",              func_LdrFindResource_U },
     { "LdrLoadDll",                     func_LdrLoadDll },
