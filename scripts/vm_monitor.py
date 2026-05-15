@@ -9,8 +9,11 @@ Usage:
 	  # Run from within your build directory (e.g., output-arm64)
 	  python3 ../vm_monitor.py
 
-	  # ARM64 QEMU path: build livecd and boot livecd.iso
+	  # QEMU path: build livecd and boot livecd.iso
 	  python3 ../vm_monitor.py --qemu
+
+	  # QEMU disk-image path: build reactosimg and boot ReactOS.img
+	  python3 ../vm_monitor.py --qemu --img
 
 	  # Build and boot LiveCD ISO
 	  python3 ../vm_monitor.py --livecd
@@ -125,6 +128,7 @@ use_qemu = False
 target_arch = "amd64" 
 boot_media = "disk"
 boot_image_path = REACTOS_IMG
+vm_cleanup_done = False
 
 
 def detect_target_arch():
@@ -345,11 +349,12 @@ def process_is_running(pid):
         return False
 
 
-def kill_qemu_for_image(image_path, reason):
+def kill_qemu_for_image(image_path, reason, quiet_not_found=False):
     """Kill only QEMU processes that are using the ReactOS image for this build."""
     matches = find_qemu_pids_for_image(image_path)
     if not matches:
-        print(f"No existing QEMU process found for {image_path}.")
+        if not quiet_not_found:
+            print(f"No existing QEMU process found for {image_path}.")
         return
 
     print(f"Stopping {len(matches)} QEMU process(es) for {image_path} ({reason})...")
@@ -400,7 +405,11 @@ def add_qemu_gdb_server(qemu_cmd):
 
 def force_kill_vm():
     """Forcefully kill VM - called on exit."""
-    global qemu_process, use_qemu, boot_image_path
+    global qemu_process, use_qemu, boot_image_path, vm_cleanup_done
+
+    if vm_cleanup_done:
+        return
+    vm_cleanup_done = True
 
     if use_qemu:
         if qemu_process:
@@ -412,7 +421,8 @@ def force_kill_vm():
                     qemu_process.kill()
                 except Exception:
                     pass
-        kill_qemu_for_image(boot_image_path, "monitor cleanup")
+            qemu_process = None
+        kill_qemu_for_image(boot_image_path, "monitor cleanup", quiet_not_found=True)
     else:
         try:
             subprocess.run(
@@ -1460,17 +1470,9 @@ def capture_gdb_dump(reason):
 
     if target_arch == "arm64":
         text_vma = get_section_vma(ntoskrnl_symbols, ".text")
-        pvec_vma = get_section_vma(ntoskrnl_symbols, ".pvec")
-        vector_vma = get_symbol_vma(ntoskrnl_symbols, "KiArm64VectorTable")
-        if not text_vma or not pvec_vma or not vector_vma:
-            print("GDB state dump skipped: could not derive ARM64 kernel section VMAs.")
-            return False
-
         commands.append("set architecture aarch64")
     else:
         text_vma = None
-        pvec_vma = None
-        vector_vma = None
 
     commands.extend([
         f"target remote 127.0.0.1:{QEMU_GDB_PORT}",
@@ -1478,19 +1480,24 @@ def capture_gdb_dump(reason):
 
     if target_arch == "arm64":
         log_addresses = extract_interesting_log_addresses(read_log_tail(LOG_FILE))
-        if KERNEL_TEXT_ADDRESS is not None:
+        symbols_loaded = False
+        if KERNEL_TEXT_ADDRESS is not None and text_vma:
             commands.append(f"set $nt_text = {KERNEL_TEXT_ADDRESS:#x}")
+            commands.append("p/x $nt_text")
+            commands.append(f"set $nt_delta = $nt_text - {text_vma:#x}")
+            add_symbol_parts = [f"add-symbol-file {ntoskrnl_symbols} $nt_text"]
+            for section_name in (".rdata", ".data", ".pdata", ".evec", ".pvec", "INIT", "INITDATA", "PAGE"):
+                section_vma = get_section_vma(ntoskrnl_symbols, section_name)
+                if section_vma:
+                    add_symbol_parts.append(f"-s {section_name} ($nt_delta+{section_vma:#x})")
+            commands.append(" ".join(add_symbol_parts))
+            symbols_loaded = True
+        elif KERNEL_TEXT_ADDRESS is not None:
+            print("GDB state dump: ARM64 symbol load skipped; could not derive ntoskrnl .text VMA.")
         else:
-            commands.append(f"set $nt_text = $VBAR_EL1 - {vector_vma:#x} + {text_vma:#x}")
-        commands.append("p/x $nt_text")
-        commands.append(f"set $nt_delta = $nt_text - {text_vma:#x}")
-        add_symbol_parts = [f"add-symbol-file {ntoskrnl_symbols} $nt_text"]
-        for section_name in (".rdata", ".data", ".pdata", ".evec", ".pvec", "INIT", "INITDATA", "PAGE"):
-            section_vma = get_section_vma(ntoskrnl_symbols, section_name)
-            if section_vma:
-                add_symbol_parts.append(f"-s {section_name} ($nt_delta+{section_vma:#x})")
-        commands.append(" ".join(add_symbol_parts))
-        if log_addresses:
+            print("GDB state dump: ARM64 symbol load skipped; set ROS_KERNEL_TEXT to the loaded kernel .text address.")
+
+        if symbols_loaded and log_addresses:
             commands.append('printf "ARM64 serial address symbols:\\n"')
             for label, address in log_addresses:
                 commands.append(f'printf "  {label} {address:#018x}: "')
@@ -1505,10 +1512,10 @@ def capture_gdb_dump(reason):
 
     if target_arch == "arm64":
         commands.extend([
-        'printf "ARM64 selected regs: pc=%#llx sp=%#llx fp=%#llx lr=%#llx esr=%#llx far=%#llx elr=%#llx spsr=%#llx tpidr=%#llx ttbr0=%#llx ttbr1=%#llx vbar=%#llx\\n", $pc, $sp, $x29, $x30, $ESR_EL1, $FAR_EL1, $ELR_EL1, $SPSR_EL1, $TPIDR_EL1, $TTBR0_EL1, $TTBR1_EL1, $VBAR_EL1',
+        'printf "ARM64 selected general registers:\\n"',
+        "info registers pc sp x29 x30",
         "info symbol $pc",
         "info symbol $x30",
-        "info symbol $ELR_EL1",
         "x/8i $pc",
         ])
     else:
@@ -1663,6 +1670,7 @@ def main():
     parser.add_argument('--vbox', action='store_true', help='Use VirtualBox (default behavior)')
     parser.add_argument('--rpi', action='store_true', help='Use Raspberry Pi emulation mode (cortex-a72, no HVF)')
     parser.add_argument('--smp', type=int, default=4, help='Number of CPU cores (default: 4)')
+    parser.add_argument('--img', action='store_true', help='Build and boot ReactOS.img instead of the default QEMU livecd.iso')
     parser.add_argument('--livecd', action='store_true', help='Build and boot livecd.iso instead of ReactOS.img')
     parser.add_argument('--iso', nargs='?', const=LIVECD_ISO, default=None,
                         help='Boot an ISO path with QEMU; no path means build/livecd.iso')
@@ -1675,6 +1683,9 @@ def main():
     # --vbox is explicit but same as default (no --qemu)
     use_qemu = args.qemu and not args.vbox
 
+    if args.img and (args.livecd or args.iso is not None):
+        parser.error("--img cannot be combined with --livecd or --iso")
+
     # Detect target architecture from CWD
     target_arch = detect_target_arch()
 
@@ -1682,7 +1693,11 @@ def main():
     boot_media = "disk"
     boot_image_path = REACTOS_IMG
 
-    if args.livecd or args.iso is not None:
+    if args.img:
+        build_target = "reactosimg"
+        boot_media = "disk"
+        boot_image_path = REACTOS_IMG
+    elif args.livecd or args.iso is not None or use_qemu:
         boot_media = "iso"
         boot_image_path = os.path.realpath(args.iso if args.iso is not None else LIVECD_ISO)
         use_qemu = True
@@ -1694,11 +1709,6 @@ def main():
     # Force QEMU for ARM64 (VirtualBox does not exist for arm64)
     if target_arch == "arm64":
         use_qemu = True
-        # Match the tested ARM64 QEMU path: build livecd and boot it as optical media.
-        if args.qemu and not args.livecd and args.iso is None:
-            boot_media = "iso"
-            boot_image_path = LIVECD_ISO
-            build_target = "livecd"
 
     atexit.register(force_kill_vm)
     signal.signal(signal.SIGINT, signal_handler)
@@ -1718,7 +1728,7 @@ def main():
         if not build_ninja_target(build_target):
             sys.exit(1)
     elif not os.path.exists(boot_image_path):
-        print(f"Error: ISO image not found: {boot_image_path}")
+        print(f"Error: boot image not found: {boot_image_path}")
         sys.exit(1)
 
     # Cleanup: Stop only previous QEMU instances using this build's OS image.
