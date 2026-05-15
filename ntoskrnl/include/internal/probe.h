@@ -97,6 +97,11 @@ DefaultSetInfoBufferCheck(
         {
             if (PreviousMode != KernelMode)
             {
+                if (Buffer == NULL && BufferLength != 0)
+                {
+                    return STATUS_ACCESS_VIOLATION;
+                }
+
                 _SEH2_TRY
                 {
                     ProbeForRead(Buffer,
