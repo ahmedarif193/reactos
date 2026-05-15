@@ -61,6 +61,49 @@ fail() {
 	exit 1
 }
 
+sync_arm64_submodules() {
+	[ "$ARCH" = "arm64" ] || return 0
+
+	if [ ! -d "$REACTOS_SOURCE_DIR/.git" ]; then
+		echo "Skipping ARM64 submodule sync outside a Git checkout."
+		return 0
+	fi
+
+	command -v git >/dev/null 2>&1 || fail "git is required to initialize ARM64 submodules"
+
+	echo "Syncing ARM64 submodules..."
+	git -C "$REACTOS_SOURCE_DIR" submodule sync -- submodules/fex-arm64ec || fail "failed to sync FEX submodule metadata"
+	git -C "$REACTOS_SOURCE_DIR" submodule update --init --recursive -- submodules/fex-arm64ec || fail "failed to initialize FEX submodule"
+}
+
+prepare_arm64_fex_source() {
+	[ "$ARCH" = "arm64" ] || return 0
+
+	case " $ROS_CMAKEOPTS " in
+		*" -DENABLE_FEX_ARM64EC=ON "*|*" -DENABLE_FEX_ARM64EC:BOOL=ON "*|*" -DENABLE_FEX_ARM64EC=TRUE "*|*" -DENABLE_FEX_ARM64EC:BOOL=TRUE "*|*" -DENABLE_FEX_ARM64EC=1 "*|*" -DENABLE_FEX_ARM64EC:BOOL=1 "*)
+			;;
+		*)
+			return 0
+			;;
+	esac
+
+	FEX_UPSTREAM_DIR="$REACTOS_SOURCE_DIR/submodules/fex-arm64ec"
+	FEX_PATCH_FILE="$REACTOS_SOURCE_DIR/submodules/fex-arm64ec-reactos.patch"
+	FEX_PREPARED_DIR="$REACTOS_SOURCE_DIR/$REACTOS_OUTPUT_PATH/submodules/fex-arm64ec-src"
+
+	[ -f "$FEX_UPSTREAM_DIR/CMakeLists.txt" ] || fail "FEX submodule source is missing at $FEX_UPSTREAM_DIR"
+	[ -f "$FEX_UPSTREAM_DIR/External/fmt/CMakeLists.txt" ] || fail "FEX submodule dependencies are incomplete"
+	[ -f "$FEX_PATCH_FILE" ] || fail "FEX ReactOS patch is missing at $FEX_PATCH_FILE"
+	command -v patch >/dev/null 2>&1 || fail "patch is required to prepare the FEX ARM64EC source"
+
+	echo "Preparing FEX ARM64EC source..."
+	rm -rf "$FEX_PREPARED_DIR"
+	mkdir -p "$(dirname "$FEX_PREPARED_DIR")"
+	cp -a "$FEX_UPSTREAM_DIR" "$FEX_PREPARED_DIR"
+	rm -rf "$FEX_PREPARED_DIR/.git"
+	patch -d "$FEX_PREPARED_DIR" -p1 < "$FEX_PATCH_FILE" >/dev/null || fail "failed to apply FEX ReactOS patch"
+}
+
 lower_build_type() {
 	case "$1" in
 		Release|release)
@@ -221,6 +264,9 @@ echo "Build type:    $BUILD_TYPE"
 echo "Generator:     $CMAKE_GENERATOR"
 echo "Output path:   $REACTOS_OUTPUT_PATH"
 echo
+
+sync_arm64_submodules
+prepare_arm64_fex_source
 
 if [ "$REACTOS_SOURCE_DIR" = "$PWD" ]; then
 	BUILD_HINT_PATH="./$REACTOS_OUTPUT_PATH"

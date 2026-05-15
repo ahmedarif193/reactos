@@ -9,6 +9,7 @@
     TEXTAREA
 
 #define SVC_(name, argcount) STUB_U name
+#define SVC_WRAP_(name, argcount) STUB_U name
 
 #include <sysfuncs.h>
 
@@ -19,6 +20,7 @@
     .text
 
 #define SVC_(name, argcount) STUB_U name, argcount
+#define SVC_WRAP_(name, argcount) STUB_WRAP name, argcount
 
 #include <sysfuncs.h>
 
@@ -27,6 +29,7 @@
 .code
 
 #define SVC_(name, argcount) STUB_U name, argcount
+#define SVC_WRAP_(name, argcount) STUB_U name, argcount
 
 #include <sysfuncs.h>
 

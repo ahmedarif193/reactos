@@ -1677,4 +1677,48 @@ LdrInitShimEngineDynamic(IN PVOID BaseAddress)
     return FALSE;
 }
 
+/*
+ * @implemented
+ *
+ * Wine-derived behavior: NULL module means the process image, undersized
+ * buffers receive a partial copy, and STATUS_BUFFER_TOO_SMALL is returned
+ * after copying.
+ */
+NTSTATUS
+NTAPI
+LdrGetDllFullName(HMODULE hModule, UNICODE_STRING *FullDllName)
+{
+    PLDR_DATA_TABLE_ENTRY LdrEntry;
+    PLIST_ENTRY ListHead, NextEntry;
+    PPEB Peb = NtCurrentPeb();
+    NTSTATUS Status;
+
+    if (!FullDllName)
+        return STATUS_INVALID_PARAMETER;
+
+    if (!Peb->Ldr)
+        return STATUS_DLL_NOT_FOUND;
+
+    if (!hModule)
+        hModule = Peb->ImageBaseAddress;
+
+    ListHead = &Peb->Ldr->InMemoryOrderModuleList;
+    NextEntry = ListHead->Flink;
+    while (NextEntry != ListHead)
+    {
+        LdrEntry = CONTAINING_RECORD(NextEntry, LDR_DATA_TABLE_ENTRY, InMemoryOrderLinks);
+        if (LdrEntry->DllBase == hModule)
+        {
+            Status = (FullDllName->MaximumLength <
+                      LdrEntry->FullDllName.Length + sizeof(WCHAR)) ?
+                     STATUS_BUFFER_TOO_SMALL : STATUS_SUCCESS;
+            RtlCopyUnicodeString(FullDllName, &LdrEntry->FullDllName);
+            return Status;
+        }
+        NextEntry = NextEntry->Flink;
+    }
+
+    return STATUS_DLL_NOT_FOUND;
+}
+
 /* EOF */
