@@ -6,6 +6,7 @@
     TEXTAREA
 
 #define SVC_(name, argcount) STUB_K name
+#define SVC_WRAP_(name, argcount) STUB_K name
 
 #include <sysfuncs.h>
 
@@ -14,6 +15,7 @@
     .text
 
 #define SVC_(name, argcount) STUB_K name, argcount
+#define SVC_WRAP_(name, argcount) STUB_K name, argcount
 
 #include <sysfuncs.h>
 
@@ -30,6 +32,7 @@ EXTERN KiZwSystemService:PROC
 .code
 
 #define SVC_(name, argcount) STUB_K name, argcount
+#define SVC_WRAP_(name, argcount) STUB_K name, argcount
 
 #include <sysfuncs.h>
 

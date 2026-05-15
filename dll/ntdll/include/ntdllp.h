@@ -261,4 +261,129 @@ NTAPI
 RtlpInitializeThreadPooling(
     VOID);
 
+/* CHPE (ARM64EC) emulator integration -- chpe.c */
+#if defined(_M_ARM64)
+
+BOOLEAN
+NTAPI
+ChpeIsChpeProcess(
+    VOID);
+
+BOOLEAN
+NTAPI
+ChpeIsEmulatorReady(
+    VOID);
+
+NTSTATUS
+NTAPI
+ChpeInitializeProcess(
+    VOID);
+
+NTSTATUS
+NTAPI
+ChpeInitializeThread(
+    VOID);
+
+VOID
+NTAPI
+ChpeCleanupThread(
+    HANDLE ThreadHandle,
+    LONG ExitCode);
+
+VOID
+NTAPI
+ChpeCleanupProcess(
+    HANDLE ProcessHandle,
+    NTSTATUS ExitStatus);
+
+BOOLEAN
+NTAPI
+ChpeDispatchException(
+    PEXCEPTION_RECORD ExceptionRecord,
+    PCONTEXT Context);
+
+VOID
+NTAPI
+ChpeNotifyMemoryAlloc(
+    PVOID Address,
+    SIZE_T Size,
+    ULONG Type,
+    ULONG Prot,
+    BOOLEAN After,
+    NTSTATUS Status);
+
+VOID
+NTAPI
+ChpeNotifyMemoryFree(
+    PVOID Address,
+    SIZE_T Size,
+    ULONG FreeType,
+    BOOLEAN After,
+    NTSTATUS Status);
+
+VOID
+NTAPI
+ChpeNotifyMemoryProtect(
+    PVOID Address,
+    SIZE_T Size,
+    ULONG NewProt,
+    BOOLEAN After,
+    NTSTATUS Status);
+
+NTSTATUS
+NTAPI
+ChpeNotifyMapViewOfSection(
+    PVOID Unk1,
+    PVOID Address,
+    PVOID Unk2,
+    SIZE_T Size,
+    ULONG AllocType,
+    ULONG Prot);
+
+VOID
+NTAPI
+ChpeNotifyUnmapViewOfSection(
+    PVOID Address,
+    BOOLEAN After,
+    NTSTATUS Status);
+
+VOID
+NTAPI
+ChpeFlushInstructionCache(
+    const void *Address,
+    SIZE_T Size);
+
+BOOLEAN
+NTAPI
+ChpeShouldEmulateImage(
+    PVOID ImageBase);
+
+BOOLEAN
+NTAPI
+ChpeRegisterArm64EcImage(
+    PVOID ImageBase);
+
+BOOLEAN
+NTAPI
+ChpeGetArm64EcRedirection(
+    PVOID ImageBase,
+    ULONG_PTR SourceRva,
+    PULONG_PTR DestinationRva);
+
+BOOLEAN
+NTAPI
+ChpeCallX64DllMain(
+    PVOID EntryPoint,
+    PVOID BaseAddress,
+    ULONG Reason,
+    PVOID Context);
+
+VOID
+NTAPI
+ChpeRtlUserThreadStart(
+    PVOID StartAddress,
+    PVOID Parameter);
+
+#endif /* _M_ARM64 */
+
 /* EOF */

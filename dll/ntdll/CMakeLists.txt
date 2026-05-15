@@ -35,7 +35,13 @@ list(APPEND SOURCE
     ldr/ldrinit.c
     ldr/ldrpe.c
     ldr/ldrutils.c
-    ldr/verifier.c)
+    ldr/verifier.c
+    rtl/exit.c
+    rtl/registry.c
+    rtl/time.c
+    rtl/virtual.c
+    rtl/wait.c
+    rtl/xstate.c)
 
 if(ARCH STREQUAL "i386")
     list(APPEND ASM_SOURCE dispatch/i386/dispatch.S)
@@ -60,7 +66,9 @@ list(APPEND PCH_SKIP_SOURCE
 if(ARCH STREQUAL "arm64")
     list(APPEND SOURCE
         arm64/ehandler.c
-        arm64/stubs.c)
+        arm64/stubs.c
+        chpe.c
+        chpewrap.c)
 endif()
 
 add_library(ntdll MODULE
