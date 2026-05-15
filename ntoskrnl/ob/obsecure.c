@@ -817,6 +817,11 @@ NtQuerySecurityObject(IN HANDLE Handle,
     /* Check if we came from user mode */
     if (PreviousMode != KernelMode)
     {
+        if (ResultLength == NULL)
+        {
+            return STATUS_ACCESS_VIOLATION;
+        }
+
         /* Enter SEH */
         _SEH2_TRY
         {

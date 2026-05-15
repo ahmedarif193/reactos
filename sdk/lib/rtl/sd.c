@@ -1058,6 +1058,11 @@ RtlValidSecurityDescriptor(IN PSECURITY_DESCRIPTOR SecurityDescriptor)
     PACL Sacl, Dacl;
     PAGED_CODE_RTL();
 
+    if (SecurityDescriptor == NULL)
+    {
+        return FALSE;
+    }
+
     _SEH2_TRY
     {
         /* Fail on bad revisions */
