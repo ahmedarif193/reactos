@@ -33,6 +33,25 @@ index 0c9a57a17..9097a65bd 100644
  target_link_libraries(arm64ecfex PRIVATE ${LIBGCC_PATH})
  install(TARGETS arm64ecfex RUNTIME
    DESTINATION ${CMAKE_INSTALL_LIBDIR}
+diff --git a/Source/Windows/CMakeLists.txt b/Source/Windows/CMakeLists.txt
+index 0693c0826..ed74ca89f 100644
+--- a/Source/Windows/CMakeLists.txt
++++ b/Source/Windows/CMakeLists.txt
+@@ -1,8 +1,13 @@
+ function(build_implib name)
+   set(name_ex ${name}_ex)
++  set(dlltool_machine_args)
++  if (ARCHITECTURE_arm64ec)
++    list(APPEND dlltool_machine_args -m arm64ec)
++  endif()
++
+   add_custom_target(${name_ex}lib ALL DEPENDS ${CMAKE_CURRENT_BINARY_DIR}/lib${name_ex}.a)
+   add_custom_command(OUTPUT ${CMAKE_CURRENT_BINARY_DIR}/lib${name_ex}.a
+-    COMMAND ${CMAKE_DLLTOOL} -d ${CMAKE_CURRENT_SOURCE_DIR}/Defs/${name}.def -k -l lib${name_ex}.a
++    COMMAND ${CMAKE_DLLTOOL} ${dlltool_machine_args} -d ${CMAKE_CURRENT_SOURCE_DIR}/Defs/${name}.def -k -l lib${name_ex}.a
+     COMMENT "Building lib${name_ex}.a")
+ 
+   add_library(${name_ex} SHARED IMPORTED)
 diff --git a/Source/Windows/ARM64EC/Module.S b/Source/Windows/ARM64EC/Module.S
 index 365931332..d5eccfe54 100644
 --- a/Source/Windows/ARM64EC/Module.S
