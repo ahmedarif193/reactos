@@ -122,8 +122,8 @@ add_compile_options(
     -Wno-unused-const-variable
     -Wno-unused-local-typedefs
     -Wno-deprecated
-    -Wno-missing-braces
     -Wno-unused-result
+    -Wno-missing-braces
     -Wno-unused-but-set-variable
     -Wno-error=implicit-function-declaration
     -Wno-error=incompatible-library-redeclaration
