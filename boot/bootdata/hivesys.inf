@@ -1930,6 +1930,23 @@ HKLM,"SYSTEM\CurrentControlSet\Services\usbccgp","Type",0x00010001,0x00000001
 ;HKLM,"SYSTEM\CurrentControlSet\Services\atapi","ImagePath",0x00020000,"system32\drivers\atapi.sys"
 ;HKLM,"SYSTEM\CurrentControlSet\Services\atapi","Start",0x00010001,0x00000000
 ;HKLM,"SYSTEM\CurrentControlSet\Services\atapi","Type",0x00010001,0x00000001
+
+; storport driver (StorPort port driver for storahci)
+HKLM,"SYSTEM\CurrentControlSet\Services\storport","ErrorControl",0x00010001,0x00000003
+HKLM,"SYSTEM\CurrentControlSet\Services\storport","Group",0x00000000,"SCSI Miniport"
+HKLM,"SYSTEM\CurrentControlSet\Services\storport","ImagePath",0x00020000,"system32\drivers\storport.sys"
+HKLM,"SYSTEM\CurrentControlSet\Services\storport","Start",0x00010001,0x00000000
+HKLM,"SYSTEM\CurrentControlSet\Services\storport","Type",0x00010001,0x00000001
+HKLM,"SYSTEM\CurrentControlSet\Services\storport","Tag",0x00010001,0x00000001
+
+; storahci driver (StorPort AHCI miniport)
+HKLM,"SYSTEM\CurrentControlSet\Services\storahci","ErrorControl",0x00010001,0x00000003
+HKLM,"SYSTEM\CurrentControlSet\Services\storahci","Group",0x00000000,"SCSI Miniport"
+HKLM,"SYSTEM\CurrentControlSet\Services\storahci","ImagePath",0x00020000,"system32\drivers\storahci.sys"
+HKLM,"SYSTEM\CurrentControlSet\Services\storahci","Start",0x00010001,0x00000000
+HKLM,"SYSTEM\CurrentControlSet\Services\storahci","Type",0x00010001,0x00000001
+HKLM,"SYSTEM\CurrentControlSet\Services\storahci","Tag",0x00010001,0x00000005
+
 ; SD Bus driver (bus FDO on SD Host Controller, creates child PDOs for cards)
 HKLM,"SYSTEM\CurrentControlSet\Services\sdbus","ErrorControl",0x00010001,0x00000001
 HKLM,"SYSTEM\CurrentControlSet\Services\sdbus","Group",0x00000000,"System Bus Extender"
