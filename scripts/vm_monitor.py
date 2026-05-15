@@ -493,6 +493,17 @@ def qemu_arm64_iso_drive_args(image_path):
     ]
 
 
+def qemu_arm64_disk_drive_args(image_path):
+    """Return ARM64 disk args for firmware boot and kernel storage discovery."""
+    return [
+        "-drive", f"file.driver=file,file.filename={image_path},file.locking=off,format=raw",
+        "-device", "ich9-ahci,id=ahci",
+        "-drive", f"if=none,id=ahcidisk,format=raw,file.driver=file,file.filename={image_path},file.locking=off",
+        "-device", "ide-hd,drive=ahcidisk,bus=ahci.0",
+        "-boot", "order=d,menu=on",
+    ]
+
+
 def resolve_qemu_arm64_gic_version(rpi_mode, is_darwin=False):
     """Return the QEMU virt GIC version to use for ARM64."""
     requested = str(QEMU_ARM64_GIC_VERSION).strip().lower()
@@ -584,10 +595,7 @@ def start_qemu(rpi_mode=False, smp=4):
                     "-cpu", "cortex-a72",
                     "-m", QEMU_ARM64_MEMORY,
                     "-drive", "if=pflash,format=raw,readonly=on,file=/opt/homebrew/share/qemu/edk2-aarch64-code.fd",
-                    *(qemu_arm64_iso_drive_args(img_path) if is_iso_boot else [
-                        "-drive", f"file={img_path}",
-                        "-boot", "order=d,menu=on",
-                    ]),
+                    *(qemu_arm64_iso_drive_args(img_path) if is_iso_boot else qemu_arm64_disk_drive_args(img_path)),
                     "-display", "none",
                     "-serial", "stdio"
                 ]
@@ -602,10 +610,7 @@ def start_qemu(rpi_mode=False, smp=4):
                     "-smp", str(smp),
                     "-m", QEMU_ARM64_MEMORY,
                     "-drive", "if=pflash,format=raw,readonly=on,file=/opt/homebrew/share/qemu/edk2-aarch64-code.fd",
-                    *(qemu_arm64_iso_drive_args(img_path) if is_iso_boot else [
-                        "-drive", f"file={img_path}",
-                        "-boot", "order=d,menu=on",
-                    ]),
+                    *(qemu_arm64_iso_drive_args(img_path) if is_iso_boot else qemu_arm64_disk_drive_args(img_path)),
                     "-display", "none",
                     "-serial", f"file:{LOG_FILE}"
                 ]
@@ -629,12 +634,7 @@ def start_qemu(rpi_mode=False, smp=4):
                     "-cpu", "cortex-a72",
                     "-m", QEMU_ARM64_MEMORY,
                     "-bios", "/usr/share/qemu-efi-aarch64/QEMU_EFI.fd",
-                    *(qemu_arm64_iso_drive_args(img_path) if is_iso_boot else [
-                        "-drive", f"file.driver=file,file.filename={img_path},file.locking=off,format=raw",
-                        "-device", "ich9-ahci,id=ahci",
-                        "-drive", f"if=none,id=ahcidisk,format=raw,file.driver=file,file.filename={img_path},file.locking=off",
-                        "-device", "ide-hd,drive=ahcidisk,bus=ahci.0",
-                    ]),
+                    *(qemu_arm64_iso_drive_args(img_path) if is_iso_boot else qemu_arm64_disk_drive_args(img_path)),
                     "-display", "none",
                     "-serial", "stdio"
                 ]
@@ -649,12 +649,7 @@ def start_qemu(rpi_mode=False, smp=4):
                     "-cpu", "max",
                     "-m", QEMU_ARM64_MEMORY,
                     "-bios", "/usr/share/qemu-efi-aarch64/QEMU_EFI.fd",
-                    *(qemu_arm64_iso_drive_args(img_path) if is_iso_boot else [
-                        "-drive", f"file.driver=file,file.filename={img_path},file.locking=off,format=raw",
-                        "-device", "ich9-ahci,id=ahci",
-                        "-drive", f"if=none,id=ahcidisk,format=raw,file.driver=file,file.filename={img_path},file.locking=off",
-                        "-device", "ide-hd,drive=ahcidisk,bus=ahci.0",
-                    ]),
+                    *(qemu_arm64_iso_drive_args(img_path) if is_iso_boot else qemu_arm64_disk_drive_args(img_path)),
                     "-display", "none",
                     "-serial", f"file:{LOG_FILE}"
                 ]
