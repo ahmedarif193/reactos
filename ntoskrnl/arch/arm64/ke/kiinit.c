@@ -23,6 +23,29 @@ KiArm64TtbrToPa(
     return Ttbr & 0x0000FFFFFFFFF000ULL;
 }
 
+#define SCTLR_EL1_A     (1ULL << 1)
+#define SCTLR_EL1_SA    (1ULL << 3)
+#define SCTLR_EL1_SA0   (1ULL << 4)
+#define SCTLR_EL1_BT0   (1ULL << 35)
+#define SCTLR_EL1_BT1   (1ULL << 36)
+
+FORCEINLINE
+VOID
+KiArm64ApplySctlrPolicy(VOID)
+{
+    ULONG64 Sctlr;
+    ULONG64 NewSctlr;
+
+    __asm__ __volatile__("mrs %0, sctlr_el1" : "=r"(Sctlr));
+    NewSctlr = (Sctlr & ~(SCTLR_EL1_A | SCTLR_EL1_BT0 | SCTLR_EL1_BT1)) |
+               SCTLR_EL1_SA | SCTLR_EL1_SA0;
+    if (NewSctlr != Sctlr)
+    {
+        __asm__ __volatile__("msr sctlr_el1, %0" :: "r"(NewSctlr) : "memory");
+        __asm__ __volatile__("isb" ::: "memory");
+    }
+}
+
 #ifndef KE_ARM64_TTBR1_L0_OFFSET
 #define KE_ARM64_TTBR1_L0_OFFSET 0x800ULL
 #endif
@@ -838,21 +861,10 @@ KiInitializeSystem(_Inout_ PLOADER_PARAMETER_BLOCK LoaderBlock)
         /*
          * NT code expects ordinary unaligned data accesses to normal memory to
          * work on ARM64. Keep EL1/EL0 stack alignment checking, but force
-         * SCTLR_EL1.A off in case firmware or the loader left strict alignment
-         * checking enabled.
+         * SCTLR_EL1.A off. Also disable BTI enforcement unless the whole kernel
+         * and all loaded images are built with landing pads.
          */
-        {
-            ULONG64 Sctlr;
-            ULONG64 NewSctlr;
-
-            __asm__ __volatile__("mrs %0, sctlr_el1" : "=r"(Sctlr));
-            NewSctlr = (Sctlr & ~(1ULL << 1)) | (1ULL << 3) | (1ULL << 4);
-            if (NewSctlr != Sctlr)
-            {
-                __asm__ __volatile__("msr sctlr_el1, %0" :: "r"(NewSctlr) : "memory");
-                __asm__ __volatile__("isb" ::: "memory");
-            }
-        }
+        KiArm64ApplySctlrPolicy();
 
         /*
          * PAN (Privileged Access Never):
@@ -975,20 +987,10 @@ KiInitializeSystem(_Inout_ PLOADER_PARAMETER_BLOCK LoaderBlock)
 
         /*
          * Match BSP alignment policy. Ordinary unaligned data accesses are
-         * permitted; EL1/EL0 SP alignment checking remains enabled.
+         * permitted; EL1/EL0 SP alignment checking remains enabled. BTI
+         * enforcement is disabled because loaded images do not carry BTI pads.
          */
-        {
-            ULONG64 Sctlr;
-            ULONG64 NewSctlr;
-
-            __asm__ __volatile__("mrs %0, sctlr_el1" : "=r"(Sctlr));
-            NewSctlr = (Sctlr & ~(1ULL << 1)) | (1ULL << 3) | (1ULL << 4);
-            if (NewSctlr != Sctlr)
-            {
-                __asm__ __volatile__("msr sctlr_el1, %0" :: "r"(NewSctlr) : "memory");
-                __asm__ __volatile__("isb" ::: "memory");
-            }
-        }
+        KiArm64ApplySctlrPolicy();
 
         /*
          * PAN: Disable on this AP (same as BSP).
