@@ -640,12 +640,6 @@ Ndis6IsrWrapper(
         &QueueDpc,
         &TargetCpus);
 
-    /* Log the first few ISRs (limit to avoid log flood). */
-    MyCount = InterlockedIncrement(&IsrCount);
-    if (MyCount <= 30)
-        DbgPrint("NDIS6-IRQ: ISR fired #%ld Recognized=%d QueueDpc=%d\n",
-                 MyCount, Recognized, QueueDpc);
-
     if (Recognized && QueueDpc)
         KeInsertQueueDpc(&Ext->InterruptDpc, NULL, NULL);
 
