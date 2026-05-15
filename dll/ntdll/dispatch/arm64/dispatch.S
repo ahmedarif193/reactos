@@ -7,6 +7,7 @@
     .extern NtContinue
     .extern RtlExitUserThread
     .extern RtlRaiseStatus
+    .extern ChpeRtlUserThreadStart
 
     .global LdrInitializeThunk
     .seh_proc LdrInitializeThunk
@@ -56,9 +57,6 @@ KiUserApcDispatcher:
     .seh_proc RtlUserThreadStart
 RtlUserThreadStart:
     .seh_endprologue
-    mov     x16, x0
-    mov     x0, x1
-    blr     x16
-    bl      RtlExitUserThread
+    b       ChpeRtlUserThreadStart
     brk     #0
     .seh_endproc

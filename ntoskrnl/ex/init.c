@@ -1434,7 +1434,11 @@ ExpInitializeExecutive(IN ULONG Cpu,
     SharedUserData->NtMinorVersion = NtMinorVersion;
 
     /* Set the machine type */
+#if defined(_M_ARM64)
+    SharedUserData->ImageNumberLow = IMAGE_FILE_MACHINE_AMD64;
+#else
     SharedUserData->ImageNumberLow = IMAGE_FILE_MACHINE_NATIVE;
+#endif
     SharedUserData->ImageNumberHigh = IMAGE_FILE_MACHINE_NATIVE;
 
     /* ReactOS magic */
