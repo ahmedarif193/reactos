@@ -393,6 +393,162 @@ MiArm64ReadUserPtePhysically(
     return ((Walk.PteValue & 0x3ULL) == 0x3ULL);
 }
 
+static
+NTSTATUS
+MiArm64PrepareUserPageForMdl(
+    _In_ PEPROCESS Process,
+    _In_ PVOID PageAddress,
+    _In_ LOCK_OPERATION Operation)
+{
+    ULONG Attempt;
+    NTSTATUS Status = STATUS_ACCESS_VIOLATION;
+
+    for (Attempt = 0; Attempt < 4; Attempt++)
+    {
+        MI_ARM64_USER_PTE_WALK Walk;
+        MMPTE Pte;
+
+        if (MiArm64GetUserPteAddressForProcess(Process, PageAddress, &Walk))
+        {
+            Pte.u.Long = Walk.PteValue;
+            if (Pte.u.Hard.Valid)
+            {
+                if ((Operation == IoReadAccess) ||
+                    (MI_IS_PAGE_WRITEABLE(&Pte) && MI_IS_PAGE_DIRTY(&Pte)))
+                {
+                    return STATUS_SUCCESS;
+                }
+
+                Status = MmAccessFaultEx(0x3, PageAddress, KernelMode, NULL, FALSE);
+            }
+            else
+            {
+                Status = MmAccessFaultEx(0x2, PageAddress, KernelMode, NULL, FALSE);
+            }
+        }
+        else
+        {
+            Status = MmAccessFaultEx(0x2, PageAddress, KernelMode, NULL, FALSE);
+        }
+
+        if (!NT_SUCCESS(Status))
+        {
+            return Status;
+        }
+    }
+
+    return STATUS_ACCESS_VIOLATION;
+}
+
+NTSTATUS
+MiArm64ProbeAndLockUserPages(
+    _Inout_ PMDL Mdl,
+    _In_ PVOID StartAddress,
+    _In_ ULONG TotalPages,
+    _In_ LOCK_OPERATION Operation,
+    _In_ PEPROCESS CurrentProcess)
+{
+    PPFN_NUMBER MdlPages;
+    PVOID PageAddress;
+    ULONG PageIndex;
+    NTSTATUS Status;
+    PFN_NUMBER PageFrameIndex;
+    PMMPFN Pfn1;
+
+    ASSERT(TotalPages != 0);
+    ASSERT(CurrentProcess == PsGetCurrentProcess());
+
+    MdlPages = (PPFN_NUMBER)(Mdl + 1);
+    PageAddress = PAGE_ALIGN(StartAddress);
+    *MdlPages = LIST_HEAD;
+
+    if (Operation != IoReadAccess)
+    {
+        Mdl->MdlFlags |= MDL_WRITE_OPERATION;
+    }
+    else
+    {
+        Mdl->MdlFlags &= ~(MDL_WRITE_OPERATION);
+    }
+
+    Mdl->MdlFlags |= MDL_PAGES_LOCKED;
+    Mdl->Process = CurrentProcess;
+
+    InterlockedExchangeAddSizeT(&CurrentProcess->NumberOfLockedPages,
+                                TotalPages);
+
+    for (PageIndex = 0; PageIndex < TotalPages; PageIndex++)
+    {
+        MI_ARM64_USER_PTE_WALK Walk;
+        MMPTE Pte;
+
+        *MdlPages = LIST_HEAD;
+
+        Status = MiArm64PrepareUserPageForMdl(CurrentProcess,
+                                              PageAddress,
+                                              Operation);
+        if (!NT_SUCCESS(Status))
+        {
+            goto Cleanup;
+        }
+
+        MiLockProcessWorkingSet(CurrentProcess, PsGetCurrentThread());
+
+        /*
+         * ARM64 user VAs are translated through TTBR0, while the generic ARM3
+         * self-map helpers describe TTBR1. Walk the process user page tables
+         * directly and then fill the MDL with the resolved PFN.
+         */
+        if (!MiArm64GetUserPteAddressForProcess(CurrentProcess, PageAddress, &Walk))
+        {
+            Status = STATUS_ACCESS_VIOLATION;
+            MiUnlockProcessWorkingSet(CurrentProcess, PsGetCurrentThread());
+            goto Cleanup;
+        }
+
+        Pte.u.Long = Walk.PteValue;
+        if (!Pte.u.Hard.Valid)
+        {
+            Status = STATUS_ACCESS_VIOLATION;
+            MiUnlockProcessWorkingSet(CurrentProcess, PsGetCurrentThread());
+            goto Cleanup;
+        }
+
+        if ((Operation != IoReadAccess) &&
+            (!MI_IS_PAGE_WRITEABLE(&Pte) || !MI_IS_PAGE_DIRTY(&Pte)))
+        {
+            Status = STATUS_ACCESS_VIOLATION;
+            MiUnlockProcessWorkingSet(CurrentProcess, PsGetCurrentThread());
+            goto Cleanup;
+        }
+
+        PageFrameIndex = PFN_FROM_PTE(&Pte);
+        Pfn1 = MiGetPfnEntry(PageFrameIndex);
+        if (Pfn1 == NULL)
+        {
+            Status = STATUS_ACCESS_VIOLATION;
+            MiUnlockProcessWorkingSet(CurrentProcess, PsGetCurrentThread());
+            goto Cleanup;
+        }
+
+        ASSERT(CurrentProcess->PhysicalVadRoot == NULL);
+        MiReferenceProbedPageAndBumpLockCount(Pfn1);
+
+        *MdlPages++ = PageFrameIndex;
+
+        MiUnlockProcessWorkingSet(CurrentProcess, PsGetCurrentThread());
+
+        PageAddress = (PVOID)((ULONG_PTR)PageAddress + PAGE_SIZE);
+    }
+
+    return STATUS_SUCCESS;
+
+Cleanup:
+    ASSERT(!NT_SUCCESS(Status));
+    MmUnlockPages(Mdl);
+    return Status;
+}
+
 FORCEINLINE
 VOID
 MiArm64InvalidateUserAddress(
