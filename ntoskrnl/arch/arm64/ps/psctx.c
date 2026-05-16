@@ -12,8 +12,6 @@
 
 /* FUNCTIONS ******************************************************************/
 
-static LONG PspArm64SystemDllTraceCount;
-
 static
 PVOID
 PspArm64ResolveSystemDllUserVa(
@@ -45,10 +43,8 @@ static
 VOID
 PspArm64AddPrimePage(
     _Inout_updates_(8) PVOID *Pages,
-    _Inout_updates_(8) PCSTR *Tags,
     _Inout_ PULONG Count,
-    _In_opt_ PVOID Address,
-    _In_z_ PCSTR Tag)
+    _In_opt_ PVOID Address)
 {
     PVOID Page;
     ULONG Index;
@@ -70,24 +66,19 @@ PspArm64AddPrimePage(
     }
 
     Pages[*Count] = Page;
-    Tags[*Count] = Tag;
     (*Count)++;
 }
 
 static
 NTSTATUS
 PspArm64PrimeUserInstructionPage(
-    _In_ PEPROCESS Process,
-    _In_ PVOID UserPage,
-    _In_z_ PCSTR Tag,
-    _In_ LONG TraceIndex)
+    _In_ PVOID UserPage)
 {
     NTSTATUS Status;
     ULONG_PTR Address;
 
     Address = (ULONG_PTR)UserPage;
     ASSERT(Address < (ULONG_PTR)MmSystemRangeStart);
-
     Status = MmAccessFaultEx(FALSE, UserPage, UserMode, NULL, FALSE);
     if (NT_SUCCESS(Status))
     {
@@ -102,16 +93,6 @@ PspArm64PrimeUserInstructionPage(
          * read-only user alias, which can surface later as a delayed SError on
          * the first ERET into user mode.
          */
-    }
-
-    if (TraceIndex <= 24)
-    {
-        DPRINT1("[arm64][SYSDLL] prime[%ld] proc=%.16s tag=%s page=%p status=0x%08lx ic=0\n",
-                TraceIndex,
-                Process->ImageFileName,
-                Tag,
-                UserPage,
-                Status);
     }
 
     return Status;
@@ -144,38 +125,35 @@ PsArchPrimeSystemDllPages(
     _Inout_ PEPROCESS Process)
 {
     PVOID Pages[8];
-    PCSTR Tags[8];
     ULONG Count = 0;
     ULONG Index;
     KAPC_STATE ApcState;
     BOOLEAN Attached = FALSE;
-    LONG TraceIndex;
     NTSTATUS Status;
 
     RtlZeroMemory(Pages, sizeof(Pages));
-    RtlZeroMemory(Tags, sizeof(Tags));
 
     if ((Process == NULL) || (PspSystemDllBase == NULL))
     {
         return STATUS_SUCCESS;
     }
 
-    PspArm64AddPrimePage(Pages, Tags, &Count, PspSystemDllBase, "base");
-    PspArm64AddPrimePage(Pages, Tags, &Count,
-                         PspArm64ResolveSystemDllUserVa(Process, PspSystemDllEntryPoint),
-                         "ldr");
-    PspArm64AddPrimePage(Pages, Tags, &Count,
-                         PspArm64ResolveSystemDllUserVa(Process, KeUserApcDispatcher),
-                         "apc");
-    PspArm64AddPrimePage(Pages, Tags, &Count,
-                         PspArm64ResolveSystemDllUserVa(Process, KeUserExceptionDispatcher),
-                         "exc");
-    PspArm64AddPrimePage(Pages, Tags, &Count,
-                         PspArm64ResolveSystemDllUserVa(Process, KeUserCallbackDispatcher),
-                         "cb");
-    PspArm64AddPrimePage(Pages, Tags, &Count,
-                         PspArm64ResolveSystemDllUserVa(Process, KeRaiseUserExceptionDispatcher),
-                         "raise");
+    PspArm64AddPrimePage(Pages, &Count, PspSystemDllBase);
+    PspArm64AddPrimePage(Pages,
+                         &Count,
+                         PspArm64ResolveSystemDllUserVa(Process, PspSystemDllEntryPoint));
+    PspArm64AddPrimePage(Pages,
+                         &Count,
+                         PspArm64ResolveSystemDllUserVa(Process, KeUserApcDispatcher));
+    PspArm64AddPrimePage(Pages,
+                         &Count,
+                         PspArm64ResolveSystemDllUserVa(Process, KeUserExceptionDispatcher));
+    PspArm64AddPrimePage(Pages,
+                         &Count,
+                         PspArm64ResolveSystemDllUserVa(Process, KeUserCallbackDispatcher));
+    PspArm64AddPrimePage(Pages,
+                         &Count,
+                         PspArm64ResolveSystemDllUserVa(Process, KeRaiseUserExceptionDispatcher));
 
     if (Count == 0)
     {
@@ -188,23 +166,15 @@ PsArchPrimeSystemDllPages(
         Attached = TRUE;
     }
 
-    TraceIndex = InterlockedIncrement(&PspArm64SystemDllTraceCount);
-    if (TraceIndex <= 24)
-    {
-        DPRINT1("[arm64][SYSDLL] map[%ld] proc=%.16s base=%p pages=%lu\n",
-                TraceIndex,
-                Process->ImageFileName,
-                PspSystemDllBase,
-                Count);
-    }
-
     Status = STATUS_SUCCESS;
     for (Index = 0; Index < Count; Index++)
     {
-        Status = PspArm64PrimeUserInstructionPage(Process,
-                                                  Pages[Index],
-                                                  Tags[Index],
-                                                  TraceIndex);
+        if (!NT_SUCCESS(Status))
+        {
+            break;
+        }
+
+        Status = PspArm64PrimeUserInstructionPage(Pages[Index]);
         if (!NT_SUCCESS(Status))
         {
             break;
