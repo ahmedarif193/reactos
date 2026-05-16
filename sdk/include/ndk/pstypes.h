@@ -1766,6 +1766,7 @@ typedef struct _PS_JOB_TOKEN_FILTER
     PLUID_AND_ATTRIBUTES CapturedPrivileges;
     ULONG CapturedPrivilegesLength;
 } PS_JOB_TOKEN_FILTER, *PPS_JOB_TOKEN_FILTER;
+#include <poppack.h>
 
 //
 // Executive Job (EJOB)
