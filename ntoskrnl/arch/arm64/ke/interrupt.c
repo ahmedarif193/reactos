@@ -42,10 +42,10 @@ static PKTRAP_FRAME KiArm64CurrentInterruptTrapFrame[MAXIMUM_PROCESSORS];
 
 static inline
 PKINTERRUPT
-KiArm64LoadInterruptHeadAcquire(
+KiArm64LoadInterruptHeadNoFence(
     _In_ ULONG IntId)
 {
-    return (PKINTERRUPT)ReadPointerAcquire((PVOID const volatile *)&KiArm64IntTable[IntId]);
+    return (PKINTERRUPT)ReadPointerNoFence((PVOID const volatile *)&KiArm64IntTable[IntId]);
 }
 
 ULONG KiTimerIsrCallCount = 0;
@@ -580,7 +580,7 @@ KiArm64DispatchChain(_In_ ULONG IntId,
     if (IntId >= ARM64_MAX_INTID) goto Done;
 
     /* Snapshot head without taking the global lock on every interrupt. */
-    Head = KiArm64LoadInterruptHeadAcquire(IntId);
+    Head = KiArm64LoadInterruptHeadNoFence(IntId);
     if (!Head) goto Done;
 
     ListHead = &Head->InterruptListEntry;
