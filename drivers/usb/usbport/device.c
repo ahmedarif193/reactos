@@ -311,6 +311,7 @@ USBPORT_OpenInterface(IN PURB Urb,
     ULONG ix;
     USBD_STATUS USBDStatus = USBD_STATUS_SUCCESS;
     NTSTATUS Status;
+    ULONG OpenedPipes = 0;
 
     DPRINT("USBPORT_OpenInterface: ...\n");
 
@@ -512,9 +513,15 @@ USBPORT_OpenInterface(IN PURB Urb,
                    ix, Status, USBDStatus);
 
             if (!NT_SUCCESS(Status))
+            {
+                if (USBD_SUCCESS(USBDStatus))
+                    USBDStatus = USBD_STATUS_INSUFFICIENT_RESOURCES;
+
                 break;
+            }
 
             PipeInfo->PipeHandle = PipeHandle;
+            OpenedPipes++;
         }
 
         if (NumEndpoints)
@@ -535,6 +542,14 @@ Exit:
     {
         if (InterfaceHandle)
         {
+            while (OpenedPipes > 0)
+            {
+                OpenedPipes--;
+                USBPORT_ClosePipe(DeviceHandle,
+                                  FdoDevice,
+                                  &InterfaceHandle->PipeHandle[OpenedPipes]);
+            }
+
             if (NumEndpoints)
             {
                 DPRINT1("USBPORT_OpenInterface: USBDStatus - %lx\n", USBDStatus);
@@ -548,23 +563,23 @@ Exit:
     return USBDStatus;
 }
 
-VOID
+static VOID
 NTAPI
-USBPORT_CloseConfiguration(IN PUSBPORT_DEVICE_HANDLE DeviceHandle,
-                           IN PDEVICE_OBJECT FdoDevice)
+USBPORT_FreeConfigurationHandle(IN PUSBPORT_DEVICE_HANDLE DeviceHandle,
+                                IN PDEVICE_OBJECT FdoDevice,
+                                IN PUSBPORT_CONFIGURATION_HANDLE ConfigHandle)
 {
-    PUSBPORT_CONFIGURATION_HANDLE ConfigHandle;
     PLIST_ENTRY iHandleList;
     PUSBPORT_INTERFACE_HANDLE iHandle;
     ULONG NumEndpoints;
     PUSBPORT_PIPE_HANDLE PipeHandle;
+    BOOLEAN ClearDeviceConfigHandle;
 
-    DPRINT("USBPORT_CloseConfiguration: ... \n");
-
-    ConfigHandle = DeviceHandle->ConfigHandle;
+    DPRINT("USBPORT_FreeConfigurationHandle: ConfigHandle - %p\n", ConfigHandle);
 
     if (ConfigHandle)
     {
+        ClearDeviceConfigHandle = (DeviceHandle->ConfigHandle == ConfigHandle);
         iHandleList = &ConfigHandle->InterfaceHandleList;
 
         while (!IsListEmpty(iHandleList))
@@ -592,7 +607,28 @@ USBPORT_CloseConfiguration(IN PUSBPORT_DEVICE_HANDLE DeviceHandle,
         }
 
         ExFreePoolWithTag(ConfigHandle, USB_PORT_TAG);
-        DeviceHandle->ConfigHandle = NULL;
+
+        if (ClearDeviceConfigHandle)
+        {
+            DeviceHandle->ConfigHandle = NULL;
+        }
+    }
+}
+
+VOID
+NTAPI
+USBPORT_CloseConfiguration(IN PUSBPORT_DEVICE_HANDLE DeviceHandle,
+                           IN PDEVICE_OBJECT FdoDevice)
+{
+    PUSBPORT_CONFIGURATION_HANDLE ConfigHandle;
+
+    DPRINT("USBPORT_CloseConfiguration: ... \n");
+
+    ConfigHandle = DeviceHandle->ConfigHandle;
+
+    if (ConfigHandle)
+    {
+        USBPORT_FreeConfigurationHandle(DeviceHandle, FdoDevice, ConfigHandle);
     }
 }
 
@@ -687,7 +723,9 @@ USBPORT_HandleSelectConfiguration(IN PDEVICE_OBJECT FdoDevice,
     USB_DEFAULT_PIPE_SETUP_PACKET SetupPacket;
     NTSTATUS Status;
     USBD_STATUS USBDStatus;
+    USBD_STATUS DeconfigureStatus;
     PUSBPORT_DEVICE_EXTENSION FdoExtension;
+    BOOLEAN ConfigurationSet = FALSE;
 
     DPRINT("USBPORT_HandleSelectConfiguration: ConfigDescriptor %p\n",
            Urb->UrbSelectConfiguration.ConfigurationDescriptor);
@@ -725,9 +763,14 @@ USBPORT_HandleSelectConfiguration(IN PDEVICE_OBJECT FdoDevice,
                                 NULL,
                                 0,
                                 NULL,
-                                NULL);
+                                &USBDStatus);
 
-        Status = USBPORT_USBDStatusToNtStatus(Urb, USBD_STATUS_SUCCESS);
+        Status = USBPORT_USBDStatusToNtStatus(Urb, USBDStatus);
+        if (NT_SUCCESS(Status))
+        {
+            USBPORT_CloseConfiguration(DeviceHandle, FdoDevice);
+        }
+
         goto Exit;
     }
 
@@ -803,6 +846,8 @@ USBPORT_HandleSelectConfiguration(IN PDEVICE_OBJECT FdoDevice,
                                               USBD_STATUS_SET_CONFIG_FAILED);
         goto Exit;
     }
+
+    ConfigurationSet = TRUE;
 
     if (iNumber <= 0)
     {
@@ -880,6 +925,39 @@ Exit:
     else
     {
         DPRINT1("USBPORT_HandleSelectConfiguration: Status %x\n", Status);
+        if (ConfigHandle)
+        {
+            USBPORT_FreeConfigurationHandle(DeviceHandle,
+                                            FdoDevice,
+                                            ConfigHandle);
+            ConfigHandle = NULL;
+
+            if (ConfigurationSet)
+            {
+                RtlZeroMemory(&SetupPacket, sizeof(USB_DEFAULT_PIPE_SETUP_PACKET));
+                DeconfigureStatus = USBD_STATUS_SUCCESS;
+
+                SetupPacket.bmRequestType.B = 0;
+                SetupPacket.bRequest = USB_REQUEST_SET_CONFIGURATION;
+                SetupPacket.wValue.W = 0;
+                SetupPacket.wIndex.W = 0;
+                SetupPacket.wLength = 0;
+
+                USBPORT_SendSetupPacket(DeviceHandle,
+                                        FdoDevice,
+                                        &SetupPacket,
+                                        NULL,
+                                        0,
+                                        NULL,
+                                        &DeconfigureStatus);
+
+                if (USBD_ERROR(DeconfigureStatus))
+                {
+                    DPRINT1("USBPORT_HandleSelectConfiguration: rollback SET_CONFIGURATION(0) failed USBDStatus=0x%lx\n",
+                            DeconfigureStatus);
+                }
+            }
+        }
     }
 
     KeReleaseSemaphore(&FdoExtension->DeviceSemaphore,
