@@ -505,7 +505,9 @@ USBCCGP_SelectConfiguration(
     //
     // now allocate the urb
     //
-    Urb = USBD_CreateConfigurationRequestEx(DeviceExtension->ConfigurationDescriptor, DeviceExtension->InterfaceList);
+    Urb = USBCCGP_CreateConfigurationRequest(DeviceExtension->ConfigurationDescriptor,
+                                             DeviceExtension->InterfaceList,
+                                             DeviceExtension->InterfaceListCount);
     if (!Urb)
     {
         //
