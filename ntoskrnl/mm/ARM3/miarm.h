@@ -1040,16 +1040,29 @@ MI_ARM64_PREPARE_VALID_PTE(IN PMMPTE PointerPte,
 
 FORCEINLINE
 VOID
-MI_ARM64_FLUSH_VALID_PTE(IN PMMPTE PointerPte)
+MI_ARM64_SYNC_VALID_PTE(IN PMMPTE PointerPte)
 {
     ULONG_PTR EntryAddress = (ULONG_PTR)PointerPte;
+
+    if (((EntryAddress >= PXE_BASE) && (EntryAddress <= PXE_TOP)) ||
+        ((EntryAddress >= PPE_BASE) && (EntryAddress <= PPE_TOP)) ||
+        ((EntryAddress >= PDE_BASE) && (EntryAddress <= PDE_TOP)))
+    {
+        MiArm64SyncKernelHierarchyEntryWrite(PointerPte);
+    }
+    else
+    {
+        MiArm64SyncKernelLeafPteWrite(PointerPte);
+    }
+}
+
+FORCEINLINE
+VOID
+MI_ARM64_FLUSH_VALID_PTE(IN PMMPTE PointerPte)
+{
     ULONG_PTR Va = (ULONG_PTR)MiPteToAddress(PointerPte) >> PAGE_SHIFT;
 
-    if (EntryAddress >= PXE_BASE && EntryAddress <= PXE_TOP)
-    {
-        MiArm64SyncPxeWrite(PointerPte);
-    }
-
+    MI_ARM64_SYNC_VALID_PTE(PointerPte);
     __asm__ __volatile__("dsb ishst" ::: "memory");
     __asm__ __volatile__("tlbi vaae1is, %0" :: "r"(Va) : "memory");
     __asm__ __volatile__("dsb ish" ::: "memory");
@@ -1061,16 +1074,11 @@ VOID
 MI_WRITE_VALID_PTE_NO_FLUSH(IN PMMPTE PointerPte,
                             IN MMPTE TempPte)
 {
-    ULONG_PTR EntryAddress = (ULONG_PTR)PointerPte;
-
     ASSERT(PointerPte->u.Hard.Valid == 0);
     ASSERT(TempPte.u.Hard.Valid == 1);
 
     *PointerPte = MI_ARM64_PREPARE_VALID_PTE(PointerPte, TempPte);
-    if (EntryAddress >= PXE_BASE && EntryAddress <= PXE_TOP)
-    {
-        MiArm64SyncPxeWrite(PointerPte);
-    }
+    MI_ARM64_SYNC_VALID_PTE(PointerPte);
     __asm__ __volatile__("dsb ishst" ::: "memory");
 }
 #endif
