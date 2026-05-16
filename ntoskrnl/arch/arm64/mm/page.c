@@ -402,6 +402,9 @@ MiArm64PrepareUserPageForMdl(
 {
     ULONG Attempt;
     NTSTATUS Status = STATUS_ACCESS_VIOLATION;
+    ULONG NotPresentFaultCode;
+
+    NotPresentFaultCode = (Operation == IoReadAccess) ? 0x0 : 0x2;
 
     for (Attempt = 0; Attempt < 4; Attempt++)
     {
@@ -423,12 +426,12 @@ MiArm64PrepareUserPageForMdl(
             }
             else
             {
-                Status = MmAccessFaultEx(0x2, PageAddress, KernelMode, NULL, FALSE);
+                Status = MmAccessFaultEx(NotPresentFaultCode, PageAddress, KernelMode, NULL, FALSE);
             }
         }
         else
         {
-            Status = MmAccessFaultEx(0x2, PageAddress, KernelMode, NULL, FALSE);
+            Status = MmAccessFaultEx(NotPresentFaultCode, PageAddress, KernelMode, NULL, FALSE);
         }
 
         if (!NT_SUCCESS(Status))
