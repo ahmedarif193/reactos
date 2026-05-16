@@ -288,6 +288,7 @@ KiSwapContextInternal:
     ldrb    w3, [x2, #ThSwapBusy]
     cbz     w3, .Lswapbusy_clear
     yield
+    wfe
     b       .Lswapbusy_wait
 
 .Lswapbusy_clear:
@@ -312,41 +313,17 @@ KiSwapContextInternal:
      * SwLr contains the address of .Lrestore_context in KiSwapContext.
      * This was saved when this thread previously called KiSwapContext.
      *
-     * For NEW threads: SwLr is 0 (from RtlZeroMemory). But that's OK because
-     * for new threads, SwReturn = KiThreadStartup, and KiSwapContext will
-     * use ret x9 with x9 = SwReturn. However, returning to address 0 would
-     * crash before reaching that point!
-     *
-     * FIX NEEDED: KiInitializeContextThread must set SwLr for new threads.
-     * For now, check if SwLr is zero and handle it specially.
+     * For NEW threads: KiInitializeContextThread now sets SwLr = KiThreadStartup,
+     * so the cbz check is eliminated from the hot path. New threads take the same
+     * resume path as existing threads, with SwLr pointing to KiThreadStartup
+     * which expects SP to point to KSWITCH_FRAME.
      */
     ldr     x10, [sp, #SwLr]     /* Load return address to KiSwapContext */
-    cbz     x10, .Lnew_thread    /* If zero, this is a new thread */
 
-    /* Resumed thread: Call KiSwapContextResume and return to KiSwapContext */
+    /* Resumed/new thread: Call KiSwapContextResume and return */
     str     x10, [sp, #-16]!     /* Save return address */
     bl      KiSwapContextResume
     ldr     x30, [sp], #16       /* Restore return address to LR */
 
-    ret                          /* Return to .Lrestore_context in KiSwapContext */
-
-.Lnew_thread:
-    /*
-     * NEW thread: SwLr was not set by KiInitializeContextThread.
-     * For new threads, SwReturn = KiThreadStartup.
-     *
-     * We call KiSwapContextResume first, then jump to KiThreadStartup.
-     * KiThreadStartup expects SP to point to KSWITCH_FRAME, so we
-     * do NOT pop the frame here.
-     *
-     * NOTE: At this point, registers contain:
-     *   x0 = WaitIrql (reloaded from SwApcBypass)
-     *   x1 = OldThread (the thread that switched away)
-     *   x2 = NewThread (this new thread)
-     */
-
-    bl      KiSwapContextResume
-
-    ldr     x9, [sp, #SwReturn]  /* Load KiThreadStartup address */
-    br      x9                   /* Jump to KiThreadStartup (SP points to KSWITCH_FRAME) */
+    ret                          /* Return (new threads: to KiThreadStartup) */
     .seh_endproc
