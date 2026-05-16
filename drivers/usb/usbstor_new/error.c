@@ -45,7 +45,6 @@ USBSTOR_GetEndpointStatus(
     //
     // send the request
     //
-    DPRINT1("Sending Request DeviceObject %p, Urb %p\n", DeviceObject, Urb);
     Status = USBSTOR_SyncUrbRequest(DeviceObject, Urb);
 
     //
@@ -93,7 +92,6 @@ USBSTOR_ResetPipeWithHandle(
     //
     // send the request
     //
-    DPRINT1("Sending Request DeviceObject %p, Urb %p\n", DeviceObject, Urb);
     Status = USBSTOR_SyncUrbRequest(DeviceObject, Urb);
 
     //
@@ -235,7 +233,6 @@ USBSTOR_ResetHandlerWorkItemRoutine(
     // clear stall on BulkIn pipe
     //
     Status = USBSTOR_ResetPipeWithHandle(WorkItemData->Context->FDODeviceExtension->LowerDeviceObject, WorkItemData->Context->FDODeviceExtension->InterfaceInformation->Pipes[WorkItemData->Context->FDODeviceExtension->BulkInPipeIndex].PipeHandle);
-    DPRINT1("USBSTOR_ResetPipeWithHandle Status %x\n", Status);
 
     //
     // now resend the csw as the stall got cleared
