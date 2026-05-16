@@ -1252,13 +1252,18 @@ MmCreateVirtualMappingUnsafeEx(
         {
             ULONG PteIndex = MiAddressToPti(Address);
             MMPTE FinalPte;
+            MMPTE OldPteContents;
             ULONG64 OldUserPte;
+            BOOLEAN OldUserLeafValid;
 
             MapPte.u.Hard.PageFrameNumber = PtePfn;
             MI_WRITE_VALID_PTE(MappingPte, MapPte);
             MappedPage = MiPteToAddress(MappingPte);
 
             OldUserPte = MappedPage[PteIndex].u.Long;
+            OldPteContents.u.Long = OldUserPte;
+            OldUserLeafValid = OldPteContents.u.Hard.Valid &&
+                               OldPteContents.u.Hard.NotLargePage;
 
             /* Build an EL0 L3 page descriptor in the active TTBR0 hierarchy. */
             FinalPte.u.Long = 0;
@@ -1311,7 +1316,7 @@ MmCreateVirtualMappingUnsafeEx(
                  */
                 {
                     PMMPFN PtePfn1 = MiGetPfnEntry(PtePfn);
-                    if (PtePfn1 != NULL)
+                    if ((PtePfn1 != NULL) && !OldUserLeafValid)
                     {
                         PtePfn1->u2.ShareCount++;
                     }
@@ -1323,9 +1328,6 @@ MmCreateVirtualMappingUnsafeEx(
             /* Replace any valid boot-time user mapping at this VA. */
             if (OldUserPte != 0)
             {
-                MMPTE OldPteContents;
-                OldPteContents.u.Long = OldUserPte;
-
                 /*
                  * Only clear entries that are actual valid page mappings.
                  * Non-zero software PTEs (demand-zero/decommit/proto markers)
@@ -1370,7 +1372,7 @@ MmCreateVirtualMappingUnsafeEx(
             __asm__ __volatile__("dsb sy" ::: "memory");
 
             /* Balance the teardown decrement for newly created user PTEs. */
-            if (OldUserPte == 0)
+            if (!OldUserLeafValid)
             {
                 PMMPFN PtePfn1 = MiGetPfnEntry(PtePfn);
                 if (PtePfn1 != NULL)

@@ -884,6 +884,11 @@ MiArm64KernelPteKseg0(
     return (PMMPTE)&L3[((ULONG_PTR)Address >> PTI_SHIFT) & PTI_MASK_ARM64];
 }
 
+FORCEINLINE
+VOID
+MiArm64SyncKernelHierarchyEntryWrite(
+    _In_ PMMPTE PointerEntry);
+
 /*
  * MiArm64SyncKernelLeafPteWrite - Mirror a kernel leaf PTE write into TTBR1.
  *
@@ -914,6 +919,14 @@ MiArm64SyncKernelLeafPteWrite(
     }
 
     Kseg0Pte = MiArm64KernelPteKseg0(VirtualAddress);
+    if (Kseg0Pte == NULL)
+    {
+        MiArm64SyncKernelHierarchyEntryWrite((PMMPTE)MiAddressToPxe(VirtualAddress));
+        MiArm64SyncKernelHierarchyEntryWrite((PMMPTE)MiAddressToPpe(VirtualAddress));
+        MiArm64SyncKernelHierarchyEntryWrite((PMMPTE)MiAddressToPde(VirtualAddress));
+        Kseg0Pte = MiArm64KernelPteKseg0(VirtualAddress);
+    }
+
     ASSERT(Kseg0Pte != NULL);
     if (Kseg0Pte == NULL)
         return;
