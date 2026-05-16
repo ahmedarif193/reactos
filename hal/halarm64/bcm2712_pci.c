@@ -277,10 +277,6 @@ Bcm2712PciProbe(
         return FALSE;
     }
 
-    DPRINT1("[BCM2712] Platform detected: %.*s / %.*s\n",
-            6, Fadt->OEMID,
-            8, Fadt->OEMTableID);
-
     Bcm2712Detected = TRUE;
     return TRUE;
 }
@@ -345,9 +341,6 @@ Bcm2712PciInit(VOID)
             {
                 /* Controller not initialized by firmware — skip it */
                 Bcm2712RcState[Index].LinkUp = FALSE;
-                DPRINT1("[BCM2712] PCIE%lu: not initialized by firmware "
-                        "(MiscCtrl=0x%08lx VID=0x%04x) — skipped\n",
-                        Index, MiscCtrl, VendorId);
                 continue;
             }
 
@@ -355,21 +348,6 @@ Bcm2712PciInit(VOID)
 
             if (Bcm2712RcState[Index].LinkUp)
             {
-                /* Dump outbound window config for address translation debugging */
-                ULONG MemWinLo = Bcm2712Read32(VirtAddr, 0x400C); /* CPU_2_PCIE_MEM_WIN0_LO */
-                ULONG MemWinHi = Bcm2712Read32(VirtAddr, 0x4010); /* CPU_2_PCIE_MEM_WIN0_HI */
-                ULONG BaseLimitReg = Bcm2712Read32(VirtAddr, 0x4070); /* BASE_LIMIT */
-                ULONG BaseHi = Bcm2712Read32(VirtAddr, 0x4080); /* BASE_HI */
-                ULONG LimitHi = Bcm2712Read32(VirtAddr, 0x4084); /* LIMIT_HI */
-                DPRINT1("[BCM2712] PCIE%lu: outbound MEM_WIN0: LO=0x%08lx HI=0x%08lx "
-                        "BASE_LIMIT=0x%08lx BASE_HI=0x%02lx LIMIT_HI=0x%02lx\n",
-                        Index, MemWinLo, MemWinHi,
-                        BaseLimitReg, BaseHi, LimitHi);
-                DPRINT1("[BCM2712] PCIE%lu: link UP, root port VID:DID=%04x:%04x\n",
-                        Index,
-                        VendorId,
-                        (USHORT)((VendorDev >> 16) & 0xFFFF));
-
                 /*
                  * Configure PCIe inbound DMA window to cover full RAM.
                  *
@@ -399,17 +377,10 @@ Bcm2712PciInit(VOID)
 
                     /* 64GB window: ilog2(64GB) = 36, encode = 36 - 15 = 21 */
                     ULONG EncodedSize = 21;
-                    ULONG Bar2Lo, Bar2Hi, UbusLo, UbusHi;
+                    ULONG Bar2Lo;
 
                     /* Read current config */
                     Bar2Lo = Bcm2712Read32(VirtAddr, RC_BAR2_CONFIG_LO);
-                    Bar2Hi = Bcm2712Read32(VirtAddr, RC_BAR2_CONFIG_HI);
-                    UbusLo = Bcm2712Read32(VirtAddr, UBUS_BAR2_REMAP_LO);
-                    UbusHi = Bcm2712Read32(VirtAddr, UBUS_BAR2_REMAP_HI);
-
-                    DPRINT1("[BCM2712] PCIE%lu: inbound BEFORE: BAR2_LO=0x%08lx BAR2_HI=0x%08lx "
-                            "UBUS_LO=0x%08lx UBUS_HI=0x%08lx\n",
-                            Index, Bar2Lo, Bar2Hi, UbusLo, UbusHi);
 
                     /*
                      * Program BAR2 for RP1 DMA translation.
@@ -424,23 +395,12 @@ Bcm2712PciInit(VOID)
                      * dma-ranges: PCI 0x10_00000000 → CPU 0x00000000, size 64GB
                      */
                     Bar2Lo = (Bar2Lo & ~0x1F) | (EncodedSize & 0x1F);
-                    Bar2Hi = 0; /* PCI BAR base address high = 0 (identity map) */
                     Bcm2712Write32(VirtAddr, RC_BAR2_CONFIG_LO, Bar2Lo);
-                    Bcm2712Write32(VirtAddr, RC_BAR2_CONFIG_HI, Bar2Hi);
+                    Bcm2712Write32(VirtAddr, RC_BAR2_CONFIG_HI, 0);
 
                     /* UBUS remap: CPU address = 0 (maps PCI base to CPU 0), access enable = 1 */
                     Bcm2712Write32(VirtAddr, UBUS_BAR2_REMAP_LO, 0x1); /* bit 0 = access enable */
                     Bcm2712Write32(VirtAddr, UBUS_BAR2_REMAP_HI, 0x0); /* CPU addr high = 0 */
-
-                    /* Read back to verify */
-                    Bar2Lo = Bcm2712Read32(VirtAddr, RC_BAR2_CONFIG_LO);
-                    Bar2Hi = Bcm2712Read32(VirtAddr, RC_BAR2_CONFIG_HI);
-                    UbusLo = Bcm2712Read32(VirtAddr, UBUS_BAR2_REMAP_LO);
-                    UbusHi = Bcm2712Read32(VirtAddr, UBUS_BAR2_REMAP_HI);
-
-                    DPRINT1("[BCM2712] PCIE%lu: inbound AFTER: BAR2_LO=0x%08lx BAR2_HI=0x%08lx "
-                            "UBUS_LO=0x%08lx UBUS_HI=0x%08lx (64GB window)\n",
-                            Index, Bar2Lo, Bar2Hi, UbusLo, UbusHi);
                 }
             }
             else
@@ -453,8 +413,6 @@ Bcm2712PciInit(VOID)
 
     Bcm2712Initialized = TRUE;
 
-    DPRINT1("[BCM2712] PCI config-space backend initialized "
-            "(%lu controllers mapped)\n", BCM2712_PCIE_RC_COUNT);
     return STATUS_SUCCESS;
 }
 
@@ -645,10 +603,6 @@ Bcm2712PciAccessConfigSpace(
                 {
                     UCHAR PatchedLine = (Gsi <= 0xFF) ? (UCHAR)Gsi : 0xFE;
                     ByteBuffer[LineOffset] = PatchedLine;
-                    DPRINT1("[BCM2712] Patched InterruptLine: Pin=%u GSI=%lu -> Line=0x%02X "
-                            "(Bus %lu Dev %lu Func %lu)\n",
-                            InterruptPin, Gsi, PatchedLine,
-                            Bus, Slot.u.bits.DeviceNumber, Slot.u.bits.FunctionNumber);
                 }
             }
         }

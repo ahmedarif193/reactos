@@ -174,8 +174,6 @@ USBSTOR_HandleInternalDeviceControl(
         case SRB_FUNCTION_FLUSH:
         case SRB_FUNCTION_FLUSH_QUEUE:
         {
-            DPRINT1("SRB_FUNCTION_FLUSH / SRB_FUNCTION_FLUSH_QUEUE / SRB_FUNCTION_SHUTDOWN\n");
-
             // wait for pending requests to finish
             USBSTOR_QueueWaitForPendingRequests(PDODeviceExtension->LowerDeviceObject);
 

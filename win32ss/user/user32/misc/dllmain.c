@@ -227,12 +227,6 @@ ClientThreadSetupHelper(BOOL IsCallback)
     PCLIENTINFO ClientInfo = GetWin32ClientInfo();
     BOOLEAN IsFirstThread = _InterlockedExchange8((PCHAR)&gfFirstThread, FALSE);
 
-#ifdef _M_ARM64
-    ERR("[arm64][user32] ClientThreadSetupHelper cb=%u server=%u first=%u ci=%p flags=0x%lx gpsi=%p ght=%p\n",
-            IsCallback, gfServerProcess, IsFirstThread, ClientInfo,
-            ClientInfo ? ClientInfo->CI_flags : 0, gpsi, gHandleTable);
-#endif
-
     TRACE("In ClientThreadSetup(IsCallback == %s, gfServerProcess = %s, IsFirstThread = %s)\n",
           IsCallback ? "TRUE" : "FALSE", gfServerProcess ? "TRUE" : "FALSE", IsFirstThread ? "TRUE" : "FALSE");
 
@@ -467,11 +461,6 @@ Init(PUSERCONNECT UserCon /*PUSERSRV_API_CONNECTINFO*/)
         gpsi = gSharedInfo.psi;
         gHandleTable = gSharedInfo.aheList;
         /* ReactOS-Specific! */ gHandleEntries = SharedPtrToUser(gHandleTable->handles);
-#ifdef _M_ARM64
-        ERR("[arm64][user32] Init connected ppi=%p psi=%p ght=%p entries=%p sharedDelta=%p\n",
-                g_ppi, gpsi, gHandleTable, gHandleEntries,
-                (PVOID)gSharedInfo.ulSharedDelta);
-#endif
     }
 
     // FIXME: Yet another hack... This call should normally not be done here, but

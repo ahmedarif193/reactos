@@ -3955,37 +3955,6 @@ VOID Arm64SetupKernelHandoffMMU(VOID)
             }
         }
 
-        /* Example: map a 1GiB kernel window (if desired) */
-        {
-            UINT64 kernel_phys_base = 0x40000000ULL; /* example alignment */
-            UINT64 kernel_virt_base = ARM64_KSEG0_BASE | kernel_phys_base;
-
-            UINT64 kernel_l0_idx = (kernel_virt_base >> 39) & 0x1FF;
-            UINT64 kernel_l1_idx = (kernel_virt_base >> 30) & 0x1FF;
-
-            if (kernel_l0_idx >= ARM64_KSEG0_L0_INDEX &&
-                kernel_l0_idx < (ARM64_KSEG0_L0_INDEX + ARM64_KERNEL_L1_TABLES))
-            {
-                UINT64 slot = kernel_l0_idx - ARM64_KSEG0_L0_INDEX;
-                UINT64 newval = (kernel_phys_base |
-                                 PTE_TYPE_VALID | PTE_TYPE_BLOCK |
-                                 PTE_BLOCK_MEMTYPE(ARM64_MEM_ATTR_NORMAL_WB) |
-                                 PTE_BLOCK_INNER_SHARE | PTE_BLOCK_AF);
-                pte_replace_break_before_make(&arm64_kernel_l1_tables[slot][kernel_l1_idx],
-                                              newval,
-                                              kernel_virt_base,
-                                              ARM64_BLOCK_SIZE_1G);
-
-                /* Per-VA flush (all ASIDs) */
-                tlbi_vaae1is_by_va(kernel_virt_base);
-                ARM64_DSB_ISH();
-                ARM64_ISB();
-                /* Sync I-cache if this mapping may become executable soon */
-                arm64_icache_sync_range(kernel_virt_base,
-                                        kernel_virt_base + ARM64_BLOCK_SIZE_1G);
-            }
-        }
-
         if (!Arm64VerifyKseg0PhysicalPage(phys_ttbr1, "TTBR1 root final") ||
             !Arm64VerifyKseg0HardwarePage(phys_ttbr1, "TTBR1 root final"))
         {
