@@ -1010,23 +1010,14 @@ MI_IS_PHYSICAL_ADDRESS(IN PVOID Address)
 //
 // Writes a valid PTE
 //
+#if defined(_M_ARM64)
 FORCEINLINE
-VOID
-MI_WRITE_VALID_PTE(IN PMMPTE PointerPte,
-                   IN MMPTE TempPte)
+MMPTE
+MI_ARM64_PREPARE_VALID_PTE(IN PMMPTE PointerPte,
+                           IN MMPTE TempPte)
 {
-#if defined(_M_ARM64)
     ULONG_PTR EntryAddress = (ULONG_PTR)PointerPte;
-#endif
 
-    /* Write the valid PTE */
-    ASSERT(PointerPte->u.Hard.Valid == 0);
-    ASSERT(TempPte.u.Hard.Valid == 1);
-#if _M_AMD64
-    ASSERT(!MI_IS_PAGE_TABLE_ADDRESS(MiPteToAddress(PointerPte)) ||
-           (TempPte.u.Hard.NoExecute == 0));
-#endif
-#if defined(_M_ARM64)
     /*
      * Windows/ARM64 keeps table descriptors distinct from L3 leaf descriptors.
      * Common ARM3 creates demand-zero page-table pages through this helper; when
@@ -1043,22 +1034,65 @@ MI_WRITE_VALID_PTE(IN PMMPTE PointerPte,
         TablePte.u.Hard.PageFrameNumber = TempPte.u.Hard.PageFrameNumber;
         TempPte = TablePte;
     }
+
+    return TempPte;
+}
+
+FORCEINLINE
+VOID
+MI_ARM64_FLUSH_VALID_PTE(IN PMMPTE PointerPte)
+{
+    ULONG_PTR EntryAddress = (ULONG_PTR)PointerPte;
+    ULONG_PTR Va = (ULONG_PTR)MiPteToAddress(PointerPte) >> PAGE_SHIFT;
+
+    if (EntryAddress >= PXE_BASE && EntryAddress <= PXE_TOP)
+    {
+        MiArm64SyncPxeWrite(PointerPte);
+    }
+
+    __asm__ __volatile__("dsb ishst" ::: "memory");
+    __asm__ __volatile__("tlbi vaae1is, %0" :: "r"(Va) : "memory");
+    __asm__ __volatile__("dsb ish" ::: "memory");
+    __asm__ __volatile__("isb" ::: "memory");
+}
+
+FORCEINLINE
+VOID
+MI_WRITE_VALID_PTE_NO_FLUSH(IN PMMPTE PointerPte,
+                            IN MMPTE TempPte)
+{
+    ULONG_PTR EntryAddress = (ULONG_PTR)PointerPte;
+
+    ASSERT(PointerPte->u.Hard.Valid == 0);
+    ASSERT(TempPte.u.Hard.Valid == 1);
+
+    *PointerPte = MI_ARM64_PREPARE_VALID_PTE(PointerPte, TempPte);
+    if (EntryAddress >= PXE_BASE && EntryAddress <= PXE_TOP)
+    {
+        MiArm64SyncPxeWrite(PointerPte);
+    }
+    __asm__ __volatile__("dsb ishst" ::: "memory");
+}
+#endif
+
+FORCEINLINE
+VOID
+MI_WRITE_VALID_PTE(IN PMMPTE PointerPte,
+                   IN MMPTE TempPte)
+{
+    /* Write the valid PTE */
+    ASSERT(PointerPte->u.Hard.Valid == 0);
+    ASSERT(TempPte.u.Hard.Valid == 1);
+#if _M_AMD64
+    ASSERT(!MI_IS_PAGE_TABLE_ADDRESS(MiPteToAddress(PointerPte)) ||
+           (TempPte.u.Hard.NoExecute == 0));
+#endif
+#if defined(_M_ARM64)
+    TempPte = MI_ARM64_PREPARE_VALID_PTE(PointerPte, TempPte);
 #endif
     *PointerPte = TempPte;
 #if defined(_M_ARM64)
-    {
-        ULONG_PTR Va = (ULONG_PTR)MiPteToAddress(PointerPte) >> PAGE_SHIFT;
-
-        if (EntryAddress >= PXE_BASE && EntryAddress <= PXE_TOP)
-        {
-            MiArm64SyncPxeWrite(PointerPte);
-        }
-
-        __asm__ __volatile__("dsb ishst" ::: "memory");
-        __asm__ __volatile__("tlbi vaae1is, %0" :: "r"(Va) : "memory");
-        __asm__ __volatile__("dsb ish" ::: "memory");
-        __asm__ __volatile__("isb" ::: "memory");
-    }
+    MI_ARM64_FLUSH_VALID_PTE(PointerPte);
 #endif
 }
 

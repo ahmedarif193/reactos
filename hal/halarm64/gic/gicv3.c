@@ -185,15 +185,20 @@ HalpGicv3SendSgi(
     ULONG Aff3;
     ULONG TargetList;
     ULONGLONG SgiVal;
+    ULONG Cpu;
 
     if ((TargetSet == 0) || (SgiId > 15))
         return;
 
     /*
-     * Read current CPU's MPIDR to get affinity values.
+     * Get the current CPU's MPIDR to get affinity values.
      * We assume all target CPUs are in the same affinity cluster.
      */
-    Mpidr = HalpReadMpidr();
+    Cpu = KeGetCurrentProcessorNumber();
+    if ((Cpu < MAXIMUM_PROCESSORS) && (HalpGicCpuMpidr[Cpu] != 0))
+        Mpidr = HalpGicCpuMpidr[Cpu];
+    else
+        Mpidr = HalpReadMpidr();
     Aff1 = (ULONG)((Mpidr >> 8) & 0xFF);
     Aff2 = (ULONG)((Mpidr >> 16) & 0xFF);
     Aff3 = (ULONG)((Mpidr >> 32) & 0xFF);

@@ -178,7 +178,13 @@ KeQuerySystemTime(OUT PLARGE_INTEGER CurrentTime)
     {
         /* Read the time value */
         CurrentTime->HighPart = SharedUserData->SystemTime.High1Time;
+#if defined(_M_ARM64)
+        __dmb(_ARM64_BARRIER_ISHLD);
+#endif
         CurrentTime->LowPart = SharedUserData->SystemTime.LowPart;
+#if defined(_M_ARM64)
+        __dmb(_ARM64_BARRIER_ISHLD);
+#endif
         if (CurrentTime->HighPart ==
             SharedUserData->SystemTime.High2Time) break;
         YieldProcessor();
@@ -199,7 +205,13 @@ KeQueryInterruptTime(VOID)
     {
         /* Read the time value */
         CurrentTime.HighPart = SharedUserData->InterruptTime.High1Time;
+#if defined(_M_ARM64)
+        __dmb(_ARM64_BARRIER_ISHLD);
+#endif
         CurrentTime.LowPart = SharedUserData->InterruptTime.LowPart;
+#if defined(_M_ARM64)
+        __dmb(_ARM64_BARRIER_ISHLD);
+#endif
         if (CurrentTime.HighPart ==
             SharedUserData->InterruptTime.High2Time) break;
         YieldProcessor();

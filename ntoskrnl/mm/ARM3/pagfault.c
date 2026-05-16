@@ -786,18 +786,19 @@ MiResolveDemandZeroFault(IN PVOID Address,
     /* Set it dirty if it's a writable page */
     if (MI_IS_PAGE_WRITEABLE(&TempPte)) MI_MAKE_DIRTY_PAGE(&TempPte);
 
-    /* Write it */
-    MI_WRITE_VALID_PTE(PointerPte, TempPte);
-
 #if defined(_M_ARM64)
     if (MI_IS_PAGE_TABLE_ADDRESS(PointerPte))
     {
+        MI_WRITE_VALID_PTE_NO_FLUSH(PointerPte, TempPte);
         MiArm64CompleteFaultPteUpdate(Address, &TempPte);
     }
     else
     {
-        __asm__ __volatile__("dsb ishst" ::: "memory");
+        MI_WRITE_VALID_PTE(PointerPte, TempPte);
     }
+#else
+    /* Write it */
+    MI_WRITE_VALID_PTE(PointerPte, TempPte);
 #endif
 
     /* Did we manually acquire the lock */
@@ -932,11 +933,12 @@ MiCompleteProtoPteFault(IN BOOLEAN StoreInstruction,
     /* Set the dirty flag if needed */
     if (DirtyPage) MI_MAKE_DIRTY_PAGE(&TempPte);
 
+#if defined(_M_ARM64)
+    MI_WRITE_VALID_PTE_NO_FLUSH(PointerPte, TempPte);
+    MiArm64CompleteFaultPteUpdate(Address, &TempPte);
+#else
     /* Write the PTE */
     MI_WRITE_VALID_PTE(PointerPte, TempPte);
-
-#if defined(_M_ARM64)
-    MiArm64CompleteFaultPteUpdate(Address, &TempPte);
 #endif
 
     /* Reset the protection if needed */
