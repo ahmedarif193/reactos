@@ -107,6 +107,36 @@ FreeItem(
     ExFreePoolWithTag(Item, USBCCPG_TAG);
 }
 
+PURB
+USBCCGP_CreateConfigurationRequest(
+    IN PUSB_CONFIGURATION_DESCRIPTOR ConfigurationDescriptor,
+    IN PUSBD_INTERFACE_LIST_ENTRY InterfaceList,
+    IN ULONG InterfaceListCount)
+{
+    PUSBD_INTERFACE_LIST_ENTRY TempList;
+    ULONG ListSize;
+    PURB Urb;
+
+    /*
+     * USBD_CreateConfigurationRequestEx writes URB-internal pointers into
+     * InterfaceList[i].Interface. Keep that side effect in a scratch copy so
+     * callers can decide when, or whether, to publish returned interface data.
+     */
+    ListSize = sizeof(USBD_INTERFACE_LIST_ENTRY) * (InterfaceListCount + 1);
+    TempList = AllocateItem(NonPagedPool, ListSize);
+    if (!TempList)
+    {
+        return NULL;
+    }
+
+    RtlCopyMemory(TempList, InterfaceList, ListSize);
+
+    Urb = USBD_CreateConfigurationRequestEx(ConfigurationDescriptor, TempList);
+
+    FreeItem(TempList);
+    return Urb;
+}
+
 VOID
 DumpFunctionDescriptor(
     IN PUSBC_FUNCTION_DESCRIPTOR FunctionDescriptor,

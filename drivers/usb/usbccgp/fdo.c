@@ -579,8 +579,6 @@ FDO_CloseConfiguration(
     NTSTATUS Status;
     PURB Urb;
     PFDO_DEVICE_EXTENSION FDODeviceExtension;
-    PUSBD_INTERFACE_LIST_ENTRY TempList;
-    ULONG ListSize;
 
     /* Get device extension */
     FDODeviceExtension = (PFDO_DEVICE_EXTENSION)DeviceObject->DeviceExtension;
@@ -593,25 +591,10 @@ FDO_CloseConfiguration(
         return STATUS_SUCCESS;
     }
 
-    /*
-     * USBD_CreateConfigurationRequestEx overwrites InterfaceList[i].Interface
-     * with pointers into the URB it creates. We must use a temporary copy so
-     * the real Interface pointers (separately allocated) are not clobbered.
-     * Otherwise USBCCGP_FreeInterfaceList would try to free URB-internal
-     * pointers, causing misaligned-pointer / double-free pool corruption.
-     */
-    ListSize = sizeof(USBD_INTERFACE_LIST_ENTRY) * (FDODeviceExtension->InterfaceListCount + 1);
-    TempList = AllocateItem(NonPagedPool, ListSize);
-    if (!TempList)
-    {
-        return STATUS_INSUFFICIENT_RESOURCES;
-    }
-    RtlCopyMemory(TempList, FDODeviceExtension->InterfaceList, ListSize);
-
     /* Now allocate the urb */
-    Urb = USBD_CreateConfigurationRequestEx(FDODeviceExtension->ConfigurationDescriptor,
-                                            TempList);
-    FreeItem(TempList);
+    Urb = USBCCGP_CreateConfigurationRequest(FDODeviceExtension->ConfigurationDescriptor,
+                                             FDODeviceExtension->InterfaceList,
+                                             FDODeviceExtension->InterfaceListCount);
     if (!Urb)
     {
         /* No memory */

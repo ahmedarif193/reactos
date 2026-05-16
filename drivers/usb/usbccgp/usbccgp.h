@@ -115,6 +115,12 @@ VOID
 FreeItem(
     IN PVOID Item);
 
+PURB
+USBCCGP_CreateConfigurationRequest(
+    IN PUSB_CONFIGURATION_DESCRIPTOR ConfigurationDescriptor,
+    IN PUSBD_INTERFACE_LIST_ENTRY InterfaceList,
+    IN ULONG InterfaceListCount);
+
 VOID
 DumpFunctionDescriptor(
     IN PUSBC_FUNCTION_DESCRIPTOR FunctionDescriptor,
