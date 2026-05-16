@@ -2327,8 +2327,7 @@ HalpArm64FlushMdlDcacheRange(_In_ PMDL Mdl,
     ULONG PageIndex;
     ULONG PageOffset;
 
-    if (!Mdl || !CurrentVa || !Mdl->StartVa ||
-        Length == 0 || (Mdl->MdlFlags & MDL_IO_SPACE))
+    if (!Mdl || Length == 0 || (Mdl->MdlFlags & MDL_IO_SPACE))
     {
         return FALSE;
     }
@@ -2337,10 +2336,26 @@ HalpArm64FlushMdlDcacheRange(_In_ PMDL Mdl,
     if (!PfnArray)
         return FALSE;
 
-    if ((ULONG_PTR)CurrentVa < (ULONG_PTR)Mdl->StartVa)
-        return FALSE;
+    /*
+     * The MDL may not have a system VA.  In that case
+     * MmGetMdlVirtualAddress() is just the MDL byte offset, and cache
+     * maintenance must still be done through the PFN-backed physical alias.
+     */
+    if (Mdl->StartVa)
+    {
+        if ((ULONG_PTR)CurrentVa < (ULONG_PTR)Mdl->StartVa)
+            return FALSE;
 
-    Offset = (ULONG_PTR)CurrentVa - (ULONG_PTR)Mdl->StartVa;
+        Offset = (ULONG_PTR)CurrentVa - (ULONG_PTR)Mdl->StartVa;
+    }
+    else if (CurrentVa)
+    {
+        Offset = (ULONG_PTR)CurrentVa;
+    }
+    else
+    {
+        Offset = Mdl->ByteOffset;
+    }
     if (Offset < Mdl->ByteOffset)
         return FALSE;
 
@@ -3840,11 +3855,6 @@ HalpMapRuntimeMmioWindow(
     }
 
     *BaseAddress = (ULONGLONG)(ULONG_PTR)MappedVa;
-    DPRINT1("[arm64][HAL] Phase1: mapped %s PA=0x%llx -> VA=%p len=0x%llx\n",
-            Name ? Name : "MMIO",
-            Physical,
-            MappedVa,
-            (ULONGLONG)Length);
     return TRUE;
 }
 
@@ -5256,10 +5266,6 @@ HalInitSystem(
      */
     OldIrql = KfRaiseIrql(HIGH_LEVEL);
     HalpArm64SelectGicInterface(LoaderBlock);
-    DPRINT1("[HAL][INIT0] selected GIC sysregs=%u gicd=0x%llx gicc=0x%llx\n",
-            HalpGicUseSysRegs,
-            HalpGicdBase,
-            HalpGiccBase);
 
     /* Probe GIC capabilities before touching CPU IF */
     {
@@ -5498,7 +5504,6 @@ HalInitSystem(
 
     HalpGicPhase0Complete = TRUE;
     HalpArm64ApplyDeferredInterruptEnables();
-    DPRINT1("[HAL][INIT0] phase0 GIC ready\n");
 
     /*
      * Initialize system time increment values for the scheduler tick.
@@ -5507,7 +5512,6 @@ HalInitSystem(
      * This matches the configuration in KiArm64StartTimer().
      */
     KeSetTimeIncrement(100000, 10000);
-    DPRINT1("[HAL][INIT0] KeSetTimeIncrement complete\n");
 
     /*
      * Set up HAL dispatch table callbacks.
@@ -6255,12 +6259,6 @@ HalEnableSystemInterrupt(
     else if (Vector < 1020)
     {
         /* SPI (32-1019): use Distributor registers */
-        ULONG IsEnablerBefore, IsEnablerAfter;
-
-        DPRINT("[arm64][SPI] Enabling SPI %lu\n", Vector);
-
-        /* Read current enable state */
-        IsEnablerBefore = *HalpMmio((ULONG_PTR)HalpGicdBase, GICD_ISENABLER + reg * 4);
 
         /* Set priority for this interrupt */
         prioReg = GICD_IPRIORITYR + (Vector & ~3);
@@ -6278,11 +6276,6 @@ HalEnableSystemInterrupt(
 
         /* Memory barrier after enable */
         __asm__ __volatile__("dsb sy" ::: "memory");
-
-        /* Verify it was enabled */
-        IsEnablerAfter = *HalpMmio((ULONG_PTR)HalpGicdBase, GICD_ISENABLER + reg * 4);
-        DPRINT("[arm64][SPI]   ISENABLER before: 0x%08lx after: 0x%08lx (bit %lu = %lu)\n",
-               IsEnablerBefore, IsEnablerAfter, bit, (IsEnablerAfter >> bit) & 1);
     }
     else
     {
@@ -6290,9 +6283,6 @@ HalEnableSystemInterrupt(
         DPRINT1("[arm64] HalEnableSystemInterrupt: Invalid vector %lu (reserved range)\n", Vector);
         return FALSE;
     }
-
-    DPRINT1("[arm64] HalEnableSystemInterrupt: Vector=%lu IRQL=%u GICPriority=0x%02X COMPLETE\n",
-            Vector, Irql, priority);
 
     return TRUE;
 }
