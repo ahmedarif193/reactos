@@ -358,10 +358,6 @@ KiArm64StartLocalTimer(VOID)
         KiArm64TimerPeriodTicks = 1;
     }
 
-    DPRINT1("[arm64] Timer: freq=%llu Hz, period=%llu ticks increment=%lu, using %s timer\n",
-            frq, KiArm64TimerPeriodTicks, Increment,
-            KiArm64UseVirtualTimer ? "virtual (CNTV)" : "physical (CNTP)");
-
     if (KiArm64UseVirtualTimer)
     {
         /*
@@ -372,10 +368,7 @@ KiArm64StartLocalTimer(VOID)
         KiArm64WriteCntvTval(KiArm64TimerPeriodTicks);
         KiArm64WriteCntvCtl(1); /* ENABLE=1, IMASK=0 */
 
-        /* Verify configuration */
         ctl = KiArm64ReadCntvCtl();
-        DPRINT1("[arm64] CNTV_CTL_EL0 = 0x%lx (ENABLE=%lu, IMASK=%lu, ISTATUS=%lu)\n",
-                ctl, ctl & 1, (ctl >> 1) & 1, (ctl >> 2) & 1);
     }
     else
     {
@@ -387,10 +380,7 @@ KiArm64StartLocalTimer(VOID)
         KiArm64WriteCntpTval(KiArm64TimerPeriodTicks);
         KiArm64WriteCntpCtl(1); /* ENABLE=1, IMASK=0 */
 
-        /* Verify configuration */
         ctl = KiArm64ReadCntpCtl();
-        DPRINT1("[arm64] CNTP_CTL_EL0 = 0x%lx (ENABLE=%lu, IMASK=%lu, ISTATUS=%lu)\n",
-                ctl, ctl & 1, (ctl >> 1) & 1, (ctl >> 2) & 1);
     }
     KiTimerCtlReadback = ctl;
     KiTimerStartedFlag = 1;
@@ -553,8 +543,6 @@ KeReenableTimerInterrupt(VOID)
 {
     ULONG TimerIntId = KiArm64UseVirtualTimer ? 27 : 30;
 
-    DPRINT1("[arm64] KeReenableTimerInterrupt: Re-enabling timer PPI (INTID=%lu)\n", TimerIntId);
-
     /*
      * Re-enable the timer interrupt in the GIC.
      * Now that HalInitSystem(0) has run, HalpGicUseSysRegs is properly set
@@ -563,8 +551,6 @@ KeReenableTimerInterrupt(VOID)
      */
     HalEnableSystemInterrupt(TimerIntId, CLOCK_LEVEL, LevelSensitive);
     KiArm64StartLocalTimer();
-
-    DPRINT1("[arm64] KeReenableTimerInterrupt: Timer PPI re-enabled\n");
 }
 
 static
