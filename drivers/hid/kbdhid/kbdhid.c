@@ -137,6 +137,13 @@ KbdHid_ReadCompletion(
         return STATUS_MORE_PROCESSING_REQUIRED;
     }
 
+    if (!NT_SUCCESS(Irp->IoStatus.Status))
+    {
+        DeviceExtension->ReadReportActive = FALSE;
+        KeSetEvent(&DeviceExtension->ReadCompletionEvent, 0, 0);
+        return STATUS_MORE_PROCESSING_REQUIRED;
+    }
+
     //
     // print out raw report
     //

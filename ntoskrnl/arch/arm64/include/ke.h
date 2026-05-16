@@ -201,7 +201,13 @@ KeSweepICache(
     End = (ULONG_PTR)BaseAddress + FlushSize;
     for (Addr = Start; Addr < End; Addr += DLine)
     {
-        __asm__ __volatile__("dc cvau, %0" :: "r"(Addr) : "memory");
+        /*
+         * TODO: Revisit once ARM64 user/kernel executable mappings are proven
+         * alias-safe. CIVAC is stronger than CVAU and can hurt performance for
+         * large or frequent code-publication ranges because it also invalidates
+         * the data-cache line and pushes maintenance to the point of coherency.
+         */
+        __asm__ __volatile__("dc civac, %0" :: "r"(Addr) : "memory");
     }
     __asm__ __volatile__("dsb ish" ::: "memory");
 
