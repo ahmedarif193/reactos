@@ -934,9 +934,6 @@ static NTSTATUS FontLink_PopulateEntries(VOID)
         szzFontLink[_countof(szzFontLink) - 1] = UNICODE_NULL;
         szzFontLink[_countof(szzFontLink) - 2] = UNICODE_NULL;
 
-        DPRINT("szName: %S\n", szName);
-        DPRINT("szzFontLink: %S\n", szzFontLink);
-
         FontLink_AddEntry(szName, szzFontLink);
     }
 
@@ -967,8 +964,6 @@ InitFontSupport(VOID)
 
     if (!IntLoadFontsInRegistry())
     {
-        DPRINT1("Fonts registry is empty.\n");
-
         /* Load font(s) with writing registry */
         IntLoadSystemFonts();
     }

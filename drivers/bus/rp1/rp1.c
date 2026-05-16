@@ -437,12 +437,6 @@ Rp1FdoStartDevice(
         return STATUS_INSUFFICIENT_RESOURCES;
     }
 
-    DPRINT1("RP1: BAR1 bus=0x%I64x cpu=0x%I64x length=0x%lx VA=%p\n",
-            FdoExt->Bar1BusAddress.QuadPart,
-            FdoExt->Bar1CpuAddress.QuadPart,
-            FdoExt->Bar1Length,
-            FdoExt->Bar1Virtual);
-
     /*
      * Enable USB clock domains.
      *
@@ -464,7 +458,6 @@ Rp1FdoStartDevice(
         {
             WRITE_REGISTER_ULONG((PULONG)(ClkBase + RP1_CLK_USBH0_MICROFRAME_CTRL),
                                  Val | RP1_CLK_CTRL_ENABLE);
-            DPRINT1("RP1: Enabled USBH0 microframe clock (was 0x%08lx)\n", Val);
         }
 
         /* Enable USBH0 suspend clock */
@@ -473,7 +466,6 @@ Rp1FdoStartDevice(
         {
             WRITE_REGISTER_ULONG((PULONG)(ClkBase + RP1_CLK_USBH0_SUSPEND_CTRL),
                                  Val | RP1_CLK_CTRL_ENABLE);
-            DPRINT1("RP1: Enabled USBH0 suspend clock (was 0x%08lx)\n", Val);
         }
 
         /* Enable USBH1 microframe clock */
@@ -482,7 +474,6 @@ Rp1FdoStartDevice(
         {
             WRITE_REGISTER_ULONG((PULONG)(ClkBase + RP1_CLK_USBH1_MICROFRAME_CTRL),
                                  Val | RP1_CLK_CTRL_ENABLE);
-            DPRINT1("RP1: Enabled USBH1 microframe clock (was 0x%08lx)\n", Val);
         }
 
         /* Enable USBH1 suspend clock */
@@ -491,18 +482,10 @@ Rp1FdoStartDevice(
         {
             WRITE_REGISTER_ULONG((PULONG)(ClkBase + RP1_CLK_USBH1_SUSPEND_CTRL),
                                  Val | RP1_CLK_CTRL_ENABLE);
-            DPRINT1("RP1: Enabled USBH1 suspend clock (was 0x%08lx)\n", Val);
         }
 
         /* Small delay for clocks to stabilize */
         KeStallExecutionProcessor(100);
-
-        DPRINT1("RP1: USB clocks: MF0_CTRL=0x%08lx MF1_CTRL=0x%08lx "
-                "SP0_CTRL=0x%08lx SP1_CTRL=0x%08lx\n",
-                READ_REGISTER_ULONG((PULONG)(ClkBase + RP1_CLK_USBH0_MICROFRAME_CTRL)),
-                READ_REGISTER_ULONG((PULONG)(ClkBase + RP1_CLK_USBH1_MICROFRAME_CTRL)),
-                READ_REGISTER_ULONG((PULONG)(ClkBase + RP1_CLK_USBH0_SUSPEND_CTRL)),
-                READ_REGISTER_ULONG((PULONG)(ClkBase + RP1_CLK_USBH1_SUSPEND_CTRL)));
     }
 
     /*
@@ -541,12 +524,6 @@ Rp1FdoStartDevice(
                         SnpsId);
                 continue;
             }
-            DPRINT1("RP1: DWC3[%lu] GSNPSID=0x%08lx (rev %lu.%02lu%c)\n",
-                    Idx, SnpsId,
-                    (SnpsId >> 12) & 0xF,
-                    (SnpsId >> 4) & 0xFF,
-                    (SnpsId & 0xF) ? 'a' + (CHAR)(SnpsId & 0xF) - 1 : ' ');
-
             /*
              * Skip DWC3 soft reset — UEFI already initialized the DWC3 in host
              * mode with PHYs active. The xHCI driver (USBPORT/usbxhci) will
@@ -558,8 +535,6 @@ Rp1FdoStartDevice(
              * Just verify the current GCTL state and ensure host mode is set.
              */
             Reg = READ_REGISTER_ULONG((PULONG)(DwcBase + DWC3_GCTL));
-            DPRINT1("RP1: DWC3[%lu] GCTL=0x%08lx (PRTCAP=%u, no soft reset)\n",
-                    Idx, Reg, (Reg >> 12) & 3);
 
             /* Ensure host mode */
             Reg = READ_REGISTER_ULONG((PULONG)(DwcBase + DWC3_GCTL));
@@ -590,18 +565,11 @@ Rp1FdoStartDevice(
                 WRITE_REGISTER_ULONG((PULONG)(DwcBase + DWC3_GFLADJ), Gfladj);
             }
 
-            DPRINT1("RP1: DWC3[%lu] PHY+GFLADJ configured\n", Idx);
-
             /* Step 8: Verify xHCI capability registers */
             {
                 ULONG CapHdr = READ_REGISTER_ULONG((PULONG)DwcBase);
                 ULONG CapLen = CapHdr & 0xFF;
                 ULONG HciVer = (CapHdr >> 16) & 0xFFFF;
-                ULONG HccParams = READ_REGISTER_ULONG((PULONG)(DwcBase + 0x10));
-
-                DPRINT1("RP1: DWC3[%lu] xHCI: CapLen=%lu HCIVer=0x%04lx "
-                        "HccParams=0x%08lx (64bit=%lu)\n",
-                        Idx, CapLen, HciVer, HccParams, HccParams & 1);
 
                 if (CapLen == 0 || CapLen == 0xFF || HciVer < 0x0100)
                 {
@@ -624,12 +592,7 @@ Rp1FdoStartDevice(
         }
     }
 
-    if (FoundInterrupt)
-    {
-        DPRINT1("RP1: Interrupt level=%lu vector=%lu\n",
-                FdoExt->InterruptLevel, FdoExt->InterruptVector);
-    }
-    else
+    if (!FoundInterrupt)
     {
         DPRINT1("RP1: WARNING: No interrupt in PCI resources\n");
     }
@@ -724,11 +687,6 @@ Rp1FdoQueryBusRelations(
 
         FdoExt->ChildCount++;
 
-        DPRINT1("RP1: Created child PDO %lu: MMIO bus=0x%I64x cpu=0x%I64x len=0x%lx\n",
-                i,
-                PdoExt->MmioBusAddress.QuadPart,
-                PdoExt->MmioPhysical.QuadPart,
-                PdoExt->MmioLength);
     }
 
     /* Build DEVICE_RELATIONS structure */
@@ -827,7 +785,6 @@ Rp1FdoPnp(
     switch (IrpSp->MinorFunction)
     {
         case IRP_MN_START_DEVICE:
-            DPRINT1("RP1: FDO IRP_MN_START_DEVICE\n");
             Status = Rp1FdoStartDevice(DeviceObject, Irp);
             Irp->IoStatus.Status = Status;
             IoCompleteRequest(Irp, IO_NO_INCREMENT);
@@ -836,14 +793,12 @@ Rp1FdoPnp(
         case IRP_MN_QUERY_DEVICE_RELATIONS:
             if (IrpSp->Parameters.QueryDeviceRelations.Type == BusRelations)
             {
-                DPRINT1("RP1: FDO IRP_MN_QUERY_DEVICE_RELATIONS (BusRelations)\n");
                 return Rp1FdoQueryBusRelations(DeviceObject, Irp);
             }
             /* Fall through for other relation types */
             break;
 
         case IRP_MN_REMOVE_DEVICE:
-            DPRINT1("RP1: FDO IRP_MN_REMOVE_DEVICE\n");
             return Rp1FdoRemoveDevice(DeviceObject, Irp);
 
         case IRP_MN_QUERY_STOP_DEVICE:
@@ -917,7 +872,6 @@ Rp1PdoQueryId(
 
             RtlCopyMemory(Buffer, DeviceId, Size);
             Irp->IoStatus.Information = (ULONG_PTR)Buffer;
-            DPRINT1("RP1: PDO[%lu] DeviceID: %S\n", PdoExt->ChildIndex, Buffer);
             return STATUS_SUCCESS;
         }
 
@@ -943,10 +897,6 @@ Rp1PdoQueryId(
             /* Double null terminator is already zero from RtlZeroMemory */
 
             Irp->IoStatus.Information = (ULONG_PTR)Buffer;
-            DPRINT1("RP1: PDO[%lu] HardwareIDs: %S ; %S\n",
-                    PdoExt->ChildIndex,
-                    Buffer,
-                    (PWCHAR)((PUCHAR)Buffer + sizeof(HwId0)));
             return STATUS_SUCCESS;
         }
 
@@ -966,7 +916,6 @@ Rp1PdoQueryId(
             RtlCopyMemory(Buffer, CompatId, sizeof(CompatId));
 
             Irp->IoStatus.Information = (ULONG_PTR)Buffer;
-            DPRINT1("RP1: PDO[%lu] CompatibleIDs: %S\n", PdoExt->ChildIndex, Buffer);
             return STATUS_SUCCESS;
         }
 
@@ -984,7 +933,6 @@ Rp1PdoQueryId(
 
             RtlCopyMemory(Buffer, InstanceId, Size);
             Irp->IoStatus.Information = (ULONG_PTR)Buffer;
-            DPRINT1("RP1: PDO[%lu] InstanceID: %S\n", PdoExt->ChildIndex, Buffer);
             return STATUS_SUCCESS;
         }
 
@@ -1018,7 +966,6 @@ Rp1PdoQueryDeviceText(
 
         RtlCopyMemory(Buffer, Description, sizeof(Description));
         Irp->IoStatus.Information = (ULONG_PTR)Buffer;
-        DPRINT1("RP1: PDO[%lu] DeviceText: %S\n", PdoExt->ChildIndex, Buffer);
         return STATUS_SUCCESS;
     }
 
@@ -1098,13 +1045,6 @@ Rp1PdoQueryResources(
 
     Irp->IoStatus.Information = (ULONG_PTR)ResourceList;
 
-    DPRINT1("RP1: PDO[%lu] QueryResources: bus=0x%I64x cpu=0x%I64x+0x%lx irq=%lu\n",
-            PdoExt->ChildIndex,
-            PdoExt->MmioBusAddress.QuadPart,
-            PdoExt->MmioPhysical.QuadPart,
-            PdoExt->MmioLength,
-            PdoExt->InterruptVector);
-
     return STATUS_SUCCESS;
 }
 
@@ -1177,12 +1117,6 @@ Rp1PdoQueryResourceRequirements(
     }
 
     Irp->IoStatus.Information = (ULONG_PTR)ReqList;
-
-    DPRINT1("RP1: PDO[%lu] QueryResourceRequirements: cpu=0x%I64x+0x%lx irq=%lu\n",
-            PdoExt->ChildIndex,
-            PdoExt->MmioPhysical.QuadPart,
-            PdoExt->MmioLength,
-            PdoExt->InterruptVector);
 
     return STATUS_SUCCESS;
 }
@@ -1362,17 +1296,14 @@ Rp1PdoPnp(
     switch (IrpSp->MinorFunction)
     {
         case IRP_MN_START_DEVICE:
-            DPRINT1("RP1: PDO IRP_MN_START_DEVICE\n");
             Status = STATUS_SUCCESS;
             break;
 
         case IRP_MN_STOP_DEVICE:
-            DPRINT1("RP1: PDO IRP_MN_STOP_DEVICE\n");
             Status = STATUS_SUCCESS;
             break;
 
         case IRP_MN_REMOVE_DEVICE:
-            DPRINT1("RP1: PDO IRP_MN_REMOVE_DEVICE\n");
             Status = STATUS_SUCCESS;
             break;
 
@@ -1427,8 +1358,6 @@ Rp1PdoPnp(
             break;
 
         default:
-            DPRINT1("RP1: PDO unhandled IRP_MN_%lu\n",
-                    (ULONG)IrpSp->MinorFunction);
             Status = Irp->IoStatus.Status;
             break;
     }
@@ -1506,8 +1435,6 @@ Rp1AddDevice(
     PRP1_FDO_EXTENSION FdoExt;
     NTSTATUS Status;
 
-    DPRINT1("RP1: AddDevice called\n");
-
     if (!PhysicalDeviceObject)
         return STATUS_SUCCESS;
 
@@ -1541,8 +1468,6 @@ Rp1AddDevice(
     Fdo->Flags |= DO_POWER_PAGABLE;
     Fdo->Flags &= ~DO_DEVICE_INITIALIZING;
 
-    DPRINT1("RP1: AddDevice complete, FDO=%p LDO=%p\n", Fdo, FdoExt->LowerDevice);
-
     return STATUS_SUCCESS;
 }
 
@@ -1557,7 +1482,6 @@ Rp1Unload(
     _In_ PDRIVER_OBJECT DriverObject)
 {
     UNREFERENCED_PARAMETER(DriverObject);
-    DPRINT1("RP1: Unload\n");
 }
 
 /* ------------------------------------------------------------------ */
@@ -1571,8 +1495,6 @@ DriverEntry(
     _In_ PUNICODE_STRING RegistryPath)
 {
     UNREFERENCED_PARAMETER(RegistryPath);
-
-    DPRINT1("RP1: DriverEntry - Raspberry Pi 5 RP1 Southbridge Bus Driver\n");
 
     DriverObject->MajorFunction[IRP_MJ_PNP] = Rp1DispatchPnp;
     DriverObject->MajorFunction[IRP_MJ_POWER] = Rp1DispatchPower;

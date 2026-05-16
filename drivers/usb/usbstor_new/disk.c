@@ -175,8 +175,6 @@ USBSTOR_HandleInternalDeviceControl(
         case SRB_FUNCTION_FLUSH:
         case SRB_FUNCTION_FLUSH_QUEUE:
         {
-            DPRINT1("SRB_FUNCTION_FLUSH / SRB_FUNCTION_FLUSH_QUEUE / SRB_FUNCTION_SHUTDOWN\n");
-
             // HACK: don't flush pending requests
 #if 0       // we really need a proper storage stack
             //

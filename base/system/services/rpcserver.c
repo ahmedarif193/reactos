@@ -109,13 +109,11 @@ ScmStartRpcServer(VOID)
     RPC_STATUS Status;
 
     DPRINT("ScmStartRpcServer() called\n");
-    DPRINT1("[arm64][SCM-RPC] ScmStartRpcServer called\n");
 
     Status = RpcServerUseProtseqEpW(L"ncacn_np",
                                     10,
                                     L"\\pipe\\ntsvcs",
                                     NULL);
-    DPRINT1("[arm64][SCM-RPC] RpcServerUseProtseqEpW status %lx\n", Status);
     if (Status != RPC_S_OK)
     {
         DPRINT1("RpcServerUseProtseqEpW() failed (Status %lx)\n", Status);
@@ -125,7 +123,6 @@ ScmStartRpcServer(VOID)
     Status = RpcServerRegisterIf(svcctl_v2_0_s_ifspec,
                                  NULL,
                                  NULL);
-    DPRINT1("[arm64][SCM-RPC] RpcServerRegisterIf status %lx\n", Status);
     if (Status != RPC_S_OK)
     {
         DPRINT1("RpcServerRegisterIf() failed (Status %lx)\n", Status);
@@ -133,7 +130,6 @@ ScmStartRpcServer(VOID)
     }
 
     Status = RpcServerListen(1, 20, TRUE);
-    DPRINT1("[arm64][SCM-RPC] RpcServerListen status %lx\n", Status);
     if (Status != RPC_S_OK)
     {
         DPRINT1("RpcServerListen() failed (Status %lx)\n", Status);
@@ -141,7 +137,6 @@ ScmStartRpcServer(VOID)
     }
 
     DPRINT("ScmStartRpcServer() done\n");
-    DPRINT1("[arm64][SCM-RPC] ScmStartRpcServer done\n");
 }
 
 

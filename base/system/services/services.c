@@ -346,11 +346,9 @@ wWinMain(HINSTANCE hInstance,
 
     /* Start the RPC server */
     ScmStartRpcServer();
-    DPRINT1("[arm64][SERVICES] RPC server returned\n");
 
     /* Signal start event */
     SetEvent(hScmStartEvent);
-    DPRINT1("[arm64][SERVICES] start event signaled\n");
 
     DPRINT("SERVICES: Initialized\n");
 
@@ -364,25 +362,20 @@ wWinMain(HINSTANCE hInstance,
     SetProcessShutdownParameters(480, SHUTDOWN_NORETRY);
 
     /* Start auto-start services */
-    DPRINT1("[arm64][SERVICES] ScmAutoStartServices begin\n");
     ScmAutoStartServices();
-    DPRINT1("[arm64][SERVICES] ScmAutoStartServices done\n");
 
     /* Signal auto-start complete event */
     SetEvent(hScmAutoStartCompleteEvent);
-    DPRINT1("[arm64][SERVICES] autostart complete event signaled\n");
 
     /* FIXME: more to do ? */
 
     /* Release the service start lock */
     ScmReleaseServiceStartLock(&Lock);
-    DPRINT1("[arm64][SERVICES] start lock released\n");
 
     /* Initialization finished */
     ScmInitialize = FALSE;
 
     DPRINT("SERVICES: Running\n");
-    DPRINT1("[arm64][SERVICES] running\n");
 
     /* Wait until the shutdown event gets signaled */
     WaitForSingleObject(hScmShutdownEvent, INFINITE);

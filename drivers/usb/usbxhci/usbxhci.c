@@ -3125,23 +3125,11 @@ XHCI_PerformEndpointResetSequence(
             EpState = EpCtx->EpInfo & XHCI_EPCTX_STATE_MASK;
     }
 
-    DPRINT1("usbxhci: EndpointResetSequence ENTRY slot=%u ep=%u state=%lu (0=Dis,1=Run,2=Halt,3=Stop,4=Err)\n",
-            Endpoint->SlotId,
-            Endpoint->EndpointId,
-            EpState);
-
     if (EpState == XHCI_EPCTX_STATE_HALTED)
     {
         MPSTATUS ResetStatus;
         /* Halted endpoint: Use Reset Endpoint command to transition to Stopped */
-        DPRINT1("usbxhci: EndpointResetSequence slot=%u ep=%u issuing RESET_ENDPOINT (state=Halted)\n",
-                Endpoint->SlotId,
-                Endpoint->EndpointId);
         ResetStatus = XHCI_ResetEndpoint(Extension, Endpoint->Slot, Endpoint->EndpointId);
-        DPRINT1("usbxhci: EndpointResetSequence slot=%u ep=%u RESET_ENDPOINT returned %lu\n",
-                Endpoint->SlotId,
-                Endpoint->EndpointId,
-                ResetStatus);
         if (ResetStatus == MP_STATUS_SUCCESS)
             CanSetDequeue = TRUE;
     }
@@ -3149,14 +3137,7 @@ XHCI_PerformEndpointResetSequence(
     {
         MPSTATUS StopStatus;
         /* Running endpoint: Use Stop Endpoint command to transition to Stopped */
-        DPRINT1("usbxhci: EndpointResetSequence slot=%u ep=%u issuing STOP_ENDPOINT (state=Running)\n",
-                Endpoint->SlotId,
-                Endpoint->EndpointId);
         StopStatus = XHCI_StopEndpoint(Extension, Endpoint->Slot, Endpoint->EndpointId);
-        DPRINT1("usbxhci: EndpointResetSequence slot=%u ep=%u STOP_ENDPOINT returned %lu\n",
-                Endpoint->SlotId,
-                Endpoint->EndpointId,
-                StopStatus);
         if (StopStatus == MP_STATUS_SUCCESS)
             CanSetDequeue = TRUE;
     }
@@ -3184,11 +3165,6 @@ XHCI_PerformEndpointResetSequence(
      * This handles races where the endpoint state changed between our initial
      * read and the command execution (e.g., transfer completed, endpoint halted).
      */
-    DPRINT1("usbxhci: EndpointResetSequence slot=%u ep=%u CanSetDequeue=%u after cmd\n",
-            Endpoint->SlotId,
-            Endpoint->EndpointId,
-            CanSetDequeue);
-
     if (!CanSetDequeue)
     {
         DevCtx = Endpoint->Slot->DeviceContext.VirtualAddress;
@@ -3257,9 +3233,6 @@ XHCI_PerformEndpointResetSequence(
         if (!SkipSetDequeue)
         {
             MPSTATUS DeqStatus;
-            DPRINT1("usbxhci: EndpointResetSequence slot=%u ep=%u issuing SET_TR_DEQUEUE\n",
-                    Endpoint->SlotId,
-                    Endpoint->EndpointId);
             DeqStatus = XHCI_SetEndpointDequeue(Extension,
                                                          Endpoint->Slot,
                                                          Endpoint->EndpointId,
@@ -3270,12 +3243,6 @@ XHCI_PerformEndpointResetSequence(
                         Endpoint->SlotId,
                         Endpoint->EndpointId,
                         DeqStatus);
-            }
-            else
-            {
-                DPRINT1("usbxhci: EndpointResetSequence slot=%u ep=%u SET_TR_DEQUEUE success\n",
-                        Endpoint->SlotId,
-                        Endpoint->EndpointId);
             }
         }
         else
@@ -3316,18 +3283,11 @@ XHCI_PerformEndpointResetSequence(
 
     if (RingDoorbell)
     {
-        DPRINT1("usbxhci: EndpointResetSequence slot=%u ep=%u ringing doorbell\n",
-                Endpoint->SlotId,
-                Endpoint->EndpointId);
         XHCI_RingEndpointDoorbell(Extension,
                                   Endpoint->SlotId,
                                   Endpoint->EndpointId,
                                   0);
     }
-
-    DPRINT1("usbxhci: EndpointResetSequence EXIT slot=%u ep=%u\n",
-            Endpoint->SlotId,
-            Endpoint->EndpointId);
 }
 
 static
@@ -6288,12 +6248,7 @@ XHCI_HandleTransferEvent(
     /* Log errors and short packets (code != 1 = success) */
     if (CompletionCode != 1)
     {
-        if (CompletionCode == XHCI_COMPLETION_SHORT_PACKET)
-        {
-            DPRINT("xhci: XFER_EVT slot=%u ep=%u code=%lu remain=%lu ptr=%I64x\n",
-                   SlotId, EndpointId, CompletionCode, Remaining, TrbPointer);
-        }
-        else
+        if (CompletionCode != XHCI_COMPLETION_SHORT_PACKET)
         {
             DPRINT1("xhci: XFER_EVT slot=%u ep=%u code=%lu remain=%lu ptr=%I64x\n",
                     SlotId, EndpointId, CompletionCode, Remaining, TrbPointer);
@@ -6324,18 +6279,6 @@ XHCI_HandleTransferEvent(
 
     Transfer = Endpoint->ActiveTransfer;
     Ring = XHCI_SelectStreamRing(Endpoint, Transfer->StreamId);
-
-    /* Diagnostic: log bulk transfer event matching details */
-    if (EndpointId >= 3 && CompletionCode != 1)
-    {
-        DPRINT1("xhci: BULK_TRACE slot=%u ep=%u code=%lu ptr=%I64x exp=%I64x first=%I64x reqLen=%lu isCtrl=%u\n",
-                SlotId, EndpointId, CompletionCode,
-                TrbPointer,
-                (ULONGLONG)Transfer->CompletionTrbPointer,
-                (ULONGLONG)Transfer->TdFirstTrbPointer,
-                Transfer->RequestedLength,
-                Transfer->IsControl);
-    }
 
     {
         PUSBPORT_TRANSFER_PARAMETERS Params = Transfer->TransferParameters;
@@ -13280,10 +13223,6 @@ XHCI_SetEndpointStatus(PVOID MiniPortExtension,
      * AbortTransfer avoids this by queueing work at DISPATCH_LEVEL only
      * when there is no active transfer, so no new TRBs can appear.
      */
-    DPRINT1("usbxhci: SetEndpointStatus synchronous reset for slot %u ep %u (IRQL=%lu)\n",
-            Endpoint->SlotId,
-            Endpoint->EndpointId,
-            (ULONG)KeGetCurrentIrql());
     InterlockedIncrement(&Endpoint->PendingWorkCount);
     XHCI_PerformEndpointResetSequence(Extension, Endpoint, TRUE);
     InterlockedDecrement(&Endpoint->PendingWorkCount);
