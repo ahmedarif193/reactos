@@ -148,43 +148,6 @@ KiArm64CopyToCurrentUserBuffer(
     return STATUS_SUCCESS;
 }
 
-static
-VOID
-KiArm64PrefaultUserApcPage(
-    _In_z_ PCSTR Tag,
-    _In_opt_ PVOID UserVa,
-    _In_ BOOLEAN SweepIcache)
-{
-    UNREFERENCED_PARAMETER(Tag);
-
-    if (UserVa == NULL)
-    {
-        return;
-    }
-
-    if ((ULONG_PTR)UserVa >= (ULONG_PTR)MmSystemRangeStart)
-    {
-        return;
-    }
-
-    /*
-     * Resolve the first-user pages through the MM fault path directly instead of
-     * touching the EL0 alias from EL1. Earlier ARM64 bring-up bugs showed that
-     * speculative/cache-visible EL1 accesses to fresh user aliases can surface
-     * later as deferred SErrors on the first ERET.
-     */
-    (VOID)MmAccessFaultEx(FALSE, PAGE_ALIGN(UserVa), UserMode, NULL, FALSE);
-
-    /*
-     * The executable system-DLL mapping path already publishes instruction
-     * pages through a stable PFN alias. Avoid additional cache maintenance
-     * through the EL0 VA here: the remaining first-user SError is delivered
-     * exactly at the prefaulted dispatcher ELR, and FAR_EL1 is unreliable for
-     * async aborts.
-     */
-    UNREFERENCED_PARAMETER(SweepIcache);
-}
-
 VOID
 KiSystemService(
     _Inout_ PKTHREAD Thread,
@@ -561,31 +524,6 @@ KiInitializeUserApc(
     TrapFrame->Sp = Stack;
     TrapFrame->Pc = (ULONG_PTR)UserApcDispatcher;  /* Use converted user address */
     TrapFrame->Lr = (ULONG_PTR)UserApcDispatcher;  /* Use converted user address */
-
-    /*
-     * ARM64 bring-up: make the first user APC deterministic by faulting in the
-     * initial ntdll/TEB pages before ERET. The existing stack ProbeForWrite
-     * covers the APC frame itself, but the first user instruction stream and
-     * TEB reads would otherwise rely on the very first EL0 faults working
-     * perfectly during process startup.
-     */
-    KiArm64PrefaultUserApcPage("dispatcher", UserApcDispatcher, TRUE);
-    if (UserNormalRoutine != UserApcDispatcher)
-    {
-        KiArm64PrefaultUserApcPage("normal", UserNormalRoutine, TRUE);
-    }
-    if (UserSystemArgument1 != NULL)
-    {
-        KiArm64PrefaultUserApcPage("sys1", UserSystemArgument1, FALSE);
-    }
-    if (Thread->Teb != NULL)
-    {
-        KiArm64PrefaultUserApcPage("teb", Thread->Teb, FALSE);
-        if (ROUND_TO_PAGES(sizeof(TEB)) > PAGE_SIZE)
-        {
-            KiArm64PrefaultUserApcPage("teb+1", (PVOID)((ULONG_PTR)Thread->Teb + PAGE_SIZE), FALSE);
-        }
-    }
 
 }
 

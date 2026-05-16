@@ -12746,29 +12746,19 @@ XHCI_ReopenEndpoint(PVOID MiniPortExtension,
     if (!Extension || !Endpoint || !EndpointProperties)
         return MP_STATUS_ERROR;
 
-    /*
-     * Stream resource allocation uses MmAllocateContiguousMemorySpecifyCache
-     * which MUST be called at PASSIVE_LEVEL. Reject the call if we're at
-     * elevated IRQL - the caller must defer to a work item.
-     */
-    if (KeGetCurrentIrql() > PASSIVE_LEVEL)
-    {
-        DPRINT1("usbxhci: ReopenEndpoint called at IRQL %u, must be PASSIVE_LEVEL\n",
-                (ULONG)KeGetCurrentIrql());
-        return MP_STATUS_FAILURE;
-    }
-
     if (!Endpoint->Slot)
         return MP_STATUS_ERROR;
-
-    if (EndpointProperties->TransferType != USBPORT_TRANSFER_TYPE_BULK)
-        return MP_STATUS_NOT_SUPPORTED;
 
     MaxStreamId = (USHORT)(EndpointProperties->Reserved6 & 0xFFFF);
     if (MaxStreamId == 0)
     {
         if (Endpoint->StreamsEnabled)
+        {
+            if (KeGetCurrentIrql() > PASSIVE_LEVEL)
+                return MP_STATUS_FAILURE;
+
             XHCI_FreeStreamResources(Endpoint);
+        }
 
         Endpoint->ReservedStreamId = 0;
         Endpoint->MaxStreamId = 0;
@@ -12779,6 +12769,18 @@ XHCI_ReopenEndpoint(PVOID MiniPortExtension,
                                           Endpoint,
                                           Endpoint->EndpointId);
     }
+
+    if (EndpointProperties->TransferType != USBPORT_TRANSFER_TYPE_BULK)
+        return MP_STATUS_NOT_SUPPORTED;
+
+    /*
+     * Stream resource allocation uses MmAllocateContiguousMemorySpecifyCache
+     * which MUST be called at PASSIVE_LEVEL. Ordinary endpoint reopen above is
+     * allowed at DISPATCH_LEVEL because USBPORT_RestoreDevice calls it while
+     * holding the miniport spin lock.
+     */
+    if (KeGetCurrentIrql() > PASSIVE_LEVEL)
+        return MP_STATUS_FAILURE;
 
     if (EndpointProperties->DeviceSpeed != UsbSuperSpeed)
         return MP_STATUS_NOT_SUPPORTED;

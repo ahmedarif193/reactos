@@ -843,7 +843,12 @@ MouHid_StartDevice(
 
     /* init input report */
     DeviceExtension->ReportLength = Capabilities.InputReportByteLength;
-    ASSERT(DeviceExtension->ReportLength);
+    if (!DeviceExtension->ReportLength)
+    {
+        ExFreePoolWithTag(PreparsedData, MOUHID_TAG);
+        return STATUS_UNSUCCESSFUL;
+    }
+
     DeviceExtension->Report = ExAllocatePoolWithTag(NonPagedPool, DeviceExtension->ReportLength, MOUHID_TAG);
     ASSERT(DeviceExtension->Report);
     RtlZeroMemory(DeviceExtension->Report, DeviceExtension->ReportLength);
