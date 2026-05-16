@@ -144,6 +144,7 @@ KiInitializeContextThread(_Inout_ PKTHREAD Thread,
     }
 
     SwitchFrame->ReturnAddress = (ULONG64)KiThreadStartup;
+    SwitchFrame->Lr = (ULONG64)KiThreadStartup;
     SwitchFrame->ApcBypass = APC_LEVEL;
 }
 
@@ -453,6 +454,10 @@ KiSwapContextResume(
 
 #if (NTDDI_VERSION < NTDDI_WIN7)
     OldThread->SwapBusy = FALSE;
+#ifdef _M_ARM64
+    __asm__ __volatile__("dmb ishst" ::: "memory");
+    __asm__ __volatile__("sev" ::: "memory");
+#endif
 #endif
 
     /*

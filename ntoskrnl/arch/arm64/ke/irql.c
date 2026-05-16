@@ -501,7 +501,7 @@ KfRaiseIrql(
      * IRQL raise. This prevents critical section violations where stores to
      * shared data might reorder past the IRQL raise on ARM64's relaxed memory model.
      */
-    __asm__ __volatile__("dsb sy" ::: "memory");
+    __asm__ __volatile__("dmb ish" ::: "memory");
 
     KiApplyIrqMaskForIrqlTransition(OldIrql, NewIrql);
     KiSetCurrentIrql(NewIrql);
@@ -580,7 +580,7 @@ KfLowerIrql(
      * DMB (lighter than DSB) is sufficient here - we just need the IRQL write
      * to be visible before GIC PMR update allows interrupts to fire.
      */
-    __asm__ __volatile__("dmb sy" ::: "memory");
+    __asm__ __volatile__("dmb ish" ::: "memory");
 
     /* Now unmask interrupts - any pending hardware interrupts may fire here */
     KiApplyIrqMaskForIrqlTransition(OldIrql, NewIrql);

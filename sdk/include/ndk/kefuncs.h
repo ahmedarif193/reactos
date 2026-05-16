@@ -434,11 +434,17 @@ KiWriteSystemTime(
     SystemTime->High2Time = NewTime.HighPart;
 
 #ifdef _WIN64
+#if defined(_M_ARM64)
+    __dmb(_ARM64_BARRIER_ISHST);
+#endif
     /* Do a single 'atomic' write. This isn't actually guaranteed to be atomic,
        if the address isn't 64 bit aligned. But as long as the entire 64 bits
        are within a single cache line, we should be good (on x64 at least,
        when it comes to ARM64, all bets are off) This is also what Windows does. */
     *(LONG64*)SystemTime = NewTime.QuadPart;
+#if defined(_M_ARM64)
+    __dmb(_ARM64_BARRIER_ISHST);
+#endif
 #else
     /* Update low part, then high part to allow readers detect partial updates. */
     SystemTime->LowPart = NewTime.LowPart;

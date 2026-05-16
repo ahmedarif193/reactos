@@ -399,13 +399,15 @@ KeFlushEntireTb(_In_ BOOLEAN Invalid,
     KIRQL OldIrql;
 
     UNREFERENCED_PARAMETER(Invalid);
-    UNREFERENCED_PARAMETER(AllProcessors);
 
     /* Serialize with other TLB modifications. */
     OldIrql = KeRaiseIrqlToSynchLevel();
 
     __asm__ __volatile__("dsb ish" ::: "memory");
-    __asm__ __volatile__("tlbi vmalle1" ::: "memory");
+    if (AllProcessors)
+        __asm__ __volatile__("tlbi vmalle1is" ::: "memory");
+    else
+        __asm__ __volatile__("tlbi vmalle1" ::: "memory");
     __asm__ __volatile__("dsb ish" ::: "memory");
     __asm__ __volatile__("isb" ::: "memory");
 
