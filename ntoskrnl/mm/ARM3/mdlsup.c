@@ -24,6 +24,19 @@ SIZE_T MmSystemLockPagesCount;
 ULONG MiCacheOverride[MiNotMapped + 1];
 
 /* INTERNAL FUNCTIONS *********************************************************/
+
+#ifdef _M_ARM64
+
+NTSTATUS
+MiArm64ProbeAndLockUserPages(
+    _Inout_ PMDL Mdl,
+    _In_ PVOID StartAddress,
+    _In_ ULONG TotalPages,
+    _In_ LOCK_OPERATION Operation,
+    _In_ PEPROCESS CurrentProcess);
+
+#endif
+
 static
 PVOID
 NTAPI
@@ -1007,6 +1020,23 @@ MmProbeAndLockPages(IN PMDL Mdl,
 
     /* Large pages not supported */
     ASSERT(!MI_IS_PHYSICAL_ADDRESS(Address));
+
+#ifdef _M_ARM64
+    if (CurrentProcess != NULL)
+    {
+        Status = MiArm64ProbeAndLockUserPages(Mdl,
+                                              StartAddress,
+                                              TotalPages,
+                                              Operation,
+                                              CurrentProcess);
+        if (!NT_SUCCESS(Status))
+        {
+            ExRaiseStatus(Status);
+        }
+
+        return;
+    }
+#endif
 
     //
     // Now probe them
