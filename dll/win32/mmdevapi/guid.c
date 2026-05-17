@@ -11,6 +11,10 @@
 #include <wingdi.h>
 #include <objbase.h>
 #include <initguid.h>
+#ifdef __REACTOS__
+#include <audioclient.h>
+#include <devicetopology.h>
+#endif
 #include <audiopolicy.h>
 #include <endpointvolume.h>
 #include <mmdeviceapi.h>

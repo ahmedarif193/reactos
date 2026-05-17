@@ -343,36 +343,6 @@ GetRawInputDeviceList(
 /*
  * @unimplemented
  */
-UINT
-WINAPI
-DECLSPEC_HOTPATCH
-GetRegisteredRawInputDevices(
-    PRAWINPUTDEVICE pRawInputDevices,
-    PUINT puiNumDevices,
-    UINT cbSize)
-{
-  UNIMPLEMENTED;
-  return 0;
-}
-
-/*
- * @unimplemented
- */
-BOOL
-WINAPI
-DECLSPEC_HOTPATCH
-RegisterRawInputDevices(
-    PCRAWINPUTDEVICE pRawInputDevices,
-    UINT uiNumDevices,
-    UINT cbSize)
-{
-  UNIMPLEMENTED;
-  return FALSE;
-}
-
-/*
- * @unimplemented
- */
 BOOL WINAPI DisplayExitWindowsWarnings(ULONG flags)
 {
   UNIMPLEMENTED;
@@ -600,4 +570,3 @@ Win32PoolAllocationStats(DWORD dw1, DWORD dw2, DWORD dw3, DWORD dw4, DWORD dw5)
     UNIMPLEMENTED;
     return FALSE;
 }
-
