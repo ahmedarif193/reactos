@@ -60,25 +60,13 @@ add_cd_file(FILE ${CMAKE_CURRENT_SOURCE_DIR}/livecd/unattend.inf DESTINATION rea
 # LiveImage shortcuts
 add_custom_target(livecd_links)
 function(add_livecd_shortcut name path)
-    cmake_parse_arguments(_shortcut "" "WORKDIR;CMDLINE_ARGS;ICON;ICON_INDEX" "DESTINATION" ${ARGN})
+    # Only handle DESTINATION; transfer all the other parameters verbatim to add_link()
+    cmake_parse_arguments(_shortcut "" "" "DESTINATION" ${ARGN})
     if(NOT _shortcut_DESTINATION)
         message(FATAL_ERROR "You must provide at least one destination")
     endif()
 
-    if(DEFINED _shortcut_WORKDIR)
-        set(_shortcut_WORKDIR WORKDIR "${_shortcut_WORKDIR}")
-    endif()
-    if(DEFINED _shortcut_CMDLINE_ARGS)
-        set(_shortcut_CMDLINE_ARGS CMDLINE_ARGS "${_shortcut_CMDLINE_ARGS}")
-    endif()
-    if(DEFINED _shortcut_ICON)
-        set(_shortcut_ICON ICON "${_shortcut_ICON}")
-    endif()
-    if(DEFINED _shortcut_ICON_INDEX)
-        set(_shortcut_ICON_INDEX ICON_INDEX ${_shortcut_ICON_INDEX})
-    endif()
-
-    add_link(${name} ${path} ${_shortcut_WORKDIR} ${_shortcut_CMDLINE_ARGS} ${_shortcut_ICON} ${_shortcut_ICON_INDEX})
+    add_link(${name} ${path} ${_shortcut_UNPARSED_ARGUMENTS})
     # Only on CMake 3.20+: target_sources(livecd_links PRIVATE ...)
     set_property(TARGET livecd_links APPEND PROPERTY SOURCES "${CMAKE_CURRENT_BINARY_DIR}/${name}.lnk")
 
@@ -90,17 +78,27 @@ function(add_livecd_shortcut name path)
     endforeach()
 endfunction()
 
+# Win32: Use pseudo-escape hacks to work-around variables expansion by CMD.EXE
+if(CMAKE_HOST_WIN32)
+    macro(cmdenvvar var name used_in_quotes)
+        if(${used_in_quotes})
+            set(${var} "%^${name}^%") # The name itself is surrounded by '^'
+        else()
+            set(${var} "^%${name}^%") # The '%' are pseudo-escaped to '^%'
+        endif()
+    endmacro()
+else()
+    macro(cmdenvvar var name used_in_quotes)
+        set(${var} "%${name}%")
+    endmacro()
+endif()
+
+cmdenvvar(envvar_systemroot "SystemRoot" FALSE)
+cmdenvvar(envvar_homedrive  "HOMEDRIVE"  FALSE)
+cmdenvvar(envvar_homepath   "HOMEPATH"   FALSE)
+
 ## NOTE: What would be nice is to create this list using /media/inf/shortcuts.inf
 ## and taking their default english translation!
-
-set(env_percent "%")
-# Win32: Use pseudo-escapes '^%' to work-around variables expansion by CMD.EXE
-if (CMAKE_HOST_WIN32)
-    set(env_percent "^%")
-endif()
-set(envvar_systemroot   "${env_percent}SystemRoot${env_percent}")
-set(envvar_homedrive    "${env_percent}HOMEDRIVE${env_percent}")
-set(envvar_homepath     "${env_percent}HOMEPATH${env_percent}")
 
 set(dir_allusers_desktop        "Profiles/All Users/Desktop")
 set(dir_startmenu_programs      "Profiles/All Users/Start Menu/Programs")
@@ -112,6 +110,15 @@ set(dir_startmenu_comms         "${dir_startmenu_accessories}/Communications")
 set(dir_startmenu_entertainment "${dir_startmenu_accessories}/Entertainment")
 set(dir_startmenu_systemtools   "${dir_startmenu_accessories}/System Tools")
 set(dir_quicklaunch             "Profiles/Default User/Application Data/Microsoft/Internet Explorer/Quick Launch")
+
+cmdenvvar(envvar_systemdrive "SystemDrive" TRUE)
+cmdenvvar(envvar_archdir     "PROCESSOR_ARCHITECTURE:x86=I386" TRUE)
+add_livecd_shortcut("Install ReactOS"
+    "shell:system\\cmd.exe"
+    CMDLINE_ARGS "/D /E:ON /C \"start ${envvar_systemdrive}\\${envvar_archdir}\\reactos.exe\""
+    ICON "${envvar_systemroot}\\system32\\msiexec.exe"
+    MINIMIZE
+    DESTINATION "${dir_allusers_desktop}")
 
 add_livecd_shortcut("Read Me"
     "shell:windows\\readme.txt"
