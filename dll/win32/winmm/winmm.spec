@@ -1,5 +1,5 @@
 # ordinal exports
-1 stdcall @(ptr long long) PlaySoundA
+2 stdcall @(ptr long long) PlaySoundA
 3 stub WINMM_3
 4 stub WINMM_4
 
@@ -26,11 +26,6 @@
 @ stdcall auxGetVolume(long ptr)
 @ stdcall auxOutMessage(long long long long)
 @ stdcall auxSetVolume(long long)
-@ stdcall -stub gfxBatchChange(ptr long ptr long ptr long)
-@ stdcall -stub gfxCreateGfxFactoriesList(long ptr)
-@ stdcall -stub gfxDestroyDeviceInterfaceList(ptr)
-@ stdcall -stub gfxEnumerateGfxs(ptr ptr long)
-@ stdcall -stub gfxOpenGfx(long long)
 @ stdcall joyConfigChanged(long)
 @ stdcall joyGetDevCapsA(long ptr long)
 @ stdcall joyGetDevCapsW(long ptr long)
@@ -93,7 +88,7 @@
 @ stdcall midiOutOpen(ptr long long long long)
 @ stdcall midiOutPrepareHeader(long ptr long)
 @ stdcall midiOutReset(long)
-@ stdcall midiOutSetVolume(long ptr)
+@ stdcall midiOutSetVolume(long long)
 @ stdcall midiOutShortMsg(long long)
 @ stdcall midiOutUnprepareHeader(long ptr long)
 @ stdcall midiStreamClose(long)
