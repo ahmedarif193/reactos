@@ -640,6 +640,41 @@ IntVkToChar(WORD wVk, PKBDTABLES pKbdTbl)
 }
 
 /*
+ * IntMapVkToChar
+ *
+ * Implements the MAPVK_VK_TO_CHAR API mapping. This is intentionally separate
+ * from IntVkToChar because Windows preserves virtual-key identity for A-Z here,
+ * while other translation paths use the layout table's unshifted character.
+ */
+static
+UINT FASTCALL
+IntMapVkToChar(WORD wVk, PKBDTABLES pKbdTbl)
+{
+    WCHAR wch;
+    BOOL bDead, bLigature;
+
+    ASSERT(pKbdTbl);
+
+    if (wVk >= 'A' && wVk <= 'Z')
+        return wVk;
+
+    if (!IntTranslateChar(wVk,
+                          NULL,
+                          &bDead,
+                          &bLigature,
+                          &wch,
+                          pKbdTbl))
+    {
+        return 0;
+    }
+
+    if (bLigature)
+        return 0;
+
+    return bDead ? ((UINT)wch | 0x80000000) : (UINT)wch;
+}
+
+/*
  * NtUserGetAsyncKeyState
  *
  * Gets key state from global bitmap
@@ -1632,7 +1667,7 @@ IntMapVirtualKeyEx(UINT uCode, UINT Type, PKBDTABLES pKbdTbl)
             break;
 
         case MAPVK_VK_TO_CHAR:
-            uRet = (UINT)IntVkToChar(uCode, pKbdTbl);
+            uRet = IntMapVkToChar(uCode, pKbdTbl);
         break;
 
         case MAPVK_VSC_TO_VK_EX:
