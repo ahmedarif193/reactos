@@ -218,7 +218,11 @@ static void WAVE_mciNotify(DWORD_PTR hWndCallBack, WINE_MCIWAVE* wmw, UINT wStat
     MCIDEVICEID wDevID = wmw->wNotifyDeviceID;
     HANDLE old = InterlockedExchangePointer(&wmw->hCallback, NULL);
     if (old) mciDriverNotify(old, wDevID, MCI_NOTIFY_SUPERSEDED);
+#ifdef __REACTOS__
+    mciDriverNotify((HWND)hWndCallBack, wDevID, wStatus);
+#else
     mciDriverNotify(HWND_32(LOWORD(hWndCallBack)), wDevID, wStatus);
+#endif
 }
 
 /**************************************************************************
@@ -826,7 +830,11 @@ static DWORD WAVE_mciPlay(MCIDEVICEID wDevID, DWORD_PTR dwFlags, DWORD_PTR pmt, 
     TRACE("Playing from byte=%u to byte=%u\n", wmw->dwPosition, end);
 
     oldcb = InterlockedExchangePointer(&wmw->hCallback,
+#ifdef __REACTOS__
+	(dwFlags & MCI_NOTIFY) ? (HWND)lpParms->dwCallback : NULL);
+#else
 	(dwFlags & MCI_NOTIFY) ? HWND_32(LOWORD(lpParms->dwCallback)) : NULL);
+#endif
     if (oldcb) mciDriverNotify(oldcb, wDevID, MCI_NOTIFY_ABORTED);
     oldcb = NULL;
 
@@ -1062,7 +1070,11 @@ static DWORD WAVE_mciRecord(MCIDEVICEID wDevID, DWORD_PTR dwFlags, DWORD_PTR pmt
     TRACE("Recording from byte=%u to byte=%u\n", wmw->dwPosition, end);
 
     oldcb = InterlockedExchangePointer(&wmw->hCallback,
+#ifdef __REACTOS__
+	(dwFlags & MCI_NOTIFY) ? (HWND)lpParms->dwCallback : NULL);
+#else
 	(dwFlags & MCI_NOTIFY) ? HWND_32(LOWORD(lpParms->dwCallback)) : NULL);
+#endif
     if (oldcb) mciDriverNotify(oldcb, wDevID, MCI_NOTIFY_ABORTED);
     oldcb = NULL;
 
@@ -1084,7 +1096,11 @@ static DWORD WAVE_mciRecord(MCIDEVICEID wDevID, DWORD_PTR dwFlags, DWORD_PTR pmt
 
     if (dwRet != MMSYSERR_NOERROR) {
 	TRACE("Can't open low level audio device %d\n", dwRet);
+#ifdef __REACTOS__
+	dwRet = waveInGetNumDevs() ? MCIERR_DEVICE_OPEN : MCIERR_WAVE_INPUTSUNSUITABLE;
+#else
 	dwRet = MCIERR_DEVICE_OPEN;
+#endif
 	wmw->hWave = 0;
 	goto cleanUp;
     }
@@ -1390,6 +1406,10 @@ static DWORD WAVE_mciSet(MCIDEVICEID wDevID, DWORD dwFlags, LPMCI_WAVE_SET_PARMS
     }
     if (dwFlags & MCI_WAVE_SET_BITSPERSAMPLE) {
 	if (wmw->lpWaveFormat != &wmw->wfxRef) return MCIERR_NONAPPLICABLE_FUNCTION;
+#ifdef __REACTOS__
+	if (lpParms->wBitsPerSample != 8 && lpParms->wBitsPerSample != 16)
+	    return MCIERR_OUTOFRANGE;
+#endif
 	wmw->wfxRef.wBitsPerSample = lpParms->wBitsPerSample;
 	TRACE("MCI_WAVE_SET_BITSPERSAMPLE = %d\n", wmw->wfxRef.wBitsPerSample);
     }
@@ -1477,6 +1497,10 @@ static DWORD WAVE_mciStatus(MCIDEVICEID wDevID, DWORD dwFlags, LPMCI_STATUS_PARM
     if (lpParms == NULL)	return MCIERR_NULL_PARAMETER_BLOCK;
     if (wmw == NULL)		return MCIERR_INVALID_DEVICE_ID;
     if (!(dwFlags & MCI_STATUS_ITEM))	return MCIERR_MISSING_PARAMETER;
+#ifdef __REACTOS__
+    if ((dwFlags & MCI_TRACK) && lpParms->dwTrack != 1)
+	return MCIERR_OUTOFRANGE;
+#endif
 
     if (dwFlags & MCI_STATUS_ITEM) {
 	switch (lpParms->dwItem) {
@@ -1487,7 +1511,11 @@ static DWORD WAVE_mciStatus(MCIDEVICEID wDevID, DWORD dwFlags, LPMCI_STATUS_PARM
 	case MCI_STATUS_LENGTH:
 	    if (!wmw->hFile) {
 		lpParms->dwReturn = 0;
+#ifdef __REACTOS__
+		break;
+#else
 		return MCIERR_UNSUPPORTED_FUNCTION;
+#endif
 	    }
 	    /* only one track in file is currently handled, so don't take care of MCI_TRACK flag */
 	    lpParms->dwReturn = WAVE_ConvertByteToTimeFormat(wmw, wmw->ckWaveData.cksize);
@@ -1511,7 +1539,11 @@ static DWORD WAVE_mciStatus(MCIDEVICEID wDevID, DWORD dwFlags, LPMCI_STATUS_PARM
 	case MCI_STATUS_POSITION:
 	    if (!wmw->hFile) {
 		lpParms->dwReturn = 0;
+#ifdef __REACTOS__
+		break;
+#else
 		return MCIERR_UNSUPPORTED_FUNCTION;
+#endif
 	    }
 	    /* only one track in file is currently handled, so don't take care of MCI_TRACK flag */
 	    lpParms->dwReturn = WAVE_ConvertByteToTimeFormat(wmw,
@@ -1689,7 +1721,17 @@ static DWORD WAVE_mciInfo(MCIDEVICEID wDevID, DWORD dwFlags, LPMCI_INFO_PARMSW l
 
 	switch (dwFlags & ~(MCI_WAIT|MCI_NOTIFY)) {
 	case MCI_INFO_PRODUCT: str = wszAudio; break;
-	case MCI_INFO_FILE:    str = wmw->lpFileName; break;
+	case MCI_INFO_FILE:
+#ifdef __REACTOS__
+	    if (!wmw->lpFileName || !wmw->lpFileName[0])
+		ret = MCIERR_NONAPPLICABLE_FUNCTION;
+	    else
+		str = wmw->lpFileName;
+	    break;
+#else
+	    str = wmw->lpFileName;
+	    break;
+#endif
 	case MCI_WAVE_INPUT:   str = wszWaveIn; break;
 	case MCI_WAVE_OUTPUT:  str = wszWaveOut; break;
 	default:
