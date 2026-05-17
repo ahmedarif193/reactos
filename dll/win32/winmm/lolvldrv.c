@@ -4,7 +4,6 @@
  * MMSYSTEM low level drivers handling functions
  *
  * Copyright 1999 Eric Pouech
- * Modified for use with ReactOS by Andrew Greenwood, 2007
  *
  * This library is free software; you can redistribute it and/or
  * modify it under the terms of the GNU Lesser General Public
@@ -21,7 +20,24 @@
  * Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA 02110-1301, USA
  */
 
+#define COBJMACROS
+
+#include <string.h>
+#include <stdarg.h>
+#include <stdio.h>
+#include <assert.h>
+#include "windef.h"
+#include "winbase.h"
+#include "winreg.h"
+#include "winnls.h"
 #include "winemm.h"
+#include "wine/debug.h"
+#include "wine/exception.h"
+
+#include "wingdi.h"
+#include "ole2.h"
+#include "devpkey.h"
+#include "mmdeviceapi.h"
 
 WINE_DEFAULT_DEBUG_CHANNEL(winmm);
 
@@ -29,31 +45,34 @@ WINE_DEFAULT_DEBUG_CHANNEL(winmm);
 typedef struct tagWINE_LLTYPE {
     /* those attributes depend on the specification of the type */
     LPCSTR		typestr;	/* name (for debugging) */
-    BOOL		bSupportMapper;	/* if type is allowed to support mapper */
     /* those attributes reflect the loaded/current situation for the type */
     UINT		wMaxId;		/* number of loaded devices (sum across all loaded drivers) */
     LPWINE_MLD		lpMlds;		/* "static" mlds to access the part though device IDs */
     int			nMapper;	/* index to mapper */
 } WINE_LLTYPE;
 
-static int		MMDrvsHi /* = 0 */;
+static WINE_LLTYPE llTypes[MMDRV_MAX] = {
+    { "Aux", 0, 0, -1 },
+    { "Mixer", 0, 0, -1 },
+    { "MidiIn", 0, 0, -1 },
+    { "MidiOut", 0, 0, -1 },
+    { "WaveIn", 0, 0, -1 },
+    { "WaveOut", 0, 0, -1 }
+};
+
+static BOOL drivers_loaded;
+static int MMDrvsHi;
 static WINE_MM_DRIVER	MMDrvs[8];
 static LPWINE_MLD	MM_MLDrvs[40];
-#define MAX_MM_MLDRVS	(sizeof(MM_MLDrvs) / sizeof(MM_MLDrvs[0]))
 
-#define A(_x,_y) {#_y, _x, 0, NULL, -1}
-/* Note: the indices of this array must match the definitions
- *	 of the MMDRV_???? manifest constants
- */
-static WINE_LLTYPE	llTypes[MMDRV_MAX] = {
-    A(TRUE,  Aux),
-    A(FALSE, Mixer),
-    A(TRUE,  MidiIn),
-    A(TRUE,  MidiOut),
-    A(TRUE,  WaveIn),
-    A(TRUE,  WaveOut),
-};
-#undef A
+static void MMDRV_Init(void);
+
+static void MMDRV_InitSingleType(UINT type) {
+    if (!drivers_loaded) {
+        drivers_loaded = TRUE;
+        MMDRV_Init();
+    }
+}
 
 /**************************************************************************
  * 			MMDRV_GetNum				[internal]
@@ -62,6 +81,7 @@ UINT	MMDRV_GetNum(UINT type)
 {
     TRACE("(%04x)\n", type);
     assert(type < MMDRV_MAX);
+    MMDRV_InitSingleType(type);
     return llTypes[type].wMaxId;
 }
 
@@ -75,41 +95,30 @@ DWORD  MMDRV_Message(LPWINE_MLD mld, UINT wMsg, DWORD_PTR dwParam1,
     DWORD			ret;
     WINE_MM_DRIVER_PART*	part;
     WINE_LLTYPE*		llType = &llTypes[mld->type];
-    int				devID;
 
-    TRACE("(%s %u %u 0x%08lx 0x%08lx 0x%08lx)\n",
+    TRACE("(%s %d %u 0x%08Ix 0x%08Ix 0x%08Ix)\n",
 	  llTypes[mld->type].typestr, mld->uDeviceID, wMsg,
 	  mld->dwDriverInstance, dwParam1, dwParam2);
 
-    if (mld->uDeviceID == (UINT16)-1) {
-	if (!llType->bSupportMapper) {
-	    WARN("uDev=-1 requested on non-mappable ll type %s\n",
+    if ((UINT16)mld->uDeviceID == (UINT16)-1) {
+        if (llType->nMapper == -1) {
+	    WARN("uDev=-1 requested on non-mapped ll type %s\n",
 		 llTypes[mld->type].typestr);
 	    return MMSYSERR_BADDEVICEID;
-	}
-	devID = -1;
+        }
     } else {
 	if (mld->uDeviceID >= llType->wMaxId) {
 	    WARN("uDev(%u) requested >= max (%d)\n", mld->uDeviceID, llType->wMaxId);
 	    return MMSYSERR_BADDEVICEID;
 	}
-	devID = mld->uDeviceID;
     }
 
     lpDrv = &MMDrvs[mld->mmdIndex];
     part = &lpDrv->parts[mld->type];
 
-#if 0
-    /* some sanity checks */
-    if (!(part->nIDMin <= devID))
-	ERR("!(part->nIDMin(%d) <= devID(%d))\n", part->nIDMin, devID);
-    if (!(devID < part->nIDMax))
-	ERR("!(devID(%d) < part->nIDMax(%d))\n", devID, part->nIDMax);
-#endif
-
     assert(part->fnMessage32);
 
-    TRACE("Calling message(dev=%u msg=%u usr=0x%08lx p1=0x%08lx p2=0x%08lx)\n",
+    TRACE("Calling message(dev=%d msg=%u usr=0x%08Ix p1=0x%08Ix p2=0x%08Ix)\n",
           mld->uDeviceID, wMsg, mld->dwDriverInstance, dwParam1, dwParam2);
     ret = part->fnMessage32(mld->uDeviceID, wMsg, mld->dwDriverInstance, dwParam1, dwParam2);
     TRACE("=> %s\n", WINMM_ErrorToString(ret));
@@ -128,16 +137,16 @@ LPWINE_MLD	MMDRV_Alloc(UINT size, UINT type, LPHANDLE hndl, DWORD* dwFlags,
     TRACE("(%d, %04x, %p, %p, %p, %p)\n",
           size, type, hndl, dwFlags, dwCallback, dwInstance);
 
-    mld = HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY, size);
+    mld = calloc(1, size);
     if (!mld)	return NULL;
 
     /* find an empty slot in MM_MLDrvs table */
-    for (i = 0; i < MAX_MM_MLDRVS; i++) if (!MM_MLDrvs[i]) break;
+    for (i = 0; i < ARRAY_SIZE(MM_MLDrvs); i++) if (!MM_MLDrvs[i]) break;
 
-    if (i == MAX_MM_MLDRVS) {
+    if (i == ARRAY_SIZE(MM_MLDrvs)) {
 	/* the MM_MLDrvs table could be made growable in the future if needed */
 	ERR("Too many open drivers\n");
-        HeapFree(GetProcessHeap(), 0, mld);
+        free(mld);
 	return NULL;
     }
     MM_MLDrvs[i] = mld;
@@ -168,9 +177,9 @@ void	MMDRV_Free(HANDLE hndl, LPWINE_MLD mld)
 
     if ((UINT_PTR)hndl & 0x8000) {
 	UINT_PTR idx = (UINT_PTR)hndl & ~0x8000;
-	if (idx < sizeof(MM_MLDrvs) / sizeof(MM_MLDrvs[0])) {
+	if (idx < ARRAY_SIZE(MM_MLDrvs)) {
 	    MM_MLDrvs[idx] = NULL;
-	    HeapFree(GetProcessHeap(), 0, mld);
+	    free(mld);
 	    return;
 	}
     }
@@ -185,31 +194,19 @@ DWORD MMDRV_Open(LPWINE_MLD mld, UINT wMsg, DWORD_PTR dwParam1, DWORD dwFlags)
     DWORD		dwRet = MMSYSERR_BADDEVICEID;
     DWORD_PTR		dwInstance;
     WINE_LLTYPE*	llType = &llTypes[mld->type];
-    TRACE("(%p, %04x, 0x%08lx, 0x%08x)\n", mld, wMsg, dwParam1, dwFlags);
+    TRACE("(%p, %04x, 0x%08Ix, 0x%08lx)\n", mld, wMsg, dwParam1, dwFlags);
 
     mld->dwDriverInstance = (DWORD_PTR)&dwInstance;
 
     if (mld->uDeviceID == (UINT)-1 || mld->uDeviceID == (UINT16)-1) {
-	TRACE("MAPPER mode requested !\n");
-	/* check if mapper is supported by type */
-	if (llType->bSupportMapper) {
-	    if (llType->nMapper == -1) {
-		/* no driver for mapper has been loaded, try a dumb implementation */
-		TRACE("No mapper loaded, doing it by hand\n");
-		for (mld->uDeviceID = 0; mld->uDeviceID < llType->wMaxId; mld->uDeviceID++) {
-		    if ((dwRet = MMDRV_Open(mld, wMsg, dwParam1, dwFlags)) == MMSYSERR_NOERROR) {
-			/* to share this function epilog */
-			dwInstance = mld->dwDriverInstance;
-			break;
-		    }
-		}
-	    } else {
-		mld->uDeviceID = (UINT16)-1;
-		mld->mmdIndex = llType->lpMlds[-1].mmdIndex;
-		TRACE("Setting mmdIndex to %u\n", mld->mmdIndex);
-		dwRet = MMDRV_Message(mld, wMsg, dwParam1, dwFlags);
-	    }
-	}
+        TRACE("MAPPER mode requested !\n");
+        if (llType->nMapper == -1) {
+            WARN("Mapper not supported for type %s\n", llTypes[mld->type].typestr);
+            return MMSYSERR_BADDEVICEID;
+        }
+        mld->mmdIndex = llType->lpMlds[-1].mmdIndex;
+        TRACE("Setting mmdIndex to %u\n", mld->mmdIndex);
+        dwRet = MMDRV_Message(mld, wMsg, dwParam1, dwFlags);
     } else {
 	if (mld->uDeviceID < llType->wMaxId) {
 	    mld->mmdIndex = llType->lpMlds[mld->uDeviceID].mmdIndex;
@@ -254,12 +251,13 @@ LPWINE_MLD	MMDRV_Get(HANDLE _hndl, UINT type, BOOL bCanBeID)
     TRACE("(%p, %04x, %c)\n", _hndl, type, bCanBeID ? 'Y' : 'N');
 
     assert(type < MMDRV_MAX);
+    MMDRV_InitSingleType(type);
 
     if (hndl >= llTypes[type].wMaxId &&
 	hndl != (UINT16)-1 && hndl != (UINT)-1) {
 	if (hndl & 0x8000) {
 	    UINT idx = hndl & ~0x8000;
-	    if (idx < sizeof(MM_MLDrvs) / sizeof(MM_MLDrvs[0])) {
+	    if (idx < ARRAY_SIZE(MM_MLDrvs)) {
                 __TRY
                 {
                     mld = MM_MLDrvs[idx];
@@ -280,24 +278,6 @@ LPWINE_MLD	MMDRV_Get(HANDLE _hndl, UINT type, BOOL bCanBeID)
 }
 
 /**************************************************************************
- * 				MMDRV_GetRelated		[internal]
- */
-LPWINE_MLD	MMDRV_GetRelated(HANDLE hndl, UINT srcType,
-				 BOOL bSrcCanBeID, UINT dstType)
-{
-    LPWINE_MLD		mld;
-    TRACE("(%p, %04x, %c, %04x)\n",
-          hndl, srcType, bSrcCanBeID ? 'Y' : 'N', dstType);
-
-    if ((mld = MMDRV_Get(hndl, srcType, bSrcCanBeID)) != NULL) {
-	WINE_MM_DRIVER_PART*	part = &MMDrvs[mld->mmdIndex].parts[dstType];
-	if (part->nIDMin < part->nIDMax)
-	    return MMDRV_GetByID(part->nIDMin, dstType);
-    }
-    return NULL;
-}
-
-/**************************************************************************
  * 				MMDRV_PhysicalFeatures		[internal]
  */
 UINT	MMDRV_PhysicalFeatures(LPWINE_MLD mld, UINT uMsg,
@@ -305,7 +285,7 @@ UINT	MMDRV_PhysicalFeatures(LPWINE_MLD mld, UINT uMsg,
 {
     WINE_MM_DRIVER*	lpDrv = &MMDrvs[mld->mmdIndex];
 
-    TRACE("(%p, %04x, %08lx, %08lx)\n", mld, uMsg, dwParam1, dwParam2);
+    TRACE("(%p, %04x, %08Ix, %08Ix)\n", mld, uMsg, dwParam1, dwParam2);
 
     /* all those function calls are undocumented */
     switch (uMsg) {
@@ -330,10 +310,6 @@ UINT	MMDRV_PhysicalFeatures(LPWINE_MLD mld, UINT uMsg,
 
     case DRVM_MAPPER_PREFERRED_GET:
 	/* FIXME: get from registry someday */
-#ifdef __REACTOS__
-        if (!dwParam1 || !dwParam2)
-            return MMSYSERR_INVALPARAM;
-#endif
         *((LPDWORD)dwParam1) = -1;      /* No preferred device */
         *((LPDWORD)dwParam2) = 0;
         break;
@@ -341,10 +317,6 @@ UINT	MMDRV_PhysicalFeatures(LPWINE_MLD mld, UINT uMsg,
     case DRV_QUERYDEVICEINTERFACE:
     case DRV_QUERYDEVICEINTERFACESIZE:
         return MMDRV_Message(mld, uMsg, dwParam1, dwParam2);
-
-    case DRV_QUERYDSOUNDIFACE: /* Wine-specific: Retrieve DirectSound interface */
-    case DRV_QUERYDSOUNDDESC: /* Wine-specific: Retrieve DirectSound driver description*/
-	return MMDRV_Message(mld, uMsg, dwParam1, dwParam2);
 
     default:
 	WARN("Unknown call %04x\n", uMsg);
@@ -362,6 +334,8 @@ static  BOOL	MMDRV_InitPerType(LPWINE_MM_DRIVER lpDrv, UINT type, UINT wMsg)
     DWORD			ret;
     UINT			count = 0;
     int				i, k;
+    WINE_MLD *mem;
+
     TRACE("(%p, %04x, %04x)\n", lpDrv, type, wMsg);
 
     part->nIDMin = part->nIDMax = 0;
@@ -386,13 +360,7 @@ static  BOOL	MMDRV_InitPerType(LPWINE_MM_DRIVER lpDrv, UINT type, UINT wMsg)
 
     /* got some drivers */
     if (lpDrv->bIsMapper) {
-	/* it seems native mappers return 0 devices :-( */
-	if (llTypes[type].nMapper != -1)
-	    ERR("Two mappers for type %s (%d, %s)\n",
-		llTypes[type].typestr, llTypes[type].nMapper, lpDrv->drvname);
-	if (count > 1)
-	    ERR("Strange: mapper with %d > 1 devices\n", count);
-	llTypes[type].nMapper = MMDrvsHi;
+        llTypes[type].nMapper = MMDrvsHi;
     } else {
 	if (count == 0)
 	    return FALSE;
@@ -404,19 +372,14 @@ static  BOOL	MMDRV_InitPerType(LPWINE_MM_DRIVER lpDrv, UINT type, UINT wMsg)
 	  part->nIDMin, part->nIDMax, llTypes[type].wMaxId,
 	  lpDrv->drvname, llTypes[type].typestr);
     /* realloc translation table */
-    if (llTypes[type].lpMlds)
-        llTypes[type].lpMlds = (LPWINE_MLD)
-	HeapReAlloc(GetProcessHeap(), 0, llTypes[type].lpMlds - 1,
-		    sizeof(WINE_MLD) * (llTypes[type].wMaxId + 1)) + 1;
-    else
-        llTypes[type].lpMlds = (LPWINE_MLD)
-	HeapAlloc(GetProcessHeap(), 0,
-		    sizeof(WINE_MLD) * (llTypes[type].wMaxId + 1)) + 1;
+    mem = llTypes[type].lpMlds ? llTypes[type].lpMlds - 1 : NULL;
+    mem = realloc(mem, sizeof(WINE_MLD) * (llTypes[type].wMaxId + 1));
+    llTypes[type].lpMlds = mem + 1;
 
     /* re-build the translation table */
-    if (llTypes[type].nMapper != -1) {
+    if (lpDrv->bIsMapper) {
 	TRACE("%s:Trans[%d] -> %s\n", llTypes[type].typestr, -1, MMDrvs[llTypes[type].nMapper].drvname);
-	llTypes[type].lpMlds[-1].uDeviceID = (UINT16)-1;
+	llTypes[type].lpMlds[-1].uDeviceID = (UINT)-1;
 	llTypes[type].lpMlds[-1].type = type;
 	llTypes[type].lpMlds[-1].mmdIndex = llTypes[type].nMapper;
 	llTypes[type].lpMlds[-1].dwDriverInstance = 0;
@@ -437,7 +400,7 @@ static  BOOL	MMDRV_InitPerType(LPWINE_MM_DRIVER lpDrv, UINT type, UINT wMsg)
 /**************************************************************************
  * 				MMDRV_Install			[internal]
  */
-BOOL	MMDRV_Install(LPCSTR drvRegName, LPCSTR drvFileName, BOOL bIsMapper)
+static	BOOL	MMDRV_Install(LPCSTR drvRegName, LPCSTR drvFileName, BOOL bIsMapper)
 {
     int			i, count = 0;
     LPWINE_MM_DRIVER	lpDrv = &MMDrvs[MMDrvsHi];
@@ -454,7 +417,7 @@ BOOL	MMDRV_Install(LPCSTR drvRegName, LPCSTR drvFileName, BOOL bIsMapper)
      * drivers !!
      * If not just increase size of MMDrvs
      */
-    assert(MMDrvsHi <= sizeof(MMDrvs)/sizeof(MMDrvs[0]));
+    assert(MMDrvsHi <= ARRAY_SIZE(MMDrvs));
 
     memset(lpDrv, 0, sizeof(*lpDrv));
 
@@ -464,12 +427,6 @@ BOOL	MMDRV_Install(LPCSTR drvRegName, LPCSTR drvFileName, BOOL bIsMapper)
     }
 
     d = DRIVER_FindFromHDrvr(lpDrv->hDriver);
-
-    if (!(d = DRIVER_FindFromHDrvr(lpDrv->hDriver))) {
-	CloseDriver(lpDrv->hDriver, 0, 0);
-	WARN("Couldn't get the WINE internal structure for driver '%s'\n", drvFileName);
-	return FALSE;
-    }
 
     /* Then look for xxxMessage functions */
 #define	AA(_h,_w,_x,_y,_z)					\
@@ -501,7 +458,7 @@ BOOL	MMDRV_Install(LPCSTR drvRegName, LPCSTR drvFileName, BOOL bIsMapper)
      * I don't have any clue for PE drvs
      */
     lpDrv->bIsMapper = bIsMapper;
-    lpDrv->drvname = strcpy(HeapAlloc(GetProcessHeap(), 0, strlen(drvRegName) + 1), drvRegName);
+    lpDrv->drvname = strdup(drvRegName);
 
     /* Finish init and get the count of the devices */
     i = 0;
@@ -514,7 +471,7 @@ BOOL	MMDRV_Install(LPCSTR drvRegName, LPCSTR drvFileName, BOOL bIsMapper)
     /* if all those func calls return FALSE, then the driver must be unloaded */
     if (!i) {
 	CloseDriver(lpDrv->hDriver, 0, 0);
-	HeapFree(GetProcessHeap(), 0, lpDrv->drvname);
+	free(lpDrv->drvname);
 	WARN("Driver initialization failed\n");
 	return FALSE;
     }
@@ -527,57 +484,78 @@ BOOL	MMDRV_Install(LPCSTR drvRegName, LPCSTR drvFileName, BOOL bIsMapper)
 /**************************************************************************
  * 				MMDRV_Init
  */
-BOOL	MMDRV_Init(void)
+static void MMDRV_Init(void)
 {
-/* Redundant code, keeping this for reference only (for now) */
-#if 0
-    HKEY	hKey;
-    char	driver_buffer[256];
-    char	mapper_buffer[256];
-    char	midi_buffer[256];
-    char*	p;
-    DWORD	type, size;
-    BOOL	ret = FALSE;
+    IMMDeviceEnumerator *devenum;
+    IMMDevice *device;
+    IPropertyStore *ps;
+    PROPVARIANT pv;
+    DWORD size;
+    char *drvA;
+    HRESULT init_hr, hr;
+
     TRACE("()\n");
 
-    strcpy(driver_buffer, WINE_DEFAULT_WINMM_DRIVER);
-    strcpy(mapper_buffer, WINE_DEFAULT_WINMM_MAPPER);
-    strcpy(midi_buffer, WINE_DEFAULT_WINMM_MIDI);
+    init_hr = CoInitialize(NULL);
 
-    /* @@ Wine registry key: HKCU\Software\Wine\Drivers */
-    if (!RegOpenKeyA(HKEY_CURRENT_USER, "Software\\Wine\\Drivers", &hKey))
-    {
-        size = sizeof(driver_buffer);
-        if (RegQueryValueExA(hKey, "Audio", 0, &type, (LPVOID)driver_buffer, &size))
-            strcpy(driver_buffer, WINE_DEFAULT_WINMM_DRIVER);
+    hr = CoCreateInstance(&CLSID_MMDeviceEnumerator, NULL,
+            CLSCTX_INPROC_SERVER, &IID_IMMDeviceEnumerator, (void**)&devenum);
+    if(FAILED(hr)){
+        ERR("CoCreateInstance failed: %08lx\n", hr);
+        goto exit;
     }
 
-    p = driver_buffer;
-    while (p)
-    {
-        char filename[sizeof(driver_buffer)+10];
-        char *next = strchr(p, ',');
-        if (next) *next++ = 0;
-        sprintf( filename, "wine%s.drv", p );
-        if ((ret = MMDRV_Install( filename, filename, FALSE ))) break;
-        p = next;
+    hr = IMMDeviceEnumerator_GetDevice(devenum, L"Wine info device", &device);
+    IMMDeviceEnumerator_Release(devenum);
+    if(FAILED(hr)){
+        ERR("GetDevice failed: %08lx\n", hr);
+        goto exit;
     }
 
-    ret |= MMDRV_Install("beepmidi.dll", "beepmidi.dll", FALSE);
+    hr = IMMDevice_OpenPropertyStore(device, STGM_READ, &ps);
+    if(FAILED(hr)){
+        ERR("OpenPropertyStore failed: %08lx\n", hr);
+        IMMDevice_Release(device);
+        goto exit;
+    }
 
-    ret |= MMDRV_Install("wavemapper", WINE_DEFAULT_WINMM_MAPPER, TRUE);
-    ret |= MMDRV_Install("midimapper", WINE_DEFAULT_WINMM_MIDI, TRUE);
-    return ret;
-#else
-    INT driver_count = 0;
+    hr = IPropertyStore_GetValue(ps,
+            (const PROPERTYKEY *)&DEVPKEY_Device_Driver, &pv);
+    IPropertyStore_Release(ps);
+    IMMDevice_Release(device);
+    if(FAILED(hr)){
+        ERR("GetValue failed: %08lx\n", hr);
+        goto exit;
+    }
 
-    driver_count += LoadRegistryMMEDrivers(NT_MME_DRIVERS_KEY);
-    driver_count += LoadRegistryMMEDrivers(NT_MME_DRIVERS32_KEY);
+    size = WideCharToMultiByte(CP_ACP, 0, pv.pwszVal, -1,
+            NULL, 0, NULL, NULL);
+    drvA = malloc(size);
+    WideCharToMultiByte(CP_ACP, 0, pv.pwszVal, -1, drvA, size, NULL, NULL);
 
-    /* Explorer doesn't like us failing */
-    return TRUE;
-//    return ( driver_count > 0 );
+#ifdef __REACTOS__
+    if (!drvA[0])
+    {
+        free(drvA);
+        PropVariantClear(&pv);
+        goto install_mappers;
+    }
 #endif
+
+    MMDRV_Install(drvA, drvA, FALSE);
+
+    free(drvA);
+    PropVariantClear(&pv);
+
+#ifdef __REACTOS__
+install_mappers:
+#endif
+    MMDRV_Install("wavemapper", "msacm32.drv", TRUE);
+    MMDRV_Install("midimapper", "midimap.dll", TRUE);
+
+exit:
+    if(SUCCEEDED(init_hr))
+        CoUninitialize();
 }
 
 /******************************************************************
@@ -608,12 +586,12 @@ static  BOOL	MMDRV_ExitPerType(LPWINE_MM_DRIVER lpDrv, UINT type)
  *
  *
  */
-void    MMDRV_Exit(void)
+void MMDRV_Exit(void)
 {
     unsigned int i;
     TRACE("()\n");
 
-    for (i = 0; i < sizeof(MM_MLDrvs) / sizeof(MM_MLDrvs[0]); i++)
+    for (i = 0; i < ARRAY_SIZE(MM_MLDrvs); i++)
     {
         if (MM_MLDrvs[i] != NULL)
         {
@@ -626,7 +604,7 @@ void    MMDRV_Exit(void)
     }
 
     /* unload driver, in reverse order of loading */
-    i = MMDrvsHi;
+    i = ARRAY_SIZE(MMDrvs);
     while (i-- > 0)
     {
         MMDRV_ExitPerType(&MMDrvs[i], MMDRV_AUX);
@@ -638,15 +616,15 @@ void    MMDRV_Exit(void)
         CloseDriver(MMDrvs[i].hDriver, 0, 0);
     }
     if (llTypes[MMDRV_AUX].lpMlds)
-        HeapFree(GetProcessHeap(), 0, llTypes[MMDRV_AUX].lpMlds - 1);
+        free(llTypes[MMDRV_AUX].lpMlds - 1);
     if (llTypes[MMDRV_MIXER].lpMlds)
-        HeapFree(GetProcessHeap(), 0, llTypes[MMDRV_MIXER].lpMlds - 1);
+        free(llTypes[MMDRV_MIXER].lpMlds - 1);
     if (llTypes[MMDRV_MIDIIN].lpMlds)
-        HeapFree(GetProcessHeap(), 0, llTypes[MMDRV_MIDIIN].lpMlds - 1);
+        free(llTypes[MMDRV_MIDIIN].lpMlds - 1);
     if (llTypes[MMDRV_MIDIOUT].lpMlds)
-        HeapFree(GetProcessHeap(), 0, llTypes[MMDRV_MIDIOUT].lpMlds - 1);
+        free(llTypes[MMDRV_MIDIOUT].lpMlds - 1);
     if (llTypes[MMDRV_WAVEIN].lpMlds)
-        HeapFree(GetProcessHeap(), 0, llTypes[MMDRV_WAVEIN].lpMlds - 1);
+        free(llTypes[MMDRV_WAVEIN].lpMlds - 1);
     if (llTypes[MMDRV_WAVEOUT].lpMlds)
-        HeapFree(GetProcessHeap(), 0, llTypes[MMDRV_WAVEOUT].lpMlds - 1);
+        free(llTypes[MMDRV_WAVEOUT].lpMlds - 1);
 }
