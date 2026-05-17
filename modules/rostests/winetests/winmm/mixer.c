@@ -36,6 +36,12 @@
 
 #include "winmm_test.h"
 
+static BOOL compare_uint(unsigned int x, unsigned int y, unsigned int max_diff)
+{
+    unsigned int diff = x > y ? x - y : y - x;
+    return diff <= max_diff;
+}
+
 static const char * line_flags(DWORD fdwLine)
 {
     static char flags[100];
@@ -196,7 +202,7 @@ static void mixer_test_controlA(HMIXEROBJ mix, MIXERCONTROLA *control)
         details.cbStruct = sizeof(MIXERCONTROLDETAILS);
         details.dwControlID = control->dwControlID;
         details.cChannels = 1;
-        U(details).cMultipleItems = 0;
+        details.cMultipleItems = 0;
         details.cbDetails = sizeof(value);
 
         /* test NULL paDetails */
@@ -216,9 +222,9 @@ static void mixer_test_controlA(HMIXEROBJ mix, MIXERCONTROLA *control)
             MIXERCONTROLDETAILS new_details;
             MIXERCONTROLDETAILS_UNSIGNED new_value;
 
-            trace("            Value=%d\n",value.dwValue);
+            trace("            Value=%ld\n",value.dwValue);
 
-            if (value.dwValue + control->Metrics.cSteps < S1(control->Bounds).dwMaximum)
+            if (value.dwValue + control->Metrics.cSteps < control->Bounds.dwMaximum)
                 new_value.dwValue = value.dwValue + control->Metrics.cSteps;
             else
                 new_value.dwValue = value.dwValue - control->Metrics.cSteps;
@@ -226,7 +232,7 @@ static void mixer_test_controlA(HMIXEROBJ mix, MIXERCONTROLA *control)
             new_details.cbStruct = sizeof(MIXERCONTROLDETAILS);
             new_details.dwControlID = control->dwControlID;
             new_details.cChannels = 1;
-            U(new_details).cMultipleItems = 0;
+            new_details.cMultipleItems = 0;
             new_details.paDetails = &new_value;
             new_details.cbDetails = sizeof(new_value);
 
@@ -242,7 +248,7 @@ static void mixer_test_controlA(HMIXEROBJ mix, MIXERCONTROLA *control)
                 ret_details.cbStruct = sizeof(MIXERCONTROLDETAILS);
                 ret_details.dwControlID = control->dwControlID;
                 ret_details.cChannels = 1;
-                U(ret_details).cMultipleItems = 0;
+                ret_details.cMultipleItems = 0;
                 ret_details.paDetails = &ret_value;
                 ret_details.cbDetails = sizeof(ret_value);
 
@@ -253,15 +259,15 @@ static void mixer_test_controlA(HMIXEROBJ mix, MIXERCONTROLA *control)
                    mmsys_error(rc));
                 if (rc==MMSYSERR_NOERROR) {
                     /* result may not match exactly because of rounding */
-                    ok(abs(ret_value.dwValue-new_value.dwValue)<=1,
-                       "Couldn't change value from %d to %d, returned %d\n",
+                    ok(compare_uint(ret_value.dwValue, new_value.dwValue, 1),
+                       "Couldn't change value from %ld to %ld, returned %ld\n",
                        value.dwValue,new_value.dwValue,ret_value.dwValue);
 
-                    if (abs(ret_value.dwValue-new_value.dwValue)<=1) {
+                    if (compare_uint(ret_value.dwValue, new_value.dwValue, 1)) {
                         details.cbStruct = sizeof(MIXERCONTROLDETAILS);
                         details.dwControlID = control->dwControlID;
                         details.cChannels = 1;
-                        U(details).cMultipleItems = 0;
+                        details.cMultipleItems = 0;
                         details.paDetails = &value;
                         details.cbDetails = sizeof(value);
 
@@ -283,7 +289,7 @@ static void mixer_test_controlA(HMIXEROBJ mix, MIXERCONTROLA *control)
         details.cbStruct = sizeof(MIXERCONTROLDETAILS);
         details.dwControlID = control->dwControlID;
         details.cChannels = 1;
-        U(details).cMultipleItems = 0;
+        details.cMultipleItems = 0;
         details.paDetails = &value;
         details.cbDetails = sizeof(value);
 
@@ -295,7 +301,7 @@ static void mixer_test_controlA(HMIXEROBJ mix, MIXERCONTROLA *control)
             MIXERCONTROLDETAILS new_details;
             MIXERCONTROLDETAILS_BOOLEAN new_value;
 
-            trace("            Value=%d\n",value.fValue);
+            trace("            Value=%ld\n",value.fValue);
 
             if (value.fValue == FALSE)
                 new_value.fValue = TRUE;
@@ -305,7 +311,7 @@ static void mixer_test_controlA(HMIXEROBJ mix, MIXERCONTROLA *control)
             new_details.cbStruct = sizeof(MIXERCONTROLDETAILS);
             new_details.dwControlID = control->dwControlID;
             new_details.cChannels = 1;
-            U(new_details).cMultipleItems = 0;
+            new_details.cMultipleItems = 0;
             new_details.paDetails = &new_value;
             new_details.cbDetails = sizeof(new_value);
 
@@ -321,7 +327,7 @@ static void mixer_test_controlA(HMIXEROBJ mix, MIXERCONTROLA *control)
                 ret_details.cbStruct = sizeof(MIXERCONTROLDETAILS);
                 ret_details.dwControlID = control->dwControlID;
                 ret_details.cChannels = 1;
-                U(ret_details).cMultipleItems = 0;
+                ret_details.cMultipleItems = 0;
                 ret_details.paDetails = &ret_value;
                 ret_details.cbDetails = sizeof(ret_value);
 
@@ -333,14 +339,14 @@ static void mixer_test_controlA(HMIXEROBJ mix, MIXERCONTROLA *control)
                 if (rc==MMSYSERR_NOERROR) {
                     /* result may not match exactly because of rounding */
                     ok(ret_value.fValue==new_value.fValue,
-                       "Couldn't change value from %d to %d, returned %d\n",
+                       "Couldn't change value from %ld to %ld, returned %ld\n",
                        value.fValue,new_value.fValue,ret_value.fValue);
 
                     if (ret_value.fValue==new_value.fValue) {
                         details.cbStruct = sizeof(MIXERCONTROLDETAILS);
                         details.dwControlID = control->dwControlID;
                         details.cChannels = 1;
-                        U(details).cMultipleItems = 0;
+                        details.cMultipleItems = 0;
                         details.paDetails = &value;
                         details.cbDetails = sizeof(value);
 
@@ -381,7 +387,7 @@ static void mixer_test_deviceA(int device)
        mmsys_error(rc));
 
     if (winetest_interactive) {
-        trace("  %d: \"%s\" %d.%d (%d:%d) destinations=%d\n", device,
+        trace("  %d: \"%s\" %d.%d (%d:%d) destinations=%ld\n", device,
               capsA.szPname, capsA.vDriverVersion >> 8,
               capsA.vDriverVersion & 0xff,capsA.wMid,capsA.wPid,
               capsA.cDestinations);
@@ -449,20 +455,20 @@ static void mixer_test_deviceA(int device)
                 trace("  No Driver\n");
             else if (rc==MMSYSERR_NOERROR) {
 	      if (winetest_interactive) {
-                trace("    %d: \"%s\" (%s) Destination=%d Source=%d\n",
+                trace("    %ld: \"%s\" (%s) Destination=%ld Source=%ld\n",
                       d,mixerlineA.szShortName, mixerlineA.szName,
                       mixerlineA.dwDestination,mixerlineA.dwSource);
-                trace("        LineID=%08x Channels=%d "
-                      "Connections=%d Controls=%d\n",
+                trace("        LineID=%08lx Channels=%ld "
+                      "Connections=%ld Controls=%ld\n",
                       mixerlineA.dwLineID,mixerlineA.cChannels,
                       mixerlineA.cConnections,mixerlineA.cControls);
-                trace("        State=0x%08x(%s)\n",
+                trace("        State=0x%08lx(%s)\n",
                       mixerlineA.fdwLine,line_flags(mixerlineA.fdwLine));
                 trace("        ComponentType=%s\n",
                       component_type(mixerlineA.dwComponentType));
                 trace("        Type=%s\n",
                       target_type(mixerlineA.Target.dwType));
-                trace("        Device=%d (%s) %d.%d (%d:%d)\n",
+                trace("        Device=%ld (%s) %d.%d (%d:%d)\n",
                       mixerlineA.Target.dwDeviceID,
                       mixerlineA.Target.szPname,
                       mixerlineA.Target.vDriverVersion >> 8,
@@ -485,20 +491,20 @@ static void mixer_test_deviceA(int device)
                     LPMIXERCONTROLA    array;
                     MIXERLINECONTROLSA controls;
                     if (winetest_interactive) {
-                        trace("      %d: \"%s\" (%s) Destination=%d Source=%d\n",
+                        trace("      %ld: \"%s\" (%s) Destination=%ld Source=%ld\n",
                               s,mixerlineA.szShortName, mixerlineA.szName,
                               mixerlineA.dwDestination,mixerlineA.dwSource);
-                        trace("          LineID=%08x Channels=%d "
-                              "Connections=%d Controls=%d\n",
+                        trace("          LineID=%08lx Channels=%ld "
+                              "Connections=%ld Controls=%ld\n",
                               mixerlineA.dwLineID,mixerlineA.cChannels,
                               mixerlineA.cConnections,mixerlineA.cControls);
-                        trace("          State=0x%08x(%s)\n",
+                        trace("          State=0x%08lx(%s)\n",
                               mixerlineA.fdwLine,line_flags(mixerlineA.fdwLine));
                         trace("          ComponentType=%s\n",
                               component_type(mixerlineA.dwComponentType));
                         trace("          Type=%s\n",
                               target_type(mixerlineA.Target.dwType));
-                        trace("          Device=%d (%s) %d.%d (%d:%d)\n",
+                        trace("          Device=%ld (%s) %d.%d (%d:%d)\n",
                               mixerlineA.Target.dwDeviceID,
                               mixerlineA.Target.szPname,
                               mixerlineA.Target.vDriverVersion >> 8,
@@ -506,8 +512,7 @@ static void mixer_test_deviceA(int device)
                               mixerlineA.Target.wMid, mixerlineA.Target.wPid);
                     }
                     if (mixerlineA.cControls) {
-                        array=HeapAlloc(GetProcessHeap(),HEAP_ZERO_MEMORY,
-                            mixerlineA.cControls*sizeof(MIXERCONTROLA));
+                        array=calloc(mixerlineA.cControls, sizeof(MIXERCONTROLA));
                         if (array) {
                             memset(&controls, 0, sizeof(controls));
 
@@ -540,18 +545,18 @@ static void mixer_test_deviceA(int device)
                             if (rc==MMSYSERR_NOERROR) {
                                 for(nc=0;nc<mixerlineA.cControls;nc++) {
                                     if (winetest_interactive) {
-                                        trace("        %d: \"%s\" (%s) ControlID=%d\n", nc,
+                                        trace("        %ld: \"%s\" (%s) ControlID=%ld\n", nc,
                                               array[nc].szShortName,
                                               array[nc].szName, array[nc].dwControlID);
                                         trace("            ControlType=%s\n",
                                                control_type(array[nc].dwControlType));
-                                        trace("            Control=0x%08x(%s)\n",
+                                        trace("            Control=0x%08lx(%s)\n",
                                               array[nc].fdwControl,
                                               control_flags(array[nc].fdwControl));
-                                        trace("            Items=%d Min=%d Max=%d Step=%d\n",
+                                        trace("            Items=%ld Min=%ld Max=%ld Step=%ld\n",
                                               array[nc].cMultipleItems,
-                                              S1(array[nc].Bounds).dwMinimum,
-                                              S1(array[nc].Bounds).dwMaximum,
+                                              array[nc].Bounds.dwMinimum,
+                                              array[nc].Bounds.dwMaximum,
                                               array[nc].Metrics.cSteps);
                                     }
 
@@ -559,7 +564,7 @@ static void mixer_test_deviceA(int device)
                                 }
                             }
 
-                            HeapFree(GetProcessHeap(),0,array);
+                            free(array);
                         }
                     }
                 }
@@ -582,7 +587,7 @@ static void mixer_test_controlW(HMIXEROBJ mix, MIXERCONTROLW *control)
         details.cbStruct = sizeof(MIXERCONTROLDETAILS);
         details.dwControlID = control->dwControlID;
         details.cChannels = 1;
-        U(details).cMultipleItems = 0;
+        details.cMultipleItems = 0;
         details.paDetails = &value;
         details.cbDetails = sizeof(value);
 
@@ -595,9 +600,9 @@ static void mixer_test_controlW(HMIXEROBJ mix, MIXERCONTROLW *control)
             MIXERCONTROLDETAILS new_details;
             MIXERCONTROLDETAILS_UNSIGNED new_value;
 
-            trace("            Value=%d\n",value.dwValue);
+            trace("            Value=%ld\n",value.dwValue);
 
-            if (value.dwValue + control->Metrics.cSteps < S1(control->Bounds).dwMaximum)
+            if (value.dwValue + control->Metrics.cSteps < control->Bounds.dwMaximum)
                 new_value.dwValue = value.dwValue + control->Metrics.cSteps;
             else
                 new_value.dwValue = value.dwValue - control->Metrics.cSteps;
@@ -605,7 +610,7 @@ static void mixer_test_controlW(HMIXEROBJ mix, MIXERCONTROLW *control)
             new_details.cbStruct = sizeof(MIXERCONTROLDETAILS);
             new_details.dwControlID = control->dwControlID;
             new_details.cChannels = 1;
-            U(new_details).cMultipleItems = 0;
+            new_details.cMultipleItems = 0;
             new_details.paDetails = &new_value;
             new_details.cbDetails = sizeof(new_value);
 
@@ -621,7 +626,7 @@ static void mixer_test_controlW(HMIXEROBJ mix, MIXERCONTROLW *control)
                 ret_details.cbStruct = sizeof(MIXERCONTROLDETAILS);
                 ret_details.dwControlID = control->dwControlID;
                 ret_details.cChannels = 1;
-                U(ret_details).cMultipleItems = 0;
+                ret_details.cMultipleItems = 0;
                 ret_details.paDetails = &ret_value;
                 ret_details.cbDetails = sizeof(ret_value);
 
@@ -632,15 +637,15 @@ static void mixer_test_controlW(HMIXEROBJ mix, MIXERCONTROLW *control)
                    mmsys_error(rc));
                 if (rc==MMSYSERR_NOERROR) {
                     /* result may not match exactly because of rounding */
-                    ok(abs(ret_value.dwValue-new_value.dwValue)<=1,
-                       "Couldn't change value from %d to %d, returned %d\n",
+                    ok(compare_uint(ret_value.dwValue, new_value.dwValue, 1),
+                       "Couldn't change value from %ld to %ld, returned %ld\n",
                        value.dwValue,new_value.dwValue,ret_value.dwValue);
 
-                    if (abs(ret_value.dwValue-new_value.dwValue)<=1) {
+                    if (compare_uint(ret_value.dwValue, new_value.dwValue, 1)) {
                         details.cbStruct = sizeof(MIXERCONTROLDETAILS);
                         details.dwControlID = control->dwControlID;
                         details.cChannels = 1;
-                        U(details).cMultipleItems = 0;
+                        details.cMultipleItems = 0;
                         details.paDetails = &value;
                         details.cbDetails = sizeof(value);
 
@@ -662,7 +667,7 @@ static void mixer_test_controlW(HMIXEROBJ mix, MIXERCONTROLW *control)
         details.cbStruct = sizeof(MIXERCONTROLDETAILS);
         details.dwControlID = control->dwControlID;
         details.cChannels = 1;
-        U(details).cMultipleItems = 0;
+        details.cMultipleItems = 0;
         details.paDetails = &value;
         details.cbDetails = sizeof(value);
 
@@ -674,7 +679,7 @@ static void mixer_test_controlW(HMIXEROBJ mix, MIXERCONTROLW *control)
             MIXERCONTROLDETAILS new_details;
             MIXERCONTROLDETAILS_BOOLEAN new_value;
 
-            trace("            Value=%d\n",value.fValue);
+            trace("            Value=%ld\n",value.fValue);
 
             if (value.fValue == FALSE)
                 new_value.fValue = TRUE;
@@ -684,7 +689,7 @@ static void mixer_test_controlW(HMIXEROBJ mix, MIXERCONTROLW *control)
             new_details.cbStruct = sizeof(MIXERCONTROLDETAILS);
             new_details.dwControlID = control->dwControlID;
             new_details.cChannels = 1;
-            U(new_details).cMultipleItems = 0;
+            new_details.cMultipleItems = 0;
             new_details.paDetails = &new_value;
             new_details.cbDetails = sizeof(new_value);
 
@@ -700,7 +705,7 @@ static void mixer_test_controlW(HMIXEROBJ mix, MIXERCONTROLW *control)
                 ret_details.cbStruct = sizeof(MIXERCONTROLDETAILS);
                 ret_details.dwControlID = control->dwControlID;
                 ret_details.cChannels = 1;
-                U(ret_details).cMultipleItems = 0;
+                ret_details.cMultipleItems = 0;
                 ret_details.paDetails = &ret_value;
                 ret_details.cbDetails = sizeof(ret_value);
 
@@ -712,14 +717,14 @@ static void mixer_test_controlW(HMIXEROBJ mix, MIXERCONTROLW *control)
                 if (rc==MMSYSERR_NOERROR) {
                     /* result may not match exactly because of rounding */
                     ok(ret_value.fValue==new_value.fValue,
-                       "Couldn't change value from %d to %d, returned %d\n",
+                       "Couldn't change value from %ld to %ld, returned %ld\n",
                        value.fValue,new_value.fValue,ret_value.fValue);
 
                     if (ret_value.fValue==new_value.fValue) {
                         details.cbStruct = sizeof(MIXERCONTROLDETAILS);
                         details.dwControlID = control->dwControlID;
                         details.cChannels = 1;
-                        U(details).cMultipleItems = 0;
+                        details.cMultipleItems = 0;
                         details.paDetails = &value;
                         details.cbDetails = sizeof(value);
 
@@ -766,7 +771,7 @@ static void mixer_test_deviceW(int device)
     WideCharToMultiByte(CP_ACP,0,capsW.szPname, MAXPNAMELEN,szPname,
                         MAXPNAMELEN,NULL,NULL);
     if (winetest_interactive) {
-        trace("  %d: \"%s\" %d.%d (%d:%d) destinations=%d\n", device,
+        trace("  %d: \"%s\" %d.%d (%d:%d) destinations=%ld\n", device,
               szPname, capsW.vDriverVersion >> 8,
               capsW.vDriverVersion & 0xff,capsW.wMid,capsW.wPid,
               capsW.cDestinations);
@@ -843,20 +848,20 @@ static void mixer_test_deviceW(int device)
                 WideCharToMultiByte(CP_ACP,0,mixerlineW.Target.szPname,
                     MAXPNAMELEN,szPname,
                     MAXPNAMELEN,NULL, NULL);
-                trace("    %d: \"%s\" (%s) Destination=%d Source=%d\n",
+                trace("    %ld: \"%s\" (%s) Destination=%ld Source=%ld\n",
                       d,szShortName,szName,
                       mixerlineW.dwDestination,mixerlineW.dwSource);
-                trace("        LineID=%08x Channels=%d "
-                      "Connections=%d Controls=%d\n",
+                trace("        LineID=%08lx Channels=%ld "
+                      "Connections=%ld Controls=%ld\n",
                       mixerlineW.dwLineID,mixerlineW.cChannels,
                       mixerlineW.cConnections,mixerlineW.cControls);
-                trace("        State=0x%08x(%s)\n",
+                trace("        State=0x%08lx(%s)\n",
                       mixerlineW.fdwLine,line_flags(mixerlineW.fdwLine));
                 trace("        ComponentType=%s\n",
                       component_type(mixerlineW.dwComponentType));
                 trace("        Type=%s\n",
                       target_type(mixerlineW.Target.dwType));
-                trace("        Device=%d (%s) %d.%d (%d:%d)\n",
+                trace("        Device=%ld (%s) %d.%d (%d:%d)\n",
                       mixerlineW.Target.dwDeviceID,szPname,
                       mixerlineW.Target.vDriverVersion >> 8,
                       mixerlineW.Target.vDriverVersion & 0xff,
@@ -887,28 +892,27 @@ static void mixer_test_deviceW(int device)
                         WideCharToMultiByte(CP_ACP,0,mixerlineW.Target.szPname,
                             MAXPNAMELEN,szPname,
                             MAXPNAMELEN,NULL, NULL);
-                        trace("      %d: \"%s\" (%s) Destination=%d Source=%d\n",
+                        trace("      %ld: \"%s\" (%s) Destination=%ld Source=%ld\n",
                               s,szShortName,szName,
                               mixerlineW.dwDestination,mixerlineW.dwSource);
-                        trace("          LineID=%08x Channels=%d "
-                              "Connections=%d Controls=%d\n",
+                        trace("          LineID=%08lx Channels=%ld "
+                              "Connections=%ld Controls=%ld\n",
                               mixerlineW.dwLineID,mixerlineW.cChannels,
                               mixerlineW.cConnections,mixerlineW.cControls);
-                        trace("          State=0x%08x(%s)\n",
+                        trace("          State=0x%08lx(%s)\n",
                               mixerlineW.fdwLine,line_flags(mixerlineW.fdwLine));
                         trace("          ComponentType=%s\n",
                               component_type(mixerlineW.dwComponentType));
                         trace("          Type=%s\n",
                               target_type(mixerlineW.Target.dwType));
-                        trace("          Device=%d (%s) %d.%d (%d:%d)\n",
+                        trace("          Device=%ld (%s) %d.%d (%d:%d)\n",
                               mixerlineW.Target.dwDeviceID,szPname,
                               mixerlineW.Target.vDriverVersion >> 8,
                               mixerlineW.Target.vDriverVersion & 0xff,
                               mixerlineW.Target.wMid, mixerlineW.Target.wPid);
                     }
                     if (mixerlineW.cControls) {
-                        array=HeapAlloc(GetProcessHeap(),HEAP_ZERO_MEMORY,
-                            mixerlineW.cControls*sizeof(MIXERCONTROLW));
+                        array=calloc(mixerlineW.cControls, sizeof(MIXERCONTROLW));
                         if (array) {
                             rc = mixerGetLineControlsW(mix, 0, MIXER_GETLINECONTROLSF_ALL);
                             ok(rc==MMSYSERR_INVALPARAM,
@@ -944,24 +948,24 @@ static void mixer_test_deviceW(int device)
                                         WideCharToMultiByte(CP_ACP,0,array[nc].szName,
                                             MIXER_LONG_NAME_CHARS,szName,
                                             MIXER_LONG_NAME_CHARS,NULL,NULL);
-                                        trace("        %d: \"%s\" (%s) ControlID=%d\n", nc,
+                                        trace("        %ld: \"%s\" (%s) ControlID=%ld\n", nc,
                                               szShortName, szName, array[nc].dwControlID);
                                         trace("            ControlType=%s\n",
                                                control_type(array[nc].dwControlType));
-                                        trace("            Control=0x%08x(%s)\n",
+                                        trace("            Control=0x%08lx(%s)\n",
                                               array[nc].fdwControl,
                                               control_flags(array[nc].fdwControl));
-                                        trace("            Items=%d Min=%d Max=%d Step=%d\n",
+                                        trace("            Items=%ld Min=%ld Max=%ld Step=%ld\n",
                                               array[nc].cMultipleItems,
-                                              S1(array[nc].Bounds).dwMinimum,
-                                              S1(array[nc].Bounds).dwMaximum,
+                                              array[nc].Bounds.dwMinimum,
+                                              array[nc].Bounds.dwMaximum,
                                               array[nc].Metrics.cSteps);
                                     }
                                     mixer_test_controlW(mix, &array[nc]);
                                 }
                             }
 
-                            HeapFree(GetProcessHeap(),0,array);
+                            free(array);
                         }
                     }
                 }
@@ -977,7 +981,7 @@ static void mixer_testsA(void)
     MMRESULT rc;
     UINT ndev, d;
 
-    trace("--- Testing ASCII functions ---\n");
+    trace("--- Testing ANSI functions ---\n");
 
     ndev=mixerGetNumDevs();
     trace("found %d Mixer devices\n",ndev);

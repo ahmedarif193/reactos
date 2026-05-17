@@ -157,6 +157,14 @@ static BOOL WINAPI init_driver(INIT_ONCE *once, void *param, void **context)
             *next = ',';
     }
 
+#ifdef __REACTOS__
+    if (!drvs.module)
+    {
+        WARN("No audio driver loaded, continuing without endpoints.\n");
+        return TRUE;
+    }
+#endif
+
     return drvs.module != 0;
 }
 

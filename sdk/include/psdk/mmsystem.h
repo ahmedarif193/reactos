@@ -1166,10 +1166,7 @@ typedef struct midievent_tag {
 	DWORD dwStreamID;
 	DWORD dwEvent;
 	DWORD dwParms[1];
-} MIDIEVENT;
-#ifdef _WINE
-typedef struct midievent_tag *LPMIDIEVENT;
-#endif
+} MIDIEVENT,*LPMIDIEVENT;
 
 typedef struct midistrmbuffver_tag {
 	DWORD dwVersion;
@@ -1489,7 +1486,7 @@ typedef struct _MMIOINFO {
 	FOURCC fccIOProc;
 	LPMMIOPROC pIOProc;
 	UINT wErrorRet;
-	HTASK htask;
+	HTASK hTask;
 	LONG cchBuffer;
 	HPSTR pchBuffer;
 	HPSTR pchNext;
@@ -1546,7 +1543,6 @@ typedef struct tagMCI_SEEK_PARMS {
 	DWORD dwTo;
 } MCI_SEEK_PARMS, *PMCI_SEEK_PARMS,*LPMCI_SEEK_PARMS;
 
-#ifdef _WINE
 typedef struct tagMCI_SOUND_PARMSA {
     DWORD_PTR   dwCallback;
     LPCSTR      lpstrSoundName;
@@ -1561,7 +1557,6 @@ typedef struct tagMCI_SOUND_PARMSW {
 typedef MCI_SOUND_PARMSW MCI_SOUND_PARMS;
 #else
 typedef MCI_SOUND_PARMSA MCI_SOUND_PARMS;
-#endif
 #endif
 
 typedef struct tagMCI_STATUS_PARMS {

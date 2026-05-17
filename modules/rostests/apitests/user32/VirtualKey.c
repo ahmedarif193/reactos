@@ -36,6 +36,7 @@ static void testMapVirtualKey()
 {
     INT i;
     UINT vCode, vExpect = 0;
+    HKL hkl = GetKeyboardLayout(0);
 
     /* Make sure MapVirtualKeyW returns 0 in all cases when uCode == 0 */
     for (i = 0; i < _countof(MapTypes); i++)
@@ -54,6 +55,16 @@ static void testMapVirtualKey()
         vCode = MapVirtualKeyW(TestCodes[i].ScanCode, MAPVK_VSC_TO_VK);
         vExpect = (TestCodes[i].ScanToVirt == 0 ? TestCodes[i].VirtKey : TestCodes[i].ScanToVirt);
         ok(vCode == vExpect, "[%d] VirtKey = %u, expected %u\n", i, vCode, vExpect);
+    }
+
+    /* Windows returns uppercase virtual-key identity for A-Z in MAPVK_VK_TO_CHAR. */
+    for (i = 'A'; i <= 'Z'; ++i)
+    {
+        vCode = MapVirtualKeyW(i, MAPVK_VK_TO_CHAR);
+        ok(vCode == (UINT)i, "MapVirtualKeyW(%c, MAPVK_VK_TO_CHAR) returned %#x\n", i, vCode);
+
+        vCode = MapVirtualKeyExW(i, MAPVK_VK_TO_CHAR, hkl);
+        ok(vCode == (UINT)i, "MapVirtualKeyExW(%c, MAPVK_VK_TO_CHAR) returned %#x\n", i, vCode);
     }
 }
 

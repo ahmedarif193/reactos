@@ -1,40 +1,74 @@
-#pragma once
+/*
+ * Joystick testing control panel applet resources and definitions
+ *
+ * Copyright 2012 Lucas Fialho Zawacki
+ *
+ * This library is free software; you can redistribute it and/or
+ * modify it under the terms of the GNU Lesser General Public
+ * License as published by the Free Software Foundation; either
+ * version 2.1 of the License, or (at your option) any later version.
+ *
+ * This library is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
+ * Lesser General Public License for more details.
+ *
+ * You should have received a copy of the GNU Lesser General Public
+ * License along with this library; if not, write to the Free Software
+ * Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA 02110-1301, USA
+ *
+ */
 
-/* Icons */
-#define IDI_CPLSYSTEM 102
+#ifndef __WINE_JOYSTICKCPL__
+#define __WINE_JOYSTICKCPL__
 
-/* Dialogs */
-#define IDD_PROPPAGEMAIN 101
-#define IDD_ADD          119
-#define IDD_CUSTOM       4099
-#define IDD_ADVANCED     8188
+#include <windef.h>
+#include <winbase.h>
+#include <winuser.h>
+#include <commctrl.h>
 
-/* Strings */
-#define IDS_CPLSYSTEMNAME        1076
-#define IDS_CPLSYSTEMDESCRIPTION 1099
-#define IDS_CONTROLLER           1151
-#define IDS_STATUS               1152
-#define IDS_NONE                 1200
+/* strings */
+#define IDS_CPL_NAME        1
+#define IDS_CPL_INFO        2
 
-/* Controls */
-#define IDC_CONTROLLER_LIST         1020
-#define IDC_ADD_BUTTON              1011
-#define IDC_REMOVE_BUTTON           1028
-#define IDC_PROPERTIES_BUTTON       1002
-#define IDC_ADVANCED_BUTTON         1311
-#define IDC_TROUBLESHOOT_BUTTON     1007
-#define IDC_CUSTOM_BUTTON           1169
-#define IDC_GAME_PORT_COMBO         1168
-#define IDC_GAME_CONTROLLERS_LIST   1057
-#define IDC_ENABLE_RUDDERS_CHECKBOX 1000
-#define IDC_JOYSTICK_RADIO          1054
-#define IDC_FLIGHT_YOKE_RADIO       1051
-#define IDC_GAME_PAD_RADIO          1052
-#define IDC_RACE_CAR_RADIO          1053
-#define IDC_AXES_COMBO              1030
-#define IDC_RUDDER_PEDALS_RADIO     1172
-#define IDC_Z_AXIS_RADIO            1174
-#define IDC_BUTTONS_COMBO           1048
-#define IDC_INC_POINT_CHECKBOX      1072
-#define IDC_CONTROLLER_NAME_EDIT    1056
-#define IDC_PREFERRED_DEV_COMBO     8195
+/* dialogs */
+#define IDC_STATIC          -1
+
+#define IDD_LIST            1000
+#define IDD_TEST_DI         1001
+#define IDD_TEST_XI         1002
+
+#define IDC_DI_ENABLED_LIST    2000
+#define IDC_XI_ENABLED_LIST    2001
+#define IDC_DISABLED_LIST      2002
+#define IDC_ADVANCED           2003
+#define IDC_DISABLE_HIDRAW     2004
+#define IDC_ENABLE_SDL         2005
+
+#define IDC_BUTTON_DI_DISABLE   2010
+#define IDC_BUTTON_DI_RESET     2011
+#define IDC_BUTTON_XI_OVERRIDE  2013
+#define IDC_BUTTON_ENABLE       2014
+
+#define IDC_DI_DEVICES      2100
+#define IDC_DI_AXES         2101
+#define IDC_DI_POVS         2102
+#define IDC_DI_BUTTONS      2103
+#define IDC_DI_EFFECTS      2104
+
+#define IDC_XI_USER_0       2200
+#define IDC_XI_USER_1       2201
+#define IDC_XI_USER_2       2202
+#define IDC_XI_USER_3       2203
+#define IDC_XI_NO_USER_0    2210
+#define IDC_XI_NO_USER_1    2211
+#define IDC_XI_NO_USER_2    2212
+#define IDC_XI_NO_USER_3    2213
+#define IDC_XI_RUMBLE_0     2220
+#define IDC_XI_RUMBLE_1     2221
+#define IDC_XI_RUMBLE_2     2222
+#define IDC_XI_RUMBLE_3     2223
+
+#define ICO_MAIN            100
+
+#endif

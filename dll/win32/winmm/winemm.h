@@ -19,33 +19,31 @@
  * Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA 02110-1301, USA
  */
 
-#ifndef _WINEMM_H_
-#define _WINEMM_H_
+#ifdef __REACTOS__
+#pragma once
+#endif
 
-#include <wine/config.h>
+#include <stdarg.h>
+#ifdef __REACTOS__
+#include <stdlib.h>
+#endif
 
-#include <assert.h>
-#include <stdio.h>
+#include "windef.h"
+#include "winbase.h"
+#include "mmddk.h"
 
-#define _INC_WINDOWS
-#define COM_NO_WINDOWS_H
+#ifdef __REACTOS__
+#ifndef ARRAY_SIZE
+#define ARRAY_SIZE(a) (sizeof(a) / sizeof((a)[0]))
+#endif
 
-#define NONAMELESSUNION
-#define NONAMELESSSTRUCT
+#ifndef DRV_QUERYFUNCTIONINSTANCEIDSIZE
+#define DRV_QUERYFUNCTIONINSTANCEIDSIZE (DRV_RESERVED + 18)
+#endif
 
-#include <windef.h>
-#include <winbase.h>
-#include <winuser.h>
-#include <winreg.h>
-#include <mmddk.h>
-
-#include <wine/debug.h>
-#include <wine/exception.h>
-#include <wine/unicode.h>
-
-#define WINE_DEFAULT_WINMM_DRIVER     "alsa,oss,coreaudio,esd"
-#define WINE_DEFAULT_WINMM_MAPPER     "msacm32.drv"
-#define WINE_DEFAULT_WINMM_MIDI       "midimap.dll"
+CHAR NTAPI RtlUpperChar(CHAR Source);
+HDRVR WINAPI OpenDriverA(LPCSTR lpDriverName, LPCSTR lpSectionName, LPARAM lParam);
+#endif
 
 /* Who said goofy boy ? */
 #define	WINE_DI_MAGIC	0x900F1B01
@@ -117,7 +115,6 @@ typedef struct {
 typedef struct tagWINE_MCIDRIVER {
         UINT			wDeviceID;
         UINT			wType;
-	LPWSTR			lpstrElementName;
         LPWSTR			lpstrDeviceType;
         LPWSTR			lpstrAlias;
         HDRVR			hDriver;
@@ -149,15 +146,12 @@ typedef struct tagWINE_MMIO {
 } WINE_MMIO, *LPWINE_MMIO;
 
 /* function prototypes */
-BOOL WINMM_CheckForMMSystem(void);
+
 LPWINE_DRIVER	DRIVER_FindFromHDrvr(HDRVR hDrvr);
 BOOL		DRIVER_GetLibName(LPCWSTR keyName, LPCWSTR sectName, LPWSTR buf, int sz);
 LPWINE_DRIVER	DRIVER_TryOpenDriver32(LPCWSTR fn, LPARAM lParam2);
 void            DRIVER_UnloadAll(void);
-HDRVR WINAPI OpenDriverA(LPCSTR lpDriverName, LPCSTR lpSectionName, LPARAM lParam);
-BOOL	MMDRV_Install(LPCSTR drvRegName, LPCSTR drvFileName, BOOL bIsMapper);
-BOOL LoadRegistryMMEDrivers(char* key);
-BOOL		MMDRV_Init(void);
+
 void            MMDRV_Exit(void);
 UINT		MMDRV_GetNum(UINT);
 LPWINE_MLD	MMDRV_Alloc(UINT size, UINT type, LPHANDLE hndl, DWORD* dwFlags,
@@ -166,18 +160,20 @@ void		MMDRV_Free(HANDLE hndl, LPWINE_MLD mld);
 DWORD		MMDRV_Open(LPWINE_MLD mld, UINT wMsg, DWORD_PTR dwParam1, DWORD dwParam2);
 DWORD		MMDRV_Close(LPWINE_MLD mld, UINT wMsg);
 LPWINE_MLD	MMDRV_Get(HANDLE hndl, UINT type, BOOL bCanBeID);
-LPWINE_MLD	MMDRV_GetRelated(HANDLE hndl, UINT srcType, BOOL bSrcCanBeID, UINT dstTyped);
 DWORD           MMDRV_Message(LPWINE_MLD mld, UINT wMsg, DWORD_PTR dwParam1, DWORD_PTR dwParam2);
 UINT		MMDRV_PhysicalFeatures(LPWINE_MLD mld, UINT uMsg, DWORD_PTR dwParam1, DWORD_PTR dwParam2);
 
 DWORD           MCI_SendCommand(UINT wDevID, UINT16 wMsg, DWORD_PTR dwParam1, DWORD_PTR dwParam2);
-LPSTR           MCI_strdupWtoA(LPCWSTR str);
 
 const char*     WINMM_ErrorToString(MMRESULT error);
 
 void		TIME_MMTimeStop(void);
 
-MMRESULT WINMM_CheckCallback(DWORD_PTR dwCallback, DWORD fdwOpen, BOOL mixer) DECLSPEC_HIDDEN;
+MMRESULT WINMM_CheckCallback(DWORD_PTR dwCallback, DWORD fdwOpen, BOOL mixer);
+
+void WINMM_DeleteWaveform(void);
+
+void joystick_unload( void );
 
 /* Global variables */
 extern CRITICAL_SECTION WINMM_cs;
@@ -191,21 +187,3 @@ extern HANDLE psStopEvent;
 #define WINE_GDF_EXIST	        0x80000000
 #define WINE_GDF_EXTERNAL_MASK  0xF0000000
 #define WINE_GDF_SESSION        0x00000001
-
-
-/* Modification to take into account Windows NT's registry format */
-
-#define NT_MME_DRIVERS32_KEY \
-    "SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\Drivers32"
-
-#define NT_MME_DRIVERS_KEY \
-    "SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\Drivers"
-
-INT LoadRegistryMMEDrivers(char* key);
-
-// REACTOS:
-#define ARRAY_SIZE(a) (sizeof(a) / sizeof((a)[0]))
-#define wcsnicmp strncmpiW
-#define swprintf snprintfW
-
-#endif /* _WINEMM_H_ */

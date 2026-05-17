@@ -1226,6 +1226,16 @@ static DWORD WINAPI notif_thread_proc(void *user)
 
         EnterCriticalSection(&g_notif_lock);
 
+#ifdef __REACTOS__
+        notify_if_changed(eRender, eConsole, key, reg_out_nameW,
+                out_name, MMDevice_def_play ? &MMDevice_def_play->IMMDevice_iface : NULL);
+        notify_if_changed(eRender, eCommunications, key, reg_vout_nameW,
+                vout_name, MMDevice_def_play ? &MMDevice_def_play->IMMDevice_iface : NULL);
+        notify_if_changed(eCapture, eConsole, key, reg_in_nameW,
+                in_name, MMDevice_def_rec ? &MMDevice_def_rec->IMMDevice_iface : NULL);
+        notify_if_changed(eCapture, eCommunications, key, reg_vin_nameW,
+                vin_name, MMDevice_def_rec ? &MMDevice_def_rec->IMMDevice_iface : NULL);
+#else
         notify_if_changed(eRender, eConsole, key, reg_out_nameW,
                 out_name, &MMDevice_def_play->IMMDevice_iface);
         notify_if_changed(eRender, eCommunications, key, reg_vout_nameW,
@@ -1234,6 +1244,7 @@ static DWORD WINAPI notif_thread_proc(void *user)
                 in_name, &MMDevice_def_rec->IMMDevice_iface);
         notify_if_changed(eCapture, eCommunications, key, reg_vin_nameW,
                 vin_name, &MMDevice_def_rec->IMMDevice_iface);
+#endif
 
         LeaveCriticalSection(&g_notif_lock);
     }
