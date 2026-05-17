@@ -367,7 +367,11 @@ DWORD	MCIAVI_mciStatus(UINT wDevID, DWORD dwFlags, LPMCI_DGV_STATUS_PARMSW lpPar
 
     if (lpParms == NULL)	return MCIERR_NULL_PARAMETER_BLOCK;
     if (wma == NULL)		return MCIERR_INVALID_DEVICE_ID;
+#ifdef __REACTOS__
+    if (!(dwFlags & MCI_STATUS_ITEM))	return MCIERR_UNSUPPORTED_FUNCTION;
+#else
     if (!(dwFlags & MCI_STATUS_ITEM))	return MCIERR_MISSING_PARAMETER;
+#endif
     if (dwFlags & MCI_TEST)	return 0;
 
     EnterCriticalSection(&wma->cs);
