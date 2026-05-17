@@ -4,6 +4,7 @@
 #include <wine/test.h>
 
 extern void func_capture(void);
+extern void func_generated(void);
 extern void func_joystick(void);
 extern void func_mci(void);
 extern void func_mcicda(void);
@@ -16,6 +17,7 @@ extern void func_wave(void);
 const struct test winetest_testlist[] =
 {
     { "capture", func_capture },
+    { "generated", func_generated },
     { "joystick", func_joystick },
     { "mci", func_mci },
     { "mcicda", func_mcicda },

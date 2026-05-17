@@ -1,5 +1,5 @@
 
-add_definitions(-D_WINE)
+add_definitions(-D_WINE -D_WINMM_)
 include_directories(BEFORE ${REACTOS_SOURCE_DIR}/sdk/include/wine)
 spec2def(winmm.dll winmm.spec ADD_IMPORTLIB)
 
@@ -10,14 +10,15 @@ list(APPEND SOURCE
     mci.c
     mmio.c
     playsound.c
-    registry.c
     time.c
+    waveform.c
     winmm.c
     winemm.h
     ${CMAKE_CURRENT_BINARY_DIR}/winmm_stubs.c)
 
 add_library(winmm MODULE
     ${SOURCE}
+    winmm.rc
     winmm_res.rc
     ${CMAKE_CURRENT_BINARY_DIR}/winmm.def)
 
@@ -30,8 +31,9 @@ if(MSVC)
 endif()
 
 set_module_type(winmm win32dll)
-target_link_libraries(winmm wine ${PSEH_LIB} oldnames)
-add_importlibs(winmm userenv advapi32 user32 msvcrt kernel32 ntdll)
+target_link_libraries(winmm wine uuid ${PSEH_LIB} oldnames)
+add_importlibs(winmm userenv advapi32 user32 ole32 msacm32 msvcrt kernel32 ntdll)
+add_delay_importlibs(winmm dinput8)
 add_pch(winmm winemm.h SOURCE)
 add_cd_file(TARGET winmm DESTINATION reactos/system32 FOR all)
 

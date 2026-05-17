@@ -36,8 +36,8 @@ dll/directx/wine/d3dx9_24 => 43 # Synced to WineStaging-6.0-rc5
 dll/directx/wine/d3dxof         # Synced to WineStaging-4.18
 dll/directx/wine/ddraw          # Synced to WineStaging-3.3
 dll/directx/wine/devenum        # Synced to WineStaging-4.18
-dll/directx/wine/dinput         # Synced to WineStaging-4.18
-dll/directx/wine/dinput8        # Synced to WineStaging-4.18
+dll/directx/wine/dinput         # Synced to Wine-10.0
+dll/directx/wine/dinput8        # Synced to Wine-10.0
 dll/directx/wine/dmusic         # Synced to WineStaging-4.18
 dll/directx/wine/dplay          # Synced to WineStaging-3.3
 dll/directx/wine/dplayx         # Synced to WineStaging-4.18
@@ -106,7 +106,7 @@ dll/win32/lz32                # Synced to WineStaging-3.3
 dll/win32/mapi32              # Synced to WineStaging-4.18
 dll/win32/mciavi32            # Synced to WineStaging-4.18
 dll/win32/mcicda              # Synced to WineStaging-3.3
-dll/win32/mciqtz32            # Synced to WineStaging-4.18
+dll/win32/mciqtz32            # Synced to Wine-10.0
 dll/win32/mciseq              # Synced to WineStaging-4.18
 dll/win32/mciwave             # Synced to WineStaging-4.18
 dll/win32/mgmtapi             # Synced to WineStaging-3.3
@@ -218,8 +218,8 @@ dll/win32/windowscodecsext    # Synced to Wine-10.0
 dll/win32/winemp3.acm         # Synced to WineStaging-4.18
 dll/win32/wing32              # Synced to WineStaging-3.3
 dll/win32/winhttp             # Synced to Wine-10.0
-dll/win32/wininet             # Synced to WineStaging-6.0rc1
-dll/win32/winmm               # Forked at Wine-20050628
+dll/win32/wininet             # Synced to Wine-10.0
+dll/win32/winmm               # Synced to Wine-10.0
 dll/win32/winmm/midimap       # Forked at Wine-20050628
 dll/win32/winmm/wavemap       # Forked at Wine-20050628
 dll/win32/winscard            # Synced to WineStaging-4.18
@@ -246,6 +246,7 @@ comctl32 -
 
 dll/cpl/bthprops              # Synced to Wine-10.0
 dll/cpl/inetcpl               # Synced to WineStaging-4.18
+dll/cpl/joy                   # Synced to Wine-10.0
 
 win32ss/printing/monitors/localmon/ui/  # Synced to WineStaging-4.18 (known there as /dll/win32/localui)
 
@@ -390,4 +391,4 @@ win32k -
   win32ss/gdi/ntgdi/bezier.c                    # Synced to WineStaging-1.9.4 (gdi32/painting.c)
 
 winmm -
-  modules/rostests/winetests/winmm      # Synced to WineStaging-4.18
+  modules/rostests/winetests/winmm      # Synced to Wine-10.0

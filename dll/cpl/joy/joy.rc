@@ -1,89 +1,125 @@
-#include <windef.h>
-#include <winuser.h>
+/*
+ * Joystick testing control panel applet resource file
+ *
+ * Copyright 2012 Lucas Fialho Zawacki
+ *
+ * This library is free software; you can redistribute it and/or
+ * modify it under the terms of the GNU Lesser General Public
+ * License as published by the Free Software Foundation; either
+ * version 2.1 of the License, or (at your option) any later version.
+ *
+ * This library is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
+ * Lesser General Public License for more details.
+ *
+ * You should have received a copy of the GNU Lesser General Public
+ * License along with this library; if not, write to the Free Software
+ * Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA 02110-1301, USA
+ *
+ */
 
 #include "resource.h"
 
+#pragma makedep po
+
+LANGUAGE LANG_ENGLISH, SUBLANG_DEFAULT
+
+STRINGTABLE
+BEGIN
+    IDS_CPL_NAME        "Game Controllers"
+    IDS_CPL_INFO        "Test and configure game controllers."
+END
+
+IDD_LIST DIALOG 0, 0, 320, 300
+STYLE WS_CAPTION | WS_CHILD | WS_DISABLED
+CAPTION "Joysticks"
+FONT 8, "Ms Shell Dlg"
+{
+    PUSHBUTTON      "&Disable", IDC_BUTTON_DI_DISABLE, 200, 20, 60, 15
+    PUSHBUTTON      "&Reset", IDC_BUTTON_DI_RESET, 200, 40, 60, 15
+    PUSHBUTTON      "&Override", IDC_BUTTON_XI_OVERRIDE, 200, 90, 60, 15
+    PUSHBUTTON      "&Enable", IDC_BUTTON_ENABLE, 200, 160, 60, 15
+    LTEXT           "Connected (DirectInput devices)", IDC_STATIC, 10, 10, 180, 10
+    LISTBOX         IDC_DI_ENABLED_LIST, 10, 20, 180, 60, WS_TABSTOP | WS_VSCROLL | LBS_NOTIFY
+    LTEXT           "Connected (XInput devices)", IDC_STATIC, 10, 80, 180, 10
+    LISTBOX         IDC_XI_ENABLED_LIST, 10, 90, 180, 60, WS_TABSTOP | WS_VSCROLL | LBS_NOTIFY
+    LTEXT           "Disabled", IDC_STATIC, 10, 150, 180, 10
+    LISTBOX         IDC_DISABLED_LIST, 10, 160, 180, 60, WS_TABSTOP | WS_VSCROLL | LBS_NOTIFY
+
+    GROUPBOX        "Advanced settings (restart prefix required to take effect)", IDC_ADVANCED, 10, 220, 300, 70
+    AUTOCHECKBOX    "Enable SDL", IDC_ENABLE_SDL, 20, 235, 100, 10
+    AUTOCHECKBOX    "Disable hidraw", IDC_DISABLE_HIDRAW, 20, 245, 100, 10
+}
+
+IDD_TEST_DI DIALOG 0, 0, 320, 300
+STYLE WS_CAPTION | WS_CHILD | WS_DISABLED
+CAPTION "DInput"
+FONT 8, "Ms Shell Dlg"
+{
+    COMBOBOX        IDC_DI_DEVICES, 15, 10, 291, 60, CBS_DROPDOWNLIST | CBS_HASSTRINGS
+    GROUPBOX        "Axes", IDC_DI_AXES, 15, 30, 214, 60
+    GROUPBOX        "POVs", IDC_DI_POVS, 246, 30, 60, 60
+    GROUPBOX        "Buttons", IDC_DI_BUTTONS, 15, 100, 291, 86
+    LTEXT           "Force Feedback Effect", IDC_STATIC, 15, 196, 291, 10
+    LISTBOX         IDC_DI_EFFECTS, 15, 206, 291, 54, WS_TABSTOP | WS_VSCROLL | LBS_NOTIFY
+    LTEXT           "Press any button in the controller to activate the chosen effect. The effect direction can be changed with the controller axis.",
+                    IDC_STATIC, 15, 260, 291, 25
+}
+
+IDD_TEST_XI DIALOG 0, 0, 320, 300
+STYLE WS_CAPTION | WS_CHILD | WS_DISABLED
+CAPTION "XInput"
+FONT 8, "Ms Shell Dlg"
+{
+    GROUPBOX        "User #0", IDC_XI_USER_0, 15,  10, 291, 60
+    GROUPBOX        "User #1", IDC_XI_USER_1, 15,  80, 291, 60
+    GROUPBOX        "User #2", IDC_XI_USER_2, 15, 150, 291, 60
+    GROUPBOX        "User #3", IDC_XI_USER_3, 15, 220, 291, 60
+
+#ifndef __REACTOS__
+    LTEXT           "No user detected on slot #0, make sure your " \
+                    "gamepad is plugged in, and not overridden for " \
+                    "DInput in the Joysticks tab.",
+                    IDC_XI_NO_USER_0,         15, 10, 291, 60
+    LTEXT           "No user detected on slot #1, make sure your " \
+                    "gamepad is plugged in, and not overridden for " \
+                    "DInput in the Joysticks tab.",
+                    IDC_XI_NO_USER_1,         15,  80, 291, 60
+    LTEXT           "No user detected on slot #2, make sure your " \
+                    "gamepad is plugged in, and not overridden for " \
+                    "DInput in the Joysticks tab.",
+                    IDC_XI_NO_USER_2,         15, 150, 291, 60
+    LTEXT           "No user detected on slot #3, make sure your " \
+                    "gamepad is plugged in, and not overridden for " \
+                    "DInput in the Joysticks tab.",
+                    IDC_XI_NO_USER_3,         15, 220, 291, 60
+#else
+    LTEXT           "No user detected on slot #0, make sure your gamepad is plugged in, and not overridden for DInput in the Joysticks tab.",
+                    IDC_XI_NO_USER_0,         15, 10, 291, 60
+    LTEXT           "No user detected on slot #1, make sure your gamepad is plugged in, and not overridden for DInput in the Joysticks tab.",
+                    IDC_XI_NO_USER_1,         15,  80, 291, 60
+    LTEXT           "No user detected on slot #2, make sure your gamepad is plugged in, and not overridden for DInput in the Joysticks tab.",
+                    IDC_XI_NO_USER_2,         15, 150, 291, 60
+    LTEXT           "No user detected on slot #3, make sure your gamepad is plugged in, and not overridden for DInput in the Joysticks tab.",
+                    IDC_XI_NO_USER_3,         15, 220, 291, 60
+#endif
+
+    AUTOCHECKBOX    "Rumble", IDC_XI_RUMBLE_0, 260,  10, 40, 10
+    AUTOCHECKBOX    "Rumble", IDC_XI_RUMBLE_1, 260,  80, 40, 10
+    AUTOCHECKBOX    "Rumble", IDC_XI_RUMBLE_2, 260, 150, 40, 10
+    AUTOCHECKBOX    "Rumble", IDC_XI_RUMBLE_3, 260, 220, 40, 10
+}
+
 LANGUAGE LANG_NEUTRAL, SUBLANG_NEUTRAL
 
-#define REACTOS_VERSION_DLL
-#define REACTOS_STR_FILE_DESCRIPTION  "ReactOS Software Control Panel"
-#define REACTOS_STR_INTERNAL_NAME     "joy"
-#define REACTOS_STR_ORIGINAL_FILENAME "joy.cpl"
-#include <reactos/version.rc>
+/* @makedep: joy.manifest */
+124 RT_MANIFEST joy.manifest
 
-IDI_CPLSYSTEM ICON "resources/applet.ico"
+/* @makedep: joy.ico */
+ICO_MAIN ICON "joy.ico"
 
-#include <reactos/manifest_hosted.rc>
+#define WINE_FILENAME_STR "joy.cpl"
+#define WINE_FILEDESCRIPTION_STR "Game Controllers Configuration Panel"
 
-/* UTF-8 */
-#pragma code_page(65001)
-
-#ifdef LANGUAGE_BG_BG
-    #include "lang/bg-BG.rc"
-#endif
-#ifdef LANGUAGE_CS_CZ
-    #include "lang/cs-CZ.rc"
-#endif
-#ifdef LANGUAGE_DE_DE
-    #include "lang/de-DE.rc"
-#endif
-#ifdef LANGUAGE_EL_GR
-    #include "lang/el-GR.rc"
-#endif
-#ifdef LANGUAGE_EN_US
-    #include "lang/en-US.rc"
-#endif
-#ifdef LANGUAGE_ES_ES
-    #include "lang/es-ES.rc"
-#endif
-#ifdef LANGUAGE_FR_FR
-    #include "lang/fr-FR.rc"
-#endif
-#ifdef LANGUAGE_HE_IL
-    #include "lang/he-IL.rc"
-#endif
-#ifdef LANGUAGE_ID_ID
-    #include "lang/id-ID.rc"
-#endif
-#ifdef LANGUAGE_IT_IT
-    #include "lang/it-IT.rc"
-#endif
-#ifdef LANGUAGE_JA_JP
-    #include "lang/ja-JP.rc"
-#endif
-#ifdef LANGUAGE_NB_NO
-    #include "lang/no-NO.rc"
-#endif
-#ifdef LANGUAGE_PL_PL
-    #include "lang/pl-PL.rc"
-#endif
-#ifdef LANGUAGE_PT_PT
-    #include "lang/pt-PT.rc"
-#endif
-#ifdef LANGUAGE_RO_RO
-    #include "lang/ro-RO.rc"
-#endif
-#ifdef LANGUAGE_RU_RU
-    #include "lang/ru-RU.rc"
-#endif
-#ifdef LANGUAGE_SK_SK
-    #include "lang/sk-SK.rc"
-#endif
-#ifdef LANGUAGE_SQ_AL
-    #include "lang/sq-AL.rc"
-#endif
-#ifdef LANGUAGE_TR_TR
-    #include "lang/tr-TR.rc"
-#endif
-#ifdef LANGUAGE_UK_UA
-    #include "lang/uk-UA.rc"
-#endif
-#ifdef LANGUAGE_ZH_CN
-    #include "lang/zh-CN.rc"
-#endif
-#ifdef LANGUAGE_ZH_HK
-    #include "lang/zh-HK.rc"
-#endif
-#ifdef LANGUAGE_ZH_TW
-    #include "lang/zh-TW.rc"
-#endif
+#include "wine/wine_common_ver.rc"

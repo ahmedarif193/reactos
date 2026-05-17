@@ -119,14 +119,14 @@ static void test_timer(UINT period, UINT resolution)
         if (i == 0)
         {
             if (winetest_debug > 1)
-                trace("time[%d] = %u\n", i, times[i]);
+                trace("time[%d] = %lu\n", i, times[i]);
         }
         else
         {
             delta = times[i] - times[i - 1];
 
             if (winetest_debug > 1)
-                trace("time[%d] = %u delta = %d\n", i, times[i], delta);
+                trace("time[%d] = %lu delta = %d\n", i, times[i], delta);
 
             sum += delta;
             deviation += ((delta - period) * (delta - period));
@@ -139,7 +139,7 @@ static void test_timer(UINT period, UINT resolution)
         }
     }
 
-    trace("min = %u, max = %u, average = %f, standard deviation = %f\n",
+    trace("min = %lu, max = %lu, average = %f, standard deviation = %f\n",
           dwMin, dwMax, sum / (count - 1), sqrt(deviation / (count - 2)));
 }
 
@@ -167,7 +167,7 @@ static void CALLBACK priorityTimeProc(UINT uID, UINT uMsg, DWORD_PTR dwUser,
                                       DWORD_PTR dw1, DWORD_PTR dw2)
 {
     priority = GetThreadPriority(GetCurrentThread());
-    ok(priority!=THREAD_PRIORITY_ERROR_RETURN, "GetThreadPriority() failed, GetLastError() = %u\n", GetLastError());
+    ok(priority!=THREAD_PRIORITY_ERROR_RETURN, "GetThreadPriority() failed, GetLastError() = %lu\n", GetLastError());
     fired = TRUE;
 }
 
@@ -193,6 +193,60 @@ static void test_priority(void)
     timeKillEvent(id);
 }
 
+static void CALLBACK kill_timer_callback(UINT id, UINT msg,
+        DWORD_PTR arg, DWORD_PTR dw1, DWORD_PTR dw2)
+{
+    HANDLE event = (HANDLE)arg;
+    MMRESULT res;
+
+    res = timeKillEvent(id);
+    ok(res == TIMERR_NOERROR, "timeKillEvent failed in callback\n");
+    SetEvent(event);
+}
+
+static void test_timer_lifetime(void)
+{
+    UINT timers[20], i;
+    HANDLE event;
+    MMRESULT res;
+
+    event = CreateEventW(NULL, FALSE, FALSE, NULL);
+    ok(event != NULL, "CreateEvent failed\n");
+
+    for (i = 0; i < 20; i++)
+    {
+        timers[i] = timeSetEvent(10000, 0, event, 0, TIME_CALLBACK_EVENT_SET);
+        if (i < 16)
+            ok(timers[i] != 0, "%d) timeSetEvent failed\n", i);
+        else
+            ok(!timers[i], "%d) timeSetEvent succeeded\n", i);
+    }
+
+    for (i = 0; i < 16; i++)
+    {
+        res = timeKillEvent(timers[i]);
+        ok(res == TIMERR_NOERROR, "%d) timeKillEvent failed\n", i);
+    }
+
+    timers[0] = timeSetEvent(10, 0, event, 0, TIME_CALLBACK_EVENT_SET);
+    ok(timers[0], "timeSetEvent failed\n");
+    WaitForSingleObject(event, 1000);
+    timers[1] = timeSetEvent(1000, 0, event, 0, TIME_CALLBACK_EVENT_SET);
+    ok(timers[1], "timeSetEvent failed\n");
+    ok(timers[0] != timers[1], "timer got the same id as just destroyed timer\n");
+    res = timeKillEvent(timers[0]);
+    ok(res == TIMERR_NOCANDO, "timeKillEvent returned %d\n", res);
+    res = timeKillEvent(timers[1]);
+    ok(res == TIMERR_NOERROR, "timeKillEvent returned %d\n", res);
+
+    timers[0] = timeSetEvent(10, 0, kill_timer_callback, (DWORD_PTR)event, TIME_ONESHOT);
+    WaitForSingleObject(event, 1000);
+    timers[0] = timeSetEvent(10, 0, kill_timer_callback, (DWORD_PTR)event, TIME_KILL_SYNCHRONOUS);
+    WaitForSingleObject(event, 1000);
+
+    CloseHandle(event);
+}
+
 START_TEST(timer)
 {
     test_timeGetDevCaps();
@@ -216,4 +270,5 @@ START_TEST(timer)
     }
 
     test_priority();
+    test_timer_lifetime();
 }

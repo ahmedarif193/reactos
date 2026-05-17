@@ -13,6 +13,7 @@ list(APPEND SOURCE
     wave.c)
 
 add_executable(winmm_winetest ${SOURCE})
+target_sources(winmm_winetest PRIVATE rsrc.rc)
 
 if(CMAKE_C_COMPILER_ID STREQUAL "GNU" OR CMAKE_C_COMPILER_ID STREQUAL "Clang")
     target_compile_options(winmm_winetest PRIVATE "-Wno-format")

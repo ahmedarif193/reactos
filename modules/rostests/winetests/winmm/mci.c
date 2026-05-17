@@ -23,6 +23,7 @@
 #include "windows.h"
 #include "mmsystem.h"
 #include "mmreg.h"
+#include "digitalv.h"
 #include "wine/test.h"
 
 /* The tests use the MCI's own save capability to create the tempfile.wav to play.
@@ -37,6 +38,10 @@ typedef union {
       MCI_GETDEVCAPS_PARMS caps;
       MCI_SYSINFO_PARMSA  sys;
       MCI_SEEK_PARMS      seek;
+      MCI_DGV_OPEN_PARMSW dgv_open;
+      MCI_DGV_PUT_PARMS   put;
+      MCI_DGV_WHERE_PARMS where;
+      MCI_DGV_WINDOW_PARMSW win;
       MCI_GENERIC_PARMS   gen;
     } MCI_PARMS_UNION;
 
@@ -123,7 +128,7 @@ const char* dbg_mcierr(MCIERROR err)
 #undef X
      default: {
          static char name[20]; /* Not to be called twice in a parameter list! */
-         sprintf(name, "MMSYSERR %u", err);
+         sprintf(name, "MMSYSERR %lu", err);
          return name;
          }
      }
@@ -137,6 +142,31 @@ static BOOL spurious_message(LPMSG msg)
     return TRUE;
   }
   return FALSE;
+}
+
+static WCHAR *load_resource(const WCHAR *name)
+{
+    static WCHAR pathW[MAX_PATH];
+    DWORD written;
+    HANDLE file;
+    HRSRC res;
+    void *ptr;
+
+    GetTempPathW(ARRAY_SIZE(pathW), pathW);
+    wcscat(pathW, name);
+
+    file = CreateFileW(pathW, GENERIC_READ|GENERIC_WRITE, 0, NULL, CREATE_ALWAYS, 0, 0);
+    ok(file != INVALID_HANDLE_VALUE, "Failed to create file %s, error %lu.\n",
+            wine_dbgstr_w(pathW), GetLastError());
+
+    res = FindResourceW(NULL, name, (LPCWSTR)RT_RCDATA);
+    ok(!!res, "Failed to load resource, error %lu.\n", GetLastError());
+    ptr = LockResource(LoadResource(GetModuleHandleA(NULL), res));
+    WriteFile(file, ptr, SizeofResource( GetModuleHandleA(NULL), res), &written, NULL);
+    ok(written == SizeofResource(GetModuleHandleA(NULL), res), "Failed to write resource.\n");
+    CloseHandle(file);
+
+    return pathW;
 }
 
 /* A single ok() in each code path allows us to prefix this with todo_wine */
@@ -155,19 +185,12 @@ static void test_notification_dbg(HWND hwnd, const char* command, WPARAM type, i
       seen = PeekMessageA(&msg, hwnd, MM_MCINOTIFY, MM_MCINOTIFY, PM_REMOVE);
     }
     if(!seen)
-      ok_(__FILE__,line)(type==0, "Expect message %04lx from %s\n", type, command);
+      ok_(__FILE__,line)(type==0, "Expect message %04Ix from %s\n", type, command);
     else if(msg.hwnd != hwnd)
         ok_(__FILE__,line)(msg.hwnd == hwnd, "Didn't get the handle to our test window\n");
     else if(msg.message != MM_MCINOTIFY)
         ok_(__FILE__,line)(msg.message == MM_MCINOTIFY, "got %04x instead of MM_MCINOTIFY from command %s\n", msg.message, command);
-    else ok_(__FILE__,line)(msg.wParam == type, "got %04lx instead of MCI_NOTIFY_xyz %04lx from command %s\n", msg.wParam, type, command);
-}
-
-static int strcmp_wa(LPCWSTR strw, const char *stra)
-{
-    CHAR buf[512];
-    WideCharToMultiByte(CP_ACP, 0, strw, -1, buf, sizeof(buf), 0, 0);
-    return lstrcmpA(buf, stra);
+    else ok_(__FILE__,line)(msg.wParam == type, "got %04Ix instead of MCI_NOTIFY_xyz %04Ix from command %s\n", msg.wParam, type, command);
 }
 
 static void test_mciParser(HWND hwnd)
@@ -323,13 +346,13 @@ static void test_mciParser(HWND hwnd)
     parm.status.dwReturn = 0xFEEDABAD;
     err = mciSendCommandA(wDeviceID, MCI_STATUS, MCI_STATUS_ITEM, (DWORD_PTR)&parm);
     ok(!err,"mciCommand status time format: %s\n", dbg_mcierr(err));
-    if(!err) ok(MCI_FORMAT_MILLISECONDS==parm.status.dwReturn,"status time format: %ld\n",parm.status.dwReturn);
+    if(!err) ok(MCI_FORMAT_MILLISECONDS==parm.status.dwReturn,"status time format: %Id\n",parm.status.dwReturn);
 
     parm.status.dwItem = MCI_STATUS_MODE;
     parm.status.dwReturn = 0xFEEDABAD;
     err = mciSendCommandA(wDeviceID, MCI_STATUS, MCI_STATUS_ITEM, (DWORD_PTR)&parm);
     ok(!err,"mciCommand status mode: %s\n", dbg_mcierr(err));
-    if(!err) ok(MCI_MODE_STOP==parm.status.dwReturn,"STATUS mode: %ld\n",parm.status.dwReturn);
+    if(!err) ok(MCI_MODE_STOP==parm.status.dwReturn,"STATUS mode: %Id\n",parm.status.dwReturn);
 
     err = mciSendStringA("status x mode", buf, sizeof(buf), hwnd);
     ok(!err,"status mode: %s\n", dbg_mcierr(err));
@@ -339,19 +362,19 @@ static void test_mciParser(HWND hwnd)
     parm.caps.dwReturn = 0xFEEDABAD;
     err = mciSendCommandA(wDeviceID, MCI_GETDEVCAPS, MCI_GETDEVCAPS_ITEM, (DWORD_PTR)&parm);
     ok(!err,"mciCommand getdevcaps files: %s\n", dbg_mcierr(err));
-    if(!err) ok(1==parm.caps.dwReturn,"getdevcaps files: %d\n",parm.caps.dwReturn);
+    if(!err) ok(1==parm.caps.dwReturn,"getdevcaps files: %ld\n",parm.caps.dwReturn);
 
     parm.caps.dwItem = MCI_GETDEVCAPS_HAS_VIDEO;
     parm.caps.dwReturn = 0xFEEDABAD;
     err = mciSendCommandA(wDeviceID, MCI_GETDEVCAPS, MCI_GETDEVCAPS_ITEM, (DWORD_PTR)&parm);
     ok(!err,"mciCommand getdevcaps video: %s\n", dbg_mcierr(err));
-    if(!err) ok(0==parm.caps.dwReturn,"getdevcaps video: %d\n",parm.caps.dwReturn);
+    if(!err) ok(0==parm.caps.dwReturn,"getdevcaps video: %ld\n",parm.caps.dwReturn);
 
     parm.caps.dwItem = MCI_GETDEVCAPS_DEVICE_TYPE;
     parm.caps.dwReturn = 0xFEEDABAD;
     err = mciSendCommandA(wDeviceID, MCI_GETDEVCAPS, MCI_GETDEVCAPS_ITEM, (DWORD_PTR)&parm);
     ok(!err,"mciCommand getdevcaps video: %s\n", dbg_mcierr(err));
-    if(!err) ok(MCI_DEVTYPE_WAVEFORM_AUDIO==parm.caps.dwReturn,"getdevcaps device type: %d\n",parm.caps.dwReturn);
+    if(!err) ok(MCI_DEVTYPE_WAVEFORM_AUDIO==parm.caps.dwReturn,"getdevcaps device type: %ld\n",parm.caps.dwReturn);
 
     err = mciSendStringA("capability x uses files", buf, sizeof(buf), hwnd);
     ok(!err,"capability files: %s\n", dbg_mcierr(err));
@@ -417,7 +440,7 @@ static void test_openCloseWAVE(HWND hwnd)
     }
 
     err = mciGetDeviceIDA("waveaudio");
-    ok(!err, "mciGetDeviceIDA waveaudio returned %u, expected 0\n", err);
+    ok(!err, "mciGetDeviceIDA waveaudio returned %lu, expected 0\n", err);
 
     err = mciSendStringA(command_open, buf, sizeof(buf), hwnd);
     ok(!err,"mci %s returned %s\n", command_open, dbg_mcierr(err));
@@ -464,7 +487,7 @@ static void test_openCloseWAVE(HWND hwnd)
     /* MCI_..._PARMSA and PARMSW share the same layout, use one for both tests. */
     err = mciSendCommandW(MCI_ALL_DEVICE_ID, MCI_SYSINFO, MCI_SYSINFO_NAME | MCI_SYSINFO_OPEN, (DWORD_PTR)&parm);
     ok(!err || broken(err==MMSYSERR_NOTSUPPORTED/* Win9x */), "mciCommandW MCI_SYSINFO all name 1 open buffer[8]: %s\n", dbg_mcierr(err));
-    if(!err) ok(!strcmp_wa((LPWSTR)buf,"mysound"), "sysinfo name 1 open contents\n");
+    if (!err) ok(!lstrcmpW((LPWSTR)buf, L"mysound"), "sysinfo name 1 open contents\n");
 
     memset(buf, 0, sizeof(buf));
     buf[0] = 'Y';
@@ -532,7 +555,7 @@ static void test_openCloseWAVE(HWND hwnd)
     ok(!strcmp(buf,"K"), "info output buffer %s\n", buf);
 
     err = mciGetDeviceIDA("all");
-    ok(err == MCI_ALL_DEVICE_ID, "mciGetDeviceIDA all returned %u, expected MCI_ALL_DEVICE_ID\n", err);
+    ok(err == MCI_ALL_DEVICE_ID, "mciGetDeviceIDA all returned %lu, expected MCI_ALL_DEVICE_ID\n", err);
 
     err = mciSendStringA(command_close_my, NULL, 0, hwnd);
     ok(!err,"mci %s returned %s\n", command_close_my, dbg_mcierr(err));
@@ -595,13 +618,13 @@ static void test_openCloseWAVE(HWND hwnd)
         parm.caps.dwItem = MCI_GETDEVCAPS_DEVICE_TYPE;
         err = mciSendCommandA(wDeviceID, MCI_GETDEVCAPS, MCI_GETDEVCAPS_ITEM, (DWORD_PTR)&parm);
         ok(!err,"mciCommand MCI_GETDEVCAPS device type: %s\n", dbg_mcierr(err));
-        ok(MCI_DEVTYPE_WAVEFORM_AUDIO==parm.caps.dwReturn,"mciCommand GETDEVCAPS says %u, expected %u\n", parm.caps.dwReturn, MCI_DEVTYPE_WAVEFORM_AUDIO);
+        ok(MCI_DEVTYPE_WAVEFORM_AUDIO==parm.caps.dwReturn,"mciCommand GETDEVCAPS says %lu, expected %u\n", parm.caps.dwReturn, MCI_DEVTYPE_WAVEFORM_AUDIO);
     }
 
     ok(0xDEADF00D==intbuf[0] && 0xABADCAFE==intbuf[2],"DWORD buffer corruption\n");
 
     err = mciGetDeviceIDA("waveaudio");
-    ok(err == 1, "mciGetDeviceIDA waveaudio returned %u, expected 1\n", err);
+    ok(err == 1, "mciGetDeviceIDA waveaudio returned %lu, expected 1\n", err);
 
     err = mciSendStringA("open no-such-file.wav alias waveaudio", buf, sizeof(buf), NULL);
     ok(err==MCIERR_DUPLICATE_ALIAS, "mci open alias waveaudio returned %s\n", dbg_mcierr(err));
@@ -643,11 +666,11 @@ static void test_recordWAVE(HWND hwnd)
     wDeviceID = parm.open.wDeviceID;
 
     err = mciGetDeviceIDA("x");
-    ok(err == wDeviceID, "mciGetDeviceIDA x returned %u, expected %u\n", err, wDeviceID);
+    ok(err == wDeviceID, "mciGetDeviceIDA x returned %lu, expected %u\n", err, wDeviceID);
 
     /* Only the alias is looked up. */
     err = mciGetDeviceIDA("waveaudio");
-    ok(!err, "mciGetDeviceIDA waveaudio returned %u, expected 0\n", err);
+    ok(!err, "mciGetDeviceIDA waveaudio returned %lu, expected 0\n", err);
 
     test_notification(hwnd, "open new", MCI_NOTIFY_SUCCESSFUL);
     test_notification(hwnd, "open new no #2", 0);
@@ -656,7 +679,7 @@ static void test_recordWAVE(HWND hwnd)
     parm.status.dwItem = MCI_STATUS_TIME_FORMAT;
     err = mciSendCommandA(wDeviceID, MCI_STATUS, MCI_STATUS_ITEM, (DWORD_PTR)&parm);
     ok(!err,"mciCommand status time format: %s\n", dbg_mcierr(err));
-    ok(parm.status.dwReturn==MCI_FORMAT_MILLISECONDS,"status time format: %ld\n",parm.status.dwReturn);
+    ok(parm.status.dwReturn==MCI_FORMAT_MILLISECONDS,"status time format: %Id\n",parm.status.dwReturn);
 
     /* Info file fails until named in Open or Save. */
     err = mciSendStringA("info x file", buf, sizeof(buf), NULL);
@@ -714,7 +737,7 @@ static void test_recordWAVE(HWND hwnd)
     err = mciSendCommandA(wDeviceID, MCI_GETDEVCAPS, MCI_GETDEVCAPS_ITEM | MCI_NOTIFY,
             (DWORD_PTR)&parm);
     ok(!err,"mciCommand MCI_GETDEVCAPS inputs: %s\n", dbg_mcierr(err));
-    ok(parm.caps.dwReturn==ndevs,"mciCommand GETDEVCAPS claims %u inputs, expected %u\n", parm.caps.dwReturn, ndevs);
+    ok(parm.caps.dwReturn==ndevs,"mciCommand GETDEVCAPS claims %lu inputs, expected %u\n", parm.caps.dwReturn, ndevs);
     ok(!ok_pcm || !parm.caps.dwReturn,"No input device accepts PCM!?\n");
     test_notification(hwnd, "GETDEVCAPS inputs", MCI_NOTIFY_SUCCESSFUL);
 
@@ -746,7 +769,7 @@ static void test_recordWAVE(HWND hwnd)
     err = mciSendCommandA(wDeviceID, MCI_STATUS, MCI_STATUS_ITEM, (DWORD_PTR)&parm);
     ok(!err,"mciCommand status position: %s\n", dbg_mcierr(err));
     expect = 2 * nsamp * nch * nbits/8;
-    if(!err) todo_wine ok(parm.status.dwReturn==expect,"recorded %lu bytes, expected %u\n",parm.status.dwReturn,expect);
+    if(!err) todo_wine ok(parm.status.dwReturn==expect,"recorded %Iu bytes, expected %lu\n",parm.status.dwReturn,expect);
 
     parm.set.dwTimeFormat = MCI_FORMAT_SAMPLES;
     err = mciSendCommandA(wDeviceID, MCI_SET, MCI_SET_TIME_FORMAT, (DWORD_PTR)&parm);
@@ -756,7 +779,7 @@ static void test_recordWAVE(HWND hwnd)
     err = mciSendCommandA(wDeviceID, MCI_STATUS, MCI_STATUS_ITEM, (DWORD_PTR)&parm);
     ok(!err,"mciCommand status position: %s\n", dbg_mcierr(err));
     expect = 2 * nsamp;
-    if(!err) todo_wine ok(parm.status.dwReturn==expect,"recorded %lu samples, expected %u\n",parm.status.dwReturn,expect);
+    if(!err) todo_wine ok(parm.status.dwReturn==expect,"recorded %Iu samples, expected %lu\n",parm.status.dwReturn,expect);
 
     err = mciSendStringA("set x time format milliseconds", NULL, 0, NULL);
     ok(!err,"mci set time format milliseconds returned %s\n", dbg_mcierr(err));
@@ -770,7 +793,7 @@ static void test_recordWAVE(HWND hwnd)
 
     /* Save must not rename the original file. */
     if (!DeleteFileA("tempfile1.wav"))
-        todo_wine ok(FALSE, "Save must not rename the original file; DeleteFileA returned %d\n",
+        todo_wine ok(FALSE, "Save must not rename the original file; DeleteFileA returned %ld\n",
                 GetLastError());
 
     err = mciSendStringA("set x channels 2", NULL, 0, NULL);
@@ -807,13 +830,13 @@ static void test_playWAVE(HWND hwnd)
     }
 
     err = mciGetDeviceIDA("mysound");
-    ok(err == 1, "mciGetDeviceIDA mysound returned %u, expected 1\n", err);
+    ok(err == 1, "mciGetDeviceIDA mysound returned %lu, expected 1\n", err);
 
     err = mciGetDeviceIDA("tempfile.wav");
-    ok(!err, "mciGetDeviceIDA tempfile.wav returned %u, expected 0\n", err);
+    ok(!err, "mciGetDeviceIDA tempfile.wav returned %lu, expected 0\n", err);
 
     err = mciGetDeviceIDA("waveaudio");
-    ok(!err, "mciGetDeviceIDA waveaudio returned %u, expected 0\n", err);
+    ok(!err, "mciGetDeviceIDA waveaudio returned %lu, expected 0\n", err);
 
     err = mciSendStringA("status mysound length", buf, sizeof(buf), NULL);
     ok(!err,"mci status length returned %s\n", dbg_mcierr(err));
@@ -971,7 +994,7 @@ static void test_asyncWAVE(HWND hwnd)
     parm.status.dwItem = MCI_STATUS_TIME_FORMAT;
     err = mciSendCommandA(wDeviceID, MCI_STATUS, MCI_STATUS_ITEM, (DWORD_PTR)&parm);
     ok(!err,"mciCommand status time format: %s\n", dbg_mcierr(err));
-    if(!err) ok(parm.status.dwReturn==MCI_FORMAT_MILLISECONDS,"status time format: %ld\n",parm.status.dwReturn);
+    if(!err) ok(parm.status.dwReturn==MCI_FORMAT_MILLISECONDS,"status time format: %Id\n",parm.status.dwReturn);
 
     parm.set.dwTimeFormat = MCI_FORMAT_MILLISECONDS;
     err = mciSendCommandA(wDeviceID, MCI_SET, MCI_SET_TIME_FORMAT, (DWORD_PTR)&parm);
@@ -1195,7 +1218,7 @@ static void test_AutoOpenWAVE(HWND hwnd)
     test_notification(hwnd, "sysinfo name notify\n", MCI_NOTIFY_SUCCESSFUL);
 
     err = mciGetDeviceIDA("tempfile.wav");
-    ok(err == 1, "mciGetDeviceIDA tempfile.wav returned %u, expected 1\n", err);
+    ok(err == 1, "mciGetDeviceIDA tempfile.wav returned %lu, expected 1\n", err);
 
     /* Save the full pathname to the file. */
     err = mciSendStringA("info tempfile.wav file", path, sizeof(path), NULL);
@@ -1325,7 +1348,7 @@ static void test_playWaveTypeMpegvideo(void)
                           (DWORD_PTR)&status_parm);
     ok(!err,"mciCommand status mode returned %s\n", dbg_mcierr(err));
     ok(status_parm.dwReturn == MCI_MODE_PLAY,
-       "mciCommand status mode: %u\n", (DWORD)status_parm.dwReturn);
+       "mciCommand status mode: %lu\n", (DWORD)status_parm.dwReturn);
 
     err = mciSendStringA("setaudio mysound volume to 1000", NULL, 0, NULL);
     ok(!err,"mci setaudio volume to 1000 returned %s\n", dbg_mcierr(err));
@@ -1340,6 +1363,19 @@ static void test_playWaveTypeMpegvideo(void)
     err = mciSendStringA("status mysound mode", buf, sizeof(buf), NULL);
     ok(!err,"mci status mode returned %s\n", dbg_mcierr(err));
     ok(!strcmp(buf,"playing"), "mci status mode: %s\n", buf);
+
+    err = mciSendStringA("close mysound", NULL, 0, NULL);
+    ok(!err,"mci close returned %s\n", dbg_mcierr(err));
+
+    /* test a second play */
+    err = mciSendStringA("open tempfile.wav type MPEGVideo alias mysound", NULL, 0, NULL);
+    ok(err==ok_saved,"mci open tempfile.wav type MPEGVideo returned %s\n", dbg_mcierr(err));
+
+    err = mciSendStringA("play mysound", NULL, 0, NULL);
+    ok(!err,"mci play retuend %s\n", dbg_mcierr(err));
+
+    err = mciSendStringA("play mysound", NULL, 0, NULL);
+    ok(!err,"mci play retuend %s\n", dbg_mcierr(err));
 
     err = mciSendStringA("close mysound", NULL, 0, NULL);
     ok(!err,"mci close returned %s\n", dbg_mcierr(err));
@@ -1388,6 +1424,20 @@ static void test_asyncWaveTypeMpegvideo(HWND hwnd)
     Sleep(200);
     test_notification(hwnd,"play",0);
 
+    err = mciSendStringA("window mysound state hide", NULL, 0, NULL);
+    ok(err == MCIERR_NO_WINDOW, "mci window state returned %s\n", dbg_mcierr(err));
+
+    err = mciSendStringA("window mysound text abracadabra", NULL, 0, NULL);
+    ok(err == MCIERR_NO_WINDOW, "mci window text returned %s\n", dbg_mcierr(err));
+
+    sprintf(buf, "window mysound handle %lu", PtrToUlong(GetDesktopWindow()));
+    err = mciSendStringA(buf, NULL, 0, NULL);
+    ok(err == MCIERR_INTERNAL, "mci window handle (desktop) returned %s\n", dbg_mcierr(err));
+
+    sprintf(buf, "window mysound handle %lu", (unsigned long)0xdeadbeef);
+    err = mciSendStringA(buf, NULL, 0, NULL);
+    ok(err == MCIERR_NO_WINDOW, "mci window handle (deadbeef) returned %s\n", dbg_mcierr(err));
+
     err = mciSendStringA("close mysound wait", NULL, 0, NULL);
     ok(!err,"mci close wait returned %s\n", dbg_mcierr(err));
     test_notification(hwnd,"play (aborted by close)",MCI_NOTIFY_ABORTED);
@@ -1399,10 +1449,10 @@ static DWORD CALLBACK thread_cb(void *p)
     MCIERROR mr;
 
     mr = mciSendStringA("play x", NULL, 0, NULL);
-    ok(mr == MCIERR_INVALID_DEVICE_NAME, "play gave: 0x%x\n", mr);
+    ok(mr == MCIERR_INVALID_DEVICE_NAME, "play gave: 0x%lx\n", mr);
 
     mr = mciSendStringA("close x", NULL, 0, NULL);
-    ok(mr == MCIERR_INVALID_DEVICE_NAME, "close gave: 0x%x\n", mr);
+    ok(mr == MCIERR_INVALID_DEVICE_NAME, "close gave: 0x%lx\n", mr);
 
     SetEvent(evt);
 
@@ -1415,7 +1465,7 @@ static void test_threads(void)
     HANDLE evt;
 
     mr = mciSendStringA("open tempfile.wav alias x", NULL, 0, NULL);
-    ok(mr == 0 || mr == ok_saved, "open gave: 0x%x\n", mr);
+    ok(mr == 0 || mr == ok_saved, "open gave: 0x%lx\n", mr);
     if(mr){
         skip("Cannot open tempfile.wav for playing (%s), skipping\n", dbg_mcierr(mr));
         return;
@@ -1430,7 +1480,287 @@ static void test_threads(void)
     CloseHandle(evt);
 
     mr = mciSendStringA("close x", NULL, 0, NULL);
-    ok(mr == 0, "close gave: 0x%x\n", mr);
+    ok(mr == 0, "close gave: 0x%lx\n", mr);
+}
+
+static BOOL CALLBACK my_visible_window_proc(HWND hwnd, LPARAM param)
+{
+    HWND *ret = (HWND *)param;
+    DWORD pid;
+
+    GetWindowThreadProcessId(hwnd, &pid);
+    if (pid != GetCurrentProcessId())
+        return TRUE;
+
+    if (GetWindowLongW(hwnd, GWL_STYLE) & WS_VISIBLE)
+    {
+        *ret = hwnd;
+        return FALSE;
+    }
+
+    return TRUE;
+}
+
+static void test_video_window(void)
+{
+    const WCHAR *filename = load_resource(L"test.mpg");
+    MCI_PARMS_UNION parm;
+    WCHAR buffer[256];
+    unsigned int i;
+    MCIDEVICEID id;
+    MCIERROR err;
+    BOOL ret;
+
+    static const struct
+    {
+        DWORD open_flags;
+        DWORD style;
+        DWORD expected_style;
+    }
+    testcase[] =
+    {
+        {
+            0,
+            0,
+            (WS_OVERLAPPEDWINDOW | WS_CLIPCHILDREN | WS_CLIPSIBLINGS) & ~WS_MAXIMIZEBOX,
+        },
+        {
+            MCI_DGV_OPEN_PARENT,
+            0,
+            (WS_OVERLAPPEDWINDOW | WS_CLIPCHILDREN | WS_CLIPSIBLINGS) & ~WS_MAXIMIZEBOX,
+        },
+        {
+            MCI_DGV_OPEN_WS,
+            0,
+            WS_BORDER | WS_CLIPSIBLINGS | WS_BORDER | WS_DLGFRAME,
+        },
+        {
+            MCI_DGV_OPEN_WS,
+            WS_POPUPWINDOW,
+            WS_POPUPWINDOW | WS_CLIPSIBLINGS,
+        },
+        {
+            MCI_DGV_OPEN_PARENT | MCI_DGV_OPEN_WS,
+            WS_OVERLAPPEDWINDOW,
+            WS_OVERLAPPEDWINDOW | WS_CLIPSIBLINGS,
+        },
+        {
+            MCI_DGV_OPEN_PARENT | MCI_DGV_OPEN_WS,
+            WS_CHILDWINDOW,
+            WS_CHILD,
+        },
+    };
+
+    for (i = 0; i < ARRAY_SIZE(testcase); ++i)
+    {
+        HWND parent_window = NULL, hwnd, video_window, main_window;
+        DWORD style, expected;
+        RECT rc, src_rc, win_rc;
+
+        winetest_push_context("%u", i);
+
+        main_window = CreateWindowExA(0, "static", "main",
+                WS_POPUPWINDOW, 0, 0, 10, 10, 0, 0, 0, NULL);
+        if (testcase[i].open_flags & MCI_DGV_OPEN_PARENT)
+            parent_window = CreateWindowExA(0, "static", "parent",
+                    WS_POPUPWINDOW, 0, 0, 100, 100, 0, 0, 0, NULL);
+
+        parm.dgv_open.lpstrDeviceType = (WCHAR *)L"MPEGVideo";
+        parm.dgv_open.lpstrElementName = (WCHAR *)filename;
+        parm.dgv_open.hWndParent = parent_window;
+        parm.dgv_open.dwStyle = testcase[i].style;
+        err = mciSendCommandW(0, MCI_OPEN,
+                MCI_OPEN_ELEMENT | MCI_OPEN_TYPE | testcase[i].open_flags, (DWORD_PTR)&parm);
+        ok(!err, "Got %s.\n", dbg_mcierr(err));
+        id = parm.dgv_open.wDeviceID;
+
+        err = mciSendCommandW(id, MCI_PLAY, 0, (DWORD_PTR)&parm);
+        ok(!err, "Got %s.\n", dbg_mcierr(err));
+
+        if (!(testcase[i].style & WS_CHILD))
+        {
+            video_window = NULL;
+            EnumWindows(my_visible_window_proc, (LPARAM)&video_window);
+            ok(video_window != NULL, "Video window should be shown.\n");
+
+            hwnd = GetWindow(video_window, GW_OWNER);
+            ok(hwnd == parent_window, "Got owner %p, expected %p.\n", hwnd, parent_window);
+        }
+        else
+        {
+            ok(!IsWindowVisible(parent_window), "Parent window should be hidden.\n");
+            ShowWindow(parent_window, SW_SHOWNA);
+
+            hwnd = GetWindow(parent_window, GW_CHILD);
+            ok(hwnd != NULL, "Child video window should be shown.\n");
+            video_window = hwnd;
+        }
+
+        expected = testcase[i].expected_style | WS_VISIBLE;
+        style = GetWindowLongW(video_window, GWL_STYLE);
+        ok(style == expected, "Got style %#lx for window %p, expected %#lx.\n", style, video_window, expected);
+
+        /* Get the source video size. */
+        err = mciSendCommandW(id, MCI_WHERE, MCI_DGV_WHERE_SOURCE, (DWORD_PTR)&parm);
+        ok(!err, "Got %s.\n", dbg_mcierr(err));
+        SetRect(&rc, 0, 0, 32, 24);
+        ok(EqualRect(&parm.where.rc, &rc), "Got source rect %s, expected %s.\n",
+                wine_dbgstr_rect(&parm.where.rc), wine_dbgstr_rect(&rc));
+        src_rc = parm.where.rc;
+
+        /* Test the default video destination size. */
+        err = mciSendCommandW(id, MCI_WHERE, MCI_DGV_WHERE_DESTINATION, (DWORD_PTR)&parm);
+        ok(!err, "Got %s.\n", dbg_mcierr(err));
+        if (style & (WS_POPUP | WS_CHILD))
+            rc = src_rc;
+        else
+            /* The video destination is stretched to fit the window,
+             * in particular if the video width is less than SM_CXMIN. */
+            GetClientRect(video_window, &rc);
+
+        ok(EqualRect(&parm.where.rc, &rc), "Got destination rect %s, expected %s.\n",
+                wine_dbgstr_rect(&parm.where.rc), wine_dbgstr_rect(&rc));
+
+        /* Test the default video window size. */
+        rc = src_rc;
+        /* Windows is broken and always uses WS_OVERLAPPEDWINDOW regardless of
+         * the window's actual style. */
+        AdjustWindowRect(&rc, WS_OVERLAPPEDWINDOW, FALSE);
+        OffsetRect(&rc, -rc.left, -rc.top);
+        rc.right = max(rc.right, GetSystemMetrics(SM_CXMIN));
+
+        GetWindowRect(video_window, &win_rc);
+        OffsetRect(&rc, win_rc.left, win_rc.top);
+        ok(EqualRect(&rc, &win_rc), "Got window rect %s, expected %s.\n",
+                wine_dbgstr_rect(&win_rc), wine_dbgstr_rect(&rc));
+
+        err = mciSendCommandW(id, MCI_WHERE, MCI_DGV_WHERE_WINDOW, (DWORD_PTR)&parm);
+        ok(!err, "Got %s.\n", dbg_mcierr(err));
+        win_rc.right -= win_rc.left;
+        win_rc.bottom -= win_rc.top;
+        ok(EqualRect(&win_rc, &parm.where.rc), "Got rect %s, expected %s.\n",
+                wine_dbgstr_rect(&parm.where.rc), wine_dbgstr_rect(&win_rc));
+
+        err = mciSendCommandW(id, MCI_STOP, 0, (DWORD_PTR)&parm);
+        ok(!err, "Got %s.\n", dbg_mcierr(err));
+
+        ok(IsWindowVisible(video_window), "Video window should be visible.\n");
+
+        err = mciSendCommandW(id, MCI_PLAY, 0, (DWORD_PTR)&parm);
+        ok(!err, "Got %s.\n", dbg_mcierr(err));
+
+        ok(IsWindowVisible(video_window), "Video window should be visible.\n");
+
+        err = mciSendCommandW(id, MCI_SEEK, MCI_SEEK_TO_START, (DWORD_PTR)&parm);
+        ok(!err, "Got %s.\n", dbg_mcierr(err));
+
+        ok(IsWindowVisible(video_window), "Video window should be visible.\n");
+
+        /* Test MCI_DGV_WINDOW_HWND. */
+        parm.win.hWnd = (HWND)0xdeadbeef;
+        err = mciSendCommandW(id, MCI_WINDOW, MCI_DGV_WINDOW_HWND, (DWORD_PTR)&parm);
+        ok(err == MCIERR_NO_WINDOW, "Got %s.\n", dbg_mcierr(err));
+
+        parm.win.hWnd = main_window;
+        err = mciSendCommandW(id, MCI_WINDOW, MCI_DGV_WINDOW_HWND, (DWORD_PTR)&parm);
+        ok(!err, "Got %s.\n", dbg_mcierr(err));
+        ok(!IsWindowVisible(main_window), "Main window should be hidden.\n");
+
+        hwnd = GetWindow(main_window, GW_CHILD);
+        ok(hwnd != video_window, "Video window (%p) and child window (%p) should be different.\n",
+                video_window, hwnd);
+        style = GetWindowLongW(hwnd, GWL_STYLE);
+        expected = WS_CHILD | WS_VISIBLE;
+        ok(style == expected, "Child window %p: got style %#lx, expected %#lx.\n",
+                hwnd, style, expected);
+
+        style = GetWindowLongW(video_window, GWL_STYLE);
+        expected = testcase[i].expected_style;
+        ok(style == expected, "Video window %p: got style %#lx, expected %#lx.\n",
+                video_window, style, expected);
+
+        /* destination size is reset to the source video size */
+        err = mciSendCommandW(id, MCI_WHERE, MCI_DGV_WHERE_DESTINATION, (DWORD_PTR)&parm);
+        ok(!err, "Got %s.\n", dbg_mcierr(err));
+        ok(EqualRect(&parm.where.rc, &src_rc), "Got destination rect %s, expected %s.\n",
+                wine_dbgstr_rect(&parm.where.rc), wine_dbgstr_rect(&src_rc));
+
+        /* destination size isn't reset unless the destination window is changed */
+        SetRect(&rc, 0, 0, src_rc.right * 2, src_rc.bottom / 2);
+        parm.put.rc = rc;
+        err = mciSendCommandW(id, MCI_PUT, MCI_DGV_PUT_DESTINATION | MCI_DGV_RECT, (DWORD_PTR)&parm);
+        ok(!err, "Got %s.\n", dbg_mcierr(err));
+
+        parm.win.hWnd = main_window;
+        err = mciSendCommandW(id, MCI_WINDOW, MCI_DGV_WINDOW_HWND, (DWORD_PTR)&parm);
+        ok(!err, "Got %s.\n", dbg_mcierr(err));
+        ok(!IsWindowVisible(main_window), "Main window should be hidden.\n");
+
+        err = mciSendCommandW(id, MCI_WHERE, MCI_DGV_WHERE_DESTINATION, (DWORD_PTR)&parm);
+        ok(!err, "Got %s.\n", dbg_mcierr(err));
+        ok(EqualRect(&parm.where.rc, &rc), "Got destination rect %s, expected %s.\n",
+                wine_dbgstr_rect(&parm.where.rc), wine_dbgstr_rect(&rc));
+
+        /* MCI_PLAY shows current video window */
+        err = mciSendCommandW(id, MCI_PLAY, 0, (DWORD_PTR)&parm);
+        ok(!err, "Got %s.\n", dbg_mcierr(err));
+        ok(IsWindowVisible(main_window), "Main window should be shown.\n");
+        ok(IsWindow(video_window), "Video window should exist.\n");
+        ok(!IsWindowVisible(video_window), "Video window should be hidden.\n");
+
+        /* Test MCI_DGV_WINDOW_STATE for the non-default window. */
+        parm.win.nCmdShow = SW_MINIMIZE;
+        err = mciSendCommandW(id, MCI_WINDOW, MCI_DGV_WINDOW_STATE, (DWORD_PTR)&parm);
+        ok(!err, "Got %s.\n", dbg_mcierr(err));
+        ok(IsIconic(main_window), "Video window should be minimized.\n");
+
+        /* Test MCI_DGV_WINDOW_TEXT for the non-default window. */
+        parm.win.lpstrText = (LPWSTR)L"foobar";
+        err = mciSendCommandW(id, MCI_WINDOW, MCI_DGV_WINDOW_TEXT, (DWORD_PTR)&parm);
+        ok(!err, "Got %s.\n", dbg_mcierr(err));
+        GetWindowTextW(main_window, buffer, ARRAY_SIZE(buffer));
+        ok(!wcscmp(buffer, parm.win.lpstrText), "Got %s, expected %s\n", wine_dbgstr_w(buffer), wine_dbgstr_w(parm.win.lpstrText));
+
+        /* video window is reset to the default window, which is visible again */
+        parm.win.hWnd = NULL;
+        err = mciSendCommandW(id, MCI_WINDOW, MCI_DGV_WINDOW_HWND, (DWORD_PTR)&parm);
+        ok(!err, "Got %s.\n", dbg_mcierr(err));
+        ok(IsWindowVisible(main_window), "Main window should be shown.\n");
+        ok(IsWindowVisible(video_window), "Video window should be shown.\n");
+
+        err = mciSendCommandW(id, MCI_WHERE, MCI_DGV_WHERE_DESTINATION, (DWORD_PTR)&parm);
+        ok(!err, "Got %s.\n", dbg_mcierr(err));
+        ok(EqualRect(&parm.where.rc, &src_rc), "Got destination rect %s, expected %s.\n",
+                wine_dbgstr_rect(&parm.where.rc), wine_dbgstr_rect(&src_rc));
+
+        /* Test MCI_DGV_WINDOW_STATE for the default window. */
+        parm.win.nCmdShow = SW_MINIMIZE;
+        err = mciSendCommandW(id, MCI_WINDOW, MCI_DGV_WINDOW_STATE, (DWORD_PTR)&parm);
+        ok(!err, "Got %s.\n", dbg_mcierr(err));
+        ok(IsIconic(video_window), "Video window should be minimized.\n");
+
+        /* Test MCI_DGV_WINDOW_TEXT for the default window. */
+        parm.win.lpstrText = (LPWSTR)L"abracadabra";
+        err = mciSendCommandW(id, MCI_WINDOW, MCI_DGV_WINDOW_TEXT, (DWORD_PTR)&parm);
+        ok(!err, "Got %s.\n", dbg_mcierr(err));
+        GetWindowTextW(video_window, buffer, ARRAY_SIZE(buffer));
+        ok(!wcscmp(buffer, parm.win.lpstrText), "Got %s, expected %s\n", wine_dbgstr_w(buffer), wine_dbgstr_w(parm.win.lpstrText));
+
+        err = mciSendCommandW(id, MCI_CLOSE, 0, 0);
+        ok(!err, "Got %s.\n", dbg_mcierr(err));
+
+        if (parent_window)
+        {
+            ret = DestroyWindow(parent_window);
+            ok(ret, "Failed to destroy parent window\n");
+        }
+        DestroyWindow(main_window);
+
+        winetest_pop_context();
+    }
+
+    ret = DeleteFileW(filename);
+    ok(ret, "Failed to delete %s, error %lu.\n", debugstr_w(filename), GetLastError());
 }
 
 START_TEST(mci)
@@ -1457,6 +1787,9 @@ START_TEST(mci)
         test_asyncWaveTypeMpegvideo(hwnd);
     }else
         skip("No output devices available, skipping all output tests\n");
+
+    test_video_window();
+
     /* Win9X hangs when exiting with something still open. */
     err = mciSendStringA("close all", NULL, 0, hwnd);
     ok(!err,"final close all returned %s\n", dbg_mcierr(err));

@@ -640,6 +640,41 @@ IntVkToChar(WORD wVk, PKBDTABLES pKbdTbl)
 }
 
 /*
+ * IntMapVkToChar
+ *
+ * Implements the MAPVK_VK_TO_CHAR API mapping. This is intentionally separate
+ * from IntVkToChar because Windows preserves virtual-key identity for A-Z here,
+ * while other translation paths use the layout table's unshifted character.
+ */
+static
+UINT FASTCALL
+IntMapVkToChar(WORD wVk, PKBDTABLES pKbdTbl)
+{
+    WCHAR wch;
+    BOOL bDead, bLigature;
+
+    ASSERT(pKbdTbl);
+
+    if (wVk >= 'A' && wVk <= 'Z')
+        return wVk;
+
+    if (!IntTranslateChar(wVk,
+                          NULL,
+                          &bDead,
+                          &bLigature,
+                          &wch,
+                          pKbdTbl))
+    {
+        return 0;
+    }
+
+    if (bLigature)
+        return 0;
+
+    return bDead ? ((UINT)wch | 0x80000000) : (UINT)wch;
+}
+
+/*
  * NtUserGetAsyncKeyState
  *
  * Gets key state from global bitmap
@@ -1632,7 +1667,7 @@ IntMapVirtualKeyEx(UINT uCode, UINT Type, PKBDTABLES pKbdTbl)
             break;
 
         case MAPVK_VK_TO_CHAR:
-            uRet = (UINT)IntVkToChar(uCode, pKbdTbl);
+            uRet = IntMapVkToChar(uCode, pKbdTbl);
         break;
 
         case MAPVK_VSC_TO_VK_EX:
@@ -1936,9 +1971,10 @@ NtUserVkKeyScanEx(
 {
     PKBDTABLES pKbdTbl;
     PVK_TO_WCHAR_TABLE pVkToWchTbl;
-    PVK_TO_WCHARS10 pVkToWch;
+    PVK_TO_WCHARS10 pVkToWch, pPrevVkToWch;
     PKL pKl = NULL;
     DWORD i, dwModBits = 0, dwModNumber = 0, Ret = (DWORD)-1;
+    BYTE VirtualKey;
 
     TRACE("NtUserVkKeyScanEx() wch %u, KbdLayout 0x%p\n", wch, dwhkl);
     UserEnterShared();
@@ -1965,6 +2001,7 @@ NtUserVkKeyScanEx(
     {
         pVkToWchTbl = &pKbdTbl->pVkToWcharTable[i];
         pVkToWch = (PVK_TO_WCHARS10)(pVkToWchTbl->pVkToWchars);
+        pPrevVkToWch = NULL;
 
         // Interate through all virtual keys
         while (pVkToWch->VirtualKey)
@@ -1973,13 +2010,25 @@ NtUserVkKeyScanEx(
             {
                 if (pVkToWch->wch[dwModNumber] == wch)
                 {
+                    VirtualKey = pVkToWch->VirtualKey;
+                    if (VirtualKey == 0xFF)
+                    {
+                        if (!pPrevVkToWch || pPrevVkToWch->wch[dwModNumber] != WCH_DEAD)
+                            continue;
+
+                        VirtualKey = pPrevVkToWch->VirtualKey;
+                        if (VirtualKey == 0xFF)
+                            continue;
+                    }
+
                     dwModBits = pKbdTbl->pCharModifiers->ModNumber[dwModNumber];
                     TRACE("i %lu wC %04x: dwModBits %08x dwModNumber %08x MaxModBits %08x\n",
                           i, wch, dwModBits, dwModNumber, pKbdTbl->pCharModifiers->wMaxModBits);
-                    Ret = (dwModBits << 8) | (pVkToWch->VirtualKey & 0xFF);
+                    Ret = (dwModBits << 8) | VirtualKey;
                     goto Exit;
                 }
             }
+            pPrevVkToWch = pVkToWch;
             pVkToWch = (PVK_TO_WCHARS10)(((BYTE *)pVkToWch) + pVkToWchTbl->cbSize);
         }
     }

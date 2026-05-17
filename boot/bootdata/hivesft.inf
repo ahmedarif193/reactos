@@ -677,8 +677,18 @@ HKLM,"SOFTWARE\Microsoft\Windows NT\CurrentVersion\Drivers32","vidc.msvc",0x0000
 
 HKLM,"SOFTWARE\Microsoft\Windows NT\CurrentVersion\MCI32","AVIVideo",0x00000002,"mciavi32.dll"
 HKLM,"SOFTWARE\Microsoft\Windows NT\CurrentVersion\MCI32","CDAudio",0x00000002,"mcicda.dll"
+HKLM,"SOFTWARE\Microsoft\Windows NT\CurrentVersion\MCI32","MPEGVideo",0x00000002,"mciqtz32.dll"
+HKLM,"SOFTWARE\Microsoft\Windows NT\CurrentVersion\MCI32","MPEGVideo2",0x00000002,"mciqtz32.dll"
 HKLM,"SOFTWARE\Microsoft\Windows NT\CurrentVersion\MCI32","Sequencer",0x00000002,"mciseq.dll"
 HKLM,"SOFTWARE\Microsoft\Windows NT\CurrentVersion\MCI32","WaveAudio",0x00000002,"mciwave.dll"
+
+; Wine-synced winmm still queries the legacy MCI key for 32-bit MCI drivers.
+HKLM,"SOFTWARE\Microsoft\Windows NT\CurrentVersion\MCI","AVIVideo",0x00000002,"mciavi32.dll"
+HKLM,"SOFTWARE\Microsoft\Windows NT\CurrentVersion\MCI","CDAudio",0x00000002,"mcicda.dll"
+HKLM,"SOFTWARE\Microsoft\Windows NT\CurrentVersion\MCI","MPEGVideo",0x00000002,"mciqtz32.dll"
+HKLM,"SOFTWARE\Microsoft\Windows NT\CurrentVersion\MCI","MPEGVideo2",0x00000002,"mciqtz32.dll"
+HKLM,"SOFTWARE\Microsoft\Windows NT\CurrentVersion\MCI","Sequencer",0x00000002,"mciseq.dll"
+HKLM,"SOFTWARE\Microsoft\Windows NT\CurrentVersion\MCI","WaveAudio",0x00000002,"mciwave.dll"
 
 HKLM,"SOFTWARE\Microsoft\Windows NT\CurrentVersion\MCI Extensions","aif",0x00000002,"MPEGVideo"
 HKLM,"SOFTWARE\Microsoft\Windows NT\CurrentVersion\MCI Extensions","aifc",0x00000002,"MPEGVideo"

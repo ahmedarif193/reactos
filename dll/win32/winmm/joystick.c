@@ -1,10 +1,11 @@
-/* -*- tab-width: 8; c-basic-offset: 4 -*- */
 /*
  * joystick functions
  *
  * Copyright 1997 Andreas Mohr
- *	     2000 Wolfgang Schwotzer
- *                Eric Pouech
+ * Copyright 2000 Wolfgang Schwotzer
+ * Copyright 2000 Eric Pouech
+ * Copyright 2020 Zebediah Figura for CodeWeavers
+ * Copyright 2021 Rémi Bernon for CodeWeavers
  *
  * This library is free software; you can redistribute it and/or
  * modify it under the terms of the GNU Lesser General Public
@@ -21,101 +22,332 @@
  * Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA 02110-1301, USA
  */
 
+#include <stdarg.h>
+#include <stdint.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <fcntl.h>
+
+#include "windef.h"
+#include "winbase.h"
+#include "mmsystem.h"
+
+#include "hidusage.h"
+#include "initguid.h"
+#include "dinput.h"
+
 #include "winemm.h"
 
-#ifdef HAVE_UNISTD_H
-# include <unistd.h>
-#endif
-
-#include <stdlib.h>
-
-#ifdef HAVE_SYS_IOCTL_H
-#include <sys/ioctl.h>
-#endif
+#include "wine/debug.h"
 
 WINE_DEFAULT_DEBUG_CHANNEL(winmm);
 
-#define MAXJOYSTICK (JOYSTICKID2 + 30)
+static CRITICAL_SECTION joystick_cs;
+static CRITICAL_SECTION_DEBUG critsect_debug =
+{
+    0, 0, &joystick_cs,
+    { &critsect_debug.ProcessLocksList, &critsect_debug.ProcessLocksList },
+      0, 0, { (DWORD_PTR)(__FILE__ ": joystick_cs") }
+};
+static CRITICAL_SECTION joystick_cs = { &critsect_debug, -1, 0, 0, 0, 0 };
+
+enum axis
+{
+    AXIS_X,
+    AXIS_Y,
+    AXIS_Z,
+    AXIS_R,
+    AXIS_U,
+    AXIS_V,
+    AXIS_COUNT,
+};
+
+#define BUTTON_COUNT 32
+
+struct joystick_state
+{
+    LONG axes[AXIS_COUNT];
+    LONG pov;
+    BYTE buttons[BUTTON_COUNT];
+};
+
 #define JOY_PERIOD_MIN	(10)	/* min Capture time period */
 #define JOY_PERIOD_MAX	(1000)	/* max Capture time period */
 
-typedef struct tagWINE_JOYSTICK {
-    JOYINFO	ji;
-    HWND	hCapture;
-    UINT	wTimer;
-    DWORD	threshold;
-    BOOL	bChanged;
-    HDRVR	hDriver;
-} WINE_JOYSTICK;
-
-static	WINE_JOYSTICK	JOY_Sticks[MAXJOYSTICK];
-
-/**************************************************************************
- * 				JOY_LoadDriver		[internal]
- */
-static	BOOL JOY_LoadDriver(DWORD dwJoyID)
+struct joystick
 {
-    static BOOL winejoystick_missing = FALSE;
+    DIDEVICEINSTANCEW instance;
+    IDirectInputDevice8W *device;
+    struct joystick_state state;
+    HANDLE event;
 
-    if (dwJoyID >= MAXJOYSTICK || winejoystick_missing)
-	return FALSE;
-    if (JOY_Sticks[dwJoyID].hDriver)
-	return TRUE;
+    JOYINFO info;
+    HWND capture;
+    UINT timer;
+    DWORD threshold;
+    BOOL changed;
+};
 
-    JOY_Sticks[dwJoyID].hDriver = OpenDriverA("winejoystick.drv", 0, dwJoyID);
+static DIDEVICEINSTANCEW instances[16];
+static struct joystick joysticks[16];
+static IDirectInput8W *dinput;
 
-    if (!JOY_Sticks[dwJoyID].hDriver)
-    {
-        WARN("OpenDriverA(\"winejoystick.drv\") failed\n");
+static BOOL CALLBACK enum_instances( const DIDEVICEINSTANCEW *instance, void *context )
+{
+    ULONG index = *(ULONG *)context;
+    BYTE type = instance->dwDevType;
 
-        /* The default driver is missing, don't attempt to load it again */
-        winejoystick_missing = TRUE;
-    }
+    if (type == DI8DEVTYPE_MOUSE) return DIENUM_CONTINUE;
+    if (type == DI8DEVTYPE_KEYBOARD) return DIENUM_CONTINUE;
 
-    return (JOY_Sticks[dwJoyID].hDriver != 0);
+    instances[index++] = *instance;
+    if (index >= ARRAY_SIZE(instances)) return DIENUM_STOP;
+    *(ULONG *)context = index;
+    return DIENUM_CONTINUE;
 }
 
-/**************************************************************************
- * 				JOY_Timer		[internal]
- */
-static	void	CALLBACK	JOY_Timer(HWND hWnd, UINT wMsg, UINT_PTR wTimer, DWORD dwTime)
+static BOOL WINAPI joystick_load_once( INIT_ONCE *once, void *param, void **context )
 {
-    int			i;
-    WINE_JOYSTICK*	joy;
-    JOYINFO		ji;
-    LONG		pos;
-    unsigned 		buttonChange;
+    HRESULT hr = DirectInput8Create( hWinMM32Instance, DIRECTINPUT_VERSION, &IID_IDirectInput8W,
+                                     (void **)&dinput, NULL );
+    if (FAILED(hr)) ERR( "Could not create dinput instance, hr %#lx\n", hr );
+    return TRUE;
+}
 
-    for (i = 0; i < MAXJOYSTICK; i++) {
-	joy = &JOY_Sticks[i];
+void joystick_unload(void)
+{
+    int i;
 
-	if (joy->hCapture != hWnd) continue;
+    if (!dinput) return;
 
-	joyGetPos(i, &ji);
-	pos = MAKELONG(ji.wXpos, ji.wYpos);
-
-	if (!joy->bChanged ||
-	    abs((INT)joy->ji.wXpos - (INT)ji.wXpos) > joy->threshold ||
-	    abs((INT)joy->ji.wYpos - (INT)ji.wYpos) > joy->threshold) {
-	    SendMessageA(joy->hCapture, MM_JOY1MOVE + i, ji.wButtons, pos);
-	    joy->ji.wXpos = ji.wXpos;
-	    joy->ji.wYpos = ji.wYpos;
-	}
-	if (!joy->bChanged ||
-	    abs((INT)joy->ji.wZpos - (INT)ji.wZpos) > joy->threshold) {
-	    SendMessageA(joy->hCapture, MM_JOY1ZMOVE + i, ji.wButtons, pos);
-	    joy->ji.wZpos = ji.wZpos;
-	}
-	if ((buttonChange = joy->ji.wButtons ^ ji.wButtons) != 0) {
-	    if (ji.wButtons & buttonChange)
-		SendMessageA(joy->hCapture, MM_JOY1BUTTONDOWN + i,
-			     (buttonChange << 8) | (ji.wButtons & buttonChange), pos);
-	    if (joy->ji.wButtons & buttonChange)
-		SendMessageA(joy->hCapture, MM_JOY1BUTTONUP + i,
-			     (buttonChange << 8) | (joy->ji.wButtons & buttonChange), pos);
-	    joy->ji.wButtons = ji.wButtons;
-	}
+    for (i = 0; i < ARRAY_SIZE(joysticks); i++)
+    {
+        if (!joysticks[i].device) continue;
+        IDirectInputDevice8_Release( joysticks[i].device );
+        CloseHandle( joysticks[i].event );
     }
+
+    IDirectInput8_Release( dinput );
+}
+
+static int is_already_mapped( const DIOBJECTDATAFORMAT *object_formats, DWORD count, DWORD instance_number )
+{
+    DWORD i;
+
+    for (i = 0; i < count; ++i)
+    {
+        if (object_formats[i].dwType == instance_number)
+            return 1;
+    }
+
+    return 0;
+}
+
+struct usage_enum_params
+{
+    WORD usage;
+    int found;
+    DWORD instance_number;
+};
+
+static BOOL CALLBACK usage_enum_cb( const DIDEVICEOBJECTINSTANCEW *instance, void *ctx )
+{
+    struct usage_enum_params *params = ctx;
+
+    if (!(instance->dwFlags & DIDOI_ASPECTPOSITION))
+        return DIENUM_CONTINUE;
+
+    if (instance->wUsagePage != HID_USAGE_PAGE_GENERIC)
+        return DIENUM_CONTINUE;
+
+    if ((params->usage == instance->wUsage)
+            || (params->usage == HID_USAGE_GENERIC_Z && instance->wUsage == HID_USAGE_GENERIC_WHEEL))
+    {
+        params->instance_number = instance->dwType;
+        params->found = 1;
+        return DIENUM_STOP;
+    }
+
+    return DIENUM_CONTINUE;
+}
+
+static HRESULT set_data_format( IDirectInputDevice8W *device )
+{
+    DIOBJECTDATAFORMAT object_formats[AXIS_COUNT + 1 + BUTTON_COUNT] = {{0}}; /* +1 for hat switch */
+    DIOBJECTDATAFORMAT *object_format;
+    DIDATAFORMAT data_format = {0};
+    unsigned int i, j;
+
+    static const struct
+    {
+        WORD usages[5];
+    }
+    usage_mappings[AXIS_COUNT] =
+    {
+        [AXIS_X] = {{HID_USAGE_GENERIC_X, HID_USAGE_GENERIC_RY}},
+        [AXIS_Y] = {{HID_USAGE_GENERIC_Y, HID_USAGE_GENERIC_RX}},
+        [AXIS_Z] = {{HID_USAGE_GENERIC_Z, HID_USAGE_GENERIC_SLIDER, HID_USAGE_GENERIC_DIAL}},
+        [AXIS_R] = {{HID_USAGE_GENERIC_RZ, HID_USAGE_GENERIC_SLIDER, HID_USAGE_GENERIC_DIAL, HID_USAGE_GENERIC_RY, HID_USAGE_GENERIC_RX}},
+        [AXIS_U] = {{HID_USAGE_GENERIC_SLIDER, HID_USAGE_GENERIC_DIAL, HID_USAGE_GENERIC_RY, HID_USAGE_GENERIC_RX}},
+        [AXIS_V] = {{HID_USAGE_GENERIC_RX}},
+    };
+
+    data_format.dwSize = sizeof(DIDATAFORMAT);
+    data_format.dwObjSize = sizeof(DIOBJECTDATAFORMAT);
+    data_format.dwFlags = DIDF_ABSAXIS;
+    data_format.dwDataSize = sizeof(struct joystick_state);
+    data_format.rgodf = object_formats;
+
+    for (i = 0; i < ARRAY_SIZE(usage_mappings); ++i)
+    {
+        for (j = 0; j < ARRAY_SIZE(usage_mappings[i].usages) && usage_mappings[i].usages[j]; ++j)
+        {
+            struct usage_enum_params params = {.usage = usage_mappings[i].usages[j]};
+
+            /* We can almost use GetObjectInfo() here, except that winmm
+             * treats Z and wheel identically. */
+            if (FAILED(IDirectInputDevice8_EnumObjects( device, usage_enum_cb, &params, DIDFT_AXIS )))
+                continue;
+            if (!params.found)
+                continue;
+            if (is_already_mapped( object_formats, data_format.dwNumObjs, params.instance_number ))
+                continue;
+
+            object_format = &object_formats[data_format.dwNumObjs++];
+            object_format->dwOfs = offsetof(struct joystick_state, axes[i]);
+            object_format->dwType = params.instance_number;
+            break;
+        }
+    }
+
+    object_format = &object_formats[data_format.dwNumObjs++];
+    object_format->pguid = &GUID_POV;
+    object_format->dwOfs = offsetof(struct joystick_state, pov);
+    object_format->dwType = DIDFT_OPTIONAL | DIDFT_POV | DIDFT_ANYINSTANCE;
+
+    for (i = 0; i < BUTTON_COUNT; ++i)
+    {
+        object_format = &object_formats[data_format.dwNumObjs++];
+        object_format->dwOfs = offsetof(struct joystick_state, buttons[i]);
+        object_format->dwType = DIDFT_OPTIONAL | DIDFT_BUTTON | DIDFT_ANYINSTANCE;
+    }
+
+    return IDirectInputDevice8_SetDataFormat( device, &data_format );
+}
+
+static void find_joysticks(void)
+{
+    static INIT_ONCE init_once = INIT_ONCE_STATIC_INIT;
+
+    IDirectInputDevice8W *device;
+    HANDLE event;
+    DWORD index;
+    HRESULT hr;
+
+    InitOnceExecuteOnce( &init_once, joystick_load_once, NULL, NULL );
+
+    if (!dinput) return;
+
+    index = 0;
+    IDirectInput8_EnumDevices( dinput, DI8DEVCLASS_ALL, enum_instances, &index, DIEDFL_ATTACHEDONLY );
+    TRACE( "found %lu device instances\n", index );
+
+    while (index--)
+    {
+        if (!memcmp( &joysticks[index].instance, &instances[index], sizeof(DIDEVICEINSTANCEW) ))
+            continue;
+
+        if (joysticks[index].device)
+        {
+            IDirectInputDevice8_Release( joysticks[index].device );
+            CloseHandle( joysticks[index].event );
+        }
+
+        if (!(event = CreateEventW( NULL, FALSE, FALSE, NULL )))
+            WARN( "could not event for device, error %lu\n", GetLastError() );
+        else if (FAILED(hr = IDirectInput8_CreateDevice( dinput, &instances[index].guidInstance, &device, NULL )))
+            WARN( "could not create device %s instance, hr %#lx\n",
+                  debugstr_guid( &instances[index].guidInstance ), hr );
+        else if (FAILED(hr = IDirectInputDevice8_SetEventNotification( device, event )))
+            WARN( "SetEventNotification device %p hr %#lx\n", device, hr );
+        else if (FAILED(hr = IDirectInputDevice8_SetCooperativeLevel( device, NULL, DISCL_NONEXCLUSIVE|DISCL_BACKGROUND )))
+            WARN( "SetCooperativeLevel device %p hr %#lx\n", device, hr );
+        else if (FAILED(hr = set_data_format( device )))
+            WARN( "SetDataFormat device %p hr %#lx\n", device, hr );
+        else if (FAILED(hr = IDirectInputDevice8_Acquire( device )))
+            WARN( "Acquire device %p hr %#lx\n", device, hr );
+        else
+        {
+            TRACE( "opened device %p event %p\n", device, event );
+
+            memset( &joysticks[index], 0, sizeof(struct joystick) );
+            joysticks[index].instance = instances[index];
+            joysticks[index].device = device;
+            joysticks[index].event = event;
+            continue;
+        }
+
+        CloseHandle( event );
+        if (device) IDirectInputDevice8_Release( device );
+        memmove( joysticks + index, joysticks + index + 1,
+                 (ARRAY_SIZE(joysticks) - index - 1) * sizeof(struct joystick) );
+        memset( &joysticks[ARRAY_SIZE(joysticks) - 1], 0, sizeof(struct joystick) );
+    }
+}
+
+static BOOL compare_uint(unsigned int x, unsigned int y, unsigned int max_diff)
+{
+    unsigned int diff = x > y ? x - y : y - x;
+    return diff <= max_diff;
+}
+
+static void CALLBACK joystick_timer( HWND hwnd, UINT msg, UINT_PTR timer, DWORD time )
+{
+    MMRESULT res;
+    JOYINFO info;
+    WORD change;
+    LONG pos;
+    int i;
+
+    EnterCriticalSection( &joystick_cs );
+
+    for (i = 0; i < ARRAY_SIZE(joysticks); i++)
+    {
+        if (joysticks[i].capture != hwnd) continue;
+        if ((res = joyGetPos( i, &info )))
+        {
+            WARN( "joyGetPos failed: %08x\n", res );
+            continue;
+        }
+
+        pos = MAKELONG( info.wXpos, info.wYpos );
+
+        if (!joysticks[i].changed ||
+            !compare_uint( joysticks[i].info.wXpos, info.wXpos, joysticks[i].threshold ) ||
+            !compare_uint( joysticks[i].info.wYpos, info.wYpos, joysticks[i].threshold ))
+        {
+            SendMessageA( hwnd, MM_JOY1MOVE + i, info.wButtons, pos );
+            joysticks[i].info.wXpos = info.wXpos;
+            joysticks[i].info.wYpos = info.wYpos;
+        }
+        if (!joysticks[i].changed ||
+            !compare_uint( joysticks[i].info.wZpos, info.wZpos, joysticks[i].threshold ))
+        {
+            SendMessageA( hwnd, MM_JOY1ZMOVE + i, info.wButtons, pos );
+            joysticks[i].info.wZpos = info.wZpos;
+        }
+        if ((change = joysticks[i].info.wButtons ^ info.wButtons) != 0)
+        {
+            if (info.wButtons & change)
+                SendMessageA( hwnd, MM_JOY1BUTTONDOWN + i, (change << 8) | (info.wButtons & change), pos );
+            if (joysticks[i].info.wButtons & change)
+                SendMessageA( hwnd, MM_JOY1BUTTONUP + i, (change << 8) | (joysticks[i].info.wButtons & change), pos );
+            joysticks[i].info.wButtons = info.wButtons;
+        }
+    }
+
+    LeaveCriticalSection( &joystick_cs );
 }
 
 /**************************************************************************
@@ -123,11 +355,8 @@ static	void	CALLBACK	JOY_Timer(HWND hWnd, UINT wMsg, UINT_PTR wTimer, DWORD dwTi
  */
 MMRESULT WINAPI joyConfigChanged(DWORD flags)
 {
-    FIXME("(%x) - stub\n", flags);
-
-    if (flags)
-	return JOYERR_PARMS;
-
+    FIXME( "flags %#lx stub!\n", flags );
+    if (flags) return JOYERR_PARMS;
     return JOYERR_NOERROR;
 }
 
@@ -136,150 +365,285 @@ MMRESULT WINAPI joyConfigChanged(DWORD flags)
  */
 UINT WINAPI DECLSPEC_HOTPATCH joyGetNumDevs(void)
 {
-    UINT	ret = 0;
-    int		i;
-
-    for (i = 0; i < MAXJOYSTICK; i++) {
-	if (JOY_LoadDriver(i)) {
-            ret += SendDriverMessage(JOY_Sticks[i].hDriver, JDD_GETNUMDEVS, 0, 0);
-	}
-    }
-    return ret;
+    return ARRAY_SIZE(joysticks);
 }
 
 /**************************************************************************
  * 				joyGetDevCapsW		[WINMM.@]
  */
-MMRESULT WINAPI DECLSPEC_HOTPATCH joyGetDevCapsW(UINT_PTR wID, LPJOYCAPSW lpCaps, UINT wSize)
+MMRESULT WINAPI DECLSPEC_HOTPATCH joyGetDevCapsW( UINT_PTR id, JOYCAPSW *caps, UINT size )
 {
-    if (wID >= MAXJOYSTICK)	return JOYERR_PARMS;
-    if (!JOY_LoadDriver(wID))	return MMSYSERR_NODRIVER;
+    static ULONG last_check;
+    DIDEVICEOBJECTINSTANCEW instance = {.dwSize = sizeof(DIDEVICEOBJECTINSTANCEW)};
+    DIDEVCAPS dicaps = {.dwSize = sizeof(DIDEVCAPS)};
+    DIPROPDWORD diprop =
+    {
+        .diph =
+        {
+            .dwSize = sizeof(DIPROPDWORD),
+            .dwHeaderSize = sizeof(DIPROPHEADER),
+            .dwHow = DIPH_DEVICE,
+        },
+    };
+    MMRESULT res = JOYERR_NOERROR;
+    IDirectInputDevice8W *device;
+    ULONG ticks = GetTickCount();
+    HRESULT hr;
 
-    lpCaps->wPeriodMin = JOY_PERIOD_MIN; /* FIXME */
-    lpCaps->wPeriodMax = JOY_PERIOD_MAX; /* FIXME (same as MS Joystick Driver) */
+    TRACE( "id %d, caps %p, size %u.\n", (int)id, caps, size );
 
-    return SendDriverMessage(JOY_Sticks[wID].hDriver, JDD_GETDEVCAPS, (LPARAM)lpCaps, wSize);
+    if (!caps) return MMSYSERR_INVALPARAM;
+    if (size != sizeof(JOYCAPSW) && size != sizeof(JOYCAPS2W)) return JOYERR_PARMS;
+
+    memset( caps, 0, size );
+    wcscpy( caps->szRegKey, L"DINPUT.DLL" );
+    if (id == ~(UINT_PTR)0) return JOYERR_NOERROR;
+
+    if (id >= ARRAY_SIZE(joysticks)) return JOYERR_PARMS;
+
+    EnterCriticalSection( &joystick_cs );
+
+    if (!(device = joysticks[id].device) && (ticks - last_check) >= 2000)
+    {
+        last_check = ticks;
+        find_joysticks();
+    }
+
+    if (!(device = joysticks[id].device)) res = JOYERR_PARMS;
+    else if (FAILED(hr = IDirectInputDevice8_GetCapabilities( device, &dicaps )))
+    {
+        WARN( "GetCapabilities device %p returned %#lx\n", device, hr );
+        res = JOYERR_PARMS;
+    }
+    else
+    {
+        hr = IDirectInputDevice8_GetProperty( device, DIPROP_VIDPID, &diprop.diph );
+        if (FAILED(hr)) WARN( "GetProperty device %p returned %#lx\n", device, hr );
+        else
+        {
+            caps->wMid = LOWORD(diprop.dwData);
+            caps->wPid = HIWORD(diprop.dwData);
+        }
+
+        wcscpy( caps->szPname, L"Wine joystick driver" );
+        caps->wXmin = 0;
+        caps->wXmax = 0xffff;
+        caps->wYmin = 0;
+        caps->wYmax = 0xffff;
+        caps->wZmin = 0;
+        caps->wZmax = 0xffff;
+        caps->wNumButtons = dicaps.dwButtons;
+        caps->wPeriodMin = JOY_PERIOD_MIN;
+        caps->wPeriodMax = JOY_PERIOD_MAX;
+        caps->wRmin = 0;
+        caps->wRmax = 0xffff;
+        caps->wUmin = 0;
+        caps->wUmax = 0xffff;
+        caps->wVmin = 0;
+        caps->wVmax = 0xffff;
+        caps->wCaps = 0;
+        caps->wMaxAxes = AXIS_COUNT;
+        caps->wNumAxes = min( dicaps.dwAxes, caps->wMaxAxes );
+        caps->wMaxButtons = BUTTON_COUNT;
+
+        hr = IDirectInputDevice8_GetObjectInfo( device, &instance, offsetof(struct joystick_state, axes[AXIS_Z]), DIPH_BYOFFSET );
+        if (SUCCEEDED(hr)) caps->wCaps |= JOYCAPS_HASZ;
+        hr = IDirectInputDevice8_GetObjectInfo( device, &instance, offsetof(struct joystick_state, axes[AXIS_R]), DIPH_BYOFFSET );
+        if (SUCCEEDED(hr)) caps->wCaps |= JOYCAPS_HASR;
+        hr = IDirectInputDevice8_GetObjectInfo( device, &instance, offsetof(struct joystick_state, axes[AXIS_U]), DIPH_BYOFFSET );
+        if (SUCCEEDED(hr)) caps->wCaps |= JOYCAPS_HASU;
+        hr = IDirectInputDevice8_GetObjectInfo( device, &instance, offsetof(struct joystick_state, axes[AXIS_V]), DIPH_BYOFFSET );
+        if (SUCCEEDED(hr)) caps->wCaps |= JOYCAPS_HASV;
+        hr = IDirectInputDevice8_GetObjectInfo( device, &instance, offsetof(struct joystick_state, pov), DIPH_BYOFFSET );
+        if (SUCCEEDED(hr)) caps->wCaps |= JOYCAPS_HASPOV|JOYCAPS_POV4DIR;
+    }
+
+    LeaveCriticalSection( &joystick_cs );
+
+    return res;
 }
 
 /**************************************************************************
  * 				joyGetDevCapsA		[WINMM.@]
  */
-MMRESULT WINAPI DECLSPEC_HOTPATCH joyGetDevCapsA(UINT_PTR wID, LPJOYCAPSA lpCaps, UINT wSize)
+MMRESULT WINAPI DECLSPEC_HOTPATCH joyGetDevCapsA( UINT_PTR id, JOYCAPSA *caps, UINT size )
 {
-    JOYCAPSW	jcw;
-    MMRESULT	ret;
+    UINT size_w = sizeof(JOYCAPS2W);
+    JOYCAPS2W caps_w;
+    MMRESULT res;
 
-    if (lpCaps == NULL) return MMSYSERR_INVALPARAM;
+    TRACE( "id %d, caps %p, size %u.\n", (int)id, caps, size );
 
-    ret = joyGetDevCapsW(wID, &jcw, sizeof(jcw));
+    if (!caps) return MMSYSERR_INVALPARAM;
+    if (size != sizeof(JOYCAPSA) && size != sizeof(JOYCAPS2A)) return JOYERR_PARMS;
 
-    if (ret == JOYERR_NOERROR)
+    if (size == sizeof(JOYCAPSA)) size_w = sizeof(JOYCAPSW);
+    res = joyGetDevCapsW( id, (JOYCAPSW *)&caps_w, size_w );
+    if (res) return res;
+
+    caps->wMid = caps_w.wMid;
+    caps->wPid = caps_w.wPid;
+    WideCharToMultiByte( CP_ACP, 0, caps_w.szPname, -1, caps->szPname,
+                         sizeof(caps->szPname), NULL, NULL );
+    caps->wXmin = caps_w.wXmin;
+    caps->wXmax = caps_w.wXmax;
+    caps->wYmin = caps_w.wYmin;
+    caps->wYmax = caps_w.wYmax;
+    caps->wZmin = caps_w.wZmin;
+    caps->wZmax = caps_w.wZmax;
+    caps->wNumButtons = caps_w.wNumButtons;
+    caps->wPeriodMin = caps_w.wPeriodMin;
+    caps->wPeriodMax = caps_w.wPeriodMax;
+    caps->wRmin = caps_w.wRmin;
+    caps->wRmax = caps_w.wRmax;
+    caps->wUmin = caps_w.wUmin;
+    caps->wUmax = caps_w.wUmax;
+    caps->wVmin = caps_w.wVmin;
+    caps->wVmax = caps_w.wVmax;
+    caps->wCaps = caps_w.wCaps;
+    caps->wMaxAxes = caps_w.wMaxAxes;
+    caps->wNumAxes = caps_w.wNumAxes;
+    caps->wMaxButtons = caps_w.wMaxButtons;
+    WideCharToMultiByte( CP_ACP, 0, caps_w.szRegKey, -1, caps->szRegKey,
+                         sizeof(caps->szRegKey), NULL, NULL );
+    WideCharToMultiByte( CP_ACP, 0, caps_w.szOEMVxD, -1, caps->szOEMVxD,
+                         sizeof(caps->szOEMVxD), NULL, NULL );
+
+    if (size == sizeof(JOYCAPS2A))
     {
-        lpCaps->wMid = jcw.wMid;
-        lpCaps->wPid = jcw.wPid;
-        WideCharToMultiByte( CP_ACP, 0, jcw.szPname, -1, lpCaps->szPname,
-                             sizeof(lpCaps->szPname), NULL, NULL );
-        lpCaps->wXmin = jcw.wXmin;
-        lpCaps->wXmax = jcw.wXmax;
-        lpCaps->wYmin = jcw.wYmin;
-        lpCaps->wYmax = jcw.wYmax;
-        lpCaps->wZmin = jcw.wZmin;
-        lpCaps->wZmax = jcw.wZmax;
-        lpCaps->wNumButtons = jcw.wNumButtons;
-        lpCaps->wPeriodMin = jcw.wPeriodMin;
-        lpCaps->wPeriodMax = jcw.wPeriodMax;
-
-        if (wSize >= sizeof(JOYCAPSA)) { /* Win95 extensions ? */
-            lpCaps->wRmin = jcw.wRmin;
-            lpCaps->wRmax = jcw.wRmax;
-            lpCaps->wUmin = jcw.wUmin;
-            lpCaps->wUmax = jcw.wUmax;
-            lpCaps->wVmin = jcw.wVmin;
-            lpCaps->wVmax = jcw.wVmax;
-            lpCaps->wCaps = jcw.wCaps;
-            lpCaps->wMaxAxes = jcw.wMaxAxes;
-            lpCaps->wNumAxes = jcw.wNumAxes;
-            lpCaps->wMaxButtons = jcw.wMaxButtons;
-            WideCharToMultiByte( CP_ACP, 0, jcw.szRegKey, -1, lpCaps->szRegKey,
-                                 sizeof(lpCaps->szRegKey), NULL, NULL );
-            WideCharToMultiByte( CP_ACP, 0, jcw.szOEMVxD, -1, lpCaps->szOEMVxD,
-                                 sizeof(lpCaps->szOEMVxD), NULL, NULL );
-        }
+        JOYCAPS2A *caps2_a = (JOYCAPS2A *)caps;
+        caps2_a->ManufacturerGuid = caps_w.ManufacturerGuid;
+        caps2_a->ProductGuid = caps_w.ProductGuid;
+        caps2_a->NameGuid = caps_w.NameGuid;
     }
 
-    return ret;
+    return JOYERR_NOERROR;
 }
 
 /**************************************************************************
  *                              joyGetPosEx             [WINMM.@]
  */
-MMRESULT WINAPI DECLSPEC_HOTPATCH joyGetPosEx(UINT wID, LPJOYINFOEX lpInfo)
+MMRESULT WINAPI DECLSPEC_HOTPATCH joyGetPosEx( UINT id, JOYINFOEX *info )
 {
-    TRACE("(%d, %p);\n", wID, lpInfo);
+    static ULONG last_check;
+    DWORD i, ticks = GetTickCount();
+    MMRESULT res = JOYERR_NOERROR;
+    IDirectInputDevice8W *device;
+    struct joystick_state state;
+    HRESULT hr;
 
-    if (wID >= MAXJOYSTICK)	return JOYERR_PARMS;
-    if (!JOY_LoadDriver(wID))	return MMSYSERR_NODRIVER;
+    TRACE( "id %u, info %p.\n", id, info );
 
-    lpInfo->dwXpos = 0;
-    lpInfo->dwYpos = 0;
-    lpInfo->dwZpos = 0;
-    lpInfo->dwRpos = 0;
-    lpInfo->dwUpos = 0;
-    lpInfo->dwVpos = 0;
-    lpInfo->dwButtons = 0;
-    lpInfo->dwButtonNumber = 0;
-    lpInfo->dwPOV = 0;
-    lpInfo->dwReserved1 = 0;
-    lpInfo->dwReserved2 = 0;
+    if (!info) return MMSYSERR_INVALPARAM;
+    if (id >= ARRAY_SIZE(joysticks) || info->dwSize < sizeof(JOYINFOEX)) return JOYERR_PARMS;
 
-    return SendDriverMessage(JOY_Sticks[wID].hDriver, JDD_GETPOSEX, (LPARAM)lpInfo, 0);
+    EnterCriticalSection( &joystick_cs );
+
+    if (!(device = joysticks[id].device) && (ticks - last_check) >= 2000)
+    {
+        last_check = ticks;
+        find_joysticks();
+    }
+
+    if (!(device = joysticks[id].device))
+        res = JOYERR_PARMS;
+    else if (FAILED(hr = IDirectInputDevice8_GetDeviceState( device, sizeof(struct joystick_state), &state )))
+    {
+        WARN( "GetDeviceState device %p returned %#lx\n", device, hr );
+        res = JOYERR_PARMS;
+    }
+    else
+    {
+        if (info->dwFlags & JOY_RETURNX) info->dwXpos = state.axes[AXIS_X];
+        if (info->dwFlags & JOY_RETURNY) info->dwYpos = state.axes[AXIS_Y];
+        if (info->dwFlags & JOY_RETURNZ) info->dwZpos = state.axes[AXIS_Z];
+        if (info->dwFlags & JOY_RETURNR) info->dwRpos = state.axes[AXIS_R];
+        if (info->dwFlags & JOY_RETURNU) info->dwUpos = state.axes[AXIS_U];
+        if (info->dwFlags & JOY_RETURNV) info->dwVpos = state.axes[AXIS_V];
+        if (info->dwFlags & JOY_RETURNPOV)
+        {
+            if (state.pov == ~0) info->dwPOV = 0xffff;
+            else info->dwPOV = state.pov;
+        }
+        if (info->dwFlags & JOY_RETURNBUTTONS)
+        {
+            info->dwButtonNumber = info->dwButtons = 0;
+            for (i = 0; i < ARRAY_SIZE(state.buttons); ++i)
+            {
+                if (!state.buttons[i]) continue;
+                info->dwButtonNumber++;
+                info->dwButtons |= 1 << i;
+            }
+        }
+    }
+
+    LeaveCriticalSection( &joystick_cs );
+
+    return res;
 }
 
 /**************************************************************************
  * 				joyGetPos	       	[WINMM.@]
  */
-MMRESULT WINAPI joyGetPos(UINT wID, LPJOYINFO lpInfo)
+MMRESULT WINAPI joyGetPos( UINT id, JOYINFO *info )
 {
-    TRACE("(%d, %p);\n", wID, lpInfo);
+    JOYINFOEX infoex =
+    {
+        .dwSize = sizeof(JOYINFOEX),
+        .dwFlags = JOY_RETURNX | JOY_RETURNY | JOY_RETURNZ | JOY_RETURNBUTTONS,
+    };
+    MMRESULT res;
 
-    if (wID >= MAXJOYSTICK)	return JOYERR_PARMS;
-    if (!JOY_LoadDriver(wID))	return MMSYSERR_NODRIVER;
+    TRACE( "id %u, info %p.\n", id, info );
 
-    lpInfo->wXpos = 0;
-    lpInfo->wYpos = 0;
-    lpInfo->wZpos = 0;
-    lpInfo->wButtons = 0;
+    if (!info) return MMSYSERR_INVALPARAM;
+    if ((res = joyGetPosEx( id, &infoex ))) return res;
 
-    return SendDriverMessage(JOY_Sticks[wID].hDriver, JDD_GETPOS, (LPARAM)lpInfo, 0);
+    info->wXpos = infoex.dwXpos;
+    info->wYpos = infoex.dwYpos;
+    info->wZpos = infoex.dwZpos;
+    info->wButtons = infoex.dwButtons;
+
+    return JOYERR_NOERROR;
 }
 
 /**************************************************************************
  * 				joyGetThreshold		[WINMM.@]
  */
-MMRESULT WINAPI joyGetThreshold(UINT wID, LPUINT lpThreshold)
+MMRESULT WINAPI joyGetThreshold( UINT id, UINT *threshold )
 {
-    TRACE("(%04X, %p);\n", wID, lpThreshold);
+    TRACE( "id %u, threshold %p.\n", id, threshold );
 
-    if (wID >= MAXJOYSTICK)	return JOYERR_PARMS;
+    if (id >= ARRAY_SIZE(joysticks)) return JOYERR_PARMS;
 
-    *lpThreshold = JOY_Sticks[wID].threshold;
+    EnterCriticalSection( &joystick_cs );
+    *threshold = joysticks[id].threshold;
+    LeaveCriticalSection( &joystick_cs );
+
     return JOYERR_NOERROR;
 }
 
 /**************************************************************************
  * 				joyReleaseCapture	[WINMM.@]
  */
-MMRESULT WINAPI joyReleaseCapture(UINT wID)
+MMRESULT WINAPI joyReleaseCapture( UINT id )
 {
-    TRACE("(%04X);\n", wID);
+    TRACE( "id %u.\n", id );
 
-    if (wID >= MAXJOYSTICK)		return JOYERR_PARMS;
-    if (!JOY_LoadDriver(wID))		return MMSYSERR_NODRIVER;
-    if (!JOY_Sticks[wID].hCapture)	return JOYERR_NOCANDO;
+    if (id >= ARRAY_SIZE(joysticks)) return JOYERR_PARMS;
 
-    KillTimer(JOY_Sticks[wID].hCapture, JOY_Sticks[wID].wTimer);
-    JOY_Sticks[wID].hCapture = 0;
-    JOY_Sticks[wID].wTimer = 0;
+    EnterCriticalSection( &joystick_cs );
+
+    if (!joysticks[id].capture)
+        TRACE("Joystick is not captured, ignoring request.\n");
+    else
+    {
+        KillTimer( joysticks[id].capture, joysticks[id].timer );
+        joysticks[id].capture = 0;
+        joysticks[id].timer = 0;
+    }
+
+    LeaveCriticalSection( &joystick_cs );
 
     return JOYERR_NOERROR;
 }
@@ -287,39 +651,46 @@ MMRESULT WINAPI joyReleaseCapture(UINT wID)
 /**************************************************************************
  * 				joySetCapture		[WINMM.@]
  */
-MMRESULT WINAPI joySetCapture(HWND hWnd, UINT wID, UINT wPeriod, BOOL bChanged)
+MMRESULT WINAPI joySetCapture( HWND hwnd, UINT id, UINT period, BOOL changed )
 {
-    TRACE("(%p, %04X, %d, %d);\n",  hWnd, wID, wPeriod, bChanged);
+    MMRESULT res = JOYERR_NOERROR;
 
-    if (wID >= MAXJOYSTICK || hWnd == 0) return JOYERR_PARMS;
-    if (wPeriod<JOY_PERIOD_MIN || wPeriod>JOY_PERIOD_MAX) return JOYERR_PARMS;
-    if (!JOY_LoadDriver(wID)) return MMSYSERR_NODRIVER;
+    TRACE( "hwnd %p, id %u, period %u, changed %u.\n", hwnd, id, period, changed );
 
-    if (JOY_Sticks[wID].hCapture || !IsWindow(hWnd))
-	return JOYERR_NOCANDO; /* FIXME: what should be returned ? */
+    if (id >= ARRAY_SIZE(joysticks) || hwnd == 0) return JOYERR_PARMS;
+    if (period < JOY_PERIOD_MIN) period = JOY_PERIOD_MIN;
+    else if (period > JOY_PERIOD_MAX) period = JOY_PERIOD_MAX;
 
-    if (joyGetPos(wID, &JOY_Sticks[wID].ji) != JOYERR_NOERROR)
-	return JOYERR_UNPLUGGED;
+    EnterCriticalSection( &joystick_cs );
 
-    if ((JOY_Sticks[wID].wTimer = SetTimer(hWnd, 0, wPeriod, JOY_Timer)) == 0)
-	return JOYERR_NOCANDO;
+    if (joysticks[id].capture || !IsWindow( hwnd ))
+        res = JOYERR_NOCANDO; /* FIXME: what should be returned ? */
+    else if (joyGetPos( id, &joysticks[id].info ) != JOYERR_NOERROR)
+        res = JOYERR_UNPLUGGED;
+    else if ((joysticks[id].timer = SetTimer( hwnd, 0, period, joystick_timer )) == 0)
+        res = JOYERR_NOCANDO;
+    else
+    {
+        joysticks[id].capture = hwnd;
+        joysticks[id].changed = changed;
+    }
 
-    JOY_Sticks[wID].hCapture = hWnd;
-    JOY_Sticks[wID].bChanged = bChanged;
-
-    return JOYERR_NOERROR;
+    LeaveCriticalSection( &joystick_cs );
+    return res;
 }
 
 /**************************************************************************
  * 				joySetThreshold		[WINMM.@]
  */
-MMRESULT WINAPI joySetThreshold(UINT wID, UINT wThreshold)
+MMRESULT WINAPI joySetThreshold( UINT id, UINT threshold )
 {
-    TRACE("(%04X, %d);\n", wID, wThreshold);
+    TRACE( "id %u, threshold %u.\n", id, threshold );
 
-    if (wID >= MAXJOYSTICK) return MMSYSERR_INVALPARAM;
+    if (id >= ARRAY_SIZE(joysticks) || threshold > 65535) return MMSYSERR_INVALPARAM;
 
-    JOY_Sticks[wID].threshold = wThreshold;
+    EnterCriticalSection( &joystick_cs );
+    joysticks[id].threshold = threshold;
+    LeaveCriticalSection( &joystick_cs );
 
     return JOYERR_NOERROR;
 }
