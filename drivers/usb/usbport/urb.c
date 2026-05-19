@@ -245,6 +245,33 @@ USBPORT_HandleGetConfiguration(IN PURB Urb)
 
 NTSTATUS
 NTAPI
+USBPORT_HandleGetInterface(IN PURB Urb)
+{
+    PUSB_DEFAULT_PIPE_SETUP_PACKET SetupPacket;
+    USHORT Interface;
+
+    Interface = Urb->UrbControlGetInterfaceRequest.Interface;
+    SetupPacket = (PUSB_DEFAULT_PIPE_SETUP_PACKET)
+                   &Urb->UrbControlGetInterfaceRequest.Reserved1;
+
+    SetupPacket->bmRequestType.Dir = BMREQUEST_DEVICE_TO_HOST;
+    SetupPacket->bmRequestType.Type = BMREQUEST_STANDARD;
+    SetupPacket->bmRequestType.Recipient = BMREQUEST_TO_INTERFACE;
+    SetupPacket->bRequest = USB_REQUEST_GET_INTERFACE;
+    SetupPacket->wValue.W = 0;
+    SetupPacket->wIndex.W = Interface;
+    SetupPacket->wLength = Urb->UrbControlGetInterfaceRequest.TransferBufferLength;
+
+    Urb->UrbControlGetInterfaceRequest.Reserved0 |= USBD_TRANSFER_DIRECTION_IN;
+    Urb->UrbControlGetInterfaceRequest.Reserved0 |= USBD_SHORT_TRANSFER_OK;
+
+    USBPORT_QueueTransferUrb(Urb);
+
+    return STATUS_PENDING;
+}
+
+NTSTATUS
+NTAPI
 USBPORT_HandleGetCurrentFrame(IN PDEVICE_OBJECT FdoDevice,
                               IN PIRP Irp,
                               IN PURB Urb)
@@ -1230,9 +1257,16 @@ USBPORT_HandleSubmitURB(IN PDEVICE_OBJECT PdoDevice,
             break;
 
         case URB_FUNCTION_GET_INTERFACE:
-            DPRINT1("USBPORT_HandleSubmitURB: URB_FUNCTION_GET_INTERFACE (0x27) NOT_SUPPORTED\n");
-            return USBPORT_USBDStatusToNtStatus(Urb,
-                                                USBD_STATUS_INVALID_URB_FUNCTION);
+            Status = USBPORT_ValidateURB(FdoDevice, Irp, Urb, TRUE, FALSE);
+
+            if (!NT_SUCCESS(Status))
+            {
+                DPRINT1("USBPORT_HandleSubmitURB: Not valid URB\n");
+                break;
+            }
+
+            Status = USBPORT_HandleGetInterface(Urb);
+            break;
 
         case URB_FUNCTION_OPEN_STATIC_STREAMS:
             Status = USBPORT_HandleOpenStaticStreams(PdoExtension->FdoDevice, Urb);

@@ -10,6 +10,10 @@
 #define NDEBUG
 #include <debug.h>
 
+NTSTATUS
+NTAPI
+USBPORT_ResumeController(IN PDEVICE_OBJECT FdoDevice);
+
 VOID
 NTAPI
 USBPORT_CompletePdoWaitWake(IN PDEVICE_OBJECT FdoDevice)
@@ -103,8 +107,22 @@ VOID
 NTAPI
 USBPORT_DoSetPowerD0(IN PDEVICE_OBJECT FdoDevice)
 {
-    DPRINT("USBPORT_DoSetPowerD0: FIXME!\n");
-    return;
+    PUSBPORT_DEVICE_EXTENSION FdoExtension;
+
+    FdoExtension = FdoDevice->DeviceExtension;
+
+    if (FdoExtension->CommonExtension.DevicePowerState != PowerDeviceD0 ||
+        !(FdoExtension->Flags & USBPORT_FLAG_HC_SUSPEND))
+    {
+        return;
+    }
+
+    if (InterlockedCompareExchange(&FdoExtension->SetPowerLockCounter, 1, 0) != 0)
+        return;
+
+    USBPORT_ResumeController(FdoDevice);
+
+    InterlockedExchange(&FdoExtension->SetPowerLockCounter, 0);
 }
 
 VOID
@@ -254,7 +272,6 @@ USBPORT_PdoDevicePowerState(IN PDEVICE_OBJECT PdoDevice,
     {
         if (FdoExtension->CommonExtension.DevicePowerState == PowerDeviceD0)
         {
-            // FIXME FdoExtension->Flags
             while (FdoExtension->SetPowerLockCounter)
             {
                 USBPORT_Wait(FdoDevice, 10);
@@ -272,8 +289,20 @@ USBPORT_PdoDevicePowerState(IN PDEVICE_OBJECT PdoDevice,
             DPRINT1("USBPORT_PdoDevicePowerState: FdoExtension->Flags - %lx\n",
                     FdoExtension->Flags);
 
-            DbgBreakPoint();
-            Status = STATUS_UNSUCCESSFUL;
+            InterlockedIncrement(&FdoExtension->SetPowerLockCounter);
+
+            if (FdoExtension->Flags & USBPORT_FLAG_HC_SUSPEND)
+                Status = USBPORT_ResumeController(FdoDevice);
+
+            if (NT_SUCCESS(Status))
+            {
+                FdoExtension->CommonExtension.DevicePowerState = PowerDeviceD0;
+                PdoExtension->CommonExtension.DevicePowerState = PowerDeviceD0;
+                USBPORT_CompletePdoWaitWake(FdoDevice);
+                USBPORT_CompletePendingIdleIrp(PdoDevice);
+            }
+
+            InterlockedDecrement(&FdoExtension->SetPowerLockCounter);
         }
     }
     else if (State.DeviceState  == PowerDeviceD1 ||
@@ -400,9 +429,9 @@ USBPORT_PdoPower(IN PDEVICE_OBJECT PdoDevice,
               }
               else
               {
-                  ASSERT(FALSE);
                   KeReleaseSpinLock(&FdoExtension->PowerWakeSpinLock, OldIrql);
-                  return Status;
+                  Status = STATUS_CANCELLED;
+                  break;
               }
           }
 
@@ -462,8 +491,12 @@ NTAPI
 USBPORT_HcWake(IN PDEVICE_OBJECT FdoDevice,
                IN PIRP Irp)
 {
-    DPRINT1("USBPORT_HcWake: UNIMPLEMENTED. FIXME. \n");
-    return STATUS_SUCCESS;
+    PUSBPORT_DEVICE_EXTENSION FdoExtension;
+
+    FdoExtension = FdoDevice->DeviceExtension;
+
+    IoCopyCurrentIrpStackLocationToNext(Irp);
+    return PoCallDriver(FdoExtension->CommonExtension.LowerDevice, Irp);
 }
 
 NTSTATUS
@@ -471,8 +504,51 @@ NTAPI
 USBPORT_DevicePowerState(IN PDEVICE_OBJECT FdoDevice,
                          IN PIRP Irp)
 {
-    DPRINT1("USBPORT_DevicePowerState: UNIMPLEMENTED. FIXME. \n");
-    return STATUS_SUCCESS;
+    PUSBPORT_DEVICE_EXTENSION FdoExtension;
+    PIO_STACK_LOCATION IoStack;
+    POWER_STATE State;
+    NTSTATUS Status = STATUS_SUCCESS;
+
+    FdoExtension = FdoDevice->DeviceExtension;
+    IoStack = IoGetCurrentIrpStackLocation(Irp);
+    State = IoStack->Parameters.Power.State;
+
+    switch (State.DeviceState)
+    {
+        case PowerDeviceD0:
+            InterlockedIncrement(&FdoExtension->SetPowerLockCounter);
+
+            if (FdoExtension->Flags & USBPORT_FLAG_HC_SUSPEND)
+                Status = USBPORT_ResumeController(FdoDevice);
+
+            if (NT_SUCCESS(Status))
+            {
+                FdoExtension->CommonExtension.DevicePowerState = PowerDeviceD0;
+
+                if (FdoExtension->RootHubPdo)
+                {
+                    USBPORT_CompletePdoWaitWake(FdoDevice);
+                    USBPORT_CompletePendingIdleIrp(FdoExtension->RootHubPdo);
+                }
+            }
+
+            InterlockedDecrement(&FdoExtension->SetPowerLockCounter);
+            break;
+
+        case PowerDeviceD1:
+        case PowerDeviceD2:
+        case PowerDeviceD3:
+            USBPORT_SuspendController(FdoDevice);
+            FdoExtension->CommonExtension.DevicePowerState = State.DeviceState;
+            break;
+
+        default:
+            Status = STATUS_INVALID_PARAMETER;
+            break;
+    }
+
+    Irp->IoStatus.Status = Status;
+    return Status;
 }
 
 NTSTATUS

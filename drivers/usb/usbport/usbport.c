@@ -127,6 +127,46 @@ USBPORT_MdlNeedsBounce(IN PMDL Mdl,
     return FALSE;
 }
 
+static
+BOOLEAN
+USBPORT_UhciNeedsPacketAlignedBounce(IN PUSBPORT_DEVICE_EXTENSION FdoExtension,
+                                     IN PUSBPORT_TRANSFER Transfer,
+                                     IN PMDL Mdl,
+                                     IN SIZE_T TransferLength)
+{
+    PUSBPORT_ENDPOINT Endpoint;
+    ULONG MaxPacketSize;
+    ULONG_PTR Offset;
+    SIZE_T FirstSegmentLength;
+
+    if (!FdoExtension ||
+        !FdoExtension->MiniPortInterface ||
+        FdoExtension->MiniPortInterface->Packet.MiniPortVersion != USB_MINIPORT_VERSION_UHCI)
+    {
+        return FALSE;
+    }
+
+    Endpoint = Transfer->Endpoint;
+    if (!Endpoint ||
+        Endpoint->EndpointProperties.TransferType == USBPORT_TRANSFER_TYPE_ISOCHRONOUS)
+    {
+        return FALSE;
+    }
+
+    MaxPacketSize = Endpoint->EndpointProperties.TotalMaxPacketSize;
+    if (MaxPacketSize == 0 || TransferLength <= MaxPacketSize)
+        return FALSE;
+
+    Offset = (ULONG_PTR)MmGetMdlVirtualAddress(Mdl) & (PAGE_SIZE - 1);
+    FirstSegmentLength = PAGE_SIZE - Offset;
+
+    if (FirstSegmentLength >= TransferLength)
+        return FALSE;
+
+    return (FirstSegmentLength % MaxPacketSize) != 0 ||
+           (PAGE_SIZE % MaxPacketSize) != 0;
+}
+
 NTSTATUS
 USBPORT_SetupTransferBounceBuffer(IN PDEVICE_OBJECT FdoDevice,
                                   IN PUSBPORT_TRANSFER Transfer,
@@ -135,6 +175,7 @@ USBPORT_SetupTransferBounceBuffer(IN PDEVICE_OBJECT FdoDevice,
     PUSBPORT_DEVICE_EXTENSION FdoExtension;
     SIZE_T TransferLength = Transfer->TransferParameters.TransferBufferLength;
     PMDL OriginalMdl = Transfer->TransferBufferMDL;
+    BOOLEAN NeedsBounce;
     PVOID OriginalVa;
     PUSBPORT_COMMON_BUFFER_HEADER CommonBuffer;
     PMDL BounceMdl;
@@ -155,7 +196,16 @@ USBPORT_SetupTransferBounceBuffer(IN PDEVICE_OBJECT FdoDevice,
         return STATUS_SUCCESS;
     }
 
-    if (!USBPORT_MdlNeedsBounce(OriginalMdl, TransferLength))
+    NeedsBounce = USBPORT_MdlNeedsBounce(OriginalMdl, TransferLength);
+    if (!NeedsBounce)
+    {
+        NeedsBounce = USBPORT_UhciNeedsPacketAlignedBounce(FdoExtension,
+                                                           Transfer,
+                                                           OriginalMdl,
+                                                           TransferLength);
+    }
+
+    if (!NeedsBounce)
         return STATUS_SUCCESS;
 
     OriginalVa = MmGetSystemAddressForMdlSafe(OriginalMdl, NormalPagePriority);
@@ -950,8 +1000,68 @@ USBPORT_NotifyDoubleBuffer(IN PVOID MiniPortExtension,
                            IN PVOID Buffer,
                            IN SIZE_T Length)
 {
-    DPRINT_CORE("USBPORT_NotifyDoubleBuffer: UNIMPLEMENTED. FIXME.\n");
-    return 0;
+    PUSBPORT_MINIPORT_TRANSFER_HEADER Header;
+    PUSBPORT_TRANSFER Transfer;
+    PMDL OriginalMdl;
+    PVOID OriginalVa;
+    SIZE_T RequestedLength;
+    SIZE_T MaxCopy;
+    SIZE_T Copied;
+
+    if (!MiniPortTransfer || !Buffer || !Length)
+        return 0;
+
+    Header = USBPORT_GetMiniportTransferHeader(MiniPortTransfer);
+    Transfer = Header->Transfer;
+
+    if (!Transfer || Transfer->MiniportTransfer != MiniPortTransfer)
+        return 0;
+
+    if (Transfer->FdoDevice)
+    {
+        PUSBPORT_DEVICE_EXTENSION FdoExtension;
+
+        FdoExtension = Transfer->FdoDevice->DeviceExtension;
+        if (FdoExtension && FdoExtension->MiniPortExt != MiniPortExtension)
+            return 0;
+    }
+
+    if (!Transfer->TransferBufferMDL)
+        return 0;
+
+    if (Transfer->Direction != USBPORT_DMA_DIRECTION_FROM_DEVICE)
+        return 0;
+
+    RequestedLength = Transfer->TransferParameters.TransferBufferLength;
+    if (!RequestedLength)
+        return 0;
+
+    OriginalMdl = Transfer->TransferBufferMDL;
+    OriginalVa = MmGetSystemAddressForMdlSafe(OriginalMdl, NormalPagePriority);
+    if (!OriginalVa)
+        return 0;
+
+    MaxCopy = MmGetMdlByteCount(OriginalMdl);
+    Copied = Length;
+    if (Copied > RequestedLength)
+        Copied = RequestedLength;
+    if (Copied > MaxCopy)
+        Copied = MaxCopy;
+
+    RtlCopyMemory(OriginalVa, Buffer, Copied);
+
+    return (ULONG)Copied;
+}
+
+VOID
+NTAPI
+USBPORT_ResetEndpointIdle(
+    _In_ PUSBPORT_ENDPOINT Endpoint)
+{
+    if (!Endpoint)
+        return;
+
+    InterlockedAnd((PLONG)&Endpoint->Flags, ~(LONG)ENDPOINT_FLAG_IDLE);
 }
 
 VOID
@@ -1712,9 +1822,7 @@ USBPORT_DoRootHubCallback(IN PDEVICE_OBJECT FdoDevice)
                     Sequence,
                     Caller,
                     RootHubInitContext);
-#if DBG
-            DbgBreakPoint();
-#endif
+            DPRINT1("USBPORT_DoRootHubCallback: invalid callback data\n");
             return;
         }
 
@@ -2006,9 +2114,7 @@ USBPORT_SynchronizeControllersStart(IN PDEVICE_OBJECT FdoDevice)
         DPRINT_CORE("USBPORT_SynchronizeControllersStart: invalid RootHub extension pointer %p (pdo=%p)\n",
                 PdoExtension,
                 PdoDevice);
-#if DBG
-        DbgBreakPoint();
-#endif
+        DPRINT1("USBPORT_SynchronizeControllersStart: invalid PDO extension\n");
         return;
     }
 
@@ -2759,7 +2865,8 @@ USBPORT_GetMappedVirtualAddress(IN ULONG PhysicalAddress,
 
     if (!Endpoint)
     {
-        ASSERT(FALSE);
+        DPRINT1("USBPORT_GetMappedVirtualAddress: NULL Endpoint\n");
+        return NULL;
     }
 
     HeaderBuffer = Endpoint->HeaderBuffer;
@@ -3063,8 +3170,7 @@ USBPORT_CleanupTransferOnBadUrb(IN PUSBPORT_TRANSFER Transfer,
 
                 if (!IsFlushSuccess)
                 {
-                    DPRINT("USBPORT_CleanupTransferOnBadUrb: no FlushAdapterBuffers !!!\n");
-                    ASSERT(FALSE);
+                    DPRINT1("USBPORT_CleanupTransferOnBadUrb: FlushAdapterBuffers failed\n");
                 }
             }
 
@@ -3227,8 +3333,7 @@ if (!Urb)
 
         if (!IsFlushSuccess)
         {
-            DPRINT("USBPORT_CompleteTransfer: no FlushAdapterBuffers !!!\n");
-            ASSERT(FALSE);
+            DPRINT1("USBPORT_CompleteTransfer: FlushAdapterBuffers failed\n");
         }
 
         KeRaiseIrql(DISPATCH_LEVEL, &OldIrql);
@@ -3500,34 +3605,48 @@ USBPORT_MapTransfer(IN PDEVICE_OBJECT FdoDevice,
 
         SgCurrentLength = TransferLength;
 
-        do
+        if (Transfer->Flags & TRANSFER_FLAG_BOUNCE)
         {
-            ElementLength = PAGE_SIZE - (PhAddress.LowPart & (PAGE_SIZE - 1));
-
-            if (ElementLength > SgCurrentLength)
-                ElementLength = SgCurrentLength;
-
-            DPRINT_CORE("USBPORT_MapTransfer: PhAddress.LowPart - %p, HighPart - %x, ElementLength - %x\n",
-                   PhAddress.LowPart,
-                   PhAddress.HighPart,
-                   ElementLength);
-
             sgList->SgElement[ix].SgPhysicalAddress = PhAddress;
-            sgList->SgElement[ix].SgTransferLength = ElementLength;
-            sgList->SgElement[ix].SgOffset = CurrentLength +
-                                             (TransferLength - SgCurrentLength);
+            sgList->SgElement[ix].SgTransferLength = SgCurrentLength;
+            sgList->SgElement[ix].SgOffset = CurrentLength;
 
-            PhAddress.QuadPart += ElementLength;
-            SgCurrentLength -= ElementLength;
+            PhAddress.QuadPart += SgCurrentLength;
+            SgCurrentLength = 0;
 
             ++ix;
         }
-        while (SgCurrentLength);
+        else
+        {
+            do
+            {
+                ElementLength = PAGE_SIZE - (PhAddress.LowPart & (PAGE_SIZE - 1));
+
+                if (ElementLength > SgCurrentLength)
+                    ElementLength = SgCurrentLength;
+
+                DPRINT_CORE("USBPORT_MapTransfer: PhAddress.LowPart - %p, HighPart - %x, ElementLength - %x\n",
+                       PhAddress.LowPart,
+                       PhAddress.HighPart,
+                       ElementLength);
+
+                sgList->SgElement[ix].SgPhysicalAddress = PhAddress;
+                sgList->SgElement[ix].SgTransferLength = ElementLength;
+                sgList->SgElement[ix].SgOffset = CurrentLength +
+                                                 (TransferLength - SgCurrentLength);
+
+                PhAddress.QuadPart += ElementLength;
+                SgCurrentLength -= ElementLength;
+
+                ++ix;
+            }
+            while (SgCurrentLength);
+        }
 
         if (PhAddr.QuadPart == PhAddress.QuadPart)
         {
-            DPRINT_CORE("USBPORT_MapTransfer: PhAddr == PhAddress\n");
-            ASSERT(FALSE);
+            DPRINT1("USBPORT_MapTransfer: PhAddr == PhAddress\n");
+            break;
         }
 
         PhAddr = PhAddress;
@@ -3595,6 +3714,16 @@ USBPORT_MapTransfer(IN PDEVICE_OBJECT FdoDevice,
             KeReleaseSpinLock(&Endpoint->EndpointSpinLock,
                               Endpoint->EndpointOldIrql);
         }
+        else
+        {
+            KeAcquireSpinLock(&Endpoint->EndpointSpinLock,
+                              &Endpoint->EndpointOldIrql);
+
+            InsertTailList(&Endpoint->TransferList, &Transfer->TransferLink);
+
+            KeReleaseSpinLock(&Endpoint->EndpointSpinLock,
+                              Endpoint->EndpointOldIrql);
+        }
     }
 
     DeviceHandle = Urb->UrbHeader.UsbdDeviceHandle;
@@ -3610,7 +3739,7 @@ USBPORT_MapTransfer(IN PDEVICE_OBJECT FdoDevice,
     return DeallocateObjectKeepRegisters;
 }
 
-VOID
+NTSTATUS
 NTAPI
 USBPORT_FlushMapTransfers(IN PDEVICE_OBJECT FdoDevice)
 {
@@ -3623,6 +3752,7 @@ USBPORT_FlushMapTransfers(IN PDEVICE_OBJECT FdoDevice)
     ULONG_PTR VirtualAddr;
     KIRQL OldIrql;
     NTSTATUS Status;
+    NTSTATUS FlushStatus = STATUS_SUCCESS;
     PDMA_OPERATIONS DmaOperations;
 
     DPRINT_CORE("USBPORT_FlushMapTransfers: ...\n");
@@ -3639,7 +3769,7 @@ USBPORT_FlushMapTransfers(IN PDEVICE_OBJECT FdoDevice)
         if (IsListEmpty(&FdoExtension->MapTransferList))
         {
             KeLowerIrql(OldIrql);
-            return;
+            return FlushStatus;
         }
 
         Transfer = CONTAINING_RECORD(MapTransferList->Flink,
@@ -3684,10 +3814,20 @@ USBPORT_FlushMapTransfers(IN PDEVICE_OBJECT FdoDevice)
         }
 
         if (!NT_SUCCESS(Status))
-            ASSERT(FALSE);
+        {
+            DPRINT1("USBPORT_FlushMapTransfers: AllocateAdapterChannel failed (0x%lx)\n", Status);
+            if (NT_SUCCESS(FlushStatus))
+                FlushStatus = Status;
+
+            USBPORT_QueueDoneTransfer(Transfer,
+                                      USBD_STATUS_INSUFFICIENT_RESOURCES,
+                                      TRUE);
+            continue;
+        }
     }
 
     KeLowerIrql(OldIrql);
+    return STATUS_SUCCESS;
 }
 
 USBD_STATUS
@@ -3756,6 +3896,7 @@ USBPORT_AllocateTransfer(IN PDEVICE_OBJECT FdoDevice,
         Transfer = Endpoint->ReusableTransfer;
         if (Transfer &&
             Transfer->FullTransferLength >= (sizeof(USBPORT_TRANSFER) +
+                sizeof(USBPORT_MINIPORT_TRANSFER_HEADER) +
                 FdoExtension->MiniPortInterface->Packet.MiniPortTransferSize) &&
             Transfer->TransferParameters.TransferBufferLength == TransferLength)
         {
@@ -3850,6 +3991,7 @@ USBPORT_AllocateTransfer(IN PDEVICE_OBJECT FdoDevice,
                          IsoBlockLen;
 
     FullTransferLength = PortTransferLength +
+                         sizeof(USBPORT_MINIPORT_TRANSFER_HEADER) +
                          FdoExtension->MiniPortInterface->Packet.MiniPortTransferSize;
 
     Transfer = ExAllocatePoolWithTag(NonPagedPool,
@@ -3944,8 +4086,7 @@ USBPORT_AllocateTransfer(IN PDEVICE_OBJECT FdoDevice,
         Transfer->Flags |= TRANSFER_FLAG_ISO;
     }
 
-    Transfer->MiniportTransfer = (PVOID)((ULONG_PTR)Transfer +
-                                                    PortTransferLength);
+    USBPORT_InitializeMiniportTransfer(Transfer);
 
     KeInitializeSpinLock(&Transfer->TransferSpinLock);
 
@@ -3991,8 +4132,10 @@ USBPORT_Dispatch(IN PDEVICE_OBJECT DeviceObject,
 
     if (DeviceExtension->PnpStateFlags & USBPORT_PNP_STATE_FAILED)
     {
-        DPRINT_CORE("USBPORT_Dispatch: USBPORT_PNP_STATE_FAILED\n");
-        DbgBreakPoint();
+        DPRINT1("USBPORT_Dispatch: device in failed state, rejecting IRP\n");
+        Irp->IoStatus.Status = STATUS_DEVICE_NOT_CONNECTED;
+        IoCompleteRequest(Irp, IO_NO_INCREMENT);
+        return STATUS_DEVICE_NOT_CONNECTED;
     }
 
     switch (IoStack->MajorFunction)

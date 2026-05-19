@@ -105,8 +105,8 @@
 #define USBHUB_FEATURE_PORT_INDICATOR      22
 
 #define USBHUB_MAX_CASCADE_LEVELS  6
-#define USBHUB_RESET_PORT_MAX_RETRY  3
 #define USBHUB_RESET_PORT_POLL_MS    10
+#define USBHUB_RESET_PORT_TIMEOUT_MS 500
 #define USBHUB_MAX_REQUEST_ERRORS    3
 
 /* Adaptive port debounce parameters (USB 2.0 spec section 7.1.7.3 TATTDB) */
@@ -418,6 +418,15 @@ USBH_HubCancelWakeIrp(
 
 VOID
 NTAPI
+USBH_FdoPoRequestD0Completion(
+  IN PDEVICE_OBJECT DeviceObject,
+  IN UCHAR MinorFunction,
+  IN POWER_STATE PowerState,
+  IN PVOID Context,
+  IN PIO_STATUS_BLOCK IoStatus);
+
+VOID
+NTAPI
 USBH_IdleCancelPowerHubWorker(
   IN PUSBHUB_FDO_EXTENSION HubExtension,
   IN PVOID Context);
@@ -509,6 +518,11 @@ USBH_DeviceIs2xDualMode(
 PUSBHUB_FDO_EXTENSION
 NTAPI
 USBH_GetRootHubExtension(
+  IN PUSBHUB_FDO_EXTENSION HubExtension);
+
+NTSTATUS
+NTAPI
+USBH_FdoSubmitWaitWakeIrp(
   IN PUSBHUB_FDO_EXTENSION HubExtension);
 
 NTSTATUS
@@ -690,6 +704,12 @@ NTAPI
 USBH_HubCancelIdleIrp(
   IN PUSBHUB_FDO_EXTENSION HubExtension,
   IN PIRP IdleIrp);
+
+VOID
+NTAPI
+USBH_HubCompletePortIdleIrps(
+  IN PUSBHUB_FDO_EXTENSION HubExtension,
+  IN NTSTATUS NtStatus);
 
 BOOLEAN
 NTAPI
