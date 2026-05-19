@@ -1,7 +1,18 @@
 #include <ntddk.h>
+#include <reactos/hal/msi.h>
 
-VOID NTAPI HalpGetInterruptTargetInformation(PVOID p) { (VOID)p; }
-VOID NTAPI HalpGetMessageRoutingInfo(PVOID p) { (VOID)p; }
+NTSTATUS NTAPI HalGetInterruptTargetInformation(PHAL_INTERRUPT_TARGET_INFORMATION TargetInformation);
+NTSTATUS NTAPI HalGetMessageRoutingInfo(PHAL_MESSAGE_ROUTING_INFO RoutingInfo);
+
+NTSTATUS NTAPI HalpGetInterruptTargetInformation(PHAL_INTERRUPT_TARGET_INFORMATION TargetInformation)
+{
+    return HalGetInterruptTargetInformation(TargetInformation);
+}
+
+NTSTATUS NTAPI HalpGetMessageRoutingInfo(PHAL_MESSAGE_ROUTING_INFO RoutingInfo)
+{
+    return HalGetMessageRoutingInfo(RoutingInfo);
+}
 NTSTATUS NTAPI IopReserveIrqVectors(ULONG c, ULONG a, PKINTERRUPT *i) { (VOID)c;(VOID)a;(VOID)i; return 0; }
 
 VOID NTAPI ScsiPortWritePortUchar(PUCHAR p, UCHAR v) { WRITE_PORT_UCHAR(p,v); }
