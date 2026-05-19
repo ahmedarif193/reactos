@@ -1479,14 +1479,10 @@ KiArm64HandleSynchronousException(
                  */
                 {
                     ULONG_PTR Va;
-                    ULONG64 Ctr;
                     ULONG DcacheLineSize, IcacheLineSize;
 
                     Va = (ULONG_PTR)Context->State.FaultAddress & ~(ULONG_PTR)(PAGE_SIZE - 1);
-
-                    __asm__ __volatile__("mrs %0, ctr_el0" : "=r"(Ctr));
-                    DcacheLineSize = 4u << ((Ctr >> 16) & 0xF);
-                    IcacheLineSize = 4u << (Ctr & 0xF);
+                    KiArm64GetCacheLineSizes(&DcacheLineSize, &IcacheLineSize);
 
                     /*
                      * For kernel addresses, invalidate D-cache lines for the page.

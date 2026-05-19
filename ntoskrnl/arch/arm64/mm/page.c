@@ -127,11 +127,7 @@ MiArm64CacheLineSizes(
     _Out_ PULONG DcacheLineSize,
     _Out_ PULONG IcacheLineSize)
 {
-    ULONG64 Ctr;
-
-    __asm__ __volatile__("mrs %0, ctr_el0" : "=r"(Ctr));
-    *DcacheLineSize = 4u << ((Ctr >> 16) & 0xF);
-    *IcacheLineSize = 4u << (Ctr & 0xF);
+    KiArm64GetCacheLineSizes(DcacheLineSize, IcacheLineSize);
 }
 
 FORCEINLINE

@@ -9089,7 +9089,7 @@ KeStallExecutionProcessor(
     Ticks = (Frequency / 1000000ULL) * (ULONGLONG)MicroSeconds;
     while ((HalpReadCntpct() - Start) < Ticks)
     {
-        __asm__ __volatile__("isb" ::: "memory");
+        __asm__ __volatile__("yield");
     }
 }
 
