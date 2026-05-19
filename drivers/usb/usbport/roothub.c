@@ -263,7 +263,7 @@ USBPORT_RootHubClassCommand(IN PDEVICE_OBJECT FdoDevice,
                     return RHStatus;
                 }
 
-                DbgBreakPoint();
+                DPRINT1("USBPORT_RootHubClearFeature: unknown hub feature %x\n", Feature);
                 return RHStatus;
             }
 
@@ -980,7 +980,6 @@ USBPORT_RootHubCreateDevice(IN PDEVICE_OBJECT FdoDevice,
         USBPORT_RH_TRACE("USBPORT_RootHubCreateDevice: failed to validate root hub handle %p\n",
                          DeviceHandle);
         USBPORT_DumpDeviceHandleList(FdoExtension);
-        DbgBreakPoint();
     }
     else
     {
@@ -1097,8 +1096,6 @@ USBPORT_RootHubCreateDevice(IN PDEVICE_OBJECT FdoDevice,
         {
             DPRINT1("USBPORT_RootHubCreateDevice: Unknown MiniPortVersion - %x\n",
                     Packet->MiniPortVersion);
-
-            DbgBreakPoint();
         }
 
         RH_HubDescriptor->bNumberOfPorts = RootHubData.NumberOfPorts;
@@ -1181,9 +1178,6 @@ USBPORT_InvalidateRootHub(PVOID MiniPortExtension)
         DPRINT1("USBPORT_InvalidateRootHub: invalid RootHubExt=%p (pdo=%p)\n",
                 PdoExtension,
                 PdoDevice);
-#if DBG
-        DbgBreakPoint();
-#endif
         Packet->RH_EnableIrq(FdoExtension->MiniPortExt);
         return 0;
     }

@@ -121,7 +121,7 @@ typedef struct _USBPORT_ENDPOINT_PROPERTIES {
   UCHAR InterruptScheduleMask;
   UCHAR SplitCompletionMask;
   UCHAR TransactionPerMicroframe; // 1 + additional transactions. Total: from 1 to 3)
-  UCHAR Reserved4;
+  UCHAR Reserved4; /* Raw endpoint descriptor bInterval */
   ULONG MaxPacketSize;
   ULONG Reserved6;
 } USBPORT_ENDPOINT_PROPERTIES, *PUSBPORT_ENDPOINT_PROPERTIES;
@@ -167,6 +167,26 @@ typedef struct _USBPORT_SCATTER_GATHER_LIST {
 } USBPORT_SCATTER_GATHER_LIST, *PUSBPORT_SCATTER_GATHER_LIST;
 
 C_ASSERT(sizeof(USBPORT_SCATTER_GATHER_LIST) == 48 + 4 * sizeof(PVOID));
+
+typedef struct _USBPORT_ISO_BLOCK_PACKET {
+  ULONG Offset;
+  ULONG Length;
+  ULONG ActualLength;
+  USBD_STATUS Status;
+} USBPORT_ISO_BLOCK_PACKET, *PUSBPORT_ISO_BLOCK_PACKET;
+
+typedef struct _USBPORT_ISO_BLOCK {
+  ULONG StartFrame;
+  ULONG NumberOfPackets;
+  ULONG TransferFlags;
+  ULONG ErrorCount;
+  PUSBPORT_SCATTER_GATHER_LIST SgList;
+  USBPORT_ISO_BLOCK_PACKET Packets[1];
+} USBPORT_ISO_BLOCK, *PUSBPORT_ISO_BLOCK;
+
+#define USBPORT_ISO_BLOCK_SIZE(_Packets_) \
+  (FIELD_OFFSET(USBPORT_ISO_BLOCK, Packets[0]) + \
+   (_Packets_) * sizeof(USBPORT_ISO_BLOCK_PACKET))
 
 typedef struct _USBPORT_ENDPOINT_REQUIREMENTS {
   ULONG HeaderBufferSize;
@@ -256,7 +276,7 @@ typedef MPSTATUS
   PVOID,
   PUSBPORT_TRANSFER_PARAMETERS,
   PVOID,
-  PVOID);
+  PUSBPORT_ISO_BLOCK);
 
 typedef VOID
 (NTAPI *PHCI_ABORT_TRANSFER)(
@@ -330,6 +350,11 @@ typedef VOID
 
 typedef VOID
 (NTAPI *PHCI_RESET_CONTROLLER)(PVOID);
+
+typedef MPSTATUS
+(NTAPI *PHCI_RESET_DEVICE)(
+  PVOID,
+  USHORT);
 
 /* Roothub functions */
 typedef VOID
@@ -699,8 +724,13 @@ typedef struct _USBPORT_REGISTRATION_PACKET {
   PHCI_FLUSH_INTERRUPTS FlushInterrupts;
   PHCI_RH_CHIRP_ROOT_PORT RH_ChirpRootPort;
   PHCI_TAKE_PORT_CONTROL TakePortControl;
-  ULONG Reserved4;
-  ULONG Reserved5;
+  union {
+    struct {
+      ULONG Reserved4;
+      ULONG Reserved5;
+    };
+    PHCI_RESET_DEVICE ResetDevice;
+  };
 } USBPORT_REGISTRATION_PACKET, *PUSBPORT_REGISTRATION_PACKET;
 
 #define USB10_MINIPORT_INTERFACE_VERSION  100

@@ -233,6 +233,7 @@ USBCCGP_GetDescriptors(
          DeviceExtension->DeviceDescriptor = NULL;
          return Status;
      }
+
      return Status;
 }
 
@@ -486,6 +487,8 @@ USBCCGP_SelectConfiguration(
     IN PFDO_DEVICE_EXTENSION DeviceExtension)
 {
     PUSBD_INTERFACE_INFORMATION InterfaceInformation;
+    PUSBD_INTERFACE_INFORMATION RequestInterfaceInformation;
+    PUSB_INTERFACE_DESCRIPTOR InterfaceDescriptor;
     NTSTATUS Status;
     PURB Urb;
     ULONG Index;
@@ -516,6 +519,14 @@ USBCCGP_SelectConfiguration(
         return STATUS_INSUFFICIENT_RESOURCES;
     }
 
+    RequestInterfaceInformation = &Urb->UrbSelectConfiguration.Interface;
+    for (Index = 0; Index < DeviceExtension->InterfaceListCount; Index++)
+    {
+        RequestInterfaceInformation = (PUSBD_INTERFACE_INFORMATION)
+                                      ((ULONG_PTR)RequestInterfaceInformation +
+                                       RequestInterfaceInformation->Length);
+    }
+
     //
     // submit urb
     //
@@ -525,7 +536,6 @@ USBCCGP_SelectConfiguration(
         //
         // failed to set configuration
         //
-        DPRINT1("USBCCGP_SyncUrbRequest failed to set interface %x\n", Status);
         ExFreePool(Urb);
         return Status;
     }

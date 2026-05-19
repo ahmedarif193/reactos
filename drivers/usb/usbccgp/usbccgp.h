@@ -32,6 +32,9 @@ typedef struct
     PUSBC_FUNCTION_DESCRIPTOR FunctionDescriptor;            // usb function descriptor
     ULONG FunctionDescriptorCount;                           // number of function descriptor
     PDEVICE_OBJECT * ChildPDO;                               // child pdos
+    ULONG ChildPDOCount;                                     // child pdo array count
+    BOOLEAN Removing;                                        // remove/surprise removal in progress
+    BOOLEAN ResourcesReleased;                               // fdo-owned resources released
     LIST_ENTRY ResetPortListHead;                            // reset port list head
     LIST_ENTRY CyclePortListHead;                            // cycle port list head
     UCHAR ResetPortActive;                                   // reset port active
@@ -54,6 +57,8 @@ typedef struct
     PUSBD_INTERFACE_LIST_ENTRY InterfaceList;                // interface list
     ULONG InterfaceListCount;                                // interface list count
     PFDO_DEVICE_EXTENSION FDODeviceExtension;                // pointer to fdo's pdo list
+    BOOLEAN Present;                                         // reported in bus relations
+    BOOLEAN Removed;                                         // remove irp processed
 }PDO_DEVICE_EXTENSION, *PPDO_DEVICE_EXTENSION;
 
 /* descriptor.c */
@@ -132,6 +137,11 @@ NTSTATUS
 FDO_Dispatch(
     PDEVICE_OBJECT DeviceObject,
     PIRP Irp);
+
+VOID
+USBCCGP_FdoReleaseResources(
+    IN OUT PFDO_DEVICE_EXTENSION FDODeviceExtension,
+    IN BOOLEAN Force);
 
 /* pdo.c */
 

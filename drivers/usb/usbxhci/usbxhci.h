@@ -20,6 +20,8 @@
 
 #define XHCI_TAG 'xhcu'
 
+typedef struct _XHCI_ISO_PACKET_CONTEXT XHCI_ISO_PACKET_CONTEXT, *PXHCI_ISO_PACKET_CONTEXT;
+
 #if DBG
 #define XHCI_LOG_IRQL(Tag)                                                        \
     DPRINT("usbxhci[IRQL]: %s (IRQL=%lu)\n", Tag, (ULONG)KeGetCurrentIrql())
@@ -350,7 +352,9 @@ typedef struct _XHCI_ENDPOINT {
     PUSBPORT_TRANSFER_PARAMETERS PendingParameters;
     PUSBPORT_SCATTER_GATHER_LIST PendingSgList;
     struct _XHCI_TRANSFER *ActiveTransfer;
+    LIST_ENTRY ActiveTransferList;
     volatile LONG PendingWorkCount;
+    volatile LONG ResetInProgress;
     /*
      * SwEnumRefCount: Miniport-owned reference count for SW-enum work items.
      * Incremented when queuing async work, decremented on completion.
@@ -383,6 +387,7 @@ typedef struct _XHCI_ENDPOINT {
 
 typedef struct _XHCI_TRANSFER {
     LIST_ENTRY ListEntry;
+    LIST_ENTRY EndpointListEntry;
     PXHCI_ENDPOINT Endpoint;
     PUSBPORT_TRANSFER_PARAMETERS TransferParameters;
     PUSBPORT_SCATTER_GATHER_LIST SgList;
@@ -395,6 +400,11 @@ typedef struct _XHCI_TRANSFER {
     ULONG Flags;
     BOOLEAN IsControl;
     BOOLEAN IsIsochronous;
+    PVOID IsoBlock;
+    PXHCI_ISO_PACKET_CONTEXT IsoPacketContext;
+    ULONG IsoPacketCount;
+    ULONG IsoPacketsCompleted;
+    ULONG IsoCompletedLength;
     USHORT StreamId;
     UCHAR NewAddress;
     UCHAR Reserved[2];

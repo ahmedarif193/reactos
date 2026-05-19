@@ -13,6 +13,34 @@
 #define NDEBUG_USBPORT_CORE
 #include "usbdebug.h"
 
+static USBD_STATUS
+USBPORT_MpStatusToUsbdStatus(
+    _In_ MPSTATUS MpStatus)
+{
+    switch (MpStatus)
+    {
+        case MP_STATUS_SUCCESS:
+            return USBD_STATUS_SUCCESS;
+
+        case MP_STATUS_NO_RESOURCES:
+            return USBD_STATUS_INSUFFICIENT_RESOURCES;
+
+        case MP_STATUS_NO_BANDWIDTH:
+            return USBD_STATUS_NO_BANDWIDTH;
+
+        case MP_STATUS_NOT_SUPPORTED:
+            return USBD_STATUS_NOT_SUPPORTED;
+
+        case MP_STATUS_HW_ERROR:
+        case MP_STATUS_ERROR:
+        case MP_STATUS_FAILURE:
+        case MP_STATUS_RESERVED1:
+        case MP_STATUS_UNSUCCESSFUL:
+        default:
+            return USBD_STATUS_REQUEST_FAILED;
+    }
+}
+
 static
 ULONG
 USBPORT_EncodeEndpointLpmPolicy(
@@ -69,11 +97,29 @@ USBPORT_CalculateUsbBandwidth(IN PDEVICE_OBJECT FdoDevice,
     switch (EndpointProperties->TransferType)
     {
         case USBPORT_TRANSFER_TYPE_ISOCHRONOUS:
-            Overhead = USB2_FS_ISOCHRONOUS_OVERHEAD;
+            if (EndpointProperties->DeviceSpeed == UsbHighSpeed)
+            {
+                Overhead = (EndpointProperties->Direction == USBPORT_TRANSFER_DIRECTION_OUT) ?
+                           USB2_HS_ISOCHRONOUS_OUT_OVERHEAD :
+                           USB2_HS_ISOCHRONOUS_IN_OVERHEAD;
+            }
+            else
+            {
+                Overhead = USB2_FS_ISOCHRONOUS_OVERHEAD;
+            }
             break;
 
         case USBPORT_TRANSFER_TYPE_INTERRUPT:
-            Overhead = USB2_FS_INTERRUPT_OVERHEAD;
+            if (EndpointProperties->DeviceSpeed == UsbHighSpeed)
+            {
+                Overhead = (EndpointProperties->Direction == USBPORT_TRANSFER_DIRECTION_OUT) ?
+                           USB2_HS_INTERRUPT_OUT_OVERHEAD :
+                           USB2_HS_INTERRUPT_IN_OVERHEAD;
+            }
+            else
+            {
+                Overhead = USB2_FS_INTERRUPT_OVERHEAD;
+            }
             break;
 
         default: //USBPORT_TRANSFER_TYPE_CONTROL or USBPORT_TRANSFER_TYPE_BULK
@@ -204,15 +250,8 @@ USBPORT_AllocateBandwidth(IN PDEVICE_OBJECT FdoDevice,
                 }
             }
 
-            DPRINT("USBPORT_AllocateBandwidth: FIXME AllocatedInterrupt_XXms\n");
-        }
-        else
-        {
-            DPRINT("USBPORT_AllocateBandwidth: FIXME AllocatedIso\n");
         }
     }
-
-    DPRINT("USBPORT_AllocateBandwidth: FIXME USBPORT_UpdateAllocatedBw\n");
 
     DPRINT("USBPORT_AllocateBandwidth: ScheduleOffset - %X\n", ScheduleOffset);
     return ScheduleOffset != -1;
@@ -230,6 +269,7 @@ USBPORT_FreeBandwidth(IN PDEVICE_OBJECT FdoDevice,
     ULONG EndpointBandwidth;
     ULONG Period;
     ULONG Factor;
+    ULONG ix;
     UCHAR Bit;
 
     DPRINT("USBPORT_FreeBandwidth: FdoDevice - %p, Endpoint - %p\n",
@@ -243,6 +283,7 @@ USBPORT_FreeBandwidth(IN PDEVICE_OBJECT FdoDevice,
 
     if (TransferType == USBPORT_TRANSFER_TYPE_BULK ||
         TransferType == USBPORT_TRANSFER_TYPE_CONTROL ||
+        EndpointProperties->DeviceSpeed == UsbSuperSpeed ||
         (Endpoint->Flags & ENDPOINT_FLAG_ROOTHUB_EP0))
     {
         return;
@@ -254,9 +295,14 @@ USBPORT_FreeBandwidth(IN PDEVICE_OBJECT FdoDevice,
     Period = Endpoint->EndpointProperties.Period;
     ASSERT(Period != 0);
 
-    for (Factor = USB2_FRAMES / Period; Factor; Factor--)
+    Factor = USB2_FRAMES / Period;
+
+    for (ix = 0; ix < Factor; ix++)
     {
-        FdoExtension->Bandwidth[Offset * Factor] += EndpointBandwidth;
+        ULONG Index = Offset + (ix * Period);
+
+        ASSERT(Index < RTL_NUMBER_OF(FdoExtension->Bandwidth));
+        FdoExtension->Bandwidth[Index] += EndpointBandwidth;
     }
 
     if (TransferType == USBPORT_TRANSFER_TYPE_INTERRUPT)
@@ -272,14 +318,7 @@ USBPORT_FreeBandwidth(IN PDEVICE_OBJECT FdoDevice,
 
         ASSERT(Period != 0);
 
-        DPRINT("USBPORT_AllocateBandwidth: FIXME AllocatedInterrupt_XXms\n");
     }
-    else
-    {
-        DPRINT("USBPORT_AllocateBandwidth: FIXME AllocatedIso\n");
-    }
-
-    DPRINT1("USBPORT_FreeBandwidth: FIXME USBPORT_UpdateAllocatedBw\n");
 }
 
 UCHAR
@@ -1139,6 +1178,7 @@ USBPORT_OpenPipe(IN PDEVICE_OBJECT FdoDevice,
     EndpointProperties->MaxPacketSize = MaxPacketSize;
     EndpointProperties->TotalMaxPacketSize = MaxPacketSize *
                                              (AdditionalTransaction + 1);
+    EndpointProperties->Reserved4 = EndpointDescriptor->bInterval;
 
     if (EndpointProperties->DeviceSpeed == UsbSuperSpeed &&
         PipeHandle->SsCompanionValid)
@@ -1190,7 +1230,6 @@ USBPORT_OpenPipe(IN PDEVICE_OBJECT FdoDevice,
             break;
 
         case USB_ENDPOINT_TYPE_ISOCHRONOUS:
-            DPRINT1("USBPORT_OpenPipe: USB_ENDPOINT_TYPE_ISOCHRONOUS UNIMPLEMENTED. FIXME. \n");
             EndpointProperties->TransferType = USBPORT_TRANSFER_TYPE_ISOCHRONOUS;
             EndpointProperties->MaxTransferSize = 0x1000000;
             break;
@@ -1257,10 +1296,12 @@ USBPORT_OpenPipe(IN PDEVICE_OBJECT FdoDevice,
         }
     }
 
-    if (EndpointProperties->TransferType == USBPORT_TRANSFER_TYPE_ISOCHRONOUS)
-    {
-        DPRINT1("USBPORT_OpenPipe: Isochronous endpoints are not supported\n");
+    Direction = USB_ENDPOINT_DIRECTION_OUT(EndpointDescriptor->bEndpointAddress);
+    EndpointProperties->Direction = Direction;
 
+    if (EndpointProperties->TransferType == USBPORT_TRANSFER_TYPE_ISOCHRONOUS &&
+        Packet->SubmitIsoTransfer == NULL)
+    {
         USBDStatus = USBD_STATUS_NOT_SUPPORTED;
 
         if (UsbdStatus)
@@ -1309,8 +1350,6 @@ USBPORT_OpenPipe(IN PDEVICE_OBJECT FdoDevice,
         goto ExitWithError;
     }
 
-    Direction = USB_ENDPOINT_DIRECTION_OUT(EndpointDescriptor->bEndpointAddress);
-    EndpointProperties->Direction = Direction;
     if (DeviceHandle->IsRootHub)
     {
         Endpoint->EndpointWorker = 0; // USBPORT_RootHubEndpointWorker;
@@ -1371,15 +1410,7 @@ USBPORT_OpenPipe(IN PDEVICE_OBJECT FdoDevice,
 
             USBPORT_ApplyEndpointLpmPolicy(EndpointProperties, DeviceHandle);
 
-            DPRINT("USBPORT_OpenPipe: calling MiniportOpenEndpoint addr=%u EP=0x%02x type=%lu maxpkt=%lu\n",
-                   EndpointProperties->DeviceAddress,
-                   EndpointProperties->EndpointAddress,
-                   EndpointProperties->TransferType,
-                   EndpointProperties->MaxPacketSize);
-
             MpStatus = MiniportOpenEndpoint(FdoDevice, Endpoint);
-
-            DPRINT("USBPORT_OpenPipe: MiniportOpenEndpoint returned MpStatus=%lx\n", MpStatus);
 
             Endpoint->Flags |= ENDPOINT_FLAG_DMA_TYPE;
             Endpoint->Flags |= ENDPOINT_FLAG_QUEUENE_EMPTY;
@@ -1875,7 +1906,6 @@ USBPORT_DmaEndpointPaused(IN PDEVICE_OBJECT FdoDevice,
 
                 if (Transfer->Flags & TRANSFER_FLAG_ISO)
                 {
-                    DPRINT1("USBPORT_DmaEndpointActive: FIXME call USBPORT_FlushIsoTransfer\n");
                     USBPORT_FlushIsoTransfer(Transfer);
                 }
                 else
@@ -1943,6 +1973,16 @@ USBPORT_DmaEndpointActive(IN PDEVICE_OBJECT FdoDevice,
             continue;
         }
 
+        if (Transfer->Flags & (TRANSFER_FLAG_CANCELED | TRANSFER_FLAG_ABORTED))
+        {
+            return USBPORT_ENDPOINT_PAUSED;
+        }
+
+        if (Transfer->Flags & TRANSFER_FLAG_SUBMITED)
+        {
+            return USBPORT_ENDPOINT_ACTIVE;
+        }
+
         if (Endpoint &&
             (Endpoint->EndpointProperties.TransferType == USBPORT_TRANSFER_TYPE_BULK ||
              Transfer->TransferParameters.TransferBufferLength >= 64))
@@ -1968,9 +2008,7 @@ USBPORT_DmaEndpointActive(IN PDEVICE_OBJECT FdoDevice,
                                                      Endpoint + 1,
                                                      &Transfer->TransferParameters,
                                                      Transfer->MiniportTransfer,
-                                                     Transfer->IsoBlockPtr ?
-                                                         (PVOID)Transfer->IsoBlockPtr->SgList :
-                                                         (PVOID)&Transfer->SgList);
+                                                     Transfer->IsoBlockPtr);
             }
             else
             {
@@ -1993,12 +2031,18 @@ USBPORT_DmaEndpointActive(IN PDEVICE_OBJECT FdoDevice,
 
             if (MpStatus)
             {
-                DPRINT1("USBPORT_DmaEndpointActive: SubmitTransfer FAILED MpStatus=%lu\n", MpStatus);
-                if ((MpStatus != MP_STATUS_FAILURE) && Transfer->Flags & TRANSFER_FLAG_ISO)
-                {
-                    DPRINT1("USBPORT_DmaEndpointActive: FIXME call USBPORT_ErrorCompleteIsoTransfer\n");
-                    USBPORT_ErrorCompleteIsoTransfer(Transfer);
-                }
+                USBD_STATUS USBDStatus;
+
+                USBDStatus = USBPORT_MpStatusToUsbdStatus(MpStatus);
+
+                DPRINT1("USBPORT_DmaEndpointActive: SubmitTransfer FAILED MpStatus=%lu USBDStatus=%x\n",
+                        MpStatus,
+                        USBDStatus);
+
+                if (Transfer->Flags & TRANSFER_FLAG_ISO)
+                    USBPORT_FailIsoTransfer(Transfer, USBDStatus, TRUE);
+                else
+                    USBPORT_QueueDoneTransfer(Transfer, USBDStatus, TRUE);
 
                 return USBPORT_ENDPOINT_ACTIVE;
             }
@@ -2008,11 +2052,8 @@ USBPORT_DmaEndpointActive(IN PDEVICE_OBJECT FdoDevice,
 
             TimeOut.QuadPart = 10000 * Transfer->TimeOut;
             Transfer->Time.QuadPart += TimeOut.QuadPart;
-        }
 
-        if (Transfer->Flags & (TRANSFER_FLAG_CANCELED | TRANSFER_FLAG_ABORTED))
-        {
-            return USBPORT_ENDPOINT_PAUSED;
+            return USBPORT_ENDPOINT_ACTIVE;
         }
 
         Entry = Transfer->TransferLink.Flink;

@@ -142,9 +142,8 @@ OHCI_InsertEndpointInSchedule(IN POHCI_ENDPOINT OhciEndpoint)
         }
         else
         {
-            DPRINT1("OHCI_InsertEndpointInSchedule: Unknown HeadED->Type - %x\n",
-                    HeadED->Type);
-            DbgBreakPoint();
+        DPRINT1("OHCI_InsertEndpointInSchedule: Unknown HeadED->Type - %x\n",
+                HeadED->Type);
         }
     }
     else
@@ -376,7 +375,7 @@ OHCI_OpenIsoEndpoint(IN POHCI_EXTENSION OhciExtension,
                      IN PUSBPORT_ENDPOINT_PROPERTIES EndpointProperties,
                      IN POHCI_ENDPOINT OhciEndpoint)
 {
-    DPRINT1("OHCI_OpenIsoEndpoint: UNIMPLEMENTED. FIXME\n");
+    DPRINT1("OHCI_OpenIsoEndpoint: UNIMPLEMENTED.\n");
     return MP_STATUS_NOT_SUPPORTED;
 }
 
@@ -506,7 +505,6 @@ OHCI_QueryEndpointRequirements(IN PVOID ohciExtension,
         default:
             DPRINT1("OHCI_QueryEndpointRequirements: Unknown TransferType - %x\n",
                     TransferType);
-            DbgBreakPoint();
             break;
     }
 }
@@ -843,7 +841,7 @@ OHCI_StartController(IN PVOID ohciExtension,
     /* Setup HcControl register */
     Control.AsULONG = READ_REGISTER_ULONG(ControlReg);
 
-    Control.ControlBulkServiceRatio = 0; // FIXME (1 : 1)
+    Control.ControlBulkServiceRatio = 0; // ControlBulkServiceRatio: 1:1
     Control.PeriodicListEnable = 1;
     Control.IsochronousEnable = 1;
     Control.ControlListEnable = 1;
@@ -1576,10 +1574,16 @@ OHCI_SubmitIsoTransfer(IN PVOID ohciExtension,
                        IN PVOID ohciEndpoint,
                        IN PUSBPORT_TRANSFER_PARAMETERS TransferParameters,
                        IN PVOID ohciTransfer,
-                       IN PVOID isoParameters)
+                       IN PUSBPORT_ISO_BLOCK IsoBlock)
 {
-    DPRINT1("OHCI_SubmitIsoTransfer: UNIMPLEMENTED. FIXME\n");
-    return MP_STATUS_SUCCESS;
+    UNREFERENCED_PARAMETER(ohciExtension);
+    UNREFERENCED_PARAMETER(ohciEndpoint);
+    UNREFERENCED_PARAMETER(TransferParameters);
+    UNREFERENCED_PARAMETER(ohciTransfer);
+    UNREFERENCED_PARAMETER(IsoBlock);
+
+    DPRINT1("OHCI_SubmitIsoTransfer: UNIMPLEMENTED.\n");
+    return MP_STATUS_NOT_SUPPORTED;
 }
 
 VOID
@@ -1659,7 +1663,7 @@ OHCI_ProcessDoneIsoTD(IN POHCI_EXTENSION OhciExtension,
                       IN POHCI_HCD_TD TD,
                       IN BOOLEAN IsPortComplete)
 {
-    DPRINT1("OHCI_ProcessDoneIsoTD: UNIMPLEMENTED. FIXME\n");
+    DPRINT1("OHCI_ProcessDoneIsoTD: UNIMPLEMENTED.\n");
 }
 
 /**
@@ -1828,9 +1832,8 @@ OHCI_RemoveEndpointFromSchedule(IN POHCI_ENDPOINT OhciEndpoint)
         }
         else
         {
-            DPRINT1("OHCI_RemoveEndpointFromSchedule: Unknown HeadED->Type - %x\n",
-                    HeadED->Type);
-            DbgBreakPoint();
+        DPRINT1("OHCI_RemoveEndpointFromSchedule: Unknown HeadED->Type - %x\n",
+                HeadED->Type);
         }
     }
     else
@@ -1880,7 +1883,7 @@ OHCI_SetEndpointState(IN PVOID ohciExtension,
             break;
 
         default:
-            ASSERT(FALSE);
+            DPRINT1("OHCI_SetEndpointState: Unknown EndpointState - %x\n", EndpointState);
             break;
     }
 }
@@ -1911,8 +1914,9 @@ OHCI_PollAsyncEndpoint(IN POHCI_EXTENSION OhciExtension,
 
     if (!NextTdPA)
     {
+        DPRINT1("OHCI_PollAsyncEndpoint: NextTdPA is NULL\n");
         OHCI_DumpHcdED(ED);
-        DbgBreakPoint();
+        return;
     }
 
     NextTD = RegPacket.UsbPortGetMappedVirtualAddress(NextTdPA,
@@ -1932,8 +1936,9 @@ OHCI_PollAsyncEndpoint(IN POHCI_EXTENSION OhciExtension,
     {
         if (!TD)
         {
+            DPRINT1("OHCI_PollAsyncEndpoint: TD is NULL\n");
             OHCI_DumpHcdED(ED);
-            DbgBreakPoint();
+            return;
         }
 
         if (TD == NextTD)
@@ -2085,8 +2090,7 @@ NTAPI
 OHCI_PollIsoEndpoint(IN POHCI_EXTENSION OhciExtension,
                      IN POHCI_ENDPOINT OhciEndpoint)
 {
-    DPRINT1("OHCI_PollAsyncEndpoint: UNIMPLEMENTED. FIXME \n");
-    ASSERT(FALSE);
+    DPRINT1("OHCI_PollIsoEndpoint: UNIMPLEMENTED.\n");
 }
 
 VOID
@@ -2263,7 +2267,12 @@ VOID
 NTAPI
 OHCI_PollController(IN PVOID ohciExtension)
 {
-    DPRINT1("OHCI_PollController: UNIMPLEMENTED. FIXME\n");
+    POHCI_EXTENSION OhciExtension = ohciExtension;
+
+    if (!OHCI_HardwarePresent(OhciExtension, TRUE))
+        return;
+
+    OHCI_InterruptDpc(OhciExtension, FALSE);
 }
 
 VOID
@@ -2332,7 +2341,7 @@ OHCI_SetEndpointStatus(IN PVOID ohciExtension,
     }
     else if (EndpointStatus == USBPORT_ENDPOINT_HALT)
     {
-        ASSERT(FALSE);
+        DPRINT1("OHCI_SetEndpointStatus: USBPORT_ENDPOINT_HALT not supported\n");
     }
 }
 
@@ -2445,31 +2454,53 @@ OHCI_ResetController(IN PVOID ohciExtension)
 MPSTATUS
 NTAPI
 OHCI_StartSendOnePacket(IN PVOID ohciExtension,
-                        IN PVOID PacketParameters,
-                        IN PVOID Data,
-                        IN PULONG pDataLength,
-                        IN PVOID BufferVA,
-                        IN PVOID BufferPA,
-                        IN ULONG BufferLength,
-                        IN USBD_STATUS * pUSBDStatus)
+                       IN PVOID PacketParameters,
+                       IN PVOID Data,
+                       IN PULONG pDataLength,
+                       IN PVOID BufferVA,
+                       IN PVOID BufferPA,
+                       IN ULONG BufferLength,
+                       IN USBD_STATUS * pUSBDStatus)
 {
-    DPRINT1("OHCI_StartSendOnePacket: UNIMPLEMENTED. FIXME\n");
-    return MP_STATUS_SUCCESS;
+    UNREFERENCED_PARAMETER(ohciExtension);
+    UNREFERENCED_PARAMETER(PacketParameters);
+    UNREFERENCED_PARAMETER(Data);
+    UNREFERENCED_PARAMETER(pDataLength);
+    UNREFERENCED_PARAMETER(BufferVA);
+    UNREFERENCED_PARAMETER(BufferPA);
+    UNREFERENCED_PARAMETER(BufferLength);
+
+    if (pUSBDStatus)
+        *pUSBDStatus = USBD_STATUS_NOT_SUPPORTED;
+
+    DPRINT1("OHCI_StartSendOnePacket: not supported\n");
+    return MP_STATUS_NOT_SUPPORTED;
 }
 
 MPSTATUS
 NTAPI
 OHCI_EndSendOnePacket(IN PVOID ohciExtension,
-                      IN PVOID PacketParameters,
-                      IN PVOID Data,
-                      IN PULONG pDataLength,
-                      IN PVOID BufferVA,
-                      IN PVOID BufferPA,
-                      IN ULONG BufferLength,
-                      IN USBD_STATUS * pUSBDStatus)
+                     IN PVOID PacketParameters,
+                     IN PVOID Data,
+                     IN PULONG pDataLength,
+                     IN PVOID BufferVA,
+                     IN PVOID BufferPA,
+                     IN ULONG BufferLength,
+                     IN USBD_STATUS * pUSBDStatus)
 {
-    DPRINT1("OHCI_EndSendOnePacket: UNIMPLEMENTED. FIXME\n");
-    return MP_STATUS_SUCCESS;
+    UNREFERENCED_PARAMETER(ohciExtension);
+    UNREFERENCED_PARAMETER(PacketParameters);
+    UNREFERENCED_PARAMETER(Data);
+    UNREFERENCED_PARAMETER(pDataLength);
+    UNREFERENCED_PARAMETER(BufferVA);
+    UNREFERENCED_PARAMETER(BufferPA);
+    UNREFERENCED_PARAMETER(BufferLength);
+
+    if (pUSBDStatus)
+        *pUSBDStatus = USBD_STATUS_NOT_SUPPORTED;
+
+    DPRINT1("OHCI_EndSendOnePacket: not supported\n");
+    return MP_STATUS_NOT_SUPPORTED;
 }
 
 MPSTATUS
@@ -2479,8 +2510,12 @@ OHCI_PassThru(IN PVOID ohciExtension,
               IN ULONG ParameterLength,
               IN PVOID pParameters)
 {
-    DPRINT1("OHCI_PassThru: UNIMPLEMENTED. FIXME\n");
-    return MP_STATUS_SUCCESS;
+    UNREFERENCED_PARAMETER(ohciExtension);
+    UNREFERENCED_PARAMETER(passThruParameters);
+    UNREFERENCED_PARAMETER(ParameterLength);
+    UNREFERENCED_PARAMETER(pParameters);
+    DPRINT1("OHCI_PassThru: UNIMPLEMENTED.\n");
+    return MP_STATUS_NOT_SUPPORTED;
 }
 
 VOID
@@ -2555,7 +2590,7 @@ DriverEntry(IN PDRIVER_OBJECT DriverObject,
     RegPacket.InterruptService = OHCI_InterruptService;
     RegPacket.InterruptDpc = OHCI_InterruptDpc;
     RegPacket.SubmitTransfer = OHCI_SubmitTransfer;
-    RegPacket.SubmitIsoTransfer = OHCI_SubmitIsoTransfer;
+    RegPacket.SubmitIsoTransfer = NULL;
     RegPacket.AbortTransfer = OHCI_AbortTransfer;
     RegPacket.GetEndpointState = OHCI_GetEndpointState;
     RegPacket.SetEndpointState = OHCI_SetEndpointState;

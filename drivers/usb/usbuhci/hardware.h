@@ -104,6 +104,23 @@ C_ASSERT(sizeof(UHCI_INTERRUPT_ENABLE) == sizeof(USHORT));
 #define UHCI_FRNUM_OVERFLOW_LIST  0x400
 
 /* PORTSC(1|2) USB port status and control registers */
+#define UHCI_PORTSC_CCS   0x0001
+#define UHCI_PORTSC_CSC   0x0002
+#define UHCI_PORTSC_PE    0x0004
+#define UHCI_PORTSC_PEC   0x0008
+#define UHCI_PORTSC_RD    0x0040
+#define UHCI_PORTSC_LSDA  0x0100
+#define UHCI_PORTSC_PR    0x0200
+#define UHCI_PORTSC_OC    0x0400
+#define UHCI_PORTSC_OCC   0x0800
+#define UHCI_PORTSC_SUSP  0x1000
+#define UHCI_PORTSC_WZ_BITS \
+    (0x2000 | 0x4000 | 0x8000)
+#define UHCI_PORTSC_RWC_BITS \
+    (UHCI_PORTSC_CSC | UHCI_PORTSC_PEC | UHCI_PORTSC_OCC)
+#define UHCI_PORTSC_SUSPEND_BITS \
+    (UHCI_PORTSC_SUSP | UHCI_PORTSC_RD)
+
 typedef union _UHCI_PORT_STATUS_CONTROL {
   struct {
     USHORT CurrentConnectStatus    : 1;
