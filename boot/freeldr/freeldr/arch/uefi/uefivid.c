@@ -22,6 +22,14 @@ ULONG_PTR VramAddress;
 ULONG VramSize;
 PCM_FRAMEBUF_DEVICE_DATA FrameBufferData = NULL;
 
+static EFI_GRAPHICS_OUTPUT_PROTOCOL* UefiBltOnlyGop = NULL;
+static EFI_GRAPHICS_OUTPUT_BLT_PIXEL* UefiBltOnlyBuffer = NULL;
+static UINTN UefiBltOnlyDelta = 0;
+static UINT32 UefiBltOnlyWidth = 0;
+static UINT32 UefiBltOnlyHeight = 0;
+static BOOLEAN UefiBltOnlyMode = FALSE;
+static BOOLEAN UefiBltOnlyErrorLogged = FALSE;
+
 typedef struct _UEFI_BGRT_LOGO
 {
     BOOLEAN Valid;
@@ -108,6 +116,159 @@ static EFI_PIXEL_BITMASK EfiPixelMasks[] =
 };
 
 #endif /* UEFI */
+
+static
+VOID
+UefiBltOnlyReset(VOID)
+{
+    if (UefiBltOnlyBuffer != NULL)
+    {
+        GlobalSystemTable->BootServices->FreePool(UefiBltOnlyBuffer);
+    }
+
+    UefiBltOnlyGop = NULL;
+    UefiBltOnlyBuffer = NULL;
+    UefiBltOnlyDelta = 0;
+    UefiBltOnlyWidth = 0;
+    UefiBltOnlyHeight = 0;
+    UefiBltOnlyMode = FALSE;
+    UefiBltOnlyErrorLogged = FALSE;
+}
+
+static
+VOID
+UefiBltOnlyFlushRect(
+    _In_ UINTN X,
+    _In_ UINTN Y,
+    _In_ UINTN Width,
+    _In_ UINTN Height)
+{
+    EFI_STATUS Status;
+
+    if (!UefiBltOnlyMode || !UefiBltOnlyGop || !UefiBltOnlyBuffer)
+        return;
+
+    if ((Width == 0) || (Height == 0) ||
+        (X >= UefiBltOnlyWidth) || (Y >= UefiBltOnlyHeight))
+    {
+        return;
+    }
+
+    Width = min(Width, UefiBltOnlyWidth - X);
+    Height = min(Height, UefiBltOnlyHeight - Y);
+
+    Status = UefiBltOnlyGop->Blt(UefiBltOnlyGop,
+                                 UefiBltOnlyBuffer,
+                                 EfiBltBufferToVideo,
+                                 X,
+                                 Y,
+                                 X,
+                                 Y,
+                                 Width,
+                                 Height,
+                                 UefiBltOnlyDelta);
+    if ((Status != EFI_SUCCESS) && !UefiBltOnlyErrorLogged)
+    {
+        ERR("GOP PixelBltOnly flush failed: %lu\n", Status);
+        UefiBltOnlyErrorLogged = TRUE;
+    }
+}
+
+static
+VOID
+UefiBltOnlyFlush(VOID)
+{
+    UefiBltOnlyFlushRect(0, 0, UefiBltOnlyWidth, UefiBltOnlyHeight);
+}
+
+static
+VOID
+UefiBltOnlyFlushTextCell(
+    _In_ unsigned X,
+    _In_ unsigned Y)
+{
+    ULONG CellWidth, CellHeight;
+
+    FbConsGetCellSize(&CellWidth, &CellHeight);
+    UefiBltOnlyFlushRect((UINTN)X * CellWidth,
+                         (UINTN)Y * CellHeight,
+                         CellWidth,
+                         CellHeight);
+}
+
+static
+EFI_STATUS
+UefiInitializeBltOnlyGop(
+    _In_ EFI_GRAPHICS_OUTPUT_PROTOCOL* Gop)
+{
+    EFI_STATUS Status;
+    UINT32 Width, Height;
+    ULONGLONG BufferSize;
+
+    Width = Gop->Mode->Info->HorizontalResolution;
+    Height = Gop->Mode->Info->VerticalResolution;
+
+    if ((Width == 0) || (Height == 0))
+        return EFI_UNSUPPORTED;
+
+    if (Width > MAXULONGLONG / Height / sizeof(EFI_GRAPHICS_OUTPUT_BLT_PIXEL))
+        return EFI_OUT_OF_RESOURCES;
+
+    BufferSize = (ULONGLONG)Width * Height * sizeof(EFI_GRAPHICS_OUTPUT_BLT_PIXEL);
+    if (BufferSize > MAXULONG)
+    {
+        ERR("GOP PixelBltOnly shadow framebuffer is too large: %llu\n", BufferSize);
+        return EFI_OUT_OF_RESOURCES;
+    }
+
+    UefiBltOnlyReset();
+
+    Status = GlobalSystemTable->BootServices->AllocatePool(EfiLoaderData,
+                                                           (UINTN)BufferSize,
+                                                           (VOID**)&UefiBltOnlyBuffer);
+    if (Status != EFI_SUCCESS)
+    {
+        ERR("Failed to allocate GOP PixelBltOnly shadow framebuffer: %lu\n", Status);
+        return Status;
+    }
+
+    RtlZeroMemory(UefiBltOnlyBuffer, (SIZE_T)BufferSize);
+
+    /*
+     * PixelBltOnly has no firmware-owned linear framebuffer. Render into a
+     * shadow buffer using the EFI BLT pixel layout, and do not expose it as
+     * VramAddress/FrameBufferData to ntoskrnl.
+     */
+    UefiBltOnlyGop = Gop;
+    UefiBltOnlyDelta = Width * sizeof(EFI_GRAPHICS_OUTPUT_BLT_PIXEL);
+    UefiBltOnlyWidth = Width;
+    UefiBltOnlyHeight = Height;
+    UefiBltOnlyMode = TRUE;
+    VramAddress = 0;
+    VramSize = 0;
+    FrameBufferData = NULL;
+
+    if (!VidFbInitializeVideo(NULL,
+                              (ULONG_PTR)UefiBltOnlyBuffer,
+                              (ULONG)BufferSize,
+                              Width,
+                              Height,
+                              Width,
+                              RTL_BITS_OF(EFI_GRAPHICS_OUTPUT_BLT_PIXEL),
+                              (PPIXEL_BITMASK)&EfiPixelMasks[PixelBlueGreenRedReserved8BitPerColor]))
+    {
+        ERR("Couldn't initialize GOP PixelBltOnly shadow framebuffer\n");
+        UefiBltOnlyReset();
+        return EFI_UNSUPPORTED;
+    }
+
+    TRACE("Using GOP PixelBltOnly shadow framebuffer: %ux%u, size %llu\n",
+          Width,
+          Height,
+          BufferSize);
+    UefiBltOnlyFlush();
+    return EFI_SUCCESS;
+}
 
 BOOLEAN
 UefiCalculateBmpRowStride(
@@ -536,6 +697,10 @@ UefiInitializeGop(VOID)
         }
 
         case PixelBltOnly:
+        {
+            return UefiInitializeBltOnlyGop(gop);
+        }
+
         default:
         {
             ERR("Unsupported UEFI GOP format %lu\n", PixelFormat);
@@ -649,12 +814,14 @@ VOID
 UefiVideoClearScreen(UCHAR Attr)
 {
     FbConsClearScreen(Attr);
+    UefiBltOnlyFlush();
 }
 
 VOID
 UefiVideoPutChar(int Ch, UCHAR Attr, unsigned X, unsigned Y)
 {
     FbConsPutChar(Ch, Attr, X, Y);
+    UefiBltOnlyFlushTextCell(X, Y);
 }
 
 VOID
@@ -682,6 +849,13 @@ UefiVideoCopyOffScreenBufferToVRAM(PVOID Buffer)
 {
     FbConsCopyOffScreenBufferToVRAM(Buffer);
     UefiDrawBgrtLogo();
+    UefiBltOnlyFlush();
+}
+
+VOID
+UefiVideoSync(VOID)
+{
+    UefiBltOnlyFlush();
 }
 
 VOID

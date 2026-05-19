@@ -160,6 +160,11 @@ FbConsGetDisplaySize(
     _Out_ PULONG Height,
     _Out_ PULONG Depth);
 
+VOID
+FbConsGetCellSize(
+    _Out_ PULONG Width,
+    _Out_ PULONG Height);
+
 ULONG
 FbConsGetBufferSize(VOID);
 
