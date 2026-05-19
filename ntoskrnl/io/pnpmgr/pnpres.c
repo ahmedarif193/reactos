@@ -12,7 +12,7 @@
 #define NDEBUG
 #include <debug.h>
 
-#if defined(_M_AMD64)
+#if defined(_M_AMD64) || defined(_M_ARM64)
 NTHALAPI
 NTSTATUS
 NTAPI
@@ -369,6 +369,38 @@ IopFindInterruptResource(
         }
     }
 #endif /* defined(_M_AMD64) */
+
+#if defined(_M_ARM64)
+    if (IoDesc->Flags & CM_RESOURCE_INTERRUPT_MESSAGE)
+    {
+        HAL_MESSAGE_ROUTING_INFO RoutingInfo;
+        NTSTATUS RoutingStatus;
+
+        RtlZeroMemory(&RoutingInfo, sizeof(RoutingInfo));
+        RoutingInfo.Version = HAL_MESSAGE_ROUTING_INFO_VERSION;
+        RoutingInfo.Flags = HAL_MSI_ROUTING_ALLOCATE_VECTOR;
+        RoutingInfo.MessageCount = 1;
+
+        RoutingStatus = HalpGetMessageRoutingInfo(&RoutingInfo);
+        if (!NT_SUCCESS(RoutingStatus))
+        {
+            DPRINT1("MSI: ARM64 HalpGetMessageRoutingInfo failed 0x%lx\n",
+                    RoutingStatus);
+            return FALSE;
+        }
+
+        CmDesc->Flags = IoDesc->Flags;
+        CmDesc->ShareDisposition = IoDesc->ShareDisposition;
+        CmDesc->u.Interrupt.Level = RoutingInfo.Irql;
+        CmDesc->u.Interrupt.Vector = RoutingInfo.Vector;
+        CmDesc->u.Interrupt.Affinity = RoutingInfo.TargetProcessors;
+        DPRINT1("MSI: allocated ARM64 message vector 0x%lx at irql %u affinity 0x%Ix\n",
+                RoutingInfo.Vector,
+                RoutingInfo.Irql,
+                RoutingInfo.TargetProcessors);
+        return TRUE;
+    }
+#endif /* defined(_M_ARM64) */
 
     {
         ULONG LegacyMin = IoDesc->u.Interrupt.MinimumVector;

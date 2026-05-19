@@ -15,8 +15,157 @@
 /* INCLUDES *******************************************************************/
 
 #include <hal.h>
+#if defined(_M_ARM64)
+#include <reactos/hal/acpi_pci.h>
+#endif
 #define NDEBUG
 #include <debug.h>
+
+#if defined(_M_ARM64)
+#define HALP_ARM64_MSI_DEFAULT_IRQL 4
+
+static KSPIN_LOCK HalpArm64MsiRoutingLock;
+static volatile LONG HalpArm64MsiRoutingLockState;
+static RTL_BITMAP HalpArm64MsiRoutingBitmap;
+static PULONG HalpArm64MsiRoutingBuffer;
+static ULONG HalpArm64MsiRoutingBase;
+static ULONG HalpArm64MsiRoutingCount;
+
+static
+VOID
+HalpArm64EnsureMsiRoutingLock(VOID)
+{
+    LONG State;
+
+    State = HalpArm64MsiRoutingLockState;
+    if (State == 2)
+        return;
+
+    State = InterlockedCompareExchange(&HalpArm64MsiRoutingLockState, 1, 0);
+    if (State == 0)
+    {
+        KeInitializeSpinLock(&HalpArm64MsiRoutingLock);
+        InterlockedExchange(&HalpArm64MsiRoutingLockState, 2);
+        return;
+    }
+
+    while (HalpArm64MsiRoutingLockState != 2)
+        KeStallExecutionProcessor(1);
+}
+
+static
+NTSTATUS
+HalpArm64EnsureMsiRoutingAllocator(VOID)
+{
+    ULONG BaseVector;
+    ULONG VectorCount;
+    ULONG BitmapBytes;
+    PULONG NewBuffer;
+    PULONG OldBuffer = NULL;
+    KIRQL OldIrql;
+
+    if (!HalGetMsiVectorRange(&BaseVector, &VectorCount) ||
+        VectorCount == 0)
+    {
+        return STATUS_NOT_SUPPORTED;
+    }
+
+    HalpArm64EnsureMsiRoutingLock();
+
+    KeAcquireSpinLock(&HalpArm64MsiRoutingLock, &OldIrql);
+    if (HalpArm64MsiRoutingBuffer != NULL &&
+        HalpArm64MsiRoutingBase == BaseVector &&
+        HalpArm64MsiRoutingCount == VectorCount)
+    {
+        KeReleaseSpinLock(&HalpArm64MsiRoutingLock, OldIrql);
+        return STATUS_SUCCESS;
+    }
+    KeReleaseSpinLock(&HalpArm64MsiRoutingLock, OldIrql);
+
+    BitmapBytes = ((VectorCount + 31) / 32) * sizeof(ULONG);
+    NewBuffer = ExAllocatePoolWithTag(NonPagedPool, BitmapBytes, TAG_HAL);
+    if (NewBuffer == NULL)
+        return STATUS_INSUFFICIENT_RESOURCES;
+
+    RtlZeroMemory(NewBuffer, BitmapBytes);
+
+    KeAcquireSpinLock(&HalpArm64MsiRoutingLock, &OldIrql);
+    if (HalpArm64MsiRoutingBuffer == NULL ||
+        HalpArm64MsiRoutingBase != BaseVector ||
+        HalpArm64MsiRoutingCount != VectorCount)
+    {
+        OldBuffer = HalpArm64MsiRoutingBuffer;
+        HalpArm64MsiRoutingBuffer = NewBuffer;
+        HalpArm64MsiRoutingBase = BaseVector;
+        HalpArm64MsiRoutingCount = VectorCount;
+        RtlInitializeBitMap(&HalpArm64MsiRoutingBitmap,
+                            HalpArm64MsiRoutingBuffer,
+                            HalpArm64MsiRoutingCount);
+        RtlClearAllBits(&HalpArm64MsiRoutingBitmap);
+        NewBuffer = NULL;
+    }
+    KeReleaseSpinLock(&HalpArm64MsiRoutingLock, OldIrql);
+
+    if (OldBuffer != NULL)
+        ExFreePoolWithTag(OldBuffer, TAG_HAL);
+    if (NewBuffer != NULL)
+        ExFreePoolWithTag(NewBuffer, TAG_HAL);
+
+    return STATUS_SUCCESS;
+}
+
+static
+NTSTATUS
+HalpArm64AllocateMsiRoutingVector(
+    _In_ ULONG MessageCount,
+    _Out_ PULONG Vector)
+{
+    ULONG Offset;
+    KIRQL OldIrql;
+    NTSTATUS Status;
+
+    /*
+     * Keep the native ARM64 rule exact: Windows 11 ARM64 HalpAllocateMsiLines
+     * rejects Count == 0 and every non-power-of-two count before scanning its
+     * bitmap. PCI MSI multiple-message fields encode powers of two; MSI-X
+     * entries are allocated as individual messages.
+     */
+    if (Vector == NULL || MessageCount == 0 ||
+        (MessageCount & (MessageCount - 1)) != 0)
+    {
+        DPRINT1("HalpArm64AllocateMsiRoutingVector: native MSI line count must be a power of two, got %lu\n",
+                MessageCount);
+        return STATUS_INVALID_PARAMETER;
+    }
+
+    Status = HalpArm64EnsureMsiRoutingAllocator();
+    if (!NT_SUCCESS(Status))
+        return Status;
+
+    KeAcquireSpinLock(&HalpArm64MsiRoutingLock, &OldIrql);
+    if (MessageCount > HalpArm64MsiRoutingCount)
+    {
+        KeReleaseSpinLock(&HalpArm64MsiRoutingLock, OldIrql);
+        return STATUS_INSUFFICIENT_RESOURCES;
+    }
+
+    for (Offset = 0;
+         Offset + MessageCount <= HalpArm64MsiRoutingCount;
+         Offset += MessageCount)
+    {
+        if (RtlAreBitsClear(&HalpArm64MsiRoutingBitmap, Offset, MessageCount))
+        {
+            RtlSetBits(&HalpArm64MsiRoutingBitmap, Offset, MessageCount);
+            *Vector = HalpArm64MsiRoutingBase + Offset;
+            KeReleaseSpinLock(&HalpArm64MsiRoutingLock, OldIrql);
+            return STATUS_SUCCESS;
+        }
+    }
+
+    KeReleaseSpinLock(&HalpArm64MsiRoutingLock, OldIrql);
+    return STATUS_INSUFFICIENT_RESOURCES;
+}
+#endif
 
 /* FUNCTIONS ******************************************************************/
 
@@ -149,7 +298,31 @@ HalGetMessageRoutingInfo(
     }
 
     if (RoutingInfo->Flags & HAL_MSI_ROUTING_ALLOCATE_VECTOR)
+    {
+#if defined(_M_ARM64)
+        Status = HalpArm64AllocateMsiRoutingVector(RoutingInfo->MessageCount,
+                                                   &RoutingInfo->Vector);
+        if (!NT_SUCCESS(Status))
+            return Status;
+
+        RoutingInfo->Irql = RoutingInfo->DesiredIrql ?
+                            RoutingInfo->DesiredIrql :
+                            HALP_ARM64_MSI_DEFAULT_IRQL;
+        if (RoutingInfo->TargetProcessors == 0)
+            RoutingInfo->TargetProcessors = KeQueryActiveProcessors();
+#else
         return STATUS_NOT_SUPPORTED;
+#endif
+    }
+    else
+    {
+#if defined(_M_ARM64)
+        return STATUS_NOT_SUPPORTED;
+#else
+        if (RoutingInfo->Vector == 0)
+            return STATUS_INVALID_PARAMETER;
+#endif
+    }
 
     if (RoutingInfo->Vector == 0)
         return STATUS_INVALID_PARAMETER;
@@ -166,9 +339,14 @@ HalGetMessageRoutingInfo(
     RoutingInfo->DestinationId = TargetInfo.DestinationId;
     if (RoutingInfo->Irql == 0)
         RoutingInfo->Irql = HalConvertDeviceIdtToIrql(RoutingInfo->Vector);
+#if defined(_M_ARM64)
+    RoutingInfo->MessageAddress.QuadPart = 0;
+    RoutingInfo->MessageData = (USHORT)(RoutingInfo->Vector - HalpArm64MsiRoutingBase);
+#else
     RoutingInfo->MessageAddress.QuadPart = 0xFEE00000ULL |
                                            ((ULONGLONG)TargetInfo.DestinationId << 12);
     RoutingInfo->MessageData = (USHORT)(RoutingInfo->Vector & 0xFF);
+#endif
     return STATUS_SUCCESS;
 }
 

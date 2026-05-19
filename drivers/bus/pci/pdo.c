@@ -49,6 +49,56 @@ HalpGetMessageRoutingInfo(
     _Inout_ PHAL_MESSAGE_ROUTING_INFO RoutingInfo);
 #endif
 
+#if defined(_M_ARM64)
+static
+USHORT
+PciPdoGetRequesterId(
+    _In_ PPCI_DEVICE Device)
+{
+    return (USHORT)(((Device->BusNumber & 0xFF) << 8) |
+                    ((Device->SlotNumber.u.bits.DeviceNumber & 0x1F) << 3) |
+                    (Device->SlotNumber.u.bits.FunctionNumber & 0x07));
+}
+
+static
+NTSTATUS
+PciPdoGetArm64MsiMessage(
+    _In_ PPCI_DEVICE Device,
+    _In_ ULONG Vector,
+    _In_ KAFFINITY Affinity,
+    _Out_ PULONG AddressLow,
+    _Out_ PULONG AddressHigh,
+    _Out_ PUSHORT Data)
+{
+    USHORT RequesterId;
+
+    RequesterId = PciPdoGetRequesterId(Device);
+    if (!HalGetMsiMessageAddressEx(RequesterId,
+                                   Vector,
+                                   Affinity,
+                                   AddressLow,
+                                   AddressHigh,
+                                   Data))
+    {
+        DPRINT1("PCI PDO: ARM64 MSI route failed for RID 0x%04x vector %lu affinity 0x%Ix\n",
+                RequesterId,
+                Vector,
+                Affinity);
+        return STATUS_NOT_SUPPORTED;
+    }
+
+    DPRINT1("PCI PDO: ARM64 MSI route RID 0x%04x vector %lu affinity 0x%Ix address 0x%08lx%08lx data 0x%04x\n",
+            RequesterId,
+            Vector,
+            Affinity,
+            *AddressHigh,
+            *AddressLow,
+            *Data);
+
+    return STATUS_SUCCESS;
+}
+#endif
+
 static
 BOOLEAN
 PciPdoIsBusInRange(
@@ -365,7 +415,7 @@ typedef struct _PCI_MSG_INTERRUPT_RAW
     ((PPCI_MSG_INTERRUPT_RAW)&(desc)->u.Interrupt)
 
 static
-VOID
+BOOLEAN
 PciPdoApplyLegacyInterruptPolicyFromKey(
     _In_ HANDLE KeyHandle,
     _Inout_ PBOOLEAN AllowMsi,
@@ -376,9 +426,10 @@ PciPdoApplyLegacyInterruptPolicyFromKey(
     PKEY_VALUE_PARTIAL_INFORMATION ValueInfo = (PKEY_VALUE_PARTIAL_INFORMATION)Buffer;
     ULONG ResultLength;
     NTSTATUS Status;
+    BOOLEAN Found = FALSE;
 
     if (!KeyHandle)
-        return;
+        return FALSE;
 
     RtlInitUnicodeString(&ValueName, L"AllowMSI");
     Status = ZwQueryValueKey(KeyHandle,
@@ -392,6 +443,7 @@ PciPdoApplyLegacyInterruptPolicyFromKey(
         ValueInfo->DataLength == sizeof(ULONG))
     {
         *AllowMsi = (*(PULONG)ValueInfo->Data) != 0;
+        Found = TRUE;
     }
 
     RtlInitUnicodeString(&ValueName, L"AllowMSIX");
@@ -406,11 +458,14 @@ PciPdoApplyLegacyInterruptPolicyFromKey(
         ValueInfo->DataLength == sizeof(ULONG))
     {
         *AllowMsix = (*(PULONG)ValueInfo->Data) != 0;
+        Found = TRUE;
     }
+
+    return Found;
 }
 
 static
-VOID
+BOOLEAN
 PciPdoApplyStandardMessageInterruptPolicy(
     _In_ HANDLE DeviceKeyHandle,
     _Inout_ PBOOLEAN AllowMsi,
@@ -427,9 +482,10 @@ PciPdoApplyStandardMessageInterruptPolicy(
     PKEY_VALUE_PARTIAL_INFORMATION ValueInfo = (PKEY_VALUE_PARTIAL_INFORMATION)Buffer;
     ULONG ResultLength;
     NTSTATUS Status;
+    BOOLEAN Found = FALSE;
 
     if (!DeviceKeyHandle)
-        return;
+        return FALSE;
 
     RtlInitUnicodeString(&SubKeyName, SubKeyNameBuffer);
     InitializeObjectAttributes(&ObjectAttributes,
@@ -439,7 +495,7 @@ PciPdoApplyStandardMessageInterruptPolicy(
                                NULL);
     Status = ZwOpenKey(&SubKeyHandle, KEY_READ, &ObjectAttributes);
     if (!NT_SUCCESS(Status))
-        return;
+        return FALSE;
 
     RtlInitUnicodeString(&ValueName, L"MSISupported");
     Status = ZwQueryValueKey(SubKeyHandle,
@@ -455,6 +511,7 @@ PciPdoApplyStandardMessageInterruptPolicy(
         BOOLEAN Enabled = (*(PULONG)ValueInfo->Data) != 0;
         *AllowMsi = Enabled;
         *AllowMsix = Enabled;
+        Found = TRUE;
     }
 
     if (MessageNumberLimit)
@@ -475,6 +532,7 @@ PciPdoApplyStandardMessageInterruptPolicy(
     }
 
     ZwClose(SubKeyHandle);
+    return Found;
 }
 
 static
@@ -539,6 +597,65 @@ PciPdoOpenEnumInstanceKey(
     KeyName.MaximumLength = (USHORT)KeyNameLength;
     RtlAppendUnicodeToString(&KeyName, RootKeyName);
     Status = RtlAppendUnicodeStringToString(&KeyName, &DeviceNode->InstancePath);
+    if (NT_SUCCESS(Status))
+    {
+        InitializeObjectAttributes(&ObjectAttributes,
+                                   &KeyName,
+                                   OBJ_CASE_INSENSITIVE | OBJ_KERNEL_HANDLE,
+                                   NULL,
+                                   NULL);
+        Status = ZwOpenKey(KeyHandle, DesiredAccess, &ObjectAttributes);
+    }
+
+    ExFreePoolWithTag(KeyName.Buffer, TAG_PCI);
+    return Status;
+}
+
+static
+NTSTATUS
+PciPdoOpenServiceKey(
+    _In_ PPDO_DEVICE_EXTENSION DeviceExtension,
+    _In_ ACCESS_MASK DesiredAccess,
+    _Out_ PHANDLE KeyHandle)
+{
+    static const WCHAR ServicesRootKeyName[] =
+        L"\\Registry\\Machine\\System\\CurrentControlSet\\Services\\";
+    PDEVICE_NODE DeviceNode;
+    UNICODE_STRING KeyName;
+    ULONG KeyNameLength;
+    NTSTATUS Status;
+    OBJECT_ATTRIBUTES ObjectAttributes;
+
+    *KeyHandle = NULL;
+
+    Status = PciPdoGetDeviceNode(DeviceExtension, &DeviceNode);
+    if (!NT_SUCCESS(Status))
+        return Status;
+
+    if (DeviceNode->ServiceName.Length == 0)
+        return STATUS_INVALID_DEVICE_REQUEST;
+
+    if (DeviceNode->ServiceName.Length >
+        MAXUSHORT -
+        (sizeof(ServicesRootKeyName) - sizeof(UNICODE_NULL)) -
+        sizeof(UNICODE_NULL))
+    {
+        return STATUS_NAME_TOO_LONG;
+    }
+
+    KeyNameLength = sizeof(ServicesRootKeyName) - sizeof(UNICODE_NULL) +
+                    DeviceNode->ServiceName.Length +
+                    sizeof(UNICODE_NULL);
+
+    KeyName.Buffer = ExAllocatePoolWithTag(PagedPool, KeyNameLength, TAG_PCI);
+    if (!KeyName.Buffer)
+        return STATUS_INSUFFICIENT_RESOURCES;
+
+    KeyName.Length = 0;
+    KeyName.MaximumLength = (USHORT)KeyNameLength;
+    Status = RtlAppendUnicodeToString(&KeyName, ServicesRootKeyName);
+    if (NT_SUCCESS(Status))
+        Status = RtlAppendUnicodeStringToString(&KeyName, &DeviceNode->ServiceName);
     if (NT_SUCCESS(Status))
     {
         InitializeObjectAttributes(&ObjectAttributes,
@@ -855,6 +972,7 @@ PciPdoDetermineInterruptPolicy(
     BOOLEAN UseMsix = FALSE;
     ULONG MessageLimit = 0;
     HANDLE KeyHandle;
+    BOOLEAN PolicyFound = FALSE;
 
     if (!DeviceExtension || !DeviceExtension->PciDevice)
     {
@@ -877,11 +995,13 @@ PciPdoDetermineInterruptPolicy(
          * typically populated by a DDInstall.HW section on the PDO's
          * enum instance key. Keep the legacy AllowMSI/AllowMSIX
          * values as explicit overrides. */
-        PciPdoApplyStandardMessageInterruptPolicy(KeyHandle,
-                                                  &UseMsi,
-                                                  &UseMsix,
-                                                  &MessageLimit);
-        PciPdoApplyLegacyInterruptPolicyFromKey(KeyHandle, &UseMsi, &UseMsix);
+        PolicyFound |=
+            PciPdoApplyStandardMessageInterruptPolicy(KeyHandle,
+                                                      &UseMsi,
+                                                      &UseMsix,
+                                                      &MessageLimit);
+        PolicyFound |=
+            PciPdoApplyLegacyInterruptPolicyFromKey(KeyHandle, &UseMsi, &UseMsix);
         ZwClose(KeyHandle);
     }
 
@@ -893,11 +1013,13 @@ PciPdoDetermineInterruptPolicy(
          * under HKR in the main DDInstall section. Query the same class
          * driver key through the Win7 property path first, then keep the
          * direct registry-key fallback below for older callers. */
-        PciPdoApplyStandardMessageInterruptPolicy(KeyHandle,
-                                                  &UseMsi,
-                                                  &UseMsix,
-                                                  &MessageLimit);
-        PciPdoApplyLegacyInterruptPolicyFromKey(KeyHandle, &UseMsi, &UseMsix);
+        PolicyFound |=
+            PciPdoApplyStandardMessageInterruptPolicy(KeyHandle,
+                                                      &UseMsi,
+                                                      &UseMsix,
+                                                      &MessageLimit);
+        PolicyFound |=
+            PciPdoApplyLegacyInterruptPolicyFromKey(KeyHandle, &UseMsi, &UseMsix);
         ZwClose(KeyHandle);
     }
     else if (NT_SUCCESS(IoOpenDeviceRegistryKey(DeviceExtension->PciDevice->Pdo,
@@ -905,6 +1027,26 @@ PciPdoDetermineInterruptPolicy(
                                                 KEY_READ,
                                                 &KeyHandle)))
     {
+        PolicyFound |=
+            PciPdoApplyStandardMessageInterruptPolicy(KeyHandle,
+                                                      &UseMsi,
+                                                      &UseMsix,
+                                                      &MessageLimit);
+        PolicyFound |=
+            PciPdoApplyLegacyInterruptPolicyFromKey(KeyHandle, &UseMsi, &UseMsix);
+        ZwClose(KeyHandle);
+    }
+
+    if (!PolicyFound &&
+        NT_SUCCESS(PciPdoOpenServiceKey(DeviceExtension,
+                                        KEY_READ,
+                                        &KeyHandle)))
+    {
+        /*
+         * Boot-critical devices can bind from the critical-device database
+         * before their INF hardware section is installed on the enum key.
+         * Allow boot hives to carry the same MSI policy on the service key.
+         */
         PciPdoApplyStandardMessageInterruptPolicy(KeyHandle,
                                                   &UseMsi,
                                                   &UseMsix,
@@ -957,6 +1099,7 @@ PciPdoDetermineInterruptPolicy(
         *MessageNumberLimit = MessageLimit;
 }
 
+#if !defined(_M_AMD64) && !defined(_M_ARM64) && (NTDDI_VERSION < NTDDI_WIN7)
 static
 ULONG
 PciPdoSelectDestinationId(
@@ -976,6 +1119,7 @@ PciPdoSelectDestinationId(
 
     return Index;
 }
+#endif
 
 static
 BOOLEAN
@@ -1092,11 +1236,6 @@ PciPdoEnableMsi(
     ULONG MessageCount;
     KAFFINITY Affinity;
     ULONG Vector;
-#if defined(_M_AMD64) || defined(_M_ARM64) || (NTDDI_VERSION >= NTDDI_WIN7)
-    HAL_MESSAGE_ROUTING_INFO RoutingInfo;
-    HAL_INTERRUPT_TARGET_INFORMATION TargetInfo;
-    NTSTATUS Status;
-#endif
 
     Device = DeviceExtension->PciDevice;
     if (!Device || Device->MsiCapability == 0 || !RawDescriptor)
@@ -1117,51 +1256,76 @@ PciPdoEnableMsi(
              PCI_MSG_RAW(RawDescriptor)->Vector;
 
 #if defined(_M_AMD64)
-    RtlZeroMemory(&TargetInfo, sizeof(TargetInfo));
-    TargetInfo.Version = HAL_INTERRUPT_TARGET_INFORMATION_VERSION;
-    TargetInfo.TargetProcessors = Affinity;
-    Status = HalpGetInterruptTargetInformation(&TargetInfo);
-    if (NT_SUCCESS(Status) && TargetInfo.TargetProcessors != 0)
-        Affinity = TargetInfo.TargetProcessors;
+    {
+        HAL_MESSAGE_ROUTING_INFO RoutingInfo;
+        HAL_INTERRUPT_TARGET_INFORMATION TargetInfo;
+        NTSTATUS Status;
 
-    RtlZeroMemory(&RoutingInfo, sizeof(RoutingInfo));
-    RoutingInfo.Version = HAL_MESSAGE_ROUTING_INFO_VERSION;
-    RoutingInfo.TargetProcessors = Affinity;
-    RoutingInfo.Vector = Vector;
-    RoutingInfo.Irql = TranslatedDescriptor ?
-                       (KIRQL)TranslatedDescriptor->u.Interrupt.Level :
-                       0;
-    RoutingInfo.MessageCount = MessageCount;
-    Status = HalpGetMessageRoutingInfo(&RoutingInfo);
-    if (!NT_SUCCESS(Status))
-        return Status;
+        RtlZeroMemory(&TargetInfo, sizeof(TargetInfo));
+        TargetInfo.Version = HAL_INTERRUPT_TARGET_INFORMATION_VERSION;
+        TargetInfo.TargetProcessors = Affinity;
+        Status = HalpGetInterruptTargetInformation(&TargetInfo);
+        if (NT_SUCCESS(Status) && TargetInfo.TargetProcessors != 0)
+            Affinity = TargetInfo.TargetProcessors;
 
-    MessageAddressLow = RoutingInfo.MessageAddress.LowPart;
-    MessageAddressHigh = RoutingInfo.MessageAddress.HighPart;
-    MessageData = RoutingInfo.MessageData;
+        RtlZeroMemory(&RoutingInfo, sizeof(RoutingInfo));
+        RoutingInfo.Version = HAL_MESSAGE_ROUTING_INFO_VERSION;
+        RoutingInfo.TargetProcessors = Affinity;
+        RoutingInfo.Vector = Vector;
+        RoutingInfo.Irql = TranslatedDescriptor ?
+                           (KIRQL)TranslatedDescriptor->u.Interrupt.Level :
+                           0;
+        RoutingInfo.MessageCount = MessageCount;
+        Status = HalpGetMessageRoutingInfo(&RoutingInfo);
+        if (!NT_SUCCESS(Status))
+            return Status;
+
+        MessageAddressLow = RoutingInfo.MessageAddress.LowPart;
+        MessageAddressHigh = RoutingInfo.MessageAddress.HighPart;
+        MessageData = RoutingInfo.MessageData;
+    }
+#elif defined(_M_ARM64)
+    {
+        NTSTATUS Status;
+
+        Status = PciPdoGetArm64MsiMessage(Device,
+                                          Vector,
+                                          Affinity,
+                                          &MessageAddressLow,
+                                          &MessageAddressHigh,
+                                          &MessageData);
+        if (!NT_SUCCESS(Status))
+            return Status;
+    }
 #elif (NTDDI_VERSION >= NTDDI_WIN7)
-    RtlZeroMemory(&TargetInfo, sizeof(TargetInfo));
-    TargetInfo.Version = HAL_INTERRUPT_TARGET_INFORMATION_VERSION;
-    TargetInfo.TargetProcessors = Affinity;
-    Status = HalGetInterruptTargetInformation(&TargetInfo);
-    if (NT_SUCCESS(Status) && TargetInfo.TargetProcessors != 0)
-        Affinity = TargetInfo.TargetProcessors;
+    {
+        HAL_MESSAGE_ROUTING_INFO RoutingInfo;
+        HAL_INTERRUPT_TARGET_INFORMATION TargetInfo;
+        NTSTATUS Status;
 
-    RtlZeroMemory(&RoutingInfo, sizeof(RoutingInfo));
-    RoutingInfo.Version = HAL_MESSAGE_ROUTING_INFO_VERSION;
-    RoutingInfo.TargetProcessors = Affinity;
-    RoutingInfo.Vector = Vector;
-    RoutingInfo.Irql = TranslatedDescriptor ?
-                       (KIRQL)TranslatedDescriptor->u.Interrupt.Level :
-                       0;
-    RoutingInfo.MessageCount = MessageCount;
-    Status = HalGetMessageRoutingInfo(&RoutingInfo);
-    if (!NT_SUCCESS(Status))
-        return Status;
+        RtlZeroMemory(&TargetInfo, sizeof(TargetInfo));
+        TargetInfo.Version = HAL_INTERRUPT_TARGET_INFORMATION_VERSION;
+        TargetInfo.TargetProcessors = Affinity;
+        Status = HalGetInterruptTargetInformation(&TargetInfo);
+        if (NT_SUCCESS(Status) && TargetInfo.TargetProcessors != 0)
+            Affinity = TargetInfo.TargetProcessors;
 
-    MessageAddressLow = RoutingInfo.MessageAddress.LowPart;
-    MessageAddressHigh = RoutingInfo.MessageAddress.HighPart;
-    MessageData = RoutingInfo.MessageData;
+        RtlZeroMemory(&RoutingInfo, sizeof(RoutingInfo));
+        RoutingInfo.Version = HAL_MESSAGE_ROUTING_INFO_VERSION;
+        RoutingInfo.TargetProcessors = Affinity;
+        RoutingInfo.Vector = Vector;
+        RoutingInfo.Irql = TranslatedDescriptor ?
+                           (KIRQL)TranslatedDescriptor->u.Interrupt.Level :
+                           0;
+        RoutingInfo.MessageCount = MessageCount;
+        Status = HalGetMessageRoutingInfo(&RoutingInfo);
+        if (!NT_SUCCESS(Status))
+            return Status;
+
+        MessageAddressLow = RoutingInfo.MessageAddress.LowPart;
+        MessageAddressHigh = RoutingInfo.MessageAddress.HighPart;
+        MessageData = RoutingInfo.MessageData;
+    }
 #else
     MessageAddressLow = 0xFEE00000 | (PciPdoSelectDestinationId(Affinity) << 12);
     MessageAddressHigh = 0;
@@ -1224,9 +1388,7 @@ PciPdoEnableMsix(
     ULONG ProgramCount;
     ULONG i;
     USHORT Control;
-#if defined(_M_AMD64) || defined(_M_ARM64) || (NTDDI_VERSION >= NTDDI_WIN7)
     NTSTATUS Status;
-#endif
 
     Device = DeviceExtension->PciDevice;
     if (!Device || Device->MsixCapability == 0 || !Messages || MessageCount == 0)
@@ -1258,7 +1420,7 @@ PciPdoEnableMsix(
         USHORT Data;
         KAFFINITY MsgAffinity;
         ULONG MsgVector;
-#if defined(_M_AMD64) || defined(_M_ARM64) || (NTDDI_VERSION >= NTDDI_WIN7)
+#if defined(_M_AMD64) || (!defined(_M_ARM64) && (NTDDI_VERSION >= NTDDI_WIN7))
         HAL_MESSAGE_ROUTING_INFO RoutingInfo;
         HAL_INTERRUPT_TARGET_INFORMATION TargetInfo;
 #endif
@@ -1292,6 +1454,18 @@ PciPdoEnableMsix(
         AddressLow = RoutingInfo.MessageAddress.LowPart;
         AddressHigh = RoutingInfo.MessageAddress.HighPart;
         Data = RoutingInfo.MessageData;
+#elif defined(_M_ARM64)
+        Status = PciPdoGetArm64MsiMessage(Device,
+                                          MsgVector,
+                                          MsgAffinity,
+                                          &AddressLow,
+                                          &AddressHigh,
+                                          &Data);
+        if (!NT_SUCCESS(Status))
+        {
+            MmUnmapIoSpace(TableMapping, ProgramCount * sizeof(PCI_MSIX_TABLE_ENTRY));
+            return Status;
+        }
 #elif (NTDDI_VERSION >= NTDDI_WIN7)
         RtlZeroMemory(&TargetInfo, sizeof(TargetInfo));
         TargetInfo.Version = HAL_INTERRUPT_TARGET_INFORMATION_VERSION;
@@ -1321,10 +1495,10 @@ PciPdoEnableMsix(
 #endif
 
         Entry = (PPCI_MSIX_TABLE_ENTRY)((PUCHAR)TableMapping + (i * sizeof(PCI_MSIX_TABLE_ENTRY)));
-        Entry->MessageAddressLow = AddressLow;
-        Entry->MessageAddressHigh = AddressHigh;
-        Entry->MessageData = Data;
-        Entry->VectorControl = 0;
+        WRITE_REGISTER_ULONG(&Entry->MessageAddressLow, AddressLow);
+        WRITE_REGISTER_ULONG(&Entry->MessageAddressHigh, AddressHigh);
+        WRITE_REGISTER_ULONG(&Entry->MessageData, Data);
+        WRITE_REGISTER_ULONG(&Entry->VectorControl, 0);
     }
 
     Control |= PCI_MSIX_FLAGS_ENABLE;
@@ -3201,8 +3375,8 @@ PdoStartDevice(
 
     if (UsingMsix && MsixMessageCount > 0 && MsixMessages)
     {
-        DPRINT1("PCI PDO: calling PciPdoEnableMsix MessageCount=%lu Vector[0]=%u Affinity[0]=0x%lx\n",
-                MsixMessageCount, MsixMessages[0].Vector, (ULONG)MsixMessages[0].Affinity);
+        DPRINT1("PCI PDO: calling PciPdoEnableMsix MessageCount=%lu Vector[0]=%u Affinity[0]=0x%Ix\n",
+                MsixMessageCount, MsixMessages[0].Vector, MsixMessages[0].Affinity);
         MsixStatus = PciPdoEnableMsix(DeviceExtension,
                                       MsixMessages,
                                       MsixMessageCount);

@@ -3161,21 +3161,6 @@ HalpGicItsInitialize(VOID)
         return TRUE;
 
     /*
-     * QEMU HVF workaround: GIC ITS LPI interrupt delivery crashes QEMU HVF
-     * (exit code -6 / SIGABRT) when MSI-X interrupts fire through the ITS.
-     * The ITS command queue works correctly (MAPC, MAPD, MAPTI all succeed),
-     * but actual LPI delivery through the HVF hypervisor is broken.
-     *
-     * Disable ITS until QEMU HVF GIC ITS support is fixed or we switch to
-     * real hardware / QEMU TCG. Devices will fall back to legacy SPI interrupts.
-     *
-     * TODO: Remove this when QEMU HVF GIC ITS LPI delivery is working.
-     */
-    DPRINT1("[arm64][ITS] HalpGicItsInitialize: ITS disabled (QEMU HVF LPI workaround)\n");
-    HalpGicItsInitFailed = TRUE;
-    return FALSE;
-
-    /*
      * ITS initialization requires memory allocations (MmAllocateContiguousMemorySpecifyCache,
      * ExAllocatePoolWithTag) that need IRQL <= APC_LEVEL for the slow path.
      * If called at elevated IRQL, bail out rather than risk bugcheck.
