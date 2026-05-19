@@ -4442,6 +4442,11 @@ VOID
 HalpGicv3SetSpiAffinityRoundRobin(
     _In_ ULONG Lines);
 
+VOID
+HalpGicv3SendSgi(
+    _In_ KAFFINITY TargetSet,
+    _In_ ULONG SgiId);
+
 /*
  * HalpSetInterruptAffinity - Set IRQ affinity (HAL API wrapper)
  *
@@ -5102,36 +5107,7 @@ HalpArm64SendSgi(
 
     if (HalpGicUseSysRegs)
     {
-        ULONGLONG mpidr = HalpReadMpidr();
-        ULONG aff1 = (ULONG)((mpidr >> 8) & 0xFF);
-        ULONG aff2 = (ULONG)((mpidr >> 16) & 0xFF);
-        ULONG aff3 = (ULONG)((mpidr >> 32) & 0xFF);
-        ULONG targetList = (ULONG)(TargetSet & 0xFFFF);
-        ULONGLONG sgi = 0;
-
-        if (targetList == 0)
-            return;
-
-        sgi |= (ULONGLONG)(SgiId & 0xF) << 24;
-        sgi |= (ULONGLONG)(aff1 & 0xFF) << 16;
-        sgi |= (ULONGLONG)(aff2 & 0xFF) << 32;
-        sgi |= (ULONGLONG)(aff3 & 0xFF) << 48;
-        sgi |= (ULONGLONG)(targetList & 0xFFFF);
-
-        /*
-         * CRITICAL ARM64 SGI DELIVERY SEQUENCE:
-         *
-         * 1. Write to ICC_SGI1R_EL1 to send the SGI
-         * 2. ISB ensures the system register write completes
-         * 3. DSB SY ensures the SGI is visible to all CPUs
-         * 4. SEV wakes any CPUs in WFE/WFI state
-         *
-         * Without SEV, a CPU in WFI will not wake up even though the SGI is pending!
-         * The ARM64 architecture requires an event (interrupt or SEV) to exit WFI.
-         * SGI delivery alone does not guarantee WFI exit without proper synchronization.
-         */
-        HalpWriteIccSgi1r(sgi);
-        __asm__ __volatile__("dsb sy; sev" ::: "memory");
+        HalpGicv3SendSgi(TargetSet, SgiId);
         return;
     }
 

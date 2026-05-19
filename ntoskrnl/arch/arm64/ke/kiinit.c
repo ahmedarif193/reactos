@@ -28,6 +28,98 @@ KiArm64TtbrToPa(
 #define SCTLR_EL1_SA0   (1ULL << 4)
 #define SCTLR_EL1_BT0   (1ULL << 35)
 #define SCTLR_EL1_BT1   (1ULL << 36)
+#define KI_ARM64_ID_AA64ISAR0_ATOMIC_LSE 2
+
+static
+ARM64_CPU_FEATURES
+KiArm64ReadCpuFeatures(VOID)
+{
+    ARM64_CPU_FEATURES Features = {0};
+    ULONG64 Pfr0, Pfr1, Isar0, Mmfr0, Mmfr1, Ctr;
+    ULONG AsidField;
+
+    __asm__ __volatile__("mrs %0, id_aa64pfr0_el1" : "=r"(Pfr0));
+    __asm__ __volatile__("mrs %0, id_aa64pfr1_el1" : "=r"(Pfr1));
+    __asm__ __volatile__("mrs %0, id_aa64isar0_el1" : "=r"(Isar0));
+    __asm__ __volatile__("mrs %0, id_aa64mmfr0_el1" : "=r"(Mmfr0));
+    __asm__ __volatile__("mrs %0, id_aa64mmfr1_el1" : "=r"(Mmfr1));
+    __asm__ __volatile__("mrs %0, ctr_el0" : "=r"(Ctr));
+
+    Features.HafdbsSupported = (ULONG)(Mmfr1 & 0xFULL);
+    Features.PanSupported = (((Mmfr1 >> 20) & 0xFULL) != 0);
+    Features.SveSupported = (((Pfr0 >> 32) & 0xFULL) != 0);
+    Features.SmeSupported = (((Pfr1 >> 24) & 0xFULL) != 0);
+    Features.AtomicSupported = (ULONG)((Isar0 >> 20) & 0xFULL);
+    Features.NeonSupported = (((Pfr0 >> 20) & 0xFULL) != 0xFULL);
+    AsidField = (ULONG)((Mmfr0 >> 4) & 0xFULL);
+    Features.AsidBits = (AsidField >= 2) ? 16 : 8;
+    Features.DcacheLineSize = 4u << ((Ctr >> 16) & 0xFULL);
+    Features.IcacheLineSize = 4u << (Ctr & 0xFULL);
+
+    return Features;
+}
+
+static
+ULONG_PTR
+KiArm64FeatureSignature(_In_ ARM64_CPU_FEATURES Features)
+{
+    return (ULONG_PTR)((Features.HafdbsSupported & 0xF) |
+                       ((Features.PanSupported & 0x1) << 4) |
+                       ((Features.SveSupported & 0x1) << 5) |
+                       ((Features.SmeSupported & 0x1) << 6) |
+                       ((Features.AtomicSupported & 0xF) << 8) |
+                       ((Features.NeonSupported & 0x1) << 12) |
+                       ((Features.AsidBits & 0x1F) << 13) |
+                       ((Features.HaEnabled & 0x1) << 18) |
+                       ((Features.HdEnabled & 0x1) << 19) |
+                       ((Features.DcacheLineSize & 0xFF) << 20) |
+                       ((Features.IcacheLineSize & 0xFF) << 28));
+}
+
+static
+VOID
+KiArm64ValidateProcessorFeatures(
+    _In_ ULONG ProcessorNumber,
+    _In_ ARM64_CPU_FEATURES LocalFeatures)
+{
+    BOOLEAN Mismatch = FALSE;
+
+    if ((Arm64CpuFeatures.NeonSupported && !LocalFeatures.NeonSupported) ||
+        (Arm64CpuFeatures.PanSupported && !LocalFeatures.PanSupported) ||
+        (Arm64CpuFeatures.SveSupported && !LocalFeatures.SveSupported) ||
+        (Arm64CpuFeatures.SmeSupported && !LocalFeatures.SmeSupported))
+    {
+        Mismatch = TRUE;
+    }
+
+    if ((Arm64CpuFeatures.HaEnabled && (LocalFeatures.HafdbsSupported < 1)) ||
+        (Arm64CpuFeatures.HdEnabled && (LocalFeatures.HafdbsSupported < 2)))
+    {
+        Mismatch = TRUE;
+    }
+
+    if ((Arm64CpuFeatures.AtomicSupported >= KI_ARM64_ID_AA64ISAR0_ATOMIC_LSE) &&
+        (LocalFeatures.AtomicSupported < KI_ARM64_ID_AA64ISAR0_ATOMIC_LSE))
+    {
+        Mismatch = TRUE;
+    }
+
+    if ((Arm64CpuFeatures.DcacheLineSize != LocalFeatures.DcacheLineSize) ||
+        (Arm64CpuFeatures.IcacheLineSize != LocalFeatures.IcacheLineSize) ||
+        (Arm64CpuFeatures.AsidBits != LocalFeatures.AsidBits))
+    {
+        Mismatch = TRUE;
+    }
+
+    if (Mismatch)
+    {
+        KeBugCheckEx(MULTIPROCESSOR_CONFIGURATION_NOT_SUPPORTED,
+                     ProcessorNumber,
+                     KiArm64FeatureSignature(Arm64CpuFeatures),
+                     KiArm64FeatureSignature(LocalFeatures),
+                     0);
+    }
+}
 
 FORCEINLINE
 VOID
@@ -845,23 +937,10 @@ KiInitializeSystem(_Inout_ PLOADER_PARAMETER_BLOCK LoaderBlock)
      */
     if (ProcessorNumber == 0)
     {
-        ULONG64 Pfr0, Pfr1, Isar0, Mmfr1, Ctr, Cpacr;
+        ULONG64 Cpacr;
 
-        /* Read Processor Feature Registers to detect hardware capabilities */
-        __asm__ __volatile__("mrs %0, id_aa64pfr0_el1" : "=r"(Pfr0));
-        __asm__ __volatile__("mrs %0, id_aa64pfr1_el1" : "=r"(Pfr1));
-        __asm__ __volatile__("mrs %0, id_aa64isar0_el1" : "=r"(Isar0));
-        __asm__ __volatile__("mrs %0, id_aa64mmfr1_el1" : "=r"(Mmfr1));
-        __asm__ __volatile__("mrs %0, ctr_el0" : "=r"(Ctr));
-
-        /* Cache feature bits in the global struct — one canonical read per boot */
-        Arm64CpuFeatures.HafdbsSupported = (ULONG)(Mmfr1 & 0xFULL);
-        Arm64CpuFeatures.PanSupported = (((Mmfr1 >> 20) & 0xFULL) != 0);
-        Arm64CpuFeatures.SveSupported = ((Pfr0 >> 32) & 0xF) != 0;
-        Arm64CpuFeatures.SmeSupported = ((Pfr1 >> 24) & 0xF) != 0;
-        Arm64CpuFeatures.AtomicSupported = (ULONG)((Isar0 >> 20) & 0xFULL);
-        Arm64CpuFeatures.DcacheLineSize = 4u << ((Ctr >> 16) & 0xFULL);
-        Arm64CpuFeatures.IcacheLineSize = 4u << (Ctr & 0xFULL);
+        /* Read and publish the BSP hardware capability policy once. */
+        Arm64CpuFeatures = KiArm64ReadCpuFeatures();
 
         /*
          * NT code expects ordinary unaligned data accesses to normal memory to
@@ -988,7 +1067,11 @@ KiInitializeSystem(_Inout_ PLOADER_PARAMETER_BLOCK LoaderBlock)
          * Feature detection globals (KiArm64HasNeon, KiArm64HasSve, etc.)
          * were set by the BSP and are valid for all CPUs in a homogeneous system.
          */
+        ARM64_CPU_FEATURES LocalFeatures;
         ULONG64 Cpacr;
+
+        LocalFeatures = KiArm64ReadCpuFeatures();
+        KiArm64ValidateProcessorFeatures(ProcessorNumber, LocalFeatures);
 
         /*
          * Match BSP alignment policy. Ordinary unaligned data accesses are
@@ -1021,6 +1104,8 @@ KiInitializeSystem(_Inout_ PLOADER_PARAMETER_BLOCK LoaderBlock)
 
             __asm__ __volatile__("mrs %0, tcr_el1" : "=r"(CurrentTcr));
             NewTcr = CurrentTcr & ~((1ULL << 39) | (1ULL << 40));
+            NewTcr |= (1ULL << 22); /* A1: TTBR1 ASID selector */
+            NewTcr &= ~(1ULL << 36);
             if (Arm64CpuFeatures.HaEnabled)
                 NewTcr |= (1ULL << 39);
             if (Arm64CpuFeatures.HdEnabled)
@@ -1045,13 +1130,15 @@ KiInitializeSystem(_Inout_ PLOADER_PARAMETER_BLOCK LoaderBlock)
         __asm__ __volatile__("mrs %0, cpacr_el1" : "=r"(Cpacr));
         Cpacr |= (3ULL << 20); /* FPEN = 11 (no trap on FP) */
 
-        if (KiArm64HasSve)
+        if (Arm64CpuFeatures.SveSupported)
         {
             Cpacr &= ~(3ULL << 16); /* ZEN = 00 (trap SVE) */
         }
 
-        /* SME: trap on APs too */
-        Cpacr &= ~(3ULL << 24); /* SMEN = 00 (trap SME) */
+        if (Arm64CpuFeatures.SmeSupported)
+        {
+            Cpacr &= ~(3ULL << 24); /* SMEN = 00 (trap SME) */
+        }
 
         __asm__ __volatile__("msr cpacr_el1, %0" : : "r"(Cpacr));
         __asm__ __volatile__("isb" ::: "memory");
