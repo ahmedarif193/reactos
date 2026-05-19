@@ -1,0 +1,28 @@
+; VirtIO GPU miniport service registration
+
+[AddReg]
+HKLM,"SYSTEM\CurrentControlSet\Control\CriticalDeviceDatabase\PCI#VEN_1AF4&DEV_1050","ClassGUID",0x00000000,"{4D36E968-E325-11CE-BFC1-08002BE10318}"
+HKLM,"SYSTEM\CurrentControlSet\Control\CriticalDeviceDatabase\PCI#VEN_1AF4&DEV_1050","Service",0x00000000,"virtgpu"
+HKLM,"SYSTEM\CurrentControlSet\Control\CriticalDeviceDatabase\PCI#VEN_1AF4&DEV_1000&SUBSYS_00101AF4","ClassGUID",0x00000000,"{4D36E968-E325-11CE-BFC1-08002BE10318}"
+HKLM,"SYSTEM\CurrentControlSet\Control\CriticalDeviceDatabase\PCI#VEN_1AF4&DEV_1000&SUBSYS_00101AF4","Service",0x00000000,"virtgpu"
+
+HKLM,"SYSTEM\CurrentControlSet\Services\virtgpu","ErrorControl",0x00010001,0x00000000
+HKLM,"SYSTEM\CurrentControlSet\Services\virtgpu","Group",0x00000000,"Video"
+HKLM,"SYSTEM\CurrentControlSet\Services\virtgpu","ImagePath",0x00020000,"system32\drivers\virtgpu.sys"
+HKLM,"SYSTEM\CurrentControlSet\Services\virtgpu","Start",0x00010001,0x00000001
+HKLM,"SYSTEM\CurrentControlSet\Services\virtgpu","Type",0x00010001,0x00000001
+HKLM,"SYSTEM\CurrentControlSet\Services\virtgpu","Tag",0x00010001,0x00000002
+HKLM,"SYSTEM\CurrentControlSet\Services\virtgpu\Video","Service",0x00000000,"virtgpu"
+
+HKLM,"SYSTEM\CurrentControlSet\Services\virtgpu\Device0","InstalledDisplayDrivers",0x00010000,"virtgpu"
+HKLM,"SYSTEM\CurrentControlSet\Services\virtgpu\Device0","DefaultSettings.VRefresh",0x00010001,0x00000001
+HKLM,"SYSTEM\CurrentControlSet\Services\virtgpu\Device0","DefaultSettings.BitsPerPel",0x00010001,0x00000020
+HKLM,"SYSTEM\CurrentControlSet\Services\virtgpu\Device0","DefaultSettings.XResolution",0x00010001,0x00000500
+HKLM,"SYSTEM\CurrentControlSet\Services\virtgpu\Device0","DefaultSettings.YResolution",0x00010001,0x000003c0
+HKLM,"SYSTEM\CurrentControlSet\Services\virtgpu\Device0","Device Description",0x00000000,"VirtIO GPU Adapter"
+HKLM,"SYSTEM\CurrentControlSet\Services\virtgpu\Device0","VgaCompatible",0x00010001,0x00000000
+
+HKLM,"SOFTWARE\Microsoft\Windows NT\CurrentVersion\OpenGLDrivers\VirtGpu","Dll",0x00000000,"virtgpuogl.dll"
+HKLM,"SOFTWARE\Microsoft\Windows NT\CurrentVersion\OpenGLDrivers\VirtGpu","Version",0x00010001,0x00000001
+HKLM,"SOFTWARE\Microsoft\Windows NT\CurrentVersion\OpenGLDrivers\VirtGpu","DriverVersion",0x00010001,0x00000001
+HKLM,"SOFTWARE\Microsoft\Windows NT\CurrentVersion\OpenGLDrivers\VirtGpu","Flags",0x00010001,0x00000000
