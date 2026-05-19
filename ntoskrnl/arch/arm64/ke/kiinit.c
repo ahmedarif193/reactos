@@ -845,18 +845,23 @@ KiInitializeSystem(_Inout_ PLOADER_PARAMETER_BLOCK LoaderBlock)
      */
     if (ProcessorNumber == 0)
     {
-        ULONG64 Pfr0, Pfr1, Mmfr1, Cpacr;
+        ULONG64 Pfr0, Pfr1, Isar0, Mmfr1, Ctr, Cpacr;
 
         /* Read Processor Feature Registers to detect hardware capabilities */
         __asm__ __volatile__("mrs %0, id_aa64pfr0_el1" : "=r"(Pfr0));
         __asm__ __volatile__("mrs %0, id_aa64pfr1_el1" : "=r"(Pfr1));
+        __asm__ __volatile__("mrs %0, id_aa64isar0_el1" : "=r"(Isar0));
         __asm__ __volatile__("mrs %0, id_aa64mmfr1_el1" : "=r"(Mmfr1));
+        __asm__ __volatile__("mrs %0, ctr_el0" : "=r"(Ctr));
 
         /* Cache feature bits in the global struct — one canonical read per boot */
         Arm64CpuFeatures.HafdbsSupported = (ULONG)(Mmfr1 & 0xFULL);
         Arm64CpuFeatures.PanSupported = (((Mmfr1 >> 20) & 0xFULL) != 0);
         Arm64CpuFeatures.SveSupported = ((Pfr0 >> 32) & 0xF) != 0;
         Arm64CpuFeatures.SmeSupported = ((Pfr1 >> 24) & 0xF) != 0;
+        Arm64CpuFeatures.AtomicSupported = (ULONG)((Isar0 >> 20) & 0xFULL);
+        Arm64CpuFeatures.DcacheLineSize = 4u << ((Ctr >> 16) & 0xFULL);
+        Arm64CpuFeatures.IcacheLineSize = 4u << (Ctr & 0xFULL);
 
         /*
          * NT code expects ordinary unaligned data accesses to normal memory to

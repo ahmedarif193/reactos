@@ -496,6 +496,19 @@ KfRaiseIrql(
     }
 
     /*
+     * PASSIVE/APC/DISPATCH share the same unmasked GIC PMR after HAL init.
+     * Raising inside that band is a logical PCR update only, so avoid the
+     * DMB/PMR/ISB path that is needed only when CPU interrupt masking changes.
+     */
+    if (KiHalInitialized &&
+        (OldIrql <= DISPATCH_LEVEL) &&
+        (NewIrql <= DISPATCH_LEVEL))
+    {
+        KiSetCurrentIrql(NewIrql);
+        return OldIrql;
+    }
+
+    /*
      * ARM64 Memory Barrier: Ensure all pending loads/stores complete before
      * IRQL raise. This prevents critical section violations where stores to
      * shared data might reorder past the IRQL raise on ARM64's relaxed memory model.

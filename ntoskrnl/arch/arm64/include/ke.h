@@ -436,11 +436,35 @@ typedef struct _ARM64_CPU_FEATURES
     ULONG PanSupported:1;       /* ID_AA64MMFR1_EL1[23:20] PAN present          */
     ULONG SveSupported:1;       /* ID_AA64PFR0_EL1[35:32]  SVE present           */
     ULONG SmeSupported:1;       /* ID_AA64PFR1_EL1[27:24]  SME present           */
+    ULONG AtomicSupported:4;    /* ID_AA64ISAR0_EL1[23:20] 2=FEAT_LSE           */
     ULONG HaEnabled:1;          /* TCR_EL1.HA committed by BSP                   */
     ULONG HdEnabled:1;          /* TCR_EL1.HD committed (DBM hardware dirty)     */
+    ULONG DcacheLineSize;       /* CTR_EL0.DminLine decoded in bytes             */
+    ULONG IcacheLineSize;       /* CTR_EL0.IminLine decoded in bytes             */
 } ARM64_CPU_FEATURES;
 
 extern ARM64_CPU_FEATURES Arm64CpuFeatures;
+
+FORCEINLINE
+VOID
+KiArm64GetCacheLineSizes(
+    _Out_ PULONG DcacheLineSize,
+    _Out_ PULONG IcacheLineSize)
+{
+    ULONG64 Ctr;
+
+    if ((Arm64CpuFeatures.DcacheLineSize != 0) &&
+        (Arm64CpuFeatures.IcacheLineSize != 0))
+    {
+        *DcacheLineSize = Arm64CpuFeatures.DcacheLineSize;
+        *IcacheLineSize = Arm64CpuFeatures.IcacheLineSize;
+        return;
+    }
+
+    __asm__ __volatile__("mrs %0, ctr_el0" : "=r"(Ctr));
+    *DcacheLineSize = 4u << ((Ctr >> 16) & 0xF);
+    *IcacheLineSize = 4u << (Ctr & 0xF);
+}
 
 VOID
 KiInitializeDebugRegisterCounts(VOID);
