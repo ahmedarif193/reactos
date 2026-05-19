@@ -101,6 +101,125 @@ USBCCGP_FreeInterfaceList(
     FDODeviceExtension->ConfigurationHandle = NULL;
 }
 
+static BOOLEAN
+USBCCGP_FdoHasChildPdos(
+    IN PFDO_DEVICE_EXTENSION FDODeviceExtension)
+{
+    ULONG Index;
+
+    if (!FDODeviceExtension->ChildPDO)
+        return FALSE;
+
+    for (Index = 0; Index < FDODeviceExtension->ChildPDOCount; Index++)
+    {
+        if (FDODeviceExtension->ChildPDO[Index])
+            return TRUE;
+    }
+
+    return FALSE;
+}
+
+static VOID
+USBCCGP_FdoUpdateChildPdos(
+    IN OUT PFDO_DEVICE_EXTENSION FDODeviceExtension)
+{
+    ULONG Index;
+    PPDO_DEVICE_EXTENSION PDODeviceExtension;
+
+    if (!FDODeviceExtension->ChildPDO)
+        return;
+
+    for (Index = 0; Index < FDODeviceExtension->ChildPDOCount; Index++)
+    {
+        if (FDODeviceExtension->ChildPDO[Index])
+        {
+            PDODeviceExtension = (PPDO_DEVICE_EXTENSION)FDODeviceExtension->ChildPDO[Index]->DeviceExtension;
+            PDODeviceExtension->InterfaceList = FDODeviceExtension->InterfaceList;
+            PDODeviceExtension->InterfaceListCount = FDODeviceExtension->InterfaceListCount;
+            PDODeviceExtension->ConfigurationHandle = FDODeviceExtension->ConfigurationHandle;
+            PDODeviceExtension->ConfigurationDescriptor = FDODeviceExtension->ConfigurationDescriptor;
+        }
+    }
+}
+
+static BOOLEAN
+USBCCGP_FdoMarkChildPdosMissing(
+    IN OUT PFDO_DEVICE_EXTENSION FDODeviceExtension)
+{
+    ULONG Index;
+    BOOLEAN MissingPdos = FALSE;
+    PPDO_DEVICE_EXTENSION PDODeviceExtension;
+
+    if (!FDODeviceExtension->ChildPDO)
+        return FALSE;
+
+    for (Index = 0; Index < FDODeviceExtension->ChildPDOCount; Index++)
+    {
+        if (FDODeviceExtension->ChildPDO[Index])
+        {
+            PDODeviceExtension = (PPDO_DEVICE_EXTENSION)FDODeviceExtension->ChildPDO[Index]->DeviceExtension;
+            if (PDODeviceExtension->Present)
+            {
+                PDODeviceExtension->Present = FALSE;
+                MissingPdos = TRUE;
+            }
+        }
+    }
+
+    return MissingPdos;
+}
+
+VOID
+USBCCGP_FdoReleaseResources(
+    IN OUT PFDO_DEVICE_EXTENSION FDODeviceExtension,
+    IN BOOLEAN Force)
+{
+    if (FDODeviceExtension->ResourcesReleased)
+        return;
+
+    if (!Force && !FDODeviceExtension->Removing)
+        return;
+
+    if (USBCCGP_FdoHasChildPdos(FDODeviceExtension))
+        return;
+
+    if (FDODeviceExtension->ChildPDO)
+    {
+        FreeItem(FDODeviceExtension->ChildPDO);
+        FDODeviceExtension->ChildPDO = NULL;
+        FDODeviceExtension->ChildPDOCount = 0;
+    }
+
+    USBCCGP_FreeFunctionDescriptors(FDODeviceExtension);
+    USBCCGP_FreeInterfaceList(FDODeviceExtension);
+
+    /* Dereference bus interface if we acquired a reference */
+    if (FDODeviceExtension->BusInterfaceReferenced)
+    {
+        if (FDODeviceExtension->BusInterface.InterfaceDereference)
+        {
+            FDODeviceExtension->BusInterface.InterfaceDereference(FDODeviceExtension->BusInterface.Context);
+        }
+    }
+
+    RtlZeroMemory(&FDODeviceExtension->BusInterface, sizeof(FDODeviceExtension->BusInterface));
+    FDODeviceExtension->BusInterfaceReferenced = FALSE;
+
+    if (FDODeviceExtension->ConfigurationDescriptor)
+    {
+        FreeItem(FDODeviceExtension->ConfigurationDescriptor);
+        FDODeviceExtension->ConfigurationDescriptor = NULL;
+    }
+
+    if (FDODeviceExtension->DeviceDescriptor)
+    {
+        FreeItem(FDODeviceExtension->DeviceDescriptor);
+        FDODeviceExtension->DeviceDescriptor = NULL;
+    }
+
+    FDODeviceExtension->ResourcesReleased = TRUE;
+}
+
 static VOID
 USBCCGP_DrainResetCycleQueue(
     IN OUT PFDO_DEVICE_EXTENSION FDODeviceExtension,
@@ -140,57 +259,17 @@ USBCCGP_DrainResetCycleQueue(
 
 static VOID
 USBCCGP_FdoCleanup(
-    IN PDEVICE_OBJECT DeviceObject)
+    IN PDEVICE_OBJECT DeviceObject,
+    IN BOOLEAN ForceRelease)
 {
     PFDO_DEVICE_EXTENSION FDODeviceExtension;
-    ULONG Index;
 
     FDODeviceExtension = (PFDO_DEVICE_EXTENSION)DeviceObject->DeviceExtension;
 
     USBCCGP_DrainResetCycleQueue(FDODeviceExtension, &FDODeviceExtension->ResetPortListHead, STATUS_CANCELLED);
     USBCCGP_DrainResetCycleQueue(FDODeviceExtension, &FDODeviceExtension->CyclePortListHead, STATUS_CANCELLED);
 
-    if (FDODeviceExtension->ChildPDO)
-    {
-        for (Index = 0; Index < FDODeviceExtension->FunctionDescriptorCount; Index++)
-        {
-            if (FDODeviceExtension->ChildPDO[Index])
-            {
-                IoDeleteDevice(FDODeviceExtension->ChildPDO[Index]);
-                FDODeviceExtension->ChildPDO[Index] = NULL;
-            }
-        }
-
-        FreeItem(FDODeviceExtension->ChildPDO);
-        FDODeviceExtension->ChildPDO = NULL;
-    }
-
-    USBCCGP_FreeFunctionDescriptors(FDODeviceExtension);
-    USBCCGP_FreeInterfaceList(FDODeviceExtension);
-
-    /* Dereference bus interface if we acquired a reference */
-    if (FDODeviceExtension->BusInterfaceReferenced)
-    {
-        if (FDODeviceExtension->BusInterface.InterfaceDereference)
-        {
-            FDODeviceExtension->BusInterface.InterfaceDereference(FDODeviceExtension->BusInterface.Context);
-        }
-    }
-
-    RtlZeroMemory(&FDODeviceExtension->BusInterface, sizeof(FDODeviceExtension->BusInterface));
-    FDODeviceExtension->BusInterfaceReferenced = FALSE;
-
-    if (FDODeviceExtension->ConfigurationDescriptor)
-    {
-        FreeItem(FDODeviceExtension->ConfigurationDescriptor);
-        FDODeviceExtension->ConfigurationDescriptor = NULL;
-    }
-
-    if (FDODeviceExtension->DeviceDescriptor)
-    {
-        FreeItem(FDODeviceExtension->DeviceDescriptor);
-        FDODeviceExtension->DeviceDescriptor = NULL;
-    }
+    USBCCGP_FdoReleaseResources(FDODeviceExtension, ForceRelease);
 }
 
 VOID
@@ -328,9 +407,10 @@ FDO_DeviceRelations(
     }
 
     /* Go through array and count device objects */
-    for(Index = 0; Index < FDODeviceExtension->FunctionDescriptorCount; Index++)
+    for(Index = 0; Index < FDODeviceExtension->ChildPDOCount; Index++)
     {
-        if (FDODeviceExtension->ChildPDO[Index])
+        if (FDODeviceExtension->ChildPDO[Index] &&
+            ((PPDO_DEVICE_EXTENSION)FDODeviceExtension->ChildPDO[Index]->DeviceExtension)->Present)
         {
             /* Child pdo */
             DeviceCount++;
@@ -347,9 +427,10 @@ FDO_DeviceRelations(
     }
 
     /* Add device objects */
-    for(Index = 0; Index < FDODeviceExtension->FunctionDescriptorCount; Index++)
+    for(Index = 0; Index < FDODeviceExtension->ChildPDOCount; Index++)
     {
-        if (FDODeviceExtension->ChildPDO[Index])
+        if (FDODeviceExtension->ChildPDO[Index] &&
+            ((PPDO_DEVICE_EXTENSION)FDODeviceExtension->ChildPDO[Index]->DeviceExtension)->Present)
         {
             /* Store child pdo */
             DeviceRelations->Objects[DeviceRelations->Count] = FDODeviceExtension->ChildPDO[Index];
@@ -392,6 +473,7 @@ FDO_CreateChildPdo(
         /* No memory */
         return STATUS_INSUFFICIENT_RESOURCES;
     }
+    FDODeviceExtension->ChildPDOCount = FDODeviceExtension->FunctionDescriptorCount;
 
     /* Create pdo for each function */
     for (Index = 0; Index < FDODeviceExtension->FunctionDescriptorCount; Index++)
@@ -415,11 +497,8 @@ FDO_CreateChildPdo(
         {
             /* Failed to create device object */
             DPRINT1("IoCreateDevice failed with %x\n", Status);
-            return Status;
+            goto Cleanup;
         }
-
-        /* Store in array */
-        FDODeviceExtension->ChildPDO[Index] = PDODeviceObject;
 
         /* Get device extension */
         PDODeviceExtension = (PPDO_DEVICE_EXTENSION)PDODeviceObject->DeviceExtension;
@@ -435,8 +514,15 @@ FDO_CreateChildPdo(
         PDODeviceExtension->InterfaceListCount = FDODeviceExtension->InterfaceListCount;
         PDODeviceExtension->ConfigurationHandle = FDODeviceExtension->ConfigurationHandle;
         PDODeviceExtension->ConfigurationDescriptor = FDODeviceExtension->ConfigurationDescriptor;
+        PDODeviceExtension->Present = TRUE;
         RtlCopyMemory(&PDODeviceExtension->Capabilities, &FDODeviceExtension->Capabilities, sizeof(DEVICE_CAPABILITIES));
         RtlCopyMemory(&PDODeviceExtension->DeviceDescriptor, FDODeviceExtension->DeviceDescriptor, sizeof(USB_DEVICE_DESCRIPTOR));
+
+        /* Keep the parent FDO extension valid until the PDO remove path unlinks this child. */
+        ObReferenceObject(DeviceObject);
+
+        /* Store in array */
+        FDODeviceExtension->ChildPDO[Index] = PDODeviceObject;
 
         /* Patch the stack size */
         PDODeviceObject->StackSize = DeviceObject->StackSize + 1;
@@ -449,6 +535,61 @@ FDO_CreateChildPdo(
     }
 
     /* Done */
+    return STATUS_SUCCESS;
+
+Cleanup:
+    while (Index > 0)
+    {
+        Index--;
+
+        if (FDODeviceExtension->ChildPDO[Index])
+        {
+            IoDeleteDevice(FDODeviceExtension->ChildPDO[Index]);
+            FDODeviceExtension->ChildPDO[Index] = NULL;
+            ObDereferenceObject(DeviceObject);
+        }
+    }
+
+    FreeItem(FDODeviceExtension->ChildPDO);
+    FDODeviceExtension->ChildPDO = NULL;
+    FDODeviceExtension->ChildPDOCount = 0;
+    return Status;
+}
+
+static NTSTATUS
+FDO_RestartChildPdos(
+    IN PDEVICE_OBJECT DeviceObject)
+{
+    NTSTATUS Status;
+    PFDO_DEVICE_EXTENSION FDODeviceExtension;
+
+    FDODeviceExtension = (PFDO_DEVICE_EXTENSION)DeviceObject->DeviceExtension;
+
+    if (FDODeviceExtension->ConfigurationHandle)
+    {
+        USBCCGP_FdoUpdateChildPdos(FDODeviceExtension);
+        return STATUS_SUCCESS;
+    }
+
+    if (!FDODeviceExtension->DeviceDescriptor ||
+        !FDODeviceExtension->ConfigurationDescriptor ||
+        !FDODeviceExtension->FunctionDescriptor)
+    {
+        return STATUS_DEVICE_DATA_ERROR;
+    }
+
+    USBCCGP_FreeInterfaceList(FDODeviceExtension);
+    USBCCGP_FdoUpdateChildPdos(FDODeviceExtension);
+
+    Status = USBCCGP_SelectConfiguration(DeviceObject, FDODeviceExtension);
+    if (!NT_SUCCESS(Status))
+    {
+        USBCCGP_FreeInterfaceList(FDODeviceExtension);
+        USBCCGP_FdoUpdateChildPdos(FDODeviceExtension);
+        return Status;
+    }
+
+    USBCCGP_FdoUpdateChildPdos(FDODeviceExtension);
     return STATUS_SUCCESS;
 }
 
@@ -481,11 +622,23 @@ FDO_StartDevice(
     {
         /* Failed to start lower device */
         DPRINT1("FDO_StartDevice lower device failed to start with %x\n", Status);
-        USBCCGP_FdoCleanup(DeviceObject);
+        USBCCGP_FdoCleanup(DeviceObject, TRUE);
         return Status;
     }
 
-    DPRINT("[USBCCGP] FDO_StartDevice: lower device started, getting descriptors\n");
+    FDODeviceExtension->ResourcesReleased = FALSE;
+
+    if (FDODeviceExtension->ChildPDO)
+    {
+        Status = FDO_RestartChildPdos(DeviceObject);
+        if (!NT_SUCCESS(Status))
+        {
+            DPRINT1("FDO_RestartChildPdos failed with %x\n", Status);
+            return Status;
+        }
+
+        return STATUS_SUCCESS;
+    }
 
     /* Get descriptors */
     Status = USBCCGP_GetDescriptors(DeviceObject);
@@ -493,7 +646,7 @@ FDO_StartDevice(
     {
         /* Failed to start lower device */
         DPRINT1("FDO_StartDevice failed to get descriptors with %x\n", Status);
-        USBCCGP_FdoCleanup(DeviceObject);
+        USBCCGP_FdoCleanup(DeviceObject, TRUE);
         return Status;
     }
 
@@ -506,7 +659,7 @@ FDO_StartDevice(
     {
         /* Failed to start lower device */
         DPRINT1("FDO_StartDevice failed to get capabilities with %x\n", Status);
-        USBCCGP_FdoCleanup(DeviceObject);
+        USBCCGP_FdoCleanup(DeviceObject, TRUE);
         return Status;
     }
 
@@ -518,7 +671,7 @@ FDO_StartDevice(
     {
         /* Failed to select interface */
         DPRINT1("FDO_StartDevice failed to select configuration with %x\n", Status);
-        USBCCGP_FdoCleanup(DeviceObject);
+        USBCCGP_FdoCleanup(DeviceObject, TRUE);
         return Status;
     }
 
@@ -543,7 +696,7 @@ FDO_StartDevice(
     {
         /* Failed to enumerate functions */
         DPRINT1("Failed to enumerate functions with %x\n", Status);
-        USBCCGP_FdoCleanup(DeviceObject);
+        USBCCGP_FdoCleanup(DeviceObject, TRUE);
         return Status;
     }
 
@@ -559,7 +712,7 @@ FDO_StartDevice(
     {
         /* Failed */
         DPRINT1("FDO_CreateChildPdo failed with %x\n", Status);
-        USBCCGP_FdoCleanup(DeviceObject);
+        USBCCGP_FdoCleanup(DeviceObject, TRUE);
         return Status;
     }
 
@@ -586,7 +739,8 @@ FDO_CloseConfiguration(
 
     /* Nothing to do if we're not configured */
     if (FDODeviceExtension->ConfigurationDescriptor == NULL ||
-        FDODeviceExtension->InterfaceList == NULL)
+        FDODeviceExtension->InterfaceList == NULL ||
+        FDODeviceExtension->ConfigurationHandle == NULL)
     {
         return STATUS_SUCCESS;
     }
@@ -613,6 +767,7 @@ FDO_CloseConfiguration(
     }
 
     ExFreePool(Urb);
+    FDODeviceExtension->ConfigurationHandle = NULL;
     return Status;
 }
 
@@ -640,8 +795,15 @@ FDO_HandlePnp(
         {
             /* Unconfigure device */
             DPRINT("[USBCCGP] FDO IRP_MN_REMOVE\n");
+            FDODeviceExtension->Removing = TRUE;
             FDO_CloseConfiguration(DeviceObject);
-            USBCCGP_FdoCleanup(DeviceObject);
+            USBCCGP_FdoUpdateChildPdos(FDODeviceExtension);
+            if (USBCCGP_FdoMarkChildPdosMissing(FDODeviceExtension))
+            {
+                IoInvalidateDeviceRelations(FDODeviceExtension->PhysicalDeviceObject,
+                                            BusRelations);
+            }
+            USBCCGP_FdoCleanup(DeviceObject, FALSE);
 
             /* Forward remove IRP down the stack */
             Irp->IoStatus.Status = STATUS_SUCCESS;
@@ -659,8 +821,15 @@ FDO_HandlePnp(
         }
         case IRP_MN_SURPRISE_REMOVAL:
         {
+            FDODeviceExtension->Removing = TRUE;
             FDO_CloseConfiguration(DeviceObject);
-            USBCCGP_FdoCleanup(DeviceObject);
+            USBCCGP_FdoUpdateChildPdos(FDODeviceExtension);
+            if (USBCCGP_FdoMarkChildPdosMissing(FDODeviceExtension))
+            {
+                IoInvalidateDeviceRelations(FDODeviceExtension->PhysicalDeviceObject,
+                                            BusRelations);
+            }
+            USBCCGP_FdoCleanup(DeviceObject, FALSE);
             IoSkipCurrentIrpStackLocation(Irp);
             return IoCallDriver(FDODeviceExtension->NextDeviceObject, Irp);
         }
@@ -672,16 +841,15 @@ FDO_HandlePnp(
         }
         case IRP_MN_QUERY_DEVICE_RELATIONS:
         {
-            /* Handle device relations */
-            Status = FDO_DeviceRelations(DeviceObject, Irp);
-            if (!NT_SUCCESS(Status))
+            if (IoStack->Parameters.QueryDeviceRelations.Type != BusRelations)
             {
-                break;
+                IoSkipCurrentIrpStackLocation(Irp);
+                return IoCallDriver(FDODeviceExtension->NextDeviceObject, Irp);
             }
 
-            /* Forward irp to next device object */
-            IoSkipCurrentIrpStackLocation(Irp);
-            return IoCallDriver(FDODeviceExtension->NextDeviceObject, Irp);
+            /* Handle device relations */
+            Status = FDO_DeviceRelations(DeviceObject, Irp);
+            break;
         }
         case IRP_MN_QUERY_CAPABILITIES:
         {
@@ -705,7 +873,8 @@ FDO_HandlePnp(
         {
             /* Close configuration and clean up resources */
             FDO_CloseConfiguration(DeviceObject);
-            USBCCGP_FdoCleanup(DeviceObject);
+            USBCCGP_FdoUpdateChildPdos(FDODeviceExtension);
+            USBCCGP_FdoCleanup(DeviceObject, FALSE);
 
             /* Forward stop IRP to lower driver */
             Irp->IoStatus.Status = STATUS_SUCCESS;

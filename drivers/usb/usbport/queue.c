@@ -478,6 +478,8 @@ NTAPI
 USBPORT_CancelPendingTransferIrp(IN PDEVICE_OBJECT DeviceObject,
                                  IN PIRP Irp)
 {
+    PUSBPORT_COMMON_DEVICE_EXTENSION CommonExtension;
+    PUSBPORT_RHDEVICE_EXTENSION PdoExtension;
     PURB Urb;
     PUSBPORT_TRANSFER Transfer;
     PUSBPORT_ENDPOINT Endpoint;
@@ -494,8 +496,18 @@ USBPORT_CancelPendingTransferIrp(IN PDEVICE_OBJECT DeviceObject,
     Transfer = Urb->UrbControlTransfer.hca.Reserved8[0];
     Endpoint = Transfer->Endpoint;
 
-    FdoDevice = Endpoint->FdoDevice;
-    FdoExtension = DeviceObject->DeviceExtension;
+    CommonExtension = DeviceObject->DeviceExtension;
+    if (CommonExtension->IsPDO)
+    {
+        PdoExtension = DeviceObject->DeviceExtension;
+        FdoDevice = PdoExtension->FdoDevice;
+    }
+    else
+    {
+        FdoDevice = DeviceObject;
+    }
+
+    FdoExtension = FdoDevice->DeviceExtension;
 
     IoReleaseCancelSpinLock(Irp->CancelIrql);
 
@@ -538,6 +550,7 @@ USBPORT_CancelActiveTransferIrp(IN PDEVICE_OBJECT DeviceObject,
     PUSBPORT_TRANSFER SplitTransfer;
     PLIST_ENTRY Entry;
     KIRQL OldIrql;
+    BOOLEAN CompleteNonSubmitted;
 
     DPRINT_CORE("USBPORT_CancelActiveTransferIrp: Irp - %p\n", Irp);
 
@@ -569,6 +582,7 @@ USBPORT_CancelActiveTransferIrp(IN PDEVICE_OBJECT DeviceObject,
     KeAcquireSpinLockAtDpcLevel(&Endpoint->EndpointSpinLock);
 
     Transfer->Flags |= TRANSFER_FLAG_CANCELED;
+    CompleteNonSubmitted = FALSE;
 
     if (Transfer->Flags & TRANSFER_FLAG_PARENT)
     {
@@ -590,8 +604,20 @@ USBPORT_CancelActiveTransferIrp(IN PDEVICE_OBJECT DeviceObject,
         KeReleaseSpinLockFromDpcLevel(&Transfer->TransferSpinLock);
     }
 
+    if (!(Transfer->Flags & (TRANSFER_FLAG_SUBMITED | TRANSFER_FLAG_PARENT)) &&
+        Transfer->TransferLink.Flink &&
+        Transfer->TransferLink.Blink)
+    {
+        RemoveEntryList(&Transfer->TransferLink);
+        InsertTailList(&Endpoint->CancelList, &Transfer->TransferLink);
+        CompleteNonSubmitted = TRUE;
+    }
+
     KeReleaseSpinLockFromDpcLevel(&Endpoint->EndpointSpinLock);
     KeReleaseSpinLock(&FdoExtension->FlushTransferSpinLock, OldIrql);
+
+    if (CompleteNonSubmitted)
+        USBPORT_FlushCancelList(Endpoint);
 
     USBPORT_InvalidateEndpointHandler(FdoDevice,
                                       Endpoint,
@@ -1015,7 +1041,7 @@ USBPORT_QueuePendingUrbToEndpoint(IN PUSBPORT_ENDPOINT Endpoint,
                 Urb);
 
     Transfer = Urb->UrbControlTransfer.hca.Reserved8[0];
-    //FIXME USBPORT_ResetEndpointIdle();
+    USBPORT_ResetEndpointIdle(Endpoint);
     InsertTailList(&Endpoint->PendingTransferList, &Transfer->TransferLink);
     Urb->UrbHeader.Status = USBD_STATUS_PENDING;
 }

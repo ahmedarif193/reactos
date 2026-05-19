@@ -103,6 +103,7 @@ C_ASSERT(sizeof(UHCI_HCD_QH) == 0x40);
 #define UHCI_ENDPOINT_FLAG_HALTED           1
 #define UHCI_ENDPOINT_FLAG_RESERVED         2
 #define UHCI_ENDPOINT_FLAG_CONTROL_OR_ISO   4
+#define UHCI_ENDPOINT_FLAG_REMOVE           8
 
 /* UHCI Endpoint follows USBPORT Endpoint */
 typedef struct _UHCI_ENDPOINT {
@@ -127,6 +128,7 @@ typedef struct _UHCI_TRANSFER {
   USBD_STATUS USBDStatus;
   ULONG PendingTds;
   SIZE_T TransferLen;
+  PUSBPORT_ISO_BLOCK IsoBlock;
 } UHCI_TRANSFER, *PUHCI_TRANSFER;
 
 #define UHCI_FRAME_LIST_POINTER_VALID      (0 << 0)

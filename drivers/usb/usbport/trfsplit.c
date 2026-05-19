@@ -153,9 +153,7 @@ USBPORT_SplitBulkInterruptTransfer(IN PDEVICE_OBJECT FdoDevice,
 
     if (!NeedSplits)
     {
-        DPRINT1("USBPORT_SplitBulkInterruptTransfer: DbgBreakPoint \n");
-        DbgBreakPoint();
-        goto Exit;
+        return;
     }
 
     for (ix = 0; ix < NeedSplits; ++ix)
@@ -166,15 +164,13 @@ USBPORT_SplitBulkInterruptTransfer(IN PDEVICE_OBJECT FdoDevice,
 
         if (!SplitTransfer)
         {
-            DPRINT1("USBPORT_SplitBulkInterruptTransfer: DbgBreakPoint \n");
-            DbgBreakPoint();
+            DPRINT1("USBPORT_SplitBulkInterruptTransfer: allocation failed\n");
             goto Exit;
         }
 
         RtlCopyMemory(SplitTransfer, Transfer, Transfer->FullTransferLength);
 
-        SplitTransfer->MiniportTransfer = (PVOID)((ULONG_PTR)SplitTransfer +
-                                          SplitTransfer->PortTransferLength);
+        USBPORT_InitializeMiniportTransfer(SplitTransfer);
 
         InsertTailList(&tmplist, &SplitTransfer->TransferLink);
     }
