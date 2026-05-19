@@ -170,60 +170,116 @@ HalpGicv3EndInterrupt(
  *   TargetSet - Bitmask of target processors
  *   SgiId     - SGI number (0-15)
  *
- * Notes:
- *   - This implementation assumes all CPUs are in the same affinity cluster
- *   - For multi-cluster systems, this would need to be extended
  */
+static
+BOOLEAN
+HalpGicv3GetMpidrForCpu(
+    _In_ ULONG Cpu,
+    _Out_ PULONGLONG Mpidr)
+{
+    if (Cpu >= MAXIMUM_PROCESSORS)
+        return FALSE;
+
+    if (Cpu == KeGetCurrentProcessorNumber())
+    {
+        *Mpidr = HalpReadMpidr();
+        return TRUE;
+    }
+
+    if (HalpGicCpuMpidrValid[Cpu])
+    {
+        *Mpidr = HalpGicCpuMpidr[Cpu];
+        return TRUE;
+    }
+
+    if ((Cpu < HalpArm64GicInfo.GiccEntryCount) &&
+        (HalpArm64GicInfo.GiccEntries[Cpu].Flags & 0x1))
+    {
+        *Mpidr = HalpArm64GicInfo.GiccEntries[Cpu].Mpidr;
+        return TRUE;
+    }
+
+    return FALSE;
+}
+
 VOID
 HalpGicv3SendSgi(
     _In_ KAFFINITY TargetSet,
     _In_ ULONG SgiId)
 {
-    ULONGLONG Mpidr;
-    ULONG Aff1;
-    ULONG Aff2;
-    ULONG Aff3;
-    ULONG TargetList;
-    ULONGLONG SgiVal;
+    KAFFINITY Remaining;
     ULONG Cpu;
+    ULONG MaxAffinityBits;
 
     if ((TargetSet == 0) || (SgiId > 15))
         return;
 
-    /*
-     * Get the current CPU's MPIDR to get affinity values.
-     * We assume all target CPUs are in the same affinity cluster.
-     */
-    Cpu = KeGetCurrentProcessorNumber();
-    if ((Cpu < MAXIMUM_PROCESSORS) && (HalpGicCpuMpidr[Cpu] != 0))
-        Mpidr = HalpGicCpuMpidr[Cpu];
-    else
-        Mpidr = HalpReadMpidr();
-    Aff1 = (ULONG)((Mpidr >> 8) & 0xFF);
-    Aff2 = (ULONG)((Mpidr >> 16) & 0xFF);
-    Aff3 = (ULONG)((Mpidr >> 32) & 0xFF);
+    Remaining = TargetSet;
+    MaxAffinityBits = sizeof(KAFFINITY) * 8;
 
-    /* Target list is a 16-bit bitmap */
-    TargetList = (ULONG)(TargetSet & 0xFFFF);
-    if (TargetList == 0)
-        return;
+    for (Cpu = 0; (Cpu < MAXIMUM_PROCESSORS) && (Cpu < MaxAffinityBits) && (Remaining != 0); Cpu++)
+    {
+        KAFFINITY CpuMask = ((KAFFINITY)1 << Cpu);
+        ULONGLONG Mpidr;
+        ULONG Aff1;
+        ULONG Aff2;
+        ULONG Aff3;
+        ULONG Rs;
+        ULONG TargetList = 0;
+        ULONG TargetCpu;
+        ULONGLONG SgiVal;
 
-    /*
-     * Build ICC_SGI1R_EL1 value:
-     * - INTID at bits [27:24]
-     * - Aff1 at bits [23:16]
-     * - Aff2 at bits [39:32]
-     * - Aff3 at bits [55:48]
-     * - TargetList at bits [15:0]
-     */
-    SgiVal = 0;
-    SgiVal |= (ULONGLONG)(SgiId & 0xF) << 24;
-    SgiVal |= (ULONGLONG)(Aff1 & 0xFF) << 16;
-    SgiVal |= (ULONGLONG)(Aff2 & 0xFF) << 32;
-    SgiVal |= (ULONGLONG)(Aff3 & 0xFF) << 48;
-    SgiVal |= (ULONGLONG)(TargetList & 0xFFFF);
+        if ((Remaining & CpuMask) == 0)
+            continue;
 
-    HalpWriteIccSgi1r(SgiVal);
+        if (!HalpGicv3GetMpidrForCpu(Cpu, &Mpidr))
+            continue;
+
+        Aff1 = (ULONG)((Mpidr >> 8) & 0xFF);
+        Aff2 = (ULONG)((Mpidr >> 16) & 0xFF);
+        Aff3 = (ULONG)((Mpidr >> 32) & 0xFF);
+        Rs = (ULONG)(Mpidr & 0xFF) >> 4;
+
+        for (TargetCpu = Cpu;
+             (TargetCpu < MAXIMUM_PROCESSORS) && (TargetCpu < MaxAffinityBits);
+             TargetCpu++)
+        {
+            KAFFINITY TargetMask = ((KAFFINITY)1 << TargetCpu);
+            ULONGLONG TargetMpidr;
+
+            if ((Remaining & TargetMask) == 0)
+                continue;
+
+            if (!HalpGicv3GetMpidrForCpu(TargetCpu, &TargetMpidr))
+                continue;
+
+            if ((((TargetMpidr >> 8) & 0xFF) != Aff1) ||
+                (((TargetMpidr >> 16) & 0xFF) != Aff2) ||
+                (((TargetMpidr >> 32) & 0xFF) != Aff3) ||
+                ((((ULONG)(TargetMpidr & 0xFF) >> 4) != Rs)))
+            {
+                continue;
+            }
+
+            TargetList |= (1u << (TargetMpidr & 0xF));
+            Remaining &= ~TargetMask;
+        }
+
+        if (TargetList == 0)
+            continue;
+
+        SgiVal = 0;
+        SgiVal |= (ULONGLONG)(SgiId & 0xF) << 24;
+        SgiVal |= (ULONGLONG)(Rs & 0xF) << 44;
+        SgiVal |= (ULONGLONG)(Aff1 & 0xFF) << 16;
+        SgiVal |= (ULONGLONG)(Aff2 & 0xFF) << 32;
+        SgiVal |= (ULONGLONG)(Aff3 & 0xFF) << 48;
+        SgiVal |= (ULONGLONG)(TargetList & 0xFFFF);
+
+        HalpWriteIccSgi1r(SgiVal);
+    }
+
+    __asm__ __volatile__("dsb sy; sev" ::: "memory");
 }
 
 /*
@@ -377,11 +433,14 @@ HalpGicv3InitAffinityTracking(VOID)
     for (i = 0; i < MAXIMUM_PROCESSORS; i++)
     {
         HalpGicCpuMpidr[i] = 0;
+        HalpGicCpuMpidrValid[i] = FALSE;
     }
 
     /* Register the boot CPU (CPU 0) */
     Mpidr = HalpReadMpidr();
     HalpGicCpuMpidr[0] = Mpidr;
+    HalpGicCpuMpidrValid[0] = TRUE;
+    HalpGicOnlineCpuCount = 1;
 
     HalpGicAffinityInitialized = TRUE;
 
@@ -406,13 +465,14 @@ HalpGicv3RegisterCpu(
 
     KeAcquireSpinLock(&HalpGicAffinityLock, &OldIrql);
 
-    HalpGicCpuMpidr[CpuIndex] = Mpidr;
-
-    /* Increment online CPU count if this is a new registration */
-    if (CpuIndex >= (ULONG)HalpGicOnlineCpuCount)
+    /* Increment online CPU count if this is a new registration. */
+    if (!HalpGicCpuMpidrValid[CpuIndex])
     {
         InterlockedIncrement(&HalpGicOnlineCpuCount);
     }
+
+    HalpGicCpuMpidr[CpuIndex] = Mpidr;
+    HalpGicCpuMpidrValid[CpuIndex] = TRUE;
 
     KeReleaseSpinLock(&HalpGicAffinityLock, OldIrql);
 
@@ -479,13 +539,13 @@ HalpArm64SetGicAffinity(
     KeAcquireSpinLock(&HalpGicAffinityLock, &OldIrql);
 
     /* Get MPIDR for target CPU */
-    Mpidr = HalpGicCpuMpidr[TargetCpu];
-    if (Mpidr == 0)
+    if (!HalpGicCpuMpidrValid[TargetCpu])
     {
         KeReleaseSpinLock(&HalpGicAffinityLock, OldIrql);
         DPRINT1("[arm64][GICv3] SetAffinity: CPU %lu has no registered MPIDR\n", TargetCpu);
         return STATUS_INVALID_PARAMETER;
     }
+    Mpidr = HalpGicCpuMpidr[TargetCpu];
 
     /*
      * Check if interrupt is currently enabled.
@@ -616,6 +676,7 @@ HalpGicv3MigrateCpuIrqs(
 
     /* Mark CPU as offline by clearing its MPIDR */
     HalpGicCpuMpidr[CpuIndex] = 0;
+    HalpGicCpuMpidrValid[CpuIndex] = FALSE;
 
     /* Decrement online CPU count */
     if (HalpGicOnlineCpuCount > 1)
@@ -664,7 +725,7 @@ HalpGicv3SetSpiAffinityRoundRobin(
     CpuCount = 0;
     for (i = 0; i < MAXIMUM_PROCESSORS; i++)
     {
-        if (HalpGicCpuMpidr[i] != 0)
+        if (HalpGicCpuMpidrValid[i])
             CpuCount++;
     }
 
@@ -683,13 +744,17 @@ HalpGicv3SetSpiAffinityRoundRobin(
     /* Distribute SPIs across CPUs */
     for (i = 32; i < Lines; i++)
     {
-        /* Find next CPU with valid MPIDR */
-        while (HalpGicCpuMpidr[CurrentCpu] == 0 && CurrentCpu < MAXIMUM_PROCESSORS)
+        ULONG SearchCount = 0;
+
+        /* Find next CPU with a registered MPIDR. */
+        while ((SearchCount < MAXIMUM_PROCESSORS) &&
+               !HalpGicCpuMpidrValid[CurrentCpu])
         {
-            CurrentCpu++;
-            if (CurrentCpu >= CpuCount)
-                CurrentCpu = 0;
+            CurrentCpu = (CurrentCpu + 1) % MAXIMUM_PROCESSORS;
+            SearchCount++;
         }
+        if (SearchCount == MAXIMUM_PROCESSORS)
+            break;
 
         /* Set affinity for this SPI */
         if (HalpArm64SetGicAffinity(i, CurrentCpu) == STATUS_SUCCESS)
@@ -698,9 +763,7 @@ HalpGicv3SetSpiAffinityRoundRobin(
         }
 
         /* Move to next CPU */
-        CurrentCpu++;
-        if (CurrentCpu >= CpuCount)
-            CurrentCpu = 0;
+        CurrentCpu = (CurrentCpu + 1) % MAXIMUM_PROCESSORS;
     }
 
     DPRINT1("[arm64][GICv3] Distributed %lu SPIs across %lu CPUs\n",
