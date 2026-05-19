@@ -34,6 +34,7 @@ UefiConsPutChar(int c)
     if (NeedScroll)
     {
         FbConsScrollUp(CurrentAttr);
+        UefiVideoSync();
         --CurrentCursorY;
     }
     if (c == '\r')

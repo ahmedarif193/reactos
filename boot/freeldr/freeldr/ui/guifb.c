@@ -69,6 +69,8 @@ FbGuiTickProgressBar(
                           FBGUI_PROGRESS_FILL_ATTR,
                           FBGUI_PROGRESS_REMAINING_ATTR,
                           SubPercentTimes100);
+
+    MachVideoSync();
 }
 
 const UIVTBL FbGuiVtbl =
