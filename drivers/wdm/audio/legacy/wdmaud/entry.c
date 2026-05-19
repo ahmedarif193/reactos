@@ -39,7 +39,7 @@ WdmAudInitWorkerRoutine(
         if (!NT_SUCCESS(Status))
         {
             DPRINT1("WdmAudOpenSysAudioDevices failed with %x\n", Status);
-            return;
+            goto done;
         }
     }
 
@@ -47,19 +47,26 @@ WdmAudInitWorkerRoutine(
     /* get device count */
     DeviceCount = GetSysAudioDeviceCount(DeviceObject);
 
-    DPRINT("WdmAudInitWorkerRoutine SysAudioDeviceCount %ld\n", DeviceCount);
+    DPRINT1("WDMAUD: SysAudioDeviceCount %lu previous %lu\n",
+            DeviceCount,
+            DeviceExtension->SysAudioDeviceCount);
 
     /* was a device added / removed */
     if (DeviceCount != DeviceExtension->SysAudioDeviceCount)
     {
         /* init mmixer library */
         Status = WdmAudMixerInitialize(DeviceObject);
-        DPRINT("WdmAudMixerInitialize Status %x WaveIn %lu WaveOut %lu Mixer %lu\n", Status, WdmAudGetWaveInDeviceCount(), WdmAudGetWaveOutDeviceCount(), WdmAudGetMixerDeviceCount());
+        DPRINT1("WDMAUD: MMixerInitialize Status %x WaveIn %lu WaveOut %lu Mixer %lu\n",
+                Status,
+                WdmAudGetWaveInDeviceCount(),
+                WdmAudGetWaveOutDeviceCount(),
+                WdmAudGetMixerDeviceCount());
 
         /* store sysaudio device count */
         DeviceExtension->SysAudioDeviceCount = DeviceCount;
     }
 
+done:
     /* signal completion */
     KeSetEvent(&DeviceExtension->InitializationCompletionEvent, IO_NO_INCREMENT, FALSE);
 
