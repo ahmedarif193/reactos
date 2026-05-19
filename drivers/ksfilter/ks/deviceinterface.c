@@ -21,6 +21,10 @@ KspSetDeviceInterfacesState(
         /* set device interface state */
         Status = IoSetDeviceInterfaceState(&SymEntry->SymbolicLink, Enable);
 
+        DPRINT1("KS: set interface %wZ enable=%u status=%x\n",
+                &SymEntry->SymbolicLink,
+                Enable,
+                Status);
         DPRINT("KspSetDeviceInterfacesState SymbolicLink '%S' Status %lx\n", SymEntry->SymbolicLink.Buffer, Status, Enable);
 
         /* check for success */
@@ -83,6 +87,11 @@ KspRegisterDeviceInterfaces(
                                            ReferenceString,
                                            &SymEntry->SymbolicLink);
 
+        DPRINT1("KS: register interface category %lu ref %wZ status %x link %wZ\n",
+                Index,
+                ReferenceString,
+                Status,
+                &SymEntry->SymbolicLink);
         if (!NT_SUCCESS(Status))
         {
             DPRINT1("Failed to register device interface %x\n", Status);
@@ -127,7 +136,9 @@ KspSetFilterFactoriesState(
         if (CreateEntry->CreateItem->Create == IKsFilterFactory_Create)
         {
             /* found our own filterfactory */
+            DPRINT1("KS: set filter factory state %u\n", NewState);
             Status = KsFilterFactorySetDeviceClassesState((PKSFILTERFACTORY)CreateEntry->CreateItem->Context, NewState);
+            DPRINT1("KS: set filter factory state done %x\n", Status);
         }
 
         Entry = Entry->Flink;

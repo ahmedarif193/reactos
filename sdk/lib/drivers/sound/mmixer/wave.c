@@ -18,56 +18,6 @@ const GUID KSDATAFORMAT_TYPE_AUDIO              = {0x73647561L, 0x0000, 0x0010, 
 const GUID KSINTERFACESETID_Standard            = {0x1A8766A0L, 0x62CE, 0x11CF, {0xA5, 0xD6, 0x28, 0xDB, 0x04, 0xC1, 0x00, 0x00}};
 const GUID KSMEDIUMSETID_Standard               = {0x4747B320L, 0x62CE, 0x11CF, {0xA5, 0xD6, 0x28, 0xDB, 0x04, 0xC1, 0x00, 0x00}};
 
-typedef struct
-{
-    ULONG SampleRate;
-    ULONG Bit8Mono;
-    ULONG Bit8Stereo;
-    ULONG Bit16Mono;
-    ULONG Bit16Stereo;
-}AUDIO_RANGE;
-
-#define AUDIO_TEST_RANGE (5)
-
-static AUDIO_RANGE TestRange[AUDIO_TEST_RANGE] =
-{
-    {
-        11025,
-        WAVE_FORMAT_1M08,
-        WAVE_FORMAT_1S08,
-        WAVE_FORMAT_1M16,
-        WAVE_FORMAT_1S16
-    },
-    {
-        22050,
-        WAVE_FORMAT_2M08,
-        WAVE_FORMAT_2S08,
-        WAVE_FORMAT_2M16,
-        WAVE_FORMAT_2S16
-    },
-    {
-        44100,
-        WAVE_FORMAT_4M08,
-        WAVE_FORMAT_4S08,
-        WAVE_FORMAT_4M16,
-        WAVE_FORMAT_4S16
-    },
-    {
-        48000,
-        WAVE_FORMAT_48M08,
-        WAVE_FORMAT_48S08,
-        WAVE_FORMAT_48M16,
-        WAVE_FORMAT_48S16
-    },
-    {
-        96000,
-        WAVE_FORMAT_96M08,
-        WAVE_FORMAT_96S08,
-        WAVE_FORMAT_96M16,
-        WAVE_FORMAT_96S16
-    }
-};
-
 PKSPIN_CONNECT
 MMixerAllocatePinConnect(
     IN PMIXER_CONTEXT MixerContext,
@@ -300,40 +250,13 @@ MMixerCheckFormat(
     IN LPWAVE_INFO WaveInfo,
     IN ULONG bInput)
 {
-    ULONG Index, SampleFrequency;
-    ULONG Result = 0;
+    ULONG Result;
 
-    for(Index = 0; Index < AUDIO_TEST_RANGE; Index++)
-    {
-        SampleFrequency = TestRange[Index].SampleRate;
-
-        if (DataRangeAudio->MinimumSampleFrequency <= SampleFrequency && DataRangeAudio->MaximumSampleFrequency >= SampleFrequency)
-        {
-            /* the audio adapter supports the sample frequency */
-            if (DataRangeAudio->MinimumBitsPerSample <= 8 && DataRangeAudio->MaximumBitsPerSample >= 8)
-            {
-                Result |= TestRange[Index].Bit8Mono;
-
-                if (DataRangeAudio->MaximumChannels > 1)
-                {
-                    /* check if pin supports the sample rate in 8-Bit Stereo */
-                    Result |= TestRange[Index].Bit8Stereo;
-                }
-            }
-
-            if (DataRangeAudio->MinimumBitsPerSample <= 16 && DataRangeAudio->MaximumBitsPerSample >= 16)
-            {
-                /* check if pin supports the sample rate in 16-Bit Mono */
-                Result |= TestRange[Index].Bit16Mono;
-
-                if (DataRangeAudio->MaximumChannels > 1)
-                {
-                    /* check if pin supports the sample rate in 16-Bit Stereo */
-                    Result |= TestRange[Index].Bit16Stereo;
-                }
-            }
-        }
-    }
+    Result = RosSoundAudioRangeToLegacyFlags(DataRangeAudio->MinimumSampleFrequency,
+                                             DataRangeAudio->MaximumSampleFrequency,
+                                             DataRangeAudio->MinimumBitsPerSample,
+                                             DataRangeAudio->MaximumBitsPerSample,
+                                             DataRangeAudio->MaximumChannels);
 
     if (bInput)
         WaveInfo->u.InCaps.dwFormats = Result;
@@ -405,6 +328,7 @@ MMixerInitializeWaveInfo(
     if (Status != MM_STATUS_SUCCESS)
     {
         /* failed to get audio pin data ranges */
+        DPRINT1("MMIXER: pin %lu data ranges failed %x\n", Pins[0], Status);
         MixerContext->Free(WaveInfo);
         return MM_STATUS_UNSUCCESSFUL;
     }
@@ -414,6 +338,9 @@ MMixerInitializeWaveInfo(
     if (Status != MM_STATUS_SUCCESS)
     {
         /* failed to find audio pin data range */
+        DPRINT1("MMIXER: pin %lu has no audio data range status %x\n",
+                Pins[0],
+                Status);
         MixerContext->Free(MultipleItem);
         MixerContext->Free(WaveInfo);
         return MM_STATUS_UNSUCCESSFUL;
