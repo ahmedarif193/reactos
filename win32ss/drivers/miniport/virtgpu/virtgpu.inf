@@ -1,0 +1,62 @@
+; virtgpu.inf
+;
+; Installation file for the VirtIO GPU display adapter
+
+[Version]
+Signature  = "$Windows NT$"
+LayoutFile = layout.inf
+Class      = Display
+ClassGUID  = {4D36E968-E325-11CE-BFC1-08002BE10318}
+Provider   = %ReactOS%
+DriverVer  = 05/19/2026,1.00
+
+[DestinationDirs]
+DefaultDestDir = 12
+VirtGpu.Display_CopyFiles = 11
+
+[Manufacturer]
+%VirtIO% = VirtIO
+
+[VirtIO]
+%VirtGpu.DeviceDesc% = VirtGpu,PCI\VEN_1AF4&DEV_1050
+%VirtGpu.DeviceDesc% = VirtGpu,PCI\VEN_1AF4&DEV_1000&SUBSYS_00101AF4
+
+[VirtGpu]
+CopyFiles = VirtGpu.Miniport_CopyFiles, VirtGpu.Display_CopyFiles
+
+[VirtGpu.Miniport_CopyFiles]
+virtgpu.sys
+
+[VirtGpu.Display_CopyFiles]
+virtgpu.dll
+virtgpuogl.dll
+
+[VirtGpu.SoftwareSettings]
+AddReg = VirtGpu_SoftwareSettings
+
+[VirtGpu_SoftwareSettings]
+HKR,, InstalledDisplayDrivers, %REG_MULTI_SZ%, virtgpu
+HKR,, VgaCompatible,           %REG_DWORD%,    0
+HKLM,"SOFTWARE\Microsoft\Windows NT\CurrentVersion\OpenGLDrivers\VirtGpu","Dll",%REG_SZ%,"virtgpuogl.dll"
+HKLM,"SOFTWARE\Microsoft\Windows NT\CurrentVersion\OpenGLDrivers\VirtGpu","Version",%REG_DWORD%,0x00000001
+HKLM,"SOFTWARE\Microsoft\Windows NT\CurrentVersion\OpenGLDrivers\VirtGpu","DriverVersion",%REG_DWORD%,0x00000001
+HKLM,"SOFTWARE\Microsoft\Windows NT\CurrentVersion\OpenGLDrivers\VirtGpu","Flags",%REG_DWORD%,0x00000000
+
+[VirtGpu.Services]
+AddService = virtgpu, 0x00000002, VirtGpu_Service
+
+[VirtGpu_Service]
+ServiceType   = 1
+StartType     = 1
+ErrorControl  = 0
+ServiceBinary = %12%\virtgpu.sys
+LoadOrderGroup = Video
+
+[Strings]
+ReactOS = "ReactOS Project"
+VirtIO = "VirtIO"
+VirtGpu.DeviceDesc = "VirtIO GPU Adapter"
+
+REG_MULTI_SZ = 0x00010000
+REG_DWORD    = 0x00010001
+REG_SZ       = 0x00000000
