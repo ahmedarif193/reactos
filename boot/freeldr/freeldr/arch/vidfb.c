@@ -1411,6 +1411,15 @@ FbConsGetDisplaySize(
     *Depth = framebufInfo.BitsPerPixel;
 }
 
+VOID
+FbConsGetCellSize(
+    _Out_ PULONG Width,
+    _Out_ PULONG Height)
+{
+    *Width = FbConsCellWidth();
+    *Height = FbConsCellHeight();
+}
+
 /**
  * @brief
  * Draws a progress bar in framebuffer pixels using text-grid coordinates.
