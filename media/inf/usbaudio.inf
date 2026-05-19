@@ -1,0 +1,53 @@
+; USBAUDIO.INF
+
+; Installation of the USB Audio Class function driver (usbaudio.sys).
+
+[Version]
+Signature  = "$Windows NT$"
+;Signature  = "$ReactOS$"
+LayoutFile = layout.inf
+Class      = MEDIA
+ClassGUID  = {4d36e96c-e325-11ce-bfc1-08002be10318}
+Provider   = %ReactOS%
+DriverVer  = 10/02/2005,1.00.0.0
+
+[DestinationDirs]
+DefaultDestDir = 12
+
+[Manufacturer]
+%GenericMfg% = GenericMfg
+
+[GenericMfg]
+%USB\Class_01&SubClass_01.DeviceDesc% = usbaudio_Inst, USB\Class_01&SubClass_01
+%USB\Class_01&SubClass_01&Prot_00.DeviceDesc% = usbaudio_Inst, USB\Class_01&SubClass_01&Prot_00
+
+;------------------------- USB AUDIO CLASS DRIVER -----------------------
+
+[usbaudio_Inst.NT]
+Include = ks.inf, wdmaudio.inf
+Needs = KS.Registration, WDMAUDIO.Registration
+CopyFiles = usbaudio_CopyFiles.NT
+
+[usbaudio_CopyFiles.NT]
+usbaudio.sys
+
+[usbaudio_Inst.NT.Services]
+AddService = usbaudio, 0x00000002, usbaudio_Service_Inst
+
+[usbaudio_Service_Inst]
+ServiceType   = 1
+StartType     = 3
+ErrorControl  = 1
+ServiceBinary = %12%\usbaudio.sys
+LoadOrderGroup = Base
+
+;-------------------------------- STRINGS -------------------------------
+
+[Strings]
+; Non-localizable
+ReactOS = "ReactOS Project"
+
+; Localizable
+GenericMfg = "(Generic USB Audio devices)"
+USB\Class_01&SubClass_01.DeviceDesc = "USB Audio Control Device"
+USB\Class_01&SubClass_01&Prot_00.DeviceDesc = "USB Audio Control Device"
