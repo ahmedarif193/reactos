@@ -38,6 +38,83 @@ ULONG KeDcacheFlushCount;
 ULONG KeLargestCacheLine = 64;
 extern PVOID MmPagedPoolStart;
 
+#define ARM64_MAX_CACHE_LEVELS 7
+
+typedef struct _ARM64_CACHE_SWEEP_LEVEL
+{
+    ULONG Level;
+    ULONG NumSets;
+    ULONG NumWays;
+    ULONG SetShift;
+    ULONG WayShift;
+} ARM64_CACHE_SWEEP_LEVEL, *PARM64_CACHE_SWEEP_LEVEL;
+
+static ARM64_CACHE_SWEEP_LEVEL KiArm64DcacheSweepLevels[ARM64_MAX_CACHE_LEVELS];
+static ULONG KiArm64DcacheSweepLevelCount;
+static volatile LONG KiArm64DcacheSweepGeometryValid;
+
+static
+VOID
+KiArm64EnsureDcacheSweepGeometry(VOID)
+{
+    ARM64_CACHE_SWEEP_LEVEL LocalLevels[ARM64_MAX_CACHE_LEVELS];
+    ULONG LocalCount = 0;
+    ULONG LargestLine = 64;
+    ULONG64 Clidr;
+    ULONG Level;
+
+    if (KiArm64DcacheSweepGeometryValid)
+    {
+        __asm__ __volatile__("dmb ish" ::: "memory");
+        return;
+    }
+
+    __asm__ __volatile__("mrs %0, clidr_el1" : "=r"(Clidr));
+
+    for (Level = 0; Level < ARM64_MAX_CACHE_LEVELS; Level++)
+    {
+        ULONG CacheType = (Clidr >> (Level * 3)) & 0x7;
+        ULONG64 Ccsidr;
+        ULONG LineShift;
+        ULONG NumWays;
+        ULONG NumSets;
+
+        if (CacheType < 2)
+        {
+            continue;
+        }
+
+        __asm__ __volatile__("msr csselr_el1, %0" :: "r"((ULONG64)(Level << 1)) : "memory");
+        __asm__ __volatile__("isb" ::: "memory");
+        __asm__ __volatile__("mrs %0, ccsidr_el1" : "=r"(Ccsidr));
+
+        LineShift = (ULONG)(Ccsidr & 0x7) + 4;
+        NumWays = (ULONG)(((Ccsidr >> 3) & 0x3FF) + 1);
+        NumSets = (ULONG)(((Ccsidr >> 13) & 0x7FFF) + 1);
+
+        LocalLevels[LocalCount].Level = Level;
+        LocalLevels[LocalCount].NumSets = NumSets;
+        LocalLevels[LocalCount].NumWays = NumWays;
+        LocalLevels[LocalCount].SetShift = LineShift;
+        LocalLevels[LocalCount].WayShift =
+            (NumWays <= 1) ? 32 : (ULONG)__builtin_clz(NumWays - 1);
+        LocalCount++;
+
+        if ((1UL << LineShift) > LargestLine)
+        {
+            LargestLine = 1UL << LineShift;
+        }
+    }
+
+    RtlCopyMemory(KiArm64DcacheSweepLevels,
+                  LocalLevels,
+                  LocalCount * sizeof(LocalLevels[0]));
+    KiArm64DcacheSweepLevelCount = LocalCount;
+    KeLargestCacheLine = LargestLine;
+    __asm__ __volatile__("dmb ish" ::: "memory");
+    KiArm64DcacheSweepGeometryValid = 1;
+}
+
 /*
  * Number of hardware breakpoint and watchpoint registers.
  * Read from ID_AA64DFR0_EL1 during early init.
@@ -319,57 +396,20 @@ KeInvalidateAllCaches(VOID)
      */
     __asm__ __volatile__("dsb ish" ::: "memory");
 
-    /*
-     * Clean and invalidate entire data cache to Point of Coherency.
-     * This ensures that:
-     * - All dirty cache lines are written back to RAM
-     * - All cache lines are invalidated so subsequent reads fetch from RAM
-     *
-     * We use a simplified loop over cache levels. A production implementation
-     * would read CLIDR_EL1 to determine actual cache levels and sizes.
-     */
+    KiArm64EnsureDcacheSweepGeometry();
+
+    for (ULONG LevelIndex = 0; LevelIndex < KiArm64DcacheSweepLevelCount; LevelIndex++)
     {
-        ULONG64 Clidr, Ccsidr, NumSets, NumWays, LineSize;
-        ULONG Level, SetLoop, WayLoop, WayShift, SetShift;
-        ULONG64 SetWayValue;
+        PARM64_CACHE_SWEEP_LEVEL Geometry = &KiArm64DcacheSweepLevels[LevelIndex];
 
-        /* Read Cache Level ID Register to get cache topology */
-        __asm__ __volatile__("mrs %0, clidr_el1" : "=r"(Clidr));
-
-        /* Clean and invalidate all data/unified caches (typically L1D, L2) */
-        for (Level = 0; Level < 3; Level++)
+        for (ULONG WayLoop = 0; WayLoop < Geometry->NumWays; WayLoop++)
         {
-            /* Check if this level has a data or unified cache */
-            ULONG CacheType = (Clidr >> (Level * 3)) & 0x7;
-            if (CacheType < 2) /* 0=none, 1=I-cache only */
-                break;
-
-            /* Select the cache level in CSSELR_EL1 (Level:1, 0=data cache) */
-            __asm__ __volatile__("msr csselr_el1, %0" :: "r"((ULONG64)(Level << 1)) : "memory");
-            __asm__ __volatile__("isb" ::: "memory");
-
-            /* Read Current Cache Size ID Register */
-            __asm__ __volatile__("mrs %0, ccsidr_el1" : "=r"(Ccsidr));
-
-            /* Extract cache geometry: LineSize = 2^(LineSize+4) bytes */
-            LineSize = (Ccsidr & 0x7) + 4;
-            NumWays = ((Ccsidr >> 3) & 0x3FF) + 1;
-            NumSets = ((Ccsidr >> 13) & 0x7FFF) + 1;
-
-            /* Calculate bit positions for set/way operations */
-            WayShift = __builtin_clz((unsigned int)NumWays - 1);
-            SetShift = LineSize;
-
-            /* Clean and invalidate all sets and ways */
-            for (WayLoop = 0; WayLoop < NumWays; WayLoop++)
+            for (ULONG SetLoop = 0; SetLoop < Geometry->NumSets; SetLoop++)
             {
-                for (SetLoop = 0; SetLoop < NumSets; SetLoop++)
-                {
-                    SetWayValue = (((ULONG64)Level) << 1) |
-                                  (((ULONG64)SetLoop) << SetShift) |
-                                  (((ULONG64)WayLoop) << WayShift);
-                    __asm__ __volatile__("dc cisw, %0" :: "r"(SetWayValue) : "memory");
-                }
+                ULONG64 SetWayValue = (((ULONG64)Geometry->Level) << 1) |
+                                      (((ULONG64)SetLoop) << Geometry->SetShift) |
+                                      (((ULONG64)WayLoop) << Geometry->WayShift);
+                __asm__ __volatile__("dc cisw, %0" :: "r"(SetWayValue) : "memory");
             }
         }
     }
