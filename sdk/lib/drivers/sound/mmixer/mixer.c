@@ -843,6 +843,10 @@ MMixerInitialize(
             if (Status != MM_STATUS_SUCCESS)
                 DPRINT1("MMixerCreateMixerData() failed for device %lu, Status %x\n",
                         DeviceIndex, Status);
+            else
+                DPRINT1("MMIXER: created mixer data for device %lu %S\n",
+                        DeviceIndex,
+                        DeviceName);
 
             /* ignore error and continue */
         }
@@ -856,7 +860,13 @@ MMixerInitialize(
     while(Entry != &MixerList->MixerData)
     {
         MixerData = (LPMIXER_DATA)CONTAINING_RECORD(Entry, MIXER_DATA, Entry);
+        DPRINT1("MMIXER: setup filter device %lu\n", MixerData->DeviceId);
         MMixerSetupFilter(MixerContext, MixerList, MixerData, &Count);
+        DPRINT1("MMIXER: after setup WaveIn %lu WaveOut %lu Mixer %lu Count %lu\n",
+                MixerList->WaveInListCount,
+                MixerList->WaveOutListCount,
+                MixerList->MixerListCount,
+                Count);
         Entry = Entry->Flink;
     }
 
