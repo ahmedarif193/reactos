@@ -20,6 +20,10 @@ PerformIO(IN HANDLE hDevice,
 {
     OVERLAPPED overlapped;
     DWORD dwResult;
+    DWORD NumberBytes;
+
+    if (lpNumberBytes == NULL)
+        lpNumberBytes = &NumberBytes;
 
     ZeroMemory(&overlapped, sizeof(OVERLAPPED));
     overlapped.hEvent = CreateEvent(NULL, TRUE, FALSE, NULL);
@@ -64,9 +68,10 @@ InstallSoftwareDeviceInterface(IN LPGUID DeviceId,
     HANDLE hDevice;
     PSWENUM_INSTALL_INTERFACE InstallInterface;
     DWORD dwResult;
+    DWORD BufferSize;
 
     hDevInfo = SetupDiGetClassDevsW(&SWBusGuid, NULL, NULL,  DIGCF_DEVICEINTERFACE| DIGCF_PRESENT);
-    if (!hDevInfo)
+    if (hDevInfo == INVALID_HANDLE_VALUE)
     {
         // failed
         return GetLastError();
@@ -106,7 +111,9 @@ InstallSoftwareDeviceInterface(IN LPGUID DeviceId,
         return GetLastError();
     }
 
-    InstallInterface  = (PSWENUM_INSTALL_INTERFACE)HeapAlloc(GetProcessHeap(), 0, sizeof(SWENUM_INSTALL_INTERFACE) + wcslen(ReferenceString) * sizeof(WCHAR));
+    BufferSize = FIELD_OFFSET(SWENUM_INSTALL_INTERFACE, ReferenceString) +
+                 (wcslen(ReferenceString) + 1) * sizeof(WCHAR);
+    InstallInterface = (PSWENUM_INSTALL_INTERFACE)HeapAlloc(GetProcessHeap(), 0, BufferSize);
     if (!InstallInterface)
     {
         // failed
@@ -121,8 +128,14 @@ InstallSoftwareDeviceInterface(IN LPGUID DeviceId,
     InstallInterface->InterfaceId = *InterfaceId;
     wcscpy(InstallInterface->ReferenceString, ReferenceString);
 
-    PerformIO(hDevice, IOCTL_SWENUM_INSTALL_INTERFACE, InstallInterface, sizeof(SWENUM_INSTALL_INTERFACE) + wcslen(ReferenceString) * sizeof(WCHAR), NULL, 0, NULL);
-    dwResult = HeapFree(GetProcessHeap(), 0, InstallInterface);
+    dwResult = PerformIO(hDevice,
+                         IOCTL_SWENUM_INSTALL_INTERFACE,
+                         InstallInterface,
+                         BufferSize,
+                         NULL,
+                         0,
+                         NULL);
+    HeapFree(GetProcessHeap(), 0, InstallInterface);
 
     CloseHandle(hDevice);
     HeapFree(GetProcessHeap(), 0, DeviceInterfaceDetailData);
@@ -141,7 +154,7 @@ InstallSoftwareDeviceInterfaceInf(IN LPWSTR InfName,
     GUID SWBusGuid = {STATIC_BUSID_SoftwareDeviceEnumerator};
 
     hDevInfo = SetupDiGetClassDevsW(&SWBusGuid, NULL, NULL, 0);
-    if (!hDevInfo)
+    if (hDevInfo == INVALID_HANDLE_VALUE)
     {
         // failed
         return GetLastError();
