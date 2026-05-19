@@ -46,6 +46,12 @@ typedef struct
     //
     PHID_DESCRIPTOR HidDescriptor;
 
+    //
+    // configuration lifetime state
+    //
+    LONG ConfigurationActive;
+    LONG ResetPending;
+
 } HID_USB_DEVICE_EXTENSION, *PHID_USB_DEVICE_EXTENSION;
 
 typedef struct
@@ -86,6 +92,12 @@ Hid_DispatchUrb(
 
 #define USB_SET_IDLE_REQUEST 0xA
 #define USB_GET_PROTOCOL_REQUEST 0x3
+#define USB_HID_GET_REPORT_REQUEST 0x1
+#define USB_HID_SET_REPORT_REQUEST 0x9
+
+#define USB_HID_REPORT_TYPE_INPUT 0x1
+#define USB_HID_REPORT_TYPE_OUTPUT 0x2
+#define USB_HID_REPORT_TYPE_FEATURE 0x3
 
 #define HIDUSB_TAG 'UdiH'
 #define HIDUSB_URB_TAG 'rUiH'

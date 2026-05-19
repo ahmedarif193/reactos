@@ -6,6 +6,7 @@
 #include <hidpddi.h>
 #include <stdio.h>
 #include <hidport.h>
+#include <pseh/pseh2.h>
 
 #define HIDCLASS_TAG 'CdiH'
 

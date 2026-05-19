@@ -30,6 +30,29 @@ static USHORT MouHid_ButtonDownFlags[] =
     MOUSE_BUTTON_5_UP
 };
 
+static
+BOOLEAN
+MouHid_ScaleAbsoluteCoordinate(
+    IN ULONG Value,
+    IN PHIDP_VALUE_CAPS ValueCaps,
+    IN ULONG VirtualScreenSize,
+    OUT PLONG Last)
+{
+    if (ValueCaps->LogicalMax <= 0 ||
+        ValueCaps->LogicalMax <= ValueCaps->LogicalMin)
+    {
+        DPRINT1("MouHid_ScaleAbsoluteCoordinate: invalid logical range %ld..%ld\n",
+                ValueCaps->LogicalMin,
+                ValueCaps->LogicalMax);
+        return FALSE;
+    }
+
+    if (Value > (ULONG)ValueCaps->LogicalMax)
+        Value = ValueCaps->LogicalMax;
+
+    *Last = (LONG)(((ULONGLONG)Value * VirtualScreenSize) / ValueCaps->LogicalMax);
+    return TRUE;
+}
 
 VOID
 MouHid_GetButtonMove(
@@ -74,15 +97,18 @@ MouHid_GetButtonMove(
                                         DeviceExtension->Report,
                                         DeviceExtension->ReportLength);
 
-                /* FIXME handle error */
-                ASSERT(Status == HIDP_STATUS_SUCCESS);
-
-                /* absolute pointing devices values need be in range 0 - 0xffff */
-                ASSERT(DeviceExtension->ValueCapsX.LogicalMax > 0);
-                ASSERT(DeviceExtension->ValueCapsX.LogicalMax > DeviceExtension->ValueCapsX.LogicalMin);
-
-                /* convert to logical range */
-                *LastX = (ValueX * VIRTUAL_SCREEN_SIZE_X) / DeviceExtension->ValueCapsX.LogicalMax;
+                if (Status == HIDP_STATUS_SUCCESS)
+                {
+                    MouHid_ScaleAbsoluteCoordinate(ValueX,
+                                                   &DeviceExtension->ValueCapsX,
+                                                   VIRTUAL_SCREEN_SIZE_X,
+                                                   LastX);
+                }
+                else
+                {
+                    DPRINT1("MouHid_GetButtonMove: failed to get absolute X %x\n",
+                            Status);
+                }
             }
         }
     }
@@ -98,15 +124,18 @@ MouHid_GetButtonMove(
                                     DeviceExtension->Report,
                                     DeviceExtension->ReportLength);
 
-        /* FIXME handle error */
-        ASSERT(Status == HIDP_STATUS_SUCCESS);
-
-        /* absolute pointing devices values need be in range 0 - 0xffff */
-        ASSERT(DeviceExtension->ValueCapsX.LogicalMax > 0);
-        ASSERT(DeviceExtension->ValueCapsX.LogicalMax > DeviceExtension->ValueCapsX.LogicalMin);
-
-        /* convert to logical range */
-        *LastX = (ValueX * VIRTUAL_SCREEN_SIZE_X) / DeviceExtension->ValueCapsX.LogicalMax;
+        if (Status == HIDP_STATUS_SUCCESS)
+        {
+            MouHid_ScaleAbsoluteCoordinate(ValueX,
+                                           &DeviceExtension->ValueCapsX,
+                                           VIRTUAL_SCREEN_SIZE_X,
+                                           LastX);
+        }
+        else
+        {
+            DPRINT1("MouHid_GetButtonMove: failed to get absolute X %x\n",
+                    Status);
+        }
     }
 
     if (!DeviceExtension->MouseAbsolute)
@@ -139,15 +168,18 @@ MouHid_GetButtonMove(
                                         DeviceExtension->Report,
                                         DeviceExtension->ReportLength);
 
-                /* FIXME handle error */
-                ASSERT(Status == HIDP_STATUS_SUCCESS);
-
-                /* absolute pointing devices values need be in range 0 - 0xffff */
-                ASSERT(DeviceExtension->ValueCapsY.LogicalMax > 0);
-                ASSERT(DeviceExtension->ValueCapsY.LogicalMax > DeviceExtension->ValueCapsY.LogicalMin);
-
-                /* convert to logical range */
-                *LastY = (ValueY * VIRTUAL_SCREEN_SIZE_Y) / DeviceExtension->ValueCapsY.LogicalMax;
+                if (Status == HIDP_STATUS_SUCCESS)
+                {
+                    MouHid_ScaleAbsoluteCoordinate(ValueY,
+                                                   &DeviceExtension->ValueCapsY,
+                                                   VIRTUAL_SCREEN_SIZE_Y,
+                                                   LastY);
+                }
+                else
+                {
+                    DPRINT1("MouHid_GetButtonMove: failed to get absolute Y %x\n",
+                            Status);
+                }
             }
         }
     }
@@ -163,15 +195,18 @@ MouHid_GetButtonMove(
                                 DeviceExtension->Report,
                                 DeviceExtension->ReportLength);
 
-        /* FIXME handle error */
-        ASSERT(Status == HIDP_STATUS_SUCCESS);
-
-        /* absolute pointing devices values need be in range 0 - 0xffff */
-        ASSERT(DeviceExtension->ValueCapsY.LogicalMax > 0);
-        ASSERT(DeviceExtension->ValueCapsY.LogicalMax > DeviceExtension->ValueCapsY.LogicalMin);
-
-        /* convert to logical range */
-        *LastY = (ValueY * VIRTUAL_SCREEN_SIZE_Y) / DeviceExtension->ValueCapsY.LogicalMax;
+        if (Status == HIDP_STATUS_SUCCESS)
+        {
+            MouHid_ScaleAbsoluteCoordinate(ValueY,
+                                           &DeviceExtension->ValueCapsY,
+                                           VIRTUAL_SCREEN_SIZE_Y,
+                                           LastY);
+        }
+        else
+        {
+            DPRINT1("MouHid_GetButtonMove: failed to get absolute Y %x\n",
+                    Status);
+        }
     }
 }
 
@@ -440,6 +475,23 @@ MouHid_CreateCompletion(
     return STATUS_MORE_PROCESSING_REQUIRED;
 }
 
+static
+VOID
+MouHid_StopRead(
+    IN PMOUHID_DEVICE_EXTENSION DeviceExtension)
+{
+    if (!DeviceExtension->ReadReportActive)
+        return;
+
+    /* request stopping of the report cycle */
+    DeviceExtension->StopReadReport = TRUE;
+
+    /* cancel irp */
+    IoCancelIrp(DeviceExtension->Irp);
+
+    /* wait until the read completion routine has stopped the report cycle */
+    KeWaitForSingleObject(&DeviceExtension->ReadCompletionEvent, Executive, KernelMode, FALSE, NULL);
+}
 
 NTSTATUS
 NTAPI
@@ -523,29 +575,24 @@ MouHid_Close(
     IN PDEVICE_OBJECT DeviceObject,
     IN PIRP Irp)
 {
+    PIO_STACK_LOCATION IoStack;
     PMOUHID_DEVICE_EXTENSION DeviceExtension;
 
     /* get device extension */
     DeviceExtension = DeviceObject->DeviceExtension;
+    IoStack = IoGetCurrentIrpStackLocation(Irp);
 
     DPRINT("[MOUHID] IRP_MJ_CLOSE ReadReportActive %x\n", DeviceExtension->ReadReportActive);
 
-    if (DeviceExtension->ReadReportActive)
+    if (IoStack->FileObject == DeviceExtension->FileObject)
     {
-        /* request stopping of the report cycle */
-        DeviceExtension->StopReadReport = TRUE;
+        MouHid_StopRead(DeviceExtension);
 
-        /* wait until the reports have been read */
-        KeWaitForSingleObject(&DeviceExtension->ReadCompletionEvent, Executive, KernelMode, FALSE, NULL);
-
-        /* cancel irp */
-        IoCancelIrp(DeviceExtension->Irp);
+        /* remove file object */
+        DeviceExtension->FileObject = NULL;
     }
 
     DPRINT("[MOUHID] IRP_MJ_CLOSE ReadReportActive %x\n", DeviceExtension->ReadReportActive);
-
-    /* remove file object */
-    DeviceExtension->FileObject = NULL;
 
     /* skip location */
     IoSkipCurrentIrpStackLocation(Irp);
@@ -1064,6 +1111,9 @@ MouHid_Pnp(
     {
     case IRP_MN_STOP_DEVICE:
     case IRP_MN_SURPRISE_REMOVAL:
+        /* stop pending reads before freeing report buffers */
+        MouHid_StopRead(DeviceExtension);
+
         /* free resources */
         MouHid_FreeResources(DeviceObject);
     case IRP_MN_CANCEL_REMOVE_DEVICE:
@@ -1082,11 +1132,8 @@ MouHid_Pnp(
     case IRP_MN_REMOVE_DEVICE:
         /* FIXME synchronization */
 
-        /* request stop */
-        DeviceExtension->StopReadReport = TRUE;
-
-        /* cancel irp */
-        IoCancelIrp(DeviceExtension->Irp);
+        /* stop pending reads before freeing report buffers */
+        MouHid_StopRead(DeviceExtension);
 
         /* free resources */
         MouHid_FreeResources(DeviceObject);
@@ -1099,9 +1146,6 @@ MouHid_Pnp(
 
         /* dispatch to lower device */
         Status = IoCallDriver(DeviceExtension->NextDeviceObject, Irp);
-
-        /* wait for completion of stop event */
-        KeWaitForSingleObject(&DeviceExtension->ReadCompletionEvent, Executive, KernelMode, FALSE, NULL);
 
         /* free irp */
         IoFreeIrp(DeviceExtension->Irp);

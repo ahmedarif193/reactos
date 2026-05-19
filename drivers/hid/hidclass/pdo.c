@@ -665,14 +665,18 @@ HidClassPDO_PnP(
         case IRP_MN_START_DEVICE:
         {
             //
-            // FIXME: support polled devices
+            // Polled HID miniports are not implemented by HIDCLASS yet.
+            // Keep the PDO alive and let read dispatch fail explicitly.
             //
-            ASSERT(PDODeviceExtension->Common.DriverExtension->DevicesArePolled == FALSE);
+            if (PDODeviceExtension->Common.DriverExtension->DevicesArePolled)
+            {
+                DPRINT1("[HIDCLASS] PDO start: polled device detected\n");
+            }
 
             //
             // now register the device interface
             //
-            Status = IoRegisterDeviceInterface(PDODeviceExtension->Common.HidDeviceExtension.PhysicalDeviceObject,
+            Status = IoRegisterDeviceInterface(DeviceObject,
                                                &GUID_DEVINTERFACE_HID,
                                                NULL,
                                                &PDODeviceExtension->DeviceInterface);
@@ -879,7 +883,7 @@ HidClassPDO_CreatePDO(
         //
         // set device flags
         //
-        PDODeviceObject->Flags |= DO_MAP_IO_BUFFER;
+        PDODeviceObject->Flags |= DO_BUFFERED_IO | DO_MAP_IO_BUFFER;
 
         //
         // device is initialized

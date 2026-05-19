@@ -98,10 +98,10 @@ ClassRead(
 
 	TRACE_(CLASS_NAME, "IRP_MJ_READ\n");
 
-	ASSERT(DeviceExtension->Common.IsClassDO);
-
 	if (!((PCOMMON_DEVICE_EXTENSION)DeviceObject->DeviceExtension)->IsClassDO)
 		return ForwardIrpAndForget(DeviceObject, Irp);
+
+	ASSERT(DeviceExtension->Common.IsClassDO);
 
 	if (IoGetCurrentIrpStackLocation(Irp)->Parameters.Read.Length < sizeof(KEYBOARD_INPUT_DATA))
 	{
