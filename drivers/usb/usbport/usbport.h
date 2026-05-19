@@ -330,26 +330,6 @@ typedef struct _USBPORT_ENDPOINT {
   LIST_ENTRY RebalanceLink;
 } USBPORT_ENDPOINT, *PUSBPORT_ENDPOINT;
 
-typedef struct _USBPORT_ISO_BLOCK_PACKET {
-  ULONG Offset;
-  ULONG Length;
-  ULONG ActualLength;
-  USBD_STATUS Status;
-} USBPORT_ISO_BLOCK_PACKET, *PUSBPORT_ISO_BLOCK_PACKET;
-
-typedef struct _USBPORT_ISO_BLOCK {
-  ULONG StartFrame;
-  ULONG NumberOfPackets;
-  ULONG TransferFlags;
-  ULONG ErrorCount;
-  PUSBPORT_SCATTER_GATHER_LIST SgList;
-  USBPORT_ISO_BLOCK_PACKET Packets[1];
-} USBPORT_ISO_BLOCK, *PUSBPORT_ISO_BLOCK;
-
-#define USBPORT_ISO_BLOCK_SIZE(_Packets_) \
-  (FIELD_OFFSET(USBPORT_ISO_BLOCK, Packets[0]) + \
-   (_Packets_) * sizeof(USBPORT_ISO_BLOCK_PACKET))
-
 typedef struct _USBPORT_TRANSFER {
   ULONG Flags;
   PIRP Irp;
@@ -387,6 +367,32 @@ typedef struct _USBPORT_TRANSFER {
   USBPORT_SCATTER_GATHER_LIST SgList; // variable length
   //USBPORT_ISO_BLOCK IsoBlock; // variable length
 } USBPORT_TRANSFER, *PUSBPORT_TRANSFER;
+
+typedef struct _USBPORT_MINIPORT_TRANSFER_HEADER {
+  PUSBPORT_TRANSFER Transfer;
+} USBPORT_MINIPORT_TRANSFER_HEADER, *PUSBPORT_MINIPORT_TRANSFER_HEADER;
+
+FORCEINLINE
+PUSBPORT_MINIPORT_TRANSFER_HEADER
+USBPORT_GetMiniportTransferHeader(
+  IN PVOID MiniportTransfer)
+{
+  return (PUSBPORT_MINIPORT_TRANSFER_HEADER)((ULONG_PTR)MiniportTransfer -
+                                             sizeof(USBPORT_MINIPORT_TRANSFER_HEADER));
+}
+
+FORCEINLINE
+VOID
+USBPORT_InitializeMiniportTransfer(
+  IN PUSBPORT_TRANSFER Transfer)
+{
+  PUSBPORT_MINIPORT_TRANSFER_HEADER Header;
+
+  Header = (PUSBPORT_MINIPORT_TRANSFER_HEADER)((ULONG_PTR)Transfer +
+                                               Transfer->PortTransferLength);
+  Header->Transfer = Transfer;
+  Transfer->MiniportTransfer = Header + 1;
+}
 
 typedef struct _USBPORT_IRP_TABLE {
   struct _USBPORT_IRP_TABLE * LinkNextTable;
@@ -830,7 +836,7 @@ USBPORT_AllocateTransfer(
   IN PIRP Irp,
   IN PRKEVENT Event);
 
-VOID
+NTSTATUS
 NTAPI
 USBPORT_FlushMapTransfers(
   IN PDEVICE_OBJECT FdoDevice);
@@ -1302,8 +1308,20 @@ USBPORT_FlushIsoTransfer(
 
 VOID
 NTAPI
+USBPORT_FailIsoTransfer(
+  IN PUSBPORT_TRANSFER Transfer,
+  IN USBD_STATUS Status,
+  IN BOOLEAN CallerHoldsEndpointLock);
+
+VOID
+NTAPI
 USBPORT_ErrorCompleteIsoTransfer(
   IN PUSBPORT_TRANSFER Transfer);
+
+VOID
+NTAPI
+USBPORT_ResetEndpointIdle(
+  IN PUSBPORT_ENDPOINT Endpoint);
 
 ULONG
 NTAPI
@@ -1598,6 +1616,13 @@ NTSTATUS
 NTAPI
 USBPORT_HandleSubmitURB(
   IN PDEVICE_OBJECT PdoDevice,
+  IN PIRP Irp,
+  IN PURB Urb);
+
+NTSTATUS
+NTAPI
+USBPORT_SyncResetPipeAndClearStall(
+  IN PDEVICE_OBJECT FdoDevice,
   IN PIRP Irp,
   IN PURB Urb);
 

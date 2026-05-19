@@ -407,7 +407,10 @@ PDO_HandlePnp(
     PIO_STACK_LOCATION IoStack;
     PPDO_DEVICE_EXTENSION PDODeviceExtension;
     NTSTATUS Status;
-    ULONG Index, bFound;
+    ULONG Index;
+    BOOLEAN Found;
+    PFDO_DEVICE_EXTENSION FDODeviceExtension;
+    PDEVICE_OBJECT FDODeviceObject;
 
     //
     // get current stack location
@@ -452,37 +455,41 @@ PDO_HandlePnp(
         }
         case IRP_MN_REMOVE_DEVICE:
         {
-            //
-            // remove us from the fdo's pdo list
-            //
-            bFound = FALSE;
-            for(Index = 0; Index < PDODeviceExtension->FDODeviceExtension->FunctionDescriptorCount; Index++)
+            FDODeviceExtension = PDODeviceExtension->FDODeviceExtension;
+            FDODeviceObject = PDODeviceExtension->NextDeviceObject;
+
+            PDODeviceExtension->Present = FALSE;
+            PDODeviceExtension->Removed = TRUE;
+
+            Found = FALSE;
+            if (FDODeviceExtension->ChildPDO)
             {
-                if (PDODeviceExtension->FDODeviceExtension->ChildPDO[Index] == DeviceObject)
+                for(Index = 0; Index < FDODeviceExtension->ChildPDOCount; Index++)
                 {
-                    //
-                    // remove us
-                    //
-                    PDODeviceExtension->FDODeviceExtension->ChildPDO[Index] = NULL;
-                    bFound = TRUE;
-                    break;
+                    if (FDODeviceExtension->ChildPDO[Index] == DeviceObject)
+                    {
+                        FDODeviceExtension->ChildPDO[Index] = NULL;
+                        Found = TRUE;
+                        break;
+                    }
                 }
             }
 
-            //
-            // Complete the IRP
-            //
             Irp->IoStatus.Status = STATUS_SUCCESS;
             IoCompleteRequest(Irp, IO_NO_INCREMENT);
 
-            if (bFound)
-            {
-                //
-                // Delete the device object
-                //
-                IoDeleteDevice(DeviceObject);
-            }
+            if (Found)
+                USBCCGP_FdoReleaseResources(FDODeviceExtension, FALSE);
+
+            IoDeleteDevice(DeviceObject);
+            ObDereferenceObject(FDODeviceObject);
             return STATUS_SUCCESS;
+        }
+        case IRP_MN_SURPRISE_REMOVAL:
+        {
+            PDODeviceExtension->Present = FALSE;
+            Status = STATUS_SUCCESS;
+            break;
         }
         case IRP_MN_QUERY_CAPABILITIES:
         {
@@ -1058,6 +1065,15 @@ PDO_HandleInternalDeviceControl(
     // get device extension
     //
     PDODeviceExtension = (PPDO_DEVICE_EXTENSION)DeviceObject->DeviceExtension;
+
+    if (PDODeviceExtension->Removed ||
+        !PDODeviceExtension->Present ||
+        PDODeviceExtension->FDODeviceExtension->Removing)
+    {
+        Irp->IoStatus.Status = STATUS_DEVICE_REMOVED;
+        IoCompleteRequest(Irp, IO_NO_INCREMENT);
+        return STATUS_DEVICE_REMOVED;
+    }
 
     if (IoStack->Parameters.DeviceIoControl.IoControlCode == IOCTL_INTERNAL_USB_SUBMIT_URB)
     {

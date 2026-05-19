@@ -1071,16 +1071,16 @@ USBH_FdoStartDevice(IN PUSBHUB_FDO_EXTENSION HubExtension,
         }
         else
         {
-            DPRINT1("USBH_FdoStartDevice: FIXME. start ParentDevice\n");
-            DbgBreakPoint();
+            DPRINT1("USBH_FdoStartDevice: root hub PDO missing\n");
+            Status = STATUS_NO_SUCH_DEVICE;
+            USBH_CompleteIrp(Irp, Status);
         }
     }
     else
     {
-        DPRINT1("USBH_FdoStartDevice: FIXME. USBH_SyncGetRootHubPdo return - %lX\n",
+        DPRINT1("USBH_FdoStartDevice: USBH_SyncGetRootHubPdo failed - %lX\n",
                 Status);
 
-        DbgBreakPoint();
         USBH_CompleteIrp(Irp, Status);
     }
 
@@ -1217,27 +1217,16 @@ USBH_FdoQueryBusRelations(IN PUSBHUB_FDO_EXTENSION HubExtension,
 
 EnumStart:
 
-    /* Consume a pending re-enumeration request but keep it cleared only
-     * after we finish this full pass. */
     if (HubExtension->HubFlags & USBHUB_FDO_FLAG_ESD_RECOVERING)
     {
-        HubExtension->HubFlags &= ~USBHUB_FDO_FLAG_NOT_ENUMERATED;
-
-        KeReleaseSemaphore(&HubExtension->ResetDeviceSemaphore,
-                           LOW_REALTIME_PRIORITY,
-                           1,
-                           FALSE);
-
-        if (!InterlockedDecrement(&HubExtension->PendingRequestCount))
-        {
-            KeSetEvent(&HubExtension->PendingRequestEvent, EVENT_INCREMENT, FALSE);
-        }
-
-        Status = STATUS_SUCCESS;
-        goto RelationsWorker;
+        HubExtension->HubFlags &= ~(USBHUB_FDO_FLAG_ESD_RECOVERING |
+                                    USBHUB_FDO_FLAG_ENUM_POST_RECOVER |
+                                    USBHUB_FDO_FLAG_NOT_ENUMERATED);
     }
-
-    HubExtension->HubFlags &= ~USBHUB_FDO_FLAG_ENUM_POST_RECOVER;
+    else
+    {
+        HubExtension->HubFlags &= ~USBHUB_FDO_FLAG_ENUM_POST_RECOVER;
+    }
 
     for (Port = 1; Port <= NumberPorts; Port++)
     {
@@ -1360,8 +1349,7 @@ EnumStart:
 
         if (HubExtension->HubFlags & USBHUB_FDO_FLAG_DEVICE_FAILED)
         {
-            DPRINT1("USBH_FdoQueryBusRelations: DbgBreakPoint() \n");
-            DbgBreakPoint();
+            DPRINT1("USBH_FdoQueryBusRelations: hub is marked failed\n");
         }
 
         if (!USBH_PortStatusIsConnected(&PortData->PortStatus) &&
@@ -1745,9 +1733,33 @@ NTAPI
 USBH_FdoStopDevice(IN PUSBHUB_FDO_EXTENSION HubExtension,
                    IN PIRP Irp)
 {
-    DPRINT1("USBH_FdoStopDevice: UNIMPLEMENTED. FIXME\n");
-    DbgBreakPoint();
-    return STATUS_SUCCESS;
+    NTSTATUS Status;
+
+    HubExtension->HubFlags |= USBHUB_FDO_FLAG_DEVICE_STOPPING;
+
+    USBH_HubCompletePortWakeIrps(HubExtension, STATUS_CANCELLED);
+    USBH_HubCompletePortIdleIrps(HubExtension, STATUS_CANCELLED);
+
+    if (HubExtension->SCEIrp)
+    {
+        Status = USBH_AbortInterruptPipe(HubExtension);
+
+        if (!NT_SUCCESS(Status) && IoCancelIrp(HubExtension->SCEIrp))
+        {
+            KeWaitForSingleObject(&HubExtension->StatusChangeEvent,
+                                  Suspended,
+                                  KernelMode,
+                                  FALSE,
+                                  NULL);
+        }
+    }
+
+    HubExtension->HubFlags &= ~(USBHUB_FDO_FLAG_DEVICE_STARTED |
+                                USBHUB_FDO_FLAG_DO_ENUMERATION |
+                                USBHUB_FDO_FLAG_DEVICE_STOPPING);
+    HubExtension->HubFlags |= USBHUB_FDO_FLAG_DEVICE_STOPPED;
+
+    return USBH_PassIrp(HubExtension->LowerDevice, Irp);
 }
 
 NTSTATUS
@@ -3057,10 +3069,11 @@ USBH_PdoPnP(IN PUSBHUB_PORT_PDO_EXTENSION PortExtension,
             DPRINT_PNP("PDO IRP_MN_QUERY_RESOURCE_REQUIREMENTS\n");
             PortExtension->PortPdoFlags |= USBHUB_PDO_FLAG_ENUMERATED;
 
-            /* FIXME HKEY_LOCAL_MACHINE\SYSTEM\ControlSetXXX\Enum\USB\
-               Vid_????&Pid_????\????????????\Device Parameters\
-               if (ExtPropDescSemaphore)
-            */
+            /*
+             * USB hub PDOs do not consume translated hardware resources.
+             * Extended property descriptor synchronization is handled when
+             * the client requests URB_FUNCTION_GET_MS_FEATURE_DESCRIPTOR.
+             */
 
             Status = STATUS_SUCCESS;
             break;
@@ -3076,25 +3089,21 @@ USBH_PdoPnP(IN PUSBHUB_PORT_PDO_EXTENSION PortExtension,
 
         case IRP_MN_READ_CONFIG:
             DPRINT_PNP("PDO IRP_MN_READ_CONFIG\n");
-            DbgBreakPoint();
             Status = Irp->IoStatus.Status;
             break;
 
         case IRP_MN_WRITE_CONFIG:
             DPRINT_PNP("PDO IRP_MN_WRITE_CONFIG\n");
-            DbgBreakPoint();
             Status = Irp->IoStatus.Status;
             break;
 
         case IRP_MN_EJECT:
             DPRINT_PNP("PDO IRP_MN_EJECT\n");
-            DbgBreakPoint();
             Status = Irp->IoStatus.Status;
             break;
 
         case IRP_MN_SET_LOCK:
             DPRINT_PNP("PDO IRP_MN_SET_LOCK\n");
-            DbgBreakPoint();
             Status = Irp->IoStatus.Status;
             break;
 
@@ -3107,7 +3116,8 @@ USBH_PdoPnP(IN PUSBHUB_PORT_PDO_EXTENSION PortExtension,
             if (PortExtension->PortPdoFlags & (USBHUB_PDO_FLAG_INSUFFICIENT_PWR |
                                                USBHUB_PDO_FLAG_OVERCURRENT_PORT |
                                                USBHUB_PDO_FLAG_PORT_RESTORE_FAIL |
-                                               USBHUB_PDO_FLAG_INIT_PORT_FAILED))
+                                               USBHUB_PDO_FLAG_INIT_PORT_FAILED |
+                                               USBHUB_PDO_FLAG_ALLOC_BNDW_FAILED))
             {
                 Irp->IoStatus.Information |= PNP_DEVICE_FAILED;
             }
@@ -3142,7 +3152,6 @@ USBH_PdoPnP(IN PUSBHUB_PORT_PDO_EXTENSION PortExtension,
 
         case IRP_MN_DEVICE_USAGE_NOTIFICATION:
             DPRINT_PNP("PDO IRP_MN_DEVICE_USAGE_NOTIFICATION\n");
-            DbgBreakPoint();
             Status = Irp->IoStatus.Status;
             break;
 

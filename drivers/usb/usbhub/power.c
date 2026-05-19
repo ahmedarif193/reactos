@@ -59,6 +59,42 @@ USBH_HubCancelWakeIrp(IN PUSBHUB_FDO_EXTENSION HubExtension,
 
 VOID
 NTAPI
+USBH_PdoWaitWakeCancelRoutine(IN PDEVICE_OBJECT DeviceObject,
+                              IN PIRP Irp)
+{
+    PUSBHUB_PORT_PDO_EXTENSION PortExtension;
+    PUSBHUB_FDO_EXTENSION HubExtension;
+    BOOLEAN CompleteIrp = FALSE;
+
+    PortExtension = DeviceObject->DeviceExtension;
+    HubExtension = PortExtension->HubExtension;
+
+    if (PortExtension->PdoWaitWakeIrp == Irp)
+    {
+        PortExtension->PdoWaitWakeIrp = NULL;
+        PortExtension->PortPdoFlags &= ~USBHUB_PDO_FLAG_WAIT_WAKE;
+        CompleteIrp = TRUE;
+    }
+
+    IoReleaseCancelSpinLock(Irp->CancelIrql);
+
+    if (CompleteIrp)
+    {
+        if (HubExtension)
+        {
+            USBH_CompletePowerIrp(HubExtension, Irp, STATUS_CANCELLED);
+        }
+        else
+        {
+            PoStartNextPowerIrp(Irp);
+            Irp->IoStatus.Status = STATUS_CANCELLED;
+            IoCompleteRequest(Irp, IO_NO_INCREMENT);
+        }
+    }
+}
+
+VOID
+NTAPI
 USBH_HubESDRecoverySetD3Completion(IN PDEVICE_OBJECT DeviceObject,
                                    IN UCHAR MinorFunction,
                                    IN POWER_STATE PowerState,
@@ -188,8 +224,18 @@ USBH_HubQueuePortWakeIrps(IN PUSBHUB_FDO_EXTENSION HubExtension,
 
             if (WakeIrp)
             {
-                DPRINT1("USBH_HubQueuePortWakeIrps: UNIMPLEMENTED. FIXME\n");
-                DbgBreakPoint();
+                PortExtension->PortPdoFlags &= ~USBHUB_PDO_FLAG_WAIT_WAKE;
+
+                if (IoSetCancelRoutine(WakeIrp, NULL))
+                {
+                    InsertTailList(ListIrps, &WakeIrp->Tail.Overlay.ListEntry);
+                }
+                else if (!InterlockedDecrement(&HubExtension->PendingRequestCount))
+                {
+                    KeSetEvent(&HubExtension->PendingRequestEvent,
+                               EVENT_INCREMENT,
+                               FALSE);
+                }
             }
         }
     }
@@ -203,12 +249,17 @@ USBH_HubCompleteQueuedPortWakeIrps(IN PUSBHUB_FDO_EXTENSION HubExtension,
                                    IN PLIST_ENTRY ListIrps,
                                    IN NTSTATUS NtStatus)
 {
+    PLIST_ENTRY Entry;
+    PIRP WakeIrp;
+
     DPRINT("USBH_HubCompleteQueuedPortWakeIrps ... \n");
 
     while (!IsListEmpty(ListIrps))
     {
-        DPRINT1("USBH_HubCompleteQueuedPortWakeIrps: UNIMPLEMENTED. FIXME\n");
-        DbgBreakPoint();
+        Entry = RemoveHeadList(ListIrps);
+        WakeIrp = CONTAINING_RECORD(Entry, IRP, Tail.Overlay.ListEntry);
+
+        USBH_CompletePowerIrp(HubExtension, WakeIrp, NtStatus);
     }
 }
 
@@ -240,12 +291,24 @@ USBH_FdoPoRequestD0Completion(IN PDEVICE_OBJECT DeviceObject,
                               IN PIO_STATUS_BLOCK IoStatus)
 {
     PUSBHUB_FDO_EXTENSION HubExtension;
+    NTSTATUS Status;
+
+    UNREFERENCED_PARAMETER(DeviceObject);
+    UNREFERENCED_PARAMETER(MinorFunction);
+    UNREFERENCED_PARAMETER(PowerState);
 
     DPRINT("USBH_FdoPoRequestD0Completion ... \n");
 
     HubExtension = Context;
+    Status = IoStatus ? IoStatus->Status : STATUS_UNSUCCESSFUL;
 
-    USBH_HubCompletePortWakeIrps(HubExtension, STATUS_SUCCESS);
+    if (!NT_SUCCESS(Status))
+    {
+        DPRINT1("USBH_FdoPoRequestD0Completion: D0 request failed - %lx\n",
+                Status);
+    }
+
+    USBH_HubCompletePortWakeIrps(HubExtension, Status);
 
     HubExtension->HubFlags &= ~USBHUB_FDO_FLAG_WAKEUP_START;
 
@@ -262,8 +325,18 @@ NTAPI
 USBH_CompletePortWakeIrpsWorker(IN PUSBHUB_FDO_EXTENSION HubExtension,
                                 IN PVOID Context)
 {
-    DPRINT1("USBH_CompletePortWakeIrpsWorker: UNIMPLEMENTED. FIXME\n");
-    DbgBreakPoint();
+    NTSTATUS Status;
+
+    if (Context)
+    {
+        Status = *(PNTSTATUS)Context;
+    }
+    else
+    {
+        Status = STATUS_CANCELLED;
+    }
+
+    USBH_HubCompletePortWakeIrps(HubExtension, Status);
 }
 
 NTSTATUS
@@ -306,8 +379,9 @@ USBH_FdoWWIrpIoCompletion(IN PDEVICE_OBJECT DeviceObject,
 
     if (!NT_SUCCESS(Status))
     {
-        DPRINT1("USBH_FdoWWIrpIoCompletion: DbgBreakPoint() \n");
-        DbgBreakPoint();
+        DPRINT1("USBH_FdoWWIrpIoCompletion: wait-wake failed - %lx\n",
+                Status);
+        USBH_HubCompletePortWakeIrps(HubExtension, Status);
     }
     else
     {
@@ -385,19 +459,7 @@ USBH_PowerIrpCompletion(IN PDEVICE_OBJECT DeviceObject,
 
         DPRINT("USBH_PowerIrpCompletion: OldDeviceState - %x\n", OldDeviceState);
 
-        if (HubExtension->HubFlags & USBHUB_FDO_FLAG_HIBERNATE_STATE)
-        {
-            DPRINT1("USBH_PowerIrpCompletion: USBHUB_FDO_FLAG_HIBERNATE_STATE. FIXME\n");
-            DbgBreakPoint();
-        }
-
         HubExtension->HubFlags &= ~USBHUB_FDO_FLAG_HIBERNATE_STATE;
-
-        if (OldDeviceState == PowerDeviceD3)
-        {
-            DPRINT1("USBH_PowerIrpCompletion: PowerDeviceD3. FIXME\n");
-            DbgBreakPoint();
-        }
 
         if (!(HubExtension->HubFlags & USBHUB_FDO_FLAG_DEVICE_STOPPED) &&
             HubExtension->HubFlags & USBHUB_FDO_FLAG_DO_ENUMERATION)
@@ -634,8 +696,10 @@ USBH_FdoPower(IN PUSBHUB_FDO_EXTENSION HubExtension,
 
                     default:
                         DPRINT1("USBH_FdoPower: Unsupported PowerState.DeviceState\n");
-                        DbgBreakPoint();
-                        break;
+                        PoStartNextPowerIrp(Irp);
+                        Irp->IoStatus.Status = STATUS_INVALID_PARAMETER;
+                        IoCompleteRequest(Irp, IO_NO_INCREMENT);
+                        return STATUS_INVALID_PARAMETER;
                 }
             }
             else
@@ -759,6 +823,9 @@ USBH_PdoPower(IN PUSBHUB_PORT_PDO_EXTENSION PortExtension,
               IN UCHAR Minor)
 {
     NTSTATUS Status = Irp->IoStatus.Status;
+    PUSBHUB_FDO_EXTENSION HubExtension;
+    BOOLEAN SubmitHubWake = FALSE;
+    KIRQL OldIrql;
 
     DPRINT_PWR("USBH_FdoPower: PortExtension - %p, Irp - %p, Minor - %X\n",
                PortExtension,
@@ -769,8 +836,64 @@ USBH_PdoPower(IN PUSBHUB_PORT_PDO_EXTENSION PortExtension,
     {
       case IRP_MN_WAIT_WAKE:
           DPRINT_PWR("USBHUB_PdoPower: IRP_MN_WAIT_WAKE\n");
-          PoStartNextPowerIrp(Irp);
-          break;
+
+          HubExtension = PortExtension->HubExtension;
+          if (!HubExtension ||
+              !(HubExtension->HubFlags & USBHUB_FDO_FLAG_DEVICE_STARTED))
+          {
+              Status = STATUS_DELETE_PENDING;
+              PoStartNextPowerIrp(Irp);
+              break;
+          }
+
+          if (PortExtension->Capabilities.DeviceWake == PowerDeviceUnspecified)
+          {
+              Status = STATUS_NOT_SUPPORTED;
+              PoStartNextPowerIrp(Irp);
+              break;
+          }
+
+          IoAcquireCancelSpinLock(&OldIrql);
+
+          if (PortExtension->PdoWaitWakeIrp)
+          {
+              Status = STATUS_DEVICE_BUSY;
+              IoReleaseCancelSpinLock(OldIrql);
+              PoStartNextPowerIrp(Irp);
+              break;
+          }
+
+          if (Irp->Cancel)
+          {
+              Status = STATUS_CANCELLED;
+              IoReleaseCancelSpinLock(OldIrql);
+              PoStartNextPowerIrp(Irp);
+              break;
+          }
+
+          IoMarkIrpPending(Irp);
+          IoSetCancelRoutine(Irp, USBH_PdoWaitWakeCancelRoutine);
+
+          PortExtension->PdoWaitWakeIrp = Irp;
+          PortExtension->PortPdoFlags |= USBHUB_PDO_FLAG_WAIT_WAKE;
+          InterlockedIncrement(&HubExtension->PendingRequestCount);
+
+          if (!(HubExtension->HubFlags & USBHUB_FDO_FLAG_PENDING_WAKE_IRP))
+              SubmitHubWake = TRUE;
+
+          IoReleaseCancelSpinLock(OldIrql);
+
+          if (SubmitHubWake)
+          {
+              Status = USBH_FdoSubmitWaitWakeIrp(HubExtension);
+              if (!NT_SUCCESS(Status) && Status != STATUS_PENDING)
+              {
+                  USBH_HubCompletePortWakeIrps(HubExtension, Status);
+                  return Status;
+              }
+          }
+
+          return STATUS_PENDING;
 
       case IRP_MN_POWER_SEQUENCE:
           DPRINT_PWR("USBHUB_PdoPower: IRP_MN_POWER_SEQUENCE\n");

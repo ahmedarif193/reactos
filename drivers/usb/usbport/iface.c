@@ -1261,9 +1261,7 @@ USBHI_RootHubInitNotification(IN PVOID BusContext,
                 CallbackContext,
                 PdoDevice,
                 USBPORT_RETURN_ADDRESS());
-#if DBG
-        DbgBreakPoint();
-#endif
+        DPRINT1("USBDI_RegisterRootHubInitCallback: invalid callback\n");
         return STATUS_INVALID_PARAMETER;
     }
 
@@ -1464,8 +1462,8 @@ USB_BUSIFFN
 USBDI_SubmitIsoOutUrb(IN PVOID BusContext,
                       IN PURB Urb)
 {
-    DPRINT1("USBDI_SubmitIsoOutUrb: UNIMPLEMENTED. FIXME.\n");
-    return STATUS_SUCCESS;
+    DPRINT1("USBDI_SubmitIsoOutUrb: isochronous OUT not supported\n");
+    return USBPORT_USBDStatusToNtStatus(Urb, USBD_STATUS_NOT_SUPPORTED);
 }
 
 NTSTATUS

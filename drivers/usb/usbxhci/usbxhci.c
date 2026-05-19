@@ -38,6 +38,7 @@
 
 #define XHCI_COMMAND_TIMEOUT_MS 100
 #define XHCI_COMMAND_POLL_INTERVAL_US 50
+#define XHCI_ENDPOINT_INTERVAL_MAX 15
 #ifndef VERBOSE_SHARED_IRQ
 #define VERBOSE_SHARED_IRQ 0
 #endif
@@ -54,6 +55,14 @@
 #define XHCI_IC_CONTEXT_LENGTH(Ext) ((((SIZE_T)(Ext)->ContextSize * XHCI_IC_CONTEXT_COUNT) + 63) & ~0x3F)
 #define XHCI_COMMON_BUFFER_RESERVE_SLOTS      96
 #define XHCI_COMMON_BUFFER_RESERVE_SCRATCHPADS 64
+
+struct _XHCI_ISO_PACKET_CONTEXT {
+    ULONGLONG FirstTrbPointer;
+    ULONGLONG LastTrbPointer;
+    ULONG Length;
+    BOOLEAN Completed;
+    UCHAR Reserved[3];
+};
 
 #ifndef PCI_ENABLE_MEMORY_SPACE
 #define PCI_ENABLE_MEMORY_SPACE 0x0002
@@ -177,8 +186,6 @@ static ULONG g_XhciTraceMask;
 #define XHCI_DBG(Mask, ...) do { UNREFERENCED_PARAMETER(Mask); } while (0)
 #endif
 
-/* TODO: fill out real interfaces; everything below is placeholder */
-
 static MPSTATUS NTAPI XHCI_OpenEndpoint(PVOID MiniPortExtension, PUSBPORT_ENDPOINT_PROPERTIES EndpointProperties, PVOID Endpoint);
 static MPSTATUS XHCI_PerformEndpointOpen(PXHCI_EXTENSION Extension, PXHCI_ENDPOINT XhciEndpoint, PUSBPORT_ENDPOINT_PROPERTIES EndpointProperties);
 static MPSTATUS XHCI_DeferEndpointOpen(PXHCI_EXTENSION Extension, PXHCI_ENDPOINT Endpoint, PUSBPORT_ENDPOINT_PROPERTIES EndpointProperties);
@@ -221,7 +228,7 @@ static BOOLEAN XHCI_WaitForRegisterBits(volatile ULONG *Reg, ULONG Mask, BOOLEAN
 static VOID XHCI_HandleControllerError(PXHCI_EXTENSION Extension, ULONG PendingStatus);
 static VOID XHCI_HandleCommandTimeout(PXHCI_EXTENSION Extension, PXHCI_COMMAND_CONTEXT CommandContext);
 static VOID XHCI_GetRegistryParameters(PXHCI_EXTENSION Extension);
-static VOID XHCI_ValidateContextLayout(PXHCI_EXTENSION Extension);
+static BOOLEAN XHCI_ValidateContextLayout(PXHCI_EXTENSION Extension);
 static VOID NTAPI XHCI_RH_GetRootHubData(PVOID MiniPortExtension, PVOID RootHubData);
 static MPSTATUS NTAPI XHCI_RH_GetStatus(PVOID MiniPortExtension, PUSHORT Status);
 static MPSTATUS NTAPI XHCI_RH_GetPortStatus(PVOID MiniPortExtension, USHORT Port, PUSB_PORT_STATUS_AND_CHANGE PortStatus);
@@ -253,6 +260,19 @@ static VOID XHCI_ArmTransferPoll(PXHCI_EXTENSION Extension, PXHCI_TRANSFER Trans
 static VOID XHCI_DisarmTransferPoll(PXHCI_EXTENSION Extension, PXHCI_TRANSFER Transfer);
 static VOID XHCI_QueueEp0StallReset(PXHCI_EXTENSION Extension, PXHCI_ENDPOINT Endpoint);
 static MPSTATUS XHCI_WaitForEp0StallReset(PXHCI_EXTENSION Extension, PXHCI_ENDPOINT Endpoint);
+static VOID XHCI_InitEndpointTransferState(PXHCI_ENDPOINT Endpoint);
+static BOOLEAN XHCI_TryBeginEndpointReset(PXHCI_ENDPOINT Endpoint);
+static VOID XHCI_EndEndpointReset(PXHCI_ENDPOINT Endpoint);
+static BOOLEAN XHCI_HasActiveTransfersLocked(PXHCI_ENDPOINT Endpoint);
+static PXHCI_TRANSFER XHCI_GetActiveTransferHeadLocked(PXHCI_ENDPOINT Endpoint);
+static BOOLEAN XHCI_IsTransferActiveLocked(PXHCI_ENDPOINT Endpoint, PXHCI_TRANSFER Transfer);
+static VOID XHCI_InsertActiveTransferLocked(PXHCI_ENDPOINT Endpoint, PXHCI_TRANSFER Transfer);
+static VOID XHCI_RemoveActiveTransferLocked(PXHCI_ENDPOINT Endpoint, PXHCI_TRANSFER Transfer);
+static VOID XHCI_ClearActiveTransfersLocked(PXHCI_ENDPOINT Endpoint);
+static VOID XHCI_InitTransferForSubmit(PXHCI_TRANSFER Transfer);
+static PXHCI_TRANSFER XHCI_FindActiveTransferByEventLocked(PXHCI_ENDPOINT Endpoint,
+                                                           ULONGLONG TrbPointer,
+                                                           ULONG CompletionCode);
 static VOID XHCI_TraceCommandRingState(PXHCI_EXTENSION Extension,
                                        PCSTR Reason,
                                        ULONGLONG CommandPointer,
@@ -397,8 +417,8 @@ static MPSTATUS NTAPI XHCI_ReopenEndpoint(PVOID MiniPortExtension,
 static MPSTATUS NTAPI XHCI_SubmitIsoTransfer(PVOID MiniPortExtension,
                                              PVOID EndpointHandle,
                                              PUSBPORT_TRANSFER_PARAMETERS TransferParameters,
-                                             PVOID Param4,
-                                             PVOID Param5);
+                                             PVOID TransferHandle,
+                                             PUSBPORT_ISO_BLOCK IsoBlock);
 static VOID NTAPI XHCI_AbortTransfer(PVOID MiniPortExtension,
                                      PVOID EndpointHandle,
                                      PVOID TransferHandle,
@@ -654,6 +674,11 @@ static MPSTATUS XHCI_AllocateTransferRing(PXHCI_EXTENSION Extension,
 static VOID XHCI_FreeTransferRing(PXHCI_RING Ring);
 static UCHAR XHCI_EndpointIdFromProperties(PUSBPORT_ENDPOINT_PROPERTIES EndpointProperties);
 static ULONG XHCI_GetEndpointTypeFromProperties(PUSBPORT_ENDPOINT_PROPERTIES EndpointProperties);
+static ULONG XHCI_CalculateEndpointInterval(PUSBPORT_ENDPOINT_PROPERTIES EndpointProperties,
+                                            ULONG EndpointType);
+static ULONG XHCI_CalculateAverageTrbLength(PUSBPORT_ENDPOINT_PROPERTIES EndpointProperties,
+                                            ULONG EndpointType,
+                                            ULONG MaxPacketSize);
 static MEMORY_CACHING_TYPE XHCI_GetDmaCacheType(PXHCI_EXTENSION Extension);
 static PXHCI_DEVICE_SLOT XHCI_FindSlotByAddress(PXHCI_EXTENSION Extension, USHORT DeviceAddress);
 static PXHCI_DEVICE_SLOT XHCI_FindSlotByPort(PXHCI_EXTENSION Extension, USHORT PortNumber);
@@ -688,6 +713,7 @@ static VOID XHCI_InitDeviceAddressMap(PXHCI_EXTENSION Extension);
 static VOID XHCI_HandleEnumerationTransfer(PXHCI_EXTENSION Extension,
                                            PXHCI_ENDPOINT Endpoint,
                                            PXHCI_TRANSFER Transfer);
+static MPSTATUS NTAPI XHCI_MpResetDevice(PVOID MiniPortExtension, USHORT PortNumber);
 static MPSTATUS XHCI_ResetDeviceOnPort(PXHCI_EXTENSION Extension, USHORT PortNumber);
 static VOID XHCI_DetectHardwareQuirks(PXHCI_EXTENSION Extension);
 static ULONG XHCI_FindExtendedCapability(PXHCI_EXTENSION Extension, UCHAR CapabilityId);
@@ -730,6 +756,12 @@ XHCI_SubmitSgTransfer(
     _Inout_ PXHCI_TRANSFER Transfer,
     _In_ ULONG TrbType,
     _In_ BOOLEAN IsIsochronous);
+static MPSTATUS
+XHCI_SubmitIsochronousTransfer(
+    _In_ PXHCI_EXTENSION Extension,
+    _Inout_ PXHCI_ENDPOINT Endpoint,
+    _Inout_ PXHCI_TRANSFER Transfer,
+    _Inout_ PUSBPORT_ISO_BLOCK IsoBlock);
 static MPSTATUS XHCI_UpdateSlotTtInfo(_In_ PXHCI_EXTENSION Extension,
                                       _Inout_ PXHCI_DEVICE_SLOT Slot);
 static VOID NTAPI XHCI_TtUpdateWorker(_In_ PVOID Context);
@@ -768,35 +800,12 @@ DriverEntry(
                                   USB_MINIPORT_FLAGS_CLOSE_AT_PASSIVE;
 
     /*
-     * SuperSpeed Periodic Bandwidth Budgeting
-     *
-     * Per xHCI spec, SuperSpeed uses 125us microframes (same as USB 2.0 high-speed).
-     * However, SuperSpeed has vastly higher raw bandwidth:
-     * - USB 2.0 High-Speed: 480 Mbps = 400000 bits/ms (1000us frame)
-     * - USB 3.0 SuperSpeed: 5 Gbps = 5000000 bits/ms
-     * - USB 3.1 SuperSpeed+: 10 Gbps = 10000000 bits/ms
-     *
-     * For periodic bandwidth allocation, typical policy reserves 80% for
-     * periodic transfers, leaving 20% for control/bulk.
-     *
-     * USBPORT's scheduler uses MiniPortBusBandwidth to track periodic
-     * bandwidth consumption. We report a USB3-appropriate value that
-     * reflects the higher bandwidth capacity while remaining compatible
-     * with USBPORT's existing scheduling logic.
-     *
-     * Calculation for USB 3.0:
-     * - 5 Gbps raw = 5,000,000,000 bits/sec
-     * - Per microframe (125us): 5,000,000,000 * 0.000125 = 625,000 bits
-     * - 80% for periodic: 500,000 bits per microframe
-     * - Expressed in USBPORT units (bits per 1ms): 500,000 * 8 = 4,000,000
-     *
-     * For compatibility with USBPORT's existing allocator that expects
-     * USB 2.0-scale values, we use a scaled value that allows proper
-     * scheduling while not overflowing internal counters.
+     * USBPORT's legacy periodic scheduler is used only for non-SuperSpeed
+     * endpoints; SuperSpeed endpoints are accepted without consuming this
+     * frame-based pool. Advertise the USB 2.0 budget so high/full/low-speed
+     * periodic endpoints behind xHCI are checked against the right units.
      */
-#define XHCI_SUPERSPEED_BUS_BANDWIDTH   4000000  /* USB 3.0: ~4M bits/ms (80% of 5 Gbps) */
-
-    XhciRegPacket.MiniPortBusBandwidth = XHCI_SUPERSPEED_BUS_BANDWIDTH;
+    XhciRegPacket.MiniPortBusBandwidth = TOTAL_USB20_BUS_BANDWIDTH;
 
     XhciRegPacket.MiniPortExtensionSize = sizeof(XHCI_EXTENSION);
     XhciRegPacket.MiniPortEndpointSize = sizeof(XHCI_ENDPOINT);
@@ -851,6 +860,7 @@ DriverEntry(
     XhciRegPacket.GetEndpointStatus = XHCI_GetEndpointStatus;
     XhciRegPacket.SetEndpointStatus = XHCI_SetEndpointStatus;
     XhciRegPacket.ResetController = XHCI_MpResetController;
+    XhciRegPacket.ResetDevice = XHCI_MpResetDevice;
     XhciRegPacket.StartSendOnePacket = XHCI_StartSendOnePacket;
     XhciRegPacket.EndSendOnePacket = XHCI_EndSendOnePacket;
     XhciRegPacket.PassThru = XHCI_PassThru;
@@ -1801,6 +1811,446 @@ XHCI_SelectDoorbellStreamId(
     return Transfer->StreamId;
 }
 
+static
+VOID
+XHCI_InitEndpointTransferState(
+    _Inout_ PXHCI_ENDPOINT Endpoint)
+{
+    if (!Endpoint)
+        return;
+
+    Endpoint->ActiveTransfer = NULL;
+    InitializeListHead(&Endpoint->ActiveTransferList);
+    InterlockedExchange(&Endpoint->ResetInProgress, 0);
+}
+
+static
+BOOLEAN
+XHCI_TryBeginEndpointReset(
+    _Inout_ PXHCI_ENDPOINT Endpoint)
+{
+    if (!Endpoint)
+        return FALSE;
+
+    return InterlockedCompareExchange(&Endpoint->ResetInProgress, 1, 0) == 0;
+}
+
+static
+VOID
+XHCI_EndEndpointReset(
+    _Inout_ PXHCI_ENDPOINT Endpoint)
+{
+    if (!Endpoint)
+        return;
+
+    InterlockedExchange(&Endpoint->ResetInProgress, 0);
+}
+
+static
+BOOLEAN
+XHCI_EndpointActiveListReady(
+    _In_ PXHCI_ENDPOINT Endpoint)
+{
+    return Endpoint &&
+           Endpoint->ActiveTransferList.Flink != NULL &&
+           Endpoint->ActiveTransferList.Blink != NULL;
+}
+
+static
+BOOLEAN
+XHCI_TrbPointerInRange(
+    _In_ ULONGLONG First,
+    _In_ ULONGLONG Last,
+    _In_ ULONGLONG TrbPointer)
+{
+    if (First == 0 || Last == 0)
+        return FALSE;
+
+    if (First <= Last)
+        return TrbPointer >= First && TrbPointer <= Last;
+
+    return TrbPointer >= First || TrbPointer <= Last;
+}
+
+static
+BOOLEAN
+XHCI_TransferPointerInRange(
+    _In_ PXHCI_TRANSFER Transfer,
+    _In_ ULONGLONG TrbPointer)
+{
+    if (!Transfer)
+        return FALSE;
+
+    return XHCI_TrbPointerInRange(Transfer->TdFirstTrbPointer,
+                                  Transfer->CompletionTrbPointer,
+                                  TrbPointer);
+}
+
+static
+PXHCI_ISO_PACKET_CONTEXT
+XHCI_FindIsoPacketContextByEvent(
+    _In_ PXHCI_TRANSFER Transfer,
+    _In_ ULONGLONG TrbPointer,
+    _Out_opt_ PULONG PacketIndex)
+{
+    ULONG Index;
+
+    if (PacketIndex)
+        *PacketIndex = 0;
+
+    if (!Transfer || !Transfer->IsoPacketContext)
+        return NULL;
+
+    for (Index = 0; Index < Transfer->IsoPacketCount; Index++)
+    {
+        PXHCI_ISO_PACKET_CONTEXT PacketContext =
+            &Transfer->IsoPacketContext[Index];
+
+        if (PacketContext->Completed)
+            continue;
+
+        if (PacketContext->LastTrbPointer == TrbPointer)
+        {
+            if (PacketIndex)
+                *PacketIndex = Index;
+            return PacketContext;
+        }
+    }
+
+    for (Index = 0; Index < Transfer->IsoPacketCount; Index++)
+    {
+        PXHCI_ISO_PACKET_CONTEXT PacketContext =
+            &Transfer->IsoPacketContext[Index];
+
+        if (PacketContext->Completed)
+            continue;
+
+        if (XHCI_TrbPointerInRange(PacketContext->FirstTrbPointer,
+                                   PacketContext->LastTrbPointer,
+                                   TrbPointer))
+        {
+            if (PacketIndex)
+                *PacketIndex = Index;
+            return PacketContext;
+        }
+    }
+
+    return NULL;
+}
+
+static
+BOOLEAN
+XHCI_IsoTransferPointerMatches(
+    _In_ PXHCI_TRANSFER Transfer,
+    _In_ ULONGLONG TrbPointer)
+{
+    return XHCI_FindIsoPacketContextByEvent(Transfer, TrbPointer, NULL) != NULL;
+}
+
+static
+BOOLEAN
+XHCI_HasActiveTransfersLocked(
+    _In_ PXHCI_ENDPOINT Endpoint)
+{
+    if (!Endpoint)
+        return FALSE;
+
+    if (XHCI_EndpointActiveListReady(Endpoint))
+        return !IsListEmpty(&Endpoint->ActiveTransferList);
+
+    return Endpoint->ActiveTransfer != NULL;
+}
+
+static
+PXHCI_TRANSFER
+XHCI_GetActiveTransferHeadLocked(
+    _In_ PXHCI_ENDPOINT Endpoint)
+{
+    PLIST_ENTRY Entry;
+
+    if (!Endpoint)
+        return NULL;
+
+    if (XHCI_EndpointActiveListReady(Endpoint))
+    {
+        if (IsListEmpty(&Endpoint->ActiveTransferList))
+            return NULL;
+
+        Entry = Endpoint->ActiveTransferList.Flink;
+        return CONTAINING_RECORD(Entry, XHCI_TRANSFER, EndpointListEntry);
+    }
+
+    return Endpoint->ActiveTransfer;
+}
+
+static
+VOID
+XHCI_UpdateActiveTransferHeadLocked(
+    _Inout_ PXHCI_ENDPOINT Endpoint)
+{
+    if (!Endpoint)
+        return;
+
+    Endpoint->ActiveTransfer = XHCI_GetActiveTransferHeadLocked(Endpoint);
+}
+
+static
+BOOLEAN
+XHCI_IsTransferActiveLocked(
+    _In_ PXHCI_ENDPOINT Endpoint,
+    _In_opt_ PXHCI_TRANSFER Transfer)
+{
+    PLIST_ENTRY Entry;
+
+    if (!Endpoint || !Transfer)
+        return FALSE;
+
+    if (XHCI_EndpointActiveListReady(Endpoint))
+    {
+        for (Entry = Endpoint->ActiveTransferList.Flink;
+             Entry != &Endpoint->ActiveTransferList;
+             Entry = Entry->Flink)
+        {
+            if (CONTAINING_RECORD(Entry, XHCI_TRANSFER, EndpointListEntry) == Transfer)
+                return TRUE;
+        }
+
+        return FALSE;
+    }
+
+    return Endpoint->ActiveTransfer == Transfer;
+}
+
+static
+VOID
+XHCI_InsertActiveTransferLocked(
+    _Inout_ PXHCI_ENDPOINT Endpoint,
+    _Inout_ PXHCI_TRANSFER Transfer)
+{
+    if (!Endpoint || !Transfer)
+        return;
+
+    if (!XHCI_EndpointActiveListReady(Endpoint))
+        InitializeListHead(&Endpoint->ActiveTransferList);
+
+    if (XHCI_IsTransferActiveLocked(Endpoint, Transfer))
+        XHCI_RemoveActiveTransferLocked(Endpoint, Transfer);
+
+    InsertTailList(&Endpoint->ActiveTransferList, &Transfer->EndpointListEntry);
+    XHCI_UpdateActiveTransferHeadLocked(Endpoint);
+}
+
+static
+VOID
+XHCI_RemoveActiveTransferLocked(
+    _Inout_ PXHCI_ENDPOINT Endpoint,
+    _Inout_ PXHCI_TRANSFER Transfer)
+{
+    PLIST_ENTRY Entry;
+
+    if (!Endpoint || !Transfer)
+        return;
+
+    if (XHCI_EndpointActiveListReady(Endpoint))
+    {
+        for (Entry = Endpoint->ActiveTransferList.Flink;
+             Entry != &Endpoint->ActiveTransferList;
+             Entry = Entry->Flink)
+        {
+            if (CONTAINING_RECORD(Entry, XHCI_TRANSFER, EndpointListEntry) == Transfer)
+            {
+                RemoveEntryList(Entry);
+                InitializeListHead(&Transfer->EndpointListEntry);
+                XHCI_UpdateActiveTransferHeadLocked(Endpoint);
+                return;
+            }
+        }
+    }
+
+    if (Endpoint->ActiveTransfer == Transfer)
+        Endpoint->ActiveTransfer = NULL;
+}
+
+static
+VOID
+XHCI_InitTransferForSubmit(
+    _Inout_ PXHCI_TRANSFER Transfer)
+{
+    if (!Transfer)
+        return;
+
+    RtlZeroMemory(Transfer, sizeof(*Transfer));
+    InitializeListHead(&Transfer->ListEntry);
+    InitializeListHead(&Transfer->EndpointListEntry);
+}
+
+static
+VOID
+XHCI_FreeIsoTransferContext(
+    _Inout_ PXHCI_TRANSFER Transfer)
+{
+    if (!Transfer || !Transfer->IsoPacketContext)
+        return;
+
+    ExFreePoolWithTag(Transfer->IsoPacketContext, XHCI_TAG);
+    Transfer->IsoPacketContext = NULL;
+    Transfer->IsoPacketCount = 0;
+    Transfer->IsoPacketsCompleted = 0;
+    Transfer->IsoCompletedLength = 0;
+}
+
+static
+VOID
+XHCI_ClearActiveTransfersLocked(
+    _Inout_ PXHCI_ENDPOINT Endpoint)
+{
+    if (!Endpoint)
+        return;
+
+    if (XHCI_EndpointActiveListReady(Endpoint))
+    {
+        while (!IsListEmpty(&Endpoint->ActiveTransferList))
+        {
+            PLIST_ENTRY Entry = RemoveHeadList(&Endpoint->ActiveTransferList);
+            PXHCI_TRANSFER Transfer = CONTAINING_RECORD(Entry,
+                                                        XHCI_TRANSFER,
+                                                        EndpointListEntry);
+            InitializeListHead(&Transfer->EndpointListEntry);
+            XHCI_FreeIsoTransferContext(Transfer);
+        }
+    }
+    else
+    {
+        if (Endpoint->ActiveTransfer)
+            XHCI_FreeIsoTransferContext(Endpoint->ActiveTransfer);
+
+        InitializeListHead(&Endpoint->ActiveTransferList);
+    }
+
+    Endpoint->ActiveTransfer = NULL;
+}
+
+static
+PXHCI_TRANSFER
+XHCI_FindActiveTransferByEventLocked(
+    _In_ PXHCI_ENDPOINT Endpoint,
+    _In_ ULONGLONG TrbPointer,
+    _In_ ULONG CompletionCode)
+{
+    PLIST_ENTRY Entry;
+    PXHCI_TRANSFER RangeMatch = NULL;
+
+    UNREFERENCED_PARAMETER(CompletionCode);
+
+    if (!Endpoint)
+        return NULL;
+
+    if (XHCI_EndpointActiveListReady(Endpoint))
+    {
+        for (Entry = Endpoint->ActiveTransferList.Flink;
+             Entry != &Endpoint->ActiveTransferList;
+             Entry = Entry->Flink)
+        {
+            PXHCI_TRANSFER Transfer = CONTAINING_RECORD(Entry,
+                                                        XHCI_TRANSFER,
+                                                        EndpointListEntry);
+
+            if (Transfer->IsIsochronous)
+            {
+                if (XHCI_IsoTransferPointerMatches(Transfer, TrbPointer))
+                    return Transfer;
+
+                continue;
+            }
+
+            if (Transfer->CompletionTrbPointer == TrbPointer)
+                return Transfer;
+
+            if (!RangeMatch && XHCI_TransferPointerInRange(Transfer, TrbPointer))
+                RangeMatch = Transfer;
+        }
+
+        return RangeMatch;
+    }
+
+    if (!Endpoint->ActiveTransfer)
+        return NULL;
+
+    if (Endpoint->ActiveTransfer->IsIsochronous)
+    {
+        if (XHCI_IsoTransferPointerMatches(Endpoint->ActiveTransfer, TrbPointer))
+            return Endpoint->ActiveTransfer;
+
+        return NULL;
+    }
+
+    if (Endpoint->ActiveTransfer->CompletionTrbPointer == TrbPointer ||
+        XHCI_TransferPointerInRange(Endpoint->ActiveTransfer, TrbPointer))
+    {
+        return Endpoint->ActiveTransfer;
+    }
+
+    return NULL;
+}
+
+static
+BOOLEAN
+XHCI_RingPointerToIndex(
+    _In_ const XHCI_RING *Ring,
+    _In_ ULONGLONG TrbPointer,
+    _Out_ PULONG Index)
+{
+    ULONGLONG Base;
+    ULONGLONG Offset;
+
+    if (!Ring || !Ring->Base || !Index || Ring->TrbCount < 2)
+        return FALSE;
+
+    Base = Ring->PhysicalAddress.QuadPart;
+    if (TrbPointer < Base || TrbPointer >= Base + Ring->Length)
+        return FALSE;
+
+    Offset = TrbPointer - Base;
+    if (Offset & (sizeof(XHCI_TRB) - 1))
+        return FALSE;
+
+    *Index = (ULONG)(Offset / sizeof(XHCI_TRB));
+    return *Index < Ring->TrbCount;
+}
+
+static
+VOID
+XHCI_UpdateRingDequeueFromPointer(
+    _Inout_ PXHCI_RING Ring,
+    _In_ ULONGLONG TrbPointer)
+{
+    ULONG Index;
+
+    if (!Ring)
+        return;
+
+    if (!XHCI_RingPointerToIndex(Ring, TrbPointer, &Index))
+        return;
+
+    Index++;
+    if (Index >= Ring->TrbCount - 1)
+        Index = 0;
+
+    Ring->DequeueIndex = Index;
+}
+
+static
+VOID
+XHCI_UpdateRingDequeueFromTransfer(
+    _Inout_ PXHCI_RING Ring,
+    _In_ PXHCI_TRANSFER Transfer)
+{
+    if (!Ring || !Transfer)
+        return;
+
+    XHCI_UpdateRingDequeueFromPointer(Ring, Transfer->CompletionTrbPointer);
+}
+
 /**
  * @brief Calculate available space in a transfer ring.
  *
@@ -2497,9 +2947,7 @@ XHCI_ConfigureSlotEndpoint(
     ULONG AverageTrbLength;
     ULONGLONG DequeuePtr;
     MPSTATUS Status;
-    ULONG ResumeDoorbells = 0;
-    BOOLEAN ExpandAddFlags = FALSE;
-    ULONG ReconfigureMask = 0;
+    ULONG CompletionCode = 0;
 
     if (!Extension || !Slot || !Endpoint || EndpointId == 0)
         return MP_STATUS_ERROR;
@@ -2527,7 +2975,12 @@ XHCI_ConfigureSlotEndpoint(
     RtlZeroMemory(InputCtxBase, Slot->InputContext.Length);
 
     CtrlCtx = XHCI_GetInputControlContextVa(Extension, InputCtxBase);
-    CtrlCtx->AddContextFlags = (1 << 0) | (1 << EndpointId);
+    /*
+     * Configure only the endpoint being opened. Existing endpoint contexts
+     * remain valid in the output device context and must not be re-added,
+     * because they may be running unrelated interrupt/ISO transfers.
+     */
+    CtrlCtx->AddContextFlags = (1u << 0) | (1u << EndpointId);
     CtrlCtx->DropContextFlags = 0;
 
     ActiveSlotCtx = XHCI_GetDeviceSlotContextVa(Extension, DeviceCtxBase);
@@ -2562,27 +3015,6 @@ XHCI_ConfigureSlotEndpoint(
                                                         CopyId - 1);
             if (ActiveEpCtx && InputEpCtx)
                 RtlCopyMemory(InputEpCtx, ActiveEpCtx, Extension->ContextSize);
-        }
-    }
-
-    ExpandAddFlags = Slot->Configured &&
-                     (Slot->HighestEndpointId != 0) &&
-                     (EndpointId < Slot->HighestEndpointId);
-    if (ExpandAddFlags)
-    {
-        UCHAR Id;
-        UCHAR StartId = (UCHAR)(EndpointId + 1);
-
-        for (Id = StartId;
-             Id <= Slot->HighestEndpointId && Id <= XHCI_MAX_ENDPOINTS;
-             Id++)
-        {
-            if (Id != EndpointId && Slot->EndpointTable[Id] != NULL)
-            {
-                CtrlCtx->AddContextFlags |= (1 << Id);
-                ResumeDoorbells |= (1 << Id);
-                ReconfigureMask |= (1u << Id);
-            }
         }
     }
 
@@ -2622,38 +3054,16 @@ XHCI_ConfigureSlotEndpoint(
     Mult = (EndpointType == XHCI_ENDPOINT_TYPE_ISOCH_OUT ||
             EndpointType == XHCI_ENDPOINT_TYPE_ISOCH_IN) ?
            ((BurstSize > 0x3) ? 0x3 : BurstSize) : 0;
-    Interval = 0;
-    if (EndpointType == XHCI_ENDPOINT_TYPE_ISOCH_OUT ||
-        EndpointType == XHCI_ENDPOINT_TYPE_ISOCH_IN ||
-        EndpointType == XHCI_ENDPOINT_TYPE_INTERRUPT_OUT ||
-        EndpointType == XHCI_ENDPOINT_TYPE_INTERRUPT_IN)
+    Interval = XHCI_CalculateEndpointInterval(&Endpoint->EndpointProperties,
+                                              EndpointType);
+    if ((EndpointType == XHCI_ENDPOINT_TYPE_ISOCH_OUT ||
+         EndpointType == XHCI_ENDPOINT_TYPE_ISOCH_IN ||
+         EndpointType == XHCI_ENDPOINT_TYPE_INTERRUPT_OUT ||
+         EndpointType == XHCI_ENDPOINT_TYPE_INTERRUPT_IN) &&
+        (Endpoint->EndpointProperties.DeviceSpeed == UsbFullSpeed ||
+         Endpoint->EndpointProperties.DeviceSpeed == UsbLowSpeed))
     {
-        UCHAR Period = Endpoint->EndpointProperties.Period;
-
-        if (Period == 0)
-            Period = 1;
-
-        if (Endpoint->EndpointProperties.DeviceSpeed == UsbHighSpeed ||
-            Endpoint->EndpointProperties.DeviceSpeed == UsbSuperSpeed)
-        {
-            Interval = Period - 1;
-        }
-        else
-        {
-            ULONG Exp = 0;
-            while (Exp < 15 && ((1u << (Exp + 1)) <= Period))
-                Exp++;
-            Interval = Exp + 3;
-        }
-
-        if (Endpoint->EndpointProperties.DeviceSpeed == UsbFullSpeed ||
-            Endpoint->EndpointProperties.DeviceSpeed == UsbLowSpeed)
-        {
-            BurstSize = 0;
-        }
-
-        if (Interval > 15)
-            Interval = 15;
+        BurstSize = 0;
     }
     MaxEsitPayload = 0;
     if (EndpointType == XHCI_ENDPOINT_TYPE_ISOCH_OUT ||
@@ -2675,10 +3085,10 @@ XHCI_ConfigureSlotEndpoint(
             MaxEsitPayload = 0xFFFF;
     }
 
-    AverageTrbLength = Endpoint->EndpointProperties.MaxTransferSize ?
-                       (Endpoint->EndpointProperties.MaxTransferSize & 0xFFFF) :
-                       MaxPacketSize;
-    if (AverageTrbLength == 0) AverageTrbLength = MaxPacketSize;
+    AverageTrbLength =
+        XHCI_CalculateAverageTrbLength(&Endpoint->EndpointProperties,
+                                       EndpointType,
+                                       MaxPacketSize);
 
     if (!Endpoint->TransferRing.Base ||
         Endpoint->TransferRing.PhysicalAddress.QuadPart == 0)
@@ -2733,147 +3143,8 @@ XHCI_ConfigureSlotEndpoint(
                 Slot->SlotId, EndpointId, Endpoint->MaxStreamId, MaxPStreams);
     }
 
-    if (ExpandAddFlags && ReconfigureMask != 0)
-    {
-        UCHAR Id;
-        for (Id = 2; Id <= Slot->HighestEndpointId && Id <= XHCI_MAX_ENDPOINTS; Id++)
-        {
-            PXHCI_ENDPOINT ExistingEndpoint;
-            ULONG ExistingEndpointType;
-            ULONGLONG ExistingDequeuePtr;
-            ULONG ExistingMaxPacketSize;
-            ULONG ExistingBurstSize;
-            ULONG ExistingMult;
-            ULONG ExistingInterval;
-            ULONG ExistingMaxEsitPayload;
-            ULONG ExistingAverageTrbLength;
-
-            if ((ReconfigureMask & (1u << Id)) == 0)
-                continue;
-
-            ExistingEndpoint = Slot->EndpointTable[Id];
-            if (!ExistingEndpoint)
-                continue;
-
-            ExistingEndpointType =
-                XHCI_GetEndpointTypeFromProperties(&ExistingEndpoint->EndpointProperties);
-            if (ExistingEndpointType == XHCI_ENDPOINT_TYPE_INVALID)
-                continue;
-
-            EpCtx = XHCI_GetInputEndpointContextVa(Extension, InputCtxBase, Id - 1);
-            if (!EpCtx)
-                continue;
-
-            RtlZeroMemory(EpCtx, Extension->ContextSize);
-
-            ExistingMaxPacketSize = ExistingEndpoint->EndpointProperties.MaxPacketSize ?
-                                    ExistingEndpoint->EndpointProperties.MaxPacketSize : 8;
-            ExistingBurstSize =
-                (ExistingEndpoint->EndpointProperties.TransactionPerMicroframe > 0) ?
-                (ExistingEndpoint->EndpointProperties.TransactionPerMicroframe - 1) : 0;
-            if (ExistingBurstSize > 0xF)
-                ExistingBurstSize = 0xF;
-
-            ExistingMult = (ExistingEndpointType == XHCI_ENDPOINT_TYPE_ISOCH_OUT ||
-                            ExistingEndpointType == XHCI_ENDPOINT_TYPE_ISOCH_IN) ?
-                           ((ExistingBurstSize > 0x3) ? 0x3 : ExistingBurstSize) : 0;
-
-            ExistingInterval = 0;
-            if (ExistingEndpointType == XHCI_ENDPOINT_TYPE_ISOCH_OUT ||
-                ExistingEndpointType == XHCI_ENDPOINT_TYPE_ISOCH_IN ||
-                ExistingEndpointType == XHCI_ENDPOINT_TYPE_INTERRUPT_OUT ||
-                ExistingEndpointType == XHCI_ENDPOINT_TYPE_INTERRUPT_IN)
-            {
-                UCHAR Period = ExistingEndpoint->EndpointProperties.Period;
-
-                if (Period == 0)
-                    Period = 1;
-
-                if (ExistingEndpoint->EndpointProperties.DeviceSpeed == UsbHighSpeed ||
-                    ExistingEndpoint->EndpointProperties.DeviceSpeed == UsbSuperSpeed)
-                {
-                    ExistingInterval = Period - 1;
-                }
-                else
-                {
-                    ULONG Exp = 0;
-                    while (Exp < 15 && ((1u << (Exp + 1)) <= Period))
-                        Exp++;
-                    ExistingInterval = Exp + 3;
-                }
-
-                if (ExistingEndpoint->EndpointProperties.DeviceSpeed == UsbFullSpeed ||
-                    ExistingEndpoint->EndpointProperties.DeviceSpeed == UsbLowSpeed)
-                {
-                    ExistingBurstSize = 0;
-                }
-
-                if (ExistingInterval > 15)
-                    ExistingInterval = 15;
-            }
-
-            ExistingMaxEsitPayload = 0;
-            if (ExistingEndpointType == XHCI_ENDPOINT_TYPE_ISOCH_OUT ||
-                ExistingEndpointType == XHCI_ENDPOINT_TYPE_ISOCH_IN ||
-                ExistingEndpointType == XHCI_ENDPOINT_TYPE_INTERRUPT_OUT ||
-                ExistingEndpointType == XHCI_ENDPOINT_TYPE_INTERRUPT_IN)
-            {
-                ExistingMaxEsitPayload = ExistingEndpoint->EndpointProperties.TotalMaxPacketSize;
-                if (ExistingMaxEsitPayload == 0)
-                {
-                    ULONG Transactions = ExistingEndpoint->EndpointProperties.TransactionPerMicroframe;
-                    if (Transactions == 0)
-                        Transactions = 1;
-
-                    ExistingMaxEsitPayload = ExistingMaxPacketSize * Transactions;
-                }
-
-                if (ExistingMaxEsitPayload > 0xFFFF)
-                    ExistingMaxEsitPayload = 0xFFFF;
-            }
-
-            ExistingAverageTrbLength = ExistingEndpoint->EndpointProperties.MaxTransferSize ?
-                                       (ExistingEndpoint->EndpointProperties.MaxTransferSize & 0xFFFF) :
-                                       ExistingMaxPacketSize;
-            if (ExistingAverageTrbLength == 0)
-                ExistingAverageTrbLength = ExistingMaxPacketSize;
-
-            if (!ExistingEndpoint->TransferRing.Base ||
-                ExistingEndpoint->TransferRing.PhysicalAddress.QuadPart == 0)
-            {
-                DPRINT1("usbxhci: ConfigureSlotEndpoint missing transfer ring for slot %u ep %u\n",
-                        Slot->SlotId,
-                        Id);
-                continue;
-            }
-
-            /* Same as above: use DequeueIndex to preserve pending transfers */
-            ExistingDequeuePtr = XHCI_GetEndpointDequeuePointer(ExistingEndpoint);
-
-            XhciEndpointContextInit(EpCtx,
-                                    ExistingEndpointType,
-                                    ExistingMaxPacketSize,
-                                    ExistingBurstSize,
-                                    ExistingInterval,
-                                    ExistingMult,
-                                    ExistingMaxEsitPayload,
-                                    ExistingAverageTrbLength,
-                                    ExistingDequeuePtr);
-        }
-    }
-
     XHCI_LOG_IRQL("ConfigureSlotEndpoint before XHCI_SendCommand");
 
-    if (ExpandAddFlags && ReconfigureMask != 0)
-    {
-        UCHAR Id;
-        for (Id = 2; Id <= Slot->HighestEndpointId && Id <= XHCI_MAX_ENDPOINTS; Id++)
-        {
-            if ((ReconfigureMask & (1u << Id)) == 0)
-                continue;
-            (VOID)XHCI_StopEndpoint(Extension, Slot, Id);
-        }
-    }
     if (Slot->Configured &&
              EndpointId < RTL_NUMBER_OF(Slot->EndpointTable) &&
              Slot->EndpointTable[EndpointId] != NULL)
@@ -2893,9 +3164,18 @@ XHCI_ConfigureSlotEndpoint(
                               XHCI_COMMAND_TIMEOUT_MS,
                               FALSE,
                               NULL,
-                              NULL);
+                              &CompletionCode);
     if (Status != MP_STATUS_SUCCESS)
+    {
+        if (CompletionCode == XHCI_COMPLETION_BANDWIDTH_ERROR ||
+            CompletionCode == XHCI_COMPLETION_BANDWIDTH_OVERRUN ||
+            CompletionCode == XHCI_COMPLETION_SECONDARY_BANDWIDTH)
+        {
+            return MP_STATUS_NO_BANDWIDTH;
+        }
+
         return Status;
+    }
 
     Slot->Configured = TRUE;
     if (Slot->HighestEndpointId < EndpointId)
@@ -2905,20 +3185,9 @@ XHCI_ConfigureSlotEndpoint(
     Endpoint->DoorbellTarget = EndpointId;
     /*
      * All endpoints route to interrupter 0 until per-interrupter event rings
-     * are implemented. See TODO_XHCI.md for multi-interrupter support status.
+     * are implemented.
      */
     Endpoint->InterruptTarget = 0;
-
-    if (ExpandAddFlags)
-    {
-        UCHAR Id;
-        for (Id = 2; Id <= Slot->HighestEndpointId && Id <= XHCI_MAX_ENDPOINTS; Id++)
-        {
-            if ((ResumeDoorbells & (1u << Id)) == 0 || Id == EndpointId)
-                continue;
-            XHCI_RingEndpointDoorbell(Extension, Slot->SlotId, Id, 0);
-        }
-    }
 
     return MP_STATUS_SUCCESS;
 }
@@ -3051,7 +3320,8 @@ XHCI_SetEndpointDequeue(
      *
      * The DCS must be encoded in bit 0 of the parameter, not in a separate field.
      */
-    ULONGLONG Dequeue = (Ring->PhysicalAddress.QuadPart & ~0xFULL) |
+    ULONGLONG Dequeue = ((Ring->PhysicalAddress.QuadPart +
+                          ((ULONGLONG)Ring->DequeueIndex * sizeof(XHCI_TRB))) & ~0xFULL) |
                         (Ring->CycleState & 0x1);
 
     return XHCI_SendCommand(Extension,
@@ -3064,6 +3334,42 @@ XHCI_SetEndpointDequeue(
                             TRUE,
                             NULL,
                             NULL);
+}
+
+static MPSTATUS
+XHCI_ResumeStoppedEndpoint(
+    _In_ PXHCI_EXTENSION Extension,
+    _Inout_ PXHCI_ENDPOINT Endpoint,
+    _Inout_ PXHCI_RING Ring)
+{
+    PVOID DevCtx;
+    PXHCI_ENDPOINT_CONTEXT EpCtx;
+    ULONG EpState;
+    MPSTATUS Status;
+
+    if (!Extension || !Endpoint || !Endpoint->Slot || !Ring || Endpoint->EndpointId == 0)
+        return MP_STATUS_ERROR;
+
+    DevCtx = Endpoint->Slot->DeviceContext.VirtualAddress;
+    if (!DevCtx)
+        return MP_STATUS_ERROR;
+
+    EpCtx = XHCI_GetDeviceEndpointContextVa(Extension,
+                                            DevCtx,
+                                            Endpoint->EndpointId - 1);
+    if (!EpCtx)
+        return MP_STATUS_ERROR;
+
+    EpState = EpCtx->EpInfo & XHCI_EPCTX_STATE_MASK;
+    if (EpState != XHCI_EPCTX_STATE_STOPPED)
+        return MP_STATUS_SUCCESS;
+
+    Status = XHCI_SetEndpointDequeue(Extension,
+                                     Endpoint->Slot,
+                                     Endpoint->EndpointId,
+                                     Ring);
+
+    return Status;
 }
 
 static
@@ -3092,11 +3398,6 @@ XHCI_PerformEndpointResetSequence(
      */
     if (!Endpoint->Slot->InUse || Endpoint->Slot->DisablePending)
     {
-        DPRINT1("usbxhci: EndpointResetSequence slot=%u ep=%u slot disabled (InUse=%u DisablePending=%u), bailing out\n",
-                Endpoint->SlotId,
-                Endpoint->EndpointId,
-                Endpoint->Slot->InUse,
-                Endpoint->Slot->DisablePending);
         return;
     }
 
@@ -3145,17 +3446,7 @@ XHCI_PerformEndpointResetSequence(
              EpState == XHCI_EPCTX_STATE_ERROR)
     {
         /* Already in a state where Set TR Dequeue is valid */
-        DPRINT1("usbxhci: EndpointResetSequence slot=%u ep=%u already Stopped/Error, skipping cmd\n",
-                Endpoint->SlotId,
-                Endpoint->EndpointId);
         CanSetDequeue = TRUE;
-    }
-    else
-    {
-        DPRINT1("usbxhci: EndpointResetSequence slot=%u ep=%u unexpected state=%lu, no cmd issued\n",
-                Endpoint->SlotId,
-                Endpoint->EndpointId,
-                EpState);
     }
     /* For Disabled state, endpoint is not usable - skip Set TR Dequeue */
 
@@ -3175,24 +3466,10 @@ XHCI_PerformEndpointResetSequence(
             if (EpCtx)
             {
                 EpState = EpCtx->EpInfo & XHCI_EPCTX_STATE_MASK;
-                DPRINT1("usbxhci: EndpointResetSequence slot=%u ep=%u re-read state=%lu\n",
-                        Endpoint->SlotId,
-                        Endpoint->EndpointId,
-                        EpState);
                 if (EpState == XHCI_EPCTX_STATE_STOPPED ||
                     EpState == XHCI_EPCTX_STATE_ERROR)
                 {
                     CanSetDequeue = TRUE;
-                    DPRINT1("usbxhci: EndpointResetSequence slot=%u ep=%u state now valid for SetDequeue\n",
-                            Endpoint->SlotId,
-                            Endpoint->EndpointId);
-                }
-                else
-                {
-                    DPRINT1("usbxhci: EndpointResetSequence slot=%u ep=%u state=%lu NOT valid for SetDequeue\n",
-                            Endpoint->SlotId,
-                            Endpoint->EndpointId,
-                            EpState);
                 }
             }
         }
@@ -3232,11 +3509,10 @@ XHCI_PerformEndpointResetSequence(
 
         if (!SkipSetDequeue)
         {
-            MPSTATUS DeqStatus;
-            DeqStatus = XHCI_SetEndpointDequeue(Extension,
-                                                         Endpoint->Slot,
-                                                         Endpoint->EndpointId,
-                                                         &Endpoint->TransferRing);
+            MPSTATUS DeqStatus = XHCI_SetEndpointDequeue(Extension,
+                                                          Endpoint->Slot,
+                                                          Endpoint->EndpointId,
+                                                          &Endpoint->TransferRing);
             if (DeqStatus != MP_STATUS_SUCCESS)
             {
                 DPRINT1("usbxhci: EndpointResetSequence slot=%u ep=%u SET_TR_DEQUEUE failed (status=%lu)\n",
@@ -3245,18 +3521,6 @@ XHCI_PerformEndpointResetSequence(
                         DeqStatus);
             }
         }
-        else
-        {
-            DPRINT1("usbxhci: EndpointResetSequence slot=%u ep=%u SET_TR_DEQUEUE skipped (QEMU quirk)\n",
-                    Endpoint->SlotId,
-                    Endpoint->EndpointId);
-        }
-    }
-    else
-    {
-        DPRINT1("usbxhci: EndpointResetSequence slot=%u ep=%u CanSetDequeue=FALSE, skipping SET_TR_DEQUEUE\n",
-                Endpoint->SlotId,
-                Endpoint->EndpointId);
     }
 
     XHCI_StartEndpoint(Extension, Endpoint->Slot, Endpoint->EndpointId);
@@ -3270,13 +3534,9 @@ XHCI_PerformEndpointResetSequence(
     {
         KIRQL OldIrql;
         KeAcquireSpinLock(&Endpoint->Lock, &OldIrql);
-        if (Endpoint->ActiveTransfer)
+        if (XHCI_HasActiveTransfersLocked(Endpoint))
         {
-            DPRINT1("usbxhci: EndpointResetSequence slot=%u ep=%u clearing stale ActiveTransfer %p\n",
-                    Endpoint->SlotId,
-                    Endpoint->EndpointId,
-                    Endpoint->ActiveTransfer);
-            Endpoint->ActiveTransfer = NULL;
+            XHCI_ClearActiveTransfersLocked(Endpoint);
         }
         KeReleaseSpinLock(&Endpoint->Lock, OldIrql);
     }
@@ -3655,6 +3915,45 @@ XHCI_CopyBufferToSgList(
 }
 
 static
+ULONG
+XHCI_CopyIsoBufferToSgList(
+    _In_ PUSBPORT_SCATTER_GATHER_LIST SgList,
+    _In_reads_bytes_(BufferLength) const VOID *Buffer,
+    _In_ ULONG BufferLength,
+    _In_ PUSBPORT_ISO_BLOCK IsoBlock)
+{
+    ULONG Index;
+    ULONG Copied = 0;
+    PUCHAR Base;
+
+    if (!SgList || !Buffer || !SgList->MappedSystemVa || !IsoBlock)
+        return 0;
+
+    Base = (PUCHAR)SgList->MappedSystemVa;
+
+    for (Index = 0; Index < IsoBlock->NumberOfPackets; Index++)
+    {
+        PUSBPORT_ISO_BLOCK_PACKET Packet = &IsoBlock->Packets[Index];
+        ULONG Offset = Packet->Offset;
+        ULONG Length = Packet->ActualLength;
+
+        if (Length == 0)
+            continue;
+
+        if (Offset >= BufferLength)
+            continue;
+
+        if (Length > BufferLength - Offset)
+            Length = BufferLength - Offset;
+
+        RtlCopyMemory(Base + Offset, (const PUCHAR)Buffer + Offset, Length);
+        Copied += Length;
+    }
+
+    return Copied;
+}
+
+static
 MPSTATUS
 XHCI_PrepareBounceBuffer(
     _In_ PXHCI_EXTENSION Extension,
@@ -3812,13 +4111,28 @@ XHCI_FinalizeBounceBuffer(
 
     if (Transfer->BounceDataIn)
     {
-        Length = Transfer->BytesTransferred;
-        if (Length > Transfer->BounceLength)
-            Length = Transfer->BounceLength;
+        if (Transfer->IsIsochronous && Transfer->IsoBlock)
+        {
+            Length = Transfer->BytesTransferred;
+            if (Length > Transfer->BounceLength)
+                Length = Transfer->BounceLength;
 
-        Copied = XHCI_CopyBufferToSgList(Transfer->SgList,
-                                         Transfer->BounceBuffer,
-                                         Length);
+            Copied = XHCI_CopyIsoBufferToSgList(Transfer->SgList,
+                                                Transfer->BounceBuffer,
+                                                Transfer->BounceLength,
+                                                (PUSBPORT_ISO_BLOCK)Transfer->IsoBlock);
+        }
+        else
+        {
+            Length = Transfer->BytesTransferred;
+            if (Length > Transfer->BounceLength)
+                Length = Transfer->BounceLength;
+
+            Copied = XHCI_CopyBufferToSgList(Transfer->SgList,
+                                             Transfer->BounceBuffer,
+                                             Length);
+        }
+
         if (Copied < Length)
         {
             DPRINT1("usbxhci: bounce IN copy short (%lu/%lu)\n",
@@ -4060,8 +4374,7 @@ XHCI_CompleteSwEnumTransfer(
     if (ActiveEndpoint)
     {
         KeAcquireSpinLock(&ActiveEndpoint->Lock, &OldIrql);
-        if (ActiveEndpoint->ActiveTransfer == Transfer)
-            ActiveEndpoint->ActiveTransfer = NULL;
+        XHCI_RemoveActiveTransferLocked(ActiveEndpoint, Transfer);
         KeReleaseSpinLock(&ActiveEndpoint->Lock, OldIrql);
     }
 
@@ -4604,9 +4917,6 @@ XHCI_HandleEnumerationTransfer(
 
                 if (NeedsUpdate)
                 {
-                    DPRINT1("usbxhci: SS hub descriptor portcnt=%u delay=%u\n",
-                            Endpoint->Slot->HubPortCount,
-                            Endpoint->Slot->MaxExitLatency);
                     if (KeGetCurrentIrql() <= PASSIVE_LEVEL)
                     {
                         XHCI_UpdateSlotTtInfo(Extension, Endpoint->Slot);
@@ -4714,6 +5024,32 @@ XHCI_ResetDeviceOnPort(
     return Status;
 }
 
+static MPSTATUS
+NTAPI
+XHCI_MpResetDevice(
+    _In_ PVOID MiniPortExtension,
+    _In_ USHORT PortNumber)
+{
+    PXHCI_EXTENSION Extension = MiniPortExtension;
+    PXHCI_DEVICE_SLOT Slot;
+
+    if (!Extension)
+        return MP_STATUS_ERROR;
+
+    Slot = XHCI_FindSlotByPort(Extension, PortNumber);
+    if (!Slot)
+    {
+        return MP_STATUS_SUCCESS;
+    }
+
+    if (!Slot->Addressed)
+    {
+        return MP_STATUS_SUCCESS;
+    }
+
+    return XHCI_ResetDeviceOnPort(Extension, PortNumber);
+}
+
 static UCHAR
 XHCI_EndpointIdFromProperties(
     _In_ PUSBPORT_ENDPOINT_PROPERTIES EndpointProperties)
@@ -4771,6 +5107,114 @@ XHCI_GetEndpointTypeFromProperties(
         default:
             return XHCI_ENDPOINT_TYPE_INVALID;
     }
+}
+
+static ULONG
+XHCI_CalculateEndpointInterval(
+    _In_ PUSBPORT_ENDPOINT_PROPERTIES EndpointProperties,
+    _In_ ULONG EndpointType)
+{
+    ULONG RawInterval;
+    ULONG Period;
+    ULONG Interval = 0;
+
+    if (!EndpointProperties)
+        return 0;
+
+    if (EndpointType != XHCI_ENDPOINT_TYPE_ISOCH_OUT &&
+        EndpointType != XHCI_ENDPOINT_TYPE_ISOCH_IN &&
+        EndpointType != XHCI_ENDPOINT_TYPE_INTERRUPT_OUT &&
+        EndpointType != XHCI_ENDPOINT_TYPE_INTERRUPT_IN)
+    {
+        return 0;
+    }
+
+    RawInterval = EndpointProperties->Reserved4;
+    Period = EndpointProperties->Period;
+
+    if (EndpointProperties->DeviceSpeed == UsbHighSpeed ||
+        EndpointProperties->DeviceSpeed == UsbSuperSpeed)
+    {
+        if (RawInterval != 0)
+        {
+            Interval = RawInterval - 1;
+        }
+        else
+        {
+            while (Period > 1 && Interval < XHCI_ENDPOINT_INTERVAL_MAX)
+            {
+                Period >>= 1;
+                Interval++;
+            }
+        }
+    }
+    else
+    {
+        ULONG Microframes;
+
+        if (RawInterval != 0)
+            Microframes = RawInterval * 8;
+        else
+            Microframes = (Period ? Period : 1) * 8;
+
+        while (Microframes > (1u << Interval) &&
+               Interval < XHCI_ENDPOINT_INTERVAL_MAX)
+        {
+            Interval++;
+        }
+    }
+
+    if (Interval > XHCI_ENDPOINT_INTERVAL_MAX)
+        Interval = XHCI_ENDPOINT_INTERVAL_MAX;
+
+    return Interval;
+}
+
+static ULONG
+XHCI_CalculateAverageTrbLength(
+    _In_ PUSBPORT_ENDPOINT_PROPERTIES EndpointProperties,
+    _In_ ULONG EndpointType,
+    _In_ ULONG MaxPacketSize)
+{
+    ULONG AverageTrbLength;
+
+    if (!EndpointProperties)
+        return MaxPacketSize ? MaxPacketSize : 8;
+
+    AverageTrbLength = EndpointProperties->MaxTransferSize;
+    if (AverageTrbLength == 0)
+        AverageTrbLength = MaxPacketSize;
+
+    if (EndpointType == XHCI_ENDPOINT_TYPE_ISOCH_OUT ||
+        EndpointType == XHCI_ENDPOINT_TYPE_ISOCH_IN ||
+        EndpointType == XHCI_ENDPOINT_TYPE_INTERRUPT_OUT ||
+        EndpointType == XHCI_ENDPOINT_TYPE_INTERRUPT_IN)
+    {
+        ULONG PeriodicPacketSize = EndpointProperties->TotalMaxPacketSize;
+
+        if (PeriodicPacketSize == 0)
+        {
+            ULONG Transactions = EndpointProperties->TransactionPerMicroframe;
+            if (Transactions == 0)
+                Transactions = 1;
+
+            PeriodicPacketSize = MaxPacketSize * Transactions;
+        }
+
+        if (PeriodicPacketSize != 0 &&
+            (AverageTrbLength == 0 || AverageTrbLength > PeriodicPacketSize))
+        {
+            AverageTrbLength = PeriodicPacketSize;
+        }
+    }
+
+    if (AverageTrbLength == 0)
+        AverageTrbLength = MaxPacketSize ? MaxPacketSize : 8;
+
+    if (AverageTrbLength > 0xFFFF)
+        AverageTrbLength = 0xFFFF;
+
+    return AverageTrbLength;
 }
 
 static
@@ -5729,10 +6173,14 @@ XHCI_HandleCommandCompletion(
         if (Slot->EndpointTable[1] != NULL)
         {
             PXHCI_ENDPOINT Ep0 = Slot->EndpointTable[1];
+            KIRQL EpIrql;
+
             Ep0->TransferRing.CycleState = 1;
             Ep0->TransferRing.EnqueueIndex = 0;
             Ep0->TransferRing.DequeueIndex = 0;
-            Ep0->ActiveTransfer = NULL;
+            KeAcquireSpinLock(&Ep0->Lock, &EpIrql);
+            XHCI_ClearActiveTransfersLocked(Ep0);
+            KeReleaseSpinLock(&Ep0->Lock, EpIrql);
         }
 
         InterlockedExchange(&Slot->Ep0NeedsStallReset, 0);
@@ -5785,11 +6233,11 @@ XHCI_HandleCommandCompletion(
                     continue;
 
                 KeAcquireSpinLock(&Ep->Lock, &EpIrql);
-                if (Ep->ActiveTransfer)
+                if (XHCI_HasActiveTransfersLocked(Ep))
                 {
                     DPRINT1("usbxhci: slot %u ep %u NULLing orphan ActiveTransfer %p (USBPORT will abort)\n",
-                            SlotId, EpId, Ep->ActiveTransfer);
-                    Ep->ActiveTransfer = NULL;
+                            SlotId, EpId, XHCI_GetActiveTransferHeadLocked(Ep));
+                    XHCI_ClearActiveTransfersLocked(Ep);
                 }
                 KeReleaseSpinLock(&Ep->Lock, EpIrql);
             }
@@ -6042,6 +6490,9 @@ XHCI_QueueDeferredTransferCompletion(
     KeAcquireSpinLock(&Extension->DeferredTransferLock, &OldIrql);
     InsertTailList(&Extension->DeferredTransferList, &Transfer->ListEntry);
     KeReleaseSpinLock(&Extension->DeferredTransferLock, OldIrql);
+
+    if (!Extension->FatalError && !Extension->StoppingOrRemoved)
+        XHCI_ScheduleTransferPoll(Extension);
 }
 
 /**
@@ -6200,9 +6651,6 @@ XHCI_DrainDeferredTransferCompletions(
         }
         else if (XhciRegPacket.UsbPortCompleteTransfer)
         {
-            XHCI_DBG(XHCI_TRACE_TRANSFERS,
-                     "usbxhci: draining deferred completion (UsbdStatus=0x%x)\n",
-                     Transfer->UsbdStatus);
             XhciRegPacket.UsbPortCompleteTransfer(Extension,
                                                   Endpoint,
                                                   Transfer->TransferParameters,
@@ -6210,6 +6658,210 @@ XHCI_DrainDeferredTransferCompletions(
                                                   Transfer->BytesTransferred);
         }
     }
+}
+
+static
+USBD_STATUS
+XHCI_MapCompletionCodeToUsbdStatus(
+    _In_ ULONG CompletionCode,
+    _In_opt_ PXHCI_TRANSFER Transfer)
+{
+    switch (CompletionCode)
+    {
+        case XHCI_COMPLETION_SUCCESS:
+        case XHCI_COMPLETION_SHORT_PACKET:
+            return USBD_STATUS_SUCCESS;
+
+        case XHCI_COMPLETION_STALL_ERROR:
+            return USBD_STATUS_STALL_PID;
+
+        case XHCI_COMPLETION_BABBLE_ERROR:
+            return USBD_STATUS_BABBLE_DETECTED;
+
+        case XHCI_COMPLETION_DATA_BUFFER_ERROR:
+            return (Transfer && Transfer->TransferParameters &&
+                    (Transfer->TransferParameters->TransferFlags &
+                     USBD_TRANSFER_DIRECTION_IN)) ?
+                   USBD_STATUS_DATA_OVERRUN :
+                   USBD_STATUS_DATA_UNDERRUN;
+
+        case XHCI_COMPLETION_USB_TRANSACTION_ERROR:
+            return USBD_STATUS_CRC;
+
+        case XHCI_COMPLETION_STOPPED:
+        case XHCI_COMPLETION_STOPPED_LENGTH_INVALID:
+        case XHCI_COMPLETION_STOPPED_SHORT_PACKET:
+        case XHCI_COMPLETION_COMMAND_ABORTED:
+            return USBD_STATUS_CANCELED;
+
+        case XHCI_COMPLETION_RING_UNDERRUN:
+        case XHCI_COMPLETION_RING_OVERRUN:
+        case XHCI_COMPLETION_MISSED_SERVICE:
+        case XHCI_COMPLETION_ISOCH_BUFFER_OVERRUN:
+            return USBD_STATUS_ISOCH_REQUEST_FAILED;
+
+        case XHCI_COMPLETION_NO_PING_RESPONSE:
+            return USBD_STATUS_DEV_NOT_RESPONDING;
+
+        case XHCI_COMPLETION_BANDWIDTH_ERROR:
+        case XHCI_COMPLETION_BANDWIDTH_OVERRUN:
+        case XHCI_COMPLETION_SECONDARY_BANDWIDTH:
+            return USBD_STATUS_NO_BANDWIDTH;
+
+        case XHCI_COMPLETION_RESOURCE_ERROR:
+        case XHCI_COMPLETION_NO_SLOTS_ERROR:
+        case XHCI_COMPLETION_EVENT_RING_FULL:
+        case XHCI_COMPLETION_VF_EVENT_RING_FULL:
+            return USBD_STATUS_INSUFFICIENT_RESOURCES;
+
+        case XHCI_COMPLETION_CONTEXT_ERROR:
+        case XHCI_COMPLETION_CONTEXT_STATE_ERROR:
+        case XHCI_COMPLETION_PARAMETER_ERROR:
+        case XHCI_COMPLETION_SLOT_NOT_ENABLED:
+        case XHCI_COMPLETION_ENDPOINT_NOT_ENABLED:
+        case XHCI_COMPLETION_INVALID_STREAM_TYPE:
+        case XHCI_COMPLETION_INVALID_STREAM_ID:
+            return USBD_STATUS_INTERNAL_HC_ERROR;
+
+        case XHCI_COMPLETION_INCOMPATIBLE_DEVICE:
+        case XHCI_COMPLETION_MAX_EXIT_LATENCY_ERROR:
+            return USBD_STATUS_ERROR_BUSY;
+
+        case XHCI_COMPLETION_SPLIT_TRANSACTION:
+            return USBD_STATUS_XACT_ERROR;
+
+        case XHCI_COMPLETION_EVENT_LOST:
+        case XHCI_COMPLETION_UNDEFINED_ERROR:
+        default:
+            return USBD_STATUS_REQUEST_FAILED;
+    }
+}
+
+static
+BOOLEAN
+XHCI_IsoCompletionTerminatesTransfer(
+    _In_ ULONG CompletionCode)
+{
+    switch (CompletionCode)
+    {
+        case XHCI_COMPLETION_SUCCESS:
+        case XHCI_COMPLETION_SHORT_PACKET:
+        case XHCI_COMPLETION_DATA_BUFFER_ERROR:
+        case XHCI_COMPLETION_BABBLE_ERROR:
+        case XHCI_COMPLETION_USB_TRANSACTION_ERROR:
+        case XHCI_COMPLETION_RING_UNDERRUN:
+        case XHCI_COMPLETION_RING_OVERRUN:
+        case XHCI_COMPLETION_MISSED_SERVICE:
+        case XHCI_COMPLETION_ISOCH_BUFFER_OVERRUN:
+            return FALSE;
+
+        default:
+            return TRUE;
+    }
+}
+
+static
+VOID
+XHCI_CompleteRemainingIsoPackets(
+    _Inout_ PXHCI_TRANSFER Transfer,
+    _In_ USBD_STATUS UsbdStatus)
+{
+    PUSBPORT_ISO_BLOCK IsoBlock;
+    ULONG Index;
+    ULONG Count;
+
+    if (!Transfer || !Transfer->IsoBlock || !Transfer->IsoPacketContext)
+        return;
+
+    IsoBlock = (PUSBPORT_ISO_BLOCK)Transfer->IsoBlock;
+    Count = Transfer->IsoPacketCount;
+    if (Count > IsoBlock->NumberOfPackets)
+        Count = IsoBlock->NumberOfPackets;
+
+    for (Index = 0; Index < Count; Index++)
+    {
+        PXHCI_ISO_PACKET_CONTEXT PacketContext =
+            &Transfer->IsoPacketContext[Index];
+        PUSBPORT_ISO_BLOCK_PACKET Packet = &IsoBlock->Packets[Index];
+
+        if (PacketContext->Completed)
+            continue;
+
+        Packet->ActualLength = 0;
+        Packet->Status = UsbdStatus;
+        PacketContext->Completed = TRUE;
+        Transfer->IsoPacketsCompleted++;
+    }
+}
+
+static
+BOOLEAN
+XHCI_RecordIsoTransferEvent(
+    _Inout_ PXHCI_TRANSFER Transfer,
+    _In_ ULONGLONG TrbPointer,
+    _In_ ULONG CompletionCode,
+    _In_ USBD_STATUS UsbdStatus,
+    _In_ ULONG Remaining,
+    _Out_ PBOOLEAN TransferComplete)
+{
+    PUSBPORT_ISO_BLOCK IsoBlock;
+    PUSBPORT_ISO_BLOCK_PACKET Packet;
+    PXHCI_ISO_PACKET_CONTEXT PacketContext;
+    ULONG PacketIndex;
+    ULONG PacketLength;
+    ULONG ActualLength;
+    BOOLEAN Success;
+
+    if (TransferComplete)
+        *TransferComplete = FALSE;
+
+    if (!Transfer || !Transfer->IsoBlock || !TransferComplete)
+        return FALSE;
+
+    IsoBlock = (PUSBPORT_ISO_BLOCK)Transfer->IsoBlock;
+    PacketContext = XHCI_FindIsoPacketContextByEvent(Transfer,
+                                                     TrbPointer,
+                                                     &PacketIndex);
+    if (!PacketContext)
+        return FALSE;
+
+    if (PacketIndex >= IsoBlock->NumberOfPackets)
+        return FALSE;
+
+    Packet = &IsoBlock->Packets[PacketIndex];
+    PacketLength = Packet->Length;
+
+    if (Remaining > PacketLength)
+        Remaining = PacketLength;
+
+    ActualLength = PacketLength - Remaining;
+    Success = (CompletionCode == XHCI_COMPLETION_SUCCESS ||
+               CompletionCode == XHCI_COMPLETION_SHORT_PACKET);
+
+    if (Success)
+    {
+        Packet->ActualLength = ActualLength;
+        Packet->Status = USBD_STATUS_SUCCESS;
+        Transfer->IsoCompletedLength += ActualLength;
+    }
+    else
+    {
+        Packet->ActualLength = 0;
+        Packet->Status = UsbdStatus;
+        if (!USBD_ERROR(Transfer->UsbdStatus))
+            Transfer->UsbdStatus = UsbdStatus;
+    }
+
+    PacketContext->Completed = TRUE;
+    Transfer->IsoPacketsCompleted++;
+
+    if (!Success && XHCI_IsoCompletionTerminatesTransfer(CompletionCode))
+    {
+        XHCI_CompleteRemainingIsoPackets(Transfer, UsbdStatus);
+    }
+
+    *TransferComplete = (Transfer->IsoPacketsCompleted >= Transfer->IsoPacketCount);
+    return TRUE;
 }
 
 static VOID
@@ -6245,16 +6897,6 @@ XHCI_HandleTransferEvent(
     SlotId = (UCHAR)XHCI_TRB_TO_SLOT_ID(EventTrb->Control);
     EndpointId = (UCHAR)XHCI_TRB_TO_EP_ID(EventTrb->Control);
 
-    /* Log errors and short packets (code != 1 = success) */
-    if (CompletionCode != 1)
-    {
-        if (CompletionCode != XHCI_COMPLETION_SHORT_PACKET)
-        {
-            DPRINT1("xhci: XFER_EVT slot=%u ep=%u code=%lu remain=%lu ptr=%I64x\n",
-                    SlotId, EndpointId, CompletionCode, Remaining, TrbPointer);
-        }
-    }
-
     Slot = XHCI_GetSlot(Extension, SlotId);
     Endpoint = XHCI_GetSlotEndpoint(Slot, EndpointId);
     if (!Endpoint)
@@ -6267,7 +6909,7 @@ XHCI_HandleTransferEvent(
     }
 
     KeAcquireSpinLock(&Endpoint->Lock, &OldIrql);
-    if (!Endpoint->ActiveTransfer)
+    if (!XHCI_HasActiveTransfersLocked(Endpoint))
     {
         KeReleaseSpinLock(&Endpoint->Lock, OldIrql);
         DPRINT1("usbxhci: transfer event slot=%u ep=%u has no active transfer (ptr=%I64x)\n",
@@ -6277,7 +6919,15 @@ XHCI_HandleTransferEvent(
         return;
     }
 
-    Transfer = Endpoint->ActiveTransfer;
+    Transfer = XHCI_FindActiveTransferByEventLocked(Endpoint,
+                                                    TrbPointer,
+                                                    CompletionCode);
+    if (!Transfer)
+    {
+        KeReleaseSpinLock(&Endpoint->Lock, OldIrql);
+        return;
+    }
+
     Ring = XHCI_SelectStreamRing(Endpoint, Transfer->StreamId);
 
     {
@@ -6305,6 +6955,70 @@ XHCI_HandleTransferEvent(
 
     if (Slot && (Slot->DisablePending || !Slot->InUse))
         DeviceGone = TRUE;
+
+    if (!DeviceGone && Transfer->IsIsochronous)
+    {
+        BOOLEAN IsoEventRecorded;
+        BOOLEAN IsoTransferComplete;
+
+        UsbdStatus = XHCI_MapCompletionCodeToUsbdStatus(CompletionCode, Transfer);
+        IsoEventRecorded = XHCI_RecordIsoTransferEvent(Transfer,
+                                                       TrbPointer,
+                                                       CompletionCode,
+                                                       UsbdStatus,
+                                                       Remaining,
+                                                       &IsoTransferComplete);
+
+        if (!IsoEventRecorded)
+        {
+            KeReleaseSpinLock(&Endpoint->Lock, OldIrql);
+            return;
+        }
+
+        if (Ring)
+            XHCI_UpdateRingDequeueFromPointer(Ring, TrbPointer);
+
+        if (!IsoTransferComplete)
+        {
+            KeReleaseSpinLock(&Endpoint->Lock, OldIrql);
+            return;
+        }
+
+        XHCI_RemoveActiveTransferLocked(Endpoint, Transfer);
+        KeReleaseSpinLock(&Endpoint->Lock, OldIrql);
+
+        Transfer->CompletionTrbPointer = TrbPointer;
+        Transfer->BytesTransferred = Transfer->IsoCompletedLength;
+        XHCI_FinalizeBounceBuffer(Transfer);
+        XHCI_FreeIsoTransferContext(Transfer);
+        XHCI_DisarmTransferPoll(Extension, Transfer);
+
+        Endpoint->TotalBytesTransferred += Transfer->IsoCompletedLength;
+
+        if (!AllowCallbacks)
+        {
+            XHCI_QueueDeferredTransferCompletion(Extension, Transfer);
+            return;
+        }
+
+        if (InterlockedBitTestAndSet((volatile LONG *)&Transfer->Flags,
+                                     XHCI_TRANSFER_FLAG_COMPLETED_BIT))
+        {
+            DPRINT1("usbxhci: ISO transfer %p already completed, skipping double completion\n",
+                    Transfer);
+            return;
+        }
+
+        if (XhciRegPacket.UsbPortCompleteIsoTransfer)
+        {
+            XhciRegPacket.UsbPortCompleteIsoTransfer(Extension,
+                                                     Endpoint,
+                                                     Transfer->TransferParameters,
+                                                     Transfer->BytesTransferred);
+        }
+
+        return;
+    }
 
     /*
      * Only complete the currently active transfer when the controller reports
@@ -6454,7 +7168,7 @@ XHCI_HandleTransferEvent(
     Ring = XHCI_SelectStreamRing(Endpoint, Transfer->StreamId);
     if (Ring)
     {
-        Ring->DequeueIndex = Ring->EnqueueIndex;
+        XHCI_UpdateRingDequeueFromTransfer(Ring, Transfer);
     }
 
     if (Endpoint->DefaultControl && Endpoint->Slot)
@@ -6463,7 +7177,7 @@ XHCI_HandleTransferEvent(
         Endpoint->Slot->Ep0RingEnqueueIndex = Endpoint->TransferRing.EnqueueIndex;
         Endpoint->Slot->Ep0RingDequeueIndex = Endpoint->TransferRing.DequeueIndex;
     }
-    Endpoint->ActiveTransfer = NULL;
+    XHCI_RemoveActiveTransferLocked(Endpoint, Transfer);
     KeReleaseSpinLock(&Endpoint->Lock, OldIrql);
 
     RequestedLength = Transfer->RequestedLength;
@@ -6521,8 +7235,8 @@ XHCI_HandleTransferEvent(
         /*
          * The device is gone (slot disabled or disable-pending). Do NOT
          * complete this transfer to USBPORT from the miniport side. Instead,
-         * ActiveTransfer was already NULLed above (under the endpoint lock),
-         * so USBPORT's own abort mechanism will handle the completion
+         * The transfer was disowned above (under the endpoint lock), so
+         * USBPORT's own abort mechanism will handle the completion
          * through its AbortTransfers -> DmaEndpointPaused -> FlushCancelList
          * path.
          *
@@ -6539,6 +7253,7 @@ XHCI_HandleTransferEvent(
          * state, and cancel the poll timer if needed.
          */
         XHCI_FinalizeBounceBuffer(Transfer);
+        XHCI_FreeIsoTransferContext(Transfer);
         XHCI_DisarmTransferPoll(Extension, Transfer);
         return;
     }
@@ -6605,106 +7320,7 @@ XHCI_HandleTransferEvent(
                  TParams ? TParams->SetupPacket.bRequest : 0xFF);
     }
 
-    switch (CompletionCode)
-    {
-        case XHCI_COMPLETION_SUCCESS:
-        case XHCI_COMPLETION_SHORT_PACKET:
-            UsbdStatus = USBD_STATUS_SUCCESS;
-            break;
-
-        case XHCI_COMPLETION_STALL_ERROR:
-            UsbdStatus = USBD_STATUS_STALL_PID;
-            break;
-
-        case XHCI_COMPLETION_BABBLE_ERROR:
-            /* Babble indicates the device sent more data than expected.
-             * Map to BABBLE_DETECTED for proper upper-layer handling. */
-            UsbdStatus = USBD_STATUS_BABBLE_DETECTED;
-            break;
-
-        case XHCI_COMPLETION_DATA_BUFFER_ERROR:
-            /* Data buffer error: either overrun or underrun depending on direction */
-            UsbdStatus = (Transfer && Transfer->TransferParameters &&
-                         (Transfer->TransferParameters->TransferFlags & USBD_TRANSFER_DIRECTION_IN))
-                         ? USBD_STATUS_DATA_OVERRUN
-                         : USBD_STATUS_DATA_UNDERRUN;
-            break;
-
-        case XHCI_COMPLETION_USB_TRANSACTION_ERROR:
-            /* USB transaction errors (CRC, timeout, bitstuff, etc.) */
-            UsbdStatus = USBD_STATUS_CRC;
-            break;
-
-        case XHCI_COMPLETION_STOPPED:
-        case XHCI_COMPLETION_STOPPED_LENGTH_INVALID:
-        case XHCI_COMPLETION_STOPPED_SHORT_PACKET:
-        case XHCI_COMPLETION_COMMAND_ABORTED:
-            /* Endpoint stopped (typically due to cancel/reset) - surface as a
-             * canceled transfer rather than a generic failure to better match
-             * Windows USBPORT semantics. */
-            UsbdStatus = USBD_STATUS_CANCELED;
-            break;
-
-        case XHCI_COMPLETION_RING_UNDERRUN:
-        case XHCI_COMPLETION_RING_OVERRUN:
-        case XHCI_COMPLETION_MISSED_SERVICE:
-        case XHCI_COMPLETION_ISOCH_BUFFER_OVERRUN:
-            /* Isochronous/streaming timing errors */
-            UsbdStatus = USBD_STATUS_ISOCH_REQUEST_FAILED;
-            break;
-
-        case XHCI_COMPLETION_NO_PING_RESPONSE:
-            /* No ping response - typically a device timeout on SuperSpeed */
-            UsbdStatus = USBD_STATUS_DEV_NOT_RESPONDING;
-            break;
-
-        case XHCI_COMPLETION_BANDWIDTH_ERROR:
-        case XHCI_COMPLETION_BANDWIDTH_OVERRUN:
-        case XHCI_COMPLETION_SECONDARY_BANDWIDTH:
-            /* Bandwidth allocation failures */
-            UsbdStatus = USBD_STATUS_NO_BANDWIDTH;
-            break;
-
-        case XHCI_COMPLETION_RESOURCE_ERROR:
-        case XHCI_COMPLETION_NO_SLOTS_ERROR:
-        case XHCI_COMPLETION_EVENT_RING_FULL:
-        case XHCI_COMPLETION_VF_EVENT_RING_FULL:
-            /* Resource exhaustion */
-            UsbdStatus = USBD_STATUS_INSUFFICIENT_RESOURCES;
-            break;
-
-        case XHCI_COMPLETION_CONTEXT_ERROR:
-        case XHCI_COMPLETION_CONTEXT_STATE_ERROR:
-        case XHCI_COMPLETION_PARAMETER_ERROR:
-        case XHCI_COMPLETION_SLOT_NOT_ENABLED:
-        case XHCI_COMPLETION_ENDPOINT_NOT_ENABLED:
-        case XHCI_COMPLETION_INVALID_STREAM_TYPE:
-        case XHCI_COMPLETION_INVALID_STREAM_ID:
-            /* Driver or hardware configuration errors */
-            UsbdStatus = USBD_STATUS_INTERNAL_HC_ERROR;
-            break;
-
-        case XHCI_COMPLETION_INCOMPATIBLE_DEVICE:
-            /* Device is incompatible with the port type/speed */
-            UsbdStatus = USBD_STATUS_ERROR_BUSY;
-            break;
-
-        case XHCI_COMPLETION_SPLIT_TRANSACTION:
-            /* Split transaction error (for HS/FS devices behind TT) */
-            UsbdStatus = USBD_STATUS_XACT_ERROR;
-            break;
-
-        case XHCI_COMPLETION_MAX_EXIT_LATENCY_ERROR:
-            /* Power management constraint violation */
-            UsbdStatus = USBD_STATUS_ERROR_BUSY;
-            break;
-
-        case XHCI_COMPLETION_EVENT_LOST:
-        case XHCI_COMPLETION_UNDEFINED_ERROR:
-        default:
-            UsbdStatus = USBD_STATUS_REQUEST_FAILED;
-            break;
-    }
+    UsbdStatus = XHCI_MapCompletionCodeToUsbdStatus(CompletionCode, Transfer);
 
     /*
      * Control endpoint errors can leave EP0 halted until a reset is issued.
@@ -6749,6 +7365,7 @@ XHCI_HandleTransferEvent(
     Transfer->BytesTransferred = BytesTransferred;
     Transfer->UsbdStatus = UsbdStatus;
     XHCI_FinalizeBounceBuffer(Transfer);
+    XHCI_FreeIsoTransferContext(Transfer);
     XHCI_DisarmTransferPoll(Extension, Transfer);
 
     if (Transfer->Flags & (XHCI_TRANSFER_FLAG_SET_ADDRESS | XHCI_TRANSFER_FLAG_GET_DESCRIPTOR))
@@ -6807,7 +7424,7 @@ XHCI_HandleTransferEvent(
                  "usbxhci: UsbPortCompleteTransfer returned\n");
     }
 
-    /* TODO: If we ever start calling UsbPortInvalidateEndpoint from the xHCI
+    /* If we ever start calling UsbPortInvalidateEndpoint from the xHCI
      * miniport (for example to nudge busy DMA endpoints), consider batching
      * those notifications similar to root-hub invalidation so USBPORT does not
      * see a storm of endpoint callbacks under heavy load. */
@@ -7451,8 +8068,9 @@ XHCI_AddressDeviceSlot(
 
     /*
      * Verify the port is enabled before issuing ADDRESS_DEVICE.
-     * After the fix in XHCI_RH_SetFeaturePortReset, the port should already
-     * be enabled (PED=1) when we get here. This check is a safety net.
+     * The hub layer waits for reset completion before USBPORT asks the
+     * miniport to address the device, so PED should already be set when we
+     * get here. This check is a safety net.
      *
      * If PED=0, the device failed to enumerate at the negotiated speed and
      * ADDRESS_DEVICE will fail with USB_TRANSACTION_ERROR. Fail early with
@@ -7688,6 +8306,7 @@ XHCI_BringupDefaultControlEndpoint(
         return MP_STATUS_ERROR;
 
     KeInitializeSpinLock(&Endpoint->Lock);
+    XHCI_InitEndpointTransferState(Endpoint);
 
     DPRINT("usbxhci: EP0 bring-up: issuing ENABLE_SLOT for port %u (MPS=%lu)\n",
             EndpointProperties->PortNumber,
@@ -7841,7 +8460,7 @@ XHCI_InitDeviceSlots(
     }
 }
 #if DBG
-static VOID
+static BOOLEAN
 XHCI_ValidateContextLayout(
     _In_ PXHCI_EXTENSION Extension)
 {
@@ -7850,7 +8469,7 @@ XHCI_ValidateContextLayout(
     if (!Extension->DeviceContexts ||
         !Extension->InputContexts)
     {
-        return;
+        return TRUE;
     }
 
     for (SlotId = 0; SlotId <= Extension->MaxSlots; SlotId++)
@@ -7901,8 +8520,7 @@ XHCI_ValidateContextLayout(
                     (ULONGLONG)ExpectedInpPa,
                     (SIZE_T)Slot->InputContext.Length,
                     (SIZE_T)IcLength);
-            ASSERT(FALSE);
-            break;
+            return FALSE;
         }
 
         if (Extension->ContextSize == 64)
@@ -7915,18 +8533,19 @@ XHCI_ValidateContextLayout(
                         SlotId,
                         (ULONGLONG)Slot->DeviceContext.PhysicalAddress.QuadPart,
                         (ULONGLONG)Slot->InputContext.PhysicalAddress.QuadPart);
-                ASSERT(FALSE);
-                break;
+                return FALSE;
             }
         }
     }
+    return TRUE;
 }
 #else
-static VOID
+static BOOLEAN
 XHCI_ValidateContextLayout(
     _In_ PXHCI_EXTENSION Extension)
 {
     UNREFERENCED_PARAMETER(Extension);
+    return TRUE;
 }
 #endif
 
@@ -9252,18 +9871,16 @@ CheckCompletion:
         }
         Result = MP_STATUS_SUCCESS;
     }
-    else if (CommandContext->CompletionCode == XHCI_COMPLETION_CONTEXT_STATE_ERROR &&
+    else if ((CommandContext->CompletionCode == XHCI_COMPLETION_CONTEXT_STATE_ERROR ||
+              CommandContext->CompletionCode == XHCI_COMPLETION_ENDPOINT_NOT_ENABLED) &&
              CommandContext->CommandType == XHCI_TRB_TYPE_STOP_EP)
     {
         /*
-         * CONTEXT_STATE_ERROR (code 19) for Stop Endpoint means the endpoint
-         * is already in a stopped/disabled state or was never running. This is
-         * a benign condition during shutdown suspend when we try to stop
-         * endpoints that have already been torn down. The endpoint is already
-         * in the desired state, so treat this as success.
+         * CONTEXT_STATE_ERROR and ENDPOINT_NOT_ENABLED for Stop Endpoint both
+         * mean the endpoint is already stopped, disabled, or was never running.
+         * That is benign for callers trying to quiesce an endpoint before
+         * reset/reconfiguration.
          */
-        DPRINT("usbxhci: StopEndpoint got CONTEXT_STATE_ERROR - endpoint already stopped (slot=%u)\n",
-               CommandContext->SlotId);
         Result = MP_STATUS_SUCCESS;
     }
     else
@@ -9649,14 +10266,6 @@ XHCI_SubmitTransfer(PVOID MiniPortExtension,
     PXHCI_EXTENSION Extension = MiniPortExtension;
     PXHCI_ENDPOINT Endpoint = EndpointHandle;
     PXHCI_TRANSFER Transfer = TransferHandle;
-    static BOOLEAN Triggered = FALSE;
-    if (Extension && Extension->RhIrqEnabled && !Triggered && XhciRegPacket.UsbPortInvalidateRootHub)
-    {
-        Triggered = TRUE;
-        DPRINT("XHCI: Triggering RH Invalidate from SubmitTransfer\n");
-        XhciRegPacket.UsbPortInvalidateRootHub(Extension);
-    }
-
 
     if (!Extension || !Endpoint || !Transfer || !TransferParameters)
         return MP_STATUS_ERROR;
@@ -9677,14 +10286,11 @@ XHCI_SubmitTransfer(PVOID MiniPortExtension,
     if (Endpoint->EndpointProperties.TransferType ==
             USBPORT_TRANSFER_TYPE_ISOCHRONOUS)
     {
-        return XHCI_SubmitIsoTransfer(Extension,
-                                      Endpoint,
-                                      TransferParameters,
-                                      TransferHandle,
-                                      SgList);
+        DPRINT1("usbxhci: ISO transfer submitted through non-ISO miniport path\n");
+        return MP_STATUS_NOT_SUPPORTED;
     }
 
-    RtlZeroMemory(Transfer, sizeof(*Transfer));
+    XHCI_InitTransferForSubmit(Transfer);
     Transfer->Endpoint = Endpoint;
     Transfer->TransferParameters = TransferParameters;
     Transfer->SgList = SgList;
@@ -9760,6 +10366,11 @@ XHCI_SubmitControlTransfer(
     Status = XHCI_SubmitControlTransferSwEnum(Extension, Endpoint, Transfer);
     if (Status != MP_STATUS_NOT_SUPPORTED)
         return Status;
+
+    TransferParameters = Transfer->TransferParameters;
+    SgList = Transfer->SgList;
+    if (!TransferParameters)
+        return MP_STATUS_ERROR;
 
     if (!Endpoint->Slot || !Endpoint->TransferRing.Base)
     {
@@ -10040,18 +10651,29 @@ XHCI_SubmitControlTransfer(
     }
 
     KeAcquireSpinLock(&Endpoint->Lock, &OldIrql);
-    if (Endpoint->ActiveTransfer)
+    if (XHCI_HasActiveTransfersLocked(Endpoint))
     {
+        PXHCI_TRANSFER ActiveTransfer = XHCI_GetActiveTransferHeadLocked(Endpoint);
+        PUSBPORT_TRANSFER_PARAMETERS ActiveParams = ActiveTransfer->TransferParameters;
+
         KeReleaseSpinLock(&Endpoint->Lock, OldIrql);
-        DPRINT1("usbxhci: endpoint %u already has an active transfer\n",
-                Endpoint->EndpointId);
+        DPRINT1("usbxhci: endpoint %u already has an active transfer "
+                "active=%p activeSetup=%02x/%02x activeLen=%lu incoming=%p "
+                "incomingSetup=%02x/%02x incomingLen=%lu\n",
+                Endpoint->EndpointId,
+                ActiveTransfer,
+                ActiveParams ? ActiveParams->SetupPacket.bmRequestType.B : 0xff,
+                ActiveParams ? ActiveParams->SetupPacket.bRequest : 0xff,
+                ActiveParams ? ActiveParams->TransferBufferLength : 0,
+                Transfer,
+                TransferParameters->SetupPacket.bmRequestType.B,
+                TransferParameters->SetupPacket.bRequest,
+                TransferParameters->TransferBufferLength);
         return MP_STATUS_FAILURE;
     }
-    Endpoint->ActiveTransfer = Transfer;
+    XHCI_InsertActiveTransferLocked(Endpoint, Transfer);
     KeReleaseSpinLock(&Endpoint->Lock, OldIrql);
 
-    TransferParameters = Transfer->TransferParameters;
-    SgList = Transfer->SgList;
     Transfer->TdFirstTrbPointer = 0;
     Transfer->CompletionTrbPointer = 0;
     HasDataStage = (TransferParameters->TransferBufferLength != 0);
@@ -10114,7 +10736,7 @@ XHCI_SubmitControlTransfer(
             if (!XHCI_ReferenceEndpointForSwEnum(Endpoint))
             {
                 KeAcquireSpinLock(&Endpoint->Lock, &OldIrql);
-                Endpoint->ActiveTransfer = NULL;
+                XHCI_RemoveActiveTransferLocked(Endpoint, Transfer);
                 KeReleaseSpinLock(&Endpoint->Lock, OldIrql);
                 Transfer->UsbdStatus = USBD_STATUS_CANCELED;
                 return MP_STATUS_FAILURE;
@@ -10124,7 +10746,7 @@ XHCI_SubmitControlTransfer(
             if (!Work)
             {
                 KeAcquireSpinLock(&Endpoint->Lock, &OldIrql);
-                Endpoint->ActiveTransfer = NULL;
+                XHCI_RemoveActiveTransferLocked(Endpoint, Transfer);
                 KeReleaseSpinLock(&Endpoint->Lock, OldIrql);
                 XHCI_DereferenceEndpointForSwEnum(Endpoint);
                 return MP_STATUS_NO_RESOURCES;
@@ -10681,8 +11303,7 @@ Failure:
     XHCI_ReleaseBounceBuffer(Transfer);
     Transfer->UsbdStatus = USBD_STATUS_REQUEST_FAILED;
     KeAcquireSpinLock(&Endpoint->Lock, &OldIrql);
-    if (Endpoint->ActiveTransfer == Transfer)
-        Endpoint->ActiveTransfer = NULL;
+    XHCI_RemoveActiveTransferLocked(Endpoint, Transfer);
     KeReleaseSpinLock(&Endpoint->Lock, OldIrql);
     return Status;
 }
@@ -10750,18 +11371,9 @@ XHCI_SubmitSgTransfer(
     if (!Endpoint->Slot || !Ring || !Ring->Base)
         return MP_STATUS_ERROR;
 
-    KeAcquireSpinLock(&Endpoint->Lock, &OldIrql);
-    if (Endpoint->ActiveTransfer)
-    {
-        DPRINT1("usbxhci: SubmitSgTransfer REJECTED slot=%u ep=%u: ActiveTransfer=%p already set\n",
-                Endpoint->SlotId,
-                Endpoint->EndpointId,
-                Endpoint->ActiveTransfer);
-        KeReleaseSpinLock(&Endpoint->Lock, OldIrql);
-        return MP_STATUS_FAILURE;
-    }
-    Endpoint->ActiveTransfer = Transfer;
-    KeReleaseSpinLock(&Endpoint->Lock, OldIrql);
+    Status = XHCI_ResumeStoppedEndpoint(Extension, Endpoint, Ring);
+    if (Status != MP_STATUS_SUCCESS)
+        return Status;
 
     TransferParameters = Transfer->TransferParameters;
     SgList = Transfer->SgList;
@@ -10886,6 +11498,9 @@ XHCI_SubmitSgTransfer(
 
         {
             USHORT DoorbellStreamId = XHCI_SelectDoorbellStreamId(Endpoint, Transfer);
+            KeAcquireSpinLock(&Endpoint->Lock, &OldIrql);
+            XHCI_InsertActiveTransferLocked(Endpoint, Transfer);
+            KeReleaseSpinLock(&Endpoint->Lock, OldIrql);
             XHCI_ArmTransferPoll(Extension, Transfer);
             KeMemoryBarrier();
             XHCI_RingEndpointDoorbell(Extension,
@@ -11124,10 +11739,14 @@ XHCI_SubmitSgTransfer(
                  (ULONG)(Ring ? Ring->CycleState : 0),
                  EpState,
                  EpInfo2);
+
     }
 
     {
         USHORT DoorbellStreamId = XHCI_SelectDoorbellStreamId(Endpoint, Transfer);
+        KeAcquireSpinLock(&Endpoint->Lock, &OldIrql);
+        XHCI_InsertActiveTransferLocked(Endpoint, Transfer);
+        KeReleaseSpinLock(&Endpoint->Lock, OldIrql);
         XHCI_ArmTransferPoll(Extension, Transfer);
         KeMemoryBarrier();
         XHCI_RingEndpointDoorbell(Extension,
@@ -11139,12 +11758,12 @@ XHCI_SubmitSgTransfer(
     return MP_STATUS_SUCCESS;
 
 Failure:
+    XHCI_FreeIsoTransferContext(Transfer);
     XHCI_ReleaseBounceBuffer(Transfer);
     XHCI_DisarmTransferPoll(Extension, Transfer);
     Transfer->UsbdStatus = USBD_STATUS_REQUEST_FAILED;
     KeAcquireSpinLock(&Endpoint->Lock, &OldIrql);
-    if (Endpoint->ActiveTransfer == Transfer)
-        Endpoint->ActiveTransfer = NULL;
+    XHCI_RemoveActiveTransferLocked(Endpoint, Transfer);
     KeReleaseSpinLock(&Endpoint->Lock, OldIrql);
     return Status;
 }
@@ -11277,6 +11896,7 @@ XHCI_PerformEndpointOpen(PXHCI_EXTENSION Extension,
 
     RtlZeroMemory(XhciEndpoint, sizeof(*XhciEndpoint));
     KeInitializeSpinLock(&XhciEndpoint->Lock);
+    XHCI_InitEndpointTransferState(XhciEndpoint);
     XhciEndpoint->Extension = Extension;
     XhciEndpoint->EndpointProperties = *EndpointProperties;
     XHCI_ApplyEndpointLpmPolicy(Extension, EndpointProperties);
@@ -11388,6 +12008,7 @@ XHCI_PerformEndpointOpen(PXHCI_EXTENSION Extension,
             XhciEndpoint->TransferRing.DequeueIndex = Slot->Ep0RingDequeueIndex;
             XhciEndpoint->TransferRing.UsesCommonBuffer = TRUE;
             KeInitializeSpinLock(&XhciEndpoint->Lock);
+            XHCI_InitEndpointTransferState(XhciEndpoint);
             Slot->EndpointTable[1] = XhciEndpoint;
 
             DPRINT("usbxhci: EP0 ReopenPipe complete slot=%u EnqIdx=%lu DeqIdx=%lu Cycle=%lu\n",
@@ -11470,8 +12091,15 @@ XHCI_PerformEndpointOpen(PXHCI_EXTENSION Extension,
 
         if (Existing && Existing != XhciEndpoint)
         {
+            BOOLEAN HasActiveTransfers;
+            KIRQL ExistingIrql;
+
+            KeAcquireSpinLock(&Existing->Lock, &ExistingIrql);
+            HasActiveTransfers = XHCI_HasActiveTransfersLocked(Existing);
+            KeReleaseSpinLock(&Existing->Lock, ExistingIrql);
+
             if (InterlockedCompareExchange((volatile LONG *)&Existing->PendingWorkCount, 0, 0) != 0 ||
-                Existing->ActiveTransfer)
+                HasActiveTransfers)
             {
                 DPRINT1("usbxhci: refusing to reopen ep %u on slot %u while work/transfers are active\n",
                         EndpointId,
@@ -11496,6 +12124,7 @@ XHCI_PerformEndpointOpen(PXHCI_EXTENSION Extension,
         (EndpointType == XHCI_ENDPOINT_TYPE_ISOCH_OUT ||
          EndpointType == XHCI_ENDPOINT_TYPE_ISOCH_IN);
     KeInitializeSpinLock(&XhciEndpoint->Lock);
+    XHCI_InitEndpointTransferState(XhciEndpoint);
 
     Status = XHCI_AllocateTransferRing(Extension,
                                        XHCI_EXTERNAL_EP_RING_TRBS,
@@ -11667,7 +12296,12 @@ XHCI_CloseEndpoint(PVOID MiniPortExtension,
         XHCI_FreeStreamResources(XhciEndpoint);
 
     XhciEndpoint->Slot = NULL;
-    XhciEndpoint->ActiveTransfer = NULL;
+    {
+        KIRQL OldIrql;
+        KeAcquireSpinLock(&XhciEndpoint->Lock, &OldIrql);
+        XHCI_ClearActiveTransfersLocked(XhciEndpoint);
+        KeReleaseSpinLock(&XhciEndpoint->Lock, OldIrql);
+    }
 }
 
 static MPSTATUS NTAPI
@@ -12003,7 +12637,7 @@ XHCI_StartController(PVOID MiniPortExtension,
         }
         /*
          * Force single interrupter until per-interrupter ERST/ERDP and event
-         * ring servicing is implemented. See TODO_XHCI.md for details.
+         * ring servicing is implemented.
          */
         Extension->InterrupterCount = 1;
         (void)ActiveIntr; /* suppress unused-variable warning */
@@ -12089,7 +12723,8 @@ XHCI_StartController(PVOID MiniPortExtension,
     if (Extension->Quirks & XHCI_QUIRK_NO_PORT_INDICATORS)
         Extension->PortIndicatorsSupported = FALSE;
 
-    XHCI_ValidateContextLayout(Extension);
+    if (!XHCI_ValidateContextLayout(Extension))
+        return MP_STATUS_ERROR;
 
     /*
      * Bring the controller into a clean state before programming operational
@@ -12382,15 +13017,23 @@ XHCI_StopController(PVOID MiniPortExtension,
             continue;
         }
 
-        if (XhciRegPacket.UsbPortCompleteTransfer &&
-            Transfer->Endpoint &&
-            Transfer->TransferParameters)
+        if (Transfer->Endpoint && Transfer->TransferParameters)
         {
-            XhciRegPacket.UsbPortCompleteTransfer(Extension,
-                                                  Transfer->Endpoint,
-                                                  Transfer->TransferParameters,
-                                                  USBD_STATUS_CANCELED,
-                                                  Transfer->BytesTransferred);
+            if (Transfer->IsIsochronous && XhciRegPacket.UsbPortCompleteIsoTransfer)
+            {
+                XhciRegPacket.UsbPortCompleteIsoTransfer(Extension,
+                                                         Transfer->Endpoint,
+                                                         Transfer->TransferParameters,
+                                                         Transfer->BytesTransferred);
+            }
+            else if (XhciRegPacket.UsbPortCompleteTransfer)
+            {
+                XhciRegPacket.UsbPortCompleteTransfer(Extension,
+                                                      Transfer->Endpoint,
+                                                      Transfer->TransferParameters,
+                                                      USBD_STATUS_CANCELED,
+                                                      Transfer->BytesTransferred);
+            }
         }
 
         KeAcquireSpinLock(&Extension->DeferredTransferLock, &OldIrql);
@@ -12756,21 +13399,368 @@ XHCI_ReopenEndpoint(PVOID MiniPortExtension,
                                       Endpoint->EndpointId);
 }
 
+static MPSTATUS
+XHCI_SubmitIsochronousTransfer(
+    _In_ PXHCI_EXTENSION Extension,
+    _Inout_ PXHCI_ENDPOINT Endpoint,
+    _Inout_ PXHCI_TRANSFER Transfer,
+    _Inout_ PUSBPORT_ISO_BLOCK IsoBlock)
+{
+    PUSBPORT_TRANSFER_PARAMETERS TransferParameters;
+    PUSBPORT_SCATTER_GATHER_LIST SgList;
+    PXHCI_RING Ring;
+    PXHCI_TRB Trb;
+    ULONGLONG PhysicalAddress = 0;
+    ULONG IsoPayloadLimit;
+    ULONG PacketIndex;
+    ULONG Control;
+    KIRQL OldIrql;
+    MPSTATUS Status = MP_STATUS_SUCCESS;
+    BOOLEAN ProgrammedRing = FALSE;
+    BOOLEAN DataIn = FALSE;
+    BOOLEAN UseBounce = FALSE;
+    ULONGLONG HighAddress = 0;
+    SIZE_T IsoContextSize;
+
+    if (!Extension || !Endpoint || !Transfer || !IsoBlock)
+        return MP_STATUS_ERROR;
+
+    TransferParameters = Transfer->TransferParameters;
+    SgList = IsoBlock->SgList;
+    Ring = XHCI_SelectStreamRing(Endpoint, Transfer->StreamId);
+
+    if (!TransferParameters || !Ring || !Ring->Base)
+        return MP_STATUS_ERROR;
+
+    if ((IsoBlock->TransferFlags & USBD_START_ISO_TRANSFER_ASAP) == 0)
+    {
+        for (PacketIndex = 0; PacketIndex < IsoBlock->NumberOfPackets; PacketIndex++)
+        {
+            IsoBlock->Packets[PacketIndex].ActualLength = 0;
+            IsoBlock->Packets[PacketIndex].Status = USBD_STATUS_BAD_START_FRAME;
+        }
+        return MP_STATUS_FAILURE;
+    }
+
+    Status = XHCI_ResumeStoppedEndpoint(Extension, Endpoint, Ring);
+    if (Status != MP_STATUS_SUCCESS)
+        return Status;
+
+    DataIn = (TransferParameters->TransferFlags & USBD_TRANSFER_DIRECTION_IN) ? TRUE : FALSE;
+
+    IsoPayloadLimit = Endpoint->EndpointProperties.TotalMaxPacketSize;
+    if (IsoPayloadLimit == 0)
+    {
+        ULONG Transactions = Endpoint->EndpointProperties.TransactionPerMicroframe;
+        ULONG PacketSize = Endpoint->EndpointProperties.MaxPacketSize;
+
+        if (Transactions == 0)
+            Transactions = 1;
+
+        IsoPayloadLimit = PacketSize * Transactions;
+    }
+
+    if (IsoPayloadLimit == 0 ||
+        IsoPayloadLimit > XHCI_MAX_TRB_TRANSFER_LENGTH)
+    {
+        IsoPayloadLimit = XHCI_MAX_TRB_TRANSFER_LENGTH;
+    }
+
+    if (TransferParameters->TransferBufferLength != 0)
+    {
+        if (!SgList || SgList->SgElementCount == 0)
+            return MP_STATUS_NO_RESOURCES;
+
+        if (XHCI_Requires32BitDma(Extension) &&
+            XHCI_SgListHasHighAddress(SgList, &HighAddress))
+        {
+            Status = XHCI_PrepareBounceBuffer(Extension,
+                                              Transfer,
+                                              TransferParameters->TransferBufferLength,
+                                              DataIn);
+            if (Status != MP_STATUS_SUCCESS)
+                return Status;
+
+            UseBounce = (Transfer->BounceBuffer != NULL);
+            if (UseBounce && !DataIn)
+            {
+                ULONG Copied = XHCI_CopySgListToBuffer(SgList,
+                                                       Transfer->BounceBuffer,
+                                                       Transfer->BounceLength);
+                if (Copied < Transfer->BounceLength)
+                {
+                    DPRINT1("usbxhci: ISO OUT bounce copy short (%lu/%lu)\n",
+                            Copied,
+                            Transfer->BounceLength);
+                }
+            }
+        }
+    }
+
+    if (IsoBlock->NumberOfPackets == 0 ||
+        IsoBlock->NumberOfPackets > (MAXULONG / sizeof(XHCI_ISO_PACKET_CONTEXT)))
+    {
+        Status = MP_STATUS_ERROR;
+        goto Failure;
+    }
+
+    IsoContextSize = IsoBlock->NumberOfPackets * sizeof(XHCI_ISO_PACKET_CONTEXT);
+    Transfer->IsoPacketContext = ExAllocatePoolWithTag(NonPagedPool,
+                                                       IsoContextSize,
+                                                       XHCI_TAG);
+    if (!Transfer->IsoPacketContext)
+    {
+        Status = MP_STATUS_NO_RESOURCES;
+        goto Failure;
+    }
+
+    RtlZeroMemory(Transfer->IsoPacketContext, IsoContextSize);
+    Transfer->IsoBlock = IsoBlock;
+    Transfer->IsoPacketCount = IsoBlock->NumberOfPackets;
+    Transfer->IsoPacketsCompleted = 0;
+    Transfer->IsoCompletedLength = 0;
+
+    for (PacketIndex = 0; PacketIndex < IsoBlock->NumberOfPackets; PacketIndex++)
+    {
+        PUSBPORT_ISO_BLOCK_PACKET Packet = &IsoBlock->Packets[PacketIndex];
+        PXHCI_ISO_PACKET_CONTEXT PacketContext =
+            &Transfer->IsoPacketContext[PacketIndex];
+        ULONG PacketRemaining = Packet->Length;
+        ULONG PacketOffset = Packet->Offset;
+        ULONG PacketEnd = PacketOffset + Packet->Length;
+        BOOLEAN PacketProgrammed = FALSE;
+
+        PacketContext->Length = Packet->Length;
+
+        if (Packet->Length == 0)
+        {
+            Trb = XHCI_GetTransferRingTrb(Ring, &PhysicalAddress, FALSE);
+            if (!Trb)
+            {
+                Status = MP_STATUS_NO_RESOURCES;
+                goto Failure;
+            }
+
+            if (Transfer->TdFirstTrbPointer == 0)
+                Transfer->TdFirstTrbPointer = PhysicalAddress;
+            PacketContext->FirstTrbPointer = PhysicalAddress;
+
+            Trb->Parameter1 = 0;
+            Trb->Parameter2 = 0;
+            Trb->Status = 0;
+            Control = (XHCI_TRB_TYPE_ISOCH << XHCI_TRB_TYPE_SHIFT) |
+                      (Ring->CycleState & XHCI_TRB_CYCLE) |
+                      XHCI_TRB_SIA |
+                      XHCI_TRB_IOC;
+            if (Endpoint->InterruptTarget < Extension->InterrupterCount)
+                Control |= ((ULONG)Endpoint->InterruptTarget << XHCI_TRB_INTR_TARGET_SHIFT);
+
+            Trb->Control = Control;
+            XHCI_AdvanceTransferRing(Ring);
+            PacketContext->LastTrbPointer = PhysicalAddress;
+            Transfer->CompletionTrbPointer = PhysicalAddress;
+            ProgrammedRing = TRUE;
+            continue;
+        }
+
+        if (PacketEnd < PacketOffset ||
+            PacketEnd > TransferParameters->TransferBufferLength)
+        {
+            Status = MP_STATUS_ERROR;
+            goto Failure;
+        }
+
+        if (UseBounce)
+        {
+            ULONGLONG ElementAddress =
+                Transfer->BouncePhysicalAddress.QuadPart + PacketOffset;
+
+            while (PacketRemaining)
+            {
+                ULONG Chunk;
+                BOOLEAN TdContinues;
+
+                Chunk = XHCI_CalcTrbTransferChunk(ElementAddress,
+                                                  PacketRemaining,
+                                                  PacketRemaining,
+                                                  IsoPayloadLimit);
+                TdContinues = (PacketRemaining > Chunk);
+
+                Trb = XHCI_GetTransferRingTrb(Ring,
+                                              &PhysicalAddress,
+                                              TdContinues);
+                if (!Trb)
+                {
+                    Status = MP_STATUS_NO_RESOURCES;
+                    goto Failure;
+                }
+
+                if (Transfer->TdFirstTrbPointer == 0)
+                    Transfer->TdFirstTrbPointer = PhysicalAddress;
+                if (PacketContext->FirstTrbPointer == 0)
+                    PacketContext->FirstTrbPointer = PhysicalAddress;
+
+                Trb->Parameter1 = (ULONG)(ElementAddress & 0xFFFFFFFF);
+                Trb->Parameter2 = (ULONG)(ElementAddress >> 32);
+                Trb->Status = Chunk;
+                Control = (XHCI_TRB_TYPE_ISOCH << XHCI_TRB_TYPE_SHIFT) |
+                          (Ring->CycleState & XHCI_TRB_CYCLE);
+                if (!PacketProgrammed)
+                    Control |= XHCI_TRB_SIA;
+                if (Endpoint->InterruptTarget < Extension->InterrupterCount)
+                    Control |= ((ULONG)Endpoint->InterruptTarget << XHCI_TRB_INTR_TARGET_SHIFT);
+                if (TdContinues)
+                    Control |= XHCI_TRB_CHAIN_BIT;
+                else
+                    Control |= XHCI_TRB_IOC;
+
+                Trb->Control = Control;
+                XHCI_AdvanceTransferRing(Ring);
+                PacketContext->LastTrbPointer = PhysicalAddress;
+                Transfer->CompletionTrbPointer = PhysicalAddress;
+                ProgrammedRing = TRUE;
+                PacketProgrammed = TRUE;
+
+                ElementAddress += Chunk;
+                PacketRemaining -= Chunk;
+            }
+        }
+        else
+        {
+            ULONG SgIndex;
+
+            for (SgIndex = 0;
+                 PacketRemaining && SgIndex < SgList->SgElementCount;
+                 SgIndex++)
+            {
+                PUSBPORT_SCATTER_GATHER_ELEMENT Element = &SgList->SgElement[SgIndex];
+                ULONG ElementStart = Element->SgOffset;
+                ULONG ElementEnd = ElementStart + Element->SgTransferLength;
+                ULONG OverlapStart;
+                ULONG OverlapEnd;
+                ULONGLONG ElementAddress;
+                ULONG ElementRemaining;
+
+                if (ElementEnd < ElementStart || ElementEnd <= PacketOffset)
+                    continue;
+
+                if (ElementStart >= PacketEnd)
+                    break;
+
+                OverlapStart = (ElementStart > PacketOffset) ? ElementStart : PacketOffset;
+                OverlapEnd = (ElementEnd < PacketEnd) ? ElementEnd : PacketEnd;
+                if (OverlapEnd <= OverlapStart)
+                    continue;
+
+                ElementAddress = Element->SgPhysicalAddress.QuadPart +
+                                 (OverlapStart - ElementStart);
+                ElementRemaining = OverlapEnd - OverlapStart;
+
+                while (ElementRemaining && PacketRemaining)
+                {
+                    ULONG Chunk;
+                    BOOLEAN TdContinues;
+
+                    Chunk = XHCI_CalcTrbTransferChunk(ElementAddress,
+                                                      ElementRemaining,
+                                                      PacketRemaining,
+                                                      IsoPayloadLimit);
+                    TdContinues = (PacketRemaining > Chunk);
+
+                    Trb = XHCI_GetTransferRingTrb(Ring,
+                                                  &PhysicalAddress,
+                                                  TdContinues);
+                    if (!Trb)
+                    {
+                        Status = MP_STATUS_NO_RESOURCES;
+                        goto Failure;
+                    }
+
+                    if (Transfer->TdFirstTrbPointer == 0)
+                        Transfer->TdFirstTrbPointer = PhysicalAddress;
+                    if (PacketContext->FirstTrbPointer == 0)
+                        PacketContext->FirstTrbPointer = PhysicalAddress;
+
+                    Trb->Parameter1 = (ULONG)(ElementAddress & 0xFFFFFFFF);
+                    Trb->Parameter2 = (ULONG)(ElementAddress >> 32);
+                    Trb->Status = Chunk;
+                    Control = (XHCI_TRB_TYPE_ISOCH << XHCI_TRB_TYPE_SHIFT) |
+                              (Ring->CycleState & XHCI_TRB_CYCLE);
+                    if (!PacketProgrammed)
+                        Control |= XHCI_TRB_SIA;
+                    if (Endpoint->InterruptTarget < Extension->InterrupterCount)
+                        Control |= ((ULONG)Endpoint->InterruptTarget << XHCI_TRB_INTR_TARGET_SHIFT);
+                    if (TdContinues)
+                        Control |= XHCI_TRB_CHAIN_BIT;
+                    else
+                        Control |= XHCI_TRB_IOC;
+
+                    Trb->Control = Control;
+                    XHCI_AdvanceTransferRing(Ring);
+                    PacketContext->LastTrbPointer = PhysicalAddress;
+                    Transfer->CompletionTrbPointer = PhysicalAddress;
+                    ProgrammedRing = TRUE;
+                    PacketProgrammed = TRUE;
+
+                    ElementAddress += Chunk;
+                    ElementRemaining -= Chunk;
+                    PacketRemaining -= Chunk;
+                }
+            }
+
+            if (PacketRemaining)
+            {
+                Status = MP_STATUS_ERROR;
+                goto Failure;
+            }
+        }
+    }
+
+    {
+        USHORT DoorbellStreamId = XHCI_SelectDoorbellStreamId(Endpoint, Transfer);
+
+        KeAcquireSpinLock(&Endpoint->Lock, &OldIrql);
+        XHCI_InsertActiveTransferLocked(Endpoint, Transfer);
+        KeReleaseSpinLock(&Endpoint->Lock, OldIrql);
+
+        XHCI_ArmTransferPoll(Extension, Transfer);
+        KeMemoryBarrier();
+        XHCI_RingEndpointDoorbell(Extension,
+                                   Endpoint->SlotId,
+                                   Endpoint->DoorbellTarget,
+                                   DoorbellStreamId);
+    }
+
+    return MP_STATUS_SUCCESS;
+
+Failure:
+    XHCI_FreeIsoTransferContext(Transfer);
+    XHCI_ReleaseBounceBuffer(Transfer);
+    XHCI_DisarmTransferPoll(Extension, Transfer);
+    Transfer->UsbdStatus = USBD_STATUS_REQUEST_FAILED;
+    if (ProgrammedRing)
+        XHCI_ResetEndpointRing(Endpoint);
+
+    KeAcquireSpinLock(&Endpoint->Lock, &OldIrql);
+    XHCI_RemoveActiveTransferLocked(Endpoint, Transfer);
+    KeReleaseSpinLock(&Endpoint->Lock, OldIrql);
+
+    return Status;
+}
+
 static MPSTATUS NTAPI
 XHCI_SubmitIsoTransfer(PVOID MiniPortExtension,
                        PVOID EndpointHandle,
                        PUSBPORT_TRANSFER_PARAMETERS TransferParameters,
                        PVOID TransferHandle,
-                       PVOID IsoParameters)
+                       PUSBPORT_ISO_BLOCK IsoBlock)
 {
     PXHCI_EXTENSION Extension = (PXHCI_EXTENSION)MiniPortExtension;
     PXHCI_ENDPOINT Endpoint = (PXHCI_ENDPOINT)EndpointHandle;
     PXHCI_TRANSFER Transfer = (PXHCI_TRANSFER)TransferHandle;
-    PUSBPORT_SCATTER_GATHER_LIST SgList =
-        (PUSBPORT_SCATTER_GATHER_LIST)IsoParameters;
 
     if (!Extension || !Endpoint || !Endpoint->Slot ||
-        !TransferParameters || !Transfer)
+        !TransferParameters || !Transfer || !IsoBlock)
     {
         return MP_STATUS_ERROR;
     }
@@ -12784,19 +13774,28 @@ XHCI_SubmitIsoTransfer(PVOID MiniPortExtension,
     if (Extension->FatalError)
         return MP_STATUS_HW_ERROR;
 
-    if (!SgList || SgList->SgElementCount == 0)
+    if (!IsoBlock->SgList || IsoBlock->SgList->SgElementCount == 0)
     {
         if (TransferParameters->TransferBufferLength != 0)
             return MP_STATUS_NO_RESOURCES;
     }
 
-    if (Endpoint->ActiveTransfer)
-        return MP_STATUS_FAILURE;
+    {
+        KIRQL OldIrql;
 
-    RtlZeroMemory(Transfer, sizeof(*Transfer));
+        KeAcquireSpinLock(&Endpoint->Lock, &OldIrql);
+        if (XHCI_HasActiveTransfersLocked(Endpoint))
+        {
+            KeReleaseSpinLock(&Endpoint->Lock, OldIrql);
+            return MP_STATUS_FAILURE;
+        }
+        KeReleaseSpinLock(&Endpoint->Lock, OldIrql);
+    }
+
+    XHCI_InitTransferForSubmit(Transfer);
     Transfer->Endpoint = Endpoint;
     Transfer->TransferParameters = TransferParameters;
-    Transfer->SgList = SgList;
+    Transfer->SgList = IsoBlock->SgList;
     Transfer->TransferHandle = TransferHandle;
     Transfer->RequestedLength = TransferParameters->TransferBufferLength;
     Transfer->UsbdStatus = USBD_STATUS_SUCCESS;
@@ -12804,12 +13803,12 @@ XHCI_SubmitIsoTransfer(PVOID MiniPortExtension,
     Transfer->NewAddress = 0;
     Transfer->IsIsochronous = TRUE;
     Transfer->IsControl = FALSE;
+    Transfer->IsoBlock = IsoBlock;
 
-    return XHCI_SubmitSgTransfer(Extension,
-                                 Endpoint,
-                                 Transfer,
-                                 XHCI_TRB_TYPE_ISOCH,
-                                 TRUE);
+    return XHCI_SubmitIsochronousTransfer(Extension,
+                                          Endpoint,
+                                          Transfer,
+                                          IsoBlock);
 }
 
 static VOID NTAPI
@@ -12822,17 +13821,16 @@ XHCI_AbortTransfer(PVOID MiniPortExtension,
     PXHCI_ENDPOINT Endpoint = (PXHCI_ENDPOINT)EndpointHandle;
     PXHCI_TRANSFER Transfer = (PXHCI_TRANSFER)TransferHandle;
     KIRQL Irql;
+    KIRQL OldIrql;
+    BOOLEAN HasActiveTransfer;
+    BOOLEAN IsRequestedTransferActive;
+    BOOLEAN DisownedAbortTransfer = FALSE;
 
     if (BytesTransferred)
         *BytesTransferred = 0;
 
     if (!Extension || !Endpoint || !Endpoint->Slot)
     {
-        DPRINT1("usbxhci: AbortTransfer invalid args: Extension=%p Endpoint=%p Slot=%p (IRQL=%lu)\n",
-                Extension,
-                Endpoint,
-                Endpoint ? Endpoint->Slot : NULL,
-                (ULONG)KeGetCurrentIrql());
         /*
          * If the slot is NULL (device disconnected and slot freed), we cannot
          * perform any hardware abort operations. Return immediately - USBPORT
@@ -12853,26 +13851,11 @@ XHCI_AbortTransfer(PVOID MiniPortExtension,
      */
     if (!Endpoint->Slot->InUse || Endpoint->Slot->DisablePending)
     {
-        DPRINT1("usbxhci: AbortTransfer: slot %u ep %u slot disabled (InUse=%u DisablePending=%u), skipping\n",
-                Endpoint->SlotId,
-                Endpoint->EndpointId,
-                Endpoint->Slot->InUse,
-                Endpoint->Slot->DisablePending);
         return;
     }
 
-    DPRINT1("usbxhci: AbortTransfer ENTRY: slot %u ep %u Transfer=%p ActiveTransfer=%p Ep0StallReset=%u\n",
-            Endpoint->SlotId,
-            Endpoint->EndpointId,
-            Transfer,
-            Endpoint->ActiveTransfer,
-            (Endpoint->Slot ? Endpoint->Slot->Ep0NeedsStallReset : 0));
-
     if (Transfer && (Transfer->Flags & XHCI_TRANSFER_FLAG_SWENUM_PENDING))
     {
-        DPRINT1("usbxhci: AbortTransfer: slot %u ep %u SWENUM_PENDING, marking canceled\n",
-                Endpoint->SlotId,
-                Endpoint->EndpointId);
         InterlockedOr((volatile LONG *)&Transfer->Flags,
                       XHCI_TRANSFER_FLAG_SWENUM_CANCELED);
         return;
@@ -12885,21 +13868,37 @@ XHCI_AbortTransfer(PVOID MiniPortExtension,
      * By the time USBPORT's timeout fires, a different transfer may be active on this
      * endpoint. In that case, the requested transfer already completed - nothing to abort.
      */
-    DPRINT1("usbxhci: AbortTransfer: slot %u ep %u CHECK1: Transfer=%p ActiveTransfer=%p (same=%u)\n",
-            Endpoint->SlotId,
-            Endpoint->EndpointId,
-            Transfer,
-            Endpoint->ActiveTransfer,
-            (Transfer && Endpoint->ActiveTransfer) ? (Transfer == Endpoint->ActiveTransfer) : 99);
+    KeAcquireSpinLock(&Endpoint->Lock, &OldIrql);
+    HasActiveTransfer = XHCI_HasActiveTransfersLocked(Endpoint);
+    IsRequestedTransferActive = !Transfer ||
+                                XHCI_IsTransferActiveLocked(Endpoint, Transfer);
+    KeReleaseSpinLock(&Endpoint->Lock, OldIrql);
 
-    if (Transfer && Endpoint->ActiveTransfer && Endpoint->ActiveTransfer != Transfer)
+    if (Transfer && HasActiveTransfer && !IsRequestedTransferActive)
     {
-        DPRINT1("usbxhci: AbortTransfer: slot %u ep %u transfer %p not active (active=%p), already completed\n",
-                Endpoint->SlotId,
-                Endpoint->EndpointId,
-                Transfer,
-                Endpoint->ActiveTransfer);
         return;
+    }
+
+    if (Transfer && IsRequestedTransferActive)
+    {
+        KeAcquireSpinLock(&Endpoint->Lock, &OldIrql);
+        XHCI_RemoveActiveTransferLocked(Endpoint, Transfer);
+        HasActiveTransfer = XHCI_HasActiveTransfersLocked(Endpoint);
+        KeReleaseSpinLock(&Endpoint->Lock, OldIrql);
+
+        XHCI_DisarmTransferPoll(Extension, Transfer);
+        XHCI_FreeIsoTransferContext(Transfer);
+        Transfer->UsbdStatus = USBD_STATUS_CANCELED;
+        DisownedAbortTransfer = TRUE;
+    }
+    else if (!Transfer && HasActiveTransfer)
+    {
+        KeAcquireSpinLock(&Endpoint->Lock, &OldIrql);
+        XHCI_ClearActiveTransfersLocked(Endpoint);
+        HasActiveTransfer = FALSE;
+        KeReleaseSpinLock(&Endpoint->Lock, OldIrql);
+
+        DisownedAbortTransfer = TRUE;
     }
 
     /*
@@ -12908,13 +13907,9 @@ XHCI_AbortTransfer(PVOID MiniPortExtension,
      * Check endpoint state: if it's Running with an active transfer, the transfer is
      * progressing normally and USBPORT's timeout is spurious. Skip the reset.
      */
-    if (Endpoint->ActiveTransfer)
+    if (HasActiveTransfer)
     {
         ULONG EpState = XHCI_EPCTX_STATE_RUNNING;
-
-        DPRINT1("usbxhci: AbortTransfer: slot %u ep %u CHECK2: has ActiveTransfer, checking EP state\n",
-                Endpoint->SlotId,
-                Endpoint->EndpointId);
 
         if (Endpoint->Slot && Endpoint->Slot->DeviceContext.VirtualAddress &&
             Endpoint->EndpointId != 0)
@@ -12926,11 +13921,6 @@ XHCI_AbortTransfer(PVOID MiniPortExtension,
             if (EpCtx)
                 EpState = EpCtx->EpInfo & XHCI_EPCTX_STATE_MASK;
         }
-
-        DPRINT1("usbxhci: AbortTransfer: slot %u ep %u CHECK2: EP state=%lu (0=Disabled,1=Running,2=Halted,3=Stopped,4=Error)\n",
-                Endpoint->SlotId,
-                Endpoint->EndpointId,
-                EpState);
 
         /*
          * Handle endpoint state:
@@ -12946,38 +13936,17 @@ XHCI_AbortTransfer(PVOID MiniPortExtension,
              * transfers can proceed. The transfer was aborted by the stop.
              * Must hold Endpoint->Lock to avoid racing with transfer submission.
              */
-            KIRQL OldIrql;
-            DPRINT1("usbxhci: AbortTransfer: slot %u ep %u EP is Stopped (3), clearing stale ActiveTransfer %p\n",
-                    Endpoint->SlotId,
-                    Endpoint->EndpointId,
-                    Endpoint->ActiveTransfer);
             KeAcquireSpinLock(&Endpoint->Lock, &OldIrql);
-            Endpoint->ActiveTransfer = NULL;
+            XHCI_ClearActiveTransfersLocked(Endpoint);
             KeReleaseSpinLock(&Endpoint->Lock, OldIrql);
             return;
         }
         else if (EpState != XHCI_EPCTX_STATE_HALTED &&
-                 EpState != XHCI_EPCTX_STATE_ERROR)
+                 EpState != XHCI_EPCTX_STATE_ERROR &&
+                 !DisownedAbortTransfer)
         {
-            DPRINT1("usbxhci: AbortTransfer: slot %u ep %u has active transfer but EP state=%lu (Running), skipping spurious abort\n",
-                    Endpoint->SlotId,
-                    Endpoint->EndpointId,
-                    EpState);
             return;
         }
-        else
-        {
-            DPRINT1("usbxhci: AbortTransfer: slot %u ep %u EP state=%lu needs recovery, proceeding with abort\n",
-                    Endpoint->SlotId,
-                    Endpoint->EndpointId,
-                    EpState);
-        }
-    }
-    else
-    {
-        DPRINT1("usbxhci: AbortTransfer: slot %u ep %u CHECK2: NO ActiveTransfer, checking if reset needed\n",
-                Endpoint->SlotId,
-                Endpoint->EndpointId);
     }
 
     /*
@@ -12997,7 +13966,11 @@ XHCI_AbortTransfer(PVOID MiniPortExtension,
      * (completion code 19) because the endpoint state may have changed since
      * we read it, or the endpoint is already idle.
      */
-    if (!Endpoint->ActiveTransfer)
+    KeAcquireSpinLock(&Endpoint->Lock, &OldIrql);
+    HasActiveTransfer = XHCI_HasActiveTransfersLocked(Endpoint);
+    KeReleaseSpinLock(&Endpoint->Lock, OldIrql);
+
+    if (!HasActiveTransfer && !DisownedAbortTransfer)
     {
         ULONG EpState = XHCI_EPCTX_STATE_DISABLED;
         BOOLEAN NeedsReset = FALSE;
@@ -13007,9 +13980,6 @@ XHCI_AbortTransfer(PVOID MiniPortExtension,
             Endpoint->Slot &&
             Endpoint->Slot->Ep0NeedsStallReset)
         {
-            DPRINT1("usbxhci: AbortTransfer: slot %u ep %u CHECK3: Ep0NeedsStallReset=TRUE\n",
-                    Endpoint->SlotId,
-                    Endpoint->EndpointId);
             NeedsReset = TRUE;
         }
 
@@ -13025,19 +13995,10 @@ XHCI_AbortTransfer(PVOID MiniPortExtension,
                 EpState = EpCtx->EpInfo & XHCI_EPCTX_STATE_MASK;
         }
 
-        DPRINT1("usbxhci: AbortTransfer: slot %u ep %u CHECK3: EP state=%lu NeedsReset=%u\n",
-                Endpoint->SlotId,
-                Endpoint->EndpointId,
-                EpState,
-                NeedsReset);
-
         /* Only reset if endpoint is in a state requiring recovery */
         if (EpState == XHCI_EPCTX_STATE_HALTED ||
             EpState == XHCI_EPCTX_STATE_ERROR)
         {
-            DPRINT1("usbxhci: AbortTransfer: slot %u ep %u CHECK3: EP state requires recovery\n",
-                    Endpoint->SlotId,
-                    Endpoint->EndpointId);
             NeedsReset = TRUE;
         }
 
@@ -13048,51 +14009,19 @@ XHCI_AbortTransfer(PVOID MiniPortExtension,
          */
         if (!NeedsReset)
         {
-            DPRINT1("usbxhci: AbortTransfer: slot %u ep %u no active transfer, state=%lu, skipping reset\n",
-                    Endpoint->SlotId,
-                    Endpoint->EndpointId,
-                    EpState);
             return;
-        }
-        else
-        {
-            DPRINT1("usbxhci: AbortTransfer: slot %u ep %u CHECK3: NeedsReset=TRUE, proceeding\n",
-                    Endpoint->SlotId,
-                    Endpoint->EndpointId);
         }
     }
 
-    DPRINT1("usbxhci: AbortTransfer: slot %u ep %u PROCEEDING with reset (IRQL=%lu)\n",
-            Endpoint->SlotId,
-            Endpoint->EndpointId,
-            (ULONG)KeGetCurrentIrql());
-
     Irql = KeGetCurrentIrql();
-    if (Irql > PASSIVE_LEVEL)
+    if (Irql > DISPATCH_LEVEL)
     {
-        PXHCI_EP_RESET_WORK Work;
+        ASSERT(Irql <= DISPATCH_LEVEL);
+        return;
+    }
 
-        Work = ExAllocatePoolWithTag(NonPagedPool,
-                                     sizeof(*Work),
-                                     XHCI_TAG);
-        if (!Work)
-        {
-            DPRINT1("usbxhci: AbortTransfer cannot queue async reset at DISPATCH_LEVEL (alloc failed) - USBPORT will handle timeout\n");
-            return;
-        }
-
-        InterlockedIncrement(&Endpoint->PendingWorkCount);
-        Work->Extension = Extension;
-        Work->Endpoint = Endpoint;
-        Work->RingDoorbell = TRUE;
-        Work->ClearStallResetFlags = FALSE;
-        ExInitializeWorkItem(&Work->Item,
-                             XHCI_EndpointResetWorker,
-                             Work);
-        ExQueueWorkItem(&Work->Item, DelayedWorkQueue);
-        DPRINT1("usbxhci: AbortTransfer queued reset work for slot %u ep %u\n",
-                Endpoint->SlotId,
-                Endpoint->EndpointId);
+    if (!Endpoint->DefaultControl && !XHCI_TryBeginEndpointReset(Endpoint))
+    {
         return;
     }
 
@@ -13100,10 +14029,16 @@ XHCI_AbortTransfer(PVOID MiniPortExtension,
     XHCI_PerformEndpointResetSequence(Extension, Endpoint, TRUE);
     InterlockedDecrement(&Endpoint->PendingWorkCount);
 
-    DPRINT1("usbxhci: AbortTransfer done for slot %u ep %u (IRQL=%lu)\n",
-            Endpoint->SlotId,
-            Endpoint->EndpointId,
-            (ULONG)KeGetCurrentIrql());
+    if (!Endpoint->DefaultControl)
+        XHCI_EndEndpointReset(Endpoint);
+
+    /*
+     * Stop/Reset Endpoint command polling services the event ring with USBPORT
+     * callbacks masked. Transfer events observed there are queued for later;
+     * deliver them now that the endpoint reset sequence has finished and the
+     * miniport is back in a callback-safe USBPORT entry point.
+     */
+    XHCI_DrainDeferredTransferCompletions(Extension);
 }
 
 static VOID NTAPI
@@ -13204,6 +14139,7 @@ XHCI_SetEndpointStatus(PVOID MiniPortExtension,
 {
     PXHCI_EXTENSION Extension = (PXHCI_EXTENSION)MiniPortExtension;
     PXHCI_ENDPOINT Endpoint = (PXHCI_ENDPOINT)EndpointHandle;
+    BOOLEAN OwnsEndpointReset = FALSE;
 
     if (!Extension || !Endpoint || !Endpoint->Slot)
         return;
@@ -13223,9 +14159,29 @@ XHCI_SetEndpointStatus(PVOID MiniPortExtension,
      * AbortTransfer avoids this by queueing work at DISPATCH_LEVEL only
      * when there is no active transfer, so no new TRBs can appear.
      */
+    if (!Endpoint->DefaultControl)
+    {
+        if (!XHCI_TryBeginEndpointReset(Endpoint))
+        {
+            return;
+        }
+
+        OwnsEndpointReset = TRUE;
+    }
+
     InterlockedIncrement(&Endpoint->PendingWorkCount);
     XHCI_PerformEndpointResetSequence(Extension, Endpoint, TRUE);
     InterlockedDecrement(&Endpoint->PendingWorkCount);
+
+    if (OwnsEndpointReset)
+        XHCI_EndEndpointReset(Endpoint);
+
+    /*
+     * Synchronous endpoint recovery can collect transfer events while command
+     * waits run with callbacks disabled. Flush them before returning so
+     * USBPORT sees cancellations/completions that caused this recovery.
+     */
+    XHCI_DrainDeferredTransferCompletions(Extension);
 }
 
 static VOID NTAPI
@@ -13252,7 +14208,10 @@ XHCI_StartSendOnePacket(PVOID MiniPortExtension,
     UNREFERENCED_PARAMETER(Param4);
     UNREFERENCED_PARAMETER(Param5);
     UNREFERENCED_PARAMETER(Param6);
-    UNREFERENCED_PARAMETER(Param7);
+
+    if (Param7)
+        *Param7 = USBD_STATUS_NOT_SUPPORTED;
+
     DPRINT1("usbxhci: StartSendOnePacket (IRQL=%lu)\n", (ULONG)KeGetCurrentIrql());
     return MP_STATUS_NOT_SUPPORTED;
 }
@@ -13274,7 +14233,10 @@ XHCI_EndSendOnePacket(PVOID MiniPortExtension,
     UNREFERENCED_PARAMETER(Param4);
     UNREFERENCED_PARAMETER(Param5);
     UNREFERENCED_PARAMETER(Param6);
-    UNREFERENCED_PARAMETER(Param7);
+
+    if (Param7)
+        *Param7 = USBD_STATUS_NOT_SUPPORTED;
+
     DPRINT1("usbxhci: EndSendOnePacket (IRQL=%lu)\n", (ULONG)KeGetCurrentIrql());
     return MP_STATUS_NOT_SUPPORTED;
 }
@@ -13854,18 +14816,9 @@ XHCI_RH_UpdatePortStatusFields(
 
     if ((PortValue & XHCI_PORTSC_CSC) || (CurrentConnect != PreviousConnect))
     {
-        if (PortNumber == 7)
-        {
-            XHCI_RH_AckPortChange(Extension, PortNumber, XHCI_PORTSC_CSC);
-            PortStatus->PortStatus.AsUshort16 &= ~USB_PORT_STATUS_CONNECT;
-            if (Protocol >= 3) PortStatus30->CurrentConnectStatus = 0;
-        }
-        else
-        {
-            PortStatus->PortChange.Usb20PortChange.ConnectStatusChange = 1;
-            if (Protocol >= 3)
-                PortChange30->ConnectStatusChange = 1;
-        }
+        PortStatus->PortChange.Usb20PortChange.ConnectStatusChange = 1;
+        if (Protocol >= 3)
+            PortChange30->ConnectStatusChange = 1;
     }
 
     if (PortValue & XHCI_PORTSC_PEC)
@@ -14064,6 +15017,7 @@ XHCI_RH_SetFeaturePortReset(
     PXHCI_EXTENSION Extension = MiniPortExtension;
     volatile ULONG *PortStatusReg;
     ULONG PortValue;
+    MPSTATUS Status;
 
     if (!Extension)
         return MP_STATUS_ERROR;
@@ -14083,348 +15037,12 @@ XHCI_RH_SetFeaturePortReset(
     /* SuperSpeed ports use Warm Port Reset (WPR) */
     if (XHCI_PortIsSuperSpeed(Extension, Port))
     {
-        MPSTATUS Status;
-        ULONG PostValue;
-        ULONG WaitAttempts;
-        BOOLEAN ResetComplete = FALSE;
-
-        DPRINT("XHCI: Port %u is SuperSpeed, using Warm Port Reset (WPR)\n", Port);
-
-        /*
-         * Issue RESET_DEVICE before warm port reset if the slot is in
-         * Addressed/Configured state.  A warm reset puts the USB device
-         * back to Default state; the xHC slot must be transitioned to
-         * Default as well, otherwise the next OpenEndpoint will skip
-         * Address Device and transfers will fail (endpoint halts
-         * immediately because the device expects re-addressing).
-         *
-         * This mirrors the logic already present in the USB 2.0 standard
-         * port reset path below.
-         */
-        {
-            PXHCI_DEVICE_SLOT Slot = XHCI_FindSlotByPort(Extension, Port);
-            if (Slot && Slot->Addressed)
-            {
-                ULONG ResetCompletionCode = 0;
-                MPSTATUS ResetStatus;
-
-                DPRINT("XHCI: SS Port %u has slot %u in Addressed state, issuing RESET_DEVICE before WPR\n",
-                        Port, Slot->SlotId);
-
-                ResetStatus = XHCI_SendCommand(Extension,
-                                               XHCI_TRB_TYPE_RESET_DEV,
-                                               0,
-                                               0,
-                                               XHCI_COMMAND_SLOT_FIELD(Slot->SlotId),
-                                               XHCI_COMMAND_TIMEOUT_MS,
-                                               TRUE,
-                                               NULL,
-                                               &ResetCompletionCode);
-
-                if (ResetStatus == MP_STATUS_SUCCESS)
-                {
-                    Slot->Addressed = FALSE;
-                    DPRINT("XHCI: SS RESET_DEVICE succeeded for slot %u, now in Default state\n",
-                            Slot->SlotId);
-                }
-                else
-                {
-                    DPRINT1("XHCI: SS RESET_DEVICE failed for slot %u (Status=%ld Code=%lu) - continuing with WPR\n",
-                            Slot->SlotId, ResetStatus, ResetCompletionCode);
-                }
-            }
-        }
-
         Status = XHCI_ModifyPortBits(Extension, Port, XHCI_PORTSC_WPR, 0, 0);
-        if (Status != MP_STATUS_SUCCESS)
-            return Status;
-
-        /*
-         * Wait for Warm Port Reset completion. Per xHCI spec 4.19.5.1, warm
-         * reset puts the link through all link states (Rx.Detect, Polling,
-         * Training, then U0). The controller sets WRC (Warm Reset Change)
-         * when the warm reset completes.
-         *
-         * USB 3.0 spec requires up to 100ms for warm reset completion (tRESET),
-         * plus additional time for link training. We use 500ms total timeout.
-         */
-        #define SS_RESET_TIMEOUT_ATTEMPTS 2500
-        #define SS_RESET_POLL_US          200
-
-        for (WaitAttempts = 0; WaitAttempts < SS_RESET_TIMEOUT_ATTEMPTS; WaitAttempts++)
-        {
-            KeStallExecutionProcessor(SS_RESET_POLL_US);
-
-            PostValue = XHCI_READ_REGISTER_ULONG(PortStatusReg);
-
-            /* Check if device disconnected during reset */
-            if (!(PostValue & XHCI_PORTSC_CCS))
-            {
-                DPRINT1("XHCI: Port %u (SS) device disconnected during warm reset\n", Port);
-                return MP_STATUS_ERROR;
-            }
-
-            /*
-             * Warm reset is complete when:
-             * - WRC (Warm Reset Change) is set, AND
-             * - PED (Port Enabled) is set (link is up)
-             *
-             * Note: PRC may also be set, but WRC is the definitive indicator
-             * for warm reset completion on SuperSpeed ports.
-             */
-            if ((PostValue & XHCI_PORTSC_WRC) && (PostValue & XHCI_PORTSC_PED))
-            {
-                ResetComplete = TRUE;
-                DPRINT("XHCI: Port %u (SS) warm reset complete after %lu us: PORTSC=0x%08lx (PED=1 WRC=1)\n",
-                        Port, (WaitAttempts + 1) * SS_RESET_POLL_US, PostValue);
-                break;
-            }
-
-            /*
-             * If WRC is set but PED is not, the warm reset completed but
-             * link training failed. This could indicate a device that doesn't
-             * support SuperSpeed or a connection issue.
-             */
-            if (PostValue & XHCI_PORTSC_WRC)
-            {
-                ULONG LinkState = (PostValue & XHCI_PORTSC_PLS_MASK) >> XHCI_PORTSC_PLS_SHIFT;
-                DPRINT("XHCI: Port %u (SS) WRC set but PED=0, PLS=%lu - continuing to wait\n",
-                        Port, LinkState);
-                /* Continue waiting - link training may still be in progress */
-            }
-        }
-
-        PostValue = XHCI_READ_REGISTER_ULONG(PortStatusReg);
-
-        if (!ResetComplete)
-        {
-            ULONG LinkState = (PostValue & XHCI_PORTSC_PLS_MASK) >> XHCI_PORTSC_PLS_SHIFT;
-            DPRINT1("XHCI: Port %u (SS) warm reset timeout: PORTSC=0x%08lx (CCS=%u PED=%u WRC=%u PLS=%lu)\n",
-                    Port,
-                    PostValue,
-                    (PostValue & XHCI_PORTSC_CCS) ? 1 : 0,
-                    (PostValue & XHCI_PORTSC_PED) ? 1 : 0,
-                    (PostValue & XHCI_PORTSC_WRC) ? 1 : 0,
-                    LinkState);
-        }
-
-        /* Latch change bits for hub driver polling */
-        if (Port >= 1 && Port <= XHCI_MAX_PORTS)
-        {
-            ULONG ChangeBits = 0;
-            if (PostValue & XHCI_PORTSC_PRC)
-                ChangeBits |= XHCI_PORTSC_PRC;
-            if (PostValue & XHCI_PORTSC_WRC)
-                ChangeBits |= XHCI_PORTSC_WRC;
-
-            if (ChangeBits)
-            {
-                InterlockedOr((volatile LONG *)&Extension->PortChangeMask[Port], ChangeBits);
-            }
-        }
-
-        return ResetComplete ? MP_STATUS_SUCCESS : MP_STATUS_ERROR;
+        return Status;
     }
 
-    /* Standard Behavior: Set PR (Port Reset) and wait for completion */
-    DPRINT("XHCI: Port %u standard reset - writing PORTSC_PR\n", Port);
-
-    {
-        MPSTATUS Status;
-        ULONG PostValue;
-        ULONG WaitAttempts;
-        BOOLEAN ResetComplete = FALSE;
-        PXHCI_DEVICE_SLOT Slot;
-
-        /*
-         * Per xHCI spec section 4.6.11 (Reset Device) and Linux kernel xhci.c
-         * xhci_discover_or_reset_device(): when a USB bus reset occurs on a
-         * port that has an associated slot in Addressed or Configured state,
-         * the xHC must be notified via RESET_DEVICE command to transition
-         * the slot back to Default state.
-         *
-         * On Intel Alder Lake-N (8086:464e, 8086:54ed), if we perform a USB
-         * bus reset while the slot is still in Addressed state, the second
-         * port reset (issued by usbhub after device addressing) fails with
-         * PED=0 and PLS=7 (Polling) - the port never transitions to Enabled.
-         *
-         * The fix is to issue RESET_DEVICE BEFORE the port reset when there's
-         * an associated slot in Addressed state. This puts the slot back into
-         * Default state, allowing the USB bus reset to complete normally.
-         *
-         * Note: We skip RESET_DEVICE for VirtualBox and for slots already in
-         * Default state.
-         */
-        if (!(Extension->Quirks & XHCI_QUIRK_VBOX_POLL_XFERS))
-        {
-            Slot = XHCI_FindSlotByPort(Extension, Port);
-            if (Slot && Slot->Addressed)
-            {
-                ULONG ResetCompletionCode = 0;
-                MPSTATUS ResetStatus;
-
-                DPRINT("XHCI: Port %u has slot %u in Addressed state, issuing RESET_DEVICE before port reset\n",
-                        Port, Slot->SlotId);
-
-                ResetStatus = XHCI_SendCommand(Extension,
-                                               XHCI_TRB_TYPE_RESET_DEV,
-                                               0,
-                                               0,
-                                               XHCI_COMMAND_SLOT_FIELD(Slot->SlotId),
-                                               XHCI_COMMAND_TIMEOUT_MS,
-                                               TRUE,
-                                               NULL,
-                                               &ResetCompletionCode);
-
-                if (ResetStatus == MP_STATUS_SUCCESS)
-                {
-                    /*
-                     * RESET_DEVICE succeeded - slot is now in Default state.
-                     * Mark it as not addressed so we don't issue redundant
-                     * RESET_DEVICE commands later.
-                     */
-                    Slot->Addressed = FALSE;
-                    DPRINT("XHCI: RESET_DEVICE succeeded for slot %u, now in Default state\n",
-                            Slot->SlotId);
-                }
-                else
-                {
-                    /*
-                     * RESET_DEVICE failed. Per xHCI spec, this can happen if
-                     * the slot is not in Addressed/Configured state (e.g.,
-                     * already in Default state due to hardware auto-reset).
-                     * Log but continue with port reset - it may still work.
-                     */
-                    DPRINT1("XHCI: RESET_DEVICE failed for slot %u (Status=%ld Code=%lu) - continuing with port reset\n",
-                            Slot->SlotId, ResetStatus, ResetCompletionCode);
-                }
-            }
-        }
-
-        /*
-         * Initiate port reset by writing PR bit. Per xHCI spec 4.19.4, for USB 2.0
-         * devices the controller drives reset signaling for 50ms, then transitions
-         * the port from Polling to Enabled state, setting PED=1 and PRC=1.
-         *
-         * On real Intel hardware (Alder Lake-N), we must wait for PRC and PED to
-         * ensure the reset completes before ADDRESS_DEVICE. Without this wait,
-         * ADDRESS_DEVICE fails with USB_TRANSACTION_ERROR because the port is
-         * still in Polling state.
-         */
-        Status = XHCI_ModifyPortBits(Extension, Port, XHCI_PORTSC_PR, 0, 0);
-        if (Status != MP_STATUS_SUCCESS)
-            return Status;
-
-        /*
-         * Poll for reset completion. USB 2.0 spec requires 10ms reset signaling,
-         * but xHCI typically uses 50ms for USB 2.0 ports. Add margin for device
-         * recovery time (TRSTRCY). Total timeout: 200ms should be plenty.
-         * Poll every 1ms (1000 attempts at 200us each = 200ms total).
-         */
-        #define PORT_RESET_TIMEOUT_ATTEMPTS 1000
-        #define PORT_RESET_POLL_US          200
-
-        for (WaitAttempts = 0; WaitAttempts < PORT_RESET_TIMEOUT_ATTEMPTS; WaitAttempts++)
-        {
-            KeStallExecutionProcessor(PORT_RESET_POLL_US);
-
-            PostValue = XHCI_READ_REGISTER_ULONG(PortStatusReg);
-
-            /* Check if device disconnected during reset */
-            if (!(PostValue & XHCI_PORTSC_CCS))
-            {
-                DPRINT1("XHCI: Port %u device disconnected during reset\n", Port);
-                return MP_STATUS_ERROR;
-            }
-
-            /*
-             * Reset is complete when:
-             * - PR bit clears (reset signaling done), AND
-             * - PRC bit is set (Port Reset Change), AND
-             * - PED bit is set (Port Enabled) for USB 2.0 devices
-             *
-             * For USB 2.0 devices behind xHCI, successful reset always results
-             * in PED=1. If PED remains 0 after reset, the device failed to
-             * enumerate at this speed.
-             */
-            if (!(PostValue & XHCI_PORTSC_PR))
-            {
-                /* PR cleared - reset signaling is done */
-                if (PostValue & XHCI_PORTSC_PRC)
-                {
-                    /* PRC set - controller acknowledged reset completion */
-                    if (PostValue & XHCI_PORTSC_PED)
-                    {
-                        /* PED set - port is enabled, reset successful */
-                        ResetComplete = TRUE;
-                        DPRINT("XHCI: Port %u reset complete after %lu us: PORTSC=0x%08lx (PED=1 PRC=1)\n",
-                                Port, (WaitAttempts + 1) * PORT_RESET_POLL_US, PostValue);
-                        break;
-                    }
-                    else
-                    {
-                        /*
-                         * PRC set but PED=0: Reset signaling completed but port
-                         * did not enable. This can happen if:
-                         * 1. Device doesn't support the current speed
-                         * 2. Cable/connection issues
-                         * 3. Device needs more reset time
-                         *
-                         * On Intel Alder Lake-N, USB 2.0 devices may need the
-                         * link to transition out of Polling state. Check PLS.
-                         */
-                        ULONG LinkState = (PostValue & XHCI_PORTSC_PLS_MASK) >> XHCI_PORTSC_PLS_SHIFT;
-
-                        if (LinkState == 7) /* Still in Polling */
-                        {
-                            /* Continue waiting - device may still be negotiating */
-                            continue;
-                        }
-                        else
-                        {
-                            DPRINT1("XHCI: Port %u reset done but PED=0 (PLS=%lu): PORTSC=0x%08lx\n",
-                                    Port, LinkState, PostValue);
-                            /* Continue to wait a bit more */
-                        }
-                    }
-                }
-            }
-        }
-
-        /*
-         * Log final port state and latch the change bits so the hub driver sees
-         * ResetChange when it polls GetPortStatus.
-         */
-        PostValue = XHCI_READ_REGISTER_ULONG(PortStatusReg);
-
-        if (!ResetComplete)
-        {
-            ULONG LinkState = (PostValue & XHCI_PORTSC_PLS_MASK) >> XHCI_PORTSC_PLS_SHIFT;
-            DPRINT1("XHCI: Port %u reset timeout after %lu us: PORTSC=0x%08lx (CCS=%u PED=%u PR=%u PRC=%u PLS=%lu)\n",
-                    Port,
-                    PORT_RESET_TIMEOUT_ATTEMPTS * PORT_RESET_POLL_US,
-                    PostValue,
-                    (PostValue & XHCI_PORTSC_CCS) ? 1 : 0,
-                    (PostValue & XHCI_PORTSC_PED) ? 1 : 0,
-                    (PostValue & XHCI_PORTSC_PR) ? 1 : 0,
-                    (PostValue & XHCI_PORTSC_PRC) ? 1 : 0,
-                    LinkState);
-
-            /*
-             * Even on timeout, latch PRC if present so hub driver can clear it.
-             * Return success to allow hub layer to poll and potentially retry.
-             */
-        }
-
-        /* Latch change bits for hub driver polling */
-        if ((PostValue & XHCI_PORTSC_PRC) && Port >= 1 && Port <= XHCI_MAX_PORTS)
-        {
-            InterlockedOr((volatile LONG *)&Extension->PortChangeMask[Port],
-                          XHCI_PORTSC_PRC);
-        }
-
-        return MP_STATUS_SUCCESS;
-    }
+    Status = XHCI_ModifyPortBits(Extension, Port, XHCI_PORTSC_PR, 0, 0);
+    return Status;
 }
 
 static
@@ -14547,10 +15165,9 @@ XHCI_RH_ClearFeaturePortResetChange(
      *
      * We ONLY do this when the slot is in Configured state, which indicates
      * the device was previously fully set up (i.e., this is a spontaneous
-     * reset, not initial enumeration). During initial enumeration,
-     * XHCI_RH_SetFeaturePortReset already issues RESET_DEVICE inline before
-     * the port reset, so calling it again here would be redundant and could
-     * race with ADDRESS_DEVICE that the enumeration worker is performing.
+     * reset, not initial enumeration). Normal enumeration/reset recovery is
+     * synchronized by USBPORT after the hub reset wait completes, before
+     * SET_ADDRESS is sent.
      */
     Slot = XHCI_FindSlotByPort(Extension, Port);
     if (Slot && Slot->Configured)

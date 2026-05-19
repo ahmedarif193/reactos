@@ -57,15 +57,37 @@ USBPORT_DbgPrint(IN PVOID MiniPortExtension,
                  IN PCH Format,
                  ...)
 {
-    DPRINT("USBPORT_DbgPrint: UNIMPLEMENTED. FIXME. \n");
-    return 0;
+    va_list Arguments;
+    ULONG Result;
+
+    UNREFERENCED_PARAMETER(MiniPortExtension);
+
+    if (!Format)
+        return 0;
+
+    va_start(Arguments, Format);
+    Result = vDbgPrintExWithPrefix("USBMINI: ",
+                                   DPFLTR_IHVBUS_ID,
+                                   Level,
+                                   Format,
+                                   Arguments);
+    va_end(Arguments);
+
+    return Result;
 }
 
 ULONG
 NTAPI
 USBPORT_TestDebugBreak(IN PVOID MiniPortExtension)
 {
-    DPRINT("USBPORT_TestDebugBreak: UNIMPLEMENTED. FIXME. \n");
+    UNREFERENCED_PARAMETER(MiniPortExtension);
+
+    if (KD_DEBUGGER_ENABLED && !KD_DEBUGGER_NOT_PRESENT)
+    {
+        DbgBreakPoint();
+        return TRUE;
+    }
+
     return 0;
 }
 
@@ -86,9 +108,11 @@ VOID
 NTAPI
 USBPORT_BugCheck(IN PVOID MiniPortExtension)
 {
-    DPRINT1("USBPORT_BugCheck: FIXME \n");
-    //KeBugCheckEx(BUGCODE_USB_DRIVER, ...);
-    ASSERT(FALSE);
+    KeBugCheckEx(BUGCODE_USB_DRIVER,
+                 0,
+                 (ULONG_PTR)MiniPortExtension,
+                 0,
+                 0);
 }
 
 ULONG

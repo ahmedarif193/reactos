@@ -662,7 +662,8 @@ USBH_SyncResetPort(IN PUSBHUB_FDO_EXTENSION HubExtension,
     USB_PORT_STATUS_AND_CHANGE PortStatus;
     KEVENT Event;
     LARGE_INTEGER Timeout;
-    ULONG ResetRetry = 0;
+    BM_REQUEST_TYPE RequestType;
+    ULONG ResetElapsed = 0;
     NTSTATUS Status;
 
     DPRINT("USBH_SyncResetPort: Port - %x\n", Port);
@@ -689,46 +690,44 @@ USBH_SyncResetPort(IN PUSBHUB_FDO_EXTENSION HubExtension,
 
     HubExtension->HubFlags |= USBHUB_FDO_FLAG_RESET_PORT_LOCK;
 
+    KeInitializeEvent(&Event, NotificationEvent, FALSE);
+
+    InterlockedExchangePointer((PVOID)&HubExtension->pResetPortEvent,
+                               &Event);
+
+    RequestType.B = 0;
+    /* Port reset is a class request to the specific port, not the hub
+     * device, otherwise the controller never generates the reset change. */
+    RequestType.Recipient = BMREQUEST_TO_OTHER;
+    RequestType.Type = BMREQUEST_CLASS;
+    RequestType.Dir = BMREQUEST_HOST_TO_DEVICE;
+
+    Status = USBH_Transact(HubExtension,
+                           NULL,
+                           0,
+                           BMREQUEST_HOST_TO_DEVICE,
+                           URB_FUNCTION_CLASS_OTHER,
+                           RequestType,
+                           USB_REQUEST_SET_FEATURE,
+                           USBHUB_FEATURE_PORT_RESET,
+                           Port);
+
+    if (!NT_SUCCESS(Status))
+    {
+        InterlockedExchangePointer((PVOID)&HubExtension->pResetPortEvent,
+                                   NULL);
+
+        USBH_Wait(10);
+        HubExtension->HubFlags &= ~USBHUB_FDO_FLAG_RESET_PORT_LOCK;
+
+        goto Exit;
+    }
+
     while (TRUE)
     {
-        BM_REQUEST_TYPE RequestType;
-
-        KeInitializeEvent(&Event, NotificationEvent, FALSE);
-
-        InterlockedExchangePointer((PVOID)&HubExtension->pResetPortEvent,
-                                   &Event);
-
-        RequestType.B = 0;
-        /* Port reset is a class request to the specific port, not the hub
-         * device, otherwise the controller never generates the reset change. */
-        RequestType.Recipient = BMREQUEST_TO_OTHER;
-        RequestType.Type = BMREQUEST_CLASS;
-        RequestType.Dir = BMREQUEST_HOST_TO_DEVICE;
-
-        Status = USBH_Transact(HubExtension,
-                               NULL,
-                               0,
-                               BMREQUEST_HOST_TO_DEVICE,
-                               URB_FUNCTION_CLASS_OTHER,
-                               RequestType,
-                               USB_REQUEST_SET_FEATURE,
-                               USBHUB_FEATURE_PORT_RESET,
-                               Port);
-
-        /* Do not wait the full 5 seconds; poll at a shorter interval if
-         * controllers fail to raise a change interrupt. */
+        /* Poll at a short interval if controllers fail to raise a change
+         * interrupt, but do not restart the reset while it is in progress. */
         Timeout.QuadPart = -((LONGLONG)USBHUB_RESET_PORT_POLL_MS * 10000);
-
-        if (!NT_SUCCESS(Status))
-        {
-            InterlockedExchangePointer((PVOID)&HubExtension->pResetPortEvent,
-                                       NULL);
-
-            USBH_Wait(10);
-            HubExtension->HubFlags &= ~USBHUB_FDO_FLAG_RESET_PORT_LOCK;
-
-            goto Exit;
-        }
 
         Status = KeWaitForSingleObject(&Event,
                                        Suspended,
@@ -756,10 +755,19 @@ USBH_SyncResetPort(IN PUSBHUB_FDO_EXTENSION HubExtension,
             break;
         }
 
+        ResetElapsed += USBHUB_RESET_PORT_POLL_MS;
+
         if (!NT_SUCCESS(Status) ||
             !USBH_PortStatusIsConnected(&PortStatus) ||
-            ResetRetry >= USBHUB_RESET_PORT_MAX_RETRY)
+            ResetElapsed >= USBHUB_RESET_PORT_TIMEOUT_MS)
         {
+            DPRINT_ENUM("USBH_SyncResetPort: Port %u reset failed after %lu ms, Status=%lX, PortStatus=0x%04X, PortChange=0x%04X\n",
+                        Port,
+                        ResetElapsed,
+                        Status,
+                        PortStatus.PortStatus.AsUshort16,
+                        PortStatus.PortChange.AsUshort16);
+
             InterlockedExchangePointer((PVOID)&HubExtension->pResetPortEvent,
                                        NULL);
 
@@ -769,8 +777,6 @@ USBH_SyncResetPort(IN PUSBHUB_FDO_EXTENSION HubExtension,
             Status = STATUS_DEVICE_DATA_ERROR;
             goto Exit;
         }
-
-        ResetRetry++;
     }
 
     /*
@@ -2141,8 +2147,12 @@ USBH_ProcessHubStateChange(IN PUSBHUB_FDO_EXTENSION HubExtension,
                                 USBHUB_FEATURE_C_HUB_OVER_CURRENT);
         if (HubStatus->HubStatus.OverCurrent)
         {
-            DPRINT1("USBH_ProcessHubStateChange: OverCurrent UNIMPLEMENTED. FIXME\n");
-            DbgBreakPoint();
+            DPRINT1("USBH_ProcessHubStateChange: hub overcurrent, failing hub PDO\n");
+
+            HubExtension->HubFlags |= USBHUB_FDO_FLAG_DEVICE_FAILED;
+            USBH_WriteFailReasonID(HubExtension->LowerPDO,
+                                   USBHUB_FAIL_OVERCURRENT);
+            IoInvalidateDeviceState(HubExtension->LowerPDO);
         }
     }
 }
@@ -2596,12 +2606,32 @@ USBH_ChangeIndicationWorker(IN PUSBHUB_FDO_EXTENSION HubExtension,
 
     if (!(HubExtension->HubFlags & USBHUB_FDO_FLAG_ESD_RECOVERING))
     {
-        HubExtension->HubFlags |= USBHUB_FDO_FLAG_ESD_RECOVERING;
+        HubExtension->HubFlags |= USBHUB_FDO_FLAG_ESD_RECOVERING |
+                                  USBHUB_FDO_FLAG_ENUM_POST_RECOVER;
 
-        DPRINT1("USBH_ChangeIndicationWorker: USBHUB_FDO_FLAG_ESD_RECOVERING FIXME\n");
-        DbgBreakPoint();
+        Status = USBH_ResetHub(HubExtension);
+        if (!NT_SUCCESS(Status))
+        {
+            DPRINT1("USBH_ChangeIndicationWorker: ESD recovery reset failed - %lX\n",
+                    Status);
 
-        goto Exit;
+            HubExtension->HubFlags &= ~(USBHUB_FDO_FLAG_ESD_RECOVERING |
+                                        USBHUB_FDO_FLAG_ENUM_POST_RECOVER);
+            HubExtension->HubFlags |= USBHUB_FDO_FLAG_DEVICE_FAILED;
+            IoInvalidateDeviceState(HubExtension->LowerPDO);
+            goto Exit;
+        }
+
+        HubExtension->RequestErrors = 0;
+        HubExtension->HubFlags &= ~USBHUB_FDO_FLAG_ESD_RECOVERING;
+        HubExtension->HubFlags |= USBHUB_FDO_FLAG_DO_ENUMERATION;
+
+        IoInvalidateDeviceRelations(HubExtension->LowerPDO, BusRelations);
+        KeSetEvent(&HubExtension->StatusChangeEvent,
+                   EVENT_INCREMENT,
+                   FALSE);
+
+        goto SubmitTransfer;
     }
 
 Enum:
@@ -3754,10 +3784,14 @@ USBH_HubQueuePortIdleIrps(IN PUSBHUB_FDO_EXTENSION HubExtension,
             IdleIrp = PortExtension->IdleNotificationIrp;
             PortExtension->IdleNotificationIrp = NULL;
 
+            if (IdleIrp)
+            {
+                PortExtension->PortPdoFlags &= ~USBHUB_PDO_FLAG_IDLE_NOTIFICATION;
+            }
+
             if (IdleIrp && IoSetCancelRoutine(IdleIrp, NULL))
             {
-                DPRINT1("USBH_HubQueuePortIdleIrps: IdleIrp != NULL. FIXME\n");
-                DbgBreakPoint();
+                InsertTailList(IdleList, &IdleIrp->Tail.Overlay.ListEntry);
             }
         }
     }
@@ -3786,12 +3820,21 @@ USBH_HubCompleteQueuedPortIdleIrps(IN PUSBHUB_FDO_EXTENSION HubExtension,
                                    IN PLIST_ENTRY IdleList,
                                    IN NTSTATUS NtStatus)
 {
+    PLIST_ENTRY Entry;
+    PIRP IdleIrp;
+
     DPRINT("USBH_HubCompleteQueuedPortIdleIrps ... \n");
+
+    UNREFERENCED_PARAMETER(HubExtension);
 
     while (!IsListEmpty(IdleList))
     {
-        DPRINT1("USBH_HubCompleteQueuedPortIdleIrps: IdleList not Empty. FIXME\n");
-        DbgBreakPoint();
+        Entry = RemoveHeadList(IdleList);
+        IdleIrp = CONTAINING_RECORD(Entry, IRP, Tail.Overlay.ListEntry);
+
+        IdleIrp->IoStatus.Status = NtStatus;
+        IdleIrp->IoStatus.Information = 0;
+        IoCompleteRequest(IdleIrp, IO_NO_INCREMENT);
     }
 }
 
@@ -3801,10 +3844,14 @@ USBH_FlushPortPwrList(IN PUSBHUB_FDO_EXTENSION HubExtension)
 {
     PDEVICE_OBJECT PortDevice;
     PUSBHUB_PORT_PDO_EXTENSION PortExtension;
+    LIST_ENTRY PwrList;
     PLIST_ENTRY Entry;
+    PIRP PowerIrp;
     ULONG Port;
 
     DPRINT("USBH_FlushPortPwrList ... \n");
+
+    InitializeListHead(&PwrList);
 
     InterlockedIncrement((PLONG)&HubExtension->PendingRequestCount);
 
@@ -3837,8 +3884,7 @@ USBH_FlushPortPwrList(IN PUSBHUB_FDO_EXTENSION HubExtension)
                 break;
             }
 
-            DPRINT1("USBH_FlushPortPwrList: PortPowerList FIXME\n");
-            DbgBreakPoint();
+            InsertTailList(&PwrList, Entry);
         }
     }
 
@@ -3852,6 +3898,14 @@ USBH_FlushPortPwrList(IN PUSBHUB_FDO_EXTENSION HubExtension)
         KeSetEvent(&HubExtension->PendingRequestEvent,
                    EVENT_INCREMENT,
                    FALSE);
+    }
+
+    while (!IsListEmpty(&PwrList))
+    {
+        Entry = RemoveHeadList(&PwrList);
+        PowerIrp = CONTAINING_RECORD(Entry, IRP, Tail.Overlay.ListEntry);
+
+        USBH_CompletePowerIrp(HubExtension, PowerIrp, STATUS_CANCELLED);
     }
 }
 
@@ -3980,7 +4034,60 @@ USBH_FdoWaitWakeIrpCompletion(IN PDEVICE_OBJECT DeviceObject,
                               IN PVOID Context,
                               IN PIO_STATUS_BLOCK IoStatus)
 {
-    DPRINT("USBH_FdoWaitWakeIrpCompletion ... \n");
+    PUSBHUB_FDO_EXTENSION HubExtension;
+    NTSTATUS Status;
+    KIRQL OldIrql;
+    POWER_STATE DevicePowerState;
+
+    UNREFERENCED_PARAMETER(DeviceObject);
+    UNREFERENCED_PARAMETER(MinorFunction);
+    UNREFERENCED_PARAMETER(PowerState);
+
+    HubExtension = Context;
+    Status = IoStatus ? IoStatus->Status : STATUS_UNSUCCESSFUL;
+
+    IoAcquireCancelSpinLock(&OldIrql);
+    HubExtension->HubFlags &= ~USBHUB_FDO_FLAG_PENDING_WAKE_IRP;
+    HubExtension->PendingWakeIrp = NULL;
+
+    if (!InterlockedDecrement(&HubExtension->PendingRequestCount))
+    {
+        KeSetEvent(&HubExtension->PendingRequestEvent,
+                   EVENT_INCREMENT,
+                   FALSE);
+    }
+
+    IoReleaseCancelSpinLock(OldIrql);
+
+    if (!NT_SUCCESS(Status))
+    {
+        USBH_HubCompletePortWakeIrps(HubExtension, Status);
+        return;
+    }
+
+    DevicePowerState.DeviceState = PowerDeviceD0;
+    HubExtension->HubFlags |= USBHUB_FDO_FLAG_WAKEUP_START;
+    InterlockedIncrement(&HubExtension->PendingRequestCount);
+
+    Status = PoRequestPowerIrp(HubExtension->LowerPDO,
+                               IRP_MN_SET_POWER,
+                               DevicePowerState,
+                               USBH_FdoPoRequestD0Completion,
+                               HubExtension,
+                               NULL);
+
+    if (!NT_SUCCESS(Status) && Status != STATUS_PENDING)
+    {
+        HubExtension->HubFlags &= ~USBHUB_FDO_FLAG_WAKEUP_START;
+        if (!InterlockedDecrement(&HubExtension->PendingRequestCount))
+        {
+            KeSetEvent(&HubExtension->PendingRequestEvent,
+                       EVENT_INCREMENT,
+                       FALSE);
+        }
+
+        USBH_HubCompletePortWakeIrps(HubExtension, Status);
+    }
 }
 
 NTSTATUS
@@ -4068,7 +4175,7 @@ USBH_FdoIdleNotificationCallback(IN PVOID Context)
                                   USBHUB_FDO_FLAG_DEVICE_FAILED |
                                   USBHUB_FDO_FLAG_DEVICE_STOPPING))
     {
-        DbgBreakPoint();
+        USBH_HubCompletePortIdleIrps(HubExtension, STATUS_CANCELLED);
         return;
     }
 
@@ -4080,9 +4187,10 @@ USBH_FdoIdleNotificationCallback(IN PVOID Context)
 
         if (Status != STATUS_PENDING)
         {
-            DPRINT("Status != STATUS_PENDING. DbgBreakPoint()\n");
-            DbgBreakPoint();
+            DPRINT1("USBH_FdoIdleNotificationCallback: wait-wake submit failed - %lx\n",
+                    Status);
             HubExtension->HubFlags &= ~USBHUB_FDO_FLAG_GOING_IDLE;
+            USBH_HubCompletePortIdleIrps(HubExtension, Status);
             return;
         }
     }
@@ -4204,7 +4312,6 @@ IdleHub:
             USBH_HubCancelIdleIrp(HubExtension, Irp);
         }
 
-        DbgBreakPoint();
         USBH_HubCompletePortIdleIrps(HubExtension, STATUS_CANCELLED);
     }
     else
@@ -4246,6 +4353,10 @@ IdleHub:
     }
 }
 
+NTSTATUS
+NTAPI
+USBH_RegQueryFlushPortPowerIrpsFlag(OUT PBOOLEAN IsFlush);
+
 VOID
 NTAPI
 USBH_CompletePortIdleIrpsWorker(IN PUSBHUB_FDO_EXTENSION HubExtension,
@@ -4265,8 +4376,7 @@ USBH_CompletePortIdleIrpsWorker(IN PUSBHUB_FDO_EXTENSION HubExtension,
                                        &IdlePortContext->PwrList,
                                        NtStatus);
 
-    DPRINT1("USBH_CompletePortIdleIrpsWorker: USBH_RegQueryFlushPortPowerIrpsFlag() UNIMPLEMENTED. FIXME\n");
-    Status = STATUS_NOT_IMPLEMENTED;// USBH_RegQueryFlushPortPowerIrpsFlag(&IsFlush);
+    Status = USBH_RegQueryFlushPortPowerIrpsFlag(&IsFlush);
 
     if (NT_SUCCESS(Status))
     {
@@ -4274,6 +4384,11 @@ USBH_CompletePortIdleIrpsWorker(IN PUSBHUB_FDO_EXTENSION HubExtension,
         {
             USBH_FlushPortPwrList(HubExtension);
         }
+    }
+    else
+    {
+        DPRINT1("USBH_CompletePortIdleIrpsWorker: FlushPortPowerIrpsFlag query failed - %lx\n",
+                Status);
     }
 }
 
@@ -4297,6 +4412,50 @@ USBH_IdleCompletePowerHubWorker(IN PUSBHUB_FDO_EXTENSION HubExtension,
 
     USBH_HubCompletePortIdleIrps(HubExtension, HubWorkItemBuffer->Status);
 
+}
+
+NTSTATUS
+NTAPI
+USBH_RegQueryFlushPortPowerIrpsFlag(OUT PBOOLEAN IsFlush)
+{
+    RTL_QUERY_REGISTRY_TABLE QueryTable[2];
+    ULONG Value = 0;
+    NTSTATUS Status;
+
+    if (!IsFlush)
+    {
+        return STATUS_INVALID_PARAMETER;
+    }
+
+    *IsFlush = FALSE;
+
+    RtlZeroMemory(QueryTable, sizeof(QueryTable));
+
+    QueryTable[0].QueryRoutine = USBH_GetConfigValue;
+    QueryTable[0].Flags = 0;
+    QueryTable[0].Name = L"FlushPortPowerIrpsFlag";
+    QueryTable[0].EntryContext = &Value;
+    QueryTable[0].DefaultType = REG_DWORD;
+    QueryTable[0].DefaultData = &Value;
+    QueryTable[0].DefaultLength = sizeof(Value);
+
+    Status = RtlQueryRegistryValues(RTL_REGISTRY_CONTROL,
+                                    L"usbflags",
+                                    QueryTable,
+                                    NULL,
+                                    NULL);
+    if (Status == STATUS_OBJECT_NAME_NOT_FOUND ||
+        Status == STATUS_OBJECT_PATH_NOT_FOUND)
+    {
+        Status = STATUS_SUCCESS;
+    }
+
+    if (NT_SUCCESS(Status))
+    {
+        *IsFlush = (Value != 0);
+    }
+
+    return Status;
 }
 
 NTSTATUS
@@ -4491,10 +4650,6 @@ USBH_CheckHubIdle(IN PUSBHUB_FDO_EXTENSION HubExtension)
     BOOLEAN IsHubIdle = FALSE;
     BOOLEAN IsAllPortsIdle;
     BOOLEAN IsHubCheck = TRUE;
-
-    DPRINT("USBH_CheckHubIdle: FIXME !!! HubExtension - %p\n", HubExtension);
-
-return; //HACK: delete it line after fixing Power Manager!!!
 
     KeAcquireSpinLock(&HubExtension->CheckIdleSpinLock, &Irql);
 
@@ -6082,9 +6237,7 @@ USBH_PdoDispatch(IN PUSBHUB_PORT_PDO_EXTENSION PortExtension,
 
             if (ControlCode == IOCTL_KS_PROPERTY)
             {
-                DPRINT1("USBH_PdoDispatch: IOCTL_KS_PROPERTY FIXME\n");
-                DbgBreakPoint();
-                Status = STATUS_NOT_SUPPORTED;
+                Status = STATUS_INVALID_DEVICE_REQUEST;
                 USBH_CompleteIrp(Irp, Status);
                 break;
             }
@@ -6115,8 +6268,6 @@ USBH_PdoDispatch(IN PUSBHUB_PORT_PDO_EXTENSION PortExtension,
             break;
 
         case IRP_MJ_SYSTEM_CONTROL:
-            DPRINT1("USBH_PdoDispatch: USBH_SystemControl() UNIMPLEMENTED. FIXME\n");
-            //USBH_PortSystemControl(PortExtension, Irp);
             Status = Irp->IoStatus.Status;
             USBH_CompleteIrp(Irp, Status);
             break;
@@ -6170,9 +6321,6 @@ USBH_FdoDispatch(IN PUSBHUB_FDO_EXTENSION HubExtension,
             break;
 
         case IRP_MJ_SYSTEM_CONTROL:
-            DPRINT1("USBH_FdoDispatch: USBH_SystemControl() UNIMPLEMENTED. FIXME\n");
-            /* fall through */
-
         case IRP_MJ_INTERNAL_DEVICE_CONTROL:
         default:
             Status = USBH_PassIrp(HubExtension->LowerDevice, Irp);
@@ -6267,7 +6415,7 @@ VOID
 NTAPI
 USBH_DriverUnload(IN PDRIVER_OBJECT DriverObject)
 {
-    DPRINT("USBH_DriverUnload: UNIMPLEMENTED\n");
+    UNREFERENCED_PARAMETER(DriverObject);
 
     if (GenericUSBDeviceString)
     {
@@ -6325,8 +6473,8 @@ USBH_HubDispatch(IN PDEVICE_OBJECT DeviceObject,
     else
     {
         DPRINT1("USBH_HubDispatch: Unknown ExtensionType - %x\n", ExtensionType);
-        DbgBreakPoint();
-        Status = STATUS_ASSERTION_FAILURE;
+        Status = STATUS_INVALID_DEVICE_REQUEST;
+        USBH_CompleteIrp(Irp, Status);
     }
 
     return Status;
