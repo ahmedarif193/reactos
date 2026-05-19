@@ -3566,10 +3566,6 @@ VOID Arm64EnablePageTables(VOID)
         }
 
         Arm64MapEarlyUart();
-
-        /* Clean dcache to ensure page table writes are visible to the table walker */
-        __asm_dcache_all(0);
-        ARM64_DSB_ISH();
     }
     /* ========== END CRITICAL REGION MAPPING ========== */
 
