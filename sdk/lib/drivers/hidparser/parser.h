@@ -279,6 +279,19 @@ HidParser_GetReportLength(
     IN UCHAR ReportType);
 
 ULONG
+HidParser_GetReportIdCount(
+    IN PVOID CollectionContext);
+
+NTSTATUS
+HidParser_GetReportIdByIndex(
+    IN PVOID CollectionContext,
+    IN ULONG ReportIndex,
+    OUT PUCHAR ReportID,
+    OUT PUSHORT InputLength,
+    OUT PUSHORT OutputLength,
+    OUT PUSHORT FeatureLength);
+
+ULONG
 HidParser_GetReportItemCountFromReportType(
     IN PVOID CollectionContext,
     IN UCHAR ReportType);
@@ -304,6 +317,14 @@ HidParser_GetSpecificValueCapsWithReport(
     OUT PHIDP_VALUE_CAPS  ValueCaps,
     IN OUT PUSHORT  ValueCapsLength);
 
+NTSTATUS
+HidParser_GetSpecificButtonCapsWithReport(
+    IN PVOID CollectionContext,
+    IN UCHAR ReportType,
+    IN USHORT UsagePage,
+    IN USHORT Usage,
+    OUT PHIDP_BUTTON_CAPS ButtonCaps,
+    IN OUT PULONG ButtonCapsLength);
 
 NTSTATUS
 HidParser_GetUsagesWithReport(
