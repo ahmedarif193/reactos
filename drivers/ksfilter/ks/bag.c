@@ -324,10 +324,10 @@ KsFreeObjectBag(
         /* get an bag entry */
         Entry = RemoveHeadList(&Bag->ObjectList);
         /* access bag entry item */
-        BagEntry = (PKSIOBJECT_BAG_ENTRY)CONTAINING_RECORD(Entry, KSIOBJECT_BAG, Entry);
+        BagEntry = CONTAINING_RECORD(Entry, KSIOBJECT_BAG_ENTRY, Entry);
 
         /* check if the item is present in some other bag */
-        TotalRefs = KspGetObjectItemReferenceCount((PKSIDEVICE_HEADER)Bag->DeviceHeader, &BagEntry->Item);
+        TotalRefs = KspGetObjectItemReferenceCount((PKSIDEVICE_HEADER)Bag->DeviceHeader, BagEntry->Item);
 
         if (TotalRefs == 0)
         {
@@ -440,5 +440,3 @@ _KsEdit(
 
     return STATUS_SUCCESS;
 }
-
-

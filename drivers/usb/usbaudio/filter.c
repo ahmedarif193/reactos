@@ -22,9 +22,27 @@ GUID NodeTypeDesktopSpeaker = { STATIC_KSNODETYPE_DESKTOP_SPEAKER };
 GUID NodeTypeRoomSpeaker = { STATIC_KSNODETYPE_ROOM_SPEAKER };
 GUID NodeTypeCommunicationSpeaker = { STATIC_KSNODETYPE_COMMUNICATION_SPEAKER };
 GUID NodeTypeSubwoofer = { STATIC_KSNODETYPE_LOW_FREQUENCY_EFFECTS_SPEAKER };
+GUID NodeTypeBidirectionalUndefined = { STATIC_KSNODETYPE_BIDIRECTIONAL_UNDEFINED };
+GUID NodeTypeHandset = { STATIC_KSNODETYPE_HANDSET };
+GUID NodeTypeHeadset = { STATIC_KSNODETYPE_HEADSET };
+GUID NodeTypeSpeakerphone = { STATIC_KSNODETYPE_SPEAKERPHONE_NO_ECHO_REDUCTION };
+GUID NodeTypeEchoSuppressingSpeakerphone = { STATIC_KSNODETYPE_ECHO_SUPPRESSING_SPEAKERPHONE };
+GUID NodeTypeEchoCancelingSpeakerphone = { STATIC_KSNODETYPE_ECHO_CANCELING_SPEAKERPHONE };
+GUID NodeTypePhoneLine = { STATIC_KSNODETYPE_PHONE_LINE };
+GUID NodeTypeLineConnector = { STATIC_KSNODETYPE_LINE_CONNECTOR };
+GUID NodeTypeAnalogConnector = { STATIC_KSNODETYPE_ANALOG_CONNECTOR };
 GUID NodeTypeCapture = { STATIC_PINNAME_CAPTURE };
 GUID NodeTypePlayback = { STATIC_KSCATEGORY_AUDIO };
 GUID GUID_KSCATEGORY_AUDIO = { STATIC_KSCATEGORY_AUDIO };
+
+static GUID UsbAudioFilterCategories[] =
+{
+    { STATIC_KSCATEGORY_AUDIO },
+    { STATIC_KSCATEGORY_RENDER },
+    { STATIC_KSCATEGORY_CAPTURE },
+    { STATIC_KSCATEGORY_AUDIO_DEVICE },
+    { STATIC_KSCATEGORY_TOPOLOGY }
+};
 
 KSPIN_INTERFACE StandardPinInterface =
 {
@@ -39,6 +57,63 @@ KSPIN_MEDIUM StandardPinMedium =
      KSMEDIUM_TYPE_ANYINSTANCE,
      0
 };
+
+LPGUID
+UsbAudioGetPinCategoryFromTerminalDescriptor(
+    IN PUSB_AUDIO_CONTROL_INPUT_TERMINAL_DESCRIPTOR TerminalDescriptor);
+
+static
+const GUID *
+UsbAudioGetTerminalNodeType(
+    IN PUSB_AUDIO_CONTROL_INPUT_TERMINAL_DESCRIPTOR TerminalDescriptor)
+{
+    USHORT TerminalType = TerminalDescriptor->wTerminalType;
+
+    /*
+     * USB streaming terminals are the digital boundary between the host
+     * wave pin and the device topology. Model that boundary as the ADC/DAC
+     * converter so sysaudio/mmixer can walk from the converter to both the
+     * wave pin and the physical bridge pin. Non-streaming terminals keep
+     * their physical endpoint role.
+     */
+    if (TerminalType == USB_AUDIO_STREAMING_TERMINAL_TYPE)
+    {
+        if (TerminalDescriptor->bDescriptorSubtype == USB_AUDIO_INPUT_TERMINAL)
+            return &KSNODETYPE_DAC;
+
+        if (TerminalDescriptor->bDescriptorSubtype == USB_AUDIO_OUTPUT_TERMINAL)
+            return &KSNODETYPE_ADC;
+
+        return &KSNODETYPE_SRC;
+    }
+
+    return UsbAudioGetPinCategoryFromTerminalDescriptor(TerminalDescriptor);
+}
+
+static
+VOID
+UsbAudioAddTerminalNode(
+    IN PKSFILTER_DESCRIPTOR FilterDescriptor,
+    IN PKSNODE_DESCRIPTOR NodeDescriptors,
+    IN PNODE_CONTEXT NodeContext,
+    IN OUT PULONG DescriptorCount,
+    IN PUSB_COMMON_DESCRIPTOR CommonDescriptor)
+{
+    const GUID *NodeType;
+
+    NodeType = UsbAudioGetTerminalNodeType((PUSB_AUDIO_CONTROL_INPUT_TERMINAL_DESCRIPTOR)CommonDescriptor);
+
+    NodeDescriptors[FilterDescriptor->NodeDescriptorsCount].Type = NodeType;
+    NodeDescriptors[FilterDescriptor->NodeDescriptorsCount].Name = NodeType;
+    NodeDescriptors[FilterDescriptor->NodeDescriptorsCount].AutomationTable = AllocFunction(sizeof(KSAUTOMATION_TABLE));
+
+    NodeContext[*DescriptorCount].Descriptor = CommonDescriptor;
+    NodeContext[*DescriptorCount].NodeCount = 1;
+    NodeContext[*DescriptorCount].Nodes[0] = FilterDescriptor->NodeDescriptorsCount;
+    (*DescriptorCount)++;
+
+    FilterDescriptor->NodeDescriptorsCount++;
+}
 
 KSDATARANGE BridgePinAudioFormat[] =
 {
@@ -92,9 +167,11 @@ static KSPIN_DISPATCH UsbAudioPinDispatch =
 
 NTSTATUS NTAPI FilterAudioVolumeHandler(IN PIRP Irp, IN PKSIDENTIFIER  Request, IN OUT PVOID  Data);
 NTSTATUS NTAPI FilterAudioMuteHandler(IN PIRP Irp, IN PKSIDENTIFIER  Request, IN OUT PVOID  Data);
+NTSTATUS NTAPI FilterAudioVolumeSupportHandler(IN PIRP Irp, IN PKSIDENTIFIER Request, IN OUT PVOID Data);
+NTSTATUS NTAPI FilterAudioMuteSupportHandler(IN PIRP Irp, IN PKSIDENTIFIER Request, IN OUT PVOID Data);
 
-DEFINE_KSPROPERTY_TABLE_AUDIO_VOLUME(FilterAudioVolumePropertySet, FilterAudioVolumeHandler);
-DEFINE_KSPROPERTY_TABLE_AUDIO_MUTE(FilterAudioMutePropertySet, FilterAudioMuteHandler);
+DEFINE_KSPROPERTY_TABLE_AUDIO_VOLUME(FilterAudioVolumePropertySet, FilterAudioVolumeHandler, FilterAudioVolumeSupportHandler);
+DEFINE_KSPROPERTY_TABLE_AUDIO_MUTE(FilterAudioMutePropertySet, FilterAudioMuteHandler, FilterAudioMuteSupportHandler);
 
 
 static KSPROPERTY_SET FilterAudioVolumePropertySetArray[] =
@@ -179,6 +256,168 @@ FindNodeContextWithNode(
         }
     }
     return NULL;
+}
+
+static
+ULONG
+UsbAudioGetFeatureUnitChannelCount(
+    IN PUSB_AUDIO_CONTROL_FEATURE_UNIT_DESCRIPTOR FeatureUnitDescriptor)
+{
+    ULONG ControlsLength;
+
+    if (!FeatureUnitDescriptor ||
+        FeatureUnitDescriptor->bLength <= 7 ||
+        FeatureUnitDescriptor->bControlSize == 0)
+    {
+        return 1;
+    }
+
+    ControlsLength = FeatureUnitDescriptor->bLength - 7;
+    if (ControlsLength < FeatureUnitDescriptor->bControlSize)
+        return 1;
+
+    return max(ControlsLength / FeatureUnitDescriptor->bControlSize, 1);
+}
+
+static
+NTSTATUS
+UsbAudioGetFeatureUnitFromRequest(
+    IN PIRP Irp,
+    IN PKSIDENTIFIER Request,
+    OUT PUSB_AUDIO_CONTROL_FEATURE_UNIT_DESCRIPTOR *FeatureUnitDescriptor)
+{
+    PKSFILTER Filter;
+    PFILTER_CONTEXT FilterContext;
+    PNODE_CONTEXT NodeContext;
+    PKSP_NODE NodeProperty;
+
+    *FeatureUnitDescriptor = NULL;
+
+    Filter = KsGetFilterFromIrp(Irp);
+    if (!Filter)
+        return STATUS_INVALID_PARAMETER;
+
+    FilterContext = (PFILTER_CONTEXT)Filter->Context;
+    if (!FilterContext || !FilterContext->DeviceExtension)
+        return STATUS_INVALID_PARAMETER;
+
+    NodeProperty = (PKSP_NODE)Request;
+    NodeContext = FindNodeContextWithNode(FilterContext->DeviceExtension->NodeContext,
+                                          FilterContext->DeviceExtension->NodeContextCount,
+                                          NodeProperty->NodeId);
+    if (!NodeContext || !NodeContext->Descriptor)
+        return STATUS_INVALID_PARAMETER;
+
+    if (((PUSB_AUDIO_CONTROL_INPUT_TERMINAL_DESCRIPTOR)NodeContext->Descriptor)->bDescriptorSubtype !=
+        USB_AUDIO_FEATURE_UNIT)
+    {
+        return STATUS_INVALID_PARAMETER;
+    }
+
+    *FeatureUnitDescriptor = (PUSB_AUDIO_CONTROL_FEATURE_UNIT_DESCRIPTOR)NodeContext->Descriptor;
+    return STATUS_SUCCESS;
+}
+
+static
+NTSTATUS
+UsbAudioPropertyBasicSupport(
+    IN PIRP Irp,
+    IN PKSIDENTIFIER Request,
+    IN OUT PVOID Data,
+    IN ULONG ValueType,
+    IN BOOLEAN VolumeProperty)
+{
+    PIO_STACK_LOCATION IoStack;
+    ULONG OutputBufferLength;
+    ULONG AccessFlags;
+    ULONG DescriptionSize;
+    PUSB_AUDIO_CONTROL_FEATURE_UNIT_DESCRIPTOR FeatureUnitDescriptor;
+    PKSPROPERTY_DESCRIPTION Description;
+    PKSPROPERTY_MEMBERSHEADER Members;
+    PKSPROPERTY_STEPPING_LONG Range;
+    ULONG ChannelCount;
+    NTSTATUS Status;
+
+    IoStack = IoGetCurrentIrpStackLocation(Irp);
+    OutputBufferLength = IoStack->Parameters.DeviceIoControl.OutputBufferLength;
+
+    if (OutputBufferLength < sizeof(ULONG))
+        return STATUS_BUFFER_TOO_SMALL;
+
+    AccessFlags = KSPROPERTY_TYPE_GET | KSPROPERTY_TYPE_SET | KSPROPERTY_TYPE_BASICSUPPORT;
+
+    if (OutputBufferLength < sizeof(KSPROPERTY_DESCRIPTION))
+    {
+        *(PULONG)Data = AccessFlags;
+        Irp->IoStatus.Information = sizeof(ULONG);
+        return STATUS_SUCCESS;
+    }
+
+    DescriptionSize = sizeof(KSPROPERTY_DESCRIPTION);
+    ChannelCount = 1;
+
+    if (VolumeProperty)
+    {
+        Status = UsbAudioGetFeatureUnitFromRequest(Irp, Request, &FeatureUnitDescriptor);
+        if (!NT_SUCCESS(Status))
+            return Status;
+
+        ChannelCount = UsbAudioGetFeatureUnitChannelCount(FeatureUnitDescriptor);
+        DescriptionSize += sizeof(KSPROPERTY_MEMBERSHEADER) + sizeof(KSPROPERTY_STEPPING_LONG);
+    }
+
+    RtlZeroMemory(Data, OutputBufferLength);
+
+    Description = (PKSPROPERTY_DESCRIPTION)Data;
+    Description->AccessFlags = AccessFlags;
+    Description->DescriptionSize = DescriptionSize;
+    Description->PropTypeSet.Set = KSPROPTYPESETID_General;
+    Description->PropTypeSet.Id = ValueType;
+    Description->PropTypeSet.Flags = 0;
+    Description->MembersListCount = VolumeProperty ? 1 : 0;
+    Description->Reserved = 0;
+
+    Irp->IoStatus.Information = sizeof(KSPROPERTY_DESCRIPTION);
+
+    if (!VolumeProperty || OutputBufferLength < DescriptionSize)
+        return STATUS_SUCCESS;
+
+    Members = (PKSPROPERTY_MEMBERSHEADER)(Description + 1);
+    Members->MembersFlags = KSPROPERTY_MEMBER_STEPPEDRANGES;
+    Members->MembersSize = sizeof(KSPROPERTY_STEPPING_LONG);
+    Members->MembersCount = ChannelCount;
+    Members->Flags = (ChannelCount > 1) ?
+                     KSPROPERTY_MEMBER_FLAG_BASICSUPPORT_MULTICHANNEL :
+                     KSPROPERTY_MEMBER_FLAG_BASICSUPPORT_UNIFORM;
+
+    Range = (PKSPROPERTY_STEPPING_LONG)(Members + 1);
+    Range->SteppingDelta = 0x10000;
+    Range->Reserved = 0;
+    Range->Bounds.SignedMinimum = -96 * 0x10000;
+    Range->Bounds.SignedMaximum = 0;
+
+    Irp->IoStatus.Information = DescriptionSize;
+    return STATUS_SUCCESS;
+}
+
+NTSTATUS
+NTAPI
+FilterAudioMuteSupportHandler(
+    IN PIRP Irp,
+    IN PKSIDENTIFIER Request,
+    IN OUT PVOID Data)
+{
+    return UsbAudioPropertyBasicSupport(Irp, Request, Data, VT_BOOL, FALSE);
+}
+
+NTSTATUS
+NTAPI
+FilterAudioVolumeSupportHandler(
+    IN PIRP Irp,
+    IN PKSIDENTIFIER Request,
+    IN OUT PVOID Data)
+{
+    return UsbAudioPropertyBasicSupport(Irp, Request, Data, VT_I4, TRUE);
 }
 
 
@@ -391,7 +630,8 @@ CountTopologyComponents(
                     }
                     else
                     {
-                        UNIMPLEMENTED;
+                        DPRINT1("BuildUSBAudioFilterTopology: unknown descriptor subtype %x\n",
+                                InputTerminalDescriptor->bDescriptorSubtype);
                     }
                     CommonDescriptor = (PUSB_COMMON_DESCRIPTOR)((ULONG_PTR)CommonDescriptor + CommonDescriptor->bLength);
                     if ((ULONG_PTR)CommonDescriptor >= ((ULONG_PTR)InterfaceHeaderDescriptor + InterfaceHeaderDescriptor->wTotalLength))
@@ -415,11 +655,449 @@ FindNodeContextWithId(
 
     for (Index = 0; Index < NodeContextCount; Index++)
     {
+        if (!NodeContext[Index].Descriptor)
+            continue;
+
         TerminalDescriptor = (PUSB_AUDIO_CONTROL_INPUT_TERMINAL_DESCRIPTOR)NodeContext[Index].Descriptor;
         if (TerminalDescriptor->bTerminalID == TerminalId)
             return &NodeContext[Index];
     }
     return NULL;
+}
+
+static BOOLEAN
+UsbAudioResolveLastNodeForId(
+    IN PNODE_CONTEXT NodeContext,
+    IN ULONG NodeContextCount,
+    IN UCHAR TerminalId,
+    OUT PULONG NodeId,
+    IN ULONG RecursionDepth)
+{
+    PNODE_CONTEXT CurrentNodeContext;
+    PUSB_COMMON_DESCRIPTOR CommonDescriptor;
+    PUSB_AUDIO_CONTROL_FEATURE_UNIT_DESCRIPTOR FeatureUnitDescriptor;
+
+    if (RecursionDepth >= NodeContextCount)
+        return FALSE;
+
+    CurrentNodeContext = FindNodeContextWithId(NodeContext,
+                                               NodeContextCount,
+                                               TerminalId);
+    if (!CurrentNodeContext || !CurrentNodeContext->Descriptor)
+        return FALSE;
+
+    if (CurrentNodeContext->NodeCount != 0)
+    {
+        *NodeId = CurrentNodeContext->Nodes[CurrentNodeContext->NodeCount - 1];
+        return TRUE;
+    }
+
+    CommonDescriptor = CurrentNodeContext->Descriptor;
+    if (((PUSB_AUDIO_CONTROL_INPUT_TERMINAL_DESCRIPTOR)CommonDescriptor)->bDescriptorSubtype !=
+        USB_AUDIO_FEATURE_UNIT)
+        return FALSE;
+
+    FeatureUnitDescriptor = (PUSB_AUDIO_CONTROL_FEATURE_UNIT_DESCRIPTOR)CommonDescriptor;
+    return UsbAudioResolveLastNodeForId(NodeContext,
+                                        NodeContextCount,
+                                        FeatureUnitDescriptor->bSourceID,
+                                        NodeId,
+                                        RecursionDepth + 1);
+}
+
+static
+ULONG
+UsbAudioCountRenderBridgePins(
+    IN PUSB_CONFIGURATION_DESCRIPTOR ConfigurationDescriptor)
+{
+    ULONG Index;
+    ULONG Count = 0;
+    ULONG NonStreamingTerminalDescriptorCount;
+    ULONG TotalTerminalDescriptorCount;
+    ULONG StreamingTerminalDescriptorCount;
+    PUSB_AUDIO_CONTROL_INPUT_TERMINAL_DESCRIPTOR TerminalDescriptor;
+
+    CountTerminalUnits(ConfigurationDescriptor,
+                       &NonStreamingTerminalDescriptorCount,
+                       &TotalTerminalDescriptorCount);
+    if (NonStreamingTerminalDescriptorCount > TotalTerminalDescriptorCount)
+        return 0;
+
+    StreamingTerminalDescriptorCount = TotalTerminalDescriptorCount -
+                                       NonStreamingTerminalDescriptorCount;
+
+    for (Index = 0; Index < StreamingTerminalDescriptorCount; Index++)
+    {
+        TerminalDescriptor = UsbAudioGetStreamingTerminalDescriptorByIndex(ConfigurationDescriptor,
+                                                                          Index);
+        if (TerminalDescriptor &&
+            TerminalDescriptor->bDescriptorSubtype == USB_AUDIO_INPUT_TERMINAL)
+        {
+            Count++;
+        }
+    }
+
+    return Count;
+}
+
+static
+BOOLEAN
+UsbAudioGetRenderBridgePinId(
+    IN PUSB_CONFIGURATION_DESCRIPTOR ConfigurationDescriptor,
+    IN UCHAR TerminalId,
+    IN ULONG StreamingTerminalDescriptorCount,
+    OUT PULONG PinId)
+{
+    ULONG Index;
+    ULONG BridgeIndex = 0;
+    ULONG NonStreamingTerminalDescriptorCount;
+    ULONG TotalTerminalDescriptorCount;
+    PUSB_AUDIO_CONTROL_INPUT_TERMINAL_DESCRIPTOR TerminalDescriptor;
+
+    CountTerminalUnits(ConfigurationDescriptor,
+                       &NonStreamingTerminalDescriptorCount,
+                       &TotalTerminalDescriptorCount);
+    if (NonStreamingTerminalDescriptorCount > TotalTerminalDescriptorCount)
+        return FALSE;
+
+    for (Index = 0; Index < TotalTerminalDescriptorCount - NonStreamingTerminalDescriptorCount; Index++)
+    {
+        TerminalDescriptor = UsbAudioGetStreamingTerminalDescriptorByIndex(ConfigurationDescriptor,
+                                                                          Index);
+        if (!TerminalDescriptor ||
+            TerminalDescriptor->bDescriptorSubtype != USB_AUDIO_INPUT_TERMINAL)
+        {
+            continue;
+        }
+
+        if (TerminalDescriptor->bTerminalID == TerminalId)
+        {
+            *PinId = StreamingTerminalDescriptorCount + BridgeIndex;
+            return TRUE;
+        }
+
+        BridgeIndex++;
+    }
+
+    return FALSE;
+}
+
+static
+PUSB_AUDIO_CONTROL_INPUT_TERMINAL_DESCRIPTOR
+UsbAudioGetRenderBridgeTerminalDescriptorByIndex(
+    IN PUSB_CONFIGURATION_DESCRIPTOR ConfigurationDescriptor,
+    IN ULONG BridgeIndex)
+{
+    ULONG Index;
+    ULONG CurrentBridgeIndex = 0;
+    ULONG NonStreamingTerminalDescriptorCount;
+    ULONG TotalTerminalDescriptorCount;
+    PUSB_AUDIO_CONTROL_INPUT_TERMINAL_DESCRIPTOR TerminalDescriptor;
+
+    CountTerminalUnits(ConfigurationDescriptor,
+                       &NonStreamingTerminalDescriptorCount,
+                       &TotalTerminalDescriptorCount);
+    if (NonStreamingTerminalDescriptorCount > TotalTerminalDescriptorCount)
+        return NULL;
+
+    for (Index = 0; Index < TotalTerminalDescriptorCount - NonStreamingTerminalDescriptorCount; Index++)
+    {
+        TerminalDescriptor = UsbAudioGetStreamingTerminalDescriptorByIndex(ConfigurationDescriptor,
+                                                                          Index);
+        if (!TerminalDescriptor ||
+            TerminalDescriptor->bDescriptorSubtype != USB_AUDIO_INPUT_TERMINAL)
+        {
+            continue;
+        }
+
+        if (CurrentBridgeIndex == BridgeIndex)
+            return TerminalDescriptor;
+
+        CurrentBridgeIndex++;
+    }
+
+    return NULL;
+}
+
+static
+NTSTATUS
+UsbAudioAddConnectionCount(
+    IN OUT PULONG ConnectionsCount,
+    IN ULONG AdditionalCount)
+{
+    if (*ConnectionsCount > MAXULONG - AdditionalCount)
+        return STATUS_INTEGER_OVERFLOW;
+
+    *ConnectionsCount += AdditionalCount;
+    return STATUS_SUCCESS;
+}
+
+static
+NTSTATUS
+UsbAudioCountSourceToNodeConnection(
+    IN PUSB_CONFIGURATION_DESCRIPTOR ConfigurationDescriptor,
+    IN OUT PULONG ConnectionsCount,
+    IN UCHAR SourceId,
+    IN ULONG StreamingTerminalDescriptorCount)
+{
+    ULONG BridgePinId;
+
+    return UsbAudioAddConnectionCount(ConnectionsCount,
+                                      UsbAudioGetRenderBridgePinId(ConfigurationDescriptor,
+                                                                   SourceId,
+                                                                   StreamingTerminalDescriptorCount,
+                                                                   &BridgePinId) ? 2 : 1);
+}
+
+static
+NTSTATUS
+UsbAudioAppendTopologyConnection(
+    IN OUT PKSTOPOLOGY_CONNECTION Connections,
+    IN ULONG MaxConnections,
+    IN OUT PULONG ConnectionsCount,
+    IN ULONG FromNode,
+    IN ULONG FromNodePin,
+    IN ULONG ToNode,
+    IN ULONG ToNodePin)
+{
+    if (*ConnectionsCount >= MaxConnections)
+    {
+        DPRINT1("BuildUSBAudioFilterTopology: connection allocation exceeded %lu/%lu\n",
+                *ConnectionsCount,
+                MaxConnections);
+        return STATUS_BUFFER_TOO_SMALL;
+    }
+
+    Connections[*ConnectionsCount].FromNode = FromNode;
+    Connections[*ConnectionsCount].FromNodePin = FromNodePin;
+    Connections[*ConnectionsCount].ToNode = ToNode;
+    Connections[*ConnectionsCount].ToNodePin = ToNodePin;
+    (*ConnectionsCount)++;
+
+    return STATUS_SUCCESS;
+}
+
+static
+NTSTATUS
+UsbAudioAddSourceToNodeConnection(
+    IN PUSB_CONFIGURATION_DESCRIPTOR ConfigurationDescriptor,
+    IN OUT PKSTOPOLOGY_CONNECTION Connections,
+    IN ULONG MaxConnections,
+    IN OUT PULONG ConnectionsCount,
+    IN UCHAR SourceId,
+    IN ULONG SourceNode,
+    IN ULONG TargetNode,
+    IN ULONG TargetNodePin,
+    IN ULONG StreamingTerminalDescriptorCount)
+{
+    ULONG BridgePinId;
+    NTSTATUS Status;
+
+    if (UsbAudioGetRenderBridgePinId(ConfigurationDescriptor,
+                                     SourceId,
+                                     StreamingTerminalDescriptorCount,
+                                     &BridgePinId))
+    {
+        Status = UsbAudioAppendTopologyConnection(Connections,
+                                                  MaxConnections,
+                                                  ConnectionsCount,
+                                                  SourceNode,
+                                                  0,
+                                                  KSFILTER_NODE,
+                                                  BridgePinId);
+        if (!NT_SUCCESS(Status))
+            return Status;
+
+        return UsbAudioAppendTopologyConnection(Connections,
+                                                MaxConnections,
+                                                ConnectionsCount,
+                                                KSFILTER_NODE,
+                                                BridgePinId,
+                                                TargetNode,
+                                                TargetNodePin);
+    }
+
+    return UsbAudioAppendTopologyConnection(Connections,
+                                            MaxConnections,
+                                            ConnectionsCount,
+                                            SourceNode,
+                                            0,
+                                            TargetNode,
+                                            TargetNodePin);
+}
+
+static
+NTSTATUS
+UsbAudioCountTopologyConnections(
+    IN PUSB_CONFIGURATION_DESCRIPTOR ConfigurationDescriptor,
+    IN PNODE_CONTEXT NodeContext,
+    IN ULONG NodeContextCount,
+    IN ULONG StreamingTerminalDescriptorCount,
+    OUT PULONG OutConnectionsCount)
+{
+    PUSB_INTERFACE_DESCRIPTOR Descriptor;
+    PUSB_AUDIO_CONTROL_INTERFACE_HEADER_DESCRIPTOR InterfaceHeaderDescriptor;
+    PUSB_COMMON_DESCRIPTOR CommonDescriptor;
+    PUSB_AUDIO_CONTROL_INPUT_TERMINAL_DESCRIPTOR InputTerminalDescriptor;
+    PUSB_AUDIO_CONTROL_FEATURE_UNIT_DESCRIPTOR FeatureUnitDescriptor;
+    PUSB_AUDIO_CONTROL_MIXER_UNIT_DESCRIPTOR MixerUnitDescriptor;
+    PUSB_AUDIO_CONTROL_OUTPUT_TERMINAL_DESCRIPTOR OutputTerminalDescriptor;
+    PUSB_AUDIO_CONTROL_SELECTOR_UNIT_DESCRIPTOR SelectorUnitDescriptor;
+    ULONG DescriptorCount = 0;
+    ULONG Index;
+    ULONG SourceNode;
+    UCHAR Value;
+    NTSTATUS Status;
+
+    *OutConnectionsCount = 0;
+
+    for (Descriptor = USBD_ParseConfigurationDescriptorEx(ConfigurationDescriptor, ConfigurationDescriptor, -1, -1, USB_DEVICE_CLASS_AUDIO, -1, -1);
+    Descriptor != NULL;
+        Descriptor = USBD_ParseConfigurationDescriptorEx(ConfigurationDescriptor, (PVOID)((ULONG_PTR)Descriptor + Descriptor->bLength), -1, -1, USB_DEVICE_CLASS_AUDIO, -1, -1))
+    {
+        if (Descriptor->bInterfaceSubClass != 0x01) /* AUDIO_CONTROL */
+            continue;
+
+        InterfaceHeaderDescriptor = (PUSB_AUDIO_CONTROL_INTERFACE_HEADER_DESCRIPTOR)USBD_ParseDescriptors(ConfigurationDescriptor, ConfigurationDescriptor->wTotalLength, Descriptor, USB_AUDIO_CONTROL_TERMINAL_DESCRIPTOR_TYPE);
+        if (InterfaceHeaderDescriptor == NULL)
+            continue;
+
+        CommonDescriptor = USBD_ParseDescriptors(InterfaceHeaderDescriptor, InterfaceHeaderDescriptor->wTotalLength, (PVOID)((ULONG_PTR)InterfaceHeaderDescriptor + InterfaceHeaderDescriptor->bLength), USB_AUDIO_CONTROL_TERMINAL_DESCRIPTOR_TYPE);
+        while (CommonDescriptor)
+        {
+            InputTerminalDescriptor = (PUSB_AUDIO_CONTROL_INPUT_TERMINAL_DESCRIPTOR)CommonDescriptor;
+            if (InputTerminalDescriptor->bDescriptorSubtype == USB_AUDIO_INPUT_TERMINAL)
+            {
+                if (DescriptorCount >= NodeContextCount)
+                    return STATUS_INVALID_DEVICE_REQUEST;
+
+                Status = UsbAudioAddConnectionCount(OutConnectionsCount, 1);
+                if (!NT_SUCCESS(Status))
+                    return Status;
+
+                DescriptorCount++;
+            }
+            else if (InputTerminalDescriptor->bDescriptorSubtype == USB_AUDIO_OUTPUT_TERMINAL)
+            {
+                if (DescriptorCount >= NodeContextCount)
+                    return STATUS_INVALID_DEVICE_REQUEST;
+
+                OutputTerminalDescriptor = (PUSB_AUDIO_CONTROL_OUTPUT_TERMINAL_DESCRIPTOR)CommonDescriptor;
+                if (UsbAudioResolveLastNodeForId(NodeContext,
+                                                 NodeContextCount,
+                                                 OutputTerminalDescriptor->bSourceID,
+                                                 &SourceNode,
+                                                 0))
+                {
+                    Status = UsbAudioCountSourceToNodeConnection(ConfigurationDescriptor,
+                                                                OutConnectionsCount,
+                                                                OutputTerminalDescriptor->bSourceID,
+                                                                StreamingTerminalDescriptorCount);
+                    if (!NT_SUCCESS(Status))
+                        return Status;
+                }
+
+                Status = UsbAudioAddConnectionCount(OutConnectionsCount, 1);
+                if (!NT_SUCCESS(Status))
+                    return Status;
+
+                DescriptorCount++;
+            }
+            else if (InputTerminalDescriptor->bDescriptorSubtype == USB_AUDIO_FEATURE_UNIT)
+            {
+                if (DescriptorCount >= NodeContextCount)
+                    return STATUS_INVALID_DEVICE_REQUEST;
+
+                FeatureUnitDescriptor = (PUSB_AUDIO_CONTROL_FEATURE_UNIT_DESCRIPTOR)InputTerminalDescriptor;
+                if (NodeContext[DescriptorCount].NodeCount != 0 &&
+                    UsbAudioResolveLastNodeForId(NodeContext,
+                                                 NodeContextCount,
+                                                 FeatureUnitDescriptor->bSourceID,
+                                                 &SourceNode,
+                                                 0))
+                {
+                    Status = UsbAudioCountSourceToNodeConnection(ConfigurationDescriptor,
+                                                                OutConnectionsCount,
+                                                                FeatureUnitDescriptor->bSourceID,
+                                                                StreamingTerminalDescriptorCount);
+                    if (!NT_SUCCESS(Status))
+                        return Status;
+                }
+
+                if (NodeContext[DescriptorCount].NodeCount > 1)
+                {
+                    Status = UsbAudioAddConnectionCount(OutConnectionsCount,
+                                                        NodeContext[DescriptorCount].NodeCount - 1);
+                    if (!NT_SUCCESS(Status))
+                        return Status;
+                }
+
+                DescriptorCount++;
+            }
+            else if (InputTerminalDescriptor->bDescriptorSubtype == USB_AUDIO_MIXER_UNIT)
+            {
+                if (DescriptorCount >= NodeContextCount)
+                    return STATUS_INVALID_DEVICE_REQUEST;
+
+                MixerUnitDescriptor = (PUSB_AUDIO_CONTROL_MIXER_UNIT_DESCRIPTOR)InputTerminalDescriptor;
+                for (Index = 0; Index < MixerUnitDescriptor->bNrInPins; Index++)
+                {
+                    Value = MixerUnitDescriptor->baSourceID[Index];
+                    if (UsbAudioResolveLastNodeForId(NodeContext,
+                                                     NodeContextCount,
+                                                     Value,
+                                                     &SourceNode,
+                                                     0))
+                    {
+                        Status = UsbAudioCountSourceToNodeConnection(ConfigurationDescriptor,
+                                                                    OutConnectionsCount,
+                                                                    Value,
+                                                                    StreamingTerminalDescriptorCount);
+                        if (!NT_SUCCESS(Status))
+                            return Status;
+                    }
+
+                    Status = UsbAudioAddConnectionCount(OutConnectionsCount, 1);
+                    if (!NT_SUCCESS(Status))
+                        return Status;
+                }
+
+                DescriptorCount++;
+            }
+            else if (InputTerminalDescriptor->bDescriptorSubtype == USB_AUDIO_SELECTOR_UNIT)
+            {
+                if (DescriptorCount >= NodeContextCount)
+                    return STATUS_INVALID_DEVICE_REQUEST;
+
+                SelectorUnitDescriptor = (PUSB_AUDIO_CONTROL_SELECTOR_UNIT_DESCRIPTOR)InputTerminalDescriptor;
+                for (Index = 0; Index < SelectorUnitDescriptor->bNrInPins; Index++)
+                {
+                    Value = SelectorUnitDescriptor->baSourceID[Index];
+                    if (UsbAudioResolveLastNodeForId(NodeContext,
+                                                     NodeContextCount,
+                                                     Value,
+                                                     &SourceNode,
+                                                     0))
+                    {
+                        Status = UsbAudioCountSourceToNodeConnection(ConfigurationDescriptor,
+                                                                    OutConnectionsCount,
+                                                                    Value,
+                                                                    StreamingTerminalDescriptorCount);
+                        if (!NT_SUCCESS(Status))
+                            return Status;
+                    }
+                }
+
+                DescriptorCount++;
+            }
+
+            CommonDescriptor = (PUSB_COMMON_DESCRIPTOR)((ULONG_PTR)CommonDescriptor + CommonDescriptor->bLength);
+            if ((ULONG_PTR)CommonDescriptor >= ((ULONG_PTR)InterfaceHeaderDescriptor + InterfaceHeaderDescriptor->wTotalLength))
+                break;
+        }
+    }
+
+    return STATUS_SUCCESS;
 }
 
 NTSTATUS
@@ -428,7 +1106,8 @@ BuildUSBAudioFilterTopology(
     PKSFILTER_DESCRIPTOR FilterDescriptor)
 {
     PDEVICE_EXTENSION DeviceExtension;
-    ULONG NodeCount, Index, DescriptorCount, StreamingTerminalIndex, NonStreamingTerminalDescriptorCount, TotalTerminalDescriptorCount, StreamingTerminalPinOffset, ControlDescriptorCount, Length;
+    ULONG NodeCount, Index, DescriptorCount, StreamingTerminalIndex, NonStreamingTerminalDescriptorCount, TotalTerminalDescriptorCount, StreamingTerminalPinOffset, StreamingTerminalDescriptorCount, RenderBridgePinCount, ControlDescriptorCount, Length;
+    ULONG ConnectionCapacity;
     UCHAR Value;
     PUSB_INTERFACE_DESCRIPTOR Descriptor;
     PUSB_AUDIO_CONTROL_INTERFACE_HEADER_DESCRIPTOR InterfaceHeaderDescriptor;
@@ -439,9 +1118,11 @@ BuildUSBAudioFilterTopology(
     PUSB_AUDIO_CONTROL_OUTPUT_TERMINAL_DESCRIPTOR OutputTerminalDescriptor;
     PUSB_AUDIO_CONTROL_SELECTOR_UNIT_DESCRIPTOR SelectorUnitDescriptor;
     PKSNODE_DESCRIPTOR NodeDescriptors;
-    PNODE_CONTEXT NodeContext, PreviousNodeContext;
+    PNODE_CONTEXT NodeContext;
     PKSTOPOLOGY_CONNECTION Connections;
     PKSAUTOMATION_TABLE AutomationTable;
+    ULONG SourceNode;
+    NTSTATUS Status;
 
     /* get device extension */
     DeviceExtension = Device->Context;
@@ -481,92 +1162,15 @@ BuildUSBAudioFilterTopology(
                 while (CommonDescriptor)
                 {
                     InputTerminalDescriptor = (PUSB_AUDIO_CONTROL_INPUT_TERMINAL_DESCRIPTOR)CommonDescriptor;
-                    if (InputTerminalDescriptor->bDescriptorSubtype == 0x02 /* INPUT TERMINAL*/)
+                    if (InputTerminalDescriptor->bDescriptorSubtype == USB_AUDIO_INPUT_TERMINAL ||
+                        InputTerminalDescriptor->bDescriptorSubtype == USB_AUDIO_OUTPUT_TERMINAL)
                     {
-                        if (InputTerminalDescriptor->wTerminalType == USB_AUDIO_STREAMING_TERMINAL_TYPE)
-                        {
-                            NodeDescriptors[FilterDescriptor->NodeDescriptorsCount].Type = &KSNODETYPE_SRC;
-                            NodeDescriptors[FilterDescriptor->NodeDescriptorsCount].Name = &KSNODETYPE_SRC;
-                            NodeDescriptors[FilterDescriptor->NodeDescriptorsCount].AutomationTable = AllocFunction(sizeof(KSAUTOMATION_TABLE));
-
-                            /* insert into node context*/
-                            NodeContext[DescriptorCount].Descriptor = CommonDescriptor;
-                            NodeContext[DescriptorCount].NodeCount = 1;
-                            NodeContext[DescriptorCount].Nodes[0] = FilterDescriptor->NodeDescriptorsCount;
-                            DescriptorCount++;
-
-                            FilterDescriptor->NodeDescriptorsCount++;
-                        }
-                        else if ((InputTerminalDescriptor->wTerminalType & 0xFF00) == 0x200)
-                        {
-                            NodeDescriptors[FilterDescriptor->NodeDescriptorsCount].Type = &KSNODETYPE_ADC;
-                            NodeDescriptors[FilterDescriptor->NodeDescriptorsCount].Name = &KSNODETYPE_ADC;
-                            NodeDescriptors[FilterDescriptor->NodeDescriptorsCount].AutomationTable = AllocFunction(sizeof(KSAUTOMATION_TABLE));
-
-                            /* insert into node context*/
-                            NodeContext[DescriptorCount].Descriptor = CommonDescriptor;
-                            NodeContext[DescriptorCount].NodeCount = 1;
-                            NodeContext[DescriptorCount].Nodes[0] = FilterDescriptor->NodeDescriptorsCount;
-                            DescriptorCount++;
-
-
-                            FilterDescriptor->NodeDescriptorsCount++;
-                        }
-                        else if ((InputTerminalDescriptor->wTerminalType & 0xFF00) == 0x300)
-                        {
-                            NodeDescriptors[FilterDescriptor->NodeDescriptorsCount].Type = &KSNODETYPE_DAC;
-                            NodeDescriptors[FilterDescriptor->NodeDescriptorsCount].Name = &KSNODETYPE_DAC;
-                            NodeDescriptors[FilterDescriptor->NodeDescriptorsCount].AutomationTable = AllocFunction(sizeof(KSAUTOMATION_TABLE));
-
-                            /* insert into node context*/
-                            NodeContext[DescriptorCount].Descriptor = CommonDescriptor;
-                            NodeContext[DescriptorCount].NodeCount = 1;
-                            NodeContext[DescriptorCount].Nodes[0] = FilterDescriptor->NodeDescriptorsCount;
-                            DescriptorCount++;
-
-                            FilterDescriptor->NodeDescriptorsCount++;
-                        }
-                        else
-                        {
-                            DPRINT1("Unexpected input terminal type %x\n", InputTerminalDescriptor->wTerminalType);
-                        }
+                        UsbAudioAddTerminalNode(FilterDescriptor,
+                                                NodeDescriptors,
+                                                NodeContext,
+                                                &DescriptorCount,
+                                                CommonDescriptor);
                     }
-                    else if (InputTerminalDescriptor->bDescriptorSubtype == 0x03 /* OUTPUT_TERMINAL*/)
-                    {
-                        if (InputTerminalDescriptor->wTerminalType == USB_AUDIO_STREAMING_TERMINAL_TYPE)
-                        {
-                            NodeDescriptors[FilterDescriptor->NodeDescriptorsCount].Type = &KSNODETYPE_SRC;
-                            NodeDescriptors[FilterDescriptor->NodeDescriptorsCount].Name = &KSNODETYPE_SRC;
-                            NodeDescriptors[FilterDescriptor->NodeDescriptorsCount].AutomationTable = AllocFunction(sizeof(KSAUTOMATION_TABLE));
-
-                            /* insert into node context*/
-                            NodeContext[DescriptorCount].Descriptor = CommonDescriptor;
-                            NodeContext[DescriptorCount].NodeCount = 1;
-                            NodeContext[DescriptorCount].Nodes[0] = FilterDescriptor->NodeDescriptorsCount;
-                            DescriptorCount++;
-
-                            FilterDescriptor->NodeDescriptorsCount++;
-                        }
-                        else if ((InputTerminalDescriptor->wTerminalType & 0xFF00) == 0x300)
-                        {
-                            NodeDescriptors[FilterDescriptor->NodeDescriptorsCount].Type = &KSNODETYPE_DAC;
-                            NodeDescriptors[FilterDescriptor->NodeDescriptorsCount].Name = &KSNODETYPE_DAC;
-                            NodeDescriptors[FilterDescriptor->NodeDescriptorsCount].AutomationTable = AllocFunction(sizeof(KSAUTOMATION_TABLE));
-
-                            /* insert into node context*/
-                            NodeContext[DescriptorCount].Descriptor = CommonDescriptor;
-                            NodeContext[DescriptorCount].NodeCount = 1;
-                            NodeContext[DescriptorCount].Nodes[0] = FilterDescriptor->NodeDescriptorsCount;
-                            DescriptorCount++;
-
-                            FilterDescriptor->NodeDescriptorsCount++;
-                        }
-                        else
-                        {
-                            DPRINT1("Unexpected output terminal type %x\n", InputTerminalDescriptor->wTerminalType);
-                        }
-                    }
-
                     else if (InputTerminalDescriptor->bDescriptorSubtype == 0x06 /* FEATURE_UNIT*/)
                     {
                         FeatureUnitDescriptor = (PUSB_AUDIO_CONTROL_FEATURE_UNIT_DESCRIPTOR)CommonDescriptor;
@@ -703,6 +1307,14 @@ BuildUSBAudioFilterTopology(
                     else if (InputTerminalDescriptor->bDescriptorSubtype == 0x04 /* MIXER_UNIT */)
                     {
                         MixerUnitDescriptor = (PUSB_AUDIO_CONTROL_MIXER_UNIT_DESCRIPTOR)CommonDescriptor;
+                        if (MixerUnitDescriptor->bNrInPins + 1 > USBAUDIO_MAX_NODES_PER_CONTEXT)
+                        {
+                            DPRINT1("BuildUSBAudioFilterTopology: mixer unit %u has too many pins %u\n",
+                                    MixerUnitDescriptor->bUnitID,
+                                    MixerUnitDescriptor->bNrInPins);
+                            return STATUS_INVALID_DEVICE_REQUEST;
+                        }
+
                         for (Index = 0; Index < MixerUnitDescriptor->bNrInPins; Index++)
                         {
                             NodeDescriptors[FilterDescriptor->NodeDescriptorsCount].Type = &KSNODETYPE_SUPERMIX;
@@ -743,7 +1355,8 @@ BuildUSBAudioFilterTopology(
                     }
                     else
                     {
-                        UNIMPLEMENTED;
+                        DPRINT1("BuildUSBAudioFilterTopology: unknown descriptor subtype %x\n",
+                                InputTerminalDescriptor->bDescriptorSubtype);
                     }
                     CommonDescriptor = (PUSB_COMMON_DESCRIPTOR)((ULONG_PTR)CommonDescriptor + CommonDescriptor->bLength);
                     if ((ULONG_PTR)CommonDescriptor >= ((ULONG_PTR)InterfaceHeaderDescriptor + InterfaceHeaderDescriptor->wTotalLength))
@@ -753,8 +1366,31 @@ BuildUSBAudioFilterTopology(
         }
     }
 
-    /* FIXME determine connections count*/
-    FilterDescriptor->Connections = Connections = AllocFunction(sizeof(KSTOPOLOGY_CONNECTION) * FilterDescriptor->NodeDescriptorsCount * 2);
+    CountTerminalUnits(DeviceExtension->ConfigurationDescriptor, &NonStreamingTerminalDescriptorCount, &TotalTerminalDescriptorCount);
+    if (NonStreamingTerminalDescriptorCount > TotalTerminalDescriptorCount)
+        return STATUS_INVALID_DEVICE_REQUEST;
+
+    StreamingTerminalDescriptorCount = TotalTerminalDescriptorCount - NonStreamingTerminalDescriptorCount;
+    RenderBridgePinCount = UsbAudioCountRenderBridgePins(DeviceExtension->ConfigurationDescriptor);
+    StreamingTerminalPinOffset = StreamingTerminalDescriptorCount + RenderBridgePinCount;
+
+    Status = UsbAudioCountTopologyConnections(DeviceExtension->ConfigurationDescriptor,
+                                              NodeContext,
+                                              ControlDescriptorCount,
+                                              StreamingTerminalDescriptorCount,
+                                              &ConnectionCapacity);
+    if (!NT_SUCCESS(Status))
+        return Status;
+
+    if (ConnectionCapacity == 0)
+        return STATUS_INVALID_DEVICE_REQUEST;
+
+    if (ConnectionCapacity > MAXULONG / sizeof(KSTOPOLOGY_CONNECTION))
+        return STATUS_INTEGER_OVERFLOW;
+
+    /* Allocate exactly the topology connections this descriptor graph can emit. */
+    FilterDescriptor->Connections = Connections =
+        AllocFunction(sizeof(KSTOPOLOGY_CONNECTION) * ConnectionCapacity);
     if (!FilterDescriptor->Connections)
     {
         /* no memory */
@@ -766,9 +1402,6 @@ BuildUSBAudioFilterTopology(
     DescriptorCount = 0;
     StreamingTerminalIndex = 0;
     NodeCount = 0;
-
-    CountTerminalUnits(DeviceExtension->ConfigurationDescriptor, &NonStreamingTerminalDescriptorCount, &TotalTerminalDescriptorCount);
-    StreamingTerminalPinOffset = TotalTerminalDescriptorCount - NonStreamingTerminalDescriptorCount;
 
     for (Descriptor = USBD_ParseConfigurationDescriptorEx(DeviceExtension->ConfigurationDescriptor, DeviceExtension->ConfigurationDescriptor, -1, -1, USB_DEVICE_CLASS_AUDIO, -1, -1);
     Descriptor != NULL;
@@ -783,131 +1416,196 @@ BuildUSBAudioFilterTopology(
                 while (CommonDescriptor)
                 {
                     InputTerminalDescriptor = (PUSB_AUDIO_CONTROL_INPUT_TERMINAL_DESCRIPTOR)CommonDescriptor;
-                    if (InputTerminalDescriptor->bDescriptorSubtype == 0x02 /* INPUT TERMINAL*/)
+                    if (InputTerminalDescriptor->bDescriptorSubtype == USB_AUDIO_INPUT_TERMINAL)
                     {
                         if (InputTerminalDescriptor->wTerminalType == USB_AUDIO_STREAMING_TERMINAL_TYPE)
                         {
-                             Connections[FilterDescriptor->ConnectionsCount].FromNode = KSFILTER_NODE;
-                             Connections[FilterDescriptor->ConnectionsCount].FromNodePin = StreamingTerminalIndex;
-                             Connections[FilterDescriptor->ConnectionsCount].ToNodePin = 1;
-                             Connections[FilterDescriptor->ConnectionsCount].ToNode = NodeContext[DescriptorCount].Nodes[0];
-                             FilterDescriptor->ConnectionsCount++;
+                             Status = UsbAudioAppendTopologyConnection(Connections,
+                                                                       ConnectionCapacity,
+                                                                       &FilterDescriptor->ConnectionsCount,
+                                                                       KSFILTER_NODE,
+                                                                       StreamingTerminalIndex,
+                                                                       NodeContext[DescriptorCount].Nodes[0],
+                                                                       1);
+                             if (!NT_SUCCESS(Status))
+                                 return Status;
+
                              StreamingTerminalIndex++;
 
                         }
                         else
                         {
-                            Connections[FilterDescriptor->ConnectionsCount].FromNode = KSFILTER_NODE;
-                            Connections[FilterDescriptor->ConnectionsCount].FromNodePin = StreamingTerminalPinOffset;
-                            Connections[FilterDescriptor->ConnectionsCount].ToNodePin = 1;
-                            Connections[FilterDescriptor->ConnectionsCount].ToNode = NodeContext[DescriptorCount].Nodes[0];
-                            FilterDescriptor->ConnectionsCount++;
+                            Status = UsbAudioAppendTopologyConnection(Connections,
+                                                                      ConnectionCapacity,
+                                                                      &FilterDescriptor->ConnectionsCount,
+                                                                      KSFILTER_NODE,
+                                                                      StreamingTerminalPinOffset,
+                                                                      NodeContext[DescriptorCount].Nodes[0],
+                                                                      1);
+                            if (!NT_SUCCESS(Status))
+                                return Status;
+
                             StreamingTerminalPinOffset++;
                         }
                         DescriptorCount++;
                     }
-                    else if (InputTerminalDescriptor->bDescriptorSubtype == 0x03 /* OUTPUT_TERMINAL*/)
+                    else if (InputTerminalDescriptor->bDescriptorSubtype == USB_AUDIO_OUTPUT_TERMINAL)
                     {
                         OutputTerminalDescriptor = (PUSB_AUDIO_CONTROL_OUTPUT_TERMINAL_DESCRIPTOR)CommonDescriptor;
-                        PreviousNodeContext = FindNodeContextWithId(NodeContext, ControlDescriptorCount, OutputTerminalDescriptor->bSourceID);
-                        if (PreviousNodeContext)
+                        if (UsbAudioResolveLastNodeForId(NodeContext,
+                                                         ControlDescriptorCount,
+                                                         OutputTerminalDescriptor->bSourceID,
+                                                         &SourceNode,
+                                                         0))
                         {
-                            Connections[FilterDescriptor->ConnectionsCount].FromNode = PreviousNodeContext->Nodes[PreviousNodeContext->NodeCount - 1];
-                            Connections[FilterDescriptor->ConnectionsCount].FromNodePin = 0;
-                            Connections[FilterDescriptor->ConnectionsCount].ToNodePin = 1;
-                            Connections[FilterDescriptor->ConnectionsCount].ToNode = NodeContext[DescriptorCount].Nodes[0];
-                            FilterDescriptor->ConnectionsCount++;
+                            Status = UsbAudioAddSourceToNodeConnection(DeviceExtension->ConfigurationDescriptor,
+                                                                       Connections,
+                                                                       ConnectionCapacity,
+                                                                       &FilterDescriptor->ConnectionsCount,
+                                                                       OutputTerminalDescriptor->bSourceID,
+                                                                       SourceNode,
+                                                                       NodeContext[DescriptorCount].Nodes[0],
+                                                                       1,
+                                                                       StreamingTerminalDescriptorCount);
+                            if (!NT_SUCCESS(Status))
+                                return Status;
                         }
 
                         if (InputTerminalDescriptor->wTerminalType == USB_AUDIO_STREAMING_TERMINAL_TYPE)
                         {
-                            Connections[FilterDescriptor->ConnectionsCount].FromNode = NodeContext[DescriptorCount].Nodes[0];
-                            Connections[FilterDescriptor->ConnectionsCount].FromNodePin = 0;
-                            Connections[FilterDescriptor->ConnectionsCount].ToNodePin = StreamingTerminalIndex;
-                            Connections[FilterDescriptor->ConnectionsCount].ToNode = KSFILTER_NODE;
-                            FilterDescriptor->ConnectionsCount++;
+                            Status = UsbAudioAppendTopologyConnection(Connections,
+                                                                      ConnectionCapacity,
+                                                                      &FilterDescriptor->ConnectionsCount,
+                                                                      NodeContext[DescriptorCount].Nodes[0],
+                                                                      0,
+                                                                      KSFILTER_NODE,
+                                                                      StreamingTerminalIndex);
+                            if (!NT_SUCCESS(Status))
+                                return Status;
+
                             StreamingTerminalIndex++;
                         }
                         else
                         {
-                            Connections[FilterDescriptor->ConnectionsCount].FromNode = NodeContext[DescriptorCount].Nodes[0];
-                            Connections[FilterDescriptor->ConnectionsCount].FromNodePin = 0;
-                            Connections[FilterDescriptor->ConnectionsCount].ToNodePin = StreamingTerminalPinOffset;
-                            Connections[FilterDescriptor->ConnectionsCount].ToNode = KSFILTER_NODE;
-                            FilterDescriptor->ConnectionsCount++;
+                            Status = UsbAudioAppendTopologyConnection(Connections,
+                                                                      ConnectionCapacity,
+                                                                      &FilterDescriptor->ConnectionsCount,
+                                                                      NodeContext[DescriptorCount].Nodes[0],
+                                                                      0,
+                                                                      KSFILTER_NODE,
+                                                                      StreamingTerminalPinOffset);
+                            if (!NT_SUCCESS(Status))
+                                return Status;
 
                             StreamingTerminalPinOffset++;
                         }
                         DescriptorCount++;
                     }
-                    else if (InputTerminalDescriptor->bDescriptorSubtype == 0x06 /* FEATURE_UNIT*/)
+                    else if (InputTerminalDescriptor->bDescriptorSubtype == USB_AUDIO_FEATURE_UNIT)
                     {
                         FeatureUnitDescriptor = (PUSB_AUDIO_CONTROL_FEATURE_UNIT_DESCRIPTOR)InputTerminalDescriptor;
-                        PreviousNodeContext = FindNodeContextWithId(NodeContext, ControlDescriptorCount, FeatureUnitDescriptor->bSourceID);
-                        if (PreviousNodeContext)
+                        if (NodeContext[DescriptorCount].NodeCount != 0 &&
+                            UsbAudioResolveLastNodeForId(NodeContext,
+                                                         ControlDescriptorCount,
+                                                         FeatureUnitDescriptor->bSourceID,
+                                                         &SourceNode,
+                                                         0))
                         {
-                            Connections[FilterDescriptor->ConnectionsCount].FromNode = PreviousNodeContext->Nodes[PreviousNodeContext->NodeCount-1];
-                            Connections[FilterDescriptor->ConnectionsCount].FromNodePin = 0;
-                            Connections[FilterDescriptor->ConnectionsCount].ToNodePin = 1;
-                            Connections[FilterDescriptor->ConnectionsCount].ToNode = NodeContext[DescriptorCount].Nodes[0];
-                            FilterDescriptor->ConnectionsCount++;
+                            Status = UsbAudioAddSourceToNodeConnection(DeviceExtension->ConfigurationDescriptor,
+                                                                       Connections,
+                                                                       ConnectionCapacity,
+                                                                       &FilterDescriptor->ConnectionsCount,
+                                                                       FeatureUnitDescriptor->bSourceID,
+                                                                       SourceNode,
+                                                                       NodeContext[DescriptorCount].Nodes[0],
+                                                                       1,
+                                                                       StreamingTerminalDescriptorCount);
+                            if (!NT_SUCCESS(Status))
+                                return Status;
                         }
                         for (Index = 1; Index < NodeContext[DescriptorCount].NodeCount; Index++)
                         {
-                            Connections[FilterDescriptor->ConnectionsCount].FromNode = NodeContext[DescriptorCount].Nodes[Index - 1];
-                            Connections[FilterDescriptor->ConnectionsCount].FromNodePin = 0;
-                            Connections[FilterDescriptor->ConnectionsCount].ToNodePin = 1;
-                            Connections[FilterDescriptor->ConnectionsCount].ToNode = NodeContext[DescriptorCount].Nodes[Index];
-                            FilterDescriptor->ConnectionsCount++;
+                            Status = UsbAudioAppendTopologyConnection(Connections,
+                                                                      ConnectionCapacity,
+                                                                      &FilterDescriptor->ConnectionsCount,
+                                                                      NodeContext[DescriptorCount].Nodes[Index - 1],
+                                                                      0,
+                                                                      NodeContext[DescriptorCount].Nodes[Index],
+                                                                      1);
+                            if (!NT_SUCCESS(Status))
+                                return Status;
                         }
 
                         DescriptorCount++;
                     }
-                    else if (InputTerminalDescriptor->bDescriptorSubtype == 0x04 /* MIXER_UNIT */)
+                    else if (InputTerminalDescriptor->bDescriptorSubtype == USB_AUDIO_MIXER_UNIT)
                     {
                         MixerUnitDescriptor = (PUSB_AUDIO_CONTROL_MIXER_UNIT_DESCRIPTOR)InputTerminalDescriptor;
                         for (Index = 0; Index < MixerUnitDescriptor->bNrInPins; Index++)
                         {
                             Value = MixerUnitDescriptor->baSourceID[Index];
-                            PreviousNodeContext = FindNodeContextWithId(NodeContext, ControlDescriptorCount, Value);
-                            if (PreviousNodeContext)
+                            if (UsbAudioResolveLastNodeForId(NodeContext,
+                                                             ControlDescriptorCount,
+                                                             Value,
+                                                             &SourceNode,
+                                                             0))
                             {
-                                Connections[FilterDescriptor->ConnectionsCount].FromNode = PreviousNodeContext->Nodes[PreviousNodeContext->NodeCount - 1];
-                                Connections[FilterDescriptor->ConnectionsCount].FromNodePin = 0;
-                                Connections[FilterDescriptor->ConnectionsCount].ToNodePin = 1;
-                                Connections[FilterDescriptor->ConnectionsCount].ToNode = NodeContext[DescriptorCount].Nodes[Index];
-                                FilterDescriptor->ConnectionsCount++;
+                                Status = UsbAudioAddSourceToNodeConnection(DeviceExtension->ConfigurationDescriptor,
+                                                                           Connections,
+                                                                           ConnectionCapacity,
+                                                                           &FilterDescriptor->ConnectionsCount,
+                                                                           Value,
+                                                                           SourceNode,
+                                                                           NodeContext[DescriptorCount].Nodes[Index],
+                                                                           1,
+                                                                           StreamingTerminalDescriptorCount);
+                                if (!NT_SUCCESS(Status))
+                                    return Status;
                             }
 
-                            Connections[FilterDescriptor->ConnectionsCount].FromNode = NodeContext[DescriptorCount].Nodes[Index];
-                            Connections[FilterDescriptor->ConnectionsCount].FromNodePin = 0;
-                            Connections[FilterDescriptor->ConnectionsCount].ToNodePin = 1 + Index;
-                            Connections[FilterDescriptor->ConnectionsCount].ToNode = NodeContext[DescriptorCount].Nodes[NodeContext[DescriptorCount].NodeCount-1];
-                            FilterDescriptor->ConnectionsCount++;
+                            Status = UsbAudioAppendTopologyConnection(Connections,
+                                                                      ConnectionCapacity,
+                                                                      &FilterDescriptor->ConnectionsCount,
+                                                                      NodeContext[DescriptorCount].Nodes[Index],
+                                                                      0,
+                                                                      NodeContext[DescriptorCount].Nodes[NodeContext[DescriptorCount].NodeCount - 1],
+                                                                      1 + Index);
+                            if (!NT_SUCCESS(Status))
+                                return Status;
                         }
                         DescriptorCount++;
                     }
-                    else if (InputTerminalDescriptor->bDescriptorSubtype == 0x05 /* SELECTOR_UNIT */)
+                    else if (InputTerminalDescriptor->bDescriptorSubtype == USB_AUDIO_SELECTOR_UNIT)
                     {
                         SelectorUnitDescriptor = (PUSB_AUDIO_CONTROL_SELECTOR_UNIT_DESCRIPTOR)InputTerminalDescriptor;
                         for (Index = 0; Index < SelectorUnitDescriptor->bNrInPins; Index++)
                         {
                             Value = SelectorUnitDescriptor->baSourceID[Index];
-                            PreviousNodeContext = FindNodeContextWithId(NodeContext, ControlDescriptorCount, Value);
-                            if (PreviousNodeContext)
+                            if (UsbAudioResolveLastNodeForId(NodeContext,
+                                                             ControlDescriptorCount,
+                                                             Value,
+                                                             &SourceNode,
+                                                             0))
                             {
-                                Connections[FilterDescriptor->ConnectionsCount].FromNode = PreviousNodeContext->Nodes[PreviousNodeContext->NodeCount - 1];
-                                Connections[FilterDescriptor->ConnectionsCount].FromNodePin = 0;
-                                Connections[FilterDescriptor->ConnectionsCount].ToNodePin = 1;
-                                Connections[FilterDescriptor->ConnectionsCount].ToNode = NodeContext[DescriptorCount].Nodes[0];
-                                FilterDescriptor->ConnectionsCount++;
+                                Status = UsbAudioAddSourceToNodeConnection(DeviceExtension->ConfigurationDescriptor,
+                                                                           Connections,
+                                                                           ConnectionCapacity,
+                                                                           &FilterDescriptor->ConnectionsCount,
+                                                                           Value,
+                                                                           SourceNode,
+                                                                           NodeContext[DescriptorCount].Nodes[0],
+                                                                           1,
+                                                                           StreamingTerminalDescriptorCount);
+                                if (!NT_SUCCESS(Status))
+                                    return Status;
                             }
                         }
                         DescriptorCount++;
                     }
                     else
                     {
-                        UNIMPLEMENTED;
+                        DPRINT1("BuildUSBAudioFilterTopology: unknown descriptor subtype %x\n",
+                                InputTerminalDescriptor->bDescriptorSubtype);
                     }
                     CommonDescriptor = (PUSB_COMMON_DESCRIPTOR)((ULONG_PTR)CommonDescriptor + CommonDescriptor->bLength);
                     if ((ULONG_PTR)CommonDescriptor >= ((ULONG_PTR)InterfaceHeaderDescriptor + InterfaceHeaderDescriptor->wTotalLength))
@@ -1008,7 +1706,8 @@ CountTerminalUnits(
         }
         else if (Descriptor->bInterfaceSubClass == 0x03) /* MIDI_STREAMING */
         {
-            UNIMPLEMENTED;
+            /* MIDI streaming interfaces are claimed for future use
+             * but do not contribute to audio terminal topology */
         }
     }
     *NonStreamingTerminalDescriptorCount = NonStreamingTerminalCount;
@@ -1019,6 +1718,11 @@ LPGUID
 UsbAudioGetPinCategoryFromTerminalDescriptor(
     IN PUSB_AUDIO_CONTROL_INPUT_TERMINAL_DESCRIPTOR TerminalDescriptor)
 {
+    USHORT TerminalGroup;
+
+    if (!TerminalDescriptor)
+        return &GUID_KSCATEGORY_AUDIO;
+
     if (TerminalDescriptor->wTerminalType == USB_AUDIO_MICROPHONE_TERMINAL_TYPE)
         return &NodeTypeMicrophone;
     else if (TerminalDescriptor->wTerminalType == USB_AUDIO_DESKTOP_MICROPHONE_TERMINAL_TYPE)
@@ -1048,6 +1752,20 @@ UsbAudioGetPinCategoryFromTerminalDescriptor(
     else if (TerminalDescriptor->wTerminalType == USB_AUDIO_SUBWOOFER_TERMINAL_TYPE)
         return &NodeTypeSubwoofer;
 
+    /* bidirectional terminal types */
+    if (TerminalDescriptor->wTerminalType == USB_AUDIO_UNDEFINED_BIDIRECTIONAL_TERMINAL_TYPE)
+        return &NodeTypeBidirectionalUndefined;
+    else if (TerminalDescriptor->wTerminalType == USB_AUDIO_HANDSET_TERMINAL_TYPE)
+        return &NodeTypeHandset;
+    else if (TerminalDescriptor->wTerminalType == USB_AUDIO_HEADSET_TERMINAL_TYPE)
+        return &NodeTypeHeadset;
+    else if (TerminalDescriptor->wTerminalType == USB_AUDIO_SPEAKERPHONE_TERMINAL_TYPE)
+        return &NodeTypeSpeakerphone;
+    else if (TerminalDescriptor->wTerminalType == USB_AUDIO_ECHO_SUPPRESSING_SPEAKERPHONE_TERMINAL_TYPE)
+        return &NodeTypeEchoSuppressingSpeakerphone;
+    else if (TerminalDescriptor->wTerminalType == USB_AUDIO_ECHO_CANCELING_SPEAKERPHONE_TERMINAL_TYPE)
+        return &NodeTypeEchoCancelingSpeakerphone;
+
     if (TerminalDescriptor->wTerminalType == USB_AUDIO_STREAMING_TERMINAL_TYPE)
     {
         if (TerminalDescriptor->bDescriptorSubtype == USB_AUDIO_OUTPUT_TERMINAL)
@@ -1056,7 +1774,20 @@ UsbAudioGetPinCategoryFromTerminalDescriptor(
             return &NodeTypePlayback;
 
     }
-    return NULL;
+
+    TerminalGroup = TerminalDescriptor->wTerminalType & USB_AUDIO_TERMINAL_TYPE_GROUP_MASK;
+    if (TerminalGroup == USB_AUDIO_BIDIRECTIONAL_TERMINAL_TYPE_GROUP)
+        return &NodeTypeBidirectionalUndefined;
+    else if (TerminalGroup == USB_AUDIO_TELEPHONY_TERMINAL_TYPE_GROUP)
+        return &NodeTypePhoneLine;
+    else if (TerminalGroup == USB_AUDIO_EXTERNAL_TERMINAL_TYPE_GROUP)
+        return &NodeTypeLineConnector;
+    else if (TerminalGroup == USB_AUDIO_EMBEDDED_FUNCTION_TERMINAL_TYPE_GROUP)
+        return &NodeTypeAnalogConnector;
+
+    if (TerminalDescriptor->bDescriptorSubtype == USB_AUDIO_OUTPUT_TERMINAL)
+        return &NodeTypeSpeaker;
+    return &NodeTypeMicrophone;
 }
 
 PUSB_AUDIO_CONTROL_INPUT_TERMINAL_DESCRIPTOR
@@ -1150,6 +1881,16 @@ UsbAudioGetNonStreamingTerminalDescriptorByIndex(
     return NULL;
 }
 
+static
+ULONG
+UsbAudioReadSampleFrequency(
+    IN const UCHAR *Frequency)
+{
+    return ((ULONG)Frequency[0]) |
+           ((ULONG)Frequency[1] << 8) |
+           ((ULONG)Frequency[2] << 16);
+}
+
 VOID
 UsbAudioGetDataRanges(
     IN PUSB_CONFIGURATION_DESCRIPTOR ConfigurationDescriptor,
@@ -1161,8 +1902,11 @@ UsbAudioGetDataRanges(
     PUSB_AUDIO_STREAMING_FORMAT_TYPE_DESCRIPTOR StreamingFormatDescriptor;
     PUSB_INTERFACE_DESCRIPTOR Descriptor;
     PKSDATARANGE_AUDIO DataRangeAudio;
-    PKSDATARANGE *DataRangeAudioArray;
-    ULONG NumFrequency, DataRangeCount, DataRangeIndex, Index;
+    PKSDATARANGE *DataRangeAudioArray = NULL;
+    ULONG NumFrequency, DataRangeCount, DataRangeIndex, Index, Range;
+
+    *OutDataRanges = NULL;
+    *OutDataRangesCount = 0;
 
     /* count all data ranges */
     DataRangeCount = 0;
@@ -1170,7 +1914,8 @@ UsbAudioGetDataRanges(
     Descriptor != NULL;
         Descriptor = USBD_ParseConfigurationDescriptorEx(ConfigurationDescriptor, (PVOID)((ULONG_PTR)Descriptor + Descriptor->bLength), -1, -1, USB_DEVICE_CLASS_AUDIO, -1, -1))
     {
-        if (Descriptor->bInterfaceSubClass == 0x02) /* AUDIO_STREAMING */
+        if (Descriptor->bInterfaceSubClass == 0x02 && /* AUDIO_STREAMING */
+            Descriptor->bNumEndpoints > 0)
         {
             StreamingInterfaceDescriptor = (PUSB_AUDIO_STREAMING_INTERFACE_DESCRIPTOR)USBD_ParseDescriptors(ConfigurationDescriptor, ConfigurationDescriptor->wTotalLength, Descriptor, USB_AUDIO_CONTROL_TERMINAL_DESCRIPTOR_TYPE);
             if (StreamingInterfaceDescriptor != NULL)
@@ -1179,13 +1924,38 @@ UsbAudioGetDataRanges(
                 ASSERT(StreamingInterfaceDescriptor->wFormatTag == WAVE_FORMAT_PCM);
                 if (StreamingInterfaceDescriptor->bTerminalLink == bTerminalID)
                 {
-                    DataRangeCount++;
-                    DPRINT1("StreamingInterfaceDescriptor %p TerminalID %x\n", StreamingInterfaceDescriptor, bTerminalID);
+                    StreamingFormatDescriptor = (PUSB_AUDIO_STREAMING_FORMAT_TYPE_DESCRIPTOR)((ULONG_PTR)StreamingInterfaceDescriptor + StreamingInterfaceDescriptor->bLength);
+                    if (StreamingFormatDescriptor->bDescriptorType != USB_AUDIO_CONTROL_TERMINAL_DESCRIPTOR_TYPE ||
+                        StreamingFormatDescriptor->bDescriptorSubtype != 0x02 ||
+                        StreamingFormatDescriptor->bFormatType != 0x01 ||
+                        StreamingFormatDescriptor->bSubframeSize == 0 ||
+                        StreamingFormatDescriptor->bNrChannels == 0)
+                    {
+                        continue;
+                    }
+
+                    NumFrequency = StreamingFormatDescriptor->bSamFreqType;
+                    if (NumFrequency == 0)
+                    {
+                        if (StreamingFormatDescriptor->bLength >=
+                            FIELD_OFFSET(USB_AUDIO_STREAMING_FORMAT_TYPE_DESCRIPTOR, tSamFreq) + 6)
+                        {
+                            DataRangeCount++;
+                        }
+                    }
+                    else if (StreamingFormatDescriptor->bLength >=
+                             FIELD_OFFSET(USB_AUDIO_STREAMING_FORMAT_TYPE_DESCRIPTOR, tSamFreq) +
+                             (NumFrequency * 3))
+                    {
+                        DataRangeCount += NumFrequency;
+                    }
                 }
             }
-            Descriptor = (PUSB_INTERFACE_DESCRIPTOR)StreamingInterfaceDescriptor;
         }
     }
+
+    if (DataRangeCount == 0)
+        return;
 
     DataRangeAudioArray = AllocFunction(sizeof(PVOID) * DataRangeCount);
     if (DataRangeAudioArray == NULL)
@@ -1199,7 +1969,8 @@ UsbAudioGetDataRanges(
     Descriptor != NULL;
         Descriptor = USBD_ParseConfigurationDescriptorEx(ConfigurationDescriptor, (PVOID)((ULONG_PTR)Descriptor + Descriptor->bLength), -1, -1, USB_DEVICE_CLASS_AUDIO, -1, -1))
     {
-        if (Descriptor->bInterfaceSubClass == 0x02) /* AUDIO_STREAMING */
+        if (Descriptor->bInterfaceSubClass == 0x02 && /* AUDIO_STREAMING */
+            Descriptor->bNumEndpoints > 0)
         {
             StreamingInterfaceDescriptor = (PUSB_AUDIO_STREAMING_INTERFACE_DESCRIPTOR)USBD_ParseDescriptors(ConfigurationDescriptor, ConfigurationDescriptor->wTotalLength, Descriptor, USB_AUDIO_CONTROL_TERMINAL_DESCRIPTOR_TYPE);
             if (StreamingInterfaceDescriptor != NULL)
@@ -1213,38 +1984,96 @@ UsbAudioGetDataRanges(
                     ASSERT(StreamingFormatDescriptor->bDescriptorSubtype == 0x02);
                     ASSERT(StreamingFormatDescriptor->bFormatType == 0x01);
 
-                    DataRangeAudio = AllocFunction(sizeof(KSDATARANGE_AUDIO));
-                    if (DataRangeAudio == NULL)
-                    {
-                        /* no memory*/
-                        return;
-                    }
-
-                    DataRangeAudio->DataRange.FormatSize = sizeof(KSDATARANGE_AUDIO);
-                    DataRangeAudio->DataRange.MajorFormat = KSDATAFORMAT_TYPE_AUDIO;
-                    DataRangeAudio->DataRange.SubFormat = KSDATAFORMAT_SUBTYPE_PCM;
-                    DataRangeAudio->DataRange.Specifier = KSDATAFORMAT_SPECIFIER_WAVEFORMATEX;
-                    DataRangeAudio->MaximumChannels = StreamingFormatDescriptor->bNrChannels;
-                    DataRangeAudio->MinimumBitsPerSample = StreamingFormatDescriptor->bBitResolution;
-                    DataRangeAudio->MaximumBitsPerSample = StreamingFormatDescriptor->bBitResolution;
                     NumFrequency = StreamingFormatDescriptor->bSamFreqType;
-                    DataRangeAudio->MinimumSampleFrequency = MAXULONG;
-                    DataRangeAudio->MaximumSampleFrequency = 0;
-                    for (Index = 0; Index < NumFrequency; Index++)
+                    if (NumFrequency == 0)
                     {
-                        DataRangeAudio->MinimumSampleFrequency = min(StreamingFormatDescriptor->tSamFreq[Index * 3] | StreamingFormatDescriptor->tSamFreq[(Index * 3) + 1] << 8 | StreamingFormatDescriptor->tSamFreq[(Index * 3) + 2] << 16, DataRangeAudio->MinimumSampleFrequency);
-                        DataRangeAudio->MaximumSampleFrequency = max(StreamingFormatDescriptor->tSamFreq[Index * 3] | StreamingFormatDescriptor->tSamFreq[(Index * 3) + 1] << 8 | StreamingFormatDescriptor->tSamFreq[(Index * 3) + 2] << 16, DataRangeAudio->MaximumSampleFrequency);
+                        if (StreamingFormatDescriptor->bLength <
+                            FIELD_OFFSET(USB_AUDIO_STREAMING_FORMAT_TYPE_DESCRIPTOR, tSamFreq) + 6)
+                        {
+                            continue;
+                        }
+
+                        DataRangeAudio = AllocFunction(sizeof(KSDATARANGE_AUDIO));
+                        if (DataRangeAudio == NULL)
+                            goto Cleanup;
+
+                        DataRangeAudio->DataRange.FormatSize = sizeof(KSDATARANGE_AUDIO);
+                        DataRangeAudio->DataRange.MajorFormat = KSDATAFORMAT_TYPE_AUDIO;
+                        DataRangeAudio->DataRange.SubFormat = KSDATAFORMAT_SUBTYPE_PCM;
+                        DataRangeAudio->DataRange.Specifier = KSDATAFORMAT_SPECIFIER_WAVEFORMATEX;
+                        DataRangeAudio->DataRange.SampleSize =
+                            StreamingFormatDescriptor->bSubframeSize *
+                            StreamingFormatDescriptor->bNrChannels;
+                        DataRangeAudio->MaximumChannels = StreamingFormatDescriptor->bNrChannels;
+                        DataRangeAudio->MinimumBitsPerSample = StreamingFormatDescriptor->bBitResolution;
+                        DataRangeAudio->MaximumBitsPerSample = StreamingFormatDescriptor->bBitResolution;
+                        DataRangeAudio->MinimumSampleFrequency =
+                            UsbAudioReadSampleFrequency(&StreamingFormatDescriptor->tSamFreq[0]);
+                        DataRangeAudio->MaximumSampleFrequency =
+                            UsbAudioReadSampleFrequency(&StreamingFormatDescriptor->tSamFreq[3]);
+
+                        DataRangeAudioArray[DataRangeIndex] = (PKSDATARANGE)DataRangeAudio;
+                        DataRangeIndex++;
                     }
-                    DataRangeAudioArray[DataRangeIndex] = (PKSDATARANGE)DataRangeAudio;
-                    DataRangeIndex++;
+                    else
+                    {
+                        for (Index = 0; Index < NumFrequency; Index++)
+                        {
+                            ULONG SampleFrequency;
+
+                            if (StreamingFormatDescriptor->bLength <
+                                FIELD_OFFSET(USB_AUDIO_STREAMING_FORMAT_TYPE_DESCRIPTOR, tSamFreq) +
+                                ((Index + 1) * 3))
+                            {
+                                break;
+                            }
+
+                            SampleFrequency =
+                                UsbAudioReadSampleFrequency(&StreamingFormatDescriptor->tSamFreq[Index * 3]);
+
+                            DataRangeAudio = AllocFunction(sizeof(KSDATARANGE_AUDIO));
+                            if (DataRangeAudio == NULL)
+                                goto Cleanup;
+
+                            DataRangeAudio->DataRange.FormatSize = sizeof(KSDATARANGE_AUDIO);
+                            DataRangeAudio->DataRange.MajorFormat = KSDATAFORMAT_TYPE_AUDIO;
+                            DataRangeAudio->DataRange.SubFormat = KSDATAFORMAT_SUBTYPE_PCM;
+                            DataRangeAudio->DataRange.Specifier = KSDATAFORMAT_SPECIFIER_WAVEFORMATEX;
+                            DataRangeAudio->DataRange.SampleSize =
+                                StreamingFormatDescriptor->bSubframeSize *
+                                StreamingFormatDescriptor->bNrChannels;
+                            DataRangeAudio->MaximumChannels = StreamingFormatDescriptor->bNrChannels;
+                            DataRangeAudio->MinimumBitsPerSample = StreamingFormatDescriptor->bBitResolution;
+                            DataRangeAudio->MaximumBitsPerSample = StreamingFormatDescriptor->bBitResolution;
+                            DataRangeAudio->MinimumSampleFrequency = SampleFrequency;
+                            DataRangeAudio->MaximumSampleFrequency = SampleFrequency;
+
+                            DataRangeAudioArray[DataRangeIndex] = (PKSDATARANGE)DataRangeAudio;
+                            DataRangeIndex++;
+                        }
+                    }
                 }
             }
-            Descriptor = (PUSB_INTERFACE_DESCRIPTOR)StreamingInterfaceDescriptor;
         }
     }
 
+    if (DataRangeIndex == 0)
+    {
+        goto Cleanup;
+    }
+
     *OutDataRanges = DataRangeAudioArray;
-    *OutDataRangesCount = DataRangeCount;
+    *OutDataRangesCount = DataRangeIndex;
+    return;
+
+Cleanup:
+    for (Range = 0; Range < DataRangeIndex; Range++)
+    {
+        if (DataRangeAudioArray[Range])
+            FreeFunction(DataRangeAudioArray[Range]);
+    }
+    if (DataRangeAudioArray)
+        FreeFunction(DataRangeAudioArray);
 }
 
 
@@ -1259,30 +2088,58 @@ USBAudioPinBuildDescriptors(
     PKSPIN_DESCRIPTOR_EX Pins;
     ULONG TotalTerminalDescriptorCount = 0;
     ULONG NonStreamingTerminalDescriptorCount = 0;
+    ULONG StreamingTerminalDescriptorCount = 0;
+    ULONG RenderBridgePinCount = 0;
+    ULONG TotalPinCount = 0;
     ULONG Index = 0;
+    ULONG PinOffset;
     PUSB_AUDIO_CONTROL_INPUT_TERMINAL_DESCRIPTOR TerminalDescriptor = NULL;
 
     /* get device extension */
     DeviceExtension = Device->Context;
 
+    *PinDescriptors = NULL;
+    *PinDescriptorsCount = 0;
+    *PinDescriptorSize = sizeof(KSPIN_DESCRIPTOR_EX);
+
     CountTerminalUnits(DeviceExtension->ConfigurationDescriptor, &NonStreamingTerminalDescriptorCount, &TotalTerminalDescriptorCount);
     DPRINT("TotalTerminalDescriptorCount %lu NonStreamingTerminalDescriptorCount %lu\n", TotalTerminalDescriptorCount, NonStreamingTerminalDescriptorCount);
 
+    if (TotalTerminalDescriptorCount == 0 ||
+        NonStreamingTerminalDescriptorCount > TotalTerminalDescriptorCount)
+    {
+        return STATUS_NOT_SUPPORTED;
+    }
+
+    StreamingTerminalDescriptorCount = TotalTerminalDescriptorCount - NonStreamingTerminalDescriptorCount;
+    RenderBridgePinCount = UsbAudioCountRenderBridgePins(DeviceExtension->ConfigurationDescriptor);
+    if (RenderBridgePinCount > MAXULONG - TotalTerminalDescriptorCount)
+        return STATUS_INTEGER_OVERFLOW;
+
+    TotalPinCount = TotalTerminalDescriptorCount + RenderBridgePinCount;
+    if (TotalPinCount > MAXULONG / sizeof(KSPIN_DESCRIPTOR_EX))
+        return STATUS_INTEGER_OVERFLOW;
+
     /* allocate pins */
-    Pins = AllocFunction(sizeof(KSPIN_DESCRIPTOR_EX) * TotalTerminalDescriptorCount);
+    Pins = AllocFunction(sizeof(KSPIN_DESCRIPTOR_EX) * TotalPinCount);
     if (!Pins)
     {
         /* no memory*/
         return STATUS_INSUFFICIENT_RESOURCES;
     }
 
-    for (Index = 0; Index < TotalTerminalDescriptorCount; Index++)
+    for (Index = 0; Index < TotalPinCount; Index++)
     {
-        if (Index < (TotalTerminalDescriptorCount - NonStreamingTerminalDescriptorCount))
+        if (Index < StreamingTerminalDescriptorCount)
         {
             /* irp sink pins*/
             TerminalDescriptor = UsbAudioGetStreamingTerminalDescriptorByIndex(DeviceExtension->ConfigurationDescriptor, Index);
-            ASSERT(TerminalDescriptor != NULL);
+            if (!TerminalDescriptor)
+            {
+                DPRINT1("USBAudioPinBuildDescriptors: missing streaming terminal %lu\n", Index);
+                FreeFunction(Pins);
+                return STATUS_INVALID_DEVICE_REQUEST;
+            }
 
             Pins[Index].Dispatch = &UsbAudioPinDispatch;
             Pins[Index].PinDescriptor.InterfacesCount = 1;
@@ -1315,10 +2172,40 @@ USBAudioPinBuildDescriptors(
             /* irp sinks / sources can be instantiated */
             Pins[Index].InstancesPossible = 1;
         }
+        else if (Index < StreamingTerminalDescriptorCount + RenderBridgePinCount)
+        {
+            TerminalDescriptor = UsbAudioGetRenderBridgeTerminalDescriptorByIndex(DeviceExtension->ConfigurationDescriptor,
+                                                                                 Index - StreamingTerminalDescriptorCount);
+            if (!TerminalDescriptor)
+            {
+                DPRINT1("USBAudioPinBuildDescriptors: missing render bridge terminal %lu\n",
+                        Index - StreamingTerminalDescriptorCount);
+                FreeFunction(Pins);
+                return STATUS_INVALID_DEVICE_REQUEST;
+            }
+
+            Pins[Index].PinDescriptor.InterfacesCount = 1;
+            Pins[Index].PinDescriptor.Interfaces = &StandardPinInterface;
+            Pins[Index].PinDescriptor.MediumsCount = 1;
+            Pins[Index].PinDescriptor.Mediums = &StandardPinMedium;
+            Pins[Index].PinDescriptor.DataRanges = BridgePinAudioFormats;
+            Pins[Index].PinDescriptor.DataRangesCount = 1;
+            Pins[Index].PinDescriptor.Communication = KSPIN_COMMUNICATION_BRIDGE;
+            Pins[Index].PinDescriptor.DataFlow = KSPIN_DATAFLOW_IN;
+            Pins[Index].PinDescriptor.Category = UsbAudioGetPinCategoryFromTerminalDescriptor(TerminalDescriptor);
+        }
         else
         {
             /* bridge pins */
-            TerminalDescriptor = UsbAudioGetNonStreamingTerminalDescriptorByIndex(DeviceExtension->ConfigurationDescriptor, Index - (TotalTerminalDescriptorCount - NonStreamingTerminalDescriptorCount));
+            PinOffset = Index - (StreamingTerminalDescriptorCount + RenderBridgePinCount);
+            TerminalDescriptor = UsbAudioGetNonStreamingTerminalDescriptorByIndex(DeviceExtension->ConfigurationDescriptor, PinOffset);
+            if (!TerminalDescriptor)
+            {
+                DPRINT1("USBAudioPinBuildDescriptors: missing non-streaming terminal %lu\n",
+                        PinOffset);
+                FreeFunction(Pins);
+                return STATUS_INVALID_DEVICE_REQUEST;
+            }
             Pins[Index].PinDescriptor.InterfacesCount = 1;
             Pins[Index].PinDescriptor.Interfaces = &StandardPinInterface;
             Pins[Index].PinDescriptor.MediumsCount = 1;
@@ -1342,7 +2229,7 @@ USBAudioPinBuildDescriptors(
 
     *PinDescriptors = Pins;
     *PinDescriptorSize = sizeof(KSPIN_DESCRIPTOR_EX);
-    *PinDescriptorsCount = TotalTerminalDescriptorCount;
+    *PinDescriptorsCount = TotalPinCount;
 
     return STATUS_SUCCESS;
 }
@@ -1427,6 +2314,9 @@ USBAudioGetStringDescriptor(
     OUT PVOID *OutDescriptor)
 {
     NTSTATUS Status;
+    PUSB_STRING_DESCRIPTOR StringDescriptor;
+    ULONG StringBytes, Size;
+    PWCHAR String;
 
     /* retrieve descriptor */
     Status = USBAudioGetDescriptor(DeviceObject, USB_STRING_DESCRIPTOR_TYPE, DescriptorLength, DescriptorIndex, LanguageId, OutDescriptor);
@@ -1435,6 +2325,34 @@ USBAudioGetStringDescriptor(
         // failed
         return Status;
     }
+
+    StringDescriptor = (PUSB_STRING_DESCRIPTOR)*OutDescriptor;
+    if (StringDescriptor->bLength < FIELD_OFFSET(USB_STRING_DESCRIPTOR, bString) ||
+        StringDescriptor->bLength > DescriptorLength ||
+        StringDescriptor->bDescriptorType != USB_STRING_DESCRIPTOR_TYPE ||
+        ((StringDescriptor->bLength - FIELD_OFFSET(USB_STRING_DESCRIPTOR, bString)) & 1))
+    {
+        FreeFunction(StringDescriptor);
+        *OutDescriptor = NULL;
+        return STATUS_DEVICE_DATA_ERROR;
+    }
+
+    StringBytes = StringDescriptor->bLength - FIELD_OFFSET(USB_STRING_DESCRIPTOR, bString);
+    Size = StringBytes + sizeof(WCHAR);
+
+    String = AllocFunction(Size);
+    if (String == NULL)
+    {
+        FreeFunction(StringDescriptor);
+        *OutDescriptor = NULL;
+        return STATUS_INSUFFICIENT_RESOURCES;
+    }
+
+    RtlCopyMemory(String, StringDescriptor->bString, StringBytes);
+    String[StringBytes / sizeof(WCHAR)] = UNICODE_NULL;
+    FreeFunction(StringDescriptor);
+
+    *OutDescriptor = String;
     return STATUS_SUCCESS;
 }
 
@@ -1494,9 +2412,19 @@ USBAudioInitComponentId(
     INIT_USBAUDIO_PID(&ComponentId->Product, DeviceExtension->DeviceDescriptor->idProduct);
     INIT_USBAUDIO_PRODUCT_NAME(&TempGuid, DeviceExtension->DeviceDescriptor->idVendor, DeviceExtension->DeviceDescriptor->idProduct, 0);
 
+    /* Query device string descriptor — try US English (0x0409) first,
+     * then fall back to the first language from the device's language list */
     if (DeviceExtension->DeviceDescriptor->iProduct)
     {
-        Status = USBAudioGetStringDescriptor(DeviceExtension->LowerDevice, 100 * sizeof(WCHAR), DeviceExtension->DeviceDescriptor->iProduct, 0x0409 /* FIXME */, (PVOID*)&DescriptionBuffer);
+        Status = USBAudioGetStringDescriptor(DeviceExtension->LowerDevice,
+                                             100 * sizeof(WCHAR),
+                                             DeviceExtension->DeviceDescriptor->iProduct,
+                                             0x0409,
+                                             (PVOID*)&DescriptionBuffer);
+        if (!NT_SUCCESS(Status))
+        {
+            DescriptionBuffer = NULL;
+        }
         if (NT_SUCCESS(Status))
         {
             Status = RtlStringFromGUID(&TempGuid, &GuidString);
@@ -1542,8 +2470,8 @@ USBAudioCreateFilterContext(
     FilterDescriptor->Flags = 0;
     FilterDescriptor->ReferenceGuid = &KSNAME_Filter;
     FilterDescriptor->Dispatch = &USBAudioFilterDispatch;
-    FilterDescriptor->CategoriesCount = 1;
-    FilterDescriptor->Categories = &GUID_KSCATEGORY_AUDIO;
+    FilterDescriptor->CategoriesCount = RTL_NUMBER_OF(UsbAudioFilterCategories);
+    FilterDescriptor->Categories = UsbAudioFilterCategories;
 
     /* init component id*/
     ComponentId = AllocFunction(sizeof(KSCOMPONENTID));
@@ -1585,5 +2513,3 @@ USBAudioCreateFilterContext(
 
     return Status;
 }
-
-
