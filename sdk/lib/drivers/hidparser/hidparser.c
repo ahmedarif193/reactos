@@ -13,6 +13,54 @@
 #define NDEBUG
 #include <debug.h>
 
+static USHORT
+HidParser_GetValueCapsCount(
+    IN PVOID CollectionContext,
+    IN HIDP_REPORT_TYPE ReportType)
+{
+    USHORT Count = 0;
+    NTSTATUS Status;
+
+    Status = HidParser_GetSpecificValueCaps(CollectionContext,
+                                            ReportType,
+                                            HID_USAGE_PAGE_UNDEFINED,
+                                            HIDP_LINK_COLLECTION_UNSPECIFIED,
+                                            0,
+                                            NULL,
+                                            &Count);
+    if (Status == HIDP_STATUS_SUCCESS ||
+        Status == HIDP_STATUS_BUFFER_TOO_SMALL)
+    {
+        return Count;
+    }
+
+    return 0;
+}
+
+static USHORT
+HidParser_GetButtonCapsCount(
+    IN PVOID CollectionContext,
+    IN HIDP_REPORT_TYPE ReportType)
+{
+    ULONG Count = 0;
+    NTSTATUS Status;
+
+    Status = HidParser_GetSpecificButtonCaps(CollectionContext,
+                                             ReportType,
+                                             HID_USAGE_PAGE_UNDEFINED,
+                                             HIDP_LINK_COLLECTION_UNSPECIFIED,
+                                             0,
+                                             NULL,
+                                             &Count);
+    if (Status == HIDP_STATUS_SUCCESS ||
+        Status == HIDP_STATUS_BUFFER_TOO_SMALL)
+    {
+        return (Count > MAXUSHORT) ? MAXUSHORT : (USHORT)Count;
+    }
+
+    return 0;
+}
+
 NTSTATUS
 NTAPI
 HidParser_GetCollectionDescription(
@@ -24,6 +72,9 @@ HidParser_GetCollectionDescription(
     NTSTATUS ParserStatus;
     ULONG CollectionCount;
     ULONG Index;
+    ULONG ReportIdCount = 0;
+    ULONG ReportIndex;
+    ULONG ReportIdLocalIndex;
     PVOID ParserContext;
 
     //
@@ -68,19 +119,7 @@ HidParser_GetCollectionDescription(
         //
         return STATUS_INSUFFICIENT_RESOURCES;
     }
-
-    //
-    // allocate report description
-    //
-    DeviceDescription->ReportIDs = (PHIDP_REPORT_IDS)AllocFunction(sizeof(HIDP_REPORT_IDS) * CollectionCount);
-    if (!DeviceDescription->ReportIDs)
-    {
-        //
-        // no memory
-        //
-        FreeFunction(DeviceDescription->CollectionDesc);
-        return STATUS_INSUFFICIENT_RESOURCES;
-    }
+    ZeroFunction(DeviceDescription->CollectionDesc, sizeof(HIDP_COLLECTION_DESC) * CollectionCount);
 
     for(Index = 0; Index < CollectionCount; Index++)
     {
@@ -94,25 +133,14 @@ HidParser_GetCollectionDescription(
             //
             // no memory
             //
+            while (Index > 0)
+            {
+                Index--;
+                FreeFunction(DeviceDescription->CollectionDesc[Index].PreparsedData);
+            }
             FreeFunction(DeviceDescription->CollectionDesc);
-            FreeFunction(DeviceDescription->ReportIDs);
             return ParserStatus;
         }
-
-        //
-        // init report description
-        //
-        DeviceDescription->ReportIDs[Index].CollectionNumber = Index + 1;
-        DeviceDescription->ReportIDs[Index].ReportID = Index; //FIXME
-        DeviceDescription->ReportIDs[Index].InputLength = HidParser_GetReportLength((PVOID)DeviceDescription->CollectionDesc[Index].PreparsedData, HID_REPORT_TYPE_INPUT);
-        DeviceDescription->ReportIDs[Index].OutputLength = HidParser_GetReportLength((PVOID)DeviceDescription->CollectionDesc[Index].PreparsedData, HID_REPORT_TYPE_OUTPUT);
-        DeviceDescription->ReportIDs[Index].FeatureLength = HidParser_GetReportLength((PVOID)DeviceDescription->CollectionDesc[Index].PreparsedData, HID_REPORT_TYPE_FEATURE);
-
-
-        DeviceDescription->ReportIDs[Index].InputLength += (HidParser_UsesReportId((PVOID)DeviceDescription->CollectionDesc[Index].PreparsedData, HID_REPORT_TYPE_INPUT) ? 1 : 0);
-        DeviceDescription->ReportIDs[Index].OutputLength += (HidParser_UsesReportId((PVOID)DeviceDescription->CollectionDesc[Index].PreparsedData, HID_REPORT_TYPE_OUTPUT) ? 1 : 0);
-        DeviceDescription->ReportIDs[Index].FeatureLength += (HidParser_UsesReportId((PVOID)DeviceDescription->CollectionDesc[Index].PreparsedData, HID_REPORT_TYPE_FEATURE) ? 1 : 0);
-
 
         //
         // init collection description
@@ -126,31 +154,103 @@ HidParser_GetCollectionDescription(
         if (ParserStatus != HIDP_STATUS_SUCCESS)
         {
             // collection not found
+            Index++;
+            while (Index > 0)
+            {
+                Index--;
+                FreeFunction(DeviceDescription->CollectionDesc[Index].PreparsedData);
+            }
             FreeFunction(DeviceDescription->CollectionDesc);
-            FreeFunction(DeviceDescription->ReportIDs);
             return ParserStatus;
         }
 
-        //
-        // windows seems to prepend the report id, regardless if it is required
-        //
-        DeviceDescription->CollectionDesc[Index].CollectionNumber = Index + 1;
-        DeviceDescription->CollectionDesc[Index].InputLength = DeviceDescription->ReportIDs[Index].InputLength;
-        DeviceDescription->CollectionDesc[Index].OutputLength = DeviceDescription->ReportIDs[Index].OutputLength;
-        DeviceDescription->CollectionDesc[Index].FeatureLength = DeviceDescription->ReportIDs[Index].FeatureLength;
+        ReportIdCount += HidParser_GetReportIdCount((PVOID)DeviceDescription->CollectionDesc[Index].PreparsedData);
+    }
 
-        DeviceDescription->CollectionDesc[Index].InputLength += (HidParser_UsesReportId((PVOID)DeviceDescription->CollectionDesc[Index].PreparsedData, HID_REPORT_TYPE_INPUT) == FALSE ? 1 : 0);
-        DeviceDescription->CollectionDesc[Index].OutputLength += (HidParser_UsesReportId((PVOID)DeviceDescription->CollectionDesc[Index].PreparsedData, HID_REPORT_TYPE_OUTPUT) == FALSE ? 1 : 0);
-        DeviceDescription->CollectionDesc[Index].FeatureLength += (HidParser_UsesReportId((PVOID)DeviceDescription->CollectionDesc[Index].PreparsedData, HID_REPORT_TYPE_FEATURE) == FALSE ? 1 : 0);
+    if (!ReportIdCount)
+    {
+        for (Index = 0; Index < CollectionCount; Index++)
+            FreeFunction(DeviceDescription->CollectionDesc[Index].PreparsedData);
 
+        FreeFunction(DeviceDescription->CollectionDesc);
+        return STATUS_NO_DATA_DETECTED;
+    }
 
+    //
+    // allocate report descriptions
+    //
+    DeviceDescription->ReportIDs = (PHIDP_REPORT_IDS)AllocFunction(sizeof(HIDP_REPORT_IDS) * ReportIdCount);
+    if (!DeviceDescription->ReportIDs)
+    {
+        for (Index = 0; Index < CollectionCount; Index++)
+            FreeFunction(DeviceDescription->CollectionDesc[Index].PreparsedData);
+
+        FreeFunction(DeviceDescription->CollectionDesc);
+        return STATUS_INSUFFICIENT_RESOURCES;
+    }
+    ZeroFunction(DeviceDescription->ReportIDs, sizeof(HIDP_REPORT_IDS) * ReportIdCount);
+
+    ReportIndex = 0;
+    for (Index = 0; Index < CollectionCount; Index++)
+    {
+        ULONG CollectionReportIdCount;
+
+        CollectionReportIdCount = HidParser_GetReportIdCount((PVOID)DeviceDescription->CollectionDesc[Index].PreparsedData);
+
+        for (ReportIdLocalIndex = 0; ReportIdLocalIndex < CollectionReportIdCount; ReportIdLocalIndex++)
+        {
+            UCHAR ReportID;
+            USHORT InputLength;
+            USHORT OutputLength;
+            USHORT FeatureLength;
+
+            ParserStatus = HidParser_GetReportIdByIndex((PVOID)DeviceDescription->CollectionDesc[Index].PreparsedData,
+                                                        ReportIdLocalIndex,
+                                                        &ReportID,
+                                                        &InputLength,
+                                                        &OutputLength,
+                                                        &FeatureLength);
+            if (ParserStatus != HIDP_STATUS_SUCCESS)
+            {
+                for (Index = 0; Index < CollectionCount; Index++)
+                    FreeFunction(DeviceDescription->CollectionDesc[Index].PreparsedData);
+
+                FreeFunction(DeviceDescription->ReportIDs);
+                FreeFunction(DeviceDescription->CollectionDesc);
+                return ParserStatus;
+            }
+
+            DeviceDescription->ReportIDs[ReportIndex].CollectionNumber = Index + 1;
+            DeviceDescription->ReportIDs[ReportIndex].ReportID = ReportID;
+            DeviceDescription->ReportIDs[ReportIndex].InputLength =
+                InputLength ? InputLength + (ReportID ? 1 : 0) : 0;
+            DeviceDescription->ReportIDs[ReportIndex].OutputLength =
+                OutputLength ? OutputLength + (ReportID ? 1 : 0) : 0;
+            DeviceDescription->ReportIDs[ReportIndex].FeatureLength =
+                FeatureLength ? FeatureLength + (ReportID ? 1 : 0) : 0;
+
+            //
+            // Windows exposes collection lengths with a leading report byte,
+            // even for descriptors that do not use numbered reports.
+            //
+            if (InputLength && InputLength + 1 > DeviceDescription->CollectionDesc[Index].InputLength)
+                DeviceDescription->CollectionDesc[Index].InputLength = InputLength + 1;
+
+            if (OutputLength && OutputLength + 1 > DeviceDescription->CollectionDesc[Index].OutputLength)
+                DeviceDescription->CollectionDesc[Index].OutputLength = OutputLength + 1;
+
+            if (FeatureLength && FeatureLength + 1 > DeviceDescription->CollectionDesc[Index].FeatureLength)
+                DeviceDescription->CollectionDesc[Index].FeatureLength = FeatureLength + 1;
+
+            ReportIndex++;
+        }
     }
 
     //
     // store collection & report count
     //
     DeviceDescription->CollectionDescLength = CollectionCount;
-    DeviceDescription->ReportIDsLength = CollectionCount;
+    DeviceDescription->ReportIDsLength = ReportIdCount;
 
     //
     // done
@@ -229,17 +329,17 @@ HidParser_GetCaps(
     //
     // get value caps
     //
-    Capabilities->NumberInputValueCaps = HidParser_GetReportItemTypeCountFromReportType(CollectionContext, HID_REPORT_TYPE_INPUT, FALSE);
-    Capabilities->NumberOutputValueCaps = HidParser_GetReportItemTypeCountFromReportType(CollectionContext, HID_REPORT_TYPE_OUTPUT, FALSE);
-    Capabilities->NumberFeatureValueCaps = HidParser_GetReportItemTypeCountFromReportType(CollectionContext, HID_REPORT_TYPE_FEATURE, FALSE);
+    Capabilities->NumberInputValueCaps = HidParser_GetValueCapsCount(CollectionContext, HidP_Input);
+    Capabilities->NumberOutputValueCaps = HidParser_GetValueCapsCount(CollectionContext, HidP_Output);
+    Capabilities->NumberFeatureValueCaps = HidParser_GetValueCapsCount(CollectionContext, HidP_Feature);
 
 
     //
     // get button caps
     //
-    Capabilities->NumberInputButtonCaps = HidParser_GetReportItemCountFromReportType(CollectionContext, HID_REPORT_TYPE_INPUT);
-    Capabilities->NumberOutputButtonCaps = HidParser_GetReportItemCountFromReportType(CollectionContext, HID_REPORT_TYPE_OUTPUT);
-    Capabilities->NumberFeatureButtonCaps = HidParser_GetReportItemCountFromReportType(CollectionContext, HID_REPORT_TYPE_FEATURE);
+    Capabilities->NumberInputButtonCaps = HidParser_GetButtonCapsCount(CollectionContext, HidP_Input);
+    Capabilities->NumberOutputButtonCaps = HidParser_GetButtonCapsCount(CollectionContext, HidP_Output);
+    Capabilities->NumberFeatureButtonCaps = HidParser_GetButtonCapsCount(CollectionContext, HidP_Feature);
 
     //
     // done
@@ -255,22 +355,6 @@ HidParser_MaxUsageListLength(
     IN HIDP_REPORT_TYPE  ReportType,
     IN USAGE  UsagePage  OPTIONAL)
 {
-    //
-    // FIXME test what should be returned when usage page is not defined
-    //
-    if (UsagePage == HID_USAGE_PAGE_UNDEFINED)
-    {
-        //
-        // implement me
-        //
-        UNIMPLEMENTED;
-
-        //
-        // invalid report
-        //
-        return 0;
-    }
-
     if (ReportType == HidP_Input)
     {
         //
@@ -312,7 +396,23 @@ HidParser_GetButtonCaps(
     IN PHIDP_BUTTON_CAPS ButtonCaps,
     IN PUSHORT ButtonCapsLength)
 {
-    return HidParser_GetSpecificButtonCaps(CollectionContext, ReportType, HID_USAGE_PAGE_UNDEFINED, HIDP_LINK_COLLECTION_UNSPECIFIED, HID_USAGE_PAGE_UNDEFINED, ButtonCaps, (PULONG)ButtonCapsLength);
+    ULONG Length;
+    NTSTATUS Status;
+
+    if (!ButtonCapsLength)
+        return HIDP_STATUS_INVALID_PREPARSED_DATA;
+
+    Length = *ButtonCapsLength;
+    Status = HidParser_GetSpecificButtonCaps(CollectionContext,
+                                             ReportType,
+                                             HID_USAGE_PAGE_UNDEFINED,
+                                             HIDP_LINK_COLLECTION_UNSPECIFIED,
+                                             HID_USAGE_PAGE_UNDEFINED,
+                                             ButtonCaps,
+                                             &Length);
+
+    *ButtonCapsLength = (USHORT)Length;
+    return Status;
 }
 
 HIDAPI
@@ -824,9 +924,38 @@ HidParser_GetSpecificButtonCaps(
     OUT PHIDP_BUTTON_CAPS  ButtonCaps,
     IN OUT PULONG  ButtonCapsLength)
 {
-    UNIMPLEMENTED;
-    ASSERT(FALSE);
-    return STATUS_NOT_IMPLEMENTED;
+    if (LinkCollection != HIDP_LINK_COLLECTION_UNSPECIFIED)
+        return HIDP_STATUS_USAGE_NOT_FOUND;
+
+    if (ReportType == HidP_Input)
+    {
+        return HidParser_GetSpecificButtonCapsWithReport(CollectionContext,
+                                                         HID_REPORT_TYPE_INPUT,
+                                                         UsagePage,
+                                                         Usage,
+                                                         ButtonCaps,
+                                                         ButtonCapsLength);
+    }
+    else if (ReportType == HidP_Output)
+    {
+        return HidParser_GetSpecificButtonCapsWithReport(CollectionContext,
+                                                         HID_REPORT_TYPE_OUTPUT,
+                                                         UsagePage,
+                                                         Usage,
+                                                         ButtonCaps,
+                                                         ButtonCapsLength);
+    }
+    else if (ReportType == HidP_Feature)
+    {
+        return HidParser_GetSpecificButtonCapsWithReport(CollectionContext,
+                                                         HID_REPORT_TYPE_FEATURE,
+                                                         UsagePage,
+                                                         Usage,
+                                                         ButtonCaps,
+                                                         ButtonCapsLength);
+    }
+
+    return HIDP_STATUS_INVALID_REPORT_TYPE;
 }
 
 
@@ -855,19 +984,6 @@ HidParser_GetExtendedAttributes(
     IN USHORT  DataIndex,
     OUT PHIDP_EXTENDED_ATTRIBUTES  Attributes,
     IN OUT PULONG  LengthAttributes)
-{
-    UNIMPLEMENTED;
-    ASSERT(FALSE);
-    return STATUS_NOT_IMPLEMENTED;
-}
-
-HIDAPI
-NTSTATUS
-NTAPI
-HidParser_GetLinkCollectionNodes(
-    IN PVOID CollectionContext,
-    OUT PHIDP_LINK_COLLECTION_NODE  LinkCollectionNodes,
-    IN OUT PULONG  LinkCollectionNodesLength)
 {
     UNIMPLEMENTED;
     ASSERT(FALSE);
