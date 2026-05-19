@@ -23,12 +23,6 @@ UefiVideoGetFontsFromFirmware(PULONG RomFontPointers)
 }
 
 VOID
-UefiVideoSync(VOID)
-{
-
-}
-
-VOID
 UefiGetExtendedBIOSData(PULONG ExtendedBIOSDataArea,
                         PULONG ExtendedBIOSDataSize)
 {
