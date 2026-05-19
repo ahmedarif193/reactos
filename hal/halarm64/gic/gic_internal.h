@@ -886,6 +886,9 @@ extern ULONG HalpGicSpiAffinityTarget[HALP_GIC_MAX_SPI_COUNT];
 /* Array storing MPIDR values for each CPU (indexed by CPU number) */
 extern ULONGLONG HalpGicCpuMpidr[MAXIMUM_PROCESSORS];
 
+/* Validity bitmap for HalpGicCpuMpidr entries. */
+extern BOOLEAN HalpGicCpuMpidrValid[MAXIMUM_PROCESSORS];
+
 /* Spinlock protecting affinity updates */
 extern KSPIN_LOCK HalpGicAffinityLock;
 
