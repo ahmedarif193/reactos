@@ -137,6 +137,7 @@ SysAudio_AddDevice(
     SYSAUDIODEVEXT *DeviceExtension;
 
     DPRINT("SysAudio_AddDevice called\n");
+    DPRINT1("SYSAUDIO: AddDevice PDO %p\n", PhysicalDeviceObject);
 
     /* Create the device */
     Status = IoCreateDevice(DriverObject,

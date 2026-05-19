@@ -250,6 +250,9 @@ Enum(
 
     /* get device count */
     DeviceCount = GetSysAudioDeviceCount(DeviceObject);
+    DPRINT1("WDMAUD: Enum index %lu sysaudio count %lu\n",
+            DeviceIndex,
+            DeviceCount);
 
     if (DeviceIndex >= DeviceCount)
     {
@@ -263,8 +266,13 @@ Enum(
     if (!NT_SUCCESS(Status))
     {
         /* failed to retrieve device name */
+        DPRINT1("WDMAUD: GetSysAudioDevicePnpName(%lu) failed %x\n",
+                DeviceIndex,
+                Status);
         return MM_STATUS_UNSUCCESSFUL;
     }
+
+    DPRINT1("WDMAUD: Enum device %lu name %S\n", DeviceIndex, *DeviceName);
 
     /* initialize key name */
     RtlInitUnicodeString(&KeyName, *DeviceName);
@@ -292,6 +300,7 @@ Enum(
     if (!NT_SUCCESS(Status))
     {
         /* failed to open device */
+        DPRINT1("WDMAUD: OpenDevice(%S) failed %x\n", *DeviceName, Status);
         return MM_STATUS_UNSUCCESSFUL;
     }
 

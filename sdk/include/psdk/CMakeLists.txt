@@ -120,6 +120,7 @@ list(APPEND SOURCE
     shldisp.idl
     shobjidl.idl
     shtypes.idl
+    spatialaudioclient.idl
 #   stdole2.idl
     strmif.idl
     structuredquerycondition.idl
