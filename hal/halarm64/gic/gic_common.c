@@ -121,6 +121,9 @@ ULONG HalpGicSpiAffinityTarget[HALP_GIC_MAX_SPI_COUNT] = {0};
 /* Array storing MPIDR values for each CPU (indexed by CPU number) */
 ULONGLONG HalpGicCpuMpidr[MAXIMUM_PROCESSORS] = {0};
 
+/* Validity bitmap for HalpGicCpuMpidr entries. MPIDR affinity zero is valid. */
+BOOLEAN HalpGicCpuMpidrValid[MAXIMUM_PROCESSORS] = {0};
+
 /* Spinlock protecting affinity updates */
 KSPIN_LOCK HalpGicAffinityLock;
 
@@ -414,6 +417,7 @@ HalpArm64SendSgi(
             return;
 
         *HalpMmio((ULONG_PTR)HalpGicdBase, GICD_SGIR) = (SgiId & 0xF) | (TargetList << 16);
+        __asm__ __volatile__("dsb sy; sev" ::: "memory");
     }
 }
 
