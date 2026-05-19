@@ -3176,23 +3176,31 @@ USBPORT_PdoPnP(IN PDEVICE_OBJECT PdoDevice,
 
         case IRP_MN_READ_CONFIG:
             DPRINT("IRP_MN_READ_CONFIG\n");
-            ASSERT(FALSE);
-            break;
+            DPRINT1("USBPORT_PdoPnP: IRP_MN_READ_CONFIG not supported\n");
+            Irp->IoStatus.Status = STATUS_NOT_SUPPORTED;
+            IoCompleteRequest(Irp, IO_NO_INCREMENT);
+            return STATUS_NOT_SUPPORTED;
 
         case IRP_MN_WRITE_CONFIG:
             DPRINT("IRP_MN_WRITE_CONFIG\n");
-            ASSERT(FALSE);
-            break;
+            DPRINT1("USBPORT_PdoPnP: IRP_MN_WRITE_CONFIG not supported\n");
+            Irp->IoStatus.Status = STATUS_NOT_SUPPORTED;
+            IoCompleteRequest(Irp, IO_NO_INCREMENT);
+            return STATUS_NOT_SUPPORTED;
 
         case IRP_MN_EJECT:
             DPRINT("IRP_MN_EJECT\n");
-            ASSERT(FALSE);
-            break;
+            DPRINT1("USBPORT_PdoPnP: IRP_MN_EJECT not supported\n");
+            Irp->IoStatus.Status = STATUS_NOT_SUPPORTED;
+            IoCompleteRequest(Irp, IO_NO_INCREMENT);
+            return STATUS_NOT_SUPPORTED;
 
         case IRP_MN_SET_LOCK:
             DPRINT("IRP_MN_SET_LOCK\n");
-            ASSERT(FALSE);
-            break;
+            DPRINT1("USBPORT_PdoPnP: IRP_MN_SET_LOCK not supported\n");
+            Irp->IoStatus.Status = STATUS_NOT_SUPPORTED;
+            IoCompleteRequest(Irp, IO_NO_INCREMENT);
+            return STATUS_NOT_SUPPORTED;
 
         case IRP_MN_QUERY_ID:
         {

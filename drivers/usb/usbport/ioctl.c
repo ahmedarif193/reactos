@@ -14,6 +14,54 @@ static VOID USBPORT_FillTransportCharacteristics(IN PUSBPORT_DEVICE_EXTENSION Fd
                                                  OUT PUSB_TRANSPORT_CHARACTERISTICS Characteristics);
 static VOID USBPORT_FillDeviceCharacteristics(IN PUSBPORT_DEVICE_EXTENSION FdoExtension,
                                               OUT PUSB_DEVICE_CHARACTERISTICS Characteristics);
+static WDMUSB_POWER_STATE USBPORT_MapSystemPowerState(IN SYSTEM_POWER_STATE State);
+static WDMUSB_POWER_STATE USBPORT_MapDevicePowerState(IN DEVICE_POWER_STATE State);
+
+static
+WDMUSB_POWER_STATE
+USBPORT_MapSystemPowerState(IN SYSTEM_POWER_STATE State)
+{
+    switch (State)
+    {
+        case PowerSystemUnspecified:
+            return WdmUsbPowerSystemUnspecified;
+        case PowerSystemWorking:
+            return WdmUsbPowerSystemWorking;
+        case PowerSystemSleeping1:
+            return WdmUsbPowerSystemSleeping1;
+        case PowerSystemSleeping2:
+            return WdmUsbPowerSystemSleeping2;
+        case PowerSystemSleeping3:
+            return WdmUsbPowerSystemSleeping3;
+        case PowerSystemHibernate:
+            return WdmUsbPowerSystemHibernate;
+        case PowerSystemShutdown:
+            return WdmUsbPowerSystemShutdown;
+        default:
+            return WdmUsbPowerNotMapped;
+    }
+}
+
+static
+WDMUSB_POWER_STATE
+USBPORT_MapDevicePowerState(IN DEVICE_POWER_STATE State)
+{
+    switch (State)
+    {
+        case PowerDeviceUnspecified:
+            return WdmUsbPowerDeviceUnspecified;
+        case PowerDeviceD0:
+            return WdmUsbPowerDeviceD0;
+        case PowerDeviceD1:
+            return WdmUsbPowerDeviceD1;
+        case PowerDeviceD2:
+            return WdmUsbPowerDeviceD2;
+        case PowerDeviceD3:
+            return WdmUsbPowerDeviceD3;
+        default:
+            return WdmUsbPowerNotMapped;
+    }
+}
 
 static
 VOID
@@ -889,6 +937,68 @@ USBPORT_FdoDeviceControl(IN PDEVICE_OBJECT FdoDevice,
                     break;
                 }
 
+                case USBUSER_GET_POWER_STATE_MAP:
+                {
+                    PUSBUSER_POWER_INFO_REQUEST PowerReq;
+                    PUSB_POWER_INFO PowerInfo;
+                    PUSBPORT_RHDEVICE_EXTENSION RhExtension;
+
+                    if (UserHeader->RequestBufferLength < sizeof(USBUSER_POWER_INFO_REQUEST))
+                    {
+                        UserHeader->UsbUserStatusCode = UsbUserInvalidParameter;
+                        UserHeader->ActualBufferLength = sizeof(USBUSER_POWER_INFO_REQUEST);
+                        Status = STATUS_INVALID_PARAMETER;
+                        Information = sizeof(USBUSER_REQUEST_HEADER);
+                        break;
+                    }
+
+                    PowerReq = (PUSBUSER_POWER_INFO_REQUEST)UserHeader;
+                    PowerInfo = &PowerReq->PowerInformation;
+                    RhExtension = FdoExtension->RootHubPdoExtension;
+
+                    RtlZeroMemory(PowerInfo, sizeof(USB_POWER_INFO));
+
+                    PowerInfo->SystemState = WdmUsbPowerSystemWorking;
+                    PowerInfo->HcDevicePowerState =
+                        USBPORT_MapDevicePowerState(FdoExtension->CommonExtension.DevicePowerState);
+                    PowerInfo->HcDeviceWake =
+                        USBPORT_MapDevicePowerState(FdoExtension->Capabilities.DeviceWake);
+                    PowerInfo->HcSystemWake =
+                        USBPORT_MapSystemPowerState(FdoExtension->Capabilities.SystemWake);
+
+                    if (RhExtension)
+                    {
+                        PowerInfo->RhDevicePowerState =
+                            USBPORT_MapDevicePowerState(RhExtension->CommonExtension.DevicePowerState);
+                        PowerInfo->RhDeviceWake =
+                            USBPORT_MapDevicePowerState(RhExtension->Capabilities.DeviceWake);
+                        PowerInfo->RhSystemWake =
+                            USBPORT_MapSystemPowerState(RhExtension->Capabilities.SystemWake);
+                    }
+                    else
+                    {
+                        PowerInfo->RhDevicePowerState =
+                            USBPORT_MapDevicePowerState(FdoExtension->Capabilities.DeviceState[PowerSystemWorking]);
+                        PowerInfo->RhDeviceWake =
+                            USBPORT_MapDevicePowerState(FdoExtension->Capabilities.DeviceWake);
+                        PowerInfo->RhSystemWake =
+                            USBPORT_MapSystemPowerState(FdoExtension->Capabilities.SystemWake);
+                    }
+
+                    PowerInfo->LastSystemSleepState = WdmUsbPowerNotMapped;
+                    PowerInfo->CanWakeup =
+                        FdoExtension->Capabilities.SystemWake != PowerSystemUnspecified &&
+                        FdoExtension->Capabilities.DeviceWake != PowerDeviceUnspecified;
+                    PowerInfo->IsPowered =
+                        FdoExtension->CommonExtension.DevicePowerState == PowerDeviceD0;
+
+                    UserHeader->UsbUserStatusCode = UsbUserSuccess;
+                    UserHeader->ActualBufferLength = sizeof(USBUSER_POWER_INFO_REQUEST);
+                    Status = STATUS_SUCCESS;
+                    Information = UserHeader->ActualBufferLength;
+                    break;
+                }
+
                 case USBUSER_GET_USB_DRIVER_VERSION:
                 {
                     PUSBUSER_GET_DRIVER_VERSION Ver;
@@ -930,6 +1040,36 @@ USBPORT_FdoDeviceControl(IN PDEVICE_OBJECT FdoDevice,
 
                     UserHeader->UsbUserStatusCode = UsbUserSuccess;
                     UserHeader->ActualBufferLength = sizeof(USBUSER_GET_DRIVER_VERSION);
+                    Status = STATUS_SUCCESS;
+                    Information = UserHeader->ActualBufferLength;
+                    break;
+                }
+
+                case USBUSER_GET_USB2_HW_VERSION:
+                {
+                    PUSBUSER_GET_USB2HW_VERSION HwVersion;
+
+                    if (UserHeader->RequestBufferLength < sizeof(USBUSER_GET_USB2HW_VERSION))
+                    {
+                        UserHeader->UsbUserStatusCode = UsbUserInvalidParameter;
+                        UserHeader->ActualBufferLength = sizeof(USBUSER_GET_USB2HW_VERSION);
+                        Status = STATUS_INVALID_PARAMETER;
+                        Information = sizeof(USBUSER_REQUEST_HEADER);
+                        break;
+                    }
+
+                    HwVersion = (PUSBUSER_GET_USB2HW_VERSION)UserHeader;
+                    RtlZeroMemory(&HwVersion->Parameters,
+                                  sizeof(HwVersion->Parameters));
+
+                    if (FdoExtension->MiniPortInterface &&
+                        (FdoExtension->MiniPortInterface->Packet.MiniPortFlags & USB_MINIPORT_FLAGS_USB2))
+                    {
+                        HwVersion->Parameters.Usb2HwRevision = FdoExtension->RevisionID;
+                    }
+
+                    UserHeader->UsbUserStatusCode = UsbUserSuccess;
+                    UserHeader->ActualBufferLength = sizeof(USBUSER_GET_USB2HW_VERSION);
                     Status = STATUS_SUCCESS;
                     Information = UserHeader->ActualBufferLength;
                     break;
