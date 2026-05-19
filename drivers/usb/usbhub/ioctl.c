@@ -13,6 +13,114 @@
 #define NDEBUG_USBHUB_IOCTL
 #include "dbg_uhub.h"
 
+static
+NTSTATUS
+USBH_GetMsOsVendorCode(IN PUSBHUB_PORT_PDO_EXTENSION PortExtension,
+                       OUT PUCHAR VendorCode)
+{
+    struct _URB_CONTROL_DESCRIPTOR_REQUEST Urb;
+    OS_STRING OsString;
+    NTSTATUS Status;
+
+    if (!VendorCode)
+    {
+        return STATUS_INVALID_PARAMETER;
+    }
+
+    *VendorCode = 0;
+
+    RtlZeroMemory(&OsString, sizeof(OsString));
+    RtlZeroMemory(&Urb, sizeof(Urb));
+
+    Urb.Hdr.Length = sizeof(Urb);
+    Urb.Hdr.Function = URB_FUNCTION_GET_DESCRIPTOR_FROM_DEVICE;
+    Urb.TransferBufferLength = sizeof(OsString);
+    Urb.TransferBuffer = &OsString;
+    Urb.Index = OS_STRING_DESCRIPTOR_INDEX;
+    Urb.DescriptorType = USB_STRING_DESCRIPTOR_TYPE;
+    Urb.LanguageId = 0;
+
+    Status = USBH_SyncSubmitUrb(PortExtension->Common.SelfDevice, (PURB)&Urb);
+    if (!NT_SUCCESS(Status) || !USBD_SUCCESS(Urb.Hdr.Status))
+    {
+        return STATUS_NOT_SUPPORTED;
+    }
+
+    if (OsString.bLength < sizeof(OS_STRING) ||
+        OsString.bDescriptorType != USB_STRING_DESCRIPTOR_TYPE ||
+        RtlCompareMemory(OsString.MicrosoftString,
+                         MS_OS_STRING_SIGNATURE,
+                         sizeof(MS_OS_STRING_SIGNATURE) - sizeof(WCHAR)) !=
+            sizeof(MS_OS_STRING_SIGNATURE) - sizeof(WCHAR))
+    {
+        return STATUS_NOT_SUPPORTED;
+    }
+
+    *VendorCode = OsString.bVendorCode;
+    return STATUS_SUCCESS;
+}
+
+static
+NTSTATUS
+USBH_PdoHandleMsFeatureDescriptor(IN PUSBHUB_PORT_PDO_EXTENSION PortExtension,
+                                  IN PIRP Irp,
+                                  IN PURB Urb)
+{
+    PUSBHUB_FDO_EXTENSION HubExtension;
+    ULONG TransferBufferLength;
+    PVOID TransferBuffer;
+    PMDL TransferBufferMDL;
+    struct _URB *UrbLink;
+    UCHAR InterfaceNumber;
+    UCHAR PageIndex;
+    USHORT FeatureIndex;
+    UCHAR VendorCode;
+    NTSTATUS Status;
+
+    if (Urb->UrbHeader.Length < sizeof(struct _URB_OS_FEATURE_DESCRIPTOR_REQUEST))
+    {
+        Urb->UrbHeader.Status = USBD_STATUS_INVALID_PARAMETER;
+        USBH_CompleteIrp(Irp, STATUS_INVALID_PARAMETER);
+        return STATUS_INVALID_PARAMETER;
+    }
+
+    Status = USBH_GetMsOsVendorCode(PortExtension, &VendorCode);
+    if (!NT_SUCCESS(Status))
+    {
+        Urb->UrbHeader.Status = USBD_STATUS_NOT_SUPPORTED;
+        USBH_CompleteIrp(Irp, Status);
+        return Status;
+    }
+
+    TransferBufferLength = Urb->UrbOSFeatureDescriptorRequest.TransferBufferLength;
+    TransferBuffer = Urb->UrbOSFeatureDescriptorRequest.TransferBuffer;
+    TransferBufferMDL = Urb->UrbOSFeatureDescriptorRequest.TransferBufferMDL;
+    UrbLink = Urb->UrbOSFeatureDescriptorRequest.UrbLink;
+    InterfaceNumber = Urb->UrbOSFeatureDescriptorRequest.InterfaceNumber;
+    PageIndex = Urb->UrbOSFeatureDescriptorRequest.MS_PageIndex;
+    FeatureIndex = Urb->UrbOSFeatureDescriptorRequest.MS_FeatureDescriptorIndex;
+
+    RtlZeroMemory(&Urb->UrbControlVendorClassRequest,
+                  sizeof(Urb->UrbControlVendorClassRequest));
+
+    Urb->UrbControlVendorClassRequest.Hdr.Length =
+        sizeof(struct _URB_CONTROL_VENDOR_OR_CLASS_REQUEST);
+    Urb->UrbControlVendorClassRequest.Hdr.Function = URB_FUNCTION_VENDOR_DEVICE;
+    Urb->UrbControlVendorClassRequest.TransferFlags =
+        USBD_TRANSFER_DIRECTION_IN | USBD_SHORT_TRANSFER_OK;
+    Urb->UrbControlVendorClassRequest.TransferBufferLength = TransferBufferLength;
+    Urb->UrbControlVendorClassRequest.TransferBuffer = TransferBuffer;
+    Urb->UrbControlVendorClassRequest.TransferBufferMDL = TransferBufferMDL;
+    Urb->UrbControlVendorClassRequest.UrbLink = UrbLink;
+    Urb->UrbControlVendorClassRequest.Request = VendorCode;
+    Urb->UrbControlVendorClassRequest.Value =
+        ((USHORT)InterfaceNumber << 8) | PageIndex;
+    Urb->UrbControlVendorClassRequest.Index = FeatureIndex;
+
+    HubExtension = PortExtension->HubExtension;
+    return USBH_PassIrp(HubExtension->RootHubPdo2, Irp);
+}
+
 NTSTATUS
 NTAPI
 USBH_SelectConfigOrInterfaceComplete(IN PDEVICE_OBJECT DeviceObject,
@@ -54,8 +162,7 @@ USBH_SelectConfigOrInterfaceComplete(IN PDEVICE_OBJECT DeviceObject,
 
         if (TimeoutContext)
         {
-            DPRINT1("USBH_SelectConfigOrInterfaceComplete: TimeoutContext != NULL. FIXME\n");
-            DbgBreakPoint();
+            PortExtension->BndwTimeoutContext = NULL;
         }
 
         KeReleaseSpinLock(&PortExtension->PortTimeoutSpinLock, OldIrql);
@@ -74,8 +181,12 @@ USBH_SelectConfigOrInterfaceComplete(IN PDEVICE_OBJECT DeviceObject,
         DPRINT1("USBH_SelectConfigOrInterfaceComplete: Status = 0x%lx, UsbdStatus = 0x%lx\n", Status, Urb->UrbHeader.Status);
         if (Urb->UrbHeader.Status == USBD_STATUS_NO_BANDWIDTH)
         {
-            DPRINT1("USBH_SelectConfigOrInterfaceComplete: USBD_STATUS_NO_BANDWIDTH. FIXME\n");
-            /*DbgBreakPoint();*/ /* disabled due to CORE-16384, seems to be continuable */
+            PortExtension->PortPdoFlags |= USBHUB_PDO_FLAG_ALLOC_BNDW_FAILED;
+
+            if (PortData)
+                PortData->ConnectionStatus = DeviceGeneralFailure;
+
+            IoInvalidateDeviceState(DeviceObject);
         }
     }
 
@@ -154,8 +265,17 @@ USBH_PdoUrbFilter(IN PUSBHUB_PORT_PDO_EXTENSION PortExtension,
                 {
                     PortExtension->PortPdoFlags |= USBHUB_PDO_FLAG_INSUFFICIENT_PWR;
 
-                    DPRINT1("USBH_PdoUrbFilter: USBH_InvalidatePortDeviceState() UNIMPLEMENTED. FIXME\n");
-                    DbgBreakPoint();
+                    if (PortExtension->PortNumber > 0)
+                    {
+                        HubExtension->PortData[PortExtension->PortNumber - 1].ConnectionStatus =
+                            DeviceGeneralFailure;
+                    }
+
+                    DPRINT1("USBH_PdoUrbFilter: insufficient power (requested=%lu, max=%lu), failing config\n",
+                            MaxPower, HubExtension->MaxPowerPerPort);
+
+                    Urb->UrbHeader.Status = USBD_STATUS_INSUFFICIENT_RESOURCES;
+                    IoInvalidateDeviceState(DeviceObject);
 
                     USBH_CompleteIrp(Irp, STATUS_INVALID_PARAMETER);
                     return STATUS_INVALID_PARAMETER;
@@ -194,9 +314,7 @@ USBH_PdoUrbFilter(IN PUSBHUB_PORT_PDO_EXTENSION PortExtension,
         }
 
         case URB_FUNCTION_GET_MS_FEATURE_DESCRIPTOR:
-            DPRINT1("USBH_PdoUrbFilter: URB_FUNCTION_GET_MS_FEATURE_DESCRIPTOR UNIMPLEMENTED. FIXME\n");
-            USBH_CompleteIrp(Irp, STATUS_NOT_IMPLEMENTED);
-            return STATUS_NOT_IMPLEMENTED;
+            return USBH_PdoHandleMsFeatureDescriptor(PortExtension, Irp, Urb);
 
         default:
             break;

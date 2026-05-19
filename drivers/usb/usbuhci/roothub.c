@@ -10,6 +10,59 @@
 #define NDEBUG
 #include <debug.h>
 
+static
+USHORT
+NTAPI
+UhciRHReadPortStatus(IN PUHCI_EXTENSION UhciExtension,
+                     IN USHORT Port)
+{
+    return READ_PORT_USHORT(&UhciExtension->BaseRegister->
+                            PortControl[Port - 1].AsUSHORT);
+}
+
+static
+VOID
+NTAPI
+UhciRHWritePortStatus(IN PUHCI_EXTENSION UhciExtension,
+                      IN USHORT Port,
+                      IN USHORT Value)
+{
+    WRITE_PORT_USHORT(&UhciExtension->BaseRegister->
+                      PortControl[Port - 1].AsUSHORT,
+                      Value & ~UHCI_PORTSC_WZ_BITS);
+}
+
+static
+VOID
+NTAPI
+UhciRHSetPortStatusBits(IN PUHCI_EXTENSION UhciExtension,
+                        IN USHORT Port,
+                        IN USHORT SetBits)
+{
+    USHORT Status;
+
+    Status = UhciRHReadPortStatus(UhciExtension, Port);
+    Status |= SetBits;
+    Status &= ~UHCI_PORTSC_RWC_BITS;
+    UhciRHWritePortStatus(UhciExtension, Port, Status);
+}
+
+static
+VOID
+NTAPI
+UhciRHClearPortStatusBits(IN PUHCI_EXTENSION UhciExtension,
+                          IN USHORT Port,
+                          IN USHORT ClearBits)
+{
+    USHORT Status;
+
+    Status = UhciRHReadPortStatus(UhciExtension, Port);
+    Status &= ~UHCI_PORTSC_RWC_BITS;
+    Status &= ~ClearBits;
+    Status |= (ClearBits & UHCI_PORTSC_RWC_BITS);
+    UhciRHWritePortStatus(UhciExtension, Port, Status);
+}
+
 VOID
 NTAPI
 UhciRHGetRootHubData(IN PVOID uhciExtension,
@@ -52,8 +105,6 @@ UhciRHGetPortStatus(IN PVOID uhciExtension,
                     IN PUSB_PORT_STATUS_AND_CHANGE PortStatus)
 {
     PUHCI_EXTENSION UhciExtension = uhciExtension;
-    PUHCI_HW_REGISTERS BaseRegister;
-    PUSHORT PortControlRegister;
     UHCI_PORT_STATUS_CONTROL PortControl;
     ULONG PortBit;
     USB_20_PORT_STATUS portStatus;
@@ -63,9 +114,7 @@ UhciRHGetPortStatus(IN PVOID uhciExtension,
 
     ASSERT(Port);
 
-    BaseRegister = UhciExtension->BaseRegister;
-    PortControlRegister = &BaseRegister->PortControl[Port-1].AsUSHORT;
-    PortControl.AsUSHORT = READ_PORT_USHORT(PortControlRegister);
+    PortControl.AsUSHORT = UhciRHReadPortStatus(UhciExtension, Port);
 
     portStatus.AsUshort16 = 0;
     portChange.AsUshort16 = 0;
@@ -86,9 +135,10 @@ UhciRHGetPortStatus(IN PVOID uhciExtension,
     //if (UhciExtension->HcFlavor == UHCI_Piix4) // check will work after supporting HcFlavor in usbport.
     if (TRUE)
     {
-        portStatus.OverCurrent = PortControl.Reserved2 & 1;
-        portStatus.PortPower = (~PortControl.Reserved2 & 1);
-        portChange.OverCurrentIndicatorChange = (PortControl.Reserved2 & 2) != 0;
+        portStatus.OverCurrent = (PortControl.AsUSHORT & UHCI_PORTSC_OC) ? 1 : 0;
+        portStatus.PortPower = 1;
+        portChange.OverCurrentIndicatorChange =
+            (PortControl.AsUSHORT & UHCI_PORTSC_OCC) ? 1 : 0;
     }
     else
     {
@@ -144,6 +194,32 @@ UhciRHGetHubStatus(IN PVOID uhciExtension,
 
 VOID
 NTAPI
+UhciRHPortResumeComplete(IN PVOID uhciExtension,
+                         IN PVOID pPort)
+{
+    PUHCI_EXTENSION UhciExtension = uhciExtension;
+    USHORT Port;
+    ULONG ix;
+
+    Port = *(PUSHORT)pPort;
+    ASSERT(Port);
+
+    UhciRHClearPortStatusBits(UhciExtension, Port, UHCI_PORTSC_SUSPEND_BITS);
+
+    for (ix = 0; ix < 10; ix++)
+    {
+        if (!(UhciRHReadPortStatus(UhciExtension, Port) & UHCI_PORTSC_SUSPEND_BITS))
+            break;
+
+        KeStallExecutionProcessor(1);
+    }
+
+    UhciExtension->SuspendChangePortMask |= (1 << (Port - 1));
+    RegPacket.UsbPortInvalidateRootHub(UhciExtension);
+}
+
+VOID
+NTAPI
 UhciRHPortResetComplete(IN PVOID uhciExtension,
                         IN PVOID pPort)
 {
@@ -194,17 +270,6 @@ UhciRHPortResetComplete(IN PVOID uhciExtension,
     PortControl.ConnectStatusChange = 1;
     PortControl.PortEnableDisableChange = 1;
     WRITE_PORT_USHORT(PortControlRegister, PortControl.AsUSHORT);
-
-    if (UhciExtension->HcFlavor == UHCI_VIA ||
-        UhciExtension->HcFlavor == UHCI_VIA_x01 ||
-        UhciExtension->HcFlavor == UHCI_VIA_x02 ||
-        UhciExtension->HcFlavor == UHCI_VIA_x03 ||
-        UhciExtension->HcFlavor == UHCI_VIA_x04)
-    {
-        DPRINT1("UhciRHPortResetComplete: Via chip. FIXME\n");
-        DbgBreakPoint();
-        return;
-    }
 
     UhciExtension->ResetChangePortMask |= (1 << (Port - 1));
     UhciExtension->ResetPortMask &= ~(1 << (Port - 1));
@@ -265,16 +330,6 @@ UhciRHSetFeaturePortReset(IN PVOID uhciExtension,
         return MP_STATUS_FAILURE;
 
     UhciExtension->ResetPortMask = ResetPortMask | PortBit;
-
-    if (UhciExtension->HcFlavor == UHCI_VIA ||
-        UhciExtension->HcFlavor == UHCI_VIA_x01 ||
-        UhciExtension->HcFlavor == UHCI_VIA_x02 ||
-        UhciExtension->HcFlavor == UHCI_VIA_x03 ||
-        UhciExtension->HcFlavor == UHCI_VIA_x04)
-    {
-        DPRINT1("UhciRHSetFeaturePortReset: Via chip. FIXME\n");
-        return MP_STATUS_SUCCESS;
-    }
 
     UhciRHSetFeaturePortResetWorker(UhciExtension, &Port);
 
@@ -340,8 +395,11 @@ NTAPI
 UhciRHSetFeaturePortSuspend(IN PVOID uhciExtension,
                             IN USHORT Port)
 {
-    DPRINT("UhciRHSetFeaturePortSuspend: UNIMPLEMENTED. FIXME\n");
+    PUHCI_EXTENSION UhciExtension = uhciExtension;
+
     ASSERT(Port);
+
+    UhciRHSetPortStatusBits(UhciExtension, Port, UHCI_PORTSC_SUSP);
     return MP_STATUS_SUCCESS;
 }
 
@@ -361,9 +419,8 @@ NTAPI
 UhciRHClearFeaturePortPower(IN PVOID uhciExtension,
                             IN USHORT Port)
 {
-    DPRINT("UhciRHClearFeaturePortPower: UNIMPLEMENTED. FIXME\n");
     ASSERT(Port);
-    return MP_STATUS_SUCCESS;
+    return MP_STATUS_NOT_SUPPORTED;
 }
 
 MPSTATUS
@@ -371,8 +428,31 @@ NTAPI
 UhciRHClearFeaturePortSuspend(IN PVOID uhciExtension,
                               IN USHORT Port)
 {
-    DPRINT("UhciRHClearFeaturePortSuspend: UNIMPLEMENTED. FIXME\n");
+    PUHCI_EXTENSION UhciExtension = uhciExtension;
+    USHORT PortStatus;
+
     ASSERT(Port);
+
+    PortStatus = UhciRHReadPortStatus(UhciExtension, Port);
+    if (!(PortStatus & UHCI_PORTSC_SUSPEND_BITS))
+        return MP_STATUS_SUCCESS;
+
+    if (PortStatus & UHCI_PORTSC_SUSP)
+    {
+        UhciRHSetPortStatusBits(UhciExtension, Port, UHCI_PORTSC_RD);
+
+        if (UhciRHReadPortStatus(UhciExtension, Port) & UHCI_PORTSC_RD)
+        {
+            RegPacket.UsbPortRequestAsyncCallback(UhciExtension,
+                                                  20,
+                                                  &Port,
+                                                  sizeof(Port),
+                                                  UhciRHPortResumeComplete);
+            return MP_STATUS_SUCCESS;
+        }
+    }
+
+    UhciRHPortResumeComplete(UhciExtension, &Port);
     return MP_STATUS_SUCCESS;
 }
 
@@ -447,8 +527,11 @@ NTAPI
 UhciRHClearFeaturePortSuspendChange(IN PVOID uhciExtension,
                                     IN USHORT Port)
 {
-    DPRINT("UhciRHClearFeaturePortSuspendChange: UNIMPLEMENTED. FIXME\n");
+    PUHCI_EXTENSION UhciExtension = uhciExtension;
+
     ASSERT(Port);
+
+    UhciExtension->SuspendChangePortMask &= ~(1 << (Port - 1));
     return MP_STATUS_SUCCESS;
 }
 
@@ -457,8 +540,11 @@ NTAPI
 UhciRHClearFeaturePortOvercurrentChange(IN PVOID uhciExtension,
                                         IN USHORT Port)
 {
-    DPRINT("UhciRHClearFeaturePortOvercurrentChange: UNIMPLEMENTED. FIXME\n");
+    PUHCI_EXTENSION UhciExtension = uhciExtension;
+
     ASSERT(Port);
+
+    UhciRHClearPortStatusBits(UhciExtension, Port, UHCI_PORTSC_OCC);
     return MP_STATUS_SUCCESS;
 }
 
@@ -477,4 +563,3 @@ UhciRHEnableIrq(IN PVOID uhciExtension)
     /* Do nothing */
     return;
 }
-

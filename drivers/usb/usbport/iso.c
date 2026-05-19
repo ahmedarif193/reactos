@@ -31,12 +31,13 @@ USBPORT_InitializeIsoTransfer(PDEVICE_OBJECT FdoDevice,
                               PUSBPORT_TRANSFER Transfer)
 {
     PUSBPORT_ISO_BLOCK IsoBlock;
+    ULONG TransferBufferLength;
     ULONG ix;
-    ULONG EndOffset;
 
     UNREFERENCED_PARAMETER(FdoDevice);
 
     IsoBlock = Transfer->IsoBlockPtr;
+    TransferBufferLength = Transfer->TransferParameters.TransferBufferLength;
 
     if (!IsoBlock)
     {
@@ -50,19 +51,48 @@ USBPORT_InitializeIsoTransfer(PDEVICE_OBJECT FdoDevice,
     IsoBlock->ErrorCount = 0;
     IsoBlock->SgList = &Transfer->SgList;
 
+    if (IsoBlock->NumberOfPackets == 0)
+        return USBD_STATUS_INVALID_PARAMETER;
+
     for (ix = 0; ix < IsoBlock->NumberOfPackets; ix++)
     {
-        EndOffset = Urb->IsoPacket[ix].Offset + Urb->IsoPacket[ix].Length;
+        ULONG Offset;
+        ULONG Length;
 
-        if (EndOffset > Urb->TransferBufferLength)
+        Offset = Urb->IsoPacket[ix].Offset;
+        if (Offset > TransferBufferLength)
         {
-            DPRINT1("USBPORT_InitializeIsoTransfer: packet %lu exceeds buffer\n",
-                    ix);
+            DPRINT1("USBPORT_InitializeIsoTransfer: packet %lu offset %lu exceeds buffer %lu\n",
+                    ix,
+                    Offset,
+                    TransferBufferLength);
             return USBD_STATUS_INVALID_PARAMETER;
         }
 
-        IsoBlock->Packets[ix].Offset = Urb->IsoPacket[ix].Offset;
-        IsoBlock->Packets[ix].Length = Urb->IsoPacket[ix].Length;
+        if (ix + 1 < IsoBlock->NumberOfPackets)
+        {
+            ULONG NextOffset = Urb->IsoPacket[ix + 1].Offset;
+
+            if (NextOffset < Offset ||
+                NextOffset > TransferBufferLength)
+            {
+                DPRINT1("USBPORT_InitializeIsoTransfer: packet %lu next offset %lu invalid (offset %lu buffer %lu)\n",
+                        ix,
+                        NextOffset,
+                        Offset,
+                        TransferBufferLength);
+                return USBD_STATUS_INVALID_PARAMETER;
+            }
+
+            Length = NextOffset - Offset;
+        }
+        else
+        {
+            Length = TransferBufferLength - Offset;
+        }
+
+        IsoBlock->Packets[ix].Offset = Offset;
+        IsoBlock->Packets[ix].Length = Length;
         IsoBlock->Packets[ix].ActualLength = 0;
         IsoBlock->Packets[ix].Status = USBD_STATUS_ISO_NOT_ACCESSED_BY_HW;
     }
@@ -98,16 +128,17 @@ USBPORT_SetIsoPacketsStatus(IN PUSBPORT_TRANSFER Transfer,
 VOID
 NTAPI
 USBPORT_FailIsoTransfer(IN PUSBPORT_TRANSFER Transfer,
-                        IN USBD_STATUS Status)
+                        IN USBD_STATUS Status,
+                        IN BOOLEAN CallerHoldsEndpointLock)
 {
+    if (!Transfer)
+        return;
+
     USBPORT_SetIsoPacketsStatus(Transfer, Status);
     Transfer->USBDStatus = Status;
     Transfer->CompletedTransferLen = 0;
 
-    USBPORT_CompleteIsoTransfer(NULL,
-                                NULL,
-                                &Transfer->TransferParameters,
-                                0);
+    USBPORT_QueueDoneTransfer(Transfer, Status, CallerHoldsEndpointLock);
 }
 
 VOID
@@ -118,7 +149,7 @@ USBPORT_FlushIsoTransfer(IN PUSBPORT_TRANSFER Transfer)
         return;
 
     /* Treat aborted/canceled ISO transfers as fully failed. */
-    USBPORT_FailIsoTransfer(Transfer, USBD_STATUS_CANCELED);
+    USBPORT_FailIsoTransfer(Transfer, USBD_STATUS_CANCELED, TRUE);
 }
 
 VOID
@@ -129,7 +160,7 @@ USBPORT_ErrorCompleteIsoTransfer(IN PUSBPORT_TRANSFER Transfer)
         return;
 
     /* Map miniport submission errors to a generic request failure. */
-    USBPORT_FailIsoTransfer(Transfer, USBD_STATUS_REQUEST_FAILED);
+    USBPORT_FailIsoTransfer(Transfer, USBD_STATUS_REQUEST_FAILED, TRUE);
 }
 
 ULONG
@@ -177,7 +208,7 @@ USBPORT_CompleteIsoTransfer(IN PVOID MiniPortExtension,
     if (Status == 0)
         Status = USBD_STATUS_SUCCESS;
 
-    USBPORT_CompleteTransferSafe(Transfer, Status);
+    USBPORT_QueueDoneTransfer(Transfer, Status, FALSE);
 
     return TransferLength;
 }

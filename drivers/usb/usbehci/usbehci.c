@@ -333,8 +333,7 @@ EHCI_InitializeQH(IN PEHCI_EXTENSION EhciExtension,
             break;
 
         default:
-            DPRINT_EHCI("EHCI_InitializeQH: Unknown DeviceSpeed=0x%x\n", DeviceSpeed);
-            ASSERT(FALSE);
+            DPRINT1("EHCI_InitializeQH: Unknown DeviceSpeed=0x%x\n", DeviceSpeed);
             break;
     }
 
@@ -643,7 +642,7 @@ EHCI_OpenHsIsoEndpoint(IN PEHCI_EXTENSION EhciExtension,
                        IN PUSBPORT_ENDPOINT_PROPERTIES EndpointProperties,
                        IN PEHCI_ENDPOINT EhciEndpoint)
 {
-    DPRINT_EHCI("EHCI_OpenHsIsoEndpoint: UNIMPLEMENTED. FIXME\n");
+    DPRINT_EHCI("EHCI_OpenHsIsoEndpoint: UNIMPLEMENTED\n");
     return MP_STATUS_NOT_SUPPORTED;
 }
 
@@ -653,7 +652,7 @@ EHCI_OpenIsoEndpoint(IN PEHCI_EXTENSION EhciExtension,
                      IN PUSBPORT_ENDPOINT_PROPERTIES EndpointProperties,
                      IN PEHCI_ENDPOINT EhciEndpoint)
 {
-    DPRINT_EHCI("EHCI_OpenIsoEndpoint: UNIMPLEMENTED. FIXME\n");
+    DPRINT_EHCI("EHCI_OpenIsoEndpoint: UNIMPLEMENTED\n");
     return MP_STATUS_NOT_SUPPORTED;
 }
 
@@ -746,12 +745,12 @@ EHCI_ReopenEndpoint(IN PVOID ehciExtension,
         case USBPORT_TRANSFER_TYPE_ISOCHRONOUS:
             if (EndpointProperties->DeviceSpeed == UsbHighSpeed)
             {
-                DPRINT_EHCI("EHCI_ReopenEndpoint: HS Iso. UNIMPLEMENTED. FIXME\n");
+                DPRINT_EHCI("EHCI_ReopenEndpoint: HS Iso. UNIMPLEMENTED\n");
                 MPStatus = MP_STATUS_NOT_SUPPORTED;
             }
             else
             {
-                DPRINT_EHCI("EHCI_ReopenEndpoint: Iso. UNIMPLEMENTED. FIXME\n");
+                DPRINT_EHCI("EHCI_ReopenEndpoint: Iso. UNIMPLEMENTED\n");
                 MPStatus = MP_STATUS_NOT_SUPPORTED;
             }
 
@@ -845,9 +844,8 @@ EHCI_QueryEndpointRequirements(IN PVOID ehciExtension,
             break;
 
         default:
-            DPRINT_EHCI("EHCI_QueryEndpointRequirements: Unknown TransferType=0x%x\n",
+            DPRINT1("EHCI_QueryEndpointRequirements: Unknown TransferType=0x%x\n",
                     TransferType);
-            DbgBreakPoint();
             break;
     }
 
@@ -1773,7 +1771,7 @@ EHCI_SuspendController(IN PVOID ehciExtension)
     }
 
     if (!Status.HCHalted)
-        DbgBreakPoint();
+        DPRINT1("EHCI_SuspendController: Controller failed to halt\n");
 
     /* Keep PortChange enabled to detect wake events */
     IntrEn.AsULONG = READ_REGISTER_ULONG(&OperationalRegs->HcInterruptEnable.AsULONG);
@@ -2893,8 +2891,7 @@ EHCI_InterruptTransfer(IN PEHCI_EXTENSION EhciExtension,
 
     if (!EhciEndpoint->RemainTDs)
     {
-        DPRINT_EHCI("EHCI_InterruptTransfer: EhciEndpoint - %p\n", EhciEndpoint);
-        DbgBreakPoint();
+        DPRINT1("EHCI_InterruptTransfer: No remaining TDs\n");
         return MP_STATUS_FAILURE;
     }
 
@@ -2902,8 +2899,7 @@ EHCI_InterruptTransfer(IN PEHCI_EXTENSION EhciExtension,
 
     if (!TransferParameters->TransferBufferLength)
     {
-        DPRINT_EHCI("EHCI_InterruptTransfer: EhciEndpoint - %p\n", EhciEndpoint);
-        DbgBreakPoint();
+        DPRINT1("EHCI_InterruptTransfer: Zero-length transfer\n");
         return MP_STATUS_FAILURE;
     }
 
@@ -3059,7 +3055,6 @@ EHCI_SubmitTransfer(IN PVOID ehciExtension,
             break;
 
         default:
-            DbgBreakPoint();
             MPStatus = MP_STATUS_NOT_SUPPORTED;
             break;
     }
@@ -3073,13 +3068,13 @@ EHCI_SubmitIsoTransfer(IN PVOID ehciExtension,
                        IN PVOID ehciEndpoint,
                        IN PUSBPORT_TRANSFER_PARAMETERS TransferParameters,
                        IN PVOID ehciTransfer,
-                       IN PVOID isoParameters)
+                       IN PUSBPORT_ISO_BLOCK IsoBlock)
 {
     UNREFERENCED_PARAMETER(ehciExtension);
     UNREFERENCED_PARAMETER(ehciEndpoint);
     UNREFERENCED_PARAMETER(TransferParameters);
     UNREFERENCED_PARAMETER(ehciTransfer);
-    UNREFERENCED_PARAMETER(isoParameters);
+    UNREFERENCED_PARAMETER(IsoBlock);
 
     DPRINT_EHCI("EHCI_SubmitIsoTransfer: not supported (ISO transfers not implemented for EHCI)\n");
     return MP_STATUS_NOT_SUPPORTED;
@@ -3091,7 +3086,6 @@ EHCI_AbortIsoTransfer(IN PEHCI_EXTENSION EhciExtension,
                       IN PEHCI_ENDPOINT EhciEndpoint,
                       IN PEHCI_TRANSFER EhciTransfer)
 {
-    DPRINT_EHCI("EHCI_AbortIsoTransfer: UNIMPLEMENTED. FIXME\n");
 }
 
 VOID
@@ -3518,7 +3512,7 @@ EHCI_SetAsyncEndpointState(IN PEHCI_EXTENSION EhciExtension,
             break;
 
         default:
-            DbgBreakPoint();
+            DPRINT1("EHCI_EndpointStateTransition: Unknown endpoint state\n");
             break;
     }
 
@@ -4045,7 +4039,6 @@ NTAPI
 EHCI_PollIsoEndpoint(IN PEHCI_EXTENSION EhciExtension,
                      IN PEHCI_ENDPOINT EhciEndpoint)
 {
-    DPRINT_EHCI("EHCI_PollIsoEndpoint: UNIMPLEMENTED. FIXME\n");
 }
 
 VOID
@@ -4262,7 +4255,8 @@ EHCI_SetEndpointStatus(IN PVOID ehciExtension,
         }
 
         if (EndpointStatus == USBPORT_ENDPOINT_HALT)
-            DbgBreakPoint();
+        {
+        }
     }
 }
 
@@ -4306,31 +4300,53 @@ EHCI_ResetController(IN PVOID ehciExtension)
 MPSTATUS
 NTAPI
 EHCI_StartSendOnePacket(IN PVOID ehciExtension,
-                        IN PVOID PacketParameters,
-                        IN PVOID Data,
-                        IN PULONG pDataLength,
-                        IN PVOID BufferVA,
-                        IN PVOID BufferPA,
-                        IN ULONG BufferLength,
-                        IN USBD_STATUS * pUSBDStatus)
+                       IN PVOID PacketParameters,
+                       IN PVOID Data,
+                       IN PULONG pDataLength,
+                       IN PVOID BufferVA,
+                       IN PVOID BufferPA,
+                       IN ULONG BufferLength,
+                       IN USBD_STATUS * pUSBDStatus)
 {
-    DPRINT_EHCI("EHCI_StartSendOnePacket: UNIMPLEMENTED. FIXME\n");
-    return MP_STATUS_SUCCESS;
+    UNREFERENCED_PARAMETER(ehciExtension);
+    UNREFERENCED_PARAMETER(PacketParameters);
+    UNREFERENCED_PARAMETER(Data);
+    UNREFERENCED_PARAMETER(pDataLength);
+    UNREFERENCED_PARAMETER(BufferVA);
+    UNREFERENCED_PARAMETER(BufferPA);
+    UNREFERENCED_PARAMETER(BufferLength);
+
+    if (pUSBDStatus)
+        *pUSBDStatus = USBD_STATUS_NOT_SUPPORTED;
+
+    DPRINT_EHCI("EHCI_StartSendOnePacket: not supported\n");
+    return MP_STATUS_NOT_SUPPORTED;
 }
 
 MPSTATUS
 NTAPI
 EHCI_EndSendOnePacket(IN PVOID ehciExtension,
-                      IN PVOID PacketParameters,
-                      IN PVOID Data,
-                      IN PULONG pDataLength,
-                      IN PVOID BufferVA,
-                      IN PVOID BufferPA,
-                      IN ULONG BufferLength,
-                      IN USBD_STATUS * pUSBDStatus)
+                     IN PVOID PacketParameters,
+                     IN PVOID Data,
+                     IN PULONG pDataLength,
+                     IN PVOID BufferVA,
+                     IN PVOID BufferPA,
+                     IN ULONG BufferLength,
+                     IN USBD_STATUS * pUSBDStatus)
 {
-    DPRINT_EHCI("EHCI_EndSendOnePacket: UNIMPLEMENTED. FIXME\n");
-    return MP_STATUS_SUCCESS;
+    UNREFERENCED_PARAMETER(ehciExtension);
+    UNREFERENCED_PARAMETER(PacketParameters);
+    UNREFERENCED_PARAMETER(Data);
+    UNREFERENCED_PARAMETER(pDataLength);
+    UNREFERENCED_PARAMETER(BufferVA);
+    UNREFERENCED_PARAMETER(BufferPA);
+    UNREFERENCED_PARAMETER(BufferLength);
+
+    if (pUSBDStatus)
+        *pUSBDStatus = USBD_STATUS_NOT_SUPPORTED;
+
+    DPRINT_EHCI("EHCI_EndSendOnePacket: not supported\n");
+    return MP_STATUS_NOT_SUPPORTED;
 }
 
 MPSTATUS
@@ -4340,8 +4356,13 @@ EHCI_PassThru(IN PVOID ehciExtension,
               IN ULONG ParameterLength,
               IN PVOID pParameters)
 {
-    DPRINT_EHCI("EHCI_PassThru: UNIMPLEMENTED. FIXME\n");
-    return MP_STATUS_SUCCESS;
+    UNREFERENCED_PARAMETER(ehciExtension);
+    UNREFERENCED_PARAMETER(passThruParameters);
+    UNREFERENCED_PARAMETER(ParameterLength);
+    UNREFERENCED_PARAMETER(pParameters);
+
+    DPRINT_EHCI("EHCI_PassThru: UNIMPLEMENTED\n");
+    return MP_STATUS_NOT_SUPPORTED;
 }
 
 VOID
@@ -4636,7 +4657,7 @@ DriverEntry(IN PDRIVER_OBJECT DriverObject,
     RegPacket.InterruptService = EHCI_InterruptService;
     RegPacket.InterruptDpc = EHCI_InterruptDpc;
     RegPacket.SubmitTransfer = EHCI_SubmitTransfer;
-    RegPacket.SubmitIsoTransfer = EHCI_SubmitIsoTransfer;
+    RegPacket.SubmitIsoTransfer = NULL;
     RegPacket.AbortTransfer = EHCI_AbortTransfer;
     RegPacket.GetEndpointState = EHCI_GetEndpointState;
     RegPacket.SetEndpointState = EHCI_SetEndpointState;
