@@ -8,6 +8,45 @@
 
 #define UNIMPLEMENTED DebugFunction("%s is UNIMPLEMENTED\n", __FUNCTION__)
 
+static
+ULONG_PTR
+HidP_AlignUp(
+    IN ULONG_PTR Value,
+    IN ULONG_PTR Alignment)
+{
+    return (Value + Alignment - 1) & ~(Alignment - 1);
+}
+
+static
+PVOID
+HidP_GetParserContext(
+    IN PHIDP_PREPARSED_DATA PreparsedData)
+{
+    struct hid_preparsed_data *WineData = (struct hid_preparsed_data *)PreparsedData;
+    PHIDP_REACTOS_PREPARSED_DATA ReactOSData;
+    ULONG_PTR Offset;
+
+    if (!PreparsedData)
+        return NULL;
+
+    if (*(PULONG)WineData->magic != HIDP_WINE_PREPARSED_DATA_MAGIC)
+        return PreparsedData;
+
+    Offset = FIELD_OFFSET(struct hid_preparsed_data, value_caps) +
+             WineData->caps_size +
+             WineData->number_link_collection_nodes * sizeof(struct hid_collection_node);
+    Offset = HidP_AlignUp(Offset, sizeof(PVOID));
+
+    ReactOSData = (PHIDP_REACTOS_PREPARSED_DATA)((PUCHAR)PreparsedData + Offset);
+    if (ReactOSData->Magic != HIDP_REACTOS_PREPARSED_DATA_MAGIC ||
+        ReactOSData->NativeOffset < Offset + sizeof(*ReactOSData))
+    {
+        return NULL;
+    }
+
+    return (PUCHAR)PreparsedData + ReactOSData->NativeOffset;
+}
+
 VOID
 NTAPI
 HidP_FreeCollectionDescription(
@@ -27,6 +66,10 @@ HidP_GetCaps(
     IN PHIDP_PREPARSED_DATA  PreparsedData,
     OUT PHIDP_CAPS  Capabilities)
 {
+    PreparsedData = HidP_GetParserContext(PreparsedData);
+    if (!PreparsedData || !Capabilities)
+        return HIDP_STATUS_INVALID_PREPARSED_DATA;
+
     //
     // get caps
     //
@@ -81,6 +124,10 @@ HidP_MaxUsageListLength(
     IN USAGE  UsagePage  OPTIONAL,
     IN PHIDP_PREPARSED_DATA  PreparsedData)
 {
+    PreparsedData = HidP_GetParserContext(PreparsedData);
+    if (!PreparsedData)
+        return 0;
+
     //
     // sanity check
     //
@@ -104,6 +151,10 @@ HidP_GetSpecificValueCaps(
     IN OUT PUSHORT  ValueCapsLength,
     IN PHIDP_PREPARSED_DATA  PreparsedData)
 {
+    PreparsedData = HidP_GetParserContext(PreparsedData);
+    if (!PreparsedData || !ValueCapsLength)
+        return HIDP_STATUS_INVALID_PREPARSED_DATA;
+
     //
     // sanity check
     //
@@ -128,6 +179,10 @@ HidP_GetUsages(
     IN PCHAR Report,
     IN ULONG ReportLength)
 {
+    PreparsedData = HidP_GetParserContext(PreparsedData);
+    if (!PreparsedData)
+        return HIDP_STATUS_INVALID_PREPARSED_DATA;
+
     //
     // sanity check
     //
@@ -196,6 +251,10 @@ HidP_GetScaledUsageValue(
     IN PCHAR  Report,
     IN ULONG  ReportLength)
 {
+    PreparsedData = HidP_GetParserContext(PreparsedData);
+    if (!PreparsedData)
+        return HIDP_STATUS_INVALID_PREPARSED_DATA;
+
     //
     // sanity check
     //
@@ -220,6 +279,10 @@ HidP_GetUsageValue(
     IN PCHAR  Report,
     IN ULONG  ReportLength)
 {
+    PreparsedData = HidP_GetParserContext(PreparsedData);
+    if (!PreparsedData)
+        return HIDP_STATUS_INVALID_PREPARSED_DATA;
+
     //
     // sanity check
     //
@@ -273,9 +336,30 @@ HidP_GetSpecificButtonCaps(
     IN OUT PUSHORT ButtonCapsLength,
     IN PHIDP_PREPARSED_DATA  PreparsedData)
 {
-    UNIMPLEMENTED;
-    ASSERT(FALSE);
-    return STATUS_NOT_IMPLEMENTED;
+    ULONG Length;
+    NTSTATUS Status;
+
+    if (!ButtonCapsLength)
+        return HIDP_STATUS_INVALID_PREPARSED_DATA;
+
+    PreparsedData = HidP_GetParserContext(PreparsedData);
+    if (!PreparsedData)
+    {
+        *ButtonCapsLength = 0;
+        return HIDP_STATUS_INVALID_PREPARSED_DATA;
+    }
+
+    Length = *ButtonCapsLength;
+    Status = HidParser_GetSpecificButtonCaps(PreparsedData,
+                                             ReportType,
+                                             UsagePage,
+                                             LinkCollection,
+                                             Usage,
+                                             ButtonCaps,
+                                             &Length);
+
+    *ButtonCapsLength = (USHORT)Length;
+    return Status;
 }
 
 HIDAPI
@@ -317,9 +401,13 @@ HidP_GetLinkCollectionNodes(
     IN OUT PULONG  LinkCollectionNodesLength,
     IN PHIDP_PREPARSED_DATA  PreparsedData)
 {
-    UNIMPLEMENTED;
-    ASSERT(FALSE);
-    return STATUS_NOT_IMPLEMENTED;
+    PreparsedData = HidP_GetParserContext(PreparsedData);
+    if (!PreparsedData || !LinkCollectionNodesLength)
+        return HIDP_STATUS_INVALID_PREPARSED_DATA;
+
+    return HidParser_GetLinkCollectionNodes(PreparsedData,
+                                            LinkCollectionNodes,
+                                            LinkCollectionNodesLength);
 }
 
 NTSTATUS

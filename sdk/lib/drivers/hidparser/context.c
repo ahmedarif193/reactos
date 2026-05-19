@@ -22,6 +22,65 @@ typedef struct
     };
 }HID_COLLECTION_CONTEXT, *PHID_COLLECTION_CONTEXT;
 
+static
+BOOLEAN
+HidParser_IsRawRangeValid(
+    IN PHID_COLLECTION_CONTEXT CollectionContext,
+    IN ULONG Offset,
+    IN ULONG Length)
+{
+    ULONG RawDataSize;
+
+    if (!CollectionContext || CollectionContext->Size < sizeof(HID_COLLECTION_CONTEXT))
+        return FALSE;
+
+    RawDataSize = CollectionContext->Size - sizeof(HID_COLLECTION_CONTEXT);
+
+    if (Offset > RawDataSize)
+        return FALSE;
+
+    return Length <= RawDataSize - Offset;
+}
+
+static
+BOOLEAN
+HidParser_GetCollectionHeaderSize(
+    IN PHID_COLLECTION Collection,
+    OUT PULONG CollectionSize)
+{
+    ULONG OffsetCount;
+
+    OffsetCount = Collection->ReportCount + Collection->NodeCount;
+    if (OffsetCount == 0)
+        OffsetCount = 1;
+
+    if (OffsetCount > (MAXULONG - FIELD_OFFSET(HID_COLLECTION, Offsets)) / sizeof(ULONG))
+        return FALSE;
+
+    *CollectionSize = FIELD_OFFSET(HID_COLLECTION, Offsets) + OffsetCount * sizeof(ULONG);
+    return TRUE;
+}
+
+static
+BOOLEAN
+HidParser_GetCollectionAtOffset(
+    IN PHID_COLLECTION_CONTEXT CollectionContext,
+    IN ULONG Offset,
+    OUT PHID_COLLECTION *Collection)
+{
+    ULONG CollectionSize;
+
+    if (!HidParser_IsRawRangeValid(CollectionContext, Offset, sizeof(HID_COLLECTION)))
+        return FALSE;
+
+    *Collection = (PHID_COLLECTION)(CollectionContext->RawData + Offset);
+
+    if (!HidParser_GetCollectionHeaderSize(*Collection, &CollectionSize))
+        return FALSE;
+
+    return HidParser_IsRawRangeValid(CollectionContext, Offset, CollectionSize);
+}
+
 ULONG
 HidParser_CalculateCollectionSize(
     IN PHID_COLLECTION Collection)
@@ -286,6 +345,206 @@ HidParser_GetReportInCollection(
     return HidParser_SearchReportInCollection(CollectionContext, (PHID_COLLECTION)&CollectionContext->RawData, ReportType);
 }
 
+static
+ULONG
+HidParser_BitsToBytes(
+    IN ULONG BitCount)
+{
+    return (BitCount + 7) / 8;
+}
+
+static
+VOID
+HidParser_MarkReportIdsInCollection(
+    IN PHID_COLLECTION_CONTEXT CollectionContext,
+    IN PHID_COLLECTION Collection,
+    IN OUT PUCHAR SeenReportIds,
+    IN OUT PULONG ReportIdCount)
+{
+    ULONG Index;
+    PHID_REPORT Report;
+    PHID_COLLECTION SubCollection;
+
+    for (Index = 0; Index < Collection->ReportCount; Index++)
+    {
+        Report = (PHID_REPORT)(CollectionContext->RawData + Collection->Offsets[Index]);
+
+        if (!SeenReportIds[Report->ReportID])
+        {
+            SeenReportIds[Report->ReportID] = TRUE;
+            (*ReportIdCount)++;
+        }
+    }
+
+    for (Index = 0; Index < Collection->NodeCount; Index++)
+    {
+        SubCollection = (PHID_COLLECTION)(CollectionContext->RawData +
+            Collection->Offsets[Collection->ReportCount + Index]);
+
+        HidParser_MarkReportIdsInCollection(CollectionContext,
+                                            SubCollection,
+                                            SeenReportIds,
+                                            ReportIdCount);
+    }
+}
+
+ULONG
+HidParser_GetReportIdCount(
+    IN PVOID Context)
+{
+    UCHAR SeenReportIds[256];
+    ULONG ReportIdCount = 0;
+    PHID_COLLECTION_CONTEXT CollectionContext = (PHID_COLLECTION_CONTEXT)Context;
+
+    ZeroFunction(SeenReportIds, sizeof(SeenReportIds));
+
+    HidParser_MarkReportIdsInCollection(CollectionContext,
+                                        (PHID_COLLECTION)&CollectionContext->RawData,
+                                        SeenReportIds,
+                                        &ReportIdCount);
+
+    return ReportIdCount;
+}
+
+static
+VOID
+HidParser_GetReportIdLengthsInCollection(
+    IN PHID_COLLECTION_CONTEXT CollectionContext,
+    IN PHID_COLLECTION Collection,
+    IN UCHAR ReportID,
+    OUT PUSHORT InputLength,
+    OUT PUSHORT OutputLength,
+    OUT PUSHORT FeatureLength)
+{
+    ULONG Index;
+    ULONG Length;
+    PHID_REPORT Report;
+    PHID_COLLECTION SubCollection;
+
+    for (Index = 0; Index < Collection->ReportCount; Index++)
+    {
+        Report = (PHID_REPORT)(CollectionContext->RawData + Collection->Offsets[Index]);
+
+        if (Report->ReportID != ReportID)
+            continue;
+
+        Length = HidParser_BitsToBytes(Report->ReportSize);
+
+        if (Report->Type == HID_REPORT_TYPE_INPUT && Length > *InputLength)
+            *InputLength = (USHORT)Length;
+        else if (Report->Type == HID_REPORT_TYPE_OUTPUT && Length > *OutputLength)
+            *OutputLength = (USHORT)Length;
+        else if (Report->Type == HID_REPORT_TYPE_FEATURE && Length > *FeatureLength)
+            *FeatureLength = (USHORT)Length;
+    }
+
+    for (Index = 0; Index < Collection->NodeCount; Index++)
+    {
+        SubCollection = (PHID_COLLECTION)(CollectionContext->RawData +
+            Collection->Offsets[Collection->ReportCount + Index]);
+
+        HidParser_GetReportIdLengthsInCollection(CollectionContext,
+                                                 SubCollection,
+                                                 ReportID,
+                                                 InputLength,
+                                                 OutputLength,
+                                                 FeatureLength);
+    }
+}
+
+static
+BOOLEAN
+HidParser_FindReportIdByIndexInCollection(
+    IN PHID_COLLECTION_CONTEXT CollectionContext,
+    IN PHID_COLLECTION Collection,
+    IN ULONG ReportIndex,
+    IN OUT PUCHAR SeenReportIds,
+    IN OUT PULONG CurrentReportIndex,
+    OUT PUCHAR ReportID)
+{
+    ULONG Index;
+    PHID_REPORT Report;
+    PHID_COLLECTION SubCollection;
+
+    for (Index = 0; Index < Collection->ReportCount; Index++)
+    {
+        Report = (PHID_REPORT)(CollectionContext->RawData + Collection->Offsets[Index]);
+
+        if (SeenReportIds[Report->ReportID])
+            continue;
+
+        SeenReportIds[Report->ReportID] = TRUE;
+
+        if (*CurrentReportIndex == ReportIndex)
+        {
+            *ReportID = Report->ReportID;
+            return TRUE;
+        }
+
+        (*CurrentReportIndex)++;
+    }
+
+    for (Index = 0; Index < Collection->NodeCount; Index++)
+    {
+        SubCollection = (PHID_COLLECTION)(CollectionContext->RawData +
+            Collection->Offsets[Collection->ReportCount + Index]);
+
+        if (HidParser_FindReportIdByIndexInCollection(CollectionContext,
+                                                      SubCollection,
+                                                      ReportIndex,
+                                                      SeenReportIds,
+                                                      CurrentReportIndex,
+                                                      ReportID))
+        {
+            return TRUE;
+        }
+    }
+
+    return FALSE;
+}
+
+NTSTATUS
+HidParser_GetReportIdByIndex(
+    IN PVOID Context,
+    IN ULONG ReportIndex,
+    OUT PUCHAR ReportID,
+    OUT PUSHORT InputLength,
+    OUT PUSHORT OutputLength,
+    OUT PUSHORT FeatureLength)
+{
+    UCHAR SeenReportIds[256];
+    ULONG CurrentReportIndex = 0;
+    PHID_COLLECTION_CONTEXT CollectionContext = (PHID_COLLECTION_CONTEXT)Context;
+
+    if (!Context || !ReportID || !InputLength || !OutputLength || !FeatureLength)
+        return HIDP_STATUS_INVALID_PREPARSED_DATA;
+
+    ZeroFunction(SeenReportIds, sizeof(SeenReportIds));
+
+    if (!HidParser_FindReportIdByIndexInCollection(CollectionContext,
+                                                   (PHID_COLLECTION)&CollectionContext->RawData,
+                                                   ReportIndex,
+                                                   SeenReportIds,
+                                                   &CurrentReportIndex,
+                                                   ReportID))
+    {
+        return HIDP_STATUS_REPORT_DOES_NOT_EXIST;
+    }
+
+    *InputLength = 0;
+    *OutputLength = 0;
+    *FeatureLength = 0;
+
+    HidParser_GetReportIdLengthsInCollection(CollectionContext,
+                                             (PHID_COLLECTION)&CollectionContext->RawData,
+                                             *ReportID,
+                                             InputLength,
+                                             OutputLength,
+                                             FeatureLength);
+
+    return HIDP_STATUS_SUCCESS;
+}
+
 PHID_COLLECTION
 HidParser_GetCollectionFromContext(
     IN PVOID Context)
@@ -304,7 +563,7 @@ HidParser_GetCollectionCount(
     IN PHID_COLLECTION Collection)
 {
     ULONG Index;
-    ULONG Count = Collection->NodeCount;
+    ULONG Count = 1;
     PHID_COLLECTION SubCollection;
 
     for(Index = 0; Index < Collection->NodeCount; Index++)
@@ -331,14 +590,141 @@ HidParser_GetTotalCollectionCount(
     IN PVOID Context)
 {
     PHID_COLLECTION_CONTEXT CollectionContext;
+    PHID_COLLECTION Collection;
 
     //
     // get parser context
     //
     CollectionContext = (PHID_COLLECTION_CONTEXT)Context;
 
+    if (!HidParser_GetCollectionAtOffset(CollectionContext, 0, &Collection))
+        return 0;
+
     //
     // count collections
     //
-    return HidParser_GetCollectionCount(CollectionContext, (PHID_COLLECTION)CollectionContext->RawData);
+    return HidParser_GetCollectionCount(CollectionContext, Collection);
+}
+
+static
+NTSTATUS
+HidParser_CountLinkCollectionNodes(
+    IN PHID_COLLECTION_CONTEXT CollectionContext,
+    IN ULONG CollectionOffset,
+    IN OUT PULONG LinkCollectionNodesLength)
+{
+    ULONG Index;
+    PHID_COLLECTION Collection;
+    NTSTATUS Status;
+
+    if (!HidParser_GetCollectionAtOffset(CollectionContext, CollectionOffset, &Collection))
+        return HIDP_STATUS_INVALID_PREPARSED_DATA;
+
+    if (*LinkCollectionNodesLength == MAXULONG)
+        return HIDP_STATUS_INTERNAL_ERROR;
+
+    (*LinkCollectionNodesLength)++;
+
+    for (Index = 0; Index < Collection->NodeCount; Index++)
+    {
+        Status = HidParser_CountLinkCollectionNodes(CollectionContext,
+                                                    Collection->Offsets[Collection->ReportCount + Index],
+                                                    LinkCollectionNodesLength);
+        if (Status != HIDP_STATUS_SUCCESS)
+            return Status;
+    }
+
+    return HIDP_STATUS_SUCCESS;
+}
+
+static
+NTSTATUS
+HidParser_FillLinkCollectionNodes(
+    IN PHID_COLLECTION_CONTEXT CollectionContext,
+    IN ULONG CollectionOffset,
+    IN USHORT Parent,
+    IN OUT PULONG NextNode,
+    OUT PHIDP_LINK_COLLECTION_NODE LinkCollectionNodes)
+{
+    ULONG Index;
+    ULONG NodeIndex;
+    ULONG ChildIndex;
+    PHID_COLLECTION Collection;
+    PHIDP_LINK_COLLECTION_NODE Node;
+    NTSTATUS Status;
+
+    if (!HidParser_GetCollectionAtOffset(CollectionContext, CollectionOffset, &Collection))
+        return HIDP_STATUS_INVALID_PREPARSED_DATA;
+
+    if (*NextNode > MAXUSHORT)
+        return HIDP_STATUS_INTERNAL_ERROR;
+
+    NodeIndex = *NextNode;
+    (*NextNode)++;
+
+    Node = &LinkCollectionNodes[NodeIndex];
+    ZeroFunction(Node, sizeof(*Node));
+
+    Node->LinkUsage = (USAGE)((Collection->Usage >> USAGE_ID_SHIFT) & USAGE_ID_MASK);
+    Node->LinkUsagePage = (USAGE)((Collection->Usage >> USAGE_PAGE_SHIFT) & USAGE_PAGE_MASK);
+    Node->Parent = Parent;
+    Node->NumberOfChildren = (USHORT)Collection->NodeCount;
+    Node->CollectionType = Collection->Type;
+
+    if (Collection->NodeCount)
+        Node->FirstChild = (USHORT)*NextNode;
+
+    for (Index = 0; Index < Collection->NodeCount; Index++)
+    {
+        ChildIndex = *NextNode;
+        Status = HidParser_FillLinkCollectionNodes(CollectionContext,
+                                                   Collection->Offsets[Collection->ReportCount + Index],
+                                                   (USHORT)NodeIndex,
+                                                   NextNode,
+                                                   LinkCollectionNodes);
+        if (Status != HIDP_STATUS_SUCCESS)
+            return Status;
+
+        if (Index + 1 < Collection->NodeCount)
+            LinkCollectionNodes[ChildIndex].NextSibling = (USHORT)*NextNode;
+    }
+
+    return HIDP_STATUS_SUCCESS;
+}
+
+HIDAPI
+NTSTATUS
+NTAPI
+HidParser_GetLinkCollectionNodes(
+    IN PVOID Context,
+    OUT PHIDP_LINK_COLLECTION_NODE  LinkCollectionNodes,
+    IN OUT PULONG  LinkCollectionNodesLength)
+{
+    ULONG RequiredLength = 0;
+    ULONG NextNode = 0;
+    PHID_COLLECTION_CONTEXT CollectionContext = (PHID_COLLECTION_CONTEXT)Context;
+    NTSTATUS Status;
+
+    if (!LinkCollectionNodesLength)
+        return HIDP_STATUS_INVALID_PREPARSED_DATA;
+
+    Status = HidParser_CountLinkCollectionNodes(CollectionContext, 0, &RequiredLength);
+    if (Status != HIDP_STATUS_SUCCESS)
+        return Status;
+
+    if (!LinkCollectionNodes || *LinkCollectionNodesLength < RequiredLength)
+    {
+        *LinkCollectionNodesLength = RequiredLength;
+        return HIDP_STATUS_BUFFER_TOO_SMALL;
+    }
+
+    Status = HidParser_FillLinkCollectionNodes(CollectionContext,
+                                               0,
+                                               HIDP_LINK_COLLECTION_UNSPECIFIED,
+                                               &NextNode,
+                                               LinkCollectionNodes);
+    if (Status == HIDP_STATUS_SUCCESS)
+        *LinkCollectionNodesLength = RequiredLength;
+
+    return Status;
 }

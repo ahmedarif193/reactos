@@ -69,6 +69,66 @@ HidParser_BitsToBytes(
     return (BitCount + 7) / 8;
 }
 
+static
+USHORT
+HidParser_ReportItemUsagePage(
+    _In_ PHID_REPORT_ITEM ReportItem)
+{
+    return (USHORT)(ReportItem->UsageMinimum >> 16);
+}
+
+static
+BOOLEAN
+HidParser_ReportItemIsButtonCap(
+    _In_ PHID_REPORT_ITEM ReportItem)
+{
+    USHORT UsagePage;
+
+    if (ReportItem->BitCount == 0)
+        return FALSE;
+
+    UsagePage = HidParser_ReportItemUsagePage(ReportItem);
+
+    /*
+     * HID button capabilities cover selector arrays and one-bit button-like
+     * variable fields. Multi-bit variable controls are value capabilities.
+     */
+    if (ReportItem->Array)
+        return TRUE;
+
+    return UsagePage == HID_USAGE_PAGE_BUTTON ||
+           UsagePage == HID_USAGE_PAGE_KEYBOARD;
+}
+
+static
+BOOLEAN
+HidParser_ReportItemMatchesUsage(
+    _In_ PHID_REPORT_ITEM ReportItem,
+    _In_ USHORT UsagePage,
+    _In_ USHORT Usage)
+{
+    USHORT CurrentUsagePage;
+    USAGE UsageMin;
+    USAGE UsageMax;
+
+    CurrentUsagePage = HidParser_ReportItemUsagePage(ReportItem);
+    if (UsagePage != HID_USAGE_PAGE_UNDEFINED && UsagePage != CurrentUsagePage)
+        return FALSE;
+
+    UsageMin = (USAGE)(ReportItem->UsageMinimum & 0xFFFF);
+    UsageMax = (USAGE)(ReportItem->UsageMaximum & 0xFFFF);
+    if (UsageMax < UsageMin)
+        UsageMax = UsageMin;
+
+    if (Usage != HID_USAGE_PAGE_UNDEFINED &&
+        (Usage < UsageMin || Usage > UsageMax))
+    {
+        return FALSE;
+    }
+
+    return TRUE;
+}
+
 NTSTATUS
 HidParser_GetCollectionUsagePage(
     IN PVOID CollectionContext,
@@ -241,8 +301,15 @@ HidParser_GetMaxUsageListLengthWithReportAndPage(
         //
         // check usage page
         //
-        CurrentUsagePage = (Report->Items[Index].UsageMinimum >> 16);
-        if (CurrentUsagePage == UsagePage && Report->Items[Index].HasData)
+        if (!Report->Items[Index].HasData ||
+            !HidParser_ReportItemIsButtonCap(&Report->Items[Index]))
+        {
+            continue;
+        }
+
+        CurrentUsagePage = HidParser_ReportItemUsagePage(&Report->Items[Index]);
+        if ((UsagePage == HID_USAGE_PAGE_UNDEFINED || CurrentUsagePage == UsagePage) &&
+            Report->Items[Index].HasData)
         {
             //
             // found item
@@ -269,8 +336,10 @@ HidParser_GetSpecificValueCapsWithReport(
     ULONG Index;
     PHID_REPORT Report;
     USHORT ItemCount = 0;
+    USHORT Capacity;
     USHORT CurrentUsagePage;
     USHORT CurrentUsage;
+    PHID_REPORT_ITEM ReportItem;
 
     //
     // get report
@@ -284,20 +353,31 @@ HidParser_GetSpecificValueCapsWithReport(
         return HIDP_STATUS_REPORT_DOES_NOT_EXIST;
     }
 
+    if (!ValueCapsLength)
+        return HIDP_STATUS_INVALID_PREPARSED_DATA;
+
+    Capacity = *ValueCapsLength;
+    if (!ValueCaps)
+        Capacity = 0;
+
     for(Index = 0; Index < Report->ItemCount; Index++)
     {
+        ReportItem = &Report->Items[Index];
+        if (HidParser_ReportItemIsButtonCap(ReportItem))
+            continue;
+
         //
         // check usage page
         //
-        CurrentUsagePage = (Report->Items[Index].UsageMinimum >> 16);
-        CurrentUsage = (Report->Items[Index].UsageMinimum & 0xFFFF);
+        CurrentUsagePage = HidParser_ReportItemUsagePage(ReportItem);
+        CurrentUsage = (ReportItem->UsageMinimum & 0xFFFF);
 
-        if ((Usage == CurrentUsage && UsagePage == CurrentUsagePage) || (Usage == 0 && UsagePage == CurrentUsagePage) || (Usage == CurrentUsage && UsagePage == 0) || (Usage == 0 && UsagePage == 0))
+        if (HidParser_ReportItemMatchesUsage(ReportItem, UsagePage, Usage))
         {
             //
             // check if there is enough place for the caps
             //
-            if (ItemCount < *ValueCapsLength)
+            if (ItemCount < Capacity)
             {
                 //
                 // zero caps
@@ -309,10 +389,27 @@ HidParser_GetSpecificValueCapsWithReport(
                 //
                 ValueCaps[ItemCount].UsagePage = CurrentUsagePage;
                 ValueCaps[ItemCount].ReportID = Report->ReportID;
-                ValueCaps[ItemCount].LogicalMin = Report->Items[Index].Minimum;
-                ValueCaps[ItemCount].LogicalMax = Report->Items[Index].Maximum;
-                ValueCaps[ItemCount].IsAbsolute = !Report->Items[Index].Relative;
-                ValueCaps[ItemCount].BitSize = Report->Items[Index].BitCount;
+                ValueCaps[ItemCount].LogicalMin = ReportItem->Minimum;
+                ValueCaps[ItemCount].LogicalMax = ReportItem->Maximum;
+                ValueCaps[ItemCount].IsAbsolute = !ReportItem->Relative;
+                ValueCaps[ItemCount].BitSize = ReportItem->BitCount;
+                ValueCaps[ItemCount].ReportCount = 1;
+
+                if (ReportItem->UsageMinimum != ReportItem->UsageMaximum)
+                {
+                    ValueCaps[ItemCount].IsRange = TRUE;
+                    ValueCaps[ItemCount].Range.UsageMin = (ReportItem->UsageMinimum & 0xFFFF);
+                    ValueCaps[ItemCount].Range.UsageMax = (ReportItem->UsageMaximum & 0xFFFF);
+                    ValueCaps[ItemCount].Range.DataIndexMin = Index;
+                    ValueCaps[ItemCount].Range.DataIndexMax = Index;
+                }
+                else
+                {
+                    ValueCaps[ItemCount].NotRange.Usage = CurrentUsage;
+                    ValueCaps[ItemCount].NotRange.Reserved1 = CurrentUsage;
+                    ValueCaps[ItemCount].NotRange.DataIndex = Index;
+                    ValueCaps[ItemCount].NotRange.Reserved4 = Index;
+                }
 
                 //
                 // FIXME: FILLMEIN
@@ -332,18 +429,178 @@ HidParser_GetSpecificValueCapsWithReport(
     //
     *ValueCapsLength = ItemCount;
 
-    if (ItemCount)
+    if (!ItemCount)
+        return HIDP_STATUS_USAGE_NOT_FOUND;
+
+    if (ItemCount > Capacity)
+        return HIDP_STATUS_BUFFER_TOO_SMALL;
+
+    return HIDP_STATUS_SUCCESS;
+}
+
+static
+BOOLEAN
+HidParser_ButtonCapCanMerge(
+    IN PHIDP_BUTTON_CAPS ButtonCaps,
+    IN USAGE UsagePage,
+    IN USAGE UsageMin,
+    IN USAGE UsageMax,
+    IN UCHAR ReportID,
+    IN BOOLEAN IsAbsolute)
+{
+    USAGE CurrentMax;
+
+    if (ButtonCaps->UsagePage != UsagePage ||
+        ButtonCaps->ReportID != ReportID ||
+        ButtonCaps->IsAbsolute != IsAbsolute)
     {
-        //
-        // success
-        //
-        return HIDP_STATUS_SUCCESS;
+        return FALSE;
     }
 
-    //
-    // item not found
-    //
-    return HIDP_STATUS_USAGE_NOT_FOUND;
+    CurrentMax = ButtonCaps->IsRange ? ButtonCaps->Range.UsageMax
+                                     : ButtonCaps->NotRange.Usage;
+
+    return (UsageMin <= CurrentMax + 1);
+}
+
+static
+VOID
+HidParser_ExtendButtonCapRange(
+    IN OUT PHIDP_BUTTON_CAPS ButtonCaps,
+    IN USAGE UsageMax,
+    IN USHORT DataIndex)
+{
+    if (!ButtonCaps->IsRange)
+    {
+        ButtonCaps->IsRange = TRUE;
+        ButtonCaps->Range.UsageMin = ButtonCaps->NotRange.Usage;
+        ButtonCaps->Range.UsageMax = ButtonCaps->NotRange.Usage;
+        ButtonCaps->Range.DataIndexMin = ButtonCaps->NotRange.DataIndex;
+        ButtonCaps->Range.DataIndexMax = ButtonCaps->NotRange.DataIndex;
+    }
+
+    if (UsageMax > ButtonCaps->Range.UsageMax)
+        ButtonCaps->Range.UsageMax = UsageMax;
+
+    if (DataIndex > ButtonCaps->Range.DataIndexMax)
+        ButtonCaps->Range.DataIndexMax = DataIndex;
+}
+
+NTSTATUS
+HidParser_GetSpecificButtonCapsWithReport(
+    IN PVOID CollectionContext,
+    IN UCHAR ReportType,
+    IN USHORT UsagePage,
+    IN USHORT Usage,
+    OUT PHIDP_BUTTON_CAPS ButtonCaps,
+    IN OUT PULONG ButtonCapsLength)
+{
+    ULONG Index;
+    ULONG ItemCount = 0;
+    ULONG Capacity;
+    PHID_REPORT Report;
+    PHID_REPORT_ITEM ReportItem;
+    PHIDP_BUTTON_CAPS CurrentCaps;
+    USHORT CurrentUsagePage;
+    USHORT CollectionUsage;
+    USHORT CollectionUsagePage;
+    USAGE UsageMin;
+    USAGE UsageMax;
+
+    if (!ButtonCapsLength)
+        return HIDP_STATUS_INVALID_PREPARSED_DATA;
+
+    Capacity = *ButtonCapsLength;
+    if (!ButtonCaps)
+        Capacity = 0;
+
+    Report = HidParser_GetReportInCollection(CollectionContext, ReportType);
+    if (!Report)
+    {
+        *ButtonCapsLength = 0;
+        return HIDP_STATUS_REPORT_DOES_NOT_EXIST;
+    }
+
+    if (HidParser_GetCollectionUsagePage(CollectionContext,
+                                         &CollectionUsage,
+                                         &CollectionUsagePage) != HIDP_STATUS_SUCCESS)
+    {
+        CollectionUsage = HID_USAGE_PAGE_UNDEFINED;
+        CollectionUsagePage = HID_USAGE_PAGE_UNDEFINED;
+    }
+
+    for (Index = 0; Index < Report->ItemCount; Index++)
+    {
+        ReportItem = &Report->Items[Index];
+        if (!HidParser_ReportItemIsButtonCap(ReportItem))
+            continue;
+
+        CurrentUsagePage = HidParser_ReportItemUsagePage(ReportItem);
+        if (!HidParser_ReportItemMatchesUsage(ReportItem, UsagePage, Usage))
+            continue;
+
+        UsageMin = (USAGE)(ReportItem->UsageMinimum & 0xFFFF);
+        UsageMax = (USAGE)(ReportItem->UsageMaximum & 0xFFFF);
+        if (UsageMax < UsageMin)
+            UsageMax = UsageMin;
+
+        if (ItemCount > 0 &&
+            ItemCount <= Capacity &&
+            HidParser_ButtonCapCanMerge(&ButtonCaps[ItemCount - 1],
+                                        CurrentUsagePage,
+                                        UsageMin,
+                                        UsageMax,
+                                        Report->ReportID,
+                                        !ReportItem->Relative))
+        {
+            if (ItemCount <= Capacity)
+                HidParser_ExtendButtonCapRange(&ButtonCaps[ItemCount - 1],
+                                               UsageMax,
+                                               (USHORT)Index);
+            continue;
+        }
+
+        if (ItemCount < Capacity)
+        {
+            CurrentCaps = &ButtonCaps[ItemCount];
+            ZeroFunction(CurrentCaps, sizeof(HIDP_BUTTON_CAPS));
+
+            CurrentCaps->UsagePage = CurrentUsagePage;
+            CurrentCaps->ReportID = Report->ReportID;
+            CurrentCaps->LinkCollection = HIDP_LINK_COLLECTION_UNSPECIFIED;
+            CurrentCaps->LinkUsage = CollectionUsage;
+            CurrentCaps->LinkUsagePage = CollectionUsagePage;
+            CurrentCaps->IsAbsolute = !ReportItem->Relative;
+
+            if (UsageMin != UsageMax)
+            {
+                CurrentCaps->IsRange = TRUE;
+                CurrentCaps->Range.UsageMin = UsageMin;
+                CurrentCaps->Range.UsageMax = UsageMax;
+                CurrentCaps->Range.DataIndexMin = (USHORT)Index;
+                CurrentCaps->Range.DataIndexMax = (USHORT)Index;
+            }
+            else
+            {
+                CurrentCaps->NotRange.Usage = UsageMin;
+                CurrentCaps->NotRange.Reserved1 = UsageMin;
+                CurrentCaps->NotRange.DataIndex = (USHORT)Index;
+                CurrentCaps->NotRange.Reserved4 = (USHORT)Index;
+            }
+        }
+
+        ItemCount++;
+    }
+
+    *ButtonCapsLength = ItemCount;
+
+    if (!ItemCount)
+        return HIDP_STATUS_USAGE_NOT_FOUND;
+
+    if (ItemCount > Capacity)
+        return HIDP_STATUS_BUFFER_TOO_SMALL;
+
+    return HIDP_STATUS_SUCCESS;
 }
 
 NTSTATUS
@@ -406,13 +663,14 @@ HidParser_GetUsagesWithReport(
         //
         // does it have data
         //
-        if (!ReportItem->HasData)
+        if (!ReportItem->HasData ||
+            !HidParser_ReportItemIsButtonCap(ReportItem))
             continue;
 
         //
         // check usage page
         //
-        CurrentUsagePage = (ReportItem->UsageMinimum >> 16);
+        CurrentUsagePage = HidParser_ReportItemUsagePage(ReportItem);
 
         if (UsagePage != HID_USAGE_PAGE_UNDEFINED)
         {
@@ -595,11 +853,13 @@ HidParser_GetUsageValueWithReport(
         // get report item
         //
         ReportItem = &Report->Items[Index];
+        if (HidParser_ReportItemIsButtonCap(ReportItem))
+            continue;
 
         //
         // check usage page
         //
-        CurrentUsagePage = (ReportItem->UsageMinimum >> 16);
+        CurrentUsagePage = HidParser_ReportItemUsagePage(ReportItem);
 
         //
         // does usage page match
@@ -691,11 +951,13 @@ HidParser_GetScaledUsageValueWithReport(
         // get report item
         //
         ReportItem = &Report->Items[Index];
+        if (HidParser_ReportItemIsButtonCap(ReportItem))
+            continue;
 
         //
         // check usage page
         //
-        CurrentUsagePage = (ReportItem->UsageMinimum >> 16);
+        CurrentUsagePage = HidParser_ReportItemUsagePage(ReportItem);
 
         //
         // does usage page match

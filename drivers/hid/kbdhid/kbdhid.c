@@ -147,11 +147,12 @@ KbdHid_ReadCompletion(
     //
     // print out raw report
     //
-    ASSERT(DeviceExtension->ReportLength >= 9);
-    DPRINT("[KBDHID] ReadCompletion %02x %02x %02x %02x %02x %02x %02x %02x %02x\n", DeviceExtension->Report[0], DeviceExtension->Report[1], DeviceExtension->Report[2],
-        DeviceExtension->Report[3], DeviceExtension->Report[4], DeviceExtension->Report[5],
-        DeviceExtension->Report[6], DeviceExtension->Report[7], DeviceExtension->Report[8]);
-
+    if (DeviceExtension->ReportLength >= 9)
+    {
+        DPRINT("[KBDHID] ReadCompletion %02x %02x %02x %02x %02x %02x %02x %02x %02x\n", DeviceExtension->Report[0], DeviceExtension->Report[1], DeviceExtension->Report[2],
+            DeviceExtension->Report[3], DeviceExtension->Report[4], DeviceExtension->Report[5],
+            DeviceExtension->Report[6], DeviceExtension->Report[7], DeviceExtension->Report[8]);
+    }
 
     /* get current usages */
     ButtonLength = DeviceExtension->UsageListLength;
@@ -162,7 +163,12 @@ KbdHid_ReadCompletion(
                               DeviceExtension->PreparsedData,
                               DeviceExtension->Report,
                               DeviceExtension->ReportLength);
-    ASSERT(Status == HIDP_STATUS_SUCCESS);
+    if (Status != HIDP_STATUS_SUCCESS)
+    {
+        DPRINT1("[KBDHID] HidP_GetUsagesEx failed with %x\n", Status);
+        KbdHid_InitiateRead(DeviceExtension);
+        return STATUS_MORE_PROCESSING_REQUIRED;
+    }
 
     /* FIXME check if needs mapping */
 
@@ -172,7 +178,12 @@ KbdHid_ReadCompletion(
                                              DeviceExtension->BreakUsageList,
                                              DeviceExtension->MakeUsageList,
                                              DeviceExtension->UsageListLength);
-    ASSERT(Status == HIDP_STATUS_SUCCESS);
+    if (Status != HIDP_STATUS_SUCCESS)
+    {
+        DPRINT1("[KBDHID] HidP_UsageAndPageListDifference failed with %x\n", Status);
+        KbdHid_InitiateRead(DeviceExtension);
+        return STATUS_MORE_PROCESSING_REQUIRED;
+    }
 
     /* replace previous usage list with current list */
     RtlMoveMemory(DeviceExtension->PreviousUsageList,
@@ -180,22 +191,24 @@ KbdHid_ReadCompletion(
                   sizeof(USAGE_AND_PAGE) * DeviceExtension->UsageListLength);
 
     /* translate break usage list */
-    HidP_TranslateUsageAndPagesToI8042ScanCodes(DeviceExtension->BreakUsageList,
-                                                DeviceExtension->UsageListLength,
-                                                HidP_Keyboard_Break,
-                                                &DeviceExtension->ModifierState,
-                                                KbdHid_InsertScanCodes,
-                                                DeviceExtension);
-    ASSERT(Status == HIDP_STATUS_SUCCESS);
+    Status = HidP_TranslateUsageAndPagesToI8042ScanCodes(DeviceExtension->BreakUsageList,
+                                                         DeviceExtension->UsageListLength,
+                                                         HidP_Keyboard_Break,
+                                                         &DeviceExtension->ModifierState,
+                                                         KbdHid_InsertScanCodes,
+                                                         DeviceExtension);
+    if (Status != HIDP_STATUS_SUCCESS)
+        DPRINT1("[KBDHID] break translation failed with %x\n", Status);
 
     /* translate new usage list */
-    HidP_TranslateUsageAndPagesToI8042ScanCodes(DeviceExtension->MakeUsageList,
-                                                DeviceExtension->UsageListLength,
-                                                HidP_Keyboard_Make,
-                                                &DeviceExtension->ModifierState,
-                                                KbdHid_InsertScanCodes,
-                                                DeviceExtension);
-    ASSERT(Status == HIDP_STATUS_SUCCESS);
+    Status = HidP_TranslateUsageAndPagesToI8042ScanCodes(DeviceExtension->MakeUsageList,
+                                                         DeviceExtension->UsageListLength,
+                                                         HidP_Keyboard_Make,
+                                                         &DeviceExtension->ModifierState,
+                                                         KbdHid_InsertScanCodes,
+                                                         DeviceExtension);
+    if (Status != HIDP_STATUS_SUCCESS)
+        DPRINT1("[KBDHID] make translation failed with %x\n", Status);
 
     /* re-init read */
     KbdHid_InitiateRead(DeviceExtension);
@@ -251,6 +264,23 @@ KbdHid_CreateCompletion(
     return STATUS_MORE_PROCESSING_REQUIRED;
 }
 
+static
+VOID
+KbdHid_StopRead(
+    IN PKBDHID_DEVICE_EXTENSION DeviceExtension)
+{
+    if (!DeviceExtension->ReadReportActive)
+        return;
+
+    /* request stopping of the report cycle */
+    DeviceExtension->StopReadReport = TRUE;
+
+    /* cancel irp */
+    IoCancelIrp(DeviceExtension->Irp);
+
+    /* wait until the read completion routine has stopped the report cycle */
+    KeWaitForSingleObject(&DeviceExtension->ReadCompletionEvent, Executive, KernelMode, FALSE, NULL);
+}
 
 NTSTATUS
 NTAPI
@@ -334,29 +364,24 @@ KbdHid_Close(
     IN PDEVICE_OBJECT DeviceObject,
     IN PIRP Irp)
 {
+    PIO_STACK_LOCATION IoStack;
     PKBDHID_DEVICE_EXTENSION DeviceExtension;
 
     /* get device extension */
     DeviceExtension = DeviceObject->DeviceExtension;
+    IoStack = IoGetCurrentIrpStackLocation(Irp);
 
     DPRINT("[KBDHID] IRP_MJ_CLOSE ReadReportActive %x\n", DeviceExtension->ReadReportActive);
 
-    if (DeviceExtension->ReadReportActive)
+    if (IoStack->FileObject == DeviceExtension->FileObject)
     {
-        /* request stopping of the report cycle */
-        DeviceExtension->StopReadReport = TRUE;
+        KbdHid_StopRead(DeviceExtension);
 
-        /* wait until the reports have been read */
-        KeWaitForSingleObject(&DeviceExtension->ReadCompletionEvent, Executive, KernelMode, FALSE, NULL);
-
-        /* cancel irp */
-        IoCancelIrp(DeviceExtension->Irp);
+        /* remove file object */
+        DeviceExtension->FileObject = NULL;
     }
 
     DPRINT("[KBDHID] IRP_MJ_CLOSE ReadReportActive %x\n", DeviceExtension->ReadReportActive);
-
-    /* remove file object */
-    DeviceExtension->FileObject = NULL;
 
     /* skip location */
     IoSkipCurrentIrpStackLocation(Irp);
@@ -894,6 +919,9 @@ KbdHid_Pnp(
     {
     case IRP_MN_STOP_DEVICE:
     case IRP_MN_SURPRISE_REMOVAL:
+        /* stop pending reads before freeing report buffers */
+        KbdHid_StopRead(DeviceExtension);
+
         /* free resources */
         KbdHid_FreeResources(DeviceObject);
         /* fall through */
@@ -913,8 +941,8 @@ KbdHid_Pnp(
     case IRP_MN_REMOVE_DEVICE:
         /* FIXME synchronization */
 
-        /* cancel irp */
-        IoCancelIrp(DeviceExtension->Irp);
+        /* stop pending reads before freeing report buffers */
+        KbdHid_StopRead(DeviceExtension);
 
         /* free resources */
         KbdHid_FreeResources(DeviceObject);
