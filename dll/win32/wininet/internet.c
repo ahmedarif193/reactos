@@ -48,7 +48,9 @@
 #define NO_SHLWAPI_STREAM
 #include "shlwapi.h"
 #include "ws2tcpip.h"
+#ifndef __REACTOS__
 #include "winternl.h"
+#endif
 #include "iphlpapi.h"
 #include "dhcpcsdk.h"
 

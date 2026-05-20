@@ -44,7 +44,9 @@
 #include "winnls.h"
 #include "winerror.h"
 #include "winreg.h"
+#ifndef __REACTOS__
 #include "winternl.h"
+#endif
 #include "shlwapi.h"
 
 #include "wine/debug.h"
