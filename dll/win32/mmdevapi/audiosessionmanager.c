@@ -167,7 +167,7 @@ static HRESULT create_session_enumerator(IMMDevice *device, IAudioSessionEnumera
         free(enumerator);
         return hr;
     }
-    enumerator->IAudioSessionEnumerator_iface.lpVtbl = &IAudioSessionEnumerator_vtbl;
+    enumerator->IAudioSessionEnumerator_iface.lpVtbl = (IAudioSessionEnumeratorVtbl *)&IAudioSessionEnumerator_vtbl;
     IMMDevice_AddRef(device);
     enumerator->device = device;
     enumerator->ref = 1;
@@ -325,7 +325,7 @@ HRESULT AudioSessionManager_Create(IMMDevice *device, IAudioSessionManager2 **pp
     if (!This)
         return E_OUTOFMEMORY;
 
-    This->IAudioSessionManager2_iface.lpVtbl = &AudioSessionManager2_Vtbl;
+    This->IAudioSessionManager2_iface.lpVtbl = (IAudioSessionManager2Vtbl *)&AudioSessionManager2_Vtbl;
     This->device = device;
     This->ref = 1;
 
