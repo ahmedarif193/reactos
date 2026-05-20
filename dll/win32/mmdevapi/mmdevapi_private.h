@@ -16,14 +16,34 @@
  * Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA 02110-1301, USA
  */
 
+#pragma once
+
 #include <assert.h>
+
+#ifndef ARRAY_SIZE
+#define ARRAY_SIZE(x) (sizeof(x) / sizeof((x)[0]))
+#endif
+
+#if defined(__REACTOS__) && (_WIN32_WINNT <= 0x0600)
+static inline HRESULT mmdevapi_SetThreadDescription(HANDLE thread, PCWSTR description)
+{
+    UNREFERENCED_PARAMETER(thread);
+    UNREFERENCED_PARAMETER(description);
+    return S_OK;
+}
+#define SetThreadDescription mmdevapi_SetThreadDescription
+#endif
 
 #include <endpointvolume.h>
 #include <spatialaudioclient.h>
 #include <winternl.h>
 
 #include <wine/list.h>
+#ifndef __REACTOS__
 #include <wine/unixlib.h>
+#else
+typedef ULONG_PTR unixlib_handle_t;
+#endif
 
 #include "unixlib.h"
 #include "mmdevdrv.h"
@@ -61,9 +81,19 @@ typedef struct MMDevice {
     struct list entry;
 } MMDevice;
 
+#ifdef __REACTOS__
+extern BOOL reactos_audio_driver_init(DriverFuncs *driver);
+extern void reactos_audio_driver_deinit(void);
+extern NTSTATUS reactos_mmdevapi_call(unsigned int code, void *args);
+#endif
+
 static inline void wine_unix_call(const unsigned int code, void *args)
 {
+#ifdef __REACTOS__
+    const NTSTATUS status = reactos_mmdevapi_call(code, args);
+#else
     const NTSTATUS status = __wine_unix_call(drvs.module_unixlib, code, args);
+#endif
     assert(!status);
 }
 

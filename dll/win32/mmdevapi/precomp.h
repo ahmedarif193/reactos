@@ -29,6 +29,6 @@
 #endif
 #endif
 
-#include "mmdevapi.h"
+#include "mmdevapi_private.h"
 
 #endif /* !_MMDEVAPI_PRECOMP_H_ */

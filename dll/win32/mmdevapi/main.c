@@ -51,6 +51,7 @@ DriverFuncs drvs;
 
 const WCHAR drv_keyW[] = L"Software\\Wine\\Drivers";
 
+#ifndef __REACTOS__
 static const char *get_priority_string(int prio)
 {
     switch(prio){
@@ -124,9 +125,26 @@ fail:
     FreeLibrary(driver->module);
     return FALSE;
 }
+#endif
 
 static BOOL WINAPI init_driver(INIT_ONCE *once, void *param, void **context)
 {
+#ifdef __REACTOS__
+    UNREFERENCED_PARAMETER(once);
+    UNREFERENCED_PARAMETER(param);
+    UNREFERENCED_PARAMETER(context);
+
+    if (reactos_audio_driver_init(&drvs))
+    {
+        load_devices_from_reg();
+        load_driver_devices(eRender);
+        load_driver_devices(eCapture);
+        return TRUE;
+    }
+
+    WARN("No ReactOS WDMAUD audio backend could be initialized.\n");
+    return TRUE;
+#else
     static WCHAR default_list[] = L"pulse,alsa,oss,coreaudio";
     DriverFuncs driver;
     HKEY key;
@@ -185,6 +203,7 @@ static BOOL WINAPI init_driver(INIT_ONCE *once, void *param, void **context)
             wine_dbgstr_w(driver_list));
 
     return drvs.module != 0;
+#endif
 }
 
 BOOL WINAPI DllMain(HINSTANCE hinstDLL, DWORD fdwReason, LPVOID lpvReserved)
@@ -197,11 +216,15 @@ BOOL WINAPI DllMain(HINSTANCE hinstDLL, DWORD fdwReason, LPVOID lpvReserved)
             DisableThreadLibraryCalls(hinstDLL);
             break;
         case DLL_PROCESS_DETACH:
+#ifdef __REACTOS__
+            reactos_audio_driver_deinit();
+#else
             if (drvs.module_unixlib) {
                 const NTSTATUS status = __wine_unix_call(drvs.module_unixlib, process_detach, NULL);
                 if (status)
                     WARN("Unable to deinitialize library: %lx\n", status);
             }
+#endif
 
             main_loop_stop();
 
@@ -211,6 +234,21 @@ BOOL WINAPI DllMain(HINSTANCE hinstDLL, DWORD fdwReason, LPVOID lpvReserved)
     }
 
     return TRUE;
+}
+
+HRESULT WINAPI DllCanUnloadNow(void)
+{
+    return S_FALSE;
+}
+
+HRESULT WINAPI DllRegisterServer(void)
+{
+    return S_OK;
+}
+
+HRESULT WINAPI DllUnregisterServer(void)
+{
+    return S_OK;
 }
 
 typedef HRESULT (*FnCreateInstance)(REFIID riid, LPVOID *ppobj);
@@ -291,7 +329,7 @@ static const IClassFactoryVtbl MMCF_Vtbl = {
 };
 
 static IClassFactoryImpl MMDEVAPI_CF[] = {
-    { { &MMCF_Vtbl }, &CLSID_MMDeviceEnumerator, (FnCreateInstance)MMDevEnum_Create }
+    { { (IClassFactoryVtbl *)&MMCF_Vtbl }, &CLSID_MMDeviceEnumerator, (FnCreateInstance)MMDevEnum_Create }
 };
 
 HRESULT WINAPI DllGetClassObject(REFCLSID rclsid, REFIID riid, LPVOID *ppv)

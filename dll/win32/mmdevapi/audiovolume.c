@@ -312,7 +312,7 @@ HRESULT AudioEndpointVolume_Create(MMDevice *parent, IAudioEndpointVolumeEx **pp
     This = calloc(1, sizeof(*This));
     if (!This)
         return E_OUTOFMEMORY;
-    This->IAudioEndpointVolumeEx_iface.lpVtbl = &AEVImpl_Vtbl;
+    This->IAudioEndpointVolumeEx_iface.lpVtbl = (IAudioEndpointVolumeExVtbl *)&AEVImpl_Vtbl;
     This->ref = 1;
 
     *ppv = &This->IAudioEndpointVolumeEx_iface;
