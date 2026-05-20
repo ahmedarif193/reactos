@@ -3457,7 +3457,7 @@ FindSupportedSystemPartition(
 //
 
 UseAlternativeDisk:
-    if (!AlternativeDisk || (!ForceSelect && (DiskEntry != AlternativeDisk)))
+    if (!AlternativeDisk || (!ForceSelect && DiskEntry && (DiskEntry != AlternativeDisk)))
         goto NoSystemPartition;
 
     if (AlternativeDisk->DiskStyle == PARTITION_STYLE_GPT)
