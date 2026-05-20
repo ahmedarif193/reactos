@@ -7,9 +7,9 @@
 #define NDEBUG
 #include <debug.h>
 
-BOOLEAN
+VOID
 NTAPI
-ExArchProbeForWrite(
+MiArm64ProbeForWrite(
     _In_ ULONG_PTR Current,
     _In_ ULONG_PTR Last)
 {
@@ -71,6 +71,4 @@ ExArchProbeForWrite(
 
         Page = PAGE_ROUND_DOWN(Page) + PAGE_SIZE;
     }
-
-    return TRUE;
 }
