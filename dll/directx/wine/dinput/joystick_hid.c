@@ -80,6 +80,28 @@ static UINT32 dinput_hid_path_hash( const WCHAR *path )
 
     return hash;
 }
+
+static BOOL reactos_hid_joystick_check_usage_range( const struct hid_value_caps *caps, const char *where )
+{
+    DWORD usage_count;
+
+    if (caps->usage_max < caps->usage_min)
+    {
+        WARN( "ReactOS: ignoring invalid HID joystick %s range page %#x usage %u..%u report %#x flags %#lx\n",
+              where, caps->usage_page, caps->usage_min, caps->usage_max, caps->report_id, caps->flags );
+        return FALSE;
+    }
+
+    usage_count = caps->usage_max - caps->usage_min + 1;
+    if (usage_count > 256)
+    {
+        WARN( "ReactOS: ignoring oversized HID joystick %s range page %#x usage %u..%u count %lu report %#x flags %#lx\n",
+              where, caps->usage_page, caps->usage_min, caps->usage_max, usage_count, caps->report_id, caps->flags );
+        return FALSE;
+    }
+
+    return TRUE;
+}
 #endif
 
 struct pid_control_report
@@ -584,6 +606,10 @@ static BOOL enum_objects( struct hid_joystick *impl, const DIPROPHEADER *filter,
         if (!caps->usage_page) continue;
         if (caps->flags & HID_VALUE_CAPS_IS_BUTTON) continue;
 
+#ifdef __REACTOS__
+        if (!reactos_hid_joystick_check_usage_range( caps, "input-value" )) continue;
+#endif
+
         if (caps->usage_page >= HID_USAGE_PAGE_VENDOR_DEFINED_BEGIN)
             value_ofs += (caps->usage_max - caps->usage_min + 1) * sizeof(LONG);
         else for (j = caps->usage_min; j <= caps->usage_max; ++j)
@@ -657,6 +683,10 @@ static BOOL enum_objects( struct hid_joystick *impl, const DIPROPHEADER *filter,
         if (!caps->usage_page) continue;
         if (!(caps->flags & HID_VALUE_CAPS_IS_BUTTON)) continue;
 
+#ifdef __REACTOS__
+        if (!reactos_hid_joystick_check_usage_range( caps, "input-button" )) continue;
+#endif
+
         if (caps->usage_page >= HID_USAGE_PAGE_VENDOR_DEFINED_BEGIN)
             button_ofs += caps->usage_max - caps->usage_min + 1;
         else for (j = caps->usage_min; j <= caps->usage_max; ++j)
@@ -689,6 +719,10 @@ static BOOL enum_objects( struct hid_joystick *impl, const DIPROPHEADER *filter,
          caps != caps_end; ++caps)
     {
         if (!caps->usage_page) continue;
+
+#ifdef __REACTOS__
+        if (!reactos_hid_joystick_check_usage_range( caps, "output-feature" )) continue;
+#endif
 
         if (caps->usage_page >= HID_USAGE_PAGE_VENDOR_DEFINED_BEGIN)
         {
