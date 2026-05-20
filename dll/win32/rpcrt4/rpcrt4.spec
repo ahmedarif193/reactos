@@ -269,7 +269,7 @@
 @ stdcall NdrSendReceive(ptr ptr)
 @ stdcall NdrServerCall2(ptr)
 @ stdcall NdrServerCall(ptr)
-@ stdcall -arch=x86_64 NdrServerCallAll(ptr)
+@ stdcall -arch=x86_64,arm64 NdrServerCallAll(ptr)
 @ stdcall NdrServerContextMarshall(ptr ptr ptr)
 @ stdcall NdrServerContextNewMarshall(ptr ptr ptr ptr)
 @ stdcall NdrServerContextNewUnmarshall(ptr ptr)
