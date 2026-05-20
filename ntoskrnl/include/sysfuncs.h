@@ -24,6 +24,7 @@
     SVC_(CallbackReturn, 3)
     SVC_(CancelDeviceWakeupRequest, 1)
     SVC_(CancelIoFile, 2)
+    SVC_(CancelIoFileEx, 3)
     SVC_(CancelTimer, 2)
     SVC_(ClearEvent, 1)
     SVC_(Close, 1)

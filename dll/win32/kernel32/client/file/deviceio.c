@@ -305,4 +305,31 @@ CancelIo(IN HANDLE hFile)
     return TRUE;
 }
 
+/*
+ * @implemented
+ */
+BOOL
+WINAPI
+CancelIoEx(IN HANDLE hFile,
+           IN LPOVERLAPPED lpOverlapped)
+{
+    IO_STATUS_BLOCK IoStatusBlock;
+    NTSTATUS Status;
+
+    /*
+     * OVERLAPPED starts with the Internal field, which is the user I/O
+     * status block pointer passed to NtCancelIoFileEx.
+     */
+    Status = NtCancelIoFileEx(hFile,
+                              (PIO_STATUS_BLOCK)lpOverlapped,
+                              &IoStatusBlock);
+    if (!NT_SUCCESS(Status))
+    {
+        BaseSetLastNTError(Status);
+        return FALSE;
+    }
+
+    return TRUE;
+}
+
 /* EOF */
