@@ -33,8 +33,9 @@
 #include "audioclient.h"
 #include "endpointvolume.h"
 #include "audiopolicy.h"
+#include "spatialaudioclient.h"
 
-#include "mmdevapi.h"
+#include "mmdevapi_private.h"
 
 WINE_DEFAULT_DEBUG_CHANNEL(mmdevapi);
 
@@ -52,7 +53,7 @@ static inline AEVImpl *impl_from_IAudioEndpointVolumeEx(IAudioEndpointVolumeEx *
 
 static void AudioEndpointVolume_Destroy(AEVImpl *This)
 {
-    HeapFree(GetProcessHeap(), 0, This);
+    free(This);
 }
 
 static HRESULT WINAPI AEV_QueryInterface(IAudioEndpointVolumeEx *iface, REFIID riid, void **ppv)
@@ -77,7 +78,7 @@ static ULONG WINAPI AEV_AddRef(IAudioEndpointVolumeEx *iface)
 {
     AEVImpl *This = impl_from_IAudioEndpointVolumeEx(iface);
     ULONG ref = InterlockedIncrement(&This->ref);
-    TRACE("(%p) new ref %u\n", This, ref);
+    TRACE("(%p) new ref %lu\n", This, ref);
     return ref;
 }
 
@@ -85,7 +86,7 @@ static ULONG WINAPI AEV_Release(IAudioEndpointVolumeEx *iface)
 {
     AEVImpl *This = impl_from_IAudioEndpointVolumeEx(iface);
     ULONG ref = InterlockedDecrement(&This->ref);
-    TRACE("(%p) new ref %u\n", This, ref);
+    TRACE("(%p) new ref %lu\n", This, ref);
     if (!ref)
         AudioEndpointVolume_Destroy(This);
     return ref;
@@ -159,7 +160,8 @@ static HRESULT WINAPI AEV_GetMasterVolumeLevelScalar(IAudioEndpointVolumeEx *ifa
     if (!level)
         return E_POINTER;
     FIXME("stub\n");
-    return E_NOTIMPL;
+    *level = 1.0;
+    return S_OK;
 }
 
 static HRESULT WINAPI AEV_SetChannelVolumeLevel(IAudioEndpointVolumeEx *iface, UINT chan, float leveldb, const GUID *ctx)
@@ -307,7 +309,7 @@ HRESULT AudioEndpointVolume_Create(MMDevice *parent, IAudioEndpointVolumeEx **pp
     AEVImpl *This;
 
     *ppv = NULL;
-    This = HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY, sizeof(*This));
+    This = calloc(1, sizeof(*This));
     if (!This)
         return E_OUTOFMEMORY;
     This->IAudioEndpointVolumeEx_iface.lpVtbl = &AEVImpl_Vtbl;

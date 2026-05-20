@@ -14,6 +14,8 @@
 #ifdef __REACTOS__
 #include <audioclient.h>
 #include <devicetopology.h>
+#include <devpkey.h>
+#include <spatialaudioclient.h>
 #endif
 #include <audiopolicy.h>
 #include <endpointvolume.h>

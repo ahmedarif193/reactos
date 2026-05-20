@@ -12,6 +12,8 @@
 13 stub MMDEVAPI_13
 14 stub MMDEVAPI_14
 15 stub MMDEVAPI_15
+16 stub MMDEVAPI_16
+17 stdcall ActivateAudioInterfaceAsync( wstr ptr ptr ptr ptr )
 
 @ stdcall -private DllCanUnloadNow()
 @ stdcall -private DllGetClassObject( ptr ptr ptr )
