@@ -2,9 +2,16 @@
 spec2def(mmdevapi.dll mmdevapi.spec ADD_IMPORTLIB)
 
 list(APPEND SOURCE
+    audiosessionmanager.c
     audiovolume.c
+    client.c
     devenum.c
     main.c
+    session.c
+    spatialaudio.c
+    mmdevapi_private.h
+    mmdevdrv.h
+    unixlib.h
     precomp.h
     ${CMAKE_CURRENT_BINARY_DIR}/mmdevapi_stubs.c)
 
@@ -19,8 +26,7 @@ add_library(mmdevapi MODULE
 
 set_module_type(mmdevapi win32dll)
 target_link_libraries(mmdevapi uuid wine)
-add_importlibs(mmdevapi ole32 oleaut32 user32 advapi32 msvcrt kernel32 ntdll)
-add_pch(mmdevapi precomp.h "${PCH_SKIP_SOURCE}")
+add_importlibs(mmdevapi ole32 oleaut32 user32 advapi32 version msvcrt kernel32 ntdll)
 add_dependencies(mmdevapi dxsdk)
 add_cd_file(TARGET mmdevapi DESTINATION reactos/system32 FOR all)
 set_wine_module(mmdevapi)
