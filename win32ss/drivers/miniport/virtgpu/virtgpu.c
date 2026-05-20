@@ -537,6 +537,158 @@ VirtGpuRecordFenceCompletion(
 }
 
 static BOOLEAN
+VirtGpuGetAsyncCommandSlot(
+    _Inout_ PVIRTGPU_DEVICE_EXTENSION DeviceExtension,
+    _In_ PVOID Used,
+    _Out_ PULONG Slot)
+{
+    ULONG_PTR Base;
+    ULONG_PTR Pointer;
+    ULONG Offset;
+
+    if ((DeviceExtension->AsyncCommandBuffer == NULL) || (Used == NULL))
+        return FALSE;
+
+    Base = (ULONG_PTR)DeviceExtension->AsyncCommandBuffer;
+    Pointer = (ULONG_PTR)Used;
+    if ((Pointer < Base) ||
+        (Pointer >= Base + VIRTGPU_ASYNC_COMMAND_COUNT * VIRTGPU_ASYNC_COMMAND_SLOT_SIZE))
+    {
+        return FALSE;
+    }
+
+    Offset = (ULONG)(Pointer - Base);
+    if ((Offset % VIRTGPU_ASYNC_COMMAND_SLOT_SIZE) != 0)
+        return FALSE;
+
+    *Slot = Offset / VIRTGPU_ASYNC_COMMAND_SLOT_SIZE;
+    return *Slot < VIRTGPU_ASYNC_COMMAND_COUNT;
+}
+
+static BOOLEAN
+VirtGpuReapAsyncCommand(
+    _Inout_ PVIRTGPU_DEVICE_EXTENSION DeviceExtension,
+    _In_ PVOID Used,
+    _In_ ULONG Length)
+{
+    PUCHAR SlotBase;
+    ULONG Slot;
+
+    UNREFERENCED_PARAMETER(Length);
+
+    if (!VirtGpuGetAsyncCommandSlot(DeviceExtension, Used, &Slot))
+        return FALSE;
+
+    SlotBase = (PUCHAR)DeviceExtension->AsyncCommandBuffer +
+               (Slot * VIRTGPU_ASYNC_COMMAND_SLOT_SIZE);
+    VirtGpuRecordFenceCompletion(DeviceExtension,
+                                 SlotBase + VIRTGPU_ASYNC_RESPONSE_OFFSET,
+                                 sizeof(VIRTGPU_CTRL_HDR));
+    DeviceExtension->AsyncCommandInUse[Slot] = FALSE;
+    return TRUE;
+}
+
+static VOID
+VirtGpuReapAsyncCommands(_Inout_ PVIRTGPU_DEVICE_EXTENSION DeviceExtension)
+{
+    unsigned int Length;
+    PVOID Used;
+
+    if (DeviceExtension->ControlQueue == NULL)
+        return;
+
+    while ((Used = virtqueue_get_buf(DeviceExtension->ControlQueue, &Length)) != NULL)
+    {
+        if (!VirtGpuReapAsyncCommand(DeviceExtension, Used, Length))
+            return;
+    }
+}
+
+static ULONG
+VirtGpuAsyncFreeCommandCount(_Inout_ PVIRTGPU_DEVICE_EXTENSION DeviceExtension)
+{
+    ULONG Count = 0;
+    ULONG Index;
+
+    VirtGpuReapAsyncCommands(DeviceExtension);
+
+    for (Index = 0; Index < VIRTGPU_ASYNC_COMMAND_COUNT; ++Index)
+    {
+        if (!DeviceExtension->AsyncCommandInUse[Index])
+            ++Count;
+    }
+
+    return Count;
+}
+
+static ULONG
+VirtGpuFindFreeAsyncCommand(_Inout_ PVIRTGPU_DEVICE_EXTENSION DeviceExtension)
+{
+    ULONG Index;
+
+    for (Index = 0; Index < VIRTGPU_ASYNC_COMMAND_COUNT; ++Index)
+    {
+        if (!DeviceExtension->AsyncCommandInUse[Index])
+            return Index;
+    }
+
+    return VIRTGPU_ASYNC_COMMAND_COUNT;
+}
+
+static BOOLEAN
+VirtGpuSendCommandAsync(
+    _Inout_ PVIRTGPU_DEVICE_EXTENSION DeviceExtension,
+    _In_reads_bytes_(RequestSize) PVOID Request,
+    _In_ ULONG RequestSize)
+{
+    struct scatterlist Sg[2];
+    PUCHAR SlotBase;
+    ULONG Slot;
+
+    if (!DeviceExtension->ControlQueue ||
+        !DeviceExtension->AsyncCommandBuffer ||
+        (RequestSize > VIRTGPU_ASYNC_RESPONSE_OFFSET) ||
+        DeviceExtension->CommandBusy)
+    {
+        return FALSE;
+    }
+
+    Slot = VirtGpuFindFreeAsyncCommand(DeviceExtension);
+    if (Slot >= VIRTGPU_ASYNC_COMMAND_COUNT)
+        return FALSE;
+
+    SlotBase = (PUCHAR)DeviceExtension->AsyncCommandBuffer +
+               (Slot * VIRTGPU_ASYNC_COMMAND_SLOT_SIZE);
+    VideoPortZeroMemory(SlotBase, VIRTGPU_ASYNC_COMMAND_SLOT_SIZE);
+    VideoPortMoveMemory(SlotBase, Request, RequestSize);
+
+    Sg[0].physAddr.QuadPart =
+        DeviceExtension->AsyncCommandPhysical.QuadPart +
+        (Slot * VIRTGPU_ASYNC_COMMAND_SLOT_SIZE);
+    Sg[0].length = RequestSize;
+    Sg[1].physAddr.QuadPart =
+        DeviceExtension->AsyncCommandPhysical.QuadPart +
+        (Slot * VIRTGPU_ASYNC_COMMAND_SLOT_SIZE) +
+        VIRTGPU_ASYNC_RESPONSE_OFFSET;
+    Sg[1].length = sizeof(VIRTGPU_CTRL_HDR);
+
+    if (virtqueue_add_buf(DeviceExtension->ControlQueue,
+                          Sg,
+                          1,
+                          1,
+                          SlotBase,
+                          NULL,
+                          0) != 0)
+    {
+        return FALSE;
+    }
+
+    DeviceExtension->AsyncCommandInUse[Slot] = TRUE;
+    virtqueue_kick(DeviceExtension->ControlQueue);
+    return TRUE;
+}
+
+static BOOLEAN
 VirtGpuSendCommand(
     _Inout_ PVIRTGPU_DEVICE_EXTENSION DeviceExtension,
     _In_reads_bytes_(RequestSize) PVOID Request,
@@ -563,6 +715,7 @@ VirtGpuSendCommand(
         return FALSE;
     }
 
+    VirtGpuReapAsyncCommands(DeviceExtension);
     DeviceExtension->CommandBusy = TRUE;
 
     RequestBuffer = DeviceExtension->CommandBuffer;
@@ -604,6 +757,9 @@ VirtGpuSendCommand(
             return TRUE;
         }
 
+        if (Used != NULL)
+            VirtGpuReapAsyncCommand(DeviceExtension, Used, Length);
+
         VideoPortStallExecution(10);
     }
 
@@ -643,6 +799,7 @@ VirtGpuSendCommandWithPayload(
         return FALSE;
     }
 
+    VirtGpuReapAsyncCommands(DeviceExtension);
     DeviceExtension->CommandBusy = TRUE;
 
     RequestSize = HeaderSize + PayloadSize;
@@ -686,6 +843,9 @@ VirtGpuSendCommandWithPayload(
             DeviceExtension->CommandBusy = FALSE;
             return TRUE;
         }
+
+        if (Used != NULL)
+            VirtGpuReapAsyncCommand(DeviceExtension, Used, Length);
 
         VideoPortStallExecution(10);
     }
@@ -1868,6 +2028,61 @@ VirtGpuTransferToHost2D(
 }
 
 static BOOLEAN
+VirtGpuClipFlushRect(
+    _Inout_ PVIRTGPU_DEVICE_EXTENSION DeviceExtension,
+    _Inout_ PLONG Left,
+    _Inout_ PLONG Top,
+    _Inout_ PLONG Right,
+    _Inout_ PLONG Bottom)
+{
+    if (*Left < 0)
+        *Left = 0;
+    if (*Top < 0)
+        *Top = 0;
+    if (*Right > (LONG)DeviceExtension->ScreenWidth)
+        *Right = DeviceExtension->ScreenWidth;
+    if (*Bottom > (LONG)DeviceExtension->ScreenHeight)
+        *Bottom = DeviceExtension->ScreenHeight;
+
+    return (*Left < *Right) && (*Top < *Bottom);
+}
+
+static VOID
+VirtGpuBuildTransferToHost2D(
+    _Inout_ PVIRTGPU_DEVICE_EXTENSION DeviceExtension,
+    _Out_ PVIRTGPU_TRANSFER_TO_HOST_2D TransferRequest,
+    _In_ LONG Left,
+    _In_ LONG Top,
+    _In_ ULONG Width,
+    _In_ ULONG Height)
+{
+    ULONGLONG Offset;
+
+    Offset = ((ULONGLONG)Top * DeviceExtension->BytesPerScanLine) +
+             ((ULONGLONG)Left * DeviceExtension->BytesPerPixel);
+
+    VideoPortZeroMemory(TransferRequest, sizeof(*TransferRequest));
+    TransferRequest->Header.Type = VIRTGPU_CMD_TRANSFER_TO_HOST_2D;
+    VirtGpuSetRectAt(&TransferRequest->Rect, Left, Top, Width, Height);
+    TransferRequest->Offset = Offset;
+    TransferRequest->ResourceId = VIRTGPU_RESOURCE_ID;
+}
+
+static VOID
+VirtGpuBuildResourceFlush(
+    _Out_ PVIRTGPU_RESOURCE_FLUSH FlushRequest,
+    _In_ LONG Left,
+    _In_ LONG Top,
+    _In_ ULONG Width,
+    _In_ ULONG Height)
+{
+    VideoPortZeroMemory(FlushRequest, sizeof(*FlushRequest));
+    FlushRequest->Header.Type = VIRTGPU_CMD_RESOURCE_FLUSH;
+    VirtGpuSetRectAt(&FlushRequest->Rect, Left, Top, Width, Height);
+    FlushRequest->ResourceId = VIRTGPU_RESOURCE_ID;
+}
+
+static BOOLEAN
 VirtGpuFlushRect(
     _Inout_ PVIRTGPU_DEVICE_EXTENSION DeviceExtension,
     _In_ LONG Left,
@@ -1876,20 +2091,11 @@ VirtGpuFlushRect(
     _In_ LONG Bottom)
 {
     VIRTGPU_RESOURCE_FLUSH FlushRequest;
+    ULONGLONG Offset;
     ULONG Width;
     ULONG Height;
-    ULONGLONG Offset;
 
-    if (Left < 0)
-        Left = 0;
-    if (Top < 0)
-        Top = 0;
-    if (Right > (LONG)DeviceExtension->ScreenWidth)
-        Right = DeviceExtension->ScreenWidth;
-    if (Bottom > (LONG)DeviceExtension->ScreenHeight)
-        Bottom = DeviceExtension->ScreenHeight;
-
-    if ((Left >= Right) || (Top >= Bottom))
+    if (!VirtGpuClipFlushRect(DeviceExtension, &Left, &Top, &Right, &Bottom))
         return TRUE;
 
     Width = Right - Left;
@@ -1908,21 +2114,62 @@ VirtGpuFlushRect(
         return FALSE;
     }
 
-    VideoPortZeroMemory(&FlushRequest, sizeof(FlushRequest));
-    FlushRequest.Header.Type = VIRTGPU_CMD_RESOURCE_FLUSH;
-    VirtGpuSetRectAt(&FlushRequest.Rect, Left, Top, Width, Height);
-    FlushRequest.ResourceId = VIRTGPU_RESOURCE_ID;
+    VirtGpuBuildResourceFlush(&FlushRequest, Left, Top, Width, Height);
     return VirtGpuCommandOk(DeviceExtension, &FlushRequest, sizeof(FlushRequest));
+}
+
+static BOOLEAN
+VirtGpuFlushRectAsync(
+    _Inout_ PVIRTGPU_DEVICE_EXTENSION DeviceExtension,
+    _In_ LONG Left,
+    _In_ LONG Top,
+    _In_ LONG Right,
+    _In_ LONG Bottom)
+{
+    VIRTGPU_TRANSFER_TO_HOST_2D TransferRequest;
+    VIRTGPU_RESOURCE_FLUSH FlushRequest;
+    ULONG Width;
+    ULONG Height;
+
+    if (!VirtGpuClipFlushRect(DeviceExtension, &Left, &Top, &Right, &Bottom))
+        return TRUE;
+
+    if (VirtGpuAsyncFreeCommandCount(DeviceExtension) < 2)
+        return FALSE;
+
+    Width = Right - Left;
+    Height = Bottom - Top;
+
+    VirtGpuBuildTransferToHost2D(DeviceExtension,
+                                 &TransferRequest,
+                                 Left,
+                                 Top,
+                                 Width,
+                                 Height);
+    VirtGpuBuildResourceFlush(&FlushRequest, Left, Top, Width, Height);
+
+    return VirtGpuSendCommandAsync(DeviceExtension,
+                                   &TransferRequest,
+                                   sizeof(TransferRequest)) &&
+           VirtGpuSendCommandAsync(DeviceExtension,
+                                   &FlushRequest,
+                                   sizeof(FlushRequest));
 }
 
 static BOOLEAN
 VirtGpuFlush(_Inout_ PVIRTGPU_DEVICE_EXTENSION DeviceExtension)
 {
-    return VirtGpuFlushRect(DeviceExtension,
-                            0,
-                            0,
-                            DeviceExtension->ScreenWidth,
-                            DeviceExtension->ScreenHeight);
+    if (!VirtGpuFlushRect(DeviceExtension,
+                          0,
+                          0,
+                          DeviceExtension->ScreenWidth,
+                          DeviceExtension->ScreenHeight))
+    {
+        return FALSE;
+    }
+
+    DeviceExtension->FlushPending = FALSE;
+    return TRUE;
 }
 
 static BOOLEAN
@@ -1934,24 +2181,63 @@ VirtGpuSendCursorCommand(
     struct scatterlist Sg;
     PUCHAR RequestBuffer;
     unsigned int Length;
-    ULONG Retry;
+    ULONG Attempt;
+    ULONG Slot;
     PVOID Used;
+    BOOLEAN MoveOnly;
+
+    MoveOnly = FALSE;
+    if ((Request != NULL) && (RequestSize >= sizeof(VIRTGPU_CTRL_HDR)))
+        MoveOnly = ((PVIRTGPU_CTRL_HDR)Request)->Type == VIRTGPU_CMD_MOVE_CURSOR;
 
     if (!DeviceExtension->CursorQueue ||
         !DeviceExtension->CursorCommandBuffer ||
-        (RequestSize > VIRTGPU_CURSOR_COMMAND_BUFFER_SIZE) ||
-        DeviceExtension->CursorBusy)
+        (RequestSize > VIRTGPU_CURSOR_COMMAND_BUFFER_SIZE))
     {
         return FALSE;
     }
 
-    DeviceExtension->CursorBusy = TRUE;
+    while ((Used = virtqueue_get_buf(DeviceExtension->CursorQueue, &Length)) != NULL)
+    {
+        ULONG_PTR Base = (ULONG_PTR)DeviceExtension->CursorCommandBuffer;
+        ULONG_PTR Pointer = (ULONG_PTR)Used;
+        ULONG Offset;
 
-    RequestBuffer = DeviceExtension->CursorCommandBuffer;
+        UNREFERENCED_PARAMETER(Length);
+
+        if ((Pointer < Base) ||
+            (Pointer >= Base + VIRTGPU_CURSOR_COMMAND_BUFFER_SIZE * VIRTGPU_CURSOR_COMMAND_COUNT))
+        {
+            continue;
+        }
+
+        Offset = (ULONG)(Pointer - Base);
+        if ((Offset % VIRTGPU_CURSOR_COMMAND_BUFFER_SIZE) == 0)
+        {
+            Slot = Offset / VIRTGPU_CURSOR_COMMAND_BUFFER_SIZE;
+            if (Slot < VIRTGPU_CURSOR_COMMAND_COUNT)
+                DeviceExtension->CursorCommandInUse[Slot] = FALSE;
+        }
+    }
+
+    for (Attempt = 0; Attempt < VIRTGPU_CURSOR_COMMAND_COUNT; ++Attempt)
+    {
+        Slot = (DeviceExtension->CursorCommandNextSlot + Attempt) %
+               VIRTGPU_CURSOR_COMMAND_COUNT;
+        if (!DeviceExtension->CursorCommandInUse[Slot])
+            break;
+    }
+
+    if (Attempt == VIRTGPU_CURSOR_COMMAND_COUNT)
+        return MoveOnly;
+
+    RequestBuffer = (PUCHAR)DeviceExtension->CursorCommandBuffer +
+                    (Slot * VIRTGPU_CURSOR_COMMAND_BUFFER_SIZE);
     VideoPortZeroMemory(RequestBuffer, VIRTGPU_CURSOR_COMMAND_BUFFER_SIZE);
     VideoPortMoveMemory(RequestBuffer, Request, RequestSize);
 
-    Sg.physAddr.QuadPart = DeviceExtension->CursorCommandPhysical.QuadPart;
+    Sg.physAddr.QuadPart = DeviceExtension->CursorCommandPhysical.QuadPart +
+                           (Slot * VIRTGPU_CURSOR_COMMAND_BUFFER_SIZE);
     Sg.length = RequestSize;
 
     if (virtqueue_add_buf(DeviceExtension->CursorQueue,
@@ -1962,26 +2248,14 @@ VirtGpuSendCursorCommand(
                           NULL,
                           0) != 0)
     {
-        DeviceExtension->CursorBusy = FALSE;
-        return FALSE;
+        return MoveOnly;
     }
 
+    DeviceExtension->CursorCommandInUse[Slot] = TRUE;
+    DeviceExtension->CursorCommandNextSlot =
+        (Slot + 1) % VIRTGPU_CURSOR_COMMAND_COUNT;
     virtqueue_kick(DeviceExtension->CursorQueue);
-
-    for (Retry = 0; Retry < 10000; ++Retry)
-    {
-        Used = virtqueue_get_buf(DeviceExtension->CursorQueue, &Length);
-        if (Used == RequestBuffer)
-        {
-            DeviceExtension->CursorBusy = FALSE;
-            return TRUE;
-        }
-
-        VideoPortStallExecution(10);
-    }
-
-    DeviceExtension->CursorBusy = FALSE;
-    return FALSE;
+    return TRUE;
 }
 
 static BOOLEAN
@@ -2147,7 +2421,8 @@ VirtGpuCreateCursorResource(_Inout_ PVIRTGPU_DEVICE_EXTENSION DeviceExtension)
 
     DeviceExtension->CursorCommandBuffer =
         VirtGpuAllocateContiguous(DeviceExtension,
-                                  VIRTGPU_CURSOR_COMMAND_BUFFER_SIZE,
+                                  VIRTGPU_CURSOR_COMMAND_BUFFER_SIZE *
+                                  VIRTGPU_CURSOR_COMMAND_COUNT,
                                   &DeviceExtension->CursorCommandPhysical);
     if (DeviceExtension->CursorCommandBuffer == NULL)
         return FALSE;
@@ -2248,6 +2523,8 @@ VirtGpuAddMode(
 
     if ((Width == 0) ||
         (Height == 0) ||
+        (Width < VIRTGPU_MIN_VIDEO_WIDTH) ||
+        (Height < VIRTGPU_MIN_VIDEO_HEIGHT) ||
         (Width > DeviceExtension->MaxScreenWidth) ||
         (Height > DeviceExtension->MaxScreenHeight) ||
         (DeviceExtension->ModeCount >= VIRTGPU_MAX_VIDEO_MODES) ||
@@ -2265,25 +2542,134 @@ VirtGpuAddMode(
 }
 
 static VOID
+VirtGpuAddEdidEstablishedModes(_Inout_ PVIRTGPU_DEVICE_EXTENSION DeviceExtension)
+{
+    const UCHAR* Edid = DeviceExtension->Edid;
+
+    if (!DeviceExtension->EdidValid || (DeviceExtension->EdidSize < 0x26))
+        return;
+
+    if (Edid[0x23] & 0xC0)
+        VirtGpuAddMode(DeviceExtension, 720, 400);
+    if (Edid[0x23] & 0x3C)
+        VirtGpuAddMode(DeviceExtension, 640, 480);
+    if (Edid[0x23] & 0x03)
+        VirtGpuAddMode(DeviceExtension, 800, 600);
+
+    if (Edid[0x24] & 0xC0)
+        VirtGpuAddMode(DeviceExtension, 800, 600);
+    if (Edid[0x24] & 0x20)
+        VirtGpuAddMode(DeviceExtension, 832, 624);
+    if (Edid[0x24] & 0x1E)
+        VirtGpuAddMode(DeviceExtension, 1024, 768);
+    if (Edid[0x24] & 0x01)
+        VirtGpuAddMode(DeviceExtension, 1280, 1024);
+
+    if (Edid[0x25] & 0x80)
+        VirtGpuAddMode(DeviceExtension, 1152, 870);
+}
+
+static VOID
+VirtGpuAddEdidStandardModes(_Inout_ PVIRTGPU_DEVICE_EXTENSION DeviceExtension)
+{
+    const UCHAR* Edid = DeviceExtension->Edid;
+    ULONG Offset;
+
+    if (!DeviceExtension->EdidValid || (DeviceExtension->EdidSize < 0x36))
+        return;
+
+    for (Offset = 0x26; Offset < 0x36; Offset += 2)
+    {
+        ULONG Width;
+        ULONG Height;
+
+        if ((Edid[Offset] == 0x01) && (Edid[Offset + 1] == 0x01))
+            continue;
+
+        Width = ((ULONG)Edid[Offset] + 31) * 8;
+        switch (Edid[Offset + 1] >> 6)
+        {
+            case 0:
+                Height = (Width / 16) * 10;
+                break;
+            case 1:
+                Height = (Width / 4) * 3;
+                break;
+            case 2:
+                Height = (Width / 5) * 4;
+                break;
+            default:
+                Height = (Width / 16) * 9;
+                break;
+        }
+
+        VirtGpuAddMode(DeviceExtension, Width, Height);
+    }
+}
+
+static VOID
+VirtGpuAddEdidDetailedModes(_Inout_ PVIRTGPU_DEVICE_EXTENSION DeviceExtension)
+{
+    const UCHAR* Edid = DeviceExtension->Edid;
+    ULONG Offset;
+
+    if (!DeviceExtension->EdidValid || (DeviceExtension->EdidSize < 0x7E))
+        return;
+
+    for (Offset = 0x36; Offset < 0x7E; Offset += 18)
+    {
+        const UCHAR* Descriptor = &Edid[Offset];
+        ULONG PixelClock = Descriptor[0] | ((ULONG)Descriptor[1] << 8);
+        ULONG Width;
+        ULONG Height;
+
+        if (PixelClock == 0)
+            continue;
+
+        Width = Descriptor[2] | ((ULONG)(Descriptor[4] & 0xF0) << 4);
+        Height = Descriptor[5] | ((ULONG)(Descriptor[7] & 0xF0) << 4);
+        VirtGpuAddMode(DeviceExtension, Width, Height);
+    }
+}
+
+static VOID
+VirtGpuAddEdidModes(_Inout_ PVIRTGPU_DEVICE_EXTENSION DeviceExtension)
+{
+    VirtGpuAddEdidEstablishedModes(DeviceExtension);
+    VirtGpuAddEdidStandardModes(DeviceExtension);
+    VirtGpuAddEdidDetailedModes(DeviceExtension);
+}
+
+static VOID
 VirtGpuInitializeModeInfo(_Inout_ PVIRTGPU_DEVICE_EXTENSION DeviceExtension)
 {
     static const VIRTGPU_MODE_SIZE StandardModes[] =
     {
+        { 720, 400 },
         { 640, 480 },
         { 800, 600 },
+        { 832, 624 },
+        { 848, 480 },
         { 1024, 768 },
         { 1152, 864 },
+        { 1152, 870 },
         { 1280, 720 },
+        { 1280, 768 },
         { 1280, 800 },
         { 1280, 960 },
         { 1280, 1024 },
         { 1360, 768 },
         { 1366, 768 },
+        { 1400, 1050 },
         { 1440, 900 },
         { 1600, 900 },
+        { 1600, 1200 },
         { 1680, 1050 },
+        { 1792, 1344 },
+        { 1856, 1392 },
         { 1920, 1080 },
         { 1920, 1200 },
+        { 1920, 1440 },
         { 2560, 1440 }
     };
     ULONG Index;
@@ -2294,6 +2680,7 @@ VirtGpuInitializeModeInfo(_Inout_ PVIRTGPU_DEVICE_EXTENSION DeviceExtension)
     VirtGpuAddMode(DeviceExtension,
                    DeviceExtension->MaxScreenWidth,
                    DeviceExtension->MaxScreenHeight);
+    VirtGpuAddEdidModes(DeviceExtension);
 
     for (Index = 0; Index < sizeof(StandardModes) / sizeof(StandardModes[0]); ++Index)
     {
@@ -2441,6 +2828,17 @@ VirtGpuInitialize(_In_ PVOID HwDeviceExtension)
     if (DeviceExtension->CommandBuffer == NULL)
         return FALSE;
 
+    DeviceExtension->AsyncCommandBuffer =
+        VirtGpuAllocateContiguous(DeviceExtension,
+                                  VIRTGPU_ASYNC_COMMAND_COUNT *
+                                      VIRTGPU_ASYNC_COMMAND_SLOT_SIZE,
+                                  &DeviceExtension->AsyncCommandPhysical);
+    if (DeviceExtension->AsyncCommandBuffer == NULL)
+    {
+        VideoDebugPrint((Warn,
+            "VirtGpu: async 2D command queue unavailable, using synchronous flushes\n"));
+    }
+
     virtio_device_ready(&DeviceExtension->VirtIODevice);
 
     VirtGpuQuery3DCapsets(DeviceExtension);
@@ -2488,8 +2886,8 @@ VirtGpuInitialize(_In_ PVOID HwDeviceExtension)
 
     DeviceExtension->HardwareReady = TRUE;
     DeviceExtension->FlushPending = TRUE;
-    VirtGpuFlush(DeviceExtension);
-    VideoPortStartTimer(DeviceExtension);
+    if (!VirtGpuFlush(DeviceExtension))
+        VideoPortStartTimer(DeviceExtension);
 
     VideoDebugPrint((Info,
         "VirtGpu: initialized %lux%lu at PA 0x%I64x (%lu bytes), 3D=%u capsets=%lu preferred=%lu blob=%u uuid=%u edid=%u\n",
@@ -2615,7 +3013,8 @@ VirtGpuStartIO(
             }
 
             DeviceExtension->FlushPending = TRUE;
-            VirtGpuFlush(DeviceExtension);
+            if (!VirtGpuFlush(DeviceExtension))
+                VideoPortStartTimer(DeviceExtension);
             Status = NO_ERROR;
             break;
 
@@ -2649,7 +3048,8 @@ VirtGpuStartIO(
                 RequestPacket->StatusBlock->Information =
                     sizeof(VIDEO_MEMORY_INFORMATION);
                 DeviceExtension->FlushPending = TRUE;
-                VirtGpuFlush(DeviceExtension);
+                if (!VirtGpuFlush(DeviceExtension))
+                    VideoPortStartTimer(DeviceExtension);
             }
             break;
 
@@ -2735,11 +3135,16 @@ VirtGpuStartIO(
             }
 
             DirtyRect = RequestPacket->InputBuffer;
-            Status = VirtGpuFlushRect(DeviceExtension,
-                                      DirtyRect->Left,
-                                      DirtyRect->Top,
-                                      DirtyRect->Right,
-                                      DirtyRect->Bottom) ?
+            Status = (VirtGpuFlushRectAsync(DeviceExtension,
+                                            DirtyRect->Left,
+                                            DirtyRect->Top,
+                                            DirtyRect->Right,
+                                            DirtyRect->Bottom) ||
+                      VirtGpuFlushRect(DeviceExtension,
+                                       DirtyRect->Left,
+                                       DirtyRect->Top,
+                                       DirtyRect->Right,
+                                       DirtyRect->Bottom)) ?
                      NO_ERROR : ERROR_INVALID_PARAMETER;
             break;
 
@@ -3367,8 +3772,14 @@ VirtGpuTimer(_In_ PVOID HwDeviceExtension)
 {
     PVIRTGPU_DEVICE_EXTENSION DeviceExtension = HwDeviceExtension;
 
-    if (DeviceExtension->HardwareReady)
-        VirtGpuFlush(DeviceExtension);
+    if (!DeviceExtension->HardwareReady || !DeviceExtension->FlushPending)
+    {
+        VideoPortStopTimer(DeviceExtension);
+        return;
+    }
+
+    if (VirtGpuFlush(DeviceExtension))
+        VideoPortStopTimer(DeviceExtension);
 }
 
 VP_STATUS
