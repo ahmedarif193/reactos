@@ -9,6 +9,12 @@
 extern NTKERNELAPI ULONG64 MmUserProbeAddress;
 #define MM_USER_PROBE_ADDRESS MmUserProbeAddress
 
+VOID
+NTAPI
+MiArm64ProbeForWrite(
+    _In_ ULONG_PTR Current,
+    _In_ ULONG_PTR Last);
+
 #define PTI_SHIFT  12L
 #define PDI_SHIFT  21L
 #define PPI_SHIFT  30L
