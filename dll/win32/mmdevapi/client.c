@@ -28,10 +28,13 @@
 
 #include <audiopolicy.h>
 #include <mmdeviceapi.h>
+#include <winver.h>
 #include <winternl.h>
 
 #include <wine/debug.h>
+#ifndef __REACTOS__
 #include <wine/unixlib.h>
+#endif
 
 #include "mmdevapi_private.h"
 
@@ -1610,13 +1613,13 @@ HRESULT AudioClient_Create(GUID *guid, IMMDevice *device, IAudioClient **out)
 
     This->device_name = name;
 
-    This->IAudioCaptureClient_iface.lpVtbl   = &AudioCaptureClient_Vtbl;
-    This->IAudioClient3_iface.lpVtbl         = &AudioClient3_Vtbl;
-    This->IAudioClock_iface.lpVtbl           = &AudioClock_Vtbl;
-    This->IAudioClock2_iface.lpVtbl          = &AudioClock2_Vtbl;
-    This->IAudioClockAdjustment_iface.lpVtbl = &AudioClockAdjustment_Vtbl;
-    This->IAudioRenderClient_iface.lpVtbl    = &AudioRenderClient_Vtbl;
-    This->IAudioStreamVolume_iface.lpVtbl    = &AudioStreamVolume_Vtbl;
+    This->IAudioCaptureClient_iface.lpVtbl   = (IAudioCaptureClientVtbl *)&AudioCaptureClient_Vtbl;
+    This->IAudioClient3_iface.lpVtbl         = (IAudioClient3Vtbl *)&AudioClient3_Vtbl;
+    This->IAudioClock_iface.lpVtbl           = (IAudioClockVtbl *)&AudioClock_Vtbl;
+    This->IAudioClock2_iface.lpVtbl          = (IAudioClock2Vtbl *)&AudioClock2_Vtbl;
+    This->IAudioClockAdjustment_iface.lpVtbl = (IAudioClockAdjustmentVtbl *)&AudioClockAdjustment_Vtbl;
+    This->IAudioRenderClient_iface.lpVtbl    = (IAudioRenderClientVtbl *)&AudioRenderClient_Vtbl;
+    This->IAudioStreamVolume_iface.lpVtbl    = (IAudioStreamVolumeVtbl *)&AudioStreamVolume_Vtbl;
 
     This->dataflow = dataflow;
     This->parent   = device;

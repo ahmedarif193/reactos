@@ -27,7 +27,11 @@
 #include "wine/debug.h"
 #include "wine/list.h"
 
+#ifndef __REACTOS__
 #include "initguid.h"
+#else
+#include "cguid.h"
+#endif
 #include "ole2.h"
 #include "mmdeviceapi.h"
 #include "dshow.h"
@@ -42,7 +46,9 @@
 
 WINE_DEFAULT_DEBUG_CHANNEL(mmdevapi);
 
+#ifndef __REACTOS__
 DEFINE_GUID(GUID_NULL,0,0,0,0,0,0,0,0,0,0,0);
+#endif
 
 static HKEY key_render;
 static HKEY key_capture;
@@ -280,7 +286,11 @@ static HRESULT set_driver_prop_value(GUID *id, const EDataFlow flow, const PROPE
     params.buffer_size = &size;
 
     while (1) {
+#ifdef __REACTOS__
+        reactos_mmdevapi_call(get_prop_value, &params);
+#else
         __wine_unix_call(drvs.module_unixlib, get_prop_value, &params);
+#endif
 
         if (params.result != E_NOT_SUFFICIENT_BUFFER)
             break;
@@ -363,8 +373,8 @@ static MMDevice *MMDevice_Create(const WCHAR *name, GUID *id, EDataFlow flow, DW
         if (!cur)
             return NULL;
 
-        cur->IMMDevice_iface.lpVtbl = &MMDeviceVtbl;
-        cur->IMMEndpoint_iface.lpVtbl = &MMEndpointVtbl;
+        cur->IMMDevice_iface.lpVtbl = (IMMDeviceVtbl *)&MMDeviceVtbl;
+        cur->IMMEndpoint_iface.lpVtbl = (IMMEndpointVtbl *)&MMEndpointVtbl;
 
         list_add_tail(&device_list, &cur->entry);
     }else if(cur->ref > 0)
@@ -553,7 +563,11 @@ HRESULT load_driver_devices(EDataFlow flow)
     do {
         free(params.endpoints);
         params.endpoints = malloc(params.size);
+#ifdef __REACTOS__
+        reactos_mmdevapi_call(get_endpoint_ids, &params);
+#else
         __wine_unix_call(drvs.module_unixlib, get_endpoint_ids, &params);
+#endif
     } while (params.result == HRESULT_FROM_WIN32(ERROR_INSUFFICIENT_BUFFER));
 
     if (FAILED(params.result))
@@ -568,7 +582,8 @@ HRESULT load_driver_devices(EDataFlow flow)
         drvs.pget_device_guid(flow, dev_name, &guid);
 
         dev = MMDevice_Create(name, &guid, flow, DEVICE_STATE_ACTIVE, params.default_idx == i);
-        set_format(dev);
+        if (dev)
+            set_format(dev);
     }
 
 end:
@@ -576,6 +591,23 @@ end:
 
     return params.result;
 }
+
+#ifdef __REACTOS__
+static void reactos_refresh_devices(EDataFlow flow)
+{
+    if (!drvs.module)
+        return;
+
+    if (flow == eRender || flow == eCapture)
+    {
+        load_driver_devices(flow);
+        return;
+    }
+
+    load_driver_devices(eRender);
+    load_driver_devices(eCapture);
+}
+#endif
 
 static void MMDevice_Destroy(MMDevice *This)
 {
@@ -668,7 +700,7 @@ static HRESULT WINAPI MMDevice_Activate(IMMDevice *iface, REFIID riid, DWORD cls
             {
                 /* ::Load cannot assume the interface stays alive after the function returns,
                  * so just create the interface on the stack, saves a lot of complicated code */
-                IPropertyBagImpl bag = { { &PB_Vtbl } };
+                IPropertyBagImpl bag = { { (IPropertyBagVtbl *)&PB_Vtbl } };
                 bag.devguid = This->devguid;
                 hr = IPersistPropertyBag_Load(ppb, &bag.IPropertyBag_iface, NULL);
                 IPersistPropertyBag_Release(ppb);
@@ -829,7 +861,7 @@ static HRESULT MMDevCol_Create(IMMDeviceCollection **ppv, EDataFlow flow, DWORD 
     *ppv = NULL;
     if (!This)
         return E_OUTOFMEMORY;
-    This->IMMDeviceCollection_iface.lpVtbl = &MMDevColVtbl;
+    This->IMMDeviceCollection_iface.lpVtbl = (IMMDeviceCollectionVtbl *)&MMDevColVtbl;
     This->ref = 1;
     This->devices = NULL;
     This->devices_count = 0;
@@ -1008,6 +1040,9 @@ static HRESULT WINAPI MMDevEnum_EnumAudioEndpoints(IMMDeviceEnumerator *iface, E
         return E_INVALIDARG;
     if (mask & ~DEVICE_STATEMASK_ALL)
         return E_INVALIDARG;
+#ifdef __REACTOS__
+    reactos_refresh_devices(flow);
+#endif
     return MMDevCol_Create(devices, flow, mask);
 }
 
@@ -1030,6 +1065,10 @@ static HRESULT WINAPI MMDevEnum_GetDefaultAudioEndpoint(IMMDeviceEnumerator *ifa
     }
 
     *device = NULL;
+
+#ifdef __REACTOS__
+    reactos_refresh_devices(flow);
+#endif
 
     if(!drvs.module_name[0])
         return E_NOTFOUND;
@@ -1262,9 +1301,12 @@ static DWORD WINAPI notif_thread_proc(void *user)
         vin_name[0] = 0;
 
     while(1){
-        if(RegNotifyChangeKeyValue(key, FALSE, REG_NOTIFY_CHANGE_LAST_SET,
-                    NULL, FALSE) != ERROR_SUCCESS){
-            ERR("RegNotifyChangeKeyValue failed: %lu\n", GetLastError());
+        LONG ret;
+
+        ret = RegNotifyChangeKeyValue(key, FALSE, REG_NOTIFY_CHANGE_LAST_SET,
+                    NULL, FALSE);
+        if(ret != ERROR_SUCCESS){
+            ERR("RegNotifyChangeKeyValue failed: %ld\n", ret);
             RegCloseKey(key);
             g_notif_thread = NULL;
             return 1;
@@ -1362,7 +1404,7 @@ static const IMMDeviceEnumeratorVtbl MMDevEnumVtbl =
 
 static MMDevEnumImpl enumerator =
 {
-    {&MMDevEnumVtbl},
+    {(IMMDeviceEnumeratorVtbl *)&MMDevEnumVtbl},
     1,
 };
 
@@ -1380,7 +1422,7 @@ static HRESULT MMDevPropStore_Create(MMDevice *parent, DWORD access, IPropertySt
     *ppv = &This->IPropertyStore_iface;
     if (!This)
         return E_OUTOFMEMORY;
-    This->IPropertyStore_iface.lpVtbl = &MMDevPropVtbl;
+    This->IPropertyStore_iface.lpVtbl = (IPropertyStoreVtbl *)&MMDevPropVtbl;
     This->ref = 1;
     This->parent = parent;
     This->access = access;
@@ -1660,7 +1702,7 @@ static const IPropertyStoreVtbl info_device_ps_Vtbl =
 };
 
 static IPropertyStore info_device_ps = {
-    &info_device_ps_Vtbl
+    (IPropertyStoreVtbl *)&info_device_ps_Vtbl
 };
 
 static ULONG WINAPI info_device_AddRef(IMMDevice *iface)
@@ -1693,7 +1735,7 @@ static const IMMDeviceVtbl info_device_Vtbl =
 };
 
 static IMMDevice info_device = {
-    &info_device_Vtbl
+    (IMMDeviceVtbl *)&info_device_Vtbl
 };
 
 static HRESULT WINAPI Connector_QueryInterface(IConnector *iface, REFIID riid, void **ppv)
@@ -1824,7 +1866,7 @@ HRESULT Connector_Create(IConnector **ppv)
     if (!This)
         return E_OUTOFMEMORY;
 
-    This->IConnector_iface.lpVtbl = &Connector_Vtbl;
+    This->IConnector_iface.lpVtbl = (IConnectorVtbl *)&Connector_Vtbl;
     This->ref = 1;
 
     *ppv = &This->IConnector_iface;
@@ -1962,7 +2004,7 @@ static HRESULT DeviceTopology_Create(IMMDevice *device, IDeviceTopology **ppv)
     if (!This)
         return E_OUTOFMEMORY;
 
-    This->IDeviceTopology_iface.lpVtbl = &DeviceTopology_Vtbl;
+    This->IDeviceTopology_iface.lpVtbl = (IDeviceTopologyVtbl *)&DeviceTopology_Vtbl;
     This->ref = 1;
 
     *ppv = &This->IDeviceTopology_iface;
