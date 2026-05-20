@@ -99,6 +99,15 @@ NtCancelIoFile(
     _Out_ PIO_STATUS_BLOCK IoStatusBlock
 );
 
+NTSYSCALLAPI
+NTSTATUS
+NTAPI
+NtCancelIoFileEx(
+    _In_ HANDLE FileHandle,
+    _In_opt_ PIO_STATUS_BLOCK IoRequestToCancel,
+    _Out_ PIO_STATUS_BLOCK IoStatusBlock
+);
+
 __kernel_entry
 NTSYSCALLAPI
 NTSTATUS
@@ -636,6 +645,15 @@ NTSTATUS
 NTAPI
 ZwCancelIoFile(
     _In_ HANDLE FileHandle,
+    _Out_ PIO_STATUS_BLOCK IoStatusBlock
+);
+
+NTSYSAPI
+NTSTATUS
+NTAPI
+ZwCancelIoFileEx(
+    _In_ HANDLE FileHandle,
+    _In_opt_ PIO_STATUS_BLOCK IoRequestToCancel,
     _Out_ PIO_STATUS_BLOCK IoStatusBlock
 );
 
