@@ -40,7 +40,9 @@
 #include "winbase.h"
 #include "wininet.h"
 #include "winerror.h"
+#ifndef __REACTOS__
 #include "winternl.h"
+#endif
 #include "winsock2.h"
 #include "ws2ipdef.h"
 #define NO_SHLWAPI_STREAM
