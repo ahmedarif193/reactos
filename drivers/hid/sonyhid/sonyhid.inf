@@ -1,0 +1,67 @@
+; SONYHID.INF
+
+; Installation file for Sony HID controllers with touchpad pointer support
+
+[Version]
+Signature  = "$Windows NT$"
+LayoutFile = layout.inf
+; sonyhid exposes the controller touchpad through mouclass, so the
+; installed device is intentionally a mouse-class function device.
+Class      = Mouse
+ClassGUID  = {4D36E96F-E325-11CE-BFC1-08002BE10318}
+Provider   = %ReactOS%
+DriverVer  = 05/20/2026,1.00
+
+[DestinationDirs]
+DefaultDestDir = 12
+
+[Manufacturer]
+%SonyMfg% = SonyMfg
+
+[SonyMfg]
+%HID\Vid_054C&Pid_0268.DeviceDesc% = SonyHID_Inst,HID\Vid_054C&Pid_0268&Col01
+%HID\Vid_054C&Pid_042F.DeviceDesc% = SonyHID_Inst,HID\Vid_054C&Pid_042F&Col01
+%HID\Vid_054C&Pid_05C4.DeviceDesc% = SonyHID_Inst,HID\Vid_054C&Pid_05C4&Col01
+%HID\Vid_054C&Pid_09CC.DeviceDesc% = SonyHID_Inst,HID\Vid_054C&Pid_09CC&Col01
+%HID\Vid_054C&Pid_0BA0.DeviceDesc% = SonyHID_Inst,HID\Vid_054C&Pid_0BA0&Col01
+%HID\Vid_054C&Pid_0CE6.DeviceDesc% = SonyHID_Inst,HID\Vid_054C&Pid_0CE6&Col01
+%HID\Vid_054C&Pid_0DF2.DeviceDesc% = SonyHID_Inst,HID\Vid_054C&Pid_0DF2&Col01
+
+[SonyHID_Inst.NT]
+CopyFiles = SonyHID_CopyFiles.NT, Mouclass_CopyFiles.NT
+
+[SonyHID_CopyFiles.NT]
+sonyhid.sys
+
+[Mouclass_CopyFiles.NT]
+mouclass.sys
+
+[SonyHID_Inst.NT.Services]
+AddService = sonyhid, 0x00000002, sonyhid_Service_Inst
+AddService = mouclass, , mouclass_Service_Inst
+
+[sonyhid_Service_Inst]
+ServiceType   = 1
+StartType     = 3
+ErrorControl  = 1
+ServiceBinary = %12%\sonyhid.sys
+LoadOrderGroup = Pointer Port
+
+[mouclass_Service_Inst]
+ServiceType   = 1
+StartType     = 1
+ErrorControl  = 1
+ServiceBinary = %12%\mouclass.sys
+LoadOrderGroup = Pointer Class
+
+[Strings]
+ReactOS = "ReactOS Project"
+SonyMfg = "Sony"
+
+HID\Vid_054C&Pid_0268.DeviceDesc = "Sony DualShock 3 Controller"
+HID\Vid_054C&Pid_042F.DeviceDesc = "Sony DualShock 3 Controller"
+HID\Vid_054C&Pid_05C4.DeviceDesc = "Sony DualShock 4 Controller"
+HID\Vid_054C&Pid_09CC.DeviceDesc = "Sony DualShock 4 Controller"
+HID\Vid_054C&Pid_0BA0.DeviceDesc = "Sony DualShock 4 USB Wireless Adapter"
+HID\Vid_054C&Pid_0CE6.DeviceDesc = "Sony DualSense Controller"
+HID\Vid_054C&Pid_0DF2.DeviceDesc = "Sony DualSense Edge Controller"

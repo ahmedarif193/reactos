@@ -1,0 +1,6 @@
+include_directories(${REACTOS_SOURCE_DIR}/ntoskrnl/include)
+add_library(sonyhid MODULE sonyhid.c sonyhid.rc)
+set_module_type(sonyhid kernelmodedriver)
+add_importlibs(sonyhid ntoskrnl hal hidparse)
+add_cd_file(TARGET sonyhid DESTINATION reactos/system32/drivers NO_CAB FOR all)
+add_cd_file(FILE ${CMAKE_CURRENT_SOURCE_DIR}/sonyhid.inf DESTINATION reactos/inf FOR all)
