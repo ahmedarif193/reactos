@@ -172,6 +172,9 @@ ProbeForWrite(IN PVOID Address,
             ExRaiseAccessViolation();
         }
 
+#ifdef _M_ARM64
+        MiArm64ProbeForWrite(Current, Last);
+#else
         /* Round down to the last page */
         Last = PAGE_ROUND_DOWN(Last) + PAGE_SIZE;
         do
@@ -182,5 +185,6 @@ ProbeForWrite(IN PVOID Address,
             /* Go to the next address */
             Current = PAGE_ROUND_DOWN(Current) + PAGE_SIZE;
         } while (Current != Last);
+#endif
     }
 }
