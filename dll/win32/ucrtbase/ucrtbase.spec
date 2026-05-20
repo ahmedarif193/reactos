@@ -85,7 +85,7 @@
 @ cdecl -norelay __CxxFrameHandler(ptr ptr ptr ptr)
 @ cdecl -norelay __CxxFrameHandler2(ptr ptr ptr ptr) __CxxFrameHandler
 @ cdecl -norelay __CxxFrameHandler3(ptr ptr ptr ptr) __CxxFrameHandler
-@ cdecl -stub -arch=x86_64 __CxxFrameHandler4(ptr long ptr ptr)
+@ cdecl -stub -arch=x86_64,arm64 __CxxFrameHandler4(ptr long ptr ptr)
 @ stdcall -arch=i386 __CxxLongjmpUnwind(ptr)
 @ cdecl __CxxQueryExceptionSize()
 @ cdecl __CxxRegisterExceptionObject(ptr ptr)
@@ -561,7 +561,7 @@
 @ cdecl _ismbstrail(ptr ptr)
 @ cdecl _ismbstrail_l(ptr ptr ptr)
 @ cdecl _isnan(double)
-@ cdecl -arch=x86_64 _isnanf(float)
+@ cdecl -arch=x86_64,arm64 _isnanf(float)
 @ cdecl _isprint_l(long ptr)
 @ cdecl _ispunct_l(long ptr)
 @ cdecl _isspace_l(long ptr)
@@ -792,7 +792,7 @@
 @ cdecl _msize(ptr)
 @ cdecl -dbg _msize_dbg(ptr long)
 @ cdecl _nextafter(double double) nextafter
-@ cdecl -arch=x86_64 _nextafterf(float float) nextafterf
+@ cdecl -arch=x86_64,arm64 _nextafterf(float float) nextafterf
 @ cdecl -arch=i386 _o__CIacos() _CIacos
 @ cdecl -arch=i386 _o__CIasin() _CIasin
 @ cdecl -arch=i386 _o__CIatan() _CIatan
@@ -1360,7 +1360,7 @@
 @ cdecl _o__mktime64(ptr) _mktime64
 @ cdecl _o__msize(ptr) _msize
 @ cdecl _o__nextafter(double double) nextafter
-@ cdecl -arch=x86_64 _o__nextafterf(float float) nextafterf
+@ cdecl -arch=x86_64,arm64 _o__nextafterf(float float) nextafterf
 @ cdecl _o__open_osfhandle(long long) _open_osfhandle
 @ cdecl _o__pclose(ptr) _pclose
 @ cdecl _o__pipe(ptr long long) _pipe
@@ -1384,7 +1384,7 @@
 @ cdecl _o__rmdir(str) _rmdir
 @ cdecl _o__rmtmp() _rmtmp
 @ cdecl _o__scalb(double long) scalbn
-@ cdecl -arch=x86_64 _o__scalbf(float long) scalbnf
+@ cdecl -arch=x86_64,arm64 _o__scalbf(float long) scalbnf
 @ cdecl _o__searchenv(str str ptr) _searchenv
 @ cdecl _o__searchenv_s(str str ptr long) _searchenv_s
 @ cdecl _o__seh_filter_dll(long ptr) _seh_filter_dll # __CppXcptFilter
@@ -1936,7 +1936,7 @@
 @ cdecl _rotr(long long)
 @ cdecl -ret64 _rotr64(int64 long)
 @ cdecl _scalb(double long) scalbn # double _scalb(double x, long exp);
-@ cdecl -arch=x86_64 _scalbf(float long) scalbnf # float _scalbf(float x, long exp);
+@ cdecl -arch=x86_64,arm64 _scalbf(float long) scalbnf # float _scalbf(float x, long exp);
 @ cdecl _searchenv(str str ptr)
 @ cdecl _searchenv_s(str str ptr long)
 @ cdecl _seh_filter_dll(long ptr) # __CppXcptFilter
@@ -2560,7 +2560,7 @@
 @ cdecl set_terminate(ptr)
 @ cdecl set_unexpected(ptr)
 @ cdecl setbuf(ptr ptr)
-@ cdecl -arch=arm,x86_64 -norelay -private setjmp(ptr ptr) __intrinsic_setjmp
+@ cdecl -arch=arm,x86_64,arm64 -norelay -private setjmp(ptr ptr) __intrinsic_setjmp
 @ cdecl setlocale(long str)
 @ cdecl setvbuf(ptr str long long)
 @ cdecl signal(long long)
