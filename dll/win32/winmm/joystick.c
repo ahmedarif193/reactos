@@ -425,7 +425,9 @@ MMRESULT WINAPI DECLSPEC_HOTPATCH joyGetDevCapsW( UINT_PTR id, JOYCAPSW *caps, U
             caps->wPid = HIWORD(diprop.dwData);
         }
 
-        wcscpy( caps->szPname, L"Wine joystick driver" );
+        lstrcpynW( caps->szPname, joysticks[id].instance.tszProductName,
+                   ARRAY_SIZE(caps->szPname) );
+        if (!caps->szPname[0]) wcscpy( caps->szPname, L"Wine joystick driver" );
         caps->wXmin = 0;
         caps->wXmax = 0xffff;
         caps->wYmin = 0;
@@ -663,8 +665,24 @@ MMRESULT WINAPI joySetCapture( HWND hwnd, UINT id, UINT period, BOOL changed )
 
     EnterCriticalSection( &joystick_cs );
 
-    if (joysticks[id].capture || !IsWindow( hwnd ))
+    if (!IsWindow( hwnd ))
         res = JOYERR_NOCANDO; /* FIXME: what should be returned ? */
+#ifdef __REACTOS__
+    else if (joysticks[id].capture == hwnd)
+    {
+        UINT timer = SetTimer( hwnd, joysticks[id].timer, period, joystick_timer );
+
+        if (!timer)
+            res = JOYERR_NOCANDO;
+        else
+        {
+            joysticks[id].timer = timer;
+            joysticks[id].changed = changed;
+        }
+    }
+#endif
+    else if (joysticks[id].capture)
+        res = JOYERR_NOCANDO;
     else if (joyGetPos( id, &joysticks[id].info ) != JOYERR_NOERROR)
         res = JOYERR_UNPLUGGED;
     else if ((joysticks[id].timer = SetTimer( hwnd, 0, period, joystick_timer )) == 0)
