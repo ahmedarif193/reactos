@@ -400,6 +400,11 @@ LoadReactOSSetup(
     CHAR FilePath[MAX_PATH];
     CHAR UserBootOptions[MAX_OPTIONS_LENGTH+1];
     PCSTR BootOptions;
+#if (_WIN32_WINNT > _WIN32_WINNT_WS03)
+    USHORT OperatingSystemVersion = _WIN32_WINNT;
+#else
+    USHORT OperatingSystemVersion = _WIN32_WINNT_WS03;
+#endif
 
     static PCSTR SourcePaths[] =
     {
@@ -707,7 +712,7 @@ LoadReactOSSetup(
         UiResetForSOS();
 
     /* Allocate and minimally-initialize the Loader Parameter Block */
-    AllocateAndInitLPB(_WIN32_WINNT_WS03, &LoaderBlock);
+    AllocateAndInitLPB(OperatingSystemVersion, &LoaderBlock);
 
     /* Allocate and initialize the setup loader block */
     SetupBlock = &WinLdrSystemBlock->SetupBlock;
@@ -749,7 +754,7 @@ LoadReactOSSetup(
     UiDrawStatusText("The Setup program is starting...");
 
     /* Finish loading */
-    return LoadAndBootWindowsCommon(_WIN32_WINNT_WS03,
+    return LoadAndBootWindowsCommon(OperatingSystemVersion,
                                     LoaderBlock,
                                     BootOptions,
                                     SystemPartition,
