@@ -1461,6 +1461,7 @@
 @ stdcall ZwAllocateVirtualMemory(ptr ptr long ptr long long)
 @ stdcall ZwAssignProcessToJobObject(ptr ptr)
 @ stdcall ZwCancelIoFile(ptr ptr)
+@ stdcall ZwCancelIoFileEx(ptr ptr ptr)
 @ stdcall ZwCancelTimer(ptr ptr)
 @ stdcall ZwClearEvent(ptr)
 @ stdcall ZwClose(ptr)
