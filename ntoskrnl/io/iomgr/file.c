@@ -4141,6 +4141,235 @@ NtCancelIoFile(IN HANDLE FileHandle,
     return STATUS_SUCCESS;
 }
 
+typedef struct _IOP_CANCEL_IO_APC_CONTEXT
+{
+    KAPC Apc;
+    KEVENT Event;
+    PFILE_OBJECT FileObject;
+    PIO_STATUS_BLOCK IoRequestToCancel;
+    NTSTATUS Status;
+    BOOLEAN Found;
+} IOP_CANCEL_IO_APC_CONTEXT, *PIOP_CANCEL_IO_APC_CONTEXT;
+
+static
+BOOLEAN
+IopCancelMatchingIrpsInCurrentThread(
+    _In_ PFILE_OBJECT FileObject,
+    _In_opt_ PIO_STATUS_BLOCK IoRequestToCancel)
+{
+    PETHREAD Thread;
+    PLIST_ENTRY ListHead, NextEntry;
+    PIRP Irp;
+    KIRQL OldIrql;
+    BOOLEAN Found = FALSE;
+
+    KeRaiseIrql(APC_LEVEL, &OldIrql);
+
+    Thread = PsGetCurrentThread();
+    ListHead = &Thread->IrpList;
+    NextEntry = ListHead->Flink;
+    while (NextEntry != ListHead)
+    {
+        Irp = CONTAINING_RECORD(NextEntry, IRP, ThreadListEntry);
+        NextEntry = NextEntry->Flink;
+
+        if ((Irp->Tail.Overlay.OriginalFileObject == FileObject) &&
+            (!IoRequestToCancel || (Irp->UserIosb == IoRequestToCancel)))
+        {
+            IoCancelIrp(Irp);
+            Found = TRUE;
+        }
+    }
+
+    KeLowerIrql(OldIrql);
+    return Found;
+}
+
+static
+VOID
+NTAPI
+IopCancelIoFileExKernelApc(
+    _In_ PKAPC Apc,
+    _Inout_ PKNORMAL_ROUTINE *NormalRoutine,
+    _Inout_ PVOID *NormalContext,
+    _Inout_ PVOID *SystemArgument1,
+    _Inout_ PVOID *SystemArgument2)
+{
+    PIOP_CANCEL_IO_APC_CONTEXT Context = *SystemArgument1;
+
+    UNREFERENCED_PARAMETER(Apc);
+    UNREFERENCED_PARAMETER(NormalRoutine);
+    UNREFERENCED_PARAMETER(NormalContext);
+    UNREFERENCED_PARAMETER(SystemArgument2);
+
+    Context->Found = IopCancelMatchingIrpsInCurrentThread(Context->FileObject,
+                                                          Context->IoRequestToCancel);
+    Context->Status = STATUS_SUCCESS;
+    KeSetEvent(&Context->Event, IO_NO_INCREMENT, FALSE);
+}
+
+static
+VOID
+NTAPI
+IopCancelIoFileExRundownApc(
+    _In_ PKAPC Apc)
+{
+    PIOP_CANCEL_IO_APC_CONTEXT Context;
+
+    Context = CONTAINING_RECORD(Apc, IOP_CANCEL_IO_APC_CONTEXT, Apc);
+    Context->Status = STATUS_SUCCESS;
+    Context->Found = FALSE;
+    KeSetEvent(&Context->Event, IO_NO_INCREMENT, FALSE);
+}
+
+static
+NTSTATUS
+IopCancelIoFileExInThread(
+    _In_ PETHREAD Thread,
+    _In_ PFILE_OBJECT FileObject,
+    _In_opt_ PIO_STATUS_BLOCK IoRequestToCancel,
+    _Out_ PBOOLEAN Found)
+{
+    IOP_CANCEL_IO_APC_CONTEXT Context;
+    NTSTATUS Status;
+
+    *Found = FALSE;
+
+    if (Thread == PsGetCurrentThread())
+    {
+        *Found = IopCancelMatchingIrpsInCurrentThread(FileObject, IoRequestToCancel);
+        return STATUS_SUCCESS;
+    }
+
+    KeInitializeEvent(&Context.Event, NotificationEvent, FALSE);
+    Context.FileObject = FileObject;
+    Context.IoRequestToCancel = IoRequestToCancel;
+    Context.Status = STATUS_PENDING;
+    Context.Found = FALSE;
+
+    KeInitializeApc(&Context.Apc,
+                    &Thread->Tcb,
+                    OriginalApcEnvironment,
+                    IopCancelIoFileExKernelApc,
+                    IopCancelIoFileExRundownApc,
+                    NULL,
+                    KernelMode,
+                    NULL);
+
+    if (!KeInsertQueueApc(&Context.Apc, &Context, NULL, IO_NO_INCREMENT))
+        return STATUS_SUCCESS;
+
+    /*
+     * Thread IRP lists are synchronized by disabling special kernel APCs in
+     * the owning thread.  Run the scan in that same thread context, then wait
+     * until the APC has either run or been rundown.
+     */
+    Status = KeWaitForSingleObject(&Context.Event,
+                                   Executive,
+                                   KernelMode,
+                                   FALSE,
+                                   NULL);
+
+    if (NT_SUCCESS(Status))
+    {
+        Status = Context.Status;
+        *Found = Context.Found;
+    }
+
+    return Status;
+}
+
+/**
+ * @name NtCancelIoFileEx
+ *
+ * Cancel matching pending I/O operations for a file object in the current
+ * process, regardless of the issuing thread.
+ *
+ * @implemented
+ */
+NTSTATUS
+NTAPI
+NtCancelIoFileEx(IN HANDLE FileHandle,
+                 IN PIO_STATUS_BLOCK IoRequestToCancel OPTIONAL,
+                 OUT PIO_STATUS_BLOCK IoStatusBlock)
+{
+    PFILE_OBJECT FileObject;
+    PEPROCESS Process;
+    PETHREAD Thread;
+    BOOLEAN FoundAny = FALSE;
+    BOOLEAN Found;
+    KPROCESSOR_MODE PreviousMode = KeGetPreviousMode();
+    NTSTATUS Status;
+    NTSTATUS ApcStatus;
+
+    PAGED_CODE();
+    IOTRACE(IO_API_DEBUG,
+            "FileHandle: %p IoRequestToCancel: %p\n",
+            FileHandle,
+            IoRequestToCancel);
+
+    if (PreviousMode != KernelMode)
+    {
+        _SEH2_TRY
+        {
+            ProbeForWriteIoStatusBlock(IoStatusBlock);
+        }
+        _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
+        {
+            _SEH2_YIELD(return _SEH2_GetExceptionCode());
+        }
+        _SEH2_END;
+    }
+
+    Status = ObReferenceObjectByHandle(FileHandle,
+                                       0,
+                                       IoFileObjectType,
+                                       PreviousMode,
+                                       (PVOID*)&FileObject,
+                                       NULL);
+    if (!NT_SUCCESS(Status))
+        return Status;
+
+    IopUpdateOperationCount(IopOtherTransfer);
+
+    Process = PsGetCurrentProcess();
+    Thread = PsGetNextProcessThread(Process, NULL);
+    while (Thread)
+    {
+        ApcStatus = IopCancelIoFileExInThread(Thread,
+                                             FileObject,
+                                             IoRequestToCancel,
+                                             &Found);
+        if (NT_SUCCESS(ApcStatus))
+        {
+            if (Found)
+                FoundAny = TRUE;
+        }
+        else if (Status == STATUS_SUCCESS)
+        {
+            Status = ApcStatus;
+        }
+
+        Thread = PsGetNextProcessThread(Process, Thread);
+    }
+
+    if ((Status == STATUS_SUCCESS) && !FoundAny)
+        Status = STATUS_NOT_FOUND;
+
+    _SEH2_TRY
+    {
+        IoStatusBlock->Status = Status;
+        IoStatusBlock->Information = 0;
+    }
+    _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
+    {
+    }
+    _SEH2_END;
+
+    ObDereferenceObject(FileObject);
+    return Status;
+}
+
 /*
  * @implemented
  */
