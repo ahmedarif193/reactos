@@ -100,6 +100,30 @@ FlushProcessWriteBuffers(
     VOID);
 
 WINBASEAPI
+BOOL
+WINAPI
+QueryFullProcessImageNameA(
+    _In_ HANDLE hProcess,
+    _In_ DWORD dwFlags,
+    _Out_writes_to_(*lpdwSize, *lpdwSize) LPSTR lpExeName,
+    _Inout_ PDWORD lpdwSize);
+
+WINBASEAPI
+BOOL
+WINAPI
+QueryFullProcessImageNameW(
+    _In_ HANDLE hProcess,
+    _In_ DWORD dwFlags,
+    _Out_writes_to_(*lpdwSize, *lpdwSize) LPWSTR lpExeName,
+    _Inout_ PDWORD lpdwSize);
+
+#ifdef UNICODE
+#define QueryFullProcessImageName QueryFullProcessImageNameW
+#else
+#define QueryFullProcessImageName QueryFullProcessImageNameA
+#endif
+
+WINBASEAPI
 _Success_(return != FALSE)
 BOOL
 WINAPI
