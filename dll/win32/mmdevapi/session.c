@@ -26,7 +26,9 @@
 #include <winternl.h>
 
 #include <wine/debug.h>
+#ifndef __REACTOS__
 #include <wine/unixlib.h>
+#endif
 
 #include "mmdevapi_private.h"
 
@@ -701,9 +703,9 @@ struct audio_session_wrapper *session_wrapper_create(struct audio_client *client
     if (!ret)
         return NULL;
 
-    ret->IAudioSessionControl2_iface.lpVtbl = &AudioSessionControl2_Vtbl;
-    ret->IChannelAudioVolume_iface.lpVtbl   = &ChannelAudioVolume_Vtbl;
-    ret->ISimpleAudioVolume_iface.lpVtbl    = &SimpleAudioVolume_Vtbl;
+    ret->IAudioSessionControl2_iface.lpVtbl = (IAudioSessionControl2Vtbl *)&AudioSessionControl2_Vtbl;
+    ret->IChannelAudioVolume_iface.lpVtbl   = (IChannelAudioVolumeVtbl *)&ChannelAudioVolume_Vtbl;
+    ret->ISimpleAudioVolume_iface.lpVtbl    = (ISimpleAudioVolumeVtbl *)&SimpleAudioVolume_Vtbl;
 
     ret->ref    = 1;
     ret->client = client;
