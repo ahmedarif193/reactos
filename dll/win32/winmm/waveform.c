@@ -878,26 +878,19 @@ static inline BOOL WINMM_IsMapper(UINT device)
     return (device == WAVE_MAPPER || device == (UINT16)WAVE_MAPPER);
 }
 
-static MMRESULT WINMM_TryDeviceMapping(WINMM_Device *device, WAVEFORMATEX *fmt,
-        WORD channels, DWORD freq, DWORD bits_per_samp, BOOL is_query, BOOL is_out)
+static MMRESULT WINMM_TryDeviceMappingFormat(WINMM_Device *device, WAVEFORMATEX *fmt,
+        WAVEFORMATEX *target, BOOL is_query, BOOL is_out)
 {
-    WAVEFORMATEX target, *closer_fmt = NULL;
+    WAVEFORMATEX *closer_fmt = NULL;
     HRESULT hr;
     MMRESULT mr;
 
-    TRACE("format: %u, channels: %u, sample rate: %lu, bit depth: %lu\n",
-            WAVE_FORMAT_PCM, channels, freq, bits_per_samp);
-
-    target.wFormatTag = WAVE_FORMAT_PCM;
-    target.nChannels = channels;
-    target.nSamplesPerSec = freq;
-    target.wBitsPerSample = bits_per_samp;
-    target.nBlockAlign = (target.nChannels * target.wBitsPerSample) / 8;
-    target.nAvgBytesPerSec = target.nSamplesPerSec * target.nBlockAlign;
-    target.cbSize = 0;
+    TRACE("target format: tag=%u channels=%u sample rate=%lu bit depth=%u\n",
+            target->wFormatTag, target->nChannels, target->nSamplesPerSec,
+            target->wBitsPerSample);
 
     hr = IAudioClient_IsFormatSupported(device->client,
-            AUDCLNT_SHAREMODE_SHARED, &target, &closer_fmt);
+            AUDCLNT_SHAREMODE_SHARED, target, &closer_fmt);
     CoTaskMemFree(closer_fmt);
     if(hr != S_OK)
         return WAVERR_BADFORMAT;
@@ -905,10 +898,10 @@ static MMRESULT WINMM_TryDeviceMapping(WINMM_Device *device, WAVEFORMATEX *fmt,
     /* device supports our target format, so see if MSACM can
      * do the conversion */
     if(is_out)
-        mr = acmStreamOpen(&device->acm_handle, NULL, fmt, &target, NULL,
+        mr = acmStreamOpen(&device->acm_handle, NULL, fmt, target, NULL,
                 0, 0, 0);
     else
-        mr = acmStreamOpen(&device->acm_handle, NULL, &target, fmt, NULL,
+        mr = acmStreamOpen(&device->acm_handle, NULL, target, fmt, NULL,
                 0, 0, 0);
     if(mr != MMSYSERR_NOERROR)
         return mr;
@@ -922,7 +915,7 @@ static MMRESULT WINMM_TryDeviceMapping(WINMM_Device *device, WAVEFORMATEX *fmt,
 
     hr = IAudioClient_Initialize(device->client, AUDCLNT_SHAREMODE_SHARED,
             AUDCLNT_STREAMFLAGS_EVENTCALLBACK | AUDCLNT_STREAMFLAGS_NOPERSIST,
-            AC_BUFLEN, 0, &target, &device->parent->session);
+            AC_BUFLEN, 0, target, &device->parent->session);
     if(hr != S_OK){
         WARN("Initialize failed: %08lx\n", hr);
         acmStreamClose(device->acm_handle, 0);
@@ -930,20 +923,49 @@ static MMRESULT WINMM_TryDeviceMapping(WINMM_Device *device, WAVEFORMATEX *fmt,
         return MMSYSERR_ERROR;
     }
 
-    device->bytes_per_frame = target.nBlockAlign;
-    device->samples_per_sec = target.nSamplesPerSec;
+    device->bytes_per_frame = target->nBlockAlign;
+    device->samples_per_sec = target->nSamplesPerSec;
 
     TRACE("Success!\n");
 
     return MMSYSERR_NOERROR;
 }
 
+static MMRESULT WINMM_TryDeviceMapping(WINMM_Device *device, WAVEFORMATEX *fmt,
+        WORD channels, DWORD freq, DWORD bits_per_samp, BOOL is_query, BOOL is_out)
+{
+    WAVEFORMATEX target;
+
+    target.wFormatTag = WAVE_FORMAT_PCM;
+    target.nChannels = channels;
+    target.nSamplesPerSec = freq;
+    target.wBitsPerSample = bits_per_samp;
+    target.nBlockAlign = (target.nChannels * target.wBitsPerSample) / 8;
+    target.nAvgBytesPerSec = target.nSamplesPerSec * target.nBlockAlign;
+    target.cbSize = 0;
+
+    return WINMM_TryDeviceMappingFormat(device, fmt, &target, is_query, is_out);
+}
+
 static MMRESULT WINMM_MapDevice(WINMM_Device *device, BOOL is_query, BOOL is_out)
 {
     MMRESULT mr;
     WAVEFORMATEXTENSIBLE *fmtex = (WAVEFORMATEXTENSIBLE*)device->orig_fmt;
+    WAVEFORMATEX *mix_fmt = NULL;
 
     TRACE("(%p, %u)\n", device, is_out);
+
+    if (SUCCEEDED(IAudioClient_GetMixFormat(device->client, &mix_fmt)))
+    {
+        mr = WINMM_TryDeviceMappingFormat(device,
+                device->orig_fmt,
+                mix_fmt,
+                is_query,
+                is_out);
+        CoTaskMemFree(mix_fmt);
+        if(mr == MMSYSERR_NOERROR)
+            return mr;
+    }
 
     /* set up the ACM stream */
     if(device->orig_fmt->wFormatTag != WAVE_FORMAT_PCM &&
@@ -1468,6 +1490,11 @@ static DWORD WINMM_FixedBufferLen(DWORD length, WINMM_Device *device)
     return length - length % device->bytes_per_frame;
 }
 
+static DWORD WINMM_FixedBufferLenForFrame(DWORD length, UINT32 bytes_per_frame)
+{
+    return bytes_per_frame ? length - length % bytes_per_frame : length;
+}
+
 static LRESULT WINMM_PrepareHeader(HWAVE hwave, WAVEHDR *header)
 {
     WINMM_Device *device = WINMM_GetDeviceFromHWAVE(hwave);
@@ -1757,98 +1784,145 @@ exit:
     }
 }
 
-static void WID_PullACMData(WINMM_Device *device)
+static WAVEHDR *WID_PullACMData(WINMM_Device *device)
 {
-    UINT32 packet;
-    DWORD packet_bytes;
-    DWORD flags;
-    BYTE *data;
-    WAVEHDR *queue;
-    HRESULT hr;
-    MMRESULT mr;
+    WAVEHDR *queue, *last = NULL;
+    UINT32 user_frame = device->orig_fmt->nBlockAlign;
 
-    if(device->acm_hdr.cbDstLength == 0){
-        hr = IAudioCaptureClient_GetBuffer(device->capture, &data, &packet,
-                &flags, NULL, NULL);
-        if(hr != S_OK){
+    for(;;){
+        UINT32 packet;
+        DWORD packet_bytes;
+        DWORD flags;
+        BYTE *data;
+        HRESULT hr;
+        MMRESULT mr;
+
+        if(device->acm_hdr.cbDstLength == 0){
+            hr = IAudioCaptureClient_GetBuffer(device->capture, &data, &packet,
+                    &flags, NULL, NULL);
+            if(hr != S_OK){
+                if(FAILED(hr))
+                    WARN("GetBuffer failed: %08lx\n", hr);
+                return last;
+            }
+
+            if(!packet){
+                IAudioCaptureClient_ReleaseBuffer(device->capture, packet);
+                return last;
+            }
+
+            acmStreamSize(device->acm_handle, packet * device->bytes_per_frame,
+                    &packet_bytes, ACM_STREAMSIZEF_SOURCE);
+
+            device->acm_offs = 0;
+
+            device->acm_hdr.cbStruct = sizeof(device->acm_hdr);
+            device->acm_hdr.fdwStatus = 0;
+            device->acm_hdr.dwUser = 0;
+            device->acm_hdr.pbSrc = data;
+            device->acm_hdr.cbSrcLength = packet * device->bytes_per_frame;
+            device->acm_hdr.cbSrcLengthUsed = 0;
+            device->acm_hdr.dwSrcUser = 0;
+            device->acm_hdr.pbDst = malloc(packet_bytes);
+            if(!device->acm_hdr.pbDst){
+                IAudioCaptureClient_ReleaseBuffer(device->capture, packet);
+                return last;
+            }
+            device->acm_hdr.cbDstLength = packet_bytes;
+            device->acm_hdr.cbDstLengthUsed = 0;
+            device->acm_hdr.dwDstUser = 0;
+
+            mr = acmStreamPrepareHeader(device->acm_handle, &device->acm_hdr, 0);
+            if(mr != MMSYSERR_NOERROR){
+                WARN("acmStreamPrepareHeader failed: %d\n", mr);
+                free(device->acm_hdr.pbDst);
+                device->acm_hdr.pbDst = NULL;
+                device->acm_hdr.cbDstLength = 0;
+                IAudioCaptureClient_ReleaseBuffer(device->capture, packet);
+                return last;
+            }
+
+            mr = acmStreamConvert(device->acm_handle, &device->acm_hdr, 0);
+            if(mr != MMSYSERR_NOERROR){
+                WARN("acmStreamConvert failed: %d\n", mr);
+                acmStreamUnprepareHeader(device->acm_handle, &device->acm_hdr, 0);
+                free(device->acm_hdr.pbDst);
+                device->acm_hdr.pbDst = NULL;
+                device->acm_hdr.cbDstLength = 0;
+                IAudioCaptureClient_ReleaseBuffer(device->capture, packet);
+                return last;
+            }
+
+            hr = IAudioCaptureClient_ReleaseBuffer(device->capture, packet);
             if(FAILED(hr))
-                WARN("GetBuffer failed: %08lx\n", hr);
-            return;
+                WARN("ReleaseBuffer failed: %08lx\n", hr);
+
+            device->played_frames += packet;
         }
 
-        acmStreamSize(device->acm_handle, packet * device->bytes_per_frame,
-                &packet_bytes, ACM_STREAMSIZEF_SOURCE);
-
-        device->acm_offs = 0;
-
-        device->acm_hdr.cbStruct = sizeof(device->acm_hdr);
-        device->acm_hdr.fdwStatus = 0;
-        device->acm_hdr.dwUser = 0;
-        device->acm_hdr.pbSrc = data;
-        device->acm_hdr.cbSrcLength = packet * device->bytes_per_frame;
-        device->acm_hdr.cbSrcLengthUsed = 0;
-        device->acm_hdr.dwSrcUser = 0;
-        device->acm_hdr.pbDst = malloc(packet_bytes);
-        device->acm_hdr.cbDstLength = packet_bytes;
-        device->acm_hdr.cbDstLengthUsed = 0;
-        device->acm_hdr.dwDstUser = 0;
-
-        mr = acmStreamPrepareHeader(device->acm_handle, &device->acm_hdr, 0);
-        if(mr != MMSYSERR_NOERROR){
-            WARN("acmStreamPrepareHeader failed: %d\n", mr);
-            return;
-        }
-
-        mr = acmStreamConvert(device->acm_handle, &device->acm_hdr, 0);
-        if(mr != MMSYSERR_NOERROR){
-            WARN("acmStreamConvert failed: %d\n", mr);
-            return;
-        }
-
-        hr = IAudioCaptureClient_ReleaseBuffer(device->capture, packet);
-        if(FAILED(hr))
-            WARN("ReleaseBuffer failed: %08lx\n", hr);
-
-        device->played_frames += packet;
-    }
-
-    queue = device->first;
-    while(queue){
-        UINT32 to_copy_bytes;
-
-        to_copy_bytes = min(WINMM_FixedBufferLen(queue->dwBufferLength, device) - queue->dwBytesRecorded,
-                WINMM_FixedBufferLen(device->acm_hdr.cbDstLengthUsed, device) - device->acm_offs);
-
-        memcpy(queue->lpData + queue->dwBytesRecorded,
-                device->acm_hdr.pbDst + device->acm_offs, to_copy_bytes);
-
-        queue->dwBytesRecorded += to_copy_bytes;
-        device->acm_offs += to_copy_bytes;
-
-        if(queue->dwBufferLength - queue->dwBytesRecorded <
-                device->bytes_per_frame){
-            queue->dwFlags &= ~WHDR_INQUEUE;
-            queue->dwFlags |= WHDR_DONE;
-            device->first = queue = queue->lpNext;
-        }
-
-        if(device->acm_offs >= WINMM_FixedBufferLen(device->acm_hdr.cbDstLengthUsed, device)){
+        if(device->acm_offs >= WINMM_FixedBufferLenForFrame(device->acm_hdr.cbDstLengthUsed, user_frame)){
             acmStreamUnprepareHeader(device->acm_handle, &device->acm_hdr, 0);
             free(device->acm_hdr.pbDst);
+            device->acm_hdr.pbDst = NULL;
             device->acm_hdr.cbDstLength = 0;
             device->acm_hdr.cbDstLengthUsed = 0;
+            if(last)
+                return last;
+            continue;
+        }
 
-            /* done with this ACM Header, so try to pull more data */
-            WID_PullACMData(device);
-            return;
+        queue = device->first;
+        while(queue){
+            UINT32 to_copy_bytes, queue_len, converted_len;
+
+            queue_len = WINMM_FixedBufferLenForFrame(queue->dwBufferLength, user_frame);
+            converted_len = WINMM_FixedBufferLenForFrame(device->acm_hdr.cbDstLengthUsed, user_frame);
+
+            if(queue->dwBytesRecorded < queue_len && device->acm_offs < converted_len){
+                to_copy_bytes = min(queue_len - queue->dwBytesRecorded, converted_len - device->acm_offs);
+
+                memcpy(queue->lpData + queue->dwBytesRecorded,
+                        device->acm_hdr.pbDst + device->acm_offs, to_copy_bytes);
+
+                queue->dwBytesRecorded += to_copy_bytes;
+                device->acm_offs += to_copy_bytes;
+            }
+
+            if(queue->dwBytesRecorded >= queue_len){
+                queue->dwFlags &= ~WHDR_INQUEUE;
+                queue->dwFlags |= WHDR_DONE;
+                last = queue;
+                device->first = queue = queue->lpNext;
+                if(!device->first)
+                    device->last = NULL;
+            }
+
+            if(device->acm_offs >= converted_len){
+                acmStreamUnprepareHeader(device->acm_handle, &device->acm_hdr, 0);
+                free(device->acm_hdr.pbDst);
+                device->acm_hdr.pbDst = NULL;
+                device->acm_hdr.cbDstLength = 0;
+                device->acm_hdr.cbDstLengthUsed = 0;
+                break;
+            }
+
+            if(last)
+                return last;
+        }
+
+        if(last)
+            return last;
+
+        if(device->acm_hdr.cbDstLength != 0){
+            /* out of WAVEHDRs to write into, so toss the rest of this packet */
+            acmStreamUnprepareHeader(device->acm_handle, &device->acm_hdr, 0);
+            free(device->acm_hdr.pbDst);
+            device->acm_hdr.pbDst = NULL;
+            device->acm_hdr.cbDstLength = 0;
+            device->acm_hdr.cbDstLengthUsed = 0;
+            return NULL;
         }
     }
-
-    /* out of WAVEHDRs to write into, so toss the rest of this packet */
-    acmStreamUnprepareHeader(device->acm_handle, &device->acm_hdr, 0);
-    free(device->acm_hdr.pbDst);
-    device->acm_hdr.cbDstLength = 0;
-    device->acm_hdr.cbDstLengthUsed = 0;
 }
 
 static void WID_PullData(WINMM_Device *device)
@@ -1867,7 +1941,7 @@ static void WID_PullData(WINMM_Device *device)
     first = device->first;
 
     if(device->acm_handle){
-        WID_PullACMData(device);
+        last = WID_PullACMData(device);
         goto exit;
     }
 
