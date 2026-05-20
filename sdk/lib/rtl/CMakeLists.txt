@@ -134,6 +134,7 @@ elseif(ARCH STREQUAL "arm64")
         arm64/debug_asm.S)
     list(APPEND SOURCE
         arm64/except.c
+        arm64/stubs.c
         arm64/unwind.c
         byteswap.c
         mem.c)
