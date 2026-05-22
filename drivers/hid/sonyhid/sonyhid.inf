@@ -24,6 +24,7 @@ DefaultDestDir = 12
 %HID\Vid_054C&Pid_05C4.DeviceDesc% = SonyHID_Inst,HID\Vid_054C&Pid_05C4&Col01
 %HID\Vid_054C&Pid_09CC.DeviceDesc% = SonyHID_Inst,HID\Vid_054C&Pid_09CC&Col01
 %HID\Vid_054C&Pid_0BA0.DeviceDesc% = SonyHID_Inst,HID\Vid_054C&Pid_0BA0&Col01
+%HID\Vid_054C&Pid_0CE6.DeviceDesc% = SonyHID_Inst,HID\Vid_054C&Pid_0CE6
 %HID\Vid_054C&Pid_0CE6.DeviceDesc% = SonyHID_Inst,HID\Vid_054C&Pid_0CE6&Col01
 %HID\Vid_054C&Pid_0DF2.DeviceDesc% = SonyHID_Inst,HID\Vid_054C&Pid_0DF2&Col01
 
