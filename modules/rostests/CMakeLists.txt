@@ -1,7 +1,7 @@
 
 start_module_group(rostests)
 
-if(NOT MSVC)
+if(CMAKE_C_COMPILER_ID STREQUAL "GNU")
     add_link_options("-Wl,-T,${CMAKE_CURRENT_SOURCE_DIR}/test-section.lds")
 endif()
 
