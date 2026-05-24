@@ -112,7 +112,6 @@ cmdenvvar(envvar_homepath   "HOMEPATH"   FALSE)
 
 ## NOTE: What would be nice is to create this list using /media/inf/shortcuts.inf
 ## and taking their default english translation!
-
 set(dir_allusers_desktop        "Profiles/All Users/Desktop")
 set(dir_startmenu_programs      "Profiles/All Users/Start Menu/Programs")
 set(dir_startmenu_admintools    "${dir_startmenu_programs}/Administrative Tools")
