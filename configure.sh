@@ -39,7 +39,7 @@ fi
 ROSBE_LLVM_ROOT="$ROSBE_ROOT/llvm-mingw"
 
 CMAKE_GENERATOR="Ninja"
-USE_CLANG=0
+USE_CLANG=1
 ARCH=amd64
 BUILD_TYPE=Debug
 BUILD_TYPE_SUFFIX=debug
@@ -48,7 +48,8 @@ USER_BUILD_TYPE=0
 
 usage() {
 	echo "Usage: configure.sh [options]"
-	echo "  --clang              Use Clang/LLVM from ~/.local/opt/rosbe/llvm-mingw"
+	echo "  --clang              Use Clang/LLVM from ~/.local/opt/rosbe/llvm-mingw (default)"
+	echo "  --gcc                Use GCC from ~/.local/opt/rosbe/mingw-gcc"
 	echo "  -a, --arch <arch>    Target architecture: amd64, i386, arm64 (default: amd64)"
 	echo "  -r, --release        Configure a Release build (default: Debug)"
 	echo "  makefiles            Use Unix Makefiles generator (default: Ninja)"
@@ -176,6 +177,9 @@ while [ $# -gt 0 ]; do
 			;;
 		--clang|clang|Clang)
 			USE_CLANG=1
+			;;
+		--gcc|gcc|GCC)
+			USE_CLANG=0
 			;;
 		-a|--arch)
 			shift
