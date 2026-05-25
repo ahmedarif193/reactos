@@ -89,25 +89,6 @@ static VOID Arm64PopulateEarlyDeviceRanges(PLOADER_PARAMETER_BLOCK LoaderBlock);
 static VOID Arm64PopulatePsciConfiguration(PLOADER_PARAMETER_BLOCK LoaderBlock);
 
 /* -------------------------------------------------------------------------- */
-/* Minimal PL011 UART helper for bring-up logs                                 */
-/* Platform-specific UART addresses:                                           */
-/*   - QEMU virt:    0x09000000                                                */
-/*   - Raspberry Pi 5 (BCM2712): 0x107d001000 (UART0 on debug header)          */
-/*   - Raspberry Pi 4 (BCM2711): 0xFE201000                                    */
-/* -------------------------------------------------------------------------- */
-#if defined(TARGET_QEMU_VIRT)
-#define PL011_BASE   0x09000000ULL
-#elif defined(TARGET_RPI4)
-#define PL011_BASE   0xFE201000ULL
-#else
-/* Default to Raspberry Pi 5 (BCM2712) */
-#define PL011_BASE   0x107D001000ULL
-#endif
-#define PL011_DR     (*(volatile ULONG *)(PL011_BASE + 0x00))
-#define PL011_FR     (*(volatile ULONG *)(PL011_BASE + 0x18))
-#define PL011_TXFF   (1u << 5)
-
-/* -------------------------------------------------------------------------- */
 /* ARM64-specific data structures for kernel initialization                   */
 /* -------------------------------------------------------------------------- */
 /*
