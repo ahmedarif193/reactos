@@ -22,8 +22,6 @@
 #include <debug.h>
 #include <drivers/acpi/acpi.h>
 
-/* Define implementation flag to get variable definitions */
-#define _EARLY_UART_IMPL
 #include <reactos/arm64/early_uart.h>
 
 /*
@@ -43,10 +41,27 @@ extern EFI_HANDLE GlobalImageHandle;
  * SPCR table definitions for ACPI Serial Port Console Redirection.
  */
 #define SPCR_SIGNATURE          0x52435053  /* "SPCR" */
-#define SPCR_INTERFACE_16550    0x00
-#define SPCR_INTERFACE_ARM_PL011 0x0E
-#define SPCR_INTERFACE_ARM_SBSA 0x0E        /* Same as PL011 for our purposes */
-#define SPCR_INTERFACE_QUP_GENI 0x13 /* TODO: Implement GENI serial for Snapdragon devices */
+#define DBG2_SIGNATURE          0x32474244  /* "DBG2" */
+
+/*
+ * Serial sub-types per Microsoft DBG2 spec (mirrored in ACPICA actbl1.h).
+ * DBG2.PortSubtype and modern SPCR.InterfaceType share this namespace.
+ *
+ * Note: very old SPCR firmware uses InterfaceType=0x0E for ARM PL011 (the
+ * legacy SPCR encoding, predating the DBG2 unification). We accept both
+ * 0x03 (current) and 0x0E (legacy SBSA-generic, used in the wild for
+ * PL011-compatible UARTs) below.
+ */
+#define SERIAL_SUBTYPE_16550_COMPATIBLE 0x0000
+#define SERIAL_SUBTYPE_16550_SUBSET     0x0001
+#define SERIAL_SUBTYPE_ARM_PL011        0x0003
+#define SERIAL_SUBTYPE_NS16550_NV       0x0005
+#define SERIAL_SUBTYPE_ARM_SBSA_32      0x000D
+#define SERIAL_SUBTYPE_ARM_SBSA_GENERIC 0x000E /* also legacy SPCR PL011 */
+#define SERIAL_SUBTYPE_BCM2835          0x0010
+#define SERIAL_SUBTYPE_16550_WITH_GAS   0x0012
+
+#define DBG2_PORT_TYPE_SERIAL           0x8000
 
 #define ACPI_GAS_SPACE_SYSTEM_MEMORY    0
 #define ACPI_GAS_SPACE_SYSTEM_IO        1
@@ -80,6 +95,30 @@ typedef struct _SPCR_TABLE
     UCHAR PciSegment;
     ULONG Reserved2;
 } SPCR_TABLE, *PSPCR_TABLE;
+
+/* ACPI DBG2 (Debug Port Table 2) - Microsoft spec */
+typedef struct _DBG2_TABLE
+{
+    DESCRIPTION_HEADER Header;
+    ULONG OffsetDbgDeviceInfo;
+    ULONG NumberDbgDeviceInfo;
+} DBG2_TABLE, *PDBG2_TABLE;
+
+typedef struct _DBG2_DEVICE_INFO
+{
+    UCHAR  Revision;
+    USHORT Length;
+    UCHAR  NumberOfGenericAddressRegisters;
+    USHORT NameSpaceStringLength;
+    USHORT NameSpaceStringOffset;
+    USHORT OemDataLength;
+    USHORT OemDataOffset;
+    USHORT PortType;
+    USHORT PortSubtype;
+    USHORT Reserved;
+    USHORT BaseAddressRegisterOffset;
+    USHORT AddressSizeOffset;
+} DBG2_DEVICE_INFO, *PDBG2_DEVICE_INFO;
 #pragma pack(pop)
 
 /*
@@ -111,103 +150,184 @@ EarlyUartLocateRsdp(VOID)
 }
 
 /*
+ * Generic ACPI table lookup. Walks XSDT first (ACPI 2.0+), falls back to RSDT.
+ * Returns a pointer to the table header, or NULL.
+ */
+static PDESCRIPTION_HEADER
+EarlyUartFindAcpiTable(ULONG Signature)
+{
+    PRSDP Rsdp = EarlyUartLocateRsdp();
+    if (!Rsdp)
+        return NULL;
+
+    if (Rsdp->Revision >= 2 && Rsdp->XsdtAddress.QuadPart != 0)
+    {
+        PXSDT Xsdt = (PXSDT)(UINTN)Rsdp->XsdtAddress.QuadPart;
+        if (Xsdt && Xsdt->Header.Length > sizeof(DESCRIPTION_HEADER))
+        {
+            ULONG EntryCount = (Xsdt->Header.Length - sizeof(DESCRIPTION_HEADER)) /
+                               sizeof(PHYSICAL_ADDRESS);
+            for (ULONG i = 0; i < EntryCount; ++i)
+            {
+                UINTN TablePa = (UINTN)Xsdt->Tables[i].QuadPart;
+                if (TablePa == 0)
+                    continue;
+                PDESCRIPTION_HEADER Hdr = (PDESCRIPTION_HEADER)TablePa;
+                if (Hdr->Signature == Signature)
+                    return Hdr;
+            }
+        }
+    }
+
+    if (Rsdp->RsdtAddress != 0)
+    {
+        PRSDT Rsdt = (PRSDT)(UINTN)Rsdp->RsdtAddress;
+        if (Rsdt && Rsdt->Header.Length > sizeof(DESCRIPTION_HEADER))
+        {
+            ULONG EntryCount = (Rsdt->Header.Length - sizeof(DESCRIPTION_HEADER)) /
+                               sizeof(ULONG);
+            for (ULONG i = 0; i < EntryCount; ++i)
+            {
+                UINTN TablePa = (UINTN)Rsdt->Tables[i];
+                if (TablePa == 0)
+                    continue;
+                PDESCRIPTION_HEADER Hdr = (PDESCRIPTION_HEADER)TablePa;
+                if (Hdr->Signature == Signature)
+                    return Hdr;
+            }
+        }
+    }
+
+    return NULL;
+}
+
+/*
+ * Map a serial port subtype (used by both SPCR.InterfaceType and
+ * DBG2.PortSubtype - they share Microsoft's serial subtype namespace) to an
+ * ARM64_UART_INTERFACE. Unknown subtypes return Arm64UartUnknown so the
+ * caller leaves the UART disabled rather than poking foreign registers as
+ * if they were PL011.
+ */
+static ARM64_UART_INTERFACE
+EarlyUartInterfaceFromSubtype(USHORT Subtype)
+{
+    switch (Subtype)
+    {
+        case SERIAL_SUBTYPE_ARM_PL011:
+        case SERIAL_SUBTYPE_ARM_SBSA_32:
+        case SERIAL_SUBTYPE_ARM_SBSA_GENERIC:
+            return Arm64UartPl011;
+
+        case SERIAL_SUBTYPE_16550_COMPATIBLE:
+        case SERIAL_SUBTYPE_16550_SUBSET:
+        case SERIAL_SUBTYPE_NS16550_NV:
+        case SERIAL_SUBTYPE_16550_WITH_GAS:
+        case SERIAL_SUBTYPE_BCM2835:    /* RPi mini UART - 16550-ish */
+            return Arm64UartNs16550;
+
+        /*
+         * Qualcomm MSM/SDM/SM GENI/QUP, i.MX, OMAP, USIF, SAM5250, DCC: all
+         * have their own register layouts. TODO: add proper drivers; until
+         * then we report Unknown so EarlyUartReady() blocks any I/O and
+         * EarlyUartPutc becomes a no-op rather than scribbling on whatever
+         * device happens to live at that MMIO base.
+         */
+        default:
+            return Arm64UartUnknown;
+    }
+}
+
+/*
  * Locate SPCR table from ACPI tables.
  * Returns the UART base address if found, 0 otherwise.
  */
 static UINT64
 EarlyUartLocateSpcrAddress(_Out_opt_ ARM64_UART_INTERFACE *UartInterface)
 {
-    PRSDP Rsdp;
-    PSPCR_TABLE Spcr = NULL;
+    PSPCR_TABLE Spcr;
 
     if (UartInterface)
         *UartInterface = Arm64UartUnknown;
 
-    Rsdp = EarlyUartLocateRsdp();
-    if (!Rsdp)
+    Spcr = (PSPCR_TABLE)EarlyUartFindAcpiTable(SPCR_SIGNATURE);
+    if (!Spcr || Spcr->Header.Length < sizeof(*Spcr))
         return 0;
-
-    /* Try XSDT first (ACPI 2.0+) */
-    if (Rsdp->Revision >= 2 && Rsdp->XsdtAddress.QuadPart != 0)
-    {
-        PXSDT Xsdt = (PXSDT)(UINTN)Rsdp->XsdtAddress.QuadPart;
-        if (Xsdt)
-        {
-            ULONG EntryCount = 0;
-            if (Xsdt->Header.Length > sizeof(DESCRIPTION_HEADER))
-                EntryCount = (Xsdt->Header.Length - sizeof(DESCRIPTION_HEADER)) / sizeof(PHYSICAL_ADDRESS);
-
-            for (ULONG i = 0; i < EntryCount; ++i)
-            {
-                UINTN TablePa = (UINTN)Xsdt->Tables[i].QuadPart;
-                if (TablePa == 0)
-                    continue;
-
-                PSPCR_TABLE Candidate = (PSPCR_TABLE)TablePa;
-                if (Candidate->Header.Signature == SPCR_SIGNATURE)
-                {
-                    Spcr = Candidate;
-                    break;
-                }
-            }
-        }
-    }
-
-    /* Fallback to RSDT (ACPI 1.0) */
-    if (!Spcr && Rsdp->RsdtAddress != 0)
-    {
-        PRSDT Rsdt = (PRSDT)(UINTN)Rsdp->RsdtAddress;
-        if (Rsdt)
-        {
-            ULONG EntryCount = 0;
-            if (Rsdt->Header.Length > sizeof(DESCRIPTION_HEADER))
-                EntryCount = (Rsdt->Header.Length - sizeof(DESCRIPTION_HEADER)) / sizeof(ULONG);
-
-            for (ULONG i = 0; i < EntryCount; ++i)
-            {
-                UINTN TablePa = (UINTN)Rsdt->Tables[i];
-                if (TablePa == 0)
-                    continue;
-
-                PSPCR_TABLE Candidate = (PSPCR_TABLE)TablePa;
-                if (Candidate->Header.Signature == SPCR_SIGNATURE)
-                {
-                    Spcr = Candidate;
-                    break;
-                }
-            }
-        }
-    }
-
-    if (!Spcr)
-        return 0;
-
-    /* Validate SPCR for PL011-compatible UART */
-    if (Spcr->InterfaceType == SPCR_INTERFACE_ARM_PL011)
-    {
-        if (UartInterface)
-            *UartInterface = Arm64UartPl011;
-    }
-    else if (Spcr->InterfaceType == SPCR_INTERFACE_16550)
-    {
-        if (UartInterface)
-            *UartInterface = Arm64UartNs16550;
-    }
-    else
-    {
-        /* Unknown interface type (e.g. 0x13 QUP/GENI on Qualcomm) */
-    }
 
     if (Spcr->SerialPort.AddressSpaceID != ACPI_GAS_SPACE_SYSTEM_MEMORY)
-    {
-        /* Not memory-mapped I/O */
         return 0;
-    }
 
     if (Spcr->SerialPort.Address.QuadPart == 0)
         return 0;
 
+    if (UartInterface)
+        *UartInterface = EarlyUartInterfaceFromSubtype(Spcr->InterfaceType);
+
     return Spcr->SerialPort.Address.QuadPart;
+}
+
+/*
+ * Locate the first usable serial entry in DBG2. DBG2 is what most modern
+ * Windows-on-ARM firmware populates (Surface family, Qualcomm reference
+ * boards) - sometimes in addition to SPCR, sometimes alone. Walked as a
+ * fallback when SPCR is missing.
+ */
+static UINT64
+EarlyUartLocateDbg2Address(_Out_opt_ ARM64_UART_INTERFACE *UartInterface)
+{
+    PDBG2_TABLE Dbg2;
+    PUCHAR Cursor;
+    PUCHAR TableEnd;
+    ULONG Index;
+
+    if (UartInterface)
+        *UartInterface = Arm64UartUnknown;
+
+    Dbg2 = (PDBG2_TABLE)EarlyUartFindAcpiTable(DBG2_SIGNATURE);
+    if (!Dbg2 || Dbg2->Header.Length < sizeof(*Dbg2))
+        return 0;
+
+    TableEnd = (PUCHAR)Dbg2 + Dbg2->Header.Length;
+    Cursor = (PUCHAR)Dbg2 + Dbg2->OffsetDbgDeviceInfo;
+    if (Cursor < (PUCHAR)Dbg2 || Cursor > TableEnd)
+        return 0;
+
+    for (Index = 0; Index < Dbg2->NumberDbgDeviceInfo; ++Index)
+    {
+        PDBG2_DEVICE_INFO Dev;
+        PGEN_ADDR Gas;
+
+        if (Cursor + sizeof(*Dev) > TableEnd)
+            break;
+
+        Dev = (PDBG2_DEVICE_INFO)Cursor;
+
+        if (Dev->Length < sizeof(*Dev) || Cursor + Dev->Length > TableEnd)
+            break;
+
+        if (Dev->PortType != DBG2_PORT_TYPE_SERIAL ||
+            Dev->NumberOfGenericAddressRegisters == 0 ||
+            Dev->BaseAddressRegisterOffset == 0 ||
+            (USHORT)(Dev->BaseAddressRegisterOffset + sizeof(GEN_ADDR)) > Dev->Length)
+        {
+            Cursor += Dev->Length;
+            continue;
+        }
+
+        Gas = (PGEN_ADDR)(Cursor + Dev->BaseAddressRegisterOffset);
+        if (Gas->AddressSpaceID != ACPI_GAS_SPACE_SYSTEM_MEMORY ||
+            Gas->Address.QuadPart == 0)
+        {
+            Cursor += Dev->Length;
+            continue;
+        }
+
+        if (UartInterface)
+            *UartInterface = EarlyUartInterfaceFromSubtype(Dev->PortSubtype);
+
+        return Gas->Address.QuadPart;
+    }
+
+    return 0;
 }
 
 /*
@@ -369,106 +489,6 @@ EarlyUartDetectFromSmbios(VOID)
 }
 
 /*
- * Check if a physical address range is mapped in UEFI memory map.
- * Used to probe for known UART addresses.
- */
-static BOOLEAN
-EarlyUartIsAddressMapped(UINT64 PhysAddr, UINT64 Length)
-{
-    EFI_BOOT_SERVICES *Bs;
-    EFI_STATUS Status;
-    EFI_MEMORY_DESCRIPTOR *Map = NULL;
-    UINTN MapSize = 0, MapKey = 0, DescSize = 0;
-    UINT32 DescVer = 0;
-    BOOLEAN Found = FALSE;
-    UINTN Count, i;
-    UINT64 Start, End;
-
-    if (!GlobalSystemTable || !GlobalSystemTable->BootServices)
-        return FALSE;
-
-    Bs = GlobalSystemTable->BootServices;
-
-    /* Get required buffer size */
-    Status = Bs->GetMemoryMap(&MapSize, NULL, &MapKey, &DescSize, &DescVer);
-    if (Status != EFI_BUFFER_TOO_SMALL && Status != EFI_SUCCESS)
-        return FALSE;
-
-    if (DescSize == 0)
-        DescSize = sizeof(EFI_MEMORY_DESCRIPTOR);
-
-    /* Add some extra space for map changes */
-    MapSize += DescSize * 4;
-
-    Status = Bs->AllocatePool(EfiLoaderData, MapSize, (VOID**)&Map);
-    if (EFI_ERROR(Status) || !Map)
-        return FALSE;
-
-    Status = Bs->GetMemoryMap(&MapSize, Map, &MapKey, &DescSize, &DescVer);
-    if (EFI_ERROR(Status))
-    {
-        Bs->FreePool(Map);
-        return FALSE;
-    }
-
-    Count = MapSize / DescSize;
-    Start = PhysAddr;
-    End = PhysAddr + Length;
-
-    for (i = 0; i < Count; ++i)
-    {
-        EFI_MEMORY_DESCRIPTOR *Desc = (EFI_MEMORY_DESCRIPTOR*)((UINT8*)Map + i * DescSize);
-        UINT64 DescStart = (UINT64)Desc->PhysicalStart;
-        UINT64 DescEnd = DescStart + ((UINT64)Desc->NumberOfPages << 12);
-
-        if (Start >= DescStart && End <= DescEnd)
-        {
-            /* Check if it's a memory-mapped I/O region or reserved */
-            if (Desc->Type == EfiMemoryMappedIO ||
-                Desc->Type == EfiMemoryMappedIOPortSpace ||
-                Desc->Type == EfiReservedMemoryType)
-            {
-                Found = TRUE;
-            }
-            break;
-        }
-    }
-
-    Bs->FreePool(Map);
-    return Found;
-}
-
-/*
- * Probe known UART addresses to detect platform.
- * This is a fallback when ACPI/SMBIOS don't provide information.
- */
-static ARM64_PLATFORM_ID
-EarlyUartProbeKnownAddresses(UINT64 *OutUartAddress)
-{
-    /* Known UART addresses in order of likelihood */
-    static const struct {
-        UINT64 Address;
-        ARM64_PLATFORM_ID Platform;
-    } KnownUarts[] = {
-        { ARM64_UART_QEMU_VIRT,    Arm64PlatformQemuVirt },
-        { ARM64_UART_RPI5_BCM2712, Arm64PlatformRpi5 },
-        { ARM64_UART_RPI4_BCM2711, Arm64PlatformRpi4 },
-        { ARM64_UART_RPI3_BCM2837, Arm64PlatformRpi3 },
-    };
-
-    for (ULONG i = 0; i < sizeof(KnownUarts) / sizeof(KnownUarts[0]); ++i)
-    {
-        if (EarlyUartIsAddressMapped(KnownUarts[i].Address, 0x1000))
-        {
-            *OutUartAddress = KnownUarts[i].Address;
-            return KnownUarts[i].Platform;
-        }
-    }
-
-    return Arm64PlatformUnknown;
-}
-
-/*
  * Get UART address for a known platform.
  */
 static UINT64
@@ -505,77 +525,54 @@ EarlyUartDetectPlatform(VOID)
 {
     UINT64 SpcrAddress;
     ARM64_PLATFORM_ID Platform;
-    UINT64 ProbeAddress = 0;
     ARM64_UART_INTERFACE UartInterface = Arm64UartUnknown;
 
     /* Method 1: ACPI SPCR table */
     SpcrAddress = EarlyUartLocateSpcrAddress(&UartInterface);
     if (SpcrAddress != 0)
     {
-        /* SPCR found - determine platform from address */
         EarlyUartBaseAddress = SpcrAddress;
-        EarlyUartInterface = (UartInterface != Arm64UartUnknown) ?
-                             UartInterface :
-                             EarlyUartInferInterfaceFromAddress(SpcrAddress);
-        /* If interface is still unknown (e.g. SPCR type 0x13 QUP/GENI),
-         * leave it unset. EarlyUartReady() will return FALSE and all
-         * early prints become no-ops, instead of writing PL011 sequences
-         * to a foreign register block and triggering a synchronous abort. */
-
-        /* Match address to known platform */
+        EarlyUartInterface = UartInterface;
+        /* Match address to a known platform for diagnostic naming */
         if (SpcrAddress == ARM64_UART_QEMU_VIRT)
-        {
             EarlyUartPlatformId = Arm64PlatformQemuVirt;
-        }
         else if (SpcrAddress == ARM64_UART_RPI3_BCM2837)
-        {
             EarlyUartPlatformId = Arm64PlatformRpi3;
-        }
         else if (SpcrAddress == ARM64_UART_RPI4_BCM2711)
-        {
             EarlyUartPlatformId = Arm64PlatformRpi4;
-        }
         else if (SpcrAddress == ARM64_UART_RPI5_BCM2712)
-        {
             EarlyUartPlatformId = Arm64PlatformRpi5;
-        }
         else
-        {
-            /* Unknown UART address from SPCR - use it anyway */
             EarlyUartPlatformId = Arm64PlatformGenericAcpi;
-        }
-
         return EarlyUartPlatformId;
     }
 
-    /* Method 2: SMBIOS system information */
+    /* Method 2: ACPI DBG2 table (preferred by modern Windows-on-ARM firmware) */
+    SpcrAddress = EarlyUartLocateDbg2Address(&UartInterface);
+    if (SpcrAddress != 0)
+    {
+        EarlyUartBaseAddress = SpcrAddress;
+        EarlyUartInterface = UartInterface;
+        EarlyUartPlatformId = Arm64PlatformGenericAcpi;
+        return EarlyUartPlatformId;
+    }
+
+    /* Method 3: SMBIOS system information (RPi/QEMU identification) */
     Platform = EarlyUartDetectFromSmbios();
     if (Platform != Arm64PlatformUnknown)
     {
         EarlyUartPlatformId = Platform;
         EarlyUartBaseAddress = EarlyUartGetAddressForPlatform(Platform);
         EarlyUartInterface = EarlyUartInferInterfaceFromAddress(EarlyUartBaseAddress);
-        if (EarlyUartInterface == Arm64UartUnknown)
-            EarlyUartInterface = Arm64UartPl011;
         return EarlyUartPlatformId;
     }
 
-    /* Method 3: Probe known UART addresses in memory map */
-    Platform = EarlyUartProbeKnownAddresses(&ProbeAddress);
-    if (Platform != Arm64PlatformUnknown && ProbeAddress != 0)
-    {
-        EarlyUartPlatformId = Platform;
-        EarlyUartBaseAddress = ProbeAddress;
-        EarlyUartInterface = EarlyUartInferInterfaceFromAddress(ProbeAddress);
-        if (EarlyUartInterface == Arm64UartUnknown)
-            EarlyUartInterface = Arm64UartPl011;
-        return EarlyUartPlatformId;
-    }
-
-    /* Method 4: Nothing detected. Leave the UART disabled rather than
-     * guessing — the previous default (QEMU virt PL011 @ 0x09000000) caused
+    /*
+     * Method 5: nothing detected. Leave the UART disabled rather than
+     * guessing - the previous default (QEMU virt PL011 @ 0x09000000) caused
      * a synchronous abort when used on Qualcomm/other SoCs where that PA
-     * is not MMIO. EarlyUartReady() will return FALSE and prints no-op. */
+     * is not MMIO. EarlyUartReady() returns FALSE and prints no-op.
+     */
     EarlyUartPlatformId = Arm64PlatformUnknown;
     EarlyUartBaseAddress = 0;
     EarlyUartInterface = Arm64UartUnknown;
