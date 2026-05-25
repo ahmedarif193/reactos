@@ -1355,6 +1355,137 @@ VirtGpuRangeValid(
 }
 
 static BOOLEAN
+VirtGpuTransferPackedRows(
+    _In_ PVIRTGPU_3D_TRANSFER Transfer,
+    _Out_ PULONG RowBytes)
+{
+    if ((Transfer == NULL) ||
+        (RowBytes == NULL) ||
+        (Transfer->Depth != 1) ||
+        (Transfer->Height == 0) ||
+        (Transfer->Size == 0) ||
+        (Transfer->Stride == 0) ||
+        ((Transfer->Size % Transfer->Height) != 0))
+    {
+        return FALSE;
+    }
+
+    *RowBytes = Transfer->Size / Transfer->Height;
+    return (*RowBytes != 0) && (*RowBytes <= Transfer->Stride);
+}
+
+static BOOLEAN
+VirtGpuTransferBackingRangeValid(
+    _In_ PVIRTGPU_3D_TRANSFER Transfer,
+    _In_ ULONG BackingSize)
+{
+    ULONG RowBytes;
+    ULONGLONG LastRowOffset;
+    ULONGLONG EndOffset;
+
+    if (Transfer == NULL)
+        return FALSE;
+
+    if (!VirtGpuTransferPackedRows(Transfer, &RowBytes))
+        return VirtGpuRangeValid(Transfer->Offset, Transfer->Size, BackingSize);
+
+    LastRowOffset = Transfer->Offset +
+                    ((ULONGLONG)(Transfer->Height - 1) * Transfer->Stride);
+    EndOffset = LastRowOffset + RowBytes;
+    return (LastRowOffset >= Transfer->Offset) &&
+           (EndOffset >= LastRowOffset) &&
+           (EndOffset <= BackingSize);
+}
+
+static VOID
+VirtGpuCopyTransferDataToBacking(
+    _In_ PVIRTGPU_3D_RESOURCE_STATE Resource,
+    _In_ PVIRTGPU_3D_TRANSFER Transfer,
+    _In_reads_bytes_(Transfer->Size) const UCHAR* Data)
+{
+    ULONG RowBytes;
+    ULONG Row;
+
+    if ((Resource == NULL) ||
+        (Transfer == NULL) ||
+        (Data == NULL) ||
+        (Transfer->Size == 0))
+    {
+        return;
+    }
+
+    if (VirtGpuTransferPackedRows(Transfer, &RowBytes))
+    {
+        for (Row = 0; Row < Transfer->Height; ++Row)
+        {
+            VideoPortMoveMemory((PUCHAR)Resource->BackingVirtual +
+                                (ULONG)Transfer->Offset +
+                                (Row * Transfer->Stride),
+                                (PVOID)(Data + (Row * RowBytes)),
+                                RowBytes);
+        }
+        return;
+    }
+
+    VideoPortMoveMemory((PUCHAR)Resource->BackingVirtual +
+                        (ULONG)Transfer->Offset,
+                        (PVOID)Data,
+                        Transfer->Size);
+}
+
+static VOID
+VirtGpuCopyTransferToBacking(
+    _In_ PVIRTGPU_3D_RESOURCE_STATE Resource,
+    _In_ PVIRTGPU_3D_TRANSFER Transfer)
+{
+    VirtGpuCopyTransferDataToBacking(Resource, Transfer, Transfer->Data);
+}
+
+static VOID
+VirtGpuCopyBackingToTransferData(
+    _In_ PVIRTGPU_3D_RESOURCE_STATE Resource,
+    _In_ PVIRTGPU_3D_TRANSFER Transfer,
+    _Out_writes_bytes_(Transfer->Size) UCHAR* Data)
+{
+    ULONG RowBytes;
+    ULONG Row;
+
+    if ((Resource == NULL) ||
+        (Transfer == NULL) ||
+        (Data == NULL) ||
+        (Transfer->Size == 0))
+    {
+        return;
+    }
+
+    if (VirtGpuTransferPackedRows(Transfer, &RowBytes))
+    {
+        for (Row = 0; Row < Transfer->Height; ++Row)
+        {
+            VideoPortMoveMemory(Data + (Row * RowBytes),
+                                (PUCHAR)Resource->BackingVirtual +
+                                (ULONG)Transfer->Offset +
+                                (Row * Transfer->Stride),
+                                RowBytes);
+        }
+        return;
+    }
+
+    VideoPortMoveMemory(Data,
+                        (PUCHAR)Resource->BackingVirtual +
+                        (ULONG)Transfer->Offset,
+                        Transfer->Size);
+}
+
+static VOID
+VirtGpuCopyBackingToTransfer(
+    _In_ PVIRTGPU_3D_RESOURCE_STATE Resource,
+    _In_ PVIRTGPU_3D_TRANSFER Transfer)
+{
+    VirtGpuCopyBackingToTransferData(Resource, Transfer, Transfer->Data);
+}
+
+static BOOLEAN
 VirtGpuAttachResourceBacking(
     _Inout_ PVIRTGPU_DEVICE_EXTENSION DeviceExtension,
     _Inout_ PVIRTGPU_3D_RESOURCE_STATE Resource)
@@ -1851,14 +1982,13 @@ VirtGpuContextResource(
 }
 
 static BOOLEAN
-VirtGpuTransferHost3D(
+VirtGpuBuildTransferHost3D(
     _Inout_ PVIRTGPU_DEVICE_EXTENSION DeviceExtension,
     _In_ BOOLEAN ToHost,
     _In_ PVIRTGPU_3D_TRANSFER Transfer,
+    _Out_ PVIRTGPU_TRANSFER_HOST_3D Request,
     _Out_opt_ PULONGLONG FenceId)
 {
-    VIRTGPU_TRANSFER_HOST_3D Request;
-
     if ((Transfer->Width == 0) ||
         (Transfer->Height == 0) ||
         (Transfer->Depth == 0) ||
@@ -1870,28 +2000,69 @@ VirtGpuTransferHost3D(
         return FALSE;
     }
 
-    VideoPortZeroMemory(&Request, sizeof(Request));
-    Request.Header.Type = ToHost ?
+    VideoPortZeroMemory(Request, sizeof(*Request));
+    Request->Header.Type = ToHost ?
         VIRTGPU_CMD_TRANSFER_TO_HOST_3D :
         VIRTGPU_CMD_TRANSFER_FROM_HOST_3D;
-    Request.Header.ContextId = Transfer->ContextId;
+    Request->Header.ContextId = Transfer->ContextId;
     VirtGpuPrepareFence(DeviceExtension,
-                        &Request.Header,
+                        &Request->Header,
                         Transfer->RingIndex,
                         FenceId);
-    Request.Box.X = Transfer->X;
-    Request.Box.Y = Transfer->Y;
-    Request.Box.Z = Transfer->Z;
-    Request.Box.Width = Transfer->Width;
-    Request.Box.Height = Transfer->Height;
-    Request.Box.Depth = Transfer->Depth;
-    Request.Offset = Transfer->Offset;
-    Request.ResourceId = Transfer->ResourceId;
-    Request.Level = Transfer->Level;
-    Request.Stride = Transfer->Stride;
-    Request.LayerStride = Transfer->LayerStride;
+    Request->Box.X = Transfer->X;
+    Request->Box.Y = Transfer->Y;
+    Request->Box.Z = Transfer->Z;
+    Request->Box.Width = Transfer->Width;
+    Request->Box.Height = Transfer->Height;
+    Request->Box.Depth = Transfer->Depth;
+    Request->Offset = Transfer->Offset;
+    Request->ResourceId = Transfer->ResourceId;
+    Request->Level = Transfer->Level;
+    Request->Stride = Transfer->Stride;
+    Request->LayerStride = Transfer->LayerStride;
+
+    return TRUE;
+}
+
+static BOOLEAN
+VirtGpuTransferHost3D(
+    _Inout_ PVIRTGPU_DEVICE_EXTENSION DeviceExtension,
+    _In_ BOOLEAN ToHost,
+    _In_ PVIRTGPU_3D_TRANSFER Transfer,
+    _Out_opt_ PULONGLONG FenceId)
+{
+    VIRTGPU_TRANSFER_HOST_3D Request;
+
+    if (!VirtGpuBuildTransferHost3D(DeviceExtension,
+                                    ToHost,
+                                    Transfer,
+                                    &Request,
+                                    FenceId))
+    {
+        return FALSE;
+    }
 
     return VirtGpuCommandOk(DeviceExtension, &Request, sizeof(Request));
+}
+
+static BOOLEAN
+VirtGpuTransferHost3DAsync(
+    _Inout_ PVIRTGPU_DEVICE_EXTENSION DeviceExtension,
+    _In_ PVIRTGPU_3D_TRANSFER Transfer,
+    _Out_opt_ PULONGLONG FenceId)
+{
+    VIRTGPU_TRANSFER_HOST_3D Request;
+
+    if (!VirtGpuBuildTransferHost3D(DeviceExtension,
+                                    TRUE,
+                                    Transfer,
+                                    &Request,
+                                    FenceId))
+    {
+        return FALSE;
+    }
+
+    return VirtGpuSendCommandAsync(DeviceExtension, &Request, sizeof(Request));
 }
 
 static BOOLEAN
@@ -1929,25 +2100,349 @@ VirtGpuSubmit3D(
                                        Size);
 }
 
+static BOOLEAN
+VirtGpuSubmit3DAsync(
+    _Inout_ PVIRTGPU_DEVICE_EXTENSION DeviceExtension,
+    _In_ ULONG ContextId,
+    _In_reads_bytes_(Size) PVOID Commands,
+    _In_ ULONG Size,
+    _In_ ULONG RingIndex,
+    _Out_opt_ PULONGLONG FenceId)
+{
+    union
+    {
+        VIRTGPU_SUBMIT_3D Request;
+        UCHAR Buffer[VIRTGPU_ASYNC_RESPONSE_OFFSET];
+    } Submit;
+    ULONG RequestSize;
+
+    if (!DeviceExtension->VirglSupported ||
+        (VirtGpuFindContext(DeviceExtension, ContextId) == NULL) ||
+        (Commands == NULL) ||
+        (Size == 0) ||
+        (RingIndex > 0xFF) ||
+        ((RingIndex != 0) && !DeviceExtension->ContextInitSupported) ||
+        (Size > VIRTGPU_ASYNC_RESPONSE_OFFSET - sizeof(VIRTGPU_SUBMIT_3D)))
+    {
+        return FALSE;
+    }
+
+    RequestSize = sizeof(VIRTGPU_SUBMIT_3D) + Size;
+    VideoPortZeroMemory(&Submit, sizeof(Submit));
+    Submit.Request.Header.Type = VIRTGPU_CMD_SUBMIT_3D;
+    Submit.Request.Header.ContextId = ContextId;
+    VirtGpuPrepareFence(DeviceExtension, &Submit.Request.Header, RingIndex, FenceId);
+    Submit.Request.Size = Size;
+    VideoPortMoveMemory(Submit.Buffer + sizeof(VIRTGPU_SUBMIT_3D),
+                        Commands,
+                        Size);
+
+    return VirtGpuSendCommandAsync(DeviceExtension,
+                                   Submit.Buffer,
+                                   RequestSize);
+}
+
+static BOOLEAN
+VirtGpuExecute3DBatchSubmit(
+    _Inout_ PVIRTGPU_DEVICE_EXTENSION DeviceExtension,
+    _In_ ULONG ContextId,
+    _In_reads_bytes_(CommandSize) PUCHAR Commands,
+    _In_ ULONG CommandSize,
+    _In_ ULONG RingIndex,
+    _Out_ PULONGLONG LastFenceId)
+{
+    ULONGLONG FenceId = 0;
+
+    if ((Commands == NULL) || (CommandSize == 0))
+        return FALSE;
+
+    if (!(VirtGpuSubmit3DAsync(DeviceExtension,
+                               ContextId,
+                               Commands,
+                               CommandSize,
+                               RingIndex,
+                               &FenceId) ||
+          VirtGpuSubmit3D(DeviceExtension,
+                          ContextId,
+                          Commands,
+                          CommandSize,
+                          RingIndex,
+                          &FenceId)))
+    {
+        return FALSE;
+    }
+
+    if (FenceId != 0)
+        *LastFenceId = FenceId;
+    return TRUE;
+}
+
+static BOOLEAN
+VirtGpuExecute3DBatchTransferToHost(
+    _Inout_ PVIRTGPU_DEVICE_EXTENSION DeviceExtension,
+    _In_ ULONG ContextId,
+    _In_reads_bytes_(CommandSize) PUCHAR Command,
+    _In_ ULONG CommandSize,
+    _In_ ULONG RingIndex,
+    _Out_ PULONGLONG LastFenceId)
+{
+    VIRTGPU_3D_BATCH_TRANSFER BatchTransfer;
+    VIRTGPU_3D_TRANSFER Transfer;
+    PVIRTGPU_3D_RESOURCE_STATE Resource;
+    ULONG HeaderSize = offsetof(VIRTGPU_3D_BATCH_TRANSFER, Data);
+    ULONGLONG FenceId = 0;
+
+    if ((Command == NULL) || (CommandSize < HeaderSize))
+        return FALSE;
+
+    VideoPortMoveMemory(&BatchTransfer, Command, HeaderSize);
+    if (BatchTransfer.Size > CommandSize - HeaderSize)
+        return FALSE;
+
+    VideoPortZeroMemory(&Transfer, sizeof(Transfer));
+    Transfer.ContextId = ContextId;
+    Transfer.ResourceId = BatchTransfer.ResourceId;
+    Transfer.X = BatchTransfer.X;
+    Transfer.Y = BatchTransfer.Y;
+    Transfer.Z = BatchTransfer.Z;
+    Transfer.Width = BatchTransfer.Width;
+    Transfer.Height = BatchTransfer.Height;
+    Transfer.Depth = BatchTransfer.Depth;
+    Transfer.Level = BatchTransfer.Level;
+    Transfer.Stride = BatchTransfer.Stride;
+    Transfer.LayerStride = BatchTransfer.LayerStride;
+    Transfer.Offset = BatchTransfer.Offset;
+    Transfer.RingIndex = RingIndex;
+    Transfer.Size = BatchTransfer.Size;
+
+    Resource = VirtGpuFindResource(DeviceExtension, Transfer.ResourceId);
+    if ((Resource == NULL) ||
+        !Resource->BackingAttached ||
+        !VirtGpuTransferBackingRangeValid(&Transfer, Resource->BackingSize))
+    {
+        return FALSE;
+    }
+
+    VirtGpuCopyTransferDataToBacking(Resource, &Transfer, Command + HeaderSize);
+
+    if (!(VirtGpuTransferHost3DAsync(DeviceExtension, &Transfer, &FenceId) ||
+          VirtGpuTransferHost3D(DeviceExtension, TRUE, &Transfer, &FenceId)))
+    {
+        return FALSE;
+    }
+
+    if (FenceId != 0)
+        *LastFenceId = FenceId;
+    return TRUE;
+}
+
+static BOOLEAN
+VirtGpuExecute3DBatchTransferFromHost(
+    _Inout_ PVIRTGPU_DEVICE_EXTENSION DeviceExtension,
+    _In_ ULONG ContextId,
+    _Inout_updates_bytes_(CommandSize) PUCHAR Command,
+    _In_ ULONG CommandSize,
+    _In_ ULONG RingIndex,
+    _Out_ PULONGLONG LastFenceId)
+{
+    VIRTGPU_3D_BATCH_TRANSFER BatchTransfer;
+    VIRTGPU_3D_TRANSFER Transfer;
+    PVIRTGPU_3D_RESOURCE_STATE Resource;
+    ULONG HeaderSize = offsetof(VIRTGPU_3D_BATCH_TRANSFER, Data);
+    ULONGLONG FenceId = 0;
+
+    if ((Command == NULL) || (CommandSize < HeaderSize))
+        return FALSE;
+
+    VideoPortMoveMemory(&BatchTransfer, Command, HeaderSize);
+    if (BatchTransfer.Size > CommandSize - HeaderSize)
+        return FALSE;
+
+    VideoPortZeroMemory(&Transfer, sizeof(Transfer));
+    Transfer.ContextId = ContextId;
+    Transfer.ResourceId = BatchTransfer.ResourceId;
+    Transfer.X = BatchTransfer.X;
+    Transfer.Y = BatchTransfer.Y;
+    Transfer.Z = BatchTransfer.Z;
+    Transfer.Width = BatchTransfer.Width;
+    Transfer.Height = BatchTransfer.Height;
+    Transfer.Depth = BatchTransfer.Depth;
+    Transfer.Level = BatchTransfer.Level;
+    Transfer.Stride = BatchTransfer.Stride;
+    Transfer.LayerStride = BatchTransfer.LayerStride;
+    Transfer.Offset = BatchTransfer.Offset;
+    Transfer.RingIndex = RingIndex;
+    Transfer.Size = BatchTransfer.Size;
+
+    Resource = VirtGpuFindResource(DeviceExtension, Transfer.ResourceId);
+    if ((Resource == NULL) ||
+        !Resource->BackingAttached ||
+        !VirtGpuTransferBackingRangeValid(&Transfer, Resource->BackingSize))
+    {
+        return FALSE;
+    }
+
+    if (!VirtGpuTransferHost3D(DeviceExtension, FALSE, &Transfer, &FenceId))
+        return FALSE;
+
+    VirtGpuCopyBackingToTransferData(Resource,
+                                     &Transfer,
+                                     Command + HeaderSize);
+
+    if (FenceId != 0)
+        *LastFenceId = FenceId;
+    return TRUE;
+}
+
+static BOOLEAN
+VirtGpuExecute3DBatch(
+    _Inout_ PVIRTGPU_DEVICE_EXTENSION DeviceExtension,
+    _Inout_updates_bytes_(InputSize) PVIRTGPU_3D_BATCH Batch,
+    _In_ ULONG InputSize)
+{
+    ULONG HeaderSize = offsetof(VIRTGPU_3D_BATCH, Commands);
+    PUCHAR Cursor;
+    PUCHAR End;
+    ULONG Index;
+    ULONGLONG LastFenceId = 0;
+
+    if (!DeviceExtension->VirglSupported ||
+        (Batch == NULL) ||
+        (InputSize < HeaderSize) ||
+        (Batch->Version != VIRTGPU_3D_BATCH_VERSION) ||
+        (Batch->ContextId == 0) ||
+        (VirtGpuFindContext(DeviceExtension, Batch->ContextId) == NULL) ||
+        (Batch->RingIndex > 0xFF) ||
+        ((Batch->RingIndex != 0) && !DeviceExtension->ContextInitSupported) ||
+        (Batch->CommandCount > VIRTGPU_3D_MAX_BATCH_COMMANDS) ||
+        (Batch->Size > VIRTGPU_3D_MAX_BATCH_BYTES) ||
+        (Batch->Size > InputSize - HeaderSize))
+    {
+        return FALSE;
+    }
+
+    Cursor = Batch->Commands;
+    End = Cursor + Batch->Size;
+
+    for (Index = 0; Index < Batch->CommandCount; ++Index)
+    {
+        VIRTGPU_3D_BATCH_COMMAND Command;
+        PUCHAR Payload;
+
+        if ((ULONG_PTR)(End - Cursor) < sizeof(Command))
+            return FALSE;
+
+        VideoPortMoveMemory(&Command, Cursor, sizeof(Command));
+        Cursor += sizeof(Command);
+
+        if ((Command.Size & 3) != 0)
+            return FALSE;
+        if ((ULONG_PTR)(End - Cursor) < Command.Size)
+            return FALSE;
+
+        Payload = Cursor;
+        switch (Command.OpCode)
+        {
+            case VIRTGPU_3D_BATCH_OP_NOP:
+                if (Command.Size != 0)
+                    return FALSE;
+                break;
+
+            case VIRTGPU_3D_BATCH_OP_SUBMIT:
+                if (!VirtGpuExecute3DBatchSubmit(DeviceExtension,
+                                                 Batch->ContextId,
+                                                 Payload,
+                                                 Command.Size,
+                                                 Batch->RingIndex,
+                                                 &LastFenceId))
+                {
+                    return FALSE;
+                }
+                break;
+
+            case VIRTGPU_3D_BATCH_OP_TRANSFER_TO_HOST:
+                if (!VirtGpuExecute3DBatchTransferToHost(DeviceExtension,
+                                                         Batch->ContextId,
+                                                         Payload,
+                                                         Command.Size,
+                                                         Batch->RingIndex,
+                                                         &LastFenceId))
+                {
+                    return FALSE;
+                }
+                break;
+
+            case VIRTGPU_3D_BATCH_OP_TRANSFER_FROM_HOST:
+                if (!VirtGpuExecute3DBatchTransferFromHost(DeviceExtension,
+                                                           Batch->ContextId,
+                                                           Payload,
+                                                           Command.Size,
+                                                           Batch->RingIndex,
+                                                           &LastFenceId))
+                {
+                    return FALSE;
+                }
+                break;
+
+            default:
+                return FALSE;
+        }
+
+        Cursor += Command.Size;
+    }
+
+    if (Cursor != End)
+        return FALSE;
+
+    Batch->FenceId = LastFenceId;
+    return TRUE;
+}
+
 static VOID
-VirtGpuSetRect(
+VirtGpuSetRectAt(
     _Out_ PVIRTGPU_RECT Rect,
+    _In_ ULONG X,
+    _In_ ULONG Y,
     _In_ ULONG Width,
     _In_ ULONG Height);
 
 static BOOLEAN
-VirtGpuSetScanout(_Inout_ PVIRTGPU_DEVICE_EXTENSION DeviceExtension)
+VirtGpuSetScanoutResource(
+    _Inout_ PVIRTGPU_DEVICE_EXTENSION DeviceExtension,
+    _In_ ULONG ResourceId,
+    _In_ ULONG X,
+    _In_ ULONG Y,
+    _In_ ULONG Width,
+    _In_ ULONG Height)
 {
     VIRTGPU_SET_SCANOUT ScanoutRequest;
 
+    if ((ResourceId != VIRTGPU_RESOURCE_ID) &&
+        (VirtGpuFindResource(DeviceExtension, ResourceId) == NULL))
+    {
+        return FALSE;
+    }
+
+    if ((Width == 0) || (Height == 0))
+        return FALSE;
+
     VideoPortZeroMemory(&ScanoutRequest, sizeof(ScanoutRequest));
     ScanoutRequest.Header.Type = VIRTGPU_CMD_SET_SCANOUT;
-    VirtGpuSetRect(&ScanoutRequest.Rect,
-                   DeviceExtension->ScreenWidth,
-                   DeviceExtension->ScreenHeight);
+    VirtGpuSetRectAt(&ScanoutRequest.Rect, X, Y, Width, Height);
     ScanoutRequest.ScanoutId = VIRTGPU_SCANOUT_ID;
-    ScanoutRequest.ResourceId = VIRTGPU_RESOURCE_ID;
+    ScanoutRequest.ResourceId = ResourceId;
     return VirtGpuCommandOk(DeviceExtension, &ScanoutRequest, sizeof(ScanoutRequest));
+}
+
+static BOOLEAN
+VirtGpuSetScanout(_Inout_ PVIRTGPU_DEVICE_EXTENSION DeviceExtension)
+{
+    return VirtGpuSetScanoutResource(DeviceExtension,
+                                     VIRTGPU_RESOURCE_ID,
+                                     0,
+                                     0,
+                                     DeviceExtension->ScreenWidth,
+                                     DeviceExtension->ScreenHeight);
 }
 
 static VOID
@@ -1962,15 +2457,6 @@ VirtGpuSetRectAt(
     Rect->Y = Y;
     Rect->Width = Width;
     Rect->Height = Height;
-}
-
-static VOID
-VirtGpuSetRect(
-    _Out_ PVIRTGPU_RECT Rect,
-    _In_ ULONG Width,
-    _In_ ULONG Height)
-{
-    VirtGpuSetRectAt(Rect, 0, 0, Width, Height);
 }
 
 static BOOLEAN
@@ -2071,6 +2557,7 @@ VirtGpuBuildTransferToHost2D(
 static VOID
 VirtGpuBuildResourceFlush(
     _Out_ PVIRTGPU_RESOURCE_FLUSH FlushRequest,
+    _In_ ULONG ResourceId,
     _In_ LONG Left,
     _In_ LONG Top,
     _In_ ULONG Width,
@@ -2079,7 +2566,7 @@ VirtGpuBuildResourceFlush(
     VideoPortZeroMemory(FlushRequest, sizeof(*FlushRequest));
     FlushRequest->Header.Type = VIRTGPU_CMD_RESOURCE_FLUSH;
     VirtGpuSetRectAt(&FlushRequest->Rect, Left, Top, Width, Height);
-    FlushRequest->ResourceId = VIRTGPU_RESOURCE_ID;
+    FlushRequest->ResourceId = ResourceId;
 }
 
 static BOOLEAN
@@ -2114,8 +2601,71 @@ VirtGpuFlushRect(
         return FALSE;
     }
 
-    VirtGpuBuildResourceFlush(&FlushRequest, Left, Top, Width, Height);
+    VirtGpuBuildResourceFlush(&FlushRequest,
+                              VIRTGPU_RESOURCE_ID,
+                              Left,
+                              Top,
+                              Width,
+                              Height);
     return VirtGpuCommandOk(DeviceExtension, &FlushRequest, sizeof(FlushRequest));
+}
+
+static BOOLEAN
+VirtGpuFlushResourceRect(
+    _Inout_ PVIRTGPU_DEVICE_EXTENSION DeviceExtension,
+    _In_ ULONG ResourceId,
+    _In_ LONG Left,
+    _In_ LONG Top,
+    _In_ LONG Right,
+    _In_ LONG Bottom)
+{
+    VIRTGPU_RESOURCE_FLUSH FlushRequest;
+    ULONG Width;
+    ULONG Height;
+
+    if ((ResourceId != VIRTGPU_RESOURCE_ID) &&
+        (VirtGpuFindResource(DeviceExtension, ResourceId) == NULL))
+    {
+        return FALSE;
+    }
+
+    if (!VirtGpuClipFlushRect(DeviceExtension, &Left, &Top, &Right, &Bottom))
+        return TRUE;
+
+    Width = Right - Left;
+    Height = Bottom - Top;
+    VirtGpuBuildResourceFlush(&FlushRequest, ResourceId, Left, Top, Width, Height);
+    return VirtGpuCommandOk(DeviceExtension, &FlushRequest, sizeof(FlushRequest));
+}
+
+static BOOLEAN
+VirtGpuFlushResourceRectAsync(
+    _Inout_ PVIRTGPU_DEVICE_EXTENSION DeviceExtension,
+    _In_ ULONG ResourceId,
+    _In_ LONG Left,
+    _In_ LONG Top,
+    _In_ LONG Right,
+    _In_ LONG Bottom)
+{
+    VIRTGPU_RESOURCE_FLUSH FlushRequest;
+    ULONG Width;
+    ULONG Height;
+
+    if ((ResourceId != VIRTGPU_RESOURCE_ID) &&
+        (VirtGpuFindResource(DeviceExtension, ResourceId) == NULL))
+    {
+        return FALSE;
+    }
+
+    if (!VirtGpuClipFlushRect(DeviceExtension, &Left, &Top, &Right, &Bottom))
+        return TRUE;
+
+    Width = Right - Left;
+    Height = Bottom - Top;
+    VirtGpuBuildResourceFlush(&FlushRequest, ResourceId, Left, Top, Width, Height);
+    return VirtGpuSendCommandAsync(DeviceExtension,
+                                   &FlushRequest,
+                                   sizeof(FlushRequest));
 }
 
 static BOOLEAN
@@ -2146,7 +2696,12 @@ VirtGpuFlushRectAsync(
                                  Top,
                                  Width,
                                  Height);
-    VirtGpuBuildResourceFlush(&FlushRequest, Left, Top, Width, Height);
+    VirtGpuBuildResourceFlush(&FlushRequest,
+                              VIRTGPU_RESOURCE_ID,
+                              Left,
+                              Top,
+                              Width,
+                              Height);
 
     return VirtGpuSendCommandAsync(DeviceExtension,
                                    &TransferRequest,
@@ -2921,6 +3476,8 @@ VirtGpuStartIO(
     PVIDEO_POINTER_ATTRIBUTES PointerAttributes;
     PVIDEO_POINTER_POSITION PointerPosition;
     PVIRTGPU_DIRTY_RECT DirtyRect;
+    PVIRTGPU_SCANOUT_RESOURCE ScanoutResource;
+    PVIRTGPU_RESOURCE_DIRTY_RECT ResourceDirtyRect;
     ULONG InIoSpace;
 
     switch (RequestPacket->IoControlCode)
@@ -3148,6 +3705,46 @@ VirtGpuStartIO(
                      NO_ERROR : ERROR_INVALID_PARAMETER;
             break;
 
+        case IOCTL_VIDEO_VIRTGPU_SET_SCANOUT_RESOURCE:
+            if (RequestPacket->InputBufferLength < sizeof(VIRTGPU_SCANOUT_RESOURCE))
+            {
+                Status = ERROR_INSUFFICIENT_BUFFER;
+                break;
+            }
+
+            ScanoutResource = RequestPacket->InputBuffer;
+            Status = VirtGpuSetScanoutResource(DeviceExtension,
+                                               ScanoutResource->ResourceId,
+                                               ScanoutResource->X,
+                                               ScanoutResource->Y,
+                                               ScanoutResource->Width,
+                                               ScanoutResource->Height) ?
+                     NO_ERROR : ERROR_INVALID_PARAMETER;
+            break;
+
+        case IOCTL_VIDEO_VIRTGPU_RESOURCE_FLUSH_RECT:
+            if (RequestPacket->InputBufferLength < sizeof(VIRTGPU_RESOURCE_DIRTY_RECT))
+            {
+                Status = ERROR_INSUFFICIENT_BUFFER;
+                break;
+            }
+
+            ResourceDirtyRect = RequestPacket->InputBuffer;
+            Status = (VirtGpuFlushResourceRectAsync(DeviceExtension,
+                                                    ResourceDirtyRect->ResourceId,
+                                                    ResourceDirtyRect->Left,
+                                                    ResourceDirtyRect->Top,
+                                                    ResourceDirtyRect->Right,
+                                                    ResourceDirtyRect->Bottom) ||
+                      VirtGpuFlushResourceRect(DeviceExtension,
+                                               ResourceDirtyRect->ResourceId,
+                                               ResourceDirtyRect->Left,
+                                               ResourceDirtyRect->Top,
+                                               ResourceDirtyRect->Right,
+                                               ResourceDirtyRect->Bottom)) ?
+                     NO_ERROR : ERROR_INVALID_PARAMETER;
+            break;
+
         case IOCTL_VIDEO_VIRTGPU_QUERY_3D_CAPS:
             if (RequestPacket->OutputBufferLength < sizeof(VIRTGPU_3D_CAPS))
             {
@@ -3174,6 +3771,11 @@ VirtGpuStartIO(
                     DeviceExtension->PreferredCapsetVersion;
                 Caps->MaxCommandBytes =
                     VIRTGPU_RESPONSE_OFFSET - sizeof(VIRTGPU_SUBMIT_3D);
+                Caps->BatchSupported = DeviceExtension->VirglSupported ? 1 : 0;
+                Caps->MaxBatchBytes = DeviceExtension->VirglSupported ?
+                    VIRTGPU_3D_MAX_BATCH_BYTES : 0;
+                Caps->MaxBatchCommands = DeviceExtension->VirglSupported ?
+                    VIRTGPU_3D_MAX_BATCH_COMMANDS : 0;
                 Caps->LastCompletedFenceId = DeviceExtension->CompletedFenceId;
                 Caps->HostFeatures = DeviceExtension->HostFeatures;
                 Caps->GuestFeatures = DeviceExtension->GuestFeatures;
@@ -3550,26 +4152,22 @@ VirtGpuStartIO(
                                                Transfer->ResourceId);
                 if ((Resource == NULL) ||
                     !Resource->BackingAttached ||
-                    !VirtGpuRangeValid(Transfer->Offset,
-                                       Transfer->Size,
-                                       Resource->BackingSize))
+                    !VirtGpuTransferBackingRangeValid(Transfer,
+                                                      Resource->BackingSize))
                 {
                     Status = ERROR_INVALID_PARAMETER;
                     break;
                 }
 
-                if (Transfer->Size != 0)
-                {
-                    VideoPortMoveMemory((PUCHAR)Resource->BackingVirtual +
-                                        (ULONG)Transfer->Offset,
-                                        Transfer->Data,
-                                        Transfer->Size);
-                }
+                VirtGpuCopyTransferToBacking(Resource, Transfer);
 
-                Status = VirtGpuTransferHost3D(DeviceExtension,
-                                               TRUE,
-                                               Transfer,
-                                               &FenceId) ?
+                Status = (VirtGpuTransferHost3DAsync(DeviceExtension,
+                                                     Transfer,
+                                                     &FenceId) ||
+                          VirtGpuTransferHost3D(DeviceExtension,
+                                                TRUE,
+                                                Transfer,
+                                                &FenceId)) ?
                          NO_ERROR : ERROR_INVALID_PARAMETER;
                 if (Status == NO_ERROR)
                 {
@@ -3617,9 +4215,8 @@ VirtGpuStartIO(
                 Resource = VirtGpuFindResource(DeviceExtension, Input->ResourceId);
                 if ((Resource == NULL) ||
                     !Resource->BackingAttached ||
-                    !VirtGpuRangeValid(Input->Offset,
-                                       Input->Size,
-                                       Resource->BackingSize))
+                    !VirtGpuTransferBackingRangeValid(Input,
+                                                      Resource->BackingSize))
                 {
                     Status = ERROR_INVALID_PARAMETER;
                     break;
@@ -3634,13 +4231,8 @@ VirtGpuStartIO(
                 VideoPortMoveMemory(Output, Input, HeaderSize);
                 Output->FenceId = FenceId;
                 if (Input->Size != 0)
-                {
-                    VideoPortMoveMemory(Output->Data,
-                                        (PUCHAR)Resource->BackingVirtual +
-                                        (ULONG)Input->Offset,
-                                        Input->Size);
-                    Information += Input->Size;
-                }
+                    VirtGpuCopyBackingToTransfer(Resource, Output);
+                Information += Input->Size;
 
                 RequestPacket->StatusBlock->Information = Information;
                 Status = NO_ERROR;
@@ -3669,12 +4261,18 @@ VirtGpuStartIO(
                     break;
                 }
 
-                Status = VirtGpuSubmit3D(DeviceExtension,
-                                         Submit->ContextId,
-                                         Submit->Commands,
-                                         Submit->Size,
-                                         Submit->RingIndex,
-                                         &FenceId) ?
+                Status = (VirtGpuSubmit3DAsync(DeviceExtension,
+                                               Submit->ContextId,
+                                               Submit->Commands,
+                                               Submit->Size,
+                                               Submit->RingIndex,
+                                               &FenceId) ||
+                          VirtGpuSubmit3D(DeviceExtension,
+                                          Submit->ContextId,
+                                          Submit->Commands,
+                                          Submit->Size,
+                                          Submit->RingIndex,
+                                          &FenceId)) ?
                          NO_ERROR : ERROR_INVALID_PARAMETER;
                 if (Status == NO_ERROR)
                 {
@@ -3688,6 +4286,58 @@ VirtGpuStartIO(
                         RequestPacket->StatusBlock->Information = HeaderSize;
                     }
                 }
+            }
+            break;
+
+        case IOCTL_VIDEO_VIRTGPU_3D_EXECUTE_BATCH:
+            if (!DeviceExtension->VirglSupported)
+            {
+                Status = ERROR_INVALID_FUNCTION;
+                break;
+            }
+            if ((RequestPacket->InputBufferLength <
+                 offsetof(VIRTGPU_3D_BATCH, Commands)) ||
+                (RequestPacket->OutputBufferLength <
+                 offsetof(VIRTGPU_3D_BATCH, Commands)))
+            {
+                Status = ERROR_INSUFFICIENT_BUFFER;
+                break;
+            }
+            {
+                PVIRTGPU_3D_BATCH Batch;
+                ULONG HeaderSize = offsetof(VIRTGPU_3D_BATCH, Commands);
+                ULONG BatchSize;
+
+                Batch = RequestPacket->InputBuffer;
+                if ((Batch->Size > VIRTGPU_3D_MAX_BATCH_BYTES) ||
+                    (Batch->Size > RequestPacket->InputBufferLength - HeaderSize))
+                {
+                    Status = ERROR_INVALID_PARAMETER;
+                    break;
+                }
+
+                BatchSize = HeaderSize + Batch->Size;
+                if (RequestPacket->OutputBufferLength < BatchSize)
+                {
+                    Status = ERROR_INSUFFICIENT_BUFFER;
+                    break;
+                }
+
+                VideoPortMoveMemory(RequestPacket->OutputBuffer,
+                                    RequestPacket->InputBuffer,
+                                    BatchSize);
+                Batch = RequestPacket->OutputBuffer;
+
+                if (!VirtGpuExecute3DBatch(DeviceExtension,
+                                           Batch,
+                                           BatchSize))
+                {
+                    Status = ERROR_INVALID_PARAMETER;
+                    break;
+                }
+
+                RequestPacket->StatusBlock->Information = BatchSize;
+                Status = NO_ERROR;
             }
             break;
 
