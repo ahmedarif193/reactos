@@ -55,6 +55,16 @@ typedef struct _PDEV
     ULONG PreferredCapsetId;
     ULONG PreferredCapsetVersion;
     ULONG SupportedCapsetMask;
+    BOOL Gdi3DEnabled;
+    ULONG Gdi3DContextId;
+    ULONG Gdi3DPrimaryResourceId;
+    ULONG Gdi3DPrimarySurfaceHandle;
+    ULONG Gdi3DWidth;
+    ULONG Gdi3DHeight;
+    ULONGLONG Gdi3DLastFenceId;
+    BOOL DirtyValid;
+    RECTL DirtyRect;
+    ULONG DirtyOps;
 } PDEV, *PPDEV;
 
 BOOL
@@ -105,6 +115,9 @@ VOID
 VirtGpuDispFlushRect(
     _Inout_ PPDEV ppdev,
     _In_opt_ const RECTL *Rect);
+
+VOID
+VirtGpuDispCommitDirty(_Inout_ PPDEV ppdev);
 
 VOID
 VirtGpuDispFlushSurfaceRect(
