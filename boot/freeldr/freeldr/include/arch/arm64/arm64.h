@@ -28,7 +28,6 @@ typedef struct _ARM64_CONTEXT
 } ARM64_CONTEXT, *PARM64_CONTEXT;
 
 /* Function prototypes */
-VOID Arm64MachInit(const char *CmdLine);
 VOID Arm64InitializeMMU(VOID);
 VOID Arm64SetupKernelHandoffMMU(VOID);
 VOID Arm64DisableMMU(VOID);
