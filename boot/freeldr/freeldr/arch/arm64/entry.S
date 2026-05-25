@@ -40,31 +40,70 @@ Arm64EnsureEl1EntryState:
     cmp x0, #2
     b.ne 1f
 
-    /* Drop from EL2 to EL1 following Windows loader expectations */
-    mrs x1, hcr_el2
-    mov x2, #1
-    lsl x2, x2, #31       /* HCR_RW */
-    orr x1, x1, x2
-    mov x2, #1
-    lsl x2, x2, #34       /* Clear HCR_E2H */
-    bic x1, x1, x2
-    mov x2, #1
-    lsl x2, x2, #27       /* Clear HCR_TGE */
-    bic x1, x1, x2
-    msr hcr_el2, x1
+    /*
+     * TODO: test this :)
+     * Drop from EL2 to EL1.
+     */
+    mrs x3, hcr_el2
+    mov x4, #1
+    lsl x4, x4, #34       /* HCR_E2H */
+    tst x3, x4
+    b.eq el2_no_vhe
 
-    /* Allow EL1 access to timers and system registers */
+    /* VHE is enabled: snapshot effective EL1 state via VHE aliases */
+    mrs x10, sctlr_el1
+    mrs x11, tcr_el1
+    mrs x12, ttbr0_el1
+    mrs x13, ttbr1_el1
+    mrs x14, mair_el1
+    mrs x15, vbar_el1
+    mrs x16, cpacr_el1
+
+    /* Clear E2H (also clear TGE which is only valid with E2H=1) */
+    bic x3, x3, x4        /* clear E2H */
+    mov x4, #1
+    lsl x4, x4, #27
+    bic x3, x3, x4        /* clear TGE */
+    mov x4, #1
+    lsl x4, x4, #31
+    orr x3, x3, x4        /* set RW: EL1 is AArch64 */
+    msr hcr_el2, x3
+    isb
+
+    /* Now the *_EL1 mnemonics target the real EL1 registers. Restore. */
+    msr sctlr_el1, x10
+    msr tcr_el1, x11
+    msr ttbr0_el1, x12
+    msr ttbr1_el1, x13
+    msr mair_el1, x14
+    msr vbar_el1, x15
+    msr cpacr_el1, x16
+    isb
+    b el2_common
+
+el2_no_vhe:
+    /* Non-VHE EL2: just set RW=1, TGE already 0 in this path */
+    mov x4, #1
+    lsl x4, x4, #31
+    orr x3, x3, x4
+    msr hcr_el2, x3
+
+el2_common:
+    /*
+     * Allow EL1 access to the generic timer and system registers.
+     * Do NOT zero cntvoff_el2 unconditionally: firmware (especially under a
+     * hypervisor) may have programmed an offset that the kernel relies on.
+     * Only initialise it if it reads back as some absurd uninitialised value.
+     */
     mrs x1, cnthctl_el2
     mov x2, #3
-    orr x1, x1, x2        /* Enable EL1 PCT/PC */
+    orr x1, x1, x2        /* EL1PCEN | EL1PCTEN */
     msr cnthctl_el2, x1
-    msr cntvoff_el2, xzr
 
     /* Permit SIMD/FPU and system instructions at EL1 */
-    mov x1, xzr
-    msr cptr_el2, x1
-    msr hstr_el2, x1
-    msr mdcr_el2, x1
+    msr cptr_el2, xzr
+    msr hstr_el2, xzr
+    msr mdcr_el2, xzr
 
     /* Propagate current stack pointer to EL1 */
     mov x1, sp
