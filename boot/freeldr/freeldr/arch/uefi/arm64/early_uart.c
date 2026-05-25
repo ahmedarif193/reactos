@@ -46,6 +46,7 @@ extern EFI_HANDLE GlobalImageHandle;
 #define SPCR_INTERFACE_16550    0x00
 #define SPCR_INTERFACE_ARM_PL011 0x0E
 #define SPCR_INTERFACE_ARM_SBSA 0x0E        /* Same as PL011 for our purposes */
+#define SPCR_INTERFACE_QUP_GENI 0x13 /* TODO: Implement GENI serial for Snapdragon devices */
 
 #define ACPI_GAS_SPACE_SYSTEM_MEMORY    0
 #define ACPI_GAS_SPACE_SYSTEM_IO        1
@@ -194,7 +195,7 @@ EarlyUartLocateSpcrAddress(_Out_opt_ ARM64_UART_INTERFACE *UartInterface)
     }
     else
     {
-        /* Unknown interface type, but try anyway if it's memory-mapped */
+        /* Unknown interface type (e.g. 0x13 QUP/GENI on Qualcomm) */
     }
 
     if (Spcr->SerialPort.AddressSpaceID != ACPI_GAS_SPACE_SYSTEM_MEMORY)
@@ -516,8 +517,10 @@ EarlyUartDetectPlatform(VOID)
         EarlyUartInterface = (UartInterface != Arm64UartUnknown) ?
                              UartInterface :
                              EarlyUartInferInterfaceFromAddress(SpcrAddress);
-        if (EarlyUartInterface == Arm64UartUnknown)
-            EarlyUartInterface = Arm64UartPl011;
+        /* If interface is still unknown (e.g. SPCR type 0x13 QUP/GENI),
+         * leave it unset. EarlyUartReady() will return FALSE and all
+         * early prints become no-ops, instead of writing PL011 sequences
+         * to a foreign register block and triggering a synchronous abort. */
 
         /* Match address to known platform */
         if (SpcrAddress == ARM64_UART_QEMU_VIRT)
@@ -569,10 +572,13 @@ EarlyUartDetectPlatform(VOID)
         return EarlyUartPlatformId;
     }
 
-    /* Method 4: Default to QEMU virt for development */
-    EarlyUartPlatformId = Arm64PlatformQemuVirt;
-    EarlyUartBaseAddress = ARM64_UART_DEFAULT;
-    EarlyUartInterface = Arm64UartPl011;
+    /* Method 4: Nothing detected. Leave the UART disabled rather than
+     * guessing — the previous default (QEMU virt PL011 @ 0x09000000) caused
+     * a synchronous abort when used on Qualcomm/other SoCs where that PA
+     * is not MMIO. EarlyUartReady() will return FALSE and prints no-op. */
+    EarlyUartPlatformId = Arm64PlatformUnknown;
+    EarlyUartBaseAddress = 0;
+    EarlyUartInterface = Arm64UartUnknown;
 
     return EarlyUartPlatformId;
 }
