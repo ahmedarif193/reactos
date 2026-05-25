@@ -25,8 +25,30 @@ static LOGFONTW AnsiFixedFont =
 #define VIRTGPU_OPENGL_ICD_VERSION 1
 #define VIRTGPU_OPENGL_ICD_DRIVER_VERSION 1
 #define OPENGL_GETINFO_DRVNAME 0
+#define VIRTGPU_ROP4_SRCCOPY 0xCCCC
+#define VIRTGPU_LEGACY_SCANOUT_RESOURCE_ID 1
+#define VIRTGPU_GDI3D_PRIMARY_SURFACE_HANDLE 0x1000
+#define VIRTGPU_GDI3D_CMD_DWORDS 64
+#define VIRTGPU_GDI3D_MAX_TRANSFER_SIZE (64 * 1024 * 1024)
 
-/* ReactOS Eng path and PlgBlt fallbacks are stubs, so do not hook them here. */
+/* Values match the upstream VirGL protocol and Gallium pipe ABI. */
+#define VIRTGPU_GDI3D_VIRGL_CCMD_CREATE_OBJECT 1
+#define VIRTGPU_GDI3D_VIRGL_CCMD_DESTROY_OBJECT 3
+#define VIRTGPU_GDI3D_VIRGL_OBJECT_SURFACE 8
+#define VIRTGPU_GDI3D_VIRGL_CMD0(Command, Object, Length) \
+    ((ULONG)((Command) | ((Object) << 8) | ((Length) << 16)))
+#define VIRTGPU_GDI3D_VIRGL_OBJ_SURFACE_SIZE 5
+#define VIRTGPU_GDI3D_PIPE_TEXTURE_2D 2
+#define VIRTGPU_GDI3D_PIPE_BIND_RENDER_TARGET (1 << 1)
+#define VIRTGPU_GDI3D_PIPE_BIND_BLENDABLE (1 << 2)
+#define VIRTGPU_GDI3D_PIPE_BIND_SAMPLER_VIEW (1 << 3)
+#define VIRTGPU_GDI3D_VIRGL_FORMAT_B8G8R8A8_UNORM 1
+
+#define VIRTGPU_DISP_DIRTY_OP_THRESHOLD 64
+#define VIRTGPU_DISP_DIRTY_BYTE_THRESHOLD (2 * 1024 * 1024)
+#define VIRTGPU_DISP_DIRTY_WASTE_NUMERATOR 3
+#define VIRTGPU_DISP_DIRTY_WASTE_DENOMINATOR 1
+
 #define VIRTGPU_SURFACE_HOOKS \
     (HOOK_SYNCHRONIZE | \
      HOOK_BITBLT | \
@@ -64,6 +86,13 @@ typedef struct _VIRTGPU_OPENGL_INFO
     ULONG DriverVersion;
     WCHAR DriverName[MAX_PATH + 1];
 } VIRTGPU_OPENGL_INFO, *PVIRTGPU_OPENGL_INFO;
+
+typedef struct _VIRTGPU_GDI3D_CMDBUF
+{
+    ULONG Dwords[VIRTGPU_GDI3D_CMD_DWORDS];
+    ULONG Count;
+    BOOL Overflow;
+} VIRTGPU_GDI3D_CMDBUF, *PVIRTGPU_GDI3D_CMDBUF;
 
 static DRVFN VirtGpuDrvFunctions[] =
 {
@@ -219,15 +248,790 @@ VirtGpuDispMapSurface(
     return pso;
 }
 
+static VOID
+VirtGpuDispGdi3DCmdInit(_Out_ PVIRTGPU_GDI3D_CMDBUF Cmd)
+{
+    memset(Cmd, 0, sizeof(*Cmd));
+}
+
+static VOID
+VirtGpuDispGdi3DCmdEmit(_Inout_ PVIRTGPU_GDI3D_CMDBUF Cmd, _In_ ULONG Dword)
+{
+    if (Cmd->Count >= VIRTGPU_GDI3D_CMD_DWORDS)
+    {
+        Cmd->Overflow = TRUE;
+        return;
+    }
+
+    Cmd->Dwords[Cmd->Count++] = Dword;
+}
+
+static BOOL
+VirtGpuDispGdi3DSubmitCmd(
+    _Inout_ PPDEV ppdev,
+    _In_ PVIRTGPU_GDI3D_CMDBUF Cmd)
+{
+    ULONG HeaderSize = offsetof(VIRTGPU_3D_SUBMIT, Commands);
+    ULONG CommandBytes;
+    ULONG BufferSize;
+    PVIRTGPU_3D_SUBMIT Submit;
+    ULONG Returned;
+    BOOL Success;
+
+    if ((ppdev == NULL) ||
+        (ppdev->hDriver == NULL) ||
+        (ppdev->Gdi3DContextId == 0) ||
+        (Cmd == NULL) ||
+        Cmd->Overflow ||
+        (Cmd->Count == 0))
+    {
+        return FALSE;
+    }
+
+    CommandBytes = Cmd->Count * sizeof(ULONG);
+    BufferSize = HeaderSize + CommandBytes;
+    Submit = EngAllocMem(FL_ZERO_MEMORY, BufferSize, ALLOC_TAG);
+    if (Submit == NULL)
+        return FALSE;
+
+    Submit->ContextId = ppdev->Gdi3DContextId;
+    Submit->Size = CommandBytes;
+    memcpy(Submit->Commands, Cmd->Dwords, CommandBytes);
+
+    Success = (EngDeviceIoControl(ppdev->hDriver,
+                                  IOCTL_VIDEO_VIRTGPU_3D_SUBMIT,
+                                  Submit,
+                                  BufferSize,
+                                  Submit,
+                                  HeaderSize,
+                                  &Returned) == 0) &&
+              (Returned >= HeaderSize);
+    if (Success)
+        ppdev->Gdi3DLastFenceId = Submit->FenceId;
+
+    EngFreeMem(Submit);
+    return Success;
+}
+
+static BOOL
+VirtGpuDispGdi3DCreateVirglSurface(
+    _Inout_ PPDEV ppdev,
+    _In_ ULONG ResourceId,
+    _In_ ULONG SurfaceHandle)
+{
+    VIRTGPU_GDI3D_CMDBUF Cmd;
+
+    VirtGpuDispGdi3DCmdInit(&Cmd);
+    VirtGpuDispGdi3DCmdEmit(&Cmd,
+                            VIRTGPU_GDI3D_VIRGL_CMD0(
+                                VIRTGPU_GDI3D_VIRGL_CCMD_CREATE_OBJECT,
+                                VIRTGPU_GDI3D_VIRGL_OBJECT_SURFACE,
+                                VIRTGPU_GDI3D_VIRGL_OBJ_SURFACE_SIZE));
+    VirtGpuDispGdi3DCmdEmit(&Cmd, SurfaceHandle);
+    VirtGpuDispGdi3DCmdEmit(&Cmd, ResourceId);
+    VirtGpuDispGdi3DCmdEmit(&Cmd, VIRTGPU_GDI3D_VIRGL_FORMAT_B8G8R8A8_UNORM);
+    VirtGpuDispGdi3DCmdEmit(&Cmd, 0);
+    VirtGpuDispGdi3DCmdEmit(&Cmd, 0);
+    return VirtGpuDispGdi3DSubmitCmd(ppdev, &Cmd);
+}
+
+static VOID
+VirtGpuDispGdi3DDestroyVirglSurface(
+    _Inout_ PPDEV ppdev,
+    _In_ ULONG SurfaceHandle)
+{
+    VIRTGPU_GDI3D_CMDBUF Cmd;
+
+    if ((ppdev == NULL) ||
+        (ppdev->Gdi3DContextId == 0) ||
+        (SurfaceHandle == 0))
+    {
+        return;
+    }
+
+    VirtGpuDispGdi3DCmdInit(&Cmd);
+    VirtGpuDispGdi3DCmdEmit(&Cmd,
+                            VIRTGPU_GDI3D_VIRGL_CMD0(
+                                VIRTGPU_GDI3D_VIRGL_CCMD_DESTROY_OBJECT,
+                                VIRTGPU_GDI3D_VIRGL_OBJECT_SURFACE,
+                                1));
+    VirtGpuDispGdi3DCmdEmit(&Cmd, SurfaceHandle);
+    (VOID)VirtGpuDispGdi3DSubmitCmd(ppdev, &Cmd);
+}
+
+static BOOL
+VirtGpuDispGdi3DCreateContext(_Inout_ PPDEV ppdev)
+{
+    static const CHAR DebugName[] = "virtgpu-gdi";
+    VIRTGPU_3D_CREATE_CONTEXT Context;
+    ULONG Returned;
+
+    if ((ppdev == NULL) ||
+        !ppdev->ThreeDEnabled ||
+        (ppdev->PreferredCapsetId == 0))
+    {
+        return FALSE;
+    }
+
+    memset(&Context, 0, sizeof(Context));
+    Context.CapsetId = ppdev->PreferredCapsetId;
+    if (ppdev->ContextInitSupported)
+        Context.ContextInit = ppdev->PreferredCapsetId & 0xFF;
+    memcpy(Context.DebugName, DebugName, sizeof(DebugName));
+
+    if ((EngDeviceIoControl(ppdev->hDriver,
+                            IOCTL_VIDEO_VIRTGPU_3D_CREATE_CONTEXT,
+                            &Context,
+                            sizeof(Context),
+                            &Context,
+                            sizeof(Context),
+                            &Returned) != 0) ||
+        (Returned < sizeof(Context)) ||
+        (Context.ContextId == 0))
+    {
+        return FALSE;
+    }
+
+    ppdev->Gdi3DContextId = Context.ContextId;
+    return TRUE;
+}
+
+static VOID
+VirtGpuDispGdi3DDestroyContext(_Inout_ PPDEV ppdev)
+{
+    VIRTGPU_3D_CONTEXT Context;
+    ULONG Returned;
+
+    if ((ppdev == NULL) || (ppdev->Gdi3DContextId == 0))
+        return;
+
+    memset(&Context, 0, sizeof(Context));
+    Context.ContextId = ppdev->Gdi3DContextId;
+    (VOID)EngDeviceIoControl(ppdev->hDriver,
+                             IOCTL_VIDEO_VIRTGPU_3D_DESTROY_CONTEXT,
+                             &Context,
+                             sizeof(Context),
+                             NULL,
+                             0,
+                             &Returned);
+    ppdev->Gdi3DContextId = 0;
+}
+
+static BOOL
+VirtGpuDispGdi3DCreateResource(
+    _Inout_ PPDEV ppdev,
+    _In_ BOOL Backed,
+    _Out_ PULONG ResourceId)
+{
+    VIRTGPU_3D_CREATE_RESOURCE Resource;
+    VIRTGPU_3D_CONTEXT_RESOURCE ContextResource;
+    VIRTGPU_3D_RESOURCE Destroy;
+    ULONGLONG BackingSize64;
+    ULONG Returned;
+
+    *ResourceId = 0;
+    if ((ppdev == NULL) ||
+        (ppdev->Gdi3DContextId == 0) ||
+        (ppdev->ScreenWidth == 0) ||
+        (ppdev->ScreenHeight == 0) ||
+        (ppdev->ScreenDelta == 0))
+    {
+        return FALSE;
+    }
+
+    BackingSize64 = (ULONGLONG)ppdev->ScreenDelta * ppdev->ScreenHeight;
+    if (BackingSize64 > VIRTGPU_GDI3D_MAX_TRANSFER_SIZE)
+        return FALSE;
+
+    memset(&Resource, 0, sizeof(Resource));
+    Resource.Target = VIRTGPU_GDI3D_PIPE_TEXTURE_2D;
+    Resource.Format = VIRTGPU_GDI3D_VIRGL_FORMAT_B8G8R8A8_UNORM;
+    Resource.Bind = VIRTGPU_GDI3D_PIPE_BIND_RENDER_TARGET |
+                    VIRTGPU_GDI3D_PIPE_BIND_BLENDABLE |
+                    VIRTGPU_GDI3D_PIPE_BIND_SAMPLER_VIEW;
+    Resource.Width = ppdev->ScreenWidth;
+    Resource.Height = ppdev->ScreenHeight;
+    Resource.Depth = 1;
+    Resource.ArraySize = 1;
+    Resource.BackingSize = Backed ? (ULONG)BackingSize64 : 0;
+
+    if ((EngDeviceIoControl(ppdev->hDriver,
+                            IOCTL_VIDEO_VIRTGPU_3D_CREATE_RESOURCE,
+                            &Resource,
+                            sizeof(Resource),
+                            &Resource,
+                            sizeof(Resource),
+                            &Returned) != 0) ||
+        (Returned < sizeof(Resource)) ||
+        (Resource.ResourceId == 0))
+    {
+        return FALSE;
+    }
+
+    memset(&ContextResource, 0, sizeof(ContextResource));
+    ContextResource.ContextId = ppdev->Gdi3DContextId;
+    ContextResource.ResourceId = Resource.ResourceId;
+    if (EngDeviceIoControl(ppdev->hDriver,
+                           IOCTL_VIDEO_VIRTGPU_3D_ATTACH_RESOURCE,
+                           &ContextResource,
+                           sizeof(ContextResource),
+                           NULL,
+                           0,
+                           &Returned) != 0)
+    {
+        memset(&Destroy, 0, sizeof(Destroy));
+        Destroy.ResourceId = Resource.ResourceId;
+        (VOID)EngDeviceIoControl(ppdev->hDriver,
+                                 IOCTL_VIDEO_VIRTGPU_3D_DESTROY_RESOURCE,
+                                 &Destroy,
+                                 sizeof(Destroy),
+                                 NULL,
+                                 0,
+                                 &Returned);
+        return FALSE;
+    }
+
+    *ResourceId = Resource.ResourceId;
+    return TRUE;
+}
+
+static VOID
+VirtGpuDispGdi3DDestroyResource(
+    _Inout_ PPDEV ppdev,
+    _Inout_ PULONG ResourceId)
+{
+    VIRTGPU_3D_CONTEXT_RESOURCE ContextResource;
+    VIRTGPU_3D_RESOURCE Resource;
+    ULONG Returned;
+
+    if ((ppdev == NULL) || (ResourceId == NULL) || (*ResourceId == 0))
+        return;
+
+    if (ppdev->Gdi3DContextId != 0)
+    {
+        memset(&ContextResource, 0, sizeof(ContextResource));
+        ContextResource.ContextId = ppdev->Gdi3DContextId;
+        ContextResource.ResourceId = *ResourceId;
+        (VOID)EngDeviceIoControl(ppdev->hDriver,
+                                 IOCTL_VIDEO_VIRTGPU_3D_DETACH_RESOURCE,
+                                 &ContextResource,
+                                 sizeof(ContextResource),
+                                 NULL,
+                                 0,
+                                 &Returned);
+    }
+
+    memset(&Resource, 0, sizeof(Resource));
+    Resource.ResourceId = *ResourceId;
+    (VOID)EngDeviceIoControl(ppdev->hDriver,
+                             IOCTL_VIDEO_VIRTGPU_3D_DESTROY_RESOURCE,
+                             &Resource,
+                             sizeof(Resource),
+                             NULL,
+                             0,
+                             &Returned);
+    *ResourceId = 0;
+}
+
+static BOOL
+VirtGpuDispSetScanoutResource(
+    _Inout_ PPDEV ppdev,
+    _In_ ULONG ResourceId)
+{
+    VIRTGPU_SCANOUT_RESOURCE Scanout;
+    ULONG Returned;
+
+    if ((ppdev == NULL) || (ppdev->hDriver == NULL))
+        return FALSE;
+
+    memset(&Scanout, 0, sizeof(Scanout));
+    Scanout.ResourceId = ResourceId;
+    Scanout.Width = ppdev->ScreenWidth;
+    Scanout.Height = ppdev->ScreenHeight;
+    return EngDeviceIoControl(ppdev->hDriver,
+                              IOCTL_VIDEO_VIRTGPU_SET_SCANOUT_RESOURCE,
+                              &Scanout,
+                              sizeof(Scanout),
+                              NULL,
+                              0,
+                              &Returned) == 0;
+}
+
+static BOOL
+VirtGpuDispGdi3DFlushResourceRect(
+    _Inout_ PPDEV ppdev,
+    _In_ const RECTL *Rect)
+{
+    VIRTGPU_RESOURCE_DIRTY_RECT DirtyRect;
+    ULONG Returned;
+
+    if ((ppdev == NULL) ||
+        (ppdev->Gdi3DPrimaryResourceId == 0) ||
+        (Rect == NULL))
+    {
+        return FALSE;
+    }
+
+    DirtyRect.ResourceId = ppdev->Gdi3DPrimaryResourceId;
+    DirtyRect.Left = Rect->left;
+    DirtyRect.Top = Rect->top;
+    DirtyRect.Right = Rect->right;
+    DirtyRect.Bottom = Rect->bottom;
+
+    return EngDeviceIoControl(ppdev->hDriver,
+                              IOCTL_VIDEO_VIRTGPU_RESOURCE_FLUSH_RECT,
+                              &DirtyRect,
+                              sizeof(DirtyRect),
+                              NULL,
+                              0,
+                              &Returned) == 0;
+}
+
+static BOOL
+VirtGpuDispGdi3DUploadRect(
+    _Inout_ PPDEV ppdev,
+    _In_ const RECTL *Rect)
+{
+    PVIRTGPU_3D_TRANSFER Transfer;
+    ULONG HeaderSize = offsetof(VIRTGPU_3D_TRANSFER, Data);
+    ULONG Width;
+    ULONG Height;
+    ULONG RowBytes;
+    ULONG ImageSize;
+    ULONG BufferSize;
+    ULONG Returned;
+    ULONG Row;
+    PUCHAR Source;
+    PUCHAR Destination;
+
+    if ((ppdev == NULL) ||
+        !ppdev->Gdi3DEnabled ||
+        (ppdev->Gdi3DPrimaryResourceId == 0) ||
+        (ppdev->ScreenPtr == NULL) ||
+        (Rect == NULL) ||
+        (Rect->left >= Rect->right) ||
+        (Rect->top >= Rect->bottom))
+    {
+        return FALSE;
+    }
+
+    Width = Rect->right - Rect->left;
+    Height = Rect->bottom - Rect->top;
+    if ((Width > (VIRTGPU_DISP_MAX_ULONG / sizeof(ULONG))) ||
+        (Height == 0))
+    {
+        return FALSE;
+    }
+
+    RowBytes = Width * sizeof(ULONG);
+    if ((ppdev->ScreenDelta < RowBytes) ||
+        (RowBytes > (VIRTGPU_GDI3D_MAX_TRANSFER_SIZE / Height)))
+    {
+        return FALSE;
+    }
+
+    ImageSize = RowBytes * Height;
+    BufferSize = HeaderSize + ImageSize;
+    Transfer = EngAllocMem(0, BufferSize, ALLOC_TAG);
+    if (Transfer == NULL)
+        return FALSE;
+
+    memset(Transfer, 0, HeaderSize);
+    Transfer->ContextId = ppdev->Gdi3DContextId;
+    Transfer->ResourceId = ppdev->Gdi3DPrimaryResourceId;
+    Transfer->X = Rect->left;
+    Transfer->Y = Rect->top;
+    Transfer->Width = Width;
+    Transfer->Height = Height;
+    Transfer->Depth = 1;
+    Transfer->Stride = ppdev->ScreenDelta;
+    Transfer->LayerStride = ppdev->ScreenDelta * ppdev->ScreenHeight;
+    Transfer->Offset = ((ULONGLONG)Rect->top * ppdev->ScreenDelta) +
+                       ((ULONGLONG)Rect->left * sizeof(ULONG));
+    Transfer->Size = ImageSize;
+
+    Source = (PUCHAR)ppdev->ScreenPtr +
+             (Rect->top * ppdev->ScreenDelta) +
+             (Rect->left * sizeof(ULONG));
+    Destination = Transfer->Data;
+    for (Row = 0; Row < Height; ++Row)
+    {
+        memcpy(Destination, Source, RowBytes);
+        Source += ppdev->ScreenDelta;
+        Destination += RowBytes;
+    }
+
+    if ((EngDeviceIoControl(ppdev->hDriver,
+                            IOCTL_VIDEO_VIRTGPU_3D_TRANSFER_TO_HOST,
+                            Transfer,
+                            BufferSize,
+                            Transfer,
+                            HeaderSize,
+                            &Returned) == 0) &&
+        (Returned >= HeaderSize))
+    {
+        ppdev->Gdi3DLastFenceId = Transfer->FenceId;
+        EngFreeMem(Transfer);
+        return VirtGpuDispGdi3DFlushResourceRect(ppdev, Rect);
+    }
+
+    EngFreeMem(Transfer);
+    return FALSE;
+}
+
+static VOID
+VirtGpuDispResetDirty(_Inout_ PPDEV ppdev);
+
+static VOID
+VirtGpuDispDisableGdi3D(_Inout_ PPDEV ppdev)
+{
+    if (ppdev == NULL)
+        return;
+
+    if (ppdev->Gdi3DContextId != 0)
+    {
+        (VOID)VirtGpuDispSetScanoutResource(ppdev, VIRTGPU_LEGACY_SCANOUT_RESOURCE_ID);
+        VirtGpuDispGdi3DDestroyVirglSurface(ppdev, ppdev->Gdi3DPrimarySurfaceHandle);
+    }
+
+    ppdev->Gdi3DPrimarySurfaceHandle = 0;
+    VirtGpuDispGdi3DDestroyResource(ppdev, &ppdev->Gdi3DPrimaryResourceId);
+    VirtGpuDispGdi3DDestroyContext(ppdev);
+    ppdev->Gdi3DEnabled = FALSE;
+    ppdev->Gdi3DWidth = 0;
+    ppdev->Gdi3DHeight = 0;
+    ppdev->Gdi3DLastFenceId = 0;
+    VirtGpuDispResetDirty(ppdev);
+}
+
+static BOOL
+VirtGpuDispEnableGdi3D(_Inout_ PPDEV ppdev)
+{
+    RECTL FullRect;
+
+    if ((ppdev == NULL) ||
+        !ppdev->ThreeDEnabled ||
+        (ppdev->BitsPerPixel != 32) ||
+        (ppdev->ScreenPtr == NULL))
+    {
+        return FALSE;
+    }
+
+    if (!VirtGpuDispGdi3DCreateContext(ppdev))
+        return FALSE;
+
+    if (!VirtGpuDispGdi3DCreateResource(ppdev,
+                                        TRUE,
+                                        &ppdev->Gdi3DPrimaryResourceId))
+    {
+        goto Failure;
+    }
+
+    ppdev->Gdi3DPrimarySurfaceHandle = VIRTGPU_GDI3D_PRIMARY_SURFACE_HANDLE;
+    if (!VirtGpuDispGdi3DCreateVirglSurface(ppdev,
+                                            ppdev->Gdi3DPrimaryResourceId,
+                                            ppdev->Gdi3DPrimarySurfaceHandle))
+    {
+        goto Failure;
+    }
+
+    ppdev->Gdi3DEnabled = TRUE;
+    ppdev->Gdi3DWidth = ppdev->ScreenWidth;
+    ppdev->Gdi3DHeight = ppdev->ScreenHeight;
+    VirtGpuDispResetDirty(ppdev);
+
+    if (!VirtGpuDispSetScanoutResource(ppdev, ppdev->Gdi3DPrimaryResourceId))
+        goto Failure;
+
+    FullRect.left = 0;
+    FullRect.top = 0;
+    FullRect.right = ppdev->ScreenWidth;
+    FullRect.bottom = ppdev->ScreenHeight;
+    if (!VirtGpuDispGdi3DUploadRect(ppdev, &FullRect))
+        goto Failure;
+
+    return TRUE;
+
+Failure:
+    VirtGpuDispDisableGdi3D(ppdev);
+    return FALSE;
+}
+
+static BOOL
+VirtGpuDispClipPrimaryCopy(
+    _In_ PPDEV ppdev,
+    _In_opt_ CLIPOBJ *pco,
+    _In_ const RECTL *DestinationRect,
+    _In_ const POINTL *SourcePoint,
+    _Out_ RECTL *ClippedDestination,
+    _Out_ POINTL *ClippedSource)
+{
+    RECTL Bounds;
+    RECTL OrderedDestination;
+    RECTL Clipped;
+    LONG Delta;
+    LONG Width;
+    LONG Height;
+
+    if ((ppdev == NULL) ||
+        (DestinationRect == NULL) ||
+        (SourcePoint == NULL) ||
+        (ClippedDestination == NULL) ||
+        (ClippedSource == NULL))
+    {
+        return FALSE;
+    }
+
+    if ((pco != NULL) && (pco->iDComplexity == DC_COMPLEX))
+        return FALSE;
+
+    Bounds.left = 0;
+    Bounds.top = 0;
+    Bounds.right = ppdev->ScreenWidth;
+    Bounds.bottom = ppdev->ScreenHeight;
+
+    OrderedDestination = *DestinationRect;
+    VirtGpuOrderRect(&OrderedDestination);
+
+    if ((pco != NULL) && (pco->iDComplexity != DC_TRIVIAL))
+    {
+        if (!VirtGpuIntersectRect(&Clipped, &OrderedDestination, &pco->rclBounds))
+            return FALSE;
+    }
+    else
+    {
+        Clipped = OrderedDestination;
+    }
+
+    if (!VirtGpuIntersectRect(&Clipped, &Clipped, &Bounds))
+        return FALSE;
+
+    ClippedSource->x = SourcePoint->x + (Clipped.left - OrderedDestination.left);
+    ClippedSource->y = SourcePoint->y + (Clipped.top - OrderedDestination.top);
+
+    if (ClippedSource->x < 0)
+    {
+        Delta = -ClippedSource->x;
+        Clipped.left += Delta;
+        ClippedSource->x = 0;
+    }
+
+    if (ClippedSource->y < 0)
+    {
+        Delta = -ClippedSource->y;
+        Clipped.top += Delta;
+        ClippedSource->y = 0;
+    }
+
+    Width = Clipped.right - Clipped.left;
+    Height = Clipped.bottom - Clipped.top;
+
+    if ((ClippedSource->x + Width) > (LONG)ppdev->ScreenWidth)
+        Clipped.right -= (ClippedSource->x + Width) - (LONG)ppdev->ScreenWidth;
+
+    if ((ClippedSource->y + Height) > (LONG)ppdev->ScreenHeight)
+        Clipped.bottom -= (ClippedSource->y + Height) - (LONG)ppdev->ScreenHeight;
+
+    if ((Clipped.left >= Clipped.right) || (Clipped.top >= Clipped.bottom))
+        return FALSE;
+
+    *ClippedDestination = Clipped;
+    return TRUE;
+}
+
+static VOID
+VirtGpuDispCopyPrimaryRect32(
+    _In_ PPDEV ppdev,
+    _In_ const RECTL *DestinationRect,
+    _In_ const POINTL *SourcePoint)
+{
+    PUCHAR Base;
+    PUCHAR Destination;
+    PUCHAR Source;
+    ULONG Width;
+    ULONG Height;
+    ULONG Row;
+    ULONG RowBytes;
+
+    Width = DestinationRect->right - DestinationRect->left;
+    Height = DestinationRect->bottom - DestinationRect->top;
+    RowBytes = Width * sizeof(ULONG);
+
+    Base = ppdev->ScreenPtr;
+    Destination = Base + (DestinationRect->top * ppdev->ScreenDelta) +
+                  (DestinationRect->left * sizeof(ULONG));
+    Source = Base + (SourcePoint->y * ppdev->ScreenDelta) +
+             (SourcePoint->x * sizeof(ULONG));
+
+    if ((DestinationRect->top > SourcePoint->y) ||
+        ((DestinationRect->top == SourcePoint->y) &&
+         (DestinationRect->left > SourcePoint->x)))
+    {
+        for (Row = Height; Row != 0; --Row)
+        {
+            memmove(Destination + ((Row - 1) * ppdev->ScreenDelta),
+                    Source + ((Row - 1) * ppdev->ScreenDelta),
+                    RowBytes);
+        }
+    }
+    else
+    {
+        for (Row = 0; Row < Height; ++Row)
+        {
+            memmove(Destination + (Row * ppdev->ScreenDelta),
+                    Source + (Row * ppdev->ScreenDelta),
+                    RowBytes);
+        }
+    }
+}
+
+static BOOL
+VirtGpuDispTryPrimaryCopyBits(
+    _In_ PPDEV ppdev,
+    _In_opt_ SURFOBJ *psoDest,
+    _In_opt_ SURFOBJ *psoSrc,
+    _In_opt_ CLIPOBJ *pco,
+    _In_opt_ XLATEOBJ *pxlo,
+    _In_ RECTL *prclDest,
+    _In_ POINTL *pptlSrc)
+{
+    RECTL ClippedDestination;
+    POINTL ClippedSource;
+
+    if ((ppdev == NULL) ||
+        (ppdev->ScreenPtr == NULL) ||
+        (ppdev->BitsPerPixel != 32) ||
+        !VirtGpuDispIsPrimarySurface(ppdev, psoDest) ||
+        !VirtGpuDispIsPrimarySurface(ppdev, psoSrc))
+    {
+        return FALSE;
+    }
+
+    if ((pxlo != NULL) && ((pxlo->flXlate & XO_TRIVIAL) == 0))
+        return FALSE;
+
+    if (!VirtGpuDispClipPrimaryCopy(ppdev,
+                                    pco,
+                                    prclDest,
+                                    pptlSrc,
+                                    &ClippedDestination,
+                                    &ClippedSource))
+    {
+        return FALSE;
+    }
+
+    VirtGpuDispCopyPrimaryRect32(ppdev, &ClippedDestination, &ClippedSource);
+    VirtGpuDispFlushRect(ppdev, &ClippedDestination);
+    return TRUE;
+}
+
+static VOID
+VirtGpuDispUnionDirtyRect(_Inout_ RECTL *Dirty, _In_ const RECTL *Rect)
+{
+    if (Rect->left < Dirty->left)
+        Dirty->left = Rect->left;
+    if (Rect->top < Dirty->top)
+        Dirty->top = Rect->top;
+    if (Rect->right > Dirty->right)
+        Dirty->right = Rect->right;
+    if (Rect->bottom > Dirty->bottom)
+        Dirty->bottom = Rect->bottom;
+}
+
+static ULONG
+VirtGpuDispDirtyBytes(_In_ const RECTL *Rect)
+{
+    ULONG Width;
+    ULONG Height;
+
+    if ((Rect->left >= Rect->right) || (Rect->top >= Rect->bottom))
+        return 0;
+
+    Width = Rect->right - Rect->left;
+    Height = Rect->bottom - Rect->top;
+    if ((Height != 0) && (Width > (VIRTGPU_DISP_MAX_ULONG / Height)))
+        return VIRTGPU_DISP_MAX_ULONG;
+    if ((Width * Height) > (VIRTGPU_DISP_MAX_ULONG / sizeof(ULONG)))
+        return VIRTGPU_DISP_MAX_ULONG;
+
+    return Width * Height * sizeof(ULONG);
+}
+
+static VOID
+VirtGpuDispMarkDirty(_Inout_ PPDEV ppdev, _In_ const RECTL *Rect)
+{
+    if (!ppdev->DirtyValid)
+    {
+        ppdev->DirtyRect = *Rect;
+        ppdev->DirtyValid = TRUE;
+        ppdev->DirtyOps = 1;
+        return;
+    }
+
+    VirtGpuDispUnionDirtyRect(&ppdev->DirtyRect, Rect);
+    ppdev->DirtyOps++;
+}
+
+static VOID
+VirtGpuDispResetDirty(_Inout_ PPDEV ppdev)
+{
+    ppdev->DirtyValid = FALSE;
+    ppdev->DirtyOps = 0;
+    ppdev->DirtyRect.left = 0;
+    ppdev->DirtyRect.top = 0;
+    ppdev->DirtyRect.right = 0;
+    ppdev->DirtyRect.bottom = 0;
+}
+
+static VOID
+VirtGpuDispFlush2DRect(_In_ PPDEV ppdev, _In_ const RECTL *Rect)
+{
+    VIRTGPU_DIRTY_RECT DirtyRect;
+    ULONG Returned;
+
+    DirtyRect.Left = Rect->left;
+    DirtyRect.Top = Rect->top;
+    DirtyRect.Right = Rect->right;
+    DirtyRect.Bottom = Rect->bottom;
+
+    EngDeviceIoControl(ppdev->hDriver,
+                       IOCTL_VIDEO_VIRTGPU_FLUSH_RECT,
+                       &DirtyRect,
+                       sizeof(DirtyRect),
+                       NULL,
+                       0,
+                       &Returned);
+}
+
+VOID
+VirtGpuDispCommitDirty(_Inout_ PPDEV ppdev)
+{
+    RECTL Dirty;
+
+    if ((ppdev == NULL) || (ppdev->hDriver == NULL) || !ppdev->DirtyValid)
+        return;
+
+    Dirty = ppdev->DirtyRect;
+    VirtGpuDispResetDirty(ppdev);
+
+    if (ppdev->Gdi3DEnabled)
+    {
+        if (VirtGpuDispGdi3DUploadRect(ppdev, &Dirty))
+            return;
+
+        VirtGpuDispDisableGdi3D(ppdev);
+    }
+
+    VirtGpuDispFlush2DRect(ppdev, &Dirty);
+}
+
 VOID
 VirtGpuDispFlushRect(
     _Inout_ PPDEV ppdev,
     _In_opt_ const RECTL *Rect)
 {
-    VIRTGPU_DIRTY_RECT DirtyRect;
     RECTL Clipped;
     RECTL Bounds;
-    ULONG Returned;
 
     if ((ppdev == NULL) || (ppdev->hDriver == NULL))
         return;
@@ -249,18 +1053,35 @@ VirtGpuDispFlushRect(
         Clipped = Bounds;
     }
 
-    DirtyRect.Left = Clipped.left;
-    DirtyRect.Top = Clipped.top;
-    DirtyRect.Right = Clipped.right;
-    DirtyRect.Bottom = Clipped.bottom;
+    if (ppdev->DirtyValid && (Rect != NULL))
+    {
+        RECTL Merged = ppdev->DirtyRect;
+        ULONG MergedBytes;
+        ULONG IndividualBytes;
 
-    EngDeviceIoControl(ppdev->hDriver,
-                       IOCTL_VIDEO_VIRTGPU_FLUSH_RECT,
-                       &DirtyRect,
-                       sizeof(DirtyRect),
-                       NULL,
-                       0,
-                       &Returned);
+        VirtGpuDispUnionDirtyRect(&Merged, &Clipped);
+        MergedBytes = VirtGpuDispDirtyBytes(&Merged);
+        IndividualBytes = VirtGpuDispDirtyBytes(&ppdev->DirtyRect) +
+                          VirtGpuDispDirtyBytes(&Clipped);
+
+        if ((IndividualBytes != 0) &&
+            (MergedBytes >
+             IndividualBytes * VIRTGPU_DISP_DIRTY_WASTE_NUMERATOR /
+                               VIRTGPU_DISP_DIRTY_WASTE_DENOMINATOR))
+        {
+            VirtGpuDispCommitDirty(ppdev);
+        }
+    }
+
+    VirtGpuDispMarkDirty(ppdev, &Clipped);
+
+    if ((Rect == NULL) ||
+        (ppdev->DirtyOps >= VIRTGPU_DISP_DIRTY_OP_THRESHOLD) ||
+        (VirtGpuDispDirtyBytes(&ppdev->DirtyRect) >=
+         VIRTGPU_DISP_DIRTY_BYTE_THRESHOLD))
+    {
+        VirtGpuDispCommitDirty(ppdev);
+    }
 }
 
 VOID
@@ -1063,6 +1884,7 @@ DrvDisableSurface(_In_ DHPDEV dhpdev)
     ULONG Returned;
 
     VirtGpuDispDisablePointer(ppdev);
+    VirtGpuDispDisableGdi3D(ppdev);
 
     if (ppdev->hSurfEng != NULL)
     {
@@ -1113,6 +1935,12 @@ DrvAssertMode(_In_ DHPDEV dhpdev, _In_ BOOL bEnable)
             return FALSE;
         }
 
+        if (ppdev->Gdi3DEnabled &&
+            !VirtGpuDispSetScanoutResource(ppdev, ppdev->Gdi3DPrimaryResourceId))
+        {
+            VirtGpuDispDisableGdi3D(ppdev);
+        }
+
         VirtGpuDispFlushRect(ppdev, NULL);
         return TRUE;
     }
@@ -1149,6 +1977,7 @@ DrvSetPointerShape(
         return SPS_ERROR;
 
     ppdev = (PPDEV)pso->dhpdev;
+    VirtGpuDispCommitDirty(ppdev);
     if (!VirtGpuDispSetPointerShape(ppdev, psoMask, psoColor, xHot, yHot, x, y, fl))
         return SPS_DECLINE;
 
@@ -1163,17 +1992,26 @@ DrvMovePointer(
     _In_ LONG y,
     _Inout_opt_ RECTL *prcl)
 {
+    PPDEV ppdev;
+
     UNREFERENCED_PARAMETER(prcl);
 
-    if (pso != NULL)
-        VirtGpuDispMovePointer((PPDEV)pso->dhpdev, x, y);
+    if (pso == NULL)
+        return;
+
+    ppdev = (PPDEV)pso->dhpdev;
+    VirtGpuDispCommitDirty(ppdev);
+    VirtGpuDispMovePointer(ppdev, x, y);
 }
 
 VOID
 APIENTRY
 DrvSynchronize(_In_ DHPDEV dhpdev, _In_opt_ RECTL *prcl)
 {
-    VirtGpuDispFlushRect((PPDEV)dhpdev, prcl);
+    PPDEV ppdev = (PPDEV)dhpdev;
+
+    VirtGpuDispFlushRect(ppdev, prcl);
+    VirtGpuDispCommitDirty(ppdev);
 }
 
 VOID
@@ -1189,7 +2027,10 @@ DrvSynchronizeSurface(
 
     ppdev = VirtGpuDispFindPdev(pso, NULL, NULL);
     if ((ppdev != NULL) && VirtGpuDispIsPrimarySurface(ppdev, pso))
+    {
         VirtGpuDispFlushRect(ppdev, prcl);
+        VirtGpuDispCommitDirty(ppdev);
+    }
 }
 
 static VOID
@@ -1331,6 +2172,7 @@ DrvSaveScreenBits(
                                  RowBytes,
                                  Height);
         VirtGpuDispFlushRect(ppdev, &Clipped);
+        VirtGpuDispCommitDirty(ppdev);
         return TRUE;
     }
 
@@ -1573,6 +2415,7 @@ VirtGpuDispIs3DIoControl(_In_ ULONG IoControlCode)
         case IOCTL_VIDEO_VIRTGPU_3D_TRANSFER_TO_HOST:
         case IOCTL_VIDEO_VIRTGPU_3D_TRANSFER_FROM_HOST:
         case IOCTL_VIDEO_VIRTGPU_3D_SUBMIT:
+        case IOCTL_VIDEO_VIRTGPU_3D_EXECUTE_BATCH:
         case IOCTL_VIDEO_VIRTGPU_3D_ATTACH_RESOURCE:
         case IOCTL_VIDEO_VIRTGPU_3D_DETACH_RESOURCE:
         case IOCTL_VIDEO_VIRTGPU_3D_WAIT_FENCE:
@@ -1735,6 +2578,21 @@ DrvBitBlt(
     ppdev = VirtGpuDispFindPdev(psoTrg, psoSrc, psoMask);
     if (ppdev != NULL)
     {
+        if ((rop4 == VIRTGPU_ROP4_SRCCOPY) &&
+            (psoMask == NULL) &&
+            (pbo == NULL) &&
+            (pptlSrc != NULL) &&
+            VirtGpuDispTryPrimaryCopyBits(ppdev,
+                                          psoTrg,
+                                          psoSrc,
+                                          pco,
+                                          pxlo,
+                                          prclTrg,
+                                          pptlSrc))
+        {
+            return TRUE;
+        }
+
         FlushTarget = VirtGpuDispIsPrimarySurface(ppdev, psoTrg);
         psoEngTrg = VirtGpuDispMapSurface(ppdev, psoTrg);
         psoEngSrc = VirtGpuDispMapSurface(ppdev, psoSrc);
@@ -1767,6 +2625,17 @@ DrvCopyBits(
     ppdev = VirtGpuDispFindPdev(psoDest, psoSrc, NULL);
     if (ppdev != NULL)
     {
+        if (VirtGpuDispTryPrimaryCopyBits(ppdev,
+                                          psoDest,
+                                          psoSrc,
+                                          pco,
+                                          pxlo,
+                                          prclDest,
+                                          pptlSrc))
+        {
+            return TRUE;
+        }
+
         FlushTarget = VirtGpuDispIsPrimarySurface(ppdev, psoDest);
         psoEngDest = VirtGpuDispMapSurface(ppdev, psoDest);
         psoEngSrc = VirtGpuDispMapSurface(ppdev, psoSrc);
