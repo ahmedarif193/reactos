@@ -86,6 +86,8 @@ typedef struct _FDO_EXTENSION {
     ULONG MaxClockFrequency;
     USHORT SpecVersion;
     UCHAR CurrentBusWidth;
+    BOOLEAN EmmcPartitionConfigValid;
+    UCHAR EmmcPartitionConfig;
 
     /* Host bus information (for DMA adapter initialization) */
     INTERFACE_TYPE BusInterfaceType;
@@ -483,6 +485,7 @@ SdBusWaitForInterrupt(
  * @param[in]      Argument      The 32-bit command argument.
  * @param[in,out]  Mdl           Optional MDL describing the data buffer for read/write transfers.
  * @param[in]      DataLength    Length of the data transfer in bytes (0 for command-only).
+ * @param[in]      BlockSize     SDHCI block size for data transfers.
  * @param[out]     Response      Optional pointer to receive response data (4 ULONGs for R2).
  *
  * @return STATUS_SUCCESS on success, or an NTSTATUS error code.
@@ -494,6 +497,7 @@ SdBusSendSdhciCommand(
     _In_ ULONG Argument,
     _Inout_opt_ PMDL Mdl,
     _In_ ULONG DataLength,
+    _In_ ULONG BlockSize,
     _Out_opt_ PULONG Response);
 
 NTSTATUS
@@ -628,6 +632,22 @@ SdBusEmmcSwitch(
     _In_ UCHAR CmdSet);
 
 NTSTATUS
+SdBusEmmcSwitchByRca(
+    _In_ PFDO_EXTENSION FdoExtension,
+    _In_ ULONG Rca,
+    _In_ UCHAR Access,
+    _In_ UCHAR Index,
+    _In_ UCHAR Value,
+    _In_ UCHAR CmdSet,
+    _In_ ULONG TimeoutMs);
+
+NTSTATUS
+SdBusEmmcWaitReadyByRca(
+    _In_ PFDO_EXTENSION FdoExtension,
+    _In_ ULONG Rca,
+    _In_ ULONG TimeoutMs);
+
+NTSTATUS
 SdBusEmmcSelectPartition(
     _In_ PFDO_EXTENSION FdoExtension,
     _In_ PPDO_EXTENSION PdoExtension,
@@ -658,6 +678,11 @@ SdhcRegisterBusCallbacks(
     _In_ PVOID FdoExt,
     _In_ PVOID MiniportExt,
     _In_ PVOID IssueRequestFunc);
+
+NTSTATUS
+SdBusResetHost(
+    _In_ PFDO_EXTENSION FdoExtension,
+    _In_ UCHAR ResetMask);
 
 /**
  * @brief SDHCI register access helpers (inline).

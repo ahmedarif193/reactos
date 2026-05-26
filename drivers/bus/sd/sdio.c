@@ -184,6 +184,8 @@ SdBusSdioCmd53(
     SDCMD_DESCRIPTOR CmdDesc;
     ULONG Argument;
     ULONG DataLength;
+    ULONG ActualCount;
+    ULONG TransferBlockSize;
     ULONG Response = 0;
 
     UNREFERENCED_PARAMETER(PdoExtension);
@@ -193,24 +195,38 @@ SdBusSdioCmd53(
         return STATUS_INVALID_PARAMETER;
     }
 
+    if (Count > 512)
+    {
+        return STATUS_INVALID_PARAMETER;
+    }
+
+    ActualCount = (Count == 0) ? 512 : Count;
+
+    if (Mdl == NULL)
+    {
+        return STATUS_INVALID_PARAMETER;
+    }
+
     if (BlockMode)
     {
-        if (BlockSize == 0 || Mdl == NULL)
+        if (BlockSize == 0 || BlockSize > SDHCI_BLOCK_SIZE_MASK)
         {
             return STATUS_INVALID_PARAMETER;
         }
-        DataLength = Count * BlockSize;
+        TransferBlockSize = BlockSize;
+        DataLength = ActualCount * BlockSize;
     }
     else
     {
-        DataLength = (Count == 0) ? 512 : Count;
+        TransferBlockSize = ActualCount;
+        DataLength = ActualCount;
     }
 
     RtlZeroMemory(&CmdDesc, sizeof(CmdDesc));
     CmdDesc.Cmd = SDCMD_IO_RW_EXTENDED;
     CmdDesc.CmdClass = SDCC_STANDARD;
     CmdDesc.TransferDirection = Write ? SDTD_WRITE : SDTD_READ;
-    CmdDesc.TransferType = (BlockMode && Count > 1) ?
+    CmdDesc.TransferType = (BlockMode && ActualCount > 1) ?
         SDTT_MULTI_BLOCK_NO_CMD12 : SDTT_SINGLE_BLOCK;
     CmdDesc.ResponseType = SDRT_5;
 
@@ -218,7 +234,7 @@ SdBusSdioCmd53(
                                             Increment, Address, Count);
 
     return SdBusSendSdhciCommand(FdoExtension, &CmdDesc, Argument,
-                                 Mdl, DataLength, &Response);
+                                 Mdl, DataLength, TransferBlockSize, &Response);
 }
 
 static NTSTATUS

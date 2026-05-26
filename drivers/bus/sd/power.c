@@ -145,12 +145,8 @@ SdBusRestoreControllerState(
         USHORT Divisor;
         USHORT DivisorHigh;
 
-        Divisor = (USHORT)SDHCI_CLK_DIVISOR(FdoExtension->MaxClockFrequency,
+        Divisor = (USHORT)SDHCI_CALC_CLK_DIVIDER(FdoExtension->MaxClockFrequency,
                                             SD_INIT_CLOCK_KHZ);
-        if (Divisor > 0)
-        {
-            Divisor--;
-        }
         if (Divisor > 0x3FF)
         {
             Divisor = 0x3FF;
@@ -183,6 +179,9 @@ SdBusRestoreControllerState(
         ClockControl |= SDHCI_CLK_SD_CLK_ENABLE;
         SdBusWriteReg16(FdoExtension, SDHCI_CLOCK_CONTROL, ClockControl);
     }
+
+    Delay.QuadPart = -(LONGLONG)SD_POWER_UP_DELAY_MS * 10000;
+    KeDelayExecutionThread(KernelMode, FALSE, &Delay);
 
     /* SDHCI full reset restores 1-bit transfers until the card is reconfigured. */
     FdoExtension->CurrentBusWidth = 1;

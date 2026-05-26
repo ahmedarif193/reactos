@@ -38,8 +38,8 @@ SdBusEmmcBuildSwitchArgument(
     return Arg;
 }
 
-static NTSTATUS
-SdBusEmmcWaitReady(
+NTSTATUS
+SdBusEmmcWaitReadyByRca(
     _In_ PFDO_EXTENSION FdoExtension,
     _In_ ULONG Rca,
     _In_ ULONG TimeoutMs)
@@ -47,6 +47,7 @@ SdBusEmmcWaitReady(
     ULONG Status;
     ULONG Retry;
     NTSTATUS CmdStatus;
+    NTSTATUS LastStatus = STATUS_IO_TIMEOUT;
     LARGE_INTEGER Delay;
 
     Delay.QuadPart = -10000LL;
@@ -63,12 +64,19 @@ SdBusEmmcWaitReady(
                                      &Status);
         if (!NT_SUCCESS(CmdStatus))
         {
+            LastStatus = CmdStatus;
+            if (CmdStatus == STATUS_SD_CMD_CRC_ERROR ||
+                CmdStatus == STATUS_SD_CMD_TIMEOUT ||
+                CmdStatus == STATUS_IO_TIMEOUT)
+            {
+                goto DelayAndRetry;
+            }
             return CmdStatus;
         }
 
         if (Status & EMMC_STATUS_SWITCH_ERROR)
         {
-            DPRINT1("SdBusEmmcWaitReady: SWITCH_ERROR set in status 0x%08lx\n",
+            DPRINT1("SdBusEmmcWaitReadyByRca: SWITCH_ERROR set in status 0x%08lx\n",
                     Status);
             return STATUS_INVALID_PARAMETER;
         }
@@ -83,6 +91,7 @@ SdBusEmmcWaitReady(
             }
         }
 
+DelayAndRetry:
         if (KeGetCurrentIrql() <= APC_LEVEL)
         {
             KeDelayExecutionThread(KernelMode, FALSE, &Delay);
@@ -93,9 +102,71 @@ SdBusEmmcWaitReady(
         }
     }
 
-    DPRINT1("SdBusEmmcWaitReady: timed out after %lu ms (RCA=0x%04lX)\n",
+    DPRINT1("SdBusEmmcWaitReadyByRca: timed out after %lu ms (RCA=0x%04lX)\n",
             TimeoutMs, Rca);
-    return STATUS_IO_TIMEOUT;
+    return LastStatus;
+}
+
+NTSTATUS
+SdBusEmmcSwitchByRca(
+    _In_ PFDO_EXTENSION FdoExtension,
+    _In_ ULONG Rca,
+    _In_ UCHAR Access,
+    _In_ UCHAR Index,
+    _In_ UCHAR Value,
+    _In_ UCHAR CmdSet,
+    _In_ ULONG TimeoutMs)
+{
+    ULONG Argument;
+    NTSTATUS Status;
+
+    if (FdoExtension == NULL)
+    {
+        return STATUS_INVALID_PARAMETER;
+    }
+
+    if (Rca == 0)
+    {
+        DPRINT1("SdBusEmmcSwitchByRca: invalid RCA 0\n");
+        return STATUS_INVALID_PARAMETER;
+    }
+
+    if (Access > EMMC_SWITCH_ACCESS_WRITE_BYTE)
+    {
+        DPRINT1("SdBusEmmcSwitchByRca: invalid access mode %u\n", Access);
+        return STATUS_INVALID_PARAMETER;
+    }
+
+    Argument = SdBusEmmcBuildSwitchArgument(Access, Index, Value, CmdSet);
+
+    DPRINT("SdBusEmmcSwitchByRca: RCA=0x%04lX Access=%u Index=%u Value=0x%02X CmdSet=%u Arg=0x%08lx\n",
+           Rca, Access, Index, Value, CmdSet, Argument);
+
+    Status = SdBusSendCommand(FdoExtension,
+                              SDCMD_SWITCH_FUNC,
+                              Argument,
+                              SDHCI_CMD_RESP_48_BUSY |
+                                  SDHCI_CMD_CRC_CHECK |
+                                  SDHCI_CMD_INDEX_CHECK,
+                              NULL);
+    if (!NT_SUCCESS(Status))
+    {
+        DPRINT1("SdBusEmmcSwitchByRca: CMD6 failed (0x%08lx)\n", Status);
+        return Status;
+    }
+
+    if (TimeoutMs == 0)
+    {
+        return STATUS_SUCCESS;
+    }
+
+    Status = SdBusEmmcWaitReadyByRca(FdoExtension, Rca, TimeoutMs);
+    if (!NT_SUCCESS(Status))
+    {
+        DPRINT1("SdBusEmmcSwitchByRca: post-switch CMD13 poll failed (0x%08lx)\n",
+                Status);
+    }
+    return Status;
 }
 
 NTSTATUS
@@ -106,8 +177,6 @@ SdBusEmmcSwitch(
     _In_ UCHAR Value,
     _In_ UCHAR CmdSet)
 {
-    ULONG Argument;
-    NTSTATUS Status;
     PPDO_EXTENSION TargetPdo = NULL;
     PLIST_ENTRY Entry;
     KIRQL OldIrql;
@@ -115,12 +184,6 @@ SdBusEmmcSwitch(
 
     if (FdoExtension == NULL)
     {
-        return STATUS_INVALID_PARAMETER;
-    }
-
-    if (Access > EMMC_SWITCH_ACCESS_WRITE_BYTE)
-    {
-        DPRINT1("SdBusEmmcSwitch: invalid access mode %u\n", Access);
         return STATUS_INVALID_PARAMETER;
     }
 
@@ -150,31 +213,13 @@ SdBusEmmcSwitch(
         return STATUS_DEVICE_NOT_READY;
     }
 
-    Argument = SdBusEmmcBuildSwitchArgument(Access, Index, Value, CmdSet);
-
-    DPRINT("SdBusEmmcSwitch: Access=%u Index=%u Value=0x%02X CmdSet=%u Arg=0x%08lx\n",
-           Access, Index, Value, CmdSet, Argument);
-
-    Status = SdBusSendCommand(FdoExtension,
-                              SDCMD_SWITCH_FUNC,
-                              Argument,
-                              SDHCI_CMD_RESP_48_BUSY |
-                                  SDHCI_CMD_CRC_CHECK |
-                                  SDHCI_CMD_INDEX_CHECK,
-                              NULL);
-    if (!NT_SUCCESS(Status))
-    {
-        DPRINT1("SdBusEmmcSwitch: CMD6 failed (0x%08lx)\n", Status);
-        return Status;
-    }
-
-    Status = SdBusEmmcWaitReady(FdoExtension, Rca, SD_DATA_TIMEOUT_MS);
-    if (!NT_SUCCESS(Status))
-    {
-        DPRINT1("SdBusEmmcSwitch: post-switch CMD13 poll failed (0x%08lx)\n",
-                Status);
-    }
-    return Status;
+    return SdBusEmmcSwitchByRca(FdoExtension,
+                                Rca,
+                                Access,
+                                Index,
+                                Value,
+                                CmdSet,
+                                SD_DATA_TIMEOUT_MS);
 }
 
 NTSTATUS
@@ -206,20 +251,30 @@ SdBusEmmcSelectPartition(
         return STATUS_NOT_SUPPORTED;
     }
 
-    OldConfig = PdoExtension->ExtCsd[EMMC_EXT_CSD_PARTITION_CONFIG];
+    OldConfig = FdoExtension->EmmcPartitionConfigValid ?
+        FdoExtension->EmmcPartitionConfig :
+        PdoExtension->ExtCsd[EMMC_EXT_CSD_PARTITION_CONFIG];
     NewConfig = (UCHAR)((OldConfig & ~EMMC_PARTITION_ACCESS_MASK) |
                         (PartitionId & EMMC_PARTITION_ACCESS_MASK));
+    if (NewConfig == OldConfig)
+    {
+        return STATUS_SUCCESS;
+    }
 
-    Status = SdBusEmmcSwitch(FdoExtension,
-                             EMMC_SWITCH_ACCESS_WRITE_BYTE,
-                             (UCHAR)EMMC_EXT_CSD_PARTITION_CONFIG,
-                             NewConfig,
-                             0);
+    Status = SdBusEmmcSwitchByRca(FdoExtension,
+                                  PdoExtension->RelativeAddress,
+                                  EMMC_SWITCH_ACCESS_WRITE_BYTE,
+                                  (UCHAR)EMMC_EXT_CSD_PARTITION_CONFIG,
+                                  NewConfig,
+                                  0,
+                                  SD_DATA_TIMEOUT_MS);
     if (NT_SUCCESS(Status))
     {
         PLIST_ENTRY Entry;
         KIRQL OldIrql;
 
+        FdoExtension->EmmcPartitionConfig = NewConfig;
+        FdoExtension->EmmcPartitionConfigValid = TRUE;
         PdoExtension->ExtCsd[EMMC_EXT_CSD_PARTITION_CONFIG] = NewConfig;
 
         KeAcquireSpinLock(&FdoExtension->Lock, &OldIrql);
@@ -248,7 +303,6 @@ SdBusEmmcSanitize(
     _In_ PFDO_EXTENSION FdoExtension,
     _In_ PPDO_EXTENSION PdoExtension)
 {
-    ULONG Argument;
     NTSTATUS Status;
     ULONG Rca;
 
@@ -265,32 +319,20 @@ SdBusEmmcSanitize(
         return STATUS_NOT_SUPPORTED;
     }
 
-
-    Argument = SdBusEmmcBuildSwitchArgument(EMMC_SWITCH_ACCESS_WRITE_BYTE,
-                                             (UCHAR)EMMC_EXT_CSD_SANITIZE_START,
-                                             1,
-                                             0);
     Rca = PdoExtension->RelativeAddress;
 
     DPRINT1("SdBusEmmcSanitize: issuing SANITIZE_START (RCA=0x%04lX)\n", Rca);
 
-    Status = SdBusSendCommand(FdoExtension,
-                              SDCMD_SWITCH_FUNC,
-                              Argument,
-                              SDHCI_CMD_RESP_48_BUSY |
-                                  SDHCI_CMD_CRC_CHECK |
-                                  SDHCI_CMD_INDEX_CHECK,
-                              NULL);
+    Status = SdBusEmmcSwitchByRca(FdoExtension,
+                                  Rca,
+                                  EMMC_SWITCH_ACCESS_WRITE_BYTE,
+                                  (UCHAR)EMMC_EXT_CSD_SANITIZE_START,
+                                  1,
+                                  0,
+                                  EMMC_SANITIZE_TIMEOUT_MS);
     if (!NT_SUCCESS(Status))
     {
         DPRINT1("SdBusEmmcSanitize: CMD6 SANITIZE failed (0x%08lx)\n", Status);
-        return Status;
-    }
-
-    Status = SdBusEmmcWaitReady(FdoExtension, Rca, EMMC_SANITIZE_TIMEOUT_MS);
-    if (!NT_SUCCESS(Status))
-    {
-        DPRINT1("SdBusEmmcSanitize: status poll failed (0x%08lx)\n", Status);
     }
     else
     {

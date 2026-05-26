@@ -29,14 +29,70 @@ SdBusIsRetryableError(
     }
 }
 
+typedef struct _SDBUS_INTERRUPT_CAPTURE_CONTEXT {
+    PFDO_EXTENSION FdoExtension;
+    ULONG Mask;
+    ULONG Status;
+} SDBUS_INTERRUPT_CAPTURE_CONTEXT, *PSDBUS_INTERRUPT_CAPTURE_CONTEXT;
+
+static BOOLEAN
+NTAPI
+SdBusCaptureInterruptStatusSynchronized(
+    _In_ PVOID Context)
+{
+    PSDBUS_INTERRUPT_CAPTURE_CONTEXT Capture;
+
+    Capture = (PSDBUS_INTERRUPT_CAPTURE_CONTEXT)Context;
+    Capture->Status = SdBusReadReg32(Capture->FdoExtension,
+                                     SDHCI_INT_STATUS) & Capture->Mask;
+    if (Capture->Status != 0)
+    {
+        SdBusWriteReg32(Capture->FdoExtension,
+                        SDHCI_INT_STATUS,
+                        Capture->Status);
+    }
+
+    return TRUE;
+}
+
+static ULONG
+SdBusCaptureInterruptStatus(
+    _In_ PFDO_EXTENSION FdoExtension,
+    _In_ ULONG Mask)
+{
+    SDBUS_INTERRUPT_CAPTURE_CONTEXT Capture;
+
+    if (FdoExtension->RegisterBase == NULL)
+    {
+        return 0;
+    }
+
+    Capture.FdoExtension = FdoExtension;
+    Capture.Mask = Mask;
+    Capture.Status = 0;
+
+    if (FdoExtension->InterruptObject != NULL)
+    {
+        KeSynchronizeExecution(FdoExtension->InterruptObject,
+                               SdBusCaptureInterruptStatusSynchronized,
+                               &Capture);
+    }
+    else
+    {
+        SdBusCaptureInterruptStatusSynchronized(&Capture);
+    }
+
+    return Capture.Status;
+}
+
 /**
  * @brief Wait for specific SDHCI interrupt bits via the ISR-driven event.
  *
- * Replaces all KeStallExecutionProcessor polling loops. The ISR acknowledges
- * interrupt status bits, accumulates them in CommandInterruptStatus, and
- * signals CommandEvent. This function waits for the desired bits (or errors)
- * and returns the matched bits. Only consumed bits are cleared from the
- * accumulator.
+ * The ISR acknowledges interrupt status bits, accumulates them in
+ * CommandInterruptStatus, and signals CommandEvent. This function also samples
+ * the SDHCI status register directly so command completion is not lost when
+ * the controller status bit is set but the platform interrupt is delayed or
+ * not delivered. Only consumed bits are cleared from the accumulator.
  *
  * @param[in]  FdoExtension  Host controller FDO extension.
  * @param[in]  WantedBits    Interrupt status bits to wait for (e.g. CMD_COMPLETE).
@@ -55,33 +111,66 @@ SdBusWaitForInterrupt(
     _In_ ULONG TimeoutMs,
     _Out_ PULONG ResultBits)
 {
-    LARGE_INTEGER Timeout;
-    Timeout.QuadPart = -(LONGLONG)TimeoutMs * 10000; /* ms -> 100ns, relative */
+    ULONG RemainingMs;
+    ULONG ErrorMask;
+    ULONG MatchMask;
+
+    RemainingMs = TimeoutMs;
+    ErrorMask = ErrorBits;
+    if (ErrorMask != 0)
+    {
+        ErrorMask |= SDHCI_INT_ERROR;
+    }
+    MatchMask = WantedBits | ErrorMask;
 
     for (;;)
     {
         ULONG Bits = (ULONG)FdoExtension->CommandInterruptStatus; /* volatile read */
-        ULONG Match = Bits & (WantedBits | ErrorBits);
+        ULONG Match = Bits & MatchMask;
 
         if (Match)
         {
             InterlockedAnd(&FdoExtension->CommandInterruptStatus, ~(LONG)Match);
             *ResultBits = Match;
-            if (Match & ErrorBits)
+            if (Match & ErrorMask)
             {
                 return STATUS_IO_DEVICE_ERROR;
             }
             return STATUS_SUCCESS;
         }
 
+        Match = SdBusCaptureInterruptStatus(FdoExtension, MatchMask);
+        if (Match)
         {
-            NTSTATUS Status = KeWaitForSingleObject(
-                &FdoExtension->CommandEvent,
-                Executive, KernelMode, FALSE, &Timeout);
+            *ResultBits = Match;
+            if (Match & ErrorMask)
+            {
+                return STATUS_IO_DEVICE_ERROR;
+            }
+            return STATUS_SUCCESS;
+        }
+
+        if (RemainingMs == 0)
+        {
+            *ResultBits = 0;
+            return STATUS_IO_TIMEOUT;
+        }
+
+        {
+            ULONG WaitMs;
+            LARGE_INTEGER Timeout;
+            NTSTATUS Status;
+
+            WaitMs = (RemainingMs > 10) ? 10 : RemainingMs;
+            Timeout.QuadPart = -(LONGLONG)WaitMs * 10000; /* ms -> 100ns */
+            Status = KeWaitForSingleObject(&FdoExtension->CommandEvent,
+                                           Executive,
+                                           KernelMode,
+                                           FALSE,
+                                           &Timeout);
             if (Status == STATUS_TIMEOUT)
             {
-                *ResultBits = 0;
-                return STATUS_IO_TIMEOUT;
+                RemainingMs -= WaitMs;
             }
         }
     }
@@ -149,26 +238,8 @@ SdBusWaitForBusyRelease(
 
     DPRINT1("SdBusWaitForBusyRelease: CMD%u timed out waiting for busy release\n",
             CommandIndex);
-    SdBusWriteReg8(FdoExtension, SDHCI_SOFTWARE_RESET, SDHCI_RESET_DATA);
-    InterlockedExchange(&FdoExtension->CommandInterruptStatus, 0);
+    (void)SdBusResetHost(FdoExtension, SDHCI_RESET_DATA);
     return STATUS_IO_TIMEOUT;
-}
-
-static
-VOID
-SdBusDelayOneMillisecond(
-    VOID)
-{
-    LARGE_INTEGER Delay;
-
-    if (KeGetCurrentIrql() > APC_LEVEL)
-    {
-        KeStallExecutionProcessor(1000);
-        return;
-    }
-
-    Delay.QuadPart = -10000LL;
-    KeDelayExecutionThread(KernelMode, FALSE, &Delay);
 }
 
 static
@@ -176,29 +247,7 @@ NTSTATUS
 SdBusHandleMmcSoftReset(
     _In_ PFDO_EXTENSION FdoExtension)
 {
-    ULONG Timeout;
-
-    SdBusWriteReg8(FdoExtension,
-                   SDHCI_SOFTWARE_RESET,
-                   SDHCI_RESET_CMD | SDHCI_RESET_DATA);
-
-    Timeout = SD_RESET_TIMEOUT_MS;
-    while (Timeout > 0)
-    {
-        UCHAR ResetVal;
-
-        ResetVal = SdBusReadReg8(FdoExtension, SDHCI_SOFTWARE_RESET);
-        if (!(ResetVal & (SDHCI_RESET_CMD | SDHCI_RESET_DATA)))
-        {
-            return STATUS_SUCCESS;
-        }
-
-        SdBusDelayOneMillisecond();
-        Timeout--;
-    }
-
-    DPRINT1("SdBusHandleMmcSoftReset: controller reset timed out\n");
-    return STATUS_IO_TIMEOUT;
+    return SdBusResetHost(FdoExtension, SDHCI_RESET_CMD | SDHCI_RESET_DATA);
 }
 
 /**
@@ -852,6 +901,7 @@ FailReleaseSg:
  * @param[in]      Argument      The 32-bit command argument.
  * @param[in,out]  Mdl           Optional MDL describing the data buffer for transfer.
  * @param[in]      DataLength    Length of the data transfer in bytes (0 for command-only).
+ * @param[in]      RequestedBlockSize  SDHCI block size for this transfer.
  * @param[out]     Response      Optional pointer to receive response data (1 or 4 ULONGs).
  *
  * @return STATUS_SUCCESS on success, or an NTSTATUS error code.
@@ -863,6 +913,7 @@ SdBusSendSdhciCommand(
     _In_ ULONG Argument,
     _Inout_opt_ PMDL Mdl,
     _In_ ULONG DataLength,
+    _In_ ULONG RequestedBlockSize,
     _Out_opt_ PULONG Response)
 {
     NTSTATUS Status = STATUS_SUCCESS;
@@ -870,7 +921,7 @@ SdBusSendSdhciCommand(
     USHORT TransferMode;
     USHORT CmdReg;
     ULONG BlockCount = 0;
-    ULONG BlockSize = 0;
+    ULONG BlockSize = RequestedBlockSize;
     PVOID DataBuffer = NULL;
     BOOLEAN HasData;
     BOOLEAN IsRead;
@@ -911,13 +962,14 @@ SdBusSendSdhciCommand(
 
     if (HasData)
     {
-        if ((DataLength % SD_DEFAULT_BLOCK_SIZE) != 0)
+        if (BlockSize == 0 || BlockSize > SDHCI_BLOCK_SIZE_MASK ||
+            (DataLength % BlockSize) != 0)
         {
-            DPRINT1("SdBusSendSdhciCommand: Unaligned data length %lu\n", DataLength);
+            DPRINT1("SdBusSendSdhciCommand: invalid data length %lu block size %lu\n",
+                    DataLength, BlockSize);
             return STATUS_INVALID_PARAMETER;
         }
 
-        BlockSize = SD_DEFAULT_BLOCK_SIZE;
         BlockCount = DataLength / BlockSize;
         if (BlockCount == 0 || BlockCount > 0xFFFF)
         {
@@ -1142,12 +1194,9 @@ SdBusSendSdhciCommand(
 
         if (WaitStatus == STATUS_IO_DEVICE_ERROR)
         {
-            SdBusWriteReg8(FdoExtension, SDHCI_SOFTWARE_RESET, SDHCI_RESET_CMD);
-            if (HasData)
-            {
-                SdBusWriteReg8(FdoExtension, SDHCI_SOFTWARE_RESET, SDHCI_RESET_DATA);
-            }
-            InterlockedExchange(&FdoExtension->CommandInterruptStatus, 0);
+            (void)SdBusResetHost(FdoExtension,
+                                 HasData ? (SDHCI_RESET_CMD | SDHCI_RESET_DATA) :
+                                           SDHCI_RESET_CMD);
             if (CmdBits & SDHCI_INT_CMD_TIMEOUT)
             {
                 Status = STATUS_SD_CMD_TIMEOUT;
@@ -1161,12 +1210,9 @@ SdBusSendSdhciCommand(
         {
             DPRINT1("SdBusSendSdhciCommand: CMD%u command completion timed out\n",
                     CmdDesc->Cmd);
-            SdBusWriteReg8(FdoExtension, SDHCI_SOFTWARE_RESET, SDHCI_RESET_CMD);
-            if (HasData)
-            {
-                SdBusWriteReg8(FdoExtension, SDHCI_SOFTWARE_RESET, SDHCI_RESET_DATA);
-            }
-            InterlockedExchange(&FdoExtension->CommandInterruptStatus, 0);
+            (void)SdBusResetHost(FdoExtension,
+                                 HasData ? (SDHCI_RESET_CMD | SDHCI_RESET_DATA) :
+                                           SDHCI_RESET_CMD);
             Status = STATUS_IO_TIMEOUT;
             goto Cleanup;
         }
@@ -1221,8 +1267,7 @@ SdBusSendSdhciCommand(
                 DPRINT1("SdBusSendSdhciCommand: ADMA2 error status 0x%02x\n",
                         AdmaErr);
             }
-            SdBusWriteReg8(FdoExtension, SDHCI_SOFTWARE_RESET, SDHCI_RESET_DATA);
-            InterlockedExchange(&FdoExtension->CommandInterruptStatus, 0);
+            (void)SdBusResetHost(FdoExtension, SDHCI_RESET_DATA);
             if (DmaBits & SDHCI_INT_DATA_TIMEOUT)
             {
                 Status = STATUS_SD_DATA_TIMEOUT;
@@ -1238,8 +1283,7 @@ SdBusSendSdhciCommand(
                                            SDHCI_ADMA_ERROR_STATUS);
             DPRINT1("SdBusSendSdhciCommand: ADMA2 transfer timed out, "
                     "error status 0x%02x\n", AdmaErr);
-            SdBusWriteReg8(FdoExtension, SDHCI_SOFTWARE_RESET, SDHCI_RESET_DATA);
-            InterlockedExchange(&FdoExtension->CommandInterruptStatus, 0);
+            (void)SdBusResetHost(FdoExtension, SDHCI_RESET_DATA);
             Status = STATUS_IO_TIMEOUT;
             goto Cleanup;
         }
@@ -1266,8 +1310,7 @@ SdBusSendSdhciCommand(
 
         if (WaitStatus == STATUS_IO_DEVICE_ERROR)
         {
-            SdBusWriteReg8(FdoExtension, SDHCI_SOFTWARE_RESET, SDHCI_RESET_DATA);
-            InterlockedExchange(&FdoExtension->CommandInterruptStatus, 0);
+            (void)SdBusResetHost(FdoExtension, SDHCI_RESET_DATA);
             if (DmaBits & SDHCI_INT_DATA_TIMEOUT)
             {
                 Status = STATUS_SD_DATA_TIMEOUT;
@@ -1280,8 +1323,7 @@ SdBusSendSdhciCommand(
         if (WaitStatus == STATUS_IO_TIMEOUT)
         {
             DPRINT1("SdBusSendSdhciCommand: SDMA transfer complete timed out\n");
-            SdBusWriteReg8(FdoExtension, SDHCI_SOFTWARE_RESET, SDHCI_RESET_DATA);
-            InterlockedExchange(&FdoExtension->CommandInterruptStatus, 0);
+            (void)SdBusResetHost(FdoExtension, SDHCI_RESET_DATA);
             Status = STATUS_IO_TIMEOUT;
             goto Cleanup;
         }
@@ -1304,16 +1346,15 @@ SdBusSendSdhciCommand(
         if (DataBuffer == NULL)
         {
             DPRINT1("SdBusSendSdhciCommand: Failed to map MDL\n");
-            SdBusWriteReg8(FdoExtension, SDHCI_SOFTWARE_RESET, SDHCI_RESET_DATA);
+            (void)SdBusResetHost(FdoExtension, SDHCI_RESET_DATA);
             Status = STATUS_INSUFFICIENT_RESOURCES;
             goto Cleanup;
         }
 
         {
-            PULONG DataWords = (PULONG)DataBuffer;
-            ULONG WordsPerBlock = BlockSize / sizeof(ULONG);
+            PUCHAR DataBytes = (PUCHAR)DataBuffer;
             ULONG Block;
-            ULONG Word;
+            ULONG Byte;
 
             for (Block = 0; Block < BlockCount; Block++)
             {
@@ -1327,9 +1368,7 @@ SdBusSendSdhciCommand(
 
                 if (WaitStatus == STATUS_IO_DEVICE_ERROR)
                 {
-                    SdBusWriteReg8(FdoExtension, SDHCI_SOFTWARE_RESET,
-                                   SDHCI_RESET_DATA);
-                    InterlockedExchange(&FdoExtension->CommandInterruptStatus, 0);
+                    (void)SdBusResetHost(FdoExtension, SDHCI_RESET_DATA);
                     if (PioBits & SDHCI_INT_DATA_TIMEOUT)
                     {
                         Status = STATUS_SD_DATA_TIMEOUT;
@@ -1343,28 +1382,48 @@ SdBusSendSdhciCommand(
                 {
                     DPRINT1("SdBusSendSdhciCommand: Data buffer timeout (block %lu)\n",
                             Block);
-                    SdBusWriteReg8(FdoExtension, SDHCI_SOFTWARE_RESET,
-                                   SDHCI_RESET_DATA);
-                    InterlockedExchange(&FdoExtension->CommandInterruptStatus, 0);
+                    (void)SdBusResetHost(FdoExtension, SDHCI_RESET_DATA);
                     Status = STATUS_IO_TIMEOUT;
                     goto Cleanup;
                 }
 
-                /* Transfer one block via the data buffer port */
-                for (Word = 0; Word < WordsPerBlock; Word++)
+                /* Transfer one block via the data buffer port. */
+                for (Byte = 0; Byte + sizeof(ULONG) <= BlockSize; Byte += sizeof(ULONG))
                 {
-                    ULONG Index = Block * WordsPerBlock + Word;
+                    ULONG Value;
+                    ULONG Offset = Block * BlockSize + Byte;
+
                     if (IsRead)
                     {
-                        DataWords[Index] = SdBusReadReg32(FdoExtension,
+                        Value = SdBusReadReg32(FdoExtension,
+                                               SDHCI_BUFFER_DATA_PORT);
+                        RtlCopyMemory(DataBytes + Offset, &Value, sizeof(Value));
+                    }
+                    else
+                    {
+                        RtlCopyMemory(&Value, DataBytes + Offset, sizeof(Value));
+                        SdBusWriteReg32(FdoExtension,
+                                        SDHCI_BUFFER_DATA_PORT,
+                                        Value);
+                    }
+                }
+
+                while (Byte < BlockSize)
+                {
+                    ULONG Offset = Block * BlockSize + Byte;
+
+                    if (IsRead)
+                    {
+                        DataBytes[Offset] = SdBusReadReg8(FdoExtension,
                                                           SDHCI_BUFFER_DATA_PORT);
                     }
                     else
                     {
-                        SdBusWriteReg32(FdoExtension,
-                                        SDHCI_BUFFER_DATA_PORT,
-                                        DataWords[Index]);
+                        SdBusWriteReg8(FdoExtension,
+                                       SDHCI_BUFFER_DATA_PORT,
+                                       DataBytes[Offset]);
                     }
+                    Byte++;
                 }
             }
         }
@@ -1379,8 +1438,7 @@ SdBusSendSdhciCommand(
 
         if (WaitStatus == STATUS_IO_DEVICE_ERROR)
         {
-            SdBusWriteReg8(FdoExtension, SDHCI_SOFTWARE_RESET, SDHCI_RESET_DATA);
-            InterlockedExchange(&FdoExtension->CommandInterruptStatus, 0);
+            (void)SdBusResetHost(FdoExtension, SDHCI_RESET_DATA);
             if (PioBits & SDHCI_INT_DATA_TIMEOUT)
             {
                 Status = STATUS_SD_DATA_TIMEOUT;
@@ -1393,8 +1451,7 @@ SdBusSendSdhciCommand(
         if (WaitStatus == STATUS_IO_TIMEOUT)
         {
             DPRINT1("SdBusSendSdhciCommand: Transfer complete timed out\n");
-            SdBusWriteReg8(FdoExtension, SDHCI_SOFTWARE_RESET, SDHCI_RESET_DATA);
-            InterlockedExchange(&FdoExtension->CommandInterruptStatus, 0);
+            (void)SdBusResetHost(FdoExtension, SDHCI_RESET_DATA);
             Status = STATUS_IO_TIMEOUT;
             goto Cleanup;
         }
@@ -1674,18 +1731,14 @@ SdBusHandleSetProperty(
             /* Calculate divisor */
             if (FdoExtension->MaxClockFrequency > 0)
             {
-                Divisor = (USHORT)SDHCI_CLK_DIVISOR(FdoExtension->MaxClockFrequency,
+                Divisor = (USHORT)SDHCI_CALC_CLK_DIVIDER(FdoExtension->MaxClockFrequency,
                                                      RequestedClockKhz);
             }
             else
             {
-                Divisor = 1;
+                Divisor = 0;
             }
 
-            if (Divisor > 0)
-            {
-                Divisor--;
-            }
             if (Divisor > 0x3FF)
             {
                 Divisor = 0x3FF;
@@ -1754,6 +1807,119 @@ SdBusHandleSetProperty(
     }
 }
 
+static BOOLEAN
+SdBusEmmcCommandUsesPartitionAccess(
+    _In_ PSDCMD_DESCRIPTOR CmdDesc)
+{
+    if (CmdDesc->CmdClass != SDCC_STANDARD)
+    {
+        return FALSE;
+    }
+
+    switch (CmdDesc->Cmd)
+    {
+        case SDCMD_READ_SINGLE_BLOCK:
+        case SDCMD_READ_MULTIPLE_BLOCK:
+        case SDCMD_WRITE_BLOCK:
+        case SDCMD_WRITE_MULTIPLE_BLOCK:
+        case SDCMD_ERASE_WR_BLK_START:
+        case SDCMD_ERASE_WR_BLK_END:
+        case SDCMD_ERASE:
+            return TRUE;
+
+        default:
+            return FALSE;
+    }
+}
+
+static UCHAR
+SdBusResponseLengthFromType(
+    _In_ SD_RESPONSE_TYPE ResponseType)
+{
+    switch (ResponseType)
+    {
+        case SDRT_1:
+        case SDRT_1B:
+        case SDRT_3:
+        case SDRT_4:
+        case SDRT_5:
+        case SDRT_5B:
+        case SDRT_6:
+            return sizeof(ULONG);
+
+        case SDRT_2:
+            return 16;
+
+        default:
+            return 0;
+    }
+}
+
+static VOID
+SdBusBuildCachedCidResponse(
+    _In_ const SD_CID *Cid,
+    _Out_writes_(4) PULONG Response)
+{
+    Response[0] =
+        ((Cid->ProductSerialNumber & 0xFFFF) << 16) |
+        (((ULONG)Cid->ManufacturingDate & 0x0FFF) << 4) |
+        (((ULONG)Cid->Crc7 >> 1) & 0x7F);
+    Response[1] =
+        ((ULONG)Cid->ProductName[4] << 24) |
+        ((ULONG)Cid->ProductRevision << 16) |
+        ((Cid->ProductSerialNumber >> 16) & 0xFFFF);
+    Response[2] =
+        ((ULONG)Cid->ProductName[0] << 24) |
+        ((ULONG)Cid->ProductName[1] << 16) |
+        ((ULONG)Cid->ProductName[2] << 8) |
+        ((ULONG)Cid->ProductName[3]);
+    Response[3] =
+        ((ULONG)Cid->ManufacturerId << 16) |
+        (ULONG)Cid->OemId;
+}
+
+static BOOLEAN
+SdBusTryCompleteCachedR2Command(
+    _In_ PPDO_EXTENSION PdoExtension,
+    _Inout_ PSDBUS_REQUEST_PACKET Packet)
+{
+    PSDCMD_DESCRIPTOR CmdDesc = &Packet->Parameters.DeviceCommand.CmdDesc;
+
+    if (CmdDesc->CmdClass != SDCC_STANDARD ||
+        CmdDesc->ResponseType != SDRT_2 ||
+        CmdDesc->TransferType != SDTT_CMD_ONLY ||
+        Packet->Parameters.DeviceCommand.Mdl != NULL ||
+        Packet->Parameters.DeviceCommand.Length != 0 ||
+        PdoExtension->CardType == SdCardTypeSdio)
+    {
+        return FALSE;
+    }
+
+    RtlZeroMemory(Packet->ResponseData.AsUCHAR,
+                  sizeof(Packet->ResponseData.AsUCHAR));
+
+    switch (CmdDesc->Cmd)
+    {
+        case SDCMD_SEND_CID:
+            SdBusBuildCachedCidResponse(&PdoExtension->Cid,
+                                        Packet->ResponseData.AsULONG);
+            break;
+
+        case SDCMD_SEND_CSD:
+            RtlCopyMemory(Packet->ResponseData.AsULONG,
+                          PdoExtension->Csd.Raw,
+                          sizeof(PdoExtension->Csd.Raw));
+            break;
+
+        default:
+            return FALSE;
+    }
+
+    Packet->ResponseLength = SdBusResponseLengthFromType(CmdDesc->ResponseType);
+    Packet->Information = 0;
+    return TRUE;
+}
+
 /**
  * @brief Handle SDRF_DEVICE_COMMAND requests.
  *
@@ -1786,8 +1952,14 @@ SdBusHandleDeviceCommand(
 
     RtlZeroMemory(Response, sizeof(Response));
 
-    if (PdoExtension->CardType == SdCardTypeEmmc ||
-        PdoExtension->CardType == SdCardTypeMmc)
+    if (SdBusTryCompleteCachedR2Command(PdoExtension, Packet))
+    {
+        return STATUS_SUCCESS;
+    }
+
+    if ((PdoExtension->CardType == SdCardTypeEmmc ||
+         PdoExtension->CardType == SdCardTypeMmc) &&
+        SdBusEmmcCommandUsesPartitionAccess(CmdDesc))
     {
         UCHAR PartitionId;
 
@@ -1847,6 +2019,7 @@ SdBusHandleDeviceCommand(
                                         Argument,
                                         Mdl,
                                         DataLength,
+                                        SD_DEFAULT_BLOCK_SIZE,
                                         Response);
         if (NT_SUCCESS(Status))
         {
@@ -1861,14 +2034,13 @@ SdBusHandleDeviceCommand(
         DPRINT1("SdBusHandleDeviceCommand: CMD%u retry %lu/%lu after status 0x%08lx\n",
                 CmdDesc->Cmd, Retry + 1, MaxRetries, Status);
 
-        SdBusWriteReg8(FdoExtension, SDHCI_SOFTWARE_RESET,
-                        SDHCI_RESET_CMD | SDHCI_RESET_DATA);
-        InterlockedExchange(&FdoExtension->CommandInterruptStatus, 0);
+        (void)SdBusResetHost(FdoExtension, SDHCI_RESET_CMD | SDHCI_RESET_DATA);
     }
 
     /* Copy response data back into the request packet */
     RtlCopyMemory(Packet->ResponseData.AsULONG, Response,
                    sizeof(Packet->ResponseData.AsULONG));
+    Packet->ResponseLength = SdBusResponseLengthFromType(CmdDesc->ResponseType);
     Packet->Information = DataLength;
 
     return STATUS_SUCCESS;
@@ -1905,6 +2077,7 @@ SdBusHandleIoRwExtended(
 {
     PFDO_EXTENSION FdoExtension = PdoExtension->FdoExtension;
     NTSTATUS Status;
+    ULONG ActualCount;
 
     Status = SdBusSdioCmd53(FdoExtension,
                             PdoExtension,
@@ -1917,14 +2090,23 @@ SdBusHandleIoRwExtended(
                             Packet->Parameters.IoExtended.BlockSize,
                             Packet->Parameters.IoExtended.Mdl);
 
+    if (!NT_SUCCESS(Status))
+    {
+        Packet->Information = 0;
+        return Status;
+    }
+
+    ActualCount = (Packet->Parameters.IoExtended.BlockCount == 0) ?
+        512 : Packet->Parameters.IoExtended.BlockCount;
+
     if (Packet->Parameters.IoExtended.BlockMode)
     {
-        Packet->Information = Packet->Parameters.IoExtended.BlockCount *
+        Packet->Information = ActualCount *
                               Packet->Parameters.IoExtended.BlockSize;
     }
     else
     {
-        Packet->Information = Packet->Parameters.IoExtended.BlockCount;
+        Packet->Information = ActualCount;
     }
     return Status;
 }

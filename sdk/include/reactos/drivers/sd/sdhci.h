@@ -166,9 +166,39 @@
 #define SDHCI_CLK_FREQ_SEL_MASK         0xFF00
 #define SDHCI_CLK_FREQ_SEL_SHIFT        8
 
-/* Clock divider calculation: SD Clock = Base Clock / (2 * divisor) */
-#define SDHCI_CLK_DIVISOR(base, target) \
-    ((target) == 0 ? 0 : (((base) + 2 * (target) - 1) / (2 * (target))))
+/*
+ * SDHCI v3 divided-clock encoding. The register stores real_div / 2, with
+ * zero selecting the undivided base clock. Pick a real divisor that does not
+ * overclock the requested target.
+ */
+static __inline USHORT
+SDHCI_CALC_CLK_DIVIDER(
+    _In_ ULONG BaseClockKhz,
+    _In_ ULONG TargetClockKhz)
+{
+    ULONG RealDivisor;
+
+    if (BaseClockKhz == 0 || TargetClockKhz == 0 ||
+        BaseClockKhz <= TargetClockKhz)
+    {
+        return 0;
+    }
+
+    for (RealDivisor = 2; RealDivisor < 2046; RealDivisor += 2)
+    {
+        if ((BaseClockKhz / RealDivisor) <= TargetClockKhz)
+        {
+            break;
+        }
+    }
+
+    if (RealDivisor >= 2046)
+    {
+        RealDivisor = 2046;
+    }
+
+    return (USHORT)(RealDivisor >> 1);
+}
 
 /**
  * @brief Software Reset Register (0x2F)

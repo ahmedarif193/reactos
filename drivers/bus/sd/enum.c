@@ -41,8 +41,7 @@ SdBusWaitForBusyRelease(
 
     DPRINT1("SdBusWaitForBusyRelease: CMD%u timed out waiting for busy release\n",
             CommandIndex);
-    SdBusWriteReg8(FdoExtension, SDHCI_SOFTWARE_RESET, SDHCI_RESET_DATA);
-    InterlockedExchange(&FdoExtension->CommandInterruptStatus, 0);
+    (void)SdBusResetHost(FdoExtension, SDHCI_RESET_DATA);
     return STATUS_IO_TIMEOUT;
 }
 
@@ -116,8 +115,7 @@ SdBusSendCommand(
 
     if (WaitStatus == STATUS_IO_DEVICE_ERROR)
     {
-        SdBusWriteReg8(FdoExtension, SDHCI_SOFTWARE_RESET, SDHCI_RESET_CMD);
-        InterlockedExchange(&FdoExtension->CommandInterruptStatus, 0);
+        (void)SdBusResetHost(FdoExtension, SDHCI_RESET_CMD);
         if (CmdBits & SDHCI_INT_CMD_TIMEOUT)
         {
             return STATUS_SD_CMD_TIMEOUT;
@@ -128,8 +126,7 @@ SdBusSendCommand(
     if (WaitStatus == STATUS_IO_TIMEOUT)
     {
         DPRINT1("SdBusSendCommand: CMD%u completion timed out\n", CommandIndex);
-        SdBusWriteReg8(FdoExtension, SDHCI_SOFTWARE_RESET, SDHCI_RESET_CMD);
-        InterlockedExchange(&FdoExtension->CommandInterruptStatus, 0);
+        (void)SdBusResetHost(FdoExtension, SDHCI_RESET_CMD);
         return STATUS_IO_TIMEOUT;
     }
 
@@ -203,6 +200,46 @@ SdBusSendAppCommand(
                               CommandFlags,
                               Response);
     return Status;
+}
+
+static NTSTATUS
+SdBusTryMmcOpCond(
+    _In_ PFDO_EXTENSION FdoExtension,
+    _Out_ PULONG Ocr,
+    _Out_ PBOOLEAN IsHighCapacity)
+{
+    ULONG Response;
+    ULONG Timeout;
+    NTSTATUS Status;
+    LARGE_INTEGER Delay;
+
+    Delay.QuadPart = -10000LL;
+    Timeout = SD_INIT_TIMEOUT_MS;
+
+    do
+    {
+        Status = SdBusSendCommand(FdoExtension,
+                                  SDCMD_SEND_OP_COND,
+                                  SD_OCR_VDD_RANGE | MMC_OCR_SECTOR_MODE,
+                                  SDHCI_CMD_RESP_48,
+                                  &Response);
+        if (!NT_SUCCESS(Status))
+        {
+            return Status;
+        }
+
+        *Ocr = Response;
+        if (Response & MMC_OCR_BUSY)
+        {
+            *IsHighCapacity = (Response & MMC_OCR_SECTOR_MODE) ? TRUE : FALSE;
+            return STATUS_SUCCESS;
+        }
+
+        KeDelayExecutionThread(KernelMode, FALSE, &Delay);
+        Timeout--;
+    } while (Timeout > 0);
+
+    return STATUS_IO_TIMEOUT;
 }
 
 /**
@@ -352,8 +389,7 @@ SdBusReadDataPio(
 
     if (WaitStatus == STATUS_IO_DEVICE_ERROR)
     {
-        SdBusWriteReg8(FdoExtension, SDHCI_SOFTWARE_RESET, SDHCI_RESET_DATA);
-        InterlockedExchange(&FdoExtension->CommandInterruptStatus, 0);
+        (void)SdBusResetHost(FdoExtension, SDHCI_RESET_DATA);
         if (DataBits & SDHCI_INT_DATA_TIMEOUT)
         {
             return STATUS_SD_DATA_TIMEOUT;
@@ -364,8 +400,7 @@ SdBusReadDataPio(
     if (WaitStatus == STATUS_IO_TIMEOUT)
     {
         DPRINT1("SdBusReadDataPio: Timed out waiting for BUFFER_READ_READY\n");
-        SdBusWriteReg8(FdoExtension, SDHCI_SOFTWARE_RESET, SDHCI_RESET_DATA);
-        InterlockedExchange(&FdoExtension->CommandInterruptStatus, 0);
+        (void)SdBusResetHost(FdoExtension, SDHCI_RESET_DATA);
         return STATUS_IO_TIMEOUT;
     }
 
@@ -385,16 +420,14 @@ SdBusReadDataPio(
 
     if (WaitStatus == STATUS_IO_DEVICE_ERROR)
     {
-        SdBusWriteReg8(FdoExtension, SDHCI_SOFTWARE_RESET, SDHCI_RESET_DATA);
-        InterlockedExchange(&FdoExtension->CommandInterruptStatus, 0);
+        (void)SdBusResetHost(FdoExtension, SDHCI_RESET_DATA);
         return STATUS_SD_DATA_CRC_ERROR;
     }
 
     if (WaitStatus == STATUS_IO_TIMEOUT)
     {
         DPRINT1("SdBusReadDataPio: Timed out waiting for XFER_COMPLETE\n");
-        SdBusWriteReg8(FdoExtension, SDHCI_SOFTWARE_RESET, SDHCI_RESET_DATA);
-        InterlockedExchange(&FdoExtension->CommandInterruptStatus, 0);
+        (void)SdBusResetHost(FdoExtension, SDHCI_RESET_DATA);
         return STATUS_IO_TIMEOUT;
     }
 
@@ -483,9 +516,7 @@ SdBusSendDataReadCommand(
 
     if (WaitStatus == STATUS_IO_DEVICE_ERROR)
     {
-        SdBusWriteReg8(FdoExtension, SDHCI_SOFTWARE_RESET,
-                       SDHCI_RESET_CMD | SDHCI_RESET_DATA);
-        InterlockedExchange(&FdoExtension->CommandInterruptStatus, 0);
+        (void)SdBusResetHost(FdoExtension, SDHCI_RESET_CMD | SDHCI_RESET_DATA);
         if (CmdBits & SDHCI_INT_CMD_TIMEOUT)
         {
             return STATUS_SD_CMD_TIMEOUT;
@@ -495,9 +526,7 @@ SdBusSendDataReadCommand(
 
     if (WaitStatus == STATUS_IO_TIMEOUT)
     {
-        SdBusWriteReg8(FdoExtension, SDHCI_SOFTWARE_RESET,
-                       SDHCI_RESET_CMD | SDHCI_RESET_DATA);
-        InterlockedExchange(&FdoExtension->CommandInterruptStatus, 0);
+        (void)SdBusResetHost(FdoExtension, SDHCI_RESET_CMD | SDHCI_RESET_DATA);
         return STATUS_IO_TIMEOUT;
     }
 
@@ -576,6 +605,129 @@ SdBusEnableSdHighSpeed(
 
     DPRINT1("SdBusEnableSdHighSpeed: SD high-speed mode enabled\n");
     return STATUS_SUCCESS;
+}
+
+static ULONG
+SdBusEmmcHostWidthFromExtCsd(
+    _In_ UCHAR BusWidth)
+{
+    switch (BusWidth)
+    {
+        case EMMC_BUS_WIDTH_8:
+            return 8;
+
+        case EMMC_BUS_WIDTH_4:
+            return 4;
+
+        default:
+            return 1;
+    }
+}
+
+static VOID
+SdBusSetEmmcHostBusWidth(
+    _In_ PFDO_EXTENSION FdoExtension,
+    _In_ UCHAR BusWidth)
+{
+    UCHAR HostCtrl;
+
+    HostCtrl = SdBusReadReg8(FdoExtension, SDHCI_HOST_CONTROL);
+    HostCtrl &= ~(SDHCI_HC_DATA_WIDTH_4BIT | SDHCI_HC_DATA_WIDTH_8BIT);
+
+    if (BusWidth == EMMC_BUS_WIDTH_8)
+    {
+        HostCtrl |= SDHCI_HC_DATA_WIDTH_8BIT;
+    }
+    else if (BusWidth == EMMC_BUS_WIDTH_4)
+    {
+        HostCtrl |= SDHCI_HC_DATA_WIDTH_4BIT;
+    }
+
+    SdBusWriteReg8(FdoExtension, SDHCI_HOST_CONTROL, HostCtrl);
+    FdoExtension->CurrentBusWidth = (UCHAR)SdBusEmmcHostWidthFromExtCsd(BusWidth);
+}
+
+static NTSTATUS
+SdBusReadExtCsd(
+    _In_ PFDO_EXTENSION FdoExtension,
+    _Out_writes_bytes_(512) PUCHAR ExtCsd)
+{
+    return SdBusSendDataReadCommand(FdoExtension,
+                                    SDCMD_SEND_IF_COND,
+                                    0,
+                                    SDHCI_CMD_RESP_48 |
+                                        SDHCI_CMD_CRC_CHECK |
+                                        SDHCI_CMD_INDEX_CHECK,
+                                    ExtCsd,
+                                    512,
+                                    NULL);
+}
+
+static NTSTATUS
+SdBusSetEmmcBusWidth(
+    _In_ PFDO_EXTENSION FdoExtension,
+    _In_ PPDO_EXTENSION PdoExtension,
+    _In_ ULONG Rca)
+{
+    static const UCHAR BusWidths[] =
+    {
+        EMMC_BUS_WIDTH_8,
+        EMMC_BUS_WIDTH_4,
+        EMMC_BUS_WIDTH_1
+    };
+    ULONG Index;
+    ULONG FirstIndex;
+    NTSTATUS LastStatus;
+
+    LastStatus = STATUS_UNSUCCESSFUL;
+    FirstIndex = (FdoExtension->HostCapabilities & SDHCI_CAP_8BIT_SUPPORT) ? 0 : 1;
+
+    for (Index = FirstIndex; Index < RTL_NUMBER_OF(BusWidths); Index++)
+    {
+        ULONG VerifyExtCsdWords[128];
+        PUCHAR VerifyExtCsd = (PUCHAR)VerifyExtCsdWords;
+        UCHAR BusWidth = BusWidths[Index];
+        NTSTATUS Status;
+
+        Status = SdBusEmmcSwitchByRca(FdoExtension,
+                                      Rca,
+                                      EMMC_SWITCH_ACCESS_WRITE_BYTE,
+                                      (UCHAR)EMMC_EXT_CSD_BUS_WIDTH,
+                                      BusWidth,
+                                      0,
+                                      SD_DATA_TIMEOUT_MS);
+        if (!NT_SUCCESS(Status))
+        {
+            DPRINT1("SdBusSetEmmcBusWidth: CMD6 width %lu-bit failed (0x%08lx)\n",
+                    SdBusEmmcHostWidthFromExtCsd(BusWidth), Status);
+            LastStatus = Status;
+            continue;
+        }
+
+        SdBusSetEmmcHostBusWidth(FdoExtension, BusWidth);
+        RtlZeroMemory(VerifyExtCsdWords, sizeof(VerifyExtCsdWords));
+
+        Status = SdBusReadExtCsd(FdoExtension, VerifyExtCsd);
+        if (NT_SUCCESS(Status) &&
+            VerifyExtCsd[EMMC_EXT_CSD_BUS_WIDTH] == BusWidth)
+        {
+            RtlCopyMemory(PdoExtension->ExtCsd,
+                          VerifyExtCsd,
+                          sizeof(PdoExtension->ExtCsd));
+            DPRINT1("SdBusSetEmmcBusWidth: eMMC bus width set to %lu-bit\n",
+                    SdBusEmmcHostWidthFromExtCsd(BusWidth));
+            return STATUS_SUCCESS;
+        }
+
+        DPRINT1("SdBusSetEmmcBusWidth: width %lu-bit verify failed "
+                "(status 0x%08lx, ext_csd width 0x%02x)\n",
+                SdBusEmmcHostWidthFromExtCsd(BusWidth),
+                Status,
+                NT_SUCCESS(Status) ? VerifyExtCsd[EMMC_EXT_CSD_BUS_WIDTH] : 0xff);
+        LastStatus = NT_SUCCESS(Status) ? STATUS_DEVICE_PROTOCOL_ERROR : Status;
+    }
+
+    return LastStatus;
 }
 
 static BOOLEAN
@@ -857,6 +1009,35 @@ SdBusEnumerateCard(
         DPRINT("SdBusEnumerateCard: CMD5 not supported\n");
     }
 
+    if (CardType == SdCardTypeUnknown && IsEmbeddedSlot && !HasSdio)
+    {
+        Status = SdBusResetHost(FdoExtension, SDHCI_RESET_CMD);
+        if (!NT_SUCCESS(Status))
+        {
+            DPRINT1("SdBusEnumerateCard: command-line reset before CMD1 failed (0x%08lx)\n",
+                    Status);
+            return Status;
+        }
+
+        KeDelayExecutionThread(KernelMode, FALSE, &Delay);
+
+        Status = SdBusTryMmcOpCond(FdoExtension, &Ocr, &IsHighCapacity);
+        if (NT_SUCCESS(Status))
+        {
+            CardType = SdCardTypeEmmc;
+            DPRINT1("SdBusEnumerateCard: eMMC card ready, OCR=0x%08lx, sector=%u\n",
+                    Ocr,
+                    IsHighCapacity);
+        }
+        else
+        {
+            DPRINT("SdBusEnumerateCard: embedded CMD1 probe failed (0x%08lx), trying SD path\n",
+                   Status);
+
+            (void)SdBusResetHost(FdoExtension, SDHCI_RESET_CMD);
+        }
+    }
+
     /*
      * Step 3: ACMD41 -- SD_SEND_OP_COND (try SD card first)
      * For v2+: set HCS bit to indicate host supports high-capacity.
@@ -972,37 +1153,18 @@ SdBusEnumerateCard(
                              NULL);
             KeDelayExecutionThread(KernelMode, FALSE, &Delay);
 
-            Timeout = SD_INIT_TIMEOUT_MS;
-            do
-            {
-                Status = SdBusSendCommand(FdoExtension,
-                                          SDCMD_SEND_OP_COND,
-                                          SD_OCR_VDD_RANGE | MMC_OCR_SECTOR_MODE,
-                                          SDHCI_CMD_RESP_48,
-                                          &Response[0]);
-                if (!NT_SUCCESS(Status))
-                {
-                    DPRINT1("SdBusEnumerateCard: CMD1 failed (0x%08lx)\n", Status);
-                    return STATUS_SD_CARD_NOT_DETECTED;
-                }
-
-                Ocr = Response[0];
-                if (Ocr & MMC_OCR_BUSY)
-                {
-                    break;
-                }
-
-                KeDelayExecutionThread(KernelMode, FALSE, &Delay);
-                Timeout--;
-            } while (Timeout > 0);
-
-            if (Timeout == 0)
+            Status = SdBusTryMmcOpCond(FdoExtension, &Ocr, &IsHighCapacity);
+            if (Status == STATUS_IO_TIMEOUT)
             {
                 DPRINT1("SdBusEnumerateCard: CMD1 timed out\n");
                 return STATUS_IO_TIMEOUT;
             }
+            if (!NT_SUCCESS(Status))
+            {
+                DPRINT1("SdBusEnumerateCard: CMD1 failed (0x%08lx)\n", Status);
+                return STATUS_SD_CARD_NOT_DETECTED;
+            }
 
-            IsHighCapacity = (Ocr & MMC_OCR_SECTOR_MODE) ? TRUE : FALSE;
             CardType = IsEmbeddedSlot ? SdCardTypeEmmc : SdCardTypeMmc;
 
             DPRINT1("SdBusEnumerateCard: MMC-compatible card ready, OCR=0x%08lx, sector=%u, embedded=%u\n",
@@ -1281,6 +1443,9 @@ SdBusEnumerateCard(
         if (NT_SUCCESS(Status))
         {
             DPRINT1("SdBusEnumerateCard: EXT_CSD read successfully\n");
+            FdoExtension->EmmcPartitionConfig =
+                PdoExtension->ExtCsd[EMMC_EXT_CSD_PARTITION_CONFIG];
+            FdoExtension->EmmcPartitionConfigValid = TRUE;
         }
         else
         {
@@ -1289,76 +1454,54 @@ SdBusEnumerateCard(
 
         /*
          * CMD6 (SWITCH): set bus width in EXT_CSD[183]
-         * Argument format for SWITCH (Access=Write Byte):
-         *   [25:24] = 3 (Write Byte)
-         *   [23:16] = Index (183 = BUS_WIDTH)
-         *   [15:8]  = Value (1 = 4-bit)
-         *   [7:0]   = 0
          */
+        Status = SdBusSetEmmcBusWidth(FdoExtension, PdoExtension, Rca);
+        if (!NT_SUCCESS(Status))
         {
-            UCHAR BusWidth = EMMC_BUS_WIDTH_4;
-            ULONG SwitchArg;
-
-            /* Check if controller supports 8-bit */
-            if (FdoExtension->HostCapabilities & SDHCI_CAP_8BIT_SUPPORT)
-            {
-                BusWidth = EMMC_BUS_WIDTH_8;
-            }
-
-            SwitchArg = (3UL << 24) |
-                         ((ULONG)EMMC_EXT_CSD_BUS_WIDTH << 16) |
-                         ((ULONG)BusWidth << 8);
-
-            Status = SdBusSendCommand(FdoExtension,
-                                      SDCMD_SWITCH_FUNC,
-                                      SwitchArg,
-                                      SDHCI_CMD_RESP_48_BUSY | SDHCI_CMD_CRC_CHECK | SDHCI_CMD_INDEX_CHECK,
-                                      NULL);
-            if (NT_SUCCESS(Status))
-            {
-                UCHAR HostCtrl;
-                HostCtrl = SdBusReadReg8(FdoExtension, SDHCI_HOST_CONTROL);
-                if (BusWidth == EMMC_BUS_WIDTH_8)
-                {
-                    HostCtrl |= SDHCI_HC_DATA_WIDTH_8BIT;
-                }
-                else
-                {
-                    HostCtrl |= SDHCI_HC_DATA_WIDTH_4BIT;
-                }
-                SdBusWriteReg8(FdoExtension, SDHCI_HOST_CONTROL, HostCtrl);
-                FdoExtension->CurrentBusWidth =
-                    (BusWidth == EMMC_BUS_WIDTH_8) ? 8 : 4;
-                DPRINT1("SdBusEnumerateCard: eMMC bus width set to %u-bit\n",
-                       (BusWidth == EMMC_BUS_WIDTH_8) ? 8 : 4);
-            }
+            DPRINT1("SdBusEnumerateCard: eMMC bus width selection failed (0x%08lx)\n",
+                    Status);
+            return Status;
         }
 
         /*
-         * CMD6 (SWITCH): enable high-speed mode via EXT_CSD[185]
+         * CMD6 (SWITCH): enable high-speed mode via EXT_CSD[185].
          */
         {
             UCHAR DeviceType = PdoExtension->ExtCsd[EMMC_EXT_CSD_DEVICE_TYPE];
-            ULONG SwitchArg;
 
-            if (DeviceType & EMMC_DEVICE_TYPE_HS_52)
+            if (FdoExtension->CurrentBusWidth == 1)
             {
-                SwitchArg = (3UL << 24) |
-                             ((ULONG)EMMC_EXT_CSD_HS_TIMING << 16) |
-                             ((ULONG)EMMC_TIMING_HIGH_SPEED << 8);
-
-                Status = SdBusSendCommand(FdoExtension,
-                                          SDCMD_SWITCH_FUNC,
-                                          SwitchArg,
-                                          SDHCI_CMD_RESP_48_BUSY | SDHCI_CMD_CRC_CHECK | SDHCI_CMD_INDEX_CHECK,
-                                          NULL);
+                DPRINT1("SdBusEnumerateCard: keeping eMMC default timing on 1-bit bus\n");
+            }
+            else if ((FdoExtension->HostCapabilities & SDHCI_CAP_HIGH_SPEED) &&
+                     (DeviceType & EMMC_DEVICE_TYPE_HS_52))
+            {
+                /*
+                 * CMD6 is R1b. After DAT0 busy release, switch the host timing
+                 * before sending any further status commands.
+                 */
+                Status = SdBusEmmcSwitchByRca(FdoExtension,
+                                              Rca,
+                                              EMMC_SWITCH_ACCESS_WRITE_BYTE,
+                                              (UCHAR)EMMC_EXT_CSD_HS_TIMING,
+                                              EMMC_TIMING_HIGH_SPEED,
+                                              0,
+                                              0);
                 if (NT_SUCCESS(Status))
                 {
                     UCHAR HostCtrl;
+
                     HostCtrl = SdBusReadReg8(FdoExtension, SDHCI_HOST_CONTROL);
                     HostCtrl |= SDHCI_HC_HIGH_SPEED;
                     SdBusWriteReg8(FdoExtension, SDHCI_HOST_CONTROL, HostCtrl);
+                    PdoExtension->ExtCsd[EMMC_EXT_CSD_HS_TIMING] =
+                        EMMC_TIMING_HIGH_SPEED;
                     DPRINT1("SdBusEnumerateCard: eMMC high-speed mode enabled\n");
+                }
+                else
+                {
+                    DPRINT("SdBusEnumerateCard: eMMC high-speed switch failed (0x%08lx)\n",
+                           Status);
                 }
             }
         }
@@ -1453,10 +1596,15 @@ SdBusSetTransferClock(
         PdoExtension->CardType == SdCardTypeMmc)
     {
         UCHAR HostCtrl = SdBusReadReg8(FdoExtension, SDHCI_HOST_CONTROL);
-        if (HostCtrl & SDHCI_HC_HIGH_SPEED)
+        if ((HostCtrl & SDHCI_HC_HIGH_SPEED) &&
+            PdoExtension->ExtCsd[EMMC_EXT_CSD_HS_TIMING] == EMMC_TIMING_HIGH_SPEED)
+        {
             TargetClockKhz = MMC_HIGH_SPEED_KHZ;   /* 52 MHz */
+        }
         else
+        {
             TargetClockKhz = SD_DEFAULT_SPEED_KHZ;  /* 25 MHz */
+        }
     }
     else
     {
@@ -1474,7 +1622,7 @@ SdBusSetTransferClock(
         TargetClockKhz = FdoExtension->MaxClockFrequency;
     }
 
-    DPRINT1("SdBusSetTransferClock: Raising clock from 400 kHz to %lu kHz\n",
+    DPRINT1("SdBusSetTransferClock: Setting transfer clock to %lu kHz\n",
             TargetClockKhz);
 
     /* Disable SD clock output */
@@ -1485,16 +1633,12 @@ SdBusSetTransferClock(
     /* Compute divisor */
     if (FdoExtension->MaxClockFrequency > 0)
     {
-        Divisor = (USHORT)SDHCI_CLK_DIVISOR(FdoExtension->MaxClockFrequency,
+        Divisor = (USHORT)SDHCI_CALC_CLK_DIVIDER(FdoExtension->MaxClockFrequency,
                                               TargetClockKhz);
     }
     else
     {
-        Divisor = 1;
-    }
-    if (Divisor > 0)
-    {
-        Divisor--;
+        Divisor = 0;
     }
     if (Divisor > 0x3FF)
     {
