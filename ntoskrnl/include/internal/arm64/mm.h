@@ -244,7 +244,7 @@ C_ASSERT(MI_SECONDARY_COLORS == 64);
     } while (0)
 #define MI_PAGE_DISABLE_CACHE(x)   MI_SET_PTE_ATTR_INDEX((x), 1)
 #define MI_PAGE_WRITE_THROUGH(x)   MI_SET_PTE_ATTR_INDEX((x), 1)
-#define MI_PAGE_WRITE_COMBINED(x)  MI_SET_PTE_ATTR_INDEX((x), 2)
+#define MI_PAGE_WRITE_COMBINED(x)  MI_SET_PTE_ATTR_INDEX((x), MI_ARM64_MAIR_NORMAL_WC_IDX)
 #define MI_IS_PAGE_LARGE(x)        ((x)->u.Hard.NotLargePage == 0)
 #define MI_IS_PAGE_WRITEABLE(x)    ((x)->u.Hard.Writable == 1)
 #define MI_IS_PAGE_COPY_ON_WRITE(x)((x)->u.Hard.CopyOnWrite == 1)
