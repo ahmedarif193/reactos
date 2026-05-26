@@ -745,7 +745,7 @@ VOID
 NTAPI
 MiMapPfnDatabase(IN PLOADER_PARAMETER_BLOCK LoaderBlock)
 {
-    PFN_NUMBER FreePage, FreePageCount, PagesLeft, BasePage, PageCount;
+    PFN_NUMBER FreePage, FreePageCount, BasePage, PageCount;
     PLIST_ENTRY NextEntry;
     PMEMORY_ALLOCATION_DESCRIPTOR MdBlock;
     PMMPTE PointerPte, LastPte;

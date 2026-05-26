@@ -38,3 +38,13 @@ double _logb (double __x)
 #endif /*__GNUC__*/
   return __val;
 }
+
+float _logbf(float __x)
+{
+  return (float)_logb((double)__x);
+}
+
+float logbf(float __x)
+{
+  return _logbf(__x);
+}

@@ -488,7 +488,6 @@ USBCCGP_SelectConfiguration(
 {
     PUSBD_INTERFACE_INFORMATION InterfaceInformation;
     PUSBD_INTERFACE_INFORMATION RequestInterfaceInformation;
-    PUSB_INTERFACE_DESCRIPTOR InterfaceDescriptor;
     NTSTATUS Status;
     PURB Urb;
     ULONG Index;

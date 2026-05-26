@@ -106,7 +106,11 @@ i386ExceptionHandlerHang:
 
 MACRO(TRAP_STUB, function, index)
     PUBLIC VAL(function)
-    VAL(function):
+#ifdef __clang__
+    \function:
+#else
+    &function:
+#endif
     push 0 // Fake error code
     mov dword ptr ds:[i386ExceptionIndex], VAL(index)
     jmp i386CommonExceptionHandler
@@ -114,7 +118,11 @@ ENDM
 
 MACRO(TRAP_STUB2, function, index)
     PUBLIC VAL(function)
-    VAL(function):
+#ifdef __clang__
+    \function:
+#else
+    &function:
+#endif
     mov dword ptr ds:[i386ExceptionIndex], VAL(index)
     jmp i386CommonExceptionHandler
 ENDM

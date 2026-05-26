@@ -16,7 +16,7 @@
 
 /* DebugDpcTime removed from KPRCB at Vista+ */
 #if (NTDDI_VERSION >= NTDDI_LONGHORN)
-#define KiResetDebugDpcTime(Prcb) ((void)0)
+#define KiResetDebugDpcTime(Prcb) ((void)(Prcb))
 #else
 #define KiResetDebugDpcTime(Prcb) ((Prcb)->DebugDpcTime = 0)
 #endif
@@ -569,7 +569,10 @@ FASTCALL
 KiRetireDpcList(IN PKPRCB Prcb)
 {
     PKDPC_DATA DpcData;
-    PLIST_ENTRY ListHead, DpcEntry;
+#if (NTDDI_VERSION < NTDDI_LONGHORN)
+    PLIST_ENTRY ListHead;
+#endif
+    PLIST_ENTRY DpcEntry;
     PKDPC Dpc;
     PKDEFERRED_ROUTINE DeferredRoutine;
     PVOID DeferredContext, SystemArgument1, SystemArgument2;

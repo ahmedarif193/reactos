@@ -627,8 +627,6 @@ Ndis6IsrWrapper(
     BOOLEAN QueueDpc       = FALSE;
     ULONG   TargetCpus     = 0;
     BOOLEAN Recognized;
-    static volatile LONG IsrCount = 0;
-    LONG MyCount;
 
     UNREFERENCED_PARAMETER(Interrupt);
 

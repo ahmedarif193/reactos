@@ -406,7 +406,6 @@ STDMETHODIMP_(NTSTATUS) CAC97MiniportWaveRTStream::GetPosition
     _Out_ PKSAUDIO_POSITION   Position
 )
 {
-    UCHAR   nCurrentIndex = 0;
     DWORD   bufferPos;
 
     ASSERT (Position);
@@ -418,7 +417,7 @@ STDMETHODIMP_(NTSTATUS) CAC97MiniportWaveRTStream::GetPosition
     }
     else
     {
-        nCurrentIndex = GetBuffPos(&bufferPos);
+        GetBuffPos(&bufferPos);
         Position->PlayOffset = bufferPos;
         Position->WriteOffset = bufferPos + NumberOfChannels * 2 * 8;
     }
