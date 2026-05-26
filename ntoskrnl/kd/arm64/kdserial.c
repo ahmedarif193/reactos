@@ -1,14 +1,14 @@
 /*
  * PROJECT:         ReactOS Kernel
  * LICENSE:         BSD - See COPYING.ARM in the top level directory
- * FILE:            ntoskrnl/arch/arm64/kd/kdserial.c
+ * FILE:            ntoskrnl/kd/arm64/kdserial.c
  * PURPOSE:         Serial kernel debugger stubs for ARM64
  */
 
 #include <ntoskrnl.h>
 #define NDEBUG
 #include <debug.h>
-#include "../include/arm64pl011.h"
+#include <reactos/arm64/early_uart.h>
 
 CPPORT DefaultPort = {0};
 extern BOOLEAN KdDebuggerNotPresent;
@@ -27,12 +27,18 @@ KdPortInitializeEx(_Inout_ PCPPORT PortInformation,
     ULONG Baud;
 
 
-    if (!EarlyUartIsInitialized() || EarlyUartGetBaseAddress() == 0)
+    if (!EarlyUartIsInitialized())
     {
         EarlyUartInitialize(0);
     }
 
-    Base = (EarlyUartIsInitialized() && EarlyUartGetBaseAddress() != 0) ?
+    /*
+     * Require a driver-known interface, not just a base address. FreeLDR may
+     * have captured the base from ACPI DBG2 but reported Interface=Unknown
+     * (e.g. Qualcomm GENI/QUP) - in that case we have no driver to drive it
+     * and KD must fail cleanly rather than silently swallow output.
+     */
+    Base = EarlyUartReady() ?
            (PUCHAR)(ULONG_PTR)EarlyUartPhysToVa(EarlyUartGetBaseAddress()) :
            NULL;
     Baud = (PortInformation->BaudRate != 0) ? PortInformation->BaudRate : 115200;

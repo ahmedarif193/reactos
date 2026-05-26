@@ -8,7 +8,6 @@
 
 #include <ntoskrnl.h>
 
-#define _EARLY_UART_IMPL
 #include <reactos/arm64/early_uart.h>
 
 /* Global UART state - set from loader block during kernel init */
@@ -17,12 +16,18 @@ volatile ARM64_PLATFORM_ID EarlyUartPlatformId = Arm64PlatformUnknown;
 volatile ARM64_UART_INTERFACE EarlyUartInterface = Arm64UartUnknown;
 volatile BOOLEAN EarlyUartInitialized = FALSE;
 
+/*
+ * Kernel never re-detects at runtime. FreeLDR did the SPCR/DBG2 walk and
+ * passed the result through LoaderBlock; KiSystemStartup populates the
+ * globals from it. These functions exist only to satisfy callers that
+ * happen to use the shared early_uart.h API (e.g. KdPortInitializeEx
+ * calling EarlyUartInitialize(0) defensively when KD comes up before
+ * KiSystemStartup has run).
+ */
 ARM64_PLATFORM_ID
 EarlyUartDetectPlatform(VOID)
 {
-    if (EarlyUartInitialized)
-        return EarlyUartPlatformId;
-    return Arm64PlatformQemuVirt;
+    return EarlyUartInitialized ? EarlyUartPlatformId : Arm64PlatformUnknown;
 }
 
 BOOLEAN
@@ -42,29 +47,17 @@ EarlyUartInitializeWithInterface(
     if (UartBaseOverride != 0)
     {
         EarlyUartBaseAddress = UartBaseOverride;
-
-        if (UartBaseOverride == ARM64_UART_QEMU_VIRT)
-            EarlyUartPlatformId = Arm64PlatformQemuVirt;
-        else if (UartBaseOverride == ARM64_UART_RPI3_BCM2837)
-            EarlyUartPlatformId = Arm64PlatformRpi3;
-        else if (UartBaseOverride == ARM64_UART_RPI4_BCM2711)
-            EarlyUartPlatformId = Arm64PlatformRpi4;
-        else if (UartBaseOverride == ARM64_UART_RPI5_BCM2712)
-            EarlyUartPlatformId = Arm64PlatformRpi5;
-        else
-            EarlyUartPlatformId = Arm64PlatformGenericAcpi;
+        EarlyUartInterface = (UartInterfaceOverride < Arm64UartMax) ?
+                             UartInterfaceOverride :
+                             Arm64UartUnknown;
+        EarlyUartPlatformId = Arm64PlatformGenericAcpi;
     }
     else
     {
-        EarlyUartBaseAddress = ARM64_UART_DEFAULT;
-        EarlyUartPlatformId = Arm64PlatformQemuVirt;
+        EarlyUartBaseAddress = 0;
+        EarlyUartInterface = Arm64UartUnknown;
+        EarlyUartPlatformId = Arm64PlatformUnknown;
     }
-
-    EarlyUartInterface = (UartInterfaceOverride != Arm64UartUnknown) ?
-                         UartInterfaceOverride :
-                         EarlyUartInferInterfaceFromAddress(EarlyUartBaseAddress);
-    if (EarlyUartInterface == Arm64UartUnknown)
-        EarlyUartInterface = Arm64UartPl011;
 
     EarlyUartInitialized = TRUE;
     return TRUE;
