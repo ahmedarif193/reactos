@@ -229,6 +229,7 @@ LoadAlternateHive:
     return TRUE;
 }
 
+#if defined(UEFIBOOT) || defined(_M_ARM64)
 static const PCWSTR WinLdrLegacyBootServices[] =
 {
     L"Floppy",
@@ -268,6 +269,7 @@ WinLdrDisableLegacyBootDriversForUefi(VOID)
         RegCloseKey(ServiceKey);
     }
 }
+#endif
 
 BOOLEAN WinLdrScanSystemHive(IN OUT PLOADER_PARAMETER_BLOCK LoaderBlock,
                              IN PCSTR SystemRoot)
@@ -279,12 +281,12 @@ BOOLEAN WinLdrScanSystemHive(IN OUT PLOADER_PARAMETER_BLOCK LoaderBlock,
     DECLARE_UNICODE_STRING_SIZE(OemHalFileName, MAX_PATH);
     CHAR SearchPath[1024];
 
-#if defined(UEFIBOOT) || defined(_M_ARM64) || defined(_ARM64_) || defined(__aarch64__) || defined(__arm64__)
+#if defined(UEFIBOOT) || defined(_M_ARM64)
     if (LoaderBlock->Extension && LoaderBlock->Extension->BootViaEFI)
     {
         WinLdrDisableLegacyBootDriversForUefi();
     }
-#if defined(_M_ARM64) || defined(_ARM64_) || defined(__aarch64__) || defined(__arm64__)
+#if defined(_M_ARM64)
     else
     {
         WinLdrDisableLegacyBootDriversForUefi();

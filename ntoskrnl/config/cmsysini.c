@@ -1229,6 +1229,7 @@ CmpGetRegistryPath(VOID)
  * A pointer to a boolean value, if both hives are the same
  * it returns TRUE. Otherwise it returns FALSE.
  */
+#if (NTDDI_VERSION < NTDDI_VISTA)
 static
 VOID
 CmpHasAlternateHiveDiverged(
@@ -1278,6 +1279,7 @@ CmpHasAlternateHiveDiverged(
 
     CmpDestroyHive(CmiAlternateHive);
 }
+#endif /* NTDDI_VERSION < NTDDI_VISTA */
 
 _Function_class_(KSTART_ROUTINE)
 VOID
@@ -1472,7 +1474,9 @@ CmpLoadHiveThread(IN PVOID StartContext)
         }
     }
 
+#if (NTDDI_VERSION < NTDDI_VISTA)
 Exit:
+#endif
     /* We're done */
     CmpMachineHiveList[i].ThreadFinished = TRUE;
 
