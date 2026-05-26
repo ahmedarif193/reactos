@@ -19,6 +19,7 @@
 #include <AppleGraphInfo.h>
 #include <BlockIo.h>
 #include <Acpi.h>
+#include <Cpu.h>
 #include <GlobalVariable.h>
 #include <debug.h>
 #include <machuefi.h>

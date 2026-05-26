@@ -85,6 +85,17 @@ typedef struct _FBCONS_FONT_STATE
 static FRAMEBUFFER_INFO framebufInfo = {0};
 static CM_FRAMEBUF_DEVICE_DATA FrameBufferData = {0};
 static FBCONS_FONT_STATE FbConsFont = {0};
+static PUCHAR FbConsCachedTextBuffer = NULL;
+static ULONG FbConsCachedTextBufferSize = 0;
+static BOOLEAN FbConsCachedTextBufferValid = FALSE;
+static BOOLEAN VidFbDirtyValid = FALSE;
+static ULONG VidFbDirtyLeft = 0;
+static ULONG VidFbDirtyTop = 0;
+static ULONG VidFbDirtyRight = 0;
+static ULONG VidFbDirtyBottom = 0;
+
+static VOID
+FbConsReleaseTextCache(VOID);
 
 #ifdef UEFIBOOT
 typedef struct _FBCONS_GLYPH
@@ -131,6 +142,67 @@ static const WCHAR FbConsCp437UpperHalfMap[128] =
 
 
 /* FUNCTIONS ******************************************************************/
+
+static VOID
+VidFbResetDirtyRect(VOID)
+{
+    VidFbDirtyValid = FALSE;
+    VidFbDirtyLeft = 0;
+    VidFbDirtyTop = 0;
+    VidFbDirtyRight = 0;
+    VidFbDirtyBottom = 0;
+}
+
+VOID
+FbConsMarkDirtyRect(
+    _In_ ULONG X,
+    _In_ ULONG Y,
+    _In_ ULONG Width,
+    _In_ ULONG Height)
+{
+    if ((Width == 0) || (Height == 0))
+        return;
+
+    if ((X >= framebufInfo.ScreenWidth) || (Y >= framebufInfo.ScreenHeight))
+        return;
+
+    Width = min(Width, framebufInfo.ScreenWidth - X);
+    Height = min(Height, framebufInfo.ScreenHeight - Y);
+
+    if (!VidFbDirtyValid)
+    {
+        VidFbDirtyLeft = X;
+        VidFbDirtyTop = Y;
+        VidFbDirtyRight = X + Width;
+        VidFbDirtyBottom = Y + Height;
+        VidFbDirtyValid = TRUE;
+        return;
+    }
+
+    VidFbDirtyLeft = min(VidFbDirtyLeft, X);
+    VidFbDirtyTop = min(VidFbDirtyTop, Y);
+    VidFbDirtyRight = max(VidFbDirtyRight, X + Width);
+    VidFbDirtyBottom = max(VidFbDirtyBottom, Y + Height);
+}
+
+BOOLEAN
+FbConsTakeDirtyRect(
+    _Out_ PULONG X,
+    _Out_ PULONG Y,
+    _Out_ PULONG Width,
+    _Out_ PULONG Height)
+{
+    if (!VidFbDirtyValid)
+        return FALSE;
+
+    *X = VidFbDirtyLeft;
+    *Y = VidFbDirtyTop;
+    *Width = VidFbDirtyRight - VidFbDirtyLeft;
+    *Height = VidFbDirtyBottom - VidFbDirtyTop;
+
+    VidFbResetDirtyRect();
+    return TRUE;
+}
 
 #ifdef UEFIBOOT
 static
@@ -505,6 +577,38 @@ VidFbMaskShift(
     return Shift;
 }
 
+VOID
+VidFbSetFrameBuffer(
+    _In_ ULONG_PTR BaseAddress,
+    _In_ ULONG BufferSize,
+    _In_ UINT32 PixelsPerScanLine,
+    _In_ UINT32 BitsPerPixel,
+    _In_ PPIXEL_BITMASK PixelMasks)
+{
+    framebufInfo.BaseAddress = BaseAddress;
+    framebufInfo.BufferSize = BufferSize;
+    framebufInfo.PixelsPerScanLine = PixelsPerScanLine;
+    framebufInfo.BitsPerPixel = BitsPerPixel;
+    framebufInfo.BytesPerPixel = (BitsPerPixel + 7) / 8;
+    framebufInfo.Delta = (PixelsPerScanLine * framebufInfo.BytesPerPixel + 3) & ~3;
+
+    RtlCopyMemory(&framebufInfo.PixelMasks,
+                  PixelMasks,
+                  sizeof(framebufInfo.PixelMasks));
+
+    framebufInfo.RedShift = VidFbMaskShift(framebufInfo.PixelMasks.RedMask);
+    framebufInfo.GreenShift = VidFbMaskShift(framebufInfo.PixelMasks.GreenMask);
+    framebufInfo.BlueShift = VidFbMaskShift(framebufInfo.PixelMasks.BlueMask);
+    framebufInfo.ReservedShift = VidFbMaskShift(framebufInfo.PixelMasks.ReservedMask);
+
+    framebufInfo.RedBits = (UCHAR)CountNumberOfBits(framebufInfo.PixelMasks.RedMask);
+    framebufInfo.GreenBits = (UCHAR)CountNumberOfBits(framebufInfo.PixelMasks.GreenMask);
+    framebufInfo.BlueBits = (UCHAR)CountNumberOfBits(framebufInfo.PixelMasks.BlueMask);
+    framebufInfo.ReservedBits = (UCHAR)CountNumberOfBits(framebufInfo.PixelMasks.ReservedMask);
+
+    VidFbResetDirtyRect();
+}
+
 static
 __inline
 ULONG
@@ -644,6 +748,8 @@ VidFbFillRect(
         for (Col = 0; Col < Width; ++Col)
             Pixel[Col] = Color;
     }
+
+    FbConsMarkDirtyRect(X, Y + TOP_BOTTOM_LINES, Width, Height);
 }
 
 static
@@ -681,6 +787,8 @@ VidFbOutputBitmapChar(
         }
         Pixel = (PUINT32)((PUCHAR)Pixel + framebufInfo.Delta);
     }
+
+    FbConsMarkDirtyRect(X, Y + TOP_BOTTOM_LINES, CHAR_WIDTH, CHAR_HEIGHT);
 }
 
 static
@@ -969,6 +1077,8 @@ VidFbInitializeVideo(
     if (pFbData)
         *pFbData = NULL;
 
+    FbConsReleaseTextCache();
+    VidFbResetDirtyRect();
     RtlZeroMemory(&framebufInfo, sizeof(framebufInfo));
 
     /* Verify framebuffer dimensions */
@@ -1122,6 +1232,11 @@ VidFbClearScreenColor(
             *p++ = Color;
         }
     }
+
+    FbConsMarkDirtyRect(0,
+                        FullScreen ? 0 : TOP_BOTTOM_LINES,
+                        framebufInfo.ScreenWidth,
+                        framebufInfo.ScreenHeight - (FullScreen ? 0 : 2 * TOP_BOTTOM_LINES));
 }
 
 /**
@@ -1265,6 +1380,8 @@ VidFbScrollUp(
         for (Col = 0; Col < framebufInfo.ScreenWidth; ++Col)
             Pixel[Col] = Color;
     }
+
+    FbConsMarkDirtyRect(0, TOP_BOTTOM_LINES, framebufInfo.ScreenWidth, VisibleHeight);
 }
 
 #if 0
@@ -1315,6 +1432,142 @@ VidFbGetPaletteColor(
 
 #define VGA_CHAR_SIZE 2
 
+static VOID
+FbConsReleaseTextCache(VOID)
+{
+    if (FbConsCachedTextBuffer)
+    {
+        MmFreeMemory(FbConsCachedTextBuffer);
+        FbConsCachedTextBuffer = NULL;
+    }
+
+    FbConsCachedTextBufferSize = 0;
+    FbConsCachedTextBufferValid = FALSE;
+}
+
+static VOID
+FbConsInvalidateTextCache(VOID)
+{
+    FbConsCachedTextBufferValid = FALSE;
+}
+
+static VOID
+FbConsUpdateTextCacheCell(
+    _In_ UCHAR Char,
+    _In_ UCHAR Attr,
+    _In_ ULONG Column,
+    _In_ ULONG Row)
+{
+    PUCHAR Cell;
+    ULONG Width = FbConsWidth();
+    ULONG Height = FbConsHeight();
+    ULONG Offset;
+
+    if (!FbConsCachedTextBufferValid)
+        return;
+
+    if ((Column >= Width) || (Row >= Height))
+        return;
+
+    Offset = (Row * Width + Column) * VGA_CHAR_SIZE;
+    if (Offset + VGA_CHAR_SIZE > FbConsCachedTextBufferSize)
+    {
+        FbConsInvalidateTextCache();
+        return;
+    }
+
+    Cell = FbConsCachedTextBuffer + Offset;
+    Cell[0] = Char;
+    Cell[1] = Attr;
+}
+
+static VOID
+FbConsClearTextCache(
+    _In_ UCHAR Attr)
+{
+    ULONG Index;
+    ULONG Width = FbConsWidth();
+    ULONG Height = FbConsHeight();
+    ULONG BufferSize = Width * Height * VGA_CHAR_SIZE;
+    PUCHAR Cell = FbConsCachedTextBuffer;
+
+    if (!FbConsCachedTextBufferValid)
+        return;
+
+    if (BufferSize != FbConsCachedTextBufferSize)
+    {
+        FbConsInvalidateTextCache();
+        return;
+    }
+
+    for (Index = 0; Index < Width * Height; ++Index)
+    {
+        Cell[0] = ' ';
+        Cell[1] = Attr;
+        Cell += VGA_CHAR_SIZE;
+    }
+}
+
+VOID
+FbConsScrollTextCache(
+    _In_ UCHAR Attr)
+{
+    ULONG Column;
+    ULONG Width = FbConsWidth();
+    ULONG Height = FbConsHeight();
+    ULONG RowSize = Width * VGA_CHAR_SIZE;
+    ULONG BufferSize = Height * RowSize;
+    PUCHAR LastRow;
+
+    if (!FbConsCachedTextBufferValid)
+        return;
+
+    if ((Height == 0) || (RowSize == 0) ||
+        (BufferSize != FbConsCachedTextBufferSize))
+    {
+        FbConsInvalidateTextCache();
+        return;
+    }
+
+    if (Height > 1)
+    {
+        RtlMoveMemory(FbConsCachedTextBuffer,
+                      FbConsCachedTextBuffer + RowSize,
+                      BufferSize - RowSize);
+    }
+
+    LastRow = FbConsCachedTextBuffer + BufferSize - RowSize;
+    for (Column = 0; Column < Width; ++Column)
+    {
+        LastRow[0] = ' ';
+        LastRow[1] = Attr;
+        LastRow += VGA_CHAR_SIZE;
+    }
+}
+
+static BOOLEAN
+FbConsEnsureTextCache(
+    _In_ ULONG BufferSize)
+{
+    if (!BufferSize)
+        return FALSE;
+
+    if (FbConsCachedTextBufferSize != BufferSize)
+        FbConsReleaseTextCache();
+
+    if (!FbConsCachedTextBuffer)
+    {
+        FbConsCachedTextBuffer = MmAllocateMemoryWithType(BufferSize, LoaderFirmwareTemporary);
+        if (!FbConsCachedTextBuffer)
+            return FALSE;
+
+        FbConsCachedTextBufferSize = BufferSize;
+        FbConsCachedTextBufferValid = FALSE;
+    }
+
+    return TRUE;
+}
+
 static inline
 UINT32
 FbConsAttrToSingleColor(
@@ -1349,6 +1602,7 @@ FbConsClearScreen(
     UINT32 FgColor, BgColor;
     FbConsAttrToColors(Attr, &FgColor, &BgColor);
     VidFbClearScreenColor(BgColor, FALSE);
+    FbConsClearTextCache(Attr);
 }
 
 /**
@@ -1390,6 +1644,7 @@ FbConsPutChar(
 
     FbConsAttrToColors(Attr, &FgColor, &BgColor);
     FbConsOutputChar(Char, Column, Row, FgColor, BgColor);
+    FbConsUpdateTextCacheCell(Char, Attr, Column, Row);
 }
 
 /**
@@ -1489,20 +1744,52 @@ FbConsCopyOffScreenBufferToVRAM(
     _In_ PVOID Buffer)
 {
     PUCHAR OffScreenBuffer = (PUCHAR)Buffer;
+    PUCHAR CachedBuffer;
     ULONG Row, Col;
+    ULONG BufferSize;
+    BOOLEAN CacheReady;
+    BOOLEAN RedrawAll;
     // ULONG Width, Height, Depth;
     // FbConsGetDisplaySize(&Width, &Height, &Depth);
     ULONG Width = FbConsWidth();
     ULONG Height = FbConsHeight();
 
+    if (!OffScreenBuffer)
+        return;
+
+    BufferSize = Height * Width * VGA_CHAR_SIZE;
+    CacheReady = FbConsEnsureTextCache(BufferSize);
+    RedrawAll = !CacheReady || !FbConsCachedTextBufferValid;
+    CachedBuffer = FbConsCachedTextBuffer;
+
     for (Row = 0; Row < Height; ++Row)
     {
         for (Col = 0; Col < Width; ++Col)
         {
-            FbConsPutChar(OffScreenBuffer[0], OffScreenBuffer[1], Col, Row);
+            if (RedrawAll ||
+                (CachedBuffer[0] != OffScreenBuffer[0]) ||
+                (CachedBuffer[1] != OffScreenBuffer[1]))
+            {
+                UINT32 FgColor, BgColor;
+
+                FbConsAttrToColors(OffScreenBuffer[1], &FgColor, &BgColor);
+                FbConsOutputChar(OffScreenBuffer[0], Col, Row, FgColor, BgColor);
+
+                if (CacheReady)
+                {
+                    CachedBuffer[0] = OffScreenBuffer[0];
+                    CachedBuffer[1] = OffScreenBuffer[1];
+                }
+            }
+
             OffScreenBuffer += VGA_CHAR_SIZE;
+            if (CacheReady)
+                CachedBuffer += VGA_CHAR_SIZE;
         }
     }
+
+    if (CacheReady)
+        FbConsCachedTextBufferValid = TRUE;
 }
 
 VOID
@@ -1512,4 +1799,5 @@ FbConsScrollUp(
     UINT32 BgColor, Dummy;
     FbConsAttrToColors(Attr, &Dummy, &BgColor);
     VidFbScrollUp(BgColor, FbConsCellHeight());
+    FbConsScrollTextCache(Attr);
 }
