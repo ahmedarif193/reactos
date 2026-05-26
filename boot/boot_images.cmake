@@ -259,11 +259,7 @@ add_allusers_profile_dirs(${CMAKE_CURRENT_BINARY_DIR}/preinstall.cmake.lst "Prof
 add_user_profile_dirs(${CMAKE_CURRENT_BINARY_DIR}/preinstall.cmake.lst "Profiles" "Default User")
 
 # Disk image size configuration (in MB)
-if(ARCH STREQUAL "arm64")
-    set(_preinstall_image_size_default 400)
-else()
-    set(_preinstall_image_size_default 1024)
-endif()
+set(_preinstall_image_size_default 400)
 set(PREINSTALL_IMAGE_SIZE_MB ${_preinstall_image_size_default} CACHE STRING "Pre-installed disk image size in MB")
 # Partition starts at sector 2048 (1MB alignment), rest is partition
 math(EXPR _preinstall_partition_sectors "(${PREINSTALL_IMAGE_SIZE_MB} - 1) * 2048")
