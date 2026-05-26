@@ -56,6 +56,8 @@ SdBusFormatEmmcPartitionHardwareIds(
     SIZE_T Written;
     PCWSTR ClassSuffix = SdBusEmmcPartitionSuffix(PdoExtension->EmmcPartitionId);
 
+    *OutLengthWchars = 0;
+
     Status = RtlStringCchPrintfW(
         Cursor, Remaining,
         L"SD\\VID_%02X&OID_%04X&CLASS_%s",
@@ -97,7 +99,10 @@ SdBusFormatEmmcPartitionHardwareIds(
     {
         return STATUS_BUFFER_TOO_SMALL;
     }
-    Cursor += 1;
+    *Cursor = UNICODE_NULL;
+    Cursor++;
+
+    *OutLengthWchars = (ULONG)(Cursor - Buffer);
 
     return STATUS_SUCCESS;
 }
@@ -114,6 +119,8 @@ SdBusFormatEmmcPartitionCompatibleIds(
     NTSTATUS Status;
     SIZE_T Written;
     PCWSTR ClassSuffix = SdBusEmmcPartitionSuffix(PdoExtension->EmmcPartitionId);
+
+    *OutLengthWchars = 0;
 
     Status = RtlStringCchPrintfW(
         Cursor, Remaining,
@@ -142,7 +149,10 @@ SdBusFormatEmmcPartitionCompatibleIds(
     {
         return STATUS_BUFFER_TOO_SMALL;
     }
-    Cursor += 1;
+    *Cursor = UNICODE_NULL;
+    Cursor++;
+
+    *OutLengthWchars = (ULONG)(Cursor - Buffer);
 
     return STATUS_SUCCESS;
 }
@@ -158,6 +168,8 @@ SdBusFormatSdioHardwareIds(
     SIZE_T Remaining = BufSize;
     NTSTATUS Status;
     SIZE_T Written;
+
+    *OutLengthWchars = 0;
 
     Status = RtlStringCchPrintfW(
         Cursor, Remaining,
@@ -215,7 +227,10 @@ SdBusFormatSdioHardwareIds(
     {
         return STATUS_BUFFER_TOO_SMALL;
     }
-    Cursor += 1;
+    *Cursor = UNICODE_NULL;
+    Cursor++;
+
+    *OutLengthWchars = (ULONG)(Cursor - Buffer);
 
     return STATUS_SUCCESS;
 }
@@ -231,6 +246,8 @@ SdBusFormatSdioCompatibleIds(
     SIZE_T Remaining = BufSize;
     NTSTATUS Status;
     SIZE_T Written;
+
+    *OutLengthWchars = 0;
 
     Status = RtlStringCchPrintfW(
         Cursor, Remaining,
@@ -259,7 +276,10 @@ SdBusFormatSdioCompatibleIds(
     {
         return STATUS_BUFFER_TOO_SMALL;
     }
-    Cursor += 1;
+    *Cursor = UNICODE_NULL;
+    Cursor++;
+
+    *OutLengthWchars = (ULONG)(Cursor - Buffer);
 
     return STATUS_SUCCESS;
 }
@@ -287,7 +307,7 @@ SdBusPdoQueryId(
     BUS_QUERY_ID_TYPE IdType;
     PWCHAR Buffer;
     WCHAR TempBuffer[512];
-    ULONG Length;
+    ULONG Length = 0;
     NTSTATUS Status;
     BOOLEAN IsSdioFunction;
 
