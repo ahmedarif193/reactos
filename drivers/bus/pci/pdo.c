@@ -191,6 +191,7 @@ PciPdoSetBusDataByOffset(
 
 #define PCI_CAP_PTR_FIRST      0x40
 #define PCI_CAP_MAX_ITERATIONS 48
+#define PCI_PROGIF_USB_XHCI    0x30
 
 static
 USHORT
@@ -375,6 +376,29 @@ PciPdoCacheMsiInfo(
             Device->MsixPbaOffset = TableInfo & PCI_MSIX_TABLE_OFFSET_MASK;
         }
     }
+}
+
+static
+BOOLEAN
+PciPdoShouldUseDefaultMsi(
+    _In_ PPDO_DEVICE_EXTENSION DeviceExtension)
+{
+    PPCI_COMMON_CONFIG PciConfig;
+
+    if (!DeviceExtension || !DeviceExtension->PciDevice)
+        return FALSE;
+
+    PciConfig = &DeviceExtension->PciDevice->PciConfig;
+
+    /*
+     * Boot-critical xHCI controllers can start from the critical-device
+     * database before any DDInstall.HW MSI policy reaches the enum key. The
+     * USBPORT/xHCI stack already consumes message interrupt resources, and
+     * modern xHCI controllers frequently have no usable INTx route.
+     */
+    return (PciConfig->BaseClass == PCI_CLASS_SERIAL_BUS_CTLR &&
+            PciConfig->SubClass == PCI_SUBCLASS_SB_USB &&
+            PciConfig->ProgIf == PCI_PROGIF_USB_XHCI);
 }
 
 #define PCI_ADDRESS_MEMORY_ADDRESS_MASK_64     0xfffffffffffffff0ull
@@ -995,13 +1019,8 @@ PciPdoDetermineInterruptPolicy(
          * typically populated by a DDInstall.HW section on the PDO's
          * enum instance key. Keep the legacy AllowMSI/AllowMSIX
          * values as explicit overrides. */
-        PolicyFound |=
-            PciPdoApplyStandardMessageInterruptPolicy(KeyHandle,
-                                                      &UseMsi,
-                                                      &UseMsix,
-                                                      &MessageLimit);
-        PolicyFound |=
-            PciPdoApplyLegacyInterruptPolicyFromKey(KeyHandle, &UseMsi, &UseMsix);
+        PolicyFound |= PciPdoApplyStandardMessageInterruptPolicy(KeyHandle, &UseMsi, &UseMsix, &MessageLimit);
+        PolicyFound |= PciPdoApplyLegacyInterruptPolicyFromKey(KeyHandle, &UseMsi, &UseMsix);
         ZwClose(KeyHandle);
     }
 
@@ -1013,13 +1032,8 @@ PciPdoDetermineInterruptPolicy(
          * under HKR in the main DDInstall section. Query the same class
          * driver key through the Win7 property path first, then keep the
          * direct registry-key fallback below for older callers. */
-        PolicyFound |=
-            PciPdoApplyStandardMessageInterruptPolicy(KeyHandle,
-                                                      &UseMsi,
-                                                      &UseMsix,
-                                                      &MessageLimit);
-        PolicyFound |=
-            PciPdoApplyLegacyInterruptPolicyFromKey(KeyHandle, &UseMsi, &UseMsix);
+        PolicyFound |= PciPdoApplyStandardMessageInterruptPolicy(KeyHandle, &UseMsi, &UseMsix, &MessageLimit);
+        PolicyFound |= PciPdoApplyLegacyInterruptPolicyFromKey(KeyHandle, &UseMsi, &UseMsix);
         ZwClose(KeyHandle);
     }
     else if (NT_SUCCESS(IoOpenDeviceRegistryKey(DeviceExtension->PciDevice->Pdo,
@@ -1027,13 +1041,8 @@ PciPdoDetermineInterruptPolicy(
                                                 KEY_READ,
                                                 &KeyHandle)))
     {
-        PolicyFound |=
-            PciPdoApplyStandardMessageInterruptPolicy(KeyHandle,
-                                                      &UseMsi,
-                                                      &UseMsix,
-                                                      &MessageLimit);
-        PolicyFound |=
-            PciPdoApplyLegacyInterruptPolicyFromKey(KeyHandle, &UseMsi, &UseMsix);
+        PolicyFound |= PciPdoApplyStandardMessageInterruptPolicy(KeyHandle, &UseMsi, &UseMsix, &MessageLimit);
+        PolicyFound |= PciPdoApplyLegacyInterruptPolicyFromKey(KeyHandle, &UseMsi, &UseMsix);
         ZwClose(KeyHandle);
     }
 
@@ -1047,12 +1056,21 @@ PciPdoDetermineInterruptPolicy(
          * before their INF hardware section is installed on the enum key.
          * Allow boot hives to carry the same MSI policy on the service key.
          */
-        PciPdoApplyStandardMessageInterruptPolicy(KeyHandle,
-                                                  &UseMsi,
-                                                  &UseMsix,
-                                                  &MessageLimit);
-        PciPdoApplyLegacyInterruptPolicyFromKey(KeyHandle, &UseMsi, &UseMsix);
+        PolicyFound |= PciPdoApplyStandardMessageInterruptPolicy(KeyHandle, &UseMsi, &UseMsix, &MessageLimit);
+        PolicyFound |= PciPdoApplyLegacyInterruptPolicyFromKey(KeyHandle, &UseMsi, &UseMsix);
         ZwClose(KeyHandle);
+    }
+
+    if (!PolicyFound)
+    {
+        PciPdoCacheMsiInfo(DeviceExtension);
+        if (DeviceExtension->PciDevice->MsiCapability &&
+            PciPdoShouldUseDefaultMsi(DeviceExtension))
+        {
+            UseMsi = TRUE;
+            UseMsix = FALSE;
+            MessageLimit = 1;
+        }
     }
 
     if (!PciMsiEnabledByPolicy)
@@ -2375,7 +2393,7 @@ PdoQueryResourceRequirements(
             else
             {
                 Dest->ShareDisposition = CmResourceShareDeviceExclusive;
-                Dest->Flags = CM_RESOURCE_INTERRUPT_LEVEL_SENSITIVE |
+                Dest->Flags = CM_RESOURCE_INTERRUPT_LATCHED |
                               CM_RESOURCE_INTERRUPT_MESSAGE;
                 Dest->u.Interrupt.MinimumVector = 1;
                 Dest->u.Interrupt.MaximumVector =
