@@ -70,6 +70,7 @@ jobs:
         . "$HOME/.local/opt/rosbe/rosbe-env.sh"
         FLAGS=""
         [ "${{matrix.compiler}}" = "clang" ] && FLAGS="$FLAGS --clang"
+        [ "${{matrix.compiler}}" = "gcc" ] && FLAGS="$FLAGS --gcc"
         [ "${{matrix.config}}" = "Release" ] && FLAGS="$FLAGS -r"
         ./configure.sh $FLAGS -a ${{matrix.arch}} \
           -DDLL_EXPORT_VERSION=${{matrix.dllver}} \

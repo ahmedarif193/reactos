@@ -1,1 +1,1 @@
-@ stdcall -private DriverEntry()
+@ stdcall -private DriverEntry(ptr ptr)

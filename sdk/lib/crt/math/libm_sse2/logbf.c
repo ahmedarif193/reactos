@@ -80,3 +80,8 @@ float _logbf(float x)
 #endif
     }
 }
+
+float logbf(float x)
+{
+  return _logbf(x);
+}

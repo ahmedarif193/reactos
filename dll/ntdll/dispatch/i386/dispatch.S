@@ -132,7 +132,7 @@ _KiUserCallbackDispatcher@12:
     pop edx
 
     /* Get the callback table */
-    mov eax, [fs:TEB_PEB]
+    mov eax, fs:[TEB_PEB]
     mov eax, [eax+PEB_KERNEL_CALLBACK_TABLE]
 
     /* Call the routine */
@@ -165,7 +165,7 @@ _KiRaiseUserExceptionDispatcher@0:
 
     /* Fill out the record */
     mov [esp+EXCEPTION_RECORD_EXCEPTION_ADDRESS], eax
-    mov eax, [fs:KPCR_TEB]
+    mov eax, fs:[KPCR_TEB]
     mov eax, [eax+TEB_EXCEPTION_CODE]
     mov [esp+EXCEPTION_RECORD_EXCEPTION_CODE], eax
     mov dword ptr [esp+EXCEPTION_RECORD_EXCEPTION_FLAGS], 0

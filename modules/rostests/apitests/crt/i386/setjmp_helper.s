@@ -28,12 +28,12 @@ __setjmp1:
 
 PUBLIC _call_setjmp
 _call_setjmp:
-    push offset __setjmp
+    PUSH_OFFSET __setjmp
     jmp _call_setjmp_common
 
 PUBLIC _call_setjmp3
 _call_setjmp3:
-    push offset __setjmp3
+    PUSH_OFFSET __setjmp3
     jmp _call_setjmp_common
 
 

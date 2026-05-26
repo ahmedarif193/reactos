@@ -271,7 +271,11 @@ MACRO(STUBCODE_U, Name, SyscallId, ArgCount)
     ret StackBytes
 ENDM
 MACRO(STUBCODE_K, Name, SyscallId, ArgCount)
+#ifdef _USE_ML
     StackBytes = 4 * &ArgCount
+#else
+    StackBytes = 4 * ArgCount
+#endif
     FPO 0, 0, 0, 0, 0, FRAME_FPO
     mov eax, SyscallId
     lea edx, [esp + 4]
@@ -324,6 +328,7 @@ ENDM
 #endif
 
 #ifdef _M_IX86
+#ifdef _USE_ML
 MACRO(MAKE_LABEL, Name, StackBytes)
     PUBLIC _&Name&@&StackBytes
     _&Name&@&StackBytes:
@@ -332,6 +337,16 @@ MACRO(START_PROC, Name, StackBytes)
     PUBLIC _&Name&@&StackBytes
     .PROC _&Name&@&StackBytes
 ENDM
+#else
+MACRO(MAKE_LABEL, Name, StackBytes)
+    PUBLIC _\Name\()@\StackBytes
+    _\Name\()@\StackBytes:
+ENDM
+MACRO(START_PROC, Name, StackBytes)
+    PUBLIC _\Name\()@\StackBytes
+    .PROC _\Name\()@\StackBytes
+ENDM
+#endif
 #else
 MACRO(MAKE_LABEL, Name, StackBytes)
     PUBLIC \Name

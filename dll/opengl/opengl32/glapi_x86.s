@@ -17,8 +17,13 @@ ASSUME nothing
 .code
 
 MACRO(USE_GL_FUNC, name, offset, stack)
+#ifdef _USE_ML
 PUBLIC _gl&name&@&stack
 .PROC _gl&name&@&stack
+#else
+PUBLIC _gl\name\()@\stack
+.PROC _gl\name\()@\stack
+#endif
 
     FPO 0, 0, 0, 0, 0, FRAME_FPO
 
@@ -29,10 +34,18 @@ PUBLIC _gl&name&@&stack
 
     /* If we don't have a dispatch table, this is a nop */
     test eax, eax
+#ifdef _USE_ML
     jz name&_fast_ret
+#else
+    jz \name\()_fast_ret
+#endif
     /* Jump into the ICD */
     jmp dword ptr [eax+4*VAL(offset)]
+#ifdef _USE_ML
 name&_fast_ret:
+#else
+\name\()_fast_ret:
+#endif
     ret VAL(stack)
 .ENDP
 ENDM

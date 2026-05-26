@@ -48,7 +48,7 @@ KiSwapProcess(IN PKPROCESS NewProcess,
     }
 
     /* Update CR3 */
-    __writecr3(NewProcess->DirectoryTableBase[0]);
+    __writecr3(KPROCESS_DTB0(NewProcess));
 
     /* Clear GS */
     Ke386SetGs(0);
@@ -56,4 +56,3 @@ KiSwapProcess(IN PKPROCESS NewProcess,
     /* Update IOPM offset */
     Pcr->TSS->IoMapBase = NewProcess->IopmOffset;
 }
-
