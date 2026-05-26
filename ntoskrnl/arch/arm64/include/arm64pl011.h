@@ -54,22 +54,3 @@
 #define KiArm64UartPutc(Ch)         EarlyUartPutc(Ch)
 #define KiArm64UartPuts(Str)        EarlyUartPuts(Str)
 #define KiArm64UartPutHex(Val, N)   EarlyUartPutHex((Val), (N))
-
-/*
- * KiArm64InitializeUart - Initialize kernel UART with address from loader.
- *
- * This should be called early in kernel initialization with the UART
- * base address that was detected by the bootloader. The address is
- * typically stored in the loader block extension.
- *
- * UartBase: Physical address of the PL011 UART (from loader block)
- *           Pass 0 to use the default/detected address.
- */
-static __inline VOID
-KiArm64InitializeUart(UINT64 UartBase)
-{
-    if (!EarlyUartInitialized)
-    {
-        EarlyUartInitialize(UartBase);
-    }
-}
