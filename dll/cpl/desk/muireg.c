@@ -1,5 +1,7 @@
 #include "desk.h"
 
+#if DLL_EXPORT_VERSION < 0x600
+
 /******************************************************************************
  * load_string [Internal]
  *
@@ -142,3 +144,5 @@ cleanup:
     HeapFree(GetProcessHeap(), 0, pwszExpandedBuffer);
     return result;
 }
+
+#endif
