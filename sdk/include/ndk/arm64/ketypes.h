@@ -19,15 +19,26 @@ extern "C" {
 #define POWER_LEVEL             14
 #define PROFILE_LEVEL           15
 #define HIGH_LEVEL              15
+#define SYNCH_LEVEL             DISPATCH_LEVEL
+
+#define NUMBER_POOL_LOOKASIDE_LISTS 32
 
 //
 // IPI Types
 //
+/* NOTE: These constants are bit indices for InterlockedBitTestAndSet/Reset. */
 #define IPI_APC                 1
 #define IPI_DPC                 2
 #define IPI_FREEZE              4
 #define IPI_PACKET_READY        6
 #define IPI_SYNCH_REQUEST       16
+
+#define IPI_FROZEN_STATE_RUNNING        0
+#define IPI_FROZEN_STATE_FROZEN         2
+#define IPI_FROZEN_STATE_THAW           3
+#define IPI_FROZEN_STATE_OWNER          4
+#define IPI_FROZEN_STATE_TARGET_FREEZE  5
+#define IPI_FROZEN_FLAG_ACTIVE          0x20
 
 //
 // PRCB Flags
@@ -67,6 +78,14 @@ typedef union _CPU_INFO
     ULONG dummy;
 } CPU_INFO, *PCPU_INFO;
 
+typedef struct _KARM64_VFP_STATE
+{
+    struct _KARM64_VFP_STATE *Link;
+    ULONG Fpcr;
+    ULONG Fpsr;
+    NEON128 V[32];
+} KARM64_VFP_STATE, *PKARM64_VFP_STATE;
+
 typedef struct _KTRAP_FRAME
 {
     UCHAR ExceptionActive;
@@ -74,23 +93,16 @@ typedef struct _KTRAP_FRAME
     UCHAR DebugRegistersValid;
     union
     {
-        struct
-        {
-            CHAR PreviousMode;
-            UCHAR PreviousIrql;
-        };
+        KPROCESSOR_MODE PreviousMode;
+        KIRQL PreviousIrql;
     };
     ULONG Reserved;
     union
     {
-        struct
-        {
-            ULONG64 FaultAddress;
-            ULONG64 TrapFrame;
-        };
+        ULONG64 FaultAddress;
+        ULONG64 TrapFrame;
     };
-    //struct PKARM64_VFP_STATE VfpState;
-    ULONG VfpState;
+    PKARM64_VFP_STATE VfpState;
     ULONG Bcr[8];
     ULONG64 Bvr[8];
     ULONG Wcr[2];
@@ -131,10 +143,30 @@ typedef struct _KTRAP_FRAME
 
 typedef struct _KEXCEPTION_FRAME
 {
-    ULONG dummy;
+    ULONG64 X19;
+    ULONG64 X20;
+    ULONG64 X21;
+    ULONG64 X22;
+    ULONG64 X23;
+    ULONG64 X24;
+    ULONG64 X25;
+    ULONG64 X26;
+    ULONG64 X27;
+    ULONG64 X28;
+    ULONG64 Fp;
+    ULONG64 Return;
 } KEXCEPTION_FRAME, *PKEXCEPTION_FRAME;
 
 #ifndef NTOS_MODE_USER
+
+typedef struct _KSWITCH_FRAME
+{
+    UCHAR ApcBypass;
+    UCHAR Fill[7];
+    ULONG64 Tpidr;
+    ULONG64 Fp;
+    ULONG64 Return;
+} KSWITCH_FRAME, *PKSWITCH_FRAME;
 
 typedef struct _TRAPFRAME_LOG_ENTRY
 {
@@ -159,68 +191,6 @@ typedef struct _TRAPFRAME_LOG_ENTRY
     ULONG Esr;
     ULONG Reserved1;
 } TRAPFRAME_LOG_ENTRY, *PTRAPFRAME_LOG_ENTRY;
-
-//
-// Processor Region Control Block
-// Based on WoA
-//
-typedef struct _KPRCB
-{
-    ULONG dummy;
-} KPRCB, *PKPRCB;
-
-//
-// Processor Control Region
-// Based on WoA
-//
-typedef struct _KIPCR
-{
-    union
-    {
-        struct
-        {
-            ULONG TibPad0[2];
-            PVOID Spare1;
-            struct _KPCR *Self;
-            PVOID  PcrReserved0;
-            struct _KSPIN_LOCK_QUEUE* LockArray;
-            PVOID Used_Self;
-        };
-    };
-    KIRQL CurrentIrql;
-    UCHAR SecondLevelCacheAssociativity;
-    UCHAR Pad1[2];
-    USHORT MajorVersion;
-    USHORT MinorVersion;
-    ULONG StallScaleFactor;
-    ULONG SecondLevelCacheSize;
-    struct
-    {
-        UCHAR ApcInterrupt;
-        UCHAR DispatchInterrupt;
-    };
-    USHORT InterruptPad;
-    UCHAR BtiMitigation;
-    struct
-    {
-        UCHAR SsbMitigationFirmware:1;
-        UCHAR SsbMitigationDynamic:1;
-        UCHAR SsbMitigationKernel:1;
-        UCHAR SsbMitigationUser:1;
-        UCHAR SsbMitigationReserved:4;
-    };
-    UCHAR Pad2[2];
-    ULONG64 PanicStorage[6];
-    PVOID KdVersionBlock;
-    PVOID HalReserved[134];
-    PVOID KvaUserModeTtbr1;
-
-    /* Private members, not in ntddk.h */
-    PVOID Idt[256];
-    PVOID* IdtExt;
-    PVOID PcrAlign[15];
-    KPRCB Prcb;
-} KIPCR, *PKIPCR;
 
 //
 // Special Registers Structure (outside of CONTEXT)
@@ -264,14 +234,97 @@ typedef struct _KARM64_ARCH_STATE
     ULONG64 Pmuserenr_El0;
     ULONG64 Mair_El1;
     ULONG64 Vbar_El1;
+    ULONG64 APIBKeyHi_El1;
+    ULONG64 APIBKeyLo_El1;
+    ULONG64 Mpam0_El1;
+    ULONG64 Zcr_El1;
+    ULONG64 Padding;
 } KARM64_ARCH_STATE, *PKARM64_ARCH_STATE;
 
 typedef struct _KPROCESSOR_STATE
 {
     KSPECIAL_REGISTERS SpecialRegisters; // 0
     KARM64_ARCH_STATE ArchState;         // 160
-    CONTEXT ContextFrame;                // 800
+    CONTEXT ContextFrame;                // 832
 } KPROCESSOR_STATE, *PKPROCESSOR_STATE;
+
+//
+// Processor Region Control Block
+// Based on WoA
+//
+typedef struct _KPRCB
+{
+    ULONG dummy;
+} KPRCB, *PKPRCB;
+
+//
+// Processor Control Region
+// Based on WoA
+//
+typedef struct _KIPCR
+{
+    union
+    {
+        struct
+        {
+            PVOID TibPad0[2];
+            PVOID Spare1;
+            struct _KPCR *Self;
+            PVOID  PcrReserved0;
+            struct _KSPIN_LOCK_QUEUE* LockArray;
+            PVOID Used_Self;
+        };
+    };
+    KIRQL CurrentIrql;
+    UCHAR SecondLevelCacheAssociativity;
+    UCHAR Pad1[2];
+    USHORT MajorVersion;
+    USHORT MinorVersion;
+    ULONG StallScaleFactor;
+    ULONG SecondLevelCacheSize;
+    struct
+    {
+        UCHAR ApcInterrupt;
+        UCHAR DispatchInterrupt;
+    };
+    USHORT InterruptPad;
+    UCHAR BtiMitigation;
+    struct
+    {
+        UCHAR SsbMitigationFirmware:1;
+        UCHAR SsbMitigationDynamic:1;
+        UCHAR SsbMitigationKernel:1;
+        UCHAR SsbMitigationUser:1;
+        UCHAR SsbMitigationReserved:4;
+    };
+    UCHAR Pad2[2];
+    ULONG64 PanicStorage[6];
+    PVOID KdVersionBlock;
+    PVOID HalReserved[14];
+    PVOID KvaUserModeTtbr1;
+
+    /* Private members, not in ntddk.h */
+    PVOID Idt[256];
+    PVOID* IdtExt;
+    PVOID PcrAlign[15];
+    KPRCB Prcb;
+} KIPCR, *PKIPCR;
+
+extern NTKERNELAPI PKIPCR KeArm64CurrentPcr;
+
+//
+// Macro to get current KPCR
+//
+FORCEINLINE
+PKIPCR
+KeGetPcr(VOID)
+{
+#if defined(_NTOSKRNL_EARLY_INIT_)
+    return KeArm64CurrentPcr;
+#else
+    return (PKIPCR)__getReg(18);
+#endif
+}
 
 //
 // Macro to get current KPRCB
@@ -279,10 +332,10 @@ typedef struct _KPROCESSOR_STATE
 FORCEINLINE
 struct _KPRCB *
 KeGetCurrentPrcb(VOID)
-{  
-    //UNIMPLEMENTED;
-    return 0;
+{
+    return &KeGetPcr()->Prcb;
 }
+#define PRIMARY_VECTOR_BASE            0x00
 
 //
 // Just read it from the PCR
