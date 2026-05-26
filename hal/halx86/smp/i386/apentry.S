@@ -9,8 +9,24 @@
 #include <asm.inc>
 #include <ks386.inc>
 
-#define ZERO_OFFSET(f) (f - _HalpAPEntry16)
 #define PS(f) (f - _HalpAPEntryData)
+
+#ifdef _USE_ML
+#define OFFSET_GDTR (Gdtr - _HalpAPEntry16)
+#define OFFSET_IDTR (Idtr - _HalpAPEntry16)
+#define OFFSET_PAGE_TABLE_ROOT (PageTableRoot - _HalpAPEntry16)
+#define OFFSET_PROCESSOR_STATE (ProcessorState - _HalpAPEntry16)
+#else
+#define OFFSET_GDTR GdtrOffset
+#define OFFSET_IDTR IdtrOffset
+#define OFFSET_PAGE_TABLE_ROOT PageTableRootOffset
+#define OFFSET_PROCESSOR_STATE ProcessorStateOffset
+
+.equ GdtrOffset, Gdtr - _HalpAPEntry16
+.equ IdtrOffset, Idtr - _HalpAPEntry16
+.equ PageTableRootOffset, PageTableRoot - _HalpAPEntry16
+.equ ProcessorStateOffset, ProcessorState - _HalpAPEntry16
+#endif
 
 PUBLIC _HalpAPEntry16
 PUBLIC _HalpAPEntryData
@@ -30,15 +46,15 @@ _HalpAPEntry16:
     mov ds, eax
 
 #ifdef _USE_ML
-    data32 lgdt fword ptr cs:[ZERO_OFFSET(Gdtr)]
-    data32 lidt fword ptr cs:[ZERO_OFFSET(Idtr)]
+    data32 lgdt fword ptr cs:[OFFSET_GDTR]
+    data32 lidt fword ptr cs:[OFFSET_IDTR]
 #else
-    data32 lgdt cs:[ZERO_OFFSET(Gdtr)]
-    data32 lidt cs:[ZERO_OFFSET(Idtr)]
+    data32 lgdt cs:[OFFSET_GDTR]
+    data32 lidt cs:[OFFSET_IDTR]
 #endif
 
     /* Load temp page table */
-    mov eax, cs:[ZERO_OFFSET(PageTableRoot)]
+    mov eax, cs:[OFFSET_PAGE_TABLE_ROOT]
     mov cr3, eax
 
     mov eax, cr0
@@ -83,7 +99,7 @@ _HalpAPEntry32:
     mov gs, ax
 
     /* Load ProcessorState pointer */
-    mov esi, [ebp + ZERO_OFFSET(ProcessorState)]
+    mov esi, [ebp + OFFSET_PROCESSOR_STATE]
 
     mov eax, [esi + PsContextFrame + CsSegDs]
     mov ds, eax

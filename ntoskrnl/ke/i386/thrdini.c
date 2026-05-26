@@ -355,7 +355,7 @@ KiSwapContextExit(IN PKTHREAD OldThread,
         }
 
         /* Switch address space and flush TLB */
-        __writecr3(NewProcess->DirectoryTableBase[0]);
+        __writecr3(KPROCESS_DTB0(NewProcess));
     }
 
     /* Clear GS */

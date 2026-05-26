@@ -20,7 +20,7 @@
 @ stdcall FwpsCalloutUnregisterByKey0(ptr)
 @ stdcall FwpsAllocateCloneNetBufferList0(ptr ptr ptr long ptr)
 @ stdcall FwpsFreeCloneNetBufferList0(ptr long)
-@ stdcall FwpsAllocateNetBufferAndNetBufferList0(ptr long long ptr long double ptr)
+@ stdcall FwpsAllocateNetBufferAndNetBufferList0(ptr long long ptr long long ptr)
 @ stdcall FwpsInjectNetworkSendAsync0(ptr ptr long long ptr ptr ptr)
 @ stdcall FwpsInjectNetworkReceiveAsync0(ptr ptr long long long long ptr ptr ptr)
 @ stdcall FwpsInjectionHandleCreate0(long long ptr)

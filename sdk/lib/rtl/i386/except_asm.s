@@ -172,10 +172,10 @@ _RtlpExecuteHandler2@20:
     push edx
 
     /* Push the exception list */
-    push [fs:TEB_EXCEPTION_LIST]
+    push fs:[TEB_EXCEPTION_LIST]
 
     /* Link us to it */
-    mov [fs:TEB_EXCEPTION_LIST], esp
+    mov fs:[TEB_EXCEPTION_LIST], esp
 
     /* Call the handler */
     push [ebp+20]
@@ -186,10 +186,10 @@ _RtlpExecuteHandler2@20:
     call ecx
 
     /* Unlink us */
-    mov esp, [fs:TEB_EXCEPTION_LIST]
+    mov esp, fs:[TEB_EXCEPTION_LIST]
 
     /* Restore it */
-    pop [fs:TEB_EXCEPTION_LIST]
+    pop fs:[TEB_EXCEPTION_LIST]
 
     /* Undo stack frame and return */
     mov esp, ebp

@@ -1690,26 +1690,12 @@ typedef struct tagMCI_WAVE_SET_PARMS {
 	DWORD dwAudio;
 	UINT wInput;
 	UINT wOutput;
-#ifdef _WIN64
-	DWORD wFormatTag;
-	DWORD nChannels;
-#else
-	WORD wFormatTag;
-	WORD wReserved2;
-	WORD nChannels;
-	WORD wReserved3;
-#endif
+	UINT wFormatTag;
+	UINT nChannels;
 	DWORD nSamplesPerSec;
 	DWORD nAvgBytesPerSec;
-#ifdef _WIN64
-	DWORD nBlockAlign;
-	DWORD wBitsPerSample;
-#else
-	WORD nBlockAlign;
-	WORD wReserved4;
-	WORD wBitsPerSample;
-	WORD wReserved5;
-#endif
+	UINT nBlockAlign;
+	UINT wBitsPerSample;
 } MCI_WAVE_SET_PARMS,*PMCI_WAVE_SET_PARMS,*LPMCI_WAVE_SET_PARMS;
 
 typedef struct tagWAVEOUTCAPS2A {

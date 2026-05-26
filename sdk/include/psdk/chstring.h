@@ -198,7 +198,11 @@ inline BOOL operator>=(const CHString& s1, const CHString& s2) { return s1.Compa
 /* Have GCC link to the symbols exported by framedyn.dll */
 #if defined(__GNUC__) && !defined(CHSTRING_BUILD)
 
+#ifdef __clang__
+#define DEFINE_FRAMEDYN_ALIAS(alias, orig) __asm__(".weak " #alias "\n.set " #alias ", \"" #orig "\"");
+#else
 #define DEFINE_FRAMEDYN_ALIAS(alias, orig) __asm__(".set " #alias ", \"" #orig "\"");
+#endif
 
 #ifdef _M_IX86
 DEFINE_FRAMEDYN_ALIAS(__ZN8CHString16AllocBeforeWriteEi, ?AllocBeforeWrite@CHString@@IAEXH@Z)

@@ -81,6 +81,16 @@
 /* EPROCESS.ExceptionPort -> ExceptionPortData at Vista+ (union member) */
 #define ExceptionPort   ExceptionPortData
 
+/* KPROCESS.DirectoryTableBase is scalar at Vista+ except on ARM64.
+ * Keep old code explicit about the primary and hyperspace directory bases. */
+#if !defined(_M_ARM64)
+#define KPROCESS_DTB0(Process)  ((Process)->DirectoryTableBase)
+#define KPROCESS_DTB1(Process)  ((Process)->Unused0)
+#else
+#define KPROCESS_DTB0(Process)  ((Process)->DirectoryTableBase[0])
+#define KPROCESS_DTB1(Process)  ((Process)->DirectoryTableBase[1])
+#endif
+
 /* ETHREAD.LpcReplyMessageId -> AlpcMessageId at Vista+ */
 /* (also defined in lpc.h for LPC subsystem files) */
 
@@ -114,6 +124,11 @@
 /* (handled per-file where needed) */
 
 #endif /* NTDDI_VERSION >= NTDDI_LONGHORN */
+
+#ifndef KPROCESS_DTB0
+#define KPROCESS_DTB0(Process)  ((Process)->DirectoryTableBase[0])
+#define KPROCESS_DTB1(Process)  ((Process)->DirectoryTableBase[1])
+#endif
 
 #include "tag.h"
 #include "ke.h"

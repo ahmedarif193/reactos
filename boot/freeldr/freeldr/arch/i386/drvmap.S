@@ -20,6 +20,20 @@
 #include <asm.inc>
 #include <arch/pc/x86common.h>
 
+#ifdef _USE_ML
+#define INT13_OFFSET_CALLERS_FLAGS (CallersFlags - Int13Handler)
+#define INT13_OFFSET_PASSED_IN_DRIVE_NUMBER (PassedInDriveNumber - Int13Handler)
+#define INT13_OFFSET_MAP_COUNT (Int13HandlerMapCount - Int13Handler)
+#else
+#define INT13_OFFSET_CALLERS_FLAGS CallersFlagsOffset
+#define INT13_OFFSET_PASSED_IN_DRIVE_NUMBER PassedInDriveNumberOffset
+#define INT13_OFFSET_MAP_COUNT Int13HandlerMapCountOffset
+
+.equ CallersFlagsOffset, CallersFlags - Int13Handler
+.equ PassedInDriveNumberOffset, PassedInDriveNumber - Int13Handler
+.equ Int13HandlerMapCountOffset, Int13HandlerMapCount - Int13Handler
+#endif
+
 .code16
 
 PUBLIC _DriveMapInt13HandlerStart
@@ -36,14 +50,14 @@ Int13Handler:
 
     /* Get callers flags from stack */
     mov ax, [bp + 6]
-    mov word ptr cs:[CallersFlags - Int13Handler], ax
+    mov word ptr cs:[INT13_OFFSET_CALLERS_FLAGS], ax
 
     /* Save the drive number they passed in */
-    mov byte ptr cs:[PassedInDriveNumber - Int13Handler], dl
+    mov byte ptr cs:[INT13_OFFSET_PASSED_IN_DRIVE_NUMBER], dl
 
     /* Now we need to perform the mapping */
     xor cx, cx
-    mov si, offset Int13HandlerMapCount - Int13Handler
+    mov si, offset INT13_OFFSET_MAP_COUNT
 
     /* Get the count of drives in the map list */
     mov cl, byte ptr cs:[si]
@@ -81,7 +95,7 @@ CallOldInt13Handler:
     pop ax
 
     /* Put flags onto stack */
-    push word ptr cs:[CallersFlags - Int13Handler]
+    push word ptr cs:[INT13_OFFSET_CALLERS_FLAGS]
 
     /* Call old int 13h handler with new drive number */
     .byte HEX(9a) /* lcall */
@@ -98,7 +112,7 @@ _DriveMapOldInt13HandlerAddress:
     pop ax
 
     /* Restore the callers drive number */
-    mov dl, byte ptr cs:[PassedInDriveNumber - Int13Handler]
+    mov dl, byte ptr cs:[INT13_OFFSET_PASSED_IN_DRIVE_NUMBER]
 
     pop bp
 
