@@ -59,7 +59,7 @@ Arm64EnsureEl1EntryState:
     mrs x15, vbar_el1
     mrs x16, cpacr_el1
 
-    /* Clear E2H (also clear TGE which is only valid with E2H=1) */
+    /* Clear E2H and TGE before entering EL1 */
     bic x3, x3, x4        /* clear E2H */
     mov x4, #1
     lsl x4, x4, #27
@@ -82,7 +82,10 @@ Arm64EnsureEl1EntryState:
     b el2_common
 
 el2_no_vhe:
-    /* Non-VHE EL2: just set RW=1, TGE already 0 in this path */
+    /* Non-VHE EL2: set RW=1 and clear TGE before entering EL1 */
+    mov x4, #1
+    lsl x4, x4, #27
+    bic x3, x3, x4
     mov x4, #1
     lsl x4, x4, #31
     orr x3, x3, x4
