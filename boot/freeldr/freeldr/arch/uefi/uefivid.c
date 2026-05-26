@@ -29,6 +29,11 @@ static UINT32 UefiBltOnlyWidth = 0;
 static UINT32 UefiBltOnlyHeight = 0;
 static BOOLEAN UefiBltOnlyMode = FALSE;
 static BOOLEAN UefiBltOnlyErrorLogged = FALSE;
+static EFI_GRAPHICS_OUTPUT_PROTOCOL* UefiGop = NULL;
+static UINT32 UefiGopWidth = 0;
+static UINT32 UefiGopHeight = 0;
+static ULONG_PTR UefiRenderAddress = 0;
+static UINT32 UefiRenderPixelsPerScanLine = 0;
 
 typedef struct _UEFI_BGRT_LOGO
 {
@@ -119,6 +124,128 @@ static EFI_PIXEL_BITMASK EfiPixelMasks[] =
 
 static
 VOID
+UefiVideoConfigureFramebufferCache(VOID)
+{
+    EFI_STATUS Status;
+    EFI_STATUS FallbackStatus;
+    EFI_CPU_ARCH_PROTOCOL* CpuProtocol;
+    EFI_GUID CpuProtocolGuid = EFI_CPU_ARCH_PROTOCOL_GUID;
+    EFI_PHYSICAL_ADDRESS FramebufferBase;
+    EFI_PHYSICAL_ADDRESS AttributeBase;
+    UINT64 AttributeLength;
+    UINT64 EndOffset;
+
+    if ((VramAddress == 0) || (VramSize == 0) ||
+        (GlobalSystemTable == NULL) || (GlobalSystemTable->BootServices == NULL))
+    {
+        return;
+    }
+
+    FramebufferBase = (EFI_PHYSICAL_ADDRESS)VramAddress;
+    AttributeBase = FramebufferBase & ~((EFI_PHYSICAL_ADDRESS)EFI_PAGE_SIZE - 1);
+    EndOffset = (FramebufferBase - AttributeBase) + VramSize;
+    AttributeLength = (EndOffset + EFI_PAGE_SIZE - 1) & ~((UINT64)EFI_PAGE_SIZE - 1);
+
+    Status = GlobalSystemTable->BootServices->LocateProtocol(&CpuProtocolGuid,
+                                                             NULL,
+                                                             (VOID**)&CpuProtocol);
+    if (Status != EFI_SUCCESS)
+        return;
+
+    if (CpuProtocol->SetMemoryAttributes == NULL)
+        return;
+
+    Status = CpuProtocol->SetMemoryAttributes(CpuProtocol,
+                                              AttributeBase,
+                                              AttributeLength,
+                                              EFI_MEMORY_WC);
+    if ((Status == EFI_UNSUPPORTED) || (Status == EFI_ACCESS_DENIED))
+    {
+        FallbackStatus = CpuProtocol->SetMemoryAttributes(CpuProtocol,
+                                                          AttributeBase,
+                                                          AttributeLength,
+                                                          EFI_MEMORY_WB);
+        if (FallbackStatus == EFI_SUCCESS)
+            Status = FallbackStatus;
+    }
+
+    if (Status == EFI_SUCCESS)
+    {
+        TRACE("UEFI framebuffer cache attributes set for %p/%lu\n",
+              (PVOID)(ULONG_PTR)VramAddress,
+              VramSize);
+    }
+}
+
+static
+VOID
+UefiBltPixelFromTextBackground(
+    _In_ UCHAR Attr,
+    _Out_ EFI_GRAPHICS_OUTPUT_BLT_PIXEL* Pixel)
+{
+    UCHAR Color = (Attr >> 4) & 0x0F;
+    UCHAR Intensity = ((Color & 0x08) == 0) ? 127 : 255;
+
+    Pixel->Blue = (Color & 0x01) ? Intensity : 0;
+    Pixel->Green = (Color & 0x02) ? Intensity : 0;
+    Pixel->Red = (Color & 0x04) ? Intensity : 0;
+    Pixel->Reserved = 0;
+}
+
+static
+BOOLEAN
+UefiVideoFastScrollUp(
+    _In_ UCHAR Attr)
+{
+    EFI_STATUS Status;
+    EFI_GRAPHICS_OUTPUT_BLT_PIXEL FillPixel;
+    ULONG CellWidth, CellHeight;
+    UINTN CopyHeight;
+
+    if (UefiGop == NULL)
+        return FALSE;
+
+    FbConsGetCellSize(&CellWidth, &CellHeight);
+    if ((CellHeight == 0) || (CellHeight >= UefiGopHeight))
+        return FALSE;
+
+    CopyHeight = UefiGopHeight - CellHeight;
+    Status = UefiGop->Blt(UefiGop,
+                          NULL,
+                          EfiBltVideoToVideo,
+                          0,
+                          CellHeight,
+                          0,
+                          0,
+                          UefiGopWidth,
+                          CopyHeight,
+                          0);
+    if (Status != EFI_SUCCESS)
+        return FALSE;
+
+    UefiBltPixelFromTextBackground(Attr, &FillPixel);
+    Status = UefiGop->Blt(UefiGop,
+                          &FillPixel,
+                          EfiBltVideoFill,
+                          0,
+                          0,
+                          0,
+                          CopyHeight,
+                          UefiGopWidth,
+                          CellHeight,
+                          0);
+    if (Status != EFI_SUCCESS)
+    {
+        ERR("GOP scroll clear failed: %lu\n", Status);
+    }
+
+    FbConsScrollTextCache(Attr);
+
+    return TRUE;
+}
+
+static
+VOID
 UefiBltOnlyReset(VOID)
 {
     if (UefiBltOnlyBuffer != NULL)
@@ -182,18 +309,16 @@ UefiBltOnlyFlush(VOID)
 }
 
 static
-VOID
-UefiBltOnlyFlushTextCell(
-    _In_ unsigned X,
-    _In_ unsigned Y)
+BOOLEAN
+UefiBltOnlyFlushDirty(VOID)
 {
-    ULONG CellWidth, CellHeight;
+    ULONG X, Y, Width, Height;
 
-    FbConsGetCellSize(&CellWidth, &CellHeight);
-    UefiBltOnlyFlushRect((UINTN)X * CellWidth,
-                         (UINTN)Y * CellHeight,
-                         CellWidth,
-                         CellHeight);
+    if (!FbConsTakeDirtyRect(&X, &Y, &Width, &Height))
+        return FALSE;
+
+    UefiBltOnlyFlushRect(X, Y, Width, Height);
+    return TRUE;
 }
 
 static
@@ -605,8 +730,11 @@ UefiDrawBgrtLogo(VOID)
         return;
 
     BytesPerPixel = FrameBufferData->BitsPerPixel / 8;
-    Pitch = FrameBufferData->PixelsPerScanLine * BytesPerPixel;
-    VramBase = (PUCHAR)VramAddress;
+    if (UefiRenderAddress == 0)
+        return;
+
+    Pitch = UefiRenderPixelsPerScanLine * BytesPerPixel;
+    VramBase = (PUCHAR)UefiRenderAddress;
 
     for (Row = 0; Row < UefiBgrtLogo.DrawHeight; ++Row)
     {
@@ -635,6 +763,11 @@ UefiDrawBgrtLogo(VOID)
                                   SourcePixel[0];
         }
     }
+
+    FbConsMarkDirtyRect(UefiBgrtLogo.PositionX,
+                        UefiBgrtLogo.PositionY,
+                        UefiBgrtLogo.DrawWidth,
+                        UefiBgrtLogo.DrawHeight);
 }
 
 static
@@ -712,6 +845,11 @@ UefiInitializeGop(VOID)
 
     VramAddress = (ULONG_PTR)gop->Mode->FrameBufferBase;
     VramSize = gop->Mode->FrameBufferSize;
+    UefiGop = gop;
+    UefiGopWidth = gop->Mode->Info->HorizontalResolution;
+    UefiGopHeight = gop->Mode->Info->VerticalResolution;
+    UefiVideoConfigureFramebufferCache();
+
     if (!VidFbInitializeVideo(&FrameBufferData,
                               VramAddress,
                               VramSize,
@@ -722,10 +860,15 @@ UefiInitializeGop(VOID)
                               (PPIXEL_BITMASK)pPixelBitmask))
     {
         ERR("Couldn't initialize video framebuffer\n");
+        UefiGop = NULL;
+        UefiGopWidth = 0;
+        UefiGopHeight = 0;
         Status = EFI_UNSUPPORTED;
     }
     else
     {
+        UefiRenderAddress = VramAddress;
+        UefiRenderPixelsPerScanLine = gop->Mode->Info->PixelsPerScanLine;
         UefiInitializeBgrtLogo();
     }
     return Status;
@@ -768,6 +911,8 @@ UefiInitializeAppleGraphics(VOID)
 
     VramAddress = (ULONG_PTR)BaseAddress;
     VramSize = (ULONG)FrameBufferSize;
+    UefiVideoConfigureFramebufferCache();
+
     if (!VidFbInitializeVideo(&FrameBufferData,
                               VramAddress,
                               VramSize,
@@ -782,6 +927,8 @@ UefiInitializeAppleGraphics(VOID)
     }
     else
     {
+        UefiRenderAddress = VramAddress;
+        UefiRenderPixelsPerScanLine = BytesPerRow / 4;
         UefiInitializeBgrtLogo();
     }
 
@@ -809,19 +956,40 @@ UefiInitializeVideo(VOID)
     return Status;
 }
 
+VOID
+UefiVideoPrepareForExitBootServices(VOID)
+{
+    UefiGop = NULL;
+    UefiGopWidth = 0;
+    UefiGopHeight = 0;
+    UefiBltOnlyGop = NULL;
+    UefiBltOnlyMode = FALSE;
+}
+
+VOID
+UefiVideoExitBootServices(VOID)
+{
+    UefiGop = NULL;
+    UefiGopWidth = 0;
+    UefiGopHeight = 0;
+    UefiBltOnlyGop = NULL;
+    UefiBltOnlyMode = FALSE;
+}
 
 VOID
 UefiVideoClearScreen(UCHAR Attr)
 {
     FbConsClearScreen(Attr);
-    UefiBltOnlyFlush();
+    if (UefiBltOnlyMode)
+        UefiBltOnlyFlush();
 }
 
 VOID
 UefiVideoPutChar(int Ch, UCHAR Attr, unsigned X, unsigned Y)
 {
     FbConsPutChar(Ch, Attr, X, Y);
-    UefiBltOnlyFlushTextCell(X, Y);
+    if (UefiBltOnlyMode)
+        UefiBltOnlyFlushDirty();
 }
 
 VOID
@@ -849,13 +1017,26 @@ UefiVideoCopyOffScreenBufferToVRAM(PVOID Buffer)
 {
     FbConsCopyOffScreenBufferToVRAM(Buffer);
     UefiDrawBgrtLogo();
-    UefiBltOnlyFlush();
+    if (UefiBltOnlyMode)
+        UefiBltOnlyFlushDirty();
 }
 
 VOID
 UefiVideoSync(VOID)
 {
-    UefiBltOnlyFlush();
+    if (UefiBltOnlyMode)
+        UefiBltOnlyFlushDirty();
+}
+
+VOID
+UefiVideoScrollUp(UCHAR Attr)
+{
+    if (!UefiVideoFastScrollUp(Attr))
+    {
+        FbConsScrollUp(Attr);
+        if (UefiBltOnlyMode)
+            UefiBltOnlyFlushDirty();
+    }
 }
 
 VOID

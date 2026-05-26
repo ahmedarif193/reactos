@@ -63,6 +63,14 @@ VidFbInitializeVideo(
     _In_opt_ PPIXEL_BITMASK PixelMasks);
 
 VOID
+VidFbSetFrameBuffer(
+    _In_ ULONG_PTR BaseAddress,
+    _In_ ULONG BufferSize,
+    _In_ UINT32 PixelsPerScanLine,
+    _In_ UINT32 BitsPerPixel,
+    _In_ PPIXEL_BITMASK PixelMasks);
+
+VOID
 VidFbClearScreenColor(
     _In_ UINT32 Color,
     _In_ BOOLEAN FullScreen);
@@ -140,6 +148,24 @@ FbConsPutChar(
     _In_ UCHAR Attr,
     _In_ ULONG Column,
     _In_ ULONG Row);
+
+VOID
+FbConsScrollTextCache(
+    _In_ UCHAR Attr);
+
+VOID
+FbConsMarkDirtyRect(
+    _In_ ULONG X,
+    _In_ ULONG Y,
+    _In_ ULONG Width,
+    _In_ ULONG Height);
+
+BOOLEAN
+FbConsTakeDirtyRect(
+    _Out_ PULONG X,
+    _Out_ PULONG Y,
+    _Out_ PULONG Width,
+    _Out_ PULONG Height);
 
 /*
  * Draws a progress bar using text-grid coordinates while rendering directly
