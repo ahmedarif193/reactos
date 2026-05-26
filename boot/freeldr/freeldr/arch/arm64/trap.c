@@ -16,6 +16,12 @@ UefiArm64PrintBacktrace(
     ULONG_PTR FramePointer,
     ULONG_PTR StackTop,
     ULONG_PTR StackBottom);
+
+static BOOLEAN TrapDisplayReady;
+static ULONG TrapDisplayWidth;
+static ULONG TrapDisplayHeight;
+static ULONG TrapDisplayX;
+static ULONG TrapDisplayY;
 #endif
 
 /*
@@ -40,6 +46,177 @@ static VOID TrapUartPutDec(ULONG Value)
 }
 
 DBG_DEFAULT_CHANNEL(WARNING);
+
+#if defined(UEFIBOOT)
+
+#define TRAP_DISPLAY_ATTR        ATTR(COLOR_GRAY, COLOR_BLACK)
+#define TRAP_DISPLAY_HEADER_ATTR ATTR(COLOR_WHITE, COLOR_RED)
+
+static BOOLEAN
+TrapDisplayBegin(VOID)
+{
+    ULONG Depth;
+
+    if (!MachVtbl.VideoGetDisplaySize || !MachVtbl.VideoPutChar)
+        return FALSE;
+
+    MachVideoGetDisplaySize(&TrapDisplayWidth, &TrapDisplayHeight, &Depth);
+    if ((TrapDisplayWidth == 0) || (TrapDisplayHeight == 0))
+        return FALSE;
+
+    TrapDisplayX = 0;
+    TrapDisplayY = 0;
+    TrapDisplayReady = TRUE;
+
+    if (MachVtbl.VideoHideShowTextCursor)
+        MachVideoHideShowTextCursor(FALSE);
+
+    return TRUE;
+}
+
+static VOID
+TrapDisplayNewLine(VOID)
+{
+    TrapDisplayX = 0;
+    if (TrapDisplayY + 1 < TrapDisplayHeight)
+        ++TrapDisplayY;
+}
+
+static VOID
+TrapDisplayPutChar(
+    _In_ CHAR Ch,
+    _In_ UCHAR Attr)
+{
+    if (!TrapDisplayReady || (TrapDisplayY >= TrapDisplayHeight))
+        return;
+
+    if (Ch == '\n')
+    {
+        TrapDisplayNewLine();
+        return;
+    }
+
+    if (Ch == '\r')
+    {
+        TrapDisplayX = 0;
+        return;
+    }
+
+    if (TrapDisplayX >= TrapDisplayWidth)
+        TrapDisplayNewLine();
+
+    if (TrapDisplayY >= TrapDisplayHeight)
+        return;
+
+    MachVideoPutChar(Ch, Attr, TrapDisplayX, TrapDisplayY);
+    ++TrapDisplayX;
+}
+
+static VOID
+TrapDisplayPuts(
+    _In_ PCSTR String,
+    _In_ UCHAR Attr)
+{
+    while (*String)
+        TrapDisplayPutChar(*String++, Attr);
+}
+
+static VOID
+TrapDisplayPutHex(
+    _In_ ULONGLONG Value,
+    _In_ ULONG Digits,
+    _In_ UCHAR Attr)
+{
+    ULONG Shift;
+
+    if (Digits == 0)
+        Digits = 1;
+
+    for (Shift = (Digits - 1) * 4; ; Shift -= 4)
+    {
+        UCHAR Nibble = (UCHAR)((Value >> Shift) & 0x0F);
+
+        TrapDisplayPutChar((CHAR)(Nibble < 10 ? ('0' + Nibble) : ('A' + Nibble - 10)), Attr);
+        if (Shift == 0)
+            break;
+    }
+}
+
+static VOID
+TrapDisplayPutReg(
+    _In_ PCSTR Name,
+    _In_ ULONGLONG Value)
+{
+    TrapDisplayPuts(Name, TRAP_DISPLAY_ATTR);
+    TrapDisplayPuts("=0x", TRAP_DISPLAY_ATTR);
+    TrapDisplayPutHex(Value, 16, TRAP_DISPLAY_ATTR);
+}
+
+static VOID
+TrapDisplayDumpContext(
+    _In_ PCSTR Title,
+    _In_ PCSTR ExceptionName,
+    _In_ ULONGLONG Esr,
+    _In_ ULONGLONG Far,
+    _In_ ULONGLONG Iss,
+    _In_ PARM64_CONTEXT Context)
+{
+    ULONG Index;
+
+    if (!TrapDisplayBegin())
+        return;
+
+    TrapDisplayPuts(" ReactOS FreeLDR ARM64 ", TRAP_DISPLAY_HEADER_ATTR);
+    TrapDisplayPuts(Title, TRAP_DISPLAY_HEADER_ATTR);
+    TrapDisplayPutChar('\n', TRAP_DISPLAY_ATTR);
+
+    TrapDisplayPuts(ExceptionName, TRAP_DISPLAY_ATTR);
+    TrapDisplayPutChar('\n', TRAP_DISPLAY_ATTR);
+
+    TrapDisplayPutReg("ESR", Esr);
+    TrapDisplayPuts("  ", TRAP_DISPLAY_ATTR);
+    TrapDisplayPutReg("ISS", Iss);
+    TrapDisplayPutChar('\n', TRAP_DISPLAY_ATTR);
+
+    TrapDisplayPutReg("FAR", Far);
+    TrapDisplayPutChar('\n', TRAP_DISPLAY_ATTR);
+
+    TrapDisplayPutReg("ELR", Context->PC);
+    TrapDisplayPuts("  ", TRAP_DISPLAY_ATTR);
+    TrapDisplayPutReg("SP", Context->SP);
+    TrapDisplayPutChar('\n', TRAP_DISPLAY_ATTR);
+
+    TrapDisplayPutReg("PSTATE", Context->PSTATE);
+    TrapDisplayPutChar('\n', TRAP_DISPLAY_ATTR);
+
+    for (Index = 0; Index < 31; Index += 2)
+    {
+        CHAR Name[4];
+        ULONG Second;
+
+        Name[0] = 'X';
+        Name[1] = (CHAR)('0' + (Index / 10));
+        Name[2] = (CHAR)('0' + (Index % 10));
+        Name[3] = ANSI_NULL;
+        TrapDisplayPutReg(Name, Context->X[Index]);
+
+        Second = Index + 1;
+        if (Second < 31)
+        {
+            TrapDisplayPuts("  ", TRAP_DISPLAY_ATTR);
+            Name[1] = (CHAR)('0' + (Second / 10));
+            Name[2] = (CHAR)('0' + (Second % 10));
+            TrapDisplayPutReg(Name, Context->X[Second]);
+        }
+
+        TrapDisplayPutChar('\n', TRAP_DISPLAY_ATTR);
+    }
+
+    if (MachVtbl.VideoSync)
+        MachVideoSync();
+}
+
+#endif
 
 /* Exception syndrome register bits */
 #define ESR_ELx_EC_SHIFT    26
@@ -253,6 +430,15 @@ VOID Arm64HandleSynchronousException(PARM64_CONTEXT Context, ULONGLONG Esr, ULON
     {
         ExceptionName = "Invalid";
     }
+
+#if defined(UEFIBOOT)
+    TrapDisplayDumpContext("Synchronous Exception",
+                           ExceptionName,
+                           Esr,
+                           FaultAddr,
+                           ISS,
+                           Context);
+#endif
     
     ERR("ARM64 Synchronous Exception: %s (EC=0x%02lx)\n", ExceptionName, ExceptionClass);
     ERR("ESR: 0x%016llx  FAR: 0x%016llx  ELR: 0x%016llx  ISS: 0x%08lx  IL=%u\n",
@@ -390,6 +576,15 @@ VOID Arm64HandleFiq(PARM64_CONTEXT Context)
 
 VOID Arm64HandleSerror(PARM64_CONTEXT Context, ULONGLONG Esr)
 {
+#if defined(UEFIBOOT)
+    TrapDisplayDumpContext("SError",
+                           "SError asynchronous external abort",
+                           Esr,
+                           0,
+                           Esr & ESR_ELx_ISS_MASK,
+                           Context);
+#endif
+
     ERR("ARM64 System Error (SError) Exception\n");
     ERR("ESR: 0x%016llx\n", Esr);
     
