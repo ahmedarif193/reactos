@@ -1737,7 +1737,11 @@ typedef struct _KTHREAD
 #endif // ]
 #if defined(_M_IX86) // [
 #if (NTDDI_VERSION >= NTDDI_LONGHORN) // [
-    UCHAR OtherPlatformFill;
+    union
+    {
+        UCHAR OtherPlatformFill;
+        UCHAR Iopl;
+    };
 #else // ][
     UCHAR Iopl;
 #endif // ]

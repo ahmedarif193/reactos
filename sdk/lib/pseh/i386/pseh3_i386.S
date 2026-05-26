@@ -143,7 +143,8 @@ __SEH3$_InvokeEmbeddedFilterFromRegistration:
     sub ecx, [eax + SEH3_REGISTRATION_FRAME_Esp]
 
     /* Put the return address on the stack */
-    push offset __SEH3$_InvokeEmbeddedFilterReturnClang
+    .byte 0x68
+    .long __SEH3$_InvokeEmbeddedFilterReturnClang
 
     /* Save the current stack pointer in the AllocaFrame member */
     mov [eax + SEH3_REGISTRATION_FRAME_AllocaFrame], esp
@@ -197,7 +198,8 @@ __SEH3$_InvokeEmbeddedFilter:
     sub ecx, [eax + SEH3_REGISTRATION_FRAME_Esp]
 
     /* Put the return address on the stack */
-    push offset __SEH3$_InvokeEmbeddedFilterReturn
+    .byte 0x68
+    .long __SEH3$_InvokeEmbeddedFilterReturn
 
     /* Save the current stack pointer in the AllocaFrame member */
     mov [eax + SEH3_REGISTRATION_FRAME_AllocaFrame], esp

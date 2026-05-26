@@ -133,7 +133,7 @@ public:
     // This static functions is the interrupt service routine which is
     // not stream related, but services all streams at once.
     //
-    static NTSTATUS InterruptServiceRoutine
+    static NTSTATUS NTAPI InterruptServiceRoutine
     (
         IN      PINTERRUPTSYNC  InterruptSync,
         IN      PVOID           StaticContext

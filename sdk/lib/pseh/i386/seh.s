@@ -142,7 +142,7 @@ __local_unwind2:
     push ebp
     push eax
     push -2
-    push offset _unwind_handler
+    PUSH_OFFSET _unwind_handler
     push fs:0
     mov fs:0, esp
 
