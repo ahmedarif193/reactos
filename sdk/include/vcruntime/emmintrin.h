@@ -18,6 +18,8 @@
 /* ARM64: no x86 intrinsics */
 #else
 
+#include <xmmintrin.h>
+
 #if defined(_MSC_VER) && !defined(__clang__)
 
 typedef union _DECLSPEC_INTRIN_TYPE _CRT_ALIGN(16) __m128i

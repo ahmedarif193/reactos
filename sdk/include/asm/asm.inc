@@ -28,6 +28,10 @@ OPTION DOTNAME
 .XMM
 .MODEL FLAT
 ASSUME FS:NOTHING, GS:NOTHING
+
+PUSH_OFFSET MACRO symbol
+    push offset symbol
+ENDM
 #endif
 
 /* Explicit radix in MASM syntax  */
@@ -316,6 +320,13 @@ ENDM
 #ifdef __clang__
 .macro public symbol
     .global \symbol
+.endm
+#endif
+
+#ifdef _M_IX86
+.macro PUSH_OFFSET symbol
+    .byte 0x68
+    .long \symbol
 .endm
 #endif
 
