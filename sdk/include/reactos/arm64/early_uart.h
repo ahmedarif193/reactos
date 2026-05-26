@@ -2,15 +2,16 @@
  * PROJECT:     ReactOS ARM64 Kernel/Bootloader
  * LICENSE:     GPL-2.0-or-later (https://spdx.org/licenses/GPL-2.0-or-later)
  * FILE:        sdk/include/reactos/arm64/early_uart.h
- * PURPOSE:     ARM64 early UART with runtime platform detection
+ * PURPOSE:     ARM64 early UART with runtime ACPI-based detection
  * COPYRIGHT:   Copyright 2025 Ahmed Arif (arif.ing@outlook.com)
  *
  * DESCRIPTION:
- *   This header provides early UART support for both FreeLoader and ntoskrnl
- *   with RUNTIME detection of the UART base address. The platform is detected
- *   at boot time via ACPI SPCR table, SMBIOS, or other firmware mechanisms.
+ *   Early UART for FreeLoader and ntoskrnl. The base address and register
+ *   layout are determined at runtime from ACPI SPCR or DBG2 (the only two
+ *   firmware-blessed mechanisms for serial console discovery on ARM64).
  *
- *   NO compile-time #ifdef TARGET_xxx switches - detection is pure runtime.
+ *   If neither table is present, or the reported port subtype has no driver, 
+ *   the UART stays disabled and all output becomes a no-op.
  */
 
 #pragma once
@@ -20,24 +21,20 @@ extern "C" {
 #endif
 
 /*
- * Platform identification enum.
- * Detected at runtime, NOT at compile time.
+ * Whether early UART discovery has run, and whether we have a usable port.
+ * Anything more granular (which RPi model, etc.) belongs in higher layers.
  */
 typedef enum _ARM64_PLATFORM_ID
 {
     Arm64PlatformUnknown = 0,
-    Arm64PlatformQemuVirt,      /* QEMU virt machine */
-    Arm64PlatformRpi3,          /* Raspberry Pi 3B (BCM2837) */
-    Arm64PlatformRpi4,          /* Raspberry Pi 4 (BCM2711) */
-    Arm64PlatformRpi5,          /* Raspberry Pi 5 (BCM2712) */
-    Arm64PlatformGenericAcpi,   /* Generic ACPI-based platform with SPCR */
+    Arm64PlatformGenericAcpi,   /* SPCR/DBG2 gave us a usable serial port */
     Arm64PlatformMax
 } ARM64_PLATFORM_ID;
 
 /*
- * UART register interface type.
- * Detected at runtime from ACPI SPCR where available, otherwise inferred
- * from known platform addresses.
+ * UART register interface type. Set from the SPCR InterfaceType / DBG2
+ * PortSubtype. Arm64UartUnknown means we have no driver for this port and
+ * must not perform I/O on it - even if a base address was reported.
  */
 typedef enum _ARM64_UART_INTERFACE
 {
@@ -46,18 +43,6 @@ typedef enum _ARM64_UART_INTERFACE
     Arm64UartNs16550,
     Arm64UartMax
 } ARM64_UART_INTERFACE;
-
-/*
- * Known UART base addresses for various platforms.
- * These are physical addresses.
- */
-#define ARM64_UART_QEMU_VIRT        0x09000000ULL
-#define ARM64_UART_RPI3_BCM2837     0x3F201000ULL
-#define ARM64_UART_RPI4_BCM2711     0xFE201000ULL
-#define ARM64_UART_RPI5_BCM2712     0x107D001000ULL
-
-/* Default fallback (QEMU virt for development) */
-#define ARM64_UART_DEFAULT          ARM64_UART_QEMU_VIRT
 
 /*
  * PL011 UART register offsets
@@ -99,9 +84,10 @@ extern volatile ARM64_UART_INTERFACE EarlyUartInterface;
 extern volatile BOOLEAN EarlyUartInitialized;
 
 /*
- * Private ARM64 physical-map base for kernel virtual address calculation.
+ * Kernel-side physical-map base used by EarlyUartPhysToVa below.
+ * Must match ARM64_PHYS_MAP_BASE in ntoskrnl/arch/arm64/ke/boot.c, where the
+ * early identity map is established.
  */
-#define ARM64_KSEG0_BASE_VA         0xFFFF800000000000ULL
 #define ARM64_PHYS_MAP_BASE_VA      0xFFFFFC0000000000ULL
 
 /*
@@ -134,22 +120,6 @@ extern volatile BOOLEAN EarlyUartInitialized;
 
 #define EARLY_UART_WRITE8(offset, value) \
     (*(volatile UCHAR*)(ULONG_PTR)(EarlyUartPhysToVa(EarlyUartBaseAddress) + (offset)) = (UCHAR)(value))
-
-static __inline ARM64_UART_INTERFACE
-EarlyUartInferInterfaceFromAddress(UINT64 Address)
-{
-    switch (Address)
-    {
-        case ARM64_UART_QEMU_VIRT:
-        case ARM64_UART_RPI3_BCM2837:
-        case ARM64_UART_RPI4_BCM2711:
-        case ARM64_UART_RPI5_BCM2712:
-            return Arm64UartPl011;
-
-        default:
-            return Arm64UartUnknown;
-    }
-}
 
 static __inline BOOLEAN
 EarlyUartReady(VOID)
@@ -307,37 +277,28 @@ EarlyUartPutDec(UINT32 Value)
 }
 
 /*
- * Function declarations for runtime detection.
- * These are implemented in early_uart.c for the bootloader.
- */
-
-/*
- * EarlyUartDetectPlatform - Detect the ARM64 platform at runtime.
+ * EarlyUartDetectPlatform - Walk ACPI SPCR then DBG2 (in that order). Sets
+ * the globals on success. Must be called while UEFI tables are still mapped
+ * (i.e. before ExitBootServices). Kernel doesn't re-detect; FreeLDR passes
+ * the result through the loader block.
  *
- * This function queries ACPI SPCR table to get the UART address,
- * and/or SMBIOS to identify the board (e.g., Raspberry Pi).
- *
- * Must be called BEFORE ExitBootServices when UEFI tables are available.
- * For kernel, the detected values are passed via loader block.
- *
- * Returns: The detected platform ID, or Arm64PlatformUnknown if detection fails.
+ * Returns Arm64PlatformGenericAcpi on success, Arm64PlatformUnknown if no
+ * serial console was discovered.
  */
 ARM64_PLATFORM_ID
 EarlyUartDetectPlatform(VOID);
 
 /*
- * EarlyUartInitialize - Initialize early UART with runtime detection.
+ * EarlyUartInitialize / EarlyUartInitializeWithInterface - main entry points.
  *
- * This is the main entry point for UART initialization.
- * It calls EarlyUartDetectPlatform and sets up the global state.
+ *   UartBase == 0:               run EarlyUartDetectPlatform()
+ *   UartBase != 0, iface == Unk: caller doesn't know the register layout;
+ *                                we record the base but leave the UART off
+ *                                (EarlyUartReady() returns FALSE)
+ *   UartBase != 0, iface valid:  use as-is (loader-block path)
  *
- * For bootloader: Call this early in boot, before ExitBootServices.
- * For kernel: Call with the address passed from the loader.
- *
- * UartBaseOverride: If non-zero, use this address instead of detecting.
- *                   This allows kernel to use address from loader block.
- *
- * Returns: TRUE if UART was initialized successfully.
+ * Always returns TRUE; the "initialised" bit just means detection has run.
+ * Use EarlyUartReady() to check whether I/O is actually safe.
  */
 BOOLEAN
 EarlyUartInitialize(UINT64 UartBaseOverride);
@@ -358,44 +319,13 @@ EarlyUartGetBaseAddress(VOID)
 }
 
 /*
- * EarlyUartGetPlatformId - Get the detected platform ID.
- */
-static __inline ARM64_PLATFORM_ID
-EarlyUartGetPlatformId(VOID)
-{
-    return EarlyUartPlatformId;
-}
-
-static __inline ARM64_UART_INTERFACE
-EarlyUartGetInterface(VOID)
-{
-    return EarlyUartInterface;
-}
-
-/*
- * EarlyUartIsInitialized - Check if early UART is ready for use.
+ * EarlyUartIsInitialized - Has detection run (regardless of outcome)?
+ * Use EarlyUartReady() above when you actually want to know if I/O is safe.
  */
 static __inline BOOLEAN
 EarlyUartIsInitialized(VOID)
 {
     return EarlyUartInitialized;
-}
-
-/*
- * Platform name strings for debug output.
- */
-static __inline const CHAR*
-EarlyUartGetPlatformName(ARM64_PLATFORM_ID PlatformId)
-{
-    switch (PlatformId)
-    {
-        case Arm64PlatformQemuVirt:     return "QEMU virt";
-        case Arm64PlatformRpi3:         return "Raspberry Pi 3";
-        case Arm64PlatformRpi4:         return "Raspberry Pi 4";
-        case Arm64PlatformRpi5:         return "Raspberry Pi 5";
-        case Arm64PlatformGenericAcpi:  return "Generic ACPI";
-        default:                        return "Unknown";
-    }
 }
 
 #ifdef __cplusplus
