@@ -1,7 +1,7 @@
 /*
  * PROJECT:         ReactOS Kernel
  * LICENSE:         BSD - See COPYING.ARM in the top level directory
- * FILE:            ntoskrnl/arch/arm64/kd64/kdarm64.c
+ * FILE:            ntoskrnl/kd64/arm64/kdarm64.c
  * PURPOSE:         KD support for ARM64
  */
 
@@ -131,6 +131,7 @@ KdpSysReadControlSpace(_In_ ULONG Processor,
     Prcb = KiProcessorBlock[Processor];
     Pcr = CONTAINING_RECORD(Prcb, KIPCR, Prcb);
 
+    /* TODO: are those correct and should they be called AMD64_xxx? */
     switch (BaseAddress)
     {
         case AMD64_DEBUG_CONTROL_SPACE_KPCR:
