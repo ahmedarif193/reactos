@@ -14,7 +14,7 @@ _continuePoint:
  push 0
  pushfd
  push cs
- push offset _continuePoint
+ PUSH_OFFSET _continuePoint
  push ebp
 
  push eax

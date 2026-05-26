@@ -106,20 +106,24 @@ typedef struct _NPI_PROVIDER_CHARACTERISTICS {
 } NPI_PROVIDER_CHARACTERISTICS;
 
 NTSTATUS
+NTAPI
 NmrRegisterClient(
   _In_ PNPI_CLIENT_CHARACTERISTICS ClientCharacteristics,
   _In_opt_ __drv_aliasesMem PVOID ClientContext,
   _Out_ PHANDLE NmrClientHandle);
 
 NTSTATUS
+NTAPI
 NmrDeregisterClient(
   _In_ HANDLE NmrClientHandle);
 
 NTSTATUS
+NTAPI
 NmrWaitForClientDeregisterComplete(
   _In_ HANDLE NmrClientHandle);
 
 NTSTATUS
+NTAPI
 NmrClientAttachProvider(
   _In_ HANDLE NmrBindingHandle,
   _In_ __drv_aliasesMem PVOID ClientBindingContext,
@@ -128,24 +132,29 @@ NmrClientAttachProvider(
   _Out_ CONST VOID* *ProviderDispatch);
 
 VOID
+NTAPI
 NmrClientDetachProviderComplete(
   _In_ HANDLE NmrBindingHandle);
 
 NTSTATUS
+NTAPI
 NmrRegisterProvider(
   _In_ PNPI_PROVIDER_CHARACTERISTICS ProviderCharacteristics,
   _In_opt_ __drv_aliasesMem PVOID ProviderContext,
   _Out_ PHANDLE NmrProviderHandle);
 
 NTSTATUS
+NTAPI
 NmrDeregisterProvider(
   _In_ HANDLE NmrProviderHandle);
 
 NTSTATUS
+NTAPI
 NmrWaitForProviderDeregisterComplete(
   _In_ HANDLE NmrProviderHandle);
 
 VOID
+NTAPI
 NmrProviderDetachClientComplete(
   _In_ HANDLE NmrBindingHandle);
 

@@ -75,8 +75,10 @@ ENDM
 #define KI_DONT_SAVE_SEGS       HEX(0100)
 
 MACRO(KiEnterTrap, Flags)
+#ifdef _USE_ML
     LOCAL not_v86_trap
     LOCAL set_sane_segs
+#endif
 
     /* Check what kind of trap frame this trap requires */
     if (Flags AND KI_FAST_SYSTEM_CALL)
@@ -155,7 +157,11 @@ MACRO(KiEnterTrap, Flags)
 
         /* Check for V86 mode */
         test byte ptr [esp + KTRAP_FRAME_EFLAGS + 2], (EFLAGS_V86_MASK / HEX(10000))
+#ifdef _USE_ML
         jz not_v86_trap
+#else
+        jz .Lnot_v86_trap\@
+#endif
 
             /* Restore V8086 segments into Protected Mode segments */
             mov eax, [esp + KTRAP_FRAME_V86_DS]
@@ -166,9 +172,17 @@ MACRO(KiEnterTrap, Flags)
             mov ecx, [esp + KTRAP_FRAME_V86_GS]
             mov [esp + KTRAP_FRAME_FS], eax
             mov [esp + KTRAP_FRAME_GS], ecx
+#ifdef _USE_ML
             jmp set_sane_segs
+#else
+            jmp .Lset_sane_segs\@
+#endif
 
+#ifdef _USE_ML
         not_v86_trap:
+#else
+        .Lnot_v86_trap\@:
+#endif
 
             /* Save segment selectors */
             mov eax, ds
@@ -182,7 +196,11 @@ MACRO(KiEnterTrap, Flags)
 
     endif
 
+#ifdef _USE_ML
 set_sane_segs:
+#else
+.Lset_sane_segs\@:
+#endif
     /* Load correct data segments */
     mov ax, KGDT_R3_DATA OR RPL_MASK
     mov ds, ax
@@ -262,9 +280,15 @@ MACRO(KiCallHandler, Handler)
 ENDM
 
 MACRO(TRAP_ENTRY, Trap, Flags)
+#ifdef _USE_ML
     EXTERN @&Trap&Handler@4 :PROC
     PUBLIC _&Trap
     .PROC _&Trap
+#else
+    EXTERN @\Trap\()Handler@4 :PROC
+    PUBLIC _\Trap
+    .PROC _\Trap
+#endif
         /* Generate proper debugging symbols */
         FPO 0, 0, 0, 0, 1, FRAME_TRAP
 
@@ -272,26 +296,44 @@ MACRO(TRAP_ENTRY, Trap, Flags)
         KiEnterTrap Flags
 
         /* Call the C handler */
+#ifdef _USE_ML
         KiCallHandler @&Trap&Handler@4
+#else
+        KiCallHandler @\Trap\()Handler@4
+#endif
     .ENDP
 ENDM
 
 #define KI_NMI  HEX(0001)
 
 MACRO(TASK_ENTRY, Trap, Flags)
+#ifdef _USE_ML
     EXTERN _&Trap&Handler :PROC
     PUBLIC _&Trap
     .PROC _&Trap
+#else
+    EXTERN _\Trap\()Handler :PROC
+    PUBLIC _\Trap
+    .PROC _\Trap
+#endif
         /* Generate proper debugging symbols */
         FPO 0, 0, 0, 0, 0, FRAME_TSS
 
         /* Call the C handler */
+#ifdef _USE_ML
         call _&Trap&Handler
+#else
+        call _\Trap\()Handler
+#endif
 
         if (Flags AND KI_NMI)
             /* Return from NMI: return with iret and handle NMI recursion */
             iretd
+#ifdef _USE_ML
             jmp _&Trap
+#else
+            jmp _\Trap
+#endif
         endif
 
     .ENDP
@@ -311,11 +353,18 @@ ENDM
 #define KI_RESTORE_VOLATILES  (KI_RESTORE_EAX OR KI_RESTORE_ECX_EDX)
 
 MACRO(KiTrapExitStub, Name, Flags)
+#ifdef _USE_ML
     LOCAL ret8_instruction
     LOCAL not_nested_int
+#endif
 
+#ifdef _USE_ML
 PUBLIC @&Name&@4
 @&Name&@4:
+#else
+PUBLIC @\Name\()@4
+@\Name\()@4:
+#endif
 
     if (Flags AND KI_EXIT_RET8) OR (Flags AND KI_EXIT_IRET)
 
@@ -409,15 +458,24 @@ PUBLIC @&Name&@4
             /* Check if we return from a nested interrupt, i.e. an interrupt
                that occurred in the ret8 return path between restoring
                EFLAGS and returning with the ret instruction. */
+#ifdef _USE_ML
             cmp dword ptr [esp], offset ret8_instruction
             jne not_nested_int
+#else
+            cmp dword ptr [esp], offset .Lret8_instruction\@
+            jne .Lnot_nested_int\@
+#endif
 
             /* This is a nested interrupt, so we have 2 IRET frames.
                Skip the first, and go directly to the previous return address.
                Do not pass Go. Do not collect $200 */
             add esp, 12
 
+#ifdef _USE_ML
 not_nested_int:
+#else
+.Lnot_nested_int\@:
+#endif
             /* We are at the IRET frame, so push EFLAGS first */
             push dword ptr [esp + 8]
 
@@ -448,7 +506,11 @@ not_nested_int:
     elseif (Flags AND KI_EXIT_RET8)
 
         /* Return to kernel mode with a ret 8 */
+#ifdef _USE_ML
 ret8_instruction:
+#else
+.Lret8_instruction\@:
+#endif
         ret 8
 
     elseif (Flags AND KI_EXIT_RET)
@@ -459,4 +521,3 @@ ret8_instruction:
     endif
 
 ENDM
-
