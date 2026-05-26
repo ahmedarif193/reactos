@@ -160,7 +160,7 @@ C_ASSERT(SYSTEM_PD_SIZE == PAGE_SIZE);
 #define PTE_WRITECOMBINED_CACHE 0x10
 #define PTE_PROTECT_MASK        0x610
 #elif defined(_M_ARM64)
-/* ARM64 PTE definitions are supplied by ntoskrnl/arch/arm64/include/mm.h. */
+/* ARM64 PTE definitions are supplied by ntoskrnl/include/internal/arm64/mm.h. */
 #include <arch/arm64/include/arm3_compat.h>
 #ifndef PTE_PROTECT_MASK
 #error Missing ARM64 PTE definitions

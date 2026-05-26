@@ -30,7 +30,7 @@
 #elif defined(_M_AMD64)
 #include <internal/amd64/ke.h>
 #elif defined(_M_ARM64) || defined(__aarch64__)
-#include <arch/arm64/include/ke.h>
+#include <internal/arm64/ke.h>
 #else
 #error "Unknown processor"
 #endif
