@@ -659,12 +659,8 @@ static UINT64 get_l2_slot_index(BOOLEAN is_kernel, UINT64 l0_slot, UINT64 *l2_ta
 static BOOLEAN Arm64UpdateMappingAttributes(ULONGLONG Va, ULONGLONG Size, UINT64 set_mask, UINT64 clear_mask);
 static VOID Arm64ApplyImageSectionProtections(VOID);
 
-/* PL011 UART debugging helpers - enabled for page table debugging */
-static inline VOID Pl011RawPutc(char Ch) { EarlyUartPutc(Ch); }
-static inline VOID Pl011RawPuts(const char *S) { EarlyUartPuts(S); }
-
 #define ARM64_PT_VERBOSE 0
-#define ARM64_PT_LOG(S) do { if (ARM64_PT_VERBOSE) Pl011RawPuts(S); } while (0)
+#define ARM64_PT_LOG(S) do { if (ARM64_PT_VERBOSE) UartPuts(S); } while (0)
 
 /* NEW: public functions used before they are defined later in this file */
 BOOLEAN Arm64MapVirtualMemory(ULONGLONG VirtualAddress,
@@ -753,7 +749,7 @@ Arm64VerifyKseg0PhysicalPage(UINT64 PhysicalAddress, const char *Label)
                        Label ? Label : "?",
                        (unsigned long long)Pa,
                        (unsigned long long)Va);
-    Pl011RawPuts(Buffer);
+    UartPuts(Buffer);
     debug_dump_static_mapping(Va);
     return FALSE;
 }
@@ -779,7 +775,7 @@ Arm64VerifyKseg0HardwarePage(UINT64 PhysicalAddress, const char *Label)
                            Label ? Label : "?",
                            (unsigned long long)Va,
                            (unsigned long long)Par);
-        Pl011RawPuts(Buffer);
+        UartPuts(Buffer);
         debug_dump_static_mapping(Va);
         return FALSE;
     }
@@ -795,7 +791,7 @@ Arm64VerifyKseg0HardwarePage(UINT64 PhysicalAddress, const char *Label)
                        (unsigned long long)Va,
                        (unsigned long long)Pa,
                        (unsigned long long)Par);
-    Pl011RawPuts(Buffer);
+    UartPuts(Buffer);
     debug_dump_static_mapping(Va);
     return FALSE;
 }
@@ -864,7 +860,7 @@ Arm64MapPageTableAllocationsIntoKseg0(VOID)
     {
         if (!Arm64MapPageTableRangeIntoKseg0(Ranges[i].Base, Ranges[i].Pages, attrs))
         {
-            Pl011RawPuts("[PT] FAILED to map active page-table range into KSEG0\n");
+            UartPuts("[PT] FAILED to map active page-table range into KSEG0\n");
             return FALSE;
         }
     }
@@ -875,7 +871,7 @@ Arm64MapPageTableAllocationsIntoKseg0(VOID)
 
         if (!Arm64MapPageTableRangeIntoKseg0(base, Arm64PtAllocations[i].Pages, attrs))
         {
-            Pl011RawPuts("[PT] FAILED to map page-table allocation into KSEG0\n");
+            UartPuts("[PT] FAILED to map page-table allocation into KSEG0\n");
             return FALSE;
         }
     }
@@ -1728,7 +1724,7 @@ static UINT64* alloc_kernel_l3_from_flat_pool(UINT64 l0_slot)
     /* Debug: check if arm64_kernel_l3_tables is NULL */
     if (!arm64_kernel_l3_tables)
     {
-        Pl011RawPuts("[L3] kernel L3 seed pool is NULL; allocating spill table\n");
+        UartPuts("[L3] kernel L3 seed pool is NULL; allocating spill table\n");
         return allocate_pt_pages(1, "TTBR1 L3 (kernel no-pool spill)");
     }
 
@@ -1745,7 +1741,7 @@ static UINT64* alloc_kernel_l3_from_flat_pool(UINT64 l0_slot)
 
     if (!result)
     {
-        Pl011RawPuts("[L3] kernel L3 seed entry is NULL; allocating spill table\n");
+        UartPuts("[L3] kernel L3 seed entry is NULL; allocating spill table\n");
         return allocate_pt_pages(1, "TTBR1 L3 (kernel null spill)");
     }
 
@@ -1767,7 +1763,7 @@ static UINT64* alloc_user_l3_from_flat_pool(UINT64 l0_slot)
     UINT64 *result = arm64_user_l3_tables[l0_slot][l2_slot_for_alloc][idx_in_l2_slot];
     if (!result)
     {
-        Pl011RawPuts("[L3] user L3 seed entry is NULL; allocating spill table\n");
+        UartPuts("[L3] user L3 seed entry is NULL; allocating spill table\n");
         return allocate_pt_pages(1, "TTBR0 L3 (user null spill)");
     }
 
@@ -1789,13 +1785,13 @@ static UINT64* alloc_extra_l3_from_flat_pool(UINT64 extra_slot)
 
     if (extra_slot >= ARM64_EXTRA_KERNEL_SLOTS)
     {
-        Pl011RawPuts("[L3] FATAL: invalid extra_slot in alloc_extra_l3_from_flat_pool\n");
+        UartPuts("[L3] FATAL: invalid extra_slot in alloc_extra_l3_from_flat_pool\n");
         return NULL;
     }
 
     if (!arm64_extra_l3_tables)
     {
-        Pl011RawPuts("[L3] extra L3 seed pool is NULL; allocating spill table\n");
+        UartPuts("[L3] extra L3 seed pool is NULL; allocating spill table\n");
         return allocate_pt_pages(1, "TTBR1 L3 (extra no-pool spill)");
     }
 
@@ -1819,7 +1815,7 @@ static UINT64* alloc_extra_l3_from_flat_pool(UINT64 extra_slot)
             (unsigned long long)extra_slot,
             (unsigned long long)l2_slot_for_alloc,
             (unsigned long long)idx_in_l2_slot);
-        Pl011RawPuts(buf);
+        UartPuts(buf);
         return allocate_pt_pages(1, "TTBR1 L3 (extra null spill)");
     }
 
@@ -1937,7 +1933,7 @@ static UINT64* ensure_l3_table(BOOLEAN is_kernel, UINT64 l0_slot, UINT64 *l2_tab
 
     /* User space path - use flat pool allocation */
     if (!user_pool) {
-        Pl011RawPuts("[L3] ensure_l3_table: not user_pool\n");
+        UartPuts("[L3] ensure_l3_table: not user_pool\n");
         return NULL;
     }
 
@@ -2035,7 +2031,7 @@ static BOOLEAN map_region_hierarchical(UINT64 va, UINT64 pa, UINT64 size, UINT64
             l0_table = arm64_l0_page_table;
             if (l0_idx >= ARM64_USER_L1_TABLES)
             {
-                Pl011RawPuts("[MAP] User L0 index out of range\n");
+                UartPuts("[MAP] User L0 index out of range\n");
                 return FALSE;
             }
         }
@@ -2055,7 +2051,7 @@ static BOOLEAN map_region_hierarchical(UINT64 va, UINT64 pa, UINT64 size, UINT64
                 if (!DESC_VALID(l0_table[l0_idx])) {
                     UINT64 *new_l1 = allocate_pt_pages(1, "TTBR1 L1 (extra)");
                     if (!new_l1) {
-                        Pl011RawPuts("[MAP] allocate_pt_pages failed for extra L1\n");
+                        UartPuts("[MAP] allocate_pt_pages failed for extra L1\n");
                         return FALSE;
                     }
                     RtlZeroMemory(new_l1, PAGE_SIZE);
@@ -2112,7 +2108,7 @@ static BOOLEAN map_region_hierarchical(UINT64 va, UINT64 pa, UINT64 size, UINT64
             UINT64 l0_slot = is_kernel ? (in_pool ? (l0_idx - ARM64_KSEG0_L0_INDEX) : l0_idx) : l0_idx;
             UINT64 *l2_table_ptr = ensure_l2_table(is_kernel, l0_slot, l1_table, l1_idx, va);
             if (!l2_table_ptr) {
-                Pl011RawPuts("[MAP] ensure_l2_table FAILED (2MB block path)\n");
+                UartPuts("[MAP] ensure_l2_table FAILED (2MB block path)\n");
                 return FALSE;
             }
 
@@ -2142,7 +2138,7 @@ static BOOLEAN map_region_hierarchical(UINT64 va, UINT64 pa, UINT64 size, UINT64
                     "[MAP] ensure_l2_table FAILED l0_slot=%llu l1_idx=%llu\n",
                     (unsigned long long)l0_slot,
                     (unsigned long long)l1_idx);
-                Pl011RawPuts(buf);
+                UartPuts(buf);
                 return FALSE;
             }
 
@@ -2154,7 +2150,7 @@ static BOOLEAN map_region_hierarchical(UINT64 va, UINT64 pa, UINT64 size, UINT64
                     (unsigned long long)l0_slot,
                     (unsigned long long)l2_idx,
                     (unsigned long long)(l1_idx * 512 + l2_idx));
-                Pl011RawPuts(buf);
+                UartPuts(buf);
                 return FALSE;
             }
 
@@ -2195,20 +2191,22 @@ Arm64MapEarlyUart(VOID)
                         PTE_BLOCK_UXN;
     BOOLEAN ok = TRUE;
 
+    /* No UART discovered: nothing to map. EarlyUartReady() will return FALSE
+     * and EarlyUartPutc/Puts no-op, so the missing mapping is never used. */
     if (uart_pa == 0)
-        uart_pa = ARM64_UART_DEFAULT;
+        return TRUE;
 
     uart_pa &= ~(PAGE_SIZE - 1ULL);
 
     if (!map_region_hierarchical(uart_pa, uart_pa, PAGE_SIZE, uart_attrs))
     {
-        Pl011RawPuts("[PT] FAILED to map early UART identity\n");
+        UartPuts("[PT] FAILED to map early UART identity\n");
         ok = FALSE;
     }
 
     if (!map_region_hierarchical(ARM64_PHYS_MAP_BASE | uart_pa, uart_pa, PAGE_SIZE, uart_attrs))
     {
-        Pl011RawPuts("[PT] FAILED to map early UART physical alias\n");
+        UartPuts("[PT] FAILED to map early UART physical alias\n");
         ok = FALSE;
     }
 
@@ -2548,12 +2546,12 @@ Arm64EnsureRangeTables(
                 in_pool,
                 (unsigned long long)l0_slot,
                 (unsigned long long)ARM64_KSEG0_L0_INDEX);
-            Pl011RawPuts(buf);
+            UartPuts(buf);
         }
 
         UINT64 *l2_table_ptr = ensure_l2_table(KernelSpace, l0_slot, l1_table, l1_idx, Va);
         if (!l2_table_ptr) {
-            Pl011RawPuts("[EnsureRange] ensure_l2_table FAILED\n");
+            UartPuts("[EnsureRange] ensure_l2_table FAILED\n");
             return FALSE;
         }
 
@@ -2566,7 +2564,7 @@ Arm64EnsureRangeTables(
                 (unsigned long long)l2_idx,
                 (unsigned long long)l1_idx,
                 (unsigned long long)(l1_idx * 512 + l2_idx));
-            Pl011RawPuts(buf);
+            UartPuts(buf);
             return FALSE;
         }
 
@@ -2668,7 +2666,7 @@ Arm64MappingPlanApply(
                                      Request->Size,
                                      Request->Attributes))
         {
-            Pl011RawPuts("[PLAN] map_region_hierarchical FAILED\n");
+            UartPuts("[PLAN] map_region_hierarchical FAILED\n");
             return FALSE;
         }
     }
@@ -2684,7 +2682,7 @@ Arm64MappingPlanApply(
                                     Request->Size,
                                     (Target == Arm64MappingKernel)))
         {
-            Pl011RawPuts("[PLAN] Arm64EnsureRangeTables FAILED\n");
+            UartPuts("[PLAN] Arm64EnsureRangeTables FAILED\n");
             return FALSE;
         }
     }
@@ -3149,7 +3147,7 @@ static VOID setup_pgtables(VOID)
                                           ARM64_HYPERSPACE_BASE,
                                           ARM64_HYPERSPACE_BYTES))
         {
-            Pl011RawPuts("[PT] FAILED to queue hyperspace\n");
+            UartPuts("[PT] FAILED to queue hyperspace\n");
             return;
         }
 
@@ -3157,7 +3155,7 @@ static VOID setup_pgtables(VOID)
                                           ARM64_DEBUG_MAPPING_BASE,
                                           ARM64_DEBUG_MAPPING_BYTES))
         {
-            Pl011RawPuts("[PT] FAILED to queue debug mapping\n");
+            UartPuts("[PT] FAILED to queue debug mapping\n");
             return;
         }
 
@@ -3165,7 +3163,7 @@ static VOID setup_pgtables(VOID)
                                           ARM64_PFN_DB_BASE,
                                           pfnReserveBytes))
         {
-            Pl011RawPuts("[PT] FAILED to queue PFN database\n");
+            UartPuts("[PT] FAILED to queue PFN database\n");
             return;
         }
 
@@ -3173,7 +3171,7 @@ static VOID setup_pgtables(VOID)
                                           ARM64_PFN_DB_BASE + pfnReserveBytes,
                                           nonPagedReserveBytes))
         {
-            Pl011RawPuts("[PT] FAILED to queue nonpaged pool\n");
+            UartPuts("[PT] FAILED to queue nonpaged pool\n");
             return;
         }
 
@@ -3181,26 +3179,26 @@ static VOID setup_pgtables(VOID)
                                           ARM64_PAGED_POOL_BASE,
                                           ARM64_PAGED_POOL_INIT_BYTES))
         {
-            Pl011RawPuts("[PT] FAILED to queue paged pool\n");
+            UartPuts("[PT] FAILED to queue paged pool\n");
             return;
         }
 
         if (!Arm64MappingPlanApply(&Plan, Arm64MappingIdentity))
         {
-            Pl011RawPuts("[PT] FAILED to apply identity mapping\n");
+            UartPuts("[PT] FAILED to apply identity mapping\n");
             return;
         }
 
         if (!Arm64MappingPlanApply(&Plan, Arm64MappingKernel))
         {
-            Pl011RawPuts("[PT] FATAL - Kernel mapping failed\n");
+            UartPuts("[PT] FATAL - Kernel mapping failed\n");
             for (;;)
                 __asm__ volatile("wfi");
         }
 
         if (!Arm64MappingPlanApply(&Plan, Arm64MappingPhysicalAlias))
         {
-            Pl011RawPuts("[PT] FATAL - Physical alias mapping failed\n");
+            UartPuts("[PT] FATAL - Physical alias mapping failed\n");
             for (;;)
                 __asm__ volatile("wfi");
         }
@@ -3640,7 +3638,7 @@ static VOID ensure_page_tables_initialized(VOID)
     {
         ERR("ARM64: Page table allocation failed\n");
         UartPuts("ARM64: FATAL unable to allocate page table arena\n");
-        Pl011RawPuts("[PT] ERROR: allocate_page_table_memory FAILED\n");
+        UartPuts("[PT] ERROR: allocate_page_table_memory FAILED\n");
         for (;;)
             __asm__ volatile("wfi");
     }
