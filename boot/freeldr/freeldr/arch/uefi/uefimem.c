@@ -339,6 +339,8 @@ UefiExitBootServices(VOID)
         GlobalSystemTable->BootServices->SetWatchdogTimer(0, 0, 0, NULL);
     }
 
+    UefiVideoPrepareForExitBootServices();
+
     Status = PUEFI_LoadMemoryMap(&MapKey,
                                  &MapSize,
                                  &DescriptorSize,
@@ -386,8 +388,9 @@ UefiExitBootServices(VOID)
     }
     else
     {
-        TRACE("Exited bootservices\n");
         BootServicesExitedFlag = TRUE;
+        UefiVideoExitBootServices();
+        TRACE("Exited bootservices\n");
     }
 }
 
