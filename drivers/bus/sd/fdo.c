@@ -81,6 +81,44 @@ SdBusHasMemoryAbove4Gb(VOID)
     return HasAbove4Gb;
 }
 
+NTSTATUS
+SdBusResetHost(
+    _In_ PFDO_EXTENSION FdoExtension,
+    _In_ UCHAR ResetMask)
+{
+    ULONG Timeout;
+
+    SdBusWriteReg8(FdoExtension, SDHCI_SOFTWARE_RESET, ResetMask);
+
+    Timeout = SD_RESET_TIMEOUT_MS;
+    while (Timeout > 0)
+    {
+        if (!(SdBusReadReg8(FdoExtension, SDHCI_SOFTWARE_RESET) & ResetMask))
+        {
+            InterlockedExchange(&FdoExtension->CommandInterruptStatus, 0);
+            return STATUS_SUCCESS;
+        }
+
+        if (KeGetCurrentIrql() > APC_LEVEL)
+        {
+            KeStallExecutionProcessor(1000);
+        }
+        else
+        {
+            LARGE_INTEGER Delay;
+
+            Delay.QuadPart = -10000LL;
+            KeDelayExecutionThread(KernelMode, FALSE, &Delay);
+        }
+
+        Timeout--;
+    }
+
+    DPRINT1("SdBusResetHost: reset 0x%02x timed out\n", ResetMask);
+    InterlockedExchange(&FdoExtension->CommandInterruptStatus, 0);
+    return STATUS_IO_TIMEOUT;
+}
+
 /**
  * @brief Release DMA adapter object if previously acquired.
  *
@@ -237,6 +275,7 @@ SdBusInitializeController(
     NTSTATUS Status;
     BOOLEAN HasMemoryAbove4Gb;
     BOOLEAN NeedDmaMappingForAdma2;
+    LARGE_INTEGER Delay;
 
     DPRINT1("SdBusInitializeController: RegisterBase %p\n",
            FdoExtension->RegisterBase);
@@ -306,12 +345,8 @@ SdBusInitializeController(
         USHORT Divisor;
         USHORT DivisorHigh;
 
-        Divisor = (USHORT)SDHCI_CLK_DIVISOR(FdoExtension->MaxClockFrequency,
+        Divisor = (USHORT)SDHCI_CALC_CLK_DIVIDER(FdoExtension->MaxClockFrequency,
                                               SD_INIT_CLOCK_KHZ);
-        if (Divisor > 0)
-        {
-            Divisor--;
-        }
         /* Clamp to 8-bit + 2-bit extended divisor */
         if (Divisor > 0x3FF)
         {
@@ -371,6 +406,9 @@ SdBusInitializeController(
         return STATUS_SD_BUS_POWER_ERROR;
     }
     SdBusWriteReg8(FdoExtension, SDHCI_POWER_CONTROL, PowerControl);
+
+    Delay.QuadPart = -(LONGLONG)SD_POWER_UP_DELAY_MS * 10000;
+    KeDelayExecutionThread(KernelMode, FALSE, &Delay);
 
     /* Set data timeout to maximum */
     SdBusWriteReg8(FdoExtension, SDHCI_TIMEOUT_CONTROL, 0x0E);

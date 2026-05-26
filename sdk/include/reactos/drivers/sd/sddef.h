@@ -215,6 +215,8 @@ typedef struct _SD_SCR {
 #define SD_INIT_TIMEOUT_MS              2000
 /** @brief Software reset timeout in milliseconds (100ms). */
 #define SD_RESET_TIMEOUT_MS             100
+/** @brief Bus power and identification clock settle time after power-up. */
+#define SD_POWER_UP_DELAY_MS            10
 
 /*
  * NTSTATUS codes for SD-specific errors
