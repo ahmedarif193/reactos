@@ -1531,7 +1531,6 @@ NtCreateUserProcess(OUT PHANDLE ProcessHandle,
     SIZE_T AttributeCount, i;
     SECTION_IMAGE_INFORMATION ImageInformation;
     PEPROCESS Process = NULL;
-    PETHREAD Thread = NULL;
     CLIENT_ID ClientId;
     INITIAL_TEB InitialTeb;
     CONTEXT ThreadContext;
@@ -1672,6 +1671,9 @@ NtCreateUserProcess(OUT PHANDLE ProcessHandle,
         _SEH2_YIELD(return _SEH2_GetExceptionCode());
     }
     _SEH2_END;
+
+    UNREFERENCED_PARAMETER(TokenHandle);
+    UNREFERENCED_PARAMETER(TebAddressPtr);
 
     /* Image name is required */
     if (!ImageName.Buffer || !ImageName.Length)

@@ -964,8 +964,9 @@ SdBusPdoQueryInterface(
     IoStack = IoGetCurrentIrpStackLocation(Irp);
 
     /* Check if the caller is requesting GUID_SDBUS_INTERFACE_STANDARD */
-    if (IsEqualGUID(IoStack->Parameters.QueryInterface.InterfaceType,
-                    &GUID_SDBUS_INTERFACE_STANDARD_LOCAL))
+    if (RtlCompareMemory(IoStack->Parameters.QueryInterface.InterfaceType,
+                         &GUID_SDBUS_INTERFACE_STANDARD_LOCAL,
+                         sizeof(GUID)) == sizeof(GUID))
     {
         if (IoStack->Parameters.QueryInterface.Size < sizeof(SDBUS_INTERFACE_STANDARD))
         {

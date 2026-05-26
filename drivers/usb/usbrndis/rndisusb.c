@@ -33,6 +33,17 @@ static VOID NTAPI RndisTxResubmitDpc(PKDPC Dpc, PVOID DeferredContext, PVOID Sys
 static NTSTATUS RndisUsbSelectAlternate(IN PRNDIS_ADAPTER Adapter, IN UCHAR InterfaceNumber, IN UCHAR AlternateSetting);
 
 static __inline
+CCHAR
+RndisGetCurrentProcessorNumber(VOID)
+{
+#if (NTDDI_VERSION >= NTDDI_WIN7)
+    return (CCHAR)KeGetCurrentProcessorIndex();
+#else
+    return (CCHAR)KeGetCurrentProcessorNumber();
+#endif
+}
+
+static __inline
 VOID
 RndisMaybeDeferIrpFree(
     _In_ PRNDIS_ADAPTER Adapter,
@@ -2006,7 +2017,7 @@ RndisRxComplete(
              * Set DPC affinity to current CPU to keep RX processing
              * on the same CPU as the completion for better cache locality.
              */
-            CCHAR CpuNumber = (CCHAR)KeGetCurrentProcessorNumber();
+            CCHAR CpuNumber = RndisGetCurrentProcessorNumber();
             KeSetTargetProcessorDpc(&Adapter->RxResubmitDpc, CpuNumber);
             KeInsertQueueDpc(&Adapter->RxResubmitDpc, NULL, NULL);
         }
@@ -2215,7 +2226,7 @@ RndisTxComplete(
             if (InterlockedExchange(&Adapter->TxHot.TxResubmitScheduled, 1) == 0)
             {
                 /* Set DPC affinity to current CPU for cache locality */
-                CCHAR CpuNumber = (CCHAR)KeGetCurrentProcessorNumber();
+                CCHAR CpuNumber = RndisGetCurrentProcessorNumber();
                 KeSetTargetProcessorDpc(&Adapter->TxResubmitDpc, CpuNumber);
                 KeInsertQueueDpc(&Adapter->TxResubmitDpc, NULL, NULL);
             }

@@ -40,7 +40,9 @@
 #include "winbase.h"
 #include "wininet.h"
 #include "winerror.h"
-#ifndef __REACTOS__
+#ifdef __REACTOS__
+#include <ndk/kefuncs.h>
+#else
 #include "winternl.h"
 #endif
 #include "winsock2.h"

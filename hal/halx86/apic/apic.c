@@ -458,7 +458,6 @@ HalpGetRootInterruptVector(
         *OutIrql = HalpVectorToIrql(Vector);
     }
 
-Exit:
     *OutAffinity = HalpDefaultInterruptAffinity;
     ASSERT(HalpDefaultInterruptAffinity);
 

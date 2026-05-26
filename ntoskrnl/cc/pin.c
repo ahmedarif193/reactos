@@ -287,13 +287,13 @@ CcpMapDataAcrossVacbs(
 
     if (Bcb->MappedBase != NULL)
     {
-        *Buffer = (PVOID)((ULONG_PTR)Bcb->MappedBase +
-                          (FileOffset->QuadPart - Bcb->MappedBaseOffset.QuadPart));
+        *Buffer = (PUCHAR)Bcb->MappedBase +
+                  (ULONG_PTR)(FileOffset->QuadPart - Bcb->MappedBaseOffset.QuadPart);
     }
     else
     {
-        *Buffer = (PVOID)((ULONG_PTR)Bcb->Vacb->BaseAddress +
-                          (FileOffset->QuadPart - Bcb->Vacb->FileOffset.QuadPart));
+        *Buffer = (PUCHAR)Bcb->Vacb->BaseAddress +
+                  (ULONG_PTR)(FileOffset->QuadPart - Bcb->Vacb->FileOffset.QuadPart);
     }
 
     return Bcb;
@@ -597,8 +597,8 @@ CcMapData (
         *pBcb = &iBcb->PFCB;
         if (iBcb->MappedBase != NULL)
         {
-            *pBuffer = (PVOID)((ULONG_PTR)iBcb->MappedBase +
-                               (FileOffset->QuadPart - iBcb->MappedBaseOffset.QuadPart));
+            *pBuffer = (PUCHAR)iBcb->MappedBase +
+                       (ULONG_PTR)(FileOffset->QuadPart - iBcb->MappedBaseOffset.QuadPart);
         }
         else
         {

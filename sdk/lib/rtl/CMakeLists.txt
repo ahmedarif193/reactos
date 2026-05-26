@@ -23,7 +23,9 @@ list(APPEND RTL_WINE_SOURCE_VISTA
     product.c
     threadpool.c
 )
-set_source_files_properties(threadpool.c PROPERTIES COMPILE_DEFINITIONS __WINESRC__)
+set_source_files_properties(threadpool.c PROPERTIES
+    COMPILE_DEFINITIONS __WINESRC__
+    SKIP_PRECOMPILE_HEADERS ON)
 
 if(MSVC)
     # Silence warning C4267: 'initializing': conversion from 'size_t' to 'const int', possible loss of data
