@@ -1048,31 +1048,23 @@ KiSystemStartup(_Inout_ PLOADER_PARAMETER_BLOCK LoaderBlock)
 {
     ARM64_BOOT_CONTEXT BootContext = {0};
 
-    /*
-     * Initialize kernel UART from loader block.
-     * The bootloader detected the UART address via ACPI SPCR or SMBIOS
-     * and passed it in LoaderBlock->u.Arm64.EarlyUartAddress.
-     */
     if (LoaderBlock && LoaderBlock->u.Arm64.EarlyUartAddress != 0)
     {
+        ARM64_UART_INTERFACE LoaderInterface =
+            (ARM64_UART_INTERFACE)LoaderBlock->u.Arm64.EarlyUartInterface;
+
         EarlyUartBaseAddress = LoaderBlock->u.Arm64.EarlyUartAddress;
-        EarlyUartInterface = (ARM64_UART_INTERFACE)LoaderBlock->u.Arm64.EarlyUartInterface;
-        if (EarlyUartInterface == Arm64UartUnknown ||
-            EarlyUartInterface >= Arm64UartMax)
-        {
-            EarlyUartInterface = EarlyUartInferInterfaceFromAddress(EarlyUartBaseAddress);
-        }
-        if (EarlyUartInterface == Arm64UartUnknown)
-            EarlyUartInterface = Arm64UartPl011;
+        EarlyUartInterface = (LoaderInterface < Arm64UartMax) ?
+                             LoaderInterface :
+                             Arm64UartUnknown;
         EarlyUartPlatformId = Arm64PlatformGenericAcpi;
         EarlyUartInitialized = TRUE;
     }
     else
     {
-        /* Fallback to QEMU default if loader didn't provide address */
-        EarlyUartBaseAddress = 0x09000000ULL;
-        EarlyUartPlatformId = Arm64PlatformQemuVirt;
-        EarlyUartInterface = Arm64UartPl011;
+        EarlyUartBaseAddress = 0;
+        EarlyUartPlatformId = Arm64PlatformUnknown;
+        EarlyUartInterface = Arm64UartUnknown;
         EarlyUartInitialized = TRUE;
     }
 
