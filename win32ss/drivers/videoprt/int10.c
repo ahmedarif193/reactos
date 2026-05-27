@@ -43,7 +43,7 @@ KMUTEX VideoPortInt10Mutex;
 
 /* X86 EMULATOR & V86 MODE INITIALIZATION *************************************/
 
-#if (NTDDI_VERSION < NTDDI_VISTA) && (DLL_EXPORT_VERSION < _WIN32_WINNT_VISTA)
+#if (DLL_EXPORT_VERSION < _WIN32_WINNT_VISTA)
 /*
  * x86 Emulator callbacks
  */
@@ -79,7 +79,7 @@ static NTSTATUS
     _In_reads_bytes_(Size) PVOID Buffer,
     _In_ ULONG Size);
 
-#else // (NTDDI_VERSION >= NTDDI_VISTA) || (DLL_EXPORT_VERSION >= _WIN32_WINNT_VISTA)
+#else // (DLL_EXPORT_VERSION >= _WIN32_WINNT_VISTA)
 #include <ndk/halfuncs.h> // For x86Bios*()
 #endif
 
@@ -89,7 +89,7 @@ IntInitializeX86Emu(VOID)
 #ifdef _M_ARM64
     return FALSE;
 #else
-#if (NTDDI_VERSION < NTDDI_VISTA) && (DLL_EXPORT_VERSION < _WIN32_WINNT_VISTA)
+#if (DLL_EXPORT_VERSION < _WIN32_WINNT_VISTA)
     UNICODE_STRING ImportName;
 #define LOAD_IMPORT(func) \
     (RtlInitUnicodeString(&ImportName, L ## #func), \
