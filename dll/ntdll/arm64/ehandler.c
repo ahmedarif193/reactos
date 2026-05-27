@@ -4,7 +4,7 @@
  * PURPOSE:     C specific exception/unwind handler for ARM64 SEH metadata
  */
 
-#include <ntdllp.h>
+#include <ntdll.h>
 
 #define NDEBUG
 #include <debug.h>

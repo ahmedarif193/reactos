@@ -34,6 +34,10 @@
 #include <assert.h>
 #include <errno.h>
 #include <limits.h>
+
+#ifdef __REACTOS__
+#define WIN32_NO_STATUS
+#endif
 #include <zlib.h>
 
 #include "windef.h"
