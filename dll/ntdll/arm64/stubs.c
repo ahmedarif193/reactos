@@ -4,7 +4,7 @@
  * PURPOSE:     ARM64 stubs until full ntdll arm64 is implemented
  */
 
-#include <ntdllp.h>
+#include <ntdll.h>
 
 void _local_unwind2(void) {}
 void _global_unwind2(void) {}

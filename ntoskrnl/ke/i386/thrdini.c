@@ -162,7 +162,9 @@ KiInitializeContextThread(IN PKTHREAD Thread,
 
         /* Set the Thread's NPX State */
         Thread->NpxState = NPX_STATE_NOT_LOADED;
+#if (NTDDI_VERSION < NTDDI_WIN7)
         Thread->Header.NpxIrql = PASSIVE_LEVEL;
+#endif
 
         /* Disable any debug registers */
         Context->ContextFlags &= ~CONTEXT_DEBUG_REGISTERS;
@@ -438,7 +440,9 @@ KiSwapContextEntry(IN PKSWITCHFRAME SwitchFrame,
     OldThread->KernelStack = SwitchFrame;
 
     /* Set swapbusy to false for the new thread */
+#if (NTDDI_VERSION < NTDDI_WIN7)
     NewThread->SwapBusy = FALSE;
+#endif
 
     /* ISRs can change FPU state, so disable interrupts while checking */
     _disable();

@@ -5,22 +5,47 @@ jobs:
   build-linux:
     strategy:
       matrix:
-        compiler: [clang]
-        arch: [i386, amd64]
-        config: [Debug, Release]
-        dllver: ['0x502', '0x600']
-        exclude:
-          - dllver: 0x600
-            config: Release
         include:
+          - compiler: gcc
+            arch: i386
+            config: Debug
+            ntver: '0x600'
+          - compiler: gcc
+            arch: i386
+            config: Release
+            ntver: '0x600'
           - compiler: gcc
             arch: amd64
             config: Debug
-            dllver: '0x502'
+            ntver: '0x600'
           - compiler: gcc
             arch: amd64
             config: Release
-            dllver: '0x502'
+            ntver: '0x600'
+          - compiler: gcc
+            arch: amd64
+            config: Debug
+            ntver: '0x601'
+          - compiler: gcc
+            arch: amd64
+            config: Release
+            ntver: '0x601'
+          - compiler: clang
+            arch: amd64
+            config: Debug
+            ntver: '0x601'
+          - compiler: clang
+            arch: amd64
+            config: Release
+            ntver: '0x601'
+          - compiler: clang
+            arch: arm64
+            config: Debug
+            ntver: '0x601'
+          - compiler: clang
+            arch: arm64
+            config: Release
+            ntver: '0x601'
       fail-fast: false
     runs-on: ubuntu-24.04
     steps:
@@ -53,9 +78,9 @@ jobs:
       uses: actions/cache@v5
       with:
         path: ccache
-        key: ccache-${{matrix.compiler}}-${{matrix.arch}}-${{matrix.config}}-${{matrix.dllver}}-${{github.sha}}
+        key: ccache-${{matrix.compiler}}-${{matrix.arch}}-${{matrix.config}}-${{matrix.ntver}}-${{github.sha}}
         restore-keys: |
-          ccache-${{matrix.compiler}}-${{matrix.arch}}-${{matrix.config}}-${{matrix.dllver}}-
+          ccache-${{matrix.compiler}}-${{matrix.arch}}-${{matrix.config}}-${{matrix.ntver}}-
 
     - name: Set ccache settings
       run: |
@@ -73,23 +98,16 @@ jobs:
         [ "${{matrix.compiler}}" = "gcc" ] && FLAGS="$FLAGS --gcc"
         [ "${{matrix.config}}" = "Release" ] && FLAGS="$FLAGS -r"
         ./configure.sh $FLAGS -a ${{matrix.arch}} \
-          -DDLL_EXPORT_VERSION=${{matrix.dllver}} \
-          -DENABLE_CCACHE=1 \
-          -DENABLE_ROSTESTS=1 \
-          -DENABLE_ROSAPPS=1
+          -DREACTOS_TARGET_NT=${{matrix.ntver}} \
+          -DENABLE_CCACHE=1
         ENV_NAME=$([ "${{matrix.compiler}}" = "clang" ] && echo Clang || echo GCC)
         CFG_LOWER=$(echo "${{matrix.config}}" | tr '[:upper:]' '[:lower:]')
         echo "outdir=output-$ENV_NAME-${{matrix.arch}}-$CFG_LOWER" >> "$GITHUB_OUTPUT"
 
-    - name: Build
+    - name: Build ISOs
       run: |
         . "$HOME/.local/opt/rosbe/rosbe-env.sh"
-        ninja -C ${{steps.configure.outputs.outdir}} -k0
-
-    - name: Generate ISOs
-      run: |
-        . "$HOME/.local/opt/rosbe/rosbe-env.sh"
-        ninja -C ${{steps.configure.outputs.outdir}} bootcd livecd
+        ninja -C ${{steps.configure.outputs.outdir}} bootcd livecd -k0
 
     - name: Print ccache statistics
       run: ccache -s
@@ -97,7 +115,7 @@ jobs:
     - name: Upload ISOs
       uses: actions/upload-artifact@v7
       with:
-        name: reactos-${{matrix.compiler}}-${{matrix.arch}}-${{matrix.config}}-${{matrix.dllver}}-${{github.sha}}
+        name: reactos-${{matrix.compiler}}-${{matrix.arch}}-${{matrix.config}}-target${{matrix.ntver}}-${{github.sha}}
         path: |
           ${{steps.configure.outputs.outdir}}/bootcd.iso
           ${{steps.configure.outputs.outdir}}/livecd.iso

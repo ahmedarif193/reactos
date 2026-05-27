@@ -182,6 +182,7 @@ add_compile_options(
     -Wno-unused-const-variable
     -Wno-unused-local-typedefs
     -Wno-deprecated
+    -Wno-deprecated-declarations
     -Wno-unused-result # FIXME To be removed when CORE-17637 is resolved
     -Wno-format
     -Wno-maybe-uninitialized
