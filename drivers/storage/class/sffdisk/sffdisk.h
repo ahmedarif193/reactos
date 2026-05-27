@@ -53,11 +53,8 @@ typedef struct _SFFDISK_DEVICE_EXTENSION
     HANDLE HarddiskDirectory;           /**< Handle to \\Device\\HarddiskN directory object */
     UNICODE_STRING DeviceName;          /**< FDO device name (e.g. \\Device\\Harddisk0\\DR0) */
     UNICODE_STRING DiskInterfaceName;
-    UNICODE_STRING MountedInterfaceName;
     BOOLEAN DiskInterfaceRegistered;
     BOOLEAN DiskInterfaceEnabled;
-    BOOLEAN MountedInterfaceRegistered;
-    BOOLEAN MountedInterfaceEnabled;
     BOOLEAN SurpriseRemoved;
     BOOLEAN Present;
 
