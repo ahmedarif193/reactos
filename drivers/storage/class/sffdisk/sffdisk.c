@@ -521,26 +521,6 @@ SffdiskStartDevice(
         }
     }
 
-    if (DeviceExtension->MountedInterfaceRegistered &&
-        !DeviceExtension->MountedInterfaceEnabled)
-    {
-        NTSTATUS IfStatus;
-
-        IfStatus = IoSetDeviceInterfaceState(&DeviceExtension->MountedInterfaceName,
-                                             TRUE);
-        if (NT_SUCCESS(IfStatus))
-        {
-            DeviceExtension->MountedInterfaceEnabled = TRUE;
-            DPRINT1("SffdiskStartDevice: Enabled mounted interface %wZ\n",
-                    &DeviceExtension->MountedInterfaceName);
-        }
-        else
-        {
-            DPRINT1("SffdiskStartDevice: IoSetDeviceInterfaceState(mounted) failed 0x%08lx\n",
-                    IfStatus);
-        }
-    }
-
     DPRINT1("SffdiskStartDevice: Card type %d, %I64u sectors, %s, %s\n",
            DeviceExtension->CardType,
            DeviceExtension->TotalSectors,
@@ -565,12 +545,6 @@ VOID
 SffdiskCleanupDevice(
     _In_ PSFFDISK_DEVICE_EXTENSION DeviceExtension)
 {
-    if (DeviceExtension->MountedInterfaceEnabled)
-    {
-        IoSetDeviceInterfaceState(&DeviceExtension->MountedInterfaceName, FALSE);
-        DeviceExtension->MountedInterfaceEnabled = FALSE;
-    }
-
     if (DeviceExtension->DiskInterfaceEnabled)
     {
         IoSetDeviceInterfaceState(&DeviceExtension->DiskInterfaceName, FALSE);
@@ -595,13 +569,6 @@ SffdiskCleanupDevice(
         RtlFreeUnicodeString(&DeviceExtension->DiskInterfaceName);
         RtlInitUnicodeString(&DeviceExtension->DiskInterfaceName, NULL);
         DeviceExtension->DiskInterfaceRegistered = FALSE;
-    }
-
-    if (DeviceExtension->MountedInterfaceRegistered)
-    {
-        RtlFreeUnicodeString(&DeviceExtension->MountedInterfaceName);
-        RtlInitUnicodeString(&DeviceExtension->MountedInterfaceName, NULL);
-        DeviceExtension->MountedInterfaceRegistered = FALSE;
     }
 
     if (DeviceExtension->InterfaceOpen)
@@ -774,31 +741,6 @@ SffdiskAddDevice(
             DPRINT1("SffdiskAddDevice: IoRegisterDeviceInterface(disk) failed 0x%08lx\n",
                     IfStatus);
             RtlInitUnicodeString(&DeviceExtension->DiskInterfaceName, NULL);
-        }
-    }
-
-    {
-        UNICODE_STRING InterfaceName;
-        NTSTATUS IfStatus;
-
-        RtlInitUnicodeString(&InterfaceName, NULL);
-
-        IfStatus = IoRegisterDeviceInterface(PhysicalDeviceObject,
-                                             &MOUNTDEV_MOUNTED_DEVICE_GUID,
-                                             NULL,
-                                             &InterfaceName);
-        if (NT_SUCCESS(IfStatus))
-        {
-            DeviceExtension->MountedInterfaceName = InterfaceName;
-            DeviceExtension->MountedInterfaceRegistered = TRUE;
-            DPRINT1("SffdiskAddDevice: Registered mounted interface %wZ\n",
-                    &InterfaceName);
-        }
-        else
-        {
-            DPRINT1("SffdiskAddDevice: IoRegisterDeviceInterface(mounted) failed 0x%08lx\n",
-                    IfStatus);
-            RtlInitUnicodeString(&DeviceExtension->MountedInterfaceName, NULL);
         }
     }
 
