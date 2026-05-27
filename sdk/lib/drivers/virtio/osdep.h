@@ -19,7 +19,7 @@
 #ifdef __REACTOS__
 #ifdef __GNUC__
 #undef FORCEINLINE
-#define FORCEINLINE __attribute__((__always_inline__))
+#define FORCEINLINE inline __attribute__((__always_inline__))
 #endif
 #endif
 
