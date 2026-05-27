@@ -24,7 +24,7 @@
 #define ARRAY_SIZE(x) (sizeof(x) / sizeof((x)[0]))
 #endif
 
-#if defined(__REACTOS__) && (_WIN32_WINNT <= 0x0600)
+#if defined(__REACTOS__) && (!defined(DLL_EXPORT_VERSION) || (DLL_EXPORT_VERSION < 0x0A00))
 static inline HRESULT mmdevapi_SetThreadDescription(HANDLE thread, PCWSTR description)
 {
     UNREFERENCED_PARAMETER(thread);
