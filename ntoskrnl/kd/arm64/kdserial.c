@@ -34,9 +34,8 @@ KdPortInitializeEx(_Inout_ PCPPORT PortInformation,
 
     /*
      * Require a driver-known interface, not just a base address. FreeLDR may
-     * have captured the base from ACPI DBG2 but reported Interface=Unknown
-     * (e.g. Qualcomm GENI/QUP) - in that case we have no driver to drive it
-     * and KD must fail cleanly rather than silently swallow output.
+     * have captured the base from ACPI DBG2 but reported Interface=Unknown;
+     * in that case KD must fail cleanly rather than silently swallow output.
      */
     Base = EarlyUartReady() ?
            (PUCHAR)(ULONG_PTR)EarlyUartPhysToVa(EarlyUartGetBaseAddress()) :
