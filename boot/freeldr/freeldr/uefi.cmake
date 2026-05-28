@@ -61,7 +61,8 @@ elseif(ARCH STREQUAL "arm")
     #TBD
 elseif(ARCH STREQUAL "arm64")
     list(APPEND UEFILDR_ARC_SOURCE
-        arch/uefi/arm64/early_uart.c)
+        arch/uefi/arm64/early_uart.c
+        arch/uefi/uefiserial.c)
     list(APPEND UEFILDR_COMMON_ASM_SOURCE
         arch/uefi/arm64/uefiasm.S)
 else()
@@ -170,7 +171,8 @@ target_compile_definitions(uefildr PRIVATE UEFIBOOT)
 if(ARCH STREQUAL "amd64")
     set_image_base(uefildr 0x10000)
 elseif(ARCH STREQUAL "arm64")
-    set_image_base(uefildr 0x10000000)
+    set_image_base(uefildr 0x140000000)
+    target_link_options(uefildr PRIVATE -Wl,--stack,0x200000)
 endif()
 
 if(MSVC)
@@ -201,10 +203,10 @@ if(MSVC)
 elseif(CMAKE_C_COMPILER_ID STREQUAL "Clang")
     if(ARCH STREQUAL "arm64")
         target_link_options(uefildr PRIVATE
-            -Wl,--subsystem,efi_application:1.00
-            -Wl,--major-os-version,0
+            -Wl,--subsystem,efi_application:6.00
+            -Wl,--major-os-version,6
             -Wl,--minor-os-version,0
-            -Wl,--major-subsystem-version,1
+            -Wl,--major-subsystem-version,6
             -Wl,--minor-subsystem-version,0)
     else()
         set_subsystem(uefildr efi_application)

@@ -15,6 +15,9 @@ volatile UINT64 EarlyUartBaseAddress = 0;
 volatile ARM64_PLATFORM_ID EarlyUartPlatformId = Arm64PlatformUnknown;
 volatile ARM64_UART_INTERFACE EarlyUartInterface = Arm64UartUnknown;
 volatile BOOLEAN EarlyUartInitialized = FALSE;
+volatile BOOLEAN EarlyUartHardwareInitialized = FALSE;
+volatile UINT32 EarlyUartRxCachedBytes = 0;
+volatile UINT32 EarlyUartRxCachedByteCount = 0;
 
 /*
  * Kernel never re-detects at runtime. FreeLDR did the SPCR/DBG2 walk and
