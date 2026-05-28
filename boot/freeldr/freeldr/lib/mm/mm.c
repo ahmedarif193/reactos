@@ -51,7 +51,8 @@ PVOID MmAllocateMemoryWithType(SIZE_T MemorySize, TYPE_OF_MEMORY MemoryType)
     // then return NULL
     if (FreePagesInLookupTable < PagesNeeded)
     {
-        ERR("Memory allocation failed in MmAllocateMemory(). Not enough free memory to allocate %d bytes.\n", MemorySize);
+        ERR("Memory allocation failed in MmAllocateMemory(). Not enough free memory to allocate %llu bytes.\n",
+            (ULONGLONG)MemorySize);
         UiMessageBoxCritical("Memory allocation failed: out of memory.");
         return NULL;
     }
@@ -60,7 +61,8 @@ PVOID MmAllocateMemoryWithType(SIZE_T MemorySize, TYPE_OF_MEMORY MemoryType)
 
     if (FirstFreePageFromEnd == 0)
     {
-        ERR("Memory allocation failed in MmAllocateMemory(). Not enough free memory to allocate %d bytes.\n", MemorySize);
+        ERR("Memory allocation failed in MmAllocateMemory(). Not enough free memory to allocate %llu bytes.\n",
+            (ULONGLONG)MemorySize);
         UiMessageBoxCritical("Memory allocation failed: out of memory.");
         return NULL;
     }
@@ -70,8 +72,11 @@ PVOID MmAllocateMemoryWithType(SIZE_T MemorySize, TYPE_OF_MEMORY MemoryType)
     FreePagesInLookupTable -= PagesNeeded;
     MemPointer = (PVOID)((ULONG_PTR)FirstFreePageFromEnd * MM_PAGE_SIZE);
 
-    TRACE("Allocated %d bytes (%d pages) of memory (type %ld) starting at page 0x%lx.\n",
-          MemorySize, PagesNeeded, MemoryType, FirstFreePageFromEnd);
+    TRACE("Allocated %llu bytes (%llu pages) of memory (type %ld) starting at page 0x%lx.\n",
+          (ULONGLONG)MemorySize,
+          (ULONGLONG)PagesNeeded,
+          MemoryType,
+          FirstFreePageFromEnd);
     TRACE("Memory allocation pointer: 0x%x\n", MemPointer);
 
     /* LoaderXIPRom identifies the retained boot ramdisk and must not define the boot image mapping span. */
