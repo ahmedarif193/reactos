@@ -100,12 +100,17 @@ typedef struct _WSK_SOCKET_INTERNAL
 
     /* Incoming connection callback function */
     const WSK_CLIENT_LISTEN_DISPATCH *ListenDispatch;
+    const WSK_CLIENT_CONNECTION_DISPATCH *ConnectionDispatch;
     UINT CallbackMask;
 
     UINT Flags;                    /* SO_REUSEADDR, ... see ws2def.h */
     LONG RefCount;                 /* See ReferenceSocket/DereferenceSocket */
 
-    PIRP ListenIrp;	           /* must be cancelled on close */
+    KSPIN_LOCK ListenLock;         /* protects pending accept bookkeeping */
+    LIST_ENTRY PendingAcceptList;  /* LISTEN_CONTEXT list */
+    LONG PendingAcceptCount;       /* total pending accepts for this listen socket */
+    LONG PendingUserAcceptCount;   /* pending explicit WskAccept IRPs */
+    BOOLEAN EventAcceptPending;    /* provider-owned pending accept for WskAcceptEvent */
     volatile BOOLEAN ListenCancelled;
     HANDLE ListenThreadHandle;     /* needed to restart listening */
     PKTHREAD ListenThread;
@@ -137,6 +142,26 @@ typedef struct _NETIO_CONTEXT
     SIZE_T Length;
 } NETIO_CONTEXT, *PNETIO_CONTEXT;
 
+typedef struct _LISTEN_CONTEXT
+{
+    LIST_ENTRY ListEntry;
+    LONG RefCount;                 /* lifetime while completion/cancel helpers race */
+    BOOLEAN EventMode;             /* provider-owned accept for WskAcceptEvent */
+    BOOLEAN CancelRequested;       /* cancellation already requested */
+    BOOLEAN InPendingList;         /* protected by ListenSocket->ListenLock */
+
+    PIRP UserIrp;                  /* non-NULL for WskAccept */
+    PSOCKADDR LocalAddressOut;
+    PSOCKADDR RemoteAddressOut;
+    PVOID AcceptSocketContext;
+    const WSK_CLIENT_CONNECTION_DISPATCH *AcceptSocketDispatch;
+
+    PWSK_SOCKET_INTERNAL ListenSocket;
+    PWSK_SOCKET_INTERNAL AcceptSocket;
+    PTDI_CONNECTION_INFORMATION RequestConnectionInfo;
+    PTDI_CONNECTION_INFORMATION ReturnConnectionInfo;
+} LISTEN_CONTEXT, *PLISTEN_CONTEXT;
+
 static void
 ReferenceSocket(_In_ PWSK_SOCKET_INTERNAL Socket)
 {
@@ -147,6 +172,88 @@ ReferenceSocket(_In_ PWSK_SOCKET_INTERNAL Socket)
 
 static void
 DereferenceSocket(_In_ PWSK_SOCKET_INTERNAL Socket);
+
+static
+void SocketShutdown(_In_ PWSK_SOCKET_INTERNAL Socket);
+
+static void
+ReferenceListenContext(_In_ PLISTEN_CONTEXT ListenContext)
+{
+    InterlockedIncrement(&ListenContext->RefCount);
+}
+
+static void
+DereferenceListenContext(_In_ PLISTEN_CONTEXT ListenContext)
+{
+    if (InterlockedDecrement(&ListenContext->RefCount) == 0)
+    {
+        if (ListenContext->ReturnConnectionInfo != NULL)
+            ExFreePoolWithTag(ListenContext->ReturnConnectionInfo, TAG_AFD_TDI_CONNECTION_INFORMATION);
+        if (ListenContext->RequestConnectionInfo != NULL)
+            ExFreePoolWithTag(ListenContext->RequestConnectionInfo, TAG_AFD_TDI_CONNECTION_INFORMATION);
+        ExFreePoolWithTag(ListenContext, TAG_NETIO);
+    }
+}
+
+static VOID
+InitializeAcceptedSocket(_In_ PWSK_SOCKET_INTERNAL AcceptSocket,
+                         _In_ PWSK_SOCKET_INTERNAL ListenSocket,
+                         _In_ PSOCKADDR RemoteAddress,
+                         _In_opt_ PVOID SocketContext,
+                         _In_opt_ const WSK_CLIENT_CONNECTION_DISPATCH *SocketDispatch)
+{
+    AcceptSocket->user_context = SocketContext;
+    AcceptSocket->ConnectionDispatch = SocketDispatch;
+    memcpy(&AcceptSocket->LocalAddress,
+           &ListenSocket->LocalAddress,
+           sizeof(AcceptSocket->LocalAddress));
+    memcpy(&AcceptSocket->RemoteAddress,
+           RemoteAddress,
+           sizeof(AcceptSocket->RemoteAddress));
+}
+
+static VOID
+CancelPendingAccepts(_In_ PWSK_SOCKET_INTERNAL ListenSocket,
+                     _In_ BOOLEAN EventOnly)
+{
+    KIRQL OldIrql;
+    PLISTEN_CONTEXT ListenContext;
+    PWSK_SOCKET_INTERNAL AcceptSocket;
+
+    for (;;)
+    {
+        ListenContext = NULL;
+        AcceptSocket = NULL;
+
+        KeAcquireSpinLock(&ListenSocket->ListenLock, &OldIrql);
+        for (PLIST_ENTRY Entry = ListenSocket->PendingAcceptList.Flink;
+             Entry != &ListenSocket->PendingAcceptList;
+             Entry = Entry->Flink)
+        {
+            PLISTEN_CONTEXT Candidate = CONTAINING_RECORD(Entry, LISTEN_CONTEXT, ListEntry);
+
+            if (Candidate->CancelRequested)
+                continue;
+            if (EventOnly && !Candidate->EventMode)
+                continue;
+
+            Candidate->CancelRequested = TRUE;
+            ReferenceListenContext(Candidate);
+            ReferenceSocket(Candidate->AcceptSocket);
+            ListenContext = Candidate;
+            AcceptSocket = Candidate->AcceptSocket;
+            break;
+        }
+        KeReleaseSpinLock(&ListenSocket->ListenLock, OldIrql);
+
+        if (ListenContext == NULL)
+            break;
+
+        SocketShutdown(AcceptSocket);
+        DereferenceSocket(AcceptSocket);
+        DereferenceListenContext(ListenContext);
+    }
+}
 
 /* This function can be called several times on the same socket.
    In particular it will be called by WskClose and later by the
@@ -178,11 +285,10 @@ void SocketShutdown(_In_ PWSK_SOCKET_INTERNAL Socket)
         Socket->ListenThread = NULL;
         Socket->ListenThreadHandle = NULL;
     }
-    if (Socket->ListenIrp != NULL)
+    if (Socket->PendingAcceptCount > 0)
     {
         Socket->ListenCancelled = TRUE;
-        IoCancelIrp(Socket->ListenIrp);
-        Socket->ListenIrp = NULL;
+        CancelPendingAccepts(Socket, FALSE);
     }
     if (Socket->ConnectionFile != NULL)
     {
@@ -367,6 +473,8 @@ WskSocket(
     _In_opt_ PSECURITY_DESCRIPTOR SecurityDescriptor,
     _Inout_ PIRP Irp);
 
+static void FreeConnectionInfo(_In_ PTDI_CONNECTION_INFORMATION ci);
+
 static NTSTATUS NTAPI
 NetioComplete(_In_ PDEVICE_OBJECT DeviceObject, _In_ PIRP Irp, _In_ PVOID ContextParam)
 {
@@ -396,12 +504,13 @@ NetioComplete(_In_ PDEVICE_OBJECT DeviceObject, _In_ PIRP Irp, _In_ PVOID Contex
             memcpy(Context->RemoteAddressOut, RemoteAddress, sizeof(*Context->RemoteAddressOut));
         }
     }
+
     IoCompleteRequest(UserIrp, IO_NETWORK_INCREMENT);
 
     DereferenceSocket(Context->socket);
     if (Context->TargetConnectionInfo != NULL)
     {
-        ExFreePoolWithTag(Context->TargetConnectionInfo, TAG_AFD_TDI_CONNECTION_INFORMATION);
+        FreeConnectionInfo(Context->TargetConnectionInfo);
     }
     if (Context->PeerAddrRet != NULL)
     {
@@ -411,13 +520,6 @@ NetioComplete(_In_ PDEVICE_OBJECT DeviceObject, _In_ PIRP Irp, _In_ PVOID Contex
 
     return STATUS_SUCCESS;
 }
-
-typedef struct _LISTEN_CONTEXT
-{
-    PWSK_SOCKET_INTERNAL ListenSocket;
-    PWSK_SOCKET_INTERNAL AcceptSocket;
-    PTDI_CONNECTION_INFORMATION RequestConnectionInfo, ReturnConnectionInfo;
-} LISTEN_CONTEXT, *PLISTEN_CONTEXT;
 
 static NTSTATUS NTAPI
 CompletionFireEvent(_In_ PDEVICE_OBJECT DeviceObject, _In_ PIRP Irp, _In_ PVOID Context)
@@ -485,8 +587,29 @@ ListenComplete(_In_ PDEVICE_OBJECT DeviceObject, _In_ PIRP Irp, _In_ PVOID Conte
     PLISTEN_CONTEXT ListenContext = (PLISTEN_CONTEXT)Context;
     PWSK_SOCKET_INTERNAL ListenSocket = ListenContext->ListenSocket;
     PWSK_SOCKET_INTERNAL AcceptSocket = ListenContext->AcceptSocket;
-    PWSK_CLIENT_LISTEN_DISPATCH ListenDispatch =
-        (PWSK_CLIENT_LISTEN_DISPATCH)ListenSocket->ListenDispatch;
+    NTSTATUS Status = Irp->IoStatus.Status;
+    KIRQL OldIrql;
+    BOOLEAN CloseAcceptSocket = TRUE;
+    BOOLEAN QueueEventAccept;
+
+    FUNCTION_TRACE;
+
+    KeAcquireSpinLock(&ListenSocket->ListenLock, &OldIrql);
+    if (ListenContext->InPendingList)
+    {
+        RemoveEntryList(&ListenContext->ListEntry);
+        ListenContext->InPendingList = FALSE;
+        ListenSocket->PendingAcceptCount--;
+        if (ListenContext->EventMode)
+            ListenSocket->EventAcceptPending = FALSE;
+        else
+            ListenSocket->PendingUserAcceptCount--;
+    }
+    QueueEventAccept = ((ListenSocket->CallbackMask & WSK_EVENT_ACCEPT) != 0) &&
+                       !ListenSocket->EventAcceptPending &&
+                       (ListenSocket->PendingUserAcceptCount == 0) &&
+                       !ListenSocket->ListenCancelled;
+    KeReleaseSpinLock(&ListenSocket->ListenLock, OldIrql);
 
     /* A PTRANSPORT_ADDRESS address field has an additional
      * AddressLength field so the struct sockaddr_in starts
@@ -494,67 +617,109 @@ ListenComplete(_In_ PDEVICE_OBJECT DeviceObject, _In_ PIRP Irp, _In_ PVOID Conte
      * field.
      */
 
-    PSOCKADDR RemoteAddress =
-        (PSOCKADDR)(&((PTRANSPORT_ADDRESS)ListenContext->ReturnConnectionInfo->RemoteAddress)->Address[0].AddressType);
-    PVOID AcceptSocketContext;
-    const WSK_CLIENT_CONNECTION_DISPATCH *AcceptSocketDispatch;
-    NTSTATUS Status;
-
-    FUNCTION_TRACE;
-
-    if (ListenSocket->CallbackMask & WSK_EVENT_ACCEPT &&
-        ListenDispatch->WskAcceptEvent != NULL &&
-        ListenSocket->ListenIrp != NULL &&
-        !ListenSocket->ListenCancelled &&
-        Irp->IoStatus.Status != STATUS_CANCELLED)
+    if (NT_SUCCESS(Status))
     {
-        ListenSocket->ListenIrp = NULL;
+        PSOCKADDR RemoteAddress =
+            (PSOCKADDR)(&((PTRANSPORT_ADDRESS)ListenContext->ReturnConnectionInfo->RemoteAddress)->Address[0].AddressType);
 
-        Status = ListenDispatch->WskAcceptEvent(ListenSocket->user_context,
-                                                0,
-                                                &ListenSocket->LocalAddress,
-                                                RemoteAddress,
-                                                &AcceptSocket->Socket,
-                                                &AcceptSocketContext,
-                                                &AcceptSocketDispatch);
-
-        if (!NT_SUCCESS(Status))
+        if (ListenContext->EventMode)
         {
-            DPRINT1("ListenDispatch->WskAcceptEvent returned non-successful status 0x%08x\n", Status);
+            PWSK_CLIENT_LISTEN_DISPATCH ListenDispatch =
+                (PWSK_CLIENT_LISTEN_DISPATCH)ListenSocket->ListenDispatch;
+            PVOID AcceptSocketContext = NULL;
+            const WSK_CLIENT_CONNECTION_DISPATCH *AcceptSocketDispatch = NULL;
+
+            if ((ListenSocket->CallbackMask & WSK_EVENT_ACCEPT) != 0 &&
+                ListenDispatch != NULL &&
+                ListenDispatch->WskAcceptEvent != NULL &&
+                !ListenSocket->ListenCancelled &&
+                Status != STATUS_CANCELLED)
+            {
+                Status = ListenDispatch->WskAcceptEvent(ListenSocket->user_context,
+                                                        0,
+                                                        &ListenSocket->LocalAddress,
+                                                        RemoteAddress,
+                                                        &AcceptSocket->Socket,
+                                                        &AcceptSocketContext,
+                                                        &AcceptSocketDispatch);
+                if (NT_SUCCESS(Status))
+                {
+                    InitializeAcceptedSocket(AcceptSocket,
+                                             ListenSocket,
+                                             RemoteAddress,
+                                             AcceptSocketContext,
+                                             AcceptSocketDispatch);
+                    CloseAcceptSocket = FALSE;
+                }
+                else
+                {
+                    DPRINT1("ListenDispatch->WskAcceptEvent returned non-successful status 0x%08x\n",
+                            Status);
+                }
+            }
         }
         else
         {
-            memcpy(&AcceptSocket->RemoteAddress, RemoteAddress, sizeof(AcceptSocket->RemoteAddress));
+            InitializeAcceptedSocket(AcceptSocket,
+                                     ListenSocket,
+                                     RemoteAddress,
+                                     ListenContext->AcceptSocketContext,
+                                     ListenContext->AcceptSocketDispatch);
+
+            if (ListenContext->LocalAddressOut != NULL)
+                memcpy(ListenContext->LocalAddressOut,
+                       &AcceptSocket->LocalAddress,
+                       sizeof(*ListenContext->LocalAddressOut));
+            if (ListenContext->RemoteAddressOut != NULL)
+                memcpy(ListenContext->RemoteAddressOut,
+                       &AcceptSocket->RemoteAddress,
+                       sizeof(*ListenContext->RemoteAddressOut));
+
+            ListenContext->UserIrp->IoStatus.Information = (ULONG_PTR)&AcceptSocket->Socket;
+            ListenContext->UserIrp->IoStatus.Status = STATUS_SUCCESS;
+            IoCompleteRequest(ListenContext->UserIrp, IO_NETWORK_INCREMENT);
+            CloseAcceptSocket = FALSE;
         }
     }
     else
     {
-        DereferenceSocket(AcceptSocket);	/* close the AcceptSocket */
+        if (ListenContext->UserIrp != NULL)
+        {
+            ListenContext->UserIrp->IoStatus.Information = 0;
+            ListenContext->UserIrp->IoStatus.Status = Status;
+            IoCompleteRequest(ListenContext->UserIrp, IO_NETWORK_INCREMENT);
+        }
     }
-    ListenSocket->ListenIrp = NULL;
+
+    if (QueueEventAccept)
+        QueueListening(ListenSocket);
+
+    if (CloseAcceptSocket)
+        DereferenceSocket(AcceptSocket);
 
     DereferenceSocket(AcceptSocket);
     DereferenceSocket(ListenSocket);
 
-    ExFreePoolWithTag(ListenContext->ReturnConnectionInfo, TAG_AFD_TDI_CONNECTION_INFORMATION);
-    ExFreePoolWithTag(ListenContext->RequestConnectionInfo, TAG_AFD_TDI_CONNECTION_INFORMATION);
-    ExFreePoolWithTag(ListenContext, TAG_NETIO);
-
-    /* And wait for the next incoming connection.
-     * This is done in a separate thread at IRQL = PASSIVE_LEVEL
-     */
-
-    QueueListening(ListenSocket);
+    DereferenceListenContext(ListenContext);
 
     return STATUS_SUCCESS;
 }
 
 static NTSTATUS
-StartListening(_In_ PWSK_SOCKET_INTERNAL ListenSocket)
+QueueOneAccept(_In_ PWSK_SOCKET_INTERNAL ListenSocket,
+               _In_opt_ PIRP UserIrp,
+               _In_opt_ PVOID AcceptSocketContext,
+               _In_opt_ const WSK_CLIENT_CONNECTION_DISPATCH *AcceptSocketDispatch,
+               _Out_opt_ PSOCKADDR LocalAddress,
+               _Out_opt_ PSOCKADDR RemoteAddress,
+               _In_ BOOLEAN EventMode)
 {
-    PIRP tdiIrp;
     NTSTATUS status;
-    PLISTEN_CONTEXT lc;
+    PDEVICE_OBJECT DeviceObject;
+    PIRP tdiIrp;
+    KIRQL OldIrql;
+    BOOLEAN AddedToPendingList = FALSE;
+    PLISTEN_CONTEXT ListenContext;
     PWSK_SOCKET_INTERNAL AcceptSocket;
 
     FUNCTION_TRACE;
@@ -576,13 +741,20 @@ StartListening(_In_ PWSK_SOCKET_INTERNAL ListenSocket)
     ReferenceSocket(AcceptSocket->ListenSocket);
 
     status = STATUS_INSUFFICIENT_RESOURCES;
-    lc = ExAllocatePoolUninitialized(NonPagedPool, sizeof(*lc), TAG_NETIO);
-    if (lc == NULL)
+    ListenContext = ExAllocatePoolZero(NonPagedPool, sizeof(*ListenContext), TAG_NETIO);
+    if (ListenContext == NULL)
     {
         goto err_out_free_accept_socket;
     }
-    lc->ListenSocket = ListenSocket;
-    lc->AcceptSocket = AcceptSocket;
+    ListenContext->RefCount = 1;
+    ListenContext->ListenSocket = ListenSocket;
+    ListenContext->AcceptSocket = AcceptSocket;
+    ListenContext->UserIrp = UserIrp;
+    ListenContext->LocalAddressOut = LocalAddress;
+    ListenContext->RemoteAddressOut = RemoteAddress;
+    ListenContext->AcceptSocketContext = AcceptSocketContext;
+    ListenContext->AcceptSocketDispatch = AcceptSocketDispatch;
+    ListenContext->EventMode = EventMode;
 
     tdiIrp = NULL;
 
@@ -593,42 +765,72 @@ StartListening(_In_ PWSK_SOCKET_INTERNAL ListenSocket)
     }
     AcceptSocket->ConnectionFileAssociated = TRUE;
 
-    lc->RequestConnectionInfo = NULL;
-    TdiBuildNullConnectionInfo(&lc->RequestConnectionInfo, TDI_ADDRESS_TYPE_IP);
-    if (lc->RequestConnectionInfo == NULL)
+    ListenContext->RequestConnectionInfo = NULL;
+    TdiBuildNullConnectionInfo(&ListenContext->RequestConnectionInfo, TDI_ADDRESS_TYPE_IP);
+    if (ListenContext->RequestConnectionInfo == NULL)
     {
         goto err_out_free_lc_and_disassociate;
     }
-    lc->RequestConnectionInfo->OptionsLength = 0;
+    ListenContext->RequestConnectionInfo->OptionsLength = 0;
 
-    lc->ReturnConnectionInfo = NULL;
-    TdiBuildNullConnectionInfo(&lc->ReturnConnectionInfo, TDI_ADDRESS_TYPE_IP);
-    if (lc->ReturnConnectionInfo == NULL)
+    ListenContext->ReturnConnectionInfo = NULL;
+    TdiBuildNullConnectionInfo(&ListenContext->ReturnConnectionInfo, TDI_ADDRESS_TYPE_IP);
+    if (ListenContext->ReturnConnectionInfo == NULL)
     {
         goto err_out_free_lc_and_req_conn_info;
     }
-    lc->ReturnConnectionInfo->OptionsLength = 0;
+    ListenContext->ReturnConnectionInfo->OptionsLength = 0;
 
     ReferenceSocket(ListenSocket);
     ReferenceSocket(AcceptSocket);
 
-    ListenSocket->ListenCancelled = FALSE;
-    /* pass the ConnectionFile from accept socket, not from ListenSocket ... */
-    status = TdiListen(&tdiIrp, AcceptSocket->ConnectionFile, &lc->RequestConnectionInfo, &lc->ReturnConnectionInfo, ListenComplete, lc);
-
-    if (!NT_SUCCESS(status))
+    DeviceObject = IoGetRelatedDeviceObject(AcceptSocket->ConnectionFile);
+    if (DeviceObject == NULL)
     {
-        ExFreePoolWithTag(lc->ReturnConnectionInfo, TAG_NETIO);
+        status = STATUS_INVALID_PARAMETER;
         DereferenceSocket(ListenSocket);
         DereferenceSocket(AcceptSocket);
         goto err_out_free_lc_and_req_conn_info;
     }
-    ListenSocket->ListenIrp = tdiIrp;
 
+    tdiIrp = TdiBuildInternalDeviceControlIrp(TDI_LISTEN,
+                                              DeviceObject,
+                                              AcceptSocket->ConnectionFile,
+                                              NULL,
+                                              NULL);
+    if (tdiIrp == NULL)
+    {
+        status = STATUS_INSUFFICIENT_RESOURCES;
+        DereferenceSocket(ListenSocket);
+        DereferenceSocket(AcceptSocket);
+        goto err_out_free_lc_and_req_conn_info;
+    }
+
+    TdiBuildListen(tdiIrp,
+                   DeviceObject,
+                   AcceptSocket->ConnectionFile,
+                   ListenComplete,
+                   ListenContext,
+                   0,
+                   ListenContext->RequestConnectionInfo,
+                   ListenContext->ReturnConnectionInfo);
+
+    KeAcquireSpinLock(&ListenSocket->ListenLock, &OldIrql);
+    InsertTailList(&ListenSocket->PendingAcceptList, &ListenContext->ListEntry);
+    ListenContext->InPendingList = TRUE;
+    ListenSocket->PendingAcceptCount++;
+    if (EventMode)
+        ListenSocket->EventAcceptPending = TRUE;
+    else
+        ListenSocket->PendingUserAcceptCount++;
+    KeReleaseSpinLock(&ListenSocket->ListenLock, OldIrql);
+    AddedToPendingList = TRUE;
+
+    /* Completion handles both synchronous and asynchronous TDI completion. */
+    IoCallDriver(DeviceObject, tdiIrp);
     return STATUS_PENDING;
 
 err_out_free_lc_and_req_conn_info:
-    ExFreePoolWithTag(lc->RequestConnectionInfo, TAG_NETIO);
 
 err_out_free_lc_and_disassociate:
     status = TdiDisassociateAddressFile(AcceptSocket->ConnectionFile);
@@ -639,12 +841,50 @@ err_out_free_lc_and_disassociate:
     AcceptSocket->ConnectionFileAssociated = FALSE;
 
 err_out_free_lc:
-    ExFreePoolWithTag(lc, TAG_NETIO);
+    if (AddedToPendingList)
+    {
+        KeAcquireSpinLock(&ListenSocket->ListenLock, &OldIrql);
+        if (ListenContext->InPendingList)
+        {
+            RemoveEntryList(&ListenContext->ListEntry);
+            ListenContext->InPendingList = FALSE;
+            ListenSocket->PendingAcceptCount--;
+            if (EventMode)
+                ListenSocket->EventAcceptPending = FALSE;
+            else
+                ListenSocket->PendingUserAcceptCount--;
+        }
+        KeReleaseSpinLock(&ListenSocket->ListenLock, OldIrql);
+    }
+    DereferenceListenContext(ListenContext);
 
 err_out_free_accept_socket:
     DereferenceSocket(AcceptSocket);
 
     return status;
+}
+
+static NTSTATUS
+StartListening(_In_ PWSK_SOCKET_INTERNAL ListenSocket)
+{
+    NTSTATUS Status = STATUS_SUCCESS;
+    KIRQL OldIrql;
+    BOOLEAN ShouldPostEventAccept = FALSE;
+
+    KeAcquireSpinLock(&ListenSocket->ListenLock, &OldIrql);
+    if ((ListenSocket->CallbackMask & WSK_EVENT_ACCEPT) != 0 &&
+        !ListenSocket->EventAcceptPending &&
+        (ListenSocket->PendingUserAcceptCount == 0) &&
+        !ListenSocket->ListenCancelled)
+    {
+        ShouldPostEventAccept = TRUE;
+    }
+    KeReleaseSpinLock(&ListenSocket->ListenLock, OldIrql);
+
+    if (ShouldPostEventAccept)
+        Status = QueueOneAccept(ListenSocket, NULL, NULL, NULL, NULL, NULL, TRUE);
+
+    return Status;
 }
 
 static VOID NTAPI RequeueListenThread(_In_ PVOID p)
@@ -743,16 +983,30 @@ WskControlSocket(
                                 break;
                             }
                             PWSK_EVENT_CALLBACK_CONTROL Control = (WSK_EVENT_CALLBACK_CONTROL *)InputBuffer;
+                            ULONG EventMask = Control->EventMask & ~WSK_EVENT_DISABLE;
+                            BOOLEAN Disable = ((Control->EventMask & WSK_EVENT_DISABLE) != 0);
+                            BOOLEAN AcceptWasEnabled = ((Socket->CallbackMask & WSK_EVENT_ACCEPT) != 0);
 
-                            if (((Socket->CallbackMask & WSK_EVENT_ACCEPT) == 0) &&
-                                ((Control->EventMask & WSK_EVENT_ACCEPT) == WSK_EVENT_ACCEPT))
+                            if (Disable)
                             {
-                                Socket->CallbackMask = Control->EventMask;
-                                QueueListening(Socket);
+                                Socket->CallbackMask &= ~EventMask;
                             }
                             else
                             {
-                                Socket->CallbackMask = Control->EventMask;
+                                Socket->CallbackMask |= EventMask;
+                            }
+
+                            if (Socket->WskFlags == WSK_FLAG_LISTEN_SOCKET &&
+                                (EventMask & WSK_EVENT_ACCEPT) != 0)
+                            {
+                                if (Disable)
+                                {
+                                    CancelPendingAccepts(Socket, TRUE);
+                                }
+                                else if (!AcceptWasEnabled)
+                                {
+                                    QueueListening(Socket);
+                                }
                             }
 
                             status = STATUS_SUCCESS;
@@ -853,6 +1107,13 @@ TdiConnectionInfoFromSocketAddress(_In_ PSOCKADDR SocketAddress)
     return ConnectionInformation;
 }
 
+static void
+FreeConnectionInfo(_In_ PTDI_CONNECTION_INFORMATION ci)
+{
+    if (ci != NULL)
+        ExFreePoolWithTag(ci, TAG_AFD_TDI_CONNECTION_INFORMATION);
+}
+
 static NTSTATUS WSKAPI
 WskBind(_In_ PWSK_SOCKET SocketParam, _In_ PSOCKADDR LocalAddress, _Reserved_ ULONG Flags, _Inout_ PIRP Irp)
 {
@@ -877,6 +1138,11 @@ WskBind(_In_ PWSK_SOCKET SocketParam, _In_ PSOCKADDR LocalAddress, _Reserved_ UL
 
     status = TdiOpenAddressFile(&Socket->TdiName,
                                 ta, AFD_SHARE_REUSE, &Socket->LocalAddressHandle, &Socket->LocalAddressFile);
+
+    if (NT_SUCCESS(status))
+    {
+        memcpy(&Socket->LocalAddress, LocalAddress, sizeof(Socket->LocalAddress));
+    }
 
     ExFreePoolWithTag(ta, TAG_NETIO);
 
@@ -960,7 +1226,7 @@ WskSendTo(
     return STATUS_PENDING;
 
 err_out_free_nc_and_tci:
-    ExFreePoolWithTag(TargetConnectionInfo, TAG_AFD_TDI_CONNECTION_INFORMATION);
+    FreeConnectionInfo(TargetConnectionInfo);
 
 err_out_free_nc:
     ExFreePoolWithTag(NetioContext, TAG_NETIO);
@@ -1096,17 +1362,94 @@ WskReleaseTcp(_In_ PWSK_SOCKET SocketParam, _In_ PWSK_DATA_INDICATION DataIndica
 static NTSTATUS WSKAPI
 WskGetLocalAddress(_In_ PWSK_SOCKET SocketParam, _Out_ PSOCKADDR LocalAddress, _Inout_ PIRP Irp)
 {
+    PWSK_SOCKET_INTERNAL Socket = CONTAINING_RECORD(SocketParam, WSK_SOCKET_INTERNAL, Socket);
+    NTSTATUS Status = STATUS_INVALID_PARAMETER;
+
     FUNCTION_TRACE;
 
-    UNIMPLEMENTED;
-    if (Irp != NULL)
+    IoSetNextIrpStackLocation(Irp);
+    if (Socket != NULL)
     {
-        IoSetNextIrpStackLocation(Irp);
-        Irp->IoStatus.Status = STATUS_NOT_IMPLEMENTED;
-        Irp->IoStatus.Information = 0;
-        IoCompleteRequest(Irp, IO_NETWORK_INCREMENT);
+        memcpy(LocalAddress, &Socket->LocalAddress, sizeof(*LocalAddress));
+        Status = STATUS_SUCCESS;
     }
-    return STATUS_NOT_IMPLEMENTED;
+    Irp->IoStatus.Status = Status;
+    IoCompleteRequest(Irp, IO_NETWORK_INCREMENT);
+
+    return STATUS_PENDING;
+}
+
+static NTSTATUS WSKAPI
+WskAccept(_In_ PWSK_SOCKET SocketParam,
+          _Reserved_ ULONG Flags,
+          _In_opt_ PVOID AcceptSocketContext,
+          _In_opt_ const WSK_CLIENT_CONNECTION_DISPATCH *AcceptSocketDispatch,
+          _Out_opt_ PSOCKADDR LocalAddress,
+          _Out_opt_ PSOCKADDR RemoteAddress,
+          _Inout_ PIRP Irp)
+{
+    PWSK_SOCKET_INTERNAL ListenSocket = CONTAINING_RECORD(SocketParam, WSK_SOCKET_INTERNAL, Socket);
+    NTSTATUS Status;
+
+    FUNCTION_TRACE;
+
+    IoSetNextIrpStackLocation(Irp);
+
+    if (Flags != 0)
+    {
+        Status = STATUS_INVALID_PARAMETER;
+        goto err_out;
+    }
+    if (ListenSocket->WskFlags != WSK_FLAG_LISTEN_SOCKET)
+    {
+        Status = STATUS_INVALID_DEVICE_STATE;
+        goto err_out;
+    }
+    if (ListenSocket->LocalAddressHandle == NULL)
+    {
+        Status = STATUS_INVALID_PARAMETER;
+        goto err_out;
+    }
+
+    if ((ListenSocket->CallbackMask & WSK_EVENT_ACCEPT) != 0)
+        CancelPendingAccepts(ListenSocket, TRUE);
+
+    IoMarkIrpPending(Irp);
+
+    Status = QueueOneAccept(ListenSocket,
+                            Irp,
+                            AcceptSocketContext,
+                            AcceptSocketDispatch,
+                            LocalAddress,
+                            RemoteAddress,
+                            FALSE);
+    if (Status == STATUS_PENDING || NT_SUCCESS(Status))
+        return Status;
+
+err_out:
+    Irp->IoStatus.Status = Status;
+    Irp->IoStatus.Information = 0;
+    IoCompleteRequest(Irp, IO_NETWORK_INCREMENT);
+    return Status;
+}
+
+static NTSTATUS WSKAPI
+WskInspectComplete(_In_ PWSK_SOCKET SocketParam,
+                   _In_ PWSK_INSPECT_ID InspectID,
+                   _In_ WSK_INSPECT_ACTION Action,
+                   _Inout_ PIRP Irp)
+{
+    UNREFERENCED_PARAMETER(SocketParam);
+    UNREFERENCED_PARAMETER(InspectID);
+    UNREFERENCED_PARAMETER(Action);
+
+    FUNCTION_TRACE;
+
+    IoSetNextIrpStackLocation(Irp);
+    Irp->IoStatus.Status = STATUS_NOT_IMPLEMENTED;
+    Irp->IoStatus.Information = 0;
+    IoCompleteRequest(Irp, IO_NETWORK_INCREMENT);
+    return STATUS_PENDING;
 }
 
 static NTSTATUS WSKAPI
@@ -1270,14 +1613,14 @@ WskConnect(_In_ PWSK_SOCKET SocketParam, _In_ PSOCKADDR RemoteAddress, _Reserved
          * Call the IoCompletion of the application's Irp so this Irp
          * gets freed.
          */
-        ExFreePoolWithTag(PeerAddrRet, TAG_NETIO);
+        FreeConnectionInfo(PeerAddrRet);
         DereferenceSocket(Socket);
         goto err_out_free_nc_and_tci;
     }
     return STATUS_PENDING;
 
 err_out_free_nc_and_tci:
-    ExFreePoolWithTag(TargetConnectionInfo, TAG_AFD_TDI_CONNECTION_INFORMATION);
+    FreeConnectionInfo(TargetConnectionInfo);
 
 err_out_free_nc_and_disassociate:
     status2 = TdiDisassociateAddressFile(Socket->ConnectionFile);
@@ -1466,6 +1809,15 @@ static WSK_PROVIDER_CONNECTION_DISPATCH TcpDispatch = {
     .WskRelease = WskReleaseTcp,
 };
 
+static WSK_PROVIDER_LISTEN_DISPATCH ListenDispatch = {
+    .WskControlSocket = WskControlSocket,
+    .WskCloseSocket = WskCloseSocket,
+    .WskBind = WskBind,
+    .WskAccept = WskAccept,
+    .WskInspectComplete = WskInspectComplete,
+    .WskGetLocalAddress = WskGetLocalAddress,
+};
+
 static NTSTATUS WSKAPI
 WskSocket(
     _In_ PWSK_CLIENT Client,
@@ -1557,7 +1909,8 @@ WskSocket(
     Socket->proto = Protocol;
     Socket->WskFlags = Flags;
     Socket->user_context = SocketContext;
-    Socket->ListenDispatch = Dispatch;
+    Socket->ListenDispatch = (Flags == WSK_FLAG_LISTEN_SOCKET) ? Dispatch : NULL;
+    Socket->ConnectionDispatch = (Flags == WSK_FLAG_CONNECTION_SOCKET) ? Dispatch : NULL;
     Socket->RefCount = 1;            /* DereferenceSocket() is in WskCloseSocket */
 
     switch (SocketType)
@@ -1584,7 +1937,9 @@ WskSocket(
             }
             break;
         case SOCK_STREAM:
-            Socket->Socket.Dispatch = &TcpDispatch;
+            Socket->Socket.Dispatch = (Flags == WSK_FLAG_LISTEN_SOCKET)
+                                        ? (const VOID *)&ListenDispatch
+                                        : (const VOID *)&TcpDispatch;
             RtlInitUnicodeString(&Socket->TdiName, L"\\Device\\Tcp");
 
             if (Flags != WSK_FLAG_LISTEN_SOCKET)
@@ -1599,6 +1954,8 @@ WskSocket(
             }
             else
             {
+                KeInitializeSpinLock(&Socket->ListenLock);
+                InitializeListHead(&Socket->PendingAcceptList);
                 KeInitializeEvent(&Socket->StartListenEvent, SynchronizationEvent, FALSE);
                 Socket->ListenThreadShouldRun = TRUE;
 
