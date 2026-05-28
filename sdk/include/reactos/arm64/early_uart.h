@@ -42,6 +42,7 @@ typedef enum _ARM64_UART_INTERFACE
     Arm64UartPl011,
     Arm64UartNs16550,
     Arm64UartQcomGeni,
+    Arm64UartBcm2835Mini,
     Arm64UartMax
 } ARM64_UART_INTERFACE;
 
@@ -69,6 +70,15 @@ typedef enum _ARM64_UART_INTERFACE
 #define ARM64_NS16550_LSR           0x005   /* Line Status Register */
 #define ARM64_NS16550_LSR_DR        0x01    /* Data Ready */
 #define ARM64_NS16550_LSR_THRE      0x20    /* Transmit Holding Register Empty */
+
+/*
+ * BCM2835 mini UART register offsets from the AUX base address reported by
+ * Raspberry Pi ACPI tables.
+ */
+#define ARM64_BCM2835_MINI_UART_IO            0x040
+#define ARM64_BCM2835_MINI_UART_LSR           0x054
+#define ARM64_BCM2835_MINI_UART_LSR_DR        (1U << 0)
+#define ARM64_BCM2835_MINI_UART_LSR_TX_EMPTY  (1U << 5)
 
 /*
  * Qualcomm GENI/QUP UART register offsets and bits. This is the FIFO-mode
@@ -471,6 +481,16 @@ EarlyUartPutc(CHAR Ch)
 
         EARLY_UART_WRITE8(ARM64_NS16550_THR, (UCHAR)Ch);
     }
+    else if (EarlyUartInterface == Arm64UartBcm2835Mini)
+    {
+        while (!(EARLY_UART_READ(ARM64_BCM2835_MINI_UART_LSR) &
+                 ARM64_BCM2835_MINI_UART_LSR_TX_EMPTY))
+        {
+            __asm__ __volatile__("yield");
+        }
+
+        EARLY_UART_WRITE(ARM64_BCM2835_MINI_UART_IO, (UINT32)(UCHAR)Ch);
+    }
     else if (EarlyUartInterface == Arm64UartQcomGeni)
     {
         EarlyUartQcomGeniPutc(Ch);
@@ -502,6 +522,16 @@ EarlyUartGetc(_Out_ UCHAR *Byte)
             return FALSE;
 
         *Byte = EARLY_UART_READ8(ARM64_NS16550_RBR);
+    }
+    else if (EarlyUartInterface == Arm64UartBcm2835Mini)
+    {
+        if (!(EARLY_UART_READ(ARM64_BCM2835_MINI_UART_LSR) &
+              ARM64_BCM2835_MINI_UART_LSR_DR))
+        {
+            return FALSE;
+        }
+
+        *Byte = (UCHAR)(EARLY_UART_READ(ARM64_BCM2835_MINI_UART_IO) & 0xFF);
     }
     else if (EarlyUartInterface == Arm64UartQcomGeni)
     {

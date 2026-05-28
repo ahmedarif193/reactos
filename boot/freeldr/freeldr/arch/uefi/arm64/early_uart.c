@@ -218,8 +218,10 @@ EarlyUartInterfaceFromSubtype(USHORT Subtype)
         case SERIAL_SUBTYPE_16550_SUBSET:
         case SERIAL_SUBTYPE_NS16550_NV:
         case SERIAL_SUBTYPE_16550_WITH_GAS:
-        case SERIAL_SUBTYPE_BCM2835:    /* RPi mini UART - 16550-ish */
             return Arm64UartNs16550;
+
+        case SERIAL_SUBTYPE_BCM2835:    /* Raspberry Pi AUX mini UART */
+            return Arm64UartBcm2835Mini;
 
         case SERIAL_SUBTYPE_SDM845_1_8432MHZ:
         case SERIAL_SUBTYPE_SDM845_7_372MHZ:
