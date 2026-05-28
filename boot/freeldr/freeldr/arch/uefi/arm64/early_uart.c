@@ -26,6 +26,9 @@ volatile UINT64 EarlyUartBaseAddress = 0;
 volatile ARM64_PLATFORM_ID EarlyUartPlatformId = Arm64PlatformUnknown;
 volatile ARM64_UART_INTERFACE EarlyUartInterface = Arm64UartUnknown;
 volatile BOOLEAN EarlyUartInitialized = FALSE;
+volatile BOOLEAN EarlyUartHardwareInitialized = FALSE;
+volatile UINT32 EarlyUartRxCachedBytes = 0;
+volatile UINT32 EarlyUartRxCachedByteCount = 0;
 
 /* External UEFI globals */
 extern EFI_SYSTEM_TABLE* GlobalSystemTable;
@@ -53,7 +56,9 @@ extern EFI_HANDLE GlobalImageHandle;
 #define SERIAL_SUBTYPE_ARM_SBSA_32      0x000D
 #define SERIAL_SUBTYPE_ARM_SBSA_GENERIC 0x000E /* also legacy SPCR PL011 */
 #define SERIAL_SUBTYPE_BCM2835          0x0010
+#define SERIAL_SUBTYPE_SDM845_1_8432MHZ 0x0011
 #define SERIAL_SUBTYPE_16550_WITH_GAS   0x0012
+#define SERIAL_SUBTYPE_SDM845_7_372MHZ  0x0013
 
 #define DBG2_PORT_TYPE_SERIAL           0x8000
 
@@ -216,12 +221,14 @@ EarlyUartInterfaceFromSubtype(USHORT Subtype)
         case SERIAL_SUBTYPE_BCM2835:    /* RPi mini UART - 16550-ish */
             return Arm64UartNs16550;
 
+        case SERIAL_SUBTYPE_SDM845_1_8432MHZ:
+        case SERIAL_SUBTYPE_SDM845_7_372MHZ:
+            return Arm64UartQcomGeni;
+
         /*
-         * Qualcomm MSM/SDM/SM GENI/QUP, i.MX, OMAP, USIF, SAM5250, DCC: all
-         * have their own register layouts. TODO: add proper drivers; until
-         * then we report Unknown so EarlyUartReady() blocks any I/O and
-         * EarlyUartPutc becomes a no-op rather than scribbling on whatever
-         * device happens to live at that MMIO base.
+         * Older Qualcomm MSM debug UARTs, i.MX, OMAP, USIF, SAM5250, DCC:
+         * all have their own register layouts. Keep them disabled until they
+         * have explicit drivers.
          */
         default:
             return Arm64UartUnknown;

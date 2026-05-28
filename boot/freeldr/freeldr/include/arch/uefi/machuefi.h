@@ -79,6 +79,15 @@ UefiVideoExitBootServices(VOID);
 VOID
 UefiPcBeep(VOID);
 
+#if defined(_M_ARM64)
+BOOLEAN
+UefiSerialInitialize(VOID);
+
+VOID
+UefiSerialPutChar(
+    _In_ UCHAR Character);
+#endif
+
 VOID
 UefiSerialDisableFirmware(VOID);
 

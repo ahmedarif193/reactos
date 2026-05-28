@@ -41,6 +41,7 @@ typedef enum _ARM64_UART_INTERFACE
     Arm64UartUnknown = 0,
     Arm64UartPl011,
     Arm64UartNs16550,
+    Arm64UartQcomGeni,
     Arm64UartMax
 } ARM64_UART_INTERFACE;
 
@@ -70,6 +71,87 @@ typedef enum _ARM64_UART_INTERFACE
 #define ARM64_NS16550_LSR_THRE      0x20    /* Transmit Holding Register Empty */
 
 /*
+ * Qualcomm GENI/QUP UART register offsets and bits. This is the FIFO-mode
+ * early-console path used by Linux's qcom_geni_serial earlycon driver.
+ */
+#define ARM64_QCOM_GENI_FORCE_DEFAULT_REG      0x020
+#define ARM64_QCOM_GENI_OUTPUT_CTRL            0x024
+#define ARM64_QCOM_GENI_CGC_CTRL               0x028
+#define ARM64_QCOM_GENI_STATUS                 0x040
+#define ARM64_QCOM_GENI_FW_REVISION_RO         0x068
+#define ARM64_QCOM_GENI_DMA_MODE_EN            0x258
+#define ARM64_QCOM_GENI_BYTE_GRAN              0x254
+#define ARM64_QCOM_GENI_TX_PACKING_CFG0        0x260
+#define ARM64_QCOM_GENI_TX_PACKING_CFG1        0x264
+#define ARM64_QCOM_GENI_RX_PACKING_CFG0        0x284
+#define ARM64_QCOM_GENI_RX_PACKING_CFG1        0x288
+#define ARM64_QCOM_GENI_M_CMD0                 0x600
+#define ARM64_QCOM_GENI_M_CMD_CTRL_REG         0x604
+#define ARM64_QCOM_GENI_M_IRQ_STATUS           0x610
+#define ARM64_QCOM_GENI_M_IRQ_EN               0x614
+#define ARM64_QCOM_GENI_M_IRQ_CLEAR            0x618
+#define ARM64_QCOM_GENI_S_CMD0                 0x630
+#define ARM64_QCOM_GENI_S_CMD_CTRL_REG         0x634
+#define ARM64_QCOM_GENI_S_IRQ_STATUS           0x640
+#define ARM64_QCOM_GENI_S_IRQ_EN               0x644
+#define ARM64_QCOM_GENI_S_IRQ_CLEAR            0x648
+#define ARM64_QCOM_GENI_TX_FIFO                0x700
+#define ARM64_QCOM_GENI_RX_FIFO                0x780
+#define ARM64_QCOM_GENI_RX_FIFO_STATUS         0x804
+#define ARM64_QCOM_GENI_RX_WATERMARK_REG       0x810
+#define ARM64_QCOM_GENI_RX_RFR_WATERMARK_REG   0x814
+#define ARM64_QCOM_GENI_DMA_TX_IRQ_CLR         0xC44
+#define ARM64_QCOM_GENI_DMA_RX_IRQ_CLR         0xD44
+#define ARM64_QCOM_GENI_GSI_EVENT_EN           0xE18
+#define ARM64_QCOM_GENI_IRQ_EN                 0xE1C
+#define ARM64_QCOM_GENI_DMA_GENERAL_CFG        0xE30
+
+#define ARM64_QCOM_GENI_SE_UART                2
+#define ARM64_QCOM_GENI_FW_REV_PROTOCOL_MASK   0x0000FF00U
+#define ARM64_QCOM_GENI_FW_REV_PROTOCOL_SHIFT  8
+#define ARM64_QCOM_GENI_M_CMD_ACTIVE           (1U << 0)
+#define ARM64_QCOM_GENI_S_CMD_ACTIVE           (1U << 12)
+#define ARM64_QCOM_GENI_DMA_MODE               (1U << 0)
+#define ARM64_QCOM_GENI_DEFAULT_CGC_EN         0x7FU
+#define ARM64_QCOM_GENI_DEFAULT_IO_OUTPUT_CTRL 0x7FU
+#define ARM64_QCOM_GENI_FORCE_DEFAULT          (1U << 0)
+#define ARM64_QCOM_GENI_IRQ_ALL                0xFFFFFFFFU
+#define ARM64_QCOM_GENI_SE_IRQ_EN_ALL          0xFU
+#define ARM64_QCOM_GENI_DMA_GENERAL_CFG_ALL    0xFU
+#define ARM64_QCOM_GENI_M_COMMON_IRQ_EN        0x33C0007EU
+#define ARM64_QCOM_GENI_S_COMMON_IRQ_EN        0x03003E3EU
+#define ARM64_QCOM_GENI_M_CMD_DONE             (1U << 0)
+#define ARM64_QCOM_GENI_M_CMD_CANCEL           (1U << 4)
+#define ARM64_QCOM_GENI_M_CMD_ABORT            (1U << 5)
+#define ARM64_QCOM_GENI_S_CMD_DONE             (1U << 0)
+#define ARM64_QCOM_GENI_S_CMD_ABORT            (1U << 5)
+#define ARM64_QCOM_GENI_M_CMD_CTRL_CANCEL      (1U << 2)
+#define ARM64_QCOM_GENI_M_CMD_CTRL_ABORT       (1U << 1)
+#define ARM64_QCOM_GENI_S_CMD_CTRL_ABORT       (1U << 1)
+#define ARM64_QCOM_GENI_UART_CTS_MASK          (1U << 1)
+#define ARM64_QCOM_GENI_UART_START_TX          0x1U
+#define ARM64_QCOM_GENI_UART_START_READ        0x1U
+#define ARM64_QCOM_GENI_M_OPCODE_SHIFT         27
+#define ARM64_QCOM_GENI_S_OPCODE_SHIFT         27
+#define ARM64_QCOM_GENI_TX_PACKING_CFG0_8X4    0x0004380EU
+#define ARM64_QCOM_GENI_TX_PACKING_CFG1_8X4    0x000C3E0EU
+#define ARM64_QCOM_GENI_RX_LAST                (1U << 31)
+#define ARM64_QCOM_GENI_RX_LAST_VALID_MASK     0x70000000U
+#define ARM64_QCOM_GENI_RX_LAST_VALID_SHIFT    28
+#define ARM64_QCOM_GENI_RX_FIFO_WORD_COUNT     0x01FFFFFFU
+#define ARM64_QCOM_GENI_FIFO_WORD_BYTES        4
+#define ARM64_QCOM_GENI_POLL_LIMIT             1000000U
+
+#define ARM64_QCOM_UART_TX_TRANS_CFG           0x25C
+#define ARM64_QCOM_UART_TX_WORD_LEN            0x268
+#define ARM64_QCOM_UART_TX_STOP_BIT_LEN        0x26C
+#define ARM64_QCOM_UART_TX_TRANS_LEN           0x270
+#define ARM64_QCOM_UART_RX_TRANS_CFG           0x280
+#define ARM64_QCOM_UART_RX_WORD_LEN            0x28C
+#define ARM64_QCOM_UART_TX_PARITY_CFG          0x2A4
+#define ARM64_QCOM_UART_RX_PARITY_CFG          0x2A8
+
+/*
  * Global runtime-detected UART state.
  * These are set during early boot by the detection code.
  *
@@ -82,6 +164,9 @@ extern volatile UINT64 EarlyUartBaseAddress;
 extern volatile ARM64_PLATFORM_ID EarlyUartPlatformId;
 extern volatile ARM64_UART_INTERFACE EarlyUartInterface;
 extern volatile BOOLEAN EarlyUartInitialized;
+extern volatile BOOLEAN EarlyUartHardwareInitialized;
+extern volatile UINT32 EarlyUartRxCachedBytes;
+extern volatile UINT32 EarlyUartRxCachedByteCount;
 
 /*
  * Kernel-side physical-map base used by EarlyUartPhysToVa below.
@@ -129,6 +214,244 @@ EarlyUartReady(VOID)
            EarlyUartInterface != Arm64UartUnknown;
 }
 
+static __inline UINT32
+EarlyUartQcomGeniReadProtocol(VOID)
+{
+    return (EARLY_UART_READ(ARM64_QCOM_GENI_FW_REVISION_RO) &
+            ARM64_QCOM_GENI_FW_REV_PROTOCOL_MASK) >>
+           ARM64_QCOM_GENI_FW_REV_PROTOCOL_SHIFT;
+}
+
+static __inline BOOLEAN
+EarlyUartQcomGeniPollBit(UINT32 Offset, UINT32 Bit, BOOLEAN Set)
+{
+    UINT32 Guard;
+
+    for (Guard = ARM64_QCOM_GENI_POLL_LIMIT; Guard > 0; --Guard)
+    {
+        if ((EARLY_UART_READ(Offset) & Bit) == (Set ? Bit : 0))
+            return TRUE;
+
+        __asm__ __volatile__("yield");
+    }
+
+    return FALSE;
+}
+
+static __inline VOID
+EarlyUartQcomGeniPollTxDone(VOID)
+{
+    if (!EarlyUartQcomGeniPollBit(ARM64_QCOM_GENI_M_IRQ_STATUS,
+                                  ARM64_QCOM_GENI_M_CMD_DONE,
+                                  TRUE))
+    {
+        EARLY_UART_WRITE(ARM64_QCOM_GENI_M_CMD_CTRL_REG,
+                         ARM64_QCOM_GENI_M_CMD_CTRL_ABORT);
+        EarlyUartQcomGeniPollBit(ARM64_QCOM_GENI_M_IRQ_STATUS,
+                                 ARM64_QCOM_GENI_M_CMD_ABORT,
+                                 TRUE);
+        EARLY_UART_WRITE(ARM64_QCOM_GENI_M_IRQ_CLEAR,
+                         ARM64_QCOM_GENI_M_CMD_ABORT);
+    }
+}
+
+static __inline VOID
+EarlyUartQcomGeniAbortRx(VOID)
+{
+    EARLY_UART_WRITE(ARM64_QCOM_GENI_S_CMD_CTRL_REG,
+                     ARM64_QCOM_GENI_S_CMD_CTRL_ABORT);
+    EarlyUartQcomGeniPollBit(ARM64_QCOM_GENI_S_CMD_CTRL_REG,
+                             ARM64_QCOM_GENI_S_CMD_CTRL_ABORT,
+                             FALSE);
+    EARLY_UART_WRITE(ARM64_QCOM_GENI_S_IRQ_CLEAR,
+                     ARM64_QCOM_GENI_S_CMD_DONE |
+                     ARM64_QCOM_GENI_S_CMD_ABORT);
+    EARLY_UART_WRITE(ARM64_QCOM_GENI_FORCE_DEFAULT_REG,
+                     ARM64_QCOM_GENI_FORCE_DEFAULT);
+}
+
+static __inline BOOLEAN
+EarlyUartQcomGeniInitialize(VOID)
+{
+    UINT32 Value;
+
+    if (EarlyUartHardwareInitialized)
+        return TRUE;
+
+    if (EarlyUartQcomGeniReadProtocol() != ARM64_QCOM_GENI_SE_UART)
+    {
+        EarlyUartInterface = Arm64UartUnknown;
+        return FALSE;
+    }
+
+    if (EARLY_UART_READ(ARM64_QCOM_GENI_STATUS) & ARM64_QCOM_GENI_M_CMD_ACTIVE)
+        EarlyUartQcomGeniPollTxDone();
+
+    if (EARLY_UART_READ(ARM64_QCOM_GENI_STATUS) & ARM64_QCOM_GENI_S_CMD_ACTIVE)
+        EarlyUartQcomGeniAbortRx();
+
+    EARLY_UART_WRITE(ARM64_QCOM_GENI_TX_PACKING_CFG0,
+                     ARM64_QCOM_GENI_TX_PACKING_CFG0_8X4);
+    EARLY_UART_WRITE(ARM64_QCOM_GENI_TX_PACKING_CFG1,
+                     ARM64_QCOM_GENI_TX_PACKING_CFG1_8X4);
+    EARLY_UART_WRITE(ARM64_QCOM_GENI_RX_PACKING_CFG0,
+                     ARM64_QCOM_GENI_TX_PACKING_CFG0_8X4);
+    EARLY_UART_WRITE(ARM64_QCOM_GENI_RX_PACKING_CFG1,
+                     ARM64_QCOM_GENI_TX_PACKING_CFG1_8X4);
+    EARLY_UART_WRITE(ARM64_QCOM_GENI_BYTE_GRAN, 0);
+
+    EARLY_UART_WRITE(ARM64_QCOM_GENI_GSI_EVENT_EN, 0);
+    EARLY_UART_WRITE(ARM64_QCOM_GENI_M_IRQ_CLEAR, ARM64_QCOM_GENI_IRQ_ALL);
+    EARLY_UART_WRITE(ARM64_QCOM_GENI_S_IRQ_CLEAR, ARM64_QCOM_GENI_IRQ_ALL);
+    EARLY_UART_WRITE(ARM64_QCOM_GENI_DMA_TX_IRQ_CLR, ARM64_QCOM_GENI_IRQ_ALL);
+    EARLY_UART_WRITE(ARM64_QCOM_GENI_DMA_RX_IRQ_CLR, ARM64_QCOM_GENI_IRQ_ALL);
+    EARLY_UART_WRITE(ARM64_QCOM_GENI_IRQ_EN,
+                     ARM64_QCOM_GENI_SE_IRQ_EN_ALL);
+
+    Value = EARLY_UART_READ(ARM64_QCOM_GENI_CGC_CTRL);
+    EARLY_UART_WRITE(ARM64_QCOM_GENI_CGC_CTRL,
+                     Value | ARM64_QCOM_GENI_DEFAULT_CGC_EN);
+
+    Value = EARLY_UART_READ(ARM64_QCOM_GENI_DMA_GENERAL_CFG);
+    EARLY_UART_WRITE(ARM64_QCOM_GENI_DMA_GENERAL_CFG,
+                     Value | ARM64_QCOM_GENI_DMA_GENERAL_CFG_ALL);
+
+    EARLY_UART_WRITE(ARM64_QCOM_GENI_OUTPUT_CTRL,
+                     ARM64_QCOM_GENI_DEFAULT_IO_OUTPUT_CTRL);
+    EARLY_UART_WRITE(ARM64_QCOM_GENI_FORCE_DEFAULT_REG,
+                     ARM64_QCOM_GENI_FORCE_DEFAULT);
+
+    Value = EARLY_UART_READ(ARM64_QCOM_GENI_IRQ_EN);
+    EARLY_UART_WRITE(ARM64_QCOM_GENI_IRQ_EN,
+                     Value | ARM64_QCOM_GENI_SE_IRQ_EN_ALL);
+
+    Value = EARLY_UART_READ(ARM64_QCOM_GENI_DMA_MODE_EN);
+    EARLY_UART_WRITE(ARM64_QCOM_GENI_DMA_MODE_EN,
+                     Value & ~ARM64_QCOM_GENI_DMA_MODE);
+
+    EARLY_UART_WRITE(ARM64_QCOM_GENI_GSI_EVENT_EN, 0);
+    EARLY_UART_WRITE(ARM64_QCOM_GENI_RX_WATERMARK_REG, 8);
+    EARLY_UART_WRITE(ARM64_QCOM_GENI_RX_RFR_WATERMARK_REG, 14);
+
+    Value = EARLY_UART_READ(ARM64_QCOM_GENI_M_IRQ_EN);
+    EARLY_UART_WRITE(ARM64_QCOM_GENI_M_IRQ_EN,
+                     Value | ARM64_QCOM_GENI_M_COMMON_IRQ_EN);
+
+    Value = EARLY_UART_READ(ARM64_QCOM_GENI_S_IRQ_EN);
+    EARLY_UART_WRITE(ARM64_QCOM_GENI_S_IRQ_EN,
+                     Value | ARM64_QCOM_GENI_S_COMMON_IRQ_EN);
+
+    EARLY_UART_WRITE(ARM64_QCOM_GENI_M_IRQ_CLEAR, ARM64_QCOM_GENI_IRQ_ALL);
+    EARLY_UART_WRITE(ARM64_QCOM_GENI_S_IRQ_CLEAR, ARM64_QCOM_GENI_IRQ_ALL);
+    EARLY_UART_WRITE(ARM64_QCOM_GENI_DMA_TX_IRQ_CLR, ARM64_QCOM_GENI_IRQ_ALL);
+    EARLY_UART_WRITE(ARM64_QCOM_GENI_DMA_RX_IRQ_CLR, ARM64_QCOM_GENI_IRQ_ALL);
+    EARLY_UART_WRITE(ARM64_QCOM_GENI_IRQ_EN,
+                     ARM64_QCOM_GENI_SE_IRQ_EN_ALL);
+
+    Value = EARLY_UART_READ(ARM64_QCOM_GENI_DMA_MODE_EN);
+    EARLY_UART_WRITE(ARM64_QCOM_GENI_DMA_MODE_EN,
+                     Value & ~ARM64_QCOM_GENI_DMA_MODE);
+
+    EARLY_UART_WRITE(ARM64_QCOM_UART_TX_TRANS_CFG,
+                     ARM64_QCOM_GENI_UART_CTS_MASK);
+    EARLY_UART_WRITE(ARM64_QCOM_UART_TX_PARITY_CFG, 0);
+    EARLY_UART_WRITE(ARM64_QCOM_UART_RX_TRANS_CFG, 0);
+    EARLY_UART_WRITE(ARM64_QCOM_UART_RX_PARITY_CFG, 0);
+    EARLY_UART_WRITE(ARM64_QCOM_UART_TX_WORD_LEN, 8);
+    EARLY_UART_WRITE(ARM64_QCOM_UART_RX_WORD_LEN, 8);
+    EARLY_UART_WRITE(ARM64_QCOM_UART_TX_STOP_BIT_LEN, 0);
+
+    EARLY_UART_WRITE(ARM64_QCOM_GENI_S_CMD0,
+                     ARM64_QCOM_GENI_UART_START_READ <<
+                     ARM64_QCOM_GENI_S_OPCODE_SHIFT);
+
+    EarlyUartHardwareInitialized = TRUE;
+    return TRUE;
+}
+
+static __inline VOID
+EarlyUartQcomGeniPutc(CHAR Ch)
+{
+    if (!EarlyUartQcomGeniInitialize())
+        return;
+
+    if (EARLY_UART_READ(ARM64_QCOM_GENI_STATUS) & ARM64_QCOM_GENI_M_CMD_ACTIVE)
+    {
+        EarlyUartQcomGeniPollTxDone();
+    }
+
+    if (EARLY_UART_READ(ARM64_QCOM_GENI_STATUS) & ARM64_QCOM_GENI_M_CMD_ACTIVE)
+    {
+        EARLY_UART_WRITE(ARM64_QCOM_GENI_M_CMD_CTRL_REG,
+                         ARM64_QCOM_GENI_M_CMD_CTRL_CANCEL);
+        if (!EarlyUartQcomGeniPollBit(ARM64_QCOM_GENI_M_IRQ_STATUS,
+                                      ARM64_QCOM_GENI_M_CMD_CANCEL,
+                                      TRUE))
+        {
+            EARLY_UART_WRITE(ARM64_QCOM_GENI_M_CMD_CTRL_REG,
+                             ARM64_QCOM_GENI_M_CMD_CTRL_ABORT);
+            EarlyUartQcomGeniPollBit(ARM64_QCOM_GENI_M_IRQ_STATUS,
+                                     ARM64_QCOM_GENI_M_CMD_ABORT,
+                                     TRUE);
+            EARLY_UART_WRITE(ARM64_QCOM_GENI_M_IRQ_CLEAR,
+                             ARM64_QCOM_GENI_M_CMD_ABORT);
+        }
+        EARLY_UART_WRITE(ARM64_QCOM_GENI_M_IRQ_CLEAR,
+                         ARM64_QCOM_GENI_M_CMD_CANCEL);
+    }
+
+    EARLY_UART_WRITE(ARM64_QCOM_GENI_M_IRQ_CLEAR,
+                     ARM64_QCOM_GENI_M_CMD_DONE);
+    EARLY_UART_WRITE(ARM64_QCOM_UART_TX_TRANS_LEN, 1);
+    EARLY_UART_WRITE(ARM64_QCOM_GENI_M_CMD0,
+                     ARM64_QCOM_GENI_UART_START_TX <<
+                     ARM64_QCOM_GENI_M_OPCODE_SHIFT);
+    EARLY_UART_WRITE(ARM64_QCOM_GENI_TX_FIFO, (UINT32)(UCHAR)Ch);
+    EarlyUartQcomGeniPollTxDone();
+}
+
+static __inline BOOLEAN
+EarlyUartQcomGeniGetc(_Out_ UCHAR *Byte)
+{
+    UINT32 Status;
+    UINT32 WordCount;
+    UINT32 ByteCount;
+
+    if (!EarlyUartQcomGeniInitialize() || Byte == NULL)
+        return FALSE;
+
+    if (EarlyUartRxCachedByteCount == 0)
+    {
+        Status = EARLY_UART_READ(ARM64_QCOM_GENI_M_IRQ_STATUS);
+        EARLY_UART_WRITE(ARM64_QCOM_GENI_M_IRQ_CLEAR, Status);
+
+        Status = EARLY_UART_READ(ARM64_QCOM_GENI_S_IRQ_STATUS);
+        EARLY_UART_WRITE(ARM64_QCOM_GENI_S_IRQ_CLEAR, Status);
+
+        Status = EARLY_UART_READ(ARM64_QCOM_GENI_RX_FIFO_STATUS);
+        WordCount = Status & ARM64_QCOM_GENI_RX_FIFO_WORD_COUNT;
+        if (WordCount == 0)
+            return FALSE;
+
+        ByteCount = ARM64_QCOM_GENI_FIFO_WORD_BYTES;
+        if ((WordCount == 1) && (Status & ARM64_QCOM_GENI_RX_LAST))
+        {
+            ByteCount = (Status & ARM64_QCOM_GENI_RX_LAST_VALID_MASK) >>
+                        ARM64_QCOM_GENI_RX_LAST_VALID_SHIFT;
+            if (ByteCount == 0)
+                ByteCount = ARM64_QCOM_GENI_FIFO_WORD_BYTES;
+        }
+
+        EarlyUartRxCachedBytes = EARLY_UART_READ(ARM64_QCOM_GENI_RX_FIFO);
+        EarlyUartRxCachedByteCount = ByteCount;
+    }
+
+    *Byte = (UCHAR)(EarlyUartRxCachedBytes & 0xFF);
+    EarlyUartRxCachedBytes >>= 8;
+    EarlyUartRxCachedByteCount--;
+    return TRUE;
+}
+
 /*
  * EarlyUartPutc - Output a single character to the early UART.
  * Waits for transmit FIFO to have space.
@@ -147,6 +470,10 @@ EarlyUartPutc(CHAR Ch)
         }
 
         EARLY_UART_WRITE8(ARM64_NS16550_THR, (UCHAR)Ch);
+    }
+    else if (EarlyUartInterface == Arm64UartQcomGeni)
+    {
+        EarlyUartQcomGeniPutc(Ch);
     }
     else
     {
@@ -175,6 +502,10 @@ EarlyUartGetc(_Out_ UCHAR *Byte)
             return FALSE;
 
         *Byte = EARLY_UART_READ8(ARM64_NS16550_RBR);
+    }
+    else if (EarlyUartInterface == Arm64UartQcomGeni)
+    {
+        return EarlyUartQcomGeniGetc(Byte);
     }
     else
     {
