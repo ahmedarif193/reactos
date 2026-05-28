@@ -18,6 +18,7 @@
 #include <UgaDraw.h>
 #include <AppleGraphInfo.h>
 #include <BlockIo.h>
+#include <SerialIo.h>
 #include <Acpi.h>
 #include <Cpu.h>
 #include <GlobalVariable.h>
