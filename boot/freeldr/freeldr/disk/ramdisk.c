@@ -2494,9 +2494,31 @@ RamDiskLoadVirtualFile(
         return Status;
     }
 
+    RamDiskFileSize = Information.EndingAddress.QuadPart;
+    {
+        ULONGLONG VolumeSize;
+
+        /*
+         * This path may open an ARC storage device rather than a named file.
+         * In that case there is no file-system service on the returned ID:
+         * EndingAddress is the device extent, while the ramdisk image ends at
+         * the mounted filesystem volume boundary.
+         */
+        if (FsGetServiceName(RamFileId) == NULL &&
+            FsGetVolumeSize(RamFileId, &VolumeSize) == ESUCCESS &&
+            VolumeSize != 0 &&
+            (RamDiskFileSize == 0 || VolumeSize < RamDiskFileSize))
+        {
+            TRACE("RamDiskLoadVirtualFile: using volume size %llu bytes instead of raw device size %llu bytes\n",
+                  VolumeSize,
+                  RamDiskFileSize);
+            RamDiskFileSize = VolumeSize;
+        }
+    }
+
     /* Enforce the legacy 4GB limit on 32-bit builds */
 #if !defined(_M_AMD64) && !defined(__x86_64__) && !defined(_M_ARM64) && !defined(_ARM64_) && !defined(__aarch64__) && !defined(__arm64__)
-    if (Information.EndingAddress.HighPart != 0)
+    if (RamDiskFileSize >= 0x100000000ULL)
     {
         ArcClose(RamFileId);
         if (!OptionalRamDisk)
@@ -2504,8 +2526,6 @@ RamDiskLoadVirtualFile(
         return ENOMEM;
     }
 #endif
-
-    RamDiskFileSize = Information.EndingAddress.QuadPart;
 #if !defined(_M_AMD64) && !defined(__x86_64__) && !defined(_M_ARM64) && !defined(_ARM64_) && !defined(__aarch64__) && !defined(__arm64__)
     ASSERT(RamDiskFileSize < 0x100000000); // Legacy limit on 32-bit builds.
 #endif
