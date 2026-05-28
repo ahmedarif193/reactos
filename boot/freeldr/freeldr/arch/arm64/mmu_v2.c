@@ -643,6 +643,7 @@ static __attribute__((unused)) inline BOOLEAN is_extra_kernel_slot(UINT64 l0_idx
 /* -------------------------------------------------------------------------- */
 
 static UINT64 get_tcr(UINT64 *pips, UINT64 *pva_bits);
+static UINT64 get_tcr_for_el(UINT64 *pips, UINT64 *pva_bits, int el, BOOLEAN el12);
 static int get_effective_el(VOID);
 static BOOLEAN use_el12_registers(VOID);
 static VOID setup_pgtables(VOID);
@@ -1221,6 +1222,7 @@ arm64_ttbr1_l0_base(UINT64 RootPa)
 
 /* Prototypes */
 static UINT64 get_tcr(UINT64 *pips, UINT64 *pva_bits);
+static UINT64 get_tcr_for_el(UINT64 *pips, UINT64 *pva_bits, int el, BOOLEAN el12);
 static int get_effective_el(VOID);
 static BOOLEAN use_el12_registers(VOID);
 static VOID setup_pgtables(VOID);
@@ -1358,7 +1360,23 @@ static inline void pte_replace_break_before_make(UINT64 *entry, UINT64 newval, U
 
 /* ---------- TCR composition (now clamped by hw caps) ---------- */
 
-static UINT64 get_tcr(UINT64 *pips, UINT64 *pva_bits)
+static UINT64
+get_tcr(
+    UINT64 *pips,
+    UINT64 *pva_bits)
+{
+    return get_tcr_for_el(pips,
+                          pva_bits,
+                          get_effective_el(),
+                          use_el12_registers());
+}
+
+static UINT64
+get_tcr_for_el(
+    UINT64 *pips,
+    UINT64 *pva_bits,
+    int el,
+    BOOLEAN el12)
 {
     query_mmfr0_caps();
     if (!g_granule4k_supported) {
@@ -1368,14 +1386,13 @@ static UINT64 get_tcr(UINT64 *pips, UINT64 *pva_bits)
         return 0;
     }
 
-    int el = get_effective_el();
-    BOOLEAN el12 = use_el12_registers();
-
     UINT64 max_addr = cached_max_physical_address;
     ULONG MemoryMapSize;
     FREELDR_MEMORY_DESCRIPTOR* MemoryMap;
     ULONG i;
-    BOOLEAN boot_services_available = (GlobalSystemTable && GlobalSystemTable->BootServices);
+    BOOLEAN boot_services_available = (!BootServicesExitedFlag &&
+                                       GlobalSystemTable &&
+                                       GlobalSystemTable->BootServices);
 
     /* Refresh cached physical limit when possible */
     if (boot_services_available) {
@@ -3210,120 +3227,6 @@ static VOID setup_pgtables(VOID)
 #endif
 
 /*
- * Diagnostic: Walk page table hierarchy and verify mapping exists for a VA.
- * Returns TRUE if mapping is valid, FALSE otherwise.
- * NOTE: Called post-ExitBootServices, so TRACE/ERR macros removed to avoid hangs.
- */
-static BOOLEAN
-Arm64VerifyIdentityMapping(UINT64 va, UINT64 *out_pa, UINT64 *out_attrs)
-{
-    UINT64 l0_idx = (va >> 39) & 0x1FF;
-    UINT64 l1_idx = (va >> 30) & 0x1FF;
-    UINT64 l2_idx = (va >> 21) & 0x1FF;
-    UINT64 l3_idx = (va >> 12) & 0x1FF;
-    UINT64 entry;
-    UINT64 *table;
-
-    /* Check L0 */
-    if (!arm64_l0_page_table)
-    {
-        return FALSE;
-    }
-
-    if (l0_idx >= ARM64_USER_L1_TABLES)
-    {
-        return FALSE;
-    }
-
-    entry = arm64_l0_page_table[l0_idx];
-
-    if (!DESC_VALID(entry))
-    {
-        return FALSE;
-    }
-
-    if (!DESC_IS_TABLE(entry))
-    {
-        return FALSE;
-    }
-
-    /* Get L1 table */
-    table = (UINT64 *)PA_TO_VA(entry & PTE_ADDR_MASK);
-
-    entry = table[l1_idx];
-
-    if (!DESC_VALID(entry))
-    {
-        return FALSE;
-    }
-
-    /* Check for 1GB block */
-    if (DESC_IS_BLOCK(entry))
-    {
-        UINT64 block_pa = entry & PTE_BLOCK_ADDR_MASK_1G;
-        UINT64 offset = va & 0x3FFFFFFFULL;
-        if (out_pa) *out_pa = block_pa + offset;
-        if (out_attrs) *out_attrs = entry & 0xFFF0000000000FFFULL;
-        return TRUE;
-    }
-
-    if (!DESC_IS_TABLE(entry))
-    {
-        return FALSE;
-    }
-
-    /* Get L2 table */
-    table = (UINT64 *)PA_TO_VA(entry & PTE_ADDR_MASK);
-
-    entry = table[l2_idx];
-
-    if (!DESC_VALID(entry))
-    {
-        return FALSE;
-    }
-
-    /* Check for 2MB block */
-    if (DESC_IS_BLOCK(entry))
-    {
-        UINT64 block_pa = entry & PTE_BLOCK_ADDR_MASK_2M;
-        UINT64 offset = va & 0x1FFFFFULL;
-        if (out_pa) *out_pa = block_pa + offset;
-        if (out_attrs) *out_attrs = entry & 0xFFF0000000000FFFULL;
-        return TRUE;
-    }
-
-    if (!DESC_IS_TABLE(entry))
-    {
-        return FALSE;
-    }
-
-    /* Get L3 table */
-    table = (UINT64 *)PA_TO_VA(entry & PTE_ADDR_MASK);
-
-    entry = table[l3_idx];
-
-    if (!DESC_VALID(entry))
-    {
-        return FALSE;
-    }
-
-    if (!DESC_IS_PAGE(entry))
-    {
-        return FALSE;
-    }
-
-    /* 4KB page */
-    {
-        UINT64 page_pa = entry & PTE_ADDR_MASK;
-        UINT64 offset = va & 0xFFFULL;
-        if (out_pa) *out_pa = page_pa + offset;
-        if (out_attrs) *out_attrs = entry & 0xFFF0000000000FFFULL;
-    }
-
-    return TRUE;
-}
-
-/*
  * Diagnostic: Dump L2 pool allocation state for debugging
  */
 static __attribute__((unused)) VOID
@@ -3347,6 +3250,7 @@ VOID Arm64EnablePageTables(VOID)
     UINT64 tcr;
     int el = get_effective_el();
     BOOLEAN el12 = use_el12_registers();
+    BOOLEAN transition_to_el1 = FALSE;
     UINT64 sctlr = 0;
 
     if (!page_tables_initialized)
@@ -3354,25 +3258,19 @@ VOID Arm64EnablePageTables(VOID)
     Arm64ApplyImageSectionProtections();
 
     /*
-     * Windows loaders always run EL1; if we somehow arrived here in plain EL2
-     * (no VHE), drop to EL1 before programming EL1/VHE register layout to
-     * avoid reserved/invalid TCR_EL2 settings.
+     * Windows loaders run EL1.  If firmware returned from ExitBootServices in
+     * plain EL2, program the EL1 register set from EL2 first and only then drop
+     * with ERET.  Dropping before TTBR/TCR/SCTLR_EL1 are ready faults on RPi5.
      */
     if (el == 2 && !el12)
     {
-    // TRACE("ARM64: PT_EN: Forcing EL1 entry state for Windows parity\n");
-        Arm64EnsureEl1EntryState();
-        el = get_effective_el();
-        el12 = use_el12_registers();
-        if (el != 1 && !el12)
-        {
-    // ERR("ARM64: PT_EN: Unable to transition to EL1, aborting MMU enable\n");
-            return;
-        }
+        transition_to_el1 = TRUE;
+        el = 1;
+        el12 = FALSE;
     }
 
     /* Compose TCR after ensuring final EL */
-    tcr = get_tcr(NULL, NULL);
+    tcr = get_tcr_for_el(NULL, NULL, el, el12);
 
     /* 1. Read current SCTLR and Disable MMU (M) and Cache (C) */
     // TRACE("ARM64: PT_EN: Reading SCTLR\n");
@@ -3567,34 +3465,14 @@ VOID Arm64EnablePageTables(VOID)
     }
     /* ========== END CRITICAL REGION MAPPING ========== */
 
-    /* ========== DIAGNOSTIC: Verify identity mapping before MMU enable ========== */
-    /*
-     * NOTE: This verification runs AFTER we've ensured the critical regions are
-     * mapped. If verification still fails, there's a fundamental problem with
-     * the page table structure or the mapping function.
-     */
+    if (transition_to_el1)
     {
-        UINT64 current_pc;
-        UINT64 mapped_pa;
-        UINT64 mapped_attrs;
-        BOOLEAN mapping_valid;
-
-        /* Get current PC */
-        __asm__ volatile("adr %0, ." : "=r"(current_pc));
-
-
-        /* Verify current PC is identity-mapped */
-        mapping_valid = Arm64VerifyIdentityMapping(current_pc, &mapped_pa, &mapped_attrs);
-
-        if (!mapping_valid)
+        Arm64EnsureEl1EntryState();
+        if (get_effective_el() != 1)
         {
-            /* Don't proceed - hang here */
-            for (;;)
-                __asm__ volatile("wfi");
+            return;
         }
-
     }
-    /* ========== END DIAGNOSTIC ========== */
 
     /* 3. Re-enable MMU and Cache (Original SCTLR flags) */
     /* Ensure M and C are set.

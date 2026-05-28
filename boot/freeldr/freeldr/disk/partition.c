@@ -32,9 +32,6 @@ DiskReadBootRecord(
     }
     RtlCopyMemory(BootRecord, DiskReadBuffer, sizeof(MASTER_BOOT_RECORD));
 
-    TRACE("Read MBR for drive 0x%x at sector %lld (magic 0x%x)\n",
-          DriveNumber, LogicalSectorNumber, BootRecord->MasterBootRecordMagic);
-
     /* Check the partition table magic value */
     return (BootRecord->MasterBootRecordMagic == 0xaa55);
 }

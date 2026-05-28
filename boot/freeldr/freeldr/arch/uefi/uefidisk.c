@@ -671,8 +671,6 @@ UefiDiskOpen(CHAR *Path, OPENMODE OpenMode, ULONG *FileId)
     EFI_BLOCK_IO* BlockIo;
     EFI_STATUS Status;
 
-    TRACE("UefiDiskOpen: File ID: %p, Path: %s\n", FileId, Path);
-
     if (DiskReadBufferSize == 0)
     {
         ERR("DiskOpen(): DiskReadBufferSize is 0, something is wrong.\n");
@@ -682,8 +680,6 @@ UefiDiskOpen(CHAR *Path, OPENMODE OpenMode, ULONG *FileId)
 
     if (!DissectArcPath(Path, NULL, &DriveNumber, &DrivePartition))
         return EINVAL;
-
-    TRACE("Opening disk: DriveNumber: %d, DrivePartition: %d\n", DriveNumber, DrivePartition);
 
     if (DriveNumber < FIRST_BIOS_DISK)
         return EINVAL;

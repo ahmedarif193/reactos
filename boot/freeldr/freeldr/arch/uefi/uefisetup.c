@@ -8,6 +8,9 @@
 #include <uefildr.h>
 
 #include <debug.h>
+#if defined(_M_ARM64)
+#include <reactos/arm64/early_uart.h>
+#endif
 DBG_DEFAULT_CHANNEL(WARNING);
 #if DBG
 static void __attribute__((unused)) UefiSetupKeepDebugChannel(void)
@@ -27,6 +30,10 @@ VOID
 MachInit(const char *CmdLine)
 {
     RtlZeroMemory(&MachVtbl, sizeof(MachVtbl));
+
+#if defined(_M_ARM64)
+    EarlyUartInitialize(0);
+#endif
 
     MachVtbl.ConsPutChar = UefiConsPutChar;
     MachVtbl.ConsKbHit = UefiConsKbHit;

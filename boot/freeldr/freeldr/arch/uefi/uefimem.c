@@ -228,6 +228,13 @@ UefiMemGetMemoryMap(ULONG *MemoryMapSize)
     UINT32 EntryCount = 0;
     FreeldrDescCount = 0;
 
+    if (BootServicesExitedFlag)
+    {
+        if (MemoryMapSize)
+            *MemoryMapSize = 0;
+        return NULL;
+    }
+
     Status = GlobalSystemTable->BootServices->HandleProtocol(GlobalImageHandle,
                                                              &EfiLoadedImageProtocol,
                                                              (VOID**)&LoadedImage);
