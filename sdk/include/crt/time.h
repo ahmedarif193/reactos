@@ -299,7 +299,7 @@ extern "C" {
   _wasctime(
     _In_ const struct tm *_Tm);
 
-  _CRTIMP wchar_t *__cdecl _wctime(const time_t *_Time);
+  wchar_t *__cdecl _wctime(const time_t *_Time);
 
   _CRTIMP
   _CRT_INSECURE_DEPRECATE(_wctime32_s)
@@ -395,15 +395,15 @@ __CRT_INLINE wchar_t *__cdecl _wctime(const time_t *_Time) { return _wctime64(_T
 
 #endif /* !_WTIME_DEFINED */
 
- _CRTIMP double __cdecl difftime(time_t _Time1,time_t _Time2);
- _CRTIMP char *__cdecl ctime(const time_t *_Time);
- _CRTIMP struct tm *__cdecl gmtime(const time_t *_Time);
- _CRTIMP struct tm *__cdecl localtime(const time_t *_Time);
+ double __cdecl difftime(time_t _Time1,time_t _Time2);
+ char *__cdecl ctime(const time_t *_Time);
+ struct tm *__cdecl gmtime(const time_t *_Time);
+ struct tm *__cdecl localtime(const time_t *_Time);
  _CRTIMP struct tm *__cdecl localtime_r(const time_t *_Time,struct tm *);
 
- _CRTIMP time_t __cdecl mktime(struct tm *_Tm);
- _CRTIMP time_t __cdecl _mkgmtime(struct tm *_Tm);
- _CRTIMP time_t __cdecl time(time_t *_Time);
+ time_t __cdecl mktime(struct tm *_Tm);
+ time_t __cdecl _mkgmtime(struct tm *_Tm);
+ time_t __cdecl time(time_t *_Time);
 
 #if !defined(RC_INVOKED)  && !defined(_NO_INLINING)  && !defined(_CRTBLD)
 #ifdef _USE_32BIT_TIME_T
