@@ -32,6 +32,7 @@ MachInit(const char *CmdLine)
     RtlZeroMemory(&MachVtbl, sizeof(MachVtbl));
 
 #if defined(_M_ARM64)
+    UefiSerialInitialize();
     EarlyUartInitialize(0);
 #endif
 

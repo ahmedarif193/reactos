@@ -200,8 +200,8 @@ Done:
     Initialized = TRUE;
 
 #if defined(UEFIBOOT) && defined(_M_ARM64)
-    EarlyUartInitialize(0);
     UefiSerialInitialize();
+    EarlyUartInitialize(0);
     DebugPort |= RS232;
 #else
     /* Try to initialize the port; if it fails, remove the corresponding flag */
