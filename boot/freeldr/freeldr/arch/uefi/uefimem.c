@@ -15,12 +15,23 @@ DBG_DEFAULT_CHANNEL(WARNING);
 #define NEXT_MEMORY_DESCRIPTOR(Descriptor, DescriptorSize) \
     (EFI_MEMORY_DESCRIPTOR*)((char*)(Descriptor) + (DescriptorSize))
 #define EXIT_STACK_SIZE 0x1000
-#define UNUSED_MAX_DESCRIPTOR_COUNT 10000
+/*
+ * A free EFI region can split into pinned and firmware-owned descriptors.
+ * Keep slack for those splits, page 0, and the terminating empty entry.
+ */
+#define FREELDR_DESCRIPTOR_SLACK 16
 #define MEMORY_MAP_EXTRA_DESCRIPTORS 32
 #define MEMORY_MAP_MAX_RETRIES 8
 #define UEFI_ERROR_MASK_32 0x80000000ULL
 #define UEFI_ERROR_MASK_64 0x8000000000000000ULL
 #define UEFI_STATUS_BUFFER_TOO_SMALL 5
+
+/*
+ * Modern firmware can still allocate while completing ExitBootServices().
+ * Leave it a small conventional-memory reserve instead of pinning everything.
+ */
+#define UEFI_FIRMWARE_RESERVE_BYTES (16ULL * 1024 * 1024)
+#define UEFI_FIRMWARE_RESERVE_PAGES (UEFI_FIRMWARE_RESERVE_BYTES / EFI_PAGE_SIZE)
 
 ULONG
 AddMemoryDescriptor(
@@ -37,6 +48,8 @@ extern EFI_HANDLE GlobalImageHandle;
 
 EFI_MEMORY_DESCRIPTOR* EfiMemoryMap = NULL;
 UINT32 FreeldrDescCount;
+/* Usable FreeldrMem capacity, excluding the terminator slot. */
+static UINT32 FreeldrDescMax;
 PVOID OsLoaderBase;
 
 /*
@@ -166,7 +179,7 @@ UefiSetMemory(
 
     /* Add the memory descriptor */
     FreeldrDescCount = AddMemoryDescriptor(MemoryMap,
-                                           UNUSED_MAX_DESCRIPTOR_COUNT,
+                                           FreeldrDescMax,
                                            BasePage,
                                            PageCount,
                                            MemoryType);
@@ -273,7 +286,12 @@ UefiMemGetMemoryMap(ULONG *MemoryMapSize)
 
     EntryCount = (MapSize / DescriptorSize);
 
-    FreeldrMemMapSize = (sizeof(FREELDR_MEMORY_DESCRIPTOR) * EntryCount);
+    /*
+     * Splitting free EFI regions can produce more FreeLoader descriptors than
+     * EFI entries. FreeldrDescMax is the bound used by AddMemoryDescriptor().
+     */
+    FreeldrMemMapSize = sizeof(FREELDR_MEMORY_DESCRIPTOR) * (EntryCount + FREELDR_DESCRIPTOR_SLACK);
+    FreeldrDescMax = EntryCount + FREELDR_DESCRIPTOR_SLACK - 1;
     Status = GlobalSystemTable->BootServices->AllocatePool(EfiLoaderData,
                                                            FreeldrMemMapSize,
                                                            (void**)&FreeldrMem);
@@ -285,34 +303,78 @@ UefiMemGetMemoryMap(ULONG *MemoryMapSize)
     }
 
     RtlZeroMemory(FreeldrMem, FreeldrMemMapSize);
-    MapEntry = EfiMemoryMap;
-	for (Index = 0; Index < EntryCount; ++Index)
+
+    /*
+     * Leave the reserve at the high end and pin the rest for FreeLoader.
+     */
     {
-        TYPE_OF_MEMORY MemoryType = UefiConvertToFreeldrDesc(MapEntry->Type);
+        UINT64 TotalFreePages = 0;
+        UINT64 PagesToPin;
+        UINT64 PinnedSoFar = 0;
 
-        if (MemoryType == LoaderFree)
+        MapEntry = EfiMemoryMap;
+        for (Index = 0; Index < EntryCount; ++Index)
         {
-            Status = GlobalSystemTable->BootServices->AllocatePages(AllocateAddress,
-                                                                    EfiLoaderData,
-                                                                    MapEntry->NumberOfPages,
-                                                                    &MapEntry->PhysicalStart);
-            if (Status != EFI_SUCCESS)
+            if (UefiConvertToFreeldrDesc(MapEntry->Type) == LoaderFree)
+                TotalFreePages += MapEntry->NumberOfPages;
+            MapEntry = NEXT_MEMORY_DESCRIPTOR(MapEntry, DescriptorSize);
+        }
+
+        /*
+         * Clamp the reserve to current free pages. UefiMemGetMemoryMap() can
+         * run more than once, so keep the remaining headroom stable.
+         */
+        {
+            UINT64 Reserve = min(UEFI_FIRMWARE_RESERVE_PAGES, TotalFreePages);
+            PagesToPin = TotalFreePages - Reserve;
+        }
+
+        MapEntry = EfiMemoryMap;
+        for (Index = 0; Index < EntryCount; ++Index)
+        {
+            TYPE_OF_MEMORY MemoryType = UefiConvertToFreeldrDesc(MapEntry->Type);
+
+            if (MemoryType == LoaderFree)
             {
-                /* We failed to reserve the page, so change its type */
-                MemoryType = LoaderFirmwareTemporary;
+                EFI_PHYSICAL_ADDRESS RegionBase = MapEntry->PhysicalStart;
+                UINT64 RegionPages = MapEntry->NumberOfPages;
+                UINT64 PinPages = (PinnedSoFar < PagesToPin) ? min(RegionPages, PagesToPin - PinnedSoFar) : 0;
+
+                /* Pin the part FreeLoader will manage as its own free pool. */
+                if (PinPages != 0)
+                {
+                    EFI_PHYSICAL_ADDRESS PinBase = RegionBase;
+
+                    Status = GlobalSystemTable->BootServices->AllocatePages(AllocateAddress, EfiLoaderData, PinPages, &PinBase);
+                    if (Status == EFI_SUCCESS)
+                    {
+                        PinnedSoFar += PinPages;
+                        UefiSetMemory(FreeldrMem, PinBase, PinPages, LoaderFree);
+                    }
+                    else
+                    {
+                        /* Firmware refused: don't claim ownership we don't have. */
+                        PinPages = 0;
+                    }
+                }
+
+                /*
+                 * FreeLoader will not allocate from LoaderFirmwareTemporary,
+                 * and NT can reclaim it after boot.
+                 */
+                if (PinPages < RegionPages)
+                {
+                    UefiSetMemory(FreeldrMem, RegionBase + PinPages * EFI_PAGE_SIZE, RegionPages - PinPages, LoaderFirmwareTemporary);
+                }
             }
-        }
+            else if (MemoryType != LoaderReserve)
+            {
+                /* Preserve non-reserved firmware descriptors. */
+                UefiSetMemory(FreeldrMem, MapEntry->PhysicalStart, MapEntry->NumberOfPages, MemoryType);
+            }
 
-        /* We really don't want to touch these reserved spots at all */
-        if (MemoryType != LoaderReserve)
-        {
-            UefiSetMemory(FreeldrMem,
-                          MapEntry->PhysicalStart,
-                          MapEntry->NumberOfPages,
-                          MemoryType);
+            MapEntry = NEXT_MEMORY_DESCRIPTOR(MapEntry, DescriptorSize);
         }
-
-        MapEntry = NEXT_MEMORY_DESCRIPTOR(MapEntry, DescriptorSize);
     }
 
     /* Windows expects the first page to be reserved, otherwise it asserts.
