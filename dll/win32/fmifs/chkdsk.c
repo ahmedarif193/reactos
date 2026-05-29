@@ -29,7 +29,7 @@ Chkdsk(
 {
     PIFS_PROVIDER Provider;
     UNICODE_STRING usDriveRoot;
-    NTSTATUS Status;
+    NTSTATUS Status = STATUS_UNSUCCESSFUL;
     BOOLEAN Success = FALSE;
     WCHAR DriveName[MAX_PATH];
     WCHAR VolumeName[MAX_PATH];

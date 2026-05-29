@@ -1099,8 +1099,8 @@ Return Value:
                 continue;
             }
 
-            if (!FsRtlIsAnsiCharacterLegalFat(OemLabel.Buffer[(unsigned char)i], FALSE) ||
-                (OemLabel.Buffer[(unsigned char)i] == '.')) {
+            if (!FsRtlIsAnsiCharacterLegalFat((UCHAR)OemLabel.Buffer[i], FALSE) ||
+                ((UCHAR)OemLabel.Buffer[i] == '.')) {
 
                 return STATUS_INVALID_VOLUME_LABEL;
             }

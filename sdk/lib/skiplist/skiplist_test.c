@@ -12,7 +12,7 @@
 void
 DumpSkiplist(PSKIPLIST Skiplist)
 {
-    CHAR i;
+    INT i;
     DWORD j;
     PSKIPLIST_NODE pNode;
 

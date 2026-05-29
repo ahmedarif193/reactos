@@ -1247,7 +1247,7 @@ static BOOL
 HEXEDIT_WM_CHAR(PHEXEDIT_DATA hed, WCHAR wch)
 {
     size_t bufsize;
-    CHAR ch = (CHAR)wch; // keep the lowest octet.
+    UCHAR ch = (UCHAR)wch; // keep the lowest octet.
     PBYTE buf;
     INT i0, i1;
 
