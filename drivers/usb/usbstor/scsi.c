@@ -101,17 +101,32 @@ USBSTOR_IssueBulkOrInterruptRequest(
 static
 BOOLEAN
 USBSTOR_IsCSWValid(
-    PIRP_CONTEXT Context)
+    PIRP_CONTEXT Context,
+    ULONG TransferLength)
 {
-    if (Context->csw.Signature != CSW_SIGNATURE)
+    if (TransferLength != sizeof(CSW))
     {
-        DPRINT1("[USBSTOR] Expected Signature %x but got %x\n", CSW_SIGNATURE, Context->csw.Signature);
+        DPRINT1("[USBSTOR] Expected CSW length %lu but got %lu\n",
+                (ULONG)sizeof(CSW),
+                TransferLength);
         return FALSE;
     }
 
-    if (Context->csw.Tag != PtrToUlong(Context->Irp))
+    if (Context->Csw->Signature != CSW_SIGNATURE)
     {
-        DPRINT1("[USBSTOR] Expected Tag %Ix but got %x\n", PtrToUlong(Context->Irp), Context->csw.Tag);
+        DPRINT1("[USBSTOR] Expected Signature %x but got %x\n", CSW_SIGNATURE, Context->Csw->Signature);
+        return FALSE;
+    }
+
+    if (Context->Csw->Tag != PtrToUlong(Context->Irp))
+    {
+        DPRINT1("[USBSTOR] Expected Tag %Ix but got %x\n", PtrToUlong(Context->Irp), Context->Csw->Tag);
+        return FALSE;
+    }
+
+    if (Context->Csw->Status > CSW_STATUS_PHASE_ERROR)
+    {
+        DPRINT1("[USBSTOR] Invalid CSW status %x\n", Context->Csw->Status);
         return FALSE;
     }
 
@@ -192,13 +207,14 @@ USBSTOR_CSWCompletionRoutine(
     }
 
     // now check the CSW packet validity
-    if (!USBSTOR_IsCSWValid(Context) || Context->csw.Status == CSW_STATUS_PHASE_ERROR)
+    if (!USBSTOR_IsCSWValid(Context, Context->Urb.UrbBulkOrInterruptTransfer.TransferBufferLength) ||
+        Context->Csw->Status == CSW_STATUS_PHASE_ERROR)
     {
         goto ResetRecovery;
     }
 
     // finally check for CSW errors
-    if (Context->csw.Status == CSW_STATUS_COMMAND_PASSED)
+    if (Context->Csw->Status == CSW_STATUS_COMMAND_PASSED)
     {
         // should happen only when a sense request was sent
         if (Request != FDODeviceExtension->ActiveSrb)
@@ -221,7 +237,7 @@ USBSTOR_CSWCompletionRoutine(
 
         Irp->IoStatus.Status = USBSTOR_SrbStatusToNtStatus(Request);
     }
-    else if (Context->csw.Status == CSW_STATUS_COMMAND_FAILED)
+    else if (Context->Csw->Status == CSW_STATUS_COMMAND_FAILED)
     {
         // the command is correct but with failed status - issue request sense
         DPRINT("USBSTOR_CSWCompletionRoutine: CSW_STATUS_COMMAND_FAILED\n");
@@ -274,12 +290,17 @@ USBSTOR_SendCSWRequest(
     PFDO_DEVICE_EXTENSION FDODeviceExtension,
     PIRP Irp)
 {
+    if (!FDODeviceExtension->CurrentIrpContext.Csw)
+        return STATUS_INSUFFICIENT_RESOURCES;
+
+    RtlZeroMemory(FDODeviceExtension->CurrentIrpContext.Csw, sizeof(CSW));
+
     return USBSTOR_IssueBulkOrInterruptRequest(FDODeviceExtension,
                                                Irp,
                                                FDODeviceExtension->InterfaceInformation->Pipes[FDODeviceExtension->BulkInPipeIndex].PipeHandle,
                                                USBD_TRANSFER_DIRECTION_IN,
                                                sizeof(CSW),
-                                               &FDODeviceExtension->CurrentIrpContext.csw,
+                                               FDODeviceExtension->CurrentIrpContext.Csw,
                                                NULL,
                                                USBSTOR_CSWCompletionRoutine);
 }
@@ -529,7 +550,10 @@ USBSTOR_SendCBWRequest(
     PSCSI_REQUEST_BLOCK Request;
     PIRP_CONTEXT Context = &FDODeviceExtension->CurrentIrpContext;
 
-    RtlZeroMemory(&Context->cbw, sizeof(CBW));
+    if (!Context->Cbw)
+        return STATUS_INSUFFICIENT_RESOURCES;
+
+    RtlZeroMemory(Context->Cbw, sizeof(CBW));
     RtlZeroMemory(&Context->Urb, sizeof(URB));
 
     IoStack = IoGetCurrentIrpStackLocation(Irp);
@@ -537,17 +561,17 @@ USBSTOR_SendCBWRequest(
     Request = IoStack->Parameters.Scsi.Srb;
 
     // Make a CBW structure from SCSI request block
-    Context->cbw.Signature = CBW_SIGNATURE;
-    Context->cbw.Tag = PtrToUlong(Irp);
-    Context->cbw.DataTransferLength = Request->DataTransferLength;
-    Context->cbw.Flags = ((UCHAR)Request->SrbFlags & SRB_FLAGS_UNSPECIFIED_DIRECTION) << 1;
-    Context->cbw.LUN = PDODeviceExtension->LUN;
-    Context->cbw.CommandBlockLength = Request->CdbLength;
+    Context->Cbw->Signature = CBW_SIGNATURE;
+    Context->Cbw->Tag = PtrToUlong(Irp);
+    Context->Cbw->DataTransferLength = Request->DataTransferLength;
+    Context->Cbw->Flags = ((UCHAR)Request->SrbFlags & SRB_FLAGS_UNSPECIFIED_DIRECTION) << 1;
+    Context->Cbw->LUN = PDODeviceExtension->LUN;
+    Context->Cbw->CommandBlockLength = Request->CdbLength;
 
-    RtlCopyMemory(&Context->cbw.CommandBlock, Request->Cdb, Request->CdbLength);
+    RtlCopyMemory(&Context->Cbw->CommandBlock, Request->Cdb, Request->CdbLength);
 
     DPRINT("CBW for IRP %p\n", Irp);
-    DumpCBW((PUCHAR)&Context->cbw);
+    DumpCBW((PUCHAR)Context->Cbw);
 
     // initialize rest of context
     Context->Irp = Irp;
@@ -559,7 +583,7 @@ USBSTOR_SendCBWRequest(
         FDODeviceExtension->InterfaceInformation->Pipes[FDODeviceExtension->BulkOutPipeIndex].PipeHandle,
         USBD_TRANSFER_DIRECTION_OUT,
         sizeof(CBW),
-        &Context->cbw,
+        Context->Cbw,
         NULL,
         USBSTOR_CBWCompletionRoutine);
 }

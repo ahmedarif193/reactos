@@ -107,7 +107,9 @@ USBSTOR_FdoHandleRemoveDevice(
 
     DPRINT("Handling FDO removal %p\n", DeviceObject);
 
-    // FIXME: wait for devices finished processing
+    if (DeviceExtension->IrpPendingCount != 0 || DeviceExtension->ActiveSrb != NULL)
+        USBSTOR_QueueWaitForPendingRequests(DeviceObject);
+
     for (Index = 0; Index < USB_MAXCHILDREN; Index++)
     {
         if (DeviceExtension->ChildPDO[Index] != NULL)
@@ -128,6 +130,10 @@ USBSTOR_FdoHandleRemoveDevice(
         IoFreeWorkItem(DeviceExtension->ResetDeviceWorkItem);
     if (DeviceExtension->SerialNumber)
         ExFreePoolWithTag(DeviceExtension->SerialNumber, USB_STOR_TAG);
+    if (DeviceExtension->CurrentIrpContext.CbwAllocation)
+        ExFreePoolWithTag(DeviceExtension->CurrentIrpContext.CbwAllocation, USB_STOR_TAG);
+    if (DeviceExtension->CurrentIrpContext.CswAllocation)
+        ExFreePoolWithTag(DeviceExtension->CurrentIrpContext.CswAllocation, USB_STOR_TAG);
 
     // Send the IRP down the stack
     IoSkipCurrentIrpStackLocation(Irp);
