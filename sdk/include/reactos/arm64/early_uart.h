@@ -284,11 +284,14 @@ static __inline BOOLEAN
 EarlyUartQcomGeniInitialize(VOID)
 {
     UINT32 Value;
+    UINT32 FwRevision;
 
     if (EarlyUartHardwareInitialized)
         return TRUE;
 
-    if (EarlyUartQcomGeniReadProtocol() != ARM64_QCOM_GENI_SE_UART)
+    /* Trust SPCR/DBG2 for GENI UART type and only reject dead-looking firmware revisions. */
+    FwRevision = EARLY_UART_READ(ARM64_QCOM_GENI_FW_REVISION_RO);
+    if (FwRevision == 0xFFFFFFFFU || FwRevision == 0)
     {
         EarlyUartInterface = Arm64UartUnknown;
         return FALSE;
