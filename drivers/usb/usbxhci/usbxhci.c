@@ -6669,8 +6669,16 @@ XHCI_MapCompletionCodeToUsbdStatus(
     switch (CompletionCode)
     {
         case XHCI_COMPLETION_SUCCESS:
-        case XHCI_COMPLETION_SHORT_PACKET:
             return USBD_STATUS_SUCCESS;
+
+        case XHCI_COMPLETION_SHORT_PACKET:
+            if (Transfer &&
+                Transfer->TransferParameters &&
+                (Transfer->TransferParameters->TransferFlags & USBD_SHORT_TRANSFER_OK))
+            {
+                return USBD_STATUS_SUCCESS;
+            }
+            return USBD_STATUS_ERROR_SHORT_TRANSFER;
 
         case XHCI_COMPLETION_STALL_ERROR:
             return USBD_STATUS_STALL_PID;
@@ -6912,10 +6920,28 @@ XHCI_HandleTransferEvent(
     if (!XHCI_HasActiveTransfersLocked(Endpoint))
     {
         KeReleaseSpinLock(&Endpoint->Lock, OldIrql);
-        DPRINT1("usbxhci: transfer event slot=%u ep=%u has no active transfer (ptr=%I64x)\n",
-                SlotId,
-                EndpointId,
-                TrbPointer);
+
+        if (CompletionCode == XHCI_COMPLETION_SUCCESS ||
+            CompletionCode == XHCI_COMPLETION_SHORT_PACKET ||
+            CompletionCode == XHCI_COMPLETION_STOPPED ||
+            CompletionCode == XHCI_COMPLETION_STOPPED_SHORT_PACKET ||
+            CompletionCode == XHCI_COMPLETION_STOPPED_LENGTH_INVALID ||
+            CompletionCode == XHCI_COMPLETION_COMMAND_ABORTED)
+        {
+            DPRINT("usbxhci: stale transfer event slot=%u ep=%u code=%lu ptr=%I64x\n",
+                   SlotId,
+                   EndpointId,
+                   CompletionCode,
+                   TrbPointer);
+        }
+        else
+        {
+            DPRINT1("usbxhci: transfer event slot=%u ep=%u has no active transfer (code=%lu ptr=%I64x)\n",
+                    SlotId,
+                    EndpointId,
+                    CompletionCode,
+                    TrbPointer);
+        }
         return;
     }
 

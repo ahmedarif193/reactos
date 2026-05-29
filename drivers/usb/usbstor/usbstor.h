@@ -79,6 +79,7 @@ typedef struct
 } CBW, *PCBW;
 
 C_ASSERT(sizeof(CBW) == 31);
+C_ASSERT(sizeof(CBW) <= SYSTEM_CACHE_ALIGNMENT_SIZE);
 
 #define CSW_STATUS_COMMAND_PASSED 0x00
 #define CSW_STATUS_COMMAND_FAILED 0x01
@@ -92,6 +93,8 @@ typedef struct
     UCHAR Status;                                                    // CSW status
 } CSW, *PCSW;
 
+C_ASSERT(sizeof(CSW) <= SYSTEM_CACHE_ALIGNMENT_SIZE);
+
 #include <poppack.h>
 
 typedef struct
@@ -99,11 +102,10 @@ typedef struct
     PIRP Irp;
     ULONG ErrorIndex;
     ULONG StallRetryCount;                                            // the number of retries after receiving USBD_STATUS_STALL_PID status
-    union
-    {
-        CBW cbw;
-        CSW csw;
-    };
+    PCBW Cbw;
+    PCSW Csw;
+    PVOID CbwAllocation;
+    PVOID CswAllocation;
     URB Urb;
     SCSI_REQUEST_BLOCK SenseSrb;
 } IRP_CONTEXT, *PIRP_CONTEXT;
