@@ -285,13 +285,19 @@ EarlyUartQcomGeniInitialize(VOID)
 {
     UINT32 Value;
     UINT32 FwRevision;
+    UINT32 Protocol;
 
     if (EarlyUartHardwareInitialized)
         return TRUE;
 
-    /* Trust SPCR/DBG2 for GENI UART type and only reject dead-looking firmware revisions. */
     FwRevision = EARLY_UART_READ(ARM64_QCOM_GENI_FW_REVISION_RO);
-    if (FwRevision == 0xFFFFFFFFU || FwRevision == 0)
+    Protocol = (FwRevision & ARM64_QCOM_GENI_FW_REV_PROTOCOL_MASK) >>
+               ARM64_QCOM_GENI_FW_REV_PROTOCOL_SHIFT;
+
+    /* DBG2 can name a GENI serial block that is not safe for direct MMIO UART I/O. */
+    if (FwRevision == 0xFFFFFFFFU ||
+        FwRevision == 0 ||
+        Protocol != ARM64_QCOM_GENI_SE_UART)
     {
         EarlyUartInterface = Arm64UartUnknown;
         return FALSE;
