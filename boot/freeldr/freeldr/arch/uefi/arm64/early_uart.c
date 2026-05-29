@@ -141,7 +141,7 @@ EarlyUartDiagBcmProbe(_In_ UINT64 Address)
 }
 
 /* Log the GENI SE identity while UEFI Serial I/O is still available. */
-static VOID
+static BOOLEAN
 EarlyUartDiagGeniProbe(_In_ UINT64 Address)
 {
     UINT32 FwRevision = EarlyUartDiagRead32(Address + ARM64_QCOM_GENI_FW_REVISION_RO);
@@ -156,6 +156,10 @@ EarlyUartDiagGeniProbe(_In_ UINT64 Address)
     EarlyUartDiagPuts(" status=0x");
     EarlyUartDiagHex(Status, 8);
     EarlyUartDiagPuts(" (SE_UART=0x02)\n");
+
+    return FwRevision != 0xFFFFFFFFU &&
+           FwRevision != 0 &&
+           Protocol == ARM64_QCOM_GENI_SE_UART;
 }
 
 /*
@@ -584,7 +588,13 @@ EarlyUartDetectPlatform(VOID)
     if (EarlyUartInterface == Arm64UartBcm2835Mini)
         EarlyUartDiagBcmProbe(EarlyUartBaseAddress);
     else if (EarlyUartInterface == Arm64UartQcomGeni)
-        EarlyUartDiagGeniProbe(EarlyUartBaseAddress);
+    {
+        if (!EarlyUartDiagGeniProbe(EarlyUartBaseAddress))
+        {
+            EarlyUartDiagPuts("[EUART] GENI probe: disable non-UART SE\n");
+            EarlyUartInterface = Arm64UartUnknown;
+        }
+    }
 
     return EarlyUartPlatformId;
 }
