@@ -409,7 +409,7 @@ PciQueryResources(IN PPCI_PDO_EXTENSION PdoExtension,
     {
         /* Read the interrupt line for the pin, add a descriptor if it's valid */
         InterruptLine = PdoExtension->AdjustedInterruptLine;
-        if ((InterruptLine) && (InterruptLine != -1)) Count++;
+        if ((InterruptLine) && (InterruptLine != (UCHAR)-1)) Count++;
     }
 
     /* Check for PCI bridge */
@@ -495,7 +495,7 @@ PciQueryResources(IN PPCI_PDO_EXTENSION PdoExtension,
     {
          /* Read the interrupt line for the pin, check if it's valid */
          InterruptLine = PdoExtension->AdjustedInterruptLine;
-         if ((InterruptLine) && (InterruptLine != -1))
+         if ((InterruptLine) && (InterruptLine != (UCHAR)-1))
          {
              /* Make sure there's still space */
              ASSERT(Resource < LastResource);

@@ -37,3 +37,4 @@ typedef struct _REACTOS_INTERNAL_BGCONTEXT
 } REACTOS_INTERNAL_BGCONTEXT, *PREACTOS_INTERNAL_BGCONTEXT;
 
 VOID __cdecl BootMain(IN PCCH CmdLine);
+VOID StallExecutionProcessor(ULONG Microseconds);

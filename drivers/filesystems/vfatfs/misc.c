@@ -338,7 +338,7 @@ VfatDoRequest(
     PVOID Context)
 {
     PVFAT_IRP_CONTEXT IrpContext = Context;
-    PDEVICE_EXTENSION DeviceExt;
+    PDEVICE_EXTENSION DeviceExt = NULL;
     KIRQL OldIrql;
 
     InterlockedDecrement(&QueueCount);

@@ -54,7 +54,7 @@ double erf(double x)
     sign = 1;
     if (x < 0)
         sign = -1;
-    x = fabsf(x);
+    x = fabs(x);
 
     /* A & S 7.1.26 */
     t = 1.0/(1.0 + p*x);
