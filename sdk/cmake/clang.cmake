@@ -118,13 +118,24 @@ add_compile_options(-Wall -Wpointer-arith)
 # Disable some overzealous warnings
 add_compile_options(
     -Wno-unknown-warning-option
+    -Wno-unknown-pragmas
+    -Wno-ignored-pragmas
     -Wno-multichar
     -Wno-unused-const-variable
     -Wno-unused-local-typedefs
+    -Wno-unused-value
+    -Wno-unused-variable
+    -Wno-unused-function
+    -Wno-unused-private-field
     -Wno-deprecated
+    -Wno-deprecated-declarations
+    -Wno-deprecated-non-prototype
     -Wno-unused-result
     -Wno-missing-braces
     -Wno-unused-but-set-variable
+    -Wno-inconsistent-missing-override
+    -Wno-main
+    "-Wno-#pragma-messages"
     -Wno-error=implicit-function-declaration
     -Wno-error=incompatible-library-redeclaration
     -Wno-error=incompatible-pointer-types
