@@ -140,6 +140,24 @@ EarlyUartDiagBcmProbe(_In_ UINT64 Address)
     EarlyUartDiagPuts("\n");
 }
 
+/* Log the GENI SE identity while UEFI Serial I/O is still available. */
+static VOID
+EarlyUartDiagGeniProbe(_In_ UINT64 Address)
+{
+    UINT32 FwRevision = EarlyUartDiagRead32(Address + ARM64_QCOM_GENI_FW_REVISION_RO);
+    UINT32 Status     = EarlyUartDiagRead32(Address + ARM64_QCOM_GENI_STATUS);
+    UINT32 Protocol   = (FwRevision & ARM64_QCOM_GENI_FW_REV_PROTOCOL_MASK) >>
+                        ARM64_QCOM_GENI_FW_REV_PROTOCOL_SHIFT;
+
+    EarlyUartDiagPuts("[EUART] GENI probe: fw_rev=0x");
+    EarlyUartDiagHex(FwRevision, 8);
+    EarlyUartDiagPuts(" proto=0x");
+    EarlyUartDiagHex(Protocol, 2);
+    EarlyUartDiagPuts(" status=0x");
+    EarlyUartDiagHex(Status, 8);
+    EarlyUartDiagPuts(" (SE_UART=0x02)\n");
+}
+
 /*
  * SPCR table definitions for ACPI Serial Port Console Redirection.
  */
@@ -565,6 +583,8 @@ EarlyUartDetectPlatform(VOID)
 
     if (EarlyUartInterface == Arm64UartBcm2835Mini)
         EarlyUartDiagBcmProbe(EarlyUartBaseAddress);
+    else if (EarlyUartInterface == Arm64UartQcomGeni)
+        EarlyUartDiagGeniProbe(EarlyUartBaseAddress);
 
     return EarlyUartPlatformId;
 }
