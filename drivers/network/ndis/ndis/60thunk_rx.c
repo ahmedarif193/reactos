@@ -45,8 +45,8 @@ MiniIndicateReceivePacket(
  *
  *  The wrapper is allocated from Ext->RxLegacyPacketPool, with a single
  *  NDIS_BUFFER chained on that re-uses the NB's CurrentMdl directly (no
- *  copy). The original NBL pointer is stashed in Reserved[2] so the
- *  return path can find it; the Ext is stashed in Reserved[3]. The legacy
+ *  copy). The original NBL pointer is stashed in Reserved[0] so the
+ *  return path can find it; the Ext is stashed in Reserved[1]. The legacy
  *  WrapperReserved[0] starts at zero and is incremented by the existing
  *  protocol-bind logic in MiniIndicateReceivePacket.
  *
@@ -174,8 +174,8 @@ Ndis6RxBuildLegacyPacket(
     NdisChainBufferAtFront(Packet, FirstBuffer);
 
     /* Stash NBL backptr + Ext so Ndis6RxReturnLegacyPacket can find them. */
-    Packet->Reserved[2] = (ULONG_PTR)Nbl;
-    Packet->Reserved[3] = (ULONG_PTR)Ext;
+    Packet->Reserved[0] = (ULONG_PTR)Nbl;
+    Packet->Reserved[1] = (ULONG_PTR)Ext;
 
     /* B2: translate RX offload result from NBL info to legacy packet info.
      * NDIS_TCP_IP_CHECKSUM_PACKET_INFO.Receive and
@@ -256,8 +256,8 @@ Ndis6RxReturnLegacyPacket(
     if (Packet == NULL)
         return;
 
-    Nbl = (PNET_BUFFER_LIST)Packet->Reserved[2];
-    Ext = (PNDIS6_ADAPTER_EXT)Packet->Reserved[3];
+    Nbl = (PNET_BUFFER_LIST)Packet->Reserved[0];
+    Ext = (PNDIS6_ADAPTER_EXT)Packet->Reserved[1];
 
     Ndis6RxFreeLegacyPacket(Packet);
 
