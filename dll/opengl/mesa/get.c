@@ -625,7 +625,7 @@ void gl_GetBooleanv( GLcontext *ctx, GLenum pname, GLboolean *params )
 	 *params = FLOAT_TO_BOOL(ctx->Point.Size );
 	 break;
       case GL_POINT_SIZE_GRANULARITY:
-	 *params = FLOAT_TO_BOOL(POINT_SIZE_GRANULARITY );
+	 *params = FLOAT_TO_BOOL((GLfloat) POINT_SIZE_GRANULARITY );
 	 break;
       case GL_POINT_SIZE_RANGE:
 	 params[0] = FLOAT_TO_BOOL(MIN_POINT_SIZE );

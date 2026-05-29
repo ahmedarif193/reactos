@@ -101,17 +101,17 @@ WinLdrPortInitialize(
 #else
         static const ULONG TestPorts[] = {2, 1};
 #endif
-        PortAddress = UlongToPtr(BaseArray[TestPorts[0]]);
+        PortNumber = (TestPorts[0] <= MAX_COM_PORTS) ? TestPorts[0] : 1;
+        PortAddress = UlongToPtr(BaseArray[PortNumber]);
         if (CpDoesPortExist(PortAddress))
         {
-            PortNumber = TestPorts[0];
         }
         else
         {
-            PortAddress = UlongToPtr(BaseArray[TestPorts[1]]);
+            PortNumber = TestPorts[1];
+            PortAddress = UlongToPtr(BaseArray[PortNumber]);
             if (!CpDoesPortExist(PortAddress))
                 return FALSE;
-            PortNumber = TestPorts[1];
         }
     }
 

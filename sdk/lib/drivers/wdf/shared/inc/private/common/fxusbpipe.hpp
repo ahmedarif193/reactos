@@ -650,9 +650,10 @@ public:
             WdfUsbPipeTypeBulk,                 // UsbdPipeTypeBulk
             WdfUsbPipeTypeInterrupt,            // UsbdPipeTypeInterrupt
         };
+        ULONG index = (ULONG) UsbdPipeType;
 
-        if (UsbdPipeType < sizeof(types)/sizeof(types[0])) {
-            return types[UsbdPipeType];
+        if (index < sizeof(types)/sizeof(types[0])) {
+            return types[index];
         }
         else {
             return WdfUsbPipeTypeInvalid;

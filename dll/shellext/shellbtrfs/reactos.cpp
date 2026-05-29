@@ -158,7 +158,7 @@ FILE_INFORMATION_CLASS ConvertToFileInfo[MaximumFileInfoByHandleClass] =
 {
     FileBasicInformation, FileStandardInformation, FileNameInformation, FileRenameInformation,
     FileDispositionInformation, FileAllocationInformation, FileEndOfFileInformation, FileStreamInformation,
-    FileCompressionInformation, FileAttributeTagInformation, FileIdBothDirectoryInformation, (FILE_INFORMATION_CLASS)-1,
+    FileCompressionInformation, FileAttributeTagInformation, FileIdBothDirectoryInformation, FileMaximumInformation,
     FileIoPriorityHintInformation, FileRemoteProtocolInformation
 };
 
@@ -193,7 +193,7 @@ SetFileInformationByHandle(HANDLE hFile,
     }
 
     /* If wrong, bail out */
-    if (FileInfoClass == -1)
+    if (FileInfoClass == FileMaximumInformation)
     {
         SetLastError(ERROR_INVALID_PARAMETER);
         return FALSE;

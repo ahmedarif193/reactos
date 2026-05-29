@@ -1571,6 +1571,10 @@ InstallBootManagerAndBootEntriesWorker(
             return Status;
         }
     }
+    else
+    {
+        return STATUS_NOT_SUPPORTED;
+    }
 
     return Status;
 }

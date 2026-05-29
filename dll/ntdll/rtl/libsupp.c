@@ -330,7 +330,7 @@ RtlWalkFrameChain(OUT PVOID *Callers,
             /* FIXME: Check that EIP is inside a loaded module */
 
             /* Save this frame */
-            Callers[i] = (PVOID)Eip;
+            Callers[i] = (PVOID)(ULONG_PTR)Eip;
 
             /* Check if we should continue */
             if (StopSearch)

@@ -19,10 +19,10 @@
 #else
 // FIXME: BE
 #define GETVAL(x) \
-    (sizeof(x) == 1) ? (x) : \
-    (sizeof(x) == 2) ? (((PCHAR)&(x))[0] + (((PCHAR)&(x))[1] << 8)) : \
-    (((PCHAR)&(x))[0] + (((PCHAR)&(x))[1] << 8) + (((PCHAR)&(x))[2] << 16) + \
-     (((PCHAR)&(x))[3] << 24))
+    ((sizeof(x) == 1) ? (x) : \
+    (sizeof(x) == 2) ? (((PUCHAR)&(x))[0] + (((PUCHAR)&(x))[1] << 8)) : \
+    (((PUCHAR)&(x))[0] + (((PUCHAR)&(x))[1] << 8) + (((PUCHAR)&(x))[2] << 16) + \
+     (((PUCHAR)&(x))[3] << 24)))
 
 #endif
 

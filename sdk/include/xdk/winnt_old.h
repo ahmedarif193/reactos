@@ -4818,7 +4818,11 @@ DbgRaiseAssertionFailure(VOID)
 #elif defined(_M_ARM)
 #define YieldProcessor __yield
 #elif defined(_M_ARM64)
+#if defined(__clang__) || defined(__GNUC__)
+#define YieldProcessor() __asm__ __volatile__("yield")
+#else
 #define YieldProcessor __yield
+#endif
 #else
 #error Unknown architecture
 #endif

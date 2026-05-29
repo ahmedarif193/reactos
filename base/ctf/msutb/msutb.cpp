@@ -1506,6 +1506,8 @@ class CTipbarWnd
     friend LONG MyWaitForInputIdle(DWORD dwThreadId, DWORD dwMilliseconds);
 
 public:
+    using CUIFWindow::OnSetFocus;
+
     CTipbarWnd(DWORD style);
     ~CTipbarWnd() override;
 
