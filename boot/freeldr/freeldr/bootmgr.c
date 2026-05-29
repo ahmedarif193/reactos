@@ -455,7 +455,8 @@ VOID RunLoader(VOID)
         /* Show the operating system list menu */
         if (!UiDisplayMenu("Please select the operating system to start:",
                            /* The string is 80 characters long; don't make it longer! */
-                           MAIN_BOOT_MENU_KEY_HINT,
+                           "Press F8 for troubleshooting and advanced startup options."
+                           "     F2: FreeLdr SETUP",
                            OperatingSystemDisplayNames,
                            OperatingSystemCount,
                            SelectedOperatingSystem,

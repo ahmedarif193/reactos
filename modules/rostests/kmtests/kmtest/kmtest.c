@@ -241,6 +241,7 @@ OutputResult(
     /* A console window can't handle a single
      * huge block of data, so split it up */
     const DWORD BlockSize = 8 * 1024;
+    CHAR DebugBlock[8 * 1024 + 1];
 
     KmtFinishTest(TestName);
 
@@ -250,6 +251,9 @@ OutputResult(
         DWORD Length = min(LogBufferLength - Offset, BlockSize);
         if (!WriteFile(GetStdHandle(STD_OUTPUT_HANDLE), ResultBuffer->LogBuffer + Offset, Length, &BytesWritten, NULL))
             error(Error);
+        RtlCopyMemory(DebugBlock, ResultBuffer->LogBuffer + Offset, Length);
+        DebugBlock[Length] = ANSI_NULL;
+        OutputDebugStringA(DebugBlock);
     }
 
     return Error;

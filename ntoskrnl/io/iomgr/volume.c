@@ -1286,7 +1286,8 @@ IoVolumeDeviceToDosName(
     KEVENT Event;
     PIRP Irp;
     PFILE_OBJECT FileObject;
-    PDEVICE_OBJECT DeviceObject;
+    PDEVICE_OBJECT DeviceObject, MountDevDeviceObject, TargetDeviceObject, LowerDeviceObject;
+    PVPB Vpb;
     IO_STATUS_BLOCK IoStatusBlock;
     UNICODE_STRING MountMgrDevice;
     MOUNTMGR_VOLUME_PATHS VolumePath;
@@ -1305,24 +1306,59 @@ IoVolumeDeviceToDosName(
 
     PAGED_CODE();
 
-    /* First, retrieve the corresponding device name */
+    /* First, retrieve the corresponding device name. */
+    MountDevDeviceObject = VolumeDeviceObject;
+    ObReferenceObject(MountDevDeviceObject);
+
+    for (;;)
+    {
+        Vpb = MountDevDeviceObject->Vpb;
+        if (!Vpb)
+        {
+            Vpb = IoGetDevObjExtension(MountDevDeviceObject)->Vpb;
+        }
+        if (Vpb)
+            break;
+
+        LowerDeviceObject = IoGetLowerDeviceObject(MountDevDeviceObject);
+        if (!LowerDeviceObject)
+        {
+            ObDereferenceObject(MountDevDeviceObject);
+            return STATUS_INVALID_PARAMETER;
+        }
+
+        ObDereferenceObject(MountDevDeviceObject);
+        MountDevDeviceObject = LowerDeviceObject;
+    }
+
+    if (!Vpb->RealDevice)
+    {
+        ObDereferenceObject(MountDevDeviceObject);
+        return STATUS_INVALID_PARAMETER;
+    }
+
+    TargetDeviceObject = IoGetAttachedDeviceReference(Vpb->RealDevice);
+    ObDereferenceObject(MountDevDeviceObject);
+
     KeInitializeEvent(&Event, NotificationEvent, FALSE);
     Irp = IoBuildDeviceIoControlRequest(IOCTL_MOUNTDEV_QUERY_DEVICE_NAME,
-                                        VolumeDeviceObject,
+                                        TargetDeviceObject,
                                         NULL, 0,
                                         &DeviceName, sizeof(DeviceName),
                                         FALSE, &Event, &IoStatusBlock);
     if (!Irp)
     {
+        ObDereferenceObject(TargetDeviceObject);
         return STATUS_INSUFFICIENT_RESOURCES;
     }
 
-    Status = IoCallDriver(VolumeDeviceObject, Irp);
+    Status = IoCallDriver(TargetDeviceObject, Irp);
     if (Status == STATUS_PENDING)
     {
         KeWaitForSingleObject(&Event, Executive, KernelMode, FALSE, NULL);
         Status = IoStatusBlock.Status;
     }
+    ObDereferenceObject(TargetDeviceObject);
     if (!NT_SUCCESS(Status))
     {
         return Status;

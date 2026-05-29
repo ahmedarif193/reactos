@@ -12,6 +12,11 @@
 #include <freeldr.h>
 #include <debug.h> // For DbgParseDebugChannels()
 
+#ifdef UEFIBOOT
+VOID
+UefiBootToFirmware(VOID);
+#endif
+
 /* GLOBALS ********************************************************************/
 
 typedef enum _FREELDR_SETUP_ACTION

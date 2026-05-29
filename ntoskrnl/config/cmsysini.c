@@ -366,6 +366,8 @@ CmpInitHiveFromFile(IN PCUNICODE_STRING HiveName,
                                NULL,
                                HiveName,
                                CheckFlags);
+    DPRINT1("CmpInitHiveFromFile: '%wZ' op=%lu Status=0x%08lx NewHive=%p\n",
+            HiveName, Operation, Status, NewHive);
     if (!NT_SUCCESS(Status))
     {
         /* Fail */
@@ -1352,7 +1354,12 @@ CmpLoadHiveThread(IN PVOID StartContext)
              * We failed, or could not get a log file (unless
              * the hive is shared), raise a hard error.
              */
+            DPRINT1("CmpLoadHiveThread: HARD ERROR i=%lu file='%wZ' Status=0x%08lx CmHive=%p Log=%p Share=%lu &FileName=%p &EP=%p\n",
+                    i, &FileName, Status, CmHive, CmHive ? CmHive->FileHandles[HFILE_TYPE_LOG] : NULL,
+                    CmpShareSystemHives, &FileName, &ErrorParameters);
             ErrorParameters = &FileName;
+            DPRINT1("CmpLoadHiveThread: ErrorParameters=%p (&FileName), passing addr-of-EP=%p as Params\n",
+                    ErrorParameters, &ErrorParameters);
             NtRaiseHardError(STATUS_CANNOT_LOAD_REGISTRY_FILE,
                              1,
                              1,
@@ -1385,7 +1392,11 @@ CmpLoadHiveThread(IN PVOID StartContext)
             if (!NT_SUCCESS(Status) || !AlternateHandle)
             {
                 /* Couldn't open the hive or its alternate file, raise a hard error */
+                DPRINT1("CmpLoadHiveThread: HARD ERROR (alt) i=%lu file='%wZ' Status=0x%08lx Alt=%p &FileName=%p &EP=%p\n",
+                        i, &FileName, Status, AlternateHandle, &FileName, &ErrorParameters);
                 ErrorParameters = &FileName;
+                DPRINT1("CmpLoadHiveThread: (alt) ErrorParameters=%p (=&FileName), passing addr-of-EP=%p\n",
+                        ErrorParameters, &ErrorParameters);
                 NtRaiseHardError(STATUS_CANNOT_LOAD_REGISTRY_FILE,
                                  1,
                                  1,

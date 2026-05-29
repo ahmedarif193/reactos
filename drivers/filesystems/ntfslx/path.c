@@ -1,21 +1,7 @@
 /*
- * NTFS pathname traversal helpers for the staged ReactOS-compatible port.
- *
- * Integration note:
- * This file is intentionally self-contained and does not depend on any FCB,
- * CCB, or directory-enumeration implementation.  The traversal routine only
- * requires a narrow callback that can resolve one normalized path component
- * from the current node and return the next node.  IRP_MJ_CREATE glue can
- * adapt the real directory lookup logic to that contract later without
- * changing the path-walking code below.
- *
- * Normalization assumptions:
- * - paths are native NT paths, not Win32/DOS paths;
- * - backslash is the only separator handled here;
- * - repeated separators are collapsed;
- * - leading separators are ignored so traversal starts at the filesystem root;
- * - trailing separators are ignored unless the path is exactly root;
- * - dot segments are preserved for the callback layer to interpret.
+ * PROJECT:     ReactOS ntfslx driver
+ * LICENSE:     GPL-2.0-or-later
+ * PURPOSE:     Native NT path component traversal
  */
 
 #include "ntfslx.h"

@@ -1,5 +1,5 @@
 /*
- * PROJECT:     ReactOS NTFS Linux-Port Skeleton
+ * PROJECT:     ReactOS ntfslx driver
  * LICENSE:     GPL-2.0-or-later
  * PURPOSE:     Volume information queries
  */

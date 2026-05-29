@@ -1,7 +1,7 @@
 /*
- * PROJECT:     ReactOS NTFS Linux-Port Skeleton
+ * PROJECT:     ReactOS ntfslx driver
  * LICENSE:     GPL-2.0-or-later
- * PURPOSE:     NT-compatible filesystem driver shell for staged NTFS porting
+ * PURPOSE:     Driver entry and dispatch table setup
  */
 
 #include "ntfslx.h"
@@ -48,13 +48,22 @@ DriverEntry(
     DeviceExtension->Kind = NtfslxDeviceKindControl;
     DeviceExtension->DeviceObject = DeviceObject;
 
-    Status = ExInitializeResourceLite(&DeviceExtension->Resource);
+    /*
+     * Even on the control device, the Resource is a sentinel that the
+     * lifecycle code can rely on always being valid. The control device
+     * never gets a Vpb / volume-info, so VolumeResource here is exclusively
+     * used to keep the device alive across IoControl handlers; no shared
+     * acquires happen against it. See fsctl.c for the volume-side
+     * initialization.
+     */
+    Status = ExInitializeResourceLite(&DeviceExtension->VolumeResource);
     if (!NT_SUCCESS(Status))
     {
         NTFSDBG("ExInitializeResourceLite failed with status %lx\n", Status);
         IoDeleteDevice(DeviceObject);
         return Status;
     }
+    DeviceExtension->VolumeResourceInitialized = TRUE;
 
     NtfslxGlobalData.DriverObject = DriverObject;
     NtfslxGlobalData.ControlDeviceObject = DeviceObject;

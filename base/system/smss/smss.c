@@ -227,8 +227,8 @@ SmpExecuteCommand(IN PUNICODE_STRING CommandLine,
     if (!NT_SUCCESS(Status))
     {
         /* Fail if we couldn't do that */
-        DPRINT1("SMSS: SmpParseCommandLine( %wZ ) failed - Status == %lx\n",
-                CommandLine, Status);
+        DPRINT1("SMSS: SmpParseCommandLine( %wZ ) failed - Status == %lx Flags=0x%08lx\n",
+                CommandLine, Status, Flags);
         return Status;
     }
 
@@ -319,8 +319,8 @@ SmpExecuteInitialCommand(IN ULONG MuSessionId,
     /* And fail if any other reason is also true */
     if (!NT_SUCCESS(Status))
     {
-        DPRINT1("SMSS: SmpParseCommandLine( %wZ ) failed - Status == %lx\n",
-                InitialCommand, Status);
+        DPRINT1("SMSS: SmpParseCommandLine( %wZ ) failed - Status == %lx Flags=0x%08lx\n",
+                InitialCommand, Status, Flags);
         return Status;
     }
 

@@ -12,6 +12,18 @@
 #include <debug.h>
 
 /*
+ * Obsolete-MFT-runlist parking entry. The MFT-extend publisher allocates
+ * one per superseded DevExt->MftRunlist buffer; the drainer
+ * (NtfslxDrainObsoleteMftRunlists) runs at dismount/shutdown when no
+ * lock-free reader can still hold the parked pointer.
+ */
+typedef struct _NTFSLX_OBSOLETE_RUNLIST_ENTRY
+{
+    LIST_ENTRY ListEntry;
+    PNTFSLX_RUNLIST_ELEMENT Runlist;
+} NTFSLX_OBSOLETE_RUNLIST_ENTRY, *PNTFSLX_OBSOLETE_RUNLIST_ENTRY;
+
+/*
  * NtfslxRunlistVcnToLcnLocal - translate VCN to LCN via runlist
  *
  * Duplicated locally to avoid cross-module static linkage issues.
@@ -153,6 +165,7 @@ NtfslxWriteMftMirrorRecord(
 
 NTSTATUS
 NtfslxWriteMftRecord(
+    _In_opt_ PNTFSLX_DEVICE_EXTENSION DevExt,
     _In_ PDEVICE_OBJECT StorageDevice,
     _In_ PNTFSLX_VOLUME_INFO VolumeInfo,
     _In_ PNTFSLX_RUNLIST_ELEMENT MftRunlist,
@@ -217,6 +230,7 @@ NtfslxWriteMftRecord(
     NtfslxPostWriteMstFixup(&RecordCopy->Ntfs);
 
     ExFreePoolWithTag(RecordCopy, NTFSLX_TAG);
+
     return Status;
 }
 
@@ -632,7 +646,8 @@ NtfslxExtendMftRunlist(
     ULONG I;
     LONGLONG LastVcn = 0;
     LONGLONG HintLcn = 0;
-    UCHAR MpBuf[256];
+    PUCHAR MpBuf = NULL;
+    LONG MpBufSize = 0;
     ULONG MpLen = 0;
     ULONG MpOffset;
     ULONG NewAttrLen;
@@ -726,11 +741,33 @@ NtfslxExtendMftRunlist(
     Merged[OutIdx].Length = 0;
     MergedCount = OutIdx;
 
+    /*
+     * Size the mapping-pairs buffer from the merged runlist instead of using
+     * a fixed stack buffer. A fragmented MFT can easily produce a runlist
+     * whose encoded form exceeds 256 bytes — the previous stack buffer would
+     * either overflow or get truncated, corrupting the MFT $DATA mapping.
+     */
+    MpBufSize = NtfslxGetSizeForMappingPairs(0, Merged, MergedCount, 0, LastVcn);
+    if (MpBufSize <= 0)
+    {
+        NTFSDBG("ntfslx: ExtendMft: GetSizeForMappingPairs failed merged=%lu lastVcn=%I64d\n",
+                 MergedCount, LastVcn);
+        Status = STATUS_FILE_CORRUPT_ERROR;
+        goto Cleanup;
+    }
+
+    MpBuf = ExAllocatePoolWithTag(NonPagedPool, (SIZE_T)MpBufSize, NTFSLX_TAG);
+    if (MpBuf == NULL)
+    {
+        Status = STATUS_INSUFFICIENT_RESOURCES;
+        goto Cleanup;
+    }
+
     /* Encode new mapping pairs. */
-    RtlZeroMemory(MpBuf, sizeof(MpBuf));
+    RtlZeroMemory(MpBuf, (SIZE_T)MpBufSize);
     Status = NtfslxMappingPairsBuild(
         /* ClusterSizeBits */ 0,
-        MpBuf, (LONG)sizeof(MpBuf),
+        MpBuf, MpBufSize,
         Merged, MergedCount,
         0, LastVcn, NULL);
     if (!NT_SUCCESS(Status))
@@ -742,7 +779,7 @@ NtfslxExtendMftRunlist(
 
     /* Compute mapping pairs length (including terminator). */
     MpLen = 1;
-    while (MpLen < sizeof(MpBuf) && MpBuf[MpLen - 1] != 0)
+    while (MpLen < (ULONG)MpBufSize && MpBuf[MpLen - 1] != 0)
         MpLen++;
     NTFSDBG("ntfslx: ExtendMft: new mapping pairs len=%lu runs=%lu lastVcn=%I64d\n",
              MpLen, MergedCount, LastVcn);
@@ -770,16 +807,58 @@ NtfslxExtendMftRunlist(
     DataAttr->Data.NonResident.InitializedSize = NewAllocatedBytes;
     DataAttr->Data.NonResident.HighestVcn = LastVcn - 1;
 
-    /* Replace DeviceExtension->MftRunlist with the new merged runlist so
+    /*
+     * Replace DeviceExtension->MftRunlist with the new merged runlist so
      * subsequent reads/writes can reach the extended range. The caller
-     * will NtfslxWriteMftRecord the mutated MftRecord below. */
+     * will NtfslxWriteMftRecord the mutated MftRecord below.
+     *
+     * T0.4: lock-free readers across the codebase still dereference
+     * DevExt->MftRunlist without acquiring any lock that the writer here
+     * (running under MftAllocLock) could block. Freeing the old buffer
+     * inline is therefore a use-after-free; instead, park it on
+     * DevExt->ObsoleteMftRunlists for bulk reclamation at dismount /
+     * shutdown when no IRP can hold a stale pointer. The header struct
+     * is allocated separately and chained via LIST_ENTRY; the runlist
+     * payload is the same buffer that was previously DevExt->MftRunlist
+     * and is freed verbatim by the drainer.
+     */
     {
         PNTFSLX_RUNLIST_ELEMENT OldDevRunlist = DevExt->MftRunlist;
+
         DevExt->MftRunlist = Merged;
         DevExt->MftRunlistCount = MergedCount;
         Merged = NULL; /* ownership transferred */
-        if (OldDevRunlist != NULL)
+
+        if (OldDevRunlist != NULL && DevExt->ObsoleteMftRunlistsInitialized)
         {
+            PNTFSLX_OBSOLETE_RUNLIST_ENTRY ObsoleteEntry;
+
+            ObsoleteEntry = ExAllocatePoolWithTag(NonPagedPool,
+                                                   sizeof(*ObsoleteEntry),
+                                                   NTFSLX_TAG);
+            if (ObsoleteEntry != NULL)
+            {
+                KIRQL OldIrql;
+
+                ObsoleteEntry->Runlist = OldDevRunlist;
+                KeAcquireSpinLock(&DevExt->ObsoleteMftRunlistsLock, &OldIrql);
+                InsertTailList(&DevExt->ObsoleteMftRunlists,
+                               &ObsoleteEntry->ListEntry);
+                KeReleaseSpinLock(&DevExt->ObsoleteMftRunlistsLock, OldIrql);
+            }
+            /*
+             * If the small parking-header allocation failed we cannot park
+             * the old runlist - leak it into the volume DevExt's lifetime
+             * rather than risk a UAF by freeing it inline. Pool tagged
+             * with NTFSLX_TAG so the leak is identifiable.
+             */
+        }
+        else if (OldDevRunlist != NULL)
+        {
+            /*
+             * Parking list not initialized (test path or pre-mount). Safe
+             * to free inline because no lock-free readers exist yet.
+             */
             ExFreePoolWithTag(OldDevRunlist, NTFSLX_TAG);
         }
     }
@@ -795,11 +874,14 @@ Cleanup:
         ExFreePoolWithTag(NewRuns, NTFSLX_TAG);
     if (Merged != NULL)
         ExFreePoolWithTag(Merged, NTFSLX_TAG);
+    if (MpBuf != NULL)
+        ExFreePoolWithTag(MpBuf, NTFSLX_TAG);
     return Status;
 }
 
 NTSTATUS
 NtfslxAllocateMftRecord(
+    _In_opt_ PNTFSLX_DEVICE_EXTENSION DevExt,
     _In_ PDEVICE_OBJECT StorageDevice,
     _In_ PNTFSLX_VOLUME_INFO VolumeInfo,
     _In_ PNTFSLX_RUNLIST_ELEMENT MftRunlist,
@@ -995,13 +1077,26 @@ NtfslxAllocateMftRecord(
         return Status;
     }
 
+    /*
+     * Append a redo record to $LogFile *before* the bitmap write
+     * lands on disk, so a crash between the journal and the bitmap
+     * I/O can be replayed from the log on next mount. Phase-1
+     * journaling is best-effort — failure here is non-fatal because
+     * Phase-1 has no recovery driver yet, but it keeps the records
+     * durable for Phase 2.
+     */
+    if (DevExt != NULL)
+    {
+        (VOID)NtfslxJournalAppendMftBitmapBit(DevExt, RecordNumber, TRUE);
+    }
+
     /* Write bitmap back */
     if (BitmapAttr->NonResident == 0)
     {
         /* Write back via the resident attribute in the MFT record */
         RtlCopyMemory((PUCHAR)BitmapAttr + BitmapAttr->Data.Resident.ValueOffset,
                       BitmapData, BitmapLength);
-        Status = NtfslxWriteMftRecord(StorageDevice, VolumeInfo, MftRunlist,
+        Status = NtfslxWriteMftRecord(DevExt, StorageDevice, VolumeInfo, MftRunlist,
                                       NTFSLX_FILE_MFT, MftRecord);
     }
     else
@@ -1091,7 +1186,7 @@ NtfslxAllocateMftRecord(
     UsaPos = (PUSHORT)((PUCHAR)NewRecord + NewRecord->Ntfs.UsaOffset);
     *UsaPos = 1;
 
-    Status = NtfslxWriteMftRecord(StorageDevice, VolumeInfo, MftRunlist,
+    Status = NtfslxWriteMftRecord(DevExt, StorageDevice, VolumeInfo, MftRunlist,
                                   RecordNumber, NewRecord);
     ExFreePoolWithTag(NewRecord, NTFSLX_TAG);
 
@@ -1125,7 +1220,8 @@ NtfslxAllocateMftRecordEx(
     PNTFSLX_MFT_RECORD MftRecord;
     ULONG RecordSize = DevExt->VolumeInfo.BytesPerFileRecord;
 
-    Status = NtfslxAllocateMftRecord(DevExt->StorageDevice,
+    Status = NtfslxAllocateMftRecord(DevExt,
+                                     DevExt->StorageDevice,
                                      &DevExt->VolumeInfo,
                                      DevExt->MftRunlist,
                                      DevExt->MftRunlistCount,
@@ -1173,7 +1269,8 @@ NtfslxAllocateMftRecordEx(
 
     if (MetadataDirty)
     {
-        Status = NtfslxWriteMftRecord(DevExt->StorageDevice,
+        Status = NtfslxWriteMftRecord(DevExt,
+                                      DevExt->StorageDevice,
                                       &DevExt->VolumeInfo,
                                       DevExt->MftRunlist,
                                       NTFSLX_FILE_MFT, MftRecord);
@@ -1185,7 +1282,8 @@ NtfslxAllocateMftRecordEx(
             return Status;
         }
 
-        Status = NtfslxAllocateMftRecord(DevExt->StorageDevice,
+        Status = NtfslxAllocateMftRecord(DevExt,
+                                         DevExt->StorageDevice,
                                          &DevExt->VolumeInfo,
                                          DevExt->MftRunlist,
                                          DevExt->MftRunlistCount,
@@ -1241,7 +1339,8 @@ NtfslxAllocateMftRecordEx(
         return Status;
     }
 
-    Status = NtfslxWriteMftRecord(DevExt->StorageDevice,
+    Status = NtfslxWriteMftRecord(DevExt,
+                                  DevExt->StorageDevice,
                                   &DevExt->VolumeInfo,
                                   DevExt->MftRunlist,
                                   NTFSLX_FILE_MFT, MftRecord);
@@ -1255,7 +1354,8 @@ NtfslxAllocateMftRecordEx(
     }
 
     /* Retry the allocation against the extended $MFT. */
-    Status = NtfslxAllocateMftRecord(DevExt->StorageDevice,
+    Status = NtfslxAllocateMftRecord(DevExt,
+                                     DevExt->StorageDevice,
                                      &DevExt->VolumeInfo,
                                      DevExt->MftRunlist,
                                      DevExt->MftRunlistCount,
@@ -1267,6 +1367,7 @@ NtfslxAllocateMftRecordEx(
 
 NTSTATUS
 NtfslxFreeMftRecord(
+    _In_opt_ PNTFSLX_DEVICE_EXTENSION DevExt,
     _In_ PDEVICE_OBJECT StorageDevice,
     _In_ PNTFSLX_VOLUME_INFO VolumeInfo,
     _In_ PNTFSLX_RUNLIST_ELEMENT MftRunlist,
@@ -1307,7 +1408,7 @@ NtfslxFreeMftRecord(
         Record->SequenceNumber = 1;
     }
 
-    Status = NtfslxWriteMftRecord(StorageDevice, VolumeInfo, MftRunlist,
+    Status = NtfslxWriteMftRecord(DevExt, StorageDevice, VolumeInfo, MftRunlist,
                                   RecordNumber, Record);
     ExFreePoolWithTag(Record, NTFSLX_TAG);
     if (!NT_SUCCESS(Status))
@@ -1385,6 +1486,16 @@ NtfslxFreeMftRecord(
         }
     }
 
+    /*
+     * Journal the clear-bit before mutating the in-memory copy and
+     * writing it back. See the analogous append in
+     * NtfslxAllocateMftRecord for rationale.
+     */
+    if (DevExt != NULL)
+    {
+        (VOID)NtfslxJournalAppendMftBitmapBit(DevExt, RecordNumber, FALSE);
+    }
+
     /* Clear the bit */
     NtfslxBitmapSetBitsInRun(BitmapData, BitmapLength, RecordNumber, 1, 0);
 
@@ -1393,7 +1504,7 @@ NtfslxFreeMftRecord(
     {
         RtlCopyMemory((PUCHAR)BitmapAttr + BitmapAttr->Data.Resident.ValueOffset,
                       BitmapData, BitmapLength);
-        Status = NtfslxWriteMftRecord(StorageDevice, VolumeInfo, MftRunlist,
+        Status = NtfslxWriteMftRecord(DevExt, StorageDevice, VolumeInfo, MftRunlist,
                                       NTFSLX_FILE_MFT, MftBaseRecord);
     }
     else
@@ -1409,4 +1520,52 @@ NtfslxFreeMftRecord(
     ExFreePoolWithTag(MftBaseRecord, NTFSLX_TAG);
 
     return Status;
+}
+
+/*
+ * Drain DevExt->ObsoleteMftRunlists, freeing every parked old MFT runlist.
+ * Detach the list under the spin lock, then walk and free outside it - the
+ * payload free does pool work and we don't want it under DISPATCH_LEVEL.
+ * Idempotent and safe to call when the list was never initialized.
+ */
+VOID
+NtfslxDrainObsoleteMftRunlists(
+    _Inout_ PNTFSLX_DEVICE_EXTENSION DevExt)
+{
+    LIST_ENTRY DrainList;
+    KIRQL OldIrql;
+
+    if (DevExt == NULL || !DevExt->ObsoleteMftRunlistsInitialized)
+    {
+        return;
+    }
+
+    InitializeListHead(&DrainList);
+
+    KeAcquireSpinLock(&DevExt->ObsoleteMftRunlistsLock, &OldIrql);
+    if (!IsListEmpty(&DevExt->ObsoleteMftRunlists))
+    {
+        PLIST_ENTRY Head = &DevExt->ObsoleteMftRunlists;
+        PLIST_ENTRY First = Head->Flink;
+        PLIST_ENTRY Last = Head->Blink;
+        First->Blink = &DrainList;
+        Last->Flink = &DrainList;
+        DrainList.Flink = First;
+        DrainList.Blink = Last;
+        InitializeListHead(Head);
+    }
+    KeReleaseSpinLock(&DevExt->ObsoleteMftRunlistsLock, OldIrql);
+
+    while (!IsListEmpty(&DrainList))
+    {
+        PLIST_ENTRY Entry = RemoveHeadList(&DrainList);
+        PNTFSLX_OBSOLETE_RUNLIST_ENTRY ObsoleteEntry =
+            CONTAINING_RECORD(Entry, NTFSLX_OBSOLETE_RUNLIST_ENTRY, ListEntry);
+
+        if (ObsoleteEntry->Runlist != NULL)
+        {
+            ExFreePoolWithTag(ObsoleteEntry->Runlist, NTFSLX_TAG);
+        }
+        ExFreePoolWithTag(ObsoleteEntry, NTFSLX_TAG);
+    }
 }

@@ -169,10 +169,9 @@ BOOLEAN TryNoRaise(PKSPIN_LOCK SpinLock, PCHECK_DATA CheckData) {
     PKTHREAD Thread = KeGetCurrentThread();                                         \
     (VOID)Thread;                                                                   \
     /* NT 5.x i386 UP kernels (incl. checked) don't write to *SpinLock from         \
-     * KeAcquireSpinLock; only Vista+ added that. Treat the NT 5.x checked          \
-     * case the same as UP free for the purposes of these assertions. */            \
+     * KeAcquireSpinLock; other checked kernels do. */                              \
     if (KmtIsMultiProcessorBuild ||                                                 \
-        (KmtIsCheckedBuild && GetNTVersion() >= _WIN32_WINNT_VISTA))                \
+        (KmtIsCheckedBuild && !KmtIsNt5I386()))                                     \
     {                                                                               \
         ok_eq_bool(Ret, (Value) == 0);                                              \
         if (SpinLock)                                                               \
@@ -201,9 +200,9 @@ BOOLEAN TryNoRaise(PKSPIN_LOCK SpinLock, PCHECK_DATA CheckData) {
 
 #define CheckSpinLockQueueHandle(SpinLock, CheckData, Value) do                     \
 {                                                                                   \
-    /* See CheckSpinLockLock; same NT 5.x UP/checked exception. */                  \
+    /* See CheckSpinLockLock; same NT 5.x i386 UP/checked exception. */             \
     if (KmtIsMultiProcessorBuild ||                                                 \
-        (KmtIsCheckedBuild && GetNTVersion() >= _WIN32_WINNT_VISTA))                \
+        (KmtIsCheckedBuild && !KmtIsNt5I386()))                                     \
     {                                                                               \
         ok_eq_bool(Ret, (Value) == 0);                                              \
         if (SpinLock)                                                               \

@@ -39,6 +39,8 @@ GENERIC_MAPPING ExpDesktopMapping =
 
 PKWIN32_SESSION_CALLOUT ExpWindowStationObjectParse = NULL;
 PKWIN32_SESSION_CALLOUT ExpWindowStationObjectDelete = NULL;
+PKWIN32_SESSION_CALLOUT ExpWindowStationObjectOpen = NULL;
+PKWIN32_SESSION_CALLOUT ExpWindowStationObjectClose = NULL;
 PKWIN32_SESSION_CALLOUT ExpWindowStationObjectOkToClose = NULL;
 PKWIN32_SESSION_CALLOUT ExpDesktopObjectOkToClose = NULL;
 PKWIN32_SESSION_CALLOUT ExpDesktopObjectDelete = NULL;
@@ -150,6 +152,54 @@ ExpWindowStationOkToClose( IN PEPROCESS Process OPTIONAL,
                                     &Parameters);
 
     return NT_SUCCESS(Status);
+}
+
+NTSTATUS
+NTAPI
+ExpWindowStationOpen(IN OB_OPEN_REASON Reason,
+                     IN PEPROCESS Process OPTIONAL,
+                     IN PVOID ObjectBody,
+                     IN ACCESS_MASK GrantedAccess,
+                     IN ULONG HandleCount)
+{
+    WIN32_OPENMETHOD_PARAMETERS Parameters;
+
+    if (!ExpWindowStationObjectOpen)
+        return STATUS_SUCCESS;
+
+    Parameters.OpenReason = Reason;
+    Parameters.Process = Process;
+    Parameters.Object = ObjectBody;
+    Parameters.GrantedAccess = GrantedAccess;
+    Parameters.HandleCount = HandleCount;
+
+    return ExpWin32SessionCallout(ObjectBody,
+                                  ExpWindowStationObjectOpen,
+                                  &Parameters);
+}
+
+VOID
+NTAPI
+ExpWindowStationClose(IN PEPROCESS Process OPTIONAL,
+                      IN PVOID Object,
+                      IN ACCESS_MASK GrantedAccess,
+                      IN ULONG ProcessHandleCount,
+                      IN ULONG SystemHandleCount)
+{
+    WIN32_CLOSEMETHOD_PARAMETERS Parameters;
+
+    if (!ExpWindowStationObjectClose)
+        return;
+
+    Parameters.Process = Process;
+    Parameters.Object = Object;
+    Parameters.AccessMask = GrantedAccess;
+    Parameters.ProcessHandleCount = ProcessHandleCount;
+    Parameters.SystemHandleCount = SystemHandleCount;
+
+    ExpWin32SessionCallout(Object,
+                           ExpWindowStationObjectClose,
+                           &Parameters);
 }
 
 VOID
@@ -271,8 +321,11 @@ ExpWin32kInit(VOID)
     ObjectTypeInitializer.PoolType = NonPagedPool;
     ObjectTypeInitializer.DeleteProcedure = ExpWinStaObjectDelete;
     ObjectTypeInitializer.ParseProcedure = ExpWinStaObjectParse;
+    ObjectTypeInitializer.OpenProcedure = ExpWindowStationOpen;
+    ObjectTypeInitializer.CloseProcedure = ExpWindowStationClose;
     ObjectTypeInitializer.OkayToCloseProcedure = ExpWindowStationOkToClose;
     ObjectTypeInitializer.SecurityRequired = TRUE;
+    ObjectTypeInitializer.MaintainHandleCount = TRUE;
     ObjectTypeInitializer.InvalidAttributes = OBJ_OPENLINK |
                                               OBJ_PERMANENT |
                                               OBJ_EXCLUSIVE;

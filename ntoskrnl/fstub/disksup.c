@@ -533,6 +533,7 @@ HalpSetMountLetter(
     /* Setup the DosDevice name */
     swprintf(Buffer, L"\\DosDevices\\%c:", DriveLetter);
     RtlInitUnicodeString(&DosDevice, Buffer);
+    DPRINT1("fstub: requesting %c: for %wZ\n", DriveLetter, DeviceName);
 
     /* Allocate the input buffer for the MountMgr */
     InputBufferLength = DosDevice.Length + DeviceName->Length + sizeof(MOUNTMGR_CREATE_POINT_INPUT);
@@ -592,6 +593,11 @@ HalpSetMountLetter(
                               NULL);
         Status = IoStatusBlock.Status;
     }
+
+    DPRINT1("fstub: MountMgr create point %c: -> %wZ Status=0x%08lx\n",
+            DriveLetter,
+            DeviceName,
+            Status);
 
     ObDereferenceObject(FileObject);
     ExFreePoolWithTag(InputBuffer, TAG_FSTUB);

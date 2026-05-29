@@ -12,8 +12,9 @@
 
 static
 POBJECT_TYPE
-GetObjectType(
-    IN PCWSTR TypeName)
+GetObjectType_(
+    IN PCWSTR TypeName,
+    IN BOOLEAN Optional)
 {
     NTSTATUS Status;
     UNICODE_STRING Name;
@@ -24,6 +25,11 @@ GetObjectType(
     RtlInitUnicodeString(&Name, TypeName);
     InitializeObjectAttributes(&ObjectAttributes, &Name, OBJ_CASE_INSENSITIVE | OBJ_KERNEL_HANDLE, NULL, NULL);
     Status = ObOpenObjectByName(&ObjectAttributes, NULL, KernelMode, NULL, 0, NULL, &Handle);
+    if (Optional && Status == STATUS_OBJECT_NAME_NOT_FOUND)
+    {
+        skip(FALSE, "Object type %ls is not present\n", TypeName);
+        return NULL;
+    }
     ok_eq_hex(Status, STATUS_SUCCESS);
     ok(Handle != NULL, "ObjectTypeHandle = NULL\n");
     if (!skip(Status == STATUS_SUCCESS && Handle, "No handle\n"))
@@ -36,6 +42,8 @@ GetObjectType(
     }
     return ObjectType;
 }
+
+#define GetObjectType(TypeName) GetObjectType_(TypeName, FALSE)
 
 #define ok_eq_ustr(value, expected) ok(RtlEqualUnicodeString(value, expected, FALSE), #value " = \"%wZ\", expected \"%%wZ\"\n", value, expected)
 
@@ -54,10 +62,14 @@ GetObjectType(
     BOOLEAN MaintainHandleCount = ((Flags) & OBT_MAINTAIN_HANDLE_COUNT) != 0;       \
     POOL_TYPE PoolType = ((Flags) & OBT_PAGED_POOL) ? PagedPool : NonPagedPool;     \
     BOOLEAN CustomKey = ((Flags) & OBT_CUSTOM_KEY) != 0;                            \
+    BOOLEAN AcceptWin2003PortInvalidAttributes =                                    \
+        ((Flags) & OBT_ACCEPT_WIN2003_PORT_INVALID_ATTRIBUTES) != 0;                \
+    BOOLEAN Optional = ((Flags) & OBT_OPTIONAL) != 0;                               \
                                                                                     \
     trace(#TypeName "\n");                                                          \
-    ObjectType = GetObjectType(L"\\ObjectTypes\\" L ## #TypeName);                  \
-    ok(ObjectType != NULL, "ObjectType = NULL\n");                                  \
+    ObjectType = GetObjectType_(L"\\ObjectTypes\\" L ## #TypeName, Optional);       \
+    if (!Optional)                                                                  \
+        ok(ObjectType != NULL, "ObjectType = NULL\n");                              \
     if (!skip(ObjectType != NULL, "No ObjectType\n"))                               \
     {                                                                               \
         ok(!Variable || Variable == ObjectType,                                     \
@@ -84,7 +96,13 @@ GetObjectType(
         ok_eq_ulong(ObjectType->TypeInfo.Length, sizeof(OBJECT_TYPE_INITIALIZER));  \
         ok_eq_bool(ObjectType->TypeInfo.UseDefaultObject, UseDefault);              \
         ok_eq_bool(ObjectType->TypeInfo.CaseInsensitive, CaseInsensitive);          \
-        ok_eq_hex(ObjectType->TypeInfo.InvalidAttributes, InvalidAttr);             \
+        if (AcceptWin2003PortInvalidAttributes)                                     \
+            ok(ObjectType->TypeInfo.InvalidAttributes == 0x7b2 ||                   \
+               ObjectType->TypeInfo.InvalidAttributes == 0xfb2,                     \
+               "ObjectType->TypeInfo.InvalidAttributes = 0x%lx, expected 0x7b2 or 0xfb2\n", \
+               ObjectType->TypeInfo.InvalidAttributes);                             \
+        else                                                                        \
+            ok_eq_hex(ObjectType->TypeInfo.InvalidAttributes, InvalidAttr);         \
         ok_eq_hex(ObjectType->TypeInfo.GenericMapping.GenericRead, ReadMapping);    \
         ok_eq_hex(ObjectType->TypeInfo.GenericMapping.GenericWrite, WriteMapping);  \
         ok_eq_hex(ObjectType->TypeInfo.GenericMapping.GenericExecute, ExecMapping); \
@@ -146,6 +164,8 @@ static OB_SECURITY_METHOD SeDefaultObjectMethod;
 #define OBT_MAINTAIN_HANDLE_COUNT   0x20
 #define OBT_PAGED_POOL              0x40
 #define OBT_CUSTOM_KEY              0x80
+#define OBT_ACCEPT_WIN2003_PORT_INVALID_ATTRIBUTES 0x100
+#define OBT_OPTIONAL                0x200
 
 #define TAG(x) RtlUlongByteSwap(x)
 
@@ -216,9 +236,11 @@ TestWin2003ObjectTypes(VOID)
     CheckObjectType(Key, CmpKeyObjectType,                      OBT_CUSTOM_SECURITY_PROC | OBT_SECURITY_REQUIRED | OBT_PAGED_POOL,
                                                                                                             0x030,  0x020019, 0x020006, 0x020019, 0x0f003f, 0x1f003f);
     // 0x7b2 is used for Server 2003 SP2 RTM, it seems it was changed to 0xfb2 in some patch level.
-    CheckObjectType(Port, LpcPortObjectType,                    OBT_PAGED_POOL,                             0xfb2,  0x020001, 0x010001, 0x000000, 0x1f0001, 0x1f0001);
+    CheckObjectType(Port, LpcPortObjectType,                    OBT_PAGED_POOL | OBT_ACCEPT_WIN2003_PORT_INVALID_ATTRIBUTES,
+                                                                                                            0xfb2,  0x020001, 0x010001, 0x000000, 0x1f0001, 0x1f0001);
     // 0x7b2 is used for Server 2003 SP2 RTM, it seems it was changed to 0xfb2 in some patch level.
-    CheckObjectType(WaitablePort, LpcWaitablePortObjectType,    OBT_NO_DEFAULT,                             0xfb2,  0x020001, 0x010001, 0x000000, 0x1f0001, 0x1f0001);
+    CheckObjectType(WaitablePort, LpcWaitablePortObjectType,    OBT_NO_DEFAULT | OBT_ACCEPT_WIN2003_PORT_INVALID_ATTRIBUTES,
+                                                                                                            0xfb2,  0x020001, 0x010001, 0x000000, 0x1f0001, 0x1f0001);
     CheckObjectType(Adapter, IoAdapterObjectType,               0,                                          0x100,  0x120089, 0x120116, 0x1200a0, 0x1f01ff, 0x1f01ff);
     CheckObjectType(Controller, IoControllerObjectType,         0,                                          0x100,  0x120089, 0x120116, 0x1200a0, 0x1f01ff, 0x1f01ff);
     CheckObjectType(Device, IoDeviceObjectType,                 OBT_CUSTOM_SECURITY_PROC | OBT_CASE_INSENSITIVE,
@@ -229,8 +251,9 @@ TestWin2003ObjectTypes(VOID)
                                                                                                             0x130,  0x120089, 0x120116, 0x1200a0, 0x1f01ff, 0x1f01ff);
     CheckObjectType(WmiGuid, WmipGuidObjectType,                OBT_NO_DEFAULT | OBT_CUSTOM_SECURITY_PROC | OBT_SECURITY_REQUIRED,
                                                                                                             0x100,  0x000001, 0x000002, 0x000010, 0x120fff, 0x1f0fff);
-    CheckObjectType(FilterConnectionPort, NULL,                 OBT_NO_DEFAULT | OBT_SECURITY_REQUIRED,     0x100,  0x020001, 0x010001, 0x000000, 0x1f0001, 0x1f0001);
-    CheckObjectType(FilterCommunicationPort, NULL,              OBT_NO_DEFAULT,                             0x100,  0x020001, 0x010001, 0x000000, 0x1f0001, 0x1f0001);
+    CheckObjectType(FilterConnectionPort, NULL,                 OBT_NO_DEFAULT | OBT_SECURITY_REQUIRED | OBT_OPTIONAL,
+                                                                                                            0x100,  0x020001, 0x010001, 0x000000, 0x1f0001, 0x1f0001);
+    CheckObjectType(FilterCommunicationPort, NULL,              OBT_NO_DEFAULT | OBT_OPTIONAL,              0x100,  0x020001, 0x010001, 0x000000, 0x1f0001, 0x1f0001);
 
     // exported but not created
     ok_eq_pointer(IoDeviceHandlerObjectType, NULL);

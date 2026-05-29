@@ -1059,7 +1059,12 @@ const DEVVTBL NtfsFuncTable =
     NtfsOpen,
     NtfsRead,
     NtfsSeek,
-    L"ntfs",
+    /* This is the kernel-mode service name freeldr passes to the kernel as
+     * the BOOT FILE SYSTEM, so that the matching driver gets pre-loaded as
+     * a boot driver and is available before \SystemRoot is mounted. We've
+     * retired the legacy "Ntfs" service in favour of "NtfsLx" (see
+     * boot/bootdata/hivesys.inf), so point freeldr at NtfsLx here. */
+    L"NtfsLx",
 };
 
 const DEVVTBL* NtfsMount(ULONG DeviceId)

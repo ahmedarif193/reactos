@@ -1,6 +1,6 @@
 /*
  * PROJECT:     FreeLoader UEFI Support
- * LICENSE:     GPL-2.0-or-later (https://spdx.org/licenses/GPL-2.0-or-later)
+ * LICENSE:     MIT (https://spdx.org/licenses/MIT)
  * PURPOSE:     Request firmware setup menu on next boot
  * COPYRIGHT:   Copyright 2026 Ahmed Arif <arif.img@outlook.com>
  */

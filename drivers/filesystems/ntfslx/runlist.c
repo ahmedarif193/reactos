@@ -293,6 +293,117 @@ NtfslxMappingPairsBuild(
 }
 
 /*
+ * NtfslxRunlistVcnToLcnHinted - O(log n) VCN -> LCN translation (R4)
+ *
+ * Returns the LCN that holds the given VCN, NTFSLX_LCN_HOLE if the VCN
+ * lands in a sparse run, NTFSLX_LCN_RL_NOT_MAPPED if past the runlist
+ * tail, or NTFSLX_LCN_ENOENT if before the first run.
+ *
+ * The runlist is terminator-marked (Length == 0 sentinel) and sorted by
+ * VCN with non-overlapping runs (NtfslxMappingPairsDecompress maintains
+ * that invariant). HintIndex is an opaque per-FCB hint cell: the caller
+ * starts it at 0 for cold reads and the helper updates it on success.
+ * Sequential reads through one extent stay O(1); a cross-extent step is
+ * still bounded by a couple of forward checks before the hint is
+ * abandoned for a binary search.
+ *
+ * If HintIndex is NULL, behaves like a stateless O(log n) lookup.
+ */
+LONGLONG
+NtfslxRunlistVcnToLcnHinted(
+    _In_ PNTFSLX_RUNLIST_ELEMENT Runlist,
+    _In_ LONGLONG Vcn,
+    _Inout_opt_ PULONG HintIndex)
+{
+    ULONG Lo;
+    ULONG Hi;
+    ULONG Count;
+    ULONG Index;
+
+    if (Runlist == NULL)
+    {
+        return NTFSLX_LCN_RL_NOT_MAPPED;
+    }
+    if (Vcn < Runlist[0].Vcn)
+    {
+        return NTFSLX_LCN_ENOENT;
+    }
+
+    /*
+     * Count the runlist length first so the hint can be bounds-checked.
+     * This is cheap (dozens of extents typical) and also gives us Count
+     * for the binary search below. N1: without the bound, a stale or
+     * never-initialized hint cell would read past the runlist tail.
+     */
+    Count = 0;
+    while (Runlist[Count].Length != 0)
+    {
+        ++Count;
+    }
+
+    /* Try the per-FCB hint first: same extent, or the immediate next. */
+    if (HintIndex != NULL && *HintIndex < Count)
+    {
+        Index = *HintIndex;
+        if (Vcn >= Runlist[Index].Vcn &&
+            Vcn < Runlist[Index].Vcn + Runlist[Index].Length)
+        {
+            goto resolve;
+        }
+        if (Index + 1 < Count &&
+            Vcn >= Runlist[Index + 1].Vcn &&
+            Vcn < Runlist[Index + 1].Vcn + Runlist[Index + 1].Length)
+        {
+            Index = Index + 1;
+            goto resolve;
+        }
+    }
+    else if (HintIndex != NULL)
+    {
+        /* Stale or never-initialized hint — clamp so the next call sees
+         * a valid cell, and fall through to the binary search. */
+        *HintIndex = 0;
+    }
+    if (Count == 0)
+    {
+        return Runlist[0].Lcn;
+    }
+
+    Lo = 0;
+    Hi = Count;
+    while (Lo + 1 < Hi)
+    {
+        ULONG Mid = Lo + (Hi - Lo) / 2;
+        if (Vcn < Runlist[Mid].Vcn)
+        {
+            Hi = Mid;
+        }
+        else
+        {
+            Lo = Mid;
+        }
+    }
+    Index = Lo;
+
+    if (Vcn >= Runlist[Index].Vcn + Runlist[Index].Length)
+    {
+        /* Past the addressable extent — fall to the terminator's Lcn. */
+        return Runlist[Count].Lcn;
+    }
+
+resolve:
+    if (HintIndex != NULL)
+    {
+        *HintIndex = Index;
+    }
+    if (Runlist[Index].Lcn >= 0)
+    {
+        return Runlist[Index].Lcn + (Vcn - Runlist[Index].Vcn);
+    }
+    return Runlist[Index].Lcn;
+}
+
+/*
  * NtfslxRunlistIsSparse - check if any run is a hole
  */
 BOOLEAN

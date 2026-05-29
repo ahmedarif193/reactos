@@ -143,12 +143,9 @@ static void TestVolumeInfo(void)
                                VolumeName, _countof(VolumeName),
                                &Serial, &MaxComp, &Flags,
                                FsName, _countof(FsName));
+    ok(Ok, "GetVolumeInformationW failed (error %lu)\n", GetLastError());
     if (!Ok)
-    {
-        skip(TRUE, "GetVolumeInformationW failed (error %lu) -- D: not mounted by ntfslx?\n",
-             GetLastError());
         return;
-    }
 
     ok(wcscmp(FsName, L"NTFS") == 0,
        "Expected fs name 'NTFS', got '%ls'\n", FsName);
@@ -1297,6 +1294,22 @@ static void RunKernelPhases(void)
         "NtfslxFuncStressA",
         "NtfslxFuncStressB",
         "NtfslxFuncStressC",
+        /*
+         * Bug-class regression cases. Run after the bulk stress so we
+         * hit them with a populated $MFT and a primed cache, which is
+         * the realistic state at which Bug #1 originally surfaced.
+         *
+         *   - NtfslxFuncReadLargeOffset: writes a >= 1 MiB pattern,
+         *     reads it back via buffered, FILE_NO_INTERMEDIATE_BUFFERING
+         *     and bulk-read paths, asserts every probed offset (incl.
+         *     0x60028 = the historical SOFTWARE-hive failure point).
+         *   - NtfslxFuncMountIsNonDestructive: issues IOCTL_NTFSLX_TIER0_PROOF
+         *     before and after a deliberate write, asserts the latch
+         *     state transitions correctly. Catches a regression of the
+         *     mount-non-destructive fix in metadata.c.
+        */
+        "NtfslxFuncReadLargeOffset",
+        "NtfslxFuncMountIsNonDestructive",
     };
     DWORD Error;
     UINT i;
@@ -1320,6 +1333,28 @@ static void RunKernelPhases(void)
 
 START_TEST(NtfslxFunc)
 {
+    WCHAR VolumeName[64];
+    WCHAR FsName[32];
+    DWORD Serial, MaxComp, Flags;
+    ULARGE_INTEGER FreeBytesAvailable;
+    ULARGE_INTEGER TotalBytes;
+    ULARGE_INTEGER TotalFreeBytes;
+
+    if (!GetVolumeInformationW(L"D:\\",
+                               VolumeName, _countof(VolumeName),
+                               &Serial, &MaxComp, &Flags,
+                               FsName, _countof(FsName)) ||
+        wcscmp(FsName, L"NTFS") != 0 ||
+        !GetDiskFreeSpaceExW(L"D:\\",
+                             &FreeBytesAvailable,
+                             &TotalBytes,
+                             &TotalFreeBytes) ||
+        TotalFreeBytes.QuadPart == 0)
+    {
+        skip(FALSE, "NtfslxFunc requires writable NTFS on D:\\\n");
+        return;
+    }
+
     TestVolumeInfo();
     TestFreeSpace();
     TestDirListing();

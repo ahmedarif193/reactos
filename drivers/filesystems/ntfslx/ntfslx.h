@@ -10,9 +10,13 @@
 #define NTFSLX_DEVICE_NAME L"\\NtfsLx"
 #define NTFSLX_DEFAULT_UPCASE_LENGTH 0x10000
 
-#ifndef NTFSLX_ENABLE_DEBUG_TRACES
-#define NTFSLX_ENABLE_DEBUG_TRACES 1
-#endif
+/* Force-disable verbose ntfslx traces. The per-IO / per-path-component
+ * NTFSDBG spew was drowning out the boot. Mount lifecycle, latch, and
+ * error-path messages still log via DPRINT1 directly (see ntfslx.c,
+ * fsctl.c, logfile.c). Re-enable temporarily by flipping the #define
+ * to 1 below when investigating ntfslx-internal behaviour. */
+#undef NTFSLX_ENABLE_DEBUG_TRACES
+#define NTFSLX_ENABLE_DEBUG_TRACES 0
 
 #if NTFSLX_ENABLE_DEBUG_TRACES
 #define NTFSDBG(fmt, ...) DPRINT1(fmt, ##__VA_ARGS__)
@@ -53,6 +57,50 @@
 #define IOCTL_NTFSLX_TIER0_PROOF \
     CTL_CODE(FILE_DEVICE_DISK_FILE_SYSTEM, 0x801, METHOD_BUFFERED, FILE_ANY_ACCESS)
 
+/*
+ * IOCTL_NTFSLX_TC1_MFTLOCK_REENTRANCY - regression test for the
+ * APC-blocking-mutex / sync-IRP deadlock that would re-appear if
+ * NtfslxWriteDisk reverted to IoBuildSynchronousFsdRequest. The driver
+ * acquires DevExt->MftAllocLock (KGUARDED_MUTEX after T1.5.2; the exact
+ * primitive that allocator code briefly takes), then calls
+ * NtfslxWriteDisk to rewrite the boot sector with the same bytes it
+ * just read (idempotent). The test runs on a dedicated worker thread
+ * and signals an event when it finishes; the IOCTL caller waits on
+ * that event with a 10 s timeout, so a deadlock is reported as
+ * TestCompleted=FALSE rather than hanging the kmtest run forever.
+ */
+#define IOCTL_NTFSLX_TC1_MFTLOCK_REENTRANCY \
+    CTL_CODE(FILE_DEVICE_DISK_FILE_SYSTEM, 0x802, METHOD_BUFFERED, FILE_ANY_ACCESS)
+
+/* Compatibility query. The private MFT-record cache was removed; callers
+ * receive a zeroed v1 structure with RecordSize populated.
+ */
+#define IOCTL_NTFSLX_MFT_CACHE_STATS \
+    CTL_CODE(FILE_DEVICE_DISK_FILE_SYSTEM, 0x803, METHOD_BUFFERED, FILE_ANY_ACCESS)
+
+typedef struct _NTFSLX_MFT_CACHE_STATS
+{
+    ULONG     Version;                /* 1 */
+    ULONG     Capacity;               /* records the cache can hold */
+    ULONG     RecordSize;             /* BytesPerFileRecord */
+    ULONG     Reserved;
+    ULONGLONG Hits;
+    ULONGLONG Misses;
+} NTFSLX_MFT_CACHE_STATS, *PNTFSLX_MFT_CACHE_STATS;
+
+/* Compatibility query. The private file-body cache was removed; callers
+ * receive a zeroed v1 structure.
+ */
+#define IOCTL_NTFSLX_FILEBODY_STATS \
+    CTL_CODE(FILE_DEVICE_DISK_FILE_SYSTEM, 0x804, METHOD_BUFFERED, FILE_ANY_ACCESS)
+
+typedef struct _NTFSLX_FILEBODY_STATS
+{
+    ULONG Version;
+    ULONG PagingIoDiskIrpCount;
+    ULONG Reserved[4];
+} NTFSLX_FILEBODY_STATS, *PNTFSLX_FILEBODY_STATS;
+
 #define NTFSLX_SELFTEST_BUFFER_SIZE (32 * 1024 * 1024)
 
 typedef struct _NTFSLX_SELFTEST_RESULT
@@ -76,6 +124,30 @@ typedef struct _NTFSLX_TIER0_PROOF
     ULONGLONG BootLcn;
     ULONGLONG MftMirrLcn;
 } NTFSLX_TIER0_PROOF, *PNTFSLX_TIER0_PROOF;
+
+/*
+ * Result of IOCTL_NTFSLX_TC1_MFTLOCK_REENTRANCY.
+ *
+ *   - TestCompleted: TRUE if the worker thread finished the lock-acquire,
+ *                    write-disk, lock-release sequence within the watchdog
+ *                    window. FALSE means we timed out waiting and the most
+ *                    likely cause is a regression of the FAST_MUTEX/sync-IRP
+ *                    deadlock.
+ *   - WriteStatus:   NTSTATUS returned by NtfslxWriteDisk. Only meaningful
+ *                    when TestCompleted is TRUE.
+ *   - ElapsedMs:     Wallclock milliseconds the test took. 0 on timeout.
+ *
+ * The watchdog window is 10 s - much longer than a real one-sector write
+ * needs (~tens of ms), but short enough that a deadlocked test still fails
+ * within the kmtest budget.
+ */
+typedef struct _NTFSLX_TC1_REENTRANCY_RESULT
+{
+    ULONG    Version;             /* 1 */
+    ULONG    TestCompleted;       /* BOOLEAN-like */
+    NTSTATUS WriteStatus;
+    ULONG    ElapsedMs;
+} NTFSLX_TC1_REENTRANCY_RESULT, *PNTFSLX_TC1_REENTRANCY_RESULT;
 
 #define NTFSLX_RECORD_MAGIC_FILE 0x454C4946UL
 #define NTFSLX_RECORD_MAGIC_INDX 0x58444E49UL
@@ -279,17 +351,73 @@ typedef struct _NTFSLX_DEVICE_EXTENSION
     PDEVICE_OBJECT DeviceObject;
     PDEVICE_OBJECT StorageDevice;
     PVPB Vpb;
-    ERESOURCE Resource;
+    /*
+     * Volume-wide ERESOURCE. Acquired exclusive for mount, dismount, and
+     * any operation that mutates the volume's metadata layout
+     * (file/directory create or delete, $MFT or $MFTMirr extension,
+     * volume-level $LogFile reset). Acquired shared by readers that need
+     * a stable snapshot of mount-level state — runlist references,
+     * volume-info queries, IoCheckShareAccess walks of the per-volume
+     * ShareList. ERESOURCE supports recursion and shared/exclusive
+     * semantics; FAST_MUTEX cannot, which is why this is the lock at the
+     * top of the order. Initialized in NtfslxMountVolume and torn down
+     * by the dismount path.
+     */
+    ERESOURCE VolumeResource;
+    BOOLEAN VolumeResourceInitialized;
+    UCHAR VolumeResourceReserved[3];
     NTFSLX_VOLUME_INFO VolumeInfo;
     PUSHORT UpcaseTable;
     ULONG UpcaseTableLength;
     PNTFSLX_RUNLIST_ELEMENT MftRunlist;
     ULONG MftRunlistCount;
     /*
+     * RCU-style obsolete-runlist parking for NtfslxExtendMftRunlist.
+     * MFT extension publishes a freshly merged runlist into MftRunlist and
+     * cannot immediately free the old one because lock-free readers may
+     * still hold it (T0.4). Old buffers are pushed onto ObsoleteMftRunlists
+     * under ObsoleteMftRunlistsLock and freed in bulk at dismount, after
+     * all opens have drained. The list head is empty until the first
+     * extension; the list grows by at most one entry per MFT extension and
+     * is freed in a single dismount pass.
+     *
+     * Each entry is allocated as PNTFSLX_OBSOLETE_RUNLIST (LIST_ENTRY
+     * header followed by the actual runlist payload).
+     */
+    KSPIN_LOCK ObsoleteMftRunlistsLock;
+    LIST_ENTRY ObsoleteMftRunlists;
+    BOOLEAN ObsoleteMftRunlistsInitialized;
+    UCHAR ObsoleteMftRunlistsReserved[3];
+    /*
+     * Serializes MFT-record allocation. The bitmap allocator does a
+     * read/modify/write against $MFT::$BITMAP; without this, parallel
+     * hive LOG/ALT creates can hand the same record number to different
+     * files and later fail share-access checks against the aliased MFT
+     * slot. KGUARDED_MUTEX (not FAST_MUTEX) so the alloc-lock guards
+     * exactly the bitmap scan + reserve sequence; the disk write of
+     * the new MFT record happens OUTSIDE this lock — see filecreate.c
+     * for the hold-window discipline. Sibling of ClusterAllocLock; only
+     * one of the two should be held by a single thread at a time.
+     */
+    KGUARDED_MUTEX MftAllocLock;
+    BOOLEAN MftAllocLockInitialized;
+    UCHAR MftAllocLockReserved[3];
+    /*
+     * Serializes cluster (data-area LCN) allocation. Same scoping
+     * discipline as MftAllocLock: held only across the $Bitmap scan
+     * and reserve. The clusters' actual disk writes (zeroing or
+     * payload) happen OUTSIDE the lock so they can issue async IRPs
+     * safely. Sibling of MftAllocLock; never hold both at once.
+     */
+    KGUARDED_MUTEX ClusterAllocLock;
+    BOOLEAN ClusterAllocLockInitialized;
+    UCHAR ClusterAllocLockReserved[3];
+    /*
      * FsRtl directory-change notification package state. NotifySync is a
      * notify-package opaque handle; NotifyList holds subscribed watchers
      * posted via IRP_MN_NOTIFY_CHANGE_DIRECTORY. Both are initialized on
      * mount and consulted whenever a file is created/modified/deleted.
+     * Lowest in the lock-order; safe to acquire under any other lock.
      */
     PNOTIFY_SYNC NotifySync;
     LIST_ENTRY NotifyList;
@@ -308,6 +436,80 @@ typedef struct _NTFSLX_DEVICE_EXTENSION
      */
     FAST_MUTEX ShareMutex;
     BOOLEAN ShareInitialized;
+    /*
+     * Phase-1 journal state. JournalNextOffset is the byte offset within
+     * $LogFile where the next redo record will be appended; it advances
+     * monotonically as records land. JournalNextLsn is the LSN to stamp
+     * on the next record. JournalEnabled gates the whole subsystem so
+     * mount can fall back to "no journaling, original behaviour" if the
+     * synthetic restart-page stamp fails. Serialized by JournalLock,
+     * which is acquired UNDER MftAllocLock / ClusterAllocLock — never
+     * above them. The bitmap-RMW paths journal the intent (LSN +
+     * payload) inside the alloc-lock window so a crash between the
+     * journal write and the bitmap write can be replayed. The
+     * synchronous IO under JournalLock must therefore stay APC-safe;
+     * NtfslxJournalWriteAtOffset uses NtfslxWriteDisk, which is
+     * APC-safe (custom-completion KEVENT). See fcb.c level-5 for the
+     * canonical statement of the order, and
+     * docs/ntfs-specs/13_ntfslx_phase1_redo_records.txt for record
+     * format.
+     *
+     * JournalLogRunlist is a cached decode of $LogFile's $DATA mapping
+     * pairs, captured at mount; it is used for byte-offset->LCN
+     * translation during record append. JournalLogFileSize is the
+     * usable byte count of $LogFile (data-area only; restart-page
+     * pair occupies the first 2*PageSize bytes).
+     */
+    KGUARDED_MUTEX JournalLock;
+    BOOLEAN JournalLockInitialized;
+    BOOLEAN JournalEnabled;
+    /*
+     * Volume-wide exclusion state for FSCTL_LOCK_VOLUME / FSCTL_DISMOUNT_VOLUME.
+     * VolumeLockOwner: when non-NULL, points to the FILE_OBJECT whose handle
+     *   issued FSCTL_LOCK_VOLUME. While set, IRP_MJ_CREATE on the volume
+     *   device must reject any open whose FileObject != VolumeLockOwner with
+     *   STATUS_ACCESS_DENIED. Cleared by FSCTL_UNLOCK_VOLUME or by Cleanup
+     *   of the lock-owning FileObject.
+     * DismountPending: set by FSCTL_DISMOUNT_VOLUME. While set, every
+     *   IRP_MJ_CREATE on the volume must fail with STATUS_VOLUME_DISMOUNTED
+     *   regardless of locking. Cleared on a fresh mount.
+     * Both fields are guarded by VolumeResource (acquired exclusive on
+     *   transition, shared for read in the create path).
+     */
+    PFILE_OBJECT VolumeLockOwner;
+    BOOLEAN DismountPending;
+    UCHAR VolumeStateReserved[1];
+    ULONGLONG JournalNextOffset;
+    ULONGLONG JournalNextLsn;
+    ULONG JournalTransactionId;
+    ULONG JournalDataAreaLength;     /* bytes available for records after RSTR */
+    PNTFSLX_RUNLIST_ELEMENT JournalLogRunlist;
+    ULONG JournalLogRunCount;
+    ULONGLONG JournalLogFileSize;
+    /*
+     * Phase-1 journal batch buffer. Records are first copied here under
+     * JournalLock and flushed lazily to $LogFile via NtfslxWriteDisk
+     * when the buffer crosses the watermark or on explicit flush points
+     * (FSCTL_FLUSH_BUFFERS, IRP_MJ_SHUTDOWN, FSCTL_DISMOUNT_VOLUME, and
+     * NtfslxJournalTeardown). Without batching, every cluster
+     * free / MFT bit clear / index-block update issued a synchronous
+     * IO; that pushed delete p99 from ~6 ms to ~63 ms in TC.4.
+     * Batching restores p99 because a typical operation's record
+     * (16-32 bytes) is a memcpy + counter bump while the lock is held.
+     *
+     * JournalBatchBuffer points into NonPagedPool, sized JournalBatchSize
+     * (allocated only when journaling is actually enabled, freed on
+     * teardown). JournalBatchUsed is bytes consumed since the last
+     * flush; JournalNextLsn advances on append (records get a final
+     * LSN at copy time); JournalNextOffset advances on flush (records
+     * land on disk in append order). The pending window between
+     * "appended to buffer" and "landed on disk" is the crash window
+     * Phase-2 recovery has to tolerate; with the watermark set to half
+     * the buffer this is bounded to ~32 KiB of records.
+     */
+    PUCHAR JournalBatchBuffer;
+    ULONG JournalBatchSize;
+    ULONG JournalBatchUsed;
 } NTFSLX_DEVICE_EXTENSION, *PNTFSLX_DEVICE_EXTENSION;
 
 /*
@@ -346,10 +548,39 @@ typedef struct _NTFSLX_FILE_CONTEXT
      * instance.
      */
     SECTION_OBJECT_POINTERS SectionObjectPointers;
+    /*
+     * MainResource: per-FCB ERESOURCE. Acquired exclusive when this
+     * file's metadata is being mutated (resize, attribute add/remove,
+     * cleanup-time delete). Acquired shared by readers that need a
+     * coherent view of the FCB. Wired into FcbHeader.Resource so the
+     * cache manager / FsRtl fast-I/O paths see the same lock that the
+     * dispatch handlers use.
+     *
+     * PagingIoResource: per-FCB ERESOURCE for paging I/O specifically.
+     * Held by Cc / Mm during section flushes and lazy-writer page
+     * outs. Wired into FcbHeader.PagingIoResource. Always sub-ordinate
+     * to MainResource — if a path needs both, MainResource is acquired
+     * first.
+     *
+     * See drivers/filesystems/ntfslx/fcb.c for the full lock-order
+     * documentation.
+     */
     ERESOURCE MainResource;
     ERESOURCE PagingIoResource;
     BOOLEAN MainResourceInitialized;
     BOOLEAN PagingIoResourceInitialized;
+    /*
+     * Per-FCB share-access lock. Wraps every IoCheckShareAccess /
+     * IoSetShareAccess / IoUpdateShareAccess / IoRemoveShareAccess
+     * pair so two opens of the same file cannot race on the
+     * SHARE_ACCESS state machine. FAST_MUTEX (raises to APC_LEVEL,
+     * acceptable for IoCheckShareAccess) and recursion-free; never
+     * acquired with another lock held above it (see fcb.c order).
+     * No teardown needed: FAST_MUTEX has no destructor.
+     */
+    FAST_MUTEX ShareMutex;
+    BOOLEAN ShareMutexInitialized;
+    UCHAR ShareMutexReserved[2];
     ULONG Signature;
     PNTFSLX_DEVICE_EXTENSION DeviceExtension;
     ULONGLONG MftIndex;
@@ -397,6 +628,17 @@ typedef struct _NTFSLX_FILE_CONTEXT
      * never set (volume opens, root opens).
      */
     ULONGLONG ParentMftIndex;
+    /*
+     * R4: per-FCB last-resolved runlist hint. Sequential VBO->LCN lookups
+     * cost O(extents) without it; with the hint, a step that stays inside
+     * the previously-resolved extent is O(1), and a step that crosses to
+     * the next extent is bounded by a short forward walk before it falls
+     * back to binary search. Updated lazily by NtfslxRunlistVcnToLcnHinted;
+     * no lock needed because a stale hint just causes a fallback. Zeroed
+     * by RtlZeroMemory in NtfslxAllocateFileContext.
+     */
+    ULONG LastResolvedRunIndex;
+    UCHAR LastResolvedReserved[4];
 } NTFSLX_FILE_CONTEXT, *PNTFSLX_FILE_CONTEXT;
 
 typedef struct _NTFSLX_CCB
@@ -621,20 +863,6 @@ NtfslxTraversePath(
     _Out_opt_ PULONG ComponentCount);
 
 NTSTATUS
-NtfslxEnumerateDirectoryRoot(
-    _In_reads_bytes_(RootLength) const VOID *IndexRoot,
-    _In_ ULONG RootLength,
-    _In_ PNTFSLX_DIR_ENUM_CALLBACK Callback,
-    _In_opt_ PVOID Context);
-
-NTSTATUS
-NtfslxEnumerateDirectoryFromMftRecord(
-    _In_ const VOID *DirectoryMftRecord,
-    _In_ ULONG DirectoryRecordLength,
-    _In_ PNTFSLX_DIR_ENUM_CALLBACK Callback,
-    _In_opt_ PVOID Context);
-
-NTSTATUS
 NtfslxBuildIndexAllocationRunlist(
     _In_ PNTFSLX_ATTR_RECORD IndexAllocationAttribute,
     _Outptr_ PNTFSLX_RUNLIST_ELEMENT *Runlist,
@@ -666,20 +894,31 @@ NtfslxEnumerateIndexAllocationTree(
     _In_ PNTFSLX_DIR_ENUM_CALLBACK Callback,
     _In_opt_ PVOID Context);
 
+/*
+ * O(log N) directory-name lookup. See indexalloc.c for the descent
+ * semantics. Returns STATUS_OBJECT_NAME_NOT_FOUND if the name is not
+ * present, STATUS_SUCCESS with *FoundReference set on a hit.
+ *
+ * DeviceExtension and ParentMftIndex are used by the R5 directory
+ * index-block cache; both may be NULL/0 to disable cache use (then
+ * every descent step issues a fresh disk IRP, matching pre-R5 behaviour).
+ */
 NTSTATUS
-NtfslxCopyDirectoryEntryToBothInformation(
-    _In_ const NTFSLX_DIR_ENTRY *Entry,
-    _Inout_updates_bytes_(BufferLength) PFILE_BOTH_DIR_INFORMATION Buffer,
-    _In_ ULONG BufferLength,
-    _Out_ PULONG NextOffset);
-
-NTSTATUS
-NtfslxQueryDirectoryEnumerateFromMftRecord(
-    _In_ const VOID *DirectoryMftRecord,
-    _In_ ULONG DirectoryRecordLength,
-    _In_ const struct _NTFSLX_QUERY_DIRECTORY_REQUEST *Request,
-    _Out_opt_ PULONG BytesWritten,
-    _Out_opt_ PULONG NextIndex);
+NtfslxIndexLookupName(
+    _In_reads_bytes_(IndexRootLength) const VOID *IndexRootBuffer,
+    _In_ ULONG IndexRootLength,
+    _In_ PDEVICE_OBJECT StorageDevice,
+    _In_ PNTFSLX_VOLUME_INFO VolumeInfo,
+    _In_opt_ PNTFSLX_RUNLIST_ELEMENT IndexAllocationRunlist,
+    _In_ ULONG IndexAllocationRunlistCount,
+    _In_reads_(SearchNameLength) const USHORT *SearchName,
+    _In_ ULONG SearchNameLength,
+    _In_ BOOLEAN IgnoreCase,
+    _In_reads_opt_(UpcaseTableLength) const USHORT *UpcaseTable,
+    _In_ ULONG UpcaseTableLength,
+    _In_opt_ PNTFSLX_DEVICE_EXTENSION DeviceExtension,
+    _In_ ULONGLONG ParentMftIndex,
+    _Out_ PULONGLONG FoundReference);
 
 NTSTATUS
 NtfslxOpenFileObjectByIndex(
@@ -697,8 +936,7 @@ NtfslxCloseFileObject(
 /*
  * Copy the supplied path (absolute, relative to the volume root) into
  * FileContext->FullPath and compute LeafNameLength (bytes). Idempotent:
- * rebuilds the stored path on each call. Called from the create path
- * once the FileObject is wired to the context.
+ * rebuilds the stored path on each call after create attaches the context.
  */
 NTSTATUS
 NtfslxSetFileContextFullPath(
@@ -734,6 +972,69 @@ VOID
 NtfslxNotifyCleanupCcb(
     _In_ PNTFSLX_DEVICE_EXTENSION DevExt,
     _In_opt_ PNTFSLX_CCB Ccb);
+
+/* ========================================================================
+ * FCB and volume lock helpers (fcb.c) - canonical lock-order enforcement
+ * ========================================================================
+ *
+ * See drivers/filesystems/ntfslx/fcb.c for the canonical lock-order
+ * documentation. ALL locks below acquire and release in the order
+ * documented there.
+ */
+
+BOOLEAN
+NtfslxFcbAcquireMainExclusive(
+    _In_ PNTFSLX_FILE_CONTEXT FileContext,
+    _In_ BOOLEAN Wait);
+
+BOOLEAN
+NtfslxFcbAcquireMainShared(
+    _In_ PNTFSLX_FILE_CONTEXT FileContext,
+    _In_ BOOLEAN Wait);
+
+VOID
+NtfslxFcbReleaseMain(
+    _In_ PNTFSLX_FILE_CONTEXT FileContext);
+
+BOOLEAN
+NtfslxFcbAcquirePagingIoExclusive(
+    _In_ PNTFSLX_FILE_CONTEXT FileContext,
+    _In_ BOOLEAN Wait);
+
+BOOLEAN
+NtfslxFcbAcquirePagingIoShared(
+    _In_ PNTFSLX_FILE_CONTEXT FileContext,
+    _In_ BOOLEAN Wait);
+
+VOID
+NtfslxFcbReleasePagingIo(
+    _In_ PNTFSLX_FILE_CONTEXT FileContext);
+
+VOID
+NtfslxFcbInitializeShareMutex(
+    _Inout_ PNTFSLX_FILE_CONTEXT FileContext);
+
+VOID
+NtfslxFcbAcquireShareMutex(
+    _In_ PNTFSLX_FILE_CONTEXT FileContext);
+
+VOID
+NtfslxFcbReleaseShareMutex(
+    _In_ PNTFSLX_FILE_CONTEXT FileContext);
+
+BOOLEAN
+NtfslxVolumeAcquireExclusive(
+    _In_ PNTFSLX_DEVICE_EXTENSION DevExt,
+    _In_ BOOLEAN Wait);
+
+BOOLEAN
+NtfslxVolumeAcquireShared(
+    _In_ PNTFSLX_DEVICE_EXTENSION DevExt,
+    _In_ BOOLEAN Wait);
+
+VOID
+NtfslxVolumeRelease(
+    _In_ PNTFSLX_DEVICE_EXTENSION DevExt);
 
 /* ========================================================================
  * Share-access enforcement (share.c)
@@ -801,14 +1102,6 @@ NtfslxValidateOpenFileObject(
 NTSTATUS
 NtfslxEnsureCacheInitialized(
     _In_ PFILE_OBJECT FileObject);
-
-NTSTATUS
-NtfslxWriteFileObjectConservative(
-    _In_ PFILE_OBJECT FileObject,
-    _In_reads_bytes_(Length) const VOID *Buffer,
-    _In_ ULONG Length,
-    _In_ PLARGE_INTEGER ByteOffset,
-    _Out_opt_ PULONG BytesWritten);
 
 NTSTATUS
 NtfslxExtendedWrite(
@@ -887,16 +1180,6 @@ NtfslxValidateDismountVpb(
 
 NTSTATUS
 NTAPI
-NtfslxCacheRuntimeCreate(
-    _In_ PDEVICE_OBJECT DeviceObject,
-    _In_ PSECTION_OBJECT_POINTERS SectionObjectPointers,
-    _In_ PCC_FILE_SIZES FileSizes,
-    _In_ BOOLEAN ReadOnly,
-    _In_ ULONG ReadAheadGranularity,
-    _Outptr_ struct _NTFSLX_CACHE_RUNTIME_CONTEXT **CacheContext);
-
-NTSTATUS
-NTAPI
 NtfslxCacheRuntimeAttach(
     _In_ PFILE_OBJECT FileObject,
     _In_ PCC_FILE_SIZES FileSizes,
@@ -906,24 +1189,9 @@ NtfslxCacheRuntimeAttach(
 
 NTSTATUS
 NTAPI
-NtfslxCacheRuntimeCopyRead(
-    _In_ struct _NTFSLX_CACHE_RUNTIME_CONTEXT *CacheContext,
-    _In_ PLARGE_INTEGER ByteOffset,
-    _In_ ULONG Length,
-    _In_ BOOLEAN Wait,
-    _Out_writes_bytes_(Length) PVOID Buffer,
-    _Inout_ PIO_STATUS_BLOCK IoStatus);
-
-NTSTATUS
-NTAPI
 NtfslxCacheRuntimeSetFileSizes(
     _In_ struct _NTFSLX_CACHE_RUNTIME_CONTEXT *CacheContext,
     _In_ PCC_FILE_SIZES NewFileSizes);
-
-NTSTATUS
-NTAPI
-NtfslxCacheRuntimeValidate(
-    _In_ struct _NTFSLX_CACHE_RUNTIME_CONTEXT *CacheContext);
 
 NTSTATUS
 NTAPI
@@ -973,6 +1241,68 @@ NtfslxFillLogFile(
     _In_ PDEVICE_OBJECT StorageDevice,
     _In_ PNTFSLX_VOLUME_INFO VolumeInfo,
     _In_ PNTFSLX_RUNLIST_ELEMENT MftRunlist);
+
+/*
+ * Phase-1 journal API. JournalInitialize is called once at mount, after
+ * the dirty-flag set / log-fill / log-preserve decision; it caches the
+ * $LogFile runlist in DevExt and stamps a synthetic Phase-1 restart
+ * page when the existing log was wiped. JournalAppendMftBitmapBit
+ * appends a single MftBitmapSetBit / MftBitmapClearBit redo record
+ * before the caller mutates the on-disk MFT bitmap. JournalTeardown
+ * frees the cached runlist on dismount.
+ */
+NTSTATUS
+NtfslxJournalInitialize(
+    _Inout_ PNTFSLX_DEVICE_EXTENSION DevExt,
+    _In_ BOOLEAN LogWasWiped);
+
+VOID
+NtfslxJournalTeardown(
+    _Inout_ PNTFSLX_DEVICE_EXTENSION DevExt);
+
+NTSTATUS
+NtfslxJournalFlush(
+    _Inout_ PNTFSLX_DEVICE_EXTENSION DevExt);
+
+NTSTATUS
+NtfslxJournalAppendMftBitmapBit(
+    _Inout_ PNTFSLX_DEVICE_EXTENSION DevExt,
+    _In_ ULONGLONG MftIndex,
+    _In_ BOOLEAN Set);
+
+NTSTATUS
+NtfslxJournalAppendClusterBitmapRange(
+    _Inout_ PNTFSLX_DEVICE_EXTENSION DevExt,
+    _In_ ULONGLONG StartLcn,
+    _In_ ULONGLONG Length,
+    _In_ BOOLEAN Set);
+
+NTSTATUS
+NtfslxJournalAppendIndexBlockUpdate(
+    _Inout_ PNTFSLX_DEVICE_EXTENSION DevExt,
+    _In_ ULONGLONG ParentMftIndex,
+    _In_ ULONGLONG Vcn,
+    _In_ ULONG TransactionId,
+    _In_reads_bytes_(BlockLength) PVOID BlockData,
+    _In_ ULONG BlockLength);
+
+ULONG
+NtfslxJournalAllocateTransactionId(
+    _Inout_ PNTFSLX_DEVICE_EXTENSION DevExt);
+
+/*
+ * Hinted runlist VBO->LCN translation (R4). Runlist is sorted by VCN,
+ * terminator-marked (Length == 0). HintIndex is an opaque per-FCB cell
+ * (start at 0 for cold reads); the function updates it on success so
+ * the next sequential lookup is O(1). Pass NULL HintIndex for
+ * caller-doesn't-have-an-FCB call sites — a fresh binary search is
+ * still O(log n).
+ */
+LONGLONG
+NtfslxRunlistVcnToLcnHinted(
+    _In_ PNTFSLX_RUNLIST_ELEMENT Runlist,
+    _In_ LONGLONG Vcn,
+    _Inout_opt_ PULONG HintIndex);
 
 /* ========================================================================
  * Bitmap (bitmap.c) - on-disk bitmap operations
@@ -1051,24 +1381,6 @@ BOOLEAN
 NtfslxRunlistIsSparse(
     _In_reads_(RunlistCount) const NTFSLX_RUNLIST_ELEMENT *Runlist,
     _In_ ULONG RunlistCount);
-
-/* ========================================================================
- * Directory lookup (dirlookup.c) - name-based inode lookup
- * ======================================================================== */
-
-NTSTATUS
-NtfslxLookupInodeByName(
-    _In_ PDEVICE_OBJECT StorageDevice,
-    _In_ PNTFSLX_VOLUME_INFO VolumeInfo,
-    _In_ PNTFSLX_RUNLIST_ELEMENT MftRunlist,
-    _In_ ULONG MftRunlistCount,
-    _In_ ULONGLONG DirectoryMftIndex,
-    _In_reads_(NameLength) const WCHAR *Name,
-    _In_ ULONG NameLength,
-    _In_ BOOLEAN IgnoreCase,
-    _In_reads_(UpcaseLength) const USHORT *UpcaseTable,
-    _In_ ULONG UpcaseLength,
-    _Out_ PULONGLONG FoundMftReference);
 
 /* ========================================================================
  * Security (security.c) - descriptor parsing helpers
@@ -1168,6 +1480,71 @@ NtfslxReadMappedAttributeData(
     _Out_writes_bytes_(Length) PUCHAR Buffer);
 
 /* ========================================================================
+ * Attribute list writer (attrlist.c) - $ATTRIBUTE_LIST manipulation
+ *
+ * V1 covers create/extend correctness for files whose attributes overflow
+ * a single MFT record. Lookups, list-buffer splice/excise, extension MFT
+ * record allocation, and the orchestrator that places a new attribute in
+ * either the base or a fresh extension record are exposed here. Coalesce
+ * (move attributes back into the base when they shrink) is deferred.
+ * ======================================================================== */
+
+NTSTATUS
+NtfslxAttributeListInsertEntry(
+    _In_reads_bytes_opt_(AttributeListLength) const void *AttributeList,
+    _In_ ULONG AttributeListLength,
+    _In_ ULONG AttributeType,
+    _In_opt_ PCWSTR Name,
+    _In_ ULONG NameLength,
+    _In_ ULONGLONG LowestVcn,
+    _In_ ULONGLONG MftReference,
+    _In_ USHORT Instance,
+    _Outptr_result_bytebuffer_(*NewBufferLengthOut) PUCHAR *NewBufferOut,
+    _Out_ PULONG NewBufferLengthOut);
+
+NTSTATUS
+NtfslxAttributeListRemoveEntry(
+    _In_reads_bytes_(AttributeListLength) const void *AttributeList,
+    _In_ ULONG AttributeListLength,
+    _In_ ULONG AttributeType,
+    _In_opt_ PCWSTR Name,
+    _In_ ULONG NameLength,
+    _In_ ULONGLONG LowestVcn,
+    _Outptr_result_maybenull_ PUCHAR *NewBufferOut,
+    _Out_ PULONG NewBufferLengthOut);
+
+NTSTATUS
+NtfslxAttributeListLookupEntry(
+    _In_reads_bytes_(AttributeListLength) const void *AttributeList,
+    _In_ ULONG AttributeListLength,
+    _In_ ULONG AttributeType,
+    _In_opt_ PCWSTR Name,
+    _In_ ULONG NameLength,
+    _In_ ULONGLONG LowestVcn,
+    _Out_ PULONGLONG MftReferenceOut,
+    _Out_ PUSHORT InstanceOut);
+
+NTSTATUS
+NtfslxAllocateExtensionMftRecord(
+    _In_ PNTFSLX_DEVICE_EXTENSION DevExt,
+    _In_ PNTFSLX_MFT_RECORD BaseRecord,
+    _Out_ PULONGLONG OutExtensionRecordNumber,
+    _Outptr_ PNTFSLX_MFT_RECORD *OutExtensionRecord);
+
+NTSTATUS
+NtfslxAttributeListInstallResidentAttribute(
+    _In_ PNTFSLX_DEVICE_EXTENSION DevExt,
+    _Inout_ PNTFSLX_MFT_RECORD BaseRecord,
+    _In_ ULONGLONG BaseRecordNumber,
+    _In_ ULONG AttributeType,
+    _In_reads_opt_(NameLength) PCWSTR Name,
+    _In_ ULONG NameLength,
+    _In_reads_bytes_opt_(ValueLength) const VOID *Value,
+    _In_ ULONG ValueLength,
+    _Out_opt_ PULONGLONG OutHostMftReference,
+    _Out_opt_ PUSHORT OutHostInstance);
+
+/* ========================================================================
  * Disk write (diskwrite.c) - synchronous disk write
  * ======================================================================== */
 
@@ -1186,6 +1563,7 @@ NtfslxWriteDisk(
 
 NTSTATUS
 NtfslxWriteMftRecord(
+    _In_opt_ struct _NTFSLX_DEVICE_EXTENSION *DevExt,
     _In_ PDEVICE_OBJECT StorageDevice,
     _In_ PNTFSLX_VOLUME_INFO VolumeInfo,
     _In_ PNTFSLX_RUNLIST_ELEMENT MftRunlist,
@@ -1194,6 +1572,7 @@ NtfslxWriteMftRecord(
 
 NTSTATUS
 NtfslxAllocateMftRecord(
+    _In_opt_ struct _NTFSLX_DEVICE_EXTENSION *DevExt,
     _In_ PDEVICE_OBJECT StorageDevice,
     _In_ PNTFSLX_VOLUME_INFO VolumeInfo,
     _In_ PNTFSLX_RUNLIST_ELEMENT MftRunlist,
@@ -1212,10 +1591,22 @@ NtfslxAllocateMftRecordEx(
 
 NTSTATUS
 NtfslxFreeMftRecord(
+    _In_opt_ struct _NTFSLX_DEVICE_EXTENSION *DevExt,
     _In_ PDEVICE_OBJECT StorageDevice,
     _In_ PNTFSLX_VOLUME_INFO VolumeInfo,
     _In_ PNTFSLX_RUNLIST_ELEMENT MftRunlist,
     _In_ ULONGLONG RecordNumber);
+
+/*
+ * Drain DevExt->ObsoleteMftRunlists, freeing every parked old MFT runlist.
+ * Safe to call when no concurrent reader can dereference DevExt->MftRunlist
+ * - i.e. shutdown, FSCTL_DISMOUNT_VOLUME, or any other point at which all
+ * file opens have drained. Idempotent. See ntfslx.h MftRunlist commentary
+ * and mftwrite.c:NtfslxExtendMftRunlist for the publisher side.
+ */
+VOID
+NtfslxDrainObsoleteMftRunlists(
+    _Inout_ PNTFSLX_DEVICE_EXTENSION DevExt);
 
 /* ========================================================================
  * Cluster allocation (clusteralloc.c) - allocate/free volume clusters

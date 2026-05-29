@@ -3264,10 +3264,12 @@ RamdiskOpenClose(IN PDEVICE_OBJECT DeviceObject,
                  IN PIRP Irp)
 {
     PRAMDISK_DRIVE_EXTENSION DeviceExtension;
+    PIO_STACK_LOCATION IoStackLocation;
     NTSTATUS Status;
 
     /* Get the device extension */
     DeviceExtension = DeviceObject->DeviceExtension;
+    IoStackLocation = IoGetCurrentIrpStackLocation(Irp);
 
     /* Acquire the remove lock if this is a drive */
     if (DeviceExtension->Type == RamdiskDrive)
@@ -3282,9 +3284,23 @@ RamdiskOpenClose(IN PDEVICE_OBJECT DeviceObject,
         }
     }
 
-    /* Complete the IRP */
-    Irp->IoStatus.Information = 0;  /* Conventionally return 0 for create/close */
-    Irp->IoStatus.Status = STATUS_SUCCESS;
+    /* Raw ramdisk devices only support volume opens. A named open means the
+     * caller expected a mounted filesystem, not the backing storage device. */
+    if (IoStackLocation->MajorFunction == IRP_MJ_CREATE &&
+        IoStackLocation->FileObject != NULL &&
+        IoStackLocation->FileObject->FileName.Length != 0)
+    {
+        DPRINT1("RamdiskOpenClose: rejecting named create on raw device %wZ\n",
+                &IoStackLocation->FileObject->FileName);
+        Irp->IoStatus.Information = 0;
+        Irp->IoStatus.Status = STATUS_OBJECT_PATH_NOT_FOUND;
+    }
+    else
+    {
+        /* Complete the IRP */
+        Irp->IoStatus.Information = 0;  /* Conventionally return 0 for create/close */
+        Irp->IoStatus.Status = STATUS_SUCCESS;
+    }
 
     /* Release the remove lock if this is a drive before completing */
     if (DeviceExtension->Type == RamdiskDrive)
@@ -3293,7 +3309,7 @@ RamdiskOpenClose(IN PDEVICE_OBJECT DeviceObject,
     }
 
     IoCompleteRequest(Irp, IO_NO_INCREMENT);
-    return STATUS_SUCCESS;
+    return Irp->IoStatus.Status;
 }
 
 NTSTATUS

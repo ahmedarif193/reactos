@@ -3983,8 +3983,6 @@ Return Value:
 
     _SEH2_TRY {
 
-        ULONG i;
-
         //
         //  If the Dcb is already opened by someone then we need
         //  to check the share access
@@ -4027,51 +4025,34 @@ Return Value:
         if (IsFileObjectReadOnly(FileObject)) { Dcb->Vcb->ReadOnlyCount += 1; }
 
         //
-        //  Update the name in the file object, by definition the remaining
-        //  part must be shorter than the original file name so we'll just
-        //  overwrite the file name.
+        //  The file object now represents the opened target directory.
         //
 
-        i = FileObject->FileName.Length/sizeof(WCHAR) - 1;
+        FatSetFullFileNameInFcb( IrpContext, Dcb );
 
-        //
-        //  Get rid of a trailing backslash
-        //
+        {
+            USHORT NameLength = Dcb->FullFileName.Length;
+            BOOLEAN AddBackslash = (NameLength > sizeof(WCHAR)) &&
+                                   (Dcb->FullFileName.Buffer[(NameLength / sizeof(WCHAR)) - 1] != L'\\');
+            USHORT RequiredLength = NameLength + (AddBackslash ? sizeof(WCHAR) : 0) + sizeof(WCHAR);
 
-        if (FileObject->FileName.Buffer[i] == L'\\') {
+            if (FileObject->FileName.MaximumLength < RequiredLength) {
 
-            NT_ASSERT(i != 0);
-
-            FileObject->FileName.Length -= sizeof(WCHAR);
-            i -= 1;
-        }
-
-        //
-        //  Find the first non-backslash character.  i will be its index.
-        //
-
-        while (TRUE) {
-
-            if (FileObject->FileName.Buffer[i] == L'\\') {
-
-                i += 1;
-                break;
+                ExRaiseStatus( STATUS_INSUFFICIENT_RESOURCES );
             }
 
-            if (i == 0) {
-                break;
+            RtlCopyMemory( FileObject->FileName.Buffer,
+                           Dcb->FullFileName.Buffer,
+                           NameLength );
+
+            if (AddBackslash) {
+
+                FileObject->FileName.Buffer[NameLength / sizeof(WCHAR)] = L'\\';
+                NameLength += sizeof(WCHAR);
             }
 
-            i--;
-        }
-
-        if (i) {
-
-            FileObject->FileName.Length -= (USHORT)(i * sizeof(WCHAR));
-
-            RtlMoveMemory( &FileObject->FileName.Buffer[0],
-                           &FileObject->FileName.Buffer[i],
-                           FileObject->FileName.Length );
+            FileObject->FileName.Length = NameLength;
+            FileObject->FileName.Buffer[FileObject->FileName.Length / sizeof(WCHAR)] = UNICODE_NULL;
         }
 
         //

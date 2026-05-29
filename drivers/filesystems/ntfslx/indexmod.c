@@ -76,6 +76,8 @@ NtfslxReadDirIndexBlock(
 static NTSTATUS
 NtfslxWriteDirIndexBlock(
     _In_ PNTFSLX_DEVICE_EXTENSION DevExt,
+    _In_ ULONGLONG ParentMftIndex,
+    _In_ ULONG TransactionId,
     _In_ PNTFSLX_RUNLIST_ELEMENT Runlist,
     _In_ ULONGLONG Vcn,
     _In_ ULONG BlockSize,
@@ -675,18 +677,32 @@ NtfslxAppendRightLeafIndexBlock(
         RightHeader->IndexLength = MoveStart + RightEnd->Length;
     }
 
-    Stage = "write-new-block";
-    Status = NtfslxWriteDirIndexBlock(DevExt, MergedRunlist, NewBlockVcn, BlockSize, NewBlock);
-    if (!NT_SUCCESS(Status))
+    /*
+     * Both block writes belong to the same logical "extend" — share a
+     * TransactionId so Phase-2 recovery replays them atomically (or not
+     * at all). 0 is reserved for stand-alone records, so a journal-disabled
+     * mount falls back to the stand-alone convention naturally.
+     */
     {
-        goto Cleanup;
-    }
+        ULONG TxId = NtfslxJournalAllocateTransactionId(DevExt);
 
-    Stage = "write-old-block";
-    Status = NtfslxWriteDirIndexBlock(DevExt, MergedRunlist, RightmostVcn, BlockSize, RightBlock);
-    if (!NT_SUCCESS(Status))
-    {
-        goto Cleanup;
+        Stage = "write-new-block";
+        Status = NtfslxWriteDirIndexBlock(DevExt, DirRecord->MftRecordNumber, TxId,
+                                          MergedRunlist, NewBlockVcn,
+                                          BlockSize, NewBlock);
+        if (!NT_SUCCESS(Status))
+        {
+            goto Cleanup;
+        }
+
+        Stage = "write-old-block";
+        Status = NtfslxWriteDirIndexBlock(DevExt, DirRecord->MftRecordNumber, TxId,
+                                          MergedRunlist, RightmostVcn,
+                                          BlockSize, RightBlock);
+        if (!NT_SUCCESS(Status))
+        {
+            goto Cleanup;
+        }
     }
 
     NTFSDBG("ntfslx: AllocationInsert: extended index dir block=%I64u newBlock=%I64u moved=%lu\n",
@@ -860,10 +876,16 @@ NtfslxReadDirIndexBlock(
 /*
  * Write a single INDX block. A copy is made, MST fixup applied, the copy is
  * written to disk, and the caller's buffer is left untouched.
+ *
+ * ParentMftIndex is the directory's MFT record number; TransactionId groups
+ * multiple block writes that must replay together (0 = stand-alone). Both
+ * are forwarded to the Phase-1 journal so a crash mid-update can be replayed.
  */
 static NTSTATUS
 NtfslxWriteDirIndexBlock(
     _In_ PNTFSLX_DEVICE_EXTENSION DevExt,
+    _In_ ULONGLONG ParentMftIndex,
+    _In_ ULONG TransactionId,
     _In_ PNTFSLX_RUNLIST_ELEMENT Runlist,
     _In_ ULONGLONG Vcn,
     _In_ ULONG BlockSize,
@@ -881,6 +903,19 @@ NtfslxWriteDirIndexBlock(
     BlockClusters = BlockSize / ClusterSize;
     if (BlockClusters == 0)
         BlockClusters = 1;
+
+    /*
+     * Journal the block image *before* MST fixup is applied to it, so
+     * recovery can re-apply fixup on replay (matching the in-memory layout
+     * the rest of the driver works with). Phase-1 best-effort: failure to
+     * journal is non-fatal because Phase-1 has no recovery driver yet.
+     */
+    (VOID)NtfslxJournalAppendIndexBlockUpdate(DevExt,
+                                              ParentMftIndex,
+                                              Vcn,
+                                              TransactionId,
+                                              BlockBuffer,
+                                              BlockSize);
 
     Copy = ExAllocatePoolWithTag(NonPagedPool, BlockSize, NTFSLX_TAG);
     if (Copy == NULL)
@@ -940,6 +975,7 @@ NtfslxWriteDirIndexBlock(
     }
 
     ExFreePoolWithTag(Copy, NTFSLX_TAG);
+
     return STATUS_SUCCESS;
 }
 
@@ -1186,7 +1222,9 @@ NtfslxIndexAllocationRemove(
                                                  DevExt);
         if (Status == STATUS_SUCCESS)
         {
-            Status = NtfslxWriteDirIndexBlock(DevExt, Runlist, Vcn,
+            Status = NtfslxWriteDirIndexBlock(DevExt,
+                                              DirRecord->MftRecordNumber, 0,
+                                              Runlist, Vcn,
                                               BlockSize, BlockBuf);
             ExFreePoolWithTag(BlockBuf, NTFSLX_TAG);
             ExFreePoolWithTag(Runlist, 'aIxN');
@@ -1430,7 +1468,8 @@ NtfslxSpillIndexRootToAllocation(
     }
 
     /* Write the INDX block to its cluster. */
-    Status = NtfslxWriteDirIndexBlock(DevExt, Runlist, 0, BlockSize, BlockBuf);
+    Status = NtfslxWriteDirIndexBlock(DevExt, DirectoryMftIndex, 0,
+                                      Runlist, 0, BlockSize, BlockBuf);
     if (!NT_SUCCESS(Status))
     {
         NTFSDBG("ntfslx: SpillIndexRoot: WriteDirIndexBlock failed 0x%08lx\n", Status);
@@ -1755,7 +1794,9 @@ NtfslxIndexAllocationInsert(
         }
 
         /* Success — write the updated block back. */
-        Status = NtfslxWriteDirIndexBlock(DevExt, Runlist, Vcn, BlockSize, BlockBuf);
+        Status = NtfslxWriteDirIndexBlock(DevExt,
+                                          DirRecord->MftRecordNumber, 0,
+                                          Runlist, Vcn, BlockSize, BlockBuf);
         ExFreePoolWithTag(BlockBuf, NTFSLX_TAG);
         ExFreePoolWithTag(Runlist, 'aIxN');
         if (NT_SUCCESS(Status))
@@ -1880,7 +1921,9 @@ NtfslxIndexAllocationUpdate(
 
         if (Status == STATUS_SUCCESS)
         {
-            Status = NtfslxWriteDirIndexBlock(DevExt, Runlist, Vcn,
+            Status = NtfslxWriteDirIndexBlock(DevExt,
+                                              DirRecord->MftRecordNumber, 0,
+                                              Runlist, Vcn,
                                               BlockSize, BlockBuf);
             ExFreePoolWithTag(BlockBuf, NTFSLX_TAG);
             ExFreePoolWithTag(Runlist, 'aIxN');
@@ -2169,7 +2212,7 @@ NtfslxIndexInsertFileName(
                 IndexHeader->AllocatedSize = NewIndexLength;
                 IndexRootAttr->Data.Resident.ValueLength = NewAttrValueLength;
 
-                Status = NtfslxWriteMftRecord(DevExt->StorageDevice, &DevExt->VolumeInfo,
+                Status = NtfslxWriteMftRecord(DevExt, DevExt->StorageDevice, &DevExt->VolumeInfo,
                                               DevExt->MftRunlist, DirectoryMftIndex, DirRecord);
                 ExFreePoolWithTag(DirRecord, NTFSLX_TAG);
                 ExFreePoolWithTag(NewEntry, NTFSLX_TAG);
@@ -2219,7 +2262,8 @@ NtfslxIndexInsertFileName(
             }
             /* Persist the mutated MFT record so the allocation-insert below
              * reads a consistent directory state. */
-            Status = NtfslxWriteMftRecord(DevExt->StorageDevice,
+            Status = NtfslxWriteMftRecord(DevExt,
+                                          DevExt->StorageDevice,
                                           &DevExt->VolumeInfo,
                                           DevExt->MftRunlist,
                                           DirectoryMftIndex,
@@ -2242,7 +2286,8 @@ NtfslxIndexInsertFileName(
     Status = NtfslxIndexAllocationInsert(DevExt, DirRecord, NewEntry, NewEntryLength);
     if (NT_SUCCESS(Status))
     {
-        Status = NtfslxWriteMftRecord(DevExt->StorageDevice,
+        Status = NtfslxWriteMftRecord(DevExt,
+                                      DevExt->StorageDevice,
                                       &DevExt->VolumeInfo,
                                       DevExt->MftRunlist,
                                       DirectoryMftIndex,
@@ -2374,7 +2419,7 @@ NtfslxIndexUpdateFileName(
 
     if (Found)
     {
-        Status = NtfslxWriteMftRecord(DevExt->StorageDevice, &DevExt->VolumeInfo,
+        Status = NtfslxWriteMftRecord(DevExt, DevExt->StorageDevice, &DevExt->VolumeInfo,
                                       DevExt->MftRunlist, DirectoryMftIndex, DirRecord);
         ExFreePoolWithTag(DirRecord, NTFSLX_TAG);
         return Status;
@@ -2540,7 +2585,7 @@ NtfslxIndexRemoveFileName(
         NTFSDBG("ntfslx: IndexRemove dir=%I64u name='%.*S' removed from resident root (%lu bytes), new attr size=%lu\n",
                  DirectoryMftIndex, FileNameLength, FileName, EntryLength, NewAttrLength);
 
-        Status = NtfslxWriteMftRecord(DevExt->StorageDevice, &DevExt->VolumeInfo,
+        Status = NtfslxWriteMftRecord(DevExt, DevExt->StorageDevice, &DevExt->VolumeInfo,
                                       DevExt->MftRunlist, DirectoryMftIndex, DirRecord);
         ExFreePoolWithTag(DirRecord, NTFSLX_TAG);
         return Status;

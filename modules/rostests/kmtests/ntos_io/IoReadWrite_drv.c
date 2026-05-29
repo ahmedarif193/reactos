@@ -316,10 +316,13 @@ TestIrpHandler(
     }
     else if (IoStack->MajorFunction == IRP_MJ_CLEANUP)
     {
-        KeInitializeEvent(&CacheUninitEvent.Event, NotificationEvent, FALSE);
-        CcUninitializeCacheMap(IoStack->FileObject, NULL, &CacheUninitEvent);
-        KeWaitForSingleObject(&CacheUninitEvent.Event, Executive, KernelMode, FALSE, NULL);
         Fcb = IoStack->FileObject->FsContext;
+        if (Fcb->Cached)
+        {
+            KeInitializeEvent(&CacheUninitEvent.Event, NotificationEvent, FALSE);
+            CcUninitializeCacheMap(IoStack->FileObject, NULL, &CacheUninitEvent);
+            KeWaitForSingleObject(&CacheUninitEvent.Event, Executive, KernelMode, FALSE, NULL);
+        }
         ExFreePoolWithTag(Fcb, 'FwrI');
         IoStack->FileObject->FsContext = NULL;
         Status = STATUS_SUCCESS;

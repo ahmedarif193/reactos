@@ -527,6 +527,9 @@ SmpLoadSubSystemsForMuSession(IN PULONG MuSessionId,
     {
         /* Execute each one and move on */
         RegEntry = CONTAINING_RECORD(NextEntry, SMP_REGISTRY_VALUE, Entry);
+        DPRINT1("SMSS: SetupExecute entry Name='%wZ' Value='%wZ'\n",
+                &RegEntry->Name,
+                &RegEntry->Value);
         SmpExecuteCommand(&RegEntry->Name, 0, NULL, 0);
         NextEntry = NextEntry->Flink;
     }

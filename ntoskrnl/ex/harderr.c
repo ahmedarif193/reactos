@@ -206,6 +206,24 @@ ExpRaiseHardError(IN NTSTATUS ErrorStatus,
         }
     }
 
+    /* Validate the response option; unknown values are not sent to CSRSS */
+    switch (ValidResponseOptions)
+    {
+        case OptionAbortRetryIgnore:
+        case OptionOk:
+        case OptionOkCancel:
+        case OptionRetryCancel:
+        case OptionYesNo:
+        case OptionYesNoCancel:
+        case OptionShutdownSystem:
+        case OptionOkNoWait:
+        case OptionCancelTryContinue:
+            break;
+        default:
+            *Response = ResponseReturnToCaller;
+            return STATUS_SUCCESS;
+    }
+
     /* Now check if we have a port */
     if (PortHandle == NULL)
     {

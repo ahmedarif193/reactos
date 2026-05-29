@@ -9,6 +9,7 @@
 #include <debug.h>
 #include <fs/fat.h>
 #include <disk.h>
+#include "../disk/part_mbr.h" // For MASTER_BOOT_RECORD, PARTITION_FAT32_XINT13
 #include "ramdisk.h"
 #include "ramdisk_signature.h"
 

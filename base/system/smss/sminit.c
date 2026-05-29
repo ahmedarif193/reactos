@@ -342,8 +342,21 @@ SmpConfigureMemoryMgmt(IN PWSTR ValueName,
                        IN PVOID Context,
                        IN PVOID EntryContext)
 {
+    PWSTR StringData = ValueData;
+
+    UNREFERENCED_PARAMETER(ValueType);
+    UNREFERENCED_PARAMETER(ValueLength);
+    UNREFERENCED_PARAMETER(Context);
+
+    if (StringData == NULL || *StringData == UNICODE_NULL)
+    {
+        DPRINT1("SMSS: skipping empty %S entry during registry load\n",
+                ValueName ? ValueName : L"(null)");
+        return STATUS_SUCCESS;
+    }
+
     /* Save this is into a list */
-    return SmpSaveRegistryValue(EntryContext, ValueData, NULL, TRUE);
+    return SmpSaveRegistryValue(EntryContext, StringData, NULL, TRUE);
 }
 
 NTSTATUS
@@ -2378,6 +2391,9 @@ SmpLoadDataFromRegistry(OUT PUNICODE_STRING InitialCommand)
 
         /* Execute it */
         RegEntry = CONTAINING_RECORD(NextEntry, SMP_REGISTRY_VALUE, Entry);
+        DPRINT1("SMSS: BootExecute entry Name='%wZ' Value='%wZ'\n",
+                &RegEntry->Name,
+                &RegEntry->Value);
         SmpExecuteCommand(&RegEntry->Name, 0, NULL, 0);
 
         /* And free it */

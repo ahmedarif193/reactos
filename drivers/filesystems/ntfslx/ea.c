@@ -589,7 +589,8 @@ NtfslxSetEaFileObject(
         }
     }
 
-    Status = NtfslxWriteMftRecord(DevExt->StorageDevice,
+    Status = NtfslxWriteMftRecord(DevExt,
+                                  DevExt->StorageDevice,
                                   &DevExt->VolumeInfo,
                                   DevExt->MftRunlist,
                                   FileContext->MftIndex,

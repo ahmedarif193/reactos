@@ -2,13 +2,6 @@
  * PROJECT:     ReactOS ntfslx driver
  * LICENSE:     GPL-2.0-or-later
  * PURPOSE:     Live cache-manager helper runtime for ntfslx
- *
- * Integration note:
- *   This file is intentionally self-contained. Wire the public prototypes into
- *   ntfslx.h and add this translation unit to the ntfslx target when the
- *   caller-side stream/FCB layer is ready. The helpers here do not fake cache
- *   success: they validate file size ordering, file-object state, and cache
- *   initialization before calling into Cc.
  */
 
 #include "ntfslx.h"
@@ -373,45 +366,6 @@ static const CACHE_MANAGER_CALLBACKS NtfslxCacheRuntimeCallbacks =
 
 static
 NTSTATUS
-NtfslxCacheRuntimeCreateStreamFileObject(
-    _In_ PDEVICE_OBJECT DeviceObject,
-    _In_ PSECTION_OBJECT_POINTERS SectionObjectPointers,
-    _Outptr_ PFILE_OBJECT *StreamFileObject)
-{
-    PFILE_OBJECT FileObject;
-
-    if (StreamFileObject != NULL)
-    {
-        *StreamFileObject = NULL;
-    }
-
-    if (DeviceObject == NULL ||
-        DeviceObject->Vpb == NULL ||
-        SectionObjectPointers == NULL ||
-        StreamFileObject == NULL)
-    {
-        return STATUS_INVALID_PARAMETER;
-    }
-
-    FileObject = IoCreateStreamFileObject(NULL, DeviceObject);
-    if (FileObject == NULL)
-    {
-        return STATUS_INSUFFICIENT_RESOURCES;
-    }
-
-    FileObject->Vpb = DeviceObject->Vpb;
-    FileObject->SectionObjectPointer = SectionObjectPointers;
-
-    ASSERT(FileObject->DeviceObject == DeviceObject);
-    ASSERT(FileObject->Vpb == DeviceObject->Vpb);
-    ASSERT(FileObject->SectionObjectPointer == SectionObjectPointers);
-
-    *StreamFileObject = FileObject;
-    return STATUS_SUCCESS;
-}
-
-static
-NTSTATUS
 NtfslxCacheRuntimeInitializeCacheMapInternal(
     _In_ PNTFSLX_CACHE_RUNTIME_CONTEXT Context)
 {
@@ -505,79 +459,6 @@ NtfslxCacheRuntimeApplyReadAheadGranularity(
     ASSERT(Context->FileObject->PrivateCacheMap != NULL);
     CcSetReadAheadGranularity(Context->FileObject, Granularity);
     Context->ReadAheadGranularity = Granularity;
-
-    return STATUS_SUCCESS;
-}
-
-NTSTATUS
-NTAPI
-NtfslxCacheRuntimeCreate(
-    _In_ PDEVICE_OBJECT DeviceObject,
-    _In_ PSECTION_OBJECT_POINTERS SectionObjectPointers,
-    _In_ PCC_FILE_SIZES FileSizes,
-    _In_ BOOLEAN ReadOnly,
-    _In_ ULONG ReadAheadGranularity,
-    _Outptr_ PNTFSLX_CACHE_RUNTIME_CONTEXT *CacheContext)
-{
-    NTSTATUS Status;
-    PFILE_OBJECT StreamFileObject;
-    PNTFSLX_CACHE_RUNTIME_CONTEXT Context;
-
-    if (CacheContext != NULL)
-    {
-        *CacheContext = NULL;
-    }
-
-    Status = NtfslxCacheRuntimeValidateFileSizes(FileSizes);
-    if (!NT_SUCCESS(Status))
-    {
-        return Status;
-    }
-
-    Status = NtfslxCacheRuntimeCreateStreamFileObject(DeviceObject,
-                                                      SectionObjectPointers,
-                                                      &StreamFileObject);
-    if (!NT_SUCCESS(Status))
-    {
-        return Status;
-    }
-
-    Context = NtfslxCacheRuntimeAllocateContext(DeviceObject,
-                                                StreamFileObject,
-                                                SectionObjectPointers,
-                                                FileSizes,
-                                                ReadOnly,
-                                                TRUE);
-    if (Context == NULL)
-    {
-        ObDereferenceObject(StreamFileObject);
-        return STATUS_INSUFFICIENT_RESOURCES;
-    }
-
-    Status = NtfslxCacheRuntimeInitializeCacheMapInternal(Context);
-    if (!NT_SUCCESS(Status))
-    {
-        (VOID)NtfslxCacheRuntimeDestroy(Context);
-        return Status;
-    }
-
-    Status = NtfslxCacheRuntimeApplyReadAheadGranularity(Context,
-                                                         ReadAheadGranularity);
-    if (!NT_SUCCESS(Status))
-    {
-        (VOID)NtfslxCacheRuntimeDestroy(Context);
-        return Status;
-    }
-
-    ASSERT(Context->Signature == NTFSLX_CACHE_RUNTIME_SIGNATURE);
-    ASSERT(Context->CacheInitialized);
-    ASSERT(Context->FileObject == StreamFileObject);
-    ASSERT(Context->FileObject->PrivateCacheMap != NULL);
-
-    if (CacheContext != NULL)
-    {
-        *CacheContext = Context;
-    }
 
     return STATUS_SUCCESS;
 }
@@ -689,88 +570,6 @@ NtfslxCacheRuntimeSetFileSizes(
     _SEH2_END;
 
     return Status;
-}
-
-NTSTATUS
-NTAPI
-NtfslxCacheRuntimeCopyRead(
-    _In_ PNTFSLX_CACHE_RUNTIME_CONTEXT CacheContext,
-    _In_ PLARGE_INTEGER ByteOffset,
-    _In_ ULONG Length,
-    _In_ BOOLEAN Wait,
-    _Out_writes_bytes_(Length) PVOID Buffer,
-    _Inout_ PIO_STATUS_BLOCK IoStatus)
-{
-    BOOLEAN Result;
-    NTSTATUS Status;
-
-    if (IoStatus != NULL)
-    {
-        IoStatus->Status = STATUS_UNSUCCESSFUL;
-        IoStatus->Information = 0;
-    }
-
-    if (CacheContext == NULL ||
-        ByteOffset == NULL ||
-        IoStatus == NULL ||
-        (Length > 0 && Buffer == NULL))
-    {
-        return STATUS_INVALID_PARAMETER;
-    }
-
-    if (ByteOffset->QuadPart < 0)
-    {
-        return STATUS_INVALID_PARAMETER;
-    }
-
-    Status = NtfslxCacheRuntimeValidateContext(CacheContext);
-    if (!NT_SUCCESS(Status))
-    {
-        return Status;
-    }
-
-    if (Length == 0)
-    {
-        IoStatus->Status = STATUS_SUCCESS;
-        IoStatus->Information = 0;
-        return STATUS_SUCCESS;
-    }
-
-    Result = CcCopyRead(CacheContext->FileObject,
-                        ByteOffset,
-                        Length,
-                        Wait,
-                        Buffer,
-                        IoStatus);
-
-    if (!Result)
-    {
-        if (!Wait)
-        {
-            IoStatus->Status = STATUS_CANT_WAIT;
-            IoStatus->Information = 0;
-            return STATUS_CANT_WAIT;
-        }
-
-        if (!NT_SUCCESS(IoStatus->Status))
-        {
-            return IoStatus->Status;
-        }
-
-        return STATUS_UNSUCCESSFUL;
-    }
-
-    ASSERT(NT_SUCCESS(IoStatus->Status));
-    ASSERT(CacheContext->FileObject->PrivateCacheMap != NULL);
-    return IoStatus->Status;
-}
-
-NTSTATUS
-NTAPI
-NtfslxCacheRuntimeValidate(
-    _In_ PNTFSLX_CACHE_RUNTIME_CONTEXT CacheContext)
-{
-    return NtfslxCacheRuntimeValidateContext(CacheContext);
 }
 
 NTSTATUS

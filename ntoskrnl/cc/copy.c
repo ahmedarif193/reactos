@@ -470,6 +470,7 @@ CcpEnsureVacbResidentForCopy(
 {
     PROS_SHARED_CACHE_MAP SharedCacheMap = Vacb->SharedCacheMap;
     LONGLONG FileOffset = Vacb->FileOffset.QuadPart + Offset;
+    NTSTATUS Status;
 
     ASSERT((Offset + Length) <= VACB_MAPPING_GRANULARITY);
 
@@ -482,7 +483,19 @@ CcpEnsureVacbResidentForCopy(
                                  FileOffset,
                                  Length))
     {
-        return FALSE;
+        Status = MmMakeDataSectionResident(SharedCacheMap->FileObject->SectionObjectPointer,
+                                           FileOffset,
+                                           Length,
+                                           &SharedCacheMap->ValidDataLength);
+        if (!NT_SUCCESS(Status))
+        {
+            if (Wait)
+                ExRaiseStatus(Status);
+            return FALSE;
+        }
+
+        if (!Wait)
+            return FALSE;
     }
 
     return TRUE;

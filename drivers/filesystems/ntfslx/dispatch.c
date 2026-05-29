@@ -1,7 +1,7 @@
 /*
- * PROJECT:     ReactOS NTFS Linux-Port Skeleton
+ * PROJECT:     ReactOS ntfslx driver
  * LICENSE:     GPL-2.0-or-later
- * PURPOSE:     IRP dispatch for staged NTFS port
+ * PURPOSE:     IRP dispatch
  */
 
 #include "ntfslx.h"
@@ -716,44 +716,6 @@ NtfslxLookupParentIndexFromRecord(
 
 static
 NTSTATUS
-NtfslxLookupPathEntryCallback(
-    _In_ const NTFSLX_DIR_ENTRY *Entry,
-    _In_opt_ PVOID Context)
-{
-    PNTFSLX_COMPONENT_SEARCH_CONTEXT SearchContext;
-    UNICODE_STRING EntryName;
-
-    SearchContext = Context;
-    EntryName.Buffer = (PWCHAR)Entry->FileName;
-    EntryName.Length = Entry->FileNameLength * sizeof(WCHAR);
-    EntryName.MaximumLength = EntryName.Length;
-
-    NTFSLX_DISPATCH_TRACE("ntfslx: dispatch lookup candidate ref=%I64u type=%u attrs=0x%08lx name='%wZ' target='%wZ'\n",
-                          MREF(Entry->FileReference),
-                          Entry->FileNameType,
-                          Entry->FileAttributes,
-                          &EntryName,
-                          SearchContext->ComponentName);
-
-    if (!FsRtlAreNamesEqual(SearchContext->ComponentName,
-                            &EntryName,
-                            TRUE,
-                            (PCWCH)SearchContext->DeviceExtension->UpcaseTable))
-    {
-        return STATUS_SUCCESS;
-    }
-
-    NTFSLX_DISPATCH_TRACE("ntfslx: dispatch lookup match ref=%I64u name='%wZ'\n",
-                          MREF(Entry->FileReference),
-                          &EntryName);
-
-    SearchContext->Found = TRUE;
-    SearchContext->FoundIndex = MREF(Entry->FileReference);
-    return STATUS_NO_MORE_FILES;
-}
-
-static
-NTSTATUS
 NtfslxGetDirectoryIndexRoot(
     _In_ PNTFSLX_MFT_RECORD FileRecord,
     _Outptr_result_bytebuffer_(*IndexRootLength) PVOID *IndexRootBuffer,
@@ -904,7 +866,6 @@ NtfslxLookupPathComponent(
     PNTFSLX_PATH_LOOKUP_CONTEXT Context;
     ULONGLONG ParentIndex;
     PNTFSLX_MFT_RECORD FileRecord;
-    NTFSLX_COMPONENT_SEARCH_CONTEXT SearchContext;
     NTSTATUS Status;
 
     Context = LookupContext;
@@ -960,52 +921,94 @@ NtfslxLookupPathComponent(
                                 : STATUS_OBJECT_PATH_NOT_FOUND;
     }
 
-    RtlZeroMemory(&SearchContext, sizeof(SearchContext));
-    SearchContext.DeviceExtension = Context->DeviceExtension;
-    SearchContext.ComponentName = ComponentName;
-
-    Status = NtfslxEnumerateLookupDirectory(Context->DeviceExtension,
-                                            FileRecord,
-                                            NtfslxLookupPathEntryCallback,
-                                            &SearchContext);
-    ExFreePoolWithTag(FileRecord, NTFSLX_TAG);
-    if (!NT_SUCCESS(Status))
+    /*
+     * O(log N) directory lookup via NtfslxIndexLookupName. Replaces the
+     * earlier full pre-order traversal that descended into every child
+     * subtree until the callback found a match — that walk read every
+     * index allocation block in the directory, turning each path
+     * component into 30+ disk IRPs on a populated System32 mount.
+     *
+     * The lookup needs the directory's $INDEX_ROOT (resident, lives in
+     * FileRecord) and, for large directories, the runlist of the
+     * non-resident $INDEX_ALLOCATION attribute.
+     */
     {
-        NTFSDBG("ntfslx: component lookup failed in directory MFT %I64u for '%wZ' status=0x%08lx\n",
-                ParentIndex,
-                ComponentName,
-                Status);
-        return Status;
-    }
+        PNTFSLX_ATTR_RECORD IndexRootAttr = NULL;
+        PNTFSLX_ATTR_RECORD IndexAllocAttr = NULL;
+        PNTFSLX_RUNLIST_ELEMENT IndexAllocRunlist = NULL;
+        ULONG IndexAllocRunlistCount = 0;
+        const VOID *IndexRootBuffer = NULL;
+        ULONG IndexRootLength = 0;
+        ULONGLONG FoundRef = 0;
+        static const WCHAR I30Name[] = { '$', 'I', '3', '0' };
 
-    if (ParentIndex == NTFSLX_FILE_ROOT)
-    {
-        NTFSDBG("ntfslx: root lookup completed for '%wZ' found=%u index=%I64u\n",
-                ComponentName,
-                SearchContext.Found,
-                SearchContext.FoundIndex);
-    }
-
-    if (!SearchContext.Found)
-    {
-        NTFSLX_DISPATCH_TRACE("ntfslx: dispatch lookup miss parent=%I64u component='%wZ' final=%u\n",
-                              ParentIndex,
-                              ComponentName,
-                              IsFinalComponent);
-
-        if (ParentIndex == NTFSLX_FILE_ROOT)
+        Status = NtfslxFindAttribute(FileRecord,
+                                     NTFSLX_ATTRIBUTE_INDEX_ROOT,
+                                     I30Name,
+                                     RTL_NUMBER_OF(I30Name),
+                                     &IndexRootAttr);
+        if (NT_SUCCESS(Status) && IndexRootAttr->NonResident == 0)
         {
-            NTFSDBG("ntfslx: root component '%wZ' is absent from ntfs.img root enumeration, likely image content mismatch rather than case-only lookup failure\n",
-                    ComponentName);
+            IndexRootBuffer = (const UCHAR *)IndexRootAttr +
+                              IndexRootAttr->Data.Resident.ValueOffset;
+            IndexRootLength = IndexRootAttr->Data.Resident.ValueLength;
+        }
+        else
+        {
+            ExFreePoolWithTag(FileRecord, NTFSLX_TAG);
+            return IsFinalComponent ? STATUS_OBJECT_NAME_NOT_FOUND
+                                    : STATUS_OBJECT_PATH_NOT_FOUND;
         }
 
-        return IsFinalComponent ? STATUS_OBJECT_NAME_NOT_FOUND
-                                : STATUS_OBJECT_PATH_NOT_FOUND;
-    }
+        if (NT_SUCCESS(NtfslxFindAttribute(FileRecord,
+                                           NTFSLX_ATTRIBUTE_INDEX_ALLOCATION,
+                                           I30Name,
+                                           RTL_NUMBER_OF(I30Name),
+                                           &IndexAllocAttr)) &&
+            IndexAllocAttr->NonResident != 0)
+        {
+            (VOID)NtfslxBuildIndexAllocationRunlist(IndexAllocAttr,
+                                                    &IndexAllocRunlist,
+                                                    &IndexAllocRunlistCount);
+        }
 
-    Context->CurrentIndex = SearchContext.FoundIndex;
-    *ChildNode = &Context->CurrentIndex;
-    return STATUS_SUCCESS;
+        Status = NtfslxIndexLookupName(IndexRootBuffer,
+                                       IndexRootLength,
+                                       Context->DeviceExtension->StorageDevice,
+                                       &Context->DeviceExtension->VolumeInfo,
+                                       IndexAllocRunlist,
+                                       IndexAllocRunlistCount,
+                                       (const USHORT *)ComponentName->Buffer,
+                                       ComponentName->Length / sizeof(WCHAR),
+                                       Context->DeviceExtension->UpcaseTable != NULL,
+                                       Context->DeviceExtension->UpcaseTable,
+                                       Context->DeviceExtension->UpcaseTableLength,
+                                       Context->DeviceExtension,
+                                       ParentIndex,
+                                       &FoundRef);
+
+        if (IndexAllocRunlist != NULL)
+        {
+            /* NtfslxBuildIndexAllocationRunlist allocates with this tag. */
+            ExFreePoolWithTag(IndexAllocRunlist, 'aIxN');
+        }
+
+        ExFreePoolWithTag(FileRecord, NTFSLX_TAG);
+
+        if (Status == STATUS_OBJECT_NAME_NOT_FOUND)
+        {
+            return IsFinalComponent ? STATUS_OBJECT_NAME_NOT_FOUND
+                                    : STATUS_OBJECT_PATH_NOT_FOUND;
+        }
+        if (!NT_SUCCESS(Status))
+        {
+            return Status;
+        }
+
+        Context->CurrentIndex = FoundRef;
+        *ChildNode = &Context->CurrentIndex;
+        return STATUS_SUCCESS;
+    }
 }
 
 static
@@ -1148,6 +1151,45 @@ NtfslxParseCreateTarget(
     if (FileName->Length == 0 || FileName->Buffer == NULL)
     {
         return STATUS_SUCCESS;
+    }
+
+    /*
+     * Strip a leading "\??\<drive>:" device-namespace prefix so opens that
+     * were issued in DOS-namespace form (e.g. kernel32 LoadLibraryExW
+     * prepending \??\C: to a user-supplied path) reach our path resolver
+     * with a volume-relative name. The IO manager normally redirects
+     * \??\C: through the symlink to \Device\HarddiskVolume<n>, but when the
+     * caller bypasses that step or the symlink resolution leaves the
+     * prefix attached, we must consume it ourselves or we end up looking
+     * for "??" as a directory entry under the volume root and returning
+     * STATUS_OBJECT_PATH_NOT_FOUND for every Win32 absolute path.
+     */
+    while (FileName->Length >= 5 * sizeof(WCHAR) &&
+           FileName->Buffer[0] == L'\\' &&
+           FileName->Buffer[1] == L'?' &&
+           FileName->Buffer[2] == L'?' &&
+           FileName->Buffer[3] == L'\\')
+    {
+        USHORT Skip = 4;
+        USHORT Chars = FileName->Length / sizeof(WCHAR);
+
+        while (Skip < Chars && FileName->Buffer[Skip] != L'\\')
+        {
+            ++Skip;
+        }
+
+        if (Skip == Chars)
+        {
+            BasePath->Buffer = NULL;
+            BasePath->Length = 0;
+            BasePath->MaximumLength = 0;
+            return STATUS_SUCCESS;
+        }
+
+        BasePath->Buffer = FileName->Buffer + Skip;
+        BasePath->Length = (USHORT)((Chars - Skip) * sizeof(WCHAR));
+        BasePath->MaximumLength = BasePath->Length;
+        FileName = BasePath;
     }
 
     /*
@@ -1299,6 +1341,7 @@ NtfslxCreate(
     ULONGLONG MftIndex;
     ULONGLONG ExistingMftIndex;
     BOOLEAN HadTrailingBackslash;
+    BOOLEAN CreatedNewObject;
     BOOLEAN NotifyCreated;
     BOOLEAN OpenTargetDirectory;
     ULONG_PTR CreateResult;
@@ -1307,6 +1350,7 @@ NtfslxCreate(
     NTSTATUS Status;
 
     HadTrailingBackslash = FALSE;
+    CreatedNewObject = FALSE;
     NotifyCreated = FALSE;
     OpenTargetDirectory = FALSE;
     CreateResult = FILE_OPENED;
@@ -1344,6 +1388,41 @@ NtfslxCreate(
     }
 
     Stack->FileObject->Vpb = DeviceExtension->Vpb;
+
+    /*
+     * Volume exclusion: dismount-pending volumes refuse all opens; locked
+     * volumes refuse opens from any FileObject other than the lock owner.
+     * The lock owner can still open the volume itself or files inside it
+     * (the FSCTL handler captured Stack->FileObject as the owner). The
+     * VolumeResource is acquired shared because the create path is the
+     * read side; the FSCTL handlers grab it exclusive when transitioning
+     * the state.
+     */
+    {
+        BOOLEAN Reject = FALSE;
+        NTSTATUS RejectStatus = STATUS_SUCCESS;
+
+        ExAcquireResourceSharedLite(&DeviceExtension->VolumeResource, TRUE);
+        if (DeviceExtension->DismountPending)
+        {
+            Reject = TRUE;
+            RejectStatus = STATUS_VOLUME_DISMOUNTED;
+        }
+        else if (DeviceExtension->VolumeLockOwner != NULL &&
+                 DeviceExtension->VolumeLockOwner != Stack->FileObject)
+        {
+            Reject = TRUE;
+            RejectStatus = STATUS_ACCESS_DENIED;
+        }
+        ExReleaseResourceLite(&DeviceExtension->VolumeResource);
+
+        if (Reject)
+        {
+            NTFSDBG("ntfslx: Create rejected fileObj=%p name='%wZ' status=0x%08lx (locked/dismounted)\n",
+                     Stack->FileObject, &Stack->FileObject->FileName, RejectStatus);
+            return NtfslxCompleteRequest(Irp, RejectStatus, 0);
+        }
+    }
 
     if (Stack->FileObject->FileName.Length == 0)
     {
@@ -1476,7 +1555,8 @@ NtfslxCreate(
                     DeviceExtension->StorageDevice,
                     &DeviceExtension->VolumeInfo,
                     DeviceExtension->MftRunlist,
-                    MftIndex, ProbeRecord);
+                    MftIndex,
+                    ProbeRecord);
                 if (NT_SUCCESS(RdSt))
                 {
                     NTSTATUS LookupSt = NtfslxFindAttribute(
@@ -1520,6 +1600,7 @@ NtfslxCreate(
                                  &BasePath, StreamNameLength, StreamName, AddSt);
                         return NtfslxCompleteRequest(Irp, AddSt, 0);
                     }
+                    CreatedNewObject = TRUE;
                     NotifyCreated = TRUE;
                 }
                 else if (CreateDisp == FILE_OVERWRITE)
@@ -1644,12 +1725,28 @@ NtfslxCreate(
                                          &NewMftIndex);
             NTFSDBG("ntfslx: NtfslxCreateNewFile returned 0x%08lx newMft=%I64u\n",
                      Status, NewMftIndex);
+            if (Status == STATUS_OBJECT_NAME_COLLISION &&
+                (CreateDisposition == FILE_OPEN_IF ||
+                 CreateDisposition == FILE_OVERWRITE_IF))
+            {
+                Status = NtfslxResolvePathToMftIndex(DeviceExtension,
+                                                     &BasePath,
+                                                     &NewMftIndex);
+                if (NT_SUCCESS(Status))
+                {
+                    MftIndex = NewMftIndex;
+                    CreatedNewObject = FALSE;
+                    NotifyCreated = FALSE;
+                    goto OpenByIndex;
+                }
+            }
             if (!NT_SUCCESS(Status))
             {
                 return NtfslxCompleteRequest(Irp, Status, 0);
             }
 
             MftIndex = NewMftIndex;
+            CreatedNewObject = TRUE;
             NotifyCreated = TRUE;
 
             /* Fall through to open the newly created file */
@@ -1736,6 +1833,14 @@ OpenByIndex:
      * the share record; subsequent openers are validated against it. A
      * conflicting request returns STATUS_SHARING_VIOLATION; without this we
      * silently let writers stomp readers.
+     *
+     * Per-FCB ShareMutex guards the IoCheckShareAccess + IoUpdateShareAccess
+     * sequence inside NtfslxShareAccessAcquire FOR THIS FCB. The DevExt-level
+     * ShareMutex inside share.c provides cross-FCB serialization on the
+     * shared NTFSLX_SHARE_RECORD; the FCB-level lock here would matter only
+     * if we ever start sharing FCBs across opens (a future refactor). It is
+     * acquired and released to satisfy the lock-order contract documented in
+     * fcb.c and to keep the contract concrete at every share-access site.
      */
     {
         ACCESS_MASK Desired = Stack->Parameters.Create.SecurityContext
@@ -1744,11 +1849,18 @@ OpenByIndex:
         ULONG ShareMode = Stack->Parameters.Create.ShareAccess;
         PNTFSLX_SHARE_RECORD ShareRec = NULL;
 
+        NtfslxFcbAcquireShareMutex(FileContext);
         Status = NtfslxShareAccessAcquire(DeviceExtension,
                                           FileContext->MftIndex,
                                           Desired, ShareMode,
                                           Stack->FileObject,
                                           &ShareRec);
+        if (NT_SUCCESS(Status))
+        {
+            FileContext->ShareRecord = ShareRec;
+        }
+        NtfslxFcbReleaseShareMutex(FileContext);
+
         if (!NT_SUCCESS(Status))
         {
             Stack->FileObject->FsContext2 = NULL;
@@ -1756,7 +1868,6 @@ OpenByIndex:
             NtfslxCloseFileObject(Stack->FileObject);
             return NtfslxCompleteRequest(Irp, Status, 0);
         }
-        FileContext->ShareRecord = ShareRec;
     }
 
     /*
@@ -1773,10 +1884,12 @@ OpenByIndex:
                                               FileContext->MftIndex);
             if (!NT_SUCCESS(Status))
             {
+                NtfslxFcbAcquireShareMutex(FileContext);
                 NtfslxShareAccessRelease(DeviceExtension,
                                          FileContext->ShareRecord,
                                          Stack->FileObject);
                 FileContext->ShareRecord = NULL;
+                NtfslxFcbReleaseShareMutex(FileContext);
                 Stack->FileObject->FsContext2 = NULL;
                 NtfslxFreeCcb(Ccb);
                 NtfslxCloseFileObject(Stack->FileObject);
@@ -1800,15 +1913,18 @@ OpenByIndex:
             /* Non-fatal: open still succeeds even if truncate partially fails. */
         }
 
-        if (CreateDisposition == FILE_CREATE ||
-            CreateDisposition == FILE_OPEN_IF ||
-            CreateDisposition == FILE_OVERWRITE_IF)
+        if (CreatedNewObject)
         {
-            /* For the "_IF" variants the result reflects whether we created
-             * or opened. For now we set CREATED unconditionally in those cases
-             * since we don't distinguish the "found existing" branch from
-             * a fresh creation here. */
-            CreateResult = FILE_OPENED; /* keep simple until needed */
+            CreateResult = FILE_CREATED;
+        }
+        else if (!OpenTargetDirectory &&
+                 (CreateDisposition == FILE_SUPERSEDE ||
+                  CreateDisposition == FILE_OVERWRITE ||
+                  CreateDisposition == FILE_OVERWRITE_IF))
+        {
+            CreateResult = (CreateDisposition == FILE_SUPERSEDE)
+                ? FILE_SUPERSEDED
+                : FILE_OVERWRITTEN;
         }
 
         /*
@@ -1984,6 +2100,25 @@ NtfslxCleanup(
         return NtfslxCompleteRequest(Irp, STATUS_SUCCESS, 0);
     }
 
+    /*
+     * If this handle held the volume lock, drop it on close so a stuck
+     * lock-owner doesn't keep the volume offline forever. Matches the
+     * Windows convention: closing the lock-owning handle implicitly
+     * unlocks the volume.
+     */
+    if (DeviceExtension->VolumeResourceInitialized &&
+        DeviceExtension->VolumeLockOwner == Stack->FileObject)
+    {
+        ExAcquireResourceExclusiveLite(&DeviceExtension->VolumeResource, TRUE);
+        if (DeviceExtension->VolumeLockOwner == Stack->FileObject)
+        {
+            DeviceExtension->VolumeLockOwner = NULL;
+            NTFSDBG("ntfslx: Cleanup auto-unlocked volume on lock-owner close fileObj=%p\n",
+                     Stack->FileObject);
+        }
+        ExReleaseResourceLite(&DeviceExtension->VolumeResource);
+    }
+
     FileContext = (PNTFSLX_FILE_CONTEXT)Stack->FileObject->FsContext;
     Ccb = (PNTFSLX_CCB)Stack->FileObject->FsContext2;
 
@@ -2069,14 +2204,20 @@ NtfslxCleanup(
      * close) matches the FILE_OBJECT lifetime: cleanup runs once per handle
      * and the share-access state is supposed to track open handles, not
      * outstanding kernel references.
+     *
+     * The per-FCB ShareMutex serializes the IoRemoveShareAccess call inside
+     * NtfslxShareAccessRelease against any other share-access mutation on
+     * the same FCB (see fcb.c lock-order doc).
      */
     if (FileContext != NULL &&
         FileContext->Signature == NTFSLX_FILE_CONTEXT_SIGNATURE &&
         FileContext->ShareRecord != NULL)
     {
+        NtfslxFcbAcquireShareMutex(FileContext);
         NtfslxShareAccessRelease(DeviceExtension, FileContext->ShareRecord,
                                  Stack->FileObject);
         FileContext->ShareRecord = NULL;
+        NtfslxFcbReleaseShareMutex(FileContext);
     }
 
     return NtfslxCompleteRequest(Irp, STATUS_SUCCESS, 0);
@@ -2128,15 +2269,21 @@ NtfslxRead(
 {
     PIO_STACK_LOCATION Stack;
     PNTFSLX_DEVICE_EXTENSION DeviceExtension;
+    PNTFSLX_FILE_CONTEXT FileContext;
     LARGE_INTEGER ByteOffset;
     ULONG Length;
     ULONG BytesRead;
     PVOID Buffer;
     NTSTATUS Status;
+    BOOLEAN PagingIo;
+    BOOLEAN ResourceAcquired;
 
     Stack = IoGetCurrentIrpStackLocation(Irp);
     DeviceExtension = DeviceObject->DeviceExtension;
     Length = Stack->Parameters.Read.Length;
+    PagingIo = BooleanFlagOn(Irp->Flags, IRP_PAGING_IO);
+    ResourceAcquired = FALSE;
+    BytesRead = 0;
 
     if (!NtfslxIsVolumeDevice(DeviceExtension) || Stack->FileObject == NULL)
     {
@@ -2151,18 +2298,11 @@ NtfslxRead(
     /*
      * Paging I/O arrives from the MM when a page fault on a mapped view
      * needs the backing bytes read in. We service it via the runlist reader
-     * exactly like a normal read — no cache interaction, no locks held that
-     * would block. For paging I/O the MDL is already mapped by the IO mgr,
-     * so NtfslxGetUserBuffer(TRUE) gives us the right kernel VA.
+     * exactly like a normal read — no cache interaction. For paging I/O
+     * the MDL is already mapped by the IO mgr, so NtfslxGetUserBuffer(TRUE)
+     * gives us the right kernel VA.
      */
-    if (BooleanFlagOn(Irp->Flags, IRP_PAGING_IO))
-    {
-        Buffer = NtfslxGetUserBuffer(Irp, TRUE);
-    }
-    else
-    {
-        Buffer = NtfslxGetUserBuffer(Irp, FALSE);
-    }
+    Buffer = NtfslxGetUserBuffer(Irp, PagingIo);
 
     if (Buffer == NULL)
     {
@@ -2176,14 +2316,48 @@ NtfslxRead(
         ByteOffset = Stack->FileObject->CurrentByteOffset;
     }
 
+    /*
+     * Acquire FCB resource according to canonical lock-order (fcb.c):
+     *   - PagingIoResource shared for paging I/O (Cc / Mm path)
+     *   - MainResource shared for normal reads
+     * Shared because reads don't mutate FCB state; multiple concurrent
+     * readers are fine. Cc's fast-I/O paths take the same resources via
+     * FcbHeader.Resource / .PagingIoResource, so the locks here serialize
+     * with cache-manager activity correctly.
+     */
+    FileContext = (PNTFSLX_FILE_CONTEXT)Stack->FileObject->FsContext;
+    if (FileContext != NULL)
+    {
+        if (PagingIo)
+        {
+            ResourceAcquired = NtfslxFcbAcquirePagingIoShared(FileContext, TRUE);
+        }
+        else
+        {
+            ResourceAcquired = NtfslxFcbAcquireMainShared(FileContext, TRUE);
+        }
+    }
+
     Status = NtfslxReadFileObject(Stack->FileObject,
                                   Buffer,
                                   Length,
                                   &ByteOffset,
-                                  BooleanFlagOn(Irp->Flags, IRP_PAGING_IO),
+                                  PagingIo,
                                   &BytesRead);
-    if (NT_SUCCESS(Status) &&
-        !BooleanFlagOn(Irp->Flags, IRP_PAGING_IO) &&
+
+    if (ResourceAcquired)
+    {
+        if (PagingIo)
+        {
+            NtfslxFcbReleasePagingIo(FileContext);
+        }
+        else
+        {
+            NtfslxFcbReleaseMain(FileContext);
+        }
+    }
+
+    if (NT_SUCCESS(Status) && !PagingIo &&
         BooleanFlagOn(Stack->FileObject->Flags, FO_SYNCHRONOUS_IO))
     {
         Stack->FileObject->CurrentByteOffset.QuadPart = ByteOffset.QuadPart + BytesRead;
@@ -2200,15 +2374,21 @@ NtfslxWrite(
 {
     PIO_STACK_LOCATION Stack;
     PNTFSLX_DEVICE_EXTENSION DeviceExtension;
+    PNTFSLX_FILE_CONTEXT FileContext;
     LARGE_INTEGER ByteOffset;
     ULONG Length;
     ULONG BytesWritten;
     PVOID Buffer;
     NTSTATUS Status;
+    BOOLEAN PagingIo;
+    BOOLEAN ResourceAcquired;
 
     Stack = IoGetCurrentIrpStackLocation(Irp);
     DeviceExtension = DeviceObject->DeviceExtension;
     Length = Stack->Parameters.Write.Length;
+    PagingIo = BooleanFlagOn(Irp->Flags, IRP_PAGING_IO);
+    ResourceAcquired = FALSE;
+    BytesWritten = 0;
 
     if (!NtfslxIsVolumeDevice(DeviceExtension) || Stack->FileObject == NULL)
     {
@@ -2220,7 +2400,7 @@ NtfslxWrite(
         return NtfslxCompleteRequest(Irp, STATUS_SUCCESS, 0);
     }
 
-    Buffer = NtfslxGetUserBuffer(Irp, BooleanFlagOn(Irp->Flags, IRP_PAGING_IO));
+    Buffer = NtfslxGetUserBuffer(Irp, PagingIo);
     if (Buffer == NULL)
     {
         return NtfslxCompleteRequest(Irp, STATUS_INVALID_USER_BUFFER, 0);
@@ -2233,13 +2413,48 @@ NtfslxWrite(
         ByteOffset = Stack->FileObject->CurrentByteOffset;
     }
 
+    /*
+     * Acquire FCB resource according to canonical lock-order (fcb.c):
+     *   - Paging-write: PagingIoResource shared. Cc's lazy-writer holds
+     *     the same resource shared while flushing dirty pages, so we
+     *     do likewise — Cc itself serializes the actual page write
+     *     against concurrent readers via its internal lock map.
+     *   - Non-paging write: MainResource exclusive. The dispatch path
+     *     mutates DataSize / AllocationSize / Initialized in the FCB,
+     *     and only one writer at a time may do that.
+     */
+    FileContext = (PNTFSLX_FILE_CONTEXT)Stack->FileObject->FsContext;
+    if (FileContext != NULL)
+    {
+        if (PagingIo)
+        {
+            ResourceAcquired = NtfslxFcbAcquirePagingIoShared(FileContext, TRUE);
+        }
+        else
+        {
+            ResourceAcquired = NtfslxFcbAcquireMainExclusive(FileContext, TRUE);
+        }
+    }
+
     Status = NtfslxWriteFileObject(Stack->FileObject,
                                    Buffer,
                                    Length,
                                    &ByteOffset,
                                    &BytesWritten);
-    if (NT_SUCCESS(Status) &&
-        !BooleanFlagOn(Irp->Flags, IRP_PAGING_IO) &&
+
+    if (ResourceAcquired)
+    {
+        if (PagingIo)
+        {
+            NtfslxFcbReleasePagingIo(FileContext);
+        }
+        else
+        {
+            NtfslxFcbReleaseMain(FileContext);
+        }
+    }
+
+    if (NT_SUCCESS(Status) && !PagingIo &&
         BooleanFlagOn(Stack->FileObject->Flags, FO_SYNCHRONOUS_IO))
     {
         Stack->FileObject->CurrentByteOffset.QuadPart = ByteOffset.QuadPart + BytesWritten;
@@ -3319,7 +3534,8 @@ NtfslxApplyBasicInfo(
         Offset += Attr->Length;
     }
 
-    Status = NtfslxWriteMftRecord(DevExt->StorageDevice,
+    Status = NtfslxWriteMftRecord(DevExt,
+                                  DevExt->StorageDevice,
                                   &DevExt->VolumeInfo,
                                   DevExt->MftRunlist,
                                   FileContext->MftIndex,
@@ -3787,7 +4003,8 @@ NtfslxSetInformation(
                               NewLeafName.Buffer,
                               NewLeafName.Length);
 
-                Status = NtfslxWriteMftRecord(DeviceExtension->StorageDevice,
+                Status = NtfslxWriteMftRecord(DeviceExtension,
+                                              DeviceExtension->StorageDevice,
                                               &DeviceExtension->VolumeInfo,
                                               DeviceExtension->MftRunlist,
                                               FileContext->MftIndex,
@@ -3949,8 +4166,10 @@ NtfslxFlushBuffers(
     /*
      * ntfslx writes through to disk synchronously today, so there is no dirty
      * file-system cache state to push here. Report success so user-mode flush
-     * callers stop treating the operation as unsupported.
+     * callers stop treating the operation as unsupported. Drain the Phase-1
+     * journal batch first so any pending redo records land before we ack.
      */
+    NtfslxJournalFlush(DeviceExtension);
     return NtfslxCompleteRequest(Irp, STATUS_SUCCESS, 0);
 }
 
@@ -3977,6 +4196,15 @@ NtfslxShutdown(
              DeviceExtension->StorageDevice,
              DeviceExtension->VolumeInfo.Flags);
 
+    /*
+     * Drain the Phase-1 journal batch before we mark the volume clean.
+     * Order matters: the dirty flag drop is the last metadata write of
+     * a clean shutdown, and any pending redo records describe earlier
+     * writes that the recovery driver may need to replay if a crash
+     * happens between this shutdown and the next mount.
+     */
+    NtfslxJournalFlush(DeviceExtension);
+
     Status = NtfslxSetVolumeDirtyFlag(DeviceExtension->StorageDevice,
                                       &DeviceExtension->VolumeInfo,
                                       DeviceExtension->MftRunlist,
@@ -4002,6 +4230,16 @@ NtfslxShutdown(
             Status = StorageStatus;
         }
     }
+
+    /*
+     * Reclaim parked MFT runlists from MFT-extend operations (T0.4). At
+     * shutdown all opens have drained, so no lock-free reader can still
+     * dereference any of the parked pointers.
+     */
+    NtfslxDrainObsoleteMftRunlists(DeviceExtension);
+
+    /* Release the cached $LogFile runlist used by Phase-1 journaling. */
+    NtfslxJournalTeardown(DeviceExtension);
 
     return NtfslxCompleteRequest(Irp, Status, 0);
 }

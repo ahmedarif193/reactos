@@ -32,6 +32,31 @@
 /* FIXME */
 GUID MountedDevicesGuid = {0x53F5630D, 0xB6BF, 0x11D0, {0x94, 0xF2, 0x00, 0xA0, 0xC9, 0x1E, 0xFB, 0x8B}};
 static const GUID MountMgrBootRamdiskGuid = {0xD9B257FC, 0x684E, 0x4DCB, {0xAB, 0x79, 0x03, 0xCF, 0xA2, 0xF6, 0xB7, 0x50}};
+static const WCHAR MountMgrRamdiskPrefixBuffer[] = L"\\Device\\Ramdisk";
+
+static
+BOOLEAN
+MountMgrIsMiniNtBoot(VOID)
+{
+    HANDLE MiniNTKeyHandle;
+    OBJECT_ATTRIBUTES MiniNTAttributes;
+    UNICODE_STRING MiniNTKeyName = RTL_CONSTANT_STRING(
+        L"\\Registry\\Machine\\System\\CurrentControlSet\\Control\\MiniNT");
+
+    InitializeObjectAttributes(&MiniNTAttributes,
+                               &MiniNTKeyName,
+                               OBJ_CASE_INSENSITIVE | OBJ_KERNEL_HANDLE,
+                               NULL,
+                               NULL);
+
+    if (NT_SUCCESS(ZwOpenKey(&MiniNTKeyHandle, KEY_READ, &MiniNTAttributes)))
+    {
+        ZwClose(MiniNTKeyHandle);
+        return TRUE;
+    }
+
+    return FALSE;
+}
 
 PDEVICE_OBJECT gdeviceObject;
 KEVENT UnloadEvent;
@@ -1073,6 +1098,9 @@ MountMgrMountedDeviceArrival(IN PDEVICE_EXTENSION DeviceExtension,
                                     &IsFT);
     if (!NT_SUCCESS(Status))
     {
+        DPRINT1("mountmgr: arrival query failed Symbolic=%wZ Status=0x%08lx\n",
+                SymbolicName,
+                Status);
         KeWaitForSingleObject(&(DeviceExtension->DeviceLock), Executive, KernelMode, FALSE, NULL);
 
         for (NextEntry = DeviceExtension->OfflineDeviceListHead.Flink;
@@ -1101,10 +1129,47 @@ MountMgrMountedDeviceArrival(IN PDEVICE_EXTENSION DeviceExtension,
         return Status;
     }
 
+    DPRINT1("mountmgr: arrival Symbolic=%wZ Device=%wZ UniqueIdLength=%lu Removable=%u GptLetter=%u HasGuid=%u IsFT=%u Manual=%u\n",
+            SymbolicName,
+            &TargetDeviceName,
+            UniqueId->UniqueIdLength,
+            DeviceInformation->Removable,
+            HasGptDriveLetter,
+            HasGuid,
+            IsFT,
+            ManuallyRegistered);
+
     /* Save gathered data */
     DeviceInformation->UniqueId = UniqueId;
     DeviceInformation->DeviceName = TargetDeviceName;
     DeviceInformation->KeepLinks = FALSE;
+
+    if (MountMgrIsMiniNtBoot())
+    {
+        UNICODE_STRING RamdiskPrefix;
+
+        RtlInitUnicodeString(&RamdiskPrefix, MountMgrRamdiskPrefixBuffer);
+        if (RtlPrefixUnicodeString(&RamdiskPrefix, &TargetDeviceName, TRUE))
+        {
+            DPRINT1("mountmgr: MiniNT ramdisk system partition %wZ UniqueIdLength=%lu\n",
+                    &TargetDeviceName,
+                    UniqueId->UniqueIdLength);
+
+            IoSetSystemPartition(&TargetDeviceName);
+
+            if (DeviceExtension->DriveLetterData == NULL)
+            {
+                DeviceExtension->DriveLetterData = AllocatePool(UniqueId->UniqueIdLength +
+                                                                sizeof(MOUNTDEV_UNIQUE_ID));
+                if (DeviceExtension->DriveLetterData)
+                {
+                    RtlCopyMemory(DeviceExtension->DriveLetterData,
+                                  UniqueId,
+                                  UniqueId->UniqueIdLength + sizeof(MOUNTDEV_UNIQUE_ID));
+                }
+            }
+        }
+    }
 
     /* If we found system partition, mark it */
     if (DeviceExtension->DriveLetterData && UniqueId->UniqueIdLength == DeviceExtension->DriveLetterData->UniqueIdLength)
@@ -1112,6 +1177,10 @@ MountMgrMountedDeviceArrival(IN PDEVICE_EXTENSION DeviceExtension,
         if (RtlCompareMemory(UniqueId->UniqueId, DeviceExtension->DriveLetterData->UniqueId, UniqueId->UniqueIdLength)
             == UniqueId->UniqueIdLength)
         {
+            DPRINT1("mountmgr: system partition match Device=%wZ Symbolic=%wZ UniqueIdLength=%lu\n",
+                    &TargetDeviceName,
+                    SymbolicName,
+                    UniqueId->UniqueIdLength);
             IoSetSystemPartition(&TargetDeviceName);
         }
     }
@@ -1930,27 +1999,12 @@ DriverEntry(IN PDRIVER_OBJECT DriverObject,
 
     DeviceExtension->NoAutoMount = MountmgrReadNoAutoMount(&(DeviceExtension->RegistryPath));
 
-    /* In WinPE / LiveCD mode the kernel creates a volatile MiniNT key before
-     * boot drivers are loaded.  When present, force NoAutoMount so that only
-     * volumes with a pre-registered link (e.g. ramdisk X:) get a letter. */
-    if (!DeviceExtension->NoAutoMount)
-    {
-        UNICODE_STRING MiniNTKeyName = RTL_CONSTANT_STRING(
-            L"\\Registry\\Machine\\System\\CurrentControlSet\\Control\\MiniNT");
-        OBJECT_ATTRIBUTES MiniNTAttributes;
-        HANDLE MiniNTKeyHandle;
-
-        InitializeObjectAttributes(&MiniNTAttributes,
-                                   &MiniNTKeyName,
-                                   OBJ_CASE_INSENSITIVE | OBJ_KERNEL_HANDLE,
-                                   NULL,
-                                   NULL);
-        if (NT_SUCCESS(ZwOpenKey(&MiniNTKeyHandle, KEY_READ, &MiniNTAttributes)))
-        {
-            ZwClose(MiniNTKeyHandle);
-            DeviceExtension->NoAutoMount = TRUE;
-        }
-    }
+    /* In WinPE / LiveCD mode the kernel creates a volatile MiniNT key.
+     * Do NOT force NoAutoMount here -- it prevents filesystem drivers from
+     * exposing their volumes with drive letters.  The ramdisk system
+     * partition gets its letter via the system partition matching path,
+     * not via automount, so disabling automount only blocks non-ramdisk
+     * volumes like attached NTFS disks from getting letters. */
 
     MountMgrLoadBootRamdiskInformation(DeviceExtension);
 

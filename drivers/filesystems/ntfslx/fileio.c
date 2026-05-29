@@ -1,18 +1,7 @@
 /*
- * PROJECT:     ReactOS NTFS Linux-Port Skeleton
+ * PROJECT:     ReactOS ntfslx driver
  * LICENSE:     GPL-2.0-or-later
- * PURPOSE:     File open/read/write helpers for staged ntfslx integration
- *
- * Integration note:
- * - Add public prototypes for the helpers below to ntfslx.h when dispatch
- *   starts using them.
- * - Wire file-object FsContext/FsContext2 ownership in IRP_MJ_CREATE/CLOSE.
- * - Dispatch should call NtfslxOpenFileObjectByIndex(), NtfslxReadFileObject(),
- *   NtfslxWriteFileObject(), and NtfslxCloseFileObject() once path traversal
- *   resolves a target MFT record.
- * - Attribute-list extent handling is implemented here conservatively so the
- *   main thread can later swap in a richer open-path resolver without changing
- *   the file I/O surface.
+ * PURPOSE:     File object open, close, read, write, and cache attach paths
  */
 
 #include "ntfslx.h"
@@ -412,28 +401,35 @@ NtfslxAppendRunlist(
         return STATUS_SUCCESS;
     }
 
-    if (SrcCount < 2 || (*DestCount < 1))
+    if (SrcCount < 2 || (*DestCount < 2))
     {
         return STATUS_INVALID_PARAMETER;
     }
 
-    CopyCount = SrcCount - 1;
-    NewCount = *DestCount + CopyCount;
+    /*
+     * Both dest and src counts include a Length=0 terminator at index
+     * (count-1). Drop the dest terminator so the appended src extents
+     * are reachable to the runlist walker, then keep the src terminator
+     * (which carries the correct trailing Vcn / sentinel Lcn for the
+     * merged attribute).
+     */
+    CopyCount = (*DestCount - 1) + SrcCount;
+    NewCount = CopyCount;
     NewRunlist = ExAllocatePoolWithTag(NonPagedPool,
-                                       (NewCount + 1) * sizeof(NTFSLX_RUNLIST_ELEMENT),
+                                       NewCount * sizeof(NTFSLX_RUNLIST_ELEMENT),
                                        NTFSLX_TAG);
     if (NewRunlist == NULL)
     {
         return STATUS_INSUFFICIENT_RESOURCES;
     }
 
-    RtlZeroMemory(NewRunlist, (NewCount + 1) * sizeof(NTFSLX_RUNLIST_ELEMENT));
+    RtlZeroMemory(NewRunlist, NewCount * sizeof(NTFSLX_RUNLIST_ELEMENT));
     RtlCopyMemory(NewRunlist,
                   *DestRunlist,
-                  *DestCount * sizeof(NTFSLX_RUNLIST_ELEMENT));
-    RtlCopyMemory(NewRunlist + *DestCount,
+                  (*DestCount - 1) * sizeof(NTFSLX_RUNLIST_ELEMENT));
+    RtlCopyMemory(NewRunlist + (*DestCount - 1),
                   SrcRunlist,
-                  CopyCount * sizeof(NTFSLX_RUNLIST_ELEMENT));
+                  SrcCount * sizeof(NTFSLX_RUNLIST_ELEMENT));
 
     ExFreePoolWithTag(*DestRunlist, NTFSLX_TAG);
     *DestRunlist = NewRunlist;
@@ -618,40 +614,6 @@ NtfslxBuildRunlistForAttribute(
 }
 
 static
-LONGLONG
-NtfslxRunlistVcnToLcn(
-    _In_ PNTFSLX_RUNLIST_ELEMENT Runlist,
-    _In_ LONGLONG Vcn)
-{
-    ULONG Index;
-
-    if (Runlist == NULL)
-    {
-        return NTFSLX_LCN_RL_NOT_MAPPED;
-    }
-
-    if (Vcn < Runlist[0].Vcn)
-    {
-        return NTFSLX_LCN_ENOENT;
-    }
-
-    for (Index = 0; Runlist[Index].Length != 0; ++Index)
-    {
-        if (Vcn < Runlist[Index + 1].Vcn)
-        {
-            if (Runlist[Index].Lcn >= 0)
-            {
-                return Runlist[Index].Lcn + (Vcn - Runlist[Index].Vcn);
-            }
-
-            return Runlist[Index].Lcn;
-        }
-    }
-
-    return Runlist[Index].Lcn;
-}
-
-static
 NTSTATUS
 NtfslxReadRunlistData(
     _In_ PDEVICE_OBJECT StorageDevice,
@@ -668,6 +630,7 @@ NtfslxReadRunlistData(
     LONGLONG Lcn;
     ULONG ClusterOffset;
     ULONG ChunkLength;
+    ULONG RunHint = 0;
     NTSTATUS Status;
 
     if (BytesRead != NULL)
@@ -680,39 +643,134 @@ NtfslxReadRunlistData(
 
     while (Remaining != 0)
     {
-        Vcn = (LONGLONG)(CurrentOffset / VolumeInfo->BytesPerCluster);
-        ClusterOffset = (ULONG)(CurrentOffset % VolumeInfo->BytesPerCluster);
-        ChunkLength = VolumeInfo->BytesPerCluster - ClusterOffset;
+        ULONG ClusterSize = VolumeInfo->BytesPerCluster;
+
+        Vcn = (LONGLONG)(CurrentOffset / ClusterSize);
+        ClusterOffset = (ULONG)(CurrentOffset % ClusterSize);
+        ChunkLength = ClusterSize - ClusterOffset;
         if ((ULONGLONG)ChunkLength > Remaining)
         {
             ChunkLength = (ULONG)Remaining;
         }
 
-        Lcn = NtfslxRunlistVcnToLcn(Runlist, Vcn);
+        Lcn = NtfslxRunlistVcnToLcnHinted(Runlist, Vcn, &RunHint);
         if (Lcn == NTFSLX_LCN_HOLE)
         {
             RtlZeroMemory(Buffer, ChunkLength);
+            Buffer += ChunkLength;
+            CurrentOffset += ChunkLength;
+            Remaining -= ChunkLength;
+            continue;
         }
-        else if (Lcn >= 0)
+        if (Lcn == NTFSLX_LCN_ENOENT)
         {
+            return STATUS_END_OF_FILE;
+        }
+        if (Lcn < 0)
+        {
+            return STATUS_FILE_CORRUPT_ERROR;
+        }
+
+        /*
+         * Scan ahead: how many additional contiguous clusters
+         * (same LCN run, all whole clusters) can we batch
+         * into one large NtfslxReadDisk? Coalescing reduces synchronous IRP
+         * count from ~1 per 4 KiB to ~1 per N×4 KiB, which is the dominant
+         * factor in cold-boot wallclock on virtual disks. Cap at 32 clusters
+         * (128 KiB) — large enough to amortize IRP overhead, small enough
+         * not to OOM the temp buffer or block other readers waiting on the
+         * disk for too long.
+         */
+        {
+            ULONG MaxBatchClusters = 32;
+            ULONG BatchClusters;
+            ULONG BatchBytes;
+            PUCHAR DiskBuf = NULL;
+            BOOLEAN AllocatedDiskBuf = FALSE;
+            BOOLEAN FullClusterStart;
+            BOOLEAN FullClusterEnd;
+            LONGLONG NextVcn;
+            LONGLONG ExpectedLcn;
+            ULONG NextRunHint;
+            ULONGLONG NextOffset;
+
+            FullClusterStart = (ClusterOffset == 0);
+            FullClusterEnd = (ChunkLength == ClusterSize);
+
+            BatchClusters = 1;
+            NextVcn = Vcn + 1;
+            ExpectedLcn = Lcn + 1;
+            NextRunHint = RunHint;
+            NextOffset = CurrentOffset + ChunkLength;
+
+            /*
+             * Only batch when starting at a cluster boundary AND the
+             * current chunk covers the full cluster. Sub-cluster reads
+             * (first/last partial cluster of the request) stay 1-cluster
+             * to keep the cache-insert correctness invariant simple.
+             */
+            if (FullClusterStart && FullClusterEnd && Remaining > ChunkLength)
+            {
+                /*
+                 * Loop invariant: Buffer[0 .. BatchClusters*ClusterSize) is
+                 * the user-buffer slice we may write into when the disk
+                 * read fires. The next iteration will examine slot
+                 * BatchClusters and may write a full cluster there if it
+                 * decides to extend; that requires Remaining to cover
+                 * (BatchClusters + 1) * ClusterSize bytes. Off-by-one
+                 * here is a real bug that crashes paging IO when the
+                 * IRP buffer ends just past BatchClusters*ClusterSize.
+                 */
+                while (BatchClusters < MaxBatchClusters &&
+                       Remaining >= (ULONGLONG)(BatchClusters + 1) * ClusterSize)
+                {
+                    LONGLONG NextLcn = NtfslxRunlistVcnToLcnHinted(Runlist,
+                                                                  NextVcn,
+                                                                  &NextRunHint);
+                    if (NextLcn != ExpectedLcn)
+                        break;
+
+                    BatchClusters++;
+                    NextVcn++;
+                    ExpectedLcn++;
+                    NextOffset += ClusterSize;
+                }
+            }
+
+            BatchBytes = BatchClusters * ClusterSize;
+            if (BatchClusters > 1)
+            {
+                /* Multi-cluster batch reads land directly into the user
+                 * buffer (always full clusters there). Single-cluster
+                 * reads can be partial — those still go via the small
+                 * sub-cluster path inside NtfslxReadDisk's MDL handling. */
+                Status = NtfslxReadDisk(StorageDevice,
+                                        (LONGLONG)((ULONGLONG)Lcn * ClusterSize),
+                                        BatchBytes,
+                                        VolumeInfo->BytesPerSector,
+                                        Buffer,
+                                        TRUE);
+                if (!NT_SUCCESS(Status))
+                    return Status;
+                Buffer += BatchBytes;
+                CurrentOffset += BatchBytes;
+                Remaining -= BatchBytes;
+                continue;
+            }
+
+            /* Single-cluster (possibly partial) read. */
             Status = NtfslxReadDisk(StorageDevice,
-                                    (LONGLONG)(Lcn * VolumeInfo->BytesPerCluster + ClusterOffset),
+                                    (LONGLONG)(Lcn * ClusterSize + ClusterOffset),
                                     ChunkLength,
                                     VolumeInfo->BytesPerSector,
                                     Buffer,
                                     TRUE);
             if (!NT_SUCCESS(Status))
             {
+                if (AllocatedDiskBuf)
+                    ExFreePoolWithTag(DiskBuf, NTFSLX_TAG);
                 return Status;
             }
-        }
-        else if (Lcn == NTFSLX_LCN_ENOENT)
-        {
-            return STATUS_END_OF_FILE;
-        }
-        else
-        {
-            return STATUS_FILE_CORRUPT_ERROR;
         }
 
         Buffer += ChunkLength;
@@ -818,10 +876,10 @@ NtfslxBuildAttributeDataRunlist(
         }
 
         Status = NtfslxReadMftRecord(DeviceExtension->StorageDevice,
-                                    &DeviceExtension->VolumeInfo,
-                                    DeviceExtension->MftRunlist,
-                                    MREF(Entry->MftReference),
-                                    RemoteRecord);
+                                     &DeviceExtension->VolumeInfo,
+                                     DeviceExtension->MftRunlist,
+                                     MREF(Entry->MftReference),
+                                     RemoteRecord);
         if (!NT_SUCCESS(Status))
         {
             ExFreePoolWithTag(RemoteRecord, NTFSLX_TAG);
@@ -914,6 +972,15 @@ NtfslxOpenFileContext(
     }
     Context->PagingIoResourceInitialized = TRUE;
 
+    /*
+     * Per-FCB share-access lock. Wraps every IoCheckShareAccess /
+     * IoSetShareAccess / IoUpdateShareAccess / IoRemoveShareAccess pair
+     * in share.c so two opens of the same file cannot race on the
+     * SHARE_ACCESS state machine. See drivers/filesystems/ntfslx/fcb.c
+     * for the canonical lock-order documentation.
+     */
+    NtfslxFcbInitializeShareMutex(Context);
+
     Context->FcbHeader.NodeTypeCode = 0x0502; /* FSRTL_FCB_HEADER_TYPE */
     Context->FcbHeader.NodeByteSize = sizeof(NTFSLX_FILE_CONTEXT);
     Context->FcbHeader.Resource = &Context->MainResource;
@@ -937,10 +1004,10 @@ NtfslxOpenFileContext(
     }
 
     Status = NtfslxReadMftRecord(DeviceExtension->StorageDevice,
-                                &DeviceExtension->VolumeInfo,
-                                DeviceExtension->MftRunlist,
-                                MftIndex,
-                                FileRecord);
+                                 &DeviceExtension->VolumeInfo,
+                                 DeviceExtension->MftRunlist,
+                                 MftIndex,
+                                 FileRecord);
     if (!NT_SUCCESS(Status))
     {
         ExFreePoolWithTag(FileRecord, NTFSLX_TAG);
@@ -1290,6 +1357,37 @@ NtfslxWriteFileObject(
     _In_ PLARGE_INTEGER ByteOffset,
     _Out_opt_ PULONG BytesWritten)
 {
+    PNTFSLX_FILE_CONTEXT FileContext;
+
+    /*
+     * Refuse writes to compressed / sparse / encrypted $DATA attributes
+     * before any state mutation. Until full sparse/compressed/encrypted
+     * support lands these paths can silently corrupt on-disk data.
+     *
+     * Relies on these flag bits being immutable post-open. If
+     * FSCTL_SET_COMPRESSION (or any other flag-toggling FSCTL) lands later,
+     * the snapshot captured at open time becomes stale and the guard must
+     * re-read from FileContext->FileRecord under appropriate locking.
+     */
+    if (FileObject != NULL)
+    {
+        FileContext = (PNTFSLX_FILE_CONTEXT)FileObject->FsContext;
+        if (FileContext != NULL &&
+            FileContext->Signature == NTFSLX_FILE_CONTEXT_SIGNATURE &&
+            !FileContext->IsDirectory &&
+            FileContext->DataAttribute != NULL &&
+            (FileContext->DataAttribute->Flags &
+             (NTFSLX_ATTR_IS_COMPRESSED |
+              NTFSLX_ATTR_IS_ENCRYPTED |
+              NTFSLX_ATTR_IS_SPARSE)) != 0)
+        {
+            if (BytesWritten != NULL)
+                *BytesWritten = 0;
+            return STATUS_NOT_IMPLEMENTED;
+        }
+
+    }
+
     return NtfslxExtendedWrite(FileObject, Buffer, Length, ByteOffset, BytesWritten);
 }
 

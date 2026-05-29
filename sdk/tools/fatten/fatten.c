@@ -937,14 +937,12 @@ int main(int oargc, char* oargv[])
         while ((argv[i] != NULL) && !is_command(argv[i++]))
             nargs++;
 
-        if (strcmp(parg, "format") == 0)
+        if (strcmp(parg, "format") == 0 || strcmp(parg, "format32") == 0)
         {
-            // NOTE: The fs driver detects which FAT format fits best based on size
             int sectors;
 
             NEED_PARAMS(1, 2);
 
-            // Arg 1: number of sectors
             sectors = atoi(argv[0]);
 
             if (sectors <= 0)
@@ -963,6 +961,10 @@ int main(int oargc, char* oargv[])
 
             NEED_MOUNT();
 
+            // f_mkfs's 2nd arg is sfd (0=FDISK, 1=SFD); fatfs auto-selects
+            // FAT12/16/32 by sector count. "format32" is accepted as an alias
+            // for callers that want explicit naming, but the FAT subtype is
+            // still chosen by size (>~32MB → FAT32).
             ret = f_mkfs("0:", 1, sectors < 4096 ? 1 : 8);
             if (ret)
             {

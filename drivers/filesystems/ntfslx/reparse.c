@@ -474,7 +474,8 @@ NtfslxSetReparsePoint(
 
     NtfslxUpdateReparseAttributeFlags(FileContext->FileRecord, TRUE);
 
-    Status = NtfslxWriteMftRecord(DevExt->StorageDevice,
+    Status = NtfslxWriteMftRecord(DevExt,
+                                 DevExt->StorageDevice,
                                  &DevExt->VolumeInfo,
                                  DevExt->MftRunlist,
                                  FileContext->MftIndex,
@@ -673,7 +674,8 @@ NtfslxDeleteReparsePoint(
 
     NtfslxUpdateReparseAttributeFlags(FileContext->FileRecord, FALSE);
 
-    Status = NtfslxWriteMftRecord(FileContext->DeviceExtension->StorageDevice,
+    Status = NtfslxWriteMftRecord(FileContext->DeviceExtension,
+                                  FileContext->DeviceExtension->StorageDevice,
                                   &FileContext->DeviceExtension->VolumeInfo,
                                   FileContext->DeviceExtension->MftRunlist,
                                   FileContext->MftIndex,

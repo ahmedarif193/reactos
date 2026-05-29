@@ -1010,6 +1010,13 @@ KeReleaseQueuedSpinLockFromDpcLevel(
     _Inout_ PKSPIN_LOCK_QUEUE LockQueue
 );
 
+_IRQL_requires_min_(DISPATCH_LEVEL)
+BOOLEAN
+FASTCALL
+KeTryToAcquireQueuedSpinLockAtDpcLevel(
+    _Inout_ PKSPIN_LOCK_QUEUE LockQueue
+);
+
 VOID
 NTAPI
 KiRestoreProcessorControlState(

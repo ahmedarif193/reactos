@@ -222,6 +222,270 @@ done:
 }
 
 /*
+ * Allocate real clusters for the [HoleVcn, HoleVcn + HoleLen) sub-range of an
+ * existing LCN_HOLE run, splice the allocated runs into the file's runlist,
+ * re-encode mapping pairs, persist the MFT record. The replaced segment must
+ * be entirely contained within a single hole entry of FileContext->DataRunlist.
+ *
+ * This is the heart of the T2.1 fix: prior code skipped hole runs in the
+ * write loop, so any data the caller placed at a hole-mapped VBO was lost.
+ * We allocate, splice, and persist BEFORE returning, so the subsequent data
+ * write can proceed against real LCNs.
+ *
+ * On failure the runlist and MFT record are left untouched and any newly
+ * allocated bitmap bits are released. On success the in-memory runlist is
+ * swapped to the new merged buffer.
+ */
+static NTSTATUS
+NtfslxFillHoleRange(
+    _Inout_ PNTFSLX_FILE_CONTEXT FileContext,
+    _In_ LONGLONG HoleVcn,
+    _In_ LONGLONG HoleLen)
+{
+    PNTFSLX_DEVICE_EXTENSION DevExt;
+    PNTFSLX_MFT_RECORD Record;
+    PNTFSLX_ATTR_RECORD DataAttr;
+    PNTFSLX_RUNLIST_ELEMENT OldRunlist;
+    PNTFSLX_RUNLIST_ELEMENT NewRunlist = NULL;
+    PNTFSLX_RUNLIST_ELEMENT MergedRunlist = NULL;
+    ULONG OldCount;
+    ULONG NewCount = 0;
+    ULONG MergedCapacity;
+    ULONG MergedIndex;
+    ULONG HoleIdx;
+    ULONG OutIdx;
+    ULONG Idx;
+    ULONG NewRuns;
+    LONGLONG HoleEnd;
+    LONGLONG HoleRunVcn;
+    LONGLONG HoleRunLen;
+    LONGLONG PreLen;
+    LONGLONG PostStart;
+    LONGLONG PostLen;
+    LONGLONG HintLcn;
+    UCHAR MpBuffer[NTFSLX_MP_ENCODE_MAX];
+    ULONG MpSize = 0;
+    ULONG MpOffset;
+    ULONG OldAttrLength;
+    ULONG NewAttrLength;
+    NTSTATUS Status;
+
+    DevExt = FileContext->DeviceExtension;
+    Record = FileContext->FileRecord;
+    DataAttr = FileContext->DataAttribute;
+    OldRunlist = FileContext->DataRunlist;
+    OldCount = FileContext->DataRunlistCount;
+
+    if (HoleLen <= 0 || OldRunlist == NULL || OldCount == 0)
+    {
+        return STATUS_INVALID_PARAMETER;
+    }
+
+    HoleEnd = HoleVcn + HoleLen;
+
+    /* Locate the hole entry that fully contains [HoleVcn, HoleEnd). */
+    HoleIdx = (ULONG)-1;
+    for (Idx = 0; Idx + 1 < OldCount; Idx++)
+    {
+        if (OldRunlist[Idx].Length <= 0)
+        {
+            continue;
+        }
+        if (OldRunlist[Idx].Lcn != NTFSLX_LCN_HOLE)
+        {
+            continue;
+        }
+        if (HoleVcn >= OldRunlist[Idx].Vcn &&
+            HoleEnd <= OldRunlist[Idx].Vcn + OldRunlist[Idx].Length)
+        {
+            HoleIdx = Idx;
+            break;
+        }
+    }
+    if (HoleIdx == (ULONG)-1)
+    {
+        return STATUS_INVALID_PARAMETER;
+    }
+
+    HoleRunVcn = OldRunlist[HoleIdx].Vcn;
+    HoleRunLen = OldRunlist[HoleIdx].Length;
+    PreLen = HoleVcn - HoleRunVcn;
+    PostStart = HoleEnd;
+    PostLen = (HoleRunVcn + HoleRunLen) - HoleEnd;
+
+    /* Hint allocator with the LCN that follows the run preceding the hole, so
+     * single-extent files stay contiguous when possible. */
+    HintLcn = 0;
+    if (HoleIdx > 0 &&
+        OldRunlist[HoleIdx - 1].Lcn >= 0 &&
+        OldRunlist[HoleIdx - 1].Length > 0)
+    {
+        HintLcn = OldRunlist[HoleIdx - 1].Lcn + OldRunlist[HoleIdx - 1].Length;
+    }
+
+    Status = NtfslxAllocateClusters(DevExt->StorageDevice, &DevExt->VolumeInfo,
+                                    DevExt->MftRunlist,
+                                    (ULONGLONG)HoleLen, (ULONGLONG)HintLcn,
+                                    &NewRunlist, &NewCount);
+    if (!NT_SUCCESS(Status))
+    {
+        NTFSDBG("ntfslx: FillHole AllocateClusters failed mft=%I64u status=0x%08lx\n",
+                 FileContext->MftIndex, Status);
+        return Status;
+    }
+
+    /* NewCount includes the allocator's own sentinel (Length == 0). */
+    NewRuns = (NewCount > 0) ? NewCount - 1 : 0;
+
+    /* Worst-case merged: every old run + pre-split + every new run + post-split.
+     * (OldCount already includes the old sentinel so adding NewRuns + 2 covers
+     * the split and the inserted runs.) */
+    MergedCapacity = OldCount + NewRuns + 2;
+    MergedRunlist = ExAllocatePoolWithTag(NonPagedPool,
+                                          MergedCapacity * sizeof(NTFSLX_RUNLIST_ELEMENT),
+                                          NTFSLX_TAG);
+    if (MergedRunlist == NULL)
+    {
+        Status = STATUS_INSUFFICIENT_RESOURCES;
+        goto Fail;
+    }
+    RtlZeroMemory(MergedRunlist, MergedCapacity * sizeof(NTFSLX_RUNLIST_ELEMENT));
+
+    OutIdx = 0;
+
+    /* Copy entries before the split hole. */
+    for (Idx = 0; Idx < HoleIdx; Idx++)
+    {
+        MergedRunlist[OutIdx++] = OldRunlist[Idx];
+    }
+
+    /* Pre-hole remnant. */
+    if (PreLen > 0)
+    {
+        MergedRunlist[OutIdx].Vcn = HoleRunVcn;
+        MergedRunlist[OutIdx].Lcn = NTFSLX_LCN_HOLE;
+        MergedRunlist[OutIdx].Length = PreLen;
+        OutIdx++;
+    }
+
+    /* Allocated runs, shifted into the file's VCN space. */
+    for (MergedIndex = 0; MergedIndex < NewRuns; MergedIndex++)
+    {
+        MergedRunlist[OutIdx].Vcn = NewRunlist[MergedIndex].Vcn + HoleVcn;
+        MergedRunlist[OutIdx].Lcn = NewRunlist[MergedIndex].Lcn;
+        MergedRunlist[OutIdx].Length = NewRunlist[MergedIndex].Length;
+        OutIdx++;
+    }
+
+    /* Post-hole remnant. */
+    if (PostLen > 0)
+    {
+        MergedRunlist[OutIdx].Vcn = PostStart;
+        MergedRunlist[OutIdx].Lcn = NTFSLX_LCN_HOLE;
+        MergedRunlist[OutIdx].Length = PostLen;
+        OutIdx++;
+    }
+
+    /* Copy entries after the split hole, including the original sentinel. */
+    for (Idx = HoleIdx + 1; Idx < OldCount; Idx++)
+    {
+        MergedRunlist[OutIdx++] = OldRunlist[Idx];
+    }
+
+    /* Re-encode mapping pairs from the merged runlist. */
+    Status = NtfslxEncodeMappingPairs(MergedRunlist, MpBuffer,
+                                      sizeof(MpBuffer), &MpSize);
+    if (!NT_SUCCESS(Status))
+    {
+        NTFSDBG("ntfslx: FillHole encode mapping pairs failed mft=%I64u status=0x%08lx runs=%lu\n",
+                 FileContext->MftIndex, Status, OutIdx);
+        goto Fail;
+    }
+
+    MpOffset = DataAttr->Data.NonResident.MappingPairsOffset;
+    if (MpOffset < NTFSLX_NONRESIDENT_ATTR_HEADER_SIZE)
+    {
+        MpOffset = NTFSLX_NONRESIDENT_ATTR_HEADER_SIZE;
+        DataAttr->Data.NonResident.MappingPairsOffset = (USHORT)MpOffset;
+    }
+    OldAttrLength = DataAttr->Length;
+    NewAttrLength = ROUND_UP(MpOffset + MpSize, 8);
+
+    if (NewAttrLength != OldAttrLength)
+    {
+        Status = NtfslxResizeAttributeRecord(Record, DataAttr, NewAttrLength);
+        if (!NT_SUCCESS(Status))
+        {
+            NTFSDBG("ntfslx: FillHole resize attr %lu->%lu failed mft=%I64u status=0x%08lx\n",
+                     OldAttrLength, NewAttrLength,
+                     FileContext->MftIndex, Status);
+            goto Fail;
+        }
+    }
+
+    RtlZeroMemory((PUCHAR)DataAttr + MpOffset, NewAttrLength - MpOffset);
+    RtlCopyMemory((PUCHAR)DataAttr + MpOffset, MpBuffer, MpSize);
+
+    /*
+     * Zero-fill the newly allocated clusters before the MFT commit. The user
+     * write that triggered this hole-fill may only cover a portion of the
+     * allocated VCN range (sub-cluster start/end, or a smaller stride);
+     * without zero-fill the uncovered bytes would expose stale data from
+     * whoever held those clusters before. Mirrors the ordering used in
+     * NtfslxExtendNonResident: allocator + zero-fill + MFT, so a crash
+     * before MFT commit leaves the bitmap with leaked bits but the file's
+     * on-disk runlist still shows a hole (which reads as zeros).
+     */
+    Status = NtfslxZeroFillRunRange(DevExt, MergedRunlist,
+                                    (ULONGLONG)HoleVcn * DevExt->VolumeInfo.BytesPerCluster,
+                                    (ULONGLONG)HoleLen * DevExt->VolumeInfo.BytesPerCluster);
+    if (!NT_SUCCESS(Status))
+    {
+        NTFSDBG("ntfslx: FillHole zero fill failed mft=%I64u status=0x%08lx\n",
+                 FileContext->MftIndex, Status);
+        goto Fail;
+    }
+
+    Status = NtfslxWriteMftRecord(DevExt, DevExt->StorageDevice, &DevExt->VolumeInfo,
+                                  DevExt->MftRunlist, FileContext->MftIndex,
+                                  Record);
+    if (!NT_SUCCESS(Status))
+    {
+        NTFSDBG("ntfslx: FillHole WriteMft failed mft=%I64u status=0x%08lx\n",
+                 FileContext->MftIndex, Status);
+        goto Fail;
+    }
+
+    /* Commit the merged runlist. The allocator output array is no longer
+     * shared (its entries have been copied into MergedRunlist). */
+    ExFreePoolWithTag(NewRunlist, NTFSLX_TAG);
+    NewRunlist = NULL;
+
+    if (FileContext->DataRunlist != NULL)
+    {
+        ExFreePoolWithTag(FileContext->DataRunlist, NTFSLX_TAG);
+    }
+    FileContext->DataRunlist = MergedRunlist;
+    FileContext->DataRunlistCount = OutIdx;
+    MergedRunlist = NULL;
+
+    return STATUS_SUCCESS;
+
+Fail:
+    if (NewRunlist != NULL)
+    {
+        NtfslxFreeClusters(DevExt->StorageDevice, &DevExt->VolumeInfo,
+                           DevExt->MftRunlist, NewRunlist, NewCount);
+        ExFreePoolWithTag(NewRunlist, NTFSLX_TAG);
+    }
+    if (MergedRunlist != NULL)
+    {
+        ExFreePoolWithTag(MergedRunlist, NTFSLX_TAG);
+    }
+    return Status;
+}
+
+/*
  * Mirror a size change into FcbHeader and tell the cache manager via
  * CcSetFileSizes. Every write/truncate path calls this instead of touching
  * FcbHeader directly, so the cache map stays in sync with on-disk state.
@@ -588,7 +852,7 @@ NtfslxTruncateNonResident(
         DataAttr->Data.NonResident.DataSize = NewSize;
         DataAttr->Data.NonResident.InitializedSize = NewSize;
 
-        Status = NtfslxWriteMftRecord(DevExt->StorageDevice, &DevExt->VolumeInfo,
+        Status = NtfslxWriteMftRecord(DevExt, DevExt->StorageDevice, &DevExt->VolumeInfo,
                                       DevExt->MftRunlist, FileContext->MftIndex,
                                       Record);
         if (NT_SUCCESS(Status))
@@ -636,7 +900,7 @@ NtfslxTruncateNonResident(
             goto Cleanup;
         }
 
-        Status = NtfslxWriteMftRecord(DevExt->StorageDevice, &DevExt->VolumeInfo,
+        Status = NtfslxWriteMftRecord(DevExt, DevExt->StorageDevice, &DevExt->VolumeInfo,
                                       DevExt->MftRunlist, FileContext->MftIndex,
                                       Record);
         if (!NT_SUCCESS(Status))
@@ -704,7 +968,7 @@ NtfslxTruncateNonResident(
         goto Cleanup;
     }
 
-    Status = NtfslxWriteMftRecord(DevExt->StorageDevice, &DevExt->VolumeInfo,
+    Status = NtfslxWriteMftRecord(DevExt, DevExt->StorageDevice, &DevExt->VolumeInfo,
                                   DevExt->MftRunlist, FileContext->MftIndex,
                                   Record);
     if (!NT_SUCCESS(Status))
@@ -869,7 +1133,7 @@ NtfslxUpdateFileNameSize(
     }
 
     /* Flush the modified MFT record once. */
-    Status = NtfslxWriteMftRecord(DevExt->StorageDevice, &DevExt->VolumeInfo,
+    Status = NtfslxWriteMftRecord(DevExt, DevExt->StorageDevice, &DevExt->VolumeInfo,
                                   DevExt->MftRunlist, FileContext->MftIndex, Record);
     if (!NT_SUCCESS(Status))
     {
@@ -986,7 +1250,7 @@ NtfslxWriteResidentExtend(
     }
 
     /* Write the modified MFT record back to disk */
-    Status = NtfslxWriteMftRecord(DevExt->StorageDevice, &DevExt->VolumeInfo,
+    Status = NtfslxWriteMftRecord(DevExt, DevExt->StorageDevice, &DevExt->VolumeInfo,
                                   DevExt->MftRunlist, FileContext->MftIndex,
                                   Record);
     if (NT_SUCCESS(Status))
@@ -1170,7 +1434,7 @@ NtfslxPromoteToNonResident(
     }
 
     /* Write the MFT record with new attribute layout */
-    Status = NtfslxWriteMftRecord(DevExt->StorageDevice, &DevExt->VolumeInfo,
+    Status = NtfslxWriteMftRecord(DevExt, DevExt->StorageDevice, &DevExt->VolumeInfo,
                                   DevExt->MftRunlist, FileContext->MftIndex,
                                   Record);
     if (!NT_SUCCESS(Status))
@@ -1411,7 +1675,7 @@ NtfslxExtendNonResident(
         goto Fail;
     }
 
-    Status = NtfslxWriteMftRecord(DevExt->StorageDevice, &DevExt->VolumeInfo,
+    Status = NtfslxWriteMftRecord(DevExt, DevExt->StorageDevice, &DevExt->VolumeInfo,
                                   DevExt->MftRunlist, FileContext->MftIndex,
                                   Record);
     if (!NT_SUCCESS(Status))
@@ -1475,6 +1739,8 @@ NtfslxWriteNonResidentOverwrite(
     ULONG SectorSize;
     ULONGLONG Remaining;
     ULONGLONG CurrentOffset;
+    ULONGLONG OldAllocationSize;
+    ULONGLONG OldInitializedSize;
     const UCHAR *Src;
     ULONG I;
     NTSTATUS Status;
@@ -1491,6 +1757,19 @@ NtfslxWriteNonResidentOverwrite(
         return NormalizeStatus;
     }
 
+    /*
+     * Snapshot AllocationSize and on-disk InitializedSize BEFORE any extend.
+     * We need both: NtfslxExtendNonResident already zero-fills the freshly
+     * allocated tail [OldAllocationSize, NewAllocationSize), but if the
+     * write starts past the current InitializedSize and within the OLD
+     * allocation, those clusters were never zeroed and contain stale data.
+     * Without filling that gap a close+reopen+read of [InitializedSize,
+     * ByteOffset) returns garbage instead of zeros (the NTFS contract for
+     * the unwritten region of a file).
+     */
+    OldAllocationSize = FileContext->AllocationSize;
+    OldInitializedSize = FileContext->DataAttribute->Data.NonResident.InitializedSize;
+
     if (ByteOffset + Length > FileContext->AllocationSize)
     {
         NTSTATUS ExtendStatus = NtfslxExtendNonResident(FileContext,
@@ -1499,6 +1778,91 @@ NtfslxWriteNonResidentOverwrite(
         {
             return ExtendStatus;
         }
+    }
+
+    /*
+     * Zero-fill the gap [OldInitializedSize, ByteOffset) for the portion that
+     * lives within the old allocation. The portion past OldAllocationSize was
+     * zeroed by NtfslxExtendNonResident already, so we cap the fill at
+     * OldAllocationSize to avoid redundant disk writes.
+     */
+    if (ByteOffset > OldInitializedSize)
+    {
+        ULONGLONG GapEnd = ByteOffset;
+        if (GapEnd > OldAllocationSize)
+        {
+            GapEnd = OldAllocationSize;
+        }
+        if (GapEnd > OldInitializedSize)
+        {
+            Status = NtfslxZeroFillRunRange(DevExt,
+                                            FileContext->DataRunlist,
+                                            OldInitializedSize,
+                                            GapEnd - OldInitializedSize);
+            if (!NT_SUCCESS(Status))
+            {
+                NTFSDBG("ntfslx: WriteNonRes: gap zero-fill failed mft=%I64u status=0x%08lx\n",
+                         FileContext->MftIndex, Status);
+                return Status;
+            }
+        }
+    }
+
+    /*
+     * Hole-fill pre-pass (T2.1): walk the runlist and for any hole entry that
+     * the write covers, allocate clusters and splice them into the runlist.
+     * Without this the data-write loop below silently skipped holes, dropping
+     * caller data on the floor. Each fill rewrites DataRunlist, so after a
+     * successful fill we restart the scan from index 0 to walk the new layout.
+     */
+    {
+        ULONGLONG WriteEnd = ByteOffset + Length;
+        ULONGLONG StartVcn = ByteOffset / ClusterSize;
+        ULONGLONG EndVcn = (WriteEnd + ClusterSize - 1) / ClusterSize;
+        BOOLEAN FilledOne;
+
+        do
+        {
+            FilledOne = FALSE;
+            for (I = 0; I + 1 < FileContext->DataRunlistCount; I++)
+            {
+                NTFSLX_RUNLIST_ELEMENT *Run = &FileContext->DataRunlist[I];
+                LONGLONG RunVcnEnd;
+                LONGLONG OverlapStart;
+                LONGLONG OverlapEnd;
+
+                if (Run->Length <= 0 || Run->Lcn != NTFSLX_LCN_HOLE)
+                {
+                    continue;
+                }
+
+                RunVcnEnd = Run->Vcn + Run->Length;
+                OverlapStart = Run->Vcn;
+                if ((LONGLONG)StartVcn > OverlapStart)
+                {
+                    OverlapStart = (LONGLONG)StartVcn;
+                }
+                OverlapEnd = RunVcnEnd;
+                if ((LONGLONG)EndVcn < OverlapEnd)
+                {
+                    OverlapEnd = (LONGLONG)EndVcn;
+                }
+                if (OverlapStart >= OverlapEnd)
+                {
+                    continue;
+                }
+
+                Status = NtfslxFillHoleRange(FileContext,
+                                             OverlapStart,
+                                             OverlapEnd - OverlapStart);
+                if (!NT_SUCCESS(Status))
+                {
+                    return Status;
+                }
+                FilledOne = TRUE;
+                break;
+            }
+        } while (FilledOne);
     }
 
     CurrentOffset = ByteOffset;
@@ -1556,7 +1920,7 @@ NtfslxWriteNonResidentOverwrite(
                                      FileContext->AllocationSize,
                                      FileContext->DataSize,
                                      FileContext->DataSize);
-        NtfslxWriteMftRecord(DevExt->StorageDevice, &DevExt->VolumeInfo,
+        NtfslxWriteMftRecord(DevExt, DevExt->StorageDevice, &DevExt->VolumeInfo,
                              DevExt->MftRunlist, FileContext->MftIndex, Record);
         NtfslxUpdateFileNameSize(FileContext,
                                  FileContext->DataSize,
@@ -1638,7 +2002,8 @@ NtfslxSetFileSize(
             NtfslxUpdateFcbAndCacheSizes(FileContext,
                                          FileContext->AllocationSize,
                                          NewSize, NewSize);
-            Status = NtfslxWriteMftRecord(DevExt->StorageDevice,
+            Status = NtfslxWriteMftRecord(DevExt,
+                                          DevExt->StorageDevice,
                                           &DevExt->VolumeInfo,
                                           DevExt->MftRunlist,
                                           FileContext->MftIndex,
@@ -1663,7 +2028,7 @@ NtfslxSetFileSize(
             return Status;
 
         DataAttr->Data.Resident.ValueLength = (ULONG)NewSize;
-        Status = NtfslxWriteMftRecord(DevExt->StorageDevice, &DevExt->VolumeInfo,
+        Status = NtfslxWriteMftRecord(DevExt, DevExt->StorageDevice, &DevExt->VolumeInfo,
                                       DevExt->MftRunlist, FileContext->MftIndex,
                                       Record);
         if (NT_SUCCESS(Status))
@@ -1713,6 +2078,22 @@ NtfslxExtendedWrite(
         FileContext->IsDirectory)
     {
         return STATUS_INVALID_DEVICE_REQUEST;
+    }
+
+    /*
+     * Mirror of the T0.1 guard in NtfslxWriteFileObject. NtfslxExtendedWrite
+     * is a public symbol; any future caller that reaches it directly (rather
+     * than through NtfslxWriteFileObject) must still refuse compressed,
+     * sparse, or encrypted $DATA. Relies on these flags being immutable
+     * post-open — revisit if FSCTL_SET_COMPRESSION lands.
+     */
+    if (FileContext->DataAttribute != NULL &&
+        (FileContext->DataAttribute->Flags &
+         (NTFSLX_ATTR_IS_COMPRESSED |
+          NTFSLX_ATTR_IS_ENCRYPTED |
+          NTFSLX_ATTR_IS_SPARSE)) != 0)
+    {
+        return STATUS_NOT_IMPLEMENTED;
     }
 
     if (ByteOffset->QuadPart < 0)

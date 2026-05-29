@@ -63,7 +63,6 @@ TestRead(
             ok_eq_hex(IoStatus.Status, 0x55555555);
             ok_eq_ulongptr(IoStatus.Information, (ULONG_PTR)0x5555555555555555);
         }
-
         KmtStartSeh()
         ResetEvent(EventHandle);
         RtlFillMemory(&IoStatus, sizeof(IoStatus), 0x55);
@@ -84,7 +83,6 @@ TestRead(
         ok_eq_hex(IoStatus.Status, 0x55555555);
         ok_eq_ulongptr(IoStatus.Information, (ULONG_PTR)0x5555555555555555);
         KmtEndSeh(STATUS_SUCCESS);
-
         ResetEvent(EventHandle);
         RtlFillMemory(&IoStatus, sizeof(IoStatus), 0x55);
         RtlFillMemory(Buffer, sizeof(Buffer), 0x55);
@@ -214,7 +212,6 @@ TestWrite(
             ok_eq_hex(IoStatus.Status, 0x55555555);
             ok_eq_ulongptr(IoStatus.Information, (ULONG_PTR)0x5555555555555555);
         }
-
         KmtStartSeh()
         ResetEvent(EventHandle);
         RtlFillMemory(&IoStatus, sizeof(IoStatus), 0x55);
@@ -235,7 +232,6 @@ TestWrite(
         ok_eq_hex(IoStatus.Status, 0x55555555);
         ok_eq_ulongptr(IoStatus.Information, (ULONG_PTR)0x5555555555555555);
         KmtEndSeh(STATUS_SUCCESS);
-
         ResetEvent(EventHandle);
         RtlFillMemory(&IoStatus, sizeof(IoStatus), 0x55);
         RtlFillMemory(Buffer, sizeof(Buffer), 0x55);
@@ -264,7 +260,6 @@ TestWrite(
             ok_eq_hex(IoStatus.Status, 0x55555555);
             ok_eq_ulongptr(IoStatus.Information, (ULONG_PTR)0x5555555555555555);
         }
-
         ResetEvent(EventHandle);
         RtlFillMemory(&IoStatus, sizeof(IoStatus), 0x55);
         RtlFillMemory(Buffer, sizeof(Buffer), 0x44);

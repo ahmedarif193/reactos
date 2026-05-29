@@ -275,8 +275,10 @@ NtfslxCreateNewFile(
     ULONG RecordSize;
     LARGE_INTEGER CurrentTime;
     NTSTATUS Status;
+    BOOLEAN HoldingMftLock;
 
     *OutMftIndex = 0;
+    HoldingMftLock = FALSE;
     RecordSize = DeviceExtension->VolumeInfo.BytesPerFileRecord;
     NameBytes = FileNameLength * sizeof(WCHAR);
     FnAttrValueLength = sizeof(NTFSLX_FILE_NAME_ATTRIBUTE) + NameBytes;
@@ -295,11 +297,54 @@ NtfslxCreateNewFile(
     NTFSDBG("ntfslx: CreateNewFile: name='%.*S' parent=%I64u isDir=%u\n",
              FileNameLength, FileName, ParentMftIndex, IsDirectory);
 
+    /*
+     * Lock-scope discipline (see drivers/filesystems/ntfslx/fcb.c for the
+     * canonical lock-order doc):
+     *
+     *   - Acquire MftAllocLock.
+     *   - Run NtfslxAllocateMftRecordEx, which performs the bitmap scan,
+     *     reservation, and durable bitmap write inside the lock. This
+     *     sequence cannot be split: the bitmap write IS the reservation
+     *     and another allocator must not race into the same slot.
+     *   - Release MftAllocLock IMMEDIATELY after the allocation returns.
+     *   - All subsequent disk I/O on the reserved record (the read-back,
+     *     the new-record disk write, the parent-index insert, the
+     *     rollback path) happens OUTSIDE the alloc-lock. They serialize
+     *     per-record because the bitmap reservation already excludes
+     *     other allocators from picking the same number; no other lock
+     *     is required for that exclusion.
+     *
+     * This avoids the deadlock where a sync IRP issued under the
+     * FAST_MUTEX would never have its completion APC delivered (FAST_MUTEX
+     * disables APCs via KeEnterCriticalRegion). It also lets parallel
+     * creates progress past Step 1 concurrently. KGUARDED_MUTEX has the
+     * same APC-blocking behaviour, but the narrow lock-window means we
+     * never issue a sync IRP under it.
+     */
+    if (DeviceExtension->MftAllocLockInitialized)
+    {
+        KeAcquireGuardedMutex(&DeviceExtension->MftAllocLock);
+        HoldingMftLock = TRUE;
+    }
+
     /* Step 1: Allocate a new MFT record. Use the Ex variant so the $MFT
      * gets extended on demand when the initial allocation is exhausted. */
     Status = NtfslxAllocateMftRecordEx(DeviceExtension, &RecordNumber);
     NTFSDBG("ntfslx: CreateNewFile: AllocateMftRecord returned 0x%08lx rec=%I64u\n",
              Status, RecordNumber);
+
+    /*
+     * Drop the alloc-lock the moment the bitmap reservation is committed
+     * (or the allocator has failed). All subsequent operations work
+     * against the already-reserved record number with no risk of another
+     * allocator picking the same slot.
+     */
+    if (HoldingMftLock)
+    {
+        KeReleaseGuardedMutex(&DeviceExtension->MftAllocLock);
+        HoldingMftLock = FALSE;
+    }
+
     if (!NT_SUCCESS(Status))
     {
         return Status;
@@ -309,7 +354,8 @@ NtfslxCreateNewFile(
     NewRecord = ExAllocatePoolWithTag(NonPagedPool, RecordSize, NTFSLX_TAG);
     if (NewRecord == NULL)
     {
-        NtfslxFreeMftRecord(DeviceExtension->StorageDevice,
+        NtfslxFreeMftRecord(DeviceExtension,
+                            DeviceExtension->StorageDevice,
                             &DeviceExtension->VolumeInfo,
                             DeviceExtension->MftRunlist,
                             RecordNumber);
@@ -323,7 +369,8 @@ NtfslxCreateNewFile(
     if (!NT_SUCCESS(Status))
     {
         ExFreePoolWithTag(NewRecord, NTFSLX_TAG);
-        NtfslxFreeMftRecord(DeviceExtension->StorageDevice,
+        NtfslxFreeMftRecord(DeviceExtension,
+                            DeviceExtension->StorageDevice,
                             &DeviceExtension->VolumeInfo,
                             DeviceExtension->MftRunlist,
                             RecordNumber);
@@ -442,7 +489,8 @@ NtfslxCreateNewFile(
     NTFSDBG("ntfslx: CreateNewFile step4/5 done, bytesInUse=%lu\n", NewRecord->BytesInUse);
 
     /* Step 6: Write MFT record to disk */
-    Status = NtfslxWriteMftRecord(DeviceExtension->StorageDevice,
+    Status = NtfslxWriteMftRecord(DeviceExtension,
+                                  DeviceExtension->StorageDevice,
                                   &DeviceExtension->VolumeInfo,
                                   DeviceExtension->MftRunlist,
                                   RecordNumber, NewRecord);
@@ -476,14 +524,37 @@ NtfslxCreateNewFile(
 
     ExFreePoolWithTag(NewRecord, NTFSLX_TAG);
     *OutMftIndex = RecordNumber;
+    /*
+     * The alloc-lock was already dropped right after Step 1 (see comment
+     * block above). HoldingMftLock should be FALSE here; the assert
+     * documents the contract, and the conditional release is defensive.
+     */
+    ASSERT(!HoldingMftLock);
+    if (HoldingMftLock)
+    {
+        KeReleaseGuardedMutex(&DeviceExtension->MftAllocLock);
+    }
     return STATUS_SUCCESS;
 
 RollbackMft:
     ExFreePoolWithTag(NewRecord, NTFSLX_TAG);
-    NtfslxFreeMftRecord(DeviceExtension->StorageDevice,
+    /*
+     * Free the reserved record. NtfslxFreeMftRecord internally takes the
+     * MftAllocLock if it needs to mutate the bitmap — but since the lock
+     * is reentrant-safe only for ERESOURCE (NOT for KGUARDED_MUTEX), we
+     * MUST be sure HoldingMftLock is FALSE before calling Free here.
+     * The lock-release contract above guarantees that.
+     */
+    ASSERT(!HoldingMftLock);
+    NtfslxFreeMftRecord(DeviceExtension,
+                        DeviceExtension->StorageDevice,
                         &DeviceExtension->VolumeInfo,
                         DeviceExtension->MftRunlist,
                         RecordNumber);
+    if (HoldingMftLock)
+    {
+        KeReleaseGuardedMutex(&DeviceExtension->MftAllocLock);
+    }
     return Status;
 }
 
@@ -572,7 +643,8 @@ NtfslxDeleteFile(
     }
 
     /* Step 5: Free the MFT record */
-    Status = NtfslxFreeMftRecord(DeviceExtension->StorageDevice,
+    Status = NtfslxFreeMftRecord(DeviceExtension,
+                                 DeviceExtension->StorageDevice,
                                  &DeviceExtension->VolumeInfo,
                                  DeviceExtension->MftRunlist,
                                  MftIndex);

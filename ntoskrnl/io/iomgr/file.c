@@ -17,8 +17,86 @@
 #include <debug.h>
 
 extern ERESOURCE IopSecurityResource;
+static const UNICODE_STRING IopRamdiskDriverName = RTL_CONSTANT_STRING(L"\\Driver\\Ramdisk");
+static const UNICODE_STRING IopDosDevicesPrefix = RTL_CONSTANT_STRING(L"\\??\\");
+static const UNICODE_STRING IopGlobalDosDevicesPrefix = RTL_CONSTANT_STRING(L"\\GLOBAL??\\");
+static const UNICODE_STRING IopDosDevicesLongPrefix = RTL_CONSTANT_STRING(L"\\DosDevices\\");
+static const UNICODE_STRING IopDevicePrefix = RTL_CONSTANT_STRING(L"\\Device\\");
+static const UNICODE_STRING IopSystemRootPrefix = RTL_CONSTANT_STRING(L"\\SystemRoot\\");
 
 /* PRIVATE FUNCTIONS *********************************************************/
+
+static
+BOOLEAN
+NTAPI
+IopIsAbsoluteObjectPath(_In_opt_ PUNICODE_STRING RemainingName)
+{
+    if (RemainingName == NULL || RemainingName->Buffer == NULL)
+    {
+        return FALSE;
+    }
+
+    if (RtlPrefixUnicodeString(&IopDosDevicesPrefix, RemainingName, TRUE) ||
+        RtlPrefixUnicodeString(&IopGlobalDosDevicesPrefix, RemainingName, TRUE) ||
+        RtlPrefixUnicodeString(&IopDosDevicesLongPrefix, RemainingName, TRUE) ||
+        RtlPrefixUnicodeString(&IopDevicePrefix, RemainingName, TRUE) ||
+        RtlPrefixUnicodeString(&IopSystemRootPrefix, RemainingName, TRUE))
+    {
+        return TRUE;
+    }
+
+    return FALSE;
+}
+
+static
+BOOLEAN
+NTAPI
+IopExtractNtDrivePath(_Inout_ PUNICODE_STRING RemainingName,
+                      _Out_ PWCHAR DriveLetter)
+{
+    USHORT PrefixChars;
+    UNICODE_STRING Prefix;
+
+    if (RemainingName == NULL || RemainingName->Buffer == NULL || RemainingName->Length < 7 * sizeof(WCHAR))
+    {
+        return FALSE;
+    }
+
+    if (RtlPrefixUnicodeString(&IopDosDevicesPrefix, RemainingName, TRUE))
+    {
+        Prefix = IopDosDevicesPrefix;
+    }
+    else if (RtlPrefixUnicodeString(&IopGlobalDosDevicesPrefix, RemainingName, TRUE))
+    {
+        Prefix = IopGlobalDosDevicesPrefix;
+    }
+    else if (RtlPrefixUnicodeString(&IopDosDevicesLongPrefix, RemainingName, TRUE))
+    {
+        Prefix = IopDosDevicesLongPrefix;
+    }
+    else
+    {
+        return FALSE;
+    }
+
+    PrefixChars = Prefix.Length / sizeof(WCHAR);
+    if (RemainingName->Length < (PrefixChars + 3) * sizeof(WCHAR))
+    {
+        return FALSE;
+    }
+
+    if (RemainingName->Buffer[PrefixChars + 1] != L':' ||
+        RemainingName->Buffer[PrefixChars + 2] != OBJ_NAME_PATH_SEPARATOR)
+    {
+        return FALSE;
+    }
+
+    *DriveLetter = RemainingName->Buffer[PrefixChars];
+    RemainingName->Buffer += PrefixChars + 2;
+    RemainingName->Length -= (PrefixChars + 2) * sizeof(WCHAR);
+    RemainingName->MaximumLength -= (PrefixChars + 2) * sizeof(WCHAR);
+    return TRUE;
+}
 
 VOID
 NTAPI
@@ -387,6 +465,48 @@ IopParseDevice(IN PVOID ParseObject,
             OriginalDeviceObject = OpenPacket->RelatedFileObject->DeviceObject;
         }
 
+        if (OriginalDeviceObject->DriverObject &&
+            RtlEqualUnicodeString(&OriginalDeviceObject->DriverObject->DriverName,
+                                  &IopRamdiskDriverName,
+                                  TRUE))
+        {
+            UNICODE_STRING LocalName;
+            WCHAR DriveLetter;
+            WCHAR BootDriveLetter;
+            BOOLEAN Normalized;
+            USHORT NormalizationCount;
+
+            LocalName = *RemainingName;
+            BootDriveLetter = SharedUserData->NtSystemRoot[0];
+            Normalized = FALSE;
+            NormalizationCount = 0;
+
+            while (IopExtractNtDrivePath(&LocalName, &DriveLetter))
+            {
+                if (((DriveLetter >= L'a') && (DriveLetter <= L'z') ? DriveLetter - (L'a' - L'A') : DriveLetter) !=
+                    ((BootDriveLetter >= L'a') && (BootDriveLetter <= L'z') ? BootDriveLetter - (L'a' - L'A') : BootDriveLetter))
+                {
+                    break;
+                }
+
+                Normalized = TRUE;
+                NormalizationCount++;
+            }
+
+            if (Normalized)
+            {
+                if (NormalizationCount > 1)
+                {
+                    DPRINT1("ioparse: collapsed repeated ramdisk boot prefixes %wZ -> %wZ ParseObject=%p Count=%u\n",
+                            RemainingName,
+                            &LocalName,
+                            ParseObject,
+                            NormalizationCount);
+                }
+                *RemainingName = LocalName;
+            }
+        }
+
         /* Validate device status */
         Status = IopCheckDeviceAndDriver(OpenPacket, OriginalDeviceObject);
         if (!NT_SUCCESS(Status))
@@ -587,16 +707,21 @@ IopParseDevice(IN PVOID ParseObject,
         /* Check if this is a direct open */
         if (!(RemainingName->Length) &&
             !(OpenPacket->RelatedFileObject) &&
-            ((DesiredAccess & ~(SYNCHRONIZE |
-                                FILE_READ_ATTRIBUTES |
-                                READ_CONTROL |
-                                ACCESS_SYSTEM_SECURITY |
-                                WRITE_OWNER |
-                                WRITE_DAC)) == 0) &&
             !(UseDummyFile))
         {
-            /* Remember this for later */
-            DirectOpen = TRUE;
+            /*
+             * Empty-name opens on a mounted VPB are volume opens such as
+             * \\.\C:. Route them through the mounted file system so
+             * volume FSCTLs (dirty bit, lock, dismount, ...) and write-capable
+             * DASD handles reach the FSD instead of bypassing it as a raw
+             * device open. Keep direct opens only for unmounted devices.
+             */
+            if (!(OriginalDeviceObject->Vpb) ||
+                !BooleanFlagOn(OriginalDeviceObject->Vpb->Flags, VPB_MOUNTED))
+            {
+                /* Remember this for later */
+                DirectOpen = TRUE;
+            }
         }
 
         /* Check if we have a related FO that wasn't a direct open */
@@ -627,6 +752,23 @@ IopParseDevice(IN PVOID ParseObject,
             /* Check if it has a VPB */
             if ((OriginalDeviceObject->Vpb) && !(DirectOpen))
             {
+                if (OriginalDeviceObject->DriverObject &&
+                    RtlEqualUnicodeString(&OriginalDeviceObject->DriverObject->DriverName,
+                                          &IopRamdiskDriverName,
+                                          TRUE) &&
+                    IopIsAbsoluteObjectPath(RemainingName))
+                {
+                    DPRINT1("ioparse: ramdisk VPB open Remaining=%wZ Direct=%u Parse=%p Original=%p Related=%p RelatedFlags=0x%lx Vpb=%p Flags=0x%lx\n",
+                            RemainingName,
+                            DirectOpen,
+                            ParseObject,
+                            OriginalDeviceObject,
+                            OpenPacket->RelatedFileObject,
+                            OpenPacket->RelatedFileObject ? OpenPacket->RelatedFileObject->Flags : 0,
+                            OriginalDeviceObject->Vpb,
+                            OriginalDeviceObject->Vpb ? OriginalDeviceObject->Vpb->Flags : 0);
+                }
+
                 /* Check if the VPB is mounted, and mount it */
                 Vpb = IopCheckVpbMounted(OpenPacket,
                                          OriginalDeviceObject,
@@ -1329,6 +1471,21 @@ IopParseFile(IN PVOID ParseObject,
 
     /* Validate the open packet */
     if (!IopValidateOpenPacket(OpenPacket)) return STATUS_OBJECT_TYPE_MISMATCH;
+
+    /*
+     * An absolute NT namespace path must restart from the object manager root,
+     * even if a file handle was supplied as RootDirectory. Otherwise a stale
+     * related file object turns "\??\X:\..." into a bogus filesystem-relative
+     * open on the current volume.
+     */
+    if (IopIsAbsoluteObjectPath(RemainingName))
+    {
+        OpenPacket->RelatedFileObject = NULL;
+        DPRINT1("ioparse: reparsing absolute namespace open from root Remaining=%wZ ParseObject=%p\n",
+                RemainingName,
+                ParseObject);
+        return STATUS_REPARSE;
+    }
 
     /* Get the device object */
     DeviceObject = IoGetRelatedDeviceObject(ParseObject);
@@ -2573,6 +2730,7 @@ IopCreateFile(OUT PHANDLE FileHandle,
     PNAMED_PIPE_CREATE_PARAMETERS NamedPipeCreateParameters;
     POPEN_PACKET OpenPacket;
     ULONG EaErrorOffset;
+    ULONG_PTR Last;
     PAGED_CODE();
 
     IOTRACE(IO_FILE_DEBUG, "FileName: %wZ\n", ObjectAttributes->ObjectName);
@@ -2728,6 +2886,22 @@ IopCreateFile(OUT PHANDLE FileHandle,
     /* Check if the call came from user mode */
     if (AccessMode != KernelMode)
     {
+        Last = (ULONG_PTR)FileHandle + sizeof(HANDLE) - 1;
+        if (Last < (ULONG_PTR)FileHandle ||
+            Last >= (ULONG_PTR)MmUserProbeAddress)
+        {
+            ExFreePool(OpenPacket);
+            return STATUS_ACCESS_VIOLATION;
+        }
+
+        Last = (ULONG_PTR)IoStatusBlock + sizeof(IO_STATUS_BLOCK) - 1;
+        if (Last < (ULONG_PTR)IoStatusBlock ||
+            Last >= (ULONG_PTR)MmUserProbeAddress)
+        {
+            ExFreePool(OpenPacket);
+            return STATUS_ACCESS_VIOLATION;
+        }
+
         _SEH2_TRY
         {
             /* Probe the output parameters */

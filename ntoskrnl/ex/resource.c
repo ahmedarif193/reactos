@@ -967,8 +967,9 @@ ExAcquireResourceSharedLite(IN PERESOURCE Resource,
                 else
                 {
                     /* Increase active entries */
-                    ASSERT(Resource->ActiveCount == 1);
+                    ASSERT(Resource->ActiveCount >= 1);
                     Resource->ActiveEntries++;
+                    Resource->ActiveCount++;
                 }
 
                 /* Release the lock and return */
@@ -1150,8 +1151,9 @@ TryAcquire:
         else
         {
             /* Increase active entries */
-            ASSERT(Resource->ActiveCount == 1);
+            ASSERT(Resource->ActiveCount >= 1);
             Resource->ActiveEntries++;
+            Resource->ActiveCount++;
         }
 
         /* Release the lock and return */
@@ -1349,8 +1351,9 @@ TryAcquire:
             else
             {
                 /* Increase active entries */
-                ASSERT(Resource->ActiveCount == 1);
+                ASSERT(Resource->ActiveCount >= 1);
                 Resource->ActiveEntries++;
+                Resource->ActiveCount++;
             }
 
             /* Release the lock and return */
@@ -1445,7 +1448,7 @@ ExConvertExclusiveToSharedLite(IN PERESOURCE Resource)
  * @implemented NT4
  *
  *     The ExConvertExclusiveToSharedLite routine deletes a given resource
- *     from the system’s resource list.
+ *     from the systemï¿½s resource list.
  *
  * @param Resource
  *        Pointer to the resource to delete.
@@ -1890,10 +1893,11 @@ ExReleaseResourceForThreadLite(IN PERESOURCE Resource,
             /* Give ownage to another thread */
             Count = Resource->NumberOfSharedWaiters;
             Resource->ActiveEntries = Count;
+            Resource->ActiveCount = Count;
             Resource->NumberOfSharedWaiters = 0;
 
             /* Release lock and let someone else have it */
-            ASSERT(Resource->ActiveCount == 1);
+            ASSERT(Resource->ActiveCount == Count);
             ExReleaseResourceLock(Resource, &LockHandle);
             KeReleaseSemaphore(Resource->SharedWaiters, 0, Count, FALSE);
             return;
@@ -1904,6 +1908,7 @@ ExReleaseResourceForThreadLite(IN PERESOURCE Resource,
             Resource->OwnerEntry.OwnerThread = 1;
             Resource->OwnerEntry.OwnerCount = 1;
             Resource->ActiveEntries = 1;
+            Resource->ActiveCount = 1;
             Resource->NumberOfExclusiveWaiters--;
 
             /* Release the lock and give it away */
@@ -1997,6 +2002,7 @@ ExReleaseResourceForThreadLite(IN PERESOURCE Resource,
                 Resource->OwnerEntry.OwnerThread = 1;
                 Resource->OwnerEntry.OwnerCount = 1;
                 Resource->ActiveEntries = 1;
+                Resource->ActiveCount = 1;
                 Resource->NumberOfExclusiveWaiters--;
 
                 /* Release the lock and give it away */
@@ -2009,6 +2015,10 @@ ExReleaseResourceForThreadLite(IN PERESOURCE Resource,
 
             /* Clear the active count */
             Resource->ActiveCount = 0;
+        }
+        else
+        {
+            Resource->ActiveCount--;
         }
     }
 

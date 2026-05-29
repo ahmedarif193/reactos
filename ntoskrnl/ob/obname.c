@@ -47,7 +47,54 @@ ObpGetDosDevicesProtection(OUT PSECURITY_DESCRIPTOR SecurityDescriptor)
     Status = RtlCreateSecurityDescriptor(SecurityDescriptor, SECURITY_DESCRIPTOR_REVISION);
     ASSERT(NT_SUCCESS(Status));
 
-    if (ObpProtectionMode & 1)
+    if ((ObpProtectionMode & 1) && ObpLUIDDeviceMapsEnabled)
+    {
+        AclSize = sizeof(ACL) +
+                  sizeof(ACE) + RtlLengthSid(SeLocalSystemSid) +
+                  sizeof(ACE) + RtlLengthSid(SeAliasAdminsSid) +
+                  sizeof(ACE) + RtlLengthSid(SeAliasAdminsSid) +
+                  sizeof(ACE) + RtlLengthSid(SeCreatorOwnerSid);
+
+        /* Allocate the ACL */
+        Dacl = ExAllocatePoolWithTag(PagedPool, AclSize, TAG_DACL);
+        if (Dacl == NULL)
+        {
+            return STATUS_INSUFFICIENT_RESOURCES;
+        }
+
+        /* Initialize the DACL */
+        Status = RtlCreateAcl(Dacl, AclSize, ACL_REVISION);
+        ASSERT(NT_SUCCESS(Status));
+
+        /* Add the ACEs */
+        Status = RtlAddAccessAllowedAceEx(Dacl,
+                                          ACL_REVISION,
+                                          CONTAINER_INHERIT_ACE | OBJECT_INHERIT_ACE,
+                                          DIRECTORY_ALL_ACCESS,
+                                          SeLocalSystemSid);
+        ASSERT(NT_SUCCESS(Status));
+
+        Status = RtlAddAccessAllowedAceEx(Dacl,
+                                          ACL_REVISION,
+                                          CONTAINER_INHERIT_ACE | OBJECT_INHERIT_ACE,
+                                          DIRECTORY_ALL_ACCESS,
+                                          SeAliasAdminsSid);
+        ASSERT(NT_SUCCESS(Status));
+
+        Status = RtlAddAccessAllowedAce(Dacl,
+                                        ACL_REVISION,
+                                        DIRECTORY_ALL_ACCESS,
+                                        SeAliasAdminsSid);
+        ASSERT(NT_SUCCESS(Status));
+
+        Status = RtlAddAccessAllowedAceEx(Dacl,
+                                          ACL_REVISION,
+                                          INHERIT_ONLY_ACE | CONTAINER_INHERIT_ACE | OBJECT_INHERIT_ACE,
+                                          GENERIC_ALL,
+                                          SeCreatorOwnerSid);
+        ASSERT(NT_SUCCESS(Status));
+    }
+    else if (ObpProtectionMode & 1)
     {
         AclSize = sizeof(ACL) +
                   sizeof(ACE) + RtlLengthSid(SeWorldSid) +

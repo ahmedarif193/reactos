@@ -294,6 +294,10 @@ CmpOpenHiveFiles(IN PCUNICODE_STRING BaseName,
     FILE_STANDARD_INFORMATION FileInformation;
     FILE_FS_SIZE_INFORMATION FsSizeInformation;
 
+    DPRINT1("CmpOpenHiveFiles: enter BaseName='%wZ' Extension='%S' CreateAllowed=%lu MarkAsSystemHive=%lu NoBuffering=%lu\n",
+            BaseName, Extension ? Extension : L"(null)",
+            (ULONG)CreateAllowed, (ULONG)MarkAsSystemHive, (ULONG)NoBuffering);
+
     /* Create event */
     Status = CmpCreateEvent(NotificationEvent, &EventHandle, &Event);
     if (!NT_SUCCESS(Status)) return Status;
@@ -388,6 +392,8 @@ CmpOpenHiveFiles(IN PCUNICODE_STRING BaseName,
                           FILE_SYNCHRONOUS_IO_NONALERT | IoFlags,
                           NULL,
                           0);
+    DPRINT1("CmpOpenHiveFiles: primary opened name='%wZ' Status=0x%08lx Handle=%p\n",
+            &FullName, Status, *Primary);
     /* Check if anything failed until now */
     if (!NT_SUCCESS(Status))
     {
@@ -461,6 +467,8 @@ CmpOpenHiveFiles(IN PCUNICODE_STRING BaseName,
                               FALSE,
                               NULL);
     }
+    DPRINT1("CmpOpenHiveFiles: primary post-compress name='%wZ' Status=0x%08lx\n",
+            &FullName, Status);
 
     /* Get the disposition */
     *PrimaryDisposition = (ULONG)IoStatusBlock.Information;
@@ -524,6 +532,9 @@ CmpOpenHiveFiles(IN PCUNICODE_STRING BaseName,
         return STATUS_SUCCESS;
     }
 
+    DPRINT1("CmpOpenHiveFiles: about to create log/alt name='%wZ' ext='%S' primaryDisp=%lu\n",
+            &FullName, Extension, *PrimaryDisposition);
+
     /* Check if we can create the hive */
     CreateDisposition = CmpShareSystemHives ? FILE_OPEN : FILE_OPEN_IF;
     if (*PrimaryDisposition == FILE_CREATED)
@@ -568,6 +579,8 @@ CmpOpenHiveFiles(IN PCUNICODE_STRING BaseName,
                           FILE_SYNCHRONOUS_IO_NONALERT | IoFlags,
                           NULL,
                           0);
+    DPRINT1("CmpOpenHiveFiles: log/alt ZwCreateFile name='%wZ' disp=%lu Status=0x%08lx Information=%lu Handle=%p\n",
+            &FullName, CreateDisposition, Status, (ULONG)IoStatusBlock.Information, *Log);
     if (NT_SUCCESS(Status) && MarkAsSystemHive)
     {
         /* We opened it, mark it as a system hive */
@@ -603,6 +616,8 @@ CmpOpenHiveFiles(IN PCUNICODE_STRING BaseName,
     if (!NT_SUCCESS(Status))
     {
         /* Clear the handle */
+        DPRINT1("CmpOpenHiveFiles: ext='%S' file create/mark failed Status=0x%08lx, clearing log handle\n",
+                Extension, Status);
         *Log = NULL;
     }
     else

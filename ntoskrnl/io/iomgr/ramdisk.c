@@ -254,13 +254,14 @@ IopStartRamdisk(IN PLOADER_PARAMETER_BLOCK LoaderBlock)
     }
 
     //
-    // ReactOS hack (drive letter should not be hardcoded, and maybe set by mountmgr.sys)
+    // Keep the system root on X: for WinPE-style ramdisk boots, but do not
+    // create a raw drive-letter symlink here. Drive letters belong to the
+    // mount manager / drive-letter assignment path, not the loader bootstrap.
     //
     {
         ANSI_STRING AnsiPath;
         CHAR Buffer[256];
         UNICODE_STRING NtSystemRoot;
-        UNICODE_STRING DriveLetter = RTL_CONSTANT_STRING(L"\\??\\X:");
 
         AnsiPath.Length = sprintf(Buffer, "X:%s", LoaderBlock->NtBootPathName);
         AnsiPath.MaximumLength = AnsiPath.Length + 1;
@@ -277,7 +278,6 @@ IopStartRamdisk(IN PLOADER_PARAMETER_BLOCK LoaderBlock)
                          0,
                          0);
         }
-        IoCreateSymbolicLink(&DriveLetter, &DeviceString);
     }
 
     //

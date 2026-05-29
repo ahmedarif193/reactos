@@ -1,5 +1,5 @@
 /*
- * PROJECT:     ReactOS NTFS Linux-Port Skeleton
+ * PROJECT:     ReactOS ntfslx driver
  * LICENSE:     GPL-2.0-or-later
  * PURPOSE:     NTFS metadata reading and mapping-pairs decoding
  */
@@ -271,40 +271,6 @@ NtfslxMappingPairsDecompress(
     return STATUS_SUCCESS;
 }
 
-static
-LONGLONG
-NtfslxRunlistVcnToLcn(
-    _In_ PNTFSLX_RUNLIST_ELEMENT Runlist,
-    _In_ LONGLONG Vcn)
-{
-    ULONG Index;
-
-    if (Runlist == NULL)
-    {
-        return NTFSLX_LCN_RL_NOT_MAPPED;
-    }
-
-    if (Vcn < Runlist[0].Vcn)
-    {
-        return NTFSLX_LCN_ENOENT;
-    }
-
-    for (Index = 0; Runlist[Index].Length != 0; ++Index)
-    {
-        if (Vcn < Runlist[Index + 1].Vcn)
-        {
-            if (Runlist[Index].Lcn >= 0)
-            {
-                return Runlist[Index].Lcn + (Vcn - Runlist[Index].Vcn);
-            }
-
-            return Runlist[Index].Lcn;
-        }
-    }
-
-    return Runlist[Index].Lcn;
-}
-
 NTSTATUS
 NtfslxReadMappedAttributeData(
     _In_ PDEVICE_OBJECT StorageDevice,
@@ -318,6 +284,7 @@ NtfslxReadMappedAttributeData(
     ULONGLONG CurrentOffset;
     ULONG ClusterOffset;
     ULONG ChunkLength;
+    ULONG RunHint = 0;
     LONGLONG Vcn;
     LONGLONG Lcn;
     NTSTATUS Status;
@@ -334,7 +301,7 @@ NtfslxReadMappedAttributeData(
             ChunkLength = (ULONG)Remaining;
         }
 
-        Lcn = NtfslxRunlistVcnToLcn(Runlist, Vcn);
+        Lcn = NtfslxRunlistVcnToLcnHinted(Runlist, Vcn, &RunHint);
         if (Lcn == NTFSLX_LCN_HOLE)
         {
             RtlZeroMemory(Buffer, ChunkLength);
@@ -610,7 +577,7 @@ NtfslxSetVolumeDirtyFlag(
 
     VolInfoAttr->Flags = NewFlags;
 
-    Status = NtfslxWriteMftRecord(StorageDevice, VolumeInfo, MftRunlist,
+    Status = NtfslxWriteMftRecord(NULL, StorageDevice, VolumeInfo, MftRunlist,
                                   NTFSLX_FILE_VOLUME, VolumeRecord);
     if (NT_SUCCESS(Status))
     {

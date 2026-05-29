@@ -1,10 +1,7 @@
 /*
- * PROJECT:     ReactOS NTFS Linux-Port Skeleton
+ * PROJECT:     ReactOS ntfslx driver
  * LICENSE:     GPL-2.0-or-later
  * PURPOSE:     Imported NTFS core helpers adapted from Linux NTFS
- *
- * The algorithms in this file are staged NT/ReactOS adaptations of the
- * Linux NTFS helpers from mst.c, upcase.c, and unistr.c.
  */
 
 #include "ntfslx.h"

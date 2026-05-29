@@ -270,7 +270,7 @@ NtfslxWriteVolumeBitmap(
         RtlCopyMemory((PUCHAR)DataAttr + DataAttr->Data.Resident.ValueOffset,
                       BitmapData, BitmapLength);
 
-        Status = NtfslxWriteMftRecord(StorageDevice, VolumeInfo, MftRunlist,
+        Status = NtfslxWriteMftRecord(NULL, StorageDevice, VolumeInfo, MftRunlist,
                                       NTFSLX_FILE_BITMAP, BitmapRecord);
         ExFreePoolWithTag(BitmapRecord, NTFSLX_TAG);
         return Status;
@@ -348,8 +348,19 @@ NtfslxAdjustFreeClusterCount(
 }
 
 
+/*
+ * Internal lock-naive cluster allocator. Callers must hold
+ * DevExt->ClusterAllocLock (or be on the volume mount path before any
+ * other thread can race). Performs the bitmap scan, bit-flip, and
+ * durable bitmap write. The bitmap write IS the on-disk reservation,
+ * so it has to be inside the alloc-lock. Once this returns, callers
+ * can drop the lock and write data to the reserved clusters without
+ * risk of another allocator picking the same range.
+ */
+static
 NTSTATUS
-NtfslxAllocateClusters(
+NtfslxAllocateClustersLocked(
+    _In_opt_ PNTFSLX_DEVICE_EXTENSION DevExt,
     _In_ PDEVICE_OBJECT StorageDevice,
     _In_ PNTFSLX_VOLUME_INFO VolumeInfo,
     _In_ PNTFSLX_RUNLIST_ELEMENT MftRunlist,
@@ -567,6 +578,27 @@ NtfslxAllocateClusters(
         return STATUS_DISK_FULL;
     }
 
+    /*
+     * Journal each allocated range as a BMP_SET_RANGE redo record before
+     * the bitmap write hits disk, so a crash between the journal append
+     * and the bitmap I/O can be replayed on next mount. Phase-1 journaling
+     * is best-effort — failure to journal is non-fatal because Phase-1
+     * has no recovery driver yet, but the records stay durable for Phase 2.
+     * See docs/ntfs-specs/13_ntfslx_phase1_redo_records.txt.
+     */
+    if (DevExt != NULL)
+    {
+        ULONG J;
+        for (J = 0; J < RunCount; J++)
+        {
+            (VOID)NtfslxJournalAppendClusterBitmapRange(
+                DevExt,
+                (ULONGLONG)ResultRunlist[J].Lcn,
+                (ULONGLONG)ResultRunlist[J].Length,
+                TRUE);
+        }
+    }
+
     /* Write modified bitmap back to disk */
     Status = NtfslxWriteVolumeBitmap(StorageDevice, VolumeInfo,
                                      BitmapRunlist, BitmapData,
@@ -596,8 +628,16 @@ NtfslxAllocateClusters(
     return STATUS_SUCCESS;
 }
 
+/*
+ * Internal lock-naive cluster freer. Callers must hold
+ * DevExt->ClusterAllocLock. Symmetric with NtfslxAllocateClustersLocked:
+ * the bitmap write IS the durable record of the free, so it must be
+ * inside the alloc-lock.
+ */
+static
 NTSTATUS
-NtfslxFreeClusters(
+NtfslxFreeClustersLocked(
+    _In_opt_ PNTFSLX_DEVICE_EXTENSION DevExt,
     _In_ PDEVICE_OBJECT StorageDevice,
     _In_ PNTFSLX_VOLUME_INFO VolumeInfo,
     _In_ PNTFSLX_RUNLIST_ELEMENT MftRunlist,
@@ -640,6 +680,29 @@ NtfslxFreeClusters(
         }
     }
 
+    /*
+     * Journal each freed range as a BMP_CLEAR_RANGE redo record before the
+     * bitmap write hits disk. Same Phase-1 best-effort discipline as the
+     * allocator above — see docs/ntfs-specs/13_ntfslx_phase1_redo_records.txt.
+     */
+    if (DevExt != NULL)
+    {
+        for (I = 0; I < RunlistCount; I++)
+        {
+            if (Runlist[I].Length == 0)
+                break;
+
+            if (Runlist[I].Lcn >= 0)
+            {
+                (VOID)NtfslxJournalAppendClusterBitmapRange(
+                    DevExt,
+                    (ULONGLONG)Runlist[I].Lcn,
+                    (ULONGLONG)Runlist[I].Length,
+                    FALSE);
+            }
+        }
+    }
+
     /* Write back */
     Status = NtfslxWriteVolumeBitmap(StorageDevice, VolumeInfo,
                                      BitmapRunlist, BitmapData,
@@ -653,6 +716,100 @@ NtfslxFreeClusters(
         NtfslxAdjustFreeClusterCount(VolumeInfo,
                                      (LONGLONG)NtfslxRunlistMappedClusterCount(Runlist, RunlistCount),
                                      "free");
+    }
+
+    return Status;
+}
+
+/*
+ * Public DevExt-aware wrappers. They acquire ClusterAllocLock around
+ * the lock-naive helpers, so callers don't have to know about the lock.
+ *
+ * Lock-window discipline: the lock is held only across the bitmap RMW
+ * cycle (read bitmap, scan, set bits, write bitmap back). The caller
+ * is expected to write the actual cluster contents (data pages,
+ * cleared MFT records, etc.) AFTER this returns and the lock is
+ * dropped — see drivers/filesystems/ntfslx/fcb.c for the full
+ * lock-order doc.
+ *
+ * The pre-T1.5.2 code held no lock at all here, which let two parallel
+ * allocators read the same bitmap, both pick the same free range, and
+ * both think they had it. The lock is the fix.
+ */
+NTSTATUS
+NtfslxAllocateClusters(
+    _In_ PDEVICE_OBJECT StorageDevice,
+    _In_ PNTFSLX_VOLUME_INFO VolumeInfo,
+    _In_ PNTFSLX_RUNLIST_ELEMENT MftRunlist,
+    _In_ ULONGLONG Count,
+    _In_ ULONGLONG HintLcn,
+    _Outptr_ PNTFSLX_RUNLIST_ELEMENT *OutRunlist,
+    _Out_ PULONG OutRunlistCount)
+{
+    PNTFSLX_DEVICE_EXTENSION DevExt = NULL;
+    NTSTATUS Status;
+
+    /*
+     * Look up the volume DevExt via the storage device's Vpb. The
+     * Vpb->DeviceObject is the VolumeDevice we created in
+     * NtfslxMountVolume; its DeviceExtension is the volume's
+     * NTFSLX_DEVICE_EXTENSION which owns ClusterAllocLock. If the Vpb
+     * is missing (test path, pre-mount), fall through to the lock-
+     * naive helper — there's no shared state to protect yet.
+     */
+    if (StorageDevice != NULL &&
+        StorageDevice->Vpb != NULL &&
+        StorageDevice->Vpb->DeviceObject != NULL)
+    {
+        DevExt = StorageDevice->Vpb->DeviceObject->DeviceExtension;
+    }
+
+    if (DevExt != NULL && DevExt->ClusterAllocLockInitialized)
+    {
+        KeAcquireGuardedMutex(&DevExt->ClusterAllocLock);
+    }
+
+    Status = NtfslxAllocateClustersLocked(DevExt, StorageDevice, VolumeInfo, MftRunlist,
+                                          Count, HintLcn,
+                                          OutRunlist, OutRunlistCount);
+
+    if (DevExt != NULL && DevExt->ClusterAllocLockInitialized)
+    {
+        KeReleaseGuardedMutex(&DevExt->ClusterAllocLock);
+    }
+
+    return Status;
+}
+
+NTSTATUS
+NtfslxFreeClusters(
+    _In_ PDEVICE_OBJECT StorageDevice,
+    _In_ PNTFSLX_VOLUME_INFO VolumeInfo,
+    _In_ PNTFSLX_RUNLIST_ELEMENT MftRunlist,
+    _In_ PNTFSLX_RUNLIST_ELEMENT Runlist,
+    _In_ ULONG RunlistCount)
+{
+    PNTFSLX_DEVICE_EXTENSION DevExt = NULL;
+    NTSTATUS Status;
+
+    if (StorageDevice != NULL &&
+        StorageDevice->Vpb != NULL &&
+        StorageDevice->Vpb->DeviceObject != NULL)
+    {
+        DevExt = StorageDevice->Vpb->DeviceObject->DeviceExtension;
+    }
+
+    if (DevExt != NULL && DevExt->ClusterAllocLockInitialized)
+    {
+        KeAcquireGuardedMutex(&DevExt->ClusterAllocLock);
+    }
+
+    Status = NtfslxFreeClustersLocked(DevExt, StorageDevice, VolumeInfo, MftRunlist,
+                                      Runlist, RunlistCount);
+
+    if (DevExt != NULL && DevExt->ClusterAllocLockInitialized)
+    {
+        KeReleaseGuardedMutex(&DevExt->ClusterAllocLock);
     }
 
     return Status;

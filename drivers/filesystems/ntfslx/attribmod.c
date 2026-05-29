@@ -241,19 +241,29 @@ NtfslxAddNamedDataStream(
         return Status;
     }
 
-    /* Insert a fresh empty $DATA with the requested name. */
-    Status = NtfslxInsertAttributeRecord(Record, RecordSize,
-                                         NTFSLX_ATTRIBUTE_DATA,
-                                         Name, NameLength,
-                                         NULL, 0,
-                                         NULL);
+    /*
+     * Insert a fresh empty $DATA with the requested name. The orchestrator
+     * handles three cases transparently:
+     *   - simple base-record insert (common: small file, few streams)
+     *   - base-record insert plus mirror entry into existing $ATTRIBUTE_LIST
+     *   - first-time promotion: allocate extension MFT record, place the
+     *     new $DATA there, build $ATTRIBUTE_LIST in base
+     * Adding many ADS streams (the test scenario in T2.2) hits all three.
+     */
+    Status = NtfslxAttributeListInstallResidentAttribute(DevExt,
+                                                         Record,
+                                                         MftIndex,
+                                                         NTFSLX_ATTRIBUTE_DATA,
+                                                         Name, NameLength,
+                                                         NULL, 0,
+                                                         NULL, NULL);
     if (!NT_SUCCESS(Status))
     {
         ExFreePoolWithTag(Record, NTFSLX_TAG);
         return Status;
     }
 
-    Status = NtfslxWriteMftRecord(DevExt->StorageDevice, &DevExt->VolumeInfo,
+    Status = NtfslxWriteMftRecord(DevExt, DevExt->StorageDevice, &DevExt->VolumeInfo,
                                   DevExt->MftRunlist, MftIndex, Record);
     ExFreePoolWithTag(Record, NTFSLX_TAG);
     return Status;

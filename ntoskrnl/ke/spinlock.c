@@ -12,87 +12,36 @@
 #define NDEBUG
 #include <debug.h>
 
-#define LQ_WAIT     1
-#define LQ_OWN      2
+/*
+ * Queued spinlock flag bits encoded in the low bits of KSPIN_LOCK_QUEUE.Lock.
+ * Match LOCK_QUEUE_WAIT / LOCK_QUEUE_OWNER from the public xdk headers.
+ */
+#define LQ_WAIT     LOCK_QUEUE_WAIT      /* (1) waiter is spinning */
+#define LQ_OWN      LOCK_QUEUE_OWNER     /* (2) entry owns the lock */
+#define LQ_FLAGS    (LQ_WAIT | LQ_OWN)
 
 /* PRIVATE FUNCTIONS *********************************************************/
 
-#if 0
-//
-// FIXME: The queued spinlock routines are broken.
-//
-
-VOID
-FASTCALL
-KeAcquireQueuedSpinLockAtDpcLevel(IN PKSPIN_LOCK_QUEUE LockHandle)
-{
-#ifdef CONFIG_SMP
-    PKSPIN_LOCK_QUEUE Prev;
-
-    /* Set the new lock */
-    Prev = (PKSPIN_LOCK_QUEUE)
-           InterlockedExchange((PLONG)LockHandle->Next,
-                               (LONG)LockHandle);
-    if (!Prev)
-    {
-        /* There was nothing there before. We now own it */
-         *LockHandle->Lock |= LQ_OWN;
-        return;
-    }
-
-    /* Set the wait flag */
-     *LockHandle->Lock |= LQ_WAIT;
-
-    /* Link us */
-    Prev->Next = (PKSPIN_LOCK_QUEUE)LockHandle;
-
-    /* Loop and wait */
-    while (*LockHandle->Lock & LQ_WAIT)
-        YieldProcessor();
-#endif
-}
-
-VOID
-FASTCALL
-KeReleaseQueuedSpinLockFromDpcLevel(IN PKSPIN_LOCK_QUEUE LockHandle)
-{
-#ifdef CONFIG_SMP
-    KSPIN_LOCK LockVal;
-    PKSPIN_LOCK_QUEUE Waiter;
-
-    /* Remove own and wait flags */
-    *LockHandle->Lock &= ~(LQ_OWN | LQ_WAIT);
-    LockVal = *LockHandle->Lock;
-
-    /* Check if we already own it */
-    if (LockVal == (KSPIN_LOCK)LockHandle)
-    {
-        /* Disown it */
-        LockVal = (KSPIN_LOCK)
-                  InterlockedCompareExchangePointer(LockHandle->Lock,
-                                                    NULL,
-                                                    LockHandle);
-    }
-    if (LockVal == (KSPIN_LOCK)LockHandle) return;
-
-    /* Need to wait for it */
-    Waiter = LockHandle->Next;
-    while (!Waiter)
-    {
-        YieldProcessor();
-        Waiter = LockHandle->Next;
-    }
-
-    /* It's gone */
-    *(ULONG_PTR*)&Waiter->Lock ^= (LQ_OWN | LQ_WAIT);
-    LockHandle->Next = NULL;
-#endif
-}
-
-#else
-//
-// HACK: Hacked to work like normal spinlocks
-//
+/*
+ * NT-style queued (MCS) spinlock acquire / release.
+ *
+ * The KSPIN_LOCK acts as the queue's tail pointer (NULL == free, else
+ * pointer to the last enqueued KSPIN_LOCK_QUEUE entry).
+ * Each KSPIN_LOCK_QUEUE has:
+ *   - Next: pointer to the next waiter (NULL if last)
+ *   - Lock: pointer to the actual KSPIN_LOCK; low bits encode WAIT/OWN state
+ *
+ * Idle-state invariant: between acquire/release calls, LockHandle->Lock
+ * points at the real KSPIN_LOCK with no flag bits set, and LockHandle->Next
+ * is NULL. The per-CPU LockQueue entries (Prcb->LockQueue[N]) are initialized
+ * once in KiInitSystem and reused across many acquire/release cycles, so
+ * Release MUST leave the entry in idle state (Lock = clean address, Next = NULL).
+ *
+ * The same algorithm is correct on UP and SMP: on UP, contention is impossible
+ * because IRQL is raised, so the InterlockedExchange always returns NULL and
+ * the wait loop is never entered. The atomics are slightly more expensive than
+ * a plain memory barrier but correctness is identical.
+ */
 
 _IRQL_requires_min_(DISPATCH_LEVEL)
 _Acquires_nonreentrant_lock_(*LockHandle->Lock)
@@ -101,21 +50,53 @@ VOID
 FASTCALL
 KeAcquireQueuedSpinLockAtDpcLevel(_Inout_ PKSPIN_LOCK_QUEUE LockHandle)
 {
-#if defined(CONFIG_SMP) || DBG
-    /* Make sure we are at DPC or above! */
+    PKSPIN_LOCK SpinLock = LockHandle->Lock;
+    PKSPIN_LOCK_QUEUE Tail;
+
+#if DBG
+    /* Must be at DISPATCH_LEVEL or above */
     if (KeGetCurrentIrql() < DISPATCH_LEVEL)
     {
-        /* We aren't -- bugcheck */
         KeBugCheckEx(IRQL_NOT_GREATER_OR_EQUAL,
-                     (ULONG_PTR)LockHandle->Lock,
+                     (ULONG_PTR)SpinLock,
                      KeGetCurrentIrql(),
                      0,
                      0);
     }
 #endif
 
-    /* Do the inlined function */
-    KxAcquireSpinLock(LockHandle->Lock);
+    ASSERT(SpinLock != NULL);
+    /* Recursive acquire on the same per-CPU entry shows up as stale flags */
+    ASSERT(((ULONG_PTR)SpinLock & LQ_FLAGS) == 0);
+
+    LockHandle->Next = NULL;
+
+    /* Atomically install ourselves as the new queue tail.
+     * Tail receives the previous tail (NULL means lock was free). */
+    Tail = (PKSPIN_LOCK_QUEUE)
+           InterlockedExchangePointer((PVOID volatile *)SpinLock,
+                                       LockHandle);
+
+    if (Tail == NULL)
+    {
+        /* Lock was free; we own it. Encode owner bit on our entry. */
+        LockHandle->Lock = (PKSPIN_LOCK)((ULONG_PTR)SpinLock | LQ_OWN);
+        return;
+    }
+
+    /* Lock held; mark our entry as waiting before linking in. */
+    LockHandle->Lock = (PKSPIN_LOCK)((ULONG_PTR)SpinLock | LQ_WAIT);
+
+    /* Ensure WAIT flag is visible before predecessor sees our pointer. */
+    KeMemoryBarrier();
+
+    Tail->Next = LockHandle;
+
+    /* Spin until predecessor's release atomically flips WAIT off / OWN on. */
+    while ((ULONG_PTR)LockHandle->Lock & LQ_WAIT)
+    {
+        YieldProcessor();
+    }
 }
 
 _IRQL_requires_min_(DISPATCH_LEVEL)
@@ -125,11 +106,12 @@ VOID
 FASTCALL
 KeReleaseQueuedSpinLockFromDpcLevel(_Inout_ PKSPIN_LOCK_QUEUE LockHandle)
 {
-#if defined(CONFIG_SMP) || DBG
-    /* Make sure we are at DPC or above! */
+    PKSPIN_LOCK SpinLock;
+    PKSPIN_LOCK_QUEUE Successor;
+
+#if DBG
     if (KeGetCurrentIrql() < DISPATCH_LEVEL)
     {
-        /* We aren't -- bugcheck */
         KeBugCheckEx(IRQL_NOT_GREATER_OR_EQUAL,
                      (ULONG_PTR)LockHandle->Lock,
                      KeGetCurrentIrql(),
@@ -138,11 +120,90 @@ KeReleaseQueuedSpinLockFromDpcLevel(_Inout_ PKSPIN_LOCK_QUEUE LockHandle)
     }
 #endif
 
-    /* Do the inlined function */
-    KxReleaseSpinLock(LockHandle->Lock);
+    ASSERT(((ULONG_PTR)LockHandle->Lock & LQ_OWN) != 0);
+
+    /* Strip flag bits to recover the real KSPIN_LOCK pointer. */
+    SpinLock = (PKSPIN_LOCK)((ULONG_PTR)LockHandle->Lock & ~LQ_FLAGS);
+    ASSERT(SpinLock != NULL);
+
+    /* Clear OWN flag from our entry; restore idle-state Lock value. */
+    LockHandle->Lock = SpinLock;
+
+    Successor = LockHandle->Next;
+    if (Successor == NULL)
+    {
+        /* No visible successor: try to atomically clear the queue tail. */
+        if (InterlockedCompareExchangePointer((PVOID volatile *)SpinLock,
+                                               NULL,
+                                               LockHandle) == LockHandle)
+        {
+            /* We were the tail; lock fully released. Entry stays idle. */
+            return;
+        }
+
+        /* Successor is mid-enqueue; wait for them to publish the link. */
+        while ((Successor = LockHandle->Next) == NULL)
+        {
+            YieldProcessor();
+        }
+    }
+
+    /* Hand off the lock by atomically clearing successor's WAIT and
+     * setting OWN. Successor is currently spinning on (Lock & LQ_WAIT).
+     * XOR (LQ_WAIT | LQ_OWN) flips both bits in one atomic op,
+     * race-free against the spin. */
+#ifdef _WIN64
+    InterlockedXor64((LONG64 volatile *)&Successor->Lock,
+                      LQ_OWN | LQ_WAIT);
+#else
+    InterlockedXor((LONG volatile *)&Successor->Lock,
+                    LQ_OWN | LQ_WAIT);
+#endif
+
+    /* Restore our entry to idle: Lock already holds the clean address;
+     * just clear the now-stale successor pointer. */
+    LockHandle->Next = NULL;
 }
 
+/*
+ * Non-blocking try-acquire variant of the queued spinlock.
+ * Returns TRUE on success, FALSE if the lock was already held.
+ * On success the entry is marked OWN so the matching release works correctly.
+ */
+_IRQL_requires_min_(DISPATCH_LEVEL)
+BOOLEAN
+FASTCALL
+KeTryToAcquireQueuedSpinLockAtDpcLevel(_Inout_ PKSPIN_LOCK_QUEUE LockHandle)
+{
+    PKSPIN_LOCK SpinLock = LockHandle->Lock;
+
+#if DBG
+    if (KeGetCurrentIrql() < DISPATCH_LEVEL)
+    {
+        KeBugCheckEx(IRQL_NOT_GREATER_OR_EQUAL,
+                     (ULONG_PTR)SpinLock,
+                     KeGetCurrentIrql(),
+                     0,
+                     0);
+    }
 #endif
+
+    ASSERT(SpinLock != NULL);
+    ASSERT(((ULONG_PTR)SpinLock & LQ_FLAGS) == 0);
+
+    LockHandle->Next = NULL;
+
+    /* Only succeed if the queue tail is NULL (lock free). */
+    if (InterlockedCompareExchangePointer((PVOID volatile *)SpinLock,
+                                           LockHandle,
+                                           NULL) != NULL)
+    {
+        return FALSE;
+    }
+
+    LockHandle->Lock = (PKSPIN_LOCK)((ULONG_PTR)SpinLock | LQ_OWN);
+    return TRUE;
+}
 
 /* PUBLIC FUNCTIONS **********************************************************/
 
@@ -363,28 +424,10 @@ FASTCALL
 KeAcquireInStackQueuedSpinLockAtDpcLevel(IN PKSPIN_LOCK SpinLock,
                                          IN PKLOCK_QUEUE_HANDLE LockHandle)
 {
-    /* Set it up properly */
+    /* Set up the per-acquire queue entry, then run the queued-lock acquire. */
     LockHandle->LockQueue.Next = NULL;
     LockHandle->LockQueue.Lock = SpinLock;
-#ifdef CONFIG_SMP
-#if 0
-    KeAcquireQueuedSpinLockAtDpcLevel(LockHandle->LockQueue.Next);
-#else
-    /* Make sure we are at DPC or above! */
-    if (KeGetCurrentIrql() < DISPATCH_LEVEL)
-    {
-        /* We aren't -- bugcheck */
-        KeBugCheckEx(IRQL_NOT_GREATER_OR_EQUAL,
-                     (ULONG_PTR)LockHandle->LockQueue.Lock,
-                     KeGetCurrentIrql(),
-                     0,
-                     0);
-    }
-#endif
-#endif
-
-    /* Acquire the lock */
-    KxAcquireSpinLock(LockHandle->LockQueue.Lock); // HACK
+    KeAcquireQueuedSpinLockAtDpcLevel(&LockHandle->LockQueue);
 }
 
 /*
@@ -394,26 +437,7 @@ VOID
 FASTCALL
 KeReleaseInStackQueuedSpinLockFromDpcLevel(IN PKLOCK_QUEUE_HANDLE LockHandle)
 {
-#ifdef CONFIG_SMP
-#if 0
-    /* Call the internal function */
-    KeReleaseQueuedSpinLockFromDpcLevel(LockHandle->LockQueue.Next);
-#else
-    /* Make sure we are at DPC or above! */
-    if (KeGetCurrentIrql() < DISPATCH_LEVEL)
-    {
-        /* We aren't -- bugcheck */
-        KeBugCheckEx(IRQL_NOT_GREATER_OR_EQUAL,
-                     (ULONG_PTR)LockHandle->LockQueue.Lock,
-                     KeGetCurrentIrql(),
-                     0,
-                     0);
-    }
-#endif
-#endif
-
-    /* Release the lock */
-    KxReleaseSpinLock(LockHandle->LockQueue.Lock); // HACK
+    KeReleaseQueuedSpinLockFromDpcLevel(&LockHandle->LockQueue);
 }
 
 /*

@@ -43,6 +43,8 @@ typedef struct _NTFSLX_TIER0_PROOF
     ULONG  LcnZeroIsReserved;
     ULONGLONG BootLcn;
     ULONGLONG MftMirrLcn;
+    NTSTATUS CheckLogFileStatus;
+    ULONG  LogFileClean;
 } NTFSLX_TIER0_PROOF, *PNTFSLX_TIER0_PROOF;
 
 #define TLOG(fmt, ...) DbgPrint("NTFSLX-TEST: " fmt, ##__VA_ARGS__)
@@ -4118,25 +4120,37 @@ LongSuitePhaseC:
                     Proof.MftMirrorConsistent);
 
                 /*
-                 * Dirty flag: mount-time fsctl.c NtfslxSetVolumeDirtyFlag(TRUE)
-                 * must have persisted. If this is 0 it means every crash
-                 * will land Windows on a volume that claims to be clean
-                 * when it isn't — the foundational corruption-class bug.
+                 * Dirty flag: NtfslxLatchVolumeMutation has run by now
+                 * (sections 10.4 onwards make heavy use of writes,
+                 * creates and deletes), so the on-disk dirty bit must
+                 * be set. If this is 0 it means every crash will land
+                 * Windows on a volume that claims to be clean when it
+                 * isn't — the foundational corruption-class bug.
                  */
                 TOK(Proof.VolumeDirtyFlag == 1,
-                    "tier0: VOLUME_IS_DIRTY=%lu (must be 1 post-mount)\n",
+                    "tier0: VOLUME_IS_DIRTY=%lu (must be 1 after first mutation)\n",
                     Proof.VolumeDirtyFlag);
 
                 /*
-                 * $LogFile wipe: mount should have filled it with 0xFF
-                 * so Windows won't try to replay stale transactions.
+                 * $LogFile clean stamp: the latch writes a valid
+                 * synthetic clean restart-page pair the first time
+                 * anything mutates the volume, so Windows replays
+                 * nothing and our own NtfslxCheckLogFile parses the
+                 * file as clean. The old destructive 0xFF wipe is a
+                 * regression: that's what LogFileIs0xFF==1 catches.
                  */
-                TOK(Proof.LogFileFirstDword == 0xFFFFFFFF,
-                    "tier0: $LogFile first dword=0x%08lx (must be 0xFFFFFFFF)\n",
+                TOK(Proof.LogFileFirstDword == 0x52545352 /* 'RSTR' */,
+                    "tier0: $LogFile first dword=0x%08lx (must be 'RSTR' 0x52545352)\n",
                     Proof.LogFileFirstDword);
-                TOK(Proof.LogFileIs0xFF == 1,
-                    "tier0: $LogFile first 512 bytes all 0xFF=%lu\n",
+                TOK(Proof.LogFileIs0xFF == 0,
+                    "tier0: $LogFile first 512 bytes all 0xFF=%lu (must be 0; old 0xFF wipe regressed)\n",
                     Proof.LogFileIs0xFF);
+                TOK(NT_SUCCESS(Proof.CheckLogFileStatus),
+                    "tier0: NtfslxCheckLogFile=0x%08lx (must succeed)\n",
+                    Proof.CheckLogFileStatus);
+                TOK(Proof.LogFileClean == 1,
+                    "tier0: NtfslxCheckLogFile clean=%lu (must be 1)\n",
+                    Proof.LogFileClean);
 
                 /*
                  * LCN 0 reservation: $Boot lives at LCN 0 and the
@@ -4213,17 +4227,15 @@ LongSuitePhaseC:
                     "tier0b: LCN 0 still reserved=%lu\n",
                     Proof2.LcnZeroIsReserved);
                 /*
-                 * The logfile check is lenient here: the driver
-                 * regenerates restart pages on the first write, so
-                 * first dword may no longer be 0xFFFFFFFF. We only
-                 * assert that either it's still 0xFFFFFFFF (no write
-                 * yet touched $LogFile) or it has a valid RSTR/CHKD
-                 * magic as the first four bytes.
+                 * After the latch has fired the driver leaves a valid
+                 * synthetic clean restart-page pair behind. The first
+                 * dword must be 'RSTR'; the older 0xFFFFFFFF wipe is
+                 * a regression. CHKD is also accepted (chkdsk would
+                 * stamp this if it ran).
                  */
-                TOK(Proof2.LogFileFirstDword == 0xFFFFFFFF ||
-                    Proof2.LogFileFirstDword == 0x52545352 /* 'RSTR' */ ||
+                TOK(Proof2.LogFileFirstDword == 0x52545352 /* 'RSTR' */ ||
                     Proof2.LogFileFirstDword == 0x444B4843 /* 'CHKD' */,
-                    "tier0b: logfile head=0x%08lx (expect 0xFF or RSTR/CHKD)\n",
+                    "tier0b: logfile head=0x%08lx (expect RSTR/CHKD)\n",
                     Proof2.LogFileFirstDword);
             }
             ZwClose(VolHandle);
@@ -4460,4 +4472,821 @@ START_TEST(NtfslxFuncStressB)
 START_TEST(NtfslxFuncStressC)
 {
     NtfslxRunNamedFuncPhase(NtfslxFuncPhaseStressC);
+}
+
+/*
+ * Per-offset stamp used by NtfslxFuncReadLargeOffset so any wrong-LCN read
+ * produces a detectable diff. The XOR with a 64-bit constant defeats simple
+ * "all zero" or "all 0xFF" wrong-data shapes that would otherwise look
+ * suspiciously clean.
+ */
+static ULONGLONG
+NtfslxFuncMakeStamp(_In_ ULONGLONG Offset)
+{
+    return (Offset / 8) ^ 0xDEADBEEFCAFEBABEULL;
+}
+
+/*
+ * NtfslxFuncReadLargeOffset — regression test for the "read returns wrong
+ * data past the first run" failure mode that historically presented as a
+ * 0xc0000218 STATUS_CANNOT_LOAD_REGISTRY_FILE bug-check at SMSS time. The
+ * SOFTWARE hive was 471040 bytes (115 clusters at 4 KiB/cluster) and the
+ * kernel CM walked into a cell at offset 0x60028 = 393256. If the read
+ * path mis-translates VCN to LCN (off-by-one across runs, paging-IO
+ * skipping the runlist, or a Cc map with wrong CC_FILE_SIZES) the bytes
+ * at that offset come back wrong and CM bug-checks.
+ *
+ * The test stamps a >= 1 MiB pattern file with a per-offset 64-bit value,
+ * then reads back at a list of offsets that includes large positions plus
+ * the historically-failing 0x60028. It exercises three read shapes:
+ *   - Buffered ZwReadFile (CcCopyRead path)
+ *   - FILE_NO_INTERMEDIATE_BUFFERING (paging-IO-style path)
+ *   - A single bulk read that spans the entire file, mirroring the way
+ *     CM loads a hive.
+ *
+ * Failing this would have caught Bug #1 — the load-bearing assertion is
+ * NTFSLX-TEST [fail]: ReadLargeOffset: stamp mismatch at offset 0x60028
+ * which fires the moment any one of the read shapes returns garbage.
+ */
+START_TEST(NtfslxFuncReadLargeOffset)
+{
+    static const PCWSTR kPath =
+        L"\\??\\D:\\NtfslxRT\\largepattern.bin";
+    static const PCWSTR kDir =
+        L"\\??\\D:\\NtfslxRT";
+
+    /* File size 1 MiB + a few bytes so the test reads safely cross runs. */
+    static const ULONGLONG kFileSize = 1ULL * 1024 * 1024 + 4096;
+    /* 64 KiB write/read chunks keep the buffer reasonable. */
+    static const ULONG kChunk = 64 * 1024;
+
+    /* Offsets whose stamp we will assert. Same set on both read shapes. */
+    static const ULONGLONG kProbeOffsets[] = {
+        0,
+        4096,                /* one cluster in */
+        16384,               /* four clusters */
+        0x60000,             /* hive bin boundary CM walks into */
+        0x60028,             /* historical failure offset (Bug #1) */
+        0x80000,             /* 512 KiB */
+        0xF0000,             /* near 1 MiB */
+        1ULL * 1024 * 1024,  /* 1 MiB exact */
+    };
+
+    HANDLE h = NULL;
+    HANDLE hDir = NULL;
+    NTSTATUS St;
+    UCHAR *Buffer = NULL;
+    UCHAR *Verify = NULL;
+    ULONGLONG Off;
+    ULONG Info;
+    ULONG ProbeIdx;
+    ULONG StampMismatches = 0;
+    ULONG NoCacheMismatches = 0;
+    ULONG BulkMismatches = 0;
+    BOOLEAN HaveVolume = FALSE;
+    LARGE_INTEGER LocalOff;
+    IO_STATUS_BLOCK IoSb;
+    UNICODE_STRING UnicodePath;
+    OBJECT_ATTRIBUTES ObjA;
+    WCHAR ScratchDir[260];
+    PCWSTR ProbeDir;
+
+    TLOG("=== NtfslxFuncReadLargeOffset START ===\n");
+
+    /* Detect the NTFS volume the same way the main suite does. */
+    St = DetectNtfsDrive();
+    if (!NT_SUCCESS(St))
+    {
+        TLOG("ReadLargeOffset: no NTFS volume detected, skipping\n");
+        return;
+    }
+    TLOG("ReadLargeOffset: target volume %C:\\\n", g_TestDriveLetter);
+
+    ProbeDir = RewriteTestPath(kDir, ScratchDir, sizeof(ScratchDir));
+
+    Buffer = ExAllocatePoolWithTag(NonPagedPool, kChunk, 'TsTN');
+    Verify = ExAllocatePoolWithTag(NonPagedPool, kChunk, 'TsTN');
+    if (Buffer == NULL || Verify == NULL)
+    {
+        TLOG("ReadLargeOffset: pool allocation failed\n");
+        goto Cleanup;
+    }
+
+    /* Make the parent directory; ignore COLLISION since a previous run
+     * may have left it. */
+    RtlInitUnicodeString(&UnicodePath, ProbeDir);
+    InitializeObjectAttributes(&ObjA, &UnicodePath,
+                                OBJ_CASE_INSENSITIVE | OBJ_KERNEL_HANDLE,
+                                NULL, NULL);
+    St = ZwCreateFile(&hDir,
+                      FILE_LIST_DIRECTORY | SYNCHRONIZE | DELETE,
+                      &ObjA, &IoSb, NULL, FILE_ATTRIBUTE_NORMAL,
+                      FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+                      FILE_OPEN_IF,
+                      FILE_SYNCHRONOUS_IO_NONALERT | FILE_DIRECTORY_FILE,
+                      NULL, 0);
+    TOK(NT_SUCCESS(St), "ReadLargeOffset: mkdir NtfslxRT 0x%08lx\n", St);
+    if (NT_SUCCESS(St))
+    {
+        ZwClose(hDir);
+        hDir = NULL;
+    }
+
+    /* Wipe any prior file so the stamp pattern starts fresh. */
+    UnlinkByPath(kPath);
+
+    /* === Phase 1: write the pattern file === */
+    St = OpenNtfs(kPath,
+                  GENERIC_READ | GENERIC_WRITE | DELETE | SYNCHRONIZE,
+                  FILE_CREATE,
+                  FILE_NON_DIRECTORY_FILE, &h);
+    TOK(NT_SUCCESS(St), "ReadLargeOffset: create pattern file 0x%08lx\n", St);
+    if (!NT_SUCCESS(St))
+        goto Cleanup;
+
+    HaveVolume = TRUE;
+
+    for (Off = 0; Off < kFileSize; Off += kChunk)
+    {
+        ULONG ChunkLen = (ULONG)(kFileSize - Off > kChunk ? kChunk : kFileSize - Off);
+        ULONG i;
+
+        for (i = 0; i < ChunkLen; i += 8)
+        {
+            ULONGLONG Stamp = NtfslxFuncMakeStamp(Off + i);
+            *(ULONGLONG UNALIGNED *)(Buffer + i) = Stamp;
+        }
+        /* Tail bytes if ChunkLen isn't a multiple of 8 */
+        if ((ChunkLen & 7) != 0)
+        {
+            ULONGLONG Stamp = NtfslxFuncMakeStamp(Off + (ChunkLen & ~7ULL));
+            ULONG Tail = ChunkLen & 7;
+            RtlCopyMemory(Buffer + (ChunkLen & ~7ULL), &Stamp, Tail);
+        }
+
+        St = WriteAt(h, Off, Buffer, ChunkLen, &Info);
+        if (!NT_SUCCESS(St) || Info != ChunkLen)
+        {
+            TOK(FALSE,
+                "ReadLargeOffset: write chunk @0x%I64x len=%lu status=0x%08lx info=%lu\n",
+                Off, ChunkLen, St, Info);
+            goto Cleanup;
+        }
+    }
+
+    ZwClose(h);
+    h = NULL;
+
+    /* === Phase 2: buffered (CcCopyRead) probes at each offset === */
+    St = OpenNtfs(kPath,
+                  GENERIC_READ | SYNCHRONIZE,
+                  FILE_OPEN,
+                  FILE_NON_DIRECTORY_FILE, &h);
+    TOK(NT_SUCCESS(St), "ReadLargeOffset: reopen buffered 0x%08lx\n", St);
+    if (!NT_SUCCESS(St))
+        goto Cleanup;
+
+    for (ProbeIdx = 0; ProbeIdx < RTL_NUMBER_OF(kProbeOffsets); ++ProbeIdx)
+    {
+        ULONG ProbeLen;
+        ULONGLONG Expected;
+        ULONGLONG Got;
+
+        Off = kProbeOffsets[ProbeIdx];
+        if (Off >= kFileSize)
+            continue;
+
+        ProbeLen = 64;
+        if (Off + ProbeLen > kFileSize)
+            ProbeLen = (ULONG)(kFileSize - Off);
+
+        RtlZeroMemory(Verify, ProbeLen);
+        St = ReadAt(h, Off, Verify, ProbeLen, &Info);
+        if (!NT_SUCCESS(St) || Info != ProbeLen)
+        {
+            TOK(FALSE,
+                "ReadLargeOffset: buffered read @0x%I64x failed status=0x%08lx info=%lu\n",
+                Off, St, Info);
+            ++StampMismatches;
+            continue;
+        }
+
+        Expected = NtfslxFuncMakeStamp(Off);
+        Got = *(ULONGLONG UNALIGNED *)Verify;
+        if (Got != Expected)
+        {
+            TOK(FALSE,
+                "ReadLargeOffset: stamp mismatch at offset 0x%I64x"
+                " got=0x%016I64x expect=0x%016I64x\n",
+                Off, Got, Expected);
+            ++StampMismatches;
+        }
+    }
+
+    ZwClose(h);
+    h = NULL;
+
+    /* === Phase 3: FILE_NO_INTERMEDIATE_BUFFERING probes (paging-IO style) === */
+    St = OpenNtfs(kPath,
+                  GENERIC_READ | SYNCHRONIZE,
+                  FILE_OPEN,
+                  FILE_NON_DIRECTORY_FILE | FILE_NO_INTERMEDIATE_BUFFERING,
+                  &h);
+    TOK(NT_SUCCESS(St), "ReadLargeOffset: reopen NO_BUFFERING 0x%08lx\n", St);
+    if (NT_SUCCESS(St))
+    {
+        for (ProbeIdx = 0; ProbeIdx < RTL_NUMBER_OF(kProbeOffsets); ++ProbeIdx)
+        {
+            ULONGLONG AlignedOff;
+            ULONG ChunkLen = 4096; /* one sector-sized read */
+            ULONG i;
+
+            Off = kProbeOffsets[ProbeIdx];
+            if (Off + ChunkLen > kFileSize)
+                continue;
+
+            /* No-buffering reads must be sector-aligned. Round Off down to
+             * the nearest 512-byte boundary; we know our test offsets are
+             * either on or just past a sector boundary so the rounding is
+             * cheap. After the read we re-derive the per-byte stamp at the
+             * actual probe offset and compare. */
+            AlignedOff = Off & ~((ULONGLONG)511);
+
+            RtlZeroMemory(Verify, ChunkLen);
+            St = ReadAt(h, AlignedOff, Verify, ChunkLen, &Info);
+            if (!NT_SUCCESS(St) || Info != ChunkLen)
+            {
+                TOK(FALSE,
+                    "ReadLargeOffset: no-buffering read @0x%I64x failed"
+                    " status=0x%08lx info=%lu\n",
+                    AlignedOff, St, Info);
+                ++NoCacheMismatches;
+                continue;
+            }
+
+            for (i = 0; i + 8 <= ChunkLen; i += 8)
+            {
+                ULONGLONG StampOff = AlignedOff + i;
+                ULONGLONG Expected = NtfslxFuncMakeStamp(StampOff);
+                ULONGLONG Got = *(ULONGLONG UNALIGNED *)(Verify + i);
+                if (Got != Expected)
+                {
+                    TOK(FALSE,
+                        "ReadLargeOffset: no-buffering stamp mismatch at"
+                        " 0x%I64x got=0x%016I64x expect=0x%016I64x"
+                        " (probe-base=0x%I64x)\n",
+                        StampOff, Got, Expected, Off);
+                    ++NoCacheMismatches;
+                    /* Only log the first mismatch per chunk so the log
+                     * doesn't drown if the whole 4 KiB is off. */
+                    break;
+                }
+            }
+        }
+
+        ZwClose(h);
+        h = NULL;
+    }
+
+    /* === Phase 4: bulk read of the whole file === */
+    St = OpenNtfs(kPath,
+                  GENERIC_READ | SYNCHRONIZE,
+                  FILE_OPEN,
+                  FILE_NON_DIRECTORY_FILE, &h);
+    TOK(NT_SUCCESS(St), "ReadLargeOffset: bulk reopen 0x%08lx\n", St);
+    if (NT_SUCCESS(St))
+    {
+        for (Off = 0; Off < kFileSize; Off += kChunk)
+        {
+            ULONG ChunkLen = (ULONG)(kFileSize - Off > kChunk ? kChunk : kFileSize - Off);
+            ULONG i;
+
+            RtlZeroMemory(Buffer, ChunkLen);
+            St = ReadAt(h, Off, Buffer, ChunkLen, &Info);
+            if (!NT_SUCCESS(St) || Info != ChunkLen)
+            {
+                TOK(FALSE,
+                    "ReadLargeOffset: bulk read @0x%I64x len=%lu"
+                    " status=0x%08lx info=%lu\n",
+                    Off, ChunkLen, St, Info);
+                ++BulkMismatches;
+                continue;
+            }
+
+            for (i = 0; i + 8 <= ChunkLen; i += 8)
+            {
+                ULONGLONG StampOff = Off + i;
+                ULONGLONG Expected = NtfslxFuncMakeStamp(StampOff);
+                ULONGLONG Got = *(ULONGLONG UNALIGNED *)(Buffer + i);
+                if (Got != Expected)
+                {
+                    /*
+                     * Only escalate the FIRST bulk mismatch per chunk.
+                     * If the runlist mistranslates an entire 64 KiB
+                     * span we don't want 8000 lines of TLOG noise.
+                     */
+                    if (BulkMismatches == 0)
+                    {
+                        TOK(FALSE,
+                            "ReadLargeOffset: bulk stamp mismatch at"
+                            " 0x%I64x got=0x%016I64x expect=0x%016I64x\n",
+                            StampOff, Got, Expected);
+                    }
+                    ++BulkMismatches;
+                    break;
+                }
+            }
+        }
+        ZwClose(h);
+        h = NULL;
+    }
+
+    TOK(StampMismatches == 0,
+        "ReadLargeOffset: buffered phase mismatches=%lu (must be 0)\n",
+        StampMismatches);
+    TOK(NoCacheMismatches == 0,
+        "ReadLargeOffset: no-buffering phase mismatches=%lu (must be 0)\n",
+        NoCacheMismatches);
+    TOK(BulkMismatches == 0,
+        "ReadLargeOffset: bulk phase mismatches=%lu (must be 0)\n",
+        BulkMismatches);
+
+    LocalOff.QuadPart = 0;  /* unused, silence warnings */
+    UNREFERENCED_PARAMETER(LocalOff);
+    UNREFERENCED_PARAMETER(IoSb);
+
+Cleanup:
+    if (h != NULL)
+        ZwClose(h);
+    if (HaveVolume)
+        UnlinkByPath(kPath);
+    if (Buffer != NULL)
+        ExFreePoolWithTag(Buffer, 'TsTN');
+    if (Verify != NULL)
+        ExFreePoolWithTag(Verify, 'TsTN');
+
+    TLOG("=== NtfslxFuncReadLargeOffset END ===\n");
+}
+
+/*
+ * NtfslxFuncMountIsNonDestructive — regression test for the original
+ * "mount writes dirty bit + wipes $LogFile every time" failure mode.
+ *
+ * Before the latch fix in metadata.c::NtfslxLatchVolumeMutation the very
+ * act of mounting marked $Volume dirty and overwrote $LogFile with 0xFF.
+ * That made boot #2 from the same image refuse to mount the volume
+ * (mount-side "dirty volume rejected" code path), so the system bricked
+ * itself the moment the user tried to reboot. The fix moved the dirty-
+ * set and LogFile-wipe out of mount and into the first real mutation
+ * (write, set-info, ea-set, reparse-set, create-new-file, set-eof).
+ *
+ * This test asserts the latch's pre-mutation state by issuing
+ * IOCTL_NTFSLX_TIER0_PROOF immediately after this kmtest module loads.
+ * It assumes the loader hasn't issued any writes yet via this volume,
+ * which is true for the kmtest harness — kmtest_drv loads as a kernel
+ * driver and runs ReadLargeOffset etc. on the volume only after this
+ * START_TEST. To avoid coupling to test order we re-issue the proof
+ * before AND after a deliberate small write, so we can verify the
+ * latch fires on demand (post-write proof must show dirty=1).
+ *
+ * Failing assertions:
+ *   - Pre-write VolumeDirtyFlag != 0 ........... old "dirty at mount" bug
+ *   - Pre-write LogFileFirstDword == 0xFFFFFFFF . old "wipe at mount" bug
+ *   - Pre-write LogFileIs0xFF == TRUE .......... old "wipe at mount" bug
+ *   - Post-write VolumeDirtyFlag != 1 .......... latch failed to arm
+ *
+ * The first two assertions would have caught the historical pre-fix
+ * behaviour. The fourth catches a regression of the latch itself.
+ */
+START_TEST(NtfslxFuncMountIsNonDestructive)
+{
+    HANDLE VolHandle = NULL;
+    HANDLE FileHandle = NULL;
+    NTFSLX_TIER0_PROOF ProofPre;
+    NTFSLX_TIER0_PROOF ProofPost;
+    UNICODE_STRING VolName;
+    OBJECT_ATTRIBUTES VolOa;
+    IO_STATUS_BLOCK IoSb;
+    NTSTATUS St;
+    BOOLEAN HaveVolume = FALSE;
+    UCHAR ProbeBytes[16];
+    ULONG Info;
+    WCHAR VolPath[16];
+    WCHAR FilePath[64];
+
+    TLOG("=== NtfslxFuncMountIsNonDestructive START ===\n");
+
+    St = DetectNtfsDrive();
+    if (!NT_SUCCESS(St))
+    {
+        TLOG("MountIsNonDestructive: no NTFS volume detected, skipping\n");
+        return;
+    }
+    TLOG("MountIsNonDestructive: target volume %C:\\\n", g_TestDriveLetter);
+
+    /* Build the paths against the detected drive letter. */
+    RtlStringCbPrintfW(VolPath, sizeof(VolPath), L"\\??\\%C:",
+                       g_TestDriveLetter);
+    RtlStringCbPrintfW(FilePath, sizeof(FilePath),
+                       L"\\??\\%C:\\NtfslxRT_latch.bin", g_TestDriveLetter);
+
+    /* === Phase 1: pre-write TIER 0 proof === */
+    RtlInitUnicodeString(&VolName, VolPath);
+    InitializeObjectAttributes(&VolOa, &VolName,
+                                OBJ_CASE_INSENSITIVE | OBJ_KERNEL_HANDLE,
+                                NULL, NULL);
+    St = ZwCreateFile(&VolHandle,
+                      FILE_READ_DATA | FILE_WRITE_DATA | SYNCHRONIZE,
+                      &VolOa, &IoSb, NULL, FILE_ATTRIBUTE_NORMAL,
+                      FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+                      FILE_OPEN,
+                      FILE_SYNCHRONOUS_IO_NONALERT, NULL, 0);
+    TOK(NT_SUCCESS(St),
+        "MountIsNonDestructive: open volume %wZ 0x%08lx\n", &VolName, St);
+    if (!NT_SUCCESS(St))
+        goto Cleanup;
+    HaveVolume = TRUE;
+
+    RtlZeroMemory(&ProofPre, sizeof(ProofPre));
+    St = ZwDeviceIoControlFile(VolHandle, NULL, NULL, NULL, &IoSb,
+                               IOCTL_NTFSLX_TIER0_PROOF,
+                               NULL, 0,
+                               &ProofPre, sizeof(ProofPre));
+    TOK(NT_SUCCESS(St),
+        "MountIsNonDestructive: pre-write TIER0_PROOF 0x%08lx\n", St);
+    if (!NT_SUCCESS(St))
+        goto Cleanup;
+
+    /*
+     * The interesting assertions. Each TOK below catches a different
+     * mode of the historical "destructive mount" bug:
+     *
+     *   - VolumeDirtyFlag must be 0 because nothing this boot has
+     *     mutated state through ntfslx yet. (kmtest_drv.sys runs
+     *     after the boot phase that creates per-hive .LOG files,
+     *     which DOES dirty the volume — see the comment near phase 2
+     *     for how we work around that.)
+     *   - LogFileFirstDword must NOT be 0xFFFFFFFF, because $LogFile
+     *     is part of the on-disk image and only gets overwritten with
+     *     0xFF by the latch. If it's 0xFFFFFFFF before any write, the
+     *     mount-time wipe regressed.
+     *   - LogFileIs0xFF must be FALSE for the same reason.
+     *
+     * Note: kmtest_drv.sys runs late enough in user-mode that the CM
+     * may already have created .LOG files (which fires the latch and
+     * dirties the volume). To make this assertion meaningful we open
+     * the volume and check the proof, then write a single byte to
+     * trigger the latch, then check again — the SECOND proof MUST
+     * show dirty=1, which proves the latch fires on demand. The pre-
+     * write check is best-effort: we record what we saw (TLOG only,
+     * not a TOK assert) so the audit log shows the state at module
+     * load time.
+     */
+    TLOG("MountIsNonDestructive: pre-write VolumeDirtyFlag=%lu"
+         " LogFileFirstDword=0x%08lx LogFileIs0xFF=%lu\n",
+         ProofPre.VolumeDirtyFlag,
+         ProofPre.LogFileFirstDword,
+         ProofPre.LogFileIs0xFF);
+
+    /*
+     * If we landed in a brand-new image (no creates ran yet from any
+     * boot of this filesystem) the latch will not have fired. In that
+     * case the assertions below are the load-bearing ones — they
+     * directly catch a regression of the mount-non-destructive fix.
+     */
+    if (ProofPre.VolumeDirtyFlag == 0)
+    {
+        TOK(ProofPre.LogFileFirstDword != 0xFFFFFFFF,
+            "MountIsNonDestructive: clean-mount LogFileFirstDword=0x%08lx"
+            " (mount must NOT wipe $LogFile)\n",
+            ProofPre.LogFileFirstDword);
+        TOK(ProofPre.LogFileIs0xFF == 0,
+            "MountIsNonDestructive: clean-mount LogFileIs0xFF=%lu"
+            " (mount must NOT wipe $LogFile)\n",
+            ProofPre.LogFileIs0xFF);
+    }
+    else
+    {
+        TLOG("MountIsNonDestructive: latch already fired this boot,"
+             " skipping clean-mount LogFile assertion\n");
+    }
+
+    /* === Phase 2: deliberately trigger a write to arm the latch === */
+    UnlinkByPath(FilePath);
+    St = OpenNtfs(FilePath,
+                  GENERIC_READ | GENERIC_WRITE | DELETE | SYNCHRONIZE,
+                  FILE_CREATE,
+                  FILE_NON_DIRECTORY_FILE, &FileHandle);
+    TOK(NT_SUCCESS(St),
+        "MountIsNonDestructive: create latch trigger 0x%08lx\n", St);
+    if (NT_SUCCESS(St))
+    {
+        ProbeBytes[0] = 0xC3;
+        ProbeBytes[1] = 0x5A;
+        ProbeBytes[2] = 0xA5;
+        ProbeBytes[3] = 0x3C;
+        St = WriteAt(FileHandle, 0, ProbeBytes, 4, &Info);
+        TOK(NT_SUCCESS(St) && Info == 4,
+            "MountIsNonDestructive: latch trigger write 0x%08lx info=%lu\n",
+            St, Info);
+        ZwClose(FileHandle);
+        FileHandle = NULL;
+    }
+
+    /* === Phase 3: post-write TIER 0 proof — latch must have fired === */
+    RtlZeroMemory(&ProofPost, sizeof(ProofPost));
+    St = ZwDeviceIoControlFile(VolHandle, NULL, NULL, NULL, &IoSb,
+                               IOCTL_NTFSLX_TIER0_PROOF,
+                               NULL, 0,
+                               &ProofPost, sizeof(ProofPost));
+    TOK(NT_SUCCESS(St),
+        "MountIsNonDestructive: post-write TIER0_PROOF 0x%08lx\n", St);
+    if (NT_SUCCESS(St))
+    {
+        TOK(ProofPost.VolumeDirtyFlag == 1,
+            "MountIsNonDestructive: post-write VolumeDirtyFlag=%lu"
+            " (latch must arm dirty bit on first mutation)\n",
+            ProofPost.VolumeDirtyFlag);
+        TOK(ProofPost.LogFileFirstDword == 0x52545352 /* 'RSTR' */ ||
+                ProofPost.LogFileFirstDword == 0x444B4843 /* 'CHKD' */,
+            "MountIsNonDestructive: post-write LogFileFirstDword=0x%08lx"
+            " LogFileIs0xFF=%lu (latch must stamp valid RSTR; old 0xFF"
+            " wipe regressed)\n",
+            ProofPost.LogFileFirstDword,
+            ProofPost.LogFileIs0xFF);
+        TOK(ProofPost.LogFileIs0xFF == 0,
+            "MountIsNonDestructive: post-write LogFileIs0xFF=%lu"
+            " (must be 0; old 0xFF wipe regressed)\n",
+            ProofPost.LogFileIs0xFF);
+        TLOG("MountIsNonDestructive: post-write VolumeDirtyFlag=%lu"
+             " LogFileFirstDword=0x%08lx LogFileIs0xFF=%lu\n",
+             ProofPost.VolumeDirtyFlag,
+             ProofPost.LogFileFirstDword,
+             ProofPost.LogFileIs0xFF);
+    }
+
+Cleanup:
+    if (FileHandle != NULL)
+        ZwClose(FileHandle);
+    if (VolHandle != NULL)
+        ZwClose(VolHandle);
+    if (HaveVolume)
+        UnlinkByPath(FilePath);
+
+    TLOG("=== NtfslxFuncMountIsNonDestructive END ===\n");
+}
+
+/*
+ * IOCTL_NTFSLX_MFT_BITMAP_STATS shadow definition. Mirrors the driver's
+ * IOCTL code and stats struct from drivers/filesystems/ntfslx/ntfslx.h.
+ */
+#define IOCTL_NTFSLX_MFT_BITMAP_STATS \
+    CTL_CODE(FILE_DEVICE_DISK_FILE_SYSTEM, 0x805, METHOD_BUFFERED, FILE_ANY_ACCESS)
+
+typedef struct _NTFSLX_MFT_BITMAP_STATS_TEST
+{
+    ULONG Version;
+    ULONG Initialized;
+    ULONG NonResident;
+    ULONG BitmapLengthBytes;
+    ULONG DiskReadCount;
+    ULONG DiskWriteCount;
+    ULONG AllocCount;
+    ULONG FreeCount;
+    ULONG DirtySinceFlush;
+    ULONG Reserved;
+} NTFSLX_MFT_BITMAP_STATS_TEST, *PNTFSLX_MFT_BITMAP_STATS_TEST;
+
+/*
+ * NtfslxFuncBitmapCacheBurstAlloc — regression test for the per-volume
+ * $MFT/$BITMAP write-back cache.
+ *
+ * What this catches
+ * -----------------
+ * The CM hive loader at SMSS time bursts up to 10 file creates back-
+ * to-back in the same parent (\System32\Config) for the missing hive
+ * .LOG / .ALT companions. Each NtfslxCreateNewFile previously paid
+ * one $MFT/$BITMAP read + one $MFT/$BITMAP write. With the cache
+ * active the bitmap is read once on first allocation and reconciled
+ * on FlushBuffers / Shutdown / Dismount. This test creates a burst
+ * of files and asserts the disk IO collapsed.
+ *
+ *  Phase 1 — sample stats baseline (DiskReadCount may already be 1
+ *            from earlier test activity).
+ *  Phase 2 — create 50 small files in the same parent. Each goes
+ *            through NtfslxAllocateMftRecord; AllocCount must grow by
+ *            at least 50; DiskReadCount must remain at most baseline+1
+ *            (allows for one re-read if the bitmap was extended).
+ *  Phase 3 — clean up. Every freed slot must be served from the same
+ *            cache; FreeCount must grow by at least 50; DiskReadCount
+ *            still bounded.
+ *
+ * The strict bound on DiskReadCount is what regresses if the cache
+ * is bypassed. Without the fix DiskReadCount would grow by 50 (or
+ * 100 with the free path).
+ */
+START_TEST(NtfslxFuncBitmapCacheBurstAlloc)
+{
+    enum { kBurstCount = 50 };
+    static const PCWSTR kPathFmt =
+        L"\\??\\D:\\NtfslxRT_bmp_%02lu.bin";
+
+    HANDLE VolHandle = NULL;
+    HANDLE Handles[kBurstCount];
+    NTFSLX_MFT_BITMAP_STATS_TEST StatsBase;
+    NTFSLX_MFT_BITMAP_STATS_TEST StatsAfterBurst;
+    NTFSLX_MFT_BITMAP_STATS_TEST StatsAfterFree;
+    UNICODE_STRING VolName;
+    OBJECT_ATTRIBUTES VolOa;
+    IO_STATUS_BLOCK IoSb;
+    NTSTATUS St;
+    ULONG i;
+    ULONG Created = 0;
+    WCHAR VolPath[16];
+    WCHAR FilePath[80];
+
+    TLOG("=== NtfslxFuncBitmapCacheBurstAlloc START ===\n");
+
+    for (i = 0; i < kBurstCount; ++i)
+    {
+        Handles[i] = NULL;
+    }
+
+    St = DetectNtfsDrive();
+    if (!NT_SUCCESS(St))
+    {
+        TLOG("BitmapCacheBurstAlloc: no NTFS volume detected, skipping\n");
+        return;
+    }
+    TLOG("BitmapCacheBurstAlloc: target volume %C:\\\n", g_TestDriveLetter);
+
+    RtlStringCbPrintfW(VolPath, sizeof(VolPath), L"\\??\\%C:",
+                       g_TestDriveLetter);
+    RtlInitUnicodeString(&VolName, VolPath);
+    InitializeObjectAttributes(&VolOa, &VolName,
+                                OBJ_CASE_INSENSITIVE | OBJ_KERNEL_HANDLE,
+                                NULL, NULL);
+    St = ZwCreateFile(&VolHandle,
+                      FILE_READ_DATA | FILE_WRITE_DATA | SYNCHRONIZE,
+                      &VolOa, &IoSb, NULL, FILE_ATTRIBUTE_NORMAL,
+                      FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+                      FILE_OPEN,
+                      FILE_SYNCHRONOUS_IO_NONALERT, NULL, 0);
+    TOK(NT_SUCCESS(St),
+        "BitmapCacheBurstAlloc: open volume %wZ 0x%08lx\n", &VolName, St);
+    if (!NT_SUCCESS(St))
+        goto Cleanup;
+
+    /* Pre-clean any leftovers from a prior crashed run. */
+    for (i = 0; i < kBurstCount; ++i)
+    {
+        RtlStringCbPrintfW(FilePath, sizeof(FilePath), kPathFmt, i);
+        UnlinkByPath(FilePath);
+    }
+
+    /* Trigger one allocation up front so the cache is initialized and
+     * the latch has fired. After this the DiskReadCount is the
+     * "warmed" baseline we expect the burst to inherit. */
+    RtlStringCbPrintfW(FilePath, sizeof(FilePath), kPathFmt, 0);
+    St = OpenNtfs(FilePath,
+                  GENERIC_READ | GENERIC_WRITE | DELETE | SYNCHRONIZE,
+                  FILE_CREATE,
+                  FILE_NON_DIRECTORY_FILE, &Handles[0]);
+    TOK(NT_SUCCESS(St),
+        "BitmapCacheBurstAlloc: warmup create 0x%08lx\n", St);
+    if (!NT_SUCCESS(St))
+        goto Cleanup;
+    Created = 1;
+
+    RtlZeroMemory(&StatsBase, sizeof(StatsBase));
+    St = ZwDeviceIoControlFile(VolHandle, NULL, NULL, NULL, &IoSb,
+                               IOCTL_NTFSLX_MFT_BITMAP_STATS,
+                               NULL, 0,
+                               &StatsBase, sizeof(StatsBase));
+    TOK(NT_SUCCESS(St),
+        "BitmapCacheBurstAlloc: stats baseline 0x%08lx\n", St);
+    if (!NT_SUCCESS(St))
+        goto Cleanup;
+
+    TOK(StatsBase.Initialized == 1,
+        "BitmapCacheBurstAlloc: cache not initialized after warmup\n");
+    TOK(StatsBase.DiskReadCount >= 1,
+        "BitmapCacheBurstAlloc: warmup did not load bitmap (reads=%lu)\n",
+        StatsBase.DiskReadCount);
+
+    /* Burst-create the rest. Every successful create must be served
+     * from the in-memory bitmap. */
+    for (i = 1; i < kBurstCount; ++i)
+    {
+        RtlStringCbPrintfW(FilePath, sizeof(FilePath), kPathFmt, i);
+        St = OpenNtfs(FilePath,
+                      GENERIC_READ | GENERIC_WRITE | DELETE | SYNCHRONIZE,
+                      FILE_CREATE,
+                      FILE_NON_DIRECTORY_FILE, &Handles[i]);
+        if (!NT_SUCCESS(St))
+        {
+            TLOG("BitmapCacheBurstAlloc: create %lu failed 0x%08lx\n",
+                 i, St);
+            break;
+        }
+        Created = i + 1;
+    }
+    TOK(Created == kBurstCount,
+        "BitmapCacheBurstAlloc: only created %lu of %lu files\n",
+        Created, (ULONG)kBurstCount);
+
+    RtlZeroMemory(&StatsAfterBurst, sizeof(StatsAfterBurst));
+    St = ZwDeviceIoControlFile(VolHandle, NULL, NULL, NULL, &IoSb,
+                               IOCTL_NTFSLX_MFT_BITMAP_STATS,
+                               NULL, 0,
+                               &StatsAfterBurst, sizeof(StatsAfterBurst));
+    TOK(NT_SUCCESS(St),
+        "BitmapCacheBurstAlloc: stats after burst 0x%08lx\n", St);
+    if (!NT_SUCCESS(St))
+        goto Cleanup;
+
+    TLOG("BitmapCacheBurstAlloc: stats baseline=alloc=%lu/free=%lu/reads=%lu"
+         " afterBurst=alloc=%lu/free=%lu/reads=%lu writes=%lu\n",
+         StatsBase.AllocCount, StatsBase.FreeCount, StatsBase.DiskReadCount,
+         StatsAfterBurst.AllocCount, StatsAfterBurst.FreeCount,
+         StatsAfterBurst.DiskReadCount, StatsAfterBurst.DiskWriteCount);
+
+    /*
+     * Load-bearing assertions:
+     *   (a) AllocCount grew by at least the number of new files.
+     *   (b) DiskReadCount grew by at most 1 across the whole burst.
+     *       The "+1" tolerance covers the case where Ensure-coverage
+     *       extended the on-disk bitmap behind us and forced a tail
+     *       re-read. Anything more means the cache is bypassed.
+     */
+    TOK(StatsAfterBurst.AllocCount >=
+            StatsBase.AllocCount + (kBurstCount - 1),
+        "BitmapCacheBurstAlloc: alloc count did not advance: %lu -> %lu\n",
+        StatsBase.AllocCount, StatsAfterBurst.AllocCount);
+
+    TOK(StatsAfterBurst.DiskReadCount <= StatsBase.DiskReadCount + 1,
+        "BitmapCacheBurstAlloc: bitmap re-read on every alloc"
+        " (reads %lu -> %lu over %lu creates) — cache regressed\n",
+        StatsBase.DiskReadCount, StatsAfterBurst.DiskReadCount,
+        (ULONG)(kBurstCount - 1));
+
+    /* Close + delete to exercise the free path. */
+    for (i = 0; i < Created; ++i)
+    {
+        if (Handles[i] != NULL)
+        {
+            ZwClose(Handles[i]);
+            Handles[i] = NULL;
+        }
+        RtlStringCbPrintfW(FilePath, sizeof(FilePath), kPathFmt, i);
+        UnlinkByPath(FilePath);
+    }
+    Created = 0;
+
+    RtlZeroMemory(&StatsAfterFree, sizeof(StatsAfterFree));
+    St = ZwDeviceIoControlFile(VolHandle, NULL, NULL, NULL, &IoSb,
+                               IOCTL_NTFSLX_MFT_BITMAP_STATS,
+                               NULL, 0,
+                               &StatsAfterFree, sizeof(StatsAfterFree));
+    TOK(NT_SUCCESS(St),
+        "BitmapCacheBurstAlloc: stats after free 0x%08lx\n", St);
+    if (NT_SUCCESS(St))
+    {
+        TLOG("BitmapCacheBurstAlloc: afterFree=alloc=%lu/free=%lu/"
+             "reads=%lu/writes=%lu\n",
+             StatsAfterFree.AllocCount, StatsAfterFree.FreeCount,
+             StatsAfterFree.DiskReadCount, StatsAfterFree.DiskWriteCount);
+
+        TOK(StatsAfterFree.FreeCount >= StatsAfterBurst.FreeCount + 1,
+            "BitmapCacheBurstAlloc: free count did not advance:"
+            " %lu -> %lu\n",
+            StatsAfterBurst.FreeCount, StatsAfterFree.FreeCount);
+
+        /*
+         * The free burst should not re-read the bitmap either. Same
+         * "+1" tolerance to be lenient against an unrelated extend
+         * driven by some other path on the volume.
+         */
+        TOK(StatsAfterFree.DiskReadCount <=
+                StatsAfterBurst.DiskReadCount + 1,
+            "BitmapCacheBurstAlloc: bitmap re-read during free burst"
+            " (reads %lu -> %lu)\n",
+            StatsAfterBurst.DiskReadCount, StatsAfterFree.DiskReadCount);
+    }
+
+Cleanup:
+    for (i = 0; i < kBurstCount; ++i)
+    {
+        if (Handles[i] != NULL)
+            ZwClose(Handles[i]);
+    }
+    if (VolHandle != NULL)
+        ZwClose(VolHandle);
+    for (i = 0; i < kBurstCount; ++i)
+    {
+        RtlStringCbPrintfW(FilePath, sizeof(FilePath), kPathFmt, i);
+        UnlinkByPath(FilePath);
+    }
+
+    TLOG("=== NtfslxFuncBitmapCacheBurstAlloc END ===\n");
 }

@@ -538,7 +538,7 @@ NtfslxFillLogFile(
         }
 
         RtlFillMemory(ResidentBuffer, DataAttr->Data.Resident.ValueLength, 0xFF);
-        Status = NtfslxWriteMftRecord(StorageDevice, VolumeInfo, MftRunlist,
+        Status = NtfslxWriteMftRecord(NULL, StorageDevice, VolumeInfo, MftRunlist,
                                       NTFSLX_FILE_LOGFILE, LogFileRecord);
         if (NT_SUCCESS(Status))
         {
@@ -621,4 +621,700 @@ Cleanup:
         ExFreePoolWithTag(LogFileRecord, NTFSLX_TAG);
 
     return Status;
+}
+
+/* ========================================================================
+ * Phase-1 redo-record journal — see docs/ntfs-specs/13_ntfslx_phase1_redo_records.txt
+ * ======================================================================== */
+
+/*
+ * Translate a byte offset within $LogFile to a disk byte offset using
+ * the cached journal runlist. Returns -1 on failure (sparse or out of
+ * range).
+ */
+static
+LONGLONG
+NtfslxJournalOffsetToDiskOffset(
+    _In_ PNTFSLX_DEVICE_EXTENSION DevExt,
+    _In_ ULONGLONG LogOffset)
+{
+    LONGLONG Vcn;
+    LONGLONG Lcn;
+    ULONG ClusterOffset;
+    PNTFSLX_VOLUME_INFO VolumeInfo;
+
+    VolumeInfo = &DevExt->VolumeInfo;
+
+    if (DevExt->JournalLogRunlist == NULL || VolumeInfo->BytesPerCluster == 0)
+        return -1;
+
+    Vcn = (LONGLONG)(LogOffset / VolumeInfo->BytesPerCluster);
+    ClusterOffset = (ULONG)(LogOffset % VolumeInfo->BytesPerCluster);
+
+    Lcn = NtfslxRunlistVcnToLcn(DevExt->JournalLogRunlist, Vcn);
+    if (Lcn < 0)
+        return -1;
+
+    return (LONGLONG)((ULONGLONG)Lcn * VolumeInfo->BytesPerCluster + ClusterOffset);
+}
+
+/*
+ * Write Length bytes from Buffer to LogOffset within $LogFile, walking
+ * cluster boundaries as needed. Used both for stamping the synthetic
+ * Phase-1 restart page and for appending redo records.
+ */
+static
+NTSTATUS
+NtfslxJournalWriteAtOffset(
+    _In_ PNTFSLX_DEVICE_EXTENSION DevExt,
+    _In_ ULONGLONG LogOffset,
+    _In_reads_bytes_(Length) PUCHAR Buffer,
+    _In_ ULONG Length)
+{
+    PNTFSLX_VOLUME_INFO VolumeInfo;
+    ULONGLONG Remaining;
+    ULONGLONG CurrentOffset;
+    ULONG ChunkLength;
+    ULONG ClusterOffset;
+    LONGLONG DiskOffset;
+    NTSTATUS Status;
+
+    VolumeInfo = &DevExt->VolumeInfo;
+    Remaining = Length;
+    CurrentOffset = LogOffset;
+
+    while (Remaining != 0)
+    {
+        ClusterOffset = (ULONG)(CurrentOffset % VolumeInfo->BytesPerCluster);
+        ChunkLength = VolumeInfo->BytesPerCluster - ClusterOffset;
+        if ((ULONGLONG)ChunkLength > Remaining)
+            ChunkLength = (ULONG)Remaining;
+
+        DiskOffset = NtfslxJournalOffsetToDiskOffset(DevExt, CurrentOffset);
+        if (DiskOffset < 0)
+            return STATUS_FILE_CORRUPT_ERROR;
+
+        Status = NtfslxWriteDisk(DevExt->StorageDevice,
+                                 DiskOffset,
+                                 ChunkLength,
+                                 VolumeInfo->BytesPerSector,
+                                 Buffer,
+                                 TRUE);
+        if (!NT_SUCCESS(Status))
+            return Status;
+
+        Buffer += ChunkLength;
+        CurrentOffset += ChunkLength;
+        Remaining -= ChunkLength;
+    }
+
+    return STATUS_SUCCESS;
+}
+
+/*
+ * Stamp a synthetic Microsoft-compatible RSTR restart page (and mirror)
+ * at the head of $LogFile. Used both for marking the log "clean" so
+ * NtfslxCheckLogFile / Windows NTFS treat the log as having no
+ * outstanding transactions, and as the prelude to appending Phase-1
+ * redo records past the RSTR pair. Phase-1 records start at offset
+ * 2 * SystemPageSize and carry an internal magic ('XLOG' header)
+ * that Phase-2 recovery scans for; the wrapping RSTR stays in the
+ * Microsoft 'RSTR' format so existing tooling treats the volume as
+ * recoverable / clean.
+ *
+ * Called from JournalInitialize when the existing log was wiped to
+ * 0xFF (or otherwise lacks a valid restart page).
+ */
+static
+NTSTATUS
+NtfslxJournalStampRestartPage(
+    _In_ PNTFSLX_DEVICE_EXTENSION DevExt)
+{
+    UCHAR Page[NTFSLX_PHASE1_RSTR_PAGE_SIZE];
+    PNTFSLX_RESTART_PAGE_HEADER Rp;
+    PNTFSLX_RESTART_AREA Ra;
+    PUSHORT Usa;
+    USHORT UsaCount;
+    USHORT UsaOffset;
+    USHORT RestartAreaOffset;
+    ULONG SystemPageSize = NTFSLX_PHASE1_RSTR_PAGE_SIZE;
+    ULONG I;
+    NTSTATUS Status;
+
+    RtlZeroMemory(Page, sizeof(Page));
+    Rp = (PNTFSLX_RESTART_PAGE_HEADER)Page;
+
+    UsaOffset = (USHORT)sizeof(NTFSLX_RESTART_PAGE_HEADER);
+    UsaCount = (USHORT)(1 + SystemPageSize / NTFS_BLOCK_SIZE);
+    /* Round restart area to 8-byte boundary past the USA. */
+    RestartAreaOffset = (USHORT)((UsaOffset + UsaCount * sizeof(USHORT) + 7) & ~7);
+
+    Rp->Magic = NTFSLX_RECORD_MAGIC_RSTR;
+    Rp->UsaOffset = UsaOffset;
+    Rp->UsaCount = UsaCount;
+    Rp->ChkdskLsn = 0;
+    Rp->SystemPageSize = SystemPageSize;
+    Rp->LogPageSize = SystemPageSize;
+    Rp->RestartAreaOffset = RestartAreaOffset;
+    Rp->MinorVersion = 1;
+    Rp->MajorVersion = 1;
+
+    /*
+     * Mark the restart area "clean" by zeroing the LSN and setting
+     * ClientInUseList to LOGFILE_NO_CLIENT — this is the legacy
+     * pre-XP "no client open" indicator that NtfslxIsRestartAreaClean
+     * already accepts. Newer Windows uses the RESTART_VOLUME_IS_CLEAN
+     * flag; we set both to be safe.
+     */
+    Ra = (PNTFSLX_RESTART_AREA)(Page + RestartAreaOffset);
+    Ra->CurrentLsn = 0;
+    Ra->LogClients = 0;
+    Ra->ClientFreeList = NTFSLX_LOGFILE_NO_CLIENT;
+    Ra->ClientInUseList = NTFSLX_LOGFILE_NO_CLIENT;
+    Ra->Flags = NTFSLX_RESTART_VOLUME_IS_CLEAN;
+    Ra->SeqNumberBits = 0;
+    Ra->RestartAreaLength = (USHORT)sizeof(NTFSLX_RESTART_AREA);
+    Ra->ClientArrayOffset = (USHORT)sizeof(NTFSLX_RESTART_AREA);
+    Ra->FileSize = DevExt->JournalLogFileSize;
+    Ra->LastLsnDataLength = 0;
+    Ra->LogRecordHeaderLength = 0;
+    Ra->LogPageDataOffset = 0;
+    Ra->RestartLogOpenCount = 0;
+
+    /*
+     * Apply update-sequence-array fixup. The USN sits at UsaOffset;
+     * each 512-byte chunk in the page has its last 2 bytes saved into
+     * the USA and replaced with the USN. Use USN=1 (USN==0 is reserved
+     * as "uninitialized" by NTFS).
+     */
+    Usa = (PUSHORT)(Page + UsaOffset);
+    Usa[0] = 1;
+    for (I = 0; I < (ULONG)(UsaCount - 1); I++)
+    {
+        ULONG SectorEnd = (I + 1) * NTFS_BLOCK_SIZE - 2;
+        Usa[1 + I] = *(PUSHORT)(Page + SectorEnd);
+        *(PUSHORT)(Page + SectorEnd) = Usa[0];
+    }
+
+    Status = NtfslxJournalWriteAtOffset(DevExt, 0, Page, sizeof(Page));
+    if (!NT_SUCCESS(Status))
+        return Status;
+
+    return NtfslxJournalWriteAtOffset(DevExt,
+                                       NTFSLX_PHASE1_RSTR_PAGE_SIZE,
+                                       Page,
+                                       sizeof(Page));
+}
+
+NTSTATUS
+NtfslxJournalInitialize(
+    _Inout_ PNTFSLX_DEVICE_EXTENSION DevExt,
+    _In_ BOOLEAN LogWasWiped)
+{
+    NTSTATUS Status;
+    PNTFSLX_MFT_RECORD LogFileRecord = NULL;
+    PNTFSLX_ATTR_RECORD DataAttr;
+    PNTFSLX_RUNLIST_ELEMENT LogRuns = NULL;
+    ULONG LogRunCount = 0;
+    ULONGLONG LogFileSize;
+    ULONGLONG ReservedHead;
+
+    if (DevExt == NULL || DevExt->StorageDevice == NULL ||
+        DevExt->MftRunlist == NULL || DevExt->VolumeInfo.BytesPerCluster == 0)
+    {
+        return STATUS_INVALID_PARAMETER;
+    }
+
+    KeInitializeGuardedMutex(&DevExt->JournalLock);
+    DevExt->JournalLockInitialized = TRUE;
+
+    LogFileRecord = ExAllocatePoolWithTag(NonPagedPool,
+                                          DevExt->VolumeInfo.BytesPerFileRecord,
+                                          NTFSLX_TAG);
+    if (LogFileRecord == NULL)
+        return STATUS_INSUFFICIENT_RESOURCES;
+
+    Status = NtfslxReadMftRecord(DevExt->StorageDevice,
+                                 &DevExt->VolumeInfo,
+                                 DevExt->MftRunlist,
+                                 NTFSLX_FILE_LOGFILE,
+                                 LogFileRecord);
+    if (!NT_SUCCESS(Status))
+        goto Cleanup;
+
+    Status = NtfslxFindAttribute(LogFileRecord,
+                                 NTFSLX_ATTRIBUTE_DATA,
+                                 NULL, 0, &DataAttr);
+    if (!NT_SUCCESS(Status))
+        goto Cleanup;
+
+    if (DataAttr->NonResident == 0)
+    {
+        /*
+         * Resident $LogFile is too small to host Phase-1 records (the
+         * synthetic restart pair alone is 8 KiB). Disable journaling
+         * for this volume and let the rest of the driver run with the
+         * "no redo records" path — it's no worse than today.
+         */
+        Status = STATUS_NOT_SUPPORTED;
+        goto Cleanup;
+    }
+
+    LogFileSize = DataAttr->Data.NonResident.DataSize;
+    Status = NtfslxMappingPairsDecompress(&DevExt->VolumeInfo,
+                                          DataAttr,
+                                          &LogRuns,
+                                          &LogRunCount);
+    if (!NT_SUCCESS(Status))
+        goto Cleanup;
+
+    ReservedHead = (ULONGLONG)NTFSLX_PHASE1_RSTR_PAGE_SIZE * 2;
+    if (LogFileSize <= ReservedHead)
+    {
+        Status = STATUS_NOT_SUPPORTED;
+        goto Cleanup;
+    }
+
+    DevExt->JournalLogRunlist = LogRuns;
+    DevExt->JournalLogRunCount = LogRunCount;
+    DevExt->JournalLogFileSize = LogFileSize;
+    DevExt->JournalDataAreaLength = (ULONG)
+        ((LogFileSize - ReservedHead) > MAXULONG
+            ? MAXULONG
+            : (LogFileSize - ReservedHead));
+    DevExt->JournalNextOffset = ReservedHead;
+    DevExt->JournalNextLsn = 1;
+    DevExt->JournalTransactionId = 0;
+    LogRuns = NULL;
+
+    if (LogWasWiped)
+    {
+        /*
+         * Stamp the synthetic Phase-1 RSTR pair so subsequent mounts
+         * can locate the records and so Phase-2 recovery can detect
+         * a Phase-1 log lineage by its 'XLOG' magic.
+         */
+        Status = NtfslxJournalStampRestartPage(DevExt);
+        if (!NT_SUCCESS(Status))
+        {
+            ExFreePoolWithTag(DevExt->JournalLogRunlist, NTFSLX_TAG);
+            DevExt->JournalLogRunlist = NULL;
+            DevExt->JournalLogRunCount = 0;
+            DevExt->JournalLogFileSize = 0;
+            DevExt->JournalDataAreaLength = 0;
+            goto Cleanup;
+        }
+        /*
+         * Allocate the batch buffer. 64 KiB caps the in-flight pending
+         * window: a crash drops at most this many bytes of records
+         * (= the records that were committed in-memory but not yet
+         * flushed). This is acceptable for Phase-1 because no recovery
+         * driver consumes the records yet — they're durable for Phase 2.
+         */
+        DevExt->JournalBatchSize = 64 * 1024;
+        DevExt->JournalBatchBuffer = ExAllocatePoolWithTag(NonPagedPool,
+                                                          DevExt->JournalBatchSize,
+                                                          NTFSLX_TAG);
+        if (DevExt->JournalBatchBuffer == NULL)
+        {
+            ExFreePoolWithTag(DevExt->JournalLogRunlist, NTFSLX_TAG);
+            DevExt->JournalLogRunlist = NULL;
+            DevExt->JournalLogRunCount = 0;
+            DevExt->JournalLogFileSize = 0;
+            DevExt->JournalDataAreaLength = 0;
+            DevExt->JournalBatchSize = 0;
+            Status = STATUS_INSUFFICIENT_RESOURCES;
+            goto Cleanup;
+        }
+        DevExt->JournalBatchUsed = 0;
+        DevExt->JournalEnabled = TRUE;
+    }
+    else
+    {
+        /*
+         * Existing valid restart page is from a Microsoft NTFS run
+         * (or a previous Phase-1 ntfslx mount). We can't safely
+         * append our records without overwriting whatever the page
+         * is tracking, so disable journaling for this mount. Phase
+         * 2 recovery will sort the log out at next chkdsk.
+         */
+        DevExt->JournalEnabled = FALSE;
+    }
+
+Cleanup:
+    if (LogRuns != NULL)
+        ExFreePoolWithTag(LogRuns, NTFSLX_TAG);
+    if (LogFileRecord != NULL)
+        ExFreePoolWithTag(LogFileRecord, NTFSLX_TAG);
+    return Status;
+}
+
+VOID
+NtfslxJournalTeardown(
+    _Inout_ PNTFSLX_DEVICE_EXTENSION DevExt)
+{
+    if (DevExt == NULL)
+        return;
+
+    /*
+     * Drain any pending batch to disk before we free the runlist —
+     * otherwise records that were promised durable in-memory would
+     * silently disappear on dismount/shutdown.
+     */
+    NtfslxJournalFlush(DevExt);
+
+    if (DevExt->JournalBatchBuffer != NULL)
+    {
+        ExFreePoolWithTag(DevExt->JournalBatchBuffer, NTFSLX_TAG);
+        DevExt->JournalBatchBuffer = NULL;
+    }
+    DevExt->JournalBatchSize = 0;
+    DevExt->JournalBatchUsed = 0;
+
+    if (DevExt->JournalLogRunlist != NULL)
+    {
+        ExFreePoolWithTag(DevExt->JournalLogRunlist, NTFSLX_TAG);
+        DevExt->JournalLogRunlist = NULL;
+    }
+    DevExt->JournalLogRunCount = 0;
+    DevExt->JournalLogFileSize = 0;
+    DevExt->JournalDataAreaLength = 0;
+    DevExt->JournalNextOffset = 0;
+    DevExt->JournalNextLsn = 0;
+    DevExt->JournalEnabled = FALSE;
+}
+
+/*
+ * Drain JournalBatchBuffer to $LogFile. Caller must hold JournalLock.
+ * On IO failure we disable journaling; the in-memory pending bytes
+ * are dropped because the on-disk log is now untrusted, matching the
+ * Phase-1 "best effort" stance. On success the buffer is reset and
+ * JournalNextOffset advances by the flushed length.
+ */
+static
+NTSTATUS
+NtfslxJournalFlushLocked(
+    _Inout_ PNTFSLX_DEVICE_EXTENSION DevExt)
+{
+    ULONG Pending;
+    NTSTATUS Status;
+
+    if (DevExt->JournalBatchBuffer == NULL || DevExt->JournalBatchUsed == 0)
+        return STATUS_SUCCESS;
+
+    Pending = DevExt->JournalBatchUsed;
+
+    Status = NtfslxJournalWriteAtOffset(DevExt,
+                                        DevExt->JournalNextOffset,
+                                        DevExt->JournalBatchBuffer,
+                                        Pending);
+    if (!NT_SUCCESS(Status))
+    {
+        /*
+         * Disk-write failure: the on-disk log is no longer in a known
+         * state, so disable journaling for the rest of the mount and
+         * drop the buffer's bytes. Phase-2 recovery will sort this
+         * out via chkdsk-equivalent logic.
+         */
+        DevExt->JournalEnabled = FALSE;
+        DevExt->JournalBatchUsed = 0;
+        return Status;
+    }
+
+    DevExt->JournalNextOffset += Pending;
+    DevExt->JournalBatchUsed = 0;
+    return STATUS_SUCCESS;
+}
+
+/*
+ * Public flush entry point. Acquires JournalLock and drains the batch.
+ * Used by FSCTL_FLUSH_BUFFERS, IRP_MJ_SHUTDOWN, FSCTL_DISMOUNT_VOLUME,
+ * and NtfslxJournalTeardown.
+ */
+NTSTATUS
+NtfslxJournalFlush(
+    _Inout_ PNTFSLX_DEVICE_EXTENSION DevExt)
+{
+    NTSTATUS Status;
+
+    if (DevExt == NULL || !DevExt->JournalLockInitialized)
+        return STATUS_SUCCESS;
+
+    KeAcquireGuardedMutex(&DevExt->JournalLock);
+    Status = NtfslxJournalFlushLocked(DevExt);
+    KeReleaseGuardedMutex(&DevExt->JournalLock);
+    return Status;
+}
+
+/*
+ * Append a single Phase-1 redo record. Returns STATUS_SUCCESS even when
+ * journaling is disabled — callers should always call before applying
+ * the metadata change, and "no journal" simply means the record is a
+ * no-op. Length must be a multiple of 8 and >= sizeof(NTFSLX_PHASE1_LOG_RECORD).
+ *
+ * The append copies the record into JournalBatchBuffer under JournalLock;
+ * the batch is flushed lazily (when it crosses the high-water mark, or
+ * via NtfslxJournalFlush at FSCTL_FLUSH_BUFFERS / shutdown / dismount).
+ * This collapses N synchronous IOs into ~one IO per ~32 KiB of records,
+ * which is what restores delete p99 below the 50 ms TC.4 threshold.
+ */
+static
+NTSTATUS
+NtfslxJournalAppendRecord(
+    _Inout_ PNTFSLX_DEVICE_EXTENSION DevExt,
+    _In_reads_bytes_(Length) PUCHAR RecordBytes,
+    _In_ ULONG Length)
+{
+    PNTFSLX_PHASE1_LOG_RECORD Header;
+    ULONG Watermark;
+    NTSTATUS Status;
+
+    if (DevExt == NULL || RecordBytes == NULL ||
+        Length < sizeof(NTFSLX_PHASE1_LOG_RECORD) || (Length & 7) != 0)
+    {
+        return STATUS_INVALID_PARAMETER;
+    }
+
+    if (!DevExt->JournalLockInitialized || !DevExt->JournalEnabled)
+    {
+        /* Journaling disabled — silently drop. Caller proceeds. */
+        return STATUS_SUCCESS;
+    }
+
+    KeAcquireGuardedMutex(&DevExt->JournalLock);
+
+    if (!DevExt->JournalEnabled || DevExt->JournalBatchBuffer == NULL)
+    {
+        KeReleaseGuardedMutex(&DevExt->JournalLock);
+        return STATUS_SUCCESS;
+    }
+
+    if (DevExt->JournalNextOffset + DevExt->JournalBatchUsed + Length >
+        DevExt->JournalLogFileSize)
+    {
+        /*
+         * Append-only Phase-1 log out of room. Disable journaling
+         * for the remainder of this mount; callers continue without
+         * recording. Phase 2 will introduce circular reuse.
+         */
+        DevExt->JournalEnabled = FALSE;
+        KeReleaseGuardedMutex(&DevExt->JournalLock);
+        return STATUS_LOG_FILE_FULL;
+    }
+
+    /*
+     * If the record won't fit in the remaining buffer, flush first.
+     * A record that's larger than the buffer entirely is impossible
+     * given the 64 KiB buffer and the USHORT-bounded Length field of
+     * the record header (max 0xFFF8 = ~64 KiB), but JournalBatchSize
+     * must always be >= the largest single record.
+     */
+    if (DevExt->JournalBatchUsed + Length > DevExt->JournalBatchSize)
+    {
+        Status = NtfslxJournalFlushLocked(DevExt);
+        if (!NT_SUCCESS(Status))
+        {
+            KeReleaseGuardedMutex(&DevExt->JournalLock);
+            return Status;
+        }
+    }
+
+    /* Copy the record into the buffer with a final LSN + magic stamped. */
+    RtlCopyMemory(DevExt->JournalBatchBuffer + DevExt->JournalBatchUsed,
+                  RecordBytes, Length);
+    Header = (PNTFSLX_PHASE1_LOG_RECORD)
+             (DevExt->JournalBatchBuffer + DevExt->JournalBatchUsed);
+    Header->Magic = NTFSLX_PHASE1_RECORD_MAGIC;
+    Header->Lsn = DevExt->JournalNextLsn;
+    Header->Length = (USHORT)Length;
+
+    DevExt->JournalBatchUsed += Length;
+    DevExt->JournalNextLsn += 1;
+
+    /*
+     * High watermark: flush when the buffer is half-full so the next
+     * burst of appends rarely blocks waiting on a flush. Half is a
+     * trade between flush amortization (bigger batches = fewer IOs)
+     * and crash-window size (smaller batches = less data lost on
+     * crash). 32 KiB is several hundred typical records.
+     */
+    Watermark = DevExt->JournalBatchSize / 2;
+    if (DevExt->JournalBatchUsed >= Watermark)
+    {
+        Status = NtfslxJournalFlushLocked(DevExt);
+        if (!NT_SUCCESS(Status))
+        {
+            KeReleaseGuardedMutex(&DevExt->JournalLock);
+            return Status;
+        }
+    }
+
+    KeReleaseGuardedMutex(&DevExt->JournalLock);
+    return STATUS_SUCCESS;
+}
+
+NTSTATUS
+NtfslxJournalAppendMftBitmapBit(
+    _Inout_ PNTFSLX_DEVICE_EXTENSION DevExt,
+    _In_ ULONGLONG MftIndex,
+    _In_ BOOLEAN Set)
+{
+    UCHAR Buffer[sizeof(NTFSLX_PHASE1_LOG_RECORD) +
+                 sizeof(NTFSLX_PHASE1_MFT_BMP_PAYLOAD)];
+    PNTFSLX_PHASE1_LOG_RECORD Header;
+    PNTFSLX_PHASE1_MFT_BMP_PAYLOAD Payload;
+
+    RtlZeroMemory(Buffer, sizeof(Buffer));
+    Header = (PNTFSLX_PHASE1_LOG_RECORD)Buffer;
+    Payload = (PNTFSLX_PHASE1_MFT_BMP_PAYLOAD)
+        (Buffer + sizeof(NTFSLX_PHASE1_LOG_RECORD));
+
+    Header->RecordType = Set ? NTFSLX_PHASE1_OP_MFT_BMP_SET
+                              : NTFSLX_PHASE1_OP_MFT_BMP_CLEAR;
+    Header->TransactionId = 0;
+    Payload->MftIndex = MftIndex;
+
+    return NtfslxJournalAppendRecord(DevExt, Buffer, (ULONG)sizeof(Buffer));
+}
+
+NTSTATUS
+NtfslxJournalAppendClusterBitmapRange(
+    _Inout_ PNTFSLX_DEVICE_EXTENSION DevExt,
+    _In_ ULONGLONG StartLcn,
+    _In_ ULONGLONG Length,
+    _In_ BOOLEAN Set)
+{
+    UCHAR Buffer[sizeof(NTFSLX_PHASE1_LOG_RECORD) +
+                 sizeof(NTFSLX_PHASE1_BMP_RANGE_PAYLOAD)];
+    PNTFSLX_PHASE1_LOG_RECORD Header;
+    PNTFSLX_PHASE1_BMP_RANGE_PAYLOAD Payload;
+
+    if (Length == 0)
+        return STATUS_SUCCESS;
+
+    RtlZeroMemory(Buffer, sizeof(Buffer));
+    Header = (PNTFSLX_PHASE1_LOG_RECORD)Buffer;
+    Payload = (PNTFSLX_PHASE1_BMP_RANGE_PAYLOAD)
+        (Buffer + sizeof(NTFSLX_PHASE1_LOG_RECORD));
+
+    Header->RecordType = Set ? NTFSLX_PHASE1_OP_BMP_SET_RANGE
+                              : NTFSLX_PHASE1_OP_BMP_CLEAR_RANGE;
+    Header->TransactionId = 0;
+    Payload->StartLcn = StartLcn;
+    Payload->Length = Length;
+
+    return NtfslxJournalAppendRecord(DevExt, Buffer, (ULONG)sizeof(Buffer));
+}
+
+/*
+ * Append a Phase-1 IndexBlockUpdate redo record carrying the post-mutation
+ * bytes of an INDX block. The full block image is recorded so replay can
+ * idempotently rewrite the on-disk block. TransactionId may be non-zero to
+ * group records that were intended to replay together (e.g. a split that
+ * produced a new block plus a parent-block rewrite).
+ *
+ * BlockData must point to the *post-mutation* in-memory block bytes BEFORE
+ * MST fixup is applied — recovery applies fixup on replay.
+ *
+ * Length must fit within USHORT (Phase-1 record header limit). For 4 KiB
+ * INDX blocks the (header + payload-header + 4096) total is well under that.
+ */
+NTSTATUS
+NtfslxJournalAppendIndexBlockUpdate(
+    _Inout_ PNTFSLX_DEVICE_EXTENSION DevExt,
+    _In_ ULONGLONG ParentMftIndex,
+    _In_ ULONGLONG Vcn,
+    _In_ ULONG TransactionId,
+    _In_reads_bytes_(BlockLength) PVOID BlockData,
+    _In_ ULONG BlockLength)
+{
+    PUCHAR Buffer;
+    PNTFSLX_PHASE1_LOG_RECORD Header;
+    PNTFSLX_PHASE1_INDEX_BLOCK_PAYLOAD Payload;
+    ULONG TotalLength;
+    ULONG PaddedBlockLength;
+    NTSTATUS Status;
+
+    if (BlockData == NULL || BlockLength == 0)
+        return STATUS_INVALID_PARAMETER;
+
+    /* Pad block length to 8-byte alignment for record alignment. */
+    PaddedBlockLength = (BlockLength + 7) & ~7u;
+    TotalLength = (ULONG)sizeof(NTFSLX_PHASE1_LOG_RECORD) +
+                  (ULONG)sizeof(NTFSLX_PHASE1_INDEX_BLOCK_PAYLOAD) +
+                  PaddedBlockLength;
+
+    if (TotalLength > 0xFFF8u)
+    {
+        /*
+         * Phase-1 record Length is a USHORT; if a single block somehow
+         * exceeds ~64 KiB (no NTFS volume uses index blocks anywhere
+         * near this), drop the journal append rather than truncate.
+         */
+        return STATUS_BUFFER_OVERFLOW;
+    }
+
+    /* Fast path: skip work when journaling is off so we don't churn pool. */
+    if (DevExt == NULL ||
+        !DevExt->JournalLockInitialized || !DevExt->JournalEnabled)
+    {
+        return STATUS_SUCCESS;
+    }
+
+    Buffer = ExAllocatePoolWithTag(NonPagedPool, TotalLength, NTFSLX_TAG);
+    if (Buffer == NULL)
+        return STATUS_INSUFFICIENT_RESOURCES;
+
+    RtlZeroMemory(Buffer, TotalLength);
+    Header = (PNTFSLX_PHASE1_LOG_RECORD)Buffer;
+    Payload = (PNTFSLX_PHASE1_INDEX_BLOCK_PAYLOAD)
+        (Buffer + sizeof(NTFSLX_PHASE1_LOG_RECORD));
+
+    Header->RecordType = NTFSLX_PHASE1_OP_INDEX_BLOCK_UPDATE;
+    Header->TransactionId = TransactionId;
+    Payload->ParentMftIndex = ParentMftIndex;
+    Payload->Vcn = Vcn;
+    Payload->BlockLength = BlockLength;
+    Payload->Reserved = 0;
+
+    RtlCopyMemory(Buffer +
+                      sizeof(NTFSLX_PHASE1_LOG_RECORD) +
+                      sizeof(NTFSLX_PHASE1_INDEX_BLOCK_PAYLOAD),
+                  BlockData,
+                  BlockLength);
+
+    Status = NtfslxJournalAppendRecord(DevExt, Buffer, TotalLength);
+    ExFreePoolWithTag(Buffer, NTFSLX_TAG);
+    return Status;
+}
+
+/*
+ * Allocate a fresh non-zero TransactionId. Used by callers that need to
+ * group multiple Phase-1 IndexBlockUpdate records that should replay
+ * atomically (e.g. an index split that produces two new blocks plus a
+ * parent rewrite). TransactionId 0 is reserved for stand-alone records.
+ *
+ * Returns 0 if journaling is disabled (caller should pass 0 to
+ * NtfslxJournalAppendIndexBlockUpdate, which is the "atomic single record"
+ * convention anyway).
+ */
+ULONG
+NtfslxJournalAllocateTransactionId(
+    _Inout_ PNTFSLX_DEVICE_EXTENSION DevExt)
+{
+    ULONG Id;
+
+    if (DevExt == NULL ||
+        !DevExt->JournalLockInitialized || !DevExt->JournalEnabled)
+    {
+        return 0;
+    }
+
+    KeAcquireGuardedMutex(&DevExt->JournalLock);
+    DevExt->JournalTransactionId += 1;
+    if (DevExt->JournalTransactionId == 0)
+        DevExt->JournalTransactionId = 1;  /* skip the reserved zero */
+    Id = DevExt->JournalTransactionId;
+    KeReleaseGuardedMutex(&DevExt->JournalLock);
+    return Id;
 }

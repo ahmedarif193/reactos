@@ -1,19 +1,7 @@
 /*
- * PROJECT:     ReactOS NTFS Linux-Port Skeleton
+ * PROJECT:     ReactOS ntfslx driver
  * LICENSE:     GPL-2.0-or-later
  * PURPOSE:     VPB / FILE_OBJECT association hardening helpers for ntfslx
- *
- * Integration note:
- * - Wire NtfslxValidateMountVpb() from fsctl.c after the mount VPB is chosen
- *   but before the volume device is published.
- * - Wire NtfslxValidateOpenFileObjectVpb() from dispatch.c after FsContext,
- *   FsContext2, and Vpb are assigned in IRP_MJ_CREATE.
- * - Wire NtfslxValidateCloseFileObjectVpb() from dispatch.c before FsContext /
- *   FsContext2 are cleared in IRP_MJ_CLOSE and IRP_MJ_CLEANUP.
- * - Wire NtfslxValidateDismountVpb() from any explicit unmount / teardown path
- *   after Vpb->DeviceObject has been cleared and before final VPB release.
- * - In DBG builds, prefer the NtfslxAssert* wrappers at those handoff points so
- *   a stale or non-VPB binding is traced before the I/O manager frees it.
  */
 
 #include "ntfslx.h"
@@ -229,103 +217,6 @@ NtfslxValidateFileContextBindings(
     }
 
     return STATUS_SUCCESS;
-}
-
-static
-NTSTATUS
-NtfslxValidateMountedVpbState(
-    _In_ PVPB Vpb,
-    _In_opt_ PDEVICE_OBJECT RealDevice,
-    _In_opt_ PDEVICE_OBJECT FileSystemDeviceObject,
-    _In_ BOOLEAN ExpectMounted,
-    _In_ BOOLEAN ExpectDetached)
-{
-    KIRQL OldIrql;
-    NTSTATUS Status;
-
-    if (Vpb == NULL)
-    {
-        return STATUS_INVALID_PARAMETER;
-    }
-
-    if (!NtfslxIsPlausibleVpb(Vpb))
-    {
-        NtfslxDebugTraceVpbState("invalid VPB", Vpb, RealDevice, FileSystemDeviceObject);
-        return STATUS_FILE_CORRUPT_ERROR;
-    }
-
-    IoAcquireVpbSpinLock(&OldIrql);
-
-    Status = STATUS_SUCCESS;
-    if (ExpectMounted)
-    {
-        if ((Vpb->Flags & VPB_MOUNTED) == 0)
-        {
-            NtfslxDebugTraceVpbState("expected mounted VPB is not mounted",
-                                     Vpb,
-                                     RealDevice,
-                                     FileSystemDeviceObject);
-            Status = STATUS_FILE_CORRUPT_ERROR;
-        }
-
-        if (Vpb->ReferenceCount == 0)
-        {
-            NtfslxDebugTraceVpbState("mounted VPB has zero references",
-                                     Vpb,
-                                     RealDevice,
-                                     FileSystemDeviceObject);
-            Status = STATUS_FILE_CORRUPT_ERROR;
-        }
-    }
-    else if (Vpb->Flags & VPB_MOUNTED)
-    {
-        NtfslxDebugTraceVpbState("unexpectedly mounted VPB",
-                                 Vpb,
-                                 RealDevice,
-                                 FileSystemDeviceObject);
-        Status = STATUS_FILE_CORRUPT_ERROR;
-    }
-
-    if (RealDevice != NULL && Vpb->RealDevice != RealDevice)
-    {
-        NtfslxDebugTraceVpbState("real device mismatch",
-                                 Vpb,
-                                 RealDevice,
-                                 FileSystemDeviceObject);
-        Status = STATUS_FILE_CORRUPT_ERROR;
-    }
-
-    if (FileSystemDeviceObject != NULL && Vpb->DeviceObject != FileSystemDeviceObject)
-    {
-        NtfslxDebugTraceVpbState("filesystem device mismatch",
-                                 Vpb,
-                                 RealDevice,
-                                 FileSystemDeviceObject);
-        Status = STATUS_FILE_CORRUPT_ERROR;
-    }
-
-    if (ExpectDetached)
-    {
-        if (Vpb->DeviceObject != NULL)
-        {
-            NtfslxDebugTraceVpbState("expected detached VPB still has DeviceObject",
-                                     Vpb,
-                                     RealDevice,
-                                     FileSystemDeviceObject);
-            Status = STATUS_FILE_CORRUPT_ERROR;
-        }
-    }
-    else if (Vpb->DeviceObject != NULL && Vpb->DeviceObject->Vpb != Vpb)
-    {
-        NtfslxDebugTraceVpbState("DeviceObject back-link mismatch",
-                                 Vpb,
-                                 RealDevice,
-                                 FileSystemDeviceObject);
-        Status = STATUS_FILE_CORRUPT_ERROR;
-    }
-
-    IoReleaseVpbSpinLock(OldIrql);
-    return Status;
 }
 
 static

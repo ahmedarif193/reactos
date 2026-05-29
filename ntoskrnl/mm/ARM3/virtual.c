@@ -4679,6 +4679,11 @@ NtAllocateVirtualMemory(IN HANDLE ProcessHandle,
         DPRINT1("Invalid protection mask\n");
         return STATUS_INVALID_PAGE_PROTECTION;
     }
+    if ((Protect & PAGE_WRITECOMBINE) &&
+        ((ProtectionMask & MM_PROTECT_ACCESS) == MM_READONLY))
+    {
+        return STATUS_INVALID_PAGE_PROTECTION;
+    }
 
     /* Enter SEH */
     _SEH2_TRY
@@ -5496,6 +5501,14 @@ NtFreeVirtualMemory(IN HANDLE ProcessHandle,
     {
         DPRINT1("Address 0x%p is beyond the VAD\n", EndingAddress);
         Status = STATUS_UNABLE_TO_FREE_VM;
+        goto FailPath;
+    }
+
+    if ((FreeType & MEM_RELEASE) &&
+        !PRegionSize &&
+        (((ULONG_PTR)PBaseAddress >> PAGE_SHIFT) != Vad->StartingVpn))
+    {
+        Status = STATUS_FREE_VM_NOT_AT_BASE;
         goto FailPath;
     }
 

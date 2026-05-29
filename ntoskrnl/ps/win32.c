@@ -20,6 +20,8 @@ PKWIN32_THREAD_CALLOUT PspW32ThreadCallout = NULL;
 PGDI_BATCHFLUSH_ROUTINE KeGdiFlushUserBatch = NULL;
 extern PKWIN32_SESSION_CALLOUT ExpWindowStationObjectParse;
 extern PKWIN32_SESSION_CALLOUT ExpWindowStationObjectDelete;
+extern PKWIN32_SESSION_CALLOUT ExpWindowStationObjectOpen;
+extern PKWIN32_SESSION_CALLOUT ExpWindowStationObjectClose;
 extern PKWIN32_SESSION_CALLOUT ExpWindowStationObjectOkToClose;
 extern PKWIN32_SESSION_CALLOUT ExpDesktopObjectOkToClose;
 extern PKWIN32_SESSION_CALLOUT ExpDesktopObjectDelete;
@@ -116,6 +118,8 @@ PsEstablishWin32Callouts(IN PWIN32_CALLOUTS_FPNS CalloutData)
     PspW32ThreadCallout = CalloutData->ThreadCallout;
     ExpWindowStationObjectParse = CalloutData->WindowStationParseProcedure;
     ExpWindowStationObjectDelete = CalloutData->WindowStationDeleteProcedure;
+    ExpWindowStationObjectOpen = CalloutData->WindowStationOpenProcedure;
+    ExpWindowStationObjectClose = CalloutData->WindowStationCloseProcedure;
     ExpWindowStationObjectOkToClose = CalloutData->WindowStationOkToCloseProcedure;
     ExpDesktopObjectOkToClose = CalloutData->DesktopOkToCloseProcedure;
     ExpDesktopObjectDelete = CalloutData->DesktopDeleteProcedure;

@@ -1,7 +1,7 @@
 /*
  * PROJECT:     ReactOS Disk Image Creator
  * LICENSE:     MIT (https://spdx.org/licenses/MIT)
- * PURPOSE:     Assembles a bootable MBR+FAT32 disk image from a partition image
+ * PURPOSE:     Assembles a bootable MBR disk image from one or more partition images
  * COPYRIGHT:   Copyright 2026 Ahmed Arif <arif.img@outlook.com>
  */
 
@@ -14,6 +14,19 @@
 #define MBR_BOOT_CODE_SIZE 440
 #define MBR_PARTITION_TABLE_OFFSET 446
 #define MBR_SIGNATURE_OFFSET 510
+#define MBR_MAX_PARTITIONS 4
+
+#define GPT_HEADER_LBA 1
+#define GPT_PART_ARRAY_LBA 2
+#define GPT_NUMBER_OF_ENTRIES 128
+#define GPT_SIZE_OF_ENTRY 128
+#define GPT_PART_ARRAY_BYTES (GPT_NUMBER_OF_ENTRIES * GPT_SIZE_OF_ENTRY)
+#define GPT_PART_ARRAY_SECTORS (GPT_PART_ARRAY_BYTES / SECTOR_SIZE)
+#define GPT_HEADER_STRUCT_SIZE 92
+#define GPT_REVISION 0x00010000U
+#define GPT_FIRST_USABLE_LBA (GPT_PART_ARRAY_LBA + GPT_PART_ARRAY_SECTORS)
+#define GPT_BACKUP_RESERVED_SECTORS (1 + GPT_PART_ARRAY_SECTORS)
+#define MBR_PARTITION_TYPE_PROTECTIVE 0xEE
 
 /* FAT/FAT32 BPB field offsets (from start of VBR) */
 #define FAT_BPB_BYTES_PER_SECTOR_OFFSET 11
@@ -25,6 +38,14 @@
 #define FAT32_SECTORS_PER_FAT_OFFSET 36
 #define FAT32_BACKUP_BOOT_SECTOR_OFFSET 50
 #define FAT32_BOOT_DRIVE_OFFSET 64
+#define FAT16_BOOT_DRIVE_OFFSET 36
+
+/* NTFS BPB / bootstrap offsets (from start of VBR) */
+#define NTFS_OEM_NAME_OFFSET 3
+#define NTFS_OEM_NAME_LENGTH 8
+#define NTFS_BOOT_DRIVE_OFFSET 36
+#define NTFS_BOOT_CODE_OFFSET 84
+#define NTFS_BOOTSTRAP_SECTORS 5
 
 /* Fixed disk media descriptor (0xF8) vs removable (0xF0) */
 #define MEDIA_DESCRIPTOR_FIXED 0xF8
@@ -52,6 +73,12 @@ typedef enum _OUTPUT_FORMAT
     OUTPUT_FORMAT_VHD
 } OUTPUT_FORMAT;
 
+typedef enum _PARTITION_FILESYSTEM
+{
+    PARTITION_FILESYSTEM_FAT = 0,
+    PARTITION_FILESYSTEM_NTFS
+} PARTITION_FILESYSTEM;
+
 #pragma pack(push, 1)
 typedef struct _PARTITION_ENTRY
 {
@@ -64,16 +91,142 @@ typedef struct _PARTITION_ENTRY
 } PARTITION_ENTRY;
 #pragma pack(pop)
 
+typedef struct _PARTITION_DESC
+{
+    const char* path;
+    const char* vbr_path;
+    unsigned int start_sector;
+    unsigned char type;
+    int has_start;
+    int has_type;
+    int active;
+
+    /* Runtime state populated during processing */
+    FILE* file;
+    long size;
+    unsigned int sectors;
+    unsigned char vbr[SECTOR_SIZE];
+    PARTITION_FILESYSTEM filesystem;
+    unsigned char gpt_unique_guid[16];
+} PARTITION_DESC;
+
+#pragma pack(push, 1)
+typedef struct _GPT_HEADER
+{
+    unsigned char Signature[8];
+    unsigned int Revision;
+    unsigned int HeaderSize;
+    unsigned int HeaderCRC32;
+    unsigned int Reserved;
+    unsigned long long MyLBA;
+    unsigned long long AlternateLBA;
+    unsigned long long FirstUsableLBA;
+    unsigned long long LastUsableLBA;
+    unsigned char DiskGUID[16];
+    unsigned long long PartitionEntryLBA;
+    unsigned int NumberOfEntries;
+    unsigned int SizeOfEntry;
+    unsigned int PartitionArrayCRC32;
+} GPT_HEADER;
+
+typedef struct _GPT_ENTRY
+{
+    unsigned char PartitionTypeGUID[16];
+    unsigned char UniqueGUID[16];
+    unsigned long long FirstLBA;
+    unsigned long long LastLBA;
+    unsigned long long Attributes;
+    unsigned short PartitionName[36];
+} GPT_ENTRY;
+#pragma pack(pop)
+
+static const unsigned char GPT_TYPE_ESP[16] =
+{
+    0x28, 0x73, 0x2A, 0xC1, 0x1F, 0xF8, 0xD2, 0x11,
+    0xBA, 0x4B, 0x00, 0xA0, 0xC9, 0x3E, 0xC9, 0x3B
+};
+
+static const unsigned char GPT_TYPE_BASIC_DATA[16] =
+{
+    0xA2, 0xA0, 0xD0, 0xEB, 0xE5, 0xB9, 0x33, 0x44,
+    0x87, 0xC0, 0x68, 0xB6, 0xB7, 0x26, 0x99, 0xC7
+};
+
 static void print_usage(const char* name)
 {
-    printf("Usage: %s -o <output> -mbr <mbr.bin> -partition <part.img> [-start <sector>] [-type <hex>] [-format <raw|vhd>] [-vhd]\n\n", name);
+    printf("Usage: %s -o <output> -mbr <mbr.bin>\n", name);
+    printf("         -partition <img> [-start <sector>] [-type <hex>] [-active] [-vbr <boot.bin>]\n");
+    printf("         [-partition <img> ...]  (up to %d slots)\n", MBR_MAX_PARTITIONS);
+    printf("         [-format <raw|vhd>] [-vhd] [-gpt]\n\n");
     printf("  -o <output>         Output image file\n");
     printf("  -mbr <mbr.bin>      MBR boot code binary (first 440 bytes used)\n");
-    printf("  -partition <img>    Raw FAT32 partition image\n");
-    printf("  -start <sector>     Partition start sector (default: %d)\n", DEFAULT_START_SECTOR);
+    printf("  -partition <img>    Raw partition image (FAT or NTFS); starts a new slot\n");
+    printf("  -start <sector>     Partition start sector (default: %d for the first slot)\n", DEFAULT_START_SECTOR);
     printf("  -type <hex>         Partition type ID (default: 0x%02X)\n", DEFAULT_PARTITION_TYPE);
+    printf("  -active             Set the active/bootable flag on the current slot\n");
+    printf("  -vbr <boot.bin>     Optional filesystem VBR/bootstrap blob for the current slot\n");
     printf("  -format <raw|vhd>   Output container format (default: raw)\n");
     printf("  -vhd                Shorthand for -format vhd\n");
+    printf("  -gpt                Write hybrid GPT (protective MBR + GPT primary/backup) for UEFI + BIOS\n");
+}
+
+static unsigned int crc32_update(unsigned int crc, const unsigned char* data, size_t len)
+{
+    size_t i;
+    int j;
+
+    for (i = 0; i < len; i++)
+    {
+        crc ^= data[i];
+        for (j = 0; j < 8; j++)
+            crc = (crc >> 1) ^ (0xEDB88320U & -(int)(crc & 1));
+    }
+    return crc;
+}
+
+static unsigned int crc32_compute(const unsigned char* data, size_t len)
+{
+    return crc32_update(0xFFFFFFFFU, data, len) ^ 0xFFFFFFFFU;
+}
+
+static void write_le32(unsigned char* ptr, unsigned int value)
+{
+    ptr[0] = (unsigned char)(value & 0xFF);
+    ptr[1] = (unsigned char)((value >> 8) & 0xFF);
+    ptr[2] = (unsigned char)((value >> 16) & 0xFF);
+    ptr[3] = (unsigned char)((value >> 24) & 0xFF);
+}
+
+static void write_le64(unsigned char* ptr, unsigned long long value)
+{
+    int i;
+    for (i = 0; i < 8; i++)
+        ptr[i] = (unsigned char)((value >> (8 * i)) & 0xFF);
+}
+
+static void generate_random_guid(unsigned char guid[16])
+{
+    static int seeded = 0;
+    int i;
+
+    if (!seeded)
+    {
+        unsigned int seed = (unsigned int)time(NULL) ^ (unsigned int)clock();
+        srand(seed);
+        seeded = 1;
+    }
+    for (i = 0; i < 16; i++)
+        guid[i] = (unsigned char)(rand() & 0xFF);
+
+    guid[7] = (unsigned char)((guid[7] & 0x0F) | 0x40);
+    guid[8] = (unsigned char)((guid[8] & 0x3F) | 0x80);
+}
+
+static const unsigned char* gpt_type_for_mbr_type(unsigned char mbr_type)
+{
+    if (mbr_type == 0xEF)
+        return GPT_TYPE_ESP;
+    return GPT_TYPE_BASIC_DATA;
 }
 
 static int copy_file_data(FILE* dst, FILE* src, long size)
@@ -218,6 +371,137 @@ static int buffer_is_zero(const unsigned char* data, size_t size)
             return 0;
     }
     return 1;
+}
+
+static PARTITION_FILESYSTEM detect_partition_filesystem(const unsigned char* vbr)
+{
+    static const unsigned char ntfs_oem_name[NTFS_OEM_NAME_LENGTH] =
+        { 'N', 'T', 'F', 'S', ' ', ' ', ' ', ' ' };
+
+    if (memcmp(vbr + NTFS_OEM_NAME_OFFSET, ntfs_oem_name, NTFS_OEM_NAME_LENGTH) == 0)
+        return PARTITION_FILESYSTEM_NTFS;
+
+    return PARTITION_FILESYSTEM_FAT;
+}
+
+static int install_ntfs_vbr(FILE* output,
+                            long vbr_offset,
+                            long partition_size,
+                            const unsigned char* partition_vbr,
+                            const char* vbr_path)
+{
+    FILE* vbr_file = NULL;
+    unsigned char* ntfs_bootstrap = NULL;
+    unsigned char first_sector[SECTOR_SIZE];
+    long ntfs_bootstrap_size;
+    size_t bootstrap_bytes_to_write;
+    int ret = -1;
+
+    if (!vbr_path)
+        return 0;
+
+    if (partition_size < NTFS_BOOTSTRAP_SECTORS * SECTOR_SIZE)
+    {
+        fprintf(stderr, "Error: NTFS partition image is too small for bootstrap installation.\n");
+        return -1;
+    }
+
+    vbr_file = fopen(vbr_path, "rb");
+    if (!vbr_file)
+    {
+        fprintf(stderr, "Error: Cannot open VBR file '%s'.\n", vbr_path);
+        goto cleanup;
+    }
+
+    if (fseek(vbr_file, 0, SEEK_END) != 0)
+    {
+        fprintf(stderr, "Error: Cannot seek VBR file '%s'.\n", vbr_path);
+        goto cleanup;
+    }
+
+    ntfs_bootstrap_size = ftell(vbr_file);
+    if (ntfs_bootstrap_size < SECTOR_SIZE)
+    {
+        fprintf(stderr, "Error: NTFS VBR file '%s' is too small.\n", vbr_path);
+        goto cleanup;
+    }
+    if (ntfs_bootstrap_size > NTFS_BOOTSTRAP_SECTORS * SECTOR_SIZE)
+    {
+        fprintf(stderr, "Error: NTFS VBR file '%s' exceeds %u sectors.\n",
+                vbr_path, NTFS_BOOTSTRAP_SECTORS);
+        goto cleanup;
+    }
+    if (fseek(vbr_file, 0, SEEK_SET) != 0)
+    {
+        fprintf(stderr, "Error: Cannot rewind VBR file '%s'.\n", vbr_path);
+        goto cleanup;
+    }
+
+    ntfs_bootstrap = (unsigned char*)malloc((size_t)ntfs_bootstrap_size);
+    if (!ntfs_bootstrap)
+    {
+        fprintf(stderr, "Error: Cannot allocate memory for NTFS VBR installation.\n");
+        goto cleanup;
+    }
+
+    if (fread(ntfs_bootstrap, 1, (size_t)ntfs_bootstrap_size, vbr_file) != (size_t)ntfs_bootstrap_size)
+    {
+        fprintf(stderr, "Error: Cannot read NTFS VBR file '%s'.\n", vbr_path);
+        goto cleanup;
+    }
+
+    memcpy(first_sector, partition_vbr, sizeof(first_sector));
+    memcpy(first_sector, ntfs_bootstrap, 3);
+    if (NTFS_BOOT_CODE_OFFSET < SECTOR_SIZE)
+    {
+        size_t first_sector_bootstrap_size = (size_t)ntfs_bootstrap_size;
+        if (first_sector_bootstrap_size > SECTOR_SIZE)
+            first_sector_bootstrap_size = SECTOR_SIZE;
+
+        if (first_sector_bootstrap_size > NTFS_BOOT_CODE_OFFSET)
+        {
+            memcpy(first_sector + NTFS_BOOT_CODE_OFFSET,
+                   ntfs_bootstrap + NTFS_BOOT_CODE_OFFSET,
+                   first_sector_bootstrap_size - NTFS_BOOT_CODE_OFFSET);
+        }
+    }
+    first_sector[NTFS_BOOT_DRIVE_OFFSET] = BOOT_DRIVE_AUTO;
+    first_sector[MBR_SIGNATURE_OFFSET] = 0x55;
+    first_sector[MBR_SIGNATURE_OFFSET + 1] = 0xAA;
+
+    if (write_data_at(output, vbr_offset, first_sector, sizeof(first_sector)) != 0)
+    {
+        fprintf(stderr, "Error: Cannot install NTFS VBR first sector.\n");
+        goto cleanup;
+    }
+
+    if (fseek(output, vbr_offset + SECTOR_SIZE, SEEK_SET) != 0 ||
+        write_zero_bytes(output, (NTFS_BOOTSTRAP_SECTORS - 1) * SECTOR_SIZE) != 0)
+    {
+        fprintf(stderr, "Error: Cannot clear NTFS bootstrap extension sectors.\n");
+        goto cleanup;
+    }
+
+    if (ntfs_bootstrap_size > SECTOR_SIZE)
+    {
+        bootstrap_bytes_to_write = (size_t)(ntfs_bootstrap_size - SECTOR_SIZE);
+        if (write_data_at(output,
+                          vbr_offset + SECTOR_SIZE,
+                          ntfs_bootstrap + SECTOR_SIZE,
+                          bootstrap_bytes_to_write) != 0)
+        {
+            fprintf(stderr, "Error: Cannot install NTFS bootstrap extension sectors.\n");
+            goto cleanup;
+        }
+    }
+
+    ret = 0;
+
+cleanup:
+    free(ntfs_bootstrap);
+    if (vbr_file)
+        fclose(vbr_file);
+    return ret;
 }
 
 static void generate_vhd_uuid(unsigned char uuid[16])
@@ -451,49 +735,433 @@ cleanup:
     return ret;
 }
 
+static int patch_fat_vbr(FILE* output, const PARTITION_DESC* part)
+{
+    long vbr_offset = (long)part->start_sector * SECTOR_SIZE;
+    unsigned short bytes_per_sector;
+    unsigned short reserved_sectors;
+    unsigned short backup_boot_sector = 0;
+    unsigned short sectors_per_fat_16;
+    unsigned char number_of_fats;
+    unsigned int sectors_per_fat;
+    long fat_offset;
+    long fat_size;
+    unsigned int fat_index;
+    int is_fat32;
+    unsigned char media_byte = MEDIA_DESCRIPTOR_FIXED;
+    unsigned char boot_drive = BOOT_DRIVE_AUTO;
+    long boot_drive_offset;
+    static const unsigned char fat32_reserved_entries[12] =
+    {
+        0xF8, 0xFF, 0xFF, 0x0F,
+        0xFF, 0xFF, 0xFF, 0x0F,
+        0xF8, 0xFF, 0xFF, 0x0F
+    };
+
+    bytes_per_sector = read_le16(part->vbr + FAT_BPB_BYTES_PER_SECTOR_OFFSET);
+    reserved_sectors = read_le16(part->vbr + FAT_BPB_RESERVED_SECTORS_OFFSET);
+    number_of_fats = part->vbr[FAT_BPB_NUMBER_OF_FATS_OFFSET];
+    sectors_per_fat_16 = read_le16(part->vbr + FAT_BPB_SECTORS_PER_FAT16_OFFSET);
+    is_fat32 = (sectors_per_fat_16 == 0);
+    sectors_per_fat = sectors_per_fat_16;
+    if (is_fat32)
+    {
+        sectors_per_fat = read_le32(part->vbr + FAT32_SECTORS_PER_FAT_OFFSET);
+        backup_boot_sector = read_le16(part->vbr + FAT32_BACKUP_BOOT_SECTOR_OFFSET);
+    }
+
+    /* FAT32 BootDrive lives at offset 64; FAT12/FAT16 put it at offset 36. */
+    boot_drive_offset = is_fat32 ? FAT32_BOOT_DRIVE_OFFSET : NTFS_BOOT_DRIVE_OFFSET;
+
+    if (bytes_per_sector == 0 || reserved_sectors == 0 || number_of_fats == 0 || sectors_per_fat == 0)
+    {
+        fprintf(stderr, "Error: Partition image '%s' has an invalid FAT BPB.\n", part->path);
+        return -1;
+    }
+
+    /* Patch HiddenSectors in primary BPB to match partition start */
+    if (write_le32_at(output, vbr_offset + FAT32_HIDDEN_SECTORS_OFFSET, part->start_sector) != 0)
+    {
+        fprintf(stderr, "Error: Cannot patch HiddenSectors in BPB.\n");
+        return -1;
+    }
+
+    if (backup_boot_sector != 0)
+    {
+        long backup_vbr_offset = vbr_offset + (long)backup_boot_sector * bytes_per_sector;
+
+        if (backup_vbr_offset + FAT32_HIDDEN_SECTORS_OFFSET + 4 > vbr_offset + part->size ||
+            write_le32_at(output, backup_vbr_offset + FAT32_HIDDEN_SECTORS_OFFSET, part->start_sector) != 0)
+        {
+            fprintf(stderr, "Error: Cannot patch HiddenSectors in backup BPB.\n");
+            return -1;
+        }
+    }
+
+    /* Patch MediaDescriptor to 0xF8 (fixed disk); FatFs may have written 0xF0 (removable) */
+    if (write_byte_at(output, vbr_offset + FAT32_MEDIA_DESCRIPTOR_OFFSET, media_byte) != 0)
+    {
+        fprintf(stderr, "Error: Cannot patch media descriptor in BPB.\n");
+        return -1;
+    }
+
+    if (backup_boot_sector != 0)
+    {
+        long backup_vbr_offset = vbr_offset + (long)backup_boot_sector * bytes_per_sector;
+
+        if (backup_vbr_offset + FAT32_MEDIA_DESCRIPTOR_OFFSET + 1 > vbr_offset + part->size ||
+            write_byte_at(output, backup_vbr_offset + FAT32_MEDIA_DESCRIPTOR_OFFSET, media_byte) != 0)
+        {
+            fprintf(stderr, "Error: Cannot patch media descriptor in backup BPB.\n");
+            return -1;
+        }
+    }
+
+    fat_offset = vbr_offset + (long)reserved_sectors * bytes_per_sector;
+    fat_size = (long)sectors_per_fat * bytes_per_sector;
+
+    for (fat_index = 0; fat_index < number_of_fats; fat_index++)
+    {
+        long current_fat_offset = fat_offset + (long)fat_index * fat_size;
+
+        if (current_fat_offset + 1 > vbr_offset + part->size ||
+            write_byte_at(output, current_fat_offset, media_byte) != 0)
+        {
+            fprintf(stderr, "Error: Cannot patch FAT%u media descriptor.\n", fat_index + 1);
+            return -1;
+        }
+
+        /* Only FAT32 needs the 12-byte reserved entries (entry 0 = media+EOF32, entry 1 = clean flag,
+         * entry 2 = EOC for $ROOTDIR). FAT12/FAT16 use different-width entries; writing this
+         * pattern to them overwrites real cluster chains and corrupts the filesystem. */
+        if (is_fat32 && fat_size >= (long)sizeof(fat32_reserved_entries) &&
+            write_data_at(output, current_fat_offset, fat32_reserved_entries, sizeof(fat32_reserved_entries)) != 0)
+        {
+            fprintf(stderr, "Error: Cannot patch FAT%u reserved entries.\n", fat_index + 1);
+            return -1;
+        }
+    }
+
+    /* Patch BootDrive to 0xFF (auto-detect from BIOS DL register) */
+    if (write_byte_at(output, vbr_offset + boot_drive_offset, boot_drive) != 0)
+    {
+        fprintf(stderr, "Error: Cannot patch BootDrive in BPB.\n");
+        return -1;
+    }
+
+    if (backup_boot_sector != 0)
+    {
+        long backup_vbr_offset = vbr_offset + (long)backup_boot_sector * bytes_per_sector;
+
+        if (backup_vbr_offset + boot_drive_offset + 1 > vbr_offset + part->size ||
+            write_byte_at(output, backup_vbr_offset + boot_drive_offset, boot_drive) != 0)
+        {
+            fprintf(stderr, "Error: Cannot patch BootDrive in backup BPB.\n");
+            return -1;
+        }
+    }
+
+    return 0;
+}
+
+static int open_partition(PARTITION_DESC* part)
+{
+    part->file = fopen(part->path, "rb");
+    if (!part->file)
+    {
+        fprintf(stderr, "Error: Cannot open partition image '%s'.\n", part->path);
+        return -1;
+    }
+
+    if (fseek(part->file, 0, SEEK_END) != 0)
+    {
+        fprintf(stderr, "Error: Cannot seek partition image '%s'.\n", part->path);
+        return -1;
+    }
+
+    part->size = ftell(part->file);
+    if (part->size <= 0 || (part->size % SECTOR_SIZE) != 0)
+    {
+        fprintf(stderr, "Error: Partition image '%s' size (%ld) is not a multiple of %d.\n",
+                part->path, part->size, SECTOR_SIZE);
+        return -1;
+    }
+
+    part->sectors = (unsigned int)(part->size / SECTOR_SIZE);
+
+    if (fseek(part->file, 0, SEEK_SET) != 0)
+    {
+        fprintf(stderr, "Error: Cannot rewind partition image '%s'.\n", part->path);
+        return -1;
+    }
+
+    if (fread(part->vbr, 1, sizeof(part->vbr), part->file) != sizeof(part->vbr))
+    {
+        fprintf(stderr, "Error: Cannot read boot sector from '%s'.\n", part->path);
+        return -1;
+    }
+
+    if (fseek(part->file, 0, SEEK_SET) != 0)
+    {
+        fprintf(stderr, "Error: Cannot rewind partition image '%s'.\n", part->path);
+        return -1;
+    }
+
+    part->filesystem = detect_partition_filesystem(part->vbr);
+    return 0;
+}
+
+static int partitions_overlap(const PARTITION_DESC* a, const PARTITION_DESC* b)
+{
+    unsigned long long a_end = (unsigned long long)a->start_sector + a->sectors;
+    unsigned long long b_end = (unsigned long long)b->start_sector + b->sectors;
+
+    return !(a_end <= b->start_sector || b_end <= a->start_sector);
+}
+
+static int write_gpt(FILE* output,
+                     unsigned long long total_sectors,
+                     const PARTITION_DESC* parts,
+                     int num_partitions,
+                     const unsigned char disk_guid[16])
+{
+    unsigned char* array = NULL;
+    unsigned char header[SECTOR_SIZE];
+    unsigned int array_crc;
+    unsigned int header_crc;
+    unsigned long long backup_array_lba;
+    unsigned long long backup_header_lba;
+    unsigned long long last_usable_lba;
+    int p;
+    int ret = -1;
+
+    if (total_sectors <= GPT_FIRST_USABLE_LBA + GPT_BACKUP_RESERVED_SECTORS)
+    {
+        fprintf(stderr, "Error: Disk is too small for GPT layout.\n");
+        return -1;
+    }
+
+    backup_header_lba = total_sectors - 1;
+    backup_array_lba = total_sectors - GPT_BACKUP_RESERVED_SECTORS;
+    last_usable_lba = backup_array_lba - 1;
+
+    array = (unsigned char*)malloc(GPT_PART_ARRAY_BYTES);
+    if (!array)
+    {
+        fprintf(stderr, "Error: Cannot allocate GPT partition array.\n");
+        return -1;
+    }
+    memset(array, 0, GPT_PART_ARRAY_BYTES);
+
+    for (p = 0; p < num_partitions; p++)
+    {
+        unsigned char* entry = array + (unsigned long)p * GPT_SIZE_OF_ENTRY;
+        const unsigned char* type_guid = gpt_type_for_mbr_type(parts[p].type);
+        unsigned long long first_lba = (unsigned long long)parts[p].start_sector;
+        unsigned long long last_lba = first_lba + parts[p].sectors - 1;
+
+        if (first_lba < GPT_FIRST_USABLE_LBA || last_lba > last_usable_lba)
+        {
+            fprintf(stderr,
+                    "Error: Partition %d LBA range [%llu, %llu] is outside GPT usable range [%llu, %llu].\n",
+                    p, first_lba, last_lba, (unsigned long long)GPT_FIRST_USABLE_LBA, last_usable_lba);
+            goto cleanup;
+        }
+
+        memcpy(entry + 0, type_guid, 16);
+        memcpy(entry + 16, parts[p].gpt_unique_guid, 16);
+        write_le64(entry + 32, first_lba);
+        write_le64(entry + 40, last_lba);
+    }
+
+    array_crc = crc32_compute(array, GPT_PART_ARRAY_BYTES);
+
+    if (fseek(output, (long)(GPT_PART_ARRAY_LBA * SECTOR_SIZE), SEEK_SET) != 0 ||
+        fwrite(array, 1, GPT_PART_ARRAY_BYTES, output) != GPT_PART_ARRAY_BYTES)
+    {
+        fprintf(stderr, "Error: Cannot write primary GPT partition array.\n");
+        goto cleanup;
+    }
+
+    memset(header, 0, sizeof(header));
+    memcpy(header + 0, "EFI PART", 8);
+    write_le32(header + 8, GPT_REVISION);
+    write_le32(header + 12, GPT_HEADER_STRUCT_SIZE);
+    write_le32(header + 16, 0);
+    write_le32(header + 20, 0);
+    write_le64(header + 24, GPT_HEADER_LBA);
+    write_le64(header + 32, backup_header_lba);
+    write_le64(header + 40, GPT_FIRST_USABLE_LBA);
+    write_le64(header + 48, last_usable_lba);
+    memcpy(header + 56, disk_guid, 16);
+    write_le64(header + 72, GPT_PART_ARRAY_LBA);
+    write_le32(header + 80, GPT_NUMBER_OF_ENTRIES);
+    write_le32(header + 84, GPT_SIZE_OF_ENTRY);
+    write_le32(header + 88, array_crc);
+    header_crc = crc32_compute(header, GPT_HEADER_STRUCT_SIZE);
+    write_le32(header + 16, header_crc);
+
+    if (fseek(output, (long)(GPT_HEADER_LBA * SECTOR_SIZE), SEEK_SET) != 0 ||
+        fwrite(header, 1, SECTOR_SIZE, output) != SECTOR_SIZE)
+    {
+        fprintf(stderr, "Error: Cannot write primary GPT header.\n");
+        goto cleanup;
+    }
+
+    {
+        unsigned long long backup_array_offset = backup_array_lba * SECTOR_SIZE;
+        if (fseek(output, (long)backup_array_offset, SEEK_SET) != 0 ||
+            fwrite(array, 1, GPT_PART_ARRAY_BYTES, output) != GPT_PART_ARRAY_BYTES)
+        {
+            fprintf(stderr, "Error: Cannot write backup GPT partition array.\n");
+            goto cleanup;
+        }
+    }
+
+    memset(header, 0, sizeof(header));
+    memcpy(header + 0, "EFI PART", 8);
+    write_le32(header + 8, GPT_REVISION);
+    write_le32(header + 12, GPT_HEADER_STRUCT_SIZE);
+    write_le32(header + 16, 0);
+    write_le32(header + 20, 0);
+    write_le64(header + 24, backup_header_lba);
+    write_le64(header + 32, GPT_HEADER_LBA);
+    write_le64(header + 40, GPT_FIRST_USABLE_LBA);
+    write_le64(header + 48, last_usable_lba);
+    memcpy(header + 56, disk_guid, 16);
+    write_le64(header + 72, backup_array_lba);
+    write_le32(header + 80, GPT_NUMBER_OF_ENTRIES);
+    write_le32(header + 84, GPT_SIZE_OF_ENTRY);
+    write_le32(header + 88, array_crc);
+    header_crc = crc32_compute(header, GPT_HEADER_STRUCT_SIZE);
+    write_le32(header + 16, header_crc);
+
+    if (fseek(output, (long)(backup_header_lba * SECTOR_SIZE), SEEK_SET) != 0 ||
+        fwrite(header, 1, SECTOR_SIZE, output) != SECTOR_SIZE)
+    {
+        fprintf(stderr, "Error: Cannot write backup GPT header.\n");
+        goto cleanup;
+    }
+
+    ret = 0;
+
+cleanup:
+    free(array);
+    return ret;
+}
+
+static int sort_partitions_by_start(PARTITION_DESC* parts, int count, int* order)
+{
+    int i, j;
+
+    for (i = 0; i < count; i++)
+        order[i] = i;
+
+    /* Simple insertion sort; count <= MBR_MAX_PARTITIONS */
+    for (i = 1; i < count; i++)
+    {
+        int key = order[i];
+        for (j = i - 1;
+             j >= 0 && parts[order[j]].start_sector > parts[key].start_sector;
+             j--)
+        {
+            order[j + 1] = order[j];
+        }
+        order[j + 1] = key;
+    }
+
+    return 0;
+}
+
 int main(int argc, char* argv[])
 {
     const char* output_path = NULL;
     const char* mbr_path = NULL;
-    const char* partition_path = NULL;
-    unsigned int start_sector = DEFAULT_START_SECTOR;
-    unsigned char partition_type = DEFAULT_PARTITION_TYPE;
     OUTPUT_FORMAT output_format = OUTPUT_FORMAT_RAW;
+    int gpt_mode = 0;
+
+    PARTITION_DESC parts[MBR_MAX_PARTITIONS];
+    int num_partitions = 0;
+    int current = -1;
+    int any_active = 0;
+    int order[MBR_MAX_PARTITIONS];
+    unsigned char disk_guid[16];
 
     FILE* f_output = NULL;
     FILE* f_final = NULL;
     FILE* f_mbr = NULL;
-    FILE* f_partition = NULL;
 
     unsigned char mbr_sector[SECTOR_SIZE];
-    unsigned char partition_vbr[SECTOR_SIZE];
-    PARTITION_ENTRY* entry;
-    long partition_size;
-    long total_size;
-    long gap_size;
-    long vbr_offset;
-    unsigned short bytes_per_sector;
-    unsigned short reserved_sectors;
-    unsigned short backup_boot_sector;
-    unsigned char number_of_fats;
-    unsigned int sectors_per_fat;
-    unsigned int partition_sectors;
-    unsigned int end_sector;
-    int i, ret = 1;
+    unsigned long long total_size = 0;
+    unsigned long long total_sectors;
+    unsigned long long current_offset;
+    int i, p, ret = 1;
+
+    memset(parts, 0, sizeof(parts));
 
     /* Parse arguments */
     for (i = 1; i < argc; i++)
     {
         if (strcmp(argv[i], "-o") == 0 && i + 1 < argc)
+        {
             output_path = argv[++i];
+        }
         else if (strcmp(argv[i], "-mbr") == 0 && i + 1 < argc)
+        {
             mbr_path = argv[++i];
+        }
         else if (strcmp(argv[i], "-partition") == 0 && i + 1 < argc)
-            partition_path = argv[++i];
+        {
+            if (num_partitions >= MBR_MAX_PARTITIONS)
+            {
+                fprintf(stderr, "Error: Too many -partition slots (max %d).\n", MBR_MAX_PARTITIONS);
+                print_usage(argv[0]);
+                return 1;
+            }
+            current = num_partitions++;
+            parts[current].path = argv[++i];
+            parts[current].type = DEFAULT_PARTITION_TYPE;
+            parts[current].start_sector = DEFAULT_START_SECTOR;
+        }
+        else if (strcmp(argv[i], "-vbr") == 0 && i + 1 < argc)
+        {
+            if (current < 0)
+            {
+                fprintf(stderr, "Error: -vbr must follow a -partition.\n");
+                return 1;
+            }
+            parts[current].vbr_path = argv[++i];
+        }
         else if (strcmp(argv[i], "-start") == 0 && i + 1 < argc)
-            start_sector = (unsigned int)atoi(argv[++i]);
+        {
+            if (current < 0)
+            {
+                fprintf(stderr, "Error: -start must follow a -partition.\n");
+                return 1;
+            }
+            parts[current].start_sector = (unsigned int)strtoul(argv[++i], NULL, 10);
+            parts[current].has_start = 1;
+        }
         else if (strcmp(argv[i], "-type") == 0 && i + 1 < argc)
-            partition_type = (unsigned char)strtol(argv[++i], NULL, 16);
+        {
+            if (current < 0)
+            {
+                fprintf(stderr, "Error: -type must follow a -partition.\n");
+                return 1;
+            }
+            parts[current].type = (unsigned char)strtoul(argv[++i], NULL, 16);
+            parts[current].has_type = 1;
+        }
+        else if (strcmp(argv[i], "-active") == 0)
+        {
+            if (current < 0)
+            {
+                fprintf(stderr, "Error: -active must follow a -partition.\n");
+                return 1;
+            }
+            parts[current].active = 1;
+            any_active = 1;
+        }
         else if (strcmp(argv[i], "-format") == 0 && i + 1 < argc)
         {
             const char* format = argv[++i];
@@ -509,7 +1177,13 @@ int main(int argc, char* argv[])
             }
         }
         else if (strcmp(argv[i], "-vhd") == 0)
+        {
             output_format = OUTPUT_FORMAT_VHD;
+        }
+        else if (strcmp(argv[i], "-gpt") == 0)
+        {
+            gpt_mode = 1;
+        }
         else
         {
             fprintf(stderr, "Error: Unknown argument '%s'\n", argv[i]);
@@ -518,12 +1192,16 @@ int main(int argc, char* argv[])
         }
     }
 
-    if (!output_path || !mbr_path || !partition_path)
+    if (!output_path || !mbr_path || num_partitions == 0)
     {
         fprintf(stderr, "Error: Missing required arguments.\n");
         print_usage(argv[0]);
         return 1;
     }
+
+    /* Preserve legacy single-partition behavior: implicit active */
+    if (!any_active && num_partitions == 1)
+        parts[0].active = 1;
 
     /* Read MBR boot code */
     f_mbr = fopen(mbr_path, "rb");
@@ -533,10 +1211,7 @@ int main(int argc, char* argv[])
         goto cleanup;
     }
 
-    /* Initialize MBR sector to zero */
     memset(mbr_sector, 0, SECTOR_SIZE);
-
-    /* Read boot code (up to 440 bytes) */
     if (fread(mbr_sector, 1, MBR_BOOT_CODE_SIZE, f_mbr) != MBR_BOOT_CODE_SIZE)
     {
         fprintf(stderr, "Error: Cannot read MBR boot code from '%s'.\n", mbr_path);
@@ -545,57 +1220,109 @@ int main(int argc, char* argv[])
     fclose(f_mbr);
     f_mbr = NULL;
 
-    /* Get partition image size */
-    f_partition = fopen(partition_path, "rb");
-    if (!f_partition)
+    if (gpt_mode && num_partitions >= MBR_MAX_PARTITIONS)
     {
-        fprintf(stderr, "Error: Cannot open partition image '%s'.\n", partition_path);
+        fprintf(stderr,
+                "Error: -gpt needs one free MBR slot for the protective entry; use up to %d -partition.\n",
+                MBR_MAX_PARTITIONS - 1);
         goto cleanup;
     }
 
-    fseek(f_partition, 0, SEEK_END);
-    partition_size = ftell(f_partition);
-    fseek(f_partition, 0, SEEK_SET);
-
-    if (partition_size <= 0 || (partition_size % SECTOR_SIZE) != 0)
+    /* Open each partition, read its VBR, and compute sector count */
+    for (p = 0; p < num_partitions; p++)
     {
-        fprintf(stderr, "Error: Partition image size (%ld) is not a multiple of %d.\n",
-                partition_size, SECTOR_SIZE);
-        goto cleanup;
+        if (open_partition(&parts[p]) != 0)
+            goto cleanup;
+
+        if ((unsigned long long)parts[p].start_sector + parts[p].sectors > 0xFFFFFFFFULL)
+        {
+            fprintf(stderr, "Error: Partition %d start/size exceeds MBR addressing limits.\n", p);
+            goto cleanup;
+        }
+
+        if (gpt_mode)
+            generate_random_guid(parts[p].gpt_unique_guid);
     }
 
-    if (fread(partition_vbr, 1, sizeof(partition_vbr), f_partition) != sizeof(partition_vbr))
+    if (gpt_mode)
+        generate_random_guid(disk_guid);
+
+    /* Sort partitions by start sector so we can write them in order */
+    sort_partitions_by_start(parts, num_partitions, order);
+
+    /* Reject overlapping or mis-aligned layouts */
+    for (i = 0; i < num_partitions; i++)
     {
-        fprintf(stderr, "Error: Cannot read partition boot sector from '%s'.\n", partition_path);
-        goto cleanup;
+        PARTITION_DESC* a = &parts[order[i]];
+
+        if (a->start_sector == 0)
+        {
+            fprintf(stderr, "Error: Partition %d cannot start at sector 0 (reserved for MBR).\n", order[i]);
+            goto cleanup;
+        }
+
+        if (i > 0)
+        {
+            PARTITION_DESC* prev = &parts[order[i - 1]];
+
+            if (partitions_overlap(prev, a))
+            {
+                fprintf(stderr, "Error: Partitions %d and %d overlap.\n", order[i - 1], order[i]);
+                goto cleanup;
+            }
+        }
     }
 
-    if (fseek(f_partition, 0, SEEK_SET) != 0)
+    /* Build partition table entries in slot order (not sorted order) */
+    for (p = 0; p < num_partitions; p++)
     {
-        fprintf(stderr, "Error: Cannot rewind partition image '%s'.\n", partition_path);
-        goto cleanup;
-    }
+        PARTITION_ENTRY* entry = (PARTITION_ENTRY*)(mbr_sector + MBR_PARTITION_TABLE_OFFSET + p * sizeof(PARTITION_ENTRY));
+        unsigned int end_sector = parts[p].start_sector + parts[p].sectors - 1;
 
-    partition_sectors = (unsigned int)(partition_size / SECTOR_SIZE);
-    if ((unsigned long long)start_sector + partition_sectors - 1 > 0xFFFFFFFFULL)
-    {
-        fprintf(stderr, "Error: Partition start/size exceeds MBR addressing limits.\n");
-        goto cleanup;
+        entry->Status = parts[p].active ? (unsigned char)0x80 : (unsigned char)0x00;
+        entry->Type = parts[p].type;
+        entry->LBAStart = parts[p].start_sector;
+        entry->LBASize = parts[p].sectors;
+        write_chs(parts[p].start_sector, entry->CHSFirst);
+        write_chs(end_sector, entry->CHSLast);
     }
-
-    /* Build partition table entry #1 */
-    entry = (PARTITION_ENTRY*)(mbr_sector + MBR_PARTITION_TABLE_OFFSET);
-    entry->Status = 0x80;  /* Active/bootable */
-    entry->Type = partition_type;
-    entry->LBAStart = start_sector;
-    entry->LBASize = partition_sectors;
-    write_chs(start_sector, entry->CHSFirst);
-    end_sector = start_sector + partition_sectors - 1;
-    write_chs(end_sector, entry->CHSLast);
 
     /* Write boot signature */
     mbr_sector[MBR_SIGNATURE_OFFSET]     = 0x55;
     mbr_sector[MBR_SIGNATURE_OFFSET + 1] = 0xAA;
+
+    /* Compute total virtual-disk size as the end of the last partition */
+    for (p = 0; p < num_partitions; p++)
+    {
+        unsigned long long end = ((unsigned long long)parts[p].start_sector + parts[p].sectors) * SECTOR_SIZE;
+        if (end > total_size)
+            total_size = end;
+    }
+
+    /* GPT needs a backup header + array trailer at the very end of the disk */
+    if (gpt_mode)
+        total_size += (unsigned long long)GPT_BACKUP_RESERVED_SECTORS * SECTOR_SIZE;
+
+    total_sectors = total_size / SECTOR_SIZE;
+
+    /* Hybrid MBR: drop a 0xEE protective covering [1, first_partition - 1] so UEFI sees GPT
+     * without overlapping the real MBR entries that legacy BIOS chainloads from. */
+    if (gpt_mode)
+    {
+        PARTITION_ENTRY* pe;
+        unsigned int first_lba = parts[order[0]].start_sector;
+        unsigned int protective_size = first_lba > 1 ? first_lba - 1 : 1;
+        unsigned int protective_end = protective_size;
+
+        pe = (PARTITION_ENTRY*)(mbr_sector + MBR_PARTITION_TABLE_OFFSET +
+                                num_partitions * sizeof(PARTITION_ENTRY));
+        pe->Status = 0x00;
+        pe->Type = MBR_PARTITION_TYPE_PROTECTIVE;
+        pe->LBAStart = 1;
+        pe->LBASize = protective_size;
+        write_chs(1, pe->CHSFirst);
+        write_chs(protective_end, pe->CHSLast);
+    }
 
     /* Raw images are written directly; VHD images are wrapped after staging the raw disk. */
     if (output_format == OUTPUT_FORMAT_RAW)
@@ -624,133 +1351,67 @@ int main(int argc, char* argv[])
         goto cleanup;
     }
 
-    /* Write gap (zero-filled sectors between MBR and partition start) */
-    gap_size = ((long)start_sector - 1) * SECTOR_SIZE;
-    if (gap_size > 0 && write_zero_bytes(f_output, (unsigned long long)gap_size) != 0)
+    current_offset = SECTOR_SIZE;
+
+    /* Stream each partition into place in ascending-start order, with zero-fill gaps */
+    for (i = 0; i < num_partitions; i++)
     {
-        fprintf(stderr, "Error: Cannot write gap sectors.\n");
-        goto cleanup;
-    }
+        PARTITION_DESC* part = &parts[order[i]];
+        unsigned long long part_offset = (unsigned long long)part->start_sector * SECTOR_SIZE;
 
-    /* Copy partition image */
-    if (copy_file_data(f_output, f_partition, partition_size) != 0)
-    {
-        fprintf(stderr, "Error: Cannot write partition data.\n");
-        goto cleanup;
-    }
-
-    bytes_per_sector = read_le16(partition_vbr + FAT_BPB_BYTES_PER_SECTOR_OFFSET);
-    reserved_sectors = read_le16(partition_vbr + FAT_BPB_RESERVED_SECTORS_OFFSET);
-    number_of_fats = partition_vbr[FAT_BPB_NUMBER_OF_FATS_OFFSET];
-    sectors_per_fat = read_le16(partition_vbr + FAT_BPB_SECTORS_PER_FAT16_OFFSET);
-    if (sectors_per_fat == 0)
-        sectors_per_fat = read_le32(partition_vbr + FAT32_SECTORS_PER_FAT_OFFSET);
-    backup_boot_sector = read_le16(partition_vbr + FAT32_BACKUP_BOOT_SECTOR_OFFSET);
-
-    if (bytes_per_sector == 0 || reserved_sectors == 0 || number_of_fats == 0 || sectors_per_fat == 0)
-    {
-        fprintf(stderr, "Error: Partition image '%s' has an invalid FAT BPB.\n", partition_path);
-        goto cleanup;
-    }
-
-    vbr_offset = (long)start_sector * SECTOR_SIZE;
-    total_size = (long)start_sector * SECTOR_SIZE + partition_size;
-
-    /* Patch HiddenSectors in FAT32 BPB to match partition start */
-    if (write_le32_at(f_output, vbr_offset + FAT32_HIDDEN_SECTORS_OFFSET, start_sector) != 0)
-    {
-        fprintf(stderr, "Error: Cannot patch HiddenSectors in BPB.\n");
-        goto cleanup;
-    }
-
-    if (backup_boot_sector != 0)
-    {
-        long backup_vbr_offset = vbr_offset + (long)backup_boot_sector * bytes_per_sector;
-
-        if (backup_vbr_offset + FAT32_HIDDEN_SECTORS_OFFSET + 4 > vbr_offset + partition_size ||
-            write_le32_at(f_output, backup_vbr_offset + FAT32_HIDDEN_SECTORS_OFFSET, start_sector) != 0)
+        if (part_offset < current_offset)
         {
-            fprintf(stderr, "Error: Cannot patch HiddenSectors in backup BPB.\n");
-            goto cleanup;
-        }
-    }
-
-    /* Patch MediaDescriptor to 0xF8 (fixed disk) -- FatFs may set 0xF0 (removable) */
-    {
-        unsigned char media_byte = MEDIA_DESCRIPTOR_FIXED;
-        static const unsigned char fat32_reserved_entries[12] =
-        {
-            0xF8, 0xFF, 0xFF, 0x0F,
-            0xFF, 0xFF, 0xFF, 0x0F,
-            0xF8, 0xFF, 0xFF, 0x0F
-        };
-        long fat_offset;
-        long fat_size;
-        unsigned int fat_index;
-
-        /* Primary VBR */
-        if (write_byte_at(f_output, vbr_offset + FAT32_MEDIA_DESCRIPTOR_OFFSET, media_byte) != 0)
-        {
-            fprintf(stderr, "Error: Cannot patch media descriptor in BPB.\n");
+            fprintf(stderr, "Error: Internal error — partition %d offset regressed.\n", order[i]);
             goto cleanup;
         }
 
-        if (backup_boot_sector != 0)
+        if (part_offset > current_offset &&
+            write_zero_bytes(f_output, part_offset - current_offset) != 0)
         {
-            long backup_vbr_offset = vbr_offset + (long)backup_boot_sector * bytes_per_sector;
-
-            if (backup_vbr_offset + FAT32_MEDIA_DESCRIPTOR_OFFSET + 1 > vbr_offset + partition_size ||
-                write_byte_at(f_output, backup_vbr_offset + FAT32_MEDIA_DESCRIPTOR_OFFSET, media_byte) != 0)
-            {
-                fprintf(stderr, "Error: Cannot patch media descriptor in backup BPB.\n");
-                goto cleanup;
-            }
-        }
-
-        fat_offset = vbr_offset + (long)reserved_sectors * bytes_per_sector;
-        fat_size = (long)sectors_per_fat * bytes_per_sector;
-
-        for (fat_index = 0; fat_index < number_of_fats; fat_index++)
-        {
-            long current_fat_offset = fat_offset + (long)fat_index * fat_size;
-
-            if (current_fat_offset + 1 > vbr_offset + partition_size ||
-                write_byte_at(f_output, current_fat_offset, media_byte) != 0)
-            {
-                fprintf(stderr, "Error: Cannot patch FAT%u media descriptor.\n", fat_index + 1);
-                goto cleanup;
-            }
-
-            if (fat_size >= (long)sizeof(fat32_reserved_entries) &&
-                write_data_at(f_output, current_fat_offset, fat32_reserved_entries, sizeof(fat32_reserved_entries)) != 0)
-            {
-                fprintf(stderr, "Error: Cannot patch FAT%u reserved entries.\n", fat_index + 1);
-                goto cleanup;
-            }
-        }
-    }
-
-    /* Patch BootDrive to 0xFF (auto-detect from BIOS DL register) */
-    {
-        unsigned char boot_drive = BOOT_DRIVE_AUTO;
-
-        if (write_byte_at(f_output, vbr_offset + FAT32_BOOT_DRIVE_OFFSET, boot_drive) != 0)
-        {
-            fprintf(stderr, "Error: Cannot patch BootDrive in BPB.\n");
+            fprintf(stderr, "Error: Cannot write gap sectors before partition %d.\n", order[i]);
             goto cleanup;
         }
 
-        if (backup_boot_sector != 0)
+        if (copy_file_data(f_output, part->file, part->size) != 0)
         {
-            long backup_vbr_offset = vbr_offset + (long)backup_boot_sector * bytes_per_sector;
-
-            if (backup_vbr_offset + FAT32_BOOT_DRIVE_OFFSET + 1 > vbr_offset + partition_size ||
-                write_byte_at(f_output, backup_vbr_offset + FAT32_BOOT_DRIVE_OFFSET, boot_drive) != 0)
-            {
-                fprintf(stderr, "Error: Cannot patch BootDrive in backup BPB.\n");
-                goto cleanup;
-            }
+            fprintf(stderr, "Error: Cannot write partition %d data.\n", order[i]);
+            goto cleanup;
         }
+
+        current_offset = part_offset + (unsigned long long)part->size;
+    }
+
+    /* Patch each partition's VBR (FAT or NTFS) in the staged image */
+    for (p = 0; p < num_partitions; p++)
+    {
+        PARTITION_DESC* part = &parts[p];
+        long vbr_offset = (long)part->start_sector * SECTOR_SIZE;
+
+        if (part->filesystem == PARTITION_FILESYSTEM_FAT)
+        {
+            if (patch_fat_vbr(f_output, part) != 0)
+                goto cleanup;
+        }
+        else
+        {
+            if (install_ntfs_vbr(f_output, vbr_offset, part->size, part->vbr, part->vbr_path) != 0)
+                goto cleanup;
+        }
+    }
+
+    /* Extend raw image to include the reserved backup-GPT trailer and lay down the GPT */
+    if (gpt_mode)
+    {
+        if (fseek(f_output, (long)(current_offset), SEEK_SET) != 0 ||
+            write_zero_bytes(f_output,
+                             total_size - current_offset) != 0)
+        {
+            fprintf(stderr, "Error: Cannot extend image for GPT backup area.\n");
+            goto cleanup;
+        }
+
+        if (write_gpt(f_output, total_sectors, parts, num_partitions, disk_guid) != 0)
+            goto cleanup;
     }
 
     if (output_format == OUTPUT_FORMAT_VHD)
@@ -768,24 +1429,30 @@ int main(int argc, char* argv[])
             goto cleanup;
         }
 
-        if (write_dynamic_vhd(f_final, f_output, (unsigned long long)total_size) != 0)
+        if (write_dynamic_vhd(f_final, f_output, total_size) != 0)
         {
             fprintf(stderr, "Error: Cannot write dynamic VHD image.\n");
             goto cleanup;
         }
     }
 
-    printf("Created %s '%s' (%ld bytes virtual disk, partition at sector %u)\n",
+    printf("Created %s '%s' (%llu bytes virtual disk, %d %s partition%s)\n",
            output_format == OUTPUT_FORMAT_VHD ? "dynamic VHD image" : "disk image",
            output_path,
            total_size,
-           start_sector);
+           num_partitions,
+           gpt_mode ? "GPT" : "MBR",
+           num_partitions == 1 ? "" : "s");
     ret = 0;
 
 cleanup:
+    for (p = 0; p < num_partitions; p++)
+    {
+        if (parts[p].file)
+            fclose(parts[p].file);
+    }
     if (f_final) fclose(f_final);
     if (f_output) fclose(f_output);
     if (f_mbr) fclose(f_mbr);
-    if (f_partition) fclose(f_partition);
     return ret;
 }

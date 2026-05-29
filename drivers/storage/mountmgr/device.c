@@ -457,6 +457,9 @@ MountMgrNextDriveLetterWorker(IN PDEVICE_EXTENSION DeviceExtension,
     Status = QueryDeviceInformation(DeviceName, &TargetDeviceName, NULL, &Removable, &GptDriveLetter, NULL, NULL, NULL);
     if (!NT_SUCCESS(Status))
     {
+        DPRINT1("mountmgr: next-letter query failed Device=%wZ Status=0x%08lx\n",
+                DeviceName,
+                Status);
         return Status;
     }
 
@@ -509,6 +512,9 @@ MountMgrNextDriveLetterWorker(IN PDEVICE_EXTENSION DeviceExtension,
         {
             DriveLetterInfo->DriveLetterWasAssigned = FALSE;
             DriveLetterInfo->CurrentDriveLetter = 0;
+            DPRINT1("mountmgr: no drive letter Device=%wZ GptLetter=%u\n",
+                    &TargetDeviceName,
+                    GptDriveLetter);
             goto Release;
         }
     }
@@ -521,6 +527,8 @@ MountMgrNextDriveLetterWorker(IN PDEVICE_EXTENSION DeviceExtension,
         {
             DriveLetterInfo->DriveLetterWasAssigned = FALSE;
             DriveLetterInfo->CurrentDriveLetter = 0;
+            DPRINT1("mountmgr: automount disabled for Device=%wZ\n",
+                    &TargetDeviceName);
             goto Release;
         }
     }
@@ -574,8 +582,44 @@ MountMgrNextDriveLetterWorker(IN PDEVICE_EXTENSION DeviceExtension,
         Status = MountMgrCreatePointWorker(DeviceExtension, &SymbolicName, &TargetDeviceName);
         if (NT_SUCCESS(Status))
         {
+            DPRINT1("mountmgr: assigned suggested drive %wc to %wZ\n",
+                    DriveLetterInfo->CurrentDriveLetter,
+                    &TargetDeviceName);
             goto Release;
         }
+
+        if (Status == STATUS_OBJECT_NAME_COLLISION)
+        {
+            UNICODE_STRING ExistingTarget;
+            NTSTATUS ExistingStatus;
+
+            ExistingStatus = QueryDeviceInformation(&SymbolicName,
+                                                    &ExistingTarget,
+                                                    NULL,
+                                                    NULL,
+                                                    NULL,
+                                                    NULL,
+                                                    NULL,
+                                                    NULL);
+            if (NT_SUCCESS(ExistingStatus))
+            {
+                DPRINT1("mountmgr: suggested drive %wc already linked to %wZ\n",
+                        DriveLetterInfo->CurrentDriveLetter,
+                        &ExistingTarget);
+                FreePool(ExistingTarget.Buffer);
+            }
+            else
+            {
+                DPRINT1("mountmgr: suggested drive %wc collision target query failed Status=0x%08lx\n",
+                        DriveLetterInfo->CurrentDriveLetter,
+                        ExistingStatus);
+            }
+        }
+
+        DPRINT1("mountmgr: suggested drive %wc failed for %wZ Status=0x%08lx\n",
+                DriveLetterInfo->CurrentDriveLetter,
+                &TargetDeviceName,
+                Status);
     }
 
     /* It failed with this letter... Try another one! */
@@ -588,8 +632,44 @@ MountMgrNextDriveLetterWorker(IN PDEVICE_EXTENSION DeviceExtension,
         Status = MountMgrCreatePointWorker(DeviceExtension, &SymbolicName, &TargetDeviceName);
         if (NT_SUCCESS(Status))
         {
+            DPRINT1("mountmgr: assigned drive %wc to %wZ\n",
+                    DriveLetterInfo->CurrentDriveLetter,
+                    &TargetDeviceName);
             break;
         }
+
+        if (Status == STATUS_OBJECT_NAME_COLLISION)
+        {
+            UNICODE_STRING ExistingTarget;
+            NTSTATUS ExistingStatus;
+
+            ExistingStatus = QueryDeviceInformation(&SymbolicName,
+                                                    &ExistingTarget,
+                                                    NULL,
+                                                    NULL,
+                                                    NULL,
+                                                    NULL,
+                                                    NULL,
+                                                    NULL);
+            if (NT_SUCCESS(ExistingStatus))
+            {
+                DPRINT1("mountmgr: drive %wc already linked to %wZ\n",
+                        DriveLetterInfo->CurrentDriveLetter,
+                        &ExistingTarget);
+                FreePool(ExistingTarget.Buffer);
+            }
+            else
+            {
+                DPRINT1("mountmgr: drive %wc collision target query failed Status=0x%08lx\n",
+                        DriveLetterInfo->CurrentDriveLetter,
+                        ExistingStatus);
+            }
+        }
+
+        DPRINT1("mountmgr: drive %wc failed for %wZ Status=0x%08lx\n",
+                DriveLetterInfo->CurrentDriveLetter,
+                &TargetDeviceName,
+                Status);
     }
 
     /* We failed setting a letter */
@@ -597,6 +677,8 @@ MountMgrNextDriveLetterWorker(IN PDEVICE_EXTENSION DeviceExtension,
     {
         DriveLetterInfo->DriveLetterWasAssigned = FALSE;
         DriveLetterInfo->CurrentDriveLetter = 0;
+        DPRINT1("mountmgr: failed to assign drive letter to %wZ\n",
+                &TargetDeviceName);
 
         /* Try at least to add a no drive letter entry */
         Status = QueryDeviceInformation(&TargetDeviceName, NULL, &UniqueId, NULL, NULL, NULL, NULL, NULL);
@@ -724,10 +806,35 @@ MountMgrQuerySystemVolumeName(OUT PUNICODE_STRING SystemVolumeName)
 
     if (SystemVolumeName->Buffer)
     {
+        DPRINT1("mountmgr: system volume name %wZ\n", SystemVolumeName);
         return STATUS_SUCCESS;
     }
 
     return STATUS_UNSUCCESSFUL;
+}
+
+static
+BOOLEAN
+MountMgrIsMiniNtBoot(VOID)
+{
+    HANDLE MiniNTKeyHandle;
+    OBJECT_ATTRIBUTES MiniNTAttributes;
+    UNICODE_STRING MiniNTKeyName = RTL_CONSTANT_STRING(
+        L"\\Registry\\Machine\\System\\CurrentControlSet\\Control\\MiniNT");
+
+    InitializeObjectAttributes(&MiniNTAttributes,
+                               &MiniNTKeyName,
+                               OBJ_CASE_INSENSITIVE | OBJ_KERNEL_HANDLE,
+                               NULL,
+                               NULL);
+
+    if (NT_SUCCESS(ZwOpenKey(&MiniNTKeyHandle, KEY_READ, &MiniNTAttributes)))
+    {
+        ZwClose(MiniNTKeyHandle);
+        return TRUE;
+    }
+
+    return FALSE;
 }
 
 /*
@@ -736,14 +843,58 @@ MountMgrQuerySystemVolumeName(OUT PUNICODE_STRING SystemVolumeName)
 VOID
 MountMgrAssignDriveLetters(IN PDEVICE_EXTENSION DeviceExtension)
 {
+    BOOLEAN BootRamdiskMode;
     NTSTATUS Status;
+    NTSTATUS TranslateStatus;
     PLIST_ENTRY NextEntry;
     UNICODE_STRING SystemVolumeName;
+    UNICODE_STRING TranslatedSystemVolumeName;
     PDEVICE_INFORMATION DeviceInformation;
     MOUNTMGR_DRIVE_LETTER_INFORMATION DriveLetterInformation;
 
-    /* First, get system volume name */
-    Status = MountMgrQuerySystemVolumeName(&SystemVolumeName);
+    BootRamdiskMode = MountMgrIsMiniNtBoot();
+
+    /* In MiniNT / boot-ramdisk mode the ramdisk unique ID has already been
+     * loaded from the Ramdisk service state and will be matched on arrival.
+     * Do not promote Setup\\SystemPartition to a fixed-disk drive letter here,
+     * or the NTFS source disk steals the first free letter from the writable
+     * ramdisk boot environment. */
+    if (BootRamdiskMode)
+    {
+        DPRINT1("mountmgr: boot ramdisk mode active, skipping Setup\\\\SystemPartition promotion\n");
+        Status = STATUS_UNSUCCESSFUL;
+    }
+    else
+    {
+        /* First, get system volume name */
+        Status = MountMgrQuerySystemVolumeName(&SystemVolumeName);
+    }
+
+    if (NT_SUCCESS(Status))
+    {
+        TranslateStatus = QueryDeviceInformation(&SystemVolumeName,
+                                                 &TranslatedSystemVolumeName,
+                                                 NULL,
+                                                 NULL,
+                                                 NULL,
+                                                 NULL,
+                                                 NULL,
+                                                 NULL);
+        if (NT_SUCCESS(TranslateStatus))
+        {
+            DPRINT1("mountmgr: translated system volume %wZ -> %wZ\n",
+                    &SystemVolumeName,
+                    &TranslatedSystemVolumeName);
+            FreePool(SystemVolumeName.Buffer);
+            SystemVolumeName = TranslatedSystemVolumeName;
+        }
+        else
+        {
+            DPRINT1("mountmgr: failed to translate system volume %wZ Status=0x%08lx\n",
+                    &SystemVolumeName,
+                    TranslateStatus);
+        }
+    }
 
     /* If there are no device, it's all done */
     if (IsListEmpty(&(DeviceExtension->DeviceListHead)))
@@ -774,6 +925,17 @@ MountMgrAssignDriveLetters(IN PDEVICE_EXTENSION DeviceExtension)
         /* If it's the system volume */
         if (NT_SUCCESS(Status) && RtlEqualUnicodeString(&SystemVolumeName, &(DeviceInformation->DeviceName), TRUE))
         {
+            NTSTATUS SystemPartitionStatus;
+
+            DPRINT1("mountmgr: system volume matched %wZ UniqueIdLength=%lu\n",
+                    &(DeviceInformation->DeviceName),
+                    DeviceInformation->UniqueId->UniqueIdLength);
+
+            SystemPartitionStatus = IoSetSystemPartition(&(DeviceInformation->DeviceName));
+            DPRINT1("mountmgr: IoSetSystemPartition(%wZ) Status=0x%08lx\n",
+                    &(DeviceInformation->DeviceName),
+                    SystemPartitionStatus);
+
             /* Keep track of it */
             DeviceExtension->DriveLetterData = AllocatePool(DeviceInformation->UniqueId->UniqueIdLength +
                                                             sizeof(MOUNTDEV_UNIQUE_ID));
@@ -861,7 +1023,7 @@ MountMgrQueryDosVolumePath(IN PDEVICE_EXTENSION DeviceExtension,
     SymbolicName.Buffer = Target->DeviceName;
 
     /* Find device with our info */
-    Status = FindDeviceInfo(DeviceExtension, &SymbolicName, FALSE, &DeviceInformation);
+    Status = FindDeviceInfo(DeviceExtension, &SymbolicName, TRUE, &DeviceInformation);
     if (!NT_SUCCESS(Status))
     {
         return Status;
@@ -896,7 +1058,7 @@ MountMgrQueryDosVolumePath(IN PDEVICE_EXTENSION DeviceExtension,
             goto TryWithVolumeName;
 
         /* Create a string with the information about the device */
-        AssociatedDevice = CONTAINING_RECORD(&(DeviceInformation->AssociatedDevicesHead), ASSOCIATED_DEVICE_ENTRY, AssociatedDevicesEntry);
+        AssociatedDevice = CONTAINING_RECORD(DeviceInformation->AssociatedDevicesHead.Flink, ASSOCIATED_DEVICE_ENTRY, AssociatedDevicesEntry);
         OldLength = DeviceLength;
         OldBuffer = DeviceString;
         DeviceLength += AssociatedDevice->String.Length;
@@ -1484,7 +1646,7 @@ MountMgrQueryDosVolumePaths(IN PDEVICE_EXTENSION DeviceExtension,
     SymbolicName.Buffer = Target->DeviceName;
 
     /* Find device with our info */
-    Status = FindDeviceInfo(DeviceExtension, &SymbolicName, FALSE, &DeviceInformation);
+    Status = FindDeviceInfo(DeviceExtension, &SymbolicName, TRUE, &DeviceInformation);
     if (!NT_SUCCESS(Status))
     {
         return Status;
@@ -2317,8 +2479,10 @@ MountMgrVolumeMountPointCreated(IN PDEVICE_EXTENSION DeviceExtension,
     RemoteDatabase = OpenRemoteDatabase(DeviceInformation, TRUE);
     if (RemoteDatabase == 0)
     {
+        DPRINT1("mountmgr: remote database unavailable for %wZ, skipping mount-point replication\n",
+                &DeviceInformation->DeviceName);
         FreePool(SourceSymbolicName.Buffer);
-        return STATUS_INSUFFICIENT_RESOURCES;
+        return STATUS_SUCCESS;
     }
 
     /* Browse all the entries */
@@ -2550,8 +2714,10 @@ MountMgrVolumeMountPointDeleted(IN PDEVICE_EXTENSION DeviceExtension,
     RemoteDatabase = OpenRemoteDatabase(DeviceInformation, TRUE);
     if (RemoteDatabase == 0)
     {
+        DPRINT1("mountmgr: remote database unavailable for %wZ during delete, skipping mount-point replication cleanup\n",
+                &DeviceInformation->DeviceName);
         FreePool(SourceSymbolicName.Buffer);
-        return STATUS_INSUFFICIENT_RESOURCES;
+        return STATUS_SUCCESS;
     }
 
     /* Browse all the entries */

@@ -277,7 +277,24 @@ SmpParseCommandLine(IN PUNICODE_STRING CommandLine,
     {
         /* Parse the first token and check for modifiers/specifiers */
         Status = SmpParseToken(&CmdLineCopy, FALSE, &Token);
-        if (!(NT_SUCCESS(Status)) || !(Token.Buffer)) return STATUS_UNSUCCESSFUL;
+        if (!NT_SUCCESS(Status))
+        {
+            DPRINT1("SMSS: SmpParseToken failed for command line '%wZ' status=0x%08lx remaining='%wZ'\n",
+                    CommandLine,
+                    Status,
+                    &CmdLineCopy);
+            return Status;
+        }
+
+        if (!(Token.Buffer))
+        {
+            DPRINT1("SMSS: empty first token in command line '%wZ' remaining='%wZ' FlagsPtr=%p\n",
+                    CommandLine,
+                    &CmdLineCopy,
+                    Flags);
+            return STATUS_UNSUCCESSFUL;
+        }
+
         if (!Flags) break;
 
         /* Debug requested? */
@@ -318,6 +335,12 @@ SmpParseCommandLine(IN PUNICODE_STRING CommandLine,
         RtlFreeHeap(SmpHeap, 0, Token.Buffer);
         return STATUS_INSUFFICIENT_RESOURCES;
     }
+
+    DPRINT1("SMSS: parse token='%wZ' original='%wZ' flags=0x%08lx remaining='%wZ'\n",
+            &Token,
+            CommandLine,
+            Flags ? *Flags : 0,
+            &CmdLineCopy);
 
     /* Query the path from the environment */
     Status = RtlQueryEnvironmentVariable_U(SmpDefaultEnvironment,
@@ -370,6 +393,11 @@ SmpParseCommandLine(IN PUNICODE_STRING CommandLine,
                                      PathBuffer,
                                      &FilePart)))
             {
+                DPRINT1("SMSS: image search failed token='%wZ' Path='%wZ' DefaultLibPath='%wZ'\n",
+                        &Token,
+                        &PathString,
+                        &SmpDefaultLibPath);
+
                 /* It doesn't, let the caller know about it and exit */
                 *Flags |= SMP_INVALID_PATH;
                 *FileName = Token;

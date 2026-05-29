@@ -1,7 +1,7 @@
 /*
- * PROJECT:     ReactOS NTFS Linux-Port Skeleton
+ * PROJECT:     ReactOS ntfslx driver
  * LICENSE:     GPL-2.0-or-later
- * PURPOSE:     Mount and verify path for staged NTFS port
+ * PURPOSE:     Mount, verify, and FSCTL handling
  */
 
 #include "ntfslx.h"
@@ -447,6 +447,21 @@ NtfslxMountVolume(
     VolumeExtension->UpcaseTableLength = NTFSLX_DEFAULT_UPCASE_LENGTH;
     VolumeExtension->MftRunlist = MftRunlist;
     VolumeExtension->MftRunlistCount = MftRunlistCount;
+    /*
+     * Allocator locks: KGUARDED_MUTEX, narrow scope. The mutex is held
+     * only for the duration of the in-memory bitmap scan + reserve;
+     * disk writes happen OUTSIDE the lock. See clusteralloc.c and
+     * mftwrite.c for the canonical sequence. KGUARDED_MUTEX (not
+     * FAST_MUTEX) was chosen because the prior code held FAST_MUTEX
+     * across IoBuildSynchronousFsdRequest, which APC-deadlocks under
+     * a held FAST_MUTEX. KGUARDED_MUTEX has the same APC-blocking
+     * behaviour but with a distinct primitive name to make the
+     * narrow-scope contract explicit at every call site.
+     */
+    KeInitializeGuardedMutex(&VolumeExtension->MftAllocLock);
+    VolumeExtension->MftAllocLockInitialized = TRUE;
+    KeInitializeGuardedMutex(&VolumeExtension->ClusterAllocLock);
+    VolumeExtension->ClusterAllocLockInitialized = TRUE;
 
     NtfslxTraceMountVpb("mount pre-validate",
                         StorageDevice,
@@ -485,7 +500,13 @@ NtfslxMountVolume(
         return Status == STATUS_DEVICE_ALREADY_ATTACHED ? STATUS_WRONG_VOLUME : Status;
     }
 
-    Status = ExInitializeResourceLite(&VolumeExtension->Resource);
+    /*
+     * VolumeResource - top of the lock-order. See fcb.c for canonical
+     * lock-acquisition order. Initialized AFTER the validate step so a
+     * failed mount tears down without leaving an initialized resource
+     * orphaned in the device extension.
+     */
+    Status = ExInitializeResourceLite(&VolumeExtension->VolumeResource);
     if (!NT_SUCCESS(Status))
     {
         NTFSDBG("ntfslx: ExInitializeResourceLite failed with status 0x%08lx\n", Status);
@@ -500,6 +521,17 @@ NtfslxMountVolume(
         IoDeleteDevice(VolumeDevice);
         return Status;
     }
+    VolumeExtension->VolumeResourceInitialized = TRUE;
+
+    /*
+     * Obsolete-MFT-runlist parking list. Each NtfslxExtendMftRunlist
+     * pushes the previous runlist here instead of freeing it inline; the
+     * dismount path drains the list. See ntfslx.h for the rationale and
+     * mftwrite.c:NtfslxExtendMftRunlist for the publisher.
+     */
+    KeInitializeSpinLock(&VolumeExtension->ObsoleteMftRunlistsLock);
+    InitializeListHead(&VolumeExtension->ObsoleteMftRunlists);
+    VolumeExtension->ObsoleteMftRunlistsInitialized = TRUE;
 
     /*
      * Initialize the FsRtl directory-change notify package. Without this
@@ -561,26 +593,68 @@ NtfslxMountVolume(
     }
 
     /*
-     * Wipe $LogFile to 0xFF. We have no CLFS journal of our own, so any
-     * stale log entries left on disk by a previous Windows NTFS session
-     * (or by us) must not be replayed — replay would fight with whatever
-     * metadata mutations we make and could roll real work back. NTFS
-     * convention: 0xFF in a restart page means "uninitialized", and the
-     * first write after mount regenerates the restart area. Non-fatal:
-     * if the write fails the worst case is Windows running chkdsk on
-     * next boot, which is what we're already asking for via the dirty
-     * flag above.
+     * $LogFile handling: only wipe to 0xFF if there is no structurally
+     * valid restart page on disk. Wiping unconditionally would destroy
+     * any in-flight journal state that we (or, eventually, full LFS
+     * recovery) might want to replay. The dirty flag set above is what
+     * keeps Windows from trusting a partially-mutated volume; the log
+     * itself can stay intact across mounts.
+     *
+     * NtfslxCheckLogFile returns STATUS_SUCCESS when at least one
+     * restart page validates (regardless of clean / dirty); on success
+     * we leave $LogFile alone. If neither page validates the log is
+     * fresh or corrupted and we fall back to the historical 0xFF wipe.
+     * Non-fatal in either branch: failure here means the next Windows
+     * boot will run chkdsk, which is already what the dirty flag asks
+     * for.
      */
     {
-        NTSTATUS FillStatus =
-            NtfslxFillLogFile(StorageDevice,
-                              &VolumeExtension->VolumeInfo,
-                              VolumeExtension->MftRunlist);
-        if (!NT_SUCCESS(FillStatus))
+        BOOLEAN IsClean = FALSE;
+        BOOLEAN LogWasWiped = FALSE;
+        NTSTATUS CheckStatus =
+            NtfslxCheckLogFile(StorageDevice,
+                               &VolumeExtension->VolumeInfo,
+                               VolumeExtension->MftRunlist,
+                               &IsClean);
+        if (NT_SUCCESS(CheckStatus))
         {
-            NTFSDBG("ntfslx: mount: could not fill $LogFile with 0xFF 0x%08lx\n",
-                    FillStatus);
+            NTFSDBG("ntfslx: mount: $LogFile has valid restart page (clean=%u)"
+                    " — preserving on-disk journal state\n",
+                    IsClean ? 1 : 0);
         }
+        else
+        {
+            NTSTATUS FillStatus =
+                NtfslxFillLogFile(StorageDevice,
+                                  &VolumeExtension->VolumeInfo,
+                                  VolumeExtension->MftRunlist);
+            NTFSDBG("ntfslx: mount: $LogFile has no valid restart page"
+                    " (check=0x%08lx) — wiping to 0xFF (fill=0x%08lx)\n",
+                    CheckStatus,
+                    FillStatus);
+            if (NT_SUCCESS(FillStatus))
+                LogWasWiped = TRUE;
+        }
+
+        /*
+         * Bring up the Phase-1 journal subsystem. On a freshly-wiped
+         * log we stamp the synthetic 'XLOG' restart page and start
+         * appending records; on a preserved Microsoft RSTR we leave
+         * the log alone and disable Phase-1 journaling for this
+         * mount. JournalInitialize is non-fatal: any failure leaves
+         * JournalEnabled = FALSE and the rest of the driver runs
+         * exactly as it did before T1.3 landed.
+         */
+        {
+            NTSTATUS JournalStatus =
+                NtfslxJournalInitialize(VolumeExtension, LogWasWiped);
+            if (!NT_SUCCESS(JournalStatus))
+            {
+                NTFSDBG("ntfslx: mount: journal init failed 0x%08lx\n",
+                        JournalStatus);
+            }
+        }
+
     }
 
     Status = IoRegisterShutdownNotification(VolumeDevice);
@@ -772,6 +846,143 @@ NtfslxUserFsRequest(
                      DirtyFlags,
                      DeviceExtension->VolumeInfo.Flags);
             return Status;
+        }
+
+        case FSCTL_LOCK_VOLUME:
+        {
+            /*
+             * Capture the caller's FileObject as the lock owner. While
+             * the owner is set, IRP_MJ_CREATE for the volume device
+             * rejects any non-owner open with STATUS_ACCESS_DENIED.
+             * Re-locking by the same handle is idempotent. A different
+             * handle issuing LOCK_VOLUME while another holds the lock
+             * fails with STATUS_ACCESS_DENIED, matching Windows.
+             */
+            PIO_STACK_LOCATION Stack = IoGetCurrentIrpStackLocation(Irp);
+            PFILE_OBJECT Caller = Stack ? Stack->FileObject : NULL;
+            NTSTATUS LockStatus;
+
+            if (Caller == NULL)
+                return STATUS_INVALID_PARAMETER;
+
+            ExAcquireResourceExclusiveLite(&DeviceExtension->VolumeResource, TRUE);
+            if (DeviceExtension->DismountPending)
+            {
+                LockStatus = STATUS_VOLUME_DISMOUNTED;
+            }
+            else if (DeviceExtension->VolumeLockOwner == NULL ||
+                     DeviceExtension->VolumeLockOwner == Caller)
+            {
+                DeviceExtension->VolumeLockOwner = Caller;
+                LockStatus = STATUS_SUCCESS;
+            }
+            else
+            {
+                LockStatus = STATUS_ACCESS_DENIED;
+            }
+            ExReleaseResourceLite(&DeviceExtension->VolumeResource);
+            return LockStatus;
+        }
+
+        case FSCTL_UNLOCK_VOLUME:
+        {
+            /*
+             * Only the lock-owning FileObject may unlock. Returning
+             * STATUS_NOT_LOCKED matches Windows for any other case.
+             */
+            PIO_STACK_LOCATION Stack = IoGetCurrentIrpStackLocation(Irp);
+            PFILE_OBJECT Caller = Stack ? Stack->FileObject : NULL;
+            NTSTATUS UnlockStatus;
+
+            ExAcquireResourceExclusiveLite(&DeviceExtension->VolumeResource, TRUE);
+            if (DeviceExtension->VolumeLockOwner != NULL &&
+                DeviceExtension->VolumeLockOwner == Caller)
+            {
+                DeviceExtension->VolumeLockOwner = NULL;
+                UnlockStatus = STATUS_SUCCESS;
+            }
+            else
+            {
+                UnlockStatus = STATUS_NOT_LOCKED;
+            }
+            ExReleaseResourceLite(&DeviceExtension->VolumeResource);
+            return UnlockStatus;
+        }
+
+        case FSCTL_MARK_VOLUME_DIRTY:
+        {
+            /*
+             * Explicit "mark this volume dirty". We already set the
+             * flag on every mount, so this is a re-arm; succeed
+             * idempotently.
+             */
+            NTSTATUS Status =
+                NtfslxSetVolumeDirtyFlag(DeviceExtension->StorageDevice,
+                                          &DeviceExtension->VolumeInfo,
+                                          DeviceExtension->MftRunlist,
+                                          TRUE);
+            if (!NT_SUCCESS(Status))
+            {
+                NTFSDBG("ntfslx: mark-dirty: set dirty flag failed 0x%08lx\n",
+                         Status);
+            }
+            return Status;
+        }
+
+        case FSCTL_DISMOUNT_VOLUME:
+        {
+            NTSTATUS Status;
+
+            /*
+             * Explicit dismount path. The shutdown handler covers the
+             * "the OS is going down" case; FSCTL_DISMOUNT_VOLUME covers
+             * "an admin asked to take this volume offline". In both
+             * cases we have to clear VOLUME_IS_DIRTY before letting go
+             * of the volume — otherwise next mount will see a dirty
+             * volume even though we left it consistent. Because this
+             * driver is write-through there is no FCB cache to flush.
+             */
+            Status = NtfslxSetVolumeDirtyFlag(DeviceExtension->StorageDevice,
+                                              &DeviceExtension->VolumeInfo,
+                                              DeviceExtension->MftRunlist,
+                                              FALSE);
+            if (!NT_SUCCESS(Status))
+            {
+                NTFSDBG("ntfslx: dismount: clear dirty flag failed 0x%08lx\n",
+                         Status);
+                return Status;
+            }
+            NTFSDBG("ntfslx: dismount: volume marked clean flags=0x%04x\n",
+                     DeviceExtension->VolumeInfo.Flags);
+
+            /*
+             * Reclaim parked MFT runlists from MFT-extend operations
+             * (T0.4). Dismount happens after all opens drain, so no
+             * lock-free reader can still dereference any parked pointer.
+             */
+            NtfslxDrainObsoleteMftRunlists(DeviceExtension);
+
+            /* Free the cached $LogFile runlist Phase-1 journal held. */
+            NtfslxJournalTeardown(DeviceExtension);
+
+            /*
+             * Mark the volume dismount-pending so any subsequent
+             * IRP_MJ_CREATE rejects the open with STATUS_VOLUME_DISMOUNTED
+             * instead of returning a fresh handle on what the caller
+             * just took offline. The flag stays set until a fresh mount
+             * clears it; we deliberately do NOT clear VPB_MOUNTED on the
+             * VPB because that would cause the IO Manager to schedule a
+             * fresh mount on the next access and bypass the
+             * STATUS_VOLUME_DISMOUNTED return entirely. The handler also
+             * drops any held VolumeLockOwner — semantically the dismount
+             * supersedes the lock state.
+             */
+            ExAcquireResourceExclusiveLite(&DeviceExtension->VolumeResource, TRUE);
+            DeviceExtension->DismountPending = TRUE;
+            DeviceExtension->VolumeLockOwner = NULL;
+            ExReleaseResourceLite(&DeviceExtension->VolumeResource);
+
+            return STATUS_SUCCESS;
         }
 
         default:
@@ -1081,6 +1292,174 @@ Cleanup:
     return Status;
 }
 
+/*
+ * Regression test for the FAST_MUTEX/sync-IRP deadlock guarded by
+ * diskwrite.c. The worker acquires DevExt->MftAllocLock (mirroring the
+ * NtfslxCreateNewFile call site that hits the bug first), reads sector 0
+ * into a buffer, then calls NtfslxWriteDisk to write the same bytes back.
+ *
+ * Pre-IRP-completion-routine NtfslxWriteDisk used IoBuildSynchronousFsdRequest,
+ * which signals via a kernel APC into the originating thread. APCs are
+ * disabled while a FAST_MUTEX is held (FAST_MUTEX raises to APC_LEVEL via
+ * KeEnterCriticalRegion), so the wait would never wake. The current
+ * implementation uses an async IRP + custom completion routine and is
+ * correct under FAST_MUTEX. This worker proves both the lock acquire
+ * and the write complete; if the deadlock returns it never reaches
+ * KeSetEvent and the IOCTL caller times out.
+ */
+typedef struct _NTFSLX_TC1_WORK
+{
+    PNTFSLX_DEVICE_EXTENSION DevExt;
+    KEVENT Done;
+    NTSTATUS WriteStatus;
+    ULONG ElapsedMs;
+} NTFSLX_TC1_WORK, *PNTFSLX_TC1_WORK;
+
+static VOID NTAPI
+NtfslxTc1Worker(
+    _In_ PVOID Context)
+{
+    PNTFSLX_TC1_WORK Work = (PNTFSLX_TC1_WORK)Context;
+    PNTFSLX_DEVICE_EXTENSION DevExt = Work->DevExt;
+    PUCHAR SectorBuf;
+    ULONG SectorSize;
+    LARGE_INTEGER Start;
+    LARGE_INTEGER End;
+    LARGE_INTEGER Frequency;
+    NTSTATUS Status;
+
+    Work->WriteStatus = STATUS_UNSUCCESSFUL;
+    Work->ElapsedMs = 0;
+
+    SectorSize = DevExt->VolumeInfo.BytesPerSector;
+    if (SectorSize == 0 || !NtfslxIsPowerOfTwo(SectorSize))
+    {
+        Work->WriteStatus = STATUS_INVALID_DEVICE_STATE;
+        goto Done;
+    }
+
+    SectorBuf = ExAllocatePoolWithTag(NonPagedPool, SectorSize, NTFSLX_TAG);
+    if (SectorBuf == NULL)
+    {
+        Work->WriteStatus = STATUS_INSUFFICIENT_RESOURCES;
+        goto Done;
+    }
+
+    /*
+     * Read the boot sector before grabbing the lock. We rewrite this
+     * exact buffer back in step 3 so the on-disk state is unchanged.
+     */
+    Status = NtfslxReadDisk(DevExt->StorageDevice,
+                            0,
+                            SectorSize,
+                            SectorSize,
+                            SectorBuf,
+                            FALSE);
+    if (!NT_SUCCESS(Status))
+    {
+        ExFreePoolWithTag(SectorBuf, NTFSLX_TAG);
+        Work->WriteStatus = Status;
+        goto Done;
+    }
+
+    Start = KeQueryPerformanceCounter(&Frequency);
+
+    /*
+     * The property under test: NtfslxWriteDisk must complete while
+     * MftAllocLock is held by the same thread. Acquire, write, release.
+     *
+     * After T1.5.2 the production code no longer holds MftAllocLock
+     * across disk writes — but the underlying property still matters:
+     * KGUARDED_MUTEX (like FAST_MUTEX) raises IRQL to APC_LEVEL and
+     * blocks special kernel APC delivery, so a sync-IRP using
+     * IoBuildSynchronousFsdRequest's APC-driven completion would
+     * still hang under it. NtfslxWriteDisk uses an async IRP plus a
+     * custom completion routine signalled via KEVENT, which is APC-
+     * independent. This worker keeps verifying that property so a
+     * future regression to APC-based completion is caught.
+     */
+    KeAcquireGuardedMutex(&DevExt->MftAllocLock);
+    Status = NtfslxWriteDisk(DevExt->StorageDevice,
+                             0,
+                             SectorSize,
+                             SectorSize,
+                             SectorBuf,
+                             FALSE);
+    KeReleaseGuardedMutex(&DevExt->MftAllocLock);
+
+    End = KeQueryPerformanceCounter(NULL);
+    if (Frequency.QuadPart > 0)
+    {
+        LONGLONG Delta = End.QuadPart - Start.QuadPart;
+        if (Delta < 0)
+            Delta = 0;
+        Work->ElapsedMs = (ULONG)((Delta * 1000) / Frequency.QuadPart);
+    }
+
+    Work->WriteStatus = Status;
+    ExFreePoolWithTag(SectorBuf, NTFSLX_TAG);
+
+Done:
+    KeSetEvent(&Work->Done, IO_NO_INCREMENT, FALSE);
+    PsTerminateSystemThread(STATUS_SUCCESS);
+}
+
+static NTSTATUS
+NtfslxRunTc1ReentrancyTest(
+    _In_ PNTFSLX_DEVICE_EXTENSION DevExt,
+    _Out_ PNTFSLX_TC1_REENTRANCY_RESULT Result)
+{
+    NTFSLX_TC1_WORK Work;
+    HANDLE ThreadHandle;
+    LARGE_INTEGER Timeout;
+    NTSTATUS Status;
+    NTSTATUS WaitStatus;
+
+    RtlZeroMemory(Result, sizeof(*Result));
+    Result->Version = 1;
+
+    if (DevExt->StorageDevice == NULL || !DevExt->MftAllocLockInitialized)
+    {
+        return STATUS_INVALID_DEVICE_STATE;
+    }
+
+    Work.DevExt = DevExt;
+    KeInitializeEvent(&Work.Done, NotificationEvent, FALSE);
+    Work.WriteStatus = STATUS_UNSUCCESSFUL;
+    Work.ElapsedMs = 0;
+
+    Status = PsCreateSystemThread(&ThreadHandle, THREAD_ALL_ACCESS, NULL, NULL,
+                                  NULL, NtfslxTc1Worker, &Work);
+    if (!NT_SUCCESS(Status))
+    {
+        return Status;
+    }
+
+    /* 10-second watchdog: if the worker deadlocks, it never signals. */
+    Timeout.QuadPart = -((LONGLONG)10 * 1000 * 1000 * 10);
+    WaitStatus = KeWaitForSingleObject(&Work.Done, Executive, KernelMode,
+                                       FALSE, &Timeout);
+    if (WaitStatus == STATUS_SUCCESS)
+    {
+        Result->TestCompleted = 1;
+        Result->WriteStatus = Work.WriteStatus;
+        Result->ElapsedMs = Work.ElapsedMs;
+        ZwClose(ThreadHandle);
+        return STATUS_SUCCESS;
+    }
+
+    /*
+     * Timeout. The worker is presumed deadlocked under MftAllocLock; we
+     * leak the thread handle (the system thread will never finish). The
+     * IOCTL caller still gets a structured failure rather than hanging.
+     */
+    Result->TestCompleted = 0;
+    Result->WriteStatus = STATUS_TIMEOUT;
+    Result->ElapsedMs = 0;
+    ZwClose(ThreadHandle);
+    return STATUS_SUCCESS;
+}
+
 NTSTATUS
 NtfslxDeviceControl(
     _In_ PDEVICE_OBJECT DeviceObject,
@@ -1141,6 +1520,70 @@ NtfslxDeviceControl(
         Status = NtfslxGatherTier0Proof(DeviceExtension,
                                         (PNTFSLX_TIER0_PROOF)Irp->AssociatedIrp.SystemBuffer);
         OutputLength = sizeof(NTFSLX_TIER0_PROOF);
+        goto CompleteRequest;
+    }
+
+    if (IoControlCode == IOCTL_NTFSLX_TC1_MFTLOCK_REENTRANCY)
+    {
+        if (!NtfslxIsVolumeDevice(DeviceExtension) ||
+            DeviceExtension->StorageDevice == NULL)
+        {
+            Status = STATUS_INVALID_DEVICE_REQUEST;
+            OutputLength = 0;
+            goto CompleteRequest;
+        }
+        if (OutputLength < sizeof(NTFSLX_TC1_REENTRANCY_RESULT))
+        {
+            Status = STATUS_BUFFER_TOO_SMALL;
+            OutputLength = sizeof(NTFSLX_TC1_REENTRANCY_RESULT);
+            goto CompleteRequest;
+        }
+        Status = NtfslxRunTc1ReentrancyTest(DeviceExtension,
+            (PNTFSLX_TC1_REENTRANCY_RESULT)Irp->AssociatedIrp.SystemBuffer);
+        OutputLength = sizeof(NTFSLX_TC1_REENTRANCY_RESULT);
+        goto CompleteRequest;
+    }
+
+    if (IoControlCode == IOCTL_NTFSLX_FILEBODY_STATS)
+    {
+        PNTFSLX_FILEBODY_STATS Out;
+
+        if (OutputLength < sizeof(NTFSLX_FILEBODY_STATS))
+        {
+            Status = STATUS_BUFFER_TOO_SMALL;
+            OutputLength = sizeof(NTFSLX_FILEBODY_STATS);
+            goto CompleteRequest;
+        }
+        Out = (PNTFSLX_FILEBODY_STATS)Irp->AssociatedIrp.SystemBuffer;
+        RtlZeroMemory(Out, sizeof(*Out));
+        Out->Version = 1;
+        OutputLength = sizeof(*Out);
+        Status = STATUS_SUCCESS;
+        goto CompleteRequest;
+    }
+
+    if (IoControlCode == IOCTL_NTFSLX_MFT_CACHE_STATS)
+    {
+        PNTFSLX_MFT_CACHE_STATS Out;
+
+        if (!NtfslxIsVolumeDevice(DeviceExtension))
+        {
+            Status = STATUS_INVALID_DEVICE_REQUEST;
+            OutputLength = 0;
+            goto CompleteRequest;
+        }
+        if (OutputLength < sizeof(NTFSLX_MFT_CACHE_STATS))
+        {
+            Status = STATUS_BUFFER_TOO_SMALL;
+            OutputLength = sizeof(NTFSLX_MFT_CACHE_STATS);
+            goto CompleteRequest;
+        }
+        Out = (PNTFSLX_MFT_CACHE_STATS)Irp->AssociatedIrp.SystemBuffer;
+        RtlZeroMemory(Out, sizeof(*Out));
+        Out->Version = 1;
+        Out->RecordSize = DeviceExtension->VolumeInfo.BytesPerFileRecord;
+        Status = STATUS_SUCCESS;
+        OutputLength = sizeof(NTFSLX_MFT_CACHE_STATS);
         goto CompleteRequest;
     }
 

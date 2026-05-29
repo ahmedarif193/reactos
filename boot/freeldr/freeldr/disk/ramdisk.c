@@ -20,6 +20,7 @@
 #include <fs/fat.h>
 #include <disk.h>
 #include <arch/archwsup.h>
+#include "part_mbr.h" // For MASTER_BOOT_RECORD, PARTITION_TABLE_ENTRY, PARTITION_ENTRY_UNUSED
 
 #if defined(__GNUC__)
 extern VOID

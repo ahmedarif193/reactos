@@ -1762,16 +1762,20 @@ HKLM,"SYSTEM\CurrentControlSet\Services\Netlogon","ImagePath",0x00020000,"%Syste
 HKLM,"SYSTEM\CurrentControlSet\Services\NetLogon","Start",0x00010001,0x00000003
 HKLM,"SYSTEM\CurrentControlSet\Services\Netlogon","Type",0x00010001,0x00000020
 
-; NTFS filesystem driver
-HKLM,"SYSTEM\CurrentControlSet\Services\Ntfs","ErrorControl",0x00010001,0x00000001
-HKLM,"SYSTEM\CurrentControlSet\Services\Ntfs","Group",0x00000000,"File System"
-HKLM,"SYSTEM\CurrentControlSet\Services\Ntfs","ImagePath",0x00020000,"system32\drivers\ntfs.sys"
-HKLM,"SYSTEM\CurrentControlSet\Services\Ntfs","Start",0x00010001,0x00000003
-HKLM,"SYSTEM\CurrentControlSet\Services\Ntfs","Type",0x00010001,0x00000002
-; un-comment the line below to enable EXPERIMENTAL write-support on NTFS volumes:
+; NTFS filesystem driver -- DISABLED: NtfsLx is now the primary NTFS handler.
+; The legacy ntfs.sys binary still ships on the install media but is not
+; registered as a service, so the I/O manager will never load it. Re-enable
+; this block (and restore the Ntfs fallback in fs_rec/ntfs.c) to fall back
+; to the legacy driver.
+;HKLM,"SYSTEM\CurrentControlSet\Services\Ntfs","ErrorControl",0x00010001,0x00000001
+;HKLM,"SYSTEM\CurrentControlSet\Services\Ntfs","Group",0x00000000,"File System"
+;HKLM,"SYSTEM\CurrentControlSet\Services\Ntfs","ImagePath",0x00020000,"system32\drivers\ntfs.sys"
+;HKLM,"SYSTEM\CurrentControlSet\Services\Ntfs","Start",0x00010001,0x00000003
+;HKLM,"SYSTEM\CurrentControlSet\Services\Ntfs","Type",0x00010001,0x00000002
+; un-comment the line below to enable EXPERIMENTAL write-support on the legacy NTFS driver:
 ;HKLM,"SYSTEM\CurrentControlSet\Services\Ntfs","MyDataDoesNotMatterSoEnableExperimentalWriteSupportForEveryNTFSVolume",0x00010001,0x00000001
 
-; Staged NT-compatible Linux NTFS port driver
+; NT-compatible Linux NTFS port driver -- primary NTFS handler.
 HKLM,"SYSTEM\CurrentControlSet\Services\NtfsLx","ErrorControl",0x00010001,0x00000001
 HKLM,"SYSTEM\CurrentControlSet\Services\NtfsLx","Group",0x00000000,"File System"
 HKLM,"SYSTEM\CurrentControlSet\Services\NtfsLx","ImagePath",0x00020000,"system32\drivers\ntfslx.sys"

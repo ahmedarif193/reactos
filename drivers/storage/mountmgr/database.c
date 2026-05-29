@@ -752,6 +752,8 @@ ReconcileThisDatabaseWithMasterWorker(IN PVOID Parameter)
         DatabaseHandle = OpenRemoteDatabase(DeviceInformation, TRUE);
         if (DatabaseHandle == 0)
         {
+            DPRINT1("mountmgr: remote database still unavailable for %wZ after reparse scan, leaving NoDatabase=TRUE and skipping reconcile\n",
+                    &DeviceInformation->DeviceName);
             KeReleaseSemaphore(&DeviceExtension->DeviceLock, IO_NO_INCREMENT, 1, FALSE);
             goto ReleaseRDS;
         }
@@ -1892,6 +1894,20 @@ OpenRemoteDatabase(IN PDEVICE_INFORMATION DeviceInformation,
     if (Status == STATUS_STOPPED_ON_SYMLINK)
     {
         DPRINT1("Attempt to exploit CVE-2015-1769. See CORE-10216\n");
+    }
+    else if (Status == STATUS_OBJECT_PATH_NOT_FOUND || Status == STATUS_OBJECT_NAME_NOT_FOUND)
+    {
+        Status = STATUS_SUCCESS;
+        Database = 0;
+    }
+    else if (!NT_SUCCESS(Status))
+    {
+        DPRINT1("mountmgr: OpenRemoteDatabase failed Device=%wZ Path=%wZ Status=0x%08lx Migrate=%u Migrated=%u\n",
+                &DeviceInformation->DeviceName,
+                &DeviceRemoteDatabase,
+                Status,
+                MigrateDatabase ? 1 : 0,
+                DeviceInformation->Migrated ? 1 : 0);
     }
 
     /* If base it to be migrated and was opened successfully, go ahead */

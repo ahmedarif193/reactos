@@ -490,6 +490,15 @@ function(create_iso_lists)
     file(GENERATE
          OUTPUT ${REACTOS_BINARY_DIR}/boot/preinstall.$<CONFIG>.lst
          INPUT ${REACTOS_BINARY_DIR}/boot/preinstall.cmake.lst)
+
+    # PREINSTALL_FILE_LIST is now finalized. Defer-create the partition.ntfs /
+    # preinstall_esp.img / ReactOS.img / ReactOS.vhd rules with every packed
+    # source file as an explicit DEPENDS, so ninja invalidates the partition
+    # whenever any binary inside it is rebuilt. (The function lives in
+    # boot/preinstall_images.cmake.)
+    if(COMMAND create_preinstall_image_rules)
+        create_preinstall_image_rules()
+    endif()
 endfunction()
 
 # Create module_clean targets

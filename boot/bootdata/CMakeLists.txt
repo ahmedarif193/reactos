@@ -19,6 +19,7 @@ add_registry_inf(
 
 # Regtest
 add_cd_file(FILE ${CMAKE_CURRENT_SOURCE_DIR}/bootcdregtest/regtest.cmd DESTINATION reactos/bin FOR all)
+add_cd_file(FILE ${CMAKE_CURRENT_SOURCE_DIR}/kmtest_ccmm.cmd DESTINATION reactos/bin FOR livecd)
 
 # autorun.inf
 add_cd_file(FILE ${CMAKE_CURRENT_SOURCE_DIR}/autorun-bootcd.inf DESTINATION root NO_CAB NOT_IN_HYBRIDCD NAME_ON_CD autorun.inf FOR bootcd)
@@ -54,7 +55,7 @@ endif()
 add_cd_file(FILE ${CMAKE_CURRENT_SOURCE_DIR}/bootcd.ini DESTINATION root NO_CAB NOT_IN_HYBRIDCD NAME_ON_CD freeldr.ini FOR bootcd regtest)
 add_cd_file(FILE ${CMAKE_CURRENT_SOURCE_DIR}/livecd.ini DESTINATION root NOT_IN_HYBRIDCD NAME_ON_CD freeldr.ini FOR livecd)
 add_cd_file(FILE ${CMAKE_CURRENT_SOURCE_DIR}/hybridcd.ini DESTINATION root NAME_ON_CD freeldr.ini FOR hybridcd)
-add_cd_file(FILE ${CMAKE_CURRENT_SOURCE_DIR}/preinstall.ini DESTINATION root NAME_ON_CD freeldr.ini FOR preinstall)
+add_cd_file(FILE ${CMAKE_CURRENT_BINARY_DIR}/preinstall.ini DESTINATION root NAME_ON_CD freeldr.ini FOR preinstall)
 
 # Unattend
 add_cd_file(FILE ${CMAKE_CURRENT_SOURCE_DIR}/bootcdregtest/unattend.inf DESTINATION reactos NO_CAB FOR regtest)

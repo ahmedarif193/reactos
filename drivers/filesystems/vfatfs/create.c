@@ -595,7 +595,6 @@ VfatCreateFile(
     else
     {
         PVFATFCB TargetFcb;
-        LONG idx, FileNameLen;
 
         vfatAddToStat(DeviceExt, Fat.CreateHits, 1);
 
@@ -616,50 +615,34 @@ VfatCreateFile(
             Irp->IoStatus.Information = FILE_DOES_NOT_EXIST;
         }
 
-        idx = FileObject->FileName.Length / sizeof(WCHAR) - 1;
-
-        /* Skip trailing \ - if any */
-        if (PathNameU.Buffer[idx] == L'\\')
+        if (ParentFcb != NULL)
         {
-            --idx;
-            PathNameU.Length -= sizeof(WCHAR);
-        }
+            USHORT ParentNameLength = ParentFcb->PathNameU.Length;
 
-        /* Get file name */
-        while (idx >= 0 && PathNameU.Buffer[idx] != L'\\')
-        {
-            --idx;
-        }
+            if (FileObject->FileName.MaximumLength < ParentNameLength + sizeof(UNICODE_NULL))
+            {
+                PWCHAR NewBuffer;
 
-        if (idx > 0 || PathNameU.Buffer[0] == L'\\')
-        {
-            /* We don't want to include / in the name */
-            FileNameLen = PathNameU.Length - ((idx + 1) * sizeof(WCHAR));
+                NewBuffer = ExAllocatePoolWithTag(PagedPool,
+                                                  ParentNameLength + sizeof(UNICODE_NULL),
+                                                  TAG_NAME);
+                if (NewBuffer == NULL)
+                {
+                    vfatReleaseFCB(DeviceExt, ParentFcb);
+                    return STATUS_INSUFFICIENT_RESOURCES;
+                }
 
-            /* Update FO just to keep file name */
-            /* Skip first slash */
-            ++idx;
-            FileObject->FileName.Length = FileNameLen;
-            RtlMoveMemory(&PathNameU.Buffer[0], &PathNameU.Buffer[idx], FileObject->FileName.Length);
-#if 0
-            /* Terminate the string at the last backslash */
-            PathNameU.Buffer[idx + 1] = UNICODE_NULL;
-            PathNameU.Length = (idx + 1) * sizeof(WCHAR);
-            PathNameU.MaximumLength = PathNameU.Length + sizeof(WCHAR);
+                if (FileObject->FileName.Buffer != NULL)
+                {
+                    ExFreePoolWithTag(FileObject->FileName.Buffer, 0);
+                }
 
-            /* Update the file object as well */
-            FileObject->FileName.Length = PathNameU.Length;
-            FileObject->FileName.MaximumLength = PathNameU.MaximumLength;
-#endif
-        }
-        else
-        {
-            /* This is a relative open and we have only the filename, so open the parent directory
-             * It is in RelatedFileObject
-             */
-            ASSERT(FileObject->RelatedFileObject != NULL);
+                FileObject->FileName.Buffer = NewBuffer;
+                FileObject->FileName.MaximumLength = ParentNameLength + sizeof(UNICODE_NULL);
+            }
 
-            /* No need to modify the FO, it already has the name */
+            RtlCopyUnicodeString(&FileObject->FileName, &ParentFcb->PathNameU);
+            FileObject->FileName.Buffer[FileObject->FileName.Length / sizeof(WCHAR)] = UNICODE_NULL;
         }
 
         /* We're done with opening! */

@@ -1,14 +1,7 @@
 /*
- * PROJECT:     ReactOS NTFS Linux-Port Skeleton
+ * PROJECT:     ReactOS ntfslx driver
  * LICENSE:     GPL-2.0-or-later
- * PURPOSE:     Large-directory $INDEX_ALLOCATION / INDX traversal helpers
- *
- * Integration note:
- * - This module is intentionally self-contained and is not wired into CMake
- *   or ntfslx.h yet.
- * - Future directory-query code can build a runlist from the nonresident
- *   $INDEX_ALLOCATION attribute, read and validate INDX blocks, and recurse
- *   through child subnodes using the helpers below.
+ * PURPOSE:     Directory $INDEX_ALLOCATION lookup and traversal
  */
 
 #include "ntfslx.h"
@@ -1170,6 +1163,384 @@ NtfslxBuildIndexAllocationRunlist(
     return NtfslxIndexDecodeMappingPairs(IndexAllocationAttribute,
                                          Runlist,
                                          RunlistCount);
+}
+
+/*
+ * Proper B+ tree lookup for $I30 directory indexes. Replaces the
+ * O(N) full pre-order traversal in NtfslxWalkIndexEntryRange with the
+ * canonical O(log N) descent — at each node, walk entries in order
+ * comparing the search key, and descend into exactly one child
+ * subtree based on the comparison.
+ *
+ * NTFS B+ tree semantics for the descent:
+ *   - For each non-end entry e in node order:
+ *       cmp = collate(search_key, e.key)
+ *       if cmp <  0:  descend into e's child if e has NODE flag (subtree
+ *                     keys are < e.key); if no child, NOT_FOUND.
+ *       if cmp == 0:  found, return e.FileReference.
+ *       if cmp >  0:  continue to next entry.
+ *   - End entry: keys greater than last real key are reachable here.
+ *                If end has NODE flag, descend into its child; else
+ *                NOT_FOUND.
+ *
+ * The walk reads at most one index block per tree level. Typical
+ * NTFS directories are 2 levels deep up to ~10K entries, 3 levels
+ * up to ~10M entries — so a lookup costs 1-3 disk IRPs versus the
+ * old O(N) traversal that read every block.
+ */
+
+typedef struct _NTFSLX_INDEX_LOOKUP_CONTEXT
+{
+    PDEVICE_OBJECT          StorageDevice;
+    PNTFSLX_VOLUME_INFO     VolumeInfo;
+    PNTFSLX_RUNLIST_ELEMENT Runlist;
+    ULONG                   IndexBlockSize;
+    const USHORT *          SearchName;
+    ULONG                   SearchNameLength;
+    BOOLEAN                 IgnoreCase;
+    const USHORT *          UpcaseTable;
+    ULONG                   UpcaseTableLength;
+    PNTFSLX_DEVICE_EXTENSION DeviceExtension;
+    ULONGLONG               ParentMftIndex;
+    /* Output: */
+    BOOLEAN                 Found;
+    ULONGLONG               FoundReference;
+    /* Cycle detection: track visited VCNs (descent depth typically <= 8). */
+    ULONGLONG               VisitedVcns[16];
+    ULONG                   VisitedCount;
+} NTFSLX_INDEX_LOOKUP_CONTEXT, *PNTFSLX_INDEX_LOOKUP_CONTEXT;
+
+static
+BOOLEAN
+NtfslxIndexLookupVcnSeen(
+    _In_ PNTFSLX_INDEX_LOOKUP_CONTEXT Context,
+    _In_ ULONGLONG Vcn)
+{
+    ULONG i;
+    for (i = 0; i < Context->VisitedCount; ++i)
+    {
+        if (Context->VisitedVcns[i] == Vcn)
+            return TRUE;
+    }
+    return FALSE;
+}
+
+static
+NTSTATUS NTAPI
+NtfslxIndexLookupSearchNode(
+    _Inout_ PNTFSLX_INDEX_LOOKUP_CONTEXT Context,
+    _In_reads_bytes_(NodeLength) const UCHAR *NodeBase,
+    _In_ ULONG NodeLength,
+    _In_ ULONG EntriesOffset,
+    _In_ ULONG IndexLength);
+
+static
+NTSTATUS
+NtfslxIndexLookupReadAndSearchChild(
+    _Inout_ PNTFSLX_INDEX_LOOKUP_CONTEXT Context,
+    _In_ ULONGLONG ChildVcn)
+{
+    PNTFSLX_INDEX_BUFFER IndexBuffer;
+    NTSTATUS Status;
+    ULONG EntriesOffset;
+    ULONG IndexLength;
+
+    if (Context->Runlist == NULL)
+    {
+        return STATUS_INVALID_PARAMETER;
+    }
+
+    if (Context->VisitedCount >= RTL_NUMBER_OF(Context->VisitedVcns))
+    {
+        /* Tree depth exceeds expected bound — bail out rather than descend further. */
+        return STATUS_FILE_CORRUPT_ERROR;
+    }
+
+    if (NtfslxIndexLookupVcnSeen(Context, ChildVcn))
+    {
+        return STATUS_FILE_CORRUPT_ERROR;
+    }
+
+    Context->VisitedVcns[Context->VisitedCount++] = ChildVcn;
+
+    if (ChildVcn > (ULONGLONG)(MAXLONGLONG / Context->VolumeInfo->BytesPerCluster))
+    {
+        return STATUS_UNRECOGNIZED_VOLUME;
+    }
+
+    IndexBuffer = ExAllocatePoolWithTag(NonPagedPool,
+                                        Context->IndexBlockSize,
+                                        NTFSLX_INDEX_ALLOCATION_TAG);
+    if (IndexBuffer == NULL)
+    {
+        return STATUS_INSUFFICIENT_RESOURCES;
+    }
+
+    Status = NtfslxReadMappedAttributeData(Context->StorageDevice,
+                                           Context->VolumeInfo,
+                                           Context->Runlist,
+                                           ChildVcn * Context->VolumeInfo->BytesPerCluster,
+                                           Context->IndexBlockSize,
+                                           (PUCHAR)IndexBuffer);
+    if (!NT_SUCCESS(Status))
+    {
+        ExFreePoolWithTag(IndexBuffer, NTFSLX_INDEX_ALLOCATION_TAG);
+        return Status;
+    }
+
+    Status = NtfslxValidateIndexBufferHeader(IndexBuffer,
+                                             Context->IndexBlockSize,
+                                             Context->VolumeInfo->BytesPerSector,
+                                             ChildVcn,
+                                             &EntriesOffset,
+                                             &IndexLength);
+    if (!NT_SUCCESS(Status))
+    {
+        ExFreePoolWithTag(IndexBuffer, NTFSLX_INDEX_ALLOCATION_TAG);
+        return Status;
+    }
+
+    Status = NtfslxApplyIndexMstFixup(&IndexBuffer->Ntfs,
+                                      Context->IndexBlockSize,
+                                      Context->VolumeInfo->BytesPerSector);
+    if (!NT_SUCCESS(Status))
+    {
+        ExFreePoolWithTag(IndexBuffer, NTFSLX_INDEX_ALLOCATION_TAG);
+        return Status;
+    }
+
+    Status = NtfslxIndexLookupSearchNode(Context,
+                                         (const UCHAR *)IndexBuffer,
+                                         Context->IndexBlockSize,
+                                         EntriesOffset,
+                                         IndexLength);
+    ExFreePoolWithTag(IndexBuffer, NTFSLX_INDEX_ALLOCATION_TAG);
+    return Status;
+}
+
+static
+NTSTATUS NTAPI
+NtfslxIndexLookupSearchNode(
+    _Inout_ PNTFSLX_INDEX_LOOKUP_CONTEXT Context,
+    _In_reads_bytes_(NodeLength) const UCHAR *NodeBase,
+    _In_ ULONG NodeLength,
+    _In_ ULONG EntriesOffset,
+    _In_ ULONG IndexLength)
+{
+    ULONG Offset;
+    ULONG Remaining;
+    ULONG KeyLength;
+    const NTFSLX_INDEX_ENTRY_ATTRIBUTE *IndexEntry;
+    const NTFSLX_FILENAME_ATTRIBUTE *FileNameAttr;
+    LONG Cmp;
+    ULONGLONG ChildVcn;
+    NTSTATUS Status;
+
+    Offset = EntriesOffset;
+    if ((Offset & 7) != 0 ||
+        (IndexLength & 7) != 0 ||
+        Offset > IndexLength ||
+        IndexLength > NodeLength)
+    {
+        return STATUS_FILE_CORRUPT_ERROR;
+    }
+
+    while (Offset < IndexLength)
+    {
+        IndexEntry = (const NTFSLX_INDEX_ENTRY_ATTRIBUTE *)(NodeBase + Offset);
+        Remaining = IndexLength - Offset;
+        if (!NtfslxIndexEntryLooksValid(IndexEntry, Remaining, &KeyLength))
+        {
+            return STATUS_FILE_CORRUPT_ERROR;
+        }
+
+        if (NtfslxIndexEntryIsEnd(IndexEntry))
+        {
+            /* End-marker. The end's child holds keys greater than the last
+             * real entry's key; descend if present. Otherwise NOT_FOUND. */
+            if (NtfslxIndexEntryHasChildNode(IndexEntry))
+            {
+                ChildVcn = *(const ULONGLONG *)
+                    ((const UCHAR *)IndexEntry + IndexEntry->Length - sizeof(ULONGLONG));
+                Status = NtfslxIndexLookupReadAndSearchChild(Context, ChildVcn);
+                if (!NT_SUCCESS(Status))
+                    return Status;
+                /* If found in subtree, return success. Otherwise not found. */
+                return STATUS_SUCCESS;
+            }
+            return STATUS_SUCCESS; /* not found at this leaf */
+        }
+
+        /* Non-end entry: validate FILE_NAME payload, then collate. */
+        if (KeyLength < FIELD_OFFSET(NTFSLX_FILENAME_ATTRIBUTE, FileName))
+        {
+            return STATUS_FILE_CORRUPT_ERROR;
+        }
+        FileNameAttr = (const NTFSLX_FILENAME_ATTRIBUTE *)
+            ((const UCHAR *)IndexEntry + sizeof(*IndexEntry));
+        if (FIELD_OFFSET(NTFSLX_FILENAME_ATTRIBUTE, FileName) +
+            ((ULONG)FileNameAttr->FileNameLength * sizeof(WCHAR)) > KeyLength)
+        {
+            return STATUS_FILE_CORRUPT_ERROR;
+        }
+
+        Cmp = NtfslxCollateNames(Context->SearchName,
+                                 Context->SearchNameLength,
+                                 (const USHORT *)FileNameAttr->FileName,
+                                 (ULONG)FileNameAttr->FileNameLength,
+                                 1,
+                                 Context->IgnoreCase,
+                                 Context->UpcaseTable,
+                                 Context->UpcaseTableLength);
+
+        if (Cmp == 0)
+        {
+            /* Exact name match. Take the first matched FileNameType — for
+             * case-insensitive lookup multiple $FILE_NAME entries (Win32 +
+             * DOS short) could exist, and the first one in tree order is
+             * fine for resolving to an MFT reference. */
+            Context->Found = TRUE;
+            Context->FoundReference = MREF(IndexEntry->FileReference);
+            return STATUS_SUCCESS;
+        }
+
+        if (Cmp < 0)
+        {
+            /* Search key is less than this entry's key. The B+ tree
+             * invariant says any matching key would live in this entry's
+             * left subtree (the child pointer attached to THIS entry).
+             * Descend if a child exists; otherwise NOT_FOUND. */
+            if (NtfslxIndexEntryHasChildNode(IndexEntry))
+            {
+                ChildVcn = *(const ULONGLONG *)
+                    ((const UCHAR *)IndexEntry + IndexEntry->Length - sizeof(ULONGLONG));
+                Status = NtfslxIndexLookupReadAndSearchChild(Context, ChildVcn);
+                if (!NT_SUCCESS(Status))
+                    return Status;
+                return STATUS_SUCCESS;
+            }
+            /* Leaf: key would have been here if present, so NOT_FOUND. */
+            return STATUS_SUCCESS;
+        }
+
+        /* Cmp > 0: search key is greater. Skip this entry and continue. */
+        if (IndexEntry->Length == 0)
+        {
+            return STATUS_FILE_CORRUPT_ERROR;
+        }
+        Offset += IndexEntry->Length;
+    }
+
+    /* Walked off the end without seeing the end marker — corrupt index. */
+    return STATUS_FILE_CORRUPT_ERROR;
+}
+
+/*
+ * NtfslxIndexLookupName - O(log N) name lookup in a $I30 directory index.
+ *
+ * Replaces NtfslxEnumerateIndexAllocationTree+callback for the path
+ * resolution use case where we know the search key up-front. The
+ * caller passes the directory's resident $INDEX_ROOT plus (if the
+ * directory is large) the $INDEX_ALLOCATION runlist; the function
+ * walks the tree comparing keys and reads only the index blocks on
+ * the descent path.
+ *
+ * Returns STATUS_SUCCESS with FoundReference set when a match is
+ * found, STATUS_OBJECT_NAME_NOT_FOUND when the descent finishes
+ * without a match, or any propagated NTFSLX read/decode error.
+ */
+NTSTATUS
+NtfslxIndexLookupName(
+    _In_reads_bytes_(IndexRootLength) const VOID *IndexRootBuffer,
+    _In_ ULONG IndexRootLength,
+    _In_ PDEVICE_OBJECT StorageDevice,
+    _In_ PNTFSLX_VOLUME_INFO VolumeInfo,
+    _In_opt_ PNTFSLX_RUNLIST_ELEMENT IndexAllocationRunlist,
+    _In_ ULONG IndexAllocationRunlistCount,
+    _In_reads_(SearchNameLength) const USHORT *SearchName,
+    _In_ ULONG SearchNameLength,
+    _In_ BOOLEAN IgnoreCase,
+    _In_reads_opt_(UpcaseTableLength) const USHORT *UpcaseTable,
+    _In_ ULONG UpcaseTableLength,
+    _In_opt_ PNTFSLX_DEVICE_EXTENSION DeviceExtension,
+    _In_ ULONGLONG ParentMftIndex,
+    _Out_ PULONGLONG FoundReference)
+{
+    NTFSLX_INDEX_LOOKUP_CONTEXT Context;
+    const NTFSLX_INDEX_ROOT_ATTRIBUTE *IndexRoot;
+    ULONG EntriesOffset;
+    ULONG IndexLength;
+    NTSTATUS Status;
+
+    if (FoundReference == NULL)
+    {
+        return STATUS_INVALID_PARAMETER;
+    }
+    *FoundReference = 0;
+
+    if (IndexRootBuffer == NULL || StorageDevice == NULL || VolumeInfo == NULL ||
+        SearchName == NULL || SearchNameLength == 0)
+    {
+        return STATUS_INVALID_PARAMETER;
+    }
+
+    if ((IndexAllocationRunlist == NULL) != (IndexAllocationRunlistCount == 0))
+    {
+        return STATUS_INVALID_PARAMETER;
+    }
+
+    IndexRoot = (const NTFSLX_INDEX_ROOT_ATTRIBUTE *)IndexRootBuffer;
+    Status = NtfslxValidateResidentIndexRoot(IndexRoot,
+                                             IndexRootLength,
+                                             &EntriesOffset,
+                                             &IndexLength);
+    if (!NT_SUCCESS(Status))
+    {
+        return Status;
+    }
+
+    if (IndexAllocationRunlist != NULL &&
+        IndexAllocationRunlist[IndexAllocationRunlistCount - 1].Length != 0)
+    {
+        return STATUS_FILE_CORRUPT_ERROR;
+    }
+
+    if (IndexRoot->Header.Flags != 0 &&
+        (IndexAllocationRunlist == NULL || IndexAllocationRunlistCount == 0))
+    {
+        return STATUS_INVALID_PARAMETER;
+    }
+
+    RtlZeroMemory(&Context, sizeof(Context));
+    Context.StorageDevice = StorageDevice;
+    Context.VolumeInfo = VolumeInfo;
+    Context.Runlist = IndexAllocationRunlist;
+    Context.IndexBlockSize = VolumeInfo->BytesPerIndexRecord;
+    Context.SearchName = SearchName;
+    Context.SearchNameLength = SearchNameLength;
+    Context.IgnoreCase = IgnoreCase;
+    Context.UpcaseTable = UpcaseTable;
+    Context.UpcaseTableLength = UpcaseTableLength;
+    Context.DeviceExtension = DeviceExtension;
+    Context.ParentMftIndex = ParentMftIndex;
+
+    Status = NtfslxIndexLookupSearchNode(&Context,
+                                         (const UCHAR *)IndexRootBuffer,
+                                         IndexRootLength,
+                                         EntriesOffset,
+                                         IndexLength);
+    if (!NT_SUCCESS(Status))
+    {
+        return Status;
+    }
+
+    if (!Context.Found)
+    {
+        return STATUS_OBJECT_NAME_NOT_FOUND;
+    }
+
+    *FoundReference = Context.FoundReference;
+    return STATUS_SUCCESS;
 }
 
 NTSTATUS

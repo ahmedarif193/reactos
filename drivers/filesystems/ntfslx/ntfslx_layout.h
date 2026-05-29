@@ -592,6 +592,76 @@ typedef struct _NTFSLX_LOG_CLIENT_RECORD
     WCHAR  ClientName[64];
 } NTFSLX_LOG_CLIENT_RECORD, *PNTFSLX_LOG_CLIENT_RECORD;
 
+/*
+ * ============================================================================
+ * Phase-1 ntfslx redo records (interim format)
+ *
+ * Compact in-house format used during T1.3 / T1.4 / T1.5. Replaced by full
+ * Microsoft LFS records once Phase 2 lands. See
+ * docs/ntfs-specs/13_ntfslx_phase1_redo_records.txt for the full design.
+ *
+ * Magic 'XLOG' on the synthetic restart page distinguishes Phase-1 logs
+ * from real Microsoft RSTR pages (which Phase-2 will eventually consume).
+ * ============================================================================
+ */
+/*
+ * Phase-1 records sit AFTER a regular Microsoft-style RSTR pair so the
+ * volume reads as "clean" to NtfslxCheckLogFile and to native Windows
+ * NTFS. The Phase-1 record stream starts at offset
+ * 2 * NTFSLX_PHASE1_RSTR_PAGE_SIZE and each header carries the
+ * NTFSLX_PHASE1_RECORD_MAGIC ('XLOG') so Phase-2 recovery can
+ * distinguish our redo records from arbitrary log-page bytes.
+ */
+#define NTFSLX_PHASE1_RECORD_MAGIC    0x474F4C58UL  /* 'XLOG' */
+#define NTFSLX_PHASE1_VERSION         1
+#define NTFSLX_PHASE1_RSTR_PAGE_SIZE  4096
+
+#define NTFSLX_PHASE1_OP_MFT_BMP_SET   0x0001
+#define NTFSLX_PHASE1_OP_MFT_BMP_CLEAR 0x0002
+#define NTFSLX_PHASE1_OP_BMP_SET_RANGE   0x0010
+#define NTFSLX_PHASE1_OP_BMP_CLEAR_RANGE 0x0011
+#define NTFSLX_PHASE1_OP_INDEX_BLOCK_UPDATE 0x0020
+#define NTFSLX_PHASE1_OP_END_OF_LOG    0xFFFF
+
+/*
+ * Phase-1 redo-record header. Records are laid out sequentially after the
+ * Microsoft-style restart-page pair (offset 2 * NTFSLX_PHASE1_RSTR_PAGE_SIZE
+ * onward). Length includes this header and is 8-byte aligned. Magic is
+ * 'XLOG' so Phase-2 recovery can scan past arbitrary log-page bytes.
+ */
+typedef struct _NTFSLX_PHASE1_LOG_RECORD
+{
+    ULONG     Magic;             /* NTFSLX_PHASE1_RECORD_MAGIC ('XLOG') */
+    USHORT    RecordType;        /* NTFSLX_PHASE1_OP_* */
+    USHORT    Length;            /* total length incl. header, 8-byte aligned */
+    ULONGLONG Lsn;               /* monotonic per volume */
+    ULONG     TransactionId;     /* group records that must replay together */
+    ULONG     Reserved;          /* zero-fill */
+    /* Payload follows directly */
+} NTFSLX_PHASE1_LOG_RECORD, *PNTFSLX_PHASE1_LOG_RECORD;
+
+/* MftBitmapSetBit / MftBitmapClearBit payload (T1.3) */
+typedef struct _NTFSLX_PHASE1_MFT_BMP_PAYLOAD
+{
+    ULONGLONG MftIndex;
+} NTFSLX_PHASE1_MFT_BMP_PAYLOAD, *PNTFSLX_PHASE1_MFT_BMP_PAYLOAD;
+
+/* ClusterBitmapSetRange / ClusterBitmapClearRange payload (T1.4) */
+typedef struct _NTFSLX_PHASE1_BMP_RANGE_PAYLOAD
+{
+    ULONGLONG StartLcn;
+    ULONGLONG Length;
+} NTFSLX_PHASE1_BMP_RANGE_PAYLOAD, *PNTFSLX_PHASE1_BMP_RANGE_PAYLOAD;
+
+/* IndexBlockUpdate payload (T1.5); BlockData[BlockLength] follows. */
+typedef struct _NTFSLX_PHASE1_INDEX_BLOCK_PAYLOAD
+{
+    ULONGLONG ParentMftIndex;
+    ULONGLONG Vcn;
+    ULONG     BlockLength;
+    ULONG     Reserved;
+} NTFSLX_PHASE1_INDEX_BLOCK_PAYLOAD, *PNTFSLX_PHASE1_INDEX_BLOCK_PAYLOAD;
+
 #include <poppack.h>
 
 /*
