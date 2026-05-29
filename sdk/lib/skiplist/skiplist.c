@@ -71,7 +71,7 @@ static BOOL
 _InsertElementSkiplistWithInformation(PSKIPLIST Skiplist, PVOID Element, PSKIPLIST_NODE* pUpdate, DWORD* dwDistance)
 {
     CHAR chNewLevel;
-    CHAR i;
+    INT i;
     PSKIPLIST_NODE pNode;
 
     // Get the highest level, on which the node shall be inserted.
@@ -145,7 +145,7 @@ _InsertElementSkiplistWithInformation(PSKIPLIST Skiplist, PVOID Element, PSKIPLI
 PVOID
 DeleteElementSkiplist(PSKIPLIST Skiplist, PVOID Element)
 {
-    CHAR i;
+    INT i;
     PSKIPLIST_NODE pLastComparedNode = NULL;
     PSKIPLIST_NODE pNode = &Skiplist->Head;
     PSKIPLIST_NODE pUpdate[SKIPLIST_LEVELS];
@@ -191,7 +191,7 @@ DeleteElementSkiplist(PSKIPLIST Skiplist, PVOID Element)
     Skiplist->FreeRoutine(pNode);
 
     // Find all levels which now contain no more nodes and reduce the maximum level of the entire Skiplist accordingly.
-    while (Skiplist->MaximumLevel > 0 && !Skiplist->Head.Next[Skiplist->MaximumLevel])
+    while (Skiplist->MaximumLevel > 0 && !Skiplist->Head.Next[(UCHAR)Skiplist->MaximumLevel])
         --Skiplist->MaximumLevel;
 
     // We've successfully deleted the node :)
@@ -249,7 +249,7 @@ InitializeSkiplist(PSKIPLIST Skiplist, PSKIPLIST_ALLOCATE_ROUTINE AllocateRoutin
 BOOL
 InsertElementSkiplist(PSKIPLIST Skiplist, PVOID Element)
 {
-    CHAR i;
+    INT i;
     DWORD dwDistance[SKIPLIST_LEVELS + 1] = { 0 };
     PSKIPLIST_NODE pLastComparedNode = NULL;
     PSKIPLIST_NODE pNode = &Skiplist->Head;
@@ -307,7 +307,7 @@ InsertElementSkiplist(PSKIPLIST Skiplist, PVOID Element)
 BOOL
 InsertTailElementSkiplist(PSKIPLIST Skiplist, PVOID Element)
 {
-    CHAR i;
+    INT i;
     DWORD dwDistance[SKIPLIST_LEVELS + 1] = { 0 };
     PSKIPLIST_NODE pNode = &Skiplist->Head;
     PSKIPLIST_NODE pUpdate[SKIPLIST_LEVELS];
@@ -356,7 +356,7 @@ InsertTailElementSkiplist(PSKIPLIST Skiplist, PVOID Element)
 PVOID
 LookupElementSkiplist(PSKIPLIST Skiplist, PVOID Element, PDWORD ElementIndex)
 {
-    CHAR i;
+    INT i;
     DWORD dwIndex = 0;
     PSKIPLIST_NODE pLastComparedNode = NULL;
     PSKIPLIST_NODE pNode = &Skiplist->Head;
@@ -411,7 +411,7 @@ LookupElementSkiplist(PSKIPLIST Skiplist, PVOID Element, PDWORD ElementIndex)
 PSKIPLIST_NODE
 LookupNodeByIndexSkiplist(PSKIPLIST Skiplist, DWORD ElementIndex)
 {
-    CHAR i;
+    INT i;
     DWORD dwIndex = 0;
     PSKIPLIST_NODE pNode = &Skiplist->Head;
 

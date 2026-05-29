@@ -88,6 +88,9 @@ RtlRaiseException(IN PEXCEPTION_RECORD ExceptionRecord)
 #ifdef _MSC_VER
 #pragma warning(push)
 #pragma warning(disable:4717) // RtlRaiseStatus is recursive by design
+#elif defined(__clang__)
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Winfinite-recursion" // RtlRaiseStatus is recursive by design
 #endif
 
 /*
@@ -145,6 +148,8 @@ RtlRaiseStatus(IN NTSTATUS Status)
 
 #ifdef _MSC_VER
 #pragma warning(pop)
+#elif defined(__clang__)
+#pragma clang diagnostic pop
 #endif
 
 #endif

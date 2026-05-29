@@ -427,7 +427,10 @@ VOID WINAPI FixSlashesAndColonW(_Inout_ LPWSTR lpwstr);
 BOOL WINAPI PathIsValidCharA(char c, DWORD dwClass);
 BOOL WINAPI PathIsValidCharW(WCHAR c, DWORD dwClass);
 BOOL WINAPI SHGetPathFromIDListWrapW(LPCITEMIDLIST pidl, LPWSTR pszPath);
-#ifndef _SHLWAPI_
+#ifdef WINSHLWAPI
+WINSHLWAPI BOOL WINAPI PathFileExistsAndAttributesA(LPCSTR lpszPath, DWORD* dwAttr);
+WINSHLWAPI BOOL WINAPI PathFileExistsAndAttributesW(LPCWSTR lpszPath, DWORD* dwAttr);
+#elif !defined(_SHLWAPI_)
 DECLSPEC_IMPORT BOOL WINAPI PathFileExistsAndAttributesA(LPCSTR lpszPath, DWORD* dwAttr);
 DECLSPEC_IMPORT BOOL WINAPI PathFileExistsAndAttributesW(LPCWSTR lpszPath, DWORD* dwAttr);
 #else

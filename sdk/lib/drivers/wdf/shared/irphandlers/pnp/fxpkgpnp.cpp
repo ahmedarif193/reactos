@@ -1691,7 +1691,7 @@ FxPkgPnp::QueryForCapabilities(
     if (NT_SUCCESS(status)) {
         ULONG states, i;
 
-        ASSERT(caps.DeviceCaps.DeviceWake <= 0xFF && caps.DeviceCaps.SystemWake <= 0xFF);
+        ASSERT((ULONG) caps.DeviceCaps.DeviceWake <= 0xFF && (ULONG) caps.DeviceCaps.SystemWake <= 0xFF);
 
         m_SystemWake = (BYTE) caps.DeviceCaps.SystemWake;
 

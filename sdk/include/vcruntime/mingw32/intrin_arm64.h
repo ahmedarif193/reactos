@@ -192,6 +192,20 @@ __INTRIN_INLINE long long _InterlockedExchangeAdd64(volatile long long *Addend, 
 }
 #endif
 
+#if !HAS_BUILTIN(_InterlockedAdd)
+__INTRIN_INLINE long _InterlockedAdd(volatile long *Addend, long Value)
+{
+    return __sync_add_and_fetch(Addend, Value);
+}
+#endif
+
+#if !HAS_BUILTIN(_InterlockedAdd64)
+__INTRIN_INLINE long long _InterlockedAdd64(volatile long long *Addend, long long Value)
+{
+    return __sync_add_and_fetch(Addend, Value);
+}
+#endif
+
 #if !HAS_BUILTIN(_InterlockedAnd)
 __INTRIN_INLINE long _InterlockedAnd(volatile long *Value, long Mask)
 {

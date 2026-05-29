@@ -121,7 +121,7 @@ FORCEINLINE
 ULONG
 KeGetCurrentProcessorNumber(VOID)
 {
-    extern ULONG NTAPI KeGetCurrentProcessorNumberEx(
+    extern NTKERNELAPI ULONG NTAPI KeGetCurrentProcessorNumberEx(
         _Out_opt_ PPROCESSOR_NUMBER ProcNumber);
     return KeGetCurrentProcessorNumberEx(NULL);
 }
@@ -201,7 +201,7 @@ FORCEINLINE
 ULONG
 KeGetCurrentProcessorIndex(VOID)
 {
-    extern ULONG NTAPI KeGetCurrentProcessorNumberEx(
+    extern NTKERNELAPI ULONG NTAPI KeGetCurrentProcessorNumberEx(
         _Out_opt_ PPROCESSOR_NUMBER ProcNumber);
     return KeGetCurrentProcessorNumberEx(NULL);
 }
