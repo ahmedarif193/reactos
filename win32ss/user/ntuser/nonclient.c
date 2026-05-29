@@ -408,6 +408,12 @@ DefWndDoSizeMove(PWND pwnd, WORD wParam)
       }
       if (IntCallMsgFilter( &msg, MSGF_SIZE )) continue;
 
+      if (msg.message == WM_QUIT)
+      {
+         MsqPostQuitMessage(pti, (ULONG)msg.wParam);
+         break;
+      }
+
       if (msg.message == WM_KEYDOWN && (msg.wParam == VK_RETURN || msg.wParam == VK_ESCAPE))
          break; // Exit on Return or Esc
 
