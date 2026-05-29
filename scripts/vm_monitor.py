@@ -131,10 +131,33 @@ boot_image_path = REACTOS_IMG
 vm_cleanup_done = False
 
 
+def read_cmake_cache_arch():
+    """Return ARCH from CMakeCache.txt when the build tree has it."""
+    cache_path = os.path.join(BUILD_DIR, "CMakeCache.txt")
+
+    try:
+        with open(cache_path, "r", encoding="utf-8", errors="replace") as cache_file:
+            for line in cache_file:
+                if line.startswith("ARCH:STRING="):
+                    arch = line.split("=", 1)[1].strip().lower()
+                    if arch in ("i386", "amd64", "arm64"):
+                        return arch
+    except OSError:
+        pass
+
+    return None
+
+
 def detect_target_arch():
-    """Detect target architecture from build directory name."""
+    """Detect target architecture from the current build tree."""
     global target_arch
-    build_dir_lower = BUILD_DIR.lower()
+
+    cache_arch = read_cmake_cache_arch()
+    if cache_arch:
+        target_arch = cache_arch
+        return target_arch
+
+    build_dir_lower = os.path.basename(BUILD_DIR).lower()
     
     if "arm64" in build_dir_lower or "aarch64" in build_dir_lower:
         target_arch = "arm64"
@@ -437,14 +460,6 @@ def force_kill_vm():
 
 def build_ninja_target(target):
     """Build a Ninja target before starting VM."""
-    global target_arch
-
-    # Detect architecture first if not set
-    if target_arch == "amd64":
-        build_dir_lower = BUILD_DIR.lower()
-        if "arm64" in build_dir_lower or "aarch64" in build_dir_lower:
-            target_arch = "arm64"
-
     print(f"Building {target} in {BUILD_DIR}...")
     try:
         build_env = os.environ.copy()
@@ -757,7 +772,6 @@ def start_qemu(rpi_mode=False, smp=4):
                         "-drive", f"file={img_path}",
                     ]),
                     "-serial", "stdio",
-                    "-display", "none",
                     "-no-reboot",
                     "-no-shutdown",
                     "-device", "qemu-xhci,id=xhci",
@@ -1661,7 +1675,7 @@ def main():
 
     parser = argparse.ArgumentParser(description='VM Monitor Script')
     parser.add_argument('--qemu', action='store_true',
-                        help='Use QEMU instead of VirtualBox; ARM64 builds and boots livecd.iso')
+                        help='Use QEMU instead of VirtualBox; by default builds and boots livecd.iso')
     parser.add_argument('--vbox', action='store_true', help='Use VirtualBox (default behavior)')
     parser.add_argument('--rpi', action='store_true', help='Use Raspberry Pi emulation mode (cortex-a72, no HVF)')
     parser.add_argument('--smp', type=int, default=4, help='Number of CPU cores (default: 4)')
@@ -1700,6 +1714,10 @@ def main():
             build_target = "livecd"
         else:
             build_target = None
+    elif use_qemu:
+        boot_media = "iso"
+        boot_image_path = LIVECD_ISO
+        build_target = "livecd"
     
     # Force QEMU for ARM64 (VirtualBox does not exist for arm64)
     if target_arch == "arm64":
