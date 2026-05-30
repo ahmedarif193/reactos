@@ -19,6 +19,10 @@ extern "C" {
 #define _1MB (1024 * _1KB)
 #define _1GB (1024 * _1MB)
 
+#if defined(_M_ARM64)
+#define MI_ARM64_BOOT_POOL_SIZING_PAGES ((512 * _1MB) / PAGE_SIZE)
+#endif
+
 /* Everyone loves 64K */
 #define _64K (64 * _1KB)
 
@@ -243,6 +247,10 @@ extern const ULONG MmProtectToValue[32];
 // This is used as a LIST_HEAD for the colored list
 //
 #define COLORED_LIST_HEAD (((ULONG_PTR)1 << MI_PTE_FRAME_BITS) - 1)
+
+#if defined(_M_ARM64)
+#define MI_ARM64_UNCOLORED_FREE_PTEFRAME (COLORED_LIST_HEAD - 1)
+#endif
 
 //
 // Returns the color of a page
