@@ -501,12 +501,12 @@ MiScanMemoryDescriptors(IN PLOADER_PARAMETER_BLOCK LoaderBlock)
         DPRINT("MD Type: %lx Base: %lx Count: %lx\n",
             Descriptor->MemoryType, Descriptor->BasePage, Descriptor->PageCount);
 
-        /* Count this descriptor */
-        MiNumberDescriptors++;
-
         /* If this is invisible memory, ignore this descriptor */
         if (MiIsMemoryTypeInvisible(Descriptor->MemoryType))
             continue;
+
+        /* Count this descriptor */
+        MiNumberDescriptors++;
 
         /* Check if this isn't bad memory */
         if (Descriptor->MemoryType != LoaderBad)
@@ -770,9 +770,7 @@ MiMapPfnDatabase(IN PLOADER_PARAMETER_BLOCK LoaderBlock)
         MdBlock = CONTAINING_RECORD(NextEntry,
                                     MEMORY_ALLOCATION_DESCRIPTOR,
                                     ListEntry);
-        if ((MdBlock->MemoryType == LoaderFirmwarePermanent) ||
-            (MdBlock->MemoryType == LoaderBBTMemory) ||
-            (MdBlock->MemoryType == LoaderSpecialMemory))
+        if (MiIsMemoryTypeInvisible(MdBlock->MemoryType))
         {
             /* These pages are not part of the PFN database */
             NextEntry = MdBlock->ListEntry.Flink;
@@ -1047,6 +1045,84 @@ MiBuildPfnDatabaseZeroPage(VOID)
     }
 }
 
+#if defined(_M_ARM64)
+static
+CODE_SEG("INIT")
+VOID
+MiArm64AddAvailablePages(
+    _In_ PFN_COUNT PageCount)
+{
+    PFN_COUNT OldAvailablePages = MmAvailablePages;
+
+    MmAvailablePages += PageCount;
+
+    if ((OldAvailablePages < MmLowMemoryThreshold) &&
+        (MmAvailablePages >= MmLowMemoryThreshold))
+    {
+        KeClearEvent(MiLowMemoryEvent);
+    }
+
+    if ((OldAvailablePages < MmHighMemoryThreshold) &&
+        (MmAvailablePages >= MmHighMemoryThreshold))
+    {
+        KeSetEvent(MiHighMemoryEvent, 0, FALSE);
+    }
+}
+
+static
+CODE_SEG("INIT")
+VOID
+MiArm64InsertFreePfnRun(
+    _In_ PFN_NUMBER BasePage,
+    _In_ PFN_COUNT PageCount)
+{
+    PFN_NUMBER PageFrameIndex, HighPage, OldBlink;
+    PMMPFNLIST ListHead;
+    PMMPFN Pfn1;
+
+    ASSERT(PageCount != 0);
+    ASSERT(BasePage != 0);
+    ASSERT(BasePage >= MmLowestPhysicalPage);
+    ASSERT((BasePage + PageCount - 1) <= MmHighestPhysicalPage);
+
+    ListHead = &MmFreePageListHead;
+
+    HighPage = BasePage + PageCount - 1;
+    OldBlink = ListHead->Blink;
+
+    if (OldBlink != LIST_HEAD)
+    {
+        MI_PFN_ELEMENT(OldBlink)->u1.Flink = BasePage;
+    }
+    else
+    {
+        ListHead->Flink = BasePage;
+    }
+
+    ListHead->Blink = HighPage;
+    ListHead->Total += PageCount;
+
+    for (PageFrameIndex = BasePage; PageFrameIndex <= HighPage; PageFrameIndex++)
+    {
+        Pfn1 = MI_PFN_ELEMENT(PageFrameIndex);
+
+        ASSERT(Pfn1->u4.MustBeCached == 0);
+        ASSERT(Pfn1->u3.e1.Rom != 1);
+        ASSERT(Pfn1->u3.e1.RemovalRequested == 0);
+        ASSERT(Pfn1->u4.VerifierAllocation == 0);
+        ASSERT(Pfn1->u3.e2.ReferenceCount == 0);
+
+        Pfn1->u1.Flink = (PageFrameIndex == HighPage) ? LIST_HEAD : PageFrameIndex + 1;
+        Pfn1->u2.Blink = (PageFrameIndex == BasePage) ? OldBlink : PageFrameIndex - 1;
+        Pfn1->u3.e1.PageLocation = FreePageList;
+        Pfn1->u4.PteFrame = MI_ARM64_UNCOLORED_FREE_PTEFRAME;
+        Pfn1->u4.Priority = 3;
+    }
+
+    MiArm64AddAvailablePages(PageCount);
+}
+#endif
+
 CODE_SEG("INIT")
 VOID
 NTAPI
@@ -1107,6 +1183,88 @@ MiBuildPfnDatabaseFromLoaderBlock(IN PLOADER_PARAMETER_BLOCK LoaderBlock)
             case LoaderFirmwareTemporary:
             case LoaderOsloaderStack:
 
+#if defined(_M_ARM64)
+            {
+                PFN_NUMBER RunBase = 0;
+                PFN_COUNT RunCount = 0;
+                PFN_COUNT RemainingPages;
+                BOOLEAN NotifyZeroThread;
+
+                /* Lock the PFN Database */
+                OldIrql = MiAcquirePfnLock();
+
+                if (PageFrameIndex == 0)
+                {
+                    PageFrameIndex++;
+                    PageCount--;
+                }
+
+                if (PageCount != 0)
+                {
+                    if (MdBlock == MxFreeDescriptor)
+                    {
+                        MiArm64InsertFreePfnRun(PageFrameIndex, PageCount);
+                    }
+                    else
+                    {
+                        PageFrameIndex += PageCount - 1;
+                        Pfn1 = MiGetPfnEntry(PageFrameIndex);
+                        RemainingPages = PageCount;
+
+                        while (RemainingPages--)
+                        {
+                            if (!Pfn1->u3.e2.ReferenceCount)
+                            {
+                                Pfn1->u3.e1.CacheAttribute = MiNonCached;
+
+                                if (RunCount == 0)
+                                {
+                                    RunBase = PageFrameIndex;
+                                    RunCount = 1;
+                                }
+                                else if (PageFrameIndex == (RunBase - 1))
+                                {
+                                    RunBase = PageFrameIndex;
+                                    RunCount++;
+                                }
+                                else
+                                {
+                                    MiArm64InsertFreePfnRun(RunBase, RunCount);
+                                    RunBase = PageFrameIndex;
+                                    RunCount = 1;
+                                }
+                            }
+                            else if (RunCount != 0)
+                            {
+                                MiArm64InsertFreePfnRun(RunBase, RunCount);
+                                RunCount = 0;
+                            }
+
+                            Pfn1--;
+                            PageFrameIndex--;
+                        }
+
+                        if (RunCount != 0)
+                        {
+                            MiArm64InsertFreePfnRun(RunBase, RunCount);
+                        }
+                    }
+                }
+
+                NotifyZeroThread = (MmFreePageListHead.Total >= 8);
+
+                /* Release PFN database */
+                MiReleasePfnLock(OldIrql);
+
+                if (NotifyZeroThread)
+                {
+                    KeSetEvent(&MmZeroingPageEvent, IO_NO_INCREMENT, FALSE);
+                }
+
+                /* Done with this block */
+                break;
+            }
+#else
                 /* Get the last page of this descriptor. Note we loop backwards */
                 PageFrameIndex += PageCount - 1;
                 Pfn1 = MiGetPfnEntry(PageFrameIndex);
@@ -1133,10 +1291,12 @@ MiBuildPfnDatabaseFromLoaderBlock(IN PLOADER_PARAMETER_BLOCK LoaderBlock)
 
                 /* Done with this block */
                 break;
+#endif
 
             /* Check for pages that are invisible to us */
             case LoaderFirmwarePermanent:
             case LoaderSpecialMemory:
+            case LoaderHALCachedMemory:
             case LoaderBBTMemory:
 
                 /* Leave them out of the free/active lists */
@@ -1240,12 +1400,14 @@ MiInitializePfnDatabase(IN PLOADER_PARAMETER_BLOCK LoaderBlock)
     /* Scan memory and start setting up PFN entries */
     MiBuildPfnDatabaseFromPages(LoaderBlock);
 #endif
+    DPRINT1("[BOOTPROF 12a] PfnDb: loader-mapped/page-scan PFNs done\n");
 
     /* Add the zero page */
     MiBuildPfnDatabaseZeroPage();
 
     /* Scan the loader block and build the rest of the PFN database */
     MiBuildPfnDatabaseFromLoaderBlock(LoaderBlock);
+    DPRINT1("[BOOTPROF 12b] PfnDb: FromLoaderBlock free-list build done\n");
 
     /* Finally add the pages for the PFN database itself */
     MiBuildPfnDatabaseSelf();
@@ -1830,6 +1992,7 @@ MmInitializeMemoryLimits(IN PLOADER_PARAMETER_BLOCK LoaderBlock,
     PFN_NUMBER NextPage = -1, PageCount = 0;
     PPHYSICAL_MEMORY_DESCRIPTOR Buffer, NewBuffer;
     PMEMORY_ALLOCATION_DESCRIPTOR MdBlock;
+    PFN_NUMBER BasePage, DescriptorPageCount;
 
     //
     // Start with the maximum we might need
@@ -1866,30 +2029,42 @@ MmInitializeMemoryLimits(IN PLOADER_PARAMETER_BLOCK LoaderBlock,
         if ((MdBlock->MemoryType < LoaderMaximum) &&
             (IncludeType[MdBlock->MemoryType]))
         {
+            BasePage = MdBlock->BasePage;
+            DescriptorPageCount = MdBlock->PageCount;
+
+#if defined(_M_ARM64)
+            if ((MdBlock == MxFreeDescriptor) &&
+                (MxOldFreeDescriptor.PageCount != 0))
+            {
+                BasePage = MxOldFreeDescriptor.BasePage;
+                DescriptorPageCount = MxOldFreeDescriptor.PageCount;
+            }
+#endif
+
             //
             // Add this to our running total
             //
-            PageCount += MdBlock->PageCount;
+            PageCount += DescriptorPageCount;
 
             //
             // Check if the next page is described by the next descriptor
             //
-            if (MdBlock->BasePage == NextPage)
+            if (BasePage == NextPage)
             {
                 //
                 // Combine it into the same physical run
                 //
-                ASSERT(MdBlock->PageCount != 0);
-                Buffer->Run[Run - 1].PageCount += MdBlock->PageCount;
-                NextPage += MdBlock->PageCount;
+                ASSERT(DescriptorPageCount != 0);
+                Buffer->Run[Run - 1].PageCount += DescriptorPageCount;
+                NextPage += DescriptorPageCount;
             }
             else
             {
                 //
                 // Otherwise just duplicate the descriptor's contents
                 //
-                Buffer->Run[Run].BasePage = MdBlock->BasePage;
-                Buffer->Run[Run].PageCount = MdBlock->PageCount;
+                Buffer->Run[Run].BasePage = BasePage;
+                Buffer->Run[Run].PageCount = DescriptorPageCount;
                 NextPage = Buffer->Run[Run].BasePage + Buffer->Run[Run].PageCount;
 
                 //
@@ -2283,11 +2458,17 @@ MmArmInitSystem(IN ULONG Phase,
     IncludeType[LoaderBad] = FALSE;
     IncludeType[LoaderFirmwarePermanent] = FALSE;
     IncludeType[LoaderSpecialMemory] = FALSE;
+    IncludeType[LoaderHALCachedMemory] = FALSE;
     IncludeType[LoaderBBTMemory] = FALSE;
     if (Phase == 0)
     {
         /* Count physical pages on the system */
         MiScanMemoryDescriptors(LoaderBlock);
+#if defined(_M_ARM64)
+        DPRINT1("[BOOTPROF 06a] Mm: ARM64 PFN range scanned; highest PFN 0x%lx, pages 0x%lx\n",
+                MmHighestPhysicalPage,
+                MmNumberOfPhysicalPages);
+#endif
 
         /* Initialize the phase 0 temporary event */
         KeInitializeEvent(&MiTempEvent, NotificationEvent, FALSE);
@@ -2519,7 +2700,9 @@ MmArmInitSystem(IN ULONG Phase,
         MxPfnAllocation++;
 
         /* Initialize the platform-specific parts */
+        DPRINT1("[BOOTPROF 07] Mm: calling MiInitMachineDependent\n");
         MiInitMachineDependent(LoaderBlock);
+        DPRINT1("[BOOTPROF 14] Mm: MiInitMachineDependent returned\n");
 
         //
         // x86 uses the loader-gap region
@@ -2614,34 +2797,6 @@ MmArmInitSystem(IN ULONG Phase,
             }
         }
 
-#if defined(_M_ARM64)
-        /*
-         * ARM64 consumes pages from MxFreeDescriptor while building the early
-         * PFN database, nonpaged pool, and bootstrap page tables. The descriptor
-         * is advanced before MmInitializeMemoryLimits builds MmPhysicalMemoryBlock,
-         * but those consumed pages still have PFN entries and remain valid
-         * allocated RAM. Keep MiGetPfnEntry from rejecting them once MiPfnBitMap
-         * becomes active.
-         */
-        if (MxOldFreeDescriptor.PageCount != 0)
-        {
-            PFN_NUMBER BasePage = MxOldFreeDescriptor.BasePage;
-            PFN_NUMBER EndPage = BasePage + MxOldFreeDescriptor.PageCount;
-
-            if (EndPage > (MmHighestPhysicalPage + 1))
-            {
-                EndPage = MmHighestPhysicalPage + 1;
-            }
-
-            if (BasePage < EndPage)
-            {
-                RtlSetBits(&MiPfnBitMap,
-                           (ULONG)BasePage,
-                           (ULONG)(EndPage - BasePage));
-            }
-        }
-#endif
-
         /* Look for large page cache entries that need caching */
         MiSyncCachedRanges();
 
@@ -2649,6 +2804,7 @@ MmArmInitSystem(IN ULONG Phase,
         MiAddHalIoMappings();
 
         /* Initialize large page structures on PAE/x64, and MmProcessList on x86 */
+        DPRINT1("[BOOTPROF 15] Mm: PFN bitmap built; calling MiInitializeLargePageSupport\n");
         MiInitializeLargePageSupport();
 
         /* Check if the registry says any drivers should be loaded with large pages */

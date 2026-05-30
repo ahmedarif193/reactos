@@ -142,6 +142,9 @@ MiUnlinkFreeOrZeroedPage(IN PMMPFN Entry)
     ULONG Color;
     PMMCOLOR_TABLES ColorTable;
     PMMPFN Pfn1;
+#if defined(_M_ARM64)
+    BOOLEAN UncoloredPage;
+#endif
 
     /* Make sure the PFN lock is held */
     MI_ASSERT_PFN_LOCK_HELD();
@@ -156,6 +159,11 @@ MiUnlinkFreeOrZeroedPage(IN PMMPFN Entry)
     ASSERT(ListHead != NULL);
     ASSERT(ListName <= FreePageList);
     ASSERT_LIST_INVARIANT(ListHead);
+
+#if defined(_M_ARM64)
+    UncoloredPage = ((ListName == FreePageList) &&
+                     (Entry->u4.PteFrame == MI_ARM64_UNCOLORED_FREE_PTEFRAME));
+#endif
 
     /* Remove one count */
     ASSERT(ListHead->Total != 0);
@@ -189,56 +197,67 @@ MiUnlinkFreeOrZeroedPage(IN PMMPFN Entry)
         ListHead->Flink = OldFlink;
     }
 
-    /* Get the page color */
-    OldBlink = MiGetPfnEntryIndex(Entry);
-    Color = OldBlink & MmSecondaryColorMask;
-
-    /* Get the first page on the color list */
-    ColorTable = &MmFreePagesByColor[ListName][Color];
-
-    /* Check if this was was actually the head */
-    OldFlink = ColorTable->Flink;
-    if (OldFlink == OldBlink)
+#if defined(_M_ARM64)
+    if (!UncoloredPage)
+#endif
     {
-        /* Make the table point to the next page this page was linking to */
-        ColorTable->Flink = Entry->OriginalPte.u.Long;
-        if (ColorTable->Flink != LIST_HEAD)
+        /* Get the page color */
+        OldBlink = MiGetPfnEntryIndex(Entry);
+        Color = OldBlink & MmSecondaryColorMask;
+
+        /* Get the first page on the color list */
+        ColorTable = &MmFreePagesByColor[ListName][Color];
+
+        /* Check if this was was actually the head */
+        OldFlink = ColorTable->Flink;
+        if (OldFlink == OldBlink)
         {
-            /* And make the previous link point to the head now */
-            MI_PFN_ELEMENT(ColorTable->Flink)->u4.PteFrame = COLORED_LIST_HEAD;
+            /* Make the table point to the next page this page was linking to */
+            ColorTable->Flink = Entry->OriginalPte.u.Long;
+            if (ColorTable->Flink != LIST_HEAD)
+            {
+                /* And make the previous link point to the head now */
+                MI_PFN_ELEMENT(ColorTable->Flink)->u4.PteFrame = COLORED_LIST_HEAD;
+            }
+            else
+            {
+                /* And if that page was the head, loop the list back around */
+                ColorTable->Blink = (PVOID)LIST_HEAD;
+            }
         }
         else
         {
-            /* And if that page was the head, loop the list back around */
-            ColorTable->Blink = (PVOID)LIST_HEAD;
+            /* This page shouldn't be pointing back to the head */
+            ASSERT(Entry->u4.PteFrame != COLORED_LIST_HEAD);
+
+            /* Make the back link point to whoever the next page is */
+            Pfn1 = MI_PFN_ELEMENT(Entry->u4.PteFrame);
+            Pfn1->OriginalPte.u.Long = Entry->OriginalPte.u.Long;
+
+            /* Check if this page was pointing to the head */
+            if (Entry->OriginalPte.u.Long != LIST_HEAD)
+            {
+                /* Make the back link point to the head */
+                Pfn1 = MI_PFN_ELEMENT(Entry->OriginalPte.u.Long);
+                Pfn1->u4.PteFrame = Entry->u4.PteFrame;
+            }
+            else
+            {
+                /* Then the table is directly back pointing to this page now */
+                ColorTable->Blink = Pfn1;
+            }
         }
+
+        /* One less colored page */
+        ASSERT(ColorTable->Count >= 1);
+        ColorTable->Count--;
     }
+#if defined(_M_ARM64)
     else
     {
-        /* This page shouldn't be pointing back to the head */
-        ASSERT(Entry->u4.PteFrame != COLORED_LIST_HEAD);
-
-        /* Make the back link point to whoever the next page is */
-        Pfn1 = MI_PFN_ELEMENT(Entry->u4.PteFrame);
-        Pfn1->OriginalPte.u.Long = Entry->OriginalPte.u.Long;
-
-        /* Check if this page was pointing to the head */
-        if (Entry->OriginalPte.u.Long != LIST_HEAD)
-        {
-            /* Make the back link point to the head */
-            Pfn1 = MI_PFN_ELEMENT(Entry->OriginalPte.u.Long);
-            Pfn1->u4.PteFrame = Entry->u4.PteFrame;
-        }
-        else
-        {
-            /* Then the table is directly back pointing to this page now */
-            ColorTable->Blink = Pfn1;
-        }
+        Entry->u4.PteFrame = 0;
     }
-
-    /* One less colored page */
-    ASSERT(ColorTable->Count >= 1);
-    ColorTable->Count--;
+#endif
 
     /* ReactOS Hack */
     Entry->OriginalPte.u.Long = 0;
@@ -370,6 +389,9 @@ MiRemovePageByColor(IN PFN_NUMBER PageIndex,
     PFN_NUMBER OldFlink, OldBlink;
     USHORT OldColor, OldCache;
     PMMCOLOR_TABLES ColorTable;
+#if defined(_M_ARM64)
+    BOOLEAN UncoloredPage;
+#endif
 
     /* Make sure PFN lock is held */
     MI_ASSERT_PFN_LOCK_HELD();
@@ -389,6 +411,11 @@ MiRemovePageByColor(IN PFN_NUMBER PageIndex,
     ASSERT_LIST_INVARIANT(ListHead);
     ListName = ListHead->ListName;
     ASSERT(ListName <= FreePageList);
+
+#if defined(_M_ARM64)
+    UncoloredPage = ((ListName == FreePageList) &&
+                     (Pfn1->u4.PteFrame == MI_ARM64_UNCOLORED_FREE_PTEFRAME));
+#endif
 
     /* Remove a page */
     ListHead->Total--;
@@ -430,28 +457,39 @@ MiRemovePageByColor(IN PFN_NUMBER PageIndex,
     Pfn1->u3.e1.PageColor = OldColor;
     Pfn1->u3.e1.CacheAttribute = OldCache;
 
-    /* Get the first page on the color list */
-    ASSERT(Color < MmSecondaryColors);
-    ColorTable = &MmFreePagesByColor[ListName][Color];
-    ASSERT(ColorTable->Count >= 1);
-
-    /* Set the forward link to whoever we were pointing to */
-    ColorTable->Flink = Pfn1->OriginalPte.u.Long;
-
-    /* Get the first page on the color list */
-    if (ColorTable->Flink == LIST_HEAD)
+#if defined(_M_ARM64)
+    if (!UncoloredPage)
+#endif
     {
-        /* This is the beginning of the list, so set the sentinel value */
-        ColorTable->Blink = (PVOID)LIST_HEAD;
+        /* Get the first page on the color list */
+        ASSERT(Color < MmSecondaryColors);
+        ColorTable = &MmFreePagesByColor[ListName][Color];
+        ASSERT(ColorTable->Count >= 1);
+
+        /* Set the forward link to whoever we were pointing to */
+        ColorTable->Flink = Pfn1->OriginalPte.u.Long;
+
+        /* Get the first page on the color list */
+        if (ColorTable->Flink == LIST_HEAD)
+        {
+            /* This is the beginning of the list, so set the sentinel value */
+            ColorTable->Blink = (PVOID)LIST_HEAD;
+        }
+        else
+        {
+            /* The list is empty, so we are the first page */
+            MI_PFN_ELEMENT(ColorTable->Flink)->u4.PteFrame = COLORED_LIST_HEAD;
+        }
+
+        /* One less page */
+        ColorTable->Count--;
     }
+#if defined(_M_ARM64)
     else
     {
-        /* The list is empty, so we are the first page */
-        MI_PFN_ELEMENT(ColorTable->Flink)->u4.PteFrame = COLORED_LIST_HEAD;
+        Pfn1->u4.PteFrame = 0;
     }
-
-    /* One less page */
-    ColorTable->Count--;
+#endif
 
     /* ReactOS Hack */
     Pfn1->OriginalPte.u.Long = 0;
