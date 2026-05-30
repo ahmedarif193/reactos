@@ -32,8 +32,29 @@ typedef enum _EXTENSION_TYPE
 typedef enum _PDO_TYPE
 {
     AcpiPdo = 0x80,
-    WdPdo
+    WdPdo,
+    SdHostPdo
 } PDO_TYPE;
+
+/*
+ * Raspberry Pi 5 (BCM2712) on-chip SD/eMMC host controller.
+ *
+ * The microSD slot is driven by the SoC-internal Arasan/brcmstb SDHCI block
+ * (DT "brcm,sdhci-brcmstb", node mmc@fff000). It is not a PCI function and is
+ * absent from the RPi5 UEFI ACPI tables, so neither pci.sys nor acpi.sys can
+ * enumerate it. We report it here as a child of the HAL bus; it advertises the
+ * PCI\CC_0805 compatible ID so the CriticalDeviceDatabase binds sdbus.sys.
+ *
+ * From bcm2712-rpi-5-b.dtb: soc ranges <0 0x10 0 ...> maps soc-local 0 to CPU
+ * phys 0x1000000000, so host reg 0xfff000 -> 0x1000FFF000; interrupts
+ * <GIC_SPI 273 LEVEL_HIGH> -> GIC INTID 273 + 32 = 305.
+ */
+#define HALP_RPI5_SD_HOST_PHYS      0x1000FFF000ULL
+#define HALP_RPI5_SD_HOST_LENGTH    0x260
+#define HALP_RPI5_SD_GSI            305
+
+/* Set by Bcm2712PciProbe() in bcm2712_pci.c when running on a Raspberry Pi 5. */
+extern BOOLEAN Bcm2712Detected;
 
 typedef enum _HALP_PNP_STATE
 {
@@ -272,6 +293,155 @@ HalpPortRangeFreeRange(
 
 /* PRIVATE FUNCTIONS **********************************************************/
 
+/*
+ * Build the boot (raw) resource list for the Raspberry Pi 5 SD host: the SDHCI
+ * register window plus its GIC SPI. The raw GSI is placed in u.Interrupt.Level;
+ * IopTranslateDeviceResources re-runs it through HalGetInterruptVector to fill
+ * the translated vector/IRQL that sdbus.sys consumes.
+ */
+static
+NTSTATUS
+HalpBuildRpi5SdResources(
+    _Out_ PCM_RESOURCE_LIST *Resources)
+{
+    PCM_RESOURCE_LIST List;
+    PCM_PARTIAL_RESOURCE_DESCRIPTOR Desc;
+    ULONG Size;
+
+    /* CM_RESOURCE_LIST already covers one partial descriptor; add one more. */
+    Size = sizeof(CM_RESOURCE_LIST) + sizeof(CM_PARTIAL_RESOURCE_DESCRIPTOR);
+    List = ExAllocatePoolZero(PagedPool, Size, TAG_HAL);
+    if (!List)
+        return STATUS_INSUFFICIENT_RESOURCES;
+
+    List->Count = 1;
+    List->List[0].InterfaceType = PNPBus;
+    List->List[0].BusNumber = 0;
+    List->List[0].PartialResourceList.Version = 1;
+    List->List[0].PartialResourceList.Revision = 1;
+    List->List[0].PartialResourceList.Count = 2;
+
+    Desc = List->List[0].PartialResourceList.PartialDescriptors;
+
+    Desc->Type = CmResourceTypeMemory;
+    Desc->ShareDisposition = CmResourceShareDeviceExclusive;
+    Desc->Flags = CM_RESOURCE_MEMORY_READ_WRITE;
+    Desc->u.Memory.Start.QuadPart = HALP_RPI5_SD_HOST_PHYS;
+    Desc->u.Memory.Length = HALP_RPI5_SD_HOST_LENGTH;
+    Desc++;
+
+    Desc->Type = CmResourceTypeInterrupt;
+    Desc->ShareDisposition = CmResourceShareDeviceExclusive;
+    Desc->Flags = CM_RESOURCE_INTERRUPT_LEVEL_SENSITIVE;
+    Desc->u.Interrupt.Level = HALP_RPI5_SD_GSI;
+    Desc->u.Interrupt.Vector = HALP_RPI5_SD_GSI;
+    Desc->u.Interrupt.Affinity = (KAFFINITY)-1;
+
+    *Resources = List;
+    return STATUS_SUCCESS;
+}
+
+/* Build the matching resource requirements (fixed address + fixed GIC SPI). */
+static
+NTSTATUS
+HalpBuildRpi5SdRequirements(
+    _Out_ PIO_RESOURCE_REQUIREMENTS_LIST *Requirements)
+{
+    PIO_RESOURCE_REQUIREMENTS_LIST List;
+    PIO_RESOURCE_DESCRIPTOR Desc;
+    ULONG Size;
+
+    /* One alternative list holding a memory range and an interrupt. */
+    Size = sizeof(IO_RESOURCE_REQUIREMENTS_LIST) + sizeof(IO_RESOURCE_DESCRIPTOR);
+    List = ExAllocatePoolZero(PagedPool, Size, TAG_HAL);
+    if (!List)
+        return STATUS_INSUFFICIENT_RESOURCES;
+
+    List->ListSize = Size;
+    List->InterfaceType = PNPBus;
+    List->BusNumber = 0;
+    List->SlotNumber = 0;
+    List->AlternativeLists = 1;
+    List->List[0].Version = 1;
+    List->List[0].Revision = 1;
+    List->List[0].Count = 2;
+
+    Desc = List->List[0].Descriptors;
+
+    Desc->Type = CmResourceTypeMemory;
+    Desc->ShareDisposition = CmResourceShareDeviceExclusive;
+    Desc->Flags = CM_RESOURCE_MEMORY_READ_WRITE;
+    Desc->u.Memory.Length = HALP_RPI5_SD_HOST_LENGTH;
+    Desc->u.Memory.Alignment = 1;
+    Desc->u.Memory.MinimumAddress.QuadPart = HALP_RPI5_SD_HOST_PHYS;
+    Desc->u.Memory.MaximumAddress.QuadPart =
+        HALP_RPI5_SD_HOST_PHYS + HALP_RPI5_SD_HOST_LENGTH - 1;
+    Desc++;
+
+    Desc->Type = CmResourceTypeInterrupt;
+    Desc->ShareDisposition = CmResourceShareDeviceExclusive;
+    Desc->Flags = CM_RESOURCE_INTERRUPT_LEVEL_SENSITIVE;
+    Desc->u.Interrupt.MinimumVector = HALP_RPI5_SD_GSI;
+    Desc->u.Interrupt.MaximumVector = HALP_RPI5_SD_GSI;
+
+    *Requirements = List;
+    return STATUS_SUCCESS;
+}
+
+/*
+ * Raspberry Pi 5: report the BCM2712 SD/eMMC host controller as a child PDO of
+ * the HAL bus so sdbus.sys can drive the microSD slot. Best-effort: a failure
+ * here just means no SD, so it never aborts HAL device startup.
+ */
+static
+VOID
+HalpCreateRpi5SdPdo(
+    _In_ PDRIVER_OBJECT DriverObject,
+    _In_ PFDO_EXTENSION FdoExtension,
+    _In_ PDEVICE_OBJECT FdoDeviceObject)
+{
+    NTSTATUS Status;
+    PDEVICE_OBJECT PdoDeviceObject;
+    PPDO_EXTENSION PdoExtension;
+
+    Status = IoCreateDevice(DriverObject,
+                            sizeof(PDO_EXTENSION),
+                            NULL,
+                            FILE_DEVICE_BUS_EXTENDER,
+                            FILE_AUTOGENERATED_DEVICE_NAME,
+                            FALSE,
+                            &PdoDeviceObject);
+    if (!NT_SUCCESS(Status))
+    {
+        DPRINT1("HAL: Could not create Raspberry Pi 5 SD PDO (0x%08x)\n", Status);
+        return;
+    }
+
+    PdoExtension = PdoDeviceObject->DeviceExtension;
+    PdoExtension->ExtensionType = PdoExtensionType;
+    PdoExtension->PhysicalDeviceObject = PdoDeviceObject;
+    PdoExtension->ParentFdoExtension = FdoExtension;
+    PdoExtension->ParentFdoDeviceObject = FdoDeviceObject;
+    ObReferenceObject(FdoDeviceObject);
+    PdoExtension->PdoType = SdHostPdo;
+    ExInitializeFastMutex(&PdoExtension->PnpStateLock);
+    PdoExtension->PnpState = HalpPnpStateNotStarted;
+    PdoExtension->PreviousPnpState = HalpPnpStateNotStarted;
+    PdoExtension->CurrentDevicePowerState = PowerDeviceD3;
+    PdoExtension->CurrentSystemPowerState = PowerSystemWorking;
+    PdoExtension->InterfaceReferenceCount = 0;
+
+    ExAcquireFastMutex(&FdoExtension->ChildPdoLock);
+    PdoExtension->Next = FdoExtension->ChildPdoList;
+    FdoExtension->ChildPdoList = PdoExtension;
+    ExReleaseFastMutex(&FdoExtension->ChildPdoLock);
+
+    PdoDeviceObject->Flags &= ~DO_DEVICE_INITIALIZING;
+
+    DPRINT1("HAL: Reported Raspberry Pi 5 SD host (phys 0x%I64x len 0x%x GSI %u)\n",
+            (ULONGLONG)HALP_RPI5_SD_HOST_PHYS, HALP_RPI5_SD_HOST_LENGTH, HALP_RPI5_SD_GSI);
+}
+
 NTSTATUS
 NTAPI
 HalpAddDevice(IN PDRIVER_OBJECT DriverObject,
@@ -365,6 +535,16 @@ HalpAddDevice(IN PDRIVER_OBJECT DriverObject,
 
     /* Initialization is finished */
     PdoDeviceObject->Flags &= ~DO_DEVICE_INITIALIZING;
+
+    /*
+     * Raspberry Pi 5: the BCM2712 SD/eMMC host controller is a fixed
+     * SoC-internal device that the firmware ACPI does not enumerate, so
+     * report it here as an extra child PDO for sdbus.sys to bind to.
+     */
+    if (Bcm2712Detected)
+    {
+        HalpCreateRpi5SdPdo(DriverObject, FdoExtension, DeviceObject);
+    }
 
     /* Find the ACPI watchdog table */
     Wdrt = HalAcpiGetTable(0, 'TRDW');
@@ -1144,6 +1324,11 @@ HalpQueryResources(IN PDEVICE_OBJECT DeviceObject,
 
         return STATUS_SUCCESS;
     }
+    else if (DeviceExtension->PdoType == SdHostPdo)
+    {
+        /* Raspberry Pi 5 BCM2712 SD host controller */
+        return HalpBuildRpi5SdResources(Resources);
+    }
     else if (DeviceExtension->PdoType == WdPdo)
     {
         /* Watchdog doesn't */
@@ -1169,6 +1354,11 @@ HalpQueryResourceRequirements(IN PDEVICE_OBJECT DeviceObject,
     {
         /* Query ACPI requirements */
         return HalpQueryAcpiResourceRequirements(Requirements);
+    }
+    else if (DeviceExtension->PdoType == SdHostPdo)
+    {
+        /* Raspberry Pi 5 BCM2712 SD host controller */
+        return HalpBuildRpi5SdRequirements(Requirements);
     }
     else if (DeviceExtension->PdoType == WdPdo)
     {
@@ -1226,6 +1416,11 @@ HalpQueryIdPdo(IN PDEVICE_OBJECT DeviceObject,
             {
                 Ids[0] = L"ACPI_HAL\\PNP0C18";
             }
+            else if (PdoType == SdHostPdo)
+            {
+                /* Raspberry Pi 5 BCM2712 SD host controller */
+                Ids[0] = L"ACPI_HAL\\BCM2712_SDHCI";
+            }
             else
             {
                 return STATUS_NOT_SUPPORTED;
@@ -1245,6 +1440,16 @@ HalpQueryIdPdo(IN PDEVICE_OBJECT DeviceObject,
             {
                 Ids[0] = L"ACPI_HAL\\PNP0C18";
                 Ids[1] = L"*PNP0C18";
+            }
+            else if (PdoType == SdHostPdo)
+            {
+                /*
+                 * Raspberry Pi 5 BCM2712 SD host controller. The PCI\CC_0805
+                 * standard-SD-host class ID is what the CriticalDeviceDatabase
+                 * maps to sdbus.sys, so the boot-start bind works.
+                 */
+                Ids[0] = L"ACPI_HAL\\BCM2712_SDHCI";
+                Ids[1] = L"PCI\\CC_0805";
             }
             else
             {
