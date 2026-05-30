@@ -444,10 +444,19 @@ SdBusInitializeController(
                     SDHCI_INT_CMD_ERROR_MASK |
                     SDHCI_INT_DATA_ERROR_MASK);
 
-    /* Try ADMA2 first (scatter-gather directly to caller pages, no bounce buffer) */
+    /*
+     * Try ADMA2 first (scatter-gather directly to caller pages, no bounce buffer).
+     *
+     * Only when no DMA address mapping is required. Direct ADMA2 puts the
+     * caller's buffer pages into 32-bit descriptor addresses, which truncates
+     * any page above 4 GB. On platforms whose RAM lives above 4 GB (e.g. the
+     * Raspberry Pi 5) the HAL DMA adapter provides no map registers / bounce,
+     * so direct ADMA2 silently targets the wrong physical address and the data
+     * transfer never completes. In that case fall through to the SDMA path,
+     * which DMAs into the guaranteed-below-4 GB bounce buffer and copies up.
+     */
     FdoExtension->UseAdma2 = FALSE;
-    if ((Caps & SDHCI_CAP_ADMA2_SUPPORT) &&
-        (!NeedDmaMappingForAdma2 || FdoExtension->DmaAdapter != NULL))
+    if ((Caps & SDHCI_CAP_ADMA2_SUPPORT) && !NeedDmaMappingForAdma2)
     {
         PHYSICAL_ADDRESS HighestAcceptable;
         HighestAcceptable.QuadPart = 0xFFFFFFFF; /* 32-bit addressable */
