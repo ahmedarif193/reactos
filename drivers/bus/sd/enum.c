@@ -1569,51 +1569,26 @@ SdBusEnumerateCard(
 }
 
 /**
- * @brief Raise the SDHCI clock from 400 kHz init speed to transfer speed.
+ * @brief Program the SDHCI clock divider for a target frequency.
  *
- * Called after card enumeration completes successfully. Selects 25 MHz for
- * SD cards (Default Speed) or 52 MHz for eMMC in high-speed timing mode.
- * Non-fatal: the card works at 400 kHz if this fails.
+ * Disables the card clock, programs the divider derived from the host base
+ * clock, waits for the internal clock to restabilize, and re-enables the card
+ * clock. This is the raw register sequence shared by every speed transition.
  *
- * @param[in] FdoExtension  Pointer to the host controller FDO extension.
- * @param[in] PdoExtension  Pointer to the child PDO extension (for card type).
+ * @param[in] FdoExtension    Pointer to the host controller FDO extension.
+ * @param[in] TargetClockKhz  Desired SD clock in kHz.
  *
- * @return STATUS_SUCCESS or STATUS_IO_TIMEOUT.
+ * @return STATUS_SUCCESS, or STATUS_IO_TIMEOUT if the clock fails to stabilize.
  */
-NTSTATUS
-SdBusSetTransferClock(
+static NTSTATUS
+SdBusProgramClock(
     _In_ PFDO_EXTENSION FdoExtension,
-    _In_ PPDO_EXTENSION PdoExtension)
+    _In_ ULONG TargetClockKhz)
 {
-    ULONG TargetClockKhz;
     USHORT Divisor;
     USHORT DivisorHigh;
     USHORT ClockControl;
     ULONG Timeout;
-
-    /* Pick target clock based on card type and host speed mode */
-    if (PdoExtension->CardType == SdCardTypeEmmc ||
-        PdoExtension->CardType == SdCardTypeMmc)
-    {
-        UCHAR HostCtrl = SdBusReadReg8(FdoExtension, SDHCI_HOST_CONTROL);
-        if ((HostCtrl & SDHCI_HC_HIGH_SPEED) &&
-            PdoExtension->ExtCsd[EMMC_EXT_CSD_HS_TIMING] == EMMC_TIMING_HIGH_SPEED)
-        {
-            TargetClockKhz = MMC_HIGH_SPEED_KHZ;   /* 52 MHz */
-        }
-        else
-        {
-            TargetClockKhz = SD_DEFAULT_SPEED_KHZ;  /* 25 MHz */
-        }
-    }
-    else
-    {
-        UCHAR HostCtrl = SdBusReadReg8(FdoExtension, SDHCI_HOST_CONTROL);
-        if (HostCtrl & SDHCI_HC_HIGH_SPEED)
-            TargetClockKhz = SD_HIGH_SPEED_KHZ;     /* 50 MHz */
-        else
-            TargetClockKhz = SD_DEFAULT_SPEED_KHZ;  /* 25 MHz */
-    }
 
     /* Clamp to base clock */
     if (FdoExtension->MaxClockFrequency > 0 &&
@@ -1622,7 +1597,7 @@ SdBusSetTransferClock(
         TargetClockKhz = FdoExtension->MaxClockFrequency;
     }
 
-    DPRINT1("SdBusSetTransferClock: Setting transfer clock to %lu kHz\n",
+    DPRINT1("SdBusProgramClock: Setting transfer clock to %lu kHz\n",
             TargetClockKhz);
 
     /* Disable SD clock output */
@@ -1666,7 +1641,7 @@ SdBusSetTransferClock(
 
     if (Timeout == 0)
     {
-        DPRINT1("SdBusSetTransferClock: Clock stabilization timed out\n");
+        DPRINT1("SdBusProgramClock: Clock stabilization timed out\n");
         return STATUS_IO_TIMEOUT;
     }
 
@@ -1675,4 +1650,222 @@ SdBusSetTransferClock(
     SdBusWriteReg16(FdoExtension, SDHCI_CLOCK_CONTROL, ClockControl);
 
     return STATUS_SUCCESS;
+}
+
+/**
+ * @brief Confirm the card still answers on the CMD line at the current clock.
+ *
+ * Issues CMD13 (SEND_STATUS), a cheap non-data R1 command, to verify the card
+ * responds with a valid CRC at the freshly programmed clock. Pure SDIO cards
+ * do not implement CMD13, so they are treated as responsive.
+ *
+ * @return STATUS_SUCCESS if the card responded (or the probe is not applicable),
+ *         otherwise the command failure status (e.g. STATUS_SD_CMD_CRC_ERROR).
+ */
+static NTSTATUS
+SdBusVerifyCardResponds(
+    _In_ PFDO_EXTENSION FdoExtension,
+    _In_ PPDO_EXTENSION PdoExtension)
+{
+    ULONG Response = 0;
+
+    /* SDIO-only cards have no CMD13 SEND_STATUS; nothing to probe. */
+    if (PdoExtension->CardType == SdCardTypeSdio)
+    {
+        return STATUS_SUCCESS;
+    }
+
+    return SdBusSendCommand(FdoExtension,
+                            SDCMD_SEND_STATUS,
+                            PdoExtension->RelativeAddress << 16,
+                            SDHCI_CMD_RESP_48 | SDHCI_CMD_CRC_CHECK | SDHCI_CMD_INDEX_CHECK,
+                            &Response);
+}
+
+/**
+ * @brief Switch the card itself out of High Speed back to Default Speed timing.
+ *
+ * The High Speed enable path switches both the card (SD CMD6 group 1 function 1,
+ * or eMMC EXT_CSD[HS_TIMING]=1) and the host. When a High Speed transfer clock
+ * turns out not to work and the driver steps the host back down, the card must
+ * be switched back too; otherwise host and card run with mismatched timing.
+ * Issued only after the clock has already dropped to Default Speed, where the
+ * card still answers reliably. Best-effort: a failure is not fatal because the
+ * slower clock alone usually carries the bus.
+ *
+ * @param[in] FdoExtension  Pointer to the host controller FDO extension.
+ * @param[in] PdoExtension  Pointer to the child PDO extension (for card type).
+ */
+static VOID
+SdBusDowngradeCardToDefaultSpeed(
+    _In_ PFDO_EXTENSION FdoExtension,
+    _In_ PPDO_EXTENSION PdoExtension)
+{
+    NTSTATUS Status;
+
+    if (PdoExtension->CardType == SdCardTypeEmmc ||
+        PdoExtension->CardType == SdCardTypeMmc)
+    {
+        /* eMMC: CMD6 writes EXT_CSD[HS_TIMING] back to legacy timing. */
+        Status = SdBusEmmcSwitchByRca(FdoExtension,
+                                      PdoExtension->RelativeAddress,
+                                      EMMC_SWITCH_ACCESS_WRITE_BYTE,
+                                      (UCHAR)EMMC_EXT_CSD_HS_TIMING,
+                                      EMMC_TIMING_LEGACY,
+                                      0,
+                                      0);
+        if (NT_SUCCESS(Status))
+        {
+            PdoExtension->ExtCsd[EMMC_EXT_CSD_HS_TIMING] = EMMC_TIMING_LEGACY;
+        }
+        else
+        {
+            DPRINT1("SdBusDowngradeCardToDefaultSpeed: eMMC HS_TIMING clear "
+                    "failed (0x%08lx)\n", Status);
+        }
+    }
+    else if (PdoExtension->CardType != SdCardTypeSdio)
+    {
+        /*
+         * SD memory (incl. combo): CMD6 group 1 -> function 0 (Default/SDR12),
+         * mode bit set to actually switch. The 64-byte switch status is read but
+         * not inspected; the goal is only to undo the earlier function-1 switch.
+         */
+        ULONG SwitchStatusWords[16];
+
+        RtlZeroMemory(SwitchStatusWords, sizeof(SwitchStatusWords));
+        Status = SdBusSendDataReadCommand(FdoExtension,
+                                          SDCMD_SWITCH_FUNC,
+                                          0x80FFFFF0,
+                                          SDHCI_CMD_RESP_48 | SDHCI_CMD_CRC_CHECK | SDHCI_CMD_INDEX_CHECK,
+                                          (PUCHAR)SwitchStatusWords,
+                                          sizeof(SwitchStatusWords),
+                                          NULL);
+        if (!NT_SUCCESS(Status))
+        {
+            DPRINT1("SdBusDowngradeCardToDefaultSpeed: SD CMD6 default-speed "
+                    "switch failed (0x%08lx)\n", Status);
+        }
+    }
+}
+
+/**
+ * @brief Raise the SDHCI clock from 400 kHz init speed to transfer speed.
+ *
+ * Selects the fastest mode the card and host negotiated (50 MHz SD High Speed,
+ * 52 MHz eMMC High Speed, otherwise 25 MHz Default Speed), programs it, and
+ * confirms the card still responds. If a High Speed mode does not actually work
+ * on this host/card pair, it steps down -- High Speed -> Default Speed -> 400
+ * kHz identification clock -- exactly as the Windows SD port driver and the
+ * Linux mmc core do, instead of leaving the bus wedged at a speed the card
+ * cannot meet (which otherwise surfaces as CMD/data CRC errors on the first
+ * real transfer).
+ *
+ * @param[in] FdoExtension  Pointer to the host controller FDO extension.
+ * @param[in] PdoExtension  Pointer to the child PDO extension (for card type).
+ *
+ * @return STATUS_SUCCESS once a working clock is programmed, or STATUS_IO_TIMEOUT.
+ */
+NTSTATUS
+SdBusSetTransferClock(
+    _In_ PFDO_EXTENSION FdoExtension,
+    _In_ PPDO_EXTENSION PdoExtension)
+{
+    ULONG TargetClockKhz;
+    BOOLEAN HighSpeed = FALSE;
+    UCHAR HostCtrl;
+    NTSTATUS Status;
+
+    /* Pick target clock based on card type and host speed mode */
+    HostCtrl = SdBusReadReg8(FdoExtension, SDHCI_HOST_CONTROL);
+    if (PdoExtension->CardType == SdCardTypeEmmc ||
+        PdoExtension->CardType == SdCardTypeMmc)
+    {
+        if ((HostCtrl & SDHCI_HC_HIGH_SPEED) &&
+            PdoExtension->ExtCsd[EMMC_EXT_CSD_HS_TIMING] == EMMC_TIMING_HIGH_SPEED)
+        {
+            TargetClockKhz = MMC_HIGH_SPEED_KHZ;   /* 52 MHz */
+            HighSpeed = TRUE;
+        }
+        else
+        {
+            TargetClockKhz = SD_DEFAULT_SPEED_KHZ;  /* 25 MHz */
+        }
+    }
+    else
+    {
+        if (HostCtrl & SDHCI_HC_HIGH_SPEED)
+        {
+            TargetClockKhz = SD_HIGH_SPEED_KHZ;     /* 50 MHz */
+            HighSpeed = TRUE;
+        }
+        else
+        {
+            TargetClockKhz = SD_DEFAULT_SPEED_KHZ;  /* 25 MHz */
+        }
+    }
+
+    /*
+     * Program the negotiated speed and verify the card still answers. Some
+     * host/card combinations advertise High Speed but fail CRC once the bus
+     * actually runs at 50/52 MHz; Windows and Linux validate the switch and
+     * fall back to a slower mode rather than wedging the bus.
+     */
+    Status = SdBusProgramClock(FdoExtension, TargetClockKhz);
+    if (NT_SUCCESS(Status))
+    {
+        Status = SdBusVerifyCardResponds(FdoExtension, PdoExtension);
+        if (NT_SUCCESS(Status))
+        {
+            return STATUS_SUCCESS;
+        }
+        DPRINT1("SdBusSetTransferClock: card did not respond at %lu kHz (0x%08lx)\n",
+                TargetClockKhz, Status);
+    }
+
+    /* Fallback 1: drop out of High Speed timing down to Default Speed (25 MHz). */
+    if (HighSpeed)
+    {
+        HostCtrl = SdBusReadReg8(FdoExtension, SDHCI_HOST_CONTROL);
+        HostCtrl &= ~SDHCI_HC_HIGH_SPEED;
+        SdBusWriteReg8(FdoExtension, SDHCI_HOST_CONTROL, HostCtrl);
+
+        DPRINT1("SdBusSetTransferClock: High Speed failed, falling back to "
+                "Default Speed (%lu kHz)\n", (ULONG)SD_DEFAULT_SPEED_KHZ);
+
+        Status = SdBusProgramClock(FdoExtension, SD_DEFAULT_SPEED_KHZ);
+        if (NT_SUCCESS(Status))
+        {
+            /*
+             * The clock is now at Default Speed; switch the card out of High
+             * Speed timing too so host and card stay consistent before probing.
+             */
+            SdBusDowngradeCardToDefaultSpeed(FdoExtension, PdoExtension);
+
+            Status = SdBusVerifyCardResponds(FdoExtension, PdoExtension);
+            if (NT_SUCCESS(Status))
+            {
+                return STATUS_SUCCESS;
+            }
+            DPRINT1("SdBusSetTransferClock: card did not respond at Default "
+                    "Speed (0x%08lx)\n", Status);
+        }
+    }
+
+    /*
+     * Last resort: return to the 400 kHz identification clock. The card
+     * enumerated at this speed, so it should answer here even when every
+     * transfer-speed mode was rejected -- but confirm it, so a card that was
+     * removed or wedged by the failed speed switches is reported as a failure
+     * rather than enumerated as a PDO that faults on the first real transfer.
+     */
+    DPRINT1("SdBusSetTransferClock: falling back to identification clock "
+            "(%lu kHz)\n", (ULONG)SD_INIT_CLOCK_KHZ);
+    Status = SdBusProgramClock(FdoExtension, SD_INIT_CLOCK_KHZ);
+    if (!NT_SUCCESS(Status))
+    {
+        return Status;
+    }
+
+    return SdBusVerifyCardResponds(FdoExtension, PdoExtension);
 }
