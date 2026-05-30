@@ -812,7 +812,7 @@ EngpFindGraphicsDevice(
            pustrDevice, iDevNum);
 
     /* Lock list */
-    EngAcquireSemaphore(ghsemGraphicsDeviceList);
+    EngAcquireSemaphoreShared(ghsemGraphicsDeviceList);
 
     if (pustrDevice && pustrDevice->Buffer)
     {
