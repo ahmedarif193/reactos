@@ -64,6 +64,83 @@ MiArm64CompleteFaultPteUpdate(
         __asm__ __volatile__("dsb ish\n\tisb" ::: "memory");
     }
 }
+
+static
+VOID
+MiArm64WriteFaultPte(
+    _In_ PVOID FaultAddress,
+    _Inout_ PMMPTE PointerPte,
+    _In_ MMPTE ValidPte)
+{
+    if (((ULONG_PTR)FaultAddress < (ULONG_PTR)MmSystemRangeStart) &&
+        !MI_IS_PAGE_TABLE_ADDRESS(PointerPte))
+    {
+        MI_WRITE_VALID_PTE_NO_FLUSH(PointerPte, ValidPte);
+        __asm__ __volatile__("tlbi vaale1is, %0" :: "r"((ULONG_PTR)FaultAddress >> PAGE_SHIFT) : "memory");
+        __asm__ __volatile__("dsb ish\n\tisb" ::: "memory");
+    }
+    else if (MI_IS_PAGE_TABLE_ADDRESS(PointerPte))
+    {
+        MI_WRITE_VALID_PTE_NO_FLUSH(PointerPte, ValidPte);
+        MiArm64CompleteFaultPteUpdate(FaultAddress, &ValidPte);
+    }
+    else
+    {
+        MI_WRITE_VALID_PTE(PointerPte, ValidPte);
+    }
+}
+
+static
+BOOLEAN
+MiArm64GetUserFaultPteFrame(
+    _In_ PVOID FaultAddress,
+    _In_ PMMPTE PointerPte,
+    _Out_ PPFN_NUMBER PteFrame)
+{
+    PMMPTE UserPte;
+
+    *PteFrame = 0;
+
+    if ((ULONG_PTR)FaultAddress >= (ULONG_PTR)MmSystemRangeStart)
+        return FALSE;
+
+    UserPte = MiArm64UserPteKseg0ForPfn(FaultAddress, PteFrame);
+    return (PointerPte == UserPte);
+}
+
+static
+BOOLEAN
+MiArm64IsUserFaultPte(
+    _In_ PVOID FaultAddress,
+    _In_ PMMPTE PointerPte)
+{
+    PFN_NUMBER PteFrame;
+
+    return MiArm64GetUserFaultPteFrame(FaultAddress, PointerPte, &PteFrame);
+}
+
+static
+VOID
+MiArm64InitializeFaultPfn(
+    _In_ PFN_NUMBER PageFrameIndex,
+    _In_ PVOID FaultAddress,
+    _In_ PMMPTE PointerPte,
+    _In_ BOOLEAN Modified)
+{
+    PFN_NUMBER PteFrame;
+
+    if (MiArm64GetUserFaultPteFrame(FaultAddress, PointerPte, &PteFrame))
+    {
+        MiInitializePfnWithPteFrame(PageFrameIndex,
+                                    PointerPte,
+                                    MiAddressToPte(FaultAddress),
+                                    PteFrame,
+                                    Modified);
+        return;
+    }
+
+    MiInitializePfn(PageFrameIndex, PointerPte, Modified);
+}
 #endif
 
 static
@@ -207,7 +284,8 @@ MiIsAccessAllowed(
 static
 NTSTATUS
 NTAPI
-MiAccessCheck(IN PMMPTE PointerPte,
+MiAccessCheck(IN PVOID FaultAddress,
+              IN PMMPTE PointerPte,
               IN BOOLEAN StoreInstruction,
               IN KPROCESSOR_MODE PreviousMode,
               IN ULONG_PTR ProtectionMask,
@@ -217,7 +295,11 @@ MiAccessCheck(IN PMMPTE PointerPte,
     MMPTE TempPte;
 
     /* Check for invalid user-mode access */
-    if ((PreviousMode == UserMode) && (PointerPte > MiHighestUserPte))
+    if ((PreviousMode == UserMode) && (PointerPte > MiHighestUserPte)
+#if defined(_M_ARM64)
+        && !MiArm64IsUserFaultPte(FaultAddress, PointerPte)
+#endif
+        )
     {
         return STATUS_ACCESS_VIOLATION;
     }
@@ -653,7 +735,12 @@ MiResolveDemandZeroFault(IN PVOID Address,
     if ((Process > HYDRA_PROCESS) && (OldIrql == MM_NOIRQL))
     {
         /* Sanity check */
+#if defined(_M_ARM64)
+        ASSERT(MI_IS_PAGE_TABLE_ADDRESS(PointerPte) ||
+               MiArm64IsUserFaultPte(Address, PointerPte));
+#else
         ASSERT(MI_IS_PAGE_TABLE_ADDRESS(PointerPte));
+#endif
 
         /* No forking yet */
         ASSERT(Process->ForkInProgress == NULL);
@@ -747,7 +834,11 @@ MiResolveDemandZeroFault(IN PVOID Address,
     }
 
     /* Initialize it */
+#if defined(_M_ARM64)
+    MiArm64InitializeFaultPfn(PageFrameNumber, Address, PointerPte, TRUE);
+#else
     MiInitializePfn(PageFrameNumber, PointerPte, TRUE);
+#endif
 
     /* Increment demand zero faults */
     KeGetCurrentPrcb()->MmDemandZeroCount++;
@@ -766,11 +857,17 @@ MiResolveDemandZeroFault(IN PVOID Address,
     if (NeedZero) MiZeroPfn(PageFrameNumber);
 
     /* Fault on user PDE, or fault on user PTE? */
+#if defined(_M_ARM64)
+    if (((ULONG_PTR)Address < (ULONG_PTR)MmSystemRangeStart) ||
+        (PointerPte <= MiHighestUserPte))
+#else
     if (PointerPte <= MiHighestUserPte)
+#endif
     {
         /* User fault, build a user PTE */
         MI_MAKE_HARDWARE_PTE_USER(&TempPte,
-                                  PointerPte,
+                                  ((ULONG_PTR)Address < (ULONG_PTR)MmSystemRangeStart) ?
+                                      MiAddressToPte(Address) : PointerPte,
                                   Protection,
                                   PageFrameNumber);
     }
@@ -787,15 +884,7 @@ MiResolveDemandZeroFault(IN PVOID Address,
     if (MI_IS_PAGE_WRITEABLE(&TempPte)) MI_MAKE_DIRTY_PAGE(&TempPte);
 
 #if defined(_M_ARM64)
-    if (MI_IS_PAGE_TABLE_ADDRESS(PointerPte))
-    {
-        MI_WRITE_VALID_PTE_NO_FLUSH(PointerPte, TempPte);
-        MiArm64CompleteFaultPteUpdate(Address, &TempPte);
-    }
-    else
-    {
-        MI_WRITE_VALID_PTE(PointerPte, TempPte);
-    }
+    MiArm64WriteFaultPte(Address, PointerPte, TempPte);
 #else
     /* Write it */
     MI_WRITE_VALID_PTE(PointerPte, TempPte);
@@ -834,6 +923,9 @@ MiCompleteProtoPteFault(IN BOOLEAN StoreInstruction,
     ULONG_PTR Protection;
     PFN_NUMBER PageFrameIndex;
     PMMPFN Pfn1, Pfn2;
+#if defined(_M_ARM64)
+    PFN_NUMBER PteFrame;
+#endif
     BOOLEAN OriginalProtection, DirtyPage;
 
     /* Must be called with an valid prototype PTE, with the PFN lock held */
@@ -848,8 +940,17 @@ MiCompleteProtoPteFault(IN BOOLEAN StoreInstruction,
     Pfn1->u3.e1.PrototypePte = 1;
 
     /* Increment the share count for the page table */
-    PageTablePte = MiAddressToPte(PointerPte);
-    Pfn2 = MiGetPfnEntry(PageTablePte->u.Hard.PageFrameNumber);
+#if defined(_M_ARM64)
+    if (MiArm64GetUserFaultPteFrame(Address, PointerPte, &PteFrame))
+    {
+        Pfn2 = MiGetPfnEntry(PteFrame);
+    }
+    else
+#endif
+    {
+        PageTablePte = MiAddressToPte(PointerPte);
+        Pfn2 = MiGetPfnEntry(PageTablePte->u.Hard.PageFrameNumber);
+    }
     Pfn2->u2.ShareCount++;
 
     /* Check where we should be getting the protection information from */
@@ -922,7 +1023,7 @@ MiCompleteProtoPteFault(IN BOOLEAN StoreInstruction,
     if (Address < MmSystemRangeStart)
     {
         /* Build the user PTE */
-        MI_MAKE_HARDWARE_PTE_USER(&TempPte, PointerPte, Protection, PageFrameIndex);
+        MI_MAKE_HARDWARE_PTE_USER(&TempPte, MiAddressToPte(Address), Protection, PageFrameIndex);
     }
     else
     {
@@ -934,8 +1035,7 @@ MiCompleteProtoPteFault(IN BOOLEAN StoreInstruction,
     if (DirtyPage) MI_MAKE_DIRTY_PAGE(&TempPte);
 
 #if defined(_M_ARM64)
-    MI_WRITE_VALID_PTE_NO_FLUSH(PointerPte, TempPte);
-    MiArm64CompleteFaultPteUpdate(Address, &TempPte);
+    MiArm64WriteFaultPte(Address, PointerPte, TempPte);
 #else
     /* Write the PTE */
     MI_WRITE_VALID_PTE(PointerPte, TempPte);
@@ -945,7 +1045,12 @@ MiCompleteProtoPteFault(IN BOOLEAN StoreInstruction,
     if (OriginalProtection) Protection = MM_ZERO_ACCESS;
 
     /* Return success */
+#if defined(_M_ARM64)
+    ASSERT((PointerPte == MiAddressToPte(Address)) ||
+           MiArm64IsUserFaultPte(Address, PointerPte));
+#else
     ASSERT(PointerPte == MiAddressToPte(Address));
+#endif
     return STATUS_SUCCESS;
 }
 
@@ -991,7 +1096,11 @@ MiResolvePageFileFault(_In_ BOOLEAN StoreInstruction,
     }
 
     /* Initialize this PFN */
+#if defined(_M_ARM64)
+    MiArm64InitializeFaultPfn(Page, FaultingAddress, PointerPte, StoreInstruction);
+#else
     MiInitializePfn(Page, PointerPte, StoreInstruction);
+#endif
 
     /* Sets the PFN as being in IO operation */
     Pfn1 = MI_PFN_ELEMENT(Page);
@@ -1027,8 +1136,20 @@ MiResolvePageFileFault(_In_ BOOLEAN StoreInstruction,
     }
 
     /* And the PTE can finally be valid */
-    MI_MAKE_HARDWARE_PTE(&TempPte, PointerPte, Protection, Page);
+    if (FaultingAddress < MmSystemRangeStart)
+    {
+        MI_MAKE_HARDWARE_PTE_USER(&TempPte, MiAddressToPte(FaultingAddress), Protection, Page);
+    }
+    else
+    {
+        MI_MAKE_HARDWARE_PTE(&TempPte, PointerPte, Protection, Page);
+    }
+
+#if defined(_M_ARM64)
+    MiArm64WriteFaultPte(FaultingAddress, PointerPte, TempPte);
+#else
     MI_WRITE_VALID_PTE(PointerPte, TempPte);
+#endif
 
     Pfn1->u3.e1.ReadInProgress = 0;
     /* Did someone start to wait on us while we proceeded ? */
@@ -1167,7 +1288,11 @@ MiResolveTransitionFault(IN BOOLEAN StoreInstruction,
     }
 
     /* Write the valid PTE */
+#if defined(_M_ARM64)
+    MiArm64WriteFaultPte(FaultingAddress, PointerPte, TempPte);
+#else
     MI_WRITE_VALID_PTE(PointerPte, TempPte);
+#endif
 
     /* Return success */
     return STATUS_PAGE_FAULT_TRANSITION;
@@ -1245,7 +1370,8 @@ MiResolveProtoPteFault(IN BOOLEAN StoreInstruction,
             Protection = MM_READONLY;
         }
         /* Check for page acess in software */
-        Status = MiAccessCheck(PointerProtoPte,
+        Status = MiAccessCheck(Address,
+                               PointerProtoPte,
                                StoreInstruction,
                                KernelMode,
                                TempPte.u.Soft.Protection,
@@ -1313,7 +1439,11 @@ MiResolveProtoPteFault(IN BOOLEAN StoreInstruction,
 
         /* Because now we use this */
         Pfn1 = MI_PFN_ELEMENT(PageFrameIndex);
+#if defined(_M_ARM64)
+        MiArm64InitializeFaultPfn(PageFrameIndex, Address, PointerPte, TRUE);
+#else
         MiInitializePfn(PageFrameIndex, PointerPte, TRUE);
+#endif
 
         /* Fix the protection */
         Protection &= ~MM_WRITECOPY;
@@ -1321,7 +1451,7 @@ MiResolveProtoPteFault(IN BOOLEAN StoreInstruction,
         if (Address < MmSystemRangeStart)
         {
             /* Build the user PTE */
-            MI_MAKE_HARDWARE_PTE_USER(&PteContents, PointerPte, Protection, PageFrameIndex);
+            MI_MAKE_HARDWARE_PTE_USER(&PteContents, MiAddressToPte(Address), Protection, PageFrameIndex);
         }
         else
         {
@@ -1330,7 +1460,11 @@ MiResolveProtoPteFault(IN BOOLEAN StoreInstruction,
         }
 
         /* And finally, write the valid PTE */
+#if defined(_M_ARM64)
+        MiArm64WriteFaultPte(Address, PointerPte, PteContents);
+#else
         MI_WRITE_VALID_PTE(PointerPte, PteContents);
+#endif
 
         /* The caller expects us to release the PFN lock */
         MiReleasePfnLock(OldIrql);
@@ -1338,7 +1472,15 @@ MiResolveProtoPteFault(IN BOOLEAN StoreInstruction,
     }
 
     /* Check for clone PTEs */
-    if (PointerPte <= MiHighestUserPte) ASSERT(Process->CloneRoot == NULL);
+#if defined(_M_ARM64)
+    if (((ULONG_PTR)Address < (ULONG_PTR)MmSystemRangeStart) ||
+        (PointerPte <= MiHighestUserPte))
+#else
+    if (PointerPte <= MiHighestUserPte)
+#endif
+    {
+        ASSERT(Process->CloneRoot == NULL);
+    }
 
     /* We don't support mapped files yet */
     ASSERT(TempPte.u.Soft.Prototype == 0);
@@ -1411,7 +1553,12 @@ MiDispatchFault(IN ULONG FaultCode,
              Process);
 
     /* Make sure the addresses are ok */
+#if defined(_M_ARM64)
+    ASSERT((PointerPte == MiAddressToPte(Address)) ||
+           MiArm64IsUserFaultPte(Address, PointerPte));
+#else
     ASSERT(PointerPte == MiAddressToPte(Address));
+#endif
 
     //
     // Make sure APCs are off and we're not at dispatch
@@ -2214,6 +2361,31 @@ UserFault:
 
     ProtectionCode = MM_INVALID_PROTECTION;
 
+#if defined(_M_ARM64)
+    if ((ULONG_PTR)Address < (ULONG_PTR)MmSystemRangeStart)
+    {
+        PMMPTE Arm64PointerPte = MiArm64UserPteKseg0(Address);
+        if (Arm64PointerPte == NULL)
+        {
+            ProtoPte = MiCheckVirtualAddress(Address, &ProtectionCode, &Vad);
+            if (ProtectionCode == MM_NOACCESS)
+            {
+                MiUnlockProcessWorkingSet(CurrentProcess, CurrentThread);
+                return STATUS_ACCESS_VIOLATION;
+            }
+
+            Status = MiArm64EnsureUserPte(CurrentProcess, Address, &Arm64PointerPte);
+            if (!NT_SUCCESS(Status))
+            {
+                goto ExitUser;
+            }
+        }
+
+        PointerPte = Arm64PointerPte;
+        goto Arm64UserLeafReady;
+    }
+#endif
+
 #if (_MI_PAGING_LEVELS == 4)
     /* Check if the PXE is valid */
     if (PointerPxe->u.Hard.Valid == 0)
@@ -2350,6 +2522,9 @@ UserFault:
         ASSERT(MI_IS_PAGE_LARGE(PointerPde) == FALSE);
     }
 
+#if defined(_M_ARM64)
+Arm64UserLeafReady:
+#endif
     /* Now capture the PTE. */
     TempPte = *PointerPte;
 
@@ -2392,12 +2567,20 @@ UserFault:
                 MiDeletePte(PointerPte, Address, CurrentProcess, ProtoPte);
 
                 /* And make a new shiny one with our page */
+#if defined(_M_ARM64)
+                MiArm64InitializeFaultPfn(PageFrameIndex, Address, PointerPte, TRUE);
+#else
                 MiInitializePfn(PageFrameIndex, PointerPte, TRUE);
+#endif
                 TempPte.u.Hard.PageFrameNumber = PageFrameIndex;
                 TempPte.u.Hard.Write = 1;
                 TempPte.u.Hard.CopyOnWrite = 0;
 
+#if defined(_M_ARM64)
+                MiArm64WriteFaultPte(Address, PointerPte, TempPte);
+#else
                 MI_WRITE_VALID_PTE(PointerPte, TempPte);
+#endif
 
                 MiReleasePfnLock(LockIrql);
 
@@ -2502,7 +2685,11 @@ UserFault:
         )
         {
             /* Add an additional page table reference */
+#if defined(_M_ARM64)
+            MiArm64IncrementUserPageTableReferences(Address);
+#else
             MiIncrementPageTableReferences(Address);
+#endif
         }
 
         /* Is this a guard page? */
@@ -2583,7 +2770,11 @@ UserFault:
             }
 
             /* Initialize the PFN entry now */
+#if defined(_M_ARM64)
+            MiArm64InitializeFaultPfn(PageFrameIndex, Address, PointerPte, 1);
+#else
             MiInitializePfn(PageFrameIndex, PointerPte, 1);
+#endif
 
             /* Increment the count of pages in the process */
             CurrentProcess->NumberOfPrivatePages++;
@@ -2595,11 +2786,17 @@ UserFault:
             MiReleasePfnLock(OldIrql);
 
             /* Fault on user PDE, or fault on user PTE? */
+#if defined(_M_ARM64)
+            if (((ULONG_PTR)Address < (ULONG_PTR)MmSystemRangeStart) ||
+                (PointerPte <= MiHighestUserPte))
+#else
             if (PointerPte <= MiHighestUserPte)
+#endif
             {
                 /* User fault, build a user PTE */
                 MI_MAKE_HARDWARE_PTE_USER(&TempPte,
-                                          PointerPte,
+                                          ((ULONG_PTR)Address < (ULONG_PTR)MmSystemRangeStart) ?
+                                              MiAddressToPte(Address) : PointerPte,
                                           PointerPte->u.Soft.Protection,
                                           PageFrameIndex);
             }
@@ -2616,7 +2813,11 @@ UserFault:
             if (MI_IS_PAGE_WRITEABLE(&TempPte)) MI_MAKE_DIRTY_PAGE(&TempPte);
 
             /* And now write down the PTE, making the address valid */
+#if defined(_M_ARM64)
+            MiArm64WriteFaultPte(Address, PointerPte, TempPte);
+#else
             MI_WRITE_VALID_PTE(PointerPte, TempPte);
+#endif
             Pfn1 = MI_PFN_ELEMENT(PageFrameIndex);
             ASSERT(Pfn1->u1.Event == NULL);
 
@@ -2680,7 +2881,8 @@ UserFault:
     if (ProtectionCode != 0x100)
     {
         /* Run a software access check first, including to detect guard pages */
-        Status = MiAccessCheck(PointerPte,
+        Status = MiAccessCheck(Address,
+                               PointerPte,
                                !MI_IS_NOT_PRESENT_FAULT(FaultCode),
                                Mode,
                                ProtectionCode,
