@@ -15,12 +15,7 @@
 #define RP1_VENDOR_ID       0x1DE4
 #define RP1_DEVICE_ID       0x0001
 
-/*
- * BCM2712 PCIE2 outbound window used by current RPi5 firmware.
- * Keep bus-relative PCI addresses separate from CPU-visible physical
- * addresses; firmware currently reports the child window without the
- * translation ReactOS needs to map it.
- */
+/* BCM2712 PCIE2 outbound window used for RP1 MMIO resources. */
 #define BCM2712_PCIE2_PCI_MEM_BASE  0xC0000000ULL
 #define BCM2712_PCIE2_CPU_MEM_BASE  0x1F00000000ULL
 
@@ -44,13 +39,32 @@
 /* Synthetic config-space device IDs, not external PnP hardware IDs. */
 #define RP1_XHCI_PCI_DEVICE_ID_BASE 0x0100
 
+/* Ethernet (Cadence GEM) controller offset within BAR1 */
+#define RP1_ETH_OFFSET          0x00100000
+#define RP1_ETH_SIZE            0x00004000
+#define RP1_ETH_PCI_DEVICE_ID   0x0200
+
+/* RP1 PCIe APB-side MSI-X routing registers. */
+#define RP1_PCIE_APBS_OFFSET    0x00108000
+#define RP1_REG_SET_OFFSET      0x00000800
+#define RP1_REG_CLR_OFFSET      0x00000c00
+#define RP1_MSIX_CFG(_Irq)      (0x00000008 + (sizeof(ULONG) * (_Irq)))
+#define RP1_MSIX_CFG_IACK_EN    (1u << 3)
+#define RP1_MSIX_CFG_IACK       (1u << 2)
+#define RP1_MSIX_CFG_ENABLE     (1u << 0)
+#define RP1_INT_ETH             6u
+
 /* RP1 clock controller (within BAR1) */
 #define RP1_CLOCKS_OFFSET       0x00018000
 
 /*
- * USB clock register offsets (relative to RP1_CLOCKS_OFFSET).
+ * Clock register offsets (relative to RP1_CLOCKS_OFFSET).
  * Each clock has CTRL, DIV_INT, and SEL registers.
  */
+#define RP1_CLK_ETH_CTRL            0x064
+#define RP1_CLK_ETH_DIV             0x068
+#define RP1_CLK_ETH_SEL             0x070
+
 #define RP1_CLK_USBH0_MICROFRAME_CTRL  0x0F4
 #define RP1_CLK_USBH0_MICROFRAME_DIV   0x0F8
 #define RP1_CLK_USBH0_MICROFRAME_SEL   0x100
@@ -66,6 +80,10 @@
 #define RP1_CLK_USBH1_SUSPEND_CTRL     0x124
 #define RP1_CLK_USBH1_SUSPEND_DIV      0x128
 #define RP1_CLK_USBH1_SUSPEND_SEL      0x130
+
+#define RP1_CLK_ETH_TSU_CTRL           0x134
+#define RP1_CLK_ETH_TSU_DIV            0x138
+#define RP1_CLK_ETH_TSU_SEL            0x140
 
 /* Clock control register bits */
 #define RP1_CLK_CTRL_ENABLE             (1u << 11)
@@ -107,11 +125,18 @@
 #define DWC3_GFLADJ_30MHZ_MASK        0x3F
 
 /* Maximum number of child devices the bus driver exposes */
-#define RP1_MAX_CHILDREN        2
+#define RP1_MAX_CHILDREN        3
 
 /* Child device indices */
 #define RP1_CHILD_XHCI0         0
 #define RP1_CHILD_XHCI1         1
+#define RP1_CHILD_ETHERNET      2
+
+typedef enum _RP1_CHILD_TYPE
+{
+    Rp1ChildXhci,
+    Rp1ChildEthernet
+} RP1_CHILD_TYPE;
 
 /*
  * Child device descriptor.
@@ -119,9 +144,19 @@
  */
 typedef struct _RP1_CHILD_DESCRIPTOR
 {
+    RP1_CHILD_TYPE Type;
     ULONG  Offset;      /* Offset from BAR1 base */
     ULONG  Length;       /* MMIO region size */
     PCWSTR InstanceId;   /* Unique instance identifier */
+    USHORT PciDeviceId;  /* Synthetic config-space device ID */
+    UCHAR  ProgIf;
+    UCHAR  SubClass;
+    UCHAR  BaseClass;
+    PCWSTR DeviceId;
+    PCWSTR HardwareId;
+    PCWSTR CompatibleId;
+    PCWSTR Description;
+    BOOLEAN UniqueId;
 } RP1_CHILD_DESCRIPTOR, *PRP1_CHILD_DESCRIPTOR;
 
 /*
@@ -162,6 +197,11 @@ typedef struct _RP1_FDO_EXTENSION
     ULONG InterruptVector;
     KAFFINITY InterruptAffinity;
 
+    /* RP1 internal MSI-X domain, programmed by this hardware bus driver. */
+    BOOLEAN MsixReady;
+    ULONG MsiVectorBase;
+    ULONG MsiVectorCount;
+
     /* Child PDO array */
     PDEVICE_OBJECT ChildPdo[RP1_MAX_CHILDREN];
     BOOLEAN ChildPresent[RP1_MAX_CHILDREN];
@@ -186,7 +226,7 @@ typedef struct _RP1_PDO_EXTENSION
     /* Back pointer to the parent FDO */
     PDEVICE_OBJECT ParentFdo;
 
-    /* Which child this PDO represents (RP1_CHILD_XHCI0 or RP1_CHILD_XHCI1) */
+    /* Which child this PDO represents (RP1_CHILD_*) */
     ULONG ChildIndex;
 
     /* MMIO region: bus-relative and CPU-visible address for this child */
@@ -198,8 +238,10 @@ typedef struct _RP1_PDO_EXTENSION
     ULONG InterruptLevel;
     ULONG InterruptVector;
     KAFFINITY InterruptAffinity;
+    ULONG InterruptFlags;
+    CM_SHARE_DISPOSITION InterruptShareDisposition;
 
-    /* Mutable fields in the synthetic PCI config view exposed to USBPORT */
+    /* Mutable fields in the child PCI config view. */
     USHORT PciCommand;
     UCHAR CacheLineSize;
     UCHAR LatencyTimer;
@@ -209,6 +251,30 @@ typedef struct _RP1_PDO_EXTENSION
 
 /* Static child descriptor table */
 extern const RP1_CHILD_DESCRIPTOR Rp1Children[RP1_MAX_CHILDREN];
+
+/* RP1 internal interrupt setup */
+NTSTATUS
+Rp1InitializeInterrupts(
+    _In_ PRP1_FDO_EXTENSION FdoExt);
+
+VOID
+Rp1EnableEthernetInterruptRoute(
+    _In_ PRP1_FDO_EXTENSION FdoExt);
+
+BOOLEAN
+Rp1GetChildInterrupt(
+    _In_ PRP1_FDO_EXTENSION FdoExt,
+    _In_ ULONG ChildIndex,
+    _Out_ PULONG Level,
+    _Out_ PULONG Vector,
+    _Out_ PKAFFINITY Affinity,
+    _Out_ PULONG Flags,
+    _Out_ CM_SHARE_DISPOSITION *ShareDisposition,
+    _Out_ PUCHAR InterruptLine);
+
+PHYSICAL_ADDRESS
+Rp1TranslateBarAddress(
+    _In_ PHYSICAL_ADDRESS BusAddress);
 
 /* FDO dispatch */
 NTSTATUS

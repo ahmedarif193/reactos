@@ -1,5 +1,14 @@
 
+#
+# PROJECT:     ReactOS RP1 Bus Driver
+# LICENSE:     GPL-2.0+ (https://spdx.org/licenses/GPL-2.0+)
+# FILE:        drivers/bus/rp1/CMakeLists.txt
+# PURPOSE:     RP1 southbridge bus driver build rules
+# COPYRIGHT:   Copyright 2026 Ahmed ARIF <arif.ing@outlook.com>
+#
+
 list(APPEND SOURCE
+    interrupt.c
     rp1.c
     rp1.h)
 

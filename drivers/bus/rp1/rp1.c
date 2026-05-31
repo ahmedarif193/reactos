@@ -2,19 +2,8 @@
  * PROJECT:     ReactOS RP1 Bus Driver
  * LICENSE:     GPL-2.0+ (https://spdx.org/licenses/GPL-2.0+)
  * FILE:        drivers/bus/rp1/rp1.c
- * PURPOSE:     Raspberry Pi 5 RP1 southbridge bus driver
+ * PURPOSE:     Raspberry Pi 5 RP1 southbridge child bus driver
  * COPYRIGHT:   Copyright 2026 Ahmed ARIF <arif.ing@outlook.com>
- *
- * DESCRIPTION:
- *   The RP1 is the southbridge IC on the Raspberry Pi 5 (BCM2712).
- *   It appears as PCI device VEN_1DE4&DEV_0001 and exposes a 4 MB
- *   BAR1 containing multiple on-chip peripherals (USB xHCI, Ethernet,
- *   GPIO, SPI, I2C, etc.).
- *
- *   This bus driver binds to the RP1 PCI function, maps BAR1, and
- *   creates child PDOs for the embedded xHCI (DWC3) USB 3.0 controllers.
- *   Each child PDO reports a PCI\CC_0C0330 compatible ID so that
- *   usbxhci.sys (via USBPORT) can bind to it.
  */
 
 #include "rp1.h"
@@ -32,16 +21,53 @@ const RP1_CHILD_DESCRIPTOR Rp1Children[RP1_MAX_CHILDREN] =
 {
     /* xHCI0 (DWC3 USB 3.0 #0) */
     {
+        Rp1ChildXhci,
         RP1_XHCI0_OFFSET,
         RP1_XHCI0_SIZE,
-        L"0"
+        L"0",
+        (USHORT)(RP1_XHCI_PCI_DEVICE_ID_BASE + RP1_CHILD_XHCI0),
+        RP1_XHCI_PCI_PROGIF,
+        PCI_SUBCLASS_SB_USB,
+        PCI_CLASS_SERIAL_BUS_CTLR,
+        L"RP1\\XHCI",
+        L"RP1\\XHCI&REV_00",
+        L"PCI\\CC_0C0330",
+        L"RP1 xHCI USB 3.0 Controller",
+        FALSE
     },
 
     /* xHCI1 (DWC3 USB 3.0 #1) */
     {
+        Rp1ChildXhci,
         RP1_XHCI1_OFFSET,
         RP1_XHCI1_SIZE,
-        L"1"
+        L"1",
+        (USHORT)(RP1_XHCI_PCI_DEVICE_ID_BASE + RP1_CHILD_XHCI1),
+        RP1_XHCI_PCI_PROGIF,
+        PCI_SUBCLASS_SB_USB,
+        PCI_CLASS_SERIAL_BUS_CTLR,
+        L"RP1\\XHCI",
+        L"RP1\\XHCI&REV_00",
+        L"PCI\\CC_0C0330",
+        L"RP1 xHCI USB 3.0 Controller",
+        FALSE
+    },
+
+    /* Ethernet (Cadence GEM) */
+    {
+        Rp1ChildEthernet,
+        RP1_ETH_OFFSET,
+        RP1_ETH_SIZE,
+        L"2",
+        RP1_ETH_PCI_DEVICE_ID,
+        0,
+        PCI_SUBCLASS_NET_ETHERNET_CTLR,
+        PCI_CLASS_NETWORK_CTLR,
+        L"RP1\\GEM",
+        L"RP1\\GEM&REV_00",
+        L"PCI\\CC_020000",
+        L"RP1 Ethernet Controller",
+        TRUE
     },
 };
 
@@ -119,7 +145,6 @@ Rp1SendIrpSynchronous(
     return Status;
 }
 
-static
 PHYSICAL_ADDRESS
 Rp1TranslateBarAddress(
     _In_ PHYSICAL_ADDRESS BusAddress)
@@ -145,29 +170,26 @@ Rp1BuildSyntheticPciConfig(
     _In_ PRP1_PDO_EXTENSION PdoExt,
     _Out_ PPCI_COMMON_CONFIG PciConfig)
 {
+    const RP1_CHILD_DESCRIPTOR *Child = &Rp1Children[PdoExt->ChildIndex];
+
     RtlZeroMemory(PciConfig, sizeof(*PciConfig));
 
-    /*
-     * The RP1 xHCI blocks are not PCI functions.  USBPORT still expects a
-     * small PCI-like config view, so expose only stable controller metadata
-     * and the BAR slice assigned by this bus driver.
-     */
+    /* Fill the per-child PCI config view exposed through BUS_INTERFACE_STANDARD. */
     PciConfig->VendorID = RP1_VENDOR_ID;
-    PciConfig->DeviceID = (USHORT)(RP1_XHCI_PCI_DEVICE_ID_BASE + PdoExt->ChildIndex);
+    PciConfig->DeviceID = Child->PciDeviceId;
     PciConfig->Command = PdoExt->PciCommand;
     PciConfig->Status = 0;
     PciConfig->RevisionID = 0;
-    PciConfig->ProgIf = RP1_XHCI_PCI_PROGIF;
-    PciConfig->SubClass = PCI_SUBCLASS_SB_USB;
-    PciConfig->BaseClass = PCI_CLASS_SERIAL_BUS_CTLR;
+    PciConfig->ProgIf = Child->ProgIf;
+    PciConfig->SubClass = Child->SubClass;
+    PciConfig->BaseClass = Child->BaseClass;
     PciConfig->CacheLineSize = PdoExt->CacheLineSize;
     PciConfig->LatencyTimer = PdoExt->LatencyTimer;
     PciConfig->HeaderType = PCI_DEVICE_TYPE;
     PciConfig->u.type0.BaseAddresses[0] =
         (ULONG)(PdoExt->MmioBusAddress.QuadPart & ~0xFULL);
     PciConfig->u.type0.SubVendorID = RP1_VENDOR_ID;
-    PciConfig->u.type0.SubSystemID =
-        (USHORT)(RP1_XHCI_PCI_DEVICE_ID_BASE + PdoExt->ChildIndex);
+    PciConfig->u.type0.SubSystemID = Child->PciDeviceId;
     PciConfig->u.type0.InterruptLine = PdoExt->InterruptLine;
     PciConfig->u.type0.InterruptPin = 1;
 }
@@ -407,9 +429,8 @@ Rp1FdoStartDevice(
     }
 
     /*
-     * Current firmware exposes the RP1 PCI memory window without the BCM2712
-     * outbound translation. Keep the original bus address for child config
-     * space and resources, and use the CPU address only for MmMapIoSpace().
+     * Keep bus-relative PCI addresses in child resources.  The CPU-visible
+     * address is only used for mapping the parent BAR.
      */
     FdoExt->Bar1CpuAddress = Rp1TranslateBarAddress(FdoExt->Bar1BusAddress);
 
@@ -438,15 +459,9 @@ Rp1FdoStartDevice(
     }
 
     /*
-     * Enable USB clock domains.
-     *
-     * The firmware runs XHCI-STOP before OS handoff, which gates the
-     * xHCI clock domains.  Without clocks enabled, all xHCI registers
-     * read as 0.  We need to re-enable the USB microframe and suspend
-     * clocks before child PDOs can access xHCI registers.
-     *
-     * Each clock has a CTRL register with CLK_CTRL_ENABLE at bit 11.
-     * The divisor and source select are left at firmware defaults.
+     * Enable RP1 child clock domains.  Firmware may gate the xHCI clocks
+     * before OS handoff; child PDOs require the USB and Ethernet clocks
+     * before their register blocks are usable.
      */
     {
         PUCHAR ClkBase = (PUCHAR)FdoExt->Bar1Virtual + RP1_CLOCKS_OFFSET;
@@ -484,24 +499,30 @@ Rp1FdoStartDevice(
                                  Val | RP1_CLK_CTRL_ENABLE);
         }
 
-        /* Small delay for clocks to stabilize */
+        /* Enable Ethernet MAC clock */
+        Val = READ_REGISTER_ULONG((PULONG)(ClkBase + RP1_CLK_ETH_CTRL));
+        if (!(Val & RP1_CLK_CTRL_ENABLE))
+        {
+            WRITE_REGISTER_ULONG((PULONG)(ClkBase + RP1_CLK_ETH_CTRL),
+                                 Val | RP1_CLK_CTRL_ENABLE);
+        }
+
+        /* Enable Ethernet timestamp clock */
+        Val = READ_REGISTER_ULONG((PULONG)(ClkBase + RP1_CLK_ETH_TSU_CTRL));
+        if (!(Val & RP1_CLK_CTRL_ENABLE))
+        {
+            WRITE_REGISTER_ULONG((PULONG)(ClkBase + RP1_CLK_ETH_TSU_CTRL),
+                                 Val | RP1_CLK_CTRL_ENABLE);
+        }
+
+        /* Allow the clock enables to take effect. */
         KeStallExecutionProcessor(100);
     }
 
     /*
-     * Initialize DWC3 USB3 controllers.
-     *
-     * UEFI leaves the DWC3 cores in host mode but may gate clocks and PHY
-     * suspend bits. Avoid a DWC3 core reset here; the xHCI miniport owns
-     * USBCMD.HCRST once the child controller starts.
-     *
-     * Sequence:
-     *   1. Read GSNPSID to verify core exists
-     *   2. Set PRTCAPDIR to HOST in GCTL
-     *   3. Configure USB2 PHY (GUSB2PHYCFG)
-     *   4. Configure USB3 pipe (GUSB3PIPECTL)
-     *   5. Program GFLADJ
-     *   6. Verify xHCI capability registers at offset 0
+     * Prepare each DWC3 core for its child xHCI driver.  Keep reset ownership
+     * with xHCI; this bus driver only selects host mode and clears PHY suspend
+     * state.
      */
     {
         static const ULONG DwcOffsets[] = { RP1_XHCI0_OFFSET, RP1_XHCI1_OFFSET };
@@ -515,7 +536,7 @@ Rp1FdoStartDevice(
             PUCHAR DwcBase = (PUCHAR)FdoExt->Bar1Virtual + DwcOffsets[Idx];
             ULONG Reg, SnpsId;
 
-            /* Step 1: Identify DWC3 core */
+            /* Verify DWC3 core identity. */
             SnpsId = READ_REGISTER_ULONG((PULONG)(DwcBase + DWC3_GSNPSID));
             if (SnpsId == 0 || SnpsId == 0xFFFFFFFF)
             {
@@ -524,19 +545,8 @@ Rp1FdoStartDevice(
                         SnpsId);
                 continue;
             }
-            /*
-             * Skip DWC3 soft reset — UEFI already initialized the DWC3 in host
-             * mode with PHYs active. The xHCI driver (USBPORT/usbxhci) will
-             * perform its own USBCMD.HCRST during StartDevice. Doing a DWC3
-             * core reset here can leave the controller in an inconsistent state
-             * where xHCI commands never complete (the command ring runs but
-             * no completion events appear in the event ring).
-             *
-             * Just verify the current GCTL state and ensure host mode is set.
-             */
-            Reg = READ_REGISTER_ULONG((PULONG)(DwcBase + DWC3_GCTL));
 
-            /* Ensure host mode */
+            /* Select host mode without issuing a DWC3 core reset. */
             Reg = READ_REGISTER_ULONG((PULONG)(DwcBase + DWC3_GCTL));
             if ((Reg & DWC3_GCTL_PRTCAPDIR_MASK) != DWC3_GCTL_PRTCAP_HOST)
             {
@@ -557,7 +567,7 @@ Rp1FdoStartDevice(
             Reg &= ~DWC3_GUSB3PIPECTL_UX_EXIT_PX;
             WRITE_REGISTER_ULONG((PULONG)(DwcBase + DWC3_GUSB3PIPECTL(0)), Reg);
 
-            /* Program GFLADJ — required for correct xHCI operation */
+            /* Program GFLADJ for 30 MHz reference timing. */
             {
                 ULONG Gfladj = READ_REGISTER_ULONG((PULONG)(DwcBase + DWC3_GFLADJ));
                 Gfladj &= ~DWC3_GFLADJ_30MHZ_MASK;
@@ -565,7 +575,7 @@ Rp1FdoStartDevice(
                 WRITE_REGISTER_ULONG((PULONG)(DwcBase + DWC3_GFLADJ), Gfladj);
             }
 
-            /* Step 8: Verify xHCI capability registers */
+            /* Verify xHCI capability registers. */
             {
                 ULONG CapHdr = READ_REGISTER_ULONG((PULONG)DwcBase);
                 ULONG CapLen = CapHdr & 0xFF;
@@ -592,6 +602,22 @@ Rp1FdoStartDevice(
         }
     }
 
+    if (FdoExt->Bar1Length >= RP1_ETH_OFFSET + RP1_ETH_SIZE)
+    {
+        Status = Rp1InitializeInterrupts(FdoExt);
+        if (!NT_SUCCESS(Status))
+        {
+            DPRINT1("RP1: internal MSI-X setup failed (0x%08lx), keeping legacy interrupt resources\n",
+                    Status);
+        }
+
+        FdoExt->ChildPresent[RP1_CHILD_ETHERNET] = TRUE;
+        Rp1EnableEthernetInterruptRoute(FdoExt);
+        DPRINT("RP1: Ethernet child present at BAR1+0x%lx length 0x%lx\n",
+               RP1_ETH_OFFSET,
+               RP1_ETH_SIZE);
+    }
+
     if (!FoundInterrupt)
     {
         DPRINT1("RP1: WARNING: No interrupt in PCI resources\n");
@@ -604,7 +630,7 @@ Rp1FdoStartDevice(
 
 /* ------------------------------------------------------------------ */
 /*  FDO: IRP_MN_QUERY_DEVICE_RELATIONS (BusRelations)                  */
-/*  Create child PDOs for xHCI controllers.                            */
+/*  Create child PDOs for verified RP1 peripherals.                    */
 /* ------------------------------------------------------------------ */
 
 static
@@ -674,13 +700,17 @@ Rp1FdoQueryBusRelations(
             FdoExt->Bar1CpuAddress.QuadPart + Rp1Children[i].Offset;
         PdoExt->MmioLength = Rp1Children[i].Length;
 
-        /* Pass interrupt info from parent */
-        PdoExt->InterruptLevel = FdoExt->InterruptLevel;
-        PdoExt->InterruptVector = FdoExt->InterruptVector;
-        PdoExt->InterruptAffinity = FdoExt->InterruptAffinity;
-        PdoExt->InterruptLine = FdoExt->InterruptVector ?
-                                (UCHAR)FdoExt->InterruptVector :
-                                0xFF;
+        if (!Rp1GetChildInterrupt(FdoExt,
+                                  i,
+                                  &PdoExt->InterruptLevel,
+                                  &PdoExt->InterruptVector,
+                                  &PdoExt->InterruptAffinity,
+                                  &PdoExt->InterruptFlags,
+                                  &PdoExt->InterruptShareDisposition,
+                                  &PdoExt->InterruptLine))
+        {
+            PdoExt->InterruptLine = 0xFF;
+        }
         PdoExt->PciCommand = PCI_ENABLE_MEMORY_SPACE | PCI_ENABLE_BUS_MASTER;
 
         FdoExt->ChildPdo[i]->Flags &= ~DO_DEVICE_INITIALIZING;
@@ -838,7 +868,7 @@ Rp1FdoPnp(
 /* ------------------------------------------------------------------ */
 /*  PDO: IRP_MN_QUERY_ID                                               */
 /*  Return hardware/compatible/instance/device IDs that allow          */
-/*  usbxhci.sys to bind via the PCI\CC_0C0330 compatible ID.          */
+/*  class or hardware drivers to bind to RP1 child PDOs.               */
 /* ------------------------------------------------------------------ */
 
 static
@@ -849,28 +879,23 @@ Rp1PdoQueryId(
     _In_ PIO_STACK_LOCATION IrpSp)
 {
     PRP1_PDO_EXTENSION PdoExt;
+    const RP1_CHILD_DESCRIPTOR *Child;
     PWCHAR Buffer;
     SIZE_T Size;
 
     PdoExt = (PRP1_PDO_EXTENSION)DeviceObject->DeviceExtension;
+    Child = &Rp1Children[PdoExt->ChildIndex];
 
     switch (IrpSp->Parameters.QueryId.IdType)
     {
         case BusQueryDeviceID:
         {
-            /*
-             * These are RP1-local children, not independent PCI functions.
-             * Keep the hardware identity on the RP1 bus and use the PCI xHCI
-             * class code only as a compatibility match below.
-             */
-            static const WCHAR DeviceId[] = L"RP1\\XHCI";
-
-            Size = sizeof(DeviceId);
+            Size = (wcslen(Child->DeviceId) + 1) * sizeof(WCHAR);
             Buffer = ExAllocatePoolWithTag(PagedPool, Size, RP1_TAG);
             if (!Buffer)
                 return STATUS_INSUFFICIENT_RESOURCES;
 
-            RtlCopyMemory(Buffer, DeviceId, Size);
+            RtlCopyMemory(Buffer, Child->DeviceId, Size);
             Irp->IoStatus.Information = (ULONG_PTR)Buffer;
             return STATUS_SUCCESS;
         }
@@ -878,23 +903,22 @@ Rp1PdoQueryId(
         case BusQueryHardwareIDs:
         {
             /*
-             * Hardware IDs: multi-string list (double-null terminated).
-             *
-             * Hardware IDs describe the RP1 child itself.  The PCI class
-             * compatible ID is reported separately.
+             * Hardware IDs describe the RP1 child itself.  PCI class
+             * compatible IDs are reported separately.
              */
-            static const WCHAR HwId0[] = L"RP1\\XHCI&REV_00";
-            static const WCHAR HwId1[] = L"RP1\\XHCI";
+            SIZE_T HardwareIdSize = (wcslen(Child->HardwareId) + 1) * sizeof(WCHAR);
+            SIZE_T DeviceIdSize = (wcslen(Child->DeviceId) + 1) * sizeof(WCHAR);
 
-            Size = sizeof(HwId0) + sizeof(HwId1) + sizeof(WCHAR); /* Extra null */
+            Size = HardwareIdSize + DeviceIdSize + sizeof(WCHAR);
             Buffer = ExAllocatePoolWithTag(PagedPool, Size, RP1_TAG);
             if (!Buffer)
                 return STATUS_INSUFFICIENT_RESOURCES;
 
             RtlZeroMemory(Buffer, Size);
-            RtlCopyMemory(Buffer, HwId0, sizeof(HwId0));
-            RtlCopyMemory((PUCHAR)Buffer + sizeof(HwId0), HwId1, sizeof(HwId1));
-            /* Double null terminator is already zero from RtlZeroMemory */
+            RtlCopyMemory(Buffer, Child->HardwareId, HardwareIdSize);
+            RtlCopyMemory((PUCHAR)Buffer + HardwareIdSize,
+                          Child->DeviceId,
+                          DeviceIdSize);
 
             Irp->IoStatus.Information = (ULONG_PTR)Buffer;
             return STATUS_SUCCESS;
@@ -902,18 +926,19 @@ Rp1PdoQueryId(
 
         case BusQueryCompatibleIDs:
         {
-            /*
-             * Compatibility match for the generic xHCI install section.
-             */
-            static const WCHAR CompatId[] = L"PCI\\CC_0C0330";
+            SIZE_T CompatibleIdSize;
 
-            Size = sizeof(CompatId) + sizeof(WCHAR); /* Extra null for multi-string */
+            if (!Child->CompatibleId)
+                return STATUS_NOT_SUPPORTED;
+
+            CompatibleIdSize = (wcslen(Child->CompatibleId) + 1) * sizeof(WCHAR);
+            Size = CompatibleIdSize + sizeof(WCHAR);
             Buffer = ExAllocatePoolWithTag(PagedPool, Size, RP1_TAG);
             if (!Buffer)
                 return STATUS_INSUFFICIENT_RESOURCES;
 
             RtlZeroMemory(Buffer, Size);
-            RtlCopyMemory(Buffer, CompatId, sizeof(CompatId));
+            RtlCopyMemory(Buffer, Child->CompatibleId, CompatibleIdSize);
 
             Irp->IoStatus.Information = (ULONG_PTR)Buffer;
             return STATUS_SUCCESS;
@@ -921,10 +946,7 @@ Rp1PdoQueryId(
 
         case BusQueryInstanceID:
         {
-            /*
-             * Instance ID: unique per-child ("0" or "1").
-             */
-            PCWSTR InstanceId = Rp1Children[PdoExt->ChildIndex].InstanceId;
+            PCWSTR InstanceId = Child->InstanceId;
             Size = (wcslen(InstanceId) + 1) * sizeof(WCHAR);
 
             Buffer = ExAllocatePoolWithTag(PagedPool, Size, RP1_TAG);
@@ -953,18 +975,21 @@ Rp1PdoQueryDeviceText(
     _In_ PIO_STACK_LOCATION IrpSp)
 {
     PRP1_PDO_EXTENSION PdoExt;
+    const RP1_CHILD_DESCRIPTOR *Child;
     PWCHAR Buffer;
-    static const WCHAR Description[] = L"RP1 xHCI USB 3.0 Controller";
+    SIZE_T Size;
 
     PdoExt = (PRP1_PDO_EXTENSION)DeviceObject->DeviceExtension;
+    Child = &Rp1Children[PdoExt->ChildIndex];
 
     if (IrpSp->Parameters.QueryDeviceText.DeviceTextType == DeviceTextDescription)
     {
-        Buffer = ExAllocatePoolWithTag(PagedPool, sizeof(Description), RP1_TAG);
+        Size = (wcslen(Child->Description) + 1) * sizeof(WCHAR);
+        Buffer = ExAllocatePoolWithTag(PagedPool, Size, RP1_TAG);
         if (!Buffer)
             return STATUS_INSUFFICIENT_RESOURCES;
 
-        RtlCopyMemory(Buffer, Description, sizeof(Description));
+        RtlCopyMemory(Buffer, Child->Description, Size);
         Irp->IoStatus.Information = (ULONG_PTR)Buffer;
         return STATUS_SUCCESS;
     }
@@ -1028,17 +1053,16 @@ Rp1PdoQueryResources(
     Descriptor->u.Memory.Length = PdoExt->MmioLength;
 
     /*
-     * RP1 child controllers share the parent interrupt.  On this ARM64 HAL the
-     * interrupt vector is the GSI value USBPORT needs for its legacy interrupt
-     * fallback, so keep Level and Vector aligned.
+     * RP1 child controllers share the parent interrupt.  Keep Level and Vector
+     * equal because this ARM64 HAL reports GSIs directly as interrupt vectors.
      */
     if (PdoExt->InterruptVector != 0)
     {
         Descriptor++;
         Descriptor->Type = CmResourceTypeInterrupt;
-        Descriptor->ShareDisposition = CmResourceShareShared;
-        Descriptor->Flags = CM_RESOURCE_INTERRUPT_LEVEL_SENSITIVE;
-        Descriptor->u.Interrupt.Level = PdoExt->InterruptVector;
+        Descriptor->ShareDisposition = PdoExt->InterruptShareDisposition;
+        Descriptor->Flags = PdoExt->InterruptFlags;
+        Descriptor->u.Interrupt.Level = PdoExt->InterruptLevel;
         Descriptor->u.Interrupt.Vector = PdoExt->InterruptVector;
         Descriptor->u.Interrupt.Affinity = PdoExt->InterruptAffinity;
     }
@@ -1110,8 +1134,8 @@ Rp1PdoQueryResourceRequirements(
         Descriptor++;
         Descriptor->Option = IO_RESOURCE_PREFERRED;
         Descriptor->Type = CmResourceTypeInterrupt;
-        Descriptor->ShareDisposition = CmResourceShareShared;
-        Descriptor->Flags = CM_RESOURCE_INTERRUPT_LEVEL_SENSITIVE;
+        Descriptor->ShareDisposition = PdoExt->InterruptShareDisposition;
+        Descriptor->Flags = PdoExt->InterruptFlags;
         Descriptor->u.Interrupt.MinimumVector = PdoExt->InterruptVector;
         Descriptor->u.Interrupt.MaximumVector = PdoExt->InterruptVector;
     }
@@ -1147,8 +1171,7 @@ Rp1PdoQueryCapabilities(
     Caps->EjectSupported = FALSE;
     Caps->SurpriseRemovalOK = FALSE;
 
-    /* The child index is unique only within its parent RP1 instance. */
-    Caps->UniqueID = FALSE;
+    Caps->UniqueID = Rp1Children[PdoExt->ChildIndex].UniqueId;
     Caps->Address = PdoExt->ChildIndex;
     Caps->UINumber = MAXULONG;
 
@@ -1224,16 +1247,15 @@ Rp1PdoQueryBusInformation(
 
 /* ------------------------------------------------------------------ */
 /*  PDO: IRP_MN_QUERY_INTERFACE (BUS_INTERFACE_STANDARD)               */
-/*  Provides the PCI-like pieces USBPORT still expects for xHCI.        */
+/*  Provides PCI-like config access for RP1 child PDOs.                 */
 /* ------------------------------------------------------------------ */
 
 /*
  * PDO: IRP_MN_QUERY_INTERFACE (BUS_INTERFACE_STANDARD)
  *
- * USBPORT needs BUS_INTERFACE_STANDARD to read PCI config space
- * and access a DMA adapter.  RP1 xHCI blocks are BAR slices inside one
- * PCI function, so expose a synthetic child config view instead of
- * leaking the parent RP1 PCI config as if it belonged to the child.
+ * Function drivers use BUS_INTERFACE_STANDARD for config-space and DMA
+ * adapter queries.  RP1 child devices are BAR slices inside one PCI
+ * function, so expose a per-child config view.
  */
 static
 NTSTATUS
