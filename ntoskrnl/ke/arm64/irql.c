@@ -418,18 +418,10 @@ KiApplyIrqMaskForIrqlTransition(
      *
      * ARM64 CRITICAL FIX: When LOWERING IRQL, we must ensure DAIF.I is cleared!
      *
-     * Various code paths may have called _disable() (which sets DAIF.I=1) for
-     * critical sections, spinlocks, or atomic operations. Unlike x86 where
-     * cli/sti is automatically restored on function return via RFLAGS, ARM64's
-     * DAIF.I persists across function calls.
-     *
-     * If DAIF.I is left set after lowering IRQL, the timer interrupt (PPI 27)
-     * cannot be delivered to the CPU even though the GIC has it pending. This
-     * causes catastrophic timer stalls (100+ second gaps between timer ticks).
-     *
-     * We clear DAIF.I when lowering IRQL to ensure interrupts can be delivered
-     * according to the GIC priority mask. Code that needs interrupts disabled
-     * must use proper IRQL raising (KfRaiseIrql to HIGH_LEVEL), not just _disable().
+     * That only applies to DAIF.I state owned by IRQL masking itself: the
+     * HIGH_LEVEL drop path above clears it after programming the GIC PMR.
+     * Normal non-HIGH_LEVEL transitions must not undo a caller's explicit
+     * _disable(); those callers reopen the interrupt window themselves.
      */
     NeedsPmrUpdate = KiIrqlTransitionNeedsGicPmrUpdate(OldIrql, NewIrql);
     if (NeedsPmrUpdate)
@@ -439,18 +431,16 @@ KiApplyIrqMaskForIrqlTransition(
     }
 
     /*
-     * Enforce SError policy on every non-HIGH_LEVEL transition.
-     * Lowering needs the full helper (it also fixes stale DAIF.I).
-     * Raising only updates DAIF.A to avoid perturbing IRQ/FIQ masking.
-     *
-     * CRITICAL FIX: IsHighLevelTransition parameter must be FALSE for normal
-     * IRQL transitions. Passing TRUE causes KiUpdateDaifForIrql to return early
-     * without unmasking interrupts, leading to 715-second stalls in pool allocator.
+     * Enforce SError policy on transitions that actually touch the GIC PMR.
+     * DAIF.I is left unchanged here; non-HIGH_LEVEL IRQL is represented by PMR.
      */
     if (NewIrql < OldIrql)
     {
-        KiUpdateDaifForIrql(NewIrql, FALSE);
-        ARM64_SYNC_BARRIER();
+        if (NeedsPmrUpdate)
+        {
+            KiUpdateSerrorMaskOnlyForIrql(NewIrql);
+            ARM64_SYNC_BARRIER();
+        }
         KiTraceSerrorPolicy("lower", OldIrql, NewIrql);
     }
     else if (NewIrql > OldIrql)
