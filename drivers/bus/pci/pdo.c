@@ -380,7 +380,7 @@ PciPdoCacheMsiInfo(
 
 static
 BOOLEAN
-PciPdoShouldUseDefaultMsi(
+PciPdoShouldUseDefaultMessageInterrupts(
     _In_ PPDO_DEVICE_EXTENSION DeviceExtension)
 {
     PPCI_COMMON_CONFIG PciConfig;
@@ -391,10 +391,9 @@ PciPdoShouldUseDefaultMsi(
     PciConfig = &DeviceExtension->PciDevice->PciConfig;
 
     /*
-     * Boot-critical xHCI controllers can start from the critical-device
-     * database before any DDInstall.HW MSI policy reaches the enum key. The
-     * USBPORT/xHCI stack already consumes message interrupt resources, and
-     * modern xHCI controllers frequently have no usable INTx route.
+     * xHCI can be boot-critical before an INF policy is installed, and many
+     * controllers rely on message interrupts. Preserve that default policy
+     * and prefer MSI-X when the controller exposes it.
      */
     return (PciConfig->BaseClass == PCI_CLASS_SERIAL_BUS_CTLR &&
             PciConfig->SubClass == PCI_SUBCLASS_SB_USB &&
@@ -1064,12 +1063,20 @@ PciPdoDetermineInterruptPolicy(
     if (!PolicyFound)
     {
         PciPdoCacheMsiInfo(DeviceExtension);
-        if (DeviceExtension->PciDevice->MsiCapability &&
-            PciPdoShouldUseDefaultMsi(DeviceExtension))
+        if (PciPdoShouldUseDefaultMessageInterrupts(DeviceExtension))
         {
-            UseMsi = TRUE;
-            UseMsix = FALSE;
-            MessageLimit = 1;
+            if (DeviceExtension->PciDevice->MsixCapability)
+            {
+                UseMsix = TRUE;
+                UseMsi = FALSE;
+                MessageLimit = 1;
+            }
+            else if (DeviceExtension->PciDevice->MsiCapability)
+            {
+                UseMsi = TRUE;
+                UseMsix = FALSE;
+                MessageLimit = 1;
+            }
         }
     }
 
