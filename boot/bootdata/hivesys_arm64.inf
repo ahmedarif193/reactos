@@ -1,3 +1,9 @@
+; PROJECT:     ReactOS ARM64 boot hive
+; LICENSE:     GPL-2.0+ (https://spdx.org/licenses/GPL-2.0+)
+; FILE:        boot/bootdata/hivesys_arm64.inf
+; PURPOSE:     ARM64 boot-start driver registry entries
+; COPYRIGHT:   Copyright 2026 Ahmed ARIF <arif.ing@outlook.com>
+
 [AddReg]
 
 ; Raspberry Pi 5 RP1 southbridge bus driver
@@ -9,3 +15,15 @@ HKLM,"SYSTEM\CurrentControlSet\Services\rp1","Group",0x00000000,"System Bus Exte
 HKLM,"SYSTEM\CurrentControlSet\Services\rp1","ImagePath",0x00020000,"system32\drivers\rp1.sys"
 HKLM,"SYSTEM\CurrentControlSet\Services\rp1","Start",0x00010001,0x00000000
 HKLM,"SYSTEM\CurrentControlSet\Services\rp1","Type",0x00010001,0x00000001
+
+; Raspberry Pi 5 RP1 Ethernet controller
+HKLM,"SYSTEM\CurrentControlSet\Control\CriticalDeviceDatabase\RP1#GEM&REV_00","Service",0x00000000,"rp1gem"
+HKLM,"SYSTEM\CurrentControlSet\Control\CriticalDeviceDatabase\RP1#GEM&REV_00","ClassGUID",0x00000000,"{4D36E972-E325-11CE-BFC1-08002BE10318}"
+HKLM,"SYSTEM\CurrentControlSet\Control\CriticalDeviceDatabase\RP1#GEM","Service",0x00000000,"rp1gem"
+HKLM,"SYSTEM\CurrentControlSet\Control\CriticalDeviceDatabase\RP1#GEM","ClassGUID",0x00000000,"{4D36E972-E325-11CE-BFC1-08002BE10318}"
+
+HKLM,"SYSTEM\CurrentControlSet\Services\rp1gem","ErrorControl",0x00010001,0x00000001
+HKLM,"SYSTEM\CurrentControlSet\Services\rp1gem","Group",0x00000000,"NDIS"
+HKLM,"SYSTEM\CurrentControlSet\Services\rp1gem","ImagePath",0x00020000,"system32\drivers\rp1gem.sys"
+HKLM,"SYSTEM\CurrentControlSet\Services\rp1gem","Start",0x00010001,0x00000000
+HKLM,"SYSTEM\CurrentControlSet\Services\rp1gem","Type",0x00010001,0x00000001
