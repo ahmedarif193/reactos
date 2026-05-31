@@ -1078,7 +1078,10 @@ MiArm64InsertFreePfnRun(
 {
     PFN_NUMBER PageFrameIndex, HighPage, OldBlink;
     PMMPFNLIST ListHead;
+    PMMCOLOR_TABLES ColorTable;
     PMMPFN Pfn1;
+    PMMPFN Blink;
+    ULONG Color;
 
     ASSERT(PageCount != 0);
     ASSERT(BasePage != 0);
@@ -1115,8 +1118,28 @@ MiArm64InsertFreePfnRun(
         Pfn1->u1.Flink = (PageFrameIndex == HighPage) ? LIST_HEAD : PageFrameIndex + 1;
         Pfn1->u2.Blink = (PageFrameIndex == BasePage) ? OldBlink : PageFrameIndex - 1;
         Pfn1->u3.e1.PageLocation = FreePageList;
-        Pfn1->u4.PteFrame = MI_ARM64_UNCOLORED_FREE_PTEFRAME;
+        Pfn1->u3.e1.CacheAttribute = MiCached;
         Pfn1->u4.Priority = 3;
+        Pfn1->u4.InPageError = 0;
+        Pfn1->u4.AweAllocation = 0;
+
+        Color = PageFrameIndex & MmSecondaryColorMask;
+        ColorTable = &MmFreePagesByColor[FreePageList][Color];
+        if (ColorTable->Flink == LIST_HEAD)
+        {
+            Pfn1->u4.PteFrame = COLORED_LIST_HEAD;
+            ColorTable->Flink = PageFrameIndex;
+        }
+        else
+        {
+            Blink = (PMMPFN)ColorTable->Blink;
+            Blink->OriginalPte.u.Long = PageFrameIndex;
+            Pfn1->u4.PteFrame = MiGetPfnEntryIndex(Blink);
+        }
+
+        ColorTable->Blink = Pfn1;
+        Pfn1->OriginalPte.u.Long = LIST_HEAD;
+        ColorTable->Count++;
     }
 
     MiArm64AddAvailablePages(PageCount);
@@ -1215,7 +1238,7 @@ MiBuildPfnDatabaseFromLoaderBlock(IN PLOADER_PARAMETER_BLOCK LoaderBlock)
                         {
                             if (!Pfn1->u3.e2.ReferenceCount)
                             {
-                                Pfn1->u3.e1.CacheAttribute = MiNonCached;
+                                Pfn1->u3.e1.CacheAttribute = MiCached;
 
                                 if (RunCount == 0)
                                 {
@@ -1400,14 +1423,12 @@ MiInitializePfnDatabase(IN PLOADER_PARAMETER_BLOCK LoaderBlock)
     /* Scan memory and start setting up PFN entries */
     MiBuildPfnDatabaseFromPages(LoaderBlock);
 #endif
-    DPRINT1("[BOOTPROF 12a] PfnDb: loader-mapped/page-scan PFNs done\n");
 
     /* Add the zero page */
     MiBuildPfnDatabaseZeroPage();
 
     /* Scan the loader block and build the rest of the PFN database */
     MiBuildPfnDatabaseFromLoaderBlock(LoaderBlock);
-    DPRINT1("[BOOTPROF 12b] PfnDb: FromLoaderBlock free-list build done\n");
 
     /* Finally add the pages for the PFN database itself */
     MiBuildPfnDatabaseSelf();
@@ -2464,12 +2485,6 @@ MmArmInitSystem(IN ULONG Phase,
     {
         /* Count physical pages on the system */
         MiScanMemoryDescriptors(LoaderBlock);
-#if defined(_M_ARM64)
-        DPRINT1("[BOOTPROF 06a] Mm: ARM64 PFN range scanned; highest PFN 0x%lx, pages 0x%lx\n",
-                MmHighestPhysicalPage,
-                MmNumberOfPhysicalPages);
-#endif
-
         /* Initialize the phase 0 temporary event */
         KeInitializeEvent(&MiTempEvent, NotificationEvent, FALSE);
 
@@ -2700,9 +2715,7 @@ MmArmInitSystem(IN ULONG Phase,
         MxPfnAllocation++;
 
         /* Initialize the platform-specific parts */
-        DPRINT1("[BOOTPROF 07] Mm: calling MiInitMachineDependent\n");
         MiInitMachineDependent(LoaderBlock);
-        DPRINT1("[BOOTPROF 14] Mm: MiInitMachineDependent returned\n");
 
         //
         // x86 uses the loader-gap region
@@ -2804,7 +2817,6 @@ MmArmInitSystem(IN ULONG Phase,
         MiAddHalIoMappings();
 
         /* Initialize large page structures on PAE/x64, and MmProcessList on x86 */
-        DPRINT1("[BOOTPROF 15] Mm: PFN bitmap built; calling MiInitializeLargePageSupport\n");
         MiInitializeLargePageSupport();
 
         /* Check if the registry says any drivers should be loaded with large pages */

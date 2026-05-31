@@ -267,6 +267,16 @@ extern BOOLEAN MiArm64SelfMapReady;
 VOID
 MiArm64MapKseg0Page(
     _In_ PFN_NUMBER PageFrameNumber);
+
+NTSTATUS
+MiArm64EnsureUserPte(
+    _Inout_ PEPROCESS Process,
+    _In_ PVOID Address,
+    _Outptr_ PMMPTE *PointerPte);
+
+VOID
+MiArm64IncrementUserPageTableReferences(
+    _In_ PVOID Address);
 #endif
 
 FORCEINLINE

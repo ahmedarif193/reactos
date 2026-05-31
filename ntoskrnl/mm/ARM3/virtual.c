@@ -280,6 +280,55 @@ MiCalculatePageCommitment(IN ULONG_PTR StartingAddress,
     return CommittedPages;
 }
 
+#if defined(_M_ARM64)
+static
+ULONG
+MiArm64CalculatePageCommitment(IN ULONG_PTR StartingAddress,
+                               IN ULONG_PTR EndingAddress,
+                               IN PMMVAD Vad,
+                               IN PEPROCESS Process)
+{
+    ULONG_PTR Address;
+    ULONG_PTR PageCount;
+    ULONG_PTR CommittedPages;
+
+    ASSERT(PsGetCurrentThread()->OwnsProcessWorkingSetExclusive ||
+           PsGetCurrentThread()->OwnsProcessWorkingSetShared);
+    ASSERT(Process == PsGetCurrentProcess());
+    ASSERT(EndingAddress >= StartingAddress);
+
+    PageCount = BYTES_TO_PAGES(EndingAddress - StartingAddress + 1);
+    CommittedPages = Vad->u.VadFlags.MemCommit ? PageCount : 0;
+
+    for (Address = StartingAddress; Address <= EndingAddress; Address += PAGE_SIZE)
+    {
+        PMMPTE PointerPte;
+
+        PointerPte = MiArm64UserPteKseg0((PVOID)Address);
+        if ((PointerPte == NULL) || (PointerPte->u.Long == 0))
+        {
+            continue;
+        }
+
+        if ((PointerPte->u.Hard.Valid == 0) &&
+            (PointerPte->u.Soft.Protection == MM_DECOMMIT) &&
+            ((PointerPte->u.Soft.Prototype == 0) ||
+             (PointerPte->u.Soft.PageFileHigh == MI_PTE_LOOKUP_NEEDED)))
+        {
+            if (Vad->u.VadFlags.MemCommit)
+                CommittedPages--;
+        }
+        else if (!Vad->u.VadFlags.MemCommit)
+        {
+            CommittedPages++;
+        }
+    }
+
+    ASSERT(CommittedPages <= PageCount);
+    return CommittedPages;
+}
+#endif
+
 ULONG
 NTAPI
 MiMakeSystemAddressValid(IN PVOID PageTableVirtualAddress,
@@ -2317,6 +2366,7 @@ MiProtectVirtualMemory(IN PEPROCESS Process,
     PMMPDE PointerPde;
     MMPTE PteContents;
     PMMPFN Pfn1;
+    PFN_NUMBER PageFrameIndex;
     ULONG ProtectionMask, OldProtect;
     BOOLEAN Committed;
     NTSTATUS Status = STATUS_SUCCESS;
@@ -2526,11 +2576,10 @@ MiProtectVirtualMemory(IN PEPROCESS Process,
                     KIRQL OldIrql = MiAcquirePfnLock();
 
                     /* Mark the PTE as transition and change its protection */
-                    PteContents.u.Hard.Valid = 0;
-                    PteContents.u.Soft.Transition = 1;
-                    PteContents.u.Trans.Protection = ProtectionMask;
+                    PageFrameIndex = PFN_FROM_PTE(&PteContents);
+                    MI_MAKE_TRANSITION_PTE(&PteContents, PageFrameIndex, ProtectionMask);
                     /* Decrease PFN share count and write the PTE */
-                    MiDecrementShareCount(Pfn1, PFN_FROM_PTE(&PteContents));
+                    MiDecrementShareCount(Pfn1, PageFrameIndex);
                     // FIXME: remove the page from the WS
                     MI_WRITE_INVALID_PTE(PointerPte, PteContents);
 #ifdef CONFIG_SMP
@@ -5272,20 +5321,30 @@ NtAllocateVirtualMemory(IN HANDLE ProcessHandle,
     //
     // Get the PTE, PDE and the last PTE for this address range
     //
+#if !defined(_M_ARM64)
     PointerPde = MiAddressToPde(StartingAddress);
     PointerPte = MiAddressToPte(StartingAddress);
     LastPte = MiAddressToPte(EndingAddress);
+#endif
 
     //
     // Count pages that are not already committed, then charge the VAD and
     // process before making any PTE changes.
     //
     MiLockProcessWorkingSetUnsafe(Process, CurrentThread);
+#if defined(_M_ARM64)
+    CommitCharge = BYTES_TO_PAGES(EndingAddress - StartingAddress + 1) -
+                   MiArm64CalculatePageCommitment(StartingAddress,
+                                                  EndingAddress,
+                                                  FoundVad,
+                                                  Process);
+#else
     CommitCharge = (1 + LastPte - PointerPte) -
                    MiCalculatePageCommitment(StartingAddress,
                                              EndingAddress,
                                              FoundVad,
                                              Process);
+#endif
     MiUnlockProcessWorkingSetUnsafe(Process, CurrentThread);
 
     Status = MiChargeProcessCommitment(Process, CommitCharge);
@@ -5306,6 +5365,38 @@ NtAllocateVirtualMemory(IN HANDLE ProcessHandle,
     //
     // Make the current page table valid, and then loop each page within it
     //
+#if defined(_M_ARM64)
+    for (ULONG_PTR CurrentAddress = StartingAddress;
+         CurrentAddress <= EndingAddress;
+         CurrentAddress += PAGE_SIZE)
+    {
+        Status = MiArm64EnsureUserPte(Process, (PVOID)CurrentAddress, &PointerPte);
+        if (!NT_SUCCESS(Status))
+        {
+            MiUnlockProcessWorkingSetUnsafe(Process, CurrentThread);
+            goto FailPath;
+        }
+
+        if (PointerPte->u.Long == 0)
+        {
+            MiArm64IncrementUserPageTableReferences((PVOID)CurrentAddress);
+            MI_WRITE_INVALID_PTE(PointerPte, TempPte);
+        }
+        else if (PointerPte->u.Long == MmDecommittedPte.u.Long)
+        {
+            MI_WRITE_INVALID_PTE(PointerPte, TempPte);
+        }
+        else if (!(ChangeProtection) && (Protect != MiGetPageProtection(PointerPte)))
+        {
+            if (PointerPte->u.Soft.Valid == 0)
+            {
+                ASSERT(PointerPte->u.Soft.Prototype == 0);
+            }
+
+            ChangeProtection = TRUE;
+        }
+    }
+#else
     MiMakePdeExistAndMakeValid(PointerPde, Process, MM_NOIRQL);
     while (PointerPte <= LastPte)
     {
@@ -5353,7 +5444,6 @@ NtAllocateVirtualMemory(IN HANDLE ProcessHandle,
             if (PointerPte->u.Soft.Valid == 0)
             {
                 ASSERT(PointerPte->u.Soft.Prototype == 0);
-                ASSERT((PointerPte->u.Soft.PageFileHigh == 0) || (PointerPte->u.Soft.Transition == 1));
             }
 
             //
@@ -5368,6 +5458,7 @@ NtAllocateVirtualMemory(IN HANDLE ProcessHandle,
         //
         PointerPte++;
     }
+#endif
 
     //
     // Release the working set lock, unlock the address space, and detach from
