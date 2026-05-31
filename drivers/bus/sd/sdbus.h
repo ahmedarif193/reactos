@@ -58,6 +58,9 @@ typedef struct _FDO_EXTENSION {
     ULONG RegisterLength;
     BOOLEAN RegistersMapped;
 
+    /* Optional hardware-specific controller extension */
+    PVOID HardwareExtension;
+
     /* Interrupt handling */
     PKINTERRUPT InterruptObject;
     KDPC CardDetectDpc;

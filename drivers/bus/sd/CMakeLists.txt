@@ -4,6 +4,8 @@ include_directories(
 
 list(APPEND SOURCE
     sdbus.c
+    hardware.c
+    bcm2712.c
     fdo.c
     pdo.c
     enum.c
@@ -13,6 +15,8 @@ list(APPEND SOURCE
     power.c
     sdio.c
     emmc.c
+    hardware.h
+    bcm2712.h
     sdbus.h)
 
 add_library(sdbus MODULE ${SOURCE} sdbus.rc)
