@@ -41,6 +41,20 @@
 #define PCIE_MISC_MISC_CTRL_CFG_READ_UR     0x00002000  /* Bit 13 */
 
 /* ------------------------------------------------------------------ */
+/*  Inbound DMA windows (RC_BARn + UBUS remap) - RP1 DMA translation   */
+/*  BCM2712 BARn layout is 0x402C + 8 * (n - 1).                    */
+/* ------------------------------------------------------------------ */
+#define RC_BAR1_CONFIG_LO   0x402C  /* PCI base[31:0] | size_code */
+#define UBUS_BAR1_REMAP_LO  0x40AC  /* CPU base[31:0] | access_en */
+
+#define PCIE_MISC_RC_BAR_CONFIG_LO_SIZE_MASK      0x0000001F
+#define PCIE_MISC_UBUS_BAR_REMAP_ACCESS_EN        0x00000001
+
+#define BCM2712_RP1_DMA_PCI_BASE                  0x1000000000ULL
+#define BCM2712_RP1_DMA_CPU_BASE                  0x0000000000ULL
+#define BCM2712_RP1_DMA_SIZE                      0x1000000000ULL
+
+/* ------------------------------------------------------------------ */
 /*  ACPI OEM identification for RPi5 firmware                         */
 /* ------------------------------------------------------------------ */
 #define BCM2712_ACPI_OEM_ID         "RPIFDN"
@@ -86,7 +100,9 @@ Bcm2712PciInit(VOID);
  * Drop-in replacement for the ECAM path when MCFG is absent.
  *
  * @param Write     TRUE for a write, FALSE for a read.
- * @param Segment   PCI segment (0 = PCIE0, 1 = PCIE1, 2 = PCIE2).
+ * @param Segment   ACPI PCI segment hint.  BCM2712 bus-number registers
+ *                  select the exact root complex when firmware segment
+ *                  numbering does not match the hardware index.
  * @param Bus       PCI bus number (0-255).
  * @param Slot      PCI slot (device + function).
  * @param Buffer    Caller buffer.
@@ -94,8 +110,9 @@ Bcm2712PciInit(VOID);
  * @param Length    Byte count (1, 2, or 4 for natural access; arbitrary
  *                  for memcpy-style callers).
  *
- * @return  TRUE if the access was handled, FALSE if this segment/bus
- *          is not served by BCM2712 (caller should try another backend).
+ * @return  TRUE if the access was handled by the BCM2712 backend.  Absent
+ *          devices and buses return PCI all-ones.  FALSE means the backend
+ *          is unavailable or the request is invalid.
  */
 BOOLEAN
 Bcm2712PciAccessConfigSpace(
