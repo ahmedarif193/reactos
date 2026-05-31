@@ -1897,33 +1897,99 @@ RtlpArm64FunctionLength(
 
 static
 PRUNTIME_FUNCTION
+RtlpArm64GetExceptionTable(
+    _In_ PVOID ImageBase,
+    _Out_ PULONG Length)
+{
+    ULONG_PTR Base = (ULONG_PTR)ImageBase;
+    ULONG_PTR NtAddress, HeaderEnd, TableAddress, TableEnd;
+    PIMAGE_DOS_HEADER DosHeader;
+    PIMAGE_NT_HEADERS NtHeaders;
+    PIMAGE_DATA_DIRECTORY Directory;
+    ULONG SizeOfImage, TableRva, TableSize;
+
+    *Length = 0;
+
+    if (ImageBase == NULL)
+        return NULL;
+
+    if (!MmIsAddressValid((PVOID)Base) ||
+        !MmIsAddressValid((PVOID)(Base + sizeof(IMAGE_DOS_HEADER) - 1)))
+    {
+        return NULL;
+    }
+
+    DosHeader = (PIMAGE_DOS_HEADER)Base;
+    if ((DosHeader->e_magic != IMAGE_DOS_SIGNATURE) ||
+        (DosHeader->e_lfanew <= 0) ||
+        ((ULONG)DosHeader->e_lfanew > PAGE_SIZE))
+    {
+        return NULL;
+    }
+
+    NtAddress = Base + DosHeader->e_lfanew;
+    HeaderEnd = NtAddress +
+                FIELD_OFFSET(IMAGE_NT_HEADERS, OptionalHeader.DataDirectory) +
+                ((IMAGE_DIRECTORY_ENTRY_EXCEPTION + 1) * sizeof(IMAGE_DATA_DIRECTORY)) - 1;
+
+    if ((NtAddress < Base) ||
+        (HeaderEnd < NtAddress) ||
+        !MmIsAddressValid((PVOID)NtAddress) ||
+        !MmIsAddressValid((PVOID)HeaderEnd))
+    {
+        return NULL;
+    }
+
+    NtHeaders = (PIMAGE_NT_HEADERS)NtAddress;
+    if ((NtHeaders->Signature != IMAGE_NT_SIGNATURE) ||
+        (NtHeaders->OptionalHeader.Magic != IMAGE_NT_OPTIONAL_HDR64_MAGIC) ||
+        (NtHeaders->OptionalHeader.NumberOfRvaAndSizes <= IMAGE_DIRECTORY_ENTRY_EXCEPTION))
+    {
+        return NULL;
+    }
+
+    SizeOfImage = NtHeaders->OptionalHeader.SizeOfImage;
+    Directory = &NtHeaders->OptionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_EXCEPTION];
+    TableRva = Directory->VirtualAddress;
+    TableSize = Directory->Size;
+
+    if ((TableRva == 0) ||
+        (TableSize < sizeof(RUNTIME_FUNCTION)) ||
+        (TableRva >= SizeOfImage) ||
+        (TableSize > SizeOfImage - TableRva))
+    {
+        return NULL;
+    }
+
+    TableAddress = Base + TableRva;
+    TableEnd = TableAddress + TableSize - 1;
+    if ((TableAddress < Base) ||
+        (TableEnd < TableAddress) ||
+        !MmIsAddressValid((PVOID)TableAddress) ||
+        !MmIsAddressValid((PVOID)TableEnd))
+    {
+        return NULL;
+    }
+
+    *Length = TableSize / sizeof(RUNTIME_FUNCTION);
+    return (PRUNTIME_FUNCTION)TableAddress;
+}
+
+static
+PRUNTIME_FUNCTION
 NTAPI
 RtlLookupFunctionTable(
     _In_ ULONG64 ControlPc,
     _Out_ PULONG64 ImageBase,
     _Out_ PULONG Length)
 {
-    PVOID Table;
-    ULONG Size;
-
     if (!RtlPcToFileHeader((PVOID)(ULONG_PTR)ControlPc, (PVOID *)ImageBase))
     {
         *Length = 0;
         return NULL;
     }
 
-    Table = RtlImageDirectoryEntryToData((PVOID)(ULONG_PTR)*ImageBase,
-                                         TRUE,
-                                         IMAGE_DIRECTORY_ENTRY_EXCEPTION,
-                                         &Size);
-    if (Table == NULL)
-    {
-        *Length = 0;
-        return NULL;
-    }
-
-    *Length = Size / sizeof(RUNTIME_FUNCTION);
-    return Table;
+    return RtlpArm64GetExceptionTable((PVOID)(ULONG_PTR)*ImageBase, Length);
 }
 
 PRUNTIME_FUNCTION

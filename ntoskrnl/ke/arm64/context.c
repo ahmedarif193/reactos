@@ -78,6 +78,10 @@ KeContextToTrapFrame(_In_ PCONTEXT Context,
         TrapFrame->Pc = Context->Pc;
         TrapFrame->Sp = Context->Sp;
         TrapFrame->Spsr = Context->Cpsr;
+        if (PreviousMode != KernelMode)
+        {
+            TrapFrame->Spsr |= ARM64_PSTATE_ASYNC_ABORT_MASK;
+        }
 
         TrapFrame->PreviousMode = (CHAR)PreviousMode;
         TrapFrame->PreviousIrql = KeGetCurrentIrql();
