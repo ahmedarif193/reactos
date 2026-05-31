@@ -32,6 +32,7 @@ MiArm64ProbeAndLockUserPages(
     _Inout_ PMDL Mdl,
     _In_ PVOID StartAddress,
     _In_ ULONG TotalPages,
+    _In_ KPROCESSOR_MODE AccessMode,
     _In_ LOCK_OPERATION Operation,
     _In_ PEPROCESS CurrentProcess);
 
@@ -1027,6 +1028,7 @@ MmProbeAndLockPages(IN PMDL Mdl,
         Status = MiArm64ProbeAndLockUserPages(Mdl,
                                               StartAddress,
                                               TotalPages,
+                                              AccessMode,
                                               Operation,
                                               CurrentProcess);
         if (!NT_SUCCESS(Status))

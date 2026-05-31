@@ -464,6 +464,10 @@ NTAPI
 MiFillSystemPageDirectory(IN PVOID Base,
                           IN SIZE_T NumberOfBytes)
 {
+#if defined(_M_ARM64)
+    PAGED_CODE();
+    MiArm64FillSystemPageDirectory(Base, NumberOfBytes);
+#else
     PMMPDE PointerPde, LastPde, SystemMapPde;
     MMPDE TempPde;
     PFN_NUMBER PageFrameIndex, ParentPage;
@@ -525,6 +529,7 @@ MiFillSystemPageDirectory(IN PVOID Base,
         SystemMapPde++;
         PointerPde++;
     }
+#endif
 }
 
 static
