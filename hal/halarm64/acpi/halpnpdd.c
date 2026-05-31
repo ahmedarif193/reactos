@@ -51,6 +51,10 @@ typedef enum _PDO_TYPE
  */
 #define HALP_RPI5_SD_HOST_PHYS      0x1000FFF000ULL
 #define HALP_RPI5_SD_HOST_LENGTH    0x260
+#define HALP_RPI5_SD_CFG_PHYS       0x1000FFF400ULL
+#define HALP_RPI5_SD_CFG_LENGTH     0x200
+#define HALP_RPI5_GIO_AON_PHYS      0x107D517C00ULL
+#define HALP_RPI5_GIO_AON_LENGTH    0x40
 #define HALP_RPI5_SD_GSI            305
 
 /* Set by Bcm2712PciProbe() in bcm2712_pci.c when running on a Raspberry Pi 5. */
@@ -295,9 +299,11 @@ HalpPortRangeFreeRange(
 
 /*
  * Build the boot (raw) resource list for the Raspberry Pi 5 SD host: the SDHCI
- * register window plus its GIC SPI. The raw GSI is placed in u.Interrupt.Level;
- * IopTranslateDeviceResources re-runs it through HalGetInterruptVector to fill
- * the translated vector/IRQL that sdbus.sys consumes.
+ * register window, the BCM2712 SDIO CFG window, the always-on GPIO window used
+ * by the board SD regulators, plus its GIC SPI. The raw GSI is placed in
+ * u.Interrupt.Level; IopTranslateDeviceResources re-runs it through
+ * HalGetInterruptVector to fill the translated vector/IRQL that sdbus.sys
+ * consumes.
  */
 static
 NTSTATUS
@@ -308,8 +314,8 @@ HalpBuildRpi5SdResources(
     PCM_PARTIAL_RESOURCE_DESCRIPTOR Desc;
     ULONG Size;
 
-    /* CM_RESOURCE_LIST already covers one partial descriptor; add one more. */
-    Size = sizeof(CM_RESOURCE_LIST) + sizeof(CM_PARTIAL_RESOURCE_DESCRIPTOR);
+    /* CM_RESOURCE_LIST already covers one partial descriptor; add three more. */
+    Size = sizeof(CM_RESOURCE_LIST) + 3 * sizeof(CM_PARTIAL_RESOURCE_DESCRIPTOR);
     List = ExAllocatePoolZero(PagedPool, Size, TAG_HAL);
     if (!List)
         return STATUS_INSUFFICIENT_RESOURCES;
@@ -319,7 +325,7 @@ HalpBuildRpi5SdResources(
     List->List[0].BusNumber = 0;
     List->List[0].PartialResourceList.Version = 1;
     List->List[0].PartialResourceList.Revision = 1;
-    List->List[0].PartialResourceList.Count = 2;
+    List->List[0].PartialResourceList.Count = 4;
 
     Desc = List->List[0].PartialResourceList.PartialDescriptors;
 
@@ -328,6 +334,20 @@ HalpBuildRpi5SdResources(
     Desc->Flags = CM_RESOURCE_MEMORY_READ_WRITE;
     Desc->u.Memory.Start.QuadPart = HALP_RPI5_SD_HOST_PHYS;
     Desc->u.Memory.Length = HALP_RPI5_SD_HOST_LENGTH;
+    Desc++;
+
+    Desc->Type = CmResourceTypeMemory;
+    Desc->ShareDisposition = CmResourceShareDeviceExclusive;
+    Desc->Flags = CM_RESOURCE_MEMORY_READ_WRITE;
+    Desc->u.Memory.Start.QuadPart = HALP_RPI5_SD_CFG_PHYS;
+    Desc->u.Memory.Length = HALP_RPI5_SD_CFG_LENGTH;
+    Desc++;
+
+    Desc->Type = CmResourceTypeMemory;
+    Desc->ShareDisposition = CmResourceShareDeviceExclusive;
+    Desc->Flags = CM_RESOURCE_MEMORY_READ_WRITE;
+    Desc->u.Memory.Start.QuadPart = HALP_RPI5_GIO_AON_PHYS;
+    Desc->u.Memory.Length = HALP_RPI5_GIO_AON_LENGTH;
     Desc++;
 
     Desc->Type = CmResourceTypeInterrupt;
@@ -341,7 +361,7 @@ HalpBuildRpi5SdResources(
     return STATUS_SUCCESS;
 }
 
-/* Build the matching resource requirements (fixed address + fixed GIC SPI). */
+/* Build the matching resource requirements (fixed addresses + fixed GIC SPI). */
 static
 NTSTATUS
 HalpBuildRpi5SdRequirements(
@@ -351,8 +371,8 @@ HalpBuildRpi5SdRequirements(
     PIO_RESOURCE_DESCRIPTOR Desc;
     ULONG Size;
 
-    /* One alternative list holding a memory range and an interrupt. */
-    Size = sizeof(IO_RESOURCE_REQUIREMENTS_LIST) + sizeof(IO_RESOURCE_DESCRIPTOR);
+    /* One alternative list holding three memory ranges and an interrupt. */
+    Size = sizeof(IO_RESOURCE_REQUIREMENTS_LIST) + 3 * sizeof(IO_RESOURCE_DESCRIPTOR);
     List = ExAllocatePoolZero(PagedPool, Size, TAG_HAL);
     if (!List)
         return STATUS_INSUFFICIENT_RESOURCES;
@@ -364,7 +384,7 @@ HalpBuildRpi5SdRequirements(
     List->AlternativeLists = 1;
     List->List[0].Version = 1;
     List->List[0].Revision = 1;
-    List->List[0].Count = 2;
+    List->List[0].Count = 4;
 
     Desc = List->List[0].Descriptors;
 
@@ -376,6 +396,26 @@ HalpBuildRpi5SdRequirements(
     Desc->u.Memory.MinimumAddress.QuadPart = HALP_RPI5_SD_HOST_PHYS;
     Desc->u.Memory.MaximumAddress.QuadPart =
         HALP_RPI5_SD_HOST_PHYS + HALP_RPI5_SD_HOST_LENGTH - 1;
+    Desc++;
+
+    Desc->Type = CmResourceTypeMemory;
+    Desc->ShareDisposition = CmResourceShareDeviceExclusive;
+    Desc->Flags = CM_RESOURCE_MEMORY_READ_WRITE;
+    Desc->u.Memory.Length = HALP_RPI5_SD_CFG_LENGTH;
+    Desc->u.Memory.Alignment = 1;
+    Desc->u.Memory.MinimumAddress.QuadPart = HALP_RPI5_SD_CFG_PHYS;
+    Desc->u.Memory.MaximumAddress.QuadPart =
+        HALP_RPI5_SD_CFG_PHYS + HALP_RPI5_SD_CFG_LENGTH - 1;
+    Desc++;
+
+    Desc->Type = CmResourceTypeMemory;
+    Desc->ShareDisposition = CmResourceShareDeviceExclusive;
+    Desc->Flags = CM_RESOURCE_MEMORY_READ_WRITE;
+    Desc->u.Memory.Length = HALP_RPI5_GIO_AON_LENGTH;
+    Desc->u.Memory.Alignment = 1;
+    Desc->u.Memory.MinimumAddress.QuadPart = HALP_RPI5_GIO_AON_PHYS;
+    Desc->u.Memory.MaximumAddress.QuadPart =
+        HALP_RPI5_GIO_AON_PHYS + HALP_RPI5_GIO_AON_LENGTH - 1;
     Desc++;
 
     Desc->Type = CmResourceTypeInterrupt;
@@ -438,8 +478,14 @@ HalpCreateRpi5SdPdo(
 
     PdoDeviceObject->Flags &= ~DO_DEVICE_INITIALIZING;
 
-    DPRINT1("HAL: Reported Raspberry Pi 5 SD host (phys 0x%I64x len 0x%x GSI %u)\n",
-            (ULONGLONG)HALP_RPI5_SD_HOST_PHYS, HALP_RPI5_SD_HOST_LENGTH, HALP_RPI5_SD_GSI);
+    DPRINT1("HAL: Reported Raspberry Pi 5 SD host (phys 0x%I64x len 0x%x cfg 0x%I64x len 0x%x gio_aon 0x%I64x len 0x%x GSI %u)\n",
+            (ULONGLONG)HALP_RPI5_SD_HOST_PHYS,
+            HALP_RPI5_SD_HOST_LENGTH,
+            (ULONGLONG)HALP_RPI5_SD_CFG_PHYS,
+            HALP_RPI5_SD_CFG_LENGTH,
+            (ULONGLONG)HALP_RPI5_GIO_AON_PHYS,
+            HALP_RPI5_GIO_AON_LENGTH,
+            HALP_RPI5_SD_GSI);
 }
 
 NTSTATUS
