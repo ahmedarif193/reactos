@@ -40,24 +40,6 @@ KiTrapReturn:
     ldr     x23, [x20, #TfPc]
     ldr     x26, [x20, #TfSp]
 
-    /* Program exception state to system registers */
-    msr     spsr_el1, x22
-    msr     elr_el1,  x23
-
-    /* Memory barrier to ensure exception state is committed */
-    dsb     sy
-    isb
-
-    /*
-     * CRITICAL: Save trap frame pointer (x20) to stack so we can access it
-     * after exception frame restoration to re-load SPSR/ELR just before ERET.
-     *
-     * Reserve 16 bytes on stack (16-byte aligned):
-     *   [sp+0]  = trap frame pointer (x20)
-     *   [sp+8]  = padding
-     */
-    str     x20, [sp, #-16]!             /* Save trap frame pointer */
-
     /* Restore volatile registers from the trap frame */
     ldr     x18, [x20, #TfX18]
     ldp     x16, x17, [x20, #TfX16]
@@ -118,40 +100,18 @@ KiTrapReturn:
     /* EL1 return path - falls through to common path */
 3:
     /*
-     * ARM64 CRITICAL FIX: Set SPSR_EL1/ELR_EL1 BEFORE exception frame restore.
-     *
-     * Previous code set SPSR/ELR AFTER exception frame restore, using x29/x27/x28
-     * as scratch. This clobbered the exception-frame-restored values of FP (x29),
-     * x27, and x28 for EL1 returns (data abort page faults). The corrupted FP
-     * caused stack frame corruption, leading to SPIN_LOCK_NOT_OWNED bugchecks.
-     *
-     * Fix: Pop trap frame pointer and set SPSR/ELR system registers FIRST,
-     * then restore exception frame (which correctly sets ALL GPRs including
-     * x27, x28, x29). ERET immediately after - no GPR clobber.
-     *
-     * Safety: Interrupts are disabled (daifset #0xF from entry), and the
-     * exception frame is on the kernel stack (always mapped), so no exceptions
-     * can occur between MSR and ERET to corrupt SPSR_EL1/ELR_EL1.
-     */
-    dsb     sy
-    isb
-
-    /* Pop trap frame pointer from stack (saved at entry) */
-    ldr     x29, [sp], #16
-
-    /*
      * Restore KTHREAD.PreviousMode for ARM64 kernel Zw calls.  The SVC handler
      * stores the pre-syscall value in TrapFrame->Reserved with a cookie because
      * NtRaiseException/NtContinue can leave through KiExceptionExit instead of
      * returning to the Zw wrapper.
      */
-    ldr     w27, [x29, #TfReserved]
+    ldr     w27, [x20, #TfReserved]
     lsr     w28, w27, #8
     movz    w27, #0x564D
     movk    w27, #0x50, lsl #16
     cmp     w28, w27
     b.ne    .Lprevious_mode_done
-    ldr     w27, [x29, #TfReserved]
+    ldr     w27, [x20, #TfReserved]
     and     w27, w27, #0xFF
     mrs     x28, tpidr_el1
     cbz     x28, .Lprevious_mode_done
@@ -161,11 +121,15 @@ KiTrapReturn:
 .Lprevious_mode_done:
 
     /* Load SPSR and ELR from trap frame, set system registers */
-    ldr     w27, [x29, #TfSpsr]
-    ldr     x28, [x29, #TfPc]
+    ldr     w27, [x20, #TfSpsr]
+    ldr     x28, [x20, #TfPc]
+    and     w16, w27, #0xF
+    cbnz    w16, .Lspsr_ready
+    orr     w27, w27, #0x100       /* Keep SError masked for EL0 returns */
+    str     w27, [x20, #TfSpsr]
+.Lspsr_ready:
     msr     spsr_el1, x27
     msr     elr_el1, x28
-    dsb     sy
     isb
 
     /*
@@ -200,6 +164,13 @@ KiTrapReturn:
     cbz     x28, .Lrestore_exception_frame
     mov     sp, x28
 .Lrestore_exception_frame:
+
+    /*
+     * x16/x17 are volatile, but they still belong to the interrupted context.
+     * The return path uses x16 as scratch after the early trap-frame restore,
+     * so reload both immediately before the final ERET path.
+     */
+    ldp     x16, x17, [x20, #TfX16]
 
     /* Restore non-volatiles from exception frame (if present).
      * This restores x19-x30, x27 to their correct pre-exception values.
