@@ -52,7 +52,12 @@ typedef struct _BCM2712_PCIE_RC
     PHYSICAL_ADDRESS PhysBase;   /* Controller physical address          */
     PVOID            VirtBase;   /* MmMapIoSpace mapping                 */
     BOOLEAN          Mapped;     /* TRUE after successful MmMapIoSpace   */
+    BOOLEAN          Valid;      /* TRUE if firmware initialized the RC  */
     BOOLEAN          LinkUp;     /* TRUE if PHY link is active           */
+    BOOLEAN          BusNumbersValid;
+    UCHAR            PrimaryBus;
+    UCHAR            SecondaryBus;
+    UCHAR            SubordinateBus;
 } BCM2712_PCIE_RC, *PBCM2712_PCIE_RC;
 
 static BCM2712_PCIE_RC Bcm2712RcState[BCM2712_PCIE_RC_COUNT];
@@ -60,12 +65,14 @@ BOOLEAN                Bcm2712Detected  = FALSE;
 static BOOLEAN         Bcm2712Initialized = FALSE;
 static KSPIN_LOCK      Bcm2712ConfigLock;
 
-/* Physical base addresses — indexed by segment number. */
+/* Physical base addresses — indexed by hardware controller number. */
 static const ULONGLONG Bcm2712RcBases[BCM2712_PCIE_RC_COUNT] = {
     BCM2712_PCIE0_RC_BASE,
     BCM2712_PCIE1_RC_BASE,
     BCM2712_PCIE2_RC_BASE,
 };
+
+#define BCM2712_PCI_BRIDGE_BUS_NUMBERS 0x18
 
 /* ================================================================== */
 /*  Internal helpers                                                  */
@@ -96,6 +103,67 @@ Bcm2712Write32(
     WRITE_REGISTER_ULONG((PULONG)((PUCHAR)RcBase + Offset), Value);
 }
 
+static
+ULONG
+Bcm2712EncodeInboundWindowSize(
+    _In_ ULONGLONG Size)
+{
+    ULONG Log2;
+
+    if (Size == 0 || (Size & (Size - 1)) != 0)
+        return 0;
+
+    Log2 = 0;
+    while (Size > 1)
+    {
+        Size >>= 1;
+        Log2++;
+    }
+
+    if (Log2 >= 12 && Log2 <= 15)
+        return (Log2 - 12) + 0x1C;
+
+    if (Log2 >= 16 && Log2 <= 36)
+        return Log2 - 15;
+
+    return 0;
+}
+
+static
+VOID
+Bcm2712ProgramInboundWindow(
+    _In_ PVOID RcBase,
+    _In_ ULONG BarLoOffset,
+    _In_ ULONG UbusLoOffset,
+    _In_ ULONGLONG PciBase,
+    _In_ ULONGLONG CpuBase,
+    _In_ ULONGLONG Size)
+{
+    ULONG EncodedSize;
+    ULONG BarLo;
+    ULONG UbusLo;
+
+    EncodedSize = Bcm2712EncodeInboundWindowSize(Size);
+    if (EncodedSize == 0)
+    {
+        Bcm2712Write32(RcBase, BarLoOffset, 0);
+        Bcm2712Write32(RcBase, BarLoOffset + 4, 0);
+        Bcm2712Write32(RcBase, UbusLoOffset, 0);
+        Bcm2712Write32(RcBase, UbusLoOffset + 4, 0);
+        return;
+    }
+
+    BarLo = (ULONG)PciBase & ~PCIE_MISC_RC_BAR_CONFIG_LO_SIZE_MASK;
+    BarLo |= EncodedSize & PCIE_MISC_RC_BAR_CONFIG_LO_SIZE_MASK;
+
+    UbusLo = ((ULONG)CpuBase & ~0xFFFUL) | PCIE_MISC_UBUS_BAR_REMAP_ACCESS_EN;
+
+    Bcm2712Write32(RcBase, BarLoOffset, BarLo);
+    Bcm2712Write32(RcBase, BarLoOffset + 4, (ULONG)(PciBase >> 32));
+    Bcm2712Write32(RcBase, UbusLoOffset, UbusLo);
+    Bcm2712Write32(RcBase, UbusLoOffset + 4, (ULONG)(CpuBase >> 32));
+}
+
 /**
  * Check PCIe link status for one controller.
  */
@@ -114,30 +182,31 @@ Bcm2712IsLinkUp(
 /**
  * Compute the MMIO address for a config space access.
  *
- * For bus 0 (root port):
+ * For the primary bus (root port):
  *   address = RcBase + Register
  *
- * For bus > 0 (downstream devices):
+ * For downstream buses:
  *   1. Write (Bus << 20 | Dev << 15 | Func << 12) to CFG_INDEX
  *   2. address = RcBase + CFG_DATA + Register
  *
- * Returns NULL if the target is known-unreachable (e.g. bus 0 dev > 0,
- * or bus 1 dev > 0 — BCM2712 is a single-root-port bridge).
+ * Returns NULL if the target is known-unreachable.
  */
 static
 PVOID
 Bcm2712ComputeConfigAddress(
-    _In_ PVOID RcBase,
+    _In_ PBCM2712_PCIE_RC Rc,
     _In_ ULONG Bus,
     _In_ ULONG Device,
     _In_ ULONG Function,
     _In_ ULONG Register)
 {
+    PVOID RcBase = Rc->VirtBase;
+
     /*
-     * Bus 0: only device 0, function 0 exists (the root port itself).
+     * Primary bus: only device 0, function 0 exists (the root port itself).
      * The config registers are at the RC base directly.
      */
-    if (Bus == 0)
+    if (Bus == Rc->PrimaryBus)
     {
         if (Device > 0 || Function > 0)
             return NULL;
@@ -145,11 +214,21 @@ Bcm2712ComputeConfigAddress(
         return (PVOID)((PUCHAR)RcBase + Register);
     }
 
+    if (!Rc->LinkUp)
+        return NULL;
+
+    if (Rc->BusNumbersValid &&
+        (Bus < Rc->SecondaryBus || Bus > Rc->SubordinateBus))
+    {
+        return NULL;
+    }
+
     /*
-     * Bus 1: only one device (the directly-attached endpoint, e.g. RP1).
-     * Multiple functions are allowed (RP1 may expose multiple).
+     * The directly-attached endpoint bus only has device 0 behind this
+     * single-root-port bridge.  Subordinate buses behind a downstream
+     * bridge are addressed normally through CFG_INDEX.
      */
-    if (Bus == 1 && Device > 0)
+    if (Bus == Rc->SecondaryBus && Device > 0)
         return NULL;
 
     /*
@@ -161,6 +240,79 @@ Bcm2712ComputeConfigAddress(
                    (Bus << 20) | (Device << 15) | (Function << 12));
 
     return (PVOID)((PUCHAR)RcBase + PCIE_EXT_CFG_DATA + Register);
+}
+
+static
+BOOLEAN
+Bcm2712AnyRcValid(VOID)
+{
+    ULONG Index;
+
+    for (Index = 0; Index < BCM2712_PCIE_RC_COUNT; Index++)
+    {
+        if (Bcm2712RcState[Index].Valid)
+            return TRUE;
+    }
+
+    return FALSE;
+}
+
+static
+BOOLEAN
+Bcm2712RcContainsBus(
+    _In_ PBCM2712_PCIE_RC Rc,
+    _In_ ULONG Bus)
+{
+    if (!Rc->Valid)
+        return FALSE;
+
+    if (!Rc->BusNumbersValid)
+        return (Bus == Rc->PrimaryBus ||
+                (Rc->LinkUp && Bus == Rc->SecondaryBus));
+
+    return (Bus == Rc->PrimaryBus ||
+            (Bus >= Rc->SecondaryBus && Bus <= Rc->SubordinateBus));
+}
+
+static
+PBCM2712_PCIE_RC
+Bcm2712FindRcForConfigSpace(
+    _In_ USHORT Segment,
+    _In_ ULONG Bus)
+{
+    ULONG Index;
+
+    /*
+     * Each root complex is its own PCI segment with its own bus 0, so the
+     * bus number alone cannot tell two live controllers apart - the segment
+     * is the only discriminator.  Prefer the controller the firmware segment
+     * names, but only when it is initialized and genuinely owns the bus
+     * (Bcm2712RcContainsBus checks Valid).  Validating containment means a
+     * mismatched segment number can never misroute: it just falls through to
+     * the bus scans below, which is what keeps the single-controller Pi5 case
+     * (where the active RP1 segment need not equal its controller index)
+     * working.
+     */
+    if (Segment < BCM2712_PCIE_RC_COUNT &&
+        Bcm2712RcContainsBus(&Bcm2712RcState[Segment], Bus))
+    {
+        return &Bcm2712RcState[Segment];
+    }
+
+    for (Index = 0; Index < BCM2712_PCIE_RC_COUNT; Index++)
+    {
+        if (Bcm2712RcState[Index].LinkUp &&
+            Bcm2712RcContainsBus(&Bcm2712RcState[Index], Bus))
+            return &Bcm2712RcState[Index];
+    }
+
+    for (Index = 0; Index < BCM2712_PCIE_RC_COUNT; Index++)
+    {
+        if (Bcm2712RcContainsBus(&Bcm2712RcState[Index], Bus))
+            return &Bcm2712RcState[Index];
+    }
+
+    return NULL;
 }
 
 /**
@@ -344,69 +496,49 @@ Bcm2712PciInit(VOID)
                 continue;
             }
 
+            {
+                ULONG BusNumbers;
+
+                BusNumbers = Bcm2712Read32(VirtAddr, BCM2712_PCI_BRIDGE_BUS_NUMBERS);
+
+                Bcm2712RcState[Index].Valid = TRUE;
+                Bcm2712RcState[Index].PrimaryBus = (UCHAR)(BusNumbers & 0xFF);
+                Bcm2712RcState[Index].SecondaryBus = (UCHAR)((BusNumbers >> 8) & 0xFF);
+                Bcm2712RcState[Index].SubordinateBus = (UCHAR)((BusNumbers >> 16) & 0xFF);
+                Bcm2712RcState[Index].BusNumbersValid =
+                    (Bcm2712RcState[Index].SecondaryBus != 0 ||
+                     Bcm2712RcState[Index].SubordinateBus != 0);
+
+                if (!Bcm2712RcState[Index].BusNumbersValid)
+                {
+                    Bcm2712RcState[Index].PrimaryBus = 0;
+                    Bcm2712RcState[Index].SecondaryBus = 1;
+                    Bcm2712RcState[Index].SubordinateBus = 1;
+                }
+            }
+
             Bcm2712RcState[Index].LinkUp = Bcm2712IsLinkUp(VirtAddr);
+
+            DPRINT("[BCM2712] PCIE%lu: bus %u-%u-%u, link %s\n",
+                   Index,
+                   Bcm2712RcState[Index].PrimaryBus,
+                   Bcm2712RcState[Index].SecondaryBus,
+                   Bcm2712RcState[Index].SubordinateBus,
+                   Bcm2712RcState[Index].LinkUp ? "UP" : "DOWN");
 
             if (Bcm2712RcState[Index].LinkUp)
             {
                 /*
-                 * Configure PCIe inbound DMA window to cover full RAM.
-                 *
-                 * On RPi5, ALL physical RAM is above 4GB (starting at ~0x140000000).
-                 * The RP1 xHCI needs to DMA to DCBAA/command ring/event ring which
-                 * reside in this high memory. Without a properly configured inbound
-                 * window, DMA writes from RP1 to CPU memory silently fail (xHCI
-                 * event ring stays all zeros → command timeouts).
-                 *
-                 * Program inbound window 2 (RC_BAR2) for identity mapping:
-                 *   PCI address 0 → CPU address 0, size = 64GB
-                 * This covers all possible physical RAM locations.
-                 *
-                 * Register layout (from Linux pcie-brcmstb driver):
-                 *   RC_BAR2_CONFIG_LO (0x4034) = encoded_size | flags
-                 *   RC_BAR2_CONFIG_HI (0x4038) = upper 32 bits of BAR base (0)
-                 *   UBUS_BAR2_CONFIG_REMAP_LO (0x40B4) = CPU addr low | access_en
-                 *   UBUS_BAR2_CONFIG_REMAP_HI (0x40B8) = CPU addr high
+                 * RP1 masters issue DMA at CPU_PA + 0x10_00000000.
+                 * Program the first inbound window to translate that PCIe
+                 * aperture back to CPU physical address 0.
                  */
-                {
-                    /* Bar 2: offset = 0x402C + 8*(2-1) = 0x4034 */
-                    #define RC_BAR2_CONFIG_LO  0x4034
-                    #define RC_BAR2_CONFIG_HI  0x4038
-                    /* UBUS Bar 2: offset = 0x40AC + 8*(2-1) = 0x40B4 */
-                    #define UBUS_BAR2_REMAP_LO 0x40B4
-                    #define UBUS_BAR2_REMAP_HI 0x40B8
-
-                    /* 64GB window: ilog2(64GB) = 36, encode = 36 - 15 = 21 */
-                    ULONG EncodedSize = 21;
-                    ULONG Bar2Lo;
-
-                    /* Read current config */
-                    Bar2Lo = Bcm2712Read32(VirtAddr, RC_BAR2_CONFIG_LO);
-
-                    /*
-                     * Program BAR2 for RP1 DMA translation.
-                     *
-                     * The RP1's internal bus masters (xHCI, Ethernet, DMA) add
-                     * 0x10_00000000 to AXI addresses before sending PCIe TLPs.
-                     * (This is the RP1 ATU's fixed outbound offset.)
-                     *
-                     * Set BAR2 PCI base = 0x10_00000000 so inbound TLPs from
-                     * RP1 at PCI addr (CPU_PA + 0x10G) get translated to CPU_PA.
-                     *
-                     * dma-ranges: PCI 0x10_00000000 → CPU 0x00000000, size 64GB
-                     */
-                    Bar2Lo = (Bar2Lo & ~0x1F) | (EncodedSize & 0x1F);
-                    Bcm2712Write32(VirtAddr, RC_BAR2_CONFIG_LO, Bar2Lo);
-                    Bcm2712Write32(VirtAddr, RC_BAR2_CONFIG_HI, 0);
-
-                    /* UBUS remap: CPU address = 0 (maps PCI base to CPU 0), access enable = 1 */
-                    Bcm2712Write32(VirtAddr, UBUS_BAR2_REMAP_LO, 0x1); /* bit 0 = access enable */
-                    Bcm2712Write32(VirtAddr, UBUS_BAR2_REMAP_HI, 0x0); /* CPU addr high = 0 */
-                }
-            }
-            else
-            {
-                DPRINT1("[BCM2712] PCIE%lu: initialized but link DOWN\n",
-                        Index);
+                Bcm2712ProgramInboundWindow(VirtAddr,
+                                            RC_BAR1_CONFIG_LO,
+                                            UBUS_BAR1_REMAP_LO,
+                                            BCM2712_RP1_DMA_PCI_BASE,
+                                            BCM2712_RP1_DMA_CPU_BASE,
+                                            BCM2712_RP1_DMA_SIZE);
             }
         }
     }
@@ -442,46 +574,24 @@ Bcm2712PciAccessConfigSpace(
             return FALSE;
     }
 
-    /*
-     * Resolve ACPI segment to the correct BCM2712 controller.
-     *
-     * The RPi5 firmware assigns ACPI segment numbers that don't
-     * necessarily match the hardware controller index.  For example,
-     * the firmware may report SEG=1 for the RP1 root bridge, but
-     * RP1 is physically on PCIE2 (controller index 2).
-     *
-     * Strategy: if the segment maps directly to a valid link-up
-     * controller, use it.  Otherwise, scan all controllers for one
-     * with an active link.
-     */
-    Rc = NULL;
-    if (Segment < BCM2712_PCIE_RC_COUNT &&
-        Bcm2712RcState[Segment].Mapped &&
-        Bcm2712RcState[Segment].LinkUp)
-    {
-        Rc = &Bcm2712RcState[Segment];
-    }
-    else
-    {
-        ULONG Index;
-        for (Index = 0; Index < BCM2712_PCIE_RC_COUNT; Index++)
-        {
-            if (Bcm2712RcState[Index].Mapped &&
-                Bcm2712RcState[Index].LinkUp)
-            {
-                Rc = &Bcm2712RcState[Index];
-                break;
-            }
-        }
-    }
-
-    if (!Rc)
-        return FALSE;
-
     /* Validate offset + length within 4 KB config space */
     if (Bus > 0xFF || Offset >= 0x1000 ||
         (ULONGLONG)Offset + Length > 0x1000 || Length == 0)
     {
+        return FALSE;
+    }
+
+    Rc = Bcm2712FindRcForConfigSpace(Segment, Bus);
+
+    if (!Rc)
+    {
+        if (Bcm2712AnyRcValid())
+        {
+            if (!Write)
+                RtlFillMemory(Buffer, Length, 0xFF);
+            return TRUE;
+        }
+
         return FALSE;
     }
 
@@ -490,7 +600,7 @@ Bcm2712PciAccessConfigSpace(
      * (standard PCI behavior for absent devices).  Root port (bus 0)
      * is always accessible regardless of link state.
      */
-    if (Bus > 0 && !Rc->LinkUp)
+    if (Bus != Rc->PrimaryBus && !Rc->LinkUp)
     {
         if (!Write)
             RtlFillMemory(Buffer, Length, 0xFF);
@@ -506,7 +616,7 @@ Bcm2712PciAccessConfigSpace(
     KeAcquireSpinLock(&Bcm2712ConfigLock, &OldIrql);
 
     ConfigAddr = Bcm2712ComputeConfigAddress(
-        Rc->VirtBase,
+        Rc,
         Bus,
         Slot.u.bits.DeviceNumber,
         Slot.u.bits.FunctionNumber,
@@ -589,7 +699,7 @@ Bcm2712PciAccessConfigSpace(
                     }
                     else
                     {
-                        for (QuerySeg = 0; QuerySeg <= BCM2712_PCIE_RC_COUNT && !Found; QuerySeg++)
+                        for (QuerySeg = 0; QuerySeg < BCM2712_PCIE_RC_COUNT && !Found; QuerySeg++)
                         {
                             Found = HalpArm64PciRouteQueryCallback(
                                         QuerySeg, QueryBus, QueryDev,
