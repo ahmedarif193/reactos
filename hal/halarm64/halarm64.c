@@ -6209,7 +6209,7 @@ HalEnableSystemInterrupt(
     ULONG prioShift;
     ULONG prioVal;
     UCHAR priority;
-    UNREFERENCED_PARAMETER(InterruptMode);
+    BOOLEAN EdgeTriggered;
 
     if (!HalpGicPhase0Complete)
     {
@@ -6256,6 +6256,7 @@ HalEnableSystemInterrupt(
 
     /* Calculate GIC priority from IRQL */
     priority = HalpIrqlToGicPriority(Irql);
+    EdgeTriggered = (InterruptMode == Latched);
 
     if (HalpGicUseSysRegs && Vector < 32)
     {
@@ -6341,6 +6342,7 @@ HalEnableSystemInterrupt(
     else if (Vector < 1020)
     {
         /* SPI (32-1019): use Distributor registers */
+        HalpArm64ProgramGicTrigger(Vector, EdgeTriggered);
 
         /* Set priority for this interrupt */
         prioReg = GICD_IPRIORITYR + (Vector & ~3);
