@@ -3,8 +3,7 @@
  * LICENSE:     GPL-2.0+ (https://spdx.org/licenses/GPL-2.0+)
  * PURPOSE:     Header for Broadcom BCM2712 (Raspberry Pi 5) indirect
  *              PCI configuration space access via CFG_INDEX / CFG_DATA
- *              registers.  Designed to be detachable into a standalone
- *              rpipx4.sys driver later.
+ *              registers.
  * COPYRIGHT:   Copyright 2026 Ahmed ARIF <arif.ing@outlook.com>
  */
 
@@ -46,6 +45,8 @@
 /* ------------------------------------------------------------------ */
 #define RC_BAR1_CONFIG_LO   0x402C  /* PCI base[31:0] | size_code */
 #define UBUS_BAR1_REMAP_LO  0x40AC  /* CPU base[31:0] | access_en */
+#define RC_BAR_CONFIG_LO(_Bar)   (RC_BAR1_CONFIG_LO + (8 * ((_Bar) - 1)))
+#define UBUS_BAR_REMAP_LO(_Bar)  (UBUS_BAR1_REMAP_LO + (8 * ((_Bar) - 1)))
 
 #define PCIE_MISC_RC_BAR_CONFIG_LO_SIZE_MASK      0x0000001F
 #define PCIE_MISC_UBUS_BAR_REMAP_ACCESS_EN        0x00000001
@@ -53,6 +54,11 @@
 #define BCM2712_RP1_DMA_PCI_BASE                  0x1000000000ULL
 #define BCM2712_RP1_DMA_CPU_BASE                  0x0000000000ULL
 #define BCM2712_RP1_DMA_SIZE                      0x1000000000ULL
+
+#define BCM2712_PCIE2_MIP0_BAR                    3
+#define BCM2712_PCIE2_MIP0_PCI_BASE               0x000000FFFFFFF000ULL
+#define BCM2712_PCIE2_MIP0_CPU_BASE               0x1000130000ULL
+#define BCM2712_PCIE2_MIP0_SIZE                   0x1000ULL
 
 /* ------------------------------------------------------------------ */
 /*  ACPI OEM identification for RPi5 firmware                         */
