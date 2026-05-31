@@ -37,3 +37,128 @@ MiArm64PteIsLeaf(
     return (Pte->u.Hard.Valid == 1);
 }
 
+static
+BOOLEAN
+MiArm64EnsureSystemTableEntry(
+    _Inout_ PMMPTE Entry,
+    _In_ PVOID PteAddress,
+    _In_ PFN_NUMBER ParentPage,
+    _Out_ PFN_NUMBER *TablePage)
+{
+    KIRQL OldIrql;
+    PFN_NUMBER PageFrameIndex = 0;
+    ULONG64 EntryType;
+    BOOLEAN Created = FALSE;
+
+    OldIrql = MiAcquirePfnLock();
+
+    EntryType = Entry->u.Long & ARM64_PTE_TYPE_MASK;
+    if (EntryType == ARM64_PTE_TYPE_INVALID)
+    {
+        MI_SET_USAGE(MI_USAGE_PAGE_TABLE);
+        MI_SET_PROCESS2(PsGetCurrentProcess()->ImageFileName);
+        PageFrameIndex = MiRemoveZeroPage(MI_GET_NEXT_COLOR());
+        ASSERT(PageFrameIndex);
+
+        MiInitializePfnForOtherProcess(PageFrameIndex,
+                                       PteAddress,
+                                       ParentPage);
+        Entry->u.Long = ARM64_MAKE_TABLE_DESCRIPTOR(PageFrameIndex);
+        Created = TRUE;
+    }
+    else
+    {
+        ASSERT(EntryType == ARM64_PTE_TYPE_TABLE);
+        if (EntryType != ARM64_PTE_TYPE_TABLE)
+        {
+            MiReleasePfnLock(OldIrql);
+            *TablePage = 0;
+            return FALSE;
+        }
+    }
+
+    *TablePage = PFN_FROM_PTE(Entry);
+
+    MiReleasePfnLock(OldIrql);
+
+    if (Created)
+    {
+        MiArm64MapKseg0Page(PageFrameIndex);
+    }
+
+    return Created;
+}
+
+VOID
+MiArm64FillSystemPageDirectory(
+    _In_ PVOID Base,
+    _In_ SIZE_T NumberOfBytes)
+{
+    PMMPDE PointerPde, LastPde;
+    BOOLEAN FlushHierarchy = FALSE;
+
+    PointerPde = MiAddressToPde(Base);
+    LastPde = MiAddressToPde((PVOID)((ULONG_PTR)Base + NumberOfBytes - 1));
+
+    while (PointerPde <= LastPde)
+    {
+        PVOID TargetAddress;
+        PMMPTE KernelPxe, KernelPpe, KernelPde;
+        PULONG64 Table;
+        PFN_NUMBER RootPage, PpePage, PdePage, PageFrameIndex;
+        ULONG64 Ttbr1;
+
+        TargetAddress = MiPdeToAddress(PointerPde);
+
+        __asm__ __volatile__("mrs %0, ttbr1_el1" : "=r"(Ttbr1));
+        RootPage = (PFN_NUMBER)((Ttbr1 & ARM64_PTE_ADDR_MASK) >> PAGE_SHIFT);
+
+        Table = (PULONG64)MI_ARM64_PFN_TO_VA(RootPage);
+        KernelPxe = (PMMPTE)&Table[((ULONG_PTR)TargetAddress >> PXI_SHIFT) & PXI_MASK];
+
+        FlushHierarchy |= MiArm64EnsureSystemTableEntry(KernelPxe,
+                                                        MiAddressToPxe(TargetAddress),
+                                                        RootPage,
+                                                        &PpePage);
+        if (PpePage == 0)
+        {
+            goto FlushAndReturn;
+        }
+
+        Table = (PULONG64)MI_ARM64_PFN_TO_VA(PpePage);
+        KernelPpe = (PMMPTE)&Table[((ULONG_PTR)TargetAddress >> PPI_SHIFT) & PPI_MASK];
+
+        FlushHierarchy |= MiArm64EnsureSystemTableEntry(KernelPpe,
+                                                        MiAddressToPpe(TargetAddress),
+                                                        PpePage,
+                                                        &PdePage);
+        if (PdePage == 0)
+        {
+            goto FlushAndReturn;
+        }
+
+        Table = (PULONG64)MI_ARM64_PFN_TO_VA(PdePage);
+        KernelPde = (PMMPTE)&Table[((ULONG_PTR)TargetAddress >> PDI_SHIFT) & PDI_MASK_ARM64];
+
+        FlushHierarchy |= MiArm64EnsureSystemTableEntry(KernelPde,
+                                                        (PMMPTE)PointerPde,
+                                                        PdePage,
+                                                        &PageFrameIndex);
+        if (PageFrameIndex == 0)
+        {
+            goto FlushAndReturn;
+        }
+
+        PointerPde++;
+    }
+
+FlushAndReturn:
+    if (FlushHierarchy)
+    {
+        __asm__ __volatile__(
+            "dsb ishst\n\t"
+            "tlbi vmalle1is\n\t"
+            "dsb ish\n\t"
+            "isb" ::: "memory");
+    }
+}

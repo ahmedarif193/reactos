@@ -1851,7 +1851,6 @@ MiInitMachineDependent(_Inout_ PLOADER_PARAMETER_BLOCK LoaderBlock)
 
         }
         MiArm64SeedAccessFlagsForKernelTables();
-        DPRINT1("[BOOTPROF 08] MiMD: kernel page tables built; mapping loader phys mem + PFN db\n");
 
         /*
          * FreeLDR owns the boot PCR and early stacks. They stay live after
@@ -1868,13 +1867,10 @@ MiInitMachineDependent(_Inout_ PLOADER_PARAMETER_BLOCK LoaderBlock)
             MiMapPDEs(PfnDbStart, PfnDbEnd);
         }
 
-        DPRINT1("[BOOTPROF 09] MiMD: loader mem + PFN-db page tables mapped; mapping PFN database\n");
         MiMapPfnDatabase(LoaderBlock);
-        DPRINT1("[BOOTPROF 10] MiMD: MiMapPfnDatabase done; building nonpaged pool\n");
 
         MiInitializeColorTables();
         MiBuildNonPagedPool();
-        DPRINT1("[BOOTPROF 10c] MiMD: MiBuildNonPagedPool returned; InitializePool next\n");
 
         ExpArm64PoolBootstrapMode = TRUE;
         KeInitializeSpinLock(&MmNonPagedPoolLock);
@@ -1882,7 +1878,6 @@ MiInitMachineDependent(_Inout_ PLOADER_PARAMETER_BLOCK LoaderBlock)
         KeInitializeSpinLock(&NonPagedPoolLock);
         ExpArm64PoolBootstrapMode = FALSE;
 
-        DPRINT1("[BOOTPROF 11] MiMD: nonpaged pool built; building system PTE space\n");
         MiBuildSystemPteSpace();
 
         MiMapPPEs((PVOID)MI_MAPPING_RANGE_START, (PVOID)MI_MAPPING_RANGE_END);
@@ -1925,9 +1920,7 @@ MiInitMachineDependent(_Inout_ PLOADER_PARAMETER_BLOCK LoaderBlock)
 
         MiArm64RegisterFreeLdrPageTables();
 
-        DPRINT1("[BOOTPROF 12] MiMD: before MiInitializePfnDatabase\n");
         MiInitializePfnDatabase(LoaderBlock);
-        DPRINT1("[BOOTPROF 12c] MiMD: MiInitializePfnDatabase returned; finalize+balancer next\n");
 
         if (MiArm64PfnFinalizePending)
         {
@@ -1935,7 +1928,6 @@ MiInitMachineDependent(_Inout_ PLOADER_PARAMETER_BLOCK LoaderBlock)
         }
 
         MmInitializeBalancer((ULONG)MmAvailablePages, 0);
-        DPRINT1("[BOOTPROF 13] MiMD: PFN database initialized + balancer ready\n");
 
         MiArm64PfnFreeListsReady = TRUE;
         MiArm64PfnDatabaseReady = TRUE;
@@ -1945,24 +1937,20 @@ MiInitMachineDependent(_Inout_ PLOADER_PARAMETER_BLOCK LoaderBlock)
                                           MmSizeOfPagedPoolInBytes) - 1);
 
             MiMapPPEs(MmPagedPoolStart, PagedPoolEnd);
-            DPRINT1("[BOOTPROF 13a] MiMD: paged pool PPEs mapped\n");
         }
 
         {
             PVOID SystemViewEnd = (PUCHAR)MiSystemViewStart + MmSystemViewSize - 1;
             MiMapPPEs(MiSystemViewStart, SystemViewEnd);
-            DPRINT1("[BOOTPROF 13b] MiMD: system view PPEs mapped\n");
         }
 
         {
             PVOID SessionSpaceEnd = (PUCHAR)MiSessionSpaceEnd - 1;
 
             MiMapPPEs(MmSessionBase, SessionSpaceEnd);
-            DPRINT1("[BOOTPROF 13c] MiMD: session space PPEs mapped\n");
         }
 
         MiMapPPEs(MmSystemCacheStart, (PVOID)MI_SYSTEM_CACHE_END);
-        DPRINT1("[BOOTPROF 13d] MiMD: system cache PPEs mapped\n");
 
         __asm__ __volatile__(
             "dsb ishst\n\t"
@@ -2399,7 +2387,6 @@ MiBuildNonPagedPool(VOID)
     MiArm64ZeroLeafPages = FALSE;
     MiMapPTEs(MmNonPagedPoolStart, (PCHAR)MmNonPagedPoolExpansionStart - 1);
     MiArm64ZeroLeafPages = TRUE;
-    DPRINT1("[BOOTPROF 10a] MiBuildNonPagedPool: pool VA mapped and PFNs initialized\n");
 
     MiInitializeNonPagedPool();
     MiInitializeNonPagedPoolThresholds();
