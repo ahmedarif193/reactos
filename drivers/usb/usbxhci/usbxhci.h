@@ -53,10 +53,12 @@ typedef struct _XHCI_ISO_PACKET_CONTEXT XHCI_ISO_PACKET_CONTEXT, *PXHCI_ISO_PACK
 #define XHCI_QUIRK_VBOX_POLL_XFERS    0x00000800
 #define XHCI_QUIRK_QEMU_POLL_XFERS    0x00001000
 #define XHCI_QUIRK_IS_QEMU_XHCI       0x00002000
+#define XHCI_QUIRK_RP1_POLL_XFERS     0x00004000
 
 /* Mask of quirks that force transfer polling for the fallback event drain. */
 #define XHCI_QUIRK_POLL_XFERS_MASK    (XHCI_QUIRK_VBOX_POLL_XFERS | \
-                                       XHCI_QUIRK_QEMU_POLL_XFERS)
+                                       XHCI_QUIRK_QEMU_POLL_XFERS | \
+                                       XHCI_QUIRK_RP1_POLL_XFERS)
 #define XHCI_BOUNCE_POOL_SLOTS 16
 #define XHCI_BOUNCE_BUFFER_SIZE 0x10000
 
