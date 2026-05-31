@@ -4,28 +4,9 @@
  * PURPOSE:     Broadcom BCM2712 (Raspberry Pi 5) indirect PCI
  *              configuration space access via CFG_INDEX / CFG_DATA.
  *
- *              The BCM2712 does NOT use standard ECAM.  Each of its three
- *              PCIe root complexes uses a pair of MMIO registers:
- *
- *                 CFG_INDEX  (base + 0x9000)  — write Bus/Dev/Func here
- *                 CFG_DATA   (base + 0x8000)  — 4 KB window into the
- *                                               selected device's config
- *
- *              Bus 0 (root port) config is at the RC base directly.
- *
- *              Reference: WoR edk2-platforms, rpi5-dev branch
- *                Silicon/Broadcom/Bcm27xx/Library/
- *                  Bcm2712PciSegmentLib/PciSegmentLib.c
- *                Silicon/Broadcom/Bcm27xx/Include/IndustryStandard/
- *                  Bcm2712.h, Bcm2712Pcie.h
- *
  * COPYRIGHT:   Copyright 2026 Ahmed ARIF <arif.ing@outlook.com>
  */
 
-/*
- * Include the same HAL headers as halarm64.c — this file is compiled
- * as part of the HAL, not as a standalone driver.
- */
 #include <ntifs.h>
 #include <arc/arc.h>
 #include <ndk/kefuncs.h>
@@ -283,15 +264,10 @@ Bcm2712FindRcForConfigSpace(
     ULONG Index;
 
     /*
-     * Each root complex is its own PCI segment with its own bus 0, so the
-     * bus number alone cannot tell two live controllers apart - the segment
-     * is the only discriminator.  Prefer the controller the firmware segment
-     * names, but only when it is initialized and genuinely owns the bus
-     * (Bcm2712RcContainsBus checks Valid).  Validating containment means a
-     * mismatched segment number can never misroute: it just falls through to
-     * the bus scans below, which is what keeps the single-controller Pi5 case
-     * (where the active RP1 segment need not equal its controller index)
-     * working.
+     * Firmware segment numbers may not match the hardware controller index on
+     * Raspberry Pi 5.  Prefer a segment match only when that controller owns
+     * the requested bus, then fall back to the live controller whose bridge
+     * bus-number registers contain the request.
      */
     if (Segment < BCM2712_PCIE_RC_COUNT &&
         Bcm2712RcContainsBus(&Bcm2712RcState[Segment], Bus))
@@ -539,6 +515,17 @@ Bcm2712PciInit(VOID)
                                             BCM2712_RP1_DMA_PCI_BASE,
                                             BCM2712_RP1_DMA_CPU_BASE,
                                             BCM2712_RP1_DMA_SIZE);
+
+                if (Index == 2)
+                {
+                    /* RP1 MSI writes target MIP0 through this 4 KiB inbound window. */
+                    Bcm2712ProgramInboundWindow(VirtAddr,
+                                                RC_BAR_CONFIG_LO(BCM2712_PCIE2_MIP0_BAR),
+                                                UBUS_BAR_REMAP_LO(BCM2712_PCIE2_MIP0_BAR),
+                                                BCM2712_PCIE2_MIP0_PCI_BASE,
+                                                BCM2712_PCIE2_MIP0_CPU_BASE,
+                                                BCM2712_PCIE2_MIP0_SIZE);
+                }
             }
         }
     }
@@ -608,10 +595,8 @@ Bcm2712PciAccessConfigSpace(
     }
 
     /*
-     * Serialize config access.  The CFG_INDEX register is shared —
-     * concurrent accesses to different B/D/F on the same controller
-     * would race on the index.  The lock is per-system, not per-RC,
-     * to match the WoR firmware's approach (TPL_HIGH_LEVEL lock).
+     * Serialize config access.  A controller has one CFG_INDEX selector, so
+     * racing selector writes would target the wrong B/D/F.
      */
     KeAcquireSpinLock(&Bcm2712ConfigLock, &OldIrql);
 
@@ -643,7 +628,8 @@ Bcm2712PciAccessConfigSpace(
      * Patch InterruptLine in the read buffer so the PCI driver sees a
      * valid interrupt assignment without any changes to common code.
      *
-     * This is standard practice on ARM64 — Windows HAL does the same.
+     * Keep this platform-specific fix in the HAL path instead of the common
+     * PCI bus driver.
      */
     if (!Write && Offset <= 0x3C && (Offset + Length) > 0x3D)
     {
