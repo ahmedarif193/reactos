@@ -26,6 +26,7 @@ KiArm64TtbrToPa(
 #define SCTLR_EL1_A     (1ULL << 1)
 #define SCTLR_EL1_SA    (1ULL << 3)
 #define SCTLR_EL1_SA0   (1ULL << 4)
+#define SCTLR_EL1_I     (1ULL << 12)
 #define SCTLR_EL1_BT0   (1ULL << 35)
 #define SCTLR_EL1_BT1   (1ULL << 36)
 #define KI_ARM64_ID_AA64ISAR0_ATOMIC_LSE 2
@@ -130,7 +131,7 @@ KiArm64ApplySctlrPolicy(VOID)
 
     __asm__ __volatile__("mrs %0, sctlr_el1" : "=r"(Sctlr));
     NewSctlr = (Sctlr & ~(SCTLR_EL1_A | SCTLR_EL1_BT0 | SCTLR_EL1_BT1)) |
-               SCTLR_EL1_SA | SCTLR_EL1_SA0;
+               SCTLR_EL1_SA | SCTLR_EL1_SA0 | SCTLR_EL1_I;
     if (NewSctlr != Sctlr)
     {
         __asm__ __volatile__("msr sctlr_el1, %0" :: "r"(NewSctlr) : "memory");
@@ -587,6 +588,7 @@ KiInitializePcr(_In_ ULONG ProcessorNumber,
     Pcr->Prcb.CurrentThread = IdleThread;
     Pcr->Prcb.IdleThread = IdleThread;
     Pcr->Prcb.NextThread = NULL;
+    Pcr->Prcb.DpcStack = InterruptStack;
     if (KeLoaderBlock != NULL)
     {
         Pcr->Prcb.RspBase = (UINT64)(ULONG_PTR)KeLoaderBlock->KernelStack;
@@ -607,22 +609,6 @@ KiInitializePcr(_In_ ULONG ProcessorNumber,
          */
         __asm__ __volatile__("msr tpidr_el1, %0" : : "r"(Pcr) : "memory");
         __asm__ __volatile__("isb" ::: "memory");
-
-        /* Verify TPIDR_EL1 was set correctly (diagnostic check) */
-        {
-            PVOID VerifyPcr;
-            __asm__ __volatile__("mrs %0, tpidr_el1" : "=r"(VerifyPcr));
-            DPRINT1("CPU %lu: TPIDR_EL1 initialized to PCR @ %p (verify: %p)\n",
-                    ProcessorNumber, Pcr, VerifyPcr);
-            if (VerifyPcr != Pcr)
-            {
-                KeBugCheckEx(PHASE0_INITIALIZATION_FAILED,
-                             ('A' << 24) | ('R' << 16) | ('M' << 8) | '6',
-                             (ULONG_PTR)Pcr,
-                             (ULONG_PTR)VerifyPcr,
-                             1);
-            }
-        }
 
         /*
          * Set global early-boot current CPU state.
