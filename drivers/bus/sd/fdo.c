@@ -10,6 +10,8 @@
 #define NDEBUG
 #include <debug.h>
 
+#include "hardware.h"
+
 /**
  * @brief IoCompletion routine that signals an event when the lower driver finishes.
  *
@@ -339,6 +341,8 @@ SdBusInitializeController(
         return STATUS_IO_TIMEOUT;
     }
 
+    SdBusHardwareInitializeController(FdoExtension);
+
     /* Set initial clock to 400 kHz for identification mode */
     if (FdoExtension->MaxClockFrequency > 0)
     {
@@ -662,6 +666,19 @@ SdBusFdoStartDevice(
     FdoExtension->RegisterLength = Length;
     FdoExtension->RegistersMapped = TRUE;
 
+    Status = SdBusHardwareMapResources(FdoExtension,
+                                       PhysicalAddress,
+                                       PartialList);
+    if (!NT_SUCCESS(Status))
+    {
+        MmUnmapIoSpace(FdoExtension->RegisterBase, FdoExtension->RegisterLength);
+        FdoExtension->RegisterBase = NULL;
+        FdoExtension->RegistersMapped = FALSE;
+        Irp->IoStatus.Status = Status;
+        IoCompleteRequest(Irp, IO_NO_INCREMENT);
+        return Status;
+    }
+
     /* Connect the interrupt if available */
     if (FoundInterrupt)
     {
@@ -679,6 +696,7 @@ SdBusFdoStartDevice(
         if (!NT_SUCCESS(Status))
         {
             DPRINT1("SdBusFdoStartDevice: IoConnectInterrupt failed (0x%08lx)\n", Status);
+            SdBusHardwareRelease(FdoExtension);
             MmUnmapIoSpace(FdoExtension->RegisterBase, FdoExtension->RegisterLength);
             FdoExtension->RegisterBase = NULL;
             FdoExtension->RegistersMapped = FALSE;
@@ -714,6 +732,7 @@ SdBusFdoStartDevice(
         }
 
         SdBusReleaseDmaAdapter(FdoExtension);
+        SdBusHardwareRelease(FdoExtension);
         MmUnmapIoSpace(FdoExtension->RegisterBase, FdoExtension->RegisterLength);
         FdoExtension->RegisterBase = NULL;
         FdoExtension->RegistersMapped = FALSE;
@@ -960,6 +979,8 @@ SdBusFdoRemoveDevice(
     }
 
     /* Unmap registers after all in-flight work has completed */
+    SdBusHardwareRelease(FdoExtension);
+
     if (FdoExtension->RegistersMapped)
     {
         MmUnmapIoSpace(FdoExtension->RegisterBase, FdoExtension->RegisterLength);
