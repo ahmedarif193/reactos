@@ -8,7 +8,33 @@
 	.global KiSwapContext
 	.global KiSwapContextInternal
 	.extern KfLowerIrql
+	.extern KiRetireDpcList
 	.extern KiTrapReturn
+
+    .global KiRetireDpcListInDpcStack
+    .seh_proc KiRetireDpcListInDpcStack
+KiRetireDpcListInDpcStack:
+    stp     x29, x30, [sp, #-16]!
+    .seh_save_fplr_x 16
+    mov     x29, sp
+    .seh_set_fp
+    .seh_endprologue
+
+    cbz     x1, .Lretire_dpc_current_stack
+
+    mov     sp, x1
+    sub     sp, sp, #16
+    bl      KiRetireDpcList
+    mov     sp, x29
+    b       .Lretire_dpc_done
+
+.Lretire_dpc_current_stack:
+    bl      KiRetireDpcList
+
+.Lretire_dpc_done:
+    ldp     x29, x30, [sp], #16
+    ret
+    .seh_endproc
 
 /*
  * KiThreadStartup
@@ -144,7 +170,6 @@ KiThreadStartup:
 
 
     .extern KiSwapContextResume
-    .extern KeArm64CurrentPcr
 
 /*
  * BOOLEAN
@@ -188,44 +213,21 @@ KiSwapContext:
     str     x9, [sp, #SwLr]        /* Save for KiSwapContextInternal */
 
     /*
-     * ARM64 FIX: Initialize ApcBypass to prevent IRQL corruption.
-     * When a thread switches away, it creates a KSWITCH_FRAME on its stack.
-     * The ApcBypass field (at offset 0x68) stores the WaitIrql for this thread.
-     * However, the stack memory is not zeroed when we allocate the frame (line 67).
-     * If ApcBypass is not explicitly initialized, it contains garbage from whatever
-     * was previously on the stack.
-     *
-     * The corruption sequence:
-     * 1. Thread switches away: saves WaitIrql to ApcBypass, switches to another thread
-     * 2. Thread switches back: restores registers, POPS the switch frame (line 101)
-     * 3. Thread executes, then switches away again later
-     * 4. NEW switch frame created at current SP - ApcBypass contains garbage!
-     * 5. Another thread switches TO this thread, reads garbage from ApcBypass
-     * 6. KfLowerIrql called with corrupted IRQL value (e.g., 0xC0 = 192)
-     *
-     * The fix: Initialize ApcBypass to 0 when creating the switch frame.
-     * This will be immediately overwritten by KiSwapContextInternal (line 133),
-     * but ensures no garbage is read if something goes wrong.
-     */
-    strb    wzr, [sp, #SwApcBypass]
-
-    /*
      * Locate the target (new) thread from the per-CPU PCR.
      * TPIDR_EL1 holds the per-CPU PCR pointer (set in KiInitializePcr).
      * Do NOT use the global KeArm64CurrentPcr - it's shared and wrong on SMP.
      */
     mrs     x9, tpidr_el1
-    cbz     x9, .Lfallback_thread
+    cbz     x9, .Lbad_current_thread
     ldr     x2, [x9, #PcCurrentThread]
-    cbz     x2, .Lfallback_thread
-    b       .Lcall_internal
+    cbz     x2, .Lbad_current_thread
 
-.Lfallback_thread:
-    /* Fallback to the caller's thread if the PCR path is unavailable */
-    mov     x2, x1
-
-.Lcall_internal:
     bl      KiSwapContextInternal
+    b       .Lrestore_context
+
+.Lbad_current_thread:
+    brk     #0xf000
+    b       .Lbad_current_thread
 
 .Lrestore_context:
     /* Restore the saved non-volatile register bank */
@@ -235,7 +237,6 @@ KiSwapContext:
     ldp     x25, x26, [sp, #SwX25]
     ldp     x27, x28, [sp, #SwX27]
     ldr     x29, [sp, #SwFp]
-    ldr     x30, [sp, #SwLr]       /* Load (but don't use - we use SwReturn) */
 
     /*
      * ARM64 ABI: x18 remains the EL1 platform register across context

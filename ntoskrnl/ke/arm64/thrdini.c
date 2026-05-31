@@ -42,6 +42,12 @@ VOID
 NTAPI
 KiThreadStartup(VOID);
 
+VOID
+NTAPI
+KiRetireDpcListInDpcStack(
+    _In_ PKPRCB Prcb,
+    _In_opt_ PVOID DpcStack);
+
 static
 BOOLEAN
 KiArm64ShouldTraceIdle(VOID)
@@ -186,7 +192,7 @@ KiIdleLoop(VOID)
          * Without this barrier, the weakly-ordered ARM64 memory model could cause
          * us to see stale values and miss ready threads or pending DPCs.
          */
-        __asm__ __volatile__("dmb ish" ::: "memory");
+        __asm__ __volatile__("dmb ishld" ::: "memory");
 
         /*
          * Check for pending DPC work. On ARM64, also check DpcInterruptRequested
@@ -217,54 +223,6 @@ KiIdleLoop(VOID)
             /* ARM64: Memory barrier after KiRetireDpcList to ensure NextThread is visible */
             __asm__ __volatile__("dmb ish" ::: "memory");
             continue;
-        }
-
-        /*
-         * ARM64 FIX: If we have threads in the ready queue (ReadySummary != 0),
-         * but no NextThread, something is wrong. Try to select a ready thread.
-         * This catches cases where a thread was placed on the ready queue but
-         * NextThread was never set due to timing issues.
-         */
-        if (Prcb->ReadySummary && !Prcb->NextThread)
-        {
-            PKTHREAD ReadyThread;
-            KIRQL OldIrql;
-
-            if (KiArm64ShouldTraceIdle())
-            {
-                DbgPrintEx(DPFLTR_DEFAULT_ID,
-                           DPFLTR_ERROR_LEVEL,
-                           "[arm64][IDLE] ready-summary fallback: Ready=0x%Ix Cur=%p\n",
-                           Prcb->ReadySummary,
-                           Prcb->CurrentThread);
-            }
-
-            /* Acquire PRCB lock at SYNCH_LEVEL to select a thread */
-            OldIrql = KeRaiseIrqlToSynchLevel();
-            KiAcquirePrcbLock(Prcb);
-
-            /* Double-check after acquiring lock */
-            if (Prcb->ReadySummary && !Prcb->NextThread)
-            {
-                ReadyThread = KiSelectReadyThread(0, Prcb);
-                if (ReadyThread)
-                {
-                    if (KiArm64ShouldTraceIdle())
-                    {
-                        DbgPrintEx(DPFLTR_DEFAULT_ID,
-                                   DPFLTR_ERROR_LEVEL,
-                                   "[arm64][IDLE] selected from ready-summary: T=%p Pri=%d Ready=0x%Ix\n",
-                                   ReadyThread,
-                                   ReadyThread->Priority,
-                                   Prcb->ReadySummary);
-                    }
-                    ReadyThread->State = Standby;
-                    Prcb->NextThread = ReadyThread;
-                }
-            }
-
-            KiReleasePrcbLock(Prcb);
-            KeLowerIrql(OldIrql);
         }
 
         if (Prcb->NextThread)
@@ -605,7 +563,7 @@ KiDispatchInterrupt(VOID)
         (Prcb->TimerRequest) ||
         (Prcb->DeferredReadyListHead.Next))
     {
-        KiRetireDpcList(Prcb);
+        KiRetireDpcListInDpcStack(Prcb, Prcb->DpcStack);
     }
 
     _enable();
