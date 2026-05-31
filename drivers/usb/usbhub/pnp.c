@@ -736,16 +736,17 @@ USBH_StartHubFdoDevice(IN PUSBHUB_FDO_EXTENSION HubExtension,
                               NULL);
     }
 
-    HubExtension->RootHubPdo = NULL;
-
-    Status = USBH_SyncGetRootHubPdo(HubExtension->LowerDevice,
-                                    &HubExtension->RootHubPdo,
-                                    &HubExtension->RootHubPdo2);
-
-    if (!NT_SUCCESS(Status))
+    if (!HubExtension->RootHubPdo || !HubExtension->RootHubPdo2)
     {
-        DPRINT1("USBH_SyncGetRootHubPdo() failed - %lX\n", Status);
-        goto ErrorExit;
+        Status = USBH_SyncGetRootHubPdo(HubExtension->LowerDevice,
+                                        &HubExtension->RootHubPdo,
+                                        &HubExtension->RootHubPdo2);
+
+        if (!NT_SUCCESS(Status))
+        {
+            DPRINT1("USBH_SyncGetRootHubPdo() failed - %lX\n", Status);
+            goto ErrorExit;
+        }
     }
 
     USBH_WriteFailReasonID(HubExtension->LowerPDO, USBHUB_FAIL_NO_FAIL);
