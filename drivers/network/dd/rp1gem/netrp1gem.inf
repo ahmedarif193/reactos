@@ -1,0 +1,58 @@
+; PROJECT:     ReactOS RP1 Ethernet Driver
+; LICENSE:     GPL-2.0+ (https://spdx.org/licenses/GPL-2.0+)
+; FILE:        drivers/network/dd/rp1gem/netrp1gem.inf
+; PURPOSE:     RP1 Ethernet miniport installation file
+; COPYRIGHT:   Copyright 2026 Ahmed ARIF <arif.ing@outlook.com>
+
+[Version]
+Signature="$Windows NT$"
+LayoutFile=layout.inf
+Class=Net
+ClassGUID={4D36E972-E325-11CE-BFC1-08002BE10318}
+Provider=%ReactOS%
+DriverVer=01/01/2026,1.00
+
+[DestinationDirs]
+DefaultDestDir=12
+RP1GEM_CopyFiles.NT=12
+
+[Manufacturer]
+%RaspberryPiMfg%=RaspberryPiMfg
+
+[RaspberryPiMfg]
+%RP1GEM.DeviceDesc%=RP1GEM_Inst.ndi,RP1\GEM
+
+[RP1GEM_Inst.ndi.NT]
+Characteristics=0x4
+BusType=0
+AddReg=RP1GEM_AddReg.NT
+CopyFiles=RP1GEM_CopyFiles.NT
+
+[RP1GEM_Inst.ndi.NT.Services]
+AddService=rp1gem,0x00000002,RP1GEM_Service_Inst
+
+[RP1GEM_AddReg.NT]
+HKR,Ndi,Service,0,"rp1gem"
+HKR,Ndi\Interfaces,UpperRange,0,"ndis5"
+HKR,Ndi\Interfaces,LowerRange,0,"ethernet"
+
+[RP1GEM_CopyFiles.NT]
+rp1gem.sys
+
+[RP1GEM_Service_Inst]
+ServiceType=1
+StartType=0
+ErrorControl=1
+ServiceBinary=%12%\rp1gem.sys
+LoadOrderGroup=NDIS
+
+[SourceDisksNames]
+1=%ReactOS%,,,
+
+[SourceDisksFiles]
+rp1gem.sys=1
+
+[Strings]
+ReactOS="ReactOS"
+RaspberryPiMfg="Raspberry Pi"
+RP1GEM.DeviceDesc="RP1 Ethernet Controller"
