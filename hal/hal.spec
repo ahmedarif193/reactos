@@ -54,6 +54,7 @@
 @ stdcall HalMakeBeep(long)
 @ stdcall HalProcessorIdle()
 @ stdcall HalQueryDisplayParameters(ptr ptr ptr ptr)
+@ stdcall -arch=arm64 HalQueryPciMsiSupport(long long ptr ptr ptr ptr ptr)
 @ stdcall HalQueryRealTimeClock(ptr)
 @ stdcall HalReadDmaCounter(ptr)
 @ stdcall HalReportResourceUsage()

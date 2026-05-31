@@ -464,6 +464,10 @@ FdoStartDevice(
     PCM_PARTIAL_RESOURCE_DESCRIPTOR ResourceDescriptor;
     ULONG FoundBusNumber = FALSE;
     ULONG i;
+#ifdef _M_ARM64
+    BOOLEAN HalMsiSupported;
+    USHORT EffectiveSegment;
+#endif
 
     DeviceExtension = (PFDO_DEVICE_EXTENSION)DeviceObject->DeviceExtension;
 
@@ -533,12 +537,24 @@ FdoStartDevice(
     }
 
     /*
-     * MSI is architecturally supported on all x86 ACPI platforms.
-     * Per Windows pci.sys behavior, the PCI driver determines MSI support
-     * internally — no HAL exports needed. _OSC evaluation (when implemented)
-     * can refine this per root bridge.
+     * On x86 ACPI platforms, pci.sys owns the MSI policy decision. On
+     * ARM64, message interrupts additionally depend on platform interrupt
+     * controller routing, so ask HAL before exposing MSI/MSI-X resources.
      */
+#ifdef _M_ARM64
+    EffectiveSegment = DeviceExtension->BusSegment;
+    HalMsiSupported = HalQueryPciMsiSupport(DeviceExtension->BusSegment,
+                                            (UCHAR)DeviceExtension->BusNumber,
+                                            NULL,
+                                            &DeviceExtension->OscStatusFlags,
+                                            &DeviceExtension->OscControlGranted,
+                                            &EffectiveSegment,
+                                            &DeviceExtension->OscMasked);
+    DeviceExtension->BusSegment = EffectiveSegment;
+    DeviceExtension->MsiSupported = PciMsiEnabledByPolicy && HalMsiSupported;
+#else
     DeviceExtension->MsiSupported = PciMsiEnabledByPolicy;
+#endif
 
     InitializeListHead(&DeviceExtension->DeviceListHead);
     KeInitializeSpinLock(&DeviceExtension->DeviceListLock);
