@@ -142,9 +142,6 @@ MiUnlinkFreeOrZeroedPage(IN PMMPFN Entry)
     ULONG Color;
     PMMCOLOR_TABLES ColorTable;
     PMMPFN Pfn1;
-#if defined(_M_ARM64)
-    BOOLEAN UncoloredPage;
-#endif
 
     /* Make sure the PFN lock is held */
     MI_ASSERT_PFN_LOCK_HELD();
@@ -159,11 +156,6 @@ MiUnlinkFreeOrZeroedPage(IN PMMPFN Entry)
     ASSERT(ListHead != NULL);
     ASSERT(ListName <= FreePageList);
     ASSERT_LIST_INVARIANT(ListHead);
-
-#if defined(_M_ARM64)
-    UncoloredPage = ((ListName == FreePageList) &&
-                     (Entry->u4.PteFrame == MI_ARM64_UNCOLORED_FREE_PTEFRAME));
-#endif
 
     /* Remove one count */
     ASSERT(ListHead->Total != 0);
@@ -197,67 +189,56 @@ MiUnlinkFreeOrZeroedPage(IN PMMPFN Entry)
         ListHead->Flink = OldFlink;
     }
 
-#if defined(_M_ARM64)
-    if (!UncoloredPage)
-#endif
+    /* Get the page color */
+    OldBlink = MiGetPfnEntryIndex(Entry);
+    Color = OldBlink & MmSecondaryColorMask;
+
+    /* Get the first page on the color list */
+    ColorTable = &MmFreePagesByColor[ListName][Color];
+
+    /* Check if this was was actually the head */
+    OldFlink = ColorTable->Flink;
+    if (OldFlink == OldBlink)
     {
-        /* Get the page color */
-        OldBlink = MiGetPfnEntryIndex(Entry);
-        Color = OldBlink & MmSecondaryColorMask;
-
-        /* Get the first page on the color list */
-        ColorTable = &MmFreePagesByColor[ListName][Color];
-
-        /* Check if this was was actually the head */
-        OldFlink = ColorTable->Flink;
-        if (OldFlink == OldBlink)
+        /* Make the table point to the next page this page was linking to */
+        ColorTable->Flink = Entry->OriginalPte.u.Long;
+        if (ColorTable->Flink != LIST_HEAD)
         {
-            /* Make the table point to the next page this page was linking to */
-            ColorTable->Flink = Entry->OriginalPte.u.Long;
-            if (ColorTable->Flink != LIST_HEAD)
-            {
-                /* And make the previous link point to the head now */
-                MI_PFN_ELEMENT(ColorTable->Flink)->u4.PteFrame = COLORED_LIST_HEAD;
-            }
-            else
-            {
-                /* And if that page was the head, loop the list back around */
-                ColorTable->Blink = (PVOID)LIST_HEAD;
-            }
+            /* And make the previous link point to the head now */
+            MI_PFN_ELEMENT(ColorTable->Flink)->u4.PteFrame = COLORED_LIST_HEAD;
         }
         else
         {
-            /* This page shouldn't be pointing back to the head */
-            ASSERT(Entry->u4.PteFrame != COLORED_LIST_HEAD);
-
-            /* Make the back link point to whoever the next page is */
-            Pfn1 = MI_PFN_ELEMENT(Entry->u4.PteFrame);
-            Pfn1->OriginalPte.u.Long = Entry->OriginalPte.u.Long;
-
-            /* Check if this page was pointing to the head */
-            if (Entry->OriginalPte.u.Long != LIST_HEAD)
-            {
-                /* Make the back link point to the head */
-                Pfn1 = MI_PFN_ELEMENT(Entry->OriginalPte.u.Long);
-                Pfn1->u4.PteFrame = Entry->u4.PteFrame;
-            }
-            else
-            {
-                /* Then the table is directly back pointing to this page now */
-                ColorTable->Blink = Pfn1;
-            }
+            /* And if that page was the head, loop the list back around */
+            ColorTable->Blink = (PVOID)LIST_HEAD;
         }
-
-        /* One less colored page */
-        ASSERT(ColorTable->Count >= 1);
-        ColorTable->Count--;
     }
-#if defined(_M_ARM64)
     else
     {
-        Entry->u4.PteFrame = 0;
+        /* This page shouldn't be pointing back to the head */
+        ASSERT(Entry->u4.PteFrame != COLORED_LIST_HEAD);
+
+        /* Make the back link point to whoever the next page is */
+        Pfn1 = MI_PFN_ELEMENT(Entry->u4.PteFrame);
+        Pfn1->OriginalPte.u.Long = Entry->OriginalPte.u.Long;
+
+        /* Check if this page was pointing to the head */
+        if (Entry->OriginalPte.u.Long != LIST_HEAD)
+        {
+            /* Make the back link point to the head */
+            Pfn1 = MI_PFN_ELEMENT(Entry->OriginalPte.u.Long);
+            Pfn1->u4.PteFrame = Entry->u4.PteFrame;
+        }
+        else
+        {
+            /* Then the table is directly back pointing to this page now */
+            ColorTable->Blink = Pfn1;
+        }
     }
-#endif
+
+    /* One less colored page */
+    ASSERT(ColorTable->Count >= 1);
+    ColorTable->Count--;
 
     /* ReactOS Hack */
     Entry->OriginalPte.u.Long = 0;
@@ -389,9 +370,6 @@ MiRemovePageByColor(IN PFN_NUMBER PageIndex,
     PFN_NUMBER OldFlink, OldBlink;
     USHORT OldColor, OldCache;
     PMMCOLOR_TABLES ColorTable;
-#if defined(_M_ARM64)
-    BOOLEAN UncoloredPage;
-#endif
 
     /* Make sure PFN lock is held */
     MI_ASSERT_PFN_LOCK_HELD();
@@ -411,11 +389,6 @@ MiRemovePageByColor(IN PFN_NUMBER PageIndex,
     ASSERT_LIST_INVARIANT(ListHead);
     ListName = ListHead->ListName;
     ASSERT(ListName <= FreePageList);
-
-#if defined(_M_ARM64)
-    UncoloredPage = ((ListName == FreePageList) &&
-                     (Pfn1->u4.PteFrame == MI_ARM64_UNCOLORED_FREE_PTEFRAME));
-#endif
 
     /* Remove a page */
     ListHead->Total--;
@@ -457,39 +430,28 @@ MiRemovePageByColor(IN PFN_NUMBER PageIndex,
     Pfn1->u3.e1.PageColor = OldColor;
     Pfn1->u3.e1.CacheAttribute = OldCache;
 
-#if defined(_M_ARM64)
-    if (!UncoloredPage)
-#endif
+    /* Get the first page on the color list */
+    ASSERT(Color < MmSecondaryColors);
+    ColorTable = &MmFreePagesByColor[ListName][Color];
+    ASSERT(ColorTable->Count >= 1);
+
+    /* Set the forward link to whoever we were pointing to */
+    ColorTable->Flink = Pfn1->OriginalPte.u.Long;
+
+    /* Get the first page on the color list */
+    if (ColorTable->Flink == LIST_HEAD)
     {
-        /* Get the first page on the color list */
-        ASSERT(Color < MmSecondaryColors);
-        ColorTable = &MmFreePagesByColor[ListName][Color];
-        ASSERT(ColorTable->Count >= 1);
-
-        /* Set the forward link to whoever we were pointing to */
-        ColorTable->Flink = Pfn1->OriginalPte.u.Long;
-
-        /* Get the first page on the color list */
-        if (ColorTable->Flink == LIST_HEAD)
-        {
-            /* This is the beginning of the list, so set the sentinel value */
-            ColorTable->Blink = (PVOID)LIST_HEAD;
-        }
-        else
-        {
-            /* The list is empty, so we are the first page */
-            MI_PFN_ELEMENT(ColorTable->Flink)->u4.PteFrame = COLORED_LIST_HEAD;
-        }
-
-        /* One less page */
-        ColorTable->Count--;
+        /* This is the beginning of the list, so set the sentinel value */
+        ColorTable->Blink = (PVOID)LIST_HEAD;
     }
-#if defined(_M_ARM64)
     else
     {
-        Pfn1->u4.PteFrame = 0;
+        /* The list is empty, so we are the first page */
+        MI_PFN_ELEMENT(ColorTable->Flink)->u4.PteFrame = COLORED_LIST_HEAD;
     }
-#endif
+
+    /* One less page */
+    ColorTable->Count--;
 
     /* ReactOS Hack */
     Pfn1->OriginalPte.u.Long = 0;
@@ -1076,6 +1038,61 @@ MiInitializePfn(IN PFN_NUMBER PageFrameIndex,
 
 VOID
 NTAPI
+MiInitializePfnWithPteFrame(IN PFN_NUMBER PageFrameIndex,
+                            IN PMMPTE PointerPte,
+                            IN PMMPTE PteAddress,
+                            IN PFN_NUMBER PteFrame,
+                            IN BOOLEAN Modified)
+{
+    PMMPFN Pfn1;
+    MI_ASSERT_PFN_LOCK_HELD();
+
+    ASSERT(PteAddress != NULL);
+    ASSERT(PteFrame != 0);
+
+    /* Setup the PTE */
+    Pfn1 = MI_PFN_ELEMENT(PageFrameIndex);
+    Pfn1->PteAddress = PteAddress;
+
+    DPRINT("Called for %p from %p\n", Pfn1, _ReturnAddress());
+
+    /* Check if this PFN is part of a valid address space */
+    if (PointerPte->u.Hard.Valid == 1)
+    {
+        /* Only valid from MmCreateProcessAddressSpace path */
+        ASSERT(PsGetCurrentProcess()->Vm.WorkingSetSize == 0);
+
+        /* Make this a demand zero PTE */
+        MI_MAKE_SOFTWARE_PTE(&Pfn1->OriginalPte, MM_READWRITE);
+    }
+    else
+    {
+        /* Copy the PTE data */
+        Pfn1->OriginalPte = *PointerPte;
+        ASSERT(!((Pfn1->OriginalPte.u.Soft.Prototype == 0) &&
+                 (Pfn1->OriginalPte.u.Soft.Transition == 1)));
+    }
+
+    /* Otherwise this is a fresh page -- set it up */
+    ASSERT(Pfn1->u3.e2.ReferenceCount == 0);
+    Pfn1->u3.e2.ReferenceCount = 1;
+    Pfn1->u2.ShareCount = 1;
+    Pfn1->u3.e1.PageLocation = ActiveAndValid;
+    ASSERT(Pfn1->u3.e1.Rom == 0);
+    Pfn1->u3.e1.Modified = Modified;
+
+    /* Use the caller-provided page-table frame. */
+    Pfn1->u4.PteFrame = PteFrame;
+
+    DPRINT("Incrementing share count of %lp from %p\n", PteFrame, _ReturnAddress());
+
+    /* Increase its share count so we don't get rid of it */
+    Pfn1 = MI_PFN_ELEMENT(PteFrame);
+    Pfn1->u2.ShareCount++;
+}
+
+VOID
+NTAPI
 MiInitializePfnAndMakePteValid(IN PFN_NUMBER PageFrameIndex,
                                IN PMMPTE PointerPte,
                                IN MMPTE TempPte)
@@ -1221,11 +1238,9 @@ MiDecrementShareCount(IN PMMPFN Pfn1,
 
             /* Get the original prototype PTE and turn it into a transition PTE */
             PointerPte = Pfn1->PteAddress;
-            TempPte = *PointerPte;
-            TempPte.u.Soft.Transition = 1;
-            TempPte.u.Soft.Valid = 0;
-            TempPte.u.Soft.Prototype = 0;
-            TempPte.u.Soft.Protection = Pfn1->OriginalPte.u.Soft.Protection;
+            MI_MAKE_TRANSITION_PTE(&TempPte,
+                                   PageFrameIndex,
+                                   Pfn1->OriginalPte.u.Soft.Protection);
             MI_WRITE_INVALID_PTE(PointerPte, TempPte);
             DPRINT("Marking PTE: %p as transition (%p - %lx)\n", PointerPte, Pfn1, MiGetPfnEntryIndex(Pfn1));
         }

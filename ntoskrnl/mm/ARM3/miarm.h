@@ -248,10 +248,6 @@ extern const ULONG MmProtectToValue[32];
 //
 #define COLORED_LIST_HEAD (((ULONG_PTR)1 << MI_PTE_FRAME_BITS) - 1)
 
-#if defined(_M_ARM64)
-#define MI_ARM64_UNCOLORED_FREE_PTEFRAME (COLORED_LIST_HEAD - 1)
-#endif
-
 //
 // Returns the color of a page
 //
@@ -2300,6 +2296,16 @@ NTAPI
 MiInitializePfn(
     IN PFN_NUMBER PageFrameIndex,
     IN PMMPTE PointerPte,
+    IN BOOLEAN Modified
+);
+
+VOID
+NTAPI
+MiInitializePfnWithPteFrame(
+    IN PFN_NUMBER PageFrameIndex,
+    IN PMMPTE PointerPte,
+    IN PMMPTE PteAddress,
+    IN PFN_NUMBER PteFrame,
     IN BOOLEAN Modified
 );
 
