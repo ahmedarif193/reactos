@@ -17,6 +17,8 @@
 
 #define ARM64_SYNC_BARRIER() do { __dmb(_ARM64_BARRIER_SY); __isb(_ARM64_BARRIER_SY); } while (0)
 
+#define ARM64_PSTATE_ASYNC_ABORT_MASK 0x100UL
+
 typedef struct _KSWITCHFRAME
 {
     ULONG64 Dummy;
