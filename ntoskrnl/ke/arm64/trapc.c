@@ -1687,24 +1687,29 @@ KiArm64HandleSynchronousException(
                                                                   0) == 0);
                     if (!OwnsAbortGuard)
                     {
-                        /* Nested data abort - always log this */
-                        PVOID LrPointer = (PVOID)(ULONG_PTR)Context->State.Registers.X[30];
-                        PVOID SpPointer = (PVOID)(ULONG_PTR)Context->State.Registers.Sp;
+                        if (PreviousMode == UserMode)
+                        {
+                            InterlockedExchange(&KiArm64DataAbortOwner[ProcessorIndex], 0);
+                        }
+                        else
+                        {
+                            PVOID LrPointer = (PVOID)(ULONG_PTR)Context->State.Registers.X[30];
+                            PVOID SpPointer = (PVOID)(ULONG_PTR)Context->State.Registers.Sp;
 
-                        DbgPrintEx(DPFLTR_DEFAULT_ID, DPFLTR_ERROR_LEVEL,
-                                   "[arm64] DA NESTED: esr=0x%lx far=%p elr=%p lr=%p sp=%p cpu=%lu\n",
-                                   Esr,
-                                   (PVOID)(ULONG_PTR)Context->State.FaultAddress,
-                                   (PVOID)(ULONG_PTR)Context->State.Elr,
-                                   LrPointer,
-                                   SpPointer,
-                                   ProcessorIndex);
-                        /* Nested abort detected - bugcheck to prevent infinite loop */
-                        KeBugCheckEx(PAGE_FAULT_IN_NONPAGED_AREA,
-                                     (ULONG_PTR)Context->State.FaultAddress,
-                                     (ULONG_PTR)Context->State.Elr,
-                                     (ULONG_PTR)LrPointer,
-                                     0xDA0DEAD);
+                            DbgPrintEx(DPFLTR_DEFAULT_ID, DPFLTR_ERROR_LEVEL,
+                                       "[arm64] DA NESTED: esr=0x%lx far=%p elr=%p lr=%p sp=%p cpu=%lu\n",
+                                       Esr,
+                                       (PVOID)(ULONG_PTR)Context->State.FaultAddress,
+                                       (PVOID)(ULONG_PTR)Context->State.Elr,
+                                       LrPointer,
+                                       SpPointer,
+                                       ProcessorIndex);
+                            KeBugCheckEx(PAGE_FAULT_IN_NONPAGED_AREA,
+                                         (ULONG_PTR)Context->State.FaultAddress,
+                                         (ULONG_PTR)Context->State.Elr,
+                                         (ULONG_PTR)LrPointer,
+                                         0xDA0DEAD);
+                        }
                     }
                 }
 
