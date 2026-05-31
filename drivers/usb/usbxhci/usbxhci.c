@@ -9813,13 +9813,9 @@ XHCI_WaitForCommandCompletion(
     while (Remaining--)
     {
         /*
-         * When we can use an event wait (IRQL <= APC_LEVEL), rely on the IRQ/DPC
-         * path to service the event ring and signal CompletionEvent. Polling the
-         * event ring from within a USBPORT->miniport call can force us to defer
-         * unrelated transfer completions, which risks USBPORT timeouts/cancels
-         * and ensuing pool/list corruption.
-         *
-         * If we cannot wait on an event (high IRQL), fall back to polling.
+         * Prefer the IRQ/DPC path when an event wait is legal. If the
+         * interrupt is missed, drain pending events here and then flush any
+         * transfer completions deferred by callback-masked event handling.
          */
         if (!CommandContext->Completed && !UseEventWait)
             XHCI_ServiceEventRing(Extension, FALSE, FALSE);
@@ -9838,6 +9834,16 @@ XHCI_WaitForCommandCompletion(
                                                &Interval);
             if (WaitStatus == STATUS_SUCCESS && CommandContext->Completed)
                 break;
+
+            if (WaitStatus == STATUS_TIMEOUT &&
+                !CommandContext->Completed &&
+                XHCI_EventRingHasPendingTrb(Extension))
+            {
+                XHCI_ServiceEventRing(Extension, TRUE, FALSE);
+                XHCI_DrainDeferredTransferCompletions(Extension);
+                if (CommandContext->Completed)
+                    break;
+            }
         }
         else
         {
@@ -9868,6 +9874,7 @@ XHCI_WaitForCommandCompletion(
         {
             DPRINT1("usbxhci: attempting to drain pending events after timeout\n");
             XHCI_ServiceEventRing(Extension, TRUE, FALSE);
+            XHCI_DrainDeferredTransferCompletions(Extension);
             if (CommandContext->Completed)
             {
                 DPRINT1("usbxhci: command completed after manual event ring drain\n");
