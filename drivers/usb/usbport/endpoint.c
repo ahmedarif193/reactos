@@ -13,6 +13,8 @@
 #define NDEBUG_USBPORT_CORE
 #include "usbdebug.h"
 
+#define USBPORT_BULK_MAX_TRANSFER_SIZE (4 * 1024 * 1024)
+
 static USBD_STATUS
 USBPORT_MpStatusToUsbdStatus(
     _In_ MPSTATUS MpStatus)
@@ -1236,7 +1238,7 @@ USBPORT_OpenPipe(IN PDEVICE_OBJECT FdoDevice,
 
         case USB_ENDPOINT_TYPE_BULK:
             EndpointProperties->TransferType = USBPORT_TRANSFER_TYPE_BULK;
-            EndpointProperties->MaxTransferSize = 0x10000;
+            EndpointProperties->MaxTransferSize = USBPORT_BULK_MAX_TRANSFER_SIZE;
             break;
 
         case USB_ENDPOINT_TYPE_INTERRUPT:

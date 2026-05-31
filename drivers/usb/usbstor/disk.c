@@ -52,7 +52,8 @@ IsRequestValid(PIRP Irp)
 
         if (TransferLength > USBSTOR_DEFAULT_MAX_TRANSFER_LENGTH)
         {
-            DPRINT1("IsRequestValid: Invalid Srb. TransferLength > 0x10000\n");
+            DPRINT1("IsRequestValid: Invalid Srb. TransferLength > %lu\n",
+                    (ULONG)USBSTOR_DEFAULT_MAX_TRANSFER_LENGTH);
             return FALSE;
         }
     }

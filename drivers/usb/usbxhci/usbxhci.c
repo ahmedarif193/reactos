@@ -77,6 +77,7 @@ struct _XHCI_ISO_PACKET_CONTEXT {
 #define XHCI_INVALID_LINK_STATE 0xFF
 #define USBPORT_NO_HUB_ADDRESS 0xFFFF
 #define XHCI_TRANSFER_POLL_INTERVAL_US 1000
+#define XHCI_BULK_MAX_TRANSFER_SIZE (4 * 1024 * 1024)
 #define XHCI_EP0_STALL_RESET_TIMEOUT_MS 200
 #define XHCI_EP0_STALL_RESET_POLL_MS 1
 
@@ -7555,6 +7556,8 @@ XHCI_QueryEndpointRequirements(
             Requirements->MaxTransferSize = 0x1000;    /* 4 KiB */
             break;
         case USBPORT_TRANSFER_TYPE_BULK:
+            Requirements->MaxTransferSize = XHCI_BULK_MAX_TRANSFER_SIZE;
+            break;
         case USBPORT_TRANSFER_TYPE_INTERRUPT:
             Requirements->MaxTransferSize = 0x10000;   /* 64 KiB */
             break;
@@ -8621,6 +8624,12 @@ XHCI_DetectHardwareQuirks(
                                  XHCI_QUIRK_QEMU_CONFIG_EP_ORDER |
                                  XHCI_QUIRK_QEMU_PORT_RESET;
             DPRINT("usbxhci: detected qemu-xhci, enabling QEMU quirks + poll fallback\n");
+        }
+
+        if (VendorId == 0x1DE4 &&
+            (DeviceId == 0x0100 || DeviceId == 0x0101))
+        {
+            Extension->Quirks |= XHCI_QUIRK_RP1_POLL_XFERS;
         }
     }
 
