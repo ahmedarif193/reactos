@@ -10,6 +10,8 @@
 #define NDEBUG
 #include <debug.h>
 
+#include "hardware.h"
+
 #define SDIO_OCR_READY                 0x80000000
 #define SDIO_OCR_NUM_FUNCTIONS_MASK    0x70000000
 #define SDIO_OCR_NUM_FUNCTIONS_SHIFT   28
@@ -1063,7 +1065,9 @@ SdBusEnumerateCard(
                 AcmdArg |= SD_ACMD41_HCS;
             }
 
-            if (IsV2 && SdBusHostSupportsUhs(FdoExtension))
+            if (IsV2 &&
+                SdBusHostSupportsUhs(FdoExtension) &&
+                SdBusHardwareCanVoltageSwitch(FdoExtension))
             {
                 AcmdArg |= SD_ACMD41_S18R;
                 RequestedUhs = TRUE;
@@ -1805,6 +1809,11 @@ SdBusSetTransferClock(
         }
     }
 
+    SdBusHardwareSelectPins(FdoExtension,
+                            HighSpeed &&
+                            (PdoExtension->CardType == SdCardTypeEmmc ||
+                             PdoExtension->CardType == SdCardTypeMmc));
+
     /*
      * Program the negotiated speed and verify the card still answers. Some
      * host/card combinations advertise High Speed but fail CRC once the bus
@@ -1833,6 +1842,7 @@ SdBusSetTransferClock(
         DPRINT1("SdBusSetTransferClock: High Speed failed, falling back to "
                 "Default Speed (%lu kHz)\n", (ULONG)SD_DEFAULT_SPEED_KHZ);
 
+        SdBusHardwareSelectPins(FdoExtension, FALSE);
         Status = SdBusProgramClock(FdoExtension, SD_DEFAULT_SPEED_KHZ);
         if (NT_SUCCESS(Status))
         {
@@ -1861,6 +1871,7 @@ SdBusSetTransferClock(
      */
     DPRINT1("SdBusSetTransferClock: falling back to identification clock "
             "(%lu kHz)\n", (ULONG)SD_INIT_CLOCK_KHZ);
+    SdBusHardwareSelectPins(FdoExtension, FALSE);
     Status = SdBusProgramClock(FdoExtension, SD_INIT_CLOCK_KHZ);
     if (!NT_SUCCESS(Status))
     {
