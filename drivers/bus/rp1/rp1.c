@@ -1305,6 +1305,36 @@ Rp1PdoQueryInterface(
 /*  PDO PnP dispatch                                                   */
 /* ------------------------------------------------------------------ */
 
+static
+NTSTATUS
+Rp1PdoRemoveDevice(
+    _In_ PDEVICE_OBJECT DeviceObject,
+    _Inout_ PIRP Irp)
+{
+    PRP1_PDO_EXTENSION PdoExt;
+    PRP1_FDO_EXTENSION FdoExt;
+
+    PdoExt = (PRP1_PDO_EXTENSION)DeviceObject->DeviceExtension;
+
+    if (PdoExt->ParentFdo)
+    {
+        FdoExt = (PRP1_FDO_EXTENSION)PdoExt->ParentFdo->DeviceExtension;
+        if (PdoExt->ChildIndex < RP1_MAX_CHILDREN &&
+            FdoExt->ChildPdo[PdoExt->ChildIndex] == DeviceObject)
+        {
+            FdoExt->ChildPdo[PdoExt->ChildIndex] = NULL;
+            if (FdoExt->ChildCount != 0)
+                FdoExt->ChildCount--;
+        }
+    }
+
+    Irp->IoStatus.Status = STATUS_SUCCESS;
+    IoCompleteRequest(Irp, IO_NO_INCREMENT);
+    IoDeleteDevice(DeviceObject);
+
+    return STATUS_SUCCESS;
+}
+
 NTSTATUS
 Rp1PdoPnp(
     _In_ PDEVICE_OBJECT DeviceObject,
@@ -1326,8 +1356,7 @@ Rp1PdoPnp(
             break;
 
         case IRP_MN_REMOVE_DEVICE:
-            Status = STATUS_SUCCESS;
-            break;
+            return Rp1PdoRemoveDevice(DeviceObject, Irp);
 
         case IRP_MN_QUERY_STOP_DEVICE:
         case IRP_MN_QUERY_REMOVE_DEVICE:

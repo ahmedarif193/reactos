@@ -241,7 +241,7 @@ IopInstallCriticalDevice(PDEVICE_NODE DeviceNode)
 
                     /* Check if there's already a driver installed */
                     Status = ZwQueryValueKey(InstanceKey,
-                                             &ClassGuidU,
+                                             &ServiceU,
                                              KeyValuePartialInformation,
                                              NULL,
                                              0,
