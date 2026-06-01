@@ -27,3 +27,30 @@ HKLM,"SYSTEM\CurrentControlSet\Services\rp1gem","Group",0x00000000,"NDIS"
 HKLM,"SYSTEM\CurrentControlSet\Services\rp1gem","ImagePath",0x00020000,"system32\drivers\rp1gem.sys"
 HKLM,"SYSTEM\CurrentControlSet\Services\rp1gem","Start",0x00010001,0x00000000
 HKLM,"SYSTEM\CurrentControlSet\Services\rp1gem","Type",0x00010001,0x00000001
+
+HKLM,"SYSTEM\CurrentControlSet\Enum\RP1\GEM\2","Service",0x00000000,"rp1gem"
+HKLM,"SYSTEM\CurrentControlSet\Enum\RP1\GEM\2","ClassGUID",0x00000000,"{4D36E972-E325-11CE-BFC1-08002BE10318}"
+HKLM,"SYSTEM\CurrentControlSet\Enum\RP1\GEM\2","Driver",0x00000000,"{4D36E972-E325-11CE-BFC1-08002BE10318}\0001"
+HKLM,"SYSTEM\CurrentControlSet\Enum\RP1\GEM\2","DeviceDesc",0x00000000,"RP1 Ethernet Controller"
+HKLM,"SYSTEM\CurrentControlSet\Enum\RP1\GEM\2","Mfg",0x00000000,"Raspberry Pi"
+HKLM,"SYSTEM\CurrentControlSet\Enum\RP1\GEM\2","Class",0x00000000,"Net"
+
+HKLM,"SYSTEM\CurrentControlSet\Control\Class\{4D36E972-E325-11CE-BFC1-08002BE10318}",,0x00000000,"Network adapters"
+HKLM,"SYSTEM\CurrentControlSet\Control\Class\{4D36E972-E325-11CE-BFC1-08002BE10318}","Class",0x00000000,"Net"
+HKLM,"SYSTEM\CurrentControlSet\Control\Class\{4D36E972-E325-11CE-BFC1-08002BE10318}","Icon",0x00000000,"-5"
+HKLM,"SYSTEM\CurrentControlSet\Control\Class\{4D36E972-E325-11CE-BFC1-08002BE10318}","Installer32",0x00000000,"NetCfgx.dll,NetClassInstaller"
+HKLM,"SYSTEM\CurrentControlSet\Control\Class\{4D36E972-E325-11CE-BFC1-08002BE10318}\0001","DriverDesc",0x00000000,"RP1 Ethernet Controller"
+HKLM,"SYSTEM\CurrentControlSet\Control\Class\{4D36E972-E325-11CE-BFC1-08002BE10318}\0001","ProviderName",0x00000000,"ReactOS"
+HKLM,"SYSTEM\CurrentControlSet\Control\Class\{4D36E972-E325-11CE-BFC1-08002BE10318}\0001","MatchingDeviceId",0x00000000,"RP1\GEM"
+HKLM,"SYSTEM\CurrentControlSet\Control\Class\{4D36E972-E325-11CE-BFC1-08002BE10318}\0001","NetCfgInstanceId",0x00000000,"{2E5F3B71-5C8D-4D7A-9E1B-52B4EC271201}"
+HKLM,"SYSTEM\CurrentControlSet\Control\Class\{4D36E972-E325-11CE-BFC1-08002BE10318}\0001","Characteristics",0x00010001,0x00000004
+HKLM,"SYSTEM\CurrentControlSet\Control\Class\{4D36E972-E325-11CE-BFC1-08002BE10318}\0001","ComponentId",0x00000000,"rp1gem"
+HKLM,"SYSTEM\CurrentControlSet\Control\Class\{4D36E972-E325-11CE-BFC1-08002BE10318}\0001","BusType",0x00010001,0x00000000
+HKLM,"SYSTEM\CurrentControlSet\Control\Class\{4D36E972-E325-11CE-BFC1-08002BE10318}\0001","InfPath",0x00000000,"netrp1gem.inf"
+HKLM,"SYSTEM\CurrentControlSet\Control\Class\{4D36E972-E325-11CE-BFC1-08002BE10318}\0001","InfSection",0x00000000,"RP1GEM_Inst.ndi"
+HKLM,"SYSTEM\CurrentControlSet\Control\Class\{4D36E972-E325-11CE-BFC1-08002BE10318}\0001\Ndi","Service",0x00000000,"rp1gem"
+HKLM,"SYSTEM\CurrentControlSet\Control\Class\{4D36E972-E325-11CE-BFC1-08002BE10318}\0001\Ndi\Interfaces","UpperRange",0x00000000,"ndis5"
+HKLM,"SYSTEM\CurrentControlSet\Control\Class\{4D36E972-E325-11CE-BFC1-08002BE10318}\0001\Ndi\Interfaces","LowerRange",0x00000000,"ethernet"
+HKLM,"SYSTEM\CurrentControlSet\Control\Class\{4D36E972-E325-11CE-BFC1-08002BE10318}\0001\Linkage","Export",0x00000000,"\Device\{2E5F3B71-5C8D-4D7A-9E1B-52B4EC271201}"
+HKLM,"SYSTEM\CurrentControlSet\Control\Class\{4D36E972-E325-11CE-BFC1-08002BE10318}\0001\Linkage","RootDevice",0x00000000,"{2E5F3B71-5C8D-4D7A-9E1B-52B4EC271201}"
+HKLM,"SYSTEM\CurrentControlSet\Control\Class\{4D36E972-E325-11CE-BFC1-08002BE10318}\0001\Linkage","UpperBind",0x00000000,"Tcpip"
