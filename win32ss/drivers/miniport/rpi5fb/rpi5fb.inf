@@ -1,0 +1,58 @@
+; Raspberry Pi 5 framebuffer miniport
+
+[Version]
+Signature="$Windows NT$"
+LayoutFile=layout.inf
+Class=Display
+ClassGUID={4D36E968-E325-11CE-BFC1-08002BE10318}
+Provider=%ReactOS%
+DriverVer=06/01/2026,1.0.0.0
+
+[DestinationDirs]
+DefaultDestDir=12
+Rpi5Fb.Miniport_CopyFiles=12
+Rpi5Fb.Display_CopyFiles=11
+
+[Manufacturer]
+%ReactOS%=ReactOS,NTarm64
+
+[ReactOS.NTarm64]
+%Rpi5Fb.DeviceDesc%=Rpi5Fb_Install,ROOT\RPI5FB
+
+[Rpi5Fb_Install]
+CopyFiles=Rpi5Fb.Miniport_CopyFiles,Rpi5Fb.Display_CopyFiles
+AddReg=Rpi5Fb_SoftwareSettings
+
+[Rpi5Fb.Miniport_CopyFiles]
+rpi5fb.sys
+
+[Rpi5Fb.Display_CopyFiles]
+framebuf.dll
+
+[Rpi5Fb_SoftwareSettings]
+HKR,,InstalledDisplayDrivers,%REG_MULTI_SZ%,framebuf
+HKR,,VgaCompatible,%REG_DWORD%,0
+HKR,,DefaultSettings.VRefresh,%REG_DWORD%,1
+HKR,,DefaultSettings.BitsPerPel,%REG_DWORD%,32
+HKR,,DefaultSettings.XResolution,%REG_DWORD%,1024
+HKR,,DefaultSettings.YResolution,%REG_DWORD%,768
+HKR,,"Device Description",%REG_SZ%,"%Rpi5Fb.DeviceDesc%"
+
+[Rpi5Fb_Install.Services]
+AddService=rpi5fb,0x00000002,Rpi5Fb_Service
+
+[Rpi5Fb_Service]
+DisplayName=%Rpi5Fb.ServiceDesc%
+ServiceType=1
+StartType=1
+ErrorControl=0
+ServiceBinary=%12%\rpi5fb.sys
+LoadOrderGroup=Video Save
+
+[Strings]
+ReactOS="ReactOS"
+Rpi5Fb.DeviceDesc="Raspberry Pi 5 Framebuffer"
+Rpi5Fb.ServiceDesc="ReactOS Raspberry Pi 5 Framebuffer Miniport"
+REG_MULTI_SZ=0x00010000
+REG_DWORD=0x00010001
+REG_SZ=0x00000000
