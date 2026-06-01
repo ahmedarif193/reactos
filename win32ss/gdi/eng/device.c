@@ -568,7 +568,7 @@ NTAPI
 EngpUpdateMonitorDevices(
     _In_ PGRAPHICS_DEVICE pGraphicsDevice)
 {
-    PDEVICE_RELATIONS pDeviceRelations;
+    PDEVICE_RELATIONS pDeviceRelations = NULL;
     PVIDEO_MONITOR_DEVICE pMonitorDevices;
     ULONG i, bytesWritten, monitorCount;
     NTSTATUS Status;
@@ -578,32 +578,41 @@ EngpUpdateMonitorDevices(
     Status = EngpPnPTargetRelationRequest(pGraphicsDevice->DeviceObject, &pDeviceRelations);
     if (!NT_SUCCESS(Status))
     {
-        ERR("EngpPnPTargetRelationRequest() failed with status 0x%08x\n", Status);
-        return Status;
-    }
-    ASSERT(pDeviceRelations->Count == 1);
-
-    /* Invalidate relations, so that videoprt reenumerates its monitors.
-     * Only do this for valid PDOs - check by trying to open registry key. */
-    Status = IoOpenDeviceRegistryKey(pDeviceRelations->Objects[0],
-                                     PLUGPLAY_REGKEY_DRIVER,
-                                     KEY_READ,
-                                     &hkRegistry);
-    if (NT_SUCCESS(Status))
-    {
-        ZwClose(hkRegistry);
-        IoSynchronousInvalidateDeviceRelations(pDeviceRelations->Objects[0], BusRelations);
-    }
-    else
-    {
-        /* Legacy device without valid PDO - skip invalidation.
-         * This is expected for non-PnP devices like VGA. */
+        if (Status != STATUS_INVALID_PARAMETER &&
+            Status != STATUS_INVALID_DEVICE_REQUEST &&
+            Status != STATUS_NOT_SUPPORTED)
+        {
+            ERR("EngpPnPTargetRelationRequest() failed with status 0x%08x\n", Status);
+            return Status;
+        }
     }
 
-    /* Free returned structure */
-    for (i = 0; i < pDeviceRelations->Count; i++)
-        ObDereferenceObject(pDeviceRelations->Objects[i]);
-    ExFreePool(pDeviceRelations);
+    if (pDeviceRelations)
+    {
+        ASSERT(pDeviceRelations->Count == 1);
+
+        /* Invalidate relations, so that videoprt reenumerates its monitors.
+         * Only do this for valid PDOs - check by trying to open registry key. */
+        Status = IoOpenDeviceRegistryKey(pDeviceRelations->Objects[0],
+                                         PLUGPLAY_REGKEY_DRIVER,
+                                         KEY_READ,
+                                         &hkRegistry);
+        if (NT_SUCCESS(Status))
+        {
+            ZwClose(hkRegistry);
+            IoSynchronousInvalidateDeviceRelations(pDeviceRelations->Objects[0], BusRelations);
+        }
+        else
+        {
+            /* Legacy device without valid PDO - skip invalidation.
+             * This is expected for non-PnP devices like VGA. */
+        }
+
+        /* Free returned structure */
+        for (i = 0; i < pDeviceRelations->Count; i++)
+            ObDereferenceObject(pDeviceRelations->Objects[i]);
+        ExFreePool(pDeviceRelations);
+    }
 
     /* Now, get list of monitor PDOs */
     Status = EngDeviceIoControl(pGraphicsDevice->DeviceObject,

@@ -1,0 +1,70 @@
+; UEFI GOP Framebuffer Miniport
+
+[Version]
+Signature="$Windows NT$"
+LayoutFile=layout.inf
+Class=Display
+ClassGUID={4D36E968-E325-11CE-BFC1-08002BE10318}
+Provider=%ReactOS%
+DriverVer=05/26/2026,1.0.0.0
+
+[DestinationDirs]
+DefaultDestDir=12
+UefiFb.Miniport_CopyFiles=12
+UefiFb.Display_CopyFiles=11
+
+[Manufacturer]
+%ReactOS%=ReactOS,NTx86,NTamd64,NTarm64
+
+[ReactOS.NTx86]
+%UefiFb.DeviceDesc%=UefiFb_Install,ROOT\UEFIFB
+%UefiFb.DeviceDesc%=UefiFb_Install,DETECTEDInternal\uefifb
+%UefiFb.DeviceDesc%=UefiFb_Install,DETECTED\uefifb
+
+[ReactOS.NTamd64]
+%UefiFb.DeviceDesc%=UefiFb_Install,ROOT\UEFIFB
+%UefiFb.DeviceDesc%=UefiFb_Install,DETECTEDInternal\uefifb
+%UefiFb.DeviceDesc%=UefiFb_Install,DETECTED\uefifb
+
+[ReactOS.NTarm64]
+%UefiFb.DeviceDesc%=UefiFb_Install,ROOT\UEFIFB
+%UefiFb.DeviceDesc%=UefiFb_Install,DETECTEDInternal\uefifb
+%UefiFb.DeviceDesc%=UefiFb_Install,DETECTED\uefifb
+
+[UefiFb_Install]
+CopyFiles=UefiFb.Miniport_CopyFiles,UefiFb.Display_CopyFiles
+AddReg=UefiFb_SoftwareSettings
+
+[UefiFb.Miniport_CopyFiles]
+uefifb.sys
+
+[UefiFb.Display_CopyFiles]
+framebuf.dll
+
+[UefiFb_SoftwareSettings]
+HKR,,InstalledDisplayDrivers,%REG_MULTI_SZ%,framebuf
+HKR,,VgaCompatible,%REG_DWORD%,0
+HKR,,DefaultSettings.VRefresh,%REG_DWORD%,1
+HKR,,DefaultSettings.BitsPerPel,%REG_DWORD%,32
+HKR,,DefaultSettings.XResolution,%REG_DWORD%,1024
+HKR,,DefaultSettings.YResolution,%REG_DWORD%,768
+HKR,,"Device Description",%REG_SZ%,"%UefiFb.DeviceDesc%"
+
+[UefiFb_Install.Services]
+AddService=uefifb,0x00000002,UefiFb_Service
+
+[UefiFb_Service]
+DisplayName=%UefiFb.ServiceDesc%
+ServiceType=1
+StartType=1
+ErrorControl=0
+ServiceBinary=%12%\uefifb.sys
+LoadOrderGroup=Video Save
+
+[Strings]
+ReactOS="ReactOS"
+UefiFb.DeviceDesc="UEFI GOP Framebuffer"
+UefiFb.ServiceDesc="ReactOS UEFI GOP Framebuffer Miniport"
+REG_MULTI_SZ=0x00010000
+REG_DWORD=0x00010001
+REG_SZ=0x00000000
