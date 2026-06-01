@@ -14,6 +14,13 @@ if(ARCH STREQUAL "i386")
     #list(APPEND CRT_MEM_ASM_SOURCE
     #    ${LIBCNTPR_MEM_ASM_SOURCE}
     #)
+elseif(ARCH STREQUAL "arm64")
+    list(APPEND LIBCNTPR_MEM_SOURCE
+        mem/memchr.c
+    )
+    list(APPEND LIBCNTPR_MEM_ASM_SOURCE
+        mem/arm64/mem_asm.s
+    )
 else()
     list(APPEND LIBCNTPR_MEM_SOURCE
         mem/memchr.c
