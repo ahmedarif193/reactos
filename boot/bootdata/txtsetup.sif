@@ -148,6 +148,7 @@ acpi.sys     = 1,,,,,,x,4,,,,1,4
 [SourceDisksFiles.arm64]
 acpi.sys     = 1,,,,,,x,4,,,,1,4
 rp1.sys      = 1,,,,,,x,4,,,,1,4
+rp1gem.sys   = 1,,,,,,x,4,,,,1,4
 
 ;
 ; The [SystemPartitionFiles] section lists all the files
@@ -181,6 +182,7 @@ PCI\CC_0C0310 = usbohci
 PCI\CC_0C0320 = usbehci
 PCI\CC_0C0330 = usbxhci
 PCI\VEN_1DE4&DEV_0001 = rp1
+RP1\GEM = rp1gem
 USB\Class_08&SubClass_06&Prot_50 = usbstor
 USB\Class_08&SubClass_05&Prot_50 = usbstor
 HID_DEVICE_SYSTEM_KEYBOARD = kbdhid,{4D36E96B-E325-11CE-BFC1-08002BE10318}
