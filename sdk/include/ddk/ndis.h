@@ -6453,6 +6453,10 @@ typedef struct _NET_BUFFER_POOL_PARAMETERS {
 #define NET_BUFFER_LIST_CONTEXT_DATA_SIZE(_NBL)  ((_NBL)->Context->Size)
 #define NET_BUFFER_LIST_INFO(_NBL, _Id)          ((_NBL)->NetBufferListInfo[(_Id)])
 #define NET_BUFFER_LIST_STATUS(_NBL)             ((_NBL)->Status)
+#define NDIS_GET_NET_BUFFER_LIST_CANCEL_ID(_NBL) \
+    NET_BUFFER_LIST_INFO((_NBL), NetBufferListCancelId)
+#define NDIS_SET_NET_BUFFER_LIST_CANCEL_ID(_NBL, _CancelId) \
+    (NET_BUFFER_LIST_INFO((_NBL), NetBufferListCancelId) = (_CancelId))
 
 /* NBL flags (common set) */
 #define NDIS_NBL_FLAGS_IS_IPV4                       0x00000001
@@ -6652,6 +6656,10 @@ typedef struct _NDIS_LINK_STATE {
 } NDIS_LINK_STATE, *PNDIS_LINK_STATE;
 #define NDIS_LINK_STATE_DEFINED 1
 
+#define NDIS_LINK_STATE_XMIT_LINK_SPEED_AUTO_NEGOTIATED 0x00000001
+#define NDIS_LINK_STATE_RCV_LINK_SPEED_AUTO_NEGOTIATED  0x00000002
+#define NDIS_LINK_STATE_DUPLEX_AUTO_NEGOTIATED          0x00000004
+
 /* Core NDIS 6 OID codes (additions over the existing NDIS 5.x OID set) */
 #define OID_GEN_LINK_STATE                       0x00010213
 #define OID_GEN_LINK_PARAMETERS                  0x00010214
@@ -6759,6 +6767,20 @@ typedef struct _NDIS_MINIPORT_RESTART_PARAMETERS {
   ULONG              RestartAttributes;
 } NDIS_MINIPORT_RESTART_PARAMETERS, *PNDIS_MINIPORT_RESTART_PARAMETERS;
 
+#define NET_DEVICE_PNP_EVENT_REVISION_1 1
+#define NDIS_SIZEOF_NET_DEVICE_PNP_EVENT_REVISION_1 \
+  RTL_SIZEOF_THROUGH_FIELD(NET_DEVICE_PNP_EVENT, NdisReserved)
+
+typedef struct _NET_DEVICE_PNP_EVENT {
+  NDIS_OBJECT_HEADER    Header;
+  NDIS_PORT_NUMBER      PortNumber;
+  NDIS_DEVICE_PNP_EVENT DevicePnPEvent;
+  PVOID                 InformationBuffer;
+  ULONG                 InformationBufferLength;
+  UCHAR                 NdisReserved[2 * sizeof(PVOID)];
+} NET_DEVICE_PNP_EVENT, *PNET_DEVICE_PNP_EVENT;
+#define NET_DEVICE_PNP_EVENT_DEFINED 1
+
 typedef struct _NDIS_MINIPORT_ADD_DEVICE_REGISTRATION_ATTRIBUTES {
   NDIS_OBJECT_HEADER Header;
   NDIS_HANDLE        MiniportAddDeviceContext;
@@ -6835,15 +6857,10 @@ typedef VOID
   _In_ PVOID       RequestId);
 typedef MINIPORT_CANCEL_OID_REQUEST (*MINIPORT_CANCEL_OID_REQUEST_HANDLER);
 
-/* Forward-declare NET_DEVICE_PNP_EVENT so the callback typedef below can
- * use a typed pointer. The struct body itself comes from the ndis6_compat.h
- * shim in consumer drivers (or a future dedicated header). */
-struct _NET_DEVICE_PNP_EVENT;
-
 typedef VOID
 (NTAPI MINIPORT_DEVICE_PNP_EVENT_NOTIFY)(
   _In_ NDIS_HANDLE MiniportAdapterContext,
-  _In_ struct _NET_DEVICE_PNP_EVENT* NetDevicePnPEvent);
+  _In_ PNET_DEVICE_PNP_EVENT NetDevicePnPEvent);
 typedef MINIPORT_DEVICE_PNP_EVENT_NOTIFY (*MINIPORT_DEVICE_PNP_EVENT_NOTIFY_HANDLER);
 
 typedef VOID
@@ -7025,6 +7042,15 @@ typedef struct _NDIS_MINIPORT_DRIVER_CHARACTERISTICS {
 
 #define NDIS_MINIPORT_DRIVER_CHARACTERISTICS_REVISION_1  1
 
+#define NDIS_MINIPORT_ATTRIBUTES_HARDWARE_DEVICE       0x00000001
+#define NDIS_MINIPORT_ATTRIBUTES_NDIS_WDM              0x00000002
+#define NDIS_MINIPORT_ATTRIBUTES_SURPRISE_REMOVE_OK    0x00000004
+#define NDIS_MINIPORT_ATTRIBUTES_NOT_CO_NDIS           0x00000008
+#define NDIS_MINIPORT_ATTRIBUTES_DO_NOT_BIND_TO_ALL_CO 0x00000010
+#define NDIS_MINIPORT_ATTRIBUTES_NO_HALT_ON_SUSPEND    0x00000020
+#define NDIS_MINIPORT_ATTRIBUTES_BUS_MASTER            0x00000040
+#define NDIS_MINIPORT_ATTRIBUTES_CONTROLS_DEFAULT_PORT 0x00000080
+
 /* Miniport adapter attributes — the "set me up" call the miniport uses during init */
 typedef struct _NDIS_MINIPORT_ADAPTER_REGISTRATION_ATTRIBUTES {
   NDIS_OBJECT_HEADER Header;
@@ -7041,7 +7067,7 @@ typedef struct _NDIS_MINIPORT_ADAPTER_GENERAL_ATTRIBUTES {
   NDIS_OBJECT_HEADER              Header;
   ULONG                           Flags;
   NDIS_MEDIUM                     MediaType;
-  NDIS_MEDIUM                     PhysicalMediumType;
+  NDIS_PHYSICAL_MEDIUM            PhysicalMediumType;
   ULONG                           MtuSize;
   ULONG64                         MaxXmitLinkSpeed;
   ULONG64                         XmitLinkSpeed;
@@ -7147,7 +7173,7 @@ typedef struct _NDIS_FILTER_ATTACH_PARAMETERS {
   NDIS_OBJECT_HEADER Header;
   UINT               MtuSize;
   NDIS_MEDIUM        MiniportMediaType;
-  NDIS_MEDIUM        PhysicalMediumType;
+  NDIS_PHYSICAL_MEDIUM PhysicalMediumType;
   PNDIS_STRING       BaseMiniportName;
   PNDIS_STRING       BaseMiniportInstanceName;
   PNDIS_STRING       FilterModuleGuidName;
@@ -7341,7 +7367,7 @@ typedef struct _NDIS_BIND_PARAMETERS {
   UINT               BoundIfIndex;
   ULONG64            BoundIfNetluid; /* NET_LUID — declared as ULONG64 to avoid pulling in ifdef.h */
   NDIS_MEDIUM        MediaType;
-  NDIS_MEDIUM        PhysicalMediumType;
+  NDIS_PHYSICAL_MEDIUM PhysicalMediumType;
   ULONG              MtuSize;
   ULONG              MaxXmitLinkSpeed;
   ULONG              MaxRcvLinkSpeed;

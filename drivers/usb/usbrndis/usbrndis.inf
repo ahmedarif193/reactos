@@ -15,6 +15,7 @@ DefaultDestDir = 12
 [Manufacturer]
 %Generic% = GenericDevices,NTx86,NTamd64
 %VBox% = VBoxDevices,NTx86,NTamd64
+%Realtek% = RealtekDevices,NTx86,NTamd64
 
 ; Generic RNDIS devices
 [GenericDevices.NTx86]
@@ -33,6 +34,13 @@ DefaultDestDir = 12
 
 [VBoxDevices.NTamd64]
 %VBox.DeviceDesc% = RNDIS.Install, USB\VID_80EE&PID_0040
+
+; Realtek RTL815x devices with CDC-ECM configuration
+[RealtekDevices.NTx86]
+%RTL8153.DeviceDesc% = RNDIS.Install, USB\VID_0BDA&PID_8153
+
+[RealtekDevices.NTamd64]
+%RTL8153.DeviceDesc% = RNDIS.Install, USB\VID_0BDA&PID_8153
 
 [RNDIS.Install]
 Characteristics = 0x84   ; NCF_HAS_UI | NCF_PHYSICAL
@@ -76,7 +84,9 @@ usbrndis.sys = 1
 ReactOS            = "ReactOS Team"
 Generic            = "Generic"
 VBox               = "Oracle VirtualBox"
+Realtek            = "Realtek"
 RNDIS.DeviceDesc   = "USB RNDIS Network Adapter"
 VBox.DeviceDesc    = "VirtualBox USB Ethernet Adapter"
+RTL8153.DeviceDesc = "Realtek RTL8153 USB Ethernet Adapter"
 RNDIS.ServiceDesc  = "USB RNDIS Network Driver"
 DiskName           = "USB RNDIS Driver Installation Disk"
