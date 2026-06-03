@@ -47,10 +47,13 @@ KMT_TESTFUNC Test_KeFloatPointState;
 KMT_TESTFUNC Test_KeGuardedMutex;
 KMT_TESTFUNC Test_KeIrql;
 KMT_TESTFUNC Test_KeMutex;
+KMT_TESTFUNC Test_KePcr;
 KMT_TESTFUNC Test_KeProcessor;
 KMT_TESTFUNC Test_KeSpinLock;
+KMT_TESTFUNC Test_KeThreadedDpc;
 KMT_TESTFUNC Test_KeTimer;
 KMT_TESTFUNC Test_KernelType;
+KMT_TESTFUNC Test_MmAllocateContiguousNode;
 KMT_TESTFUNC Test_MmMdl;
 KMT_TESTFUNC Test_MmSection;
 KMT_TESTFUNC Test_MmReservedMapping;
@@ -77,6 +80,7 @@ KMT_TESTFUNC Test_SeTokenFiltering;
 KMT_TESTFUNC Test_RtlAvlTree;
 KMT_TESTFUNC Test_RtlCaptureContext;
 KMT_TESTFUNC Test_RtlException;
+KMT_TESTFUNC Test_RtlGetVersion;
 KMT_TESTFUNC Test_RtlIntSafe;
 KMT_TESTFUNC Test_RtlIsValidOemCharacter;
 KMT_TESTFUNC Test_RtlMemory;
@@ -104,7 +108,7 @@ const KMT_TEST TestList[] =
     { "ExResource",                         Test_ExResource },
     { "ExSequencedList",                    Test_ExSequencedList },
     { "ExSingleList",                       Test_ExSingleList },
-    { "-ExTimer",                           Test_ExTimer },
+    { "ExTimer",                            Test_ExTimer },
     { "ExUuid",                             Test_ExUuid },
     { "Example",                            Test_Example },
     { "FsRtlDissect",                       Test_FsRtlDissect },
@@ -134,10 +138,13 @@ const KMT_TEST TestList[] =
     { "KeGuardedMutex",                     Test_KeGuardedMutex },
     { "KeIrql",                             Test_KeIrql },
     { "KeMutex",                            Test_KeMutex },
-    { "-KeProcessor",                       Test_KeProcessor },
+    { "KePcr",                              Test_KePcr },
+    { "KeProcessor",                        Test_KeProcessor },
     { "KeSpinLock",                         Test_KeSpinLock },
+    { "KeThreadedDpc",                      Test_KeThreadedDpc },
     { "KeTimer",                            Test_KeTimer },
-    { "-KernelType",                        Test_KernelType },
+    { "KernelType",                         Test_KernelType },
+    { "MmAllocateContiguousNode",           Test_MmAllocateContiguousNode },
     { "MmMdl",                              Test_MmMdl },
     { "MmSection",                          Test_MmSection },
     { "MmReservedMapping",                  Test_MmReservedMapping },
@@ -152,13 +159,14 @@ const KMT_TEST TestList[] =
     { "ObSecurity",                         Test_ObSecurity },
     { "ObSymbolicLink",                     Test_ObSymbolicLink },
     { "ObType",                             Test_ObType },
-    { "-ObTypeClean",                       Test_ObTypeClean },
-    { "-ObTypeNoClean",                     Test_ObTypeNoClean },
+    { "ObTypeClean",                        Test_ObTypeClean },
+    { "ObTypeNoClean",                      Test_ObTypeNoClean },
     { "ObTypes",                            Test_ObTypes },
     { "PsNotify",                           Test_PsNotify },
     { "PsQuota",                            Test_PsQuota },
     { "RtlAvlTreeKM",                       Test_RtlAvlTree },
     { "RtlExceptionKM",                     Test_RtlException },
+    { "RtlGetVersion",                      Test_RtlGetVersion },
     { "RtlIntSafeKM",                       Test_RtlIntSafe },
     { "RtlIsValidOemCharacter",             Test_RtlIsValidOemCharacter },
     { "RtlMemoryKM",                        Test_RtlMemory },

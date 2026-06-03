@@ -99,6 +99,7 @@ TestEntry(
     KmtRegisterIrpHandler(IRP_MJ_QUERY_INFORMATION, NULL, TestIrpHandler);
     KmtRegisterIrpHandler(IRP_MJ_SET_INFORMATION, NULL, TestIrpHandler);
 
+    TestFastIoDispatch.SizeOfFastIoDispatch = sizeof(TestFastIoDispatch);
     TestFastIoDispatch.FastIoRead = FastIoRead;
     TestFastIoDispatch.FastIoWrite = FastIoWrite;
     TestFastIoDispatch.FastIoQueryStandardInfo = FastIoQueryStandardInfo;
@@ -198,8 +199,6 @@ TestIrpHandler(
 {
     NTSTATUS Status;
     PTEST_FCB Fcb;
-    CACHE_UNINITIALIZE_EVENT CacheUninitEvent;
-
     PAGED_CODE();
 
     DPRINT("IRP %x/%x\n", IoStack->MajorFunction, IoStack->MinorFunction);
@@ -218,11 +217,16 @@ TestIrpHandler(
         ULONG RequestedDisposition = ((IoStack->Parameters.Create.Options >> 24) & 0xff);
         ok(RequestedDisposition == FILE_CREATE || RequestedDisposition == FILE_OPEN, "Invalid disposition: %lu\n", RequestedDisposition);
 
-        if (IoStack->FileObject->FileName.Length >= 2 * sizeof(WCHAR))
+        if (IoStack->FileObject->FileName.Length < 2 * sizeof(WCHAR))
         {
-            TestDeviceObject = DeviceObject;
-            TestFileObject = IoStack->FileObject;
+            Irp->IoStatus.Information = FILE_OPENED;
+            Status = STATUS_SUCCESS;
+            goto Complete;
         }
+
+        TestDeviceObject = DeviceObject;
+        TestFileObject = IoStack->FileObject;
+
         Fcb = ExAllocatePoolWithTag(NonPagedPool, sizeof(*Fcb), 'FwrI');
         RtlZeroMemory(Fcb, sizeof(*Fcb));
         ExInitializeFastMutex(&Fcb->HeaderMutex);
@@ -251,8 +255,7 @@ TestIrpHandler(
             IoStack->FileObject->SectionObjectPointer = &Fcb->SectionObjectPointers;
         }
 
-        if (IoStack->FileObject->FileName.Length == 0 ||
-            RtlCompareUnicodeString(&IoStack->FileObject->FileName, &InitOnCreate, FALSE) == 0)
+        if (RtlCompareUnicodeString(&IoStack->FileObject->FileName, &InitOnCreate, FALSE) == 0)
         {
             DPRINT1("Init\n");
 
@@ -412,8 +415,15 @@ TestIrpHandler(
     else if (IoStack->MajorFunction == IRP_MJ_CLEANUP)
     {
         Fcb = IoStack->FileObject->FsContext;
-        ok(Fcb != NULL, "Null pointer!\n");
-        if (IoStack->FileObject->SectionObjectPointer != NULL)
+        if (Fcb == NULL)
+        {
+            ok(IoStack->FileObject->FileName.Length < 2 * sizeof(WCHAR),
+               "Null pointer for file %wZ!\n", &IoStack->FileObject->FileName);
+            Status = STATUS_SUCCESS;
+            goto Complete;
+        }
+
+        if (Fcb && IoStack->FileObject->SectionObjectPointer != NULL)
         {
             LARGE_INTEGER Zero = RTL_CONSTANT_LARGE_INTEGER(0LL);
 
@@ -423,12 +433,13 @@ TestIrpHandler(
                 CcPurgeCacheSection(&Fcb->SectionObjectPointers, NULL, 0, FALSE);
             }
 
-            KeInitializeEvent(&CacheUninitEvent.Event, NotificationEvent, FALSE);
-            CcUninitializeCacheMap(IoStack->FileObject, &Zero, &CacheUninitEvent);
-            KeWaitForSingleObject(&CacheUninitEvent.Event, Executive, KernelMode, FALSE, NULL);
+            KmtCcUninitializeCacheMap(IoStack->FileObject, &Zero);
         }
-        ExFreePoolWithTag(Fcb, 'FwrI');
-        IoStack->FileObject->FsContext = NULL;
+        if (Fcb)
+        {
+            ExFreePoolWithTag(Fcb, 'FwrI');
+            IoStack->FileObject->FsContext = NULL;
+        }
         Status = STATUS_SUCCESS;
     }
     else if (IoStack->MajorFunction == IRP_MJ_QUERY_INFORMATION)
@@ -520,6 +531,7 @@ TestIrpHandler(
         }
     }
 
+Complete:
     if (Status == STATUS_PENDING)
     {
         IoMarkIrpPending(Irp);

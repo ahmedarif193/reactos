@@ -21,6 +21,7 @@ START_TEST(CcCopyWrite)
     UNICODE_STRING NormalFile = RTL_CONSTANT_STRING(L"\\Device\\Kmtest-CcCopyWrite\\NormalFile");
     UNICODE_STRING BehaviourTestFile = RTL_CONSTANT_STRING(L"\\Device\\Kmtest-CcCopyWrite\\BehaviourTestFile");
     DWORD Error;
+    BOOLEAN IsWin7 = GetNTVersion() == _WIN32_WINNT_WIN7;
 
     Error = KmtLoadAndOpenDriver(L"CcCopyWrite", FALSE);
     ok_eq_int(Error, ERROR_SUCCESS);
@@ -92,15 +93,22 @@ START_TEST(CcCopyWrite)
 
     NtClose(Handle);
 
-    InitializeObjectAttributes(&ObjectAttributes, &BehaviourTestFile, OBJ_CASE_INSENSITIVE, NULL, NULL);
-    Status = NtOpenFile(&Handle, FILE_ALL_ACCESS, &ObjectAttributes, &IoStatusBlock, 0, FILE_NON_DIRECTORY_FILE | FILE_SYNCHRONOUS_IO_NONALERT);
-    ok_eq_hex(Status, STATUS_SUCCESS);
+    if (IsWin7)
+    {
+        skip(FALSE, "CcCopyWrite behavior path leaves Windows 7 cache state unusable after CcCopyRead\n");
+    }
+    else
+    {
+        InitializeObjectAttributes(&ObjectAttributes, &BehaviourTestFile, OBJ_CASE_INSENSITIVE, NULL, NULL);
+        Status = NtOpenFile(&Handle, FILE_ALL_ACCESS, &ObjectAttributes, &IoStatusBlock, 0, FILE_NON_DIRECTORY_FILE | FILE_SYNCHRONOUS_IO_NONALERT);
+        ok_eq_hex(Status, STATUS_SUCCESS);
 
-    ByteOffset.QuadPart = 4097;
-    Status = NtWriteFile(Handle, NULL, NULL, NULL, &IoStatusBlock, Buffer, 4097, &ByteOffset, NULL);
-    ok_eq_hex(Status, STATUS_SUCCESS);
+        ByteOffset.QuadPart = 4097;
+        Status = NtWriteFile(Handle, NULL, NULL, NULL, &IoStatusBlock, Buffer, 4097, &ByteOffset, NULL);
+        ok_eq_hex(Status, STATUS_SUCCESS);
 
-    NtClose(Handle);
+        NtClose(Handle);
+    }
 
     RtlFreeHeap(RtlGetProcessHeap(), 0, Buffer);
     KmtCloseDriver();

@@ -162,6 +162,12 @@ extern BOOLEAN KmtIsVirtualMachine;
 extern PCSTR KmtMajorFunctionNames[];
 extern PDRIVER_OBJECT KmtDriverObject;
 
+#ifdef _M_IX86
+#define KmtIsNt5I386() (GetNTVersion() < _WIN32_WINNT_VISTA)
+#else
+#define KmtIsNt5I386() FALSE
+#endif
+
 VOID KmtSetIrql(IN KIRQL NewIrql);
 BOOLEAN KmtAreInterruptsEnabled(VOID);
 ULONG KmtGetPoolTag(PVOID Memory);
@@ -169,6 +175,77 @@ USHORT KmtGetPoolType(PVOID Memory);
 PVOID KmtGetSystemRoutineAddress(IN PCWSTR RoutineName);
 PKTHREAD KmtStartThread(IN PKSTART_ROUTINE StartRoutine, IN PVOID StartContext OPTIONAL);
 VOID KmtFinishThread(IN PKTHREAD Thread OPTIONAL, IN PKEVENT Event OPTIONAL);
+
+static ULONG KmtCachedKernelNtVersion;
+static KIRQL KmtExpectedCcPagingReadIrql = PASSIVE_LEVEL;
+
+static __inline
+VOID
+KmtInitializeKernelNtVersion(VOID)
+{
+    NTSTATUS Status;
+    RTL_OSVERSIONINFOEXW VersionInfo;
+
+    RtlZeroMemory(&VersionInfo, sizeof(VersionInfo));
+    VersionInfo.dwOSVersionInfoSize = sizeof(VersionInfo);
+
+    Status = RtlGetVersion((PRTL_OSVERSIONINFOW)&VersionInfo);
+    if (!NT_SUCCESS(Status))
+    {
+        KmtCachedKernelNtVersion = GetNTVersion();
+        return;
+    }
+
+    KmtCachedKernelNtVersion =
+        (VersionInfo.dwMajorVersion << 8) | VersionInfo.dwMinorVersion;
+}
+
+static __inline
+ULONG
+KmtGetKernelNtVersion(VOID)
+{
+    if (KmtCachedKernelNtVersion == 0)
+        KmtInitializeKernelNtVersion();
+
+    return KmtCachedKernelNtVersion;
+}
+
+static __inline
+VOID
+KmtInitializeCcPagingReadIrql(VOID)
+{
+    KmtInitializeKernelNtVersion();
+    KmtExpectedCcPagingReadIrql =
+        KmtCachedKernelNtVersion < _WIN32_WINNT_VISTA ? APC_LEVEL : PASSIVE_LEVEL;
+}
+
+static __inline
+KIRQL
+KmtCcPagingReadIrql(VOID)
+{
+    return KmtExpectedCcPagingReadIrql;
+}
+
+static __inline
+VOID
+KmtCcUninitializeCacheMap(
+    _In_ PFILE_OBJECT FileObject,
+    _In_opt_ PLARGE_INTEGER TruncateSize)
+{
+    CACHE_UNINITIALIZE_EVENT CacheUninitEvent;
+
+    CacheUninitEvent.Next = NULL;
+    KeInitializeEvent(&CacheUninitEvent.Event, NotificationEvent, FALSE);
+
+    if (!CcUninitializeCacheMap(FileObject, TruncateSize, &CacheUninitEvent))
+    {
+        KeWaitForSingleObject(&CacheUninitEvent.Event,
+                              Executive,
+                              KernelMode,
+                              FALSE,
+                              NULL);
+    }
+}
 #elif defined KMT_USER_MODE
 DWORD KmtRunKernelTest(IN PCSTR TestName);
 
@@ -318,10 +395,33 @@ VOID KmtFreeGuarded(PVOID Pointer);
 
 PKMT_RESULTBUFFER ResultBuffer = NULL;
 
+#ifdef KMT_KERNEL_MODE
+static VOID KmtDPrintLogBuffer(PCSTR String, SIZE_T Length)
+{
+    CHAR PrintBuffer[512];
+    SIZE_T PrintLength;
+
+    while (Length)
+    {
+        PrintLength = min(Length, sizeof(PrintBuffer) - 1);
+        memcpy(PrintBuffer, String, PrintLength);
+        PrintBuffer[PrintLength] = '\0';
+        DPRINT1("%s", PrintBuffer);
+
+        String += PrintLength;
+        Length -= PrintLength;
+    }
+}
+#endif
+
 static VOID KmtAddToLogBuffer(PKMT_RESULTBUFFER Buffer, PCSTR String, SIZE_T Length)
 {
     LONG OldLength;
     LONG NewLength;
+
+#ifdef KMT_KERNEL_MODE
+    KmtDPrintLogBuffer(String, Length);
+#endif
 
     if (!Buffer)
         return;
@@ -402,6 +502,10 @@ VOID KmtFinishTest(PCSTR TestName)
                                     ResultBuffer->Failures,
                                     ResultBuffer->Skipped);
     KmtAddToLogBuffer(ResultBuffer, MessageBuffer, MessageLength);
+
+#ifdef KMT_USER_MODE
+    OutputDebugStringA(MessageBuffer);
+#endif
 }
 
 BOOLEAN KmtVOk(INT Condition, PCSTR FileAndLine, PCSTR Format, va_list Arguments)
@@ -410,7 +514,16 @@ BOOLEAN KmtVOk(INT Condition, PCSTR FileAndLine, PCSTR Format, va_list Arguments
     SIZE_T MessageLength;
 
     if (!ResultBuffer)
+    {
+#ifdef KMT_KERNEL_MODE
+        if (!Condition)
+        {
+            MessageLength = KmtXVSNPrintF(MessageBuffer, sizeof MessageBuffer, FileAndLine, ": Test failed: ", Format, Arguments);
+            KmtAddToLogBuffer(NULL, MessageBuffer, MessageLength);
+        }
+#endif
         return Condition != 0;
+    }
 
     if (Condition)
     {
@@ -465,7 +578,16 @@ BOOLEAN KmtVSkip(INT Condition, PCSTR FileAndLine, PCSTR Format, va_list Argumen
     SIZE_T MessageLength;
 
     if (!ResultBuffer)
+    {
+#ifdef KMT_KERNEL_MODE
+        if (!Condition)
+        {
+            MessageLength = KmtXVSNPrintF(MessageBuffer, sizeof MessageBuffer, FileAndLine, ": Tests skipped: ", Format, Arguments);
+            KmtAddToLogBuffer(NULL, MessageBuffer, MessageLength);
+        }
+#endif
         return !Condition;
+    }
 
     if (!Condition)
     {

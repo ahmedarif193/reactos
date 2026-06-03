@@ -14,6 +14,7 @@ START_TEST(CcMapData)
 {
     DWORD Ret;
     ULONG TestId;
+    BOOLEAN IsWin81OrNewer = GetNTVersion() >= _WIN32_WINNT_WINBLUE;
 
     Ret = KmtLoadAndOpenDriver(L"CcMapData", FALSE);
     ok_eq_int(Ret, ERROR_SUCCESS);
@@ -26,6 +27,12 @@ START_TEST(CcMapData)
      */
     for (TestId = 0; TestId < 5; ++TestId)
     {
+        if (IsWin81OrNewer && TestId == 3)
+        {
+            skip(FALSE, "CcMapData cross-thread BCB reuse leaves Windows 8.1+ cache state unusable\n");
+            continue;
+        }
+
         Ret = KmtSendUlongToDriver(IOCTL_START_TEST, TestId);
         ok(Ret == ERROR_SUCCESS, "KmtSendUlongToDriver failed: %lx\n", Ret);
         Ret = KmtSendUlongToDriver(IOCTL_FINISH_TEST, TestId);

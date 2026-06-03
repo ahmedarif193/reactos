@@ -13,12 +13,24 @@ struct _SINGLE_LIST_ENTRY *__stdcall ExInterlockedPopEntryList(struct _SINGLE_LI
 
 #include <kmt_test.h>
 
-#define ok_eq_free2(Value, Expected) do              \
-{                                                   \
-    if (KmtIsCheckedBuild)                          \
-        ok_eq_pointer(Value, (PVOID)(ULONG_PTR)0xBADDD0FFBADDD0FFULL);    \
-    else                                            \
-        ok_eq_pointer(Value, Expected);             \
+/* Checked-build freed sentinels: Vista+ strictly uses 0xBADDD0FFBADDD0FF.
+ * Pre-Vista (2000/XP/2003) may use either 0x0BADD0FF (RTM) or
+ * 0xBADDD0FF (SP2+ / later hotfix); the transition is mid-XP-cycle,
+ * so accept both below Vista. */
+#define ok_eq_free2(Value, Expected) do                                  \
+{                                                                       \
+    if (KmtIsCheckedBuild)                                              \
+    {                                                                   \
+        if (GetNTVersion() >= _WIN32_WINNT_VISTA)                       \
+            ok_eq_pointer(Value,                                        \
+                (PVOID)(ULONG_PTR)0xBADDD0FFBADDD0FFULL);               \
+        else                                                            \
+            ok((Value) == (PVOID)(ULONG_PTR)0xBADDD0FFBADDD0FFULL ||      \
+               (Value) == (PVOID)(ULONG_PTR)0x0BADD0FF0BADD0FFULL,       \
+               "%s = %p, expected freed sentinel\n", #Value, (Value));  \
+    }                                                                   \
+    else                                                                \
+        ok_eq_pointer(Value, Expected);                                 \
 } while (0)
 
 PSINGLE_LIST_ENTRY FlushList(PSINGLE_LIST_ENTRY ListHead)
@@ -48,11 +60,20 @@ PSINGLE_LIST_ENTRY PushEntryListWrapper(PSINGLE_LIST_ENTRY ListHead, PSINGLE_LIS
     return Ret;
 }
 
+/* i386 NT 5.x collapses HIGH_LEVEL and POWER_LEVEL, reporting
+ * POWER_LEVEL (30) after KeRaiseIrql(HIGH_LEVEL=31). All other
+ * platforms / versions report HIGH_LEVEL correctly. */
 #define CheckListHeader(ListHead, ExpectedPointer, ExpectedDepth) do    \
 {                                                                       \
     ok_eq_pointer((ListHead)->Next, ExpectedPointer);                   \
     ok_eq_uint(QueryDepthList(ListHead), ExpectedDepth);                \
-    ok_irql(HIGH_LEVEL);                                                \
+    {                                                                   \
+        KIRQL _ir = KeGetCurrentIrql();                                 \
+        KIRQL _expect = HIGH_LEVEL;                                     \
+        if (KmtIsNt5I386())                                           \
+            _expect = POWER_LEVEL;                                      \
+        ok_eq_uint(_ir, _expect);                                       \
+    }                                                                   \
     ok_bool_true(KmtAreInterruptsEnabled(), "Interrupts enabled:");     \
 } while (0)
 

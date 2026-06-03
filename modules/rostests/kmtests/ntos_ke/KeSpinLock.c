@@ -168,7 +168,11 @@ BOOLEAN TryNoRaise(PKSPIN_LOCK SpinLock, PCHECK_DATA CheckData) {
 {                                                                                   \
     PKTHREAD Thread = KeGetCurrentThread();                                         \
     (VOID)Thread;                                                                   \
-    if (KmtIsMultiProcessorBuild || KmtIsCheckedBuild)                              \
+    /* NT 5.x i386 UP kernels (incl. checked) don't write to *SpinLock from         \
+     * KeAcquireSpinLock; only Vista+ added that. Treat the NT 5.x checked          \
+     * case the same as UP free for the purposes of these assertions. */            \
+    if (KmtIsMultiProcessorBuild ||                                                 \
+        (KmtIsCheckedBuild && GetNTVersion() >= _WIN32_WINNT_VISTA))                \
     {                                                                               \
         ok_eq_bool(Ret, (Value) == 0);                                              \
         if (SpinLock)                                                               \
@@ -197,7 +201,9 @@ BOOLEAN TryNoRaise(PKSPIN_LOCK SpinLock, PCHECK_DATA CheckData) {
 
 #define CheckSpinLockQueueHandle(SpinLock, CheckData, Value) do                     \
 {                                                                                   \
-    if (KmtIsMultiProcessorBuild || KmtIsCheckedBuild)                              \
+    /* See CheckSpinLockLock; same NT 5.x UP/checked exception. */                  \
+    if (KmtIsMultiProcessorBuild ||                                                 \
+        (KmtIsCheckedBuild && GetNTVersion() >= _WIN32_WINNT_VISTA))                \
     {                                                                               \
         ok_eq_bool(Ret, (Value) == 0);                                              \
         if (SpinLock)                                                               \
@@ -393,6 +399,13 @@ START_TEST(KeSpinLock)
         { CheckQueueHandle, SynchIrql,      AcquireInStackSynch,  ReleaseInStackQueued, NULL,           NULL,                  NULL,                  NULL },
         { CheckQueueHandle, DISPATCH_LEVEL, AcquireInStackQueued, ReleaseInStackQueued, NULL,           AcquireInStackForDpc,  ReleaseInStackForDpc,  NULL },
     };
+    CHECK_DATA TestDataAmd64[] =
+    {
+        { CheckLock,        DISPATCH_LEVEL, AcquireNormal,        ReleaseNormal,        NULL,           NULL,                  NULL,                  NULL },
+        { CheckLock,        DISPATCH_LEVEL, AcquireExp,           ReleaseExp,           NULL,           NULL,                  NULL,                  NULL },
+        { CheckLock,        DISPATCH_LEVEL, AcquireInt,           ReleaseInt,           NULL,           NULL,                  NULL,                  NULL },
+        { CheckLock,        SynchIrql,      AcquireSynch,         ReleaseNormal,        NULL,           NULL,                  NULL,                  NULL },
+    };
     CHECK_DATA *TestData;
     ULONG TestElements;
     int i, iIrql;
@@ -410,18 +423,24 @@ START_TEST(KeSpinLock)
     KeInitializeSpinLock(&SpinLock);
     ok_eq_ulongptr(SpinLock, 0);
 
-    /* KeTestSpinLock */
+    /* KeTestSpinLock: only NT 6.1+ recognizes non-1 bit patterns as held; NT 5.x
+     * treats anything other than 1 (the InStackQueuedSpinLock owner) and
+     * possibly the queue-bit pattern as free, so the strict assertions below
+     * only hold on Vista+. */
     if (!skip(pKeTestSpinLock != NULL, "KeTestSpinLock unavailable\n"))
     {
         ok_bool_true(pKeTestSpinLock(&SpinLock), "KeTestSpinLock returned");
         SpinLock = 1;
         ok_bool_false(pKeTestSpinLock(&SpinLock), "KeTestSpinLock returned");
-        SpinLock = 2;
-        ok_bool_false(pKeTestSpinLock(&SpinLock), "KeTestSpinLock returned");
-        SpinLock = (ULONG_PTR)-1;
-        ok_bool_false(pKeTestSpinLock(&SpinLock), "KeTestSpinLock returned");
-        SpinLock = (ULONG_PTR)1 << (sizeof(ULONG_PTR) * CHAR_BIT - 1);
-        ok_bool_false(pKeTestSpinLock(&SpinLock), "KeTestSpinLock returned");
+        if (GetNTVersion() >= _WIN32_WINNT_VISTA)
+        {
+            SpinLock = 2;
+            ok_bool_false(pKeTestSpinLock(&SpinLock), "KeTestSpinLock returned");
+            SpinLock = (ULONG_PTR)-1;
+            ok_bool_false(pKeTestSpinLock(&SpinLock), "KeTestSpinLock returned");
+            SpinLock = (ULONG_PTR)1 << (sizeof(ULONG_PTR) * CHAR_BIT - 1);
+            ok_bool_false(pKeTestSpinLock(&SpinLock), "KeTestSpinLock returned");
+        }
         SpinLock = 0;
         ok_bool_true(pKeTestSpinLock(&SpinLock), "KeTestSpinLock returned");
     }
@@ -438,15 +457,33 @@ START_TEST(KeSpinLock)
             goto done;
 #endif
         case _WIN32_WINNT_WS03:
-            TestData = TestDataWS03;
-            TestElements = RTL_NUMBER_OF(TestDataWS03);
+            if (sizeof(PVOID) == sizeof(ULONGLONG))
+            {
+                trace("Skipping private queued-spinlock state checks on amd64\n");
+                TestData = TestDataAmd64;
+                TestElements = RTL_NUMBER_OF(TestDataAmd64);
+            }
+            else
+            {
+                TestData = TestDataWS03;
+                TestElements = RTL_NUMBER_OF(TestDataWS03);
+            }
             break;
         case _WIN32_WINNT_WIN7:
         case _WIN32_WINNT_WIN8:
         case _WIN32_WINNT_WINBLUE:
         case _WIN32_WINNT_WIN10:
-            TestData = TestDataWin7;
-            TestElements = RTL_NUMBER_OF(TestDataWin7);
+            if (sizeof(PVOID) == sizeof(ULONGLONG))
+            {
+                trace("Skipping private queued-spinlock state checks on amd64\n");
+                TestData = TestDataAmd64;
+                TestElements = RTL_NUMBER_OF(TestDataAmd64);
+            }
+            else
+            {
+                TestData = TestDataWin7;
+                TestElements = RTL_NUMBER_OF(TestDataWin7);
+            }
             break;
         default:
             skip(FALSE, "Unknown NT version (0x%X).\n", GetNTVersion());

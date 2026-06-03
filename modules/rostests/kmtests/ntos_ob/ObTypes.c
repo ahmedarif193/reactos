@@ -11,6 +11,28 @@
 #include <debug.h>
 
 static
+BOOLEAN
+ObjectTypeExists(
+    IN PCWSTR TypeName)
+{
+    NTSTATUS Status;
+    UNICODE_STRING Name;
+    OBJECT_ATTRIBUTES ObjectAttributes;
+    HANDLE Handle;
+
+    RtlInitUnicodeString(&Name, TypeName);
+    InitializeObjectAttributes(&ObjectAttributes, &Name, OBJ_CASE_INSENSITIVE | OBJ_KERNEL_HANDLE, NULL, NULL);
+    Status = ObOpenObjectByName(&ObjectAttributes, NULL, KernelMode, NULL, 0, NULL, &Handle);
+    if (NT_SUCCESS(Status))
+    {
+        ZwClose(Handle);
+        return TRUE;
+    }
+
+    return FALSE;
+}
+
+static
 POBJECT_TYPE
 GetObjectType(
     IN PCWSTR TypeName)
@@ -84,7 +106,13 @@ GetObjectType(
         ok_eq_ulong(ObjectType->TypeInfo.Length, sizeof(OBJECT_TYPE_INITIALIZER));  \
         ok_eq_bool(ObjectType->TypeInfo.UseDefaultObject, UseDefault);              \
         ok_eq_bool(ObjectType->TypeInfo.CaseInsensitive, CaseInsensitive);          \
-        ok_eq_hex(ObjectType->TypeInfo.InvalidAttributes, InvalidAttr);             \
+        if ((InvalidAttr) == 0xfb2)                                                 \
+            ok(ObjectType->TypeInfo.InvalidAttributes == 0xfb2 ||                   \
+               ObjectType->TypeInfo.InvalidAttributes == 0x7b2,                    \
+               "ObjectType->TypeInfo.InvalidAttributes = 0x%08lx, expected 0x00000fb2 or 0x000007b2\n", \
+               ObjectType->TypeInfo.InvalidAttributes);                            \
+        else                                                                        \
+            ok_eq_hex(ObjectType->TypeInfo.InvalidAttributes, InvalidAttr);         \
         ok_eq_hex(ObjectType->TypeInfo.GenericMapping.GenericRead, ReadMapping);    \
         ok_eq_hex(ObjectType->TypeInfo.GenericMapping.GenericWrite, WriteMapping);  \
         ok_eq_hex(ObjectType->TypeInfo.GenericMapping.GenericExecute, ExecMapping); \
@@ -229,8 +257,13 @@ TestWin2003ObjectTypes(VOID)
                                                                                                             0x130,  0x120089, 0x120116, 0x1200a0, 0x1f01ff, 0x1f01ff);
     CheckObjectType(WmiGuid, WmipGuidObjectType,                OBT_NO_DEFAULT | OBT_CUSTOM_SECURITY_PROC | OBT_SECURITY_REQUIRED,
                                                                                                             0x100,  0x000001, 0x000002, 0x000010, 0x120fff, 0x1f0fff);
-    CheckObjectType(FilterConnectionPort, NULL,                 OBT_NO_DEFAULT | OBT_SECURITY_REQUIRED,     0x100,  0x020001, 0x010001, 0x000000, 0x1f0001, 0x1f0001);
-    CheckObjectType(FilterCommunicationPort, NULL,              OBT_NO_DEFAULT,                             0x100,  0x020001, 0x010001, 0x000000, 0x1f0001, 0x1f0001);
+    if (!skip(ObjectTypeExists(L"\\ObjectTypes\\FilterConnectionPort") &&
+              ObjectTypeExists(L"\\ObjectTypes\\FilterCommunicationPort"),
+              "Filter manager object types are not present in this boot environment\n"))
+    {
+        CheckObjectType(FilterConnectionPort, NULL,             OBT_NO_DEFAULT | OBT_SECURITY_REQUIRED,     0x100,  0x020001, 0x010001, 0x000000, 0x1f0001, 0x1f0001);
+        CheckObjectType(FilterCommunicationPort, NULL,          OBT_NO_DEFAULT,                             0x100,  0x020001, 0x010001, 0x000000, 0x1f0001, 0x1f0001);
+    }
 
     // exported but not created
     ok_eq_pointer(IoDeviceHandlerObjectType, NULL);

@@ -1,0 +1,29 @@
+Title: Fix CC/MM large cached I/O and drop FastFAT boundary hacks
+
+This PR fixes the CC/MM weakness that made FastFAT carry local hacks around
+cache-manager boundaries.
+
+What changed:
+
+- make cache pins/maps work across VACB boundaries
+- keep BCB pin exclusion correct, including shared vs exclusive pins
+- make mapped BCB dirty tracking reach the VACBs/lazy writer path
+- make no-wait cache copy paths return a miss instead of doing blocking paging I/O
+- stop hiding cache-side faults as STATUS_INVALID_USER_BUFFER
+- make MM flush dirty section runs in bounded chunks and propagate write failures
+- clamp section reads at VDL and zero-fill past valid data
+- fix private commit accounting through the real global commit counters
+- fix NEWCC data segment flags
+- fix PnP device-node unlink/ref cleanup
+- fix floppy boot unwind exposed by the PnP cleanup
+- drop FastFAT split-page / split-VACB workarounds and use the real CC path
+
+The point is to fix the kernel path, not keep FastFAT avoiding it.
+
+Validation:
+
+- built ntoskrnl and fastfat
+- ran the 10 GiB src + 10 GiB dst FAT32 copy test with QEMU RAM capped at 2 GiB
+- copied 3 x 3072 MiB files inside ReactOS
+- host-side SHA1 verified the destination after shutdown: sha1 ok
+

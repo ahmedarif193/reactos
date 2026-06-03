@@ -28,6 +28,13 @@ typedef struct _TEST_CONTEXT
     SHORT ThreadId;
 } TEST_CONTEXT, *PTEST_CONTEXT;
 
+static
+BOOLEAN
+IsReactOS(VOID)
+{
+    return *(PULONG)(KI_USER_SHARED_DATA + PAGE_SIZE - sizeof(ULONG)) == 0x8eac705;
+}
+
 
 #define ALLOC_MEMORY_WITH_FREE(ProcessHandle, BaseAddress, ZeroBits, RegionSize, AllocationType, Protect, RetStatus, FreeStatus)   \
     do {                                                                                                                   \
@@ -109,7 +116,29 @@ SimpleErrorChecks(VOID)
 
     //BASE ADDRESS TESTS
     Base = (PVOID)0x00567A20;
-    ALLOC_MEMORY_WITH_FREE(NtCurrentProcess(), Base, 0, RegionSize, (MEM_COMMIT | MEM_RESERVE), PAGE_READWRITE, STATUS_CONFLICTING_ADDRESSES, STATUS_UNABLE_TO_DELETE_SECTION);
+    if (GetNTVersion() >= _WIN32_WINNT_VISTA)
+    {
+        PVOID RequestedBase = Base;
+
+        Status = ZwAllocateVirtualMemory(NtCurrentProcess(), &Base, 0, &RegionSize, (MEM_COMMIT | MEM_RESERVE), PAGE_READWRITE);
+        ok(Status == STATUS_SUCCESS || Status == STATUS_CONFLICTING_ADDRESSES,
+           "Status = 0x%08lx, expected STATUS_SUCCESS or STATUS_CONFLICTING_ADDRESSES\n", Status);
+        if (NT_SUCCESS(Status))
+            ok_eq_pointer(Base, (PVOID)ROUND_DOWN(RequestedBase, MM_ALLOCATION_GRANULARITY));
+        else
+            ok_eq_pointer(Base, RequestedBase);
+
+        RegionSize = 0;
+        Status = ZwFreeVirtualMemory(NtCurrentProcess(), &Base, &RegionSize, MEM_RELEASE);
+        if ((ULONG_PTR)RequestedBase == (ULONG_PTR)Base)
+            ok_eq_hex(Status, STATUS_FREE_VM_NOT_AT_BASE);
+        else
+            ok_eq_hex(Status, STATUS_SUCCESS);
+        Base = NULL;
+        RegionSize = DEFAULT_ALLOC_SIZE;
+    }
+    else
+        ALLOC_MEMORY_WITH_FREE(NtCurrentProcess(), Base, 0, RegionSize, (MEM_COMMIT | MEM_RESERVE), PAGE_READWRITE, STATUS_CONFLICTING_ADDRESSES, STATUS_FREE_VM_NOT_AT_BASE);
 
     Base = (PVOID) 0x60000000;
     ALLOC_MEMORY_WITH_FREE(NtCurrentProcess(), Base, 0, RegionSize, (MEM_COMMIT | MEM_RESERVE), PAGE_READWRITE, STATUS_SUCCESS, STATUS_SUCCESS);
@@ -125,7 +154,10 @@ SimpleErrorChecks(VOID)
     //ZERO BITS TESTS
     ALLOC_MEMORY_WITH_FREE(NtCurrentProcess(), Base, 21, RegionSize, (MEM_COMMIT | MEM_RESERVE), PAGE_READWRITE, STATUS_NO_MEMORY, STATUS_MEMORY_NOT_ALLOCATED);
     ALLOC_MEMORY_WITH_FREE(NtCurrentProcess(), Base, 22, RegionSize, (MEM_COMMIT | MEM_RESERVE), PAGE_READWRITE, STATUS_INVALID_PARAMETER_3, STATUS_MEMORY_NOT_ALLOCATED);
-    ALLOC_MEMORY_WITH_FREE(NtCurrentProcess(), Base, -1, RegionSize, (MEM_COMMIT | MEM_RESERVE), PAGE_READWRITE, STATUS_INVALID_PARAMETER_3, STATUS_MEMORY_NOT_ALLOCATED);
+    if (GetNTVersion() >= _WIN32_WINNT_VISTA)
+        ALLOC_MEMORY_WITH_FREE(NtCurrentProcess(), Base, -1, RegionSize, (MEM_COMMIT | MEM_RESERVE), PAGE_READWRITE, STATUS_SUCCESS, STATUS_SUCCESS);
+    else
+        ALLOC_MEMORY_WITH_FREE(NtCurrentProcess(), Base, -1, RegionSize, (MEM_COMMIT | MEM_RESERVE), PAGE_READWRITE, STATUS_INVALID_PARAMETER_3, STATUS_MEMORY_NOT_ALLOCATED);
     ALLOC_MEMORY_WITH_FREE(NtCurrentProcess(), Base, 3, RegionSize, (MEM_COMMIT | MEM_RESERVE), PAGE_READWRITE, STATUS_SUCCESS, STATUS_SUCCESS);
 
     //REGION SIZE TESTS
@@ -134,8 +166,11 @@ SimpleErrorChecks(VOID)
     ALLOC_MEMORY_WITH_FREE(NtCurrentProcess(), Base, 0, RegionSize, (MEM_COMMIT | MEM_RESERVE), PAGE_READWRITE, STATUS_INVALID_PARAMETER_4, STATUS_MEMORY_NOT_ALLOCATED);
     RegionSize = 0;
     ALLOC_MEMORY_WITH_FREE(NtCurrentProcess(), Base, 0, RegionSize, (MEM_COMMIT | MEM_RESERVE), PAGE_READWRITE, STATUS_INVALID_PARAMETER_4, STATUS_MEMORY_NOT_ALLOCATED);
-    RegionSize = 0xFFFFFFFF; // 4 gb  is invalid
-    ALLOC_MEMORY_WITH_FREE(NtCurrentProcess(), Base, 0, RegionSize, (MEM_COMMIT | MEM_RESERVE), PAGE_READWRITE, STATUS_INVALID_PARAMETER_4, STATUS_MEMORY_NOT_ALLOCATED);
+    RegionSize = 0xFFFFFFFF; // 4 gb is invalid or over the commit limit, depending on NT version/bitness
+    if (GetNTVersion() >= _WIN32_WINNT_VISTA)
+        ALLOC_MEMORY_WITH_FREE(NtCurrentProcess(), Base, 0, RegionSize, (MEM_COMMIT | MEM_RESERVE), PAGE_READWRITE, STATUS_COMMITMENT_LIMIT, STATUS_MEMORY_NOT_ALLOCATED);
+    else
+        ALLOC_MEMORY_WITH_FREE(NtCurrentProcess(), Base, 0, RegionSize, (MEM_COMMIT | MEM_RESERVE), PAGE_READWRITE, STATUS_INVALID_PARAMETER_4, STATUS_MEMORY_NOT_ALLOCATED);
 
     //Allocation type tests
     ALLOC_MEMORY_WITH_FREE(NtCurrentProcess(), Base, 0, RegionSize, MEM_PHYSICAL, PAGE_READWRITE, STATUS_INVALID_PARAMETER_5, STATUS_MEMORY_NOT_ALLOCATED);
@@ -161,7 +196,10 @@ SimpleErrorChecks(VOID)
         ALLOC_MEMORY_WITH_FREE(NtCurrentProcess(), Base, 0, RegionSize, (MEM_COMMIT | MEM_RESERVE), (PAGE_NOACCESS | PAGE_GUARD), STATUS_INVALID_PAGE_PROTECTION, STATUS_MEMORY_NOT_ALLOCATED);
         ALLOC_MEMORY_WITH_FREE(NtCurrentProcess(), Base, 0, RegionSize, (MEM_COMMIT | MEM_RESERVE), (PAGE_NOACCESS | PAGE_WRITECOMBINE), STATUS_INVALID_PAGE_PROTECTION, STATUS_MEMORY_NOT_ALLOCATED);
     }
-    ALLOC_MEMORY_WITH_FREE(NtCurrentProcess(), Base, 0, RegionSize, (MEM_COMMIT | MEM_RESERVE), (PAGE_READONLY | PAGE_WRITECOMBINE), STATUS_SUCCESS, STATUS_SUCCESS);
+    if (GetNTVersion() < _WIN32_WINNT_VISTA)
+        ALLOC_MEMORY_WITH_FREE(NtCurrentProcess(), Base, 0, RegionSize, (MEM_COMMIT | MEM_RESERVE), (PAGE_READONLY | PAGE_WRITECOMBINE), STATUS_INVALID_PAGE_PROTECTION, STATUS_MEMORY_NOT_ALLOCATED);
+    else
+        ALLOC_MEMORY_WITH_FREE(NtCurrentProcess(), Base, 0, RegionSize, (MEM_COMMIT | MEM_RESERVE), (PAGE_READONLY | PAGE_WRITECOMBINE), STATUS_SUCCESS, STATUS_SUCCESS);
 }
 
 
@@ -260,6 +298,116 @@ SimpleAllocation(VOID)
     ZwFreeVirtualMemory(NtCurrentProcess(), &Base, &RegionSize, MEM_RELEASE);
 
     return Status;
+}
+
+
+static
+VOID
+CommitAccountingChecks(VOID)
+{
+    NTSTATUS Status;
+    PEPROCESS Process = PsGetCurrentProcess();
+    SIZE_T InitialCommit = Process->CommitCharge;
+    PVOID Base = NULL;
+    PVOID CommitBase;
+    SIZE_T RegionSize;
+
+    if (skip(IsReactOS(), "EPROCESS commit-charge layout is internal and NT-version-specific\n"))
+        return;
+
+    RegionSize = 3 * PAGE_SIZE;
+    Status = ZwAllocateVirtualMemory(NtCurrentProcess(),
+                                     &Base,
+                                     0,
+                                     &RegionSize,
+                                     MEM_COMMIT | MEM_RESERVE,
+                                     PAGE_READWRITE);
+    ok_eq_hex(Status, STATUS_SUCCESS);
+    if (!NT_SUCCESS(Status))
+        return;
+
+    ok_eq_size(Process->CommitCharge, InitialCommit + 3);
+
+    RegionSize = 0;
+    Status = ZwFreeVirtualMemory(NtCurrentProcess(),
+                                 &Base,
+                                 &RegionSize,
+                                 MEM_RELEASE);
+    ok_eq_hex(Status, STATUS_SUCCESS);
+    ok_eq_size(Process->CommitCharge, InitialCommit);
+
+    Base = NULL;
+    RegionSize = 3 * PAGE_SIZE;
+    Status = ZwAllocateVirtualMemory(NtCurrentProcess(),
+                                     &Base,
+                                     0,
+                                     &RegionSize,
+                                     MEM_RESERVE,
+                                     PAGE_READWRITE);
+    ok_eq_hex(Status, STATUS_SUCCESS);
+    if (!NT_SUCCESS(Status))
+        return;
+
+    ok_eq_size(Process->CommitCharge, InitialCommit);
+
+    CommitBase = Base;
+    RegionSize = PAGE_SIZE;
+    Status = ZwAllocateVirtualMemory(NtCurrentProcess(),
+                                     &CommitBase,
+                                     0,
+                                     &RegionSize,
+                                     MEM_COMMIT,
+                                     PAGE_READWRITE);
+    ok_eq_hex(Status, STATUS_SUCCESS);
+    ok_eq_size(Process->CommitCharge, InitialCommit + 1);
+
+    CommitBase = Base;
+    RegionSize = PAGE_SIZE;
+    Status = ZwAllocateVirtualMemory(NtCurrentProcess(),
+                                     &CommitBase,
+                                     0,
+                                     &RegionSize,
+                                     MEM_COMMIT,
+                                     PAGE_READONLY);
+    ok_eq_hex(Status, STATUS_SUCCESS);
+    ok_eq_size(Process->CommitCharge, InitialCommit + 1);
+
+    CommitBase = Base;
+    RegionSize = 2 * PAGE_SIZE;
+    Status = ZwAllocateVirtualMemory(NtCurrentProcess(),
+                                     &CommitBase,
+                                     0,
+                                     &RegionSize,
+                                     MEM_COMMIT,
+                                     PAGE_READWRITE);
+    ok_eq_hex(Status, STATUS_SUCCESS);
+    ok_eq_size(Process->CommitCharge, InitialCommit + 2);
+
+    CommitBase = (PUCHAR)Base + 2 * PAGE_SIZE;
+    RegionSize = PAGE_SIZE;
+    Status = ZwFreeVirtualMemory(NtCurrentProcess(),
+                                 &CommitBase,
+                                 &RegionSize,
+                                 MEM_DECOMMIT);
+    ok_eq_hex(Status, STATUS_SUCCESS);
+    ok_eq_size(Process->CommitCharge, InitialCommit + 2);
+
+    CommitBase = Base;
+    RegionSize = 3 * PAGE_SIZE;
+    Status = ZwFreeVirtualMemory(NtCurrentProcess(),
+                                 &CommitBase,
+                                 &RegionSize,
+                                 MEM_DECOMMIT);
+    ok_eq_hex(Status, STATUS_SUCCESS);
+    ok_eq_size(Process->CommitCharge, InitialCommit);
+
+    RegionSize = 0;
+    Status = ZwFreeVirtualMemory(NtCurrentProcess(),
+                                 &Base,
+                                 &RegionSize,
+                                 MEM_RELEASE);
+    ok_eq_hex(Status, STATUS_SUCCESS);
+    ok_eq_size(Process->CommitCharge, InitialCommit);
 }
 
 
@@ -502,11 +650,24 @@ START_TEST(ZwAllocateVirtualMemory)
     CustomBaseAllocation();
 
     Status = StressTesting(MEM_RESERVE);
+#ifdef _M_AMD64
+    ok_eq_hex(Status, STATUS_SUCCESS);
+#else
     ok_eq_hex(Status, STATUS_NO_MEMORY);
+#endif
 
     Status = STATUS_SUCCESS;
     Status = StressTesting(MEM_COMMIT);
+#ifdef _M_AMD64
+    ok_eq_hex(Status, STATUS_COMMITMENT_LIMIT);
+#else
     ok_eq_hex(Status, STATUS_NO_MEMORY);
+#endif
 
-    SystemProcessTest();
+    CommitAccountingChecks();
+
+    if (IsReactOS())
+        SystemProcessTest();
+    else
+        skip(FALSE, "System-process virtual allocation stress is ReactOS-specific\n");
 }

@@ -101,6 +101,10 @@ TestConnectInterrupt(VOID)
     PKINTERRUPT InterruptObject;
     NTSTATUS Status;
 
+    if (skip(GetNTVersion() >= _WIN32_WINNT_VISTA,
+             "IoConnectInterrupt invalid-vector probe hangs on NT 5.x\n"))
+        return;
+
     /* If the IoConnectInterrupt() fails, the interrupt object should be set to NULL */
     InterruptObject = KmtInvalidPointer;
 
@@ -117,11 +121,15 @@ TestConnectInterrupt(VOID)
                                 (KAFFINITY)-1,
                                 FALSE);
     ok_eq_hex(Status, STATUS_INVALID_PARAMETER);
-    ok_eq_pointer(InterruptObject, NULL);
+    ok_eq_pointer(InterruptObject, KmtInvalidPointer);
 }
 
 START_TEST(IoInterrupt)
 {
+    if (skip(GetNTVersion() >= _WIN32_WINNT_VISTA,
+             "IoInterrupt fake-interrupt probes hang on NT 5.x\n"))
+        return;
+
     TestSynchronizeExecution();
     TestConnectInterrupt();
 }

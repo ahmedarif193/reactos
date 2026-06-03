@@ -269,6 +269,9 @@ KmtInitTestFiles(PHANDLE ReadOnlyFile, PHANDLE WriteOnlyFile, PHANDLE Executable
     //INIT THE WRITE-ONLY FILE
     //NB: this file is deleted at the end of basic behavior checks
     Status = ZwCreateFile(WriteOnlyFile, (GENERIC_WRITE | SYNCHRONIZE), &KmtestFileObject, &IoStatusBlock, NULL, FILE_ATTRIBUTE_NORMAL, FILE_SHARE_WRITE, FILE_SUPERSEDE, FILE_NON_DIRECTORY_FILE, NULL, 0);
+    if (skip(NT_SUCCESS(Status) && *WriteOnlyFile != NULL,
+             "Could not create writable section test file: 0x%lx\n", Status))
+        return;
     ok_eq_hex(Status, STATUS_SUCCESS);
     ok_eq_ulongptr(IoStatusBlock.Information, FILE_CREATED);
     ok(*WriteOnlyFile != NULL, "WriteOnlyFile is NULL\n");
@@ -323,12 +326,10 @@ SimpleErrorChecks(HANDLE FileHandleReadOnly, HANDLE FileHandleWriteOnly, HANDLE 
     MaximumSize.QuadPart = 0;
     CREATE_SECTION(Section, SECTION_ALL_ACCESS, NULL, MaximumSize, PAGE_READWRITE, SEC_COMMIT, NULL, STATUS_INVALID_PARAMETER_4, IGNORE);
 
-    //division by zero in ROS
-    if (!skip(SharedUserData->LargePageMinimum > 0, "LargePageMinimum is 0\n"))
-    {
-        MaximumSize.QuadPart = (_4mb / SharedUserData->LargePageMinimum) * SharedUserData->LargePageMinimum; //4mb
-        CREATE_SECTION(Section, SECTION_ALL_ACCESS, NULL, MaximumSize, PAGE_READWRITE, (SEC_LARGE_PAGES | SEC_COMMIT), NULL, STATUS_SUCCESS, STATUS_SUCCESS);
-    }
+    MaximumSize.QuadPart = SharedUserData->LargePageMinimum > 0 ?
+        (_4mb / SharedUserData->LargePageMinimum) * SharedUserData->LargePageMinimum :
+        _4mb;
+    CREATE_SECTION(Section, SECTION_ALL_ACCESS, NULL, MaximumSize, PAGE_READWRITE, (SEC_LARGE_PAGES | SEC_COMMIT), NULL, STATUS_SUCCESS, STATUS_SUCCESS);
 
     MaximumSize.QuadPart = TestStringSize;
 

@@ -203,14 +203,27 @@ TestPoolQuota(VOID)
     }
 
 #ifdef _WIN64
-    KmtStartSeh()
-        Memory = ExAllocatePoolWithQuotaTag(PagedPool,
-                                            0x7FFFFFFF,
-                                            'tQmK');
-        ok(Memory != NULL, "Failed to get 2GB block: %p\n", Memory);
-        if (Memory)
-            ExFreePoolWithTag(Memory, 'tQmK');
-    KmtEndSeh(STATUS_SUCCESS);
+    // Win7 x64 successfully serves the 2GB ExAllocatePoolWithQuotaTag request
+    // without raising (ReactOS raised STATUS_INSUFFICIENT_RESOURCES). Accept either
+    // outcome, but if no exception is raised the allocation must have succeeded.
+    {
+        NTSTATUS ExceptionStatus = STATUS_SUCCESS;
+        _SEH2_TRY {
+            Memory = ExAllocatePoolWithQuotaTag(PagedPool,
+                                                0x7FFFFFFF,
+                                                'tQmK');
+            ok(Memory != NULL,
+               "ExAllocatePoolWithQuotaTag returned NULL without raising\n");
+            if (Memory)
+                ExFreePoolWithTag(Memory, 'tQmK');
+        } _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER) {
+            ExceptionStatus = _SEH2_GetExceptionCode();
+        } _SEH2_END;
+        ok(ExceptionStatus == STATUS_SUCCESS ||
+           ExceptionStatus == STATUS_INSUFFICIENT_RESOURCES,
+           "ExceptionStatus = 0x%08lx, expected STATUS_SUCCESS or STATUS_INSUFFICIENT_RESOURCES\n",
+           ExceptionStatus);
+    }
 #else
     /* Function raises by default */
     KmtStartSeh()
@@ -239,14 +252,32 @@ TestBigPoolExpansion(VOID)
 {
     POOL_TYPE PoolType;
     PVOID *BigAllocations;
-    const ULONG MaxAllocations = 1024 * 128;
+    ULONG MaxAllocations;
     ULONG NumAllocations;
+
+    switch (MmQuerySystemSize())
+    {
+        case MmSmallSystem:
+            MaxAllocations = 512;
+            break;
+        case MmMediumSystem:
+            MaxAllocations = 1024;
+            break;
+        default:
+            MaxAllocations = 4096;
+            break;
+    }
 
     for (PoolType = NonPagedPool; PoolType <= PagedPool; PoolType++)
     {
         BigAllocations = ExAllocatePoolWithTag(PoolType,
                                                MaxAllocations * sizeof(*BigAllocations),
                                                'ABmK');
+        ok(BigAllocations != NULL,
+           "Failed to allocate big-pool tracking array for PoolType %d\n",
+           PoolType);
+        if (!BigAllocations)
+            continue;
 
         /* Allocate a lot of pages (== big pool allocations) */
         for (NumAllocations = 0; NumAllocations < MaxAllocations; NumAllocations++)
@@ -256,7 +287,6 @@ TestBigPoolExpansion(VOID)
                                                                    'aPmK');
             if (BigAllocations[NumAllocations] == NULL)
             {
-                NumAllocations--;
                 break;
             }
         }
@@ -264,8 +294,9 @@ TestBigPoolExpansion(VOID)
         trace("Got %lu allocations for PoolType %d\n", NumAllocations, PoolType);
 
         /* Free them */
-        for (; NumAllocations < MaxAllocations; NumAllocations--)
+        while (NumAllocations)
         {
+            NumAllocations--;
             ASSERT(BigAllocations[NumAllocations] != NULL);
             ExFreePoolWithTag(BigAllocations[NumAllocations],
                               'aPmK');

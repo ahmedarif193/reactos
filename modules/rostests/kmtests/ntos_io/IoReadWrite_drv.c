@@ -47,6 +47,7 @@ TestEntry(
              TESTENTRY_BUFFERED_IO_DEVICE |
              TESTENTRY_NO_READONLY_DEVICE;
 
+    TestFastIoDispatch.SizeOfFastIoDispatch = sizeof(TestFastIoDispatch);
     TestFastIoDispatch.FastIoRead = TestFastIoRead;
     TestFastIoDispatch.FastIoWrite = TestFastIoWrite;
     DriverObject->FastIoDispatch = &TestFastIoDispatch;
@@ -268,8 +269,6 @@ TestIrpHandler(
     NTSTATUS Status;
     PTEST_FCB Fcb;
     CACHE_MANAGER_CALLBACKS Callbacks;
-    CACHE_UNINITIALIZE_EVENT CacheUninitEvent;
-
     PAGED_CODE();
 
     DPRINT("IRP %x/%x\n", IoStack->MajorFunction, IoStack->MinorFunction);
@@ -283,11 +282,16 @@ TestIrpHandler(
 
     if (IoStack->MajorFunction == IRP_MJ_CREATE)
     {
-        if (IoStack->FileObject->FileName.Length >= 2 * sizeof(WCHAR))
+        if (IoStack->FileObject->FileName.Length < 2 * sizeof(WCHAR))
         {
-            TestDeviceObject = DeviceObject;
-            TestFileObject = IoStack->FileObject;
+            Irp->IoStatus.Information = FILE_OPENED;
+            Status = STATUS_SUCCESS;
+            goto Complete;
         }
+
+        TestDeviceObject = DeviceObject;
+        TestFileObject = IoStack->FileObject;
+
         Fcb = ExAllocatePoolWithTag(NonPagedPool, sizeof(*Fcb), 'FwrI');
         RtlZeroMemory(Fcb, sizeof(*Fcb));
         ExInitializeFastMutex(&Fcb->HeaderMutex);
@@ -316,12 +320,13 @@ TestIrpHandler(
     }
     else if (IoStack->MajorFunction == IRP_MJ_CLEANUP)
     {
-        KeInitializeEvent(&CacheUninitEvent.Event, NotificationEvent, FALSE);
-        CcUninitializeCacheMap(IoStack->FileObject, NULL, &CacheUninitEvent);
-        KeWaitForSingleObject(&CacheUninitEvent.Event, Executive, KernelMode, FALSE, NULL);
         Fcb = IoStack->FileObject->FsContext;
-        ExFreePoolWithTag(Fcb, 'FwrI');
-        IoStack->FileObject->FsContext = NULL;
+        if (Fcb)
+        {
+            KmtCcUninitializeCacheMap(IoStack->FileObject, NULL);
+            ExFreePoolWithTag(Fcb, 'FwrI');
+            IoStack->FileObject->FsContext = NULL;
+        }
         Status = STATUS_SUCCESS;
     }
     else if (IoStack->MajorFunction == IRP_MJ_READ)
@@ -361,6 +366,7 @@ TestIrpHandler(
                                  &Irp->IoStatus);
     }
 
+Complete:
     if (Status == STATUS_PENDING)
     {
         IoMarkIrpPending(Irp);

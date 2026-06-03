@@ -38,6 +38,8 @@ FatIsCurrentOperationSynchedForDcbTeardown (
 
 #endif
 
+
+
 #ifdef ALLOC_PRAGMA
 #pragma alloc_text(PAGE, FatCloseEaFile)
 #pragma alloc_text(PAGE, FatCompleteMdl)
@@ -497,10 +499,6 @@ Arguments:
     LARGE_INTEGER Vbo;
     ULONG InitialAllocation = 0;
     BOOLEAN UnwindWeAllocatedDiskSpace = FALSE;
-    PBCB    LocalBcb = NULL;
-    PVOID   LocalBuffer = NULL;
-    ULONG   InitialRequest = ByteCount;
-    ULONG   MappingGranularity = PAGE_SIZE;
 
     PAGED_CODE();
 
@@ -577,88 +575,26 @@ Arguments:
             ByteCount = Dcb->Header.AllocationSize.LowPart - InitialAllocation;
         }
 
-        while (ByteCount > 0) {
-
-            ULONG BytesToPin;
-
-            LocalBcb = NULL;
-
-            //
-            //  We must pin in terms of pages below the boundary of the initial request.
-            //  Once we pass the end of the request, we are free to expand the pin size to
-            //  VACB_MAPPING_GRANULARITY. This will prevent Cc from returning OBCBs
-            //  and hence will prevent bugchecks when we then attempt to repin one, yet
-            //  allow us to be more efficient by pinning in 256KB chunks instead of 4KB pages.
-            //
-
-            if (Vbo.QuadPart > StartingVbo + InitialRequest) {
-
-                MappingGranularity = VACB_MAPPING_GRANULARITY;
-            }
+        if (!CcPinRead( Dcb->Specific.Dcb.DirectoryFile,
+                        &Vbo,
+                        ByteCount,
+                        BooleanFlagOn(IrpContext->Flags, IRP_CONTEXT_FLAG_WAIT),
+                        Bcb,
+                        Buffer )) {
 
             //
-            //  If the first and final byte are both described by the same page, pin
-            //  the entire range. Note we pin in pages to prevent cache manager from
-            //  returning OBCBs, which would result in a bugcheck on CcRepinBcb.
+            // Could not read the data without waiting (cache miss).
             //
 
-            if ((Vbo.QuadPart / MappingGranularity) ==
-                ((Vbo.QuadPart + ByteCount - 1) / MappingGranularity)) {
+            FatRaiseStatus( IrpContext, STATUS_CANT_WAIT );
+        }
 
-                BytesToPin = ByteCount;
+        DbgDoit( IrpContext->PinCount += 1 )
 
-            } else {
+        if (Zero) {
 
-                BytesToPin = MappingGranularity -
-                             ((ULONG)Vbo.QuadPart & (MappingGranularity - 1));
-            }
-
-            if (!CcPinRead( Dcb->Specific.Dcb.DirectoryFile,
-                            &Vbo,
-                            BytesToPin,
-                            BooleanFlagOn(IrpContext->Flags, IRP_CONTEXT_FLAG_WAIT),
-                            &LocalBcb,
-                            &LocalBuffer )) {
-
-                //
-                // Could not read the data without waiting (cache miss).
-                //
-
-                FatRaiseStatus( IrpContext, STATUS_CANT_WAIT );
-            }
-
-            //
-            //  Update our caller with the beginning of their request.
-            //
-
-            if (*Buffer == NULL) {
-
-                *Buffer = LocalBuffer;
-                *Bcb = LocalBcb;
-            }
-
-            DbgDoit( IrpContext->PinCount += 1 )
-
-            if (Zero) {
-
-                //
-                //  We set this guy dirty right now so that we can raise CANT_WAIT when
-                //  it needs to be done.  It'd be beautiful if we could noop the read IO
-                //  since we know we don't care about it.
-                //
-
-                RtlZeroMemory( LocalBuffer, BytesToPin );
-                CcSetDirtyPinnedData( LocalBcb, NULL );
-            }
-
-            ByteCount -= BytesToPin;
-            Vbo.QuadPart += BytesToPin;
-
-            if (*Bcb != LocalBcb) {
-
-                FatRepinBcb( IrpContext, LocalBcb );
-                FatUnpinBcb( IrpContext, LocalBcb );
-            }
+            RtlZeroMemory( *Buffer, ByteCount );
+            CcSetDirtyPinnedData( *Bcb, NULL );
         }
 
         //
@@ -679,11 +615,6 @@ Arguments:
             //
             //  Make sure we unpin the buffers.
             //
-
-            if (*Bcb != LocalBcb) {
-
-                FatUnpinBcb( IrpContext, LocalBcb );
-            }
 
             FatUnpinBcb(IrpContext, *Bcb);
 
@@ -2014,4 +1945,3 @@ Cleanup:
     return Status;
 }
 #endif
-

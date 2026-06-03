@@ -56,6 +56,8 @@ TestEntry(
              TESTENTRY_BUFFERED_IO_DEVICE |
              TESTENTRY_NO_READONLY_DEVICE;
 
+    KmtInitializeCcPagingReadIrql();
+
     KmtRegisterIrpHandler(IRP_MJ_READ, NULL, TestIrpHandler);
     KmtRegisterMessageHandler(0, NULL, TestMessageHandler);
 
@@ -201,7 +203,7 @@ MapInAnotherThread(IN PVOID Context)
     Ret = CcMapData(TestFileObject, &Offset, TestContext->Length, MAP_WAIT, &Bcb, (PVOID *)&Buffer);
     KmtEndSeh(STATUS_SUCCESS);
 
-    if (!skip(Ret == TRUE, "CcMapData failed\n"))
+    if (ok(Ret == TRUE, "CcMapData failed\n"))
     {
         ok_eq_pointer(Bcb, TestContext->Bcb);
         ok_eq_pointer(Buffer, TestContext->Buffer);
@@ -213,7 +215,7 @@ MapInAnotherThread(IN PVOID Context)
     Ret = CcPinRead(TestFileObject, &Offset, TestContext->Length, 0, &Bcb, (PVOID *)&Buffer);
     KmtEndSeh(STATUS_SUCCESS);
 
-    if (!skip(Ret == TRUE, "CcPinRead failed\n"))
+    if (ok(Ret == TRUE, "CcPinRead failed\n"))
     {
         ok(Bcb != TestContext->Bcb, "Returned same BCB!\n");
         ok_eq_pointer(Buffer, TestContext->Buffer);
@@ -235,7 +237,7 @@ MapInAnotherThread(IN PVOID Context)
     Ret = CcPinRead(TestFileObject, &Offset, TestContext->Length, PIN_EXCLUSIVE, &Bcb, (PVOID *)&Buffer);
     KmtEndSeh(STATUS_SUCCESS);
 
-    if (!skip(Ret == TRUE, "CcPinRead failed\n"))
+    if (ok(Ret == TRUE, "CcPinRead failed\n"))
     {
         ok(Bcb != TestContext->Bcb, "Returned same BCB!\n");
         ok_eq_pointer(Buffer, TestContext->Buffer);
@@ -250,7 +252,7 @@ MapInAnotherThread(IN PVOID Context)
     Ret = CcMapData(TestFileObject, &Offset, TestContext->Length, MAP_WAIT, &Bcb, (PVOID *)&Buffer);
     KmtEndSeh(STATUS_SUCCESS);
 
-    if (!skip(Ret == TRUE, "CcMapData failed\n"))
+    if (ok(Ret == TRUE, "CcMapData failed\n"))
     {
         ok_eq_pointer(Bcb, TestContext->Bcb);
         ok_eq_pointer(Buffer, (PVOID)((ULONG_PTR)TestContext->Buffer + 0x500));
@@ -272,6 +274,7 @@ PerformTest(
     PULONG Buffer;
     PTEST_FCB Fcb;
     LARGE_INTEGER Offset;
+    BOOLEAN IsWin81OrNewer = KmtGetKernelNtVersion() >= _WIN32_WINNT_WINBLUE;
 
     ok_eq_pointer(TestFileObject, NULL);
     ok_eq_pointer(TestDeviceObject, NULL);
@@ -306,7 +309,7 @@ PerformTest(
                     Ret = CcMapData(TestFileObject, &Offset, FileSizes.FileSize.QuadPart - Offset.QuadPart, MAP_WAIT, &Bcb, (PVOID *)&Buffer);
                     KmtEndSeh(STATUS_SUCCESS);
 
-                    if (!skip(Ret == TRUE, "CcMapData failed\n"))
+                    if (ok(Ret == TRUE, "CcMapData failed\n"))
                     {
                         ok_eq_ulong(Buffer[(0x3000 - TestId * 0x1000) / sizeof(ULONG)], 0xDEADBABE);
 
@@ -326,7 +329,7 @@ PerformTest(
                         Ret = CcMapData(TestFileObject, &Offset, FileSizes.FileSize.QuadPart - Offset.QuadPart, MAP_WAIT, &TestContext->Bcb, &TestContext->Buffer);
                         KmtEndSeh(STATUS_SUCCESS);
 
-                        if (!skip(Ret == TRUE, "CcMapData failed\n"))
+                        if (ok(Ret == TRUE, "CcMapData failed\n"))
                         {
                             PKTHREAD ThreadHandle;
 
@@ -349,8 +352,9 @@ PerformTest(
                                    "Buffer %p not mapped in system space\n", TestContext->Buffer);
                             }
 #elif defined(_M_AMD64)
-                            ok(TestContext->Buffer >= (PVOID)0xFFFFF98000000000 && TestContext->Buffer < (PVOID)0xFFFFFA8000000000,
-                               "Buffer %p not mapped in system space\n", TestContext->Buffer);
+                            ok(TestContext->Buffer >= MmSystemRangeStart,
+                               "Buffer %p not mapped in system space (MmSystemRangeStart %p)\n",
+                               TestContext->Buffer, MmSystemRangeStart);
 #else
                             skip(FALSE, "System space mapping not defined\n");
 #endif
@@ -429,19 +433,53 @@ PerformTest(
                         CcUnpinData(Bcb);
                     }
 
-                    /* Map more than a VACB */
-                    Ret = FALSE;
-                    Offset.QuadPart = 0x0;
-
-                    KmtStartSeh();
-                    Ret = CcMapData(TestFileObject, &Offset, 0x1000 + VACB_MAPPING_GRANULARITY, MAP_WAIT, &Bcb, (PVOID *)&Buffer);
-                    KmtEndSeh(STATUS_SUCCESS);
-                    ok(Ret == TRUE, "CcMapData failed\n");
-
-                    if (Ret)
+                    if (IsWin81OrNewer)
                     {
-                        CcUnpinData(Bcb);
+                        skip(FALSE, "CcMapData over more than one VACB raises on Windows 8.1+\n");
                     }
+                    else
+                    {
+                        /* Map more than a VACB and then remap a contained range. */
+                        Ret = FALSE;
+                        Offset.QuadPart = 0x0;
+
+                        KmtStartSeh();
+                        Ret = CcMapData(TestFileObject, &Offset, VACB_MAPPING_GRANULARITY + 0x1000, MAP_WAIT, &Bcb, (PVOID *)&Buffer);
+                        KmtEndSeh(STATUS_SUCCESS);
+                        ok(Ret == TRUE, "CcMapData failed\n");
+
+                        if (Ret)
+                        {
+                            PVOID SubBcb;
+                            PULONG SubBuffer;
+                            volatile UCHAR *MappedBuffer = (volatile UCHAR *)Buffer;
+
+                            KmtStartSeh();
+                            MappedBuffer[0] = 0x5a;
+                            MappedBuffer[VACB_MAPPING_GRANULARITY] = 0xa5;
+                            MappedBuffer[VACB_MAPPING_GRANULARITY + 0xfff] = 0x3c;
+                            ok_eq_uint(MappedBuffer[0], 0x5a);
+                            ok_eq_uint(MappedBuffer[VACB_MAPPING_GRANULARITY], 0xa5);
+                            ok_eq_uint(MappedBuffer[VACB_MAPPING_GRANULARITY + 0xfff], 0x3c);
+                            KmtEndSeh(STATUS_SUCCESS);
+
+                            Offset.QuadPart = 0x1000;
+                            KmtStartSeh();
+                            Ret = CcMapData(TestFileObject, &Offset, VACB_MAPPING_GRANULARITY, MAP_WAIT, &SubBcb, (PVOID *)&SubBuffer);
+                            KmtEndSeh(STATUS_SUCCESS);
+                            ok(Ret == TRUE, "CcMapData failed\n");
+
+                            if (Ret)
+                            {
+                                ok_eq_pointer(SubBcb, Bcb);
+                                ok_eq_pointer(SubBuffer, (PVOID)((ULONG_PTR)Buffer + 0x1000));
+                                CcUnpinData(SubBcb);
+                            }
+
+                            CcUnpinData(Bcb);
+                        }
+                    }
+
                 }
             }
         }
@@ -455,19 +493,27 @@ CleanupTest(
     ULONG TestId,
     PDEVICE_OBJECT DeviceObject)
 {
-    LARGE_INTEGER Zero = RTL_CONSTANT_LARGE_INTEGER(0LL);
-    CACHE_UNINITIALIZE_EVENT CacheUninitEvent;
+    PTEST_FCB Fcb;
+    LARGE_INTEGER Zero;
 
     ok_eq_pointer(TestDeviceObject, DeviceObject);
     ok_eq_ulong(TestTestId, TestId);
+    Zero.QuadPart = 0;
 
     if (!skip(TestFileObject != NULL, "No test FO\n"))
     {
         if (CcIsFileCached(TestFileObject))
         {
-            KeInitializeEvent(&CacheUninitEvent.Event, NotificationEvent, FALSE);
-            CcUninitializeCacheMap(TestFileObject, &Zero, &CacheUninitEvent);
-            KeWaitForSingleObject(&CacheUninitEvent.Event, Executive, KernelMode, FALSE, NULL);
+            Fcb = TestFileObject->FsContext;
+            if (Fcb != NULL)
+            {
+                CcFlushCache(&Fcb->SectionObjectPointers, NULL, 0, NULL);
+            }
+            KmtCcUninitializeCacheMap(TestFileObject, &Zero);
+            if (Fcb != NULL)
+            {
+                CcPurgeCacheSection(&Fcb->SectionObjectPointers, NULL, 0, FALSE);
+            }
         }
 
         if (TestFileObject->FsContext != NULL)
@@ -555,7 +601,7 @@ TestIrpHandler(
 
         ok(FlagOn(Irp->Flags, IRP_NOCACHE), "Not coming from Cc\n");
 
-        ok_irql(APC_LEVEL);
+        ok_irql(KmtCcPagingReadIrql());
         ok((Offset.QuadPart % PAGE_SIZE == 0 || Offset.QuadPart == 0), "Offset is not aligned: %I64i\n", Offset.QuadPart);
         ok(Length % PAGE_SIZE == 0, "Length is not aligned: %I64i\n", Length);
 

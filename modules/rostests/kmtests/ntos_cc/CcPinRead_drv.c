@@ -60,6 +60,8 @@ TestEntry(
              TESTENTRY_BUFFERED_IO_DEVICE |
              TESTENTRY_NO_READONLY_DEVICE;
 
+    KmtInitializeCcPagingReadIrql();
+
     KmtRegisterIrpHandler(IRP_MJ_READ, NULL, TestIrpHandler);
     KmtRegisterIrpHandler(IRP_MJ_WRITE, NULL, TestIrpHandler);
     KmtRegisterMessageHandler(0, NULL, TestMessageHandler);
@@ -221,7 +223,7 @@ PinInAnotherThread(IN PVOID Context)
     Ret = CcPinRead(TestFileObject, &Offset, TestContext->Length, PIN_WAIT, &Bcb, (PVOID *)&Buffer);
     KmtEndSeh(STATUS_SUCCESS);
 
-    if (!skip(Ret == TRUE, "CcPinRead failed\n"))
+    if (ok(Ret == TRUE, "CcPinRead failed\n"))
     {
         ok_bcb(Bcb, 12288, Offset.QuadPart);
         ok_eq_pointer(Bcb, TestContext->Bcb);
@@ -234,7 +236,7 @@ PinInAnotherThread(IN PVOID Context)
     Ret = CcPinRead(TestFileObject, &Offset, TestContext->Length, PIN_WAIT | PIN_IF_BCB, &Bcb, (PVOID *)&Buffer);
     KmtEndSeh(STATUS_SUCCESS);
 
-    if (!skip(Ret == TRUE, "CcPinRead failed\n"))
+    if (ok(Ret == TRUE, "CcPinRead failed\n"))
     {
         ok_bcb(Bcb, 12288, Offset.QuadPart);
         ok_eq_pointer(Bcb, TestContext->Bcb);
@@ -247,7 +249,7 @@ PinInAnotherThread(IN PVOID Context)
     Ret = CcPinRead(TestFileObject, &Offset, TestContext->Length, PIN_EXCLUSIVE, &Bcb, (PVOID *)&Buffer);
     KmtEndSeh(STATUS_SUCCESS);
 
-    if (!skip(Ret == TRUE, "CcPinRead failed\n"))
+    if (ok(Ret == TRUE, "CcPinRead failed\n"))
     {
         ok_bcb(Bcb, 12288, Offset.QuadPart);
         ok_eq_pointer(Bcb, TestContext->Bcb);
@@ -260,7 +262,7 @@ PinInAnotherThread(IN PVOID Context)
     Ret = CcMapData(TestFileObject, &Offset, TestContext->Length, MAP_WAIT, &Bcb, (PVOID *)&Buffer);
     KmtEndSeh(STATUS_SUCCESS);
 
-    if (!skip(Ret == TRUE, "CcMapData failed\n"))
+    if (ok(Ret == TRUE, "CcMapData failed\n"))
     {
         ok(Bcb != TestContext->Bcb, "Returned same BCB!\n");
         ok_eq_pointer(Buffer, TestContext->Buffer);
@@ -275,7 +277,7 @@ PinInAnotherThread(IN PVOID Context)
     Ret = CcPinRead(TestFileObject, &Offset, TestContext->Length, PIN_WAIT | PIN_IF_BCB, &Bcb, (PVOID *)&Buffer);
     KmtEndSeh(STATUS_SUCCESS);
 
-    if (!skip(Ret == TRUE, "CcPinRead failed\n"))
+    if (ok(Ret == TRUE, "CcPinRead failed\n"))
     {
         ok_bcb(Bcb, 12288, 4096);
         ok_eq_pointer(Bcb, TestContext->Bcb);
@@ -288,7 +290,7 @@ PinInAnotherThread(IN PVOID Context)
     Ret = CcPinRead(TestFileObject, &Offset, TestContext->Length, PIN_WAIT, &Bcb, (PVOID *)&Buffer);
     KmtEndSeh(STATUS_SUCCESS);
 
-    if (!skip(Ret == TRUE, "CcPinRead failed\n"))
+    if (ok(Ret == TRUE, "CcPinRead failed\n"))
     {
         ok_bcb(Bcb, 12288, 4096);
         ok_eq_pointer(Bcb, TestContext->Bcb);
@@ -301,7 +303,7 @@ PinInAnotherThread(IN PVOID Context)
     Ret = CcPinRead(TestFileObject, &Offset, TestContext->Length, PIN_EXCLUSIVE, &Bcb, (PVOID *)&Buffer);
     KmtEndSeh(STATUS_SUCCESS);
 
-    if (!skip(Ret == TRUE, "CcPinRead failed\n"))
+    if (ok(Ret == TRUE, "CcPinRead failed\n"))
     {
         ok_bcb(Bcb, 12288, 4096);
         ok_eq_pointer(Bcb, TestContext->Bcb);
@@ -349,7 +351,7 @@ PinInAnotherThreadExclusive(IN PVOID Context)
     Ret = CcMapData(TestFileObject, &Offset, TestContext->Length, 0, &Bcb, (PVOID *)&Buffer);
     KmtEndSeh(STATUS_SUCCESS);
 
-    if (!skip(Ret == TRUE, "CcMapData failed\n"))
+    if (ok(Ret == TRUE, "CcMapData failed\n"))
     {
         ok(Bcb != TestContext->Bcb, "Returned same BCB!\n");
         ok_eq_pointer(Buffer, TestContext->Buffer);
@@ -384,7 +386,7 @@ PinInAnotherThreadExclusive(IN PVOID Context)
     Ret = CcMapData(TestFileObject, &Offset, TestContext->Length, 0, &Bcb, (PVOID *)&Buffer);
     KmtEndSeh(STATUS_SUCCESS);
 
-    if (!skip(Ret == TRUE, "CcMapData failed\n"))
+    if (ok(Ret == TRUE, "CcMapData failed\n"))
     {
         ok(Bcb != TestContext->Bcb, "Returned same BCB!\n");
         ok_eq_pointer(Buffer, (PVOID)((ULONG_PTR)TestContext->Buffer + 0x500));
@@ -449,7 +451,7 @@ PerformTest(
                     Ret = CcPinRead(TestFileObject, &Offset, FileSizes.FileSize.QuadPart - Offset.QuadPart, PIN_WAIT, &Bcb, (PVOID *)&Buffer);
                     KmtEndSeh(STATUS_SUCCESS);
 
-                    if (!skip(Ret == TRUE, "CcPinRead failed\n"))
+                    if (ok(Ret == TRUE, "CcPinRead failed\n"))
                     {
                         ok_bcb(Bcb, ((4 - TestId) * 4096), Offset.QuadPart);
                         ok_eq_ulong(Buffer[(0x3000 - TestId * 0x1000) / sizeof(ULONG)], 0xDEADBABE);
@@ -481,7 +483,7 @@ PerformTest(
                         Ret = CcPinRead(TestFileObject, &Offset, FileSizes.FileSize.QuadPart - Offset.QuadPart, PIN_WAIT, &TestContext->Bcb, &TestContext->Buffer);
                         KmtEndSeh(STATUS_SUCCESS);
 
-                        if (!skip(Ret == TRUE, "CcPinRead failed\n"))
+                        if (ok(Ret == TRUE, "CcPinRead failed\n"))
                         {
                             PKTHREAD ThreadHandle;
 
@@ -506,8 +508,9 @@ PerformTest(
                                    "Buffer %p not mapped in system space\n", TestContext->Buffer);
                             }
 #elif defined(_M_AMD64)
-                            ok(TestContext->Buffer >= (PVOID)0xFFFFF98000000000 && TestContext->Buffer < (PVOID)0xFFFFFA8000000000,
-                               "Buffer %p not mapped in system space\n", TestContext->Buffer);
+                            ok(TestContext->Buffer >= MmSystemRangeStart,
+                               "Buffer %p not mapped in system space (MmSystemRangeStart %p)\n",
+                               TestContext->Buffer, MmSystemRangeStart);
 #else
                             skip(FALSE, "System space mapping not defined\n");
 #endif
@@ -527,7 +530,7 @@ PerformTest(
                         Ret = CcPinRead(TestFileObject, &Offset, FileSizes.FileSize.QuadPart - Offset.QuadPart, PIN_WAIT | PIN_EXCLUSIVE, &TestContext->Bcb, &TestContext->Buffer);
                         KmtEndSeh(STATUS_SUCCESS);
 
-                        if (!skip(Ret == TRUE, "CcPinRead failed\n"))
+                        if (ok(Ret == TRUE, "CcPinRead failed\n"))
                         {
                             PKTHREAD ThreadHandle;
 
@@ -551,7 +554,7 @@ PerformTest(
                     Ret = CcPinRead(TestFileObject, &Offset, FileSizes.FileSize.QuadPart - Offset.QuadPart, PIN_WAIT, &Bcb, (PVOID *)&Buffer);
                     KmtEndSeh(STATUS_SUCCESS);
 
-                    if (!skip(Ret == TRUE, "CcPinRead failed\n"))
+                    if (ok(Ret == TRUE, "CcPinRead failed\n"))
                     {
                         ok_bcb(Bcb, 12288, Offset.QuadPart);
                         ok_eq_ulong(Buffer[0x2000 / sizeof(ULONG)], 0);
@@ -600,6 +603,17 @@ PerformTest(
                     ok(Ret == TRUE, "CcPinRead failed\n");
                     if (Ret)
                     {
+                        volatile UCHAR *PinnedBuffer = (volatile UCHAR *)Buffer;
+
+                        KmtStartSeh();
+                        PinnedBuffer[0] = 0x5a;
+                        PinnedBuffer[VACB_MAPPING_GRANULARITY] = 0xa5;
+                        PinnedBuffer[VACB_MAPPING_GRANULARITY + 0xfff] = 0x3c;
+                        ok_eq_uint(PinnedBuffer[0], 0x5a);
+                        ok_eq_uint(PinnedBuffer[VACB_MAPPING_GRANULARITY], 0xa5);
+                        ok_eq_uint(PinnedBuffer[VACB_MAPPING_GRANULARITY + 0xfff], 0x3c);
+                        KmtEndSeh(STATUS_SUCCESS);
+
                         /* Set this one dirty */
                         CcSetDirtyPinnedData(Bcb, NULL);
 
@@ -671,7 +685,7 @@ PerformTest(
                     Ret = CcPinRead(TestFileObject, &Offset, FileSizes.FileSize.QuadPart, PIN_WAIT, &Bcb, (PVOID *)&Buffer);
                     KmtEndSeh(STATUS_SUCCESS);
 
-                    if (!skip(Ret == TRUE, "CcPinRead failed\n"))
+                    if (ok(Ret == TRUE, "CcPinRead failed\n"))
                     {
                         ok_bcb(Bcb, PAGE_SIZE * 4, Offset.QuadPart);
                         RtlFillMemory(Buffer, 0xbd, FileSizes.FileSize.LowPart);
@@ -692,8 +706,7 @@ CleanupTest(
     ULONG TestId,
     PDEVICE_OBJECT DeviceObject)
 {
-    LARGE_INTEGER Zero = RTL_CONSTANT_LARGE_INTEGER(0LL);
-    CACHE_UNINITIALIZE_EVENT CacheUninitEvent;
+    PTEST_FCB Fcb;
 
     ok_eq_pointer(TestDeviceObject, DeviceObject);
     ok_eq_ulong(TestTestId, TestId);
@@ -702,9 +715,16 @@ CleanupTest(
     {
         if (CcIsFileCached(TestFileObject))
         {
-            KeInitializeEvent(&CacheUninitEvent.Event, NotificationEvent, FALSE);
-            CcUninitializeCacheMap(TestFileObject, &Zero, &CacheUninitEvent);
-            KeWaitForSingleObject(&CacheUninitEvent.Event, Executive, KernelMode, FALSE, NULL);
+            Fcb = TestFileObject->FsContext;
+            if (Fcb != NULL)
+            {
+                CcFlushCache(&Fcb->SectionObjectPointers, NULL, 0, NULL);
+            }
+            KmtCcUninitializeCacheMap(TestFileObject, NULL);
+            if (Fcb != NULL)
+            {
+                CcPurgeCacheSection(&Fcb->SectionObjectPointers, NULL, 0, FALSE);
+            }
         }
 
         if (TestFileObject->FsContext != NULL)
@@ -803,7 +823,7 @@ TestIrpHandler(
 
         ok(FlagOn(Irp->Flags, IRP_NOCACHE), "Not coming from Cc\n");
 
-        ok_irql(APC_LEVEL);
+        ok_irql(KmtCcPagingReadIrql());
         ok((Offset.QuadPart % PAGE_SIZE == 0 || Offset.QuadPart == 0), "Offset is not aligned: %I64i\n", Offset.QuadPart);
         ok(Length % PAGE_SIZE == 0, "Length is not aligned: %I64i\n", Length);
 

@@ -319,18 +319,14 @@ Return Value:
 
         //
         //  Do a quick check for a root directory allocation that failed
-        //  simply because of fragmentation.  Also, only attempt to defrag
-        //  if the length is less that 0x40000.  This is to avoid
-        //  complications arising from crossing a MM view boundary (256kb).
-        //  By default on DOS the root directory is only 0x2000 long.
+        //  simply because of fragmentation.
         //
         //  Don't try to defrag fat32 root dirs.
         //
 
         if (!FatIsFat32(ParentDirectory->Vcb) &&
             (ByteOffset == -1) &&
-            (NodeType(ParentDirectory) == FAT_NTC_ROOT_DCB) &&
-            (ParentDirectory->Header.AllocationSize.LowPart <= 0x40000)) {
+            (NodeType(ParentDirectory) == FAT_NTC_ROOT_DCB)) {
 
             ByteOffset = FatDefragDirectory( IrpContext, ParentDirectory, DirentsNeeded );
         }
@@ -604,10 +600,8 @@ Return Value:
     NT_ASSERT( Dcb->Header.AllocationSize.LowPart == 0 );
 
     //
-    //  Prepare the directory file for writing.  Note that we can use a single
-    //  Bcb for these two entries because we know they are the first two in
-    //  the directory, and thus together do not span a page boundry.  Also
-    //  note that we prepare write 2 entries: one for "." and one for "..".
+    //  Prepare the directory file for writing.  Note that we prepare write
+    //  2 entries: one for "." and one for "..".
     //  The end of directory marker is automatically set since the whole
     //  directory is initially zero (DIRENT_NEVER_USED).
     //
@@ -3350,10 +3344,6 @@ Return Value:
     PUCHAR UsedDirents;
     PUCHAR UsedDirentBuffer = NULL;
 
-    PBCB *Bcbs = NULL;
-    ULONG Page;
-    ULONG PagesPinned = 0;
-
     ULONG DcbSize;
     ULONG TotalBytesAllocated = 0;
 
@@ -3365,18 +3355,7 @@ Return Value:
 
     NT_ASSERT( FatVcbAcquiredExclusive(IrpContext, Dcb->Vcb) );
 
-    //
-    //  We will only attempt this on directories less than 0x40000 bytes
-    //  long (by default on DOS the root directory is only 0x2000 long).
-    //  This is to avoid a cache manager complication.
-    //
-
     DcbSize = Dcb->Header.AllocationSize.LowPart;
-
-    if (DcbSize > 0x40000) {
-
-        return (ULONG)-1;
-    }
 
     //
     //  Force wait to TRUE
@@ -3511,9 +3490,7 @@ Return Value:
 
         //
         //  Now we are going to copy all the used and un-used parts of the
-        //  directory to separate pool.
-        //
-        //  Allocate these buffers and pin the entire directory.
+        //  directory to separate pool, then pin the entire directory.
         //
 
         UnusedDirents =
@@ -3526,49 +3503,21 @@ Return Value:
                                                      TotalBytesAllocated,
                                                      TAG_DIRENT );
 
-        PagesPinned = (DcbSize + (PAGE_SIZE - 1 )) / PAGE_SIZE;
-
-        Bcbs = FsRtlAllocatePoolWithTag( PagedPool,
-                                         PagesPinned * sizeof(PBCB),
-                                         TAG_BCB );
-
-        RtlZeroMemory( Bcbs, PagesPinned * sizeof(PBCB) );
-
-        for (Page = 0; Page < PagesPinned; Page += 1) {
-
-            ULONG PinSize;
-
-            //
-            //  Don't try to pin beyond the Dcb size.
-            //
-
-            if ((Page + 1) * PAGE_SIZE > DcbSize) {
-
-                PinSize = DcbSize - (Page * PAGE_SIZE);
-
-            } else {
-
-                PinSize = PAGE_SIZE;
-            }
-
-            FatPrepareWriteDirectoryFile( IrpContext,
-                                          Dcb,
-                                          Page * PAGE_SIZE,
-                                          PinSize,
-                                          &Bcbs[Page],
+        FatPrepareWriteDirectoryFile( IrpContext,
+                                      Dcb,
+                                      0,
+                                      DcbSize,
+                                      &Bcb,
 #ifndef __REACTOS__
-                                          &Dirent,
+                                      &Dirent,
 #else
-                                          (PVOID *)&Dirent,
+                                      (PVOID *)&Dirent,
 #endif
-                                          FALSE,
-                                          TRUE,
-                                          &DontCare );
+                                      FALSE,
+                                      TRUE,
+                                      &DontCare );
 
-            if (Page == 0) {
-                Directory = (PUCHAR)Dirent;
-            }
-        }
+        Directory = (PUCHAR)Dirent;
 
         TotalRuns = FsRtlNumberOfRunsInLargeMcb( &Mcb );
 
@@ -3637,13 +3586,7 @@ Return Value:
         //  We need to unpin here so that the UnpinRepinned won't deadlock.
         //
 
-        if (Bcbs) {
-            for (Page = 0; Page < PagesPinned; Page += 1) {
-                FatUnpinBcb( IrpContext, Bcbs[Page] );
-            }
-            ExFreePool(Bcbs);
-            Bcbs = NULL;
-        }
+        FatUnpinBcb( IrpContext, Bcb );
 
         //
         //  Now make the free dirent bitmap reflect the new state of the Dcb
@@ -3764,13 +3707,6 @@ Return Value:
             ExFreePool( UsedDirentBuffer );
         }
 
-        if (Bcbs) {
-            for (Page = 0; Page < PagesPinned; Page += 1) {
-                FatUnpinBcb( IrpContext, Bcbs[Page] );
-            }
-            ExFreePool(Bcbs);
-        }
-
         FatUnpinBcb( IrpContext, Bcb );
 
         for (Links = Dcb->Specific.Dcb.ParentDcbQueue.Flink;
@@ -3791,6 +3727,4 @@ Return Value:
 
     return ReturnValue;
 }
-
-
 

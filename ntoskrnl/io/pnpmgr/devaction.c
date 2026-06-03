@@ -1742,7 +1742,7 @@ IopSendRemoveDevice(IN PDEVICE_OBJECT DeviceObject)
     LONG_PTR refCount = ObDereferenceObject(DeviceObject);
     if (refCount != 0)
     {
-        DPRINT1("Leaking device %wZ, refCount = %d\n", &DeviceNode->InstancePath, (INT32)refCount);
+        DPRINT1("Removed device %wZ still referenced, refCount = %d\n", &DeviceNode->InstancePath, (INT32)refCount);
     }
 }
 
@@ -1756,6 +1756,9 @@ IopSendRemoveDeviceRelations(PDEVICE_RELATIONS DeviceRelations)
 
     for (i = 0; i < DeviceRelations->Count; i++)
     {
+        PDEVICE_NODE node = IopGetDeviceNode(DeviceRelations->Objects[i]);
+        if (node)
+            PiUnlinkDevNode(node);
         IopSendRemoveDevice(DeviceRelations->Objects[i]);
         DeviceRelations->Objects[i] = NULL;
     }
@@ -1777,6 +1780,7 @@ IopSendRemoveChildDevices(PDEVICE_NODE ParentDeviceNode)
         NextDeviceNode = ChildDeviceNode->Sibling;
         KeReleaseSpinLock(&IopDeviceTreeLock, OldIrql);
 
+        PiUnlinkDevNode(ChildDeviceNode);
         IopSendRemoveDevice(ChildDeviceNode->PhysicalDeviceObject);
 
         ChildDeviceNode = NextDeviceNode;
@@ -2328,12 +2332,16 @@ PiDevNodeStateMachine(
 
     do
     {
+        PDEVICE_NODE savedParent, savedSibling;
         doProcessAgain = FALSE;
 
         // The device can be removed during processing, but we still need its Parent and Sibling
         // links to continue the tree traversal. So keep the link till the and of a cycle
         referencedObject = currentNode->PhysicalDeviceObject;
         ObReferenceObject(referencedObject);
+
+        savedParent = currentNode->Parent;
+        savedSibling = currentNode->Sibling;
 
         // Devices with problems are skipped (unless they are not being removed)
         if (currentNode->Flags & DNF_HAS_PROBLEM &&
@@ -2462,12 +2470,15 @@ PiDevNodeStateMachine(
             case DeviceNodeAwaitingQueuedRemoval:
                 DPRINT("DeviceNodeAwaitingQueuedRemoval %wZ\n", &currentNode->InstancePath);
                 status = IopRemoveDevice(currentNode);
+                if (NT_SUCCESS(status))
+                    PiUnlinkDevNode(currentNode);
                 break;
             case DeviceNodeQueryRemoved:
                 break;
             case DeviceNodeRemovePendingCloses:
                 break;
             case DeviceNodeRemoved:
+                PiUnlinkDevNode(currentNode);
                 break;
             case DeviceNodeDeletePendingCloses:
                 break;
@@ -2481,7 +2492,20 @@ skipEnum:
         if (!doProcessAgain)
         {
             KIRQL OldIrql;
+            PDEVICE_NODE navParent, navSibling;
             KeAcquireSpinLock(&IopDeviceTreeLock, &OldIrql);
+
+            if (currentNode->Parent == NULL && currentNode != RootNode)
+            {
+                navParent = savedParent;
+                navSibling = savedSibling;
+            }
+            else
+            {
+                navParent = currentNode->Parent;
+                navSibling = currentNode->Sibling;
+            }
+
             /* If we have a child, simply go down the tree */
             if (currentNode->State != DeviceNodeRemoved && currentNode->Child != NULL)
             {
@@ -2493,17 +2517,17 @@ skipEnum:
                 while (currentNode != RootNode)
                 {
                     /* All children processed -- go sideways */
-                    if (currentNode->Sibling != NULL)
+                    if (navSibling != NULL)
                     {
-                        ASSERT(currentNode->Sibling->Parent == currentNode->Parent);
-                        currentNode = currentNode->Sibling;
+                        currentNode = navSibling;
                         break;
                     }
                     else
                     {
                         /* We're the last sibling -- go back up */
-                        ASSERT(currentNode->Parent->LastChild == currentNode);
-                        currentNode = currentNode->Parent;
+                        currentNode = navParent;
+                        navParent = currentNode->Parent;
+                        navSibling = currentNode->Sibling;
                     }
                     /* We already visited the parent and all its children, so keep looking */
                 }

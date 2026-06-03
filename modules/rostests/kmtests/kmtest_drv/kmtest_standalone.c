@@ -9,11 +9,11 @@
 #include <ntifs.h>
 #include <ndk/ketypes.h>
 
-#define KMT_DEFINE_TEST_FUNCTIONS
-#include <kmt_test.h>
-
 #define NDEBUG
 #include <debug.h>
+
+#define KMT_DEFINE_TEST_FUNCTIONS
+#include <kmt_test.h>
 
 #include <kmt_public.h>
 

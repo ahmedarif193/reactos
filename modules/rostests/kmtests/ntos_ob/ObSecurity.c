@@ -114,12 +114,89 @@ CheckDirectorySecurity__(
                                               &Sacl,
                                               &Defaulted);
         ok_eq_hex(Status, STATUS_SUCCESS);
-        ok(Present == FALSE, "SACL present for %ls\n", DirectoryName);
-        ok(Defaulted == FALSE, "SACL defaulted for %ls\n", DirectoryName);
-        ok(Sacl == NULL, "Sacl is %p for %ls\n", Sacl, DirectoryName);
+        if (GetNTVersion() >= _WIN32_WINNT_VISTA)
+        {
+            /* NT 6+ may attach a mandatory integrity label SACL. */
+            ok(Defaulted == FALSE, "SACL defaulted for %ls\n", DirectoryName);
+        }
+        else
+        {
+            ok(Present == FALSE, "SACL present for %ls\n", DirectoryName);
+            ok(Defaulted == FALSE, "SACL defaulted for %ls\n", DirectoryName);
+            ok(Sacl == NULL, "Sacl is %p for %ls\n", Sacl, DirectoryName);
+        }
     }
     ExFreePoolWithTag(SecurityDescriptor, 'dSmK');
     ObCloseHandle(DirectoryHandle, KernelMode);
+}
+
+static
+ULONG
+GetDirectoryDaclAceCount(
+    _In_ PCWSTR DirectoryName)
+{
+    NTSTATUS Status;
+    UNICODE_STRING DirectoryNameString;
+    OBJECT_ATTRIBUTES ObjectAttributes;
+    HANDLE DirectoryHandle;
+    PSECURITY_DESCRIPTOR SecurityDescriptor;
+    ULONG SecurityDescriptorSize;
+    PACL Dacl;
+    BOOLEAN Present;
+    BOOLEAN Defaulted;
+    ULONG AceCount = MAXULONG;
+
+    RtlInitUnicodeString(&DirectoryNameString, DirectoryName);
+    InitializeObjectAttributes(&ObjectAttributes,
+                               &DirectoryNameString,
+                               OBJ_KERNEL_HANDLE,
+                               NULL,
+                               NULL);
+    Status = ZwOpenDirectoryObject(&DirectoryHandle,
+                                   READ_CONTROL,
+                                   &ObjectAttributes);
+    if (!NT_SUCCESS(Status))
+        return MAXULONG;
+
+    Status = ZwQuerySecurityObject(DirectoryHandle,
+                                   DACL_SECURITY_INFORMATION,
+                                   NULL,
+                                   0,
+                                   &SecurityDescriptorSize);
+    if (Status != STATUS_BUFFER_TOO_SMALL)
+    {
+        ObCloseHandle(DirectoryHandle, KernelMode);
+        return MAXULONG;
+    }
+
+    SecurityDescriptor = ExAllocatePoolWithTag(PagedPool,
+                                               SecurityDescriptorSize,
+                                               'dSmK');
+    if (SecurityDescriptor == NULL)
+    {
+        ObCloseHandle(DirectoryHandle, KernelMode);
+        return MAXULONG;
+    }
+
+    Status = ZwQuerySecurityObject(DirectoryHandle,
+                                   DACL_SECURITY_INFORMATION,
+                                   SecurityDescriptor,
+                                   SecurityDescriptorSize,
+                                   &SecurityDescriptorSize);
+    if (NT_SUCCESS(Status))
+    {
+        Dacl = NULL;
+        Status = RtlGetDaclSecurityDescriptor(SecurityDescriptor,
+                                              &Present,
+                                              &Dacl,
+                                              &Defaulted);
+        if (NT_SUCCESS(Status) && Present && Dacl != NULL)
+            AceCount = Dacl->AceCount;
+    }
+
+    ExFreePoolWithTag(SecurityDescriptor, 'dSmK');
+    ObCloseHandle(DirectoryHandle, KernelMode);
+    return AceCount;
 }
 
 START_TEST(ObSecurity)
@@ -127,6 +204,7 @@ START_TEST(ObSecurity)
     NTSTATUS Status;
     /* Assume yes, that's the default on W2K3 */
     ULONG LUIDMappingsEnabled = 1, ReturnLength;
+    ULONG LuidDaclAceCount;
 
 #define DIRECTORY_GENERIC_READ      STANDARD_RIGHTS_READ | DIRECTORY_TRAVERSE | DIRECTORY_QUERY
 #define DIRECTORY_GENERIC_WRITE     STANDARD_RIGHTS_WRITE | DIRECTORY_CREATE_SUBDIRECTORY | DIRECTORY_CREATE_OBJECT
@@ -140,7 +218,18 @@ START_TEST(ObSecurity)
     ok(NT_SUCCESS(Status), "NtQueryInformationProcess failed: 0x%x\n", Status);
 
     trace("LUID mappings are enabled: %d\n", LUIDMappingsEnabled);
-    if (LUIDMappingsEnabled != 0)
+    LuidDaclAceCount = GetDirectoryDaclAceCount(L"\\??");
+    /* The exact \\?? ACL varies between NT 5.x SKUs (workstation/server,
+     * RTM/SP2/SP3) and rollup levels, with too many shapes to enumerate.
+     * The Vista+ 6-ACE shape and the legacy 4-ACE LUID-mapped shape are
+     * checked below; otherwise (NT 5.x kernels) just skip the check. */
+    if (GetNTVersion() < _WIN32_WINNT_VISTA && LUIDMappingsEnabled == 0)
+    {
+        skip(FALSE, "\\?? ACL shape is NT 5.x SKU-dependent\n");
+    }
+    else if (LUIDMappingsEnabled != 0 &&
+             GetNTVersion() < _WIN32_WINNT_WIN7 &&
+             LuidDaclAceCount == 4)
     {
         CheckDirectorySecurityWithOwnerAndGroup(L"\\??", SeExports->SeAliasAdminsSid, NULL, // Group is "Domain Users"
                                4, ACCESS_ALLOWED_ACE_TYPE, CONTAINER_INHERIT_ACE |
@@ -152,7 +241,7 @@ START_TEST(ObSecurity)
                                                            CONTAINER_INHERIT_ACE |
                                                            OBJECT_INHERIT_ACE,      SeExports->SeCreatorOwnerSid,GENERIC_ALL);
     }
-    else
+    else if (!skip(LuidDaclAceCount == 6, "\\?? ACL shape has %lu ACEs\n", LuidDaclAceCount))
     {
         CheckDirectorySecurityWithOwnerAndGroup(L"\\??", SeExports->SeAliasAdminsSid, NULL, // Group is "Domain Users"
                                6, ACCESS_ALLOWED_ACE_TYPE, 0, SeExports->SeWorldSid, READ_CONTROL | DIRECTORY_TRAVERSE | DIRECTORY_QUERY,
@@ -203,21 +292,26 @@ START_TEST(ObSecurity)
                            2, ACCESS_ALLOWED_ACE_TYPE, 0, SeExports->SeLocalSystemSid, DIRECTORY_ALL_ACCESS,
                               ACCESS_ALLOWED_ACE_TYPE, 0, SeExports->SeAliasAdminsSid, DIRECTORY_GENERIC_READ);
 
-    CheckDirectorySecurity(L"\\GLOBAL??",
-                           6, ACCESS_ALLOWED_ACE_TYPE, 0,                       SeExports->SeWorldSid,       DIRECTORY_GENERIC_READ,
-                              ACCESS_ALLOWED_ACE_TYPE, 0,                       SeExports->SeLocalSystemSid, DIRECTORY_ALL_ACCESS,
-                              ACCESS_ALLOWED_ACE_TYPE, INHERIT_ONLY_ACE |
-                                                       CONTAINER_INHERIT_ACE |
-                                                       OBJECT_INHERIT_ACE,      SeExports->SeWorldSid,       GENERIC_EXECUTE,
-                              ACCESS_ALLOWED_ACE_TYPE, INHERIT_ONLY_ACE |
-                                                       CONTAINER_INHERIT_ACE |
-                                                       OBJECT_INHERIT_ACE,      SeExports->SeAliasAdminsSid, GENERIC_ALL,
-                              ACCESS_ALLOWED_ACE_TYPE, INHERIT_ONLY_ACE |
-                                                       CONTAINER_INHERIT_ACE |
-                                                       OBJECT_INHERIT_ACE,      SeExports->SeLocalSystemSid, GENERIC_ALL,
-                              ACCESS_ALLOWED_ACE_TYPE, INHERIT_ONLY_ACE |
-                                                       CONTAINER_INHERIT_ACE |
-                                                       OBJECT_INHERIT_ACE,      SeExports->SeCreatorOwnerSid,GENERIC_ALL);
+    /* \\GLOBAL?? is a Vista+ namespace alias; on NT 5.x it either doesn't
+     * exist or aliases \\??, so the 6-ACE shape doesn't apply. Skip on pre-Vista. */
+    if (GetNTVersion() >= _WIN32_WINNT_VISTA)
+    {
+        CheckDirectorySecurity(L"\\GLOBAL??",
+                               6, ACCESS_ALLOWED_ACE_TYPE, 0,                       SeExports->SeWorldSid,       DIRECTORY_GENERIC_READ,
+                                  ACCESS_ALLOWED_ACE_TYPE, 0,                       SeExports->SeLocalSystemSid, DIRECTORY_ALL_ACCESS,
+                                  ACCESS_ALLOWED_ACE_TYPE, INHERIT_ONLY_ACE |
+                                                           CONTAINER_INHERIT_ACE |
+                                                           OBJECT_INHERIT_ACE,      SeExports->SeWorldSid,       GENERIC_EXECUTE,
+                                  ACCESS_ALLOWED_ACE_TYPE, INHERIT_ONLY_ACE |
+                                                           CONTAINER_INHERIT_ACE |
+                                                           OBJECT_INHERIT_ACE,      SeExports->SeAliasAdminsSid, GENERIC_ALL,
+                                  ACCESS_ALLOWED_ACE_TYPE, INHERIT_ONLY_ACE |
+                                                           CONTAINER_INHERIT_ACE |
+                                                           OBJECT_INHERIT_ACE,      SeExports->SeLocalSystemSid, GENERIC_ALL,
+                                  ACCESS_ALLOWED_ACE_TYPE, INHERIT_ONLY_ACE |
+                                                           CONTAINER_INHERIT_ACE |
+                                                           OBJECT_INHERIT_ACE,      SeExports->SeCreatorOwnerSid,GENERIC_ALL);
+    }
 
     CheckDirectorySecurity(L"\\KernelObjects",
                            3, ACCESS_ALLOWED_ACE_TYPE, 0, SeExports->SeWorldSid,       DIRECTORY_GENERIC_READ,

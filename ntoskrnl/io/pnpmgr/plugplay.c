@@ -1154,7 +1154,15 @@ IopGetDeviceRelations(PPLUGPLAY_CONTROL_DEVICE_RELATIONS_DATA RelationsData)
 
 done:
     if (DeviceRelations != NULL)
+    {
+        for (i = 0; i < DeviceRelations->Count; i++)
+        {
+            if (DeviceRelations->Objects[i] != NULL)
+                ObDereferenceObject(DeviceRelations->Objects[i]);
+        }
+
         ExFreePool(DeviceRelations);
+    }
 
     if (DeviceObject != NULL)
         ObDereferenceObject(DeviceObject);

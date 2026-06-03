@@ -2733,7 +2733,6 @@ Return Value:
     BOOLEAN CreateLfn = FALSE;
     BOOLEAN DeleteSourceDirent;
     BOOLEAN DeleteTarget;
-    BOOLEAN NewDirentFromPool;
     BOOLEAN RenamedAcrossDirectories;
     BOOLEAN ReplaceIfExists;
 
@@ -2751,17 +2750,14 @@ Return Value:
     PBCB DotDotBcb;
     PBCB NewDirentBcb;
     PBCB OldDirentBcb;
-    PBCB SecondPageBcb;
     PBCB TargetDirentBcb;
 
     PDCB TargetDcb = NULL;
     PDCB OldParentDcb;
 
     PDIRENT DotDotDirent = NULL;
-    PDIRENT FirstPageDirent = NULL;
     PDIRENT NewDirent = NULL;
     PDIRENT OldDirent = NULL;
-    PDIRENT SecondPageDirent = NULL;
     PDIRENT ShortDirent = NULL;
     PDIRENT TargetDirent = NULL;
 
@@ -2774,12 +2770,9 @@ Return Value:
 
     PLIST_ENTRY Links;
 
-    ULONG BytesInFirstPage = 0;
-    ULONG DirentsInFirstPage = 0;
     ULONG DirentsRequired = 0;
     ULONG NewOffset = 0;
     ULONG NotifyAction = 0;
-    ULONG SecondPageOffset = 0;
     ULONG ShortDirentOffset = 0;
     ULONG TargetDirentOffset = 0;
     ULONG TargetLfnOffset = 0;
@@ -2826,13 +2819,11 @@ Return Value:
     ContinueWithRename = FALSE;
     DeleteSourceDirent = FALSE;
     DeleteTarget = FALSE;
-    NewDirentFromPool = FALSE;
     RenamedAcrossDirectories = FALSE;
 
     DotDotBcb = NULL;
     NewDirentBcb = NULL;
     OldDirentBcb = NULL;
-    SecondPageBcb = NULL;
     TargetDirentBcb = NULL;
 
     NewOemName.Length = 0;
@@ -3583,7 +3574,7 @@ Return Value:
             FatPrepareWriteDirectoryFile( IrpContext,
                                           TargetDcb,
                                           NewOffset,
-                                          sizeof(DIRENT),
+                                          DirentsRequired * sizeof(DIRENT),
                                           &NewDirentBcb,
 #ifndef __REACTOS__
                                           &NewDirent,
@@ -3595,45 +3586,6 @@ Return Value:
                                           &Status );
 
             NT_ASSERT( NT_SUCCESS( Status ) );
-
-            //
-            //  Deal with the special case of an LFN + Dirent structure crossing
-            //  a page boundry.
-            //
-
-            if ((NewOffset / PAGE_SIZE) !=
-                ((NewOffset + (DirentsRequired - 1) * sizeof(DIRENT)) / PAGE_SIZE)) {
-
-                SecondPageOffset = (NewOffset & ~(PAGE_SIZE - 1)) + PAGE_SIZE;
-
-                BytesInFirstPage = SecondPageOffset - NewOffset;
-
-                DirentsInFirstPage = BytesInFirstPage / sizeof(DIRENT);
-
-                FatPrepareWriteDirectoryFile( IrpContext,
-                                              TargetDcb,
-                                              SecondPageOffset,
-                                              sizeof(DIRENT),
-                                              &SecondPageBcb,
-#ifndef __REACTOS__
-                                              &SecondPageDirent,
-#else
-                                              (PVOID *)&SecondPageDirent,
-#endif
-                                              FALSE,
-                                              TRUE,
-                                              &Status );
-
-                NT_ASSERT( NT_SUCCESS( Status ) );
-
-                FirstPageDirent = NewDirent;
-
-                NewDirent = FsRtlAllocatePoolWithTag( PagedPool,
-                                                      DirentsRequired * sizeof(DIRENT),
-                                                      TAG_DIRENT );
-
-                NewDirentFromPool = TRUE;
-            }
 
             //
             //  Bump up Dirent and DirentOffset
@@ -3671,23 +3623,6 @@ Return Value:
             }
 
 
-            //
-            //  If the dirent crossed pages, split the contents of the
-            //  temporary pool between the two pages.
-            //
-
-            if (NewDirentFromPool) {
-
-                RtlCopyMemory( FirstPageDirent, NewDirent, BytesInFirstPage );
-
-                RtlCopyMemory( SecondPageDirent,
-                               NewDirent + DirentsInFirstPage,
-                               DirentsRequired*sizeof(DIRENT) - BytesInFirstPage );
-
-                ShortDirent = SecondPageDirent +
-                              (DirentsRequired - DirentsInFirstPage) - 1;
-            }
-
             Dirent = *ShortDirent;
 
         } _SEH2_FINALLY {
@@ -3716,7 +3651,6 @@ Return Value:
             FatUnpinBcb( IrpContext, OldDirentBcb );
             FatUnpinBcb( IrpContext, TargetDirentBcb );
             FatUnpinBcb( IrpContext, NewDirentBcb );
-            FatUnpinBcb( IrpContext, SecondPageBcb );
         } _SEH2_END;
 
         //
@@ -3961,11 +3895,6 @@ Return Value:
             //
 
             ExFreePool(UniTunneledLongName.Buffer);
-        }
-
-        if (NewDirentFromPool) {
-
-            ExFreePool( NewDirent );
         }
 
         FatUnpinBcb( IrpContext, TargetDirentBcb );
@@ -5182,5 +5111,4 @@ FatDeleteFile (
         FatDeleteFcb( IrpContext, &Fcb );
     } _SEH2_END;
 }
-
 

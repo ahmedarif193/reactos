@@ -621,6 +621,10 @@ VOID
 PiClearDevNodeProblem(
     _In_ PDEVICE_NODE DeviceNode);
 
+VOID
+PiUnlinkDevNode(
+    _In_ PDEVICE_NODE DeviceNode);
+
 NTSTATUS
 IopFreeDeviceNode(
     IN PDEVICE_NODE DeviceNode

@@ -9,6 +9,7 @@
 #include <kmt_test.h>
 
 static PVOID ReturnAddresses[4];
+static volatile PVOID ReturnAddressSink;
 
 static
 VOID
@@ -66,7 +67,7 @@ TestStackWalk4(VOID)
         ExceptionStatus = _SEH2_GetExceptionCode();
     }
     _SEH2_END;
-    if (GetNTVersion() == _WIN32_WINNT_WS03)
+    if (GetNTVersion() < _WIN32_WINNT_VISTA)
         ok_eq_hex(ExceptionStatus, STATUS_ACCESS_VIOLATION);
     else
         ok_eq_hex(ExceptionStatus, STATUS_SUCCESS);
@@ -121,6 +122,7 @@ TestStackWalk3(VOID)
 {
     ReturnAddresses[2] = _ReturnAddress();
     TestStackWalk4();
+    ReturnAddressSink = ReturnAddresses[2];
 }
 
 DECLSPEC_NOINLINE
@@ -130,6 +132,7 @@ TestStackWalk2(VOID)
 {
     ReturnAddresses[1] = _ReturnAddress();
     TestStackWalk3();
+    ReturnAddressSink = ReturnAddresses[1];
 }
 
 DECLSPEC_NOINLINE
@@ -139,6 +142,7 @@ TestStackWalk1(VOID)
 {
     ReturnAddresses[0] = _ReturnAddress();
     TestStackWalk2();
+    ReturnAddressSink = ReturnAddresses[0];
 }
 
 #ifdef _M_AMD64

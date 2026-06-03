@@ -68,8 +68,6 @@ TestIrpHandler(
 {
     NTSTATUS Status;
     PTEST_FCB Fcb;
-    CACHE_UNINITIALIZE_EVENT CacheUninitEvent;
-
     PAGED_CODE();
 
     DPRINT("IRP %x/%x\n", IoStack->MajorFunction, IoStack->MinorFunction);
@@ -84,11 +82,16 @@ TestIrpHandler(
         ok((IoStack->Parameters.Create.Options & FILE_OPEN_REPARSE_POINT) == 0, "FILE_OPEN_REPARSE_POINT set\n");
         ok((IoStack->Flags == 0 && !gNoLinks) || (IoStack->Flags == SL_STOP_ON_SYMLINK && gNoLinks), "IoStack->Flags = %lx\n", IoStack->Flags);
 
-        if (IoStack->FileObject->FileName.Length >= 2 * sizeof(WCHAR))
+        if (IoStack->FileObject->FileName.Length < 2 * sizeof(WCHAR))
         {
-            TestDeviceObject = DeviceObject;
-            TestFileObject = IoStack->FileObject;
+            Irp->IoStatus.Information = FILE_OPENED;
+            Status = STATUS_SUCCESS;
+            goto Finish;
         }
+
+        TestDeviceObject = DeviceObject;
+        TestFileObject = IoStack->FileObject;
+
         if (IoStack->FileObject->FileName.Length >= 2 * sizeof(WCHAR) &&
             IoStack->FileObject->FileName.Buffer[1] == 'M')
         {
@@ -163,12 +166,13 @@ TestIrpHandler(
     }
     else if (IoStack->MajorFunction == IRP_MJ_CLEANUP)
     {
-        KeInitializeEvent(&CacheUninitEvent.Event, NotificationEvent, FALSE);
-        CcUninitializeCacheMap(IoStack->FileObject, NULL, &CacheUninitEvent);
-        KeWaitForSingleObject(&CacheUninitEvent.Event, Executive, KernelMode, FALSE, NULL);
         Fcb = IoStack->FileObject->FsContext;
-        ExFreePoolWithTag(Fcb, 'FwrI');
-        IoStack->FileObject->FsContext = NULL;
+        if (Fcb)
+        {
+            KmtCcUninitializeCacheMap(IoStack->FileObject, NULL);
+            ExFreePoolWithTag(Fcb, 'FwrI');
+            IoStack->FileObject->FsContext = NULL;
+        }
         Status = STATUS_SUCCESS;
     }
 

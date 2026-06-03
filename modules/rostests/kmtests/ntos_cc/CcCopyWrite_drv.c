@@ -80,12 +80,16 @@ TestEntry(
              TESTENTRY_BUFFERED_IO_DEVICE |
              TESTENTRY_NO_READONLY_DEVICE;
 
+    KmtInitializeCcPagingReadIrql();
+
     KmtRegisterIrpHandler(IRP_MJ_CLEANUP, NULL, TestIrpHandler);
+    KmtRegisterIrpHandler(IRP_MJ_CLOSE, NULL, TestIrpHandler);
     KmtRegisterIrpHandler(IRP_MJ_CREATE, NULL, TestIrpHandler);
     KmtRegisterIrpHandler(IRP_MJ_READ, NULL, TestIrpHandler);
     KmtRegisterIrpHandler(IRP_MJ_WRITE, NULL, TestIrpHandler);
     KmtRegisterIrpHandler(IRP_MJ_FLUSH_BUFFERS, NULL, TestIrpHandler);
 
+    TestFastIoDispatch.SizeOfFastIoDispatch = sizeof(TestFastIoDispatch);
     TestFastIoDispatch.FastIoRead = FastIoRead;
     TestFastIoDispatch.FastIoWrite = FastIoWrite;
     DriverObject->FastIoDispatch = &TestFastIoDispatch;
@@ -184,9 +188,10 @@ reset_read(void)
 }
 
 #define ok_read_called(_Offset, _Length) do {                           \
+    LONGLONG ExpectedOffset = (LONGLONG)(_Offset);                      \
     ok(ReadCalled, "CcCopyWrite should have triggerred a read.\n");     \
-    ok_eq_longlong(ReadOffset.QuadPart, _Offset);                       \
-    ok_eq_ulong(ReadLength, _Length);                                   \
+    ok_eq_longlong(ReadOffset.QuadPart, ExpectedOffset);                \
+    ok_eq_ulong(ReadLength, (ULONG)(_Length));                          \
 }while(0)
 
 #define ok_read_not_called() ok(!ReadCalled, "CcCopyWrite shouldn't have triggered a read.\n")
@@ -199,6 +204,8 @@ Test_CcCopyWrite(PFILE_OBJECT FileObject)
     BOOLEAN Ret;
     LARGE_INTEGER Offset;
     CHAR Buffer[10];
+    BOOLEAN IsNt5 = KmtIsNt5I386();
+    BOOLEAN IsWin8OrNewer = KmtGetKernelNtVersion() >= _WIN32_WINNT_WIN8;
 
     memset(Buffer, 0xAC, 10);
 
@@ -234,8 +241,10 @@ Test_CcCopyWrite(PFILE_OBJECT FileObject)
         Ret = CcCopyWrite(FileObject, &Offset, 10, TRUE, NULL);
     KmtEndSeh(STATUS_INVALID_USER_BUFFER);
     ok_eq_char(Ret, 'x');
-    /* This raises an exception, but it actually triggered a read */
-    ok_read_called(0, PAGE_SIZE);
+    if (IsNt5)
+        ok_read_not_called();
+    else
+        ok_read_called(0, PAGE_SIZE);
 
     /* So this one succeeds, as the page is now resident */
     Ret = 'x';
@@ -244,9 +253,19 @@ Test_CcCopyWrite(PFILE_OBJECT FileObject)
     KmtStartSeh()
         Ret = CcCopyWrite(FileObject, &Offset, 10, FALSE, Buffer);
     KmtEndSeh(STATUS_SUCCESS);
-    ok_bool_true(Ret, "CcCopyWrite should succeed\n");
-    /* But there was no read triggered, as the page is already resident. */
-    ok_read_not_called();
+    if (IsNt5 || IsWin8OrNewer)
+    {
+        ok_bool_false(Ret, "CcCopyWrite should fail\n");
+        if (IsNt5)
+            ok_read_called(0, PAGE_SIZE);
+        else
+            ok_read_not_called();
+    }
+    else
+    {
+        ok_bool_true(Ret, "CcCopyWrite should succeed\n");
+        ok_read_not_called();
+    }
 
     /* But this one doesn't */
     Ret = 'x';
@@ -256,8 +275,10 @@ Test_CcCopyWrite(PFILE_OBJECT FileObject)
         Ret = CcCopyWrite(FileObject, &Offset, 10, FALSE, Buffer);
     KmtEndSeh(STATUS_SUCCESS);
     ok_bool_false(Ret, "CcCopyWrite should fail\n");
-    /* But it triggered a read anyway. */
-    ok_read_called(PAGE_SIZE, PAGE_SIZE);
+    if (IsNt5)
+        ok_read_called(PAGE_SIZE, PAGE_SIZE);
+    else
+        ok_read_not_called();
 
     /* Of course, waiting for it succeeds and triggers the read */
     Ret = 'x';
@@ -277,15 +298,14 @@ TestIrpHandler(
     _In_ PIRP Irp,
     _In_ PIO_STACK_LOCATION IoStack)
 {
-    LARGE_INTEGER Zero = RTL_CONSTANT_LARGE_INTEGER(0LL);
     NTSTATUS Status;
     PTEST_FCB Fcb;
-    CACHE_UNINITIALIZE_EVENT CacheUninitEvent;
 
     PAGED_CODE();
 
     DPRINT("IRP %x/%x\n", IoStack->MajorFunction, IoStack->MinorFunction);
     ASSERT(IoStack->MajorFunction == IRP_MJ_CLEANUP ||
+           IoStack->MajorFunction == IRP_MJ_CLOSE ||
            IoStack->MajorFunction == IRP_MJ_CREATE ||
            IoStack->MajorFunction == IRP_MJ_READ ||
            IoStack->MajorFunction == IRP_MJ_WRITE ||
@@ -298,11 +318,12 @@ TestIrpHandler(
     {
         ok_irql(PASSIVE_LEVEL);
 
-        if (IoStack->FileObject->FileName.Length >= 2 * sizeof(WCHAR))
-        {
-            TestDeviceObject = DeviceObject;
-            TestFileObject = IoStack->FileObject;
-        }
+        if (IoStack->FileObject->FileName.Length < 2 * sizeof(WCHAR))
+            goto CreateSuccess;
+
+        TestDeviceObject = DeviceObject;
+        TestFileObject = IoStack->FileObject;
+
         Fcb = ExAllocatePoolWithTag(NonPagedPool, sizeof(*Fcb), 'FwrI');
         RtlZeroMemory(Fcb, sizeof(*Fcb));
         ExInitializeFastMutex(&Fcb->HeaderMutex);
@@ -342,6 +363,7 @@ TestIrpHandler(
                              (PCC_FILE_SIZES)&Fcb->Header.AllocationSize,
                              FALSE, &Callbacks, NULL);
 
+CreateSuccess:
         Irp->IoStatus.Information = FILE_OPENED;
         Status = STATUS_SUCCESS;
     }
@@ -360,7 +382,7 @@ TestIrpHandler(
         ok_eq_pointer(IoStack->FileObject, TestFileObject);
 
         ok(BooleanFlagOn(Irp->Flags, IRP_NOCACHE), "IRP not coming from Cc!\n");
-        ok_irql(APC_LEVEL);
+        ok_irql(KmtCcPagingReadIrql());
         ok((Offset.QuadPart == 0 || Offset.QuadPart == 4096 || Offset.QuadPart == 8192), "Unexpected offset: %I64i\n", Offset.QuadPart);
         ok(Length % PAGE_SIZE == 0, "Length is not aligned: %I64i\n", Length);
 
@@ -478,12 +500,30 @@ TestIrpHandler(
     else if (IoStack->MajorFunction == IRP_MJ_CLEANUP)
     {
         ok_irql(PASSIVE_LEVEL);
-        KeInitializeEvent(&CacheUninitEvent.Event, NotificationEvent, FALSE);
-        CcUninitializeCacheMap(IoStack->FileObject, &Zero, &CacheUninitEvent);
-        KeWaitForSingleObject(&CacheUninitEvent.Event, Executive, KernelMode, FALSE, NULL);
         Fcb = IoStack->FileObject->FsContext;
-        ExFreePoolWithTag(Fcb, 'FwrI');
-        IoStack->FileObject->FsContext = NULL;
+        if (Fcb)
+        {
+            CcFlushCache(&Fcb->SectionObjectPointers, NULL, 0, NULL);
+            KmtCcUninitializeCacheMap(IoStack->FileObject, NULL);
+            CcPurgeCacheSection(&Fcb->SectionObjectPointers, NULL, 0, FALSE);
+        }
+        Status = STATUS_SUCCESS;
+    }
+    else if (IoStack->MajorFunction == IRP_MJ_CLOSE)
+    {
+        ok_irql(PASSIVE_LEVEL);
+        Fcb = IoStack->FileObject->FsContext;
+        if (Fcb)
+        {
+            ExFreePoolWithTag(Fcb, 'FwrI');
+            IoStack->FileObject->FsContext = NULL;
+            IoStack->FileObject->SectionObjectPointer = NULL;
+            if (TestFileObject == IoStack->FileObject)
+            {
+                TestFileObject = NULL;
+                TestDeviceObject = NULL;
+            }
+        }
         Status = STATUS_SUCCESS;
     }
 

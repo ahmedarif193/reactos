@@ -51,6 +51,8 @@ TestEntry(
              TESTENTRY_BUFFERED_IO_DEVICE |
              TESTENTRY_NO_READONLY_DEVICE;
 
+    KmtInitializeCcPagingReadIrql();
+
     KmtRegisterIrpHandler(IRP_MJ_READ, NULL, TestIrpHandler);
     KmtRegisterMessageHandler(0, NULL, TestMessageHandler);
 
@@ -476,19 +478,27 @@ CleanupTest(
     ULONG TestId,
     PDEVICE_OBJECT DeviceObject)
 {
-    LARGE_INTEGER Zero = RTL_CONSTANT_LARGE_INTEGER(0LL);
-    CACHE_UNINITIALIZE_EVENT CacheUninitEvent;
+    PTEST_FCB Fcb;
+    LARGE_INTEGER Zero;
 
     ok_eq_pointer(TestDeviceObject, DeviceObject);
     ok_eq_ulong(TestTestId, TestId);
+    Zero.QuadPart = 0;
 
     if (!skip(TestFileObject != NULL, "No test FO\n"))
     {
         if (CcIsFileCached(TestFileObject))
         {
-            KeInitializeEvent(&CacheUninitEvent.Event, NotificationEvent, FALSE);
-            CcUninitializeCacheMap(TestFileObject, &Zero, &CacheUninitEvent);
-            KeWaitForSingleObject(&CacheUninitEvent.Event, Executive, KernelMode, FALSE, NULL);
+            Fcb = TestFileObject->FsContext;
+            if (Fcb != NULL)
+            {
+                CcFlushCache(&Fcb->SectionObjectPointers, NULL, 0, NULL);
+            }
+            KmtCcUninitializeCacheMap(TestFileObject, &Zero);
+            if (Fcb != NULL)
+            {
+                CcPurgeCacheSection(&Fcb->SectionObjectPointers, NULL, 0, FALSE);
+            }
         }
 
         if (TestFileObject->FsContext != NULL)
@@ -576,7 +586,7 @@ TestIrpHandler(
 
         ok(FlagOn(Irp->Flags, IRP_NOCACHE), "Not coming from Cc\n");
 
-        ok_irql(APC_LEVEL);
+        ok_irql(KmtCcPagingReadIrql());
         ok((Offset.QuadPart % PAGE_SIZE == 0 || Offset.QuadPart == 0), "Offset is not aligned: %I64i\n", Offset.QuadPart);
         ok(Length % PAGE_SIZE == 0, "Length is not aligned: %I64i\n", Length);
 

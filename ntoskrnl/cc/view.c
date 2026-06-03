@@ -113,6 +113,48 @@ ULONG CcRosVacbGetRefCount_(PROS_VACB vacb, PCSTR file, INT line)
 
 /* FUNCTIONS *****************************************************************/
 
+static
+BOOLEAN
+CcRosVacbHasDirtyBcb(
+    _In_ PROS_VACB Vacb)
+{
+    PROS_SHARED_CACHE_MAP SharedCacheMap = Vacb->SharedCacheMap;
+    LONGLONG VacbStart = Vacb->FileOffset.QuadPart;
+    LONGLONG VacbEnd = VacbStart + VACB_MAPPING_GRANULARITY;
+    PLIST_ENTRY Entry;
+    KIRQL OldIrql;
+    BOOLEAN Dirty = FALSE;
+
+    KeAcquireSpinLock(&SharedCacheMap->BcbSpinLock, &OldIrql);
+
+    for (Entry = SharedCacheMap->BcbList.Flink;
+         Entry != &SharedCacheMap->BcbList;
+         Entry = Entry->Flink)
+    {
+        PINTERNAL_BCB Bcb;
+        LONGLONG BcbStart;
+        LONGLONG BcbEnd;
+
+        Bcb = CONTAINING_RECORD(Entry, INTERNAL_BCB, BcbEntry);
+        if (!Bcb->Dirty)
+        {
+            continue;
+        }
+
+        BcbStart = Bcb->PFCB.MappedFileOffset.QuadPart;
+        BcbEnd = BcbStart + Bcb->PFCB.MappedLength;
+        if ((BcbStart < VacbEnd) && (BcbEnd > VacbStart))
+        {
+            Dirty = TRUE;
+            break;
+        }
+    }
+
+    KeReleaseSpinLock(&SharedCacheMap->BcbSpinLock, OldIrql);
+
+    return Dirty;
+}
+
 VOID
 CcRosTraceCacheMap (
     PROS_SHARED_CACHE_MAP SharedCacheMap,
@@ -192,14 +234,6 @@ CcRosFlushVacb (
 quit:
     if (!NT_SUCCESS(Status))
         CcRosMarkDirtyVacb(Vacb);
-    else
-    {
-        /* Update VDL */
-        if (SharedCacheMap->ValidDataLength.QuadPart < (Vacb->FileOffset.QuadPart + VACB_MAPPING_GRANULARITY))
-        {
-            SharedCacheMap->ValidDataLength.QuadPart = Vacb->FileOffset.QuadPart + VACB_MAPPING_GRANULARITY;
-        }
-    }
 
     return Status;
 }
@@ -371,6 +405,18 @@ CcRosFlushDirtyPages (
 
         /* Do not lazy-write the same file concurrently. Fastfat ASSERTS on that */
         if (SharedCacheMap->Flags & SHARED_CACHE_MAP_IN_LAZYWRITE)
+        {
+            CcRosVacbDecRefCount(current);
+            continue;
+        }
+
+        /*
+         * A non-wait flush must not clean a VACB that overlaps a dirty BCB.
+         * File systems can use BCB lifetime to find modified metadata later
+         * with PIN_IF_BCB and write it through with their own dirty-range
+         * accounting.
+         */
+        if (!Wait && CcRosVacbHasDirtyBcb(current))
         {
             CcRosVacbDecRefCount(current);
             continue;
@@ -1182,8 +1228,19 @@ CcFlushCache (
         {
             IO_STATUS_BLOCK MmIosb;
             LARGE_INTEGER MmOffset;
+            BOOLEAN HaveLock = FALSE;
 
             MmOffset.QuadPart = FlushStart;
+
+            if (IoGetTopLevelIrp() != (PIRP)FSRTL_CACHE_TOP_LEVEL_IRP)
+            {
+                Status = FsRtlAcquireFileForCcFlushEx(SharedCacheMap->FileObject);
+                if (!NT_SUCCESS(Status))
+                {
+                    break;
+                }
+                HaveLock = TRUE;
+            }
 
             if (FlushEnd - (FlushEnd % VACB_MAPPING_GRANULARITY) <= FlushStart)
             {
@@ -1196,15 +1253,16 @@ CcFlushCache (
                 Status = MmFlushSegment(SectionObjectPointers, &MmOffset, MmLength, &MmIosb);
             }
 
+            if (HaveLock)
+                FsRtlReleaseFileForCcFlush(SharedCacheMap->FileObject);
+
             if (!NT_SUCCESS(Status))
+            {
                 break;
+            }
 
             if (IoStatus)
                 IoStatus->Information += MmIosb.Information;
-
-            /* Update VDL */
-            if (SharedCacheMap->ValidDataLength.QuadPart < FlushEnd)
-                SharedCacheMap->ValidDataLength.QuadPart = FlushEnd;
         }
 
         if (!NT_SUCCESS(RtlLongLongAdd(FlushStart, VACB_MAPPING_GRANULARITY, &FlushStart)))

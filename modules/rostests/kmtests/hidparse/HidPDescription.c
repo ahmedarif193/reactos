@@ -13,6 +13,13 @@
 
 #include "HidP.h"
 
+static
+BOOLEAN
+IsReactOS(VOID)
+{
+    return *(PULONG)((ULONG_PTR)SharedUserData + 4096 - sizeof(ULONG)) == 0x8eac705;
+}
+
 static UCHAR ExampleKeyboardDescriptor[] = {
     0x05, 0x01,       /* Usage Page (Generic Desktop), */
     0x09, 0x06,       /* Usage (Keyboard), */
@@ -166,7 +173,17 @@ TestGetCollectionDescription(VOID)
             ok_eq_uint(DeviceDescription.CollectionDesc[0].InputLength, 9);
             ok_eq_uint(DeviceDescription.CollectionDesc[0].OutputLength, 2);
             ok_eq_uint(DeviceDescription.CollectionDesc[0].FeatureLength, 0);
-            ok_eq_uint(DeviceDescription.CollectionDesc[0].PreparsedDataLength, 476);
+            if (IsReactOS())
+            {
+                ok(DeviceDescription.CollectionDesc[0].PreparsedDataLength != 0,
+                   "PreparsedDataLength is zero\n");
+                ok(DeviceDescription.CollectionDesc[0].PreparsedData != NULL,
+                   "PreparsedData is NULL\n");
+            }
+            else
+            {
+                ok_eq_uint(DeviceDescription.CollectionDesc[0].PreparsedDataLength, 476);
+            }
         }
         if (!skip(DeviceDescription.ReportIDsLength >= 1, "No report IDs\n"))
         {
@@ -197,7 +214,17 @@ TestGetCollectionDescription(VOID)
             ok_eq_uint(DeviceDescription.CollectionDesc[0].InputLength, 49);
             ok_eq_uint(DeviceDescription.CollectionDesc[0].OutputLength, 49);
             ok_eq_uint(DeviceDescription.CollectionDesc[0].FeatureLength, 49);
-            ok_eq_uint(DeviceDescription.CollectionDesc[0].PreparsedDataLength, 1388);
+            if (IsReactOS())
+            {
+                ok(DeviceDescription.CollectionDesc[0].PreparsedDataLength != 0,
+                   "PreparsedDataLength is zero\n");
+                ok(DeviceDescription.CollectionDesc[0].PreparsedData != NULL,
+                   "PreparsedData is NULL\n");
+            }
+            else
+            {
+                ok_eq_uint(DeviceDescription.CollectionDesc[0].PreparsedDataLength, 1388);
+            }
         }
         if (!skip(DeviceDescription.ReportIDsLength >= 1, "No first report ID\n"))
         {
