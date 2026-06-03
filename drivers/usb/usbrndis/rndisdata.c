@@ -463,8 +463,6 @@ RndisIndicateReceiveNblEx(
     Adapter->RxOkCount++;
     Adapter->RxBytes += EthernetLength;
 
-    DPRINT("USBRNDIS: Indicating RX NBL (%lu bytes)\n", EthernetLength);
-
     /* Indicate to NDIS */
     NdisMIndicateReceiveNetBufferLists(
         Adapter->MiniportAdapterHandle,
@@ -698,8 +696,6 @@ RndisProcessReceivedPacket(
             Adapter->RxErrorCount++;
             return;
         }
-
-        DPRINT("USBRNDIS: Received CDC-ECM Ethernet frame (%u bytes)\n", EthernetLength);
     }
     else
     {
@@ -1111,7 +1107,6 @@ RndisSendNetBufferListsInternal(
             /* CDC-ECM: Copy Ethernet frame directly */
             NdisMoveMemory(Adapter->TxHot.TxBuffer, VirtualAddress, DataLength);
             TotalLength = DataLength;
-            DPRINT("USBRNDIS: CDC-ECM TX frame (%u bytes)\n", TotalLength);
         }
         else if (Adapter->IsCdcNcm)
         {
