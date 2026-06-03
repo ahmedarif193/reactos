@@ -20,6 +20,7 @@ LIST_ENTRY NetTableListHead;
 KSPIN_LOCK NetTableListLock;
 BOOLEAN IPInitialized = FALSE;
 BOOLEAN IpWorkItemQueued = FALSE;
+static ULONG NextNteContext = 0x100;
 /* Work around calling timer at Dpc level */
 
 IP_PROTOCOL_HANDLER ProtocolTable[IP_PROTOCOL_TABLE_SIZE];
@@ -31,6 +32,249 @@ TCPRegisterInterface(PIP_INTERFACE IF);
 
 VOID
 TCPUnregisterInterface(PIP_INTERFACE IF);
+
+static ULONG
+IPAllocateNteContext(VOID)
+{
+    ULONG Context;
+    BOOLEAN InUse;
+    KIRQL OldIrql;
+    PLIST_ENTRY CurrentEntry;
+    PIP_NTE CurrentNte;
+    IF_LIST_ITER(IF);
+
+    do {
+        Context = NextNteContext++;
+        if (NextNteContext == 0 || NextNteContext > 0xffff)
+            NextNteContext = 0x100;
+
+        InUse = FALSE;
+
+        TcpipAcquireSpinLock(&InterfaceListLock, &OldIrql);
+
+        ForEachInterface(IF) {
+            if (IF->NteContext == Context) {
+                InUse = TRUE;
+                break;
+            }
+        } EndFor(IF);
+
+        TcpipReleaseSpinLock(&InterfaceListLock, OldIrql);
+
+        if (InUse)
+            continue;
+
+        TcpipAcquireSpinLock(&NetTableListLock, &OldIrql);
+
+        CurrentEntry = NetTableListHead.Flink;
+        while (CurrentEntry != &NetTableListHead) {
+            CurrentNte = CONTAINING_RECORD(CurrentEntry, IP_NTE, ListEntry);
+
+            if (CurrentNte->Context == Context) {
+                InUse = TRUE;
+                break;
+            }
+
+            CurrentEntry = CurrentEntry->Flink;
+        }
+
+        TcpipReleaseSpinLock(&NetTableListLock, OldIrql);
+    } while (InUse);
+
+    return Context;
+}
+
+static VOID
+IPSetPrimaryAddress(
+    PIP_INTERFACE IF,
+    PIP_ADDRESS Address,
+    PIP_ADDRESS Netmask,
+    ULONG NteContext)
+{
+    IF->Unicast = *Address;
+    IF->Netmask = *Netmask;
+    IF->Broadcast.Type = IP_ADDRESS_V4;
+    IF->Broadcast.Address.IPv4Address =
+        Address->Address.IPv4Address | ~Netmask->Address.IPv4Address;
+    IF->NteContext = NteContext;
+}
+
+static VOID
+IPClearPrimaryAddress(
+    PIP_INTERFACE IF)
+{
+    IP_ADDRESS DefaultAddress;
+
+    AddrInitIPv4(&DefaultAddress, 0);
+
+    IF->Unicast = DefaultAddress;
+    IF->Netmask = DefaultAddress;
+    IF->Broadcast = DefaultAddress;
+    IF->NteContext = 0;
+}
+
+static NTSTATUS
+IPAddInterfaceRouteForAddress(
+    PIP_INTERFACE IF,
+    PIP_ADDRESS Address,
+    PIP_ADDRESS Netmask)
+{
+    PNEIGHBOR_CACHE_ENTRY NCE;
+    IP_ADDRESS NetworkAddress;
+
+    if (AddrIsUnspecified(Address) || AddrIsUnspecified(Netmask))
+        return STATUS_INVALID_PARAMETER;
+
+    /* Add a permanent neighbor for this NTE */
+    NCE = NBAddNeighbor(IF, Address,
+                        IF->Address, IF->AddressLength,
+                        NUD_PERMANENT, 0);
+    if (!NCE) {
+        TI_DbgPrint(MIN_TRACE, ("Could not create NCE.\n"));
+        return STATUS_INSUFFICIENT_RESOURCES;
+    }
+
+    AddrWidenAddress(&NetworkAddress, Address, Netmask);
+
+    if (!RouterAddRoute(&NetworkAddress, Netmask, NCE, 1)) {
+        TI_DbgPrint(MIN_TRACE, ("Could not add route due to insufficient resources.\n"));
+        NBRemoveNeighbor(NCE);
+        return STATUS_INSUFFICIENT_RESOURCES;
+    }
+
+    /* Send a gratuitous ARP packet to update the route caches of
+     * other computers */
+    if (IF != Loopback)
+        ARPTransmit(Address, NULL, IF);
+
+    return STATUS_SUCCESS;
+}
+
+static VOID
+IPRemoveInterfaceRouteForAddress(
+    PIP_INTERFACE IF,
+    PIP_ADDRESS Address,
+    PIP_ADDRESS Netmask)
+{
+    PNEIGHBOR_CACHE_ENTRY NCE;
+    IP_ADDRESS GeneralRoute;
+
+    NCE = NBLocateNeighbor(Address, IF);
+    if (NCE)
+    {
+       TI_DbgPrint(DEBUG_IP,("Removing interface Addr %s\n", A2S(Address)));
+       TI_DbgPrint(DEBUG_IP,("                   Mask %s\n", A2S(Netmask)));
+
+       AddrWidenAddress(&GeneralRoute, Address, Netmask);
+
+       RouterRemoveRoute(&GeneralRoute, Address);
+
+       NBRemoveNeighbor(NCE);
+    }
+}
+
+static PIP_INTERFACE
+IPLocatePrimaryNte(
+    ULONG NteContext)
+{
+    KIRQL OldIrql;
+    PIP_INTERFACE RetIF = NULL;
+    IF_LIST_ITER(IF);
+
+    if (NteContext == 0)
+        return NULL;
+
+    TcpipAcquireSpinLock(&InterfaceListLock, &OldIrql);
+
+    ForEachInterface(IF) {
+        if (IF->NteContext == NteContext) {
+            RetIF = IF;
+            break;
+        }
+    } EndFor(IF);
+
+    TcpipReleaseSpinLock(&InterfaceListLock, OldIrql);
+
+    return RetIF;
+}
+
+static PIP_NTE
+IPDetachFirstSecondaryNte(
+    PIP_INTERFACE IF)
+{
+    KIRQL OldIrql;
+    PLIST_ENTRY CurrentEntry;
+    PIP_NTE CurrentNte = NULL;
+
+    TcpipAcquireSpinLock(&NetTableListLock, &OldIrql);
+
+    CurrentEntry = NetTableListHead.Flink;
+    while (CurrentEntry != &NetTableListHead) {
+        CurrentNte = CONTAINING_RECORD(CurrentEntry, IP_NTE, ListEntry);
+
+        if (CurrentNte->Interface == IF) {
+            RemoveEntryList(&CurrentNte->ListEntry);
+            break;
+        }
+
+        CurrentNte = NULL;
+        CurrentEntry = CurrentEntry->Flink;
+    }
+
+    TcpipReleaseSpinLock(&NetTableListLock, OldIrql);
+
+    return CurrentNte;
+}
+
+static PIP_NTE
+IPDetachSecondaryNte(
+    ULONG NteContext)
+{
+    KIRQL OldIrql;
+    PLIST_ENTRY CurrentEntry;
+    PIP_NTE CurrentNte = NULL;
+
+    TcpipAcquireSpinLock(&NetTableListLock, &OldIrql);
+
+    CurrentEntry = NetTableListHead.Flink;
+    while (CurrentEntry != &NetTableListHead) {
+        CurrentNte = CONTAINING_RECORD(CurrentEntry, IP_NTE, ListEntry);
+
+        if (CurrentNte->Context == NteContext) {
+            RemoveEntryList(&CurrentNte->ListEntry);
+            break;
+        }
+
+        CurrentNte = NULL;
+        CurrentEntry = CurrentEntry->Flink;
+    }
+
+    TcpipReleaseSpinLock(&NetTableListLock, OldIrql);
+
+    return CurrentNte;
+}
+
+static BOOLEAN
+IPPromoteSecondaryAddress(
+    PIP_INTERFACE IF)
+{
+    PIP_NTE Nte;
+
+    Nte = IPDetachFirstSecondaryNte(IF);
+    if (!Nte)
+        return FALSE;
+
+    IF->Unicast = Nte->Unicast;
+    IF->Netmask = Nte->Netmask;
+    IF->Broadcast = Nte->Broadcast;
+    IF->NteContext = Nte->Context;
+
+    ExFreePoolWithTag(Nte, IP_ADDRESS_TAG);
+
+    TCPUpdateInterfaceIPInformation(IF);
+
+    return TRUE;
+}
 
 VOID DeinitializePacket(
     PVOID Object)
@@ -259,31 +503,130 @@ VOID IPDestroyInterface(
     ExFreePoolWithTag(IF, IP_INTERFACE_TAG);
 }
 
-VOID IPAddInterfaceRoute( PIP_INTERFACE IF ) {
-    PNEIGHBOR_CACHE_ENTRY NCE;
-    IP_ADDRESS NetworkAddress;
+NTSTATUS
+IPAddInterfaceAddress(
+    PIP_INTERFACE IF,
+    PIP_ADDRESS Address,
+    PIP_ADDRESS Netmask,
+    PULONG NteContext)
+{
+    KIRQL OldIrql;
+    PIP_NTE Nte;
+    NTSTATUS Status;
+    ULONG Context;
 
-    /* Add a permanent neighbor for this NTE */
-    NCE = NBAddNeighbor(IF, &IF->Unicast,
-			IF->Address, IF->AddressLength,
-			NUD_PERMANENT, 0);
-    if (!NCE) {
-	TI_DbgPrint(MIN_TRACE, ("Could not create NCE.\n"));
-        return;
+    if (IPLocalUnicastAddressExists(Address))
+        return STATUS_DUPLICATE_OBJECTID;
+
+    Context = IPAllocateNteContext();
+
+    if (AddrIsUnspecified(&IF->Unicast)) {
+        IPSetPrimaryAddress(IF, Address, Netmask, Context);
+
+        Status = IPAddInterfaceRouteForAddress(IF, &IF->Unicast, &IF->Netmask);
+        if (!NT_SUCCESS(Status)) {
+            IPClearPrimaryAddress(IF);
+            return Status;
+        }
+
+        TCPUpdateInterfaceIPInformation(IF);
+        *NteContext = Context;
+        return STATUS_SUCCESS;
     }
 
-    AddrWidenAddress( &NetworkAddress, &IF->Unicast, &IF->Netmask );
+    Nte = ExAllocatePoolWithTag(NonPagedPool, sizeof(IP_NTE), IP_ADDRESS_TAG);
+    if (!Nte)
+        return STATUS_INSUFFICIENT_RESOURCES;
 
-    if (!RouterAddRoute(&NetworkAddress, &IF->Netmask, NCE, 1)) {
-	TI_DbgPrint(MIN_TRACE, ("Could not add route due to insufficient resources.\n"));
+    Nte->Interface = IF;
+    Nte->Context = Context;
+    Nte->Unicast = *Address;
+    Nte->Netmask = *Netmask;
+    Nte->Broadcast.Type = IP_ADDRESS_V4;
+    Nte->Broadcast.Address.IPv4Address =
+        Address->Address.IPv4Address | ~Netmask->Address.IPv4Address;
+
+    TcpipAcquireSpinLock(&NetTableListLock, &OldIrql);
+    InsertTailList(&NetTableListHead, &Nte->ListEntry);
+    TcpipReleaseSpinLock(&NetTableListLock, OldIrql);
+
+    Status = IPAddInterfaceRouteForAddress(IF, &Nte->Unicast, &Nte->Netmask);
+    if (!NT_SUCCESS(Status)) {
+        TcpipAcquireSpinLock(&NetTableListLock, &OldIrql);
+        RemoveEntryList(&Nte->ListEntry);
+        TcpipReleaseSpinLock(&NetTableListLock, OldIrql);
+        ExFreePoolWithTag(Nte, IP_ADDRESS_TAG);
+        return Status;
     }
 
-    /* Send a gratuitous ARP packet to update the route caches of
-     * other computers */
-    if (IF != Loopback)
-       ARPTransmit(NULL, NULL, IF);
+    *NteContext = Context;
+    return STATUS_SUCCESS;
+}
+
+NTSTATUS
+IPRemoveInterfaceAddress(
+    ULONG NteContext)
+{
+    PIP_INTERFACE IF;
+    PIP_NTE Nte;
+
+    IF = IPLocatePrimaryNte(NteContext);
+    if (IF) {
+        IPRemoveInterfaceRoute(IF);
+
+        if (!IPPromoteSecondaryAddress(IF)) {
+            IPClearPrimaryAddress(IF);
+            TCPUpdateInterfaceIPInformation(IF);
+        }
+
+        return STATUS_SUCCESS;
+    }
+
+    Nte = IPDetachSecondaryNte(NteContext);
+    if (!Nte)
+        return STATUS_UNSUCCESSFUL;
+
+    IPRemoveInterfaceRouteForAddress(Nte->Interface, &Nte->Unicast, &Nte->Netmask);
+    ExFreePoolWithTag(Nte, IP_ADDRESS_TAG);
+
+    return STATUS_SUCCESS;
+}
+
+VOID
+IPRemoveInterfaceAddresses(
+    PIP_INTERFACE IF)
+{
+    PIP_NTE Nte;
+
+    while ((Nte = IPDetachFirstSecondaryNte(IF)) != NULL) {
+        IPRemoveInterfaceRouteForAddress(IF, &Nte->Unicast, &Nte->Netmask);
+        ExFreePoolWithTag(Nte, IP_ADDRESS_TAG);
+    }
+
+    if (!AddrIsUnspecified(&IF->Unicast))
+        IPRemoveInterfaceRoute(IF);
+
+    IPClearPrimaryAddress(IF);
 
     TCPUpdateInterfaceIPInformation(IF);
+}
+
+VOID IPAddInterfaceRoute( PIP_INTERFACE IF ) {
+    NTSTATUS Status;
+
+    IF->Broadcast.Type = IP_ADDRESS_V4;
+    IF->Broadcast.Address.IPv4Address =
+        IF->Unicast.Address.IPv4Address |
+        ~IF->Netmask.Address.IPv4Address;
+
+    if (IF->NteContext == 0)
+        IF->NteContext = IPAllocateNteContext();
+
+    Status = IPAddInterfaceRouteForAddress(IF, &IF->Unicast, &IF->Netmask);
+    if (NT_SUCCESS(Status))
+        TCPUpdateInterfaceIPInformation(IF);
+    else
+        IF->NteContext = 0;
 }
 
 BOOLEAN IPRegisterInterface(
@@ -329,21 +672,8 @@ BOOLEAN IPRegisterInterface(
 }
 
 VOID IPRemoveInterfaceRoute( PIP_INTERFACE IF ) {
-    PNEIGHBOR_CACHE_ENTRY NCE;
-    IP_ADDRESS GeneralRoute;
-
-    NCE = NBLocateNeighbor(&IF->Unicast, IF);
-    if (NCE)
-    {
-       TI_DbgPrint(DEBUG_IP,("Removing interface Addr %s\n", A2S(&IF->Unicast)));
-       TI_DbgPrint(DEBUG_IP,("                   Mask %s\n", A2S(&IF->Netmask)));
-
-       AddrWidenAddress(&GeneralRoute,&IF->Unicast,&IF->Netmask);
-
-       RouterRemoveRoute(&GeneralRoute, &IF->Unicast);
-
-       NBRemoveNeighbor(NCE);
-    }
+    if (!AddrIsUnspecified(&IF->Unicast))
+        IPRemoveInterfaceRouteForAddress(IF, &IF->Unicast, &IF->Netmask);
 }
 
 VOID IPUnregisterInterface(
@@ -358,7 +688,7 @@ VOID IPUnregisterInterface(
 
     TI_DbgPrint(DEBUG_IP, ("Called. IF (0x%X).\n", IF));
 
-    IPRemoveInterfaceRoute( IF );
+    IPRemoveInterfaceAddresses( IF );
 
     TcpipAcquireSpinLock(&InterfaceListLock, &OldIrql3);
     RemoveEntryList(&IF->ListEntry);
@@ -459,6 +789,7 @@ NTSTATUS IPStartup(PUNICODE_STRING RegistryPath)
     /* Initialize NTE list and protecting lock */
     InitializeListHead(&NetTableListHead);
     TcpipInitializeSpinLock(&NetTableListLock);
+    NextNteContext = 0x100;
 
     /* Initialize reassembly list and protecting lock */
     InitializeListHead(&ReassemblyListHead);

@@ -102,6 +102,9 @@ TDI_STATUS InfoTdiQueryGetAddrTable(TDIEntityID ID,
     KIRQL OldIrql;
     PIPADDR_ENTRY IPEntry;
     PIP_INTERFACE CurrentIF;
+    UINT AddrCount;
+    UINT AddrCopied;
+    UINT Size;
     UINT i;
 
     TI_DbgPrint(DEBUG_INFO, ("Called.\n"));
@@ -122,29 +125,27 @@ TDI_STATUS InfoTdiQueryGetAddrTable(TDIEntityID ID,
         return TDI_INVALID_PARAMETER;
     }
 
-    IPEntry = ExAllocatePoolWithTag(NonPagedPool, sizeof(IPADDR_ENTRY), IP_ADDRESS_TAG);
-    if (!IPEntry)
-    {
-        TcpipReleaseSpinLock(&EntityListLock, OldIrql);
-        return TDI_NO_RESOURCES;
-    }
-
     CurrentIF = EntityList[i].context;
-
-    IPEntry->Index = CurrentIF->Index;
-    GetInterfaceIPv4Address(CurrentIF,
-			    ADE_UNICAST,
-			    &IPEntry->Addr);
-    GetInterfaceIPv4Address(CurrentIF,
-			    ADE_ADDRMASK,
-			    &IPEntry->Mask);
-    GetInterfaceIPv4Address(CurrentIF,
-			    ADE_BROADCAST,
-			    &IPEntry->BcastAddr);
 
     TcpipReleaseSpinLock(&EntityListLock, OldIrql);
 
-    InfoCopyOut((PCHAR)IPEntry, sizeof(IPADDR_ENTRY),
+    AddrCount = CountInterfaceAddresses(CurrentIF);
+    Size = AddrCount * sizeof(IPADDR_ENTRY);
+
+    if (AddrCount == 0)
+        return InfoCopyOut(NULL, 0, NULL, BufferSize);
+
+    IPEntry = ExAllocatePoolWithTag(NonPagedPool, Size, IP_ADDRESS_TAG);
+    if (!IPEntry)
+    {
+        return TDI_NO_RESOURCES;
+    }
+
+    RtlZeroMemory(IPEntry, Size);
+    AddrCopied = CopyInterfaceAddressTable(CurrentIF, IPEntry, AddrCount);
+    Size = AddrCopied * sizeof(IPADDR_ENTRY);
+
+    InfoCopyOut((PCHAR)IPEntry, Size,
 		Buffer, BufferSize);
 
     ExFreePoolWithTag(IPEntry, IP_ADDRESS_TAG);
@@ -166,7 +167,7 @@ TDI_STATUS InfoTdiQueryGetIPSnmpInfo( TDIEntityID ID,
     RtlZeroMemory(&SnmpInfo, sizeof(SnmpInfo));
 
     SnmpInfo.ipsi_numif = IfCount;
-    SnmpInfo.ipsi_numaddr = 1;
+    SnmpInfo.ipsi_numaddr = CountInterfaceAddresses(IF);
     SnmpInfo.ipsi_numroutes = RouteCount;
 
     Status = InfoCopyOut( (PCHAR)&SnmpInfo, sizeof(SnmpInfo),

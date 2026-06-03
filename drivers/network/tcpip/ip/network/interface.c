@@ -16,6 +16,49 @@
 
 ULONG NextDefaultAdapter = 0;
 
+static
+BOOLEAN
+NteMatchesAddress(
+    PIP_NTE Nte,
+    PIP_ADDRESS Address,
+    BOOLEAN MatchUnicast,
+    BOOLEAN MatchBroadcast)
+{
+    return (MatchUnicast && AddrIsEqual(&Nte->Unicast, Address)) ||
+           (MatchBroadcast && AddrIsEqual(&Nte->Broadcast, Address));
+}
+
+static
+PIP_INTERFACE
+LocateSecondaryAddress(
+    PIP_ADDRESS Address,
+    BOOLEAN MatchUnicast,
+    BOOLEAN MatchBroadcast)
+{
+    KIRQL OldIrql;
+    PLIST_ENTRY CurrentEntry;
+    PIP_NTE CurrentNte;
+    PIP_INTERFACE Interface = NULL;
+
+    TcpipAcquireSpinLock(&NetTableListLock, &OldIrql);
+
+    CurrentEntry = NetTableListHead.Flink;
+    while (CurrentEntry != &NetTableListHead) {
+        CurrentNte = CONTAINING_RECORD(CurrentEntry, IP_NTE, ListEntry);
+
+        if (NteMatchesAddress(CurrentNte, Address, MatchUnicast, MatchBroadcast)) {
+            Interface = CurrentNte->Interface;
+            break;
+        }
+
+        CurrentEntry = CurrentEntry->Flink;
+    }
+
+    TcpipReleaseSpinLock(&NetTableListLock, OldIrql);
+
+    return Interface;
+}
+
 NTSTATUS GetInterfaceIPv4Address( PIP_INTERFACE Interface,
 				  ULONG TargetType,
 				  PULONG Address ) {
@@ -43,6 +86,109 @@ NTSTATUS GetInterfaceIPv4Address( PIP_INTERFACE Interface,
     return STATUS_SUCCESS;
 }
 
+BOOLEAN
+IPLocalUnicastAddressExists(
+    PIP_ADDRESS Address)
+{
+    KIRQL OldIrql;
+    BOOLEAN Found = FALSE;
+    IF_LIST_ITER(CurrentIF);
+
+    if (AddrIsUnspecified(Address))
+        return TRUE;
+
+    TcpipAcquireSpinLock(&InterfaceListLock, &OldIrql);
+
+    ForEachInterface(CurrentIF) {
+        if (AddrIsEqual(&CurrentIF->Unicast, Address)) {
+            Found = TRUE;
+            break;
+        }
+    } EndFor(CurrentIF);
+
+    TcpipReleaseSpinLock(&InterfaceListLock, OldIrql);
+
+    if (Found)
+        return TRUE;
+
+    return LocateSecondaryAddress(Address, TRUE, FALSE) != NULL;
+}
+
+BOOLEAN
+IPInterfaceHasUnicastAddress(
+    PIP_INTERFACE Interface,
+    PIP_ADDRESS Address)
+{
+    KIRQL OldIrql;
+    PLIST_ENTRY CurrentEntry;
+    PIP_NTE CurrentNte;
+    BOOLEAN Found = FALSE;
+
+    if (AddrIsEqual(&Interface->Unicast, Address))
+        return TRUE;
+
+    TcpipAcquireSpinLock(&NetTableListLock, &OldIrql);
+
+    CurrentEntry = NetTableListHead.Flink;
+    while (CurrentEntry != &NetTableListHead) {
+        CurrentNte = CONTAINING_RECORD(CurrentEntry, IP_NTE, ListEntry);
+
+        if (CurrentNte->Interface == Interface &&
+            AddrIsEqual(&CurrentNte->Unicast, Address)) {
+            Found = TRUE;
+            break;
+        }
+
+        CurrentEntry = CurrentEntry->Flink;
+    }
+
+    TcpipReleaseSpinLock(&NetTableListLock, OldIrql);
+
+    return Found;
+}
+
+BOOLEAN
+IPInterfaceHasBroadcastAddress(
+    PIP_INTERFACE Interface,
+    PIP_ADDRESS Address)
+{
+    KIRQL OldIrql;
+    PLIST_ENTRY CurrentEntry;
+    PIP_NTE CurrentNte;
+    BOOLEAN Found = FALSE;
+
+    if (AddrIsEqual(&Interface->Broadcast, Address))
+        return TRUE;
+
+    TcpipAcquireSpinLock(&NetTableListLock, &OldIrql);
+
+    CurrentEntry = NetTableListHead.Flink;
+    while (CurrentEntry != &NetTableListHead) {
+        CurrentNte = CONTAINING_RECORD(CurrentEntry, IP_NTE, ListEntry);
+
+        if (CurrentNte->Interface == Interface &&
+            AddrIsEqual(&CurrentNte->Broadcast, Address)) {
+            Found = TRUE;
+            break;
+        }
+
+        CurrentEntry = CurrentEntry->Flink;
+    }
+
+    TcpipReleaseSpinLock(&NetTableListLock, OldIrql);
+
+    return Found;
+}
+
+BOOLEAN
+IPInterfaceHasAddress(
+    PIP_INTERFACE Interface,
+    PIP_ADDRESS Address)
+{
+    return IPInterfaceHasUnicastAddress(Interface, Address) ||
+           IPInterfaceHasBroadcastAddress(Interface, Address);
+}
+
 UINT CountInterfaces() {
     ULONG Count = 0;
     KIRQL OldIrql;
@@ -57,6 +203,77 @@ UINT CountInterfaces() {
     TcpipReleaseSpinLock(&InterfaceListLock, OldIrql);
 
     return Count;
+}
+
+UINT CountInterfaceAddresses( PIP_INTERFACE Interface ) {
+    UINT Count = 0;
+    KIRQL OldIrql;
+    PLIST_ENTRY CurrentEntry;
+    PIP_NTE CurrentNte;
+
+    if (!AddrIsUnspecified(&Interface->Unicast))
+        Count++;
+
+    TcpipAcquireSpinLock(&NetTableListLock, &OldIrql);
+
+    CurrentEntry = NetTableListHead.Flink;
+    while (CurrentEntry != &NetTableListHead) {
+        CurrentNte = CONTAINING_RECORD(CurrentEntry, IP_NTE, ListEntry);
+
+        if (CurrentNte->Interface == Interface)
+            Count++;
+
+        CurrentEntry = CurrentEntry->Flink;
+    }
+
+    TcpipReleaseSpinLock(&NetTableListLock, OldIrql);
+
+    return Count;
+}
+
+UINT
+CopyInterfaceAddressTable(
+    PIP_INTERFACE Interface,
+    PIPADDR_ENTRY AddrTable,
+    UINT Count)
+{
+    UINT Copied = 0;
+    KIRQL OldIrql;
+    PLIST_ENTRY CurrentEntry;
+    PIP_NTE CurrentNte;
+
+    if (!AddrIsUnspecified(&Interface->Unicast) && Copied < Count) {
+        AddrTable[Copied].Index = Interface->Index;
+        AddrTable[Copied].Addr = Interface->Unicast.Address.IPv4Address;
+        AddrTable[Copied].Mask = Interface->Netmask.Address.IPv4Address;
+        AddrTable[Copied].BcastAddr = Interface->Broadcast.Address.IPv4Address;
+        AddrTable[Copied].ReasmSize = 65535;
+        AddrTable[Copied].Context = (USHORT)Interface->NteContext;
+        Copied++;
+    }
+
+    TcpipAcquireSpinLock(&NetTableListLock, &OldIrql);
+
+    CurrentEntry = NetTableListHead.Flink;
+    while (CurrentEntry != &NetTableListHead && Copied < Count) {
+        CurrentNte = CONTAINING_RECORD(CurrentEntry, IP_NTE, ListEntry);
+
+        if (CurrentNte->Interface == Interface) {
+            AddrTable[Copied].Index = Interface->Index;
+            AddrTable[Copied].Addr = CurrentNte->Unicast.Address.IPv4Address;
+            AddrTable[Copied].Mask = CurrentNte->Netmask.Address.IPv4Address;
+            AddrTable[Copied].BcastAddr = CurrentNte->Broadcast.Address.IPv4Address;
+            AddrTable[Copied].ReasmSize = 65535;
+            AddrTable[Copied].Context = (USHORT)CurrentNte->Context;
+            Copied++;
+        }
+
+        CurrentEntry = CurrentEntry->Flink;
+    }
+
+    TcpipReleaseSpinLock(&NetTableListLock, OldIrql);
+
+    return Copied;
 }
 
 NTSTATUS GetInterfaceSpeed( PIP_INTERFACE Interface, PUINT Speed ) {
@@ -105,7 +322,10 @@ PIP_INTERFACE AddrLocateInterface(
 
     TcpipReleaseSpinLock(&InterfaceListLock, OldIrql);
 
-    return RetIF;
+    if (RetIF)
+        return RetIF;
+
+    return LocateSecondaryAddress(MatchAddress, TRUE, TRUE);
 }
 
 BOOLEAN HasPrefix(
@@ -240,6 +460,8 @@ PIP_INTERFACE FindOnLinkInterface(PIP_ADDRESS Address)
  */
 {
     KIRQL OldIrql;
+    PLIST_ENTRY CurrentEntry;
+    PIP_NTE CurrentNte;
     IF_LIST_ITER(CurrentIF);
 
     TI_DbgPrint(DEBUG_ROUTER, ("Called. Address (0x%X)\n", Address));
@@ -260,6 +482,24 @@ PIP_INTERFACE FindOnLinkInterface(PIP_ADDRESS Address)
     } EndFor(CurrentIF);
 
     TcpipReleaseSpinLock(&InterfaceListLock, OldIrql);
+
+    TcpipAcquireSpinLock(&NetTableListLock, &OldIrql);
+
+    CurrentEntry = NetTableListHead.Flink;
+    while (CurrentEntry != &NetTableListHead) {
+        CurrentNte = CONTAINING_RECORD(CurrentEntry, IP_NTE, ListEntry);
+
+        if (HasLoopbackPrefix(Address, &CurrentNte->Unicast) ||
+            HasPrefix(Address, &CurrentNte->Unicast, AddrCountPrefixBits(&CurrentNte->Netmask)))
+        {
+            TcpipReleaseSpinLock(&NetTableListLock, OldIrql);
+            return CurrentNte->Interface;
+        }
+
+        CurrentEntry = CurrentEntry->Flink;
+    }
+
+    TcpipReleaseSpinLock(&NetTableListLock, OldIrql);
 
     return NULL;
 }

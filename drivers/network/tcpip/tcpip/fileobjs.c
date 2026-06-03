@@ -66,8 +66,8 @@ BOOLEAN AddrIsBroadcastMatch(
 
     ForEachInterface(IF) {
         if ((AddrIsUnspecified(UnicastAddress) ||
-             AddrIsEqual(&IF->Unicast, UnicastAddress)) &&
-            (AddrIsEqual(&IF->Broadcast, BroadcastAddress)))
+             IPInterfaceHasUnicastAddress(IF, UnicastAddress)) &&
+            IPInterfaceHasBroadcastAddress(IF, BroadcastAddress))
             return TRUE;
     } EndFor(IF);
 

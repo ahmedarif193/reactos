@@ -694,31 +694,39 @@ DWORD WINAPI GetAdaptersInfo(PIP_ADAPTER_INFO pAdapterInfo, PULONG pOutBufLen)
     DWORD numNonLoopbackInterfaces = getNumNonLoopbackInterfaces();
 
     if (numNonLoopbackInterfaces > 0) {
-      /* this calculation assumes only one address in the IP_ADDR_STRING lists.
-         that's okay, because:
-         - we don't get multiple addresses per adapter anyway
-         - we don't know about per-adapter gateways
-         - DHCP and WINS servers can have max one entry per list */
-      ULONG size = sizeof(IP_ADAPTER_INFO) * numNonLoopbackInterfaces;
+      InterfaceIndexTable *table = getNonLoopbackInterfaceIndexTable();
 
-      if (!pAdapterInfo || *pOutBufLen < size) {
-        *pOutBufLen = size;
-        ret = ERROR_BUFFER_OVERFLOW;
-      }
-      else {
-        InterfaceIndexTable *table = getNonLoopbackInterfaceIndexTable();
+      if (table) {
+        PMIB_IPADDRTABLE ipAddrTable = NULL;
+        DWORD extraAddrStrings = 0, ipAddrRet, ndx;
+        ULONG size;
 
-        if (table) {
-          size = sizeof(IP_ADAPTER_INFO) * table->numIndexes;
-          if (*pOutBufLen < size) {
+        ipAddrRet = AllocateAndGetIpAddrTableFromStack(&ipAddrTable, FALSE, GetProcessHeap(), 0);
+        if (ipAddrRet != NO_ERROR)
+          ipAddrTable = NULL;
+
+        for (ndx = 0; ipAddrTable && ndx < table->numIndexes; ndx++) {
+          DWORD addrCount = 0, addrIndex;
+
+          for (addrIndex = 0; addrIndex < ipAddrTable->dwNumEntries; addrIndex++)
+            if (ipAddrTable->table[addrIndex].dwIndex == table->indexes[ndx])
+              addrCount++;
+
+          if (addrCount > 1)
+            extraAddrStrings += addrCount - 1;
+        }
+
+        size = sizeof(IP_ADAPTER_INFO) * table->numIndexes +
+               sizeof(IP_ADDR_STRING) * extraAddrStrings;
+        if (!pAdapterInfo || *pOutBufLen < size) {
             *pOutBufLen = size;
-            ret = ERROR_INSUFFICIENT_BUFFER;
-          }
-          else {
-            DWORD ndx;
+            ret = pAdapterInfo ? ERROR_INSUFFICIENT_BUFFER : ERROR_BUFFER_OVERFLOW;
+        }
+        else {
             HKEY hKey;
             BOOL winsEnabled = FALSE;
             IP_ADDRESS_STRING primaryWINS, secondaryWINS;
+            PIP_ADDR_STRING nextIpAddress = (PIP_ADDR_STRING)&pAdapterInfo[table->numIndexes];
 
             memset(pAdapterInfo, 0, size);
             /* @@ Wine registry key: HKCU\Software\Wine\Network */
@@ -740,9 +748,13 @@ DWORD WINAPI GetAdaptersInfo(PIP_ADAPTER_INFO pAdapterInfo, PULONG pOutBufLen)
               RegCloseKey(hKey);
             }
             TRACE("num of index is %lu\n", table->numIndexes);
+            ret = NO_ERROR;
             for (ndx = 0; ndx < table->numIndexes; ndx++) {
               PIP_ADAPTER_INFO ptr = &pAdapterInfo[ndx];
               DWORD addrLen = sizeof(ptr->Address), type;
+              DWORD addrIndex;
+              PIP_ADDR_STRING currentIpAddress = &ptr->IpAddressList;
+              BOOL foundAddress = FALSE;
               const char *ifname =
                   getInterfaceNameByIndex(table->indexes[ndx]);
               if (!ifname) {
@@ -762,11 +774,27 @@ DWORD WINAPI GetAdaptersInfo(PIP_ADAPTER_INFO pAdapterInfo, PULONG pOutBufLen)
               ptr->AddressLength = addrLen;
               ptr->Type = type;
               ptr->Index = table->indexes[ndx];
-              toIPAddressString(getInterfaceIPAddrByIndex(table->indexes[ndx]),
-               ptr->IpAddressList.IpAddress.String);
-              toIPAddressString(getInterfaceMaskByIndex(table->indexes[ndx]),
-               ptr->IpAddressList.IpMask.String);
-              ptr->IpAddressList.Context = ptr->Index;
+              for (addrIndex = 0; ipAddrTable && addrIndex < ipAddrTable->dwNumEntries; addrIndex++) {
+                if (ipAddrTable->table[addrIndex].dwIndex != ptr->Index)
+                  continue;
+
+                if (foundAddress) {
+                  currentIpAddress->Next = nextIpAddress;
+                  currentIpAddress = nextIpAddress++;
+                }
+
+                toIPAddressString(ipAddrTable->table[addrIndex].dwAddr,
+                 currentIpAddress->IpAddress.String);
+                toIPAddressString(ipAddrTable->table[addrIndex].dwMask,
+                 currentIpAddress->IpMask.String);
+                currentIpAddress->Context = ptr->Index;
+                foundAddress = TRUE;
+              }
+              if (!foundAddress) {
+                toIPAddressString(INADDR_ANY, ptr->IpAddressList.IpAddress.String);
+                toIPAddressString(INADDR_ANY, ptr->IpAddressList.IpMask.String);
+                ptr->IpAddressList.Context = ptr->Index;
+              }
               toIPAddressString(getInterfaceGatewayByIndex(table->indexes[ndx]),
                ptr->GatewayList.IpAddress.String);
               getDhcpInfoForAdapter(table->indexes[ndx], ptr);
@@ -782,13 +810,14 @@ DWORD WINAPI GetAdaptersInfo(PIP_ADAPTER_INFO pAdapterInfo, PULONG pOutBufLen)
               else
                 ptr->Next = NULL;
             }
-            ret = NO_ERROR;
-          }
-          free(table);
         }
-        else
-          ret = ERROR_OUTOFMEMORY;
+
+        if (ipAddrTable)
+          HeapFree(GetProcessHeap(), 0, ipAddrTable);
+        free(table);
       }
+      else
+        ret = ERROR_OUTOFMEMORY;
     }
     else
       ret = ERROR_NO_DATA;
@@ -1691,57 +1720,94 @@ DWORD WINAPI GetIpAddrTable(PMIB_IPADDRTABLE pIpAddrTable, PULONG pdwSize, BOOL 
   if (!pdwSize)
     ret = ERROR_INVALID_PARAMETER;
   else {
-    DWORD numInterfaces = getNumInterfaces();
-    ULONG size = sizeof(MIB_IPADDRTABLE) + (numInterfaces - 1) *
-     sizeof(MIB_IPADDRROW);
+    HANDLE tcpFile;
+    TDIEntityID *entitySet = NULL;
+    DWORD numEntities = 0, numEntries = 0;
+    NTSTATUS status;
+    int i;
 
-    if (!pIpAddrTable || *pdwSize < size) {
-      *pdwSize = size;
-      ret = ERROR_INSUFFICIENT_BUFFER;
-    }
-    else {
-      InterfaceIndexTable *table = getInterfaceIndexTable();
+    status = openTcpFile(&tcpFile, FILE_READ_DATA);
+    if (!NT_SUCCESS(status))
+      return RtlNtStatusToDosError(status);
 
-      if (table) {
-        size = sizeof(MIB_IPADDRTABLE) + (table->numIndexes - 1) *
-         sizeof(MIB_IPADDRROW);
-        if (*pdwSize < size) {
-          *pdwSize = size;
-          ret = ERROR_INSUFFICIENT_BUFFER;
+    status = tdiGetEntityIDSet(tcpFile, &entitySet, &numEntities);
+    if (NT_SUCCESS(status)) {
+      for (i = 0; i < numEntities; i++) {
+        if (entitySet[i].tei_entity == CL_NL_ENTITY ||
+            entitySet[i].tei_entity == CO_NL_ENTITY) {
+          IPAddrEntry *addrs;
+          DWORD numAddrs;
+
+          status = tdiGetIpAddrsForIpEntity(tcpFile, &entitySet[i], &addrs, &numAddrs);
+          if (!NT_SUCCESS(status))
+            break;
+
+          numEntries += numAddrs;
+          tdiFreeThingSet(addrs);
         }
-        else {
-          DWORD ndx, bcast;
+      }
+    }
 
-          pIpAddrTable->dwNumEntries = 0;
-          for (ndx = 0; ndx < table->numIndexes; ndx++) {
-            pIpAddrTable->table[ndx].dwIndex = table->indexes[ndx];
-            pIpAddrTable->table[ndx].dwAddr =
-             getInterfaceIPAddrByIndex(table->indexes[ndx]);
-            pIpAddrTable->table[ndx].dwMask =
-             getInterfaceMaskByIndex(table->indexes[ndx]);
-            /* the dwBCastAddr member isn't the broadcast address, it indicates
-             * whether the interface uses the 1's broadcast address (1) or the
-             * 0's broadcast address (0).
-             */
-            bcast = getInterfaceBCastAddrByIndex(table->indexes[ndx]);
-            pIpAddrTable->table[ndx].dwBCastAddr =
-             (bcast & pIpAddrTable->table[ndx].dwMask) ? 1 : 0;
-            /* FIXME: hardcoded reasm size, not sure where to get it */
-            pIpAddrTable->table[ndx].dwReasmSize = 65535;
-            pIpAddrTable->table[ndx].unused1 = 0;
-            pIpAddrTable->table[ndx].wType = 0; /* aka unused2 */
-            pIpAddrTable->dwNumEntries++;
+    if (NT_SUCCESS(status)) {
+      ULONG size = FIELD_OFFSET(MIB_IPADDRTABLE, table) +
+       numEntries * sizeof(MIB_IPADDRROW);
+
+      if (!pIpAddrTable || *pdwSize < size) {
+        *pdwSize = size;
+        ret = ERROR_INSUFFICIENT_BUFFER;
+      }
+      else {
+        DWORD row = 0;
+
+        memset(pIpAddrTable, 0, size);
+
+        for (i = 0; i < numEntities; i++) {
+          if (entitySet[i].tei_entity == CL_NL_ENTITY ||
+              entitySet[i].tei_entity == CO_NL_ENTITY) {
+            IPAddrEntry *addrs;
+            DWORD numAddrs, ndx;
+
+            status = tdiGetIpAddrsForIpEntity(tcpFile, &entitySet[i], &addrs, &numAddrs);
+            if (!NT_SUCCESS(status))
+              break;
+
+            for (ndx = 0; ndx < numAddrs; ndx++) {
+              pIpAddrTable->table[row].dwIndex = addrs[ndx].iae_index;
+              pIpAddrTable->table[row].dwAddr = addrs[ndx].iae_addr;
+              pIpAddrTable->table[row].dwMask = addrs[ndx].iae_mask;
+              /* the dwBCastAddr member isn't the broadcast address, it indicates
+               * whether the interface uses the 1's broadcast address (1) or the
+               * 0's broadcast address (0).
+               */
+              pIpAddrTable->table[row].dwBCastAddr =
+               (addrs[ndx].iae_bcastaddr & addrs[ndx].iae_mask) ? 1 : 0;
+              pIpAddrTable->table[row].dwReasmSize =
+               addrs[ndx].iae_reasmsize ? addrs[ndx].iae_reasmsize : 65535;
+              pIpAddrTable->table[row].unused1 = 0;
+              pIpAddrTable->table[row].wType = 0; /* aka unused2 */
+              row++;
+            }
+
+            tdiFreeThingSet(addrs);
           }
+        }
+
+        if (NT_SUCCESS(status)) {
+          pIpAddrTable->dwNumEntries = row;
           if (bOrder)
-            qsort(pIpAddrTable->table, pIpAddrTable->dwNumEntries,
-             sizeof(MIB_IPADDRROW), IpAddrTableSorter);
+            qsort(pIpAddrTable->table, pIpAddrTable->dwNumEntries, sizeof(MIB_IPADDRROW), IpAddrTableSorter);
           ret = NO_ERROR;
         }
-        free(table);
+        else
+          ret = RtlNtStatusToDosError(status);
       }
-      else
-        ret = ERROR_OUTOFMEMORY;
     }
+    else
+      ret = RtlNtStatusToDosError(status);
+
+    if (entitySet)
+      tdiFreeThingSet(entitySet);
+    closeTcpFile(tcpFile);
   }
   TRACE("returning %ld\n", ret);
   return ret;

@@ -743,6 +743,8 @@ BOOLEAN ReconfigureAdapter(PRECONFIGURE_CONTEXT Context)
     }
     else if (!Context->Adapter->CompletingReset)
     {
+        IPRemoveInterfaceAddresses(Interface);
+
         /* Clear IP configuration */
         Interface->Unicast = DefaultMask;
         Interface->Netmask = DefaultMask;

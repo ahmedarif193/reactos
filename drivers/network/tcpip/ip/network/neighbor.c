@@ -535,7 +535,7 @@ PNEIGHBOR_CACHE_ENTRY NBFindOrCreateNeighbor(
   if (NCE == NULL)
     {
         TI_DbgPrint(MID_TRACE,("BCAST: %s\n", A2S(&Interface->Broadcast)));
-        if( AddrIsEqual(Address, &Interface->Broadcast) ||
+        if( IPInterfaceHasBroadcastAddress(Interface, Address) ||
             AddrIsUnspecified(Address) ) {
             TI_DbgPrint(MID_TRACE,("Packet targeted at broadcast addr\n"));
             NCE = NBAddNeighbor(Interface, Address, NULL,

@@ -121,6 +121,7 @@ BOOLEAN ARPTransmit(PIP_ADDRESS Address, PVOID LinkAddress,
     PNDIS_PACKET NdisPacket;
     UCHAR ProtoAddrLen;
     USHORT ProtoType;
+    PIP_ADDRESS SenderAddress;
 
     TI_DbgPrint(DEBUG_ARP, ("Called.\n"));
 
@@ -128,6 +129,11 @@ BOOLEAN ARPTransmit(PIP_ADDRESS Address, PVOID LinkAddress,
      * gratuitous ARP packet sent */
     if (!Address)
         Address = &Interface->Unicast;
+
+    if (IPInterfaceHasUnicastAddress(Interface, Address))
+        SenderAddress = Address;
+    else
+        SenderAddress = &Interface->Unicast;
 
     switch (Address->Type) {
         case IP_ADDRESS_V4:
@@ -152,7 +158,7 @@ BOOLEAN ARPTransmit(PIP_ADDRESS Address, PVOID LinkAddress,
         (UCHAR)Interface->AddressLength, /* Hardware address length */
         (UCHAR)ProtoAddrLen,             /* Protocol address length */
         Interface->Address,              /* Sender's (local) hardware address */
-        &Interface->Unicast.Address.IPv4Address,/* Sender's (local) protocol address */
+        &SenderAddress->Address.IPv4Address,/* Sender's (local) protocol address */
         LinkAddress,                     /* Target's (remote) hardware address */
         &Address->Address.IPv4Address,   /* Target's (remote) protocol address */
         ARP_OPCODE_REQUEST);             /* ARP request */
@@ -262,7 +268,7 @@ VOID ARPReceive(
 
     AddrInitIPv4(&DstAddress, *((PULONG)TargetProtoAddress));
     AddrInitIPv4(&SrcAddress, *((PULONG)SenderProtoAddress));
-    if (!AddrIsEqual(&DstAddress, &Interface->Unicast))
+    if (!IPInterfaceHasUnicastAddress(Interface, &DstAddress))
     {
         ExFreePool(DataBuffer);
         Packet->Free(Packet);
@@ -299,7 +305,7 @@ VOID ARPReceive(
         (UCHAR)Interface->AddressLength, /* Hardware address length */
         (UCHAR)Header->ProtoAddrLen,     /* Protocol address length */
         Interface->Address,              /* Sender's (local) hardware address */
-        &Interface->Unicast.Address.IPv4Address,/* Sender's (local) protocol address */
+        &DstAddress.Address.IPv4Address, /* Sender's (local) protocol address */
         SenderHWAddress,                 /* Target's (remote) hardware address */
         SenderProtoAddress,              /* Target's (remote) protocol address */
         ARP_OPCODE_REPLY);               /* ARP reply */

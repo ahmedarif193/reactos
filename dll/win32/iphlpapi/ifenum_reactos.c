@@ -180,10 +180,16 @@ static NTSTATUS getInterfaceInfoSet( HANDLE tcpFile,
                       &infoSetInt[curInterf].if_info );
                 TRACE("tdiGetMibForIfEntity: %08x\n", status);
                 if( NT_SUCCESS(status) ) {
-                    DWORD numAddrs;
-                    IPAddrEntry *addrs;
+                    DWORD numAddrs = 0;
+                    IPAddrEntry *addrs = NULL;
                     TDIEntityID ip_ent;
                     int j;
+
+                    memset( &infoSetInt[curInterf].ip_addr, 0,
+                            sizeof(infoSetInt[curInterf].ip_addr) );
+                    infoSetInt[curInterf].ip_addr.iae_index =
+                        infoSetInt[curInterf].if_info.ent.if_index;
+                    infoSetInt[curInterf].ip_addr.iae_reasmsize = 65535;
 
                     status = getNthIpEntity( tcpFile, curInterf, &ip_ent );
                     if( NT_SUCCESS(status) )
@@ -196,11 +202,12 @@ static NTSTATUS getInterfaceInfoSet( HANDLE tcpFile,
                             memcpy( &infoSetInt[curInterf].ip_addr,
                                     &addrs[j],
                                     sizeof( addrs[j] ) );
-                            curInterf++;
                             break;
                         }
                     }
                     if ( NT_SUCCESS(status) )
+                        curInterf++;
+                    if ( addrs )
                         tdiFreeThingSet(addrs);
                 }
             }
@@ -643,13 +650,17 @@ char *toIPAddressString(unsigned int addr, char string[16])
 NTSTATUS addIPAddress( IPAddr Address, IPMask Mask, DWORD IfIndex,
                        PULONG NteContext, PULONG NteInstance )
 {
+  PULONG nteContext = NteContext;
+  PULONG nteInstance = NteInstance;
   HANDLE tcpFile;
-  NTSTATUS status = openTcpFile( &tcpFile, FILE_READ_DATA | FILE_WRITE_DATA );
+  NTSTATUS status;
   IP_SET_DATA Data;
   IO_STATUS_BLOCK Iosb;
 
   TRACE("Called.\n");
 
+  if( !nteContext || !nteInstance ) return STATUS_INVALID_PARAMETER;
+  status = openTcpFile( &tcpFile, FILE_READ_DATA | FILE_WRITE_DATA );
   if( !NT_SUCCESS(status) ) return status;
 
   Data.NteContext = IfIndex;
@@ -670,8 +681,8 @@ NTSTATUS addIPAddress( IPAddr Address, IPMask Mask, DWORD IfIndex,
   closeTcpFile( tcpFile );
 
   if( NT_SUCCESS(status) ) {
-      *NteContext = Iosb.Information;
-      *NteInstance = Data.NewAddress;
+      *nteContext = Data.NteContext;
+      *nteInstance = Data.NewAddress;
   }
 
   if (!NT_SUCCESS(status)) {
@@ -699,7 +710,7 @@ NTSTATUS deleteIpAddress( ULONG NteContext )
                                   &Iosb,
                                   IOCTL_DELETE_IP_ADDRESS,
                                   &NteContext,
-                                  sizeof(USHORT),
+                                  sizeof(NteContext),
                                   NULL,
                                   0 );
 

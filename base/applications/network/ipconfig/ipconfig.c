@@ -37,6 +37,7 @@ typedef struct _RECORDTYPE
 } RECORDTYPE, *PRECORDTYPE;
 
 #define GUID_LEN 40
+#define IP_ADDRESS_STRING_ZERO "0.0.0.0"
 
 HINSTANCE hInstance;
 HANDLE ProcessHeap;
@@ -707,13 +708,44 @@ ShowInfo(
             continue;
         }
 
-        ConResPrintf(StdOut, IDS_IPADDRESS, pAdapter->IpAddressList.IpAddress.String);
-        ConResPrintf(StdOut, IDS_SUBNETMASK, pAdapter->IpAddressList.IpMask.String);
+        {
+            PIP_ADDR_STRING pIPAddr;
 
-        if (strcmp(pAdapter->GatewayList.IpAddress.String, "0.0.0.0"))
-            ConResPrintf(StdOut, IDS_DEFAULTGATEWAY, pAdapter->GatewayList.IpAddress.String);
-        else
-            ConResPrintf(StdOut, IDS_DEFAULTGATEWAY, "");
+            pIPAddr = &pAdapter->IpAddressList;
+            while (pIPAddr != NULL)
+            {
+                ConResPrintf(StdOut, IDS_IPADDRESS, pIPAddr->IpAddress.String);
+                ConResPrintf(StdOut, IDS_SUBNETMASK, pIPAddr->IpMask.String);
+                pIPAddr = pIPAddr->Next;
+            }
+        }
+
+        {
+            PIP_ADDR_STRING pGateway;
+            BOOL bPrintedGateway = FALSE;
+
+            pGateway = &pAdapter->GatewayList;
+            while (pGateway != NULL)
+            {
+                if (strcmp(pGateway->IpAddress.String, IP_ADDRESS_STRING_ZERO) != 0)
+                {
+                    if (!bPrintedGateway)
+                    {
+                        ConResPrintf(StdOut, IDS_DEFAULTGATEWAY, pGateway->IpAddress.String);
+                        bPrintedGateway = TRUE;
+                    }
+                    else
+                    {
+                        ConResPrintf(StdOut, IDS_EMPTYLINE, pGateway->IpAddress.String);
+                    }
+                }
+
+                pGateway = pGateway->Next;
+            }
+
+            if (!bPrintedGateway)
+                ConResPrintf(StdOut, IDS_DEFAULTGATEWAY, "");
+        }
 
         if (bAll)
         {

@@ -161,6 +161,7 @@ typedef struct _IP_INTERFACE {
     IP_ADDRESS PointToPoint;      /* Point to point address */
     IP_ADDRESS Netmask;           /* Netmask */
     IP_ADDRESS Broadcast;         /* Broadcast */
+    ULONG NteContext;             /* NTE context for the primary address */
     UNICODE_STRING Name;          /* Adapter name (GUID) */
     UNICODE_STRING Description;   /* Adapter description (Human readable) */
     PUCHAR Address;               /* Pointer to interface address */
@@ -170,6 +171,15 @@ typedef struct _IP_INTERFACE {
     PVOID TCPContext;             /* TCP Content for this interface */
     SEND_RECV_STATS Stats;        /* Send/Receive statistics */
 } IP_INTERFACE, *PIP_INTERFACE;
+
+typedef struct _IP_NTE {
+    LIST_ENTRY ListEntry;         /* Entry on list */
+    PIP_INTERFACE Interface;      /* Interface this NTE belongs to */
+    ULONG Context;                /* NTE context */
+    IP_ADDRESS Unicast;           /* Unicast address */
+    IP_ADDRESS Netmask;           /* Netmask */
+    IP_ADDRESS Broadcast;         /* Broadcast address */
+} IP_NTE, *PIP_NTE;
 
 typedef struct _IP_SET_ADDRESS {
     ULONG NteIndex;

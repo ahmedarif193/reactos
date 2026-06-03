@@ -67,7 +67,36 @@ TDI_STATUS GetAddressFileInfo(TDIObjectID *ID,
                               PVOID Buffer,
                               PUINT BufferSize)
 {
-    UNIMPLEMENTED;
+    UINT Value;
 
-    return TDI_INVALID_REQUEST;
+    LockObject(AddrFile);
+
+    switch (ID->toi_id)
+    {
+      case AO_OPTION_TTL:
+         Value = AddrFile->TTL;
+         break;
+
+      case AO_OPTION_IP_DONTFRAGMENT:
+         Value = AddrFile->DF;
+         break;
+
+      case AO_OPTION_BROADCAST:
+         Value = AddrFile->BCast;
+         break;
+
+      case AO_OPTION_IP_HDRINCL:
+         Value = AddrFile->HeaderIncl;
+         break;
+
+      default:
+         UnlockObject(AddrFile);
+         DbgPrint("Unimplemented option %x\n", ID->toi_id);
+
+         return TDI_INVALID_REQUEST;
+    }
+
+    UnlockObject(AddrFile);
+
+    return InfoCopyOut((PCHAR)&Value, sizeof(Value), Buffer, BufferSize);
 }

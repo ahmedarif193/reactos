@@ -1655,52 +1655,35 @@ NTSTATUS DispTdiSetInformationEx(
     return Status;
 }
 
-/* TODO: Support multiple addresses per interface.
- * For now just set the nte context to the interface index.
- *
- * Later on, create an NTE context and NTE instance
- */
-
 NTSTATUS DispTdiSetIPAddress( PIRP Irp, PIO_STACK_LOCATION IrpSp ) {
     NTSTATUS Status = STATUS_DEVICE_DOES_NOT_EXIST;
     PIP_SET_ADDRESS IpAddrChange =
         (PIP_SET_ADDRESS)Irp->AssociatedIrp.SystemBuffer;
+    IP_ADDRESS Address;
+    IP_ADDRESS Netmask;
+    ULONG NteContext = 0;
     IF_LIST_ITER(IF);
 
     TI_DbgPrint(MID_TRACE,("Setting IP Address for adapter %d\n",
 			   IpAddrChange->NteIndex));
 
+    AddrInitIPv4(&Address, IpAddrChange->Address);
+    AddrInitIPv4(&Netmask, IpAddrChange->Netmask);
+
     ForEachInterface(IF) {
 	TI_DbgPrint(MID_TRACE,("Looking at adapter %d\n", IF->Index));
 
-        if( IF->Unicast.Address.IPv4Address == IpAddrChange->Address ) {
-            Status = STATUS_DUPLICATE_OBJECTID;
-            break;
-        }
         if( IF->Index == IpAddrChange->NteIndex ) {
-            IPRemoveInterfaceRoute( IF );
+            Status = IPAddInterfaceAddress(IF, &Address, &Netmask, &NteContext);
+            if (NT_SUCCESS(Status)) {
+                TI_DbgPrint(MID_TRACE,("New Unicast Address: %x\n",
+                                       Address.Address.IPv4Address));
+                TI_DbgPrint(MID_TRACE,("New Netmask        : %x\n",
+                                       Netmask.Address.IPv4Address));
 
-            IF->Unicast.Type = IP_ADDRESS_V4;
-            IF->Unicast.Address.IPv4Address = IpAddrChange->Address;
-
-            IF->Netmask.Type = IP_ADDRESS_V4;
-            IF->Netmask.Address.IPv4Address = IpAddrChange->Netmask;
-
-            IF->Broadcast.Type = IP_ADDRESS_V4;
-	    IF->Broadcast.Address.IPv4Address =
-		IF->Unicast.Address.IPv4Address |
-		~IF->Netmask.Address.IPv4Address;
-
-            TI_DbgPrint(MID_TRACE,("New Unicast Address: %x\n",
-                                   IF->Unicast.Address.IPv4Address));
-            TI_DbgPrint(MID_TRACE,("New Netmask        : %x\n",
-                                   IF->Netmask.Address.IPv4Address));
-
-            IPAddInterfaceRoute( IF );
-
-            IpAddrChange->Address = IF->Index;
-            Status = STATUS_SUCCESS;
-            Irp->IoStatus.Information = IF->Index;
+                IpAddrChange->NteIndex = NteContext;
+                Irp->IoStatus.Information = sizeof(*IpAddrChange);
+            }
             break;
         }
     } EndFor(IF);
@@ -1710,25 +1693,8 @@ NTSTATUS DispTdiSetIPAddress( PIRP Irp, PIO_STACK_LOCATION IrpSp ) {
 }
 
 NTSTATUS DispTdiDeleteIPAddress( PIRP Irp, PIO_STACK_LOCATION IrpSp ) {
-    NTSTATUS Status = STATUS_UNSUCCESSFUL;
-    PUSHORT NteIndex = Irp->AssociatedIrp.SystemBuffer;
-    IF_LIST_ITER(IF);
-
-    ForEachInterface(IF) {
-        if( IF->Index == *NteIndex ) {
-            IPRemoveInterfaceRoute( IF );
-            IF->Unicast.Type = IP_ADDRESS_V4;
-            IF->Unicast.Address.IPv4Address = 0;
-
-            IF->Netmask.Type = IP_ADDRESS_V4;
-            IF->Netmask.Address.IPv4Address = 0;
-
-            IF->Broadcast.Type = IP_ADDRESS_V4;
-            IF->Broadcast.Address.IPv4Address = 0;
-
-            Status = STATUS_SUCCESS;
-        }
-    } EndFor(IF);
+    PULONG NteContext = Irp->AssociatedIrp.SystemBuffer;
+    NTSTATUS Status = IPRemoveInterfaceAddress(*NteContext);
 
     Irp->IoStatus.Status = Status;
     return Status;
