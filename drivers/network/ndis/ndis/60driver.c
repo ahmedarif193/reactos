@@ -613,20 +613,6 @@ Ndis6PowerCompletionRoutine(
     return STATUS_CONTINUE_COMPLETION;
 }
 
-/* D3: NET_DEVICE_PNP_EVENT isn't fully defined in the ReactOS NDIS 5.1
- * headers, just forward-declared. We mirror the Windows DDK struct so
- * DevicePnPEventNotifyHandler gets a valid layout. Keep the fields in
- * the same order as the MSDN documentation. */
-typedef struct _NDIS6_NET_DEVICE_PNP_EVENT
-{
-    NDIS_OBJECT_HEADER      Header;
-    NDIS_PORT_NUMBER        PortNumber;
-    NDIS_DEVICE_PNP_EVENT   DevicePnPEvent;
-    PVOID                   InformationBuffer;
-    ULONG                   InformationBufferLength;
-    UCHAR                   NdisReserved[2 * sizeof(PVOID)];
-} NDIS6_NET_DEVICE_PNP_EVENT, *PNDIS6_NET_DEVICE_PNP_EVENT;
-
 /* D3: call the miniport's DevicePnPEventNotifyHandler for a given
  * event. The handler was installed via the driver's characteristics
  * struct; most drivers tolerate NULL data. */
@@ -635,7 +621,7 @@ Ndis6NotifyMiniportDevicePnPEvent(
     _In_ PNDIS6_ADAPTER_EXT     Ext,
     _In_ NDIS_DEVICE_PNP_EVENT  Event)
 {
-    NDIS6_NET_DEVICE_PNP_EVENT NetEvent;
+    NET_DEVICE_PNP_EVENT NetEvent;
 
     if (Ext == NULL || !Ext->Initialized || Ext->DriverBlock == NULL ||
         Ext->DriverBlock->Characteristics.DevicePnPEventNotifyHandler == NULL ||
@@ -653,10 +639,9 @@ Ndis6NotifyMiniportDevicePnPEvent(
     NetEvent.InformationBuffer       = NULL;
     NetEvent.InformationBufferLength = 0;
 
-    /* Cast to the forward-declared type the handler expects. */
     Ext->DriverBlock->Characteristics.DevicePnPEventNotifyHandler(
         Ext->MiniportAdapterContext,
-        (struct _NET_DEVICE_PNP_EVENT*)&NetEvent);
+        &NetEvent);
 }
 
 /* D3: Ndis6IndicateNetPnPEvent — fan a NET_PNP_EVENT out to every

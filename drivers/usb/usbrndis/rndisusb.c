@@ -128,6 +128,77 @@ RndisUsbGetDescriptor(
     return Status;
 }
 
+static
+BOOLEAN
+RndisUsbConfigurationHasNetworkInterface(
+    IN PUSB_CONFIGURATION_DESCRIPTOR ConfigurationDescriptor)
+{
+    PUCHAR DescEnd;
+    PUCHAR CurrentDesc;
+    BOOLEAN FoundCdcControl;
+    BOOLEAN FoundCdcData;
+
+    DescEnd = (PUCHAR)ConfigurationDescriptor + ConfigurationDescriptor->wTotalLength;
+    CurrentDesc = (PUCHAR)ConfigurationDescriptor + ConfigurationDescriptor->bLength;
+    FoundCdcControl = FALSE;
+    FoundCdcData = FALSE;
+
+    while (CurrentDesc + sizeof(USB_COMMON_DESCRIPTOR) <= DescEnd)
+    {
+        PUSB_COMMON_DESCRIPTOR CommonDesc;
+
+        CommonDesc = (PUSB_COMMON_DESCRIPTOR)CurrentDesc;
+        if (CommonDesc->bLength == 0 || CurrentDesc + CommonDesc->bLength > DescEnd)
+        {
+            break;
+        }
+
+        if (CommonDesc->bDescriptorType == USB_INTERFACE_DESCRIPTOR_TYPE &&
+            CommonDesc->bLength >= sizeof(USB_INTERFACE_DESCRIPTOR))
+        {
+            PUSB_INTERFACE_DESCRIPTOR InterfaceDesc;
+
+            InterfaceDesc = (PUSB_INTERFACE_DESCRIPTOR)CurrentDesc;
+            if (InterfaceDesc->bInterfaceClass == USB_CLASS_COMM &&
+                InterfaceDesc->bInterfaceSubClass == USB_CDC_SUBCLASS_ACM &&
+                InterfaceDesc->bInterfaceProtocol == USB_CDC_PROTOCOL_RNDIS)
+            {
+                return TRUE;
+            }
+
+            if (InterfaceDesc->bInterfaceClass == USB_CLASS_WIRELESS_CONTROLLER &&
+                InterfaceDesc->bInterfaceSubClass == 0x01 &&
+                InterfaceDesc->bInterfaceProtocol == 0x03)
+            {
+                return TRUE;
+            }
+
+            if (InterfaceDesc->bInterfaceClass == USB_CLASS_MISC &&
+                InterfaceDesc->bInterfaceSubClass == 0x01 &&
+                InterfaceDesc->bInterfaceProtocol == 0x01)
+            {
+                return TRUE;
+            }
+
+            if (InterfaceDesc->bInterfaceClass == USB_CLASS_COMM &&
+                (InterfaceDesc->bInterfaceSubClass == USB_CDC_SUBCLASS_ECM ||
+                 InterfaceDesc->bInterfaceSubClass == USB_CDC_SUBCLASS_NCM))
+            {
+                FoundCdcControl = TRUE;
+            }
+            else if (InterfaceDesc->bInterfaceClass == USB_CLASS_CDC_DATA &&
+                     InterfaceDesc->bNumEndpoints >= 2)
+            {
+                FoundCdcData = TRUE;
+            }
+        }
+
+        CurrentDesc += CommonDesc->bLength;
+    }
+
+    return FoundCdcControl && FoundCdcData;
+}
+
 /*
  * RndisUsbGetDescriptors
  *
@@ -140,8 +211,11 @@ RndisUsbGetDescriptors(
     NTSTATUS Status;
     ULONG DescriptorLength;
     PUSB_CONFIGURATION_DESCRIPTOR ConfigDesc;
+    PUSB_CONFIGURATION_DESCRIPTOR FirstConfigDesc;
+    UCHAR ConfigIndex;
+    UCHAR ConfigCount;
 
-    DPRINT("USBRNDIS: Getting USB descriptors\n");
+    DPRINT("Getting USB descriptors\n");
 
     /* Get device descriptor */
     DescriptorLength = sizeof(USB_DEVICE_DESCRIPTOR);
@@ -155,53 +229,95 @@ RndisUsbGetDescriptors(
 
     if (!NT_SUCCESS(Status))
     {
-        DPRINT1("USBRNDIS: Failed to get device descriptor (0x%08X)\n", Status);
+        DPRINT1("Failed to get device descriptor (0x%08X)\n", Status);
         return Status;
     }
 
-    DPRINT("USBRNDIS: Device: VID=%04X PID=%04X Class=%02X SubClass=%02X Protocol=%02X\n",
+    DPRINT("Device: VID=%04X PID=%04X Class=%02X SubClass=%02X Protocol=%02X\n",
            Adapter->DeviceDescriptor->idVendor,
            Adapter->DeviceDescriptor->idProduct,
            Adapter->DeviceDescriptor->bDeviceClass,
            Adapter->DeviceDescriptor->bDeviceSubClass,
            Adapter->DeviceDescriptor->bDeviceProtocol);
 
-    /* Get configuration descriptor header first */
-    DescriptorLength = sizeof(USB_CONFIGURATION_DESCRIPTOR);
-    Status = RndisUsbGetDescriptor(
-        Adapter,
-        USB_CONFIGURATION_DESCRIPTOR_TYPE,
-        0,
-        0,
-        (PVOID*)&ConfigDesc,
-        &DescriptorLength);
-
-    if (!NT_SUCCESS(Status))
+    FirstConfigDesc = NULL;
+    ConfigCount = Adapter->DeviceDescriptor->bNumConfigurations;
+    if (ConfigCount == 0)
     {
-        DPRINT1("USBRNDIS: Failed to get config descriptor header (0x%08X)\n", Status);
-        return Status;
+        ConfigCount = 1;
     }
 
-    /* Get total configuration descriptor length */
-    DescriptorLength = ConfigDesc->wTotalLength;
-    RndisFreeMemory(ConfigDesc);
-
-    /* Get full configuration descriptor */
-    Status = RndisUsbGetDescriptor(
-        Adapter,
-        USB_CONFIGURATION_DESCRIPTOR_TYPE,
-        0,
-        0,
-        (PVOID*)&Adapter->ConfigurationDescriptor,
-        &DescriptorLength);
-
-    if (!NT_SUCCESS(Status))
+    for (ConfigIndex = 0; ConfigIndex < ConfigCount; ConfigIndex++)
     {
-        DPRINT1("USBRNDIS: Failed to get full config descriptor (0x%08X)\n", Status);
-        return Status;
+        DescriptorLength = sizeof(USB_CONFIGURATION_DESCRIPTOR);
+        Status = RndisUsbGetDescriptor(
+            Adapter,
+            USB_CONFIGURATION_DESCRIPTOR_TYPE,
+            ConfigIndex,
+            0,
+            (PVOID*)&ConfigDesc,
+            &DescriptorLength);
+
+        if (!NT_SUCCESS(Status))
+        {
+            DPRINT1("Failed to get config %u descriptor header (0x%08X)\n",
+                    ConfigIndex, Status);
+            continue;
+        }
+
+        DescriptorLength = ConfigDesc->wTotalLength;
+        RndisFreeMemory(ConfigDesc);
+        ConfigDesc = NULL;
+
+        Status = RndisUsbGetDescriptor(
+            Adapter,
+            USB_CONFIGURATION_DESCRIPTOR_TYPE,
+            ConfigIndex,
+            0,
+            (PVOID*)&ConfigDesc,
+            &DescriptorLength);
+
+        if (!NT_SUCCESS(Status))
+        {
+            DPRINT1("Failed to get full config %u descriptor (0x%08X)\n",
+                    ConfigIndex, Status);
+            continue;
+        }
+
+        if (!FirstConfigDesc)
+        {
+            FirstConfigDesc = ConfigDesc;
+        }
+
+        if (RndisUsbConfigurationHasNetworkInterface(ConfigDesc))
+        {
+            Adapter->ConfigurationDescriptor = ConfigDesc;
+            if (FirstConfigDesc != ConfigDesc)
+            {
+                RndisFreeMemory(FirstConfigDesc);
+            }
+            break;
+        }
+
+        if (FirstConfigDesc != ConfigDesc)
+        {
+            RndisFreeMemory(ConfigDesc);
+        }
     }
 
-    DPRINT("USBRNDIS: Configuration: TotalLength=%u NumInterfaces=%u\n",
+    if (!Adapter->ConfigurationDescriptor)
+    {
+        Adapter->ConfigurationDescriptor = FirstConfigDesc;
+    }
+
+    if (!Adapter->ConfigurationDescriptor)
+    {
+        DPRINT1("Failed to get any configuration descriptor\n");
+        return STATUS_DEVICE_CONFIGURATION_ERROR;
+    }
+
+    DPRINT("Configuration: Value=%u TotalLength=%u NumInterfaces=%u\n",
+           Adapter->ConfigurationDescriptor->bConfigurationValue,
            Adapter->ConfigurationDescriptor->wTotalLength,
            Adapter->ConfigurationDescriptor->bNumInterfaces);
 
@@ -231,7 +347,7 @@ RndisUsbGetCdcMacAddress(
     /* Check if we have a valid MAC string index */
     if (Adapter->CdcMacAddressIndex == 0)
     {
-        DPRINT("USBRNDIS: No MAC address string index available\n");
+        DPRINT("No MAC address string index available\n");
         return STATUS_NOT_FOUND;
     }
 
@@ -247,7 +363,7 @@ RndisUsbGetCdcMacAddress(
 
     if (!NT_SUCCESS(Status))
     {
-        DPRINT1("USBRNDIS: Failed to get MAC string descriptor (0x%08X)\n", Status);
+        DPRINT1("Failed to get MAC string descriptor (0x%08X)\n", Status);
         return Status;
     }
 
@@ -260,7 +376,7 @@ RndisUsbGetCdcMacAddress(
     if (StringDesc->bLength < 26 ||
         StringDesc->bDescriptorType != USB_STRING_DESCRIPTOR_TYPE)
     {
-        DPRINT1("USBRNDIS: Invalid MAC string descriptor (length=%u type=%u)\n",
+        DPRINT1("Invalid MAC string descriptor (length=%u type=%u)\n",
                 StringDesc->bLength, StringDesc->bDescriptorType);
         RndisFreeMemory(StringDesc);
         return STATUS_INVALID_PARAMETER;
@@ -269,13 +385,13 @@ RndisUsbGetCdcMacAddress(
     /* String length is (bLength - 2) / 2 Unicode chars, should be 12 for MAC */
     if ((StringDesc->bLength - 2) / 2 < 12)
     {
-        DPRINT1("USBRNDIS: MAC string too short (%u chars)\n",
+        DPRINT1("MAC string too short (%u chars)\n",
                 (StringDesc->bLength - 2) / 2);
         RndisFreeMemory(StringDesc);
         return STATUS_INVALID_PARAMETER;
     }
 
-    DPRINT1("USBRNDIS: MAC string from USB: %.*ls\n",
+    DPRINT1("MAC string from USB: %.*ls\n",
             12, StringDesc->bString);
 
     /* Parse 12 hex characters into 6 bytes */
@@ -304,7 +420,7 @@ RndisUsbGetCdcMacAddress(
         MacAddress[i] = (UCHAR)ByteValue;
     }
 
-    DPRINT1("USBRNDIS: Parsed MAC: %02X:%02X:%02X:%02X:%02X:%02X\n",
+    DPRINT1("Parsed MAC: %02X:%02X:%02X:%02X:%02X:%02X\n",
             MacAddress[0], MacAddress[1], MacAddress[2],
             MacAddress[3], MacAddress[4], MacAddress[5]);
 
@@ -342,7 +458,7 @@ RndisUsbFindCdcEthernetDescriptor(
             {
                 EthDesc = (PUSB_CDC_ETHERNET_DESCRIPTOR)CurrentDesc;
 
-                DPRINT1("USBRNDIS: Found CDC Ethernet Descriptor: iMACAddress=%u MaxSegment=%u\n",
+                DPRINT1("Found CDC Ethernet Descriptor: iMACAddress=%u MaxSegment=%u\n",
                         EthDesc->iMACAddress, EthDesc->wMaxSegmentSize);
 
                 Adapter->CdcMacAddressIndex = EthDesc->iMACAddress;
@@ -364,7 +480,7 @@ RndisUsbFindCdcEthernetDescriptor(
         CurrentDesc += CurrentDesc[0];
     }
 
-    DPRINT1("USBRNDIS: CDC Ethernet Descriptor not found, will use generated MAC\n");
+    DPRINT1("CDC Ethernet Descriptor not found, will use generated MAC\n");
 }
 
 /*
@@ -393,7 +509,7 @@ RndisUsbFindEndpoints(
         {
             EndpointDesc = (PUSB_ENDPOINT_DESCRIPTOR)CurrentDesc;
 
-            DPRINT("USBRNDIS: Found endpoint: Address=0x%02X Attributes=0x%02X MaxPacket=%u\n",
+            DPRINT("Found endpoint: Address=0x%02X Attributes=0x%02X MaxPacket=%u\n",
                    EndpointDesc->bEndpointAddress,
                    EndpointDesc->bmAttributes,
                    EndpointDesc->wMaxPacketSize);
@@ -406,7 +522,7 @@ RndisUsbFindEndpoints(
                     {
                         Adapter->BulkInEndpoint.EndpointAddress = EndpointDesc->bEndpointAddress;
                         Adapter->BulkInEndpoint.MaxPacketSize = EndpointDesc->wMaxPacketSize;
-                        DPRINT("USBRNDIS: Bulk IN endpoint: 0x%02X\n", EndpointDesc->bEndpointAddress);
+                        DPRINT("Bulk IN endpoint: 0x%02X\n", EndpointDesc->bEndpointAddress);
                     }
                 }
                 else
@@ -415,7 +531,7 @@ RndisUsbFindEndpoints(
                     {
                         Adapter->BulkOutEndpoint.EndpointAddress = EndpointDesc->bEndpointAddress;
                         Adapter->BulkOutEndpoint.MaxPacketSize = EndpointDesc->wMaxPacketSize;
-                        DPRINT("USBRNDIS: Bulk OUT endpoint: 0x%02X\n", EndpointDesc->bEndpointAddress);
+                        DPRINT("Bulk OUT endpoint: 0x%02X\n", EndpointDesc->bEndpointAddress);
                     }
                 }
                 EndpointsFound++;
@@ -426,7 +542,7 @@ RndisUsbFindEndpoints(
                 {
                     Adapter->InterruptEndpoint.EndpointAddress = EndpointDesc->bEndpointAddress;
                     Adapter->InterruptEndpoint.MaxPacketSize = EndpointDesc->wMaxPacketSize;
-                    DPRINT("USBRNDIS: Interrupt endpoint: 0x%02X\n", EndpointDesc->bEndpointAddress);
+                    DPRINT("Interrupt endpoint: 0x%02X\n", EndpointDesc->bEndpointAddress);
                 }
                 EndpointsFound++;
             }
@@ -491,7 +607,7 @@ RndisUsbParseConfiguration(
         {
             InterfaceDesc = (PUSB_INTERFACE_DESCRIPTOR)CurrentDesc;
 
-            DPRINT("USBRNDIS: Interface %u: Class=0x%02X SubClass=0x%02X Protocol=0x%02X Endpoints=%u\n",
+            DPRINT("Interface %u: Class=0x%02X SubClass=0x%02X Protocol=0x%02X Endpoints=%u\n",
                    InterfaceDesc->bInterfaceNumber,
                    InterfaceDesc->bInterfaceClass,
                    InterfaceDesc->bInterfaceSubClass,
@@ -504,7 +620,7 @@ RndisUsbParseConfiguration(
                 InterfaceDesc->bInterfaceSubClass == USB_CDC_SUBCLASS_ACM &&
                 InterfaceDesc->bInterfaceProtocol == USB_CDC_PROTOCOL_RNDIS)
             {
-                DPRINT("USBRNDIS: Found RNDIS control interface (CDC ACM)\n");
+                DPRINT("Found RNDIS control interface (CDC ACM)\n");
                 Adapter->ControlInterfaceNumber = InterfaceDesc->bInterfaceNumber;
                 FoundControlInterface = TRUE;
                 RndisUsbFindEndpoints(Adapter, InterfaceDesc, DescEnd, FALSE);
@@ -514,7 +630,7 @@ RndisUsbParseConfiguration(
                      InterfaceDesc->bInterfaceSubClass == 0x01 &&
                      InterfaceDesc->bInterfaceProtocol == 0x03)
             {
-                DPRINT("USBRNDIS: Found RNDIS interface (Wireless controller)\n");
+                DPRINT("Found RNDIS interface (Wireless controller)\n");
                 Adapter->ControlInterfaceNumber = InterfaceDesc->bInterfaceNumber;
                 FoundControlInterface = TRUE;
                 RndisUsbFindEndpoints(Adapter, InterfaceDesc, DescEnd, TRUE);
@@ -526,7 +642,7 @@ RndisUsbParseConfiguration(
                      InterfaceDesc->bInterfaceSubClass == 0x01 &&
                      InterfaceDesc->bInterfaceProtocol == 0x01)
             {
-                DPRINT("USBRNDIS: Found RNDIS interface (Miscellaneous/ActiveSync)\n");
+                DPRINT("Found RNDIS interface (Miscellaneous/ActiveSync)\n");
                 Adapter->ControlInterfaceNumber = InterfaceDesc->bInterfaceNumber;
                 FoundControlInterface = TRUE;
                 RndisUsbFindEndpoints(Adapter, InterfaceDesc, DescEnd, FALSE);
@@ -535,7 +651,7 @@ RndisUsbParseConfiguration(
             else if (InterfaceDesc->bInterfaceClass == USB_CLASS_COMM &&
                      InterfaceDesc->bInterfaceSubClass == USB_CDC_SUBCLASS_ECM)
             {
-                DPRINT1("USBRNDIS: Found CDC-ECM interface (Ethernet Control Model)\n");
+                DPRINT1("Found CDC-ECM interface (Ethernet Control Model)\n");
                 Adapter->ControlInterfaceNumber = InterfaceDesc->bInterfaceNumber;
                 Adapter->IsCdcEcm = TRUE;  /* CDC-ECM mode - no RNDIS messages */
                 FoundControlInterface = TRUE;
@@ -551,7 +667,7 @@ RndisUsbParseConfiguration(
                  * Ethernet frames in NTH16/NDP16 structures. This requires special
                  * TX/RX handling in rndisdata.c.
                  */
-                DPRINT1("USBRNDIS: Found CDC-NCM interface (Network Control Model)\n");
+                DPRINT1("Found CDC-NCM interface (Network Control Model)\n");
                 Adapter->ControlInterfaceNumber = InterfaceDesc->bInterfaceNumber;
                 Adapter->IsCdcNcm = TRUE;  /* CDC-NCM mode - NTB framing required */
                 FoundControlInterface = TRUE;
@@ -561,7 +677,7 @@ RndisUsbParseConfiguration(
             /* Check for CDC Data interface */
             else if (InterfaceDesc->bInterfaceClass == USB_CLASS_CDC_DATA)
             {
-                DPRINT("USBRNDIS: Found CDC Data interface (Alt=%u Endpoints=%u)\n",
+                DPRINT("Found CDC Data interface (Alt=%u Endpoints=%u)\n",
                        InterfaceDesc->bAlternateSetting, InterfaceDesc->bNumEndpoints);
                 /*
                  * CDC Data interfaces often have:
@@ -574,7 +690,7 @@ RndisUsbParseConfiguration(
                     Adapter->DataInterfaceNumber = InterfaceDesc->bInterfaceNumber;
                     Adapter->DataAlternateSetting = InterfaceDesc->bAlternateSetting;
                     RndisUsbFindEndpoints(Adapter, InterfaceDesc, DescEnd, TRUE);
-                    DPRINT("USBRNDIS: Using CDC Data Alt %u with %u endpoints\n",
+                    DPRINT("Using CDC Data Alt %u with %u endpoints\n",
                            InterfaceDesc->bAlternateSetting, InterfaceDesc->bNumEndpoints);
                 }
             }
@@ -590,7 +706,7 @@ RndisUsbParseConfiguration(
 
     if (!FoundControlInterface)
     {
-        DPRINT1("USBRNDIS: No RNDIS control interface found\n");
+        DPRINT1("No RNDIS control interface found\n");
         return STATUS_DEVICE_CONFIGURATION_ERROR;
     }
 
@@ -598,7 +714,7 @@ RndisUsbParseConfiguration(
     if (Adapter->BulkInEndpoint.EndpointAddress == 0 ||
         Adapter->BulkOutEndpoint.EndpointAddress == 0)
     {
-        DPRINT1("USBRNDIS: Missing bulk endpoints (IN=0x%02X OUT=0x%02X)\n",
+        DPRINT1("Missing bulk endpoints (IN=0x%02X OUT=0x%02X)\n",
                 Adapter->BulkInEndpoint.EndpointAddress,
                 Adapter->BulkOutEndpoint.EndpointAddress);
         return STATUS_DEVICE_CONFIGURATION_ERROR;
@@ -623,7 +739,7 @@ RndisUsbSelectConfiguration(
     ULONG InterfaceCount = 0;
     ULONG i;
 
-    DPRINT("USBRNDIS: Selecting USB configuration\n");
+    DPRINT("Selecting USB configuration\n");
 
     /* Parse configuration to find interfaces */
     Status = RndisUsbParseConfiguration(Adapter);
@@ -687,7 +803,7 @@ RndisUsbSelectConfiguration(
 
         if (InterfaceDescriptor)
         {
-            DPRINT1("USBRNDIS: Data interface descriptor: Alt=%u Endpoints=%u\n",
+            DPRINT1("Data interface descriptor: Alt=%u Endpoints=%u\n",
                    InterfaceDescriptor->bAlternateSetting,
                    InterfaceDescriptor->bNumEndpoints);
             InterfaceList[i].InterfaceDescriptor = InterfaceDescriptor;
@@ -696,7 +812,7 @@ RndisUsbSelectConfiguration(
         }
         else
         {
-            DPRINT1("USBRNDIS: Failed to find data interface %u alt %u\n",
+            DPRINT1("Failed to find data interface %u alt %u\n",
                    Adapter->DataInterfaceNumber, Adapter->DataAlternateSetting);
         }
     }
@@ -719,7 +835,7 @@ RndisUsbSelectConfiguration(
     Status = RndisSyncUrbRequest(Adapter->LowerDeviceObject, Urb);
     if (!NT_SUCCESS(Status))
     {
-        DPRINT1("USBRNDIS: Failed to select configuration (0x%08X)\n", Status);
+        DPRINT1("Failed to select configuration (0x%08X)\n", Status);
         ExFreePool(Urb);
         RndisFreeMemory(InterfaceList);
         return Status;
@@ -740,7 +856,7 @@ RndisUsbSelectConfiguration(
             continue;
         }
 
-        DPRINT("USBRNDIS: Interface %u configured: %u pipes\n",
+        DPRINT("Interface %u configured: %u pipes\n",
                InterfaceInfo->InterfaceNumber,
                InterfaceInfo->NumberOfPipes);
 
@@ -768,19 +884,19 @@ RndisUsbSelectConfiguration(
         {
             PUSBD_PIPE_INFORMATION Pipe = &InterfaceInfo->Pipes[j];
 
-            DPRINT1("USBRNDIS: Config Pipe %lu: Address=0x%02X Type=%u Handle=%p\n",
+            DPRINT1("Config Pipe %lu: Address=0x%02X Type=%u Handle=%p\n",
                     j, Pipe->EndpointAddress, Pipe->PipeType, Pipe->PipeHandle);
 
             if (Pipe->EndpointAddress == Adapter->BulkInEndpoint.EndpointAddress)
             {
                 Adapter->BulkInEndpoint.PipeHandle = Pipe->PipeHandle;
-                DPRINT1("USBRNDIS: Matched Bulk IN endpoint 0x%02X -> Handle=%p\n",
+                DPRINT1("Matched Bulk IN endpoint 0x%02X -> Handle=%p\n",
                         Pipe->EndpointAddress, Pipe->PipeHandle);
             }
             else if (Pipe->EndpointAddress == Adapter->BulkOutEndpoint.EndpointAddress)
             {
                 Adapter->BulkOutEndpoint.PipeHandle = Pipe->PipeHandle;
-                DPRINT1("USBRNDIS: Matched Bulk OUT endpoint 0x%02X -> Handle=%p\n",
+                DPRINT1("Matched Bulk OUT endpoint 0x%02X -> Handle=%p\n",
                         Pipe->EndpointAddress, Pipe->PipeHandle);
             }
             else if (Pipe->EndpointAddress == Adapter->InterruptEndpoint.EndpointAddress)
@@ -797,7 +913,7 @@ RndisUsbSelectConfiguration(
     /* Verify we got pipe handles */
     if (!Adapter->BulkInEndpoint.PipeHandle || !Adapter->BulkOutEndpoint.PipeHandle)
     {
-        DPRINT1("USBRNDIS: Missing pipe handles\n");
+        DPRINT1("Missing pipe handles\n");
         return STATUS_DEVICE_CONFIGURATION_ERROR;
     }
 
@@ -825,20 +941,20 @@ RndisUsbSelectConfiguration(
         (!Adapter->BulkInEndpoint.PipeHandle || !Adapter->BulkOutEndpoint.PipeHandle))
     {
         NTSTATUS AltStatus;
-        DPRINT1("USBRNDIS: No pipe handles from config, selecting alt %u explicitly\n",
+        DPRINT1("No pipe handles from config, selecting alt %u explicitly\n",
                 Adapter->DataAlternateSetting);
         AltStatus = RndisUsbSelectAlternate(Adapter,
                                             Adapter->DataInterfaceNumber,
                                             Adapter->DataAlternateSetting);
         if (!NT_SUCCESS(AltStatus))
         {
-            DPRINT1("USBRNDIS: Failed to select data interface alt %u (0x%08X)\n",
+            DPRINT1("Failed to select data interface alt %u (0x%08X)\n",
                     Adapter->DataAlternateSetting, AltStatus);
             return STATUS_DEVICE_CONFIGURATION_ERROR;
         }
     }
 
-    DPRINT("USBRNDIS: Configuration selected successfully\n");
+    DPRINT("Configuration selected successfully\n");
     return STATUS_SUCCESS;
 }
 
@@ -860,7 +976,7 @@ RndisUsbSelectAlternate(
     PUSB_INTERFACE_DESCRIPTOR InterfaceDesc;
     ULONG UrbSize;
 
-    DPRINT1("USBRNDIS: Selecting alternate setting %u for interface %u\n",
+    DPRINT1("Selecting alternate setting %u for interface %u\n",
             AlternateSetting, InterfaceNumber);
 
     /* Find the interface descriptor for the alternate setting */
@@ -873,7 +989,7 @@ RndisUsbSelectAlternate(
 
     if (!InterfaceDesc)
     {
-        DPRINT1("USBRNDIS: Interface descriptor not found\n");
+        DPRINT1("Interface descriptor not found\n");
         return STATUS_NOT_FOUND;
     }
 
@@ -909,7 +1025,7 @@ RndisUsbSelectAlternate(
         PUSBD_INTERFACE_INFORMATION InterfaceInfo = &Urb->UrbSelectInterface.Interface;
         ULONG j;
 
-        DPRINT1("USBRNDIS: Interface %u alt %u selected, %u pipes\n",
+        DPRINT1("Interface %u alt %u selected, %u pipes\n",
                 InterfaceNumber, AlternateSetting, InterfaceInfo->NumberOfPipes);
 
         /* Update pipe handles from the new interface info */
@@ -917,7 +1033,7 @@ RndisUsbSelectAlternate(
         {
             PUSBD_PIPE_INFORMATION Pipe = &InterfaceInfo->Pipes[j];
 
-            DPRINT1("USBRNDIS: Pipe %u: Address=0x%02X Type=%u Handle=%p MaxPacket=%u\n",
+            DPRINT1("Pipe %u: Address=0x%02X Type=%u Handle=%p MaxPacket=%u\n",
                     j, Pipe->EndpointAddress, Pipe->PipeType, Pipe->PipeHandle,
                     Pipe->MaximumPacketSize);
 
@@ -935,7 +1051,7 @@ RndisUsbSelectAlternate(
     }
     else
     {
-        DPRINT1("USBRNDIS: Select interface failed (0x%08X)\n", Status);
+        DPRINT1("Select interface failed (0x%08X)\n", Status);
     }
 
     RndisFreeMemory(Urb);
@@ -957,7 +1073,7 @@ RndisUsbSendControlMessage(
     PURB Urb;
     NTSTATUS Status;
 
-    DPRINT("USBRNDIS: Sending control message (%u bytes)\n", BufferLength);
+    DPRINT("Sending control message (%u bytes)\n", BufferLength);
 
     Urb = RndisAllocateMemory(NonPagedPool, sizeof(URB));
     if (!Urb)
@@ -998,7 +1114,7 @@ RndisUsbReceiveControlResponse(
     PURB Urb;
     NTSTATUS Status;
 
-    DPRINT("USBRNDIS: Receiving control response (max %u bytes)\n", BufferLength);
+    DPRINT("Receiving control response (max %u bytes)\n", BufferLength);
 
     *BytesReceived = 0;
 
@@ -1024,7 +1140,7 @@ RndisUsbReceiveControlResponse(
     if (NT_SUCCESS(Status))
     {
         *BytesReceived = Urb->UrbControlVendorClassRequest.TransferBufferLength;
-        DPRINT("USBRNDIS: Received %u bytes\n", *BytesReceived);
+        DPRINT("Received %u bytes\n", *BytesReceived);
     }
 
     RndisFreeMemory(Urb);
@@ -1044,7 +1160,7 @@ RndisUsbSetEthernetPacketFilter(
     PURB Urb;
     NTSTATUS Status;
 
-    DPRINT("USBRNDIS: CDC set packet filter 0x%04X\n", PacketFilter);
+    DPRINT("CDC set packet filter 0x%04X\n", PacketFilter);
 
     Urb = RndisAllocateMemory(NonPagedPool, sizeof(URB));
     if (!Urb)
@@ -1066,7 +1182,7 @@ RndisUsbSetEthernetPacketFilter(
     Status = RndisSyncUrbRequest(Adapter->LowerDeviceObject, Urb);
     if (!NT_SUCCESS(Status))
     {
-        DPRINT1("USBRNDIS: SET_ETHERNET_PACKET_FILTER failed (0x%08X)\n", Status);
+        DPRINT1("SET_ETHERNET_PACKET_FILTER failed (0x%08X)\n", Status);
     }
 
     RndisFreeMemory(Urb);
@@ -1126,7 +1242,7 @@ RndisUsbSetEthernetMulticastFilters(
     Status = RndisSyncUrbRequest(Adapter->LowerDeviceObject, Urb);
     if (!NT_SUCCESS(Status))
     {
-        DPRINT1("USBRNDIS: SET_ETHERNET_MULTICAST_FILTERS failed (0x%08X)\n", Status);
+        DPRINT1("SET_ETHERNET_MULTICAST_FILTERS failed (0x%08X)\n", Status);
     }
 
     RndisFreeMemory(Urb);
@@ -1207,7 +1323,7 @@ RndisUsbGetEthernetStatistic(
     if (NT_SUCCESS(Status))
     {
         *StatisticValue = *ResultBuffer;
-        DPRINT("USBRNDIS: GET_ETHERNET_STATISTIC selector=%u value=%lu\n",
+        DPRINT("GET_ETHERNET_STATISTIC selector=%u value=%lu\n",
                FeatureSelector, *StatisticValue);
     }
     else
@@ -1216,7 +1332,7 @@ RndisUsbGetEthernetStatistic(
          * Many devices don't support this request or specific statistics.
          * STALL response typically means not supported.
          */
-        DPRINT("USBRNDIS: GET_ETHERNET_STATISTIC selector=%u failed (0x%08X)\n",
+        DPRINT("GET_ETHERNET_STATISTIC selector=%u failed (0x%08X)\n",
                FeatureSelector, Status);
         *StatisticValue = 0;
     }
@@ -1243,7 +1359,7 @@ RndisNcmSetNtbInputSize(
     NTSTATUS Status;
     PULONG SizeBuffer;
 
-    DPRINT1("USBRNDIS: Setting NCM NTB input size to %lu\n", NtbInputSize);
+    DPRINT1("Setting NCM NTB input size to %lu\n", NtbInputSize);
 
     /* Allocate buffer for the size value */
     SizeBuffer = RndisAllocateMemory(NonPagedPool, sizeof(ULONG));
@@ -1275,7 +1391,7 @@ RndisNcmSetNtbInputSize(
 
     if (!NT_SUCCESS(Status))
     {
-        DPRINT1("USBRNDIS: SET_NTB_INPUT_SIZE failed (0x%08X)\n", Status);
+        DPRINT1("SET_NTB_INPUT_SIZE failed (0x%08X)\n", Status);
     }
 
     RndisFreeMemory(Urb);
@@ -1298,7 +1414,7 @@ RndisNcmGetNtbParameters(
     NTSTATUS Status;
     PNCM_NTB_PARAMETERS Params;
 
-    DPRINT1("USBRNDIS: Getting NCM NTB parameters\n");
+    DPRINT1("Getting NCM NTB parameters\n");
 
     /* Allocate buffer for parameters */
     Params = RndisAllocateMemory(NonPagedPool, sizeof(NCM_NTB_PARAMETERS));
@@ -1329,7 +1445,7 @@ RndisNcmGetNtbParameters(
 
     if (NT_SUCCESS(Status))
     {
-        DPRINT1("USBRNDIS: NCM NTB Parameters:\n");
+        DPRINT1("NCM NTB Parameters:\n");
         DPRINT1("  wLength: %u\n", Params->wLength);
         DPRINT1("  bmNtbFormatsSupported: 0x%04X\n", Params->bmNtbFormatsSupported);
         DPRINT1("  dwNtbInMaxSize: %lu\n", Params->dwNtbInMaxSize);
@@ -1367,7 +1483,7 @@ RndisNcmGetNtbParameters(
     }
     else
     {
-        DPRINT1("USBRNDIS: GET_NTB_PARAMETERS failed (0x%08X), using defaults\n", Status);
+        DPRINT1("GET_NTB_PARAMETERS failed (0x%08X), using defaults\n", Status);
         /* Use defaults already set in usbrndis.c */
     }
 
@@ -1390,7 +1506,7 @@ RndisNcmSetup(
 {
     NTSTATUS Status;
 
-    DPRINT1("USBRNDIS: Performing CDC-NCM setup\n");
+    DPRINT1("Performing CDC-NCM setup\n");
 
     /* Query device's NTB parameters */
     Status = RndisNcmGetNtbParameters(Adapter);
@@ -1401,10 +1517,10 @@ RndisNcmSetup(
     if (!NT_SUCCESS(Status))
     {
         /* Some devices may not support this command, continue anyway */
-        DPRINT1("USBRNDIS: SET_NTB_INPUT_SIZE failed, continuing\n");
+        DPRINT1("SET_NTB_INPUT_SIZE failed, continuing\n");
     }
 
-    DPRINT1("USBRNDIS: CDC-NCM setup complete\n");
+    DPRINT1("CDC-NCM setup complete\n");
     return STATUS_SUCCESS;
 }
 
@@ -1440,7 +1556,7 @@ RndisAsyncUrbRequest(
     Irp = IoAllocateIrp(Adapter->LowerDeviceObject->StackSize, FALSE);
     if (!Irp)
     {
-        DPRINT1("USBRNDIS: Failed to allocate IRP for async URB\n");
+        DPRINT1("Failed to allocate IRP for async URB\n");
         RndisDecrementPendingIo(Adapter);
         return STATUS_INSUFFICIENT_RESOURCES;
     }
@@ -1524,7 +1640,7 @@ RndisRxBackoffDpc(
     UNREFERENCED_PARAMETER(SystemArgument1);
     UNREFERENCED_PARAMETER(SystemArgument2);
 
-    DPRINT("USBRNDIS: RX backoff timer expired, resuming RX\n");
+    DPRINT("RX backoff timer expired, resuming RX\n");
 
     /* Reset error counter */
     InterlockedExchange((PLONG)&Adapter->RxHot.RxConsecutiveErrors, 0);
@@ -1766,11 +1882,10 @@ RndisInterruptComplete(
                            MediaConnectStateConnected :
                            MediaConnectStateDisconnected;
 
-                DPRINT1("USBRNDIS: CDC NETWORK_CONNECTION notification: %s\n",
-                        (NewState == MediaConnectStateConnected) ? "Connected" : "Disconnected");
-
                 if (Adapter->MediaState != NewState)
                 {
+                    DPRINT1("CDC network connection: %s\n",
+                            (NewState == MediaConnectStateConnected) ? "connected" : "disconnected");
                     Adapter->MediaState = NewState;
                     RndisIndicateLinkState(Adapter);
                 }
@@ -1799,25 +1914,22 @@ RndisInterruptComplete(
                      */
                     NewLinkSpeed = SpeedChange->DLBitRate;
 
-                    DPRINT1("USBRNDIS: CDC SPEED_CHANGE notification: DL=%lu bps, UL=%lu bps\n",
-                            SpeedChange->DLBitRate, SpeedChange->ULBitRate);
-
                     if (NewLinkSpeed == 0 || NewLinkSpeed == 0xFFFFFFFF)
                     {
-                        DPRINT1("USBRNDIS: SPEED_CHANGE reports unknown speed, keeping %lu bps\n",
-                                Adapter->LinkSpeed);
                         break;
                     }
 
                     if (Adapter->LinkSpeed != NewLinkSpeed)
                     {
+                        DPRINT1("CDC link speed: DL=%lu bps, UL=%lu bps\n",
+                                SpeedChange->DLBitRate, SpeedChange->ULBitRate);
                         Adapter->LinkSpeed = NewLinkSpeed;
                         RndisIndicateLinkState(Adapter);
                     }
                 }
                 else
                 {
-                    DPRINT1("USBRNDIS: CDC SPEED_CHANGE notification too short (%lu bytes)\n",
+                    DPRINT1("CDC SPEED_CHANGE notification too short (%lu bytes)\n",
                             TransferLength);
                 }
                 break;
@@ -1829,11 +1941,11 @@ RndisInterruptComplete(
                  * This is handled via polling in RndisCommand() for RNDIS devices.
                  * For CDC-ECM/NCM, this notification is not expected.
                  */
-                DPRINT("USBRNDIS: CDC RESPONSE_AVAILABLE notification\n");
+                DPRINT("CDC RESPONSE_AVAILABLE notification\n");
                 break;
 
             default:
-                DPRINT1("USBRNDIS: Unknown CDC notification type 0x%02X\n", NotifyType);
+                DPRINT1("Unknown CDC notification type 0x%02X\n", NotifyType);
                 break;
         }
     }
@@ -1935,7 +2047,7 @@ RndisRxComplete(
             Status == STATUS_IO_TIMEOUT)
         {
             /* Not a real error - just no data available */
-            DPRINT("USBRNDIS: RX NAK (no data available)\n");
+            DPRINT("RX NAK (no data available)\n");
             Adapter->RxHot.RxConsecutiveErrors = 0;  /* Reset counter for NAKs */
             /*
              * Use delayed resubmission to prevent infinite tight loop.
@@ -1945,7 +2057,7 @@ RndisRxComplete(
         }
         else
         {
-            DPRINT1("USBRNDIS: RX failed with status 0x%08X (USBD_STATUS=0x%08X)\n",
+            DPRINT1("RX failed with status 0x%08X (USBD_STATUS=0x%08X)\n",
                     Status, UsbdStatus);
             Adapter->RxErrorCount++;
 
@@ -1957,7 +2069,7 @@ RndisRxComplete(
             ConsecutiveErrors = InterlockedIncrement((PLONG)&Adapter->RxHot.RxConsecutiveErrors);
             if (ConsecutiveErrors > 10)
             {
-                DPRINT1("USBRNDIS: Too many consecutive RX errors (%u), entering backoff\n",
+                DPRINT1("Too many consecutive RX errors (%u), entering backoff\n",
                         ConsecutiveErrors);
                 ShouldResubmit = FALSE;
 
@@ -2254,7 +2366,7 @@ RndisTxComplete(
     /* Update statistics and determine NDIS status */
     if (NT_SUCCESS(Status))
     {
-        DPRINT("USBRNDIS: TX complete, %lu packet(s) sent successfully\n", NblCount ? NblCount : 1);
+        DPRINT("TX complete, %lu packet(s) sent successfully\n", NblCount ? NblCount : 1);
         /*
          * For NCM batching, update TxOkCount for each NBL in the batch.
          * If NblCount is 0, it's a non-batched send (single NBL).
@@ -2271,7 +2383,7 @@ RndisTxComplete(
     }
     else
     {
-        DPRINT1("USBRNDIS: TX failed with status 0x%08X\n", Status);
+        DPRINT1("TX failed with status 0x%08X\n", Status);
         if (NblCount > 1)
         {
             Adapter->TxErrorCount += NblCount;
@@ -2355,7 +2467,7 @@ RndisUsbSubmitBulkWrite(
         return STATUS_DEVICE_NOT_READY;
     }
 
-    DPRINT("USBRNDIS: Submitting async bulk write (%u bytes)\n", Length);
+    DPRINT("Submitting async bulk write (%u bytes)\n", Length);
 
     /* Build the URB */
     Urb = &Adapter->TxHot.TxUrb;
