@@ -4,9 +4,8 @@
  * PURPOSE:     BCM2712 CRTC / PixelValve (timing generator) access.
  * COPYRIGHT:   Copyright 2026 Ahmed Arif <arif193@gmail.com>
  *
- * Ported from the Linux drm/vc4 driver (Dave Stevenson, Dom Cobley, Maxime
- * Ripard, Tim Gover) and reworked for ReactOS to run alongside the
- * firmware-set mode.  See rpi5vc4_crtc.h.
+ * Inspired by the only available driver out there, which is the Linux
+ * equivalent (drm/vc4).
  *
  * For now this reads back the PixelValve the firmware enabled, records the
  * live raster timing, and can re-write the same timing as a no-op ownership

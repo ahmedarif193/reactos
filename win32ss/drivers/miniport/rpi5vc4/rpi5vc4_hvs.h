@@ -5,8 +5,8 @@
  *              multi-plane display-list generation and scanout ownership.
  * COPYRIGHT:   Copyright 2026 Ahmed Arif <arif193@gmail.com>
  *
- * Ported from the Linux drm/vc4 driver (Dave Stevenson, Dom Cobley, Maxime
- * Ripard, Tim Gover) and adapted for ReactOS.
+ * Inspired by the only available driver out there, which is the Linux
+ * equivalent (drm/vc4).
  *
  * The registers and display-list element layout below are the BCM2712 "HVS" -
  * the SCALER6 / SCALER6D display compositor.

@@ -5,10 +5,8 @@
  *              multi-plane display-list generation and scanout ownership.
  * COPYRIGHT:   Copyright 2026 Ahmed Arif <arif193@gmail.com>
  *
- * Ported from the Linux drm/vc4 driver (Dave Stevenson, Dom Cobley, Maxime
- * Ripard, Tim Gover) and reworked for the ReactOS videoport miniport: it
- * composites over the firmware's live display list instead of driving the
- * hardware from reset.  See rpi5vc4_hvs.h.
+ * Inspired by the only available driver out there, which is the Linux
+ * equivalent (drm/vc4).
  *
  * The HVS scans out by walking a per-channel "display list" in a small on-chip
  * RAM.  Each plane is a run of control dwords chained by CTL0.NEXT; the channel
