@@ -28,7 +28,10 @@ device_tree_end=0x210000
 device_tree=bcm2712-rpi-5-b.dtb
 armstub=RPI5_EFI.fd
 framebuffer_depth=32
+framebuffer_ignore_alpha=1
 dtparam=pciex1
+dtoverlay=uart0-pi5
+dtparam=uart0=on
 
 [all]
 force_turbo=1

@@ -1,12 +1,12 @@
 /*
  * PROJECT:     ReactOS Raspberry Pi 5 (BCM2712) display miniport
  * LICENSE:     GPL-2.0-or-later (https://spdx.org/licenses/GPL-2.0-or-later)
- * PURPOSE:     Clean-room BCM2712 CRTC / PixelValve (timing generator) access.
+ * PURPOSE:     BCM2712 CRTC / PixelValve (timing generator) access.
  * COPYRIGHT:   Copyright 2026 Ahmed Arif <arif193@gmail.com>
  *
- * Clean-room reimplementation for ReactOS, based on the work of the Linux
- * drm/vc4 BCM2712 authors (Dave Stevenson, Dom Cobley, Maxime Ripard, Tim
- * Gover).  See rpi5vc4_crtc.h.
+ * Ported from the Linux drm/vc4 driver (Dave Stevenson, Dom Cobley, Maxime
+ * Ripard, Tim Gover) and reworked for ReactOS to run alongside the
+ * firmware-set mode.  See rpi5vc4_crtc.h.
  *
  * For now this reads back the PixelValve the firmware enabled, records the
  * live raster timing, and can re-write the same timing as a no-op ownership

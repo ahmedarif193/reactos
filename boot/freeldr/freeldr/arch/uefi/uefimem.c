@@ -46,6 +46,10 @@ AddMemoryDescriptor(
 extern EFI_SYSTEM_TABLE* GlobalSystemTable;
 extern EFI_HANDLE GlobalImageHandle;
 
+/* Active firmware GOP framebuffer, captured in uefivid.c. */
+extern ULONG_PTR VramAddress;
+extern ULONG VramSize;
+
 EFI_MEMORY_DESCRIPTOR* EfiMemoryMap = NULL;
 UINT32 FreeldrDescCount;
 /* Usable FreeldrMem capacity, excluding the terminator slot. */
@@ -380,6 +384,31 @@ UefiMemGetMemoryMap(ULONG *MemoryMapSize)
     /* Windows expects the first page to be reserved, otherwise it asserts.
      * However it can be just a free page on some UEFI systems. */
     UefiSetMemory(FreeldrMem, 0x000000, 1, LoaderFirmwarePermanent);
+
+    /*
+     * Reserve the active firmware GOP framebuffer. On systems where the GOP
+     * scanout buffer lives in ordinary DRAM (e.g. the Raspberry Pi 5, base
+     * 0x3F400000) the firmware reports it inside a conventional-memory region,
+     * so without this it is handed to the kernel as free RAM. The kernel would
+     * then both zero those pages from the zero-page thread (painting the live
+     * display black) and map them write-back cacheable in KSEG0, whose stale
+     * cache lines write back over freshly drawn pixels - producing black bands
+     * that only repair on the next repaint. LoaderFirmwarePermanent is an
+     * "invisible" type, so the kernel never frees, zeroes, or aliases these
+     * pages, leaving the videoport write-combining mapping as the sole coherent
+     * view. AddMemoryDescriptor() splits the surrounding free descriptor for us.
+     */
+    if (VramAddress != 0 && VramSize != 0)
+    {
+        ULONG_PTR FbBase = VramAddress & ~((ULONG_PTR)EFI_PAGE_SIZE - 1);
+        ULONG_PTR FbEnd = (VramAddress + VramSize + EFI_PAGE_SIZE - 1) &
+                          ~((ULONG_PTR)EFI_PAGE_SIZE - 1);
+        UefiSetMemory(FreeldrMem,
+                      FbBase,
+                      (PFN_COUNT)((FbEnd - FbBase) / EFI_PAGE_SIZE),
+                      LoaderFirmwarePermanent);
+    }
+
     *MemoryMapSize = FreeldrDescCount;
     return FreeldrMem;
 }

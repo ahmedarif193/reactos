@@ -2260,7 +2260,7 @@ NtCreateUserProcess(OUT PHANDLE ProcessHandle,
     ThreadContext.Sp = (ULONG64)InitialTeb.StackBase;
     ThreadContext.Sp &= ~15ULL;
     ThreadContext.X0 = (ULONG64)ProcessBasicInfo.PebBaseAddress;
-    ThreadContext.Cpsr = 0;  /* User mode */
+    ThreadContext.Cpsr = ARM64_PSTATE_ASYNC_ABORT_MASK;
 #elif defined(_M_ARM)
     /* ARM: Set up initial context */
     ThreadContext.Pc = (ULONG)ImageInformation.TransferAddress;

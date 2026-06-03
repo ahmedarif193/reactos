@@ -890,7 +890,6 @@ KiArm64InitializeTrapFrame(
 
 static LONG KiArm64SyncExceptionLogBudget = 128;
 static LONG KiArm64SessionFaultLogBudget = 16;
-static volatile LONG KiArm64DataAbortOwner[MAXIMUM_PROCESSORS];
 extern volatile ULONG_PTR MiArm64SessionWsStage;
 extern volatile ULONG_PTR MiArm64SessionWsFp;
 extern volatile ULONG_PTR MiArm64SessionWsLr;
@@ -1001,18 +1000,6 @@ KiArm64ReleaseWorkingSetsForBugCheck(VOID)
     if (Raised)
     {
         KeLowerIrql(PreviousIrql);
-    }
-}
-
-static
-VOID
-KiArm64ResetDataAbortGuard(VOID)
-{
-    ULONG ProcessorIndex = KeGetCurrentProcessorNumber();
-
-    if (ProcessorIndex < MAXIMUM_PROCESSORS)
-    {
-        InterlockedExchange(&KiArm64DataAbortOwner[ProcessorIndex], 0);
     }
 }
 
@@ -1136,9 +1123,6 @@ KiArm64BugCheckSynchronousException(
     KdDebuggerEnabled = TRUE;
     KdDebuggerNotPresent = TRUE;  /* No interactive debugger attached */
     KdPitchDebugger = TRUE;       /* Prevent KD re-init which can fault */
-
-    /* Avoid touching working-set structures or pool during a hard stop. */
-    KiArm64ResetDataAbortGuard();
 
     /* Print first crash info */
     if (InterlockedCompareExchange(&KiArm64FirstCrashPrinted, 1, 0) == 0)
@@ -1663,9 +1647,8 @@ KiArm64HandleSynchronousException(
              * general fault handler below. */
 
             {
-                ULONG ProcessorIndex = KeGetCurrentProcessorNumber();
-                BOOLEAN OwnsAbortGuard = FALSE;
 #if DBG && defined(ARM64_TRAP_TRACE)
+                ULONG ProcessorIndex = KeGetCurrentProcessorNumber();
                 LONG GuardSnapshot = -1;
 #endif
 
@@ -1679,39 +1662,6 @@ KiArm64HandleSynchronousException(
                            ProcessorIndex,
                            GuardSnapshot);
 #endif
-
-                if (ProcessorIndex < MAXIMUM_PROCESSORS)
-                {
-                    OwnsAbortGuard = (InterlockedCompareExchange(&KiArm64DataAbortOwner[ProcessorIndex],
-                                                                  1,
-                                                                  0) == 0);
-                    if (!OwnsAbortGuard)
-                    {
-                        if (PreviousMode == UserMode)
-                        {
-                            InterlockedExchange(&KiArm64DataAbortOwner[ProcessorIndex], 0);
-                        }
-                        else
-                        {
-                            PVOID LrPointer = (PVOID)(ULONG_PTR)Context->State.Registers.X[30];
-                            PVOID SpPointer = (PVOID)(ULONG_PTR)Context->State.Registers.Sp;
-
-                            DbgPrintEx(DPFLTR_DEFAULT_ID, DPFLTR_ERROR_LEVEL,
-                                       "[arm64] DA NESTED: esr=0x%lx far=%p elr=%p lr=%p sp=%p cpu=%lu\n",
-                                       Esr,
-                                       (PVOID)(ULONG_PTR)Context->State.FaultAddress,
-                                       (PVOID)(ULONG_PTR)Context->State.Elr,
-                                       LrPointer,
-                                       SpPointer,
-                                       ProcessorIndex);
-                            KeBugCheckEx(PAGE_FAULT_IN_NONPAGED_AREA,
-                                         (ULONG_PTR)Context->State.FaultAddress,
-                                         (ULONG_PTR)Context->State.Elr,
-                                         (ULONG_PTR)LrPointer,
-                                         0xDA0DEAD);
-                        }
-                    }
-                }
 
                 {
                     ULONG FaultCodeArg = KiArm64BuildFaultCode(FaultStatus, WriteAccess, FALSE, PreviousMode);
@@ -1728,11 +1678,6 @@ KiArm64HandleSynchronousException(
                     {
                         if (KiArm64FixupUserAccessFlagFault(AddressArg, FaultStatus))
                         {
-                            if (OwnsAbortGuard)
-                            {
-                                InterlockedExchange(&KiArm64DataAbortOwner[ProcessorIndex], 0);
-                            }
-
                             Context->TrapFramePointer = TrapFrame;
                             Context->ExceptionFramePointer = &Context->ExceptionFrame;
                             KiArm64ClearTrapActive();
@@ -1754,32 +1699,10 @@ KiArm64HandleSynchronousException(
                      * the flag set and incorrectly treat it as a recursive exception,
                      * causing a spurious bugcheck.
                      *
-                     * The KiArm64DataAbortOwner guard (checked above) still protects
-                     * against truly nested aborts (faults in the exception handling path
-                     * before reaching MmAccessFault).
-                     *
                      * This mirrors the SVC handling (line ~734) which clears the flag
                      * before calling KiSystemService.
                      */
                     KiArm64ClearTrapActive();
-
-                    /*
-                     * ARM64: Also clear the data abort owner guard.
-                     *
-                     * Similar to KiArm64TrapActive, MmAccessFault can cause nested data
-                     * aborts that are legitimate (e.g., system cache page faults during
-                     * file I/O). If we don't clear this guard, the nested abort will be
-                     * incorrectly detected as a recursive fault.
-                     *
-                     * The guard will be reset by the outer code if OwnsAbortGuard is FALSE
-                     * (i.e., we were the ones who set it). Since we clear it here, when
-                     * MmAccessFault returns, OwnsAbortGuard will be checked and we'll skip
-                     * the redundant clear.
-                     */
-                    if (OwnsAbortGuard)
-                    {
-                        InterlockedExchange(&KiArm64DataAbortOwner[ProcessorIndex], 0);
-                    }
 
                     if ((MmSessionSpace != NULL) &&
                         ((ULONG_PTR)AddressArg >= (ULONG_PTR)MmSessionSpace) &&
@@ -1833,11 +1756,6 @@ KiArm64HandleSynchronousException(
                                    (PVOID)MiArm64SessionWsSavedFp,
                                    (PVOID)MiArm64SessionWsSavedLr);
                     }
-                }
-
-                if (OwnsAbortGuard)
-                {
-                    InterlockedExchange(&KiArm64DataAbortOwner[ProcessorIndex], 0);
                 }
 
 #if DBG && defined(ARM64_TRAP_TRACE)

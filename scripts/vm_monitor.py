@@ -47,6 +47,7 @@ VM_NAME = os.environ.get("ROS_VM_NAME", "ROS11")
 ENABLE_GDB_DUMP = os.environ.get("ROS_VM_GDB_DUMP", "1") != "0"
 QEMU_GDB_PORT = int(os.environ.get("ROS_QEMU_GDB_PORT", "1234"))
 QEMU_ARM64_GIC_VERSION = os.environ.get("ROS_QEMU_GIC_VERSION", "auto")
+QEMU_ARM64_CPU = os.environ.get("ROS_QEMU_ARM64_CPU", "cortex-a57")
 QEMU_ARM64_MEMORY = os.environ.get("ROS_QEMU_ARM64_MEMORY", "24G")
 KERNEL_TEXT_ADDRESS = (
     int(os.environ["ROS_KERNEL_TEXT"], 0)
@@ -534,7 +535,7 @@ def resolve_qemu_arm64_gic_version(rpi_mode, is_darwin=False):
     if rpi_mode:
         return "2"
 
-    return None if is_darwin else "max"
+    return None if is_darwin else "3"
 
 
 def qemu_arm64_machine_arg(rpi_mode, is_darwin=False):
@@ -591,7 +592,7 @@ def start_qemu(rpi_mode=False, smp=4):
             mode_str = (
                 f"HVF accelerated (max, {smp} cores{gic_desc})"
                 if is_darwin else
-                f"CPU max ({smp} cores{gic_desc})"
+                f"CPU {QEMU_ARM64_CPU} ({smp} cores{gic_desc})"
             )
         print(f"Starting QEMU (ARM64 - {mode_str}, {QEMU_ARM64_MEMORY} RAM)...")
 
@@ -661,7 +662,7 @@ def start_qemu(rpi_mode=False, smp=4):
                     "-device", "ramfb",
                     *arm64_usb_devices,
                     "-machine", machine_arg,
-                    "-cpu", "max",
+                    "-cpu", QEMU_ARM64_CPU,
                     "-m", QEMU_ARM64_MEMORY,
                     "-bios", "/usr/share/qemu-efi-aarch64/QEMU_EFI.fd",
                     *(qemu_arm64_iso_drive_args(img_path) if is_iso_boot else qemu_arm64_disk_drive_args(img_path)),
@@ -1671,7 +1672,7 @@ def signal_handler(sig, frame):
 
 
 def main():
-    global use_qemu, target_arch, boot_media, boot_image_path, QEMU_ARM64_GIC_VERSION
+    global use_qemu, target_arch, boot_media, boot_image_path, QEMU_ARM64_GIC_VERSION, QEMU_ARM64_CPU
 
     parser = argparse.ArgumentParser(description='VM Monitor Script')
     parser.add_argument('--qemu', action='store_true',
@@ -1686,8 +1687,11 @@ def main():
     parser.add_argument('--gic-version', '--gic', choices=('auto', '2', '3', '4', 'host', 'max'),
                         default=QEMU_ARM64_GIC_VERSION,
                         help='ARM64 QEMU virt GIC version (default: auto; env: ROS_QEMU_GIC_VERSION)')
+    parser.add_argument('--cpu', default=QEMU_ARM64_CPU,
+                        help='ARM64 QEMU CPU model for non-RPi mode (default: cortex-a57; env: ROS_QEMU_ARM64_CPU)')
     args = parser.parse_args()
     QEMU_ARM64_GIC_VERSION = args.gic_version
+    QEMU_ARM64_CPU = args.cpu
 
     # --vbox is explicit but same as default (no --qemu)
     use_qemu = args.qemu and not args.vbox

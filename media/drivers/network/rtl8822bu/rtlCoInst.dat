@@ -1,0 +1,608 @@
+//
+//			Version R01			2013/09/04
+//
+// =============================================================================
+// The RTK channel plan Rule
+//
+// You need to use RT channel plan to update in below country. And select what
+// you need in proper field.
+// Please refer to document.EFSUE channel plan filed. Now the definition
+// is from 0x20 ~ 0x53 in R07 version, and corresponding EFSUE data sheet.
+// But for EFUSE and driver known channel plan mapping.Plese use  
+// 
+//
+// =============================================================================
+// Channel Plan Contents				
+// Domain 		Code			EEPROM			RegistryChannelPlan
+// 2G RD		5G RD			Bit[6:0]		Decimal
+//
+// 2G_WORLD		5G_NULL			20h				25
+// 2G_ETSI1		5G_NULL			21h				26
+// 2G_FCC1		5G_NULL			22h				27
+// 2G_MKK1		5G_NULL			23h				28
+// 2G_ETSI2		5G_NULL			24h				29
+// 2G_FCC1		5G_FCC1			25h				30
+// 2G_WORLD		5G_ETSI1		26h				31
+// 2G_MKK1		5G_MKK1			27h				32
+// 2G_WORLD		5G_KCC1			28h				33
+// 2G_WORLD		5G_FCC2			29h				34
+// 2G_WORLD		5G_FCC3			30h				35
+// 2G_WORLD		5G_FCC4			31h				36
+// 2G_WORLD		5G_FCC5			32h				37
+// 2G_WORLD		5G_FCC6			33h				38
+// 2G_FCC1		5G_FCC7			34h				39
+// 2G_WORLD		5G_ETSI2		35h				40
+// 2G_WORLD		5G_ETSI3		36h				41
+// 2G_MKK1		5G_MKK2			37h				42
+// 2G_MKK1		5G_MKK3			38h				43
+// 2G_FCC1		5G_NCC1			39h				44
+// 2G_FCC1		5G_NCC2			40h				45
+// 2G_Global	5G_NULL			41h				46
+// 2G_ETSI1		5G_ETSI4		42h				47
+// 2G_FCC1		5G_FCC2			43h				48
+// 2G_FCC1		5G_NCC3			44h				49
+// 2G_WORLD		5G_ETSI5		45h				50
+// 2G_FCC1		5G_FCC8			46h				51
+// 2G_WORLD		5G_ETSI6		47h				52
+// 2G_WORLD		5G_ETSI7		48h				53
+// 2G_WORLD		5G_ETSI8		49h				54
+// 2G_WORLD		5G_ETSI9		50h				55
+// 2G_WORLD		5G_ETSI10		51h				56
+// 2G_WORLD		5G_ETSI11		52h				57
+// 2G_FCC1		5G_NCC4			53h				58
+// 2G_WORLD     5G_ETSI12       54h             59
+// 2G_FCC1      5G_FCC9         55h             60
+// 2G_WORLD     5G_ETSI13       56h             61
+// 2G_FCC1      5G_FCC10        57h             62
+// 2G_MKK2		5G_MKK4			58h				63
+// 2G_WORLD		5G_ETSI14		59h				64
+// 
+// =============================================================================
+// 2.4G Regulatory Domains				
+// 2G RD		Regulation		Channels
+//
+// 2G_WORLD		ETSI			1~13
+// 2G_ETSI1		ETSI			1~13
+// 2G_FCC1		FCC				1~11
+// 2G_MKK1		MKK				1~13, 14
+// 2G_MKK2		MKK				1~13
+// 2G_ETSI2		ETSI			10~13
+// 2G_Global	ETSI			1~13, 14
+//
+//
+// =============================================================================
+// 5G Regulatory Domains				
+// 5G RD		Regulation		Channels							Frequencyes	Note
+//
+// 5G_NULL		NA				NA									NA
+// 5G_ETSI1		ETSI			36~48, 52~64, 100~140
+// 5G_ETSI2		ETSI			36~48, 52~64, 100~140, 149~165
+// 5G_ETSI3		ETSI			36~48, 52~64, 100~132, 149~165
+// 5G_FCC1		FCC				36~48, 52~64, 100~140, 149~165
+// 5G_FCC2		FCC				36~48, 149~165
+// 5G_FCC3		FCC				36~48, 52~64, 149~165
+// 5G_FCC4		FCC				36~48, 52~64, 149~161
+// 5G_FCC5		FCC				149~165
+// 5G_FCC6		FCC				36~48, 52~64
+// 5G_FCC7		FCC				36~48, 52~64, 100~116, 132~140, 149~165
+// 5G_IC1		IC				36~48, 52~64, 100~116, 132~140, 149~165
+// 5G_KCC1		KCC				36~48, 52~64, 100~124, 149~161
+// 5G_MKK1		MKK				36~48, 52~64, 100~140
+// 5G_MKK2		MKK				36~48, 52~64
+// 5G_MKK3		MKK				100~140
+// 5G_MKK4		MKK				36~48
+// 5G_NCC1		NCC				56~64, 100~116, 132~140, 149~165
+// 5G_NCC2		NCC				56~64, 149~165
+// 5G_NCC3		NCC				149~165
+// 5G_ETSI4		ETSI			36~48
+// 5G_ETSI5		ETSI			36~48, 52~64, 100~116, 132~140, 149~165"
+// 5G_FCC8		FCC				149~161
+// 5G_ETSI6		ETSI			36~48, 52~64
+// 5G_ETSI7		ETSI			36~48, 52~64, 149~165
+// 5G_ETSI8		ETSI			36~48, 149~165
+// 5G_ETSI9		ETSI			100~140
+// 5G_ETSI10	ETSI			149~165
+// 5G_ETSI11	ETSI			36~48, 52~64, 132~140, 149~165
+// 5G_NCC4		NCC				52~64, 100~116, 132~140, 149~165
+// 5G_ETSI12    ETSI            149~161
+// 5G_FCC9      FCC             36~48, 100~116, 132~140, 149~165
+// 5G_ETSI13    ETSI            36~48, 100~116, 132~140
+// 5G_FCC10     FCC             36~48, 100~116, 132~140, 149~161
+//
+// =============================================================================
+// SystemInfo (For user to select)
+//		LOCALE_SYSTEM_DEFAULT: Get region from Windows LOCALE_SYSTEM_DEFAULT
+//		LOCALE_USER_DEFAULT: Get region from Windows LOCALE_USER_DEFAULT
+//
+//		For example:
+// 		You can select CN for XP/ and CHN for OS after Vista.
+//
+//		[Locale Short Name]: Set CountryRegion directly. (USA/US for example) 
+//
+SystemInfo=LOCALE_SYSTEM_DEFAULT
+// OsVersion=
+   
+//
+// Country compatiable.
+//
+[Country_Channel_Plan]
+// [country code] = [channel plan]
+AR=62	
+// Argentina				57h
+BO=35	
+// Bolivia					30h
+BR=39	
+// Brazil					34h
+CL=35
+// Chile					30h
+CO=39
+// Colombia					34h
+CR=39
+// Costa Rica				34h
+EC=39
+// Ecuador					34h
+SV=35
+// El Salvador				30h
+GT=39
+// Guatemala				34h
+HN=37
+// Honduras					32h
+MX=39
+// Mexico					34h
+NI=39
+// Nicaragua				34h
+PA=39
+// Panama					34h
+PY=39
+// Paraguay					34h
+PE=39
+// Peru						34h
+US=39
+// United States			34h
+UY=39
+// Uruguay					34h
+VE=35
+// Venezuela				30h
+PR=39
+// Puerto Rico				34h
+DO=39
+// Dominican Republic		34h
+AT=31
+// Austria					26h
+BE=31
+// Belgium					26h
+CY=31
+// Cyprus					26h
+CZ=31
+// Czech Republic			26h
+DK=31
+// Denmark					26h
+EE=31
+// Estonia					26h
+FI=31
+// Finland					26h
+FR=31
+// France					26h
+DE=31
+// Germany					26h
+GR=31
+// Greece					26h
+HU=31
+// Hungary					26h
+IS=31
+// Iceland					26h
+IE=31
+// Ireland					26h
+IT=31
+// Italy					26h
+LV=31
+// Latvia					26h
+LI=31
+// Liechtenstein			26h
+LT=31
+// Lithuania				26h
+LU=31
+// Luxembourg				26h
+MT=31
+// Malta					26h
+MC=31
+// Monaco					26h
+NL=31
+// Netherlands				26h
+NO=31
+// Norway					26h
+PL=31
+// Poland					26h
+PT=31
+// Portugal					26h
+SK=31
+// Slovakia					26h
+SI=31
+// Slovenia					26h
+ES=31
+// Spain					26h
+SE=31
+// Sweden					26h
+CH=31
+// Switzerland				26h
+GB=31
+// Great Britain			26h
+AL=31
+// Albania					26h
+AZ=31
+// Azerbaijan				26h
+BH=52
+// Bahrain					47h
+BA=31
+// Bosnia & Herzegovina		26h
+BG=31
+// Bulgaria					26h
+HR=31
+// Croatia					26h
+EG=52
+// Egypt					47h
+GH=31	
+// Ghana					26h
+IQ=31
+// Iraq						26h
+IL=52
+// Israel					47h
+JO=54
+// Jordan					49h
+KZ=31
+// Kazakhstan				26h
+KE=52
+// Kenya					47h
+KW=52
+// Kuwait					47h
+KG=31
+// Kyrgyzstan				26h
+LB=31
+// Lebanon					26h
+LS=31
+// Lesotho					26h
+MK=31
+// Republic of Macedonia	26h
+MA=52
+// Morocco					47h
+MZ=31
+// Mozambique				26h
+NA=31
+// Namibia					26h
+NG=55
+// Nigeria					50h
+OM=31
+// Oman						26h
+QA=56
+// Qatar					51h
+RO=31
+// Romania					26h
+RU=64
+// Russian					59h
+SA=31
+// Saudi Arabia				26h
+SN=31
+// Senegal					26h
+RS=31
+// Serbia					26h
+ME=31
+// Montenegro				26h
+ZA=31
+// South Africa				26h
+TR=31
+// Turkey					26h
+UA=31
+// Ukraine					26h
+AE=31
+// United Arab Emirates		26h
+YE=31
+// Yemen					26h
+ZW=31
+// Zimbabwe					26h
+BD=31
+// Bangladesh				26h
+KH=31
+// Cambodia					26h
+CN=53
+// China					48h
+HK=31
+// Hong Kong				26h
+IN=52
+// India					47h
+ID=59
+// Indonesia				54h
+KR=33
+// South Korea				28h
+MY=52
+// Malaysia					47h
+PK=56
+// Pakistan					51h
+PH=31
+// Philippines				26h
+SG=52
+// Singapore				47h
+LK=31
+// Sri Lanka				26h
+TW=44
+// Taiwan					39h
+TH=31
+// Thailand					26h
+VN=31
+// Vietnam					26h
+AU=50
+// Australia				45h
+NZ=50
+// New Zealand				45h
+PG=31
+// Papua New Guinea			26h
+CA=39
+// Canada					34h
+JP=32
+// Japan- Tele				27h
+JM=56
+// Jamaica					51h
+TT=47
+// Trinidad & Tobago		42h
+TN=52
+// Tunisia					47h
+AF=47
+// Afghanistan				42h
+DZ=31
+// Algeria					26h
+AS=39
+// American Samoa			34h
+AD=31
+// Andorra					26h
+AO=31
+// Angola					26h
+AI=31
+// Anguilla(UK)				26h
+AQ=31
+// Antarctica				26h
+AG=35
+// Antigua & Barbuda		30h
+AM=31
+// Armenia					26h
+AW=39
+// Aruba					34h
+BS=39
+// Bahamas					34h
+BB=39
+// Barbados					34h
+BY=31
+// Belarus					26h
+BZ=39
+// Belize					34h
+BJ=31
+// Benin					26h
+BW=31
+// Botswana
+BN=52
+// Brunei					47h
+BF=31
+// Burkina Faso				26h
+MM=31
+// Burma (Myanmar)			26h
+BI=31
+// Burundi					26h
+CM=31
+// Cameroon					26h
+CV=31
+// Cape Verde				26h
+KY=39
+// Cayman Islands (UK)		26h
+CF=31
+// Central African Republic	26h
+TD=31
+// Chad						26h
+CX=50
+// Christmas Island (Australia) 45h
+CC=31
+// Cocos (Keeling) Islands (Australia)  26h
+CG=31
+// Congo, Democratic Republic of the. Zaire  26h
+CD=31
+// Congo, Republic of the	26h
+CK=31
+// Cook Islands				26h
+CI=31
+// Cote d'Ivoire				26h
+DJ=31
+// Djibouti					26h
+DM=39
+// Dominica					34h
+GQ=31
+// Equatorial Guinea			26h
+ER=31
+// Eritrea					26h
+ET=31
+// Ethiopia					26h
+FK=31
+// Falkland Islands (Islas Malvinas) (UK) 26h
+FO=31
+// Faroe Islands (Denmark)	26h
+FJ=39
+// Fiji						34h
+GF=31
+// French Guiana			26h
+PF=31
+// French Polynesia (France) 26h
+TF=31
+// French Southern and Antarctic Lands (FR Southern Territories) 26h
+GA=31
+// Gabon					26h
+GM=31
+// Gambia					26h
+GE=31
+// Georgia					26h
+GI=31
+// Gibraltar (UK)			26h
+GL=31
+// Greenland (Denmark)		26h
+GD=39
+// Grenada					34h
+GP=31
+// Guadeloupe (France)		26h
+GU=39
+// Guam (USA)				34h
+GG=31
+// Guernsey (UK)			26h
+GN=31
+// Guinea					26h
+GW=31
+// Guinea-Bissau			26h
+GY=49
+// Guyana					44h
+HT=39
+// Haiti					34h
+HM=50
+// Heard and McDonald Islands (Australia) 45h
+VA=31
+// Holy See (Vatican City)	26h
+IM=31
+// Jersey (UK)Isle of Man (UK) 26h
+JE=31
+// Jersey (UK)				26h
+KI=31
+// Kiribati					26h
+RS=31
+// Kosovo					26h
+LA=31
+// Laos						26h
+LR=31
+// Liberia					26h
+LY=31
+// Libya					26h
+MO=31
+// Macau					26h
+MG=31
+// Madagascar				26h
+MW=31
+// Malawi					26h
+MV=31
+// Maldives					26h
+ML=31
+// Mali						26h
+MH=39
+// Marshall Islands (USA)	34h
+MQ=31
+// Martinique (France)		26h
+MR=31
+// Mauritania				26h
+MU=31
+// Mauritius				26h
+YT=31
+// Mayotte (France)			26h
+FM=39
+// Micronesia, Federated States of (USA) 34h
+MD=31
+// Moldova					26h
+MN=31
+// Mongolia					26h
+MS=31
+// Montserrat (UK)			26h
+NR=31
+// Nauru					26h
+NP=52
+// Nepal					47h
+NC=31
+// New Caledonia			26h
+NE=31
+// Niger					26h
+NU=50
+// Niue						45h
+NF=50
+// Norfolk Island (Australia) 45h
+MP=39
+// Northern Mariana Islands (USA) 34h
+PW=39
+// Palau					34h
+RE=31
+// Reunion (France)			26h
+RW=31
+// Rwanda					26h
+SH=31
+// Saint Helena (UK)		26h
+KN=39
+// Saint Kitts and Nevis	34h
+LC=39
+// Saint Lucia				34h
+MF=39
+// Saint Martin / Sint Marteen 34h
+SX=39
+// Saint Martin / Sint Marteen	34h
+PM=31
+// Saint Pierre and Miquelon (France) 26h
+VC=39
+// Saint Vincent and the Grenadines	34h
+WS=39
+// Samoa					34h
+SM=31
+// San Marino				26h
+ST=39
+// Sao Tome and Principe	34h
+SC=39
+// Seychelles				34h
+SL=31
+// Sierra Leone				26h
+SB=31
+// Solomon Islands			26h
+SO=31
+// Somalia					26h
+GS=31
+// South Georgia and the Sandwich Islands (UK) 26h
+SR=39
+// Suriname					34h
+SJ=31
+// Svalbard (Norway)		26h
+SZ=31
+// Swaziland				26h
+TJ=31
+// Tajikistan				26h
+TZ=31
+// Tanzania					26h
+TG=31
+// Togo						26h
+TK=50
+// Tokelau					45h
+TO=31
+// Tonga					26h
+TM=31
+// Turkmenistan				26h
+TC=31
+// Turks and Caicos Islands (UK) 26h
+UG=31
+// Uganda					26h
+VI=39
+// United States Virgin Islands (USA) 34h
+UZ=52
+// Uzbekistan				47h
+VU=31
+// Vanuatu					26h
+WF=31
+// Wallis and Futuna (France) 26h
+EH=52
+// Western Sahara			47h
+ZM=31
+// Zambia					26h
+IR=31
+// Iran						26h
+TR=31
+// Northern Cyprus			26h
+ES=31
+// Canary Islands(Spain)	26h
+
+
+[Country_Not_Support_AC]
+ID
+// Indonesia	
+EG
+// Egypt
+IQ
+// Iraq
+NA
+// Namibia
+IR
+// Iran
+
+

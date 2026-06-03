@@ -1,18 +1,15 @@
 /*
  * PROJECT:     ReactOS Raspberry Pi 5 (BCM2712) display miniport
  * LICENSE:     GPL-2.0-or-later (https://spdx.org/licenses/GPL-2.0-or-later)
- * PURPOSE:     Clean-room BCM2712 HVS (Hardware Video Scaler) programming -
+ * PURPOSE:     BCM2712 HVS (Hardware Video Scaler) programming -
  *              multi-plane display-list generation and scanout ownership.
  * COPYRIGHT:   Copyright 2026 Ahmed Arif <arif193@gmail.com>
  *
- * This is an independent, clean-room reimplementation written for ReactOS from
- * the documented register-level behaviour of the BCM2712 "HVS" (the SCALER6 /
- * SCALER6D display compositor). No driver source was copied; the hardware
- * register layout is a matter of fact about the silicon.
+ * Ported from the Linux drm/vc4 driver (Dave Stevenson, Dom Cobley, Maxime
+ * Ripard, Tim Gover) and adapted for ReactOS.
  *
- * It is offered with credit to - and "based on the work of" - the authors of
- * the Linux drm/vc4 BCM2712 display support, who documented this hardware:
- *   Dave Stevenson, Dom Cobley, Maxime Ripard and Tim Gover.
+ * The registers and display-list element layout below are the BCM2712 "HVS" -
+ * the SCALER6 / SCALER6D display compositor.
  */
 
 #ifndef _RPI5VC4_HVS_H_

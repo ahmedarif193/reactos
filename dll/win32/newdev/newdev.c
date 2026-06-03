@@ -1455,9 +1455,20 @@ DevInstallW(
     }
     if (ScanFoldersForDriver(DevInstData))
     {
+        BOOL NullInstall;
+
         /* Driver found ; install it */
-        retval = InstallCurrentDriver(DevInstData);
-        TRACE("InstallCurrentDriver() returned %d\n", retval);
+        NullInstall = IsCurrentDriverNullInstall(DevInstData);
+        if (NullInstall)
+        {
+            retval = InstallNullDriver(DevInstData);
+            TRACE("InstallNullDriver() returned %d\n", retval);
+        }
+        else
+        {
+            retval = InstallCurrentDriver(DevInstData);
+            TRACE("InstallCurrentDriver() returned %d\n", retval);
+        }
         if (retval && UseDriverMatchCache &&
             GetCurrentDriverInfFileName(DevInstData,
                                         InstalledInfFile,
@@ -1466,7 +1477,7 @@ DevInstallW(
             DriverMatchCacheRemember(HardwareIds,
                                      CompatibleIds,
                                      InstalledInfFile,
-                                     IsCurrentDriverNullInstall(DevInstData));
+                                     NullInstall);
         }
 
         if (retval && Show != SW_HIDE)

@@ -28,6 +28,20 @@ static DRVFN DrvFunctionTable[] =
    {INDEX_DrvEnableSurface, (PFN)DrvEnableSurface},
    {INDEX_DrvDisableSurface, (PFN)DrvDisableSurface},
    {INDEX_DrvAssertMode, (PFN)DrvAssertMode},
+   {INDEX_DrvBitBlt, (PFN)DrvBitBlt},
+   {INDEX_DrvCopyBits, (PFN)DrvCopyBits},
+   {INDEX_DrvTextOut, (PFN)DrvTextOut},
+   {INDEX_DrvLineTo, (PFN)DrvLineTo},
+   {INDEX_DrvStrokePath, (PFN)DrvStrokePath},
+   {INDEX_DrvFillPath, (PFN)DrvFillPath},
+   {INDEX_DrvStrokeAndFillPath, (PFN)DrvStrokeAndFillPath},
+   {INDEX_DrvPaint, (PFN)DrvPaint},
+   {INDEX_DrvStretchBlt, (PFN)DrvStretchBlt},
+   {INDEX_DrvTransparentBlt, (PFN)DrvTransparentBlt},
+   {INDEX_DrvAlphaBlend, (PFN)DrvAlphaBlend},
+   {INDEX_DrvGradientFill, (PFN)DrvGradientFill},
+   {INDEX_DrvSynchronize, (PFN)DrvSynchronize},
+   {INDEX_DrvSynchronizeSurface, (PFN)DrvSynchronizeSurface},
    {INDEX_DrvGetModes, (PFN)DrvGetModes},
    {INDEX_DrvSetPalette, (PFN)DrvSetPalette},
    {INDEX_DrvSetPointerShape, (PFN)DrvSetPointerShape},
@@ -135,6 +149,7 @@ DrvEnablePDEV(
    }
 
    ppdev->hDriver = hDriver;
+   ppdev->Signature = FRAMEBUF_PDEV_SIGNATURE;
 
    if (!IntInitScreenInfo(ppdev, pdm, &GdiInfo, &DevInfo))
    {
@@ -144,6 +159,7 @@ DrvEnablePDEV(
 
    if (!IntInitDefaultPalette(ppdev, &DevInfo))
    {
+      IntDisableHardwarePointer(ppdev);
       EngFreeMem(ppdev);
       return NULL;
    }
@@ -195,6 +211,8 @@ DrvDisablePDEV(
    {
       EngFreeMem(((PPDEV)dhpdev)->PaletteEntries);
    }
+
+   IntDisableHardwarePointer((PPDEV)dhpdev);
 
    EngFreeMem(dhpdev);
 }

@@ -2102,6 +2102,8 @@ Phase1InitializationDiscard(IN PVOID Context)
     KeI386VdmInitialize();
 #endif
 
+    DbgPrint("5");
+
     /* Initialize Power Subsystem in Phase 1*/
     if (!PoInitSystem(1)) KeBugCheck(INTERNAL_POWER_ERROR);
 

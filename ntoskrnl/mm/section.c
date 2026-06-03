@@ -1982,7 +1982,11 @@ MmNotPresentFaultSectionView(PMMSUPPORT AddressSpace,
 
         PFSRTL_COMMON_FCB_HEADER FcbHeader = Segment->FileObject->FsContext;
 
-        Status = MmMakeSegmentResident(Segment, Offset.QuadPart, PAGE_SIZE, &FcbHeader->ValidDataLength, FALSE);
+        Status = MmMakeSegmentResident(Segment,
+                                       Offset.QuadPart,
+                                       MemoryArea->VadNode.u.VadFlags.VadType == VadImageMap ? _64K : PAGE_SIZE,
+                                       &FcbHeader->ValidDataLength,
+                                       FALSE);
 
         FsRtlReleaseFile(Segment->FileObject);
 

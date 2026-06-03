@@ -30,8 +30,14 @@
 
 //#define EXPERIMENTAL_MOUSE_CURSOR_SUPPORT
 
+#define IOCTL_VIDEO_RPI5VC4_LATCH_SCANOUT \
+   CTL_CODE(FILE_DEVICE_VIDEO, 0x830, METHOD_BUFFERED, FILE_ANY_ACCESS)
+
+#define FRAMEBUF_PDEV_SIGNATURE 'bfPF'
+
 typedef struct _PDEV
 {
+   ULONG Signature;
    HANDLE hDriver;
    HDEV hDevEng;
    HSURF hSurfEng;
@@ -43,10 +49,21 @@ typedef struct _PDEV
    ULONG RedMask;
    ULONG GreenMask;
    ULONG BlueMask;
+   ULONG ReservedMask;
    BYTE PaletteShift;
    PVOID ScreenPtr;
+   BOOL ScanoutLatchProbed;
+   BOOL ScanoutLatchSupported;
    HPALETTE DefaultPalette;
    PALETTEENTRY *PaletteEntries;
+
+   VIDEO_POINTER_CAPABILITIES HwPointerCapabilities;
+   PVIDEO_POINTER_ATTRIBUTES HwPointerAttributes;
+   ULONG HwPointerAttributesSize;
+   POINTL HwPointerHotSpot;
+   BOOL HwPointerSupported;
+   BOOL HwPointerShapeValid;
+   BOOL HwPointerVisible;
 
 #ifdef EXPERIMENTAL_MOUSE_CURSOR_SUPPORT
    VIDEO_POINTER_ATTRIBUTES PointerAttributes;
@@ -118,6 +135,155 @@ DrvAssertMode(
    IN DHPDEV dhpdev,
    IN BOOL bEnable);
 
+BOOL APIENTRY
+DrvBitBlt(
+   IN OUT SURFOBJ *psoTrg,
+   IN SURFOBJ *psoSrc,
+   IN SURFOBJ *psoMask,
+   IN CLIPOBJ *pco,
+   IN XLATEOBJ *pxlo,
+   IN RECTL *prclTrg,
+   IN POINTL *pptlSrc,
+   IN POINTL *pptlMask,
+   IN BRUSHOBJ *pbo,
+   IN POINTL *pptlBrush,
+   IN ROP4 rop4);
+
+BOOL APIENTRY
+DrvCopyBits(
+   OUT SURFOBJ *psoDest,
+   IN SURFOBJ *psoSrc,
+   IN CLIPOBJ *pco,
+   IN XLATEOBJ *pxlo,
+   IN RECTL *prclDest,
+   IN POINTL *pptlSrc);
+
+BOOL APIENTRY
+DrvTextOut(
+   IN SURFOBJ *pso,
+   IN STROBJ *pstro,
+   IN FONTOBJ *pfo,
+   IN CLIPOBJ *pco,
+   IN RECTL *prclExtra,
+   IN RECTL *prclOpaque,
+   IN BRUSHOBJ *pboFore,
+   IN BRUSHOBJ *pboOpaque,
+   IN POINTL *pptlOrg,
+   IN MIX mix);
+
+BOOL APIENTRY
+DrvLineTo(
+   IN SURFOBJ *pso,
+   IN CLIPOBJ *pco,
+   IN BRUSHOBJ *pbo,
+   IN LONG x1,
+   IN LONG y1,
+   IN LONG x2,
+   IN LONG y2,
+   IN RECTL *prclBounds,
+   IN MIX mix);
+
+BOOL APIENTRY
+DrvStrokePath(
+   IN SURFOBJ *pso,
+   IN PATHOBJ *ppo,
+   IN CLIPOBJ *pco,
+   IN XFORMOBJ *pxo,
+   IN BRUSHOBJ *pbo,
+   IN POINTL *pptlBrushOrg,
+   IN LINEATTRS *plineattrs,
+   IN MIX mix);
+
+BOOL APIENTRY
+DrvFillPath(
+   IN SURFOBJ *pso,
+   IN PATHOBJ *ppo,
+   IN CLIPOBJ *pco,
+   IN BRUSHOBJ *pbo,
+   IN POINTL *pptlBrushOrg,
+   IN MIX mix,
+   IN FLONG flOptions);
+
+BOOL APIENTRY
+DrvStrokeAndFillPath(
+   IN SURFOBJ *pso,
+   IN PATHOBJ *ppo,
+   IN CLIPOBJ *pco,
+   IN XFORMOBJ *pxo,
+   IN BRUSHOBJ *pboStroke,
+   IN LINEATTRS *plineattrs,
+   IN BRUSHOBJ *pboFill,
+   IN POINTL *pptlBrushOrg,
+   IN MIX mixFill,
+   IN FLONG flOptions);
+
+BOOL APIENTRY
+DrvPaint(
+   IN SURFOBJ *pso,
+   IN CLIPOBJ *pco,
+   IN BRUSHOBJ *pbo,
+   IN POINTL *pptlBrushOrg,
+   IN MIX mix);
+
+BOOL APIENTRY
+DrvStretchBlt(
+   IN SURFOBJ *psoDest,
+   IN SURFOBJ *psoSrc,
+   IN SURFOBJ *psoMask,
+   IN CLIPOBJ *pco,
+   IN XLATEOBJ *pxlo,
+   IN COLORADJUSTMENT *pca,
+   IN POINTL *pptlHTOrg,
+   IN RECTL *prclDest,
+   IN RECTL *prclSrc,
+   IN POINTL *pptlMask,
+   IN ULONG iMode);
+
+BOOL APIENTRY
+DrvTransparentBlt(
+   IN SURFOBJ *psoDst,
+   IN SURFOBJ *psoSrc,
+   IN CLIPOBJ *pco,
+   IN XLATEOBJ *pxlo,
+   IN RECTL *prclDst,
+   IN RECTL *prclSrc,
+   IN ULONG iTransColor,
+   IN ULONG ulReserved);
+
+BOOL APIENTRY
+DrvAlphaBlend(
+   IN SURFOBJ *psoDest,
+   IN SURFOBJ *psoSrc,
+   IN CLIPOBJ *pco,
+   IN XLATEOBJ *pxlo,
+   IN RECTL *prclDest,
+   IN RECTL *prclSrc,
+   IN BLENDOBJ *pBlendObj);
+
+BOOL APIENTRY
+DrvGradientFill(
+   IN SURFOBJ *psoDest,
+   IN CLIPOBJ *pco,
+   IN XLATEOBJ *pxlo,
+   IN TRIVERTEX *pVertex,
+   IN ULONG nVertex,
+   IN PVOID pMesh,
+   IN ULONG nMesh,
+   IN RECTL *prclExtents,
+   IN POINTL *pptlDitherOrg,
+   IN ULONG ulMode);
+
+VOID APIENTRY
+DrvSynchronize(
+   IN DHPDEV dhpdev,
+   IN RECTL *prcl);
+
+VOID APIENTRY
+DrvSynchronizeSurface(
+   IN SURFOBJ *pso,
+   IN RECTL *prcl,
+   IN FLONG fl);
+
 ULONG APIENTRY
 DrvGetModes(
    IN HANDLE hDriver,
@@ -158,6 +324,14 @@ IntInitScreenInfo(
    LPDEVMODEW pDevMode,
    PGDIINFO pGdiInfo,
    PDEVINFO pDevInfo);
+
+BOOL
+IntInitHardwarePointer(
+   PPDEV ppdev);
+
+VOID
+IntDisableHardwarePointer(
+   PPDEV ppdev);
 
 BOOL
 IntInitDefaultPalette(

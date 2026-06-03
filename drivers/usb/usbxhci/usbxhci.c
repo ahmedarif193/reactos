@@ -14090,6 +14090,9 @@ XHCI_PollEndpoint(PVOID MiniPortExtension,
     PXHCI_EXTENSION Extension = (PXHCI_EXTENSION)MiniPortExtension;
     UNREFERENCED_PARAMETER(EndpointHandle);
 
+    if (!Extension)
+        return;
+
     XHCI_PollForWork(Extension, TRUE);
 }
 

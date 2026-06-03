@@ -1,0 +1,66 @@
+; Intel Alder Lake-N Display Miniport
+
+[Version]
+Signature="$Windows NT$"
+LayoutFile=layout.inf
+Class=Display
+ClassGUID={4D36E968-E325-11CE-BFC1-08002BE10318}
+Provider=%ReactOS%
+DriverVer=05/26/2026,1.0.0.0
+
+[DestinationDirs]
+DefaultDestDir=12
+IntelN100.Miniport_CopyFiles=12
+IntelN100.Display_CopyFiles=11
+
+[Manufacturer]
+%Intel%=Intel,NTamd64,NTarm64
+
+[Intel.NTamd64]
+%IntelN100.DeviceDesc%=IntelN100_Install,PCI\VEN_8086&DEV_46D1
+
+[Intel.NTarm64]
+%IntelN100.DeviceDesc%=IntelN100_Install,PCI\VEN_8086&DEV_46D1
+
+[IntelN100_Install]
+CopyFiles=IntelN100.Miniport_CopyFiles,IntelN100.Display_CopyFiles
+AddReg=IntelN100_SoftwareSettings
+
+[IntelN100.Miniport_CopyFiles]
+inteln100.sys
+
+[IntelN100.Display_CopyFiles]
+framebuf.dll
+
+[IntelN100_SoftwareSettings]
+HKR,,InstalledDisplayDrivers,%REG_MULTI_SZ%,framebuf
+HKR,,VgaCompatible,%REG_DWORD%,0
+HKR,,DefaultSettings.VRefresh,%REG_DWORD%,1
+HKR,,DefaultSettings.BitsPerPel,%REG_DWORD%,32
+HKR,,DefaultSettings.XResolution,%REG_DWORD%,1920
+HKR,,DefaultSettings.YResolution,%REG_DWORD%,1080
+HKR,,Attach.RelativeX,%REG_DWORD%,0
+HKR,,Attach.RelativeY,%REG_DWORD%,0
+HKR,,Attach.ToDesktop,%REG_DWORD%,1
+HKR,,Attach.PrimaryDevice,%REG_DWORD%,1
+HKR,,"Device Description",%REG_SZ%,"%IntelN100.DeviceDesc%"
+
+[IntelN100_Install.Services]
+AddService=inteln100,0x00000002,IntelN100_Service
+
+[IntelN100_Service]
+DisplayName=%IntelN100.ServiceDesc%
+ServiceType=1
+StartType=3
+ErrorControl=0
+ServiceBinary=%12%\inteln100.sys
+LoadOrderGroup=Video Save
+
+[Strings]
+ReactOS="ReactOS"
+Intel="Intel"
+IntelN100.DeviceDesc="Intel Alder Lake-N UHD Graphics"
+IntelN100.ServiceDesc="ReactOS Intel Alder Lake-N Display Miniport"
+REG_MULTI_SZ=0x00010000
+REG_DWORD=0x00010001
+REG_SZ=0x00000000

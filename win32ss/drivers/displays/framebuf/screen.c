@@ -203,6 +203,10 @@ IntInitScreenInfo(
    ppdev->RedMask = SelectedMode->RedMask;
    ppdev->GreenMask = SelectedMode->GreenMask;
    ppdev->BlueMask = SelectedMode->BlueMask;
+   ppdev->ReservedMask = SelectedMode->DriverSpecificAttributeFlags &
+                         ~(SelectedMode->RedMask |
+                           SelectedMode->GreenMask |
+                           SelectedMode->BlueMask);
 
    pGdiInfo->ulVersion = GDI_DRIVER_VERSION;
    pGdiInfo->ulTechnology = DT_RASDISPLAY;
@@ -344,6 +348,8 @@ IntInitScreenInfo(
             pDevInfo->iDitherFormat = BMF_32BPP;
       }
    }
+
+   IntInitHardwarePointer(ppdev);
 
    EngFreeMem(ModeInfo);
    return TRUE;

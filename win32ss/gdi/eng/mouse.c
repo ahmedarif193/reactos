@@ -652,7 +652,11 @@ IntEngSetPointerShape(
 
         /* Check if the driver accepted it */
         if (ulResult == SPS_ACCEPT_NOEXCLUDE)
+        {
             bHardwarePointer = TRUE;
+            if (prcl != NULL)
+                prcl->left = prcl->top = prcl->right = prcl->bottom = -1;
+        }
 
         bSoftwarePointer = !bHardwarePointer;
     }

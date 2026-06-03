@@ -1,0 +1,8 @@
+; ReactOS SMBus Controller Driver registry entries
+
+[AddReg]
+HKLM,"SYSTEM\CurrentControlSet\Services\smbus","ErrorControl",0x00010001,1
+HKLM,"SYSTEM\CurrentControlSet\Services\smbus","Group",0x00000000,"System Bus Extender"
+HKLM,"SYSTEM\CurrentControlSet\Services\smbus","ImagePath",0x00020000,"system32\drivers\smbus.sys"
+HKLM,"SYSTEM\CurrentControlSet\Services\smbus","Start",0x00010001,3
+HKLM,"SYSTEM\CurrentControlSet\Services\smbus","Type",0x00010001,1
