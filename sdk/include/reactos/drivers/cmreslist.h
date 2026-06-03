@@ -18,9 +18,9 @@
  * PCM_FULL_RESOURCE_DESCRIPTOR FullDesc = &ResourceList->List[0];
  * for (ULONG i = 0; i < ResourceList->Count; i++, FullDesc = CmiGetNextResourceDescriptor(FullDesc))
  * {
- *    for (ULONG j = 0; j < FullDesc->PartialResourceList.Count; j++)
+ *    PCM_PARTIAL_RESOURCE_DESCRIPTOR PartialDesc = &FullDesc->PartialResourceList.PartialDescriptors[0];
+ *    for (ULONG j = 0; j < FullDesc->PartialResourceList.Count; j++, PartialDesc = CmiGetNextPartialDescriptor(PartialDesc))
  *    {
- *        PartialDesc = &FullDesc->PartialResourceList.PartialDescriptors[j];
  *        // work with PartialDesc
  *    }
  * }
@@ -55,6 +55,11 @@ CmiGetNextResourceDescriptor(
     _In_ const CM_FULL_RESOURCE_DESCRIPTOR *ResourceDescriptor)
 {
     const CM_PARTIAL_RESOURCE_DESCRIPTOR *LastPartialDescriptor;
+
+    if (ResourceDescriptor->PartialResourceList.Count == 0)
+    {
+        return (PCM_FULL_RESOURCE_DESCRIPTOR)&ResourceDescriptor->PartialResourceList.PartialDescriptors[0];
+    }
 
     /* Calculate the location of the last partial descriptor, which can have a
        variable size! */

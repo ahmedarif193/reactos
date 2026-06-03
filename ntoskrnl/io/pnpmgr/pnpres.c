@@ -811,6 +811,7 @@ IopCheckResourceDescriptor(
     ULONG i, ii;
     BOOLEAN Result = FALSE;
     PCM_FULL_RESOURCE_DESCRIPTOR FullDescriptor;
+    PCM_PARTIAL_RESOURCE_DESCRIPTOR ResDesc2;
 
     FullDescriptor = &ResourceList->List[0];
     for (i = 0; i < ResourceList->Count; i++)
@@ -818,12 +819,9 @@ IopCheckResourceDescriptor(
         PCM_PARTIAL_RESOURCE_LIST ResList = &FullDescriptor->PartialResourceList;
         FullDescriptor = CmiGetNextResourceDescriptor(FullDescriptor);
 
-        for (ii = 0; ii < ResList->Count; ii++)
+        ResDesc2 = &ResList->PartialDescriptors[0];
+        for (ii = 0; ii < ResList->Count; ii++, ResDesc2 = CmiGetNextPartialDescriptor(ResDesc2))
         {
-            /* Partial resource descriptors can be of variable size (CmResourceTypeDeviceSpecific),
-               but only one is allowed and it must be the last one in the list! */
-            PCM_PARTIAL_RESOURCE_DESCRIPTOR ResDesc2 = &ResList->PartialDescriptors[ii];
-
             /* Skip self-comparison. When IopDetectResourceConflict
              * walks the registry RESOURCEMAP for already-granted
              * resources, a device's own previously-recorded entries
@@ -1547,6 +1545,7 @@ IopCheckForResourceConflict(
    ULONG i, ii;
    BOOLEAN Result = FALSE;
    PCM_FULL_RESOURCE_DESCRIPTOR FullDescriptor;
+   PCM_PARTIAL_RESOURCE_DESCRIPTOR ResDesc;
 
    FullDescriptor = &ResourceList1->List[0];
    for (i = 0; i < ResourceList1->Count; i++)
@@ -1554,12 +1553,9 @@ IopCheckForResourceConflict(
       PCM_PARTIAL_RESOURCE_LIST ResList = &FullDescriptor->PartialResourceList;
       FullDescriptor = CmiGetNextResourceDescriptor(FullDescriptor);
 
-      for (ii = 0; ii < ResList->Count; ii++)
+      ResDesc = &ResList->PartialDescriptors[0];
+      for (ii = 0; ii < ResList->Count; ii++, ResDesc = CmiGetNextPartialDescriptor(ResDesc))
       {
-        /* Partial resource descriptors can be of variable size (CmResourceTypeDeviceSpecific),
-           but only one is allowed and it must be the last one in the list! */
-         PCM_PARTIAL_RESOURCE_DESCRIPTOR ResDesc = &ResList->PartialDescriptors[ii];
-
          Result = IopCheckResourceDescriptor(ResDesc,
                                              ResourceList2,
                                              Silent,
@@ -1571,6 +1567,65 @@ IopCheckForResourceConflict(
 ByeBye:
 
    return Result;
+}
+
+static
+BOOLEAN
+IopIsResourceListValid(
+   IN PCM_RESOURCE_LIST ResourceList,
+   IN ULONG ResourceListLength)
+{
+   ULONG i, ii;
+   ULONG_PTR End;
+   PCM_FULL_RESOURCE_DESCRIPTOR FullDescriptor;
+
+   if (ResourceListLength < FIELD_OFFSET(CM_RESOURCE_LIST, List))
+      return FALSE;
+
+   if (ResourceList->Count == 0)
+      return TRUE;
+
+   End = (ULONG_PTR)ResourceList + ResourceListLength;
+   if (End < (ULONG_PTR)ResourceList)
+      return FALSE;
+
+   FullDescriptor = &ResourceList->List[0];
+
+   for (i = 0; i < ResourceList->Count; i++)
+   {
+      ULONG_PTR Current = (ULONG_PTR)FullDescriptor;
+      ULONG HeaderSize = FIELD_OFFSET(CM_FULL_RESOURCE_DESCRIPTOR, PartialResourceList.PartialDescriptors);
+      PCM_PARTIAL_RESOURCE_DESCRIPTOR PartialDescriptor;
+
+      if (Current > End || End - Current < HeaderSize)
+         return FALSE;
+
+      PartialDescriptor = FullDescriptor->PartialResourceList.PartialDescriptors;
+      for (ii = 0; ii < FullDescriptor->PartialResourceList.Count; ii++)
+      {
+         ULONG_PTR Entry = (ULONG_PTR)PartialDescriptor;
+         ULONG_PTR EntrySize = sizeof(CM_PARTIAL_RESOURCE_DESCRIPTOR);
+
+         if (Entry > End || End - Entry < EntrySize)
+            return FALSE;
+
+         if (PartialDescriptor->Type == CmResourceTypeDeviceSpecific)
+         {
+            ULONG DataSize = PartialDescriptor->u.DeviceSpecificData.DataSize;
+
+            if (DataSize > End - Entry - EntrySize)
+               return FALSE;
+
+            EntrySize += DataSize;
+         }
+
+         PartialDescriptor = (PCM_PARTIAL_RESOURCE_DESCRIPTOR)(Entry + EntrySize);
+      }
+
+      FullDescriptor = (PCM_FULL_RESOURCE_DESCRIPTOR)PartialDescriptor;
+   }
+
+   return TRUE;
 }
 
 NTSTATUS NTAPI
@@ -1588,6 +1643,9 @@ IopDetectResourceConflict(
    PKEY_VALUE_BASIC_INFORMATION KeyNameInformation;
    ULONG ChildKeyIndex1 = 0, ChildKeyIndex2, ChildKeyIndex3;
    NTSTATUS Status;
+
+   if (!ResourceList || ResourceList->Count == 0)
+      return STATUS_SUCCESS;
 
    RtlInitUnicodeString(&KeyName, L"\\Registry\\Machine\\HARDWARE\\RESOURCEMAP");
    InitializeObjectAttributes(&ObjectAttributes,
@@ -1788,6 +1846,15 @@ IopDetectResourceConflict(
               }
 
               ExFreePoolWithTag(KeyNameInformation, TAG_IO);
+
+              if (KeyValueInformation->Type != REG_RESOURCE_LIST ||
+                  !IopIsResourceListValid((PCM_RESOURCE_LIST)KeyValueInformation->Data,
+                                          KeyValueInformation->DataLength) ||
+                  ((PCM_RESOURCE_LIST)KeyValueInformation->Data)->Count == 0)
+              {
+                  ExFreePoolWithTag(KeyValueInformation, TAG_IO);
+                  continue;
+              }
 
               if (IopCheckForResourceConflict(ResourceList,
                                               (PCM_RESOURCE_LIST)KeyValueInformation->Data,
