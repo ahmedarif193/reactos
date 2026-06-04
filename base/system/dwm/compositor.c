@@ -1262,6 +1262,9 @@ DwmComposeSingleFrame(
     UINT TotalWindows;
     UINT MaxZOrder = 0;
     INT Z;
+    DWORD tEntry, tBeforePresent, tAfterPresent; /* TEMP fps instrumentation */
+
+    tEntry = GetTickCount();
 
     EnterCriticalSection(&pCtx->csWindowList);
 
@@ -1341,7 +1344,9 @@ DwmComposeSingleFrame(
     LeaveCriticalSection(&pCtx->csWindowList);
 
     /* Present the composed frame */
+    tBeforePresent = GetTickCount();
     DwmPresentFrame(pCtx);
+    tAfterPresent = GetTickCount();
 
     /* Clear dirty state for next cycle */
     DwmClearDirty(&pCtx->DirtyRegion);
@@ -1351,10 +1356,15 @@ DwmComposeSingleFrame(
 
     if (DwmpShouldLogFrame(pCtx))
     {
-        TRACE("DwmComposeSingleFrame: frame=%I64u composed windows=%u presented=%I64u\n",
+        /* TEMP fps instrumentation: capture(compose) vs present breakdown. */
+        TRACE("DwmComposeSingleFrame: frame=%I64u composed windows=%u presented=%I64u "
+              "captureMs=%lu presentMs=%lu totalMs=%lu\n",
               pCtx->FramesComposed,
               TotalWindows,
-              pCtx->FramesPresented);
+              pCtx->FramesPresented,
+              (unsigned long)(tBeforePresent - tEntry),
+              (unsigned long)(tAfterPresent - tBeforePresent),
+              (unsigned long)(tAfterPresent - tEntry));
     }
 }
 

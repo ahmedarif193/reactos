@@ -621,20 +621,39 @@ DxgkpCopyPresentSourceToShadow(
      * The source is a 32-bpp surface sized to the committed mode (dwm sizes
      * its composition allocation to the screen).  Assume a tightly-packed
      * source pitch of Width*4 unless the allocation is large enough to imply
-     * a larger stride.  Clamp the per-row copy and row count to both buffers.
+     * a larger stride.  Clamp the per-row copy and row count to both buffers
+     * so a mis-sized source allocation or shadow FB can never make the copy
+     * read or write past the smaller of the two mapped extents (defensive:
+     * dwm could in theory hand us a Lock'd allocation smaller than a full
+     * frame, e.g. mid-resize).
      */
     SrcPitch = Width * 4;
     CopyBytesPerRow = (DstPitch < SrcPitch) ? DstPitch : SrcPitch;
 
-    /* Clamp row count so we never read/write past either buffer. */
+    if (SrcPitch == 0 || DstPitch == 0 || CopyBytesPerRow == 0)
+        return STATUS_INVALID_PARAMETER;
+
+    /*
+     * Clamp the row count to BOTH mapped buffers (min of the two), and make
+     * sure even the FIRST row fits: if either buffer is smaller than a single
+     * row, copy nothing rather than over-read/over-write.
+     */
     if ((ULONGLONG)SrcPitch * Height > SourceAllocation->Size)
     {
-        Height = (ULONG)(SourceAllocation->Size / (SrcPitch ? SrcPitch : 1));
+        Height = (ULONG)(SourceAllocation->Size / SrcPitch);
     }
     if ((ULONGLONG)DstPitch * Height > Adapter->ShadowFbSize)
     {
-        Height = Adapter->ShadowFbSize / (DstPitch ? DstPitch : 1);
+        Height = (ULONG)(Adapter->ShadowFbSize / DstPitch);
     }
+    /* The partial last row must also fit within both buffers. */
+    if ((ULONGLONG)CopyBytesPerRow > SourceAllocation->Size ||
+        (ULONGLONG)CopyBytesPerRow > Adapter->ShadowFbSize)
+    {
+        return STATUS_BUFFER_TOO_SMALL;
+    }
+    if (Height == 0)
+        return STATUS_SUCCESS; /* nothing safely copyable yet */
 
     Dst = (PUCHAR)Adapter->ShadowFb;
     Src = (PUCHAR)SourceAddress;
