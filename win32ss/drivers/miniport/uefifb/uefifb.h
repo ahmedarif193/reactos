@@ -51,6 +51,7 @@ typedef struct _UEFIFB_DEVICE_EXTENSION
     ULONG RedMask;
     ULONG GreenMask;
     ULONG BlueMask;
+    ULONG ReservedMask;
 
     /* Runtime state */
     VIDEO_MODE_INFORMATION ModeInfo;        /* Single mode descriptor */
