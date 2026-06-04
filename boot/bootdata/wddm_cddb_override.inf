@@ -1,0 +1,31 @@
+; PROJECT:     ReactOS WDDM/DWM bring-up
+; LICENSE:     MIT (https://spdx.org/licenses/MIT)
+; PURPOSE:     CriticalDeviceDatabase override so the WDDM display-only miniport
+;              (kmdod) claims QEMU std-VGA / Bochs (PCI\VEN_1234&DEV_1111)
+;              INSTEAD of the legacy XPDM bochsmp miniport.
+;
+;              kmdod is the WDDM display-only driver (DOD): it implements
+;              DxgkDdiPresentDisplayOnly (the complete-frame blt path), which
+;              is what dxgkrnl's DOD present route (DxgkpExecuteDodPresent)
+;              calls when dwm.exe issues a kernel D3DKMTPresent.  This is the
+;              tear-free flip mechanism: dwm composes a COMPLETE frame into a
+;              D3DKMT allocation, then D3DKMTPresent blts it to the scanout.
+;
+;              This INF is registered LAST in the REGISTRY_INF_LIST (from the
+;              top-level CMakeLists, after win32ss) so that its CDDB Service
+;              value wins the mkhive last-write-wins merge over bochsmp_reg.inf.
+;
+;              ARM64-only bring-up aid for proving the dxgkrnl<->miniport WDDM
+;              handshake and DWM composition on QEMU virt.
+
+[AddReg]
+HKLM,"SYSTEM\CurrentControlSet\Control\CriticalDeviceDatabase\PCI#VEN_1234&DEV_1111","Service",0x00000000,"kmdod"
+HKLM,"SYSTEM\CurrentControlSet\Control\CriticalDeviceDatabase\PCI#VEN_1234&DEV_1111","ClassGUID",0x00000000,"{4D36E968-E325-11CE-BFC1-08002BE10318}"
+HKLM,"SYSTEM\CurrentControlSet\Control\CriticalDeviceDatabase\PCI#VEN_1234&DEV_1111","DeviceDesc",0x00000000,"ReactOS WDDM Display-Only Driver"
+
+; Load the UEFI GOP framebuffer miniport in the "Video Init" group so it
+; registers \Device\Video0 (the GDI desktop display) BEFORE the WDDM
+; dxgkrnl/softgpu path runs DxgkDisplayRegister. dxgkrnl then takes Video1.
+; This keeps the GDI desktop on the GOP framebuffer (no VIDEO_DRIVER_INIT_FAILURE)
+; while softgpu/dxgkrnl still provide the D3DKMT adapter for dwm.exe.
+HKLM,"SYSTEM\CurrentControlSet\Services\uefifb","Group",0x00000000,"Video Init"

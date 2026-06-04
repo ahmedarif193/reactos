@@ -287,3 +287,20 @@ PsSetCreateThreadNotifyRoutine(IN PCREATE_THREAD_NOTIFY_ROUTINE NotifyRoutine)
 }
 
 /* EOF */
+
+/*
+ * TODO(WDDM-arm64): minimal stub so dxgkrnl.sys links and loads. The full impl
+ * (separate PspProcessNotifyRoutineEx array + invocation from PspCreate/ExitProcess)
+ * should be pulled from the donor ntoskrnl/ps/psnotify.c. Registered routines are
+ * not yet invoked.
+ */
+NTSTATUS
+NTAPI
+PsSetCreateProcessNotifyRoutineEx(IN PCREATE_PROCESS_NOTIFY_ROUTINE_EX NotifyRoutine,
+                                  IN BOOLEAN Remove)
+{
+    UNREFERENCED_PARAMETER(NotifyRoutine);
+    UNREFERENCED_PARAMETER(Remove);
+    PAGED_CODE();
+    return STATUS_SUCCESS;
+}

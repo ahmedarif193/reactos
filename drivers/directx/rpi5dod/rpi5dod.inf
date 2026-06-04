@@ -1,0 +1,65 @@
+; RPI5DOD.INF
+;
+; Installation file for the ReactOS Raspberry Pi 5 display-only WDDM
+; miniport (rpi5dod.sys).
+;
+; Binding on real Raspberry Pi 5 hardware
+; ---------------------------------------
+; The Pi 5 display is NOT a PCI VGA device, so rpi5dod does not match a
+; PCI hardware ID.  It binds as a ROOT-enumerated software device:
+;
+;     ROOT\RPI5DOD
+;
+; A root-enumerated device is created from this INF (e.g. by the installer
+; or by a coinstaller) or pre-seeded in the boot hive (see rpi5dod_reg.inf,
+; which mirrors how the rpi5vc4 XPDM miniport is root-enumerated).  At
+; StartDevice rpi5dod calls DxgkCbAcquirePostDisplayOwnership to obtain the
+; firmware GOP framebuffer that the VideoCore VII HVS already scans out, and
+; presents complete frames into it.
+;
+; Class: Display (WDDM kernel-mode driver)
+
+[Version]
+Signature  = "$Windows NT$"
+Class      = Display
+ClassGUID  = {4D36E968-E325-11CE-BFC1-08002BE10318}
+Provider   = %ReactOS%
+DriverVer  = 01/01/2026,1.0.0.0
+
+[DestinationDirs]
+DefaultDestDir = 12      ; %windir%\system32\drivers
+
+[Manufacturer]
+%ReactOSMfg% = Rpi5DodDevices,NTarm64
+
+; --- arm64 device list (root-enumerated, no PCI hardware ID) ---
+
+[Rpi5DodDevices.NTarm64]
+%Rpi5Dod.DeviceDesc% = Rpi5Dod_Inst, ROOT\RPI5DOD
+
+; --- Install section ---
+
+[Rpi5Dod_Inst.NTarm64]
+CopyFiles = Rpi5Dod_CopyFiles
+
+[Rpi5Dod_CopyFiles]
+rpi5dod.sys
+
+; --- Service install ---
+
+[Rpi5Dod_Inst.NTarm64.Services]
+AddService = rpi5dod, 0x00000002, Rpi5Dod_Service_Inst
+
+[Rpi5Dod_Service_Inst]
+ServiceType    = 1                  ; SERVICE_KERNEL_DRIVER
+StartType      = 3                  ; SERVICE_DEMAND_START
+ErrorControl   = 0                  ; SERVICE_ERROR_IGNORE
+ServiceBinary  = %12%\rpi5dod.sys
+LoadOrderGroup = Video
+
+; --- Strings ---
+
+[Strings]
+ReactOS             = "ReactOS Project"
+ReactOSMfg          = "ReactOS WDDM Display-Only Driver"
+Rpi5Dod.DeviceDesc  = "ReactOS Raspberry Pi 5 Display-Only Driver (rpi5dod)"

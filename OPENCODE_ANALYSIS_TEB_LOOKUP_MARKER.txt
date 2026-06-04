@@ -1,0 +1,11 @@
+[0m
+> build · deepseek-v4-pro
+[0m
+[0m• [0mAnalyze TEB/PEB creation code[90m Explore Agent[0m
+[0m• [0mAnalyze page fault handler code[90m Explore Agent[0m
+[0m• [0mRead trap handler and mm headers[90m Explore Agent[0m
+[0m• [0mSearch for PFN bookkeeping and PTE flags[90m Explore Agent[0m
+[0m✓ [0mAnalyze page fault handler code[90m Explore Agent[0m
+[0m✓ [0mRead trap handler and mm headers[90m Explore Agent[0m
+[0m✓ [0mSearch for PFN bookkeeping and PTE flags[90m Explore Agent[0m
+[0m✓ [0mAnalyze TEB/PEB creation code[90m Explore Agent[0m

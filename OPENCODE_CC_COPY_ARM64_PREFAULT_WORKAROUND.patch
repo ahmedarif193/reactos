@@ -1,0 +1,84 @@
+diff --git a/ntoskrnl/cc/copy.c b/ntoskrnl/cc/copy.c
+index f4070c7573f..7bec29f190f 100644
+--- a/ntoskrnl/cc/copy.c
++++ b/ntoskrnl/cc/copy.c
+@@ -488,6 +488,49 @@ CcpEnsureVacbResidentForCopy(
+     return TRUE;
+ }
+ 
++#if defined(_M_ARM64)
++static
++BOOLEAN
++CcpArm64EnsureVacbMappedForCopy(
++    _In_ PROS_VACB Vacb,
++    _In_ ULONG Offset,
++    _In_ ULONG Length,
++    _In_ BOOLEAN WriteAccess)
++{
++    ULONG_PTR Va;
++    ULONG_PTR Start;
++    ULONG_PTR End;
++    ULONG FaultCode;
++
++    if (Length == 0)
++    {
++        return TRUE;
++    }
++
++    Start = ((ULONG_PTR)Vacb->BaseAddress + Offset) & ~(ULONG_PTR)(PAGE_SIZE - 1);
++    End = ((ULONG_PTR)Vacb->BaseAddress + Offset + Length + PAGE_SIZE - 1) & ~(ULONG_PTR)(PAGE_SIZE - 1);
++    FaultCode = WriteAccess ? 0x2 : 0x0;
++
++    for (Va = Start; Va < End; Va += PAGE_SIZE)
++    {
++        NTSTATUS Status;
++
++        if (MmIsPagePresent(NULL, (PVOID)Va))
++        {
++            continue;
++        }
++
++        Status = MmAccessFaultEx(FaultCode, (PVOID)Va, KernelMode, NULL, FALSE);
++        if (!NT_SUCCESS(Status) || !MmIsPagePresent(NULL, (PVOID)Va))
++        {
++            return FALSE;
++        }
++    }
++
++    return TRUE;
++}
++#endif
++
+ /*
+  * @implemented
+  */
+@@ -552,6 +595,14 @@ CcCopyRead (
+             return FALSE;
+         }
+ 
++#if defined(_M_ARM64)
++        if (!CcpArm64EnsureVacbMappedForCopy(Vacb, VacbOffset, VacbLength, FALSE))
++        {
++            CcRosReleaseVacb(SharedCacheMap, Vacb, FALSE, FALSE);
++            return FALSE;
++        }
++#endif
++
+         if ((Buffer == NULL) && (VacbLength != 0))
+         {
+             CcRosReleaseVacb(SharedCacheMap, Vacb, FALSE, FALSE);
+@@ -671,6 +722,14 @@ CcCopyWrite (
+             return FALSE;
+         }
+ 
++#if defined(_M_ARM64)
++        if (!CcpArm64EnsureVacbMappedForCopy(Vacb, VacbOffset, VacbLength, TRUE))
++        {
++            CcRosReleaseVacb(SharedCacheMap, Vacb, FALSE, FALSE);
++            return FALSE;
++        }
++#endif
++
+         if ((Buffer == NULL) && (VacbLength != 0))
+         {
+             CcRosReleaseVacb(SharedCacheMap, Vacb, FALSE, FALSE);

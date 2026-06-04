@@ -1,0 +1,15 @@
+/*
+ * PROJECT:     ReactOS DWM Core Composition Engine
+ * LICENSE:     GPL-2.0-or-later (https://spdx.org/licenses/GPL-2.0-or-later)
+ * PURPOSE:     Version resource
+ * COPYRIGHT:   Copyright 2026 ReactOS WDDM Team
+ */
+
+#define WINE_FILEDESCRIPTION_STR "Desktop Window Manager Core Library"
+#define WINE_FILENAME_STR "dwmcore.dll"
+#define WINE_FILEVERSION 6,1,7601,17514
+#define WINE_FILEVERSION_STR "6.1.7601.17514"
+#define WINE_PRODUCTVERSION 6,1,7601,17514
+#define WINE_PRODUCTVERSION_STR "6.1.7601.17514"
+
+#include "wine/wine_common_ver.rc"

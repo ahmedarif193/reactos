@@ -1,0 +1,370 @@
+================================================================================
+ ReactOS win32k — Excessive Locking Analysis
+ Date: 2026-05-29
+ Branch: codefix/Ivy-bcom
+ Scope: win32ss/user/ntuser (USER) and win32ss/gdi (GDI)
+================================================================================
+
+VERDICT
+-------
+Yes — win32k is heavily locked, and a meaningful fraction is more aggressive
+than necessary. However, the core design (one big USER lock) is largely
+INHERITED from NT's own USER architecture, not a ReactOS invention. The
+genuinely "excessive" parts are:
+  (a) lock GRANULARITY  — one global lock for all of USER,
+  (b) an EXCLUSIVE-BY-DEFAULT bias on the reader/writer lock,
+  (c) a structural rule that forces every callback path to be exclusive.
+
+
+THE LOCKING ARCHITECTURE
+------------------------
+Two completely different schemes in the two halves of win32k:
+
+  USER (win32ss/user/ntuser):
+      ONE single global ERESOURCE — "UserLock".
+      Whole-subsystem granularity.
+
+  GDI  (win32ss/gdi/ntgdi):
+      Per-object pushlocks (pobj->pushlock) + a few global list ERESOURCEs.
+      Per-object granularity (fine, well-designed).
+
+USER lock primitives — win32ss/user/ntuser/ntuser.c:241-261
+    UserEnterShared()    -> ExAcquireResourceSharedLite(&UserLock, TRUE)
+    UserEnterExclusive() -> ExAcquireResourceExclusiveLite(&UserLock, TRUE)
+                            gptiCurrent = PsGetCurrentThreadWin32Thread();  <-- NOTE
+    UserLeave()          -> ExReleaseResourceLite(&UserLock)
+
+  => Every NtUser* system call serializes through one reader/writer lock.
+     That single lock is the headline source of "excessive locking".
+
+  IMPORTANT SUBTLETY: the global "gptiCurrent" is assigned ONLY on exclusive
+  entry, not on shared entry. Any code path that reads gptiCurrent therefore
+  CANNOT be safely demoted from exclusive to shared. This constrains item #2
+  below (see "SAFE-DEMOTION CRITERIA").
+
+
+IDENTIFIED EXCESSIVE-LOCKING PATTERNS
+-------------------------------------
+1. SINGLE GLOBAL USER LOCK (the big one)
+   All of USER — windows, messages, input, timers, clipboard, focus, menus —
+   is protected by ONE ERESOURCE. No per-desktop, per-window-station, or
+   per-queue lock. Any exclusive holder blocks ALL USER activity process-wide.
+   Modern Windows win32k broke this up; ReactOS still mirrors the NT4-era
+   single-lock model.
+
+2. EXCLUSIVE-BY-DEFAULT BIAS
+   Across win32ss/user/ntuser/*.c:
+       227 exclusive acquisitions (UserEnterExclusive / UserEnterCo)
+        63 shared    acquisitions (UserEnterShared)
+       ~78% exclusive.
+   A reader/writer lock only buys concurrency if reads use SHARED mode; here
+   the writer mode dominates, so the RW lock often behaves like a plain mutex.
+   Hottest files lean almost entirely exclusive:
+       callback.c 17/0, message.c 13/0, desktop.c 12/0,
+       painting.c 10/0, input.c 7/0.
+
+   Concrete smell — NtUserGetForegroundWindow (focus.c:1643) reads a global
+   pointer yet takes the EXCLUSIVE lock; compare NtUserGetDoubleClickTime /
+   NtUserGetMonitorInfo / NtUserGetClassName, which correctly use shared.
+
+3. CALLBACKS ARE STRUCTURALLY FORCED TO BE EXCLUSIVE
+   UserEnterCo is hard-aliased to the exclusive lock (ntuser.h:3):
+       #define UserEnterCo UserEnterExclusive
+   There is NO shared callback variant. The callback pattern itself is correct
+   (it drops the lock around the upcall — callback.c:204-212):
+       UserLeaveCo();
+       Status = KeUserModeCallback(...);
+       UserEnterCo();          // always re-acquires EXCLUSIVE
+   But because there's no UserEnterSharedCo, all 123 co_* functions are
+   exclusive even when they only read.
+
+4. GDI "SEMAPHORE" IS AN ALWAYS-EXCLUSIVE ERESOURCE
+   EngCreateSemaphore allocates an ERESOURCE; EngAcquireSemaphore always takes
+   it exclusively (win32ss/gdi/eng/semaphor.c:40-56). A shared variant exists
+   (EngAcquireSemaphoreShared) but is used 6x vs 23x exclusive. Global lists
+   ghsemPDEV / ghsemLDEVList / ghsemGraphicsDeviceList are each one global lock
+   taken exclusively for walks that are mostly reads.
+
+5. NESTED GLOBAL GDI LOCKS
+   pdevobj.c:713-716 and dclife.c:555-586 acquire a per-PDEV lock AND the
+   global ghsemPDEV (and lock two DCs' device locks in sequence). Multiple
+   global locks held simultaneously is a contention / lock-ordering hazard.
+
+
+WHAT IS *NOT* EXCESSIVE (to be fair)
+------------------------------------
+ - GDI per-object pushlocks (GDIOBJ_LockObject, gdiobj.c:833) are genuinely
+   fine-grained, recursive per-thread, with a defined lock order. Well-designed.
+ - Dropping the lock around usermode callbacks is REQUIRED for correctness
+   (avoids holding a kernel lock across arbitrary user code). The churn is the
+   price of safety, not a bug.
+ - Many read-only queries DO correctly use UserEnterShared. The problem is
+   inconsistency, not total absence.
+
+
+SAFE-DEMOTION CRITERIA (for item #2 work)
+-----------------------------------------
+A UserEnterExclusive site may be demoted to UserEnterShared ONLY IF the body
+between Enter and Leave:
+   - does NOT call any co_* function (callback => must be exclusive),
+   - does NOT call any mutator (Set/Create/Destroy/Add/Remove/Insert/Free/
+     Alloc/Ref/Deref/Move/Update/Link/Unlink/...),
+   - does NOT read the global gptiCurrent (set only on exclusive entry),
+   - does NOT take a USER reference whose refcount update is non-atomic and
+     relies on the exclusive lock,
+   - only reads object/global fields and copies out to user mode.
+
+Every candidate must be individually verified against the above; this is NOT a
+mechanical search-and-replace.
+
+
+RECOMMENDATIONS (payoff vs risk)
+--------------------------------
+1. LOW-RISK   : demote verified read-only UserEnterExclusive sites to shared.
+                (NtUserGetForegroundWindow is a starter.)  <-- DONE / ~EXHAUSTED
+                Batches 1-2 swept the entire read-only-NAMED exclusive pool
+                (Get/Query/Enum/Find/Is, 15 funcs). Only 6 were genuinely safe;
+                the rest are "Get" functions that lazily create/cache/destroy,
+                take non-atomic USER refs, or call co_*. The low-risk well is now
+                essentially dry — further wins require #2 or #3 below.
+2. MEDIUM     : introduce UserEnterSharedCo so read-only callback paths stop
+                forcing exclusive. (Unlocks GetScrollBarInfo, GetUpdateRect/Rgn
+                with bErase=FALSE, and ~120 other co_* read paths.)  <-- NEXT
+3. MEDIUM     : convert global GDI list walks to EngAcquireSemaphoreShared.
+                (ghsemPDEV / ghsemLDEVList / ghsemGraphicsDeviceList — self-
+                contained, no callback/refcount hazards. Best risk/reward.)
+                <-- DONE / ~EXHAUSTED. Batch 3 swept all 10 exclusive sites on
+                the 3 global locks; only 2 were pure reads (EngpFindGraphicsDevice,
+                EngpGetPDEV). The other 8 are insert/unlink/teardown writers that
+                must stay exclusive. The shared-walk well is now dry too.
+4. HIGH/ARCH  : split UserLock into per-desktop / per-window-station locks.
+                Real scalability fix, but invasive and regression-prone.
+
+
+CHANGE LOG (low-risk demotions applied)
+---------------------------------------
+2026-05-29 — Batch 1: 5 read-only NtUser* query syscalls demoted from
+             UserEnterExclusive() to UserEnterShared(). Each was verified by
+             reading its FULL body plus the transitive call tree of every
+             helper, confirming: no co_* callback, no gptiCurrent read, no
+             non-atomic refcount (UserReferenceObject/UserDereferenceObject),
+             no writes to shared state — only handle->pointer lookups, field
+             reads, and SEH-guarded copies to per-thread user buffers.
+
+  1. NtUserGetForegroundWindow            win32ss/user/ntuser/focus.c
+       -> UserGetForegroundWindow(): IntGetFocusMessageQueue (reads active
+          desktop's ActiveMessageQueue) + UserHMGetHandle (field read).
+  2. NtUserQueryInputContext              win32ss/user/ntuser/ime.c
+       -> UserGetObject (pure handle lookup) + reads pIMC/pti fields +
+          PsGetThreadProcessId/Id (pure NT reads).
+  3. NtUserGetImeHotKey                   win32ss/user/ntuser/ime.c
+       -> IntGetImeHotKeyById (pure walk of gpImeHotKeyList) + SEH copy-out.
+  4. NtUserGetTitleBarInfo                win32ss/user/ntuser/menu.c
+       -> UserGetWindowObject (pure lookup) + intGetTitleBarInfo (writes only
+          the caller's LOCAL stack buffer; reads rcWindow/style +
+          UserGetSystemMetrics).
+  5. NtUserGetLayeredWindowAttributes     win32ss/user/ntuser/layered.c
+       -> UserGetWindowObject + UserGetProp (IntGetProp lookup) + SEH copy-out.
+
+  Why this is safe under a SHARED lock:
+    - Multiple concurrent readers under shared do not conflict.
+    - Any thread that could mutate/destroy the objects being read must take the
+      EXCLUSIVE lock, which cannot proceed while a reader holds shared; so the
+      raw (unreferenced) pointers stay valid for the read's duration.
+    - The read helpers assert UserIsEntered(), which is satisfied by shared OR
+      exclusive (ntuser.c:225-229), confirming they are designed for shared use.
+
+  Build: `ninja win32k` (output-Clang-amd64-debug) — focus.c, ime.c, menu.c,
+         layered.c recompiled clean; win32k.sys linked OK.
+
+  Explicitly NOT demoted (verified UNSAFE despite "Get" names):
+    - NtUserGetAsyncKeyState (keyboard.c)  : WRITES gafAsyncKeyStateRecentDown
+                                             (clears a bit) — mutates shared state.
+    - NtUserGetControlBrush / NtUserGetControlColor (misc.c) : call
+                                             co_IntSendMessage (WM_CTLCOLOR* upcall).
+
+  Candidate pool for future batches: ~100 UserEnterExclusive sites flagged by
+  the first-pass scan, but that scan is UNRELIABLE (it stops at the first
+  UserLeave, so functions with early-return error paths — e.g. NtUserSetWindowLong,
+  NtUserDeleteMenu — falsely look read-only). Every future candidate MUST be
+  hand-verified against the SAFE-DEMOTION CRITERIA above; no mechanical replace.
+
+2026-05-30 — Batch 2: swept the COMPLETE read-only-NAMED exclusive pool to find
+             what else is safely demotable. A scan found 15 NtUserGet*/Query*
+             funcs using ONLY UserEnterExclusive (no Shared, no literal Co). Each
+             was hand-verified body + transitive call tree. Result: ONE genuine
+             new demotion; the rest are landmines that the NAME hides.
+
+  Demoted (verified safe):
+    6. NtUserGetWOWClass                    win32ss/user/ntuser/class.c:2959
+       -> in-lock body only calls GetW32ProcessInfo (pure accessor) and
+          IntGetClassAtom -> IntFindClass (read-only class-list walk) +
+          IntGetAtomFromStringOrAtom (RtlLookupAtomInAtomTable read + NT scratch
+          alloc). String capture/free is an NT pool buffer, not USER state.
+          No co_*, no mutator, no gptiCurrent, takes no USER reference.
+
+  Verified UNSAFE despite read-only names (do NOT re-attempt — reasons recorded):
+    - NtUserGetCPD (callproc.c)        : UserGetCPD -> CreateCallProc allocates a
+                                         CALLPROCDATA handle + InterlockedExchange
+                                         into pCls->spcpdFirst list (mutator).
+    - NtUserGetClassInfo (class.c)     : UserRegisterSystemClasses (mutator) AND
+                                         IntGetClassWndProc -> UserGetCPD ->
+                                         CreateCallProc. Its own comment says
+                                         exclusive is required.
+    - NtUserGetIconInfo (cursoricon.c) : UserGetCurIconObject/UserDereferenceObject
+                                         do non-atomic cLockObj ++/-- (deref can
+                                         free); also creates a GDI bitmap copy.
+    - NtUserGetScrollBarInfo           : UserRefObjectCo + co_IntGetScrollBarInfo
+                       (scrollbar.c)     (co_* callout + non-atomic Co reference).
+    - NtUserGetSystemMenu (menu.c)     : IntGetSystemMenu lazily creates/destroys
+                                         the menu, writes Window->SystemMenu,
+                                         links spwndNotify (mutator).
+    - NtUserGetUpdateRect/Rgn          : co_UserGetUpdateRect/Rgn -> co_IntPaint-
+                       (painting.c)      Windows (co_* callout) AND unconditional
+                                         Window->state &= ~WNDS_UPDATEDIRTY write,
+                                         even when bErase==FALSE.
+    - NtUserGetThreadDesktop           : BORDERLINE — IntGetDesktopObjectHandle
+                       (desktop.c)       creates an NT desktop handle (Ob handle
+                                         table, not USER state) so arguably safe,
+                                         but cold path + subtle IntTID2PTI thread
+                                         walk => fails "clearly safe AND worth it".
+    - NtUserGetMessage / NtUserGetDCEx : obviously mutating (queue drain / DC alloc).
+    - NtUserQueryInformationThread     : technically safe BUT an unimplemented
+                                         STUB (STATUS_NOT_IMPLEMENTED) — demoting
+                                         is cosmetic; skip until it does real work.
+
+  Conclusion: the read-only-NAMED low-risk pool is now EXHAUSTED. The next real
+  concurrency wins are the MEDIUM items (UserEnterSharedCo, GDI shared list walks),
+  not more 1-line demotions.
+
+  Build: `ninja win32k` (output-Clang-amd64-debug) — class.c recompiled clean,
+         win32k.sys linked OK.
+
+2026-05-30 — Batch 3 (rec #3): GDI global list-lock shared demotions. The three
+             global GDI list ERESOURCEs are taken via EngAcquireSemaphore (always
+             EXCLUSIVE) even for read-only list walks; EngAcquireSemaphoreShared
+             already exists (precedent: pdevobj.c:46 DbgLookupDHPDEV, :1337). All
+             10 exclusive sites on ghsemPDEV / ghsemLDEVList / ghsemGraphics-
+             DeviceList were hand-verified (full locked region + helpers). Result:
+             2 pure-read sites demoted, 8 confirmed writers left exclusive.
+
+  Demoted (verified safe):
+    1. EngpFindGraphicsDevice           win32ss/gdi/eng/device.c:806
+       ghsemGraphicsDeviceList. Region only walks gpGraphicsDeviceFirst via
+       ->pNextGraphicsDevice, compares szWinDeviceName (RtlEqualUnicodeString)
+       or counts to iDevNum, returns the pointer. No list/node/field write, no
+       refcount, no helper. Canonical read-only walk (== DbgLookupDHPDEV shape).
+    2. EngpGetPDEV                       win32ss/gdi/eng/pdevobj.c:808
+       ghsemPDEV. Region walks gpmdev->dev[] / ppdevGlobal (read), then pins the
+       found PDEV with PDEVOBJ_vReference == InterlockedIncrement(&cPdevRefs)
+       (ATOMIC). Safe under shared because the ONLY decrement+teardown path,
+       PDEVOBJ_vRelease (pdevobj.c:109-116), holds ghsemPDEV EXCLUSIVE — mutually
+       exclusive with our shared hold — so no PDEV can drop to 0 / be unlinked /
+       freed while a reader holds shared; the found PDEV always has cPdevRefs>=1
+       (the ==0 guard at pdevobj.h:166 cannot fire), and concurrent shared readers
+       only ever do atomic increments. Reader-vs-writer exclusion is preserved
+       (writers stay exclusive). cPdevRefs writes audited: only c.85 (alloc, not
+       yet visible), c.112 (vRelease, exclusive), h.173 (vReference, atomic).
+
+  Verified UNSAFE — left exclusive (writers; do NOT demote):
+    - device.c:265,324 EngpUpdateGraphicsDeviceList : EngpUnlinkGraphicsDevice
+                                       (list-head/link rewrite) + ExFreePoolWithTag
+                                       + writes gpPrimaryGraphicsDevice->pVgaDevice.
+    - device.c:768 EngpRegisterGraphicsDevice : EngpLinkGraphicsDevice (append) +
+                                       giDevNum++ (global).
+    - ldevobj.c:312 LDEVOBJ_pLoadInternal : InsertHeadList + non-atomic pldev->cRefs++
+                                       + Alloc/Enable/Free helpers.
+    - ldevobj.c:398 LDEVOBJ_pLoadDriver : LDEVOBJ_bLoadImage (ZwSetSystemInformation
+                                       SystemLoadGdiDriverInformation) + InsertHeadList
+                                       + unconditional non-atomic cRefs++.
+    - ldevobj.c:474 LDEVOBJ_vDereference : non-atomic cRefs-- + RemoveEntryList +
+                                       Disable/Unload/Free teardown (== vRelease shape).
+    - pdevobj.c:716 PDEVOBJ_bSwitchMode : PDEVOBJ_Create (list-head insert at
+                                       c.621-622) + PDEVOBJ_vRelease teardown +
+                                       writes shared PDEV/surface fields.
+    - pdevobj.c:109 PDEVOBJ_vRelease    : (reference shape) decrement + teardown.
+
+  Why ldevobj cRefs is non-atomic-unsafe but pdevobj cPdevRefs is atomic-safe:
+    LDEVOBJ uses plain `pldev->cRefs++/--` (no Interlocked) — it genuinely relies
+    on the exclusive lock for serialization, so it can NEVER be demoted. PDEVOBJ
+    uses InterlockedIncrement/Decrement, which is why EngpGetPDEV's read+pin is
+    demotable while LDEVOBJ_pLoadDriver's read+pin is not.
+
+  Conclusion: GDI global-list shared-walk pool is now EXHAUSTED (2 of 10). With
+  the USER read-only pool also dry, the remaining headroom is the genuinely
+  bigger-lift items: rec #2 (UserEnterSharedCo infrastructure) and rec #4 (split
+  the single UserLock) — neither is a surgical demotion.
+
+  Build: `ninja win32k` (output-Clang-amd64-debug) — device.c, pdevobj.c
+         recompiled clean; win32k.sys linked OK.
+
+2026-05-30 — Batch 4: USER demotions the read-only-NAME scan MISSED. Re-ran the
+             scan WITHOUT the Get/Query/... name filter over all 180 exclusive
+             NtUser* sites; hand-verified the non-Get-named read-only candidates.
+
+  Demoted (verified safe):
+    7. NtUserChildWindowFromPointEx     win32ss/user/ntuser/winpos.c:3286
+       -> IntChildWindowFromPointEx: tree walk + IntPtInWindow region hit-test +
+          IntWinListChildren (NT-pool handle list, no USER ref). No co_/mutator.
+    8. NtUserMenuItemFromPoint          win32ss/user/ntuser/menu.c:6318
+       -> UserGetMenuObject (non-ref lookup) + MENU_AdjustMenuItemRect (field
+          reads) + RECTL_bPointInRect. Pure hit-test.
+    9. NtUserBuildHwndList              win32ss/user/ntuser/window.c:1530
+       -> window-tree enum + SEH copy-out; only NT refs (Desktop/Thread, balanced),
+          no USER cLockObj ref, no gptiCurrent, no mutation.
+
+  Verified UNSAFE (non-Get names that hide writes):
+    - NtUserWindowFromPoint (winpos.c)     : UserRefObjectCo + co_WinPosWindowFromPoint.
+    - NtUserBuildHimcList (ime.c)          : reads global gptiCurrent (ime.c:754).
+    - NtUserValidateHandleSecure (object.c): reads global gptiCurrent (object.c:830).
+    - NtUserCheckImeHotKey (ime.c)         : writes function-static s_uKeyUpVKey.
+
+  Build: `ninja win32k` — winpos.c, menu.c, window.c clean; win32k.sys linked OK.
+
+2026-05-30 — Batch 5 (rec #2-adjacent): NtUserCall* DISPATCHER lock-split. The
+             generic Call dispatchers take UserEnterExclusive() ONCE, then switch
+             across many routines mixing reads + writes. Sibling NtUserCallHwnd
+             already uses UserEnterShared (precedent), and OneParam carried a dev
+             /* FIXME: Should use UserEnterShared */ on ENUMCLIPBOARDFORMATS.
+             Restructure: a small lock-SELECTION switch before the dispatch switch
+             picks UserEnterShared() for the verified read-only routines and
+             UserEnterExclusive() as the fail-safe default; the dispatch switch is
+             left untouched. Every routine in all 6 exclusive dispatchers (65
+             cases) was hand-classified (handler + transitive helpers).
+
+  Demoted routines (now acquire shared via the selection switch), simplecall.c:
+    NtUserCallNoParam  (3/13): GETMSESSAGEPOS (reads pti->ptLast),
+                               GETIMESHOWSTATUS (reads gfIMEShowStatus),
+                               ISCONSOLEMODE (reads ScreenDeviceContext).
+    NtUserCallOneParam (7/25): GETDESKTOPMAPPING, WINDOWFROMDC, GETKEYBOARDTYPE,
+                               GETKEYBOARDLAYOUT, ENUMCLIPBOARDFORMATS (resolves
+                               the FIXME), GETCURSORPOS, GETPROCDEFLAYOUT.
+                               (All pure field/global reads or copy-out; the
+                               ENUMCLIPBOARDFORMATS tree refs only via NT-atomic
+                               ObReferenceObjectByHandle, not USER cLockObj.)
+
+  Left fully exclusive (no safe routine):
+    NtUserCallTwoParam (0/11)        : every case co_*/Set/Post/Insert/non-atomic ref.
+    NtUserCallHwndLock (0/8)         : dispatcher-level UserRefObjectCo (non-atomic
+                                       cLockObj++) before the switch + co_* per case.
+    NtUserCallHwndParam (0/6)        : timer-remove / prop alloc-free / state writes;
+                                       CLEAR/SETWINDOWSTATE also read global gptiCurrent.
+    NtUserCallHwndParamLock (0/2)    : dispatcher-level UserRefObjectCo + mutate.
+    (NtUserCallHwnd already shared; NtUserCallHwndOpt takes no USER lock.)
+
+  Design notes / why this is safe:
+    - The fail-safe default (UserEnterExclusive) means any routine NOT explicitly
+      whitelisted — including future additions — stays exclusive. Demotion is
+      opt-in per verified routine, never by omission.
+    - UserLeave() releases shared or exclusive identically (ExReleaseResourceLite),
+      so only the ACQUIRE needed splitting; the single Leave is unchanged.
+    - Per-thread state is read via PsGetCurrentThreadWin32Thread()/GetW32ThreadInfo()
+      (the calling thread's own pti), never the global gptiCurrent — the latter is
+      the disqualifier that knocked out CLEAR/SETWINDOWSTATE etc.
+
+  Build: `ninja win32k` — simplecall.c recompiled clean (all 10 routine enums
+         validated by the compiler); win32k.sys linked OK.
+
+  STATUS: USER read-only demotions (Batches 1,2,4), GDI shared list-walks
+  (Batch 3), and the Call-dispatcher split (Batch 5) are complete. Remaining
+  headroom is only the heavy rec #4 (split the single global UserLock).

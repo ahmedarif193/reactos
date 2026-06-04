@@ -3656,6 +3656,54 @@ NtUserSetScrollBarInfo(
     LONG idObject,
     SETSCROLLBARINFO *info);
 
+/* DWM (Desktop Window Manager) / session / ghost-window support syscalls (Vista+) */
+BOOL
+NTAPI
+NtUserDwmGetDxRgn(
+    _In_ HWND hwnd,
+    _In_ HANDLE hrgn,
+    _In_ DWORD dwFlags);
+
+BOOL
+NTAPI
+NtUserDwmHintDxUpdate(
+    _In_ HWND hwnd,
+    _In_ DWORD dwFlags);
+
+BOOL
+NTAPI
+NtUserDwmStartRedirection(
+    _Out_ PVOID pRedirectionInfo);
+
+BOOL
+NTAPI
+NtUserDwmStopRedirection(VOID);
+
+BOOL
+NTAPI
+NtUserRegisterSessionPort(
+    _In_ HANDLE hPort);
+
+BOOL
+NTAPI
+NtUserUnregisterSessionPort(VOID);
+
+HWND
+NTAPI
+NtUserGhostWindowFromHungWindow(
+    _In_ HWND hwndHung);
+
+HWND
+NTAPI
+NtUserHungWindowFromGhostWindow(
+    _In_ HWND hwndGhost);
+
+BOOL
+NTAPI
+NtUserRegisterErrorReportingDialog(
+    _In_ HWND hwndDialog,
+    _In_ DWORD dwFlags);
+
 ULONG
 RtlGetExpWinVer(_In_ PVOID BaseAddress);
 

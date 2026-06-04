@@ -1,0 +1,30 @@
+; PROJECT:     ReactOS RPi5 Display-Only WDDM Miniport (rpi5dod)
+; LICENSE:     GPL-2.0-or-later (https://spdx.org/licenses/GPL-2.0-or-later)
+; PURPOSE:     Service registration + root-enumeration seed for rpi5dod.
+;
+; rpi5dod is OPT-IN and ADDITIVE.  This file registers the service and the
+; CriticalDeviceDatabase/root-enumeration entries, but rpi5dod is a
+; DEMAND-start (Start=3) driver and is NOT placed in any Start=1 boot group,
+; so it does NOT load automatically and CANNOT regress the working rpi5vc4
+; XPDM desktop.  To actually bring rpi5dod up on a Pi 5 you additionally:
+;
+;   1. Create the root device instance (ROOT\RPI5DOD) — e.g. via the INF
+;      installer, a coinstaller, or by pre-seeding the Enum hive.  The
+;      rpi5vc4 miniport binds the same way (ROOT\RPI5VC4).
+;   2. Ensure rpi5vc4 (the XPDM display) is NOT also owning the display, or
+;      run them on different outputs — rpi5dod and rpi5vc4 both target the
+;      Pi 5 HVS scanout, so only one should drive a given display at a time.
+;
+; The service entry below is harmless when no ROOT\RPI5DOD device exists.
+
+[AddReg]
+HKLM,"SYSTEM\CurrentControlSet\Services\rpi5dod","DisplayName",0x00000000,"ReactOS Raspberry Pi 5 Display-Only Driver"
+HKLM,"SYSTEM\CurrentControlSet\Services\rpi5dod","ErrorControl",0x00010001,0x00000000
+HKLM,"SYSTEM\CurrentControlSet\Services\rpi5dod","Group",0x00000000,"Video"
+HKLM,"SYSTEM\CurrentControlSet\Services\rpi5dod","ImagePath",0x00020000,"system32\drivers\rpi5dod.sys"
+HKLM,"SYSTEM\CurrentControlSet\Services\rpi5dod","Start",0x00010001,0x00000003
+HKLM,"SYSTEM\CurrentControlSet\Services\rpi5dod","Type",0x00010001,0x00000001
+
+; Display device settings sub-key (WDDM display-only -> framebuf class driver).
+HKLM,"SYSTEM\CurrentControlSet\Services\rpi5dod\Device0","Device Description",0x00000000,"ReactOS Raspberry Pi 5 Display-Only Driver"
+HKLM,"SYSTEM\CurrentControlSet\Services\rpi5dod\Device0","DefaultSettings.BitsPerPel",0x00010001,0x00000020

@@ -2045,11 +2045,7 @@ NtGdiGetFontFileData(
     _Out_writes_bytes_(cjBuf) PVOID pvBuf,
     _In_ SIZE_T cjBuf);
 
-/*
- * NtGdiGetFontFileInfo Win7+ variant uses PFONT_FILE_INFO which is not
- * defined in ReactOS headers. Exclude until the type is available.
- */
-#if (_WIN32_WINNT >= _WIN32_WINNT_WIN7) && defined(_FONT_FILE_INFO_DEFINED)
+#if (_WIN32_WINNT >= _WIN32_WINNT_WIN7)
 __kernel_entry
 W32KAPI
 DWORD
@@ -2060,7 +2056,7 @@ NtGdiGetFontFileInfo(
     _Out_writes_bytes_(cjSize) PFONT_FILE_INFO pffi,
     _In_ SIZE_T cjSize,
     _Out_opt_ PSIZE_T pcjActualSize);
-#endif /* (_WIN32_WINNT >= _WIN32_WINNT_WIN7) && _FONT_FILE_INFO_DEFINED */
+#endif /* (_WIN32_WINNT >= _WIN32_WINNT_WIN7) */
 
 __kernel_entry
 W32KAPI
@@ -3040,11 +3036,14 @@ NtGdiGetFontUnicodeRanges(
     _Out_ _Post_bytecount_(return) LPGLYPHSET pgs);
 
 #ifdef LANGPACK
-/*
- * ReactOS implements the pre-Win7 NtGdiGetRealizationInfo (3 args).
- * The Win7+ variant uses PFONT_REALIZATION_INFO which is not defined.
- * Always use the pre-Win7 declaration.
- */
+#if (_WIN32_WINNT >= _WIN32_WINNT_WIN7)
+__kernel_entry
+W32KAPI
+BOOL
+NtGdiGetRealizationInfo(
+    _In_ HDC hdc,
+    _Out_ PFONT_REALIZATION_INFO pri);
+#else
 __kernel_entry
 W32KAPI
 BOOL
@@ -3053,6 +3052,7 @@ NtGdiGetRealizationInfo(
     _In_ HDC hdc,
     _Out_ PREALIZATION_INFO pri,
     _In_ HFONT hf);
+#endif
 #endif
 
 __kernel_entry
@@ -4310,5 +4310,120 @@ NTSTATUS
 APIENTRY
 NtGdiDdDDIWaitForSynchronizationObject(
     _In_ const D3DKMT_WAITFORSYNCHRONIZATIONOBJECT* unnamedParam1);
+
+/* Win7 WDDM 1.1 additions */
+
+__kernel_entry
+W32KAPI
+NTSTATUS
+APIENTRY
+NtGdiDdDDICheckVidPnExclusiveOwnership(
+    _In_ const D3DKMT_CHECKVIDPNEXCLUSIVEOWNERSHIP* unnamedParam1);
+
+__kernel_entry
+W32KAPI
+NTSTATUS
+APIENTRY
+NtGdiDdDDICreateAllocation2(
+    _Inout_ D3DKMT_CREATEALLOCATION* unnamedParam1);
+
+__kernel_entry
+W32KAPI
+NTSTATUS
+APIENTRY
+NtGdiDdDDIOpenResource2(
+    _Inout_ D3DKMT_OPENRESOURCE* unnamedParam1);
+
+__kernel_entry
+W32KAPI
+NTSTATUS
+APIENTRY
+NtGdiDdDDICreateSynchronizationObject2(
+    _Inout_ D3DKMT_CREATESYNCHRONIZATIONOBJECT2* unnamedParam1);
+
+__kernel_entry
+W32KAPI
+NTSTATUS
+APIENTRY
+NtGdiDdDDIOpenSynchronizationObject(
+    _Inout_ D3DKMT_OPENSYNCHRONIZATIONOBJECT* unnamedParam1);
+
+__kernel_entry
+W32KAPI
+NTSTATUS
+APIENTRY
+NtGdiDdDDIWaitForSynchronizationObject2(
+    _In_ const D3DKMT_WAITFORSYNCHRONIZATIONOBJECT2* unnamedParam1);
+
+__kernel_entry
+W32KAPI
+NTSTATUS
+APIENTRY
+NtGdiDdDDISignalSynchronizationObject2(
+    _In_ const D3DKMT_SIGNALSYNCHRONIZATIONOBJECT2* unnamedParam1);
+
+__kernel_entry
+W32KAPI
+NTSTATUS
+APIENTRY
+NtGdiDdDDICreateKeyedMutex(
+    _Inout_ D3DKMT_CREATEKEYEDMUTEX* unnamedParam1);
+
+__kernel_entry
+W32KAPI
+NTSTATUS
+APIENTRY
+NtGdiDdDDIOpenKeyedMutex(
+    _Inout_ D3DKMT_OPENKEYEDMUTEX* unnamedParam1);
+
+__kernel_entry
+W32KAPI
+NTSTATUS
+APIENTRY
+NtGdiDdDDIDestroyKeyedMutex(
+    _In_ const D3DKMT_DESTROYKEYEDMUTEX* unnamedParam1);
+
+__kernel_entry
+W32KAPI
+NTSTATUS
+APIENTRY
+NtGdiDdDDIAcquireKeyedMutex(
+    _Inout_ D3DKMT_ACQUIREKEYEDMUTEX* unnamedParam1);
+
+__kernel_entry
+W32KAPI
+NTSTATUS
+APIENTRY
+NtGdiDdDDIReleaseKeyedMutex(
+    _Inout_ D3DKMT_RELEASEKEYEDMUTEX* unnamedParam1);
+
+__kernel_entry
+W32KAPI
+NTSTATUS
+APIENTRY
+NtGdiDdDDIGetOverlayState(
+    _Inout_ D3DKMT_GETOVERLAYSTATE* unnamedParam1);
+
+__kernel_entry
+W32KAPI
+NTSTATUS
+APIENTRY
+NtGdiDdDDICheckSharedResourceAccess(
+    _In_ const D3DKMT_CHECKSHAREDRESOURCEACCESS* unnamedParam1);
+
+__kernel_entry
+W32KAPI
+NTSTATUS
+APIENTRY
+NtGdiDdDDIConfigureSharedResource(
+    _In_ const D3DKMT_CONFIGURESHAREDRESOURCE* unnamedParam1);
+
+__kernel_entry
+W32KAPI
+NTSTATUS
+APIENTRY
+NtGdiDdDDIGetPresentQueueEvent(
+    _In_ D3DKMT_HANDLE hAdapter,
+    _Inout_ HANDLE* unnamedParam2);
 
 #endif /* _NTGDI_ */

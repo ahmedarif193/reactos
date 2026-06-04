@@ -46,6 +46,16 @@ HKCU,"SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\User Shell Folders","Pe
 ; ARM64 self-map/MMU kmtest. Explorer runs this after the shell reaches the desktop.
 HKCU,"SOFTWARE\Microsoft\Windows\CurrentVersion\Run","Arm64MmSelfMapKmtest",0x00020000,"%SystemRoot%\system32\cmd.exe /c ""%SystemDrive%\Profiles\Default User\My Documents\livecd_start.cmd"""
 
+; WDDM/DWM bring-up: Explorer launches dwm.exe after the desktop is up.
+; dwm.exe's standalone fallback opens \Device\DxgKrnl via
+; D3DKMTOpenAdapterFromGdiDisplayName("\\.\DISPLAY1") and runs the
+; software composition loop, proving the user->kernel D3DKMT path on ARM64.
+HKLM,"SOFTWARE\Microsoft\Windows\CurrentVersion\Run","DwmCompositor",0x00020000,"%SystemRoot%\system32\dwm.exe -standalone"
+
+; Enable the dwm wine-debug channel so its composition-loop TRACEs reach the
+; debug serial (DwmComposeSingleFrame / DwmPresentFrame), proving dwm composites.
+HKLM,"SYSTEM\CurrentControlSet\Control\Session Manager\Environment","DEBUGCHANNEL",0x00020000,"+dwm"
+
 ; ComDlg32
 HKCU,"SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\ComDlg32",,0x00000012
 HKCU,"SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\ComDlg32\LastVisitedMRU",,0x00000012

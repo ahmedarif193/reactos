@@ -2322,12 +2322,14 @@ APIENTRY
 EngReleaseSemaphore(
     _Inout_ HSEMAPHORE hsem);
 
-#if defined(_M_AMD64) && (NTDDI_VERSION >= NTDDI_VISTA) && !defined(_WIN32K_)
+#if defined(_M_AMD64) && (NTDDI_VERSION >= NTDDI_VISTA)
 
-/* On AMD64 Vista+, these are trivial stubs defined in the header for DRIVERS,
- * but win32k.sys itself must still provide real exported implementations.
- * Use static __inline to prevent multiple-definition link errors. */
-static __inline
+_Check_return_
+_Success_(return)
+_Kernel_float_restored_
+_At_(*pBuffer, _Kernel_requires_resource_held_(EngFloatState)
+               _Kernel_releases_resource_(EngFloatState))
+ENGAPI
 BOOL
 APIENTRY
 EngRestoreFloatingPointState(
@@ -2338,7 +2340,13 @@ EngRestoreFloatingPointState(
     return TRUE;
 }
 
-static __inline
+_Check_return_
+_Success_(((pBuffer != NULL && cjBufferSize != 0) && return == 1) ||
+          ((pBuffer == NULL || cjBufferSize == 0) && return > 0))
+_When_(pBuffer != NULL && cjBufferSize != 0 && return == 1, _Kernel_float_saved_
+    _At_(*pBuffer, _Post_valid_ _Kernel_acquires_resource_(EngFloatState)))
+_On_failure_(_Post_satisfies_(return == 0))
+ENGAPI
 ULONG
 APIENTRY
 EngSaveFloatingPointState(
@@ -2349,7 +2357,7 @@ EngSaveFloatingPointState(
     return ((((pBuffer) == NULL) || ((cjBufferSize) == 0)) ? 8 : TRUE);
 }
 
-#else /* !(defined(_M_AMD64) && (NTDDI_VERSION >= NTDDI_VISTA) && !defined(_WIN32K_)) */
+#else /* !(defined(_M_AMD64) && (NTDDI_VERSION >= NTDDI_VISTA)) */
 
 _Check_return_
 _Success_(return)
@@ -2377,7 +2385,7 @@ EngSaveFloatingPointState(
     _Inout_ ULONG cjBufferSize);
 
 
-#endif /* defined(_M_AMD64) && (NTDDI_VERSION >= NTDDI_VISTA) && !defined(_WIN32K_) */
+#endif /* defined(_M_AMD64) && (NTDDI_VERSION >= NTDDI_VISTA) */
 
 ENGAPI
 HANDLE

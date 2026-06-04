@@ -1,0 +1,168 @@
+OPENCODE ANALYSIS: LiveCD Setup Stall — Why userinit/explorer Never Reached
+================================================================================
+
+DATE: 2026-05-26
+LOG:  output-Clang-amd64-debug/flash_test_serial_reset.log
+
+OBSERVATION:
+  Boot stalls after services.exe reports "LiveCD/setup in progress".
+  No userinit.exe, no explorer.exe, no GLPROBE, no glprobe.txt on FAT.
+  The uefifb EngpPnPTargetRelationRequest error is already fixed.
+
+ROOT CAUSE (most likely):
+
+  The blocking call is CMP_WaitNoPendingInstallEvents(INFINITE)
+  at dll/win32/syssetup/install.c:1087.
+
+  There is a race-condition deadlock between the syssetup/CommonInstall
+  path and the PlugPlay DeviceInstallThread, which are launched
+  independently and synchronise only via the event
+  "Global\PnP_No_Pending_Install_Events".
+
+CALL CHAIN TO THE BLOCK:
+
+  1. winlogon.exe  — winlogon.c:596
+     GetSetupType() != 0 → RunSetup()
+     Setup type is set (LiveCD), so RunSetupThreadProc starts.
+
+  2. winlogon/setup.c:153-167  — RunSetup() / RunSetupThreadProc()
+     Reads HKLM\SYSTEM\Setup\CmdLine (e.g. "syssetup.dll,InstallWindowsNt -mini").
+     Creates the setup process via CreateProcessW (line 118).
+     WaitForSingleObject(ProcessInfo.hProcess, INFINITE)  (line 136)
+     → runs on a background thread, winlogon continues its message loop.
+
+  3. syssetup/install.c:1113-1186  — InstallLiveCD()
+     PreprocessUnattend(FALSE)
+     → CommonInstall()                                   (line 1120)
+       → EnableUserModePnpManager()                      (line 691, install.c:619-690)
+         Opens PlugPlay service, changes config to AUTO_START,
+         calls StartServiceW ("PlugPlay").
+         Polls QueryServiceStatusEx until SERVICE_RUNNING.
+         ServiceMain sets SERVICE_RUNNING immediately after
+         creating threads — it does NOT wait for any thread to finish.
+       → CMP_WaitNoPendingInstallEvents(INFINITE)       (line 1087) ← THE BLOCK
+         Opens  "Global\PnP_No_Pending_Install_Events".
+         Waits on it with INFINITE timeout.
+     … then later would call:
+       CreateProcessW(L"userinit.exe", ...)              (line 1161)
+
+  4. umpnpmgr/umpnpmgr.c:260-317  — PlugPlay ServiceMain
+     Creates three threads: PnpEventThread, RpcServerThread,
+     DeviceInstallThread.
+     Sets status SERVICE_RUNNING (line 314).
+
+  5. umpnpmgr/install.c:841-1091  — DeviceInstallThread
+
+     STEP 1 (lines 849-972):
+        Calls PNP_GetDeviceListSize / PNP_GetDeviceList (kernel calls).
+        Filters for devices that still need installation.
+        Calls InstallDevicesBatch(filteredList, filteredCount)
+        → spawns  rundll32.exe newdev.dll,ClientSideInstallBatch
+        → WaitForBatchClientConnect(hPipe, hProcess)
+        → writes device list through named pipe
+        → WaitForSingleObject(ProcessInfo.hProcess, INFINITE)  (line 538)
+        → checks install event.
+        (On fallback: single-device InstallDevice per filtered device.)
+
+     STEP 2 (lines 976-1088):
+        WaitForSingleObject(hInstallEvent, INFINITE)          (line 979)
+        → returns IMMEDIATELY because hInstallEvent was created
+          pre-signaled (umpnpmgr.c:330: CreateEventW(…, SetupIsActive()))
+        → burst empty → SetEvent(hNoPendingInstalls)          (line 1007)
+        → WaitForSingleObject(hDeviceInstallListNotEmpty, INFINITE)  (line 1008)
+
+THE DEADLOCK:
+
+  The event "Global\PnP_No_Pending_Install_Events" (hNoPendingInstalls)
+  is created NON-signalled in InitializePnPManager at umpnpmgr.c:338-341:
+
+      hNoPendingInstalls = CreateEventW(NULL, TRUE, FALSE,
+                          L"Global\\PnP_No_Pending_Install_Events");
+
+  It is set to SIGNALLED only when DeviceInstallThread reaches
+  Step 2 line 1007:  SetEvent(hNoPendingInstalls);
+
+  Meanwhile, EnableUserModePnpManager() returns to CommonInstall()
+  as soon as PlugPlay reaches SERVICE_RUNNING — which happens
+  BEFORE DeviceInstallThread finishes Step 1 (and potentially
+  before it even starts executing, depending on scheduling).
+
+  Therefore:
+
+    Time  T1: PlugPlay ServiceMain → UpdateServiceStatus(SERVICE_RUNNING)
+               (threads created but Step 1 not yet started/completed)
+    Time  T2: EnableUserModePnpManager() exits → CMP_WaitNoPendingInstallEvents(INFINITE)
+               blocks (event has not been set yet)
+    Time  T3: DeviceInstallThread Step 1 runs … could be fast or slow
+    Time  T4: … eventually Step 2 SetEvent(hNoPendingInstalls)
+    Time  T5: CMP_WaitNoPendingInstallEvents returns, setup continues.
+
+  If T4 never comes (Step 1 stalls), the deadlock is permanent.
+
+WHAT CAN BLOCK STEP 1:
+
+  A. InstallDevicesBatch (install.c:368-566):
+     - Spawns "rundll32.exe newdev.dll,ClientSideInstallBatch".
+     - WaitForBatchClientConnect loops with Sleep(50) until child
+       connects or exits.
+     - WaitForSingleObject(ProcessInfo.hProcess, INFINITE) waits for
+       child to finish.
+     - If the batch child hangs (e.g. DevInstallW blocks on a
+       particular device, SetupDi* calls that never return), the
+       parent blocks forever.
+
+  B. Per-device fallback InstallDevice (install.c:117-311):
+     - Spawns "rundll32.exe newdev.dll,ClientSideInstall".
+     - WaitForSingleObject(ProcessInfo.hProcess, INFINITE) per device.
+     - Same risk if rundll32/newdev hangs on a device install.
+
+  C. RunSetupThreadProc in winlogon/setup.c:136 also does
+     WaitForSingleObject(ProcessInfo.hProcess, INFINITE) but this
+     is on the SETUP process (syssetup.dll,InstallWindowsNt), not on
+     the device install child.  The setup process itself is blocked
+     in CMP_WaitNoPendingInstallEvents.
+
+SECONDARY CONCERN — LOG TRUNCATION:
+
+  The serial log ends at ~22.5 s with services.exe output and no
+  subsequent messages from umpnpmgr.PlugPlay, syssetup, or winlogon.
+  This could be log truncation, OR the system genuinely generated no
+  further debug output (consistent with a wait on an event that never
+  signals).
+
+  Notably, the log contains NO "Boot device install: N candidate(s)"
+  message from umpnpmgr/install.c:930, which suggests DeviceInstallThread
+  may not even be executing its main loop — or its output was not captured.
+
+MITIGATION / FIX DIRECTION:
+
+  1. Replace INFINITE in CMP_WaitNoPendingInstallEvents at install.c:1087
+     with a finite timeout and a retry loop, or simply have the setup
+     code tolerate a timeout.
+
+  2. In InitializePnPManager (umpnpmgr.c:338), create hNoPendingInstalls
+     pre-signalled when SetupIsActive() is TRUE (mirroring how
+     hInstallEvent is already created pre-signalled).  This way
+     CMP_WaitNoPendingInstallEvents returns immediately during setup
+     and the deadlock cannot occur.
+
+  3. Have EnableUserModePnpManager() wait for a second event that
+     signals when DeviceInstallThread has completed Step 1 (or at
+     least reached Step 2), instead of relying solely on
+     SERVICE_RUNNING.
+
+FILES EXAMINED:
+
+  base/system/winlogon/setup.c          — RunSetup, RunSetupThreadProc
+  base/system/winlogon/winlogon.c       — main flow, StartServicesManager
+  dll/win32/syssetup/install.c          — InstallLiveCD, CommonInstall,
+                                          EnableUserModePnpManager,
+                                          CMP_WaitNoPendingInstallEvents call
+  base/system/services/services.c       — CheckForLiveCD, main flow
+  base/system/services/database.c       — ScmAutoStartServices
+  base/services/umpnpmgr/umpnpmgr.c     — ServiceMain, InitializePnPManager
+  base/services/umpnpmgr/install.c      — DeviceInstallThread (Step 1, Step 2),
+                                          InstallDevicesBatch, InstallDevice
+  base/services/umpnpmgr/event.c        — ProcessDeviceInstallEvent
+  dll/win32/setupapi/cfgmgr.c           — CMP_WaitNoPendingInstallEvents impl
+  dll/win32/newdev/newdev.c             — DevInstallW, ClientSideInstallBatchW

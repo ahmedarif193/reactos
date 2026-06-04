@@ -1,0 +1,78 @@
+; PROJECT:     ReactOS RPi5 Display-Only WDDM Miniport (rpi5dod)
+; LICENSE:     GPL-2.0-or-later (https://spdx.org/licenses/GPL-2.0-or-later)
+; PURPOSE:     Root-enumeration seed that makes rpi5dod bind on real Pi 5.
+;
+; rpi5dod is a WDDM display-only driver (DOD).  It registers with dxgkrnl via
+; DxgkInitializeDisplayOnlyDriver, which installs dxgkrnl's PnP AddDevice for
+; the driver.  dxgkrnl therefore calls Rpi5DodAddDevice ONLY when a PnP
+; physical device object whose hardware ID is ROOT\RPI5DOD is enumerated and
+; the rpi5dod service is loaded against it.
+;
+; The Pi 5 display is not a PCI VGA device, so rpi5dod cannot match a PCI
+; hardware ID.  Like the rpi5vc4 XPDM miniport's INF (ROOT\RPI5VC4), rpi5dod
+; binds as a ROOT-enumerated software device.  This file pre-seeds the
+; Enum\Root\RPI5DOD\0000 device instance in the boot hive so the ROOT bus
+; enumerator (ntoskrnl/io/pnpmgr/pnproot.c) discovers it at boot, creates the
+; PDO, reads its Service value (rpi5dod) and loads the driver -> dxgkrnl
+; AddDevice -> Rpi5DodAddDevice -> Rpi5DodStartDevice ->
+; DxgkCbAcquirePostDisplayOwnership (the firmware GOP framebuffer the
+; VideoCore VII HVS already scans out).
+;
+; This is the SAME pattern the donor tree uses to root-enumerate uefifb
+; (media/inf/uefifb_root.inf / boot/bootdata/livecd.inf Enum\Root\UEFIFB).
+;
+; OWNERSHIP / FALLBACK NOTE
+; -------------------------
+; rpi5dod and rpi5vc4 both ultimately target the Pi 5 HVS scanout.  Seeding
+; this device makes rpi5dod BIND and acquire the firmware GOP framebuffer,
+; but it does NOT take Video0 away from rpi5vc4: dxgkrnl's DxgkDisplayRegister
+; reserves Video0 for the firmware/uefifb path (InbvHasValidGopFrameBuffer)
+; and registers the WDDM display at Video1.  DxgkCbAcquirePostDisplayOwnership
+; only READS the GOP geometry from InbV (it does not take exclusive InbV
+; ownership), so rpi5dod can map the same firmware framebuffer that rpi5vc4
+; paints the GDI desktop into.  rpi5vc4 therefore stays the working primary
+; (the fallback) while rpi5dod's bind + WDDM present path is validated.
+;
+; This INF is registered into the hive ONLY when the build opts rpi5dod in
+; (scripts/wddm_reapply_wiring.sh with RPI5DOD_ROOT=1).  When it is not
+; registered, no ROOT\RPI5DOD device exists and rpi5dod (a demand-start,
+; no-boot-group service) never loads -> rpi5vc4 is completely unaffected.
+
+[AddReg]
+; ---- the root-enumerated device instance ----
+HKLM,"SYSTEM\CurrentControlSet\Enum\Root\RPI5DOD","NextInstance",0x00010001,0x00000001
+HKLM,"SYSTEM\CurrentControlSet\Enum\Root\RPI5DOD","Class",0x00000000,"Display"
+HKLM,"SYSTEM\CurrentControlSet\Enum\Root\RPI5DOD","ClassGUID",0x00000000,"{4D36E968-E325-11CE-BFC1-08002BE10318}"
+HKLM,"SYSTEM\CurrentControlSet\Enum\Root\RPI5DOD","DeviceDesc",0x00000000,"ReactOS Raspberry Pi 5 Display-Only Driver"
+HKLM,"SYSTEM\CurrentControlSet\Enum\Root\RPI5DOD\0000","HardwareID",0x00010000,"ROOT\\RPI5DOD","DISPLAY\\ROSRPI5DOD"
+HKLM,"SYSTEM\CurrentControlSet\Enum\Root\RPI5DOD\0000","CompatibleIDs",0x00010000,"ROOT\\DISPLAY"
+HKLM,"SYSTEM\CurrentControlSet\Enum\Root\RPI5DOD\0000","Class",0x00000000,"Display"
+HKLM,"SYSTEM\CurrentControlSet\Enum\Root\RPI5DOD\0000","ClassGUID",0x00000000,"{4D36E968-E325-11CE-BFC1-08002BE10318}"
+HKLM,"SYSTEM\CurrentControlSet\Enum\Root\RPI5DOD\0000","DeviceDesc",0x00000000,"ReactOS Raspberry Pi 5 Display-Only Driver"
+HKLM,"SYSTEM\CurrentControlSet\Enum\Root\RPI5DOD\0000","Mfg",0x00000000,"ReactOS Project"
+HKLM,"SYSTEM\CurrentControlSet\Enum\Root\RPI5DOD\0000","Service",0x00000000,"rpi5dod"
+HKLM,"SYSTEM\CurrentControlSet\Enum\Root\RPI5DOD\0000","ConfigFlags",0x00010001,0x00000000
+HKLM,"SYSTEM\CurrentControlSet\Enum\Root\RPI5DOD\0000","Capabilities",0x00010001,0x00000000
+HKLM,"SYSTEM\CurrentControlSet\Enum\Root\RPI5DOD\0000\LogConf",,0x00000012
+HKLM,"SYSTEM\CurrentControlSet\Enum\Root\RPI5DOD\0000\LogConf","BootConfig",0x00000001
+HKLM,"SYSTEM\CurrentControlSet\Enum\Root\RPI5DOD\0000\LogConf","BasicConfigVector",0x00000001
+
+; ---- the rpi5dod service (demand start; mirrors rpi5dod_reg.inf) ----
+HKLM,"SYSTEM\CurrentControlSet\Services\rpi5dod","DisplayName",0x00000000,"ReactOS Raspberry Pi 5 Display-Only Driver"
+HKLM,"SYSTEM\CurrentControlSet\Services\rpi5dod","ImagePath",0x00020000,"system32\drivers\rpi5dod.sys"
+HKLM,"SYSTEM\CurrentControlSet\Services\rpi5dod","Type",0x00010001,0x00000001
+HKLM,"SYSTEM\CurrentControlSet\Services\rpi5dod","Start",0x00010001,0x00000003
+HKLM,"SYSTEM\CurrentControlSet\Services\rpi5dod","ErrorControl",0x00010001,0x00000000
+HKLM,"SYSTEM\CurrentControlSet\Services\rpi5dod","Group",0x00000000,"Video"
+; Mirror the SCM Enum bookkeeping so the binding is reported.
+HKLM,"SYSTEM\CurrentControlSet\Services\rpi5dod\Enum","0",0x00000000,"ROOT\\RPI5DOD\\0000"
+HKLM,"SYSTEM\CurrentControlSet\Services\rpi5dod\Enum","Count",0x00010001,0x00000001
+HKLM,"SYSTEM\CurrentControlSet\Services\rpi5dod\Enum","NextInstance",0x00010001,0x00000001
+
+; ---- ownership switch: tell rpi5vc4 to stand down so rpi5dod owns Video0 ----
+; rpi5vc4 (XPDM) checks this flag in its DriverEntry and declines when set, so
+; it does not collide with rpi5dod on \Device\Video0.  rpi5dod then owns the
+; HVS scanout and makes it opaque (Rpi5DodHvsMakeScanoutOpaque).  When this INF
+; is NOT registered (rpi5dod opted out), the flag is absent and rpi5vc4 is the
+; primary display (the working fallback).
+HKLM,"SYSTEM\CurrentControlSet\Services\rpi5vc4","DisableForDod",0x00010001,0x00000001

@@ -122,6 +122,7 @@ list(APPEND SOURCE
     user/ntuser/defwnd.c
     user/ntuser/desktop.c
     user/ntuser/display.c
+    user/ntuser/dwm.c
     user/ntuser/draw.c
     user/ntuser/event.c
     user/ntuser/focus.c
@@ -248,7 +249,7 @@ add_library(win32k MODULE
     ${CMAKE_CURRENT_BINARY_DIR}/win32k.def)
 
 set_module_type(win32k kernelmodedriver)
-target_link_libraries(win32k ${PSEH_LIB} dxguid libcntpr)
+target_link_libraries(win32k ${PSEH_LIB} dxguid libcntpr wddm_bridge)
 
 if(USE_DIBLIB)
     target_link_libraries(win32k diblib)

@@ -1,0 +1,213 @@
+Objective
+=========
+Debug and fix the Raspberry Pi 5 ReactOS ARM64 framebuffer redraw corruption
+without adding broad display-driver workarounds. The final state must show a
+stable ReactOS desktop on real RPi5 HDMI capture, with no black stale regions or
+text/color corruption after cursor hover/redraw, and without regressing QEMU.
+
+
+Observed symptom
+================
+The system can reach userspace and draw parts of the desktop, but some regions
+remain black or visually corrupted until the mouse cursor passes over them or
+another UI action forces a redraw. The redraw then exposes the correct content
+underneath. Examples reported:
+
+- black areas around/inside setup or shell windows
+- glitched dark/black text areas where white text should be visible
+- cursor hover over the bad region causes the underlying content to appear
+- this is not the same as an early boot stall and not just a blank screen
+
+This points to a framebuffer/GDI update or pixel-format/cache/coherency issue:
+the desktop content appears to exist logically, but the visible scanout is not
+consistently updated or the visible pixels are not represented as the display
+hardware expects.
+
+
+Current context
+===============
+The active checkout is:
+
+  /home/ahmed/WorkDir/TTE/reactos_arm64
+
+The build/test directory is:
+
+  /home/ahmed/WorkDir/TTE/reactos_arm64/output-Clang-arm64-debug
+
+The normal hardware test command is run from the build directory:
+
+  ../scripts/flash_test.py
+
+The script builds/flashes/boots the RPi5, records serial into:
+
+  output-Clang-arm64-debug/flash_test.log
+
+and keeps the HDMI capture stream warm, writing the last frame to:
+
+  output-Clang-arm64-debug/flash_test_hdmi.png
+
+Be careful: the HDMI capture device can show its own color bars if it is not
+actually seeing the Pi output. A color-bar PNG is not evidence that ReactOS
+rendered correctly or incorrectly. The screenshot must show the ReactOS desktop
+or the affected window region before using it as proof.
+
+
+Important source files
+======================
+Primary suspects and current experimental edits:
+
+  win32ss/drivers/displays/framebuf/enable.c
+  win32ss/drivers/displays/framebuf/framebuf.h
+  win32ss/drivers/displays/framebuf/screen.c
+  win32ss/drivers/displays/framebuf/surface.c
+  win32ss/drivers/miniport/uefifb/uefifb.c
+  win32ss/drivers/miniport/uefifb/uefifb.h
+  win32ss/drivers/miniport/rpi5fb/rpi5fb.c
+  win32ss/drivers/miniport/rpi5fb/rpi5fb.h
+  win32ss/drivers/miniport/rpi5fb/rpi5fb.inf
+  win32ss/drivers/miniport/rpi5fb/rpi5fb_reg.inf
+
+There is/was an experimental framebuf change that hooks DrvBitBlt and ORs the
+reserved framebuffer byte/mask into updated pixels. This can make some XRGB vs
+ARGB scanout cases look better, but it is suspicious:
+
+- it only covers BitBlt, not all drawing paths
+- it can miss Paint/TextOut/LineTo/direct engine writes
+- it changes the generic framebuf DDI surface contract
+- a previous crash stack included framebuf.dll around the added BitBlt path
+
+Do not accept this as final unless it is proven to be the correct layer. The
+preferred fix should be in the miniport/display-mode contract or hardware scanout
+configuration, not an incomplete redraw hook in generic framebuf.
+
+
+Relevant earlier crash/signature
+================================
+A previous run produced a kernel data abort in csrss.exe while executing inside
+framebuf.dll:
+
+  [DABORT-KERNEL] FAIL VA=0000000000000038
+  Frames:
+    <framebuf.dll:...>
+    <framebuf.dll:...>
+    <win32k.sys:...>
+
+This happened after the framebuf BitBlt/reserved-mask hook existed in the tree.
+Treat it as a strong warning that the hook path can dereference invalid surface
+or DDI state during win32k drawing.
+
+
+Working theory to validate
+==========================
+There are two plausible classes of bugs:
+
+1. Pixel-format / alpha-reserved-byte mismatch
+
+   The firmware GOP mode is 32 bpp and reports RGB masks plus a reserved mask
+   such as 0xff000000. If the RPi5 display path treats that reserved byte as
+   alpha, normal GDI writes that leave it at zero may appear black/transparent
+   until some later operation writes a nonzero value. Hover-redraw improving the
+   area is consistent with this.
+
+   Correct fixes to investigate:
+
+   - make the RPi5 scanout plane treat the framebuffer as XRGB, not ARGB
+   - expose the mode to GDI/framebuf in a way that produces fully visible pixels
+   - if a reserved byte must be forced, do it through a complete and correct
+     display-driver path, not a partial BitBlt-only patch
+
+2. Framebuffer mapping/cache coherency issue
+
+   The framebuffer is mapped through videoport from the physical GOP buffer.
+   If the CPU mapping is cached in a way the display engine does not observe
+   promptly, cursor movement or later redraw may make stale areas appear to
+   repair themselves. Current code experimented with P6CACHE mappings. Verify
+   whether the mapping attribute is correct for RPi5 scanout memory.
+
+   Correct fixes to investigate:
+
+   - verify the actual cache attribute applied by VideoPortMapMemory on ARM64
+   - compare cached vs write-combined/uncached behavior on RPi5
+   - avoid changing common videoport/MM behavior unless logs prove that layer
+     is violating its contract
+
+
+How to test
+===========
+1. Build the targeted pieces first:
+
+   cd /home/ahmed/WorkDir/TTE/reactos_arm64/output-Clang-arm64-debug
+   ninja framebuf uefifb rpi5fb ntoskrnl
+
+2. Run the real hardware test:
+
+   ../scripts/flash_test.py
+
+   If hardware is busy, wait for the script queue. Do not bypass it.
+
+3. Inspect serial:
+
+   flash_test.log
+
+   Check that:
+
+   - uefifb or rpi5fb actually loaded successfully
+   - framebuf.dll loaded
+   - winlogon/userinit/explorer reached desktop path
+   - there is no DABORT in framebuf/win32k
+   - the test did not just sit at KDBG or the capture card bars
+
+4. Inspect HDMI:
+
+   flash_test_hdmi.png
+
+   The image must show actual ReactOS output, not color bars. If it shows bars,
+   fix/verify the capture path before drawing conclusions.
+
+5. Reproduce the symptom:
+
+   - wait until the desktop or setup/shell window is visible
+   - look for black or corrupted regions
+   - move the cursor over the black/corrupted region
+   - observe whether the cursor/redraw reveals correct content underneath
+
+6. Record before/after evidence:
+
+   - serial lines around framebuf/uefifb/rpi5fb load
+   - final HDMI screenshot
+   - any DABORT stack
+   - whether the bad area repairs only after hover/redraw
+
+
+What not to do
+==============
+- Do not call the issue fixed from serial alone if HDMI output was not captured.
+- Do not treat capture-card color bars as a ReactOS rendering result.
+- Do not keep broad BOOTPROF or temporary scheduler/syssetup diagnostics in the
+  final patch.
+- Do not keep an incomplete generic framebuf BitBlt hook as final unless it is
+  proven complete and correct for all relevant GDI drawing paths.
+- Do not hide the symptom by disabling the failing display path unless the test
+  is explicitly an A/B experiment.
+- Do not revert unrelated dirty-tree changes.
+
+
+Expected final patch shape
+==========================
+The final fix should be minimal and targeted. Good candidates:
+
+- RPi5 framebuffer miniport properly owns the RPi5 GOP/scanout mode and tells
+  the display stack the correct pixel format and memory attributes.
+- UEFI framebuffer miniport remains generic and does not contain RPi5-specific
+  hacks.
+- Generic framebuf.dll remains a simple engine-backed framebuffer display driver
+  unless a complete, architecture-independent DDI contract fix is proven.
+
+Before staging, remove temporary instrumentation and run:
+
+  git diff --check -- <affected files>
+  ninja framebuf uefifb rpi5fb ntoskrnl
+  ../scripts/flash_test.py
+
+Acceptance is a real RPi5 HDMI screenshot with a stable desktop/window render,
+no black hover-repaired regions, and no framebuf/win32k aborts in serial.

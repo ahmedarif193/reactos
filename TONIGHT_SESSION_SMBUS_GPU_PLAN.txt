@@ -1,0 +1,115 @@
+ReactOS amd64 hardware bring-up session plan
+===========================================
+
+Working directory for hardware tests:
+  /home/ahmed/WorkDir/TTE/reactos_upstream_arm64/output-Clang-amd64-debug
+
+Required hardware test command:
+  ../scripts/flash_test_serial_reset.py
+
+Rules for this session:
+  - Treat the current serial log as the boundary.
+  - Keep fixes minimal and tied to a proven failure.
+  - Do not call build success "fixed"; require boot/log evidence.
+  - Use opencode only as an analysis-only sidecar. It must not edit files.
+  - Verify every opencode claim against local source, build output, and logs.
+  - Clean-room rule for Linux/reference material: use behavior, register names,
+    public specs, and observed hardware contracts only. Do not copy code.
+
+Current known boundary:
+  - xHCI MSI path is working in the latest log.
+  - SMSS USB-storage boot blockers are fixed in the latest log.
+  - eMMC user area enumerates as a disk, but GPT/NTFS partition exposure is not
+    clean: sffdisk appears to expose the whole disk as a mounted device and D:
+    is treated as RAW.
+  - SMBus 8086:54a3 enumerates but has no real driver.
+  - Intel LPSS/I2C controllers enumerate but still have Code 28.
+  - SDIO function-card support is not proven by the log.
+  - eMMC BOOT0/BOOT1/RPMB PDOs still get Code 28.
+
+Fix list for this session before conclusion:
+
+1. Fix eMMC disk layering before deeper storage claims.
+   - Stop the SD flash disk class driver from advertising the whole physical
+     eMMC disk as a mounted volume.
+   - Ensure the disk exposes only the disk interface at the sffdisk layer.
+   - Ensure partmgr is the layer that reads GPT and creates partition/volume
+     devices.
+   - Acceptance evidence:
+       * no autochk attempt on the whole eMMC disk as RAW,
+       * GPT partitions from the eMMC are visible as STORAGE\Partition devices,
+       * NTFS partitions are reached as partition/volume devices, not as the
+         whole disk.
+
+2. Clean up eMMC special-partition enumeration status.
+   - Decide whether BOOT0/BOOT1/RPMB PDOs should bind to a class/function
+     driver, stay hidden, or report a deliberate non-error state.
+   - Do not mask Code 28 unless the exposed PDO contract is corrected.
+   - Acceptance evidence:
+       * no unexplained Code 28 for eMMC hardware partitions, or a clear
+         deliberate policy implemented in the SD stack.
+
+3. Implement a real SMBus controller driver for Alder Lake-N 8086:54a3.
+   - Add a PCI-bound SMBus driver, INF binding, service registration, and build
+     integration.
+   - Parse PCI resources for the controller MMIO and I/O BARs.
+   - Bring the controller to a known idle state and implement basic SMBus host
+     transactions: quick, byte, byte data, word data, and block where the
+     controller supports it.
+   - Provide a kernel-facing interface that later battery/thermal/sensor code
+     can call instead of hardcoding PCI access.
+   - Acceptance evidence:
+       * 8086:54a3 binds to the SMBus driver instead of NO_DRV,
+       * no PnP Code 28 for SMBus,
+       * driver starts from the hardware boot log,
+       * at least one safe bus transaction path is exercised without hanging
+         the controller.
+
+4. Separate SMBus from Intel LPSS/I2C.
+   - Do not pretend the SMBus driver fixes LPSS/I2C.
+   - Keep a separate I2C/SPB task if the 54c5/54c6/54e8/54e9/54ea/54eb
+     controllers still show Code 28.
+   - Acceptance evidence:
+       * final log explicitly states SMBus status and I2C status separately.
+
+5. Start the GPU miniport path from the real PCI display device.
+   - Identify the exact display adapter PCI ID and BAR layout from the log.
+   - Choose the correct ReactOS display-driver boundary: miniport, modeset,
+     framebuffer handoff, and user-mode OpenGL path.
+   - Add only the minimal PCI binding and mode/framebuffer bring-up needed to
+     prove the adapter can own display output.
+   - Acceptance evidence:
+       * GPU device binds to the new miniport instead of a fallback/no-driver
+         path,
+       * mode/framebuffer initialization succeeds,
+       * desktop display still reaches winlogon/explorer path.
+
+6. OpenGL 1.1 end-to-end target.
+   - First make the display miniport stable enough for GDI/desktop output.
+   - Then verify the OpenGL 1.1 loader/ICD path on that display stack.
+   - Hardware acceleration is not claimed unless the miniport and GL command
+     path actually prove it. A software OpenGL 1.1 path counts only if the
+     driver/display stack integration is clean and the test exercises OpenGL
+     1.1 through the installed system path.
+   - Acceptance evidence:
+       * an OpenGL 1.1 test app loads the expected GL path,
+       * creates a context,
+       * renders a simple frame,
+       * no crash or blank-display regression in the hardware boot log.
+
+7. Use opencode as a completeness reviewer at checkpoints.
+   - Run opencode after each major local analysis/fix candidate with prompts
+     restricted to analysis-only and report-file output in the current working
+     directory.
+   - Reject any claim that is not backed by the source or hardware log.
+   - Keep opencode reports uncommitted unless the user explicitly asks to keep
+     them.
+
+Conclusion criteria for the session:
+  - For every item touched, report one of:
+      fixed with build and hardware-log evidence,
+      implemented but not hardware-proven,
+      analyzed and intentionally deferred,
+      blocked by a specific missing contract.
+  - Do not conclude that SMBus, GPU, OpenGL, SDIO, or eMMC partitions are ready
+    without the matching acceptance evidence above.

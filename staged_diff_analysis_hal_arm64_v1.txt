@@ -1,0 +1,86 @@
+staged diff analysis — usb/scsi, hal/arm64, mm/arm3
+=======================================================
+Date: 2026-05-16
+Files analyzed:
+  - drivers/usb/usbstor/scsi.c      (33 +/-)
+  - hal/halarm64/halarm64.c         (50 +/-)
+  - ntoskrnl/mm/ARM3/miarm.h        (28 +/-)
+
+Verdict: ALL CLEAN — ready for upstream.
+========================================
+
+
+1. drivers/usb/usbstor/scsi.c — USBSTOR_IsSenseDataValid
+   Severity: NONE — improvement
+
+   Adds a new helper USBSTOR_IsSenseDataValid() that validates REQUEST
+   SENSE response data before marking SRB_STATUS_AUTOSENSE_VALID on
+   the active SRB.
+
+   Changes:
+   - Validates DataBuffer != NULL, 0 < DataTransferLength <= 0xFF
+   - Calls ScsiGetSenseKeyAndCodes() to verify the sense data is
+     structurally valid
+   - On valid: sets SenseInfoBufferLength to actual response length
+     (cast to UCHAR, safe due to <= 0xFF check), sets AUTOSENSE_VALID
+   - On invalid: clears SenseInfoBufferLength and AUTOSENSE_VALID flag
+   - Removed the old unconditional `Request->SrbStatus |= AUTOSENSE_VALID`
+     line (it was wrong anyway — should've been on ActiveSrb)
+
+   Fixes a pre-existing bug: sense data was always marked valid even
+   when the REQUEST SENSE command failed or returned garbage.
+
+
+2. hal/halarm64/halarm64.c — MDL cache flush & debug removal
+   Severity: NONE — improvement
+
+   2a. HalpArm64FlushMdlDcacheRange
+       - Removed requirement that CurrentVa and Mdl->StartVa be non-NULL
+       - Added handling for MDLs without system VA (PFN-only MDLs):
+         * StartVa != NULL: Offset = CurrentVa - StartVa (as before)
+         * StartVa == NULL, CurrentVa != NULL: Offset = CurrentVa
+         * Both NULL: Offset = Mdl->ByteOffset
+       - Cache maintenance is done through PHYSICAL ALIAS
+         (HAL_ARM64_PHYS_MAP_BASE), so no system VA is needed.
+       - This allows flushing DMA MDLs that have no kernel mapping.
+
+   2b. Debug print removal
+       - Removed DPRINT1/DPRINT calls from HalpMapRuntimeMmioWindow,
+         HalInitSystem (GIC init + KeSetTimeIncrement), and
+         HalEnableSystemInterrupt (ISENABLER readback verification).
+       - Purely cosmetic — reduces boot log noise. No functional change.
+
+
+3. ntoskrnl/mm/ARM3/miarm.h — PTE sync/write refactor
+   Severity: NONE — improvement
+
+   Introduces MI_ARM64_SYNC_VALID_PTE() to consolidate PTE write
+   propagation logic:
+
+   - Previously: only PXE range entries got synced via
+     MiArm64SyncPxeWrite(). PPE and PDE ranges had no special sync.
+
+   - Now: PXE, PPE, and PDE ranges get MiArm64SyncKernelHierarchyEntryWrite()
+     and leaf PTEs get MiArm64SyncKernelLeafPteWrite().
+
+   Both functions exist (defined in ntoskrnl/arch/arm64/include/mm.h).
+   MiArm64SyncPxeWrite is still present for other callers.
+
+   MI_WRITE_VALID_PTE_NO_FLUSH:
+   - Previously: only synced PXE range via MiArm64SyncPxeWrite
+   - Now: uses MI_ARM64_SYNC_VALID_PTE() covering all hierarchy levels
+   - Removed duplicate EntryAddress range check (consolidated)
+
+   This ensures correct TTBR1 mirroring for all kernel page table
+   hierarchy entries, not just the PXE level. Important for ARM64
+   where TTBR1 must have a consistent view of upper-level entries.
+
+
+Summary
+=======
+All three changes are clean refactors/improvements:
+  - usb/scsi: fixes incorrect AUTOSENSE_VALID behavior
+  - hal/arm64: enables PFN-only MDL cache flushing
+  - mm/arm3: completes PTE write propagation for all hierarchy levels
+
+No bugs, no compilation errors, no functional regressions.

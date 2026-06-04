@@ -1,67 +1,59 @@
-100 stub DwmpDxGetWindowSharedSurface
-101 stub DwmpDxUpdateWindowSharedSurface
-102 stdcall DwmEnableComposition(long)
-103 stub -noname DwmpRestartComposition
-104 stub -noname DwmpSetColorizationColor
-105 stub -noname DwmpStartOrStopFlip3D
-106 stub -noname DwmpIsCompositionCapable
-107 stub -noname DwmpGetGlobalState
-108 stub -noname DwmpEnableRedirection
-109 stub -noname DwmpOpenGraphicsStream
-110 stub -noname DwmpCloseGraphicsStream
-112 stub -noname DwmpSetGraphicsStreamTransformHint
-113 stub -noname DwmpActivateLivePreview
-114 stub -noname DwmpQueryThumbnailType
-115 stub -noname DwmpStartupViaUserInit
-118 stub -noname DwmpGetAssessment
-119 stub -noname DwmpGetAssessmentUsage
-120 stub -noname DwmpSetAssessmentUsage
-121 stub -noname DwmpIsSessionDWM
-124 stub -noname DwmpRegisterThumbnail
-125 stub DwmpDxBindSwapChain
-126 stub DwmpDxUnbindSwapChain
-127 stdcall -noname DwmpGetColorizationParameters(ptr)
-128 stub DwmpDxgiIsThreadDesktopComposited
-129 stub -noname DwmpDxgiDisableRedirection
-130 stub -noname DwmpDxgiEnableRedirection
-131 stub -noname DwmpSetColorizationParameters
-132 stub -noname DwmpGetCompositionTimingInfoEx
-133 stub DwmpDxUpdateWindowRedirectionBltSurface
-134 stub -noname DwmpDxSetContentHostingInformation
-135 stub DwmpRenderFlick
-136 stub DwmpAllocateSecurityDescriptor
-137 stub DwmpFreeSecurityDescriptor
-143 stub DwmpEnableDDASupport
-156 stub DwmTetherTextContact
+# dwmapi.dll - Desktop Window Manager API
+# Ordinal base: 100, total: 55 exports (100-154)
 
-# @ stdcall -private DllCanUnloadNow()
-# @ stdcall -private DllGetClassObject(ptr ptr ptr)
-@ stdcall DwmAttachMilContent(long)
-@ stdcall DwmDefWindowProc(long long long long ptr)
-@ stdcall DwmDetachMilContent(long)
-@ stdcall DwmEnableBlurBehindWindow(ptr ptr)
-@ stdcall DwmEnableMMCSS(long)
-@ stdcall DwmExtendFrameIntoClientArea(long ptr)
-@ stdcall DwmFlush()
-@ stdcall DwmGetColorizationColor(ptr ptr)
-@ stdcall DwmGetCompositionTimingInfo(long ptr)
-@ stdcall DwmGetGraphicsStreamClient(long ptr)
-@ stdcall DwmGetGraphicsStreamTransformHint(long ptr)
-@ stdcall DwmGetTransportAttributes(ptr ptr ptr)
-@ stdcall DwmGetWindowAttribute(ptr long ptr long)
-@ stdcall DwmInvalidateIconicBitmaps(ptr)
-@ stdcall DwmIsCompositionEnabled(ptr)
-@ stub DwmModifyPreviousDxFrameDuration
-@ stub DwmQueryThumbnailSourceSize
-@ stdcall DwmRegisterThumbnail(long long ptr)
-# @ stub DwmRenderGesture
-@ stub DwmSetDxFrameDuration
-@ stdcall DwmSetIconicLivePreviewBitmap(long long ptr long)
-@ stdcall DwmSetIconicThumbnail(long long long)
-@ stdcall DwmSetPresentParameters(ptr ptr)
-@ stdcall DwmSetWindowAttribute(long long ptr long)
-# @ stub DwmShowContact
-# @ stub DwmTetherContact
-# @ stub DwmTransitionOwnedWindow
-@ stdcall DwmUnregisterThumbnail(long)
-@ stdcall DwmUpdateThumbnailProperties(ptr ptr)
+# Ordinal-only (private/internal) exports
+100 stdcall -noname DwmpDxGetWindowSharedSurface(ptr ptr ptr ptr ptr ptr)
+101 stdcall -noname DwmpDxUpdateWindowSharedSurface(ptr ptr long ptr)
+102 stdcall DwmEnableComposition(long)
+103 stdcall -noname DwmpRestartComposition()
+104 stdcall -noname DwmpSetColorizationColor(long)
+105 stdcall -noname DwmpStartOrStopFlip3D()
+106 stdcall -noname DwmpIsCompositionCapable()
+107 stdcall -noname DwmpGetGlobalState(ptr)
+108 stdcall -noname DwmpEnableRedirection(long)
+109 stdcall -noname DwmpOpenGraphicsStream(ptr ptr)
+110 stdcall -noname DwmpCloseGraphicsStream(ptr)
+111 stdcall DwmAttachMilContent(long)
+112 stdcall -noname DwmpSetGraphicsStreamTransformHint(long ptr)
+113 stdcall -noname DwmpActivateLivePreview(long ptr long)
+114 stdcall -noname DwmpQueryThumbnailType(ptr)
+115 stdcall -noname DwmpStartupViaUserInit()
+116 stdcall DwmDefWindowProc(long long long long ptr)
+117 stdcall DwmDetachMilContent(long)
+118 stdcall -noname DwmpGetAssessment(ptr)
+119 stdcall -noname DwmpGetAssessmentUsage(ptr)
+120 stdcall -noname DwmpSetAssessmentUsage(long)
+121 stdcall -noname DwmpIsSessionDWM(ptr)
+122 stdcall DwmEnableBlurBehindWindow(ptr ptr)
+123 stdcall DwmEnableMMCSS(long)
+124 stdcall -noname DwmpRegisterThumbnail(ptr ptr ptr)
+125 stdcall -noname DwmpDxBindSwapChain(ptr long)
+126 stdcall -noname DwmpDxUnbindSwapChain(ptr)
+127 stdcall -noname DwmpGetColorizationParameters(ptr)
+128 stdcall -noname DwmpDxgiIsThreadDesktopComposited()
+129 stdcall -noname DwmpDxgiDisableRedirection(long)
+130 stdcall -noname DwmpDxgiEnableRedirection(long)
+131 stdcall -noname DwmpSetColorizationParameters(ptr)
+132 stdcall -noname DwmpGetCompositionTimingInfoEx(long ptr long)
+133 stdcall -noname DwmpDxUpdateWindowRedirectionBltSurface(ptr ptr)
+134 stdcall -noname DwmpDxSetContentHostingInformation(ptr long)
+135 stdcall DwmExtendFrameIntoClientArea(long ptr)
+136 stdcall DwmFlush()
+137 stdcall DwmGetColorizationColor(ptr ptr)
+138 stdcall DwmGetCompositionTimingInfo(long ptr)
+139 stdcall DwmGetGraphicsStreamClient(long ptr)
+140 stdcall DwmGetGraphicsStreamTransformHint(long ptr)
+141 stdcall DwmGetTransportAttributes(ptr ptr ptr)
+142 stdcall DwmGetWindowAttribute(ptr long ptr long)
+143 stdcall DwmInvalidateIconicBitmaps(ptr)
+144 stdcall DwmIsCompositionEnabled(ptr)
+145 stdcall DwmModifyPreviousDxFrameDuration(long long long)
+146 stdcall DwmQueryThumbnailSourceSize(ptr ptr)
+147 stdcall DwmRegisterThumbnail(long long ptr)
+148 stdcall DwmSetDxFrameDuration(long long)
+149 stdcall DwmSetIconicLivePreviewBitmap(long long ptr long)
+150 stdcall DwmSetIconicThumbnail(long long long)
+151 stdcall DwmSetPresentParameters(ptr ptr)
+152 stdcall DwmSetWindowAttribute(long long ptr long)
+153 stdcall DwmUnregisterThumbnail(long)
+154 stdcall DwmUpdateThumbnailProperties(ptr ptr)

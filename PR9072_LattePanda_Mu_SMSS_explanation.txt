@@ -1,0 +1,92 @@
+PR 9072: why the SMSS pagefile-less boot fix was needed
+===========================================================
+
+Context
+-------
+
+This fix was hit while booting ReactOS on a LattePanda Mu SBC.
+That board exposes a larger and more varied PCI/device topology than the
+simple virtual-machine paths where this code usually succeeds. During early
+boot, SMSS has to translate the system partition into a usable BootDir and
+then enumerate volumes for pagefile creation.
+
+The failure was not really "too many PCI devices" by itself. The larger real
+hardware topology makes the early object namespace and storage layout less
+simple: more DOS-device entries may exist, boot media may not look like a
+normal fixed pagefile-capable disk, and the boot/system partition may not have
+the exact drive-letter shape that the old SMSS code assumed.
+
+What was wrong before
+---------------------
+
+1. SmpTranslateSystemPartitionInformation used a fixed-size directory buffer
+   when enumerating the DOS devices directory.
+
+   If NtQueryDirectoryObject returned STATUS_BUFFER_TOO_SMALL for an entry,
+   SMSS treated that as a hard failure and returned before resolving BootDir.
+   This is fragile on real hardware because the DOS devices directory may
+   contain entries that do not fit the old stack buffer.
+
+2. The fallback path for a system partition without a matching DOS drive letter
+   reused the last directory entry buffer and overwrote its name with the boot
+   drive prefix.
+
+   That depended on a valid directory-entry buffer still being available and
+   was easy to break once enumeration failed for any reason other than
+   STATUS_NO_MORE_ENTRIES.
+
+3. SmpCreateVolumeDescriptors only counted the boot volume after filtering out
+   volumes that cannot host pagefiles.
+
+   If the boot volume was present but was flagged unsuitable for pagefile
+   creation, for example removable/read-only/non-fixed media, SMSS could end up
+   thinking no usable boot volume existed. It then returned an error even
+   though booting without a pagefile should be allowed.
+
+What the fix changes
+--------------------
+
+1. The DOS-device enumeration now uses a heap buffer and retries with the size
+   requested by NtQueryDirectoryObject when STATUS_BUFFER_TOO_SMALL is returned.
+
+   This makes BootDir resolution independent from a guessed fixed buffer size.
+
+2. The boot drive prefix is stored separately.
+
+   If the system partition has no assigned drive letter, SMSS can safely use
+   SharedUserData->NtSystemRoot's drive prefix instead of mutating a directory
+   entry buffer.
+
+3. The boot volume is counted before pagefile-capability filtering.
+
+   This separates "the boot volume exists" from "this volume can host a
+   pagefile". Those are different conditions.
+
+4. If no pagefile-capable volumes are found, SMSS now continues successfully.
+
+   A pagefile-less boot is valid. Failing SMSS here prevents the system from
+   reaching the desktop even though the boot volume itself was found.
+
+Why LattePanda Mu exposed it
+----------------------------
+
+The LattePanda Mu path is closer to real hardware than the usual minimal VM
+test case. It has a richer PCI topology and real storage/media behavior, so
+SMSS can see a DOS-device namespace and volume set that differs from the
+simple "one fixed C: disk" assumption.
+
+On that machine, the old code could fail before BootDir was resolved or fail
+when no pagefile-capable volume was accepted. The fix removes both assumptions:
+directory entries can be larger than the old buffer, and the boot volume does
+not have to be pagefile-capable for the boot to continue.
+
+Expected effect
+---------------
+
+This is a boot robustness fix, not a performance change.
+
+It lets SMSS continue when the boot volume is present but pagefile creation is
+not possible or not appropriate on the visible volumes. This is especially
+important for real SBC/laptop-style hardware where storage may be exposed with
+different media flags or where the early DOS-device namespace is more complex
+than in a VM.

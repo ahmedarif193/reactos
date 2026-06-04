@@ -21,6 +21,14 @@ HKCU,"Keyboard Layout\Toggle","Layout Hotkey",0x00000000,"2"
 ; Cdrom class driver
 HKLM,"SYSTEM\CurrentControlSet\Services\Cdrom","Start",0x00010001,0x00000000
 
+; WDDM/DWM bring-up (Pi5/preinstall): Explorer launches dwm.exe after the
+; desktop is up.  dwm.exe opens the first started WDDM adapter (rpi5dod when
+; opted in) via D3DKMTOpenAdapterFromGdiDisplayName, composes complete frames
+; and presents them through D3DKMTPresent -> dxgkrnl -> rpi5dod (tear-free).
+HKLM,"SOFTWARE\Microsoft\Windows\CurrentVersion\Run","DwmCompositor",0x00020000,"%SystemRoot%\system32\dwm.exe -standalone"
+; Surface dwm's composition TRACEs on the serial.
+HKLM,"SYSTEM\CurrentControlSet\Control\Session Manager\Environment","DEBUGCHANNEL",0x00020000,"+dwm"
+
 ; NOTE: Unlike livecd.inf, we do NOT clear BootExecute (allow autochk on real disk)
 ; Use mini setup to go straight to desktop without reboot (like livecd)
 HKLM,"SYSTEM\Setup","CmdLine",0x00020000,"setup -mini"

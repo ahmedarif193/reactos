@@ -1,0 +1,32 @@
+From: ARM64 enablement — add ARM64 codegen flags to gcc.cmake
+
+Adds an elseif() branch for ARM64 alongside the existing i386/amd64
+arch-specific compile options. These flags are required for stable
+ARM64 codegen under both GCC and Clang (gcc.cmake handles both):
+
+  -fno-optimize-sibling-calls : prevents tail-call optimization that
+      can confuse stack unwinding through the ARM64 exception model.
+  -fno-omit-frame-pointer     : required by _AddressOfReturnAddress()
+      and by reliable kernel stack walking.
+  -mstrict-align              : ARM64 default ABI permits unaligned
+      access, but kernel and HAL code uses MMIO regions where
+      unaligned access traps. Force strict alignment to match the
+      Windows ARM64 kernel build options.
+
+No other arches affected — purely additive.
+
+---
+ sdk/cmake/gcc.cmake | 2 ++
+ 1 file changed, 2 insertions(+)
+
+diff --git a/sdk/cmake/gcc.cmake b/sdk/cmake/gcc.cmake
+--- a/sdk/cmake/gcc.cmake
++++ b/sdk/cmake/gcc.cmake
+@@ -254,6 +254,8 @@
+         add_compile_options(-mpreferred-stack-boundary=4)
+     endif()
++elseif(ARCH STREQUAL "arm64")
++    add_compile_options(-fno-optimize-sibling-calls -fno-omit-frame-pointer -mstrict-align)
+ endif()
+
+ # Other

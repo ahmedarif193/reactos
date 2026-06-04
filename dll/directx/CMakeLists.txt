@@ -1,5 +1,6 @@
 
 add_subdirectory(d3d8thk)
+add_subdirectory(d3d10warp)
 #add_subdirectory(bdaplgin) #disabled in trunk
 #add_subdirectory(d3d8) #disabled in trunk, see wine subfolder
 #add_subdirectory(d3d9) #disabled in trunk, see wine subfolder

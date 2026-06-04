@@ -392,6 +392,17 @@ Enable this if the module uses typeid or dynamic_cast. You will probably need to
     add_subdirectory(sdk/tools/wpp)
     add_subdirectory(win32ss)
 
+    # WDDM bring-up: register the CDDB override LAST so the WDDM softgpu miniport
+    # wins PCI\VEN_1234&DEV_1111 over the legacy XPDM bochsmp (last-write-wins).
+    if(ARCH STREQUAL "arm64")
+        add_registry_inf(boot/bootdata/wddm_cddb_override.inf)
+    endif()
+
+    # RPi5 WDDM bring-up: seed ROOT\\RPI5DOD LAST so rpi5dod binds at boot.
+    if(ARCH STREQUAL "arm64")
+        add_registry_inf(boot/bootdata/rpi5dod_root.inf)
+    endif()
+
     # Create the registry hives
     create_registry_hives()
 

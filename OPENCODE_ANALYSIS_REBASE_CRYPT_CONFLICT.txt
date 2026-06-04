@@ -1,0 +1,77 @@
+ANALYSIS: Rebase conflict in dll/win32/advapi32/wine/crypt.c
+================================================================
+
+Commit being applied: e65381e89a4 "[DS][GCC] trim low-risk compiler and spec2def warnings"
+
+Conflicted functions (3 occurrences, identical pattern):
+  - CryptDecrypt  (~line 877)
+  - CryptEncrypt  (~line 1128)
+  - CryptExportKey (~line 1487)
+
+CONFLICT STRUCTURE
+------------------
+In each function, the conflict marker appears on the closing `return` line
+just before the function's `}`:
+
+    return prov->pFuncs->pCPDecrypt(...);
+    <<<<<<< HEAD
+    =======
+    #ifdef __REACTOS__
+        }
+            _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
+            {
+                SetLastError(ERROR_INVALID_PARAMETER);
+                _SEH2_YIELD(return FALSE);
+            }
+            _SEH2_END;
+            return FALSE;
+        #endif
+    >>>>>>> e65381e89a4
+    }
+
+The incoming hunk is ONLY the trailing half of an SEH2 block (the
+_SEH2_EXCEPT / _SEH2_END / return FALSE). It is orphaned because the
+opening _SEH2_TRY half no longer exists in HEAD.
+
+CAUSE ANALYSIS
+--------------
+The commit history shows:
+
+  1. 9844effa410  Added SEH2_TRY/_SEH2_EXCEPT wrappers to crypt functions
+                  including CryptDecrypt, CryptEncrypt, CryptExportKey.
+  2. e65381e89a4  (INCOMING) Fixed minor indentation/formatting of the
+                  trailing SEH2_EXCEPT blocks in those same 3 functions.
+  3. d323c57da75  Reverted commit 9844effa410 - removed ALL SEH2 blocks
+                  from these functions.
+  4. dff8ac82705  Synced crypt components to wine-10.0 - replaced raw
+                  ((PCRYPTKEY)hKey) casts with key_from_handle() /
+                  hash_from_handle() calls, which return NULL for
+                  invalid handles, making SEH wrapping unnecessary.
+
+The incoming commit e65381e89a4's only changes to crypt.c were:
+  - Re-indent _SEH2_EXCEPT line (spaces -> tabs)
+  - Re-indent the exception handler body
+  - Add "return FALSE;" before "#endif" (previously absent)
+
+No logical or functional changes.
+
+The fork base (HEAD) already:
+  - Removed all _SEH2_TRY / _SEH2_EXCEPT / _SEH2_END from these functions
+  - Uses key_from_handle() / hash_from_handle() for proper handle validation
+  - No longer needs SEH wrappers
+
+RESOLUTION
+----------
+DROP (accept HEAD, discard incoming).
+
+The incoming hunk is purely cosmetic formatting of code that HEAD has
+already intentionally removed. Preserving/adapting the incoming SEH
+blocks would:
+  - Create orphaned _SEH2_EXCEPT blocks with no matching _SEH2_TRY
+  - Cause compilation errors
+  - Reintroduce an SEH wrapping pattern incompatible with the new
+    key_from_handle/hash_from_handle validation approach
+
+The correct resolution is to accept the HEAD side (no SEH blocks)
+and discard the incoming `#ifdef __REACTOS__` _SEH2_EXCEPT blocks
+from all 3 conflicted functions.

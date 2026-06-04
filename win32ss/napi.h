@@ -5,6 +5,16 @@
  * PROGRAMMER:      Timo Kreuzer
  */
 
+/* WDDM 1.2 NtGdiDdDDI forward declarations for the SVC_ table.
+ * The full prototypes (with proper D3DKMT_* parameter types) live in
+ * win32ss/gdi/ntgdi/d3dkmt.c.  Here we only need the symbol addresses. */
+NTSTATUS APIENTRY NtGdiDdDDIEnumAdapters();
+NTSTATUS APIENTRY NtGdiDdDDIOpenAdapterFromLuid();
+NTSTATUS APIENTRY NtGdiDdDDIOfferAllocations();
+NTSTATUS APIENTRY NtGdiDdDDIReclaimAllocations();
+NTSTATUS APIENTRY NtGdiDdDDISetVidPnSourceOwner1();
+NTSTATUS APIENTRY NtGdiDdDDIWaitForVerticalBlankEvent2();
+
 #define SVC_(name, argcount) (ULONG_PTR)Nt##name,
 ULONG_PTR Win32kSSDT[] = {
 #ifdef _WIN64

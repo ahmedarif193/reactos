@@ -1,0 +1,383 @@
+================================================================================
+ANALYSIS: UEFIFB PnP / Win32k Initialization Failure Chain
+Log: output-Clang-amd64-debug/flash_test_serial_reset.log
+================================================================================
+
+SUMMARY: The boot reaches a partially functional desktop. The primary blocking
+issue is that uefifb.sys (non-PnP miniport) fails EngpPnPTargetRelationRequest
+with STATUS_INVALID_PARAMETER (0xc0000010), which cascades into system class
+registration without valid cursors, and ultimately a DC lock failure at
+GreMovePointer. The LiveCD detection by services.exe is NOT the root cause;
+it is a red herring. The root cause is the GDI device layer not handling
+non-PnP legacy miniports in EngpUpdateMonitorDevices.
+
+
+================================================================================
+CHRONOLOGICAL EVENT CHAIN (from log timestamps in seconds)
+================================================================================
+
+Time        Event
+--------    ------
+17.765      uefifb.sys loaded (with videoprt.sys)
+18.781      win32k.sys loaded
+19.968      DxStartupDxgkInt (DirectX kernel init)
+20.875  !!> ERR: EngpPnPTargetRelationRequest() failed with status 0xc0000010
+21.156      ERR: RegOpenKeyExW(Tcpip\Parameters) failed (error 2) -- winlogon
+21.187  !!> ERR: SYSTEMCUR(ARROW) == NULL, should not happen!! (x6 times)
+21.250      winlogon.exe assigned startup desktop
+21.296      "We are logged off" (usersrv init)
+21.531      "Running on LiveCD" / "ReactOS Setup currently in progress!" (services)
+21.546      LoadLibraryExW(services.exe) failing c000000f (services tries to
+            load lsass/svchost/eventlog; expected on minimal LiveCD)
+22.406      fixme: rpc_server.c:1736 (RPC stub)
+22.640  !!> Failed to lock the DC (GreMovePointer, mouse.c:811)
+
+================================================================================
+ROOT CAUSE 1 (PRIMARY): EngpPnPTargetRelationRequest failure
+================================================================================
+
+File:  win32ss/gdi/eng/device.c
+Lines: 520-564  (EngpPnPTargetRelationRequest)
+Line:  578      (call site in EngpUpdateMonitorDevices)
+
+What happens:
+  uefifb.sys is an intentionally non-PnP videoport miniport. It has
+  AdapterInterfaceType=Internal, HwGetVideoChildDescriptor=NULL, and no
+  PnP AddDevice routine.
+
+  When win32k initializes, InitVideo() (display.c:151) calls
+  EngpUpdateGraphicsDeviceList() (device.c:182) which iterates the
+  DEVICEMAP\VIDEO registry key, finds \Device\Video0 (backed by uefifb),
+  and calls InitDisplayDriver() -> EngpRegisterGraphicsDevice()
+  (device.c:662).
+
+  EngpRegisterGraphicsDevice sends IOCTL_VIDEO_INIT_WIN32K_CALLBACKS
+  successfully via videoprt, then calls EngpUpdateMonitorDevices()
+  at line 765.
+
+  EngpUpdateMonitorDevices() sends IRP_MJ_PNP /
+  IRP_MN_QUERY_DEVICE_RELATIONS / TargetDeviceRelation to the uefifb
+  device object. Since uefifb is non-PnP, the device stack cannot
+  satisfy this query and returns STATUS_INVALID_PARAMETER (0xc0000010).
+
+Why the error is non-fatal but leaves residual state:
+  EngpRegisterGraphicsDevice() does NOT check the return value of
+  EngpUpdateMonitorDevices() at line 765. The function continues.
+  The device still gets registered with dwMonCnt = 0 (from zero-init).
+  The comment at line 830 confirms this: "FIXME: dwMonCnt not
+  initialized, see EngpRegisterGraphicsDevice"
+
+  The code at lines 586-601 already anticipated a legacy/PnP fallback:
+    Status = IoOpenDeviceRegistryKey(pDeviceRelations->Objects[0], ...);
+    if (NT_SUCCESS(Status)) { ... }  // PnP path
+    else {
+        /* Legacy device without valid PDO - skip invalidation.
+         * This is expected for non-PnP devices like VGA. */
+    }
+  But EngpPnPTargetRelationRequest fails BEFORE this check can ever be
+  reached, so the fallback is dead code for non-PnP devices.
+
+================================================================================
+PROPOSED FIX 1: Handle non-PnP miniports in EngpUpdateMonitorDevices
+================================================================================
+
+File: win32ss/gdi/eng/device.c, function EngpUpdateMonitorDevices (line 568)
+
+Option A (minimal, handles the exact error):
+
+  At line 578, change:
+
+    Status = EngpPnPTargetRelationRequest(pGraphicsDevice->DeviceObject,
+                                          &pDeviceRelations);
+    if (!NT_SUCCESS(Status))
+    {
+        ERR("EngpPnPTargetRelationRequest() failed with status 0x%08x\n",
+            Status);
+        return Status;
+    }
+
+  To:
+
+    Status = EngpPnPTargetRelationRequest(pGraphicsDevice->DeviceObject,
+                                          &pDeviceRelations);
+    if (Status == STATUS_INVALID_PARAMETER)
+    {
+        /* Non-PnP legacy miniport (e.g. uefifb, VGA) - skip target
+         * relation query, proceed directly to monitor enumeration */
+        TRACE("Device is non-PnP (status 0x%08x), skipping target relations\n",
+              Status);
+        pDeviceRelations = NULL;
+    }
+    else if (!NT_SUCCESS(Status))
+    {
+        ERR("EngpPnPTargetRelationRequest() failed with status 0x%08x\n",
+            Status);
+        return Status;
+    }
+
+  And guard the dereference/invalidation block:
+
+    ASSERT(pDeviceRelations->Count == 1);
+    // ... IoOpenDeviceRegistryKey ...
+    for (i = 0; i < pDeviceRelations->Count; i++)
+        ObDereferenceObject(pDeviceRelations->Objects[i]);
+    ExFreePool(pDeviceRelations);
+
+  To (add NULL guard):
+
+    if (pDeviceRelations)
+    {
+        ASSERT(pDeviceRelations->Count == 1);
+        // ... revalidation + free remains same ...
+    }
+
+Option B (more comprehensive, aligns with Windows behavior):
+
+  Have videoprt return a zero-count DEVICE_RELATIONS for legacy miniports
+  when queried with IRP_MN_QUERY_DEVICE_RELATIONS/TargetDeviceRelation.
+  This requires changes in videoprt's PnP dispatch.
+
+  File: drivers/video/videoprt/* (videoprt dispatch)
+  - In the IRP_MJ_PNP handler, handle IRP_MN_QUERY_DEVICE_RELATIONS /
+    TargetDeviceRelation by returning a valid DEVICE_RELATIONS structure
+    with Count=0 and NULL Objects pointer. This matches Windows behavior
+    for non-PnP video miniports.
+
+
+================================================================================
+ROOT CAUSE 2 (SECONDARY): SYSTEMCUR(ARROW) == NULL
+================================================================================
+
+File:  win32ss/user/ntuser/class.c
+Line:  2394-2396  (SYSTEMCUR(ARROW) check in class registration)
+
+What happens:
+  The system cursors (gasyscur array in cursoricon.c:32-48) are loaded
+  by LoadSystemCursors() in user32 (win32ss/user/user32/windows/
+  cursoricon.c:270-291). This function is called from
+  User32SetupDefaultCursors() (line 297), which is a CSRSS user-mode
+  callback invoked when the first process sets up its GDI/USER state.
+
+  However, UserRegisterSystemClasses() (class.c:2337) runs EARLIER,
+  during desktop creation:
+  - DesktopThreadMain() (desktop.c:1558) -> UserRegisterSystemClasses()
+    (line 1569)
+  - Also called lazily: IntGetAndReferenceClass() (class.c:1463),
+    NtUserRegisterClassExWOW (line 2482), GetClassInfoW (line 2830)
+
+  At the time system classes are registered (desktop thread start),
+  the system cursors have NOT yet been loaded. The 6 classes with
+  hCursor == OCR_NORMAL (DefaultServerClasses array, lines 37-103):
+    1. WC_DESKTOP    (line 43)
+    2. WC_SWITCH     (line 52)
+    3. WC_MENU       (line 61)
+    4. ScrollBar     (line 70)
+    5. WC_ICONTITLE  (line 90)
+    6. Message       (line 99)
+  All hit the "SYSTEMCUR(ARROW) == NULL" error path (line 2396) and
+  get registered with hCursor = NULL (wc.hCursor defaults to NULL at
+  line 2391).
+
+Why this is separate from Root Cause 1:
+  The timing gap exists regardless of the PnP failure. Even on a fully
+  functional boot, system classes are registered BEFORE the first
+  user-mode process calls LoadSystemCursors. On a successful boot, the
+  cursor is presumably set correctly later when User32SetupDefaultCursors()
+  runs. The ERR is a cosmetic/initialization-ordering issue that exists
+  on all boots, not specific to uefifb.
+
+================================================================================
+PROPOSED FIX 2: Load system cursors in-kernel during win32k init
+================================================================================
+
+File: win32ss/user/ntuser/cursoricon.c
+
+  Move cursor loading into kernel-mode init, before class registration.
+  Options:
+  A) Add a kernel-mode cursor resource loading function in cursoricon.c
+     that loads the standard cursor bitmaps from win32k's built-in
+     resources (like mouse.c already has for the software cursor).
+  B) Reorder initialization so User32SetupDefaultCursors callback runs
+     before desktop creation (more invasive).
+
+  Minimal fix: Accept that hCursor can be NULL at class registration
+  time, and set it lazily when the cursor is first needed. This can be
+  done by removing the ERR and adding a fallback in the cursor access
+  path:
+
+  File: win32ss/user/ntuser/class.c, line 2394-2396
+    if (SYSTEMCUR(ARROW) == NULL)
+    {
+        /* System cursors loaded later by user32 callback; NULL cursor
+         * handle is acceptable, cursor will be set when loaded */
+    }
+
+  Actually the ERR at line 2396 is misleading because it uses ERR()
+  which prints unconditionally in debug builds. It should be a TRACE
+  or WARN at most, since this is normal racing initialization.
+
+  The class correctly falls through to wc.hCursor = NULL (line 2391),
+  which means windows of these classes start without a cursor handle.
+  This works because:
+  1. The global cursor (gSysCursorInfo) is what actually matters for
+     drawing, not the per-window-class cursor.
+  2. LoadSystemCursors() will eventually call NtUserSetSystemCursor()
+     (cursoricon.c:2203) which updates gasyscur[i].handle.
+
+  So the ERR output is noisy but not functionally breaking. The fix
+  should downgrade it from ERR to TRACE:
+
+    TRACE("SYSTEMCUR(ARROW) not yet loaded (OK during init)\n");
+
+
+================================================================================
+ROOT CAUSE 3 (TERTIARY): Failed to lock the DC (GreMovePointer)
+================================================================================
+
+File:  win32ss/gdi/eng/mouse.c
+Line:  811  (GreMovePointer)
+
+What happens:
+  Some caller passes an invalid HDC to GreMovePointer. DC_LockDc()
+  returns NULL. This is a generic failure that occurs when:
+  - The DC handle was already destroyed
+  - The DC was for a direct-draw surface that no longer exists
+  - The caller provided garbage
+
+  In the context of this boot, the most likely caller is user32 trying
+  to move the mouse cursor via the sprites/mouse code during system
+  initialization, but the display DC was never properly set up (see
+  Root Cause 1: dwMonCnt=0 could mean the primary display PDEV has
+  incomplete state).
+
+  Another possibility: the code that sets up the desktop display and
+  cursor may be using a DC handle that was valid during one part of
+  boot but became invalid during the GDI reinitialization (e.g., the
+  mode switch that happens during UserRefreshDisplay at display.c:210).
+
+================================================================================
+PROPOSED FIX 3: Fix is Fix 1 (display init) + defensive NULL check
+================================================================================
+
+  The "Failed to lock the DC" is a symptom, not a root cause. Fixing
+  the PnP/monitor enumeration (Fix 1) should prevent incomplete DC
+  setup that leads to this error.
+
+  As a defensive measure, the caller of GreMovePointer and
+  GreSetPointerShape should validate the HDC before calling into the
+  engine. Relevant callers include:
+  - GreSetPointerShape: called from user32's NtUserCallOneParam or
+    similar for SPI_SETCURSORS / SetCursor
+  - GreMovePointer: called from user32 mouse input processing
+
+  In user32:
+  File: win32ss/user/user32/windows/cursoricon.c
+  Or:  win32ss/user/user32/input/mouse.c (or similar mouse path)
+  - Add an HDC validity check before calling into the kernel.
+
+
+================================================================================
+NON-ISSUE: LiveCD / Setup detection
+================================================================================
+
+File:  base/system/services/services.c, line 106-110
+File:  base/system/userinit/livecd.c, line 106-144
+
+The log shows "Running on LiveCD" and "ReactOS Setup currently in
+progress!" because:
+  - services.exe reads HKLM\SYSTEM\Setup\CmdLine and finds "-mini" flag
+  - This sets ScmLiveSetup=TRUE and ScmSetupInProgress=TRUE
+  - In LiveCD+Setup mode, services skips auto-starting most services
+
+The subsequent LoadLibraryExW failures for lsass.exe, svchost.exe,
+eventlog.exe (STATUS_NOT_FOUND, 0xc000000f) are because services.exe
+tries to load these as DLLs (via CreateProcess/LoadLibrary fallback)
+but the EXEs don't exist or aren't proper DLLs on a minimal boot.
+
+This is the NORMAL LiveCD behavior and is NOT the cause of the display/
+cursor failures. The LiveCD detection is completely independent code
+running in user mode after win32k has already initialized.
+
+
+================================================================================
+CONCLUSION
+================================================================================
+
+MOST LIKELY CAUSE: uefifb/videoprt/monitor PnP interaction (Root Cause 1)
+
+The boot fails to reach a fully functional desktop because:
+1. EngpPnPTargetRelationRequest (device.c:578) fails for the non-PnP
+   uefifb miniport, leaving the display device with uninitialized
+   monitor state.
+2. System classes register without valid cursor handles due to
+   initialization ordering (separate pre-existing issue).
+3. A downstream DC lock failure (mouse.c:811) occurs, likely because
+   the incomplete display initialization produces an invalid DC that
+   some cursor-handling code later tries to use.
+
+Not caused by:
+  - LiveCD autologon/userinit (unrelated code path)
+  - Bootvid/GOP framebuffer (verified valid at timestamps 0.421-0.609)
+  - USB or storage (all complete before win32k loads)
+
+================================================================================
+FILES INVOLVED (exact paths)
+================================================================================
+
+win32ss/gdi/eng/device.c      Line  578  EngpPnPTargetRelationRequest call
+  (EngpUpdateMonitorDevices)   Line  581  ERR() output seen in log
+                               Line  530  EngpPnPTargetRelationRequest definition
+                               Line  599  "Legacy device without valid PDO" (dead code path)
+                               Line  765  EngpUpdateMonitorDevices called (return ignored)
+                               Line  830  "FIXME: dwMonCnt not initialized"
+
+win32ss/drivers/miniport/uefifb/uefifb.c
+                               Line   28  AdapterInterfaceType = Internal
+                               Line   39  HwGetVideoChildDescriptor = NULL
+                               Line   70  InbvGetGopFrameBufferInfo (framebuffer valid)
+
+win32ss/user/ntuser/class.c    Line  2394 SYSTEMCUR(ARROW) == NULL check
+                               Line  2396 ERR() output seen in log
+                               Line  2337 UserRegisterSystemClasses definition
+                               Line    37 DefaultServerClasses array (6 OCR_NORMAL classes)
+
+win32ss/user/ntuser/cursoricon.c
+                               Line    32 gasyscur array (initialized all NULL)
+                               Line  2203 NtUserSetSystemCursor (sets gasyscur[i].handle)
+
+win32ss/user/user32/windows/cursoricon.c
+                               Line   270 LoadSystemCursors (loads via NtUserSetSystemCursor)
+                               Line   297 User32SetupDefaultCursors (CSRSS callback)
+
+win32ss/gdi/eng/mouse.c        Line   811 GreMovePointer: "Failed to lock the DC"
+                               Line   721 GreSetPointerShape: "Failed to lock the DC"
+
+win32ss/user/ntuser/display.c  Line   151 InitVideo
+                               Line   167 EngpUpdateGraphicsDeviceList call
+                               Line   171 InitSysParams call
+
+base/system/winlogon/winlogon.c Line  484 CreateWindowStationAndDesktops
+                               Line   508 StartServicesManager
+                               Line   529 GinaInit
+
+base/system/services/services.c Line 108 "Running on LiveCD"
+
+================================================================================
+RECOMMENDED FIX PRIORITY
+================================================================================
+
+1. P0: Fix EngpUpdateMonitorDevices to handle STATUS_INVALID_PARAMETER
+   from non-PnP miniports (device.c:578). See Proposed Fix 1, Option A.
+   Impact: small, safe; 5 lines changed.
+
+2. P1: Downgrade SYSTEMCUR(ARROW) ERR to TRACE (class.c:2396).
+   Impact: cosmetic; 1 line changed.
+
+3. P2: Have videoprt return zero-count DEVICE_RELATIONS for legacy
+   miniports (Proposed Fix 1, Option B).
+   Impact: matches Windows behavior; ~20 lines in videoprt dispatch.
+
+4. P3: Defensive HDC validation in mouse.c callers (Proposed Fix 3).
+   Impact: prevents crash if invalid DC is passed; 2-3 lines.
+
+================================================================================

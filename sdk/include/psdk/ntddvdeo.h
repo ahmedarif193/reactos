@@ -351,6 +351,15 @@ typedef struct _VIDEO_MEMORY_INFORMATION {
   ULONG  FrameBufferLength;
 } VIDEO_MEMORY_INFORMATION, *PVIDEO_MEMORY_INFORMATION;
 
+#if defined(__REACTOS__)
+typedef struct _VIDEO_MEMORY_INFORMATION64 {
+  PVOID      VideoRamBase;
+  ULONGLONG  VideoRamLength;
+  PVOID      FrameBufferBase;
+  ULONGLONG  FrameBufferLength;
+} VIDEO_MEMORY_INFORMATION64, *PVIDEO_MEMORY_INFORMATION64;
+#endif
+
 /* VIDEO_MODE.RequestedMode */
 #define VIDEO_MODE_MAP_MEM_LINEAR         0x40000000
 #define VIDEO_MODE_NO_ZERO_MEMORY         0x80000000

@@ -1,0 +1,136 @@
+iphlpapi staged diff — bug and incorrect implementation analysis (v3)
+=====================================================================
+Date: 2026-05-16
+Files analyzed:
+  - dll/win32/iphlpapi/address.c       (16 +/-)
+  - dll/win32/iphlpapi/icmp.c          (35 +/-)
+  - dll/win32/iphlpapi/iphlpapi.spec   (52 +/-)
+  - dll/win32/iphlpapi/iphlpapi_main.c (1205 +/-)
+  - modules/rostests/winetests/iphlpapi/iphlpapi.c (289 +/-)
+
+
+Issues fixed since v2 analysis
+==============================
+
+V2 #1: Alias != Name delegation
+  Status: FIXED (with new bug, see New Issue #1 below)
+  ConvertInterfaceLuidToAlias now uses interface_alias_from_row()
+  (Description-based) instead of delegating to Name functions.
+  ConvertInterfaceAliasToLuid now does a proper table scan matching
+  the alias against each interface's Description.
+
+V2 #2: GetBestInterfaceEx wrong error code
+  Status: FIXED
+  Now returns ERROR_NOT_SUPPORTED for AF_INET6 before falling through
+  to ERROR_INVALID_PARAMETER for other unknown families:
+    if (pDestAddr->sa_family == AF_INET6)
+        return ERROR_NOT_SUPPORTED;
+    if (pDestAddr->sa_family != AF_INET)
+        return ERROR_INVALID_PARAMETER;
+
+V2 #3: *pOutBufLen not updated on success (address.c)
+  Status: FIXED (change reverted)
+  The InputSize/TotalSize conditional update was removed entirely.
+  The address.c diff no longer touches *pOutBufLen at all — the
+  original "always update" behavior is preserved.
+
+V2 #5: ICMP OutputBufferLength too small
+  Status: FIXED
+  Both IcmpSendEcho and IcmpSendEcho2 now use:
+    OutputBufferLength = ReplySize;
+  This passes the caller's full buffer (minus IO_STATUS_BLOCK) to the
+  driver, allowing for multiple replies.
+
+
+Issues from v1/v2 still present
+===============================
+
+V2 #4: CancelIPChangeNotify — event handle not closed
+  File: iphlpapi_main.c (~line 4330)
+  Severity: Low
+
+  NotifyAddrChange creates an event via CreateEventW and stores it in
+  both *Handle and overlapped->hEvent. CancelIPChangeNotify signals
+  the event but never calls CloseHandle. The caller must close *Handle
+  themselves. The Wine test does this, so it's likely the intended
+  contract, but it could lead to leaks for callers who don't.
+
+
+New issues in this version
+==========================
+
+1. CRITICAL: ConvertInterfaceLuidToAlias calls undefined function
+   File: iphlpapi_main.c line 1183
+   Severity: CRITICAL — will not compile
+
+   Code:
+     DWORD WINAPI ConvertInterfaceLuidToAlias(
+         const NET_LUID *Luid, WCHAR *Alias, SIZE_T Length)
+     {
+         MIB_IFROW Row;
+         DWORD Ret;
+
+         Ret = luid_to_row(Luid, &Row);      // <--- UNDEFINED
+         ...
+     }
+
+   Problem:
+     luid_to_row() is not defined anywhere in the codebase. The correct
+     function is get_interface_row_from_luid() which is defined at the
+     top of the same file.
+
+   Fix:
+     Replace luid_to_row with get_interface_row_from_luid:
+       Ret = get_interface_row_from_luid(Luid, &Row);
+
+
+2. ConvertInterfaceAliasToLuid — Luid not zeroed on failure
+   File: iphlpapi_main.c (~line 1190)
+   Severity: Low
+
+   Code:
+     DWORD WINAPI ConvertInterfaceAliasToLuid(
+         const WCHAR *Alias, NET_LUID *Luid)
+     {
+         ...
+         if (!Alias || !Luid)
+             return ERROR_INVALID_PARAMETER;
+         ...
+         // If no match found:
+         Ret = ERROR_INVALID_NAME;
+         ...
+         return Ret;
+     }
+
+   Problem:
+     When no matching alias is found, the function returns
+     ERROR_INVALID_NAME but leaves Luid unmodified. For consistency
+     with ConvertInterfaceNameToLuidW (which zeros Luid before
+     searching), Luid should be zeroed on entry or on failure.
+
+   Fix:
+     Add after the NULL checks:
+       RtlZeroMemory(Luid, sizeof(*Luid));
+
+
+Summary table
+=============
+
+ #    Issue                                       Severity    Status
+ --   -----                                       --------    ------
+ N1   luid_to_row undefined (won't compile)        CRITICAL    NEW
+ N2   AliasToLuid doesn't zero Luid on failure     Low         NEW
+ V2#4 CancelIPChangeNotify handle not closed       Low         Open
+
+ V2#1 Alias != Name delegation                     Medium      FIXED
+ V2#2 GetBestInterfaceEx wrong error code          Low         FIXED
+ V2#3 *pOutBufLen not updated on success           Low-Med     FIXED (reverted)
+ V2#5 ICMP OutputBufferLength too small            Medium      FIXED
+ V1#1 IpNetTableSorter overflow                    Medium      FIXED (in v2)
+ V1#2 interface_row2_from_row error propagation    Medium      FIXED (in v2)
+ V1#3 NotifyAddrChange rejects sync callers        High        FIXED (in v2)
+ V1#8 GetIpNetTable TOCTOU buffer overflow         High        FIXED (in v2)
+
+
+Verdict: NOT ready for upstream — must fix the compilation error (N1)
+         before the code can even build. N2 and V2#4 are minor.

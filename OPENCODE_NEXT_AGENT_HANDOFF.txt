@@ -1,0 +1,124 @@
+ReactOS ARM64/RPi5 next-agent handoff
+=====================================
+
+Workspace:
+  /home/ahmed/WorkDir/TTE/reactos_arm64
+Build dir:
+  /home/ahmed/WorkDir/TTE/reactos_arm64/output-Clang-arm64-debug
+
+Critical rules from user
+------------------------
+Do not reset/delete/revert broad dirty-tree state. If a change looks removable,
+warn first and get the order twice before removing it.
+
+Keep the tree dirty unless explicitly told otherwise. Stage only the proven,
+minimal fix for the current boundary. Do not accidentally include temporary
+instrumentation, CC workarounds, win32ss experiments, SMBus/UEFI framebuffer
+work, or helper-script churn in a kernel/HAL fix commit.
+
+CC decision
+-----------
+The ARM64 CC workaround was saved here:
+  OPENCODE_CC_COPY_ARM64_PREFAULT_WORKAROUND.patch
+
+Do not push that workaround as the proper fix. It pre-faults VACB system-cache
+pages in CcCopyRead/CcCopyWrite, which papers over the lower MM contract.
+
+The correct contract is:
+  CcCopyRead/CcCopyWrite gets a valid VACB and resident data, then normal
+  kernel access to Vacb->BaseAddress should fault cleanly through MM.
+
+The correct fix belongs in ARM64 MM/system-cache fault handling, not common CC.
+At handoff time, ntoskrnl/cc/copy.c has no active diff from this workaround.
+
+Latest hardware boundary
+------------------------
+Latest useful log:
+  output-Clang-arm64-debug/flash_test.log
+
+The latest log is not a no-serial boot. It reaches kernel/PNP/USB and then
+spends the remaining 60s cap in kernel/HAL/USB territory.
+
+Important latest lines:
+  28.48s SDHCI falls back to SDMA:
+    "Memory above 4GB and no DMA mapping support, disabling ADMA2-32 and using SDMA"
+
+  30.13s first xHCI root hub path starts.
+  31.39s second xHCI root hub path starts.
+  32.29s hub starts enumerating port 3:
+    USBH_CreateDevice: Port - 3, UsbPortStatus - 0x1103
+
+  52.33s xHCI command timeout:
+    usbxhci: command completion timed out type=9 timeout=100 ms
+    event ring entries are all zero
+    USBCMD=1 USBSTS=0 CRCR=0x8 DCBAAP=0x008dd000
+    ERSTBA=0x008e3000 ERDP=0x008e1008
+    PORT3=0x00001203
+    command type 9 timed out -- forcing controller reset
+
+Interpretation:
+  Current slow/fail boundary is xHCI on RPi5/RP1: command TRB type 9 times out
+  after device connect on port 3, with no event ring write visible. Focus on
+  xHCI command/event DMA visibility, RP1 PCIe inbound window, GIC/GSI routing,
+  and command recovery. Do not chase win32k/userspace for this boundary.
+
+Current test helper state
+-------------------------
+../scripts/flash_test.py was locally adjusted so a no-output boot times out
+from monitor start instead of waiting forever for first serial data. It also
+handles pyserial OSError/EIO as a serial-error instead of crashing before relay
+cleanup.
+
+media/boot/rpi/config.txt was locally adjusted to add Pi5 UART output:
+  enable_uart=1
+  uart_2ndstage=1
+
+If a rerun says relay/debug-probe not found, wait and re-check USB state before
+changing ReactOS. That happened once after a pyserial EIO; it was host hardware
+enumeration state, not a kernel result.
+
+Use:
+  cd output-Clang-arm64-debug
+  ../scripts/flash_test.py
+
+If hardware is busy, the script queues. If no devices are visible, check:
+  lsusb
+  /sys/class/hidraw
+  /sys/class/tty/ttyACM*
+
+Noise cleanup direction
+-----------------------
+Serial DPRINT1 volume is itself part of the 60s budget. Keep only logs that
+classify the next slow boundary. Candidates to remove or demote before pushing:
+  [BOOTPROF PS] PspSystemThreadStartup spam
+  broad PHASE1/KD/IOREINIT/SYSCACHE logs once no longer needed
+  generic hub/root-hub trace spam unless needed for xHCI timeout proof
+
+Keep targeted logs around:
+  RP1 PCIe inbound window / config routing
+  xHCI command submission/completion timeout
+  event ring state and interrupt/DMA state
+  HAL interrupt vector/GSI for RP1 xHCI
+
+Likely next investigation
+-------------------------
+1. Reproduce with ../scripts/flash_test.py and confirm the same xHCI type=9
+   command timeout near port 3 enumeration.
+2. Inspect drivers/usb/usbxhci/usbxhci.c command type 9 path. Identify which
+   xHCI command this is in this tree, then verify the command ring doorbell,
+   event ring DMA target, interrupter enable, and RP1 inbound DMA address path.
+3. Cross-check hal/halarm64/bcm2712_pci.c inbound BAR2/window programming and
+   PCI segment/bus routing. Event ring all-zero strongly suggests DMA/event
+   visibility or interrupt/event delivery, not usermode.
+4. Keep any new instrumentation narrow and temporary. Remove it before staging
+   a final fix unless it is the minimal diagnostic for the boundary.
+5. After a candidate fix, rebuild and rerun:
+     ninja ntoskrnl hal livecd reactosimg
+     ../scripts/flash_test.py
+
+Current status notes
+--------------------
+No flash_test/qemu process was running when this file was written.
+
+The tree and index are intentionally dirty. Use git status and git diff before
+staging anything. Do not assume staged files are ready to push.

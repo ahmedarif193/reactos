@@ -1,0 +1,27 @@
+From: ARM64 enablement — fix KSEG0_BASE for ARM64 kernel VA layout
+
+The previous value (0xfffff80000000000) was the AMD64 KSEG0 base
+mistakenly carried over to the ARM64 NDK header. Windows ARM64 uses
+the TTBR1_EL1 region starting at 0xFFFF800000000000 (48-bit kernel
+VA split). Verified against Win11 ARM64 ntkrnlmp PDB symbols and
+absolute references in disassembled scheduler/HAL code.
+
+This is a one-line constant correction with no struct-layout impact
+and no ABI surface change.
+
+---
+ sdk/include/ndk/arm64/ketypes.h | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/sdk/include/ndk/arm64/ketypes.h b/sdk/include/ndk/arm64/ketypes.h
+--- a/sdk/include/ndk/arm64/ketypes.h
++++ b/sdk/include/ndk/arm64/ketypes.h
+@@ -57,7 +57,7 @@
+ //
+ // Static Kernel-Mode Address start (use MM_KSEG0_BASE for actual)
+ //
+-#define KSEG0_BASE 0xfffff80000000000ULL
++#define KSEG0_BASE 0xFFFF800000000000ULL
+
+ //
+ // Structure for CPUID info

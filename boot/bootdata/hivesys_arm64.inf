@@ -58,3 +58,62 @@ HKLM,"SYSTEM\CurrentControlSet\Control\Class\{4D36E972-E325-11CE-BFC1-08002BE103
 HKLM,"SYSTEM\CurrentControlSet\Control\Network\{4D36E972-E325-11CE-BFC1-08002BE10318}\{2E5F3B71-5C8D-4D7A-9E1B-52B4EC271201}\Connection","Name",0x00000000,"Local Area Connection"
 HKLM,"SYSTEM\CurrentControlSet\Control\Network\{4D36E972-E325-11CE-BFC1-08002BE10318}\{2E5F3B71-5C8D-4D7A-9E1B-52B4EC271201}\Connection","PnpInstanceID",0x00000000,"RP1\GEM\2"
 HKLM,"SYSTEM\CurrentControlSet\Control\Network\{4D36E972-E325-11CE-BFC1-08002BE10318}\{2E5F3B71-5C8D-4D7A-9E1B-52B4EC271201}\Connection","ShowIcon",0x00010001,0x00000001
+
+; ---------------------------------------------------------------------------
+; WDDM DirectX kernel subsystem (ARM64)
+;
+; dxgkrnl is the WDDM port driver; it exports DxgkInitialize* which any
+; display miniport (kmdod / softgpu) calls from its DriverEntry.  dxgkrnl and
+; the dxgmms1 memory-manager are registered as system-start drivers in the
+; "Video" group so the WDDM core is resident before any miniport arrives.
+; ---------------------------------------------------------------------------
+
+; DirectX Graphics Kernel -- WDDM port driver
+HKLM,"SYSTEM\CurrentControlSet\Services\dxgkrnl","DisplayName",0x00000000,"DirectX Graphics Kernel"
+HKLM,"SYSTEM\CurrentControlSet\Services\dxgkrnl","ErrorControl",0x00010001,0x00000001
+HKLM,"SYSTEM\CurrentControlSet\Services\dxgkrnl","Group",0x00000000,"Video"
+HKLM,"SYSTEM\CurrentControlSet\Services\dxgkrnl","ImagePath",0x00020000,"system32\drivers\dxgkrnl.sys"
+HKLM,"SYSTEM\CurrentControlSet\Services\dxgkrnl","Start",0x00010001,0x00000001
+HKLM,"SYSTEM\CurrentControlSet\Services\dxgkrnl","Type",0x00010001,0x00000001
+
+; DirectX Graphics Memory Manager Subsystem -- VidMm / VidSch
+HKLM,"SYSTEM\CurrentControlSet\Services\dxgmms1","DisplayName",0x00000000,"DirectX Graphics MMS"
+HKLM,"SYSTEM\CurrentControlSet\Services\dxgmms1","ErrorControl",0x00010001,0x00000001
+HKLM,"SYSTEM\CurrentControlSet\Services\dxgmms1","Group",0x00000000,"Video"
+HKLM,"SYSTEM\CurrentControlSet\Services\dxgmms1","ImagePath",0x00020000,"system32\drivers\dxgmms1.sys"
+HKLM,"SYSTEM\CurrentControlSet\Services\dxgmms1","Start",0x00010001,0x00000001
+HKLM,"SYSTEM\CurrentControlSet\Services\dxgmms1","Type",0x00010001,0x00000001
+
+; Watchdog Timer Driver -- GPU hang detection (imported by dxgkrnl)
+HKLM,"SYSTEM\CurrentControlSet\Services\watchdog","DisplayName",0x00000000,"Watchdog Timer Driver"
+HKLM,"SYSTEM\CurrentControlSet\Services\watchdog","ErrorControl",0x00010001,0x00000000
+HKLM,"SYSTEM\CurrentControlSet\Services\watchdog","Group",0x00000000,"Video"
+HKLM,"SYSTEM\CurrentControlSet\Services\watchdog","ImagePath",0x00020000,"system32\drivers\watchdog.sys"
+HKLM,"SYSTEM\CurrentControlSet\Services\watchdog","Start",0x00010001,0x00000001
+HKLM,"SYSTEM\CurrentControlSet\Services\watchdog","Type",0x00010001,0x00000001
+
+; softgpu -- WDDM software test miniport (demand-start service).
+; Matched by PnP to QEMU std-VGA (PCI\VEN_1234&DEV_1111) via the
+; CriticalDeviceDatabase entry below when such a device is present.
+HKLM,"SYSTEM\CurrentControlSet\Services\softgpu","DisplayName",0x00000000,"ReactOS WDDM Software GPU"
+HKLM,"SYSTEM\CurrentControlSet\Services\softgpu","ErrorControl",0x00010001,0x00000000
+HKLM,"SYSTEM\CurrentControlSet\Services\softgpu","Group",0x00000000,"Video"
+HKLM,"SYSTEM\CurrentControlSet\Services\softgpu","ImagePath",0x00020000,"system32\drivers\softgpu.sys"
+HKLM,"SYSTEM\CurrentControlSet\Services\softgpu","Start",0x00010001,0x00000003
+HKLM,"SYSTEM\CurrentControlSet\Services\softgpu","Type",0x00010001,0x00000001
+
+; kmdod -- WDDM display-only miniport (demand-start service).
+HKLM,"SYSTEM\CurrentControlSet\Services\kmdod","DisplayName",0x00000000,"ReactOS KMDOD Display-Only Driver"
+HKLM,"SYSTEM\CurrentControlSet\Services\kmdod","ErrorControl",0x00010001,0x00000000
+HKLM,"SYSTEM\CurrentControlSet\Services\kmdod","Group",0x00000000,"Video"
+HKLM,"SYSTEM\CurrentControlSet\Services\kmdod","ImagePath",0x00020000,"system32\drivers\kmdod.sys"
+HKLM,"SYSTEM\CurrentControlSet\Services\kmdod","Start",0x00010001,0x00000003
+HKLM,"SYSTEM\CurrentControlSet\Services\kmdod","Type",0x00010001,0x00000001
+
+; CriticalDeviceDatabase: bind QEMU std-VGA / Bochs display to the WDDM
+; display-only miniport (kmdod).  kmdod implements DxgkDdiPresentDisplayOnly,
+; the complete-frame blt path dxgkrnl uses for a kernel D3DKMTPresent.
+HKLM,"SYSTEM\CurrentControlSet\Control\CriticalDeviceDatabase\PCI#VEN_1234&DEV_1111","Service",0x00000000,"kmdod"
+HKLM,"SYSTEM\CurrentControlSet\Control\CriticalDeviceDatabase\PCI#VEN_1234&DEV_1111","ClassGUID",0x00000000,"{4D36E968-E325-11CE-BFC1-08002BE10318}"
+HKLM,"SYSTEM\CurrentControlSet\Control\CriticalDeviceDatabase\PCI#VEN_1234&DEV_1111","DeviceDesc",0x00000000,"ReactOS WDDM Display-Only Driver"
+

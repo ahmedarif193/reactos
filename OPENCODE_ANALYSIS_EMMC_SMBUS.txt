@@ -1,0 +1,261 @@
+===============================================================================
+OPENCODE ANALYSIS: eMMC / sffdisk / partmgr Boundary + Alder Lake-N SMBus 8086:54a3
+Build: output-Clang-amd64-debug/flash_test_serial_reset.log
+Date: 2026-05-26
+===============================================================================
+
+===============================================================================
+PART A: eMMC (GPT) Disk Exposed as RAW Volume Instead of Partitions
+===============================================================================
+
+=== Observed Symptom ===
+
+From the log (lines 631-643, 677-678):
+- eMMC is enumerated as \Device\Harddisk1\DR1 (58 GB, GPT, 5 partitions per boot log)
+- sffdisk registers BOTH GUID_DEVINTERFACE_DISK AND MOUNTDEV_MOUNTED_DEVICE_GUID
+- AUTOCHK sees \??\D: assigned to the raw disk device
+- "File system RAW not supported" -- the whole disk was mounted as a raw volume
+
+The eMMC's GPT partitions (enumerated at boot via UEFI) are invisible.
+Instead, D: is the entire physical disk, which has no filesystem at sector 0.
+
+=== Root Cause ===
+
+sffdisk (drivers/storage/class/sffdisk/sffdisk.c) was calling:
+
+  IoRegisterDeviceInterface(PhysicalDeviceObject,
+                             &MOUNTDEV_MOUNTED_DEVICE_GUID,
+                             NULL, &InterfaceName);        // [REMOVED - see Fix]
+
+in SffdiskAddDevice(), and enabling it in SffdiskStartDevice().  This tells
+mountmgr "here is a mountable volume" on the raw disk PDO, bypassing partmgr
+entirely.  Mountmgr assigned a drive letter (D:) to \Device\Harddisk1\DR1,
+and since the first sector is a GPT protective MBR (not a filesystem
+superblock), the volume appears as RAW.
+
+=== Should sffdisk Advertise MOUNTDEV_MOUNTED_DEVICE_GUID? ===
+
+NO.  By Windows architecture:
+
+  Layer                     | Role                          | Interface GUID
+  --------------------------+-------------------------------+------------------
+  Storage port/bus driver   | Creates PDO for the disk      | (none)
+  Storage class driver      | Creates FDO (HarddiskX\DRX)   | GUID_DEVINTERFACE_DISK
+    (disk.sys / sffdisk.sys)|                               | only
+  Partition manager         | Reads MBR/GPT, creates        | GUID_DEVINTERFACE_PARTITION
+    (partmgr.sys)           | partition PDOs (Harddisk-     | + GUID_DEVINTERFACE_VOLUME
+                            | VolumeN)                      | (=MOUNTDEV_MOUNTED_DEVICE_GUID)
+  Mount manager (mountmgr)  | Assigns drive letters to      | (listens to
+                            | volumes                       | MOUNTDEV_MOUNTED_DEVICE_GUID)
+
+The physical disk (Partition0) should NOT carry MOUNTDEV_MOUNTED_DEVICE_GUID.
+Only the partition/volume PDOs created by partmgr should carry it.
+
+=== Minimal Correct Fix (ALREADY APPLIED in working tree) ===
+
+The git diff confirms the fix is already present in the current source
+(not in the binary that produced this log).  The removal consists of:
+
+  1. SffdiskAddDevice() -- Remove the entire block:
+       IoRegisterDeviceInterface(PhysicalDeviceObject,
+                                  &MOUNTDEV_MOUNTED_DEVICE_GUID, ...)
+     Keep only the GUID_DEVINTERFACE_DISK registration on the PDO.
+     Lines removed: ~780-803 (old numbering) / diff shows -31 lines
+
+  2. SffdiskStartDevice() -- Remove:
+       IoSetDeviceInterfaceState(&DeviceExtension->MountedInterfaceName, TRUE)
+     Remove MountedInterfaceEnabled flag set.
+     Lines removed: ~525-540 (old numbering)
+
+  3. SffdiskCleanupDevice() -- Remove:
+     - IoSetDeviceInterfaceState(&MountedInterfaceName, FALSE) on stop/remove
+     - RtlFreeUnicodeString(&MountedInterfaceName) cleanup
+     - MountedInterfaceRegistered/MountedInterfaceEnabled flags
+
+  Also, the header (sffdisk.h) no longer contains:
+     UNICODE_STRING MountedInterfaceName;
+     BOOLEAN MountedInterfaceRegistered;
+     BOOLEAN MountedInterfaceEnabled;
+  (These fields were already removed from the header.)
+
+  No changes are needed in sdbus (bus driver), sdport (port driver),
+  or partmgr for this fix.
+
+=== Will GPT Partitions Then Be Exposed by partmgr? ===
+
+After the fix, the expected device stack and flow:
+
+  PDO (sdbus FDO: SDHCI controller)
+    |
+    +-- sdbus PDO (eMMC device: SD\VID_15&OID_0100&PID_CUTB4)
+          |
+          +-- sffdisk FDO (\Device\Harddisk1\DR1)
+          |     Registers: GUID_DEVINTERFACE_DISK on PDO
+          |
+          +-- partmgr FDO (upper filter via DiskDrive class UpperFilters)
+                During IRP_MN_START_DEVICE:
+                  - Queries IOCTL_STORAGE_GET_DEVICE_NUMBER -> DiskNumber
+                  - Registers GUID_DEVINTERFACE_DISK on PhysicalDiskDO
+                During IRP_MN_QUERY_DEVICE_RELATIONS/BusRelations:
+                  - Calls IoReadPartitionTableEx() -> detects GPT style
+                  - Calls PartMgrUpdatePartitionDevices() -> creates PDOs
+                    for each GPT partition (\Device\HarddiskVolumeN)
+                  - Each partition PDO registers:
+                    - GUID_DEVINTERFACE_PARTITION
+                    - GUID_DEVINTERFACE_VOLUME (= MOUNTDEV_MOUNTED_DEVICE_GUID)
+                Mount manager then assigns drive letters to the partition
+                volumes.
+
+=== partmgr Registration Status ===
+
+  - File: boot/bootdata/hivesys.inf line 429
+    HKLM,"SYSTEM\CurrentControlSet\Control\Class\{4D36E967-E325-11CE-BFC1-08002BE10318}",
+    "UpperFilters",0x00010000,"partmgr"
+    (GUID {4D36E967-...} = GUID_DEVCLASS_DISKDRIVE)
+
+  - File: drivers/storage/partmgr/partmgr_reg.inf
+    Start = 0x00000000 (SERVICE_BOOT_START)
+    Group = "Boot Bus Extender"
+
+  - The log shows DiskClassInstaller is called for SD\VID_15&OID_0100...,
+    confirming the eMMC device is in the DiskDrive class.
+
+  - partmgr uses INFO(DPFLTR_DISK_ID, ...) for logging, which may not be
+    visible at DPFLTR_INFO_LEVEL depending on kernel debug filter settings.
+    This explains the absence of explicit partmgr log entries.
+
+  If partmgr does NOT successfully attach (e.g., class filter mechanism
+  issue), the eMMC's raw disk device would be accessible via
+  \Device\Harddisk1\DR1 but no drive letter would be assigned and no
+  partition devices would appear.
+
+=== Recommended Verification Steps ===
+
+  1. Rebuild with the fixed sffdisk.c (already applied in working tree)
+  2. Verify partmgr attaches: add DPRINT1() to PartMgrAddDevice()
+     or check !devnode / !partinfo in KD
+  3. Verify GUID_DEVINTERFACE_DISK is enabled on PDO by sffdisk
+  4. Verify GUID_DEVINTERFACE_VOLUME interfaces appear for each GPT
+     partition after partmgr processes BusRelations
+  5. Confirm mountmgr assigns drive letters to partitions, not raw disk
+  6. Ensure the eMMC boot/rpmb partition PDOs (SD\...EMMC_PART_{1,2,3})
+     are correctly handled -- they get Code 28 (NO_DRV) which is correct
+     since these are raw hardware partitions, not filesystem volumes
+
+
+===============================================================================
+PART B: Alder Lake-N SMBus 8086:54a3 Bring-Up Shape
+===============================================================================
+
+=== Hardware Identification ===
+
+  PCI device 00:1f.4 in the log:
+    SMBus [0c05]: Intel Corporation Alder Lake-N SMBus [8086:54a3] (rev 00)
+    Memory at 6001138000 (64-bit, non-prefetchable) [size=256]
+    I/O ports at efa0 [size=32]
+
+  This is the Intel 500-series PCH SMBus host controller, same register
+  layout as all Intel PCH SMBus controllers since ICH5.
+
+=== Current ReactOS SMBus Driver Boundary ===
+
+  Layer                       | Exists? | Location / Status
+  ----------------------------+---------+-------------------------------
+  PCI class/subclass detection| YES     | drivers/bus/pci/pci.c:1289:
+                             |         |   PCI_SUBCLASS_SB_SMBUS = 0x05
+                             |         |   -> Description "SMBus controller"
+  PCI HardwareID generation   | YES     | CompatibleIDs include 
+                             |         |   PCI\VEN_8086&DEV_54A3,
+                             |         |   PCI\CC_0C0500, PCI\CC_0C05
+  INF for 8086:54a3           | NO      | Not in media/inf/machine.inf
+                             |         |   or any other INF
+  Generic class-code match    | EXISTS  | PCI\CC_0C05 -> NO_DRV in
+                             |         |   media/inf/machine.inf line 67
+                             |         |   Result: Code 28 (no driver)
+  SMBus class driver library  | NO      | DDK header exists:
+  (smbclass.sys)              |         |   sdk/include/ddk/smbus.h (186 lines)
+                             |         |   Defines class/miniport model:
+                             |         |   - SMB_BUS_REQUEST, SMB_REQUEST
+                             |         |   - SMB_CLASS struct
+                             |         |   - SmbClassCreateFdo() proto
+                             |         |   - PSMB_INITIALIZE_MINIPORT type
+                             |         |   No .c/.sys implementation exists
+  Intel PCH miniport driver   | NO      | Nothing in tree
+  ACPI SMBus address space    | YES     | ACPICA exserial.c:210:
+                             |         |   ACPI_ADR_SPACE_SMBUS = 4
+                             |         |   AcpiExReadSerialBus / Write
+                             |         |   handle SMBus address space
+                             |         | ACPI opregion.c:218-220:
+                             |         |   Registers handlers for
+                             |         |   ACPI_OPREGION_REGION_SPACE_SMB
+                             |         |   but NO actual handler registered
+                             |         |   (needs a driver to call
+                             |         |   RegisterOpRegionHandler)
+  I2C/SPB framework           | NO      | No SpbCx equivalent
+  Intel LPSS I2C (DesignWare) | NO      | 8086:54e8/54e9/54ea/54eb also NO_DRV
+  Xbox SMBus (AMD-756)        | EXISTS  | hal/halx86/xbox/reboot.c
+                             |         |   I/O port-based, AMD-756 compat.
+                             |         |   Not applicable to Intel hardware
+
+=== What a Real Driver Would Need ===
+
+  1. SMBus class driver library (smbclass.sys)
+     - Implements SmbClassCreateFdo(), SmbClassInitializeDevice()
+     - Handles IRP_MJ_CREATE for user-mode SMBus access
+     - Wraps SMB_REQUEST submission to the miniport
+     - Provides WMI SMBus counter support
+     - Ref: MSDN "SMBus Class Driver" / sdk/include/ddk/smbus.h
+
+  2. Intel PCH SMBus miniport driver (e.g., intelsmb.sys)
+     - Registers with the class driver via PSMB_INITIALIZE_MINIPORT
+     - Handles PCI BARs: Memory at 6001138000, I/O ports at efa0
+     - Intel PCH SMBus register layout (well-documented):
+       - HOST_STATUS (base + 0x00)
+       - HOST_CONTROL (base + 0x02)
+       - HOST_COMMAND (base + 0x03)
+       - XMIT_SLVA (base + 0x04)
+       - HOST_DATA (base + 0x05)
+       - PEC/Receive SLVA/Data registers
+       - TCO base (typically base + 0x20..0x3f)
+     - Implements PSMB_START_MINIPORT, PSMB_HARDWARE_INTERRUPT, etc.
+     - Configures PCH SMBus clock from RTC clock (default ~100 kHz)
+
+  3. INF entry in media/inf/machine.inf:
+     A hardware-ID specific entry to bind the miniport:
+       %PCI\VEN_8086&DEV_54A3.DeviceDesc% = smbus_inst,PCI\VEN_8086&DEV_54A3
+     Or use a compatible-ID approach:
+       %PCI\CC_0C05.DeviceDesc% = smbus_inst,PCI\CC_0C05
+     (replacing the current NO_DRV binding)
+
+  Note: The I2C controllers (8086:54e8/54e9/54ea/54eb) and I2C buses
+  (8086:54c5/54c6) are separate hardware connected via LPSS (Low Power
+  Sub-System).  These require a completely different driver model
+  (SPB / SpbCx on Windows 8+), not the legacy SMBus class/miniport model.
+  The Alder Lake-N SMBus [8086:54a3] is the traditional PCH SMBus
+  (PCI class 0C05, subclass 05) and can use the legacy DDK model.
+
+=== Risk / Dependency Assessment ===
+
+  - SMBus is a device enumeration bus; without a driver, devices behind
+    SMBus (DIMM SPD EEPROMs, thermal sensors, battery controllers,
+    touchpad controllers on some laptops) are invisible to the OS.
+  - The SMBus driver is NOT a boot-critical device; boot can proceed
+    with Code 28 (observed in log -- no adverse effect on boot).
+  - ACPICA's SMBus address space handler registration may be needed
+    for AML methods that access SMBus-attached devices (e.g., Smart
+    Battery _BIF/_BST methods), but that requires a functional SMBus
+    host controller driver first.
+  - Reference code exists in ReactOS: Xbox SMBus HAL layer
+    (hal/halx86/xbox/reboot.c) and FreeLoader Xbox I2C
+    (boot/freeldr/freeldr/arch/i386/xbox/xboxi2c.c), but these target
+    AMD-756 compatible hardware with direct I/O port access, not the
+    Intel PCH memory-mapped register model.
+
+=== Implementation Estimate ===
+
+  A minimal Intel PCH SMBus driver with the DDK header skeleton would be
+  ~800-1200 lines of new C code, plus:
+  - ~200 lines for INF entries and device description strings
+  - ~200 lines for CMakeLists.txt / build system integration
+  - ~200 lines for smbclass.sys library (shared across miniports)
+  Total new code: ~1400-1800 lines across 4-6 new files.

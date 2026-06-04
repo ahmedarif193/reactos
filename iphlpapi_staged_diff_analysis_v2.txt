@@ -1,0 +1,190 @@
+iphlpapi staged diff — bug and incorrect implementation analysis (v2)
+=====================================================================
+Date: 2026-05-16
+Files analyzed:
+  - dll/win32/iphlpapi/address.c
+  - dll/win32/iphlpapi/icmp.c
+  - dll/win32/iphlpapi/iphlpapi_main.c
+  - dll/win32/iphlpapi/iphlpapi.spec
+  - modules/rostests/winetests/iphlpapi/iphlpapi.c
+
+
+Issues fixed since v1 analysis
+==============================
+
+A. IpNetTableSorter integer overflow (was #1)
+   Status: FIXED
+   Now uses overflow-safe comparison:
+     ret = (rowA->dwIndex > rowB->dwIndex) - (rowA->dwIndex < rowB->dwIndex);
+     if (!ret)
+     {
+       DWORD addrA = ntohl(rowA->dwAddr);
+       DWORD addrB = ntohl(rowB->dwAddr);
+       ret = (addrA > addrB) - (addrA < addrB);
+     }
+
+B. interface_row2_from_row error propagation (was #2)
+   Status: FIXED
+   Now ignores Alias naming failure and always returns NO_ERROR:
+     ConvertInterfaceLuidToNameW(&Row2->InterfaceLuid,
+                                 Row2->Alias, _countof(Row2->Alias));
+     return NO_ERROR;
+   The DWORD Ret variable was also removed.
+
+C. NotifyAddrChange rejects synchronous callers (was #3)
+   Status: FIXED (acceptable stub)
+   Now distinguishes both-NULL (synchronous) from one-NULL (invalid):
+     if (!Handle && !overlapped)
+       return ERROR_NOT_SUPPORTED;
+     if (!Handle || !overlapped)
+       return ERROR_INVALID_PARAMETER;
+   Not fully correct (Windows blocks synchronously), but ERROR_NOT_SUPPORTED
+   is a reasonable stub return for unimplemented synchronous mode.
+
+D. GetIpNetTable TOCTOU buffer overflow (was #8)
+   Status: FIXED
+   appendIpNetTableExtraRows now takes a maxEntries parameter:
+     static void appendIpNetTableExtraRows(
+         PMIB_IPNETTABLE ipNetTable, DWORD maxEntries)
+   And checks bounds before writing:
+     if (ipNetTable->dwNumEntries >= maxEntries)
+       break;
+   Called with: appendIpNetTableExtraRows(pIpNetTable, totalEntries);
+
+
+Remaining issues
+================
+
+1. ConvertInterfaceLuidToAlias / ConvertInterfaceAliasToLuid — incorrect delegation
+   File: iphlpapi_main.c (~lines 842-848)
+   Severity: Medium
+
+   Code:
+     DWORD WINAPI ConvertInterfaceLuidToAlias(
+         const NET_LUID *Luid, WCHAR *Alias, SIZE_T Length)
+     {
+         return ConvertInterfaceLuidToNameW(Luid, Alias, Length);
+     }
+     DWORD WINAPI ConvertInterfaceAliasToLuid(
+         const WCHAR *Alias, NET_LUID *Luid)
+     {
+         return ConvertInterfaceNameToLuidW(Alias, Luid);
+     }
+
+   Problem:
+     On Windows, "Alias" = friendly name (e.g. "Local Area Connection"),
+     "Name" = LUID-based name (e.g. "ethernet_1"). These are
+     fundamentally different. Delegating Alias to Name means
+     ConvertInterfaceAliasToLuid("Local Area Connection", &luid)
+     will return ERROR_INVALID_NAME instead of finding the interface.
+
+   Fix:
+     Implement Alias functions by looking up the interface table and
+     matching against Description/FriendlyName, or at minimum document
+     that this is a known-incorrect stub.
+
+
+2. GetBestInterfaceEx — rejects AF_INET6 with wrong error
+   File: iphlpapi_main.c (~line 4285)
+   Severity: Low
+
+   Code:
+     if (pDestAddr->sa_family != AF_INET)
+         return ERROR_INVALID_PARAMETER;
+
+   Problem:
+     Windows GetBestInterfaceEx supports AF_INET6. Returning
+     ERROR_INVALID_PARAMETER is incorrect for an unimplemented address
+     family. ERROR_NOT_SUPPORTED would be more appropriate and consistent
+     with other stubs in this patch (e.g. NotifyAddrChange).
+
+   Fix:
+     if (pDestAddr->sa_family == AF_INET6)
+         return ERROR_NOT_SUPPORTED;
+     if (pDestAddr->sa_family != AF_INET)
+         return ERROR_INVALID_PARAMETER;
+
+
+3. address.c — *pOutBufLen not updated on success
+   File: address.c (~line 997)
+   Severity: Low-Medium
+
+   Code:
+     -    *pOutBufLen = TotalSize;
+     +    if (TotalSize > InputSize)
+     +        *pOutBufLen = TotalSize;
+
+   Problem:
+     On ERROR_SUCCESS, the output buffer length should reflect the actual
+     data size written (per MSDN: "the size of the data returned"). This
+     change means if a caller passes a 15KB buffer but only 8KB is used,
+     *pOutBufLen still reports the original 15KB. Some callers may rely on
+     the output size to know how much data was actually returned.
+
+   Note:
+     The existing code has a FIXME about computing exact size before
+     writing. The original always-update behavior is more correct per
+     MSDN documentation.
+
+
+4. CancelIPChangeNotify — event handle not closed
+   File: iphlpapi_main.c (~line 4260)
+   Severity: Low
+
+   Problem:
+     NotifyAddrChange creates an event via CreateEventW and stores it in
+     both *Handle and overlapped->hEvent. CancelIPChangeNotify signals
+     the event but never calls CloseHandle on it. The caller must know
+     to close *Handle themselves.
+
+     The Wine test does close the handle separately, and Windows
+     documentation is ambiguous on ownership, so this may be acceptable
+     if the convention is that the caller owns the handle. However, the
+     pairing of NotifyAddrChange/CancelIPChangeNotify suggests Cancel
+     should clean up resources it is aware of.
+
+   Note:
+     If the intent is for the caller to own the handle, this is
+     acceptable but could lead to leaks for callers who only call
+     CancelIPChangeNotify without separately tracking the handle.
+
+
+5. IcmpSendEcho2 — OutputBufferLength too small for multiple replies
+   File: icmp.c (~line 392)
+   Severity: Medium
+
+   Code:
+     OutputBufferLength = sizeof(ICMP_ECHO_REPLY) + RequestSize;
+
+   Problem:
+     This only accounts for a single reply. If the kernel returns
+     multiple ICMP echo replies (e.g. from a broadcast ping), only one
+     reply's worth of output buffer is reported to the driver via
+     NtDeviceIoControlFile, potentially truncating results.
+
+     The original code used ReplySize (the caller's full buffer size)
+     for both input and output. The input buffer was correctly resized
+     to InputBufferLength, but the output should still allow for the
+     full caller-provided space.
+
+   Fix:
+     Use the remaining reply buffer size (after IO_STATUS_BLOCK was
+     subtracted) as OutputBufferLength:
+       OutputBufferLength = ReplySize;
+
+
+Summary table
+=============
+
+ #  Issue                                    Severity    Status
+ -  -----                                    --------    ------
+ 1  Alias != Name delegation                  Medium      Open
+ 2  GetBestInterfaceEx wrong error code       Low         Open
+ 3  *pOutBufLen not updated on success        Low-Medium  Open
+ 4  CancelIPChangeNotify handle not closed    Low         Open
+ 5  ICMP OutputBufferLength too small          Medium      Open
+
+ A  IpNetTableSorter overflow                 Medium      FIXED
+ B  interface_row2_from_row error propagation  Medium      FIXED
+ C  NotifyAddrChange rejects sync callers      High        FIXED (stub)
+ D  GetIpNetTable TOCTOU buffer overflow       High        FIXED

@@ -1,0 +1,141 @@
+## SDIO/SD BUS STACK ANALYSIS: CMD0 TIMEOUT ON INTEL ALDER LAKE-N eMMC
+
+### Observed failure (from flash_test_serial_reset.log)
+
+Line 627:  SdBusSendCommand: CMD0 completion timed out       (enum.c:130)
+Line 628:  SdBusEnumerateCard: CMD0 failed (0xc00000b5)     (enum.c:758)
+Line 629:  SdBusEnumerateInsertedCard: card enumeration failed (0xc00000b5)  (hotplug.c:280)
+Line 631:  SdBusFdoStartDevice: initial card enumeration failed (0xc00000b5) (fdo.c:695)
+Line 637:  BugCheck 0x7B INACCESSIBLE_BOOT_DEVICE
+
+The 1-second gap between init (19.812500) and timeout (20.812500) matches
+SD_CMD_TIMEOUT_MS (1000ms) exactly. SDHCI init succeeds: version 1.02,
+caps 0x546ec881, caps2 0x80000807, base clock 200MHz. The slot type is
+embedded (EMBEDDED).
+
+---
+
+### ROOT CAUSE (PRIMARY)
+
+**CMD0 (SDHCI_CMD_RESP_NONE / R0) does not assert CMD_COMPLETE on this Intel SDHCI controller.**
+
+File: drivers/bus/sd/enum.c:66-158 (SdBusSendCommand)
+File: drivers/bus/sd/request.c:51-88   (SdBusWaitForInterrupt)
+File: drivers/bus/sd/hotplug.c:30-136  (SdBusInterruptService)
+
+Evidence chain:
+
+1. SdBusSendCommand issues CMD0 with flags = SDHCI_CMD_RESP_NONE (0x0000).
+   This is an R0 command -- no response expected. The command register is
+   written as SDHCI_MAKE_CMD(0, 0) = ((0<<8) | 0) = 0x0000.
+
+2. SdBusWaitForInterrupt (request.c:51) waits for SDHCI_INT_CMD_COMPLETE
+   (0x00000001) to appear in CommandInterruptStatus, with a 1000ms timeout
+   on CommandEvent (SynchronizationEvent).
+
+3. SdBusInterruptService (hotplug.c:53) reads SDHCI_INT_STATUS after the
+   command write and separates CmdDataBits from CardBits. CMD_COMPLETE
+   would be part of CmdDataBits (line 62-68), acknowledged, ORed into
+   CommandInterruptStatus, and the CommandDpc would be queued.
+
+4. Per the SDHCI specification, SDHCI_INT_CMD_COMPLETE is defined as:
+   "This bit is set when you get the end bit of the command response"
+   (except Auto CMD12/CMD23). For R0 (no response), there is no "end bit
+   of the command response" because there is no response phase at all.
+   Many controllers (including arguably Intel's Alder Lake-N eMMC
+   controller) therefore do NOT set CMD_COMPLETE for R0 commands.
+
+5. With no CMD_COMPLETE bit ever asserted, the ISR never accumulates it,
+   the CommandEvent is never set, and SdBusWaitForInterrupt times out
+   after exactly SD_CMD_TIMEOUT_MS (1000ms), returning STATUS_IO_TIMEOUT.
+
+---
+
+### SECONDARY ISSUE: No interrupt-polish / polling fallback
+
+File: drivers/bus/sd/request.c:51-88 (SdBusWaitForInterrupt)
+
+After writing the SDHCI command register, the entire completion pipeline relies
+exclusively on the ISR -> CommandInterruptStatus -> CommandEvent chain. There is
+no fallback that polls the raw SDHCI_INT_STATUS register directly. If the
+controller does not raise the interrupt for a given command (which is legal
+for R0 per above), the driver has no secondary path to detect completion.
+
+For no-response commands (SDHCI_CMD_RESP_NONE), the command is fully
+transmitted once CMD_INHIBIT clears after the command write. No
+CMD_COMPLETE interrupt is needed. The driver should either:
+
+  a) Not wait for CMD_COMPLETE at all for R0 commands (just poll
+     CMD_INHIBIT to pulse high then low after the write), or
+
+  b) Have a timeout/poll fallback that reads SDHCI_INT_STATUS directly
+     when KeWaitForSingleObject times out.
+
+---
+
+### TERTIARY ISSUE: Command register value is 0x0000 for CMD0
+
+File: sdk/include/reactos/drivers/sd/sdhci.h:104 (SDHCI_MAKE_CMD)
+File: drivers/bus/sd/enum.c:106-107
+
+CMD0 with RESP_NONE produces SDHCI_MAKE_CMD(0, 0) = 0x0000. Some SDHCI
+implementations interpret a zero value in the upper byte (command index
+field at bits [15:8]) as a no-op or invalid command. The SDHCI spec says
+writing the upper byte initiates command generation; a value of zero in
+that field is technically legal (CMD0) but may be interpreted differently
+by buggy or conservative hardware implementations. If the controller does
+not trigger command generation for command index 0x00, CMD_INHIBIT would
+never set and the command would appear to be immediately "done" without
+any interrupt, also producing a timeout.
+
+This is an alternative (less likely but possible) explanation for the
+same symptom. Both this issue and the primary issue would produce
+identical behavior: no CMD_COMPLETE interrupt, leading to a 1-second
+timeout in SdBusWaitForInterrupt.
+
+---
+
+### IMPACT
+
+The CMD0 failure aborts all card enumeration. No child PDO is created
+for the eMMC storage device. The boot volume cannot be found, causing
+BugCheck 0x7B (INACCESSIBLE_BOOT_DEVICE) with status 0xC0000034
+(STATUS_OBJECT_NAME_NOT_FOUND).
+
+---
+
+### FILE/FUNCTION EVIDENCE SUMMARY
+
+  drivers/bus/sd/enum.c:66-158    SdBusSendCommand()
+    - Issues CMD0 with SDHCI_CMD_RESP_NONE
+    - Calls SdBusWaitForInterrupt expecting CMD_COMPLETE
+    - Times out at line 128-134, prints "CMD0 completion timed out"
+  
+  drivers/bus/sd/enum.c:747-759  SdBusEnumerateCard() Step 1
+    - Calls SdBusSendCommand for CMD0
+    - Returns failure at line 758 when CMD0 fails
+  
+  drivers/bus/sd/request.c:51-88  SdBusWaitForInterrupt()
+    - Waits on CommandEvent (SynchronizationEvent)
+    - Depends entirely on ISR-accumulated CommandInterruptStatus
+    - No polling fallback on raw SDHCI_INT_STATUS
+  
+  drivers/bus/sd/hotplug.c:30-136  SdBusInterruptService()
+    - Reads SDHCI_INT_STATUS and filters CmdDataBits
+    - ORs bits into CommandInterruptStatus, queues CommandDpc
+    - If CMD_COMPLETE is never set by hardware, this path is dead
+  
+  drivers/bus/sd/hotplug.c:438-451  SdBusCommandCompletionDpc()
+    - Sets CommandEvent, waking the thread in SdBusWaitForInterrupt
+    - Never runs if the ISR never sees CMD_COMPLETE
+  
+  sdk/include/reactos/drivers/sd/sdhci.h:91  SDHCI_CMD_RESP_NONE = 0x0000
+  sdk/include/reactos/drivers/sd/sdhci.h:104 SDHCI_MAKE_CMD(idx, flags)
+  sdk/include/reactos/drivers/sd/sdhci.h:185 SDHCI_INT_CMD_COMPLETE = 0x00000001
+  
+  sdk/include/reactos/drivers/sd/sddef.h:211 SD_CMD_TIMEOUT_MS = 1000
+  
+  drivers/bus/sd/fdo.c:504-703    SdBusFdoStartDevice()
+    - Calls SdBusEnumerateInsertedCard at line 691
+    - Does not treat enumeration failure as fatal (continues to return
+      STATUS_SUCCESS), but the missing boot volume causes 0x7B later

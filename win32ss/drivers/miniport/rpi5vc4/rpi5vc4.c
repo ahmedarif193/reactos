@@ -23,6 +23,58 @@ Rpi5Vc4IsRpi5Platform(VOID)
     return HalGetCachedAcpiTable(RPI5VC4_ACPI_FADT, "RPIFDN", "RPI5") != NULL;
 }
 
+/*
+ * Returns TRUE if the rpi5dod WDDM display-only miniport is configured to own
+ * the display (registry flag HKLM\System\CurrentControlSet\Services\rpi5vc4\
+ * DisableForDod == 1, seeded by rpi5dod_root.inf when rpi5dod is opted in).
+ *
+ * rpi5vc4 (XPDM) and rpi5dod (WDDM DOD) both drive the Pi 5 HVS scanout, so
+ * only one may own \Device\Video0 at a time.  When rpi5dod is the primary,
+ * rpi5vc4 declines here so it does not collide on Video0 — making the switch
+ * clean (rpi5dod the default fallback otherwise).
+ */
+static BOOLEAN
+Rpi5Vc4DodOwnsDisplay(VOID)
+{
+    UNICODE_STRING KeyName =
+        RTL_CONSTANT_STRING(L"\\Registry\\Machine\\SYSTEM\\CurrentControlSet\\Services\\rpi5vc4");
+    UNICODE_STRING ValueName = RTL_CONSTANT_STRING(L"DisableForDod");
+    OBJECT_ATTRIBUTES ObjectAttributes;
+    HANDLE KeyHandle;
+    UCHAR Buffer[sizeof(KEY_VALUE_PARTIAL_INFORMATION) + sizeof(ULONG)];
+    PKEY_VALUE_PARTIAL_INFORMATION Info = (PKEY_VALUE_PARTIAL_INFORMATION)Buffer;
+    ULONG ResultLength = 0;
+    NTSTATUS Status;
+    BOOLEAN Result = FALSE;
+
+    InitializeObjectAttributes(&ObjectAttributes,
+                               &KeyName,
+                               OBJ_CASE_INSENSITIVE | OBJ_KERNEL_HANDLE,
+                               NULL,
+                               NULL);
+
+    Status = ZwOpenKey(&KeyHandle, KEY_QUERY_VALUE, &ObjectAttributes);
+    if (!NT_SUCCESS(Status))
+        return FALSE;
+
+    Status = ZwQueryValueKey(KeyHandle,
+                             &ValueName,
+                             KeyValuePartialInformation,
+                             Info,
+                             sizeof(Buffer),
+                             &ResultLength);
+    if (NT_SUCCESS(Status) &&
+        Info->Type == REG_DWORD &&
+        Info->DataLength == sizeof(ULONG) &&
+        (*(PULONG)Info->Data) != 0)
+    {
+        Result = TRUE;
+    }
+
+    ZwClose(KeyHandle);
+    return Result;
+}
+
 static VP_STATUS
 Rpi5Vc4LoadGopInfo(
     _Inout_ PRPI5VC4_DEVICE_EXTENSION DeviceExtension)
@@ -151,6 +203,17 @@ DriverEntry(
          * entering videoport so no \Device\VideoN slot is consumed and uefifb can
          * handle the firmware framebuffer.
          */
+        return STATUS_SUCCESS;
+    }
+
+    if (Rpi5Vc4DodOwnsDisplay())
+    {
+        /*
+         * The rpi5dod WDDM display-only miniport is configured as the primary
+         * display.  Decline so rpi5vc4 does not collide on \Device\Video0;
+         * rpi5dod owns the HVS scanout and makes it opaque for the desktop.
+         */
+        DbgPrint("RPI5VC4: rpi5dod owns the display (DisableForDod) - declining\n");
         return STATUS_SUCCESS;
     }
 
