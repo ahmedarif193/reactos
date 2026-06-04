@@ -115,6 +115,7 @@ UefiFbFindAdapter(
     DeviceExtension->RedMask = FbInfo.RedMask;
     DeviceExtension->GreenMask = FbInfo.GreenMask;
     DeviceExtension->BlueMask = FbInfo.BlueMask;
+    DeviceExtension->ReservedMask = FbInfo.Reserved;
     DeviceExtension->BytesPerScanLine =
         DeviceExtension->PixelsPerScanLine * BytesPerPixel;
     DeviceExtension->MappedFrameBuffer = NULL;
@@ -172,6 +173,7 @@ UefiFbInitialize(
     Mode->RedMask = DeviceExtension->RedMask;
     Mode->GreenMask = DeviceExtension->GreenMask;
     Mode->BlueMask = DeviceExtension->BlueMask;
+    Mode->DriverSpecificAttributeFlags = DeviceExtension->ReservedMask;
 
     Mode->AttributeFlags = VIDEO_MODE_GRAPHICS |
                            VIDEO_MODE_COLOR |
@@ -179,7 +181,6 @@ UefiFbInitialize(
 
     Mode->VideoMemoryBitmapWidth = DeviceExtension->ScreenWidth;
     Mode->VideoMemoryBitmapHeight = DeviceExtension->ScreenHeight;
-    Mode->DriverSpecificAttributeFlags = 0;
 
     return TRUE;
 }
@@ -262,7 +263,7 @@ UefiFbStartIO(
             VideoMemory = (PVIDEO_MEMORY)RequestPacket->InputBuffer;
             MemoryInfo = (PVIDEO_MEMORY_INFORMATION)RequestPacket->OutputBuffer;
             FrameBuffer = DeviceExtension->FrameBufferPhysical;
-            inIoSpace = VIDEO_MEMORY_SPACE_MEMORY;
+            inIoSpace = VIDEO_MEMORY_SPACE_MEMORY | VIDEO_MEMORY_SPACE_P6CACHE;
             MemoryInfo->VideoRamBase = VideoMemory->RequestedVirtualAddress;
             MemoryInfo->VideoRamLength = DeviceExtension->FrameBufferSize;
             Status = VideoPortMapMemory(DeviceExtension,
