@@ -1,0 +1,16 @@
+[AddReg]
+HKLM,"SYSTEM\CurrentControlSet\Services\rpi5vc4","ErrorControl",0x00010001,0x00000000
+HKLM,"SYSTEM\CurrentControlSet\Services\rpi5vc4","Group",0x00000000,"Video Save"
+HKLM,"SYSTEM\CurrentControlSet\Services\rpi5vc4","ImagePath",0x00020000,"system32\drivers\rpi5vc4.sys"
+HKLM,"SYSTEM\CurrentControlSet\Services\rpi5vc4","Start",0x00010001,0x00000001
+HKLM,"SYSTEM\CurrentControlSet\Services\rpi5vc4","Type",0x00010001,0x00000001
+HKLM,"SYSTEM\CurrentControlSet\Services\rpi5vc4","Tag",0x00010001,0x00000002
+HKLM,"SYSTEM\CurrentControlSet\Services\rpi5vc4\Video","Service",0x00000000,"rpi5vc4"
+
+HKLM,"SYSTEM\CurrentControlSet\Services\rpi5vc4\Device0","InstalledDisplayDrivers",0x00010000,"framebuf"
+HKLM,"SYSTEM\CurrentControlSet\Services\rpi5vc4\Device0","DefaultSettings.VRefresh",0x00010001,0x00000001
+HKLM,"SYSTEM\CurrentControlSet\Services\rpi5vc4\Device0","DefaultSettings.BitsPerPel",0x00010001,0x00000020
+HKLM,"SYSTEM\CurrentControlSet\Services\rpi5vc4\Device0","DefaultSettings.XResolution",0x00010001,0x00000400
+HKLM,"SYSTEM\CurrentControlSet\Services\rpi5vc4\Device0","DefaultSettings.YResolution",0x00010001,0x00000300
+HKLM,"SYSTEM\CurrentControlSet\Services\rpi5vc4\Device0","Device Description",0x00000000,"Raspberry Pi 5 VC4 Display"
+HKLM,"SYSTEM\CurrentControlSet\Services\rpi5vc4\Device0","VgaCompatible",0x00010001,0x00000000
