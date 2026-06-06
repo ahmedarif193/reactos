@@ -10,9 +10,11 @@
 
 /* INCLUDES *******************************************************************/
 
-#include <ntdef.h>
+#include <ntddk.h>
 #include <dderror.h>
+#define __BROKEN__
 #include <miniport.h>
+#undef __BROKEN__
 #include <video.h>
 #include <devioctl.h>
 
@@ -57,6 +59,13 @@ typedef struct _UEFIFB_DEVICE_EXTENSION
     VIDEO_MODE_INFORMATION ModeInfo;        /* Single mode descriptor */
     PVOID MappedFrameBuffer;                /* Current user-mode mapping */
     ULONG CurrentMode;                      /* Active mode index (always 0) */
+
+    /*
+     * Headless fallback backing store. NULL when scanning out a real firmware
+     * framebuffer; otherwise the kernel VA of the RAM surface synthesised when
+     * the firmware exposed no GOP (no display attached at power-on).
+     */
+    PVOID HeadlessBuffer;
 } UEFIFB_DEVICE_EXTENSION, *PUEFIFB_DEVICE_EXTENSION;
 
 /* KERNEL-EXPORTED GOP ACCESSOR ***********************************************/

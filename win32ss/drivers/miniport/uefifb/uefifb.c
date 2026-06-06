@@ -42,6 +42,80 @@ DriverEntry(
     return VideoPortInitialize(Context1, Context2, &InitData, NULL);
 }
 
+/*
+ * Headless fallback geometry. A modest, universally-supported mode keeps the
+ * contiguous RAM allocation small (~3 MiB) while still giving the desktop a
+ * usable surface. Nothing scans this buffer out, so the exact resolution is
+ * cosmetic - bump it here if a larger off-screen desktop is wanted.
+ */
+#define UEFIFB_HEADLESS_WIDTH  1024
+#define UEFIFB_HEADLESS_HEIGHT 768
+#define UEFIFB_HEADLESS_BPP    32
+
+/*
+ * Synthesise an off-screen framebuffer backed by ordinary RAM. Used when the
+ * firmware exposed no usable GOP framebuffer (e.g. no display was attached at
+ * power-on, so the firmware never allocated one). Presenting a valid adapter -
+ * rather than declining - mirrors how Windows always keeps a basic display
+ * adapter present, and prevents win32k from bugchecking
+ * VIDEO_DRIVER_INIT_FAILURE (0xB4) on a machine that would otherwise have zero
+ * display devices.
+ */
+static
+VP_STATUS
+UefiFbInitHeadlessFallback(
+    _Inout_ PUEFIFB_DEVICE_EXTENSION DeviceExtension)
+{
+    const ULONG Width = UEFIFB_HEADLESS_WIDTH;
+    const ULONG Height = UEFIFB_HEADLESS_HEIGHT;
+    const ULONG BytesPerPixel = UEFIFB_HEADLESS_BPP / 8;
+    const ULONG Pitch = Width * BytesPerPixel;
+    const SIZE_T SizeInBytes = (SIZE_T)Pitch * Height;
+    PHYSICAL_ADDRESS Low, High, Boundary;
+    PVOID Buffer;
+
+    Low.QuadPart = 0;
+    High.QuadPart = (LONGLONG)-1;   /* any RAM; videoport maps it 64-bit safe */
+    Boundary.QuadPart = 0;
+
+    Buffer = MmAllocateContiguousMemorySpecifyCache(SizeInBytes,
+                                                    Low,
+                                                    High,
+                                                    Boundary,
+                                                    MmCached);
+    if (Buffer == NULL)
+    {
+        VideoPortDebugPrint(Error,
+            "UefiFb: headless framebuffer alloc (%lu bytes) failed\n",
+            (ULONG)SizeInBytes);
+        return ERROR_NOT_ENOUGH_MEMORY;
+    }
+
+    VideoPortZeroMemory(Buffer, (ULONG)SizeInBytes);
+
+    DeviceExtension->HeadlessBuffer = Buffer;
+    DeviceExtension->FrameBufferPhysical = MmGetPhysicalAddress(Buffer);
+    DeviceExtension->FrameBufferSize = (ULONG)SizeInBytes;
+    DeviceExtension->ScreenWidth = Width;
+    DeviceExtension->ScreenHeight = Height;
+    DeviceExtension->PixelsPerScanLine = Width;
+    DeviceExtension->BitsPerPixel = UEFIFB_HEADLESS_BPP;
+    DeviceExtension->RedMask = 0x00FF0000;
+    DeviceExtension->GreenMask = 0x0000FF00;
+    DeviceExtension->BlueMask = 0x000000FF;
+    DeviceExtension->ReservedMask = 0xFF000000;
+    DeviceExtension->BytesPerScanLine = Pitch;
+    DeviceExtension->MappedFrameBuffer = NULL;
+    DeviceExtension->CurrentMode = 0;
+
+    VideoPortDebugPrint(Info,
+        "UefiFb: no firmware framebuffer; synthesised %lux%lu headless RAM "
+        "surface at 0x%I64x\n",
+        Width, Height, DeviceExtension->FrameBufferPhysical.QuadPart);
+
+    return NO_ERROR;
+}
+
 VP_STATUS
 NTAPI
 UefiFbFindAdapter(
@@ -67,28 +141,25 @@ UefiFbFindAdapter(
     if (ConfigInfo->Length < sizeof(VIDEO_PORT_CONFIG_INFO))
         return ERROR_INVALID_PARAMETER;
 
-    if (!InbvGetGopFrameBufferInfo(&FbInfo))
-    {
-        VideoPortDebugPrint(Trace,
-            "UefiFb: no GOP framebuffer handoff, declining adapter\n");
-        return ERROR_DEV_NOT_EXIST;
-    }
-
-    if (FbInfo.FrameBufferBase.QuadPart == 0 ||
+    /*
+     * Prefer the real firmware framebuffer when the loader handed one off.
+     * When it did not - a headless boot where no display was attached at
+     * power-on, so the firmware never allocated a GOP framebuffer - fall back
+     * to an off-screen RAM surface so a display device still exists. Declining
+     * here instead leaves the machine with zero display adapters, which
+     * bugchecks win32k with VIDEO_DRIVER_INIT_FAILURE (0xB4).
+     */
+    if (!InbvGetGopFrameBufferInfo(&FbInfo) ||
+        FbInfo.FrameBufferBase.QuadPart == 0 ||
         FbInfo.FrameBufferSize == 0 ||
         FbInfo.HorizontalResolution == 0 ||
         FbInfo.VerticalResolution == 0 ||
         FbInfo.PixelsPerScanLine == 0 ||
         FbInfo.PixelFormat == 0)
     {
-        VideoPortDebugPrint(Error,
-            "UefiFb: invalid GOP info (%lux%lu, pitch %lu, bpp %lu, size %lu)\n",
-            FbInfo.HorizontalResolution,
-            FbInfo.VerticalResolution,
-            FbInfo.PixelsPerScanLine,
-            FbInfo.PixelFormat,
-            FbInfo.FrameBufferSize);
-        return ERROR_DEV_NOT_EXIST;
+        if (UefiFbInitHeadlessFallback(DeviceExtension) != NO_ERROR)
+            return ERROR_DEV_NOT_EXIST;
+        goto Configured;
     }
 
     BytesPerPixel = (FbInfo.PixelFormat + 7) / 8;
@@ -100,10 +171,13 @@ UefiFbFindAdapter(
         VisibleFrameBufferSize > FbInfo.FrameBufferSize)
     {
         VideoPortDebugPrint(Error,
-            "UefiFb: visible size 0x%I64x exceeds aperture 0x%lx\n",
+            "UefiFb: visible size 0x%I64x exceeds aperture 0x%lx, "
+            "using headless surface\n",
             VisibleFrameBufferSize,
             FbInfo.FrameBufferSize);
-        return ERROR_DEV_NOT_EXIST;
+        if (UefiFbInitHeadlessFallback(DeviceExtension) != NO_ERROR)
+            return ERROR_DEV_NOT_EXIST;
+        goto Configured;
     }
 
     DeviceExtension->FrameBufferPhysical = FbInfo.FrameBufferBase;
@@ -129,6 +203,7 @@ UefiFbFindAdapter(
         DeviceExtension->FrameBufferPhysical.QuadPart,
         DeviceExtension->FrameBufferSize);
 
+Configured:
     ConfigInfo->NumEmulatorAccessEntries = 0;
     ConfigInfo->EmulatorAccessEntries = 0;
     ConfigInfo->EmulatorAccessEntriesContext = 0;
