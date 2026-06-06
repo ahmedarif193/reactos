@@ -5304,11 +5304,9 @@ HalInitSystem(
     {
         DPRINT1("[arm64][HAL] ACPI phase0 init failed: 0x%08lx\n", Status);
     }
-    DPRINT1("[BOOTPROF 01] HAL: HalpSetupAcpiPhase0 returned\n");
 
     /* Probe BCM2712 platform (RPi5) — actual MMIO init is deferred */
     Bcm2712PciProbe(LoaderBlock);
-    DPRINT1("[BOOTPROF 02] HAL: Bcm2712PciProbe done; starting GIC distributor init\n");
     /*
      * CRITICAL IRQL MANAGEMENT FOR GIC INITIALIZATION:
      *
@@ -5591,6 +5589,7 @@ HalInitSystem(
     HalInitPnpDriver = HaliInitPnpDriver;
     HalQuerySystemInformation = HaliQuerySystemInformation;
     HalSetSystemInformation = HaliSetSystemInformation;
+    HalGetCachedAcpiTable = HaliGetCachedAcpiTable;
 
     /*
      * Wire up the DMA-adapter factory. The HALDISPATCH HalGetDmaAdapter entry
@@ -5611,7 +5610,6 @@ HalInitSystem(
      */
     KeLowerIrql(OldIrql);
 
-    DPRINT1("[BOOTPROF 03] HAL: phase0 complete (GIC init done); returning to ExpInitializeExecutive\n");
     return TRUE;
 }
 
@@ -8145,14 +8143,23 @@ NTAPI
 HalSetTimeIncrement(
     _In_ ULONG Increment)
 {
-    UNREFERENCED_PARAMETER(Increment);
-
     /*
-     * The ARM64 generic timer path is currently programmed at the fixed HAL
-     * maximum increment. Report the actual achieved resolution so callers do
-     * not believe a 1 ms request changed the interrupt cadence.
+     * Clamp the request to the supported range and return what was actually
+     * achieved (the caller records it in KeTimeIncrement, which the generic
+     * timer ISR reads each tick). The 1 ms floor (10000 * 100ns) is the NT
+     * minimum resolution: KeSetTimeIncrement hard-floors KeMinimumIncrement
+     * at 10000, and ExSetTimerResolution pre-clamps the request to
+     * KeMinimumIncrement before calling us. The literal is used because
+     * KeMinimumIncrement is not exported to the HAL.
      */
-    return KeQueryTimeIncrement();
+    ULONG Maximum = KeQueryTimeIncrement();
+
+    if (Increment < 10000)
+        Increment = 10000;
+    if (Increment > Maximum)
+        Increment = Maximum;
+
+    return Increment;
 }
 
 BOOLEAN
