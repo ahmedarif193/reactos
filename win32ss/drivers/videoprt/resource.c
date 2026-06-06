@@ -447,7 +447,8 @@ IntVideoPortMapMemory(
             VIDEO_PORT_ADDRESS_MAPPING,
             List);
          if (IoAddress.QuadPart == AddressMapping->IoAddress.QuadPart &&
-             NumberOfUchars <= AddressMapping->NumberOfUchars)
+             NumberOfUchars <= AddressMapping->NumberOfUchars &&
+             ((InIoSpace ^ AddressMapping->InIoSpace) & VIDEO_MEMORY_SPACE_P6CACHE) == 0)
          {
             {
                AddressMapping->MappingCount++;
@@ -511,10 +512,17 @@ IntVideoPortMapMemory(
    }
    else /* kernel space */
    {
+      MEMORY_CACHING_TYPE CacheType;
+
+      /* Honor P6CACHE as a write-combined mapping, mirroring the user-mode
+       * branch above (PAGE_WRITECOMBINE vs PAGE_NOCACHE). */
+      CacheType = (InIoSpace & VIDEO_MEMORY_SPACE_P6CACHE) ?
+         MmWriteCombined : MmNonCached;
+
       MappedAddress = MmMapIoSpace(
          TranslatedAddress,
          NumberOfUchars,
-         MmNonCached);
+         CacheType);
    }
 
    if (MappedAddress != NULL)
@@ -537,6 +545,7 @@ IntVideoPortMapMemory(
          AddressMapping->NumberOfUchars = NumberOfUchars;
          AddressMapping->IoAddress = IoAddress;
          AddressMapping->SystemIoBusNumber = DeviceExtension->SystemIoBusNumber;
+         AddressMapping->InIoSpace = InIoSpace;
          AddressMapping->MappedAddress = MappedAddress;
          AddressMapping->MappingCount = 1;
          InsertHeadList(

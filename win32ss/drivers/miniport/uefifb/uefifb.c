@@ -78,11 +78,15 @@ UefiFbInitHeadlessFallback(
     High.QuadPart = (LONGLONG)-1;   /* any RAM; videoport maps it 64-bit safe */
     Boundary.QuadPart = 0;
 
+    /*
+     * Write-combined to match videoport's P6CACHE mapping of these same pages;
+     * a cached alias here would be a mismatched-attribute alias on ARM64.
+     */
     Buffer = MmAllocateContiguousMemorySpecifyCache(SizeInBytes,
                                                     Low,
                                                     High,
                                                     Boundary,
-                                                    MmCached);
+                                                    MmWriteCombined);
     if (Buffer == NULL)
     {
         VideoPortDebugPrint(Error,
