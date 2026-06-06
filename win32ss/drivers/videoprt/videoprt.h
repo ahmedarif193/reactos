@@ -48,6 +48,7 @@ typedef struct _VIDEO_PORT_ADDRESS_MAPPING
    ULONG NumberOfUchars;
    PHYSICAL_ADDRESS IoAddress;
    ULONG SystemIoBusNumber;
+   ULONG InIoSpace;
    UINT MappingCount;
 } VIDEO_PORT_ADDRESS_MAPPING, *PVIDEO_PORT_ADDRESS_MAPPING;
 
