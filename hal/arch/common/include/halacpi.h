@@ -256,6 +256,14 @@ HalAcpiGetTable(
     _In_ ULONG Signature
     );
 
+PVOID
+NTAPI
+HaliGetCachedAcpiTable(
+    _In_ ULONG Signature,
+    _In_opt_ PCSTR OemId,
+    _In_opt_ PCSTR OemTableId
+    );
+
 ULONG
 NTAPI
 HalpAcpiTimerRead(VOID);

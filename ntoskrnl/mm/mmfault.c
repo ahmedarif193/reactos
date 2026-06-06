@@ -299,7 +299,10 @@ MmNotPresentFault(KPROCESSOR_MODE Mode,
             // passed in.
             if (!AddressSpaceLocked)
                 MmUnlockAddressSpace(AddressSpace);
-            Status = MmNotPresentFaultCacheSection(Mode, Address, AddressSpaceLocked);
+            Status = MmNotPresentFaultCacheSection(Mode,
+                                                   Address,
+                                                   AddressSpaceLocked,
+                                                   MI_IS_WRITE_ACCESS(FaultCode));
             if (!AddressSpaceLocked)
                 MmLockAddressSpace(AddressSpace);
             break;

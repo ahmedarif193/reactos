@@ -348,7 +348,8 @@ NTSTATUS
 NTAPI
 MmNotPresentFaultCacheSection(KPROCESSOR_MODE Mode,
                               ULONG_PTR Address,
-                              BOOLEAN FromMdl);
+                              BOOLEAN FromMdl,
+                              BOOLEAN WriteAccess);
 
 ULONG
 NTAPI

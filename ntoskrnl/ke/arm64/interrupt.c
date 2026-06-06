@@ -30,6 +30,7 @@ static KSPIN_LOCK KiArm64IntTableLock;
 static KINTERRUPT KiArm64TimerInterrupt;
 static KSPIN_LOCK KiArm64TimerLock;
 static ULONGLONG KiArm64TimerPeriodTicks;
+static ULONGLONG KiArm64TimerFrequency;
 static KINTERRUPT KiArm64IpiInterrupt;
 static KSPIN_LOCK KiArm64IpiLock;
 static KINTERRUPT KiArm64DpcInterrupt;
@@ -71,6 +72,43 @@ KiArm64GetCurrentInterruptTrapFrame(VOID)
 
 static inline void KiRawDebugPuts(const char *str) {
     UNREFERENCED_PARAMETER(str);
+}
+
+static __inline ULONGLONG KiArm64ReadCntFrq(void);
+
+static
+ULONG
+KiArm64CurrentTimerIncrement(VOID)
+{
+    ULONG Increment = KeTimeIncrement;
+
+    if (Increment == 0)
+        Increment = KeMaximumIncrement;
+    if (Increment == 0)
+        Increment = 100000;
+    if (KeMinimumIncrement && Increment < KeMinimumIncrement)
+        Increment = KeMinimumIncrement;
+    if (KeMaximumIncrement && Increment > KeMaximumIncrement)
+        Increment = KeMaximumIncrement;
+
+    return Increment;
+}
+
+static
+ULONGLONG
+KiArm64ComputeTimerPeriodTicks(
+    _In_ ULONG Increment)
+{
+    ULONGLONG Frequency = KiArm64TimerFrequency;
+    ULONGLONG Period;
+
+    if (Frequency == 0)
+        Frequency = KiArm64ReadCntFrq();
+    if (Frequency == 0 || Frequency > 10000000000ULL)
+        Frequency = 100000000ULL;
+
+    Period = (Frequency * Increment) / 10000000ULL;
+    return Period ? Period : 1;
 }
 
 BOOLEAN
@@ -201,32 +239,24 @@ KiArm64TimerIsr(
     _In_ PKINTERRUPT Interrupt,
     _In_opt_ PVOID ServiceContext)
 {
-    ULONGLONG period = (ServiceContext) ? *(volatile ULONGLONG*)ServiceContext : KiArm64TimerPeriodTicks;
+    ULONGLONG period;
     ULONG Increment;
     PKTRAP_FRAME TrapFrame;
     ULONG Cpu;
     UNREFERENCED_PARAMETER(Interrupt);
+    UNREFERENCED_PARAMETER(ServiceContext);
 
     KiTimerIsrCallCount++;
+
+    Increment = KiArm64CurrentTimerIncrement();
+    period = KiArm64ComputeTimerPeriodTicks(Increment);
+    KiArm64TimerPeriodTicks = period;
 
     /* Reload next tick first to minimize jitter. */
     if (KiArm64UseVirtualTimer)
         KiArm64WriteCntvTval(period);
     else
         KiArm64WriteCntpTval(period);
-
-    /*
-     * Calculate the time increment in 100-nanosecond units.
-     * ARM64 currently runs the generic timer at the HAL maximum increment.
-     * Lower timer resolutions are not applied until the ARM64 HAL has a fully
-     * validated dynamic clock-rate path.
-     */
-    Increment = KeQueryTimeIncrement();
-    if (Increment == 0)
-    {
-        /* Fallback: 10ms at 100 Hz */
-        Increment = 100000;
-    }
 
     /*
      * Call KeUpdateSystemTime to:
@@ -346,17 +376,9 @@ KiArm64StartLocalTimer(VOID)
         frq = 100000000ULL;
     }
 
-    Increment = KeQueryTimeIncrement();
-    if (Increment == 0)
-    {
-        Increment = 100000;
-    }
-
-    KiArm64TimerPeriodTicks = (frq * Increment) / 10000000ULL;
-    if (KiArm64TimerPeriodTicks == 0)
-    {
-        KiArm64TimerPeriodTicks = 1;
-    }
+    KiArm64TimerFrequency = frq;
+    Increment = KiArm64CurrentTimerIncrement();
+    KiArm64TimerPeriodTicks = KiArm64ComputeTimerPeriodTicks(Increment);
 
     if (KiArm64UseVirtualTimer)
     {
