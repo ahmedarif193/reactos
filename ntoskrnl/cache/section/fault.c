@@ -109,6 +109,7 @@ MmNotPresentFaultCachePage (
     _In_ MEMORY_AREA* MemoryArea,
     _In_ PVOID Address,
     _In_ BOOLEAN Locked,
+    _In_ BOOLEAN WriteAccess,
     _Inout_ PMM_REQUIRED_RESOURCES Required)
 {
     NTSTATUS Status;
@@ -152,7 +153,6 @@ MmNotPresentFaultCachePage (
 
     if (Segment->FileObject)
     {
-        __debugbreak();
         DPRINT("FileName %wZ\n", &Segment->FileObject->FileName);
     }
 
@@ -164,7 +164,7 @@ MmNotPresentFaultCachePage (
     /* Get the entry corresponding to the offset within the section */
     Entry = MmGetPageEntrySectionSegment(Segment, &TotalOffset);
 
-    Attributes = PAGE_READONLY;
+    Attributes = WriteAccess ? PAGE_READWRITE : PAGE_READONLY;
 
     if (Required->State && Required->Page[0])
     {
@@ -178,9 +178,15 @@ MmNotPresentFaultCachePage (
         if (Required->State & 2)
         {
             DPRINT("Set in section @ %x\n", TotalOffset.LowPart);
+            Entry = MAKE_PFN_SSE(Required->Page[0]);
+            if (WriteAccess)
+            {
+                Entry = DIRTY_SSE(Entry);
+            }
+
             Status = MmSetPageEntrySectionSegment(Segment,
                                                   &TotalOffset,
-                                                  Entry = MAKE_PFN_SSE(Required->Page[0]));
+                                                  Entry);
             if (!NT_SUCCESS(Status))
             {
                 MmReleasePageMemoryConsumer(MC_CACHE, Required->Page[0]);
@@ -247,6 +253,11 @@ MmNotPresentFaultCachePage (
         if (NT_SUCCESS(Status))
         {
             MmInsertRmap(Page, Process, Address);
+            if (WriteAccess)
+            {
+                MmSetPageEntrySectionSegment(Segment, &TotalOffset, DIRTY_SSE(Entry));
+                MmSetDirtyPage(Process, PAddress);
+            }
         }
         DPRINT("XXX Set Event %x\n", Status);
         MiSetPageEvent(Process, Address);
@@ -753,6 +764,7 @@ MmNotPresentFaultCacheSectionInner(KPROCESSOR_MODE Mode,
                                    PMMSUPPORT AddressSpace,
                                    ULONG_PTR Address,
                                    BOOLEAN FromMdl,
+                                   BOOLEAN WriteAccess,
                                    PETHREAD Thread)
 {
     BOOLEAN Locked = FromMdl;
@@ -807,6 +819,7 @@ MmNotPresentFaultCacheSectionInner(KPROCESSOR_MODE Mode,
                                             MemoryArea,
                                             (PVOID)Address,
                                             Locked,
+                                            WriteAccess,
                                             &Resources);
 
         if (!FromMdl)
@@ -911,7 +924,8 @@ NTSTATUS
 NTAPI
 MmNotPresentFaultCacheSection(KPROCESSOR_MODE Mode,
                               ULONG_PTR Address,
-                              BOOLEAN FromMdl)
+                              BOOLEAN FromMdl,
+                              BOOLEAN WriteAccess)
 {
     PETHREAD Thread;
     PMMSUPPORT AddressSpace;
@@ -953,6 +967,7 @@ MmNotPresentFaultCacheSection(KPROCESSOR_MODE Mode,
                                                 AddressSpace,
                                                 Address,
                                                 FromMdl,
+                                                WriteAccess,
                                                 Thread);
     Thread->ActiveFaultCount--;
 

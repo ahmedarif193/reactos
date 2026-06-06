@@ -112,7 +112,7 @@ KiArm64CopyToCurrentUserBuffer(
             ChunkSize = RemainingSize;
         }
 
-        Status = MmAccessFaultEx(FALSE, PageAddress, UserMode, NULL, FALSE);
+        Status = MmAccessFaultEx(0x2, PageAddress, UserMode, NULL, FALSE);
         if (!NT_SUCCESS(Status))
         {
             return Status;

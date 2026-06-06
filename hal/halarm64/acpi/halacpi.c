@@ -2055,6 +2055,69 @@ HalAcpiGetTable(IN PLOADER_PARAMETER_BLOCK LoaderBlock,
     return TableHeader;
 }
 
+static BOOLEAN
+HalpAcpiStringMatches(
+    _In_reads_(FieldLength) const UCHAR *Field,
+    _In_ ULONG FieldLength,
+    _In_opt_ PCSTR Match)
+{
+    ULONG i;
+
+    if (!Match)
+        return TRUE;
+
+    for (i = 0; i < FieldLength; ++i)
+    {
+        if (Match[i] == ANSI_NULL)
+            break;
+
+        if (Field[i] != (UCHAR)Match[i])
+            return FALSE;
+    }
+
+    if (i == FieldLength)
+        return Match[i] == ANSI_NULL;
+
+    while (i < FieldLength)
+    {
+        if (Field[i] != ' ' && Field[i] != ANSI_NULL)
+            return FALSE;
+        ++i;
+    }
+
+    return TRUE;
+}
+
+PVOID
+NTAPI
+HaliGetCachedAcpiTable(
+    _In_ ULONG Signature,
+    _In_opt_ PCSTR OemId,
+    _In_opt_ PCSTR OemTableId)
+{
+    PDESCRIPTION_HEADER TableHeader;
+
+    TableHeader = HalAcpiGetTable(NULL, Signature);
+    if (!TableHeader)
+        return NULL;
+
+    if (!HalpAcpiStringMatches(TableHeader->OEMID,
+                               sizeof(TableHeader->OEMID),
+                               OemId))
+    {
+        return NULL;
+    }
+
+    if (!HalpAcpiStringMatches(TableHeader->OEMTableID,
+                               sizeof(TableHeader->OEMTableID),
+                               OemTableId))
+    {
+        return NULL;
+    }
+
+    return TableHeader;
+}
+
 VOID
 NTAPI
 HalpNumaInitializeStaticConfiguration(IN PLOADER_PARAMETER_BLOCK LoaderBlock)
