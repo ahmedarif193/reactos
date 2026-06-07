@@ -764,6 +764,31 @@ HalpGicItsEnableLpi(
                                       HAL_ARM64_LPI_PROP_GROUP1 |
                                       HAL_ARM64_LPI_PROP_ENABLED);
     HalpArm64CleanDcacheRange(&HalpGicLpiConfig[Index], sizeof(UCHAR));
+
+    /*
+     * The redistributor caches LPI configuration; the table write above is not
+     * observed until an INVALL is issued, so the LPI would stay disabled and the
+     * MSI never fire. Invalidate the current CPU's collection (ICID == CPU) on
+     * every ITS node.
+     */
+    {
+        ULONG Cpu = KeGetCurrentProcessorNumber();
+        ULONG Node;
+
+        for (Node = 0; Node < HalpGicItsNodeCount; ++Node)
+        {
+            PHALP_GIC_ITS_NODE ItsNode = &HalpGicItsNodes[Node];
+            UINT64 Cmd[4];
+
+            if (!ItsNode->Enabled)
+                continue;
+
+            RtlZeroMemory(Cmd, HAL_ARM64_ITS_CMD_ENTRY_SIZE);
+            Cmd[0] = (UINT64)GITS_CMD_INVALL;
+            Cmd[2] = (UINT64)(Cpu & 0xFFFFu); /* ICID = collection = CPU */
+            HalpGicItsPostCommandOnNode(ItsNode, Cmd);
+        }
+    }
 }
 
 VOID
