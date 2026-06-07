@@ -19,135 +19,7 @@
 #include "bcm2712_pci.h"
 #include <debug.h>
 
-/*
- * GICv4 VLPI/vPE support forward declarations
- * These are defined in gic/gic_internal.h and implemented in gic module
- */
-
-/* Forward declaration of vPE structure */
-typedef struct _HALP_GIC_VPE *PHALP_GIC_VPE;
-
-/* GIC version and capability information */
-typedef struct _HALP_GIC_VERSION_INFO_FWD
-{
-    ULONG Architecture;
-    BOOLEAN HasExtendedSpiRange;
-    BOOLEAN HasMessageBasedSpi;
-    BOOLEAN HasRangeSelector;
-    ULONG ExtendedSpiStart;
-    ULONG ExtendedSpiCount;
-    BOOLEAN HasVlpis;
-    BOOLEAN HasDirectLpi;
-    BOOLEAN HasRvpeid;
-    BOOLEAN HasItsVirtual;
-    ULONG VpeidBits;
-    ULONG MaxVpeid;
-    ULONG MaxSpiId;
-    ULONG MaxLpiId;
-    ULONG TotalInterruptLines;
-    BOOLEAN Initialized;
-} HALP_GIC_VERSION_INFO_FWD;
-
-/* Extern declarations for GICv4 state (defined in gic_init.c) */
-extern HALP_GIC_VERSION_INFO_FWD HalpGicVersionInfo;
-extern BOOLEAN HalpGicHasVlpis;
-extern BOOLEAN HalpGicHasDirectLpi;
-extern BOOLEAN HalpGicIsGicv4_1;
-extern PHALP_GIC_VPE *HalpGicVpeTable;
-extern ULONG HalpGicVpeTableSize;
-
-/* Extern declarations for ITS state (defined in gic_common.c and gic_its.c) */
-extern ULONG HalpGicItsNodeCount;
-extern ULONGLONG HalpGicItsBase;
-extern ULONG HalpGicItsId;
-extern BOOLEAN HalpGicItsPresent;
-extern BOOLEAN HalpGicItsEnabled;
-
-/* Extern declarations for GICv2m MSI state (defined in gic_common.c) */
-extern ULONGLONG HalpGicMsiFrameBase;
-extern USHORT HalpGicMsiSpiBase;
-extern USHORT HalpGicMsiSpiCount;
-extern ULONG HalpGicMsiFlags;
-extern BOOLEAN HalpGicMsiPresent;
-
-/* Extern declarations for GIC detection/state variables (defined in gic_common.c) */
-extern BOOLEAN HalpGicUseSysRegs;
-extern BOOLEAN HalpForceSysRegs;
-extern BOOLEAN HalpForceLegacyGic;
-extern ULONG HalpGicArchRev;
-extern BOOLEAN HalpGicParsedMadt;
-extern BOOLEAN HalpGicInterfaceSelected;
-extern BOOLEAN HalpGiccPresent;
-extern ULONG HalpGicLpiCount;
-
-/*
- * Forward declaration of HALP_GIC_ITS_NODE structure for ITS initialization.
- * This is a simplified version that matches the layout in gic/gic_internal.h.
- * We only need to initialize the first few fields (PhysicalBase, VirtualBase,
- * ItsId, ListNumber, InitState) plus the spinlocks for basic ITS operation.
- */
-#define HALP_GIC_MAX_ITS_NODES_FWD 8
-typedef struct _HALP_GIC_ITS_NODE_FWD
-{
-    /* Physical and virtual base addresses - must match gic_internal.h layout */
-    PHYSICAL_ADDRESS PhysicalBase;      /* offset 0 */
-    ULONG_PTR VirtualBase;              /* offset 8 (or 16 on 64-bit) */
-
-    /* ITS identification */
-    ULONG ItsId;                        /* From ACPI MADT */
-    ULONG ListNumber;                   /* Position in its_list_map */
-
-    /* Capabilities from GITS_TYPER (12 bytes of fields we don't init) */
-    ULONGLONG Typer;
-    ULONG DeviceIdBits;
-    ULONG EventIdBits;
-    ULONG IttEntrySize;
-    ULONG MaxDeviceId;
-    BOOLEAN HasVlpis;
-    BOOLEAN HasVmovp;
-
-    /* Command queue (skip to spinlock at known offset) */
-    PVOID CmdQueueBase;
-    PHYSICAL_ADDRESS CmdQueuePa;
-    ULONG CmdWriteIndex;
-    ULONG CmdQueueEntries;
-    BOOLEAN CmdQueueNeedsFlush;
-    KSPIN_LOCK CmdLock;                 /* We need to init this */
-
-    /* Device table fields - skip to DeviceLock */
-    PVOID DeviceTableBase;
-    PHYSICAL_ADDRESS DeviceTablePa;
-    SIZE_T DeviceTableSize;
-    ULONG DeviceTableEntries;
-    ULONG DeviceTableEntrySize;
-    BOOLEAN DeviceTableFlat;
-    PVOID DeviceTableRaw;
-
-    /* Collection table fields */
-    PVOID CollectionTableBase;
-    PHYSICAL_ADDRESS CollectionTablePa;
-    SIZE_T CollectionTableSize;
-    ULONG CollectionTableEntries;
-    PVOID CollectionTableRaw;
-
-    /* Collections (one per CPU) - large array, skip */
-    BOOLEAN CollectionMapped[MAXIMUM_PROCESSORS];
-    ULONGLONG CollectionTarget[MAXIMUM_PROCESSORS];
-
-    /* Device tracking */
-    PVOID DeviceBuckets;
-    ULONG DeviceBucketCount;
-    ULONG DeviceCount;
-    KSPIN_LOCK DeviceLock;              /* We need to init this */
-
-    /* Initialization state */
-    volatile LONG InitState;            /* We need to init this */
-    BOOLEAN Enabled;
-
-    /* ... rest of structure not needed for basic init */
-} HALP_GIC_ITS_NODE_FWD, *PHALP_GIC_ITS_NODE_FWD;
-
-extern HALP_GIC_ITS_NODE_FWD HalpGicItsNodes[HALP_GIC_MAX_ITS_NODES_FWD];
+#include "gic_internal.h"
 
 /* KiHalInitialized flag is now set by kernel (ex/init.c), not by HAL */
 
@@ -157,18 +29,7 @@ extern HALP_GIC_ITS_NODE_FWD HalpGicItsNodes[HALP_GIC_MAX_ITS_NODES_FWD];
  */
 NTSTATUS NTAPI HaliInitPnpDriver(VOID);
 
-/* GIC version detection (defined in gic_init.c) */
-VOID HalpGicDetectVersion(VOID);
-BOOLEAN HalpGicHasVlpiSupport(VOID);
-
-/* GICv4 vPE management (defined in gic_its.c) */
-NTSTATUS HalpGicItsAllocateVpe(ULONG VmId, ULONG VpIndex, PHALP_GIC_VPE *VpeOut);
-VOID HalpGicItsFreeVpe(PHALP_GIC_VPE Vpe);
-NTSTATUS HalpGicItsScheduleVpe(PHALP_GIC_VPE Vpe, ULONG TargetCpu);
-NTSTATUS HalpGicItsDescheduleVpe(PHALP_GIC_VPE Vpe);
-NTSTATUS HalpGicItsMapVlpi(PHALP_GIC_VPE Vpe, ULONG DeviceId, ULONG EventId, ULONG VirtIntId, BOOLEAN Enabled);
-NTSTATUS HalpGicItsUnmapVlpi(PHALP_GIC_VPE Vpe, ULONG DeviceId, ULONG EventId);
-ULONG HalpGicItsGetVpeId(PHALP_GIC_VPE Vpe);
+BOOLEAN HalpInitGic(_In_opt_ PLOADER_PARAMETER_BLOCK LoaderBlock);
 
 /*
  * ARM64 ADAPTER_OBJECT definition.
@@ -1328,9 +1189,6 @@ HalGetAcpiSciVector(VOID)
 
 ULONG HalpBusType = 0xFFFFFFFF;
 
-/* Forward declaration for ARM64 cache line size detection */
-static ULONG HalpArm64GetCacheLineSize(VOID);
-
 /*
  * ARM64 DMA Subsystem Initialization
  *
@@ -1927,157 +1785,16 @@ HalQueryArm64TimerConfig(
 
 PUCHAR KdComPortInUse = NULL;
 
-/* Very small GICv2-style bring-up for QEMU virt */
-#define HAL_ARM64_GICD_BASE_DEFAULT   0x08000000ULL
-#define HAL_ARM64_GICC_BASE_DEFAULT   0x08010000ULL
-#define HAL_ARM64_GICR_BASE_DEFAULT   0x080A0000ULL
-#define HAL_ARM64_GICR_STRIDE_DEFAULT 0x20000ULL
-#define HAL_ARM64_GICR_SGI_OFFSET_DEFAULT 0x10000ULL
 #define HAL_ARM64_SYSTEM_RANGE_BASE 0xFFFF800000000000ULL
-#define HAL_ARM64_KSEG0_BASE HAL_ARM64_SYSTEM_RANGE_BASE
 #define HAL_ARM64_PHYS_MAP_BASE 0xFFFFFC0000000000ULL
 #define HAL_ARM64_PHYS_ADDR_MASK 0x0000FFFFFFFFFFFFULL
+
 #define HAL_ARM64_GICD_MAP_LENGTH 0x10000ULL
 #define HAL_ARM64_GICR_FRAME_LENGTH 0x20000ULL
 #define HAL_ARM64_ITS_MAP_LENGTH 0x20000ULL
-#define HAL_ARM64_GICV2M_SETSPI 0x40
-#define HAL_ARM64_LPI_BASE 8192u
-#define HAL_ARM64_LPI_COUNT 1024u
-#define HAL_ARM64_LPI_PROP_ENABLED 0x01u
-#define HAL_ARM64_LPI_PROP_GROUP1  0x02u
-#define HAL_ARM64_LPI_PROP_PRIO_DEFAULT 0xA0u
 
-#define GICD_CTLR         0x000
-#define GICD_TYPER        0x004
-#define GICD_IGROUPR      0x080
-#define GICD_ISENABLER    0x100
-#define GICD_ICENABLER    0x180
-#define GICD_ICPENDR      0x280
-#define GICD_IPRIORITYR   0x400
-#define GICD_ITARGETSR    0x800
-#define GICD_SGIR         0xF00
-#define GICD_IROUTER      0x6100
-
-#define GICC_CTLR         0x000
-#define GICC_PMR          0x004
-#define GICC_BPR          0x008
-#define GICC_IAR          0x00C
-#define GICC_EOIR         0x010
-
-/* GICv3 Redistributor (SGI/PPI) registers */
-#define GICR_CTLR         0x000
-#define GICR_TYPER        0x008
-#define GICR_WAKER        0x014
-#define GICR_IGROUPR0     0x080
-#define GICR_IGRPMODR0    0xD00  /* Group modifier register (determines Secure/NonSecure) */
-#define GICR_ISENABLER0   0x100
-#define GICR_ICENABLER0   0x180
-#define GICR_ISPENDR0     0x200
-#define GICR_ICPENDR0     0x280
-#define GICR_ISACTIVER0   0x300
-#define GICR_ICACTIVER0   0x380
-#define GICR_IPRIORITYR   0x400
-#define GICR_ICFGR0       0xC00  /* Interrupt config register for SGIs (read-only) */
-#define GICR_ICFGR1       0xC04  /* Interrupt config register for PPIs */
-#define GICR_PROPBASER    0x070
-#define GICR_PENDBASER    0x078
-
-/* GICD Interrupt Configuration Register - offset 0xC00 from GICD base */
-#define GICD_ICFGR        0xC00
-
-#define GITS_CTLR         0x0000
-#define GITS_TYPER        0x0008
-#define GITS_CBASER       0x0080
-#define GITS_CWRITER      0x0088
-#define GITS_CREADR       0x0090
-#define GITS_BASER        0x0100
-#define GITS_TRANSLATER   0x10000
-#define HAL_ARM64_GITS_BASER_COUNT 8
-
-#define GITS_CMD_SYNC     0x05
-#define GITS_CMD_MAPD     0x08
-#define GITS_CMD_MAPC     0x09
-#define GITS_CMD_MAPTI    0x0A
-#define GITS_CMD_INV      0x0C
-#define GITS_CMD_INVALL   0x0D
-
-#define GITS_TYPER_ITT_ENTRY_SIZE_SHIFT 4
-#define GITS_TYPER_ITT_ENTRY_SIZE_MASK  0xFULL
-#define GITS_TYPER_IDBITS_SHIFT         8
-#define GITS_TYPER_IDBITS_MASK          0x1FULL
-#define GITS_TYPER_DEVBITS_SHIFT        13
-#define GITS_TYPER_DEVBITS_MASK         0x1FULL
-
-#define GITS_BASER_VALID          (1ULL << 63)
-#define GITS_BASER_TYPE_SHIFT     56
-#define GITS_BASER_TYPE_MASK      0x7ULL
-#define GITS_BASER_ENTRY_SHIFT    48
-#define GITS_BASER_ENTRY_MASK     0x1FULL
-#define GITS_BASER_PAGE_SHIFT     8
-#define GITS_BASER_PAGE_MASK      0x3ULL
-#define GITS_BASER_SIZE_MASK      0xFFULL
-#define GITS_BASER_ADDR_MASK      0x0000FFFFFFFFF000ULL
-#define GITS_BASER_SHARE_SHIFT    10
-#define GITS_BASER_SHARE_INNER    (1ULL << GITS_BASER_SHARE_SHIFT)  /* Inner Shareable */
-#define GITS_BASER_INNER_NC       (1ULL << 59)  /* Non-cacheable */
-#define GITS_BASER_INNER_WAWB     (5ULL << 59)  /* Write-Allocate Write-Back Cacheable */
-
-#define GITS_BASER_TYPE_DEVICE    1
-#define GITS_BASER_TYPE_COLLECTION 2
-
-#define GITS_CBASER_VALID         (1ULL << 63)
-#define GITS_CBASER_SIZE_MASK     0xFFULL
-#define GITS_CBASER_ADDR_MASK     0x0000FFFFFFFFF000ULL
-#define GITS_CBASER_SHARE_SHIFT   10
-#define GITS_CBASER_SHARE_INNER   (1ULL << GITS_CBASER_SHARE_SHIFT)  /* Inner Shareable */
-#define GITS_CBASER_INNER_NC      (1ULL << 59)  /* Non-cacheable */
-#define GITS_CBASER_INNER_WAWB    (5ULL << 59)  /* Write-Allocate Write-Back Cacheable */
-
-#define GICR_PROPBASER_ADDR_MASK   0x0000FFFFFFFFF000ULL
-#define GICR_PROPBASER_IDBITS_MASK 0x1FULL
-#define GICR_PROPBASER_SHARE_INNER (1ULL << 10)  /* Inner Shareable */
-#define GICR_PROPBASER_INNER_NC    (1ULL << 7)   /* Inner Non-cacheable */
-#define GICR_PENDBASER_ADDR_MASK   0x0000FFFFFFFFF000ULL
-#define GICR_PENDBASER_SHARE_INNER (1ULL << 10)  /* Inner Shareable */
-#define GICR_PENDBASER_INNER_NC    (1ULL << 7)   /* Inner Non-cacheable */
-#define GICR_PENDBASER_PTZ         (1ULL << 62)  /* Pending Table Zero (optional) */
-
-#define HAL_ARM64_SGI_IPI 0
-#define HAL_ARM64_SGI_APC 1
-#define HAL_ARM64_SGI_DPC 2
-
-static ULONGLONG HalpGicdBase = HAL_ARM64_GICD_BASE_DEFAULT;
-static ULONGLONG HalpGiccBase = HAL_ARM64_GICC_BASE_DEFAULT;
-static ULONGLONG HalpGicrRegionBase = HAL_ARM64_GICR_BASE_DEFAULT;
-static ULONGLONG HalpGicrRegionLength;
-static ULONG HalpGicrStride = HAL_ARM64_GICR_STRIDE_DEFAULT;
-static ULONG HalpGicrSgiOffset = HAL_ARM64_GICR_SGI_OFFSET_DEFAULT;
-static ULONG_PTR HalpGicrCpuBase[MAXIMUM_PROCESSORS];
-/* HalpGicItsBase, HalpGicItsId, HalpGicItsPresent, HalpGicItsEnabled and
- * HalpGicMsiFrameBase, HalpGicMsiSpiBase, HalpGicMsiSpiCount, HalpGicMsiFlags,
- * HalpGicMsiPresent are now declared as extern at the top of this file and
- * defined in gic_common.c. This ensures halarm64.c and gic_its.c use the
- * same global variables.
- *
- * HalpGicLpiCount, HalpForceSysRegs, HalpGicParsedMadt, HalpGicInterfaceSelected,
- * and HalpGiccPresent are now declared as extern at the top of this file. */
-/* Use identity map until the kernel's private physical alias is established. */
-static BOOLEAN HalpUseIdentityMapping = TRUE;
 static ULONG HalpUsedAllocDescriptors;
 static MEMORY_ALLOCATION_DESCRIPTOR HalpAllocationDescriptorArray[64];
-static BOOLEAN HalpGicPhase0Complete;
-
-#define HALP_ARM64_MAX_DEFERRED_INTERRUPTS 32
-
-typedef struct _HALP_ARM64_DEFERRED_INTERRUPT
-{
-    BOOLEAN Valid;
-    ULONG Vector;
-    KIRQL Irql;
-    KINTERRUPT_MODE InterruptMode;
-} HALP_ARM64_DEFERRED_INTERRUPT, *PHALP_ARM64_DEFERRED_INTERRUPT;
-
-static HALP_ARM64_DEFERRED_INTERRUPT HalpArm64DeferredInterrupts[HALP_ARM64_MAX_DEFERRED_INTERRUPTS];
 
 /*
  * PSCI (Power State Coordination Interface) definitions for ARM64.
@@ -2122,197 +1839,6 @@ extern BOOLEAN HalpArm64WakeParkedCpu(_In_ ULONG ProcessorNumber,
                                       _In_ UINT64 EntryPoint,
                                       _In_ UINT64 ContextId);
 extern VOID HalpArm64EnableCpuInterface(VOID);
-
-#define HAL_ARM64_ITS_CMD_ENTRY_SIZE 32
-#define HAL_ARM64_ITS_CMD_QUEUE_PAGES 4
-
-typedef struct _HALP_ARM64_ITS_DEVICE
-{
-    struct _HALP_ARM64_ITS_DEVICE *Next;
-    USHORT RequesterId;
-    volatile LONG InitState;
-    ULONG IttEntries;
-    PVOID IttVa;
-    PHYSICAL_ADDRESS IttPa;
-} HALP_ARM64_ITS_DEVICE, *PHALP_ARM64_ITS_DEVICE;
-
-static KSPIN_LOCK HalpGicItsLock;
-static BOOLEAN HalpGicItsInitialized;
-static BOOLEAN HalpGicItsInitFailed;
-static volatile LONG HalpGicItsInitState;
-static ULONG_PTR HalpGicItsVa;  /* KSEG0-mapped virtual address of ITS */
-static ULONG HalpGicItsDeviceIdBits;
-static ULONG HalpGicItsEventIdBits;
-static ULONG HalpGicItsEventIdLimit;
-static ULONG HalpGicItsLpiIdBits;
-static ULONG HalpGicItsIttEntrySize;
-static ULONG HalpGicItsDeviceTableEntries;
-static ULONG HalpGicItsCollectionEntries;
-static ULONG HalpGicItsCmdEntries;
-static PHALP_ARM64_ITS_DEVICE *HalpGicItsDeviceBuckets;
-static ULONG HalpGicItsDeviceBucketCount;
-static ULONG HalpGicItsCacheLineSize;
-static UINT64 *HalpGicItsCmdQueue;
-static PHYSICAL_ADDRESS HalpGicItsCmdQueuePa;
-static ULONG HalpGicItsCmdWrite;
-static PVOID HalpGicItsDeviceTableRaw;
-static PVOID HalpGicItsDeviceTable;
-static PHYSICAL_ADDRESS HalpGicItsDeviceTablePa;
-static SIZE_T HalpGicItsDeviceTableBytes;
-static PVOID HalpGicItsCollectionTableRaw;
-static PVOID HalpGicItsCollectionTable;
-static PHYSICAL_ADDRESS HalpGicItsCollectionTablePa;
-static SIZE_T HalpGicItsCollectionTableBytes;
-static PVOID HalpGicLpiConfigRaw;
-static UCHAR *HalpGicLpiConfig;
-static PHYSICAL_ADDRESS HalpGicLpiConfigPa;
-static SIZE_T HalpGicLpiConfigSize;
-static PVOID HalpGicLpiPendingRaw[MAXIMUM_PROCESSORS];
-static UCHAR *HalpGicLpiPending[MAXIMUM_PROCESSORS];
-static PHYSICAL_ADDRESS HalpGicLpiPendingPa[MAXIMUM_PROCESSORS];
-static BOOLEAN HalpGicItsCollectionMapped[MAXIMUM_PROCESSORS];
-
-/* Default interrupt affinity - defined in gic/gic_common.c */
-extern KAFFINITY HalpDefaultInterruptAffinity;
-
-volatile ULONG *HalpMmio(ULONG_PTR Base, ULONG Offset);
-ULONGLONG HalpMmioRead64(ULONG_PTR Base, ULONG Offset);
-VOID HalpMmioWrite64(ULONG_PTR Base, ULONG Offset, ULONGLONG Value);
-static __inline ULONG_PTR HalpGicrBase(_In_ ULONG Cpu);
-static VOID HalpArm64ApplyDeferredInterruptEnables(VOID);
-
-/* ARM64 system register accessors - forward declarations */
-FORCEINLINE ULONGLONG HalpReadMpidr(void);
-FORCEINLINE ULONGLONG HalpReadMidr(void);
-FORCEINLINE ULONGLONG HalpReadPfr0(void);
-
-static __inline ULONG
-HalpGicItsLog2(_In_ ULONG Value)
-{
-    ULONG Log = 0;
-
-    while (Value > 1)
-    {
-        Value >>= 1;
-        Log++;
-    }
-
-    return Log;
-}
-
-static __inline ULONG
-HalpGicItsRoundUpPow2(_In_ ULONG Value)
-{
-    ULONG Pow2 = 1;
-
-    if (Value == 0)
-        return 1;
-
-    while ((Pow2 < Value) && (Pow2 < (1UL << 30)))
-        Pow2 <<= 1;
-
-    return Pow2;
-}
-
-static __inline ULONG
-HalpGicItsDeviceHash(_In_ USHORT RequesterId)
-{
-    ULONG Mask = HalpGicItsDeviceBucketCount ? (HalpGicItsDeviceBucketCount - 1) : 0;
-    return (ULONG)RequesterId & Mask;
-}
-
-static BOOLEAN
-HalpGicItsInitDeviceMap(_In_ ULONG DeviceLimit)
-{
-    ULONG Target;
-    SIZE_T Bytes;
-
-    if (HalpGicItsDeviceBuckets)
-        return TRUE;
-
-    Target = DeviceLimit;
-    if (Target == 0)
-        Target = 1;
-    if (Target > 4096)
-        Target = 4096;
-
-    HalpGicItsDeviceBucketCount = 1;
-    while (HalpGicItsDeviceBucketCount < Target)
-        HalpGicItsDeviceBucketCount <<= 1;
-
-    if (HalpGicItsDeviceBucketCount < 64)
-        HalpGicItsDeviceBucketCount = 64;
-
-    Bytes = (SIZE_T)HalpGicItsDeviceBucketCount * sizeof(*HalpGicItsDeviceBuckets);
-    HalpGicItsDeviceBuckets = ExAllocatePoolWithTag(NonPagedPool, Bytes, TAG_HAL);
-    if (!HalpGicItsDeviceBuckets)
-        return FALSE;
-
-    RtlZeroMemory(HalpGicItsDeviceBuckets, Bytes);
-    return TRUE;
-}
-
-static ULONG
-HalpArm64GetCacheLineSize(VOID)
-{
-    ULONGLONG Ctr;
-    ULONG Line;
-
-    if (HalpGicItsCacheLineSize)
-        return HalpGicItsCacheLineSize;
-
-    __asm__ __volatile__("mrs %0, ctr_el0" : "=r"(Ctr));
-    Line = 4u << ((ULONG)((Ctr >> 16) & 0xF));
-    if ((Line & (Line - 1)) != 0 || Line < 16)
-        Line = 64;
-
-    HalpGicItsCacheLineSize = Line;
-    return Line;
-}
-
-static VOID
-HalpArm64CleanDcacheRange(_In_ PVOID Base, _In_ SIZE_T Length)
-{
-    ULONG_PTR Start;
-    ULONG_PTR End;
-    ULONG Line;
-
-    if (!Base || Length == 0)
-        return;
-
-    Line = HalpArm64GetCacheLineSize();
-    Start = (ULONG_PTR)Base & ~((ULONG_PTR)Line - 1);
-    End = (ULONG_PTR)Base + Length;
-
-    for (ULONG_PTR Address = Start; Address < End; Address += Line)
-    {
-        __asm__ __volatile__("dc cvac, %0" :: "r"(Address) : "memory");
-    }
-
-    __asm__ __volatile__("dsb ish" ::: "memory");
-}
-
-static VOID
-HalpArm64CleanInvalidateDcacheRange(_In_ PVOID Base, _In_ SIZE_T Length)
-{
-    ULONG_PTR Start;
-    ULONG_PTR End;
-    ULONG Line;
-
-    if (!Base || Length == 0)
-        return;
-
-    Line = HalpArm64GetCacheLineSize();
-    Start = (ULONG_PTR)Base & ~((ULONG_PTR)Line - 1);
-    End = (ULONG_PTR)Base + Length;
-
-    __asm__ __volatile__("dsb ish" ::: "memory");
-    for (ULONG_PTR Address = Start; Address < End; Address += Line)
-    {
-        __asm__ __volatile__("dc civac, %0" :: "r"(Address) : "memory");
-    }
-    __asm__ __volatile__("dsb ish" ::: "memory");
-}
 
 static BOOLEAN
 HalpArm64FlushMdlDcacheRange(_In_ PMDL Mdl,
@@ -2399,986 +1925,6 @@ HalpArm64FlushMdlDcacheRange(_In_ PMDL Mdl,
     return TRUE;
 }
 
-static ULONG
-HalpGicItsSelectCpuFromAffinity(_In_ ULONGLONG Affinity)
-{
-    ULONG Cpu = KeGetCurrentProcessorNumber();
-    ULONG Limit = sizeof(ULONGLONG) * 8;
-    ULONG MaxCpu = (MAXIMUM_PROCESSORS < Limit) ? MAXIMUM_PROCESSORS : Limit;
-
-    if (Affinity == 0)
-        return Cpu;
-
-    for (Cpu = 0; Cpu < MaxCpu; ++Cpu)
-    {
-        if (Affinity & (1ULL << Cpu))
-            return Cpu;
-    }
-
-    return 0;
-}
-
-static PVOID
-HalpGicItsAllocAligned(
-    _In_ SIZE_T Size,
-    _In_ SIZE_T Alignment,
-    _Out_ PPHYSICAL_ADDRESS Physical,
-    _Out_opt_ PVOID *RawOut)
-{
-    PHYSICAL_ADDRESS Low;
-    PHYSICAL_ADDRESS High;
-    PHYSICAL_ADDRESS Boundary;
-    SIZE_T Total;
-    PVOID Raw;
-    ULONG_PTR Aligned;
-    SIZE_T Align = Alignment;
-
-    if (Size == 0)
-        return NULL;
-
-    if (Align < PAGE_SIZE)
-        Align = PAGE_SIZE;
-
-    if (Align & (Align - 1))
-    {
-        SIZE_T Pow2 = PAGE_SIZE;
-        while (Pow2 < Align)
-            Pow2 <<= 1;
-        Align = Pow2;
-    }
-
-    Low.QuadPart = 0;
-    High.QuadPart = ~0ULL;
-    Boundary.QuadPart = 0;
-    Total = Size + Align;
-
-    /*
-     * Use cached memory for ITS tables. The ITS hardware can access
-     * cached memory with proper cache maintenance, and some emulators
-     * (QEMU) work better with normal memory rather than device memory.
-     */
-    Raw = MmAllocateContiguousMemorySpecifyCache(Total,
-                                                 Low,
-                                                 High,
-                                                 Boundary,
-                                                 MmCached);
-    if (!Raw)
-        return NULL;
-
-    Aligned = ((ULONG_PTR)Raw + (Align - 1)) & ~(Align - 1);
-    if (Physical)
-        *Physical = MmGetPhysicalAddress((PVOID)Aligned);
-    if (RawOut)
-        *RawOut = Raw;
-
-    RtlZeroMemory((PVOID)Aligned, Size);
-    return (PVOID)Aligned;
-}
-
-static BOOLEAN
-HalpGicItsSetupBaserTable(
-    _In_ ULONG Type,
-    _In_ ULONG DesiredEntries,
-    _Out_ PVOID *TableRaw,
-    _Out_ PVOID *Table,
-    _Out_ PPHYSICAL_ADDRESS TablePa,
-    _Out_ PSIZE_T TableBytes,
-    _Out_ PULONG ActualEntries)
-{
-    for (ULONG Index = 0; Index < HAL_ARM64_GITS_BASER_COUNT; ++Index)
-    {
-        ULONGLONG Baser = HalpMmioRead64(HalpGicItsVa, GITS_BASER + (Index * 8));
-        ULONG BaserType = (ULONG)((Baser >> GITS_BASER_TYPE_SHIFT) & GITS_BASER_TYPE_MASK);
-        ULONG EntrySize;
-        ULONG PageField;
-        SIZE_T PageSize;
-        ULONG EntriesPerPage;
-        ULONG MaxPages = 256;
-        ULONG Entries;
-        ULONG Pages;
-        SIZE_T Bytes;
-        PHYSICAL_ADDRESS Pa;
-        PVOID Raw;
-        PVOID Aligned;
-        ULONGLONG NewBaser;
-        ULONGLONG Indirect;
-
-        DPRINT1("[arm64][ITS] GITS_BASER[%u]=0x%llx Type=%u\n", Index, Baser, BaserType);
-
-        if (BaserType != Type)
-            continue;
-
-        /* Check if this BASER uses indirect tables */
-        Indirect = (Baser >> 62) & 1ULL;
-        if (Indirect)
-        {
-            DPRINT1("[arm64][ITS] BASER[%u] uses INDIRECT tables - not supported yet\n", Index);
-            return FALSE;
-        }
-
-        EntrySize = (ULONG)((Baser >> GITS_BASER_ENTRY_SHIFT) & GITS_BASER_ENTRY_MASK) + 1;
-        PageField = (ULONG)((Baser >> GITS_BASER_PAGE_SHIFT) & GITS_BASER_PAGE_MASK);
-        PageSize = 4096ULL << (PageField * 2);
-        if (PageSize < PAGE_SIZE)
-            PageSize = PAGE_SIZE;
-
-        EntriesPerPage = (ULONG)(PageSize / EntrySize);
-        if (EntriesPerPage == 0)
-            return FALSE;
-
-        Entries = DesiredEntries;
-        if (Entries == 0)
-            Entries = EntriesPerPage;
-
-        if (Entries > EntriesPerPage * MaxPages)
-            Entries = EntriesPerPage * MaxPages;
-
-        Pages = (Entries + EntriesPerPage - 1) / EntriesPerPage;
-        if (Pages == 0)
-            Pages = 1;
-        if (Pages > MaxPages)
-            Pages = MaxPages;
-
-        Bytes = (SIZE_T)Pages * PageSize;
-        Aligned = HalpGicItsAllocAligned(Bytes, PageSize, &Pa, &Raw);
-        if (!Aligned)
-            return FALSE;
-
-        HalpArm64CleanInvalidateDcacheRange(Aligned, Bytes);
-
-        NewBaser = Baser;
-        NewBaser &= ~(GITS_BASER_ADDR_MASK | GITS_BASER_SIZE_MASK | GITS_BASER_VALID);
-        NewBaser |= (Pa.QuadPart & GITS_BASER_ADDR_MASK);
-        NewBaser |= ((ULONGLONG)(Pages - 1) & GITS_BASER_SIZE_MASK);
-        NewBaser |= GITS_BASER_SHARE_INNER;
-        NewBaser |= GITS_BASER_INNER_WAWB;
-        NewBaser |= GITS_BASER_VALID;
-
-        HalpMmioWrite64(HalpGicItsVa, GITS_BASER + (Index * 8), NewBaser);
-        __asm__ __volatile__("dsb sy" ::: "memory");
-
-        /* Read back to verify */
-        {
-            ULONGLONG Readback = HalpMmioRead64(HalpGicItsVa, GITS_BASER + (Index * 8));
-            DPRINT1("[arm64][ITS] SetupBaserTable: Type=%u BASER[%u] wrote=0x%llx readback=0x%llx PA=0x%llx\n",
-                    Type, Index, NewBaser, Readback, Pa.QuadPart);
-        }
-
-        if (TableRaw) *TableRaw = Raw;
-        if (Table) *Table = Aligned;
-        if (TablePa) *TablePa = Pa;
-        if (TableBytes) *TableBytes = Bytes;
-        if (ActualEntries) *ActualEntries = EntriesPerPage * Pages;
-
-        return TRUE;
-    }
-
-    return FALSE;
-}
-
-static BOOLEAN
-HalpGicItsInitCommandQueue(VOID)
-{
-    SIZE_T QueueBytes;
-    PHYSICAL_ADDRESS Low;
-    PHYSICAL_ADDRESS High;
-    PHYSICAL_ADDRESS Boundary;
-    ULONGLONG Cbaser;
-
-    QueueBytes = (SIZE_T)HAL_ARM64_ITS_CMD_QUEUE_PAGES * PAGE_SIZE;
-    Low.QuadPart = 0;
-    High.QuadPart = ~0ULL;
-    Boundary.QuadPart = 0;
-
-    /* Use cached memory for command queue, with proper cache maintenance */
-    HalpGicItsCmdQueue = MmAllocateContiguousMemorySpecifyCache(QueueBytes,
-                                                                Low,
-                                                                High,
-                                                                Boundary,
-                                                                MmCached);
-    if (!HalpGicItsCmdQueue)
-        return FALSE;
-
-    RtlZeroMemory(HalpGicItsCmdQueue, QueueBytes);
-    HalpArm64CleanDcacheRange(HalpGicItsCmdQueue, QueueBytes);
-    HalpGicItsCmdQueuePa = MmGetPhysicalAddress(HalpGicItsCmdQueue);
-    HalpGicItsCmdEntries = (ULONG)(QueueBytes / HAL_ARM64_ITS_CMD_ENTRY_SIZE);
-    HalpGicItsCmdWrite = 0;
-
-    Cbaser = (HalpGicItsCmdQueuePa.QuadPart & GITS_CBASER_ADDR_MASK) |
-             ((HAL_ARM64_ITS_CMD_QUEUE_PAGES - 1) & GITS_CBASER_SIZE_MASK) |
-             GITS_CBASER_SHARE_INNER |
-             GITS_CBASER_INNER_WAWB |
-             GITS_CBASER_VALID;
-    HalpMmioWrite64(HalpGicItsVa, GITS_CBASER, Cbaser);
-    __asm__ __volatile__("dsb sy" ::: "memory");
-    HalpMmioWrite64(HalpGicItsVa, GITS_CWRITER, 0);
-    DPRINT1("[arm64][ITS] Command queue: PA=0x%llx CBASER=0x%llx\n",
-            HalpGicItsCmdQueuePa.QuadPart, Cbaser);
-
-    return TRUE;
-}
-
-static BOOLEAN
-HalpGicItsInitLpiTables(VOID)
-{
-    ULONG MaxBits = 0;
-    ULONG Bits;
-    SIZE_T PropSize;
-    UCHAR DefaultProp;
-
-    while ((1u << MaxBits) < HAL_ARM64_LPI_COUNT && MaxBits < 31)
-        MaxBits++;
-
-    Bits = HalpGicItsEventIdBits;
-    if (Bits == 0)
-        Bits = 1;
-    if (MaxBits < Bits)
-        Bits = MaxBits;
-    if (Bits == 0)
-        Bits = 1;
-
-    HalpGicItsLpiIdBits = Bits;
-    HalpGicLpiCount = 1u << Bits;
-    HalpGicItsEventIdLimit = HalpGicLpiCount;
-
-    PropSize = HalpGicLpiCount;
-    PropSize = (PropSize + 0xFFFF) & ~((SIZE_T)0xFFFF);
-
-    HalpGicLpiConfig = HalpGicItsAllocAligned(PropSize,
-                                              0x10000,
-                                              &HalpGicLpiConfigPa,
-                                              &HalpGicLpiConfigRaw);
-    if (!HalpGicLpiConfig)
-        return FALSE;
-
-    HalpGicLpiConfigSize = PropSize;
-    DefaultProp = (UCHAR)(HAL_ARM64_LPI_PROP_PRIO_DEFAULT | HAL_ARM64_LPI_PROP_GROUP1);
-    RtlFillMemory(HalpGicLpiConfig, PropSize, DefaultProp);
-    HalpArm64CleanDcacheRange(HalpGicLpiConfig, PropSize);
-
-    return TRUE;
-}
-
-/* Forward declaration */
-static BOOLEAN HalpGicItsSendInvall(_In_ ULONG CollectionId);
-static VOID HalpGicItsMarkFailed(_In_z_ const CHAR *Reason);
-
-static VOID
-HalpGicItsEnableLpi(_In_ ULONG EventId)
-{
-    ULONG Cpu;
-    ULONG LpiNum;
-
-    if (!HalpGicLpiConfig || EventId >= HalpGicLpiCount)
-    {
-        DPRINT1("[arm64][ITS] HalpGicItsEnableLpi: FAILED EventId=%lu (LpiConfig=%p Count=%lu)\n",
-                EventId, HalpGicLpiConfig, HalpGicLpiCount);
-        return;
-    }
-
-    if (!HalpGicItsEnabled || HalpGicItsInitFailed)
-        return;
-
-    LpiNum = HAL_ARM64_LPI_BASE + EventId;
-    DPRINT1("[arm64][ITS] HalpGicItsEnableLpi: Enabling LPI %lu (EventId=%lu)\n", LpiNum, EventId);
-
-    HalpGicLpiConfig[EventId] = (UCHAR)(HAL_ARM64_LPI_PROP_PRIO_DEFAULT |
-                                       HAL_ARM64_LPI_PROP_GROUP1 |
-                                       HAL_ARM64_LPI_PROP_ENABLED);
-    HalpArm64CleanDcacheRange(&HalpGicLpiConfig[EventId], sizeof(UCHAR));
-
-    /* Send INVALL to invalidate cached configuration */
-    Cpu = KeGetCurrentProcessorNumber();
-    __asm__ __volatile__("dsb sy" ::: "memory");
-    HalpGicItsSendInvall(Cpu);
-
-    DPRINT1("[arm64][ITS] HalpGicItsEnableLpi: LPI %lu enabled, config=0x%02x\n",
-            LpiNum, HalpGicLpiConfig[EventId]);
-}
-
-static BOOLEAN
-HalpGicItsProgramCpuTables(_In_ ULONG Cpu)
-{
-    ULONG_PTR Base;
-    SIZE_T PendingSize;
-    ULONGLONG Prop;
-    ULONGLONG Pend;
-    ULONG Ctlr;
-
-    Base = HalpGicrBase(Cpu);
-    if (Base == 0 || HalpGicItsLpiIdBits == 0)
-        return FALSE;
-
-    PendingSize = (HalpGicLpiCount + 7) / 8;
-    PendingSize = (PendingSize + 0xFFFF) & ~((SIZE_T)0xFFFF);
-    if (!HalpGicLpiPending[Cpu])
-    {
-        HalpGicLpiPending[Cpu] = HalpGicItsAllocAligned(PendingSize,
-                                                        0x10000,
-                                                        &HalpGicLpiPendingPa[Cpu],
-                                                        &HalpGicLpiPendingRaw[Cpu]);
-        if (!HalpGicLpiPending[Cpu])
-            return FALSE;
-    }
-
-    RtlZeroMemory(HalpGicLpiPending[Cpu], PendingSize);
-    HalpArm64CleanInvalidateDcacheRange(HalpGicLpiPending[Cpu], PendingSize);
-    HalpArm64CleanDcacheRange(HalpGicLpiConfig, HalpGicLpiConfigSize);
-
-    Prop = (HalpGicLpiConfigPa.QuadPart & GICR_PROPBASER_ADDR_MASK);
-    Prop |= ((ULONGLONG)(HalpGicItsLpiIdBits - 1) & GICR_PROPBASER_IDBITS_MASK);
-    Prop |= GICR_PROPBASER_SHARE_INNER;
-    Prop |= GICR_PROPBASER_INNER_NC;
-    HalpMmioWrite64(Base, GICR_PROPBASER, Prop);
-
-    Pend = (HalpGicLpiPendingPa[Cpu].QuadPart & GICR_PENDBASER_ADDR_MASK);
-    Pend |= GICR_PENDBASER_SHARE_INNER;
-    Pend |= GICR_PENDBASER_INNER_NC;
-    /* PTZ bit - indicates table was zeroed; setting this is optional but helps */
-    Pend |= GICR_PENDBASER_PTZ;
-    HalpMmioWrite64(Base, GICR_PENDBASER, Pend);
-
-    DPRINT1("[arm64][ITS] ProgramCpuTables CPU%u: PROPBASER=0x%llx PENDBASER=0x%llx\n",
-            Cpu, Prop, Pend);
-
-    Ctlr = *HalpMmio(Base, GICR_CTLR);
-    Ctlr |= 1u; /* Enable LPIs */
-    *HalpMmio(Base, GICR_CTLR) = Ctlr;
-    __asm__ __volatile__("dsb sy" ::: "memory");
-
-    DPRINT1("[arm64][ITS] ProgramCpuTables CPU%u: LPIs enabled, GICR_CTLR=0x%x\n", Cpu, Ctlr);
-
-    return TRUE;
-}
-
-static VOID
-HalpGicItsBuildMapdCmd(
-    _Out_writes_(4) UINT64 *Cmd,
-    _In_ ULONG DeviceId,
-    _In_ ULONG IttEntries,
-    _In_ ULONGLONG IttPa,
-    _In_ BOOLEAN Valid)
-{
-    ULONG Log2Entries;
-    ULONG SizeField;
-
-    RtlZeroMemory(Cmd, HAL_ARM64_ITS_CMD_ENTRY_SIZE);
-
-    Log2Entries = HalpGicItsLog2(IttEntries);
-    if (Log2Entries == 0)
-        Log2Entries = 1;
-    SizeField = Log2Entries - 1;
-
-    Cmd[0] |= (UINT64)GITS_CMD_MAPD;
-    Cmd[0] |= ((UINT64)DeviceId) << 32;
-    Cmd[1] |= (UINT64)(SizeField & 0x1FULL);
-    Cmd[2] |= (((IttPa >> 8) & ((1ULL << 44) - 1)) << 8);
-    if (Valid)
-        Cmd[2] |= (1ULL << 63);
-}
-
-static VOID
-HalpGicItsBuildMapcCmd(
-    _Out_writes_(4) UINT64 *Cmd,
-    _In_ ULONG CollectionId,
-    _In_ ULONGLONG TargetAddress,
-    _In_ BOOLEAN Valid)
-{
-    RtlZeroMemory(Cmd, HAL_ARM64_ITS_CMD_ENTRY_SIZE);
-
-    Cmd[0] |= (UINT64)GITS_CMD_MAPC;
-    Cmd[2] |= (((TargetAddress >> 16) & ((1ULL << 36) - 1)) << 16);
-    Cmd[2] |= (UINT64)(CollectionId & 0xFFFFu);
-    if (Valid)
-        Cmd[2] |= (1ULL << 63);
-}
-
-static VOID
-HalpGicItsBuildMaptiCmd(
-    _Out_writes_(4) UINT64 *Cmd,
-    _In_ ULONG DeviceId,
-    _In_ ULONG EventId,
-    _In_ ULONG PhysId,
-    _In_ ULONG CollectionId)
-{
-    RtlZeroMemory(Cmd, HAL_ARM64_ITS_CMD_ENTRY_SIZE);
-
-    Cmd[0] |= (UINT64)GITS_CMD_MAPTI;
-    Cmd[0] |= ((UINT64)DeviceId) << 32;
-    Cmd[1] |= (UINT64)EventId;
-    Cmd[1] |= ((UINT64)PhysId) << 32;
-    Cmd[2] |= (UINT64)(CollectionId & 0xFFFFu);
-}
-
-static VOID
-HalpGicItsBuildSyncCmd(
-    _Out_writes_(4) UINT64 *Cmd,
-    _In_ ULONGLONG TargetAddress)
-{
-    RtlZeroMemory(Cmd, HAL_ARM64_ITS_CMD_ENTRY_SIZE);
-
-    Cmd[0] |= (UINT64)GITS_CMD_SYNC;
-    Cmd[2] |= (((TargetAddress >> 16) & ((1ULL << 36) - 1)) << 16);
-}
-
-static BOOLEAN
-HalpGicItsPostCommand(_In_reads_(4) const UINT64 *Cmd)
-{
-    ULONG Next;
-    ULONG ReadIndex;
-    ULONG Index;
-    ULONG Spins;
-    ULONGLONG Target;
-    ULONGLONG PrevRead;
-    ULONGLONG ToIdx;
-    ULONGLONG LinearIdx;
-    ULONGLONG QueueBytes;
-    KIRQL OldIrql;
-    static ULONG CommandCount = 0;
-
-    if (!HalpGicItsCmdQueue || HalpGicItsCmdEntries == 0)
-    {
-        DPRINT1("[arm64][ITS] PostCommand: no queue\n");
-        return FALSE;
-    }
-
-    if (HalpGicItsInitFailed)
-        return FALSE;
-
-    KeAcquireSpinLock(&HalpGicItsLock, &OldIrql);
-
-    for (Spins = 100000; Spins != 0; --Spins)
-    {
-        ULONGLONG ReadOffset = HalpMmioRead64(HalpGicItsVa, GITS_CREADR);
-        ReadIndex = (ULONG)(ReadOffset / HAL_ARM64_ITS_CMD_ENTRY_SIZE);
-        Next = (HalpGicItsCmdWrite + 1) % HalpGicItsCmdEntries;
-        if (Next != ReadIndex)
-            break;
-        KeStallExecutionProcessor(1);
-    }
-
-    if (Spins == 0)
-    {
-        DPRINT1("[arm64][ITS] PostCommand: queue full timeout\n");
-        KeReleaseSpinLock(&HalpGicItsLock, OldIrql);
-        return FALSE;
-    }
-
-    Index = HalpGicItsCmdWrite;
-    HalpGicItsCmdQueue[Index * 4 + 0] = Cmd[0];
-    HalpGicItsCmdQueue[Index * 4 + 1] = Cmd[1];
-    HalpGicItsCmdQueue[Index * 4 + 2] = Cmd[2];
-    HalpGicItsCmdQueue[Index * 4 + 3] = Cmd[3];
-
-    HalpArm64CleanDcacheRange(&HalpGicItsCmdQueue[Index * 4],
-                              HAL_ARM64_ITS_CMD_ENTRY_SIZE);
-
-    /* Ensure command is visible in memory before updating CWRITER */
-    __asm__ __volatile__("dsb sy" ::: "memory");
-
-    HalpGicItsCmdWrite = Next;
-    HalpMmioWrite64(HalpGicItsVa,
-                    GITS_CWRITER,
-                    (ULONGLONG)HalpGicItsCmdWrite * HAL_ARM64_ITS_CMD_ENTRY_SIZE);
-
-    Target = (ULONGLONG)HalpGicItsCmdWrite * HAL_ARM64_ITS_CMD_ENTRY_SIZE;
-
-    /*
-     * Sample CREADR while the lock is still held: at this instant the read
-     * pointer cannot have advanced past our just-written command, so it is a
-     * valid baseline for the completion wait below. The lock is dropped before
-     * that wait, so a concurrent poster can bump CWRITER and let the ITS run
-     * CREADR *past* our Target before we first sample it. A plain
-     * "CREADR == Target" test would then never match and wrongly time out,
-     * permanently disabling MSI for the whole machine. Track linearized
-     * read-pointer progress instead (cf. Linux its_wait_for_range_completion).
-     */
-    PrevRead = HalpMmioRead64(HalpGicItsVa, GITS_CREADR) & ~1ULL;
-    QueueBytes = (ULONGLONG)HalpGicItsCmdEntries * HAL_ARM64_ITS_CMD_ENTRY_SIZE;
-    ToIdx = (Target < PrevRead) ? (Target + QueueBytes) : Target;
-    LinearIdx = PrevRead;
-    KeReleaseSpinLock(&HalpGicItsLock, OldIrql);
-
-    CommandCount++;
-    DPRINT1("[arm64][ITS] PostCommand #%u: Cmd[0]=0x%llx [1]=0x%llx [2]=0x%llx [3]=0x%llx at Index=%u Target=0x%llx\n",
-            CommandCount, Cmd[0], Cmd[1], Cmd[2], Cmd[3], Index, Target);
-
-    for (Spins = 1000000; Spins != 0; --Spins)
-    {
-        ULONGLONG ReadOffset = HalpMmioRead64(HalpGicItsVa, GITS_CREADR);
-        ULONGLONG Delta;
-        if (ReadOffset & 1)
-        {
-            DPRINT1("[arm64][ITS] PostCommand #%u: stalled immediately, CREADR=0x%llx Target=0x%llx\n",
-                    CommandCount, ReadOffset, Target);
-            HalpMmioWrite64(HalpGicItsVa, GITS_CREADR, ReadOffset);
-            HalpGicItsMarkFailed("command queue stalled");
-            return FALSE;
-        }
-
-        /*
-         * Accumulate read-pointer progress (accounting for queue wrap) instead
-         * of testing for exact equality, so a CREADR that has already advanced
-         * past our Target - e.g. because a concurrent poster's command ran in
-         * between - still counts as completion rather than timing out.
-         */
-        Delta = (ReadOffset < PrevRead) ? (ReadOffset - PrevRead + QueueBytes)
-                                        : (ReadOffset - PrevRead);
-        LinearIdx += Delta;
-        PrevRead = ReadOffset;
-        if (LinearIdx >= ToIdx)
-        {
-            DPRINT1("[arm64][ITS] PostCommand #%u: completed\n", CommandCount);
-            return TRUE;
-        }
-        KeStallExecutionProcessor(1);
-    }
-
-    {
-        ULONGLONG ReadOffset = HalpMmioRead64(HalpGicItsVa, GITS_CREADR);
-        ULONGLONG Ctlr = HalpMmioRead64(HalpGicItsVa, GITS_CTLR);
-        ULONGLONG Cwriter = HalpMmioRead64(HalpGicItsVa, GITS_CWRITER);
-        DPRINT1("[arm64][ITS] PostCommand #%u: TIMEOUT! CREADR=0x%llx Target=0x%llx\n",
-                CommandCount, ReadOffset, Target);
-        DPRINT1("[arm64][ITS] PostCommand TIMEOUT: CTLR=0x%llx CWRITER=0x%llx StallBit=%u\n",
-                Ctlr, Cwriter, (unsigned)(ReadOffset & 1));
-        /* If stall bit is set, clear it by writing 1 to it */
-        if (ReadOffset & 1)
-        {
-            DPRINT1("[arm64][ITS] PostCommand: Clearing stall by writing CREADR=0x%llx\n", ReadOffset);
-            HalpMmioWrite64(HalpGicItsVa, GITS_CREADR, ReadOffset);
-        }
-        HalpGicItsMarkFailed("command completion timed out");
-    }
-    return FALSE;
-}
-
-static BOOLEAN
-HalpGicItsSendMapd(
-    _In_ ULONG DeviceId,
-    _In_ ULONG IttEntries,
-    _In_ ULONGLONG IttPa)
-{
-    UINT64 Cmd[4];
-
-    HalpGicItsBuildMapdCmd(Cmd, DeviceId, IttEntries, IttPa, TRUE);
-    return HalpGicItsPostCommand(Cmd);
-}
-
-static VOID
-HalpGicItsMarkFailed(_In_z_ const CHAR *Reason)
-{
-    DPRINT1("[arm64][ITS] disabling ITS after command failure: %s\n", Reason);
-    HalpGicItsEnabled = FALSE;
-    HalpGicItsInitFailed = TRUE;
-    InterlockedExchange(&HalpGicItsInitState, -1);
-}
-
-static BOOLEAN
-HalpGicItsSendMapc(
-    _In_ ULONG CollectionId,
-    _In_ ULONGLONG TargetAddress)
-{
-    UINT64 Cmd[4];
-    UINT64 Sync[4];
-
-    HalpGicItsBuildMapcCmd(Cmd, CollectionId, TargetAddress, TRUE);
-    if (!HalpGicItsPostCommand(Cmd))
-        return FALSE;
-
-    HalpGicItsBuildSyncCmd(Sync, TargetAddress);
-    return HalpGicItsPostCommand(Sync);
-}
-
-static BOOLEAN
-HalpGicItsSendMapti(
-    _In_ ULONG DeviceId,
-    _In_ ULONG EventId,
-    _In_ ULONG PhysId,
-    _In_ ULONG CollectionId,
-    _In_ ULONGLONG TargetAddress)
-{
-    UINT64 Cmd[4];
-    UINT64 Sync[4];
-
-    HalpGicItsBuildMaptiCmd(Cmd, DeviceId, EventId, PhysId, CollectionId);
-    if (!HalpGicItsPostCommand(Cmd))
-        return FALSE;
-
-    HalpGicItsBuildSyncCmd(Sync, TargetAddress);
-    return HalpGicItsPostCommand(Sync);
-}
-
-static VOID
-HalpGicItsBuildInvallCmd(
-    _Out_writes_(4) UINT64 *Cmd,
-    _In_ ULONG CollectionId)
-{
-    RtlZeroMemory(Cmd, HAL_ARM64_ITS_CMD_ENTRY_SIZE);
-
-    Cmd[0] = (UINT64)GITS_CMD_INVALL;
-    Cmd[0] |= ((UINT64)CollectionId) << 16;  /* ICID at bits 31:16 */
-}
-
-static BOOLEAN
-HalpGicItsSendInvall(_In_ ULONG CollectionId)
-{
-    UINT64 Cmd[4];
-    UINT64 Sync[4];
-    ULONGLONG TargetAddress;
-
-    /* Get redistributor base address for this CPU */
-    TargetAddress = (ULONGLONG)HalpGicrBase(CollectionId);
-    if (TargetAddress == 0)
-    {
-        DPRINT1("[arm64][ITS] INVALL: No redistributor base for CPU %lu\n", CollectionId);
-        return FALSE;
-    }
-
-    /* Send INVALL command */
-    HalpGicItsBuildInvallCmd(Cmd, CollectionId);
-    if (!HalpGicItsPostCommand(Cmd))
-        return FALSE;
-
-    /* Send SYNC to ensure INVALL is processed before continuing */
-    HalpGicItsBuildSyncCmd(Sync, TargetAddress);
-    return HalpGicItsPostCommand(Sync);
-}
-
-static PHALP_ARM64_ITS_DEVICE
-HalpGicItsFindDevice(_In_ USHORT RequesterId)
-{
-    PHALP_ARM64_ITS_DEVICE Device;
-
-    if (!HalpGicItsDeviceBuckets || HalpGicItsDeviceBucketCount == 0)
-        return NULL;
-
-    Device = HalpGicItsDeviceBuckets[HalpGicItsDeviceHash(RequesterId)];
-    while (Device)
-    {
-        if (Device->RequesterId == RequesterId)
-            return Device;
-        Device = Device->Next;
-    }
-
-    return NULL;
-}
-
-static PHALP_ARM64_ITS_DEVICE
-HalpGicItsAllocateDevice(_In_ USHORT RequesterId)
-{
-    PHALP_ARM64_ITS_DEVICE Device;
-    ULONG Bucket;
-
-    if (!HalpGicItsDeviceBuckets || HalpGicItsDeviceBucketCount == 0)
-        return NULL;
-
-    Device = ExAllocatePoolWithTag(NonPagedPool, sizeof(*Device), TAG_HAL);
-    if (!Device)
-        return NULL;
-
-    RtlZeroMemory(Device, sizeof(*Device));
-    Device->RequesterId = RequesterId;
-    Device->InitState = 0;
-
-    Bucket = HalpGicItsDeviceHash(RequesterId);
-    Device->Next = HalpGicItsDeviceBuckets[Bucket];
-    HalpGicItsDeviceBuckets[Bucket] = Device;
-    return Device;
-
-}
-
-static PHALP_ARM64_ITS_DEVICE
-HalpGicItsGetDevice(_In_ USHORT RequesterId)
-{
-    PHALP_ARM64_ITS_DEVICE Device;
-    KIRQL OldIrql;
-    ULONG Entries;
-    ULONG DeviceId;
-    LONG State;
-    SIZE_T IttBytes;
-    PHYSICAL_ADDRESS IttPa;
-
-    if (HalpGicItsDeviceTableEntries == 0 ||
-        RequesterId >= HalpGicItsDeviceTableEntries)
-    {
-        return NULL;
-    }
-
-    KeAcquireSpinLock(&HalpGicItsLock, &OldIrql);
-    Device = HalpGicItsFindDevice(RequesterId);
-    if (!Device)
-        Device = HalpGicItsAllocateDevice(RequesterId);
-    KeReleaseSpinLock(&HalpGicItsLock, OldIrql);
-
-    if (!Device)
-        return NULL;
-
-    State = Device->InitState;
-    if (State == 2 && Device->IttEntries)
-        return Device;
-    if (State == -1)
-        return NULL;
-
-    State = InterlockedCompareExchange(&Device->InitState, 1, 0);
-    if (State == 2)
-        return Device;
-    if (State == -1)
-        return NULL;
-    if (State == 1)
-    {
-        for (ULONG Spins = 100000; Spins != 0; --Spins)
-        {
-            State = Device->InitState;
-            if (State == 2)
-                return Device;
-            if (State == -1)
-                return NULL;
-            KeStallExecutionProcessor(1);
-        }
-        return NULL;
-    }
-
-    /*
-     * TEST: Use small ITT for debugging MAPD stall issue.
-     * Normally we'd use HalpGicItsEventIdLimit entries, but try just 2.
-     */
-    Entries = 2;
-    Entries = HalpGicItsRoundUpPow2(Entries);
-
-    DPRINT1("[arm64][ITS] GetDevice: ReqId=0x%04x Entries=%lu IttEntrySize=%u (EventIdLimit=%lu)\n",
-            (unsigned)RequesterId, Entries, HalpGicItsIttEntrySize, HalpGicItsEventIdLimit);
-
-    /*
-     * ITS ITT must be allocated with size rounded up to ensure alignment.
-     * Minimum allocation is PAGE_SIZE for proper alignment.
-     */
-    IttBytes = (SIZE_T)Entries * HalpGicItsIttEntrySize;
-    if (IttBytes < PAGE_SIZE)
-        IttBytes = PAGE_SIZE;
-    Device->IttVa = HalpGicItsAllocAligned(IttBytes, PAGE_SIZE, &IttPa, NULL);
-    if (!Device->IttVa)
-    {
-        DPRINT1("[arm64][ITS] GetDevice: ITT alloc failed\n");
-        Device->InitState = -1;
-        return NULL;
-    }
-
-    DPRINT1("[arm64][ITS] GetDevice: ITT VA=%p PA=0x%llx Bytes=%zu\n",
-            Device->IttVa, IttPa.QuadPart, IttBytes);
-
-    HalpArm64CleanInvalidateDcacheRange(Device->IttVa, IttBytes);
-    __asm__ __volatile__("dsb sy" ::: "memory");
-
-    Device->IttEntries = Entries;
-    Device->IttPa = IttPa;
-
-    DeviceId = (ULONG)Device->RequesterId;
-    DPRINT1("[arm64][ITS] GetDevice: Sending MAPD DevId=%u Entries=%lu IttPa=0x%llx\n",
-            DeviceId, Device->IttEntries, Device->IttPa.QuadPart);
-    if (!HalpGicItsSendMapd(DeviceId,
-                            Device->IttEntries,
-                            Device->IttPa.QuadPart))
-    {
-        Device->InitState = -1;
-        return NULL;
-    }
-
-    Device->InitState = 2;
-    return Device;
-}
-
-static BOOLEAN
-HalpGicItsEnsureCollection(_In_ ULONG Cpu)
-{
-    ULONGLONG Target;
-
-    if (Cpu >= MAXIMUM_PROCESSORS)
-        return FALSE;
-
-    if (!HalpGicItsCollectionMapped[Cpu])
-    {
-        if (!HalpGicItsProgramCpuTables(Cpu))
-            return FALSE;
-
-        Target = (ULONGLONG)HalpGicrBase(Cpu);
-        if (Target == 0)
-            return FALSE;
-
-        if (!HalpGicItsSendMapc(Cpu, Target))
-            return FALSE;
-
-        HalpGicItsCollectionMapped[Cpu] = TRUE;
-    }
-
-    return TRUE;
-}
-
-static BOOLEAN
-HalpGicItsInitialize(VOID)
-{
-    LONG State;
-    ULONG DeviceLimit;
-    ULONGLONG Typer;
-    ULONGLONG Ctlr;
-    ULONG Cpu;
-    BOOLEAN Ok = FALSE;
-
-    if (HalpGicItsInitFailed)
-        return FALSE;
-
-    if (HalpGicItsInitialized)
-        return TRUE;
-
-    /*
-     * ITS initialization requires memory allocations (MmAllocateContiguousMemorySpecifyCache,
-     * ExAllocatePoolWithTag) that need IRQL <= APC_LEVEL for the slow path.
-     * If called at elevated IRQL, bail out rather than risk bugcheck.
-     */
-    if (KeGetCurrentIrql() > APC_LEVEL)
-    {
-        DPRINT1("[arm64][ITS] HalpGicItsInitialize: IRQL %u > APC_LEVEL, deferring\n",
-                (ULONG)KeGetCurrentIrql());
-        return FALSE;
-    }
-
-    State = InterlockedCompareExchange(&HalpGicItsInitState, 1, 0);
-    if (State == 2)
-        return TRUE;
-    if (State == -1)
-        return FALSE;
-    if (State == 1)
-    {
-        for (ULONG Spins = 100000; Spins != 0; --Spins)
-        {
-            State = HalpGicItsInitState;
-            if (State == 2)
-                return TRUE;
-            if (State == -1)
-                return FALSE;
-            KeStallExecutionProcessor(1);
-        }
-        return FALSE;
-    }
-
-    if (!HalpGicItsPresent || !HalpGicItsBase)
-        goto Exit;
-
-    /*
-     * Convert ITS physical address to the private physical alias. The public
-     * FFFF8000... system range is not a direct map on ARM64.
-     */
-    HalpGicItsVa = (ULONG_PTR)(HAL_ARM64_PHYS_MAP_BASE |
-                               (HalpGicItsBase & HAL_ARM64_PHYS_ADDR_MASK));
-    DPRINT1("[arm64][HAL] HalpGicItsInitialize: ITS PA=0x%llx VA=0x%p\n",
-            HalpGicItsBase, (PVOID)HalpGicItsVa);
-
-    Typer = HalpMmioRead64(HalpGicItsVa, GITS_TYPER);
-    HalpGicItsDeviceIdBits = ((ULONG)(Typer >> GITS_TYPER_DEVBITS_SHIFT) & GITS_TYPER_DEVBITS_MASK) + 1;
-    HalpGicItsEventIdBits = ((ULONG)(Typer >> GITS_TYPER_IDBITS_SHIFT) & GITS_TYPER_IDBITS_MASK) + 1;
-    HalpGicItsIttEntrySize = ((ULONG)(Typer >> GITS_TYPER_ITT_ENTRY_SIZE_SHIFT) & GITS_TYPER_ITT_ENTRY_SIZE_MASK) + 1;
-
-    DPRINT1("[arm64][ITS] GITS_TYPER=0x%llx DevBits=%u EvtBits=%u IttEntSz=%u\n",
-            Typer, HalpGicItsDeviceIdBits, HalpGicItsEventIdBits, HalpGicItsIttEntrySize);
-
-    /*
-     * Disable ITS before configuring tables.
-     * Clear Enable bit and wait for Quiescent to indicate ITS is idle.
-     */
-    {
-        ULONGLONG InitCtlr = HalpMmioRead64(HalpGicItsVa, GITS_CTLR);
-        DPRINT1("[arm64][ITS] Initial GITS_CTLR=0x%llx\n", InitCtlr);
-        if (InitCtlr & 1ULL)
-        {
-            /* ITS was enabled, disable it first */
-            InitCtlr &= ~1ULL;
-            HalpMmioWrite64(HalpGicItsVa, GITS_CTLR, InitCtlr);
-            __asm__ __volatile__("dsb sy" ::: "memory");
-            /* Wait for Quiescent bit (bit 31) to be set */
-            for (ULONG Spins = 100000; Spins != 0; --Spins)
-            {
-                InitCtlr = HalpMmioRead64(HalpGicItsVa, GITS_CTLR);
-                if (InitCtlr & (1ULL << 31))
-                    break;
-                KeStallExecutionProcessor(1);
-            }
-            DPRINT1("[arm64][ITS] After disable: GITS_CTLR=0x%llx\n", InitCtlr);
-        }
-    }
-
-    if (HalpGicItsDeviceIdBits >= 31)
-        DeviceLimit = 0x7FFFFFFF;
-    else
-        DeviceLimit = (1U << HalpGicItsDeviceIdBits);
-
-    HalpGicItsDeviceTableEntries = DeviceLimit;
-    HalpGicItsCollectionEntries = MAXIMUM_PROCESSORS;
-    if (!HalpGicItsInitCommandQueue())
-        goto Exit;
-
-    if (!HalpGicItsSetupBaserTable(GITS_BASER_TYPE_DEVICE,
-                                   HalpGicItsDeviceTableEntries,
-                                   &HalpGicItsDeviceTableRaw,
-                                   &HalpGicItsDeviceTable,
-                                   &HalpGicItsDeviceTablePa,
-                                   &HalpGicItsDeviceTableBytes,
-                                   &HalpGicItsDeviceTableEntries))
-    {
-        goto Exit;
-    }
-
-    if (HalpGicItsDeviceTableEntries == 0)
-        goto Exit;
-
-    if (!HalpGicItsInitDeviceMap(HalpGicItsDeviceTableEntries))
-        goto Exit;
-
-    if (!HalpGicItsSetupBaserTable(GITS_BASER_TYPE_COLLECTION,
-                                   HalpGicItsCollectionEntries,
-                                   &HalpGicItsCollectionTableRaw,
-                                   &HalpGicItsCollectionTable,
-                                   &HalpGicItsCollectionTablePa,
-                                   &HalpGicItsCollectionTableBytes,
-                                   &HalpGicItsCollectionEntries))
-    {
-        /*
-         * Collection table is OPTIONAL in the GIC ITS specification.
-         * Some implementations store collections internally and don't need
-         * a GITS_BASER register for collections. In this case, the ITS
-         * uses physical redistributor addresses directly in MAPC commands.
-         * Continue with initialization - this is not a fatal error.
-         */
-        DPRINT("[arm64][HAL] HalpGicItsInitialize: No COLLECTION BASER (ITS uses internal storage)\n");
-    }
-
-    if (!HalpGicItsInitLpiTables())
-        goto Exit;
-
-    Ctlr = HalpMmioRead64(HalpGicItsVa, GITS_CTLR);
-    DPRINT1("[arm64][ITS] Enabling ITS: GITS_CTLR before=0x%llx\n", Ctlr);
-    Ctlr |= 1ULL;
-    HalpMmioWrite64(HalpGicItsVa, GITS_CTLR, Ctlr);
-    __asm__ __volatile__("dsb sy" ::: "memory");
-    Ctlr = HalpMmioRead64(HalpGicItsVa, GITS_CTLR);
-    DPRINT1("[arm64][ITS] Enabling ITS: GITS_CTLR after=0x%llx\n", Ctlr);
-    HalpGicItsEnabled = TRUE;
-
-    Cpu = KeGetCurrentProcessorNumber();
-    if (!HalpGicItsEnsureCollection(Cpu))
-        goto Exit;
-
-    HalpGicItsInitialized = TRUE;
-    Ok = TRUE;
-    DPRINT1("[arm64][HAL] HalpGicItsInitialize: SUCCESS\n");
-
-Exit:
-    InterlockedExchange(&HalpGicItsInitState, Ok ? 2 : -1);
-    if (!Ok)
-        HalpGicItsInitFailed = TRUE;
-
-    return Ok;
-}
 
 BOOLEAN
 NTAPI
@@ -3437,10 +1983,10 @@ HalGetMsiMessageAddressEx(
     ULONG Cpu;
     ULONG EventId;
     ULONG DeviceId;
-    PHALP_ARM64_ITS_DEVICE Device;
-    ULONGLONG Address;
-    ULONGLONG Target;
-    BOOLEAN InitResult;
+    ULONG Lpi;
+    PHYSICAL_ADDRESS MsiAddress;
+    ULONG MsiData;
+    NTSTATUS Status;
 
     DPRINT1("[arm64][HAL] HalGetMsiMessageAddressEx: ReqId=0x%04x Vec=%llu Aff=0x%llx\n",
             (unsigned)RequesterId, Vector, Affinity);
@@ -3457,7 +2003,7 @@ HalGetMsiMessageAddressEx(
         if (HalpGicMsiPresent && HalpGicMsiSpiCount > 0)
         {
             ULONG SpiOffset;
-            ULONGLONG MsiAddress;
+            ULONGLONG GicV2mAddress;
 
             /* Map Vector to SPI range */
             if (Vector >= HalpGicMsiSpiBase &&
@@ -3472,97 +2018,67 @@ HalGetMsiMessageAddressEx(
             }
 
             /* GICv2m SETSPI_NSR register address */
-            MsiAddress = HalpGicMsiFrameBase + HAL_ARM64_GICV2M_SETSPI;
-            *AddressLow = (ULONG)(MsiAddress & 0xFFFFFFFFu);
+            GicV2mAddress = HalpGicMsiFrameBase + HAL_ARM64_GICV2M_SETSPI;
+            *AddressLow = (ULONG)(GicV2mAddress & 0xFFFFFFFFu);
             if (AddressHigh)
-                *AddressHigh = (ULONG)(MsiAddress >> 32);
+                *AddressHigh = (ULONG)(GicV2mAddress >> 32);
             *Data = (USHORT)(HalpGicMsiSpiBase + SpiOffset);
 
             DPRINT1("[arm64][HAL] HalGetMsiMessageAddressEx: GICv2m fallback Vec=%llu -> SPI=%u Addr=0x%llx\n",
-                    Vector, HalpGicMsiSpiBase + SpiOffset, MsiAddress);
+                    Vector, HalpGicMsiSpiBase + SpiOffset, GicV2mAddress);
             return TRUE;
         }
         DPRINT1("[arm64][HAL] HalGetMsiMessageAddressEx: ITS not present, no GICv2m fallback\n");
         return FALSE;
     }
 
-    InitResult = HalpGicItsInitialize();
-    if (!InitResult)
+    /* ITS/LPI path: Vector is an LPI INTID; allocate the MSI through the ITS. */
+    if (Vector < HAL_ARM64_LPI_BASE || Vector > MAXULONG)
     {
-        DPRINT1("[arm64][HAL] HalGetMsiMessageAddressEx: ITS init failed\n");
-        return FALSE;
-    }
-
-    DPRINT1("[arm64][HAL] HalGetMsiMessageAddressEx: LpiBase=%u LpiCount=%lu LpiLimit=%lu EventIdLimit=%lu\n",
-            HAL_ARM64_LPI_BASE, HalpGicLpiCount, (ULONG)HAL_ARM64_LPI_BASE + HalpGicLpiCount, HalpGicItsEventIdLimit);
-
-    if (Vector < HAL_ARM64_LPI_BASE)
-    {
-        DPRINT1("[arm64][HAL] HalGetMsiMessageAddressEx: Vector %llu < LPI_BASE %u\n", Vector, HAL_ARM64_LPI_BASE);
-        return FALSE;
-    }
-
-    if (Vector >= (ULONGLONG)HAL_ARM64_LPI_BASE + HalpGicLpiCount)
-    {
-        DPRINT1("[arm64][HAL] HalGetMsiMessageAddressEx: Vector %llu >= LPI limit %llu\n", Vector, (ULONGLONG)HAL_ARM64_LPI_BASE + HalpGicLpiCount);
-        return FALSE;
-    }
-
-    if (Vector > MAXULONG)
-    {
-        DPRINT1("[arm64][HAL] HalGetMsiMessageAddressEx: Vector %llu > MAXULONG\n", Vector);
+        DPRINT1("[arm64][HAL] HalGetMsiMessageAddressEx: Vector %llu not a valid LPI\n", Vector);
         return FALSE;
     }
 
     EventId = (ULONG)(Vector - HAL_ARM64_LPI_BASE);
-    if (EventId >= HalpGicItsEventIdLimit || EventId > 0xFFFFu)
+    if (EventId > 0xFFFFu)
     {
-        DPRINT1("[arm64][HAL] HalGetMsiMessageAddressEx: EventId %u out of range (limit=%lu)\n", EventId, HalpGicItsEventIdLimit);
+        DPRINT1("[arm64][HAL] HalGetMsiMessageAddressEx: EventId %lu out of range\n", EventId);
         return FALSE;
     }
 
-    Cpu = HalpGicItsSelectCpuFromAffinity(Affinity);
-    DPRINT1("[arm64][HAL] HalGetMsiMessageAddressEx: selected CPU %u\n", Cpu);
-    if (!HalpGicItsEnsureCollection(Cpu))
+    /* Select the target CPU from the requested affinity (lowest set bit). */
+    Cpu = KeGetCurrentProcessorNumber();
+    if (Affinity != 0)
     {
-        DPRINT1("[arm64][HAL] HalGetMsiMessageAddressEx: EnsureCollection failed for CPU %u\n", Cpu);
+        ULONG Bit;
+        ULONG MaxCpu = (MAXIMUM_PROCESSORS < (sizeof(ULONGLONG) * 8)) ?
+                       MAXIMUM_PROCESSORS : (ULONG)(sizeof(ULONGLONG) * 8);
+        for (Bit = 0; Bit < MaxCpu; ++Bit)
+        {
+            if (Affinity & (1ULL << Bit))
+            {
+                Cpu = Bit;
+                break;
+            }
+        }
+    }
+
+    /* DeviceId is the PCI RequesterId (BDF) for ITS translation. */
+    DeviceId = (ULONG)RequesterId;
+
+    Status = HalpGicItsAllocateMsi(DeviceId, EventId, Cpu, &Lpi, &MsiAddress, &MsiData);
+    if (!NT_SUCCESS(Status))
+    {
+        DPRINT1("[arm64][HAL] HalGetMsiMessageAddressEx: HalpGicItsAllocateMsi failed (0x%lx)\n", Status);
         return FALSE;
     }
 
-    Device = HalpGicItsGetDevice(RequesterId);
-    if (!Device)
-    {
-        DPRINT1("[arm64][HAL] HalGetMsiMessageAddressEx: GetDevice failed for ReqId 0x%04x\n", (unsigned)RequesterId);
-        return FALSE;
-    }
-    DeviceId = (ULONG)Device->RequesterId;
+    *AddressLow = (ULONG)(MsiAddress.QuadPart & 0xFFFFFFFFu);
+    if (AddressHigh) *AddressHigh = (ULONG)(MsiAddress.QuadPart >> 32);
+    *Data = (USHORT)MsiData;
 
-    Target = (ULONGLONG)HalpGicrBase(Cpu);
-    if (Target == 0)
-        return FALSE;
-
-    DPRINT1("[arm64][HAL] HalGetMsiMessageAddressEx: Sending MAPTI DevId=%u EvId=%u Vec=%llu Cpu=%u Target=0x%llx\n",
-            DeviceId, EventId, Vector, Cpu, Target);
-    if (!HalpGicItsSendMapti(DeviceId,
-                             EventId,
-                             (ULONG)Vector,
-                             Cpu,
-                             Target))
-    {
-        DPRINT1("[arm64][HAL] HalGetMsiMessageAddressEx: MAPTI FAILED\n");
-        return FALSE;
-    }
-    DPRINT1("[arm64][HAL] HalGetMsiMessageAddressEx: MAPTI OK\n");
-
-    HalpGicItsEnableLpi(EventId);
-
-    Address = HalpGicItsBase + GITS_TRANSLATER;
-    *AddressLow = (ULONG)(Address & 0xFFFFFFFFu);
-    if (AddressHigh) *AddressHigh = (ULONG)(Address >> 32);
-    *Data = (USHORT)EventId;
-
-    DPRINT1("[arm64][HAL] HalGetMsiMessageAddressEx: SUCCESS MsiAddr=0x%llx Data=0x%x\n",
-            Address, (unsigned)*Data);
+    DPRINT1("[arm64][HAL] HalGetMsiMessageAddressEx: SUCCESS LPI=%lu MsiAddr=0x%llx Data=0x%x\n",
+            Lpi, MsiAddress.QuadPart, (unsigned)*Data);
     return TRUE;
 }
 
@@ -4000,8 +2516,10 @@ HalpMapGicv3RuntimeMmioWindows(VOID)
         if (!HalpMapRuntimeMmioWindow(&ItsBase, HAL_ARM64_ITS_MAP_LENGTH, "GITS"))
             return FALSE;
 
-        HalpGicItsVa = (ULONG_PTR)ItsBase;
-
+        /*
+         * Record the MmMapIoSpace VA as the ITS register base (not a phys-alias);
+         * it is the only valid mapping once the identity map is torn down.
+         */
         for (ULONG Index = 0; Index < HalpGicItsNodeCount; ++Index)
         {
             if (HalpGicItsNodes[Index].PhysicalBase.QuadPart == HalpGicItsBase)
@@ -4012,365 +2530,6 @@ HalpMapGicv3RuntimeMmioWindows(VOID)
     return TRUE;
 }
 
-static __inline ULONG_PTR HalpGicrBase(_In_ ULONG Cpu)
-{
-    if (Cpu < RTL_NUMBER_OF(HalpGicrCpuBase) && HalpGicrCpuBase[Cpu])
-        return HalpGicrCpuBase[Cpu];
-
-    return (ULONG_PTR)(HalpGicrRegionBase + ((ULONG_PTR)Cpu * HalpGicrStride));
-}
-
-static __inline ULONG_PTR HalpGicrSgiBase(_In_ ULONG Cpu)
-{
-    return HalpGicrBase(Cpu) + HalpGicrSgiOffset;
-}
-
-/*
- * HalpArm64ProgramGicTrigger - Program GIC interrupt trigger mode
- *
- * This function configures the trigger mode (edge vs level) for a GIC interrupt.
- * It programs the appropriate ICFGR register in either the distributor (for SPIs)
- * or the redistributor (for PPIs).
- *
- * GIC ICFGR register format:
- *   Each interrupt uses 2 bits:
- *     Bit [2n+1]: 0 = Level-sensitive, 1 = Edge-triggered
- *     Bit [2n]:   Reserved (should be written as 0)
- *
- * For interrupt N within an ICFGR register:
- *   - Position = (N % 16) * 2
- *   - Edge bit = position + 1
- *
- * Parameters:
- *   IntId         - GIC interrupt ID (INTID)
- *   EdgeTriggered - TRUE for edge-triggered, FALSE for level-triggered
- *
- * Notes:
- *   - SGIs (0-15) have fixed edge-triggered configuration and cannot be changed
- *   - PPIs (16-31) are configured via GICR_ICFGR1 in the redistributor
- *   - SPIs (32-1019) are configured via GICD_ICFGR in the distributor
- *   - LPIs (8192+) are always edge-triggered
- *
- * ARM64 Memory Ordering:
- *   A DSB barrier is issued after writing to ensure the configuration
- *   is visible to the GIC before any subsequent interrupt operations.
- */
-VOID
-NTAPI
-HalpArm64ProgramGicTrigger(
-    _In_ ULONG IntId,
-    _In_ BOOLEAN EdgeTriggered)
-{
-    ULONG RegOffset;
-    ULONG BitPos;
-    ULONG OldVal;
-    ULONG NewVal;
-    volatile ULONG *RegPtr;
-
-    /*
-     * SGIs (0-15): Fixed edge-triggered, cannot be reprogrammed.
-     * Return immediately as the hardware ignores writes to these bits.
-     */
-    if (IntId < 16)
-    {
-        DPRINT("[arm64] SGI %lu: trigger mode is fixed (edge-triggered)\n", IntId);
-        return;
-    }
-
-    /*
-     * PPIs (16-31): On GICv3 (HalpGicUseSysRegs) these are configured via
-     * GICR_ICFGR1 in the redistributor's SGI_base frame.
-     * GICR_ICFGR1 covers PPIs 16-31 (16 interrupts, 2 bits each = 32 bits).
-     * For PPI N (16-31), the bit position is ((N - 16) % 16) * 2.
-     *
-     * On GICv2 there is no redistributor (the GICR base is never mapped past the
-     * identity-mapping teardown), so PPIs fall through to the distributor path
-     * below, which programs GICD_ICFGR1 (GICD_ICFGR + 4) — the architecturally
-     * correct location for the banked PPI trigger config. This gate mirrors
-     * HalEnableSystemInterrupt/HalDisableSystemInterrupt.
-     */
-    if (HalpGicUseSysRegs && IntId < 32)
-    {
-        ULONG Cpu = KeGetCurrentProcessorNumber();
-        ULONG_PTR SgiBase = HalpGicrSgiBase(Cpu);
-
-        if (SgiBase == 0)
-        {
-            DPRINT1("[arm64] PPI %lu: GICR SGI base unavailable for CPU %lu\n", IntId, Cpu);
-            return;
-        }
-
-        /* Calculate bit position within GICR_ICFGR1 */
-        BitPos = ((IntId - 16) % 16) * 2;
-
-        RegPtr = HalpMmio(SgiBase, GICR_ICFGR1);
-        OldVal = *RegPtr;
-
-        /* Clear the 2-bit field and set new value */
-        NewVal = OldVal & ~(3u << BitPos);
-        if (EdgeTriggered)
-        {
-            NewVal |= (2u << BitPos);  /* Bit 1 = edge-triggered */
-        }
-        /* Level-triggered: leave bits as 0 */
-
-        *RegPtr = NewVal;
-
-        /* Ensure the write completes before returning */
-        __asm__ __volatile__("dsb sy" ::: "memory");
-
-        DPRINT("[arm64] PPI %lu: GICR_ICFGR1 0x%08lx -> 0x%08lx (%s)\n",
-               IntId, OldVal, NewVal, EdgeTriggered ? "edge" : "level");
-        return;
-    }
-
-    /*
-     * SPIs (32-1019): Configured via GICD_ICFGR in the distributor.
-     * GICD_ICFGR[n] covers interrupts (n*16) to (n*16 + 15).
-     * For SPI N, the register offset is GICD_ICFGR + (N / 16) * 4.
-     */
-    if (IntId < 1020)
-    {
-        /* Calculate register offset and bit position */
-        RegOffset = GICD_ICFGR + (IntId / 16) * 4;
-        BitPos = (IntId % 16) * 2;
-
-        RegPtr = HalpMmio((ULONG_PTR)HalpGicdBase, RegOffset);
-        OldVal = *RegPtr;
-
-        /* Clear the 2-bit field and set new value */
-        NewVal = OldVal & ~(3u << BitPos);
-        if (EdgeTriggered)
-        {
-            NewVal |= (2u << BitPos);  /* Bit 1 = edge-triggered */
-        }
-        /* Level-triggered: leave bits as 0 */
-
-        *RegPtr = NewVal;
-
-        /* Ensure the write completes before returning */
-        __asm__ __volatile__("dsb sy" ::: "memory");
-
-        DPRINT("[arm64] SPI %lu: GICD_ICFGR[0x%03lx] 0x%08lx -> 0x%08lx (%s)\n",
-               IntId, RegOffset, OldVal, NewVal, EdgeTriggered ? "edge" : "level");
-        return;
-    }
-
-    /*
-     * Reserved (1020-1023) or invalid range: Log and return.
-     */
-    if (IntId < 8192)
-    {
-        DPRINT1("[arm64] INTID %lu is in reserved/invalid range\n", IntId);
-        return;
-    }
-
-    /*
-     * LPIs (8192+): Always edge-triggered, configured via ITS.
-     * No action needed here.
-     */
-    DPRINT("[arm64] LPI %lu: trigger mode is fixed (edge-triggered)\n", IntId);
-}
-
-static VOID
-HalpInitGicRedistributor(_In_ ULONG Cpu)
-{
-    ULONG_PTR Base = HalpGicrBase(Cpu);
-    ULONG_PTR SgiBase = HalpGicrSgiBase(Cpu);
-    ULONGLONG Mpidr = HalpReadMpidr();
-    ULONGLONG Typer;
-
-    DPRINT1("[arm64][GICR] Initializing redistributor for CPU %lu\n", Cpu);
-    DPRINT1("[arm64][GICR]   MPIDR=0x%llx\n", Mpidr);
-    DPRINT1("[arm64][GICR]   RD_Base=0x%p\n", (PVOID)Base);
-    DPRINT1("[arm64][GICR]   SGI_Base=0x%p (offset=0x%lx)\n", (PVOID)SgiBase, HalpGicrSgiOffset);
-
-    if (Base == 0)
-    {
-        DPRINT1("[arm64][GICR] ERROR: GICR base unavailable for CPU %lu!\n", Cpu);
-        return;
-    }
-
-    /* Read and display GICR_TYPER for verification */
-    Typer = HalpMmioRead64(Base, GICR_TYPER);
-    DPRINT1("[arm64][GICR]   TYPER=0x%llx\n", Typer);
-    DPRINT1("[arm64][GICR]   TYPER.Affinity=0x%08lx (extracted from bits [63:32])\n",
-            (ULONG)((Typer >> 32) & 0xFFFFFFFF));
-
-    /*
-     * Wake redistributor and wait for ChildrenAsleep to clear.
-     *
-     * GICR_WAKER register is implementation-defined in GICv3:
-     *   - Some use bit 1 for ProcessorSleep, bit 2 for ChildrenAsleep
-     *   - Others use bit 0 for ProcessorSleep, bit 1 for ChildrenAsleep
-     *   - QEMU appears to NOT implement WAKER properly (always reads 0)
-     *
-     * Strategy: Try both conventions, and if WAKER is all-zeros, skip the wait.
-     */
-    volatile ULONG *Waker = HalpMmio(Base, GICR_WAKER);
-    ULONG W = *Waker;
-    DPRINT1("[arm64][GICR] WAKER before wake: 0x%08lx\n", W);
-
-    /* If WAKER is not implemented (reads as 0), skip wakeup sequence */
-    if (W == 0)
-    {
-        DPRINT1("[arm64][GICR] WAKER reads as 0 - redistributor may not implement power management, continuing\n");
-    }
-    else
-    {
-        /* Try clearing both bit 0 and bit 1 (different implementations) */
-        W &= ~((1u << 0) | (1u << 1));
-        *Waker = W;
-
-        /* Memory barrier to ensure write completes before polling */
-        __asm__ __volatile__("dsb sy" ::: "memory");
-
-        /* Poll for ChildrenAsleep to clear (check both bit 1 and bit 2) */
-        ULONG Spins;
-        for (Spins = 0x100000; Spins != 0; --Spins)
-        {
-            W = *Waker;
-            /* Consider awake if bits 1 and 2 are both clear */
-            if ((W & ((1u << 1) | (1u << 2))) == 0)
-                break;
-            __asm__ __volatile__("yield");
-        }
-
-        W = *Waker;
-        DPRINT1("[arm64][GICR] WAKER after wake: 0x%08lx (spins left=%lu)\n", W, Spins);
-
-        if (Spins == 0)
-        {
-            DPRINT1("[arm64][GICR] WARNING: GICR wakeup timeout for CPU %lu (WAKER still 0x%08lx)\n", Cpu, W);
-            /* Continue anyway - redistributor might still work */
-        }
-    }
-
-    /* Clear any pending SGI/PPI interrupts first */
-    *HalpMmio(SgiBase, GICR_ICPENDR0) = 0xFFFFFFFF;
-
-    /*
-     * Configure interrupts as Group 1 Non-Secure.
-     *
-     * GICv3 uses two registers to determine interrupt group:
-     * - GICR_IGROUPR0: Group bit (0=Group0, 1=Group1)
-     * - GICR_IGRPMODR0: Modifier bit (determines Secure/NonSecure for Group1)
-     *
-     * Group assignment table:
-     *   IGROUPR[i] | IGRPMODR[i] | Result
-     *   -----------|-------------|-----------------
-     *       0      |      0      | Group 0
-     *       0      |      1      | Group 1 Secure
-     *       1      |      0      | Group 1 Non-Secure  <-- What we want
-     *       1      |      1      | Reserved
-     *
-     * For EL1 Non-Secure (our case):
-     * - Interrupts must be Group 1 Non-Secure
-     * - Delivered via ICC_IAR1_EL1 (not ICC_IAR0_EL1)
-     * - Enabled via ICC_IGRPEN1_EL1.Enable
-    */
-    *HalpMmio(SgiBase, GICR_IGROUPR0) = 0xFFFFFFFF;  /* All Group 1 */
-    *HalpMmio(SgiBase, GICR_IGRPMODR0) = 0x00000000; /* Non-Secure (not Secure) */
-    DPRINT1("[arm64][GICR] Configured all SGI/PPI as Group 1 Non-Secure\n");
-
-    /*
-     * Set priorities to 0x00 (highest priority) for all SGI/PPI.
-     *
-     * The ICC_PMR_EL1 reads back as 0xF8 (not 0xFF as written), indicating
-     * the implementation only supports 5 priority bits [7:3].
-     *
-     * In GIC priority comparison: LOWER number = HIGHER priority.
-     * PMR=0xF8 masks interrupts with priority < 0xF8 (lower priority).
-     *
-     * Old value 0xA0 was being masked (0xA0 < 0xF8), causing spurious
-     * interrupt returns (IntId=1023) when timer fired.
-     *
-     * Use 0x00 for highest priority, ensuring interrupts pass PMR mask.
-     */
-    for (ULONG i = 0; i < 32; i += 4)
-    {
-        *HalpMmio(SgiBase, GICR_IPRIORITYR + i) = 0x00000000;
-    }
-
-    /*
-     * CRITICAL ARM64 DESIGN: DO NOT enable SGIs here!
-     *
-     * On ARM64, HalRequestSoftwareInterrupt must NOT send actual hardware interrupts.
-     * Instead, it sets pending flags (like Prcb->DpcInterruptRequested) that are
-     * checked when IRQL is lowered in KeLowerIrql.
-     *
-     * If we enable SGIs and send them via HalpWriteIccSgi1r, they fire immediately
-     * and raise IRQL in the interrupt handler. This causes IRQL violations when
-     * code at PASSIVE_LEVEL calls functions that request software interrupts.
-     *
-     * For example:
-     * 1. ExQueueWorkItem (at PASSIVE_LEVEL) calls HalRequestSoftwareInterrupt(DPC_LEVEL)
-     * 2. If we send an SGI, it fires immediately
-     * 3. Interrupt handler raises IRQL to DPC_LEVEL
-     * 4. ExQueueWorkItem then calls KeInsertQueue which requires IRQL <= DISPATCH_LEVEL
-     * 5. Assertion fails: IRQL (DPC_LEVEL=2) > required (DISPATCH_LEVEL=2)
-     *
-     * The x86 model is instructive:
-     * - PIC HAL: Sets IRR flag, only calls handler if IRQL permits
-     * - APIC HAL: Sends self-interrupt, but x86 interrupt architecture is designed
-     *   for this with automatic interrupt masking
-     *
-     * On ARM64, software interrupts are purely virtual - they're flags checked
-     * during IRQL transitions, not actual hardware interrupts.
-     *
-     * SGIs should only be enabled when needed for true inter-processor interrupts
-     * (IPI for multiprocessor synchronization), not for software interrupt simulation.
-     */
-
-    /*
-     * Configure PPI trigger modes in GICR_ICFGR1.
-     *
-     * ICFGR1 controls PPIs 16-31 (2 bits per interrupt):
-     *   Bits [2n+1:2n] for PPI (16+n)
-     *   Bit 2n+1: 0=level-sensitive, 1=edge-triggered
-     *   Bit 2n:   Reserved (SBZ)
-     *
-     * ARM Generic Timer PPIs:
-     *   PPI 30 (phys timer): Should be LEVEL-sensitive
-     *   PPI 27 (virt timer): Should be LEVEL-sensitive
-     *
-     * For PPI 30: offset = (30-16)*2 = 28, so bits [29:28]
-     * Set bit 29 = 0 for level-sensitive
-     */
-    ULONG Icfgr1 = *HalpMmio(SgiBase, GICR_ICFGR1);
-    /* Clear edge trigger bits for PPI 27 and 30 (set to level-sensitive) */
-    Icfgr1 &= ~((1u << 23) | (1u << 29)); /* PPI 27 bit 23, PPI 30 bit 29 */
-    *HalpMmio(SgiBase, GICR_ICFGR1) = Icfgr1;
-    DPRINT1("[arm64][GICR] ICFGR1=0x%08lx (PPI 27,30 set to level-sensitive)\n", Icfgr1);
-
-    /*
-     * Only write to the SGI bits (0-15), leaving PPI bits (16-31) alone.
-     * PPIs will be enabled later by HalEnableSystemInterrupt when needed.
-     */
-    *HalpMmio(SgiBase, GICR_ICENABLER0) = 0x0000FFFF; /* Disable only SGIs (0-15) */
-
-    /*
-     * Re-enable SGIs needed for inter-processor interrupts.
-     *
-     * SGI 0 (HAL_ARM64_SGI_IPI) is used by KxFreezeExecution to freeze
-     * target CPUs for debugger entry (KdEnterDebugger). Without this,
-     * HalRequestIpi sends the SGI but the redistributor drops it because
-     * ISENABLER0 bit 0 is clear, causing KiArm64WaitForFrozenTargets
-     * to spin forever.
-     *
-     * Always enable IPI SGI regardless of UP/SMP - it's harmless in UP
-     * mode and required for SMP kernel debugger synchronization.
-     */
-    *HalpMmio(SgiBase, GICR_ISENABLER0) = (1u << HAL_ARM64_SGI_IPI);
-
-    /* Memory barrier after redistributor configuration */
-    __asm__ __volatile__("dsb sy" ::: "memory");
-
-    /* Verify final state */
-    ULONG IsEnabler = *HalpMmio(SgiBase, GICR_ISENABLER0);
-    DPRINT1("[arm64][GICR] Final ISENABLER0=0x%08lx (IPI SGI enabled)\n", IsEnabler);
-    DPRINT1("[arm64][GICR] Redistributor initialization complete for CPU %lu\n", Cpu);
-}
 
 /*
  * Per-CPU active interrupt ID tracking (stored as intid + 1).
@@ -4380,91 +2539,12 @@ HalpInitGicRedistributor(_In_ ULONG Cpu)
  */
 #define HAL_ARM64_ACTIVE_INTID_STACK_DEPTH 16
 
-static ULONG HalpArm64ActiveIntId[MAXIMUM_PROCESSORS];
 static ULONG HalpArm64ActiveIntIdStack[MAXIMUM_PROCESSORS][HAL_ARM64_ACTIVE_INTID_STACK_DEPTH];
 static UCHAR HalpArm64ActiveIntIdDepth[MAXIMUM_PROCESSORS];
 
-/* GIC detection: system-register interface (GICv3+) vs legacy CPU IF (GICv2)
- * HalpGicUseSysRegs, HalpForceLegacyGic, and HalpGicArchRev are declared
- * as extern at the top of this file and defined in gic_common.c. */
 static BOOLEAN HalpLoggedGicOnce = FALSE; /* One-time post-KD log */
 BOOLEAN HalpGicv2ForceGroup0 = FALSE; /* HVF quirk mode for legacy GIC */
 BOOLEAN HalpGicv2GroupModeLocked = FALSE; /* Explicit boot option override */
-
-FORCEINLINE ULONGLONG HalpReadMidr(void)
-{
-    ULONGLONG v; __asm__ __volatile__("mrs %0, midr_el1" : "=r"(v)); return v;
-}
-
-FORCEINLINE ULONGLONG HalpReadMpidr(void)
-{
-    ULONGLONG v; __asm__ __volatile__("mrs %0, mpidr_el1" : "=r"(v)); return v;
-}
-
-FORCEINLINE ULONGLONG HalpReadPfr0(void)
-{
-    ULONGLONG v; __asm__ __volatile__("mrs %0, id_aa64pfr0_el1" : "=r"(v)); return v;
-}
-
-FORCEINLINE ULONGLONG HalpReadCntfrq(void)
-{
-    ULONGLONG v; __asm__ __volatile__("mrs %0, cntfrq_el0" : "=r"(v)); return v;
-}
-
-FORCEINLINE ULONGLONG HalpReadCntpct(void)
-{
-    ULONGLONG v; __asm__ __volatile__("mrs %0, cntpct_el0" : "=r"(v)); return v;
-}
-
-FORCEINLINE unsigned int HalpReadIccSre(void)
-{
-    ULONGLONG v; __asm__ __volatile__("mrs %0, icc_sre_el1" : "=r"(v)); return (unsigned int)v;
-}
-
-FORCEINLINE VOID HalpWriteIccSre(unsigned int v)
-{
-    __asm__ __volatile__("msr icc_sre_el1, %0; isb" :: "r"((ULONGLONG)v) : "memory");
-}
-
-FORCEINLINE unsigned int HalpReadIccIar1(void)
-{
-    ULONGLONG v; __asm__ __volatile__("mrs %0, icc_iar1_el1" : "=r"(v)); return (unsigned int)(v & 0xFFFFFFu);
-}
-
-FORCEINLINE VOID HalpWriteIccEoir1(unsigned int id)
-{
-    __asm__ __volatile__("msr icc_eoir1_el1, %0; isb" :: "r"((ULONGLONG)id) : "memory");
-}
-
-FORCEINLINE VOID HalpWriteIccPmr(unsigned int v)
-{
-    __asm__ __volatile__("msr icc_pmr_el1, %0; isb" :: "r"((ULONGLONG)v) : "memory");
-}
-
-FORCEINLINE unsigned int HalpReadIccPmr(void)
-{
-    ULONGLONG v; __asm__ __volatile__("mrs %0, icc_pmr_el1" : "=r"(v)); return (unsigned int)v;
-}
-
-FORCEINLINE VOID HalpWriteIccBpr1(unsigned int v)
-{
-    __asm__ __volatile__("msr icc_bpr1_el1, %0; isb" :: "r"((ULONGLONG)v) : "memory");
-}
-
-FORCEINLINE VOID HalpWriteIccIgrpen1(unsigned int v)
-{
-    __asm__ __volatile__("msr icc_igrpen1_el1, %0; isb" :: "r"((ULONGLONG)v) : "memory");
-}
-
-FORCEINLINE unsigned int HalpReadIccIgrpen1(void)
-{
-    ULONGLONG v; __asm__ __volatile__("mrs %0, icc_igrpen1_el1" : "=r"(v)); return (unsigned int)v;
-}
-
-FORCEINLINE VOID HalpWriteIccSgi1r(ULONGLONG v)
-{
-    __asm__ __volatile__("msr icc_sgi1r_el1, %0; isb" :: "r"(v) : "memory");
-}
 
 /*
  * ============================================================================
@@ -4778,407 +2858,6 @@ HalpPsciSystemOff(VOID)
     }
 }
 
-static BOOLEAN
-HalpHasLoaderOption(
-    _In_opt_ PSTR Options,
-    _In_ PCSTR Option)
-{
-    if (!Options || !Option || *Option == '\0')
-        return FALSE;
-
-    return (strstr(Options, Option) != NULL);
-}
-
-static __inline ULONG
-HalpArm64AffinityFromMpidr(_In_ ULONGLONG Mpidr)
-{
-    ULONG Aff0 = (ULONG)(Mpidr & 0xFF);
-    ULONG Aff1 = (ULONG)((Mpidr >> 8) & 0xFF);
-    ULONG Aff2 = (ULONG)((Mpidr >> 16) & 0xFF);
-    ULONG Aff3 = (ULONG)((Mpidr >> 32) & 0xFF);
-    return Aff0 | (Aff1 << 8) | (Aff2 << 16) | (Aff3 << 24);
-}
-
-static __inline ULONGLONG
-HalpArm64IrouterFromMpidr(_In_ ULONGLONG Mpidr)
-{
-    ULONG Aff = HalpArm64AffinityFromMpidr(Mpidr);
-    ULONGLONG Aff0 = (ULONGLONG)(Aff & 0xFF);
-    ULONGLONG Aff1 = (ULONGLONG)((Aff >> 8) & 0xFF);
-    ULONGLONG Aff2 = (ULONGLONG)((Aff >> 16) & 0xFF);
-    ULONGLONG Aff3 = (ULONGLONG)((Aff >> 24) & 0xFF);
-    return (Aff0) | (Aff1 << 8) | (Aff2 << 16) | (Aff3 << 32);
-}
-
-static ULONG_PTR
-HalpArm64FindGicrForMpidr(_In_ ULONGLONG Mpidr)
-{
-    ULONG MaxFrames;
-    ULONG Affinity = HalpArm64AffinityFromMpidr(Mpidr);
-    ULONG_PTR Base;
-
-    if (HalpGicrRegionBase == 0 || HalpGicrStride == 0)
-        return 0;
-
-    MaxFrames = HalpGicrRegionLength ?
-                (ULONG)(HalpGicrRegionLength / HalpGicrStride) :
-                MAXIMUM_PROCESSORS;
-    if (MaxFrames == 0)
-        MaxFrames = MAXIMUM_PROCESSORS;
-
-    Base = (ULONG_PTR)HalpGicrRegionBase;
-    for (ULONG Index = 0; Index < MaxFrames; ++Index, Base += HalpGicrStride)
-    {
-        ULONGLONG Typer = HalpMmioRead64(Base, GICR_TYPER);
-        ULONG TyperAffinity = (ULONG)((Typer >> 32) & 0xFFFFFFFFu);
-
-        if (TyperAffinity == Affinity)
-            return Base;
-
-        if (Typer & (1ULL << 4))
-            break;
-    }
-
-    return 0;
-}
-
-static VOID
-HalpArm64DiscoverGicFromMadt(_In_opt_ PLOADER_PARAMETER_BLOCK LoaderBlock)
-{
-    ULONGLONG Mpidr;
-    BOOLEAN FoundGicd = FALSE;
-    BOOLEAN FoundGicr = FALSE;
-    BOOLEAN FoundCpuGicr = FALSE;
-    BOOLEAN FoundGiccEntry = FALSE;
-    BOOLEAN FoundGiccBase = FALSE;
-    ULONG Cpu = KeGetCurrentProcessorNumber();
-
-    if (HalpGicParsedMadt)
-    {
-        return;
-    }
-
-    HalpGicParsedMadt = TRUE;
-    if (!LoaderBlock)
-    {
-        return;
-    }
-    Mpidr = HalpReadMpidr();
-    HalpAcpiDiscoverArm64Tables(LoaderBlock);
-    if (HalpArm64GicInfo.GicdBase)
-    {
-        HalpGicdBase = HalpArm64GicInfo.GicdBase;
-        FoundGicd = TRUE;
-    }
-    if (HalpArm64GicInfo.GicrBase)
-    {
-        HalpGicrRegionBase = HalpArm64GicInfo.GicrBase;
-        HalpGicrRegionLength = HalpArm64GicInfo.GicrLength;
-        FoundGicr = TRUE;
-    }
-    if (HalpArm64GicInfo.GiccBase)
-    {
-        HalpGiccBase = HalpArm64GicInfo.GiccBase;
-        FoundGiccBase = TRUE;
-    }
-    if (HalpArm64GicInfo.GiccEntryCount)
-    {
-        FoundGiccEntry = TRUE;
-        for (ULONG Index = 0; Index < HalpArm64GicInfo.GiccEntryCount; ++Index)
-        {
-            PHALP_ARM64_GICC_ENTRY Entry = &HalpArm64GicInfo.GiccEntries[Index];
-
-            if (!Entry->GicrBase)
-                continue;
-
-            /*
-             * QEMU HVF bug workaround: When running with < 4GB RAM but ACPI tables
-             * report GICR addresses at 0x100000000 (highmem location), the GICR
-             * hardware is actually at the lowmem location (0x80a0000). Skip any
-             * per-CPU GICR base that is at or above 4GB - we'll fall back to the
-             * region-based discovery which uses the correct default address.
-             *
-             * This occurs because QEMU generates ACPI tables assuming highmem GIC
-             * placement, but when using HVF with limited RAM, the actual GIC
-             * hardware is at the lowmem addresses shown in the device tree.
-             */
-            if (Entry->GicrBase >= 0x100000000ULL)
-            {
-                DPRINT1("[arm64][HAL] Skipping highmem GICR@0x%llx for CPU %lu\n",
-                        Entry->GicrBase, Index);
-                continue;
-            }
-
-            if (HalpArm64AffinityFromMpidr(Entry->Mpidr) ==
-                HalpArm64AffinityFromMpidr(Mpidr))
-            {
-                if (Cpu < RTL_NUMBER_OF(HalpGicrCpuBase))
-                {
-                    HalpGicrCpuBase[Cpu] = (ULONG_PTR)Entry->GicrBase;
-                    FoundCpuGicr = TRUE;
-                }
-                break;
-            }
-        }
-    }
-    if (HalpArm64GicInfo.ItsCount)
-    {
-        ULONG ItsNodeIdx = 0;
-        for (ULONG Index = 0; Index < HalpArm64GicInfo.ItsCount && ItsNodeIdx < HALP_GIC_MAX_ITS_NODES_FWD; ++Index)
-        {
-            HALP_ARM64_GIC_ITS_ENTRY *ItsEntry = &HalpArm64GicInfo.ItsEntries[Index];
-            if (ItsEntry->BaseAddress)
-            {
-                /*
-                 * Initialize the ITS node structure in HalpGicItsNodes array.
-                 * This mirrors what gic_init.c's HalpArm64DiscoverGicFromMadt does.
-                 * We must initialize these fields because HalpGicItsProbeNode in
-                 * gic_its.c checks ItsNode->VirtualBase != 0 before proceeding.
-                 */
-                PHALP_GIC_ITS_NODE_FWD ItsNode = &HalpGicItsNodes[ItsNodeIdx];
-
-                RtlZeroMemory(ItsNode, sizeof(*ItsNode));
-                ItsNode->PhysicalBase.QuadPart = ItsEntry->BaseAddress;
-                ItsNode->VirtualBase = (ULONG_PTR)ItsEntry->BaseAddress; /* Identity mapping initially */
-                ItsNode->ItsId = ItsEntry->ItsId;
-                ItsNode->ListNumber = ItsNodeIdx;
-                ItsNode->InitState = 0;
-                KeInitializeSpinLock(&ItsNode->CmdLock);
-                KeInitializeSpinLock(&ItsNode->DeviceLock);
-
-                /*
-                 * Set the legacy single-ITS fields for first ITS found.
-                 */
-                if (ItsNodeIdx == 0)
-                {
-                    HalpGicItsBase = ItsEntry->BaseAddress;
-                    HalpGicItsId = ItsEntry->ItsId;
-                }
-                HalpGicItsPresent = TRUE;
-                ItsNodeIdx++;
-            }
-        }
-        /*
-         * CRITICAL: Set HalpGicItsNodeCount so MSI allocation code
-         * (HalpAllocateMsiInterrupt) and ITS initialization code know
-         * ITS is available. This count is used by HalpGicItsInitAllNodes
-         * to iterate over the ITS nodes we just initialized.
-         */
-        HalpGicItsNodeCount = ItsNodeIdx;
-        DPRINT1("[arm64][HAL] ITS: Initialized %lu ITS nodes (ItsCount=%lu)\n",
-                ItsNodeIdx, HalpArm64GicInfo.ItsCount);
-    }
-    if (HalpArm64GicInfo.MsiFrameCount)
-    {
-        for (ULONG Index = 0; Index < HalpArm64GicInfo.MsiFrameCount; ++Index)
-        {
-            HALP_ARM64_GIC_MSI_FRAME_ENTRY *Frame =
-                &HalpArm64GicInfo.MsiFrames[Index];
-            if (Frame->BaseAddress)
-            {
-                HalpGicMsiFrameBase = Frame->BaseAddress;
-                HalpGicMsiSpiBase = Frame->SpiBase;
-                HalpGicMsiSpiCount = Frame->SpiCount;
-                HalpGicMsiFlags = Frame->Flags;
-                HalpGicMsiPresent = TRUE;
-                break;
-            }
-        }
-    }
-    if (FoundGicd)
-    {
-        DPRINT1("[arm64][HAL] MADT: GICD @0x%llx\n", HalpGicdBase);
-    }
-    if (FoundGicr)
-    {
-        DPRINT1("[arm64][HAL] MADT: GICR region @0x%llx len=0x%llx\n",
-                HalpGicrRegionBase,
-                HalpGicrRegionLength);
-    }
-    if (FoundGiccEntry && !FoundGiccBase)
-    {
-        HalpGiccBase = 0;
-        HalpGiccPresent = FALSE;
-        DPRINT1("[arm64][HAL] MADT: no GICC base, legacy CPU IF unavailable\n");
-    }
-    else if (FoundGiccBase)
-    {
-        HalpGiccPresent = TRUE;
-    }
-    if (!FoundCpuGicr && FoundGicr && HalpGicrRegionBase)
-    {
-        ULONG_PTR Base = HalpArm64FindGicrForMpidr(Mpidr);
-        if (Base && Cpu < RTL_NUMBER_OF(HalpGicrCpuBase))
-        {
-            HalpGicrCpuBase[Cpu] = Base;
-            DPRINT1("[arm64][HAL] MADT: selected GICR CPU base @0x%p\n", (PVOID)Base);
-        }
-    }
-
-    /* Log ITS detection result regardless of presence */
-    DPRINT1("[arm64][HAL] MADT: ItsCount=%lu, ItsPresent=%d, ItsBase=0x%llx\n",
-            HalpArm64GicInfo.ItsCount,
-            (int)HalpGicItsPresent,
-            HalpGicItsBase);
-    if (HalpGicItsPresent)
-    {
-        DPRINT1("[arm64][HAL] MADT: GIC ITS %lu @0x%llx\n",
-                HalpGicItsId,
-                HalpGicItsBase);
-    }
-    if (HalpGicMsiPresent)
-    {
-        DPRINT1("[arm64][HAL] MADT: GIC MSI frame @0x%llx SPI[%u..%u] flags=0x%lx\n",
-                HalpGicMsiFrameBase,
-                HalpGicMsiSpiBase,
-                (ULONG)(HalpGicMsiSpiBase + HalpGicMsiSpiCount - 1),
-                HalpGicMsiFlags);
-    }
-}
-
-static VOID
-HalpArm64SelectGicInterface(_In_opt_ PLOADER_PARAMETER_BLOCK LoaderBlock)
-{
-    ULONGLONG pfr0 = 0;
-    ULONG pfr0_gic = 0;
-    ULONGLONG midr = 0;
-    UCHAR implementer = 0;
-
-    if (HalpGicInterfaceSelected)
-    {
-        return;
-    }
-
-    HalpGicInterfaceSelected = TRUE;
-
-    /* Check for boot options that force GIC interface selection */
-    if (LoaderBlock && LoaderBlock->LoadOptions)
-    {
-        if (HalpHasLoaderOption(LoaderBlock->LoadOptions, "GICV3") ||
-            HalpHasLoaderOption(LoaderBlock->LoadOptions, "GICSYSREG"))
-        {
-            HalpForceSysRegs = TRUE;
-            HalpForceLegacyGic = FALSE;
-        }
-        else if (HalpHasLoaderOption(LoaderBlock->LoadOptions, "GICV2") ||
-                 HalpHasLoaderOption(LoaderBlock->LoadOptions, "NOGICSYSREG") ||
-                 HalpHasLoaderOption(LoaderBlock->LoadOptions, "LEGACYGIC"))
-        {
-            HalpForceLegacyGic = TRUE;
-        }
-
-        if (HalpHasLoaderOption(LoaderBlock->LoadOptions, "GICV2GROUP0") ||
-            HalpHasLoaderOption(LoaderBlock->LoadOptions, "HVFGICV2"))
-        {
-            HalpGicv2ForceGroup0 = TRUE;
-            HalpGicv2GroupModeLocked = TRUE;
-        }
-        else if (HalpHasLoaderOption(LoaderBlock->LoadOptions, "GICV2GROUP1"))
-        {
-            HalpGicv2ForceGroup0 = FALSE;
-            HalpGicv2GroupModeLocked = TRUE;
-        }
-    }
-    HalpArm64DiscoverGicFromMadt(LoaderBlock);
-
-    /* Apple HVF quirk */
-    if (!HalpForceSysRegs && !HalpForceLegacyGic && HalpGiccPresent)
-    {
-        midr = HalpReadMidr();
-        implementer = (UCHAR)((midr >> 24) & 0xFF);
-        if (implementer == 0x61) /* Apple */
-        {
-            HalpForceLegacyGic = TRUE;
-            HalpGicv2ForceGroup0 = TRUE;
-        }
-    }
-
-    if (!HalpGiccPresent)
-    {
-        HalpForceLegacyGic = FALSE;
-        HalpForceSysRegs = TRUE;
-        HalpGicv2ForceGroup0 = FALSE;
-    }
-
-    /*
-     * QEMU virt quirk:
-     * Legacy GICv2 Group1 delivery can stall very early during IRQL unmasking.
-     * Keep Group0-only by default on this machine profile unless user override
-     * explicitly requested GICV2GROUP1/GICV2GROUP0.
-     */
-    if (!HalpForceSysRegs &&
-        HalpGiccPresent &&
-        !HalpGicv2GroupModeLocked &&
-        HalpGicdBase == HAL_ARM64_GICD_BASE_DEFAULT &&
-        HalpGiccBase == HAL_ARM64_GICC_BASE_DEFAULT)
-    {
-        HalpGicv2ForceGroup0 = TRUE;
-    }
-    pfr0 = HalpReadPfr0();
-    pfr0_gic = (ULONG)((pfr0 >> 24) & 0xF);
-
-    if (HalpForceSysRegs)
-    {
-        ULONG sre = HalpReadIccSre();
-        sre |= 0x1;
-        HalpWriteIccSre(sre);
-        sre = HalpReadIccSre();
-        if (sre & 0x1)
-        {
-            HalpGicUseSysRegs = TRUE;
-        }
-        else
-        {
-            HalpGicUseSysRegs = FALSE;
-        }
-    }
-    else if (!HalpForceLegacyGic && pfr0_gic >= 1)
-    {
-        ULONG sre = HalpReadIccSre();
-        sre |= 0x1;
-        HalpWriteIccSre(sre);
-        sre = HalpReadIccSre();
-        if (sre & 0x1)
-        {
-            HalpGicUseSysRegs = TRUE;
-        }
-        else
-        {
-            HalpGicUseSysRegs = FALSE;
-        }
-    }
-    else
-    {
-        HalpGicUseSysRegs = FALSE;
-    }
-}
-
-static VOID
-HalpArm64SendSgi(
-    _In_ KAFFINITY TargetSet,
-    _In_ ULONG SgiId)
-{
-    ULONG TargetList;
-
-    if ((TargetSet == 0) || (SgiId > 15))
-        return;
-
-    if (HalpGicUseSysRegs)
-    {
-        HalpGicv3SendSgi(TargetSet, SgiId);
-        return;
-    }
-
-    TargetList = (ULONG)(TargetSet & 0xFF);
-    if (TargetList == 0)
-        return;
-
-    /* GICv2 legacy path: write to GICD_SGIR */
-    *HalpMmio((ULONG_PTR)HalpGicdBase, GICD_SGIR) = (SgiId & 0xF) | (TargetList << 16);
-
-    /* Ensure SGI write is visible and wake any waiting CPUs */
-    __asm__ __volatile__("dsb sy; sev" ::: "memory");
-}
 
 /* HALDISPATCH HalGetDmaAdapter factory; wired up in HalInitSystem (see below). */
 static PDMA_ADAPTER NTAPI
@@ -5194,8 +2873,6 @@ HalInitSystem(
     _In_ PLOADER_PARAMETER_BLOCK LoaderBlock)
 {
     NTSTATUS Status;
-    ULONG i, lines, nregs;
-    ULONG typer;
     KIRQL OldIrql;
 
     if (BootPhase != 0)
@@ -5230,21 +2907,38 @@ HalInitSystem(
          *
          * For GICv3, the CPU interface uses system registers (no MMIO).
          */
+        BOOLEAN MmioRemapped;
+
         if (HalpGicUseSysRegs)
         {
-            if (!HalpMapGicv3RuntimeMmioWindows())
+            MmioRemapped = HalpMapGicv3RuntimeMmioWindows();
+            if (!MmioRemapped)
             {
                 DPRINT1("[arm64][HAL] Phase1: MmMapIoSpace failed for GICv3 MMIO; "
-                        "GICD/GICR addresses may be stale\n");
+                        "keeping identity mapping enabled\n");
             }
         }
         else
         {
-            if (!HalpMapGicv2RuntimeMmioWindows())
+            MmioRemapped = HalpMapGicv2RuntimeMmioWindows();
+            if (!MmioRemapped)
             {
                 DPRINT1("[arm64][HAL] Phase1: MmMapIoSpace failed for GICv2 MMIO; "
-                        "GICC/GICD addresses may be stale\n");
+                        "keeping identity mapping enabled\n");
             }
+        }
+
+        /*
+         * Only tear down the identity mapping once the GIC MMIO windows have been
+         * successfully remapped to kernel VAs. If the remap failed, leaving the
+         * identity mapping enabled keeps HalpMmio() functional via the TTBR0
+         * PA==VA path; clearing it would data-abort on the next GIC access. We
+         * bugcheck because the system register / GICC interface cannot operate
+         * correctly without valid GIC MMIO after the identity mapping is gone.
+         */
+        if (!MmioRemapped)
+        {
+            KeBugCheckEx(HAL_INITIALIZATION_FAILED, 0, 0, 0, 0);
         }
 
         /* Disable identity mapping for BOTH GICv2 and GICv3 */
@@ -5335,245 +3029,18 @@ HalInitSystem(
      * at which point interrupts can safely be processed.
      */
     OldIrql = KfRaiseIrql(HIGH_LEVEL);
-    HalpArm64SelectGicInterface(LoaderBlock);
 
-    /* Probe GIC capabilities before touching CPU IF */
-    {
-        ULONG pidr2 = 0;
-
-        /* Identify distributor architecture revision */
-        pidr2 = *HalpMmio((ULONG_PTR)HalpGicdBase, 0xFE8); /* GICD_PIDR2 */
-        HalpGicArchRev = ((pidr2 >> 4) & 0xF);
-        if (HalpGicArchRev == 0)
-            HalpGicArchRev = HalpGicUseSysRegs ? 3 : 2;
-    }
-
-    /* Disable distributor while we (re)configure */
-    *HalpMmio((ULONG_PTR)HalpGicdBase, GICD_CTLR) = 0;
-
-    /* How many interrupt lines? */
-    typer = *HalpMmio((ULONG_PTR)HalpGicdBase, GICD_TYPER);
-    lines = 32 * ((typer & 0x1F) + 1);
-    if (lines > 1020) lines = 1020;
-    nregs = (lines + 31) / 32;
+    /* Initialize the GIC under the phase-0 identity mapping (see gic_init.c). */
+    HalpInitGic(LoaderBlock);
 
     /*
-     * Configure SPI interrupt groups and clear pending.
-     *
-     * For GIC-v3 with system registers: Use Group 1 (non-secure) as standard.
-     * For GIC-v2 (MMIO interface): default to Group 1 (Windows-compatible),
-     * with optional Group 0 fallback for known HVF quirk platforms.
-     *
-     * Group 0 interrupts are delivered via IRQ (not FIQ) when the CPU is in
-     * non-secure mode and GICC_CTLR.EOImodeNS=0, which is our configuration.
-     */
-    for (i = 1; i < nregs; ++i) /* start at 1 to skip SGI/PPI */
-    {
-        *HalpMmio((ULONG_PTR)HalpGicdBase, GICD_ICENABLER + i * 4) = 0xFFFFFFFF;
-        *HalpMmio((ULONG_PTR)HalpGicdBase, GICD_ICPENDR   + i * 4) = 0xFFFFFFFF;
-        if (HalpGicUseSysRegs || !HalpGicv2ForceGroup0)
-        {
-            *HalpMmio((ULONG_PTR)HalpGicdBase, GICD_IGROUPR + i * 4) = 0xFFFFFFFF; /* G1 */
-        }
-        else
-        {
-            *HalpMmio((ULONG_PTR)HalpGicdBase, GICD_IGROUPR + i * 4) = 0x00000000; /* G0 for GIC-v2 */
-        }
-    }
-
-    /*
-     * Set priorities to 0x00 (highest) for all SPIs.
-     * This matches the PPI priority fix and ensures interrupts pass the PMR mask.
-     */
-    for (i = 32; i < lines; i += 4)
-    {
-        *HalpMmio((ULONG_PTR)HalpGicdBase, GICD_IPRIORITYR + (i & ~3)) = 0x00000000;
-    }
-
-    if (HalpGicUseSysRegs)
-    {
-        ULONGLONG Route = HalpArm64IrouterFromMpidr(HalpReadMpidr());
-        for (i = 32; i < lines; ++i)
-        {
-            HalpMmioWrite64((ULONG_PTR)HalpGicdBase, GICD_IROUTER + (i * 8), Route);
-        }
-    }
-    else
-    {
-        for (i = 32; i < lines; i += 4)
-        {
-            *HalpMmio((ULONG_PTR)HalpGicdBase, GICD_ITARGETSR + (i & ~3))  = 0x01010101; /* CPU0 */
-        }
-    }
-    /*
-     * GIC-v2: Configure SGI/PPI bank (interrupts 0-31) BEFORE enabling distributor.
-     *
-     * CRITICAL: We must preserve PPIs that were already enabled by KeInitInterrupts()
-     * (e.g., timer PPI 27, DPC SGI 2, APC SGI 1). KeInitInterrupts() is called before
-     * HalInitSystem() in the boot sequence:
-     *   1. KiInitializeSystem -> KeInitInterrupts() -> enables timer/DPC/APC via GICD_ISENABLER0
-     *   2. KiInitializeKernel -> ExpInitializeExecutive -> HalInitSystem(0, ...)
-     *
-     * If we blindly disable all SGIs/PPIs here, the timer interrupt never fires,
-     * causing the idle loop to stall indefinitely in WFE.
-     *
-     * For GIC-v3, this is handled differently via redistributor registers which
-     * are configured per-CPU in HalpInitGicRedistributor() and are not reset here.
-     */
-    if (!HalpGicUseSysRegs)
-    {
-        ULONG SavedEnables;
-
-        /*
-         * Save currently enabled PPIs before reconfiguration.
-         * SGIs (bits 0-15) are always enabled in GIC-v2 and cannot be disabled,
-         * but PPIs (bits 16-31) need to be preserved if already enabled.
-         */
-        SavedEnables = *HalpMmio((ULONG_PTR)HalpGicdBase, GICD_ISENABLER + 0);
-
-        /* Clear pending interrupts but do NOT disable - we will restore enables */
-        *HalpMmio((ULONG_PTR)HalpGicdBase, GICD_ICPENDR + 0) = 0xFFFFFFFF;
-
-        /*
-         * Configure SGI/PPI groups for GIC-v2:
-         * - Default: Group 1 non-secure (Windows-compatible behavior)
-         * - HVF quirk mode: Group 0 only
-         */
-        *HalpMmio((ULONG_PTR)HalpGicdBase, GICD_IGROUPR + 0) =
-            HalpGicv2ForceGroup0 ? 0x00000000 : 0xFFFFFFFF;
-
-        /*
-         * Set SGI/PPI priorities to 0x00 (highest).
-         * Matches the GICv3 fix for priority masking.
-         */
-        for (ULONG i = 0; i < 32; i += 4)
-        {
-            *HalpMmio((ULONG_PTR)HalpGicdBase, GICD_IPRIORITYR + i) = 0x00000000;
-        }
-
-        /*
-         * Restore previously enabled interrupts.
-         * Writing to GICD_ISENABLER sets enable bits (does not clear others).
-         * This ensures timer PPI and SGIs remain enabled after reconfiguration.
-         */
-        if (SavedEnables != 0)
-        {
-            *HalpMmio((ULONG_PTR)HalpGicdBase, GICD_ISENABLER + 0) = SavedEnables;
-        }
-    }
-
-    /*
-     * Memory barrier to ensure all distributor configuration (SPIs + SGI/PPI)
-     * is complete before we enable interrupt delivery.
-     */
-    __asm__ __volatile__("dsb sy" ::: "memory");
-
-    /*
-     * Enable the distributor.
-     *
-     * GICD_CTLR bits:
-     *   Bit 0: EnableGrp0 - Group 0 interrupts
-     *   Bit 1: EnableGrp1 - Group 1 (non-secure) interrupts
-     *   Bit 4: ARE_NS - Affinity Routing Enable (GICv3 only)
-     *
-     * For GIC-v2, default to enabling both groups (Group0 + Group1) to match
-     * non-secure Windows-style interrupt delivery. On known HVF quirk setups,
-     * fallback to Group0-only mode.
-     *
-     * For GIC-v3, we MUST enable BOTH Group 0 and Group 1 because:
-     *   - SPIs are configured as Group 1 (GICD_IGROUPR)
-     *   - PPIs are configured as Group 1 in redistributor (GICR_IGROUPR0)
-     *   - ICC_IGRPEN1_EL1 is enabled for Group 1 interrupt delivery
+     * Keep Group 1 IRQ delivery masked until phase 1: HalpInitGicv3CpuInterface()
+     * enables ICC_IGRPEN1_EL1, so re-disable it here for the sysreg path.
      */
     if (HalpGicUseSysRegs)
     {
-        *HalpMmio((ULONG_PTR)HalpGicdBase, GICD_CTLR) = 0x13; /* EnableGrp0 | EnableGrp1NS | ARE_NS */
+        HalpWriteIccIgrpen1(0);
     }
-    else
-    {
-        *HalpMmio((ULONG_PTR)HalpGicdBase, GICD_CTLR) = HalpGicv2ForceGroup0 ? 0x1 : 0x3;
-    }
-
-    /* Barrier to ensure GICD enable completes before CPU interface configuration */
-    __asm__ __volatile__("dsb sy" ::: "memory");
-
-    if (HalpGicUseSysRegs)
-    {
-        HalpInitGicRedistributor(KeGetCurrentProcessorNumber());
-    }
-
-    /* CPU interface: system registers (v3+) or legacy GICC (v2) */
-    if (HalpGicUseSysRegs)
-    {
-        ULONG Sre;
-
-        /* Enable system register access and configure priority mask. */
-        Sre = HalpReadIccSre();
-        Sre |= 0x1; /* SRE bit */
-        HalpWriteIccSre(Sre);
-        HalpWriteIccPmr(0xFF); /* allow all priorities */
-        HalpWriteIccBpr1(0);
-
-        /*
-         * Keep Group 1 delivery disabled in phase 0. The executive enables CPU
-         * IRQ delivery after HalInitSystem(0), and HAL phase 1 enables Group 1
-         * after memory initialization has completed.
-         */
-        HalpWriteIccIgrpen1(0); /* KEEP DISABLED in Phase 0 */
-    }
-    else
-    {
-        if (HalpGiccBase == 0)
-        {
-            DPRINT1("[arm64][HAL] HalInitSystem: legacy CPU IF unavailable (GICC base is 0)\n");
-        }
-        else
-        {
-            ULONG GiccCtlr;
-
-            /*
-             * GIC-v2 Legacy CPU Interface (GICC) Initialization
-             *
-             * Note: The SGI/PPI bank (interrupts 0-31) was already configured
-             * earlier while the distributor was disabled to avoid race conditions.
-             * Now we just need to enable the per-CPU GICC interface.
-             *
-             * Configure GICC (CPU Interface):
-             * - PMR = 0xFF: Allow all priority levels
-             * - BPR = 0x0: No preemption grouping
-             * - CTLR = 0x3: Enable both Group0 and Group1 (default path)
-             * - CTLR = 0x1: Group0-only in HVF quirk mode
-             */
-            GiccCtlr = HalpGicv2ForceGroup0 ? 0x1 : 0x3;
-            *HalpMmio((ULONG_PTR)HalpGiccBase, GICC_PMR) = 0xFF;
-            *HalpMmio((ULONG_PTR)HalpGiccBase, GICC_BPR) = 0x0;
-            *HalpMmio((ULONG_PTR)HalpGiccBase, GICC_CTLR) = GiccCtlr;
-
-            /*
-             * CRITICAL: Memory barrier after GICC configuration.
-             *
-             * ARM64 has a relaxed memory model. MMIO writes to device registers
-             * may not complete immediately. DSB ensures that the GICC_CTLR
-             * enable takes effect before any subsequent memory operations
-             * (including PCI ECAM reads) can proceed.
-             *
-             * This barrier is essential for GIC-v2 because:
-             * 1. The CPU interface must be fully enabled before interrupt
-             *    delivery can work correctly
-             * 2. Without this barrier, subsequent MMIO reads (like PCI config
-             *    space access) may hang if they depend on interrupt state
-             * 3. QEMU's GIC-v2 emulation is sensitive to proper ordering
-             *
-             * ISB ensures the barrier effects are synchronized with the
-             * instruction stream.
-             */
-            __asm__ __volatile__("dsb sy" ::: "memory");
-            __asm__ __volatile__("isb" ::: "memory");
-        }
-    }
-
-    HalpGicPhase0Complete = TRUE;
-    HalpArm64ApplyDeferredInterruptEnables();
 
     /*
      * Initialize system time increment values for the scheduler tick.
@@ -6081,8 +3548,6 @@ HalDisableSystemInterrupt(
     _In_ ULONG Vector,
     _In_ KIRQL Irql)
 {
-    ULONG reg = Vector / 32;
-    ULONG bit = Vector % 32;
     UNREFERENCED_PARAMETER(Irql);
 
     /*
@@ -6096,44 +3561,24 @@ HalDisableSystemInterrupt(
         return;
     }
 
-    if (HalpGicUseSysRegs && Vector < 32)
+    if (Vector >= HAL_ARM64_LPI_BASE)
     {
-        /* PPI (16-31): disable via redistributor */
-        *HalpMmio(HalpGicrSgiBase(KeGetCurrentProcessorNumber()), GICR_ICENABLER0) = (1u << bit);
-    }
-    else if (Vector >= HAL_ARM64_LPI_BASE)
-    {
-        /* LPI (8192+): Disable via ITS configuration table */
-        ULONG LpiIndex = Vector - HAL_ARM64_LPI_BASE;
-
-        DPRINT1("[arm64][LPI] Disabling LPI %lu (index %lu)\n", Vector, LpiIndex);
-
-        if (!HalpGicLpiConfig || LpiIndex >= HalpGicLpiCount)
-        {
-            DPRINT1("[arm64][LPI] ERROR: Invalid LPI %lu (index %lu >= count %lu)\n",
-                    Vector, LpiIndex, HalpGicLpiCount);
-            return;
-        }
-
-        /* Clear enable bit in LPI configuration table */
-        HalpGicLpiConfig[LpiIndex] = (UCHAR)(HAL_ARM64_LPI_PROP_PRIO_DEFAULT |
-                                             HAL_ARM64_LPI_PROP_GROUP1);
-
-        /* Clean cache to ensure configuration table update is visible */
-        HalpArm64CleanDcacheRange(&HalpGicLpiConfig[LpiIndex], sizeof(UCHAR));
-
+        /* LPI: disable via the ITS. */
+        DPRINT1("[arm64][LPI] Disabling LPI %lu\n", Vector);
+        HalpGicItsDisableLpi(Vector);
         __asm__ __volatile__("dsb sy" ::: "memory");
+        return;
     }
-    else if (Vector < 1020)
-    {
-        /* SPI (32-1019): disable via distributor */
-        *HalpMmio((ULONG_PTR)HalpGicdBase, GICD_ICENABLER + reg * 4) = (1u << bit);
-    }
-    else
+
+    if (Vector >= 1020)
     {
         /* Reserved range (1020-8191): no-op */
         DPRINT1("[arm64] HalDisableSystemInterrupt: Invalid vector %lu (reserved range)\n", Vector);
+        return;
     }
+
+    /* PPIs and SPIs: clear the enable bit (redistributor on GICv3, distributor otherwise). */
+    HalpGicDisableInterrupt(Vector);
 }
 
 VOID
@@ -6208,44 +3653,8 @@ HalEnableSystemInterrupt(
     _In_ KIRQL Irql,
     _In_ KINTERRUPT_MODE InterruptMode)
 {
-    ULONG reg = Vector / 32;
-    ULONG bit = Vector % 32;
-    ULONG prioReg;
-    ULONG prioShift;
-    ULONG prioVal;
     UCHAR priority;
     BOOLEAN EdgeTriggered;
-
-    if (!HalpGicPhase0Complete)
-    {
-        for (ULONG Index = 0; Index < RTL_NUMBER_OF(HalpArm64DeferredInterrupts); ++Index)
-        {
-            PHALP_ARM64_DEFERRED_INTERRUPT Entry = &HalpArm64DeferredInterrupts[Index];
-
-            if (Entry->Valid && Entry->Vector == Vector)
-            {
-                Entry->Irql = Irql;
-                Entry->InterruptMode = InterruptMode;
-                return TRUE;
-            }
-        }
-
-        for (ULONG Index = 0; Index < RTL_NUMBER_OF(HalpArm64DeferredInterrupts); ++Index)
-        {
-            PHALP_ARM64_DEFERRED_INTERRUPT Entry = &HalpArm64DeferredInterrupts[Index];
-
-            if (!Entry->Valid)
-            {
-                Entry->Vector = Vector;
-                Entry->Irql = Irql;
-                Entry->InterruptMode = InterruptMode;
-                Entry->Valid = TRUE;
-                return TRUE;
-            }
-        }
-
-        return FALSE;
-    }
 
     /*
      * SGIs (0-15) are always enabled in GICv3 and cannot be enabled/disabled.
@@ -6263,55 +3672,10 @@ HalEnableSystemInterrupt(
     priority = HalpIrqlToGicPriority(Irql);
     EdgeTriggered = (InterruptMode == Latched);
 
-    if (HalpGicUseSysRegs && Vector < 32)
+    if (Vector >= HAL_ARM64_LPI_BASE)
     {
-        /* PPI (16-31): use Redistributor registers */
-        ULONG Cpu = KeGetCurrentProcessorNumber();
-        ULONG_PTR SgiBase = HalpGicrSgiBase(Cpu);
-        ULONG IsEnablerAfter;
-
-        if (SgiBase == 0)
-        {
-            DPRINT1("[arm64][PPI] ERROR: SgiBase is NULL for CPU %lu!\n", Cpu);
-            return FALSE;
-        }
-
-        /* Set priority for this interrupt */
-        prioReg = GICR_IPRIORITYR + (Vector & ~3);
-        prioShift = (Vector & 3) * 8;
-        prioVal = *HalpMmio(SgiBase, prioReg);
-        prioVal &= ~(0xFFu << prioShift);
-        prioVal |= ((ULONG)priority << prioShift);
-        *HalpMmio(SgiBase, prioReg) = prioVal;
-
-        /* Memory barrier after priority write */
-        __asm__ __volatile__("dsb sy" ::: "memory");
-
-        /* Enable the interrupt */
-        *HalpMmio(SgiBase, GICR_ISENABLER0) = (1u << bit);
-
-        /* Memory barrier after enable */
-        __asm__ __volatile__("dsb sy" ::: "memory");
-
-        /* Verify it was enabled */
-        IsEnablerAfter = *HalpMmio(SgiBase, GICR_ISENABLER0);
-
-        if (!(IsEnablerAfter & (1u << bit)))
-        {
-            DPRINT1("[arm64][PPI] WARNING: PPI %lu did not enable! Retrying...\n", Vector);
-            /* Retry the enable */
-            *HalpMmio(SgiBase, GICR_ISENABLER0) = (1u << bit);
-            __asm__ __volatile__("dsb sy" ::: "memory");
-        }
-    }
-    else if (Vector >= HAL_ARM64_LPI_BASE)
-    {
-        /* LPI (8192+): Enable via ITS configuration table */
-        ULONG LpiIndex = Vector - HAL_ARM64_LPI_BASE;
-        ULONG Cpu = KeGetCurrentProcessorNumber();
-        UCHAR Config;
-
-        DPRINT1("[arm64][LPI] Enabling LPI %lu (index %lu)\n", Vector, LpiIndex);
+        /* LPI: enable via the ITS. */
+        DPRINT1("[arm64][LPI] Enabling LPI %lu\n", Vector);
 
         if (!HalpGicItsEnabled || HalpGicItsInitFailed)
         {
@@ -6319,85 +3683,24 @@ HalEnableSystemInterrupt(
             return FALSE;
         }
 
-        if (!HalpGicLpiConfig || LpiIndex >= HalpGicLpiCount)
-        {
-            DPRINT1("[arm64][LPI] ERROR: Invalid LPI %lu (index %lu >= count %lu)\n",
-                    Vector, LpiIndex, HalpGicLpiCount);
-            return FALSE;
-        }
-
-        /* Set priority and enable in LPI configuration table */
-        Config = (UCHAR)((priority & 0xFC) |  /* Priority in bits 7:2 */
-                        HAL_ARM64_LPI_PROP_GROUP1 |
-                        HAL_ARM64_LPI_PROP_ENABLED);
-        HalpGicLpiConfig[LpiIndex] = Config;
-
-        /* Clean cache to ensure configuration table update is visible to redistributor */
-        HalpArm64CleanDcacheRange(&HalpGicLpiConfig[LpiIndex], sizeof(UCHAR));
-
-        /* Memory barrier */
+        HalpGicItsEnableLpi(Vector);
         __asm__ __volatile__("dsb sy" ::: "memory");
-
-        /* Send INVALL command to invalidate cached LPI configuration */
-        if (!HalpGicItsSendInvall(Cpu))
-        {
-            DPRINT1("[arm64][LPI] WARNING: INVALL command failed for CPU %lu\n", Cpu);
-        }
+        return TRUE;
     }
-    else if (Vector < 1020)
-    {
-        /* SPI (32-1019): use Distributor registers */
-        HalpArm64ProgramGicTrigger(Vector, EdgeTriggered);
 
-        /* Set priority for this interrupt */
-        prioReg = GICD_IPRIORITYR + (Vector & ~3);
-        prioShift = (Vector & 3) * 8;
-        prioVal = *HalpMmio((ULONG_PTR)HalpGicdBase, prioReg);
-        prioVal &= ~(0xFFu << prioShift);
-        prioVal |= ((ULONG)priority << prioShift);
-        *HalpMmio((ULONG_PTR)HalpGicdBase, prioReg) = prioVal;
-
-        /* Memory barrier after priority write */
-        __asm__ __volatile__("dsb sy" ::: "memory");
-
-        /* Enable the interrupt */
-        *HalpMmio((ULONG_PTR)HalpGicdBase, GICD_ISENABLER + reg * 4) = (1u << bit);
-
-        /* Memory barrier after enable */
-        __asm__ __volatile__("dsb sy" ::: "memory");
-    }
-    else
+    if (Vector >= 1020)
     {
         /* Reserved range (1020-8191): error */
         DPRINT1("[arm64] HalEnableSystemInterrupt: Invalid vector %lu (reserved range)\n", Vector);
         return FALSE;
     }
 
+    /* PPIs and SPIs: set trigger mode, priority, then enable. */
+    HalpArm64ProgramGicTrigger(Vector, EdgeTriggered);
+    HalpGicSetInterruptPriority(Vector, priority);
+    HalpGicEnableInterrupt(Vector);
+
     return TRUE;
-}
-
-static VOID
-HalpArm64ApplyDeferredInterruptEnables(VOID)
-{
-    for (ULONG Index = 0; Index < RTL_NUMBER_OF(HalpArm64DeferredInterrupts); ++Index)
-    {
-        PHALP_ARM64_DEFERRED_INTERRUPT Entry = &HalpArm64DeferredInterrupts[Index];
-
-        if (!Entry->Valid)
-        {
-            continue;
-        }
-
-        if ((Entry->Vector == 27) || (Entry->Vector == 30))
-        {
-            continue;
-        }
-
-        (VOID)HalEnableSystemInterrupt(Entry->Vector,
-                                       Entry->Irql,
-                                       Entry->InterruptMode);
-        Entry->Valid = FALSE;
-    }
 }
 
 VOID
@@ -6438,18 +3741,8 @@ HalEndSystemInterrupt(
         /* Memory barrier to ensure all interrupt processing is visible */
         __asm__ __volatile__("dsb sy" ::: "memory");
 
-        if (HalpGicUseSysRegs)
-        {
-            HalpWriteIccEoir1(intid);
-        }
-        else
-        {
-            if (HalpGiccBase != 0)
-            {
-                *HalpMmio((ULONG_PTR)HalpGiccBase, GICC_EOIR) = intid;
-                __asm__ __volatile__("dsb sy" ::: "memory");
-            }
-        }
+        /* Signal EOI (ICC_EOIR1_EL1 on GICv3 / GICC_EOIR on GICv2). */
+        HalpGicEndInterrupt(intid);
     }
 
     /*
@@ -7808,21 +5101,8 @@ ULONG
 FASTCALL
 HalGetInterruptSource(VOID)
 {
-    ULONG IntId;
-
-    if (HalpGicUseSysRegs)
-    {
-        IntId = HalpReadIccIar1();
-    }
-    else
-    {
-        if (HalpGiccBase == 0)
-            return 0;
-
-        IntId = *HalpMmio((ULONG_PTR)HalpGiccBase, GICC_IAR) & 0x3FFu;
-    }
-
-    return IntId;
+    /* Acknowledge the pending interrupt (ICC_IAR1_EL1 on GICv3 / GICC_IAR on GICv2); 1023 = spurious. */
+    return HalpGicAcknowledgeInterrupt();
 }
 
 /*
@@ -8078,6 +5358,15 @@ NTAPI
 HalQueryRealTimeClock(
     _Inout_ PTIME_FIELDS TimeFields)
 {
+    /*
+     * TODO: The PL031 RTC base is hardcoded to the QEMU 'virt' machine address.
+     * ARM64 ACPI has no standard table describing the PL031 (the FADT carries no
+     * RTC IO ports for ARM), so there is currently no ACPI source to derive this
+     * from. When an ACPI/_HID (ARMH0011) device enumeration path becomes
+     * available, resolve the base from there instead of this literal. This is
+     * not a boot-critical path (RTC read only); the per-call MmMapIoSpace is
+     * retained intentionally.
+     */
     PHYSICAL_ADDRESS Pl031Phys = { .QuadPart = 0x9010000ULL };
     PVOID Pl031Va;
     ULONG Seconds;

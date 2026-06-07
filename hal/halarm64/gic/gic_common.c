@@ -276,11 +276,9 @@ HalpArm64CleanInvalidateDcacheRange(
  *   - LPIs (8192+) are always edge-triggered
  */
 /*
- * Note: The main implementation of HalpArm64ProgramGicTrigger is still
- * in halarm64.c for now. This is a duplicate that can be enabled once
- * the migration is complete.
+ * HalpArm64ProgramGicTrigger is the single owner of GIC trigger-mode
+ * configuration (the monolithic copy in halarm64.c has been removed).
  */
-#if 0 /* Disabled - implementation still in halarm64.c */
 VOID
 NTAPI
 HalpArm64ProgramGicTrigger(
@@ -303,9 +301,16 @@ HalpArm64ProgramGicTrigger(
     }
 
     /*
-     * PPIs (16-31): Configured via GICR_ICFGR1 in the redistributor.
+     * PPIs (16-31) on GICv3 (system registers): configured via GICR_ICFGR1 in
+     * the redistributor's SGI_base frame.
+     *
+     * On GICv2 there is no redistributor mapped after the identity-mapping
+     * teardown, so PPIs must fall through to the distributor path below, which
+     * programs GICD_ICFGR1 (GICD_ICFGR + 4) - the architecturally correct
+     * banked location for PPI trigger config. Gating on HalpGicUseSysRegs here
+     * mirrors HalEnableSystemInterrupt/HalDisableSystemInterrupt.
      */
-    if (IntId < 32)
+    if (HalpGicUseSysRegs && IntId < 32)
     {
         ULONG Cpu = KeGetCurrentProcessorNumber();
         ULONG_PTR SgiBase = HalpGicrSgiBase(Cpu);
@@ -376,7 +381,6 @@ HalpArm64ProgramGicTrigger(
      */
     DPRINT("[arm64][GIC] LPI %lu: trigger mode is fixed (edge-triggered)\n", IntId);
 }
-#endif /* Disabled - implementation still in halarm64.c */
 
 /*
  * ============================================================================
