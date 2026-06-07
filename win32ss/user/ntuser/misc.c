@@ -195,7 +195,7 @@ NtUserGetControlBrush(
    PWND pwnd;
    HBRUSH hBrush = NULL;
 
-   UserEnterExclusive();
+   UserEnterShared();
    if ( (pwnd = UserGetWindowObject(hwnd)) &&
        ((ctlType - WM_CTLCOLORMSGBOX) < CTLCOLOR_MAX) &&
         hdc )
@@ -220,7 +220,7 @@ NtUserGetControlColor(
    PWND pwnd, pwndParent = NULL;
    HBRUSH hBrush = NULL;
 
-   UserEnterExclusive();
+   UserEnterShared();
    if ( (pwnd = UserGetWindowObject(hwnd)) &&
        ((CtlMsg - WM_CTLCOLORMSGBOX) < CTLCOLOR_MAX) &&
         hdc )
