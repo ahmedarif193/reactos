@@ -24,6 +24,10 @@
 
 HANDLE GlobalUserHeap = NULL;
 PVOID GlobalUserHeapSection = NULL;
+/* The global user heap is HEAP_NO_SERIALIZE; this lock serializes it so that
+ * heap-allocating callers no longer require the global USER lock to be held
+ * exclusive (per-desktop split). */
+ERESOURCE GlobalUserHeapLock;
 
 
 _Function_class_(RTL_HEAP_COMMIT_ROUTINE)

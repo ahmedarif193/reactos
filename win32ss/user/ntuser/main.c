@@ -1068,6 +1068,10 @@ DriverEntry(
     /* Init the global user lock */
     ExInitializeResourceLite(&UserLock);
 
+    /* Init the global user heap lock (serializes the HEAP_NO_SERIALIZE heap so
+       heap-allocating callers no longer require the global lock to be exclusive) */
+    ExInitializeResourceLite(&GlobalUserHeapLock);
+
     /* Lock while we use the heap (UserHeapAlloc asserts on this) */
     UserEnterExclusive();
 

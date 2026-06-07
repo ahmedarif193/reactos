@@ -16,6 +16,11 @@ typedef struct _W32HEAP_USER_MAPPING
 /* User heap */
 extern HANDLE GlobalUserHeap;
 extern PVOID GlobalUserHeapSection;
+/* Serializes the HEAP_NO_SERIALIZE global user heap so heap-allocating callers
+ * only need the global USER lock entered (shared or exclusive), not exclusive
+ * (per-desktop split). Innermost lock: never held across a USER/desktop-lock
+ * acquire or a callout. */
+extern ERESOURCE GlobalUserHeapLock;
 
 PWIN32HEAP
 UserCreateHeap(OUT PVOID *SectionObject,
@@ -33,46 +38,55 @@ MapGlobalUserHeap(IN  PEPROCESS Process,
 static __inline PVOID
 UserHeapAlloc(SIZE_T Bytes)
 {
-    /* User heap has no lock, using global user lock instead. */
-    ASSERT(UserIsEnteredExclusive());
-    return RtlAllocateHeap(GlobalUserHeap,
-                           HEAP_NO_SERIALIZE,
-                           Bytes);
+    PVOID Ret;
+    ASSERT(UserIsEntered());
+    KeEnterCriticalRegion();
+    ExAcquireResourceExclusiveLite(&GlobalUserHeapLock, TRUE);
+    Ret = RtlAllocateHeap(GlobalUserHeap,
+                          HEAP_NO_SERIALIZE,
+                          Bytes);
+    ExReleaseResourceLite(&GlobalUserHeapLock);
+    KeLeaveCriticalRegion();
+    return Ret;
 }
 
 static __inline BOOL
 UserHeapFree(PVOID lpMem)
 {
-    /* User heap has no lock, using global user lock instead. */
-    ASSERT(UserIsEnteredExclusive());
-    return RtlFreeHeap(GlobalUserHeap,
-                       HEAP_NO_SERIALIZE,
-                       lpMem);
+    BOOL Ret;
+    ASSERT(UserIsEntered());
+    KeEnterCriticalRegion();
+    ExAcquireResourceExclusiveLite(&GlobalUserHeapLock, TRUE);
+    Ret = RtlFreeHeap(GlobalUserHeap,
+                      HEAP_NO_SERIALIZE,
+                      lpMem);
+    ExReleaseResourceLite(&GlobalUserHeapLock);
+    KeLeaveCriticalRegion();
+    return Ret;
 }
 
 static __inline PVOID
 UserHeapReAlloc(PVOID lpMem,
                 SIZE_T Bytes)
 {
-#if 0
-    /* NOTE: ntoskrnl doesn't export RtlReAllocateHeap... */
-    return RtlReAllocateHeap(GlobalUserHeap,
-                             HEAP_NO_SERIALIZE,
-                             lpMem,
-                             Bytes);
-#else
+    /* NOTE: ntoskrnl doesn't export RtlReAllocateHeap, so do it by hand. */
     SIZE_T PrevSize;
     PVOID pNew;
 
-    /* User heap has no lock, using global user lock instead. */
-    ASSERT(UserIsEnteredExclusive());
+    ASSERT(UserIsEntered());
+    KeEnterCriticalRegion();
+    ExAcquireResourceExclusiveLite(&GlobalUserHeapLock, TRUE);
 
     PrevSize = RtlSizeHeap(GlobalUserHeap,
                            HEAP_NO_SERIALIZE,
                            lpMem);
 
     if (PrevSize == Bytes)
+    {
+        ExReleaseResourceLite(&GlobalUserHeapLock);
+        KeLeaveCriticalRegion();
         return lpMem;
+    }
 
     pNew = RtlAllocateHeap(GlobalUserHeap,
                            HEAP_NO_SERIALIZE,
@@ -91,8 +105,9 @@ UserHeapReAlloc(PVOID lpMem,
                     lpMem);
     }
 
+    ExReleaseResourceLite(&GlobalUserHeapLock);
+    KeLeaveCriticalRegion();
     return pNew;
-#endif
 }
 
 static __inline PVOID
