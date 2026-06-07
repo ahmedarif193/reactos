@@ -4078,11 +4078,18 @@ HalpArm64ProgramGicTrigger(
     }
 
     /*
-     * PPIs (16-31): Configured via GICR_ICFGR1 in the redistributor's SGI_base frame.
+     * PPIs (16-31): On GICv3 (HalpGicUseSysRegs) these are configured via
+     * GICR_ICFGR1 in the redistributor's SGI_base frame.
      * GICR_ICFGR1 covers PPIs 16-31 (16 interrupts, 2 bits each = 32 bits).
      * For PPI N (16-31), the bit position is ((N - 16) % 16) * 2.
+     *
+     * On GICv2 there is no redistributor (the GICR base is never mapped past the
+     * identity-mapping teardown), so PPIs fall through to the distributor path
+     * below, which programs GICD_ICFGR1 (GICD_ICFGR + 4) — the architecturally
+     * correct location for the banked PPI trigger config. This gate mirrors
+     * HalEnableSystemInterrupt/HalDisableSystemInterrupt.
      */
-    if (IntId < 32)
+    if (HalpGicUseSysRegs && IntId < 32)
     {
         ULONG Cpu = KeGetCurrentProcessorNumber();
         ULONG_PTR SgiBase = HalpGicrSgiBase(Cpu);
