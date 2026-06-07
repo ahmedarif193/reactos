@@ -870,6 +870,7 @@ extern BOOLEAN HalpUseIdentityMapping;
 
 /* GICv2 group mode control (defined in halarm64.c) */
 extern BOOLEAN HalpGicv2ForceGroup0;
+extern BOOLEAN HalpGicv2GroupModeLocked;
 
 /*
  * ============================================================================
