@@ -369,6 +369,19 @@ HalpArm64SelectGicInterface(
             HalpForceLegacyGic = TRUE;
             DPRINT1("[arm64][GIC] Forcing legacy GIC interface via boot option\n");
         }
+
+        /* Explicit GICv2 group-mode override (locks out the auto quirks below) */
+        if (HalpHasLoaderOption(LoaderBlock->LoadOptions, "GICV2GROUP0") ||
+            HalpHasLoaderOption(LoaderBlock->LoadOptions, "HVFGICV2"))
+        {
+            HalpGicv2ForceGroup0 = TRUE;
+            HalpGicv2GroupModeLocked = TRUE;
+        }
+        else if (HalpHasLoaderOption(LoaderBlock->LoadOptions, "GICV2GROUP1"))
+        {
+            HalpGicv2ForceGroup0 = FALSE;
+            HalpGicv2GroupModeLocked = TRUE;
+        }
     }
 
     /* Discover GIC components from MADT */
@@ -385,7 +398,14 @@ HalpArm64SelectGicInterface(
         if (Implementer == 0x61) /* Apple */
         {
             HalpForceLegacyGic = TRUE;
-            DPRINT1("[arm64][GIC] Apple MIDR detected; preferring legacy GIC for HVF compatibility\n");
+            /*
+             * Apple HVF's GICv2 stalls when Group 1 delivery is enabled; force
+             * Group 0 (delivered as IRQ in non-secure mode) unless a boot option
+             * already locked the group mode.
+             */
+            if (!HalpGicv2GroupModeLocked)
+                HalpGicv2ForceGroup0 = TRUE;
+            DPRINT1("[arm64][GIC] Apple MIDR detected; preferring legacy GIC (Group0) for HVF compatibility\n");
         }
     }
 
@@ -398,6 +418,22 @@ HalpArm64SelectGicInterface(
         }
         HalpForceLegacyGic = FALSE;
         HalpForceSysRegs = TRUE;
+        HalpGicv2ForceGroup0 = FALSE;
+    }
+
+    /*
+     * QEMU virt quirk: legacy GICv2 Group 1 delivery can stall very early during
+     * IRQL unmasking on this machine profile. Default to Group 0 only (delivered
+     * as IRQ in non-secure mode) unless a boot option explicitly locked the mode.
+     * Detected by the default GICD/GICC base addresses.
+     */
+    if (!HalpForceSysRegs &&
+        HalpGiccPresent &&
+        !HalpGicv2GroupModeLocked &&
+        HalpGicdBase == HAL_ARM64_GICD_BASE_DEFAULT &&
+        HalpGiccBase == HAL_ARM64_GICC_BASE_DEFAULT)
+    {
+        HalpGicv2ForceGroup0 = TRUE;
     }
 
     /* Read CPU GIC capabilities from ID_AA64PFR0_EL1 */
