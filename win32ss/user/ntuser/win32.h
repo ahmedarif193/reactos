@@ -156,6 +156,12 @@ typedef struct _THREADINFO
     LIST_ENTRY W32CallbackListHead;
     SINGLE_LIST_ENTRY  ReferencesList;
     ULONG cExclusiveLocks;
+    /* Mode this thread holds the global USER lock in (per-desktop split): TRUE if
+     * shared, FALSE (default) if exclusive. Captured at UserEnterShared/Exclusive
+     * and read by UserEnterCo to re-acquire the same mode after a usermode
+     * callout, so a shared co_* path is not upgraded to exclusive (-> deadlock).
+     * Invariant: the global USER lock is never nested in mixed modes on a thread. */
+    BOOLEAN bUserLockShared;
 #if DBG
     USHORT acExclusiveLockCount[GDIObjTypeTotal + 1];
     UINT cRefObjectCo;

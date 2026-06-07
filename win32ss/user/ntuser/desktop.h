@@ -41,6 +41,11 @@ typedef struct _DESKTOP
     /* Thread blocking input */
     PVOID BlockInputThread;
     LIST_ENTRY ShellHookWindows;
+
+    /* Per-desktop reader/writer lock (Phase 1 of the UserLock split). Taken
+     * INSIDE the global UserLock (global outer, desktop inner) so desktop-scoped
+     * state can be serialized without forcing the global lock exclusive. */
+    ERESOURCE Lock;
 } DESKTOP, *PDESKTOP;
 
 // Desktop flags

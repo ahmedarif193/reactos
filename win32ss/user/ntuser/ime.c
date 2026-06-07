@@ -740,7 +740,7 @@ NtUserBuildHimcList(
     DWORD dwRealCount;
     PTHREADINFO pti;
 
-    UserEnterExclusive();
+    UserEnterShared();
 
     if (!IS_IMM_MODE())
     {

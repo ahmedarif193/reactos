@@ -1,6 +1,8 @@
 #pragma once
 
-#define UserEnterCo UserEnterExclusive
+/* UserEnterCo re-acquires the global USER lock after a usermode callout in the
+ * mode it was held before (see ntuser.c); it is a real function, not an alias
+ * for UserEnterExclusive. UserLeaveCo is a plain (mode-agnostic) release. */
 #define UserLeaveCo UserLeave
 
 typedef VOID (*TL_FN_FREE)(PVOID);
@@ -14,7 +16,8 @@ typedef struct _TL
 } TL, *PTL;
 
 extern PSERVERINFO gpsi;
-extern PTHREADINFO gptiCurrent;
+/* Per-thread (valid under the shared USER lock); was a global set on exclusive entry. */
+#define gptiCurrent ((PTHREADINFO)PsGetCurrentThreadWin32Thread())
 extern PPROCESSINFO gppiList;
 extern PPROCESSINFO ppiScrnSaver;
 extern PPROCESSINFO gppiInputProvider;
@@ -29,7 +32,12 @@ CODE_SEG("INIT") NTSTATUS NTAPI InitUserImpl(VOID);
 VOID FASTCALL CleanupUserImpl(VOID);
 VOID FASTCALL UserEnterShared(VOID);
 VOID FASTCALL UserEnterExclusive(VOID);
+VOID FASTCALL UserEnterCo(VOID);
 VOID FASTCALL UserLeave(VOID);
+/* Per-desktop lock (taken inside the global UserLock; global outer, desktop inner). */
+VOID FASTCALL UserEnterDesktopShared(struct _DESKTOP *pdesk);
+VOID FASTCALL UserEnterDesktopExclusive(struct _DESKTOP *pdesk);
+VOID FASTCALL UserLeaveDesktop(struct _DESKTOP *pdesk);
 BOOL FASTCALL UserIsEntered(VOID);
 BOOL FASTCALL UserIsEnteredExclusive(VOID);
 DWORD FASTCALL UserGetLanguageToggle(_In_ LPCWSTR pszType, _In_ DWORD dwDefaultValue);

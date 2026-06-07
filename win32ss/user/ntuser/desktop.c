@@ -195,6 +195,9 @@ IntDesktopObjectDelete(
 
     ObDereferenceObject(pdesk->rpwinstaParent);
 
+    /* Per-desktop lock (Phase 1 of the UserLock split). */
+    ExDeleteResourceLite(&pdesk->Lock);
+
     return STATUS_SUCCESS;
 }
 
@@ -1667,6 +1670,13 @@ UserBuildShellHookHwndList(PDESKTOP Desktop)
     PSHELL_HOOK_WINDOW Current;
     HWND* list;
 
+    /* Read side of the per-desktop ShellHookWindows list. Mutators
+     * (IntRegisterShellHookWindow / IntDeRegisterShellHookWindow) hold the
+     * desktop lock exclusive; take it shared here so the list is serialized by
+     * the desktop lock itself (global outer, desktop inner) rather than relying
+     * on the caller holding the global UserLock exclusive. */
+    UserEnterDesktopShared(Desktop);
+
     /* FIXME: If we save nb elements in desktop, we don't have to loop to find nb entries */
     ListEntry = Desktop->ShellHookWindows.Flink;
     while (ListEntry != &Desktop->ShellHookWindows)
@@ -1675,7 +1685,11 @@ UserBuildShellHookHwndList(PDESKTOP Desktop)
         entries++;
     }
 
-    if (!entries) return NULL;
+    if (!entries)
+    {
+        UserLeaveDesktop(Desktop);
+        return NULL;
+    }
 
     list = ExAllocatePoolWithTag(PagedPool, sizeof(HWND) * (entries + 1), USERTAG_WINDOWLIST); /* alloc one extra for nullterm */
     if (list)
@@ -1692,6 +1706,8 @@ UserBuildShellHookHwndList(PDESKTOP Desktop)
 
         *cursor = NULL; /* Nullterm list */
     }
+
+    UserLeaveDesktop(Desktop);
 
     return list;
 }
@@ -1768,26 +1784,31 @@ BOOL IntRegisterShellHookWindow(HWND hWnd)
     PTHREADINFO pti = PsGetCurrentThreadWin32Thread();
     PDESKTOP Desktop = pti->rpdesk;
     PSHELL_HOOK_WINDOW Entry;
+    BOOL Ret = FALSE;
 
     TRACE("IntRegisterShellHookWindow\n");
 
+    /* Serialize the per-desktop ShellHookWindows list (taken inside the global
+     * UserLock; global outer, desktop inner). */
+    UserEnterDesktopExclusive(Desktop);
+
     /* First deregister the window, so we can be sure it's never twice in the
-     * list.
+     * list. (This recursively re-acquires the desktop lock - ERESOURCE allows it.)
      */
     IntDeRegisterShellHookWindow(hWnd);
 
     Entry = ExAllocatePoolWithTag(PagedPool,
                                   sizeof(SHELL_HOOK_WINDOW),
                                   TAG_WINSTA);
+    if (Entry)
+    {
+        Entry->hWnd = hWnd;
+        InsertTailList(&Desktop->ShellHookWindows, &Entry->ListEntry);
+        Ret = TRUE;
+    }
 
-    if (!Entry)
-        return FALSE;
-
-    Entry->hWnd = hWnd;
-
-    InsertTailList(&Desktop->ShellHookWindows, &Entry->ListEntry);
-
-    return TRUE;
+    UserLeaveDesktop(Desktop);
+    return Ret;
 }
 
 /*
@@ -1801,6 +1822,7 @@ BOOL IntDeRegisterShellHookWindow(HWND hWnd)
     PDESKTOP Desktop = pti->rpdesk;
     PLIST_ENTRY ListEntry;
     PSHELL_HOOK_WINDOW Current;
+    BOOL Ret = FALSE;
 
     // FIXME: This probably shouldn't happen, but it does
     if (Desktop == NULL)
@@ -1809,6 +1831,9 @@ BOOL IntDeRegisterShellHookWindow(HWND hWnd)
         if (Desktop == NULL)
             return FALSE;
     }
+
+    /* Serialize the per-desktop ShellHookWindows list (global outer, desktop inner). */
+    UserEnterDesktopExclusive(Desktop);
 
     ListEntry = Desktop->ShellHookWindows.Flink;
     while (ListEntry != &Desktop->ShellHookWindows)
@@ -1819,11 +1844,13 @@ BOOL IntDeRegisterShellHookWindow(HWND hWnd)
         {
             RemoveEntryList(&Current->ListEntry);
             ExFreePoolWithTag(Current, TAG_WINSTA);
-            return TRUE;
+            Ret = TRUE;
+            break;
         }
     }
 
-    return FALSE;
+    UserLeaveDesktop(Desktop);
+    return Ret;
 }
 
 static VOID
@@ -2282,6 +2309,10 @@ UserInitializeDesktop(PDESKTOP pdesk, PUNICODE_STRING DesktopName, PWINSTATION_O
     TRACE("UserInitializeDesktop desktop 0x%p with name %wZ\n", pdesk, DesktopName);
 
     RtlZeroMemory(pdesk, sizeof(DESKTOP));
+
+    /* Per-desktop lock (Phase 1 of the UserLock split). Initialized here, before
+     * any failure path, so IntDesktopObjectDelete can always safely delete it. */
+    ExInitializeResourceLite(&pdesk->Lock);
 
     /* Set desktop size, based on whether the WinSta is interactive or not */
     if (pwinsta == InputWindowStation)

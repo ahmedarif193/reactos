@@ -80,7 +80,7 @@ PWND FASTCALL IntGetWindowObject(HWND hWnd)
 
    Window = UserGetWindowObject(hWnd);
    if (Window)
-      Window->head.cLockObj++;
+      InterlockedIncrement((volatile LONG*)&Window->head.cLockObj);
 
    return Window;
 }

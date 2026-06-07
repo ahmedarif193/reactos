@@ -12,7 +12,6 @@ BOOL FASTCALL RegisterControlAtoms(VOID);
 
 /* GLOBALS ********************************************************************/
 
-PTHREADINFO gptiCurrent = NULL;
 PPROCESSINFO gppiInputProvider = NULL;
 BOOL g_AlwaysDisplayVersion = FALSE;
 ERESOURCE UserLock;
@@ -240,16 +239,36 @@ VOID FASTCALL CleanupUserImpl(VOID)
 
 VOID FASTCALL UserEnterShared(VOID)
 {
+    PTHREADINFO pti;
     KeEnterCriticalRegion();
     ExAcquireResourceSharedLite(&UserLock, TRUE);
+    /* Record the held mode for a post-callout re-acquire (UserEnterCo). */
+    pti = (PTHREADINFO)PsGetCurrentThreadWin32Thread();
+    if (pti) pti->bUserLockShared = TRUE;
 }
 
 VOID FASTCALL UserEnterExclusive(VOID)
 {
+    PTHREADINFO pti;
     ASSERT_NOGDILOCKS();
     KeEnterCriticalRegion();
     ExAcquireResourceExclusiveLite(&UserLock, TRUE);
-    gptiCurrent = PsGetCurrentThreadWin32Thread();
+    pti = (PTHREADINFO)PsGetCurrentThreadWin32Thread();
+    if (pti) pti->bUserLockShared = FALSE;
+}
+
+/* Re-acquire the global USER lock after a usermode callout, in the SAME mode it
+ * was held before UserLeaveCo dropped it. A co_* path that entered shared must
+ * NOT be silently upgraded to exclusive here: a shared->exclusive upgrade can
+ * deadlock when two such threads race. Defaults to exclusive when the mode is
+ * unknown (no pti / never recorded), preserving the historical behaviour. */
+VOID FASTCALL UserEnterCo(VOID)
+{
+    PTHREADINFO pti = (PTHREADINFO)PsGetCurrentThreadWin32Thread();
+    if (pti && pti->bUserLockShared)
+        UserEnterShared();
+    else
+        UserEnterExclusive();
 }
 
 VOID FASTCALL UserLeave(VOID)
@@ -258,6 +277,27 @@ VOID FASTCALL UserLeave(VOID)
     ASSERT(UserIsEntered());
     ExReleaseResourceLite(&UserLock);
     KeLeaveCriticalRegion();
+}
+
+/* Per-desktop lock. Acquired INSIDE the global UserLock (which already entered a
+ * critical region), so these only acquire/release the resource. Lock order is
+ * global outer, desktop inner: never acquire the global UserLock while holding a
+ * desktop lock. */
+VOID FASTCALL UserEnterDesktopShared(PDESKTOP pdesk)
+{
+    ASSERT(UserIsEntered());
+    ExAcquireResourceSharedLite(&pdesk->Lock, TRUE);
+}
+
+VOID FASTCALL UserEnterDesktopExclusive(PDESKTOP pdesk)
+{
+    ASSERT(UserIsEntered());
+    ExAcquireResourceExclusiveLite(&pdesk->Lock, TRUE);
+}
+
+VOID FASTCALL UserLeaveDesktop(PDESKTOP pdesk)
+{
+    ExReleaseResourceLite(&pdesk->Lock);
 }
 
 /* EOF */

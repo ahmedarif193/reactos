@@ -647,7 +647,7 @@ UserDereferenceObject(PVOID Object)
     ASSERT(ObjHead->cLockObj >= 1);
     ASSERT(ObjHead->cLockObj < 0x10000);
 
-    if (--ObjHead->cLockObj == 0)
+    if (InterlockedDecrement((volatile LONG*)&ObjHead->cLockObj) == 0)
     {
         PUSER_HANDLE_ENTRY entry;
         HANDLE_TYPE type;
@@ -732,7 +732,9 @@ UserReferenceObject(PVOID obj)
    PHEAD ObjHead = obj;
    ASSERT(ObjHead->cLockObj < 0x10000);
 
-   ObjHead->cLockObj++;
+   /* Atomic so a USER reference can be taken under a shared lock (per-desktop
+    * split): the old plain ++ relied on the global UserLock being exclusive. */
+   InterlockedIncrement((volatile LONG*)&ObjHead->cLockObj);
 }
 
 PVOID
@@ -796,7 +798,7 @@ NtUserValidateHandleSecure(
    PUSER_HANDLE_ENTRY entry;
    BOOL Ret = FALSE;
 
-   UserEnterExclusive();
+   UserEnterShared();
 
    if (!(entry = handle_to_entry(gHandleTable, handle )))
    {

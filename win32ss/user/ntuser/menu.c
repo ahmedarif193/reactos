@@ -193,7 +193,7 @@ IntGetMenuObject(HMENU hMenu)
 {
    PMENU Menu = UserGetMenuObject(hMenu);
    if (Menu)
-      Menu->head.cLockObj++;
+      InterlockedIncrement((volatile LONG*)&Menu->head.cLockObj);
 
    return Menu;
 }

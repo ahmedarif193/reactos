@@ -760,15 +760,27 @@ NtUserCallHwnd(
         }
 
         case HWND_ROUTINE_REGISTERSHELLHOOKWINDOW:
+        {
+            /* Global shared keeps the window object alive for IntIsWindow; the
+             * ShellHookWindows list itself is serialized by the per-desktop lock
+             * taken inside IntRegisterShellHookWindow. */
+            BOOL Ret = FALSE;
+            UserEnterShared();
             if (IntIsWindow(hWnd))
-                return IntRegisterShellHookWindow(hWnd);
-            return FALSE;
-            break;
+                Ret = IntRegisterShellHookWindow(hWnd);
+            UserLeave();
+            return Ret;
+        }
 
         case HWND_ROUTINE_DEREGISTERSHELLHOOKWINDOW:
+        {
+            BOOL Ret = FALSE;
+            UserEnterShared();
             if (IntIsWindow(hWnd))
-                return IntDeRegisterShellHookWindow(hWnd);
-            return FALSE;
+                Ret = IntDeRegisterShellHookWindow(hWnd);
+            UserLeave();
+            return Ret;
+        }
 
         case HWND_ROUTINE_SETMSGBOX:
         {
