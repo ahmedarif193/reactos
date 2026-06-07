@@ -48,11 +48,19 @@ UserGetProp(
     _In_ ATOM Atom,
     _In_ BOOLEAN SystemProp)
 {
+    PDESKTOP pdesk = Window->head.rpdesk;
     PPROPERTY Prop;
+    HANDLE Data = NULL;
 
     NT_ASSERT(UserIsEntered());
+    /* The window's property list is serialized by its desktop lock (read side
+     * shared); read Data while still holding it so a concurrent remover cannot
+     * free the property under us. */
+    if (pdesk) UserEnterDesktopShared(pdesk);
     Prop = IntGetProp(Window, Atom, SystemProp);
-    return Prop ? Prop->Data : NULL;
+    if (Prop) Data = Prop->Data;
+    if (pdesk) UserLeaveDesktop(pdesk);
+    return Data;
 }
 
 _Success_(return)
@@ -63,20 +71,22 @@ UserRemoveProp(
     _In_ ATOM Atom,
     _In_ BOOLEAN SystemProp)
 {
+    PDESKTOP pdesk = Window->head.rpdesk;
     PPROPERTY Prop;
-    HANDLE Data;
+    HANDLE Data = NULL;
 
-    NT_ASSERT(UserIsEnteredExclusive());
+    NT_ASSERT(UserIsEntered());
+    /* Property-list writer: serialize on the window's desktop lock (exclusive). */
+    if (pdesk) UserEnterDesktopExclusive(pdesk);
     Prop = IntGetProp(Window, Atom, SystemProp);
-    if (Prop == NULL)
+    if (Prop != NULL)
     {
-        return NULL;
+        Data = Prop->Data;
+        RemoveEntryList(&Prop->PropListEntry);
+        UserHeapFree(Prop);
+        Window->PropListItems--;
     }
-
-    Data = Prop->Data;
-    RemoveEntryList(&Prop->PropListEntry);
-    UserHeapFree(Prop);
-    Window->PropListItems--;
+    if (pdesk) UserLeaveDesktop(pdesk);
     return Data;
 }
 
@@ -89,16 +99,20 @@ UserSetProp(
     _In_ HANDLE Data,
     _In_ BOOLEAN SystemProp)
 {
+    PDESKTOP pdesk = Window->head.rpdesk;
     PPROPERTY Prop;
+    BOOL Ret = FALSE;
 
-    NT_ASSERT(UserIsEnteredExclusive());
+    NT_ASSERT(UserIsEntered());
+    /* Property-list writer: serialize on the window's desktop lock (exclusive). */
+    if (pdesk) UserEnterDesktopExclusive(pdesk);
     Prop = IntGetProp(Window, Atom, SystemProp);
     if (Prop == NULL)
     {
         Prop = UserHeapAlloc(sizeof(PROPERTY));
         if (Prop == NULL)
         {
-            return FALSE;
+            goto Exit;
         }
         Prop->Atom = Atom;
         Prop->fs = SystemProp ? PROPERTY_FLAG_SYSTEM : 0;
@@ -107,7 +121,11 @@ UserSetProp(
     }
 
     Prop->Data = Data;
-    return TRUE;
+    Ret = TRUE;
+
+Exit:
+    if (pdesk) UserLeaveDesktop(pdesk);
+    return Ret;
 }
 
 VOID
@@ -146,6 +164,7 @@ NtUserBuildPropList(
     PROPLISTITEM listitem = { 0 }, *li;
     NTSTATUS Status;
     DWORD Cnt = 0;
+    PDESKTOP pdesk = NULL;
 
     TRACE("Enter NtUserBuildPropList\n");
     UserEnterShared();
@@ -156,6 +175,10 @@ NtUserBuildPropList(
         Status = STATUS_INVALID_HANDLE;
         goto Exit;
     }
+
+    /* Serialize the property-list read on the window's desktop lock (shared). */
+    pdesk = Window->head.rpdesk;
+    if (pdesk) UserEnterDesktopShared(pdesk);
 
     if (Buffer)
     {
@@ -209,6 +232,7 @@ NtUserBuildPropList(
     Status = STATUS_SUCCESS;
 
 Exit:
+    if (pdesk) UserLeaveDesktop(pdesk);
     TRACE("Leave NtUserBuildPropList, ret=%lx\n", Status);
     UserLeave();
 
@@ -225,7 +249,7 @@ NtUserRemoveProp(
     HANDLE Data = NULL;
 
     TRACE("Enter NtUserRemoveProp\n");
-    UserEnterExclusive();
+    UserEnterShared();
 
     Window = UserGetWindowObject(hWnd);
     if (Window == NULL)
@@ -253,7 +277,7 @@ NtUserSetProp(
     BOOL Ret;
 
     TRACE("Enter NtUserSetProp\n");
-    UserEnterExclusive();
+    UserEnterShared();
 
     Window = UserGetWindowObject(hWnd);
     if (Window == NULL)
