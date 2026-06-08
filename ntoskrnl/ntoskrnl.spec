@@ -663,6 +663,8 @@
 @ stdcall KePulseEvent(ptr long long)
 @ stdcall KeQueryActiveProcessorCount(ptr)
 @ stdcall KeQueryActiveProcessors()
+@ stdcall KeQueryMaximumProcessorCount()
+@ stdcall KeQueryMaximumProcessorCountEx(long)
 @ stdcall KeQueryHighestNodeNumber()
 @ stdcall -arch=i386,arm,arm64 KeQueryInterruptTime()
 ;@ cdecl -arch=x86_64,arm64 KeQueryMultiThreadProcessorSet
