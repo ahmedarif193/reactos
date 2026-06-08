@@ -47,6 +47,29 @@ KeQueryActiveProcessors(VOID)
     return KeActiveProcessors;
 }
 
+ULONG
+NTAPI
+KeQueryMaximumProcessorCount(VOID)
+{
+#ifdef CONFIG_SMP
+    return KeMaximumProcessors;
+#else
+    return (ULONG)KeNumberProcessors;
+#endif
+}
+
+ULONG
+NTAPI
+KeQueryMaximumProcessorCountEx(
+    _In_ USHORT GroupNumber)
+{
+    /* Only a single processor group (group 0) is supported. */
+    if ((GroupNumber != ALL_PROCESSOR_GROUPS) && (GroupNumber != 0))
+        return 0;
+
+    return KeQueryMaximumProcessorCount();
+}
+
 /**
  * Retrieves the number of the current processor.
  *
