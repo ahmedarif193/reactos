@@ -54,3 +54,13 @@ HKLM,"SYSTEM\CurrentControlSet\Control\Class\{4D36E972-E325-11CE-BFC1-08002BE103
 HKLM,"SYSTEM\CurrentControlSet\Control\Class\{4D36E972-E325-11CE-BFC1-08002BE10318}\0001\Linkage","Export",0x00000000,"\Device\{2E5F3B71-5C8D-4D7A-9E1B-52B4EC271201}"
 HKLM,"SYSTEM\CurrentControlSet\Control\Class\{4D36E972-E325-11CE-BFC1-08002BE10318}\0001\Linkage","RootDevice",0x00000000,"{2E5F3B71-5C8D-4D7A-9E1B-52B4EC271201}"
 HKLM,"SYSTEM\CurrentControlSet\Control\Class\{4D36E972-E325-11CE-BFC1-08002BE10318}\0001\Linkage","UpperBind",0x00000000,"Tcpip"
+
+; RP1 Ethernet connection object (normally written by netcfgx InstallNetDevice)
+HKLM,"SYSTEM\CurrentControlSet\Control\Network\{4D36E972-E325-11CE-BFC1-08002BE10318}\{2E5F3B71-5C8D-4D7A-9E1B-52B4EC271201}\Connection","Name",0x00000000,"Network Connection"
+HKLM,"SYSTEM\CurrentControlSet\Control\Network\{4D36E972-E325-11CE-BFC1-08002BE10318}\{2E5F3B71-5C8D-4D7A-9E1B-52B4EC271201}\Connection","PnpInstanceID",0x00000000,"RP1\GEM\2"
+
+; RP1 Ethernet TCP/IP interface configuration (DHCP)
+HKLM,"SYSTEM\CurrentControlSet\Services\Tcpip\Parameters\Interfaces\{2E5F3B71-5C8D-4D7A-9E1B-52B4EC271201}","EnableDHCP",0x00010001,0x00000001
+HKLM,"SYSTEM\CurrentControlSet\Services\Tcpip\Parameters\Interfaces\{2E5F3B71-5C8D-4D7A-9E1B-52B4EC271201}","IPAddress",0x00010000,"0.0.0.0"
+HKLM,"SYSTEM\CurrentControlSet\Services\Tcpip\Parameters\Interfaces\{2E5F3B71-5C8D-4D7A-9E1B-52B4EC271201}","SubnetMask",0x00010000,"0.0.0.0"
+HKLM,"SYSTEM\CurrentControlSet\Services\Tcpip\Parameters\Interfaces\{2E5F3B71-5C8D-4D7A-9E1B-52B4EC271201}","DefaultGateway",0x00010000,"0.0.0.0"
