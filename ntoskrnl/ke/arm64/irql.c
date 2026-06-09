@@ -505,8 +505,16 @@ KfRaiseIrql(
      */
     __asm__ __volatile__("dmb ish" ::: "memory");
 
-    KiApplyIrqMaskForIrqlTransition(OldIrql, NewIrql);
-    KiSetCurrentIrql(NewIrql);
+    {
+        ULONG64 Daif;
+        __asm__ __volatile__("mrs %0, daif" : "=r"(Daif));
+        if (NewIrql < HIGH_LEVEL)
+            __asm__ __volatile__("msr daifset, #0x2\n\tisb" ::: "memory");
+        KiApplyIrqMaskForIrqlTransition(OldIrql, NewIrql);
+        KiSetCurrentIrql(NewIrql);
+        if ((NewIrql < HIGH_LEVEL) && !(Daif & 0x80))
+            __asm__ __volatile__("msr daifclr, #0x2" ::: "memory");
+    }
 
     /*
      * ARM64 Instruction Barrier: Ensure IRQL change and GIC PMR update take
