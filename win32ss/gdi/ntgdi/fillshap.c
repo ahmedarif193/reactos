@@ -1231,6 +1231,10 @@ NtGdiExtFloodFill(
     ConvColor = XLATEOBJ_iXlate(&exlo.xlo, Color);
     Ret = DIB_XXBPP_FloodFillSolid(&psurf->SurfObj, &dc->eboFill.BrushObject, &DestRect, &Pt, ConvColor, FillType);
 
+    /* Let shadow-buffer drivers flush the bits written directly above */
+    if (Ret && (psurf->flags & HOOK_SYNCHRONIZE) && GDIDEVFUNCS(&psurf->SurfObj).SynchronizeSurface)
+        GDIDEVFUNCS(&psurf->SurfObj).SynchronizeSurface(&psurf->SurfObj, &DestRect, DSS_FLUSH_EVENT);
+
     DC_vFinishBlit(dc, NULL);
 
     EXLATEOBJ_vCleanup(&exlo);

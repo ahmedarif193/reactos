@@ -4,6 +4,7 @@ list(APPEND SOURCE
     palette.c
     pointer.c
     screen.c
+    shadow.c
     surface.c
     framebuf.h)
 

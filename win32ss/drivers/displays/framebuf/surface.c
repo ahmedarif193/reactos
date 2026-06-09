@@ -41,6 +41,9 @@ DrvEnableSurface(
    VIDEO_MEMORY VideoMemory;
    VIDEO_MEMORY_INFORMATION VideoMemoryInfo;
    ULONG ulTemp;
+   ULONG ShadowSize;
+   FLONG flHooks = 0;
+   PVOID SurfaceBits;
 
    /*
     * Set video mode of our adapter.
@@ -96,9 +99,29 @@ DrvEnableSurface(
    ScreenSize.cx = ppdev->ScreenWidth;
    ScreenSize.cy = ppdev->ScreenHeight;
 
+   /* GDI draws into a cached shadow; dirty rects are streamed to the WC framebuffer. */
+   ppdev->ShadowActive = FALSE;
+   ShadowSize = ppdev->ScreenHeight * ppdev->ScreenDelta;
+   if (ppdev->ShadowPtr == NULL && ShadowSize != 0)
+   {
+      ppdev->ShadowPtr = EngAllocMem(0, ShadowSize, ALLOC_TAG);
+   }
+   if (ppdev->ShadowPtr != NULL)
+   {
+      /* Seed the shadow with the live framebuffer contents (one-time read). */
+      memcpy(ppdev->ShadowPtr, ppdev->ScreenPtr, ShadowSize);
+      ppdev->ShadowActive = TRUE;
+      SurfaceBits = ppdev->ShadowPtr;
+      flHooks = HOOK_BITBLT | HOOK_COPYBITS | HOOK_SYNCHRONIZE;
+   }
+   else
+   {
+      SurfaceBits = ppdev->ScreenPtr;
+   }
+
    hSurface = (HSURF)EngCreateBitmap(ScreenSize, ppdev->ScreenDelta, BitmapType,
                                      (ppdev->ScreenDelta > 0) ? BMF_TOPDOWN : 0,
-                                     ppdev->ScreenPtr);
+                                     SurfaceBits);
    if (hSurface == NULL)
    {
       return NULL;
@@ -108,7 +131,7 @@ DrvEnableSurface(
     * Associate the surface with our device.
     */
 
-   if (!EngAssociateSurface(hSurface, ppdev->hDevEng, 0))
+   if (!EngAssociateSurface(hSurface, ppdev->hDevEng, flHooks))
    {
       EngDeleteSurface(hSurface);
       return NULL;
@@ -139,6 +162,13 @@ DrvDisableSurface(
 
    EngDeleteSurface(ppdev->hSurfEng);
    ppdev->hSurfEng = NULL;
+
+   ppdev->ShadowActive = FALSE;
+   if (ppdev->ShadowPtr != NULL)
+   {
+      EngFreeMem(ppdev->ShadowPtr);
+      ppdev->ShadowPtr = NULL;
+   }
 
 #ifdef EXPERIMENTAL_MOUSE_CURSOR_SUPPORT
    /* Clear all mouse pointer surfaces. */
@@ -188,6 +218,9 @@ DrvAssertMode(
       {
 	     IntSetPalette(dhpdev, ppdev->PaletteEntries, 0, 256);
       }
+
+      /* The framebuffer contents are unknown; resync it from the shadow. */
+      IntFlushShadowRect(ppdev, NULL);
 
       return TRUE;
    }

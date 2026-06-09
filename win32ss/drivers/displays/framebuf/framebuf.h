@@ -45,6 +45,8 @@ typedef struct _PDEV
    ULONG BlueMask;
    BYTE PaletteShift;
    PVOID ScreenPtr;
+   PUCHAR ShadowPtr;
+   BOOL ShadowActive;
    HPALETTE DefaultPalette;
    PALETTEENTRY *PaletteEntries;
 
@@ -159,6 +161,40 @@ DrvMovePointer(
    IN LONG x,
    IN LONG y,
    IN RECTL *prcl);
+
+BOOL APIENTRY
+DrvBitBlt(
+   IN SURFOBJ *psoTrg,
+   IN SURFOBJ *psoSrc,
+   IN SURFOBJ *psoMask,
+   IN CLIPOBJ *pco,
+   IN XLATEOBJ *pxlo,
+   IN RECTL *prclTrg,
+   IN POINTL *pptlSrc,
+   IN POINTL *pptlMask,
+   IN BRUSHOBJ *pbo,
+   IN POINTL *pptlBrush,
+   IN ROP4 rop4);
+
+BOOL APIENTRY
+DrvCopyBits(
+   IN SURFOBJ *psoDest,
+   IN SURFOBJ *psoSrc,
+   IN CLIPOBJ *pco,
+   IN XLATEOBJ *pxlo,
+   IN RECTL *prclDest,
+   IN POINTL *pptlSrc);
+
+VOID APIENTRY
+DrvSynchronizeSurface(
+   IN SURFOBJ *pso,
+   IN RECTL *prcl,
+   IN FLONG fl);
+
+VOID
+IntFlushShadowRect(
+   PPDEV ppdev,
+   const RECTL *prcl);
 
 BOOL
 IntInitScreenInfo(
