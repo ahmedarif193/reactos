@@ -48,6 +48,14 @@ typedef struct _PDEV
    HPALETTE DefaultPalette;
    PALETTEENTRY *PaletteEntries;
 
+   VIDEO_POINTER_CAPABILITIES HwPointerCapabilities;
+   PVIDEO_POINTER_ATTRIBUTES HwPointerAttributes;
+   ULONG HwPointerAttributesSize;
+   POINTL HwPointerHotSpot;
+   BOOL HwPointerSupported;
+   BOOL HwPointerShapeValid;
+   BOOL HwPointerVisible;
+
 #ifdef EXPERIMENTAL_MOUSE_CURSOR_SUPPORT
    VIDEO_POINTER_ATTRIBUTES PointerAttributes;
    XLATEOBJ *PointerXlateObject;
@@ -158,6 +166,14 @@ IntInitScreenInfo(
    LPDEVMODEW pDevMode,
    PGDIINFO pGdiInfo,
    PDEVINFO pDevInfo);
+
+BOOL
+IntInitHardwarePointer(
+   PPDEV ppdev);
+
+VOID
+IntDisableHardwarePointer(
+   PPDEV ppdev);
 
 BOOL
 IntInitDefaultPalette(

@@ -345,6 +345,8 @@ IntInitScreenInfo(
       }
    }
 
+   IntInitHardwarePointer(ppdev);
+
    EngFreeMem(ModeInfo);
    return TRUE;
 }

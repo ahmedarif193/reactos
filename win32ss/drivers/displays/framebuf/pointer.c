@@ -20,6 +20,303 @@
 
 #include "framebuf.h"
 
+static PUCHAR
+FrameBufferSurfaceScan(
+   IN SURFOBJ *pso,
+   IN LONG y)
+{
+   PUCHAR Bits = pso->pvScan0 ? pso->pvScan0 : pso->pvBits;
+   return Bits + (y * pso->lDelta);
+}
+
+static BOOL
+FrameBufferMonoMaskBit(
+   IN SURFOBJ *pso,
+   IN LONG x,
+   IN LONG y)
+{
+   PUCHAR Row = FrameBufferSurfaceScan(pso, y);
+   return (Row[x >> 3] & (0x80 >> (x & 7))) != 0;
+}
+
+BOOL
+IntInitHardwarePointer(
+   PPDEV ppdev)
+{
+   ULONG Returned;
+   ULONG WidthInBytes;
+   ULONG PixelBytes;
+
+   if (EngDeviceIoControl(ppdev->hDriver, IOCTL_VIDEO_QUERY_POINTER_CAPABILITIES,
+                          NULL, 0, &ppdev->HwPointerCapabilities,
+                          sizeof(ppdev->HwPointerCapabilities), &Returned) != 0)
+   {
+      return TRUE;
+   }
+
+   if (Returned < sizeof(VIDEO_POINTER_CAPABILITIES) ||
+       !(ppdev->HwPointerCapabilities.Flags & VIDEO_MODE_COLOR_POINTER) ||
+       ppdev->HwPointerCapabilities.MaxWidth == 0 ||
+       ppdev->HwPointerCapabilities.MaxHeight == 0)
+   {
+      return TRUE;
+   }
+
+   if (ppdev->HwPointerCapabilities.MaxWidth > ((ULONG)-1) / sizeof(ULONG))
+      return TRUE;
+
+   WidthInBytes = ppdev->HwPointerCapabilities.MaxWidth * sizeof(ULONG);
+   if (ppdev->HwPointerCapabilities.MaxHeight > ((ULONG)-1) / WidthInBytes)
+      return TRUE;
+
+   PixelBytes = WidthInBytes * ppdev->HwPointerCapabilities.MaxHeight;
+   if (PixelBytes > ((ULONG)-1) - FIELD_OFFSET(VIDEO_POINTER_ATTRIBUTES, Pixels))
+      return TRUE;
+
+   ppdev->HwPointerAttributesSize = FIELD_OFFSET(VIDEO_POINTER_ATTRIBUTES, Pixels) + PixelBytes;
+   ppdev->HwPointerAttributes = EngAllocMem(FL_ZERO_MEMORY, ppdev->HwPointerAttributesSize, ALLOC_TAG);
+   if (ppdev->HwPointerAttributes == NULL)
+      return TRUE;
+
+   ppdev->HwPointerAttributes->Flags = VIDEO_MODE_COLOR_POINTER;
+   ppdev->HwPointerAttributes->WidthInBytes = WidthInBytes;
+   ppdev->HwPointerAttributes->Width = ppdev->HwPointerCapabilities.MaxWidth;
+   ppdev->HwPointerAttributes->Height = ppdev->HwPointerCapabilities.MaxHeight;
+   ppdev->HwPointerSupported = TRUE;
+   return TRUE;
+}
+
+static VOID
+FrameBufferDisableHardwarePointer(
+   PPDEV ppdev)
+{
+   ULONG Returned;
+
+   if (ppdev->HwPointerSupported)
+   {
+      EngDeviceIoControl(ppdev->hDriver, IOCTL_VIDEO_DISABLE_POINTER,
+                         NULL, 0, NULL, 0, &Returned);
+      ppdev->HwPointerVisible = FALSE;
+   }
+}
+
+VOID
+IntDisableHardwarePointer(
+   PPDEV ppdev)
+{
+   FrameBufferDisableHardwarePointer(ppdev);
+
+   if (ppdev->HwPointerAttributes != NULL)
+   {
+      EngFreeMem(ppdev->HwPointerAttributes);
+      ppdev->HwPointerAttributes = NULL;
+   }
+
+   ppdev->HwPointerSupported = FALSE;
+   ppdev->HwPointerShapeValid = FALSE;
+}
+
+static BOOL
+FrameBufferBuildHardwarePointerPixels(
+   IN PPDEV ppdev,
+   IN SURFOBJ *psoMask,
+   IN SURFOBJ *psoColor,
+   IN FLONG fl,
+   OUT PULONG Width,
+   OUT PULONG Height)
+{
+   PVIDEO_POINTER_ATTRIBUTES Attributes;
+   ULONG SourceWidth;
+   ULONG SourceHeight;
+   ULONG PixelBytes;
+   ULONG x;
+   ULONG y;
+
+   if (psoColor != NULL)
+   {
+      if (psoColor->iBitmapFormat != BMF_32BPP)
+         return FALSE;
+
+      SourceWidth = psoColor->sizlBitmap.cx;
+      SourceHeight = psoColor->sizlBitmap.cy;
+   }
+   else if (psoMask != NULL)
+   {
+      SourceWidth = psoMask->sizlBitmap.cx;
+      SourceHeight = psoMask->sizlBitmap.cy / 2;
+   }
+   else
+   {
+      return FALSE;
+   }
+
+   if (SourceWidth == 0 ||
+       SourceHeight == 0 ||
+       SourceWidth > ppdev->HwPointerCapabilities.MaxWidth ||
+       SourceHeight > ppdev->HwPointerCapabilities.MaxHeight)
+   {
+      return FALSE;
+   }
+
+   Attributes = ppdev->HwPointerAttributes;
+   PixelBytes = ppdev->HwPointerAttributesSize - FIELD_OFFSET(VIDEO_POINTER_ATTRIBUTES, Pixels);
+   memset(Attributes->Pixels, 0, PixelBytes);
+
+   for (y = 0; y < SourceHeight; ++y)
+   {
+      PULONG DestinationRow = (PULONG)(Attributes->Pixels + (y * Attributes->WidthInBytes));
+
+      if (psoColor != NULL)
+      {
+         PULONG SourceRow = (PULONG)FrameBufferSurfaceScan(psoColor, y);
+
+         for (x = 0; x < SourceWidth; ++x)
+         {
+            ULONG Pixel = SourceRow[x];
+
+            if (!(fl & SPS_ALPHA))
+               Pixel |= 0xFF000000;
+
+            if (!(fl & SPS_ALPHA) &&
+                psoMask != NULL &&
+                FrameBufferMonoMaskBit(psoMask, x, y))
+            {
+               Pixel &= 0x00FFFFFF;
+            }
+
+            DestinationRow[x] = Pixel;
+         }
+      }
+      else
+      {
+         for (x = 0; x < SourceWidth; ++x)
+         {
+            BOOL AndMask = FrameBufferMonoMaskBit(psoMask, x, y);
+            BOOL XorMask = FrameBufferMonoMaskBit(psoMask, x, y + SourceHeight);
+
+            if (AndMask && !XorMask)
+               DestinationRow[x] = 0x00000000;
+            else if (!AndMask && !XorMask)
+               DestinationRow[x] = 0xFF000000;
+            else if (!AndMask && XorMask)
+               DestinationRow[x] = 0xFFFFFFFF;
+            else
+               DestinationRow[x] = 0xFF000000;
+         }
+      }
+   }
+
+   *Width = SourceWidth;
+   *Height = SourceHeight;
+   return TRUE;
+}
+
+static BOOL
+FrameBufferSetHardwarePointerShape(
+   IN PPDEV ppdev,
+   IN SURFOBJ *psoMask,
+   IN SURFOBJ *psoColor,
+   IN LONG xHot,
+   IN LONG yHot,
+   IN LONG x,
+   IN LONG y,
+   IN FLONG fl)
+{
+   PVIDEO_POINTER_ATTRIBUTES Attributes;
+   ULONG Returned;
+   ULONG Width;
+   ULONG Height;
+
+   if (!ppdev->HwPointerSupported)
+      return FALSE;
+
+   if (psoMask == NULL && psoColor == NULL)
+   {
+      FrameBufferDisableHardwarePointer(ppdev);
+      ppdev->HwPointerShapeValid = FALSE;
+      return TRUE;
+   }
+
+   if (!FrameBufferBuildHardwarePointerPixels(ppdev, psoMask, psoColor, fl, &Width, &Height))
+   {
+      FrameBufferDisableHardwarePointer(ppdev);
+      ppdev->HwPointerShapeValid = FALSE;
+      return FALSE;
+   }
+
+   Attributes = ppdev->HwPointerAttributes;
+   Attributes->Flags = VIDEO_MODE_COLOR_POINTER;
+   Attributes->Width = Width;
+   Attributes->Height = Height;
+   Attributes->WidthInBytes = ppdev->HwPointerCapabilities.MaxWidth * sizeof(ULONG);
+   Attributes->Enable = (x != -1);
+   Attributes->Column = (SHORT)(x - xHot);
+   Attributes->Row = (SHORT)(y - yHot);
+
+   if (EngDeviceIoControl(ppdev->hDriver, IOCTL_VIDEO_SET_POINTER_ATTR,
+                          Attributes, ppdev->HwPointerAttributesSize,
+                          NULL, 0, &Returned) != 0)
+   {
+      FrameBufferDisableHardwarePointer(ppdev);
+      ppdev->HwPointerShapeValid = FALSE;
+      return FALSE;
+   }
+
+   ppdev->HwPointerHotSpot.x = xHot;
+   ppdev->HwPointerHotSpot.y = yHot;
+   ppdev->HwPointerShapeValid = TRUE;
+   ppdev->HwPointerVisible = (x != -1);
+   return TRUE;
+}
+
+static BOOL
+FrameBufferMoveHardwarePointer(
+   IN PPDEV ppdev,
+   IN LONG x,
+   IN LONG y)
+{
+   VIDEO_POINTER_POSITION Position;
+   ULONG Returned;
+
+   if (!ppdev->HwPointerSupported || !ppdev->HwPointerShapeValid)
+      return FALSE;
+
+   if (x == -1)
+   {
+      FrameBufferDisableHardwarePointer(ppdev);
+      return TRUE;
+   }
+
+   Position.Column = (SHORT)(x - ppdev->HwPointerHotSpot.x);
+   Position.Row = (SHORT)(y - ppdev->HwPointerHotSpot.y);
+
+   if (EngDeviceIoControl(ppdev->hDriver, IOCTL_VIDEO_SET_POINTER_POSITION,
+                          &Position, sizeof(Position), NULL, 0, &Returned) != 0)
+   {
+      return FALSE;
+   }
+
+   if (!ppdev->HwPointerVisible)
+   {
+      if (EngDeviceIoControl(ppdev->hDriver, IOCTL_VIDEO_ENABLE_POINTER,
+                             NULL, 0, NULL, 0, &Returned) != 0)
+      {
+         return FALSE;
+      }
+   }
+
+   ppdev->HwPointerVisible = TRUE;
+   return TRUE;
+}
+
+static VOID
+FrameBufferClearPointerExclude(
+   IN RECTL *prcl)
+{
+   if (prcl != NULL)
+      prcl->left = prcl->top = prcl->right = prcl->bottom = -1;
+}
+
 #ifndef EXPERIMENTAL_MOUSE_CURSOR_SUPPORT
 
 /*
@@ -44,8 +341,14 @@ DrvSetPointerShape(
    IN RECTL *prcl,
    IN FLONG fl)
 {
-/*   return SPS_DECLINE;*/
-   return EngSetPointerShape(pso, psoMask, psoColor, pxlo, xHot, yHot, x, y, prcl, fl);
+   if (pso != NULL &&
+       FrameBufferSetHardwarePointerShape((PPDEV)pso->dhpdev, psoMask, psoColor, xHot, yHot, x, y, fl))
+   {
+      FrameBufferClearPointerExclude(prcl);
+      return SPS_ACCEPT_NOEXCLUDE;
+   }
+
+   return SPS_DECLINE;
 }
 
 /*
@@ -65,6 +368,13 @@ DrvMovePointer(
    IN LONG y,
    IN RECTL *prcl)
 {
+   if (pso != NULL &&
+       FrameBufferMoveHardwarePointer((PPDEV)pso->dhpdev, x, y))
+   {
+      FrameBufferClearPointerExclude(prcl);
+      return;
+   }
+
    EngMovePointer(pso, x, y, prcl);
 }
 
