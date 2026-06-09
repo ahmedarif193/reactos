@@ -34,6 +34,9 @@ static DRVFN DrvFunctionTable[] =
    {INDEX_DrvMovePointer, (PFN)DrvMovePointer},
    {INDEX_DrvEnableDirectDraw, (PFN)DrvEnableDirectDraw},
    {INDEX_DrvDisableDirectDraw, (PFN)DrvDisableDirectDraw},
+   {INDEX_DrvBitBlt, (PFN)DrvBitBlt},
+   {INDEX_DrvCopyBits, (PFN)DrvCopyBits},
+   {INDEX_DrvSynchronizeSurface, (PFN)DrvSynchronizeSurface},
 
 };
 
@@ -195,6 +198,11 @@ DrvDisablePDEV(
    if (((PPDEV)dhpdev)->PaletteEntries != NULL)
    {
       EngFreeMem(((PPDEV)dhpdev)->PaletteEntries);
+   }
+
+   if (((PPDEV)dhpdev)->ShadowPtr != NULL)
+   {
+      EngFreeMem(((PPDEV)dhpdev)->ShadowPtr);
    }
 
    IntDisableHardwarePointer((PPDEV)dhpdev);
