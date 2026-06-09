@@ -14,6 +14,17 @@
 
 #include "rpi5vc4_crtc.h"
 
+/* Map the selected PixelValve register block once and cache it. */
+static PVOID
+Rpi5CrtcMapPv(
+    _In_ PRPI5VC4_DEVICE_EXTENSION DeviceExtension)
+{
+    if (DeviceExtension->PixelValveBase == NULL && DeviceExtension->PixelValveValid && DeviceExtension->PixelValvePhysical.QuadPart != 0)
+        DeviceExtension->PixelValveBase = MmMapIoSpace(DeviceExtension->PixelValvePhysical, RPI5_PV_LENGTH, MmNonCached);
+
+    return DeviceExtension->PixelValveBase;
+}
+
 static BOOLEAN
 Rpi5CrtcReportPv(
     _Inout_ PRPI5VC4_DEVICE_EXTENSION DeviceExtension,
@@ -88,18 +99,10 @@ BOOLEAN
 Rpi5CrtcProgramCurrentTiming(
     _In_ PRPI5VC4_DEVICE_EXTENSION DeviceExtension)
 {
-    PHYSICAL_ADDRESS Phys;
     PVOID Base;
     ULONG Control, VControl;
 
-    if (!DeviceExtension->PixelValveValid ||
-        DeviceExtension->PixelValvePhysical.QuadPart == 0)
-    {
-        return FALSE;
-    }
-
-    Phys = DeviceExtension->PixelValvePhysical;
-    Base = MmMapIoSpace(Phys, RPI5_PV_LENGTH, MmNonCached);
+    Base = Rpi5CrtcMapPv(DeviceExtension);
     if (Base == NULL)
         return FALSE;
 
@@ -108,7 +111,6 @@ Rpi5CrtcProgramCurrentTiming(
     if (!(Control & RPI5_PV_CONTROL_EN) ||
         !(VControl & RPI5_PV_VCONTROL_VIDEN))
     {
-        MmUnmapIoSpace(Base, RPI5_PV_LENGTH);
         return FALSE;
     }
 
@@ -147,11 +149,9 @@ Rpi5CrtcProgramCurrentTiming(
         READ_REGISTER_ULONG((PULONG)((PUCHAR)Base + RPI5_PV_CONTROL)) !=
             DeviceExtension->PixelValveControl)
     {
-        MmUnmapIoSpace(Base, RPI5_PV_LENGTH);
         return FALSE;
     }
 
-    MmUnmapIoSpace(Base, RPI5_PV_LENGTH);
     return TRUE;
 }
 
@@ -159,19 +159,11 @@ BOOLEAN
 Rpi5CrtcWaitForVBlank(
     _In_ PRPI5VC4_DEVICE_EXTENSION DeviceExtension)
 {
-    PHYSICAL_ADDRESS Phys;
     PVOID Base;
     ULONG Control, VControl;
     ULONG Tries;
 
-    if (!DeviceExtension->PixelValveValid ||
-        DeviceExtension->PixelValvePhysical.QuadPart == 0)
-    {
-        return FALSE;
-    }
-
-    Phys = DeviceExtension->PixelValvePhysical;
-    Base = MmMapIoSpace(Phys, RPI5_PV_LENGTH, MmNonCached);
+    Base = Rpi5CrtcMapPv(DeviceExtension);
     if (Base == NULL)
         return FALSE;
 
@@ -180,7 +172,6 @@ Rpi5CrtcWaitForVBlank(
     if (!(Control & RPI5_PV_CONTROL_EN) ||
         !(VControl & RPI5_PV_VCONTROL_VIDEN))
     {
-        MmUnmapIoSpace(Base, RPI5_PV_LENGTH);
         return FALSE;
     }
 
@@ -194,13 +185,11 @@ Rpi5CrtcWaitForVBlank(
         {
             WRITE_REGISTER_ULONG((PULONG)((PUCHAR)Base + RPI5_PV_INTSTAT),
                                  RPI5_PV_INT_VFP_START);
-            MmUnmapIoSpace(Base, RPI5_PV_LENGTH);
             return TRUE;
         }
 
         VideoPortStallExecution(50);
     }
 
-    MmUnmapIoSpace(Base, RPI5_PV_LENGTH);
     return FALSE;
 }

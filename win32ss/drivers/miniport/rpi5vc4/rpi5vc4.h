@@ -58,6 +58,15 @@ typedef struct _RPI5VC4_DEVICE_EXTENSION
     /* Cached MMIO mapping of the HVS register block (mapped once, reused). */
     PVOID HvsBase;
 
+    /* Cached MMIO mapping of the active PixelValve (mapped once, reused). */
+    PVOID PixelValveBase;
+
+    /* Validated cursor-plane location for the low-MMIO cursor move fast path. */
+    ULONG HvsLptrsReg;
+    ULONG HvsLptrsVal;
+    ULONG HvsCursorHead;
+    BOOLEAN HvsCursorFastValid;
+
     BOOLEAN PixelValveValid;
     ULONG PixelValveIndex;
     PHYSICAL_ADDRESS PixelValvePhysical;

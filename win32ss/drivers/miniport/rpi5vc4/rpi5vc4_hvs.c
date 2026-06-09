@@ -195,6 +195,8 @@ Rpi5HvsInstallScanout(
     if (Width == 0 || Height == 0 || Pitch == 0 || Phys == 0)
         return;
 
+    DeviceExtension->HvsCursorFastValid = FALSE;
+
     HvsBase = (PVOID)Rpi5HvsMap(DeviceExtension);
     if (HvsBase == NULL)
     {
@@ -311,6 +313,15 @@ Rpi5HvsInstallScanout(
     KeMemoryBarrier();
 
     WRITE_REGISTER_ULONG((PULONG)((PUCHAR)HvsBase + LptrsReg), LptrsVal);
+
+    /* Cache the cursor-plane location so moves can skip re-validation reads. */
+    if (Count == 2 * RPI5_HVS_PLANE_DWORDS + 1)
+    {
+        DeviceExtension->HvsLptrsReg = LptrsReg;
+        DeviceExtension->HvsLptrsVal = LptrsVal;
+        DeviceExtension->HvsCursorHead = Head + RPI5_HVS_PLANE_DWORDS;
+        DeviceExtension->HvsCursorFastValid = TRUE;
+    }
 }
 
 BOOLEAN
@@ -319,19 +330,17 @@ Rpi5HvsMoveCursor(
 {
     volatile ULONG *Dlist;
     PVOID HvsBase;
-    ULONG LptrsD, LptrsReg, LptrsVal, Head, Control;
-    ULONG CursorHead, Ctl0, Ptr0, Ptr1;
+    ULONG LptrsVal;
+    ULONG CursorHead;
     ULONG CursorX;
     ULONG CursorY;
     ULONG Width = DeviceExtension->CursorWidth;
     ULONG Height = DeviceExtension->CursorHeight;
     ULONGLONG CursorPhys = (ULONGLONG)DeviceExtension->CursorPhys.QuadPart;
-    ULONGLONG CursorBase = CursorPhys;
-    ULONGLONG CursorLimit = CursorBase +
-                            RPI5VC4_CURSOR_WIDTH * RPI5VC4_CURSOR_HEIGHT *
-                            sizeof(ULONG);
-    ULONGLONG ActiveCursorPhys;
-    ULONGLONG FrameBufferPhys = (ULONGLONG)DeviceExtension->FrameBufferPhysical.QuadPart;
+
+    /* Fall back to a full Rpi5HvsInstallScanout when no validated plane is live. */
+    if (!DeviceExtension->HvsCursorFastValid)
+        return FALSE;
 
     if (!Rpi5HvsClipCursor(DeviceExtension,
                            &CursorX,
@@ -347,61 +356,28 @@ Rpi5HvsMoveCursor(
     if (HvsBase == NULL)
         return FALSE;
 
+    /* One guard read: if the live head moved, re-validate via the full path. */
+    LptrsVal = READ_REGISTER_ULONG((PULONG)((PUCHAR)HvsBase + DeviceExtension->HvsLptrsReg));
+    if (LptrsVal != DeviceExtension->HvsLptrsVal)
+    {
+        DeviceExtension->HvsCursorFastValid = FALSE;
+        return FALSE;
+    }
+
     Dlist = (volatile ULONG *)((PUCHAR)HvsBase + RPI5_HVS_DLIST_OFFSET);
-    Control = READ_REGISTER_ULONG((PULONG)((PUCHAR)HvsBase + RPI5_HVS_REG_CONTROL));
-    LptrsD = READ_REGISTER_ULONG((PULONG)((PUCHAR)HvsBase + RPI5_HVS_LPTRS_D));
-    if (LptrsD != 0xffffffff && LptrsD != 0)
-    {
-        LptrsReg = RPI5_HVS_LPTRS_D;
-        LptrsVal = LptrsD;
-    }
-    else
-    {
-        LptrsReg = RPI5_HVS_LPTRS_C;
-        LptrsVal = READ_REGISTER_ULONG((PULONG)((PUCHAR)HvsBase + RPI5_HVS_LPTRS_C));
-    }
+    CursorHead = DeviceExtension->HvsCursorHead;
 
-    Head = LptrsVal & RPI5_HVS_LPTRS_HEAD_MASK;
-    if (!(Control & RPI5_HVS_CONTROL_HVS_EN) || Head == 0)
-        return FALSE;
-
-    Ctl0 = READ_REGISTER_ULONG((PULONG)&Dlist[Head + 0]);
-    Ptr0 = READ_REGISTER_ULONG((PULONG)&Dlist[Head + 5]);
-    Ptr1 = READ_REGISTER_ULONG((PULONG)&Dlist[Head + 6]);
-    if (!(Ctl0 & RPI5_HVS_CTL0_VALID) ||
-        (Ptr0 & 0xff) != (ULONG)((FrameBufferPhys >> 32) & 0xff) ||
-        Ptr1 != (ULONG)(FrameBufferPhys & 0xffffffff))
-        return FALSE;
-
-    CursorHead = Head + RPI5_HVS_PLANE_DWORDS;
-    Ctl0 = READ_REGISTER_ULONG((PULONG)&Dlist[CursorHead + 0]);
-    Ptr0 = READ_REGISTER_ULONG((PULONG)&Dlist[CursorHead + 5]);
-    Ptr1 = READ_REGISTER_ULONG((PULONG)&Dlist[CursorHead + 6]);
-    ActiveCursorPhys = ((ULONGLONG)(Ptr0 & 0xff) << 32) | Ptr1;
-    if (!(Ctl0 & RPI5_HVS_CTL0_VALID) ||
-        ActiveCursorPhys < CursorBase ||
-        ActiveCursorPhys >= CursorLimit)
-        return FALSE;
-
-    WRITE_REGISTER_ULONG((PULONG)&Dlist[CursorHead + 1],
-                         ((CursorY & 0x1fff) << RPI5_HVS_POS0_Y_SHIFT) |
-                         (CursorX & 0x1fff));
-    WRITE_REGISTER_ULONG((PULONG)&Dlist[CursorHead + 3],
-                         (((Height - 1) & 0x1fff) << RPI5_HVS_POS2_LINES_SHIFT) |
-                         ((Width - 1) & 0x1fff));
-    WRITE_REGISTER_ULONG((PULONG)&Dlist[CursorHead + 5],
-                         (Ptr0 & ~0xffu) | (ULONG)((CursorPhys >> 32) & 0xff));
-    WRITE_REGISTER_ULONG((PULONG)&Dlist[CursorHead + 6],
-                         (ULONG)(CursorPhys & 0xffffffff));
-    WRITE_REGISTER_ULONG((PULONG)&Dlist[CursorHead + 7],
-                         RPI5VC4_CURSOR_WIDTH * sizeof(ULONG));
+    WRITE_REGISTER_ULONG((PULONG)&Dlist[CursorHead + 1], ((CursorY & 0x1fff) << RPI5_HVS_POS0_Y_SHIFT) | (CursorX & 0x1fff));
+    WRITE_REGISTER_ULONG((PULONG)&Dlist[CursorHead + 3], (((Height - 1) & 0x1fff) << RPI5_HVS_POS2_LINES_SHIFT) | ((Width - 1) & 0x1fff));
+    WRITE_REGISTER_ULONG((PULONG)&Dlist[CursorHead + 5], (RPI5_HVS_CURSOR_UPM_BASE << RPI5_HVS_PTR0_UPM_BASE_SHIFT) | (RPI5_HVS_CURSOR_UPM_HANDLE << RPI5_HVS_PTR0_UPM_HANDLE_SHIFT) | (ULONG)((CursorPhys >> 32) & 0xff));
+    WRITE_REGISTER_ULONG((PULONG)&Dlist[CursorHead + 6], (ULONG)(CursorPhys & 0xffffffff));
 
 #if defined(_M_ARM64)
     __dsb(_ARM64_BARRIER_SY);
 #endif
     KeMemoryBarrier();
 
-    WRITE_REGISTER_ULONG((PULONG)((PUCHAR)HvsBase + LptrsReg), LptrsVal);
+    WRITE_REGISTER_ULONG((PULONG)((PUCHAR)HvsBase + DeviceExtension->HvsLptrsReg), LptrsVal);
     return TRUE;
 }
 
