@@ -1201,6 +1201,14 @@ USBPORT_InvalidateRootHub(PVOID MiniPortExtension)
 
         Endpoint = PdoExtension->Endpoint;
 
+        if (!Endpoint)
+        {
+            /* No SCE pipe yet; keep port-change interrupts armed */
+            DPRINT1("USBPORT_InvalidateRootHub: no SCE endpoint registered\n");
+            Packet->RH_EnableIrq(FdoExtension->MiniPortExt);
+            return 0;
+        }
+
         if (Endpoint && Endpoint->FdoDevice == FdoDevice &&
             USBPORT_IsEndpointOnList(FdoExtension, Endpoint))
         {
