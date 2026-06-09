@@ -55,6 +55,9 @@ typedef struct _RPI5VC4_DEVICE_EXTENSION
     PVOID MappedFrameBuffer;
     ULONG CurrentMode;
 
+    /* Cached MMIO mapping of the HVS register block (mapped once, reused). */
+    PVOID HvsBase;
+
     BOOLEAN PixelValveValid;
     ULONG PixelValveIndex;
     PHYSICAL_ADDRESS PixelValvePhysical;

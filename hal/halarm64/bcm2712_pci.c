@@ -154,10 +154,10 @@ Bcm2712IsLinkUp(
     _In_ PVOID RcBase)
 {
     ULONG Status;
+    ULONG Mask = PCIE_MISC_PCIE_STATUS_PHYLINKUP | PCIE_MISC_PCIE_STATUS_DL_ACTIVE;
 
     Status = Bcm2712Read32(RcBase, PCIE_MISC_PCIE_STATUS);
-    return (Status & (PCIE_MISC_PCIE_STATUS_PHYLINKUP |
-                      PCIE_MISC_PCIE_STATUS_DL_ACTIVE)) != 0;
+    return (Status & Mask) == Mask;
 }
 
 /**
@@ -502,13 +502,9 @@ Bcm2712PciInit(VOID)
                    Bcm2712RcState[Index].SubordinateBus,
                    Bcm2712RcState[Index].LinkUp ? "UP" : "DOWN");
 
-            if (Bcm2712RcState[Index].LinkUp)
+            if (Bcm2712RcState[Index].LinkUp && Index == 2)
             {
-                /*
-                 * RP1 masters issue DMA at CPU_PA + 0x10_00000000.
-                 * Program the first inbound window to translate that PCIe
-                 * aperture back to CPU physical address 0.
-                 */
+                /* RP1-only inbound translations: program solely on PCIE2 (the RP1 x4 link). */
                 Bcm2712ProgramInboundWindow(VirtAddr,
                                             RC_BAR1_CONFIG_LO,
                                             UBUS_BAR1_REMAP_LO,
@@ -516,16 +512,13 @@ Bcm2712PciInit(VOID)
                                             BCM2712_RP1_DMA_CPU_BASE,
                                             BCM2712_RP1_DMA_SIZE);
 
-                if (Index == 2)
-                {
-                    /* RP1 MSI writes target MIP0 through this 4 KiB inbound window. */
-                    Bcm2712ProgramInboundWindow(VirtAddr,
-                                                RC_BAR_CONFIG_LO(BCM2712_PCIE2_MIP0_BAR),
-                                                UBUS_BAR_REMAP_LO(BCM2712_PCIE2_MIP0_BAR),
-                                                BCM2712_PCIE2_MIP0_PCI_BASE,
-                                                BCM2712_PCIE2_MIP0_CPU_BASE,
-                                                BCM2712_PCIE2_MIP0_SIZE);
-                }
+                /* RP1 MSI writes target MIP0 through this 4 KiB inbound window. */
+                Bcm2712ProgramInboundWindow(VirtAddr,
+                                            RC_BAR_CONFIG_LO(BCM2712_PCIE2_MIP0_BAR),
+                                            UBUS_BAR_REMAP_LO(BCM2712_PCIE2_MIP0_BAR),
+                                            BCM2712_PCIE2_MIP0_PCI_BASE,
+                                            BCM2712_PCIE2_MIP0_CPU_BASE,
+                                            BCM2712_PCIE2_MIP0_SIZE);
             }
         }
     }
@@ -651,11 +644,6 @@ Bcm2712PciAccessConfigSpace(
                 USHORT QuerySeg;
 
                 /*
-                 * When segment is HALP_ACPI_SEGMENT_ANY (0xFFFF), try
-                 * all known segments.  The ACPI _PRT entries are keyed
-                 * by segment number, and callers often pass 0xFFFF.
-                 */
-                /*
                  * Query the _PRT for this device's interrupt.
                  * If the device is behind a bridge (bus > 0), the _PRT only
                  * covers bus 0.  Apply PCI interrupt swizzling:
@@ -685,6 +673,11 @@ Bcm2712PciAccessConfigSpace(
                     }
                     else
                     {
+                        /*
+                         * Segment 0xFFFF is a wildcard from the config-space
+                         * caller.  ACPI _PRT entries are keyed by firmware
+                         * _SEG values, not by BCM2712 hardware RC indices.
+                         */
                         for (QuerySeg = 0; QuerySeg < BCM2712_PCIE_RC_COUNT && !Found; QuerySeg++)
                         {
                             Found = HalpArm64PciRouteQueryCallback(

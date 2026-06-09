@@ -511,14 +511,14 @@ Rp1GetChildInterrupt(
         return TRUE;
     }
 
-    if (FdoExt->InterruptVector == 0)
+    if (!FdoExt->RawInterruptValid || (FdoExt->RawInterruptLevel == 0 && FdoExt->RawInterruptVector == 0))
         return FALSE;
 
-    *Level = FdoExt->InterruptLevel ? FdoExt->InterruptLevel : FdoExt->InterruptVector;
-    *Vector = FdoExt->InterruptVector;
-    *Affinity = FdoExt->InterruptAffinity;
-    *Flags = CM_RESOURCE_INTERRUPT_LEVEL_SENSITIVE;
-    *ShareDisposition = CmResourceShareShared;
-    *InterruptLine = (FdoExt->InterruptVector <= 0xff) ? (UCHAR)FdoExt->InterruptVector : 0xff;
+    *Level = FdoExt->RawInterruptLevel ? FdoExt->RawInterruptLevel : FdoExt->RawInterruptVector;
+    *Vector = FdoExt->RawInterruptVector;
+    *Affinity = FdoExt->RawInterruptAffinity;
+    *Flags = FdoExt->RawInterruptFlags;
+    *ShareDisposition = FdoExt->RawInterruptShareDisposition;
+    *InterruptLine = (*Level <= 0xff) ? (UCHAR)*Level : 0xff;
     return TRUE;
 }

@@ -21,6 +21,22 @@
 #include "rpi5vc4_hvs.h"
 #include "rpi5vc4_crtc.h"
 
+/* Map the HVS register block once and cache it (re-entered on every cursor move). */
+static volatile ULONG *
+Rpi5HvsMap(
+    _Inout_ PRPI5VC4_DEVICE_EXTENSION DeviceExtension)
+{
+    PHYSICAL_ADDRESS HvsPhys;
+
+    if (DeviceExtension->HvsBase == NULL)
+    {
+        HvsPhys.QuadPart = RPI5_HVS_PHYS;
+        DeviceExtension->HvsBase = MmMapIoSpace(HvsPhys, RPI5_HVS_LENGTH, MmNonCached);
+    }
+
+    return (volatile ULONG *)DeviceExtension->HvsBase;
+}
+
 static BOOLEAN
 Rpi5HvsClipCursor(
     _In_ PRPI5VC4_DEVICE_EXTENSION DeviceExtension,
@@ -162,7 +178,6 @@ VOID
 Rpi5HvsInstallScanout(
     _In_ PRPI5VC4_DEVICE_EXTENSION DeviceExtension)
 {
-    PHYSICAL_ADDRESS HvsPhys;
     volatile ULONG *Dlist;
     PVOID HvsBase;
     ULONG LptrsC, LptrsD, LptrsReg, LptrsVal, Head, Control;
@@ -180,8 +195,7 @@ Rpi5HvsInstallScanout(
     if (Width == 0 || Height == 0 || Pitch == 0 || Phys == 0)
         return;
 
-    HvsPhys.QuadPart = RPI5_HVS_PHYS;
-    HvsBase = MmMapIoSpace(HvsPhys, RPI5_HVS_LENGTH, MmNonCached);
+    HvsBase = (PVOID)Rpi5HvsMap(DeviceExtension);
     if (HvsBase == NULL)
     {
         DbgPrint("RPI5VC4: HVS map failed\n");
@@ -209,7 +223,6 @@ Rpi5HvsInstallScanout(
     {
         DbgPrint("RPI5VC4: HVS not ready (ctrl=0x%08lx head=%lu) - skip\n",
                  Control, Head);
-        MmUnmapIoSpace(HvsBase, RPI5_HVS_LENGTH);
         return;
     }
 
@@ -239,7 +252,6 @@ Rpi5HvsInstallScanout(
              CurPtr1 != FirmwareFbLow))
         {
             DbgPrint("RPI5VC4: HVS head does not match our planes - not taking over\n");
-            MmUnmapIoSpace(HvsBase, RPI5_HVS_LENGTH);
             return;
         }
     }
@@ -299,15 +311,12 @@ Rpi5HvsInstallScanout(
     KeMemoryBarrier();
 
     WRITE_REGISTER_ULONG((PULONG)((PUCHAR)HvsBase + LptrsReg), LptrsVal);
-
-    MmUnmapIoSpace(HvsBase, RPI5_HVS_LENGTH);
 }
 
 BOOLEAN
 Rpi5HvsMoveCursor(
     _In_ PRPI5VC4_DEVICE_EXTENSION DeviceExtension)
 {
-    PHYSICAL_ADDRESS HvsPhys;
     volatile ULONG *Dlist;
     PVOID HvsBase;
     ULONG LptrsD, LptrsReg, LptrsVal, Head, Control;
@@ -334,8 +343,7 @@ Rpi5HvsMoveCursor(
         return FALSE;
     }
 
-    HvsPhys.QuadPart = RPI5_HVS_PHYS;
-    HvsBase = MmMapIoSpace(HvsPhys, RPI5_HVS_LENGTH, MmNonCached);
+    HvsBase = (PVOID)Rpi5HvsMap(DeviceExtension);
     if (HvsBase == NULL)
         return FALSE;
 
@@ -355,10 +363,7 @@ Rpi5HvsMoveCursor(
 
     Head = LptrsVal & RPI5_HVS_LPTRS_HEAD_MASK;
     if (!(Control & RPI5_HVS_CONTROL_HVS_EN) || Head == 0)
-    {
-        MmUnmapIoSpace(HvsBase, RPI5_HVS_LENGTH);
         return FALSE;
-    }
 
     Ctl0 = READ_REGISTER_ULONG((PULONG)&Dlist[Head + 0]);
     Ptr0 = READ_REGISTER_ULONG((PULONG)&Dlist[Head + 5]);
@@ -366,10 +371,7 @@ Rpi5HvsMoveCursor(
     if (!(Ctl0 & RPI5_HVS_CTL0_VALID) ||
         (Ptr0 & 0xff) != (ULONG)((FrameBufferPhys >> 32) & 0xff) ||
         Ptr1 != (ULONG)(FrameBufferPhys & 0xffffffff))
-    {
-        MmUnmapIoSpace(HvsBase, RPI5_HVS_LENGTH);
         return FALSE;
-    }
 
     CursorHead = Head + RPI5_HVS_PLANE_DWORDS;
     Ctl0 = READ_REGISTER_ULONG((PULONG)&Dlist[CursorHead + 0]);
@@ -379,10 +381,7 @@ Rpi5HvsMoveCursor(
     if (!(Ctl0 & RPI5_HVS_CTL0_VALID) ||
         ActiveCursorPhys < CursorBase ||
         ActiveCursorPhys >= CursorLimit)
-    {
-        MmUnmapIoSpace(HvsBase, RPI5_HVS_LENGTH);
         return FALSE;
-    }
 
     WRITE_REGISTER_ULONG((PULONG)&Dlist[CursorHead + 1],
                          ((CursorY & 0x1fff) << RPI5_HVS_POS0_Y_SHIFT) |
@@ -403,7 +402,6 @@ Rpi5HvsMoveCursor(
     KeMemoryBarrier();
 
     WRITE_REGISTER_ULONG((PULONG)((PUCHAR)HvsBase + LptrsReg), LptrsVal);
-    MmUnmapIoSpace(HvsBase, RPI5_HVS_LENGTH);
     return TRUE;
 }
 
@@ -412,7 +410,6 @@ Rpi5HvsFlipScanout(
     _In_ PRPI5VC4_DEVICE_EXTENSION DeviceExtension,
     _In_ PHYSICAL_ADDRESS FrameBufferPhysical)
 {
-    PHYSICAL_ADDRESS HvsPhys;
     volatile ULONG *Dlist;
     PVOID HvsBase;
     ULONG LptrsD, LptrsReg, LptrsVal, Head, Control, Ctl0, Ptr0, Ptr1;
@@ -427,8 +424,7 @@ Rpi5HvsFlipScanout(
 
     Rpi5CrtcWaitForVBlank(DeviceExtension);
 
-    HvsPhys.QuadPart = RPI5_HVS_PHYS;
-    HvsBase = MmMapIoSpace(HvsPhys, RPI5_HVS_LENGTH, MmNonCached);
+    HvsBase = (PVOID)Rpi5HvsMap(DeviceExtension);
     if (HvsBase == NULL)
         return FALSE;
 
@@ -448,26 +444,17 @@ Rpi5HvsFlipScanout(
 
     Head = LptrsVal & RPI5_HVS_LPTRS_HEAD_MASK;
     if (!(Control & RPI5_HVS_CONTROL_HVS_EN) || Head == 0)
-    {
-        MmUnmapIoSpace(HvsBase, RPI5_HVS_LENGTH);
         return FALSE;
-    }
 
     Ctl0 = READ_REGISTER_ULONG((PULONG)&Dlist[Head + 0]);
     if (!(Ctl0 & RPI5_HVS_CTL0_VALID))
-    {
-        MmUnmapIoSpace(HvsBase, RPI5_HVS_LENGTH);
         return FALSE;
-    }
 
     Ptr0 = READ_REGISTER_ULONG((PULONG)&Dlist[Head + 5]);
     Ptr1 = READ_REGISTER_ULONG((PULONG)&Dlist[Head + 6]);
     if (((Ptr0 & 0xff) != (ULONG)((CurrentPhys >> 32) & 0xff)) ||
         Ptr1 != (ULONG)(CurrentPhys & 0xffffffff))
-    {
-        MmUnmapIoSpace(HvsBase, RPI5_HVS_LENGTH);
         return FALSE;
-    }
 
     Ptr0 = (Ptr0 & ~0xffu) | (ULONG)((Phys >> 32) & 0xff);
     WRITE_REGISTER_ULONG((PULONG)&Dlist[Head + 5], Ptr0);
@@ -479,7 +466,6 @@ Rpi5HvsFlipScanout(
     KeMemoryBarrier();
 
     WRITE_REGISTER_ULONG((PULONG)((PUCHAR)HvsBase + LptrsReg), LptrsVal);
-    MmUnmapIoSpace(HvsBase, RPI5_HVS_LENGTH);
     DeviceExtension->FrameBufferPhysical = FrameBufferPhysical;
     return TRUE;
 }

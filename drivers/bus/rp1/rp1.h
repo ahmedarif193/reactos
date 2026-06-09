@@ -197,6 +197,14 @@ typedef struct _RP1_FDO_EXTENSION
     ULONG InterruptVector;
     KAFFINITY InterruptAffinity;
 
+    /* Raw PCI interrupt resource for child PDO resource lists. */
+    ULONG RawInterruptLevel;
+    ULONG RawInterruptVector;
+    KAFFINITY RawInterruptAffinity;
+    ULONG RawInterruptFlags;
+    CM_SHARE_DISPOSITION RawInterruptShareDisposition;
+    BOOLEAN RawInterruptValid;
+
     /* RP1 internal MSI-X domain, programmed by this hardware bus driver. */
     BOOLEAN MsixReady;
     ULONG MsiVectorBase;
