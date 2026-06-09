@@ -144,6 +144,7 @@ DrvEnablePDEV(
 
    if (!IntInitDefaultPalette(ppdev, &DevInfo))
    {
+      IntDisableHardwarePointer(ppdev);
       EngFreeMem(ppdev);
       return NULL;
    }
@@ -195,6 +196,8 @@ DrvDisablePDEV(
    {
       EngFreeMem(((PPDEV)dhpdev)->PaletteEntries);
    }
+
+   IntDisableHardwarePointer((PPDEV)dhpdev);
 
    EngFreeMem(dhpdev);
 }
