@@ -340,8 +340,11 @@ USBH_PdoIoctlSubmitUrb(IN PUSBHUB_PORT_PDO_EXTENSION PortExtension,
 
     if (PortExtension->DeviceHandle == NULL)
     {
-        Urb->UrbHeader.UsbdDeviceHandle = NULL;
-        Status = USBH_PassIrp(HubExtension->RootHubPdo2, Irp);
+        /* USBPORT maps a NULL handle to the root hub itself; never forward for a removed device */
+        DPRINT1("USBH_PdoIoctlSubmitUrb: failing URB 0x%02X for removed device\n", Urb->UrbHeader.Function);
+        Urb->UrbHeader.Status = USBD_STATUS_DEVICE_GONE;
+        USBH_CompleteIrp(Irp, STATUS_DEVICE_NOT_CONNECTED);
+        Status = STATUS_DEVICE_NOT_CONNECTED;
     }
     else
     {
