@@ -14467,13 +14467,14 @@ XHCI_HaltController(
     Command = XHCI_READ_REGISTER_ULONG(&Extension->OperationalRegisters->UsbCmd);
     if ((Command & XHCI_USBCMD_RS) == 0)
     {
+        /* Run/Stop is already clear: if HCH confirms the halt, we are done. */
         if (XHCI_WaitForRegisterBits(&Extension->OperationalRegisters->UsbSts,
                                      XHCI_USBSTS_HCH,
                                      TRUE,
                                      TimeoutUs ? TimeoutUs : XHCI_WAIT_HALT_US))
         {
             Extension->ControllerRunning = FALSE;
-
+            return MP_STATUS_SUCCESS;
         }
 
         DPRINT1("usbxhci: controller already halted but status not updating\n");
