@@ -460,6 +460,31 @@ USBPORT_GetEndpointState(IN PUSBPORT_ENDPOINT Endpoint)
     return State;
 }
 
+/* Drop a queued StateChangeLink so it cannot dangle once the endpoint is freed */
+static
+VOID
+USBPORT_PurgeEndpointStateChange(IN PUSBPORT_ENDPOINT Endpoint)
+{
+    PUSBPORT_DEVICE_EXTENSION FdoExtension;
+    PLIST_ENTRY Entry;
+    KIRQL OldIrql;
+
+    FdoExtension = Endpoint->FdoDevice->DeviceExtension;
+
+    KeAcquireSpinLock(&FdoExtension->EpStateChangeSpinLock, &OldIrql);
+
+    for (Entry = FdoExtension->EpStateChangeList.Flink; Entry != &FdoExtension->EpStateChangeList; Entry = Entry->Flink)
+    {
+        if (Entry == &Endpoint->StateChangeLink)
+        {
+            RemoveEntryList(Entry);
+            break;
+        }
+    }
+
+    KeReleaseSpinLock(&FdoExtension->EpStateChangeSpinLock, OldIrql);
+}
+
 VOID
 NTAPI
 USBPORT_SetEndpointState(IN PUSBPORT_ENDPOINT Endpoint,
@@ -490,6 +515,8 @@ USBPORT_SetEndpointState(IN PUSBPORT_ENDPOINT Endpoint,
 
             KeReleaseSpinLock(&Endpoint->StateChangeSpinLock,
                               Endpoint->EndpointStateOldIrql);
+
+            USBPORT_PurgeEndpointStateChange(Endpoint);
 
             USBPORT_InvalidateEndpointHandler(FdoDevice,
                                               Endpoint,
@@ -540,6 +567,8 @@ USBPORT_SetEndpointState(IN PUSBPORT_ENDPOINT Endpoint,
 
             KeReleaseSpinLock(&Endpoint->StateChangeSpinLock,
                               Endpoint->EndpointStateOldIrql);
+
+            USBPORT_PurgeEndpointStateChange(Endpoint);
 
             USBPORT_InvalidateEndpointHandler(FdoDevice,
                                               Endpoint,
@@ -737,6 +766,8 @@ USBPORT_DeleteEndpoint(IN PDEVICE_OBJECT FdoDevice,
         Endpoint->EndpointLink.Blink = NULL;
 
         KeReleaseSpinLock(&FdoExtension->EndpointListSpinLock, OldIrql);
+
+        USBPORT_PurgeEndpointStateChange(Endpoint);
 
         /* Free any cached reusable transfer before closing endpoint */
         USBPORT_FreeReusableTransfer(Endpoint);
