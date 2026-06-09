@@ -1,8 +1,7 @@
 /*
  * PROJECT:     ReactOS Generic Framebuffer display driver
  * LICENSE:     GPL-2.0-or-later (https://spdx.org/licenses/GPL-2.0-or-later)
- * PURPOSE:     Cached shadow surface with dirty-rectangle flushing, so the
- *              DIB engine never reads from uncached video memory.
+ * PURPOSE:     Cached shadow surface with dirty-rectangle flushing.
  * COPYRIGHT:   Copyright 2026 Ahmed Arif <arif193@gmail.com>
  */
 
@@ -18,6 +17,7 @@ IntFlushShadowRect(
    LONG Bottom = ppdev->ScreenHeight;
    ULONG BytesPerPixel = (ppdev->BitsPerPixel + 7) / 8;
    ULONG Delta = ppdev->ScreenDelta;
+   ULONG ByteLeft, ByteRight;
    PUCHAR Source, Destination;
    ULONG Bytes;
    LONG y;
@@ -36,16 +36,22 @@ IntFlushShadowRect(
    if (Left >= Right || Top >= Bottom)
       return;
 
-   if (Left == 0 && Right == (LONG)ppdev->ScreenWidth)
+   /* Round the span to whole 64-byte lines so the copy runs co-aligned full-line WC bursts. */
+   ByteLeft = ((ULONG)Left * BytesPerPixel) & ~63UL;
+   ByteRight = ((ULONG)Right * BytesPerPixel + 63) & ~63UL;
+   if (ByteRight > Delta)
+      ByteRight = Delta;
+
+   if (ByteLeft == 0 && ByteRight == Delta)
    {
       /* Full-width spans are contiguous in both surfaces. */
       memcpy((PUCHAR)ppdev->ScreenPtr + Top * Delta, ppdev->ShadowPtr + Top * Delta, (Bottom - Top) * Delta);
       return;
    }
 
-   Source = ppdev->ShadowPtr + Top * Delta + Left * BytesPerPixel;
-   Destination = (PUCHAR)ppdev->ScreenPtr + Top * Delta + Left * BytesPerPixel;
-   Bytes = (Right - Left) * BytesPerPixel;
+   Source = ppdev->ShadowPtr + Top * Delta + ByteLeft;
+   Destination = (PUCHAR)ppdev->ScreenPtr + Top * Delta + ByteLeft;
+   Bytes = ByteRight - ByteLeft;
 
    for (y = Top; y < Bottom; y++)
    {
