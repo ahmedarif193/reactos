@@ -5997,6 +5997,77 @@ Exit:
 }
 
 static
+ULONG
+XHCI_GetCommandTrbType(
+    _In_ PXHCI_EXTENSION Extension,
+    _In_ ULONGLONG CommandPointer)
+{
+    ULONGLONG RingBase;
+    ULONGLONG Offset;
+    ULONG Index;
+
+    RingBase = (ULONGLONG)Extension->CommandRingPhysical.QuadPart;
+
+    if (!Extension->CommandRing || Extension->CommandRingTrbCount == 0 || CommandPointer < RingBase)
+        return 0;
+
+    Offset = CommandPointer - RingBase;
+    if (Offset % sizeof(XHCI_TRB) != 0)
+        return 0;
+
+    Index = (ULONG)(Offset / sizeof(XHCI_TRB));
+    if (Index >= Extension->CommandRingTrbCount)
+        return 0;
+
+    return (Extension->CommandRing[Index].Control & XHCI_TRB_TYPE_MASK) >> XHCI_TRB_TYPE_SHIFT;
+}
+
+static
+VOID
+XHCI_FinalizeDisableSlot(
+    _In_ PXHCI_EXTENSION Extension,
+    _In_ PXHCI_DEVICE_SLOT Slot,
+    _In_ UCHAR SlotId)
+{
+    UCHAR EpId;
+
+    /* Drain any stale deferred transfer completions for this slot */
+    XHCI_FlushDeferredCompletionsForSlot(Extension, SlotId);
+
+    /* Disown transfers only; completing them here races USBPORT's own abort path */
+    for (EpId = 1; EpId <= XHCI_MAX_ENDPOINTS; EpId++)
+    {
+        PXHCI_ENDPOINT Ep = Slot->EndpointTable[EpId];
+        KIRQL EpIrql;
+
+        if (!Ep)
+            continue;
+
+        KeAcquireSpinLock(&Ep->Lock, &EpIrql);
+        if (XHCI_HasActiveTransfersLocked(Ep))
+        {
+            DPRINT1("usbxhci: slot %u ep %u NULLing orphan ActiveTransfer %p (USBPORT will abort)\n", SlotId, EpId, XHCI_GetActiveTransferHeadLocked(Ep));
+            XHCI_ClearActiveTransfersLocked(Ep);
+        }
+        KeReleaseSpinLock(&Ep->Lock, EpIrql);
+    }
+
+    Slot->InUse = FALSE;
+    Slot->Addressed = FALSE;
+    Slot->Configured = FALSE;
+    Slot->DisablePending = FALSE;
+    Slot->UsbDeviceAddress = 0;
+    Slot->PortNumber = 0;
+    Slot->HighestEndpointId = 1;
+    XHCI_UpdateDeviceAddressMap(Extension, Slot, 0);
+    RtlZeroMemory(Slot->EndpointTable, sizeof(Slot->EndpointTable));
+    RtlZeroMemory(Slot->DeferredEndpointTable, sizeof(Slot->DeferredEndpointTable));
+    InterlockedExchange(&Slot->Ep0NeedsStallReset, 0);
+    InterlockedExchange(&Slot->Ep0StallResetQueued, 0);
+    KeSetEvent(&Slot->Ep0StallResetEvent, IO_NO_INCREMENT, FALSE);
+}
+
+static
 VOID
 XHCI_HandleCommandCompletion(
     _In_ PXHCI_EXTENSION Extension,
@@ -6083,6 +6154,16 @@ XHCI_HandleCommandCompletion(
     {
         DPRINT1("usbxhci: completion for unknown command pointer %I64x\n",
                 CommandPointer);
+
+        /* Recover a Disable Slot whose context was abandoned on timeout */
+        if (Slot && (CompletionCode == XHCI_COMPLETION_SUCCESS || CompletionCode == XHCI_COMPLETION_SLOT_NOT_ENABLED))
+        {
+            if (XHCI_GetCommandTrbType(Extension, CommandPointer) == XHCI_TRB_TYPE_DISABLE_SLOT)
+            {
+                DPRINT1("usbxhci: late disable-slot completion, finalizing slot %u\n", SlotId);
+                XHCI_FinalizeDisableSlot(Extension, Slot, SlotId);
+            }
+        }
         return;
     }
 
@@ -6192,70 +6273,14 @@ XHCI_HandleCommandCompletion(
     }
     else if (CommandContext->CommandType == XHCI_TRB_TYPE_DISABLE_SLOT)
     {
-        if (CompletionCode == XHCI_COMPLETION_SUCCESS && Slot)
+        if ((CompletionCode == XHCI_COMPLETION_SUCCESS || CompletionCode == XHCI_COMPLETION_SLOT_NOT_ENABLED) && Slot)
         {
-            UCHAR EpId;
+            if (CompletionCode == XHCI_COMPLETION_SLOT_NOT_ENABLED)
+                DPRINT1("usbxhci: slot %u already disabled by HW, finalizing\n", SlotId);
+            else
+                DPRINT("usbxhci: slot %u disabled\n", SlotId);
 
-            DPRINT("usbxhci: slot %u disabled\n", SlotId);
-
-            /*
-             * Drain any stale deferred transfer completions for this slot.
-             * Non-DeviceGone transfers that were deferred (AllowCallbacks
-             * was FALSE) should have been drained by
-             * XHCI_DrainDeferredTransferCompletions already, but flush
-             * any stragglers as a safety measure.
-             */
-            XHCI_FlushDeferredCompletionsForSlot(Extension, SlotId);
-
-            /*
-             * NULL out ActiveTransfer on all endpoints belonging to this
-             * slot. Do NOT call UsbPortCompleteTransfer from here.
-             *
-             * USBPORT's own abort mechanism (AbortTransfers ->
-             * DmaEndpointPaused -> FlushCancelList -> CompleteTransfer)
-             * will handle completing and freeing these transfers. Calling
-             * UsbPortCompleteTransfer from the miniport side races with
-             * USBPORT_AbortTransfers: the miniport's QueueDoneTransfer
-             * does RemoveEntryList on the TransferLink without holding
-             * EndpointSpinLock, corrupting the TransferList that
-             * DmaEndpointPaused iterates under EndpointSpinLock. This
-             * list corruption causes use-after-free crashes.
-             *
-             * The miniport's only job here is to disown the transfers
-             * (NULL ActiveTransfer) so XHCI_AbortTransfer knows there's
-             * nothing to abort on the hardware side.
-             */
-            for (EpId = 1; EpId <= XHCI_MAX_ENDPOINTS; EpId++)
-            {
-                PXHCI_ENDPOINT Ep = Slot->EndpointTable[EpId];
-                KIRQL EpIrql;
-
-                if (!Ep)
-                    continue;
-
-                KeAcquireSpinLock(&Ep->Lock, &EpIrql);
-                if (XHCI_HasActiveTransfersLocked(Ep))
-                {
-                    DPRINT1("usbxhci: slot %u ep %u NULLing orphan ActiveTransfer %p (USBPORT will abort)\n",
-                            SlotId, EpId, XHCI_GetActiveTransferHeadLocked(Ep));
-                    XHCI_ClearActiveTransfersLocked(Ep);
-                }
-                KeReleaseSpinLock(&Ep->Lock, EpIrql);
-            }
-
-            Slot->InUse = FALSE;
-            Slot->Addressed = FALSE;
-            Slot->Configured = FALSE;
-            Slot->DisablePending = FALSE;
-            Slot->UsbDeviceAddress = 0;
-            Slot->PortNumber = 0;
-            Slot->HighestEndpointId = 1;
-            XHCI_UpdateDeviceAddressMap(Extension, Slot, 0);
-            RtlZeroMemory(Slot->EndpointTable, sizeof(Slot->EndpointTable));
-            RtlZeroMemory(Slot->DeferredEndpointTable, sizeof(Slot->DeferredEndpointTable));
-            InterlockedExchange(&Slot->Ep0NeedsStallReset, 0);
-            InterlockedExchange(&Slot->Ep0StallResetQueued, 0);
-            KeSetEvent(&Slot->Ep0StallResetEvent, IO_NO_INCREMENT, FALSE);
+            XHCI_FinalizeDisableSlot(Extension, Slot, SlotId);
         }
         else if (Slot)
         {
@@ -9923,6 +9948,11 @@ CheckCompletion:
          * That is benign for callers trying to quiesce an endpoint before
          * reset/reconfiguration.
          */
+        Result = MP_STATUS_SUCCESS;
+    }
+    else if (CommandContext->CompletionCode == XHCI_COMPLETION_SLOT_NOT_ENABLED && CommandContext->CommandType == XHCI_TRB_TYPE_DISABLE_SLOT)
+    {
+        /* The slot is already disabled, which is what the caller wanted */
         Result = MP_STATUS_SUCCESS;
     }
     else
