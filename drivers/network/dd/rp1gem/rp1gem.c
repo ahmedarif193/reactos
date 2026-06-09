@@ -1343,6 +1343,10 @@ Rp1GemStopLinkTimer(
     {
         NdisMCancelTimer(&Adapter->LinkTimer, &Cancelled);
         Adapter->LinkTimerInitialized = FALSE;
+
+        /* Drain any in-flight LinkTimer DPC before HaltEx frees the adapter. */
+        if (!Cancelled)
+            KeFlushQueuedDpcs();
     }
 }
 
@@ -2057,7 +2061,8 @@ Rp1GemInterrupt(
 
     Adapter->InterruptRecognizedCount++;
     Rp1GemDisableInterrupts(Adapter);
-    InterlockedExchange(&Adapter->InterruptPending, (LONG)Isr);
+    /* OR (not Exchange) so a re-entrant ISR keeps earlier pending causes. */
+    InterlockedOr(&Adapter->InterruptPending, (LONG)Isr);
     *QueueDefaultInterruptDpc = TRUE;
     return TRUE;
 }
