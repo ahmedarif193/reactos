@@ -131,6 +131,8 @@ IntEngEnter(PINTENG_ENTER_LEAVE EnterLeave,
     Translate->x = 0;
     Translate->y = 0;
     *ppsoOutput = psoDest;
+    /* Remember the affected area for the post-write flush in IntEngLeave */
+    EnterLeave->DestRect = *DestRect;
     }
 
   if (NULL != *ppsoOutput)
@@ -213,6 +215,13 @@ IntEngLeave(PINTENG_ENTER_LEAVE EnterLeave)
   else
     {
     Result = TRUE;
+    /* Let shadow-buffer drivers flush bits the engine wrote directly */
+    if (!EnterLeave->ReadOnly && NULL != EnterLeave->DestObj)
+      {
+      SURFACE* psurfDest = CONTAINING_RECORD(EnterLeave->DestObj, SURFACE, SurfObj);
+      if ((psurfDest->flags & HOOK_SYNCHRONIZE) && NULL != GDIDEVFUNCS(EnterLeave->DestObj).SynchronizeSurface)
+        GDIDEVFUNCS(EnterLeave->DestObj).SynchronizeSurface(EnterLeave->DestObj, &EnterLeave->DestRect, DSS_FLUSH_EVENT);
+      }
     }
 
   return Result;
