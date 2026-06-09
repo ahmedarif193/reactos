@@ -46,6 +46,9 @@ AddMemoryDescriptor(
 extern EFI_SYSTEM_TABLE* GlobalSystemTable;
 extern EFI_HANDLE GlobalImageHandle;
 
+extern ULONG_PTR VramAddress;
+extern ULONG VramSize;
+
 EFI_MEMORY_DESCRIPTOR* EfiMemoryMap = NULL;
 UINT32 FreeldrDescCount;
 /* Usable FreeldrMem capacity, excluding the terminator slot. */
@@ -380,6 +383,27 @@ UefiMemGetMemoryMap(ULONG *MemoryMapSize)
     /* Windows expects the first page to be reserved, otherwise it asserts.
      * However it can be just a free page on some UEFI systems. */
     UefiSetMemory(FreeldrMem, 0x000000, 1, LoaderFirmwarePermanent);
+
+    if (VramAddress != 0 && VramSize != 0)
+    {
+        ULONG_PTR FbBasePage = VramAddress / EFI_PAGE_SIZE;
+        ULONG_PTR FbEndPage = (VramAddress + VramSize + EFI_PAGE_SIZE - 1) / EFI_PAGE_SIZE;
+
+        for (Index = 0; Index < FreeldrDescCount; Index++)
+        {
+            ULONG_PTR DescStart = FreeldrMem[Index].BasePage;
+            ULONG_PTR DescEnd = DescStart + FreeldrMem[Index].PageCount;
+            ULONG_PTR ReserveEnd;
+
+            if (FreeldrMem[Index].MemoryType != LoaderFree || FbBasePage < DescStart || FbBasePage >= DescEnd)
+                continue;
+
+            ReserveEnd = (FbEndPage < DescEnd) ? FbEndPage : DescEnd;
+            UefiSetMemory(FreeldrMem, FbBasePage * EFI_PAGE_SIZE, (PFN_COUNT)(ReserveEnd - FbBasePage), LoaderFirmwarePermanent);
+            break;
+        }
+    }
+
     *MemoryMapSize = FreeldrDescCount;
     return FreeldrMem;
 }
