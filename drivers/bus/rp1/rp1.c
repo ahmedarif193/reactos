@@ -355,6 +355,7 @@ Rp1FdoStartDevice(
     _Inout_ PIRP Irp)
 {
     PRP1_FDO_EXTENSION FdoExt;
+    PCM_RESOURCE_LIST AllocatedResources;
     PCM_RESOURCE_LIST AllocatedResourcesTranslated;
     PCM_PARTIAL_RESOURCE_LIST PartialList;
     PCM_PARTIAL_RESOURCE_DESCRIPTOR Descriptor;
@@ -378,7 +379,29 @@ Rp1FdoStartDevice(
     /*
      * Parse the parent PCI resources to find BAR1 and the shared interrupt.
      */
+    AllocatedResources = IrpSp->Parameters.StartDevice.AllocatedResources;
     AllocatedResourcesTranslated = IrpSp->Parameters.StartDevice.AllocatedResourcesTranslated;
+    FdoExt->RawInterruptValid = FALSE;
+
+    if (AllocatedResources && AllocatedResources->Count != 0)
+    {
+        PartialList = &AllocatedResources->List[0].PartialResourceList;
+        Descriptor = &PartialList->PartialDescriptors[0];
+
+        for (i = 0; i < PartialList->Count; i++, Descriptor++)
+        {
+            if (Descriptor->Type == CmResourceTypeInterrupt)
+            {
+                FdoExt->RawInterruptLevel = Descriptor->u.Interrupt.Level;
+                FdoExt->RawInterruptVector = Descriptor->u.Interrupt.Vector;
+                FdoExt->RawInterruptAffinity = Descriptor->u.Interrupt.Affinity;
+                FdoExt->RawInterruptFlags = Descriptor->Flags;
+                FdoExt->RawInterruptShareDisposition = Descriptor->ShareDisposition;
+                FdoExt->RawInterruptValid = TRUE;
+                break;
+            }
+        }
+    }
 
     if (!AllocatedResourcesTranslated || AllocatedResourcesTranslated->Count == 0)
     {
@@ -1023,7 +1046,7 @@ Rp1PdoQueryResources(
      * 2) A CmResourceTypeInterrupt descriptor (shared with parent)
      */
     ResCount = 1; /* Memory */
-    if (PdoExt->InterruptVector != 0)
+    if (PdoExt->InterruptLevel != 0 || PdoExt->InterruptVector != 0)
         ResCount++; /* Interrupt */
 
     ListSize = FIELD_OFFSET(CM_RESOURCE_LIST,
@@ -1052,11 +1075,8 @@ Rp1PdoQueryResources(
     Descriptor->u.Memory.Start = PdoExt->MmioPhysical;
     Descriptor->u.Memory.Length = PdoExt->MmioLength;
 
-    /*
-     * RP1 child controllers share the parent interrupt.  Keep Level and Vector
-     * equal because this ARM64 HAL reports GSIs directly as interrupt vectors.
-     */
-    if (PdoExt->InterruptVector != 0)
+    /* RP1 child controllers share the parent raw interrupt resource. */
+    if (PdoExt->InterruptLevel != 0 || PdoExt->InterruptVector != 0)
     {
         Descriptor++;
         Descriptor->Type = CmResourceTypeInterrupt;
@@ -1096,7 +1116,7 @@ Rp1PdoQueryResourceRequirements(
      * The memory range is fixed (from BAR1 offset), not relocatable.
      */
     ResCount = 1; /* Memory */
-    if (PdoExt->InterruptVector != 0)
+    if (PdoExt->InterruptLevel != 0 || PdoExt->InterruptVector != 0)
         ResCount++; /* Interrupt */
 
     ListSize = sizeof(IO_RESOURCE_REQUIREMENTS_LIST) +
@@ -1129,15 +1149,15 @@ Rp1PdoQueryResourceRequirements(
         PdoExt->MmioPhysical.QuadPart + PdoExt->MmioLength - 1;
 
     /* Interrupt resource descriptor */
-    if (PdoExt->InterruptVector != 0)
+    if (PdoExt->InterruptLevel != 0 || PdoExt->InterruptVector != 0)
     {
         Descriptor++;
         Descriptor->Option = IO_RESOURCE_PREFERRED;
         Descriptor->Type = CmResourceTypeInterrupt;
         Descriptor->ShareDisposition = PdoExt->InterruptShareDisposition;
         Descriptor->Flags = PdoExt->InterruptFlags;
-        Descriptor->u.Interrupt.MinimumVector = PdoExt->InterruptVector;
-        Descriptor->u.Interrupt.MaximumVector = PdoExt->InterruptVector;
+        Descriptor->u.Interrupt.MinimumVector = PdoExt->InterruptLevel ? PdoExt->InterruptLevel : PdoExt->InterruptVector;
+        Descriptor->u.Interrupt.MaximumVector = Descriptor->u.Interrupt.MinimumVector;
     }
 
     Irp->IoStatus.Information = (ULONG_PTR)ReqList;
