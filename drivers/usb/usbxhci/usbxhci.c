@@ -13901,35 +13901,35 @@ XHCI_AbortTransfer(PVOID MiniPortExtension,
     if (BytesTransferred)
         *BytesTransferred = 0;
 
-    if (!Extension || !Endpoint || !Endpoint->Slot)
-    {
-        /*
-         * If the slot is NULL (device disconnected and slot freed), we cannot
-         * perform any hardware abort operations. Return immediately - USBPORT
-         * will handle this via the timeout mechanism that sets ENDPOINT_FLAG_NUKE
-         * to force-complete remaining transfers.
-         */
+    if (!Extension || !Endpoint)
         return;
-    }
 
-    /*
-     * If the slot has already been disabled (or is in the process of being
-     * disabled), we must not issue any xHCI commands (Stop Endpoint, Reset
-     * Endpoint, Set TR Dequeue Pointer) to the hardware. The xHC will
-     * reject commands for disabled slots with completion code 11
-     * (SLOT_NOT_ENABLED), and the resulting command completions keep the
-     * event ring active, which in turn keeps IMAN.IP asserted and can
-     * cause an interrupt storm on the legacy INTx vector.
-     */
-    if (!Endpoint->Slot->InUse || Endpoint->Slot->DisablePending)
+    /* No xHC commands for a NULL/disabled slot: code-11 completions keep IMAN.IP asserted (INTx storm) */
+    if (!Endpoint->Slot || !Endpoint->Slot->InUse || Endpoint->Slot->DisablePending)
     {
+        if (Transfer && (Transfer->Flags & XHCI_TRANSFER_FLAG_SWENUM_PENDING))
+            InterlockedOr((volatile LONG *)&Transfer->Flags, XHCI_TRANSFER_FLAG_SWENUM_CANCELED);
+
+        /* Still disown the transfer so the freed USBPORT transfer cannot dangle on the active list */
+        KeAcquireSpinLock(&Endpoint->Lock, &OldIrql);
+        if (Transfer)
+            XHCI_RemoveActiveTransferLocked(Endpoint, Transfer);
+        else
+            XHCI_ClearActiveTransfersLocked(Endpoint);
+        KeReleaseSpinLock(&Endpoint->Lock, OldIrql);
+
+        if (Transfer)
+        {
+            XHCI_DisarmTransferPoll(Extension, Transfer);
+            XHCI_FreeIsoTransferContext(Transfer);
+            Transfer->UsbdStatus = USBD_STATUS_CANCELED;
+        }
         return;
     }
 
     if (Transfer && (Transfer->Flags & XHCI_TRANSFER_FLAG_SWENUM_PENDING))
     {
-        InterlockedOr((volatile LONG *)&Transfer->Flags,
-                      XHCI_TRANSFER_FLAG_SWENUM_CANCELED);
+        InterlockedOr((volatile LONG *)&Transfer->Flags, XHCI_TRANSFER_FLAG_SWENUM_CANCELED);
         return;
     }
 
