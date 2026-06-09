@@ -1262,41 +1262,6 @@ Rp1GemRefreshLink(
 }
 
 static VOID
-Rp1GemProbeInitialLink(
-    _In_ PRP1GEM_ADAPTER Adapter)
-{
-    ULONG ElapsedMs;
-
-    for (ElapsedMs = 0;
-         ElapsedMs <= RP1GEM_INITIAL_LINK_WAIT_MS;
-         ElapsedMs += RP1GEM_INITIAL_LINK_POLL_MS)
-    {
-        BOOLEAN ForceLog;
-
-        ForceLog = (ElapsedMs == 0) || ((ElapsedMs % 1000) == 0);
-        Rp1GemRefreshLink(Adapter, ForceLog);
-        if (Adapter->MediaConnectState == MediaConnectStateConnected)
-        {
-            DPRINT("RP1GEM: initial link ready after %lu ms speed=%I64u duplex=%s\n",
-                   ElapsedMs,
-                   Adapter->LinkSpeed,
-                   Adapter->MediaDuplexState == MediaDuplexStateFull ? "full" : "half");
-            return;
-        }
-
-        if (ElapsedMs < RP1GEM_INITIAL_LINK_WAIT_MS)
-        {
-            LARGE_INTEGER Interval;
-
-            Interval.QuadPart = -((LONGLONG)RP1GEM_INITIAL_LINK_POLL_MS * 10000);
-            KeDelayExecutionThread(KernelMode, FALSE, &Interval);
-        }
-    }
-
-    DPRINT1("RP1GEM: initial link wait expired after %u ms\n", RP1GEM_INITIAL_LINK_WAIT_MS);
-}
-
-static VOID
 Rp1GemIndicateLinkState(
     _In_ PRP1GEM_ADAPTER Adapter)
 {
@@ -1794,7 +1759,7 @@ Rp1GemProbeHardware(
 
     Rp1GemProbePhy(Adapter);
     Rp1GemConfigurePhy(Adapter);
-    Rp1GemProbeInitialLink(Adapter);
+    Rp1GemRefreshLink(Adapter, TRUE);
 }
 
 static VOID
