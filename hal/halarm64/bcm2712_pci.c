@@ -16,6 +16,7 @@
 #include <reactos/drivers/acpi/acpi.h>
 #include <halacpi.h>
 #include <hal.h>
+#include "halext.h"
 #include "bcm2712_pci.h"
 
 #define NDEBUG
@@ -364,6 +365,43 @@ Bcm2712ConfigTransfer(
 /*  Public interface                                                   */
 /* ================================================================== */
 
+/* Platform-extension service descriptors (see halext.h). */
+static const HAL_ARM64_PCI_CONFIG_BACKEND Bcm2712PciConfigBackend =
+{
+    "BCM2712 CFG_INDEX/CFG_DATA",
+    Bcm2712PciAccessConfigSpace,
+};
+
+/*
+ * Raspberry Pi 5 (BCM2712) on-chip SD/eMMC host controller.
+ *
+ * The microSD slot is driven by the SoC-internal Arasan/brcmstb SDHCI block
+ * (DT "brcm,sdhci-brcmstb", node mmc@fff000).  It is not a PCI function and
+ * is absent from the RPi5 UEFI ACPI tables, so neither pci.sys nor acpi.sys
+ * can enumerate it.  Register it as a HAL platform device; the PCI\CC_0805
+ * compatible ID is what the CriticalDeviceDatabase maps to sdbus.sys.
+ *
+ * From bcm2712-rpi-5-b.dtb: soc ranges <0 0x10 0 ...> maps soc-local 0 to
+ * CPU phys 0x1000000000, so host reg 0xfff000 -> 0x1000FFF000; interrupts
+ * <GIC_SPI 273 LEVEL_HIGH> -> GIC INTID 273 + 32 = 305.  The extra windows
+ * are the BCM2712 SDIO CFG block and the always-on GPIO block used by the
+ * board SD regulators.
+ */
+static const HAL_ARM64_PLATFORM_DEVICE Bcm2712SdHostDevice =
+{
+    "BCM2712 SDHCI",
+    L"ACPI_HAL\\BCM2712_SDHCI",
+    L"PCI\\CC_0805",
+    3,
+    {
+        { 0x1000FFF000ULL, 0x260 },     /* SDHCI registers          */
+        { 0x1000FFF400ULL, 0x200 },     /* SDIO CFG block           */
+        { 0x107D517C00ULL, 0x40  },     /* GIO_AON (SD regulators)  */
+    },
+    305,                                /* GIC SPI 273              */
+    FALSE,                              /* level-sensitive          */
+};
+
 BOOLEAN
 Bcm2712PciProbe(
     _In_opt_ PLOADER_PARAMETER_BLOCK LoaderBlock)
@@ -377,6 +415,9 @@ Bcm2712PciProbe(
      * Use HalAcpiGetTable to retrieve the already-cached FADT.
      */
     PDESCRIPTION_HEADER Fadt;
+
+    if (Bcm2712Detected)
+        return TRUE;
 
     Fadt = HalAcpiGetTable(LoaderBlock, FADT_SIGNATURE);
     if (!Fadt)
@@ -406,6 +447,11 @@ Bcm2712PciProbe(
     }
 
     Bcm2712Detected = TRUE;
+
+    /* Publish this platform's services through the extension contract. */
+    HalpArm64RegisterPciConfigBackend(&Bcm2712PciConfigBackend);
+    HalpArm64RegisterPlatformDevice(&Bcm2712SdHostDevice);
+
     return TRUE;
 }
 
