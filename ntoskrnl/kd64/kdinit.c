@@ -360,6 +360,10 @@ KdInitSystem(
         EnableKd = TRUE;
     }
 
+    // TEMP: force-enable KD so DPRINT/DPRINT1 reach the serial port without /DEBUG
+    EnableKd = TRUE;
+    KdPitchDebugger = FALSE;
+
     /* Set the Kernel Base in the Data Block */
     KdDebuggerDataBlock.KernBase = (ULONG_PTR)KdVersionBlock.KernBase;
 
