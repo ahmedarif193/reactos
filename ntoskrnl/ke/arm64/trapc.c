@@ -22,9 +22,11 @@
 #endif
 
 #define ESR_EC_BRK 0x3C
-#define ARM64_PREVIOUS_MODE_COOKIE 0x50564D00UL
-#define ARM64_PREVIOUS_MODE_MASK   0xFFFFFF00UL
-#define ARM64_PREVIOUS_MODE_VALUE  0x000000FFUL
+// Cookie lives in Reserved bits 16-31, mode in bits 8-15; byte 0 carries PreviousIrql
+#define ARM64_PREVIOUS_MODE_COOKIE 0x4D500000UL
+#define ARM64_PREVIOUS_MODE_MASK   0xFFFF0000UL
+#define ARM64_PREVIOUS_MODE_VALUE  0x0000FF00UL
+#define ARM64_PREVIOUS_MODE_SHIFT  8
 
 /* Forward declaration for SError handler */
 BOOLEAN NTAPI KiSErrorHandler(_In_ PKTRAP_FRAME TrapFrame);
@@ -96,8 +98,7 @@ KiArm64SavePreviousModeForTrap(
     _Inout_ PKTHREAD Thread,
     _Inout_ PKTRAP_FRAME TrapFrame)
 {
-    TrapFrame->Reserved = ARM64_PREVIOUS_MODE_COOKIE |
-                          ((ULONG)Thread->PreviousMode & ARM64_PREVIOUS_MODE_VALUE);
+    TrapFrame->Reserved = (TrapFrame->Reserved & 0xFFUL) | ARM64_PREVIOUS_MODE_COOKIE | (((ULONG)Thread->PreviousMode << ARM64_PREVIOUS_MODE_SHIFT) & ARM64_PREVIOUS_MODE_VALUE);
     Thread->PreviousMode = KiGetPreviousMode(TrapFrame);
 }
 
@@ -111,7 +112,7 @@ KiArm64RestorePreviousModeFromTrap(
 
     if ((PreviousMode & ARM64_PREVIOUS_MODE_MASK) == ARM64_PREVIOUS_MODE_COOKIE)
     {
-        Thread->PreviousMode = (CHAR)(PreviousMode & ARM64_PREVIOUS_MODE_VALUE);
+        Thread->PreviousMode = (CHAR)((PreviousMode & ARM64_PREVIOUS_MODE_VALUE) >> ARM64_PREVIOUS_MODE_SHIFT);
     }
 }
 

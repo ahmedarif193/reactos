@@ -517,7 +517,7 @@ PspExitThread(IN NTSTATUS ExitStatus)
     ExWaitForRundownProtectionRelease(&Thread->RundownProtect);
 
     /* Cleanup the power state */
-#if (NTDDI_VERSION >= NTDDI_WIN7)
+#if (NTDDI_VERSION >= NTDDI_WIN7) || defined(_M_ARM64)
     PopCleanupPowerState((PPOWER_STATE)&Thread->Tcb.LargeStack);
 #else
     PopCleanupPowerState((PPOWER_STATE)&Thread->Tcb.PowerState);
