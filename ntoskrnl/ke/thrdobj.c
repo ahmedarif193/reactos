@@ -848,7 +848,11 @@ KeInitThread(IN OUT PKTHREAD Thread,
                     NULL);
 
     /* Initialize the Suspend Semaphore */
+#ifdef _M_ARM64
+    KeInitializeEvent(&Thread->SuspendEvent, SynchronizationEvent, FALSE);
+#else
     KeInitializeSemaphore(&Thread->SuspendSemaphore, 0, 2);
+#endif
 
     /* Setup the timer */
     Timer = &Thread->Timer;
@@ -857,7 +861,9 @@ KeInitThread(IN OUT PKTHREAD Thread,
     TimerWaitBlock->Object = Timer;
     TimerWaitBlock->WaitKey = STATUS_TIMEOUT;
     TimerWaitBlock->WaitType = WaitAny;
+#ifndef _M_ARM64
     TimerWaitBlock->NextWaitBlock = NULL;
+#endif
 
     /* Link the two wait lists together */
     TimerWaitBlock->WaitListEntry.Flink = &Timer->Header.WaitListHead;
