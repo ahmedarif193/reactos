@@ -543,7 +543,7 @@ KeSwitchKernelStack(
     );
 
     /* Restore DAIF to pre-switch state */
-    __asm__ __volatile__("msr daif, %0" :: "r"(_savedDaif) : "memory");
+    __asm__ __volatile__("msr daif, %0\n\tisb" :: "r"(_savedDaif) : "memory");
     }
 
     return OldStackBase;

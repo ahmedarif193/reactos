@@ -164,6 +164,7 @@ KiArm64WriteUserTtbr(
 
     __asm__ __volatile__("mrs %0, daif" : "=r"(SavedDaif));
     __asm__ __volatile__("msr daifset, #0xF" ::: "memory");
+    __asm__ __volatile__("isb" ::: "memory");
 
     __asm__ __volatile__("msr ttbr0_el1, %0" :: "r"(RootBase) : "memory");
     __asm__ __volatile__("isb" ::: "memory");
@@ -175,7 +176,7 @@ KiArm64WriteUserTtbr(
     __asm__ __volatile__("dsb ish" ::: "memory");
     __asm__ __volatile__("isb" ::: "memory");
 
-    __asm__ __volatile__("msr daif, %0" :: "r"(SavedDaif) : "memory");
+    __asm__ __volatile__("msr daif, %0\n\tisb" :: "r"(SavedDaif) : "memory");
 }
 
 FORCEINLINE
@@ -238,7 +239,7 @@ KeDisableInterrupts(VOID)
     ULONG_PTR Flags;
 
     __asm__ __volatile__("mrs %0, daif" : "=r"(Flags));
-    __asm__ __volatile__("msr daifset, #2" ::: "memory");
+    __asm__ __volatile__("msr daifset, #2\n\tisb" ::: "memory");
 
     return ((Flags & ARM64_PSTATE_IRQ_MASK) == 0);
 }
@@ -250,7 +251,7 @@ KeRestoreInterrupts(
 {
     if (WereEnabled)
     {
-        __asm__ __volatile__("msr daifclr, #2" ::: "memory");
+        __asm__ __volatile__("msr daifclr, #2\n\tisb" ::: "memory");
     }
 }
 
