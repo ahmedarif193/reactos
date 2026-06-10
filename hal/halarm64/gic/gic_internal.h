@@ -1944,6 +1944,27 @@ HalpGicSetInterruptPriority(
 
 /*
  * ============================================================================
+ * External (non-GIC) interrupt-controller support
+ * ============================================================================
+ *
+ * Some ARM64 SoCs have no GIC at all (e.g. BCM2837 / Raspberry Pi 3).  A
+ * platform extension registers a HAL_ARM64_INTERRUPT_CONTROLLER through the
+ * platform-extension contract (halext.h); when one is registered, every GIC
+ * wrapper dispatches to it instead of touching any GICD/GICC/GICR register,
+ * and HalpInitGic() is skipped entirely.
+ */
+#include "../halext.h"
+
+/*
+ * Called by the platform-extension manager when an external interrupt
+ * controller registers: invalidates the GICD/GICC discovery defaults so no
+ * legacy code path can scribble on firmware-decoy or QEMU-default addresses.
+ */
+VOID
+HalpGicAdoptExternalInterruptController(VOID);
+
+/*
+ * ============================================================================
  * Memory Allocation Helpers (defined in gic_its.c)
  * ============================================================================
  */

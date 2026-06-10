@@ -16,6 +16,8 @@
 
 #include <ntstrsafe.h>
 
+#include "../halext.h"
+
 #ifndef NonPagedPoolNx
 #define NonPagedPoolNx NonPagedPool
 #endif
@@ -33,32 +35,8 @@ typedef enum _PDO_TYPE
 {
     AcpiPdo = 0x80,
     WdPdo,
-    SdHostPdo
+    PlatformPdo
 } PDO_TYPE;
-
-/*
- * Raspberry Pi 5 (BCM2712) on-chip SD/eMMC host controller.
- *
- * The microSD slot is driven by the SoC-internal Arasan/brcmstb SDHCI block
- * (DT "brcm,sdhci-brcmstb", node mmc@fff000). It is not a PCI function and is
- * absent from the RPi5 UEFI ACPI tables, so neither pci.sys nor acpi.sys can
- * enumerate it. We report it here as a child of the HAL bus; it advertises the
- * PCI\CC_0805 compatible ID so the CriticalDeviceDatabase binds sdbus.sys.
- *
- * From bcm2712-rpi-5-b.dtb: soc ranges <0 0x10 0 ...> maps soc-local 0 to CPU
- * phys 0x1000000000, so host reg 0xfff000 -> 0x1000FFF000; interrupts
- * <GIC_SPI 273 LEVEL_HIGH> -> GIC INTID 273 + 32 = 305.
- */
-#define HALP_RPI5_SD_HOST_PHYS      0x1000FFF000ULL
-#define HALP_RPI5_SD_HOST_LENGTH    0x260
-#define HALP_RPI5_SD_CFG_PHYS       0x1000FFF400ULL
-#define HALP_RPI5_SD_CFG_LENGTH     0x200
-#define HALP_RPI5_GIO_AON_PHYS      0x107D517C00ULL
-#define HALP_RPI5_GIO_AON_LENGTH    0x40
-#define HALP_RPI5_SD_GSI            305
-
-/* Set by Bcm2712PciProbe() in bcm2712_pci.c when running on a Raspberry Pi 5. */
-extern BOOLEAN Bcm2712Detected;
 
 typedef enum _HALP_PNP_STATE
 {
@@ -93,6 +71,7 @@ typedef struct _PDO_EXTENSION
     PFDO_EXTENSION ParentFdoExtension;
     PDEVICE_OBJECT ParentFdoDeviceObject;
     PDO_TYPE PdoType;
+    const HAL_ARM64_PLATFORM_DEVICE *PlatformDevice;
     PDESCRIPTION_HEADER WdTable;
     FAST_MUTEX PnpStateLock;
     HALP_PNP_STATE PnpState;
@@ -298,24 +277,31 @@ HalpPortRangeFreeRange(
 /* PRIVATE FUNCTIONS **********************************************************/
 
 /*
- * Build the boot (raw) resource list for the Raspberry Pi 5 SD host: the SDHCI
- * register window, the BCM2712 SDIO CFG window, the always-on GPIO window used
- * by the board SD regulators, plus its GIC SPI. The raw GSI is placed in
+ * Build the boot (raw) resource list for a registered platform device: its
+ * fixed memory windows plus an optional interrupt. The raw GSI is placed in
  * u.Interrupt.Level; IopTranslateDeviceResources re-runs it through
- * HalGetInterruptVector to fill the translated vector/IRQL that sdbus.sys
- * consumes.
+ * HalGetInterruptVector to fill the translated vector/IRQL that the function
+ * driver consumes.
  */
 static
 NTSTATUS
-HalpBuildRpi5SdResources(
+HalpBuildPlatformDeviceResources(
+    _In_ const HAL_ARM64_PLATFORM_DEVICE *Device,
     _Out_ PCM_RESOURCE_LIST *Resources)
 {
     PCM_RESOURCE_LIST List;
     PCM_PARTIAL_RESOURCE_DESCRIPTOR Desc;
+    ULONG Count;
+    ULONG Index;
     ULONG Size;
 
-    /* CM_RESOURCE_LIST already covers one partial descriptor; add three more. */
-    Size = sizeof(CM_RESOURCE_LIST) + 3 * sizeof(CM_PARTIAL_RESOURCE_DESCRIPTOR);
+    Count = Device->MemoryCount + (Device->Gsi != 0 ? 1 : 0);
+    if (Count == 0)
+        return STATUS_NOT_SUPPORTED;
+
+    /* CM_RESOURCE_LIST already covers one partial descriptor. */
+    Size = sizeof(CM_RESOURCE_LIST) +
+           (Count - 1) * sizeof(CM_PARTIAL_RESOURCE_DESCRIPTOR);
     List = ExAllocatePoolZero(PagedPool, Size, TAG_HAL);
     if (!List)
         return STATUS_INSUFFICIENT_RESOURCES;
@@ -325,54 +311,54 @@ HalpBuildRpi5SdResources(
     List->List[0].BusNumber = 0;
     List->List[0].PartialResourceList.Version = 1;
     List->List[0].PartialResourceList.Revision = 1;
-    List->List[0].PartialResourceList.Count = 4;
+    List->List[0].PartialResourceList.Count = Count;
 
     Desc = List->List[0].PartialResourceList.PartialDescriptors;
 
-    Desc->Type = CmResourceTypeMemory;
-    Desc->ShareDisposition = CmResourceShareDeviceExclusive;
-    Desc->Flags = CM_RESOURCE_MEMORY_READ_WRITE;
-    Desc->u.Memory.Start.QuadPart = HALP_RPI5_SD_HOST_PHYS;
-    Desc->u.Memory.Length = HALP_RPI5_SD_HOST_LENGTH;
-    Desc++;
+    for (Index = 0; Index < Device->MemoryCount; Index++, Desc++)
+    {
+        Desc->Type = CmResourceTypeMemory;
+        Desc->ShareDisposition = CmResourceShareDeviceExclusive;
+        Desc->Flags = CM_RESOURCE_MEMORY_READ_WRITE;
+        Desc->u.Memory.Start.QuadPart = Device->Memory[Index].Base;
+        Desc->u.Memory.Length = Device->Memory[Index].Length;
+    }
 
-    Desc->Type = CmResourceTypeMemory;
-    Desc->ShareDisposition = CmResourceShareDeviceExclusive;
-    Desc->Flags = CM_RESOURCE_MEMORY_READ_WRITE;
-    Desc->u.Memory.Start.QuadPart = HALP_RPI5_SD_CFG_PHYS;
-    Desc->u.Memory.Length = HALP_RPI5_SD_CFG_LENGTH;
-    Desc++;
-
-    Desc->Type = CmResourceTypeMemory;
-    Desc->ShareDisposition = CmResourceShareDeviceExclusive;
-    Desc->Flags = CM_RESOURCE_MEMORY_READ_WRITE;
-    Desc->u.Memory.Start.QuadPart = HALP_RPI5_GIO_AON_PHYS;
-    Desc->u.Memory.Length = HALP_RPI5_GIO_AON_LENGTH;
-    Desc++;
-
-    Desc->Type = CmResourceTypeInterrupt;
-    Desc->ShareDisposition = CmResourceShareDeviceExclusive;
-    Desc->Flags = CM_RESOURCE_INTERRUPT_LEVEL_SENSITIVE;
-    Desc->u.Interrupt.Level = HALP_RPI5_SD_GSI;
-    Desc->u.Interrupt.Vector = HALP_RPI5_SD_GSI;
-    Desc->u.Interrupt.Affinity = (KAFFINITY)-1;
+    if (Device->Gsi != 0)
+    {
+        Desc->Type = CmResourceTypeInterrupt;
+        Desc->ShareDisposition = CmResourceShareDeviceExclusive;
+        Desc->Flags = Device->EdgeTriggered ? CM_RESOURCE_INTERRUPT_LATCHED
+                                            : CM_RESOURCE_INTERRUPT_LEVEL_SENSITIVE;
+        Desc->u.Interrupt.Level = Device->Gsi;
+        Desc->u.Interrupt.Vector = Device->Gsi;
+        Desc->u.Interrupt.Affinity = (KAFFINITY)-1;
+    }
 
     *Resources = List;
     return STATUS_SUCCESS;
 }
 
-/* Build the matching resource requirements (fixed addresses + fixed GIC SPI). */
+/* Build the matching resource requirements (fixed addresses + fixed GSI). */
 static
 NTSTATUS
-HalpBuildRpi5SdRequirements(
+HalpBuildPlatformDeviceRequirements(
+    _In_ const HAL_ARM64_PLATFORM_DEVICE *Device,
     _Out_ PIO_RESOURCE_REQUIREMENTS_LIST *Requirements)
 {
     PIO_RESOURCE_REQUIREMENTS_LIST List;
     PIO_RESOURCE_DESCRIPTOR Desc;
+    ULONG Count;
+    ULONG Index;
     ULONG Size;
 
-    /* One alternative list holding three memory ranges and an interrupt. */
-    Size = sizeof(IO_RESOURCE_REQUIREMENTS_LIST) + 3 * sizeof(IO_RESOURCE_DESCRIPTOR);
+    Count = Device->MemoryCount + (Device->Gsi != 0 ? 1 : 0);
+    if (Count == 0)
+        return STATUS_NOT_SUPPORTED;
+
+    /* One alternative list; the structure already covers one descriptor. */
+    Size = sizeof(IO_RESOURCE_REQUIREMENTS_LIST) +
+           (Count - 1) * sizeof(IO_RESOURCE_DESCRIPTOR);
     List = ExAllocatePoolZero(PagedPool, Size, TAG_HAL);
     if (!List)
         return STATUS_INSUFFICIENT_RESOURCES;
@@ -384,58 +370,45 @@ HalpBuildRpi5SdRequirements(
     List->AlternativeLists = 1;
     List->List[0].Version = 1;
     List->List[0].Revision = 1;
-    List->List[0].Count = 4;
+    List->List[0].Count = Count;
 
     Desc = List->List[0].Descriptors;
 
-    Desc->Type = CmResourceTypeMemory;
-    Desc->ShareDisposition = CmResourceShareDeviceExclusive;
-    Desc->Flags = CM_RESOURCE_MEMORY_READ_WRITE;
-    Desc->u.Memory.Length = HALP_RPI5_SD_HOST_LENGTH;
-    Desc->u.Memory.Alignment = 1;
-    Desc->u.Memory.MinimumAddress.QuadPart = HALP_RPI5_SD_HOST_PHYS;
-    Desc->u.Memory.MaximumAddress.QuadPart =
-        HALP_RPI5_SD_HOST_PHYS + HALP_RPI5_SD_HOST_LENGTH - 1;
-    Desc++;
+    for (Index = 0; Index < Device->MemoryCount; Index++, Desc++)
+    {
+        Desc->Type = CmResourceTypeMemory;
+        Desc->ShareDisposition = CmResourceShareDeviceExclusive;
+        Desc->Flags = CM_RESOURCE_MEMORY_READ_WRITE;
+        Desc->u.Memory.Length = Device->Memory[Index].Length;
+        Desc->u.Memory.Alignment = 1;
+        Desc->u.Memory.MinimumAddress.QuadPart = Device->Memory[Index].Base;
+        Desc->u.Memory.MaximumAddress.QuadPart =
+            Device->Memory[Index].Base + Device->Memory[Index].Length - 1;
+    }
 
-    Desc->Type = CmResourceTypeMemory;
-    Desc->ShareDisposition = CmResourceShareDeviceExclusive;
-    Desc->Flags = CM_RESOURCE_MEMORY_READ_WRITE;
-    Desc->u.Memory.Length = HALP_RPI5_SD_CFG_LENGTH;
-    Desc->u.Memory.Alignment = 1;
-    Desc->u.Memory.MinimumAddress.QuadPart = HALP_RPI5_SD_CFG_PHYS;
-    Desc->u.Memory.MaximumAddress.QuadPart =
-        HALP_RPI5_SD_CFG_PHYS + HALP_RPI5_SD_CFG_LENGTH - 1;
-    Desc++;
-
-    Desc->Type = CmResourceTypeMemory;
-    Desc->ShareDisposition = CmResourceShareDeviceExclusive;
-    Desc->Flags = CM_RESOURCE_MEMORY_READ_WRITE;
-    Desc->u.Memory.Length = HALP_RPI5_GIO_AON_LENGTH;
-    Desc->u.Memory.Alignment = 1;
-    Desc->u.Memory.MinimumAddress.QuadPart = HALP_RPI5_GIO_AON_PHYS;
-    Desc->u.Memory.MaximumAddress.QuadPart =
-        HALP_RPI5_GIO_AON_PHYS + HALP_RPI5_GIO_AON_LENGTH - 1;
-    Desc++;
-
-    Desc->Type = CmResourceTypeInterrupt;
-    Desc->ShareDisposition = CmResourceShareDeviceExclusive;
-    Desc->Flags = CM_RESOURCE_INTERRUPT_LEVEL_SENSITIVE;
-    Desc->u.Interrupt.MinimumVector = HALP_RPI5_SD_GSI;
-    Desc->u.Interrupt.MaximumVector = HALP_RPI5_SD_GSI;
+    if (Device->Gsi != 0)
+    {
+        Desc->Type = CmResourceTypeInterrupt;
+        Desc->ShareDisposition = CmResourceShareDeviceExclusive;
+        Desc->Flags = Device->EdgeTriggered ? CM_RESOURCE_INTERRUPT_LATCHED
+                                            : CM_RESOURCE_INTERRUPT_LEVEL_SENSITIVE;
+        Desc->u.Interrupt.MinimumVector = Device->Gsi;
+        Desc->u.Interrupt.MaximumVector = Device->Gsi;
+    }
 
     *Requirements = List;
     return STATUS_SUCCESS;
 }
 
 /*
- * Raspberry Pi 5: report the BCM2712 SD/eMMC host controller as a child PDO of
- * the HAL bus so sdbus.sys can drive the microSD slot. Best-effort: a failure
- * here just means no SD, so it never aborts HAL device startup.
+ * Report every platform device registered through the extension contract
+ * (halext.h) as a child PDO of the HAL bus — fixed SoC devices that the
+ * firmware ACPI does not enumerate. Best-effort: a failure just means that
+ * device is missing, so it never aborts HAL device startup.
  */
 static
 VOID
-HalpCreateRpi5SdPdo(
+HalpCreatePlatformDevicePdos(
     _In_ PDRIVER_OBJECT DriverObject,
     _In_ PFDO_EXTENSION FdoExtension,
     _In_ PDEVICE_OBJECT FdoDeviceObject)
@@ -443,49 +416,50 @@ HalpCreateRpi5SdPdo(
     NTSTATUS Status;
     PDEVICE_OBJECT PdoDeviceObject;
     PPDO_EXTENSION PdoExtension;
+    const HAL_ARM64_PLATFORM_DEVICE *Device;
+    ULONG Index;
 
-    Status = IoCreateDevice(DriverObject,
-                            sizeof(PDO_EXTENSION),
-                            NULL,
-                            FILE_DEVICE_BUS_EXTENDER,
-                            FILE_AUTOGENERATED_DEVICE_NAME,
-                            FALSE,
-                            &PdoDeviceObject);
-    if (!NT_SUCCESS(Status))
+    for (Index = 0; (Device = HalpArm64GetPlatformDevice(Index)) != NULL; Index++)
     {
-        DPRINT1("HAL: Could not create Raspberry Pi 5 SD PDO (0x%08x)\n", Status);
-        return;
+        Status = IoCreateDevice(DriverObject,
+                                sizeof(PDO_EXTENSION),
+                                NULL,
+                                FILE_DEVICE_BUS_EXTENDER,
+                                FILE_AUTOGENERATED_DEVICE_NAME,
+                                FALSE,
+                                &PdoDeviceObject);
+        if (!NT_SUCCESS(Status))
+        {
+            DPRINT1("HAL: Could not create platform PDO for %S (0x%08x)\n",
+                    Device->DeviceId, Status);
+            continue;
+        }
+
+        PdoExtension = PdoDeviceObject->DeviceExtension;
+        PdoExtension->ExtensionType = PdoExtensionType;
+        PdoExtension->PhysicalDeviceObject = PdoDeviceObject;
+        PdoExtension->ParentFdoExtension = FdoExtension;
+        PdoExtension->ParentFdoDeviceObject = FdoDeviceObject;
+        ObReferenceObject(FdoDeviceObject);
+        PdoExtension->PdoType = PlatformPdo;
+        PdoExtension->PlatformDevice = Device;
+        ExInitializeFastMutex(&PdoExtension->PnpStateLock);
+        PdoExtension->PnpState = HalpPnpStateNotStarted;
+        PdoExtension->PreviousPnpState = HalpPnpStateNotStarted;
+        PdoExtension->CurrentDevicePowerState = PowerDeviceD3;
+        PdoExtension->CurrentSystemPowerState = PowerSystemWorking;
+        PdoExtension->InterfaceReferenceCount = 0;
+
+        ExAcquireFastMutex(&FdoExtension->ChildPdoLock);
+        PdoExtension->Next = FdoExtension->ChildPdoList;
+        FdoExtension->ChildPdoList = PdoExtension;
+        ExReleaseFastMutex(&FdoExtension->ChildPdoLock);
+
+        PdoDeviceObject->Flags &= ~DO_DEVICE_INITIALIZING;
+
+        DPRINT1("HAL: Reported platform device %S (GSI %lu)\n",
+                Device->DeviceId, Device->Gsi);
     }
-
-    PdoExtension = PdoDeviceObject->DeviceExtension;
-    PdoExtension->ExtensionType = PdoExtensionType;
-    PdoExtension->PhysicalDeviceObject = PdoDeviceObject;
-    PdoExtension->ParentFdoExtension = FdoExtension;
-    PdoExtension->ParentFdoDeviceObject = FdoDeviceObject;
-    ObReferenceObject(FdoDeviceObject);
-    PdoExtension->PdoType = SdHostPdo;
-    ExInitializeFastMutex(&PdoExtension->PnpStateLock);
-    PdoExtension->PnpState = HalpPnpStateNotStarted;
-    PdoExtension->PreviousPnpState = HalpPnpStateNotStarted;
-    PdoExtension->CurrentDevicePowerState = PowerDeviceD3;
-    PdoExtension->CurrentSystemPowerState = PowerSystemWorking;
-    PdoExtension->InterfaceReferenceCount = 0;
-
-    ExAcquireFastMutex(&FdoExtension->ChildPdoLock);
-    PdoExtension->Next = FdoExtension->ChildPdoList;
-    FdoExtension->ChildPdoList = PdoExtension;
-    ExReleaseFastMutex(&FdoExtension->ChildPdoLock);
-
-    PdoDeviceObject->Flags &= ~DO_DEVICE_INITIALIZING;
-
-    DPRINT1("HAL: Reported Raspberry Pi 5 SD host (phys 0x%I64x len 0x%x cfg 0x%I64x len 0x%x gio_aon 0x%I64x len 0x%x GSI %u)\n",
-            (ULONGLONG)HALP_RPI5_SD_HOST_PHYS,
-            HALP_RPI5_SD_HOST_LENGTH,
-            (ULONGLONG)HALP_RPI5_SD_CFG_PHYS,
-            HALP_RPI5_SD_CFG_LENGTH,
-            (ULONGLONG)HALP_RPI5_GIO_AON_PHYS,
-            HALP_RPI5_GIO_AON_LENGTH,
-            HALP_RPI5_SD_GSI);
 }
 
 NTSTATUS
@@ -583,14 +557,10 @@ HalpAddDevice(IN PDRIVER_OBJECT DriverObject,
     PdoDeviceObject->Flags &= ~DO_DEVICE_INITIALIZING;
 
     /*
-     * Raspberry Pi 5: the BCM2712 SD/eMMC host controller is a fixed
-     * SoC-internal device that the firmware ACPI does not enumerate, so
-     * report it here as an extra child PDO for sdbus.sys to bind to.
+     * Report fixed SoC devices that the firmware ACPI does not enumerate
+     * (registered by the platform extension) as extra child PDOs.
      */
-    if (Bcm2712Detected)
-    {
-        HalpCreateRpi5SdPdo(DriverObject, FdoExtension, DeviceObject);
-    }
+    HalpCreatePlatformDevicePdos(DriverObject, FdoExtension, DeviceObject);
 
     /* Find the ACPI watchdog table */
     Wdrt = HalAcpiGetTable(0, 'TRDW');
@@ -1370,10 +1340,11 @@ HalpQueryResources(IN PDEVICE_OBJECT DeviceObject,
 
         return STATUS_SUCCESS;
     }
-    else if (DeviceExtension->PdoType == SdHostPdo)
+    else if (DeviceExtension->PdoType == PlatformPdo)
     {
-        /* Raspberry Pi 5 BCM2712 SD host controller */
-        return HalpBuildRpi5SdResources(Resources);
+        /* Platform device registered through the extension contract */
+        return HalpBuildPlatformDeviceResources(DeviceExtension->PlatformDevice,
+                                                Resources);
     }
     else if (DeviceExtension->PdoType == WdPdo)
     {
@@ -1401,10 +1372,11 @@ HalpQueryResourceRequirements(IN PDEVICE_OBJECT DeviceObject,
         /* Query ACPI requirements */
         return HalpQueryAcpiResourceRequirements(Requirements);
     }
-    else if (DeviceExtension->PdoType == SdHostPdo)
+    else if (DeviceExtension->PdoType == PlatformPdo)
     {
-        /* Raspberry Pi 5 BCM2712 SD host controller */
-        return HalpBuildRpi5SdRequirements(Requirements);
+        /* Platform device registered through the extension contract */
+        return HalpBuildPlatformDeviceRequirements(DeviceExtension->PlatformDevice,
+                                                   Requirements);
     }
     else if (DeviceExtension->PdoType == WdPdo)
     {
@@ -1462,10 +1434,10 @@ HalpQueryIdPdo(IN PDEVICE_OBJECT DeviceObject,
             {
                 Ids[0] = L"ACPI_HAL\\PNP0C18";
             }
-            else if (PdoType == SdHostPdo)
+            else if (PdoType == PlatformPdo)
             {
-                /* Raspberry Pi 5 BCM2712 SD host controller */
-                Ids[0] = L"ACPI_HAL\\BCM2712_SDHCI";
+                /* Platform device registered through the extension contract */
+                Ids[0] = PdoExtension->PlatformDevice->DeviceId;
             }
             else
             {
@@ -1487,15 +1459,18 @@ HalpQueryIdPdo(IN PDEVICE_OBJECT DeviceObject,
                 Ids[0] = L"ACPI_HAL\\PNP0C18";
                 Ids[1] = L"*PNP0C18";
             }
-            else if (PdoType == SdHostPdo)
+            else if (PdoType == PlatformPdo)
             {
                 /*
-                 * Raspberry Pi 5 BCM2712 SD host controller. The PCI\CC_0805
-                 * standard-SD-host class ID is what the CriticalDeviceDatabase
-                 * maps to sdbus.sys, so the boot-start bind works.
+                 * Platform device: the descriptor's compatible ID (e.g. a
+                 * PCI class ID that the CriticalDeviceDatabase maps to a
+                 * boot-start driver) rides along when provided.
                  */
-                Ids[0] = L"ACPI_HAL\\BCM2712_SDHCI";
-                Ids[1] = L"PCI\\CC_0805";
+                Ids[0] = PdoExtension->PlatformDevice->DeviceId;
+                if (PdoExtension->PlatformDevice->CompatibleId)
+                    Ids[1] = PdoExtension->PlatformDevice->CompatibleId;
+                else
+                    IdCount = 1;
             }
             else
             {
