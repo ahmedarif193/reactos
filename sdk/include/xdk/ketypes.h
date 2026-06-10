@@ -532,6 +532,7 @@ typedef struct _KWAIT_BLOCK {
   union {
     struct _KTHREAD *Thread;
     struct _KQUEUE *NotificationQueue;
+    struct _KDPC *Dpc;
   };
   PVOID Object;
   PVOID SparePtr;
@@ -765,10 +766,24 @@ typedef enum _KDPC_IMPORTANCE {
 } KDPC_IMPORTANCE;
 
 typedef struct _KDPC {
+#if defined(_M_ARM64)
+  /* Win11 26100 arm64 layout (sizeof 0x40) */
+  _ANONYMOUS_UNION union {
+    ULONG TargetInfoAsUlong;
+    _ANONYMOUS_STRUCT struct {
+      UCHAR Type;
+      UCHAR Importance;
+      volatile USHORT Number;
+    } DUMMYSTRUCTNAME;
+  } DUMMYUNIONNAME;
+  SINGLE_LIST_ENTRY DpcListEntry;
+  ULONG_PTR ProcessorHistory;
+#else
   UCHAR Type;
   UCHAR Importance;
   volatile USHORT Number;
   LIST_ENTRY DpcListEntry;
+#endif
   PKDEFERRED_ROUTINE DeferredRoutine;
   PVOID DeferredContext;
   PVOID SystemArgument1;
@@ -813,10 +828,17 @@ typedef struct _DISPATCHER_HEADER {
         _ANONYMOUS_UNION union {
           UCHAR TimerControlFlags;
           _ANONYMOUS_STRUCT struct {
+#if defined(_M_ARM64)
+            /* Win11 layout */
+            UCHAR Absolute:1;
+            UCHAR Wake:1;
+            UCHAR EncodedTolerableDelay:6;
+#else
             UCHAR Absolute:1;
             UCHAR Coalescable:1;
             UCHAR KeepShifting:1;
             UCHAR EncodedTolerableDelay:5;
+#endif
           } DUMMYSTRUCTNAME;
         } DUMMYUNIONNAME;
         UCHAR Abandoned;
@@ -839,7 +861,7 @@ typedef struct _DISPATCHER_HEADER {
         UCHAR Hand;
       } DUMMYUNIONNAME2;
       _ANONYMOUS_UNION union {
-#if (NTDDI_VERSION >= NTDDI_WIN7)
+#if (NTDDI_VERSION >= NTDDI_WIN7) || defined(_M_ARM64)
         _ANONYMOUS_UNION union {
           UCHAR TimerMiscFlags;
           _ANONYMOUS_STRUCT struct {
@@ -921,7 +943,11 @@ typedef struct _KTIMER {
   ULARGE_INTEGER DueTime;
   LIST_ENTRY TimerListEntry;
   struct _KDPC *Dpc;
-#if (NTDDI_VERSION >= NTDDI_WIN7) && !defined(_X86_)
+#if defined(_M_ARM64)
+  /* Win11 26100 arm64 layout */
+  USHORT Processor;
+  USHORT TimerType;
+#elif (NTDDI_VERSION >= NTDDI_WIN7) && !defined(_X86_)
   ULONG Processor;
 #endif
   ULONG Period;
