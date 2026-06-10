@@ -116,7 +116,7 @@ KeAcquireQueuedSpinLockAtDpcLevel(_Inout_ PKSPIN_LOCK_QUEUE LockHandle)
         Lock = LockHandle->Lock;
         if ((Prcb != NULL) &&
             (LockHandle >= &Prcb->LockQueue[0]) &&
-            (LockHandle < &Prcb->LockQueue[LockQueueMaximumLock]))
+            (LockHandle < &Prcb->LockQueue[RTL_NUMBER_OF(Prcb->LockQueue)]))
         {
             LockIndex = LockHandle - &Prcb->LockQueue[0];
         }

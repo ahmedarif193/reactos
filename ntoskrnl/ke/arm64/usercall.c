@@ -589,7 +589,7 @@ KiUserModeCallout(
     Pcr = (PKIPCR)KeGetPcr();
     if (Pcr != NULL)
     {
-        Pcr->Prcb.RspBase = InitialStack;
+        Pcr->Prcb.SpBase = (PVOID)InitialStack;
     }
 
     CallbackTrapFrame.Pc = (ULONG_PTR)UserCallbackDispatcher;
@@ -731,7 +731,7 @@ NtCallbackReturn(
 
     if (Pcr != NULL)
     {
-        Pcr->Prcb.RspBase = CalloutFrame->InitialStack;
+        Pcr->Prcb.SpBase = (PVOID)CalloutFrame->InitialStack;
     }
 
     CurrentThread->InitialStack = (PVOID)CalloutFrame->InitialStack;

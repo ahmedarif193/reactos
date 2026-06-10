@@ -267,7 +267,7 @@ KiArm64PrepareBootPcr(_Inout_opt_ PLOADER_PARAMETER_BLOCK LoaderBlock)
         Pcr->Prcb.CurrentThread = KeArm64CurrentThread;
         Pcr->Prcb.IdleThread = KeArm64CurrentThread;
         Pcr->Prcb.NextThread = NULL;
-        Pcr->Prcb.RspBase = (UINT64)(ULONG_PTR)LoaderBlock->KernelStack;
+        Pcr->Prcb.SpBase = (PVOID)LoaderBlock->KernelStack;
     }
     else
     {
@@ -337,7 +337,7 @@ KiInitializeKernel(_Inout_ PKPROCESS InitProcess,
     KiInitSpinLocks(Prcb, Number);
 
     /* Bind the idle stack */
-    Prcb->RspBase = (ULONG_PTR)IdleStack;
+    Prcb->SpBase = IdleStack;
 
     /* Boot CPU only work */
     if (Number == 0)
@@ -591,7 +591,7 @@ KiInitializePcr(_In_ ULONG ProcessorNumber,
     Pcr->Prcb.DpcStack = InterruptStack;
     if (KeLoaderBlock != NULL)
     {
-        Pcr->Prcb.RspBase = (UINT64)(ULONG_PTR)KeLoaderBlock->KernelStack;
+        Pcr->Prcb.SpBase = (PVOID)KeLoaderBlock->KernelStack;
     }
 
     if (SetCurrentPcr)
@@ -739,7 +739,7 @@ KiInitializePcr(_In_ ULONG ProcessorNumber,
             CacheCount++;
         }
     }
-    Pcr->Prcb.CacheCount = CacheCount;
+    Pcr->Prcb.CacheCount = (UCHAR)CacheCount;
 }
 
 VOID
@@ -887,7 +887,7 @@ KiInitializeSystem(_Inout_ PLOADER_PARAMETER_BLOCK LoaderBlock)
 
         if (LoaderBlock->KernelStack != 0)
         {
-            Pcr->Prcb.RspBase = (ULONG_PTR)LoaderBlock->KernelStack;
+            Pcr->Prcb.SpBase = (PVOID)LoaderBlock->KernelStack;
         }
     }
 

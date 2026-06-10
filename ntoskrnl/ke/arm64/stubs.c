@@ -514,11 +514,11 @@ KeSwitchKernelStack(
     CurrentThread->StackLimit = (ULONG_PTR)StackLimit;
     CurrentThread->LargeStack = TRUE;
 
-    /* Adjust RspBase in the PCR */
+    /* Adjust SpBase in the PCR */
     Pcr = (PKIPCR)KeGetPcr();
     if (Pcr != NULL)
     {
-        Pcr->Prcb.RspBase += StackOffset;
+        Pcr->Prcb.SpBase = (PVOID)((ULONG_PTR)Pcr->Prcb.SpBase + StackOffset);
     }
 
     /*

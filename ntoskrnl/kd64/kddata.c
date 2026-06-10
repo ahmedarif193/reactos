@@ -641,8 +641,14 @@ KDDEBUGGER_DATA64 KdDebuggerDataBlock =
     FIELD_OFFSET(KPRCB, DpcRoutineActive),
     FIELD_OFFSET(KPRCB, CurrentThread),
     FIELD_OFFSET(KPRCB, MHz),
+#if defined(_M_ARM64)
+    // Win11 arm64 KPRCB has no CpuType/VendorString; closest equivalents
+    FIELD_OFFSET(KPRCB, ProcessorModel),
+    FIELD_OFFSET(KPRCB, ProcessorVendorString),
+#else
     FIELD_OFFSET(KPRCB, CpuType),
     FIELD_OFFSET(KPRCB, VendorString),
+#endif
     FIELD_OFFSET(KPRCB, ProcessorState.ContextFrame),
     FIELD_OFFSET(KPRCB, Number),
     sizeof(ETHREAD),
