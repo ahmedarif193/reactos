@@ -1088,6 +1088,45 @@ KxSetTimerForThreadWait(IN PKTIMER Timer,
     Timer->Header.Hand = (UCHAR)*Hand;
 }
 
+//
+// Wait block linkage helpers. The legacy (2k3) scheme builds a circular
+// NextWaitBlock chain; the Win11 arm64 KWAIT_BLOCK has no NextWaitBlock,
+// so there the participating blocks are tracked by WaitBlockCount plus the
+// TimerActive thread flag (timer block joins in addition to the array).
+//
+#ifdef _M_ARM64
+#define KxChainTimerOnly()                                                  \
+    Thread->WaitBlockCount = 1;                                             \
+    Thread->TimerActive = FALSE
+#define KxChainNextBlock(Array, Index)                                      \
+    NOTHING
+#define KxChainLastBlock(Array, Count)                                      \
+    Thread->WaitBlockCount = (UCHAR)(Count);                                \
+    Thread->TimerActive = FALSE
+#define KxChainTimerToArray(Array)                                          \
+    Thread->TimerActive = TRUE
+#define KxChainSingleWithTimer()                                            \
+    Thread->WaitBlockCount = 1;                                             \
+    Thread->TimerActive = TRUE
+#define KxChainSingleOnly()                                                 \
+    Thread->WaitBlockCount = 1;                                             \
+    Thread->TimerActive = FALSE
+#else
+#define KxChainTimerOnly()                                                  \
+    TimerBlock->NextWaitBlock = TimerBlock
+#define KxChainNextBlock(Array, Index)                                      \
+    WaitBlock->NextWaitBlock = &(Array)[(Index) + 1]
+#define KxChainLastBlock(Array, Count)                                      \
+    WaitBlock->NextWaitBlock = (Array)
+#define KxChainTimerToArray(Array)                                          \
+    TimerBlock->NextWaitBlock = (Array)
+#define KxChainSingleWithTimer()                                            \
+    WaitBlock->NextWaitBlock = TimerBlock;                                  \
+    TimerBlock->NextWaitBlock = WaitBlock
+#define KxChainSingleOnly()                                                 \
+    WaitBlock->NextWaitBlock = WaitBlock
+#endif
+
 #define KxDelayThreadWait()                                                 \
                                                                             \
     /* Setup the Wait Block */                                              \
@@ -1100,7 +1139,7 @@ KxSetTimerForThreadWait(IN PKTIMER Timer,
     DueTime.QuadPart = Timer->DueTime.QuadPart;                             \
                                                                             \
     /* Link the timer to this Wait Block */                                 \
-    TimerBlock->NextWaitBlock = TimerBlock;                                 \
+    KxChainTimerOnly();                                                     \
     Timer->Header.WaitListHead.Flink = &TimerBlock->WaitListEntry;          \
     Timer->Header.WaitListHead.Blink = &TimerBlock->WaitListEntry;          \
                                                                             \
@@ -1137,12 +1176,12 @@ KxSetTimerForThreadWait(IN PKTIMER Timer,
         WaitBlock->Thread = Thread;                                         \
                                                                             \
         /* Link to next block */                                            \
-        WaitBlock->NextWaitBlock = &WaitBlockArray[Index + 1];              \
+        KxChainNextBlock(WaitBlockArray, Index);                            \
         Index++;                                                            \
     } while (Index < Count);                                                \
                                                                             \
     /* Link the last block */                                               \
-    WaitBlock->NextWaitBlock = WaitBlockArray;                              \
+    KxChainLastBlock(WaitBlockArray, Count);                                \
                                                                             \
     /* Set default wait status */                                           \
     Thread->WaitStatus = STATUS_WAIT_0;                                     \
@@ -1151,7 +1190,7 @@ KxSetTimerForThreadWait(IN PKTIMER Timer,
     if (Timeout)                                                            \
     {                                                                       \
         /* Link to the block */                                             \
-        TimerBlock->NextWaitBlock = WaitBlockArray;                         \
+        KxChainTimerToArray(WaitBlockArray);                                \
                                                                             \
         /* Setup the timer */                                               \
         KxSetTimerForThreadWait(Timer, *Timeout, &Hand);                    \
@@ -1195,8 +1234,7 @@ KxSetTimerForThreadWait(IN PKTIMER Timer,
         DueTime.QuadPart = Timer->DueTime.QuadPart;                         \
                                                                             \
         /* Pointer to timer block */                                        \
-        WaitBlock->NextWaitBlock = TimerBlock;                              \
-        TimerBlock->NextWaitBlock = WaitBlock;                              \
+        KxChainSingleWithTimer();                                           \
                                                                             \
         /* Link the timer to this Wait Block */                             \
         Timer->Header.WaitListHead.Flink = &TimerBlock->WaitListEntry;      \
@@ -1205,7 +1243,7 @@ KxSetTimerForThreadWait(IN PKTIMER Timer,
     else                                                                    \
     {                                                                       \
         /* No timer block, just ourselves */                                \
-        WaitBlock->NextWaitBlock = WaitBlock;                               \
+        KxChainSingleOnly();                                                \
     }                                                                       \
                                                                             \
     /* Set wait settings */                                                 \
@@ -1241,8 +1279,7 @@ KxSetTimerForThreadWait(IN PKTIMER Timer,
         DueTime.QuadPart = Timer->DueTime.QuadPart;                         \
                                                                             \
         /* Pointer to timer block */                                        \
-        WaitBlock->NextWaitBlock = TimerBlock;                              \
-        TimerBlock->NextWaitBlock = WaitBlock;                              \
+        KxChainSingleWithTimer();                                           \
                                                                             \
         /* Link the timer to this Wait Block */                             \
         Timer->Header.WaitListHead.Flink = &TimerBlock->WaitListEntry;      \
@@ -1251,7 +1288,7 @@ KxSetTimerForThreadWait(IN PKTIMER Timer,
     else                                                                    \
     {                                                                       \
         /* No timer block, just ourselves */                                \
-        WaitBlock->NextWaitBlock = WaitBlock;                               \
+        KxChainSingleOnly();                                                \
     }                                                                       \
                                                                             \
     /* Set wait settings */                                                 \
