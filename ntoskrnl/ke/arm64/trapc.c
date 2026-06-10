@@ -659,50 +659,8 @@ MmAccessFault(
     _In_ KPROCESSOR_MODE Mode,
     _In_ PVOID TrapInformation);
 
-static
-KIRQL
-KiArm64EnterMmFaultIrql(VOID)
-{
-    KIRQL OldIrql = KeGetCurrentIrql();
-
-    if (OldIrql > APC_LEVEL)
-    {
-        KiSetCurrentIrql(APC_LEVEL);
-        KiApplyIrqMaskForIrqlTransition(OldIrql, APC_LEVEL);
-    }
-
-    return OldIrql;
-}
-
-static
-VOID
-KiArm64LeaveMmFaultIrql(
-    _In_ KIRQL OldIrql)
-{
-    if (OldIrql > APC_LEVEL)
-    {
-        KiApplyIrqMaskForIrqlTransition(APC_LEVEL, OldIrql);
-        KiSetCurrentIrql(OldIrql);
-    }
-}
-
-static
-NTSTATUS
-KiArm64MmAccessFaultAtApc(
-    _In_ ULONG FaultCode,
-    _In_ PVOID Address,
-    _In_ KPROCESSOR_MODE Mode,
-    _In_ PVOID TrapInformation)
-{
-    KIRQL OldIrql;
-    NTSTATUS Status;
-
-    OldIrql = KiArm64EnterMmFaultIrql();
-    Status = MmAccessFault(FaultCode, Address, Mode, TrapInformation);
-    KiArm64LeaveMmFaultIrql(OldIrql);
-
-    return Status;
-}
+static KIRQL KiArm64LastDataAbortIrql;
+static LONG KiArm64HighIrqlFaultLogBudget = 16;
 
 VOID
 KiSystemService(
@@ -1446,14 +1404,10 @@ KiArm64HandleSynchronousException(
                 }
             }
 
-            Status = KiArm64MmAccessFaultAtApc(
-                KiArm64BuildFaultCode(FaultStatus,
-                                      WriteAccess,
-                                      TRUE,
-                                      PreviousMode),
-                (PVOID)(ULONG_PTR)Context->State.FaultAddress,
-                PreviousMode,
-                TrapFrame);
+            Status = MmAccessFault(KiArm64BuildFaultCode(FaultStatus, WriteAccess, TRUE, PreviousMode), (PVOID)(ULONG_PTR)Context->State.FaultAddress, PreviousMode, TrapFrame);
+
+            /* MM refuses not-present faults above APC_LEVEL; that is a fatal IRQL contract violation */
+            if (Status == (NTSTATUS)(STATUS_IN_PAGE_ERROR | 0x10000000)) KeBugCheckEx(IRQL_NOT_LESS_OR_EQUAL, (ULONG_PTR)Context->State.FaultAddress, KeGetCurrentIrql(), 8, (ULONG_PTR)Context->State.Elr);
 
             if (NT_SUCCESS(Status))
             {
@@ -1730,10 +1684,16 @@ KiArm64HandleSynchronousException(
                                    (PVOID)MiArm64SessionWsStage);
                     }
 
-                    Status = KiArm64MmAccessFaultAtApc(FaultCodeArg,
-                                                       AddressArg,
-                                                       PreviousMode,
-                                                       TrapFrame);
+                    KiArm64LastDataAbortIrql = KeGetCurrentIrql();
+                    if ((KiArm64LastDataAbortIrql >= DISPATCH_LEVEL) && (InterlockedDecrement(&KiArm64HighIrqlFaultLogBudget) >= 0))
+                    {
+                        DbgPrintEx(DPFLTR_DEFAULT_ID, DPFLTR_ERROR_LEVEL, "[arm64][HIGH-IRQL-FAULT] irql=%u va=%p pc=%p lr=%p sp=%p code=0x%lx mode=%d\n", (ULONG)KiArm64LastDataAbortIrql, AddressArg, (PVOID)(ULONG_PTR)Context->State.Elr, (PVOID)TrapFrame->Lr, (PVOID)TrapFrame->Sp, FaultCodeArg, (int)PreviousMode);
+                    }
+
+                    Status = MmAccessFault(FaultCodeArg, AddressArg, PreviousMode, TrapFrame);
+
+                    /* MM refuses not-present faults above APC_LEVEL; that is a fatal IRQL contract violation */
+                    if (Status == (NTSTATUS)(STATUS_IN_PAGE_ERROR | 0x10000000)) KeBugCheckEx(IRQL_NOT_LESS_OR_EQUAL, (ULONG_PTR)AddressArg, KeGetCurrentIrql(), WriteAccess ? 1 : 0, (ULONG_PTR)Context->State.Elr);
 
                     if ((MmSessionSpace != NULL) &&
                         ((ULONG_PTR)AddressArg >= (ULONG_PTR)MmSessionSpace) &&
@@ -1804,13 +1764,14 @@ KiArm64HandleSynchronousException(
                 _SEH2_END;
 
                 DbgPrintEx(DPFLTR_DEFAULT_ID, DPFLTR_ERROR_LEVEL,
-                    "[DABORT-KERNEL] FAIL VA=%p ELR=%p Status=0x%lx DFSC=0x%lx Write=%d Vec=%p Proc=%s\n",
+                    "[DABORT-KERNEL] FAIL VA=%p ELR=%p Status=0x%lx DFSC=0x%lx Write=%d Vec=%p Irql=%u Proc=%s\n",
                     (PVOID)(ULONG_PTR)Context->State.FaultAddress,
                     (PVOID)(ULONG_PTR)Context->State.Elr,
                     (ULONG)Status,
                     (ULONG)FaultStatus,
                     (int)WriteAccess,
                     (PVOID)(ULONG_PTR)Context->State.VectorId,
+                    (ULONG)KiArm64LastDataAbortIrql,
                     (PCSTR)((PEPROCESS)KeGetCurrentThread()->ApcState.Process)->ImageFileName);
                 DbgPrintEx(DPFLTR_DEFAULT_ID, DPFLTR_ERROR_LEVEL,
                     "[DABORT-KERNEL] insn prev=0x%08lx cur=0x%08lx read=0x%lx sp=%p fp=%p lr=%p spsr=0x%lx\n",

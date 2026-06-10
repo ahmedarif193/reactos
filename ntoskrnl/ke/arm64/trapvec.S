@@ -326,8 +326,10 @@ KiArm64SyncVectorCommon:
     dsb sy
     isb
 
-    /* Allow IRQs during the C handler (page faults may require progress). */
+    /* Allow IRQs during the C handler only when the interrupted context had them enabled (SPSR.I clear) */
+    tbnz x14, #7, .Lsync_keep_irq_masked
     msr daifclr, #0x2
+.Lsync_keep_irq_masked:
     isb
 
     /* Call C handler */

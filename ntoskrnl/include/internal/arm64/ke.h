@@ -404,6 +404,11 @@ KiApplyIrqMaskForIrqlTransition(
     _In_ KIRQL NewIrql);
 
 VOID
+KiArm64ProcessPendingSoftwareInterrupts(
+    _In_ KIRQL OldIrql,
+    _In_ KIRQL NewIrql);
+
+VOID
 NTAPI
 KeReenableTimerInterrupt(
     VOID);

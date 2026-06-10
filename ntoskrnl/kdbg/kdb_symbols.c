@@ -44,8 +44,14 @@ KdbpSymSearchModuleList(
     IN INT Index,
     OUT PLDR_DATA_TABLE_ENTRY* pLdrEntry)
 {
+    ULONG Iterations = 0;
+
     while (current_entry && current_entry != end_entry)
     {
+        /* Bound the walk: the list is read lock-free from the debugger and may be torn */
+        if (++Iterations > 4096)
+            break;
+
         *pLdrEntry = CONTAINING_RECORD(current_entry, LDR_DATA_TABLE_ENTRY, InLoadOrderLinks);
 
         if ((Address && Address >= (PVOID)(*pLdrEntry)->DllBase && Address < (PVOID)((ULONG_PTR)(*pLdrEntry)->DllBase + (*pLdrEntry)->SizeOfImage)) ||
@@ -81,8 +87,13 @@ KdbpSymFindModule(
     LONG Count = 0;
     PEPROCESS CurrentProcess;
 
-    /* First try to look up the module in the kernel module list. */
-    KeAcquireSpinLockAtDpcLevel(&PsLoadedModuleSpinLock);
+    /*
+     * First try to look up the module in the kernel module list.
+     * NOTE: deliberately lock-free. KDB runs with the machine frozen; taking
+     * PsLoadedModuleSpinLock here deadlocks the debugger whenever the lock
+     * was held at exception time (common for faults at IRQL >= DISPATCH).
+     * The walk is bounded in KdbpSymSearchModuleList to survive a torn list.
+     */
     if(KdbpSymSearchModuleList(PsLoadedModuleList.Flink,
                                &PsLoadedModuleList,
                                &Count,
@@ -90,10 +101,8 @@ KdbpSymFindModule(
                                Index,
                                pLdrEntry))
     {
-        KeReleaseSpinLockFromDpcLevel(&PsLoadedModuleSpinLock);
         return TRUE;
     }
-    KeReleaseSpinLockFromDpcLevel(&PsLoadedModuleSpinLock);
 
     /* That didn't succeed. Try the module list of the current process now. */
     CurrentProcess = PsGetCurrentProcess();
@@ -164,7 +173,11 @@ KdbSymPrintAddress(
                         ModuleNameAnsi,
                         sizeof(ModuleNameAnsi));
 
-    if (LdrEntry->PatchInformation)
+    /* Print the module and offset first so the line is visible even if the
+     * symbol data lookup below faults or stalls inside the frozen debugger */
+    KdbPrintf("<%s:%x", ModuleNameAnsi, RelativeAddress);
+
+    if (LdrEntry->PatchInformation && MmIsAddressValid(LdrEntry->PatchInformation))
     {
         ULONG LineNumber;
         CHAR FileName[256];
@@ -176,18 +189,13 @@ KdbSymPrintAddress(
                                         FileName,
                                         FunctionName))
         {
-            KdbPrintf("<%s:%x (%s:%d (%s))>",
-                      ModuleNameAnsi, RelativeAddress,
-                      FileName, LineNumber, FunctionName);
+            KdbPrintf(" (%s:%d (%s))", FileName, LineNumber, FunctionName);
             Printed = TRUE;
         }
     }
 
-    if (!Printed)
-    {
-        /* Just print module & address */
-        KdbPrintf("<%s:%x>", ModuleNameAnsi, RelativeAddress);
-    }
+    KdbPrintf(">");
+    DBG_UNREFERENCED_LOCAL_VARIABLE(Printed);
 
     return TRUE;
 }
