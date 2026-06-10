@@ -823,8 +823,8 @@ HEADER("ETHREAD"),
 HEADER("KTIMER"),
 OFFSET(TiType, KTIMER, Header.Type),
 OFFSET(TiSize, KTIMER, Header.Size),
-#if (NTDDI_VERSION < NTDDI_WIN7)
-OFFSET(TiInserted, KTIMER, Header.Inserted),
+#if (NTDDI_VERSION < NTDDI_WIN7) && !defined(_M_ARM64)
+OFFSET(TiInserted, KTIMER, Header.Inserted), // bitfield at Win7+/arm64
 #endif
 OFFSET(TiSignalState, KTIMER, Header.SignalState),
 OFFSET(TiDueTime, KTIMER, DueTime),
