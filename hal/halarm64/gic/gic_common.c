@@ -135,6 +135,23 @@ BOOLEAN HalpGicAffinityInitialized = FALSE;
 volatile LONG HalpGicOnlineCpuCount = 1;
 
 /*
+ * Called by the platform-extension manager (halext.c) when an external
+ * interrupt controller registers on a GIC-less platform: invalidate the
+ * GICD/GICC discovery defaults (which start as QEMU-virt addresses and may
+ * be overwritten by firmware compatibility decoys) so that no legacy GIC
+ * code path can dereference them.  The wrappers in this file dispatch to
+ * HalpArm64InterruptController and never reach the GIC MMIO afterwards.
+ */
+VOID
+HalpGicAdoptExternalInterruptController(VOID)
+{
+    HalpGicdBase = 0;
+    HalpGiccBase = 0;
+    HalpGiccPresent = FALSE;
+    HalpGicUseSysRegs = FALSE;
+}
+
+/*
  * ============================================================================
  * Cache Maintenance Functions
  * ============================================================================
@@ -292,6 +309,12 @@ HalpArm64ProgramGicTrigger(
     ULONG NewVal;
     volatile ULONG *RegPtr;
 
+    if (HalpArm64InterruptController)
+    {
+        HalpArm64InterruptController->SetTriggerMode(IntId, EdgeTriggered);
+        return;
+    }
+
     /*
      * SGIs (0-15): Fixed edge-triggered, cannot be reprogrammed.
      */
@@ -409,6 +432,12 @@ HalpArm64SendSgi(
     if ((TargetSet == 0) || (SgiId > 15))
         return;
 
+    if (HalpArm64InterruptController)
+    {
+        HalpArm64InterruptController->SendSgi(TargetSet, SgiId);
+        return;
+    }
+
     if (HalpGicUseSysRegs)
     {
         /* GICv3: Use ICC_SGI1R_EL1 system register */
@@ -445,6 +474,9 @@ HalpArm64SendSgi(
 ULONG
 HalpGicAcknowledgeInterrupt(VOID)
 {
+    if (HalpArm64InterruptController)
+        return HalpArm64InterruptController->AcknowledgeInterrupt();
+
     if (HalpGicUseSysRegs)
     {
         return HalpGicv3AcknowledgeInterrupt();
@@ -467,6 +499,12 @@ VOID
 HalpGicEndInterrupt(
     _In_ ULONG IntId)
 {
+    if (HalpArm64InterruptController)
+    {
+        HalpArm64InterruptController->EndInterrupt(IntId);
+        return;
+    }
+
     if (HalpGicUseSysRegs)
     {
         HalpGicv3EndInterrupt(IntId);
@@ -499,6 +537,12 @@ HalpGicEnableInterrupt(
 {
     ULONG RegOffset;
     ULONG BitPos;
+
+    if (HalpArm64InterruptController)
+    {
+        HalpArm64InterruptController->EnableInterrupt(IntId);
+        return;
+    }
 
     if (IntId >= 1020 && IntId < 8192)
     {
@@ -558,6 +602,12 @@ HalpGicDisableInterrupt(
 {
     ULONG RegOffset;
     ULONG BitPos;
+
+    if (HalpArm64InterruptController)
+    {
+        HalpArm64InterruptController->DisableInterrupt(IntId);
+        return;
+    }
 
     if (IntId >= 1020 && IntId < 8192)
     {
@@ -622,6 +672,12 @@ HalpGicSetInterruptPriority(
     ULONG Shift;
     ULONG Value;
     volatile ULONG *RegPtr;
+
+    if (HalpArm64InterruptController)
+    {
+        HalpArm64InterruptController->SetInterruptPriority(IntId, Priority);
+        return;
+    }
 
     if (IntId >= 1020 && IntId < 8192)
     {

@@ -388,6 +388,19 @@ HalpArm64SelectGicInterface(
     HalpArm64DiscoverGicFromMadt(LoaderBlock);
 
     /*
+     * Platform extensions: probe runs after MADT discovery (SMP still needs
+     * the GICC CPU/MPIDR entries).  A GIC-less platform registers an
+     * external interrupt controller here, in which case nothing below
+     * applies — the firmware GICC/GICD values are Windows-compatibility
+     * decoys and must not be dereferenced.
+     */
+    HalpArm64ProbePlatforms(LoaderBlock);
+    if (HalpArm64InterruptController)
+    {
+        return;
+    }
+
+    /*
      * Apple HVF quirk: Apple's Hypervisor Framework has issues with GICv3
      * system register IRQ delivery. Prefer legacy GICC if available.
      */

@@ -16,7 +16,7 @@
 #include <halacpi.h>
 #include <halacpi_arm64.h>
 #include <bugcodes.h>
-#include "bcm2712_pci.h"
+#include "halext.h"
 #include <debug.h>
 
 #include "gic_internal.h"
@@ -621,13 +621,13 @@ HalpArm64HasPciConfigSpaceBackend(
     ULONG RootCount;
 
     /*
-     * BCM2712 indirect config-space backend (RPi5).
-     * Report as available — actual MMIO mapping is deferred to first
-     * config access (Phase 1+), but the early scan will work because
-     * HalpPhase0GetPciDataByOffsetArm64 calls through our dispatch
-     * which triggers lazy init at that point.
+     * Platform-registered config-space backend (e.g. the BCM2712 indirect
+     * CFG_INDEX/CFG_DATA accessor on RPi5).  Report as available — actual
+     * MMIO mapping is deferred to the first config access, but the early
+     * scan works because HalpPhase0GetPciDataByOffsetArm64 calls through
+     * our dispatch which triggers the backend's lazy init at that point.
      */
-    if (Bcm2712Detected)
+    if (HalpArm64PciConfigBackend)
     {
         return TRUE;
     }
@@ -856,14 +856,15 @@ HalpArm64AccessPciConfigSpace(
     _In_ ULONG Length)
 {
     /*
-     * Try BCM2712 indirect config-space backend first (RPi5).
-     * This handles the case where no MCFG or _CBA is published.
-     * Bcm2712Detected is set once during Phase 0 probe — zero overhead
-     * on non-RPi5 platforms.
+     * Try the platform-registered config-space backend first.  This
+     * handles SoCs where no MCFG or _CBA is published (e.g. the BCM2712
+     * indirect accessor on RPi5).  The pointer is set once during the
+     * platform probe — zero overhead elsewhere.
      */
-    if (Bcm2712Detected &&
-        Bcm2712PciAccessConfigSpace(Write, Segment, BusNumber, Slot,
-                                    Buffer, Offset, Length))
+    if (HalpArm64PciConfigBackend &&
+        HalpArm64PciConfigBackend->AccessConfigSpace(Write, Segment,
+                                                     BusNumber, Slot,
+                                                     Buffer, Offset, Length))
     {
         return TRUE;
     }
@@ -2909,7 +2910,16 @@ HalInitSystem(
          */
         BOOLEAN MmioRemapped;
 
-        if (HalpGicUseSysRegs)
+        if (HalpArm64InterruptController)
+        {
+            MmioRemapped = HalpArm64InterruptController->Phase1MapRuntimeMmio();
+            if (!MmioRemapped)
+            {
+                DPRINT1("[arm64][HAL] Phase1: MmMapIoSpace failed for external "
+                        "irqchip MMIO; keeping identity mapping enabled\n");
+            }
+        }
+        else if (HalpGicUseSysRegs)
         {
             MmioRemapped = HalpMapGicv3RuntimeMmioWindows();
             if (!MmioRemapped)
@@ -3006,8 +3016,12 @@ HalInitSystem(
         DPRINT1("[arm64][HAL] ACPI phase0 init failed: 0x%08lx\n", Status);
     }
 
-    /* Probe BCM2712 platform (RPi5) — actual MMIO init is deferred */
-    Bcm2712PciProbe(LoaderBlock);
+    /*
+     * Run the platform-extension probes (halext.c).  Normally already done
+     * from the GIC interface selection in HalInitializeProcessor(0); this
+     * is a safety net for paths that reach Phase 0 without it.
+     */
+    HalpArm64ProbePlatforms(LoaderBlock);
     /*
      * CRITICAL IRQL MANAGEMENT FOR GIC INITIALIZATION:
      *
@@ -3031,7 +3045,10 @@ HalInitSystem(
     OldIrql = KfRaiseIrql(HIGH_LEVEL);
 
     /* Initialize the GIC under the phase-0 identity mapping (see gic_init.c). */
-    HalpInitGic(LoaderBlock);
+    if (HalpArm64InterruptController)
+        HalpArm64InterruptController->Phase0Initialize(LoaderBlock);
+    else
+        HalpInitGic(LoaderBlock);
 
     /*
      * Keep Group 1 IRQ delivery masked until phase 1: HalpInitGicv3CpuInterface()
@@ -5165,9 +5182,18 @@ FASTCALL
 HalSetGicPriorityMask(
     _In_ KIRQL Irql)
 {
-    UCHAR Priority = (Irql <= HIGH_LEVEL) ?
-                     HalpArm64IrqlToPmr[Irql] :
-                     HalpArm64IrqlToPmr[HIGH_LEVEL];
+    UCHAR Priority;
+
+    /* GIC-less platforms emulate the priority mask in software. */
+    if (HalpArm64InterruptController)
+    {
+        HalpArm64InterruptController->SetPriorityMask(Irql);
+        return;
+    }
+
+    Priority = (Irql <= HIGH_LEVEL) ?
+               HalpArm64IrqlToPmr[Irql] :
+               HalpArm64IrqlToPmr[HIGH_LEVEL];
 
     /*
      * Write the priority mask to the GIC.
@@ -5202,6 +5228,11 @@ ULONG
 FASTCALL
 HalGetGicPriorityMask(VOID)
 {
+    if (HalpArm64InterruptController)
+    {
+        return HalpArm64InterruptController->GetPriorityMask();
+    }
+
     if (HalpGicUseSysRegs)
     {
         return (ULONG)HalpReadIccPmr();
@@ -5222,6 +5253,18 @@ HalInitializeProcessor(
     _In_ ULONG ProcessorNumber,
     _In_ PLOADER_PARAMETER_BLOCK LoaderBlock)
 {
+    /*
+     * On GIC-less platforms the backend owns all per-CPU interrupt setup.
+     * The BSP installs the backend inside HalpArm64SelectGicInterface()
+     * below and is initialized again from Phase0Initialize(); APs take
+     * this early exit (their ICC system registers and GICR do not exist).
+     */
+    if (HalpArm64InterruptController)
+    {
+        HalpArm64InterruptController->InitializeProcessor(ProcessorNumber);
+        return;
+    }
+
     HalpArm64SelectGicInterface(LoaderBlock);
 
     if (HalpGicUseSysRegs)
