@@ -97,7 +97,9 @@
 /* KTHREAD.Quantum -> ResourceIndex (same byte overlay) at Win7, Spare04 at Vista.
  * The quantum management changed to QuantumTarget at Vista+, but for skeleton
  * compatibility we redirect the field name to the same physical byte. */
-#if (NTDDI_VERSION >= NTDDI_WIN7)
+#if defined(_M_ARM64)
+/* arm64 KTHREAD has a real Quantum member (hosted in the Win11 Spare13 slot) */
+#elif (NTDDI_VERSION >= NTDDI_WIN7)
 #define Quantum         ResourceIndex
 #elif (NTDDI_VERSION >= NTDDI_LONGHORN)
 #define Quantum         Spare04

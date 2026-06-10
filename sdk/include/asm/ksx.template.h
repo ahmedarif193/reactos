@@ -904,7 +904,9 @@ HEADER("KWAIT_BLOCK offsets"),
 OFFSET(WbWaitListEntry, KWAIT_BLOCK, WaitListEntry),
 OFFSET(WbThread, KWAIT_BLOCK, Thread),
 OFFSET(WbObject, KWAIT_BLOCK, Object),
-OFFSET(WbNextWaitBlock, KWAIT_BLOCK, NextWaitBlock), // not in win10
+#ifndef _M_ARM64
+OFFSET(WbNextWaitBlock, KWAIT_BLOCK, NextWaitBlock), // not in win10/arm64
+#endif
 OFFSET(WbWaitKey, KWAIT_BLOCK, WaitKey),
 OFFSET(WbWaitType, KWAIT_BLOCK, WaitType),
 

@@ -62,6 +62,22 @@ KiUnlinkThread(IN PKTHREAD Thread,
     Thread->WaitStatus |= WaitStatus;
 
     /* Remove the Wait Blocks from the list */
+#ifdef _M_ARM64
+    {
+        ULONG WbIndex;
+        for (WbIndex = 0; WbIndex < Thread->WaitBlockCount; WbIndex++)
+        {
+            RemoveEntryList(&Thread->WaitBlockList[WbIndex].WaitListEntry);
+        }
+        if (Thread->TimerActive)
+        {
+            RemoveEntryList(&Thread->WaitBlock[TIMER_WAIT_BLOCK].WaitListEntry);
+            Thread->TimerActive = FALSE;
+        }
+        WaitBlock = Thread->WaitBlockList;
+        DBG_UNREFERENCED_LOCAL_VARIABLE(WaitBlock);
+    }
+#else
     WaitBlock = Thread->WaitBlockList;
     do
     {
@@ -71,6 +87,7 @@ KiUnlinkThread(IN PKTHREAD Thread,
         /* Go to the next one */
         WaitBlock = WaitBlock->NextWaitBlock;
     } while (WaitBlock != Thread->WaitBlockList);
+#endif
 
     /* Remove the thread from the wait list! */
     if (Thread->WaitListEntry.Flink) RemoveEntryList(&Thread->WaitListEntry);
@@ -761,6 +778,13 @@ KeWaitForMultipleObjects(IN ULONG Count,
                 if (Index == Count)
                 {
                     /* Loop wait blocks */
+#ifdef _M_ARM64
+                    for (Index = 0; Index < Count; Index++)
+                    {
+                        CurrentObject = (PKMUTANT)WaitBlockArray[Index].Object;
+                        KiSatisfyObjectWait(CurrentObject, Thread);
+                    }
+#else
                     WaitBlock = WaitBlockArray;
                     do
                     {
@@ -771,6 +795,7 @@ KeWaitForMultipleObjects(IN ULONG Count,
                         /* Go to the next block */
                         WaitBlock = WaitBlock->NextWaitBlock;
                     } while(WaitBlock != WaitBlockArray);
+#endif
 
                     /* Set the wait status and get out */
                     WaitStatus = (NTSTATUS)Thread->WaitStatus;
@@ -799,10 +824,25 @@ KeWaitForMultipleObjects(IN ULONG Count,
                 Timer->Header.Inserted = TRUE;
 
                 /* Link the wait blocks */
+#ifndef _M_ARM64
                 WaitBlock->NextWaitBlock = TimerBlock;
+#endif
             }
 
             /* Insert into Object's Wait List*/
+#ifdef _M_ARM64
+            for (Index = 0; Index < Count; Index++)
+            {
+                CurrentObject = WaitBlockArray[Index].Object;
+                InsertTailList(&CurrentObject->Header.WaitListHead,
+                               &WaitBlockArray[Index].WaitListEntry);
+            }
+            if (Timeout)
+            {
+                InsertTailList(&Timer->Header.WaitListHead,
+                               &TimerBlock->WaitListEntry);
+            }
+#else
             WaitBlock = WaitBlockArray;
             do
             {
@@ -816,6 +856,7 @@ KeWaitForMultipleObjects(IN ULONG Count,
                 /* Move to the next Wait Block */
                 WaitBlock = WaitBlock->NextWaitBlock;
             } while (WaitBlock != WaitBlockArray);
+#endif
 
             /* Handle Kernel Queues */
             if (Thread->Queue) KiActivateWaiterQueue(Thread->Queue);

@@ -1100,7 +1100,7 @@ NtSetThreadExecutionState(IN EXECUTION_STATE esFlags,
     }
 
     /* Save the previous state, always masking in the continous flag */
-#if (NTDDI_VERSION >= NTDDI_WIN7)
+#if (NTDDI_VERSION >= NTDDI_WIN7) || defined(_M_ARM64)
     /* PowerState was renamed to LargeStack at Win7 (same byte overlay) */
     PreviousState = Thread->LargeStack | ES_CONTINUOUS;
     if (esFlags & ES_CONTINUOUS) Thread->LargeStack = (UCHAR)esFlags;

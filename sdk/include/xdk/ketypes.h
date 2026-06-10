@@ -522,7 +522,7 @@ typedef enum _KWAIT_REASON {
 
 typedef struct _KWAIT_BLOCK {
   LIST_ENTRY WaitListEntry;
-#if (NTDDI_VERSION >= NTDDI_WIN8)
+#if (NTDDI_VERSION >= NTDDI_WIN8) || defined(_M_ARM64)
   UCHAR WaitType;
   volatile UCHAR BlockState;
   USHORT WaitKey;
