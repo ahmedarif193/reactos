@@ -106,13 +106,12 @@ KiTrapReturn:
      * returning to the Zw wrapper.
      */
     ldr     w27, [x20, #TfReserved]
-    lsr     w28, w27, #8
-    movz    w27, #0x564D
-    movk    w27, #0x50, lsl #16
+    lsr     w28, w27, #16
+    movz    w27, #0x4D50
     cmp     w28, w27
     b.ne    .Lprevious_mode_done
     ldr     w27, [x20, #TfReserved]
-    and     w27, w27, #0xFF
+    ubfx    w27, w27, #8, #8
     mrs     x28, tpidr_el1
     cbz     x28, .Lprevious_mode_done
     ldr     x28, [x28, #PcCurrentThread]

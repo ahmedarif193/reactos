@@ -88,37 +88,46 @@ typedef union _CPU_INFO
     ULONG dummy;
 } CPU_INFO, *PCPU_INFO;
 
+// Win11 26100 arm64 layout, sizeof 0x210
+typedef struct _KARM64_VFP_STATE
+{
+    struct _KARM64_VFP_STATE *Link;      // 0x000
+    ULONG Fpcr;                          // 0x008
+    ULONG Fpsr;                          // 0x00C
+    ARM64_NT_NEON128 V[32];              // 0x010
+} KARM64_VFP_STATE, *PKARM64_VFP_STATE;
+
+// Win11 26100 arm64 layout, sizeof 0x150
+// Win11 unions PreviousMode/PreviousIrql at 0x003; ReactOS needs both live,
+// so PreviousIrql sits in the low byte of Reserved (SVC cookie uses bits 8-31)
 typedef struct _KTRAP_FRAME
 {
-    UCHAR ExceptionActive;
-    UCHAR ContextFromKFramesUnwound;
-    UCHAR DebugRegistersValid;
+    UCHAR ExceptionActive;               // 0x000
+    UCHAR ContextFromKFramesUnwound;     // 0x001
+    UCHAR DebugRegistersValid;           // 0x002
+    CHAR PreviousMode;                   // 0x003
     union
     {
+        ULONG Reserved;                  // 0x004
         struct
         {
-            CHAR PreviousMode;
-            UCHAR PreviousIrql;
+            UCHAR PreviousIrql;          // 0x004 [ReactOS]
+            UCHAR ReservedBytes[3];      // 0x005
         };
     };
-    ULONG Reserved;
     union
     {
-        struct
-        {
-            ULONG64 FaultAddress;
-            ULONG64 TrapFrame;
-        };
+        ULONG64 FaultAddress;            // 0x008
+        ULONG64 TrapFrame;               // 0x008
     };
-    //struct PKARM64_VFP_STATE VfpState;
-    ULONG VfpState;
-    ULONG Bcr[8];
-    ULONG64 Bvr[8];
-    ULONG Wcr[2];
-    ULONG64 Wvr[2];
-    ULONG Spsr;
-    ULONG Esr;
-    ULONG64 Sp;
+    PKARM64_VFP_STATE VfpState;          // 0x010
+    ULONG Bcr[8];                        // 0x018
+    ULONG64 Bvr[8];                      // 0x038
+    ULONG Wcr[2];                        // 0x078
+    ULONG64 Wvr[2];                      // 0x080
+    ULONG Spsr;                          // 0x090
+    ULONG Esr;                           // 0x094
+    ULONG64 Sp;                          // 0x098
     union
     {
         ULONG64 X[19];
@@ -145,10 +154,27 @@ typedef struct _KTRAP_FRAME
             ULONG64 X18;
         };
     };
-    ULONG64 Lr;
-    ULONG64 Fp;
-    ULONG64 Pc;
-} KTRAP_FRAME, *PKTRAP_FRAME;
+    ULONG64 Lr;                          // 0x138
+    ULONG64 Fp;                          // 0x140
+    ULONG64 Pc;                          // 0x148
+} KTRAP_FRAME, *PKTRAP_FRAME;            // sizeof 0x150
+
+#ifndef __ASSEMBLER__
+C_ASSERT(sizeof(KTRAP_FRAME) == 0x150);
+C_ASSERT(sizeof(KARM64_VFP_STATE) == 0x210);
+C_ASSERT(FIELD_OFFSET(KTRAP_FRAME, VfpState) == 0x010);
+C_ASSERT(FIELD_OFFSET(KTRAP_FRAME, Bcr) == 0x018);
+C_ASSERT(FIELD_OFFSET(KTRAP_FRAME, Bvr) == 0x038);
+C_ASSERT(FIELD_OFFSET(KTRAP_FRAME, Wcr) == 0x078);
+C_ASSERT(FIELD_OFFSET(KTRAP_FRAME, Wvr) == 0x080);
+C_ASSERT(FIELD_OFFSET(KTRAP_FRAME, Spsr) == 0x090);
+C_ASSERT(FIELD_OFFSET(KTRAP_FRAME, Esr) == 0x094);
+C_ASSERT(FIELD_OFFSET(KTRAP_FRAME, Sp) == 0x098);
+C_ASSERT(FIELD_OFFSET(KTRAP_FRAME, X) == 0x0A0);
+C_ASSERT(FIELD_OFFSET(KTRAP_FRAME, Lr) == 0x138);
+C_ASSERT(FIELD_OFFSET(KTRAP_FRAME, Fp) == 0x140);
+C_ASSERT(FIELD_OFFSET(KTRAP_FRAME, Pc) == 0x148);
+#endif
 
 typedef struct _KEXCEPTION_FRAME
 {
