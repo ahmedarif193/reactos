@@ -1651,6 +1651,11 @@ EnterKdbg:;
     if (OldIrql > DISPATCH_LEVEL)
         KeLowerIrql(DISPATCH_LEVEL);
 
+#if defined(_M_ARM64)
+    /* Lowering from HIGH_LEVEL restores the raise-time DAIF; re-assert the critical section for the debugger session */
+    _disable();
+#endif
+
     /* Exception inside the debugger? Game over. */
     if (InterlockedIncrement(&KdbEntryCount) > 1)
     {

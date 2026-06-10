@@ -652,6 +652,10 @@ KiArm64InterruptDispatchEntry(_In_ ULONG VectorId)
     PKINTERRUPT Head;
     PKTRAP_FRAME TrapFrame;
     BOOLEAN Begun;
+    ULONG64 InterruptedSpsr;
+
+    /* Capture the interrupted PSTATE before any nested exception can clobber SPSR_EL1 */
+    __asm__ __volatile__("mrs %0, spsr_el1" : "=r"(InterruptedSpsr));
 
     /* Ask HAL for current INTID */
     IntId = HalGetInterruptSource();
@@ -681,12 +685,20 @@ KiArm64InterruptDispatchEntry(_In_ ULONG VectorId)
     {
         KiArm64CurrentInterruptTrapFrame[Cpu] = NULL;
         HalEndSystemInterrupt(OldIrql, NULL);
-        return;
+    }
+    else
+    {
+        /* Dispatch to kernel's ISR chain */
+        KiArm64DispatchChain(IntId, OldIrql);
+        KiArm64CurrentInterruptTrapFrame[Cpu] = NULL;
     }
 
-    /* Dispatch to kernel's ISR chain */
-    KiArm64DispatchChain(IntId, OldIrql);
-    KiArm64CurrentInterruptTrapFrame[Cpu] = NULL;
+    /* Trap entry hard-masked DAIF.I, so the EndSystemInterrupt lowering left software interrupts pended; drain them before ERET when the interrupted context had IRQs open */
+    if ((OldIrql < DISPATCH_LEVEL) && !(InterruptedSpsr & 0x80))
+    {
+        _enable();
+        KiArm64ProcessPendingSoftwareInterrupts(RequestIrql, OldIrql);
+    }
 
     UNREFERENCED_PARAMETER(VectorId);
 }

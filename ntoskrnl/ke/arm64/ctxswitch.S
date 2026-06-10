@@ -92,6 +92,13 @@ KiThreadStartup:
      * The KSTART_FRAME is immediately above it (higher address).
      * First, skip past the KSWITCH_FRAME to point SP at KSTART_FRAME.
      */
+
+    /* Establish the canonical thread DAIF seeded by KiInitializeContextThread (only SError masked) */
+    ldrb    w9, [sp, #SwDaif]
+    orr     x9, x9, #4
+    lsl     x9, x9, #6
+    msr     daif, x9
+
     add     sp, sp, #KSWITCH_FRAME_LENGTH
 
     /* Load startup parameters from KSTART_FRAME (SP now points to it).
@@ -196,6 +203,11 @@ KiSwapContext:
     .seh_save_reg x29, SwFp
     .seh_endprologue
 
+    /* Save the outgoing thread's DAIF nibble so the mask state cannot leak across the switch */
+    mrs     x10, daif
+    ubfx    x10, x10, #6, #4
+    strb    w10, [sp, #SwDaif]
+
     /*
      * ARM64 CRITICAL: We need to save TWO return addresses:
      * 1. SwReturn: The final return address (to our caller) - used by ret x9 at the end
@@ -243,6 +255,12 @@ KiSwapContext:
      * switches. User-mode TEB state is restored only by KiTrapReturn.
      */
     mrs     x18, tpidr_el1
+
+    /* Restore the incoming thread's DAIF (A is always kept masked by policy) */
+    ldrb    w10, [sp, #SwDaif]
+    orr     x10, x10, #4
+    lsl     x10, x10, #6
+    msr     daif, x10
 
     ldr     x9,  [sp, #SwReturn]   /* Load caller's return address */
     add     sp, sp, #KSWITCH_FRAME_LENGTH

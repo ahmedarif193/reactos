@@ -152,6 +152,8 @@ KiInitializeContextThread(_Inout_ PKTHREAD Thread,
     SwitchFrame->ReturnAddress = (ULONG64)KiThreadStartup;
     SwitchFrame->Lr = (ULONG64)KiThreadStartup;
     SwitchFrame->ApcBypass = APC_LEVEL;
+    /* DAIF[3:0] nibble (D,A,I,F): new threads start with only SError masked */
+    SwitchFrame->Daif = 0x4;
 }
 
 DECLSPEC_NORETURN
@@ -182,46 +184,26 @@ KiIdleLoop(VOID)
     }
 #endif
 
+    /* NT contract: the idle thread runs at DISPATCH_LEVEL; normalize from the boot (HIGH_LEVEL) or AP entry state */
+    if (KeGetCurrentIrql() > DISPATCH_LEVEL) KeLowerIrql(DISPATCH_LEVEL);
+    if (KeGetCurrentIrql() < DISPATCH_LEVEL) KfRaiseIrql(DISPATCH_LEVEL);
+
     for (;;)
     {
-        /*
-         * ARM64 CRITICAL: Issue a data memory barrier before checking scheduler
-         * state variables. This ensures we see updates from other CPUs/threads
-         * that may have modified DPC queues or ready lists.
-         *
-         * Without this barrier, the weakly-ordered ARM64 memory model could cause
-         * us to see stale values and miss ready threads or pending DPCs.
-         */
+        /* Close the interrupt window so the work check and wfi are atomic */
+        _disable();
+
         __asm__ __volatile__("dmb ishld" ::: "memory");
 
-        /*
-         * Check for pending DPC work. On ARM64, also check DpcInterruptRequested
-         * which is set by HalRequestSoftwareInterrupt when a DPC is queued.
-         */
-        if (Prcb->DpcData[0].DpcQueueDepth ||
-            Prcb->TimerRequest ||
-            Prcb->DeferredReadyListHead.Next ||
-            Prcb->DpcInterruptRequested)
+        if (Prcb->DpcData[0].DpcQueueDepth || Prcb->TimerRequest || Prcb->DeferredReadyListHead.Next || Prcb->DpcInterruptRequested)
         {
-            if (KiArm64ShouldTraceIdle())
-            {
-                DbgPrintEx(DPFLTR_DEFAULT_ID,
-                           DPFLTR_ERROR_LEVEL,
-                           "[arm64][IDLE] dispatch work: DpcDepth=%lu TimerReq=%p Deferred=%p DpcReq=%u Next=%p Ready=0x%Ix\n",
-                           Prcb->DpcData[0].DpcQueueDepth,
-                           Prcb->TimerRequest,
-                           Prcb->DeferredReadyListHead.Next,
-                           Prcb->DpcInterruptRequested,
-                           Prcb->NextThread,
-                           Prcb->ReadySummary);
-            }
+            if (KiArm64ShouldTraceIdle()) DbgPrintEx(DPFLTR_DEFAULT_ID, DPFLTR_ERROR_LEVEL, "[arm64][IDLE] dispatch work: DpcDepth=%lu TimerReq=%p Deferred=%p DpcReq=%u Next=%p\n", Prcb->DpcData[0].DpcQueueDepth, Prcb->TimerRequest, Prcb->DeferredReadyListHead.Next, Prcb->DpcInterruptRequested, Prcb->NextThread);
 
             HalClearSoftwareInterrupt(DISPATCH_LEVEL);
             Prcb->DpcInterruptRequested = FALSE;
+            /* KiRetireDpcList runs at DISPATCH_LEVEL and is entered and exited with interrupts disabled */
             KiRetireDpcList(Prcb);
-
-            /* ARM64: Memory barrier after KiRetireDpcList to ensure NextThread is visible */
-            __asm__ __volatile__("dmb ish" ::: "memory");
+            _enable();
             continue;
         }
 
@@ -230,51 +212,22 @@ KiIdleLoop(VOID)
             PKTHREAD OldThread = Prcb->CurrentThread;
             PKTHREAD NewThread = Prcb->NextThread;
 
-            if (KiArm64ShouldTraceIdle())
-            {
-                DbgPrintEx(DPFLTR_DEFAULT_ID,
-                           DPFLTR_ERROR_LEVEL,
-                           "[arm64][IDLE] swap: Old=%p OldPri=%d OldWait=%u OldBusy=%u New=%p NewPri=%d NewBusy=%u\n",
-                           OldThread,
-                           OldThread ? OldThread->Priority : -1,
-                           OldThread ? OldThread->WaitIrql : 0xFF,
-#if (NTDDI_VERSION >= NTDDI_WIN7)
-                           0,
-#else
-                           OldThread ? OldThread->SwapBusy : 0xFF,
-#endif
-                           NewThread,
-                           NewThread ? NewThread->Priority : -1,
-#if (NTDDI_VERSION >= NTDDI_WIN7)
-                           0);
-#else
-                           NewThread ? NewThread->SwapBusy : 0xFF);
-#endif
-            }
+            _enable();
+
+            if (KiArm64ShouldTraceIdle()) DbgPrintEx(DPFLTR_DEFAULT_ID, DPFLTR_ERROR_LEVEL, "[arm64][IDLE] swap: Old=%p OldPri=%d New=%p NewPri=%d\n", OldThread, OldThread ? OldThread->Priority : -1, NewThread, NewThread ? NewThread->Priority : -1);
 
             Prcb->NextThread = NULL;
             Prcb->CurrentThread = NewThread;
             NewThread->State = Running;
 
             ASSERT(OldThread != NULL);
-            KiSwapContext(OldThread->WaitIrql, OldThread);
+            KiSwapContext(APC_LEVEL, OldThread);
             continue;
         }
 
-        /*
-         * KiInitializeKernel enters the idle loop after raising to HIGH_LEVEL.
-         * On ARM64, clearing DAIF.I alone is not enough because the GIC PMR may
-         * still be masking every interrupt. Drop the logical IRQL before opening
-         * the idle interrupt window so timer/device interrupts can schedule work.
-         */
-        if (KeGetCurrentIrql() > PASSIVE_LEVEL)
-        {
-            KeLowerIrql(PASSIVE_LEVEL);
-        }
-
+        /* WFI wakes on a pending interrupt even with DAIF.I masked; unmasking afterwards takes it immediately */
+        __asm__ __volatile__("wfi" ::: "memory");
         _enable();
-        __asm__ __volatile__("wfe" ::: "memory");
-        _disable();
     }
 }
 
@@ -518,6 +471,10 @@ KiDispatchInterrupt(VOID)
     PKPRCB Prcb = &Pcr->Prcb;
     PKTHREAD NewThread, OldThread;
     KIRQL OldIrql;
+    ULONG64 EntryDaif;
+
+    /* Preserve the caller's interrupt mask; this function must not leak an _enable to a masked caller */
+    __asm__ __volatile__("mrs %0, daif" : "=r"(EntryDaif));
 
     /*
      * ARM64 DPC/Dispatch Interrupt Handler
@@ -566,7 +523,7 @@ KiDispatchInterrupt(VOID)
         KiRetireDpcListInDpcStack(Prcb, Prcb->DpcStack);
     }
 
-    _enable();
+    __asm__ __volatile__("msr daif, %0" :: "r"(EntryDaif) : "memory");
 
     /* Handle quantum end - this may raise/lower IRQL internally */
     if (Prcb->QuantumEnd)
@@ -593,29 +550,8 @@ KiDispatchInterrupt(VOID)
         KiSwapContext(APC_LEVEL, OldThread);
     }
 
-    /*
-     * CRITICAL: Restore original IRQL at the END, after all dispatch work.
-     *
-     * Following the AMD64 KiDpcInterruptHandler pattern:
-     * 1. Disable interrupts to prevent new hardware interrupts during lowering
-     * 2. Call KeLowerIrql to restore original IRQL
-     * 3. Re-enable interrupts (ARM64-specific: DAIF.I must be explicitly cleared)
-     *
-     * Note: KeLowerIrql may check for DpcInterruptRequested and call back into
-     * KiDispatchInterrupt, but this is safe because:
-     * - DpcInterruptRequested is cleared BEFORE calling KiDispatchInterrupt in irql.c
-     * - So we won't get infinite recursion, just one level of "retry" if new DPCs
-     *   were queued during our dispatch processing
-     *
-     * If no new DPCs were queued, KeLowerIrql simply lowers the IRQL.
-     *
-     * ARM64 CRITICAL: Unlike x86/AMD64 where IRET restores RFLAGS.IF automatically,
-     * ARM64's DAIF.I bit persists after function return. We must explicitly call
-     * _enable() to unmask interrupts after KeLowerIrql() completes. Without this,
-     * the timer interrupt (PPI 27) would remain masked and never fire, causing
-     * massive delays in timer expiration (100+ second gaps between timer ticks).
-     */
+    /* Restore the original IRQL at the very end, then put DAIF back exactly as the caller had it */
     _disable();
     KeLowerIrql(OldIrql);
-    _enable();
+    __asm__ __volatile__("msr daif, %0" :: "r"(EntryDaif) : "memory");
 }
