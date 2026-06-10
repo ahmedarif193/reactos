@@ -231,11 +231,16 @@ E1000WriteIoUlong(
     _In_ ULONG Address,
     _In_ ULONG Value)
 {
+#if defined(_M_ARM64) || defined(_M_ARM)
+    /* No port I/O on ARM: the IO-BAR quirk path would fault, use MMIO. */
+    E1000WriteUlong(Adapter, Address, Value);
+#else
     volatile ULONG Dummy;
 
     NdisRawWritePortUlong((PULONG)(Adapter->IoPort), Address);
     NdisReadRegisterUlong(Adapter->IoBase + E1000_REG_STATUS, &Dummy);
     NdisRawWritePortUlong((PULONG)(Adapter->IoPort + 4), Value);
+#endif
 }
 
 FORCEINLINE
