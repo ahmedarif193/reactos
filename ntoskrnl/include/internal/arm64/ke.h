@@ -242,6 +242,9 @@ KeDisableInterrupts(VOID)
     return ((Flags & (1ULL << 7)) == 0);
 }
 
+VOID
+KiArm64RefirePendingSoftwareInterrupts(VOID);
+
 FORCEINLINE
 VOID
 KeRestoreInterrupts(
@@ -250,6 +253,8 @@ KeRestoreInterrupts(
     if (WereEnabled)
     {
         __asm__ __volatile__("msr daifclr, #2" ::: "memory");
+        /* x64 re-fire semantics: pending software interrupts deliver at sti; drain them now that the mask is open */
+        KiArm64RefirePendingSoftwareInterrupts();
     }
 }
 
@@ -500,4 +505,8 @@ KiProcessorFreezeHandler(
 /* Debug CPU features banner */
 #if DBG
 VOID KiReportCpuFeatures(IN PKPRCB Prcb);
+
+PKTRAP_FRAME
+KiArm64ActiveInterruptTrapFrame(VOID);
+
 #endif
