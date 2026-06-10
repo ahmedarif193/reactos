@@ -54,6 +54,19 @@ ULONG KiInitInterruptsCallCount = 0;
 ULONG KiTimerStartedFlag = 0;
 ULONG KiTimerCtlReadback = 0;
 
+PKTRAP_FRAME
+KiArm64ActiveInterruptTrapFrame(VOID)
+{
+    ULONG Cpu = KeGetCurrentProcessorNumber();
+
+    if (Cpu >= MAXIMUM_PROCESSORS)
+    {
+        Cpu = 0;
+    }
+
+    return KiArm64CurrentInterruptTrapFrame[Cpu];
+}
+
 static
 PKTRAP_FRAME
 KiArm64GetCurrentInterruptTrapFrame(VOID)
@@ -683,15 +696,17 @@ KiArm64InterruptDispatchEntry(_In_ ULONG VectorId)
 
     if (Head == NULL)
     {
-        KiArm64CurrentInterruptTrapFrame[Cpu] = NULL;
         HalEndSystemInterrupt(OldIrql, NULL);
     }
     else
     {
         /* Dispatch to kernel's ISR chain */
         KiArm64DispatchChain(IntId, OldIrql);
-        KiArm64CurrentInterruptTrapFrame[Cpu] = NULL;
     }
+
+    /* Clear before the drain: it can dispatch DPCs and context-switch, so the
+     * marker must not span it; the drain itself is thread-resume work */
+    KiArm64CurrentInterruptTrapFrame[Cpu] = NULL;
 
     /* Trap entry hard-masked DAIF.I, so the EndSystemInterrupt lowering left software interrupts pended; drain them before ERET when the interrupted context had IRQs open */
     if ((OldIrql < DISPATCH_LEVEL) && !(InterruptedSpsr & 0x80))

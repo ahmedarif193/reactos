@@ -347,10 +347,11 @@ KiApplyIrqMaskForIrqlTransition(
         ULONG64 RaiseDaif;
         /* Capture the pre-raise DAIF so the matching lower restores it instead of blindly unmasking */
         __asm__ __volatile__("mrs %0, daif" : "=r"(RaiseDaif));
-        if (RaisePrcb) RaisePrcb->HighLevelSavedDaif = RaiseDaif;
         /* Raising to HIGH_LEVEL: Mask all interrupts via DAIF */
         ARM64_MASK_ALL();
         ARM64_SYNC_BARRIER();
+        /* Store only after MASK_ALL: an interrupt landing between capture and mask runs its own HIGH pair and leaves the slot I-set; storing pre-mask let that poison survive into a thread-context restore */
+        if (RaisePrcb) RaisePrcb->HighLevelSavedDaif = RaiseDaif;
         /* Also set GIC PMR to most restrictive for defense in depth */
         HalSetGicPriorityMask(HIGH_LEVEL);
         KiTraceSerrorPolicy("high-raise", OldIrql, NewIrql);
@@ -500,6 +501,17 @@ KfRaiseIrql(
         (OldIrql <= DISPATCH_LEVEL) &&
         (NewIrql <= DISPATCH_LEVEL))
     {
+        /* Tripwire: thread code at PASSIVE must not run with DAIF.I leaked masked */
+        if (OldIrql == PASSIVE_LEVEL)
+        {
+            static LONG DaifLeakLogBudget = 8;
+            ULONG64 LeakDaif;
+            __asm__ __volatile__("mrs %0, daif" : "=r"(LeakDaif));
+            if ((LeakDaif & 0x80) && (KiArm64ActiveInterruptTrapFrame() == NULL) && (InterlockedDecrement(&DaifLeakLogBudget) >= 0))
+            {
+                DbgPrint("DAIFLEAK daif=%lx new=%u thr=%p ret=%p\n", (ULONG)LeakDaif, NewIrql, KeGetCurrentThread(), _ReturnAddress());
+            }
+        }
         KiSetCurrentIrql(NewIrql);
         return OldIrql;
     }
@@ -566,19 +578,54 @@ KiArm64ProcessPendingSoftwareInterrupts(
     {
         PKTHREAD Thread = KeGetCurrentThread();
 
-        static volatile LONG ApcTraceBusy = 0;
-        if (Thread && Thread->ApcState.KernelApcPending && InterlockedCompareExchange((PLONG)&ApcTraceBusy, 1, 0) == 0)
-        {
-            DbgPrint("APCX old=%u new=%u sad=%d kad=%d thr=%p\n", OldIrql, NewIrql, Thread->SpecialApcDisable, Thread->KernelApcDisable, Thread);
-            InterlockedExchange((PLONG)&ApcTraceBusy, 0);
-        }
         if (Thread && Thread->ApcState.KernelApcPending && !Thread->SpecialApcDisable)
         {
             KiSetCurrentIrql(APC_LEVEL);
             KiDeliverApc(KernelMode, NULL, NULL);
             KiSetCurrentIrql(NewIrql);
+
+            /* Anomaly alarm: pending survived a delivery attempt, some APC is stuck */
+            if (Thread->ApcState.KernelApcPending)
+            {
+                static LONG ApcStuckLogBudget = 16;
+                if (InterlockedDecrement(&ApcStuckLogBudget) >= 0)
+                {
+                    PKAPC StuckApc = NULL;
+                    if (!IsListEmpty(&Thread->ApcState.ApcListHead[KernelMode]))
+                    {
+                        StuckApc = CONTAINING_RECORD(Thread->ApcState.ApcListHead[KernelMode].Flink, KAPC, ApcListEntry);
+                    }
+                    DbgPrint("APCSTUCK thr=%p kad=%d inprog=%u apc=%p krtn=%p nrtn=%p\n", Thread, Thread->KernelApcDisable, (ULONG)Thread->ApcState.KernelApcInProgress, StuckApc, StuckApc ? (PVOID)StuckApc->KernelRoutine : NULL, StuckApc ? (PVOID)StuckApc->NormalRoutine : NULL);
+                }
+            }
         }
     }
+}
+
+VOID
+KiArm64RefirePendingSoftwareInterrupts(VOID)
+{
+    KIRQL Irql;
+
+    /* x64 semantics: a pending software interrupt fires the moment sti reopens the hardware mask; emulate that at the unmask primitive */
+    if (!KiHalInitialized)
+    {
+        return;
+    }
+
+    /* Interrupt-context unmasks are drained by the interrupt tail */
+    if (KiArm64ActiveInterruptTrapFrame() != NULL)
+    {
+        return;
+    }
+
+    Irql = KiQueryCurrentIrql();
+    if (Irql >= DISPATCH_LEVEL)
+    {
+        return;
+    }
+
+    KiArm64ProcessPendingSoftwareInterrupts(APC_LEVEL, Irql);
 }
 
 VOID
@@ -618,12 +665,14 @@ KfLowerIrql(
         PKTHREAD GateThread = KeGetCurrentThread();
         static volatile LONG SkipTraceBusy = 0;
         __asm__ __volatile__("mrs %0, daif" : "=r"(Daif));
-        if ((Daif & 0x80) && GateThread && GateThread->ApcState.KernelApcPending && NewIrql < APC_LEVEL && OldIrql >= APC_LEVEL && InterlockedCompareExchange((PLONG)&SkipTraceBusy, 1, 0) == 0)
+        static LONG SkipLogBudget = 32;
+        if ((Daif & 0x80) && GateThread && GateThread->ApcState.KernelApcPending && NewIrql < APC_LEVEL && OldIrql >= APC_LEVEL && SkipLogBudget > 0 && InterlockedDecrement(&SkipLogBudget) >= 0 && InterlockedCompareExchange((PLONG)&SkipTraceBusy, 1, 0) == 0)
         {
-            DbgPrint("APCSKIP old=%u new=%u thr=%p\n", OldIrql, NewIrql, GateThread);
+            PKTRAP_FRAME IntTf = KiArm64ActiveInterruptTrapFrame();
+            DbgPrint("APCSKIP old=%u new=%u thr=%p daif=%lx ipc=%p ilr=%p ispsr=%lx ret=%p\n", OldIrql, NewIrql, GateThread, (ULONG)Daif, IntTf ? (PVOID)IntTf->Pc : NULL, IntTf ? (PVOID)IntTf->Lr : NULL, IntTf ? IntTf->Spsr : 0, _ReturnAddress());
             InterlockedExchange((PLONG)&SkipTraceBusy, 0);
         }
-        /* With DAIF.I still masked (explicit _disable or KD freeze/thaw), leave work pended; the next interrupt tail or unmasked lowering drains it */
+        /* Never override a masked DAIF.I here (it may be a caller's legitimate _disable, e.g. KD poll/freeze); the re-fire happens in KeRestoreInterrupts when the mask opens, matching x64 sti semantics */
         if (!(Daif & 0x80)) KiArm64ProcessPendingSoftwareInterrupts(OldIrql, NewIrql);
     }
 }
