@@ -260,9 +260,15 @@ KiInitSpinLocks(IN PKPRCB Prcb,
             KeInitializeSpinLock(&KiTimerTableLock[i]);
 
         /* Initialize the lock */
+#ifdef _M_ARM64
+        // Win11 arm64 LockQueue has only 17 entries; timer locks live in a ReactOS array
+        Prcb->TimerTableLockQueue[i].Next = NULL;
+        Prcb->TimerTableLockQueue[i].Lock = &KiTimerTableLock[i];
+#else
         Prcb->LockQueue[LockQueueTimerTableLock + i].Next = NULL;
         Prcb->LockQueue[LockQueueTimerTableLock + i].Lock =
             &KiTimerTableLock[i];
+#endif
     }
 
     /* Initialize the PRCB lock */

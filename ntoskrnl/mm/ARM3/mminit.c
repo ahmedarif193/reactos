@@ -627,7 +627,10 @@ MiComputeColorInformation(VOID)
 
     /* Compute the mask and store it */
     MmSecondaryColorMask = MmSecondaryColors - 1;
+#ifndef _M_ARM64
+    // Win11 arm64 KPRCB has no SecondaryColorMask; Mm only reads the global
     KeGetCurrentPrcb()->SecondaryColorMask = MmSecondaryColorMask;
+#endif
 }
 
 CODE_SEG("INIT")
