@@ -14,3 +14,7 @@ if(ARCH STREQUAL "i386")
     add_subdirectory(pc98vid)
     add_subdirectory(xboxvmp)
 endif()
+
+if(ARCH STREQUAL "i386" OR ARCH STREQUAL "amd64")
+    add_subdirectory(inteln100)
+endif()

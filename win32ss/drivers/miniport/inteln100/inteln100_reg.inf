@@ -1,0 +1,44 @@
+; Intel Alder Lake-N Display Miniport boot registration
+
+[AddReg]
+HKLM,"SYSTEM\CurrentControlSet\Control\CriticalDeviceDatabase\PCI#VEN_8086&DEV_46D1","ClassGUID",0x00000000,"{4D36E968-E325-11CE-BFC1-08002BE10318}"
+HKLM,"SYSTEM\CurrentControlSet\Control\CriticalDeviceDatabase\PCI#VEN_8086&DEV_46D1","Service",0x00000000,"inteln100"
+HKLM,"SYSTEM\CurrentControlSet\Control\CriticalDeviceDatabase\PCI#VEN_8086&DEV_46D1","Driver",0x00000000,"{4D36E968-E325-11CE-BFC1-08002BE10318}\0001"
+
+HKLM,"SYSTEM\CurrentControlSet\Services\inteln100","ErrorControl",0x00010001,0x00000000
+HKLM,"SYSTEM\CurrentControlSet\Services\inteln100","Group",0x00000000,"Video Save"
+HKLM,"SYSTEM\CurrentControlSet\Services\inteln100","ImagePath",0x00020000,"system32\drivers\inteln100.sys"
+HKLM,"SYSTEM\CurrentControlSet\Services\inteln100","Start",0x00010001,0x00000003
+HKLM,"SYSTEM\CurrentControlSet\Services\inteln100","Type",0x00010001,0x00000001
+HKLM,"SYSTEM\CurrentControlSet\Services\inteln100","Tag",0x00010001,0x00000002
+HKLM,"SYSTEM\CurrentControlSet\Services\inteln100\Video","Service",0x00000000,"inteln100"
+
+HKLM,"SYSTEM\CurrentControlSet\Services\inteln100\Device0","InstalledDisplayDrivers",0x00010000,"framebuf"
+HKLM,"SYSTEM\CurrentControlSet\Services\inteln100\Device0","DefaultSettings.VRefresh",0x00010001,0x00000001
+HKLM,"SYSTEM\CurrentControlSet\Services\inteln100\Device0","DefaultSettings.BitsPerPel",0x00010001,0x00000020
+HKLM,"SYSTEM\CurrentControlSet\Services\inteln100\Device0","DefaultSettings.XResolution",0x00010001,0x00000780
+HKLM,"SYSTEM\CurrentControlSet\Services\inteln100\Device0","DefaultSettings.YResolution",0x00010001,0x00000438
+HKLM,"SYSTEM\CurrentControlSet\Services\inteln100\Device0","Attach.RelativeX",0x00010001,0x00000000
+HKLM,"SYSTEM\CurrentControlSet\Services\inteln100\Device0","Attach.RelativeY",0x00010001,0x00000000
+HKLM,"SYSTEM\CurrentControlSet\Services\inteln100\Device0","Attach.ToDesktop",0x00010001,0x00000001
+HKLM,"SYSTEM\CurrentControlSet\Services\inteln100\Device0","Attach.PrimaryDevice",0x00010001,0x00000001
+HKLM,"SYSTEM\CurrentControlSet\Services\inteln100\Device0","Device Description",0x00000000,"Intel Alder Lake-N UHD Graphics"
+HKLM,"SYSTEM\CurrentControlSet\Services\inteln100\Device0","VgaCompatible",0x00010001,0x00000000
+
+HKLM,"SYSTEM\CurrentControlSet\Control\Class\{4D36E968-E325-11CE-BFC1-08002BE10318}\0001","DriverDesc",0x00000000,"Intel Alder Lake-N UHD Graphics"
+HKLM,"SYSTEM\CurrentControlSet\Control\Class\{4D36E968-E325-11CE-BFC1-08002BE10318}\0001","ProviderName",0x00000000,"ReactOS"
+HKLM,"SYSTEM\CurrentControlSet\Control\Class\{4D36E968-E325-11CE-BFC1-08002BE10318}\0001","InfPath",0x00000000,"inteln100.inf"
+HKLM,"SYSTEM\CurrentControlSet\Control\Class\{4D36E968-E325-11CE-BFC1-08002BE10318}\0001","InfSection",0x00000000,"IntelN100_Install"
+HKLM,"SYSTEM\CurrentControlSet\Control\Class\{4D36E968-E325-11CE-BFC1-08002BE10318}\0001","MatchingDeviceId",0x00000000,"PCI\VEN_8086&DEV_46D1"
+
+HKLM,"SYSTEM\CurrentControlSet\Control\Class\{4D36E968-E325-11CE-BFC1-08002BE10318}\0001\Settings","InstalledDisplayDrivers",0x00010000,"framebuf"
+HKLM,"SYSTEM\CurrentControlSet\Control\Class\{4D36E968-E325-11CE-BFC1-08002BE10318}\0001\Settings","DefaultSettings.VRefresh",0x00010001,0x00000001
+HKLM,"SYSTEM\CurrentControlSet\Control\Class\{4D36E968-E325-11CE-BFC1-08002BE10318}\0001\Settings","DefaultSettings.BitsPerPel",0x00010001,0x00000020
+HKLM,"SYSTEM\CurrentControlSet\Control\Class\{4D36E968-E325-11CE-BFC1-08002BE10318}\0001\Settings","DefaultSettings.XResolution",0x00010001,0x00000780
+HKLM,"SYSTEM\CurrentControlSet\Control\Class\{4D36E968-E325-11CE-BFC1-08002BE10318}\0001\Settings","DefaultSettings.YResolution",0x00010001,0x00000438
+HKLM,"SYSTEM\CurrentControlSet\Control\Class\{4D36E968-E325-11CE-BFC1-08002BE10318}\0001\Settings","Attach.RelativeX",0x00010001,0x00000000
+HKLM,"SYSTEM\CurrentControlSet\Control\Class\{4D36E968-E325-11CE-BFC1-08002BE10318}\0001\Settings","Attach.RelativeY",0x00010001,0x00000000
+HKLM,"SYSTEM\CurrentControlSet\Control\Class\{4D36E968-E325-11CE-BFC1-08002BE10318}\0001\Settings","Attach.ToDesktop",0x00010001,0x00000001
+HKLM,"SYSTEM\CurrentControlSet\Control\Class\{4D36E968-E325-11CE-BFC1-08002BE10318}\0001\Settings","Attach.PrimaryDevice",0x00010001,0x00000001
+HKLM,"SYSTEM\CurrentControlSet\Control\Class\{4D36E968-E325-11CE-BFC1-08002BE10318}\0001\Settings","Device Description",0x00000000,"Intel Alder Lake-N UHD Graphics"
+HKLM,"SYSTEM\CurrentControlSet\Control\Class\{4D36E968-E325-11CE-BFC1-08002BE10318}\0001\Settings","VgaCompatible",0x00010001,0x00000000

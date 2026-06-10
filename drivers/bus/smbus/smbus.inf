@@ -1,0 +1,136 @@
+; ReactOS SMBus Controller Driver
+; Intel ICH/PCH (i801-compatible) SMBus host controllers.
+; All listed parts share the same register interface, so one driver covers them.
+
+[Version]
+Signature="$Windows NT$"
+Class=System
+ClassGUID={4D36E97D-E325-11CE-BFC1-08002BE10318}
+Provider=%ReactOS%
+DriverVer=05/29/2026,1.0.0.0
+
+[SourceDisksNames]
+1=%DiskName%,,,
+
+[SourceDisksFiles]
+smbus.sys=1
+
+[DestinationDirs]
+DefaultDestDir=12
+Smbus_CopyFiles=12
+
+[Manufacturer]
+%Intel%=Intel,NTx86,NTamd64
+
+[Intel.NTx86]
+%PCI\VEN_8086&DEV_2413.DeviceDesc%=Smbus_Install,PCI\VEN_8086&DEV_2413
+%PCI\VEN_8086&DEV_2443.DeviceDesc%=Smbus_Install,PCI\VEN_8086&DEV_2443
+%PCI\VEN_8086&DEV_2483.DeviceDesc%=Smbus_Install,PCI\VEN_8086&DEV_2483
+%PCI\VEN_8086&DEV_24C3.DeviceDesc%=Smbus_Install,PCI\VEN_8086&DEV_24C3
+%PCI\VEN_8086&DEV_24D3.DeviceDesc%=Smbus_Install,PCI\VEN_8086&DEV_24D3
+%PCI\VEN_8086&DEV_25A4.DeviceDesc%=Smbus_Install,PCI\VEN_8086&DEV_25A4
+%PCI\VEN_8086&DEV_266A.DeviceDesc%=Smbus_Install,PCI\VEN_8086&DEV_266A
+%PCI\VEN_8086&DEV_27DA.DeviceDesc%=Smbus_Install,PCI\VEN_8086&DEV_27DA
+%PCI\VEN_8086&DEV_283E.DeviceDesc%=Smbus_Install,PCI\VEN_8086&DEV_283E
+%PCI\VEN_8086&DEV_2930.DeviceDesc%=Smbus_Install,PCI\VEN_8086&DEV_2930
+%PCI\VEN_8086&DEV_3A30.DeviceDesc%=Smbus_Install,PCI\VEN_8086&DEV_3A30
+%PCI\VEN_8086&DEV_3A60.DeviceDesc%=Smbus_Install,PCI\VEN_8086&DEV_3A60
+%PCI\VEN_8086&DEV_3B30.DeviceDesc%=Smbus_Install,PCI\VEN_8086&DEV_3B30
+%PCI\VEN_8086&DEV_1C22.DeviceDesc%=Smbus_Install,PCI\VEN_8086&DEV_1C22
+%PCI\VEN_8086&DEV_1E22.DeviceDesc%=Smbus_Install,PCI\VEN_8086&DEV_1E22
+%PCI\VEN_8086&DEV_8C22.DeviceDesc%=Smbus_Install,PCI\VEN_8086&DEV_8C22
+%PCI\VEN_8086&DEV_9C22.DeviceDesc%=Smbus_Install,PCI\VEN_8086&DEV_9C22
+%PCI\VEN_8086&DEV_0F12.DeviceDesc%=Smbus_Install,PCI\VEN_8086&DEV_0F12
+
+[Intel.NTamd64]
+%PCI\VEN_8086&DEV_24D3.DeviceDesc%=Smbus_Install,PCI\VEN_8086&DEV_24D3
+%PCI\VEN_8086&DEV_266A.DeviceDesc%=Smbus_Install,PCI\VEN_8086&DEV_266A
+%PCI\VEN_8086&DEV_27DA.DeviceDesc%=Smbus_Install,PCI\VEN_8086&DEV_27DA
+%PCI\VEN_8086&DEV_283E.DeviceDesc%=Smbus_Install,PCI\VEN_8086&DEV_283E
+%PCI\VEN_8086&DEV_2930.DeviceDesc%=Smbus_Install,PCI\VEN_8086&DEV_2930
+%PCI\VEN_8086&DEV_3A30.DeviceDesc%=Smbus_Install,PCI\VEN_8086&DEV_3A30
+%PCI\VEN_8086&DEV_3B30.DeviceDesc%=Smbus_Install,PCI\VEN_8086&DEV_3B30
+%PCI\VEN_8086&DEV_1C22.DeviceDesc%=Smbus_Install,PCI\VEN_8086&DEV_1C22
+%PCI\VEN_8086&DEV_1E22.DeviceDesc%=Smbus_Install,PCI\VEN_8086&DEV_1E22
+%PCI\VEN_8086&DEV_8C22.DeviceDesc%=Smbus_Install,PCI\VEN_8086&DEV_8C22
+%PCI\VEN_8086&DEV_9C22.DeviceDesc%=Smbus_Install,PCI\VEN_8086&DEV_9C22
+%PCI\VEN_8086&DEV_9D23.DeviceDesc%=Smbus_Install,PCI\VEN_8086&DEV_9D23
+%PCI\VEN_8086&DEV_A123.DeviceDesc%=Smbus_Install,PCI\VEN_8086&DEV_A123
+%PCI\VEN_8086&DEV_A1A3.DeviceDesc%=Smbus_Install,PCI\VEN_8086&DEV_A1A3
+%PCI\VEN_8086&DEV_A2A3.DeviceDesc%=Smbus_Install,PCI\VEN_8086&DEV_A2A3
+%PCI\VEN_8086&DEV_A323.DeviceDesc%=Smbus_Install,PCI\VEN_8086&DEV_A323
+%PCI\VEN_8086&DEV_9DA3.DeviceDesc%=Smbus_Install,PCI\VEN_8086&DEV_9DA3
+%PCI\VEN_8086&DEV_02A3.DeviceDesc%=Smbus_Install,PCI\VEN_8086&DEV_02A3
+%PCI\VEN_8086&DEV_06A3.DeviceDesc%=Smbus_Install,PCI\VEN_8086&DEV_06A3
+%PCI\VEN_8086&DEV_A0A3.DeviceDesc%=Smbus_Install,PCI\VEN_8086&DEV_A0A3
+%PCI\VEN_8086&DEV_43A3.DeviceDesc%=Smbus_Install,PCI\VEN_8086&DEV_43A3
+%PCI\VEN_8086&DEV_4DA3.DeviceDesc%=Smbus_Install,PCI\VEN_8086&DEV_4DA3
+%PCI\VEN_8086&DEV_34A3.DeviceDesc%=Smbus_Install,PCI\VEN_8086&DEV_34A3
+%PCI\VEN_8086&DEV_51A3.DeviceDesc%=Smbus_Install,PCI\VEN_8086&DEV_51A3
+%PCI\VEN_8086&DEV_54A3.DeviceDesc%=Smbus_Install,PCI\VEN_8086&DEV_54A3
+%PCI\VEN_8086&DEV_7AA3.DeviceDesc%=Smbus_Install,PCI\VEN_8086&DEV_7AA3
+%PCI\VEN_8086&DEV_7A23.DeviceDesc%=Smbus_Install,PCI\VEN_8086&DEV_7A23
+%PCI\VEN_8086&DEV_7F23.DeviceDesc%=Smbus_Install,PCI\VEN_8086&DEV_7F23
+
+[Smbus_Install]
+CopyFiles=Smbus_CopyFiles
+
+[Smbus_CopyFiles]
+smbus.sys,,,1
+
+[Smbus_Install.Services]
+AddService=smbus,%SPSVCINST_ASSOCSERVICE%,Smbus_Service_Install
+
+[Smbus_Service_Install]
+DisplayName=%SmbusServiceName%
+ServiceType=%SERVICE_KERNEL_DRIVER%
+StartType=%SERVICE_DEMAND_START%
+ErrorControl=%SERVICE_ERROR_NORMAL%
+ServiceBinary=%12%\smbus.sys
+LoadOrderGroup=System Bus Extender
+
+[Strings]
+ReactOS="ReactOS"
+DiskName="ReactOS SMBus Controller Driver Installation Disk"
+Intel="Intel Corporation"
+SmbusServiceName="ReactOS SMBus Controller Driver"
+SPSVCINST_ASSOCSERVICE=0x00000002
+SERVICE_KERNEL_DRIVER=1
+SERVICE_DEMAND_START=3
+SERVICE_ERROR_NORMAL=1
+
+PCI\VEN_8086&DEV_2413.DeviceDesc="Intel 82801AA (ICH) SMBus Controller"
+PCI\VEN_8086&DEV_2443.DeviceDesc="Intel 82801BA (ICH2) SMBus Controller"
+PCI\VEN_8086&DEV_2483.DeviceDesc="Intel 82801CA (ICH3) SMBus Controller"
+PCI\VEN_8086&DEV_24C3.DeviceDesc="Intel 82801DB (ICH4) SMBus Controller"
+PCI\VEN_8086&DEV_24D3.DeviceDesc="Intel 82801EB (ICH5) SMBus Controller"
+PCI\VEN_8086&DEV_25A4.DeviceDesc="Intel 6300ESB SMBus Controller"
+PCI\VEN_8086&DEV_266A.DeviceDesc="Intel 82801FB (ICH6) SMBus Controller"
+PCI\VEN_8086&DEV_27DA.DeviceDesc="Intel 82801G (ICH7) SMBus Controller"
+PCI\VEN_8086&DEV_283E.DeviceDesc="Intel 82801H (ICH8) SMBus Controller"
+PCI\VEN_8086&DEV_2930.DeviceDesc="Intel 82801I (ICH9) SMBus Controller"
+PCI\VEN_8086&DEV_3A30.DeviceDesc="Intel ICH10 SMBus Controller"
+PCI\VEN_8086&DEV_3A60.DeviceDesc="Intel ICH10 SMBus Controller"
+PCI\VEN_8086&DEV_3B30.DeviceDesc="Intel 5/3400 Series PCH SMBus Controller"
+PCI\VEN_8086&DEV_1C22.DeviceDesc="Intel 6 Series PCH SMBus Controller"
+PCI\VEN_8086&DEV_1E22.DeviceDesc="Intel 7 Series (Panther Point) SMBus Controller"
+PCI\VEN_8086&DEV_8C22.DeviceDesc="Intel 8 Series (Lynx Point) SMBus Controller"
+PCI\VEN_8086&DEV_9C22.DeviceDesc="Intel Lynx Point-LP SMBus Controller"
+PCI\VEN_8086&DEV_0F12.DeviceDesc="Intel Bay Trail SMBus Controller"
+PCI\VEN_8086&DEV_9D23.DeviceDesc="Intel Sunrise Point-LP SMBus Controller"
+PCI\VEN_8086&DEV_A123.DeviceDesc="Intel Sunrise Point-H SMBus Controller"
+PCI\VEN_8086&DEV_A1A3.DeviceDesc="Intel Lewisburg SMBus Controller"
+PCI\VEN_8086&DEV_A2A3.DeviceDesc="Intel Kaby Lake PCH-H SMBus Controller"
+PCI\VEN_8086&DEV_A323.DeviceDesc="Intel Cannon Lake-H SMBus Controller"
+PCI\VEN_8086&DEV_9DA3.DeviceDesc="Intel Cannon Lake-LP SMBus Controller"
+PCI\VEN_8086&DEV_02A3.DeviceDesc="Intel Comet Lake SMBus Controller"
+PCI\VEN_8086&DEV_06A3.DeviceDesc="Intel Comet Lake-H SMBus Controller"
+PCI\VEN_8086&DEV_A0A3.DeviceDesc="Intel Tiger Lake-LP SMBus Controller"
+PCI\VEN_8086&DEV_43A3.DeviceDesc="Intel Tiger Lake-H SMBus Controller"
+PCI\VEN_8086&DEV_4DA3.DeviceDesc="Intel Jasper Lake SMBus Controller"
+PCI\VEN_8086&DEV_34A3.DeviceDesc="Intel Ice Lake-LP SMBus Controller"
+PCI\VEN_8086&DEV_51A3.DeviceDesc="Intel Alder Lake-P SMBus Controller"
+PCI\VEN_8086&DEV_54A3.DeviceDesc="Intel Alder Lake-N SMBus Controller"
+PCI\VEN_8086&DEV_7AA3.DeviceDesc="Intel Alder Lake-S SMBus Controller"
+PCI\VEN_8086&DEV_7A23.DeviceDesc="Intel Raptor Lake-S SMBus Controller"
+PCI\VEN_8086&DEV_7F23.DeviceDesc="Intel Meteor Lake PCH-S SMBus Controller"
