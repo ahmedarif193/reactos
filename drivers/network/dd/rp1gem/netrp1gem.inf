@@ -41,7 +41,7 @@ rp1gem.sys
 
 [RP1GEM_Service_Inst]
 ServiceType=1
-StartType=0
+StartType=3
 ErrorControl=1
 ServiceBinary=%12%\rp1gem.sys
 LoadOrderGroup=NDIS
