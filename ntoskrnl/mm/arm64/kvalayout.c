@@ -226,9 +226,6 @@ SetupVaRegions(
     ReserveVaRegion(AssignedRegionSystemPtes, MI_SYSTEM_SPACE_START, 128 * _1GB);
     ReserveVaRange((ULONG_PTR)MI_DEBUG_MAPPING, PAGE_SIZE);
 
-    /* Reserve 128 GB for paged pool (also within PXI 497) */
-    ReserveVaRegion(AssignedRegionPagedPool, (ULONG64)MI_PAGED_POOL_START, 128 * _1GB);
-
     /* Reserve 1 TB system cache (PXIs 499-500) */
     ReserveVaRegion(AssignedRegionSystemCache, MI_SYSTEM_CACHE_START, 1 * _1TB);
 
@@ -239,6 +236,9 @@ SetupVaRegions(
     /* Reserve 512 GB for non-paged pool. It currently follows the PFN
      * database within the same 512 GB slot (PXI 501). */
     ReserveVaRegion(AssignedRegionNonPagedPool, MI_PFN_DATABASE, 512 * _1GB);
+
+    /* Reserve 128 GB for paged pool */
+    RandomizeVaRegion(AssignedRegionPagedPool, 128 * _1GB, PDE_MAPPED_VA);
 
     /* Reserve 128 GB for kernel stacks (no consumer yet, parity with x64) */
     RandomizeVaRegion(AssignedRegionKernelStacks, 128 * _1GB, PPE_MAPPED_VA);
