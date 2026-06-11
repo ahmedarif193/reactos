@@ -6247,36 +6247,48 @@ typedef	NDIS_WAN_MAC_CHARACTERISTICS    *PNDIS_WAN_MAC_CHARACTERISTICS;
  * ============================================================================ */
 #if NDIS_SUPPORT_NDIS6
 
-/* NDIS 6 object header types (used by pool parameters and other _PARAMETERS) */
+/* NDIS 6 object header types (values match the Windows SDK ntddndis.h —
+ * binary drivers built against the WDK pass these in NDIS_OBJECT_HEADER). */
 #define NDIS_OBJECT_TYPE_DEFAULT                        0x80
 #define NDIS_OBJECT_TYPE_MINIPORT_INIT_PARAMETERS       0x81
-#define NDIS_OBJECT_TYPE_MINIPORT_DRIVER_CHARACTERISTICS 0x82
-#define NDIS_OBJECT_TYPE_MINIPORT_INTERRUPT             0x83
-#define NDIS_OBJECT_TYPE_DEVICE_OBJECT_ATTRIBUTES       0x84
-#define NDIS_OBJECT_TYPE_BIND_PARAMETERS                0x85
-#define NDIS_OBJECT_TYPE_OPEN_PARAMETERS                0x86
+#define NDIS_OBJECT_TYPE_SG_DMA_DESCRIPTION             0x83
+#define NDIS_OBJECT_TYPE_MINIPORT_INTERRUPT             0x84
+#define NDIS_OBJECT_TYPE_DEVICE_OBJECT_ATTRIBUTES       0x85
+#define NDIS_OBJECT_TYPE_BIND_PARAMETERS                0x86
+#define NDIS_OBJECT_TYPE_OPEN_PARAMETERS                0x87
 #define NDIS_OBJECT_TYPE_RSS_CAPABILITIES               0x88
 #define NDIS_OBJECT_TYPE_RSS_PARAMETERS                 0x89
-#define NDIS_OBJECT_TYPE_OFFLOAD                        0xa7
-#define NDIS_OBJECT_TYPE_OFFLOAD_ENCAPSULATION          0xa8
-#define NDIS_OBJECT_TYPE_CONFIGURATION_OBJECT           0xa9
-#define NDIS_OBJECT_TYPE_DRIVER_WRAPPER_OBJECT          0xaa
-#define NDIS_OBJECT_TYPE_REQUEST_EX                     0xab
-#define NDIS_OBJECT_TYPE_OID_REQUEST                    0x96
-#define NDIS_OBJECT_TYPE_NET_BUFFER_LIST_POOL_PARAMETERS 0x99
-#define NDIS_OBJECT_TYPE_NET_BUFFER_POOL_PARAMETERS      0x9a
-#define NDIS_OBJECT_TYPE_FILTER_DRIVER_CHARACTERISTICS   0x91
-#define NDIS_OBJECT_TYPE_FILTER_ATTACH_PARAMETERS        0x92
-#define NDIS_OBJECT_TYPE_FILTER_PAUSE_PARAMETERS         0x93
-#define NDIS_OBJECT_TYPE_FILTER_RESTART_PARAMETERS       0x94
-#define NDIS_OBJECT_TYPE_FILTER_PARTIAL_CHARACTERISTICS  0x95
-#define NDIS_OBJECT_TYPE_PROTOCOL_DRIVER_CHARACTERISTICS 0x87
-#define NDIS_OBJECT_TYPE_MINIPORT_ADAPTER_GENERAL_ATTRIBUTES     0xa0
-#define NDIS_OBJECT_TYPE_MINIPORT_ADAPTER_REGISTRATION_ATTRIBUTES 0xa1
-#define NDIS_OBJECT_TYPE_MINIPORT_ADAPTER_NATIVE_802_11_ATTRIBUTES 0xa2
-#define NDIS_OBJECT_TYPE_MINIPORT_ADAPTER_OFFLOAD_ATTRIBUTES      0xa3
-#define NDIS_OBJECT_TYPE_STATUS_INDICATION                        0xa4
-#define NDIS_OBJECT_TYPE_TIMER_CHARACTERISTICS                    0x97
+#define NDIS_OBJECT_TYPE_MINIPORT_DRIVER_CHARACTERISTICS 0x8A
+#define NDIS_OBJECT_TYPE_FILTER_DRIVER_CHARACTERISTICS   0x8B
+#define NDIS_OBJECT_TYPE_FILTER_PARTIAL_CHARACTERISTICS  0x8C
+#define NDIS_OBJECT_TYPE_FILTER_ATTRIBUTES               0x8D
+#define NDIS_OBJECT_TYPE_PROTOCOL_DRIVER_CHARACTERISTICS 0x95
+#define NDIS_OBJECT_TYPE_REQUEST_EX                      0x96
+#define NDIS_OBJECT_TYPE_OID_REQUEST                     0x96
+#define NDIS_OBJECT_TYPE_TIMER_CHARACTERISTICS           0x97
+#define NDIS_OBJECT_TYPE_STATUS_INDICATION               0x98
+#define NDIS_OBJECT_TYPE_FILTER_ATTACH_PARAMETERS        0x99
+#define NDIS_OBJECT_TYPE_FILTER_PAUSE_PARAMETERS         0x9A
+#define NDIS_OBJECT_TYPE_FILTER_RESTART_PARAMETERS       0x9B
+#define NDIS_OBJECT_TYPE_PORT_CHARACTERISTICS            0x9C
+#define NDIS_OBJECT_TYPE_PORT_STATE                      0x9D
+#define NDIS_OBJECT_TYPE_MINIPORT_ADAPTER_REGISTRATION_ATTRIBUTES 0x9E
+#define NDIS_OBJECT_TYPE_MINIPORT_ADAPTER_GENERAL_ATTRIBUTES      0x9F
+#define NDIS_OBJECT_TYPE_MINIPORT_ADAPTER_OFFLOAD_ATTRIBUTES      0xA0
+#define NDIS_OBJECT_TYPE_MINIPORT_ADAPTER_NATIVE_802_11_ATTRIBUTES 0xA1
+#define NDIS_OBJECT_TYPE_RESTART_GENERAL_ATTRIBUTES      0xA2
+#define NDIS_OBJECT_TYPE_PROTOCOL_RESTART_PARAMETERS     0xA3
+#define NDIS_OBJECT_TYPE_MINIPORT_ADD_DEVICE_REGISTRATION_ATTRIBUTES 0xA4
+#define NDIS_OBJECT_TYPE_OFFLOAD                         0xA7
+#define NDIS_OBJECT_TYPE_OFFLOAD_ENCAPSULATION           0xA8
+#define NDIS_OBJECT_TYPE_CONFIGURATION_OBJECT            0xA9
+#define NDIS_OBJECT_TYPE_DRIVER_WRAPPER_OBJECT           0xAA
+#define NDIS_OBJECT_TYPE_HD_SPLIT_ATTRIBUTES             0xAB
+
+/* The WDK has no dedicated object types for the NET_BUFFER pool parameter
+ * structs; Windows drivers set Header.Type = NDIS_OBJECT_TYPE_DEFAULT. */
+#define NDIS_OBJECT_TYPE_NET_BUFFER_LIST_POOL_PARAMETERS NDIS_OBJECT_TYPE_DEFAULT
+#define NDIS_OBJECT_TYPE_NET_BUFFER_POOL_PARAMETERS      NDIS_OBJECT_TYPE_DEFAULT
 
 /* Forward declarations so macros and struct members can reference each other */
 struct _NET_BUFFER;
@@ -6387,9 +6399,9 @@ struct _NET_BUFFER_LIST {
   PNET_BUFFER_LIST_CONTEXT Context;
   PNET_BUFFER_LIST         ParentNetBufferList;
   NDIS_HANDLE              NdisPoolHandle;
-  PVOID                    NdisReserved[2];
-  PVOID                    ProtocolReserved[4];
-  PVOID                    MiniportReserved[2];
+  DECLSPEC_ALIGN(MEMORY_ALLOCATION_ALIGNMENT) PVOID NdisReserved[2];
+  DECLSPEC_ALIGN(MEMORY_ALLOCATION_ALIGNMENT) PVOID ProtocolReserved[4];
+  DECLSPEC_ALIGN(MEMORY_ALLOCATION_ALIGNMENT) PVOID MiniportReserved[2];
   PVOID                    Scratch;
   NDIS_HANDLE              SourceHandle;
   ULONG                    NblFlags;
@@ -6634,13 +6646,15 @@ typedef struct _NDIS_OID_REQUEST {
       UINT     BytesNeeded;
     } METHOD_INFORMATION;
   } DATA;
-  UCHAR              NdisReserved[NDIS_OID_REQUEST_NDIS_RESERVED_SIZE];
+  UCHAR              NdisReserved[NDIS_OID_REQUEST_NDIS_RESERVED_SIZE * sizeof(PVOID)];
   UCHAR              MiniportReserved[2 * sizeof(PVOID)];
   UCHAR              SourceReserved[2 * sizeof(PVOID)];
   UCHAR              SupportedRevision;
   UCHAR              Reserved1;
   USHORT             Reserved2;
 } NDIS_OID_REQUEST, *PNDIS_OID_REQUEST;
+#define NDIS_SIZEOF_OID_REQUEST_REVISION_1 \
+  RTL_SIZEOF_THROUGH_FIELD(NDIS_OID_REQUEST, Reserved2)
 
 /* Status indication object */
 #define NDIS_STATUS_INDICATION_REVISION_1 1
@@ -6837,26 +6851,32 @@ typedef struct _NDIS_STATISTICS_INFO {
 #include <ifdef.h>
 #include <ipifcons.h>
 
+/* Flags for NdisOpenConfigurationEx */
+#define NDIS_CONFIG_FLAG_FILTER_INSTANCE_CONFIGURATION 0x00000001
+
+typedef struct _NDIS_CONFIGURATION_OBJECT {
+  NDIS_OBJECT_HEADER Header;
+  NDIS_HANDLE        NdisHandle;
+  ULONG              Flags;
+} NDIS_CONFIGURATION_OBJECT, *PNDIS_CONFIGURATION_OBJECT;
+#define NDIS_CONFIGURATION_OBJECT_REVISION_1 1
+#define NDIS_SIZEOF_CONFIGURATION_OBJECT_REVISION_1 \
+  RTL_SIZEOF_THROUGH_FIELD(NDIS_CONFIGURATION_OBJECT, Flags)
+
 typedef struct _NDIS_MINIPORT_INIT_PARAMETERS {
   NDIS_OBJECT_HEADER          Header;
   ULONG                       Flags;
-  NDIS_STRING                 AdapterName;
-  NDIS_HANDLE                 MiniportAdapterContext;
-  NDIS_MEDIUM                 MediaType;
-  PVOID                       AllocatedResources;          /* PCM_RESOURCE_LIST */
-  PVOID                       IMDeviceInstanceContext;
-  PVOID                       MiniportAddDeviceContext;
-  ULONG                       IfIndex;
-  ULONG64                     NetLuid;
-  PVOID                       PnPCapabilities;             /* PNDIS_PNP_CAPABILITIES */
-  PVOID                       ResourceList;                /* PCM_RESOURCE_LIST */
-  NDIS_HANDLE                 PhysicalDeviceObject;
-  NDIS_STRING                 SymbolicName;
-  ULONG                       SystemSpecific1;
-  ULONG                       SystemSpecific2;
-  ULONG                       NdisMaximumDriverVersion;
+  PNDIS_RESOURCE_LIST         AllocatedResources;
+  NDIS_HANDLE                 IMDeviceInstanceContext;
+  NDIS_HANDLE                 MiniportAddDeviceContext;
+  NET_IFINDEX                 IfIndex;
+  NET_LUID                    NetLuid;
+  PVOID                       DefaultPortAuthStates;       /* PNDIS_PORT_AUTHENTICATION_PARAMETERS */
+  PVOID                       PciDeviceCustomProperties;   /* PNDIS_PCI_DEVICE_CUSTOM_PROPERTIES */
 } NDIS_MINIPORT_INIT_PARAMETERS, *PNDIS_MINIPORT_INIT_PARAMETERS;
 #define NDIS_MINIPORT_INIT_PARAMETERS_REVISION_1 1
+#define NDIS_SIZEOF_MINIPORT_INIT_PARAMETER_REVISION_1 \
+  RTL_SIZEOF_THROUGH_FIELD(NDIS_MINIPORT_INIT_PARAMETERS, PciDeviceCustomProperties)
 
 /* Pause / restart / shutdown / pnp parameter objects */
 typedef enum _NDIS_HALT_ACTION {
@@ -6881,14 +6901,60 @@ typedef enum _NDIS_PAUSE_FUNCTIONS {
 
 typedef struct _NDIS_MINIPORT_PAUSE_PARAMETERS {
   NDIS_OBJECT_HEADER Header;
+  ULONG              Flags;
   ULONG              PauseReason;
 } NDIS_MINIPORT_PAUSE_PARAMETERS, *PNDIS_MINIPORT_PAUSE_PARAMETERS;
+#define NDIS_MINIPORT_PAUSE_PARAMETERS_REVISION_1 1
+#define NDIS_SIZEOF_MINIPORT_PAUSE_PARAMETERS_REVISION_1 \
+  RTL_SIZEOF_THROUGH_FIELD(NDIS_MINIPORT_PAUSE_PARAMETERS, PauseReason)
+
+typedef struct _NDIS_RESTART_ATTRIBUTES NDIS_RESTART_ATTRIBUTES, *PNDIS_RESTART_ATTRIBUTES;
+typedef struct _NDIS_RESTART_ATTRIBUTES {
+  PNDIS_RESTART_ATTRIBUTES Next;
+  NDIS_OID                 Oid;
+  ULONG                    DataLength;
+  DECLSPEC_ALIGN(MEMORY_ALLOCATION_ALIGNMENT) UCHAR Data[1];
+} NDIS_RESTART_ATTRIBUTES, *PNDIS_RESTART_ATTRIBUTES;
+
+typedef struct _NDIS_RESTART_GENERAL_ATTRIBUTES {
+  NDIS_OBJECT_HEADER     Header;
+  ULONG                  MtuSize;
+  ULONG64                MaxXmitLinkSpeed;
+  ULONG64                MaxRcvLinkSpeed;
+  ULONG                  LookaheadSize;
+  ULONG                  MacOptions;
+  ULONG                  SupportedPacketFilters;
+  ULONG                  MaxMulticastListSize;
+  PVOID                  RecvScaleCapabilities;       /* PNDIS_RECEIVE_SCALE_CAPABILITIES (declared later) */
+  NET_IF_ACCESS_TYPE     AccessType;
+  ULONG                  Flags;
+  NET_IF_CONNECTION_TYPE ConnectionType;
+  ULONG                  SupportedStatistics;
+  ULONG                  DataBackFillSize;
+  ULONG                  ContextBackFillSize;
+  PNDIS_OID              SupportedOidList;
+  ULONG                  SupportedOidListLength;
+#if (NDIS_SUPPORT_NDIS620)
+  ULONG                  MaxLookaheadSizeAccessed;
+#endif
+} NDIS_RESTART_GENERAL_ATTRIBUTES, *PNDIS_RESTART_GENERAL_ATTRIBUTES;
+#define NDIS_RESTART_GENERAL_ATTRIBUTES_REVISION_1 1
+#define NDIS_SIZEOF_RESTART_GENERAL_ATTRIBUTES_REVISION_1 \
+  RTL_SIZEOF_THROUGH_FIELD(NDIS_RESTART_GENERAL_ATTRIBUTES, SupportedOidListLength)
+#if (NDIS_SUPPORT_NDIS620)
+#define NDIS_RESTART_GENERAL_ATTRIBUTES_REVISION_2 2
+#define NDIS_SIZEOF_RESTART_GENERAL_ATTRIBUTES_REVISION_2 \
+  RTL_SIZEOF_THROUGH_FIELD(NDIS_RESTART_GENERAL_ATTRIBUTES, MaxLookaheadSizeAccessed)
+#endif
 
 typedef struct _NDIS_MINIPORT_RESTART_PARAMETERS {
-  NDIS_OBJECT_HEADER Header;
-  NDIS_HANDLE        AllocatedResources;
-  ULONG              RestartAttributes;
+  NDIS_OBJECT_HEADER       Header;
+  PNDIS_RESTART_ATTRIBUTES RestartAttributes;
+  ULONG                    Flags;
 } NDIS_MINIPORT_RESTART_PARAMETERS, *PNDIS_MINIPORT_RESTART_PARAMETERS;
+#define NDIS_MINIPORT_RESTART_PARAMETERS_REVISION_1 1
+#define NDIS_SIZEOF_MINIPORT_RESTART_PARAMETERS_REVISION_1 \
+  RTL_SIZEOF_THROUGH_FIELD(NDIS_MINIPORT_RESTART_PARAMETERS, Flags)
 
 #define NET_DEVICE_PNP_EVENT_REVISION_1 1
 #define NDIS_SIZEOF_NET_DEVICE_PNP_EVENT_REVISION_1 \
@@ -6979,6 +7045,20 @@ typedef VOID
   _In_ NDIS_HANDLE MiniportAdapterContext,
   _In_ PVOID       RequestId);
 typedef MINIPORT_CANCEL_OID_REQUEST (*MINIPORT_CANCEL_OID_REQUEST_HANDLER);
+
+#if (NDIS_SUPPORT_NDIS61)
+typedef NDIS_STATUS
+(NTAPI MINIPORT_DIRECT_OID_REQUEST)(
+  _In_ NDIS_HANDLE MiniportAdapterContext,
+  _In_ PNDIS_OID_REQUEST OidRequest);
+typedef MINIPORT_DIRECT_OID_REQUEST (*MINIPORT_DIRECT_OID_REQUEST_HANDLER);
+
+typedef VOID
+(NTAPI MINIPORT_CANCEL_DIRECT_OID_REQUEST)(
+  _In_ NDIS_HANDLE MiniportAdapterContext,
+  _In_ PVOID       RequestId);
+typedef MINIPORT_CANCEL_DIRECT_OID_REQUEST (*MINIPORT_CANCEL_DIRECT_OID_REQUEST_HANDLER);
+#endif /* NDIS_SUPPORT_NDIS61 */
 
 typedef VOID
 (NTAPI MINIPORT_DEVICE_PNP_EVENT_NOTIFY)(
@@ -7184,10 +7264,20 @@ typedef struct _NDIS_MINIPORT_DRIVER_CHARACTERISTICS {
   MINIPORT_DEVICE_PNP_EVENT_NOTIFY_HANDLER DevicePnPEventNotifyHandler;
   MINIPORT_SHUTDOWN_HANDLER                ShutdownHandlerEx;
   MINIPORT_CANCEL_OID_REQUEST_HANDLER      CancelOidRequestHandler;
+#if (NDIS_SUPPORT_NDIS61)
+  MINIPORT_DIRECT_OID_REQUEST_HANDLER      DirectOidRequestHandler;
+  MINIPORT_CANCEL_DIRECT_OID_REQUEST_HANDLER CancelDirectOidRequestHandler;
+#endif /* NDIS_SUPPORT_NDIS61 */
 } NDIS_MINIPORT_DRIVER_CHARACTERISTICS, *PNDIS_MINIPORT_DRIVER_CHARACTERISTICS;
 
 #define NDIS_MINIPORT_DRIVER_CHARACTERISTICS_REVISION_1  1
 #define NDIS_MINIPORT_DRIVER_CHARACTERISTICS_REVISION_2  2
+#define NDIS_SIZEOF_MINIPORT_DRIVER_CHARACTERISTICS_REVISION_1 \
+  RTL_SIZEOF_THROUGH_FIELD(NDIS_MINIPORT_DRIVER_CHARACTERISTICS, CancelOidRequestHandler)
+#if (NDIS_SUPPORT_NDIS61)
+#define NDIS_SIZEOF_MINIPORT_DRIVER_CHARACTERISTICS_REVISION_2 \
+  RTL_SIZEOF_THROUGH_FIELD(NDIS_MINIPORT_DRIVER_CHARACTERISTICS, CancelDirectOidRequestHandler)
+#endif /* NDIS_SUPPORT_NDIS61 */
 
 #define NDIS_MINIPORT_ATTRIBUTES_HARDWARE_DEVICE       0x00000001
 #define NDIS_MINIPORT_ATTRIBUTES_NDIS_WDM              0x00000002
@@ -7245,17 +7335,27 @@ typedef struct _NDIS_MINIPORT_ADAPTER_GENERAL_ATTRIBUTES {
   NET_IF_CONNECTION_TYPE          ConnectionType;
   NET_IFTYPE                      IfType;
   BOOLEAN                         IfConnectorPresent;
-  NDIS_SUPPORTED_PAUSE_FUNCTIONS  SupportedPauseFunctions;
+  ULONG                           SupportedStatistics; /* bitmask of NDIS_STATISTICS_*_SUPPORTED flags */
+  NDIS_SUPPORTED_PAUSE_FUNCTIONS  SupportedPauseFunctions; /* enum is 4 bytes, matches WDK ULONG */
   ULONG                           DataBackFillSize;
   ULONG                           ContextBackFillSize;
   PNDIS_OID                       SupportedOidList;
   ULONG                           SupportedOidListLength;
   ULONG                           AutoNegotiationFlags;
-  ULONG                           SupportedStatistics; /* bitmask of NDIS_STATISTICS_* flags */
+#if (NDIS_SUPPORT_NDIS620)
+  PNDIS_PM_CAPABILITIES           PowerManagementCapabilitiesEx;
+#endif
 } NDIS_MINIPORT_ADAPTER_GENERAL_ATTRIBUTES, *PNDIS_MINIPORT_ADAPTER_GENERAL_ATTRIBUTES;
 
 #define NDIS_MINIPORT_ADAPTER_GENERAL_ATTRIBUTES_REVISION_1 1
 #define NDIS_MINIPORT_ADAPTER_GENERAL_ATTRIBUTES_DEFINED    1
+#define NDIS_SIZEOF_MINIPORT_ADAPTER_GENERAL_ATTRIBUTES_REVISION_1 \
+  RTL_SIZEOF_THROUGH_FIELD(NDIS_MINIPORT_ADAPTER_GENERAL_ATTRIBUTES, AutoNegotiationFlags)
+#if (NDIS_SUPPORT_NDIS620)
+#define NDIS_MINIPORT_ADAPTER_GENERAL_ATTRIBUTES_REVISION_2 2
+#define NDIS_SIZEOF_MINIPORT_ADAPTER_GENERAL_ATTRIBUTES_REVISION_2 \
+  RTL_SIZEOF_THROUGH_FIELD(NDIS_MINIPORT_ADAPTER_GENERAL_ATTRIBUTES, PowerManagementCapabilitiesEx)
+#endif
 
 typedef union _NDIS_MINIPORT_ADAPTER_ATTRIBUTES {
   NDIS_OBJECT_HEADER                                Header;
