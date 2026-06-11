@@ -16,8 +16,12 @@
 //
 // Windows NT Build 3790.3959
 //
+#ifndef VER_PRODUCTBUILD
 #define VER_PRODUCTBUILD                    3790
+#endif
+#ifndef VER_PRODUCTBUILD_QFE
 #define VER_PRODUCTBUILD_QFE                3959
+#endif
 
 //
 // Windows NT Version (derived from build target)
