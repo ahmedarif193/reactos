@@ -93,11 +93,26 @@ NTAPI
 ExArchPostHalInitSystemPhase1(
     VOID)
 {
+    KIRQL CurrentIrql;
+
     /*
      * From this point the MM bootstrap mappings are in place and the timer
      * PPI has been re-enabled, so IRQL transitions may use HAL's GIC PMR path.
+     * HAL phase 1 ran while KiHalInitialized was FALSE; its HIGH_LEVEL sections
+     * therefore lowered through the DAIF-only bootstrap path and can leave
+     * DAIF.I set. Open the normal interrupt window explicitly here.
      */
+    CurrentIrql = KeGetCurrentIrql();
     KiHalInitialized = TRUE;
-    HalSetGicPriorityMask(KeGetCurrentIrql());
-    __asm__ __volatile__("isb" ::: "memory");
+    HalSetGicPriorityMask(CurrentIrql);
+    __asm__ __volatile__("dsb sy" ::: "memory");
+
+    if (CurrentIrql < HIGH_LEVEL)
+    {
+        __asm__ __volatile__("msr daifclr, #0xb\n\tisb" ::: "memory");
+    }
+    else
+    {
+        __asm__ __volatile__("isb" ::: "memory");
+    }
 }
