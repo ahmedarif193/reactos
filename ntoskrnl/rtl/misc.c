@@ -45,7 +45,7 @@ RtlGetVersion(IN OUT PRTL_OSVERSIONINFOW lpVersionInformation)
     /* Return the basics */
     lpVersionInformation->dwMajorVersion = NtMajorVersion;
     lpVersionInformation->dwMinorVersion = NtMinorVersion;
-    lpVersionInformation->dwBuildNumber = NtBuildNumber & 0x3FFF;
+    lpVersionInformation->dwBuildNumber = NtBuildNumber & 0xFFFF;
     lpVersionInformation->dwPlatformId = VER_PLATFORM_WIN32_NT;
 
     /* Check if this is the extended version */

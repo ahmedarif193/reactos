@@ -622,7 +622,7 @@ PsGetVersion(OUT PULONG MajorVersion OPTIONAL,
 {
     if (MajorVersion) *MajorVersion = NtMajorVersion;
     if (MinorVersion) *MinorVersion = NtMinorVersion;
-    if (BuildNumber ) *BuildNumber  = NtBuildNumber & 0x3FFF;
+    if (BuildNumber ) *BuildNumber  = NtBuildNumber & 0xFFFF;
 
     if (CSDVersion)
     {
