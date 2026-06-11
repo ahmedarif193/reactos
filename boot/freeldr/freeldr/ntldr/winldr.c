@@ -16,7 +16,7 @@
 #include <drivers/bootvid/framebuf.h> // For CM_FRAMEBUF_DEVICE_DATA
 
 #if defined(_M_ARM64)
-#include <arch/arm64/arm64.h>          // For Arm64ClearIdentityMappings
+#include <arch/arm64/arm64.h>          // For the ARM64 loader MMU hooks
 #endif
 
 #include <debug.h>
@@ -1581,7 +1581,6 @@ LoadAndBootWindowsCommon(
      */
     WinLdrSetupMachineDependent(LoaderBlock);
     WinLdrSetupMemoryLayout(LoaderBlock);
-    extern VOID Arm64PreparePageTables(VOID);
     Arm64PreparePageTables();
 
     /* Exit firmware services after the final loader layout is mapped. */
