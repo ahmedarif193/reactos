@@ -233,9 +233,8 @@ SetupVaRegions(
     PfnDbSize = HighestPfn * sizeof(MMPFN) + _1MB;
     ReserveVaRegion(AssignedRegionPfnDatabase, MI_PFN_DATABASE, PfnDbSize);
 
-    /* Reserve 512 GB for non-paged pool. It currently follows the PFN
-     * database within the same 512 GB slot (PXI 501). */
-    ReserveVaRegion(AssignedRegionNonPagedPool, MI_PFN_DATABASE, 512 * _1GB);
+    /* Reserve 128 GB for non-paged pool */
+    RandomizeVaRegion(AssignedRegionNonPagedPool, 128 * _1GB, PDE_MAPPED_VA);
 
     /* Reserve 128 GB for paged pool */
     RandomizeVaRegion(AssignedRegionPagedPool, 128 * _1GB, PDE_MAPPED_VA);
