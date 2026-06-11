@@ -198,6 +198,16 @@ MmDbgCopyMemory(IN ULONG64 Address,
             return STATUS_UNSUCCESSFUL;
         }
 
+#if defined(_M_ARM64)
+        if (!MiArm64ProbeForAccess(TargetAddress, (Flags & MMDBG_COPY_WRITE) != 0))
+        {
+            KdpDprintf("MmDbgCopyMemory: Failing %s for unprobed Virtual Address 0x%p\n",
+                       Flags & MMDBG_COPY_WRITE ? "write" : "read",
+                       TargetAddress);
+            return STATUS_UNSUCCESSFUL;
+        }
+#endif
+
         /* Not handling session space correctly yet */
         if (MmIsSessionAddress(TargetAddress))
         {
