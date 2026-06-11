@@ -40,6 +40,22 @@ KMT_TESTFUNC Test_IoMdl;
 KMT_TESTFUNC Test_IoVolume;
 KMT_TESTFUNC Test_KdSystemDebugControl;
 KMT_TESTFUNC Test_KeApc;
+#ifdef _M_ARM64
+KMT_TESTFUNC Test_HalArm64Layout;
+KMT_TESTFUNC Test_KdArm64Layout;
+KMT_TESTFUNC Test_KeArm64;
+KMT_TESTFUNC Test_KeArm64Dispatcher;
+KMT_TESTFUNC Test_KeArm64DpcIpi;
+KMT_TESTFUNC Test_KeArm64Frames;
+KMT_TESTFUNC Test_KeArm64Intrinsics;
+KMT_TESTFUNC Test_KeArm64Irql;
+KMT_TESTFUNC Test_KeArm64LoaderCache;
+KMT_TESTFUNC Test_KeArm64PcrPrcb;
+KMT_TESTFUNC Test_KeArm64Smp;
+KMT_TESTFUNC Test_KeArm64SpinLock;
+KMT_TESTFUNC Test_KeArm64ThreadProcess;
+KMT_TESTFUNC Test_RtlArm64UnwindLayout;
+#endif
 KMT_TESTFUNC Test_KeDeviceQueue;
 KMT_TESTFUNC Test_KeDpc;
 KMT_TESTFUNC Test_KeEvent;
@@ -132,6 +148,22 @@ const KMT_TEST TestList[] =
     { "IoVolume",                           Test_IoVolume },
     { "KdSystemDebugControl",               Test_KdSystemDebugControl },
     { "KeApc",                              Test_KeApc },
+#ifdef _M_ARM64
+    { "HalArm64Layout",                     Test_HalArm64Layout },
+    { "KdArm64Layout",                      Test_KdArm64Layout },
+    { "KeArm64",                            Test_KeArm64 },
+    { "KeArm64Dispatcher",                  Test_KeArm64Dispatcher },
+    { "KeArm64DpcIpi",                      Test_KeArm64DpcIpi },
+    { "KeArm64Frames",                      Test_KeArm64Frames },
+    { "KeArm64Intrinsics",                  Test_KeArm64Intrinsics },
+    { "KeArm64Irql",                        Test_KeArm64Irql },
+    { "KeArm64LoaderCache",                 Test_KeArm64LoaderCache },
+    { "KeArm64PcrPrcb",                     Test_KeArm64PcrPrcb },
+    { "KeArm64Smp",                         Test_KeArm64Smp },
+    { "KeArm64SpinLock",                    Test_KeArm64SpinLock },
+    { "KeArm64ThreadProcess",               Test_KeArm64ThreadProcess },
+    { "RtlArm64UnwindLayout",               Test_RtlArm64UnwindLayout },
+#endif
     { "KeDeviceQueue",                      Test_KeDeviceQueue },
     { "KeDpc",                              Test_KeDpc },
     { "KeEvent",                            Test_KeEvent },

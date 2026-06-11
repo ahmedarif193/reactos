@@ -116,11 +116,15 @@ DEFINE_RELEASE(ReleaseExp,            TRUE,  KeReleaseSpinLock(SpinLock, CheckDa
 DEFINE_ACQUIRE(AcquireSynch,          TRUE,  CheckData->Irql = KeAcquireSpinLockRaiseToSynch(SpinLock))
 
 DEFINE_ACQUIRE(AcquireInStackQueued,  TRUE,  KeAcquireInStackQueuedSpinLock(SpinLock, &CheckData->QueueHandle))
+#ifndef _M_ARM64
 DEFINE_ACQUIRE(AcquireInStackSynch,   TRUE,  KeAcquireInStackQueuedSpinLockRaiseToSynch(SpinLock, &CheckData->QueueHandle))
+#endif
 DEFINE_RELEASE(ReleaseInStackQueued,  TRUE,  KeReleaseInStackQueuedSpinLock(&CheckData->QueueHandle))
 
 DEFINE_ACQUIRE(AcquireQueued,         TRUE,  CheckData->Irql = KeAcquireQueuedSpinLock(CheckData->QueueNumber))
+#ifndef _M_ARM64
 DEFINE_ACQUIRE(AcquireQueuedSynch,    TRUE,  CheckData->Irql = KeAcquireQueuedSpinLockRaiseToSynch(CheckData->QueueNumber))
+#endif
 DEFINE_RELEASE(ReleaseQueued,         TRUE,  KeReleaseQueuedSpinLock(CheckData->QueueNumber, CheckData->Irql))
 
 DEFINE_ACQUIRE(AcquireNoRaise,        FALSE, KeAcquireSpinLockAtDpcLevel(SpinLock))
@@ -154,11 +158,13 @@ BOOLEAN TryQueued(PKSPIN_LOCK SpinLock, PCHECK_DATA CheckData) {
     ASSERT(Ret == FALSE || Ret == TRUE);
     return (BOOLEAN)Ret;
 }
+#ifndef _M_ARM64
 BOOLEAN TryQueuedSynch(PKSPIN_LOCK SpinLock, PCHECK_DATA CheckData) {
     BOOLEAN Ret = KeTryToAcquireQueuedSpinLockRaiseToSynch(CheckData->QueueNumber, &CheckData->Irql);
     CheckData->IsAcquired = TRUE;
     return Ret;
 }
+#endif
 BOOLEAN TryNoRaise(PKSPIN_LOCK SpinLock, PCHECK_DATA CheckData) {
     BOOLEAN Ret = pKeTryToAcquireSpinLockAtDpcLevel(SpinLock);
     return Ret;
@@ -384,10 +390,14 @@ START_TEST(KeSpinLock)
         { CheckLock,        DISPATCH_LEVEL, AcquireNormal,        ReleaseNormal,        NULL,           AcquireInt,            ReleaseInt,            NULL },
         { CheckLock,        SynchIrql,      AcquireSynch,         ReleaseNormal,        NULL,           NULL,                  NULL,                  NULL },
         { CheckQueueHandle, DISPATCH_LEVEL, AcquireInStackQueued, ReleaseInStackQueued, NULL,           AcquireInStackNoRaise, ReleaseInStackNoRaise, NULL },
+#ifndef _M_ARM64
         { CheckQueueHandle, SynchIrql,      AcquireInStackSynch,  ReleaseInStackQueued, NULL,           NULL,                  NULL,                  NULL },
+#endif
         { CheckQueueHandle, DISPATCH_LEVEL, AcquireInStackQueued, ReleaseInStackQueued, NULL,           AcquireInStackForDpc,  ReleaseInStackForDpc,  NULL },
         { CheckQueue,       DISPATCH_LEVEL, AcquireQueued,        ReleaseQueued,        TryQueued,      NULL,                  NULL,                  NULL,       LockQueuePfnLock },
+#ifndef _M_ARM64
         { CheckQueue,       SynchIrql,      AcquireQueuedSynch,   ReleaseQueued,        TryQueuedSynch, NULL,                  NULL,                  NULL,       LockQueuePfnLock },
+#endif
     };
     CHECK_DATA TestDataWin7[] = 
     {
@@ -396,7 +406,9 @@ START_TEST(KeSpinLock)
         { CheckLock,        DISPATCH_LEVEL, AcquireNormal,        ReleaseNormal,        NULL,           AcquireInt,            ReleaseInt,            NULL },
         { CheckLock,        SynchIrql,      AcquireSynch,         ReleaseNormal,        NULL,           NULL,                  NULL,                  NULL },
         { CheckQueueHandle, DISPATCH_LEVEL, AcquireInStackQueued, ReleaseInStackQueued, NULL,           AcquireInStackNoRaise, ReleaseInStackNoRaise, NULL },
+#ifndef _M_ARM64
         { CheckQueueHandle, SynchIrql,      AcquireInStackSynch,  ReleaseInStackQueued, NULL,           NULL,                  NULL,                  NULL },
+#endif
         { CheckQueueHandle, DISPATCH_LEVEL, AcquireInStackQueued, ReleaseInStackQueued, NULL,           AcquireInStackForDpc,  ReleaseInStackForDpc,  NULL },
     };
     CHECK_DATA *TestData;
