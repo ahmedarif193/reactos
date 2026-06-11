@@ -541,7 +541,7 @@ KDDEBUGGER_DATA64 KdDebuggerDataBlock =
     PtrToUL64(RtlpBreakWithStatusInstruction),
     0,
     FIELD_OFFSET(KTHREAD, CallbackStack),
-#if defined(_M_ARM) || defined(_M_AMD64)
+#if defined(_M_ARM) || defined(_M_AMD64) || (defined(_M_ARM64) && (NTDDI_VERSION >= NTDDI_WIN8))
     0,
     0,
 #else

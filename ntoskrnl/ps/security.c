@@ -147,13 +147,17 @@ PspWriteTebImpersonationInfo(IN PETHREAD Thread,
             if (IsImpersonating)
             {
                 /* Set TEB data */
+#if (NTDDI_VERSION < NTDDI_WIN10)
                 Teb->ImpersonationLocale = -1;
+#endif
                 Teb->IsImpersonating = 1;
             }
             else
             {
                 /* Set TEB data */
+#if (NTDDI_VERSION < NTDDI_WIN10)
                 Teb->ImpersonationLocale = 0;
+#endif
                 Teb->IsImpersonating = 0;
             }
         }
