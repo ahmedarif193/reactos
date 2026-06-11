@@ -138,6 +138,8 @@ typedef struct _HAL_ARM64_AP_TRAMPOLINE_DATA
     /* Debug progress tracking (written by AP, read by BSP after timeout) */
     volatile UINT32 Progress;  /* 0x68: AP progress breadcrumb */
     UINT32 ProgressPad;        /* 0x6C: Alignment padding */
+
+    UINT64 CpacrEl1;           /* 0x70 */
 } HAL_ARM64_AP_TRAMPOLINE_DATA, *PHAL_ARM64_AP_TRAMPOLINE_DATA;
 
 /* External references to assembly trampoline */
@@ -438,6 +440,11 @@ HalpArm64PrepareApData(
     HalpApDataVa->MairEl1 = HalpArm64ReadMairEl1();
     HalpApDataVa->TcrEl1 = HalpArm64ReadTcrEl1();
     HalpApDataVa->SctlrEl1 = HalpArm64ReadSctlrEl1();
+    {
+        UINT64 Cpacr;
+        __asm__ __volatile__("mrs %0, cpacr_el1" : "=r"(Cpacr));
+        HalpApDataVa->CpacrEl1 = Cpacr;
+    }
     HalpApDataVa->VbarEl1 = HalpArm64ReadVbarEl1();
 
     /* Set up entry point and stack */

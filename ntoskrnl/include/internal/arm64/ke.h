@@ -496,3 +496,7 @@ PKTRAP_FRAME
 KiArm64ActiveInterruptTrapFrame(VOID);
 
 #endif
+
+VOID
+NTAPI
+KiArm64SmpStress(VOID);
