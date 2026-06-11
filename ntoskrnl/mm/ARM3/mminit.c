@@ -278,6 +278,9 @@ ULONG_PTR MmUserProbeAddress;
 PVOID MmHighestUserAddress;
 PVOID MmSystemRangeStart;
 
+/* Writable alias of KUSER_SHARED_DATA; equals the canonical VA until an arch makes that VA read-only */
+PKUSER_SHARED_DATA MmWriteableSharedUserData = SharedUserData;
+
 /* And these store the respective highest PTE/PDE address */
 PMMPTE MiHighestUserPte;
 PMMPDE MiHighestUserPde;
@@ -2888,14 +2891,14 @@ MmArmInitSystem(IN ULONG Phase,
 
         /* Now setup the shared user data fields */
         ASSERT(SharedUserData->NumberOfPhysicalPages == 0);
-        SharedUserData->NumberOfPhysicalPages = MmNumberOfPhysicalPages;
-        SharedUserData->LargePageMinimum = 0;
+        MmWriteableSharedUserData->NumberOfPhysicalPages = MmNumberOfPhysicalPages;
+        MmWriteableSharedUserData->LargePageMinimum = 0;
 
         /* Check for workstation (Wi for WinNT) */
         if (MmProductType == '\0i\0W')
         {
             /* Set Windows NT Workstation product type */
-            SharedUserData->NtProductType = NtProductWinNt;
+            MmWriteableSharedUserData->NtProductType = NtProductWinNt;
             MmProductType = 0;
 
             /* For this product, we wait till the last moment to throttle */
@@ -2908,12 +2911,12 @@ MmArmInitSystem(IN ULONG Phase,
             if (MmProductType == '\0a\0L')
             {
                 /* This is a domain controller */
-                SharedUserData->NtProductType = NtProductLanManNt;
+                MmWriteableSharedUserData->NtProductType = NtProductLanManNt;
             }
             else
             {
                 /* Otherwise it must be a normal server (Se for ServerNT) */
-                SharedUserData->NtProductType = NtProductServer;
+                MmWriteableSharedUserData->NtProductType = NtProductServer;
             }
 
             /* Set the product type, and make the system more aggressive with low memory */

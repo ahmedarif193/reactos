@@ -442,7 +442,7 @@ KiInitializeKernel(_Inout_ PKPROCESS InitProcess,
 
         /* ARM64 uses 16-byte SLIST headers and 128-bit CAS */
         RtlpUse16ByteSLists = TRUE;
-        SharedUserData->ProcessorFeatures[PF_COMPARE_EXCHANGE128] = TRUE;
+        MmWriteableSharedUserData->ProcessorFeatures[PF_COMPARE_EXCHANGE128] = TRUE;
 
         KeLowerIrql(APC_LEVEL);
         KiInitSystem();

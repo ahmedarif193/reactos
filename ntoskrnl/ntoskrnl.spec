@@ -860,6 +860,7 @@
 @ stdcall MmUnmapViewOfSection(ptr ptr)
 @ stdcall MmUnsecureVirtualMemory(ptr)
 @ extern MmUserProbeAddress
+@ extern MmWriteableSharedUserData
 @ extern NlsAnsiCodePage
 @ extern NlsLeadByteInfo
 @ extern NlsMbCodePageTag

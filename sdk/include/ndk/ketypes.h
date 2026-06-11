@@ -830,6 +830,15 @@ typedef struct _KUSER_SHARED_DATA
 #endif
 } KUSER_SHARED_DATA, *PKUSER_SHARED_DATA;
 
+#endif
+
+//
+// Win10 19H1+ writable alias of KUSER_SHARED_DATA; the canonical kernel VA is mapped read-only
+//
+extern NTSYSAPI struct _KUSER_SHARED_DATA *MmWriteableSharedUserData;
+
+#ifdef NTOS_MODE_USER
+
 //
 // VDM Structures
 //

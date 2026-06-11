@@ -431,7 +431,7 @@ KdSendPacket(
 
         KD_DEBUGGER_NOT_PRESENT = SendPktResult->Info.KdDebuggerNotPresent;
         if (SendPktResult->Info.KdDebuggerEnabledAvailable)
-            SharedUserData->KdDebuggerEnabled = SendPktResult->Info.KdDebuggerEnabled != 0;
+            MmWriteableSharedUserData->KdDebuggerEnabled = SendPktResult->Info.KdDebuggerEnabled != 0;
 
         if (SendPktResult->Info.RetryKdSendPacket)
         {

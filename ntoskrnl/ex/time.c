@@ -336,8 +336,8 @@ ExRefreshTimeZoneInformation(IN PLARGE_INTEGER CurrentBootTime)
     ExpTimeZoneBias = NewTimeZoneBias;
 
     /* Change SharedUserData->TimeZoneBias for user-mode applications */
-    KiWriteSystemTime(&SharedUserData->TimeZoneBias, ExpTimeZoneBias);
-    SharedUserData->TimeZoneId = ExpTimeZoneId;
+    KiWriteSystemTime(&MmWriteableSharedUserData->TimeZoneBias, ExpTimeZoneBias);
+    MmWriteableSharedUserData->TimeZoneId = ExpTimeZoneId;
 
     /* Convert boot time from local time to UTC */
     KeBootTime.QuadPart += ExpTimeZoneBias.QuadPart;
@@ -347,7 +347,7 @@ ExRefreshTimeZoneInformation(IN PLARGE_INTEGER CurrentBootTime)
 
     /* Change it for user-mode applications */
     CurrentTime.QuadPart += ExpTimeZoneBias.QuadPart;
-    KiWriteSystemTime(&SharedUserData->SystemTime, CurrentTime);
+    KiWriteSystemTime(&MmWriteableSharedUserData->SystemTime, CurrentTime);
 
     /* Return success */
     return TRUE;
@@ -420,8 +420,8 @@ ExpSetTimeZoneInformation(PRTL_TIME_ZONE_INFORMATION TimeZoneInformation)
                   sizeof(RTL_TIME_ZONE_INFORMATION));
 
     /* Set the new time zone information */
-    KiWriteSystemTime(&SharedUserData->TimeZoneBias, ExpTimeZoneBias);
-    SharedUserData->TimeZoneId = ExpTimeZoneId;
+    KiWriteSystemTime(&MmWriteableSharedUserData->TimeZoneBias, ExpTimeZoneBias);
+    MmWriteableSharedUserData->TimeZoneId = ExpTimeZoneId;
 
     DPRINT("New time zone bias: %I64d minutes\n",
             ExpTimeZoneBias.QuadPart / TICKSPERMINUTE);
