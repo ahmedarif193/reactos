@@ -608,7 +608,7 @@ MmCreatePeb(IN PEPROCESS Process,
         //
         Peb->OSMajorVersion = NtMajorVersion;
         Peb->OSMinorVersion = NtMinorVersion;
-        Peb->OSBuildNumber = (USHORT)(NtBuildNumber & 0x3FFF);
+        Peb->OSBuildNumber = (USHORT)(NtBuildNumber & 0xFFFF);
         Peb->OSPlatformId = VER_PLATFORM_WIN32_NT;
         Peb->OSCSDVersion = (USHORT)CmNtCSDVersion;
 
