@@ -359,7 +359,6 @@ IopCompleteRequest(IN PKAPC Apc,
         /* Check if we have an event or a file object */
         if (Irp->UserEvent)
         {
-            { static LONG IrpdLogBudget = 8; if (InterlockedDecrement(&IrpdLogBudget) >= 0) DbgPrint("IRPD irp=%p ev=%p type=%02x flags=%lx st=%lx thr=%p\n", Irp, Irp->UserEvent, Irp->UserEvent->Header.Type, Irp->Flags, Irp->IoStatus.Status, PsGetCurrentThread()); }
             /* At the very least, this is a PKEVENT, so signal it always */
             KeSetEvent(Irp->UserEvent, 0, FALSE);
 
@@ -1561,7 +1560,6 @@ IofCompleteRequest(IN PIRP Irp,
     /* Make sure the IRP isn't canceled */
     if (!Irp->Cancel)
     {
-        { static LONG IrpqLogBudget = 8; if (Irp->UserEvent && InterlockedDecrement(&IrpqLogBudget) >= 0) DbgPrint("IRPQ irp=%p ev=%p type=%02x iosb=%p thr=%p st=%lx irql=%u dpcact=%u cur=%p sad=%d\n", Irp, Irp->UserEvent, Irp->UserEvent->Header.Type, Irp->UserIosb, Thread, Irp->IoStatus.Status, KeGetCurrentIrql(), KeGetCurrentPrcb()->DpcRoutineActive, PsGetCurrentThread(), Thread->Tcb.SpecialApcDisable); }
         /* Initialize the APC */
         KeInitializeApc(&Irp->Tail.Apc,
                         &Thread->Tcb,
