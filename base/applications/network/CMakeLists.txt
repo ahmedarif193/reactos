@@ -14,4 +14,5 @@ add_subdirectory(telnet)
 add_subdirectory(tracert)
 add_subdirectory(whois)
 add_subdirectory(wlanconf)
+add_subdirectory(wlanscan)
 
