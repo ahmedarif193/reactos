@@ -91,6 +91,7 @@ typedef struct tagGESTUREINFO {
 } GESTUREINFO, *PGESTUREINFO;
 typedef GESTUREINFO const * PCGESTUREINFO;
 
+#if (WINVER < 0x0602)
 typedef enum tagPOINTER_BUTTON_CHANGE_TYPE
 {
     POINTER_CHANGE_NONE,
@@ -147,6 +148,7 @@ typedef struct tagPOINTER_TOUCH_INFO
     UINT32 orientation;
     UINT32 pressure;
 } POINTER_TOUCH_INFO;
+#endif /* WINVER < 0x0602 */
 
 #else
 #include "user_private.h"

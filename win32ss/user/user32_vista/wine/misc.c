@@ -32,6 +32,7 @@
 #include <winuser.h>
 #include <winbase.h>
 
+#if (WINVER < 0x0602)
 #define POINTER_DEVICE_PRODUCT_STRING_MAX 520
 
 enum tagPOINTER_INPUT_TYPE {
@@ -112,6 +113,7 @@ typedef struct tagPOINTER_INFO {
     UINT64          PerformanceCount;
     POINTER_BUTTON_CHANGE_TYPE ButtonChangeType;
 } POINTER_INFO;
+#endif /* WINVER < 0x0602 */
 
 
 #else
