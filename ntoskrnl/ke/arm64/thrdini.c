@@ -220,6 +220,7 @@ KiIdleLoop(VOID)
 
             ASSERT(OldThread != NULL);
             KiSwapContext(APC_LEVEL, OldThread);
+            if (KeGetCurrentIrql() > DISPATCH_LEVEL) KeLowerIrql(DISPATCH_LEVEL);
             continue;
         }
 
