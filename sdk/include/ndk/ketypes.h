@@ -1395,6 +1395,36 @@ typedef struct _UMS_CONTROL_BLOCK
 
 #endif /* NTDDI_WIN7 && _M_AMD64 */
 
+#if (NTDDI_VERSION >= NTDDI_WIN8)
+//
+// Kernel Stack Segment and Control (Win8+, layout stable through Win11 26100)
+//
+typedef struct _KERNEL_STACK_SEGMENT
+{
+    ULONG_PTR StackBase;
+    ULONG_PTR StackLimit;
+    ULONG_PTR KernelStack;
+    ULONG_PTR InitialStack;
+} KERNEL_STACK_SEGMENT, *PKERNEL_STACK_SEGMENT;
+
+typedef struct _KSTACK_CONTROL
+{
+    ULONG_PTR StackBase;
+    union
+    {
+        ULONG_PTR ActualLimit;
+        ULONG_PTR StackExpansion:1;
+    };
+    KERNEL_STACK_SEGMENT Previous;
+#ifdef _M_IX86
+    struct _KTRAP_FRAME *PreviousTrapFrame;
+    PVOID PreviousExceptionList;
+#endif
+} KSTACK_CONTROL, *PKSTACK_CONTROL;
+
+#define KSTACK_ACTUAL_LIMIT_EXPANDED 1
+#endif /* NTDDI_WIN8 */
+
 //
 // Kernel Thread (KTHREAD), Win11 26100 arm64 layout (ntkrnlmp.pdb 10.0.26100.8036)
 // sizeof == 0x4A0; members marked [ReactOS] live in Win11 spare slots

@@ -862,11 +862,11 @@ OFFSET(UsMaxStackTraceDepth, KUSER_SHARED_DATA, MaxStackTraceDepth),
 OFFSET(UsCryptoExponent, KUSER_SHARED_DATA, CryptoExponent),
 OFFSET(UsTimeZoneId, KUSER_SHARED_DATA, TimeZoneId),
 OFFSET(UsLargePageMinimum, KUSER_SHARED_DATA, LargePageMinimum),
-//#if (NTDDI_VERSION >= NTDDI_WIN10)
-//OFFSET(UsNtBuildNumber, KUSER_SHARED_DATA, NtBuildNumber),
-//#else
+#if (NTDDI_VERSION >= NTDDI_WIN10)
+OFFSET(UsNtBuildNumber, KUSER_SHARED_DATA, NtBuildNumber),
+#else
 OFFSET(UsReserved2, KUSER_SHARED_DATA, Reserved2),
-//#endif
+#endif
 OFFSET(UsNtProductType, KUSER_SHARED_DATA, NtProductType),
 OFFSET(UsProductTypeIsValid, KUSER_SHARED_DATA, ProductTypeIsValid),
 OFFSET(UsNtMajorVersion, KUSER_SHARED_DATA, NtMajorVersion),
@@ -886,12 +886,18 @@ OFFSET(UsLastSystemRITEventTickCount, KUSER_SHARED_DATA, LastSystemRITEventTickC
 OFFSET(UsNumberOfPhysicalPages, KUSER_SHARED_DATA, NumberOfPhysicalPages),
 OFFSET(UsSafeBootMode, KUSER_SHARED_DATA, SafeBootMode),
 OFFSET(UsTestRetInstruction, KUSER_SHARED_DATA, TestRetInstruction),
-OFFSET(UsSystemCall, KUSER_SHARED_DATA, SystemCall), // not in win10
-OFFSET(UsSystemCallReturn, KUSER_SHARED_DATA, SystemCallReturn), // not in win10
+#if (NTDDI_VERSION < NTDDI_WIN8)
+OFFSET(UsSystemCall, KUSER_SHARED_DATA, SystemCall),
+OFFSET(UsSystemCallReturn, KUSER_SHARED_DATA, SystemCallReturn),
+#elif (NTDDI_VERSION >= NTDDI_WIN10_TH2)
+OFFSET(UsSystemCall, KUSER_SHARED_DATA, SystemCall),
+#endif
 OFFSET(UsSystemCallPad, KUSER_SHARED_DATA, SystemCallPad),
 OFFSET(UsTickCount, KUSER_SHARED_DATA, TickCount),
 OFFSET(UsTickCountQuad, KUSER_SHARED_DATA, TickCountQuad),
-#if (NTDDI_VERSION >= NTDDI_VISTASP2)
+#if (NTDDI_VERSION >= NTDDI_WIN10)
+/* Wow64SharedInformation was retired from the shared page */
+#elif (NTDDI_VERSION >= NTDDI_VISTASP2)
 OFFSET(UsWow64SharedInformation, KUSER_SHARED_DATA, DEPRECATED_Wow64SharedInformation),
 #elif (NTDDI_VERSION >= NTDDI_VISTA)
 /* Field does not exist -- Vista pre-SP2 has it under a different layout */
