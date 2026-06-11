@@ -199,6 +199,14 @@ KiIdleLoop(VOID)
 
             HalClearSoftwareInterrupt(DISPATCH_LEVEL);
             Prcb->DpcInterruptRequested = FALSE;
+
+            if (Prcb->DeferredReadyListHead.Next != NULL)
+            {
+                KIRQL DeferredIrql = KfRaiseIrql(SYNCH_LEVEL);
+                KiProcessDeferredReadyList(Prcb);
+                KfLowerIrql(DeferredIrql);
+            }
+
             /* KiRetireDpcList runs at DISPATCH_LEVEL and is entered and exited with interrupts disabled */
             KiRetireDpcList(Prcb);
             _enable();
@@ -362,12 +370,15 @@ KiSwapContextResume(
     KeArm64CurrentThread = NewThread;
 #endif
 
+    KeMemoryBarrier();
 #if (NTDDI_VERSION < NTDDI_WIN7)
     OldThread->SwapBusy = FALSE;
+#else
+    OldThread->Running = FALSE;
+#endif
 #ifdef _M_ARM64
     __asm__ __volatile__("dmb ishst" ::: "memory");
     __asm__ __volatile__("sev" ::: "memory");
-#endif
 #endif
 
     /*
