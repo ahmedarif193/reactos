@@ -32,7 +32,6 @@ RegisterWaitForInputIdle(IN WaitForInputIdleType lpfnRegisterWaitForInputIdle)
     UserWaitForInputIdleRoutine = lpfnRegisterWaitForInputIdle;
 }
 
-#if (NTDDI_VERSION < NTDDI_WIN8)
 /*
  * @implemented
  */
@@ -199,7 +198,6 @@ CreateProcessA(LPCSTR lpApplicationName,
                                   lpProcessInformation,
                                   NULL);
 }
-#endif // NTDDI_VERSION < NTDDI_WIN8
 
 /*
  * @implemented
