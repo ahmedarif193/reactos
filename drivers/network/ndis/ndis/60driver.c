@@ -120,7 +120,15 @@ NdisMRegisterMiniportDriver(
     RtlZeroMemory(Block, sizeof(*Block));
     Block->DriverObject          = DriverObject;
     Block->MiniportDriverContext = MiniportDriverContext;
-    Block->Characteristics       = *MiniportDriverCharacteristics;
+    /* Copy only the bytes the driver actually supplied (REV_1 is 16 bytes
+     * shorter than REV_2). The block was zeroed above so the REV_2 direct-OID
+     * handlers stay NULL for a REV_1 driver. */
+    {
+        ULONG CharSize = MiniportDriverCharacteristics->Header.Size;
+        if (CharSize == 0 || CharSize > sizeof(Block->Characteristics))
+            CharSize = sizeof(Block->Characteristics);
+        RtlCopyMemory(&Block->Characteristics, MiniportDriverCharacteristics, CharSize);
+    }
 
     /* Copy the registry path so the driver can free its own copy if it
      * wants. We allocate fresh PagedPool storage for the buffer. */
@@ -578,7 +586,7 @@ Ndis6DoMiniportRestart(
 
     RtlZeroMemory(&RestartParams, sizeof(RestartParams));
     RestartParams.Header.Type     = NDIS_OBJECT_TYPE_DEFAULT;
-    RestartParams.Header.Revision = 1;
+    RestartParams.Header.Revision = NDIS_MINIPORT_RESTART_PARAMETERS_REVISION_1;
     RestartParams.Header.Size     = sizeof(RestartParams);
     Ext->DriverBlock->Characteristics.RestartHandler(
         Ext->MiniportAdapterContext, &RestartParams);
