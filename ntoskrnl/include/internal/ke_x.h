@@ -21,6 +21,14 @@ KeGetPreviousMode(VOID)
 }
 #endif
 
+#if defined(_M_ARM64) || (NTDDI_VERSION < NTDDI_WIN7)
+#define KiThreadAffinityMask(Thread) ((Thread)->Affinity)
+#define KiThreadUserAffinityMask(Thread) ((Thread)->UserAffinity)
+#else
+#define KiThreadAffinityMask(Thread) ((Thread)->Affinity.Mask)
+#define KiThreadUserAffinityMask(Thread) ((Thread)->UserAffinity.Mask)
+#endif
+
 //
 // Enters a Guarded Region
 //
@@ -1419,11 +1427,7 @@ KxQueueReadyThread(IN PKTHREAD Thread,
 
     /* Check if this thread is allowed to run in this CPU */
 #ifdef CONFIG_SMP
-#if (NTDDI_VERSION >= NTDDI_WIN7)
-    if ((Thread->Affinity.Mask) & (Prcb->SetMember))
-#else
-    if ((Thread->Affinity) & (Prcb->SetMember))
-#endif
+    if (KiThreadAffinityMask(Thread) & (Prcb->SetMember))
 #else
     if (TRUE)
 #endif
@@ -1501,11 +1505,7 @@ KiSelectReadyThread(IN KPRIORITY Priority,
 
     /* Make sure this thread is here for a reason */
     ASSERT(HighPriority == Thread->Priority);
-#if (NTDDI_VERSION >= NTDDI_WIN7)
-    ASSERT(Thread->Affinity.Mask & AFFINITY_MASK(Prcb->Number));
-#else
-    ASSERT(Thread->Affinity & AFFINITY_MASK(Prcb->Number));
-#endif
+    ASSERT(KiThreadAffinityMask(Thread) & AFFINITY_MASK(Prcb->Number));
     ASSERT(Thread->NextProcessor == Prcb->Number);
 
     /* Remove it from the list */

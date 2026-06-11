@@ -3055,11 +3055,7 @@ NtQueryInformationThread(
                 ThreadBasicInfo->ExitStatus = Thread->ExitStatus;
                 ThreadBasicInfo->TebBaseAddress = (PVOID)Thread->Tcb.Teb;
                 ThreadBasicInfo->ClientId = Thread->Cid;
-#if (NTDDI_VERSION >= NTDDI_WIN7)
-                ThreadBasicInfo->AffinityMask = Thread->Tcb.Affinity.Mask;
-#else
-                ThreadBasicInfo->AffinityMask = Thread->Tcb.Affinity;
-#endif
+                ThreadBasicInfo->AffinityMask = KiThreadAffinityMask(&Thread->Tcb);
                 ThreadBasicInfo->Priority = Thread->Tcb.Priority;
                 ThreadBasicInfo->BasePriority = KeQueryBasePriorityThread(&Thread->Tcb);
             }
