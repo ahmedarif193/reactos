@@ -47,7 +47,7 @@ IntLastInputTick(BOOL bUpdate)
             if (gpsi->dwLastRITEventTickCount - gpsi->dwLastSystemRITEventTickCountUpdate >
                 LAST_RIT_EVENT_UPDATE_INTERVAL)
             {
-                SharedUserData->LastSystemRITEventTickCount = LastInputTick;
+                MmWriteableSharedUserData->LastSystemRITEventTickCount = LastInputTick;
                 gpsi->dwLastSystemRITEventTickCountUpdate = LastInputTick;
             }
         }

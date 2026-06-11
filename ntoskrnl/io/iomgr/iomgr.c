@@ -638,7 +638,8 @@ IoInitSystem(IN PLOADER_PARAMETER_BLOCK LoaderBlock)
                          (PUCHAR)RootString.Buffer,
                          &RootString);
 
-    /* Update system root */
+    /* Update system root through the writable KUSER_SHARED_DATA alias */
+    NtSystemRoot.Buffer = MmWriteableSharedUserData->NtSystemRoot;
     Status = RtlAnsiStringToUnicodeString(&NtSystemRoot, &RootString, FALSE);
     if (!NT_SUCCESS(Status))
     {

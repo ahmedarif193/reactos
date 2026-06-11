@@ -399,7 +399,7 @@ IopDeviceFsIoControl(IN HANDLE DeviceHandle,
             /* If we are dismounting a volume, increase the dismount count */
             if (IoControlCode == FSCTL_DISMOUNT_VOLUME)
             {
-                InterlockedIncrement((PLONG)&SharedUserData->DismountCount);
+                InterlockedIncrement((PLONG)&MmWriteableSharedUserData->DismountCount);
             }
 
             /* Call the FSD */
@@ -634,7 +634,7 @@ IopDeviceFsIoControl(IN HANDLE DeviceHandle,
     /* If we are dismounting a volume, increaase the dismount count */
     if (IoControlCode == FSCTL_DISMOUNT_VOLUME)
     {
-        InterlockedIncrement((PLONG)&SharedUserData->DismountCount);
+        InterlockedIncrement((PLONG)&MmWriteableSharedUserData->DismountCount);
     }
 
     /* Perform the call */

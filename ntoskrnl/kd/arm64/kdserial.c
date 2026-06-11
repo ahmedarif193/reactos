@@ -56,7 +56,7 @@ KdPortInitializeEx(_Inout_ PCPPORT PortInformation,
 
     /* Transport is live; record transport-present bit.
      * Parity flip of NotPresent is done post-banner in kdinit to avoid stalls. */
-    SharedUserData->KdDebuggerEnabled |= 0x00000002;
+    MmWriteableSharedUserData->KdDebuggerEnabled |= 0x00000002;
 
 #ifndef NDEBUG
     {

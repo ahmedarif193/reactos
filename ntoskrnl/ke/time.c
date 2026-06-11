@@ -74,7 +74,7 @@ KeUpdateSystemTime(IN PKTRAP_FRAME TrapFrame,
     /* Add the increment time to the shared data */
     InterruptTime.QuadPart = *(ULONGLONG*)&SharedUserData->InterruptTime;
     InterruptTime.QuadPart += Increment;
-    KiWriteSystemTime(&SharedUserData->InterruptTime, InterruptTime);
+    KiWriteSystemTime(&MmWriteableSharedUserData->InterruptTime, InterruptTime);
 
     /* Check for timer expiration */
     KiCheckForTimerExpiration(Prcb, TrapFrame, InterruptTime);
@@ -95,14 +95,14 @@ KeUpdateSystemTime(IN PKTRAP_FRAME TrapFrame,
         /* Update the system time */
         CurrentTime.QuadPart = *(ULONGLONG*)&SharedUserData->SystemTime;
         CurrentTime.QuadPart += KeTimeAdjustment;
-        KiWriteSystemTime(&SharedUserData->SystemTime, CurrentTime);
+        KiWriteSystemTime(&MmWriteableSharedUserData->SystemTime, CurrentTime);
 
         /* Update the tick count */
         CurrentTime.QuadPart = (*(ULONGLONG*)&KeTickCount) + 1;
         KiWriteSystemTime(&KeTickCount, CurrentTime);
 
         /* Update it in the shared user data */
-        KiWriteSystemTime(&SharedUserData->TickCount, CurrentTime);
+        KiWriteSystemTime(&MmWriteableSharedUserData->TickCount, CurrentTime);
 
         /* Check for expiration with the new tick count as well */
         KiCheckForTimerExpiration(Prcb, TrapFrame, InterruptTime);
