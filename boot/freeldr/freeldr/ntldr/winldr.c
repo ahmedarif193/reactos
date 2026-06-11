@@ -1601,8 +1601,12 @@ LoadAndBootWindowsCommon(
     /* Set processor context */
     WinLdrSetProcessorContext(OperatingSystemVersion);
 
+#if (NTDDI_VERSION < NTDDI_WIN8)
     /* Save final value of LoaderPagesSpanned */
     WinLdrSystemBlock->Extension.LoaderPagesSpanned = FinalLoaderPagesSpanned;
+#else
+    UNREFERENCED_PARAMETER(FinalLoaderPagesSpanned);
+#endif
 
     TRACE("Hello from paged mode, KiSystemStartup %p, LoaderBlockVA %p!\n",
           KiSystemStartup, LoaderBlockVA);
