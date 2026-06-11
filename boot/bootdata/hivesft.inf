@@ -727,6 +727,15 @@ HKLM,"SOFTWARE\Microsoft\Windows NT\CurrentVersion\MCI Extensions","wvx",0x00000
 ; User Profile List
 HKLM,"SOFTWARE\Microsoft\Windows NT\CurrentVersion\ProfileList",,0x00000012
 HKLM,"SOFTWARE\Microsoft\Windows NT\CurrentVersion\ProfileList","ProfilesDirectory",0x00020000,"%SystemDrive%\Documents and Settings"
+HKLM,"SOFTWARE\Microsoft\Windows NT\CurrentVersion\ProfileList\S-1-5-18","Flags",0x00010001,0x0000000c
+HKLM,"SOFTWARE\Microsoft\Windows NT\CurrentVersion\ProfileList\S-1-5-18","ProfileImagePath",0x00020000,"%SystemRoot%\system32\config\systemprofile"
+HKLM,"SOFTWARE\Microsoft\Windows NT\CurrentVersion\ProfileList\S-1-5-18","State",0x00010001,0x00000000
+HKLM,"SOFTWARE\Microsoft\Windows NT\CurrentVersion\ProfileList\S-1-5-19","Flags",0x00010001,0x00000000
+HKLM,"SOFTWARE\Microsoft\Windows NT\CurrentVersion\ProfileList\S-1-5-19","ProfileImagePath",0x00020000,"%SystemRoot%\ServiceProfiles\LocalService"
+HKLM,"SOFTWARE\Microsoft\Windows NT\CurrentVersion\ProfileList\S-1-5-19","State",0x00010001,0x00000000
+HKLM,"SOFTWARE\Microsoft\Windows NT\CurrentVersion\ProfileList\S-1-5-20","Flags",0x00010001,0x00000000
+HKLM,"SOFTWARE\Microsoft\Windows NT\CurrentVersion\ProfileList\S-1-5-20","ProfileImagePath",0x00020000,"%SystemRoot%\ServiceProfiles\NetworkService"
+HKLM,"SOFTWARE\Microsoft\Windows NT\CurrentVersion\ProfileList\S-1-5-20","State",0x00010001,0x00000000
 
 ; Font substitutes
 HKLM,"SOFTWARE\Microsoft\Windows NT\CurrentVersion\Fonts",,0x00000012
