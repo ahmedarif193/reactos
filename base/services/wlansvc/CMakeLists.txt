@@ -5,7 +5,14 @@ add_rpc_files(server ${REACTOS_SOURCE_DIR}/sdk/include/reactos/idl/wlansvc.idl)
 list(APPEND SOURCE
     wlansvc.c
     rpcserver.c
+    core.c
+    scan.c
+    connect.c
+    profile.c
+    notify.c
+    nwifi_ioctl.c
     precomp.h
+    wlansvc.h
     ${CMAKE_CURRENT_BINARY_DIR}/wlansvc_s.c)
 
 add_executable(wlansvc ${SOURCE} wlansvc.rc)
