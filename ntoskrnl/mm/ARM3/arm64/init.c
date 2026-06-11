@@ -143,6 +143,7 @@ static VOID MiArm64MapEarlyDeviceRange(ULONGLONG BaseAddress, SIZE_T Size);
 static VOID MiArm64MapEarlyDeviceRanges(PARM64_LOADER_BLOCK Arm64Block);
 static VOID MiArm64MapEarlyStackRange(ULONG_PTR StackLimit, ULONG_PTR StackTop);
 static VOID MiArm64MapCurrentStackAlias(VOID);
+VOID MiArm64MapPageTablePage(UINT64 Ttbr1, PVOID TableVa, PFN_NUMBER Pfn);
 static VOID MiArm64MapLoaderProcessorState(PLOADER_PARAMETER_BLOCK LoaderBlock);
 static VOID MiArm64MapLoaderPhysicalMemory(PLOADER_PARAMETER_BLOCK LoaderBlock);
 
@@ -171,6 +172,7 @@ MiArm64SyncL0ToRoot(ULONG L0Index, UINT64 Desc)
      */
     RootL0 = (volatile UINT64 *)PXE_BASE;
     RootL0[L0Index] = Desc;
+    MiArm64CleanEntryToPoC(&RootL0[L0Index]);
     MiArm64FlushTranslationChanges();
 }
 
@@ -243,6 +245,7 @@ MiArm64MapKseg0IdentityBlocks(
                                  ARM64_PTE_AF |
                                  ARM64_PTE_PXN |
                                  ARM64_PTE_UXN;
+            MiArm64CleanEntryToPoC((volatile UINT64 *)PointerPde);
             MappedAny = TRUE;
         }
 
@@ -310,6 +313,7 @@ MiArm64MapEarlyAliasRangeWithAttr(
         if (PointerPte->u.Long != Pte.u.Long)
         {
             *PointerPte = Pte;
+            MiArm64CleanEntryToPoC((volatile UINT64 *)PointerPte);
             MappedAny = TRUE;
         }
 
@@ -426,6 +430,24 @@ MiArm64MapKseg0IdentityRangeWithAttr(
         {
             return;
         }
+
+        if (MiArm64PfnDatabaseReady)
+        {
+            UINT64 Ttbr1;
+
+            __asm__ __volatile__("mrs %0, ttbr1_el1" : "=r"(Ttbr1));
+            for (Va = StartVa; ; Va += PAGE_SIZE)
+            {
+                MiArm64MapPageTablePage(Ttbr1,
+                                        (PVOID)Va,
+                                        (PFN_NUMBER)((Va - (ULONG_PTR)MI_ARM64_PHYS_MAP_BASE) >> PAGE_SHIFT));
+                if (Va == EndVa)
+                {
+                    break;
+                }
+            }
+            return;
+        }
     }
 
     MiMapPPEs((PVOID)StartVa, (PVOID)EndVa);
@@ -443,6 +465,7 @@ MiArm64MapKseg0IdentityRangeWithAttr(
         if (PointerPte->u.Long != Pte.u.Long)
         {
             *PointerPte = Pte;
+            MiArm64CleanEntryToPoC((volatile UINT64 *)PointerPte);
             MappedAny = TRUE;
         }
 
@@ -950,6 +973,7 @@ static __inline VOID
 MiArm64BreakBeforeMake(_Inout_ volatile UINT64 *Entry)
 {
     *Entry = 0;
+    MiArm64CleanEntryToPoC(Entry);
     MiArm64FlushTranslationChanges();
 }
 
@@ -957,6 +981,7 @@ static __inline VOID
 MiArm64PublishTableDesc(_Inout_ volatile UINT64 *Entry, _In_ PFN_NUMBER Pfn)
 {
     *Entry = MI_ARM64_MAKE_TABLE_DESC(Pfn);
+    MiArm64CleanEntryToPoC(Entry);
     MiArm64FlushTranslationChanges();
 }
 
@@ -969,6 +994,7 @@ MiArm64PublishAndZeroTableDesc(
     MiArm64PublishTableDesc(Entry, Pfn);
     RtlZeroMemory((PVOID)ALIGN_DOWN_BY((ULONG_PTR)SelfMapAddress, PAGE_SIZE),
                   PAGE_SIZE);
+    MiArm64CleanPageToPoC(SelfMapAddress);
     __asm__ __volatile__("dsb ishst" ::: "memory");
 }
 
@@ -1048,6 +1074,7 @@ MiArm64SplitL1BlockToL2(_Inout_ volatile UINT64 *Entry, _In_ PFN_NUMBER ParentPf
         L2[Index] = (Pa & ARM64_PTE_ADDR_MASK) | Attrs | ARM64_PTE_TYPE_BLOCK;
     }
 
+    MiArm64CleanPageToPoC((PVOID)L2);
     __asm__ __volatile__("dsb ishst" ::: "memory");
     MiArm64BreakBeforeMake(Entry);
     MiArm64PublishTableDesc(Entry, NewPfn);
@@ -1080,6 +1107,7 @@ MiArm64SplitL2BlockToL3(_Inout_ volatile UINT64 *Entry, _In_ PFN_NUMBER ParentPf
         L3[Index] = (Pa & ARM64_PTE_ADDR_MASK) | Attrs | ARM64_PTE_TYPE_PAGE;
     }
 
+    MiArm64CleanPageToPoC((PVOID)L3);
     __asm__ __volatile__("dsb ishst" ::: "memory");
     MiArm64BreakBeforeMake(Entry);
     MiArm64PublishTableDesc(Entry, NewPfn);
@@ -1107,6 +1135,7 @@ MiArm64MapPageTablePage(UINT64 Ttbr1, PVOID TableVa, PFN_NUMBER Pfn)
         {
             PFN_NUMBER NewPfn = MiArm64AllocatePageTablePage();
             RtlZeroMemory(MiArm64PfnToKseg0(NewPfn), PAGE_SIZE);
+            MiArm64CleanPageToPoC(MiArm64PfnToKseg0(NewPfn));
             MiArm64PublishTableDesc(&l0[l0_idx], NewPfn);
             MiArm64SyncL0ToRoot(l0_idx, l0[l0_idx]);
             if (MiArm64PfnDatabaseReady)
@@ -1131,6 +1160,7 @@ MiArm64MapPageTablePage(UINT64 Ttbr1, PVOID TableVa, PFN_NUMBER Pfn)
         {
             PFN_NUMBER NewPfn = MiArm64AllocatePageTablePage();
             RtlZeroMemory(MiArm64PfnToKseg0(NewPfn), PAGE_SIZE);
+            MiArm64CleanPageToPoC(MiArm64PfnToKseg0(NewPfn));
             MiArm64PublishTableDesc(&l1[l1_idx], NewPfn);
             if (MiArm64PfnDatabaseReady)
             {
@@ -1156,6 +1186,7 @@ MiArm64MapPageTablePage(UINT64 Ttbr1, PVOID TableVa, PFN_NUMBER Pfn)
     {
         PFN_NUMBER NewPfn = MiArm64AllocatePageTablePage();
         RtlZeroMemory(MiArm64PfnToKseg0(NewPfn), PAGE_SIZE);
+        MiArm64CleanPageToPoC(MiArm64PfnToKseg0(NewPfn));
         MiArm64PublishTableDesc(&l2[l2_idx], NewPfn);
         if (MiArm64PfnDatabaseReady)
         {
@@ -1188,6 +1219,7 @@ MiArm64MapPageTablePage(UINT64 Ttbr1, PVOID TableVa, PFN_NUMBER Pfn)
         return;
 
     l3[l3_idx] = Desc;
+    MiArm64CleanEntryToPoC(&l3[l3_idx]);
     __asm__ __volatile__("dsb ish\n\ttlbi vmalle1is\n\tdsb ish\n\tisb" ::: "memory");
 }
 
@@ -1821,6 +1853,7 @@ MiInitMachineDependent(_Inout_ PLOADER_PARAMETER_BLOCK LoaderBlock)
                 {
                     RootL0[Index] = 0;
                 }
+                MiArm64CleanPageToPoC((PVOID)RootL0);
 
                 CurrentProcess->Pcb.DirectoryTableBase[0] = (ULONG_PTR)RootPa;
                 CurrentProcess->Pcb.DirectoryTableBase[1] = (ULONG_PTR)RootPa;

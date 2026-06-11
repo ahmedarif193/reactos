@@ -428,6 +428,7 @@ MiArm64AllocateCleanPage(
     }
 
     MiArm64MapKseg0Page(PageFrameIndex);
+    MiArm64CleanPageToPoC((PVOID)MI_ARM64_PFN_TO_VA(PageFrameIndex));
     *PageFrame = PageFrameIndex;
     return STATUS_SUCCESS;
 }
@@ -572,7 +573,7 @@ MiArm64EnsureUserPte(
         TempPte.u.Hard.PageFrameNumber = L1Pfn;
         TempPte.u.Hard.Owner = 0;
         L0Table[L0Idx] = TempPte.u.Long;
-        __asm__ __volatile__("dsb ishst" ::: "memory");
+        MiArm64CleanEntryToPoC(&L0Table[L0Idx]);
     }
     else if ((Entry & 0x3ULL) == 0x3ULL)
     {
@@ -605,7 +606,7 @@ MiArm64EnsureUserPte(
         TempPte.u.Hard.PageFrameNumber = L2Pfn;
         TempPte.u.Hard.Owner = 0;
         L1Table[L1Idx] = TempPte.u.Long;
-        __asm__ __volatile__("dsb ishst" ::: "memory");
+        MiArm64CleanEntryToPoC(&L1Table[L1Idx]);
     }
     else if ((Entry & 0x3ULL) == 0x3ULL)
     {
@@ -627,6 +628,7 @@ MiArm64EnsureUserPte(
     if ((Entry & 0x3ULL) == 0x1ULL)
     {
         L2Table[L2Idx] = 0;
+        MiArm64CleanEntryToPoC(&L2Table[L2Idx]);
         __asm__ __volatile__("dsb ishst\n\t"
                              "tlbi vaale1is, %0\n\t"
                              "dsb ish\n\t"
@@ -649,7 +651,7 @@ MiArm64EnsureUserPte(
         TempPte.u.Hard.PageFrameNumber = L3Pfn;
         TempPte.u.Hard.Owner = 0;
         L2Table[L2Idx] = TempPte.u.Long;
-        __asm__ __volatile__("dsb ishst" ::: "memory");
+        MiArm64CleanEntryToPoC(&L2Table[L2Idx]);
     }
     else if ((Entry & 0x3ULL) == 0x3ULL)
     {
@@ -717,6 +719,8 @@ MiArm64PrepareUserPageForMdl(
         {
             return Status;
         }
+
+        KeInvalidateTlbEntry(PageAddress);
     }
 
     return STATUS_ACCESS_VIOLATION;
@@ -859,6 +863,7 @@ MiArm64WritePteEntry(
     _In_ ULONG64 Value)
 {
     *Entry = Value;
+    MiArm64CleanEntryToPoC(Entry);
 }
 
 FORCEINLINE
@@ -870,6 +875,7 @@ MiArm64ExchangePteEntry(
     ULONG64 OldValue = MiArm64ReadPteEntry(Entry);
 
     *Entry = Value;
+    MiArm64CleanEntryToPoC(Entry);
     return OldValue;
 }
 
