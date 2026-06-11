@@ -347,10 +347,7 @@ Ndis6CallMiniportInitializeEx(
     Params.Header.Revision = NDIS_MINIPORT_INIT_PARAMETERS_REVISION_1;
     Params.Header.Size     = sizeof(Params);
 
-    Params.AdapterName            = Ext->Adapter->NdisMiniportBlock.MiniportName;
-    Params.MiniportAdapterContext = NULL;  /* driver fills in via NdisMSetMiniportAttributes */
-    Params.MediaType              = NdisMedium802_3;
-    Params.PhysicalDeviceObject   = Ext->PhysicalDeviceObject;
+    Params.Flags                     = 0;
     /* AllocatedResources is a PNDIS_RESOURCE_LIST which is really
      * PCM_PARTIAL_RESOURCE_LIST — the inner partial list, NOT the outer
      * CM_RESOURCE_LIST. Skip one level of indirection from what PnP
@@ -359,17 +356,15 @@ Ndis6CallMiniportInitializeEx(
     if (Ext->AllocatedResourcesTranslated &&
         Ext->AllocatedResourcesTranslated->Count > 0)
     {
-        Params.AllocatedResources = (PVOID)
+        Params.AllocatedResources = (PNDIS_RESOURCE_LIST)
             &Ext->AllocatedResourcesTranslated->List[0].PartialResourceList;
     }
-    if (Ext->AllocatedResources && Ext->AllocatedResources->Count > 0)
-    {
-        Params.ResourceList = (PVOID)
-            &Ext->AllocatedResources->List[0].PartialResourceList;
-    }
-    Params.NdisMaximumDriverVersion =
-        ((ULONG)Ext->DriverBlock->Characteristics.MajorNdisVersion << 8)
-      | (ULONG)Ext->DriverBlock->Characteristics.MinorNdisVersion;
+    Params.IMDeviceInstanceContext   = NULL;
+    Params.MiniportAddDeviceContext  = NULL;
+    Params.IfIndex                   = 0;
+    Params.NetLuid.Value             = 0;
+    Params.DefaultPortAuthStates     = NULL;
+    Params.PciDeviceCustomProperties = NULL;
 
     /* Call the driver. The handle we hand it is the LOGICAL_ADAPTER
      * pointer, which the driver round-trips back to us via every
@@ -510,8 +505,9 @@ Ndis6CallMiniportPauseEx(
 
     RtlZeroMemory(&PauseParams, sizeof(PauseParams));
     PauseParams.Header.Type     = NDIS_OBJECT_TYPE_DEFAULT;
-    PauseParams.Header.Revision = 1;    /* NDIS_MINIPORT_PAUSE_PARAMETERS_REVISION_1 */
+    PauseParams.Header.Revision = NDIS_MINIPORT_PAUSE_PARAMETERS_REVISION_1;
     PauseParams.Header.Size     = sizeof(PauseParams);
+    PauseParams.Flags           = 0;
     PauseParams.PauseReason     = 0;
 
     Ext->PauseState  = NDIS6_PAUSE_STATE_PAUSING;
@@ -568,10 +564,10 @@ Ndis6CallMiniportRestartEx(
 
     RtlZeroMemory(&RestartParams, sizeof(RestartParams));
     RestartParams.Header.Type     = NDIS_OBJECT_TYPE_DEFAULT;
-    RestartParams.Header.Revision = 1;    /* NDIS_MINIPORT_RESTART_PARAMETERS_REVISION_1 */
+    RestartParams.Header.Revision = NDIS_MINIPORT_RESTART_PARAMETERS_REVISION_1;
     RestartParams.Header.Size     = sizeof(RestartParams);
-    RestartParams.AllocatedResources = NULL;
-    RestartParams.RestartAttributes  = 0;
+    RestartParams.RestartAttributes = NULL;
+    RestartParams.Flags             = 0;
 
     Ext->PauseState    = NDIS6_PAUSE_STATE_RESTARTING;
     Ext->RestartStatus = NDIS_STATUS_PENDING;

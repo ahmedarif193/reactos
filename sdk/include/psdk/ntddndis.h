@@ -183,6 +183,28 @@ typedef struct _NDIS_PNP_CAPABILITIES {
   NDIS_PM_WAKE_UP_CAPABILITIES  WakeUpCapabilities;
 } NDIS_PNP_CAPABILITIES, *PNDIS_PNP_CAPABILITIES;
 
+/* NDIS 6.20 power-management capabilities (REVISION_1 form). Target of
+ * NDIS_MINIPORT_ADAPTER_GENERAL_ATTRIBUTES::PowerManagementCapabilitiesEx. */
+#define NDIS_PM_CAPABILITIES_REVISION_1  1
+
+typedef struct _NDIS_PM_CAPABILITIES {
+  NDIS_OBJECT_HEADER       Header;
+  ULONG                    Flags;
+  ULONG                    SupportedWoLPacketPatterns;
+  ULONG                    NumTotalWoLPatterns;
+  ULONG                    MaxWoLPatternSize;
+  ULONG                    MaxWoLPatternOffset;
+  ULONG                    MaxWoLPacketSaveBuffer;
+  ULONG                    SupportedProtocolOffloads;
+  ULONG                    NumArpOffloadIPv4Addresses;
+  ULONG                    NumNSOffloadIPv6Addresses;
+  NDIS_DEVICE_POWER_STATE  MinMagicPacketWakeUp;
+  NDIS_DEVICE_POWER_STATE  MinPatternWakeUp;
+  NDIS_DEVICE_POWER_STATE  MinLinkChangeWakeUp;
+} NDIS_PM_CAPABILITIES, *PNDIS_PM_CAPABILITIES;
+#define NDIS_SIZEOF_NDIS_PM_CAPABILITIES_REVISION_1 \
+  RTL_SIZEOF_THROUGH_FIELD(NDIS_PM_CAPABILITIES, MinLinkChangeWakeUp)
+
 /* Type (OID_GEN_VLAN_ID) */
 typedef ULONG NDIS_VLAN_ID;
 
