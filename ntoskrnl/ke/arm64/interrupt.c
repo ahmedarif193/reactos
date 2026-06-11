@@ -16,6 +16,7 @@
 
 /* HAL extension: not yet declared in public headers for ARM64 */
 extern ULONG FASTCALL HalGetInterruptSource(VOID);
+extern VOID NTAPI HalPerformEndOfInterrupt(VOID);
 
 /* Simple vector→KINTERRUPT chain table (SPIs + optional LPIs) */
 #define ARM64_LPI_BASE 8192
@@ -33,10 +34,6 @@ static ULONGLONG KiArm64TimerPeriodTicks;
 static ULONGLONG KiArm64TimerFrequency;
 static KINTERRUPT KiArm64IpiInterrupt;
 static KSPIN_LOCK KiArm64IpiLock;
-static KINTERRUPT KiArm64DpcInterrupt;
-static KSPIN_LOCK KiArm64DpcLock;
-static KINTERRUPT KiArm64ApcInterrupt;
-static KSPIN_LOCK KiArm64ApcLock;
 static BOOLEAN KiArm64UseVirtualTimer = TRUE; /* Use virtual timer - physical timer doesn't work under HVF */
 static KTRAP_FRAME KiArm64InterruptTrapFrame[MAXIMUM_PROCESSORS];
 static PKTRAP_FRAME KiArm64CurrentInterruptTrapFrame[MAXIMUM_PROCESSORS];
@@ -319,30 +316,6 @@ KiArm64IpiIsr(
     return KiIpiServiceRoutine(NULL, NULL);
 }
 
-static BOOLEAN NTAPI
-KiArm64DpcIsr(
-    _In_ PKINTERRUPT Interrupt,
-    _In_opt_ PVOID ServiceContext)
-{
-    UNREFERENCED_PARAMETER(Interrupt);
-    UNREFERENCED_PARAMETER(ServiceContext);
-
-    KiDispatchInterrupt();
-    return TRUE;
-}
-
-static BOOLEAN NTAPI
-KiArm64ApcIsr(
-    _In_ PKINTERRUPT Interrupt,
-    _In_opt_ PVOID ServiceContext)
-{
-    UNREFERENCED_PARAMETER(Interrupt);
-    UNREFERENCED_PARAMETER(ServiceContext);
-
-    KiDeliverApc(KernelMode, NULL, NULL);
-    return TRUE;
-}
-
 /*
  * KiArm64StartTimer - Initialize and start the ARM64 generic timer.
  *
@@ -467,42 +440,6 @@ KeInitInterrupts(VOID)
     (VOID)KeConnectInterrupt(&KiArm64IpiInterrupt);
     KiRawDebugPuts("[KeInitInterrupts] IPI connect done\n");
 
-    KiRawDebugPuts("[KeInitInterrupts] DPC spinlock\n");
-    KeInitializeSpinLock(&KiArm64DpcLock);
-    KiRawDebugPuts("[KeInitInterrupts] DPC KeInitializeInterrupt\n");
-    KeInitializeInterrupt(&KiArm64DpcInterrupt,
-                          KiArm64DpcIsr,
-                          NULL,
-                          &KiArm64DpcLock,
-                          ARM64_SGI_DPC,
-                          DISPATCH_LEVEL,
-                          DISPATCH_LEVEL,
-                          Latched,
-                          FALSE,
-                          0,
-                          FALSE);
-    KiRawDebugPuts("[KeInitInterrupts] DPC KeConnectInterrupt\n");
-    (VOID)KeConnectInterrupt(&KiArm64DpcInterrupt);
-    KiRawDebugPuts("[KeInitInterrupts] DPC connect done\n");
-
-    KiRawDebugPuts("[KeInitInterrupts] APC spinlock\n");
-    KeInitializeSpinLock(&KiArm64ApcLock);
-    KiRawDebugPuts("[KeInitInterrupts] APC KeInitializeInterrupt\n");
-    KeInitializeInterrupt(&KiArm64ApcInterrupt,
-                          KiArm64ApcIsr,
-                          NULL,
-                          &KiArm64ApcLock,
-                          ARM64_SGI_APC,
-                          APC_LEVEL,
-                          APC_LEVEL,
-                          Latched,
-                          FALSE,
-                          0,
-                          FALSE);
-    KiRawDebugPuts("[KeInitInterrupts] APC KeConnectInterrupt\n");
-    (VOID)KeConnectInterrupt(&KiArm64ApcInterrupt);
-    KiRawDebugPuts("[KeInitInterrupts] APC connect done\n");
-
     KiRawDebugPuts("[KeInitInterrupts] Timer setup\n");
     /*
      * Wire the generic timer (PPI) for a periodic clock tick.
@@ -590,19 +527,16 @@ KeReenableTimerInterrupt(VOID)
 
 static
 VOID
-KiArm64DispatchChain(_In_ ULONG IntId,
-                     _In_ KIRQL OldIrql)
+KiArm64DispatchChain(_In_ ULONG IntId)
 {
     PKINTERRUPT Head, Interrupt;
     PLIST_ENTRY ListHead, NextEntry;
     KIRQL RaiseIrql;
     BOOLEAN Handled = FALSE;
 
-    if (IntId >= ARM64_MAX_INTID) goto Done;
-
     /* Snapshot head without taking the global lock on every interrupt. */
     Head = KiArm64LoadInterruptHeadNoFence(IntId);
-    if (!Head) goto Done;
+    if (!Head) return;
 
     ListHead = &Head->InterruptListEntry;
 
@@ -612,7 +546,7 @@ KiArm64DispatchChain(_In_ ULONG IntId,
         KxAcquireSpinLock(Head->ActualLock);
         (VOID)Head->ServiceRoutine(Head, Head->ServiceContext);
         KxReleaseSpinLock(Head->ActualLock);
-        goto Done;
+        return;
     }
 
     /* Chained ISR list (parity with i386 path) */
@@ -649,10 +583,34 @@ KiArm64DispatchChain(_In_ ULONG IntId,
 
         Interrupt = CONTAINING_RECORD(NextEntry, KINTERRUPT, InterruptListEntry);
     }
+}
 
-Done:
-    /* End the interrupt through HAL */
-    HalEndSystemInterrupt(OldIrql, NULL);
+static
+VOID
+KiArm64SoftwareInterrupt(_In_ ULONG IntId)
+{
+    KIRQL Level = (IntId == ARM64_SGI_DPC) ? DISPATCH_LEVEL : APC_LEVEL;
+    KIRQL OldIrql;
+
+    if (!HalBeginSystemInterrupt(Level, IntId, &OldIrql))
+        return;
+
+    HalPerformEndOfInterrupt();
+    _enable();
+
+    if (IntId == ARM64_SGI_DPC)
+    {
+        PKPRCB Prcb = KeGetCurrentPrcb();
+        if (Prcb) Prcb->DpcInterruptRequested = FALSE;
+        KiDispatchInterrupt();
+    }
+    else
+    {
+        KiDeliverApc(KernelMode, NULL, NULL);
+    }
+
+    _disable();
+    KeLowerIrql(OldIrql);
 }
 
 VOID
@@ -665,15 +623,17 @@ KiArm64InterruptDispatchEntry(_In_ ULONG VectorId)
     PKINTERRUPT Head;
     PKTRAP_FRAME TrapFrame;
     BOOLEAN Begun;
-    ULONG64 InterruptedSpsr;
-
-    /* Capture the interrupted PSTATE before any nested exception can clobber SPSR_EL1 */
-    __asm__ __volatile__("mrs %0, spsr_el1" : "=r"(InterruptedSpsr));
 
     /* Ask HAL for current INTID */
     IntId = HalGetInterruptSource();
 
-    Head = KiArm64IntTable[IntId];
+    if ((IntId == ARM64_SGI_APC) || (IntId == ARM64_SGI_DPC))
+    {
+        KiArm64SoftwareInterrupt(IntId);
+        return;
+    }
+
+    Head = (IntId < ARM64_MAX_INTID) ? KiArm64IntTable[IntId] : NULL;
     if (Head != NULL)
     {
         RequestIrql = Head->Irql;
@@ -694,26 +654,16 @@ KiArm64InterruptDispatchEntry(_In_ ULONG VectorId)
     TrapFrame->PreviousIrql = OldIrql;
     KiArm64CurrentInterruptTrapFrame[Cpu] = TrapFrame;
 
-    if (Head == NULL)
-    {
-        HalEndSystemInterrupt(OldIrql, NULL);
-    }
-    else
-    {
-        /* Dispatch to kernel's ISR chain */
-        KiArm64DispatchChain(IntId, OldIrql);
-    }
-
-    /* Clear before the drain: it can dispatch DPCs and context-switch, so the
-     * marker must not span it; the drain itself is thread-resume work */
-    KiArm64CurrentInterruptTrapFrame[Cpu] = NULL;
-
-    /* Trap entry hard-masked DAIF.I, so the EndSystemInterrupt lowering left software interrupts pended; drain them before ERET when the interrupted context had IRQs open */
-    if ((OldIrql < DISPATCH_LEVEL) && !(InterruptedSpsr & 0x80))
+    if (Head != NULL)
     {
         _enable();
-        KiArm64ProcessPendingSoftwareInterrupts(RequestIrql, OldIrql);
+        KiArm64DispatchChain(IntId);
+        _disable();
     }
+
+    KiArm64CurrentInterruptTrapFrame[Cpu] = NULL;
+
+    HalEndSystemInterrupt(OldIrql, NULL);
 
     UNREFERENCED_PARAMETER(VectorId);
 }

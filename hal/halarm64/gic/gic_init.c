@@ -570,10 +570,10 @@ HalpInitGicDistributor(
         }
     }
 
-    /* Set priorities to medium (0xA0) */
+    /* Set priorities to medium (0xD0) */
     for (i = 32; i < Lines; i += 4)
     {
-        *HalpMmio((ULONG_PTR)HalpGicdBase, GICD_IPRIORITYR + (i & ~3)) = 0xA0A0A0A0;
+        *HalpMmio((ULONG_PTR)HalpGicdBase, GICD_IPRIORITYR + (i & ~3)) = 0xD0D0D0D0;
     }
 
     /* Configure SPI routing */

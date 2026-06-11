@@ -606,11 +606,22 @@ HalpInitGicRedistributor(
     /* Set all SGIs/PPIs to Group 1 (non-secure) */
     *HalpMmio(SgiBase, GICR_IGROUPR0) = 0xFFFFFFFF;
 
-    /* Set priority to medium (0xA0) for all SGIs/PPIs */
+    /* Set priority to medium (0xD0) for all SGIs/PPIs */
     for (i = 0; i < 32; i += 4)
     {
-        *HalpMmio(SgiBase, GICR_IPRIORITYR + i) = 0xA0A0A0A0;
+        *HalpMmio(SgiBase, GICR_IPRIORITYR + i) = 0xD0D0D0D0;
     }
+
+    *HalpMmio(SgiBase, GICR_IPRIORITYR) =
+        0xD0000000u |
+        ((ULONG)HAL_ARM64_SGI_DPC_PRIORITY << 16) |
+        ((ULONG)HAL_ARM64_SGI_APC_PRIORITY << 8) |
+        (ULONG)HAL_ARM64_SGI_IPI_PRIORITY;
+
+    *HalpMmio(SgiBase, GICR_ISENABLER0) =
+        (1u << HAL_ARM64_SGI_IPI) |
+        (1u << HAL_ARM64_SGI_APC) |
+        (1u << HAL_ARM64_SGI_DPC);
 
     /* Memory barrier before enabling interrupts */
     __asm__ __volatile__("dsb sy" ::: "memory");

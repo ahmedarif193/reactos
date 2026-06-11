@@ -286,8 +286,7 @@ typedef struct _KSWITCH_FRAME
     ULONG64 Lr;
     ULONG64 ReturnAddress;
     UCHAR ApcBypass;
-    UCHAR Daif;
-    UCHAR Reserved[6];
+    UCHAR Reserved[7];
 } KSWITCH_FRAME, *PKSWITCH_FRAME;
 
 typedef struct _TRAPFRAME_LOG_ENTRY

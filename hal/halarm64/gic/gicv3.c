@@ -68,11 +68,10 @@ HalpInitGicv3CpuInterface(VOID)
 
     /*
      * Configure CPU interface:
-     * - PMR = 0xFF: Allow all priority levels
      * - BPR1 = 0: No preemption grouping (all priority bits used)
      * - IGRPEN1 = 1: Enable Group 1 interrupts
      */
-    HalpWriteIccPmr(0xFF);
+    HalpWriteIccPmr(0x00);
     HalpWriteIccBpr1(0);
     HalpWriteIccIgrpen1(1);
 

@@ -622,7 +622,7 @@ VOID
 HalpArm64EnableCpuInterface(VOID)
 {
     HalpWriteIccSre(7);
-    HalpWriteIccPmr(0xFF);
+    HalpWriteIccPmr(0x00);
     HalpWriteIccBpr1(0);
     HalpWriteIccIgrpen1(1);
     __asm__ __volatile__("isb" ::: "memory");

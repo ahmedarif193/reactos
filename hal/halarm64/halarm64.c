@@ -1916,7 +1916,7 @@ HalpArm64FlushMdlDcacheRange(_In_ PMDL Mdl,
         if (WriteToDevice)
             HalpArm64CleanDcacheRange(AliasVa, ChunkLength);
         else
-            HalpArm64CleanInvalidateDcacheRange(AliasVa, ChunkLength);
+            HalpArm64InvalidateDcacheRange(AliasVa, ChunkLength);
 
         Length -= ChunkLength;
         PageIndex++;
@@ -2543,6 +2543,71 @@ HalpMapGicv3RuntimeMmioWindows(VOID)
 static ULONG HalpArm64ActiveIntIdStack[MAXIMUM_PROCESSORS][HAL_ARM64_ACTIVE_INTID_STACK_DEPTH];
 static UCHAR HalpArm64ActiveIntIdDepth[MAXIMUM_PROCESSORS];
 
+static
+VOID
+HalpArm64SetPmrExact(
+    _In_ KIRQL Irql);
+
+#define HAL_ARM64_DEFERRED_INT_SLOTS 8
+
+static ULONG HalpArm64DeferredIntId[MAXIMUM_PROCESSORS][HAL_ARM64_DEFERRED_INT_SLOTS];
+static UCHAR HalpArm64DeferredIrql[MAXIMUM_PROCESSORS][HAL_ARM64_DEFERRED_INT_SLOTS];
+static UCHAR HalpArm64DeferredCount[MAXIMUM_PROCESSORS];
+
+static
+VOID
+HalpArm64DeferInterrupt(
+    _In_ ULONG Cpu,
+    _In_ ULONG IntId,
+    _In_ KIRQL Irql)
+{
+    ULONG Slot;
+
+    for (Slot = 0; Slot < HAL_ARM64_DEFERRED_INT_SLOTS; Slot++)
+    {
+        if (HalpArm64DeferredIntId[Cpu][Slot] == (IntId + 1))
+        {
+            return;
+        }
+    }
+
+    for (Slot = 0; Slot < HAL_ARM64_DEFERRED_INT_SLOTS; Slot++)
+    {
+        if (HalpArm64DeferredIntId[Cpu][Slot] == 0)
+        {
+            HalpArm64DeferredIntId[Cpu][Slot] = IntId + 1;
+            HalpArm64DeferredIrql[Cpu][Slot] = (UCHAR)Irql;
+            HalpArm64DeferredCount[Cpu]++;
+            HalpGicDisableInterrupt(IntId);
+            return;
+        }
+    }
+
+    HalpGicDisableInterrupt(IntId);
+}
+
+static
+VOID
+HalpArm64UndeferInterrupts(
+    _In_ ULONG Cpu,
+    _In_ KIRQL Irql)
+{
+    ULONG Slot;
+
+    for (Slot = 0; Slot < HAL_ARM64_DEFERRED_INT_SLOTS; Slot++)
+    {
+        if ((HalpArm64DeferredIntId[Cpu][Slot] != 0) &&
+            (HalpArm64DeferredIrql[Cpu][Slot] > Irql))
+        {
+            ULONG IntId = HalpArm64DeferredIntId[Cpu][Slot] - 1;
+
+            HalpArm64DeferredIntId[Cpu][Slot] = 0;
+            HalpArm64DeferredCount[Cpu]--;
+            HalpGicEnableInterrupt(IntId);
+        }
+    }
+}
+
 static BOOLEAN HalpLoggedGicOnce = FALSE; /* One-time post-KD log */
 BOOLEAN HalpGicv2ForceGroup0 = FALSE; /* HVF quirk mode for legacy GIC */
 BOOLEAN HalpGicv2GroupModeLocked = FALSE; /* Explicit boot option override */
@@ -3109,62 +3174,29 @@ FASTCALL
 HalRequestSoftwareInterrupt(
     _In_ KIRQL SoftwareInterruptRequested)
 {
-    /*
-     * CRITICAL ARM64 SOFTWARE INTERRUPT DESIGN:
-     *
-     * On ARM64, HalRequestSoftwareInterrupt must NOT send actual hardware interrupts (SGIs).
-     * Instead, the kernel handles software interrupt delivery via KeLowerIrql.
-     *
-     * WHY NOT USE SGIs?
-     * -----------------
-     * If we send an SGI here, it fires immediately as a hardware interrupt, which:
-     * 1. Raises IRQL in HalBeginSystemInterrupt before any pending work can be done
-     * 2. Causes IRQL violations when called from code at PASSIVE_LEVEL
-     * 3. Breaks the Windows IRQL model where software interrupts are "requested"
-     *    but only "delivered" when IRQL permits
-     *
-     * EXAMPLE FAILURE SCENARIO (with SGI):
-     * -------------------------------------
-     * ExQueueWorkItem (IRQL=PASSIVE_LEVEL):
-     *   -> HalRequestSoftwareInterrupt(DISPATCH_LEVEL)
-     *      -> Sends SGI  [BUG: Immediate interrupt!]
-     *         -> HalBeginSystemInterrupt raises IRQL to DISPATCH_LEVEL
-     *   -> Continues executing at DISPATCH_LEVEL [BUG!]
-     *   -> Calls KeInsertQueue (requires IRQL <= DISPATCH_LEVEL)
-     *      -> ASSERTION FAILS: Current IRQL (2) > Maximum (2)
-     *
-     * THE CORRECT ARM64 MODEL (following x86 PIC HAL):
-     * -------------------------------------------------
-     * 1. HalRequestSoftwareInterrupt is a NO-OP (or sets a flag in kernel PRCB)
-     * 2. The kernel's KeLowerIrql checks for pending software interrupts
-     * 3. KeLowerIrql calls KiDispatchInterrupt when lowering to PASSIVE_LEVEL
-     * 4. This ensures software interrupts never violate IRQL ordering
-     *
-     * For ARM64, the kernel's KeLowerIrql (in ntoskrnl/arch/arm64/ke/irql.c)
-     * handles checking Prcb->DpcInterruptRequested and calling KiDispatchInterrupt.
-     *
-     * NOTE: SGIs should only be used for true inter-processor interrupts (IPI),
-     * not for software interrupt simulation on the local processor.
-     */
+    ULONG SgiId;
+    KIRQL CurrentIrql;
 
-    UNREFERENCED_PARAMETER(SoftwareInterruptRequested);
+    if (SoftwareInterruptRequested == APC_LEVEL)
+    {
+        SgiId = HAL_ARM64_SGI_APC;
+    }
+    else if (SoftwareInterruptRequested == DISPATCH_LEVEL)
+    {
+        SgiId = HAL_ARM64_SGI_DPC;
+    }
+    else
+    {
+        return;
+    }
 
-    /*
-     * ARM64: Send SEV (Send Event) to wake up the idle CPU from WFE.
-     *
-     * The kernel already sets the appropriate pending flags before calling
-     * this function:
-     * - Prcb->DpcInterruptRequested for DPCs (set by KeInsertQueueDpc)
-     * - Prcb->NextThread for ready threads (set by KiDeferredReadyThread)
-     *
-     * SEV is the ARM64 equivalent of the x86 PIC HAL setting the IRR bit.
-     * It doesn't cause an interrupt - it just sets the event register,
-     * causing the next WFE (Wait For Event) to immediately wake up.
-     *
-     * The idle loop (KiIdleLoop) uses WFE and checks Prcb->NextThread
-     * and Prcb->DpcInterruptRequested after waking.
-     */
-    __asm__ __volatile__("sev" ::: "memory");
+    CurrentIrql = KeGetCurrentIrql();
+    if (SoftwareInterruptRequested <= CurrentIrql)
+    {
+        HalpArm64SetPmrExact(CurrentIrql);
+    }
+
+    HalpArm64SendSgiSelf(SgiId);
 }
 
 VOID
@@ -3502,6 +3534,36 @@ HalBeginSystemInterrupt(
         return FALSE;
     }
 
+    {
+        KIRQL CurrentIrql = KeGetCurrentIrql();
+
+        if (Irql <= CurrentIrql)
+        {
+            ULONG EoiValue = intid;
+
+            if ((cpu < MAXIMUM_PROCESSORS) &&
+                (intid < HAL_ARM64_LPI_BASE) &&
+                ((HalpArm64AckRaw[cpu] & 0x3FF) == intid))
+            {
+                EoiValue = HalpArm64AckRaw[cpu];
+            }
+
+            if (intid < 16)
+            {
+                HalpArm64SetPmrExact(CurrentIrql);
+                HalpArm64RependInterrupt(intid);
+            }
+            else if ((intid < 1020) && (cpu < MAXIMUM_PROCESSORS))
+            {
+                HalpArm64DeferInterrupt(cpu, intid, Irql);
+                HalpArm64RependInterrupt(intid);
+            }
+
+            HalpGicEndInterrupt(EoiValue);
+            return FALSE;
+        }
+    }
+
     /*
      * Raise IRQL to the interrupt's synchronization level.
      * This prevents lower-priority interrupts from preempting this handler.
@@ -3518,12 +3580,19 @@ HalBeginSystemInterrupt(
     if (cpu < MAXIMUM_PROCESSORS)
     {
         UCHAR depth = HalpArm64ActiveIntIdDepth[cpu];
+        ULONG EoiValue = intid;
+
+        if ((intid < HAL_ARM64_LPI_BASE) &&
+            ((HalpArm64AckRaw[cpu] & 0x3FF) == intid))
+        {
+            EoiValue = HalpArm64AckRaw[cpu];
+        }
 
         if (depth < HAL_ARM64_ACTIVE_INTID_STACK_DEPTH)
         {
-            HalpArm64ActiveIntIdStack[cpu][depth] = intid + 1;
+            HalpArm64ActiveIntIdStack[cpu][depth] = EoiValue + 1;
             HalpArm64ActiveIntIdDepth[cpu] = depth + 1;
-            HalpArm64ActiveIntId[cpu] = intid + 1;
+            HalpArm64ActiveIntId[cpu] = EoiValue + 1;
         }
         else
         {
@@ -3556,7 +3625,14 @@ FASTCALL
 HalClearSoftwareInterrupt(
     _In_ KIRQL Request)
 {
-    UNREFERENCED_PARAMETER(Request);
+    if (Request == APC_LEVEL)
+    {
+        HalpArm64ClearSelfSgi(HAL_ARM64_SGI_APC);
+    }
+    else if (Request == DISPATCH_LEVEL)
+    {
+        HalpArm64ClearSelfSgi(HAL_ARM64_SGI_DPC);
+    }
 }
 
 VOID
@@ -3639,15 +3715,18 @@ HalpIrqlToGicPriority(
         UCHAR offset = (UCHAR)(12 - Irql);  /* 12->0, 3->9 */
         return 0x30 + (offset * 0x10);
     }
-    /* DISPATCH_LEVEL and below - low priority */
-    return 0xF0;
+    if (Irql == DISPATCH_LEVEL)
+        return HAL_ARM64_SGI_DPC_PRIORITY;
+    if (Irql == APC_LEVEL)
+        return HAL_ARM64_SGI_APC_PRIORITY;
+    return 0xF8;
 }
 
 static const UCHAR HalpArm64IrqlToPmr[HIGH_LEVEL + 1] =
 {
     0xFF, /* PASSIVE_LEVEL */
-    0xFF, /* APC_LEVEL */
-    0xFF, /* DISPATCH_LEVEL */
+    0xE0, /* APC_LEVEL */
+    0xD0, /* DISPATCH_LEVEL */
     0xC0, /* DEVICE_LEVEL 3 */
     0xB0,
     0xA0,
@@ -3673,15 +3752,10 @@ HalEnableSystemInterrupt(
     UCHAR priority;
     BOOLEAN EdgeTriggered;
 
-    /*
-     * SGIs (0-15) are always enabled in GICv3 and cannot be enabled/disabled.
-     * They are configured during redistributor initialization and are permanently enabled.
-     * Writing to ISENABLER for SGIs is architecturally permitted but has no effect.
-     * We skip the write to avoid confusion - SGIs are already enabled.
-     */
     if (Vector < 16)
     {
-        /* SGI: already enabled, no action needed */
+        HalpGicSetInterruptPriority(Vector, HalpIrqlToGicPriority(Irql));
+        HalpGicEnableInterrupt(Vector);
         return TRUE;
     }
 
@@ -3722,9 +3796,7 @@ HalEnableSystemInterrupt(
 
 VOID
 NTAPI
-HalEndSystemInterrupt(
-    _In_ KIRQL Irql,
-    _In_ PKTRAP_FRAME TrapFrame)
+HalPerformEndOfInterrupt(VOID)
 {
     ULONG cpu = KeGetCurrentProcessorNumber();
     ULONG stored = 0;
@@ -3761,6 +3833,15 @@ HalEndSystemInterrupt(
         /* Signal EOI (ICC_EOIR1_EL1 on GICv3 / GICC_EOIR on GICv2). */
         HalpGicEndInterrupt(intid);
     }
+}
+
+VOID
+NTAPI
+HalEndSystemInterrupt(
+    _In_ KIRQL Irql,
+    _In_ PKTRAP_FRAME TrapFrame)
+{
+    HalPerformEndOfInterrupt();
 
     /*
      * Lower IRQL only after the interrupt is no longer active in the GIC.
@@ -4838,7 +4919,7 @@ HalGetBusDataByOffset(
                     UCHAR NewLine = (Gsi <= 0xFF) ? (UCHAR)Gsi : 0xFF;
                     PciConfig->u.type0.InterruptLine = NewLine;
 
-                    DPRINT1("[arm64][PCI] Bus=%lu Dev=%lu Func=%lu Pin=%c: "
+                    DPRINT("[arm64][PCI] Bus=%lu Dev=%lu Func=%lu Pin=%c: "
                             "_PRT GSI=%lu -> InterruptLine=0x%02X\n",
                             BusNumber,
                             (ULONG)PciSlot.u.bits.DeviceNumber,
@@ -5177,11 +5258,14 @@ HalGetInterruptSource(VOID)
  * This FIXES the previous implementation which had the semantics backwards and
  * would cause deadlocks when waiting for timer interrupts at DISPATCH_LEVEL.
  */
+static UCHAR HalpArm64PmrShadow[MAXIMUM_PROCESSORS];
+
+static
 VOID
-FASTCALL
-HalSetGicPriorityMask(
+HalpArm64SetPmrExact(
     _In_ KIRQL Irql)
 {
+    ULONG Cpu = KeGetCurrentProcessorNumber();
     UCHAR Priority;
 
     /* GIC-less platforms emulate the priority mask in software. */
@@ -5191,9 +5275,12 @@ HalSetGicPriorityMask(
         return;
     }
 
-    Priority = (Irql <= HIGH_LEVEL) ?
-               HalpArm64IrqlToPmr[Irql] :
-               HalpArm64IrqlToPmr[HIGH_LEVEL];
+    if (Irql > HIGH_LEVEL)
+    {
+        Irql = HIGH_LEVEL;
+    }
+
+    Priority = HalpArm64IrqlToPmr[Irql];
 
     /*
      * Write the priority mask to the GIC.
@@ -5213,6 +5300,43 @@ HalSetGicPriorityMask(
             __asm__ __volatile__("dsb sy" ::: "memory");
         }
     }
+    __asm__ __volatile__("isb" ::: "memory");
+
+    if (Cpu < MAXIMUM_PROCESSORS)
+    {
+        HalpArm64PmrShadow[Cpu] = (UCHAR)(Irql + 1);
+    }
+}
+
+VOID
+FASTCALL
+HalSetGicPriorityMask(
+    _In_ KIRQL Irql)
+{
+    ULONG Cpu = KeGetCurrentProcessorNumber();
+
+    if (Irql > HIGH_LEVEL)
+    {
+        Irql = HIGH_LEVEL;
+    }
+
+    if (Cpu < MAXIMUM_PROCESSORS)
+    {
+        UCHAR Shadow;
+
+        if (HalpArm64DeferredCount[Cpu] != 0)
+        {
+            HalpArm64UndeferInterrupts(Cpu, Irql);
+        }
+
+        Shadow = HalpArm64PmrShadow[Cpu];
+        if ((Shadow != 0) && (Shadow <= (UCHAR)(Irql + 1)))
+        {
+            return;
+        }
+    }
+
+    HalpArm64SetPmrExact(Irql);
 }
 
 /*
@@ -5309,8 +5433,7 @@ HalInitializeProcessor(
             HalpWriteIccSre(Sre);
             __asm__ __volatile__("isb" ::: "memory");
 
-            /* Set priority mask to allow all interrupts */
-            HalpWriteIccPmr(0xFF);
+            HalpWriteIccPmr(0x00);
 
             /* Binary point = 0 for finest priority grouping */
             HalpWriteIccBpr1(0);
@@ -5339,9 +5462,11 @@ HalInitializeProcessor(
         if ((ProcessorNumber != 0) && (HalpGiccBase != 0))
         {
             ULONG GiccCtlr = HalpGicv2ForceGroup0 ? 0x1 : 0x3;
-            *HalpMmio((ULONG_PTR)HalpGiccBase, GICC_PMR) = 0xFF;
+            *HalpMmio((ULONG_PTR)HalpGiccBase, GICC_PMR) = 0x00;
             *HalpMmio((ULONG_PTR)HalpGiccBase, GICC_BPR) = 0x0;
             *HalpMmio((ULONG_PTR)HalpGiccBase, GICC_CTLR) = GiccCtlr;
+
+            HalpArm64ProgramSgiPriorities();
 
             /* Memory barrier to ensure GICC configuration takes effect */
             __asm__ __volatile__("dsb sy" ::: "memory");
@@ -5879,7 +6004,7 @@ IoFlushAdapterBuffers(
         {
             if (!WriteToDevice)
             {
-                HalpArm64CleanInvalidateDcacheRange(CurrentVa, Length);
+                HalpArm64InvalidateDcacheRange(CurrentVa, Length);
             }
             else
             {
