@@ -45,6 +45,9 @@ DpcHandler(
         ok_eq_uint(Dpc->Importance, DpcImportance);
         ok_eq_uint(Dpc->Number, 0);
     }
+#if defined(_M_ARM64)
+    ok(Dpc->DpcListEntry.Next != &Dpc->DpcListEntry, "\n");
+#else
     ok(Dpc->DpcListEntry.Blink != NULL, "\n");
     ok(Dpc->DpcListEntry.Blink != &Dpc->DpcListEntry, "\n");
     if (!skip(Dpc->DpcListEntry.Blink != NULL, "DpcListEntry.Blink == NULL\n"))
@@ -54,6 +57,7 @@ DpcHandler(
     ok(Dpc->DpcListEntry.Flink != &Dpc->DpcListEntry, "\n");
     if (!skip(Dpc->DpcListEntry.Flink != NULL, "DpcListEntry.Flink == NULL\n"))
         ok_eq_pointer(Dpc->DpcListEntry.Blink, Dpc->DpcListEntry.Flink->Blink);
+#endif
 
     ok_eq_pointer(Dpc->DeferredRoutine, DpcHandler);
     ok_eq_pointer(Dpc->DeferredContext, DeferredContext);
@@ -64,9 +68,11 @@ DpcHandler(
     if (GetNTVersion() == _WIN32_WINNT_WS03)
     {
         ok_eq_uint(Prcb->DpcRoutineActive, 1);
+#if !defined(_M_ARM64)
         /* this DPC is not in the list anymore, but it was at the head! */
         ok_eq_pointer(Prcb->DpcData[DPC_NORMAL].DpcListHead.Flink, Dpc->DpcListEntry.Flink);
         ok_eq_pointer(Prcb->DpcData[DPC_NORMAL].DpcListHead.Blink, Dpc->DpcListEntry.Blink);
+#endif
     }
 }
 
@@ -94,9 +100,13 @@ START_TEST(KeDpc)
         ok_eq_uint(Dpc.Importance, DpcImportance);
         ok_eq_uint(Dpc.Number, 0);
     }
+#if defined(_M_ARM64)
+    ok_eq_pointer(Dpc.DpcListEntry.Next, (PSINGLE_LIST_ENTRY)0x5555555555555555LL);
+#else
     ok_eq_pointer(Dpc.DpcListEntry.Flink, (LIST_ENTRY *)0x5555555555555555LL);
     if (Dpc.DpcListEntry.Blink)
         ok_eq_pointer(Dpc.DpcListEntry.Blink, (LIST_ENTRY *)0x5555555555555555LL);
+#endif
     ok_eq_pointer(Dpc.DeferredRoutine, DpcHandler);
     ok_eq_pointer(Dpc.DeferredContext, &Dpc);
     ok_eq_pointer(Dpc.SystemArgument1, (PVOID)0x5555555555555555LL);
