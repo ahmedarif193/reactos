@@ -149,7 +149,7 @@ typedef struct _FILE_LINKS_FULL_ID_INFORMATION {
 #endif
 #endif
 
-#ifdef __REACTOS__
+#if defined(__REACTOS__) && (NTDDI_VERSION < NTDDI_WIN10)
 typedef struct _FILE_RENAME_INFORMATION_EX {
     union {
         BOOLEAN ReplaceIfExists;
