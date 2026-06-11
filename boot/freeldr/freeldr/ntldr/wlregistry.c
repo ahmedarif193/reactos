@@ -611,10 +611,12 @@ WinLdrLoadNLSData(
         goto Quit;
     }
 
+#if (NTDDI_VERSION < NTDDI_WIN8)
     //
     // THIS IS a HACK and should be replaced by actually loading the OEMHAL file!
     //
     LoaderBlock->OemFontFile = VaToPa(LoaderBlock->NlsData->UnicodeCodePageData);
+#endif
 
     /* Convert NlsTables address to VA */
     LoaderBlock->NlsData = PaToVa(LoaderBlock->NlsData);
