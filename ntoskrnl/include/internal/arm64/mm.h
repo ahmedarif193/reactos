@@ -164,8 +164,10 @@ C_ASSERT(ARM64_PTE_TABLE_DESCRIPTOR_ATTRS == 0x0060000000000F13ULL);
 #define MM_HIGHEST_USER_ADDRESS_WOW64   0x7FFEFFFF
 #define MM_SYSTEM_RANGE_START_WOW64     0x80000000
 
-/* The size of the virtual memory area mapped by a single PDE. */
-#define PDE_MAPPED_VA (PTE_PER_PAGE * PAGE_SIZE)
+/* The size of the virtual memory area mapped by a single PDE/PPE/PXE. */
+#define PDE_MAPPED_VA (PTE_PER_PAGE * (ULONG64)PAGE_SIZE)
+#define PPE_MAPPED_VA (PDE_PER_PAGE * (ULONG64)PDE_MAPPED_VA)
+#define PXE_MAPPED_VA (PPE_PER_PAGE * (ULONG64)PPE_MAPPED_VA)
 
 #define MI_SYSTEM_PTE_BASE              (PVOID)MiAddressToPte(KSEG0_BASE)
 #define MM_HIGHEST_VAD_ADDRESS          (PVOID)((ULONG_PTR)MM_HIGHEST_USER_ADDRESS - (16 * PAGE_SIZE))
@@ -329,6 +331,13 @@ ULONG
 MiAddressToPxi(PVOID Address)
 {
     return ((((ULONG64)Address) >> PXI_SHIFT) & 0x1FF);
+}
+
+FORCEINLINE
+PVOID
+MiPxiToAddress(ULONG Pxi)
+{
+    return (PVOID)((((LONG64)Pxi) << 55) >> 16);
 }
 
 /*
@@ -1366,5 +1375,36 @@ MiArm64GetUserL3PfnSafe(
     MiArm64UserPteKseg0ForPfn(Address, &L3Pfn);
     return L3Pfn;
 }
+
+typedef enum _MI_ASSIGNED_REGION_TYPES
+{
+    AssignedRegionNonPagedPool = 0,
+    AssignedRegionPagedPool = 1,
+    AssignedRegionSystemCache = 2,
+    AssignedRegionSystemPtes = 3,
+    AssignedRegionUltraZero = 4,
+    AssignedRegionPfnDatabase = 5,
+    AssignedRegionCfg = 6,
+    AssignedRegionHyperSpace = 7,
+    AssignedRegionKernelStacks = 8,
+    AssignedRegionPageTables = 9,
+    AssignedRegionSession = 10,
+    AssignedRegionSecureNonPagedPool = 11,
+    AssignedRegionSystemImages = 12,
+    AssignedRegionMaximum = 13
+} MI_ASSIGNED_REGION_TYPES, * PMI_ASSIGNED_REGION_TYPES;
+
+typedef struct _MI_SYSTEM_VA_ASSIGNMENT
+{
+    VOID* BaseAddress;
+    ULONGLONG NumberOfBytes;
+} MI_SYSTEM_VA_ASSIGNMENT, *PMI_SYSTEM_VA_ASSIGNMENT;
+
+extern MI_SYSTEM_VA_ASSIGNMENT MiSystemVaRegions[AssignedRegionMaximum];
+
+VOID
+NTAPI
+MiInitializeKernelVaLayout(
+    _In_ const LOADER_PARAMETER_BLOCK* LoaderBlock);
 
 // ARM64 mm.h included successfully - shift-based MI_MAKE_PROTOTYPE_PTE active

@@ -1732,8 +1732,13 @@ MiInitMachineDependent(_Inout_ PLOADER_PARAMETER_BLOCK LoaderBlock)
 
     if (MmSystemCacheStart == NULL)
     {
-        MmSystemCacheStart = (PVOID)MI_SYSTEM_CACHE_START;
-        MmSystemCacheEnd = (PVOID)MI_SYSTEM_CACHE_END;
+        MmSystemCacheStart = MiSystemVaRegions[AssignedRegionSystemCache].BaseAddress;
+    }
+
+    if (MmSystemCacheEnd == NULL)
+    {
+        MmSystemCacheEnd = (PVOID)((ULONG_PTR)MiSystemVaRegions[AssignedRegionSystemCache].BaseAddress +
+                                   MiSystemVaRegions[AssignedRegionSystemCache].NumberOfBytes - 1);
     }
 
     if (MmNonPagedPoolEnd == NULL)
@@ -1773,7 +1778,7 @@ MiInitMachineDependent(_Inout_ PLOADER_PARAMETER_BLOCK LoaderBlock)
 
     if (MmPfnDatabase == NULL)
     {
-        MmPfnDatabase = (PMMPFN)MI_PFN_DATABASE;
+        MmPfnDatabase = (PMMPFN)MiSystemVaRegions[AssignedRegionPfnDatabase].BaseAddress;
     }
 
     if (!MiArm64CanTouchSystemPageTables())
@@ -2009,7 +2014,9 @@ MiInitMachineDependent(_Inout_ PLOADER_PARAMETER_BLOCK LoaderBlock)
             MiMapPPEs(MmSessionBase, SessionSpaceEnd);
         }
 
-        MiMapPPEs(MmSystemCacheStart, (PVOID)MI_SYSTEM_CACHE_END);
+        MiMapPPEs(MmSystemCacheStart,
+                  (PVOID)((ULONG_PTR)MiSystemVaRegions[AssignedRegionSystemCache].BaseAddress +
+                          MiSystemVaRegions[AssignedRegionSystemCache].NumberOfBytes - 1));
 
         __asm__ __volatile__(
             "dsb ishst\n\t"
