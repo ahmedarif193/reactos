@@ -266,8 +266,8 @@ IopStartRamdisk(IN PLOADER_PARAMETER_BLOCK LoaderBlock)
         AnsiPath.MaximumLength = AnsiPath.Length + 1;
         AnsiPath.Buffer = Buffer;
         RtlInitEmptyUnicodeString(&NtSystemRoot,
-                                  SharedUserData->NtSystemRoot,
-                                  sizeof(SharedUserData->NtSystemRoot));
+                                  MmWriteableSharedUserData->NtSystemRoot,
+                                  sizeof(MmWriteableSharedUserData->NtSystemRoot));
         Status = RtlAnsiStringToUnicodeString(&NtSystemRoot, &AnsiPath, FALSE);
         if (!NT_SUCCESS(Status))
         {
