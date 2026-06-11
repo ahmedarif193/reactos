@@ -116,6 +116,8 @@ MiArchCreateProcessAddressSpace(
     Index = MiAddressToPxi((PVOID)HYPER_SPACE);
     PageTable[Index] = TempPte;
 
+    MiArm64CleanPageToPoC((PVOID)PageTable);
+
     /* Map hyperspace PDPT */
     MI_MAKE_HARDWARE_PTE_KERNEL(&MapPte,
                                 MappingPte,
@@ -131,6 +133,8 @@ MiArchCreateProcessAddressSpace(
     TempPte.u.Hard.PageFrameNumber = HyperPdPfn;
     PageTable[0] = TempPte;
 
+    MiArm64CleanPageToPoC((PVOID)PageTable);
+
     /* Map hyperspace PD */
     MapPte.u.Hard.PageFrameNumber = HyperPdPfn;
     *MappingPte = MapPte;
@@ -142,6 +146,8 @@ MiArchCreateProcessAddressSpace(
     TempPte.u.Hard.PageFrameNumber = HyperPtPfn;
     PageTable[0] = TempPte;
 
+    MiArm64CleanPageToPoC((PVOID)PageTable);
+
     /* Map hyperspace PT */
     MapPte.u.Hard.PageFrameNumber = HyperPtPfn;
     *MappingPte = MapPte;
@@ -152,6 +158,8 @@ MiArchCreateProcessAddressSpace(
     TempPte.u.Hard.PageFrameNumber = Process->WorkingSetPage;
     Index = MiAddressToPti(MmWorkingSetList);
     PageTable[Index] = TempPte;
+
+    MiArm64CleanPageToPoC((PVOID)PageTable);
 
     MiReleaseSystemPtes(MappingPte, 1, SystemPteSpace);
 
