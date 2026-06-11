@@ -172,6 +172,39 @@ IntVideoPortAddDeviceMapLink(
     return STATUS_SUCCESS;
 }
 
+static
+VOID
+IntVideoPortRemoveDeviceMapLink(
+    PVIDEO_PORT_DEVICE_EXTENSION DeviceExtension)
+{
+    WCHAR DeviceBuffer[20];
+    WCHAR SymlinkBuffer[20];
+    UNICODE_STRING SymlinkName;
+    ULONG DeviceNumber;
+
+    DeviceNumber = DeviceExtension->DeviceNumber;
+    _swprintf(DeviceBuffer, L"\\Device\\Video%lu", DeviceNumber);
+    RtlDeleteRegistryValue(RTL_REGISTRY_DEVICEMAP, L"VIDEO", DeviceBuffer);
+
+    _swprintf(SymlinkBuffer, L"\\??\\DISPLAY%lu", DeviceNumber + 1);
+    RtlInitUnicodeString(&SymlinkName, SymlinkBuffer);
+    IoDeleteSymbolicLink(&SymlinkName);
+
+    if (VideoPortMaxObjectNumber == DeviceNumber)
+    {
+        VideoPortMaxObjectNumber = DeviceNumber - 1;
+        if (DeviceNumber != 0)
+        {
+            RtlWriteRegistryValue(RTL_REGISTRY_DEVICEMAP,
+                                  L"VIDEO",
+                                  L"MaxObjectNumber",
+                                  REG_DWORD,
+                                  &VideoPortMaxObjectNumber,
+                                  sizeof(VideoPortMaxObjectNumber));
+        }
+    }
+}
+
 PVOID
 NTAPI
 IntVideoPortImageDirectoryEntryToData(
@@ -238,7 +271,7 @@ IntVideoPortCreateAdapterDeviceObject(
     DeviceNumber = VideoPortMaxObjectNumber + 1;
     if (DeviceNumber == (ULONG)-1)
     {
-        WARN_(VIDEOPRT, "Can't find free device number\n");
+        ERR_(VIDEOPRT, "Can't find free device number\n");
         return STATUS_UNSUCCESSFUL;
     }
 
@@ -266,7 +299,7 @@ IntVideoPortCreateAdapterDeviceObject(
 
     if (!NT_SUCCESS(Status))
     {
-        WARN_(VIDEOPRT, "IoCreateDevice call failed with status 0x%08x\n", Status);
+        ERR_(VIDEOPRT, "IoCreateDevice call failed with status 0x%08x\n", Status);
         return Status;
     }
 
@@ -305,7 +338,7 @@ IntVideoPortCreateAdapterDeviceObject(
                                    &DeviceExtension->RegistryPath);
     if (!NT_SUCCESS(Status))
     {
-        WARN_(VIDEOPRT, "IntCreateRegistryPath() call failed with status 0x%08x\n", Status);
+        ERR_(VIDEOPRT, "IntCreateRegistryPath() call failed with status 0x%08x\n", Status);
         goto Failure;
     }
 
@@ -555,6 +588,7 @@ IntVideoPortFindAdapter(
         if (IntIsUefiFbDriver(DriverObject) &&
             IntVideoPortHasEarlierVideoDevice(DeviceExtension->DeviceNumber))
         {
+            ERR_(VIDEOPRT, "uefifb deferring to an existing video device\n");
             Status = STATUS_UNSUCCESSFUL;
             goto Failure;
         }
@@ -744,6 +778,7 @@ IntVideoPortFindAdapter(
     return STATUS_SUCCESS;
 
 Failure:
+    IntVideoPortRemoveDeviceMapLink(DeviceExtension);
     RtlFreeUnicodeString(&DeviceExtension->RegistryPath);
     if (DeviceExtension->NextDeviceObject)
         IoDetachDevice(DeviceExtension->NextDeviceObject);
