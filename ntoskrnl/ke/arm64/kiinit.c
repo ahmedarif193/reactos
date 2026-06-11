@@ -662,6 +662,21 @@ KiInitializePcr(_In_ ULONG ProcessorNumber,
     Pcr->SecondLevelCacheSize = 0;
     Pcr->SecondLevelCacheAssociativity = 0;
 
+    {
+        ULONG64 CounterFrequency = 0;
+
+        __asm__ __volatile__("mrs %0, cntfrq_el0" : "=r"(CounterFrequency));
+        if (CounterFrequency == 0)
+        {
+            CounterFrequency = 62500000ULL;
+        }
+
+        Pcr->Prcb.CycleCounterFrequency = CounterFrequency;
+        Pcr->Prcb.MHz = (ULONG)((CounterFrequency + 999999ULL) / 1000000ULL);
+        Pcr->Prcb.CoresPerPhysicalProcessor = 1;
+        Pcr->Prcb.LogicalProcessorsPerCore = 1;
+    }
+
     Arm64Block = (KeLoaderBlock != NULL) ? &KeLoaderBlock->u.Arm64 : NULL;
 
     if (Arm64Block != NULL)
