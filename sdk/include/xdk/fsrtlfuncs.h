@@ -1,4 +1,45 @@
 $if (_NTIFS_)
+
+#if (NTDDI_VERSION >= NTDDI_WIN8)
+NTKERNELAPI
+VOID
+NTAPI
+FsRtlUpdateDiskCounters(
+  _In_ ULONG64 BytesRead,
+  _In_ ULONG64 BytesWritten);
+
+_IRQL_requires_max_(PASSIVE_LEVEL)
+NTKERNELAPI
+VOID
+NTAPI
+FsRtlDismountComplete(
+  _In_ PDEVICE_OBJECT DeviceObject,
+  _In_ NTSTATUS DismountStatus);
+
+NTKERNELAPI
+NTSTATUS
+NTAPI
+FsRtlGetSectorSizeInformation(
+  _In_ PDEVICE_OBJECT DeviceObject,
+  _Out_ PFILE_FS_SECTOR_SIZE_INFORMATION SectorSizeInfo);
+
+_Must_inspect_result_
+_IRQL_requires_max_(APC_LEVEL)
+NTKERNELAPI
+BOOLEAN
+NTAPI
+FsRtlCheckLockForOplockRequest(
+  _In_ PFILE_LOCK FileLock,
+  _In_ PLARGE_INTEGER AllocationSize);
+
+_IRQL_requires_max_(APC_LEVEL)
+NTKERNELAPI
+BOOLEAN
+NTAPI
+FsRtlAreThereWaitingFileLocks(
+  _In_ PFILE_LOCK FileLock);
+#endif
+
 /* FSRTL Functions */
 
 #define FsRtlEnterFileSystem    KeEnterCriticalRegion

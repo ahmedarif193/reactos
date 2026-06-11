@@ -1416,6 +1416,23 @@ IoSetTopLevelIrp(
 
 $endif (_WDMDDK_)
 $if (_NTDDK_)
+#if (NTDDI_VERSION >= NTDDI_WIN8)
+_Must_inspect_result_
+NTKERNELAPI
+NTSTATUS
+NTAPI
+IoVolumeDeviceToGuidPath(
+  _In_ PVOID VolumeDeviceObject,
+  _Out_ PUNICODE_STRING GuidPath);
+
+NTKERNELAPI
+NTSTATUS
+NTAPI
+IoVolumeDeviceToGuid(
+  _In_ PVOID VolumeDeviceObject,
+  _Out_ GUID *Guid);
+#endif
+
 #if !(defined(USE_DMA_MACROS) && (defined(_NTDDK_) || defined(_NTDRIVER_)) || defined(_WDM_INCLUDED_))
 _IRQL_requires_max_(DISPATCH_LEVEL)
 _IRQL_requires_min_(DISPATCH_LEVEL)
@@ -2535,6 +2552,15 @@ IoInitializePriorityInfo(
     PriorityInfo->IoPriority = IoPriorityNormal;
     PriorityInfo->PagePriority = 0;
 }
+
+NTKERNELAPI
+NTSTATUS
+NTAPI
+IoRetrievePriorityInfo(
+    _In_opt_ PIRP Irp,
+    _In_opt_ PFILE_OBJECT FileObject,
+    _In_opt_ PETHREAD Thread,
+    _Inout_ PIO_PRIORITY_INFO PriorityInfo);
 $endif (_NTIFS_)
 #endif /* (NTDDI_VERSION >= NTDDI_VISTA) */
 
