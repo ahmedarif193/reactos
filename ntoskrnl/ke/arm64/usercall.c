@@ -118,6 +118,8 @@ KiArm64CopyToCurrentUserBuffer(
             return Status;
         }
 
+        KeInvalidateTlbEntry(PageAddress);
+
         CurrentVa += ChunkSize;
         RemainingSize -= ChunkSize;
     }
