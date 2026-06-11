@@ -98,4 +98,6 @@ ExArchPostHalInitSystemPhase1(
      * PPI has been re-enabled, so IRQL transitions may use HAL's GIC PMR path.
      */
     KiHalInitialized = TRUE;
+    HalSetGicPriorityMask(KeGetCurrentIrql());
+    __asm__ __volatile__("isb" ::: "memory");
 }
