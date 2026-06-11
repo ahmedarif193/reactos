@@ -15,7 +15,6 @@
 
 /* FUNCTIONS ****************************************************************/
 
-#if (NTDDI_VERSION < NTDDI_WINBLUE)
 /* moved to kernelbase in Windows 8.1 */
 /*
  * @implemented
@@ -31,6 +30,5 @@ GetCompressedFileSizeA(LPCSTR lpFileName,
 
    return GetCompressedFileSizeW(FileNameW, lpFileSizeHigh);
 }
-#endif
 
 /* EOF */
