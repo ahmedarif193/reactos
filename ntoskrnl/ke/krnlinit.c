@@ -313,3 +313,30 @@ KeInitSystem(VOID)
     KiInitMachineDependent();
     return TRUE;
 }
+
+NTSTATUS
+NTAPI
+KeExpandKernelStackAndCalloutEx(
+    _In_ PEXPAND_STACK_CALLOUT Callout,
+    _In_opt_ PVOID Parameter,
+    _In_ SIZE_T Size,
+    _In_ BOOLEAN Wait,
+    _In_opt_ PVOID Context)
+{
+    UNREFERENCED_PARAMETER(Size);
+    UNREFERENCED_PARAMETER(Wait);
+    UNREFERENCED_PARAMETER(Context);
+
+    Callout(Parameter);
+    return STATUS_SUCCESS;
+}
+
+NTSTATUS
+NTAPI
+KeExpandKernelStackAndCallout(
+    _In_ PEXPAND_STACK_CALLOUT Callout,
+    _In_opt_ PVOID Parameter,
+    _In_ SIZE_T Size)
+{
+    return KeExpandKernelStackAndCalloutEx(Callout, Parameter, Size, TRUE, NULL);
+}
