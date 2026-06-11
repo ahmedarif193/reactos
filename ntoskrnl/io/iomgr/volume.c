@@ -4,7 +4,7 @@
  * FILE:            ntoskrnl/io/iomgr/volume.c
  * PURPOSE:         Volume and File System I/O Support
  * PROGRAMMERS:     Alex Ionescu (alex.ionescu@reactos.org)
- *                  Hervé Poussineau (hpoussin@reactos.org)
+ *                  Hervï¿½ Poussineau (hpoussin@reactos.org)
  *                  Eric Kohl
  *                  Pierre Schweitzer (pierre.schweitzer@reactos.org)
  */
@@ -1428,5 +1428,208 @@ Quit:
     ObDereferenceObject(FileObject);
     return Status;
 }
+
+#if (NTDDI_VERSION >= NTDDI_WIN8)
+static
+NTSTATUS
+IopVolumeDeviceToVolumeGuidName(
+    _In_ PVOID VolumeDeviceObject,
+    _Out_ PUNICODE_STRING GuidName)
+{
+    NTSTATUS Status;
+    KEVENT Event;
+    PIRP Irp;
+    PFILE_OBJECT FileObject;
+    PDEVICE_OBJECT DeviceObject;
+    IO_STATUS_BLOCK IoStatusBlock;
+    UNICODE_STRING MountMgrDevice;
+    UNICODE_STRING SymbolicLinkName;
+    PMOUNTMGR_MOUNT_POINT InputPoint;
+    PMOUNTMGR_MOUNT_POINTS MountPoints;
+    PMOUNTMGR_MOUNT_POINT Point;
+    ULONG InputSize, OutputSize, Index;
+    PWSTR Buffer;
+    struct
+    {
+        USHORT NameLength;
+        WCHAR DeviceName[256];
+    } DeviceName;
+
+    PAGED_CODE();
+
+    KeInitializeEvent(&Event, NotificationEvent, FALSE);
+    Irp = IoBuildDeviceIoControlRequest(IOCTL_MOUNTDEV_QUERY_DEVICE_NAME,
+                                        VolumeDeviceObject,
+                                        NULL, 0,
+                                        &DeviceName, sizeof(DeviceName),
+                                        FALSE, &Event, &IoStatusBlock);
+    if (!Irp)
+    {
+        return STATUS_INSUFFICIENT_RESOURCES;
+    }
+
+    Status = IoCallDriver(VolumeDeviceObject, Irp);
+    if (Status == STATUS_PENDING)
+    {
+        KeWaitForSingleObject(&Event, Executive, KernelMode, FALSE, NULL);
+        Status = IoStatusBlock.Status;
+    }
+    if (!NT_SUCCESS(Status))
+    {
+        return Status;
+    }
+
+    InputSize = sizeof(MOUNTMGR_MOUNT_POINT) + DeviceName.NameLength;
+    InputPoint = ExAllocatePoolWithTag(PagedPool, InputSize, TAG_DEV2DOS);
+    if (!InputPoint)
+    {
+        return STATUS_INSUFFICIENT_RESOURCES;
+    }
+
+    RtlZeroMemory(InputPoint, InputSize);
+    InputPoint->DeviceNameOffset = sizeof(MOUNTMGR_MOUNT_POINT);
+    InputPoint->DeviceNameLength = DeviceName.NameLength;
+    RtlCopyMemory(InputPoint + 1, DeviceName.DeviceName, DeviceName.NameLength);
+
+    RtlInitUnicodeString(&MountMgrDevice, MOUNTMGR_DEVICE_NAME);
+    Status = IoGetDeviceObjectPointer(&MountMgrDevice, FILE_READ_ATTRIBUTES,
+                                      &FileObject, &DeviceObject);
+    if (!NT_SUCCESS(Status))
+    {
+        ExFreePoolWithTag(InputPoint, TAG_DEV2DOS);
+        return Status;
+    }
+
+    OutputSize = sizeof(MOUNTMGR_MOUNT_POINTS) + 3 * 256;
+    MountPoints = NULL;
+    while (TRUE)
+    {
+        MountPoints = ExAllocatePoolWithTag(PagedPool, OutputSize, TAG_DEV2DOS);
+        if (!MountPoints)
+        {
+            Status = STATUS_INSUFFICIENT_RESOURCES;
+            goto Quit;
+        }
+
+        KeInitializeEvent(&Event, NotificationEvent, FALSE);
+        Irp = IoBuildDeviceIoControlRequest(IOCTL_MOUNTMGR_QUERY_POINTS,
+                                            DeviceObject,
+                                            InputPoint, InputSize,
+                                            MountPoints, OutputSize,
+                                            FALSE, &Event, &IoStatusBlock);
+        if (!Irp)
+        {
+            Status = STATUS_INSUFFICIENT_RESOURCES;
+            goto Quit;
+        }
+
+        Status = IoCallDriver(DeviceObject, Irp);
+        if (Status == STATUS_PENDING)
+        {
+            KeWaitForSingleObject(&Event, Executive, KernelMode, FALSE, NULL);
+            Status = IoStatusBlock.Status;
+        }
+
+        if (Status != STATUS_BUFFER_OVERFLOW)
+        {
+            break;
+        }
+
+        OutputSize = MountPoints->Size;
+        ExFreePoolWithTag(MountPoints, TAG_DEV2DOS);
+        MountPoints = NULL;
+    }
+
+    if (!NT_SUCCESS(Status))
+    {
+        goto Quit;
+    }
+
+    Status = STATUS_NOT_FOUND;
+    for (Index = 0; Index < MountPoints->NumberOfMountPoints; Index++)
+    {
+        Point = &MountPoints->MountPoints[Index];
+
+        SymbolicLinkName.Buffer = (PWSTR)((PUCHAR)MountPoints +
+                                          Point->SymbolicLinkNameOffset);
+        SymbolicLinkName.Length = Point->SymbolicLinkNameLength;
+        SymbolicLinkName.MaximumLength = Point->SymbolicLinkNameLength;
+
+        if (MOUNTMGR_IS_VOLUME_NAME(&SymbolicLinkName))
+        {
+            Buffer = ExAllocatePoolWithTag(PagedPool,
+                                           SymbolicLinkName.Length +
+                                               sizeof(UNICODE_NULL),
+                                           TAG_DEV2DOS);
+            if (!Buffer)
+            {
+                Status = STATUS_INSUFFICIENT_RESOURCES;
+                goto Quit;
+            }
+
+            RtlCopyMemory(Buffer,
+                          SymbolicLinkName.Buffer,
+                          SymbolicLinkName.Length);
+            Buffer[SymbolicLinkName.Length / sizeof(WCHAR)] = UNICODE_NULL;
+
+            GuidName->Buffer = Buffer;
+            GuidName->Length = SymbolicLinkName.Length;
+            GuidName->MaximumLength = SymbolicLinkName.Length +
+                                      sizeof(UNICODE_NULL);
+
+            Status = STATUS_SUCCESS;
+            break;
+        }
+    }
+
+Quit:
+    if (MountPoints)
+    {
+        ExFreePoolWithTag(MountPoints, TAG_DEV2DOS);
+    }
+    ExFreePoolWithTag(InputPoint, TAG_DEV2DOS);
+    ObDereferenceObject(FileObject);
+    return Status;
+}
+
+NTSTATUS
+NTAPI
+IoVolumeDeviceToGuidPath(
+    _In_ PVOID VolumeDeviceObject,
+    _Out_ PUNICODE_STRING GuidPath)
+{
+    PAGED_CODE();
+
+    return IopVolumeDeviceToVolumeGuidName(VolumeDeviceObject, GuidPath);
+}
+
+NTSTATUS
+NTAPI
+IoVolumeDeviceToGuid(
+    _In_ PVOID VolumeDeviceObject,
+    _Out_ GUID *Guid)
+{
+    NTSTATUS Status;
+    UNICODE_STRING GuidName;
+    UNICODE_STRING GuidString;
+
+    PAGED_CODE();
+
+    Status = IopVolumeDeviceToVolumeGuidName(VolumeDeviceObject, &GuidName);
+    if (!NT_SUCCESS(Status))
+    {
+        return Status;
+    }
+
+    GuidString.Buffer = &GuidName.Buffer[10];
+    GuidString.Length = 38 * sizeof(WCHAR);
+    GuidString.MaximumLength = GuidString.Length;
+
+    Status = RtlGUIDFromString(&GuidString, Guid);
+
+    ExFreePoolWithTag(GuidName.Buffer, TAG_DEV2DOS);
+    return Status;
+}
+#endif
 
 /* EOF */

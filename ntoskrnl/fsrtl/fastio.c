@@ -2043,3 +2043,18 @@ FsRtlRegisterFileSystemFilterCallbacks(
 
     return STATUS_SUCCESS;
 }
+
+VOID
+NTAPI
+FsRtlUpdateDiskCounters(
+    _In_ ULONG64 BytesRead,
+    _In_ ULONG64 BytesWritten)
+{
+    extern BOOLEAN PspDiskCountersEnabled;
+
+    if (!PspDiskCountersEnabled)
+        return;
+
+    UNREFERENCED_PARAMETER(BytesRead);
+    UNREFERENCED_PARAMETER(BytesWritten);
+}

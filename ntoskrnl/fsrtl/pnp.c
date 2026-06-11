@@ -115,3 +115,39 @@ FsRtlNotifyVolumeEvent(IN PFILE_OBJECT FileObject,
 
     return Status;
 }
+
+#if (NTDDI_VERSION >= NTDDI_WIN8)
+VOID
+NTAPI
+FsRtlDismountComplete(IN PDEVICE_OBJECT DeviceObject,
+                      IN NTSTATUS DismountStatus)
+{
+    UNREFERENCED_PARAMETER(DeviceObject);
+    UNREFERENCED_PARAMETER(DismountStatus);
+}
+
+NTSTATUS
+NTAPI
+FsRtlGetSectorSizeInformation(IN PDEVICE_OBJECT DeviceObject,
+                              OUT PFILE_FS_SECTOR_SIZE_INFORMATION SectorSizeInfo)
+{
+    ULONG SectorSize;
+
+    SectorSize = DeviceObject->SectorSize;
+    if (SectorSize == 0)
+    {
+        SectorSize = 512;
+    }
+
+    SectorSizeInfo->LogicalBytesPerSector = SectorSize;
+    SectorSizeInfo->PhysicalBytesPerSectorForAtomicity = SectorSize;
+    SectorSizeInfo->PhysicalBytesPerSectorForPerformance = SectorSize;
+    SectorSizeInfo->FileSystemEffectivePhysicalBytesPerSectorForAtomicity = SectorSize;
+    SectorSizeInfo->Flags = SSINFO_FLAGS_ALIGNED_DEVICE |
+                            SSINFO_FLAGS_PARTITION_ALIGNED_ON_DEVICE;
+    SectorSizeInfo->ByteOffsetForSectorAlignment = 0;
+    SectorSizeInfo->ByteOffsetForPartitionAlignment = 0;
+
+    return STATUS_SUCCESS;
+}
+#endif
