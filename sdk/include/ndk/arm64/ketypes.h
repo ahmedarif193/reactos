@@ -21,7 +21,7 @@ extern "C" {
 #define POWER_LEVEL             14
 #define PROFILE_LEVEL           15
 #define HIGH_LEVEL              15
-#define SYNCH_LEVEL             DISPATCH_LEVEL
+#define SYNCH_LEVEL             12
 
 #define NUMBER_POOL_LOOKASIDE_LISTS 32
 
@@ -97,37 +97,29 @@ typedef struct _KARM64_VFP_STATE
     ARM64_NT_NEON128 V[32];              // 0x010
 } KARM64_VFP_STATE, *PKARM64_VFP_STATE;
 
-// Win11 26100 arm64 layout, sizeof 0x150
-// Win11 unions PreviousMode/PreviousIrql at 0x003; ReactOS needs both live,
-// so PreviousIrql sits in the low byte of Reserved (SVC cookie uses bits 8-31)
+// Win11 26100 arm64 layout, sizeof 0x160
+// PreviousIrql is a standalone byte at 0x004; ReactOS packs the SVC mode
+// cookie into the separate Reserved dword at 0x008 (bits 8-31)
 typedef struct _KTRAP_FRAME
 {
     UCHAR ExceptionActive;               // 0x000
     UCHAR ContextFromKFramesUnwound;     // 0x001
     UCHAR DebugRegistersValid;           // 0x002
     CHAR PreviousMode;                   // 0x003
-    union
-    {
-        ULONG Reserved;                  // 0x004
-        struct
-        {
-            UCHAR PreviousIrql;          // 0x004 [ReactOS]
-            UCHAR ReservedBytes[3];      // 0x005
-        };
-    };
-    union
-    {
-        ULONG64 FaultAddress;            // 0x008
-        ULONG64 TrapFrame;               // 0x008
-    };
-    PKARM64_VFP_STATE VfpState;          // 0x010
-    ULONG Bcr[8];                        // 0x018
-    ULONG64 Bvr[8];                      // 0x038
-    ULONG Wcr[2];                        // 0x078
-    ULONG64 Wvr[2];                      // 0x080
-    ULONG Spsr;                          // 0x090
-    ULONG Esr;                           // 0x094
-    ULONG64 Sp;                          // 0x098
+    UCHAR PreviousIrql;                  // 0x004 [ReactOS]
+    UCHAR ReservedBytes[3];              // 0x005
+    ULONG Reserved;                      // 0x008
+    ULONG ReservedPad;                   // 0x00C
+    ULONG64 FaultAddress;                // 0x010
+    ULONG64 TrapFrame;                   // 0x018
+    ULONG VfpState;                      // 0x020
+    ULONG Bcr[8];                        // 0x024
+    ULONG64 Bvr[8];                      // 0x048
+    ULONG Wcr[2];                        // 0x088
+    ULONG64 Wvr[2];                      // 0x090
+    ULONG Spsr;                          // 0x0A0
+    ULONG Esr;                           // 0x0A4
+    ULONG64 Sp;                          // 0x0A8
     union
     {
         ULONG64 X[19];
@@ -154,26 +146,32 @@ typedef struct _KTRAP_FRAME
             ULONG64 X18;
         };
     };
-    ULONG64 Lr;                          // 0x138
-    ULONG64 Fp;                          // 0x140
-    ULONG64 Pc;                          // 0x148
-} KTRAP_FRAME, *PKTRAP_FRAME;            // sizeof 0x150
+    ULONG64 Lr;                          // 0x148
+    ULONG64 Fp;                          // 0x150
+    ULONG64 Pc;                          // 0x158
+} KTRAP_FRAME, *PKTRAP_FRAME;            // sizeof 0x160
 
 #ifndef __ASSEMBLER__
-C_ASSERT(sizeof(KTRAP_FRAME) == 0x150);
+C_ASSERT(sizeof(KTRAP_FRAME) == 0x160);
 C_ASSERT(sizeof(KARM64_VFP_STATE) == 0x210);
-C_ASSERT(FIELD_OFFSET(KTRAP_FRAME, VfpState) == 0x010);
-C_ASSERT(FIELD_OFFSET(KTRAP_FRAME, Bcr) == 0x018);
-C_ASSERT(FIELD_OFFSET(KTRAP_FRAME, Bvr) == 0x038);
-C_ASSERT(FIELD_OFFSET(KTRAP_FRAME, Wcr) == 0x078);
-C_ASSERT(FIELD_OFFSET(KTRAP_FRAME, Wvr) == 0x080);
-C_ASSERT(FIELD_OFFSET(KTRAP_FRAME, Spsr) == 0x090);
-C_ASSERT(FIELD_OFFSET(KTRAP_FRAME, Esr) == 0x094);
-C_ASSERT(FIELD_OFFSET(KTRAP_FRAME, Sp) == 0x098);
-C_ASSERT(FIELD_OFFSET(KTRAP_FRAME, X) == 0x0A0);
-C_ASSERT(FIELD_OFFSET(KTRAP_FRAME, Lr) == 0x138);
-C_ASSERT(FIELD_OFFSET(KTRAP_FRAME, Fp) == 0x140);
-C_ASSERT(FIELD_OFFSET(KTRAP_FRAME, Pc) == 0x148);
+C_ASSERT(FIELD_OFFSET(KTRAP_FRAME, PreviousIrql) == 0x004);
+C_ASSERT(FIELD_OFFSET(KTRAP_FRAME, Reserved) == 0x008);
+C_ASSERT(FIELD_OFFSET(KTRAP_FRAME, FaultAddress) == 0x010);
+C_ASSERT(FIELD_OFFSET(KTRAP_FRAME, TrapFrame) == 0x018);
+C_ASSERT(FIELD_OFFSET(KTRAP_FRAME, VfpState) == 0x020);
+C_ASSERT(FIELD_OFFSET(KTRAP_FRAME, Bcr) == 0x024);
+C_ASSERT(FIELD_OFFSET(KTRAP_FRAME, Bvr) == 0x048);
+C_ASSERT(FIELD_OFFSET(KTRAP_FRAME, Wcr) == 0x088);
+C_ASSERT(FIELD_OFFSET(KTRAP_FRAME, Wvr) == 0x090);
+C_ASSERT(FIELD_OFFSET(KTRAP_FRAME, Spsr) == 0x0A0);
+C_ASSERT(FIELD_OFFSET(KTRAP_FRAME, Esr) == 0x0A4);
+C_ASSERT(FIELD_OFFSET(KTRAP_FRAME, Sp) == 0x0A8);
+C_ASSERT(FIELD_OFFSET(KTRAP_FRAME, X) == 0x0B0);
+C_ASSERT(FIELD_OFFSET(KTRAP_FRAME, X0) == 0x0B0);
+C_ASSERT(FIELD_OFFSET(KTRAP_FRAME, X18) == 0x140);
+C_ASSERT(FIELD_OFFSET(KTRAP_FRAME, Lr) == 0x148);
+C_ASSERT(FIELD_OFFSET(KTRAP_FRAME, Fp) == 0x150);
+C_ASSERT(FIELD_OFFSET(KTRAP_FRAME, Pc) == 0x158);
 #endif
 
 typedef struct _KEXCEPTION_FRAME
@@ -447,20 +445,21 @@ typedef struct _KPRCB
     ULONG CoresPerPhysicalProcessor;                     // 0x790
     ULONG LogicalProcessorsPerCore;                      // 0x794
     ULONG64 QpcToTscIncrement;                           // 0x798
-    // Win11 PrcbPad4[12] region: ReactOS legacy scheduler/DPC state
-    struct _KNODE *ParentNode;                           // 0x7A0 [ReactOS]
-    ULONG64 MultiThreadProcessorSet;                     // 0x7A8 [ReactOS]
-    struct _KPRCB *MultiThreadSetMaster;                 // 0x7B0 [ReactOS]
-    ULONG64 TimerRequest;                                // 0x7B8 [ReactOS]
-    ULONG64 TimerHand;                                   // 0x7C0 [ReactOS]
-    volatile ULONG64 TargetSet;                          // 0x7C8 [ReactOS]
-    volatile LONG DpcSetEventRequest;                    // 0x7D0 [ReactOS]
-    LONG Sleeping;                                       // 0x7D4 [ReactOS]
-    volatile UCHAR DpcInterruptRequested;                // 0x7D8 [ReactOS]
-    volatile UCHAR DpcThreadRequested;                   // 0x7D9 [ReactOS]
-    volatile UCHAR DpcThreadActive;                      // 0x7DA [ReactOS]
-    UCHAR PrcbPad4a[5];                                  // 0x7DB
-    ULONG64 PrcbPad4[4];                                 // 0x7E0
+    // Win11 PrcbPad4[12] region: named pad at its PDB offset, ReactOS legacy
+    // scheduler/DPC state packed into the remainder before LockQueue
+    ULONG64 PrcbPad4[4];                                 // 0x7A0
+    struct _KNODE *ParentNode;                           // 0x7C0 [ReactOS]
+    ULONG64 MultiThreadProcessorSet;                     // 0x7C8 [ReactOS]
+    struct _KPRCB *MultiThreadSetMaster;                 // 0x7D0 [ReactOS]
+    ULONG64 TimerRequest;                                // 0x7D8 [ReactOS]
+    ULONG64 TimerHand;                                   // 0x7E0 [ReactOS]
+    volatile ULONG64 TargetSet;                          // 0x7E8 [ReactOS]
+    volatile LONG DpcSetEventRequest;                    // 0x7F0 [ReactOS]
+    LONG Sleeping;                                       // 0x7F4 [ReactOS]
+    volatile UCHAR DpcInterruptRequested;                // 0x7F8 [ReactOS]
+    volatile UCHAR DpcThreadRequested;                   // 0x7F9 [ReactOS]
+    volatile UCHAR DpcThreadActive;                      // 0x7FA [ReactOS]
+    UCHAR PrcbPad4a[5];                                  // 0x7FB
     KSPIN_LOCK_QUEUE LockQueue[17];                      // 0x800 Win11 LockQueueMaximumLock == 17
     UCHAR ProcessorVendorString[2];                      // 0x910
     UCHAR PrcbPad5[2];                                   // 0x912
@@ -584,8 +583,7 @@ typedef struct _KPRCB
     ULONG PrcbPadCAC;                                    // 0xCAC
     KDPC TimerExpirationDpc;                             // 0xCB0
     PVOID ScbQueue[2];                                   // 0xCF0 RTL_RB_TREE
-    LIST_ENTRY ScbList;                                  // 0xD00
-    ULONG64 PrcbPadD10[14];                              // 0xD10
+    LIST_ENTRY ScbList[8];                               // 0xD00
     LIST_ENTRY DispatcherReadyListHead[32];              // 0xD80
     ULONG InterruptCount;                                // 0xF80
     ULONG KernelTime;                                    // 0xF84
@@ -677,7 +675,7 @@ typedef struct _KPRCB
     ULONG64 PackageProcessorSet[33];                     // 0x1720 KAFFINITY_EX
     union
     {
-        ULONG TopologyId[6];                             // 0x1828
+        ULONG TopologyId[5];                             // 0x1828
         struct
         {
             ULONG ProcessorId;
@@ -685,10 +683,9 @@ typedef struct _KPRCB
             ULONG ModuleId;
             ULONG DieId;
             ULONG PackageId;
-            ULONG ComplexId;
         };
     };
-    UCHAR PrcbPad25[80];                                 // 0x1840
+    UCHAR PrcbPad25[84];                                 // 0x183C
     UCHAR PrcbPad1890[112];                              // 0x1890
     ULONG64 SharedReadyQueueMask;                        // 0x1900
     PVOID SharedReadyQueue;                              // 0x1908 PKSHARED_READY_QUEUE
@@ -887,6 +884,7 @@ C_ASSERT(FIELD_OFFSET(KPRCB, Number) == 0x024);
 C_ASSERT(FIELD_OFFSET(KPRCB, ProcessorState) == 0x040);
 C_ASSERT(FIELD_OFFSET(KPRCB, HalReserved) == 0x710);
 C_ASSERT(FIELD_OFFSET(KPRCB, GroupSetMember) == 0x780);
+C_ASSERT(FIELD_OFFSET(KPRCB, PrcbPad4) == 0x7A0);
 C_ASSERT(FIELD_OFFSET(KPRCB, LockQueue) == 0x800);
 C_ASSERT(FIELD_OFFSET(KPRCB, FeatureBits) == 0x914);
 C_ASSERT(FIELD_OFFSET(KPRCB, PPLookasideList) == 0x980);
@@ -904,6 +902,8 @@ C_ASSERT(FIELD_OFFSET(KPRCB, DpcGate) == 0xC00);
 C_ASSERT(FIELD_OFFSET(KPRCB, CallDpc) == 0xC20);
 C_ASSERT(FIELD_OFFSET(KPRCB, WaitListHead) == 0xC80);
 C_ASSERT(FIELD_OFFSET(KPRCB, ReadySummary) == 0xC98);
+C_ASSERT(FIELD_OFFSET(KPRCB, ScbList) == 0xD00);
+C_ASSERT(RTL_FIELD_SIZE(KPRCB, ScbList) == 0x80);
 C_ASSERT(FIELD_OFFSET(KPRCB, DispatcherReadyListHead) == 0xD80);
 C_ASSERT(FIELD_OFFSET(KPRCB, InterruptCount) == 0xF80);
 C_ASSERT(FIELD_OFFSET(KPRCB, KeExceptionDispatchCount) == 0xFB4);
@@ -917,6 +917,7 @@ C_ASSERT(FIELD_OFFSET(KPRCB, MmSpinLockOrdering) == 0x1680);
 C_ASSERT(FIELD_OFFSET(KPRCB, InterruptObjectPool) == 0x1710);
 C_ASSERT(FIELD_OFFSET(KPRCB, PackageProcessorSet) == 0x1720);
 C_ASSERT(FIELD_OFFSET(KPRCB, TopologyId) == 0x1828);
+C_ASSERT(FIELD_OFFSET(KPRCB, PrcbPad25) == 0x183C);
 C_ASSERT(FIELD_OFFSET(KPRCB, SharedReadyQueueMask) == 0x1900);
 C_ASSERT(FIELD_OFFSET(KPRCB, Cache) == 0x1968);
 C_ASSERT(FIELD_OFFSET(KPRCB, CacheCount) == 0x19B0);
