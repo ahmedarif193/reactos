@@ -1411,6 +1411,7 @@ KiArm64HandleSynchronousException(
 
             if (NT_SUCCESS(Status))
             {
+                KeInvalidateTlbEntry((PVOID)(ULONG_PTR)Context->State.FaultAddress);
                 /*
                  * ARM64: cache maintenance after instruction fault resolution.
                  * Keep this path targeted to the faulting page to avoid global
@@ -1737,6 +1738,56 @@ KiArm64HandleSynchronousException(
                  * maintenance for DMA/PIO buffers belongs at the device mapping
                  * boundary, not in the generic page-fault return path.
                  */
+                {
+                    ULONG_PTR Va = (ULONG_PTR)Context->State.FaultAddress;
+
+                    if (Va < (ULONG_PTR)MmSystemRangeStart)
+                    {
+                        static const ULONG Shifts[4] = {39, 30, 21, 12};
+                        ULONG64 Root;
+                        ULONG64 Entry;
+                        volatile ULONG64 *Table;
+                        volatile ULONG64 *Slot;
+                        ULONG Level;
+
+                        __asm__ __volatile__("mrs %0, ttbr0_el1" : "=r"(Root));
+                        Table = (volatile ULONG64 *)MI_ARM64_PHYS_TO_VA(Root & ARM64_PTE_ADDR_MASK);
+                        for (Level = 0; Level < 4; Level++)
+                        {
+                            Slot = &Table[(Va >> Shifts[Level]) & 0x1FF];
+                            Entry = *Slot;
+                            MiArm64CleanEntryToPoC(Slot);
+                            if ((Level == 3) || ((Entry & 3) != 3))
+                            {
+                                break;
+                            }
+                            Table = (volatile ULONG64 *)MI_ARM64_PHYS_TO_VA(Entry & ARM64_PTE_ADDR_MASK);
+                        }
+                    }
+                    else
+                    {
+                        volatile ULONG64 *Entry;
+
+                        Entry = (volatile ULONG64 *)MiArm64KernelPpeKseg0((PVOID)Va);
+                        if (Entry != NULL)
+                        {
+                            MiArm64CleanEntryToPoC(Entry);
+                        }
+
+                        Entry = (volatile ULONG64 *)MiArm64KernelPdeKseg0((PVOID)Va);
+                        if (Entry != NULL)
+                        {
+                            MiArm64CleanEntryToPoC(Entry);
+                        }
+
+                        Entry = (volatile ULONG64 *)MiArm64KernelPteKseg0((PVOID)Va);
+                        if (Entry != NULL)
+                        {
+                            MiArm64CleanEntryToPoC(Entry);
+                        }
+                    }
+                }
+                KeInvalidateTlbEntry((PVOID)(ULONG_PTR)Context->State.FaultAddress);
                 Context->TrapFramePointer = TrapFrame;
                 Context->ExceptionFramePointer = &Context->ExceptionFrame;
                 KiArm64ClearTrapActive();
