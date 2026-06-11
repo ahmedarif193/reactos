@@ -429,19 +429,19 @@ Return Value:
     //  exceptions here and deal with them.
     //
 
-    try {
+    _SEH2_TRY {
 
         CalloutParameters->IrpStatus = FatCommonCreate( CalloutParameters->Create.IrpContext,
                                                         CalloutParameters->Create.Irp );
 
-    } except (FatExceptionFilter( CalloutParameters->Create.IrpContext, GetExceptionInformation() )) {
+    } _SEH2_EXCEPT (FatExceptionFilter( CalloutParameters->Create.IrpContext, _SEH2_GetExceptionInformation() )) {
 
         //
         //  Return the resulting status.
         //
 
-        CalloutParameters->ExceptionStatus = GetExceptionCode();
-    }
+        CalloutParameters->ExceptionStatus = _SEH2_GetExceptionCode();
+    } _SEH2_END;
 
 }
 
