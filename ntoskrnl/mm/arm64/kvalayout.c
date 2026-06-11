@@ -229,9 +229,9 @@ SetupVaRegions(
     /* Reserve 1 TB system cache (PXIs 499-500) */
     ReserveVaRegion(AssignedRegionSystemCache, MI_SYSTEM_CACHE_START, 1 * _1TB);
 
-    /* Reserve the PFN database (PXI 501) */
+    /* Reserve VA for the PFN database */
     PfnDbSize = HighestPfn * sizeof(MMPFN) + _1MB;
-    ReserveVaRegion(AssignedRegionPfnDatabase, MI_PFN_DATABASE, PfnDbSize);
+    RandomizeVaRegion(AssignedRegionPfnDatabase, PfnDbSize, PDE_MAPPED_VA);
 
     /* Reserve 128 GB for non-paged pool */
     RandomizeVaRegion(AssignedRegionNonPagedPool, 128 * _1GB, PDE_MAPPED_VA);
