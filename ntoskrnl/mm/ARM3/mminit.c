@@ -2531,7 +2531,53 @@ MmArmInitSystem(IN ULONG Phase,
         // whatever follows are separate from the PDEs that boot loader might've
         // already created (and later, we can blow all that away if we want to).
         //
+#if (NTDDI_VERSION >= NTDDI_WIN8)
+        {
+            PLIST_ENTRY NextMd;
+            PMEMORY_ALLOCATION_DESCRIPTOR MdBlock;
+            PFN_NUMBER SpannedPages = 0, EndPage;
+
+            for (NextMd = KeLoaderBlock->MemoryDescriptorListHead.Flink;
+                 NextMd != &KeLoaderBlock->MemoryDescriptorListHead;
+                 NextMd = NextMd->Flink)
+            {
+                MdBlock = CONTAINING_RECORD(NextMd,
+                                            MEMORY_ALLOCATION_DESCRIPTOR,
+                                            ListEntry);
+                switch (MdBlock->MemoryType)
+                {
+                    case LoaderExceptionBlock:
+                    case LoaderSystemBlock:
+                    case LoaderLoadedProgram:
+                    case LoaderFirmwareTemporary:
+                    case LoaderOsloaderHeap:
+                    case LoaderOsloaderStack:
+                    case LoaderSystemCode:
+                    case LoaderHalCode:
+                    case LoaderBootDriver:
+                    case LoaderConsoleInDriver:
+                    case LoaderConsoleOutDriver:
+                    case LoaderStartupDpcStack:
+                    case LoaderStartupKernelStack:
+                    case LoaderStartupPanicStack:
+                    case LoaderStartupPcrPage:
+                    case LoaderStartupPdrPage:
+                    case LoaderRegistryData:
+                    case LoaderMemoryData:
+                    case LoaderNlsData:
+                        EndPage = MdBlock->BasePage + MdBlock->PageCount;
+                        if (EndPage > SpannedPages) SpannedPages = EndPage;
+                        break;
+                    default:
+                        break;
+                }
+            }
+
+            MmBootImageSize = SpannedPages;
+        }
+#else
         MmBootImageSize = KeLoaderBlock->Extension->LoaderPagesSpanned;
+#endif
         MmBootImageSize *= PAGE_SIZE;
         MmBootImageSize = (MmBootImageSize + PDE_MAPPED_VA - 1) & ~(PDE_MAPPED_VA - 1);
         ASSERT((MmBootImageSize % PDE_MAPPED_VA) == 0);
