@@ -68,6 +68,8 @@ include(sdk/cmake/config.cmake)
 # selected target is 5.2, default NTDDI should be WS03SP1 rather than raw WS03.
 if(REACTOS_TARGET_NT STREQUAL "0x502")
     set(REACTOS_TARGET_NTDDI "0x05020100")
+elseif(REACTOS_TARGET_NT STREQUAL "0xA00")
+    set(REACTOS_TARGET_NTDDI "0x0A000010")
 else()
     math(EXPR REACTOS_TARGET_NTDDI "${REACTOS_TARGET_NT} * 65536" OUTPUT_FORMAT HEXADECIMAL)
 endif()
@@ -245,6 +247,7 @@ Enable this if the module uses typeid or dynamic_cast. You will probably need to
     # so host-tools see the same value).
     math(EXPR _NT_MAJOR "${REACTOS_TARGET_NT} / 256")
     math(EXPR _NT_MINOR "${REACTOS_TARGET_NT} % 256")
+    math(EXPR _NT_VALUE "${REACTOS_TARGET_NT} + 0")
 
     add_definitions(-DWINVER=${REACTOS_TARGET_NT}
                     -D_WIN32_IE=0x603
@@ -257,6 +260,10 @@ Enable this if the module uses typeid or dynamic_cast. You will probably need to
                     -DDLL_EXPORT_VERSION=${DLL_EXPORT_VERSION}
                     -DVER_PRODUCTMAJORVERSION=${_NT_MAJOR}
                     -DVER_PRODUCTMINORVERSION=${_NT_MINOR})
+
+    if(_NT_VALUE GREATER_EQUAL 2560)
+        add_definitions(-DVER_PRODUCTBUILD=26100 -DVER_PRODUCTBUILD_QFE=1)
+    endif()
 
     # Arch Options
     if(ARCH STREQUAL "i386")
