@@ -1121,6 +1121,9 @@ MI_UPDATE_VALID_PTE(IN PMMPTE PointerPte,
     ASSERT(TempPte.u.Hard.Valid == 1);
     ASSERT(PointerPte->u.Hard.PageFrameNumber == TempPte.u.Hard.PageFrameNumber);
     *PointerPte = TempPte;
+#if defined(_M_ARM64)
+    MiArm64CleanEntryToPoC(PointerPte);
+#endif
 }
 
 //
@@ -1134,6 +1137,9 @@ MI_WRITE_INVALID_PTE(IN PMMPTE PointerPte,
     /* Write the invalid PTE */
     ASSERT(InvalidPte.u.Hard.Valid == 0);
     *PointerPte = InvalidPte;
+#if defined(_M_ARM64)
+    MiArm64CleanEntryToPoC(PointerPte);
+#endif
 }
 
 //
@@ -1146,6 +1152,9 @@ MI_ERASE_PTE(IN PMMPTE PointerPte)
     /* Zero out the PTE */
     ASSERT(PointerPte->u.Long != 0);
     PointerPte->u.Long = 0;
+#if defined(_M_ARM64)
+    MiArm64CleanEntryToPoC(PointerPte);
+#endif
 }
 
 //

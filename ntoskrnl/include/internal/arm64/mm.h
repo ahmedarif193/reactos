@@ -640,6 +640,52 @@ MiArm64IsAddressValid(
     return ((Entry & ARM64_PTE_TYPE_MASK) == ARM64_PTE_TYPE_PAGE);
 }
 
+FORCEINLINE
+BOOLEAN
+MiArm64ProbeForAccess(
+    _In_ PVOID Address,
+    _In_ BOOLEAN Write)
+{
+    ULONG64 Par;
+
+    if (Write)
+    {
+        __asm__ __volatile__("at s1e1w, %0" :: "r"(Address));
+    }
+    else
+    {
+        __asm__ __volatile__("at s1e1r, %0" :: "r"(Address));
+    }
+    __asm__ __volatile__("isb" ::: "memory");
+    __asm__ __volatile__("mrs %0, par_el1" : "=r"(Par));
+
+    return ((Par & 1ULL) == 0);
+}
+
+FORCEINLINE
+VOID
+MiArm64CleanEntryToPoC(
+    _In_ volatile VOID *Entry)
+{
+    __asm__ __volatile__("dc civac, %0" :: "r"(Entry) : "memory");
+    __asm__ __volatile__("dsb ish" ::: "memory");
+}
+
+FORCEINLINE
+VOID
+MiArm64CleanPageToPoC(
+    _In_ PVOID PageVa)
+{
+    ULONG_PTR Va = (ULONG_PTR)PAGE_ALIGN(PageVa);
+    ULONG_PTR End = Va + PAGE_SIZE;
+
+    for (; Va < End; Va += 64)
+    {
+        __asm__ __volatile__("dc civac, %0" :: "r"((PVOID)Va) : "memory");
+    }
+    __asm__ __volatile__("dsb ish" ::: "memory");
+}
+
 /*
  * MiArm64SyncPxeWrite - Propagate PXE-level self-map writes to the TTBR1 root.
  *
@@ -673,7 +719,7 @@ MiArm64SyncPxeWrite(
 
     RootL0 = (volatile ULONG64 *)MI_ARM64_PHYS_TO_VA(Root);
     RootL0[Index] = PointerPxe->u.Long;
-    __asm__ __volatile__("dsb ishst" ::: "memory");
+    MiArm64CleanEntryToPoC(&RootL0[Index]);
 }
 
 /*
@@ -929,12 +975,19 @@ MiArm64SyncKernelLeafPteWrite(
 
     if (((ULONG_PTR)PointerPte < PTE_BASE) ||
         ((ULONG_PTR)PointerPte > PTE_TOP))
+    {
+        MiArm64CleanEntryToPoC(PointerPte);
         return;
+    }
 
     VirtualAddress = MiPteToAddress(PointerPte);
-    if (((ULONG_PTR)VirtualAddress < (ULONG_PTR)MmSystemRangeStart) ||
-        (((ULONG_PTR)VirtualAddress >= PTE_BASE) &&
-         ((ULONG_PTR)VirtualAddress <= HYPER_SPACE_END)))
+    if ((ULONG_PTR)VirtualAddress < (ULONG_PTR)MmSystemRangeStart)
+    {
+        MiArm64CleanEntryToPoC(PointerPte);
+        return;
+    }
+    if (((ULONG_PTR)VirtualAddress >= PTE_BASE) &&
+        ((ULONG_PTR)VirtualAddress <= HYPER_SPACE_END))
     {
         return;
     }
@@ -953,7 +1006,7 @@ MiArm64SyncKernelLeafPteWrite(
         return;
 
     *(volatile ULONG64 *)Kseg0Pte = PointerPte->u.Long;
-    __asm__ __volatile__("dsb ishst" ::: "memory");
+    MiArm64CleanEntryToPoC(Kseg0Pte);
 }
 
 /*
@@ -982,14 +1035,20 @@ MiArm64SyncKernelHierarchyEntryWrite(
     {
         VirtualAddress = MiPpeToAddress(PointerEntry);
         if ((ULONG_PTR)VirtualAddress < (ULONG_PTR)MmSystemRangeStart)
+        {
+            MiArm64CleanEntryToPoC(PointerEntry);
             return;
+        }
         Kseg0Entry = MiArm64KernelPpeKseg0(VirtualAddress);
     }
     else if ((EntryAddress >= PDE_BASE) && (EntryAddress <= PDE_TOP))
     {
         VirtualAddress = MiPdeToAddress(PointerEntry);
         if ((ULONG_PTR)VirtualAddress < (ULONG_PTR)MmSystemRangeStart)
+        {
+            MiArm64CleanEntryToPoC(PointerEntry);
             return;
+        }
         Kseg0Entry = MiArm64KernelPdeKseg0(VirtualAddress);
     }
     else
@@ -1008,7 +1067,7 @@ MiArm64SyncKernelHierarchyEntryWrite(
         return;
 
     *(volatile ULONG64 *)Kseg0Entry = PointerEntry->u.Long;
-    __asm__ __volatile__("dsb ishst" ::: "memory");
+    MiArm64CleanEntryToPoC(Kseg0Entry);
 }
 
 //
