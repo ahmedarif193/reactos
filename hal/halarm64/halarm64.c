@@ -2941,6 +2941,11 @@ HalInitSystem(
     NTSTATUS Status;
     KIRQL OldIrql;
 
+    if (KeGetCurrentPrcb()->Number != 0)
+    {
+        return TRUE;
+    }
+
     if (BootPhase != 0)
     {
         KIRQL SwitchIrql;
