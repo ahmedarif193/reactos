@@ -1637,6 +1637,64 @@ MiArm64RegisterFreeLdrPageTables(VOID)
     }
 }
 
+/* Win10 19H1+ contract: map a writable alias of the KUSER_SHARED_DATA page in system PTE space */
+CODE_SEG("INIT")
+static
+VOID
+MiInitializeSharedUserData(VOID)
+{
+    PMMPTE CanonicalPte;
+    PMMPTE AliasPte;
+    MMPTE TempPte;
+    PFN_NUMBER PageFrameIndex;
+
+    CanonicalPte = MiAddressToPte((PVOID)KI_USER_SHARED_DATA);
+    ASSERT(CanonicalPte->u.Hard.Valid == 1);
+    PageFrameIndex = PFN_FROM_PTE(CanonicalPte);
+
+    AliasPte = MiReserveSystemPtes(1, SystemPteSpace);
+    if (AliasPte == NULL)
+    {
+        return;
+    }
+
+    TempPte = ValidKernelPte;
+    TempPte.u.Long |= PTE_NOEXECUTE;
+    TempPte.u.Hard.PageFrameNumber = PageFrameIndex;
+    /* MI_WRITE_VALID_PTE publishes with dsb ishst, so the alias walks before anyone writes through it */
+    MI_WRITE_VALID_PTE(AliasPte, TempPte);
+    MmWriteableSharedUserData = (PKUSER_SHARED_DATA)MiPteToAddress(AliasPte);
+}
+
+/* Win10 19H1+ contract: the canonical KUSER_SHARED_DATA kernel VA is read-only at EL1 */
+CODE_SEG("INIT")
+static
+VOID
+MiProtectSharedUserPage(VOID)
+{
+    PMMPTE CanonicalPte;
+    MMPTE TempPte;
+
+    /* Keep the canonical VA writable if the alias could not be created */
+    if (MmWriteableSharedUserData == SharedUserData)
+    {
+        return;
+    }
+
+    CanonicalPte = MiAddressToPte((PVOID)KI_USER_SHARED_DATA);
+    TempPte = *CanonicalPte;
+    ASSERT(TempPte.u.Hard.Valid == 1);
+    TempPte.u.Hard.NotDirty = 1;
+    TempPte.u.Hard.Dbm = 0;
+    TempPte.u.Hard.Writable = 0;
+    /* Permission tightening only, so the ARM ARM allows skipping break-before-make */
+    CanonicalPte->u.Long = TempPte.u.Long;
+    __asm__ __volatile__("dsb ishst" ::: "memory");
+    __asm__ __volatile__("tlbi vaale1is, %0" :: "r"((ULONG_PTR)KI_USER_SHARED_DATA >> PAGE_SHIFT) : "memory");
+    __asm__ __volatile__("dsb ish" ::: "memory");
+    __asm__ __volatile__("isb" ::: "memory");
+}
+
 CODE_SEG("INIT")
 NTSTATUS
 NTAPI
@@ -1991,6 +2049,9 @@ MiInitMachineDependent(_Inout_ PLOADER_PARAMETER_BLOCK LoaderBlock)
             "dsb ish\n\t"
             "isb"
             ::: "memory");
+
+        MiInitializeSharedUserData();
+        MiProtectSharedUserPage();
     }
 
     if (MmSystemPtesStart[SystemPteSpace] == NULL)
