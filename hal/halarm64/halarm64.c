@@ -3774,6 +3774,7 @@ HalEnableSystemInterrupt(
             return FALSE;
         }
 
+        HalpGicItsSetLpiPriority(Vector, priority);
         HalpGicItsEnableLpi(Vector);
         __asm__ __volatile__("dsb sy" ::: "memory");
         return TRUE;

@@ -747,6 +747,35 @@ HalpGicItsSendMapti(
  * ============================================================================
  */
 
+static VOID
+HalpGicItsInvalidateLpiConfig(VOID)
+{
+    ULONG Node;
+
+    for (Node = 0; Node < HalpGicItsNodeCount; ++Node)
+    {
+        PHALP_GIC_ITS_NODE ItsNode = &HalpGicItsNodes[Node];
+        ULONG Cpu;
+
+        if (!ItsNode->Enabled)
+            continue;
+
+        for (Cpu = 0; Cpu < MAXIMUM_PROCESSORS; ++Cpu)
+        {
+            UINT64 Cmd[4];
+
+            if (!ItsNode->CollectionMapped[Cpu])
+                continue;
+
+            RtlZeroMemory(Cmd, HAL_ARM64_ITS_CMD_ENTRY_SIZE);
+            Cmd[0] = (UINT64)GITS_CMD_INVALL;
+            Cmd[2] = (UINT64)(Cpu & 0xFFFFu); /* ICID = collection = CPU */
+            if (HalpGicItsPostCommandOnNode(ItsNode, Cmd))
+                HalpGicItsSendSyncOnNode(ItsNode, ItsNode->CollectionTarget[Cpu]);
+        }
+    }
+}
+
 VOID
 HalpGicItsEnableLpi(
     _In_ ULONG Lpi)
@@ -760,35 +789,21 @@ HalpGicItsEnableLpi(
     if (Index >= HalpGicLpiCount)
         return;
 
-    HalpGicLpiConfig[Index] = (UCHAR)(HAL_ARM64_LPI_PROP_PRIO_DEFAULT |
+    /* RMW: keep the per-IRQL priority programmed at connect (HalpGicItsSetLpiPriority),
+     * only set GROUP1 | ENABLED. Clobbering it with the default would break PMR
+     * masking for any LPI whose IRQL != the default's level (bugcheck 0x0F). */
+    HalpGicLpiConfig[Index] = (UCHAR)((HalpGicLpiConfig[Index] & 0xFCu) |
                                       HAL_ARM64_LPI_PROP_GROUP1 |
                                       HAL_ARM64_LPI_PROP_ENABLED);
     HalpArm64CleanDcacheRange(&HalpGicLpiConfig[Index], sizeof(UCHAR));
 
     /*
      * The redistributor caches LPI configuration; the table write above is not
-     * observed until an INVALL is issued, so the LPI would stay disabled and the
-     * MSI never fire. Invalidate the current CPU's collection (ICID == CPU) on
-     * every ITS node.
+     * observed until an INVALL is issued, so the LPI can stay disabled or keep
+     * its old priority. Invalidate all mapped collections because an MSI can be
+     * routed to a CPU selected from affinity, not necessarily the current CPU.
      */
-    {
-        ULONG Cpu = KeGetCurrentProcessorNumber();
-        ULONG Node;
-
-        for (Node = 0; Node < HalpGicItsNodeCount; ++Node)
-        {
-            PHALP_GIC_ITS_NODE ItsNode = &HalpGicItsNodes[Node];
-            UINT64 Cmd[4];
-
-            if (!ItsNode->Enabled)
-                continue;
-
-            RtlZeroMemory(Cmd, HAL_ARM64_ITS_CMD_ENTRY_SIZE);
-            Cmd[0] = (UINT64)GITS_CMD_INVALL;
-            Cmd[2] = (UINT64)(Cpu & 0xFFFFu); /* ICID = collection = CPU */
-            HalpGicItsPostCommandOnNode(ItsNode, Cmd);
-        }
-    }
+    HalpGicItsInvalidateLpiConfig();
 }
 
 VOID
@@ -804,9 +819,11 @@ HalpGicItsDisableLpi(
     if (Index >= HalpGicLpiCount)
         return;
 
-    HalpGicLpiConfig[Index] = (UCHAR)(HAL_ARM64_LPI_PROP_PRIO_DEFAULT |
+    /* RMW: clear ENABLED, preserve the per-IRQL priority (like Linux). */
+    HalpGicLpiConfig[Index] = (UCHAR)((HalpGicLpiConfig[Index] & 0xFCu) |
                                       HAL_ARM64_LPI_PROP_GROUP1);
     HalpArm64CleanDcacheRange(&HalpGicLpiConfig[Index], sizeof(UCHAR));
+    HalpGicItsInvalidateLpiConfig();
 }
 
 VOID
