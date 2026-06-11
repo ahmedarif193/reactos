@@ -20,6 +20,10 @@ if(ARCH STREQUAL "arm64")
     add_registry_inf(hivesys_arm64.inf)
 endif()
 
+if(_NT_VALUE GREATER_EQUAL 2560)
+    add_registry_inf(hivent10.inf)
+endif()
+
 # Regtest
 add_cd_file(FILE ${CMAKE_CURRENT_SOURCE_DIR}/bootcdregtest/regtest.cmd DESTINATION reactos/bin FOR all)
 
