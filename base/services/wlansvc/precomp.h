@@ -2,6 +2,7 @@
 #define _WLANSVC_PCH_
 
 #include <stdarg.h>
+#include <stdio.h>
 
 #define WIN32_NO_STATUS
 #define _INC_WINDOWS
@@ -10,15 +11,12 @@
 #include <windef.h>
 #include <winbase.h>
 #include <winsvc.h>
+#include <winioctl.h>
 #include <wlansvc_s.h>
 
 #include <ndk/rtlfuncs.h>
 #include <ndk/obfuncs.h>
 
-typedef struct _WLANSVCHANDLE
-{
-    LIST_ENTRY WlanSvcHandleListEntry;
-    DWORD      dwClientVersion;
-} WLANSVCHANDLE, *PWLANSVCHANDLE;
+#include "wlansvc.h"
 
 #endif /* _WLANSVC_PCH_ */
