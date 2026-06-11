@@ -369,10 +369,12 @@ Ndis6CallMiniportInitializeEx(
     /* Call the driver. The handle we hand it is the LOGICAL_ADAPTER
      * pointer, which the driver round-trips back to us via every
      * subsequent NdisM* call. */
+    DbgPrint("NDIS6: InitializeEx → driver (adapter=%p pdo=%p fdo=%p next=%p)\n", Adapter, Adapter->NdisMiniportBlock.PhysicalDeviceObject, Adapter->NdisMiniportBlock.DeviceObject, Adapter->NdisMiniportBlock.NextDeviceObject);
     Status = Ext->DriverBlock->Characteristics.InitializeHandlerEx(
         (NDIS_HANDLE)Adapter,
         Ext->DriverBlock->MiniportDriverContext,
         &Params);
+    DbgPrint("NDIS6: InitializeEx returned 0x%08lx (ctx=%p)\n", (ULONG)Status, Ext->MiniportAdapterContext);
 
     return Status;
 }

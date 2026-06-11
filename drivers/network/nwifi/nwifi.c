@@ -129,7 +129,7 @@ NwifiRegisterProtocol(VOID)
     Chars.MinorNdisVersion = 20;
     Chars.MajorDriverVersion = 1;
     Chars.MinorDriverVersion = 0;
-    Chars.Name = &NwifiProtocolName;
+    Chars.Name = NwifiProtocolName;
 
     /* Lower-edge protocol entry points (binds the dot11 miniport). */
     Chars.SetOptionsHandler                 = NwifiProtocolSetOptions;
