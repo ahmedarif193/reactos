@@ -594,7 +594,7 @@ HalSetIommuPolicy(
 
 NTSTATUS
 NTAPI
-HalRequestInterrupt(
+HalpRequestInterrupt(
     _In_ ULONG Irql,
     _In_ PVOID InterruptObject,
     _In_ ULONG Vector,
@@ -612,7 +612,7 @@ HalRequestInterrupt(
 
 NTSTATUS
 NTAPI
-HalEnumerateUnmaskedInterrupts(
+HalpEnumerateUnmaskedInterrupts(
     _Out_ PVOID InterruptInformation,
     _Inout_ PULONG InterruptInformationLength)
 {
