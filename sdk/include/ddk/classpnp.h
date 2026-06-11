@@ -864,6 +864,11 @@ typedef struct _CLASS_FUNCTION_SUPPORT_INFO
 #pragma warning(pop)
 #endif
 
+typedef struct _ADDITIONAL_FDO_DATA {
+  ULONG DeviceGuidFlags;
+  GUID DeviceGuid;
+} ADDITIONAL_FDO_DATA, *PADDITIONAL_FDO_DATA;
+
 typedef struct _FUNCTIONAL_DEVICE_EXTENSION {
   _ANONYMOUS_UNION union {
     _ANONYMOUS_STRUCT struct {

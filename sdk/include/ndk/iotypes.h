@@ -514,6 +514,10 @@ typedef enum _FSINFOCLASS
     FileFsFullSizeInformation,
     FileFsObjectIdInformation,
     FileFsDriverPathInformation,
+    FileFsVolumeFlagsInformation,
+    FileFsSectorSizeInformation,
+    FileFsDataCopyInformation,
+    FileFsMetadataSizeInformation,
     FileFsMaximumInformation
 } FS_INFORMATION_CLASS, *PFS_INFORMATION_CLASS;
 

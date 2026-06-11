@@ -1411,6 +1411,9 @@ typedef enum _FSINFOCLASS {
   FileFsObjectIdInformation,
   FileFsDriverPathInformation,
   FileFsVolumeFlagsInformation,
+  FileFsSectorSizeInformation,
+  FileFsDataCopyInformation,
+  FileFsMetadataSizeInformation,
   FileFsMaximumInformation
 } FS_INFORMATION_CLASS, *PFS_INFORMATION_CLASS;
 
@@ -3413,6 +3416,13 @@ $if (_WDMDDK_)
 #define FILE_ATTRIBUTE_ENCRYPTED          0x00004000
 #define FILE_ATTRIBUTE_INTEGRITY_STREAM   0x00008000
 #define FILE_ATTRIBUTE_VIRTUAL            0x00010000
+#define FILE_ATTRIBUTE_NO_SCRUB_DATA      0x00020000
+#define FILE_ATTRIBUTE_EA                 0x00040000
+#define FILE_ATTRIBUTE_RECALL_ON_OPEN     0x00040000
+#define FILE_ATTRIBUTE_PINNED             0x00080000
+#define FILE_ATTRIBUTE_UNPINNED           0x00100000
+#define FILE_ATTRIBUTE_RECALL_ON_DATA_ACCESS 0x00400000
+#define FILE_ATTRIBUTE_STRICTLY_SEQUENTIAL  0x20000000
 
 #define FILE_ATTRIBUTE_VALID_FLAGS        0x00007fb7
 #define FILE_ATTRIBUTE_VALID_SET_FLAGS    0x000031a7
@@ -4440,6 +4450,13 @@ typedef enum _CONFIGURATION_TYPE {
 #define IRP_MN_UNLOCK_ALL_BY_KEY          0x04
 
 #define IRP_MN_FLUSH_AND_PURGE          0x01
+#if (NTDDI_VERSION >= NTDDI_WIN8)
+#define IRP_MN_FLUSH_DATA_ONLY          0x02
+#define IRP_MN_FLUSH_NO_SYNC            0x03
+#endif
+#if (NTDDI_VERSION >= NTDDI_WIN10_RS1)
+#define IRP_MN_FLUSH_DATA_SYNC_ONLY     0x04
+#endif
 
 #define IRP_MN_NORMAL                     0x00
 #define IRP_MN_DPC                        0x01
@@ -5448,6 +5465,23 @@ typedef struct _FILE_FS_FULL_SIZE_INFORMATION {
   ULONG SectorsPerAllocationUnit;
   ULONG BytesPerSector;
 } FILE_FS_FULL_SIZE_INFORMATION, *PFILE_FS_FULL_SIZE_INFORMATION;
+
+#define SSINFO_FLAGS_ALIGNED_DEVICE                 0x00000001
+#define SSINFO_FLAGS_PARTITION_ALIGNED_ON_DEVICE    0x00000002
+#define SSINFO_FLAGS_NO_SEEK_PENALTY                0x00000004
+#define SSINFO_FLAGS_TRIM_ENABLED                   0x00000008
+#define SSINFO_FLAGS_BYTE_ADDRESSABLE               0x00000010
+#define SSINFO_OFFSET_UNKNOWN (0xffffffff)
+
+typedef struct _FILE_FS_SECTOR_SIZE_INFORMATION {
+  ULONG LogicalBytesPerSector;
+  ULONG PhysicalBytesPerSectorForAtomicity;
+  ULONG PhysicalBytesPerSectorForPerformance;
+  ULONG FileSystemEffectivePhysicalBytesPerSectorForAtomicity;
+  ULONG Flags;
+  ULONG ByteOffsetForSectorAlignment;
+  ULONG ByteOffsetForPartitionAlignment;
+} FILE_FS_SECTOR_SIZE_INFORMATION, *PFILE_FS_SECTOR_SIZE_INFORMATION;
 
 typedef struct _FILE_FS_OBJECTID_INFORMATION {
   UCHAR ObjectId[16];
@@ -7068,6 +7102,17 @@ typedef struct _STORAGE_QUERY_DEPENDENT_VOLUME_RESPONSE {
 } STORAGE_QUERY_DEPENDENT_VOLUME_RESPONSE, *PSTORAGE_QUERY_DEPENDENT_VOLUME_RESPONSE;
 
 #endif /* (_WIN32_WINNT >= 0x0601) */
+
+#if (_WIN32_WINNT >= 0x0602)
+
+typedef struct _SET_PURGE_FAILURE_MODE_INPUT {
+  ULONG Flags;
+} SET_PURGE_FAILURE_MODE_INPUT, *PSET_PURGE_FAILURE_MODE_INPUT;
+
+#define SET_PURGE_FAILURE_MODE_ENABLED   0x00000001
+#define SET_PURGE_FAILURE_MODE_DISABLED  0x00000002
+
+#endif /* (_WIN32_WINNT >= 0x0602) */
 
 typedef struct _FILESYSTEM_STATISTICS {
   USHORT FileSystemType;

@@ -1,4 +1,41 @@
 $if (_NTIFS_)
+
+#define CC_DISABLE_DIRTY_PAGE_TRACKING         (0x00000008)
+#define CC_ENABLE_DISK_IO_ACCOUNTING           (0x00000010)
+#define CC_DISABLE_UNMAP_BEHIND                 (0x00000020)
+
+#if (NTDDI_VERSION >= NTDDI_WIN8)
+NTKERNELAPI
+VOID
+NTAPI
+CcSetAdditionalCacheAttributesEx(
+  _In_ PFILE_OBJECT FileObject,
+  _In_ ULONG Flags);
+
+NTKERNELAPI
+BOOLEAN
+NTAPI
+CcCopyReadEx(
+  _In_ PFILE_OBJECT FileObject,
+  _In_ PLARGE_INTEGER FileOffset,
+  _In_ ULONG Length,
+  _In_ BOOLEAN Wait,
+  _Out_writes_bytes_(Length) PVOID Buffer,
+  _Out_ PIO_STATUS_BLOCK IoStatus,
+  _In_ PETHREAD IoIssuerThread);
+
+NTKERNELAPI
+BOOLEAN
+NTAPI
+CcCopyWriteEx(
+  _In_ PFILE_OBJECT FileObject,
+  _In_ PLARGE_INTEGER FileOffset,
+  _In_ ULONG Length,
+  _In_ BOOLEAN Wait,
+  _In_reads_bytes_(Length) PVOID Buffer,
+  _In_ PETHREAD IoIssuerThread);
+#endif
+
 /* Common Cache Functions */
 
 #define CcIsFileCached(FO) (                                                         \

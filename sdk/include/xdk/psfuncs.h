@@ -54,6 +54,24 @@ NtQueryInformationProcess(
     _Out_opt_ PULONG ReturnLength);
 $endif (_NTDDK_)
 $if (_NTIFS_)
+#if (NTDDI_VERSION >= NTDDI_WIN8)
+NTKERNELAPI
+BOOLEAN
+NTAPI
+PsIsDiskCountersEnabled(VOID);
+
+NTKERNELAPI
+VOID
+NTAPI
+PsUpdateDiskCounters(
+  _Inout_ PEPROCESS Process,
+  _In_ ULONG64 BytesRead,
+  _In_ ULONG64 BytesWritten,
+  _In_ ULONG ReadOperationCount,
+  _In_ ULONG WriteOperationCount,
+  _In_ ULONG FlushOperationCount);
+#endif
+
 
 _Must_inspect_result_
 _IRQL_requires_max_(APC_LEVEL)

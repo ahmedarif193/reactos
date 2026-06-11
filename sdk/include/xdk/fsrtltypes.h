@@ -7,6 +7,8 @@ typedef LBN *PLBN;
 typedef ULONG VBN;
 typedef VBN *PVBN;
 
+typedef PVOID OPLOCK, *POPLOCK;
+
 #define FSRTL_COMMON_FCB_HEADER_LAYOUT \
   CSHORT NodeTypeCode; \
   CSHORT NodeByteSize; \
@@ -37,10 +39,21 @@ typedef struct _FSRTL_ADVANCED_FCB_HEADER {
   EX_PUSH_LOCK PushLock;
   PVOID *FileContextSupportPointer;
 #endif
+#if (NTDDI_VERSION >= NTDDI_WIN8)
+  union {
+    OPLOCK Oplock;
+    PVOID ReservedForRemote;
+  };
+#endif
+#if (NTDDI_VERSION >= NTDDI_WINBLUE)
+  PVOID ReservedContext;
+#endif
 } FSRTL_ADVANCED_FCB_HEADER, *PFSRTL_ADVANCED_FCB_HEADER;
 
 #define FSRTL_FCB_HEADER_V0             (0x00)
 #define FSRTL_FCB_HEADER_V1             (0x01)
+#define FSRTL_FCB_HEADER_V2             (0x02)
+#define FSRTL_FCB_HEADER_V3             (0x03)
 
 #define FSRTL_FLAG_FILE_MODIFIED        (0x01)
 #define FSRTL_FLAG_FILE_LENGTH_CHANGED  (0x02)
@@ -247,7 +260,6 @@ typedef struct _EOF_WAIT_BLOCK {
   KEVENT Event;
 } EOF_WAIT_BLOCK, *PEOF_WAIT_BLOCK;
 
-typedef PVOID OPLOCK, *POPLOCK;
 
 typedef VOID
 (NTAPI *POPLOCK_WAIT_COMPLETE_ROUTINE) (
@@ -268,6 +280,12 @@ typedef VOID
 #define OPLOCK_FLAG_BACK_OUT_ATOMIC_OPLOCK  0x00000004
 #define OPLOCK_FLAG_IGNORE_OPLOCK_KEYS      0x00000008
 #define OPLOCK_FSCTRL_FLAG_ALL_KEYS_MATCH   0x00000001
+#endif
+
+#if (NTDDI_VERSION >= NTDDI_WIN8)
+#define OPLOCK_FLAG_PARENT_OBJECT           0x00000010
+#define OPLOCK_FLAG_CLOSING_DELETE_ON_CLOSE 0x00000020
+#define OPLOCK_FLAG_REMOVING_FILE_OR_LINK   0x00000040
 #endif
 
 #if (NTDDI_VERSION >= NTDDI_WIN7)
