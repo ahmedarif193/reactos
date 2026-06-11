@@ -18,6 +18,7 @@
 #define ARM64_SYNC_BARRIER() do { __dmb(_ARM64_BARRIER_SY); __isb(_ARM64_BARRIER_SY); } while (0)
 
 #define ARM64_PSTATE_ASYNC_ABORT_MASK 0x100UL
+#define ARM64_PSTATE_IRQ_MASK         0x080UL
 
 typedef struct _KSWITCHFRAME
 {
@@ -239,7 +240,7 @@ KeDisableInterrupts(VOID)
     __asm__ __volatile__("mrs %0, daif" : "=r"(Flags));
     __asm__ __volatile__("msr daifset, #2" ::: "memory");
 
-    return ((Flags & (1ULL << 7)) == 0);
+    return ((Flags & ARM64_PSTATE_IRQ_MASK) == 0);
 }
 
 FORCEINLINE
