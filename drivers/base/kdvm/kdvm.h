@@ -14,6 +14,9 @@
 #include <windbgkd.h>
 #include <arc/arc.h>
 
+/* Writable alias of KUSER_SHARED_DATA exported by the kernel */
+extern NTKERNELAPI PKUSER_SHARED_DATA MmWriteableSharedUserData;
+
 #undef RtlEqualMemory
 #define RtlEqualMemory(dst, src, len) (RtlCompareMemory((dst), (src), (len)) == (len))
 

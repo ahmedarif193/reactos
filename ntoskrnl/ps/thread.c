@@ -105,7 +105,7 @@ PspUserThreadStartup(IN PKSTART_ROUTINE StartRoutine,
                     (ULONG)(ULONG_PTR)&SystemTime);
 
         /* Set the new cookie*/
-        InterlockedCompareExchange((LONG*)&SharedUserData->Cookie,
+        InterlockedCompareExchange((LONG*)&MmWriteableSharedUserData->Cookie,
                                    NewCookie,
                                    0);
     }

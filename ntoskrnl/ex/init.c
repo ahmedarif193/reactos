@@ -1145,7 +1145,7 @@ ExpInitializeExecutive(IN ULONG Cpu,
     _enable();
 
     /* Clear the crypto exponent */
-    SharedUserData->CryptoExponent = 0;
+    MmWriteableSharedUserData->CryptoExponent = 0;
 
     /* Set global flags for the checked build */
 #if DBG
@@ -1202,11 +1202,11 @@ ExpInitializeExecutive(IN ULONG Cpu,
     }
     /* Set system ranges */
 #ifdef _M_AMD64
-    SharedUserData->Reserved1 = MM_HIGHEST_USER_ADDRESS_WOW64;
-    SharedUserData->Reserved3 = MM_SYSTEM_RANGE_START_WOW64;
+    MmWriteableSharedUserData->Reserved1 = MM_HIGHEST_USER_ADDRESS_WOW64;
+    MmWriteableSharedUserData->Reserved3 = MM_SYSTEM_RANGE_START_WOW64;
 #else
-    SharedUserData->Reserved1 = (ULONG_PTR)MmHighestUserAddress;
-    SharedUserData->Reserved3 = (ULONG_PTR)MmSystemRangeStart;
+    MmWriteableSharedUserData->Reserved1 = (ULONG_PTR)MmHighestUserAddress;
+    MmWriteableSharedUserData->Reserved3 = (ULONG_PTR)MmSystemRangeStart;
 #endif
 
     /* Make a copy of the NLS Tables */
@@ -1427,22 +1427,22 @@ ExpInitializeExecutive(IN ULONG Cpu,
 
     /* Calculate the tick count multiplier */
     ExpTickCountMultiplier = ExComputeTickCountMultiplier(KeMaximumIncrement);
-    SharedUserData->TickCountMultiplier = ExpTickCountMultiplier;
+    MmWriteableSharedUserData->TickCountMultiplier = ExpTickCountMultiplier;
 
     /* Set the OS Version */
-    SharedUserData->NtMajorVersion = NtMajorVersion;
-    SharedUserData->NtMinorVersion = NtMinorVersion;
+    MmWriteableSharedUserData->NtMajorVersion = NtMajorVersion;
+    MmWriteableSharedUserData->NtMinorVersion = NtMinorVersion;
 
     /* Set the machine type */
 #if defined(_M_ARM64)
-    SharedUserData->ImageNumberLow = IMAGE_FILE_MACHINE_AMD64;
+    MmWriteableSharedUserData->ImageNumberLow = IMAGE_FILE_MACHINE_AMD64;
 #else
-    SharedUserData->ImageNumberLow = IMAGE_FILE_MACHINE_NATIVE;
+    MmWriteableSharedUserData->ImageNumberLow = IMAGE_FILE_MACHINE_NATIVE;
 #endif
-    SharedUserData->ImageNumberHigh = IMAGE_FILE_MACHINE_NATIVE;
+    MmWriteableSharedUserData->ImageNumberHigh = IMAGE_FILE_MACHINE_NATIVE;
 
     /* ReactOS magic */
-    *(PULONG)(KI_USER_SHARED_DATA + PAGE_SIZE - sizeof(ULONG)) = 0x8eac705;
+    *(PULONG)((ULONG_PTR)MmWriteableSharedUserData + PAGE_SIZE - sizeof(ULONG)) = 0x8eac705;
 }
 
 VOID
@@ -1671,7 +1671,7 @@ Phase1InitializationDiscard(IN PVOID Context)
                                                     10000000);
 
             /* Set the boot time-zone bias */
-            KiWriteSystemTime(&SharedUserData->TimeZoneBias, ExpTimeZoneBias);
+            KiWriteSystemTime(&MmWriteableSharedUserData->TimeZoneBias, ExpTimeZoneBias);
 
             /* Convert the boot time to local time, and set it */
             UniversalBootTime.QuadPart = SystemBootTime.QuadPart +
@@ -1928,7 +1928,7 @@ Phase1InitializationDiscard(IN PVOID Context)
         }
     }
 
-    SharedUserData->SafeBootMode = (InitSafeBootMode != 0);
+    MmWriteableSharedUserData->SafeBootMode = (InitSafeBootMode != 0);
 
     /* Make sure we have a command line */
     if (CommandLine)
