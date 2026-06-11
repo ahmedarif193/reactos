@@ -1,0 +1,14 @@
+/*
+ * PROJECT:     ReactOS WPP auto-logger stub
+ * LICENSE:     GPL-2.0-or-later (https://spdx.org/licenses/GPL-2.0-or-later)
+ * PURPOSE:     Resource file
+ * COPYRIGHT:   Copyright 2026 Ahmed ARIF <arif.ing@outlook.com>
+ */
+
+#define REACTOS_FILETYPE VFT_DRV
+#define REACTOS_FVERSION_MAJOR 1
+#define REACTOS_FVERSION_MINOR 0
+#define REACTOS_STR_FILE_DESCRIPTION "WPP Auto-Logger Stub"
+#define REACTOS_STR_INTERNAL_NAME "WppRecorder"
+#define REACTOS_STR_ORIGINAL_FILENAME "WppRecorder.sys"
+#include <reactos/version.rc>
