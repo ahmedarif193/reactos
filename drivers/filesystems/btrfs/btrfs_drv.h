@@ -1653,7 +1653,9 @@ typedef struct {
     PVOID ReservedContext;
 } FSRTL_ADVANCED_FCB_HEADER_NEW;
 
+#ifndef FSRTL_FCB_HEADER_V2
 #define FSRTL_FCB_HEADER_V2 2
+#endif
 
 #else
 #define FSRTL_ADVANCED_FCB_HEADER_NEW FSRTL_ADVANCED_FCB_HEADER
@@ -1672,7 +1674,9 @@ typedef struct {
     PVOID ReservedContext;
 } FSRTL_ADVANCED_FCB_HEADER_NEW;
 
+#ifndef FSRTL_FCB_HEADER_V2
 #define FSRTL_FCB_HEADER_V2 2
+#endif
 #endif // __REACTOS__
 
 static __inline POPLOCK fcb_oplock(fcb* fcb) {
