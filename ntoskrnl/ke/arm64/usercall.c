@@ -9,6 +9,14 @@
 #define NDEBUG
 #include <debug.h>
 
+#if (NTDDI_VERSION >= NTDDI_WIN8)
+#define CalloutInitialStack Spare1
+#define CalloutCallbackStack Spare2
+#else
+#define CalloutInitialStack InitialStack
+#define CalloutCallbackStack CallbackStack
+#endif
+
 VOID
 KiTrapReturn(
     _In_ PKTRAP_FRAME TrapFrame,
@@ -574,8 +582,8 @@ KiUserModeCallout(
         }
     }
 
-    CalloutFrame->CallbackStack = (ULONG_PTR)CurrentThread->CallbackStack;
-    CalloutFrame->InitialStack = (ULONG_PTR)CurrentThread->InitialStack;
+    CalloutFrame->CalloutCallbackStack = (ULONG_PTR)CurrentThread->CallbackStack;
+    CalloutFrame->CalloutInitialStack = (ULONG_PTR)CurrentThread->InitialStack;
 
     TrapFrame = CurrentThread->TrapFrame;
     CalloutFrame->TrapFrame = (ULONG_PTR)TrapFrame;
@@ -733,12 +741,12 @@ NtCallbackReturn(
 
     if (Pcr != NULL)
     {
-        Pcr->Prcb.SpBase = (PVOID)CalloutFrame->InitialStack;
+        Pcr->Prcb.SpBase = (PVOID)CalloutFrame->CalloutInitialStack;
     }
 
-    CurrentThread->InitialStack = (PVOID)CalloutFrame->InitialStack;
+    CurrentThread->InitialStack = (PVOID)CalloutFrame->CalloutInitialStack;
     CurrentThread->TrapFrame = TrapFrame;
-    CurrentThread->CallbackStack = (PVOID)CalloutFrame->CallbackStack;
+    CurrentThread->CallbackStack = (PVOID)CalloutFrame->CalloutCallbackStack;
 
     _enable();
 
