@@ -91,7 +91,7 @@ NDIS_STATUS
 NTAPI
 NdisAllocateTimerObject(
     _In_opt_ NDIS_HANDLE                  NdisHandle,
-    _In_     PNDIS6_TIMER_CHARACTERISTICS TimerCharacteristics,
+    _In_     PNDIS_TIMER_CHARACTERISTICS  TimerCharacteristics,
     _Out_    PNDIS_HANDLE                 pTimerObject)
 {
     PNDIS6_TIMER_OBJECT TimerObject;

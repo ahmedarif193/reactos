@@ -339,8 +339,6 @@ Ndis6FilterTerminalReceive(
     PNET_BUFFER_LIST    CurrentNbl;
     PNET_BUFFER_LIST    NextNbl;
     BOOLEAN             ResourcesFlag;
-    UNREFERENCED_PARAMETER(PortNumber);
-    UNREFERENCED_PARAMETER(NumberOfNetBufferLists);
 
     if (Adapter == NULL || !Adapter->IsNdis6 || NetBufferLists == NULL)
         return;
@@ -348,6 +346,61 @@ Ndis6FilterTerminalReceive(
     Ext = NDIS6_EXT(Adapter);
     if (Ext == NULL)
         return;
+
+    /* If a native NDIS 6 protocol is bound, deliver the NBLs (still
+     * miniport-owned) straight to its ReceiveNetBufferListsHandler instead of
+     * the legacy NDIS_PACKET wrap. Indicate outside the lock since the handler
+     * may re-enter NDIS (e.g. NdisReturnNetBufferLists); only a single native
+     * binding is supported — multi-binding fan-out would need NBL clones. */
+    {
+#define NDIS6_RX_BINDING_SNAPSHOT_MAX 8
+        struct
+        {
+            PNDIS6_PROTOCOL_BINDING                   Binding;
+            PROTOCOL_RECEIVE_NET_BUFFER_LISTS_HANDLER ReceiveHandler;
+            NDIS_HANDLE                               Context;
+        } Snapshot[NDIS6_RX_BINDING_SNAPSHOT_MAX];
+        UINT  SnapCount = 0;
+        UINT  i;
+        KIRQL OldIrql;
+
+        KeAcquireSpinLock(&Ext->ProtocolBindingListLock, &OldIrql);
+        {
+            PLIST_ENTRY entry;
+            for (entry = Ext->ProtocolBindingList.Flink;
+                 entry != &Ext->ProtocolBindingList &&
+                     SnapCount < NDIS6_RX_BINDING_SNAPSHOT_MAX;
+                 entry = entry->Flink)
+            {
+                PNDIS6_PROTOCOL_BINDING Binding =
+                    CONTAINING_RECORD(entry, NDIS6_PROTOCOL_BINDING, AdapterLink);
+                if (Binding->DriverBlock != NULL &&
+                    Binding->DriverBlock->Characteristics.ReceiveNetBufferListsHandler != NULL)
+                {
+                    Snapshot[SnapCount].Binding        = Binding;
+                    Snapshot[SnapCount].ReceiveHandler =
+                        Binding->DriverBlock->Characteristics.ReceiveNetBufferListsHandler;
+                    Snapshot[SnapCount].Context        = Binding->ProtocolBindingContext;
+                    SnapCount++;
+                }
+            }
+        }
+        KeReleaseSpinLock(&Ext->ProtocolBindingListLock, OldIrql);
+
+        if (SnapCount > 0)
+        {
+            for (i = 0; i < SnapCount; i++)
+            {
+                Snapshot[i].ReceiveHandler(
+                    Snapshot[i].Context,
+                    NetBufferLists,
+                    PortNumber,
+                    NumberOfNetBufferLists,
+                    ReceiveFlags);
+            }
+            return;
+        }
+    }
 
     ResourcesFlag = (ReceiveFlags & NDIS_RECEIVE_FLAGS_RESOURCES) != 0;
 
@@ -492,6 +545,52 @@ NdisMIndicateStatusEx(
     Ext = NDIS6_EXT(Adapter);
     if (Ext == NULL)
         return;
+
+    /* Hand native NDIS 6 protocols the raw NDIS_STATUS_INDICATION via
+     * StatusHandlerEx before the legacy translation switch below, which drops
+     * several codes (all NDIS_STATUS_DOT11_*) and returns early. Call the
+     * handlers outside the lock so they can re-enter NDIS. */
+    {
+#define NDIS6_STATUSEX_SNAPSHOT_MAX 8
+        struct
+        {
+            NDIS_HANDLE                Context;
+            PROTOCOL_STATUS_EX_HANDLER StatusHandlerEx;
+        } Snapshot[NDIS6_STATUSEX_SNAPSHOT_MAX];
+        UINT  SnapCount = 0;
+        UINT  i;
+        KIRQL NativeIrql;
+
+        KeAcquireSpinLock(&Ext->ProtocolBindingListLock, &NativeIrql);
+        {
+            PLIST_ENTRY entry;
+            for (entry = Ext->ProtocolBindingList.Flink;
+                 entry != &Ext->ProtocolBindingList &&
+                     SnapCount < NDIS6_STATUSEX_SNAPSHOT_MAX;
+                 entry = entry->Flink)
+            {
+                PNDIS6_PROTOCOL_BINDING Binding =
+                    CONTAINING_RECORD(entry, NDIS6_PROTOCOL_BINDING, AdapterLink);
+                if (Binding->DriverBlock != NULL &&
+                    Binding->DriverBlock->Characteristics.StatusHandlerEx != NULL)
+                {
+                    Snapshot[SnapCount].Context =
+                        Binding->ProtocolBindingContext;
+                    Snapshot[SnapCount].StatusHandlerEx =
+                        Binding->DriverBlock->Characteristics.StatusHandlerEx;
+                    SnapCount++;
+                }
+            }
+        }
+        KeReleaseSpinLock(&Ext->ProtocolBindingListLock, NativeIrql);
+
+        for (i = 0; i < SnapCount; i++)
+        {
+            Snapshot[i].StatusHandlerEx(
+                Snapshot[i].Context,
+                StatusIndication);
+        }
+    }
 
     /* Translate the NDIS 6 status code to a legacy NDIS 5 code and update
      * the cache so cached OID queries serve fresh values. */

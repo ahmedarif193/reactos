@@ -300,11 +300,22 @@ NdisWaitEvent(
  */
 {
   LARGE_INTEGER Timeout;
+  PLARGE_INTEGER pTimeout;
   NTSTATUS Status;
 
-  Timeout.QuadPart = Int32x32To64(MsToWait, -10000);
+  /* Per the NDIS contract (matching Windows), MsToWait == 0 means wait
+   * indefinitely, not "poll and return immediately". */
+  if (MsToWait == 0)
+  {
+      pTimeout = NULL;
+  }
+  else
+  {
+      Timeout.QuadPart = Int32x32To64(MsToWait, -10000);
+      pTimeout = &Timeout;
+  }
 
-  Status = KeWaitForSingleObject(&Event->Event, Executive, KernelMode, TRUE, &Timeout);
+  Status = KeWaitForSingleObject(&Event->Event, Executive, KernelMode, TRUE, pTimeout);
 
   return (Status == STATUS_SUCCESS);
 }

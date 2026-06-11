@@ -48,6 +48,22 @@ NdisAllocateMemoryWithTag(
   return NDIS_STATUS_SUCCESS;
 }
 
+/*
+ * @implemented
+ */
+PVOID
+EXPORT
+NdisAllocateMemoryWithTagPriority(
+    IN NDIS_HANDLE      NdisHandle,
+    IN UINT             Length,
+    IN ULONG            Tag,
+    IN EX_POOL_PRIORITY Priority)
+{
+  UNREFERENCED_PARAMETER(NdisHandle);
+
+  NDIS_DbgPrint(MAX_TRACE, ("Called.\n"));
+  return ExAllocatePoolWithTagPriority(NonPagedPool, Length, Tag, Priority);
+}
 
 /*
  * @implemented

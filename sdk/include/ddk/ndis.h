@@ -4557,6 +4557,18 @@ NdisAllocateMemoryWithTag(
   _In_ UINT Length,
   _In_ ULONG Tag);
 
+#if NDIS_SUPPORT_NDIS6
+_IRQL_requires_max_(DISPATCH_LEVEL)
+NDISAPI
+PVOID
+NTAPI
+NdisAllocateMemoryWithTagPriority(
+  _In_ NDIS_HANDLE NdisHandle,
+  _In_ UINT Length,
+  _In_ ULONG Tag,
+  _In_ EX_POOL_PRIORITY Priority);
+#endif
+
 _IRQL_requires_max_(DISPATCH_LEVEL)
 NDISAPI
 VOID
@@ -6264,6 +6276,7 @@ typedef	NDIS_WAN_MAC_CHARACTERISTICS    *PNDIS_WAN_MAC_CHARACTERISTICS;
 #define NDIS_OBJECT_TYPE_MINIPORT_ADAPTER_NATIVE_802_11_ATTRIBUTES 0xa2
 #define NDIS_OBJECT_TYPE_MINIPORT_ADAPTER_OFFLOAD_ATTRIBUTES      0xa3
 #define NDIS_OBJECT_TYPE_STATUS_INDICATION                        0xa4
+#define NDIS_OBJECT_TYPE_TIMER_CHARACTERISTICS                    0x97
 
 /* Forward declarations so macros and struct members can reference each other */
 struct _NET_BUFFER;
@@ -6542,6 +6555,27 @@ NdisAdvanceNetBufferDataStart(
   _In_     BOOLEAN     FreeMdl,
   _In_opt_ PVOID       FreeMdlHandler);
 
+PVOID
+NDISAPI
+NdisGetDataBuffer(
+  _In_      PNET_BUFFER NetBuffer,
+  _In_      ULONG       BytesNeeded,
+  _Out_writes_bytes_all_opt_(BytesNeeded) PVOID Storage,
+  _In_      UINT        AlignMultiple,
+  _In_      UINT        AlignOffset);
+
+PMDL
+NDISAPI
+NdisAllocateMdl(
+  _In_ NDIS_HANDLE NdisHandle,
+  _In_reads_bytes_(Length) PVOID VirtualAddress,
+  _In_ UINT Length);
+
+VOID
+NDISAPI
+NdisFreeMdl(
+  _In_ PMDL Mdl);
+
 #endif /* NDIS_SUPPORT_NDIS6 */
 /* ============================================================================
  *  End NDIS 6 datapath types.
@@ -6628,11 +6662,53 @@ typedef struct _NDIS_STATUS_INDICATION {
 } NDIS_STATUS_INDICATION, *PNDIS_STATUS_INDICATION;
 #define NDIS_STATUS_INDICATION_DEFINED 1
 
+/* Generic timer-object support */
+#define NDIS_TIMER_CHARACTERISTICS_REVISION_1 1
+typedef struct _NDIS_TIMER_CHARACTERISTICS {
+  NDIS_OBJECT_HEADER   Header;
+  ULONG                AllocationTag;
+  PNDIS_TIMER_FUNCTION TimerFunction;
+  PVOID                FunctionContext;
+} NDIS_TIMER_CHARACTERISTICS, *PNDIS_TIMER_CHARACTERISTICS;
+#define NDIS_SIZEOF_TIMER_CHARACTERISTICS_REVISION_1 \
+  RTL_SIZEOF_THROUGH_FIELD(NDIS_TIMER_CHARACTERISTICS, FunctionContext)
+#define NDIS_TIMER_CHARACTERISTICS_DEFINED 1
+
+NDIS_STATUS
+NDISAPI
+NdisAllocateTimerObject(
+  _In_  NDIS_HANDLE NdisHandle,
+  _In_  PNDIS_TIMER_CHARACTERISTICS TimerCharacteristics,
+  _Out_ PNDIS_HANDLE pTimerObject);
+
+BOOLEAN
+NDISAPI
+NdisSetTimerObject(
+  _In_     NDIS_HANDLE TimerObject,
+  _In_     LARGE_INTEGER DueTime,
+  _In_opt_ LONG MillisecondsPeriod,
+  _In_opt_ PVOID FunctionContext);
+
+BOOLEAN
+NDISAPI
+NdisCancelTimerObject(
+  _In_ NDIS_HANDLE TimerObject);
+
+VOID
+NDISAPI
+NdisFreeTimerObject(
+  _In_ NDIS_HANDLE TimerObject);
+
 /* Link state query OID data */
 /* NDIS 6 media-state enums share their enumerators with the ifdef.h
  * enums in the psdk. We alias ifdef.h's types here so the names resolve
  * without duplicate-enumerator errors. */
 #include <ifdef.h>
+#ifndef NET_IF_LINK_SPEED_UNKNOWN
+#define NET_IF_LINK_SPEED_UNKNOWN ((ULONG64)(-1))
+#endif
+#define NDIS_LINK_SPEED_UNKNOWN NET_IF_LINK_SPEED_UNKNOWN
+
 typedef NET_IF_MEDIA_CONNECT_STATE NDIS_MEDIA_CONNECT_STATE, *PNDIS_MEDIA_CONNECT_STATE;
 typedef NET_IF_MEDIA_DUPLEX_STATE  NDIS_MEDIA_DUPLEX_STATE,  *PNDIS_MEDIA_DUPLEX_STATE;
 
@@ -6696,6 +6772,53 @@ typedef struct _NDIS_LINK_STATE {
 #define NDIS_STATISTICS_RCV_DISCARDS_SUPPORTED           0x00200000
 #define NDIS_STATISTICS_GEN_STATISTICS_SUPPORTED         0x00400000
 #define NDIS_STATISTICS_XMIT_DISCARDS_SUPPORTED          0x00800000
+
+/* Flags for NDIS_STATISTICS_INFO.SupportedStatistics. */
+#define NDIS_STATISTICS_FLAGS_VALID_DIRECTED_FRAMES_RCV       0x00000001
+#define NDIS_STATISTICS_FLAGS_VALID_MULTICAST_FRAMES_RCV      0x00000002
+#define NDIS_STATISTICS_FLAGS_VALID_BROADCAST_FRAMES_RCV      0x00000004
+#define NDIS_STATISTICS_FLAGS_VALID_BYTES_RCV                 0x00000008
+#define NDIS_STATISTICS_FLAGS_VALID_RCV_DISCARDS              0x00000010
+#define NDIS_STATISTICS_FLAGS_VALID_RCV_ERROR                 0x00000020
+#define NDIS_STATISTICS_FLAGS_VALID_DIRECTED_FRAMES_XMIT      0x00000040
+#define NDIS_STATISTICS_FLAGS_VALID_MULTICAST_FRAMES_XMIT     0x00000080
+#define NDIS_STATISTICS_FLAGS_VALID_BROADCAST_FRAMES_XMIT     0x00000100
+#define NDIS_STATISTICS_FLAGS_VALID_BYTES_XMIT                0x00000200
+#define NDIS_STATISTICS_FLAGS_VALID_XMIT_ERROR                0x00000400
+#define NDIS_STATISTICS_FLAGS_VALID_XMIT_DISCARDS             0x00008000
+#define NDIS_STATISTICS_FLAGS_VALID_DIRECTED_BYTES_RCV        0x00010000
+#define NDIS_STATISTICS_FLAGS_VALID_MULTICAST_BYTES_RCV       0x00020000
+#define NDIS_STATISTICS_FLAGS_VALID_BROADCAST_BYTES_RCV       0x00040000
+#define NDIS_STATISTICS_FLAGS_VALID_DIRECTED_BYTES_XMIT       0x00080000
+#define NDIS_STATISTICS_FLAGS_VALID_MULTICAST_BYTES_XMIT      0x00100000
+#define NDIS_STATISTICS_FLAGS_VALID_BROADCAST_BYTES_XMIT      0x00200000
+
+#define NDIS_STATISTICS_INFO_REVISION_1 1
+typedef struct _NDIS_STATISTICS_INFO {
+  NDIS_OBJECT_HEADER Header;
+  ULONG              SupportedStatistics;
+  ULONG64            ifInDiscards;
+  ULONG64            ifInErrors;
+  ULONG64            ifHCInOctets;
+  ULONG64            ifHCInUcastPkts;
+  ULONG64            ifHCInMulticastPkts;
+  ULONG64            ifHCInBroadcastPkts;
+  ULONG64            ifHCOutOctets;
+  ULONG64            ifHCOutUcastPkts;
+  ULONG64            ifHCOutMulticastPkts;
+  ULONG64            ifHCOutBroadcastPkts;
+  ULONG64            ifOutErrors;
+  ULONG64            ifOutDiscards;
+  ULONG64            ifHCInUcastOctets;
+  ULONG64            ifHCInMulticastOctets;
+  ULONG64            ifHCInBroadcastOctets;
+  ULONG64            ifHCOutUcastOctets;
+  ULONG64            ifHCOutMulticastOctets;
+  ULONG64            ifHCOutBroadcastOctets;
+} NDIS_STATISTICS_INFO, *PNDIS_STATISTICS_INFO;
+#define NDIS_SIZEOF_STATISTICS_INFO_REVISION_1 \
+  RTL_SIZEOF_THROUGH_FIELD(NDIS_STATISTICS_INFO, ifHCOutBroadcastOctets)
+#define NDIS_STATISTICS_INFO_DEFINED 1
 
 #endif /* NDIS_SUPPORT_NDIS6 */
 /* ============================================================================
@@ -6880,6 +7003,29 @@ typedef VOID
   _In_ PDRIVER_OBJECT DriverObject);
 typedef MINIPORT_UNLOAD (*MINIPORT_UNLOAD_HANDLER);
 
+NDIS_HANDLE
+NDISAPI
+NdisAllocateIoWorkItem(
+  _In_ NDIS_HANDLE NdisObjectHandle);
+
+typedef VOID
+(NTAPI NDIS_IO_WORKITEM_FUNCTION)(
+  _In_opt_ PVOID WorkItemContext,
+  _In_     NDIS_HANDLE NdisIoWorkItemHandle);
+typedef NDIS_IO_WORKITEM_FUNCTION *NDIS_IO_WORKITEM_ROUTINE;
+
+VOID
+NDISAPI
+NdisQueueIoWorkItem(
+  _In_ NDIS_HANDLE NdisIoWorkItemHandle,
+  _In_ NDIS_IO_WORKITEM_ROUTINE Routine,
+  _In_ PVOID WorkItemContext);
+
+VOID
+NDISAPI
+NdisFreeIoWorkItem(
+  _In_ NDIS_HANDLE NdisIoWorkItemHandle);
+
 /* MS DDK uses both MINIPORT_INITIALIZE and MINIPORT_INITIALIZE_EX as the
  * NDIS 6 callback typedef names. The non-EX form is what's in MS docs;
  * some drivers (e1000 NDIS 6 port from dev) use the EX suffix. Provide
@@ -6933,8 +7079,8 @@ typedef VOID
   _In_ PVOID       NdisReserved2);
 typedef MINIPORT_MESSAGE_INTERRUPT_DPC (*MINIPORT_MESSAGE_INTERRUPT_DPC_HANDLER);
 
-/* Mark NDIS 6 miniport callback typedefs as defined so that
- * drivers/usb/usbrndis/ndis6_compat.h skips its own redundant set. */
+/* Mark NDIS 6 miniport callback typedefs as defined so older local
+ * compatibility headers skip their redundant fallback declarations. */
 #define NDIS_MINIPORT_HANDLERS_DEFINED 1
 
 /* SG DMA descriptor passed to NdisMRegisterScatterGatherDma. The handler
@@ -7041,6 +7187,7 @@ typedef struct _NDIS_MINIPORT_DRIVER_CHARACTERISTICS {
 } NDIS_MINIPORT_DRIVER_CHARACTERISTICS, *PNDIS_MINIPORT_DRIVER_CHARACTERISTICS;
 
 #define NDIS_MINIPORT_DRIVER_CHARACTERISTICS_REVISION_1  1
+#define NDIS_MINIPORT_DRIVER_CHARACTERISTICS_REVISION_2  2
 
 #define NDIS_MINIPORT_ATTRIBUTES_HARDWARE_DEVICE       0x00000001
 #define NDIS_MINIPORT_ATTRIBUTES_NDIS_WDM              0x00000002
@@ -7052,6 +7199,15 @@ typedef struct _NDIS_MINIPORT_DRIVER_CHARACTERISTICS {
 #define NDIS_MINIPORT_ATTRIBUTES_CONTROLS_DEFAULT_PORT 0x00000080
 
 /* Miniport adapter attributes — the "set me up" call the miniport uses during init */
+#define NDIS_MINIPORT_ATTRIBUTES_HARDWARE_DEVICE        0x00000001
+#define NDIS_MINIPORT_ATTRIBUTES_NDIS_WDM               0x00000002
+#define NDIS_MINIPORT_ATTRIBUTES_SURPRISE_REMOVE_OK     0x00000004
+#define NDIS_MINIPORT_ATTRIBUTES_NOT_CO_NDIS            0x00000008
+#define NDIS_MINIPORT_ATTRIBUTES_DO_NOT_BIND_TO_ALL_CO  0x00000010
+#define NDIS_MINIPORT_ATTRIBUTES_NO_HALT_ON_SUSPEND     0x00000020
+#define NDIS_MINIPORT_ATTRIBUTES_BUS_MASTER             0x00000040
+#define NDIS_MINIPORT_ATTRIBUTES_CONTROLS_DEFAULT_PORT  0x00000080
+
 typedef struct _NDIS_MINIPORT_ADAPTER_REGISTRATION_ATTRIBUTES {
   NDIS_OBJECT_HEADER Header;
   NDIS_HANDLE        MiniportAdapterContext;

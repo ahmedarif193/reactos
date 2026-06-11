@@ -525,6 +525,94 @@ NdisAdvanceNetBufferDataStart(
     }
 }
 
+PVOID
+NTAPI
+NdisGetDataBuffer(
+    _In_ PNET_BUFFER NetBuffer,
+    _In_ ULONG BytesNeeded,
+    _Out_writes_bytes_all_opt_(BytesNeeded) PVOID Storage,
+    _In_ UINT AlignMultiple,
+    _In_ UINT AlignOffset)
+{
+    PMDL CurrentMdl;
+    ULONG CurrentMdlOffset;
+    ULONG BytesCopied;
+    ULONG MdlByteCount;
+    PUCHAR MdlVa;
+    PUCHAR DataVa;
+    PUCHAR StoragePtr;
+
+    if (NetBuffer == NULL || BytesNeeded == 0 ||
+        BytesNeeded > NET_BUFFER_DATA_LENGTH(NetBuffer))
+    {
+        return NULL;
+    }
+
+    CurrentMdl = NET_BUFFER_CURRENT_MDL(NetBuffer);
+    CurrentMdlOffset = NET_BUFFER_CURRENT_MDL_OFFSET(NetBuffer);
+    if (CurrentMdl == NULL)
+        return NULL;
+
+    MdlByteCount = MmGetMdlByteCount(CurrentMdl);
+    if (CurrentMdlOffset >= MdlByteCount)
+        return NULL;
+
+    if (BytesNeeded <= MdlByteCount - CurrentMdlOffset)
+    {
+        MdlVa = (PUCHAR)MmGetSystemAddressForMdlSafe(CurrentMdl, NormalPagePriority);
+        if (MdlVa == NULL)
+            return NULL;
+
+        DataVa = MdlVa + CurrentMdlOffset;
+        if (AlignMultiple <= 1 ||
+            (((ULONG_PTR)DataVa + AlignOffset) % AlignMultiple) == 0)
+        {
+            return DataVa;
+        }
+
+        if (Storage == NULL)
+            return NULL;
+
+        RtlCopyMemory(Storage, DataVa, BytesNeeded);
+        return Storage;
+    }
+
+    if (Storage == NULL)
+        return NULL;
+
+    StoragePtr = (PUCHAR)Storage;
+    BytesCopied = 0;
+    while (BytesCopied < BytesNeeded && CurrentMdl != NULL)
+    {
+        ULONG AvailableBytes;
+        ULONG BytesToCopy;
+
+        MdlByteCount = MmGetMdlByteCount(CurrentMdl);
+        if (CurrentMdlOffset >= MdlByteCount)
+            return NULL;
+
+        MdlVa = (PUCHAR)MmGetSystemAddressForMdlSafe(CurrentMdl, NormalPagePriority);
+        if (MdlVa == NULL)
+            return NULL;
+
+        AvailableBytes = MdlByteCount - CurrentMdlOffset;
+        BytesToCopy = (AvailableBytes < BytesNeeded - BytesCopied) ?
+                      AvailableBytes : BytesNeeded - BytesCopied;
+        RtlCopyMemory(StoragePtr + BytesCopied,
+                      MdlVa + CurrentMdlOffset,
+                      BytesToCopy);
+
+        BytesCopied += BytesToCopy;
+        CurrentMdl = CurrentMdl->Next;
+        CurrentMdlOffset = 0;
+    }
+
+    if (BytesCopied != BytesNeeded)
+        return NULL;
+
+    return Storage;
+}
+
 /* ============================================================================
  *  MDL helpers (NDIS 6 versions of NdisAllocateBuffer / NdisFreeBuffer)
  * ============================================================================ */

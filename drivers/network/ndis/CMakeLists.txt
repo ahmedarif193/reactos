@@ -31,6 +31,7 @@ list(APPEND SOURCE
     ndis/protocol.c
     ndis/string.c
     ndis/time.c
+    ndis/workitem.c
     include/ndissys.h)
 
 # NDIS 6 sources are compiled with NDIS620_MINIPORT / NDIS620 so they see

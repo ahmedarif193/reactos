@@ -612,6 +612,11 @@ ProSendPackets(
     if (Adapter->IsNdis6)
     {
         extern ULONG Ndis6TxSendPackets(PLOGICAL_ADAPTER, PPNDIS_PACKET, UINT);
+        for (i = 0; i < NumberOfPackets; i++)
+        {
+            if (PacketArray[i] != NULL)
+                PacketArray[i]->Reserved[1] = (ULONG_PTR)NdisBindingHandle;
+        }
         Ndis6TxSendPackets(Adapter, PacketArray, NumberOfPackets);
         return;
     }
@@ -908,6 +913,22 @@ NdisOpenAdapter(
   /* Put protocol on adapter's bound protocols list */
   NDIS_DbgPrint(MAX_TRACE, ("acquiring miniport block lock\n"));
   ExInterlockedInsertTailList(&Adapter->ProtocolListHead, &AdapterBinding->AdapterListEntry, &Adapter->NdisMiniportBlock.Lock);
+
+  if (Adapter->IsNdis6)
+    {
+      extern NDIS_STATUS Ndis6CallMiniportRestartEx(PLOGICAL_ADAPTER Adapter);
+      NDIS_STATUS RestartStatus;
+
+      RestartStatus = Ndis6CallMiniportRestartEx(Adapter);
+      if (!NT_SUCCESS(RestartStatus))
+        {
+          ExInterlockedRemoveEntryList(&AdapterBinding->AdapterListEntry, &Adapter->NdisMiniportBlock.Lock);
+          ExInterlockedRemoveEntryList(&AdapterBinding->ProtocolListEntry, &Protocol->Lock);
+          ExFreePool(AdapterBinding);
+          *Status = RestartStatus;
+          return;
+        }
+    }
 
   *NdisBindingHandle = (NDIS_HANDLE)AdapterBinding;
 
