@@ -119,13 +119,14 @@ FxPoxInterface::InitializeComponents(
 //     WDFDEVICE fxDevice = NULL;
 
 
-//     if (FALSE == m_PkgPnp->m_PowerPolicyMachine.m_Owner->m_IdleSettings.
-//                                 m_TimeoutMgmt.UsingSystemManagedIdleTimeout()) {
-//         //
-//         // Driver-managed idle timeout. Nothing to do.
-//         //
-//         return STATUS_SUCCESS;
-//     }
+    if (FALSE == m_PkgPnp->m_PowerPolicyMachine.m_Owner->m_IdleSettings.
+                                m_TimeoutMgmt.UsingSystemManagedIdleTimeout()) {
+        //
+        // Driver-managed idle timeout (the only mode without kernel PoFx
+        // support, i.e. always on NT 6.1). Nothing to do.
+        //
+        return STATUS_SUCCESS;
+    }
 
 //     //
 //     // We create the device power requirement state machine only if system-
@@ -238,15 +239,15 @@ FxPoxInterface::UninitializeComponents(
     VOID
     )
 {
-    // PPOX_SETTINGS poxSettings = NULL;
+    if (FALSE == m_PkgPnp->m_PowerPolicyMachine.m_Owner->m_IdleSettings.
+                                m_TimeoutMgmt.UsingSystemManagedIdleTimeout()) {
+        //
+        // Driver-managed idle timeout. Nothing to do.
+        //
+        return;
+    }
 
-    // if (FALSE == m_PkgPnp->m_PowerPolicyMachine.m_Owner->m_IdleSettings.
-    //                             m_TimeoutMgmt.UsingSystemManagedIdleTimeout()) {
-    //     //
-    //     // Driver-managed idle timeout. Nothing to do.
-    //     //
-    //     return;
-    // }
+    // PPOX_SETTINGS poxSettings = NULL;
 
     // ASSERT(NULL != m_DevicePowerRequirementMachine);
 
@@ -289,16 +290,15 @@ FxPoxInterface::RequestComponentActive(
     VOID
     )
 {
-    // if (FALSE == m_PkgPnp->m_PowerPolicyMachine.m_Owner->m_IdleSettings.
-    //                             m_TimeoutMgmt.UsingSystemManagedIdleTimeout()) {
-    //     //
-    //     // Driver-managed idle timeout. Nothing to do.
-    //     //
-    //     return;
-    // }
+    if (FALSE == m_PkgPnp->m_PowerPolicyMachine.m_Owner->m_IdleSettings.
+                                m_TimeoutMgmt.UsingSystemManagedIdleTimeout()) {
+        //
+        // Driver-managed idle timeout. Nothing to do.
+        //
+        return;
+    }
 
     // PoxActivateComponent();
-    // return;
     ROSWDFNOTIMPLEMENTED;
 }
 
@@ -307,6 +307,15 @@ FxPoxInterface::DeclareComponentIdle(
     VOID
     )
 {
+    if (FALSE == m_PkgPnp->m_PowerPolicyMachine.m_Owner->m_IdleSettings.
+                                m_TimeoutMgmt.UsingSystemManagedIdleTimeout()) {
+        //
+        // Driver-managed idle timeout. We can power down immediately, without
+        // waiting for device-power-not-required notification.
+        //
+        return TRUE;
+    }
+
     // BOOLEAN canPowerDown;
 
     // if (FALSE == m_PkgPnp->m_PowerPolicyMachine.m_Owner->m_IdleSettings.
@@ -339,15 +348,15 @@ FxPoxInterface::UpdateIdleTimeoutHint(
     VOID
     )
 {
-    // ULONGLONG idleTimeoutHint;
+    if (FALSE == m_PkgPnp->m_PowerPolicyMachine.m_Owner->m_IdleSettings.
+                                m_TimeoutMgmt.UsingSystemManagedIdleTimeout()) {
+        //
+        // Driver-managed idle timeout. Nothing to do.
+        //
+        return;
+    }
 
-    // if (FALSE == m_PkgPnp->m_PowerPolicyMachine.m_Owner->m_IdleSettings.
-    //                             m_TimeoutMgmt.UsingSystemManagedIdleTimeout()) {
-    //     //
-    //     // Driver-managed idle timeout. Nothing to do.
-    //     //
-    //     return;
-    // }
+    // ULONGLONG idleTimeoutHint;
 
     // if (m_NextIdleTimeoutHint != m_CurrentIdleTimeoutHint) {
     //     m_CurrentIdleTimeoutHint = m_NextIdleTimeoutHint;
@@ -369,17 +378,17 @@ FxPoxInterface::NotifyDevicePowerDown(
     VOID
     )
 {
+    if (FALSE == m_PkgPnp->m_PowerPolicyMachine.m_Owner->m_IdleSettings.
+                                m_TimeoutMgmt.UsingSystemManagedIdleTimeout()) {
+        //
+        // Driver-managed idle timeout. We don't have to take power framework's
+        // device power requirement into consideration. Just return success.
+        //
+        return STATUS_SUCCESS;
+    }
+
     // KIRQL irql;
     // BOOLEAN canPowerOff;
-
-    // if (FALSE == m_PkgPnp->m_PowerPolicyMachine.m_Owner->m_IdleSettings.
-    //                             m_TimeoutMgmt.UsingSystemManagedIdleTimeout()) {
-    //     //
-    //     // Driver-managed idle timeout. We don't have to take power framework's
-    //     // device power requirement into consideration. Just return success.
-    //     //
-    //     return STATUS_SUCCESS;
-    // }
 
     // //
     // // Acquire the lock to ensure that device power requirement doesn't change.
@@ -424,14 +433,15 @@ FxPoxInterface::DeviceIsPoweredOn(
     VOID
     )
 {
+    if (FALSE == m_PkgPnp->m_PowerPolicyMachine.m_Owner->m_IdleSettings.
+                                m_TimeoutMgmt.UsingSystemManagedIdleTimeout()) {
+        //
+        // Driver-managed idle timeout. Nothing to do.
+        //
+        return;
+    }
+
     ROSWDFNOTIMPLEMENTED;
-    // if (FALSE == m_PkgPnp->m_PowerPolicyMachine.m_Owner->m_IdleSettings.
-    //                             m_TimeoutMgmt.UsingSystemManagedIdleTimeout()) {
-    //     //
-    //     // Driver-managed idle timeout. Nothing to do.
-    //     //
-    //     return;
-    // }
 
     // //
     // // System-managed idle timeout. Notify the device power requirement state
@@ -497,14 +507,15 @@ FxPoxInterface::SimulateDevicePowerRequired(
     VOID
     )
 {
+    if (FALSE == m_PkgPnp->m_PowerPolicyMachine.m_Owner->m_IdleSettings.
+                                m_TimeoutMgmt.UsingSystemManagedIdleTimeout()) {
+        //
+        // Driver-managed idle timeout. Nothing to do.
+        //
+        return;
+    }
+
     ROSWDFNOTIMPLEMENTED;
-    // if (FALSE == m_PkgPnp->m_PowerPolicyMachine.m_Owner->m_IdleSettings.
-    //                             m_TimeoutMgmt.UsingSystemManagedIdleTimeout()) {
-    //     //
-    //     // Driver-managed idle timeout. Nothing to do.
-    //     //
-    //     return;
-    // }
 
     // //
     // // System-managed idle timeout. Notify the device power requirement state
@@ -519,14 +530,15 @@ FxPoxInterface::SimulateDevicePowerNotRequired(
     VOID
     )
 {
+    if (FALSE == m_PkgPnp->m_PowerPolicyMachine.m_Owner->m_IdleSettings.
+                                m_TimeoutMgmt.UsingSystemManagedIdleTimeout()) {
+        //
+        // Driver-managed idle timeout. Nothing to do.
+        //
+        return;
+    }
+
     ROSWDFNOTIMPLEMENTED;
-    // if (FALSE == m_PkgPnp->m_PowerPolicyMachine.m_Owner->m_IdleSettings.
-    //                             m_TimeoutMgmt.UsingSystemManagedIdleTimeout()) {
-    //     //
-    //     // Driver-managed idle timeout. Nothing to do.
-    //     //
-    //     return;
-    // }
 
     // //
     // // System-managed idle timeout. Notify the device power requirement state
