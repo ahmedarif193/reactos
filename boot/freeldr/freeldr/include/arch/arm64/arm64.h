@@ -29,17 +29,11 @@ typedef struct _ARM64_CONTEXT
 
 /* Function prototypes */
 VOID Arm64InitializeMMU(VOID);
-VOID Arm64SetupKernelHandoffMMU(VOID);
-VOID Arm64DisableMMU(VOID);
-BOOLEAN Arm64IsMMUEnabled(VOID);
+VOID Arm64PreparePageTables(VOID);
+VOID Arm64EnablePageTables(VOID);
 VOID Arm64ApplyDeferredPageTableMemoryTypes(VOID);
-BOOLEAN Arm64MapVirtualMemory(ULONGLONG VirtualAddress, ULONGLONG PhysicalAddress, ULONGLONG Size, ULONG Attributes);
-BOOLEAN Arm64UnmapVirtualMemory(ULONGLONG VirtualAddress, ULONGLONG Size);
-BOOLEAN Arm64MapUserSharedDataPage(ULONGLONG VirtualAddress, ULONGLONG PhysicalAddress, ULONG Attributes);
-ULONGLONG Arm64GetPhysicalAddress(ULONGLONG VirtualAddress);
-ULONG Arm64GetMemoryAttributes(ULONGLONG Address);
-VOID Arm64FlushTlbRange(ULONGLONG VirtualAddress, ULONGLONG Size);
 VOID Arm64ClearIdentityMappings(VOID);
+BOOLEAN Arm64MapVirtualMemory(ULONGLONG VirtualAddress, ULONGLONG PhysicalAddress, ULONGLONG Size, ULONG Attributes);
 
 /* Mapping attribute helpers */
 #define ARM64_MEM_ATTR_DEVICE_nGnRnE   1U
@@ -102,7 +96,6 @@ VOID Arm64DataMemoryBarrier(VOID);
 VOID Arm64InstructionBarrier(VOID);
 VOID Arm64Breakpoint(VOID);
 VOID Arm64HaltProcessor(VOID);
-VOID Arm64DebugDumpMapping(ULONGLONG VirtualAddress);
 VOID Arm64SetVbar(ULONG_PTR VectorBase);
 VOID Arm64SetVbarAuto(ULONG_PTR VectorBase);
 ULONG_PTR Arm64GetCurrentEL(VOID);
