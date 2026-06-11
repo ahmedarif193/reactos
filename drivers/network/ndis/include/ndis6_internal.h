@@ -145,10 +145,9 @@ typedef struct _NDIS6_ADAPTER_EXT
 
     /* Phase 3 TX thunk: NBL pool used to wrap legacy NDIS_PACKETs when
      * forwarding sends from a legacy NDIS 5 protocol (tcpip.sys) into an
-     * NDIS 6 miniport's SendNetBufferListsHandler. The wrapper NBL holds
-     * the original PNDIS_PACKET in MiniportReserved[0] so the bridge's
-     * NdisMSendNetBufferListsComplete callback can recover it and signal
-     * the legacy MiniSendComplete. */
+     * NDIS 6 miniport's SendNetBufferListsHandler. Bridge-owned wrapper
+     * state lives in NdisReserved[1] so miniports keep MiniportReserved and
+     * the allocator keeps its NdisReserved[0] ownership marker. */
     NDIS_HANDLE                     TxWrapperNblPool;
     LIST_ENTRY                      InFlightNblsTx;
     KSPIN_LOCK                      TxLookupLock;
@@ -160,9 +159,9 @@ typedef struct _NDIS6_ADAPTER_EXT
     LONG                            TxInFlightCount;
     KEVENT                          TxDrainEvent;
 
-    /* A4: Pause/Restart state machine. PauseState is PAUSED / RUNNING /
-     * PAUSING / RESTARTING. PauseEvent is signaled when an async pause
-     * completes (via NdisMPauseComplete). Drivers can return PENDING
+    /* A4: Pause/Restart state machine. A new NDIS 6 miniport is PAUSED
+     * after MiniportInitializeEx and becomes RUNNING only when a protocol
+     * opens/binds and RestartHandler succeeds. Drivers can return PENDING
      * from their PauseHandler / RestartHandler; we wait on the event. */
     ULONG                           PauseState;
     KEVENT                          PauseEvent;     /* pause complete */
@@ -196,6 +195,14 @@ typedef struct _NDIS6_ADAPTER_EXT
      * isn't invoked. Real chain walk is a future phase. */
     LIST_ENTRY                      FilterModuleList;
     KSPIN_LOCK                      FilterModuleListLock;
+
+    /* Native NDIS 6 protocol bindings open on this adapter, linked via
+     * NDIS6_PROTOCOL_BINDING.AdapterLink. The native datapath walks this
+     * list to indicate receives and to validate an NBL's SourceHandle
+     * before dereferencing it on send-complete; an empty list means only
+     * the legacy NDIS 5 bridge datapath runs. */
+    LIST_ENTRY                      ProtocolBindingList;
+    KSPIN_LOCK                      ProtocolBindingListLock;
 } NDIS6_ADAPTER_EXT, *PNDIS6_ADAPTER_EXT;
 
 /* ============================================================================
@@ -258,6 +265,15 @@ VOID
 Ndis6CallMiniportHaltEx(
     _In_ PLOGICAL_ADAPTER       Adapter,
     _In_ NDIS_HALT_ACTION       HaltAction);
+
+/* Intermediate-driver upper-miniport instantiation (NdisIMInitializeDeviceInstanceEx).
+ * Creates a virtual 802.3 miniport with no PnP PDO, runs the driver's
+ * InitializeHandlerEx, and binds protocols. */
+NDIS_STATUS
+Ndis6InitializeImDeviceInstance(
+    _In_ PNDIS6_DRIVER_BLOCK    DriverBlock,
+    _In_ PCUNICODE_STRING       DeviceName,
+    _In_ NDIS_HANDLE            DeviceContext);
 
 /* A4: Pause/Restart state-machine helpers. Called around filter
  * attach/detach, HaltEx, and power transitions. Both wait on the
@@ -422,37 +438,6 @@ Ndis6FilterTerminalOidRequest(
  *  third-party NDIS 6 driver expects from ndis.sys.
  * ============================================================================ */
 
-/* NDIS 6 timer object characteristics — opaque to drivers, declared here
- * because the public DDK header doesn't carry it. */
-typedef struct _NDIS6_TIMER_CHARACTERISTICS
-{
-    NDIS_OBJECT_HEADER  Header;
-    ULONG               AllocationTag;
-    PVOID               TimerFunction;     /* NDIS_TIMER_FUNCTION* */
-    PVOID               FunctionContext;
-} NDIS6_TIMER_CHARACTERISTICS, *PNDIS6_TIMER_CHARACTERISTICS;
-
-NDIS_STATUS NTAPI
-NdisAllocateTimerObject(
-    _In_opt_ NDIS_HANDLE                  NdisHandle,
-    _In_     PNDIS6_TIMER_CHARACTERISTICS TimerCharacteristics,
-    _Out_    PNDIS_HANDLE                 pTimerObject);
-
-VOID NTAPI
-NdisFreeTimerObject(
-    _In_ NDIS_HANDLE TimerObject);
-
-BOOLEAN NTAPI
-NdisSetTimerObject(
-    _In_     NDIS_HANDLE   TimerObject,
-    _In_     LARGE_INTEGER DueTime,
-    _In_opt_ LONG          MillisecondsPeriod,
-    _In_opt_ PVOID         FunctionContext);
-
-BOOLEAN NTAPI
-NdisCancelTimerObject(
-    _In_ NDIS_HANDLE TimerObject);
-
 /* NDIS 6 RW lock — wraps an EX_PUSH_LOCK or simple shared/exclusive
  * primitive. Drivers use NdisAllocateRWLock + NdisAcquire/Release/Free. */
 typedef struct _NDIS_RW_LOCK_EX NDIS_RW_LOCK_EX, *PNDIS_RW_LOCK_EX;
@@ -560,6 +545,9 @@ typedef struct _NDIS6_PROTOCOL_BINDING
     PNDIS6_PROTOCOL_DRIVER_BLOCK            DriverBlock;
     PLOGICAL_ADAPTER                        Adapter;
     NDIS_HANDLE                             ProtocolBindingContext;
+    /* Links this binding into the owning adapter's Ext->ProtocolBindingList
+     * (inserted by NdisOpenAdapterEx, removed by NdisCloseAdapterEx). */
+    LIST_ENTRY                              AdapterLink;
     /* D4: list of in-flight async OID requests issued by this protocol
      * binding. Each pending NdisOidRequest adds an entry; the matching
      * NdisMOidRequestComplete walks it to find the binding to notify. */

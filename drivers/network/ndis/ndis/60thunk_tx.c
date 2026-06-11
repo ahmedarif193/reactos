@@ -14,11 +14,10 @@
  *
  *              We wrap the legacy NDIS_PACKET (a chain of NDIS_BUFFER, which
  *              are themselves PMDLs) in a freshly allocated NET_BUFFER_LIST
- *              from Ext->TxWrapperNblPool, stash the original packet pointer
- *              in MiniportReserved[0] for the send-complete callback to
- *              recover, track the wrapper on Ext->InFlightNblsTx so HaltEx
- *              can drain pending sends, and hand the NBL to the miniport's
- *              SendNetBufferListsHandler.
+ *              from Ext->TxWrapperNblPool, store bridge-owned state in
+ *              Nbl->NdisReserved[1], track the wrapper on Ext->InFlightNblsTx
+ *              so HaltEx can drain pending sends, and hand the NBL to the
+ *              miniport's SendNetBufferListsHandler.
  *
  *              When the miniport completes the send by calling
  *              NdisMSendNetBufferListsComplete, we walk back to the original
@@ -37,6 +36,54 @@
 /* MiniSendComplete is declared in miniport.h (pulled in via ndis6_internal.h)
  * and is the canonical way to wake up a legacy NDIS 5 protocol's
  * SendCompleteHandler. */
+
+#define NDIS6_TX_WRAPPER_TAG 'wTNn'
+
+typedef struct _NDIS6_TX_WRAPPER_CONTEXT
+{
+    LIST_ENTRY       Link;
+    PNET_BUFFER_LIST Nbl;
+    PNDIS_PACKET     Packet;
+    ULONG_PTR        BindingHandle;
+} NDIS6_TX_WRAPPER_CONTEXT, *PNDIS6_TX_WRAPPER_CONTEXT;
+
+/* ============================================================================
+ *  Ndis6IsNativeBinding — confirm a candidate SourceHandle is a native NDIS 6
+ *  protocol binding currently open on this adapter before dereferencing it
+ *  (a legacy NBL's SourceHandle may hold anything, and a binding can close
+ *  while a send is in flight). No reference is taken: the caller must finish
+ *  with the binding synchronously.
+ * ============================================================================ */
+
+static BOOLEAN
+Ndis6IsNativeBinding(
+    _In_ PNDIS6_ADAPTER_EXT       Ext,
+    _In_ PNDIS6_PROTOCOL_BINDING  Candidate)
+{
+    PLIST_ENTRY entry;
+    KIRQL       OldIrql;
+    BOOLEAN     Found = FALSE;
+
+    if (Ext == NULL || Candidate == NULL)
+        return FALSE;
+
+    KeAcquireSpinLock(&Ext->ProtocolBindingListLock, &OldIrql);
+    for (entry = Ext->ProtocolBindingList.Flink;
+         entry != &Ext->ProtocolBindingList;
+         entry = entry->Flink)
+    {
+        PNDIS6_PROTOCOL_BINDING Binding =
+            CONTAINING_RECORD(entry, NDIS6_PROTOCOL_BINDING, AdapterLink);
+        if (Binding == Candidate)
+        {
+            Found = TRUE;
+            break;
+        }
+    }
+    KeReleaseSpinLock(&Ext->ProtocolBindingListLock, OldIrql);
+
+    return Found;
+}
 
 /* ============================================================================
  *  Ndis6TxSendPacket — wraps an NDIS_PACKET in an NBL and sends it to the
@@ -57,6 +104,7 @@ Ndis6TxSendPacket(
     _In_ PNDIS_PACKET     Packet)
 {
     PNDIS6_ADAPTER_EXT  Ext;
+    PNDIS6_TX_WRAPPER_CONTEXT TxContext;
     PNET_BUFFER_LIST    Nbl;
     PNDIS_BUFFER        FirstBuffer;
     UINT                TotalLength;
@@ -96,12 +144,20 @@ Ndis6TxSendPacket(
     if (Nbl == NULL)
         return NDIS_STATUS_RESOURCES;
 
-    /* Stash the original NDIS_PACKET in MiniportReserved[0] so the
-     * send-complete callback can recover it. NDIS contracts say
-     * MiniportReserved is owned by NDIS (which is us, the bridge),
-     * not the miniport — the miniport touches its own ScratchPad and
-     * the per-NBL Context block. */
-    Nbl->MiniportReserved[0] = Packet;
+    TxContext = ExAllocatePoolWithTag(NonPagedPool,
+                                      sizeof(*TxContext),
+                                      NDIS6_TX_WRAPPER_TAG);
+    if (TxContext == NULL)
+    {
+        NdisFreeNetBufferList(Nbl);
+        return NDIS_STATUS_RESOURCES;
+    }
+
+    RtlZeroMemory(TxContext, sizeof(*TxContext));
+    TxContext->Nbl = Nbl;
+    TxContext->Packet = Packet;
+    TxContext->BindingHandle = Packet->Reserved[1];
+    Nbl->NdisReserved[1] = TxContext;
 
     /* B2: copy the legacy packet's checksum/LSO offload info onto the
      * wrapper NBL's NetBufferListInfo[] so the miniport sees the same
@@ -138,16 +194,11 @@ Ndis6TxSendPacket(
 
     /* Track the wrapper on the in-flight list so HaltEx can wait for
      * outstanding sends to drain before tearing down the adapter.
-     * Use MiniportReserved[3] as the LIST_ENTRY link to keep
-     * MiniportReserved[0..2] free for the original packet pointer +
-     * future per-NBL state. A1: also increment TxInFlightCount and
-     * clear the drain event so HaltEx will actually wait. */
+     * A1: also increment TxInFlightCount and clear the drain event so
+     * HaltEx will actually wait. */
     {
-        PLIST_ENTRY link = (PLIST_ENTRY)&Nbl->MiniportReserved[3];
-        link->Flink = link->Blink = NULL;
-
         KeAcquireSpinLock(&Ext->TxLookupLock, &OldIrql);
-        InsertTailList(&Ext->InFlightNblsTx, link);
+        InsertTailList(&Ext->InFlightNblsTx, &TxContext->Link);
         InterlockedIncrement(&Ext->TxInFlightCount);
         KeClearEvent(&Ext->TxDrainEvent);
         KeReleaseSpinLock(&Ext->TxLookupLock, OldIrql);
@@ -254,12 +305,11 @@ Ndis6FilterTerminalSendComplete(
     _In_ ULONG            SendCompleteFlags)
 {
     PNDIS6_ADAPTER_EXT Ext;
+    PNDIS6_TX_WRAPPER_CONTEXT TxContext;
     PNDIS_PACKET       Packet;
+    ULONG_PTR          BindingHandle;
     NDIS_STATUS        Status;
-    PLIST_ENTRY        link;
     KIRQL              OldIrql;
-
-    UNREFERENCED_PARAMETER(SendCompleteFlags);
 
     if (Adapter == NULL || NetBufferList == NULL)
         return;
@@ -268,18 +318,45 @@ Ndis6FilterTerminalSendComplete(
     if (Ext == NULL)
         return;
 
-    Packet = (PNDIS_PACKET)NetBufferList->MiniportReserved[0];
+    /* Native-protocol send completion: an NBL from NdisSendNetBufferLists has
+     * NdisReserved[1] == NULL (no legacy TX wrapper) and SourceHandle = the
+     * sending PNDIS6_PROTOCOL_BINDING. Validate the handle before use; the
+     * protocol owns the NBL, so hand it back rather than freeing it. */
+    if (NetBufferList->NdisReserved[1] == NULL)
+    {
+        PNDIS6_PROTOCOL_BINDING Binding =
+            (PNDIS6_PROTOCOL_BINDING)NetBufferList->SourceHandle;
+
+        if (Ndis6IsNativeBinding(Ext, Binding) &&
+            Binding->DriverBlock != NULL &&
+            Binding->DriverBlock->Characteristics.SendNetBufferListsCompleteHandler != NULL)
+        {
+            NET_BUFFER_LIST_NEXT_NBL(NetBufferList) = NULL;
+            Binding->DriverBlock->Characteristics.SendNetBufferListsCompleteHandler(
+                Binding->ProtocolBindingContext,
+                NetBufferList,
+                SendCompleteFlags);
+            return;
+        }
+    }
+
+    /* Legacy bridge wrapper completion (tcpip.sys path). */
+    TxContext = (PNDIS6_TX_WRAPPER_CONTEXT)NetBufferList->NdisReserved[1];
+    Packet = TxContext ? TxContext->Packet : NULL;
+    BindingHandle = TxContext ? TxContext->BindingHandle : 0;
     Status = NET_BUFFER_LIST_STATUS(NetBufferList);
 
-    /* Detach from the in-flight list. The link is at MiniportReserved[3].
-     * A1: decrement TxInFlightCount; if it hits zero, signal the drain
-     * event so HaltEx can finish waiting. */
-    link = (PLIST_ENTRY)&NetBufferList->MiniportReserved[3];
-    if (link->Flink != NULL && link->Blink != NULL)
+    /* Detach from the in-flight list. A1: decrement TxInFlightCount; if it
+     * hits zero, signal the drain event so HaltEx can finish waiting. */
+    if (TxContext != NULL &&
+        TxContext->Link.Flink != NULL &&
+        TxContext->Link.Blink != NULL)
     {
         LONG NewCount;
         KeAcquireSpinLock(&Ext->TxLookupLock, &OldIrql);
-        RemoveEntryList(link);
+        RemoveEntryList(&TxContext->Link);
+        TxContext->Link.Flink = NULL;
+        TxContext->Link.Blink = NULL;
         NewCount = InterlockedDecrement(&Ext->TxInFlightCount);
         if (NewCount == 0)
             KeSetEvent(&Ext->TxDrainEvent, IO_NO_INCREMENT, FALSE);
@@ -289,14 +366,24 @@ Ndis6FilterTerminalSendComplete(
     /* Free the wrapper NBL. The MDL chain it pointed at is owned by
      * the original legacy NDIS_PACKET and stays alive until
      * MiniSendComplete returns. */
+    NetBufferList->NdisReserved[1] = NULL;
     NdisFreeNetBufferList(NetBufferList);
 
     /* Wake up the legacy protocol via the existing MiniSendComplete
-     * machinery. MiniSendComplete walks back to the binding (stored
-     * in Packet->Reserved[1] by the legacy ProSend at protocol.c:508)
-     * and calls its SendCompleteHandler. */
-    if (Packet != NULL)
+     * machinery. Restore Packet->Reserved[1] because the legacy packet
+     * is owned by tcpip and may have been reused internally while the
+     * NDIS 6 miniport held the wrapper NBL. */
+    if (Packet != NULL && BindingHandle != 0)
+    {
+        Packet->Reserved[1] = BindingHandle;
         MiniSendComplete(Adapter, Packet, Status);
+    }
+    else
+        DbgPrint("NDIS6-TX: dropping send completion with missing binding packet=%p\n",
+                 Packet);
+
+    if (TxContext != NULL)
+        ExFreePoolWithTag(TxContext, NDIS6_TX_WRAPPER_TAG);
 }
 
 /* ============================================================================
@@ -346,7 +433,7 @@ Ndis6TxSendPackets(
         PNDIS_BUFFER     FirstBuffer;
         UINT             TotalLength;
         PNET_BUFFER_LIST Nbl;
-        PLIST_ENTRY      link;
+        PNDIS6_TX_WRAPPER_CONTEXT TxContext;
 
         if (Packet == NULL)
             continue;
@@ -369,7 +456,21 @@ Ndis6TxSendPackets(
             continue;
         }
 
-        Nbl->MiniportReserved[0] = Packet;
+        TxContext = ExAllocatePoolWithTag(NonPagedPool,
+                                          sizeof(*TxContext),
+                                          NDIS6_TX_WRAPPER_TAG);
+        if (TxContext == NULL)
+        {
+            NdisFreeNetBufferList(Nbl);
+            MiniSendComplete(Adapter, Packet, NDIS_STATUS_RESOURCES);
+            continue;
+        }
+
+        RtlZeroMemory(TxContext, sizeof(*TxContext));
+        TxContext->Nbl = Nbl;
+        TxContext->Packet = Packet;
+        TxContext->BindingHandle = Packet->Reserved[1];
+        Nbl->NdisReserved[1] = TxContext;
         NET_BUFFER_LIST_NEXT_NBL(Nbl) = NULL;
 
         /* B2 + D1: carry offload request + VLAN info across. */
@@ -392,10 +493,8 @@ Ndis6TxSendPackets(
                 NET_BUFFER_LIST_INFO(Nbl, Ieee8021QNetBufferListInfo) = VlanValue;
         }
 
-        link = (PLIST_ENTRY)&Nbl->MiniportReserved[3];
-        link->Flink = link->Blink = NULL;
         KeAcquireSpinLock(&Ext->TxLookupLock, &OldIrql);
-        InsertTailList(&Ext->InFlightNblsTx, link);
+        InsertTailList(&Ext->InFlightNblsTx, &TxContext->Link);
         InterlockedIncrement(&Ext->TxInFlightCount);
         KeClearEvent(&Ext->TxDrainEvent);
         KeReleaseSpinLock(&Ext->TxLookupLock, OldIrql);
@@ -475,13 +574,12 @@ NdisMCancelSendNetBufferLists(
          entry != &Ext->InFlightNblsTx;
          entry = entry->Flink)
     {
-        /* The LIST_ENTRY link is at MiniportReserved[3] — back-compute the
-         * enclosing NBL. sizeof(PVOID) is the stride of MiniportReserved. */
-        PNET_BUFFER_LIST Nbl = (PNET_BUFFER_LIST)
-            ((PUCHAR)entry - offsetof(NET_BUFFER_LIST, MiniportReserved) -
-             3 * sizeof(PVOID));
+        PNDIS6_TX_WRAPPER_CONTEXT TxContext =
+            CONTAINING_RECORD(entry, NDIS6_TX_WRAPPER_CONTEXT, Link);
+        PNET_BUFFER_LIST Nbl = TxContext->Nbl;
 
-        if (NET_BUFFER_LIST_INFO(Nbl, NetBufferListCancelId) == CancelId)
+        if (Nbl != NULL &&
+            NET_BUFFER_LIST_INFO(Nbl, NetBufferListCancelId) == CancelId)
         {
             NET_BUFFER_LIST_STATUS(Nbl) = NDIS_STATUS_SEND_ABORTED;
         }

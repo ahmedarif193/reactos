@@ -384,7 +384,7 @@ Ndis6BindProtocolToAllAdapters(
         Ndis6BuildBindParameters(Snapshot[i], &Params);
         Block->Characteristics.BindAdapterHandlerEx(
             Block->ProtocolDriverContext,
-            (NDIS_HANDLE)Block,        /* BindContext */
+            (NDIS_HANDLE)Snapshot[i],  /* BindContext = adapter handle (see NdisOpenAdapterEx) */
             &Params);
     }
 }
@@ -431,7 +431,7 @@ Ndis6BindAllProtocolsToAdapter(
     {
         Snapshot[i]->Characteristics.BindAdapterHandlerEx(
             Snapshot[i]->ProtocolDriverContext,
-            (NDIS_HANDLE)Snapshot[i],
+            (NDIS_HANDLE)Adapter,       /* BindContext = adapter handle (see NdisOpenAdapterEx) */
             &Params);
     }
 }
@@ -541,24 +541,13 @@ NdisOpenAdapterEx(
 
     *NdisBindingHandle = NULL;
 
-    /* The bridge passes (NDIS_HANDLE)NDIS6_PROTOCOL_DRIVER_BLOCK as the
-     * BindContext to BindAdapterHandlerEx, but the protocol typically
-     * gets the adapter pointer via NDIS_BIND_PARAMETERS.MiniportHandle
-     * (which we set to (NDIS_HANDLE)Adapter). Native protocols are
-     * expected to remember the adapter from BindParameters and we'd
-     * need a richer protocol-API surface to pass it through OpenParameters
-     * cleanly. For now we look up the adapter via BindContext: the
-     * protocol must pass the adapter pointer it received from
-     * NDIS_BIND_PARAMETERS.MiniportHandle as BindContext. (This matches
-     * our Phase 7A bind walker which set BindContext = Block.) */
+    /* BindContext is the adapter handle: the bind walkers pass the
+     * PLOGICAL_ADAPTER (= NDIS_BIND_PARAMETERS.MiniportHandle) as BindContext
+     * and the protocol threads it through unchanged. Reject the protocol
+     * handle (Block) itself - that can never be a valid adapter. */
     Adapter = NULL;
     if (BindContext != (NDIS_HANDLE)Block)
-    {
-        /* The driver passed a different value as BindContext — interpret
-         * it as the MiniportHandle (= adapter pointer) the bridge gave
-         * via NDIS_BIND_PARAMETERS. */
         Adapter = (PLOGICAL_ADAPTER)BindContext;
-    }
     if (Adapter == NULL || !Adapter->IsNdis6)
         return NDIS_STATUS_FAILURE;
 
@@ -613,6 +602,20 @@ NdisOpenAdapterEx(
          * to the protocol and let it decode. */
     }
 
+    /* Link this binding into the adapter's native-protocol list. Must happen
+     * before OpenAdapterCompleteHandlerEx, from which the protocol may start
+     * sending immediately. */
+    {
+        PNDIS6_ADAPTER_EXT Ext = NDIS6_EXT(Adapter);
+        if (Ext != NULL)
+        {
+            KIRQL OldIrql;
+            KeAcquireSpinLock(&Ext->ProtocolBindingListLock, &OldIrql);
+            InsertTailList(&Ext->ProtocolBindingList, &Binding->AdapterLink);
+            KeReleaseSpinLock(&Ext->ProtocolBindingListLock, OldIrql);
+        }
+    }
+
     *NdisBindingHandle = (NDIS_HANDLE)Binding;
 
     /* Synchronous open complete — call the protocol's
@@ -639,6 +642,26 @@ NdisCloseAdapterEx(
 
     Block = Binding->DriverBlock;
 
+    /* Unlink from the adapter's native-protocol list before freeing the
+     * binding, so the datapath never observes a dangling AdapterLink. */
+    if (Binding->Adapter != NULL)
+    {
+        PNDIS6_ADAPTER_EXT Ext = NDIS6_EXT(Binding->Adapter);
+        if (Ext != NULL)
+        {
+            KIRQL OldIrql;
+            KeAcquireSpinLock(&Ext->ProtocolBindingListLock, &OldIrql);
+            if (Binding->AdapterLink.Flink != NULL &&
+                Binding->AdapterLink.Blink != NULL)
+            {
+                RemoveEntryList(&Binding->AdapterLink);
+                Binding->AdapterLink.Flink = NULL;
+                Binding->AdapterLink.Blink = NULL;
+            }
+            KeReleaseSpinLock(&Ext->ProtocolBindingListLock, OldIrql);
+        }
+    }
+
     /* Synchronous close complete. */
     if (Block != NULL &&
         Block->Characteristics.CloseAdapterCompleteHandlerEx != NULL)
@@ -664,10 +687,35 @@ NdisSendNetBufferLists(
     _In_ NDIS_PORT_NUMBER PortNumber,
     _In_ ULONG SendFlags)
 {
-    UNREFERENCED_PARAMETER(NdisBindingHandle);
-    UNREFERENCED_PARAMETER(NetBufferList);
+    PNDIS6_PROTOCOL_BINDING Binding = (PNDIS6_PROTOCOL_BINDING)NdisBindingHandle;
+    PLOGICAL_ADAPTER        Adapter;
+    PNET_BUFFER_LIST        CurrentNbl;
+    PNET_BUFFER_LIST        NextNbl;
+
     UNREFERENCED_PARAMETER(PortNumber);
     UNREFERENCED_PARAMETER(SendFlags);
+
+    if (Binding == NULL || NetBufferList == NULL)
+        return;
+
+    Adapter = Binding->Adapter;
+    if (Adapter == NULL || !Adapter->IsNdis6)
+        return;
+
+    /* SourceHandle = Binding marks a native send so completion routes to the
+     * protocol's SendNetBufferListsCompleteHandler, not the legacy bridge
+     * path. The protocol keeps NBL ownership; NdisReserved[1] must stay NULL
+     * (it is the legacy TX-wrapper marker). */
+    for (CurrentNbl = NetBufferList; CurrentNbl != NULL; CurrentNbl = NextNbl)
+    {
+        NextNbl = NET_BUFFER_LIST_NEXT_NBL(CurrentNbl);
+        NET_BUFFER_LIST_NEXT_NBL(CurrentNbl) = NULL;
+
+        CurrentNbl->SourceHandle      = (NDIS_HANDLE)Binding;
+        CurrentNbl->NdisReserved[1]   = NULL;
+
+        Ndis6FilterDispatchSend(Adapter, CurrentNbl);
+    }
 }
 
 VOID
@@ -677,9 +725,28 @@ NdisReturnNetBufferLists(
     _In_ PNET_BUFFER_LIST NetBufferLists,
     _In_ ULONG ReturnFlags)
 {
-    UNREFERENCED_PARAMETER(NdisBindingHandle);
-    UNREFERENCED_PARAMETER(NetBufferLists);
-    UNREFERENCED_PARAMETER(ReturnFlags);
+    PNDIS6_PROTOCOL_BINDING Binding = (PNDIS6_PROTOCOL_BINDING)NdisBindingHandle;
+    PLOGICAL_ADAPTER        Adapter;
+    PNET_BUFFER_LIST        CurrentNbl;
+    PNET_BUFFER_LIST        NextNbl;
+
+    if (Binding == NULL || NetBufferLists == NULL)
+        return;
+
+    Adapter = Binding->Adapter;
+    if (Adapter == NULL || !Adapter->IsNdis6)
+        return;
+
+    /* Hand the receive NBLs back to the miniport's ReturnNetBufferListsHandler
+     * via the filter chain; the NBLs are miniport-owned. The chain is split
+     * because the terminal return handler nulls the Next link per NBL. */
+    for (CurrentNbl = NetBufferLists; CurrentNbl != NULL; CurrentNbl = NextNbl)
+    {
+        NextNbl = NET_BUFFER_LIST_NEXT_NBL(CurrentNbl);
+        NET_BUFFER_LIST_NEXT_NBL(CurrentNbl) = NULL;
+
+        Ndis6FilterDispatchReturn(Adapter, CurrentNbl, ReturnFlags);
+    }
 }
 
 #define NDIS6_PROTOCOL_PENDING_OID_TAG  'dOPn'
