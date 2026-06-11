@@ -15,6 +15,10 @@
 #include "apphelp.h"
 #include "shimeng.h"
 
+#if (NTDDI_VERSION >= NTDDI_WIN8)
+#define LDRP_SHIMENG_SUPPRESSED_ENTRY 0x00000008
+#endif
+
 
 
 FARPROC WINAPI StubGetProcAddress(HINSTANCE hModule, LPCSTR lpProcName);
