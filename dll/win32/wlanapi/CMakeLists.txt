@@ -6,6 +6,8 @@ spec2def(wlanapi.dll wlanapi.spec ADD_IMPORTLIB)
 list(APPEND SOURCE
     main.c
     profile.c
+    notification.c
+    wlanapi_local.h
     ${CMAKE_CURRENT_BINARY_DIR}/wlanapi_stubs.c
     ${CMAKE_CURRENT_BINARY_DIR}/wlanapi.def
     ${CMAKE_CURRENT_BINARY_DIR}/wlansvc_c.c)

@@ -93,11 +93,29 @@ WlanGetProfile(IN HANDLE hClientHandle,
                DWORD *pdwFlags,
                PDWORD pdwGrantedAccess)
 {
-    if ((pReserved != NULL) || (hClientHandle == NULL) || (pInterfaceGuid == NULL) || (pstrProfileXml  == NULL))
+    DWORD dwResult = ERROR_SUCCESS;
+
+    if ((pReserved != NULL) || (hClientHandle == NULL) || (pInterfaceGuid == NULL) || (pstrProfileXml  == NULL) || (strProfileName == NULL))
         return ERROR_INVALID_PARAMETER;
 
-    UNIMPLEMENTED;
-    return ERROR_SUCCESS;
+    *pstrProfileXml = NULL;
+
+    RpcTryExcept
+    {
+        dwResult = _RpcGetProfile(hClientHandle,
+                                  pInterfaceGuid,
+                                  (LPWSTR)strProfileName,
+                                  pstrProfileXml,
+                                  pdwFlags,
+                                  pdwGrantedAccess);
+    }
+    RpcExcept(EXCEPTION_EXECUTE_HANDLER)
+    {
+        dwResult = RpcExceptionCode();
+    }
+    RpcEndExcept;
+
+    return dwResult;
 }
 
 DWORD
@@ -111,11 +129,28 @@ WlanSetProfile(IN HANDLE hClientHandle,
                PVOID pReserved,
                OUT DWORD *pdwReasonCode)
 {
+    DWORD dwResult = ERROR_SUCCESS;
+
     if ((pReserved != NULL) || (hClientHandle == NULL) || (pInterfaceGuid == NULL) || (strProfileXml == NULL) || (pdwReasonCode == NULL))
         return ERROR_INVALID_PARAMETER;
 
-    UNIMPLEMENTED;
-    return ERROR_SUCCESS;
+    RpcTryExcept
+    {
+        dwResult = _RpcSetProfile(hClientHandle,
+                                  pInterfaceGuid,
+                                  dwFlags,
+                                  (LPWSTR)strProfileXml,
+                                  (LPWSTR)strAllUserProfileSecurity,
+                                  bOverwrite,
+                                  pdwReasonCode);
+    }
+    RpcExcept(EXCEPTION_EXECUTE_HANDLER)
+    {
+        dwResult = RpcExceptionCode();
+    }
+    RpcEndExcept;
+
+    return dwResult;
 }
 
 DWORD
@@ -160,11 +195,24 @@ WlanGetProfileList(IN HANDLE hClientHandle,
                    PVOID pReserved,
                    OUT PWLAN_PROFILE_INFO_LIST *ppProfileList)
 {
+    DWORD dwResult = ERROR_SUCCESS;
+
     if ((pReserved != NULL) || (hClientHandle == NULL) || (pInterfaceGuid == NULL) || (ppProfileList  == NULL))
         return ERROR_INVALID_PARAMETER;
 
-    UNIMPLEMENTED;
-    return ERROR_SUCCESS;
+    *ppProfileList = NULL;
+
+    RpcTryExcept
+    {
+        dwResult = _RpcGetProfileList(hClientHandle, pInterfaceGuid, ppProfileList);
+    }
+    RpcExcept(EXCEPTION_EXECUTE_HANDLER)
+    {
+        dwResult = RpcExceptionCode();
+    }
+    RpcEndExcept;
+
+    return dwResult;
 }
 
 DWORD

@@ -27,6 +27,7 @@
 #include <windef.h>
 #include <winbase.h>
 #include <wlansvc_c.h>
+#include "wlanapi_local.h"
 
 #include <wine/debug.h>
 
@@ -208,6 +209,9 @@ WlanCloseHandle(IN HANDLE hClientHandle,
     if ((pReserved != NULL) || (hClientHandle == NULL))
         return ERROR_INVALID_PARAMETER;
 
+    /* Tear down any notification worker bound to this handle first. */
+    WlanStopNotificationThread(hClientHandle);
+
     RpcTryExcept
     {
         dwResult = _RpcCloseHandle(&hClientHandle);
@@ -281,11 +285,45 @@ WlanQueryInterface(IN HANDLE hClientHandle,
                    OUT PVOID *ppData,
                    WLAN_OPCODE_VALUE_TYPE *pWlanOpcodeValueType)
 {
+    DWORD dwResult = ERROR_SUCCESS;
+    DWORD dwDataSize = 0;
+    LPBYTE pData = NULL;
+    DWORD dwValueType = 0;
+
     if ((pReserved != NULL) || (pInterfaceGuid == NULL) || (hClientHandle == NULL) || (pdwDataSize == NULL) || (ppData == NULL))
         return ERROR_INVALID_PARAMETER;
 
-    UNIMPLEMENTED;
-    return ERROR_SUCCESS;
+    *ppData = NULL;
+    *pdwDataSize = 0;
+
+    RpcTryExcept
+    {
+        dwResult = _RpcQueryInterface(hClientHandle,
+                                      pInterfaceGuid,
+                                      (long)OpCode,
+                                      &dwDataSize,
+                                      &pData,
+                                      &dwValueType);
+    }
+    RpcExcept(EXCEPTION_EXECUTE_HANDLER)
+    {
+        dwResult = WlanRpcStatusToWinError(RpcExceptionCode());
+    }
+    RpcEndExcept;
+
+    if (dwResult == ERROR_SUCCESS)
+    {
+        *ppData = pData;
+        *pdwDataSize = dwDataSize;
+        if (pWlanOpcodeValueType != NULL)
+            *pWlanOpcodeValueType = (WLAN_OPCODE_VALUE_TYPE)dwValueType;
+    }
+    else if (pData != NULL)
+    {
+        WlanFreeMemory(pData);
+    }
+
+    return dwResult;
 }
 
 DWORD
@@ -310,8 +348,15 @@ DWORD WINAPI WlanRegisterNotification(IN HANDLE hClientHandle,
                                       PVOID pReserved,
                                       PDWORD pdwPrevNotifSource)
 {
-    UNIMPLEMENTED;
-    return ERROR_SUCCESS;
+    if ((pReserved != NULL) || (hClientHandle == NULL))
+        return ERROR_INVALID_PARAMETER;
+
+    return WlanRegisterNotificationImpl(hClientHandle,
+                                        dwNotifSource,
+                                        bIgnoreDuplicate,
+                                        funcCallback,
+                                        pCallbackContext,
+                                        pdwPrevNotifSource);
 }
 
 DWORD
@@ -378,11 +423,70 @@ WlanGetAvailableNetworkList(IN HANDLE hClientHandle,
                             PVOID pReserved,
                             OUT PWLAN_AVAILABLE_NETWORK_LIST *ppAvailableNetworkList)
 {
+    DWORD dwResult = ERROR_SUCCESS;
+
     if ((pReserved != NULL) || (pInterfaceGuid == NULL) || (hClientHandle == NULL) || (ppAvailableNetworkList == NULL))
         return ERROR_INVALID_PARAMETER;
 
-    UNIMPLEMENTED;
-    return ERROR_SUCCESS;
+    *ppAvailableNetworkList = NULL;
+
+    RpcTryExcept
+    {
+        dwResult = _RpcGetAvailableNetworkList(hClientHandle,
+                                               pInterfaceGuid,
+                                               dwFlags,
+                                               ppAvailableNetworkList);
+    }
+    RpcExcept(EXCEPTION_EXECUTE_HANDLER)
+    {
+        dwResult = WlanRpcStatusToWinError(RpcExceptionCode());
+    }
+    RpcEndExcept;
+
+    return dwResult;
+}
+
+DWORD
+WINAPI
+WlanGetNetworkBssList(IN HANDLE hClientHandle,
+                      IN const GUID *pInterfaceGuid,
+                      IN const PDOT11_SSID pDot11Ssid,
+                      IN DOT11_BSS_TYPE dot11BssType,
+                      IN BOOL bSecurityEnabled,
+                      PVOID pReserved,
+                      OUT PWLAN_BSS_LIST *ppWlanBssList)
+{
+    DWORD dwResult = ERROR_SUCCESS;
+    DWORD dwBssListSize = 0;
+    LPBYTE pBssList = NULL;
+
+    if ((pReserved != NULL) || (pInterfaceGuid == NULL) || (hClientHandle == NULL) || (ppWlanBssList == NULL))
+        return ERROR_INVALID_PARAMETER;
+
+    *ppWlanBssList = NULL;
+
+    RpcTryExcept
+    {
+        dwResult = _RpcGetNetworkBssList(hClientHandle,
+                                         pInterfaceGuid,
+                                         pDot11Ssid,
+                                         (short)dot11BssType,
+                                         bSecurityEnabled ? 1 : 0,
+                                         &dwBssListSize,
+                                         &pBssList);
+    }
+    RpcExcept(EXCEPTION_EXECUTE_HANDLER)
+    {
+        dwResult = WlanRpcStatusToWinError(RpcExceptionCode());
+    }
+    RpcEndExcept;
+
+    if (dwResult == ERROR_SUCCESS)
+        *ppWlanBssList = (PWLAN_BSS_LIST)pBssList;
+    else if (pBssList != NULL)
+        WlanFreeMemory(pBssList);
+
+    return dwResult;
 }
 
 void __RPC_FAR * __RPC_USER
