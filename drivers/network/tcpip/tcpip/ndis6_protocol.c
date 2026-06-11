@@ -142,7 +142,7 @@ TcpipNdis6RegisterProtocol(VOID)
     characteristics.OidRequestCompleteHandler = TcpipNdis6OidRequestComplete;
     characteristics.StatusHandlerEx = TcpipNdis6Status;
     characteristics.NetPnPEventHandler = TcpipNdis6NetPnpEvent;
-    characteristics.Name = &name;
+    characteristics.Name = name;
 
     return NdisRegisterProtocolDriver(NULL, &characteristics, &g_Ndis6ProtocolHandle);
 }

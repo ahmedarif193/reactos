@@ -48,6 +48,12 @@ typedef struct _NDIS6_DRIVER_BLOCK
     /* Original IRP_MJ_PNP and AddDevice the driver had before we replaced them */
     PDRIVER_DISPATCH                        OriginalPnpDispatch;
     PDRIVER_ADD_DEVICE                      OriginalAddDevice;
+
+    /* WdfDriverCreate installed its own AddDevice + dispatch table before
+     * NdisMRegisterMiniportDriver ran: chain AddDevice to KMDF and demux
+     * IRPs for KMDF-owned device objects to the saved original dispatch. */
+    BOOLEAN                                 IsWdfHybrid;
+    PDRIVER_DISPATCH                        OriginalMajorFunction[IRP_MJ_MAXIMUM_FUNCTION + 1];
 } NDIS6_DRIVER_BLOCK, *PNDIS6_DRIVER_BLOCK;
 
 extern LIST_ENTRY g_Ndis6DriverList;
@@ -245,6 +251,27 @@ typedef struct _NDIS6_OID_WAITER
 
 /* 60driver.c */
 VOID Ndis6DriverInit(VOID);
+
+/* Returns KMDF's saved dispatch when DeviceObject is a KMDF-owned device
+ * object on a hybrid driver, NULL when the IRP is ours to handle. */
+PDRIVER_DISPATCH
+Ndis6HybridGetOriginalDispatch(
+    _In_ PDEVICE_OBJECT DeviceObject,
+    _In_ UCHAR          MajorFunction);
+
+/* User-mode IRP surface (create/close + IOCTL_NDIS_QUERY_GLOBAL_STATS) of
+ * the miniport FDO. TRUE = DeviceObject is an adapter FDO and the IRP was
+ * completed with *OutStatus. */
+BOOLEAN
+Ndis6TryDispatchAdapterFdoIrp(
+    _In_  PDEVICE_OBJECT DeviceObject,
+    _In_  PIRP           Irp,
+    _Out_ NTSTATUS*      OutStatus);
+
+/* 60stubs.c — TRUE if DeviceObject was created by NdisRegisterDeviceEx. */
+BOOLEAN
+Ndis6DeviceIsControlDevice(
+    _In_ PDEVICE_OBJECT DeviceObject);
 
 /* 60adapter.c */
 NDIS_STATUS
