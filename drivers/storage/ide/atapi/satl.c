@@ -1055,7 +1055,11 @@ AtaReqCompleteModeSense(
     /* Return SCSI mode pages */
     if (PageCode == MODE_PAGE_CONTROL || PageCode == MODE_SENSE_RETURN_ALL)
     {
+#if (NTDDI_VERSION >= NTDDI_WIN8)
+        UCHAR SubPageCode = Cdb->MODE_SENSE.SubPageCode;
+#else
         UCHAR SubPageCode = Cdb->MODE_SENSE.Reserved3;
+#endif
 
         if (SubPageCode == 0x00 || SubPageCode == 0xFF)
             Buffer += AtaReqControlModePage(DevExt, Buffer);
@@ -1122,7 +1126,11 @@ AtaReqScsiModeSense(
 
         case MODE_PAGE_CONTROL:
         {
+#if (NTDDI_VERSION >= NTDDI_WIN8)
+            UCHAR SubPageCode = Cdb->MODE_SENSE.SubPageCode;
+#else
             UCHAR SubPageCode = Cdb->MODE_SENSE.Reserved3;
+#endif
 
             if (SubPageCode != 0x00 && SubPageCode != 0x01 && SubPageCode != 0xFF)
                 return AtaReqTerminateInvalidField(Srb);
