@@ -2449,9 +2449,12 @@ MiBuildSystemPteSpace(VOID)
     MmNumberOfSystemPtes = MI_NUMBER_SYSTEM_PTES;
     NonPagedSystemSize = (MmNumberOfSystemPtes + 1) * PAGE_SIZE;
 
-    /* Put system PTEs at the start of the system VA space */
-    MiSystemPteSpaceStart = MmNonPagedSystemStart;
+    /* Put system PTEs at the start of the assigned system PTE region */
+    MiSystemPteSpaceStart = MiSystemVaRegions[AssignedRegionSystemPtes].BaseAddress;
     MiSystemPteSpaceEnd = (PUCHAR)MiSystemPteSpaceStart + NonPagedSystemSize;
+
+    /* Publish the location for RosMm and the address space dump */
+    MmSystemPteSpaceStart = MiSystemPteSpaceStart;
 
     /* Convert exclusive end into inclusive end for the mapping helpers */
     SystemPteRangeEnd = (PVOID)((PUCHAR)MiSystemPteSpaceEnd - 1);

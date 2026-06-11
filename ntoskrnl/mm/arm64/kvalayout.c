@@ -219,11 +219,11 @@ SetupVaRegions(
     ReserveVaRange(MI_ARM64_PHYS_MAP_BASE, 0ULL - MI_ARM64_PHYS_MAP_BASE);
 
     /*
-     * Reserve 128 GB for system PTEs (PXI 497). This slot also hosts
-     * MI_DEBUG_MAPPING and MmNonPagedSystemStart, so the PXI must stay
-     * reserved even after the system PTEs are randomized.
+     * Keep PXI 497 reserved: MI_DEBUG_MAPPING and MmNonPagedSystemStart
+     * stay at their fixed addresses there even though the system PTEs
+     * are randomized.
      */
-    ReserveVaRegion(AssignedRegionSystemPtes, MI_SYSTEM_SPACE_START, 128 * _1GB);
+    ReserveVaRange(MI_SYSTEM_SPACE_START, 128 * _1GB);
     ReserveVaRange((ULONG_PTR)MI_DEBUG_MAPPING, PAGE_SIZE);
 
     /* Reserve VA for the PFN database */
@@ -238,6 +238,9 @@ SetupVaRegions(
 
     /* Reserve 128 GB for paged pool */
     RandomizeVaRegion(AssignedRegionPagedPool, 128 * _1GB, PDE_MAPPED_VA);
+
+    /* Reserve 128 GB for system PTEs */
+    RandomizeVaRegion(AssignedRegionSystemPtes, 128 * _1GB, PDE_MAPPED_VA);
 
     /* Reserve 128 GB for kernel stacks (no consumer yet, parity with x64) */
     RandomizeVaRegion(AssignedRegionKernelStacks, 128 * _1GB, PPE_MAPPED_VA);
