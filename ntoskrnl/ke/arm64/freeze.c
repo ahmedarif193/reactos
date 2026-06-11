@@ -68,7 +68,13 @@ KiProcessorFreezeHandler(
         return FALSE;
     }
 
-    CurrentPrcb->IpiFrozen = IPI_FROZEN_STATE_FROZEN;
+    if (InterlockedCompareExchange((PLONG)&CurrentPrcb->IpiFrozen,
+                                   IPI_FROZEN_STATE_FROZEN,
+                                   IPI_FROZEN_STATE_TARGET_FREEZE) !=
+        IPI_FROZEN_STATE_TARGET_FREEZE)
+    {
+        return FALSE;
+    }
     KiSaveProcessorState(TrapFrame, ExceptionFrame);
 
     for (;;)
@@ -96,7 +102,7 @@ KiProcessorFreezeHandler(
     }
 
     KiRestoreProcessorState(TrapFrame, ExceptionFrame);
-    CurrentPrcb->IpiFrozen = IPI_FROZEN_STATE_RUNNING;
+    InterlockedExchange((PLONG)&CurrentPrcb->IpiFrozen, IPI_FROZEN_STATE_RUNNING);
     return TRUE;
 }
 
@@ -108,12 +114,29 @@ KiArm64WaitForFrozenTargets(
     for (ULONG i = 0; i < KeNumberProcessors; i++)
     {
         PKPRCB TargetPrcb = KiProcessorBlock[i];
-        if ((TargetPrcb != NULL) && (TargetPrcb != CurrentPrcb))
+        ULONG64 Spins = 0;
+
+        if ((TargetPrcb == NULL) ||
+            (TargetPrcb == CurrentPrcb) ||
+            !(KeActiveProcessors & TargetPrcb->SetMember))
         {
-            while (TargetPrcb->IpiFrozen != IPI_FROZEN_STATE_FROZEN)
+            continue;
+        }
+
+        while (TargetPrcb->IpiFrozen != IPI_FROZEN_STATE_FROZEN)
+        {
+            YieldProcessor();
+            KeMemoryBarrier();
+
+            if (++Spins > 400000000ULL)
             {
-                YieldProcessor();
-                KeMemoryBarrier();
+                if (InterlockedCompareExchange((PLONG)&TargetPrcb->IpiFrozen,
+                                               IPI_FROZEN_STATE_RUNNING,
+                                               IPI_FROZEN_STATE_TARGET_FREEZE) ==
+                    IPI_FROZEN_STATE_TARGET_FREEZE)
+                {
+                    break;
+                }
             }
         }
     }
@@ -127,11 +150,14 @@ KiArm64RequestThaw(
     for (ULONG i = 0; i < KeNumberProcessors; i++)
     {
         PKPRCB TargetPrcb = KiProcessorBlock[i];
-        if ((TargetPrcb != NULL) && (TargetPrcb != CurrentPrcb))
+        if ((TargetPrcb == NULL) || (TargetPrcb == CurrentPrcb))
         {
-            ASSERT(TargetPrcb->IpiFrozen == IPI_FROZEN_STATE_FROZEN);
-            TargetPrcb->IpiFrozen = IPI_FROZEN_STATE_THAW;
+            continue;
         }
+
+        InterlockedCompareExchange((PLONG)&TargetPrcb->IpiFrozen,
+                                   IPI_FROZEN_STATE_THAW,
+                                   IPI_FROZEN_STATE_FROZEN);
     }
 
     for (ULONG i = 0; i < KeNumberProcessors; i++)
@@ -231,9 +257,26 @@ KxFreezeExecution(
     for (ULONG i = 0; i < KeNumberProcessors; i++)
     {
         PKPRCB TargetPrcb = KiProcessorBlock[i];
-        if ((TargetPrcb != NULL) && (TargetPrcb != CurrentPrcb))
+        ULONG Spins = 0;
+
+        if ((TargetPrcb == NULL) ||
+            (TargetPrcb == CurrentPrcb) ||
+            !(KeActiveProcessors & TargetPrcb->SetMember))
         {
-            TargetPrcb->IpiFrozen = IPI_FROZEN_STATE_TARGET_FREEZE;
+            continue;
+        }
+
+        while (InterlockedCompareExchange((PLONG)&TargetPrcb->IpiFrozen,
+                                          IPI_FROZEN_STATE_TARGET_FREEZE,
+                                          IPI_FROZEN_STATE_RUNNING) !=
+               IPI_FROZEN_STATE_RUNNING)
+        {
+            YieldProcessor();
+            KeMemoryBarrier();
+            if (++Spins > 100000000UL)
+            {
+                break;
+            }
         }
     }
 
