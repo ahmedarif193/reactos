@@ -2933,6 +2933,50 @@ USBH_FdoPnP(IN PUSBHUB_FDO_EXTENSION HubExtension,
     return Status;
 }
 
+/* GUID_REENUMERATE_SELF_INTERFACE_STANDARD on the port PDO: lets a function
+ * driver request a surprise-remove + re-enumeration of its own port (same
+ * semantics as IOCTL_INTERNAL_USB_CYCLE_PORT). */
+static VOID
+NTAPI
+USBH_InterfaceNop(IN PVOID Context)
+{
+    UNREFERENCED_PARAMETER(Context);
+}
+
+static VOID
+NTAPI
+USBH_SurpriseRemoveAndReenumerateSelf(IN PVOID Context)
+{
+    PUSBHUB_PORT_PDO_EXTENSION PortExtension = Context;
+    PUSBHUB_FDO_EXTENSION HubExtension = PortExtension->HubExtension;
+
+    DPRINT_PNP("USBH_SurpriseRemoveAndReenumerateSelf: port %hu\n", PortExtension->PortNumber);
+
+    if (!HubExtension || PortExtension->PortNumber == 0)
+        return;
+
+    USBH_ResetDevice(HubExtension, PortExtension->PortNumber, FALSE, TRUE);
+}
+
+static NTSTATUS
+USBH_PdoQueryReenumerateSelfInterface(IN PUSBHUB_PORT_PDO_EXTENSION PortExtension,
+                                      IN PIO_STACK_LOCATION IoStack)
+{
+    PREENUMERATE_SELF_INTERFACE_STANDARD Interface;
+
+    if (IoStack->Parameters.QueryInterface.Size < sizeof(REENUMERATE_SELF_INTERFACE_STANDARD))
+        return STATUS_INVALID_BUFFER_SIZE;
+
+    Interface = (PREENUMERATE_SELF_INTERFACE_STANDARD)IoStack->Parameters.QueryInterface.Interface;
+    Interface->Size = sizeof(REENUMERATE_SELF_INTERFACE_STANDARD);
+    Interface->Version = 1;
+    Interface->Context = PortExtension;
+    Interface->InterfaceReference = USBH_InterfaceNop;
+    Interface->InterfaceDereference = USBH_InterfaceNop;
+    Interface->SurpriseRemoveAndReenumerateSelf = USBH_SurpriseRemoveAndReenumerateSelf;
+    return STATUS_SUCCESS;
+}
+
 NTSTATUS
 NTAPI
 USBH_PdoPnP(IN PUSBHUB_PORT_PDO_EXTENSION PortExtension,
@@ -3021,6 +3065,15 @@ USBH_PdoPnP(IN PUSBHUB_PORT_PDO_EXTENSION PortExtension,
 
         case IRP_MN_QUERY_INTERFACE:
             DPRINT_PNP("PDO IRP_MN_QUERY_INTERFACE\n");
+
+            /* Function drivers (KMDF USB targets) ask for this to request a
+             * surprise-remove + re-enumeration of their own port. */
+            if (IsEqualGUIDAligned(IoStack->Parameters.QueryInterface.InterfaceType,
+                                   &GUID_REENUMERATE_SELF_INTERFACE_STANDARD))
+            {
+                Status = USBH_PdoQueryReenumerateSelfInterface(PortExtension, IoStack);
+                break;
+            }
 
             *IsCompleteIrp = 0;
 
