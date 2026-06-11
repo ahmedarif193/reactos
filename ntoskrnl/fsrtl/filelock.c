@@ -1345,3 +1345,30 @@ FsRtlFreeFileLock(IN PFILE_LOCK FileLock)
     FsRtlUninitializeFileLock(FileLock);
     ExFreeToPagedLookasideList(&FsRtlFileLockLookasideList, FileLock);
 }
+
+#if (NTDDI_VERSION >= NTDDI_WIN8)
+BOOLEAN
+NTAPI
+FsRtlCheckLockForOplockRequest(IN PFILE_LOCK FileLock,
+                               IN PLARGE_INTEGER AllocationSize)
+{
+    UNREFERENCED_PARAMETER(AllocationSize);
+
+    return !FsRtlAreThereCurrentFileLocks(FileLock);
+}
+
+BOOLEAN
+NTAPI
+FsRtlAreThereWaitingFileLocks(IN PFILE_LOCK FileLock)
+{
+    PLOCK_INFORMATION LockInfo;
+
+    LockInfo = FileLock->LockInformation;
+    if (LockInfo == NULL)
+    {
+        return FALSE;
+    }
+
+    return !IsListEmpty(&LockInfo->CsqList);
+}
+#endif

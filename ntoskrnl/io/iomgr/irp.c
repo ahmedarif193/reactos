@@ -2013,3 +2013,24 @@ IoIs32bitProcess(
     return FALSE;
 }
 #endif
+
+#if (NTDDI_VERSION >= NTDDI_VISTA)
+NTSTATUS
+NTAPI
+IoRetrievePriorityInfo(IN PIRP Irp OPTIONAL,
+                       IN PFILE_OBJECT FileObject OPTIONAL,
+                       IN PETHREAD Thread OPTIONAL,
+                       IN OUT PIO_PRIORITY_INFO PriorityInfo)
+{
+    UNREFERENCED_PARAMETER(Irp);
+    UNREFERENCED_PARAMETER(FileObject);
+    UNREFERENCED_PARAMETER(Thread);
+
+    PriorityInfo->Size = sizeof(IO_PRIORITY_INFO);
+    PriorityInfo->ThreadPriority = 0xffff;
+    PriorityInfo->IoPriority = IoPriorityNormal;
+    PriorityInfo->PagePriority = 0;
+
+    return STATUS_SUCCESS;
+}
+#endif

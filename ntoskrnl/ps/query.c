@@ -3567,3 +3567,29 @@ NtQueryInformationThread(
 }
 
 /* EOF */
+
+BOOLEAN PspDiskCountersEnabled = FALSE;
+
+BOOLEAN
+NTAPI
+PsIsDiskCountersEnabled(VOID)
+{
+    return PspDiskCountersEnabled;
+}
+
+VOID
+NTAPI
+PsUpdateDiskCounters(IN OUT PEPROCESS Process,
+                     IN ULONG64 BytesRead,
+                     IN ULONG64 BytesWritten,
+                     IN ULONG ReadOperationCount,
+                     IN ULONG WriteOperationCount,
+                     IN ULONG FlushOperationCount)
+{
+    UNREFERENCED_PARAMETER(Process);
+    UNREFERENCED_PARAMETER(BytesRead);
+    UNREFERENCED_PARAMETER(BytesWritten);
+    UNREFERENCED_PARAMETER(ReadOperationCount);
+    UNREFERENCED_PARAMETER(WriteOperationCount);
+    UNREFERENCED_PARAMETER(FlushOperationCount);
+}
