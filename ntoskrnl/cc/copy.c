@@ -976,3 +976,34 @@ CcZeroData (
 
     return TRUE;
 }
+
+#if (NTDDI_VERSION >= NTDDI_WIN8)
+BOOLEAN
+NTAPI
+CcCopyReadEx(IN PFILE_OBJECT FileObject,
+             IN PLARGE_INTEGER FileOffset,
+             IN ULONG Length,
+             IN BOOLEAN Wait,
+             OUT PVOID Buffer,
+             OUT PIO_STATUS_BLOCK IoStatus,
+             IN PETHREAD IoIssuerThread)
+{
+    UNREFERENCED_PARAMETER(IoIssuerThread);
+
+    return CcCopyRead(FileObject, FileOffset, Length, Wait, Buffer, IoStatus);
+}
+
+BOOLEAN
+NTAPI
+CcCopyWriteEx(IN PFILE_OBJECT FileObject,
+              IN PLARGE_INTEGER FileOffset,
+              IN ULONG Length,
+              IN BOOLEAN Wait,
+              IN PVOID Buffer,
+              IN PETHREAD IoIssuerThread)
+{
+    UNREFERENCED_PARAMETER(IoIssuerThread);
+
+    return CcCopyWrite(FileObject, FileOffset, Length, Wait, Buffer);
+}
+#endif

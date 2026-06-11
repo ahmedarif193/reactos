@@ -381,3 +381,13 @@ CcSetReadAheadGranularity (
     PrivateMap = FileObject->PrivateCacheMap;
     PrivateMap->ReadAheadMask = Granularity - 1;
 }
+
+VOID
+NTAPI
+CcSetAdditionalCacheAttributesEx(
+    _In_ PFILE_OBJECT FileObject,
+    _In_ ULONG Flags)
+{
+    UNREFERENCED_PARAMETER(FileObject);
+    UNREFERENCED_PARAMETER(Flags);
+}
