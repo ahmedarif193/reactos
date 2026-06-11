@@ -1768,6 +1768,9 @@ XHCI_RingEndpointDoorbell(
 
     Value = EndpointId & 0x1F;
     Value |= (StreamId & 0xFFFF) << 16;
+#if defined(_M_ARM64)
+    __asm__ __volatile__("dsb sy" ::: "memory");
+#endif
     XHCI_WRITE_REGISTER_ULONG(&Extension->DoorbellArray->Doorbell[SlotIndex], Value);
     /*
      * Flush PCI posted writes by reading back the doorbell register.
@@ -4161,7 +4164,8 @@ XHCI_InitBouncePool(
     if (Extension->StoppingOrRemoved)
         return MP_STATUS_HW_ERROR;
 
-    if (!XHCI_Requires32BitDma(Extension))
+    if (!XHCI_Requires32BitDma(Extension) &&
+        !(Extension->Quirks & XHCI_QUIRK_NON_COHERENT_DMA))
         return MP_STATUS_SUCCESS;
 
     Extension->BounceBufferSize = XHCI_BOUNCE_BUFFER_SIZE;
@@ -8664,6 +8668,10 @@ XHCI_DetectHardwareQuirks(
      * over hardware detection results.
      */
 
+#ifdef _M_ARM64
+    Extension->Quirks |= XHCI_QUIRK_NON_COHERENT_DMA;
+#endif
+
     /* Non-coherent DMA override */
     if (g_XhciNonCoherentDmaOverrideValid)
     {
@@ -10999,17 +11007,18 @@ XHCI_SubmitControlTransfer(
 
     if (HasDataStage &&
         (ForceBounce ||
+         (Extension->Quirks & XHCI_QUIRK_NON_COHERENT_DMA) ||
          (XHCI_Requires32BitDma(Extension) &&
           XHCI_SgListHasHighAddress(SgList, &HighAddress))))
     {
         if (ForceBounce)
         {
-            DPRINT1("usbxhci: forcing control bounce buffer for EP0 (len=%lu)\n",
+            DPRINT("usbxhci: forcing control bounce buffer for EP0 (len=%lu)\n",
                     TransferParameters->TransferBufferLength);
         }
         else
         {
-            DPRINT1("usbxhci: control DMA above 4G (pa=%I64x len=%lu), using bounce buffer\n",
+            DPRINT("usbxhci: control DMA bounce (pa=%I64x len=%lu)\n",
                     HighAddress,
                     TransferParameters->TransferBufferLength);
         }
@@ -11146,7 +11155,10 @@ XHCI_SubmitControlTransfer(
                           (Endpoint->TransferRing.CycleState & XHCI_TRB_CYCLE);
 
                 if (DataIn)
+                {
                     Control |= XHCI_TRB_DIR_IN;
+                    Control |= XHCI_TRB_ISP;
+                }
 
                 /*
                  * Per xHCI spec 4.11.5.2: "For a Control transfer, the TRB Chain bit
@@ -11221,7 +11233,10 @@ XHCI_SubmitControlTransfer(
                               (Endpoint->TransferRing.CycleState & XHCI_TRB_CYCLE);
 
                     if (DataIn)
+                    {
                         Control |= XHCI_TRB_DIR_IN;
+                        Control |= XHCI_TRB_ISP;
+                    }
 
                     /*
                      * Per xHCI spec 4.11.5.2: "For a Control transfer, the TRB Chain bit
@@ -11452,9 +11467,7 @@ XHCI_SubmitSgTransfer(
     if (TransferParameters)
         DataIn = (TransferParameters->TransferFlags & USBD_TRANSFER_DIRECTION_IN) ? TRUE : FALSE;
     if (!IsIsochronous &&
-        TransferParameters &&
-        (TransferParameters->TransferFlags & USBD_SHORT_TRANSFER_OK) &&
-        (TransferParameters->TransferFlags & USBD_TRANSFER_DIRECTION_IN))
+        Endpoint->EndpointProperties.Direction != USBPORT_TRANSFER_DIRECTION_OUT)
     {
         ShortPacketOk = TRUE;
     }
@@ -11591,10 +11604,11 @@ XHCI_SubmitSgTransfer(
     }
 
     if (Remaining &&
-        XHCI_Requires32BitDma(Extension) &&
-        XHCI_SgListHasHighAddress(SgList, &HighAddress))
+        ((Extension->Quirks & XHCI_QUIRK_NON_COHERENT_DMA) ||
+         (XHCI_Requires32BitDma(Extension) &&
+          XHCI_SgListHasHighAddress(SgList, &HighAddress))))
     {
-        DPRINT1("usbxhci: sg DMA above 4G (pa=%I64x len=%lu), using bounce buffer\n",
+        DPRINT("usbxhci: sg DMA bounce (pa=%I64x len=%lu)\n",
                 HighAddress,
                 Remaining);
         Status = XHCI_PrepareBounceBuffer(Extension, Transfer, Remaining, DataIn);
@@ -13543,8 +13557,9 @@ XHCI_SubmitIsochronousTransfer(
         if (!SgList || SgList->SgElementCount == 0)
             return MP_STATUS_NO_RESOURCES;
 
-        if (XHCI_Requires32BitDma(Extension) &&
-            XHCI_SgListHasHighAddress(SgList, &HighAddress))
+        if ((Extension->Quirks & XHCI_QUIRK_NON_COHERENT_DMA) ||
+            (XHCI_Requires32BitDma(Extension) &&
+             XHCI_SgListHasHighAddress(SgList, &HighAddress)))
         {
             Status = XHCI_PrepareBounceBuffer(Extension,
                                               Transfer,
