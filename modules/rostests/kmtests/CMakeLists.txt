@@ -133,6 +133,24 @@ if(ARCH STREQUAL "i386" OR ARCH STREQUAL "amd64")
         hal/HalPortIo.c)
 endif()
 
+if(ARCH STREQUAL "arm64")
+    list(APPEND KMTEST_DRV_SOURCE
+        kmArm64/HalArm64Layout.c
+        kmArm64/KdArm64Layout.c
+        kmArm64/KeArm64.c
+        kmArm64/KeArm64Dispatcher.c
+        kmArm64/KeArm64DpcIpi.c
+        kmArm64/KeArm64Frames.c
+        kmArm64/KeArm64Intrinsics.c
+        kmArm64/KeArm64Irql.c
+        kmArm64/KeArm64LoaderCache.c
+        kmArm64/KeArm64PcrPrcb.c
+        kmArm64/KeArm64Smp.c
+        kmArm64/KeArm64SpinLock.c
+        kmArm64/KeArm64ThreadProcess.c
+        kmArm64/RtlArm64UnwindLayout.c)
+endif()
+
 add_library(kmtest_drv MODULE ${KMTEST_DRV_SOURCE})
 set_module_type(kmtest_drv kernelmodedriver)
 target_link_libraries(kmtest_drv kmtest_printf chkstk memcmp ntoskrnl_vista ${PSEH_LIB})
