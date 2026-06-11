@@ -1328,8 +1328,9 @@ HidParser_NumberOfTopCollections(
     // sanity checks
     //
     ASSERT(ParserContext);
-    ASSERT(ParserContext->RootCollection);
-    ASSERT(ParserContext->RootCollection->NodeCount);
+
+    if (!ParserContext->RootCollection)
+        return 0;
 
     //
     // number of top collections
