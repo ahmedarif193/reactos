@@ -370,6 +370,11 @@ E1000MiniportInitializeEx(
     /* Mark adapter as started */
     InterlockedOr(&Adapter->Flags, E1000_FLAG_ADAPTER_STARTED);
 
+    /* NDIS 6 miniports are in the Paused state after MiniportInitializeEx;
+     * MiniportRestart starts the datapath. E1000MiniportRestart requires
+     * E1000_FLAG_ADAPTER_PAUSED, so set it here or the first protocol bind fails. */
+    InterlockedOr(&Adapter->Flags, E1000_FLAG_ADAPTER_PAUSED);
+
     /* Enable interrupts */
     E1000EnableInterrupts(Adapter);
 
