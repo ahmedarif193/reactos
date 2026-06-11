@@ -103,6 +103,9 @@ typedef struct _LOGICAL_ADAPTER
      * NDIS 6 miniport driver. */
     BOOLEAN                     IsNdis6;                /* TRUE if NDIS 6 miniport */
     PVOID                       Ndis6Context;           /* PNDIS6_ADAPTER_EXT */
+    PVOID                       WdfReserved[4];         /* NdisGetDeviceReservedExtension area
+                                                           (NDIS-WDF miniports stash their
+                                                           framework context here) */
 } LOGICAL_ADAPTER, *PLOGICAL_ADAPTER;
 
 #define GET_LOGICAL_ADAPTER(Handle)((PLOGICAL_ADAPTER)Handle)
