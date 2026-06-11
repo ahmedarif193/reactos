@@ -891,12 +891,18 @@ typedef struct _NDIS6_DEVICE_OBJECT_ATTRIBUTES
 
 typedef struct _NDIS6_CONTROL_DEVICE
 {
+    LIST_ENTRY          ListEntry;
     PDEVICE_OBJECT      DeviceObject;
     UNICODE_STRING      SymbolicName;
     BOOLEAN             SymbolicLinkCreated;
 } NDIS6_CONTROL_DEVICE, *PNDIS6_CONTROL_DEVICE;
 
 #define NDIS6_CTL_DEV_TAG  'dCNn'
+
+/* All live control devices, so NdisGetDeviceReservedExtension can tell a
+ * NdisRegisterDeviceEx device object apart from a miniport FDO. */
+static LIST_ENTRY g_Ndis6CtlDevList = { &g_Ndis6CtlDevList, &g_Ndis6CtlDevList };
+static KSPIN_LOCK g_Ndis6CtlDevLock;
 
 NDIS_STATUS
 NTAPI
@@ -990,6 +996,9 @@ NdisRegisterDeviceEx(
     CtlDev->DeviceObject = Device;
     Device->Flags &= ~DO_DEVICE_INITIALIZING;
 
+    ExInterlockedInsertTailList(&g_Ndis6CtlDevList, &CtlDev->ListEntry,
+                                &g_Ndis6CtlDevLock);
+
     *pDeviceObject    = Device;
     *NdisDeviceHandle = (NDIS_HANDLE)CtlDev;
     return NDIS_STATUS_SUCCESS;
@@ -1001,9 +1010,14 @@ NdisDeregisterDeviceEx(
     _In_ NDIS_HANDLE NdisDeviceHandle)
 {
     PNDIS6_CONTROL_DEVICE CtlDev = (PNDIS6_CONTROL_DEVICE)NdisDeviceHandle;
+    KIRQL OldIrql;
 
     if (CtlDev == NULL)
         return NDIS_STATUS_INVALID_PARAMETER;
+
+    KeAcquireSpinLock(&g_Ndis6CtlDevLock, &OldIrql);
+    RemoveEntryList(&CtlDev->ListEntry);
+    KeReleaseSpinLock(&g_Ndis6CtlDevLock, OldIrql);
 
     if (CtlDev->SymbolicLinkCreated)
         IoDeleteSymbolicLink(&CtlDev->SymbolicName);
@@ -1011,6 +1025,125 @@ NdisDeregisterDeviceEx(
         IoDeleteDevice(CtlDev->DeviceObject);
 
     ExFreePoolWithTag(CtlDev, NDIS6_CTL_DEV_TAG);
+    return NDIS_STATUS_SUCCESS;
+}
+
+/*
+ * NdisGetDeviceReservedExtension
+ *
+ * For a device created by NdisRegisterDeviceEx the caller's reserved area is
+ * the whole device extension (we pass ExtensionSize straight to
+ * IoCreateDevice). For a miniport FDO the reserved area is the WdfReserved
+ * scratch space in LOGICAL_ADAPTER, where NDIS-WDF miniports keep their
+ * framework context.
+ */
+PVOID
+NTAPI
+NdisGetDeviceReservedExtension(
+    _In_ PDEVICE_OBJECT DeviceObject)
+{
+    PLOGICAL_ADAPTER Adapter;
+    PLIST_ENTRY Entry;
+    KIRQL OldIrql;
+    BOOLEAN IsCtlDev = FALSE;
+
+    if (DeviceObject == NULL)
+        return NULL;
+
+    KeAcquireSpinLock(&g_Ndis6CtlDevLock, &OldIrql);
+    for (Entry = g_Ndis6CtlDevList.Flink;
+         Entry != &g_Ndis6CtlDevList;
+         Entry = Entry->Flink)
+    {
+        PNDIS6_CONTROL_DEVICE CtlDev =
+            CONTAINING_RECORD(Entry, NDIS6_CONTROL_DEVICE, ListEntry);
+        if (CtlDev->DeviceObject == DeviceObject)
+        {
+            IsCtlDev = TRUE;
+            break;
+        }
+    }
+    KeReleaseSpinLock(&g_Ndis6CtlDevLock, OldIrql);
+
+    if (IsCtlDev)
+        return DeviceObject->DeviceExtension;
+
+    /* Miniport FDO check: its device extension is the LOGICAL_ADAPTER,
+     * which points back at the same device object. */
+    Adapter = (PLOGICAL_ADAPTER)DeviceObject->DeviceExtension;
+    if (Adapter != NULL &&
+        Adapter->NdisMiniportBlock.DeviceObject == DeviceObject)
+    {
+        return &Adapter->WdfReserved[0];
+    }
+
+    return NULL;
+}
+
+/*
+ * NdisOpenConfigurationEx
+ *
+ * NDIS 6 replacement for NdisOpenConfiguration. ConfigObject->NdisHandle is
+ * the adapter handle from MiniportInitializeEx; the returned handle feeds the
+ * existing NdisReadConfiguration/NdisCloseConfiguration implementation, so it
+ * must be a MINIPORT_CONFIGURATION_CONTEXT holding the adapter's driver key.
+ */
+typedef struct _NDIS6_CONFIGURATION_OBJECT
+{
+    NDIS_OBJECT_HEADER  Header;
+    NDIS_HANDLE         NdisHandle;
+    ULONG               Flags;
+} NDIS6_CONFIGURATION_OBJECT, *PNDIS6_CONFIGURATION_OBJECT;
+
+NDIS_STATUS
+NTAPI
+NdisOpenConfigurationEx(
+    _In_  PVOID         ConfigObject,
+    _Out_ PNDIS_HANDLE  ConfigurationHandle)
+{
+    PNDIS6_CONFIGURATION_OBJECT Obj = (PNDIS6_CONFIGURATION_OBJECT)ConfigObject;
+    PMINIPORT_CONFIGURATION_CONTEXT Ctx;
+    PLOGICAL_ADAPTER Adapter;
+    HANDLE KeyHandle;
+    NTSTATUS Status;
+
+    if (Obj == NULL || ConfigurationHandle == NULL || Obj->NdisHandle == NULL)
+        return NDIS_STATUS_INVALID_PARAMETER;
+
+    *ConfigurationHandle = NULL;
+
+    Adapter = GET_LOGICAL_ADAPTER(Obj->NdisHandle);
+    if (!Adapter->IsNdis6 ||
+        Adapter->NdisMiniportBlock.DeviceObject == NULL ||
+        (PLOGICAL_ADAPTER)Adapter->NdisMiniportBlock.DeviceObject->DeviceExtension != Adapter ||
+        Adapter->NdisMiniportBlock.PhysicalDeviceObject == NULL)
+    {
+        return NDIS_STATUS_INVALID_PARAMETER;
+    }
+
+    Status = IoOpenDeviceRegistryKey(
+        Adapter->NdisMiniportBlock.PhysicalDeviceObject,
+        PLUGPLAY_REGKEY_DRIVER,
+        KEY_ALL_ACCESS,
+        &KeyHandle);
+    if (!NT_SUCCESS(Status))
+    {
+        DbgPrint("NDIS6: failed to open adapter driver key (0x%08X)\n", Status);
+        return NDIS_STATUS_FAILURE;
+    }
+
+    Ctx = ExAllocatePool(NonPagedPool, sizeof(MINIPORT_CONFIGURATION_CONTEXT));
+    if (Ctx == NULL)
+    {
+        ZwClose(KeyHandle);
+        return NDIS_STATUS_RESOURCES;
+    }
+
+    KeInitializeSpinLock(&Ctx->ResourceLock);
+    InitializeListHead(&Ctx->ResourceListHead);
+    Ctx->Handle = KeyHandle;
+
+    *ConfigurationHandle = (NDIS_HANDLE)Ctx;
     return NDIS_STATUS_SUCCESS;
 }
 

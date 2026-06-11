@@ -335,6 +335,8 @@
  @ stdcall NdisCancelOidRequest(ptr ptr)
  @ stdcall NdisRegisterDeviceEx(ptr ptr ptr ptr)
  @ stdcall NdisDeregisterDeviceEx(ptr)
+ @ stdcall NdisGetDeviceReservedExtension(ptr)
+ @ stdcall NdisOpenConfigurationEx(ptr ptr)
  @ stdcall NdisMGetBusData(ptr long long ptr long)
  @ stdcall NdisMSetBusData(ptr long long ptr long)
  @ stdcall NdisGetSystemUpTimeEx(ptr)
