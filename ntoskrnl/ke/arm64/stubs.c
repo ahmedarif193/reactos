@@ -616,15 +616,6 @@ KeStartAllProcessors(
      * These would set KeNumprocSpecified and KeBootprocSpecified.
      */
 
-    {
-        static volatile ULONG KiArm64ApGate;
-        DbgPrintEx(DPFLTR_DEFAULT_ID, DPFLTR_ERROR_LEVEL, "[arm64] APGATE %p\n", &KiArm64ApGate);
-        while (KiArm64ApGate == 0)
-        {
-            YieldProcessor();
-        }
-    }
-
     DPRINT1("[arm64] KeStartAllProcessors: Max=%lu\n", MaximumProcessors);
 
     /* Start from processor 1 since BSP (processor 0) is already running */
