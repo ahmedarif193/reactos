@@ -48,6 +48,7 @@ ServiceControlHandler(DWORD dwControl,
         case SERVICE_CONTROL_STOP:
             UpdateServiceStatus(ServiceStatusHandle, SERVICE_STOP_PENDING, 1);
             RpcMgmtStopServerListening(NULL);
+            WlanSvcCleanup();
             UpdateServiceStatus(ServiceStatusHandle, SERVICE_STOPPED, 0);
             break;
         case SERVICE_CONTROL_INTERROGATE:
