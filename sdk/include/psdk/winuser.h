@@ -1853,6 +1853,29 @@ typedef enum tagHANDEDNESS
 #define WM_DROPFILES 563
 #define WM_MDIREFRESHMENU 564
 
+#if (WINVER >= 0x0602)
+#define WM_POINTERDEVICECHANGE      0x0238
+#define WM_POINTERDEVICEINRANGE     0x0239
+#define WM_POINTERDEVICEOUTOFRANGE  0x023A
+#define WM_NCPOINTERUPDATE          0x0241
+#define WM_NCPOINTERDOWN            0x0242
+#define WM_NCPOINTERUP              0x0243
+#define WM_POINTERUPDATE            0x0245
+#define WM_POINTERDOWN              0x0246
+#define WM_POINTERUP                0x0247
+#define WM_POINTERENTER             0x0249
+#define WM_POINTERLEAVE             0x024A
+#define WM_POINTERACTIVATE          0x024B
+#define WM_POINTERCAPTURECHANGED    0x024C
+#define WM_TOUCHHITTESTING          0x024D
+#define WM_POINTERWHEEL             0x024E
+#define WM_POINTERHWHEEL            0x024F
+#define DM_POINTERHITTEST           0x0250
+#define WM_POINTERROUTEDTO          0x0251
+#define WM_POINTERROUTEDAWAY        0x0252
+#define WM_POINTERROUTEDRELEASED    0x0253
+#endif /* WINVER >= 0x0602 */
+
 /* Win32 4.0 messages for IME */
 #define WM_IME_SETCONTEXT           0x0281
 #define WM_IME_NOTIFY               0x0282
@@ -4203,6 +4226,71 @@ typedef struct tagPOINTER_INFO
 #define POINTER_MESSAGE_FLAG_PRIMARY      0x00002000
 #define POINTER_MESSAGE_FLAG_CONFIDENCE   0x00004000
 #define POINTER_MESSAGE_FLAG_CANCELED     0x00008000
+
+#if !defined(_HPOWERNOTIFY_DEF_)
+#define _HPOWERNOTIFY_DEF_
+typedef PVOID HPOWERNOTIFY;
+typedef HPOWERNOTIFY *PHPOWERNOTIFY;
+#endif
+
+typedef struct tagTOUCH_HIT_TESTING_PROXIMITY_EVALUATION
+{
+    UINT16 score;
+    POINT adjustedPoint;
+} TOUCH_HIT_TESTING_PROXIMITY_EVALUATION, *PTOUCH_HIT_TESTING_PROXIMITY_EVALUATION;
+
+typedef struct tagTOUCH_HIT_TESTING_INPUT
+{
+    UINT32 pointerId;
+    POINT point;
+    RECT boundingBox;
+    RECT nonOccludedBoundingBox;
+    UINT32 orientation;
+} TOUCH_HIT_TESTING_INPUT, *PTOUCH_HIT_TESTING_INPUT;
+
+#define TOUCH_HIT_TESTING_PROXIMITY_CLOSEST  0x0
+#define TOUCH_HIT_TESTING_PROXIMITY_FARTHEST 0xFFF
+
+#define POINTER_DEVICE_PRODUCT_STRING_MAX 520
+
+typedef enum tagPOINTER_DEVICE_TYPE {
+    POINTER_DEVICE_TYPE_INTEGRATED_PEN = 0x00000001,
+    POINTER_DEVICE_TYPE_EXTERNAL_PEN   = 0x00000002,
+    POINTER_DEVICE_TYPE_TOUCH          = 0x00000003,
+#if(WINVER >= 0x0603)
+    POINTER_DEVICE_TYPE_TOUCH_PAD      = 0x00000004,
+#endif /* WINVER >= 0x0603 */
+    POINTER_DEVICE_TYPE_MAX            = 0xFFFFFFFF
+} POINTER_DEVICE_TYPE;
+
+typedef struct tagPOINTER_DEVICE_INFO {
+    DWORD displayOrientation;
+    HANDLE device;
+    POINTER_DEVICE_TYPE pointerDeviceType;
+    HMONITOR monitor;
+    ULONG startingCursorId;
+    USHORT maxActiveContacts;
+    WCHAR productString[POINTER_DEVICE_PRODUCT_STRING_MAX];
+} POINTER_DEVICE_INFO;
+
+typedef UINT32 TOUCH_FLAGS;
+#define TOUCH_FLAG_NONE                 0x00000000
+
+typedef UINT32 TOUCH_MASK;
+#define TOUCH_MASK_NONE                 0x00000000
+#define TOUCH_MASK_CONTACTAREA          0x00000001
+#define TOUCH_MASK_ORIENTATION          0x00000002
+#define TOUCH_MASK_PRESSURE             0x00000004
+
+typedef struct tagPOINTER_TOUCH_INFO {
+    POINTER_INFO    pointerInfo;
+    TOUCH_FLAGS     touchFlags;
+    TOUCH_MASK      touchMask;
+    RECT            rcContact;
+    RECT            rcContactRaw;
+    UINT32          orientation;
+    UINT32          pressure;
+} POINTER_TOUCH_INFO;
 
 #endif /* WINVER >= 0x0602 */
 
