@@ -82,6 +82,7 @@ ULONG HalpGicLpiCount = 0;
 
 /* Active interrupt tracking */
 ULONG HalpArm64ActiveIntId[MAXIMUM_PROCESSORS] = {0};
+ULONG HalpArm64AckRaw[MAXIMUM_PROCESSORS] = {0};
 
 /* Default interrupt affinity */
 KAFFINITY HalpDefaultInterruptAffinity = 1;
@@ -261,6 +262,32 @@ HalpArm64CleanInvalidateDcacheRange(
     }
 
     /* Ensure all cache operations complete */
+    __asm__ __volatile__("dsb ish" ::: "memory");
+}
+
+VOID
+HalpArm64InvalidateDcacheRange(
+    _In_ PVOID Base,
+    _In_ SIZE_T Length)
+{
+    ULONG_PTR Start;
+    ULONG_PTR End;
+    ULONG Line;
+
+    if (!Base || Length == 0)
+        return;
+
+    Line = HalpArm64GetCacheLineSize();
+    Start = (ULONG_PTR)Base & ~((ULONG_PTR)Line - 1);
+    End = (ULONG_PTR)Base + Length;
+
+    __asm__ __volatile__("dsb ish" ::: "memory");
+
+    for (ULONG_PTR Address = Start; Address < End; Address += Line)
+    {
+        __asm__ __volatile__("dc ivac, %0" :: "r"(Address) : "memory");
+    }
+
     __asm__ __volatile__("dsb ish" ::: "memory");
 }
 
@@ -454,6 +481,112 @@ HalpArm64SendSgi(
     }
 }
 
+VOID
+HalpArm64SendSgiSelf(
+    _In_ ULONG SgiId)
+{
+    if (SgiId > 15)
+        return;
+
+    if (HalpArm64InterruptController)
+    {
+        HalpArm64InterruptController->SendSgi(AFFINITY_MASK(KeGetCurrentProcessorNumber()), SgiId);
+        return;
+    }
+
+    if (HalpGicUseSysRegs)
+    {
+        HalpGicv3SendSgi(AFFINITY_MASK(KeGetCurrentProcessorNumber()), SgiId);
+    }
+    else
+    {
+        __asm__ __volatile__("dsb ishst" ::: "memory");
+        *HalpMmio((ULONG_PTR)HalpGicdBase, GICD_SGIR) = (2u << 24) | (SgiId & 0xF);
+        __asm__ __volatile__("dsb sy" ::: "memory");
+    }
+}
+
+VOID
+HalpArm64ClearSelfSgi(
+    _In_ ULONG SgiId)
+{
+    if (SgiId > 15)
+        return;
+
+    if (HalpGicUseSysRegs)
+    {
+        ULONG Cpu = KeGetCurrentProcessorNumber();
+        ULONG_PTR SgiBase = HalpGicrSgiBase(Cpu);
+
+        if (SgiBase == 0)
+            return;
+
+        *HalpMmio(SgiBase, GICR_ICPENDR0) = (1u << SgiId);
+    }
+    else
+    {
+        volatile UCHAR *Reg = (volatile UCHAR *)HalpMmio((ULONG_PTR)HalpGicdBase, GICD_CPENDSGIR + (SgiId & ~3u));
+        Reg[SgiId & 3] = 0xFF;
+    }
+
+    __asm__ __volatile__("dsb sy" ::: "memory");
+}
+
+VOID
+HalpArm64ProgramSgiPriorities(VOID)
+{
+    HalpGicSetInterruptPriority(HAL_ARM64_SGI_IPI, HAL_ARM64_SGI_IPI_PRIORITY);
+    HalpGicSetInterruptPriority(HAL_ARM64_SGI_APC, HAL_ARM64_SGI_APC_PRIORITY);
+    HalpGicSetInterruptPriority(HAL_ARM64_SGI_DPC, HAL_ARM64_SGI_DPC_PRIORITY);
+}
+
+VOID
+HalpArm64RependInterrupt(
+    _In_ ULONG IntId)
+{
+    if (IntId < 16)
+    {
+        if (HalpGicUseSysRegs)
+        {
+            ULONG Cpu = KeGetCurrentProcessorNumber();
+            ULONG_PTR SgiBase = HalpGicrSgiBase(Cpu);
+
+            if (SgiBase != 0)
+            {
+                *HalpMmio(SgiBase, GICR_ISPENDR0) = (1u << IntId);
+            }
+        }
+        else
+        {
+            volatile UCHAR *Reg = (volatile UCHAR *)HalpMmio((ULONG_PTR)HalpGicdBase, GICD_SPENDSGIR + (IntId & ~3u));
+            Reg[IntId & 3] = 1;
+        }
+    }
+    else if (IntId < 32)
+    {
+        if (HalpGicUseSysRegs)
+        {
+            ULONG Cpu = KeGetCurrentProcessorNumber();
+            ULONG_PTR SgiBase = HalpGicrSgiBase(Cpu);
+
+            if (SgiBase != 0)
+            {
+                *HalpMmio(SgiBase, GICR_ISPENDR0) = (1u << IntId);
+            }
+        }
+        else
+        {
+            *HalpMmio((ULONG_PTR)HalpGicdBase, GICD_ISPENDR) = (1u << IntId);
+        }
+    }
+    else if (IntId < 1020)
+    {
+        *HalpMmio((ULONG_PTR)HalpGicdBase, GICD_ISPENDR + (IntId / 32) * 4) = (1u << (IntId % 32));
+    }
+
+    __asm__ __volatile__("dsb sy" ::: "memory");
+}
+
 /*
  * ============================================================================
  * Unified Interrupt Acknowledge / EOI Functions
@@ -473,17 +606,28 @@ HalpArm64SendSgi(
 ULONG
 HalpGicAcknowledgeInterrupt(VOID)
 {
+    ULONG Raw;
+    ULONG Cpu;
+
     if (HalpArm64InterruptController)
         return HalpArm64InterruptController->AcknowledgeInterrupt();
 
     if (HalpGicUseSysRegs)
     {
-        return HalpGicv3AcknowledgeInterrupt();
+        Raw = HalpGicv3AcknowledgeInterrupt();
     }
     else
     {
-        return HalpGicv2AcknowledgeInterrupt();
+        Raw = HalpGicv2AcknowledgeInterrupt();
     }
+
+    Cpu = KeGetCurrentProcessorNumber();
+    if (Cpu < MAXIMUM_PROCESSORS)
+    {
+        HalpArm64AckRaw[Cpu] = Raw;
+    }
+
+    return (Raw >= HAL_ARM64_LPI_BASE) ? Raw : (Raw & 0x3FF);
 }
 
 /*

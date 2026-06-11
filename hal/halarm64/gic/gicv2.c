@@ -56,7 +56,6 @@ HalpInitGicv2CpuInterface(VOID)
 
     /*
      * Configure GICC (CPU Interface):
-     * - PMR = 0xFF: Allow all priority levels
      * - BPR = 0x0: No preemption grouping (all 8 priority bits used)
      * - CTLR: Enable Group0 only when HalpGicv2ForceGroup0 is set (HVF quirk),
      *         otherwise enable both Group0 and Group1 for Windows-style delivery.
@@ -68,7 +67,7 @@ HalpInitGicv2CpuInterface(VOID)
         ULONG GiccCtlr = HalpGicv2ForceGroup0
             ? GICC_CTLR_ENABLE_GRP0
             : (GICC_CTLR_ENABLE_GRP0 | GICC_CTLR_ENABLE_GRP1);
-        *HalpMmio((ULONG_PTR)HalpGiccBase, GICC_PMR) = 0xFF;
+        *HalpMmio((ULONG_PTR)HalpGiccBase, GICC_PMR) = 0x00;
         *HalpMmio((ULONG_PTR)HalpGiccBase, GICC_BPR) = 0x0;
         *HalpMmio((ULONG_PTR)HalpGiccBase, GICC_CTLR) = GiccCtlr;
     }
@@ -133,11 +132,17 @@ HalpInitGicv2SgiPpi(VOID)
     *HalpMmio((ULONG_PTR)HalpGicdBase, GICD_IGROUPR) =
         HalpGicv2ForceGroup0 ? 0x00000000 : 0xFFFFFFFF;
 
-    /* Set SGI/PPI priorities to medium (0xA0) */
+    /* Set SGI/PPI priorities to medium (0xD0) */
     for (i = 0; i < 32; i += 4)
     {
-        *HalpMmio((ULONG_PTR)HalpGicdBase, GICD_IPRIORITYR + i) = 0xA0A0A0A0;
+        *HalpMmio((ULONG_PTR)HalpGicdBase, GICD_IPRIORITYR + i) = 0xD0D0D0D0;
     }
+
+    *HalpMmio((ULONG_PTR)HalpGicdBase, GICD_IPRIORITYR) =
+        0xD0000000u |
+        ((ULONG)HAL_ARM64_SGI_DPC_PRIORITY << 16) |
+        ((ULONG)HAL_ARM64_SGI_APC_PRIORITY << 8) |
+        (ULONG)HAL_ARM64_SGI_IPI_PRIORITY;
 
     /*
      * Restore previously enabled interrupts.
@@ -187,14 +192,13 @@ HalpGicv2AcknowledgeInterrupt(VOID)
 
     IntId = *HalpMmio((ULONG_PTR)HalpGiccBase, GICC_IAR);
 
-    /* Extract INTID (lower 10 bits) */
-    IntId &= 0x3FF;
+    IntId &= 0x1FFF;
 
     /* Track active interrupt for this CPU */
     Cpu = KeGetCurrentProcessorNumber();
     if (Cpu < MAXIMUM_PROCESSORS)
     {
-        HalpArm64ActiveIntId[Cpu] = IntId;
+        HalpArm64ActiveIntId[Cpu] = IntId & 0x3FF;
     }
 
     return IntId;
@@ -225,7 +229,7 @@ HalpGicv2EndInterrupt(
     }
 
     /* Write the interrupt ID to GICC_EOIR */
-    *HalpMmio((ULONG_PTR)HalpGiccBase, GICC_EOIR) = IntId & 0x3FF;
+    *HalpMmio((ULONG_PTR)HalpGiccBase, GICC_EOIR) = IntId & 0x1FFF;
 
     /* Memory barrier to ensure EOI completes */
     __asm__ __volatile__("dsb sy" ::: "memory");
