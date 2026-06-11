@@ -895,7 +895,17 @@ typedef struct _NDIS6_CONTROL_DEVICE
     PDEVICE_OBJECT      DeviceObject;
     UNICODE_STRING      SymbolicName;
     BOOLEAN             SymbolicLinkCreated;
+    /* The control driver's own major-function handlers. IRPs are demuxed by
+     * target device (Ndis6ControlDemuxDispatch) so one driver's handlers never
+     * run for another device sharing the driver object (e.g. the miniport FDO,
+     * or another driver's control device). */
+    PDRIVER_DISPATCH    MajorFunctions[IRP_MJ_MAXIMUM_FUNCTION + 1];
 } NDIS6_CONTROL_DEVICE, *PNDIS6_CONTROL_DEVICE;
+
+/* PNP/POWER/SYSTEM_CONTROL on a miniport driver object belong to NDIS, never to
+ * a control driver's handlers. */
+#define NDIS6_MJ_IS_NDIS_OWNED(mj) \
+    ((mj) == IRP_MJ_PNP || (mj) == IRP_MJ_POWER || (mj) == IRP_MJ_SYSTEM_CONTROL)
 
 #define NDIS6_CTL_DEV_TAG  'dCNn'
 
@@ -903,6 +913,57 @@ typedef struct _NDIS6_CONTROL_DEVICE
  * NdisRegisterDeviceEx device object apart from a miniport FDO. */
 static LIST_ENTRY g_Ndis6CtlDevList = { &g_Ndis6CtlDevList, &g_Ndis6CtlDevList };
 static KSPIN_LOCK g_Ndis6CtlDevLock;
+
+/*
+ * Ndis6ControlDemuxDispatch
+ *
+ * Single IRP entry point installed on a miniport driver object for the major
+ * functions a control driver registered. It routes each IRP to the control
+ * device that owns it, so a control driver's handler never runs for the
+ * miniport FDO or for a different driver's control device that happens to share
+ * the driver object. Unknown targets (miniport FDO opens) complete benignly.
+ */
+static NTSTATUS
+NTAPI
+Ndis6ControlDemuxDispatch(
+    _In_ PDEVICE_OBJECT DeviceObject,
+    _Inout_ PIRP Irp)
+{
+    PIO_STACK_LOCATION    IoStack = IoGetCurrentIrpStackLocation(Irp);
+    PNDIS6_CONTROL_DEVICE Match = NULL;
+    PLIST_ENTRY           Entry;
+    KIRQL                 OldIrql;
+    NTSTATUS              Status;
+
+    KeAcquireSpinLock(&g_Ndis6CtlDevLock, &OldIrql);
+    for (Entry = g_Ndis6CtlDevList.Flink;
+         Entry != &g_Ndis6CtlDevList;
+         Entry = Entry->Flink)
+    {
+        PNDIS6_CONTROL_DEVICE CtlDev =
+            CONTAINING_RECORD(Entry, NDIS6_CONTROL_DEVICE, ListEntry);
+        if (CtlDev->DeviceObject == DeviceObject)
+        {
+            Match = CtlDev;
+            break;
+        }
+    }
+    KeReleaseSpinLock(&g_Ndis6CtlDevLock, OldIrql);
+
+    if (Match != NULL && Match->MajorFunctions[IoStack->MajorFunction] != NULL)
+        return Match->MajorFunctions[IoStack->MajorFunction](DeviceObject, Irp);
+
+    /* Not a control device (e.g. a user-mode open of the miniport FDO): a bare
+     * open/close succeeds, everything else is unsupported. */
+    Status = (IoStack->MajorFunction == IRP_MJ_CREATE ||
+              IoStack->MajorFunction == IRP_MJ_CLOSE ||
+              IoStack->MajorFunction == IRP_MJ_CLEANUP)
+                 ? STATUS_SUCCESS : STATUS_NOT_SUPPORTED;
+    Irp->IoStatus.Status = Status;
+    Irp->IoStatus.Information = 0;
+    IoCompleteRequest(Irp, IO_NO_INCREMENT);
+    return Status;
+}
 
 NDIS_STATUS
 NTAPI
@@ -919,8 +980,7 @@ NdisRegisterDeviceEx(
     PDEVICE_OBJECT          Device       = NULL;
     NTSTATUS                Status;
     ULONG                   i;
-
-    UNREFERENCED_PARAMETER(NdisHandle);
+    KIRQL                   OldIrql;
 
     if (Attrs == NULL || pDeviceObject == NULL || NdisDeviceHandle == NULL ||
         Attrs->DeviceName == NULL || Attrs->MajorFunctions == NULL)
@@ -928,26 +988,26 @@ NdisRegisterDeviceEx(
         return NDIS_STATUS_INVALID_PARAMETER;
     }
 
-    /* Pick up the driver object. For a miniport, the NdisHandle is
-     * really the NDIS6_DRIVER_BLOCK from NdisMRegisterMiniportDriver;
-     * for a filter/protocol the handle points at its registration block.
-     * All three variants begin with a LIST_ENTRY + PDRIVER_OBJECT, so
-     * we can fetch it from a known offset. Fallback: walk the global
-     * miniport driver list and match. */
+    /* Resolve the caller's own driver object. For a miniport, NdisHandle is the
+     * NDIS6_DRIVER_BLOCK returned by NdisMRegisterMiniportDriver; validate it
+     * against the registered-driver list and use ITS driver object. Using the
+     * wrong driver object cross-installs a control driver's handlers over an
+     * unrelated device (e.g. another driver's \Device\Nwifi), which then faults
+     * inside that driver's handler. */
+    KeAcquireSpinLock(&g_Ndis6DriverListLock, &OldIrql);
+    for (PLIST_ENTRY Entry = g_Ndis6DriverList.Flink;
+         Entry != &g_Ndis6DriverList;
+         Entry = Entry->Flink)
     {
-        KIRQL OldIrql;
-        KeAcquireSpinLock(&g_Ndis6DriverListLock, &OldIrql);
-        if (!IsListEmpty(&g_Ndis6DriverList))
+        PNDIS6_DRIVER_BLOCK Block =
+            CONTAINING_RECORD(Entry, NDIS6_DRIVER_BLOCK, ListEntry);
+        if ((NDIS_HANDLE)Block == NdisHandle)
         {
-            /* Use the first registered driver as a fallback if the
-             * NdisHandle isn't in our table. This isn't strictly
-             * correct but works for the typical single-miniport case. */
-            PNDIS6_DRIVER_BLOCK Block = CONTAINING_RECORD(
-                g_Ndis6DriverList.Flink, NDIS6_DRIVER_BLOCK, ListEntry);
             DriverObject = Block->DriverObject;
+            break;
         }
-        KeReleaseSpinLock(&g_Ndis6DriverListLock, OldIrql);
     }
+    KeReleaseSpinLock(&g_Ndis6DriverListLock, OldIrql);
 
     if (DriverObject == NULL)
         return NDIS_STATUS_INVALID_PARAMETER;
@@ -972,13 +1032,17 @@ NdisRegisterDeviceEx(
         return (NDIS_STATUS)Status;
     }
 
-    /* Install the caller's dispatch routines on the driver. Only the
-     * major functions that are non-NULL in the array get installed;
-     * don't overwrite existing ones with NULL. */
+    /* Keep the caller's handlers on the control device, and route the driver
+     * object's matching slots through the per-device demux (never the raw
+     * handler, so the miniport FDO and other devices are not affected). NDIS
+     * keeps PNP/POWER/SYSTEM_CONTROL. */
     for (i = 0; i <= IRP_MJ_MAXIMUM_FUNCTION; i++)
     {
-        if (Attrs->MajorFunctions[i] != NULL)
-            DriverObject->MajorFunction[i] = Attrs->MajorFunctions[i];
+        if (Attrs->MajorFunctions[i] != NULL && !NDIS6_MJ_IS_NDIS_OWNED(i))
+        {
+            CtlDev->MajorFunctions[i]      = Attrs->MajorFunctions[i];
+            DriverObject->MajorFunction[i] = Ndis6ControlDemuxDispatch;
+        }
     }
 
     /* Symbolic link so user-mode can CreateFile on it. */
