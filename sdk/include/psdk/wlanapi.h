@@ -252,6 +252,62 @@ typedef struct _WLAN_AVAILABLE_NETWORK_LIST {
 #endif
 } WLAN_AVAILABLE_NETWORK_LIST ,*PWLAN_AVAILABLE_NETWORK_LIST;
 
+typedef struct _WLAN_RATE_SET {
+    ULONG uRateSetLength;
+    USHORT usRateSet[DOT11_RATE_SET_MAX_LENGTH];
+} WLAN_RATE_SET, *PWLAN_RATE_SET;
+
+typedef struct _WLAN_BSS_ENTRY {
+    DOT11_SSID dot11Ssid;
+    ULONG uPhyId;
+    DOT11_MAC_ADDRESS dot11Bssid;
+    DOT11_BSS_TYPE dot11BssType;
+    DOT11_PHY_TYPE dot11BssPhyType;
+    LONG lRssi;
+    ULONG uLinkQuality;
+    BOOLEAN bInRegDomain;
+    USHORT usBeaconPeriod;
+    ULONGLONG ullTimestamp;
+    ULONGLONG ullHostTimestamp;
+    USHORT usCapabilityInformation;
+    ULONG  ulChCenterFrequency;
+    WLAN_RATE_SET wlanRateSet;
+    ULONG ulIeOffset;
+    ULONG ulIeSize;
+} WLAN_BSS_ENTRY, *PWLAN_BSS_ENTRY;
+
+typedef struct _WLAN_BSS_LIST {
+    DWORD dwTotalSize;
+    DWORD dwNumberOfItems;
+    WLAN_BSS_ENTRY wlanBssEntries[1];
+} WLAN_BSS_LIST, *PWLAN_BSS_LIST;
+
+typedef struct _WLAN_ASSOCIATION_ATTRIBUTES {
+    DOT11_SSID dot11Ssid;
+    DOT11_BSS_TYPE dot11BssType;
+    DOT11_MAC_ADDRESS dot11Bssid;
+    DOT11_PHY_TYPE dot11PhyType;
+    ULONG uDot11PhyIndex;
+    WLAN_SIGNAL_QUALITY wlanSignalQuality;
+    ULONG ulRxRate;
+    ULONG ulTxRate;
+} WLAN_ASSOCIATION_ATTRIBUTES, *PWLAN_ASSOCIATION_ATTRIBUTES;
+
+typedef struct _WLAN_SECURITY_ATTRIBUTES {
+    BOOL bSecurityEnabled;
+    BOOL bOneXEnabled;
+    DOT11_AUTH_ALGORITHM dot11AuthAlgorithm;
+    DOT11_CIPHER_ALGORITHM dot11CipherAlgorithm;
+} WLAN_SECURITY_ATTRIBUTES, *PWLAN_SECURITY_ATTRIBUTES;
+
+typedef struct _WLAN_CONNECTION_ATTRIBUTES {
+    WLAN_INTERFACE_STATE isState;
+    WLAN_CONNECTION_MODE wlanConnectionMode;
+    WCHAR strProfileName[WLAN_MAX_NAME_LENGTH];
+    WLAN_ASSOCIATION_ATTRIBUTES wlanAssociationAttributes;
+    WLAN_SECURITY_ATTRIBUTES wlanSecurityAttributes;
+} WLAN_CONNECTION_ATTRIBUTES, *PWLAN_CONNECTION_ATTRIBUTES;
+
 typedef struct _WLAN_CONNECTION_PARAMETERS {
     WLAN_CONNECTION_MODE wlanConnectionMode;
 #if defined(__midl) || defined(__WIDL__)
@@ -268,6 +324,72 @@ typedef struct _WLAN_CONNECTION_PARAMETERS {
 typedef L2_NOTIFICATION_DATA WLAN_NOTIFICATION_DATA, *PWLAN_NOTIFICATION_DATA;
 
 typedef void (__stdcall *WLAN_NOTIFICATION_CALLBACK) (PWLAN_NOTIFICATION_DATA, PVOID);
+
+/* flags for connection notifications */
+#define WLAN_CONNECTION_NOTIFICATION_ADHOC_NETWORK_FORMED    0x00000001
+#define WLAN_CONNECTION_NOTIFICATION_CONSOLE_USER_PROFILE    0x00000004
+
+typedef struct _WLAN_CONNECTION_NOTIFICATION_DATA {
+    WLAN_CONNECTION_MODE wlanConnectionMode;
+    WCHAR strProfileName[WLAN_MAX_NAME_LENGTH];
+    DOT11_SSID dot11Ssid;
+    DOT11_BSS_TYPE dot11BssType;
+    BOOL bSecurityEnabled;
+    WLAN_REASON_CODE wlanReasonCode;
+    DWORD dwFlags;
+    WCHAR strProfileXml[1];
+} WLAN_CONNECTION_NOTIFICATION_DATA, *PWLAN_CONNECTION_NOTIFICATION_DATA;
+
+/* Notification source masks; values match L2_NOTIFICATION_SOURCE_*. */
+#define WLAN_NOTIFICATION_SOURCE_NONE         0x00000000
+#define WLAN_NOTIFICATION_SOURCE_ALL          0x0000FFFF
+#define WLAN_NOTIFICATION_SOURCE_ACM          0x00000008
+#define WLAN_NOTIFICATION_SOURCE_MSM          0x00000010
+#define WLAN_NOTIFICATION_SOURCE_SECURITY     0x00000020
+#define WLAN_NOTIFICATION_SOURCE_IHV          0x00000040
+#define WLAN_NOTIFICATION_SOURCE_HNWK         0x00000080
+#define WLAN_NOTIFICATION_SOURCE_ONEX         0x00000004
+
+/* == L2_REASON_CODE_SUCCESS */
+#define WLAN_REASON_CODE_SUCCESS              0
+
+/* ACM notification codes (begin at L2_NOTIFICATION_CODE_PUBLIC_BEGIN == 0). */
+#if defined(__midl) || defined(__WIDL__)
+typedef [v1_enum] enum _WLAN_NOTIFICATION_ACM {
+#else
+typedef enum _WLAN_NOTIFICATION_ACM {
+#endif
+    wlan_notification_acm_start = 0,
+    wlan_notification_acm_autoconf_enabled,
+    wlan_notification_acm_autoconf_disabled,
+    wlan_notification_acm_background_scan_enabled,
+    wlan_notification_acm_background_scan_disabled,
+    wlan_notification_acm_bss_type_change,
+    wlan_notification_acm_power_setting_change,
+    wlan_notification_acm_scan_complete,
+    wlan_notification_acm_scan_fail,
+    wlan_notification_acm_connection_start,
+    wlan_notification_acm_connection_complete,
+    wlan_notification_acm_connection_attempt_fail,
+    wlan_notification_acm_filter_list_change,
+    wlan_notification_acm_interface_arrival,
+    wlan_notification_acm_interface_removal,
+    wlan_notification_acm_profile_change,
+    wlan_notification_acm_profile_name_change,
+    wlan_notification_acm_profiles_exhausted,
+    wlan_notification_acm_network_not_available,
+    wlan_notification_acm_network_available,
+    wlan_notification_acm_disconnecting,
+    wlan_notification_acm_disconnected,
+    wlan_notification_acm_adhoc_network_state_change,
+    wlan_notification_acm_profile_unblocked,
+    wlan_notification_acm_screen_power_change,
+    wlan_notification_acm_profile_blocked,
+    wlan_notification_acm_scan_list_refresh,
+    wlan_notification_acm_operational_state_change,
+    wlan_notification_acm_end
+} WLAN_NOTIFICATION_ACM;
+typedef WLAN_NOTIFICATION_ACM *PWLAN_NOTIFICATION_ACM;
 
 /* Functions */
 #if !defined(__midl) && !defined(__WIDL__)
