@@ -301,6 +301,10 @@ KiSwapContextInternal:
     b       .Lswapbusy_wait
 
 .Lswapbusy_clear:
+    mov     w3, #1
+    strb    w3, [x2, #ThSwapBusy]
+    dmb     ish
+
     /* Record the wait IRQL in the outgoing switch frame */
     strb    w0, [sp, #SwApcBypass]
 
