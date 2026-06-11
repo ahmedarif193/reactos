@@ -27,4 +27,20 @@ pushd "%SystemRoot%\bin" || goto :eof
 echo Running kmtest_ MmSelfMap
 kmtest_.exe MmSelfMap
 
+echo Running kmtest_ arm64 parity suite
+kmtest_.exe HalArm64Layout
+kmtest_.exe KdArm64Layout
+kmtest_.exe KeArm64
+kmtest_.exe KeArm64Dispatcher
+kmtest_.exe KeArm64DpcIpi
+kmtest_.exe KeArm64Frames
+kmtest_.exe KeArm64Intrinsics
+kmtest_.exe KeArm64Irql
+kmtest_.exe KeArm64LoaderCache
+kmtest_.exe KeArm64PcrPrcb
+kmtest_.exe KeArm64Smp
+kmtest_.exe KeArm64SpinLock
+kmtest_.exe KeArm64ThreadProcess
+kmtest_.exe RtlArm64UnwindLayout
+
 popd
