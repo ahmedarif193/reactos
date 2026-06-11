@@ -245,17 +245,31 @@ KiArm64SmpStress(VOID)
             break;
         }
 
-        switch (KiSmpStressRand() % 3)
         {
-            case 0:
-                KiSmpStressIpiPhase(Processors);
-                break;
-            case 1:
-                KiSmpStressDpcPhase(Processors);
-                break;
-            default:
-                KiSmpStressAffinityPhase(Processors);
-                break;
+            ULONG Phase = (ULONG)(KiSmpStressRand() % 3);
+            static ULONG PhaseSeen[3];
+
+            if (PhaseSeen[Phase]++ == 0)
+            {
+                DbgPrintEx(DPFLTR_DEFAULT_ID,
+                           DPFLTR_ERROR_LEVEL,
+                           "[arm64][SMPSTRESS] first phase%lu round=%lu\n",
+                           Phase,
+                           Round);
+            }
+
+            switch (Phase)
+            {
+                case 0:
+                    KiSmpStressIpiPhase(Processors);
+                    break;
+                case 1:
+                    KiSmpStressDpcPhase(Processors);
+                    break;
+                default:
+                    KiSmpStressAffinityPhase(Processors);
+                    break;
+            }
         }
 
         Round++;
