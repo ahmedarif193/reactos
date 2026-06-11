@@ -152,13 +152,10 @@ Arm64EnsureSharedUserDataMapped(VOID)
 
     if (!Arm64MapVirtualMemory(shared_va, shared_pa, MM_PAGE_SIZE, shared_attrs))
     {
-        if (!Arm64MapUserSharedDataPage(shared_va, shared_pa, shared_attrs))
-        {
-            ERR("ARM64: Failed to map SharedUserData (PA=0x%llx VA=0x%llx)\n",
-                (unsigned long long)shared_pa,
-                (unsigned long long)shared_va);
-            return FALSE;
-        }
+        ERR("ARM64: Failed to map SharedUserData (PA=0x%llx VA=0x%llx)\n",
+            (unsigned long long)shared_pa,
+            (unsigned long long)shared_va);
+        return FALSE;
     }
 
     Arm64SharedUserDataPage = shared_page;
@@ -704,9 +701,6 @@ WinLdrSetupMachineDependent(
 /* ARM64 specific memory & CPU setup                                          */
 /* -------------------------------------------------------------------------- */
 
-extern VOID Arm64PreparePageTables(VOID);
-extern VOID Arm64EnablePageTables(VOID);
-extern VOID Arm64ClearIdentityMappings(VOID);
 
 BOOLEAN
 Arm64InitializeMemory(
