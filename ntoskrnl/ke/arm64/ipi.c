@@ -44,7 +44,7 @@ KiIpiSend(
             PKPRCB Prcb = KiProcessorBlock[Index];
             if (Prcb != NULL)
             {
-                InterlockedBitTestAndSet((PLONG)&Prcb->IpiFrozen, IpiRequest);
+                InterlockedBitTestAndSet((PLONG)&Prcb->RequestSummary, IpiRequest);
             }
         }
     }
@@ -124,18 +124,18 @@ KiIpiServiceRoutine(
             return TRUE;
         }
 
-        if (InterlockedBitTestAndReset((PLONG)&Prcb->IpiFrozen, IPI_APC))
+        if (InterlockedBitTestAndReset((PLONG)&Prcb->RequestSummary, IPI_APC))
         {
             HalRequestSoftwareInterrupt(APC_LEVEL);
         }
 
-        if (InterlockedBitTestAndReset((PLONG)&Prcb->IpiFrozen, IPI_DPC))
+        if (InterlockedBitTestAndReset((PLONG)&Prcb->RequestSummary, IPI_DPC))
         {
             Prcb->DpcInterruptRequested = TRUE;
             HalRequestSoftwareInterrupt(DISPATCH_LEVEL);
         }
 
-        if (InterlockedBitTestAndReset((PLONG)&Prcb->IpiFrozen, IPI_SYNCH_REQUEST))
+        if (InterlockedBitTestAndReset((PLONG)&Prcb->RequestSummary, IPI_SYNCH_REQUEST))
         {
             DbgBreakPoint();
         }
