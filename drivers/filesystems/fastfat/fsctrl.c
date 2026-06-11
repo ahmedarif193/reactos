@@ -7761,7 +7761,7 @@ Return Value:
         return STATUS_INVALID_PARAMETER;
     }
 
-    try {
+    _SEH2_TRY {
 
         //
         //  Acquire the FCB exclusively to synchronize with coherency flush
@@ -7796,12 +7796,12 @@ Return Value:
 
         try_exit: NOTHING;
 
-    } finally {
+    } _SEH2_FINALLY {
 
         if (FcbAcquired) {
             FatReleaseFcb( IrpContext, Fcb );
         }
-    }
+    } _SEH2_END;
 
     //
     //  Complete the irp if we terminated normally.
