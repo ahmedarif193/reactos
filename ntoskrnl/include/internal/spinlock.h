@@ -31,7 +31,11 @@ KxAcquireSpinLock(
     if (((KSPIN_LOCK)KeGetCurrentThread() | 1) == *SpinLock)
     {
         /* We do, bugcheck! */
-        KeBugCheckEx(SPIN_LOCK_ALREADY_OWNED, (ULONG_PTR)SpinLock, 0, 0, 0);
+        KeBugCheckEx(SPIN_LOCK_ALREADY_OWNED,
+                     (ULONG_PTR)SpinLock,
+                     (ULONG_PTR)_ReturnAddress(),
+                     (ULONG_PTR)KeGetCurrentThread(),
+                     (ULONG_PTR)KeGetCurrentIrql());
     }
 #endif
 
