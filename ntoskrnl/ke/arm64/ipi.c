@@ -7,6 +7,16 @@
 
 #include <ntoskrnl.h>
 
+#ifdef CONFIG_SMP
+static struct
+{
+    PKIPI_BROADCAST_WORKER volatile Function;
+    volatile ULONG_PTR Argument;
+    volatile LONG TargetCount;
+    volatile LONG Busy;
+} KiArm64IpiPacket;
+#endif
+
 VOID
 NTAPI
 KiIpiGenericCallTarget(
@@ -137,7 +147,15 @@ KiIpiServiceRoutine(
 
         if (InterlockedBitTestAndReset((PLONG)&Prcb->RequestSummary, IPI_SYNCH_REQUEST))
         {
-            DbgBreakPoint();
+            PKIPI_BROADCAST_WORKER Function = KiArm64IpiPacket.Function;
+            ULONG_PTR Argument = KiArm64IpiPacket.Argument;
+
+            if (Function != NULL)
+            {
+                Function(Argument);
+            }
+
+            InterlockedDecrement(&KiArm64IpiPacket.TargetCount);
         }
     }
 #else
@@ -153,10 +171,60 @@ KeIpiGenericCall(
     _In_ PKIPI_BROADCAST_WORKER Function,
     _In_ ULONG_PTR Argument)
 {
+#ifdef CONFIG_SMP
+    KIRQL OldIrql;
+    ULONG_PTR Result;
+    KAFFINITY Targets;
+    LONG TargetCount;
+
+    if (Function == NULL)
+    {
+        return 0;
+    }
+
+    OldIrql = KfRaiseIrql(SYNCH_LEVEL);
+
+    while (InterlockedCompareExchange(&KiArm64IpiPacket.Busy, 1, 0) != 0)
+    {
+        YieldProcessor();
+        KeMemoryBarrier();
+    }
+
+    Targets = KeActiveProcessors & ~KeGetCurrentPrcb()->SetMember;
+    TargetCount = 0;
+    for (KAFFINITY Bit = Targets; Bit != 0; Bit &= (Bit - 1))
+    {
+        TargetCount++;
+    }
+
+    KiArm64IpiPacket.Function = Function;
+    KiArm64IpiPacket.Argument = Argument;
+    InterlockedExchange(&KiArm64IpiPacket.TargetCount, TargetCount);
+
+    if (Targets != 0)
+    {
+        KiIpiSend(Targets, IPI_SYNCH_REQUEST);
+    }
+
+    Result = Function(Argument);
+
+    while (KiArm64IpiPacket.TargetCount != 0)
+    {
+        YieldProcessor();
+        KeMemoryBarrier();
+    }
+
+    KiArm64IpiPacket.Function = NULL;
+    InterlockedExchange(&KiArm64IpiPacket.Busy, 0);
+
+    KfLowerIrql(OldIrql);
+    return Result;
+#else
     if (Function != NULL)
     {
         return Function(Argument);
     }
 
     return 0;
+#endif
 }
