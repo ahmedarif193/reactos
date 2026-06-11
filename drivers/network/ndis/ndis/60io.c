@@ -751,8 +751,16 @@ NdisMRegisterInterruptEx(
     if (Ext == NULL)
         return NDIS_STATUS_INVALID_PARAMETER;
 
-    /* Save the driver's characteristics + per-interrupt context. */
-    Ext->IntChars                 = *MiniportInterruptCharacteristics;
+    /* Save the driver's characteristics + per-interrupt context. Copy only
+     * Header.Size bytes — a driver built against a shorter revision must
+     * not have the missing tail read as garbage. */
+    RtlZeroMemory(&Ext->IntChars, sizeof(Ext->IntChars));
+    {
+        USHORT CharSize = MiniportInterruptCharacteristics->Header.Size;
+        if (CharSize == 0 || CharSize > sizeof(Ext->IntChars))
+            CharSize = sizeof(Ext->IntChars);
+        RtlCopyMemory(&Ext->IntChars, MiniportInterruptCharacteristics, CharSize);
+    }
     Ext->MiniportInterruptContext = MiniportInterruptContext;
 
     /* Initialize the wrapper DPC bound to Ndis6DpcWrapper. The driver's DPC

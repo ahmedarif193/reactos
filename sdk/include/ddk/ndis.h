@@ -6863,6 +6863,20 @@ typedef struct _NDIS_CONFIGURATION_OBJECT {
 #define NDIS_SIZEOF_CONFIGURATION_OBJECT_REVISION_1 \
   RTL_SIZEOF_THROUGH_FIELD(NDIS_CONFIGURATION_OBJECT, Flags)
 
+/* Control-device attributes for NdisRegisterDeviceEx (WDK layout). */
+typedef struct _NDIS_DEVICE_OBJECT_ATTRIBUTES {
+  NDIS_OBJECT_HEADER Header;
+  PNDIS_STRING       DeviceName;
+  PNDIS_STRING       SymbolicName;
+  PDRIVER_DISPATCH*  MajorFunctions;
+  ULONG              ExtensionSize;
+  PCUNICODE_STRING   DefaultSDDLString;
+  LPCGUID            DeviceClassGuid;
+} NDIS_DEVICE_OBJECT_ATTRIBUTES, *PNDIS_DEVICE_OBJECT_ATTRIBUTES;
+#define NDIS_DEVICE_OBJECT_ATTRIBUTES_REVISION_1 1
+#define NDIS_SIZEOF_DEVICE_OBJECT_ATTRIBUTES_REVISION_1 \
+  RTL_SIZEOF_THROUGH_FIELD(NDIS_DEVICE_OBJECT_ATTRIBUTES, DeviceClassGuid)
+
 typedef struct _NDIS_MINIPORT_INIT_PARAMETERS {
   NDIS_OBJECT_HEADER          Header;
   ULONG                       Flags;
@@ -7193,11 +7207,29 @@ typedef struct _NDIS_SG_DMA_DESCRIPTION {
 #define NDIS_SG_DMA_DESCRIPTION_REVISION_1 1
 #define NDIS_SG_DMA_DESCRIPTION_DEFINED    1
 
-/* NDIS 6 connect type — line/level interrupts vs MSI/MSI-X */
-#define NDIS_CONNECT_LINE_BASED      0
-#define NDIS_CONNECT_MESSAGE_BASED   1
-#define NDIS_CONNECT_FULLY_SPECIFIED 2
+/* NDIS 6 connect type — line/level interrupts vs MSI/MSI-X. WDK enum:
+ * LINE_BASED is 1, not 0 — stock Win7 binaries test these values. */
+typedef enum _NDIS_INTERRUPT_TYPE {
+  NDIS_CONNECT_LINE_BASED = 1,
+  NDIS_CONNECT_MESSAGE_BASED
+} NDIS_INTERRUPT_TYPE, *PNDIS_INTERRUPT_TYPE;
 
+/* Per-message enable/disable callbacks (WDK: MINIPORT_DISABLE_MESSAGE_INTERRUPT
+ * / MINIPORT_ENABLE_MESSAGE_INTERRUPT). */
+typedef VOID
+(NTAPI MINIPORT_DISABLE_MESSAGE_INTERRUPT)(
+  _In_ NDIS_HANDLE MiniportInterruptContext,
+  _In_ ULONG       MessageId);
+typedef MINIPORT_DISABLE_MESSAGE_INTERRUPT (*MINIPORT_DISABLE_MSI_INTERRUPT_HANDLER);
+
+typedef VOID
+(NTAPI MINIPORT_ENABLE_MESSAGE_INTERRUPT)(
+  _In_ NDIS_HANDLE MiniportInterruptContext,
+  _In_ ULONG       MessageId);
+typedef MINIPORT_ENABLE_MESSAGE_INTERRUPT (*MINIPORT_ENABLE_MSI_INTERRUPT_HANDLER);
+
+/* WDK layout (96 bytes on x64) — stock binaries read the write-back
+ * fields (InterruptType, MessageInfoTable) at these exact offsets. */
 typedef struct _NDIS_MINIPORT_INTERRUPT_CHARACTERISTICS {
   NDIS_OBJECT_HEADER                  Header;
   MINIPORT_ISR_HANDLER                InterruptHandler;
@@ -7208,12 +7240,16 @@ typedef struct _NDIS_MINIPORT_INTERRUPT_CHARACTERISTICS {
   BOOLEAN                             MsiSyncWithAllMessages;
   MINIPORT_MESSAGE_INTERRUPT_HANDLER     MessageInterruptHandler;
   MINIPORT_MESSAGE_INTERRUPT_DPC_HANDLER MessageInterruptDpcHandler;
+  MINIPORT_DISABLE_MSI_INTERRUPT_HANDLER DisableMessageInterruptHandler;
+  MINIPORT_ENABLE_MSI_INTERRUPT_HANDLER  EnableMessageInterruptHandler;
+  NDIS_INTERRUPT_TYPE                 InterruptType;
   PIO_INTERRUPT_MESSAGE_INFO          MessageInfoTable;
-  ULONG                               InterruptType;     /* NDIS_CONNECT_* */
 } NDIS_MINIPORT_INTERRUPT_CHARACTERISTICS, *PNDIS_MINIPORT_INTERRUPT_CHARACTERISTICS;
 #define NDIS_MINIPORT_INTERRUPT_CHARACTERISTICS_REVISION_1 1
 #define NDIS_MINIPORT_INTERRUPT_CHARACTERISTICS_DEFINED    1
 #define NDIS_MINIPORT_INTERRUPT_REVISION_1                 1
+#define NDIS_SIZEOF_MINIPORT_INTERRUPT_CHARACTERISTICS_REVISION_1 \
+  RTL_SIZEOF_THROUGH_FIELD(NDIS_MINIPORT_INTERRUPT_CHARACTERISTICS, MessageInfoTable)
 
 /* NDIS 6 interrupt registration entry points */
 NDIS_STATUS
@@ -7586,9 +7622,19 @@ typedef struct _NDIS_FILTER_DRIVER_CHARACTERISTICS {
   FILTER_DEVICE_PNP_EVENT_NOTIFY_HANDLER       DevicePnPEventNotifyHandler;
   FILTER_NET_PNP_EVENT_HANDLER                 NetPnPEventHandler;
   FILTER_STATUS_HANDLER                        StatusHandler;
+  /* NDIS 6.1 REV_2 tail — direct OID path through the filter chain.
+   * Same signatures as the serialized OID handlers. */
+  FILTER_OID_REQUEST_HANDLER                   DirectOidRequestHandler;
+  FILTER_OID_REQUEST_COMPLETE_HANDLER          DirectOidRequestCompleteHandler;
+  FILTER_CANCEL_OID_REQUEST_HANDLER            CancelDirectOidRequestHandler;
 } NDIS_FILTER_DRIVER_CHARACTERISTICS, *PNDIS_FILTER_DRIVER_CHARACTERISTICS;
 
 #define NDIS_FILTER_DRIVER_CHARACTERISTICS_REVISION_1  1
+#define NDIS_FILTER_DRIVER_CHARACTERISTICS_REVISION_2  2
+#define NDIS_SIZEOF_FILTER_DRIVER_CHARACTERISTICS_REVISION_1 \
+  RTL_SIZEOF_THROUGH_FIELD(NDIS_FILTER_DRIVER_CHARACTERISTICS, StatusHandler)
+#define NDIS_SIZEOF_FILTER_DRIVER_CHARACTERISTICS_REVISION_2 \
+  RTL_SIZEOF_THROUGH_FIELD(NDIS_FILTER_DRIVER_CHARACTERISTICS, CancelDirectOidRequestHandler)
 
 NDIS_STATUS
 NDISAPI
@@ -7719,28 +7765,44 @@ typedef NDIS_STATUS
   _In_ NDIS_HANDLE DriverContext);
 typedef PROTOCOL_SET_OPTIONS (*PROTOCOL_SET_OPTIONS_HANDLER);
 
+/* NDIS 6.1+: direct (unserialized) OID completion to the protocol. */
+typedef VOID
+(PROTOCOL_DIRECT_OID_REQUEST_COMPLETE)(
+  _In_ NDIS_HANDLE ProtocolBindingContext,
+  _In_ PNDIS_OID_REQUEST OidRequest,
+  _In_ NDIS_STATUS Status);
+typedef PROTOCOL_DIRECT_OID_REQUEST_COMPLETE (*PROTOCOL_DIRECT_OID_REQUEST_COMPLETE_HANDLER);
+
+/* WDK layout — stock Win7 protocol binaries fill this exact field order;
+ * the NDIS 6.1 REV_2 tail adds DirectOidRequestCompleteHandler. */
 typedef struct _NDIS_PROTOCOL_DRIVER_CHARACTERISTICS {
   NDIS_OBJECT_HEADER                              Header;
   UCHAR                                           MajorNdisVersion;
   UCHAR                                           MinorNdisVersion;
   UCHAR                                           MajorDriverVersion;
   UCHAR                                           MinorDriverVersion;
-  ULONG                                           Reserved;
+  ULONG                                           Flags;
+  NDIS_STRING                                     Name;
   PROTOCOL_SET_OPTIONS_HANDLER                    SetOptionsHandler;
-  PROTOCOL_OPEN_ADAPTER_COMPLETE_EX_HANDLER       OpenAdapterCompleteHandlerEx;
-  PROTOCOL_CLOSE_ADAPTER_COMPLETE_EX_HANDLER      CloseAdapterCompleteHandlerEx;
-  PROTOCOL_SEND_NET_BUFFER_LISTS_COMPLETE_HANDLER SendNetBufferListsCompleteHandler;
-  PROTOCOL_RECEIVE_NET_BUFFER_LISTS_HANDLER       ReceiveNetBufferListsHandler;
-  PROTOCOL_OID_REQUEST_COMPLETE_HANDLER           OidRequestCompleteHandler;
-  PROTOCOL_STATUS_EX_HANDLER                      StatusHandlerEx;
-  PROTOCOL_NET_PNP_EVENT_HANDLER                  NetPnPEventHandler;
-  PROTOCOL_UNINSTALL_HANDLER                      UninstallHandler;
   PROTOCOL_BIND_ADAPTER_EX_HANDLER                BindAdapterHandlerEx;
   PROTOCOL_UNBIND_ADAPTER_EX_HANDLER              UnbindAdapterHandlerEx;
-  PNDIS_STRING                                    Name;
+  PROTOCOL_OPEN_ADAPTER_COMPLETE_EX_HANDLER       OpenAdapterCompleteHandlerEx;
+  PROTOCOL_CLOSE_ADAPTER_COMPLETE_EX_HANDLER      CloseAdapterCompleteHandlerEx;
+  PROTOCOL_NET_PNP_EVENT_HANDLER                  NetPnPEventHandler;
+  PROTOCOL_UNINSTALL_HANDLER                      UninstallHandler;
+  PROTOCOL_OID_REQUEST_COMPLETE_HANDLER           OidRequestCompleteHandler;
+  PROTOCOL_STATUS_EX_HANDLER                      StatusHandlerEx;
+  PROTOCOL_RECEIVE_NET_BUFFER_LISTS_HANDLER       ReceiveNetBufferListsHandler;
+  PROTOCOL_SEND_NET_BUFFER_LISTS_COMPLETE_HANDLER SendNetBufferListsCompleteHandler;
+  PROTOCOL_DIRECT_OID_REQUEST_COMPLETE_HANDLER    DirectOidRequestCompleteHandler;
 } NDIS_PROTOCOL_DRIVER_CHARACTERISTICS, *PNDIS_PROTOCOL_DRIVER_CHARACTERISTICS;
 
 #define NDIS_PROTOCOL_DRIVER_CHARACTERISTICS_REVISION_1  1
+#define NDIS_PROTOCOL_DRIVER_CHARACTERISTICS_REVISION_2  2
+#define NDIS_SIZEOF_PROTOCOL_DRIVER_CHARACTERISTICS_REVISION_1 \
+  RTL_SIZEOF_THROUGH_FIELD(NDIS_PROTOCOL_DRIVER_CHARACTERISTICS, SendNetBufferListsCompleteHandler)
+#define NDIS_SIZEOF_PROTOCOL_DRIVER_CHARACTERISTICS_REVISION_2 \
+  RTL_SIZEOF_THROUGH_FIELD(NDIS_PROTOCOL_DRIVER_CHARACTERISTICS, DirectOidRequestCompleteHandler)
 
 NDIS_STATUS
 NDISAPI
@@ -7774,6 +7836,26 @@ NDISAPI
 NdisOidRequest(
   _In_ NDIS_HANDLE NdisBindingHandle,
   _In_ PNDIS_OID_REQUEST OidRequest);
+
+/* NDIS 6.1+ direct (unserialized) OID request path. */
+NDIS_STATUS
+NDISAPI
+NdisDirectOidRequest(
+  _In_ NDIS_HANDLE NdisBindingHandle,
+  _In_ PNDIS_OID_REQUEST OidRequest);
+
+VOID
+NDISAPI
+NdisCancelDirectOidRequest(
+  _In_ NDIS_HANDLE NdisBindingHandle,
+  _In_ PVOID RequestId);
+
+VOID
+NDISAPI
+NdisMDirectOidRequestComplete(
+  _In_ NDIS_HANDLE NdisMiniportHandle,
+  _In_ PNDIS_OID_REQUEST OidRequest,
+  _In_ NDIS_STATUS Status);
 
 #endif /* NDIS_SUPPORT_NDIS6 */
 /* ============================================================================

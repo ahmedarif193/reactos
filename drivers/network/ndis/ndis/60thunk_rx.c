@@ -603,6 +603,7 @@ NdisMIndicateStatusEx(
         if (LinkState != NULL &&
             StatusIndication->StatusBufferSize >= sizeof(NDIS_LINK_STATE))
         {
+            DbgPrint("NDIS6: LINK_STATE adapter=%p connect=%d rx=%llu tx=%llu\n", Adapter, LinkState->MediaConnectState, LinkState->RcvLinkSpeed, LinkState->XmitLinkSpeed);
             Ext->GeneralAttrs.MediaConnectState = LinkState->MediaConnectState;
             Ext->GeneralAttrs.MediaDuplexState  = LinkState->MediaDuplexState;
             Ext->GeneralAttrs.RcvLinkSpeed      = LinkState->RcvLinkSpeed;
