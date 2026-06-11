@@ -1,0 +1,69 @@
+; ReactOS Native WiFi (802.11) Intermediate Driver - nwifi.sys
+; Copyright 2026 Ahmed ARIF <arif.ing@outlook.com>
+;
+; NDIS 6.x intermediate driver installed as a network service (NetService)
+; that layers a virtual 802.3 miniport (upper edge) on top of any
+; Native-802.11 dot11 miniport (lower edge).
+
+[Version]
+Signature   = "$Windows NT$"
+Class       = NetService
+ClassGUID   = {4D36E974-E325-11CE-BFC1-08002BE10318}
+Provider    = %ReactOS%
+DriverVer   = 06/02/2026,1.0.0.0
+
+[DestinationDirs]
+DefaultDestDir = 12
+
+[Manufacturer]
+%ReactOS% = ReactOSDevices,NTx86,NTamd64,NTARM64
+
+[ReactOSDevices.NTx86]
+%Nwifi.DeviceDesc% = Nwifi.Install, nwifi
+
+[ReactOSDevices.NTamd64]
+%Nwifi.DeviceDesc% = Nwifi.Install, nwifi
+
+[ReactOSDevices.NTARM64]
+%Nwifi.DeviceDesc% = Nwifi.Install, nwifi
+
+[Nwifi.Install]
+AddReg     = Nwifi.Ndi.Reg
+Characteristics = 0x21   ; NCF_VIRTUAL | NCF_HAS_UI
+CopyFiles  = Nwifi.CopyFiles
+
+[Nwifi.Install.Services]
+AddService = Nwifi, 2, Nwifi.Service, Nwifi.EventLog
+
+; NDI binding metadata that ties the two edges together.
+[Nwifi.Ndi.Reg]
+HKR, Ndi,            Service,     0, "Nwifi"
+HKR, Ndi,            CoServices,  0x00010000, "Nwifi"
+HKR, Ndi,            HelpText,    0, %Nwifi.HelpText%
+HKR, Ndi,            FilterClass, 0, "ms_implatform"
+HKR, Ndi\Interfaces, UpperRange,  0, "ndis5"
+HKR, Ndi\Interfaces, LowerRange,  0, "nativewifi"
+
+[Nwifi.CopyFiles]
+nwifi.sys
+
+[Nwifi.Service]
+DisplayName    = %Nwifi.ServiceDesc%
+ServiceType    = 1      ; SERVICE_KERNEL_DRIVER
+StartType      = 3      ; SERVICE_DEMAND_START
+ErrorControl   = 1      ; SERVICE_ERROR_NORMAL
+ServiceBinary  = %12%\nwifi.sys
+LoadOrderGroup = NDIS
+
+[Nwifi.EventLog]
+AddReg = Nwifi.EventLog.Reg
+
+[Nwifi.EventLog.Reg]
+HKR, , EventMessageFile, 0x00020000, "%%SystemRoot%%\System32\netevent.dll"
+HKR, , TypesSupported,   0x00010001, 7
+
+[Strings]
+ReactOS            = "ReactOS Project"
+Nwifi.DeviceDesc   = "ReactOS Native WiFi Intermediate Driver"
+Nwifi.ServiceDesc  = "ReactOS Native WiFi Service"
+Nwifi.HelpText     = "Translates 802.11 to 802.3 for the TCP/IP stack"
