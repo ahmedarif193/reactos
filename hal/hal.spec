@@ -172,6 +172,7 @@
 @ fastcall -arch=arm64 HalSetGicPriorityMask(long)
 @ fastcall -arch=arm64 HalGetGicPriorityMask()
 @ fastcall -arch=arm64 HalGetInterruptSource()
+@ stdcall -arch=arm64 HalPerformEndOfInterrupt()
 
 ; Internal kernel entry points needed by early ARM64 HAL code.
 @ stdcall -arch=arm64 KxSaveFloatingPointState(ptr) ntoskrnl.KxSaveFloatingPointState

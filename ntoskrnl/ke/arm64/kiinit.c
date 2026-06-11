@@ -481,11 +481,7 @@ KiInitializeKernel(_Inout_ PKPROCESS InitProcess,
     InitThread->NextProcessor = Number;
     InitThread->Priority = HIGH_PRIORITY;
     InitThread->State = Running;
-#if (NTDDI_VERSION >= NTDDI_WIN7)
-    InitThread->Affinity.Mask = ((KAFFINITY)1 << Number);
-#else
     InitThread->Affinity = ((KAFFINITY)1 << Number);
-#endif
     InitThread->WaitIrql = DISPATCH_LEVEL;
     InitProcess->ActiveProcessors |= ((KAFFINITY)1 << Number);
 #if (NTDDI_VERSION >= NTDDI_LONGHORN)

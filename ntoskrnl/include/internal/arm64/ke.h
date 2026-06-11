@@ -242,9 +242,6 @@ KeDisableInterrupts(VOID)
     return ((Flags & (1ULL << 7)) == 0);
 }
 
-VOID
-KiArm64RefirePendingSoftwareInterrupts(VOID);
-
 FORCEINLINE
 VOID
 KeRestoreInterrupts(
@@ -253,8 +250,6 @@ KeRestoreInterrupts(
     if (WereEnabled)
     {
         __asm__ __volatile__("msr daifclr, #2" ::: "memory");
-        /* x64 re-fire semantics: pending software interrupts deliver at sti; drain them now that the mask is open */
-        KiArm64RefirePendingSoftwareInterrupts();
     }
 }
 
@@ -402,16 +397,6 @@ HalSetGicPriorityMask(
 VOID
 KiSetCurrentIrql(
     _In_ KIRQL Irql);
-
-VOID
-KiApplyIrqMaskForIrqlTransition(
-    _In_ KIRQL OldIrql,
-    _In_ KIRQL NewIrql);
-
-VOID
-KiArm64ProcessPendingSoftwareInterrupts(
-    _In_ KIRQL OldIrql,
-    _In_ KIRQL NewIrql);
 
 VOID
 NTAPI

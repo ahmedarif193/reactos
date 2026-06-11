@@ -59,6 +59,8 @@
 #define GICD_ITARGETSR      0x800
 #define GICD_ICFGR          0xC00
 #define GICD_SGIR           0xF00
+#define GICD_CPENDSGIR      0xF10
+#define GICD_SPENDSGIR      0xF20
 #define GICD_PIDR2          0xFE8
 #define GICD_IROUTER        0x6100
 
@@ -376,6 +378,10 @@
 #define HAL_ARM64_SGI_IPI   0
 #define HAL_ARM64_SGI_APC   1
 #define HAL_ARM64_SGI_DPC   2
+
+#define HAL_ARM64_SGI_IPI_PRIORITY 0x10
+#define HAL_ARM64_SGI_APC_PRIORITY 0xE0
+#define HAL_ARM64_SGI_DPC_PRIORITY 0xD0
 
 /*
  * ============================================================================
@@ -861,6 +867,7 @@ extern BOOLEAN HalpGicItsCollectionMapped[MAXIMUM_PROCESSORS];
 
 /* Active interrupt tracking */
 extern ULONG HalpArm64ActiveIntId[MAXIMUM_PROCESSORS];
+extern ULONG HalpArm64AckRaw[MAXIMUM_PROCESSORS];
 
 /* Default interrupt affinity */
 extern KAFFINITY HalpDefaultInterruptAffinity;
@@ -1125,6 +1132,11 @@ HalpArm64CleanDcacheRange(
 
 VOID
 HalpArm64CleanInvalidateDcacheRange(
+    _In_ PVOID Base,
+    _In_ SIZE_T Length);
+
+VOID
+HalpArm64InvalidateDcacheRange(
     _In_ PVOID Base,
     _In_ SIZE_T Length);
 
@@ -1921,6 +1933,21 @@ VOID
 HalpArm64SendSgi(
     _In_ KAFFINITY TargetSet,
     _In_ ULONG SgiId);
+
+VOID
+HalpArm64SendSgiSelf(
+    _In_ ULONG SgiId);
+
+VOID
+HalpArm64ClearSelfSgi(
+    _In_ ULONG SgiId);
+
+VOID
+HalpArm64RependInterrupt(
+    _In_ ULONG IntId);
+
+VOID
+HalpArm64ProgramSgiPriorities(VOID);
 
 ULONG
 HalpGicAcknowledgeInterrupt(VOID);

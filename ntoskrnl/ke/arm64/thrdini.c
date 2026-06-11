@@ -152,8 +152,6 @@ KiInitializeContextThread(_Inout_ PKTHREAD Thread,
     SwitchFrame->ReturnAddress = (ULONG64)KiThreadStartup;
     SwitchFrame->Lr = (ULONG64)KiThreadStartup;
     SwitchFrame->ApcBypass = APC_LEVEL;
-    /* DAIF[3:0] nibble (D,A,I,F): new threads start with only SError masked */
-    SwitchFrame->Daif = 0x4;
 }
 
 DECLSPEC_NORETURN
@@ -470,48 +468,6 @@ KiDispatchInterrupt(VOID)
     PKIPCR Pcr = (PKIPCR)KeGetPcr();
     PKPRCB Prcb = &Pcr->Prcb;
     PKTHREAD NewThread, OldThread;
-    KIRQL OldIrql;
-    ULONG64 EntryDaif;
-
-    /* Preserve the caller's interrupt mask; this function must not leak an _enable to a masked caller */
-    __asm__ __volatile__("mrs %0, daif" : "=r"(EntryDaif));
-
-    /*
-     * ARM64 DPC/Dispatch Interrupt Handler
-     *
-     * This function processes pending DPCs and handles thread scheduling.
-     * It follows the same pattern as AMD64's KiDpcInterruptHandler:
-     *
-     * 1. Save current IRQL and raise to DISPATCH_LEVEL
-     * 2. Process DPCs (retire DPC list)
-     * 3. Handle quantum end or thread switch if needed
-     * 4. Restore original IRQL at the END
-     *
-     * CRITICAL: The IRQL restoration MUST happen at the very end of this
-     * function, AFTER any KiQuantumEnd() or context switch operations.
-     * This is because:
-     * - KiQuantumEnd() raises IRQL to SYNCH_LEVEL then lowers to DISPATCH_LEVEL
-     * - KiSwapContext may change threads and IRQL state
-     *
-     * If we restore IRQL before these operations, the function will return
-     * with IRQL stuck at DISPATCH_LEVEL instead of the original IRQL,
-     * causing PAGED_CODE assertions to fail in subsequent code.
-     *
-     * This function is called from two contexts:
-     * 1. Hardware IRQ handler (interrupt.c) - already at elevated IRQL
-     * 2. KfLowerIrql (irql.c) - at the newly lowered IRQL
-     *
-     * We use direct IRQL manipulation (KiSetCurrentIrql/KiApplyIrqMaskForIrqlTransition)
-     * instead of KfLowerIrql() to avoid infinite recursion, since KfLowerIrql()
-     * calls this function when DpcInterruptRequested is set.
-     */
-
-    /* Save current IRQL and raise to DISPATCH_LEVEL for DPC processing */
-    OldIrql = KeGetCurrentIrql();
-    if (OldIrql < DISPATCH_LEVEL)
-    {
-        KfRaiseIrql(DISPATCH_LEVEL);
-    }
 
     _disable();
 
@@ -523,7 +479,7 @@ KiDispatchInterrupt(VOID)
         KiRetireDpcListInDpcStack(Prcb, Prcb->DpcStack);
     }
 
-    __asm__ __volatile__("msr daif, %0" :: "r"(EntryDaif) : "memory");
+    _enable();
 
     /* Handle quantum end - this may raise/lower IRQL internally */
     if (Prcb->QuantumEnd)
@@ -549,9 +505,4 @@ KiDispatchInterrupt(VOID)
 
         KiSwapContext(APC_LEVEL, OldThread);
     }
-
-    /* Restore the original IRQL at the very end, then put DAIF back exactly as the caller had it */
-    _disable();
-    KeLowerIrql(OldIrql);
-    __asm__ __volatile__("msr daif, %0" :: "r"(EntryDaif) : "memory");
 }
