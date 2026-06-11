@@ -16,7 +16,6 @@
 #define LQ_OWN      2
 
 #if defined(_M_ARM64)
-static LONG KiArm64QueuedSpinTraceBudget = 48;
 #endif
 
 /* PRIVATE FUNCTIONS *********************************************************/
@@ -105,39 +104,6 @@ VOID
 FASTCALL
 KeAcquireQueuedSpinLockAtDpcLevel(_Inout_ PKSPIN_LOCK_QUEUE LockHandle)
 {
-#if defined(_M_ARM64)
-    PKPRCB Prcb;
-    LONG_PTR LockIndex = -1;
-    PKSPIN_LOCK Lock = NULL;
-
-    Prcb = KeGetCurrentPrcb();
-    if (LockHandle != NULL)
-    {
-        Lock = LockHandle->Lock;
-        if ((Prcb != NULL) &&
-            (LockHandle >= &Prcb->LockQueue[0]) &&
-            (LockHandle < &Prcb->LockQueue[RTL_NUMBER_OF(Prcb->LockQueue)]))
-        {
-            LockIndex = LockHandle - &Prcb->LockQueue[0];
-        }
-    }
-
-    if (KiArm64QueuedSpinTraceBudget > 0)
-    {
-        LONG OldBudget = InterlockedDecrement(&KiArm64QueuedSpinTraceBudget);
-        if (OldBudget >= 0)
-        {
-            DPRINT1("[arm64][QSL] acquire-at-dpc handle=%p lock=%p index=%Id irql=%u prcb=%p thread=%p caller=%p\n",
-                    LockHandle,
-                    Lock,
-                    LockIndex,
-                    KeGetCurrentIrql(),
-                    Prcb,
-                    KeGetCurrentThread(),
-                    _ReturnAddress());
-        }
-    }
-#endif
 
 #if defined(CONFIG_SMP) || DBG
     /* Make sure we are at DPC or above! */

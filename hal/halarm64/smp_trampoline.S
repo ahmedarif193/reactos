@@ -47,6 +47,7 @@
 #define AP_DATA_CPU_NUM_OFF     0x58
 #define AP_DATA_GICR_BASE_OFF   0x60
 #define AP_DATA_PROGRESS_OFF    0x68
+#define AP_DATA_CPACR_OFF       0x70
 #define AP_DATA_SIZE            0x70
 
 /*
@@ -220,6 +221,10 @@ HalpArm64ApTrampolineEntry:
      */
     ldr     x0, [x19, #AP_DATA_VBAR_OFF]
     msr     vbar_el1, x0
+    isb
+
+    ldr     x0, [x19, #AP_DATA_CPACR_OFF]
+    msr     cpacr_el1, x0
     isb
 
     /* Progress 0x77: VBAR set */
