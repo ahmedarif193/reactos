@@ -292,7 +292,16 @@ KiSwapContextInternal:
 
     msr     daifset, #0x2
 
-    /* Wait until the incoming thread clears its SwapBusy bit */
+    /* No handshake when the scheduler reselected the running thread */
+    cmp     x1, x2
+    b.eq    .Lswapbusy_clear
+
+    /* Mark the outgoing thread busy before its kernel stack is saved */
+    mov     w3, #1
+    strb    w3, [x1, #ThSwapBusy]
+    dmb     ish
+
+    /* Wait until the incoming thread is no longer being saved elsewhere */
 .Lswapbusy_wait:
     ldrb    w3, [x2, #ThSwapBusy]
     cbz     w3, .Lswapbusy_clear
@@ -301,10 +310,6 @@ KiSwapContextInternal:
     b       .Lswapbusy_wait
 
 .Lswapbusy_clear:
-    mov     w3, #1
-    strb    w3, [x2, #ThSwapBusy]
-    dmb     ish
-
     /* Record the wait IRQL in the outgoing switch frame */
     strb    w0, [sp, #SwApcBypass]
 
