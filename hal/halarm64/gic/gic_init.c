@@ -22,6 +22,7 @@
  *   - ACPI Specification (MADT GIC structures)
  */
 
+#define NDEBUG
 #include "gic_internal.h"
 
 /*
@@ -680,6 +681,10 @@ HalpGicDetectVersion(VOID)
      */
     Pidr2 = *HalpMmio((ULONG_PTR)HalpGicdBase, GICD_PIDR2);
     ArchRev = (Pidr2 >> GICD_PIDR2_ARCHREV_SHIFT) & 0xF;
+    if (ArchRev == 0)
+    {
+        ArchRev = HalpGicArchRev;
+    }
 
     HalpGicVersionInfo.Architecture = ArchRev;
 
