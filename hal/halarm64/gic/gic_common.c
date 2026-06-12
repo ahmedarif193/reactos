@@ -17,6 +17,7 @@
  *   - ARM GIC Architecture Specification (IHI 0069)
  */
 
+#define NDEBUG
 #include "gic_internal.h"
 
 /*
@@ -538,6 +539,8 @@ HalpArm64ProgramSgiPriorities(VOID)
     HalpGicSetInterruptPriority(HAL_ARM64_SGI_IPI, HAL_ARM64_SGI_IPI_PRIORITY);
     HalpGicSetInterruptPriority(HAL_ARM64_SGI_APC, HAL_ARM64_SGI_APC_PRIORITY);
     HalpGicSetInterruptPriority(HAL_ARM64_SGI_DPC, HAL_ARM64_SGI_DPC_PRIORITY);
+    HalpGicSetInterruptPriority(HAL_ARM64_SGI_FREEZE, HAL_ARM64_SGI_FREEZE_PRIORITY);
+    HalpGicEnableInterrupt(HAL_ARM64_SGI_FREEZE);
 }
 
 VOID

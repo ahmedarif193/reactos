@@ -139,7 +139,7 @@ HalpInitGicv2SgiPpi(VOID)
     }
 
     *HalpMmio((ULONG_PTR)HalpGicdBase, GICD_IPRIORITYR) =
-        0xD0000000u |
+        ((ULONG)HAL_ARM64_SGI_FREEZE_PRIORITY << 24) |
         ((ULONG)HAL_ARM64_SGI_DPC_PRIORITY << 16) |
         ((ULONG)HAL_ARM64_SGI_APC_PRIORITY << 8) |
         (ULONG)HAL_ARM64_SGI_IPI_PRIORITY;
