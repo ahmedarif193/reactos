@@ -124,10 +124,17 @@ START_TEST(ExTimer)
     ok(Status == STATUS_SUCCESS, "ZwSetTimer failed with Status=0x%08lX", Status);
     ok(PreviousState == FALSE, "Incorrect PreviousState returned when setting the timer");
 
-    // Now wait till it's finished, and then check APC call
     DPRINT("Wait for it\n");
-    Status = ZwWaitForSingleObject(HandleOpened, FALSE, NULL);
-    ok(Status == STATUS_SUCCESS, "ZwWaitForSingleObject failed with Status=0x%08lX", Status);
+    {
+        BOOLEAN ApcsWereDisabled = KeAreApcsDisabled();
+        if (ApcsWereDisabled)
+            KeLeaveCriticalRegion();
+        Status = ZwWaitForSingleObject(HandleOpened, TRUE, NULL);
+        if (ApcsWereDisabled)
+            KeEnterCriticalRegion();
+    }
+    ok(Status == STATUS_SUCCESS || Status == STATUS_USER_APC,
+       "ZwWaitForSingleObject failed with Status=0x%08lX", Status);
 
     CurrentState = FALSE;
     Status = ZwCancelTimer(HandleOpened, &CurrentState);
