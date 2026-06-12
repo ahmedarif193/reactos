@@ -157,7 +157,7 @@ KeQueryActiveProcessors(VOID);
 $endif (_WDMDDK_ || _NTDDK_)
 
 $if (_WDMDDK_)
-#if !defined(_M_AMD64)
+#if !defined(_M_AMD64) && !(defined(_M_ARM64) && !defined(_NTOSKRNL_) && !defined(_NTHAL_) && !defined(_NTSYSTEM_))
 NTKERNELAPI
 ULONGLONG
 NTAPI
@@ -169,6 +169,22 @@ NTAPI
 KeQuerySystemTime(
   _Out_ PLARGE_INTEGER CurrentTime);
 #endif /* !_M_AMD64 */
+
+#if (NTDDI_VERSION >= NTDDI_WIN8)
+NTKERNELAPI
+VOID
+NTAPI
+KeQuerySystemTimePrecise(
+  _Out_ PLARGE_INTEGER CurrentTime);
+#endif
+
+#if (NTDDI_VERSION >= NTDDI_WINBLUE)
+NTKERNELAPI
+ULONGLONG
+NTAPI
+KeQueryInterruptTimePrecise(
+  _Out_ PULONG64 QpcTimeStamp);
+#endif
 
 #if !defined(_X86_) && !defined(_M_ARM)
 _Requires_lock_not_held_(*SpinLock)

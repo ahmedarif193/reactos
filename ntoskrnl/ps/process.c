@@ -976,7 +976,7 @@ PsLookupProcessByProcessId(IN HANDLE ProcessId,
 {
     PHANDLE_TABLE_ENTRY CidEntry;
     PEPROCESS FoundProcess;
-    NTSTATUS Status = STATUS_INVALID_PARAMETER;
+    NTSTATUS Status = STATUS_INVALID_CID;
     PAGED_CODE();
     PSTRACE(PS_PROCESS_DEBUG, "ProcessId: %p\n", ProcessId);
     KeEnterCriticalRegion();
@@ -1129,6 +1129,28 @@ PsGetProcessImageFileName(PEPROCESS Process)
 {
     return (LPSTR)Process->ImageFileName;
 }
+
+#if defined(_M_AMD64) || defined(_M_ARM64)
+/*
+ * @implemented
+ */
+PVOID
+NTAPI
+PsGetProcessWow64Process(PEPROCESS Process)
+{
+    return Process->Wow64Process;
+}
+
+/*
+ * @implemented
+ */
+PVOID
+NTAPI
+PsGetCurrentProcessWow64Process(VOID)
+{
+    return PsGetCurrentProcess()->Wow64Process;
+}
+#endif
 
 /*
  * @implemented

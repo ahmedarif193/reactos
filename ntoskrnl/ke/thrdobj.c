@@ -1193,6 +1193,34 @@ KeSetSystemAffinityThread(IN KAFFINITY Affinity)
 /*
  * @implemented
  */
+KAFFINITY
+NTAPI
+KeSetSystemAffinityThreadEx(IN KAFFINITY Affinity)
+{
+    PKTHREAD CurrentThread = KeGetCurrentThread();
+    KAFFINITY OldAffinity;
+
+    OldAffinity = CurrentThread->SystemAffinityActive ? KiThreadAffinityMask(CurrentThread) : 0;
+    KeSetSystemAffinityThread(Affinity);
+    return OldAffinity;
+}
+
+/*
+ * @implemented
+ */
+VOID
+NTAPI
+KeRevertToUserAffinityThreadEx(IN KAFFINITY Affinity)
+{
+    if (Affinity != 0)
+        KeSetSystemAffinityThread(Affinity);
+    else
+        KeRevertToUserAffinityThread();
+}
+
+/*
+ * @implemented
+ */
 LONG
 NTAPI
 KeSetBasePriorityThread(IN PKTHREAD Thread,

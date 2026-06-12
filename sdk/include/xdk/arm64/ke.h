@@ -103,6 +103,8 @@ KfRaiseIrql(
     _In_ KIRQL NewIrql);
 #define KeRaiseIrql(a,b) *(b) = KfRaiseIrql(a)
 
+#if defined(_NTOSKRNL_) || defined(_NTHAL_) || defined(_NTSYSTEM_)
+
 _IRQL_requires_max_(DISPATCH_LEVEL)
 _IRQL_saves_
 _IRQL_raises_(DISPATCH_LEVEL)
@@ -115,6 +117,41 @@ NTHALAPI
 KIRQL
 NTAPI
 KeRaiseIrqlToSynchLevel(VOID);
+
+#else
+
+#define SharedInterruptTime     (KI_USER_SHARED_DATA + 0x8)
+#define SharedSystemTime        (KI_USER_SHARED_DATA + 0x14)
+#define SharedTickCount         (KI_USER_SHARED_DATA + 0x320)
+
+#define KeQueryInterruptTime() \
+    (*(volatile ULONG64*)SharedInterruptTime)
+
+#define KeQuerySystemTime(CurrentCount) \
+    *(ULONG64*)(CurrentCount) = *(volatile ULONG64*)SharedSystemTime
+
+#define KeQueryTickCount(CurrentCount) \
+    *(ULONG64*)(CurrentCount) = *(volatile ULONG64*)SharedTickCount
+
+_IRQL_requires_max_(DISPATCH_LEVEL)
+_IRQL_saves_
+_IRQL_raises_(DISPATCH_LEVEL)
+FORCEINLINE
+KIRQL
+KeRaiseIrqlToDpcLevel(
+    VOID)
+{
+    return KfRaiseIrql(DISPATCH_LEVEL);
+}
+
+FORCEINLINE
+KIRQL
+KeRaiseIrqlToSynchLevel(VOID)
+{
+    return KfRaiseIrql(12);
+}
+
+#endif
 
 #if !defined(_NTOSKRNL_) && !defined(_NTSYSTEM_)
 FORCEINLINE
@@ -212,6 +249,7 @@ KeFlushIoBuffers(
     _In_ BOOLEAN ReadOperation,
     _In_ BOOLEAN DmaOperation);
 
+#if defined(_NTOSKRNL_) || defined(_NTHAL_) || defined(_NTSYSTEM_)
 FORCEINLINE
 VOID
 _KeQueryTickCount(
@@ -231,6 +269,7 @@ _KeQueryTickCount(
   }
 }
 #define KeQueryTickCount(CurrentCount) _KeQueryTickCount(CurrentCount)
+#endif
 
 #define DbgRaiseAssertionFailure() __break(0xf001)
 

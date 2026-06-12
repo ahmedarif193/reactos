@@ -325,4 +325,117 @@ ExInitializePagedLookasideList(IN PPAGED_LOOKASIDE_LIST Lookaside,
                                 &ExpPagedLookasideListLock);
 }
 
+static
+PVOID
+NTAPI
+ExpLookasideListExAllocate(IN POOL_TYPE PoolType,
+                           IN SIZE_T NumberOfBytes,
+                           IN ULONG Tag,
+                           IN OUT PLOOKASIDE_LIST_EX Lookaside)
+{
+    UNREFERENCED_PARAMETER(Lookaside);
+    return ExAllocatePoolWithTag(PoolType, NumberOfBytes, Tag);
+}
+
+static
+VOID
+NTAPI
+ExpLookasideListExFree(IN PVOID Buffer,
+                       IN OUT PLOOKASIDE_LIST_EX Lookaside)
+{
+    ExFreePoolWithTag(Buffer, Lookaside->L.Tag);
+}
+
+/*
+ * @implemented
+ */
+NTSTATUS
+NTAPI
+ExInitializeLookasideListEx(OUT PLOOKASIDE_LIST_EX Lookaside,
+                            IN PALLOCATE_FUNCTION_EX Allocate OPTIONAL,
+                            IN PFREE_FUNCTION_EX Free OPTIONAL,
+                            IN POOL_TYPE PoolType,
+                            IN ULONG Flags,
+                            IN SIZE_T Size,
+                            IN ULONG Tag,
+                            IN USHORT Depth)
+{
+    UNREFERENCED_PARAMETER(Depth);
+
+    if (Size < LOOKASIDE_MINIMUM_BLOCK_SIZE)
+        return STATUS_INVALID_PARAMETER_6;
+    if ((Flags & ~(EX_LOOKASIDE_LIST_EX_FLAGS_RAISE_ON_FAIL | EX_LOOKASIDE_LIST_EX_FLAGS_FAIL_NO_RAISE)) != 0)
+        return STATUS_INVALID_PARAMETER_5;
+
+    if (Flags & EX_LOOKASIDE_LIST_EX_FLAGS_RAISE_ON_FAIL)
+        PoolType |= POOL_RAISE_IF_ALLOCATION_FAILURE;
+
+    ExInitializeSListHead(&Lookaside->L.ListHead);
+    Lookaside->L.TotalAllocates = 0;
+    Lookaside->L.AllocateMisses = 0;
+    Lookaside->L.TotalFrees = 0;
+    Lookaside->L.FreeMisses = 0;
+    Lookaside->L.Type = PoolType;
+    Lookaside->L.Tag = Tag;
+    Lookaside->L.Size = (ULONG)Size;
+    Lookaside->L.Depth = 4;
+    Lookaside->L.MaximumDepth = EX_MAXIMUM_LOOKASIDE_DEPTH_BASE;
+    Lookaside->L.LastTotalAllocates = 0;
+    Lookaside->L.LastAllocateMisses = 0;
+    Lookaside->L.AllocateEx = Allocate ? Allocate : ExpLookasideListExAllocate;
+    Lookaside->L.FreeEx = Free ? Free : ExpLookasideListExFree;
+
+    if ((PoolType & 1) == PagedPool)
+    {
+        ExInterlockedInsertTailList(&ExpPagedLookasideListHead,
+                                    &Lookaside->L.ListEntry,
+                                    &ExpPagedLookasideListLock);
+    }
+    else
+    {
+        ExInterlockedInsertTailList(&ExpNonPagedLookasideListHead,
+                                    &Lookaside->L.ListEntry,
+                                    &ExpNonPagedLookasideListLock);
+    }
+
+    return STATUS_SUCCESS;
+}
+
+/*
+ * @implemented
+ */
+VOID
+NTAPI
+ExFlushLookasideListEx(IN OUT PLOOKASIDE_LIST_EX Lookaside)
+{
+    PVOID Entry;
+
+    while ((Entry = InterlockedPopEntrySList(&Lookaside->L.ListHead)) != NULL)
+    {
+        Lookaside->L.FreeEx(Entry, Lookaside);
+    }
+}
+
+/*
+ * @implemented
+ */
+VOID
+NTAPI
+ExDeleteLookasideListEx(IN OUT PLOOKASIDE_LIST_EX Lookaside)
+{
+    KIRQL OldIrql;
+    PKSPIN_LOCK Lock;
+
+    ExFlushLookasideListEx(Lookaside);
+
+    if ((Lookaside->L.Type & 1) == PagedPool)
+        Lock = &ExpPagedLookasideListLock;
+    else
+        Lock = &ExpNonPagedLookasideListLock;
+
+    KeAcquireSpinLock(Lock, &OldIrql);
+    RemoveEntryList(&Lookaside->L.ListEntry);
+    KeReleaseSpinLock(Lock, OldIrql);
+}
+
 /* EOF */
