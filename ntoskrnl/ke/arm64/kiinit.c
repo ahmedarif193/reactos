@@ -13,6 +13,8 @@
 
 ARM64_CPU_FEATURES Arm64CpuFeatures;
 
+static LONG KiArm64OnlineProcessorCount;
+
 struct _KPCR;
 
 FORCEINLINE
@@ -546,9 +548,17 @@ KiInitializeKernel(_Inout_ PKPROCESS InitProcess,
     KiAcquirePrcbLock(Prcb);
     if (Prcb->NextThread == NULL)
     {
-        KiIdleSummary |= ((KAFFINITY)1 << Number);
+        InterlockedOr64((PLONG64)&KiIdleSummary, (LONG64)((KAFFINITY)1 << Number));
     }
     KiReleasePrcbLock(Prcb);
+
+    if (Number != 0)
+    {
+        _disable();
+        KeStartArm64ProcessorTimer();
+        InterlockedOr64((PLONG64)&KeActiveProcessors, (LONG64)((KAFFINITY)1 << Number));
+        KeNumberProcessors = (CCHAR)InterlockedIncrement((PLONG)&KiArm64OnlineProcessorCount);
+    }
 
     KfRaiseIrql(HIGH_LEVEL);
     LoaderBlock->Prcb = 0;
@@ -1142,7 +1152,7 @@ KiInitializeSystem(_Inout_ PLOADER_PARAMETER_BLOCK LoaderBlock)
         __asm__ __volatile__("msr cpacr_el1, %0" : : "r"(Cpacr));
         __asm__ __volatile__("isb" ::: "memory");
 
-        DPRINT1("CPU %lu: Per-CPU registers configured (CPACR, PAN, HA)\n",
+        DPRINT("CPU %lu: Per-CPU registers configured (CPACR, PAN, HA)\n",
                 ProcessorNumber);
     }
 
@@ -1151,8 +1161,12 @@ KiInitializeSystem(_Inout_ PLOADER_PARAMETER_BLOCK LoaderBlock)
                     Pcr->Prcb.SetMember :
                     ((KAFFINITY)1 << ProcessorNumber);
 
-    KeActiveProcessors |= ProcessorMask;
-    KeNumberProcessors++;
+    if (ProcessorNumber == 0)
+    {
+        KeActiveProcessors |= ProcessorMask;
+        KeNumberProcessors++;
+        KiArm64OnlineProcessorCount = 1;
+    }
 
     KfRaiseIrql(HIGH_LEVEL);
 
@@ -1190,6 +1204,8 @@ KiInitializeSystem(_Inout_ PLOADER_PARAMETER_BLOCK LoaderBlock)
 
         KdInitSystem(0, KeLoaderBlock);
 
+        __asm__ __volatile__("msr daifclr, #0x4");
+
         /* KD is present right after banner; continue */
         if (KdPollBreakIn())
         {
@@ -1222,10 +1238,6 @@ KiInitializeSystem(_Inout_ PLOADER_PARAMETER_BLOCK LoaderBlock)
                            (CCHAR)ProcessorNumber,
                            KeLoaderBlock);
     }
-    else
-    {
-    }
-
     {
         PKTHREAD Thread = KeGetCurrentThread();
 
@@ -1234,11 +1246,6 @@ KiInitializeSystem(_Inout_ PLOADER_PARAMETER_BLOCK LoaderBlock)
             KeSetPriorityThread(Thread, 0);
             Thread->WaitIrql = DISPATCH_LEVEL;
         }
-    }
-
-    if (ProcessorNumber != 0)
-    {
-        KeStartArm64ProcessorTimer();
     }
 
     KiIdleLoop();

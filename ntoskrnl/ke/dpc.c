@@ -853,6 +853,8 @@ KeInsertQueueDpc(IN PKDPC Dpc,
         }
         else
         {
+            KeMemoryBarrier();
+
             /* Make sure a DPC isn't executing already */
             if (!(Prcb->DpcRoutineActive) && !(Prcb->DpcInterruptRequested))
             {
