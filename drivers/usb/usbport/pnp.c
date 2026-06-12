@@ -156,14 +156,14 @@ USBPORT_ProgramMsixTable(
             MsixTablePhysical.QuadPart, FdoExtension->MemoryBasePhysical.QuadPart, TableOffset);
 
     /* Map MSI-X table */
-    MsixTableVa = MmMapIoSpace(MsixTablePhysical,
-                               MessageInfo->MessageCount * 16,
-                               MmNonCached);
-    if (!MsixTableVa)
+    if (FdoExtension->UsbPortResources.ResourceBase == NULL ||
+        FdoExtension->UsbPortResources.IoSpaceLength < TableOffset + (MessageInfo->MessageCount * 16))
     {
-        DPRINT1("USBPORT_ProgramMsixTable: Failed to map MSI-X table\n");
+        DPRINT1("USBPORT_ProgramMsixTable: register mapping does not cover MSI-X table\n");
         return STATUS_INSUFFICIENT_RESOURCES;
     }
+
+    MsixTableVa = (PUCHAR)FdoExtension->UsbPortResources.ResourceBase + TableOffset;
 
     /* Program each MSI-X table entry */
     for (i = 0; i < MessageInfo->MessageCount; i++)
@@ -179,13 +179,12 @@ USBPORT_ProgramMsixTable(
          * doesn't work on ARM64. We must detect this and fail so the driver
          * falls back to line-based interrupts.
          */
-        if ((Entry->MessageAddress.LowPart & 0xFFF00000) == 0xFEE00000)
+        if ((Entry->MessageAddress.LowPart & 0xFFF00000) == 0xFEE00000 || Entry->MessageAddress.QuadPart == 0)
         {
             USHORT DisableControl;
 
             DPRINT1("USBPORT_ProgramMsixTable: Entry[%u] has invalid x86 APIC address 0x%I64x - MSI-X not available\n",
                     i, Entry->MessageAddress.QuadPart);
-            MmUnmapIoSpace(MsixTableVa, MessageInfo->MessageCount * 16);
 
             /*
              * Explicitly disable MSI-X in the PCI device to prevent the miniport
@@ -216,8 +215,6 @@ USBPORT_ProgramMsixTable(
         DPRINT("USBPORT_ProgramMsixTable: Entry[%u]: Addr=0x%I64x Data=0x%x Vector=%u\n",
                 i, Entry->MessageAddress.QuadPart, Entry->MessageData, Entry->Vector);
     }
-
-    MmUnmapIoSpace(MsixTableVa, MessageInfo->MessageCount * 16);
 
     /* Enable MSI-X in the capability register */
     MsixControl |= 0x8000; /* Set MSI-X Enable bit */
