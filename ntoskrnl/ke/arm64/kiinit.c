@@ -647,6 +647,8 @@ KiInitializePcr(_In_ ULONG ProcessorNumber,
 #endif
 
     Pcr->Prcb.Number = (UCHAR)ProcessorNumber;
+    Pcr->Prcb.Group = 0;
+    Pcr->Prcb.GroupIndex = (UCHAR)ProcessorNumber;
     Pcr->Prcb.SetMember = 1ULL << ProcessorNumber;
     Pcr->Prcb.MultiThreadProcessorSet = Pcr->Prcb.SetMember;
     Pcr->Prcb.ParentNode = KeNodeBlock[0];
