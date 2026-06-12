@@ -142,6 +142,7 @@ if(ARCH STREQUAL "arm64")
         kmArm64/KeArm64DpcIpi.c
         kmArm64/KeArm64Frames.c
         kmArm64/KeArm64Intrinsics.c
+        kmArm64/KeArm64IpiBroadcast.c
         kmArm64/KeArm64Irql.c
         kmArm64/KeArm64LoaderCache.c
         kmArm64/KeArm64PcrPrcb.c
