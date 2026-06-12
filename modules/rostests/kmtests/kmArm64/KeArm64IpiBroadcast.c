@@ -19,10 +19,7 @@ static volatile LONG TargetDpcCpu;
 
 static ULONG_PTR NTAPI Arm64BroadcastWorker(_In_ ULONG_PTR Argument)
 {
-    PKPRCB Prcb = KeGetCurrentPrcb();
-
-    if (Prcb != NULL)
-        InterlockedOr64(&BroadcastMask, (LONG64)Prcb->SetMember);
+    InterlockedOr64(&BroadcastMask, (LONG64)((KAFFINITY)1 << KeGetCurrentProcessorNumberEx(NULL)));
     InterlockedIncrement(&BroadcastCount);
     return Argument;
 }
