@@ -292,16 +292,15 @@ KiSwapContextInternal:
 
     msr     daifset, #0x2
 
-    /* No handshake when the scheduler reselected the running thread */
+    /*
+     * The outgoing thread was marked busy by KiSetThreadSwapBusy under the
+     * scheduler lock before it was queued. Wait until the incoming thread is
+     * no longer being saved on another CPU before reusing its kernel stack.
+     * Skip when the scheduler reselected the running thread (x1 == x2).
+     */
     cmp     x1, x2
     b.eq    .Lswapbusy_clear
 
-    /* Mark the outgoing thread busy before its kernel stack is saved */
-    mov     w3, #1
-    strb    w3, [x1, #ThSwapBusy]
-    dmb     ish
-
-    /* Wait until the incoming thread is no longer being saved elsewhere */
 .Lswapbusy_wait:
     ldrb    w3, [x2, #ThSwapBusy]
     cbz     w3, .Lswapbusy_clear
