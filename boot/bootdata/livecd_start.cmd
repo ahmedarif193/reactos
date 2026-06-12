@@ -39,6 +39,7 @@ kmtest_.exe KeArm64Irql
 kmtest_.exe KeArm64LoaderCache
 kmtest_.exe KeArm64PcrPrcb
 kmtest_.exe KeArm64Smp
+kmtest_.exe KeArm64SmpChurn
 kmtest_.exe KeArm64SpinLock
 kmtest_.exe KeArm64ThreadProcess
 kmtest_.exe RtlArm64UnwindLayout
