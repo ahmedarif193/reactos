@@ -17,6 +17,7 @@
 #include <halacpi_arm64.h>
 #include <bugcodes.h>
 #include "halext.h"
+#define NDEBUG
 #include <debug.h>
 
 #include "gic_internal.h"
@@ -1934,6 +1935,75 @@ HalIsPciMsiSupported(VOID)
     return ((HalpGicItsPresent && !HalpGicItsInitFailed) || HalpGicMsiPresent);
 }
 
+#define HALP_ARM64_MSI_ROUTE_CACHE_SIZE 64
+
+static struct
+{
+    ULONG Vector;
+    ULONGLONG Address;
+    ULONG Data;
+} HalpArm64MsiRouteCache[HALP_ARM64_MSI_ROUTE_CACHE_SIZE];
+static LONG HalpArm64MsiRouteCount;
+
+static
+VOID
+HalpArm64RecordMsiRoute(
+    _In_ ULONG Vector,
+    _In_ ULONGLONG Address,
+    _In_ ULONG Data)
+{
+    LONG Index;
+    LONG Count = HalpArm64MsiRouteCount;
+
+    if (Count > HALP_ARM64_MSI_ROUTE_CACHE_SIZE)
+        Count = HALP_ARM64_MSI_ROUTE_CACHE_SIZE;
+
+    for (Index = 0; Index < Count; Index++)
+    {
+        if (HalpArm64MsiRouteCache[Index].Vector == Vector)
+        {
+            HalpArm64MsiRouteCache[Index].Address = Address;
+            HalpArm64MsiRouteCache[Index].Data = Data;
+            return;
+        }
+    }
+
+    Index = InterlockedIncrement(&HalpArm64MsiRouteCount) - 1;
+    if (Index < HALP_ARM64_MSI_ROUTE_CACHE_SIZE)
+    {
+        HalpArm64MsiRouteCache[Index].Address = Address;
+        HalpArm64MsiRouteCache[Index].Data = Data;
+        KeMemoryBarrier();
+        HalpArm64MsiRouteCache[Index].Vector = Vector;
+    }
+}
+
+NTSTATUS
+NTAPI
+HalpArm64QueryMsiRoute(
+    _In_ ULONG Vector,
+    _Out_ PULONGLONG Address,
+    _Out_ PULONG Data)
+{
+    LONG Index;
+    LONG Count = HalpArm64MsiRouteCount;
+
+    if (Count > HALP_ARM64_MSI_ROUTE_CACHE_SIZE)
+        Count = HALP_ARM64_MSI_ROUTE_CACHE_SIZE;
+
+    for (Index = 0; Index < Count; Index++)
+    {
+        if (HalpArm64MsiRouteCache[Index].Vector == Vector)
+        {
+            *Address = HalpArm64MsiRouteCache[Index].Address;
+            *Data = HalpArm64MsiRouteCache[Index].Data;
+            return STATUS_SUCCESS;
+        }
+    }
+
+    return STATUS_NOT_FOUND;
+}
+
 BOOLEAN
 NTAPI
 HalGetMsiMessageAddress(
@@ -1967,6 +2037,8 @@ HalGetMsiMessageAddress(
     *AddressLow = (ULONG)(Address & 0xFFFFFFFFu);
     if (AddressHigh) *AddressHigh = (ULONG)(Address >> 32);
     *Data = (USHORT)Vector32;
+
+    HalpArm64RecordMsiRoute(Vector32, Address, Vector32);
 
     return TRUE;
 }
@@ -2027,6 +2099,7 @@ HalGetMsiMessageAddressEx(
 
             DPRINT1("[arm64][HAL] HalGetMsiMessageAddressEx: GICv2m fallback Vec=%llu -> SPI=%u Addr=0x%llx\n",
                     Vector, HalpGicMsiSpiBase + SpiOffset, GicV2mAddress);
+            HalpArm64RecordMsiRoute((ULONG)Vector, GicV2mAddress, HalpGicMsiSpiBase + SpiOffset);
             return TRUE;
         }
         DPRINT1("[arm64][HAL] HalGetMsiMessageAddressEx: ITS not present, no GICv2m fallback\n");
@@ -2080,6 +2153,7 @@ HalGetMsiMessageAddressEx(
 
     DPRINT1("[arm64][HAL] HalGetMsiMessageAddressEx: SUCCESS LPI=%lu MsiAddr=0x%llx Data=0x%x\n",
             Lpi, MsiAddress.QuadPart, (unsigned)*Data);
+    HalpArm64RecordMsiRoute((ULONG)Vector, (ULONGLONG)MsiAddress.QuadPart, MsiData);
     return TRUE;
 }
 
@@ -2863,8 +2937,18 @@ HalpPsciCpuOn(
     _In_ ULONGLONG ContextId)
 {
     LONG Result;
+    ULONGLONG PendingIsr;
 
-    DPRINT1("[arm64][HAL] PSCI CPU_ON: target=0x%llx entry=0x%llx ctx=0x%llx %s\n",
+    __asm__ __volatile__("dsb sy" ::: "memory");
+    __asm__ __volatile__("mrs %0, isr_el1" : "=r"(PendingIsr));
+    if (PendingIsr & (1ULL << 8))
+    {
+        DPRINT1("[arm64][HAL] PSCI CPU_ON aborted: SError pending (ISR_EL1=0x%llx)\n",
+                PendingIsr);
+        return -1;
+    }
+
+    DPRINT("[arm64][HAL] PSCI CPU_ON: target=0x%llx entry=0x%llx ctx=0x%llx %s\n",
             TargetMpidr, EntryPoint, ContextId,
             HalpArm64PsciInfo.UseHvc ? "HVC" : "SMC");
 
@@ -5439,7 +5523,7 @@ HalInitializeProcessor(
             HalpWriteIccSre(Sre);
             __asm__ __volatile__("isb" ::: "memory");
 
-            HalpWriteIccPmr(0x00);
+            HalpArm64SetPmrExact(HIGH_LEVEL);
 
             /* Binary point = 0 for finest priority grouping */
             HalpWriteIccBpr1(0);
@@ -5576,6 +5660,14 @@ HalRequestIpi(
     HalpArm64SendSgi(TargetSet, HAL_ARM64_SGI_IPI);
 }
 
+VOID
+NTAPI
+HalRequestDebugWakeIpi(
+    _In_ KAFFINITY TargetSet)
+{
+    HalpArm64SendSgi(TargetSet, HAL_ARM64_SGI_FREEZE);
+}
+
 ARC_STATUS
 NTAPI
 HalSetEnvironmentVariable(
@@ -5688,7 +5780,7 @@ HalStartNextProcessor(
         return FALSE;
     }
 
-    DPRINT1("[arm64][HAL] HalStartNextProcessor: starting CPU %lu (MPIDR 0x%llx)\n",
+    DPRINT("[arm64][HAL] HalStartNextProcessor: starting CPU %lu (MPIDR 0x%llx)\n",
             ProcessorNumber, TargetMpidr);
 
     /*
@@ -5753,7 +5845,7 @@ HalStartNextProcessor(
     {
         if (HalpArm64WaitForApSync(5000))
         {
-            DPRINT1("[arm64][HAL] HalStartNextProcessor: CPU %lu started and synced\n",
+            DPRINT("[arm64][HAL] HalStartNextProcessor: CPU %lu started and synced\n",
                     ProcessorNumber);
         }
         else

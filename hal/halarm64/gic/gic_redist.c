@@ -29,6 +29,7 @@
  *   - Linux kernel drivers/irqchip/irq-gic-v3.c
  */
 
+#define NDEBUG
 #include "gic_internal.h"
 
 /*
@@ -537,7 +538,7 @@ HalpInitGicRedistributor(
         return;
     }
 
-    DPRINT1("[arm64][GICR] Initializing redistributor for CPU %lu at 0x%p\n", Cpu, (PVOID)Base);
+    DPRINT("[arm64][GICR] Initializing redistributor for CPU %lu at 0x%p\n", Cpu, (PVOID)Base);
 
     /*
      * Read GICR_TYPER to discover capabilities and update global flags.
@@ -587,7 +588,8 @@ HalpInitGicRedistributor(
 
     if (Spins == 0)
     {
-        DPRINT1("[arm64][GICR] Warning: ChildrenAsleep did not clear for CPU %lu\n", Cpu);
+        DPRINT1("[arm64][GICR] Warning: ChildrenAsleep did not clear for CPU %lu (WAKER=0x%lx)\n",
+                Cpu, *Waker);
     }
 
     /*
@@ -613,7 +615,7 @@ HalpInitGicRedistributor(
     }
 
     *HalpMmio(SgiBase, GICR_IPRIORITYR) =
-        0xD0000000u |
+        ((ULONG)HAL_ARM64_SGI_FREEZE_PRIORITY << 24) |
         ((ULONG)HAL_ARM64_SGI_DPC_PRIORITY << 16) |
         ((ULONG)HAL_ARM64_SGI_APC_PRIORITY << 8) |
         (ULONG)HAL_ARM64_SGI_IPI_PRIORITY;
@@ -621,7 +623,8 @@ HalpInitGicRedistributor(
     *HalpMmio(SgiBase, GICR_ISENABLER0) =
         (1u << HAL_ARM64_SGI_IPI) |
         (1u << HAL_ARM64_SGI_APC) |
-        (1u << HAL_ARM64_SGI_DPC);
+        (1u << HAL_ARM64_SGI_DPC) |
+        (1u << HAL_ARM64_SGI_FREEZE);
 
     /* Memory barrier before enabling interrupts */
     __asm__ __volatile__("dsb sy" ::: "memory");
@@ -654,11 +657,18 @@ HalpInitGicRedistributor(
         }
         else
         {
-            DPRINT1("[arm64][GICR] Warning: Failed to program LPI tables for CPU %lu\n", Cpu);
+            DPRINT("[arm64][GICR] Warning: Failed to program LPI tables for CPU %lu\n", Cpu);
         }
     }
 
-    DPRINT1("[arm64][GICR] Redistributor initialized for CPU %lu\n", Cpu);
+    DPRINT("[arm64][GICR] Redistributor initialized for CPU %lu\n", Cpu);
+
+    DPRINT("[arm64][GICR] CPU %lu readback: WAKER=0x%lx ISEN0=0x%lx IGRP0=0x%lx CTLR=0x%lx\n",
+            Cpu,
+            *HalpMmio(Base, GICR_WAKER),
+            *HalpMmio(SgiBase, GICR_ISENABLER0),
+            *HalpMmio(SgiBase, GICR_IGROUPR0),
+            *HalpMmio(Base, GICR_CTLR));
 }
 
 /*
