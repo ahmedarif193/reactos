@@ -584,6 +584,9 @@ NTAPI
 KeStartAllProcessors(
     VOID)
 {
+#ifndef CONFIG_SMP
+    return;
+#else
     PVOID KernelStack;
     PVOID DPCStack;
     PARM64_APINFO APInfo;
@@ -602,6 +605,15 @@ KeStartAllProcessors(
      *
      * The HAL handles the actual PSCI interaction and trampoline setup.
      */
+
+    {
+        extern ULONG64 KiArm64BootSErrorDisr;
+        if (KiArm64BootSErrorDisr != 0)
+        {
+            DPRINT1("[arm64] Boot-latched SError consumed at KeInitExceptions: DISR_EL1=0x%llx\n",
+                    KiArm64BootSErrorDisr);
+        }
+    }
 
     /* Start with the system maximum processor count */
     MaximumProcessors = MAXIMUM_PROCESSORS;
@@ -700,7 +712,7 @@ KeStartAllProcessors(
             KeLoaderBlock->u.Arm64.PanicStack = 0;
             KeLoaderBlock->u.Arm64.InterruptStack = (ULONG_PTR)DPCStack;
 
-            DPRINT1("[arm64] KeStartAllProcessors: Attempting to start CPU %lu\n",
+            DPRINT("[arm64] KeStartAllProcessors: Attempting to start CPU %lu\n",
                     ProcessorCount);
 
             /* Call HAL to start the processor */
@@ -726,12 +738,19 @@ KeStartAllProcessors(
                     DPRINT1("[arm64] KeStartAllProcessors: CPU %lu AP handshake timeout (Prcb still set)\n",
                             ProcessorCount);
                     KeLoaderBlock->Prcb = 0; /* Reset for next attempt */
+                    APInfo = NULL;
+                    KernelStack = NULL;
+                    DPCStack = NULL;
                     break;
                 }
             }
 
             DPRINT1("[arm64] KeStartAllProcessors: CPU %lu started successfully\n",
                     ProcessorCount);
+
+            APInfo = NULL;
+            KernelStack = NULL;
+            DPCStack = NULL;
         }
     }
 
@@ -777,7 +796,12 @@ KeStartAllProcessors(
         /* Update system process and all its threads */
         if (PsInitialSystemProcess != NULL)
         {
-            KAFFINITY OldAffinity = PsInitialSystemProcess->Pcb.Affinity;
+            KLOCK_QUEUE_HANDLE LockHandle;
+            KAFFINITY OldAffinity;
+
+            KiAcquireProcessLockRaiseToSynch(&PsInitialSystemProcess->Pcb, &LockHandle);
+
+            OldAffinity = PsInitialSystemProcess->Pcb.Affinity;
             PsInitialSystemProcess->Pcb.Affinity = FullAffinity;
 
             /* Walk all threads in the System process and update their affinity */
@@ -793,10 +817,11 @@ KeStartAllProcessors(
                 }
             }
 
+            KiReleaseProcessLock(&LockHandle);
+
             DPRINT1("[arm64] KeStartAllProcessors: System process affinity 0x%Ix -> 0x%Ix\n",
                     OldAffinity, FullAffinity);
         }
     }
-
-    KiArm64SmpStress();
+#endif
 }

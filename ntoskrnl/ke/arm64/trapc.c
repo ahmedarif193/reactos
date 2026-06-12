@@ -1107,7 +1107,9 @@ KiArm64BugCheckSynchronousException(
             for (Depth = 0; Depth < 8; Depth++)
             {
                 if (((ULONG_PTR)FpWalk < (ULONG_PTR)MmSystemRangeStart) ||
-                    ((ULONG_PTR)FpWalk & 0x7))
+                    ((ULONG_PTR)FpWalk & 0x7) ||
+                    !MmIsAddressValid(FpWalk) ||
+                    !MmIsAddressValid(FpWalk + 1))
                 {
                     break;
                 }

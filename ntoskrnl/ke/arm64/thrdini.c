@@ -49,13 +49,6 @@ KiRetireDpcListInDpcStack(
     _In_opt_ PVOID DpcStack);
 
 static
-BOOLEAN
-KiArm64ShouldTraceIdle(VOID)
-{
-    return FALSE;
-}
-
-static
 VOID
 KiArm64SetupStartFrame(
     _Inout_ PKSTART_FRAME StartFrame,
@@ -182,6 +175,8 @@ KiIdleLoop(VOID)
     }
 #endif
 
+    __asm__ __volatile__("msr daifclr, #0x4" ::: "memory");
+
     /* NT contract: the idle thread runs at DISPATCH_LEVEL; normalize from the boot (HIGH_LEVEL) or AP entry state */
     if (KeGetCurrentIrql() > DISPATCH_LEVEL) KeLowerIrql(DISPATCH_LEVEL);
     if (KeGetCurrentIrql() < DISPATCH_LEVEL) KfRaiseIrql(DISPATCH_LEVEL);
@@ -191,11 +186,12 @@ KiIdleLoop(VOID)
         /* Close the interrupt window so the work check and wfi are atomic */
         _disable();
 
-        __asm__ __volatile__("dmb ishld" ::: "memory");
+        Prcb->Sleeping = TRUE;
+        __asm__ __volatile__("dmb ish" ::: "memory");
 
         if (Prcb->DpcData[0].DpcQueueDepth || Prcb->TimerRequest || Prcb->DeferredReadyListHead.Next || Prcb->DpcInterruptRequested)
         {
-            if (KiArm64ShouldTraceIdle()) DbgPrintEx(DPFLTR_DEFAULT_ID, DPFLTR_ERROR_LEVEL, "[arm64][IDLE] dispatch work: DpcDepth=%lu TimerReq=%p Deferred=%p DpcReq=%u Next=%p\n", Prcb->DpcData[0].DpcQueueDepth, Prcb->TimerRequest, Prcb->DeferredReadyListHead.Next, Prcb->DpcInterruptRequested, Prcb->NextThread);
+            Prcb->Sleeping = FALSE;
 
             HalClearSoftwareInterrupt(DISPATCH_LEVEL);
             Prcb->DpcInterruptRequested = FALSE;
@@ -219,6 +215,9 @@ KiIdleLoop(VOID)
             PKTHREAD OldThread = Prcb->CurrentThread;
             PKTHREAD NewThread = Prcb->NextThread;
 
+            Prcb->Sleeping = FALSE;
+            InterlockedAnd64((PLONG64)&KiIdleSummary, (LONG64)~Prcb->SetMember);
+
             Prcb->NextThread = NULL;
             Prcb->CurrentThread = NewThread;
             NewThread->State = Running;
@@ -235,84 +234,15 @@ KiIdleLoop(VOID)
 
         /* WFI wakes on a pending interrupt even with DAIF.I masked; unmasking afterwards takes it immediately */
         __asm__ __volatile__("wfi" ::: "memory");
+        Prcb->Sleeping = FALSE;
+
+        if (Prcb->IpiFrozen == IPI_FROZEN_STATE_TARGET_FREEZE)
+        {
+            KiProcessorFreezeHandler(NULL, NULL);
+        }
+
         _enable();
     }
-}
-
-/*
- * Debug trace function called from assembly at key points.
- * Uses DbgPrintEx which should work regardless of NDEBUG.
- */
-VOID
-FASTCALL
-KiDebugTracePoint(
-    _In_ ULONG Point,
-    _In_ ULONG64 Value1,
-    _In_ ULONG64 Value2)
-{
-    UNREFERENCED_PARAMETER(Point);
-    UNREFERENCED_PARAMETER(Value1);
-    UNREFERENCED_PARAMETER(Value2);
-}
-
-/*
- * Debug function to dump KSWITCH_FRAME contents before returning.
- * Called from assembly to verify stack frame integrity.
- */
-VOID
-FASTCALL
-KiDebugDumpSwitchFrame(
-    _In_ PVOID StackPointer,
-    _In_ ULONG64 SwLrValue)
-{
-    /* Disable verbose logging to reduce log spam - only log on errors */
-    UNREFERENCED_PARAMETER(StackPointer);
-    UNREFERENCED_PARAMETER(SwLrValue);
-
-#if 0  /* Enable for detailed context switch debugging */
-    PKSWITCH_FRAME Frame = (PKSWITCH_FRAME)StackPointer;
-    PKPRCB Prcb = KeGetCurrentPrcb();
-    PKTHREAD IdleThread = Prcb ? Prcb->IdleThread : NULL;
-    PKTHREAD CurrentThread = Prcb ? Prcb->CurrentThread : NULL;
-
-    DbgPrintEx(DPFLTR_DEFAULT_ID, DPFLTR_ERROR_LEVEL,
-               "[KiDebugDumpSwitchFrame] SP=%p SwLr=0x%llx\n",
-               StackPointer, SwLrValue);
-
-    DbgPrintEx(DPFLTR_DEFAULT_ID, DPFLTR_ERROR_LEVEL,
-               "[KiDebugDumpSwitchFrame] CurrentThread=%p IdleThread=%p IsIdle=%d\n",
-               CurrentThread, IdleThread, (CurrentThread == IdleThread) ? 1 : 0);
-
-    DbgPrintEx(DPFLTR_DEFAULT_ID, DPFLTR_ERROR_LEVEL,
-               "[KiDebugDumpSwitchFrame] Frame->Lr=0x%llx Frame->ReturnAddress=0x%llx ApcBypass=%u\n",
-               Frame->Lr, Frame->ReturnAddress, Frame->ApcBypass);
-
-    DbgPrintEx(DPFLTR_DEFAULT_ID, DPFLTR_ERROR_LEVEL,
-               "[KiDebugDumpSwitchFrame] X19=0x%llx X20=0x%llx Fp=0x%llx\n",
-               Frame->X19, Frame->X20, Frame->Fp);
-#endif
-}
-
-/*
- * Debug function called at .Lrestore_context to confirm we reached it.
- */
-VOID
-FASTCALL
-KiDebugRestoreContext(
-    _In_ PVOID StackPointer)
-{
-    UNREFERENCED_PARAMETER(StackPointer);
-}
-
-/*
- * Debug function called right before ret x9 to confirm final return.
- */
-VOID
-FASTCALL
-KiDebugBeforeReturn(
-    _In_ ULONG64 ReturnAddr)
-{
-    UNREFERENCED_PARAMETER(ReturnAddr);
 }
 
 BOOLEAN
@@ -327,31 +257,6 @@ KiSwapContextResume(
 
     ASSERT(OldThread != NULL);
     ASSERT(NewThread != NULL);
-
-    if (KiArm64ShouldTraceIdle())
-    {
-        DbgPrintEx(DPFLTR_DEFAULT_ID,
-                   DPFLTR_ERROR_LEVEL,
-                   "[arm64][CTX] Resume entry: WaitIrql=%u CurIrql=%u Old=%p(S=%u,P=%d,Busy=%u) New=%p(S=%u,P=%d,Busy=%u)\n",
-                   WaitIrql,
-                   KeGetCurrentIrql(),
-                   OldThread,
-                   OldThread->State,
-                   OldThread->Priority,
-#if (NTDDI_VERSION >= NTDDI_WIN7)
-                   0,
-#else
-                   OldThread->SwapBusy,
-#endif
-                   NewThread,
-                   NewThread->State,
-                   NewThread->Priority,
-#if (NTDDI_VERSION >= NTDDI_WIN7)
-                   0);
-#else
-                   NewThread->SwapBusy);
-#endif
-    }
 
     Prcb = KeGetCurrentPrcb();
 
@@ -399,12 +304,6 @@ KiSwapContextResume(
     {
         KiSwapProcess(NewProcess, OldProcess);
 
-        if (KiArm64ShouldTraceIdle())
-        {
-            DbgPrintEx(DPFLTR_DEFAULT_ID,
-                       DPFLTR_ERROR_LEVEL,
-                       "[arm64][CTX] Resume after KiSwapProcess\n");
-        }
     }
 
     /*
@@ -434,41 +333,12 @@ KiSwapContextResume(
         !NewThread->SpecialApcDisable &&
         !WaitIrql)
     {
-        if (KiArm64ShouldTraceIdle())
-        {
-            DbgPrintEx(DPFLTR_DEFAULT_ID,
-                       DPFLTR_ERROR_LEVEL,
-                       "[arm64][CTX] Resume exit: return TRUE for APC delivery\n");
-        }
         return TRUE;
     }
 
     if (NewThread->ApcState.KernelApcPending)
     {
-        if (KiArm64ShouldTraceIdle())
-        {
-            DbgPrintEx(DPFLTR_DEFAULT_ID,
-                       DPFLTR_ERROR_LEVEL,
-                       "[arm64][CTX] Resume: New thread has KernelApcPending, WaitIrql=%u\n",
-                       WaitIrql);
-        }
-
         HalRequestSoftwareInterrupt(APC_LEVEL);
-    }
-
-    if (KiArm64ShouldTraceIdle())
-    {
-        ULONG64 TpidrEl1;
-
-        __asm__ __volatile__("mrs %0, tpidr_el1" : "=r"(TpidrEl1));
-
-        DbgPrintEx(DPFLTR_DEFAULT_ID,
-                   DPFLTR_ERROR_LEVEL,
-                   "[arm64][CTX] Resume exit: return FALSE CurThread=%p tpidr=%p pcr=%p fallbackThread=%p\n",
-                   KeGetCurrentThread(),
-                   (PVOID)(ULONG_PTR)TpidrEl1,
-                   KeArm64CurrentPcr,
-                   KeArm64CurrentThread);
     }
 
     return FALSE;
@@ -507,6 +377,8 @@ KiDispatchInterrupt(VOID)
 
         OldThread = Prcb->CurrentThread;
         NewThread = Prcb->NextThread;
+
+        KiSetThreadSwapBusy(OldThread);
 
         Prcb->NextThread = NULL;
         Prcb->CurrentThread = NewThread;

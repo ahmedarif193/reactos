@@ -93,8 +93,7 @@ KiThreadStartup:
      * First, skip past the KSWITCH_FRAME to point SP at KSTART_FRAME.
      */
 
-    msr     daifset, #0x4
-    msr     daifclr, #0xB
+    msr     daifclr, #0xF
 
     add     sp, sp, #KSWITCH_FRAME_LENGTH
 
@@ -309,6 +308,8 @@ KiSwapContextInternal:
     b       .Lswapbusy_wait
 
 .Lswapbusy_clear:
+    dmb     ishld
+
     /* Record the wait IRQL in the outgoing switch frame */
     strb    w0, [sp, #SwApcBypass]
 
