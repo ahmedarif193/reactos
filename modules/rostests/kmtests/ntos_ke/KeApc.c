@@ -33,13 +33,13 @@ VOID
  * state reached through the public critical/guarded region APIs. */
 #define CheckApcs(KernelApcsDisabled, SpecialApcsDisabled, AllApcsDisabled, Irql) do    \
 {                                                                                       \
-    /* KeAreApcsDisabled treats any non-zero counter as disabled. */                    \
-    ok_eq_bool(KeAreApcsDisabled(), (LONG)(KernelApcsDisabled) != 0 ||                  \
-                                    (LONG)(SpecialApcsDisabled) != 0);                  \
+    ok_eq_bool(KeAreApcsDisabled(),                                                     \
+               (KmtKernelApcBaseline + (LONG)(KernelApcsDisabled)) != 0 ||              \
+               (KmtSpecialApcBaseline + (LONG)(SpecialApcsDisabled)) != 0);             \
     /* KeAreAllApcsDisabled depends on SpecialApcDisable and IRQL. */                   \
     if (pKeAreAllApcsDisabled)                                                          \
         ok_eq_bool(pKeAreAllApcsDisabled(),                                             \
-                   (LONG)(SpecialApcsDisabled) != 0 ||                                  \
+                   (KmtSpecialApcBaseline + (LONG)(SpecialApcsDisabled)) != 0 ||        \
                    ((Irql) >= APC_LEVEL));                                              \
     /* i386 NT 5.x reports POWER_LEVEL (30) after                         \
      * KeRaiseIrql(HIGH_LEVEL=31); all other configs report HIGH_LEVEL.    \
@@ -57,6 +57,9 @@ VOID
     UNREFERENCED_PARAMETER(AllApcsDisabled);                                            \
 } while (0)
 
+static LONG KmtKernelApcBaseline = 0;
+static LONG KmtSpecialApcBaseline = 0;
+
 START_TEST(KeApc)
 {
     KIRQL Irql;
@@ -72,6 +75,11 @@ START_TEST(KeApc)
     }
 
     Thread = KeGetCurrentThread();
+
+    if (pKeAreAllApcsDisabled && pKeAreAllApcsDisabled())
+        KmtSpecialApcBaseline = -1;
+    else if (KeAreApcsDisabled())
+        KmtKernelApcBaseline = -1;
 
     CheckApcs(0, 0, FALSE, PASSIVE_LEVEL);
 

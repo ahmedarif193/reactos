@@ -18,7 +18,7 @@
  *   ThreadedDpcObject = 24
  * The KDPC.Type byte is initialized by KeInitializeThreadedDpc to
  * ThreadedDpcObject so the dispatcher routes it to the worker thread. */
-#define KMT_THREADED_DPC_TYPE 24
+#define KMT_THREADED_DPC_TYPE (GetNTVersion() >= _WIN32_WINNT_WIN10 ? 26 : 24)
 #define KMT_DPC_OBJECT_TYPE   19
 
 typedef VOID (NTAPI *PKE_INIT_THREADED_DPC)(
