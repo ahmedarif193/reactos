@@ -28,6 +28,8 @@ static VOID    (FASTCALL *pExiAcquireFastMutex)(IN OUT PFAST_MUTEX FastMutex);
 static VOID    (FASTCALL *pExiReleaseFastMutex)(IN OUT PFAST_MUTEX FastMutex);
 static BOOLEAN (FASTCALL *pExiTryToAcquireFastMutex)(IN OUT PFAST_MUTEX FastMutex);
 
+static BOOLEAN KmtFmApcBaseline = FALSE;
+
 #define CheckMutex(Mutex, ExpectedCount, ExpectedOwner,                 \
                    ExpectedContention, ExpectedOldIrql,                 \
                    ExpectedIrql) do                                     \
@@ -39,7 +41,7 @@ static BOOLEAN (FASTCALL *pExiTryToAcquireFastMutex)(IN OUT PFAST_MUTEX FastMute
     ok_eq_ulong((Mutex)->Contention, ExpectedContention);               \
     if (GetNTVersion() >= _WIN32_WINNT_VISTA)                           \
         ok_eq_ulong((Mutex)->OldIrql, (ULONG)ExpectedOldIrql);          \
-    ok_bool_false(KeAreApcsDisabled(), "KeAreApcsDisabled returned");   \
+    ok_eq_bool(KeAreApcsDisabled(), KmtFmApcBaseline);                  \
     ok_irql(ExpectedIrql);                                              \
 } while (0)
 
@@ -339,6 +341,8 @@ START_TEST(ExFastMutex)
 {
     FAST_MUTEX Mutex;
     KIRQL Irql;
+
+    KmtFmApcBaseline = KeAreApcsDisabled();
 
     pExEnterCriticalRegionAndAcquireFastMutexUnsafe = KmtGetSystemRoutineAddress(L"ExEnterCriticalRegionAndAcquireFastMutexUnsafe");
     pExReleaseFastMutexUnsafeAndLeaveCriticalRegion = KmtGetSystemRoutineAddress(L"ExReleaseFastMutexUnsafeAndLeaveCriticalRegion");

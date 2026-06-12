@@ -146,3 +146,48 @@ START_TEST(HalArm64Layout)
     HalArm64LayoutCheck();
 #endif
 }
+
+START_TEST(HalArm64Stage1)
+{
+#ifdef _M_ARM64
+    ok(HALPRIVATEDISPATCH->Version > 0u, "HalPrivateDispatchTable.Version=%u\n", HALPRIVATEDISPATCH->Version);
+#endif
+}
+
+START_TEST(HalArm64Stage2)
+{
+#ifdef _M_ARM64
+    ULONG64 Cntfrq = ReadCntfrqEl0();
+    ULONG64 Cnt = ReadCntvctEl0();
+    ok(Cntfrq != 0, "cntfrq zero\n");
+    ok(Cnt != 0, "cntvct zero\n");
+#endif
+}
+
+START_TEST(HalArm64Stage3)
+{
+#ifdef _M_ARM64
+    UNICODE_STRING Name;
+    PVOID Routine;
+    RtlInitUnicodeString(&Name, L"KeQueryPerformanceCounter");
+    Routine = MmGetSystemRoutineAddress(&Name);
+    ok(Routine != NULL, "KeQueryPerformanceCounter not found\n");
+#endif
+}
+
+START_TEST(HalArm64Stage4)
+{
+#ifdef _M_ARM64
+    ULONG64 I1 = KeQueryInterruptTime();
+    ok(I1 != 0, "interrupt time zero\n");
+#endif
+}
+
+START_TEST(HalArm64Stage5)
+{
+#ifdef _M_ARM64
+    KeStallExecutionProcessor(10);
+    ok(TRUE, "stall returned\n");
+    ok(HALPRIVATEDISPATCH->HalPciTranslateBusAddress != NULL, "HalPciTranslateBusAddress NULL\n");
+#endif
+}
