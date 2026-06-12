@@ -682,10 +682,10 @@ KiSwapProcess(_Inout_ PKPROCESS NewProcess,
         {
             KAFFINITY Member = Pcr->Prcb.SetMember;
 
-            NewProcess->ActiveProcessors ^= Member;
-            if (OldProcess != NULL)
+            InterlockedOr64((PLONG64)&NewProcess->ActiveProcessors, (LONG64)Member);
+            if ((OldProcess != NULL) && (OldProcess != NewProcess))
             {
-                OldProcess->ActiveProcessors ^= Member;
+                InterlockedAnd64((PLONG64)&OldProcess->ActiveProcessors, (LONG64)~Member);
             }
         }
     }
@@ -1091,6 +1091,32 @@ KiArm64BugCheckSynchronousException(
                            (ULONG)Context->State.ExceptionSyndrome,
                            (PVOID)(ULONG_PTR)Context->State.Elr,
                            (PVOID)(ULONG_PTR)Context->State.FaultAddress);
+        DbgPrintEx(DPFLTR_DEFAULT_ID, DPFLTR_ERROR_LEVEL,
+                   "[arm64] CRASH regs: elr=%p far=%p x0=%p x1=%p lr=%p fp=%p cpu=%lu\n",
+                   (PVOID)(ULONG_PTR)Context->State.Elr,
+                   (PVOID)(ULONG_PTR)Context->State.FaultAddress,
+                   (PVOID)(ULONG_PTR)TrapFrame.X[0],
+                   (PVOID)(ULONG_PTR)TrapFrame.X[1],
+                   (PVOID)(ULONG_PTR)TrapFrame.Lr,
+                   (PVOID)(ULONG_PTR)TrapFrame.Fp,
+                   (ULONG)KeGetCurrentProcessorNumber());
+        {
+            PULONG_PTR FpWalk = (PULONG_PTR)(ULONG_PTR)TrapFrame.Fp;
+            ULONG Depth;
+
+            for (Depth = 0; Depth < 8; Depth++)
+            {
+                if (((ULONG_PTR)FpWalk < (ULONG_PTR)MmSystemRangeStart) ||
+                    ((ULONG_PTR)FpWalk & 0x7))
+                {
+                    break;
+                }
+                DbgPrintEx(DPFLTR_DEFAULT_ID, DPFLTR_ERROR_LEVEL,
+                           "[arm64] CRASH frame[%lu]: ret=%p\n",
+                           Depth, (PVOID)FpWalk[1]);
+                FpWalk = (PULONG_PTR)FpWalk[0];
+            }
+        }
     }
 
 #ifdef KDBG
