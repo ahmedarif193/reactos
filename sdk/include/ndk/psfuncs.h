@@ -223,6 +223,41 @@ PsGetProcessExitStatus(
 );
 
 NTKERNELAPI
+PCHAR
+NTAPI
+PsGetProcessImageFileName(
+    _In_ PEPROCESS Process
+);
+
+NTKERNELAPI
+PVOID
+NTAPI
+PsGetProcessWow64Process(
+    _In_ PEPROCESS Process
+);
+
+NTKERNELAPI
+PVOID
+NTAPI
+PsGetCurrentProcessWow64Process(
+    VOID
+);
+
+NTKERNELAPI
+PEPROCESS
+NTAPI
+PsGetCurrentThreadProcess(
+    VOID
+);
+
+NTKERNELAPI
+HANDLE
+NTAPI
+PsGetCurrentThreadProcessId(
+    VOID
+);
+
+NTKERNELAPI
 ULONG
 NTAPI
 PsGetProcessSessionId(
