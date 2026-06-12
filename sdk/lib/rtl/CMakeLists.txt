@@ -54,6 +54,7 @@ list(APPEND SOURCE
     error.c
     exception.c
     generictable.c
+    hashtable.c
     handle.c
     heap.c
     heapdbg.c
