@@ -439,6 +439,11 @@ KiSetThreadSwapBusy(IN PKTHREAD Thread)
 
     /* Set it ourselves */
     Thread->SwapBusy = TRUE;
+#elif defined(_M_ARM64)
+    /* ARM64 reuses the Running byte as the swap-busy flag; it must be set
+     * here, under the scheduler lock and before the thread is queued, so a
+     * remote CPU cannot resume the thread while this CPU still saves it. */
+    Thread->Running = TRUE;
 #else
     /* Win7+ removed SwapBusy from KTHREAD; swap synchronization is
      * handled through ThreadLock and the dispatcher database lock. */

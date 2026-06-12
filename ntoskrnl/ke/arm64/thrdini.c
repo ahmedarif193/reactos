@@ -213,24 +213,25 @@ KiIdleLoop(VOID)
             continue;
         }
 
+        KiAcquirePrcbLock(Prcb);
         if (Prcb->NextThread)
         {
             PKTHREAD OldThread = Prcb->CurrentThread;
             PKTHREAD NewThread = Prcb->NextThread;
 
-            _enable();
-
-            if (KiArm64ShouldTraceIdle()) DbgPrintEx(DPFLTR_DEFAULT_ID, DPFLTR_ERROR_LEVEL, "[arm64][IDLE] swap: Old=%p OldPri=%d New=%p NewPri=%d\n", OldThread, OldThread ? OldThread->Priority : -1, NewThread, NewThread ? NewThread->Priority : -1);
-
             Prcb->NextThread = NULL;
             Prcb->CurrentThread = NewThread;
             NewThread->State = Running;
+
+            KiReleasePrcbLock(Prcb);
+            _enable();
 
             ASSERT(OldThread != NULL);
             KiSwapContext(APC_LEVEL, OldThread);
             if (KeGetCurrentIrql() > DISPATCH_LEVEL) KeLowerIrql(DISPATCH_LEVEL);
             continue;
         }
+        KiReleasePrcbLock(Prcb);
 
         /* WFI wakes on a pending interrupt even with DAIF.I masked; unmasking afterwards takes it immediately */
         __asm__ __volatile__("wfi" ::: "memory");
