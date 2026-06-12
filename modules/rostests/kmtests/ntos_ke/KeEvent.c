@@ -286,7 +286,11 @@ CountThread(
     }
 
     Priority = KeQueryPriorityThread(KeGetCurrentThread());
-    ok_eq_long(Priority, 8L + min(ThreadData->PriorityIncrement, 7));
+    if (GetNTVersion() >= _WIN32_WINNT_WIN10)
+        ok(Priority >= 8L && Priority <= 8L + min(ThreadData->PriorityIncrement, 7),
+           "Priority = %lu, expected 8..%lu\n", Priority, 8L + min(ThreadData->PriorityIncrement, 7));
+    else
+        ok_eq_long(Priority, 8L + min(ThreadData->PriorityIncrement, 7));
 }
 
 static
@@ -324,7 +328,10 @@ TestEventScheduling(
                       0xFE);
         Thread = KmtStartThread(CountThread, ThreadData);
         Priority = KeQueryPriorityThread(KeGetCurrentThread());
-        ok(Priority == 8, "[%lu] Priority = %lu\n", PriorityIncrement, Priority);
+        if (GetNTVersion() >= _WIN32_WINNT_WIN10)
+            ok(Priority >= 8 && Priority <= 15, "[%lu] Priority = %lu\n", PriorityIncrement, Priority);
+        else
+            ok(Priority == 8, "[%lu] Priority = %lu\n", PriorityIncrement, Priority);
         for (i = 1; i <= NUM_SCHED_TESTS; i++)
         {
             Status = KeWaitForSingleObject(&ThreadData->WaitEvent, Executive, KernelMode, FALSE, NULL);
@@ -334,7 +341,10 @@ TestEventScheduling(
             ok_eq_long(PreviousState, 0L);
         }
         Priority = KeQueryPriorityThread(KeGetCurrentThread());
-        ok(Priority == 8, "[%lu] Priority = %lu\n", PriorityIncrement, Priority);
+        if (GetNTVersion() >= _WIN32_WINNT_WIN10)
+            ok(Priority >= 8 && Priority <= min(8 + (LONG)PriorityIncrement, 15), "[%lu] Priority = %lu\n", PriorityIncrement, Priority);
+        else
+            ok(Priority == 8, "[%lu] Priority = %lu\n", PriorityIncrement, Priority);
         KmtFinishThread(Thread, NULL);
 
         for (i = 0; i < NUM_SCHED_TESTS; i++)

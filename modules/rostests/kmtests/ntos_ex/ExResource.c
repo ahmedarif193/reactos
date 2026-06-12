@@ -86,11 +86,13 @@ typedef struct _ERESOURCE_2K3 {
     if (!Reinit) ok_eq_pointer((Res)->ExclusiveWaiters, NULL);                                                  \
     ok_eq_ulongptr((Res)->OwnerThreads[0].OwnerThread, 0);                                                      \
     ok_eq_ulong((Res)->OwnerThreads[0].TableSize, 0LU);                                                         \
-    ok_eq_ulongptr((Res)->OwnerThreads[1].OwnerThread, 0);                                                      \
-    ok_eq_ulong((Res)->OwnerThreads[1].TableSize, 0LU);                                                         \
+    if (GetNTVersion() < _WIN32_WINNT_WIN8) {                                                                   \
+        ok_eq_ulongptr((Res)->OwnerThreads[1].OwnerThread, 0);                                                  \
+        ok_eq_ulong((Res)->OwnerThreads[1].TableSize, 0LU);                                                     \
+    }                                                                                                           \
     ok_eq_ulong((Res)->ContentionCount, 0LU);                                                                   \
-    ok_eq_uint((Res)->NumberOfSharedWaiters, 0);                                                                \
-    ok_eq_uint((Res)->NumberOfExclusiveWaiters, 0);                                                             \
+    ok_eq_ulong(ExGetSharedWaiterCount((PERESOURCE)(Res)), 0LU);                                                \
+    ok_eq_ulong(ExGetExclusiveWaiterCount((PERESOURCE)(Res)), 0LU);                                             \
     ok_eq_pointer((Res)->Address, NULL);                                                                        \
     ok_eq_ulongptr((Res)->SpinLock, 0);                                                                         \
 } while (0)

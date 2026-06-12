@@ -196,7 +196,7 @@ TestPoolQuota(VOID)
            "Allocation %p is badly aligned\n",
            Memory);
         RefCount = GetRefCount(Process);
-        ok_eq_long(RefCount, InitialRefCount);
+        ok_eq_long(RefCount, InitialRefCount + (GetNTVersion() >= _WIN32_WINNT_WIN8 ? 1 : 0));
         ExFreePoolWithTag(Memory, 'tQmK');
         RefCount = GetRefCount(Process);
         ok_eq_long(RefCount, InitialRefCount);

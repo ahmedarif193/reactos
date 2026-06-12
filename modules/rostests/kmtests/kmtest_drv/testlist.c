@@ -15,7 +15,18 @@ KMT_TESTFUNC Test_ExHardError;
 KMT_TESTFUNC Test_ExHardErrorInteractive;
 KMT_TESTFUNC Test_ExInterlocked;
 KMT_TESTFUNC Test_ExPools;
+KMT_TESTFUNC Test_ExCallbackExtra;
+KMT_TESTFUNC Test_ExFastMutexExtra;
+KMT_TESTFUNC Test_ExLookaside;
+KMT_TESTFUNC Test_ExPoolExtra;
+KMT_TESTFUNC Test_ExResourceExtra;
+KMT_TESTFUNC Test_ExTimerExtra;
+KMT_TESTFUNC Test_ExTimeZone;
+KMT_TESTFUNC Test_IoCancelKM;
+KMT_TESTFUNC Test_PsProcessInfo;
+KMT_TESTFUNC Test_RtlStringSupportKM;
 KMT_TESTFUNC Test_ExResource;
+KMT_TESTFUNC Test_ExRundown;
 KMT_TESTFUNC Test_ExSequencedList;
 KMT_TESTFUNC Test_ExSingleList;
 KMT_TESTFUNC Test_ExTimer;
@@ -36,12 +47,21 @@ KMT_TESTFUNC Test_IoEvent;
 KMT_TESTFUNC Test_IoFilesystem;
 KMT_TESTFUNC Test_IoInterrupt;
 KMT_TESTFUNC Test_IoIrp;
+KMT_TESTFUNC Test_ExWorkItem;
 KMT_TESTFUNC Test_IoMdl;
+#if defined(_M_IX86) || defined(_M_AMD64)
+KMT_TESTFUNC Test_IoTimerKM;
+#endif
 KMT_TESTFUNC Test_IoVolume;
 KMT_TESTFUNC Test_KdSystemDebugControl;
 KMT_TESTFUNC Test_KeApc;
 #ifdef _M_ARM64
 KMT_TESTFUNC Test_HalArm64Layout;
+KMT_TESTFUNC Test_HalArm64Stage1;
+KMT_TESTFUNC Test_HalArm64Stage2;
+KMT_TESTFUNC Test_HalArm64Stage3;
+KMT_TESTFUNC Test_HalArm64Stage4;
+KMT_TESTFUNC Test_HalArm64Stage5;
 KMT_TESTFUNC Test_KdArm64Layout;
 KMT_TESTFUNC Test_KeArm64;
 KMT_TESTFUNC Test_KeArm64Dispatcher;
@@ -63,13 +83,32 @@ KMT_TESTFUNC Test_KeDpc;
 KMT_TESTFUNC Test_KeEvent;
 KMT_TESTFUNC Test_KeFloatPointState;
 KMT_TESTFUNC Test_KeGuardedMutex;
+KMT_TESTFUNC Test_CmKeyKM;
+KMT_TESTFUNC Test_EtwRegisterKM;
+KMT_TESTFUNC Test_IoBuildIoctlKM;
+KMT_TESTFUNC Test_IoCsqKM;
+KMT_TESTFUNC Test_IoNullDeviceKM;
+KMT_TESTFUNC Test_ZwDuplicateKM;
+KMT_TESTFUNC Test_ZwFileKM;
+KMT_TESTFUNC Test_KeIpiKM;
 KMT_TESTFUNC Test_KeIrql;
 KMT_TESTFUNC Test_KeMutex;
+KMT_TESTFUNC Test_KeAffinityKM;
+KMT_TESTFUNC Test_KeBugCheckCbKM;
 KMT_TESTFUNC Test_KePcr;
+KMT_TESTFUNC Test_RtlImageKM;
+KMT_TESTFUNC Test_RtlRandomKM;
+KMT_TESTFUNC Test_ZwSystemInfoKM;
+KMT_TESTFUNC Test_KeQueue;
+KMT_TESTFUNC Test_KeSemaphore;
 KMT_TESTFUNC Test_KeProcessor;
 KMT_TESTFUNC Test_KeSpinLock;
 KMT_TESTFUNC Test_KeThreadedDpc;
+KMT_TESTFUNC Test_KeTime;
+KMT_TESTFUNC Test_KeTimer2KM;
+KMT_TESTFUNC Test_MmSecureKM;
 KMT_TESTFUNC Test_KeTimer;
+KMT_TESTFUNC Test_KeWaitMultiple;
 KMT_TESTFUNC Test_KernelType;
 KMT_TESTFUNC Test_MmAllocateContiguousNode;
 KMT_TESTFUNC Test_MmMdl;
@@ -92,6 +131,8 @@ KMT_TESTFUNC Test_ObTypeNoClean;
 KMT_TESTFUNC Test_ObTypes;
 KMT_TESTFUNC Test_PsNotify;
 KMT_TESTFUNC Test_PsQuota;
+KMT_TESTFUNC Test_PsSystemThread;
+KMT_TESTFUNC Test_SeAccessCheckKM;
 KMT_TESTFUNC Test_SeInheritance;
 KMT_TESTFUNC Test_SeLogonSession;
 KMT_TESTFUNC Test_SeQueryInfoToken;
@@ -102,6 +143,17 @@ KMT_TESTFUNC Test_RtlException;
 KMT_TESTFUNC Test_RtlGetVersion;
 KMT_TESTFUNC Test_RtlIntSafe;
 KMT_TESTFUNC Test_RtlIsValidOemCharacter;
+KMT_TESTFUNC Test_MmPhysical;
+KMT_TESTFUNC Test_IoStackKM;
+KMT_TESTFUNC Test_KeCriticalRegionKM;
+KMT_TESTFUNC Test_ObOpenByPointer;
+KMT_TESTFUNC Test_ObSecurityDescKM;
+KMT_TESTFUNC Test_PsNotifyKM;
+KMT_TESTFUNC Test_RtlBitmapKM;
+KMT_TESTFUNC Test_RtlGuidKM;
+KMT_TESTFUNC Test_RtlHashTableKM;
+KMT_TESTFUNC Test_RtlTimeKM;
+KMT_TESTFUNC Test_RtlGenericTableKM;
 KMT_TESTFUNC Test_RtlMemory;
 KMT_TESTFUNC Test_RtlRangeList;
 KMT_TESTFUNC Test_RtlRegistry;
@@ -124,7 +176,15 @@ const KMT_TEST TestList[] =
     { "ExHardErrorInteractive",             Test_ExHardErrorInteractive },
     { "ExInterlocked",                      Test_ExInterlocked },
     { "ExPools",                            Test_ExPools },
+    { "ExLookaside",                        Test_ExLookaside },
+    { "ExCallbackExtra",                    Test_ExCallbackExtra },
+    { "ExFastMutexExtra",                   Test_ExFastMutexExtra },
+    { "ExPoolExtra",                        Test_ExPoolExtra },
+    { "ExResourceExtra",                    Test_ExResourceExtra },
+    { "ExTimerExtra",                       Test_ExTimerExtra },
+    { "ExTimeZone",                         Test_ExTimeZone },
     { "ExResource",                         Test_ExResource },
+    { "ExRundown",                          Test_ExRundown },
     { "ExSequencedList",                    Test_ExSequencedList },
     { "ExSingleList",                       Test_ExSingleList },
     { "ExTimer",                            Test_ExTimer },
@@ -146,12 +206,24 @@ const KMT_TEST TestList[] =
     { "IoFilesystem",                       Test_IoFilesystem },
     { "IoInterrupt",                        Test_IoInterrupt },
     { "IoIrp",                              Test_IoIrp },
+    { "ExWorkItem",                         Test_ExWorkItem },
+    { "IoCancelKM",                         Test_IoCancelKM },
+    { "CmKeyKM",                            Test_CmKeyKM },
+    { "EtwRegisterKM",                      Test_EtwRegisterKM },
+    { "IoBuildIoctlKM",                     Test_IoBuildIoctlKM },
+    { "IoCsqKM",                            Test_IoCsqKM },
+    { "IoNullDeviceKM",                     Test_IoNullDeviceKM },
     { "IoMdl",                              Test_IoMdl },
     { "IoVolume",                           Test_IoVolume },
     { "KdSystemDebugControl",               Test_KdSystemDebugControl },
     { "KeApc",                              Test_KeApc },
 #ifdef _M_ARM64
     { "HalArm64Layout",                     Test_HalArm64Layout },
+    { "HalArm64Stage1",                     Test_HalArm64Stage1 },
+    { "HalArm64Stage2",                     Test_HalArm64Stage2 },
+    { "HalArm64Stage3",                     Test_HalArm64Stage3 },
+    { "HalArm64Stage4",                     Test_HalArm64Stage4 },
+    { "HalArm64Stage5",                     Test_HalArm64Stage5 },
     { "KdArm64Layout",                      Test_KdArm64Layout },
     { "KeArm64",                            Test_KeArm64 },
     { "KeArm64Dispatcher",                  Test_KeArm64Dispatcher },
@@ -168,22 +240,37 @@ const KMT_TEST TestList[] =
     { "KeArm64ThreadProcess",               Test_KeArm64ThreadProcess },
     { "RtlArm64UnwindLayout",               Test_RtlArm64UnwindLayout },
 #endif
+#if defined(_M_IX86) || defined(_M_AMD64)
+    { "IoStackKM",                          Test_IoStackKM },
+    { "IoTimerKM",                          Test_IoTimerKM },
+#endif
+    { "KeAffinityKM",                       Test_KeAffinityKM },
+    { "KeBugCheckCbKM",                     Test_KeBugCheckCbKM },
+    { "KeCriticalRegionKM",                 Test_KeCriticalRegionKM },
     { "KeDeviceQueue",                      Test_KeDeviceQueue },
     { "KeDpc",                              Test_KeDpc },
     { "KeEvent",                            Test_KeEvent },
     { "KeFloatPointState",                  Test_KeFloatPointState },
     { "KeGuardedMutex",                     Test_KeGuardedMutex },
     { "KeIrql",                             Test_KeIrql },
+    { "KeIpiKM",                            Test_KeIpiKM },
     { "KeMutex",                            Test_KeMutex },
     { "KePcr",                              Test_KePcr },
+    { "KeQueue",                            Test_KeQueue },
     { "KeProcessor",                        Test_KeProcessor },
+    { "KeSemaphore",                        Test_KeSemaphore },
     { "KeSpinLock",                         Test_KeSpinLock },
     { "KeThreadedDpc",                      Test_KeThreadedDpc },
+    { "KeTime",                             Test_KeTime },
     { "KeTimer",                            Test_KeTimer },
+    { "KeTimer2KM",                         Test_KeTimer2KM },
+    { "KeWaitMultiple",                     Test_KeWaitMultiple },
     { "KernelType",                         Test_KernelType },
     { "MmAllocateContiguousNode",           Test_MmAllocateContiguousNode },
     { "MmMdl",                              Test_MmMdl },
+    { "MmSecureKM",                         Test_MmSecureKM },
     { "MmSection",                          Test_MmSection },
+    { "MmPhysical",                         Test_MmPhysical },
     { "MmReservedMapping",                  Test_MmReservedMapping },
     { "MmSelfMap",                          Test_MmSelfMap },
     { "NpfsConnect",                        Test_NpfsConnect },
@@ -192,9 +279,11 @@ const KMT_TEST TestList[] =
     { "NpfsReadWrite",                      Test_NpfsReadWrite },
     { "NpfsVolumeInfo",                     Test_NpfsVolumeInfo },
     { "ObHandle",                           Test_ObHandle },
+    { "ObOpenByPointer",                    Test_ObOpenByPointer },
     { "ObQuery",                            Test_ObQuery },
     { "ObReference",                        Test_ObReference },
     { "ObSecurity",                         Test_ObSecurity },
+    { "ObSecurityDescKM",                   Test_ObSecurityDescKM },
     { "ObSymbolicLink",                     Test_ObSymbolicLink },
     { "ObType",                             Test_ObType },
     { "ObTypeClean",                        Test_ObTypeClean },
@@ -202,14 +291,29 @@ const KMT_TEST TestList[] =
     { "ObTypes",                            Test_ObTypes },
     { "PsNotify",                           Test_PsNotify },
     { "PsQuota",                            Test_PsQuota },
+    { "SeAccessCheckKM",                    Test_SeAccessCheckKM },
     { "RtlAvlTreeKM",                       Test_RtlAvlTree },
     { "RtlExceptionKM",                     Test_RtlException },
     { "RtlGetVersion",                      Test_RtlGetVersion },
     { "RtlIntSafeKM",                       Test_RtlIntSafe },
     { "RtlIsValidOemCharacter",             Test_RtlIsValidOemCharacter },
+    { "PsProcessInfo",                      Test_PsProcessInfo },
+    { "PsNotifyKM",                         Test_PsNotifyKM },
+    { "PsSystemThread",                     Test_PsSystemThread },
+    { "RtlBitmapKM",                        Test_RtlBitmapKM },
+    { "RtlGenericTableKM",                  Test_RtlGenericTableKM },
+    { "RtlGuidKM",                          Test_RtlGuidKM },
+    { "RtlImageKM",                         Test_RtlImageKM },
+    { "RtlRandomKM",                        Test_RtlRandomKM },
+    { "ZwDuplicateKM",                      Test_ZwDuplicateKM },
+    { "ZwFileKM",                           Test_ZwFileKM },
+    { "ZwSystemInfoKM",                     Test_ZwSystemInfoKM },
+    { "RtlHashTableKM",                     Test_RtlHashTableKM },
     { "RtlMemoryKM",                        Test_RtlMemory },
     { "RtlRangeList",                       Test_RtlRangeList },
     { "RtlRegistryKM",                      Test_RtlRegistry },
+    { "RtlTimeKM",                          Test_RtlTimeKM },
+    { "RtlStringSupportKM",                 Test_RtlStringSupportKM },
     { "RtlSplayTreeKM",                     Test_RtlSplayTree },
     { "RtlStackKM",                         Test_RtlStack },
     { "RtlStrSafeKM",                       Test_RtlStrSafe },

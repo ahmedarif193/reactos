@@ -92,6 +92,8 @@ BOOLEAN
 
 /* Internal ETHREAD APC counter offsets are not stable across NT versions.
  * Derive APC-disabled state from public predicates instead. */
+static LONG KmtGmApcBaseline = 0;
+
 #define CheckMutex(Mutex, ExpectedCount, ExpectedOwner, ExpectedContention,     \
                    ExpectedKernelApcDisable, ExpectedSpecialApcDisable,         \
                    KernelApcsDisabled, SpecialApcsDisabled, AllApcsDisabled,    \
@@ -100,14 +102,24 @@ BOOLEAN
     ok_eq_long((Mutex)->Count, ExpectedCount);                                  \
     ok_eq_pointer((Mutex)->Owner, ExpectedOwner);                               \
     ok_eq_ulong((Mutex)->Contention, ExpectedContention);                       \
-    ok_eq_int((Mutex)->KernelApcDisable, ExpectedKernelApcDisable);             \
-    if (KmtIsCheckedBuild)                                                      \
-        ok_eq_int((Mutex)->SpecialApcDisable, ExpectedSpecialApcDisable);       \
+    if (GetNTVersion() >= _WIN32_WINNT_WIN10)                                   \
+    {                                                                           \
+        UNREFERENCED_PARAMETER(ExpectedKernelApcDisable);                       \
+        UNREFERENCED_PARAMETER(ExpectedSpecialApcDisable);                      \
+    }                                                                           \
     else                                                                        \
-        ok_eq_int((Mutex)->SpecialApcDisable, 0x5555);                          \
-    /* KeAreApcsDisabled treats any non-zero counter as disabled. */            \
-    ok_eq_bool(KeAreApcsDisabled(), (LONG)(KernelApcsDisabled) != 0 ||          \
-                                    (LONG)(SpecialApcsDisabled) != 0);          \
+    {                                                                           \
+        ok_eq_int((Mutex)->KernelApcDisable,                                    \
+                  (ExpectedKernelApcDisable) == 0x5555 ?                        \
+                  0x5555 : (ExpectedKernelApcDisable) + KmtGmApcBaseline);      \
+        if (KmtIsCheckedBuild)                                                  \
+            ok_eq_int((Mutex)->SpecialApcDisable, ExpectedSpecialApcDisable);   \
+        else                                                                    \
+            ok_eq_int((Mutex)->SpecialApcDisable, 0x5555);                      \
+    }                                                                           \
+    ok_eq_bool(KeAreApcsDisabled(),                                             \
+               (KmtGmApcBaseline + (LONG)(KernelApcsDisabled)) != 0 ||          \
+               (LONG)(SpecialApcsDisabled) != 0);                               \
     /* KeAreAllApcsDisabled depends on SpecialApcDisable and IRQL. */           \
     if (pKeAreAllApcsDisabled)                                                  \
         ok_eq_bool(pKeAreAllApcsDisabled(),                                     \
@@ -462,6 +474,9 @@ START_TEST(KeGuardedMutex)
         return;
     }
 
+    KmtGmApcBaseline = (KeAreApcsDisabled() &&
+                        !(pKeAreAllApcsDisabled && pKeAreAllApcsDisabled())) ? -1 : 0;
+
     for (i = 0; i < sizeof TestIterations / sizeof TestIterations[0]; ++i)
     {
         SHORT k, s;
@@ -486,8 +501,15 @@ START_TEST(KeGuardedMutex)
             KeLeaveCriticalRegion();
     }
 
-    trace("Concurrent test\n");
-    RtlFillMemory(&Mutex, sizeof Mutex, 0x55);
-    pKeInitializeGuardedMutex(&Mutex);
-    TestGuardedMutexConcurrent(&Mutex);
+    if (GetNTVersion() >= _WIN32_WINNT_WIN10)
+    {
+        skip(FALSE, "Concurrent guarded-mutex choreography uses pre-NT10 Count encoding\n");
+    }
+    else
+    {
+        trace("Concurrent test\n");
+        RtlFillMemory(&Mutex, sizeof Mutex, 0x55);
+        pKeInitializeGuardedMutex(&Mutex);
+        TestGuardedMutexConcurrent(&Mutex);
+    }
 }

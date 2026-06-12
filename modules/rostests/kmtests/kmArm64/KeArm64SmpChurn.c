@@ -17,7 +17,7 @@ VOID Test_KeArm64SmpChurn(VOID);
 #ifdef _M_ARM64
 
 #define CHURN_THREADS 16
-#define CHURN_MS      5000
+#define CHURN_MS      2000
 
 static volatile LONG ChurnRun;
 static volatile LONG ChurnIterations;

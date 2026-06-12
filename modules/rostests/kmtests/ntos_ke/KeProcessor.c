@@ -10,8 +10,6 @@
 #define NDEBUG
 #include <debug.h>
 
-#define STALL_SECONDS 10
-
 static
 VOID
 CheckStallDuration(
@@ -21,9 +19,8 @@ CheckStallDuration(
 {
     ULONG i;
     LARGE_INTEGER TimeStart, TimeFinish;
-    LONGLONG ExpectedSeconds, ElapsedSeconds;
+    LONGLONG ExpectedMs, ElapsedMs;
 
-    DPRINT1("Waiting for %d secs with %s...\n", STALL_SECONDS, Description);
     KeQuerySystemTime(&TimeStart);
     for (i = 0; i < Iterations; i++)
     {
@@ -31,19 +28,19 @@ CheckStallDuration(
     }
     KeQuerySystemTime(&TimeFinish);
 
-    ExpectedSeconds = ((LONGLONG)MicroSeconds * Iterations) / 1000000;
-    ElapsedSeconds = (TimeFinish.QuadPart - TimeStart.QuadPart) / 10000000;
-    ok(ElapsedSeconds >= ExpectedSeconds - 1,
-       "%s returned too early: %I64d seconds, expected at least %I64d seconds\n",
-       Description, ElapsedSeconds, ExpectedSeconds - 1);
+    ExpectedMs = ((LONGLONG)MicroSeconds * Iterations) / 1000;
+    ElapsedMs = (TimeFinish.QuadPart - TimeStart.QuadPart) / 10000;
+    ok(ElapsedMs >= ExpectedMs - 50,
+       "%s returned too early: %I64d ms, expected at least %I64d ms\n",
+       Description, ElapsedMs, ExpectedMs - 50);
 }
 
 static VOID KeStallExecutionProcessorTest(VOID)
 {
-    CheckStallDuration("50us stalls", 50, STALL_SECONDS * 1000 * 20);
-    CheckStallDuration("1000us stalls", 1000, STALL_SECONDS * 1000);
-    CheckStallDuration("1us stalls", 1, STALL_SECONDS * 1000 * 1000);
-    CheckStallDuration("one huge stall", STALL_SECONDS * 1000000, 1);
+    CheckStallDuration("50us stalls", 50, 10000);
+    CheckStallDuration("1000us stalls", 1000, 500);
+    CheckStallDuration("1us stalls", 1, 200000);
+    CheckStallDuration("one large stall", 500000, 1);
 }
 
 START_TEST(KeProcessor)

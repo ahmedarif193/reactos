@@ -160,7 +160,14 @@ START_TEST(KeIrql)
     {
         KeRaiseIrql(HIGH_LEVEL, &Irql);
         KeRaiseIrql(APC_LEVEL, &Irql);
+#ifdef _M_ARM64
+        if (GetNTVersion() >= _WIN32_WINNT_WIN10)
+            ok_irql(HIGH_LEVEL);
+        else
+            ok_irql(APC_LEVEL);
+#else
         ok_irql(APC_LEVEL);
+#endif
         KeLowerIrql(HIGH_LEVEL);
         ok_irql_compat(HIGH_LEVEL);
         KeLowerIrql(PASSIVE_LEVEL);

@@ -23,11 +23,15 @@ C_ASSERT(sizeof(KMUTANT) == MUTANT_SIZE * sizeof(ULONG));
 
 /* ETHREAD mutant-list offsets are not stable across NT versions. Check the
  * public mutant state and owner identity instead. */
+static BOOLEAN KmtApcBaseline = FALSE;
+
 #define CheckMutex(Mutex, State, New, ExpectedApcDisable) do {                  \
     PKTHREAD Thread = KeGetCurrentThread();                                     \
     ok_eq_uint((Mutex)->Header.Type, MutantObject);                             \
-    ok_eq_uint((Mutex)->Header.Abandoned, 0x55);                                \
-    ok_eq_uint((Mutex)->Header.Size, MUTANT_SIZE);                              \
+    ok_eq_uint((Mutex)->Header.Abandoned,                                       \
+               GetNTVersion() >= _WIN32_WINNT_WIN10 ? 0 : 0x55);                \
+    ok_eq_uint((Mutex)->Header.Size,                                            \
+               GetNTVersion() >= _WIN32_WINNT_WIN10 ? 0 : MUTANT_SIZE);         \
     /* NT 6.1+ KeInitializeMutant zeros Header.DpcActive; NT 5.x leaves the   \
      * 0x55 pre-init fill pattern. */                                          \
     ok_eq_uint((Mutex)->Header.DpcActive,                                       \
@@ -47,9 +51,11 @@ C_ASSERT(sizeof(KMUTANT) == MUTANT_SIZE * sizeof(ULONG));
         if (New)                                                                \
         {                                                                       \
             ok_eq_pointer((Mutex)->MutantListEntry.Flink,                       \
-                          (PVOID)0x5555555555555555ULL);                        \
+                          GetNTVersion() >= _WIN32_WINNT_WIN10 ?                \
+                          NULL : (PVOID)0x5555555555555555ULL);                 \
             ok_eq_pointer((Mutex)->MutantListEntry.Blink,                       \
-                          (PVOID)0x5555555555555555ULL);                        \
+                          GetNTVersion() >= _WIN32_WINNT_WIN10 ?                \
+                          NULL : (PVOID)0x5555555555555555ULL);                 \
         }                                                                       \
         ok_eq_pointer((Mutex)->OwnerThread, NULL);                              \
     }                                                                           \
@@ -63,7 +69,8 @@ C_ASSERT(sizeof(KMUTANT) == MUTANT_SIZE * sizeof(ULONG));
  * value; KeAreApcsDisabled() is TRUE when either counter is non-zero. */
 #define CheckApcs(KernelApcsDisabled, SpecialApcsDisabled, AllApcsDisabled, Irql) do    \
 {                                                                                       \
-    ok_eq_bool(KeAreApcsDisabled(), (LONG)(KernelApcsDisabled) != 0 ||                  \
+    ok_eq_bool(KeAreApcsDisabled(), KmtApcBaseline ||                                  \
+                                    (LONG)(KernelApcsDisabled) != 0 ||                  \
                                     (LONG)(SpecialApcsDisabled) != 0 ||                 \
                                     ((Irql) >= APC_LEVEL));                             \
     if (pKeAreAllApcsDisabled)                                                          \
@@ -83,6 +90,7 @@ TestMutant(VOID)
     LONG i;
     PKTHREAD Thread = KeGetCurrentThread();
 
+    KmtApcBaseline = KeAreApcsDisabled();
     CheckApcs(0, 0, FALSE, PASSIVE_LEVEL);
     RtlFillMemory(&Mutant, sizeof(Mutant), 0x55);
     KeInitializeMutant(&Mutant, FALSE);
@@ -211,6 +219,7 @@ TestMutex(VOID)
     LONG i;
     PKTHREAD Thread = KeGetCurrentThread();
 
+    KmtApcBaseline = KeAreApcsDisabled();
     CheckApcs(0, 0, FALSE, PASSIVE_LEVEL);
     RtlFillMemory(&Mutex, sizeof(Mutex), 0x55);
     KeInitializeMutex(&Mutex, 0);
