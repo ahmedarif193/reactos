@@ -24,6 +24,13 @@
 #if defined(_M_ARM64)
 #define HALP_ARM64_MSI_DEFAULT_IRQL 4
 
+NTSTATUS
+NTAPI
+HalpArm64QueryMsiRoute(
+    _In_ ULONG Vector,
+    _Out_ PULONGLONG Address,
+    _Out_ PULONG Data);
+
 static KSPIN_LOCK HalpArm64MsiRoutingLock;
 static volatile LONG HalpArm64MsiRoutingLockState;
 static RTL_BITMAP HalpArm64MsiRoutingBitmap;
@@ -316,12 +323,8 @@ HalGetMessageRoutingInfo(
     }
     else
     {
-#if defined(_M_ARM64)
-        return STATUS_NOT_SUPPORTED;
-#else
         if (RoutingInfo->Vector == 0)
             return STATUS_INVALID_PARAMETER;
-#endif
     }
 
     if (RoutingInfo->Vector == 0)
@@ -340,8 +343,21 @@ HalGetMessageRoutingInfo(
     if (RoutingInfo->Irql == 0)
         RoutingInfo->Irql = HalConvertDeviceIdtToIrql(RoutingInfo->Vector);
 #if defined(_M_ARM64)
-    RoutingInfo->MessageAddress.QuadPart = 0;
-    RoutingInfo->MessageData = (USHORT)(RoutingInfo->Vector - HalpArm64MsiRoutingBase);
+    {
+        ULONGLONG MsiAddress;
+        ULONG MsiData;
+
+        if (NT_SUCCESS(HalpArm64QueryMsiRoute(RoutingInfo->Vector, &MsiAddress, &MsiData)))
+        {
+            RoutingInfo->MessageAddress.QuadPart = (LONGLONG)MsiAddress;
+            RoutingInfo->MessageData = (USHORT)MsiData;
+        }
+        else
+        {
+            RoutingInfo->MessageAddress.QuadPart = 0;
+            RoutingInfo->MessageData = (USHORT)(RoutingInfo->Vector - HalpArm64MsiRoutingBase);
+        }
+    }
 #else
     RoutingInfo->MessageAddress.QuadPart = 0xFEE00000ULL |
                                            ((ULONGLONG)TargetInfo.DestinationId << 12);
