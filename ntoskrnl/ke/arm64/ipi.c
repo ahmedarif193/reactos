@@ -131,7 +131,6 @@ KiIpiServiceRoutine(
         if (Prcb->IpiFrozen == IPI_FROZEN_STATE_TARGET_FREEZE)
         {
             KiProcessorFreezeHandler(TrapFrame, ExceptionFrame);
-            return TRUE;
         }
 
         if (InterlockedBitTestAndReset((PLONG)&Prcb->RequestSummary, IPI_APC))
@@ -153,9 +152,8 @@ KiIpiServiceRoutine(
             if (Function != NULL)
             {
                 Function(Argument);
+                InterlockedDecrement(&KiArm64IpiPacket.TargetCount);
             }
-
-            InterlockedDecrement(&KiArm64IpiPacket.TargetCount);
         }
     }
 #else
