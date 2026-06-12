@@ -187,29 +187,6 @@ KiSmpStressDpcPhase(
     }
 }
 
-static
-VOID
-KiSmpStressAffinityPhase(
-    _In_ ULONG Processors)
-{
-    ULONG Cpu;
-
-    for (Cpu = 0; Cpu < Processors; Cpu++)
-    {
-        KeSetSystemAffinityThread((KAFFINITY)1 << Cpu);
-        if (KeGetCurrentProcessorNumber() != Cpu)
-        {
-            KeBugCheckEx(KI_SMP_STRESS_BUGCHECK,
-                         8,
-                         Cpu,
-                         KeGetCurrentProcessorNumber(),
-                         0);
-        }
-    }
-
-    KeRevertToUserAffinityThread();
-}
-
 VOID
 NTAPI
 KiArm64SmpStress(VOID)
@@ -245,31 +222,13 @@ KiArm64SmpStress(VOID)
             break;
         }
 
+        if (KiSmpStressRand() & 1)
         {
-            ULONG Phase = (ULONG)(KiSmpStressRand() % 3);
-            static ULONG PhaseSeen[3];
-
-            if (PhaseSeen[Phase]++ == 0)
-            {
-                DbgPrintEx(DPFLTR_DEFAULT_ID,
-                           DPFLTR_ERROR_LEVEL,
-                           "[arm64][SMPSTRESS] first phase%lu round=%lu\n",
-                           Phase,
-                           Round);
-            }
-
-            switch (Phase)
-            {
-                case 0:
-                    KiSmpStressIpiPhase(Processors);
-                    break;
-                case 1:
-                    KiSmpStressDpcPhase(Processors);
-                    break;
-                default:
-                    KiSmpStressAffinityPhase(Processors);
-                    break;
-            }
+            KiSmpStressIpiPhase(Processors);
+        }
+        else
+        {
+            KiSmpStressDpcPhase(Processors);
         }
 
         Round++;
