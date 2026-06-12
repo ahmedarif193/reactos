@@ -225,6 +225,27 @@ KeQueryInterruptTime(VOID)
 /*
  * @implemented
  */
+ULONGLONG
+NTAPI
+KeQueryInterruptTimePrecise(OUT PULONG64 QpcTimeStamp)
+{
+    *QpcTimeStamp = (ULONG64)KeQueryPerformanceCounter(NULL).QuadPart;
+    return KeQueryInterruptTime();
+}
+
+/*
+ * @implemented
+ */
+VOID
+NTAPI
+KeQuerySystemTimePrecise(OUT PLARGE_INTEGER CurrentTime)
+{
+    KeQuerySystemTime(CurrentTime);
+}
+
+/*
+ * @implemented
+ */
 VOID
 NTAPI
 KeSetTimeIncrement(IN ULONG MaxIncrement,

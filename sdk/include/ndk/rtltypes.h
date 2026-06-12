@@ -818,6 +818,44 @@ typedef struct _RTL_AVL_TABLE
 #endif /* RTL_USE_AVL_TABLES */
 
 //
+// RTL Dynamic Hash Table
+//
+#define RTL_HASH_ALLOCATED_HEADER 0x00000001
+
+typedef struct _RTL_DYNAMIC_HASH_TABLE_ENTRY
+{
+    LIST_ENTRY Linkage;
+    ULONG_PTR Signature;
+} RTL_DYNAMIC_HASH_TABLE_ENTRY, *PRTL_DYNAMIC_HASH_TABLE_ENTRY;
+
+typedef struct _RTL_DYNAMIC_HASH_TABLE_CONTEXT
+{
+    PLIST_ENTRY ChainHead;
+    PLIST_ENTRY PrevLinkage;
+    ULONG_PTR Signature;
+} RTL_DYNAMIC_HASH_TABLE_CONTEXT, *PRTL_DYNAMIC_HASH_TABLE_CONTEXT;
+
+typedef struct _RTL_DYNAMIC_HASH_TABLE_ENUMERATOR
+{
+    RTL_DYNAMIC_HASH_TABLE_ENTRY HashEntry;
+    PLIST_ENTRY ChainHead;
+    ULONG BucketIndex;
+} RTL_DYNAMIC_HASH_TABLE_ENUMERATOR, *PRTL_DYNAMIC_HASH_TABLE_ENUMERATOR;
+
+typedef struct _RTL_DYNAMIC_HASH_TABLE
+{
+    ULONG Flags;
+    ULONG Shift;
+    ULONG TableSize;
+    ULONG Pivot;
+    ULONG DivisorMask;
+    ULONG NumEntries;
+    ULONG NonEmptyBuckets;
+    ULONG NumEnumerators;
+    PVOID Directory;
+} RTL_DYNAMIC_HASH_TABLE, *PRTL_DYNAMIC_HASH_TABLE;
+
+//
 // RTL Compression Buffer
 //
 typedef struct _COMPRESSED_DATA_INFO {

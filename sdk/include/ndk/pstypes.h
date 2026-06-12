@@ -1625,7 +1625,7 @@ typedef struct _EPROCESS
     PVOID LockedPagesList;
     LIST_ENTRY ThreadListHead;
     PVOID SecurityPort;
-#ifdef _M_AMD64
+#if defined(_M_AMD64) || defined(_M_ARM64)
     struct _WOW64_PROCESS *Wow64Process;
 #else
     PVOID PaeTop;

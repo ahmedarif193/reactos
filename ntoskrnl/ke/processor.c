@@ -49,6 +49,15 @@ KeQueryActiveProcessors(VOID)
 
 ULONG
 NTAPI
+KeQueryActiveProcessorCountEx(IN USHORT GroupNumber)
+{
+    if (GroupNumber != 0 && GroupNumber != ALL_PROCESSOR_GROUPS)
+        return 0;
+    return (ULONG)KeNumberProcessors;
+}
+
+ULONG
+NTAPI
 KeQueryMaximumProcessorCount(VOID)
 {
 #ifdef CONFIG_SMP
