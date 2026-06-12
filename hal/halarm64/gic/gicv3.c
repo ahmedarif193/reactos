@@ -26,6 +26,7 @@
  *   - ARM GICv3 Programmer's Guide
  */
 
+#define NDEBUG
 #include "gic_internal.h"
 
 /*
@@ -475,7 +476,7 @@ HalpGicv3RegisterCpu(
 
     KeReleaseSpinLock(&HalpGicAffinityLock, OldIrql);
 
-    DPRINT1("[arm64][GICv3] Registered CPU %lu with MPIDR 0x%llx (online CPUs: %ld)\n",
+    DPRINT("[arm64][GICv3] Registered CPU %lu with MPIDR 0x%llx (online CPUs: %ld)\n",
             CpuIndex, Mpidr, HalpGicOnlineCpuCount);
 }
 

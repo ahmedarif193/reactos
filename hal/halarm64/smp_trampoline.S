@@ -48,13 +48,13 @@
 #define AP_DATA_GICR_BASE_OFF   0x60
 #define AP_DATA_PROGRESS_OFF    0x68
 #define AP_DATA_CPACR_OFF       0x70
-#define AP_DATA_SIZE            0x70
+#define AP_DATA_SIZE            0x78
 
 /*
  * GICv3 Redistributor register offsets
  */
 #define GICR_WAKER              0x014
-#define GICR_WAKER_SLEEP        (1 << 0)
+#define GICR_WAKER_SLEEP        (1 << 1)
 #define GICR_WAKER_CHILDREN     (1 << 2)
 
 /*
@@ -94,6 +94,32 @@ HalpArm64ApTrampolineEntry:
      * Since the trampoline is < 4KB, this always works.
      */
     mov     x20, x0                 /* Save CPU number */
+
+    mrs     x0, CurrentEL
+    lsr     x0, x0, #2
+    cmp     x0, #2
+    b.ne    .Lap_el1_entry
+
+    mov     x0, #0x80000000
+    msr     hcr_el2, x0
+    isb
+
+    mov     x0, #3
+    msr     cnthctl_el2, x0
+    msr     cntvoff_el2, xzr
+    msr     cptr_el2, xzr
+    msr     hstr_el2, xzr
+    msr     mdcr_el2, xzr
+    msr     vttbr_el2, xzr
+
+    mov     x0, #0x3C5
+    msr     spsr_el2, x0
+    adr     x0, .Lap_el1_entry
+    msr     elr_el2, x0
+    isb
+    eret
+
+.Lap_el1_entry:
     adr     x19, HalpArm64ApDataPhys
     ldr     x19, [x19]              /* Load the data structure physical address */
     cbz     x19, .Lap_halt          /* Safety: halt if no data */
