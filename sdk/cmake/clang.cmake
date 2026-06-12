@@ -312,7 +312,7 @@ function(set_entrypoint MODULE ENTRYPOINT)
 endfunction()
 
 function(set_subsystem MODULE SUBSYSTEM)
-    target_link_options(${MODULE} PRIVATE "-Wl,--subsystem,${SUBSYSTEM}:5.01")
+    target_link_options(${MODULE} PRIVATE "-Wl,--subsystem,${SUBSYSTEM}:${_NT_MAJOR}.0${_NT_MINOR}")
 endfunction()
 
 function(set_image_base MODULE IMAGE_BASE)
@@ -322,7 +322,7 @@ endfunction()
 function(set_module_type_toolchain MODULE TYPE)
     # Set the PE image version numbers from the NT OS version ReactOS is based on
     target_link_options(${MODULE} PRIVATE
-        -Wl,--major-image-version,5 -Wl,--minor-image-version,01 -Wl,--major-os-version,5 -Wl,--minor-os-version,01)
+        -Wl,--major-image-version,${_NT_MAJOR} -Wl,--minor-image-version,0${_NT_MINOR} -Wl,--major-os-version,${_NT_MAJOR} -Wl,--minor-os-version,0${_NT_MINOR})
 
     # Clang's _setjmp builtin on x64 lowers to __intrinsic_setjmp which must be
     # statically linked (it captures the caller's frame, so a DLL export won't work).
