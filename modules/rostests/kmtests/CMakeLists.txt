@@ -57,70 +57,114 @@ list(APPEND KMTEST_DRV_SOURCE
     npfs/NpfsReadWrite.c
     npfs/NpfsVolumeInfo.c
     novp_fsrtl/FsRtlRemoveDotsFromPath.c
+    ntos_cm/CmKeyKM.c
     ntos_cm/CmSecurity.c
+    ntos_etw/EtwRegisterKM.c
     ntos_ex/ExCallback.c
+    ntos_ex/ExCallbackExtra.c
     ntos_ex/ExDoubleList.c
     ntos_ex/ExFastMutex.c
+    ntos_ex/ExFastMutexExtra.c
     ntos_ex/ExHardError.c
     ntos_ex/ExInterlocked.c
+    ntos_ex/ExLookaside.c
+    ntos_ex/ExPoolExtra.c
     ntos_ex/ExPools.c
     ntos_ex/ExResource.c
+    ntos_ex/ExResourceExtra.c
+    ntos_ex/ExRundown.c
     ntos_ex/ExSequencedList.c
+    ntos_ex/ExTimeZone.c
     ntos_ex/ExSingleList.c
     ntos_ex/ExTimer.c
+    ntos_ex/ExTimerExtra.c
     ntos_ex/ExUuid.c
+    ntos_ex/ExWorkItem.c
     ntos_fsrtl/FsRtlDissect.c
     ntos_fsrtl/FsRtlExpression.c
     ntos_fsrtl/FsRtlLegal.c
     ntos_fsrtl/FsRtlMcb.c
     ntos_fsrtl/FsRtlTunnel.c
+    ntos_io/IoBuildIoctlKM.c
+    ntos_io/IoCancelKM.c
     ntos_io/IoCreateFile.c
+    ntos_io/IoCsqKM.c
     ntos_io/IoDeviceInterface.c
     ntos_io/IoEvent.c
     ntos_io/IoFilesystem.c
     ntos_io/IoInterrupt.c
     ntos_io/IoIrp.c
+    ntos_io/IoStackKM.c
     ntos_io/IoMdl.c
+    ntos_io/IoNullDeviceKM.c
     ntos_io/IoVolume.c
     ntos_kd/KdSystemDebugControl.c
+    ntos_ke/KeAffinityKM.c
     ntos_ke/KeApc.c
+    ntos_ke/KeBugCheckCbKM.c
     ntos_ke/KeDevQueue.c
+    ntos_ke/KeCriticalRegionKM.c
     ntos_ke/KeDpc.c
     ntos_ke/KeEvent.c
     ntos_ke/KeFloatPointState.c
     ntos_ke/KeGuardedMutex.c
+    ntos_ke/KeIpiKM.c
     ntos_ke/KeIrql.c
     ntos_ke/KeMutex.c
     ntos_ke/KePcr.c
+    ntos_ke/KeQueue.c
     ntos_ke/KeProcessor.c
+    ntos_ke/KeSemaphore.c
     ntos_ke/KeSpinLock.c
     ntos_ke/KeThreadedDpc.c
+    ntos_ke/KeTime.c
     ntos_ke/KeTimer.c
+    ntos_ke/KeTimer2KM.c
+    ntos_ke/KeWaitMultiple.c
     ntos_mm/MmAllocateContiguousNode.c
     ntos_mm/MmMdl.c
+    ntos_mm/MmPhysical.c
     ntos_mm/MmReservedMapping.c
     ntos_mm/MmSelfMap.c
+    ntos_mm/MmSecureKM.c
     ntos_mm/MmSection.c
     ntos_mm/ZwAllocateVirtualMemory.c
+    ntos_zw/ZwDuplicateKM.c
+    ntos_zw/ZwFileKM.c
+    ntos_zw/ZwSystemInfoKM.c
     ntos_mm/ZwCreateSection.c
     ntos_mm/ZwMapViewOfSection.c
     ntos_ob/ObHandle.c
+    ntos_ob/ObOpenByPointer.c
     ntos_ob/ObQuery.c
     ntos_ob/ObReference.c
     ntos_ob/ObSecurity.c
+    ntos_ob/ObSecurityDescKM.c
     ntos_ob/ObSymbolicLink.c
     ntos_ob/ObType.cpp
     ntos_ob/ObTypes.cpp
     ntos_ob/ObWait.c
     ntos_ps/PsNotify.c
+    ntos_ps/PsNotifyKM.c
+    ntos_ps/PsProcessInfo.c
     ntos_ps/PsQuota.c
+    ntos_ps/PsSystemThread.c
+    ntos_se/SeAccessCheck.c
     ntos_se/SeHelpers.c
     ntos_se/SeInheritance.c
     ntos_se/SeLogonSession.c
     ntos_se/SeQueryInfoToken.c
     ntos_se/SeTokenFiltering.c
+    rtl/RtlBitmapKM.c
+    rtl/RtlGenericTableKM.c
+    rtl/RtlGuidKM.c
+    rtl/RtlImageKM.c
+    rtl/RtlHashTableKM.c
+    rtl/RtlTimeKM.c
     rtl/RtlIsValidOemCharacter.c
+    rtl/RtlRandomKM.c
     rtl/RtlRangeList.c
+    rtl/RtlStringSupportKM.c
     ${COMMON_SOURCE}
 
     kmtest_drv/kmtest_drv.rc)
@@ -130,7 +174,8 @@ if(ARCH STREQUAL "i386" OR ARCH STREQUAL "amd64")
         kmtest_drv/vm_detect.S)
     list(APPEND KMTEST_DRV_SOURCE
         ${KMTEST_DRV_ASM}
-        hal/HalPortIo.c)
+        hal/HalPortIo.c
+        ntos_io/IoTimerKM.c)
 endif()
 
 if(ARCH STREQUAL "arm64")
@@ -158,7 +203,7 @@ set_module_type(kmtest_drv kernelmodedriver)
 target_link_libraries(kmtest_drv kmtest_printf chkstk memcmp ntoskrnl_vista ${PSEH_LIB})
 add_importlibs(kmtest_drv ntoskrnl hal)
 add_dependencies(kmtest_drv bugcodes xdk)
-target_compile_definitions(kmtest_drv PRIVATE KMT_KERNEL_MODE NTDDI_VERSION=NTDDI_WS03SP1)
+target_compile_definitions(kmtest_drv PRIVATE KMT_KERNEL_MODE NTDDI_VERSION=${REACTOS_TARGET_NTDDI})
 #add_pch(kmtest_drv include/kmt_test.h)
 add_rostests_file(TARGET kmtest_drv)
 
@@ -214,7 +259,7 @@ target_link_libraries(kmtest ${PSEH_LIB})
 # kmtest/filter.c resolves fltlib.dll at runtime so kmtest_ still starts on
 # NT 5.x systems without Filter Manager.
 add_importlibs(kmtest advapi32 ws2_32 msvcrt kernel32 ntdll)
-target_compile_definitions(kmtest PRIVATE KMT_USER_MODE NTDDI_VERSION=NTDDI_WS03SP1)
+target_compile_definitions(kmtest PRIVATE KMT_USER_MODE NTDDI_VERSION=${REACTOS_TARGET_NTDDI})
 #add_pch(kmtest include/kmt_test.h)
 add_rostests_file(TARGET kmtest)
 
