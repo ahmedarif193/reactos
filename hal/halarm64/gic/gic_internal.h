@@ -140,7 +140,7 @@
 /*
  * GICR_WAKER bit definitions
  */
-#define GICR_WAKER_PROCESSOR_SLEEP  (1u << 0)
+#define GICR_WAKER_PROCESSOR_SLEEP  (1u << 1)
 #define GICR_WAKER_CHILDREN_ASLEEP  (1u << 2)
 
 /*
@@ -162,7 +162,7 @@
 #define GITS_CWRITER        0x0088
 #define GITS_CREADR         0x0090
 #define GITS_BASER          0x0100
-#define GITS_TRANSLATER     0x10000
+#define GITS_TRANSLATER     0x10040
 
 #define HAL_ARM64_GITS_BASER_COUNT  8
 
@@ -190,7 +190,7 @@
 #define GITS_BASER_ADDR_MASK        0x0000FFFFFFFFF000ULL
 
 #define GITS_BASER_TYPE_DEVICE      1
-#define GITS_BASER_TYPE_COLLECTION  2
+#define GITS_BASER_TYPE_COLLECTION  4
 
 /*
  * GITS_CBASER bit definitions
@@ -375,13 +375,15 @@
  * SGI (Software Generated Interrupt) Definitions
  * ============================================================================
  */
-#define HAL_ARM64_SGI_IPI   0
-#define HAL_ARM64_SGI_APC   1
-#define HAL_ARM64_SGI_DPC   2
+#define HAL_ARM64_SGI_IPI    0
+#define HAL_ARM64_SGI_APC    1
+#define HAL_ARM64_SGI_DPC    2
+#define HAL_ARM64_SGI_FREEZE 3
 
-#define HAL_ARM64_SGI_IPI_PRIORITY 0x10
-#define HAL_ARM64_SGI_APC_PRIORITY 0xE0
-#define HAL_ARM64_SGI_DPC_PRIORITY 0xD0
+#define HAL_ARM64_SGI_IPI_PRIORITY    0x10
+#define HAL_ARM64_SGI_APC_PRIORITY    0xE0
+#define HAL_ARM64_SGI_DPC_PRIORITY    0xD0
+#define HAL_ARM64_SGI_FREEZE_PRIORITY 0x00
 
 /*
  * ============================================================================
@@ -573,6 +575,7 @@ typedef struct _HALP_GIC_ITS_NODE
     ULONG MaxDeviceId;              /* Maximum supported DeviceID */
     BOOLEAN HasVlpis;               /* GITS_TYPER.VLPIS */
     BOOLEAN HasVmovp;               /* GITS_TYPER.VMOVP - single VMOVP capable */
+    BOOLEAN RdbasePhysical;         /* GITS_TYPER.PTA - RDbase is a physical address */
 
     /* Command queue */
     PVOID CmdQueueBase;             /* Virtual address of command queue */
@@ -1562,6 +1565,7 @@ HalpGicItsSendDiscardOnNode(
 BOOLEAN
 HalpGicItsSendSyncOnNode(
     _Inout_ PHALP_GIC_ITS_NODE ItsNode,
+    _In_ ULONG Cpu,
     _In_ ULONGLONG TargetAddress);
 
 /*

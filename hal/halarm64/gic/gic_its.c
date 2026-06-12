@@ -30,6 +30,7 @@
  *   - Linux drivers/irqchip/irq-gic-v3-its.c
  */
 
+#define NDEBUG
 #include "gic_internal.h"
 
 /*
@@ -207,9 +208,14 @@ HalpGicItsAllocAligned(
         return NULL;
 
     /* Align the pointer */
-    Aligned = ((ULONG_PTR)Raw + (Align - 1)) & ~(Align - 1);
-    if (Physical)
-        *Physical = MmGetPhysicalAddress((PVOID)Aligned);
+    {
+        PHYSICAL_ADDRESS RawPa = MmGetPhysicalAddress(Raw);
+        SIZE_T Delta = (SIZE_T)((0 - (ULONG_PTR)RawPa.QuadPart) & (Align - 1));
+
+        Aligned = (ULONG_PTR)Raw + Delta;
+        if (Physical)
+            Physical->QuadPart = RawPa.QuadPart + (LONGLONG)Delta;
+    }
     if (RawOut)
         *RawOut = Raw;
 
@@ -447,7 +453,22 @@ HalpGicItsPostCommandOnNode(
     Target = (ULONGLONG)Next * HAL_ARM64_ITS_CMD_ENTRY_SIZE;
     HalpMmioWrite64(ItsNode->VirtualBase, GITS_CWRITER, Target);
 
+    for (Spins = 20000; Spins != 0; --Spins)
+    {
+        if (HalpMmioRead64(ItsNode->VirtualBase, GITS_CREADR) == Target)
+            break;
+        KeStallExecutionProcessor(1);
+    }
+
     KeReleaseSpinLock(&ItsNode->CmdLock, OldIrql);
+
+    if (Spins == 0)
+    {
+        DPRINT1("[arm64][ITS] ITS %lu cmd 0x%02x stalled: CREADR=0x%llx CWRITER=0x%llx\n",
+                ItsNode->ItsId, (ULONG)(Cmd[0] & 0xFF),
+                HalpMmioRead64(ItsNode->VirtualBase, GITS_CREADR), Target);
+        return FALSE;
+    }
 
     return TRUE;
 }
@@ -520,7 +541,7 @@ static VOID
 HalpGicItsBuildMapcCmd(
     _Out_writes_(4) UINT64 *Cmd,
     _In_ ULONG CollectionId,
-    _In_ ULONGLONG TargetAddress,
+    _In_ ULONGLONG Rdbase,
     _In_ BOOLEAN Valid)
 {
     RtlZeroMemory(Cmd, HAL_ARM64_ITS_CMD_ENTRY_SIZE);
@@ -529,7 +550,7 @@ HalpGicItsBuildMapcCmd(
     Cmd[0] = (UINT64)GITS_CMD_MAPC;
 
     /* Cmd[2]: Target address (bits 51:16) + CollectionID (bits 15:0) + Valid (bit 63) */
-    Cmd[2] = ((TargetAddress >> 16) & ((1ULL << 36) - 1)) << 16;
+    Cmd[2] = Rdbase & (((1ULL << 36) - 1) << 16);
     Cmd[2] |= (UINT64)(CollectionId & 0xFFFFu);
     if (Valid)
         Cmd[2] |= (1ULL << 63);
@@ -592,7 +613,7 @@ HalpGicItsBuildDiscardCmd(
 static VOID
 HalpGicItsBuildSyncCmd(
     _Out_writes_(4) UINT64 *Cmd,
-    _In_ ULONGLONG TargetAddress)
+    _In_ ULONGLONG Rdbase)
 {
     RtlZeroMemory(Cmd, HAL_ARM64_ITS_CMD_ENTRY_SIZE);
 
@@ -600,7 +621,40 @@ HalpGicItsBuildSyncCmd(
     Cmd[0] = (UINT64)GITS_CMD_SYNC;
 
     /* Cmd[2]: Target address (bits 51:16) */
-    Cmd[2] = ((TargetAddress >> 16) & ((1ULL << 36) - 1)) << 16;
+    Cmd[2] = Rdbase & (((1ULL << 36) - 1) << 16);
+}
+
+static UINT64
+HalpGicItsEncodeRdbase(
+    _In_ PHALP_GIC_ITS_NODE ItsNode,
+    _In_ ULONG Cpu,
+    _In_ ULONGLONG TargetAddress)
+{
+    ULONG_PTR GicrBase;
+    ULONG ProcessorNumber;
+
+    if (ItsNode->RdbasePhysical)
+    {
+        if ((LONGLONG)TargetAddress < 0)
+        {
+            PHYSICAL_ADDRESS TargetPa =
+                MmGetPhysicalAddress((PVOID)(ULONG_PTR)TargetAddress);
+
+            TargetAddress = (ULONGLONG)TargetPa.QuadPart;
+        }
+
+        return TargetAddress & (((1ULL << 36) - 1) << 16);
+    }
+
+    ProcessorNumber = Cpu;
+    GicrBase = HalpGicrBase(Cpu);
+    if (GicrBase != 0)
+    {
+        ProcessorNumber =
+            (ULONG)((HalpMmioRead64(GicrBase, GICR_TYPER) >> 8) & 0xFFFF);
+    }
+
+    return ((UINT64)ProcessorNumber & 0xFFFFULL) << 16;
 }
 
 /*
@@ -632,12 +686,15 @@ HalpGicItsSendMapcOnNode(
 {
     UINT64 Cmd[4];
     UINT64 Sync[4];
+    UINT64 Rdbase;
 
-    HalpGicItsBuildMapcCmd(Cmd, CollectionId, TargetAddress, Valid);
+    Rdbase = HalpGicItsEncodeRdbase(ItsNode, CollectionId, TargetAddress);
+
+    HalpGicItsBuildMapcCmd(Cmd, CollectionId, Rdbase, Valid);
     if (!HalpGicItsPostCommandOnNode(ItsNode, Cmd))
         return FALSE;
 
-    HalpGicItsBuildSyncCmd(Sync, TargetAddress);
+    HalpGicItsBuildSyncCmd(Sync, Rdbase);
     return HalpGicItsPostCommandOnNode(ItsNode, Sync);
 }
 
@@ -682,11 +739,12 @@ HalpGicItsSendDiscardOnNode(
 BOOLEAN
 HalpGicItsSendSyncOnNode(
     _Inout_ PHALP_GIC_ITS_NODE ItsNode,
+    _In_ ULONG Cpu,
     _In_ ULONGLONG TargetAddress)
 {
     UINT64 Cmd[4];
 
-    HalpGicItsBuildSyncCmd(Cmd, TargetAddress);
+    HalpGicItsBuildSyncCmd(Cmd, HalpGicItsEncodeRdbase(ItsNode, Cpu, TargetAddress));
     return HalpGicItsPostCommandOnNode(ItsNode, Cmd);
 }
 
@@ -735,7 +793,7 @@ HalpGicItsSendMapti(
     Result = HalpGicItsSendMaptiOnNode(&HalpGicItsNodes[0], DeviceId, EventId, PhysId, CollectionId);
     if (Result)
     {
-        Result = HalpGicItsSendSyncOnNode(&HalpGicItsNodes[0], TargetAddress);
+        Result = HalpGicItsSendSyncOnNode(&HalpGicItsNodes[0], CollectionId, TargetAddress);
     }
 
     return Result;
@@ -771,7 +829,7 @@ HalpGicItsInvalidateLpiConfig(VOID)
             Cmd[0] = (UINT64)GITS_CMD_INVALL;
             Cmd[2] = (UINT64)(Cpu & 0xFFFFu); /* ICID = collection = CPU */
             if (HalpGicItsPostCommandOnNode(ItsNode, Cmd))
-                HalpGicItsSendSyncOnNode(ItsNode, ItsNode->CollectionTarget[Cpu]);
+                HalpGicItsSendSyncOnNode(ItsNode, Cpu, ItsNode->CollectionTarget[Cpu]);
         }
     }
 }
@@ -1387,7 +1445,7 @@ HalpGicItsProgramCpuTables(
 
     /* Program GICR_PROPBASER */
     Prop = (HalpGicLpiConfigPa.QuadPart & GICR_PROPBASER_ADDR_MASK);
-    Prop |= ((ULONGLONG)(HalpGicItsLpiIdBits - 1) & GICR_PROPBASER_IDBITS_MASK);
+    Prop |= ((ULONGLONG)HalpGicItsLpiIdBits & GICR_PROPBASER_IDBITS_MASK);
     /* Add inner-shareable, write-back attributes */
     Prop |= (1ULL << 10);  /* InnerShareable */
     Prop |= (7ULL << 7);   /* Write-Back, Read-Allocate, Write-Allocate */
@@ -1472,6 +1530,7 @@ HalpGicItsProbeNode(
     ItsNode->IttEntrySize = ((ULONG)(Typer >> GITS_TYPER_ITT_ENTRY_SIZE_SHIFT) & GITS_TYPER_ITT_ENTRY_SIZE_MASK) + 1;
     ItsNode->HasVlpis = (Typer & (1ULL << 1)) != 0;
     ItsNode->HasVmovp = (Typer & (1ULL << 26)) != 0;
+    ItsNode->RdbasePhysical = (Typer & GITS_TYPER_PTA) != 0;
 
     if (ItsNode->DeviceIdBits >= 31)
         DeviceLimit = 0x7FFFFFFF;
@@ -1490,9 +1549,10 @@ HalpGicItsProbeNode(
         HalpGicItsCollectionEntries = MAXIMUM_PROCESSORS;
     }
 
-    DPRINT1("[arm64][ITS] ITS %lu: DevBits=%lu EvtBits=%lu ITT_entry=%lu VLPIS=%u VMOVP=%u\n",
+    DPRINT1("[arm64][ITS] ITS %lu: DevBits=%lu EvtBits=%lu ITT_entry=%lu VLPIS=%u VMOVP=%u PTA=%u\n",
             ItsNode->ItsId, ItsNode->DeviceIdBits, ItsNode->EventIdBits,
-            ItsNode->IttEntrySize, ItsNode->HasVlpis ? 1 : 0, ItsNode->HasVmovp ? 1 : 0);
+            ItsNode->IttEntrySize, ItsNode->HasVlpis ? 1 : 0, ItsNode->HasVmovp ? 1 : 0,
+            ItsNode->RdbasePhysical ? 1 : 0);
 
     /* Allocate command queue */
     if (!HalpGicItsAllocCommandQueue(ItsNode))
@@ -1596,15 +1656,19 @@ HalpGicItsInitAllNodes(VOID)
         return FALSE;
     }
 
-    /* Program LPI tables for current CPU */
-    Cpu = KeGetCurrentProcessorNumber();
-    if (!HalpGicItsProgramCpuTables(Cpu))
+    for (Cpu = 0; Cpu < MAXIMUM_PROCESSORS; Cpu++)
     {
-        DPRINT1("[arm64][ITS] Failed to program CPU tables for CPU %lu\n", Cpu);
-    }
+        if (!HalpGicCpuMpidrValid[Cpu] || (HalpGicrBase(Cpu) == 0))
+            continue;
 
-    /* Map collection for current CPU on all ITS nodes */
-    HalpGicItsEnsureCollection(Cpu);
+        if (!HalpGicItsProgramCpuTables(Cpu))
+        {
+            DPRINT1("[arm64][ITS] Failed to program CPU tables for CPU %lu\n", Cpu);
+            continue;
+        }
+
+        HalpGicItsEnsureCollection(Cpu);
+    }
 
     HalpGicItsInitialized = TRUE;
     HalpGicItsEnabled = TRUE;
@@ -1731,7 +1795,7 @@ HalpGicItsAllocateMsi(
     }
 
     /* Send SYNC */
-    HalpGicItsSendSyncOnNode(ItsNode, ItsNode->CollectionTarget[TargetCpu]);
+    HalpGicItsSendSyncOnNode(ItsNode, TargetCpu, ItsNode->CollectionTarget[TargetCpu]);
 
     /* Record mapping */
     if (Device->EventToLpi)
