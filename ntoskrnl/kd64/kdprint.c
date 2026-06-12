@@ -635,6 +635,28 @@ KdpPrint(
     }
 #endif
 
+#if !defined(_MSC_VER)
+    {
+        KIRQL PrintIrql;
+
+        UNREFERENCED_PARAMETER(Enable);
+
+        PrintIrql = KdpAcquireLock(&KdpDebuggerLock);
+        KdSave(FALSE);
+
+        if (KdpPrintString(&OutputString))
+        {
+            Status = STATUS_BREAKPOINT;
+        }
+        else
+        {
+            Status = STATUS_SUCCESS;
+        }
+
+        KdRestore(FALSE);
+        KdpReleaseLock(&KdpDebuggerLock, PrintIrql);
+    }
+#else
     /* Enter the debugger */
     Enable = KdEnterDebugger(TrapFrame, ExceptionFrame);
 
@@ -652,6 +674,7 @@ KdpPrint(
 
     /* Exit the debugger and return */
     KdExitDebugger(Enable);
+#endif
     *Handled = TRUE;
     return Status;
 }
