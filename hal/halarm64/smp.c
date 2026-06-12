@@ -31,6 +31,7 @@
  *   to ensure visibility across CPUs.
  */
 
+#define NDEBUG
 #include <ntifs.h>
 #include <arc/arc.h>
 #include <ndk/kefuncs.h>
@@ -478,12 +479,12 @@ HalpArm64PrepareApData(
     HalpArm64CleanDcacheRange(HalpApDataVa, sizeof(HAL_ARM64_AP_TRAMPOLINE_DATA));
     __asm__ __volatile__("dsb sy" ::: "memory");
 
-    DPRINT1("[arm64][HAL] AP data prepared: CPU=%lu entry=0x%llx stack=0x%llx GICR=disabled\n",
+    DPRINT("[arm64][HAL] AP data prepared: CPU=%lu entry=0x%llx stack=0x%llx GICR=disabled\n",
             ProcessorNumber, EntryPoint, StackPointer);
-    DPRINT1("[arm64][HAL] AP sysregs: SCTLR=0x%llx TCR=0x%llx MAIR=0x%llx VBAR=0x%llx\n",
+    DPRINT("[arm64][HAL] AP sysregs: SCTLR=0x%llx TCR=0x%llx MAIR=0x%llx VBAR=0x%llx\n",
             HalpApDataVa->SctlrEl1, HalpApDataVa->TcrEl1,
             HalpApDataVa->MairEl1, HalpApDataVa->VbarEl1);
-    DPRINT1("[arm64][HAL] AP TTBR0=0x%llx (idmap) TTBR1=0x%llx (kernel) SyncFlag=%p\n",
+    DPRINT("[arm64][HAL] AP TTBR0=0x%llx (idmap) TTBR1=0x%llx (kernel) SyncFlag=%p\n",
             HalpApDataVa->Ttbr0El1, HalpApDataVa->Ttbr1El1, HalpApDataVa->SyncFlag);
 }
 
@@ -503,7 +504,7 @@ HalpArm64WaitForApSync(
     {
         if (HalpApSyncFlag != 0)
         {
-            DPRINT1("[arm64][HAL] AP signaled after %lu iterations\n", Iterations);
+            DPRINT("[arm64][HAL] AP signaled after %lu iterations\n", Iterations);
             return TRUE;
         }
 
