@@ -63,11 +63,17 @@ static VOID HalArm64LayoutCheck(VOID)
     ok(Cntfrq >= 1000000ULL && Cntfrq <= 100000000ULL,
        "CNTFRQ_EL0=%I64u out of plausible range\n", Cntfrq);
 
-    /* Counter advances. */
+    /* Counter advances. The granularity can exceed a short yield burst, so
+     * spin-read until it ticks rather than sampling a single fixed delay. */
     Cnt1 = ReadCntvctEl0();
-    for (i = 0; i < 64; i++)
+    Cnt2 = Cnt1;
+    for (i = 0; i < 10000000; i++)
+    {
+        Cnt2 = ReadCntvctEl0();
+        if (Cnt2 > Cnt1)
+            break;
         YieldProcessor();
-    Cnt2 = ReadCntvctEl0();
+    }
     ok(Cnt2 > Cnt1,
        "CNTVCT_EL0 did not advance: %I64u -> %I64u\n", Cnt1, Cnt2);
 
