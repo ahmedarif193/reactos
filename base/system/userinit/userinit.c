@@ -204,6 +204,14 @@ StartProcess(
         CloseHandle(hToken);
     }
 
+    /* The profile directory may not exist on read-only boot media */
+    if (WorkingDir != NULL)
+    {
+        DWORD Attributes = GetFileAttributesW(WorkingDir);
+        if (Attributes == INVALID_FILE_ATTRIBUTES || !(Attributes & FILE_ATTRIBUTE_DIRECTORY))
+            WorkingDir = NULL;
+    }
+
     if (!CreateProcessW(NULL,
                         ExpandedCmdLine,
                         NULL,
