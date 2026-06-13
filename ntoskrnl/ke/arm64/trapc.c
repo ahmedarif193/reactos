@@ -1482,12 +1482,6 @@ KiArm64HandleSynchronousException(
                 return TRUE;
             }
 
-            if ((PreviousMode == KernelMode) && (!KdDebuggerEnabled || KdDebuggerNotPresent))
-            {
-                KiArm64BugCheckSynchronousException(Context);
-                /* not reached */
-            }
-
             RtlZeroMemory(&ExceptionRecord, sizeof(ExceptionRecord));
             ExceptionRecord.ExceptionCode = STATUS_ACCESS_VIOLATION;
             ExceptionRecord.ExceptionFlags = 0;
@@ -2165,17 +2159,6 @@ KiArm64HandleSynchronousException(
             }
 #endif /* KDBG */
 
-            /* If we're in kernel mode and no debugger is attached, bugcheck
-             * immediately to avoid recursive faults while trying to log/dispatch.
-             * This mirrors amd64 behavior when KD is unavailable during early boot. */
-            if ((PreviousMode == KernelMode) && (!KdDebuggerEnabled || KdDebuggerNotPresent))
-            {
-                KiArm64BugCheckSynchronousException(Context);
-                /* not reached */
-            }
-
-            /* Otherwise, dispatch an access violation through KiDispatchException
-             * so KD can catch first/second chance and print the crash context. */
             {
                 EXCEPTION_RECORD ExceptionRecord;
                 RtlZeroMemory(&ExceptionRecord, sizeof(ExceptionRecord));

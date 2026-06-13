@@ -202,6 +202,7 @@ RtlDispatchException(
     ULONG64 EstablisherFrame;
     ULONG_PTR StackLow;
     ULONG_PTR StackHigh;
+    ULONG_PTR LookupPc;
 
     if (RtlCallVectoredExceptionHandlers(ExceptionRecord, ContextRecord))
     {
@@ -215,9 +216,10 @@ RtlDispatchException(
     for (Frames = 0; Frames < 64; Frames++)
     {
         ImageBase = 0;
-        FunctionEntry = RtlLookupFunctionEntry(UnwindContext.Pc,
-                                                (PULONG_PTR)&ImageBase,
-                                                NULL);
+        LookupPc = (Frames == 0) ? UnwindContext.Pc : (UnwindContext.Pc - 1);
+        FunctionEntry = RtlLookupFunctionEntry(LookupPc,
+                                               (PULONG_PTR)&ImageBase,
+                                               NULL);
         if (FunctionEntry == NULL)
         {
             if ((UnwindContext.Lr == 0) ||
@@ -243,7 +245,7 @@ RtlDispatchException(
          */
         {
             CONTEXT VuContext = UnwindContext;
-            ULONG_PTR FrameControlPc = UnwindContext.Pc;
+            ULONG_PTR FrameControlPc = LookupPc;
             ULONG64 VuEstablisherFrame;
             PEXCEPTION_ROUTINE VuRoutine;
             PVOID VuHandlerData;
@@ -259,7 +261,7 @@ RtlDispatchException(
                                          NULL);
 
             if (VuContext.Pc != UnwindContext.Pc &&
-                VuContext.Sp > UnwindContext.Sp)
+                VuContext.Sp >= UnwindContext.Sp)
             {
                 UnwindContext = VuContext;
                 EstablisherFrame = VuEstablisherFrame;
