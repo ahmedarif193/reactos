@@ -122,29 +122,6 @@ HalpGicItsDeviceHash(
     return (ULONG)RequesterId & Mask;
 }
 
-/* Reserved for future use when routing to specific CPUs */
-#if 0
-static ULONG
-HalpGicItsSelectCpuFromAffinity(
-    _In_ ULONGLONG Affinity)
-{
-    ULONG Cpu = KeGetCurrentProcessorNumber();
-    ULONG Limit = sizeof(ULONGLONG) * 8;
-    ULONG MaxCpu = (MAXIMUM_PROCESSORS < Limit) ? MAXIMUM_PROCESSORS : Limit;
-
-    if (Affinity == 0)
-        return Cpu;
-
-    for (Cpu = 0; Cpu < MaxCpu; ++Cpu)
-    {
-        if (Affinity & (1ULL << Cpu))
-            return Cpu;
-    }
-
-    return 0;
-}
-#endif
-
 /*
  * ============================================================================
  * Memory Allocation
@@ -338,7 +315,6 @@ HalpGicItsAllocCommandQueue(
     PHYSICAL_ADDRESS High;
     PHYSICAL_ADDRESS Boundary;
     ULONGLONG Cbaser;
-    ULONGLONG ReadBack;
 
     QueueBytes = HAL_ARM64_ITS_CMD_QUEUE_SIZE;
     Low.QuadPart = 0;
@@ -370,19 +346,6 @@ HalpGicItsAllocCommandQueue(
     Cbaser |= (1ULL << 59);  /* RaWaWb */
 
     HalpMmioWrite64(ItsNode->VirtualBase, GITS_CBASER, Cbaser);
-
-    /* Read back and check if shareability was accepted */
-    ReadBack = HalpMmioRead64(ItsNode->VirtualBase, GITS_CBASER);
-    if ((ReadBack ^ Cbaser) & ((7ULL << 8) | (7ULL << 56)))
-    {
-        /* Hardware didn't accept our cacheability, use non-cacheable with flush */
-        Cbaser &= ~((7ULL << 8) | (7ULL << 56));
-        Cbaser |= (1ULL << 58);  /* nC (non-cacheable) */
-        HalpMmioWrite64(ItsNode->VirtualBase, GITS_CBASER, Cbaser);
-        ItsNode->CmdQueueNeedsFlush = TRUE;
-        DPRINT("[arm64][ITS] ITS %lu: Using cache flushing for command queue\n",
-               ItsNode->ItsId);
-    }
 
     HalpMmioWrite64(ItsNode->VirtualBase, GITS_CWRITER, 0);
 
@@ -439,11 +402,7 @@ HalpGicItsPostCommandOnNode(
     QueueEntry[2] = Cmd[2];
     QueueEntry[3] = Cmd[3];
 
-    /* Flush cache if needed */
-    if (ItsNode->CmdQueueNeedsFlush)
-    {
-        HalpArm64CleanDcacheRange(QueueEntry, HAL_ARM64_ITS_CMD_ENTRY_SIZE);
-    }
+    HalpArm64CleanDcacheRange(QueueEntry, HAL_ARM64_ITS_CMD_ENTRY_SIZE);
 
     /* Memory barrier before updating write pointer */
     __asm__ __volatile__("dsb sy" ::: "memory");
@@ -464,39 +423,17 @@ HalpGicItsPostCommandOnNode(
 
     if (Spins == 0)
     {
-        DPRINT1("[arm64][ITS] ITS %lu cmd 0x%02x stalled: CREADR=0x%llx CWRITER=0x%llx\n",
+        DPRINT1("[arm64][ITS] ITS %lu cmd 0x%02x stalled: CREADR=0x%llx CWRITER=0x%llx CTLR=0x%llx CBASER=0x%llx cmd2=0x%llx\n",
                 ItsNode->ItsId, (ULONG)(Cmd[0] & 0xFF),
-                HalpMmioRead64(ItsNode->VirtualBase, GITS_CREADR), Target);
+                HalpMmioRead64(ItsNode->VirtualBase, GITS_CREADR), Target,
+                (ULONGLONG)*(volatile ULONG *)(ItsNode->VirtualBase + GITS_CTLR),
+                HalpMmioRead64(ItsNode->VirtualBase, GITS_CBASER),
+                Cmd[2]);
         return FALSE;
     }
 
     return TRUE;
 }
-
-/*
- * HalpGicItsWaitForCommand - Wait for ITS to process commands up to Target
- * Reserved for future use when sync needs explicit offset target
- */
-#if 0
-static BOOLEAN
-HalpGicItsWaitForCommand(
-    _In_ PHALP_GIC_ITS_NODE ItsNode,
-    _In_ ULONGLONG Target)
-{
-    ULONG Spins;
-
-    for (Spins = 1000000; Spins != 0; --Spins)
-    {
-        ULONGLONG ReadOffset = HalpMmioRead64(ItsNode->VirtualBase, GITS_CREADR);
-        if (ReadOffset == Target)
-            return TRUE;
-        KeStallExecutionProcessor(1);
-    }
-
-    DPRINT1("[arm64][ITS] Timeout waiting for command on ITS %lu\n", ItsNode->ItsId);
-    return FALSE;
-}
-#endif
 
 /*
  * ============================================================================
@@ -850,9 +787,13 @@ HalpGicItsEnableLpi(
     /* RMW: keep the per-IRQL priority programmed at connect (HalpGicItsSetLpiPriority),
      * only set GROUP1 | ENABLED. Clobbering it with the default would break PMR
      * masking for any LPI whose IRQL != the default's level (bugcheck 0x0F). */
-    HalpGicLpiConfig[Index] = (UCHAR)((HalpGicLpiConfig[Index] & 0xFCu) |
-                                      HAL_ARM64_LPI_PROP_GROUP1 |
-                                      HAL_ARM64_LPI_PROP_ENABLED);
+    {
+        UCHAR Old, New;
+        do {
+            Old = HalpGicLpiConfig[Index];
+            New = (UCHAR)((Old & 0xFCu) | HAL_ARM64_LPI_PROP_GROUP1 | HAL_ARM64_LPI_PROP_ENABLED);
+        } while ((UCHAR)_InterlockedCompareExchange8((volatile char *)&HalpGicLpiConfig[Index], (char)New, (char)Old) != Old);
+    }
     HalpArm64CleanDcacheRange(&HalpGicLpiConfig[Index], sizeof(UCHAR));
 
     /*
@@ -878,8 +819,13 @@ HalpGicItsDisableLpi(
         return;
 
     /* RMW: clear ENABLED, preserve the per-IRQL priority (like Linux). */
-    HalpGicLpiConfig[Index] = (UCHAR)((HalpGicLpiConfig[Index] & 0xFCu) |
-                                      HAL_ARM64_LPI_PROP_GROUP1);
+    {
+        UCHAR Old, New;
+        do {
+            Old = HalpGicLpiConfig[Index];
+            New = (UCHAR)((Old & 0xFCu) | HAL_ARM64_LPI_PROP_GROUP1);
+        } while ((UCHAR)_InterlockedCompareExchange8((volatile char *)&HalpGicLpiConfig[Index], (char)New, (char)Old) != Old);
+    }
     HalpArm64CleanDcacheRange(&HalpGicLpiConfig[Index], sizeof(UCHAR));
     HalpGicItsInvalidateLpiConfig();
 }
@@ -899,9 +845,13 @@ HalpGicItsSetLpiPriority(
     if (Index >= HalpGicLpiCount)
         return;
 
-    Config = HalpGicLpiConfig[Index];
-    Config = (Config & 0x03) | (Priority & 0xFC);  /* Keep enabled/group, update priority */
-    HalpGicLpiConfig[Index] = Config;
+    {
+        UCHAR Old;
+        do {
+            Old = HalpGicLpiConfig[Index];
+            Config = (UCHAR)((Old & 0x03) | (Priority & 0xFC));  /* Keep enabled/group, update priority */
+        } while ((UCHAR)_InterlockedCompareExchange8((volatile char *)&HalpGicLpiConfig[Index], (char)Config, (char)Old) != Old);
+    }
     HalpArm64CleanDcacheRange(&HalpGicLpiConfig[Index], sizeof(UCHAR));
 }
 
@@ -1148,7 +1098,10 @@ HalpGicItsCreateDevice(
 
     /* Check if already initialized */
     if (Device->InitState == 2)
+    {
+        __asm__ __volatile__("dmb ish" ::: "memory");
         return Device;
+    }
     if (Device->InitState == -1)
         return NULL;
 
@@ -1158,7 +1111,10 @@ HalpGicItsCreateDevice(
         for (ULONG Spins = 100000; Spins != 0; --Spins)
         {
             if (Device->InitState == 2)
+            {
+                __asm__ __volatile__("dmb ish" ::: "memory");
                 return Device;
+            }
             if (Device->InitState == -1)
                 return NULL;
             KeStallExecutionProcessor(1);
@@ -1180,7 +1136,7 @@ HalpGicItsCreateDevice(
     Device->IttVa = HalpGicItsAllocAligned(IttBytes, HAL_ARM64_ITS_ITT_ALIGN, &IttPa, NULL);
     if (!Device->IttVa)
     {
-        Device->InitState = -1;
+        InterlockedExchange(&Device->InitState, -1);
         return NULL;
     }
 
@@ -1201,7 +1157,7 @@ HalpGicItsCreateDevice(
             ExFreePoolWithTag(Device->EventToLpi, TAG_HAL);
         if (Device->EventToCollection)
             ExFreePoolWithTag(Device->EventToCollection, TAG_HAL);
-        Device->InitState = -1;
+        InterlockedExchange(&Device->InitState, -1);
         return NULL;
     }
 
@@ -1213,11 +1169,11 @@ HalpGicItsCreateDevice(
     {
         ExFreePoolWithTag(Device->EventToLpi, TAG_HAL);
         ExFreePoolWithTag(Device->EventToCollection, TAG_HAL);
-        Device->InitState = -1;
+        InterlockedExchange(&Device->InitState, -1);
         return NULL;
     }
 
-    Device->InitState = 2;
+    InterlockedExchange(&Device->InitState, 2);
 
     DPRINT("[arm64][ITS] Created device %u on ITS %lu: %lu events, ITT at PA 0x%llx\n",
            DeviceId, ItsNode->ItsId, Entries, IttPa.QuadPart);
@@ -1519,8 +1475,15 @@ HalpGicItsProbeNode(
         return FALSE;
     }
 
-    DPRINT1("[arm64][ITS] Probing ITS %lu at 0x%llx\n",
-            ItsNode->ItsId, ItsNode->PhysicalBase.QuadPart);
+    if (ItsNode->VirtualBase == (ULONG_PTR)ItsNode->PhysicalBase.QuadPart)
+    {
+        PVOID ItsDeviceVa = MmMapIoSpace(ItsNode->PhysicalBase, 0x20000, MmNonCached);
+        if (ItsDeviceVa != NULL)
+            ItsNode->VirtualBase = (ULONG_PTR)ItsDeviceVa;
+    }
+
+    DPRINT1("[arm64][ITS] Probing ITS %lu at PA 0x%llx VA 0x%llx\n",
+            ItsNode->ItsId, ItsNode->PhysicalBase.QuadPart, (ULONGLONG)ItsNode->VirtualBase);
 
     /* Parse GITS_TYPER */
     Typer = HalpMmioRead64(ItsNode->VirtualBase, GITS_TYPER);
@@ -1593,11 +1556,11 @@ HalpGicItsProbeNode(
     }
 
     /* Enable the ITS */
-    Ctlr = HalpMmioRead64(ItsNode->VirtualBase, GITS_CTLR);
+    Ctlr = *(volatile ULONG *)(ItsNode->VirtualBase + GITS_CTLR);
     Ctlr |= 1ULL;  /* Enable */
     if (ItsNode->HasVlpis)
         Ctlr |= (1ULL << 1);  /* ImDe - Immediate delivery for VLPIs */
-    HalpMmioWrite64(ItsNode->VirtualBase, GITS_CTLR, Ctlr);
+    *(volatile ULONG *)(ItsNode->VirtualBase + GITS_CTLR) = (ULONG)Ctlr;
 
     ItsNode->Enabled = TRUE;
     InterlockedExchange(&ItsNode->InitState, 2);
