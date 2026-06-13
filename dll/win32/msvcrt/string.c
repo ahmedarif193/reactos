@@ -1337,12 +1337,14 @@ int __cdecl strncpy_s( char *dst, size_t elem, const char *src, size_t count )
 /*********************************************************************
  *      strcpy (MSVCRT.@)
  */
+#ifndef _M_ARM64
 char* CDECL strcpy(char *dst, const char *src)
 {
     char *ret = dst;
     while ((*dst++ = *src++));
     return ret;
 }
+#endif
 
 /*********************************************************************
  *      strcpy_s (MSVCRT.@)
@@ -1594,12 +1596,14 @@ int CDECL _atoldbl(_LDOUBLE *value, char *str)
 /*********************************************************************
  *              strlen (MSVCRT.@)
  */
+#ifndef _M_ARM64
 size_t __cdecl strlen(const char *str)
 {
     const char *s = str;
     while (*s) s++;
     return s - str;
 }
+#endif
 
 /******************************************************************
  *              strnlen (MSVCRT.@)
@@ -3288,6 +3292,7 @@ void *__cdecl memset(void *dst, int c, size_t n)
 /*********************************************************************
  *		    strchr (MSVCRT.@)
  */
+#ifndef _M_ARM64
 char* __cdecl strchr(const char *str, int c)
 {
     do
@@ -3296,16 +3301,19 @@ char* __cdecl strchr(const char *str, int c)
     } while (*str++);
     return NULL;
 }
+#endif
 
 /*********************************************************************
  *                  strrchr (MSVCRT.@)
  */
+#ifndef _M_ARM64
 char* __cdecl strrchr(const char *str, int c)
 {
     char *ret = NULL;
     do { if (*str == (char)c) ret = (char*)str; } while (*str++);
     return ret;
 }
+#endif
 
 /*********************************************************************
  *                  memchr   (MSVCRT.@)
