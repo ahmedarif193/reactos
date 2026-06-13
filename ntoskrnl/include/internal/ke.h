@@ -52,6 +52,7 @@ typedef struct _DEFERRED_REVERSE_BARRIER
 {
     ULONG Barrier;
     ULONG TotalProcessors;
+    ULONG Sense;
 } DEFERRED_REVERSE_BARRIER, *PDEFERRED_REVERSE_BARRIER;
 
 typedef struct _KI_SAMPLE_MAP
