@@ -221,7 +221,7 @@ NpQueryNameInfo(IN PNP_CCB Ccb,
     NTSTATUS Status;
     PWCHAR Name;
 
-    *Length -= sizeof(*InfoBuffer);
+    *Length -= FIELD_OFFSET(FILE_NAME_INFORMATION, FileName);
 
     if (Ccb->NodeType == NPFS_NTC_ROOT_DCB_CCB)
     {
@@ -234,6 +234,8 @@ NpQueryNameInfo(IN PNP_CCB Ccb,
         Name = Ccb->Fcb->FullName.Buffer;
     }
 
+    InfoBuffer->FileNameLength = NameLength;
+
     if (*Length < NameLength)
     {
         Status = STATUS_BUFFER_OVERFLOW;
@@ -245,7 +247,6 @@ NpQueryNameInfo(IN PNP_CCB Ccb,
     }
 
     RtlCopyMemory(InfoBuffer->FileName, Name, NameLength);
-    InfoBuffer->FileNameLength = NameLength;
 
     *Length -= NameLength;
     return Status;
@@ -262,6 +263,7 @@ NpQueryInternalInfo(IN PNP_CCB Ccb,
     *Length -= sizeof(*InfoBuffer);
 
     RtlZeroMemory(InfoBuffer, sizeof(*InfoBuffer));
+    InfoBuffer->IndexNumber.QuadPart = (ULONGLONG)(ULONG_PTR)Ccb;
 
     return STATUS_SUCCESS;
 }
@@ -319,7 +321,18 @@ NpQueryPipeLocalInfo(IN PNP_FCB Fcb,
     InfoBuffer->NamedPipeType = Fcb->NamedPipeType;
     InfoBuffer->NamedPipeConfiguration = Fcb->NamedPipeConfiguration;
     InfoBuffer->MaximumInstances = Fcb->MaximumInstances;
-    InfoBuffer->CurrentInstances = Fcb->CurrentInstances;
+    {
+        PLIST_ENTRY NpEntry;
+        ULONG ServerInstances = 0;
+        for (NpEntry = Fcb->CcbList.Flink;
+             NpEntry != &Fcb->CcbList;
+             NpEntry = NpEntry->Flink)
+        {
+            if (CONTAINING_RECORD(NpEntry, NP_CCB, CcbEntry)->FileObject[FILE_PIPE_SERVER_END])
+                ServerInstances++;
+        }
+        InfoBuffer->CurrentInstances = ServerInstances;
+    }
     InfoBuffer->InboundQuota = InQueue->Quota;
     InfoBuffer->OutboundQuota = OutQueue->Quota;
     InfoBuffer->NamedPipeState = Ccb->NamedPipeState;
