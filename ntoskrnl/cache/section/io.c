@@ -166,19 +166,17 @@ MiSimpleRead(PFILE_OBJECT FileObject,
         ObReferenceObject(FileObject);
 
     Status = IoCallDriver(DeviceObject, Irp);
-    if (Status == STATUS_PENDING)
+
+    DPRINT("KeWaitForSingleObject(&ReadWait)\n");
+    if (!NT_SUCCESS(KeWaitForSingleObject(&ReadWait,
+                                          Suspended,
+                                          KernelMode,
+                                          FALSE,
+                                          NULL)))
     {
-        DPRINT("KeWaitForSingleObject(&ReadWait)\n");
-        if (!NT_SUCCESS(KeWaitForSingleObject(&ReadWait,
-                                              Suspended,
-                                              KernelMode,
-                                              FALSE,
-                                              NULL)))
-        {
-            DPRINT1("Warning: Failed to wait for synchronous IRP\n");
-            ASSERT(FALSE);
-            return Status;
-        }
+        DPRINT1("Warning: Failed to wait for synchronous IRP\n");
+        ASSERT(FALSE);
+        return Status;
     }
 
     DPRINT("Paging IO Done: %08x\n", ReadStatus->Status);
