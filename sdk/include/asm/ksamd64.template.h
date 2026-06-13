@@ -842,8 +842,8 @@ OFFSET(UcbUmsTeb, UMS_CONTROL_BLOCK, UmsTeb),
 HEADER("XSTATE_CONFIGURATION offsets"),
 OFFSET(XcfgEnabledFeatures, XSTATE_CONFIGURATION, EnabledFeatures),
 #if (NTDDI_VERSION >= NTDDI_WIN10)
-OFFSET(XcfgEnabledVolatileFeatures, XSTATE_CONFIGURATION, EnabledFeatures),
-OFFSET(XcfgEnabledSupervisorFeatures, XSTATE_CONFIGURATION, EnabledSupervisorFeaturestures),
+OFFSET(XcfgEnabledVolatileFeatures, XSTATE_CONFIGURATION, EnabledVolatileFeatures),
+OFFSET(XcfgEnabledSupervisorFeatures, XSTATE_CONFIGURATION, EnabledSupervisorFeatures),
 #endif
 
 HEADER("XSTATE_CONTEXT offsets"),
@@ -860,8 +860,11 @@ SIZE(XsaHeaderLength, XSAVE_AREA_HEADER),
 
 #if (NTDDI_VERSION >= NTDDI_VISTA)
 HEADER("KTHREAD offsets"),
+#if (NTDDI_VERSION < NTDDI_WIN8)
+// TebMappedLowVa/Ucb are UMS-era fields removed from the Win10/11 amd64 KTHREAD.
 OFFSET(ThTebMappedLowVa, KTHREAD, TebMappedLowVa),
 OFFSET(ThUcb, KTHREAD, Ucb),
+#endif
 
 HEADER("KPROCESS offsets"),
 OFFSET(PrLdtSystemDescriptor, KPROCESS, LdtSystemDescriptor),
@@ -1043,7 +1046,10 @@ OFFSET(KTHREAD_TrapFrame, KTHREAD, TrapFrame),
 OFFSET(KTHREAD_PreviousMode, KTHREAD, PreviousMode),
 OFFSET(KTHREAD_KernelStack, KTHREAD, KernelStack),
 OFFSET(KTHREAD_UserApcPending, KTHREAD, ApcState.UserApcPending),
+// LargeStack: Win11 spare (Spare6) at >= WIN10, legacy KTHREAD at < WIN8; gone in the upstream WIN8..WIN10 variant.
+#if (NTDDI_VERSION < NTDDI_WIN8) || (NTDDI_VERSION >= NTDDI_WIN10)
 OFFSET(KTHREAD_LargeStack, KTHREAD, LargeStack),
+#endif
 
 HEADER("KINTERRUPT"),
 OFFSET(KINTERRUPT_Type, KINTERRUPT, Type),
