@@ -129,7 +129,9 @@ KiInitializeHandBuiltThread(
     Thread->IdealProcessor = Prcb->Number;
     Thread->Priority = HIGH_PRIORITY;
     Thread->State = Running;
-#if (NTDDI_VERSION >= NTDDI_WIN7)
+#if (NTDDI_VERSION >= NTDDI_WIN10)
+    Thread->Affinity = (ULONG_PTR)1 << Prcb->Number;
+#elif (NTDDI_VERSION >= NTDDI_WIN7)
     Thread->Affinity.Mask = (ULONG_PTR)1 << Prcb->Number;
 #else
     Thread->Affinity = (ULONG_PTR)1 << Prcb->Number;

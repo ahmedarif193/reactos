@@ -21,7 +21,7 @@ KeGetPreviousMode(VOID)
 }
 #endif
 
-#if defined(_M_ARM64) || (NTDDI_VERSION < NTDDI_WIN7)
+#if defined(_M_ARM64) || (defined(_M_AMD64) && (NTDDI_VERSION >= NTDDI_WIN10)) || (NTDDI_VERSION < NTDDI_WIN7)
 #define KiThreadAffinityMask(Thread) ((Thread)->Affinity)
 #define KiThreadUserAffinityMask(Thread) ((Thread)->UserAffinity)
 #else
@@ -1103,11 +1103,12 @@ KxSetTimerForThreadWait(IN PKTIMER Timer,
 
 //
 // Wait block linkage helpers. The legacy (2k3) scheme builds a circular
-// NextWaitBlock chain; the Win11 arm64 KWAIT_BLOCK has no NextWaitBlock,
+// NextWaitBlock chain; the Win8+ / arm64 KWAIT_BLOCK has no NextWaitBlock,
 // so there the participating blocks are tracked by WaitBlockCount plus the
 // TimerActive thread flag (timer block joins in addition to the array).
+// Condition mirrors KWAIT_BLOCK in xdk/ketypes.h.
 //
-#ifdef _M_ARM64
+#if (NTDDI_VERSION >= NTDDI_WIN8) || defined(_M_ARM64)
 #define KxChainTimerOnly()                                                  \
     Thread->WaitBlockCount = 1;                                             \
     Thread->TimerActive = FALSE

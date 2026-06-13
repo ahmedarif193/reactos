@@ -1776,6 +1776,401 @@ typedef struct _KTHREAD
     PVOID UserAbEntries;                                 // 0x498
 } KTHREAD;                                               // sizeof 0x4A0
 
+//
+// Kernel Thread (KTHREAD), Win11 26100 amd64 layout (ntkrnlmp.pdb 10.0.26100.8036)
+// sizeof == 0x4C0; members marked [ReactOS] live in Win11 spare/padding slots.
+// Mirrors the arm64 variant above: genuine Windows fields are offset-accurate and
+// C_ASSERT-locked; ReactOS-internal scheduler/APC fields are tucked into spares.
+//
+#elif defined(_M_AMD64) && (NTDDI_VERSION >= NTDDI_WIN10)
+
+typedef struct _KTHREAD
+{
+    DISPATCHER_HEADER Header;                            // 0x000
+    PVOID SListFaultAddress;                             // 0x018
+    ULONG64 QuantumTarget;                               // 0x020
+    PVOID InitialStack;                                  // 0x028
+    ULONG_PTR StackLimit;                                // 0x030 Win11 type: PVOID
+    PVOID StackBase;                                     // 0x038
+    KSPIN_LOCK ThreadLock;                               // 0x040
+    volatile ULONG64 CycleTime;                          // 0x048
+    ULONG CurrentRunTime;                                // 0x050
+    ULONG ExpectedRunTime;                               // 0x054
+    PVOID KernelStack;                                   // 0x058
+    XSAVE_FORMAT *StateSaveArea;                         // 0x060
+    struct _KSCHEDULING_GROUP *SchedulingGroup;          // 0x068
+    KWAIT_STATUS_REGISTER WaitRegister;                  // 0x070
+    volatile BOOLEAN Running;                            // 0x071
+    BOOLEAN Alerted[MaximumMode];                        // 0x072
+    union
+    {
+        struct
+        {
+            ULONG AutoBoostActive:1;                     // 0x074
+            ULONG ReadyTransition:1;
+            ULONG WaitNext:1;
+            ULONG SystemAffinityActive:1;
+            ULONG Alertable:1;
+            ULONG ProcessReadyQueue:1;                   // Win11 name: Reserved1 [ReactOS]
+            ULONG ApcInterruptRequest:1;
+            ULONG QuantumEndMigrate:1;
+            ULONG SecureThread:1;
+            ULONG TimerActive:1;
+            ULONG SystemThread:1;
+            ULONG ProcessDetachActive:1;
+            ULONG GdiFlushActive:1;                      // Win11 name: Reserved2 [ReactOS]
+            ULONG ScbReadyQueue:1;
+            ULONG ApcQueueable:1;
+            ULONG CycleChargePending:1;                  // Win11 name: Reserved3 [ReactOS]
+            ULONG WaitNextClearWobPriorityFloor:1;
+            ULONG TimerSuspended:1;
+            ULONG SuspendedWaitMode:1;
+            ULONG SuspendSchedulerApcWait:1;
+            ULONG CetUserShadowStack:1;
+            ULONG BypassProcessFreeze:1;
+            ULONG CetKernelShadowStack:1;
+            ULONG StateSaveAreaDecoupled:1;
+            ULONG MiscReserved:8;
+        };
+        LONG MiscFlags;                                  // 0x074
+    };
+    union
+    {
+        struct
+        {
+            ULONG UserIdealProcessorFixed:1;             // 0x078
+            ULONG IsolationWidth:1;
+            ULONG AutoAlignment:1;
+            ULONG DisableBoost:1;
+            ULONG AlertedByThreadId:1;
+            ULONG QuantumDonation:1;
+            ULONG EnableStackSwap:1;
+            ULONG GuiThread:1;
+            ULONG DisableQuantum:1;
+            ULONG ChargeOnlySchedulingGroup:1;
+            ULONG DeferPreemption:1;
+            ULONG QueueDeferPreemption:1;
+            ULONG ForceDeferSchedule:1;
+            ULONG SharedReadyQueueAffinity:1;
+            ULONG FreezeCount:1;
+            ULONG TerminationApcRequest:1;
+            ULONG AutoBoostEntriesExhausted:1;
+            ULONG KernelStackResident:1;
+            ULONG TerminateRequestReason:2;
+            ULONG ProcessStackCountDecremented:1;
+            ULONG RestrictedGuiThread:1;
+            ULONG VpBackingThread:1;
+            ULONG EtwStackTraceCrimsonApcDisabled:1;
+            ULONG EtwStackTraceApcInserted:8;
+        };
+        volatile LONG ThreadFlags;                       // 0x078
+    };
+    volatile UCHAR Tag;                                  // 0x07C
+    union
+    {
+        struct
+        {
+            UCHAR CalloutActive:1;                       // 0x07D
+            UCHAR ReservedStackInUse:1;
+            UCHAR UserStackWalkActive:1;
+            UCHAR SameThreadTransientReserved:5;
+        };
+        CHAR SameThreadTransientFlags;
+    };
+    union
+    {
+        struct
+        {
+            UCHAR RunningNonRetpolineCode:1;             // 0x07E
+            UCHAR SpecCtrlSpare:7;
+        };
+        UCHAR SpecCtrl;
+    };
+    ULONG SystemCallNumber;                              // 0x080
+    ULONG ReadyTime;                                     // 0x084
+    PVOID FirstArgument;                                 // 0x088
+    PKTRAP_FRAME TrapFrame;                              // 0x090
+    union
+    {
+        KAPC_STATE ApcState;                             // 0x098
+        struct
+        {
+            UCHAR ApcStateFill[FIELD_OFFSET(KAPC_STATE, UserApcPending) + 1]; // 0x098, 0x2B
+            SCHAR Priority;                              // 0x0C3
+            ULONG UserIdealProcessor;                    // 0x0C4
+        };
+    };
+    volatile LONGLONG WaitStatus;                        // 0x0C8
+    PKWAIT_BLOCK WaitBlockList;                          // 0x0D0
+    union
+    {
+        LIST_ENTRY WaitListEntry;                        // 0x0D8
+        SINGLE_LIST_ENTRY SwapListEntry;
+    };
+    PKQUEUE Queue;                                       // 0x0E8 Win11 type: _DISPATCHER_HEADER*
+    struct _TEB *Teb;                                    // 0x0F0
+    ULONG64 RelativeTimerBias;                           // 0x0F8
+    KTIMER Timer;                                        // 0x100
+    union
+    {
+        DECLSPEC_ALIGN(8) KWAIT_BLOCK WaitBlock[THREAD_WAIT_OBJECTS + 1]; // 0x140
+        struct
+        {
+            UCHAR WaitBlockFill4[FIELD_OFFSET(KWAIT_BLOCK, SpareLong)]; // 0x14
+            ULONG ContextSwitches;                       // 0x154
+        };
+        struct
+        {
+            UCHAR WaitBlockFill5[1 * sizeof(KWAIT_BLOCK) + FIELD_OFFSET(KWAIT_BLOCK, SpareLong)]; // 0x44
+            volatile UCHAR State;                        // 0x184
+            CHAR Spare13;                                // 0x185
+            UCHAR WaitIrql;                              // 0x186
+            CHAR WaitMode;                               // 0x187
+        };
+        struct
+        {
+            UCHAR WaitBlockFill6[2 * sizeof(KWAIT_BLOCK) + FIELD_OFFSET(KWAIT_BLOCK, SpareLong)]; // 0x74
+            ULONG WaitTime;                              // 0x1B4
+        };
+        struct
+        {
+            UCHAR WaitBlockFill7[3 * sizeof(KWAIT_BLOCK) + FIELD_OFFSET(KWAIT_BLOCK, SpareLong)]; // 0xA4
+            union
+            {
+                struct
+                {
+                    SHORT KernelApcDisable;              // 0x1E4
+                    SHORT SpecialApcDisable;             // 0x1E6
+                };
+                ULONG CombinedApcDisable;
+            };
+        };
+        struct
+        {
+            UCHAR WaitBlockFill8[FIELD_OFFSET(KWAIT_BLOCK, SparePtr)]; // 0x28
+            struct _KTHREAD_COUNTERS *ThreadCounters;    // 0x168
+        };
+        struct
+        {
+            UCHAR WaitBlockFill9[1 * sizeof(KWAIT_BLOCK) + FIELD_OFFSET(KWAIT_BLOCK, SparePtr)]; // 0x58
+            PXSTATE_SAVE XStateSave;                     // 0x198
+        };
+        struct
+        {
+            UCHAR WaitBlockFill10[2 * sizeof(KWAIT_BLOCK) + FIELD_OFFSET(KWAIT_BLOCK, SparePtr)]; // 0x88
+            PVOID Win32Thread;                           // 0x1C8
+        };
+        struct
+        {
+            UCHAR WaitBlockFill11[3 * sizeof(KWAIT_BLOCK) + FIELD_OFFSET(KWAIT_BLOCK, Object)]; // 0xB0
+            union
+            {
+                ULONG64 Spare18;                         // 0x1F0
+                volatile ULONG DeferredProcessor;        // 0x1F0 [ReactOS]
+            };
+            ULONG64 LastXStateSaveDebugInfo;             // 0x1F8
+        };
+    };
+    union
+    {
+        struct
+        {
+            ULONG DisableKasan:1;                        // 0x200
+            ULONG AbContextSwitchState:1;
+            ULONG ThreadFlags2Reserved:30;
+        };
+        volatile LONG ThreadFlags2;                      // 0x200
+    };
+    volatile UCHAR BamQosLevel;                          // 0x204
+    UCHAR HardwareFeedbackClass;                         // 0x205
+    union
+    {
+        SHORT PriorityDecrement;                         // 0x206
+        struct
+        {
+            USHORT ForegroundBoost:4;
+            USHORT UnusualBoost:8;
+        };
+    };
+    LIST_ENTRY QueueListEntry;                           // 0x208
+    union
+    {
+        volatile ULONG NextProcessor;                    // 0x218
+        struct
+        {
+            ULONG NextProcessorNumber:31;
+            ULONG SharedReadyQueue:1;
+        };
+    };
+    LONG QueuePriority;                                  // 0x21C
+    struct _KPROCESS *Process;                           // 0x220
+    KAFFINITY UserAffinity;                              // 0x228 Win11 type: PKAFFINITY_EX
+    USHORT UserAffinityPrimaryGroup;                     // 0x230
+    CHAR PreviousMode;                                   // 0x232
+    CHAR BasePriority;                                   // 0x233
+    UCHAR Spare24;                                       // 0x234
+    UCHAR Preempted;                                     // 0x235
+    UCHAR AdjustReason;                                  // 0x236
+    CHAR AdjustIncrement;                                // 0x237
+    ULONG64 AffinityVersion;                             // 0x238
+    KAFFINITY Affinity;                                  // 0x240 Win11 type: PKAFFINITY_EX
+    USHORT AffinityPrimaryGroup;                         // 0x248
+    UCHAR ApcStateIndex;                                 // 0x24A
+    UCHAR WaitBlockCount;                                // 0x24B
+    ULONG IdealProcessor;                                // 0x24C
+    ULONG64 NpxState;                                    // 0x250
+    union
+    {
+        KAPC_STATE SavedApcState;                        // 0x258
+        struct
+        {
+            UCHAR SavedApcStateFill[FIELD_OFFSET(KAPC_STATE, UserApcPending) + 1]; // 0x2B
+            UCHAR WaitReason;                            // 0x283
+            CHAR SuspendCount;                           // 0x284
+            CHAR Saturation;                             // 0x285
+            SHORT SListFaultCount;                       // 0x286
+        };
+    };
+    union
+    {
+        KAPC SchedulerApc;                               // 0x288
+        KAPC SuspendApc;                                 // [ReactOS] alias
+        struct
+        {
+            UCHAR SchedulerApcFill1[FIELD_OFFSET(KAPC, SpareByte1)]; // 0x03
+            UCHAR QuantumReset;                          // 0x28B
+        };
+        struct
+        {
+            UCHAR SchedulerApcFill2[FIELD_OFFSET(KAPC, SpareLong0)]; // 0x04
+            ULONG KernelTime;                            // 0x28C
+        };
+        struct
+        {
+            UCHAR SchedulerApcFill3[FIELD_OFFSET(KAPC, SystemArgument1)]; // 0x40
+            PKPRCB WaitPrcb;                             // 0x2C8
+        };
+        struct
+        {
+            UCHAR SchedulerApcFill4[FIELD_OFFSET(KAPC, SystemArgument2)]; // 0x48
+            PVOID LegoData;                              // 0x2D0
+        };
+        struct
+        {
+            UCHAR SchedulerApcFill5[FIELD_OFFSET(KAPC, Inserted) + 1]; // 0x53
+            UCHAR CallbackNestingLevel;                  // 0x2DB
+            ULONG UserTime;                              // 0x2DC
+        };
+    };
+    union
+    {
+        KEVENT SuspendEvent;                             // 0x2E0
+        KEVENT SuspendSemaphore;                         // [ReactOS] alias, KEVENT-sized
+    };
+    LIST_ENTRY ThreadListEntry;                          // 0x2F8
+    LIST_ENTRY MutantListHead;                           // 0x308
+    union
+    {
+        struct
+        {
+            volatile UCHAR AbWaitEntryCount;             // 0x318
+            volatile UCHAR AbOwnedEntryCount;            // 0x319
+        };
+        volatile USHORT AbEntryCountValue;               // 0x318
+    };
+    union
+    {
+        struct
+        {
+            UCHAR FreezeCount2:1;                        // 0x31A
+            UCHAR FreezeNormal:1;
+            UCHAR FreezeDeep:1;
+        };
+        UCHAR FreezeFlags;                               // 0x31A
+    };
+    CHAR WobPriority;                                    // 0x31B
+    ULONG SecureThreadCookie;                            // 0x31C
+    PVOID SchedulerSharedSystemSlot;                     // 0x320
+    SINGLE_LIST_ENTRY PropagateBoostsEntry;              // 0x328
+    SINGLE_LIST_ENTRY IoSelfBoostsEntry;                 // 0x330
+    UCHAR PriorityFloorCounts[32];                       // 0x338
+    ULONG PriorityFloorSummary;                          // 0x358
+    volatile LONG AbCompletedIoBoostCount;               // 0x35C
+    volatile LONG AbCompletedIoQoSBoostCount;            // 0x360
+    volatile SHORT KeReferenceCount;                     // 0x364
+    CHAR DecayBoost;                                     // 0x366
+    UCHAR LargeStack;                                    // 0x367 Win11 name: Spare6 [ReactOS]
+    ULONG ForegroundLossTime;                            // 0x368
+    union
+    {
+        LIST_ENTRY GlobalForegroundListEntry;            // 0x370
+        struct
+        {
+            SINGLE_LIST_ENTRY ForegroundDpcStackListEntry;
+            ULONG_PTR InGlobalForegroundList;
+        };
+    };
+    LONG64 ReadOperationCount;                           // 0x380
+    LONG64 WriteOperationCount;                          // 0x388
+    LONG64 OtherOperationCount;                          // 0x390
+    LONG64 ReadTransferCount;                            // 0x398
+    LONG64 WriteTransferCount;                           // 0x3A0
+    LONG64 OtherTransferCount;                           // 0x3A8
+    struct _KSCB *QueuedScb;                             // 0x3B0
+    volatile ULONG ThreadTimerDelay;                     // 0x3B8
+    USHORT Spare26;                                      // 0x3BC
+    volatile UCHAR PpmPolicy;                            // 0x3BE
+    UCHAR Spare27;                                       // 0x3BF
+    ULONG64 TracingPrivate[1];                           // 0x3C0
+    PVOID SchedulerAssist;                               // 0x3C8
+    PVOID AbWaitObject;                                  // 0x3D0
+    ULONG ReservedPreviousReadyTimeValue;                // 0x3D8
+    ULONG Spare3DC;                                      // 0x3DC
+    ULONG64 KernelWaitTime;                              // 0x3E0
+    ULONG64 UserWaitTime;                                // 0x3E8
+    union
+    {
+        LIST_ENTRY GlobalUpdateVpThreadPriorityListEntry; // 0x3F0
+        struct
+        {
+            SINGLE_LIST_ENTRY UpdateVpThreadPriorityDpcStackListEntry;
+            ULONG_PTR InGlobalUpdateVpThreadPriorityList;
+        };
+    };
+    LONG SchedulerAssistPriorityFloor;                   // 0x400
+    LONG RealtimePriorityFloor;                          // 0x404
+    PVOID KernelShadowStack;                             // 0x408
+    PVOID KernelShadowStackInitial;                      // 0x410
+    PVOID KernelShadowStackBase;                         // 0x418
+    ULONG_PTR KernelShadowStackLimit;                    // 0x420 _KERNEL_SHADOW_STACK_LIMIT
+    ULONG64 ExtendedFeatureDisableMask;                  // 0x428
+    ULONG64 HgsFeedbackStartTime;                        // 0x430
+    ULONG64 HgsFeedbackCycles;                           // 0x438
+    ULONG HgsInvalidFeedbackCount;                       // 0x440
+    ULONG HgsLowerPerfClassFeedbackCount;                // 0x444
+    ULONG HgsHigherPerfClassFeedbackCount;               // 0x448
+    volatile ULONG ModeHistory;                          // 0x44C
+    SINGLE_LIST_ENTRY SystemAffinityTokenListHead;       // 0x450
+    PVOID IptSaveArea;                                   // 0x458
+    UCHAR ResourceIndex;                                 // 0x460
+    volatile UCHAR CoreIsolationReasons;                 // 0x461
+    UCHAR BamQosLevelFromAssistPage;                     // 0x462
+    UCHAR SecureCallCoreIsolationCount;                  // 0x463
+    ULONG SchedulerSharedOffset;                         // 0x464
+    PVOID SchedulerSharedSwappablePage;                  // 0x468 PKSWAPPABLE_PAGE
+    PVOID KernelAbEntries;                               // 0x470 PKLOCK_ENTRIES
+    PVOID UserAbEntries;                                 // 0x478 PKLOCK_ENTRIES
+    ULONG64 KcsanThread;                                 // 0x480
+    ULONG SchedulerAssistYieldCounter;                   // 0x488
+    ULONG SchedulerAssistYieldBoostCount;                // 0x48C
+    LONG64 SchedulerAssistLastYieldBoostTime;            // 0x490
+    // Win11 Padding[5] region (0x498..0x4C0): ReactOS private members
+    KSPIN_LOCK ApcQueueLock;                             // 0x498 [ReactOS]
+    PKAPC_STATE ApcStatePointer[2];                      // 0x4A0 [ReactOS]
+    PVOID CallbackStack;                                 // 0x4B0 [ReactOS]
+    ULONG64 Padding;                                     // 0x4B8
+} KTHREAD;                                               // sizeof 0x4C0
+
 #elif (NTDDI_VERSION < NTDDI_WIN8)
 
 typedef struct _KTHREAD
@@ -2724,6 +3119,98 @@ C_ASSERT(FIELD_OFFSET(KTHREAD, ReadOperationCount) == 0x3A0);
 C_ASSERT(FIELD_OFFSET(KTHREAD, ApcQueueLock) == 0x440);
 C_ASSERT(FIELD_OFFSET(KTHREAD, StateSaveArea) == 0x478);
 C_ASSERT(FIELD_OFFSET(KTHREAD, ResourceIndex) == 0x480);
+#endif
+
+//
+// amd64 KTHREAD layout locks (Win11 26100 ntkrnlmp.pdb 10.0.26100.8036).
+// Genuine Windows fields are pinned to their PDB offsets; the three ReactOS-only
+// fields live in the Win11 Padding[5] tail (ApcQueueLock/ApcStatePointer/CallbackStack)
+// plus Spare6 (LargeStack) and Spare18 (DeferredProcessor).
+//
+#if defined(_M_AMD64) && (NTDDI_VERSION >= NTDDI_WIN10) && !defined(__ASSEMBLER__)
+C_ASSERT(sizeof(KTHREAD) == 0x4C0);
+C_ASSERT(sizeof(KWAIT_BLOCK) == 0x30);
+C_ASSERT(sizeof(KAPC) == 0x58);
+C_ASSERT(sizeof(KAPC_STATE) == 0x30);
+C_ASSERT(sizeof(KTIMER) == 0x40);
+C_ASSERT(FIELD_OFFSET(KTHREAD, InitialStack) == 0x028);
+C_ASSERT(FIELD_OFFSET(KTHREAD, StackLimit) == 0x030);
+C_ASSERT(FIELD_OFFSET(KTHREAD, StackBase) == 0x038);
+C_ASSERT(FIELD_OFFSET(KTHREAD, ThreadLock) == 0x040);
+C_ASSERT(FIELD_OFFSET(KTHREAD, CycleTime) == 0x048);
+C_ASSERT(FIELD_OFFSET(KTHREAD, KernelStack) == 0x058);
+C_ASSERT(FIELD_OFFSET(KTHREAD, StateSaveArea) == 0x060);
+C_ASSERT(FIELD_OFFSET(KTHREAD, WaitRegister) == 0x070);
+C_ASSERT(FIELD_OFFSET(KTHREAD, MiscFlags) == 0x074);
+C_ASSERT(FIELD_OFFSET(KTHREAD, ThreadFlags) == 0x078);
+C_ASSERT(FIELD_OFFSET(KTHREAD, SystemCallNumber) == 0x080);
+C_ASSERT(FIELD_OFFSET(KTHREAD, FirstArgument) == 0x088);
+C_ASSERT(FIELD_OFFSET(KTHREAD, TrapFrame) == 0x090);
+C_ASSERT(FIELD_OFFSET(KTHREAD, ApcState) == 0x098);
+C_ASSERT(FIELD_OFFSET(KTHREAD, Priority) == 0x0C3);
+C_ASSERT(FIELD_OFFSET(KTHREAD, UserIdealProcessor) == 0x0C4);
+C_ASSERT(FIELD_OFFSET(KTHREAD, WaitStatus) == 0x0C8);
+C_ASSERT(FIELD_OFFSET(KTHREAD, WaitBlockList) == 0x0D0);
+C_ASSERT(FIELD_OFFSET(KTHREAD, WaitListEntry) == 0x0D8);
+C_ASSERT(FIELD_OFFSET(KTHREAD, SwapListEntry) == 0x0D8);
+C_ASSERT(FIELD_OFFSET(KTHREAD, Queue) == 0x0E8);
+C_ASSERT(FIELD_OFFSET(KTHREAD, Teb) == 0x0F0);
+C_ASSERT(FIELD_OFFSET(KTHREAD, Timer) == 0x100);
+C_ASSERT(FIELD_OFFSET(KTHREAD, WaitBlock) == 0x140);
+C_ASSERT(FIELD_OFFSET(KTHREAD, ContextSwitches) == 0x154);
+C_ASSERT(FIELD_OFFSET(KTHREAD, State) == 0x184);
+C_ASSERT(FIELD_OFFSET(KTHREAD, WaitIrql) == 0x186);
+C_ASSERT(FIELD_OFFSET(KTHREAD, WaitMode) == 0x187);
+C_ASSERT(FIELD_OFFSET(KTHREAD, WaitTime) == 0x1B4);
+C_ASSERT(FIELD_OFFSET(KTHREAD, ThreadCounters) == 0x168);
+C_ASSERT(FIELD_OFFSET(KTHREAD, XStateSave) == 0x198);
+C_ASSERT(FIELD_OFFSET(KTHREAD, Win32Thread) == 0x1C8);
+C_ASSERT(FIELD_OFFSET(KTHREAD, KernelApcDisable) == 0x1E4);
+C_ASSERT(FIELD_OFFSET(KTHREAD, CombinedApcDisable) == 0x1E4);
+C_ASSERT(FIELD_OFFSET(KTHREAD, DeferredProcessor) == 0x1F0);
+C_ASSERT(FIELD_OFFSET(KTHREAD, ThreadFlags2) == 0x200);
+C_ASSERT(FIELD_OFFSET(KTHREAD, QueueListEntry) == 0x208);
+C_ASSERT(FIELD_OFFSET(KTHREAD, NextProcessor) == 0x218);
+C_ASSERT(FIELD_OFFSET(KTHREAD, QueuePriority) == 0x21C);
+C_ASSERT(FIELD_OFFSET(KTHREAD, Process) == 0x220);
+C_ASSERT(FIELD_OFFSET(KTHREAD, UserAffinity) == 0x228);
+C_ASSERT(FIELD_OFFSET(KTHREAD, UserAffinityPrimaryGroup) == 0x230);
+C_ASSERT(FIELD_OFFSET(KTHREAD, PreviousMode) == 0x232);
+C_ASSERT(FIELD_OFFSET(KTHREAD, BasePriority) == 0x233);
+C_ASSERT(FIELD_OFFSET(KTHREAD, AffinityVersion) == 0x238);
+C_ASSERT(FIELD_OFFSET(KTHREAD, Affinity) == 0x240);
+C_ASSERT(FIELD_OFFSET(KTHREAD, AffinityPrimaryGroup) == 0x248);
+C_ASSERT(FIELD_OFFSET(KTHREAD, ApcStateIndex) == 0x24A);
+C_ASSERT(FIELD_OFFSET(KTHREAD, WaitBlockCount) == 0x24B);
+C_ASSERT(FIELD_OFFSET(KTHREAD, IdealProcessor) == 0x24C);
+C_ASSERT(FIELD_OFFSET(KTHREAD, NpxState) == 0x250);
+C_ASSERT(FIELD_OFFSET(KTHREAD, SavedApcState) == 0x258);
+C_ASSERT(FIELD_OFFSET(KTHREAD, WaitReason) == 0x283);
+C_ASSERT(FIELD_OFFSET(KTHREAD, SuspendCount) == 0x284);
+C_ASSERT(FIELD_OFFSET(KTHREAD, SchedulerApc) == 0x288);
+C_ASSERT(FIELD_OFFSET(KTHREAD, QuantumReset) == 0x28B);
+C_ASSERT(FIELD_OFFSET(KTHREAD, KernelTime) == 0x28C);
+C_ASSERT(FIELD_OFFSET(KTHREAD, WaitPrcb) == 0x2C8);
+C_ASSERT(FIELD_OFFSET(KTHREAD, LegoData) == 0x2D0);
+C_ASSERT(FIELD_OFFSET(KTHREAD, CallbackNestingLevel) == 0x2DB);
+C_ASSERT(FIELD_OFFSET(KTHREAD, UserTime) == 0x2DC);
+C_ASSERT(FIELD_OFFSET(KTHREAD, SuspendEvent) == 0x2E0);
+C_ASSERT(FIELD_OFFSET(KTHREAD, ThreadListEntry) == 0x2F8);
+C_ASSERT(FIELD_OFFSET(KTHREAD, MutantListHead) == 0x308);
+C_ASSERT(FIELD_OFFSET(KTHREAD, SecureThreadCookie) == 0x31C);
+C_ASSERT(FIELD_OFFSET(KTHREAD, LargeStack) == 0x367);
+C_ASSERT(FIELD_OFFSET(KTHREAD, ForegroundLossTime) == 0x368);
+C_ASSERT(FIELD_OFFSET(KTHREAD, ReadOperationCount) == 0x380);
+C_ASSERT(FIELD_OFFSET(KTHREAD, QueuedScb) == 0x3B0);
+C_ASSERT(FIELD_OFFSET(KTHREAD, KernelWaitTime) == 0x3E0);
+C_ASSERT(FIELD_OFFSET(KTHREAD, KernelShadowStack) == 0x408);
+C_ASSERT(FIELD_OFFSET(KTHREAD, ModeHistory) == 0x44C);
+C_ASSERT(FIELD_OFFSET(KTHREAD, ResourceIndex) == 0x460);
+C_ASSERT(FIELD_OFFSET(KTHREAD, KernelAbEntries) == 0x470);
+C_ASSERT(FIELD_OFFSET(KTHREAD, UserAbEntries) == 0x478);
+C_ASSERT(FIELD_OFFSET(KTHREAD, ApcQueueLock) == 0x498);
+C_ASSERT(FIELD_OFFSET(KTHREAD, ApcStatePointer) == 0x4A0);
+C_ASSERT(FIELD_OFFSET(KTHREAD, CallbackStack) == 0x4B0);
 #endif
 
 

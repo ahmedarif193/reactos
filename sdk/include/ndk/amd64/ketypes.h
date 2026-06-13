@@ -98,7 +98,8 @@ typedef enum
     CPU_UNKNOWN,
     CPU_AMD,
     CPU_INTEL,
-    CPU_VIA
+    CPU_VIA,
+    CPU_CENTAUR = CPU_VIA
 } CPU_VENDORS;
 
 //
@@ -897,7 +898,21 @@ typedef struct _KPRCB
     ULONG KeAlignmentFixupCount;
     UCHAR VendorString[13];
     UCHAR PrcbPad10[3];
+#if (NTDDI_VERSION >= NTDDI_WINBLUE)
+    // Win 8.1+ widened FeatureBits to 64 bits; expose a high-dword accessor
+    // (FeatureBitsHigh) for ReactOS code that still composes it from halves.
+    union
+    {
+        ULONG64 FeatureBits;
+        struct
+        {
+            ULONG FeatureBitsLow;
+            ULONG FeatureBitsHigh;
+        };
+    };
+#else
     ULONG FeatureBits;
+#endif
     LARGE_INTEGER UpdateSignature;
     KDPC DpcWatchdogDpc;
     KTIMER DpcWatchdogTimer;
@@ -1037,7 +1052,7 @@ typedef struct _KEXCEPTION_FRAME
     ULONG64 P4Home;
     ULONG64 P5;
 #if (NTDDI_VERSION >= NTDDI_WIN8)
-    ULONG64 Spare1;
+    ULONG64 InitialStack;                // Win8+ name: Spare1 [ReactOS reuses the freed slot]
 #else
     ULONG64 InitialStack;
 #endif
@@ -1058,7 +1073,7 @@ typedef struct _KEXCEPTION_FRAME
     ULONG64 OutputBuffer;
     ULONG64 OutputLength;
 #if (NTDDI_VERSION >= NTDDI_WIN8)
-    ULONG64 Spare2;
+    ULONG64 CallbackStack;               // Win8+ name: Spare2 [ReactOS reuses the freed slot]
 #endif
     ULONG64 MxCsr;
     ULONG64 Rbp;
