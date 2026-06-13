@@ -150,5 +150,9 @@ TestAMLIllegalIOPortAddresses(void)
 
 START_TEST(HalSystemInfo)
 {
+#if defined(_M_IX86) || defined(_M_AMD64)
     TestAMLIllegalIOPortAddresses();
+#else
+    skip(FALSE, "HalSystemInfo IO-port info classes are x86-only\n");
+#endif
 }

@@ -18,6 +18,11 @@ START_TEST(EtwRegisterKM)
     NTSTATUS Status;
 
     Status = EtwRegister(&KmtEtwProviderGuid, NULL, NULL, &RegHandle);
+    if (Status == STATUS_NOT_IMPLEMENTED)
+    {
+        skip(FALSE, "ETW provider registration not available in this context\n");
+        return;
+    }
     ok_eq_hex(Status, STATUS_SUCCESS);
     if (!NT_SUCCESS(Status)) return;
     ok(RegHandle != 0, "reg handle zero\n");

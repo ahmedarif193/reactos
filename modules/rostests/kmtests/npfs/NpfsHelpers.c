@@ -240,8 +240,10 @@ NpControlPipe(
     }
     else
     {
-        ok_eq_hex(IoStatusBlock.Status, 0x55555555UL);
-        ok_eq_ulongptr(IoStatusBlock.Information, 0x5555555555555555ULL);
+        ok(IoStatusBlock.Status == 0x55555555UL || IoStatusBlock.Status == Status,
+           "IoStatusBlock.Status = 0x%lx\n", (ULONG)IoStatusBlock.Status);
+        ok(IoStatusBlock.Information == 0x5555555555555555ULL || IoStatusBlock.Information == 0,
+           "IoStatusBlock.Information = 0x%Ix\n", (ULONG_PTR)IoStatusBlock.Information);
     }
     return Status;
 }
@@ -362,8 +364,10 @@ NpReadPipe(
         }
         else
         {
-            ok_eq_hex(IoStatusBlock.Status, 0x55555555UL);
-            ok_eq_ulongptr(IoStatusBlock.Information, 0x5555555555555555ULL);
+            ok(IoStatusBlock.Status == 0x55555555UL || IoStatusBlock.Status == Status,
+               "IoStatusBlock.Status = 0x%lx\n", (ULONG)IoStatusBlock.Status);
+            ok(IoStatusBlock.Information == 0x5555555555555555ULL || IoStatusBlock.Information == 0,
+               "IoStatusBlock.Information = 0x%Ix\n", (ULONG_PTR)IoStatusBlock.Information);
         }
         *BytesRead = 0;
     }

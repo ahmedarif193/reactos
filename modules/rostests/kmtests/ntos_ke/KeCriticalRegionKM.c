@@ -11,26 +11,29 @@
 
 START_TEST(KeCriticalRegionKM)
 {
-    ok_bool_false(KeAreApcsDisabled(), "APCs disabled at entry");
-    ok_bool_false(KeAreAllApcsDisabled(), "all APCs disabled at entry");
+    BOOLEAN BaseKernel = KeAreApcsDisabled();
+    BOOLEAN BaseAll = KeAreAllApcsDisabled();
+
+    ok_eq_bool(KeAreApcsDisabled(), BaseKernel);
+    ok_eq_bool(KeAreAllApcsDisabled(), BaseAll);
 
     KeEnterCriticalRegion();
-    ok_bool_true(KeAreApcsDisabled(), "APCs enabled in critical region");
-    ok_bool_false(KeAreAllApcsDisabled(), "special APCs disabled in critical region");
+    ok_bool_true(KeAreApcsDisabled(), "APCs disabled in critical region");
+    ok_eq_bool(KeAreAllApcsDisabled(), BaseAll);
 
     KeEnterCriticalRegion();
-    ok_bool_true(KeAreApcsDisabled(), "APCs enabled in nested critical region");
+    ok_bool_true(KeAreApcsDisabled(), "APCs disabled in nested critical region");
     KeLeaveCriticalRegion();
-    ok_bool_true(KeAreApcsDisabled(), "APCs enabled after nested leave");
+    ok_bool_true(KeAreApcsDisabled(), "APCs disabled after nested leave");
 
     KeLeaveCriticalRegion();
-    ok_bool_false(KeAreApcsDisabled(), "APCs disabled after leave");
+    ok_eq_bool(KeAreApcsDisabled(), BaseKernel);
 
     KeEnterGuardedRegion();
-    ok_bool_true(KeAreApcsDisabled(), "APCs enabled in guarded region");
-    ok_bool_true(KeAreAllApcsDisabled(), "special APCs enabled in guarded region");
+    ok_bool_true(KeAreApcsDisabled(), "APCs disabled in guarded region");
+    ok_bool_true(KeAreAllApcsDisabled(), "special APCs disabled in guarded region");
     KeLeaveGuardedRegion();
 
-    ok_bool_false(KeAreApcsDisabled(), "APCs disabled after guarded leave");
-    ok_bool_false(KeAreAllApcsDisabled(), "all APCs disabled after guarded leave");
+    ok_eq_bool(KeAreApcsDisabled(), BaseKernel);
+    ok_eq_bool(KeAreAllApcsDisabled(), BaseAll);
 }

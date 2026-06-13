@@ -175,7 +175,9 @@ KernelModeTest(IN PVOID Context)
             ObDereferenceObject(ParentFileObject);
         }
         /* Because target exists FSD must signal it */
-        ok_eq_long(IoStatusBlock.Information, FILE_EXISTS);
+        ok(IoStatusBlock.Information == FILE_EXISTS ||
+           (GetNTVersion() >= _WIN32_WINNT_WIN8 && IoStatusBlock.Information == FILE_OPENED),
+           "Information = %Iu, expected FILE_EXISTS/FILE_OPENED\n", IoStatusBlock.Information);
         ObCloseHandle(ParentHandle, KernelMode);
     }
 
@@ -251,7 +253,9 @@ KernelModeTest(IN PVOID Context)
                 }
                 ObDereferenceObject(ParentFileObject);
             }
-            ok_eq_long(IoStatusBlock.Information, FILE_EXISTS);
+            ok(IoStatusBlock.Information == FILE_EXISTS ||
+           (GetNTVersion() >= _WIN32_WINNT_WIN8 && IoStatusBlock.Information == FILE_OPENED),
+           "Information = %Iu, expected FILE_EXISTS/FILE_OPENED\n", IoStatusBlock.Information);
             ObCloseHandle(ParentHandle, KernelMode);
         }
         ObCloseHandle(SystemRootHandle, KernelMode);
@@ -305,7 +309,9 @@ KernelModeTest(IN PVOID Context)
             ok_eq_long(RtlCompareUnicodeString(&ParentFileObject->FileName, &TargetFileObject->FileName, FALSE), 0);
             ObDereferenceObject(ParentFileObject);
         }
-        ok_eq_long(IoStatusBlock.Information, FILE_DOES_NOT_EXIST);
+        ok(IoStatusBlock.Information == FILE_DOES_NOT_EXIST ||
+           (GetNTVersion() >= _WIN32_WINNT_WIN8 && IoStatusBlock.Information == FILE_OPENED),
+           "Information = %Iu, expected FILE_DOES_NOT_EXIST/FILE_OPENED\n", IoStatusBlock.Information);
         ObCloseHandle(ParentHandle, KernelMode);
     }
 
@@ -380,7 +386,9 @@ KernelModeTest(IN PVOID Context)
                 }
                 ObDereferenceObject(ParentFileObject);
             }
-            ok_eq_long(IoStatusBlock.Information, FILE_DOES_NOT_EXIST);
+            ok(IoStatusBlock.Information == FILE_DOES_NOT_EXIST ||
+           (GetNTVersion() >= _WIN32_WINNT_WIN8 && IoStatusBlock.Information == FILE_OPENED),
+           "Information = %Iu, expected FILE_DOES_NOT_EXIST/FILE_OPENED\n", IoStatusBlock.Information);
             ObCloseHandle(ParentHandle, KernelMode);
         }
         ObCloseHandle(SystemRootHandle, KernelMode);

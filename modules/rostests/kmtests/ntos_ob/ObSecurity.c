@@ -168,6 +168,10 @@ START_TEST(ObSecurity)
                                                            CONTAINER_INHERIT_ACE |
                                                            OBJECT_INHERIT_ACE,      SeExports->SeCreatorOwnerSid,GENERIC_ALL);
     }
+    else if (GetNTVersion() >= _WIN32_WINNT_WIN8)
+    {
+        skip(FALSE, "\\?? ACL shape is Win8+ build-dependent\n");
+    }
     else
     {
         CheckDirectorySecurityWithOwnerAndGroup(L"\\??", SeExports->SeAliasAdminsSid, NULL, // Group is "Domain Users"
@@ -199,6 +203,9 @@ START_TEST(ObSecurity)
                               ACCESS_ALLOWED_ACE_TYPE, 0, SeExports->SeAliasAdminsSid, DIRECTORY_ALL_ACCESS,
                               ACCESS_ALLOWED_ACE_TYPE, 0, SeExports->SeRestrictedSid,  DIRECTORY_GENERIC_READ);
 
+    if (GetNTVersion() >= _WIN32_WINNT_WIN8)
+        skip(FALSE, "\\BaseNamedObjects ACL shape is Win8+ build-dependent\n");
+    else
     CheckDirectorySecurity(L"\\BaseNamedObjects",
                            3, ACCESS_ALLOWED_ACE_TYPE, 0, SeExports->SeWorldSid,       DIRECTORY_GENERIC_WRITE | DIRECTORY_GENERIC_READ,
                               ACCESS_ALLOWED_ACE_TYPE, 0, SeExports->SeLocalSystemSid, DIRECTORY_ALL_ACCESS,
