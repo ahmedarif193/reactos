@@ -230,7 +230,7 @@ PWLANSVC_PROFILE WlanSvcFindProfile(PWLANSVC_INTERFACE Iface, LPCWSTR Name);
 DWORD WlanSvcSetProfile(PWLANSVC_INTERFACE Iface, DWORD dwFlags, LPCWSTR Xml,
                         BOOL bOverwrite, PDWORD pdwReasonCode);
 DWORD WlanSvcGetProfile(PWLANSVC_INTERFACE Iface, LPCWSTR Name,
-                        LPWSTR *ppXml, PDWORD pdwFlags);
+                        BOOL bPlaintextKey, LPWSTR *ppXml, PDWORD pdwFlags);
 DWORD WlanSvcDeleteProfile(PWLANSVC_INTERFACE Iface, LPCWSTR Name);
 VOID  WlanSvcFreeProfile(PWLANSVC_PROFILE Profile);
 
