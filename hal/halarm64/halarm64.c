@@ -2459,17 +2459,14 @@ volatile ULONG *HalpMmio(ULONG_PTR Base, ULONG Offset)
 
 ULONGLONG HalpMmioRead64(ULONG_PTR Base, ULONG Offset)
 {
-    volatile ULONG *Ptr = HalpMmio(Base, Offset);
-    ULONGLONG Low = Ptr[0];
-    ULONGLONG High = Ptr[1];
-    return Low | (High << 32);
+    volatile ULONGLONG *Ptr = (volatile ULONGLONG *)HalpMmio(Base, Offset);
+    return *Ptr;
 }
 
 VOID HalpMmioWrite64(ULONG_PTR Base, ULONG Offset, ULONGLONG Value)
 {
-    volatile ULONG *Ptr = HalpMmio(Base, Offset);
-    Ptr[0] = (ULONG)(Value & 0xFFFFFFFFu);
-    Ptr[1] = (ULONG)(Value >> 32);
+    volatile ULONGLONG *Ptr = (volatile ULONGLONG *)HalpMmio(Base, Offset);
+    *Ptr = Value;
 }
 
 static
@@ -3371,10 +3368,6 @@ HalAllocateAdapterChannel(
     MapRegisterBase->Signature = HAL_ARM64_MAP_REG_SIGNATURE;
     MapRegisterBase->NumberOfMapRegisters = NumberOfMapRegisters;
     MapRegisterBase->AdapterObject = AdapterObject;
-
-    /* Store the map register base in the adapter */
-    AdapterObject->MapRegisterBase = MapRegisterBase;
-    AdapterObject->NumberOfMapRegisters = NumberOfMapRegisters;
 
     /*
      * On ARM64, we don't have a DMA controller to arbitrate, so we can
@@ -6125,18 +6118,7 @@ NTAPI
 IoFreeAdapterChannel(
     _In_ PADAPTER_OBJECT AdapterObject)
 {
-    if (!AdapterObject)
-    {
-        return;
-    }
-
-    /*
-     * Clear the adapter's map register base.
-     * The actual map registers should be freed via IoFreeMapRegisters.
-     */
-    AdapterObject->MapRegisterBase = NULL;
-    AdapterObject->NumberOfMapRegisters = 0;
-
+    UNREFERENCED_PARAMETER(AdapterObject);
 }
 
 /*
