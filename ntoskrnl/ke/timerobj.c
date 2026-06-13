@@ -270,7 +270,11 @@ KeInitializeTimerEx(OUT PKTIMER Timer,
     Timer->Header.Type = TimerNotificationObject + Type;
     Timer->Header.TimerControlFlags = 0;
     Timer->Header.Hand = 0;
+#if (NTDDI_VERSION >= NTDDI_WIN7) || defined(_M_ARM64)
     Timer->Header.TimerMiscFlags = 0;
+#else
+    Timer->Header.Inserted = 0;
+#endif
     Timer->Header.SignalState = 0;
     InitializeListHead(&(Timer->Header.WaitListHead));
 
