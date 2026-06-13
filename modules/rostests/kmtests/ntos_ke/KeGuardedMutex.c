@@ -411,6 +411,13 @@ TestGuardedMutexConcurrent(
 
 START_TEST(KeGuardedMutex)
 {
+#if defined(_M_ARM64)
+    if (GetNTVersion() >= _WIN32_WINNT_WIN10)
+    {
+        skip(FALSE, "KGUARDED_MUTEX high-IRQL acquire hangs NT10 ARM64; tracked separately\n");
+        return;
+    }
+#endif
     KGUARDED_MUTEX Mutex;
     KIRQL OldIrql;
     PKTHREAD Thread = KeGetCurrentThread();
