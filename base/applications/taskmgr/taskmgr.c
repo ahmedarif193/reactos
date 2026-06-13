@@ -157,6 +157,12 @@ int APIENTRY wWinMain(HINSTANCE hInstance,
     /* Load our settings from the registry */
     LoadSettings();
 
+    if (lpCmdLine && wcsstr(lpCmdLine, L"/perf"))
+    {
+        TaskManagerSettings.ActiveTabPage = 2;
+        TaskManagerSettings.CPUHistory_OneGraphPerCPU = TRUE;
+    }
+
     /* Initialize perf data */
     if (!PerfDataInitialize())
         return -1;

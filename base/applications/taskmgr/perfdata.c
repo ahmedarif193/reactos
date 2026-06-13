@@ -33,6 +33,12 @@ ULONG                                      SystemNumberOfHandles;
 PSYSTEM_PROCESSOR_PERFORMANCE_INFORMATION  SystemProcessorTimeInfo = NULL;
 PSID                                       SystemUserSid = NULL;
 
+#define PERF_MAX_CPUS 64
+static LARGE_INTEGER                       liOldPerCpuIdle[PERF_MAX_CPUS];
+static LARGE_INTEGER                       liOldPerCpuKernel[PERF_MAX_CPUS];
+static LARGE_INTEGER                       liOldPerCpuUser[PERF_MAX_CPUS];
+static BYTE                                PerCpuUsage[PERF_MAX_CPUS];
+
 PCMD_LINE_CACHE global_cache = NULL;
 
 #define CMD_LINE_MIN(a, b) (a < b ? a - sizeof(WCHAR) : b)
@@ -272,6 +278,31 @@ void PerfDataRefresh(void)
         CurrentKernelTime += Li2Double(SystemProcessorTimeInfo[Idx].InterruptTime);
     }
 
+    for (Idx = 0; Idx < (ULONG)SystemBasicInfo.NumberOfProcessors && Idx < PERF_MAX_CPUS; Idx++) {
+        LONGLONG KernelDelta = SystemProcessorTimeInfo[Idx].KernelTime.QuadPart - liOldPerCpuKernel[Idx].QuadPart;
+        LONGLONG UserDelta = SystemProcessorTimeInfo[Idx].UserTime.QuadPart - liOldPerCpuUser[Idx].QuadPart;
+        LONGLONG IdleDelta = SystemProcessorTimeInfo[Idx].IdleTime.QuadPart - liOldPerCpuIdle[Idx].QuadPart;
+        LONGLONG TotalDelta = KernelDelta + UserDelta;
+
+        if (liOldPerCpuKernel[Idx].QuadPart != 0 && TotalDelta > 0) {
+            LONGLONG BusyDelta = TotalDelta - IdleDelta;
+            LONGLONG Usage;
+
+            if (BusyDelta < 0)
+                BusyDelta = 0;
+            Usage = (BusyDelta * 100) / TotalDelta;
+            if (Usage > 100)
+                Usage = 100;
+            PerCpuUsage[Idx] = (BYTE)Usage;
+        } else {
+            PerCpuUsage[Idx] = 0;
+        }
+
+        liOldPerCpuKernel[Idx] = SystemProcessorTimeInfo[Idx].KernelTime;
+        liOldPerCpuUser[Idx] = SystemProcessorTimeInfo[Idx].UserTime;
+        liOldPerCpuIdle[Idx] = SystemProcessorTimeInfo[Idx].IdleTime;
+    }
+
     /* If it's a first call - skip idle time calcs */
     if (liOldIdleTime.QuadPart != 0) {
         /*  CurrentValue = NewValue - OldValue */
@@ -481,6 +512,28 @@ ULONG PerfDataGetProcessorSystemUsage(void)
     ULONG Result;
     EnterCriticalSection(&PerfDataCriticalSection);
     Result = (ULONG)min(max(dbKernelTime, 0.), 100.);
+    LeaveCriticalSection(&PerfDataCriticalSection);
+    return Result;
+}
+
+ULONG PerfDataGetProcessorCount(void)
+{
+    ULONG Count = SystemBasicInfo.NumberOfProcessors;
+
+    if (Count == 0)
+        Count = 1;
+    if (Count > PERF_MAX_CPUS)
+        Count = PERF_MAX_CPUS;
+    return Count;
+}
+
+ULONG PerfDataGetProcessorUsagePerCpu(ULONG Cpu)
+{
+    ULONG Result = 0;
+
+    EnterCriticalSection(&PerfDataCriticalSection);
+    if (Cpu < PERF_MAX_CPUS)
+        Result = PerCpuUsage[Cpu];
     LeaveCriticalSection(&PerfDataCriticalSection);
     return Result;
 }
