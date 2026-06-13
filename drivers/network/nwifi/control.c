@@ -497,7 +497,7 @@ NwifiDispatchDeviceControl(
     return Status;
 }
 
-/* IRP_MJ_CREATE / IRP_MJ_CLOSE / IRP_MJ_CLEANUP. */
+/* IRP_MJ_CREATE / IRP_MJ_CLOSE. */
 static
 NTSTATUS
 NTAPI
@@ -505,12 +505,29 @@ NwifiDispatchCreateClose(
     _In_ PDEVICE_OBJECT DeviceObject,
     _In_ PIRP Irp)
 {
+    PIO_STACK_LOCATION IoStack = IoGetCurrentIrpStackLocation(Irp);
+    NTSTATUS Status = STATUS_SUCCESS;
+
     UNREFERENCED_PARAMETER(DeviceObject);
 
-    Irp->IoStatus.Status = STATUS_SUCCESS;
+    /* The control device drives the radio (connect/key install); restrict opens to
+     * SYSTEM-level callers (wlansvc runs as LocalSystem) since NDIS creates it with no ACL. */
+    if (IoStack->MajorFunction == IRP_MJ_CREATE && Irp->RequestorMode == UserMode)
+    {
+        LUID TcbPrivilege;
+        TcbPrivilege.LowPart = SE_TCB_PRIVILEGE;
+        TcbPrivilege.HighPart = 0;
+        if (!SeSinglePrivilegeCheck(TcbPrivilege, UserMode))
+        {
+            DPRINT1("NWIFI: control-device open denied (caller lacks SeTcbPrivilege)\n");
+            Status = STATUS_ACCESS_DENIED;
+        }
+    }
+
+    Irp->IoStatus.Status = Status;
     Irp->IoStatus.Information = 0;
     IoCompleteRequest(Irp, IO_NO_INCREMENT);
-    return STATUS_SUCCESS;
+    return Status;
 }
 
 /* Complete every pended notify IRP as STATUS_CANCELLED.  An IRP is only
