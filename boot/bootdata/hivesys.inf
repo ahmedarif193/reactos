@@ -38,15 +38,6 @@ HKLM,"SYSTEM\CurrentControlSet\Control\CriticalDeviceDatabase\PCI#VEN_1033&DEV_0
 HKLM,"SYSTEM\CurrentControlSet\Control\CriticalDeviceDatabase\*PNP0C08","Service",0x00000000,"acpi"
 HKLM,"SYSTEM\CurrentControlSet\Control\CriticalDeviceDatabase\*PNP0C08","ClassGUID",0x00000000,"{4D36E97D-E325-11CE-BFC1-08002BE10318}"
 
-HKLM,"SYSTEM\CurrentControlSet\Control\CriticalDeviceDatabase\PCI#CC_0C0300","Service",0x00000000,"usbuhci"
-HKLM,"SYSTEM\CurrentControlSet\Control\CriticalDeviceDatabase\PCI#CC_0C0300","ClassGUID",0x00000000,"{36FC9E60-C465-11CF-8056-444553540000}"
-
-HKLM,"SYSTEM\CurrentControlSet\Control\CriticalDeviceDatabase\PCI#CC_0C0310","Service",0x00000000,"usbohci"
-HKLM,"SYSTEM\CurrentControlSet\Control\CriticalDeviceDatabase\PCI#CC_0C0310","ClassGUID",0x00000000,"{36FC9E60-C465-11CF-8056-444553540000}"
-
-HKLM,"SYSTEM\CurrentControlSet\Control\CriticalDeviceDatabase\PCI#CC_0C0320","Service",0x00000000,"usbehci"
-HKLM,"SYSTEM\CurrentControlSet\Control\CriticalDeviceDatabase\PCI#CC_0C0320","ClassGUID",0x00000000,"{36FC9E60-C465-11CF-8056-444553540000}"
-
 HKLM,"SYSTEM\CurrentControlSet\Control\CriticalDeviceDatabase\PCI#CC_0C0330","Service",0x00000000,"usbxhci"
 HKLM,"SYSTEM\CurrentControlSet\Control\CriticalDeviceDatabase\PCI#CC_0C0330","ClassGUID",0x00000000,"{36FC9E60-C465-11CF-8056-444553540000}"
 
@@ -1837,13 +1828,6 @@ HKLM,"SYSTEM\CurrentControlSet\Services\Null","Start",0x00010001,0x00000001
 HKLM,"SYSTEM\CurrentControlSet\Services\Null","Tag",0x00010001,0x00000001
 HKLM,"SYSTEM\CurrentControlSet\Services\Null","Type",0x00010001,0x00000001
 
-; NMI device driver
-HKLM,"SYSTEM\CurrentControlSet\Services\NMIDebug","ErrorControl",0x00010001,0x00000000
-HKLM,"SYSTEM\CurrentControlSet\Services\NMIDebug","Group",0x00000000,"Base"
-HKLM,"SYSTEM\CurrentControlSet\Services\NMIDebug","ImagePath",0x00020000,"system32\drivers\nmidebug.sys"
-HKLM,"SYSTEM\CurrentControlSet\Services\NMIDebug","Start",0x00010001,0x00000000
-HKLM,"SYSTEM\CurrentControlSet\Services\NMIDebug","Type",0x00010001,0x00000001
-
 ; Packet driver
 HKLM,"SYSTEM\CurrentControlSet\Services\Packet","ErrorControl",0x00010001,0x00000001
 HKLM,"SYSTEM\CurrentControlSet\Services\Packet","Group",0x00000000,"PNP_TDI"
@@ -1878,27 +1862,6 @@ HKLM,"SYSTEM\CurrentControlSet\Services\usbhub","Group",0x00000000,"Boot Bus Ext
 HKLM,"SYSTEM\CurrentControlSet\Services\usbhub","ImagePath",0x00020000,"system32\drivers\usbhub.sys"
 HKLM,"SYSTEM\CurrentControlSet\Services\usbhub","Start",0x00010001,0x00000000
 HKLM,"SYSTEM\CurrentControlSet\Services\usbhub","Type",0x00010001,0x00000001
-
-; EHCI controller driver
-HKLM,"SYSTEM\CurrentControlSet\Services\usbehci","ErrorControl",0x00010001,0x00000001
-HKLM,"SYSTEM\CurrentControlSet\Services\usbehci","Group",0x00000000,"Boot Bus Extender"
-HKLM,"SYSTEM\CurrentControlSet\Services\usbehci","ImagePath",0x00020000,"system32\drivers\usbehci.sys"
-HKLM,"SYSTEM\CurrentControlSet\Services\usbehci","Start",0x00010001,0x00000000
-HKLM,"SYSTEM\CurrentControlSet\Services\usbehci","Type",0x00010001,0x00000001
-
-; OHCI controller driver
-HKLM,"SYSTEM\CurrentControlSet\Services\usbohci","ErrorControl",0x00010001,0x00000001
-HKLM,"SYSTEM\CurrentControlSet\Services\usbohci","Group",0x00000000,"Boot Bus Extender"
-HKLM,"SYSTEM\CurrentControlSet\Services\usbohci","ImagePath",0x00020000,"system32\drivers\usbohci.sys"
-HKLM,"SYSTEM\CurrentControlSet\Services\usbohci","Start",0x00010001,0x00000000
-HKLM,"SYSTEM\CurrentControlSet\Services\usbohci","Type",0x00010001,0x00000001
-
-; UHCI controller driver
-HKLM,"SYSTEM\CurrentControlSet\Services\usbuhci","ErrorControl",0x00010001,0x00000001
-HKLM,"SYSTEM\CurrentControlSet\Services\usbuhci","Group",0x00000000,"Boot Bus Extender"
-HKLM,"SYSTEM\CurrentControlSet\Services\usbuhci","ImagePath",0x00020000,"system32\drivers\usbuhci.sys"
-HKLM,"SYSTEM\CurrentControlSet\Services\usbuhci","Start",0x00010001,0x00000000
-HKLM,"SYSTEM\CurrentControlSet\Services\usbuhci","Type",0x00010001,0x00000001
 
 ; XHCI controller driver
 HKLM,"SYSTEM\CurrentControlSet\Services\usbxhci","ErrorControl",0x00010001,0x00000001
