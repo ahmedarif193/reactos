@@ -582,7 +582,6 @@ typedef struct _HALP_GIC_ITS_NODE
     PHYSICAL_ADDRESS CmdQueuePa;    /* Physical address for GITS_CBASER */
     ULONG CmdWriteIndex;            /* Next write position (entry index) */
     ULONG CmdQueueEntries;          /* Total entries in queue */
-    BOOLEAN CmdQueueNeedsFlush;     /* Cache flush required for commands */
     KSPIN_LOCK CmdLock;             /* Lock for command queue access */
 
     /* Device table (BASER type 0x1) */
