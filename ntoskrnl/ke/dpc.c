@@ -1069,24 +1069,37 @@ NTAPI
 KeGenericCallDpc(IN PKDEFERRED_ROUTINE Routine,
                  IN PVOID Context)
 {
-    ULONG Barrier = KeNumberProcessors;
+    volatile ULONG Barrier = KeNumberProcessors;
     KIRQL OldIrql;
     DEFERRED_REVERSE_BARRIER ReverseBarrier;
-    ASSERT(KeGetCurrentIrql () < DISPATCH_LEVEL);
+    PKPRCB CurrentPrcb;
+    CCHAR Number;
+    ASSERT(KeGetCurrentIrql() < DISPATCH_LEVEL);
 
-    //
-    // The barrier is the number of processors, each processor will decrement it
-    // by one, so when all processors have run the DPC, the barrier reaches zero
-    //
-    ReverseBarrier.Barrier = Barrier;
-    ReverseBarrier.TotalProcessors = Barrier;
+    ReverseBarrier.Barrier = KeNumberProcessors;
+    ReverseBarrier.TotalProcessors = KeNumberProcessors;
+    ReverseBarrier.Sense = 0;
 
-    //
-    // But we don't need the barrier on UP, since we can simply call the routine
-    // directly while at DISPATCH_LEVEL and not worry about anything else
-    //
     KeRaiseIrql(DISPATCH_LEVEL, &OldIrql);
-    Routine(&KeGetCurrentPrcb()->CallDpc, Context, &Barrier, &ReverseBarrier);
+    CurrentPrcb = KeGetCurrentPrcb();
+
+    for (Number = 0; Number < (CCHAR)KeNumberProcessors; Number++)
+    {
+        PKPRCB Prcb = KiProcessorBlock[(UCHAR)Number];
+
+        if (Prcb == CurrentPrcb) continue;
+
+        KeInitializeDpc(&Prcb->CallDpc, Routine, Context);
+        KeSetTargetProcessorDpc(&Prcb->CallDpc, Number);
+        KeSetImportanceDpc(&Prcb->CallDpc, HighImportance);
+        KeInsertQueueDpc(&Prcb->CallDpc, (PVOID)&Barrier, (PVOID)&ReverseBarrier);
+    }
+
+    Routine(&CurrentPrcb->CallDpc, Context, (PVOID)&Barrier, (PVOID)&ReverseBarrier);
+
+    while (Barrier != 0)
+        YieldProcessor();
+
     KeLowerIrql(OldIrql);
 }
 
@@ -1110,11 +1123,28 @@ BOOLEAN
 NTAPI
 KeSignalCallDpcSynchronize(IN PVOID SystemArgument2)
 {
-    //
-    // There is nothing to do on UP systems -- the processor calling this wins
-    //
-    UNREFERENCED_PARAMETER(SystemArgument2);
-    return TRUE;
+    PDEFERRED_REVERSE_BARRIER ReverseBarrier = SystemArgument2;
+    ULONG Sense;
+
+    if (ReverseBarrier->TotalProcessors <= 1)
+        return TRUE;
+
+    Sense = ReverseBarrier->Sense;
+
+    if (InterlockedDecrement((PLONG)&ReverseBarrier->Barrier) == 0)
+    {
+        ReverseBarrier->Barrier = ReverseBarrier->TotalProcessors;
+        KeMemoryBarrier();
+        InterlockedExchange((PLONG)&ReverseBarrier->Sense, (LONG)(!Sense));
+        return TRUE;
+    }
+
+    while (((volatile DEFERRED_REVERSE_BARRIER *)ReverseBarrier)->Sense == Sense)
+        YieldProcessor();
+
+    KeMemoryBarrier();
+
+    return FALSE;
 }
 
 /* EOF */
