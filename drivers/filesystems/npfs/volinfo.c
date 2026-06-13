@@ -75,6 +75,7 @@ NpQueryFsDeviceInfo(IN PVOID Buffer,
     TRACE("Entered\n");
 
     InfoBuffer->DeviceType = FILE_DEVICE_NAMED_PIPE;
+    InfoBuffer->Characteristics = FILE_DEVICE_ALLOW_APPCONTAINER_TRAVERSAL;
     *Length -= sizeof(*InfoBuffer);
 
     TRACE("Leaving, Status = STATUS_SUCCESS\n");
