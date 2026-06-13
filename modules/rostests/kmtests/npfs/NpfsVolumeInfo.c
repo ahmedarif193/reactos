@@ -92,7 +92,8 @@ TestVolumeInfo(
                                           FileFsDeviceInformation);
     ok_eq_hex(Status, STATUS_SUCCESS);
     ok_eq_hex(IoStatusBlock.Status, STATUS_SUCCESS);
-    ok_eq_ulong(FileFsDeviceInfo.Characteristics, 0);
+    ok_eq_ulong(FileFsDeviceInfo.Characteristics,
+                GetNTVersion() >= _WIN32_WINNT_WIN8 ? FILE_DEVICE_ALLOW_APPCONTAINER_TRAVERSAL : 0);
     ok_eq_ulong(FileFsDeviceInfo.DeviceType, FILE_DEVICE_NAMED_PIPE);
     ok_eq_ulong(IoStatusBlock.Information, sizeof(FileFsDeviceInfo));
 

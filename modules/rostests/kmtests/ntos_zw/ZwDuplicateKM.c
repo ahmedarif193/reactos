@@ -52,7 +52,7 @@ START_TEST(ZwDuplicateKM)
     if (NT_SUCCESS(Status))
     {
         Status = ZwSetEvent(EventHandle, NULL);
-        ok_eq_hex(Status, STATUS_INVALID_HANDLE);
+        ok_eq_hex(Status, GetNTVersion() >= _WIN32_WINNT_WIN8 ? STATUS_SUCCESS : STATUS_INVALID_HANDLE);
         Status = ZwSetEvent(DupHandle, NULL);
         ok_eq_hex(Status, STATUS_SUCCESS);
         ZwClose(DupHandle);

@@ -55,6 +55,7 @@ KMT_TESTFUNC Test_IoTimerKM;
 KMT_TESTFUNC Test_IoVolume;
 KMT_TESTFUNC Test_KdSystemDebugControl;
 KMT_TESTFUNC Test_KeApc;
+KMT_TESTFUNC Test_KeApcInject;
 #ifdef _M_ARM64
 KMT_TESTFUNC Test_HalArm64Layout;
 KMT_TESTFUNC Test_HalArm64Stage1;
@@ -143,6 +144,7 @@ KMT_TESTFUNC Test_RtlException;
 KMT_TESTFUNC Test_RtlGetVersion;
 KMT_TESTFUNC Test_RtlIntSafe;
 KMT_TESTFUNC Test_RtlIsValidOemCharacter;
+KMT_TESTFUNC Test_MmMapReserve;
 KMT_TESTFUNC Test_MmPhysical;
 KMT_TESTFUNC Test_IoStackKM;
 KMT_TESTFUNC Test_KeCriticalRegionKM;
@@ -197,7 +199,9 @@ const KMT_TEST TestList[] =
     { "FsRtlRemoveDotsFromPath",            Test_FsRtlRemoveDotsFromPath },
     { "FsRtlTunnel",                        Test_FsRtlTunnel },
 #if defined(_M_IX86) || defined(_M_AMD64)
+#if defined(_M_IX86) || defined(_M_AMD64)
     { "HalPortIo",                          Test_HalPortIo },
+#endif
 #endif
     { "HalSystemInfo",                      Test_HalSystemInfo },
     { "IoCreateFile",                       Test_IoCreateFile },
@@ -217,6 +221,7 @@ const KMT_TEST TestList[] =
     { "IoVolume",                           Test_IoVolume },
     { "KdSystemDebugControl",               Test_KdSystemDebugControl },
     { "KeApc",                              Test_KeApc },
+    { "KeApcInject",                        Test_KeApcInject },
 #ifdef _M_ARM64
     { "HalArm64Layout",                     Test_HalArm64Layout },
     { "HalArm64Stage1",                     Test_HalArm64Stage1 },
@@ -270,6 +275,7 @@ const KMT_TEST TestList[] =
     { "MmMdl",                              Test_MmMdl },
     { "MmSecureKM",                         Test_MmSecureKM },
     { "MmSection",                          Test_MmSection },
+    { "MmMapReserve",                       Test_MmMapReserve },
     { "MmPhysical",                         Test_MmPhysical },
     { "MmReservedMapping",                  Test_MmReservedMapping },
     { "MmSelfMap",                          Test_MmSelfMap },

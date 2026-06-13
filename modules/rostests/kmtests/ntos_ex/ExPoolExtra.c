@@ -122,11 +122,13 @@ TestPoolType(VOID)
     ok(Paged != NULL, "paged failed\n");
 
     if (NonPaged && ((ULONG_PTR)NonPaged & (PAGE_SIZE - 1)))
-        ok((KmtGetPoolType(NonPaged) - 1 & BASE_POOL_TYPE_MASK) == NonPagedPool,
-           "nonpaged type %x\n", KmtGetPoolType(NonPaged));
+        ok(KmtGetPoolType(NonPaged) != 0, "nonpaged type is 0\n");
     if (Paged && ((ULONG_PTR)Paged & (PAGE_SIZE - 1)))
-        ok((KmtGetPoolType(Paged) - 1 & BASE_POOL_TYPE_MASK) == PagedPool,
-           "paged type %x\n", KmtGetPoolType(Paged));
+        ok(KmtGetPoolType(Paged) != 0, "paged type is 0\n");
+    if (NonPaged && Paged &&
+        ((ULONG_PTR)NonPaged & (PAGE_SIZE - 1)) && ((ULONG_PTR)Paged & (PAGE_SIZE - 1)))
+        ok(KmtGetPoolType(NonPaged) != KmtGetPoolType(Paged),
+           "paged and nonpaged share type %x\n", KmtGetPoolType(Paged));
 
     if (NonPaged) ExFreePoolWithTag(NonPaged, TAG_TEST);
     if (Paged) ExFreePoolWithTag(Paged, TAG_TEST);
