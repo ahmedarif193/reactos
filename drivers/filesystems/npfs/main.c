@@ -363,7 +363,7 @@ DriverEntry(IN PDRIVER_OBJECT DriverObject,
                             sizeof(NP_VCB),
                             &DeviceName,
                             FILE_DEVICE_NAMED_PIPE,
-                            0,
+                            FILE_DEVICE_ALLOW_APPCONTAINER_TRAVERSAL,
                             FALSE,
                             &DeviceObject);
     if (!NT_SUCCESS(Status))
