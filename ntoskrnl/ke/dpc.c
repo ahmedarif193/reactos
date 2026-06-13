@@ -1069,7 +1069,7 @@ NTAPI
 KeGenericCallDpc(IN PKDEFERRED_ROUTINE Routine,
                  IN PVOID Context)
 {
-    volatile ULONG Barrier = KeNumberProcessors;
+    DECLSPEC_CACHEALIGN volatile ULONG Barrier = KeNumberProcessors;
     KIRQL OldIrql;
     DEFERRED_REVERSE_BARRIER ReverseBarrier;
     PKPRCB CurrentPrcb;
@@ -1079,6 +1079,8 @@ KeGenericCallDpc(IN PKDEFERRED_ROUTINE Routine,
     ReverseBarrier.Barrier = KeNumberProcessors;
     ReverseBarrier.TotalProcessors = KeNumberProcessors;
     ReverseBarrier.Sense = 0;
+
+    ExAcquireFastMutex(&KiGenericCallDpcMutex);
 
     KeRaiseIrql(DISPATCH_LEVEL, &OldIrql);
     CurrentPrcb = KeGetCurrentPrcb();
@@ -1101,6 +1103,8 @@ KeGenericCallDpc(IN PKDEFERRED_ROUTINE Routine,
         YieldProcessor();
 
     KeLowerIrql(OldIrql);
+
+    ExReleaseFastMutex(&KiGenericCallDpcMutex);
 }
 
 /*
