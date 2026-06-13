@@ -1748,8 +1748,8 @@ ObpCloseHandle(IN HANDLE Handle,
     OBTRACE(OB_HANDLE_DEBUG,
             "%s - Closing handle: %p\n", __FUNCTION__, Handle);
 
-    if (AccessMode == KernelMode && Handle == (HANDLE)-1)
-        return STATUS_INVALID_HANDLE;
+    if (Handle == (HANDLE)-1)
+        return STATUS_SUCCESS;
 
     /* Check if we're dealing with a kernel handle */
     if (ObpIsKernelHandle(Handle, AccessMode))
@@ -2434,7 +2434,7 @@ ObDuplicateObject(IN PEPROCESS SourceProcess,
     }
 
     /* Check if we have to close the source handle */
-    if (Options & DUPLICATE_CLOSE_SOURCE)
+    if ((Options & DUPLICATE_CLOSE_SOURCE) && SourceProcess != TargetProcess)
     {
         /* Attach and close */
         KeStackAttachProcess(&SourceProcess->Pcb, &ApcState);
@@ -3418,8 +3418,21 @@ NTSTATUS
 NTAPI
 NtClose(IN HANDLE Handle)
 {
+    NTSTATUS Status;
+    EXHANDLE ExHandle;
+
     /* Call the internal API */
-    return ObpCloseHandle(Handle, ExGetPreviousMode());
+    Status = ObpCloseHandle(Handle, ExGetPreviousMode());
+    if (Status == STATUS_INVALID_HANDLE)
+    {
+        ExHandle.GenericHandleOverlay = Handle;
+        if ((ExHandle.Index & (LOW_LEVEL_ENTRIES - 1)) &&
+            ExpLookupHandleTableEntry((PHANDLE_TABLE)PsGetCurrentProcess()->ObjectTable, ExHandle))
+        {
+            Status = STATUS_SUCCESS;
+        }
+    }
+    return Status;
 }
 
 NTSTATUS
