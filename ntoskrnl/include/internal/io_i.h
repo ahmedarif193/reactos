@@ -29,7 +29,7 @@ UCHAR IopQueryOperationLength[] =
     0,
     sizeof(FILE_MODE_INFORMATION),
     sizeof(FILE_ALIGNMENT_INFORMATION),
-    sizeof(FILE_ALL_INFORMATION),
+    FIELD_OFFSET(FILE_ALL_INFORMATION, NameInformation.FileName),
     0,
     0,
     sizeof(FILE_NAME_INFORMATION),
