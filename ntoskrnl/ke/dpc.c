@@ -1061,6 +1061,13 @@ KeSetTargetProcessorDpc(IN PKDPC Dpc,
     Dpc->Number = Number + MAXIMUM_PROCESSORS;
 }
 
+typedef struct _KI_GENERIC_DPC_BARRIER
+{
+    DEFERRED_REVERSE_BARRIER Reverse;
+    LONG PassedCount;
+    PLONG Flags;
+} KI_GENERIC_DPC_BARRIER, *PKI_GENERIC_DPC_BARRIER;
+
 /*
  * @implemented
  */
@@ -1069,35 +1076,55 @@ NTAPI
 KeGenericCallDpc(IN PKDEFERRED_ROUTINE Routine,
                  IN PVOID Context)
 {
-    DECLSPEC_CACHEALIGN volatile ULONG Barrier = KeNumberProcessors;
+    DECLSPEC_CACHEALIGN volatile ULONG Barrier;
     KIRQL OldIrql;
-    DEFERRED_REVERSE_BARRIER ReverseBarrier;
+    KI_GENERIC_DPC_BARRIER Sync;
     PKPRCB CurrentPrcb;
+    PLONG Flags;
     CCHAR Number;
+    ULONG Count, Index;
     ASSERT(KeGetCurrentIrql() < DISPATCH_LEVEL);
 
-    ReverseBarrier.Barrier = KeNumberProcessors;
-    ReverseBarrier.TotalProcessors = KeNumberProcessors;
-    ReverseBarrier.Sense = 0;
+    Count = KeNumberProcessors;
+
+    Flags = ExAllocatePoolWithTag(NonPagedPool, Count * sizeof(LONG), 'cpDK');
+    if (Flags == NULL)
+    {
+        Count = 1;
+    }
+    else
+    {
+        for (Index = 0; Index < Count; Index++)
+            Flags[Index] = 0;
+    }
+
+    Barrier = Count;
+    Sync.Reverse.Barrier = Count;
+    Sync.Reverse.TotalProcessors = Count;
+    Sync.PassedCount = 0;
+    Sync.Flags = Flags;
 
     ExAcquireFastMutex(&KiGenericCallDpcMutex);
 
     KeRaiseIrql(DISPATCH_LEVEL, &OldIrql);
     CurrentPrcb = KeGetCurrentPrcb();
 
-    for (Number = 0; Number < (CCHAR)KeNumberProcessors; Number++)
+    if (Flags != NULL)
     {
-        PKPRCB Prcb = KiProcessorBlock[(UCHAR)Number];
+        for (Number = 0; Number < (CCHAR)Count; Number++)
+        {
+            PKPRCB Prcb = KiProcessorBlock[(UCHAR)Number];
 
-        if (Prcb == CurrentPrcb) continue;
+            if (Prcb == CurrentPrcb) continue;
 
-        KeInitializeDpc(&Prcb->CallDpc, Routine, Context);
-        KeSetTargetProcessorDpc(&Prcb->CallDpc, Number);
-        KeSetImportanceDpc(&Prcb->CallDpc, HighImportance);
-        KeInsertQueueDpc(&Prcb->CallDpc, (PVOID)&Barrier, (PVOID)&ReverseBarrier);
+            KeInitializeDpc(&Prcb->CallDpc, Routine, Context);
+            KeSetTargetProcessorDpc(&Prcb->CallDpc, Number);
+            KeSetImportanceDpc(&Prcb->CallDpc, HighImportance);
+            KeInsertQueueDpc(&Prcb->CallDpc, (PVOID)&Barrier, (PVOID)&Sync);
+        }
     }
 
-    Routine(&CurrentPrcb->CallDpc, Context, (PVOID)&Barrier, (PVOID)&ReverseBarrier);
+    Routine(&CurrentPrcb->CallDpc, Context, (PVOID)&Barrier, (PVOID)&Sync);
 
     while (Barrier != 0)
         YieldProcessor();
@@ -1105,6 +1132,9 @@ KeGenericCallDpc(IN PKDEFERRED_ROUTINE Routine,
     KeLowerIrql(OldIrql);
 
     ExReleaseFastMutex(&KiGenericCallDpcMutex);
+
+    if (Flags != NULL)
+        ExFreePoolWithTag(Flags, 'cpDK');
 }
 
 /*
@@ -1127,28 +1157,36 @@ BOOLEAN
 NTAPI
 KeSignalCallDpcSynchronize(IN PVOID SystemArgument2)
 {
-    PDEFERRED_REVERSE_BARRIER ReverseBarrier = SystemArgument2;
-    ULONG Sense;
+    PKI_GENERIC_DPC_BARRIER Sync = SystemArgument2;
+    ULONG Total, Index;
+    LONG Flag, Comp, Done;
+    BOOLEAN First;
 
-    if (ReverseBarrier->TotalProcessors <= 1)
+    Total = Sync->Reverse.TotalProcessors;
+    if (Total <= 1)
         return TRUE;
 
-    Sense = ReverseBarrier->Sense;
+    Index = KeGetCurrentProcessorNumber();
 
-    if (InterlockedDecrement((PLONG)&ReverseBarrier->Barrier) == 0)
-    {
-        ReverseBarrier->Barrier = ReverseBarrier->TotalProcessors;
-        KeMemoryBarrier();
-        InterlockedExchange((PLONG)&ReverseBarrier->Sense, (LONG)(!Sense));
-        return TRUE;
-    }
+    Sync->Flags[Index] ^= (LONG)0x80000000;
+    Flag = Sync->Flags[Index];
 
-    while (((volatile DEFERRED_REVERSE_BARRIER *)ReverseBarrier)->Sense == Sense)
+    First = (Index == 0);
+    Comp = Flag + (LONG)Index;
+    Done = Flag + (LONG)Total;
+
+    if (First)
+        InterlockedExchange((PLONG)&Sync->Reverse.Barrier, Comp);
+
+    while (InterlockedCompareExchange((PLONG)&Sync->Reverse.Barrier, Comp + 1, Comp) != Done)
         YieldProcessor();
 
-    KeMemoryBarrier();
+    InterlockedIncrement(&Sync->PassedCount);
 
-    return FALSE;
+    while (First && InterlockedCompareExchange(&Sync->PassedCount, 0, (LONG)Total))
+        YieldProcessor();
+
+    return First;
 }
 
 /* EOF */
