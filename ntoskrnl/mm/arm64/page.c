@@ -1579,6 +1579,7 @@ MmCreateVirtualMappingUnsafeEx(
         }
 
         PointerPte->u.Long = FinalPte.u.Long;
+        MiArm64CleanEntryToPoC(PointerPte);
         __asm__ __volatile__("dsb sy" ::: "memory");
         MiArm64PublishPageByPfnAlias(Page, FinalPte.u.Hard.UserNoExecute == 0);
         MiArm64InvalidateUserAddress(Address);
