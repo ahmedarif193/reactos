@@ -441,7 +441,25 @@ DWORD WINAPI PerformancePageRefreshThread(PVOID Parameter)
             PhysicalMemoryAvailable = PerfDataGetPhysicalMemoryAvailableK();
             nBarsUsed2 = PhysicalMemoryTotal ? ((PhysicalMemoryAvailable * 100) / PhysicalMemoryTotal) : 0;
 
-            GraphCtrl_AddPoint(&PerformancePageCpuUsageHistoryGraph, CpuUsage, CpuKernelUsage);
+            if (TaskManagerSettings.CPUHistory_OneGraphPerCPU &&
+                PerfDataGetProcessorCount() > 1)
+            {
+                BYTE  PerCpuVals[64];
+                ULONG CpuCount = PerfDataGetProcessorCount();
+                ULONG Cpu;
+
+                if (CpuCount > 64)
+                    CpuCount = 64;
+                for (Cpu = 0; Cpu < CpuCount; Cpu++)
+                    PerCpuVals[Cpu] = (BYTE)PerfDataGetProcessorUsagePerCpu(Cpu);
+
+                GraphCtrl_AddPointsPerCpu(&PerformancePageCpuUsageHistoryGraph,
+                                          PerCpuVals, CpuCount);
+            }
+            else
+            {
+                GraphCtrl_AddPoint(&PerformancePageCpuUsageHistoryGraph, CpuUsage, CpuKernelUsage);
+            }
             GraphCtrl_AddPoint(&PerformancePageMemUsageHistoryGraph, nBarsUsed1, nBarsUsed2);
             InvalidateRect(hPerformancePageMemUsageHistoryGraph, NULL, FALSE);
             InvalidateRect(hPerformancePageCpuUsageHistoryGraph, NULL, FALSE);
