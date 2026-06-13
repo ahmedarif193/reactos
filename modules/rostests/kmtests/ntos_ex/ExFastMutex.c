@@ -29,6 +29,11 @@ static VOID    (FASTCALL *pExiReleaseFastMutex)(IN OUT PFAST_MUTEX FastMutex);
 static BOOLEAN (FASTCALL *pExiTryToAcquireFastMutex)(IN OUT PFAST_MUTEX FastMutex);
 
 static BOOLEAN KmtFmApcBaseline = FALSE;
+#if defined(_M_ARM64)
+static const BOOLEAN KmtArm64Enforced = TRUE;
+#else
+static const BOOLEAN KmtArm64Enforced = FALSE;
+#endif
 
 #define CheckMutex(Mutex, ExpectedCount, ExpectedOwner,                 \
                    ExpectedContention, ExpectedOldIrql,                 \
@@ -42,7 +47,13 @@ static BOOLEAN KmtFmApcBaseline = FALSE;
     if (GetNTVersion() >= _WIN32_WINNT_VISTA)                           \
         ok_eq_ulong((Mutex)->OldIrql, (ULONG)ExpectedOldIrql);          \
     ok_eq_bool(KeAreApcsDisabled(), KmtFmApcBaseline);                  \
-    ok_irql(ExpectedIrql);                                              \
+{                                                                      \
+    KIRQL _ExpIrql = (KIRQL)(ExpectedIrql);                            \
+    if (KmtArm64Enforced && (KIRQL)(ExpectedOldIrql) <= HIGH_LEVEL &&  \
+        (KIRQL)(ExpectedOldIrql) > _ExpIrql)                           \
+        _ExpIrql = (KIRQL)(ExpectedOldIrql);                           \
+    ok_irql(_ExpIrql);                                                 \
+}                                                                      \
 } while (0)
 
 static

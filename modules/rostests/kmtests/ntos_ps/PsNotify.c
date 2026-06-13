@@ -37,10 +37,10 @@ TestCreateProcessNotify(VOID)
     ok_eq_hex(Status, STATUS_PROCEDURE_NOT_FOUND);
 
     Status = PsSetCreateProcessNotifyRoutine(NULL, FALSE);
-    ok_eq_hex(Status, STATUS_SUCCESS);
+    ok_eq_hex(Status, GetNTVersion() >= _WIN32_WINNT_WIN8 ? STATUS_ACCESS_DENIED : STATUS_SUCCESS);
 
     Status = PsSetCreateProcessNotifyRoutine(NULL, TRUE);
-    ok_eq_hex(Status, STATUS_SUCCESS);
+    ok_eq_hex(Status, GetNTVersion() >= _WIN32_WINNT_WIN8 ? STATUS_PROCEDURE_NOT_FOUND : STATUS_SUCCESS);
 
     Status = PsSetCreateProcessNotifyRoutine(NULL, TRUE);
     ok_eq_hex(Status, STATUS_PROCEDURE_NOT_FOUND);

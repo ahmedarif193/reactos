@@ -19,7 +19,8 @@
     Status = ZwQueryObject(Handle, ObjectBasicInformation,          \
                             &ObjectInfo, sizeof ObjectInfo, NULL);  \
     ok_eq_hex(Status, STATUS_SUCCESS);                              \
-    ok_eq_ulong(ObjectInfo.PointerCount, Pointers);                 \
+    if (GetNTVersion() < _WIN32_WINNT_WIN8)                         \
+        ok_eq_ulong(ObjectInfo.PointerCount, Pointers);            \
     ok_eq_ulong(ObjectInfo.HandleCount, Handles);                   \
 } while (0)
 

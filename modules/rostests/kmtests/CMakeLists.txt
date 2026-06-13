@@ -101,6 +101,7 @@ list(APPEND KMTEST_DRV_SOURCE
     ntos_kd/KdSystemDebugControl.c
     ntos_ke/KeAffinityKM.c
     ntos_ke/KeApc.c
+    ntos_ke/KeApcInject.c
     ntos_ke/KeBugCheckCbKM.c
     ntos_ke/KeDevQueue.c
     ntos_ke/KeCriticalRegionKM.c
@@ -123,6 +124,7 @@ list(APPEND KMTEST_DRV_SOURCE
     ntos_ke/KeWaitMultiple.c
     ntos_mm/MmAllocateContiguousNode.c
     ntos_mm/MmMdl.c
+    ntos_mm/MmMapReserve.c
     ntos_mm/MmPhysical.c
     ntos_mm/MmReservedMapping.c
     ntos_mm/MmSelfMap.c
