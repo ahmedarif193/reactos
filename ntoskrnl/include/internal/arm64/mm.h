@@ -242,8 +242,8 @@ C_ASSERT(MI_SECONDARY_COLORS == 64);
         (x)->u.Hard.CacheType = (ULONG)((idx) & 0x3); \
         (x)->u.Hard.OsAvailable2 = (ULONG)(((idx) >> 2) & 0x1); \
     } while (0)
-#define MI_PAGE_DISABLE_CACHE(x)   MI_SET_PTE_ATTR_INDEX((x), 1)
-#define MI_PAGE_WRITE_THROUGH(x)   MI_SET_PTE_ATTR_INDEX((x), 1)
+#define MI_PAGE_DISABLE_CACHE(x)   MI_SET_PTE_ATTR_INDEX((x), MI_ARM64_MAIR_NORMAL_NC_IDX)
+#define MI_PAGE_WRITE_THROUGH(x)   MI_SET_PTE_ATTR_INDEX((x), MI_ARM64_MAIR_NORMAL_NC_IDX)
 #define MI_PAGE_WRITE_COMBINED(x)  MI_SET_PTE_ATTR_INDEX((x), MI_ARM64_MAIR_NORMAL_WC_IDX)
 #define MI_IS_PAGE_LARGE(x)        ((x)->u.Hard.NotLargePage == 0)
 #define MI_IS_PAGE_WRITEABLE(x)    ((x)->u.Hard.Writable == 1)
