@@ -90,11 +90,20 @@ add_library(halmacpi MODULE
     ${CMAKE_CURRENT_BINARY_DIR}/hal.def)
 reactos_hal_setup(halmacpi 0)
 
+# Ship halmp.dll on ARM64 so the shared bootcd.ini SMP entry (/HAL=halmp.dll) resolves
+add_library(halmp MODULE
+    ${SOURCES}
+    ${CMAKE_CURRENT_BINARY_DIR}/hal.def)
+reactos_hal_setup(halmp 0)
+
 if((CMAKE_C_COMPILER_ID STREQUAL "Clang") OR (CMAKE_C_COMPILER_ID STREQUAL "GNU"))
     target_compile_options(hal PRIVATE
         $<$<COMPILE_LANGUAGE:C>:-mgeneral-regs-only>
         $<$<COMPILE_LANGUAGE:CXX>:-mgeneral-regs-only>)
     target_compile_options(halmacpi PRIVATE
+        $<$<COMPILE_LANGUAGE:C>:-mgeneral-regs-only>
+        $<$<COMPILE_LANGUAGE:CXX>:-mgeneral-regs-only>)
+    target_compile_options(halmp PRIVATE
         $<$<COMPILE_LANGUAGE:C>:-mgeneral-regs-only>
         $<$<COMPILE_LANGUAGE:CXX>:-mgeneral-regs-only>)
 endif()
