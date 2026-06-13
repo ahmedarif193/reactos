@@ -15,8 +15,15 @@
     Status = ZwQueryObject(Handle, ObjectBasicInformation,          \
                             &ObjectInfo, sizeof ObjectInfo, NULL);  \
     ok_eq_hex(Status, STATUS_SUCCESS);                              \
-    ok_eq_ulong(ObjectInfo.PointerCount, Pointers);                 \
+    if (GetNTVersion() < _WIN32_WINNT_WIN8)                         \
+        ok_eq_ulong(ObjectInfo.PointerCount, Pointers);            \
     ok_eq_ulong(ObjectInfo.HandleCount, Handles);                   \
+} while (0)
+
+#define CheckRet(Ret, Expected) do                                  \
+{                                                                   \
+    if (GetNTVersion() < _WIN32_WINNT_WIN8)                         \
+        ok_eq_longptr(Ret, Expected);                              \
 } while (0)
 
 static POBJECT_TYPE ObDirectoryObjectType;
@@ -54,11 +61,11 @@ TestReference(
     if (!skip(Object != NULL, "No object to reference!\n"))
     {
         Ret = ObReferenceObject(Object);
-        ok_eq_longptr(Ret, (LONG_PTR)4 + AdditionalReferences);
+        CheckRet(Ret, (LONG_PTR)4 + AdditionalReferences);
         CheckObject(Handle, 5LU + AdditionalReferences, 1LU);
 
         Ret = ObReferenceObject(Object);
-        ok_eq_longptr(Ret, (LONG_PTR)5 + AdditionalReferences);
+        CheckRet(Ret, (LONG_PTR)5 + AdditionalReferences);
         CheckObject(Handle, 6LU + AdditionalReferences, 1LU);
 
         Status = ObReferenceObjectByPointer(Object, DIRECTORY_ALL_ACCESS, NULL, KernelMode);
@@ -70,19 +77,19 @@ TestReference(
         CheckObject(Handle, 8LU + AdditionalReferences, 1LU);
 
         Ret = ObDereferenceObject(Object);
-        ok_eq_longptr(Ret, (LONG_PTR)6 + AdditionalReferences);
+        CheckRet(Ret, (LONG_PTR)6 + AdditionalReferences);
         CheckObject(Handle, 7LU + AdditionalReferences, 1LU);
 
         Ret = ObDereferenceObject(Object);
-        ok_eq_longptr(Ret, (LONG_PTR)5 + AdditionalReferences);
+        CheckRet(Ret, (LONG_PTR)5 + AdditionalReferences);
         CheckObject(Handle, 6LU + AdditionalReferences, 1LU);
 
         Ret = ObDereferenceObject(Object);
-        ok_eq_longptr(Ret, (LONG_PTR)4 + AdditionalReferences);
+        CheckRet(Ret, (LONG_PTR)4 + AdditionalReferences);
         CheckObject(Handle, 5LU + AdditionalReferences, 1LU);
 
         Ret = ObDereferenceObject(Object);
-        ok_eq_longptr(Ret, (LONG_PTR)3 + AdditionalReferences);
+        CheckRet(Ret, (LONG_PTR)3 + AdditionalReferences);
         CheckObject(Handle, 4LU + AdditionalReferences, 1LU);
     }
 
@@ -103,25 +110,25 @@ TestReference(
     if (NameUpper && !skip(Object4 != NULL, "No object to dereference\n"))
     {
         Ret = ObDereferenceObject(Object4);
-        ok_eq_longptr(Ret, (LONG_PTR)4 + AdditionalReferences);
+        CheckRet(Ret, (LONG_PTR)4 + AdditionalReferences);
         CheckObject(Handle, 5LU + AdditionalReferences, 1LU);
     }
     if (Name && !skip(Object3 != NULL, "No object to dereference\n"))
     {
         Ret = ObDereferenceObject(Object3);
-        ok_eq_longptr(Ret, (LONG_PTR)3 + AdditionalReferences);
+        CheckRet(Ret, (LONG_PTR)3 + AdditionalReferences);
         CheckObject(Handle, 4LU + AdditionalReferences, 1LU);
     }
     if (!skip(Object2 != NULL, "No object to dereference\n"))
     {
         Ret = ObDereferenceObject(Object2);
-        ok_eq_longptr(Ret, (LONG_PTR)2 + AdditionalReferences);
+        CheckRet(Ret, (LONG_PTR)2 + AdditionalReferences);
         CheckObject(Handle, 3LU + AdditionalReferences, 1LU);
     }
     if (!skip(Object != NULL, "No object to dereference\n"))
     {
         Ret = ObDereferenceObject(Object);
-        ok_eq_longptr(Ret, (LONG_PTR)1 + AdditionalReferences);
+        CheckRet(Ret, (LONG_PTR)1 + AdditionalReferences);
         CheckObject(Handle, 2LU + AdditionalReferences, 1LU);
     }
 
