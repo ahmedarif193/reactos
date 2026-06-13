@@ -884,6 +884,23 @@ NpFsdCreateNamedPipe(IN PDEVICE_OBJECT DeviceObject,
 
     if (Fcb->NodeType != NPFS_NTC_FCB)
     {
+        if (Fcb->NodeType == NPFS_NTC_ROOT_DCB)
+        {
+            IoStatus.Status = NpCreateNewNamedPipe((PNP_DCB)Fcb,
+                                                   FileObject,
+                                                   FileName,
+                                                   IoStack->Parameters.CreatePipe.
+                                                   SecurityContext->DesiredAccess,
+                                                   IoStack->Parameters.CreatePipe.
+                                                   SecurityContext->AccessState,
+                                                   Disposition,
+                                                   ShareAccess,
+                                                   Parameters,
+                                                   Process,
+                                                   &DeferredList,
+                                                   &IoStatus);
+            goto Quickie;
+        }
         IoStatus.Status = STATUS_OBJECT_NAME_INVALID;
         goto Quickie;
     }
