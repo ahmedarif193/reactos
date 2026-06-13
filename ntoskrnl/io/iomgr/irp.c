@@ -1129,7 +1129,9 @@ IoCancelIrp(IN PIRP Irp)
 
         /* Set the cancel IRQL And call the routine */
         Irp->CancelIrql = OldIrql;
-        CancelRoutine(IoGetCurrentIrpStackLocation(Irp)->DeviceObject, Irp);
+        CancelRoutine(Irp->CurrentLocation > Irp->StackCount ?
+                      NULL : IoGetCurrentIrpStackLocation(Irp)->DeviceObject,
+                      Irp);
         return TRUE;
     }
 
