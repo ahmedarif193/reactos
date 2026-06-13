@@ -126,6 +126,7 @@ list(APPEND KMTEST_DRV_SOURCE
     ntos_mm/MmMdl.c
     ntos_mm/MmMapReserve.c
     ntos_mm/MmPhysical.c
+    ntos_mm/MmPrefetchPages.c
     ntos_mm/MmReservedMapping.c
     ntos_mm/MmSelfMap.c
     ntos_mm/MmSecureKM.c

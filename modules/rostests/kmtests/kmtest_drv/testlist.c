@@ -146,6 +146,7 @@ KMT_TESTFUNC Test_RtlIntSafe;
 KMT_TESTFUNC Test_RtlIsValidOemCharacter;
 KMT_TESTFUNC Test_MmMapReserve;
 KMT_TESTFUNC Test_MmPhysical;
+KMT_TESTFUNC Test_MmPrefetchPages;
 KMT_TESTFUNC Test_IoStackKM;
 KMT_TESTFUNC Test_KeCriticalRegionKM;
 KMT_TESTFUNC Test_ObOpenByPointer;
@@ -277,6 +278,7 @@ const KMT_TEST TestList[] =
     { "MmSection",                          Test_MmSection },
     { "MmMapReserve",                       Test_MmMapReserve },
     { "MmPhysical",                         Test_MmPhysical },
+    { "MmPrefetchPages",                    Test_MmPrefetchPages },
     { "MmReservedMapping",                  Test_MmReservedMapping },
     { "MmSelfMap",                          Test_MmSelfMap },
     { "NpfsConnect",                        Test_NpfsConnect },

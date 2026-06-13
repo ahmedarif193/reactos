@@ -1873,15 +1873,69 @@ MmUnmapReservedMapping(
 }
 
 /*
- * @unimplemented
+ * @implemented
  */
 NTSTATUS
 NTAPI
 MmPrefetchPages(IN ULONG NumberOfLists,
                 IN PREAD_LIST *ReadLists)
 {
-    UNIMPLEMENTED;
-    return STATUS_NOT_IMPLEMENTED;
+    ULONG ListIndex, EntryIndex;
+    PREAD_LIST ReadList;
+    PVOID Section, MappedBase;
+    SIZE_T ViewSize;
+    LARGE_INTEGER MaximumSize;
+    NTSTATUS Status;
+    volatile UCHAR Sink = 0;
+
+    if ((NumberOfLists == 0) || (ReadLists == NULL))
+        return STATUS_INVALID_PARAMETER;
+
+    MaximumSize.QuadPart = 0;
+
+    for (ListIndex = 0; ListIndex < NumberOfLists; ListIndex++)
+    {
+        ReadList = ReadLists[ListIndex];
+        if ((ReadList == NULL) ||
+            (ReadList->FileObject == NULL) ||
+            (ReadList->NumberOfEntries == 0))
+        {
+            continue;
+        }
+
+        Section = NULL;
+        Status = MmCreateSection(&Section,
+                                 SECTION_MAP_READ,
+                                 NULL,
+                                 &MaximumSize,
+                                 PAGE_READONLY,
+                                 SEC_COMMIT,
+                                 NULL,
+                                 ReadList->FileObject);
+        if (!NT_SUCCESS(Status) || (Section == NULL))
+            continue;
+
+        MappedBase = NULL;
+        ViewSize = 0;
+        Status = MmMapViewInSystemSpace(Section, &MappedBase, &ViewSize);
+        if (NT_SUCCESS(Status) && (MappedBase != NULL))
+        {
+            for (EntryIndex = 0; EntryIndex < ReadList->NumberOfEntries; EntryIndex++)
+            {
+                SIZE_T Offset =
+                    (SIZE_T)(ReadList->List[EntryIndex].Alignment & ~((ULONGLONG)PAGE_SIZE - 1));
+
+                if (Offset < ViewSize)
+                    Sink += ((volatile UCHAR *)MappedBase)[Offset];
+            }
+
+            MmUnmapViewInSystemSpace(MappedBase);
+        }
+
+        ObDereferenceObject(Section);
+    }
+
+    return STATUS_SUCCESS;
 }
 
 /*
