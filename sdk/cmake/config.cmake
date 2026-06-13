@@ -132,8 +132,8 @@ endif()
 set(USE_DUMMY_PSEH FALSE CACHE BOOL
 "Whether to disable PSEH support.")
 
-set(REACTOS_TARGET_NT "0x600" CACHE STRING
-"Target NT version (e.g. 0x502, 0x600, 0x601)")
+set(REACTOS_TARGET_NT "0xA00" CACHE STRING
+"Target NT version (e.g. 0x502, 0x600, 0x601, 0xA00)")
 
 set(DLL_EXPORT_VERSION "${REACTOS_TARGET_NT}" CACHE INTERNAL
 "The NT version the user mode DLLs target." FORCE)

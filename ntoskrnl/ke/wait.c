@@ -62,7 +62,7 @@ KiUnlinkThread(IN PKTHREAD Thread,
     Thread->WaitStatus |= WaitStatus;
 
     /* Remove the Wait Blocks from the list */
-#ifdef _M_ARM64
+#if (NTDDI_VERSION >= NTDDI_WIN8) || defined(_M_ARM64)
     {
         ULONG WbIndex;
         for (WbIndex = 0; WbIndex < Thread->WaitBlockCount; WbIndex++)
@@ -778,7 +778,7 @@ KeWaitForMultipleObjects(IN ULONG Count,
                 if (Index == Count)
                 {
                     /* Loop wait blocks */
-#ifdef _M_ARM64
+#if (NTDDI_VERSION >= NTDDI_WIN8) || defined(_M_ARM64)
                     for (Index = 0; Index < Count; Index++)
                     {
                         CurrentObject = (PKMUTANT)WaitBlockArray[Index].Object;
@@ -824,13 +824,13 @@ KeWaitForMultipleObjects(IN ULONG Count,
                 Timer->Header.Inserted = TRUE;
 
                 /* Link the wait blocks */
-#ifndef _M_ARM64
+#if !((NTDDI_VERSION >= NTDDI_WIN8) || defined(_M_ARM64))
                 WaitBlock->NextWaitBlock = TimerBlock;
 #endif
             }
 
             /* Insert into Object's Wait List*/
-#ifdef _M_ARM64
+#if (NTDDI_VERSION >= NTDDI_WIN8) || defined(_M_ARM64)
             for (Index = 0; Index < Count; Index++)
             {
                 CurrentObject = WaitBlockArray[Index].Object;

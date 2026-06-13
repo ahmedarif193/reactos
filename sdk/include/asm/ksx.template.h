@@ -798,7 +798,9 @@ OFFSET(ThAdjustIncrement, KTHREAD, AdjustIncrement),
 OFFSET(ThAffinity, KTHREAD, Affinity), // obsolete
 OFFSET(ThApcStateIndex, KTHREAD, ApcStateIndex),
 OFFSET(ThIdealProcessor, KTHREAD, IdealProcessor), // obsolete
+#if defined(_M_ARM64) || (NTDDI_VERSION < NTDDI_WIN8)
 OFFSET(ThApcStatePointer, KTHREAD, ApcStatePointer), // obsolete
+#endif
 OFFSET(ThSavedApcState, KTHREAD, SavedApcState), // obsolete
 OFFSET(ThWaitReason, KTHREAD, WaitReason),
 OFFSET(ThSaturation, KTHREAD, Saturation), // obsolete
@@ -910,8 +912,8 @@ HEADER("KWAIT_BLOCK offsets"),
 OFFSET(WbWaitListEntry, KWAIT_BLOCK, WaitListEntry),
 OFFSET(WbThread, KWAIT_BLOCK, Thread),
 OFFSET(WbObject, KWAIT_BLOCK, Object),
-#ifndef _M_ARM64
-OFFSET(WbNextWaitBlock, KWAIT_BLOCK, NextWaitBlock), // not in win10/arm64
+#if (NTDDI_VERSION < NTDDI_WIN8) && !defined(_M_ARM64)
+OFFSET(WbNextWaitBlock, KWAIT_BLOCK, NextWaitBlock), // not in win8+/arm64
 #endif
 OFFSET(WbWaitKey, KWAIT_BLOCK, WaitKey),
 OFFSET(WbWaitType, KWAIT_BLOCK, WaitType),

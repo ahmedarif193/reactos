@@ -89,6 +89,7 @@ BOOLEAN IoRemoteBootClient;
 ULONG InitSafeBootMode;
 BOOLEAN InitIsWinPEMode, InitWinPEModeType;
 BOOLEAN SosEnabled; // Used by driver.c!IopDisplayLoadingMessage()
+extern BOOLEAN PnpEnableParallelEnum;
 
 /* NT Boot Path */
 UNICODE_STRING NtSystemRoot;
@@ -1506,6 +1507,9 @@ Phase1InitializationDiscard(IN PVOID Context)
 
     /* Get the SOS setting */
     SosEnabled = (CommandLine && strstr(CommandLine, "SOS") != NULL);
+
+    /* Enable parallel PnP enumeration */
+    if (CommandLine && strstr(CommandLine, "PNP10") != NULL) PnpEnableParallelEnum = TRUE;
 
     /* Setup the boot video driver */
     InbvEnableBootDriver(!NoGuiBoot);
