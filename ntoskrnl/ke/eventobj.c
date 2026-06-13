@@ -39,7 +39,7 @@ KeInitializeEvent(OUT PKEVENT Event,
     /* Initialize the Dispatcher Header */
     ASSERT((Type == NotificationEvent) || (Type == SynchronizationEvent));
     Event->Header.Type = EventNotificationObject + Type;
-    //Event->Header.Signalling = FALSE; // fails in kmtest
+    Event->Header.Signalling = FALSE;
     Event->Header.Size = sizeof(KEVENT) / sizeof(ULONG);
     Event->Header.SignalState = State;
     InitializeListHead(&(Event->Header.WaitListHead));

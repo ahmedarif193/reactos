@@ -416,6 +416,72 @@ SeQueryInformationToken(
             break;
         }
 
+        case TokenGroupsAndPrivileges:
+        {
+            PTOKEN_GROUPS_AND_PRIVILEGES gap;
+            ULONG UserGroupLength, RestrictedSidLength, PrivilegeLength;
+            PSID Sid, RestrictedSid;
+            ULONG SidLen, RestrictedSidLen;
+
+            DPRINT("SeQueryInformationToken(TokenGroupsAndPrivileges)\n");
+            UserGroupLength = RtlLengthSidAndAttributes(Token->UserAndGroupCount, Token->UserAndGroups);
+            RestrictedSidLength = RtlLengthSidAndAttributes(Token->RestrictedSidCount, Token->RestrictedSids);
+            PrivilegeLength = Token->PrivilegeCount * sizeof(LUID_AND_ATTRIBUTES);
+            RequiredLength = sizeof(TOKEN_GROUPS_AND_PRIVILEGES) +
+                             UserGroupLength + RestrictedSidLength + PrivilegeLength;
+
+            gap = ExAllocatePoolWithTag(PagedPool, RequiredLength, TAG_SE);
+            if (gap == NULL)
+            {
+                Status = STATUS_INSUFFICIENT_RESOURCES;
+                break;
+            }
+
+            gap->SidCount = Token->UserAndGroupCount;
+            gap->SidLength = UserGroupLength;
+            gap->Sids = (PSID_AND_ATTRIBUTES)(gap + 1);
+            Sid = (PSID)((ULONG_PTR)gap->Sids + (Token->UserAndGroupCount * sizeof(SID_AND_ATTRIBUTES)));
+            SidLen = UserGroupLength - (Token->UserAndGroupCount * sizeof(SID_AND_ATTRIBUTES));
+            Status = RtlCopySidAndAttributesArray(Token->UserAndGroupCount,
+                                                  Token->UserAndGroups,
+                                                  SidLen,
+                                                  gap->Sids,
+                                                  Sid,
+                                                  &Unused.PSid,
+                                                  &Unused.Ulong);
+
+            gap->RestrictedSidCount = Token->RestrictedSidCount;
+            gap->RestrictedSidLength = RestrictedSidLength;
+            gap->RestrictedSids = NULL;
+            if (SeTokenIsRestricted(Token))
+            {
+                gap->RestrictedSids = (PSID_AND_ATTRIBUTES)((ULONG_PTR)gap->Sids + UserGroupLength);
+                RestrictedSid = (PSID)((ULONG_PTR)gap->RestrictedSids + (Token->RestrictedSidCount * sizeof(SID_AND_ATTRIBUTES)));
+                RestrictedSidLen = RestrictedSidLength - (Token->RestrictedSidCount * sizeof(SID_AND_ATTRIBUTES));
+                Status = RtlCopySidAndAttributesArray(Token->RestrictedSidCount,
+                                                      Token->RestrictedSids,
+                                                      RestrictedSidLen,
+                                                      gap->RestrictedSids,
+                                                      RestrictedSid,
+                                                      &Unused.PSid,
+                                                      &Unused.Ulong);
+            }
+
+            gap->PrivilegeCount = Token->PrivilegeCount;
+            gap->PrivilegeLength = PrivilegeLength;
+            gap->Privileges = (PLUID_AND_ATTRIBUTES)((ULONG_PTR)(gap + 1) +
+                              UserGroupLength + RestrictedSidLength);
+            RtlCopyLuidAndAttributesArray(Token->PrivilegeCount,
+                                          Token->Privileges,
+                                          gap->Privileges);
+
+            gap->AuthenticationId = Token->AuthenticationId;
+
+            *TokenInformation = gap;
+            Status = STATUS_SUCCESS;
+            break;
+        }
+
         default:
             DPRINT1("SeQueryInformationToken(%d) invalid information class\n", TokenInformationClass);
             Status = STATUS_INVALID_INFO_CLASS;

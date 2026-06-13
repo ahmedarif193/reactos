@@ -1667,6 +1667,8 @@ MmMapLockedPagesWithReservedMapping(
 
     ASSERT(Mdl->ByteCount != 0);
 
+    MappingAddress = (PVOID)ALIGN_DOWN_BY(MappingAddress, 16);
+
     // Get the list of pages and count
     MdlPages = MmGetMdlPfnArray(Mdl);
     PageCount = ADDRESS_AND_SIZE_TO_SPAN_PAGES(MmGetMdlVirtualAddress(Mdl),

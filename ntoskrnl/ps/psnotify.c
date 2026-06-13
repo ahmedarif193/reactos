@@ -81,6 +81,8 @@ PsSetCreateProcessNotifyRoutine(IN PCREATE_PROCESS_NOTIFY_ROUTINE NotifyRoutine,
     }
     else
     {
+        if (!NotifyRoutine) return STATUS_ACCESS_DENIED;
+
         /* Allocate a callback */
         CallBack = ExAllocateCallBack((PVOID)NotifyRoutine, NULL);
         if (!CallBack) return STATUS_INSUFFICIENT_RESOURCES;

@@ -268,9 +268,9 @@ KeInitializeTimerEx(OUT PKTIMER Timer,
     /* Initialize the Dispatch Header */
     ASSERT((Type == NotificationTimer) || (Type == SynchronizationTimer));
     Timer->Header.Type = TimerNotificationObject + Type;
-    //Timer->Header.TimerControlFlags = 0; // win does not init this field
-    Timer->Header.Hand = sizeof(KTIMER) / sizeof(ULONG);
-    Timer->Header.Inserted = 0; // win7: Timer->Header.TimerMiscFlags = 0;
+    Timer->Header.TimerControlFlags = 0;
+    Timer->Header.Hand = 0;
+    Timer->Header.TimerMiscFlags = 0;
     Timer->Header.SignalState = 0;
     InitializeListHead(&(Timer->Header.WaitListHead));
 

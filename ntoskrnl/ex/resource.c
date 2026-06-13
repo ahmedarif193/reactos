@@ -1445,7 +1445,7 @@ ExConvertExclusiveToSharedLite(IN PERESOURCE Resource)
  * @implemented NT4
  *
  *     The ExConvertExclusiveToSharedLite routine deletes a given resource
- *     from the system’s resource list.
+ *     from the systemï¿½s resource list.
  *
  * @param Resource
  *        Pointer to the resource to delete.
@@ -2200,7 +2200,7 @@ ExEnterCriticalRegionAndAcquireResourceExclusive(IN PERESOURCE Resource)
     NT_VERIFY(ExAcquireResourceExclusiveLite(Resource, TRUE));
 
     /* Return the Win32 Thread */
-    return KeGetCurrentThread()->Win32Thread;
+    return NULL;
 }
 
 /*++
@@ -2229,7 +2229,7 @@ ExEnterCriticalRegionAndAcquireResourceShared(IN PERESOURCE Resource)
     NT_VERIFY(ExAcquireResourceSharedLite(Resource, TRUE));
 
     /* Return the Win32 Thread */
-    return KeGetCurrentThread()->Win32Thread;
+    return NULL;
 }
 
 /*++
@@ -2260,7 +2260,7 @@ ExEnterCriticalRegionAndAcquireSharedWaitForExclusive(IN PERESOURCE Resource)
     NT_VERIFY(ExAcquireSharedWaitForExclusive(Resource, TRUE));
 
     /* Return the Win32 Thread */
-    return KeGetCurrentThread()->Win32Thread;
+    return NULL;
 }
 
 /*++

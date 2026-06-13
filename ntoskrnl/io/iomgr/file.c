@@ -1961,8 +1961,23 @@ IopQueryNameInternal(IN PVOID ObjectBody,
     /* Validate length */
     if (Length < sizeof(OBJECT_NAME_INFORMATION))
     {
-        /* Wrong length, fail */
-        *ReturnLength = sizeof(OBJECT_NAME_INFORMATION);
+        LocalInfo = ExAllocatePoolWithTag(PagedPool,
+                                          sizeof(OBJECT_NAME_INFORMATION),
+                                          TAG_IO);
+        if (LocalInfo)
+        {
+            LocalReturnLength = sizeof(OBJECT_NAME_INFORMATION);
+            ObQueryNameString(FileObject->DeviceObject,
+                              LocalInfo,
+                              sizeof(OBJECT_NAME_INFORMATION),
+                              &LocalReturnLength);
+            ExFreePoolWithTag(LocalInfo, TAG_IO);
+            *ReturnLength = LocalReturnLength;
+        }
+        else
+        {
+            *ReturnLength = sizeof(OBJECT_NAME_INFORMATION);
+        }
         return STATUS_INFO_LENGTH_MISMATCH;
     }
 
