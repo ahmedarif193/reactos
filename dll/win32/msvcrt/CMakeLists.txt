@@ -151,6 +151,15 @@ list(APPEND MSVCRT_SOURCE
     wcs.c
 )
 
+if(ARCH STREQUAL "arm64")
+    list(APPEND MSVCRT_ASM_SOURCE
+        ${REACTOS_SOURCE_DIR}/sdk/lib/crt/string/arm64/strlen.S
+        ${REACTOS_SOURCE_DIR}/sdk/lib/crt/string/arm64/strcpy.S
+        ${REACTOS_SOURCE_DIR}/sdk/lib/crt/string/arm64/strchr.S
+        ${REACTOS_SOURCE_DIR}/sdk/lib/crt/string/arm64/strrchr.S
+    )
+endif()
+
 add_asm_files(msvcrt_asm ${MSVCRT_ASM_SOURCE})
 list(APPEND MSVCRT_SOURCE ${msvcrt_asm})
 
