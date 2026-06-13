@@ -352,7 +352,21 @@ IoReportDetectedDevice(
     /* If the caller didn't get the resources assigned for us, do it now */
     if (!ResourceAssigned)
     {
-        Status = IopAssignDeviceResources(DeviceNode);
+        extern BOOLEAN PnpEnableParallelEnum;
+        extern ERESOURCE PiResourceAssignmentLock;
+        /* Serialize with the parallel enumeration workers' resource arbitration. */
+        if (PnpEnableParallelEnum)
+        {
+            KeEnterCriticalRegion();
+            ExAcquireResourceExclusiveLite(&PiResourceAssignmentLock, TRUE);
+            Status = IopAssignDeviceResources(DeviceNode);
+            ExReleaseResourceLite(&PiResourceAssignmentLock);
+            KeLeaveCriticalRegion();
+        }
+        else
+        {
+            Status = IopAssignDeviceResources(DeviceNode);
+        }
 
         /* See if we failed */
         if (!NT_SUCCESS(Status))
