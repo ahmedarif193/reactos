@@ -846,43 +846,57 @@ RtlFindClearRuns(
     }
 
     /* Check if we are finished */
-    if (Run < SizeOfRunArray || !LocateLongestRuns)
+    if (Run == SizeOfRunArray && LocateLongestRuns)
     {
-        /* Return the number of found runs */
-        return Run;
+        while (1)
+        {
+            /* Look for a run */
+            NumberOfBits = RtlFindNextForwardRunClear(BitMapHeader,
+                                                      FromIndex,
+                                                      &StartingIndex);
+
+            /* Nothing more found? Quit looping. */
+            if (NumberOfBits == 0) break;
+
+            /* Check if we have something to update */
+            if (NumberOfBits > RunArray[SmallestRun].NumberOfBits)
+            {
+                /* Update smallest run */
+                RunArray[SmallestRun].StartingIndex = StartingIndex;
+                RunArray[SmallestRun].NumberOfBits = NumberOfBits;
+
+                /* Loop all runs */
+                for (Run = 0; Run < SizeOfRunArray; Run++)
+                {
+                    /*Is this the new smallest run? */
+                    if (NumberOfBits < RunArray[SmallestRun].NumberOfBits)
+                    {
+                        /* Set it as new smallest run */
+                        SmallestRun = Run;
+                    }
+                }
+            }
+
+            /* Advance bits */
+            FromIndex += NumberOfBits;
+        }
     }
 
-    while (1)
+    if (LocateLongestRuns)
     {
-        /* Look for a run */
-        NumberOfBits = RtlFindNextForwardRunClear(BitMapHeader,
-                                                  FromIndex,
-                                                  &StartingIndex);
-
-        /* Nothing more found? Quit looping. */
-        if (NumberOfBits == 0) break;
-
-        /* Check if we have something to update */
-        if (NumberOfBits > RunArray[SmallestRun].NumberOfBits)
+        ULONG SortI, SortJ;
+        for (SortI = 0; SortI < Run; SortI++)
         {
-            /* Update smallest run */
-            RunArray[SmallestRun].StartingIndex = StartingIndex;
-            RunArray[SmallestRun].NumberOfBits = NumberOfBits;
-
-            /* Loop all runs */
-            for (Run = 0; Run < SizeOfRunArray; Run++)
+            for (SortJ = SortI + 1; SortJ < Run; SortJ++)
             {
-                /*Is this the new smallest run? */
-                if (NumberOfBits < RunArray[SmallestRun].NumberOfBits)
+                if (RunArray[SortJ].NumberOfBits > RunArray[SortI].NumberOfBits)
                 {
-                    /* Set it as new smallest run */
-                    SmallestRun = Run;
+                    RTL_BITMAP_RUN SortTemp = RunArray[SortI];
+                    RunArray[SortI] = RunArray[SortJ];
+                    RunArray[SortJ] = SortTemp;
                 }
             }
         }
-
-        /* Advance bits */
-        FromIndex += NumberOfBits;
     }
 
     return Run;

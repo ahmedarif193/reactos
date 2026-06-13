@@ -446,8 +446,8 @@ typedef enum _KOBJECTS
     EventPairObject = 21,
     InterruptObject = 22,
     ProfileObject = 23,
-    ThreadedDpcObject = 24,
-    MaximumKernelObject = 25
+    ThreadedDpcObject = 26,
+    MaximumKernelObject = 27
 } KOBJECTS;
 
 //

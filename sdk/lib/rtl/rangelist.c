@@ -461,8 +461,8 @@ RtlGetFirstRange(IN PRTL_RANGE_LIST RangeList,
         return STATUS_NO_MORE_ENTRIES;
     }
 
-    Iterator->Current = RangeList->ListHead.Flink;
-    *Range = &((PRTL_RANGE_ENTRY)Iterator->Current)->Range;
+    *Range = &CONTAINING_RECORD(RangeList->ListHead.Flink, RTL_RANGE_ENTRY, Entry)->Range;
+    Iterator->Current = *Range;
 
     return STATUS_SUCCESS;
 }
@@ -507,11 +507,11 @@ RtlGetNextRange(IN OUT PRTL_RANGE_LIST_ITERATOR Iterator,
 
     if (MoveForwards)
     {
-        Next = ((PRTL_RANGE_ENTRY)Iterator->Current)->Entry.Flink;
+        Next = CONTAINING_RECORD(Iterator->Current, RTL_RANGE_ENTRY, Range)->Entry.Flink;
     }
     else
     {
-        Next = ((PRTL_RANGE_ENTRY)Iterator->Current)->Entry.Blink;
+        Next = CONTAINING_RECORD(Iterator->Current, RTL_RANGE_ENTRY, Range)->Entry.Blink;
     }
 
     if (Next == Iterator->RangeListHead)
@@ -521,8 +521,8 @@ RtlGetNextRange(IN OUT PRTL_RANGE_LIST_ITERATOR Iterator,
         return STATUS_NO_MORE_ENTRIES;
     }
 
-    Iterator->Current = Next;
-    *Range = &((PRTL_RANGE_ENTRY)Next)->Range;
+    *Range = &CONTAINING_RECORD(Next, RTL_RANGE_ENTRY, Entry)->Range;
+    Iterator->Current = *Range;
 
     return STATUS_SUCCESS;
 }
@@ -693,10 +693,9 @@ RtlIsRangeAvailable(IN PRTL_RANGE_LIST RangeList,
     {
         Current = CONTAINING_RECORD (Entry, RTL_RANGE_ENTRY, Entry);
 
-        if (!((Current->Range.Start >= End && Current->Range.End > End) ||
-              (Current->Range.Start <= Start && Current->Range.End < Start &&
-               (!(Flags & RTL_RANGE_SHARED) ||
-                !(Current->Range.Flags & RTL_RANGE_SHARED)))))
+        if (Current->Range.Start <= End && Current->Range.End >= Start &&
+            !(((Flags & RTL_RANGE_SHARED) && (Current->Range.Flags & RTL_RANGE_SHARED)) ||
+              (Current->Range.Attributes & AttributeAvailableMask)))
         {
             if (Callback != NULL)
             {
