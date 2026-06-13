@@ -369,9 +369,13 @@ AcpiOsMapMemory (
 
     /* ACPI tables can reside above 4 GB on amd64, so keep the full address. */
     Address.QuadPart = (ULONGLONG)phys;
+#if defined(_M_ARM64)
+    CacheType = MmCached;
+#else
     CacheType = MmNonCached;
 #if (NTDDI_VERSION >= NTDDI_WIN7)
     HalGetMemoryCachingRequirements(Address, length, &CacheType);
+#endif
 #endif
     Ptr = MmMapIoSpace(Address, length, CacheType);
     if (!Ptr)
