@@ -49,9 +49,6 @@ IoConnectInterrupt(OUT PKINTERRUPT *InterruptObject,
 
     PAGED_CODE();
 
-    /* Assume failure */
-    *InterruptObject = NULL;
-
     /* Get the affinity */
     Affinity = ProcessorEnableMask & KeActiveProcessors;
     while (Affinity)
