@@ -452,7 +452,7 @@ RtlWeaklyEnumerateEntryHashTable(
     }
     else if (Enumerator->HashEntry.Linkage.Flink != NULL)
     {
-        Link = Enumerator->HashEntry.Linkage.Flink;
+        Link = Enumerator->HashEntry.Linkage.Flink->Flink;
     }
     else
     {
