@@ -4597,11 +4597,7 @@ HalpArm64BuildScatterGatherList(
         return Status;
     }
 
-    Status = SgContext->Status;
-    if (!NT_SUCCESS(Status) && !UsingUserBuffer)
-        ExFreePoolWithTag(SgContext, TAG_DMA_SGL);
-
-    return Status;
+    return STATUS_SUCCESS;
 }
 
 static NTSTATUS NTAPI
