@@ -944,20 +944,14 @@ KiInitializeSystem(_Inout_ PLOADER_PARAMETER_BLOCK LoaderBlock)
      *
      * This provides optimal performance for threads that don't use FP/SVE.
      */
+    KiArm64ApplySctlrPolicy();
+
     if (ProcessorNumber == 0)
     {
         ULONG64 Cpacr;
 
         /* Read and publish the BSP hardware capability policy once. */
         Arm64CpuFeatures = KiArm64ReadCpuFeatures();
-
-        /*
-         * NT code expects ordinary unaligned data accesses to normal memory to
-         * work on ARM64. Keep EL1/EL0 stack alignment checking, but force
-         * SCTLR_EL1.A off. Also disable BTI enforcement unless the whole kernel
-         * and all loaded images are built with landing pads.
-         */
-        KiArm64ApplySctlrPolicy();
 
         /*
          * PAN (Privileged Access Never):
