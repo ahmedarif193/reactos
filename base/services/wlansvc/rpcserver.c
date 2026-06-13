@@ -75,6 +75,27 @@ static PWLANSVCHANDLE WlanSvcValidateHandle(WLANSVC_RPC_HANDLE ClientHandle)
     return h;
 }
 
+/* TRUE if the RPC caller is an Administrator or LocalSystem (allowed to read plaintext keys). */
+static BOOL WlanSvcClientIsPrivileged(VOID)
+{
+    SID_IDENTIFIER_AUTHORITY NtAuthority = {SECURITY_NT_AUTHORITY};
+    PSID AdminSid = NULL;
+    BOOL bIsMember = FALSE;
+
+    if (RpcImpersonateClient(NULL) != RPC_S_OK)
+        return FALSE;
+
+    if (AllocateAndInitializeSid(&NtAuthority, 2, SECURITY_BUILTIN_DOMAIN_RID, DOMAIN_ALIAS_RID_ADMINS, 0, 0, 0, 0, 0, 0, &AdminSid))
+    {
+        if (!CheckTokenMembership(NULL, AdminSid, &bIsMember))
+            bIsMember = FALSE;
+        FreeSid(AdminSid);
+    }
+
+    RpcRevertToSelf();
+    return bIsMember;
+}
+
 DWORD _RpcOpenHandle(
     wchar_t *arg_1,
     DWORD dwClientVersion,
@@ -583,6 +604,7 @@ DWORD _RpcGetProfile(
 {
     PWLANSVC_INTERFACE iface;
     DWORD dwResult;
+    BOOL bPrivileged;
 
     *pstrProfileXml = NULL;
 
@@ -592,6 +614,9 @@ DWORD _RpcGetProfile(
     if (!WlanSvcValidateHandle(hClientHandle))
         return ERROR_INVALID_HANDLE;
 
+    /* The cleartext <keyMaterial> PSK is only returned to privileged callers. */
+    bPrivileged = WlanSvcClientIsPrivileged();
+
     EnterCriticalSection(&WlanSvcLock);
     iface = WlanSvcFindInterface(pInterfaceGuid);
     if (iface == NULL)
@@ -600,11 +625,15 @@ DWORD _RpcGetProfile(
         return ERROR_NOT_FOUND;
     }
 
-    dwResult = WlanSvcGetProfile(iface, strProfileName, pstrProfileXml, pdwFlags);
+    dwResult = WlanSvcGetProfile(iface, strProfileName, bPrivileged, pstrProfileXml, pdwFlags);
     LeaveCriticalSection(&WlanSvcLock);
 
     if (dwResult == ERROR_SUCCESS && pdwGrantedAccess != NULL)
-        *pdwGrantedAccess = WLAN_READ_ACCESS | WLAN_WRITE_ACCESS | WLAN_EXECUTE_ACCESS;
+    {
+        *pdwGrantedAccess = WLAN_READ_ACCESS | WLAN_EXECUTE_ACCESS;
+        if (bPrivileged)
+            *pdwGrantedAccess |= WLAN_WRITE_ACCESS;
+    }
 
     return dwResult;
 }

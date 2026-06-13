@@ -296,9 +296,29 @@ WlanSvcSetProfile(PWLANSVC_INTERFACE Iface,
     return ERROR_SUCCESS;
 }
 
+/* Blank the <keyMaterial> text in a mutable XML copy (-> <keyMaterial></keyMaterial>). */
+static VOID
+WlanSvcRedactKeyMaterial(LPWSTR Xml)
+{
+    LPWSTR start = (LPWSTR)XmlFindOpen(Xml, L"keyMaterial");
+    LPWSTR end;
+    size_t tail;
+
+    if (start == NULL)
+        return;
+
+    end = wcschr(start, L'<');
+    if (end == NULL || end <= start)
+        return;
+
+    tail = wcslen(end) + 1;
+    memmove(start, end, tail * sizeof(WCHAR));
+}
+
 DWORD
 WlanSvcGetProfile(PWLANSVC_INTERFACE Iface,
                   LPCWSTR Name,
+                  BOOL bPlaintextKey,
                   LPWSTR *ppXml,
                   PDWORD pdwFlags)
 {
@@ -320,6 +340,10 @@ WlanSvcGetProfile(PWLANSVC_INTERFACE Iface,
     if (copy == NULL)
         return ERROR_NOT_ENOUGH_MEMORY;
     memcpy(copy, prof->Xml, len);
+
+    /* Never hand the cleartext PSK to an unprivileged caller. */
+    if (!bPlaintextKey)
+        WlanSvcRedactKeyMaterial(copy);
 
     *ppXml = copy;
     if (pdwFlags)
