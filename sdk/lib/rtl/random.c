@@ -122,7 +122,6 @@ RtlRandom (IN OUT PULONG Seed)
    *Seed = ((ULONG64)Rand * LCG_A + LCG_C) % LCG_M;
    Pos = *Seed & (sizeof(RtlpRandomConstantVector) / sizeof(RtlpRandomConstantVector[0]) - 1);
    Result = RtlpRandomConstantVector[Pos];
-   RtlpRandomConstantVector[Pos] = Rand;
 
    return Result;
 }
