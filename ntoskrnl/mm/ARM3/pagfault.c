@@ -76,6 +76,7 @@ MiArm64WriteFaultPte(
         !MI_IS_PAGE_TABLE_ADDRESS(PointerPte))
     {
         MI_WRITE_VALID_PTE_NO_FLUSH(PointerPte, ValidPte);
+        MiArm64CleanEntryToPoC(PointerPte);
         __asm__ __volatile__("tlbi vaale1is, %0" :: "r"((ULONG_PTR)FaultAddress >> PAGE_SHIFT) : "memory");
         __asm__ __volatile__("dsb ish\n\tisb" ::: "memory");
     }
