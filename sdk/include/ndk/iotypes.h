@@ -1066,6 +1066,9 @@ typedef struct _DEVICE_NODE
 #if (NTDDI_VERSION >= NTDDI_LONGHORN)
     ULONG NumaNodeIndex;
 #endif
+#if DBG
+    volatile PVOID DiagWalkOwner;
+#endif
 } DEVICE_NODE, *PDEVICE_NODE;
 
 //

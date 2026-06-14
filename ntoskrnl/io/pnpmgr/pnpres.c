@@ -165,6 +165,10 @@ IopCheckDescriptorForConflict(
     CM_RESOURCE_LIST CmList;
     NTSTATUS Status;
 
+    /* The DB path checks conflicts in-memory instead of re-scanning the registry */
+    if (PnpEnableParallelEnum)
+        return IopResDbCheckDescriptor(CmDesc, ConflictingDescriptor);
+
     CmList.Count = 1;
     CmList.List[0].InterfaceType = InterfaceTypeUndefined;
     CmList.List[0].BusNumber = 0;
@@ -1420,6 +1424,13 @@ IopAssignDeviceResources(
    NTSTATUS Status;
    ULONG ListSize;
 
+   /* DB path: drop any prior grant for this node, re-recorded on success below. */
+   if (PnpEnableParallelEnum)
+   {
+       IopResDbEnsureSeeded();
+       IopResDbRelease(DeviceNode);
+   }
+
    Status = IopFilterResourceRequirements(DeviceNode);
    if (!NT_SUCCESS(Status))
        goto ByeBye;
@@ -1430,7 +1441,7 @@ IopAssignDeviceResources(
       DeviceNode->ResourceList = NULL;
       DeviceNode->ResourceListTranslated = NULL;
       PiSetDevNodeState(DeviceNode, DeviceNodeResourcesAssigned);
-      DeviceNode->Flags |= DNF_NO_RESOURCE_REQUIRED;
+      PiSetDevNodeFlag(DeviceNode, DNF_NO_RESOURCE_REQUIRED);
 
       return STATUS_SUCCESS;
    }
@@ -1456,12 +1467,16 @@ IopAssignDeviceResources(
        IopConsolidateInterruptDescriptors(DeviceNode->ResourceList);
 #endif
 
-       Status = IopDetectResourceConflict(DeviceNode->ResourceList, FALSE, NULL);
-       if (!NT_SUCCESS(Status))
+       /* The DB path checks conflicts in-memory; skip the registry re-scan */
+       if (!PnpEnableParallelEnum)
        {
-           DPRINT1("Boot resources for %wZ cause a resource conflict!\n", &DeviceNode->InstancePath);
-           ExFreePool(DeviceNode->ResourceList);
-           DeviceNode->ResourceList = NULL;
+           Status = IopDetectResourceConflict(DeviceNode->ResourceList, FALSE, NULL);
+           if (!NT_SUCCESS(Status))
+           {
+               DPRINT1("Boot resources for %wZ cause a resource conflict!\n", &DeviceNode->InstancePath);
+               ExFreePool(DeviceNode->ResourceList);
+               DeviceNode->ResourceList = NULL;
+           }
        }
    }
    else
@@ -1499,7 +1514,7 @@ IopAssignDeviceResources(
    }
 
    /* IopFixupResourceListWithRequirements should NEVER give us a conflicting list */
-   ASSERT(IopDetectResourceConflict(DeviceNode->ResourceList, FALSE, NULL) != STATUS_CONFLICTING_ADDRESSES);
+   ASSERT(PnpEnableParallelEnum || IopDetectResourceConflict(DeviceNode->ResourceList, FALSE, NULL) != STATUS_CONFLICTING_ADDRESSES);
 
 Finish:
    Status = IopTranslateDeviceResources(DeviceNode);
@@ -1517,6 +1532,10 @@ Finish:
    Status = IopUpdateControlKeyWithResources(DeviceNode);
    if (!NT_SUCCESS(Status))
        goto ByeBye;
+
+   /* Record the grant in the in-memory resource DB */
+   if (PnpEnableParallelEnum && DeviceNode->ResourceList)
+       IopResDbReserve(DeviceNode, DeviceNode->ResourceList, NULL);
 
    PiSetDevNodeState(DeviceNode, DeviceNodeResourcesAssigned);
 
@@ -1569,7 +1588,6 @@ ByeBye:
    return Result;
 }
 
-static
 BOOLEAN
 IopIsResourceListValid(
    IN PCM_RESOURCE_LIST ResourceList,

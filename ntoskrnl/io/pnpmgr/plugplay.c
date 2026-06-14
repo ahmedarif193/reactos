@@ -350,7 +350,7 @@ PiControlInitializeDevice(
     }
 
     DeviceObject->Flags |= DO_BUS_ENUMERATED_DEVICE;
-    DeviceNode->Flags |= DNF_MADEUP | DNF_IDS_QUERIED | DNF_ENUMERATED;
+    PiSetDevNodeFlag(DeviceNode, DNF_MADEUP | DNF_IDS_QUERIED | DNF_ENUMERATED);
     PiSetDevNodeState(DeviceNode, DeviceNodeInitialized);
 
     Status = IopCreateDeviceKeyPath(&DeviceInstance, REG_OPTION_NON_VOLATILE, &InstanceKey);
