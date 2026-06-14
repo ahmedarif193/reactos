@@ -692,7 +692,7 @@ KeStartAllProcessors(
              * 3. Jump to the kernel entry point
              */
             ProcessorState->ContextFrame.Pc = (DWORD64)KiInitializeSystem;
-            ProcessorState->ContextFrame.Sp = (DWORD64)KernelStack;
+            ProcessorState->ContextFrame.Sp = (DWORD64)ALIGN_DOWN_BY((ULONG_PTR)KernelStack - PAGE_SIZE, 16);
 
             /* Store ARM64 system registers if needed */
             ProcessorState->ArchState.Ttbr0_El1 = 0; /* HAL will use BSP's value */
