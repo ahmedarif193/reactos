@@ -2186,6 +2186,19 @@ IopQueryNameInternal(IN PVOID ObjectBody,
     return Status;
 }
 
+static
+NTSTATUS
+NTAPI
+IopUnlockAllCompletionRoutine(IN PDEVICE_OBJECT DeviceObject,
+                              IN PIRP Irp,
+                              IN PVOID Context)
+{
+    UNREFERENCED_PARAMETER(DeviceObject);
+    Irp->UserEvent = NULL;
+    KeSetEvent((PKEVENT)Context, IO_NO_INCREMENT, FALSE);
+    return STATUS_SUCCESS;
+}
+
 VOID
 NTAPI
 IopCloseFile(IN PEPROCESS Process OPTIONAL,
@@ -2256,16 +2269,21 @@ IopCloseFile(IN PEPROCESS Process OPTIONAL,
             StackPtr->MinorFunction = IRP_MN_UNLOCK_ALL;
             StackPtr->FileObject = FileObject;
 
+            IoSetCompletionRoutine(Irp,
+                                   IopUnlockAllCompletionRoutine,
+                                   &Event,
+                                   TRUE,
+                                   TRUE,
+                                   TRUE);
+
             /* Queue the IRP */
             IopQueueIrpToThread(Irp);
 
             /* Call the FS Driver */
             Status = IoCallDriver(DeviceObject, Irp);
-            if (Status == STATUS_PENDING)
-            {
-                /* Wait for completion */
-                KeWaitForSingleObject(&Event, UserRequest, KernelMode, FALSE, NULL);
-            }
+
+            /* Wait for completion */
+            KeWaitForSingleObject(&Event, UserRequest, KernelMode, FALSE, NULL);
 
             /* IO will unqueue & free for us */
         }
