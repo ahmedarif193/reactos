@@ -16,7 +16,6 @@
 /* GLOBALS *******************************************************************/
 
 ERESOURCE PpRegistryDeviceResource;
-ERESOURCE PiResourceAssignmentLock;
 KGUARDED_MUTEX PpDeviceReferenceTableLock;
 RTL_AVL_TABLE PpDeviceReferenceTable;
 
@@ -1133,8 +1132,8 @@ PiInitPhase0(VOID)
     /* Initialize the resource when accessing device registry data */
     ExInitializeResourceLite(&PpRegistryDeviceResource);
 
-    /* Serializes resource arbitration during parallel enumeration */
-    ExInitializeResourceLite(&PiResourceAssignmentLock);
+    /* In-memory resource database */
+    IopResDbInitialize();
 
     /* Setup the device reference AVL table */
     PpInitializeDeviceReferenceTable();
