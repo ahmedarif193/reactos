@@ -187,7 +187,11 @@ SetupVaRegions(
     ReserveVaRegion(AssignedRegionSession, MI_SESSION_SPACE_START, 512 * _1GB);
 
     /* Reserve loader mappings */
+#if (NTDDI_VERSION < NTDDI_WIN8)
     BootImageSize = LoaderBlock->Extension->LoaderPagesSpanned * PAGE_SIZE;
+#else
+    BootImageSize = MmBootImageSize;
+#endif
     ReserveVaRegion(AssignedRegionSystemImages,
                     MI_LOADER_MAPPINGS,
                     BootImageSize + PAGE_SIZE);
