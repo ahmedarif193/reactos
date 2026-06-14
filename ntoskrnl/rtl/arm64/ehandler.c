@@ -105,6 +105,21 @@ __C_specific_handler(
     TargetIpOffset = DispatcherContext->TargetPc - ImageBase;
     ScopeTable = (PSCOPE_TABLE)DispatcherContext->HandlerData;
 
+    if (ExceptionRecord->NumberParameters >= 2 &&
+        ExceptionRecord->ExceptionInformation[1] == 0x42424242)
+    {
+        ULONG _si;
+        DPRINT1("[SEHCSH] IpOff=%p ib=%p ctlpc=%p scopes=%lu hd=%p flags=%lx\n",
+                (PVOID)IpOffset, (PVOID)ImageBase, (PVOID)DispatcherContext->ControlPc,
+                ScopeTable->Count, ScopeTable, ExceptionRecord->ExceptionFlags);
+        for (_si = 0; _si < ScopeTable->Count && _si < 8; _si++)
+            DPRINT1("[SEHCSH]  [%lu] beg=%lx end=%lx h=%lx jt=%lx\n", _si,
+                    ScopeTable->ScopeRecord[_si].BeginAddress,
+                    ScopeTable->ScopeRecord[_si].EndAddress,
+                    ScopeTable->ScopeRecord[_si].HandlerAddress,
+                    ScopeTable->ScopeRecord[_si].JumpTarget);
+    }
+
     while (DispatcherContext->ScopeIndex < ScopeTable->Count)
     {
         i = DispatcherContext->ScopeIndex++;
