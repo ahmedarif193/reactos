@@ -352,21 +352,7 @@ IoReportDetectedDevice(
     /* If the caller didn't get the resources assigned for us, do it now */
     if (!ResourceAssigned)
     {
-        extern BOOLEAN PnpEnableParallelEnum;
-        extern ERESOURCE PiResourceAssignmentLock;
-        /* Serialize with the parallel enumeration workers' resource arbitration. */
-        if (PnpEnableParallelEnum)
-        {
-            KeEnterCriticalRegion();
-            ExAcquireResourceExclusiveLite(&PiResourceAssignmentLock, TRUE);
-            Status = IopAssignDeviceResources(DeviceNode);
-            ExReleaseResourceLite(&PiResourceAssignmentLock);
-            KeLeaveCriticalRegion();
-        }
-        else
-        {
-            Status = IopAssignDeviceResources(DeviceNode);
-        }
+        Status = IopAssignDeviceResources(DeviceNode);
 
         /* See if we failed */
         if (!NT_SUCCESS(Status))
@@ -385,7 +371,7 @@ IoReportDetectedDevice(
         PnpRootRegisterDevice(*DeviceObject);
 
     PiInsertDevNode(DeviceNode, IopRootDeviceNode);
-    DeviceNode->Flags |= DNF_MADEUP | DNF_ENUMERATED;
+    PiSetDevNodeFlag(DeviceNode, DNF_MADEUP | DNF_ENUMERATED);
 
     // we still need to query IDs, send events and reenumerate this node
     PiSetDevNodeState(DeviceNode, DeviceNodeStartPostWork);
@@ -427,8 +413,12 @@ IoReportResourceForDetection(IN PDRIVER_OBJECT DriverObject,
     else
         ResourceList = DriverList;
 
-    /* Look for a resource conflict */
-    Status = IopDetectResourceConflict(ResourceList, TRUE, NULL);
+    /* Look for a resource conflict: DB on the flag path, registry otherwise */
+    if (PnpEnableParallelEnum)
+        Status = IopResDbCheckList(ResourceList) ? STATUS_CONFLICTING_ADDRESSES : STATUS_SUCCESS;
+    else
+        Status = IopDetectResourceConflict(ResourceList, TRUE, NULL);
+
     if (Status == STATUS_CONFLICTING_ADDRESSES)
     {
         /* Oh noes */

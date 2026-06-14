@@ -129,19 +129,36 @@ PiSetDevNodeState(
 }
 
 VOID
+PiSetDevNodeFlag(
+    _In_ PDEVICE_NODE DeviceNode,
+    _In_ ULONG Flags)
+{
+    InterlockedOr((volatile LONG *)&DeviceNode->Flags, (LONG)Flags);
+}
+
+VOID
+PiClearDevNodeFlag(
+    _In_ PDEVICE_NODE DeviceNode,
+    _In_ ULONG Flags)
+{
+    InterlockedAnd((volatile LONG *)&DeviceNode->Flags, ~(LONG)Flags);
+}
+
+VOID
 PiSetDevNodeProblem(
     _In_ PDEVICE_NODE DeviceNode,
     _In_ UINT32 Problem)
 {
-    DeviceNode->Flags |= DNF_HAS_PROBLEM;
+    /* Set Problem before publishing the flag (write-side ordering only) */
     DeviceNode->Problem = Problem;
+    PiSetDevNodeFlag(DeviceNode, DNF_HAS_PROBLEM);
 }
 
 VOID
 PiClearDevNodeProblem(
     _In_ PDEVICE_NODE DeviceNode)
 {
-    DeviceNode->Flags &= ~DNF_HAS_PROBLEM;
+    PiClearDevNodeFlag(DeviceNode, DNF_HAS_PROBLEM);
     DeviceNode->Problem = 0;
 }
 
@@ -337,6 +354,10 @@ IopFreeDeviceNode(
     ASSERT(DeviceNode->State == DeviceNodeRemoved);
     /* No notifications should be registered for this device */
     ASSERT(IsListEmpty(&DeviceNode->TargetDeviceNotify));
+
+    /* Release the node's resource-DB grant before it goes away */
+    if (PnpEnableParallelEnum)
+        IopResDbRelease(DeviceNode);
 
     KeAcquireSpinLock(&IopDeviceTreeLock, &OldIrql);
 

@@ -425,8 +425,7 @@ IopInitializePlugPlayServices(VOID)
     IopRootDeviceNode = PipAllocateDeviceNode(Pdo);
 
     /* Set flags */
-    IopRootDeviceNode->Flags |= DNF_MADEUP | DNF_ENUMERATED |
-                                DNF_IDS_QUERIED | DNF_NO_RESOURCE_REQUIRED;
+    PiSetDevNodeFlag(IopRootDeviceNode, DNF_MADEUP | DNF_ENUMERATED | DNF_IDS_QUERIED | DNF_NO_RESOURCE_REQUIRED);
 
     /* Create instance path */
     if (!RtlCreateUnicodeString(&IopRootDeviceNode->InstancePath, REGSTR_VAL_ROOT_DEVNODE))
