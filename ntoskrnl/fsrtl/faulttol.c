@@ -30,6 +30,19 @@
  * @remarks FTDISK is a Software RAID Implementation.
  *
  *--*/
+static
+NTSTATUS
+NTAPI
+FsRtlpBalanceReadsCompletion(IN PDEVICE_OBJECT DeviceObject,
+                             IN PIRP Irp,
+                             IN PVOID Context)
+{
+    UNREFERENCED_PARAMETER(DeviceObject);
+    UNREFERENCED_PARAMETER(Irp);
+    KeSetEvent((PKEVENT)Context, IO_NO_INCREMENT, FALSE);
+    return STATUS_MORE_PROCESSING_REQUIRED;
+}
+
 NTSTATUS
 NTAPI
 FsRtlBalanceReads(PDEVICE_OBJECT TargetDevice)
@@ -38,6 +51,7 @@ FsRtlBalanceReads(PDEVICE_OBJECT TargetDevice)
     KEVENT Event;
     IO_STATUS_BLOCK IoStatusBlock;
     NTSTATUS Status;
+    KIRQL OldIrql;
 
     /* Initialize the Local Event */
     KeInitializeEvent(&Event, NotificationEvent, FALSE);
@@ -54,22 +68,29 @@ FsRtlBalanceReads(PDEVICE_OBJECT TargetDevice)
                                         &IoStatusBlock);
     if (!Irp) return STATUS_INSUFFICIENT_RESOURCES;
 
+    IoSetCompletionRoutine(Irp,
+                           FsRtlpBalanceReadsCompletion,
+                           &Event,
+                           TRUE,
+                           TRUE,
+                           TRUE);
+
     /* Send it */
     Status = IoCallDriver(TargetDevice, Irp);
 
-    /* Wait if needed */
-    if (Status == STATUS_PENDING)
-    {
-        Status = KeWaitForSingleObject(&Event,
-                                       Executive,
-                                       KernelMode,
-                                       FALSE,
-                                       NULL);
-        ASSERT(Status == STATUS_SUCCESS);
+    KeWaitForSingleObject(&Event,
+                          Executive,
+                          KernelMode,
+                          FALSE,
+                          NULL);
 
-        /* Return Status */
-        Status = IoStatusBlock.Status;
-    }
+    Status = Irp->IoStatus.Status;
+
+    KeRaiseIrql(APC_LEVEL, &OldIrql);
+    IopUnQueueIrpFromThread(Irp);
+    KeLowerIrql(OldIrql);
+
+    IoFreeIrp(Irp);
 
     /* Return the status */
     return Status;
