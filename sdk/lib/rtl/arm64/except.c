@@ -213,10 +213,10 @@ RtlDispatchException(
     UnwindContext = *ContextRecord;
     RtlpGetStackLimits(&StackLow, &StackHigh);
 
-    for (Frames = 0; Frames < 64; Frames++)
+    for (Frames = 0; Frames < 128; Frames++)
     {
         ImageBase = 0;
-        LookupPc = (Frames == 0) ? UnwindContext.Pc : (UnwindContext.Pc - 1);
+        LookupPc = (Frames == 0) ? UnwindContext.Pc : (UnwindContext.Pc - 4);
         FunctionEntry = RtlLookupFunctionEntry(LookupPc,
                                                (PULONG_PTR)&ImageBase,
                                                NULL);
@@ -225,125 +225,69 @@ RtlDispatchException(
             if ((UnwindContext.Lr == 0) ||
                 (UnwindContext.Lr == UnwindContext.Pc))
             {
-                if (RtlpArm64UnwindFrameChain(&UnwindContext,
-                                              StackLow,
-                                              StackHigh,
-                                              &EstablisherFrame))
-                {
-                    continue;
-                }
-
                 break;
             }
+
             UnwindContext.Pc = UnwindContext.Lr;
             continue;
         }
 
-        /*
-         * Try RtlVirtualUnwind for proper PE/COFF unwinding first.
-         * If it returns meaningful results, use those instead of FP fallback.
-         */
+        EstablisherFrame = 0;
+        ExceptionRoutine = RtlVirtualUnwind(UNW_FLAG_EHANDLER,
+                                            (ULONG64)ImageBase,
+                                            LookupPc,
+                                            FunctionEntry,
+                                            &UnwindContext,
+                                            &HandlerData,
+                                            &EstablisherFrame,
+                                            NULL);
+
+        if ((EstablisherFrame < StackLow) ||
+            (EstablisherFrame >= StackHigh) ||
+            (EstablisherFrame & (sizeof(ULONG64) - 1)))
         {
-            CONTEXT VuContext = UnwindContext;
-            ULONG_PTR FrameControlPc = LookupPc;
-            ULONG64 VuEstablisherFrame;
-            PEXCEPTION_ROUTINE VuRoutine;
-            PVOID VuHandlerData;
-            BOOLEAN UsingVu = FALSE;
+            ExceptionRecord->ExceptionFlags |= EXCEPTION_STACK_INVALID;
+            break;
+        }
 
-            VuRoutine = RtlVirtualUnwind(UNW_FLAG_EHANDLER,
-                                         ImageBase,
-                                         UnwindContext.Pc,
-                                         FunctionEntry,
-                                         &VuContext,
-                                         &VuHandlerData,
-                                         &VuEstablisherFrame,
-                                         NULL);
+        if (ExceptionRoutine != NULL)
+        {
+            RtlZeroMemory(&DispatcherContext, sizeof(DispatcherContext));
+            DispatcherContext.ControlPc = LookupPc;
+            DispatcherContext.ImageBase = ImageBase;
+            DispatcherContext.FunctionEntry = FunctionEntry;
+            DispatcherContext.EstablisherFrame = EstablisherFrame;
+            DispatcherContext.ContextRecord = ContextRecord;
+            DispatcherContext.LanguageHandler = ExceptionRoutine;
+            DispatcherContext.HandlerData = HandlerData;
+            DispatcherContext.ScopeIndex = 0;
 
-            if (VuContext.Pc != UnwindContext.Pc &&
-                VuContext.Sp >= UnwindContext.Sp)
+            Disposition = ExceptionRoutine(ExceptionRecord,
+                                           (PVOID)(ULONG_PTR)EstablisherFrame,
+                                           ContextRecord,
+                                           &DispatcherContext);
+
+            if (Disposition == ExceptionContinueExecution)
             {
-                UnwindContext = VuContext;
-                EstablisherFrame = VuEstablisherFrame;
-                ExceptionRoutine = VuRoutine;
-                HandlerData = VuHandlerData;
-                UsingVu = TRUE;
+                if (ExceptionRecord->ExceptionFlags & EXCEPTION_NONCONTINUABLE)
+                {
+                    RtlRaiseStatus(STATUS_NONCONTINUABLE_EXCEPTION);
+                }
+
+                RtlCallVectoredContinueHandlers(ExceptionRecord, ContextRecord);
+                return TRUE;
             }
 
-            if (!UsingVu)
+            if ((Disposition != ExceptionContinueSearch) &&
+                (Disposition != ExceptionNestedException))
             {
-                ULONG64 FrameFp = UnwindContext.Fp;
-                ULONG64 NextFp;
-                ULONG64 NextLr;
-
-                HandlerData = NULL;
-                ExceptionRoutine = NULL;
-                if (!RtlpArm64GetExceptionHandler(ImageBase,
-                                                   FunctionEntry,
-                                                   &ExceptionRoutine,
-                                                   &HandlerData))
-                {
-                    ExceptionRoutine = NULL;
-                    HandlerData = NULL;
-                }
-
-                if (!RtlpArm64IsStackPointerValid((ULONG_PTR)FrameFp,
-                                                  StackLow,
-                                                  StackHigh) ||
-                    !RtlpArm64IsStackPointerValid((ULONG_PTR)(FrameFp + sizeof(ULONG64)),
-                                                  StackLow,
-                                                  StackHigh))
-                {
-                    break;
-                }
-
-                EstablisherFrame = FrameFp;
-                NextFp = *(PULONG64)(ULONG_PTR)FrameFp;
-                NextLr = *(PULONG64)(ULONG_PTR)(FrameFp + sizeof(ULONG64));
-
-                if ((NextLr == 0) ||
-                    ((NextFp != 0) &&
-                     (!RtlpArm64IsStackPointerValid((ULONG_PTR)NextFp,
-                                                    StackLow,
-                                                    StackHigh) ||
-                      (NextFp <= FrameFp))))
-                {
-                    break;
-                }
-
-                UnwindContext.Lr = NextLr;
-                UnwindContext.Sp = UnwindContext.Fp + (2 * sizeof(ULONG64));
-                UnwindContext.Fp = NextFp;
-                UnwindContext.Pc = UnwindContext.Lr;
-
+                break;
             }
+        }
 
-            if (ExceptionRoutine != NULL)
-            {
-                RtlZeroMemory(&DispatcherContext, sizeof(DispatcherContext));
-                DispatcherContext.ControlPc = FrameControlPc;
-                DispatcherContext.ImageBase = ImageBase;
-                DispatcherContext.FunctionEntry = FunctionEntry;
-                DispatcherContext.EstablisherFrame = EstablisherFrame;
-                DispatcherContext.ContextRecord = ContextRecord;
-                DispatcherContext.LanguageHandler = ExceptionRoutine;
-                DispatcherContext.HandlerData = HandlerData;
-
-                Disposition = ExceptionRoutine(ExceptionRecord,
-                                               (PVOID)DispatcherContext.EstablisherFrame,
-                                               ContextRecord,
-                                               &DispatcherContext);
-                if (Disposition == ExceptionContinueExecution)
-                {
-                    RtlCallVectoredContinueHandlers(ExceptionRecord, ContextRecord);
-                    return TRUE;
-                }
-
-                if (Disposition != ExceptionContinueSearch)
-                {
-                    break;
-                }
-            }
+        if (UnwindContext.Pc == 0)
+        {
+            break;
         }
     }
 
