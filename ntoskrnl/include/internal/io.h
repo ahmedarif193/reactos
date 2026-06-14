@@ -629,6 +629,61 @@ VOID
 PiClearDevNodeProblem(
     _In_ PDEVICE_NODE DeviceNode);
 
+VOID
+PiSetDevNodeFlag(
+    _In_ PDEVICE_NODE DeviceNode,
+    _In_ ULONG Flags);
+
+VOID
+PiClearDevNodeFlag(
+    _In_ PDEVICE_NODE DeviceNode,
+    _In_ ULONG Flags);
+
+extern BOOLEAN PnpEnableParallelEnum;
+
+VOID
+PiDevNodeStateMachine(
+    _In_ PDEVICE_NODE RootNode);
+
+BOOLEAN
+PiProcessChildrenParallel(
+    _In_ PDEVICE_NODE Parent);
+
+#if DBG
+VOID PiDiagAcquireDevNode(_In_ PDEVICE_NODE Node);
+VOID PiDiagReleaseDevNode(_In_ PDEVICE_NODE Node);
+#endif
+
+BOOLEAN
+IopIsResourceListValid(
+    _In_ PCM_RESOURCE_LIST ResourceList,
+    _In_ ULONG ResourceListLength);
+
+VOID
+IopResDbInitialize(VOID);
+
+VOID
+IopResDbEnsureSeeded(VOID);
+
+NTSTATUS
+IopResDbReserve(
+    _In_ PDEVICE_NODE DeviceNode,
+    _In_opt_ PCM_RESOURCE_LIST ResourceList,
+    _Out_opt_ PBOOLEAN Conflict);
+
+VOID
+IopResDbRelease(
+    _In_ PDEVICE_NODE DeviceNode);
+
+BOOLEAN
+IopResDbCheckDescriptor(
+    _In_ PCM_PARTIAL_RESOURCE_DESCRIPTOR Candidate,
+    _Out_opt_ PCM_PARTIAL_RESOURCE_DESCRIPTOR Conflicting);
+
+BOOLEAN
+IopResDbCheckList(
+    _In_opt_ PCM_RESOURCE_LIST ResourceList);
+
 NTSTATUS
 IopFreeDeviceNode(
     IN PDEVICE_NODE DeviceNode
