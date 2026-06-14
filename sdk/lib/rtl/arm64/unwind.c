@@ -1,7 +1,9 @@
 /*
  * PROJECT:     ReactOS Run-Time Library
  * LICENSE:     LGPL-2.1-or-later (https://spdx.org/licenses/LGPL-2.1-or-later)
- * PURPOSE:     ARM64 user-mode PE/COFF unwinding support
+ * PURPOSE:     ARM64 PE/COFF unwinding support
+ * COPYRIGHT:   Unwind-code interpreter ported from the Wine project
+ *              (dlls/ntdll/unwind.c), LGPL-2.1-or-later.
  */
 
 #include <rtl.h>
@@ -14,40 +16,57 @@
 #define UNW_FLAG_UHANDLER 0x2
 #endif
 
+#ifndef CONTEXT_UNWOUND_TO_CALL
+#define CONTEXT_UNWOUND_TO_CALL 0x20000000
+#endif
+
 #define ARM64_UNWIND_FLAG_MASK 0x3UL
 #define ARM64_PACKED_FUNCTION_LENGTH_SHIFT 2
 #define ARM64_PACKED_FUNCTION_LENGTH_MASK 0x7FFUL
-#define ARM64_PACKED_REGF_SHIFT 13
-#define ARM64_PACKED_REGF_MASK 0x7UL
-#define ARM64_PACKED_REGI_SHIFT 16
-#define ARM64_PACKED_REGI_MASK 0xFUL
-#define ARM64_PACKED_HOME_PARAMS (1UL << 20)
-#define ARM64_PACKED_CR_SHIFT 21
-#define ARM64_PACKED_CR_MASK 0x3UL
-#define ARM64_PACKED_FRAMESZ_SHIFT 23
-#define ARM64_PACKED_FRAMESZ_MASK 0x1FFUL
 #define ARM64_XDATA_FUNCTION_LENGTH_MASK 0x3FFFFUL
-#define ARM64_XDATA_EXCEPTION_DATA (1UL << 20)
-#define ARM64_XDATA_EPILOGUE_PACKED (1UL << 21)
-#define ARM64_XDATA_EPILOGUE_COUNT_SHIFT 22
-#define ARM64_XDATA_EPILOGUE_COUNT_MASK 0x1FUL
-#define ARM64_XDATA_CODE_WORDS_SHIFT 27
-#define ARM64_XDATA_CODE_WORDS_MASK 0x1FUL
 
-#define ARM64_CR_UNCHAINED 0
-#define ARM64_CR_UNCHAINED_SAVED_LR 1
-#define ARM64_CR_CHAINED_PAC 2
-#define ARM64_CR_CHAINED 3
-
-typedef struct _ARM64_PACKED_INFO
+typedef struct _ARM64_RT_FUNCTION
 {
-    ULONG FunctionLength;
-    ULONG FrameSize;
-    ULONG RegI;
-    ULONG RegF;
-    BOOLEAN HomesParams;
-    ULONG CR;
-} ARM64_PACKED_INFO, *PARM64_PACKED_INFO;
+    DWORD BeginAddress;
+    union
+    {
+        DWORD UnwindData;
+        struct
+        {
+            DWORD Flag : 2;
+            DWORD FunctionLength : 11;
+            DWORD RegF : 3;
+            DWORD RegI : 4;
+            DWORD H : 1;
+            DWORD CR : 2;
+            DWORD FrameSize : 9;
+        };
+    };
+} ARM64_RT_FUNCTION, *PARM64_RT_FUNCTION;
+
+typedef struct _ARM64_XDATA_HEADER
+{
+    DWORD FunctionLength : 18;
+    DWORD Version : 2;
+    DWORD ExceptionDataPresent : 1;
+    DWORD EpilogInHeader : 1;
+    DWORD EpilogCount : 5;
+    DWORD CodeWords : 5;
+} ARM64_XDATA_HEADER, *PARM64_XDATA_HEADER;
+
+typedef struct _ARM64_XDATA_EXT
+{
+    WORD epilog;
+    BYTE codes;
+    BYTE reserved;
+} ARM64_XDATA_EXT;
+
+typedef struct _ARM64_XDATA_EPILOG
+{
+    DWORD offset : 18;
+    DWORD res : 4;
+    DWORD index : 10;
+} ARM64_XDATA_EPILOG;
 
 static ULONG
 RtlpArm64FunctionLength(
@@ -156,229 +175,480 @@ RtlLookupFunctionEntry(
     return NULL;
 }
 
-static VOID
-RtlpArm64GetXdataLayout(
-    _In_ PULONG Xdata,
-    _Out_ PULONG CodeWords,
-    _Out_ PULONG EpilogCount,
-    _Out_ PULONG HeaderWords,
-    _Out_ PBOOLEAN EpilogPacked)
+static const BYTE Arm64UnwindCodeLen[256] =
 {
-    ULONG Header = Xdata[0];
+    1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
+    1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
+    1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
+    1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
+    1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
+    1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
+    2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
+    4,1,2,1,1,1,1,3,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1
+};
 
-    *CodeWords = (Header >> ARM64_XDATA_CODE_WORDS_SHIFT) &
-                 ARM64_XDATA_CODE_WORDS_MASK;
-    *EpilogCount = (Header >> ARM64_XDATA_EPILOGUE_COUNT_SHIFT) &
-                   ARM64_XDATA_EPILOGUE_COUNT_MASK;
-    *EpilogPacked = !!(Header & ARM64_XDATA_EPILOGUE_PACKED);
+static unsigned int
+RtlpArm64SequenceLen(
+    _In_ PBYTE Ptr,
+    _In_ PBYTE End)
+{
+    unsigned int Ret = 0;
 
-    if (*CodeWords == 0 && *EpilogCount == 0 && !*EpilogPacked)
+    while (Ptr < End)
     {
-        *HeaderWords = 2;
-        *EpilogCount = Xdata[1] & 0xFFFF;
-        *CodeWords = (Xdata[1] >> 16) & 0xFF;
+        if (*Ptr == 0xe4 || *Ptr == 0xe5)
+            break;
+        if ((*Ptr & 0xf8) != 0xe8)
+            Ret++;
+        Ptr += Arm64UnwindCodeLen[*Ptr];
+    }
+    return Ret;
+}
+
+static VOID
+RtlpArm64RestoreRegs(
+    _In_ int Reg,
+    _In_ int Count,
+    _In_ int Pos,
+    _Inout_ PCONTEXT Context)
+{
+    int i, Offset = (Pos > 0) ? Pos : 0;
+
+    for (i = 0; i < Count; i++)
+        Context->X[Reg + i] = ((PULONG64)(ULONG_PTR)Context->Sp)[i + Offset];
+
+    if (Pos < 0)
+        Context->Sp += -8 * Pos;
+}
+
+static VOID
+RtlpArm64RestoreFpRegs(
+    _In_ int Reg,
+    _In_ int Count,
+    _In_ int Pos,
+    _Inout_ PCONTEXT Context)
+{
+    int i, Offset = (Pos > 0) ? Pos : 0;
+
+    for (i = 0; i < Count; i++)
+        Context->V[Reg + i].Low = ((PULONG64)(ULONG_PTR)Context->Sp)[i + Offset];
+
+    if (Pos < 0)
+        Context->Sp += -8 * Pos;
+}
+
+static VOID
+RtlpArm64RestoreQRegs(
+    _In_ int Reg,
+    _In_ int Count,
+    _In_ int Pos,
+    _Inout_ PCONTEXT Context)
+{
+    int i, Offset = (Pos > 0) ? Pos : 0;
+
+    for (i = 0; i < Count; i++)
+    {
+        Context->V[Reg + i].Low = ((PULONG64)(ULONG_PTR)Context->Sp)[2 * (i + Offset)];
+        Context->V[Reg + i].High = ((PULONG64)(ULONG_PTR)Context->Sp)[2 * (i + Offset) + 1];
+    }
+
+    if (Pos < 0)
+        Context->Sp += -16 * Pos;
+}
+
+static VOID
+RtlpArm64RestoreAnyReg(
+    _In_ int Reg,
+    _In_ int Count,
+    _In_ int Type,
+    _In_ int Pos,
+    _Inout_ PCONTEXT Context)
+{
+    if (Reg & 0x20)
+        Pos = -Pos - 1;
+
+    switch (Type)
+    {
+    case 0:
+        if (Count > 1 || Pos < 0)
+            Pos *= 2;
+        RtlpArm64RestoreRegs(Reg & 0x1f, Count, Pos, Context);
+        break;
+    case 1:
+        if (Count > 1 || Pos < 0)
+            Pos *= 2;
+        RtlpArm64RestoreFpRegs(Reg & 0x1f, Count, Pos, Context);
+        break;
+    case 2:
+        RtlpArm64RestoreQRegs(Reg & 0x1f, Count, Pos, Context);
+        break;
+    }
+}
+
+static VOID
+RtlpArm64DoPacAuth(
+    _Inout_ PCONTEXT Context)
+{
+    register DWORD64 x17 __asm__("x17") = Context->Lr;
+    register DWORD64 x16 __asm__("x16") = Context->Sp;
+    __asm__ volatile("hint 0xe" : "+r"(x17) : "r"(x16));
+    Context->Lr = x17;
+}
+
+static VOID
+RtlpArm64ProcessUnwindCodes(
+    _In_ PBYTE Ptr,
+    _In_ PBYTE End,
+    _Inout_ PCONTEXT Context,
+    _In_ int Skip,
+    _Inout_ PBOOLEAN FinalPcFromLr,
+    _Inout_ PBOOLEAN UsedFp)
+{
+    unsigned int i, val, len, save_next = 2;
+
+    while (Ptr < End && Skip)
+    {
+        if (*Ptr == 0xe4)
+            break;
+        Ptr += Arm64UnwindCodeLen[*Ptr];
+        Skip--;
+    }
+
+    while (Ptr < End)
+    {
+        if ((len = Arm64UnwindCodeLen[*Ptr]) > 1)
+        {
+            if (Ptr + len > End)
+                break;
+            val = Ptr[0] * 0x100 + Ptr[1];
+        }
+        else
+            val = *Ptr;
+
+        if (*Ptr < 0x20)
+            Context->Sp += 16 * (val & 0x1f);
+        else if (*Ptr < 0x40)
+            RtlpArm64RestoreRegs(19, save_next, -(int)(val & 0x1f), Context);
+        else if (*Ptr < 0x80)
+            RtlpArm64RestoreRegs(29, 2, val & 0x3f, Context);
+        else if (*Ptr < 0xc0)
+            RtlpArm64RestoreRegs(29, 2, -(int)(val & 0x3f) - 1, Context);
+        else if (*Ptr < 0xc8)
+            Context->Sp += 16 * (val & 0x7ff);
+        else if (*Ptr < 0xcc)
+            RtlpArm64RestoreRegs(19 + ((val >> 6) & 0xf), save_next, val & 0x3f, Context);
+        else if (*Ptr < 0xd0)
+            RtlpArm64RestoreRegs(19 + ((val >> 6) & 0xf), save_next, -(int)(val & 0x3f) - 1, Context);
+        else if (*Ptr < 0xd4)
+            RtlpArm64RestoreRegs(19 + ((val >> 6) & 0xf), 1, val & 0x3f, Context);
+        else if (*Ptr < 0xd6)
+            RtlpArm64RestoreRegs(19 + ((val >> 5) & 0xf), 1, -(int)(val & 0x1f) - 1, Context);
+        else if (*Ptr < 0xd8)
+        {
+            RtlpArm64RestoreRegs(19 + 2 * ((val >> 6) & 0x7), 1, val & 0x3f, Context);
+            RtlpArm64RestoreRegs(30, 1, (val & 0x3f) + 1, Context);
+        }
+        else if (*Ptr < 0xda)
+            RtlpArm64RestoreFpRegs(8 + ((val >> 6) & 0x7), save_next, val & 0x3f, Context);
+        else if (*Ptr < 0xdc)
+            RtlpArm64RestoreFpRegs(8 + ((val >> 6) & 0x7), save_next, -(int)(val & 0x3f) - 1, Context);
+        else if (*Ptr < 0xde)
+            RtlpArm64RestoreFpRegs(8 + ((val >> 6) & 0x7), 1, val & 0x3f, Context);
+        else if (*Ptr == 0xde)
+            RtlpArm64RestoreFpRegs(8 + ((val >> 5) & 0x7), 1, -(int)(val & 0x3f) - 1, Context);
+        else if (*Ptr == 0xe0)
+            Context->Sp += 16 * ((Ptr[1] << 16) + (Ptr[2] << 8) + Ptr[3]);
+        else if (*Ptr == 0xe1)
+        {
+            Context->Sp = Context->Fp;
+            *UsedFp = TRUE;
+        }
+        else if (*Ptr == 0xe2)
+        {
+            Context->Sp = Context->Fp - 8 * (val & 0xff);
+            *UsedFp = TRUE;
+        }
+        else if (*Ptr == 0xe3)
+            ;
+        else if (*Ptr == 0xe4)
+            break;
+        else if (*Ptr == 0xe5)
+            ;
+        else if (*Ptr == 0xe6)
+        {
+            save_next += 2;
+            Ptr += len;
+            continue;
+        }
+        else if (*Ptr == 0xe7)
+            RtlpArm64RestoreAnyReg(Ptr[1], (Ptr[1] & 0x40) ? save_next : 1,
+                                   Ptr[2] >> 6, Ptr[2] & 0x3f, Context);
+        else if (*Ptr == 0xe9)
+        {
+            Context->Pc = ((PULONG64)(ULONG_PTR)Context->Sp)[1];
+            Context->Sp = ((PULONG64)(ULONG_PTR)Context->Sp)[0];
+            Context->ContextFlags &= ~CONTEXT_UNWOUND_TO_CALL;
+            *FinalPcFromLr = FALSE;
+        }
+        else if (*Ptr == 0xea)
+        {
+            ULONG Flags = Context->ContextFlags & ~CONTEXT_UNWOUND_TO_CALL;
+            PCONTEXT SrcContext = (PCONTEXT)(ULONG_PTR)Context->Sp;
+
+            *Context = *SrcContext;
+            Context->ContextFlags = Flags | (SrcContext->ContextFlags & CONTEXT_UNWOUND_TO_CALL);
+            *FinalPcFromLr = FALSE;
+        }
+        else if (*Ptr == 0xec)
+        {
+            Context->Pc = Context->Lr;
+            Context->ContextFlags &= ~CONTEXT_UNWOUND_TO_CALL;
+            *FinalPcFromLr = FALSE;
+        }
+        else if (*Ptr == 0xfc)
+            RtlpArm64DoPacAuth(Context);
+        else
+            return;
+
+        (VOID)i;
+        save_next = 2;
+        Ptr += len;
+    }
+}
+
+static PVOID
+RtlpArm64UnwindPacked(
+    _In_ ULONG_PTR Base,
+    _In_ ULONG_PTR Pc,
+    _In_ PARM64_RT_FUNCTION Func,
+    _Inout_ PCONTEXT Context)
+{
+    int i;
+    unsigned int len, offset, skip = 0;
+    unsigned int int_size = Func->RegI * 8, fp_size = Func->RegF * 8, h_size = Func->H * 4, regsave, local_size;
+    unsigned int int_regs, fp_regs, saved_regs, local_size_regs;
+
+    if (Func->CR == 1)
+        int_size += 8;
+    if (Func->RegF)
+        fp_size += 8;
+
+    regsave = ((int_size + fp_size + 8 * 8 * Func->H) + 0xf) & ~0xf;
+    local_size = Func->FrameSize * 16 - regsave;
+
+    int_regs = int_size / 8;
+    fp_regs = fp_size / 8;
+    saved_regs = regsave / 8;
+    local_size_regs = local_size / 8;
+
+    if (Func->Flag == 1)
+    {
+        offset = (unsigned int)(((Pc - Base) - Func->BeginAddress) / 4);
+        if (offset < 17 || offset >= Func->FunctionLength - 15)
+        {
+            len = (int_size + 8) / 16 + (fp_size + 8) / 16;
+            switch (Func->CR)
+            {
+            case 2:
+                len++;
+            case 3:
+                len++;
+                len++;
+                if (local_size <= 512)
+                    break;
+            case 0:
+            case 1:
+                if (local_size)
+                    len++;
+                if (local_size > 4088)
+                    len++;
+                break;
+            }
+            if (offset < len + h_size)
+                skip = len + h_size - offset;
+            else if (offset >= Func->FunctionLength - (len + 1))
+            {
+                skip = offset - (Func->FunctionLength - (len + 1));
+                h_size = 0;
+            }
+        }
+    }
+
+    if (!skip)
+    {
+        if (Func->CR == 3 || Func->CR == 2)
+        {
+            Context->Sp = Context->Fp;
+            RtlpArm64RestoreRegs(29, 2, 0, Context);
+        }
+        Context->Sp += local_size;
+        if (fp_size)
+            RtlpArm64RestoreFpRegs(8, fp_regs, int_regs, Context);
+        if (Func->CR == 1)
+            RtlpArm64RestoreRegs(30, 1, int_regs - 1, Context);
+        RtlpArm64RestoreRegs(19, Func->RegI, -(int)saved_regs, Context);
     }
     else
     {
-        *HeaderWords = 1;
+        unsigned int pos = 0;
+
+        switch (Func->CR)
+        {
+        case 3:
+        case 2:
+            if (pos++ >= skip)
+                Context->Sp = Context->Fp;
+            if (local_size <= 512)
+            {
+                if (pos++ >= skip)
+                    RtlpArm64RestoreRegs(29, 2, -(int)local_size_regs, Context);
+                break;
+            }
+            if (pos++ >= skip)
+                RtlpArm64RestoreRegs(29, 2, 0, Context);
+        case 0:
+        case 1:
+            if (!local_size)
+                break;
+            if (pos++ >= skip)
+                Context->Sp += (local_size - 1) % 4088 + 1;
+            if (local_size > 4088 && pos++ >= skip)
+                Context->Sp += 4088;
+            break;
+        }
+
+        pos += h_size;
+
+        if (fp_size)
+        {
+            if (Func->RegF % 2 == 0 && pos++ >= skip)
+                RtlpArm64RestoreFpRegs(8 + Func->RegF, 1, int_regs + fp_regs - 1, Context);
+            for (i = (Func->RegF + 1) / 2 - 1; i >= 0; i--)
+            {
+                if (pos++ < skip)
+                    continue;
+                if (!i && !int_size)
+                    RtlpArm64RestoreFpRegs(8, 2, -(int)saved_regs, Context);
+                else
+                    RtlpArm64RestoreFpRegs(8 + 2 * i, 2, int_regs + 2 * i, Context);
+            }
+        }
+
+        if (Func->RegI % 2)
+        {
+            if (pos++ >= skip)
+            {
+                if (Func->CR == 1)
+                    RtlpArm64RestoreRegs(30, 1, int_regs - 1, Context);
+                RtlpArm64RestoreRegs(18 + Func->RegI, 1,
+                                     (Func->RegI > 1) ? (int)(Func->RegI - 1) : -(int)saved_regs,
+                                     Context);
+            }
+        }
+        else if (Func->CR == 1)
+        {
+            if (pos++ >= skip)
+                RtlpArm64RestoreRegs(30, 1, Func->RegI ? (int)(int_regs - 1) : -(int)saved_regs, Context);
+        }
+
+        for (i = Func->RegI / 2 - 1; i >= 0; i--)
+        {
+            if (pos++ < skip)
+                continue;
+            if (i)
+                RtlpArm64RestoreRegs(19 + 2 * i, 2, 2 * i, Context);
+            else
+                RtlpArm64RestoreRegs(19, 2, -(int)saved_regs, Context);
+        }
     }
+
+    if (Func->CR == 2)
+        RtlpArm64DoPacAuth(Context);
+    return NULL;
 }
 
-static ULONG
-RtlpArm64UnwindCodeSize(
-    _In_ UCHAR Opcode)
-{
-    if (Opcode <= 0xBF ||
-        Opcode == 0xE1 ||
-        Opcode == 0xE3 ||
-        Opcode == 0xE4 ||
-        Opcode == 0xE5 ||
-        Opcode == 0xE6 ||
-        (Opcode >= 0xFC))
-    {
-        return 1;
-    }
-
-    if (((Opcode >= 0xC0) && (Opcode <= 0xDF)) ||
-        Opcode == 0xE2 ||
-        Opcode == 0xF8)
-    {
-        return 2;
-    }
-
-    if (Opcode == 0xE7 || Opcode == 0xF9)
-        return 3;
-
-    if (Opcode == 0xE0 || Opcode == 0xFA)
-        return 4;
-
-    if (Opcode == 0xFB)
-        return 5;
-
-    return 1;
-}
-
-static ULONG
-RtlpArm64AlignUp(
-    _In_ ULONG Value,
-    _In_ ULONG Alignment)
-{
-    return (Value + Alignment - 1) & ~(Alignment - 1);
-}
-
-static VOID
-RtlpArm64DecodePacked(
-    _In_ PRUNTIME_FUNCTION FunctionEntry,
-    _Out_ PARM64_PACKED_INFO Info)
-{
-    ULONG UnwindData = FunctionEntry->UnwindData;
-
-    RtlZeroMemory(Info, sizeof(*Info));
-
-    Info->FunctionLength = ((UnwindData >> ARM64_PACKED_FUNCTION_LENGTH_SHIFT) &
-                            ARM64_PACKED_FUNCTION_LENGTH_MASK) * sizeof(ULONG);
-    Info->RegF = (UnwindData >> ARM64_PACKED_REGF_SHIFT) & ARM64_PACKED_REGF_MASK;
-    Info->RegI = (UnwindData >> ARM64_PACKED_REGI_SHIFT) & ARM64_PACKED_REGI_MASK;
-    Info->HomesParams = !!(UnwindData & ARM64_PACKED_HOME_PARAMS);
-    Info->CR = (UnwindData >> ARM64_PACKED_CR_SHIFT) & ARM64_PACKED_CR_MASK;
-    Info->FrameSize = ((UnwindData >> ARM64_PACKED_FRAMESZ_SHIFT) &
-                       ARM64_PACKED_FRAMESZ_MASK) * 16;
-}
-
-static VOID
-RtlpArm64NormalizeLr(
-    _Inout_ PCONTEXT Context)
-{
-    ULONG64 Pc = Context->Lr & ((1ULL << 48) - 1);
-
-    if (Pc & (1ULL << 47))
-        Pc |= 0xFFFFULL << 48;
-
-    Context->Lr = Pc;
-}
-
-static VOID
-RtlpArm64RestoreRegister(
+static PVOID
+RtlpArm64UnwindFull(
+    _In_ ULONG_PTR Base,
+    _In_ ULONG_PTR Pc,
+    _In_ PARM64_RT_FUNCTION Func,
     _Inout_ PCONTEXT Context,
-    _In_ ULONG Register,
-    _In_ ULONG64 Address)
+    _Out_ PVOID *HandlerData,
+    _Inout_ PBOOLEAN FinalPcFromLr,
+    _Inout_ PBOOLEAN UsedFp)
 {
-    if (Register <= 30)
-        Context->X[Register] = *(PULONG64)(ULONG_PTR)Address;
-}
+    PARM64_XDATA_HEADER info;
+    ARM64_XDATA_EPILOG *info_epilog;
+    unsigned int i, codes, epilogs, len, offset;
+    PVOID data;
+    PBYTE end;
 
-static VOID
-RtlpArm64RestoreRegisterRange(
-    _Inout_ PCONTEXT Context,
-    _In_ ULONG Register,
-    _In_ ULONG Count,
-    _In_ LONG Position)
-{
-    ULONG Index;
-    ULONG Offset = (Position > 0) ? (ULONG)Position : 0;
-
-    for (Index = 0; Index < Count; Index++)
+    info = (PARM64_XDATA_HEADER)(ULONG_PTR)(Base + Func->UnwindData);
+    data = info + 1;
+    epilogs = info->EpilogCount;
+    codes = info->CodeWords;
+    if (!codes && !epilogs)
     {
-        RtlpArm64RestoreRegister(Context,
-                                 Register + Index,
-                                 Context->Sp + ((Offset + Index) * sizeof(ULONG64)));
+        ARM64_XDATA_EXT *infoex = data;
+        codes = infoex->codes;
+        epilogs = infoex->epilog;
+        data = infoex + 1;
+    }
+    info_epilog = data;
+    if (!info->EpilogInHeader)
+        data = info_epilog + epilogs;
+
+    offset = (unsigned int)(((Pc - Base) - Func->BeginAddress) / 4);
+    end = (PBYTE)data + codes * 4;
+
+    if (offset < codes * 4)
+    {
+        len = RtlpArm64SequenceLen(data, end);
+        if (offset < len)
+        {
+            RtlpArm64ProcessUnwindCodes(data, end, Context, len - offset, FinalPcFromLr, UsedFp);
+            return NULL;
+        }
     }
 
-    if (Position < 0)
-        Context->Sp += (ULONG64)(-Position) * sizeof(ULONG64);
-}
-
-static VOID
-RtlpArm64RestoreFpRegisterRange(
-    _Inout_ PCONTEXT Context,
-    _In_ ULONG Register,
-    _In_ ULONG Count,
-    _In_ LONG Position)
-{
-    ULONG Index;
-    ULONG Offset = (Position > 0) ? (ULONG)Position : 0;
-
-    for (Index = 0; Index < Count; Index++)
+    if (!info->EpilogInHeader)
     {
-        Context->V[Register + Index].Low =
-            *(PULONG64)(ULONG_PTR)(Context->Sp + ((Offset + Index) * sizeof(ULONG64)));
-        Context->V[Register + Index].High = 0;
+        for (i = 0; i < epilogs; i++)
+        {
+            if (offset < info_epilog[i].offset)
+                break;
+            if (offset - info_epilog[i].offset < codes * 4 - info_epilog[i].index)
+            {
+                PBYTE ptr = (PBYTE)data + info_epilog[i].index;
+                len = RtlpArm64SequenceLen(ptr, end);
+                if (offset <= info_epilog[i].offset + len)
+                {
+                    RtlpArm64ProcessUnwindCodes(ptr, end, Context, offset - info_epilog[i].offset, FinalPcFromLr, UsedFp);
+                    return NULL;
+                }
+            }
+        }
+    }
+    else if (info->FunctionLength - offset <= codes * 4 - epilogs)
+    {
+        PBYTE ptr = (PBYTE)data + epilogs;
+        len = RtlpArm64SequenceLen(ptr, end) + 1;
+        if (offset >= info->FunctionLength - len)
+        {
+            RtlpArm64ProcessUnwindCodes(ptr, end, Context, offset - (info->FunctionLength - len), FinalPcFromLr, UsedFp);
+            return NULL;
+        }
     }
 
-    if (Position < 0)
-        Context->Sp += (ULONG64)(-Position) * sizeof(ULONG64);
-}
+    RtlpArm64ProcessUnwindCodes(data, end, Context, 0, FinalPcFromLr, UsedFp);
 
-static VOID
-RtlpArm64RestoreRegisterPair(
-    _Inout_ PCONTEXT Context,
-    _In_ ULONG Register,
-    _In_ ULONG64 Address,
-    _In_ ULONG ExtraPairs)
-{
-    ULONG Pair;
-
-    for (Pair = 0; Pair <= ExtraPairs; Pair++)
+    if (info->ExceptionDataPresent)
     {
-        RtlpArm64RestoreRegister(Context, Register + (Pair * 2), Address + (Pair * 16));
-        RtlpArm64RestoreRegister(Context, Register + (Pair * 2) + 1, Address + (Pair * 16) + sizeof(ULONG64));
+        PDWORD handler_rva = (PDWORD)data + codes;
+        *HandlerData = handler_rva + 1;
+        return (PVOID)(ULONG_PTR)(Base + *handler_rva);
     }
-}
-
-static BOOLEAN
-RtlpArm64UnwindPacked(
-    _In_ PARM64_PACKED_INFO Info,
-    _Inout_ PCONTEXT Context)
-{
-    ULONG IntSize;
-    ULONG FpSize;
-    ULONG RegSave;
-    ULONG LocalSize;
-    ULONG IntRegs;
-    ULONG FpRegs;
-    ULONG SavedRegs;
-
-    IntSize = Info->RegI * sizeof(ULONG64);
-    FpSize = Info->RegF * sizeof(ULONG64);
-
-    if (Info->CR == ARM64_CR_UNCHAINED_SAVED_LR)
-        IntSize += sizeof(ULONG64);
-
-    if (Info->RegF != 0)
-        FpSize += sizeof(ULONG64);
-
-    RegSave = RtlpArm64AlignUp(IntSize + FpSize +
-                               (Info->HomesParams ? (8 * sizeof(ULONG64)) : 0),
-                               16);
-    if (Info->FrameSize < RegSave)
-        return FALSE;
-
-    LocalSize = Info->FrameSize - RegSave;
-    IntRegs = IntSize / sizeof(ULONG64);
-    FpRegs = FpSize / sizeof(ULONG64);
-    SavedRegs = RegSave / sizeof(ULONG64);
-
-    if ((Info->CR == ARM64_CR_CHAINED) ||
-        (Info->CR == ARM64_CR_CHAINED_PAC))
-    {
-        Context->Sp = Context->Fp;
-        RtlpArm64RestoreRegisterRange(Context, 29, 2, 0);
-    }
-
-    Context->Sp += LocalSize;
-
-    if (FpRegs != 0)
-        RtlpArm64RestoreFpRegisterRange(Context, 8, FpRegs, IntRegs);
-
-    if (Info->CR == ARM64_CR_UNCHAINED_SAVED_LR)
-        RtlpArm64RestoreRegisterRange(Context, 30, 1, IntRegs - 1);
-
-    RtlpArm64RestoreRegisterRange(Context, 19, Info->RegI, -(LONG)SavedRegs);
-
-    if (Info->CR == ARM64_CR_CHAINED_PAC)
-        RtlpArm64NormalizeLr(Context);
-
-    return TRUE;
+    return NULL;
 }
 
 PEXCEPTION_ROUTINE
@@ -393,241 +663,44 @@ RtlVirtualUnwind(
     _Out_ PULONG64 EstablisherFrame,
     _Inout_opt_ PVOID ContextPointers)
 {
-    ULONG_PTR ControlRva;
-    ULONG UnwindData, Header, CodeWords, EpilogCount, HeaderWords;
-    ULONG FunctionLength, PrologSize = 0, CodeIdx = 0;
-    ULONG SaveNextPairs = 0;
-    BOOLEAN HasPackedFormat, HasExceptionData, EpilogPacked, InProlog = FALSE;
-    PULONG Xdata;
-    PUCHAR UnwindCodes = NULL;
-    ULONG UnwindBytes = 0;
+    PARM64_RT_FUNCTION Func = (PARM64_RT_FUNCTION)FunctionEntry;
+    PVOID Handler = NULL;
+    PVOID LocalHandlerData = NULL;
+    BOOLEAN FinalPcFromLr = TRUE;
+    BOOLEAN UsedFp = FALSE;
+    ULONG64 OriginalFp = Context->Fp;
 
     (VOID)ContextPointers;
 
     if (HandlerData)
         *HandlerData = NULL;
-    *EstablisherFrame = Context->Fp ? Context->Fp : Context->Sp;
 
-    ControlRva = ControlPc - ImageBase;
-    UnwindData = FunctionEntry->UnwindData;
-    HasPackedFormat = ((UnwindData & ARM64_UNWIND_FLAG_MASK) != 0);
+    Context->ContextFlags |= CONTEXT_UNWOUND_TO_CALL;
 
-    if (HasPackedFormat)
+    if (Func == NULL)
     {
-        ARM64_PACKED_INFO PackedInfo;
-        BOOLEAN ChainedFunction;
-
-        RtlpArm64DecodePacked(FunctionEntry, &PackedInfo);
-        ChainedFunction = (PackedInfo.CR == ARM64_CR_CHAINED) ||
-                          (PackedInfo.CR == ARM64_CR_CHAINED_PAC);
-        FunctionLength = RtlpArm64FunctionLength((ULONG_PTR)ImageBase, FunctionEntry);
-        if (ControlRva < FunctionEntry->BeginAddress ||
-            ControlRva >= FunctionEntry->BeginAddress + FunctionLength)
+        if (ControlPc == Context->Lr)
         {
+            *EstablisherFrame = Context->Sp;
+            Context->Pc = 0;
             return NULL;
         }
+    }
+    else if (Func->Flag)
+        Handler = RtlpArm64UnwindPacked(ImageBase, ControlPc, Func, Context);
+    else
+        Handler = RtlpArm64UnwindFull(ImageBase, ControlPc, Func, Context, &LocalHandlerData, &FinalPcFromLr, &UsedFp);
 
-        *EstablisherFrame = ChainedFunction ? Context->Fp : Context->Sp;
-        if (!RtlpArm64UnwindPacked(&PackedInfo, Context))
-            return NULL;
-
+    if (FinalPcFromLr)
         Context->Pc = Context->Lr;
-        return NULL;
-    }
 
-    Xdata = (PULONG)(ImageBase + UnwindData);
-    Header = Xdata[0];
-    FunctionLength = (Header & ARM64_XDATA_FUNCTION_LENGTH_MASK) * sizeof(ULONG);
-    if (ControlRva < FunctionEntry->BeginAddress ||
-        ControlRva >= FunctionEntry->BeginAddress + FunctionLength)
+    *EstablisherFrame = UsedFp ? OriginalFp : Context->Sp;
+
+    if (Handler != NULL && (HandlerType & (UNW_FLAG_EHANDLER | UNW_FLAG_UHANDLER)))
     {
-        return NULL;
-    }
-
-    HasExceptionData = !!(Header & ARM64_XDATA_EXCEPTION_DATA);
-    RtlpArm64GetXdataLayout(Xdata, &CodeWords, &EpilogCount, &HeaderWords, &EpilogPacked);
-    UnwindCodes = (PUCHAR)(&Xdata[HeaderWords + (EpilogPacked ? 0 : EpilogCount)]);
-    UnwindBytes = CodeWords * sizeof(ULONG);
-
-    while (CodeIdx < UnwindBytes)
-    {
-        UCHAR Opcode = UnwindCodes[CodeIdx];
-
-        if (Opcode == 0xE4 || Opcode == 0xE5)
-            break;
-
-        PrologSize += sizeof(ULONG);
-        CodeIdx += RtlpArm64UnwindCodeSize(Opcode);
-    }
-
-    if ((ControlRva - FunctionEntry->BeginAddress) < PrologSize)
-        InProlog = TRUE;
-
-    if (!InProlog)
-    {
-        CodeIdx = 0;
-        while (CodeIdx < UnwindBytes)
-        {
-            UCHAR Opcode = UnwindCodes[CodeIdx];
-            ULONG Offset, Size = 1;
-            ULONG Register;
-
-            if (Opcode <= 0x1F)
-            {
-                Context->Sp += (Opcode & 0x1F) * 16;
-                SaveNextPairs = 0;
-            }
-            else if (Opcode >= 0x20 && Opcode <= 0x3F)
-            {
-                RtlpArm64RestoreRegisterPair(Context, 19, Context->Sp, SaveNextPairs);
-                Context->Sp += (Opcode & 0x1F) * 8;
-                SaveNextPairs = 0;
-            }
-            else if (Opcode >= 0x40 && Opcode <= 0x7F)
-            {
-                Offset = (Opcode & 0x3F) * 8;
-                Context->Fp = *(ULONG64 *)(Context->Sp + Offset);
-                Context->Lr = *(ULONG64 *)(Context->Sp + Offset + sizeof(ULONG64));
-                SaveNextPairs = 0;
-            }
-            else if (Opcode >= 0x80 && Opcode <= 0xBF)
-            {
-                Offset = (Opcode & 0x3F) + 1;
-                Context->Fp = *(ULONG64 *)Context->Sp;
-                Context->Lr = *(ULONG64 *)(Context->Sp + sizeof(ULONG64));
-                Context->Sp += Offset * 8;
-                SaveNextPairs = 0;
-            }
-            else if (Opcode >= 0xC0 && Opcode <= 0xC7)
-            {
-                Size = 2;
-                Offset = (((Opcode & 0x07) << 8) | UnwindCodes[CodeIdx + 1]) * 16;
-                Context->Sp += Offset;
-                SaveNextPairs = 0;
-            }
-            else if (Opcode >= 0xC8 && Opcode <= 0xCB)
-            {
-                UCHAR Next = UnwindCodes[CodeIdx + 1];
-
-                Size = 2;
-                Register = 19 + ((Opcode & 0x03) << 2) + ((Next >> 6) & 0x03);
-                Offset = (Next & 0x3F) * 8;
-                RtlpArm64RestoreRegisterPair(Context, Register, Context->Sp + Offset, SaveNextPairs);
-                SaveNextPairs = 0;
-            }
-            else if (Opcode >= 0xCC && Opcode <= 0xCF)
-            {
-                UCHAR Next = UnwindCodes[CodeIdx + 1];
-
-                Size = 2;
-                Register = 19 + ((Opcode & 0x03) << 2) + ((Next >> 6) & 0x03);
-                RtlpArm64RestoreRegisterPair(Context, Register, Context->Sp, SaveNextPairs);
-                Context->Sp += ((Next & 0x3F) + 1) * 8;
-                SaveNextPairs = 0;
-            }
-            else if (Opcode >= 0xD0 && Opcode <= 0xD3)
-            {
-                UCHAR Next = UnwindCodes[CodeIdx + 1];
-
-                Size = 2;
-                Register = 19 + ((Opcode & 0x03) << 2) + ((Next >> 6) & 0x03);
-                Offset = (Next & 0x3F) * 8;
-                RtlpArm64RestoreRegister(Context, Register, Context->Sp + Offset);
-                SaveNextPairs = 0;
-            }
-            else if (Opcode >= 0xD4 && Opcode <= 0xD5)
-            {
-                UCHAR Next = UnwindCodes[CodeIdx + 1];
-
-                Size = 2;
-                Register = 19 + ((Opcode & 0x01) << 3) + ((Next >> 5) & 0x07);
-                RtlpArm64RestoreRegister(Context, Register, Context->Sp);
-                Context->Sp += ((Next & 0x1F) + 1) * 8;
-                SaveNextPairs = 0;
-            }
-            else if (Opcode >= 0xD6 && Opcode <= 0xD7)
-            {
-                UCHAR Next = UnwindCodes[CodeIdx + 1];
-
-                Size = 2;
-                Register = 19 + (2 * (((Opcode & 0x01) << 2) + ((Next >> 6) & 0x03)));
-                Offset = (Next & 0x3F) * 8;
-                RtlpArm64RestoreRegister(Context, Register, Context->Sp + Offset);
-                Context->Lr = *(ULONG64 *)(Context->Sp + Offset + sizeof(ULONG64));
-                SaveNextPairs = 0;
-            }
-            else if (Opcode >= 0xD8 && Opcode <= 0xDE)
-            {
-                Size = 2;
-                if ((Opcode == 0xDA) || (Opcode == 0xDB) || (Opcode == 0xDE))
-                {
-                    Offset = (Opcode == 0xDE) ? (UnwindCodes[CodeIdx + 1] & 0x1F) :
-                                                 (UnwindCodes[CodeIdx + 1] & 0x3F);
-                    Context->Sp += (Offset + 1) * 8;
-                }
-                SaveNextPairs = 0;
-            }
-            else if (Opcode == 0xDF)
-            {
-                Size = 2;
-                SaveNextPairs = 0;
-            }
-            else if (Opcode == 0xE0)
-            {
-                Size = 4;
-                Offset = ((ULONG)UnwindCodes[CodeIdx + 1] << 16) |
-                         ((ULONG)UnwindCodes[CodeIdx + 2] << 8) |
-                         UnwindCodes[CodeIdx + 3];
-                Context->Sp += Offset * 16;
-                SaveNextPairs = 0;
-            }
-            else if (Opcode == 0xE1)
-            {
-                Context->Sp = Context->Fp;
-                SaveNextPairs = 0;
-            }
-            else if (Opcode == 0xE2)
-            {
-                Size = 2;
-                Context->Sp = Context->Fp - (UnwindCodes[CodeIdx + 1] * 8);
-                SaveNextPairs = 0;
-            }
-            else if (Opcode == 0xE3)
-            {
-                SaveNextPairs = 0;
-            }
-            else if (Opcode == 0xE4 || Opcode == 0xE5)
-            {
-                break;
-            }
-            else if (Opcode == 0xE6)
-            {
-                SaveNextPairs++;
-            }
-            else if (Opcode == 0xE7)
-            {
-                Size = 3;
-            }
-            else
-                Size = RtlpArm64UnwindCodeSize(Opcode);
-
-            CodeIdx += Size;
-        }
-    }
-
-    Context->Pc = Context->Lr;
-
-    if (HasExceptionData)
-    {
-        ULONG HandlerOffset = HeaderWords + (EpilogPacked ? 0 : EpilogCount) + CodeWords;
-
-        if (Xdata[HandlerOffset] != 0 &&
-            (HandlerType & (UNW_FLAG_EHANDLER | UNW_FLAG_UHANDLER)))
-        {
-            if (HandlerData)
-                *HandlerData = &Xdata[HandlerOffset + 1];
-            return (PEXCEPTION_ROUTINE)(ImageBase + Xdata[HandlerOffset]);
-        }
+        if (HandlerData)
+            *HandlerData = LocalHandlerData;
+        return (PEXCEPTION_ROUTINE)Handler;
     }
 
     return NULL;
@@ -651,6 +724,7 @@ RtlUnwindEx(
     ULONG64 ImageBase, EstablisherFrame;
     CONTEXT UnwindContext, FrameContext;
     ULONG_PTR StackLow, StackHigh;
+    ULONG_PTR LookupPc;
     ULONG FrameCount;
     BOOLEAN HaveTarget;
 
@@ -690,7 +764,8 @@ RtlUnwindEx(
             return;
         }
 
-        FunctionEntry = RtlLookupFunctionEntry(UnwindContext.Pc, &ImageBase, NULL);
+        LookupPc = (FrameCount == 0) ? UnwindContext.Pc : (UnwindContext.Pc - 4);
+        FunctionEntry = RtlLookupFunctionEntry(LookupPc, &ImageBase, NULL);
         if (FunctionEntry == NULL)
         {
             if ((UnwindContext.Lr == 0) ||
@@ -704,10 +779,10 @@ RtlUnwindEx(
         }
 
         FrameContext = UnwindContext;
-        DispatcherContext.ControlPc = UnwindContext.Pc;
+        DispatcherContext.ControlPc = LookupPc;
         ExceptionRoutine = RtlVirtualUnwind(UNW_FLAG_UHANDLER,
                                             ImageBase,
-                                            UnwindContext.Pc,
+                                            LookupPc,
                                             FunctionEntry,
                                             &UnwindContext,
                                             &DispatcherContext.HandlerData,
