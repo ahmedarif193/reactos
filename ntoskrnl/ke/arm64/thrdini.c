@@ -210,6 +210,15 @@ KiIdleLoop(VOID)
         }
 
         KiAcquirePrcbLock(Prcb);
+        if (!Prcb->NextThread)
+        {
+            PKTHREAD Candidate = KiIdleSchedule(Prcb);
+            if (Candidate != Prcb->IdleThread)
+            {
+                Candidate->State = Standby;
+                Prcb->NextThread = Candidate;
+            }
+        }
         if (Prcb->NextThread)
         {
             PKTHREAD OldThread = Prcb->CurrentThread;
