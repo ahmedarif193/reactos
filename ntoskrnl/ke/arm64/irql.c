@@ -124,6 +124,32 @@ KfLowerIrql(
     {
         HalSetGicPriorityMask(NewIrql);
     }
+
+    if ((OldIrql >= APC_LEVEL) && (NewIrql < APC_LEVEL))
+    {
+        ULONG64 Daif;
+        PKTHREAD Thread;
+
+        __asm__ __volatile__("mrs %0, daif" : "=r"(Daif));
+        if (!(Daif & 0x80))
+        {
+            Thread = KeGetCurrentThread();
+            if ((Thread != NULL) &&
+                (Thread->ApcState.KernelApcPending) &&
+                !(Thread->SpecialApcDisable))
+            {
+                KiSetCurrentIrql(APC_LEVEL);
+                if (KiHalInitialized)
+                    HalSetGicPriorityMask(APC_LEVEL);
+
+                KiDeliverApc(KernelMode, NULL, NULL);
+
+                KiSetCurrentIrql(NewIrql);
+                if (KiHalInitialized)
+                    HalSetGicPriorityMask(NewIrql);
+            }
+        }
+    }
 }
 
 NTKERNELAPI
