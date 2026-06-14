@@ -1458,15 +1458,42 @@ KdbpContextFromPrevTss(
 
 #if defined(_M_AMD64) || defined(_M_ARM64)
 
+#ifdef _M_ARM64
+#undef RUNTIME_FUNCTION
+#undef PRUNTIME_FUNCTION
+typedef struct _KDB_ARM64_RUNTIME_FUNCTION {
+    DWORD BeginAddress;
+    DWORD UnwindData;
+} RUNTIME_FUNCTION, *PRUNTIME_FUNCTION;
+
+#ifndef UNW_FLAG_NHANDLER
+#define UNW_FLAG_NHANDLER 0x0
+#endif
+
+PRUNTIME_FUNCTION
+NTAPI
+RtlLookupFunctionEntry(
+    _In_ DWORD64 ControlPc,
+    _Out_ PDWORD64 ImageBase,
+    _Inout_opt_ PVOID HistoryTable);
+
+PEXCEPTION_ROUTINE
+NTAPI
+RtlVirtualUnwind(
+    _In_ ULONG HandlerType,
+    _In_ ULONG64 ImageBase,
+    _In_ ULONG64 ControlPc,
+    _In_ PRUNTIME_FUNCTION FunctionEntry,
+    _Inout_ PCONTEXT Context,
+    _Out_ PVOID *HandlerData,
+    _Out_ PULONG64 EstablisherFrame,
+    _Inout_opt_ PVOID ContextPointers);
+#endif
+
 static
 BOOLEAN
 GetNextFrame(
-    _Inout_ PCONTEXT Context
-#ifdef _M_ARM64
-    ,
-    _Inout_ PBOOLEAN UsedLiveLr
-#endif
-    )
+    _Inout_ PCONTEXT Context)
 {
 #ifdef _M_AMD64
     PRUNTIME_FUNCTION FunctionEntry;
@@ -1505,51 +1532,45 @@ GetNextFrame(
 
     return TRUE;
 #else
-    ULONG_PTR NextFrame;
-    ULONG_PTR ReturnAddress;
+    PRUNTIME_FUNCTION FunctionEntry;
+    ULONG64 ImageBase, EstablisherFrame;
+    PVOID HandlerData;
+    ULONG64 OldPc = Context->Pc;
+    ULONG64 OldSp = Context->Sp;
 
-    if (!*UsedLiveLr &&
-        (Context->Lr != 0) &&
-        (Context->Lr != Context->Pc))
+    _SEH2_TRY
     {
-        *UsedLiveLr = TRUE;
-        Context->Pc = Context->Lr;
-        return TRUE;
-    }
+        FunctionEntry = RtlLookupFunctionEntry(Context->Pc, &ImageBase, NULL);
+        if (FunctionEntry == NULL)
+        {
+            if ((Context->Lr == 0) || (Context->Lr == Context->Pc))
+                return FALSE;
 
-    if ((Context->Fp == 0) || (Context->Fp & (sizeof(ULONG_PTR) - 1)))
-    {
-        return FALSE;
-    }
+            Context->Pc = Context->Lr;
+            return TRUE;
+        }
 
-    if (!NT_SUCCESS(KdbpSafeReadMemory(&NextFrame,
-                                       (PVOID)(ULONG_PTR)Context->Fp,
-                                       sizeof(NextFrame))))
-    {
-        return FALSE;
+        RtlVirtualUnwind(UNW_FLAG_NHANDLER,
+                         ImageBase,
+                         Context->Pc,
+                         FunctionEntry,
+                         Context,
+                         &HandlerData,
+                         &EstablisherFrame,
+                         NULL);
     }
-
-    if (!NT_SUCCESS(KdbpSafeReadMemory(&ReturnAddress,
-                                       (PVOID)(ULONG_PTR)(Context->Fp + sizeof(ULONG_PTR)),
-                                       sizeof(ReturnAddress))))
-    {
-        return FALSE;
-    }
-
-    if (ReturnAddress == 0)
+    _SEH2_EXCEPT(1)
     {
         return FALSE;
     }
+    _SEH2_END
 
-    if ((NextFrame != 0) && (NextFrame <= Context->Fp))
-    {
+    if (Context->Pc == 0)
         return FALSE;
-    }
 
-    Context->Sp = Context->Fp + 2 * sizeof(ULONG_PTR);
-    Context->Fp = NextFrame;
-    Context->Lr = ReturnAddress;
-    Context->Pc = ReturnAddress;
+    if ((Context->Pc == OldPc) && (Context->Sp == OldSp))
+        return FALSE;
+
     return TRUE;
 #endif
 }
@@ -1560,9 +1581,6 @@ KdbpCmdBackTrace(
     PCHAR Argv[])
 {
     CONTEXT Context = *KdbCurrentTrapFrame;
-#ifdef _M_ARM64
-    BOOLEAN UsedLiveLr = FALSE;
-#endif
 
 #ifdef _M_ARM64
     KdbPrintf("Context:\n");
@@ -1624,11 +1642,7 @@ KdbpCmdBackTrace(
         if (KdbOutputAborted)
             break;
 
-#ifdef _M_ARM64
-        GotNextFrame = GetNextFrame(&Context, &UsedLiveLr);
-#else
         GotNextFrame = GetNextFrame(&Context);
-#endif
         if (!GotNextFrame)
         {
             KdbpPrint("Couldn't get next frame\n");
