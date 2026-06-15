@@ -18,6 +18,8 @@ BOOLEAN PnpEnableParallelEnum = TRUE;
 BOOLEAN PnpEnableParallelEnum = FALSE;
 #endif
 
+BOOLEAN PnpForceParallelEnum = FALSE;
+
 /* Dedicated worker pool: subtree workers block in IopSynchronousCall, so the shared queue won't do. */
 #define PI_PARALLEL_ENUM_MAX 8
 static volatile LONG PiParallelEnumActive = 0;
@@ -58,6 +60,39 @@ PiSubtreeComplete(_In_ PPI_PARALLEL_CONTEXT Context)
 }
 
 static
+BOOLEAN
+PiParallelRunOneWork(VOID)
+{
+    PLIST_ENTRY entry;
+    PPI_SUBTREE_WORK work;
+    PDEVICE_NODE node;
+    PPI_PARALLEL_CONTEXT context;
+    KIRQL irql;
+
+    KeAcquireSpinLock(&PiParallelWorkLock, &irql);
+    if (IsListEmpty(&PiParallelWorkList))
+    {
+        KeReleaseSpinLock(&PiParallelWorkLock, irql);
+        return FALSE;
+    }
+    entry = RemoveHeadList(&PiParallelWorkList);
+    KeReleaseSpinLock(&PiParallelWorkLock, irql);
+
+    work = CONTAINING_RECORD(entry, PI_SUBTREE_WORK, ListEntry);
+    node = work->Node;
+    context = work->Context;
+    ExFreePoolWithTag(work, TAG_IO);
+
+    PiDevNodeStateMachine(node);
+
+    ObDereferenceObject(node->PhysicalDeviceObject);
+    InterlockedDecrement(&PiParallelEnumActive);
+    PiSubtreeComplete(context);
+    PiParallelContextRelease(context);
+    return TRUE;
+}
+
+static
 VOID
 NTAPI
 PiParallelPoolThread(_In_ PVOID Context)
@@ -65,29 +100,9 @@ PiParallelPoolThread(_In_ PVOID Context)
     UNREFERENCED_PARAMETER(Context);
     for (;;)
     {
-        PLIST_ENTRY entry;
-        PPI_SUBTREE_WORK work;
-        PDEVICE_NODE node;
-        PPI_PARALLEL_CONTEXT context;
-        KIRQL irql;
-
         KeWaitForSingleObject(&PiParallelWorkSem, Executive, KernelMode, FALSE, NULL);
 
-        KeAcquireSpinLock(&PiParallelWorkLock, &irql);
-        entry = RemoveHeadList(&PiParallelWorkList);
-        KeReleaseSpinLock(&PiParallelWorkLock, irql);
-
-        work = CONTAINING_RECORD(entry, PI_SUBTREE_WORK, ListEntry);
-        node = work->Node;
-        context = work->Context;
-        ExFreePoolWithTag(work, TAG_IO);
-
-        PiDevNodeStateMachine(node);
-
-        ObDereferenceObject(node->PhysicalDeviceObject);
-        InterlockedDecrement(&PiParallelEnumActive);
-        PiSubtreeComplete(context);
-        PiParallelContextRelease(context);
+        PiParallelRunOneWork();
     }
 }
 
@@ -155,7 +170,8 @@ PiProcessChildrenParallel(_In_ PDEVICE_NODE Parent)
     KeReleaseSpinLock(&IopDeviceTreeLock, oldIrql);
 
     /* Only fork when >= 2 children need work. */
-    if (count <= 1 || workCount < 2) return FALSE;
+    if (count <= 1) return FALSE;
+    if (workCount < 2 && !PnpForceParallelEnum) return FALSE;
 
     children = ExAllocatePoolWithTag(NonPagedPool, count * sizeof(*children), TAG_IO);
     if (children == NULL) return FALSE;
@@ -232,7 +248,19 @@ PiProcessChildrenParallel(_In_ PDEVICE_NODE Parent)
     ObDereferenceObject(children[count - 1]->PhysicalDeviceObject);
     PiSubtreeComplete(context);
 
-    KeWaitForSingleObject(&context->DoneEvent, Executive, KernelMode, FALSE, NULL);
+    for (;;)
+    {
+        LARGE_INTEGER timeout;
+
+        if (PiParallelRunOneWork())
+            continue;
+
+        if (context->Outstanding == 0)
+            break;
+
+        timeout.QuadPart = -10 * 1000 * 10;
+        KeWaitForSingleObject(&context->DoneEvent, Executive, KernelMode, FALSE, &timeout);
+    }
 
     ExFreePoolWithTag(children, TAG_IO);
     PiParallelContextRelease(context);
