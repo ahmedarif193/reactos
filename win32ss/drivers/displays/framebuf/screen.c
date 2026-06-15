@@ -116,6 +116,30 @@ GetAvailableModes(
    return Modes.NumModes;
 }
 
+/* Map a miniport (physical) mode to the logical size GDI sees. For portrait */
+/* panels we present a landscape (swapped) surface and rotate it on flush. */
+static VOID
+FbGetLogicalSize(
+   PVIDEO_MODE_INFORMATION Mode,
+   PULONG Width,
+   PULONG Height,
+   PBOOL Rotated)
+{
+   ULONG Bpp = Mode->BitsPerPlane * Mode->NumberOfPlanes;
+   if ((FB_ROTATE_DEGREES == 90) && (Bpp == 32))
+   {
+      *Width = Mode->VisScreenHeight;
+      *Height = Mode->VisScreenWidth;
+      if (Rotated != NULL) *Rotated = TRUE;
+   }
+   else
+   {
+      *Width = Mode->VisScreenWidth;
+      *Height = Mode->VisScreenHeight;
+      if (Rotated != NULL) *Rotated = FALSE;
+   }
+}
+
 BOOL
 IntInitScreenInfo(
    PPDEV ppdev,
@@ -164,12 +188,9 @@ IntInitScreenInfo(
       ModeInfoPtr = ModeInfo;
       while (ModeCount-- > 0)
       {
-         if (ModeInfoPtr->Length > 0 &&
-             pDevMode->dmPelsWidth == ModeInfoPtr->VisScreenWidth &&
-             pDevMode->dmPelsHeight == ModeInfoPtr->VisScreenHeight &&
-             pDevMode->dmBitsPerPel == (ModeInfoPtr->BitsPerPlane *
-                                        ModeInfoPtr->NumberOfPlanes) &&
-             pDevMode->dmDisplayFrequency == ModeInfoPtr->Frequency)
+         ULONG LogWidth, LogHeight;
+         FbGetLogicalSize(ModeInfoPtr, &LogWidth, &LogHeight, NULL);
+         if (ModeInfoPtr->Length > 0 && pDevMode->dmPelsWidth == LogWidth && pDevMode->dmPelsHeight == LogHeight && pDevMode->dmBitsPerPel == (ModeInfoPtr->BitsPerPlane * ModeInfoPtr->NumberOfPlanes) && pDevMode->dmDisplayFrequency == ModeInfoPtr->Frequency)
          {
             SelectedMode = ModeInfoPtr;
             break;
@@ -192,10 +213,14 @@ IntInitScreenInfo(
     */
 
    ppdev->ModeIndex = SelectedMode->ModeIndex;
-   ppdev->ScreenWidth = SelectedMode->VisScreenWidth;
-   ppdev->ScreenHeight = SelectedMode->VisScreenHeight;
-   ppdev->ScreenDelta = SelectedMode->ScreenStride;
    ppdev->BitsPerPixel = (UCHAR)(SelectedMode->BitsPerPlane * SelectedMode->NumberOfPlanes);
+
+   /* Physical framebuffer stays portrait; present a rotated landscape surface. */
+   ppdev->PhysWidth = SelectedMode->VisScreenWidth;
+   ppdev->PhysHeight = SelectedMode->VisScreenHeight;
+   ppdev->PhysDelta = SelectedMode->ScreenStride;
+   FbGetLogicalSize(SelectedMode, &ppdev->ScreenWidth, &ppdev->ScreenHeight, &ppdev->Rotate);
+   ppdev->ScreenDelta = ppdev->Rotate ? (ppdev->ScreenWidth * (ppdev->BitsPerPixel / 8)) : SelectedMode->ScreenStride;
 
    ppdev->MemWidth = SelectedMode->VideoMemoryBitmapWidth;
    ppdev->MemHeight = SelectedMode->VideoMemoryBitmapHeight;
@@ -208,10 +233,10 @@ IntInitScreenInfo(
    pGdiInfo->ulTechnology = DT_RASDISPLAY;
    pGdiInfo->ulHorzSize = SelectedMode->XMillimeter;
    pGdiInfo->ulVertSize = SelectedMode->YMillimeter;
-   pGdiInfo->ulHorzRes = SelectedMode->VisScreenWidth;
-   pGdiInfo->ulVertRes = SelectedMode->VisScreenHeight;
-   pGdiInfo->ulPanningHorzRes = SelectedMode->VisScreenWidth;
-   pGdiInfo->ulPanningVertRes = SelectedMode->VisScreenHeight;
+   pGdiInfo->ulHorzRes = ppdev->ScreenWidth;
+   pGdiInfo->ulVertRes = ppdev->ScreenHeight;
+   pGdiInfo->ulPanningHorzRes = ppdev->ScreenWidth;
+   pGdiInfo->ulPanningVertRes = ppdev->ScreenHeight;
    pGdiInfo->cBitsPixel = SelectedMode->BitsPerPlane;
    pGdiInfo->cPlanes = SelectedMode->NumberOfPlanes;
    pGdiInfo->ulVRefresh = SelectedMode->Frequency;
@@ -405,8 +430,12 @@ DrvGetModes(
       pdm->dmSize = sizeof(DEVMODEW);
       pdm->dmDriverExtra = 0;
       pdm->dmBitsPerPel = ModeInfoPtr->NumberOfPlanes * ModeInfoPtr->BitsPerPlane;
-      pdm->dmPelsWidth = ModeInfoPtr->VisScreenWidth;
-      pdm->dmPelsHeight = ModeInfoPtr->VisScreenHeight;
+      {
+         ULONG LogWidth, LogHeight;
+         FbGetLogicalSize(ModeInfoPtr, &LogWidth, &LogHeight, NULL);
+         pdm->dmPelsWidth = LogWidth;
+         pdm->dmPelsHeight = LogHeight;
+      }
       pdm->dmDisplayFrequency = ModeInfoPtr->Frequency;
       pdm->dmDisplayFlags = 0;
       pdm->dmFields = DM_BITSPERPEL | DM_PELSWIDTH | DM_PELSHEIGHT |

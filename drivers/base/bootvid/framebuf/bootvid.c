@@ -21,6 +21,12 @@
 /* Keep borders black or controlled with palette */
 // #define COLORED_BORDERS
 
+/* Software display rotation for portrait panels driven in landscape. */
+/* FB_ROTATE_DEGREES: 0 = off, 90 = quarter turn (default on for portrait tablets). */
+/* FB_ROTATE_CLOCKWISE: 1 = clockwise, 0 = counter-clockwise (flip if upside-down). */
+#define FB_ROTATE_DEGREES 90
+#define FB_ROTATE_CLOCKWISE 1
+
 
 /* GLOBALS ********************************************************************/
 
@@ -31,12 +37,24 @@
     ((PUCHAR)FrameBufferStart + (PanV + VidpYScale * (y)) * BytesPerScanLine \
                               + (PanH + VidpXScale * (x)) * BytesPerPixel)
 
+/* Physical pixel address for a logical (landscape) coordinate, rotating into */
+/* the portrait framebuffer when enabled. ScreenWidth/Height are the logical */
+/* (rotated) dims; PhysWidth/PhysHeight are the real portrait framebuffer. */
+#if FB_ROTATE_CLOCKWISE
+#define FB_ROT_ADDR(ldx, ldy) ((PUCHAR)FrameBufferStart + (ULONG)(ldx) * BytesPerScanLine + (PhysWidth - 1 - (ULONG)(ldy)) * BytesPerPixel)
+#else
+#define FB_ROT_ADDR(ldx, ldy) ((PUCHAR)FrameBufferStart + (PhysHeight - 1 - (ULONG)(ldx)) * BytesPerScanLine + (ULONG)(ldy) * BytesPerPixel)
+#endif
+#define FB_DISP_PIXEL(ldx, ldy) ((PULONG)(Rotate ? FB_ROT_ADDR((ldx), (ldy)) : ((PUCHAR)FrameBufferStart + (ULONG)(ldy) * BytesPerScanLine + (ULONG)(ldx) * BytesPerPixel)))
+
 static ULONG_PTR FrameBufferStart = 0;
 static ULONG FrameBufferSize;
 static ULONG ScreenWidth, ScreenHeight, BytesPerScanLine;
 static UCHAR BytesPerPixel;
 static PUCHAR BackBuffer = NULL;
 static SIZE_T BackBufferSize;
+static ULONG PhysWidth, PhysHeight;
+static BOOLEAN Rotate = FALSE;
 
 #ifdef SCALING_SUPPORT
 static USHORT VidpXScale = 1;
@@ -70,13 +88,17 @@ FlushBackBufferRect(
 
         for (ULONG i = 0; i < VidpYScale; ++i)
         {
-            PULONG Pixel = (PULONG)((ULONG_PTR)FB_PIXEL(Left, y) +
-                                     i * BytesPerScanLine);
+            ULONG ldy = PanV + VidpYScale * y + i;
 
             for (ULONG x = 0; x < Width; ++x)
             {
-                for (ULONG j = VidpXScale; j > 0; --j)
-                    *Pixel++ = CachedPalette[Back[x]];
+                ULONG Color = CachedPalette[Back[x]];
+
+                for (ULONG j = 0; j < VidpXScale; ++j)
+                {
+                    ULONG ldx = PanH + VidpXScale * (Left + x) + j;
+                    *FB_DISP_PIXEL(ldx, ldy) = Color;
+                }
             }
         }
     }
@@ -170,13 +192,11 @@ VidInitialize(
 
     /* Retrieve the framebuffer address, its visible screen dimensions, and its attributes */
     FrameBuffer.QuadPart = VramAddress.QuadPart + VideoConfigData.FrameBufferOffset;
-    ScreenWidth  = VideoConfigData.ScreenWidth;
-    ScreenHeight = VideoConfigData.ScreenHeight;
-    if (ScreenWidth < SCREEN_WIDTH || ScreenHeight < SCREEN_HEIGHT)
-    {
-        DPRINT1("Unsupported screen resolution!\n");
-        return FALSE;
-    }
+
+    /* The physical framebuffer is portrait; ScreenWidth/Height below are the */
+    /* logical (landscape, rotated) screen the bootvid drawing code renders to. */
+    PhysWidth  = VideoConfigData.ScreenWidth;
+    PhysHeight = VideoConfigData.ScreenHeight;
 
     BytesPerPixel = (VideoConfigData.BitsPerPixel + 7) / 8; // Round up to nearest byte.
     ASSERT(BytesPerPixel >= 1 && BytesPerPixel <= 4);
@@ -187,7 +207,7 @@ VidInitialize(
         return FALSE;
     }
 
-    ASSERT(ScreenWidth <= VideoConfigData.PixelsPerScanLine);
+    ASSERT(PhysWidth <= VideoConfigData.PixelsPerScanLine);
     BytesPerScanLine = VideoConfigData.PixelsPerScanLine * BytesPerPixel;
     if (BytesPerScanLine < 1)
     {
@@ -196,7 +216,24 @@ VidInitialize(
     }
 
     /* Compute the visible framebuffer size */
-    FrameBufferSize = ScreenHeight * BytesPerScanLine;
+    FrameBufferSize = PhysHeight * BytesPerScanLine;
+
+    Rotate = (FB_ROTATE_DEGREES == 90) ? TRUE : FALSE;
+    if (Rotate)
+    {
+        ScreenWidth = PhysHeight;
+        ScreenHeight = PhysWidth;
+    }
+    else
+    {
+        ScreenWidth = PhysWidth;
+        ScreenHeight = PhysHeight;
+    }
+    if (ScreenWidth < SCREEN_WIDTH || ScreenHeight < SCREEN_HEIGHT)
+    {
+        DPRINT1("Unsupported screen resolution!\n");
+        return FALSE;
+    }
 
     /* Verify that the framebuffer actually fits inside the video RAM */
     if (FrameBuffer.QuadPart + FrameBufferSize > VramAddress.QuadPart + VramSize)
@@ -363,16 +400,17 @@ SetPixel(
     _In_ ULONG Top,
     _In_ UCHAR Color)
 {
-    PUCHAR Back = BB_PIXEL(Left, Top);
-    PULONG Frame = (PULONG)FB_PIXEL(Left, Top);
+    ULONG NativeColor = CachedPalette[Color];
 
-    *Back = Color;
-    for (ULONG i = VidpYScale; i > 0; --i)
+    *BB_PIXEL(Left, Top) = Color;
+    for (ULONG i = 0; i < VidpYScale; ++i)
     {
-        PULONG Pixel = Frame;
-        for (ULONG j = VidpXScale; j > 0; --j)
-            *Pixel++ = CachedPalette[Color];
-        Frame = (PULONG)((ULONG_PTR)Frame + BytesPerScanLine);
+        ULONG ldy = PanV + VidpYScale * Top + i;
+        for (ULONG j = 0; j < VidpXScale; ++j)
+        {
+            ULONG ldx = PanH + VidpXScale * Left + j;
+            *FB_DISP_PIXEL(ldx, ldy) = NativeColor;
+        }
     }
 }
 
@@ -407,12 +445,14 @@ VidBufferToScreenBltNative(
 
     for (y = 0; y < Height; ++y)
     {
-        PUCHAR Src = Buffer + y * Delta;
-        PUCHAR Dst = (PUCHAR)FrameBufferStart +
-                     (Top + y) * BytesPerScanLine +
-                     Left * BytesPerPixel;
+        PULONG Src = (PULONG)(Buffer + y * Delta);
+        ULONG ldy = Top + y;
 
-        RtlCopyMemory(Dst, Src, Width * sizeof(ULONG));
+        for (ULONG x = 0; x < Width; ++x)
+        {
+            ULONG ldx = Left + x;
+            *FB_DISP_PIXEL(ldx, ldy) = Src[x];
+        }
     }
 
     return TRUE;
@@ -500,50 +540,47 @@ DisplayCharacter(
 
         if (Opaque)
         {
-            /* Loop each pixel width */
-            for (UCHAR bit = 1 << (BOOTCHAR_WIDTH - 1); bit > 0; bit >>= 1)
-            {
-                UCHAR Color = (*FontChar & bit) ? (UCHAR)TextColor : (UCHAR)BackColor;
-
-                *Back++ = Color;
-            }
+            /* Backbuffer: one indexed byte per character column */
+            UCHAR bit;
+            ULONG col;
+            for (col = 0, bit = 1 << (BOOTCHAR_WIDTH - 1); bit > 0; bit >>= 1, ++col)
+                Back[col] = (*FontChar & bit) ? (UCHAR)TextColor : (UCHAR)BackColor;
 
             for (ULONG i = 0; i < VidpYScale; ++i)
             {
-                PULONG Pixel = (PULONG)((ULONG_PTR)FB_PIXEL(Left, y) +
-                                         i * BytesPerScanLine);
-
-                for (UCHAR bit = 1 << (BOOTCHAR_WIDTH - 1); bit > 0; bit >>= 1)
+                ULONG ldy = PanV + VidpYScale * y + i;
+                UCHAR b;
+                ULONG c;
+                for (c = 0, b = 1 << (BOOTCHAR_WIDTH - 1); b > 0; b >>= 1, ++c)
                 {
-                    UCHAR Color = (*FontChar & bit) ? (UCHAR)TextColor : (UCHAR)BackColor;
-
-                    for (ULONG j = VidpXScale; j > 0; --j)
-                        *Pixel++ = CachedPalette[Color];
+                    ULONG Color = CachedPalette[(*FontChar & b) ? (UCHAR)TextColor : (UCHAR)BackColor];
+                    for (ULONG j = 0; j < VidpXScale; ++j)
+                    {
+                        ULONG ldx = PanH + VidpXScale * (Left + c) + j;
+                        *FB_DISP_PIXEL(ldx, ldy) = Color;
+                    }
                 }
             }
         }
         else
         {
-            ULONG x = Left;
-
-            /* Loop each pixel width */
-            for (UCHAR bit = 1 << (BOOTCHAR_WIDTH - 1); bit > 0; bit >>= 1, ++x)
+            UCHAR bit;
+            ULONG col;
+            for (col = 0, bit = 1 << (BOOTCHAR_WIDTH - 1); bit > 0; bit >>= 1, ++col)
             {
                 if (!(*FontChar & bit))
-                {
-                    ++Back;
                     continue;
-                }
 
-                *Back++ = (UCHAR)TextColor;
+                Back[col] = (UCHAR)TextColor;
 
-                PULONG Frame = (PULONG)FB_PIXEL(x, y);
-                for (ULONG i = VidpYScale; i > 0; --i)
+                for (ULONG i = 0; i < VidpYScale; ++i)
                 {
-                    PULONG Pixel = Frame;
-                    for (ULONG j = VidpXScale; j > 0; --j)
-                        *Pixel++ = CachedPalette[(UCHAR)TextColor];
-                    Frame = (PULONG)((ULONG_PTR)Frame + BytesPerScanLine);
+                    ULONG ldy = PanV + VidpYScale * y + i;
+                    for (ULONG j = 0; j < VidpXScale; ++j)
+                    {
+                        ULONG ldx = PanH + VidpXScale * (Left + col) + j;
+                        *FB_DISP_PIXEL(ldx, ldy) = CachedPalette[(UCHAR)TextColor];
+                    }
                 }
             }
         }
@@ -560,7 +597,6 @@ VidSolidColorFill(
     _In_ UCHAR Color)
 {
     ULONG Width = Right - Left + 1;
-    ULONG NativeWidth = Width * VidpXScale * BytesPerPixel;
     ULONG NativeColor = CachedPalette[Color];
 
     for (; Top <= Bottom; ++Top)
@@ -571,9 +607,15 @@ VidSolidColorFill(
 
         for (ULONG i = 0; i < VidpYScale; ++i)
         {
-            PULONG Frame = (PULONG)((ULONG_PTR)FB_PIXEL(Left, Top) +
-                                     i * BytesPerScanLine);
-            RtlFillMemoryUlong(Frame, NativeWidth, NativeColor);
+            ULONG ldy = PanV + VidpYScale * Top + i;
+            for (ULONG x = 0; x < Width; ++x)
+            {
+                for (ULONG j = 0; j < VidpXScale; ++j)
+                {
+                    ULONG ldx = PanH + VidpXScale * (Left + x) + j;
+                    *FB_DISP_PIXEL(ldx, ldy) = NativeColor;
+                }
+            }
         }
     }
 }

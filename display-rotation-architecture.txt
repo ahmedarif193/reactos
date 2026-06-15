@@ -1,0 +1,422 @@
+================================================================================
+ReactOS Display Rotation — Generalized Architecture
+XPDM (generic framebuffer + vendor GPU) · runtime-controlled · WDDM-forward
+================================================================================
+Author context: distilled from the working portrait-tablet bring-up
+  - FreeLdr: kept portrait (firmware GOP, GRUB-style largest-area + always SetMode)
+  - Kernel boot logo: drivers/base/bootvid/framebuf/bootvid.c (lfbbvid.dll), 90 CW
+  - Desktop: win32ss/drivers/displays/framebuf (shadow + rotate-on-flush), 90 CW
+Both are currently COMPILE-TIME hardcoded (FB_ROTATE_DEGREES / FB_ROTATE_CLOCKWISE).
+This document is the design to lift that into a general, controllable subsystem.
+
+This is a DESIGN/REASONING document, not a checklist. It states the model, the
+contracts, the data flow, and the trade-offs so the implementation is mechanical.
+
+--------------------------------------------------------------------------------
+0. WHAT WE ARE GENERALIZING (and why the current code is the wrong shape)
+--------------------------------------------------------------------------------
+The working code proves the *mechanism* (software transpose of a logical landscape
+surface onto a physical portrait scanout). It is wrong as an ARCHITECTURE for three
+reasons:
+
+  (a) The orientation is a constant baked into each driver. There is no single
+      source of truth, no runtime control, and three independent copies of the
+      same constant (FreeLdr policy, bootvid, framebuf).
+  (b) The rotation MATH and the rotate-blit live inline in one display driver and
+      one bootvid backend. A vendor GPU driver (XPDM) cannot reuse them, and the
+      generic driver only does the SW path — it cannot exploit a GPU that rotates
+      the scanout in hardware for free.
+  (c) Nothing maps cleanly onto WDDM, where rotation is a first-class property of
+      the present path negotiated by the OS, not a private driver hack.
+
+The fix is to separate POLICY ("which orientation, decided where, controlled how")
+from MECHANISM ("who physically rotates pixels"), give the mechanism a small shared
+contract, and make the policy a single value that flows from firmware/registry
+through every consumer.
+
+--------------------------------------------------------------------------------
+1. DESIGN TENETS
+--------------------------------------------------------------------------------
+  T1. One orientation model, four orientations (0/90/180/270), used identically by
+      FreeLdr, bootvid, every XPDM display driver, and (later) the WDDM miniport.
+  T2. Policy is decoupled from mechanism. The same "desired orientation" value
+      drives a dumb-framebuffer software transpose, a vendor GPU hardware scanout
+      rotate, or a WDDM VidPN path rotation — without any of them knowing about
+      each other.
+  T3. Prefer hardware. Software transpose is the universal fallback, never the
+      goal. If the panel/GPU can rotate scanout, the OS must be able to ask it to.
+  T4. The boot pipeline must be orientation-consistent end to end so there is no
+      "portrait flash": FreeLdr handoff -> bootvid -> first desktop frame all read
+      the same boot-time orientation.
+  T5. The XPDM-era abstractions must be a strict subset of the WDDM concepts, so
+      the WDDM upgrade replaces the MECHANISM layer and keeps the POLICY layer.
+  T6. Zero cost when identity. Orientation 0 must compile/run to the original
+      straight-through path (no shadow, no transpose) so non-rotated systems and
+      upstream parity are unaffected.
+
+--------------------------------------------------------------------------------
+2. THE ORIENTATION MODEL (the durable interface)
+--------------------------------------------------------------------------------
+Enumeration (value-compatible with Win32 DMDO_* and convertible to WDDM
+D3DKMDT_VIDPN_PRESENT_PATH_ROTATION):
+
+    DISP_ORIENTATION : ULONG
+      DISP_ROT_0   = 0    (DMDO_DEFAULT, identity)
+      DISP_ROT_90  = 1    (DMDO_90,  quarter turn clockwise of the IMAGE)
+      DISP_ROT_180 = 2    (DMDO_180)
+      DISP_ROT_270 = 3    (DMDO_270)
+
+Geometry. Let the PHYSICAL panel/scanout be PW x PH with byte stride PhysDelta.
+"Logical" is what GDI / bootvid / the desktop believe the screen is:
+
+      Orientation     Logical size (LW x LH)     Transpose?
+      -----------     ----------------------     ----------
+      0 / 180         PW x PH                     no
+      90 / 270        PH x PW                     yes
+
+Forward map  logical (lx,ly) -> physical (px,py)   [image rotates CW for 90]:
+
+      0    : px = lx              py = ly
+      90   : px = PW-1-ly         py = lx
+      180  : px = PW-1-lx         py = PH-1-ly
+      270  : px = ly              py = PH-1-lx
+
+This is the entire mathematical core. Everything else is plumbing. The current
+tablet uses orientation 90 (the formula above for 90 is exactly the
+FB_DISP_PIXEL / IntFlushShadowRect mapping already shipped).
+
+ASCII — what "90 CW" means physically (portrait panel, content authored landscape):
+
+   Logical (what apps draw)            Physical scanout (portrait panel)
+   LW=1920 x LH=1200                   PW=1200 x PH=1920
+   +-----------------------+           +-----------+
+   |  A  B  C  D ...        |          | .  .  A   |   each logical ROW becomes
+   |                       |   ---->   | .  .  B   |   a physical COLUMN
+   |                       |           | .  .  C   |
+   +-----------------------+           |        D  |
+                                       |     ...   |
+                                       +-----------+
+
+--------------------------------------------------------------------------------
+3. LAYERING: POLICY vs MECHANISM
+--------------------------------------------------------------------------------
+
+   +----------------------------------------------------------------+
+   | POLICY  (the "what" — one value, many readers)                 |
+   |                                                                |
+   |   firmware/ACPI panel orientation  --+                         |
+   |   registry persisted DEVMODE        --+--> EFFECTIVE ORIENT --> |
+   |   fork/board default (registry)     --+        |               |
+   |   user runtime request (CDS)        --+        |               |
+   +------------------------------------------------|---------------+
+                                                    |
+            carried by: LOADER_PARAMETER_EXTENSION  |  +  registry
+                                                    v
+   +----------------------------------------------------------------+
+   | MECHANISM  (the "how" — pluggable backends)                    |
+   |                                                                |
+   |   [A] HW scanout rotation   (vendor GPU programs CRTC)         |
+   |   [B] SW transpose          (shared rotate-blit, dumb FB/GOP)  |
+   |   [C] WDDM VidPN rotation   (dxgkrnl + miniport, future)       |
+   +----------------------------------------------------------------+
+
+Rule: a consumer asks the policy layer "what orientation?" and asks its mechanism
+"apply it." A consumer never hardcodes either. The orientation enum is the only
+type shared across the boundary, which is why it must be stable.
+
+--------------------------------------------------------------------------------
+4. MECHANISM TAXONOMY (pick the cheapest the hardware allows)
+--------------------------------------------------------------------------------
+[A] HARDWARE SCANOUT ROTATION  (preferred for any real GPU)
+    The display engine reads the (logical-orientation) primary surface and emits
+    it rotated to the panel. The primary stays linear and un-transposed, so 2D
+    acceleration, DirectDraw, overlays, and the GDI fast paths keep working. Cost:
+    ~zero per frame. Requirement: the miniport can program rotation on its CRTC.
+    XPDM vendor drivers expose this via the shared contract's HW hook (sec. 5/6.4).
+
+[B] SOFTWARE TRANSPOSE  (universal fallback; what GOP/framebuffer must use)
+    GDI draws into a LOGICAL-orientation shadow in system RAM; a single flush
+    chokepoint transposes dirty rectangles onto the physical scanout. This is the
+    shipped framebuf mechanism, generalized to all four orientations. Cost: one
+    transpose per dirty rect; acceptable for boot + a framebuffer desktop, but it
+    defeats hardware 2D accel (there is none on a dumb FB anyway).
+
+[C] WDDM VidPN PATH ROTATION  (future)
+    dxgkrnl owns the rotation; it is a property of the present path. The miniport
+    either programs HW rotation or declares it and lets the OS/compositor rotate.
+    Mechanism [A]'s hook is the natural XPDM precursor.
+
+Selection at runtime: ask mechanism [A] first ("can you rotate to O?"). If it
+declines (returns unsupported), fall back to [B]. Identity (O0) bypasses both.
+
+--------------------------------------------------------------------------------
+5. THE SHARED ROTATION LIBRARY  (libdisprot — the reusable core)
+--------------------------------------------------------------------------------
+A tiny kernel-mode static lib (link into each XPDM display driver; header-only
+subset usable by bootvid). It contains NO policy. Proposed surface:
+
+  Geometry / transform (header-inline, branch-free, also usable by bootvid):
+    VOID  DispLogicalSize(DISP_ORIENTATION o, ULONG pw, ULONG ph,
+                          PULONG lw, PULONG lh);
+    VOID  DispMapPoint   (DISP_ORIENTATION o, ULONG pw, ULONG ph,
+                          ULONG lx, ULONG ly, PULONG px, PULONG py);
+
+  Rotate-blit (the generalized IntFlushShadowRect; 32bpp first, format param for
+  16/24 later). 0/180 are run copies; 90/270 are tiled transposes (sec. 10):
+    VOID  DispRotateBlit(DISP_ORIENTATION o,
+                         PVOID dstPhys, ULONG dstStride, ULONG pw, ULONG ph,
+                         const VOID* srcLogical, ULONG srcStride,
+                         const RECTL* logicalDirty, ULONG bytesPerPixel);
+
+  Shadow-surface manager (generalizes surface.c + shadow.c for XPDM drivers):
+    DISP_SHADOW* DispShadowCreate(DISP_ORIENTATION o, ULONG pw, ULONG ph,
+                                  ULONG physStride, PVOID physBase, ULONG bpp);
+    PVOID        DispShadowBits(DISP_SHADOW*);    // logical-orientation surface
+    VOID         DispShadowGeometry(DISP_SHADOW*, PULONG lw, PULONG lh,
+                                    PULONG logStride);
+    VOID         DispShadowFlush(DISP_SHADOW*, const RECTL* logicalDirty);
+    VOID         DispShadowDestroy(DISP_SHADOW*);
+
+  DDI helpers (so each driver's DrvGetModes / IntInitScreenInfo are 3 lines):
+    VOID  DispApplyToDevmode(DISP_ORIENTATION o, PVIDEO_MODE_INFORMATION src,
+                             LPDEVMODEW dst);     // swaps dims, sets dmDisplayOrientation
+    VOID  DispApplyToGdiInfo(DISP_ORIENTATION o, PVIDEO_MODE_INFORMATION src,
+                             PGDIINFO gdi, PPDEV_GEOM out);
+
+  Hardware-rotation contract (driver-supplied; NULL => library uses SW shadow):
+    typedef NTSTATUS (*DISP_HW_ROTATE)(PVOID ctx, DISP_ORIENTATION o);
+    // The library calls this on mode/orientation change. STATUS_NOT_SUPPORTED =>
+    // fall back to DispShadow* software transpose for orientation o.
+
+Why a lib and not copy-paste: the transpose, the tiling, the cursor-via-flush
+subtlety, the 64-byte WC burst alignment for 0/180, and the DEVMODE swap are all
+easy to get subtly wrong. One audited copy.
+
+--------------------------------------------------------------------------------
+6. COMPONENT DESIGNS
+--------------------------------------------------------------------------------
+
+6.1 ORIENTATION SOURCE / POLICY RESOLUTION
+    Effective boot orientation is resolved once, in priority order:
+      1. Persisted user setting (registry DEVMODE dmDisplayOrientation) if present.
+      2. Firmware/panel native orientation, if discoverable:
+           - ACPI IGD OpRegion / _DOD, or an EDID rotation hint, or
+           - a board/fork override value (registry) for panels that lie or are mute.
+      3. Identity (0).
+    FreeLdr (or early kernel) writes the resolved value into a new field of
+    LOADER_PARAMETER_EXTENSION, e.g.:
+           ULONG DefaultDisplayOrientation;   // DISP_ROT_*
+    Rationale: bootvid and the very first desktop frame must agree BEFORE the
+    registry display branch is consulted, otherwise the screen flashes portrait
+    then snaps to landscape. The loader-block value is the earliest single truth.
+    Runtime changes (sec. 7) update the registry DEVMODE; the loader-block value
+    is only the pre-registry default.
+
+    NOTE: this is also the clean home for the FreeLdr question. Today FreeLdr is
+    left portrait. If a board wants the loader menu rotated too, FreeLdr reads the
+    same resolved orientation and rotates its vidfb exactly as bootvid does
+    (same enum, same DispMapPoint). It is opt-in per board, not forced.
+
+6.2 BOOTVID  (drivers/base/bootvid/framebuf/bootvid.c -> lfbbvid.dll / arm64 bootvid)
+    - Replace the FB_ROTATE_* compile constants with a runtime 'Orientation' read
+      from LOADER_PARAMETER_EXTENSION.DefaultDisplayOrientation at VidInitialize.
+    - Keep the physical-portrait FrameBufferStart/stride; derive logical via
+      DispLogicalSize; FB_DISP_PIXEL becomes DispMapPoint (inline, all 4 cases).
+    - bootvid stays self-contained: it includes the header-inline transform, not
+      the full lib (it must not grow heavy dependencies).
+    - Identity path unchanged (T6): when Orientation==0 the writes are the original
+      straight-through stores.
+
+6.3 XPDM GENERIC FRAMEBUFFER DRIVER  (win32ss/drivers/displays/framebuf)
+    This is the reference adopter of libdisprot. Current bespoke code becomes:
+      - IntInitScreenInfo: DispApplyToGdiInfo(o, mode, &GdiInfo, &geom).
+      - DrvGetModes: for each base mode emit the identity entry plus, if desired,
+        90/270/180 variants via DispApplyToDevmode (this is what makes the OS able
+        to OFFER rotation in the first place).
+      - DrvEnableSurface: DispShadowCreate(...) instead of the hand-rolled shadow;
+        the GDI bitmap is created over DispShadowBits at logical dims.
+      - DrvBitBlt/DrvCopyBits/DrvSynchronizeSurface: DispShadowFlush(dirty).
+    The uefifb MINIPORT stays untouched (reports physical portrait, maps physical
+    FB). All rotation remains a display-driver concern, as it is today.
+
+6.4 XPDM VENDOR GPU DRIVERS
+    Two tiers, both via libdisprot:
+      Tier 1 (has HW scanout rotation — most discrete/integrated GPUs):
+        Provide DISP_HW_ROTATE that programs the CRTC rotation register and keeps
+        the primary linear/logical. No shadow, no transpose; accel intact. The lib
+        just routes the orientation to the hook on every mode/orientation change.
+      Tier 2 (no HW rotation, or rotation only at some depths):
+        Provide DISP_HW_ROTATE returning STATUS_NOT_SUPPORTED for those cases; the
+        lib transparently switches that path to the SW shadow. A driver can be
+        Tier 1 for 32bpp and Tier 2 for others.
+    The vendor driver therefore writes ~no rotation code: it implements one hook
+    and calls the same DDI helpers. This is the whole point of the lib.
+
+6.5 WIN32K PLUMBING  (the control surface)
+    To let anything CONTROL rotation, dmDisplayOrientation must travel end to end:
+      - DrvGetModes already (will) emit rotated DEVMODEs (6.3). win32k must keep
+        dmDisplayOrientation through mode enumeration and selection (it must not
+        drop the field, and must match it when validating ChangeDisplaySettings).
+      - ChangeDisplaySettingsEx(DM_DISPLAYORIENTATION): win32k validates the target
+        DEVMODE against DrvGetModes, persists it (registry, per display device),
+        and re-points the driver (mode change / DrvAssertMode) which re-applies the
+        orientation through the lib/hook.
+      - GDI metrics that flip with orientation (SM_CXSCREEN/SM_CYSCREEN, work area,
+        monitor rect) follow from the logical dims the driver already reports.
+
+--------------------------------------------------------------------------------
+7. RUNTIME CONTROL FLOW  (how a rotate request becomes pixels)
+--------------------------------------------------------------------------------
+
+   user / tool / hotkey / desk.cpl
+        | ChangeDisplaySettingsEx(dm.dmDisplayOrientation=90,
+        |                         dmFields|=DM_DISPLAYORIENTATION)
+        v
+   win32k  --- validate against DrvGetModes (rotated variant exists?) ---+
+        |                                                                |
+        | persist DEVMODE to registry (per device)                       |
+        v                                                                |
+   driver mode change (DrvAssertMode / re-enable surface)                |
+        |                                                                |
+        +-- libdisprot: orientation := 90                                |
+              |                                                          |
+              +-- DISP_HW_ROTATE(ctx, 90) ?                              |
+              |        STATUS_SUCCESS  -> HW rotates scanout, done       |
+              |        STATUS_NOT_SUPPORTED                              |
+              |               |                                          |
+              |               v                                          |
+              +-- DispShadowCreate/realloc at logical 90 dims            |
+                      GDI now draws landscape; DispShadowFlush transposes|
+        v                                                                |
+   GDI surface re-described at logical dims; desktop relays out  <-------+
+
+Boot path (no user involved):
+   FreeLdr resolves DefaultDisplayOrientation -> LOADER_PARAMETER_EXTENSION
+       -> bootvid reads it (logo rotated)
+       -> display driver DrvEnablePDEV reads persisted DEVMODE, else the
+          loader-block default -> first desktop frame already rotated.
+
+--------------------------------------------------------------------------------
+8. PERSISTENCE & RESOLUTION ORDER (single, documented precedence)
+--------------------------------------------------------------------------------
+   Runtime (after logon/registry up):
+     persisted DEVMODE.dmDisplayOrientation  (highest)
+   Boot (before that):
+     LOADER_PARAMETER_EXTENSION.DefaultDisplayOrientation
+       which FreeLdr computed from:
+         registry board override  >  firmware/ACPI/EDID  >  identity
+   Identity is always the floor (T6): unknown/zero => original behavior.
+
+   Registry homes (mirror Windows so existing tools/users transfer):
+     per-device persisted mode:  ...\Control\Video\{adapterGUID}\<n>  (DEVMODE)
+     board/fork default:         ...\Control\GraphicsDrivers\  (a named value,
+                                 e.g. BootDisplayOrientation)
+
+--------------------------------------------------------------------------------
+9. WDDM FORWARD PATH  (why this survives the driver-model upgrade)
+--------------------------------------------------------------------------------
+WDDM makes rotation a property of the VidPN present path, negotiated by dxgkrnl:
+
+   POLICY LAYER  (UNCHANGED across XPDM -> WDDM)
+     effective orientation, sources, precedence, persistence, loader-block default
+        |
+        |  enum maps 1:1:
+        |     DISP_ROT_0/90/180/270  <->  D3DKMDT_VPPR_IDENTITY/ROTATE90/180/270
+        v
+   MECHANISM LAYER  (REPLACED)
+     XPDM:  libdisprot  (HW hook  | SW shadow transpose)
+     WDDM:  dxgkrnl drives D3DKMDT_VIDPN_PRESENT_PATH.ContentTransformation.Rotation
+            - miniport DxgkDdiEnumVidPnCofuncModality advertises supported rotations
+            - DxgkDdiCommitVidPn / DxgkDdiSetVidPnSourceAddress program HW rotation
+            - panel native orientation reported via D3DKMDT_MONITOR_ORIENTATION
+            - if HW cannot rotate, the OS/compositor (DWM) rotates -> the SW
+              transpose concept survives, just relocated above the miniport.
+
+Forward-compat checklist baked into the XPDM design now:
+   - keep orientation an explicit enum value, never a bool/define  (=> maps to VPPR)
+   - keep the panel-native vs requested orientation distinct        (=> MONITOR vs PATH)
+   - keep logical/physical geometry split explicit                  (=> VidPN source
+                                                                        vs target modes)
+   - never let GDI assume primary==scanout layout                   (=> WDDM never does)
+So the WDDM upgrade deletes libdisprot's mechanism and re-points the policy layer at
+dxgkrnl; nothing in policy/UX/persistence changes.
+
+--------------------------------------------------------------------------------
+10. CROSS-CUTTING CONCERNS (the parts that bite)
+--------------------------------------------------------------------------------
+  Cursor:
+    SW path — a hardware pointer would bypass the shadow and appear unrotated. The
+    framebuffer driver already has no HW pointer, so GDI's software cursor draws
+    into the shadow and rotates via the HOOK_SYNCHRONIZE flush. Vendor Tier-1 (HW
+    rotate) keeps HW cursor (the engine rotates it too). Vendor Tier-2 SW path must
+    disable HW pointer and force the GDI cursor — libdisprot should expose this as
+    a "pointer must be software in this orientation" flag.
+  2D acceleration / DirectDraw:
+    SW transpose forces all output through the shadow flush (no accel) — fine for a
+    dumb FB. For a vendor GPU, this is exactly why Tier-1 HW rotation matters: it
+    preserves accel. Document: enabling SW rotation on an accelerated driver is a
+    correctness-over-speed fallback only.
+  Transpose performance (90/270):
+    Per-pixel column-stride writes to write-combined VRAM are cache/WC hostile.
+    Mitigations in DispRotateBlit: process in cache-sized tiles (e.g. 32x32),
+    gather a tile into a small stack buffer in logical order, then emit it; this
+    keeps both reads and WC writes near-sequential. 0/180 stay as run copies with
+    the existing 64-byte burst alignment.
+  Pixel formats / stride:
+    First-class: 32bpp (the only format the FB path supports today). The blit takes
+    bytesPerPixel; 16/24 are a later extension. Physical stride (padding) and the
+    logical shadow stride differ and must be tracked separately (already true).
+  180 vs 90/270:
+    180 is NOT a transpose — it is a reversed run copy (cheap). Treat it in the
+    0/180 branch, not the transpose branch, or it needlessly pays transpose cost.
+  Dynamic rotation (tablet auto-rotate):
+    Out of scope for the mechanism, but the policy layer + ChangeDisplaySettings
+    path is exactly the substrate an accelerometer/sensor service would drive. The
+    design must not assume orientation is fixed after boot (it already does not).
+  Multi-monitor:
+    Orientation is per-source. Policy must be keyed by display device, not global.
+    The loader-block default applies only to the boot/primary panel.
+  Mode-list explosion:
+    Emitting 4 orientations x N modes can bloat EnumDisplaySettings. Emit rotated
+    variants only for the panel's sensible set (typically the native mode), or gate
+    behind a capability flag, rather than the full cross product.
+
+--------------------------------------------------------------------------------
+11. INVARIANTS / NON-NEGOTIABLES
+--------------------------------------------------------------------------------
+  I1. Orientation 0 is byte-for-byte the pre-rotation code path (no shadow alloc,
+      no transpose, no DEVMODE swap). Upstream/non-tablet systems unaffected.
+  I2. The miniport always describes the PHYSICAL panel; only the display driver /
+      OS present a logical orientation. (Keeps one truth for the scanout.)
+  I3. Bounds: logical coords are clamped to logical dims before mapping; the map is
+      provably in-physical-bounds for all 4 orientations (no OOB even on a logic
+      slip — important where there is no serial/debugger).
+  I4. The orientation enum values are frozen (== DMDO_*), because they are
+      serialized into the loader block and registry and mapped to WDDM.
+
+--------------------------------------------------------------------------------
+12. INCREMENTAL ADOPTION (dependency order, not a task list)
+--------------------------------------------------------------------------------
+The layering implies a natural order where each step is independently shippable and
+each later step only deletes hardcoded constants in favour of the shared value:
+  - Extract the proven 90-CW math + shadow flush into libdisprot (all 4 orients).
+  - Re-point the framebuf display driver and bootvid at the lib (behaviour
+    identical at O90; gains O0/180/270 for free).
+  - Introduce LOADER_PARAMETER_EXTENSION.DefaultDisplayOrientation + the policy
+    resolver; delete the compile-time defines.
+  - Wire dmDisplayOrientation through win32k + ChangeDisplaySettings (control).
+  - Add the DISP_HW_ROTATE hook; first vendor XPDM driver becomes Tier-1.
+  - WDDM: replace mechanism with VidPN path rotation; policy untouched.
+
+--------------------------------------------------------------------------------
+13. OPEN QUESTIONS (decide before coding the policy layer)
+--------------------------------------------------------------------------------
+  Q1. Where does the panel-native orientation come from on the target tablets —
+      ACPI, EDID, or only a board override? (Determines 6.1 step 2 feasibility.)
+  Q2. Do we want FreeLdr rotated too, or is a brief portrait loader acceptable?
+      (Design supports either; default keeps FreeLdr portrait.)
+  Q3. Registry schema: reuse Windows' per-device DEVMODE verbatim (max tooling
+      compatibility) vs a simpler fork-private value (less code now)?
+  Q4. Mode enumeration policy: offer all 4 orientations to EnumDisplaySettings, or
+      only expose rotation via an explicit set call? (Affects desk.cpl UX.)
+================================================================================

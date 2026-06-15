@@ -771,11 +771,78 @@ UefiDrawBgrtLogo(VOID)
 }
 
 static
+BOOLEAN
+UefiIsLinearGopMode(
+    _In_ EFI_GRAPHICS_OUTPUT_MODE_INFORMATION* Info)
+{
+    if ((Info->HorizontalResolution == 0) || (Info->VerticalResolution == 0))
+        return FALSE;
+    if (Info->PixelFormat == PixelRedGreenBlueReserved8BitPerColor)
+        return TRUE;
+    if (Info->PixelFormat == PixelBlueGreenRedReserved8BitPerColor)
+        return TRUE;
+    if (Info->PixelFormat == PixelBitMask)
+        return (PixelBitmasksToBpp(Info->PixelInformation.RedMask, Info->PixelInformation.GreenMask, Info->PixelInformation.BlueMask, Info->PixelInformation.ReservedMask) == 32);
+    return FALSE;
+}
+
+static
+UINT32
+UefiSelectBestGopMode(
+    _In_ EFI_GRAPHICS_OUTPUT_PROTOCOL* gop)
+{
+    EFI_STATUS Status;
+    EFI_GRAPHICS_OUTPUT_MODE_INFORMATION* Info;
+    UINTN SizeOfInfo;
+    UINT32 Mode;
+    UINT32 Pass;
+    UINT32 Width;
+    UINT32 Height;
+    ULONGLONG Area;
+    UINT32 BestMode = gop->Mode->Mode;
+    ULONGLONG BestArea = 0;
+    BOOLEAN Found = FALSE;
+    BOOLEAN AvoidLowRes = TRUE;
+
+    // Mirror GRUB2 efi_gop auto-selection: pick the largest-area 32bpp linear
+    // mode (the panel's native mode), skipping sub-480 heights on the first pass.
+    // NOTE: do NOT prefer landscape here. On portrait-native tablets the firmware
+    // landscape GOP modes are garbled (rotated/tiled vs the physical scanout);
+    // only the native portrait mode is a clean linear surface. Landscape requires
+    // software framebuffer rotation, not a mode switch.
+    for (Pass = 0; Pass < 2; ++Pass)
+    {
+        for (Mode = 0; Mode < gop->Mode->MaxMode; ++Mode)
+        {
+            Status = gop->QueryMode(gop, Mode, &SizeOfInfo, &Info);
+            if (Status != EFI_SUCCESS)
+                continue;
+            Width = Info->HorizontalResolution;
+            Height = Info->VerticalResolution;
+            Area = (ULONGLONG)Width * Height;
+            if (UefiIsLinearGopMode(Info) && (!AvoidLowRes || (Height >= 480)) && (Area > BestArea))
+            {
+                BestArea = Area;
+                BestMode = Mode;
+                Found = TRUE;
+            }
+            GlobalSystemTable->BootServices->FreePool(Info);
+        }
+        if (Found)
+            break;
+        AvoidLowRes = FALSE;
+    }
+
+    return BestMode;
+}
+
+static
 EFI_STATUS
 UefiInitializeGop(VOID)
 {
     EFI_STATUS Status;
     EFI_GRAPHICS_OUTPUT_PROTOCOL* gop = NULL;
+    UINT32 SelectedMode;
 
     EFI_GRAPHICS_PIXEL_FORMAT PixelFormat;
     EFI_PIXEL_BITMASK* pPixelBitmask;
@@ -788,17 +855,13 @@ UefiInitializeGop(VOID)
         return Status;
     }
 
-    /*
-     * Keep the firmware-selected GOP mode instead of forcing a smaller
-     * fallback mode. QEMU/OVMF already exposes an active mode here, and the
-     * kernel GOP hand-off should preserve that exact framebuffer geometry.
-     */
-    TRACE("Using existing GOP mode %u: %ux%u, pixel format %u, stride %u\n",
-          gop->Mode->Mode,
-          gop->Mode->Info->HorizontalResolution,
-          gop->Mode->Info->VerticalResolution,
-          gop->Mode->Info->PixelFormat,
-          gop->Mode->Info->PixelsPerScanLine);
+    // Mirror GRUB2: always SetMode to the chosen mode, which forces the firmware
+    // to (re)establish a clean linear framebuffer and fixes the garbled/rotated
+    // boot surface some firmwares leave active (portrait Intel tablets).
+    SelectedMode = UefiSelectBestGopMode(gop);
+    gop->SetMode(gop, SelectedMode);
+
+    TRACE("Using GOP mode %u: %ux%u, pixel format %u, stride %u\n", gop->Mode->Mode, gop->Mode->Info->HorizontalResolution, gop->Mode->Info->VerticalResolution, gop->Mode->Info->PixelFormat, gop->Mode->Info->PixelsPerScanLine);
 
     /* Physical format of the pixel */
     PixelFormat = gop->Mode->Info->PixelFormat;

@@ -36,6 +36,35 @@ IntFlushShadowRect(
    if (Left >= Right || Top >= Bottom)
       return;
 
+   if (ppdev->Rotate)
+   {
+      /* Rotate the landscape shadow into the portrait framebuffer (32bpp). */
+      /* Logical (sx,sy) -> physical: CW px=PhysWidth-1-sy,py=sx ; CCW px=sy,py=PhysHeight-1-sx. */
+      LONG sx, sy;
+      for (sy = Top; sy < Bottom; sy++)
+      {
+         PULONG Src = (PULONG)(ppdev->ShadowPtr + (ULONG)sy * Delta + (ULONG)Left * 4);
+#if FB_ROTATE_CLOCKWISE
+         LONG px = (LONG)ppdev->PhysWidth - 1 - sy;
+         PUCHAR Dst = (PUCHAR)ppdev->ScreenPtr + (ULONG)Left * ppdev->PhysDelta + (ULONG)px * 4;
+         for (sx = Left; sx < Right; sx++)
+         {
+            *(PULONG)Dst = *Src++;
+            Dst += ppdev->PhysDelta;
+         }
+#else
+         LONG px = sy;
+         PUCHAR Dst = (PUCHAR)ppdev->ScreenPtr + (ULONG)((LONG)ppdev->PhysHeight - 1 - Left) * ppdev->PhysDelta + (ULONG)px * 4;
+         for (sx = Left; sx < Right; sx++)
+         {
+            *(PULONG)Dst = *Src++;
+            Dst -= ppdev->PhysDelta;
+         }
+#endif
+      }
+      return;
+   }
+
    /* Round the span to whole 64-byte lines so the copy runs co-aligned full-line WC bursts. */
    ByteLeft = ((ULONG)Left * BytesPerPixel) & ~63UL;
    ByteRight = ((ULONG)Right * BytesPerPixel + 63) & ~63UL;

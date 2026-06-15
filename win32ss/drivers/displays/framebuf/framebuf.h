@@ -47,6 +47,11 @@ typedef struct _PDEV
    PVOID ScreenPtr;
    PUCHAR ShadowPtr;
    BOOL ShadowActive;
+   /* Physical (portrait) framebuffer geometry behind a rotated logical surface */
+   ULONG PhysWidth;
+   ULONG PhysHeight;
+   ULONG PhysDelta;
+   BOOL Rotate;
    HPALETTE DefaultPalette;
    PALETTEENTRY *PaletteEntries;
 
@@ -79,6 +84,12 @@ typedef struct _PDEV
 
 #define DEVICE_NAME	L"framebuf"
 #define ALLOC_TAG	'FUBF'
+
+/* Software display rotation for portrait panels driven in landscape. */
+/* FB_ROTATE_DEGREES: 0 = off, 90 = quarter turn (default on for portrait tablets). */
+/* FB_ROTATE_CLOCKWISE: 1 = clockwise, 0 = counter-clockwise (flip if upside-down). */
+#define FB_ROTATE_DEGREES 90
+#define FB_ROTATE_CLOCKWISE 1
 
 
 BOOL APIENTRY

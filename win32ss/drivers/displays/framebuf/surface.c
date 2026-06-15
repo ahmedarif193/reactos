@@ -108,11 +108,24 @@ DrvEnableSurface(
    }
    if (ppdev->ShadowPtr != NULL)
    {
-      /* Seed the shadow with the live framebuffer contents (one-time read). */
-      memcpy(ppdev->ShadowPtr, ppdev->ScreenPtr, ShadowSize);
+      if (ppdev->Rotate)
+      {
+         /* Physical FB is portrait; the landscape shadow can't be seeded by copy. */
+         memset(ppdev->ShadowPtr, 0, ShadowSize);
+      }
+      else
+      {
+         /* Seed the shadow with the live framebuffer contents (one-time read). */
+         memcpy(ppdev->ShadowPtr, ppdev->ScreenPtr, ShadowSize);
+      }
       ppdev->ShadowActive = TRUE;
       SurfaceBits = ppdev->ShadowPtr;
       flHooks = HOOK_BITBLT | HOOK_COPYBITS | HOOK_SYNCHRONIZE;
+   }
+   else if (ppdev->Rotate)
+   {
+      /* Rotation requires a shadow surface to rotate from. */
+      return NULL;
    }
    else
    {
@@ -138,6 +151,10 @@ DrvEnableSurface(
    }
 
    ppdev->hSurfEng = hSurface;
+
+   /* Push the cleared shadow through the rotation so the portrait FB starts clean. */
+   if (ppdev->Rotate)
+      IntFlushShadowRect(ppdev, NULL);
 
    return hSurface;
 }
