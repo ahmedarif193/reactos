@@ -2990,6 +2990,8 @@ MmArmInitSystem(IN ULONG Phase,
 
         /* Define limits for system cache */
 #if defined(_M_AMD64)
+        MmSystemCacheStart = MiSystemVaRegions[AssignedRegionSystemCache].BaseAddress;
+        ASSERT(MmSystemCacheStart != NULL);
         MmSizeOfSystemCacheInPages = MiSystemVaRegions[AssignedRegionSystemCache].NumberOfBytes / PAGE_SIZE;
 #elif defined(_M_ARM64)
         MmSizeOfSystemCacheInPages = ((MI_SYSTEM_CACHE_END + 1) - MI_SYSTEM_CACHE_START) / PAGE_SIZE;

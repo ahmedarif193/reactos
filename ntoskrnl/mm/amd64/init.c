@@ -293,6 +293,12 @@ MiInitializePageTable(VOID)
 //    MmPagedPoolEnd = Add2Ptr(MmPagedPoolStart, MmSizeOfPagedPoolInBytes - 1);
 //    MiMapPPEs(MmPagedPoolStart, MmPagedPoolEnd);
 
+    /* Setup PPEs for the randomized system cache */
+    PMI_SYSTEM_VA_ASSIGNMENT SystemCacheRegion = &MiSystemVaRegions[AssignedRegionSystemCache];
+    PVOID SystemCacheStart = SystemCacheRegion->BaseAddress;
+    PVOID SystemCacheEnd = Add2Ptr(SystemCacheStart, SystemCacheRegion->NumberOfBytes - 1);
+    MiMapPPEs(SystemCacheStart, SystemCacheEnd);
+
     /* Setup 1 PPE for hyper space */
     MiMapPPEs((PVOID)HYPER_SPACE, (PVOID)HYPER_SPACE_END);
 
