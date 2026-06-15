@@ -5418,6 +5418,19 @@ HalSetGicPriorityMask(
     HalpArm64SetPmrExact(Irql);
 }
 
+VOID
+FASTCALL
+HalRaiseGicPriorityMask(
+    _In_ KIRQL Irql)
+{
+    if (Irql > HIGH_LEVEL)
+    {
+        Irql = HIGH_LEVEL;
+    }
+
+    HalpArm64SetPmrExact(Irql);
+}
+
 /*
  * HalGetGicPriorityMask - Read current GIC interrupt priority mask
  *
