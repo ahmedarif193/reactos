@@ -94,6 +94,11 @@ KfRaiseIrql(
 
     KiSetCurrentIrql(NewIrql);
 
+    if (KiHalInitialized)
+    {
+        HalRaiseGicPriorityMask(NewIrql);
+    }
+
     return OldIrql;
 }
 
