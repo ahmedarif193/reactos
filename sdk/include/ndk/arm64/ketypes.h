@@ -1027,16 +1027,15 @@ static __inline PKPRCB KeGetCurrentPrcb(VOID)
     })
 #endif
 /*
- * ARM64 SMP: _KeGetCurrentThread must read from per-CPU PRCB, not the global.
- * The global KeArm64CurrentThread is written by ALL CPUs during context switch,
- * so reading it on SMP returns the wrong thread for all but the last writer.
- * Prcb->CurrentThread is always correct for the current CPU.
+ * ARM64 SMP: _KeGetCurrentThread must read from the per-CPU PRCB once
+ * TPIDR_EL1 is initialized. The global current thread is only an early boot
+ * fallback; using it after a valid PCR exists can return stale state from
+ * another CPU.
  */
 #define _KeGetCurrentThread() \
     __extension__ ({ \
         PKIPCR _ct_pcr = KeGetPcr(); \
-        PKTHREAD _ct_thread = (_ct_pcr != NULL) ? _ct_pcr->Prcb.CurrentThread : NULL; \
-        (_ct_thread != NULL) ? _ct_thread : KeArm64CurrentThread; \
+        (_ct_pcr != NULL) ? _ct_pcr->Prcb.CurrentThread : KeArm64CurrentThread; \
     })
 #define _KeGetPreviousMode() \
     __extension__ ({ \
