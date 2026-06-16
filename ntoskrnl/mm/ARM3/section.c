@@ -470,8 +470,13 @@ MiFillSystemPageDirectory(IN PVOID Base,
     }
 
 #if defined(_M_ARM64)
+    PETHREAD CurrentThread;
     PAGED_CODE();
+
+    CurrentThread = PsGetCurrentThread();
+    MiLockWorkingSet(CurrentThread, &MmSystemCacheWs);
     MiArm64FillSystemPageDirectory(Base, NumberOfBytes);
+    MiUnlockWorkingSet(CurrentThread, &MmSystemCacheWs);
 #elif (_MI_PAGING_LEVELS == 4)
     PMMPDE PointerPde, LastPde;
     PETHREAD CurrentThread;
