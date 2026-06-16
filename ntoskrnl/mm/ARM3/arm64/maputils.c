@@ -170,8 +170,6 @@ FlushAndReturn:
     if (FlushHierarchy)
     {
         __asm__ __volatile__(
-            "dsb ishst\n\t"
-            "tlbi vmalle1is\n\t"
             "dsb ish\n\t"
             "isb" ::: "memory");
     }
@@ -323,8 +321,6 @@ MiArm64EnsureSessionPageDirectoryPages(
     if (FlushHierarchy)
     {
         __asm__ __volatile__(
-            "dsb ishst\n\t"
-            "tlbi vmalle1is\n\t"
             "dsb ish\n\t"
             "isb" ::: "memory");
     }
