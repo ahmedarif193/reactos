@@ -1965,6 +1965,7 @@ MiInitMachineDependent(_Inout_ PLOADER_PARAMETER_BLOCK LoaderBlock)
         MiMapPfnDatabase(LoaderBlock);
 
         MiInitializeColorTables();
+        MiArm64InitializeSystemPageDirectoryLock();
         MiBuildNonPagedPool();
 
         ExpArm64PoolBootstrapMode = TRUE;
@@ -2370,6 +2371,7 @@ VOID
 MiBuildNonPagedPool(VOID)
 {
     PFN_NUMBER PoolSizingPages = MmNumberOfPhysicalPages;
+    PVOID InitialNonPagedPoolEnd;
 
     if (!MxFreeDescriptor)
     {
@@ -2471,12 +2473,13 @@ MiBuildNonPagedPool(VOID)
 
     /* And this is where the non paged pool ends */
     MmNonPagedPoolEnd = (PCHAR)MmNonPagedPoolStart + MmMaximumNonPagedPoolInBytes;
+    InitialNonPagedPoolEnd = (PCHAR)MmNonPagedPoolExpansionStart - 1;
 
-    MiMapPPEs(MmNonPagedPoolStart, MmNonPagedPoolEnd);
-    MiMapPDEs(MmNonPagedPoolStart, MmNonPagedPoolEnd);
+    MiMapPPEs(MmNonPagedPoolStart, InitialNonPagedPoolEnd);
+    MiMapPDEs(MmNonPagedPoolStart, InitialNonPagedPoolEnd);
 
     MiArm64ZeroLeafPages = FALSE;
-    MiMapPTEs(MmNonPagedPoolStart, (PCHAR)MmNonPagedPoolExpansionStart - 1);
+    MiMapPTEs(MmNonPagedPoolStart, InitialNonPagedPoolEnd);
     MiArm64ZeroLeafPages = TRUE;
 
     MiSystemPteMetadataSize = MiGetSystemPteMetadataSize(MI_NUMBER_SYSTEM_PTES);

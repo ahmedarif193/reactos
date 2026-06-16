@@ -114,6 +114,20 @@ MI_GET_CLUSTER_SIZE(IN PMMPTE Pte)
     return (ULONG)Pte->u.List.NextEntry;
 }
 
+static
+BOOLEAN
+MiEnsureSystemPteRangeBacked(
+    _In_ PMMPTE StartingPte,
+    _In_ ULONG NumberOfPtes,
+    _In_ MMSYSTEM_PTE_POOL_TYPE SystemPtePoolType);
+
+static
+VOID
+MiReleaseSystemPtesToFreeList(
+    _In_ PMMPTE StartingPte,
+    _In_ ULONG NumberOfPtes,
+    _In_ MMSYSTEM_PTE_POOL_TYPE SystemPtePoolType);
+
 PMMPTE
 NTAPI
 MiReserveAlignedSystemPtes(IN ULONG NumberOfPtes,
@@ -266,6 +280,14 @@ MiReserveAlignedSystemPtes(IN ULONG NumberOfPtes,
     //
     KeReleaseQueuedSpinLock(LockQueueSystemSpaceLock, OldIrql);
 
+    if (!MiEnsureSystemPteRangeBacked(ReturnPte, NumberOfPtes, SystemPtePoolType))
+    {
+        MiReleaseSystemPtesToFreeList(ReturnPte, NumberOfPtes, SystemPtePoolType);
+        return NULL;
+    }
+
+    RtlZeroMemory(ReturnPte, NumberOfPtes * sizeof(MMPTE));
+
     //
     // Flush the TLB
     //
@@ -297,11 +319,28 @@ MiReserveSystemPtes(IN ULONG NumberOfPtes,
     return PointerPte;
 }
 
+static
+BOOLEAN
+MiEnsureSystemPteRangeBacked(
+    _In_ PMMPTE StartingPte,
+    _In_ ULONG NumberOfPtes,
+    _In_ MMSYSTEM_PTE_POOL_TYPE SystemPtePoolType)
+{
+#if defined(_M_AMD64) || defined(_M_ARM64)
+    if (SystemPtePoolType == SystemPteSpace)
+    {
+        return MiEnsureSystemPtesBacked(StartingPte, NumberOfPtes);
+    }
+#endif
+    return TRUE;
+}
+
+static
 VOID
-NTAPI
-MiReleaseSystemPtes(IN PMMPTE StartingPte,
-                    IN ULONG NumberOfPtes,
-                    IN MMSYSTEM_PTE_POOL_TYPE SystemPtePoolType)
+MiReleaseSystemPtesToFreeList(
+    _In_ PMMPTE StartingPte,
+    _In_ ULONG NumberOfPtes,
+    _In_ MMSYSTEM_PTE_POOL_TYPE SystemPtePoolType)
 {
     KIRQL OldIrql;
     ULONG ClusterSize, StartingOffset, NextOffset;
@@ -314,10 +353,6 @@ MiReleaseSystemPtes(IN PMMPTE StartingPte,
     ASSERT(StartingPte >= MmSystemPtesStart[SystemPtePoolType]);
     ASSERT(StartingPte + NumberOfPtes - 1 <= MmSystemPtesEnd[SystemPtePoolType]);
 
-    //
-    // Zero PTEs
-    //
-    RtlZeroMemory(StartingPte, NumberOfPtes * sizeof(MMPTE));
     StartingOffset = MiSystemPteToOffset(SystemPtePoolType, StartingPte);
     StartingListPte = MiSystemPteListFromOffset(SystemPtePoolType, StartingOffset);
 
@@ -426,12 +461,34 @@ MiReleaseSystemPtes(IN PMMPTE StartingPte,
     KeReleaseQueuedSpinLock(LockQueueSystemSpaceLock, OldIrql);
 }
 
+VOID
+NTAPI
+MiReleaseSystemPtes(IN PMMPTE StartingPte,
+                    IN ULONG NumberOfPtes,
+                    IN MMSYSTEM_PTE_POOL_TYPE SystemPtePoolType)
+{
+    //
+    // Check to make sure the PTE address is within bounds
+    //
+    ASSERT(NumberOfPtes != 0);
+    ASSERT(StartingPte >= MmSystemPtesStart[SystemPtePoolType]);
+    ASSERT(StartingPte + NumberOfPtes - 1 <= MmSystemPtesEnd[SystemPtePoolType]);
+
+    //
+    // Zero PTEs
+    //
+    RtlZeroMemory(StartingPte, NumberOfPtes * sizeof(MMPTE));
+    MiReleaseSystemPtesToFreeList(StartingPte, NumberOfPtes, SystemPtePoolType);
+}
+
 PMMPTE
 NTAPI
 MiReserveNonPagedPoolExpansionPtes(IN ULONG NumberOfPtes)
 {
     KIRQL OldIrql;
     ULONG BitIndex;
+    PMMPTE StartingPte;
+    BOOLEAN Backed = TRUE;
 
     OldIrql = KeAcquireQueuedSpinLock(LockQueueSystemSpaceLock);
     BitIndex = RtlFindClearBitsAndSet(&MiNonPagedPoolExpansionPteBitmap, NumberOfPtes, 0);
@@ -444,11 +501,25 @@ MiReserveNonPagedPoolExpansionPtes(IN ULONG NumberOfPtes)
     MmTotalFreeSystemPtes[NonPagedPoolExpansion] -= NumberOfPtes;
     KeReleaseQueuedSpinLock(LockQueueSystemSpaceLock, OldIrql);
 
+    StartingPte = MiSystemPteFromOffset(NonPagedPoolExpansion, BitIndex);
+#if defined(_M_AMD64) || defined(_M_ARM64)
+    Backed = MiEnsureNonPagedPoolExpansionPtesBacked(StartingPte, NumberOfPtes);
+#endif
+
+    if (!Backed)
+    {
+        OldIrql = KeAcquireQueuedSpinLock(LockQueueSystemSpaceLock);
+        RtlClearBits(&MiNonPagedPoolExpansionPteBitmap, BitIndex, NumberOfPtes);
+        MmTotalFreeSystemPtes[NonPagedPoolExpansion] += NumberOfPtes;
+        KeReleaseQueuedSpinLock(LockQueueSystemSpaceLock, OldIrql);
+        return NULL;
+    }
+
 #if !defined(_M_ARM64)
     KeFlushProcessTb();
 #endif
 
-    return MiSystemPteFromOffset(NonPagedPoolExpansion, BitIndex);
+    return StartingPte;
 }
 
 VOID
