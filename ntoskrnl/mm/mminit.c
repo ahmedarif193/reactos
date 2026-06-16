@@ -92,6 +92,13 @@ MiReserveAssignedSystemVaRegions(VOID)
             continue;
         }
 
+#ifdef _M_AMD64
+        if (i == AssignedRegionSystemPtes)
+        {
+            continue;
+        }
+#endif
+
         if ((i == AssignedRegionSystemCache) || (i == AssignedRegionNonPagedPool) || (i == AssignedRegionPagedPool))
         {
             continue;
@@ -119,6 +126,9 @@ MiInitSystemMemoryAreas(VOID)
     MiCreateArm3StaticMemoryArea((PVOID)KI_USER_SHARED_DATA, PAGE_SIZE, FALSE);
     MiCreateArm3StaticMemoryArea(MmNonPagedPoolStart, MmMaximumNonPagedPoolInBytes, FALSE);
     MiCreateArm3StaticMemoryArea(MmPagedPoolStart, MmSizeOfPagedPoolInBytes, FALSE);
+#ifdef _M_AMD64
+    MiCreateArm3StaticMemoryArea(MmSystemPteSpaceStart, (MmNumberOfSystemPtes + 1) * PAGE_SIZE, FALSE);
+#endif
 #ifdef _M_ARM64
     MiCreateArm3StaticMemoryArea((PVOID)KSEG0_BASE, max(((ULONG64)MmHighestPhysicalPage + 1) << PAGE_SHIFT, PXE_MAPPED_VA), FALSE);
     MiCreateArm3StaticMemoryArea((PVOID)MI_SYSTEM_SPACE_START, 128 * _1GB, FALSE);
