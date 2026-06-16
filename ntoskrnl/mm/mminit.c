@@ -72,7 +72,12 @@ MiReserveAssignedSystemVaRegions(VOID)
     {
         Region = &MiSystemVaRegions[i];
 
-        if ((Region->BaseAddress == NULL) || (i == AssignedRegionSystemCache))
+        if (Region->BaseAddress == NULL)
+        {
+            continue;
+        }
+
+        if ((i == AssignedRegionSystemCache) || (i == AssignedRegionNonPagedPool))
         {
             continue;
         }
@@ -96,6 +101,7 @@ MiInitSystemMemoryAreas(VOID)
 #if defined(_M_AMD64) || defined(_M_ARM64)
     MiReserveAssignedSystemVaRegions();
     MiCreateArm3StaticMemoryArea((PVOID)KI_USER_SHARED_DATA, PAGE_SIZE, FALSE);
+    MiCreateArm3StaticMemoryArea(MmNonPagedPoolStart, MmMaximumNonPagedPoolInBytes, FALSE);
 #ifdef _M_ARM64
     MiCreateArm3StaticMemoryArea((PVOID)KSEG0_BASE, max(((ULONG64)MmHighestPhysicalPage + 1) << PAGE_SHIFT, PXE_MAPPED_VA), FALSE);
     MiCreateArm3StaticMemoryArea((PVOID)MI_SYSTEM_SPACE_START, 128 * _1GB, FALSE);
