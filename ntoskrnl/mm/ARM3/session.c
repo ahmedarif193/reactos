@@ -714,6 +714,20 @@ MiSessionCreateInternal(OUT PULONG SessionId)
     SessionPte = MiReserveSystemPtes(MiSessionDataPages, SystemPteSpace);
     ASSERT(SessionPte != NULL);
 
+#if defined(_M_AMD64)
+    if (!MiEnsureSessionPageTablesBacked(MmSessionBase, MmSessionSize))
+    {
+        DPRINT1("Failed to back session space page tables\n");
+        MiReleaseSystemPtes(SessionPte, MiSessionDataPages, SystemPteSpace);
+        KeAcquireGuardedMutex(&MiSessionIdMutex);
+        ASSERT(RtlCheckBit(MiSessionIdBitmap, *SessionId));
+        RtlClearBit(MiSessionIdBitmap, *SessionId);
+        KeReleaseGuardedMutex(&MiSessionIdMutex);
+        PspClearProcessFlag(Process, PSF_SESSION_CREATION_UNDERWAY_BIT);
+        return STATUS_NO_MEMORY;
+    }
+#endif
+
     /* Acquire the PFN lock while we set everything up */
     OldIrql = MiAcquirePfnLock();
 
