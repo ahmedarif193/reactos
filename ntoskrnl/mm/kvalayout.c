@@ -234,9 +234,6 @@ SetupVaRegions(
     /* Reserve 128 GB for system PTEs */
     RandomizeVaRegion(AssignedRegionSystemPtes, 128 * _1GB, PDE_MAPPED_VA);
 
-    /* Reserve 128 GB for kernel stacks */
-    RandomizeVaRegion(AssignedRegionKernelStacks, 128 * _1GB, PPE_MAPPED_VA);
-
 /*
     AssignedRegionUltraZero = 4,
     AssignedRegionCfg = 6,
