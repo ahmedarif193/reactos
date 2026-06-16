@@ -59,6 +59,29 @@ MiCreateArm3StaticMemoryArea(PVOID BaseAddress, SIZE_T Size, BOOLEAN Executable)
     // TODO: Perhaps it would be  prudent to bugcheck here, not only assert?
 }
 
+#if defined(_M_AMD64) || defined(_M_ARM64)
+CODE_SEG("INIT")
+static
+VOID
+MiReserveAssignedSystemVaRegions(VOID)
+{
+    PMI_SYSTEM_VA_ASSIGNMENT Region;
+    ULONG i;
+
+    for (i = 0; i < ARRAYSIZE(MiSystemVaRegions); i++)
+    {
+        Region = &MiSystemVaRegions[i];
+
+        if ((Region->BaseAddress == NULL) || (i == AssignedRegionSystemCache))
+        {
+            continue;
+        }
+
+        MiCreateArm3StaticMemoryArea(Region->BaseAddress, Region->NumberOfBytes, FALSE);
+    }
+}
+#endif
+
 CODE_SEG("INIT")
 VOID
 NTAPI
@@ -71,11 +94,15 @@ MiInitSystemMemoryAreas(VOID)
     MmLockAddressSpace(MmGetKernelAddressSpace());
 
 #if defined(_M_AMD64) || defined(_M_ARM64)
-    // On x64 and ARM64 we reserve everything except system cache, which is used for all RosMm mappings
-    ULONG64 SystemCacheStart = (ULONG64)MiSystemVaRegions[AssignedRegionSystemCache].BaseAddress;
-    ULONG64 SystemCacheEnd = SystemCacheStart + MiSystemVaRegions[AssignedRegionSystemCache].NumberOfBytes;
-    MiCreateArm3StaticMemoryArea((PVOID)MI_REAL_SYSTEM_RANGE_START, SystemCacheStart - MI_REAL_SYSTEM_RANGE_START, FALSE);
-    MiCreateArm3StaticMemoryArea((PVOID)SystemCacheEnd, 0xFFFFFFFFFFFFFFFFULL - SystemCacheEnd, FALSE);
+    MiReserveAssignedSystemVaRegions();
+    MiCreateArm3StaticMemoryArea((PVOID)KI_USER_SHARED_DATA, PAGE_SIZE, FALSE);
+#ifdef _M_ARM64
+    MiCreateArm3StaticMemoryArea((PVOID)KSEG0_BASE, max(((ULONG64)MmHighestPhysicalPage + 1) << PAGE_SHIFT, PXE_MAPPED_VA), FALSE);
+    MiCreateArm3StaticMemoryArea((PVOID)MI_SYSTEM_SPACE_START, 128 * _1GB, FALSE);
+    MiCreateArm3StaticMemoryArea((PVOID)MI_ARM64_PHYS_MAP_BASE, 0ULL - MI_ARM64_PHYS_MAP_BASE, FALSE);
+#else
+    MiCreateArm3StaticMemoryArea((PVOID)MM_HAL_VA_START, MM_HAL_VA_END - MM_HAL_VA_START + 1, FALSE);
+#endif
 #else /* _M_AMD64 || _M_ARM64 */
 
     // The loader mappings. The only Executable area.
