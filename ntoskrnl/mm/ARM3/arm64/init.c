@@ -2045,8 +2045,6 @@ MiInitMachineDependent(_Inout_ PLOADER_PARAMETER_BLOCK LoaderBlock)
             MiMapPPEs(MmSessionBase, SessionSpaceEnd);
         }
 
-        MiMapPPEs(MmSystemCacheStart, MmSystemCacheEnd);
-
         __asm__ __volatile__(
             "dsb ishst\n\t"
             "tlbi vmalle1is\n\t"
