@@ -33,11 +33,12 @@ const UCHAR MmSysPteTables[] = { 0, // 1
                                  4, 4, 4, 4, 4, 4, 4, 4 // 16
                                };
 LONG MmSysPteListBySizeCount[5];
+static RTL_BITMAP MiNonPagedPoolExpansionPteBitmap;
 
 /* PRIVATE FUNCTIONS **********************************************************/
 
 //
-// The free System Page Table Entries are stored in a bunch of clusters,
+// The free generic System Page Table Entries are stored in a bunch of clusters,
 // each consisting of one or more PTEs.  These PTE clusters are connected
 // in a singly linked list, ordered by increasing cluster size.
 //
@@ -389,14 +390,45 @@ PMMPTE
 NTAPI
 MiReserveNonPagedPoolExpansionPtes(IN ULONG NumberOfPtes)
 {
-    return MiReserveSystemPtes(NumberOfPtes, NonPagedPoolExpansion);
+    KIRQL OldIrql;
+    ULONG BitIndex;
+
+    OldIrql = KeAcquireQueuedSpinLock(LockQueueSystemSpaceLock);
+    BitIndex = RtlFindClearBitsAndSet(&MiNonPagedPoolExpansionPteBitmap, NumberOfPtes, 0);
+    if (BitIndex == 0xFFFFFFFF)
+    {
+        KeReleaseQueuedSpinLock(LockQueueSystemSpaceLock, OldIrql);
+        return NULL;
+    }
+
+    MmTotalFreeSystemPtes[NonPagedPoolExpansion] -= NumberOfPtes;
+    KeReleaseQueuedSpinLock(LockQueueSystemSpaceLock, OldIrql);
+
+#if !defined(_M_ARM64)
+    KeFlushProcessTb();
+#endif
+
+    return MmSystemPtesStart[NonPagedPoolExpansion] + BitIndex;
 }
 
 VOID
 NTAPI
 MiReleaseNonPagedPoolExpansionPtes(IN PMMPTE StartingPte, IN ULONG NumberOfPtes)
 {
-    MiReleaseSystemPtes(StartingPte, NumberOfPtes, NonPagedPoolExpansion);
+    KIRQL OldIrql;
+    ULONG BitIndex;
+
+    ASSERT(NumberOfPtes != 0);
+    ASSERT(StartingPte >= MmSystemPtesStart[NonPagedPoolExpansion]);
+    ASSERT(StartingPte + NumberOfPtes - 1 <= MmSystemPtesEnd[NonPagedPoolExpansion]);
+
+    RtlZeroMemory(StartingPte, NumberOfPtes * sizeof(MMPTE));
+
+    BitIndex = (ULONG)(StartingPte - MmSystemPtesStart[NonPagedPoolExpansion]);
+    OldIrql = KeAcquireQueuedSpinLock(LockQueueSystemSpaceLock);
+    RtlClearBits(&MiNonPagedPoolExpansionPteBitmap, BitIndex, NumberOfPtes);
+    MmTotalFreeSystemPtes[NonPagedPoolExpansion] += NumberOfPtes;
+    KeReleaseQueuedSpinLock(LockQueueSystemSpaceLock, OldIrql);
 }
 
 CODE_SEG("INIT")
@@ -459,11 +491,31 @@ MiInitializeSystemPtes(IN PMMPTE StartingPte,
 }
 
 CODE_SEG("INIT")
+SIZE_T
+NTAPI
+MiGetNonPagedPoolExpansionPteBitmapSize(IN ULONG NumberOfPtes)
+{
+    return ((NumberOfPtes + 31) / 32) * sizeof(ULONG);
+}
+
+CODE_SEG("INIT")
 VOID
 NTAPI
-MiInitializeNonPagedPoolExpansionPtes(IN PMMPTE StartingPte, IN ULONG NumberOfPtes)
+MiInitializeNonPagedPoolExpansionPtes(IN PMMPTE StartingPte, IN ULONG NumberOfPtes, IN PULONG BitmapBuffer)
 {
-    MiInitializeSystemPtes(StartingPte, NumberOfPtes, NonPagedPoolExpansion);
+    ASSERT(NumberOfPtes >= 1);
+    ASSERT(BitmapBuffer != NULL);
+
+    MmSystemPtesStart[NonPagedPoolExpansion] = StartingPte;
+    MmSystemPtesEnd[NonPagedPoolExpansion] = StartingPte + NumberOfPtes - 1;
+    DPRINT("System PTE space for %d starting at: %p and ending at: %p\n",
+           NonPagedPoolExpansion,
+           MmSystemPtesStart[NonPagedPoolExpansion],
+           MmSystemPtesEnd[NonPagedPoolExpansion]);
+
+    RtlInitializeBitMap(&MiNonPagedPoolExpansionPteBitmap, BitmapBuffer, NumberOfPtes);
+    RtlClearAllBits(&MiNonPagedPoolExpansionPteBitmap);
+    MmTotalFreeSystemPtes[NonPagedPoolExpansion] = NumberOfPtes;
 }
 
 /* EOF */
