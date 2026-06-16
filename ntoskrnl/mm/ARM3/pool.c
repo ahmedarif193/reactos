@@ -279,6 +279,9 @@ MiInitializeNonPagedPool(VOID)
 {
     ULONG i;
     PFN_COUNT PoolPages;
+    PFN_COUNT BitmapPages;
+    SIZE_T BitmapSize;
+    PULONG ExpansionPteBitmap;
     PMMFREE_POOL_ENTRY FreeEntry, FirstEntry;
     PMMPTE PointerPte;
     PAGED_CODE();
@@ -326,6 +329,28 @@ MiInitializeNonPagedPool(VOID)
     // Calculate how many pages the initial nonpaged pool has
     //
     PoolPages = (PFN_COUNT)BYTES_TO_PAGES(MmSizeOfNonPagedPoolInBytes);
+
+    //
+    // Calculate the size of the expansion region alone
+    //
+    MiExpansionPoolPagesInitialCharge = (PFN_COUNT)
+    BYTES_TO_PAGES(MmMaximumNonPagedPoolInBytes - MmSizeOfNonPagedPoolInBytes);
+
+    //
+    // Remove 2 pages, since there's a guard page on top and on the bottom
+    //
+    MiExpansionPoolPagesInitialCharge -= 2;
+
+    //
+    // Keep expansion PTE allocator metadata outside the expansion PTE array.
+    //
+    BitmapSize = MiGetNonPagedPoolExpansionPteBitmapSize((ULONG)MiExpansionPoolPagesInitialCharge);
+    BitmapPages = (PFN_COUNT)BYTES_TO_PAGES(BitmapSize);
+    ASSERT(PoolPages > BitmapPages);
+    PoolPages -= BitmapPages;
+    ExpansionPteBitmap = (PULONG)((ULONG_PTR)MmNonPagedPoolStart + (PoolPages << PAGE_SHIFT));
+    RtlZeroMemory(ExpansionPteBitmap, BitmapPages << PAGE_SHIFT);
+
     MmNumberOfFreeNonPagedPool = PoolPages;
 
     //
@@ -383,22 +408,11 @@ MiInitializeNonPagedPool(VOID)
     ASSERT(PointerPte->u.Hard.Valid == 0);
 
     //
-    // Calculate the size of the expansion region alone
-    //
-    MiExpansionPoolPagesInitialCharge = (PFN_COUNT)
-    BYTES_TO_PAGES(MmMaximumNonPagedPoolInBytes - MmSizeOfNonPagedPoolInBytes);
-
-    //
-    // Remove 2 pages, since there's a guard page on top and on the bottom
-    //
-    MiExpansionPoolPagesInitialCharge -= 2;
-
-    //
     // Now initialize the nonpaged pool expansion PTE space. Remember there's a
     // guard page on top so make sure to skip it. The bottom guard page will be
     // guaranteed by the fact our size is off by one.
     //
-    MiInitializeNonPagedPoolExpansionPtes(PointerPte + 1, MiExpansionPoolPagesInitialCharge);
+    MiInitializeNonPagedPoolExpansionPtes(PointerPte + 1, (ULONG)MiExpansionPoolPagesInitialCharge, ExpansionPteBitmap);
 }
 
 POOL_TYPE
