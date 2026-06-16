@@ -118,6 +118,11 @@ NTSTATUS
 NTAPI
 MmpPageOutPhysicalAddress(PFN_NUMBER Page);
 
+PVOID
+MiRosFindSystemCacheView(
+    _In_ PMMSUPPORT AddressSpace,
+    _In_ SIZE_T ViewSize);
+
 /* io.c **********************************************************************/
 
 NTSTATUS
