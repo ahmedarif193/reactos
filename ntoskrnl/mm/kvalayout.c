@@ -164,12 +164,34 @@ FindHighestPfnNumber(
     return HighestPfn;
 }
 
+#if defined(_M_ARM64)
+static
+VOID
+ReserveArm64FixedVaRanges(
+    _In_ PFN_NUMBER HighestPfn)
+{
+    ULONG64 IdentityMapSize = max((ULONG64)HighestPfn << PAGE_SHIFT, PXE_MAPPED_VA);
+
+    ReserveVaRange(KSEG0_BASE, IdentityMapSize);
+    ReserveVaRange(MI_SYSTEM_SPACE_START, 128 * _1GB);
+    ReserveVaRange(MI_ARM64_PHYS_MAP_BASE, 0ULL - MI_ARM64_PHYS_MAP_BASE);
+}
+#endif
+
 static
 VOID
 SetupVaRegions(
     _In_ const LOADER_PARAMETER_BLOCK* LoaderBlock)
 {
     SIZE_T BootImageSize;
+    PFN_NUMBER HighestPfn;
+    ULONG64 PfnDbSize;
+
+    HighestPfn = FindHighestPfnNumber(LoaderBlock);
+
+#if defined(_M_ARM64)
+    ReserveArm64FixedVaRanges(HighestPfn);
+#endif
 
     /* Reserve the shared user page VA */
     ReserveVaRange(KI_USER_SHARED_DATA, PAGE_SIZE);
@@ -197,8 +219,7 @@ SetupVaRegions(
                     BootImageSize + PAGE_SIZE);
 
     /* Reserve up to 8 TB for the PFN database */
-    PFN_NUMBER HighestPfn = FindHighestPfnNumber(LoaderBlock);
-    ULONG64 PfnDbSize = HighestPfn * sizeof(MMPFN) + _1MB;
+    PfnDbSize = HighestPfn * sizeof(MMPFN) + _1MB;
     RandomizeVaRegion(AssignedRegionPfnDatabase, PfnDbSize, PDE_MAPPED_VA);
 
     /* Reserve 2 TB system cache */
@@ -250,7 +271,11 @@ MiInitializeKernelVaLayout(
         MiRandomSeed ^= LoaderBlock->Extension->LoaderPerformanceData->StartTime;
         MiRandomSeed ^= _rotl(LoaderBlock->Extension->LoaderPerformanceData->EndTime, 16);
     }
+#if defined(_M_ARM64)
+    MiRandomSeed ^= _rotl(__builtin_readcyclecounter(), MiRandomSeed & 0x1F);
+#else
     MiRandomSeed ^= _rotl(__rdtsc(), MiRandomSeed & 0x1F);
+#endif
 
     SetupVaRegions(LoaderBlock);
 
