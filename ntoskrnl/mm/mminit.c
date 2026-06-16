@@ -63,6 +63,21 @@ MiCreateArm3StaticMemoryArea(PVOID BaseAddress, SIZE_T Size, BOOLEAN Executable)
 CODE_SEG("INIT")
 static
 VOID
+MiSize64BitPagedPool(VOID)
+{
+    if (MmSizeOfPagedPoolInBytes < MI_MIN_INIT_PAGED_POOLSIZE)
+    {
+        MmSizeOfPagedPoolInBytes = MI_MIN_INIT_PAGED_POOLSIZE;
+    }
+
+    MmSizeOfPagedPoolInBytes = ALIGN_UP_BY(MmSizeOfPagedPoolInBytes, PDE_MAPPED_VA);
+    MmSizeOfPagedPoolInPages = MmSizeOfPagedPoolInBytes >> PAGE_SHIFT;
+    MmPagedPoolEnd = Add2Ptr(MmPagedPoolStart, MmSizeOfPagedPoolInBytes - 1);
+}
+
+CODE_SEG("INIT")
+static
+VOID
 MiReserveAssignedSystemVaRegions(VOID)
 {
     PMI_SYSTEM_VA_ASSIGNMENT Region;
@@ -77,7 +92,7 @@ MiReserveAssignedSystemVaRegions(VOID)
             continue;
         }
 
-        if ((i == AssignedRegionSystemCache) || (i == AssignedRegionNonPagedPool))
+        if ((i == AssignedRegionSystemCache) || (i == AssignedRegionNonPagedPool) || (i == AssignedRegionPagedPool))
         {
             continue;
         }
@@ -99,9 +114,11 @@ MiInitSystemMemoryAreas(VOID)
     MmLockAddressSpace(MmGetKernelAddressSpace());
 
 #if defined(_M_AMD64) || defined(_M_ARM64)
+    MiSize64BitPagedPool();
     MiReserveAssignedSystemVaRegions();
     MiCreateArm3StaticMemoryArea((PVOID)KI_USER_SHARED_DATA, PAGE_SIZE, FALSE);
     MiCreateArm3StaticMemoryArea(MmNonPagedPoolStart, MmMaximumNonPagedPoolInBytes, FALSE);
+    MiCreateArm3StaticMemoryArea(MmPagedPoolStart, MmSizeOfPagedPoolInBytes, FALSE);
 #ifdef _M_ARM64
     MiCreateArm3StaticMemoryArea((PVOID)KSEG0_BASE, max(((ULONG64)MmHighestPhysicalPage + 1) << PAGE_SHIFT, PXE_MAPPED_VA), FALSE);
     MiCreateArm3StaticMemoryArea((PVOID)MI_SYSTEM_SPACE_START, 128 * _1GB, FALSE);
