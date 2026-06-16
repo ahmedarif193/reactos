@@ -640,6 +640,7 @@ CsrCreateRemoteThread(IN HANDLE hThread,
     if (!NT_SUCCESS(Status))
     {
         /* Bail out */
+        UnProtectHandle(CsrThread->ThreadHandle);
         if (CsrThread->ThreadHandle != hThread) NtClose(CsrThread->ThreadHandle);
         CsrUnlockProcess(CsrProcess);
         CsrDeallocateThread(CsrThread);
@@ -745,6 +746,7 @@ CsrCreateThread(IN PCSR_PROCESS CsrProcess,
     if (!NT_SUCCESS(Status))
     {
         /* Bail out */
+        UnProtectHandle(CsrThread->ThreadHandle);
         CsrUnlockProcess(CsrProcess);
         CsrDeallocateThread(CsrThread);
         return Status;

@@ -599,6 +599,7 @@ CsrCreateProcess(IN HANDLE hProcess,
     if (!NT_SUCCESS(Status))
     {
         /* Bail out */
+        UnProtectHandle(CsrThread->ThreadHandle);
         CsrDeallocateProcess(CsrProcess);
         CsrDeallocateThread(CsrThread);
         CsrReleaseProcessLock();
