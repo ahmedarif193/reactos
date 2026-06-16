@@ -2654,7 +2654,11 @@ HalpArm64DeferInterrupt(
         }
     }
 
-    HalpGicDisableInterrupt(IntId);
+    DPRINT1("Deferred interrupt table overflow on CPU %lu for INTID %lu at IRQL %u\n",
+            Cpu,
+            IntId,
+            Irql);
+    ASSERT(FALSE);
 }
 
 static

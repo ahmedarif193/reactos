@@ -1022,21 +1022,31 @@ static __inline PKPRCB KeGetCurrentPrcb(VOID)
  */
 #define KeGetCurrentIrql() \
     __extension__ ({ \
-        PKIPCR _irql_pcr = KeGetPcr(); \
-        (_irql_pcr != NULL) ? _irql_pcr->CurrentIrql : KeArm64CurrentIrql; \
+        KIRQL _ci_irql; \
+        ULONG64 _ci_daif; \
+        __asm__ __volatile__("mrs %0, daif\n\tmsr daifset, #3" \
+                             : "=r"(_ci_daif) :: "memory"); \
+        { \
+            PKIPCR _irql_pcr = KeGetPcr(); \
+            _ci_irql = (_irql_pcr != NULL) ? _irql_pcr->CurrentIrql : KeArm64CurrentIrql; \
+        } \
+        __asm__ __volatile__("msr daif, %0" :: "r"(_ci_daif) : "memory"); \
+        _ci_irql; \
     })
 #endif
-/*
- * ARM64 SMP: _KeGetCurrentThread must read from per-CPU PRCB, not the global.
- * The global KeArm64CurrentThread is written by ALL CPUs during context switch,
- * so reading it on SMP returns the wrong thread for all but the last writer.
- * Prcb->CurrentThread is always correct for the current CPU.
- */
 #define _KeGetCurrentThread() \
     __extension__ ({ \
-        PKIPCR _ct_pcr = KeGetPcr(); \
-        PKTHREAD _ct_thread = (_ct_pcr != NULL) ? _ct_pcr->Prcb.CurrentThread : NULL; \
-        (_ct_thread != NULL) ? _ct_thread : KeArm64CurrentThread; \
+        PKTHREAD _ct_thread; \
+        ULONG64 _ct_daif; \
+        __asm__ __volatile__("mrs %0, daif\n\tmsr daifset, #3" \
+                             : "=r"(_ct_daif) :: "memory"); \
+        { \
+            PKIPCR _ct_pcr = KeGetPcr(); \
+            _ct_thread = (_ct_pcr != NULL) ? _ct_pcr->Prcb.CurrentThread \
+                                           : KeArm64CurrentThread; \
+        } \
+        __asm__ __volatile__("msr daif, %0" :: "r"(_ct_daif) : "memory"); \
+        _ct_thread; \
     })
 #define _KeGetPreviousMode() \
     __extension__ ({ \
