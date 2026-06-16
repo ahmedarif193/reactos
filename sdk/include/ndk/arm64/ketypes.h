@@ -1055,8 +1055,16 @@ static __inline PKPRCB KeGetCurrentPrcb(VOID)
     })
 #define _KeIsExecutingDpc() \
     __extension__ ({ \
-        PKIPCR _dpc_pcr = KeGetPcr(); \
-        (_dpc_pcr != NULL) ? _dpc_pcr->Prcb.DpcRoutineActive : KeArm64DpcRoutineActive; \
+        BOOLEAN _dpc_active; \
+        ULONG64 _dpc_daif; \
+        __asm__ __volatile__("mrs %0, daif\n\tmsr daifset, #3" \
+                             : "=r"(_dpc_daif) :: "memory"); \
+        { \
+            PKIPCR _dpc_pcr = KeGetPcr(); \
+            _dpc_active = (_dpc_pcr != NULL) ? _dpc_pcr->Prcb.DpcRoutineActive : KeArm64DpcRoutineActive; \
+        } \
+        __asm__ __volatile__("msr daif, %0" :: "r"(_dpc_daif) : "memory"); \
+        _dpc_active; \
     })
 
 
