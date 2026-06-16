@@ -2248,6 +2248,18 @@ MiReleaseSystemPtes(
     IN MMSYSTEM_PTE_POOL_TYPE SystemPtePoolType
 );
 
+PMMPTE
+NTAPI
+MiReserveNonPagedPoolExpansionPtes(
+    IN ULONG NumberOfPtes
+);
+
+VOID
+NTAPI
+MiReleaseNonPagedPoolExpansionPtes(
+    IN PMMPTE StartingPte,
+    IN ULONG NumberOfPtes
+);
 
 PFN_NUMBER
 NTAPI

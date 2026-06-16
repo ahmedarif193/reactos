@@ -385,6 +385,20 @@ MiReleaseSystemPtes(IN PMMPTE StartingPte,
     KeReleaseQueuedSpinLock(LockQueueSystemSpaceLock, OldIrql);
 }
 
+PMMPTE
+NTAPI
+MiReserveNonPagedPoolExpansionPtes(IN ULONG NumberOfPtes)
+{
+    return MiReserveSystemPtes(NumberOfPtes, NonPagedPoolExpansion);
+}
+
+VOID
+NTAPI
+MiReleaseNonPagedPoolExpansionPtes(IN PMMPTE StartingPte, IN ULONG NumberOfPtes)
+{
+    MiReleaseSystemPtes(StartingPte, NumberOfPtes, NonPagedPoolExpansion);
+}
+
 CODE_SEG("INIT")
 VOID
 NTAPI
