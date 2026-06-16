@@ -530,6 +530,10 @@ KiSwapThread(IN PKTHREAD CurrentThread,
     /* Acquire the PRCB lock */
     KiAcquirePrcbLock(Prcb);
 
+#if defined(_M_ARM64)
+    _disable();
+#endif
+
     /* Get the next thread */
     NextThread = Prcb->NextThread;
     if (NextThread)
@@ -1020,6 +1024,10 @@ NtYieldExecution(VOID)
 
             /* Set context swap busy */
             KiSetThreadSwapBusy(Thread);
+
+#if defined(_M_ARM64)
+            _disable();
+#endif
 
             /* Set the new thread as running */
             Prcb->NextThread = NULL;
