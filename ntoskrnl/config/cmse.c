@@ -297,7 +297,10 @@ CmpSecurityMethod(IN PVOID ObjectBody,
     if (Kcb->Delete)
     {
         /* Release the KCB lock */
-        CmpReleaseKcbLock(Kcb);
+        if (!((PCM_KEY_BODY)ObjectBody)->KcbLocked)
+        {
+            CmpReleaseKcbLock(Kcb);
+        }
 
         /* Release the hive lock */
         CmpUnlockRegistry();
