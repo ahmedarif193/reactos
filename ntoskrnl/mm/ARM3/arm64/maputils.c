@@ -239,3 +239,11 @@ MiEnsureNonPagedPoolExpansionPtesBacked(
     ASSERT(NumberOfPtes != 0);
     return MiArm64EnsureSystemPdeRangeBacked(MiPteToAddress(StartingPte - 1), ((SIZE_T)NumberOfPtes + 2) << PAGE_SHIFT);
 }
+
+BOOLEAN
+NTAPI
+MiEnsurePagedPoolPdeBacked(
+    _In_ PVOID Address)
+{
+    return MiArm64EnsureSystemPdeRangeBacked(Address, PAGE_SIZE);
+}

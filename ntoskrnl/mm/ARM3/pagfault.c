@@ -626,6 +626,11 @@ MiCheckPdeForPagedPool(IN PVOID Address)
         return STATUS_ACCESS_VIOLATION;
     }
 
+    if (!MiEnsurePagedPoolPdeBacked(PoolAddress))
+    {
+        return STATUS_NO_MEMORY;
+    }
+
     if (PointerPde->u.Hard.Valid == 0)
     {
         NTSTATUS PfnStatus;
