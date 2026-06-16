@@ -1764,8 +1764,12 @@ MiInitMachineDependent(_Inout_ PLOADER_PARAMETER_BLOCK LoaderBlock)
 
     if (MmSystemCacheStart == NULL)
     {
-        MmSystemCacheStart = (PVOID)MI_SYSTEM_CACHE_START;
-        MmSystemCacheEnd = (PVOID)MI_SYSTEM_CACHE_END;
+        MmSystemCacheStart = MiSystemVaRegions[AssignedRegionSystemCache].BaseAddress;
+    }
+
+    if (MmSystemCacheEnd == NULL)
+    {
+        MmSystemCacheEnd = Add2Ptr(MmSystemCacheStart, MiSystemVaRegions[AssignedRegionSystemCache].NumberOfBytes - 1);
     }
 
     if (MmNonPagedPoolEnd == NULL)
@@ -1775,7 +1779,7 @@ MiInitMachineDependent(_Inout_ PLOADER_PARAMETER_BLOCK LoaderBlock)
 
     if (MmNonPagedPoolStart == NULL)
     {
-        MmNonPagedPoolStart = (PVOID)(MI_SYSTEM_SPACE_START + (16 * _1MB));
+        MmNonPagedPoolStart = MiSystemVaRegions[AssignedRegionNonPagedPool].BaseAddress;
     }
 
     if (MmNonPagedPoolExpansionStart == NULL)
@@ -1805,7 +1809,7 @@ MiInitMachineDependent(_Inout_ PLOADER_PARAMETER_BLOCK LoaderBlock)
 
     if (MmPfnDatabase == NULL)
     {
-        MmPfnDatabase = (PMMPFN)MI_PFN_DATABASE;
+        MmPfnDatabase = (PMMPFN)MiSystemVaRegions[AssignedRegionPfnDatabase].BaseAddress;
     }
 
     if (!MiArm64CanTouchSystemPageTables())
@@ -2041,7 +2045,7 @@ MiInitMachineDependent(_Inout_ PLOADER_PARAMETER_BLOCK LoaderBlock)
             MiMapPPEs(MmSessionBase, SessionSpaceEnd);
         }
 
-        MiMapPPEs(MmSystemCacheStart, (PVOID)MI_SYSTEM_CACHE_END);
+        MiMapPPEs(MmSystemCacheStart, MmSystemCacheEnd);
 
         __asm__ __volatile__(
             "dsb ishst\n\t"
@@ -2455,16 +2459,16 @@ MiBuildNonPagedPool(VOID)
     }
 
     /* Don't let the maximum go too high */
-    if (MmMaximumNonPagedPoolInBytes > MI_MAX_NONPAGED_POOL_SIZE)
+    if (MmMaximumNonPagedPoolInBytes > MiSystemVaRegions[AssignedRegionNonPagedPool].NumberOfBytes)
     {
-        MmMaximumNonPagedPoolInBytes = MI_MAX_NONPAGED_POOL_SIZE;
+        MmMaximumNonPagedPoolInBytes = MiSystemVaRegions[AssignedRegionNonPagedPool].NumberOfBytes;
     }
 
     /* Convert nonpaged pool size from bytes to pages */
     MmMaximumNonPagedPoolInPages = MmMaximumNonPagedPoolInBytes >> PAGE_SHIFT;
 
-    /* Non paged pool starts after the PFN database */
-    MmNonPagedPoolStart = (PUCHAR)MmPfnDatabase + MxPfnAllocation * PAGE_SIZE;
+    /* Non paged pool starts at the assigned nonpaged pool region */
+    MmNonPagedPoolStart = MiSystemVaRegions[AssignedRegionNonPagedPool].BaseAddress;
 
 
     /* Calculate the nonpaged pool expansion start region */
@@ -2498,9 +2502,12 @@ MiBuildSystemPteSpace(VOID)
     MmNumberOfSystemPtes = MI_NUMBER_SYSTEM_PTES;
     NonPagedSystemSize = (MmNumberOfSystemPtes + 1) * PAGE_SIZE;
 
-    /* Put system PTEs at the start of the system VA space */
-    MiSystemPteSpaceStart = MmNonPagedSystemStart;
+    /* Put system PTEs at the start of the assigned system PTE region */
+    MiSystemPteSpaceStart = MiSystemVaRegions[AssignedRegionSystemPtes].BaseAddress;
     MiSystemPteSpaceEnd = (PUCHAR)MiSystemPteSpaceStart + NonPagedSystemSize;
+
+    /* Publish the location for RosMm and the address space dump */
+    MmSystemPteSpaceStart = MiSystemPteSpaceStart;
 
     /* Convert exclusive end into inclusive end for the mapping helpers */
     SystemPteRangeEnd = (PVOID)((PUCHAR)MiSystemPteSpaceEnd - 1);
@@ -2516,6 +2523,10 @@ MiBuildSystemPteSpace(VOID)
                                                     SystemPteSpace);
     RtlZeroMemory(MiFirstReservedZeroingPte, (MI_ZERO_PTES + 1) * sizeof(MMPTE));
     MiFirstReservedZeroingPte->u.Hard.PageFrameNumber = MI_ZERO_PTES;
+
+    /* Allocate the debug PTE from system PTEs */
+    MmDebugPte = MiReserveSystemPtes(1, SystemPteSpace);
+    MiDebugMapping = MiPteToAddress(MmDebugPte);
 }
 
 VOID
