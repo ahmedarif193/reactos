@@ -2234,11 +2234,19 @@ MiInitializeSystemPtes(
 );
 
 CODE_SEG("INIT")
+SIZE_T
+NTAPI
+MiGetNonPagedPoolExpansionPteBitmapSize(
+    IN ULONG NumberOfPtes
+);
+
+CODE_SEG("INIT")
 VOID
 NTAPI
 MiInitializeNonPagedPoolExpansionPtes(
     IN PMMPTE StartingPte,
-    IN ULONG NumberOfPtes
+    IN ULONG NumberOfPtes,
+    IN PULONG BitmapBuffer
 );
 
 PMMPTE
