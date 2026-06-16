@@ -132,6 +132,7 @@ MiArm64SelfMapL1MarkCreated(ULONG L0Index, ULONG L1Index)
     MiArm64SelfMapL1Cache[ByteIndex] |= (1 << BitIndex);
 }
 
+static VOID MiMapPPEPages(PVOID StartAddress, PVOID EndAddress);
 static VOID MiMapPPEs(PVOID StartAddress, PVOID EndAddress);
 static VOID MiMapPDEs(PVOID StartAddress, PVOID EndAddress);
 static VOID MiMapPTEs(PVOID StartAddress, PVOID EndAddress);
@@ -2029,10 +2030,9 @@ MiInitMachineDependent(_Inout_ PLOADER_PARAMETER_BLOCK LoaderBlock)
         MiArm64PfnDatabaseReady = TRUE;
 
         {
-            PVOID PagedPoolEnd = (PVOID)(((ULONG_PTR)MmPagedPoolStart +
-                                          MmSizeOfPagedPoolInBytes) - 1);
+            PVOID PagedPoolEnd = Add2Ptr(MmPagedPoolStart, MmSizeOfPagedPoolInBytes - 1);
 
-            MiMapPPEs(MmPagedPoolStart, PagedPoolEnd);
+            MiMapPPEPages(MmPagedPoolStart, PagedPoolEnd);
         }
 
         {
@@ -2104,7 +2104,7 @@ MiInitializeSessionSpaceLayout(VOID)
     MmSessionSpace = (PMM_SESSION_SPACE)Add2Ptr(MiSessionImageStart, 0x10000);
 }
 static VOID
-MiMapPPEs(
+MiMapPPEPages(
     PVOID StartAddress,
     PVOID EndAddress)
 {
@@ -2151,6 +2151,38 @@ MiMapPPEs(
             {
                 continue;
             }
+        }
+    }
+}
+
+static VOID
+MiMapPPEs(
+    PVOID StartAddress,
+    PVOID EndAddress)
+{
+    PMMPDE PointerPpe;
+    PMMPDE BasePpe;
+    PMMPDE EndPpe;
+
+    MiMapPPEPages(StartAddress, EndAddress);
+
+    BasePpe = MiAddressToPpe(StartAddress);
+    EndPpe = MiAddressToPpe(EndAddress);
+
+    for (PointerPpe = BasePpe;
+         PointerPpe <= EndPpe;
+         PointerPpe++)
+    {
+        UINT64 Ttbr1;
+        __asm__ __volatile__("mrs %0, ttbr1_el1" : "=r"(Ttbr1));
+
+        PVOID TargetVa = MiPpeToAddress(PointerPpe);
+
+        volatile UINT64 *EntryPhys = MiArm64LookupTableEntry(Ttbr1, TargetVa, 1);
+
+        if (!EntryPhys)
+        {
+            continue;
         }
 
         UINT64 Entry = *EntryPhys;
