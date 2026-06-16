@@ -2316,7 +2316,7 @@ MiEnsureNonPagedPoolExpansionPtesBacked(
     _In_ ULONG NumberOfPtes);
 #endif
 
-#if defined(_M_AMD64)
+#if defined(_M_AMD64) || defined(_M_ARM64)
 BOOLEAN
 NTAPI
 MiEnsureSessionPageTablesBacked(

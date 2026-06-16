@@ -714,7 +714,7 @@ MiSessionCreateInternal(OUT PULONG SessionId)
     SessionPte = MiReserveSystemPtes(MiSessionDataPages, SystemPteSpace);
     ASSERT(SessionPte != NULL);
 
-#if defined(_M_AMD64)
+#if defined(_M_AMD64) || defined(_M_ARM64)
     if (!MiEnsureSessionPageTablesBacked(MmSessionBase, MmSessionSize))
     {
         DPRINT1("Failed to back session space page tables\n");
