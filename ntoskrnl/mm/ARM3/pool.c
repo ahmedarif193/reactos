@@ -398,9 +398,7 @@ MiInitializeNonPagedPool(VOID)
     // guard page on top so make sure to skip it. The bottom guard page will be
     // guaranteed by the fact our size is off by one.
     //
-    MiInitializeSystemPtes(PointerPte + 1,
-                           MiExpansionPoolPagesInitialCharge,
-                           NonPagedPoolExpansion);
+    MiInitializeNonPagedPoolExpansionPtes(PointerPte + 1, MiExpansionPoolPagesInitialCharge);
 }
 
 POOL_TYPE
