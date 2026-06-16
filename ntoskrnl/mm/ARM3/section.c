@@ -979,6 +979,11 @@ MiSessionCommitPageTables(IN PVOID StartVa,
 #if (_MI_PAGING_LEVELS < 3)
         /* If we don't already have a page table for it, increment count */
         if (MmSessionSpace->PageTables[Index].u.Long == 0) PageCount++;
+#else
+        /* If the leaf page table isn't backed yet, increment count. The
+         * session PPE hierarchy is already backed at session creation
+         * (MiEnsureSessionPageTablesBacked), so the PDE self-map is safe. */
+        if (StartPde->u.Hard.Valid == 0) PageCount++;
 #endif
         /* Move to the next one */
         StartPde++;
@@ -996,14 +1001,18 @@ MiSessionCommitPageTables(IN PVOID StartVa,
 //  MiLockWorkingSet(PsGetCurrentThread(),
 //                   &MmSessionSpace->GlobalVirtualAddress->Vm);
 #if (_MI_PAGING_LEVELS >= 3)
-_WARN("MiSessionCommitPageTables halfplemented for 3+ paging levels")
+    /* MmSessionSpace->PageTables is not used on 3+ paging levels.  Commit the
+     * session-space page-table hierarchy for this range with the same arch-
+     * correct, idempotent backing system space uses (MiMakeKernelPageTableValid
+     * on AMD64, the cache-maintained walk on ARM64), instead of returning
+     * success without committing anything. */
     DBG_UNREFERENCED_LOCAL_VARIABLE(OldIrql);
     DBG_UNREFERENCED_LOCAL_VARIABLE(Color);
-    DBG_UNREFERENCED_LOCAL_VARIABLE(Index);
     DBG_UNREFERENCED_LOCAL_VARIABLE(TempPde);
     DBG_UNREFERENCED_LOCAL_VARIABLE(Pfn1);
     DBG_UNREFERENCED_LOCAL_VARIABLE(PageFrameNumber);
-    ASSERT(FALSE);
+    MiFillSystemPageDirectory(StartVa, (ULONG_PTR)EndVa - (ULONG_PTR)StartVa);
+    ActualPages = PageCount;
 #else
     while (StartPde <= EndPde)
     {
