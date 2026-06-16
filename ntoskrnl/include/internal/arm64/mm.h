@@ -257,6 +257,9 @@ C_ASSERT(MI_SECONDARY_COLORS == 64);
 extern BOOLEAN MiArm64SelfMapReady;
 
 VOID
+MiArm64InitializeSystemPageDirectoryLock(VOID);
+
+VOID
 MiArm64MapKseg0Page(
     _In_ PFN_NUMBER PageFrameNumber);
 
