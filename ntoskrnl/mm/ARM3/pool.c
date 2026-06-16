@@ -850,7 +850,7 @@ MiAllocatePoolPages(IN POOL_TYPE PoolType,
     //
     // Allocate some system PTEs
     //
-    StartPte = MiReserveSystemPtes(SizeInPages, NonPagedPoolExpansion);
+    StartPte = MiReserveNonPagedPoolExpansionPtes(SizeInPages);
     PointerPte = StartPte;
     if (StartPte == NULL)
     {
@@ -877,7 +877,7 @@ MiAllocatePoolPages(IN POOL_TYPE PoolType,
         MiReleasePfnLockFromDpcLevel();
         KeReleaseQueuedSpinLock(LockQueueMmNonPagedPoolLock, OldIrql);
 
-        MiReleaseSystemPtes(StartPte, SizeInPages, NonPagedPoolExpansion);
+        MiReleaseNonPagedPoolExpansionPtes(StartPte, SizeInPages);
 
         DPRINT1("OUT OF AVAILABLE PAGES! Required %lu, Available %lu\n", SizeInPages, MmAvailablePages);
 
