@@ -56,6 +56,58 @@ struct _EPROCESS;
 struct _MM_RMAP_ENTRY;
 typedef ULONG_PTR SWAPENTRY;
 
+#if (_MI_PAGING_LEVELS >= 4)
+/* Dummy values (dynamically assigned) */
+#define MI_PAGED_POOL_START 0
+#define MI_NONPAGED_POOL_END 0
+#define MI_SYSTEM_CACHE_START 0
+#define MI_SYSTEM_CACHE_WS_START 0
+#define MI_DEBUG_MAPPING 0
+
+/* The size of the virtual memory area mapped by a single PDE/PPE/PXE. */
+#define PDE_MAPPED_VA (PTE_PER_PAGE * (ULONG64)PAGE_SIZE)
+#define PPE_MAPPED_VA (PDE_PER_PAGE * (ULONG64)PDE_MAPPED_VA)
+#define PXE_MAPPED_VA (PPE_PER_PAGE * (ULONG64)PPE_MAPPED_VA)
+
+FORCEINLINE
+PVOID
+MiPxiToAddress(ULONG Pxi)
+{
+    return (PVOID)((((LONG64)Pxi) << 55) >> 16);
+}
+#endif
+
+typedef enum _MI_ASSIGNED_REGION_TYPES
+{
+    AssignedRegionNonPagedPool = 0,
+    AssignedRegionPagedPool = 1,
+    AssignedRegionSystemCache = 2,
+    AssignedRegionSystemPtes = 3,
+    AssignedRegionUltraZero = 4,
+    AssignedRegionPfnDatabase = 5,
+    AssignedRegionCfg = 6,
+    AssignedRegionHyperSpace = 7,
+    AssignedRegionKernelStacks = 8,
+    AssignedRegionPageTables = 9,
+    AssignedRegionSession = 10,
+    AssignedRegionSecureNonPagedPool = 11,
+    AssignedRegionSystemImages = 12,
+    AssignedRegionMaximum = 13
+} MI_ASSIGNED_REGION_TYPES, *PMI_ASSIGNED_REGION_TYPES;
+
+typedef struct _MI_SYSTEM_VA_ASSIGNMENT
+{
+    VOID* BaseAddress;
+    ULONGLONG NumberOfBytes;
+} MI_SYSTEM_VA_ASSIGNMENT, *PMI_SYSTEM_VA_ASSIGNMENT;
+
+extern MI_SYSTEM_VA_ASSIGNMENT MiSystemVaRegions[AssignedRegionMaximum];
+
+VOID
+NTAPI
+MiInitializeKernelVaLayout(
+    _In_ const LOADER_PARAMETER_BLOCK* LoaderBlock);
+
 //
 // Pool Quota values
 //
