@@ -2035,11 +2035,6 @@ MiInitMachineDependent(_Inout_ PLOADER_PARAMETER_BLOCK LoaderBlock)
         }
 
         {
-            PVOID SystemViewEnd = (PUCHAR)MiSystemViewStart + MmSystemViewSize - 1;
-            MiMapPPEs(MiSystemViewStart, SystemViewEnd);
-        }
-
-        {
             PVOID SessionSpaceEnd = (PUCHAR)MiSessionSpaceEnd - 1;
 
             MiMapPPEs(MmSessionBase, SessionSpaceEnd);
