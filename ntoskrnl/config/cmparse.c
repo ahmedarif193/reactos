@@ -1621,6 +1621,7 @@ CmpLookInCache(
         {
             /* This key is opened too many times, bail out */
             DPRINT1("Could not reference the KCB, too many references (KCB 0x%p)\n", Kcb);
+            CmpUnLockKcbArray(LockedKcbs);
             return STATUS_UNSUCCESSFUL;
         }
 
