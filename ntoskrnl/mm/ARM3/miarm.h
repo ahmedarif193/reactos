@@ -2233,6 +2233,14 @@ MiInitializeSystemPtes(
     IN MMSYSTEM_PTE_POOL_TYPE PoolType
 );
 
+CODE_SEG("INIT")
+VOID
+NTAPI
+MiInitializeNonPagedPoolExpansionPtes(
+    IN PMMPTE StartingPte,
+    IN ULONG NumberOfPtes
+);
+
 PMMPTE
 NTAPI
 MiReserveSystemPtes(
