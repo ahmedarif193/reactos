@@ -11,12 +11,8 @@
 
 extern BOOLEAN PnPBootDriversLoaded;
 
-/* Parallel device-tree enumeration; default on for NT6+, serial for NT 5.02 and earlier. */
-#if (NTDDI_VERSION > NTDDI_WS03)
-BOOLEAN PnpEnableParallelEnum = TRUE;
-#else
+/* Keep PnP enumeration serialized while ARM64 SMP is being stabilized. */
 BOOLEAN PnpEnableParallelEnum = FALSE;
-#endif
 
 /* Dedicated worker pool: subtree workers block in IopSynchronousCall, so the shared queue won't do. */
 #define PI_PARALLEL_ENUM_MAX 8
