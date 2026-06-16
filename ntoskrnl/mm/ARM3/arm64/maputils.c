@@ -247,3 +247,97 @@ MiEnsurePagedPoolPdeBacked(
 {
     return MiArm64EnsureSystemPdeRangeBacked(Address, PAGE_SIZE);
 }
+
+static
+BOOLEAN
+MiArm64EnsureSessionPageDirectoryPages(
+    _In_ PVOID BaseVa,
+    _In_ SIZE_T NumberOfBytes)
+{
+    KIRQL OldIrql;
+    ULONG_PTR Va, EndVa;
+    BOOLEAN FlushHierarchy = FALSE;
+    BOOLEAN Backed = TRUE;
+
+    if (NumberOfBytes == 0)
+    {
+        return TRUE;
+    }
+
+    if (KeGetCurrentIrql() > DISPATCH_LEVEL)
+    {
+        return FALSE;
+    }
+
+    EndVa = (ULONG_PTR)BaseVa + NumberOfBytes - 1;
+
+    KeAcquireSpinLock(&MiArm64SystemPageDirectoryLock, &OldIrql);
+
+    /*
+     * Walk every L1 (PPE, 1 GB) entry covering the range and make sure the
+     * L0->L1 hierarchy (the L2 page-directory page) exists.  We deliberately
+     * stop at the PPE level: the leaf L2 PDEs are left clear so the session
+     * setup can fill and assert on them.  This replaces the eager session-space
+     * MiMapPPEs premap with on-demand backing, like AMD64.
+     */
+    for (Va = (ULONG_PTR)BaseVa & ~((1ULL << PPI_SHIFT) - 1);
+         Va <= EndVa;
+         Va += (1ULL << PPI_SHIFT))
+    {
+        PVOID TargetAddress = (PVOID)Va;
+        PMMPTE KernelPxe, KernelPpe;
+        PULONG64 Table;
+        PFN_NUMBER RootPage, PpePage, PdePage;
+        ULONG64 Ttbr1;
+
+        __asm__ __volatile__("mrs %0, ttbr1_el1" : "=r"(Ttbr1));
+        RootPage = (PFN_NUMBER)((Ttbr1 & ARM64_PTE_ADDR_MASK) >> PAGE_SHIFT);
+
+        Table = (PULONG64)MI_ARM64_PFN_TO_VA(RootPage);
+        KernelPxe = (PMMPTE)&Table[((ULONG_PTR)TargetAddress >> PXI_SHIFT) & PXI_MASK];
+        FlushHierarchy |= MiArm64EnsureSystemTableEntry(KernelPxe,
+                                                        MiAddressToPxe(TargetAddress),
+                                                        RootPage,
+                                                        &PpePage);
+        if (PpePage == 0)
+        {
+            Backed = FALSE;
+            break;
+        }
+
+        Table = (PULONG64)MI_ARM64_PFN_TO_VA(PpePage);
+        KernelPpe = (PMMPTE)&Table[((ULONG_PTR)TargetAddress >> PPI_SHIFT) & PPI_MASK];
+        FlushHierarchy |= MiArm64EnsureSystemTableEntry(KernelPpe,
+                                                        MiAddressToPpe(TargetAddress),
+                                                        PpePage,
+                                                        &PdePage);
+        if (PdePage == 0)
+        {
+            Backed = FALSE;
+            break;
+        }
+
+        /* PdePage is the L2 page-directory page; leave the L2 PDEs clear. */
+    }
+
+    if (FlushHierarchy)
+    {
+        __asm__ __volatile__(
+            "dsb ishst\n\t"
+            "tlbi vmalle1is\n\t"
+            "dsb ish\n\t"
+            "isb" ::: "memory");
+    }
+
+    KeReleaseSpinLock(&MiArm64SystemPageDirectoryLock, OldIrql);
+    return Backed;
+}
+
+BOOLEAN
+NTAPI
+MiEnsureSessionPageTablesBacked(
+    _In_ PVOID BaseVa,
+    _In_ SIZE_T NumberOfBytes)
+{
+    return MiArm64EnsureSessionPageDirectoryPages(BaseVa, NumberOfBytes);
+}

@@ -2033,11 +2033,9 @@ MiInitMachineDependent(_Inout_ PLOADER_PARAMETER_BLOCK LoaderBlock)
         MiArm64PfnFreeListsReady = TRUE;
         MiArm64PfnDatabaseReady = TRUE;
 
-        {
-            PVOID SessionSpaceEnd = (PUCHAR)MiSessionSpaceEnd - 1;
-
-            MiMapPPEs(MmSessionBase, SessionSpaceEnd);
-        }
+        /* Session space page-directory pages are now backed on demand at
+         * session creation (MiEnsureSessionPageTablesBacked) instead of being
+         * eagerly premapped here. */
 
         __asm__ __volatile__(
             "dsb ishst\n\t"
