@@ -490,7 +490,7 @@ MiInitMachineDependent(IN PLOADER_PARAMETER_BLOCK LoaderBlock)
     //
     // Create the system PTE space
     //
-    MiInitializeSystemPtes(PointerPte, MmNumberOfSystemPtes, SystemPteSpace);
+    MiInitializeSystemPtes(PointerPte, MmNumberOfSystemPtes, SystemPteSpace, NULL);
 
     /* Get the PDE For hyperspace */
     StartPde = MiAddressToPde(HYPER_SPACE);

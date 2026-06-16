@@ -652,6 +652,8 @@ extern SIZE_T MmMinimumStackCommitInBytes;
 extern PFN_COUNT MiExpansionPoolPagesInitialCharge;
 extern PFN_NUMBER MmResidentAvailableAtInit;
 extern ULONG MmTotalFreeSystemPtes[MaximumPtePoolTypes];
+extern PMMPTE MiSystemPteMetadataBuffer;
+extern SIZE_T MiSystemPteMetadataSize;
 extern PFN_NUMBER MmTotalSystemDriverPages;
 extern ULONG MmCritsectTimeoutSeconds;
 extern PVOID MiSessionImageStart;
@@ -2247,12 +2249,20 @@ MiInitializeSessionPool(
 );
 
 CODE_SEG("INIT")
+SIZE_T
+NTAPI
+MiGetSystemPteMetadataSize(
+    IN ULONG NumberOfPtes
+);
+
+CODE_SEG("INIT")
 VOID
 NTAPI
 MiInitializeSystemPtes(
     IN PMMPTE StartingPte,
     IN ULONG NumberOfPtes,
-    IN MMSYSTEM_PTE_POOL_TYPE PoolType
+    IN MMSYSTEM_PTE_POOL_TYPE PoolType,
+    IN PMMPTE MetadataBuffer
 );
 
 CODE_SEG("INIT")

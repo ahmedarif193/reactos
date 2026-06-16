@@ -279,6 +279,7 @@ MiInitializeNonPagedPool(VOID)
 {
     ULONG i;
     PFN_COUNT PoolPages;
+    PFN_COUNT SystemPteMetadataPages;
     PFN_COUNT BitmapPages;
     SIZE_T BitmapSize;
     PULONG ExpansionPteBitmap;
@@ -329,6 +330,15 @@ MiInitializeNonPagedPool(VOID)
     // Calculate how many pages the initial nonpaged pool has
     //
     PoolPages = (PFN_COUNT)BYTES_TO_PAGES(MmSizeOfNonPagedPoolInBytes);
+
+    if (MiSystemPteMetadataSize != 0)
+    {
+        SystemPteMetadataPages = (PFN_COUNT)BYTES_TO_PAGES(MiSystemPteMetadataSize);
+        ASSERT(PoolPages > SystemPteMetadataPages);
+        PoolPages -= SystemPteMetadataPages;
+        MiSystemPteMetadataBuffer = (PMMPTE)((ULONG_PTR)MmNonPagedPoolStart + (PoolPages << PAGE_SHIFT));
+        RtlZeroMemory(MiSystemPteMetadataBuffer, SystemPteMetadataPages << PAGE_SHIFT);
+    }
 
     //
     // Calculate the size of the expansion region alone
