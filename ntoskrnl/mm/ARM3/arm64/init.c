@@ -2479,6 +2479,8 @@ MiBuildNonPagedPool(VOID)
     MiMapPTEs(MmNonPagedPoolStart, (PCHAR)MmNonPagedPoolExpansionStart - 1);
     MiArm64ZeroLeafPages = TRUE;
 
+    MiSystemPteMetadataSize = MiGetSystemPteMetadataSize(MI_NUMBER_SYSTEM_PTES);
+
     MiInitializeNonPagedPool();
     MiInitializeNonPagedPoolThresholds();
 }
@@ -2509,7 +2511,7 @@ MiBuildSystemPteSpace(VOID)
     MiMapPDEs(MiSystemPteSpaceStart, SystemPteRangeEnd);
 
     PointerPte = MiAddressToPte(MiSystemPteSpaceStart);
-    MiInitializeSystemPtes(PointerPte, MmNumberOfSystemPtes, SystemPteSpace);
+    MiInitializeSystemPtes(PointerPte, MmNumberOfSystemPtes, SystemPteSpace, MiSystemPteMetadataBuffer);
 
     /* Reserve system PTEs for zeroing PTEs and clear them */
     MiFirstReservedZeroingPte = MiReserveSystemPtes(MI_ZERO_PTES + 1,
