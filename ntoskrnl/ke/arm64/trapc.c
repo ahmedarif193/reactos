@@ -673,6 +673,13 @@ NTAPI
 KiSwapProcess(_Inout_ PKPROCESS NewProcess,
               _Inout_ PKPROCESS OldProcess)
 {
+    ULONGLONG CurrentTtbr0;
+    ULONGLONG CurrentTtbr1;
+    ULONGLONG CurrentKernelRoot;
+    ULONGLONG CurrentUserRoot;
+    ULONGLONG NewKernelRoot;
+    ULONGLONG NewUserRoot;
+
     ASSERT(NewProcess != NULL);
 
 #ifdef CONFIG_SMP
@@ -691,7 +698,20 @@ KiSwapProcess(_Inout_ PKPROCESS NewProcess,
     }
 #endif
 
-    if (OldProcess == NewProcess)
+    NewUserRoot = NewProcess->DirectoryTableBase[0] & ARM64_PTE_ADDR_MASK;
+    NewKernelRoot = KiArm64KernelTtbrBase(NewProcess->DirectoryTableBase[0]);
+    __asm__ __volatile__("mrs %0, ttbr0_el1" : "=r"(CurrentTtbr0));
+    __asm__ __volatile__("mrs %0, ttbr1_el1" : "=r"(CurrentTtbr1));
+    CurrentUserRoot = CurrentTtbr0 & ARM64_PTE_ADDR_MASK;
+    CurrentKernelRoot = CurrentTtbr1 & MI_ARM64_PHYS_ADDR_MASK;
+
+    /*
+     * APs may enter the scheduler with the right process object but stale TTBR
+     * roots. Only skip the hardware switch when the active roots match too.
+     */
+    if ((OldProcess == NewProcess) &&
+        (CurrentUserRoot == NewUserRoot) &&
+        (CurrentKernelRoot == NewKernelRoot))
     {
         /* Same process, nothing to do */
         return;
@@ -699,7 +719,9 @@ KiSwapProcess(_Inout_ PKPROCESS NewProcess,
 
     if ((OldProcess != NULL) &&
         (NewProcess->DirectoryTableBase[0] == OldProcess->DirectoryTableBase[0]) &&
-        (NewProcess->DirectoryTableBase[1] == OldProcess->DirectoryTableBase[1]))
+        (NewProcess->DirectoryTableBase[1] == OldProcess->DirectoryTableBase[1]) &&
+        (CurrentUserRoot == NewUserRoot) &&
+        (CurrentKernelRoot == NewKernelRoot))
     {
         /* Same TTBR roots, nothing to do */
         return;
@@ -708,8 +730,7 @@ KiSwapProcess(_Inout_ PKPROCESS NewProcess,
     ASSERT(NewProcess->DirectoryTableBase[0] != 0);
     ASSERT(NewProcess->DirectoryTableBase[1] != 0);
 
-    KiArm64WriteUserTtbr(NewProcess->DirectoryTableBase[0],
-                         NewProcess->DirectoryTableBase[1]);
+    KiArm64WriteUserTtbr(NewProcess->DirectoryTableBase[0]);
 }
 
 typedef struct _ARM64_EARLY_SYNC_CONTEXT
