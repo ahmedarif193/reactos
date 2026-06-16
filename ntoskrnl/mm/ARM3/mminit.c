@@ -2257,12 +2257,23 @@ MiBuildPagedPool(VOID)
     MmPagedPoolEnd = (PVOID)(((ULONG_PTR)MmPagedPoolStart +
                               MmSizeOfPagedPoolInBytes) - 1);
 
+#if defined(_M_ARM64)
+    if (!MiEnsurePagedPoolPdeBacked(MmPagedPoolStart))
+    {
+        KeBugCheckEx(INSTALL_MORE_MEMORY,
+                     MmNumberOfPhysicalPages,
+                     MmLowestPhysicalPage,
+                     MmHighestPhysicalPage,
+                     3);
+    }
+#endif
+
     //
     // Lock the PFN database
     //
     OldIrql = MiAcquirePfnLock();
 
-#if (_MI_PAGING_LEVELS >= 3)
+#if (_MI_PAGING_LEVELS >= 3) && !defined(_M_ARM64)
     /* On these systems, there's no double-mapping, so instead, the PPEs
      * are setup to span the entire paged pool area, so there's no need for the
      * system PD */
@@ -2287,8 +2298,10 @@ MiBuildPagedPool(VOID)
     // So now get the PDE for paged pool and zero it out
     //
     PointerPde = MiAddressToPde(MmPagedPoolStart);
+#if !defined(_M_ARM64)
     RtlZeroMemory(PointerPde,
                   (1 + MiAddressToPde(MmPagedPoolEnd) - PointerPde) * sizeof(MMPDE));
+#endif
 
     //
     // Next, get the first and last PTE
@@ -2297,6 +2310,9 @@ MiBuildPagedPool(VOID)
     MmPagedPoolInfo.FirstPteForPagedPool = PointerPte;
     MmPagedPoolInfo.LastPteForPagedPool = MiAddressToPte(MmPagedPoolEnd);
 
+#if defined(_M_ARM64)
+    ASSERT(PointerPde->u.Hard.Valid == 1);
+#else
     /* Allocate a page and map the first paged pool PDE */
     MI_SET_USAGE(MI_USAGE_PAGED_POOL);
     MI_SET_PROCESS2("Kernel");
@@ -2319,6 +2335,7 @@ MiBuildPagedPool(VOID)
     MiInitializePfnForOtherProcess(PageFrameIndex,
                                    (PMMPTE)PointerPde,
                                    MmSystemPageDirectory[(PointerPde - (PMMPDE)PDE_BASE) / PDE_PER_PAGE]);
+#endif
 #endif
 
     //
