@@ -2783,7 +2783,7 @@ MmArmInitSystem(IN ULONG Phase,
         ASSERT(PointerPte == TestPte);
 
         /* Try the last nonpaged pool address */
-        PointerPte = (PMMPTE)MI_NONPAGED_POOL_END;
+        PointerPte = (PMMPTE)MmNonPagedPoolEnd;
         MI_MAKE_PROTOTYPE_PTE(&TempPte, PointerPte);
         TestPte = MiProtoPteToPte(&TempPte);
         ASSERT(PointerPte == TestPte);
@@ -2989,15 +2989,22 @@ MmArmInitSystem(IN ULONG Phase,
         }
 
         /* Define limits for system cache */
+#if defined(_M_AMD64)
+        MmSystemCacheStart = MiSystemVaRegions[AssignedRegionSystemCache].BaseAddress;
+        ASSERT(MmSystemCacheStart != NULL);
+#endif
 #if defined(_M_AMD64) || defined(_M_ARM64)
-        MmSizeOfSystemCacheInPages = ((MI_SYSTEM_CACHE_END + 1) - MI_SYSTEM_CACHE_START) / PAGE_SIZE;
+        MmSizeOfSystemCacheInPages = MiSystemVaRegions[AssignedRegionSystemCache].NumberOfBytes / PAGE_SIZE;
 #else
         MmSizeOfSystemCacheInPages = ((ULONG_PTR)MI_PAGED_POOL_START - (ULONG_PTR)MI_SYSTEM_CACHE_START) / PAGE_SIZE;
 #endif
         MmSystemCacheEnd = (PVOID)((ULONG_PTR)MmSystemCacheStart + (MmSizeOfSystemCacheInPages * PAGE_SIZE) - 1);
-#if defined(_M_AMD64) || defined(_M_ARM64)
-        ASSERT(MmSystemCacheEnd == (PVOID)MI_SYSTEM_CACHE_END);
-#else
+#if defined(_M_ARM64)
+        {
+            PVOID SystemCacheEnd = Add2Ptr(MmSystemCacheStart, MiSystemVaRegions[AssignedRegionSystemCache].NumberOfBytes - 1);
+            ASSERT(MmSystemCacheEnd == SystemCacheEnd);
+        }
+#elif !defined(_M_AMD64)
         ASSERT(MmSystemCacheEnd == (PVOID)((ULONG_PTR)MI_PAGED_POOL_START - 1));
 #endif
 
