@@ -919,8 +919,25 @@ MiMakeKernelPageTableValid(
     PMMPDE PointerPde = MiAddressToPde(Address);
 
 #if (_MI_PAGING_LEVELS >= 3)
-    /* Check if the PPE is valid */
     PMMPPE PointerPpe = MiAddressToPpe(Address);
+
+#if defined(_M_AMD64)
+    /* Check if the PXE is valid */
+    PMMPXE PointerPxe = MiAddressToPxe(Address);
+    if (PointerPxe->u.Hard.Valid == 0)
+    {
+        /* Right now, we only handle scenarios where the PXE is totally empty */
+        ASSERT(PointerPxe->u.Long == 0);
+
+        /* Resolve a demand zero fault */
+        MiResolveDemandZeroFault(PointerPpe, PointerPxe, MM_EXECUTE_READWRITE, CurrentProcess, MM_NOIRQL);
+
+        /* We should come back with a valid PXE */
+        ASSERT(PointerPxe->u.Hard.Valid == 1);
+    }
+#endif
+
+    /* Check if the PPE is valid */
     if (PointerPpe->u.Hard.Valid == 0)
     {
         /* Right now, we only handle scenarios where the PPE is totally empty */
