@@ -360,6 +360,42 @@ MiEnsureNonPagedPoolExpansionPtesBacked(
     return MiAmd64EnsureKernelPdeRangeBacked(MiPteToAddress(StartingPte - 1), ((SIZE_T)NumberOfPtes + 2) << PAGE_SHIFT);
 }
 
+BOOLEAN
+NTAPI
+MiEnsureSessionPageTablesBacked(
+    _In_ PVOID BaseVa,
+    _In_ SIZE_T NumberOfBytes)
+{
+    PVOID EndVa;
+    PMMPPE PointerPpe, LastPpe;
+
+    if (NumberOfBytes == 0)
+    {
+        return TRUE;
+    }
+
+    /* Leave the session PDEs clear; MiSessionCreateInternal fills them. */
+    EndVa = Add2Ptr(BaseVa, NumberOfBytes - 1);
+    PointerPpe = MiAddressToPpe(BaseVa);
+    LastPpe = MiAddressToPpe(EndVa);
+    while (PointerPpe <= LastPpe)
+    {
+        if (!MiAmd64EnsureKernelPageTableEntry(MiAddressToPxe(MiPpeToAddress(PointerPpe))))
+        {
+            return FALSE;
+        }
+
+        if (!MiAmd64EnsureKernelPageTableEntry(PointerPpe))
+        {
+            return FALSE;
+        }
+
+        PointerPpe++;
+    }
+
+    return TRUE;
+}
+
 CODE_SEG("INIT")
 VOID
 NTAPI
@@ -436,9 +472,6 @@ MiInitializePageTable(VOID)
 
     /* Setup 1 PPE for hyper space */
     MiMapPPEs((PVOID)HYPER_SPACE, (PVOID)HYPER_SPACE_END);
-
-    /* Setup PPEs for system space view */
-    MiMapPPEs(MiSystemViewStart, (PCHAR)MiSystemViewStart + MmSystemViewSize);
 
     /* Setup the mapping PDEs */
     MiMapPDEs((PVOID)MI_MAPPING_RANGE_START, (PVOID)MI_MAPPING_RANGE_END);
