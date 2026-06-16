@@ -687,6 +687,28 @@ extern KSPIN_LOCK MmExpansionLock;
 extern PETHREAD MiExpansionLockOwner;
 
 FORCEINLINE
+ULONG
+MiSystemPteToOffset(
+    IN MMSYSTEM_PTE_POOL_TYPE PoolType,
+    IN PMMPTE PointerPte)
+{
+    ASSERT(PointerPte >= MmSystemPtesStart[PoolType]);
+    ASSERT(PointerPte <= MmSystemPtesEnd[PoolType]);
+    return (ULONG)(PointerPte - MmSystemPtesStart[PoolType]);
+}
+
+FORCEINLINE
+PMMPTE
+MiSystemPteFromOffset(
+    IN MMSYSTEM_PTE_POOL_TYPE PoolType,
+    IN ULONG Offset)
+{
+    ASSERT(Offset != MM_EMPTY_PTE_LIST);
+    ASSERT(Offset <= (ULONG)(MmSystemPtesEnd[PoolType] - MmSystemPtesStart[PoolType]));
+    return MmSystemPtesStart[PoolType] + Offset;
+}
+
+FORCEINLINE
 BOOLEAN
 MI_IS_PROCESS_WORKING_SET(PMMSUPPORT WorkingSet)
 {

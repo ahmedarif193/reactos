@@ -123,7 +123,6 @@ MiInitializeSpecialPool(VOID)
 {
     ULONG SpecialPoolPtes, i;
     PMMPTE PointerPte;
-    PMMPTE SystemPteBase = MmSystemPtesStart[SystemPteSpace];
 
     /* Check if there is a special pool tag */
     if ((MmSpecialPoolTag == 0) ||
@@ -169,7 +168,7 @@ MiInitializeSpecialPool(VOID)
     for (i = 0; i < PTE_PER_PAGE / 2; i++)
     {
         /* Point it to the next entry */
-        PointerPte->u.List.NextEntry = &PointerPte[2] - SystemPteBase;
+        PointerPte->u.List.NextEntry = MiSystemPteToOffset(SystemPteSpace, &PointerPte[2]);
 
         /* Move to the next pair */
         PointerPte += 2;
@@ -205,7 +204,6 @@ MmExpandSpecialPool(VOID)
 {
     ULONG i;
     PMMPTE PointerPte;
-    PMMPTE SystemPteBase = MmSystemPtesStart[SystemPteSpace];
 
     MI_ASSERT_PFN_LOCK_HELD();
 
@@ -215,13 +213,13 @@ MmExpandSpecialPool(VOID)
     PointerPte = MiSpecialPoolExtra;
     ASSERT(MiSpecialPoolFirstPte == MiSpecialPoolLastPte);
     ASSERT(MiSpecialPoolFirstPte->u.List.NextEntry == MM_EMPTY_PTE_LIST);
-    MiSpecialPoolFirstPte->u.List.NextEntry = PointerPte - SystemPteBase;
+    MiSpecialPoolFirstPte->u.List.NextEntry = MiSystemPteToOffset(SystemPteSpace, PointerPte);
 
     ASSERT(MiSpecialPoolExtraCount >= PTE_PER_PAGE);
     for (i = 0; i < PTE_PER_PAGE / 2; i++)
     {
         /* Point it to the next entry */
-        PointerPte->u.List.NextEntry = &PointerPte[2] - SystemPteBase;
+        PointerPte->u.List.NextEntry = MiSystemPteToOffset(SystemPteSpace, &PointerPte[2]);
 
         /* Move to the next pair */
         PointerPte += 2;
@@ -253,7 +251,6 @@ MmAllocateSpecialPool(SIZE_T NumberOfBytes, ULONG Tag, POOL_TYPE PoolType, ULONG
     PVOID Entry;
     PPOOL_HEADER Header;
     PFN_COUNT PagesInUse;
-    PMMPTE SystemPteBase = MmSystemPtesStart[SystemPteSpace];
 
     DPRINT("MmAllocateSpecialPool(%x %x %x %x)\n", NumberOfBytes, Tag, PoolType, SpecialType);
 
@@ -327,7 +324,7 @@ MmAllocateSpecialPool(SIZE_T NumberOfBytes, ULONG Tag, POOL_TYPE PoolType, ULONG
     PointerPte = MiSpecialPoolFirstPte;
 
     /* Set the first PTE pointer to the next one in the list */
-    MiSpecialPoolFirstPte = SystemPteBase + PointerPte->u.List.NextEntry;
+    MiSpecialPoolFirstPte = MiSystemPteFromOffset(SystemPteSpace, PointerPte->u.List.NextEntry);
 
     /* Allocate a physical page */
     if (PoolType == PagedPool)
@@ -469,7 +466,6 @@ MmFreeSpecialPool(PVOID P)
     PMI_FREED_SPECIAL_POOL FreedHeader;
     LARGE_INTEGER TickCount;
     PMMPFN Pfn;
-    PMMPTE SystemPteBase = MmSystemPtesStart[SystemPteSpace];
 
     DPRINT("MmFreeSpecialPool(%p)\n", P);
 
@@ -637,7 +633,7 @@ MmFreeSpecialPool(PVOID P)
     ASSERT(MiSpecialPoolLastPte->u.List.NextEntry == MM_EMPTY_PTE_LIST);
 
     /* Update the current last PTE next pointer */
-    MiSpecialPoolLastPte->u.List.NextEntry = PointerPte - SystemPteBase;
+    MiSpecialPoolLastPte->u.List.NextEntry = MiSystemPteToOffset(SystemPteSpace, PointerPte);
 
     /* PointerPte becomes the new last PTE */
     PointerPte->u.List.NextEntry = MM_EMPTY_PTE_LIST;
