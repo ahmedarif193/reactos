@@ -447,6 +447,11 @@ KiInitializeKernel(_Inout_ PKPROCESS InitProcess,
         MmWriteableSharedUserData->ProcessorFeatures[PF_COMPARE_EXCHANGE128] = TRUE;
 
         KeLowerIrql(APC_LEVEL);
+
+        /* Initialize the kernel VA layout (needs IRQL <= APC_LEVEL because
+         * the random number generator lives in pageable code) */
+        MiInitializeKernelVaLayout(LoaderBlock);
+
         KiInitSystem();
 
 #if DBG

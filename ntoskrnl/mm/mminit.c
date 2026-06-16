@@ -70,39 +70,16 @@ MiInitSystemMemoryAreas(VOID)
 
     MmLockAddressSpace(MmGetKernelAddressSpace());
 
-#ifdef _M_AMD64
-    // On x64 we reserve everything except system cache, which is used for all RosMm mappings
+#if defined(_M_AMD64) || defined(_M_ARM64)
+    // On x64 and ARM64 we reserve everything except system cache, which is used for all RosMm mappings
     ULONG64 SystemCacheStart = (ULONG64)MiSystemVaRegions[AssignedRegionSystemCache].BaseAddress;
     ULONG64 SystemCacheEnd = SystemCacheStart + MiSystemVaRegions[AssignedRegionSystemCache].NumberOfBytes;
     MiCreateArm3StaticMemoryArea((PVOID)MI_REAL_SYSTEM_RANGE_START, SystemCacheStart - MI_REAL_SYSTEM_RANGE_START, FALSE);
     MiCreateArm3StaticMemoryArea((PVOID)SystemCacheEnd, 0xFFFFFFFFFFFFFFFFULL - SystemCacheEnd, FALSE);
-#else /* _M_AMD64 */
-
-#if defined(_M_ARM64)
-    // Reserved range FFFF800000000000 - FFFFF68000000000
-    MiCreateArm3StaticMemoryArea((PVOID)MI_REAL_SYSTEM_RANGE_START, PTE_BASE - MI_REAL_SYSTEM_RANGE_START, FALSE);
-#endif
+#else /* _M_AMD64 || _M_ARM64 */
 
     // The loader mappings. The only Executable area.
-#ifdef _M_ARM64
-    MiCreateArm3StaticMemoryArea((PVOID)MI_ARM64_BOOT_IMAGE_BASE, MmBootImageSize, TRUE);
-#else
     MiCreateArm3StaticMemoryArea((PVOID)KSEG0_BASE, MmBootImageSize, TRUE);
-#endif
-
-#ifdef _M_ARM64
-    /*
-     * The boot image lives in the first Win64-style loader slot. Keep the
-     * rest of that slot out of the generic memory-area allocator.
-     */
-    if ((MI_ARM64_BOOT_IMAGE_BASE + MmBootImageSize) < MI_SYSTEM_SPACE_START)
-    {
-        MiCreateArm3StaticMemoryArea((PVOID)(MI_ARM64_BOOT_IMAGE_BASE + MmBootImageSize),
-                                     MI_SYSTEM_SPACE_START -
-                                         (MI_ARM64_BOOT_IMAGE_BASE + MmBootImageSize),
-                                     FALSE);
-    }
-#endif
 
     // The PTE base
     MiCreateArm3StaticMemoryArea((PVOID)PTE_BASE, PTE_TOP - PTE_BASE + 1, FALSE);
@@ -138,15 +115,13 @@ MiInitSystemMemoryAreas(VOID)
     // Reserved HAL area (includes KUSER_SHARED_DATA and KPCR)
     MiCreateArm3StaticMemoryArea((PVOID)MM_HAL_VA_START, MM_HAL_VA_END - MM_HAL_VA_START + 1, FALSE);
 #else /* _X86_ */
-#if !defined(_M_ARM64)
     // KPCR, one page per CPU. Only for 32-bit kernel.
     MiCreateArm3StaticMemoryArea(PCR, PAGE_SIZE * KeNumberProcessors, FALSE);
-#endif
 
     // KUSER_SHARED_DATA
     MiCreateArm3StaticMemoryArea((PVOID)KI_USER_SHARED_DATA, PAGE_SIZE, FALSE);
 #endif /* _X86_ */
-#endif /* _M_AMD64 */
+#endif /* _M_AMD64 || _M_ARM64 */
 
     MmUnlockAddressSpace(MmGetKernelAddressSpace());
 }

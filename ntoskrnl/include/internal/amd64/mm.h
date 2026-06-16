@@ -22,21 +22,9 @@
 #define MI_HIGHEST_SYSTEM_ADDRESS       (PVOID)0xFFFFFFFFFFFFFFFFULL
 #define MmSystemRangeStart              ((PVOID)MI_REAL_SYSTEM_RANGE_START)
 
-/* Dummy values (dynamically assigned) */
-#define MI_NONPAGED_POOL_END 0
-#define MI_PAGED_POOL_START 0
-#define MI_SYSTEM_CACHE_START 0
-#define MI_SYSTEM_CACHE_WS_START 0
-#define MI_DEBUG_MAPPING 0
-
 /* WOW64 address definitions */
 #define MM_HIGHEST_USER_ADDRESS_WOW64   0x7FFEFFFF
 #define MM_SYSTEM_RANGE_START_WOW64     0x80000000
-
-/* The size of the virtual memory area that is mapped using a single PDE */
-#define PDE_MAPPED_VA (PTE_PER_PAGE * (ULONG64)PAGE_SIZE)
-#define PPE_MAPPED_VA (PDE_PER_PAGE * (ULONG64)PDE_MAPPED_VA)
-#define PXE_MAPPED_VA (PPE_PER_PAGE * (ULONG64)PPE_MAPPED_VA)
 
 /* Misc address definitions */
 //#define MI_NON_PAGED_SYSTEM_START_MIN   MM_SYSTEM_SPACE_START // FIXME
@@ -211,13 +199,6 @@ MiAddressToPxi(PVOID Address)
     return ((((ULONG64)Address) >> PXI_SHIFT) & 0x1FF);
 }
 
-FORCEINLINE
-PVOID
-MiPxiToAddress(ULONG Pxi)
-{
-    return (PVOID)((((LONG64)Pxi) << 55) >> 16);
-}
-
 /* Convert a PTE into a corresponding address */
 FORCEINLINE
 PVOID
@@ -385,34 +366,3 @@ MiIsPdeForAddressValid(PVOID Address)
             (MiAddressToPpe(Address)->u.Hard.Valid) &&
             (MiAddressToPde(Address)->u.Hard.Valid));
 }
-
-typedef enum _MI_ASSIGNED_REGION_TYPES
-{
-    AssignedRegionNonPagedPool = 0,
-    AssignedRegionPagedPool = 1,
-    AssignedRegionSystemCache = 2,
-    AssignedRegionSystemPtes = 3,
-    AssignedRegionUltraZero = 4,
-    AssignedRegionPfnDatabase = 5,
-    AssignedRegionCfg = 6,
-    AssignedRegionHyperSpace = 7,
-    AssignedRegionKernelStacks = 8,
-    AssignedRegionPageTables = 9,
-    AssignedRegionSession = 10,
-    AssignedRegionSecureNonPagedPool = 11,
-    AssignedRegionSystemImages = 12,
-    AssignedRegionMaximum = 13
-} MI_ASSIGNED_REGION_TYPES, * PMI_ASSIGNED_REGION_TYPES;
-
-typedef struct _MI_SYSTEM_VA_ASSIGNMENT
-{
-    VOID* BaseAddress;
-    ULONGLONG NumberOfBytes;
-} MI_SYSTEM_VA_ASSIGNMENT, *PMI_SYSTEM_VA_ASSIGNMENT;
-
-extern MI_SYSTEM_VA_ASSIGNMENT MiSystemVaRegions[AssignedRegionMaximum];
-
-VOID
-NTAPI
-MiInitializeKernelVaLayout(
-    _In_ const LOADER_PARAMETER_BLOCK* LoaderBlock);
