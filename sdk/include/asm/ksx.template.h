@@ -767,7 +767,7 @@ OFFSET(ThSystemCallNumber, KTHREAD, SystemCallNumber),
 OFFSET(ThTrapFrame, KTHREAD, TrapFrame),
 OFFSET(ThApcState, KTHREAD, ApcState),
 OFFSET(ThPriority, KTHREAD, Priority), // obsolete
-#if (NTDDI_VERSION < NTDDI_WIN7)
+#if (NTDDI_VERSION < NTDDI_WIN7) || defined(_M_ARM64)
 OFFSET(ThSwapBusy, KTHREAD, SwapBusy),
 #else
 /* SwapBusy was removed at Win7; use Running field at same region as stub offset */

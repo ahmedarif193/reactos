@@ -232,7 +232,6 @@ KiIdleLoop(VOID)
             NewThread->State = Running;
 
             KiReleasePrcbLock(Prcb);
-            _enable();
 
             ASSERT(OldThread != NULL);
             KiSwapContext(APC_LEVEL, OldThread);
@@ -287,6 +286,8 @@ KiSwapContextResume(
 
     KeMemoryBarrier();
 #if (NTDDI_VERSION < NTDDI_WIN7)
+    OldThread->SwapBusy = FALSE;
+#elif defined(_M_ARM64)
     OldThread->SwapBusy = FALSE;
 #else
     OldThread->Running = FALSE;
@@ -382,6 +383,7 @@ KiDispatchInterrupt(VOID)
     else if (Prcb->NextThread)
     {
         /* Thread switch needed - acquire PRCB lock and swap context */
+        _disable();
         KiAcquirePrcbLock(Prcb);
 
         OldThread = Prcb->CurrentThread;
