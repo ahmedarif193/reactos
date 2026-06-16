@@ -415,7 +415,9 @@ MiInitializeNonPagedPool(VOID)
     // Validate the first nonpaged pool expansion page (which is a guard page)
     //
     PointerPte = MiAddressToPte(MmNonPagedPoolExpansionStart);
+#if !defined(_M_AMD64) && !defined(_M_ARM64)
     ASSERT(PointerPte->u.Hard.Valid == 0);
+#endif
 
     //
     // Now initialize the nonpaged pool expansion PTE space. Remember there's a
@@ -698,7 +700,7 @@ MiAllocatePoolPages(IN POOL_TYPE PoolType,
             MI_WRITE_VALID_PTE(PointerPte, TempPte);
             MiInitializePfnForOtherProcess(PageFrameNumber,
                                            PointerPte,
-                                           PFN_FROM_PTE(MiAddressToPde(BaseVa)));
+                                           PFN_FROM_PTE(MiAddressToPde(MiPteToAddress(PointerPte))));
 #else
             MI_WRITE_INVALID_PTE(PointerPte, TempPte);
 #endif
