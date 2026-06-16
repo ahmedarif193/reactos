@@ -421,6 +421,7 @@ MiBuildSystemPteSpace(VOID)
     /* Put system PTEs at the start of the system VA space */
     MiSystemPteSpaceStart = MiSystemVaRegions[AssignedRegionSystemPtes].BaseAddress;
     MiSystemPteSpaceEnd = (PUCHAR)MiSystemPteSpaceStart + NonPagedSystemSize;
+    MmSystemPteSpaceStart = MiSystemPteSpaceStart;
 
     /* Map the PPEs and PDEs for the system PTEs */
     MiMapPPEs(MiSystemPteSpaceStart, MiSystemPteSpaceEnd);
