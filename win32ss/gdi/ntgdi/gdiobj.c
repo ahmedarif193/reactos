@@ -1133,14 +1133,19 @@ GDIOBJ_vDeleteObject(POBJ pobj)
         /* Check if the object is exclusively locked */
         if (pobj->cExclusiveLock != 0)
         {
-            /* Reset lock owner and lock count */
-            pobj->dwThreadId = 0;
-            pobj->cExclusiveLock = 0;
+            DWORD dwThreadId = PtrToUlong(PsGetCurrentThreadId());
 
-            /* Release the pushlock and reenable APCs */
-            ExReleasePushLockExclusive(&pobj->pushlock);
-            KeLeaveCriticalRegion();
-            DECREASE_THREAD_LOCK_COUNT(pobj->hHmgr);
+            if (pobj->dwThreadId == dwThreadId)
+            {
+                /* Reset lock owner and lock count */
+                pobj->dwThreadId = 0;
+                pobj->cExclusiveLock = 0;
+
+                /* Release the pushlock and reenable APCs */
+                ExReleasePushLockExclusive(&pobj->pushlock);
+                KeLeaveCriticalRegion();
+                DECREASE_THREAD_LOCK_COUNT(pobj->hHmgr);
+            }
         }
     }
 
