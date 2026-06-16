@@ -129,10 +129,23 @@ KiConvertSystemDllAddressToUser(
 }
 
 FORCEINLINE
+ULONGLONG
+KiArm64KernelTtbrBase(
+    _In_ ULONGLONG UserDirectoryBase)
+{
+    ULONGLONG RootBase = UserDirectoryBase & ~((ULONGLONG)PAGE_SIZE - 1ULL);
+    ULONGLONG TcrEl1;
+    ULONGLONG T1sz;
+
+    __asm__ __volatile__("mrs %0, tcr_el1" : "=r"(TcrEl1));
+    T1sz = (TcrEl1 >> 16) & 0x3FULL;
+    return (T1sz == 17) ? RootBase + KE_ARM64_TTBR1_L0_OFFSET : RootBase;
+}
+
+FORCEINLINE
 VOID
 KiArm64WriteUserTtbr(
-    _In_ ULONGLONG UserDirectoryBase,
-    _In_ ULONGLONG KernelDirectoryBase)
+    _In_ ULONGLONG UserDirectoryBase)
 {
     /*
      * ARM64 ASID Note (Bring-up):
@@ -149,18 +162,8 @@ KiArm64WriteUserTtbr(
      * use targeted TLBI (aside1is), and properly manage ASID allocation.
      */
     ULONGLONG RootBase = UserDirectoryBase & ~((ULONGLONG)PAGE_SIZE - 1ULL);
-    ULONGLONG KernelRootBase = RootBase;
-    ULONGLONG TcrEl1;
-    ULONGLONG T1sz;
+    ULONGLONG KernelRootBase = KiArm64KernelTtbrBase(UserDirectoryBase);
     ULONGLONG SavedDaif;
-    UNREFERENCED_PARAMETER(KernelDirectoryBase);
-
-    __asm__ __volatile__("mrs %0, tcr_el1" : "=r"(TcrEl1));
-    T1sz = (TcrEl1 >> 16) & 0x3FULL;
-    if (T1sz == 17)
-    {
-        KernelRootBase += KE_ARM64_TTBR1_L0_OFFSET;
-    }
 
     __asm__ __volatile__("mrs %0, daif" : "=r"(SavedDaif));
     __asm__ __volatile__("msr daifset, #0xF" ::: "memory");

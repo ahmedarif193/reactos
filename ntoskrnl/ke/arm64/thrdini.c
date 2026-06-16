@@ -298,9 +298,9 @@ KiSwapContextResume(
 #endif
 
     /*
-     * ARM64: Switch address space (TTBR0) when moving to a different process.
-     * This is critical for user-mode execution - without this, user-mode code
-     * would execute with the wrong page tables and access the wrong memory.
+     * ARM64: Let KiSwapProcess repair the active TTBR roots. This is needed
+     * even for same-process switches because APs can enter the scheduler with
+     * stale hardware roots during bring-up.
      *
      * KiSwapProcess will:
      * 1. Update process ActiveProcessors for SMP
@@ -310,11 +310,7 @@ KiSwapContextResume(
     OldProcess = OldThread->ApcState.Process;
     NewProcess = NewThread->ApcState.Process;
 
-    if (OldProcess != NewProcess)
-    {
-        KiSwapProcess(NewProcess, OldProcess);
-
-    }
+    KiSwapProcess(NewProcess, OldProcess);
 
     /*
      * FP/SIMD trap-on-first-use remains deferred until the ARM64 context-switch
