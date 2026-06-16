@@ -464,9 +464,32 @@ NTAPI
 MiFillSystemPageDirectory(IN PVOID Base,
                           IN SIZE_T NumberOfBytes)
 {
+    if (NumberOfBytes == 0)
+    {
+        return;
+    }
+
 #if defined(_M_ARM64)
     PAGED_CODE();
     MiArm64FillSystemPageDirectory(Base, NumberOfBytes);
+#elif (_MI_PAGING_LEVELS == 4)
+    PMMPDE PointerPde, LastPde;
+    PETHREAD CurrentThread;
+    PAGED_CODE();
+
+    PointerPde = MiAddressToPde(Base);
+    LastPde = MiAddressToPde(Add2Ptr(Base, NumberOfBytes - 1));
+    CurrentThread = PsGetCurrentThread();
+
+    MiLockWorkingSet(CurrentThread, &MmSystemCacheWs);
+
+    while (PointerPde <= LastPde)
+    {
+        MiMakeKernelPageTableValid(MiPdeToAddress(PointerPde));
+        PointerPde++;
+    }
+
+    MiUnlockWorkingSet(CurrentThread, &MmSystemCacheWs);
 #else
     PMMPDE PointerPde, LastPde, SystemMapPde;
     MMPDE TempPde;
