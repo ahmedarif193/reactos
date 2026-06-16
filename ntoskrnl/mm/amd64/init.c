@@ -272,7 +272,9 @@ MiInitializePageTable(VOID)
     {
         PMI_SYSTEM_VA_ASSIGNMENT Region = &MiSystemVaRegions[i];
 
-        if ((Region->BaseAddress == NULL) || (i == AssignedRegionSystemCache))
+        if ((Region->BaseAddress == NULL) ||
+            (i == AssignedRegionSystemCache) ||
+            (i == AssignedRegionKernelStacks))
         {
             continue;
         }
