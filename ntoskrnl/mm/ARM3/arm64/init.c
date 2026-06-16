@@ -30,7 +30,6 @@ static BOOLEAN MiArm64CanTouchSystemPageTables(VOID);
 static BOOLEAN MiArm64InitializeKernelSelfMap(VOID);
 static __inline PVOID MiArm64PhysToKseg0(UINT64 Phys);
 static __inline PVOID MiArm64PfnToKseg0(PFN_NUMBER Pfn);
-static PFN_NUMBER MiArm64AllocatePageTablePage(VOID);
 extern MMPTE ValidKernelPte;
 extern PVOID MiSystemViewStart;
 PVOID MiSystemPteSpaceStart;
@@ -1008,7 +1007,6 @@ MiArm64SelfMapEntryMatchesRoot(
             ((Entry & ~ARM64_PTE_ADDR_MASK) == ARM64_PTE_TABLE_DESCRIPTOR_ATTRS));
 }
 
-static
 PFN_NUMBER
 MiArm64AllocatePageTablePage(VOID)
 {
@@ -1051,6 +1049,12 @@ MiArm64AllocatePageTablePage(VOID)
     }
 
     return MxGetNextPage(1);
+}
+
+BOOLEAN
+MiArm64IsPfnDatabaseReady(VOID)
+{
+    return MiArm64PfnDatabaseReady;
 }
 
 static
@@ -2526,7 +2530,6 @@ MiBuildSystemPteSpace(VOID)
 {
     PMMPTE PointerPte;
     SIZE_T NonPagedSystemSize;
-    PVOID SystemPteRangeEnd;
 
     /* Use the default number of system PTEs */
     MmNumberOfSystemPtes = MI_NUMBER_SYSTEM_PTES;
@@ -2538,12 +2541,6 @@ MiBuildSystemPteSpace(VOID)
 
     /* Publish the location for RosMm and the address space dump */
     MmSystemPteSpaceStart = MiSystemPteSpaceStart;
-
-    /* Convert exclusive end into inclusive end for the mapping helpers */
-    SystemPteRangeEnd = (PVOID)((PUCHAR)MiSystemPteSpaceEnd - 1);
-
-    MiMapPPEs(MiSystemPteSpaceStart, SystemPteRangeEnd);
-    MiMapPDEs(MiSystemPteSpaceStart, SystemPteRangeEnd);
 
     PointerPte = MiAddressToPte(MiSystemPteSpaceStart);
     MiInitializeSystemPtes(PointerPte, MmNumberOfSystemPtes, SystemPteSpace, MiSystemPteMetadataBuffer);
