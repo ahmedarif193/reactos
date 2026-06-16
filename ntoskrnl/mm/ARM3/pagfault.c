@@ -594,6 +594,58 @@ MiCheckPdeForPagedPool(IN PVOID Address)
     //
     return Status;
 }
+#elif defined(_M_ARM64)
+NTSTATUS
+FASTCALL
+MiCheckPdeForPagedPool(IN PVOID Address)
+{
+    PVOID PoolAddress;
+    PMMPDE PointerPde;
+    PFN_NUMBER PageFrameIndex;
+    PFN_NUMBER PteFrame;
+    NTSTATUS Status = STATUS_SUCCESS;
+
+    if (MI_IS_SYSTEM_PAGE_TABLE_ADDRESS(Address))
+    {
+        PoolAddress = MiPteToAddress((PMMPTE)Address);
+        PointerPde = (PMMPDE)MiAddressToPte(Address);
+        Status = STATUS_WAIT_1;
+    }
+    else if (Address < MmSystemRangeStart)
+    {
+        return STATUS_ACCESS_VIOLATION;
+    }
+    else
+    {
+        PoolAddress = Address;
+        PointerPde = MiAddressToPde(Address);
+    }
+
+    if ((PoolAddress < MmPagedPoolStart) || (PoolAddress > MmPagedPoolEnd))
+    {
+        return STATUS_ACCESS_VIOLATION;
+    }
+
+    if (PointerPde->u.Hard.Valid == 0)
+    {
+        NTSTATUS PfnStatus;
+
+        MI_SET_USAGE(MI_USAGE_PAGED_POOL);
+        MI_SET_PROCESS2("Kernel");
+        PteFrame = PFN_FROM_PTE(MiAddressToPpe(PoolAddress));
+        PfnStatus = MiInitializeAndChargePfn(&PageFrameIndex, PointerPde, PteFrame, FALSE);
+        if (PfnStatus == STATUS_RETRY)
+        {
+            return Status;
+        }
+        if (!NT_SUCCESS(PfnStatus))
+        {
+            return PfnStatus;
+        }
+    }
+
+    return Status;
+}
 #else
 NTSTATUS
 FASTCALL
@@ -2078,6 +2130,8 @@ MmArmAccessFault(IN ULONG FaultCode,
 
 #if (_MI_PAGING_LEVELS == 2)
         if (MI_IS_SYSTEM_PAGE_TABLE_ADDRESS(Address)) MiSynchronizeSystemPde((PMMPDE)PointerPte);
+        MiCheckPdeForPagedPool(Address);
+#elif defined(_M_ARM64)
         MiCheckPdeForPagedPool(Address);
 #endif
 
