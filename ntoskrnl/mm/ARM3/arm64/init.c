@@ -2034,12 +2034,6 @@ MiInitMachineDependent(_Inout_ PLOADER_PARAMETER_BLOCK LoaderBlock)
         MiArm64PfnDatabaseReady = TRUE;
 
         {
-            PVOID PagedPoolEnd = Add2Ptr(MmPagedPoolStart, MmSizeOfPagedPoolInBytes - 1);
-
-            MiMapPPEPages(MmPagedPoolStart, PagedPoolEnd);
-        }
-
-        {
             PVOID SessionSpaceEnd = (PUCHAR)MiSessionSpaceEnd - 1;
 
             MiMapPPEs(MmSessionBase, SessionSpaceEnd);

@@ -2317,6 +2317,11 @@ MiEnsureNonPagedPoolExpansionPtesBacked(
 #endif
 
 #if defined(_M_ARM64)
+BOOLEAN
+NTAPI
+MiEnsurePagedPoolPdeBacked(
+    _In_ PVOID Address);
+
 PFN_NUMBER
 MiArm64AllocatePageTablePage(VOID);
 
