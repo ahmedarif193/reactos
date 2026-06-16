@@ -969,8 +969,6 @@ ExpQuerySystemProcessInformation(
                 !(Process->ActiveThreads) &&
                 (IsListEmpty(&Process->Pcb.ThreadListHead)))
             {
-                DPRINT1("Process %p (%s:%p) is a zombie\n",
-                        Process, Process->ImageFileName, Process->UniqueProcessId);
                 CurrentSize = 0;
                 ImageNameMaximumLength = 0;
 

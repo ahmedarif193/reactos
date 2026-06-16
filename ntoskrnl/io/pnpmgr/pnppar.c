@@ -11,14 +11,7 @@
 
 extern BOOLEAN PnPBootDriversLoaded;
 
-/* Parallel device-tree enumeration; default on for NT6+, serial for NT 5.02 and earlier. */
-#if (NTDDI_VERSION > NTDDI_WS03)
-BOOLEAN PnpEnableParallelEnum = TRUE;
-#else
 BOOLEAN PnpEnableParallelEnum = FALSE;
-#endif
-
-BOOLEAN PnpForceParallelEnum = FALSE;
 
 /* Dedicated worker pool: subtree workers block in IopSynchronousCall, so the shared queue won't do. */
 #define PI_PARALLEL_ENUM_MAX 8
@@ -196,7 +189,7 @@ PiProcessChildrenParallel(_In_ PDEVICE_NODE Parent)
 
     /* Only fork when >= 2 children need work. */
     if (count <= 1) return FALSE;
-    if (workCount < 2 && !PnpForceParallelEnum) return FALSE;
+    if (workCount < 2) return FALSE;
 
     children = ExAllocatePoolWithTag(NonPagedPool, count * sizeof(*children), TAG_IO);
     if (children == NULL) return FALSE;
