@@ -287,6 +287,8 @@ KiSwapContextResume(
     KeMemoryBarrier();
 #if (NTDDI_VERSION < NTDDI_WIN7)
     OldThread->SwapBusy = FALSE;
+#elif defined(_M_ARM64)
+    OldThread->SwapBusy = FALSE;
 #else
     OldThread->Running = FALSE;
 #endif

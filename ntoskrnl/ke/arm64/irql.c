@@ -21,13 +21,17 @@ FORCEINLINE
 KIRQL
 KiQueryCurrentIrql(VOID)
 {
-    PKIPCR Pcr = KeGetPcr();
-    if (Pcr != NULL)
-    {
-        return Pcr->CurrentIrql;
-    }
+    KIRQL Irql;
+    ULONG64 Daif;
 
-    return KeArm64CurrentIrql;
+    __asm__ __volatile__("mrs %0, daif\n\tmsr daifset, #3" : "=r"(Daif) :: "memory");
+    {
+        PKIPCR Pcr = KeGetPcr();
+        Irql = (Pcr != NULL) ? Pcr->CurrentIrql : KeArm64CurrentIrql;
+    }
+    __asm__ __volatile__("msr daif, %0" :: "r"(Daif) : "memory");
+
+    return Irql;
 }
 
 VOID
@@ -75,12 +79,36 @@ KiSetCurrentIrqlAndGicMask(
     KiRestoreInterruptFlag(Daif);
 }
 
+VOID
+NTAPI
+KiRestoreTrapFrameIrql(
+    _In_ KIRQL Irql)
+{
+    KiSetCurrentIrqlAndGicMask(Irql);
+}
+
 ULONG
 NTAPI
 KeGetCurrentProcessorNumber(VOID)
 {
-    PKPRCB Prcb = KeGetCurrentPrcb();
-    return Prcb ? Prcb->Number : 0;
+    ULONG Number;
+    ULONG64 Daif;
+
+    /*
+     * ARM64 SMP: KeGetCurrentPrcb() derives the PRCB pointer from
+     * mrs tpidr_el1; the dependent Prcb->Number load is not atomic vs a
+     * reschedule-SGI migration below DISPATCH_LEVEL. Callers that index a
+     * per-CPU array with the result (e.g. the GIC PMR shadow in
+     * HalpArm64SetPmrExact) would otherwise touch the wrong CPU's slot.
+     */
+    __asm__ __volatile__("mrs %0, daif\n\tmsr daifset, #3" : "=r"(Daif) :: "memory");
+    {
+        PKPRCB Prcb = KeGetCurrentPrcb();
+        Number = Prcb ? Prcb->Number : 0;
+    }
+    __asm__ __volatile__("msr daif, %0" :: "r"(Daif) : "memory");
+
+    return Number;
 }
 
 ULONG
@@ -88,8 +116,15 @@ NTAPI
 KeGetCurrentProcessorNumberEx(
     _Out_opt_ PPROCESSOR_NUMBER ProcNumber)
 {
-    PKPRCB Prcb = KeGetCurrentPrcb();
-    ULONG Processor = Prcb ? Prcb->Number : 0;
+    ULONG Processor;
+    ULONG64 Daif;
+
+    __asm__ __volatile__("mrs %0, daif\n\tmsr daifset, #3" : "=r"(Daif) :: "memory");
+    {
+        PKPRCB Prcb = KeGetCurrentPrcb();
+        Processor = Prcb ? Prcb->Number : 0;
+    }
+    __asm__ __volatile__("msr daif, %0" :: "r"(Daif) : "memory");
 
     if (ProcNumber)
     {
@@ -113,21 +148,36 @@ FASTCALL
 KfRaiseIrql(
     _In_ KIRQL NewIrql)
 {
-    KIRQL OldIrql = KiQueryCurrentIrql();
+    KIRQL OldIrql;
     ULONG64 Daif;
+
+    /*
+     * ARM64 SMP: CurrentIrql lives in per-CPU PCR memory, reached via
+     * mrs tpidr_el1 + a dependent load/store. The read of OldIrql and the
+     * write of NewIrql (plus the GIC PMR update, which itself derives the
+     * CPU number from tpidr_el1) must form a single migration-atomic
+     * read-modify-write. The DISPATCH reschedule SGI is deliverable below
+     * DISPATCH_LEVEL, so without masking IRQ/FIQ across the whole sequence a
+     * thread can migrate between the read and the write, reading the old
+     * CPU's IRQL and committing to a different CPU's PCR/PMR shadow. amd64
+     * gets this for free because cr8 is a single per-CPU register that moves
+     * with the thread; on ARM64 we must mask. Mask FIRST, before reading.
+     */
+    __asm__ __volatile__("mrs %0, daif\n\tmsr daifset, #3" : "=r"(Daif) :: "memory");
+
+    OldIrql = KiQueryCurrentIrql();
 
     if (NewIrql > HIGH_LEVEL)
     {
+        __asm__ __volatile__("msr daif, %0" :: "r"(Daif) : "memory");
         KeBugCheckEx(IRQL_NOT_GREATER_OR_EQUAL, NewIrql, OldIrql, 0, 0);
     }
 
     if (NewIrql <= OldIrql)
     {
+        __asm__ __volatile__("msr daif, %0" :: "r"(Daif) : "memory");
         return OldIrql;
     }
-
-    __asm__ __volatile__("mrs %0, daif" : "=r"(Daif));
-    __asm__ __volatile__("msr daifset, #2" ::: "memory");
 
     KiSetCurrentIrql(NewIrql);
 
@@ -136,7 +186,7 @@ KfRaiseIrql(
         HalRaiseGicPriorityMask(NewIrql);
     }
 
-    KiRestoreInterruptFlag(Daif);
+    __asm__ __volatile__("msr daif, %0" :: "r"(Daif) : "memory");
 
     return OldIrql;
 }
@@ -146,11 +196,26 @@ FASTCALL
 KfLowerIrql(
     _In_ KIRQL NewIrql)
 {
-    KIRQL OldIrql = KiQueryCurrentIrql();
+    KIRQL OldIrql;
+    ULONG64 Daif;
     BOOLEAN DeliverApc = FALSE;
+
+    /*
+     * ARM64 SMP: as in KfRaiseIrql, the OldIrql read and the CurrentIrql/PMR
+     * write must be one migration-atomic read-modify-write. Mask IRQ/FIQ
+     * before reading so the thread cannot migrate between reading the old
+     * CPU's IRQL and committing to a (possibly different) CPU's PCR. The
+     * only place the mask is lifted is around KiDeliverApc, which must run
+     * with interrupts enabled at APC_LEVEL after the IRQL has already been
+     * coherently set on this CPU.
+     */
+    __asm__ __volatile__("mrs %0, daif\n\tmsr daifset, #3" : "=r"(Daif) :: "memory");
+
+    OldIrql = KiQueryCurrentIrql();
 
     if (NewIrql > OldIrql)
     {
+        __asm__ __volatile__("msr daif, %0" :: "r"(Daif) : "memory");
         KeBugCheckEx(IRQL_NOT_GREATER_OR_EQUAL,
                      NewIrql,
                      OldIrql,
@@ -160,24 +225,23 @@ KfLowerIrql(
 
     if (NewIrql == OldIrql)
     {
+        __asm__ __volatile__("msr daif, %0" :: "r"(Daif) : "memory");
         return;
     }
 
-    if ((OldIrql >= APC_LEVEL) && (NewIrql < APC_LEVEL))
+    /*
+     * Decide on APC delivery using the IRQ-enable state the caller had on
+     * entry (the saved Daif), not the masked state we are in now.
+     */
+    if ((OldIrql >= APC_LEVEL) && (NewIrql < APC_LEVEL) &&
+        !(Daif & ARM64_DAIF_IRQ_MASK))
     {
-        ULONG64 Daif;
-        PKTHREAD Thread;
-
-        __asm__ __volatile__("mrs %0, daif" : "=r"(Daif));
-        if (!(Daif & ARM64_DAIF_IRQ_MASK))
+        PKTHREAD Thread = KeGetCurrentThread();
+        if ((Thread != NULL) &&
+            (Thread->ApcState.KernelApcPending) &&
+            !(Thread->SpecialApcDisable))
         {
-            Thread = KeGetCurrentThread();
-            if ((Thread != NULL) &&
-                (Thread->ApcState.KernelApcPending) &&
-                !(Thread->SpecialApcDisable))
-            {
-                DeliverApc = TRUE;
-            }
+            DeliverApc = TRUE;
         }
     }
 
@@ -185,13 +249,29 @@ KfLowerIrql(
     {
         if (OldIrql != APC_LEVEL)
         {
-            KiSetCurrentIrqlAndGicMask(APC_LEVEL);
+            KiSetCurrentIrql(APC_LEVEL);
+            if (KiHalInitialized)
+            {
+                HalSetGicPriorityMask(APC_LEVEL);
+            }
         }
 
+        /* APCs run at APC_LEVEL with interrupts enabled; lift the mask */
+        __asm__ __volatile__("msr daif, %0" :: "r"(Daif) : "memory");
+
         KiDeliverApc(KernelMode, NULL, NULL);
+
+        /* Re-mask for the final IRQL commit */
+        __asm__ __volatile__("mrs %0, daif\n\tmsr daifset, #3" : "=r"(Daif) :: "memory");
     }
 
-    KiSetCurrentIrqlAndGicMask(NewIrql);
+    KiSetCurrentIrql(NewIrql);
+    if (KiHalInitialized)
+    {
+        HalSetGicPriorityMask(NewIrql);
+    }
+
+    __asm__ __volatile__("msr daif, %0" :: "r"(Daif) : "memory");
 }
 
 NTKERNELAPI

@@ -1022,20 +1022,39 @@ static __inline PKPRCB KeGetCurrentPrcb(VOID)
  */
 #define KeGetCurrentIrql() \
     __extension__ ({ \
-        PKIPCR _irql_pcr = KeGetPcr(); \
-        (_irql_pcr != NULL) ? _irql_pcr->CurrentIrql : KeArm64CurrentIrql; \
+        KIRQL _ci_irql; \
+        ULONG64 _ci_daif; \
+        __asm__ __volatile__("mrs %0, daif\n\tmsr daifset, #3" \
+                             : "=r"(_ci_daif) :: "memory"); \
+        { \
+            PKIPCR _irql_pcr = KeGetPcr(); \
+            _ci_irql = (_irql_pcr != NULL) ? _irql_pcr->CurrentIrql : KeArm64CurrentIrql; \
+        } \
+        __asm__ __volatile__("msr daif, %0" :: "r"(_ci_daif) : "memory"); \
+        _ci_irql; \
     })
 #endif
 /*
- * ARM64 SMP: _KeGetCurrentThread must read from the per-CPU PRCB once
- * TPIDR_EL1 is initialized. The global current thread is only an early boot
- * fallback; using it after a valid PCR exists can return stale state from
- * another CPU.
+ * ARM64 SMP: reading CurrentThread is mrs TPIDR_EL1 + a dependent load, which
+ * is not atomic vs preemption. The DISPATCH reschedule SGI is deliverable at
+ * APC_LEVEL, so a thread can migrate CPUs between the two and the load would
+ * read the old CPU's PRCB. Mask IRQ/FIQ across the pair. (x18 is not the
+ * reserved platform register here, so the single x18-relative load amd64/Win
+ * uses is unavailable.)
  */
 #define _KeGetCurrentThread() \
     __extension__ ({ \
-        PKIPCR _ct_pcr = KeGetPcr(); \
-        (_ct_pcr != NULL) ? _ct_pcr->Prcb.CurrentThread : KeArm64CurrentThread; \
+        PKTHREAD _ct_thread; \
+        ULONG64 _ct_daif; \
+        __asm__ __volatile__("mrs %0, daif\n\tmsr daifset, #3" \
+                             : "=r"(_ct_daif) :: "memory"); \
+        { \
+            PKIPCR _ct_pcr = KeGetPcr(); \
+            _ct_thread = (_ct_pcr != NULL) ? _ct_pcr->Prcb.CurrentThread \
+                                           : KeArm64CurrentThread; \
+        } \
+        __asm__ __volatile__("msr daif, %0" :: "r"(_ct_daif) : "memory"); \
+        _ct_thread; \
     })
 #define _KeGetPreviousMode() \
     __extension__ ({ \

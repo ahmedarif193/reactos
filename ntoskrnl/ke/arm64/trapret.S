@@ -5,6 +5,7 @@
     .align 4
 
     .global KiTrapReturn
+    .extern KiRestoreTrapFrameIrql
 
     .seh_proc KiTrapReturn
 KiTrapReturn:
@@ -30,6 +31,13 @@ KiTrapReturn:
      */
     msr     daifset, #0xF                /* Disable D(8), A(4), I(2), F(1) */
     isb                                  /* Ensure mask takes effect NOW */
+
+    /*
+     * ERET restores architectural PSTATE, but ReactOS tracks IRQL in the PCR and
+     * GIC PMR. Restore the interrupted IRQL before returning from the trap.
+     */
+    ldrb    w0, [x20, #TfPreviousIrql]
+    bl      KiRestoreTrapFrameIrql
 
     /* Preserve fallback frame pointer/link register */
     ldr     x24, [x20, #TfFp]

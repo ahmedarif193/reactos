@@ -834,9 +834,7 @@ KiSetPriorityThread(IN PKTHREAD Thread,
             }
             else if (Thread->State == DeferredReady)
             {
-                /* FIXME: TODO */
-                DPRINT1("Deferred state not yet supported\n");
-                ASSERT(FALSE);
+                Thread->Priority = (SCHAR)Priority;
             }
             else
             {
