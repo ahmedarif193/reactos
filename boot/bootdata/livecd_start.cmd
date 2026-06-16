@@ -5,6 +5,12 @@ if not "%1" == "" (
     goto :eof
 )
 
+if not exist "%SystemRoot%\system32\cpubench.exe" goto after_cpubench
+%SystemRoot%\system32\dbgprint.exe CPUBENCH_BEGIN
+start "ReactOS CPU Benchmark" /wait %SystemRoot%\system32\cpubench.exe
+%SystemRoot%\system32\dbgprint.exe CPUBENCH_END
+:after_cpubench
+
 if not exist "%SystemRoot%\system32\cmd_rostest_x64.exe" goto after_cmd_rostest_x64
 echo Running cmd_rostest_x64
 %SystemRoot%\system32\dbgprint.exe FEX_TEST_BEGIN cmd_rostest_x64

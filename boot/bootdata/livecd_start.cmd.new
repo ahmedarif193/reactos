@@ -1,0 +1,439 @@
+@echo off
+
+if not "%1" == "" (
+    start %1
+    goto :eof
+)
+
+if not exist "%SystemRoot%\system32\cmd_rostest_x64.exe" goto after_cmd_rostest_x64
+echo Running cmd_rostest_x64
+%SystemRoot%\system32\dbgprint.exe FEX_TEST_BEGIN cmd_rostest_x64
+%SystemRoot%\system32\cmd_rostest_x64.exe
+%SystemRoot%\system32\dbgprint.exe FEX_TEST_EXIT cmd_rostest_x64 %ERRORLEVEL%
+%SystemRoot%\system32\dbgprint.exe FEX_TEST_END cmd_rostest_x64
+:after_cmd_rostest_x64
+
+if not exist "%SystemRoot%\system32\ntdll_apitest_x64.exe" goto after_ntdll_apitest_x64
+%SystemRoot%\system32\dbgprint.exe FEX_TEST_BEGIN ntdll_apitest_x64 arm64_chpe
+%SystemRoot%\system32\ntdll_apitest_x64.exe arm64_chpe
+%SystemRoot%\system32\dbgprint.exe FEX_TEST_EXIT ntdll_apitest_x64 arm64_chpe %ERRORLEVEL%
+%SystemRoot%\system32\dbgprint.exe FEX_TEST_END ntdll_apitest_x64 arm64_chpe
+:after_ntdll_apitest_x64
+
+if not exist "%SystemRoot%\bin\kmtest_.exe" goto :eof
+
+pushd "%SystemRoot%\bin" || goto :eof
+
+echo Running kmtest_ MmSelfMap
+kmtest_.exe MmSelfMap
+
+echo Running kmtest_ arm64 parity suite
+kmtest_.exe HalArm64Layout
+kmtest_.exe KdArm64Layout
+kmtest_.exe KeArm64
+kmtest_.exe KeArm64Dispatcher
+kmtest_.exe KeArm64DpcIpi
+kmtest_.exe KeArm64Frames
+kmtest_.exe KeArm64Intrinsics
+kmtest_.exe KeArm64Irql
+kmtest_.exe KeArm64LoaderCache
+kmtest_.exe KeArm64PcrPrcb
+kmtest_.exe KeArm64Smp
+kmtest_.exe KeArm64SmpChurn
+kmtest_.exe KeArm64SpinLock
+kmtest_.exe KeArm64ThreadProcess
+kmtest_.exe RtlArm64UnwindLayout
+
+echo raw-ros-kmtest: BEGIN
+echo raw-ros-kmtest: RUN CmKeyKM
+kmtest_.exe CmKeyKM
+echo raw-ros-kmtest: EXIT CmKeyKM %ERRORLEVEL%
+echo raw-ros-kmtest: RUN CmSecurity
+kmtest_.exe CmSecurity
+echo raw-ros-kmtest: EXIT CmSecurity %ERRORLEVEL%
+echo raw-ros-kmtest: RUN EtwRegisterKM
+kmtest_.exe EtwRegisterKM
+echo raw-ros-kmtest: EXIT EtwRegisterKM %ERRORLEVEL%
+echo raw-ros-kmtest: RUN ExCallback
+kmtest_.exe ExCallback
+echo raw-ros-kmtest: EXIT ExCallback %ERRORLEVEL%
+echo raw-ros-kmtest: RUN ExCallbackExtra
+kmtest_.exe ExCallbackExtra
+echo raw-ros-kmtest: EXIT ExCallbackExtra %ERRORLEVEL%
+echo raw-ros-kmtest: RUN ExDoubleList
+kmtest_.exe ExDoubleList
+echo raw-ros-kmtest: EXIT ExDoubleList %ERRORLEVEL%
+echo raw-ros-kmtest: RUN ExFastMutex
+kmtest_.exe ExFastMutex
+echo raw-ros-kmtest: EXIT ExFastMutex %ERRORLEVEL%
+echo raw-ros-kmtest: RUN ExFastMutexExtra
+kmtest_.exe ExFastMutexExtra
+echo raw-ros-kmtest: EXIT ExFastMutexExtra %ERRORLEVEL%
+echo raw-ros-kmtest: RUN ExInterlocked
+kmtest_.exe ExInterlocked
+echo raw-ros-kmtest: EXIT ExInterlocked %ERRORLEVEL%
+echo raw-ros-kmtest: RUN ExLookaside
+kmtest_.exe ExLookaside
+echo raw-ros-kmtest: EXIT ExLookaside %ERRORLEVEL%
+echo raw-ros-kmtest: RUN ExPoolExtra
+kmtest_.exe ExPoolExtra
+echo raw-ros-kmtest: EXIT ExPoolExtra %ERRORLEVEL%
+echo raw-ros-kmtest: RUN ExResource
+kmtest_.exe ExResource
+echo raw-ros-kmtest: EXIT ExResource %ERRORLEVEL%
+echo raw-ros-kmtest: RUN ExResourceExtra
+kmtest_.exe ExResourceExtra
+echo raw-ros-kmtest: EXIT ExResourceExtra %ERRORLEVEL%
+echo raw-ros-kmtest: RUN ExSequencedList
+kmtest_.exe ExSequencedList
+echo raw-ros-kmtest: EXIT ExSequencedList %ERRORLEVEL%
+echo raw-ros-kmtest: RUN ExSingleList
+kmtest_.exe ExSingleList
+echo raw-ros-kmtest: EXIT ExSingleList %ERRORLEVEL%
+echo raw-ros-kmtest: RUN ExTimeZone
+kmtest_.exe ExTimeZone
+echo raw-ros-kmtest: EXIT ExTimeZone %ERRORLEVEL%
+echo raw-ros-kmtest: RUN ExTimer
+kmtest_.exe ExTimer
+echo raw-ros-kmtest: EXIT ExTimer %ERRORLEVEL%
+echo raw-ros-kmtest: RUN ExTimerExtra
+kmtest_.exe ExTimerExtra
+echo raw-ros-kmtest: EXIT ExTimerExtra %ERRORLEVEL%
+echo raw-ros-kmtest: RUN ExUuid
+kmtest_.exe ExUuid
+echo raw-ros-kmtest: EXIT ExUuid %ERRORLEVEL%
+echo raw-ros-kmtest: RUN ExWorkItem
+kmtest_.exe ExWorkItem
+echo raw-ros-kmtest: EXIT ExWorkItem %ERRORLEVEL%
+echo raw-ros-kmtest: RUN FsRtlDissect
+kmtest_.exe FsRtlDissect
+echo raw-ros-kmtest: EXIT FsRtlDissect %ERRORLEVEL%
+echo raw-ros-kmtest: RUN FsRtlExpression
+kmtest_.exe FsRtlExpression
+echo raw-ros-kmtest: EXIT FsRtlExpression %ERRORLEVEL%
+echo raw-ros-kmtest: RUN FsRtlLegal
+kmtest_.exe FsRtlLegal
+echo raw-ros-kmtest: EXIT FsRtlLegal %ERRORLEVEL%
+echo raw-ros-kmtest: RUN FsRtlMcb
+kmtest_.exe FsRtlMcb
+echo raw-ros-kmtest: EXIT FsRtlMcb %ERRORLEVEL%
+echo raw-ros-kmtest: RUN FsRtlRemoveDotsFromPath
+kmtest_.exe FsRtlRemoveDotsFromPath
+echo raw-ros-kmtest: EXIT FsRtlRemoveDotsFromPath %ERRORLEVEL%
+echo raw-ros-kmtest: RUN FsRtlTunnel
+kmtest_.exe FsRtlTunnel
+echo raw-ros-kmtest: EXIT FsRtlTunnel %ERRORLEVEL%
+echo raw-ros-kmtest: RUN HalArm64Layout
+kmtest_.exe HalArm64Layout
+echo raw-ros-kmtest: EXIT HalArm64Layout %ERRORLEVEL%
+echo raw-ros-kmtest: RUN HalArm64Stage1
+kmtest_.exe HalArm64Stage1
+echo raw-ros-kmtest: EXIT HalArm64Stage1 %ERRORLEVEL%
+echo raw-ros-kmtest: RUN HalArm64Stage2
+kmtest_.exe HalArm64Stage2
+echo raw-ros-kmtest: EXIT HalArm64Stage2 %ERRORLEVEL%
+echo raw-ros-kmtest: RUN HalArm64Stage3
+kmtest_.exe HalArm64Stage3
+echo raw-ros-kmtest: EXIT HalArm64Stage3 %ERRORLEVEL%
+echo raw-ros-kmtest: RUN HalArm64Stage4
+kmtest_.exe HalArm64Stage4
+echo raw-ros-kmtest: EXIT HalArm64Stage4 %ERRORLEVEL%
+echo raw-ros-kmtest: RUN HalArm64Stage5
+kmtest_.exe HalArm64Stage5
+echo raw-ros-kmtest: EXIT HalArm64Stage5 %ERRORLEVEL%
+echo raw-ros-kmtest: RUN HalSystemInfo
+kmtest_.exe HalSystemInfo
+echo raw-ros-kmtest: EXIT HalSystemInfo %ERRORLEVEL%
+echo raw-ros-kmtest: RUN IoBuildIoctlKM
+kmtest_.exe IoBuildIoctlKM
+echo raw-ros-kmtest: EXIT IoBuildIoctlKM %ERRORLEVEL%
+echo raw-ros-kmtest: RUN IoCancelKM
+kmtest_.exe IoCancelKM
+echo raw-ros-kmtest: EXIT IoCancelKM %ERRORLEVEL%
+echo raw-ros-kmtest: RUN IoCreateFile
+kmtest_.exe IoCreateFile
+echo raw-ros-kmtest: EXIT IoCreateFile %ERRORLEVEL%
+echo raw-ros-kmtest: RUN IoCsqKM
+kmtest_.exe IoCsqKM
+echo raw-ros-kmtest: EXIT IoCsqKM %ERRORLEVEL%
+echo raw-ros-kmtest: RUN IoDeviceInterface
+kmtest_.exe IoDeviceInterface
+echo raw-ros-kmtest: EXIT IoDeviceInterface %ERRORLEVEL%
+echo raw-ros-kmtest: RUN IoEvent
+kmtest_.exe IoEvent
+echo raw-ros-kmtest: EXIT IoEvent %ERRORLEVEL%
+echo raw-ros-kmtest: RUN IoInterrupt
+kmtest_.exe IoInterrupt
+echo raw-ros-kmtest: EXIT IoInterrupt %ERRORLEVEL%
+echo raw-ros-kmtest: RUN IoIrp
+kmtest_.exe IoIrp
+echo raw-ros-kmtest: EXIT IoIrp %ERRORLEVEL%
+echo raw-ros-kmtest: RUN IoMdl
+kmtest_.exe IoMdl
+echo raw-ros-kmtest: EXIT IoMdl %ERRORLEVEL%
+echo raw-ros-kmtest: RUN IoNullDeviceKM
+kmtest_.exe IoNullDeviceKM
+echo raw-ros-kmtest: EXIT IoNullDeviceKM %ERRORLEVEL%
+echo raw-ros-kmtest: RUN KdArm64Layout
+kmtest_.exe KdArm64Layout
+echo raw-ros-kmtest: EXIT KdArm64Layout %ERRORLEVEL%
+echo raw-ros-kmtest: RUN KeAffinityKM
+kmtest_.exe KeAffinityKM
+echo raw-ros-kmtest: EXIT KeAffinityKM %ERRORLEVEL%
+echo raw-ros-kmtest: RUN KeApc
+kmtest_.exe KeApc
+echo raw-ros-kmtest: EXIT KeApc %ERRORLEVEL%
+echo raw-ros-kmtest: RUN KeApcInject
+kmtest_.exe KeApcInject
+echo raw-ros-kmtest: EXIT KeApcInject %ERRORLEVEL%
+echo raw-ros-kmtest: RUN KeArm64
+kmtest_.exe KeArm64
+echo raw-ros-kmtest: EXIT KeArm64 %ERRORLEVEL%
+echo raw-ros-kmtest: RUN KeArm64Dispatcher
+kmtest_.exe KeArm64Dispatcher
+echo raw-ros-kmtest: EXIT KeArm64Dispatcher %ERRORLEVEL%
+echo raw-ros-kmtest: RUN KeArm64DpcIpi
+kmtest_.exe KeArm64DpcIpi
+echo raw-ros-kmtest: EXIT KeArm64DpcIpi %ERRORLEVEL%
+echo raw-ros-kmtest: RUN KeArm64Frames
+kmtest_.exe KeArm64Frames
+echo raw-ros-kmtest: EXIT KeArm64Frames %ERRORLEVEL%
+echo raw-ros-kmtest: RUN KeArm64Intrinsics
+kmtest_.exe KeArm64Intrinsics
+echo raw-ros-kmtest: EXIT KeArm64Intrinsics %ERRORLEVEL%
+echo raw-ros-kmtest: RUN KeArm64IpiBroadcast
+kmtest_.exe KeArm64IpiBroadcast
+echo raw-ros-kmtest: EXIT KeArm64IpiBroadcast %ERRORLEVEL%
+echo raw-ros-kmtest: RUN KeArm64Irql
+kmtest_.exe KeArm64Irql
+echo raw-ros-kmtest: EXIT KeArm64Irql %ERRORLEVEL%
+echo raw-ros-kmtest: RUN KeArm64LoaderCache
+kmtest_.exe KeArm64LoaderCache
+echo raw-ros-kmtest: EXIT KeArm64LoaderCache %ERRORLEVEL%
+echo raw-ros-kmtest: RUN KeArm64PcrPrcb
+kmtest_.exe KeArm64PcrPrcb
+echo raw-ros-kmtest: EXIT KeArm64PcrPrcb %ERRORLEVEL%
+echo raw-ros-kmtest: RUN KeArm64Smp
+kmtest_.exe KeArm64Smp
+echo raw-ros-kmtest: EXIT KeArm64Smp %ERRORLEVEL%
+echo raw-ros-kmtest: RUN KeArm64SmpChurn
+kmtest_.exe KeArm64SmpChurn
+echo raw-ros-kmtest: EXIT KeArm64SmpChurn %ERRORLEVEL%
+echo raw-ros-kmtest: RUN KeArm64SpinLock
+kmtest_.exe KeArm64SpinLock
+echo raw-ros-kmtest: EXIT KeArm64SpinLock %ERRORLEVEL%
+echo raw-ros-kmtest: RUN KeArm64ThreadProcess
+kmtest_.exe KeArm64ThreadProcess
+echo raw-ros-kmtest: EXIT KeArm64ThreadProcess %ERRORLEVEL%
+echo raw-ros-kmtest: RUN KeBugCheckCbKM
+kmtest_.exe KeBugCheckCbKM
+echo raw-ros-kmtest: EXIT KeBugCheckCbKM %ERRORLEVEL%
+echo raw-ros-kmtest: RUN KeCriticalRegionKM
+kmtest_.exe KeCriticalRegionKM
+echo raw-ros-kmtest: EXIT KeCriticalRegionKM %ERRORLEVEL%
+echo raw-ros-kmtest: RUN KeDeviceQueue
+kmtest_.exe KeDeviceQueue
+echo raw-ros-kmtest: EXIT KeDeviceQueue %ERRORLEVEL%
+echo raw-ros-kmtest: RUN KeDpc
+kmtest_.exe KeDpc
+echo raw-ros-kmtest: EXIT KeDpc %ERRORLEVEL%
+echo raw-ros-kmtest: RUN KeEvent
+kmtest_.exe KeEvent
+echo raw-ros-kmtest: EXIT KeEvent %ERRORLEVEL%
+echo raw-ros-kmtest: RUN KeFloatPointState
+kmtest_.exe KeFloatPointState
+echo raw-ros-kmtest: EXIT KeFloatPointState %ERRORLEVEL%
+echo raw-ros-kmtest: RUN KeIpiKM
+kmtest_.exe KeIpiKM
+echo raw-ros-kmtest: EXIT KeIpiKM %ERRORLEVEL%
+echo raw-ros-kmtest: RUN KeIrql
+kmtest_.exe KeIrql
+echo raw-ros-kmtest: EXIT KeIrql %ERRORLEVEL%
+echo raw-ros-kmtest: RUN KePcr
+kmtest_.exe KePcr
+echo raw-ros-kmtest: EXIT KePcr %ERRORLEVEL%
+echo raw-ros-kmtest: RUN KeProcessor
+kmtest_.exe KeProcessor
+echo raw-ros-kmtest: EXIT KeProcessor %ERRORLEVEL%
+echo raw-ros-kmtest: RUN KeQueue
+kmtest_.exe KeQueue
+echo raw-ros-kmtest: EXIT KeQueue %ERRORLEVEL%
+echo raw-ros-kmtest: RUN KeSpinLock
+kmtest_.exe KeSpinLock
+echo raw-ros-kmtest: EXIT KeSpinLock %ERRORLEVEL%
+echo raw-ros-kmtest: RUN KeThreadedDpc
+kmtest_.exe KeThreadedDpc
+echo raw-ros-kmtest: EXIT KeThreadedDpc %ERRORLEVEL%
+echo raw-ros-kmtest: RUN KeTime
+kmtest_.exe KeTime
+echo raw-ros-kmtest: EXIT KeTime %ERRORLEVEL%
+echo raw-ros-kmtest: RUN KeTimer
+kmtest_.exe KeTimer
+echo raw-ros-kmtest: EXIT KeTimer %ERRORLEVEL%
+echo raw-ros-kmtest: RUN KeTimer2KM
+kmtest_.exe KeTimer2KM
+echo raw-ros-kmtest: EXIT KeTimer2KM %ERRORLEVEL%
+echo raw-ros-kmtest: RUN KeWaitMultiple
+kmtest_.exe KeWaitMultiple
+echo raw-ros-kmtest: EXIT KeWaitMultiple %ERRORLEVEL%
+echo raw-ros-kmtest: RUN KernelType
+kmtest_.exe KernelType
+echo raw-ros-kmtest: EXIT KernelType %ERRORLEVEL%
+echo raw-ros-kmtest: RUN MmAllocateContiguousNode
+kmtest_.exe MmAllocateContiguousNode
+echo raw-ros-kmtest: EXIT MmAllocateContiguousNode %ERRORLEVEL%
+echo raw-ros-kmtest: RUN MmMdl
+kmtest_.exe MmMdl
+echo raw-ros-kmtest: EXIT MmMdl %ERRORLEVEL%
+echo raw-ros-kmtest: RUN MmPhysical
+kmtest_.exe MmPhysical
+echo raw-ros-kmtest: EXIT MmPhysical %ERRORLEVEL%
+echo raw-ros-kmtest: RUN MmReservedMapping
+kmtest_.exe MmReservedMapping
+echo raw-ros-kmtest: EXIT MmReservedMapping %ERRORLEVEL%
+echo raw-ros-kmtest: RUN MmSection
+kmtest_.exe MmSection
+echo raw-ros-kmtest: EXIT MmSection %ERRORLEVEL%
+echo raw-ros-kmtest: RUN MmSecureKM
+kmtest_.exe MmSecureKM
+echo raw-ros-kmtest: EXIT MmSecureKM %ERRORLEVEL%
+echo raw-ros-kmtest: RUN NpfsConnect
+kmtest_.exe NpfsConnect
+echo raw-ros-kmtest: EXIT NpfsConnect %ERRORLEVEL%
+echo raw-ros-kmtest: RUN NpfsCreate
+kmtest_.exe NpfsCreate
+echo raw-ros-kmtest: EXIT NpfsCreate %ERRORLEVEL%
+echo raw-ros-kmtest: RUN NpfsFileInfo
+kmtest_.exe NpfsFileInfo
+echo raw-ros-kmtest: EXIT NpfsFileInfo %ERRORLEVEL%
+echo raw-ros-kmtest: RUN NpfsReadWrite
+kmtest_.exe NpfsReadWrite
+echo raw-ros-kmtest: EXIT NpfsReadWrite %ERRORLEVEL%
+echo raw-ros-kmtest: RUN NpfsVolumeInfo
+kmtest_.exe NpfsVolumeInfo
+echo raw-ros-kmtest: EXIT NpfsVolumeInfo %ERRORLEVEL%
+echo raw-ros-kmtest: RUN ObHandle
+kmtest_.exe ObHandle
+echo raw-ros-kmtest: EXIT ObHandle %ERRORLEVEL%
+echo raw-ros-kmtest: RUN ObOpenByPointer
+kmtest_.exe ObOpenByPointer
+echo raw-ros-kmtest: EXIT ObOpenByPointer %ERRORLEVEL%
+echo raw-ros-kmtest: RUN ObQuery
+kmtest_.exe ObQuery
+echo raw-ros-kmtest: EXIT ObQuery %ERRORLEVEL%
+echo raw-ros-kmtest: RUN ObReference
+kmtest_.exe ObReference
+echo raw-ros-kmtest: EXIT ObReference %ERRORLEVEL%
+echo raw-ros-kmtest: RUN ObSecurity
+kmtest_.exe ObSecurity
+echo raw-ros-kmtest: EXIT ObSecurity %ERRORLEVEL%
+echo raw-ros-kmtest: RUN ObSecurityDescKM
+kmtest_.exe ObSecurityDescKM
+echo raw-ros-kmtest: EXIT ObSecurityDescKM %ERRORLEVEL%
+echo raw-ros-kmtest: RUN ObType
+kmtest_.exe ObType
+echo raw-ros-kmtest: EXIT ObType %ERRORLEVEL%
+echo raw-ros-kmtest: RUN ObTypes
+kmtest_.exe ObTypes
+echo raw-ros-kmtest: EXIT ObTypes %ERRORLEVEL%
+echo raw-ros-kmtest: RUN PsNotify
+kmtest_.exe PsNotify
+echo raw-ros-kmtest: EXIT PsNotify %ERRORLEVEL%
+echo raw-ros-kmtest: RUN PsNotifyKM
+kmtest_.exe PsNotifyKM
+echo raw-ros-kmtest: EXIT PsNotifyKM %ERRORLEVEL%
+echo raw-ros-kmtest: RUN PsProcessInfo
+kmtest_.exe PsProcessInfo
+echo raw-ros-kmtest: EXIT PsProcessInfo %ERRORLEVEL%
+echo raw-ros-kmtest: RUN PsQuota
+kmtest_.exe PsQuota
+echo raw-ros-kmtest: EXIT PsQuota %ERRORLEVEL%
+echo raw-ros-kmtest: RUN PsSystemThread
+kmtest_.exe PsSystemThread
+echo raw-ros-kmtest: EXIT PsSystemThread %ERRORLEVEL%
+echo raw-ros-kmtest: RUN RtlArm64UnwindLayout
+kmtest_.exe RtlArm64UnwindLayout
+echo raw-ros-kmtest: EXIT RtlArm64UnwindLayout %ERRORLEVEL%
+echo raw-ros-kmtest: RUN RtlAvlTreeKM
+kmtest_.exe RtlAvlTreeKM
+echo raw-ros-kmtest: EXIT RtlAvlTreeKM %ERRORLEVEL%
+echo raw-ros-kmtest: RUN RtlBitmapKM
+kmtest_.exe RtlBitmapKM
+echo raw-ros-kmtest: EXIT RtlBitmapKM %ERRORLEVEL%
+echo raw-ros-kmtest: RUN RtlGenericTableKM
+kmtest_.exe RtlGenericTableKM
+echo raw-ros-kmtest: EXIT RtlGenericTableKM %ERRORLEVEL%
+echo raw-ros-kmtest: RUN RtlGetVersion
+kmtest_.exe RtlGetVersion
+echo raw-ros-kmtest: EXIT RtlGetVersion %ERRORLEVEL%
+echo raw-ros-kmtest: RUN RtlGuidKM
+kmtest_.exe RtlGuidKM
+echo raw-ros-kmtest: EXIT RtlGuidKM %ERRORLEVEL%
+echo raw-ros-kmtest: RUN RtlHashTableKM
+kmtest_.exe RtlHashTableKM
+echo raw-ros-kmtest: EXIT RtlHashTableKM %ERRORLEVEL%
+echo raw-ros-kmtest: RUN RtlImageKM
+kmtest_.exe RtlImageKM
+echo raw-ros-kmtest: EXIT RtlImageKM %ERRORLEVEL%
+echo raw-ros-kmtest: RUN RtlIntSafeKM
+kmtest_.exe RtlIntSafeKM
+echo raw-ros-kmtest: EXIT RtlIntSafeKM %ERRORLEVEL%
+echo raw-ros-kmtest: RUN RtlIsValidOemCharacter
+kmtest_.exe RtlIsValidOemCharacter
+echo raw-ros-kmtest: EXIT RtlIsValidOemCharacter %ERRORLEVEL%
+echo raw-ros-kmtest: RUN RtlRandomKM
+kmtest_.exe RtlRandomKM
+echo raw-ros-kmtest: EXIT RtlRandomKM %ERRORLEVEL%
+echo raw-ros-kmtest: RUN RtlRangeList
+kmtest_.exe RtlRangeList
+echo raw-ros-kmtest: EXIT RtlRangeList %ERRORLEVEL%
+echo raw-ros-kmtest: RUN RtlRegistryKM
+kmtest_.exe RtlRegistryKM
+echo raw-ros-kmtest: EXIT RtlRegistryKM %ERRORLEVEL%
+echo raw-ros-kmtest: RUN RtlSplayTreeKM
+kmtest_.exe RtlSplayTreeKM
+echo raw-ros-kmtest: EXIT RtlSplayTreeKM %ERRORLEVEL%
+echo raw-ros-kmtest: RUN RtlStrSafeKM
+kmtest_.exe RtlStrSafeKM
+echo raw-ros-kmtest: EXIT RtlStrSafeKM %ERRORLEVEL%
+echo raw-ros-kmtest: RUN RtlStringSupportKM
+kmtest_.exe RtlStringSupportKM
+echo raw-ros-kmtest: EXIT RtlStringSupportKM %ERRORLEVEL%
+echo raw-ros-kmtest: RUN RtlTimeKM
+kmtest_.exe RtlTimeKM
+echo raw-ros-kmtest: EXIT RtlTimeKM %ERRORLEVEL%
+echo raw-ros-kmtest: RUN RtlUnicodeStringKM
+kmtest_.exe RtlUnicodeStringKM
+echo raw-ros-kmtest: EXIT RtlUnicodeStringKM %ERRORLEVEL%
+echo raw-ros-kmtest: RUN SeAccessCheckKM
+kmtest_.exe SeAccessCheckKM
+echo raw-ros-kmtest: EXIT SeAccessCheckKM %ERRORLEVEL%
+echo raw-ros-kmtest: RUN SeInheritance
+kmtest_.exe SeInheritance
+echo raw-ros-kmtest: EXIT SeInheritance %ERRORLEVEL%
+echo raw-ros-kmtest: RUN SeLogonSession
+kmtest_.exe SeLogonSession
+echo raw-ros-kmtest: EXIT SeLogonSession %ERRORLEVEL%
+echo raw-ros-kmtest: RUN SeQueryInfoToken
+kmtest_.exe SeQueryInfoToken
+echo raw-ros-kmtest: EXIT SeQueryInfoToken %ERRORLEVEL%
+echo raw-ros-kmtest: RUN SeTokenFiltering
+kmtest_.exe SeTokenFiltering
+echo raw-ros-kmtest: EXIT SeTokenFiltering %ERRORLEVEL%
+echo raw-ros-kmtest: RUN ZwCreateSection
+kmtest_.exe ZwCreateSection
+echo raw-ros-kmtest: EXIT ZwCreateSection %ERRORLEVEL%
+echo raw-ros-kmtest: RUN ZwDuplicateKM
+kmtest_.exe ZwDuplicateKM
+echo raw-ros-kmtest: EXIT ZwDuplicateKM %ERRORLEVEL%
+echo raw-ros-kmtest: RUN ZwFileKM
+kmtest_.exe ZwFileKM
+echo raw-ros-kmtest: EXIT ZwFileKM %ERRORLEVEL%
+echo raw-ros-kmtest: RUN ZwSystemInfoKM
+kmtest_.exe ZwSystemInfoKM
+echo raw-ros-kmtest: EXIT ZwSystemInfoKM %ERRORLEVEL%
+echo raw-ros-kmtest: RUN ZwWaitForMultipleObjects
+kmtest_.exe ZwWaitForMultipleObjects
+echo raw-ros-kmtest: EXIT ZwWaitForMultipleObjects %ERRORLEVEL%
+echo raw-ros-kmtest: DONE
+popd
