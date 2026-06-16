@@ -549,6 +549,15 @@ _MiMapViewOfSegment(PMMSUPPORT AddressSpace,
     PMEMORY_AREA MArea;
     NTSTATUS Status;
 
+    if ((AddressSpace == MmGetKernelAddressSpace()) && (*BaseAddress == NULL))
+    {
+        *BaseAddress = MiRosFindSystemCacheView(AddressSpace, ViewSize);
+        if (*BaseAddress == NULL)
+        {
+            return STATUS_NO_MEMORY;
+        }
+    }
+
     Status = MmCreateMemoryArea(AddressSpace,
                                 MEMORY_AREA_CACHE,
                                 BaseAddress,
