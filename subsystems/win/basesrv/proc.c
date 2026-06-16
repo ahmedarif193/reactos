@@ -158,6 +158,8 @@ CSR_API(BaseSrvCreateProcess)
     if (Status == STATUS_THREAD_IS_TERMINATING)
     {
         DPRINT1("Thread already dead\n");
+        NtClose(ProcessHandle);
+        NtClose(ThreadHandle);
 
         /* Set the special reply value so we don't reply this message back */
         *ReplyCode = CsrReplyDeadClient;
@@ -169,6 +171,8 @@ CSR_API(BaseSrvCreateProcess)
     if (!NT_SUCCESS(Status))
     {
         DPRINT1("Failed to create process/thread structures: %lx\n", Status);
+        NtClose(ProcessHandle);
+        NtClose(ThreadHandle);
         return Status;
     }
 
@@ -261,6 +265,10 @@ CSR_API(BaseSrvCreateThread)
                                  ThreadHandle,
                                  &CreateThreadRequest->ClientId,
                                  TRUE);
+        if (!NT_SUCCESS(Status))
+        {
+            NtClose(ThreadHandle);
+        }
     }
 
     /* Unlock the process and return */
