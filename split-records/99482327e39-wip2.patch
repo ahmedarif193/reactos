@@ -1,0 +1,2274 @@
+commit 99482327e3987e2baf73a5ef8c6d79e595ccd999
+Author:     Ahmed ARIF <arif.ing@outlook.com>
+AuthorDate: Tue Jun 16 00:01:48 2026 +0200
+Commit:     Ahmed ARIF <arif.ing@outlook.com>
+CommitDate: Tue Jun 16 00:01:48 2026 +0200
+
+    wip2
+
+diff --git a/hal/halarm64/halarm64.c b/hal/halarm64/halarm64.c
+index 9ea5350d3e3..10af2341842 100644
+--- a/hal/halarm64/halarm64.c
++++ b/hal/halarm64/halarm64.c
+@@ -2654,7 +2654,12 @@ HalpArm64DeferInterrupt(
+         }
+     }
+ 
+-    HalpGicDisableInterrupt(IntId);
++    DPRINT1("[arm64][GIC] Deferred interrupt table overflow: cpu=%lu intid=%lu irql=%u count=%u; leaving enabled\n",
++            Cpu,
++            IntId,
++            Irql,
++            HalpArm64DeferredCount[Cpu]);
++    ASSERT(FALSE);
+ }
+ 
+ static
+diff --git a/ntoskrnl/config/cmkcbncb.c b/ntoskrnl/config/cmkcbncb.c
+index 4f70ad91778..5cf11dc5cf8 100644
+--- a/ntoskrnl/config/cmkcbncb.c
++++ b/ntoskrnl/config/cmkcbncb.c
+@@ -1372,7 +1372,10 @@ CmpFlushNotifiesOnKeyBodyList(IN PCM_KEY_CONTROL_BLOCK Kcb,
+     PCM_KEY_BODY KeyBody;
+ 
+     /* Sanity check */
+-    LockHeld ? CMP_ASSERT_EXCLUSIVE_REGISTRY_LOCK() : CmpIsKcbLockedExclusive(Kcb);
++    if (LockHeld)
++        CMP_ASSERT_EXCLUSIVE_REGISTRY_LOCK();
++    else
++        CMP_ASSERT_KCB_LOCK(Kcb);
+     while (TRUE)
+     {
+         /* Is the list empty? */
+diff --git a/ntoskrnl/config/cmparse.c b/ntoskrnl/config/cmparse.c
+index db2ec0e9705..40f5f03c78b 100644
+--- a/ntoskrnl/config/cmparse.c
++++ b/ntoskrnl/config/cmparse.c
+@@ -1621,6 +1621,7 @@ CmpLookInCache(
+         {
+             /* This key is opened too many times, bail out */
+             DPRINT1("Could not reference the KCB, too many references (KCB 0x%p)\n", Kcb);
++            CmpUnLockKcbArray(LockedKcbs);
+             return STATUS_UNSUCCESSFUL;
+         }
+ 
+diff --git a/ntoskrnl/include/internal/arm64/ke.h b/ntoskrnl/include/internal/arm64/ke.h
+index 1bb5180fc1b..b76565faf31 100644
+--- a/ntoskrnl/include/internal/arm64/ke.h
++++ b/ntoskrnl/include/internal/arm64/ke.h
+@@ -7,6 +7,10 @@
+ #include <ndk/arm64/ketypes.h>
+ #include "intrin_i.h"
+ 
++#ifdef __cplusplus
++extern "C" {
++#endif
++
+ /* Local KSEG0 base for physical-to-virtual mapping in inline functions.
+  * Avoids dependency on mm.h include order. Same value as KSEG0_BASE in mm.h. */
+ #ifndef KE_ARM64_KSEG0_BASE
+@@ -501,3 +505,7 @@ PKTRAP_FRAME
+ KiArm64ActiveInterruptTrapFrame(VOID);
+ 
+ #endif
++
++#ifdef __cplusplus
++} // extern "C"
++#endif
+diff --git a/ntoskrnl/include/internal/ke_x.h b/ntoskrnl/include/internal/ke_x.h
+index 0e05c58a491..1a00ce94cba 100644
+--- a/ntoskrnl/include/internal/ke_x.h
++++ b/ntoskrnl/include/internal/ke_x.h
+@@ -29,14 +29,174 @@ KeGetPreviousMode(VOID)
+ #define KiThreadUserAffinityMask(Thread) ((Thread)->UserAffinity.Mask)
+ #endif
+ 
++#if defined(_M_ARM64) && (defined(__GNUC__) || defined(__clang__))
++FORCEINLINE
++BOOLEAN
++KiDbgStackInThread(
++    _In_opt_ PKTHREAD Thread,
++    _In_ ULONG_PTR StackPointer)
++{
++    return (Thread != NULL) &&
++           (StackPointer >= (ULONG_PTR)Thread->StackLimit) &&
++           (StackPointer < (ULONG_PTR)Thread->StackBase);
++}
++
++FORCEINLINE
++BOOLEAN
++KiDbgStackInDpcStack(
++    _In_opt_ PKPRCB Prcb,
++    _In_opt_ PKTHREAD CurrentThread,
++    _In_ ULONG_PTR StackPointer)
++{
++    ULONG_PTR DpcStackBase;
++    ULONG_PTR DpcStackLimit;
++    ULONG_PTR StackSpan;
++
++    if ((Prcb == NULL) || (Prcb->DpcStack == NULL) || (CurrentThread == NULL))
++    {
++        return FALSE;
++    }
++
++    StackSpan = (ULONG_PTR)CurrentThread->StackBase -
++                (ULONG_PTR)CurrentThread->StackLimit;
++    if ((StackSpan == 0) || (StackSpan > 0x100000))
++    {
++        return FALSE;
++    }
++
++    DpcStackBase = (ULONG_PTR)Prcb->DpcStack;
++    DpcStackLimit = DpcStackBase - StackSpan;
++    return (StackPointer >= DpcStackLimit) && (StackPointer < DpcStackBase);
++}
++
++FORCEINLINE
++LONG
++KiDbgThreadOwnerCpu(
++    _In_opt_ PKTHREAD Thread)
++{
++    LONG Index;
++
++    if (Thread == NULL)
++        return -1;
++
++    for (Index = 0; Index < (LONG)KeNumberProcessors; Index++)
++    {
++        PKPRCB Prcb = KiProcessorBlock[Index];
++        if ((Prcb != NULL) && (Prcb->CurrentThread == Thread))
++            return Index;
++    }
++
++    return -1;
++}
++
++#define KiDbgPrintThreadMismatch(_Tag, _Thread, _CurrentThread)             \
++{                                                                           \
++    PKPRCB _KiDbgPrcb = KeGetCurrentPrcb();                                 \
++    ULONG_PTR _KiDbgSp;                                                     \
++    BOOLEAN _KiDbgSpInThread;                                               \
++    BOOLEAN _KiDbgSpInCurrent;                                              \
++    BOOLEAN _KiDbgSpInDpc;                                                  \
++    __asm__ __volatile__("mov %0, sp" : "=r"(_KiDbgSp));                   \
++    _KiDbgSpInThread = KiDbgStackInThread((_Thread), _KiDbgSp);             \
++    _KiDbgSpInCurrent = KiDbgStackInThread((_CurrentThread), _KiDbgSp);     \
++    _KiDbgSpInDpc = KiDbgStackInDpcStack(_KiDbgPrcb,                        \
++                                         (_CurrentThread),                  \
++                                         _KiDbgSp);                         \
++    DbgPrint("%s: Thread=%p Current=%p PrcbCurrent=%p PrcbNext=%p "         \
++             "CPU=%lu PrcbNo=%lu IRQL=%u SP=%p SPInThread=%u SPInCurrent=%u SPInDpc=%u DpcStack=%p " \
++             "TStack=%p-%p CStack=%p-%p "                                  \
++             "TState=%lu CState=%lu TRun=%lu CRun=%lu "                    \
++             "TKAD=%ld TSAD=%ld CKAD=%ld CSAD=%ld "                        \
++             "TOwner=%ld COwner=%ld TNextP=%lu CNextP=%lu Caller=%p\n",    \
++             (_Tag),                                                        \
++             (_Thread),                                                     \
++             (_CurrentThread),                                              \
++             _KiDbgPrcb ? _KiDbgPrcb->CurrentThread : NULL,                \
++             _KiDbgPrcb ? _KiDbgPrcb->NextThread : NULL,                   \
++             _KiDbgPrcb ? (ULONG)_KiDbgPrcb->Number : (ULONG)-1,           \
++             _KiDbgPrcb ? (ULONG)_KiDbgPrcb->Number : (ULONG)-1,           \
++             KeGetCurrentIrql(),                                            \
++             (PVOID)_KiDbgSp,                                               \
++             _KiDbgSpInThread,                                              \
++             _KiDbgSpInCurrent,                                             \
++             _KiDbgSpInDpc,                                                 \
++             _KiDbgPrcb ? _KiDbgPrcb->DpcStack : NULL,                     \
++             (_Thread) ? (PVOID)(_Thread)->StackLimit : NULL,               \
++             (_Thread) ? (_Thread)->StackBase : NULL,                       \
++             (_CurrentThread) ? (PVOID)(_CurrentThread)->StackLimit : NULL, \
++             (_CurrentThread) ? (_CurrentThread)->StackBase : NULL,         \
++             (_Thread) ? (ULONG)(_Thread)->State : (ULONG)-1,              \
++             (_CurrentThread) ? (ULONG)(_CurrentThread)->State : (ULONG)-1, \
++             (_Thread) ? (ULONG)(_Thread)->Running : (ULONG)-1,            \
++             (_CurrentThread) ? (ULONG)(_CurrentThread)->Running : (ULONG)-1, \
++             (_Thread) ? (LONG)(_Thread)->KernelApcDisable : 0,            \
++             (_Thread) ? (LONG)(_Thread)->SpecialApcDisable : 0,           \
++             (_CurrentThread) ? (LONG)(_CurrentThread)->KernelApcDisable : 0, \
++             (_CurrentThread) ? (LONG)(_CurrentThread)->SpecialApcDisable : 0, \
++             KiDbgThreadOwnerCpu((_Thread)),                                \
++             KiDbgThreadOwnerCpu((_CurrentThread)),                         \
++             (_Thread) ? (ULONG)(_Thread)->NextProcessor : (ULONG)-1,       \
++             (_CurrentThread) ? (ULONG)(_CurrentThread)->NextProcessor : (ULONG)-1, \
++             _ReturnAddress());                                             \
++}
++#else
++#define KiDbgPrintThreadMismatch(_Tag, _Thread, _CurrentThread)             \
++{                                                                           \
++    PKPRCB _KiDbgPrcb = KeGetCurrentPrcb();                                 \
++    DbgPrint("%s: Thread=%p Current=%p PrcbCurrent=%p PrcbNext=%p "         \
++             "CPU=%lu PrcbNo=%lu IRQL=%u "                                  \
++             "TState=%lu CState=%lu TRun=%lu CRun=%lu "                    \
++             "TKAD=%ld TSAD=%ld CKAD=%ld CSAD=%ld Caller=%p\n",           \
++             (_Tag),                                                        \
++             (_Thread),                                                     \
++             (_CurrentThread),                                              \
++             _KiDbgPrcb ? _KiDbgPrcb->CurrentThread : NULL,                \
++             _KiDbgPrcb ? _KiDbgPrcb->NextThread : NULL,                   \
++             _KiDbgPrcb ? (ULONG)_KiDbgPrcb->Number : (ULONG)-1,           \
++             _KiDbgPrcb ? (ULONG)_KiDbgPrcb->Number : (ULONG)-1,           \
++             KeGetCurrentIrql(),                                            \
++             (_Thread) ? (ULONG)(_Thread)->State : (ULONG)-1,              \
++             (_CurrentThread) ? (ULONG)(_CurrentThread)->State : (ULONG)-1, \
++             (_Thread) ? (ULONG)(_Thread)->Running : (ULONG)-1,            \
++             (_CurrentThread) ? (ULONG)(_CurrentThread)->Running : (ULONG)-1, \
++             (_Thread) ? (LONG)(_Thread)->KernelApcDisable : 0,            \
++             (_Thread) ? (LONG)(_Thread)->SpecialApcDisable : 0,           \
++             (_CurrentThread) ? (LONG)(_CurrentThread)->KernelApcDisable : 0, \
++             (_CurrentThread) ? (LONG)(_CurrentThread)->SpecialApcDisable : 0, \
++             _ReturnAddress());                                             \
++}
++#endif
++
+ //
+ // Enters a Guarded Region
+ //
+ #define KeEnterGuardedRegionThread(_Thread)                                 \
+ {                                                                           \
++    PKTHREAD _KeCurrentThread = KeGetCurrentThread();                       \
++	                                                                            \
+     /* Sanity checks */                                                     \
+     ASSERT(KeGetCurrentIrql() <= APC_LEVEL);                                \
+-    ASSERT((_Thread) == KeGetCurrentThread());                              \
++    if ((_Thread) == _KeCurrentThread)                                      \
++    {                                                                       \
++        ULONG_PTR _KiDbgSp;                                                 \
++        PKPRCB _KiDbgPrcb = KeGetCurrentPrcb();                             \
++        __asm__ __volatile__("mov %0, sp" : "=r"(_KiDbgSp));               \
++        if ((_Thread) &&                                                    \
++            !KiDbgStackInThread((_Thread), _KiDbgSp) &&                     \
++            !KiDbgStackInDpcStack(_KiDbgPrcb, _KeCurrentThread, _KiDbgSp))  \
++        {                                                                   \
++            KiDbgPrintThreadMismatch("KGR_ENTER_STACK_MISMATCH",           \
++                                     (_Thread),                             \
++                                     _KeCurrentThread);                     \
++        }                                                                   \
++    }                                                                       \
++    if ((_Thread) != _KeCurrentThread)                                      \
++    {                                                                       \
++        KiDbgPrintThreadMismatch("KGR_ENTER_THREAD_MISMATCH",              \
++                                 (_Thread),                                 \
++                                 _KeCurrentThread);                         \
++    }                                                                       \
++    ASSERT((_Thread) == _KeCurrentThread);                                  \
+     ASSERT(((_Thread)->SpecialApcDisable <= 0) &&                           \
+            ((_Thread)->SpecialApcDisable != -32768));                       \
+                                                                             \
+@@ -55,11 +215,33 @@ KeGetPreviousMode(VOID)
+ //
+ #define KeLeaveGuardedRegionThread(_Thread)                                 \
+ {                                                                           \
++    PKTHREAD _KeCurrentThread = KeGetCurrentThread();                       \
++	                                                                            \
+     /* Sanity checks */                                                     \
+     ASSERT(KeGetCurrentIrql() <= APC_LEVEL);                                \
+-    ASSERT((_Thread) == KeGetCurrentThread());                              \
++    if ((_Thread) == _KeCurrentThread)                                      \
++    {                                                                       \
++        ULONG_PTR _KiDbgSp;                                                 \
++        PKPRCB _KiDbgPrcb = KeGetCurrentPrcb();                             \
++        __asm__ __volatile__("mov %0, sp" : "=r"(_KiDbgSp));               \
++        if ((_Thread) &&                                                    \
++            !KiDbgStackInThread((_Thread), _KiDbgSp) &&                     \
++            !KiDbgStackInDpcStack(_KiDbgPrcb, _KeCurrentThread, _KiDbgSp))  \
++        {                                                                   \
++            KiDbgPrintThreadMismatch("KGR_LEAVE_STACK_MISMATCH",           \
++                                     (_Thread),                             \
++                                     _KeCurrentThread);                     \
++        }                                                                   \
++    }                                                                       \
++    if ((_Thread) != _KeCurrentThread)                                      \
++    {                                                                       \
++        KiDbgPrintThreadMismatch("KGR_LEAVE_THREAD_MISMATCH",              \
++                                 (_Thread),                                 \
++                                 _KeCurrentThread);                         \
++    }                                                                       \
++    ASSERT((_Thread) == _KeCurrentThread);                                  \
+     ASSERT((_Thread)->SpecialApcDisable < 0);                               \
+-                                                                            \
++	                                                                            \
+     /* Leave region and check if APCs are OK now */                         \
+     if (!(++(_Thread)->SpecialApcDisable))                                  \
+     {                                                                       \
+@@ -84,11 +266,33 @@ KeGetPreviousMode(VOID)
+ //
+ #define KeEnterCriticalRegionThread(_Thread)                                \
+ {                                                                           \
++    PKTHREAD _KeCurrentThread = KeGetCurrentThread();                       \
++	                                                                            \
+     /* Sanity checks */                                                     \
+-    ASSERT((_Thread) == KeGetCurrentThread());                              \
++    if ((_Thread) == _KeCurrentThread)                                      \
++    {                                                                       \
++        ULONG_PTR _KiDbgSp;                                                 \
++        PKPRCB _KiDbgPrcb = KeGetCurrentPrcb();                             \
++        __asm__ __volatile__("mov %0, sp" : "=r"(_KiDbgSp));               \
++        if ((_Thread) &&                                                    \
++            !KiDbgStackInThread((_Thread), _KiDbgSp) &&                     \
++            !KiDbgStackInDpcStack(_KiDbgPrcb, _KeCurrentThread, _KiDbgSp))  \
++        {                                                                   \
++            KiDbgPrintThreadMismatch("KCR_ENTER_STACK_MISMATCH",           \
++                                     (_Thread),                             \
++                                     _KeCurrentThread);                     \
++        }                                                                   \
++    }                                                                       \
++    if ((_Thread) != _KeCurrentThread)                                      \
++    {                                                                       \
++        KiDbgPrintThreadMismatch("KCR_ENTER_THREAD_MISMATCH",              \
++                                 (_Thread),                                 \
++                                 _KeCurrentThread);                         \
++    }                                                                       \
++    ASSERT((_Thread) == _KeCurrentThread);                                  \
+     ASSERT(((_Thread)->KernelApcDisable <= 0) &&                            \
+            ((_Thread)->KernelApcDisable != -32768));                        \
+-                                                                            \
++	                                                                            \
+     /* Disable Kernel APCs */                                               \
+     (_Thread)->KernelApcDisable--;                                          \
+ }
+@@ -104,8 +308,30 @@ KeGetPreviousMode(VOID)
+ //
+ #define KeLeaveCriticalRegionThread(_Thread)                                \
+ {                                                                           \
++    PKTHREAD _KeCurrentThread = KeGetCurrentThread();                       \
++	                                                                            \
+     /* Sanity checks */                                                     \
+-    ASSERT((_Thread) == KeGetCurrentThread());                              \
++    if ((_Thread) == _KeCurrentThread)                                      \
++    {                                                                       \
++        ULONG_PTR _KiDbgSp;                                                 \
++        PKPRCB _KiDbgPrcb = KeGetCurrentPrcb();                             \
++        __asm__ __volatile__("mov %0, sp" : "=r"(_KiDbgSp));               \
++        if ((_Thread) &&                                                    \
++            !KiDbgStackInThread((_Thread), _KiDbgSp) &&                     \
++            !KiDbgStackInDpcStack(_KiDbgPrcb, _KeCurrentThread, _KiDbgSp))  \
++        {                                                                   \
++            KiDbgPrintThreadMismatch("KCR_LEAVE_STACK_MISMATCH",           \
++                                     (_Thread),                             \
++                                     _KeCurrentThread);                     \
++        }                                                                   \
++    }                                                                       \
++    if ((_Thread) != _KeCurrentThread)                                      \
++    {                                                                       \
++        KiDbgPrintThreadMismatch("KCR_LEAVE_THREAD_MISMATCH",              \
++                                 (_Thread),                                 \
++                                 _KeCurrentThread);                         \
++    }                                                                       \
++    ASSERT((_Thread) == _KeCurrentThread);                                  \
+     ASSERT((_Thread)->KernelApcDisable < 0);                                \
+                                                                             \
+     /* Enable Kernel APCs */                                                \
+@@ -1682,6 +1908,26 @@ _KeReleaseGuardedMutex(IN OUT PKGUARDED_MUTEX GuardedMutex)
+ 
+     /* Sanity checks */
+     ASSERT(KeGetCurrentIrql() <= APC_LEVEL);
++    if (GuardedMutex->Owner != Thread)
++    {
++        PKPRCB DbgPrcb = KeGetCurrentPrcb();
++        DbgPrint("GMOWNER: Mutex=%p Count=%lx Owner=%p Current=%p CPU=%lu "
++                 "IRQL=%u State=%u Running=%u NextCpu=%u DeferredCpu=%u "
++                 "CurrentSAD=%d MutexSAD=%d Caller=%p\n",
++                 GuardedMutex,
++                 GuardedMutex->Count,
++                 GuardedMutex->Owner,
++                 Thread,
++                 DbgPrcb ? (ULONG)DbgPrcb->Number : (ULONG)-1,
++                 KeGetCurrentIrql(),
++                 Thread->State,
++                 Thread->Running,
++                 Thread->NextProcessor,
++                 Thread->DeferredProcessor,
++                 Thread->SpecialApcDisable,
++                 GuardedMutex->SpecialApcDisable,
++                 _ReturnAddress());
++    }
+     ASSERT(GuardedMutex->Owner == Thread);
+     ASSERT(Thread->SpecialApcDisable == GuardedMutex->SpecialApcDisable);
+ 
+diff --git a/ntoskrnl/io/pnpmgr/pnppar.c b/ntoskrnl/io/pnpmgr/pnppar.c
+index 0cf10c06f59..8363fbbdc1b 100644
+--- a/ntoskrnl/io/pnpmgr/pnppar.c
++++ b/ntoskrnl/io/pnpmgr/pnppar.c
+@@ -179,8 +179,17 @@ PiProcessChildrenParallel(_In_ PDEVICE_NODE Parent)
+         if (InterlockedCompareExchange(&PiParallelEnablerStarted, 1, 0) == 0)
+         {
+             HANDLE handle;
+-            if (NT_SUCCESS(PsCreateSystemThread(&handle, THREAD_ALL_ACCESS, NULL, NULL, NULL, PiParallelEnablerThread, NULL)))
++            NTSTATUS Status;
++
++            Status = PsCreateSystemThread(&handle, THREAD_ALL_ACCESS, NULL, NULL, NULL, PiParallelEnablerThread, NULL);
++            if (NT_SUCCESS(Status))
++            {
+                 ZwClose(handle);
++            }
++            else
++            {
++                InterlockedExchange(&PiParallelEnablerStarted, 0);
++            }
+         }
+         return FALSE;
+     }
+diff --git a/ntoskrnl/ke/arm64/ctxswitch.S b/ntoskrnl/ke/arm64/ctxswitch.S
+index 6e130e7d3cc..628889f261a 100644
+--- a/ntoskrnl/ke/arm64/ctxswitch.S
++++ b/ntoskrnl/ke/arm64/ctxswitch.S
+@@ -182,6 +182,16 @@ KiThreadStartup:
+  */
+     .seh_proc KiSwapContext
+ KiSwapContext:
++    /*
++     * Some scheduler paths publish Prcb->CurrentThread before entering here.
++     * Mask IRQs immediately so any missed caller-side window cannot extend into
++     * the switch frame setup.
++     */
++    msr     daifset, #0x2
++    .seh_nop
++    isb
++    .seh_nop
++
+     /* Reserve space for the switch frame and save non-volatile registers */
+     sub     sp, sp, #KSWITCH_FRAME_LENGTH
+     .seh_stackalloc KSWITCH_FRAME_LENGTH
+diff --git a/ntoskrnl/ke/arm64/irql.c b/ntoskrnl/ke/arm64/irql.c
+index a1231ddde9a..f9f1a294f0b 100644
+--- a/ntoskrnl/ke/arm64/irql.c
++++ b/ntoskrnl/ke/arm64/irql.c
+@@ -25,7 +25,11 @@ KiQueryCurrentIrql(VOID)
+         return Pcr->CurrentIrql;
+     }
+ 
++#if defined(CONFIG_SMP)
++    return PASSIVE_LEVEL;
++#else
+     return KeArm64CurrentIrql;
++#endif
+ }
+ 
+ VOID
+@@ -39,7 +43,34 @@ KiSetCurrentIrql(
+         return;
+     }
+ 
++#if !defined(CONFIG_SMP)
+     KeArm64CurrentIrql = Irql;
++#else
++    UNREFERENCED_PARAMETER(Irql);
++#endif
++}
++
++FORCEINLINE
++VOID
++KiSetCurrentIrqlAndGicMask(
++    _In_ KIRQL Irql)
++{
++    ULONG64 Daif;
++
++    __asm__ __volatile__("mrs %0, daif" : "=r"(Daif));
++    __asm__ __volatile__("msr daifset, #2" ::: "memory");
++
++    KiSetCurrentIrql(Irql);
++
++    if (KiHalInitialized)
++    {
++        HalSetGicPriorityMask(Irql);
++    }
++
++    if (!(Daif & 0x80))
++    {
++        __asm__ __volatile__("msr daifclr, #2" ::: "memory");
++    }
+ }
+ 
+ ULONG
+@@ -81,6 +112,7 @@ KfRaiseIrql(
+     _In_ KIRQL NewIrql)
+ {
+     KIRQL OldIrql = KiQueryCurrentIrql();
++    ULONG64 Daif;
+ 
+     if (NewIrql > HIGH_LEVEL)
+     {
+@@ -92,6 +124,9 @@ KfRaiseIrql(
+         return OldIrql;
+     }
+ 
++    __asm__ __volatile__("mrs %0, daif" : "=r"(Daif));
++    __asm__ __volatile__("msr daifset, #2" ::: "memory");
++
+     KiSetCurrentIrql(NewIrql);
+ 
+     if (KiHalInitialized)
+@@ -99,6 +134,11 @@ KfRaiseIrql(
+         HalRaiseGicPriorityMask(NewIrql);
+     }
+ 
++    if (!(Daif & 0x80))
++    {
++        __asm__ __volatile__("msr daifclr, #2" ::: "memory");
++    }
++
+     return OldIrql;
+ }
+ 
+@@ -108,6 +148,7 @@ KfLowerIrql(
+     _In_ KIRQL NewIrql)
+ {
+     KIRQL OldIrql = KiQueryCurrentIrql();
++    BOOLEAN DeliverApc = FALSE;
+ 
+     if (NewIrql > OldIrql)
+     {
+@@ -123,13 +164,6 @@ KfLowerIrql(
+         return;
+     }
+ 
+-    KiSetCurrentIrql(NewIrql);
+-
+-    if (KiHalInitialized)
+-    {
+-        HalSetGicPriorityMask(NewIrql);
+-    }
+-
+     if ((OldIrql >= APC_LEVEL) && (NewIrql < APC_LEVEL))
+     {
+         ULONG64 Daif;
+@@ -143,18 +177,27 @@ KfLowerIrql(
+                 (Thread->ApcState.KernelApcPending) &&
+                 !(Thread->SpecialApcDisable))
+             {
+-                KiSetCurrentIrql(APC_LEVEL);
+-                if (KiHalInitialized)
+-                    HalSetGicPriorityMask(APC_LEVEL);
+-
+-                KiDeliverApc(KernelMode, NULL, NULL);
+-
+-                KiSetCurrentIrql(NewIrql);
+-                if (KiHalInitialized)
+-                    HalSetGicPriorityMask(NewIrql);
++                DeliverApc = TRUE;
+             }
+         }
+     }
++
++    if (DeliverApc)
++    {
++        /*
++         * Keep APC_LEVEL published while delivering the pending APC. Publishing
++         * PASSIVE_LEVEL before this point opens a window where an APC SGI can
++         * enter KiDeliverApc and run a special APC below APC_LEVEL.
++         */
++        if (OldIrql != APC_LEVEL)
++        {
++            KiSetCurrentIrqlAndGicMask(APC_LEVEL);
++        }
++
++        KiDeliverApc(KernelMode, NULL, NULL);
++    }
++
++    KiSetCurrentIrqlAndGicMask(NewIrql);
+ }
+ 
+ NTKERNELAPI
+diff --git a/ntoskrnl/ke/arm64/thrdini.c b/ntoskrnl/ke/arm64/thrdini.c
+index d89e4ca19a6..129f9c0f8f4 100644
+--- a/ntoskrnl/ke/arm64/thrdini.c
++++ b/ntoskrnl/ke/arm64/thrdini.c
+@@ -63,6 +63,50 @@ KiArm64SetupStartFrame(
+     StartFrame->Return = 0;
+ }
+ 
++static
++VOID
++KiArm64DbgSwitchWindow(
++    _In_z_ PCSTR Tag,
++    _In_ PKPRCB Prcb,
++    _In_ PKTHREAD OldThread,
++    _In_ PKTHREAD NewThread)
++{
++    static volatile LONG PrintCount;
++    ULONG64 Daif;
++    ULONG_PTR Sp;
++
++    __asm__ __volatile__("mrs %0, daif" : "=r"(Daif));
++    if (Daif & ARM64_PSTATE_IRQ_MASK)
++    {
++        return;
++    }
++
++    if (InterlockedIncrement((PLONG)&PrintCount) > 16)
++    {
++        return;
++    }
++
++    __asm__ __volatile__("mov %0, sp" : "=r"(Sp));
++    DbgPrint("ARM64_SWITCH_IRQ_WINDOW: %s CPU=%lu Prcb=%p "
++             "Current=%p Next=%p Old=%p New=%p IRQL=%u DAIF=%I64x "
++             "SP=%p OldStack=%p-%p NewStack=%p-%p Caller=%p\n",
++             Tag,
++             Prcb ? (ULONG)Prcb->Number : (ULONG)-1,
++             Prcb,
++             Prcb ? Prcb->CurrentThread : NULL,
++             Prcb ? Prcb->NextThread : NULL,
++             OldThread,
++             NewThread,
++             KeGetCurrentIrql(),
++             Daif,
++             (PVOID)Sp,
++             OldThread ? (PVOID)OldThread->StackLimit : NULL,
++             OldThread ? OldThread->StackBase : NULL,
++             NewThread ? (PVOID)NewThread->StackLimit : NULL,
++             NewThread ? NewThread->StackBase : NULL,
++             _ReturnAddress());
++}
++
+ VOID
+ NTAPI
+ KiInitializeContextThread(_Inout_ PKTHREAD Thread,
+@@ -232,9 +276,15 @@ KiIdleLoop(VOID)
+             NewThread->State = Running;
+ 
+             KiReleasePrcbLock(Prcb);
+-            _enable();
+ 
++            /*
++             * CurrentThread now names NewThread, but this CPU is still running on
++             * OldThread's stack until KiSwapContext switches SP. Keep IRQs masked
++             * across that window, otherwise nested interrupt code can observe a
++             * current thread whose stack is not active on this CPU.
++             */
+             ASSERT(OldThread != NULL);
++            KiArm64DbgSwitchWindow("idle", Prcb, OldThread, NewThread);
+             KiSwapContext(APC_LEVEL, OldThread);
+             if (KeGetCurrentIrql() > DISPATCH_LEVEL) KeLowerIrql(DISPATCH_LEVEL);
+             continue;
+@@ -382,6 +432,7 @@ KiDispatchInterrupt(VOID)
+     else if (Prcb->NextThread)
+     {
+         /* Thread switch needed - acquire PRCB lock and swap context */
++        _disable();
+         KiAcquirePrcbLock(Prcb);
+ 
+         OldThread = Prcb->CurrentThread;
+@@ -397,6 +448,7 @@ KiDispatchInterrupt(VOID)
+ 
+         KxQueueReadyThread(OldThread, Prcb);
+ 
++        KiArm64DbgSwitchWindow("dispatch", Prcb, OldThread, NewThread);
+         KiSwapContext(APC_LEVEL, OldThread);
+     }
+ }
+diff --git a/ntoskrnl/ke/arm64/trapvec.S b/ntoskrnl/ke/arm64/trapvec.S
+index 0bb2820f250..f46906bc657 100644
+--- a/ntoskrnl/ke/arm64/trapvec.S
++++ b/ntoskrnl/ke/arm64/trapvec.S
+@@ -26,10 +26,18 @@
+ .equ ARM64_EARLY_STATE_FPSR,          0x588
+ .equ ARM64_EARLY_STATE_SIZE,          0x590
+ 
+-.equ ARM64_IRQ_NEON,                  0xE0
+-.equ ARM64_IRQ_FPCR,                  0x2E0
+-.equ ARM64_IRQ_FPSR,                  0x2E8
+-.equ ARM64_IRQ_FRAME_SIZE,            0x2F0
++.equ ARM64_IRQ_X20_X21,               0xA0
++.equ ARM64_IRQ_X22_X23,               0xB0
++.equ ARM64_IRQ_X24_X25,               0xC0
++.equ ARM64_IRQ_X26_X27,               0xD0
++.equ ARM64_IRQ_X28,                   0xE0
++.equ ARM64_IRQ_SP_EL0,                0xE8
++.equ ARM64_IRQ_FP_LR,                 0xF0
++.equ ARM64_IRQ_ELR_SPSR,              0x100
++.equ ARM64_IRQ_NEON,                  0x110
++.equ ARM64_IRQ_FPCR,                  0x310
++.equ ARM64_IRQ_FPSR,                  0x318
++.equ ARM64_IRQ_FRAME_SIZE,            0x320
+ 
+ /*
+  * The ARM64 compiler can use FP/SIMD registers for ordinary C struct copies and
+@@ -614,14 +622,22 @@ KiArm64PermVectorSErrorLowerA32_Handler:
+ KiArm64PermVectorIrqSp0_Handler:
+     sub sp, sp, #ARM64_IRQ_FRAME_SIZE
+     .seh_stackalloc ARM64_IRQ_FRAME_SIZE
+-    stp x20, x21, [sp, #0xA0]
+-    .seh_save_regp x20, 0xA0
+-    stp x29, x30, [sp, #0xB0]
+-    .seh_save_fplr 0xB0
++    stp x20, x21, [sp, #ARM64_IRQ_X20_X21]
++    .seh_save_regp x20, ARM64_IRQ_X20_X21
++    stp x22, x23, [sp, #ARM64_IRQ_X22_X23]
++    .seh_save_regp x22, ARM64_IRQ_X22_X23
++    stp x24, x25, [sp, #ARM64_IRQ_X24_X25]
++    .seh_save_regp x24, ARM64_IRQ_X24_X25
++    stp x26, x27, [sp, #ARM64_IRQ_X26_X27]
++    .seh_save_regp x26, ARM64_IRQ_X26_X27
++    str x28, [sp, #ARM64_IRQ_X28]
++    .seh_save_reg x28, ARM64_IRQ_X28
++    stp x29, x30, [sp, #ARM64_IRQ_FP_LR]
++    .seh_save_fplr ARM64_IRQ_FP_LR
+     .seh_endprologue
+     mrs x20, elr_el1
+     mrs x21, spsr_el1
+-    stp x20, x21, [sp, #0xC0]
++    stp x20, x21, [sp, #ARM64_IRQ_ELR_SPSR]
+     stp x0,  x1,  [sp, #0x00]
+     stp x2,  x3,  [sp, #0x10]
+     stp x4,  x5,  [sp, #0x20]
+@@ -661,11 +677,15 @@ KiArm64PermVectorIrqSp0_Handler:
+     ldp x4,  x5,  [sp, #0x20]
+     ldp x2,  x3,  [sp, #0x10]
+     ldp x0,  x1,  [sp, #0x00]
+-    ldp x29, x30, [sp, #0xB0]
+-    ldp x20, x21, [sp, #0xC0]
++    ldp x20, x21, [sp, #ARM64_IRQ_ELR_SPSR]
+     msr elr_el1, x20
+     msr spsr_el1, x21
+-    ldp x20, x21, [sp, #0xA0]
++    ldr x28, [sp, #ARM64_IRQ_X28]
++    ldp x26, x27, [sp, #ARM64_IRQ_X26_X27]
++    ldp x24, x25, [sp, #ARM64_IRQ_X24_X25]
++    ldp x22, x23, [sp, #ARM64_IRQ_X22_X23]
++    ldp x29, x30, [sp, #ARM64_IRQ_FP_LR]
++    ldp x20, x21, [sp, #ARM64_IRQ_X20_X21]
+     add sp, sp, #ARM64_IRQ_FRAME_SIZE
+     dsb sy
+     isb
+@@ -678,14 +698,22 @@ KiArm64PermVectorIrqSp0_Handler:
+ KiArm64PermVectorFiqSp0_Handler:
+     sub sp, sp, #ARM64_IRQ_FRAME_SIZE
+     .seh_stackalloc ARM64_IRQ_FRAME_SIZE
+-    stp x20, x21, [sp, #0xA0]
+-    .seh_save_regp x20, 0xA0
+-    stp x29, x30, [sp, #0xB0]
+-    .seh_save_fplr 0xB0
++    stp x20, x21, [sp, #ARM64_IRQ_X20_X21]
++    .seh_save_regp x20, ARM64_IRQ_X20_X21
++    stp x22, x23, [sp, #ARM64_IRQ_X22_X23]
++    .seh_save_regp x22, ARM64_IRQ_X22_X23
++    stp x24, x25, [sp, #ARM64_IRQ_X24_X25]
++    .seh_save_regp x24, ARM64_IRQ_X24_X25
++    stp x26, x27, [sp, #ARM64_IRQ_X26_X27]
++    .seh_save_regp x26, ARM64_IRQ_X26_X27
++    str x28, [sp, #ARM64_IRQ_X28]
++    .seh_save_reg x28, ARM64_IRQ_X28
++    stp x29, x30, [sp, #ARM64_IRQ_FP_LR]
++    .seh_save_fplr ARM64_IRQ_FP_LR
+     .seh_endprologue
+     mrs x20, elr_el1
+     mrs x21, spsr_el1
+-    stp x20, x21, [sp, #0xC0]
++    stp x20, x21, [sp, #ARM64_IRQ_ELR_SPSR]
+     stp x0,  x1,  [sp, #0x00]
+     stp x2,  x3,  [sp, #0x10]
+     stp x4,  x5,  [sp, #0x20]
+@@ -718,11 +746,15 @@ KiArm64PermVectorFiqSp0_Handler:
+     ldp x4,  x5,  [sp, #0x20]
+     ldp x2,  x3,  [sp, #0x10]
+     ldp x0,  x1,  [sp, #0x00]
+-    ldp x29, x30, [sp, #0xB0]
+-    ldp x20, x21, [sp, #0xC0]
++    ldp x20, x21, [sp, #ARM64_IRQ_ELR_SPSR]
+     msr elr_el1, x20
+     msr spsr_el1, x21
+-    ldp x20, x21, [sp, #0xA0]
++    ldr x28, [sp, #ARM64_IRQ_X28]
++    ldp x26, x27, [sp, #ARM64_IRQ_X26_X27]
++    ldp x24, x25, [sp, #ARM64_IRQ_X24_X25]
++    ldp x22, x23, [sp, #ARM64_IRQ_X22_X23]
++    ldp x29, x30, [sp, #ARM64_IRQ_FP_LR]
++    ldp x20, x21, [sp, #ARM64_IRQ_X20_X21]
+     add sp, sp, #ARM64_IRQ_FRAME_SIZE
+     dsb sy
+     isb
+@@ -735,14 +767,22 @@ KiArm64PermVectorFiqSp0_Handler:
+ KiArm64PermVectorIrqSpx_Handler:
+     sub sp, sp, #ARM64_IRQ_FRAME_SIZE
+     .seh_stackalloc ARM64_IRQ_FRAME_SIZE
+-    stp x20, x21, [sp, #0xA0]
+-    .seh_save_regp x20, 0xA0
+-    stp x29, x30, [sp, #0xB0]
+-    .seh_save_fplr 0xB0
++    stp x20, x21, [sp, #ARM64_IRQ_X20_X21]
++    .seh_save_regp x20, ARM64_IRQ_X20_X21
++    stp x22, x23, [sp, #ARM64_IRQ_X22_X23]
++    .seh_save_regp x22, ARM64_IRQ_X22_X23
++    stp x24, x25, [sp, #ARM64_IRQ_X24_X25]
++    .seh_save_regp x24, ARM64_IRQ_X24_X25
++    stp x26, x27, [sp, #ARM64_IRQ_X26_X27]
++    .seh_save_regp x26, ARM64_IRQ_X26_X27
++    str x28, [sp, #ARM64_IRQ_X28]
++    .seh_save_reg x28, ARM64_IRQ_X28
++    stp x29, x30, [sp, #ARM64_IRQ_FP_LR]
++    .seh_save_fplr ARM64_IRQ_FP_LR
+     .seh_endprologue
+     mrs x20, elr_el1
+     mrs x21, spsr_el1
+-    stp x20, x21, [sp, #0xC0]
++    stp x20, x21, [sp, #ARM64_IRQ_ELR_SPSR]
+     stp x0,  x1,  [sp, #0x00]
+     stp x2,  x3,  [sp, #0x10]
+     stp x4,  x5,  [sp, #0x20]
+@@ -775,11 +815,15 @@ KiArm64PermVectorIrqSpx_Handler:
+     ldp x4,  x5,  [sp, #0x20]
+     ldp x2,  x3,  [sp, #0x10]
+     ldp x0,  x1,  [sp, #0x00]
+-    ldp x29, x30, [sp, #0xB0]
+-    ldp x20, x21, [sp, #0xC0]
++    ldp x20, x21, [sp, #ARM64_IRQ_ELR_SPSR]
+     msr elr_el1, x20
+     msr spsr_el1, x21
+-    ldp x20, x21, [sp, #0xA0]
++    ldr x28, [sp, #ARM64_IRQ_X28]
++    ldp x26, x27, [sp, #ARM64_IRQ_X26_X27]
++    ldp x24, x25, [sp, #ARM64_IRQ_X24_X25]
++    ldp x22, x23, [sp, #ARM64_IRQ_X22_X23]
++    ldp x29, x30, [sp, #ARM64_IRQ_FP_LR]
++    ldp x20, x21, [sp, #ARM64_IRQ_X20_X21]
+     add sp, sp, #ARM64_IRQ_FRAME_SIZE
+     dsb sy
+     isb
+@@ -792,14 +836,22 @@ KiArm64PermVectorIrqSpx_Handler:
+ KiArm64PermVectorFiqSpx_Handler:
+     sub sp, sp, #ARM64_IRQ_FRAME_SIZE
+     .seh_stackalloc ARM64_IRQ_FRAME_SIZE
+-    stp x20, x21, [sp, #0xA0]
+-    .seh_save_regp x20, 0xA0
+-    stp x29, x30, [sp, #0xB0]
+-    .seh_save_fplr 0xB0
++    stp x20, x21, [sp, #ARM64_IRQ_X20_X21]
++    .seh_save_regp x20, ARM64_IRQ_X20_X21
++    stp x22, x23, [sp, #ARM64_IRQ_X22_X23]
++    .seh_save_regp x22, ARM64_IRQ_X22_X23
++    stp x24, x25, [sp, #ARM64_IRQ_X24_X25]
++    .seh_save_regp x24, ARM64_IRQ_X24_X25
++    stp x26, x27, [sp, #ARM64_IRQ_X26_X27]
++    .seh_save_regp x26, ARM64_IRQ_X26_X27
++    str x28, [sp, #ARM64_IRQ_X28]
++    .seh_save_reg x28, ARM64_IRQ_X28
++    stp x29, x30, [sp, #ARM64_IRQ_FP_LR]
++    .seh_save_fplr ARM64_IRQ_FP_LR
+     .seh_endprologue
+     mrs x20, elr_el1
+     mrs x21, spsr_el1
+-    stp x20, x21, [sp, #0xC0]
++    stp x20, x21, [sp, #ARM64_IRQ_ELR_SPSR]
+     stp x0,  x1,  [sp, #0x00]
+     stp x2,  x3,  [sp, #0x10]
+     stp x4,  x5,  [sp, #0x20]
+@@ -832,11 +884,15 @@ KiArm64PermVectorFiqSpx_Handler:
+     ldp x4,  x5,  [sp, #0x20]
+     ldp x2,  x3,  [sp, #0x10]
+     ldp x0,  x1,  [sp, #0x00]
+-    ldp x29, x30, [sp, #0xB0]
+-    ldp x20, x21, [sp, #0xC0]
++    ldp x20, x21, [sp, #ARM64_IRQ_ELR_SPSR]
+     msr elr_el1, x20
+     msr spsr_el1, x21
+-    ldp x20, x21, [sp, #0xA0]
++    ldr x28, [sp, #ARM64_IRQ_X28]
++    ldp x26, x27, [sp, #ARM64_IRQ_X26_X27]
++    ldp x24, x25, [sp, #ARM64_IRQ_X24_X25]
++    ldp x22, x23, [sp, #ARM64_IRQ_X22_X23]
++    ldp x29, x30, [sp, #ARM64_IRQ_FP_LR]
++    ldp x20, x21, [sp, #ARM64_IRQ_X20_X21]
+     add sp, sp, #ARM64_IRQ_FRAME_SIZE
+     dsb sy
+     isb
+@@ -864,14 +920,22 @@ KiArm64PermVectorFiqSpx_Handler:
+ KiArm64PermVectorIrqLowerA64_Handler:
+     sub sp, sp, #ARM64_IRQ_FRAME_SIZE
+     .seh_stackalloc ARM64_IRQ_FRAME_SIZE
+-    stp x20, x21, [sp, #0xA0]
+-    .seh_save_regp x20, 0xA0
+-    stp x29, x30, [sp, #0xB0]
+-    .seh_save_fplr 0xB0
++    stp x20, x21, [sp, #ARM64_IRQ_X20_X21]
++    .seh_save_regp x20, ARM64_IRQ_X20_X21
++    stp x22, x23, [sp, #ARM64_IRQ_X22_X23]
++    .seh_save_regp x22, ARM64_IRQ_X22_X23
++    stp x24, x25, [sp, #ARM64_IRQ_X24_X25]
++    .seh_save_regp x24, ARM64_IRQ_X24_X25
++    stp x26, x27, [sp, #ARM64_IRQ_X26_X27]
++    .seh_save_regp x26, ARM64_IRQ_X26_X27
++    str x28, [sp, #ARM64_IRQ_X28]
++    .seh_save_reg x28, ARM64_IRQ_X28
++    stp x29, x30, [sp, #ARM64_IRQ_FP_LR]
++    .seh_save_fplr ARM64_IRQ_FP_LR
+     .seh_endprologue
+     mrs x20, elr_el1
+     mrs x21, spsr_el1
+-    stp x20, x21, [sp, #0xC0]
++    stp x20, x21, [sp, #ARM64_IRQ_ELR_SPSR]
+     stp x0,  x1,  [sp, #0x00]
+     stp x2,  x3,  [sp, #0x10]
+     stp x4,  x5,  [sp, #0x20]
+@@ -883,7 +947,7 @@ KiArm64PermVectorIrqLowerA64_Handler:
+     stp x16, x17, [sp, #0x80]
+     stp x18, x19, [sp, #0x90]
+     mrs x9, sp_el0
+-    str x9, [sp, #0xD0]           /* Save user SP_EL0 after preserving x9 */
++    str x9, [sp, #ARM64_IRQ_SP_EL0] /* Save user SP_EL0 after preserving x9 */
+     ARM64_SAVE_NEON sp, ARM64_IRQ_NEON
+     ARM64_SAVE_FP_CONTROL ARM64_IRQ_FPCR, ARM64_IRQ_FPSR
+ 
+@@ -897,7 +961,7 @@ KiArm64PermVectorIrqLowerA64_Handler:
+     isb
+     ARM64_RESTORE_FP_CONTROL ARM64_IRQ_FPCR, ARM64_IRQ_FPSR
+     ARM64_RESTORE_NEON sp, ARM64_IRQ_NEON
+-    ldr x9, [sp, #0xD0]           /* Restore user SP_EL0 BEFORE GPRs */
++    ldr x9, [sp, #ARM64_IRQ_SP_EL0] /* Restore user SP_EL0 BEFORE GPRs */
+     msr sp_el0, x9
+     ldp x18, x19, [sp, #0x90]
+     ldp x16, x17, [sp, #0x80]
+@@ -909,11 +973,15 @@ KiArm64PermVectorIrqLowerA64_Handler:
+     ldp x4,  x5,  [sp, #0x20]
+     ldp x2,  x3,  [sp, #0x10]
+     ldp x0,  x1,  [sp, #0x00]
+-    ldp x29, x30, [sp, #0xB0]
+-    ldp x20, x21, [sp, #0xC0]
++    ldp x20, x21, [sp, #ARM64_IRQ_ELR_SPSR]
+     msr elr_el1, x20
+     msr spsr_el1, x21
+-    ldp x20, x21, [sp, #0xA0]
++    ldr x28, [sp, #ARM64_IRQ_X28]
++    ldp x26, x27, [sp, #ARM64_IRQ_X26_X27]
++    ldp x24, x25, [sp, #ARM64_IRQ_X24_X25]
++    ldp x22, x23, [sp, #ARM64_IRQ_X22_X23]
++    ldp x29, x30, [sp, #ARM64_IRQ_FP_LR]
++    ldp x20, x21, [sp, #ARM64_IRQ_X20_X21]
+     add sp, sp, #ARM64_IRQ_FRAME_SIZE
+     dsb sy
+     isb
+@@ -926,14 +994,22 @@ KiArm64PermVectorIrqLowerA64_Handler:
+ KiArm64PermVectorFiqLowerA64_Handler:
+     sub sp, sp, #ARM64_IRQ_FRAME_SIZE
+     .seh_stackalloc ARM64_IRQ_FRAME_SIZE
+-    stp x20, x21, [sp, #0xA0]
+-    .seh_save_regp x20, 0xA0
+-    stp x29, x30, [sp, #0xB0]
+-    .seh_save_fplr 0xB0
++    stp x20, x21, [sp, #ARM64_IRQ_X20_X21]
++    .seh_save_regp x20, ARM64_IRQ_X20_X21
++    stp x22, x23, [sp, #ARM64_IRQ_X22_X23]
++    .seh_save_regp x22, ARM64_IRQ_X22_X23
++    stp x24, x25, [sp, #ARM64_IRQ_X24_X25]
++    .seh_save_regp x24, ARM64_IRQ_X24_X25
++    stp x26, x27, [sp, #ARM64_IRQ_X26_X27]
++    .seh_save_regp x26, ARM64_IRQ_X26_X27
++    str x28, [sp, #ARM64_IRQ_X28]
++    .seh_save_reg x28, ARM64_IRQ_X28
++    stp x29, x30, [sp, #ARM64_IRQ_FP_LR]
++    .seh_save_fplr ARM64_IRQ_FP_LR
+     .seh_endprologue
+     mrs x20, elr_el1
+     mrs x21, spsr_el1
+-    stp x20, x21, [sp, #0xC0]
++    stp x20, x21, [sp, #ARM64_IRQ_ELR_SPSR]
+     stp x0,  x1,  [sp, #0x00]
+     stp x2,  x3,  [sp, #0x10]
+     stp x4,  x5,  [sp, #0x20]
+@@ -945,7 +1021,7 @@ KiArm64PermVectorFiqLowerA64_Handler:
+     stp x16, x17, [sp, #0x80]
+     stp x18, x19, [sp, #0x90]
+     mrs x9, sp_el0
+-    str x9, [sp, #0xD0]           /* Save user SP_EL0 after preserving x9 */
++    str x9, [sp, #ARM64_IRQ_SP_EL0] /* Save user SP_EL0 after preserving x9 */
+     ARM64_SAVE_NEON sp, ARM64_IRQ_NEON
+     ARM64_SAVE_FP_CONTROL ARM64_IRQ_FPCR, ARM64_IRQ_FPSR
+ 
+@@ -959,7 +1035,7 @@ KiArm64PermVectorFiqLowerA64_Handler:
+     isb
+     ARM64_RESTORE_FP_CONTROL ARM64_IRQ_FPCR, ARM64_IRQ_FPSR
+     ARM64_RESTORE_NEON sp, ARM64_IRQ_NEON
+-    ldr x9, [sp, #0xD0]           /* Restore user SP_EL0 BEFORE GPRs */
++    ldr x9, [sp, #ARM64_IRQ_SP_EL0] /* Restore user SP_EL0 BEFORE GPRs */
+     msr sp_el0, x9
+     ldp x18, x19, [sp, #0x90]
+     ldp x16, x17, [sp, #0x80]
+@@ -971,11 +1047,15 @@ KiArm64PermVectorFiqLowerA64_Handler:
+     ldp x4,  x5,  [sp, #0x20]
+     ldp x2,  x3,  [sp, #0x10]
+     ldp x0,  x1,  [sp, #0x00]
+-    ldp x29, x30, [sp, #0xB0]
+-    ldp x20, x21, [sp, #0xC0]
++    ldp x20, x21, [sp, #ARM64_IRQ_ELR_SPSR]
+     msr elr_el1, x20
+     msr spsr_el1, x21
+-    ldp x20, x21, [sp, #0xA0]
++    ldr x28, [sp, #ARM64_IRQ_X28]
++    ldp x26, x27, [sp, #ARM64_IRQ_X26_X27]
++    ldp x24, x25, [sp, #ARM64_IRQ_X24_X25]
++    ldp x22, x23, [sp, #ARM64_IRQ_X22_X23]
++    ldp x29, x30, [sp, #ARM64_IRQ_FP_LR]
++    ldp x20, x21, [sp, #ARM64_IRQ_X20_X21]
+     add sp, sp, #ARM64_IRQ_FRAME_SIZE
+     dsb sy
+     isb
+@@ -988,14 +1068,22 @@ KiArm64PermVectorFiqLowerA64_Handler:
+ KiArm64PermVectorIrqLowerA32_Handler:
+     sub sp, sp, #ARM64_IRQ_FRAME_SIZE
+     .seh_stackalloc ARM64_IRQ_FRAME_SIZE
+-    stp x20, x21, [sp, #0xA0]
+-    .seh_save_regp x20, 0xA0
+-    stp x29, x30, [sp, #0xB0]
+-    .seh_save_fplr 0xB0
++    stp x20, x21, [sp, #ARM64_IRQ_X20_X21]
++    .seh_save_regp x20, ARM64_IRQ_X20_X21
++    stp x22, x23, [sp, #ARM64_IRQ_X22_X23]
++    .seh_save_regp x22, ARM64_IRQ_X22_X23
++    stp x24, x25, [sp, #ARM64_IRQ_X24_X25]
++    .seh_save_regp x24, ARM64_IRQ_X24_X25
++    stp x26, x27, [sp, #ARM64_IRQ_X26_X27]
++    .seh_save_regp x26, ARM64_IRQ_X26_X27
++    str x28, [sp, #ARM64_IRQ_X28]
++    .seh_save_reg x28, ARM64_IRQ_X28
++    stp x29, x30, [sp, #ARM64_IRQ_FP_LR]
++    .seh_save_fplr ARM64_IRQ_FP_LR
+     .seh_endprologue
+     mrs x20, elr_el1
+     mrs x21, spsr_el1
+-    stp x20, x21, [sp, #0xC0]
++    stp x20, x21, [sp, #ARM64_IRQ_ELR_SPSR]
+     stp x0,  x1,  [sp, #0x00]
+     stp x2,  x3,  [sp, #0x10]
+     stp x4,  x5,  [sp, #0x20]
+@@ -1007,7 +1095,7 @@ KiArm64PermVectorIrqLowerA32_Handler:
+     stp x16, x17, [sp, #0x80]
+     stp x18, x19, [sp, #0x90]
+     mrs x9, sp_el0
+-    str x9, [sp, #0xD0]           /* Save user SP_EL0 after preserving x9 */
++    str x9, [sp, #ARM64_IRQ_SP_EL0] /* Save user SP_EL0 after preserving x9 */
+     ARM64_SAVE_NEON sp, ARM64_IRQ_NEON
+     ARM64_SAVE_FP_CONTROL ARM64_IRQ_FPCR, ARM64_IRQ_FPSR
+     dsb sy
+@@ -1020,7 +1108,7 @@ KiArm64PermVectorIrqLowerA32_Handler:
+     isb
+     ARM64_RESTORE_FP_CONTROL ARM64_IRQ_FPCR, ARM64_IRQ_FPSR
+     ARM64_RESTORE_NEON sp, ARM64_IRQ_NEON
+-    ldr x9, [sp, #0xD0]           /* Restore user SP_EL0 BEFORE GPRs */
++    ldr x9, [sp, #ARM64_IRQ_SP_EL0] /* Restore user SP_EL0 BEFORE GPRs */
+     msr sp_el0, x9
+     ldp x18, x19, [sp, #0x90]
+     ldp x16, x17, [sp, #0x80]
+@@ -1032,11 +1120,15 @@ KiArm64PermVectorIrqLowerA32_Handler:
+     ldp x4,  x5,  [sp, #0x20]
+     ldp x2,  x3,  [sp, #0x10]
+     ldp x0,  x1,  [sp, #0x00]
+-    ldp x29, x30, [sp, #0xB0]
+-    ldp x20, x21, [sp, #0xC0]
++    ldp x20, x21, [sp, #ARM64_IRQ_ELR_SPSR]
+     msr elr_el1, x20
+     msr spsr_el1, x21
+-    ldp x20, x21, [sp, #0xA0]
++    ldr x28, [sp, #ARM64_IRQ_X28]
++    ldp x26, x27, [sp, #ARM64_IRQ_X26_X27]
++    ldp x24, x25, [sp, #ARM64_IRQ_X24_X25]
++    ldp x22, x23, [sp, #ARM64_IRQ_X22_X23]
++    ldp x29, x30, [sp, #ARM64_IRQ_FP_LR]
++    ldp x20, x21, [sp, #ARM64_IRQ_X20_X21]
+     add sp, sp, #ARM64_IRQ_FRAME_SIZE
+     dsb sy
+     isb
+@@ -1049,14 +1141,22 @@ KiArm64PermVectorIrqLowerA32_Handler:
+ KiArm64PermVectorFiqLowerA32_Handler:
+     sub sp, sp, #ARM64_IRQ_FRAME_SIZE
+     .seh_stackalloc ARM64_IRQ_FRAME_SIZE
+-    stp x20, x21, [sp, #0xA0]
+-    .seh_save_regp x20, 0xA0
+-    stp x29, x30, [sp, #0xB0]
+-    .seh_save_fplr 0xB0
++    stp x20, x21, [sp, #ARM64_IRQ_X20_X21]
++    .seh_save_regp x20, ARM64_IRQ_X20_X21
++    stp x22, x23, [sp, #ARM64_IRQ_X22_X23]
++    .seh_save_regp x22, ARM64_IRQ_X22_X23
++    stp x24, x25, [sp, #ARM64_IRQ_X24_X25]
++    .seh_save_regp x24, ARM64_IRQ_X24_X25
++    stp x26, x27, [sp, #ARM64_IRQ_X26_X27]
++    .seh_save_regp x26, ARM64_IRQ_X26_X27
++    str x28, [sp, #ARM64_IRQ_X28]
++    .seh_save_reg x28, ARM64_IRQ_X28
++    stp x29, x30, [sp, #ARM64_IRQ_FP_LR]
++    .seh_save_fplr ARM64_IRQ_FP_LR
+     .seh_endprologue
+     mrs x20, elr_el1
+     mrs x21, spsr_el1
+-    stp x20, x21, [sp, #0xC0]
++    stp x20, x21, [sp, #ARM64_IRQ_ELR_SPSR]
+     stp x0,  x1,  [sp, #0x00]
+     stp x2,  x3,  [sp, #0x10]
+     stp x4,  x5,  [sp, #0x20]
+@@ -1068,7 +1168,7 @@ KiArm64PermVectorFiqLowerA32_Handler:
+     stp x16, x17, [sp, #0x80]
+     stp x18, x19, [sp, #0x90]
+     mrs x9, sp_el0
+-    str x9, [sp, #0xD0]           /* Save user SP_EL0 after preserving x9 */
++    str x9, [sp, #ARM64_IRQ_SP_EL0] /* Save user SP_EL0 after preserving x9 */
+     ARM64_SAVE_NEON sp, ARM64_IRQ_NEON
+     ARM64_SAVE_FP_CONTROL ARM64_IRQ_FPCR, ARM64_IRQ_FPSR
+     dsb sy
+@@ -1081,7 +1181,7 @@ KiArm64PermVectorFiqLowerA32_Handler:
+     isb
+     ARM64_RESTORE_FP_CONTROL ARM64_IRQ_FPCR, ARM64_IRQ_FPSR
+     ARM64_RESTORE_NEON sp, ARM64_IRQ_NEON
+-    ldr x9, [sp, #0xD0]           /* Restore user SP_EL0 BEFORE GPRs */
++    ldr x9, [sp, #ARM64_IRQ_SP_EL0] /* Restore user SP_EL0 BEFORE GPRs */
+     msr sp_el0, x9
+     ldp x18, x19, [sp, #0x90]
+     ldp x16, x17, [sp, #0x80]
+@@ -1093,11 +1193,15 @@ KiArm64PermVectorFiqLowerA32_Handler:
+     ldp x4,  x5,  [sp, #0x20]
+     ldp x2,  x3,  [sp, #0x10]
+     ldp x0,  x1,  [sp, #0x00]
+-    ldp x29, x30, [sp, #0xB0]
+-    ldp x20, x21, [sp, #0xC0]
++    ldp x20, x21, [sp, #ARM64_IRQ_ELR_SPSR]
+     msr elr_el1, x20
+     msr spsr_el1, x21
+-    ldp x20, x21, [sp, #0xA0]
++    ldr x28, [sp, #ARM64_IRQ_X28]
++    ldp x26, x27, [sp, #ARM64_IRQ_X26_X27]
++    ldp x24, x25, [sp, #ARM64_IRQ_X24_X25]
++    ldp x22, x23, [sp, #ARM64_IRQ_X22_X23]
++    ldp x29, x30, [sp, #ARM64_IRQ_FP_LR]
++    ldp x20, x21, [sp, #ARM64_IRQ_X20_X21]
+     add sp, sp, #ARM64_IRQ_FRAME_SIZE
+     dsb sy
+     isb
+diff --git a/ntoskrnl/ke/dpc.c b/ntoskrnl/ke/dpc.c
+index c4bfb218c61..7cca742c4bc 100644
+--- a/ntoskrnl/ke/dpc.c
++++ b/ntoskrnl/ke/dpc.c
+@@ -543,6 +543,15 @@ KiQuantumEnd(VOID)
+     /* Set current thread's swap busy to true */
+     KiSetThreadSwapBusy(Thread);
+ 
++#if defined(_M_ARM64)
++    /*
++     * ARM64 publishes the incoming thread in the per-CPU PCR before the
++     * assembly path switches SP. Keep hardware IRQs masked across that window
++     * so interrupt code cannot observe the new CurrentThread on the old stack.
++     */
++    _disable();
++#endif
++
+     /* Switch threads in PRCB */
+     Prcb->NextThread = NULL;
+     Prcb->CurrentThread = NextThread;
+diff --git a/ntoskrnl/ke/thrdschd.c b/ntoskrnl/ke/thrdschd.c
+index 287b08cf3a5..6d57ee1ae2e 100644
+--- a/ntoskrnl/ke/thrdschd.c
++++ b/ntoskrnl/ke/thrdschd.c
+@@ -28,6 +28,8 @@ KAFFINITY KiIdleSMTSummary;
+ /* FUNCTIONS *****************************************************************/
+ 
+ #ifdef CONFIG_SMP
++BOOLEAN KiIdleStealEnabled = FALSE;
++
+ static
+ PKTHREAD
+ FASTCALL
+@@ -61,6 +63,23 @@ KiStealReadyThread(IN PKPRCB Prcb)
+                 if (Thread->State != Ready) continue;
+                 if (!(KiThreadAffinityMask(Thread) & ThisBit)) continue;
+ 
++#if DBG
++                {
++                    ULONG StealScan;
++                    for (StealScan = 0; StealScan < (ULONG)KeNumberProcessors; StealScan++)
++                    {
++                        if ((KiProcessorBlock[StealScan] != NULL) &&
++                            (KiProcessorBlock[StealScan]->CurrentThread == Thread))
++                        {
++                            DPRINT1("STEAL_RUNNING: cpu=%lu thread=%p current-on-cpu=%lu state=%lu nextproc=%lu\n",
++                                    (ULONG)Prcb->Number, Thread, StealScan,
++                                    (ULONG)Thread->State, (ULONG)Thread->NextProcessor);
++                            break;
++                        }
++                    }
++                }
++#endif
++
+                 if (RemoveEntryList(&Thread->WaitListEntry))
+                 {
+                     Remote->ReadySummary ^= PRIORITY_MASK(Priority);
+@@ -96,6 +115,7 @@ KiIdleSchedule(IN PKPRCB Prcb)
+     }
+ 
+ #ifdef CONFIG_SMP
++    if (KiIdleStealEnabled)
+     {
+         PKTHREAD Stolen;
+ 
+@@ -532,6 +552,15 @@ KiSwapThread(IN PKTHREAD CurrentThread,
+ 
+     /* Get the next thread */
+     NextThread = Prcb->NextThread;
++
++#if defined(_M_ARM64)
++    /*
++     * CurrentThread is published before KiSwapContext changes SP. Mask IRQs
++     * until the switch path reaches the incoming stack.
++     */
++    _disable();
++#endif
++
+     if (NextThread)
+     {
+         /* Already got a thread, set it up */
+@@ -1021,6 +1050,14 @@ NtYieldExecution(VOID)
+             /* Set context swap busy */
+             KiSetThreadSwapBusy(Thread);
+ 
++#if defined(_M_ARM64)
++            /*
++             * Do not allow an IRQ between publishing the next thread and the
++             * ARM64 stack switch.
++             */
++            _disable();
++#endif
++
+             /* Set the new thread as running */
+             Prcb->NextThread = NULL;
+             Prcb->CurrentThread = NextThread;
+diff --git a/ntoskrnl/ke/wait.c b/ntoskrnl/ke/wait.c
+index 008390c315d..1f24c0d68af 100644
+--- a/ntoskrnl/ke/wait.c
++++ b/ntoskrnl/ke/wait.c
+@@ -259,6 +259,14 @@ KiExitDispatcher(IN KIRQL OldIrql)
+     /* Set current thread's swap busy to true */
+     KiSetThreadSwapBusy(Thread);
+ 
++#if defined(_M_ARM64)
++    /*
++     * Keep IRQs masked while CurrentThread points at the incoming thread but
++     * this CPU is still executing on the outgoing thread's stack.
++     */
++    _disable();
++#endif
++
+     /* Switch threads in PRCB */
+     Prcb->NextThread = NULL;
+     Prcb->CurrentThread = NextThread;
+diff --git a/ntoskrnl/lpc/connect.c b/ntoskrnl/lpc/connect.c
+index 69dff778ab4..577759b8557 100644
+--- a/ntoskrnl/lpc/connect.c
++++ b/ntoskrnl/lpc/connect.c
+@@ -52,6 +52,7 @@ LpcpFreeConMsg(IN OUT PLPCP_MESSAGE *Message,
+         /* Clear message data */
+         CurrentThread->LpcReceivedMessageId = 0;
+         CurrentThread->LpcReplyMessage = NULL;
++        CurrentThread->LpcReplyMessageId = 0;
+ 
+         /* Get the connection message and clear the section */
+         *ConnectMessage = (PLPCP_CONNECTION_MESSAGE)(ReplyMessage + 1);
+diff --git a/ntoskrnl/lpc/reply.c b/ntoskrnl/lpc/reply.c
+index 73a8270bf76..c25a9214819 100644
+--- a/ntoskrnl/lpc/reply.c
++++ b/ntoskrnl/lpc/reply.c
+@@ -14,6 +14,46 @@
+ 
+ /* PRIVATE FUNCTIONS *********************************************************/
+ 
++static
++BOOLEAN
++NTAPI
++LpcpValidateReplyTarget(IN PETHREAD WakeupThread,
++                        IN PLPCP_PORT_OBJECT Port,
++                        IN ULONG MessageId)
++{
++    LONG ReplyState;
++
++    /* The client must still be waiting for a reply on this LPC port. */
++    if (!LpcpValidateClientPort(WakeupThread, Port))
++    {
++        DPRINT1("LPC reply target is no longer waiting on this port: "
++                "Thread=%p Port=%p MessageId=0x%lx\n",
++                WakeupThread,
++                Port,
++                MessageId);
++        return FALSE;
++    }
++
++    /*
++     * Thread reply semaphores have a limit of one. If the semaphore is
++     * already signaled, another completion would raise
++     * STATUS_SEMAPHORE_LIMIT_EXCEEDED in KeReleaseSemaphore.
++     */
++    ReplyState = KeReadStateSemaphore(&WakeupThread->LpcReplySemaphore);
++    if (ReplyState != 0)
++    {
++        DPRINT1("LPC reply target was already completed: "
++                "Thread=%p Port=%p MessageId=0x%lx State=%ld\n",
++                WakeupThread,
++                Port,
++                MessageId,
++                ReplyState);
++        return FALSE;
++    }
++
++    return TRUE;
++}
++
+ VOID
+ NTAPI
+ LpcpFreeDataInfoMessage(IN PLPCP_PORT_OBJECT Port,
+@@ -289,6 +329,16 @@ NtReplyPort(IN HANDLE PortHandle,
+         return STATUS_REPLY_MESSAGE_MISMATCH;
+     }
+ 
++    if (!LpcpValidateReplyTarget(WakeupThread,
++                                 Port,
++                                 CapturedReplyMessage.MessageId))
++    {
++        LpcpFreeToPortZone(Message, LPCP_LOCK_HELD | LPCP_LOCK_RELEASE);
++        ObDereferenceObject(WakeupThread);
++        ObDereferenceObject(Port);
++        return STATUS_REPLY_MESSAGE_MISMATCH;
++    }
++
+     /* Copy the message */
+     _SEH2_TRY
+     {
+@@ -534,6 +584,17 @@ NtReplyWaitReceivePortEx(IN HANDLE PortHandle,
+             return STATUS_REPLY_MESSAGE_MISMATCH;
+         }
+ 
++        if (!LpcpValidateReplyTarget(WakeupThread,
++                                     Port,
++                                     CapturedReplyMessage.MessageId))
++        {
++            LpcpFreeToPortZone(Message, LPCP_LOCK_HELD | LPCP_LOCK_RELEASE);
++            if (ConnectionPort) ObDereferenceObject(ConnectionPort);
++            ObDereferenceObject(WakeupThread);
++            ObDereferenceObject(Port);
++            return STATUS_REPLY_MESSAGE_MISMATCH;
++        }
++
+         /* Copy the message */
+         _SEH2_TRY
+         {
+diff --git a/ntoskrnl/mm/mmfault.c b/ntoskrnl/mm/mmfault.c
+index a473fe7d23e..dc814926d38 100644
+--- a/ntoskrnl/mm/mmfault.c
++++ b/ntoskrnl/mm/mmfault.c
+@@ -18,6 +18,53 @@
+ 
+ extern MM_AVL_TABLE MiRosKernelVadRoot;
+ 
++#if defined(_M_ARM64)
++static LONG MiArm64FaultIrqlLogBudget = 32;
++
++static
++VOID
++MiArm64LogFaultIrql(
++    _In_z_ PCSTR Site,
++    _In_ KIRQL FirstIrql,
++    _In_ KIRQL SecondIrql,
++    _In_ KPROCESSOR_MODE Mode,
++    _In_ ULONG_PTR Address,
++    _In_ ULONG FaultCode,
++    _In_opt_ PVOID TrapInformation,
++    _In_ BOOLEAN AddressSpaceLocked)
++{
++    PKTRAP_FRAME TrapFrame = (PKTRAP_FRAME)TrapInformation;
++    PKTHREAD Thread = KeGetCurrentThread();
++    PKIPCR Pcr = KeGetPcr();
++    PKPRCB Prcb = Pcr ? &Pcr->Prcb : NULL;
++
++    if (InterlockedDecrement(&MiArm64FaultIrqlLogBudget) < 0)
++        return;
++
++    DbgPrintEx(DPFLTR_DEFAULT_ID,
++               DPFLTR_ERROR_LEVEL,
++               "[arm64][MMFAULT-IRQL] %s first=%u second=%u saved=%u "
++               "va=%p code=0x%lx mode=%d locked=%u pc=%p lr=%p sp=%p "
++               "esr=0x%lx cpu=%lu pcr=%p thread=%p prcbthread=%p\n",
++               Site,
++               (ULONG)FirstIrql,
++               (ULONG)SecondIrql,
++               TrapFrame ? (ULONG)TrapFrame->PreviousIrql : 0xFFFFFFFFUL,
++               (PVOID)Address,
++               FaultCode,
++               (int)Mode,
++               (ULONG)AddressSpaceLocked,
++               TrapFrame ? (PVOID)(ULONG_PTR)TrapFrame->Pc : NULL,
++               TrapFrame ? (PVOID)(ULONG_PTR)TrapFrame->Lr : NULL,
++               TrapFrame ? (PVOID)(ULONG_PTR)TrapFrame->Sp : NULL,
++               TrapFrame ? TrapFrame->Esr : 0,
++               Prcb ? Prcb->Number : 0xFFFFFFFFUL,
++               Pcr,
++               Thread,
++               Prcb ? Prcb->CurrentThread : NULL);
++}
++#endif
++
+ typedef enum _MI_FAULT_WS_TYPE
+ {
+     MiFaultWsNone,
+@@ -135,19 +182,38 @@ NTAPI
+ MmpAccessFault(KPROCESSOR_MODE Mode,
+                ULONG_PTR Address,
+                BOOLEAN AddressSpaceLocked,
+-               ULONG FaultCode)
++               ULONG FaultCode,
++               PVOID TrapInformation)
+ {
+     PMMSUPPORT AddressSpace;
+     MEMORY_AREA* MemoryArea;
+     NTSTATUS Status;
++#if defined(_M_ARM64)
++    KIRQL FirstIrql;
++#endif
+ 
+     DPRINT("MmAccessFault(Mode %d, Address %x)\n", Mode, Address);
+ 
++#if defined(_M_ARM64)
++    FirstIrql = KeGetCurrentIrql();
++    if (FirstIrql >= DISPATCH_LEVEL)
++    {
++        KIRQL SecondIrql = KeGetCurrentIrql();
++
++        MiArm64LogFaultIrql("access", FirstIrql, SecondIrql, Mode, Address, FaultCode, TrapInformation, AddressSpaceLocked);
++        DPRINT1("Page fault at high IRQL was %u, second %u, address %p\n",
++                (ULONG)FirstIrql,
++                (ULONG)SecondIrql,
++                (PVOID)Address);
++        return(STATUS_UNSUCCESSFUL);
++    }
++#else
+     if (KeGetCurrentIrql() >= DISPATCH_LEVEL)
+     {
+         DPRINT1("Page fault at high IRQL was %u\n", KeGetCurrentIrql());
+         return(STATUS_UNSUCCESSFUL);
+     }
++#endif
+ 
+     /* Instruction fetch and the page is present.
+        This means the page is NX and we cannot do anything to "fix" it. */
+@@ -231,19 +297,39 @@ NTSTATUS
+ NTAPI
+ MmNotPresentFault(KPROCESSOR_MODE Mode,
+                   ULONG_PTR Address,
+-                  BOOLEAN AddressSpaceLocked)
++                  BOOLEAN AddressSpaceLocked,
++                  PVOID TrapInformation,
++                  ULONG FaultCode)
+ {
+     PMMSUPPORT AddressSpace;
+     MEMORY_AREA* MemoryArea;
+     NTSTATUS Status;
++#if defined(_M_ARM64)
++    KIRQL FirstIrql;
++#endif
+ 
+     DPRINT("MmNotPresentFault(Mode %d, Address %x)\n", Mode, Address);
+ 
++#if defined(_M_ARM64)
++    FirstIrql = KeGetCurrentIrql();
++    if (FirstIrql >= DISPATCH_LEVEL)
++    {
++        KIRQL SecondIrql = KeGetCurrentIrql();
++
++        MiArm64LogFaultIrql("not-present", FirstIrql, SecondIrql, Mode, Address, FaultCode, TrapInformation, AddressSpaceLocked);
++        DPRINT1("Page fault at high IRQL was %u, second %u, address %p\n",
++                (ULONG)FirstIrql,
++                (ULONG)SecondIrql,
++                (PVOID)Address);
++        return(STATUS_UNSUCCESSFUL);
++    }
++#else
+     if (KeGetCurrentIrql() >= DISPATCH_LEVEL)
+     {
+         DPRINT1("Page fault at high IRQL was %u, address %x\n", KeGetCurrentIrql(), Address);
+         return(STATUS_UNSUCCESSFUL);
+     }
++#endif
+ 
+     /*
+      * Find the memory area for the faulting address
+@@ -411,16 +497,29 @@ MmAccessFaultEx(IN ULONG FaultCode,
+     }
+ 
+ Retry:
++#if defined(_M_ARM64)
++    {
++        KIRQL FirstIrql = KeGetCurrentIrql();
++
++        if (FirstIrql >= DISPATCH_LEVEL)
++        {
++            KIRQL SecondIrql = KeGetCurrentIrql();
++
++            MiArm64LogFaultIrql("dispatch", FirstIrql, SecondIrql, Mode, (ULONG_PTR)Address, FaultCode, TrapInformation, AddressSpaceLocked);
++        }
++    }
++#endif
++
+     /* Keep same old ReactOS Behaviour */
+     if (!MI_IS_NOT_PRESENT_FAULT(FaultCode))
+     {
+         /* Call access fault */
+-        Status = MmpAccessFault(Mode, (ULONG_PTR)Address, AddressSpaceLocked, FaultCode);
++        Status = MmpAccessFault(Mode, (ULONG_PTR)Address, AddressSpaceLocked, FaultCode, TrapInformation);
+     }
+     else
+     {
+         /* Call not present */
+-        Status = MmNotPresentFault(Mode, (ULONG_PTR)Address, AddressSpaceLocked);
++        Status = MmNotPresentFault(Mode, (ULONG_PTR)Address, AddressSpaceLocked, TrapInformation, FaultCode);
+     }
+ 
+     if (Status == STATUS_NO_MEMORY)
+diff --git a/ntoskrnl/rtl/libsupp.c b/ntoskrnl/rtl/libsupp.c
+index 96d5585bd64..bdea32ff9bb 100644
+--- a/ntoskrnl/rtl/libsupp.c
++++ b/ntoskrnl/rtl/libsupp.c
+@@ -248,9 +248,32 @@ RtlInitializeHeapManager(VOID)
+ VOID FASTCALL
+ CHECK_PAGED_CODE_RTL(char *file, int line)
+ {
+-  if(KeGetCurrentIrql() > APC_LEVEL)
++  KIRQL FirstIrql = KeGetCurrentIrql();
++
++  if (FirstIrql > APC_LEVEL)
+   {
+-    DbgPrint("%s:%i: Pagable code called at IRQL > APC_LEVEL (%u)\n", file, line, KeGetCurrentIrql());
++#ifdef _M_ARM64
++    ULONG64 Daif;
++    KIRQL SecondIrql = KeGetCurrentIrql();
++
++    __asm__ __volatile__("mrs %0, daif" : "=r"(Daif));
++    DbgPrint("PAGEDIRQL: %s:%i First=%u Second=%u CPU=%lu DAIF=%lx "
++             "Thread=%p PCR=%p Caller=%p\n",
++             file,
++             line,
++             FirstIrql,
++             SecondIrql,
++             KeGetCurrentProcessorNumber(),
++             (ULONG)Daif,
++             KeGetCurrentThread(),
++             KeGetPcr(),
++             _ReturnAddress());
++#else
++    DbgPrint("%s:%i: Pagable code called at IRQL > APC_LEVEL (%u)\n",
++             file,
++             line,
++             FirstIrql);
++#endif
+     ASSERT(FALSE);
+   }
+ }
+diff --git a/sdk/include/ndk/arm64/ketypes.h b/sdk/include/ndk/arm64/ketypes.h
+index e71db465cc6..79d77d6f9a3 100644
+--- a/sdk/include/ndk/arm64/ketypes.h
++++ b/sdk/include/ndk/arm64/ketypes.h
+@@ -1017,27 +1017,45 @@ static __inline PKPRCB KeGetCurrentPrcb(VOID)
+  * incorrect scheduler behavior.
+  *
+  * KeGetPcr() reads TPIDR_EL1 (per-CPU system register), giving each
+- * CPU its own IRQL. Fallback to the global for very early boot before
+- * TPIDR_EL1 is initialized.
++ * CPU its own IRQL. In an MP kernel the old global is not a valid
++ * runtime fallback: it can contain a stale IRQL from another CPU.
+  */
++#if defined(CONFIG_SMP)
++#define KeGetCurrentIrql() \
++    __extension__ ({ \
++        PKIPCR _irql_pcr = KeGetPcr(); \
++        (_irql_pcr != NULL) ? _irql_pcr->CurrentIrql : PASSIVE_LEVEL; \
++    })
++#else
+ #define KeGetCurrentIrql() \
+     __extension__ ({ \
+         PKIPCR _irql_pcr = KeGetPcr(); \
+         (_irql_pcr != NULL) ? _irql_pcr->CurrentIrql : KeArm64CurrentIrql; \
+     })
+ #endif
++#endif
+ /*
+  * ARM64 SMP: _KeGetCurrentThread must read from per-CPU PRCB, not the global.
+- * The global KeArm64CurrentThread is written by ALL CPUs during context switch,
+- * so reading it on SMP returns the wrong thread for all but the last writer.
+- * Prcb->CurrentThread is always correct for the current CPU.
++ * KeArm64CurrentThread is only a UP/early-boot fallback. In an MP kernel it is
++ * not per-CPU and can name a stale or different CPU's thread.
+  */
++#if defined(CONFIG_SMP)
++#define _KeGetCurrentThread() \
++    __extension__ ({ \
++        PKIPCR _ct_pcr = KeGetPcr(); \
++        PKTHREAD _ct_thread = (_ct_pcr != NULL) ? _ct_pcr->Prcb.CurrentThread : NULL; \
++        \
++        /* On SMP the global fallback can name another CPU's thread. */ \
++        _ct_thread; \
++    })
++#else
+ #define _KeGetCurrentThread() \
+     __extension__ ({ \
+         PKIPCR _ct_pcr = KeGetPcr(); \
+         PKTHREAD _ct_thread = (_ct_pcr != NULL) ? _ct_pcr->Prcb.CurrentThread : NULL; \
+         (_ct_thread != NULL) ? _ct_thread : KeArm64CurrentThread; \
+     })
++#endif
+ #define _KeGetPreviousMode() \
+     __extension__ ({ \
+         PKTHREAD _pm_t = _KeGetCurrentThread(); \
+diff --git a/sdk/include/xdk/kefuncs.h b/sdk/include/xdk/kefuncs.h
+index 02f1850764e..409dae9235d 100644
+--- a/sdk/include/xdk/kefuncs.h
++++ b/sdk/include/xdk/kefuncs.h
+@@ -1434,8 +1434,12 @@ void __PREfastPagedCodeLocked(void);
+ #endif
+ 
+ #define PAGED_CODE() { \
+-  if (KeGetCurrentIrql() > APC_LEVEL) { \
+-    KdPrint( ("NTDDK: Pageable code called at IRQL > APC_LEVEL (%d)\n", KeGetCurrentIrql() )); \
++  KIRQL _PagedCodeFirstIrql = KeGetCurrentIrql(); \
++  if (_PagedCodeFirstIrql > APC_LEVEL) { \
++    KdPrint( ("PAGEDIRQL: First=%u Second=%u Caller=%p\n", \
++              (ULONG)_PagedCodeFirstIrql, \
++              (ULONG)KeGetCurrentIrql(), \
++              _ReturnAddress()) ); \
+     PAGED_ASSERT(FALSE); \
+   } \
+ }
+diff --git a/win32ss/drivers/miniport/rpi5vc4/rpi5vc4.c b/win32ss/drivers/miniport/rpi5vc4/rpi5vc4.c
+index 436344cf309..63a47253321 100644
+--- a/win32ss/drivers/miniport/rpi5vc4/rpi5vc4.c
++++ b/win32ss/drivers/miniport/rpi5vc4/rpi5vc4.c
+@@ -32,7 +32,10 @@ Rpi5Vc4LoadGopInfo(
+     ULONGLONG VisibleFrameBufferSize;
+ 
+     if (!InbvGetGopFrameBufferInfo(&FbInfo))
++    {
++        DbgPrint("RPI5VC4: GOP framebuffer info unavailable\n");
+         return ERROR_DEV_NOT_EXIST;
++    }
+ 
+     if (FbInfo.FrameBufferBase.QuadPart == 0 ||
+         FbInfo.FrameBufferSize == 0 ||
+@@ -41,6 +44,13 @@ Rpi5Vc4LoadGopInfo(
+         FbInfo.PixelsPerScanLine == 0 ||
+         FbInfo.PixelFormat == 0)
+     {
++        DbgPrint("RPI5VC4: invalid GOP info pa=%I64x size=%lu %lux%lu stride=%lu bpp=%lu\n",
++                 FbInfo.FrameBufferBase.QuadPart,
++                 FbInfo.FrameBufferSize,
++                 FbInfo.HorizontalResolution,
++                 FbInfo.VerticalResolution,
++                 FbInfo.PixelsPerScanLine,
++                 FbInfo.PixelFormat);
+         return ERROR_DEV_NOT_EXIST;
+     }
+ 
+@@ -54,6 +64,9 @@ Rpi5Vc4LoadGopInfo(
+         VisibleFrameBufferSize > FbInfo.FrameBufferSize ||
+         VisibleFrameBufferSize > MAXULONG)
+     {
++        DbgPrint("RPI5VC4: rejected GOP visible size=%I64u total=%lu\n",
++                 VisibleFrameBufferSize,
++                 FbInfo.FrameBufferSize);
+         return ERROR_DEV_NOT_EXIST;
+     }
+ 
+@@ -74,6 +87,19 @@ Rpi5Vc4LoadGopInfo(
+     DeviceExtension->MappedFrameBuffer = NULL;
+     DeviceExtension->CurrentMode = 0;
+ 
++    DbgPrint("RPI5VC4: GOP pa=%I64x size=%lu visible=%I64u mode=%lux%lu stride=%lu bpp=%lu masks=%08lx/%08lx/%08lx/%08lx\n",
++             FbInfo.FrameBufferBase.QuadPart,
++             FbInfo.FrameBufferSize,
++             VisibleFrameBufferSize,
++             DeviceExtension->ScreenWidth,
++             DeviceExtension->ScreenHeight,
++             DeviceExtension->PixelsPerScanLine,
++             DeviceExtension->BitsPerPixel,
++             DeviceExtension->RedMask,
++             DeviceExtension->GreenMask,
++             DeviceExtension->BlueMask,
++             DeviceExtension->ReservedMask);
++
+     return NO_ERROR;
+ }
+ 
+@@ -134,6 +160,14 @@ Rpi5Vc4BuildModeInfo(
+                            VIDEO_MODE_NO_OFF_SCREEN;
+     Mode->VideoMemoryBitmapWidth = DeviceExtension->ScreenWidth;
+     Mode->VideoMemoryBitmapHeight = DeviceExtension->ScreenHeight;
++
++    DbgPrint("RPI5VC4: mode built %lux%lu stride=%lu bpp=%lu fb=%I64x bytes=%lu\n",
++             Mode->VisScreenWidth,
++             Mode->VisScreenHeight,
++             Mode->ScreenStride,
++             DeviceExtension->BitsPerPixel,
++             DeviceExtension->FrameBufferPhysical.QuadPart,
++             DeviceExtension->FrameBufferSize);
+ }
+ 
+ ULONG
+@@ -143,6 +177,9 @@ DriverEntry(
+     _In_ PVOID Context2)
+ {
+     VIDEO_HW_INITIALIZATION_DATA InitData;
++    ULONG Status;
++
++    DbgPrint("RPI5VC4: DriverEntry start\n");
+ 
+     if (!Rpi5Vc4IsRpi5Platform())
+     {
+@@ -151,9 +188,12 @@ DriverEntry(
+          * entering videoport so no \Device\VideoN slot is consumed and uefifb can
+          * handle the firmware framebuffer.
+          */
++        DbgPrint("RPI5VC4: platform probe declined\n");
+         return STATUS_SUCCESS;
+     }
+ 
++    DbgPrint("RPI5VC4: platform probe accepted\n");
++
+     VideoPortZeroMemory(&InitData, sizeof(InitData));
+     InitData.HwInitDataSize = sizeof(VIDEO_HW_INITIALIZATION_DATA);
+     InitData.StartingDeviceNumber = 0;
+@@ -167,7 +207,9 @@ DriverEntry(
+     InitData.HwGetVideoChildDescriptor = NULL;
+     InitData.HwDeviceExtensionSize = sizeof(RPI5VC4_DEVICE_EXTENSION);
+ 
+-    return VideoPortInitialize(Context1, Context2, &InitData, NULL);
++    Status = VideoPortInitialize(Context1, Context2, &InitData, NULL);
++    DbgPrint("RPI5VC4: VideoPortInitialize returned 0x%08lx\n", Status);
++    return Status;
+ }
+ 
+ VP_STATUS
+@@ -186,15 +228,25 @@ Rpi5Vc4FindAdapter(
+     UNREFERENCED_PARAMETER(HwContext);
+     UNREFERENCED_PARAMETER(ArgumentString);
+ 
++    DbgPrint("RPI5VC4: FindAdapter start cfglen=%lu\n", ConfigInfo->Length);
++
+     *Again = FALSE;
+     VideoPortZeroMemory(DeviceExtension, sizeof(*DeviceExtension));
+ 
+     if (ConfigInfo->Length < sizeof(VIDEO_PORT_CONFIG_INFO))
++    {
++        DbgPrint("RPI5VC4: FindAdapter invalid cfglen=%lu expected=%lu\n",
++                 ConfigInfo->Length,
++                 (ULONG)sizeof(VIDEO_PORT_CONFIG_INFO));
+         return ERROR_INVALID_PARAMETER;
++    }
+ 
+     Status = Rpi5Vc4LoadGopInfo(DeviceExtension);
+     if (Status != NO_ERROR)
++    {
++        DbgPrint("RPI5VC4: FindAdapter GOP failed 0x%08lx\n", Status);
+         return Status;
++    }
+ 
+     ConfigInfo->NumEmulatorAccessEntries = 0;
+     ConfigInfo->EmulatorAccessEntries = NULL;
+@@ -205,6 +257,10 @@ Rpi5Vc4FindAdapter(
+     ConfigInfo->VdmPhysicalVideoMemoryLength =
+         DeviceExtension->FrameBufferSize;
+ 
++    DbgPrint("RPI5VC4: FindAdapter success vdm=%I64x len=%lu\n",
++             ConfigInfo->VdmPhysicalVideoMemoryAddress.QuadPart,
++             ConfigInfo->VdmPhysicalVideoMemoryLength);
++
+     return NO_ERROR;
+ }
+ 
+@@ -245,6 +301,11 @@ Rpi5Vc4InitCursor(
+ #if defined(_M_ARM64)
+     __dsb(_ARM64_BARRIER_SY);
+ #endif
++
++    DbgPrint("RPI5VC4: cursor buffer va=%p pa=%I64x bytes=%lu\n",
++             DeviceExtension->CursorVa,
++             DeviceExtension->CursorPhys.QuadPart,
++             (ULONG)Bytes);
+ }
+ 
+ static VP_STATUS
+@@ -349,12 +410,28 @@ Rpi5Vc4Initialize(
+     PRPI5VC4_DEVICE_EXTENSION DeviceExtension = HwDeviceExtension;
+     WCHAR ChipType[] = L"Raspberry Pi 5 firmware framebuffer";
+     ULONG SizeInBytes = DeviceExtension->FrameBufferSize;
++    BOOLEAN TimingFound;
++    BOOLEAN TimingProgrammed = FALSE;
++
++    DbgPrint("RPI5VC4: Initialize start ext=%p fb=%I64x size=%lu\n",
++             DeviceExtension,
++             DeviceExtension->FrameBufferPhysical.QuadPart,
++             DeviceExtension->FrameBufferSize);
+ 
+     Rpi5Vc4BuildModeInfo(DeviceExtension);
++    DbgPrint("RPI5VC4: Initialize after BuildModeInfo\n");
+     Rpi5Vc4InitFrameBuffer(DeviceExtension);
++    DbgPrint("RPI5VC4: Initialize after InitFrameBuffer\n");
+     Rpi5Vc4InitCursor(DeviceExtension);
+-    if (Rpi5CrtcReportTiming(DeviceExtension))
+-        Rpi5CrtcProgramCurrentTiming(DeviceExtension);
++    DbgPrint("RPI5VC4: Initialize after InitCursor\n");
++    TimingFound = Rpi5CrtcReportTiming(DeviceExtension);
++    if (TimingFound)
++        TimingProgrammed = Rpi5CrtcProgramCurrentTiming(DeviceExtension);
++    DbgPrint("RPI5VC4: Initialize timing found=%u programmed=%u pvvalid=%u pv=%lu\n",
++             TimingFound,
++             TimingProgrammed,
++             DeviceExtension->PixelValveValid,
++             DeviceExtension->PixelValveIndex);
+ 
+     /*
+      * Take ownership of the HVS scanout: install our own display list (built
+@@ -363,15 +440,18 @@ Rpi5Vc4Initialize(
+      * GDI-drawn pixels (which leave it 0) are composited to black.
+      */
+     Rpi5HvsInstallScanout(DeviceExtension);
++    DbgPrint("RPI5VC4: Initialize after HVS install\n");
+ 
+     VideoPortSetRegistryParameters(DeviceExtension,
+                                    L"HardwareInformation.ChipType",
+                                    ChipType,
+                                    sizeof(ChipType));
++    DbgPrint("RPI5VC4: Initialize after ChipType registry set\n");
+     VideoPortSetRegistryParameters(DeviceExtension,
+                                    L"HardwareInformation.MemorySize",
+                                    &SizeInBytes,
+                                    sizeof(SizeInBytes));
++    DbgPrint("RPI5VC4: Initialize done\n");
+ 
+     return TRUE;
+ }
+@@ -395,6 +475,20 @@ Rpi5Vc4StartIO(
+     PVIDEO_POINTER_POSITION PointerPosition;
+     PHYSICAL_ADDRESS FrameBuffer;
+     ULONG InIoSpace;
++    static volatile LONG TraceCount;
++    LONG TraceIndex;
++    BOOLEAN TraceThis;
++
++    TraceIndex = InterlockedIncrement(&TraceCount);
++    TraceThis = (TraceIndex <= 64);
++    if (TraceThis)
++    {
++        DbgPrint("RPI5VC4: StartIO #%ld ioctl=0x%08lx in=%lu out=%lu\n",
++                 TraceIndex,
++                 RequestPacket->IoControlCode,
++                 RequestPacket->InputBufferLength,
++                 RequestPacket->OutputBufferLength);
++    }
+ 
+     switch (RequestPacket->IoControlCode)
+     {
+@@ -564,6 +658,13 @@ Rpi5Vc4StartIO(
+     }
+ 
+     RequestPacket->StatusBlock->Status = Status;
++    if (TraceThis)
++    {
++        DbgPrint("RPI5VC4: StartIO #%ld done status=0x%08lx info=%Iu\n",
++                 TraceIndex,
++                 Status,
++                 RequestPacket->StatusBlock->Information);
++    }
+     return TRUE;
+ }
+ 
+diff --git a/win32ss/drivers/miniport/rpi5vc4/rpi5vc4_crtc.c b/win32ss/drivers/miniport/rpi5vc4/rpi5vc4_crtc.c
+index ac98420f58b..9ae9ebfc0a6 100644
+--- a/win32ss/drivers/miniport/rpi5vc4/rpi5vc4_crtc.c
++++ b/win32ss/drivers/miniport/rpi5vc4/rpi5vc4_crtc.c
+@@ -52,6 +52,17 @@ Rpi5CrtcReportPv(
+     VertB    = READ_REGISTER_ULONG((PULONG)((PUCHAR)Base + RPI5_PV_VERTB));
+     Enabled  = (Control & RPI5_PV_CONTROL_EN) && (VControl & RPI5_PV_VCONTROL_VIDEN);
+ 
++    DbgPrint("RPI5VC4: PV%lu phys=%I64x ctrl=%08lx vctrl=%08lx horz=%08lx/%08lx vert=%08lx/%08lx enabled=%u\n",
++             Index,
++             PvPhys,
++             Control,
++             VControl,
++             HorzA,
++             HorzB,
++             VertA,
++             VertB,
++             Enabled);
++
+     if (Enabled)
+     {
+         BOOLEAN PreferThisValve =
+@@ -73,6 +84,11 @@ Rpi5CrtcReportPv(
+             DeviceExtension->PixelValveVertB = VertB;
+             DeviceExtension->PixelValveHactAct =
+                 READ_REGISTER_ULONG((PULONG)((PUCHAR)Base + RPI5_PV_HACT_ACT));
++
++            DbgPrint("RPI5VC4: PV%lu selected vsync=%08lx hact=%08lx\n",
++                     Index,
++                     DeviceExtension->PixelValveVsyncEven,
++                     DeviceExtension->PixelValveHactAct);
+         }
+     }
+ 
+@@ -92,6 +108,10 @@ Rpi5CrtcReportTiming(
+     Found |= Rpi5CrtcReportPv(DeviceExtension, RPI5_PV1_PHYS, 1);
+     if (!Found)
+         DbgPrint("RPI5VC4: no enabled PixelValve found (firmware HDMI off?)\n");
++    else
++        DbgPrint("RPI5VC4: selected PV%lu phys=%I64x\n",
++                 DeviceExtension->PixelValveIndex,
++                 DeviceExtension->PixelValvePhysical.QuadPart);
+     return Found;
+ }
+ 
+@@ -104,13 +124,22 @@ Rpi5CrtcProgramCurrentTiming(
+ 
+     Base = Rpi5CrtcMapPv(DeviceExtension);
+     if (Base == NULL)
++    {
++        DbgPrint("RPI5VC4: CRTC program skipped, PV map failed\n");
+         return FALSE;
++    }
+ 
+     Control = READ_REGISTER_ULONG((PULONG)((PUCHAR)Base + RPI5_PV_CONTROL));
+     VControl = READ_REGISTER_ULONG((PULONG)((PUCHAR)Base + RPI5_PV_V_CONTROL));
++    DbgPrint("RPI5VC4: CRTC program start ctrl=%08lx vctrl=%08lx saved=%08lx/%08lx\n",
++             Control,
++             VControl,
++             DeviceExtension->PixelValveControl,
++             DeviceExtension->PixelValveVControl);
+     if (!(Control & RPI5_PV_CONTROL_EN) ||
+         !(VControl & RPI5_PV_VCONTROL_VIDEN))
+     {
++        DbgPrint("RPI5VC4: CRTC program skipped, PV disabled\n");
+         return FALSE;
+     }
+ 
+@@ -149,9 +178,11 @@ Rpi5CrtcProgramCurrentTiming(
+         READ_REGISTER_ULONG((PULONG)((PUCHAR)Base + RPI5_PV_CONTROL)) !=
+             DeviceExtension->PixelValveControl)
+     {
++        DbgPrint("RPI5VC4: CRTC program verify failed\n");
+         return FALSE;
+     }
+ 
++    DbgPrint("RPI5VC4: CRTC program done\n");
+     return TRUE;
+ }
+ 
+diff --git a/win32ss/drivers/miniport/rpi5vc4/rpi5vc4_hvs.c b/win32ss/drivers/miniport/rpi5vc4/rpi5vc4_hvs.c
+index 10bc9588318..975d3dd9555 100644
+--- a/win32ss/drivers/miniport/rpi5vc4/rpi5vc4_hvs.c
++++ b/win32ss/drivers/miniport/rpi5vc4/rpi5vc4_hvs.c
+@@ -178,6 +178,7 @@ VOID
+ Rpi5HvsInstallScanout(
+     _In_ PRPI5VC4_DEVICE_EXTENSION DeviceExtension)
+ {
++    static volatile LONG TraceCount;
+     volatile ULONG *Dlist;
+     PVOID HvsBase;
+     ULONG LptrsC, LptrsD, LptrsReg, LptrsVal, Head, Control;
+@@ -191,9 +192,25 @@ Rpi5HvsInstallScanout(
+     ULONG Height = DeviceExtension->ScreenHeight;
+     ULONG Pitch  = DeviceExtension->BytesPerScanLine;
+     ULONGLONG Phys = (ULONGLONG)DeviceExtension->FrameBufferPhysical.QuadPart;
++    LONG TraceIndex;
++    BOOLEAN TraceThis;
++
++    TraceIndex = InterlockedIncrement(&TraceCount);
++    TraceThis = (TraceIndex <= 32);
+ 
+     if (Width == 0 || Height == 0 || Pitch == 0 || Phys == 0)
++    {
++        if (TraceThis)
++        {
++            DbgPrint("RPI5VC4: HVS install #%ld skipped invalid mode %lux%lu pitch=%lu phys=%I64x\n",
++                     TraceIndex,
++                     Width,
++                     Height,
++                     Pitch,
++                     Phys);
++        }
+         return;
++    }
+ 
+     DeviceExtension->HvsCursorFastValid = FALSE;
+ 
+@@ -221,6 +238,19 @@ Rpi5HvsInstallScanout(
+     }
+     Head = LptrsVal & RPI5_HVS_LPTRS_HEAD_MASK;
+ 
++    if (TraceThis)
++    {
++        DbgPrint("RPI5VC4: HVS install #%ld ctrl=%08lx lptrC=%08lx lptrD=%08lx use=%04lx val=%08lx head=%lu fb=%I64x\n",
++                 TraceIndex,
++                 Control,
++                 LptrsC,
++                 LptrsD,
++                 LptrsReg,
++                 LptrsVal,
++                 Head,
++                 Phys);
++    }
++
+     if (!(Control & RPI5_HVS_CONTROL_HVS_EN) || Head == 0)
+     {
+         DbgPrint("RPI5VC4: HVS not ready (ctrl=0x%08lx head=%lu) - skip\n",
+@@ -241,6 +271,16 @@ Rpi5HvsInstallScanout(
+                 DeviceExtension->CursorWidth != 0 &&
+                 DeviceExtension->CursorHeight != 0;
+ 
++    if (TraceThis)
++    {
++        DbgPrint("RPI5VC4: HVS install #%ld live ctl0=%08lx ptr1=%08lx firmware=%08lx cursor=%u\n",
++                 TraceIndex,
++                 CurCtl0,
++                 CurPtr1,
++                 (ULONG)(DeviceExtension->FirmwareFrameBufferPhysical.QuadPart & 0xffffffff),
++                 HasCursor);
++    }
++
+     /*
+      * Only take over a head holding a VALID plane that scans out our framebuffer
+      * (the firmware's plane on first install) or our cursor overlay (our own
+@@ -253,7 +293,11 @@ Rpi5HvsInstallScanout(
+             (CurPtr1 != FbLow &&
+              CurPtr1 != FirmwareFbLow))
+         {
+-            DbgPrint("RPI5VC4: HVS head does not match our planes - not taking over\n");
++            DbgPrint("RPI5VC4: HVS head mismatch ctl0=%08lx ptr1=%08lx fb=%08lx fwfb=%08lx - not taking over\n",
++                     CurCtl0,
++                     CurPtr1,
++                     FbLow,
++                     FirmwareFbLow);
+             return;
+         }
+     }
+@@ -314,6 +358,15 @@ Rpi5HvsInstallScanout(
+ 
+     WRITE_REGISTER_ULONG((PULONG)((PUCHAR)HvsBase + LptrsReg), LptrsVal);
+ 
++    if (TraceThis)
++    {
++        DbgPrint("RPI5VC4: HVS install #%ld wrote count=%lu start=%lu cursorFast=%u\n",
++                 TraceIndex,
++                 Count,
++                 StartIndex,
++                 (Count == 2 * RPI5_HVS_PLANE_DWORDS + 1));
++    }
++
+     /* Cache the cursor-plane location so moves can skip re-validation reads. */
+     if (Count == 2 * RPI5_HVS_PLANE_DWORDS + 1)
+     {
+diff --git a/win32ss/gdi/ntgdi/baseobj.hpp b/win32ss/gdi/ntgdi/baseobj.hpp
+index bd6c9d4fff0..f36d26f8825 100644
+--- a/win32ss/gdi/ntgdi/baseobj.hpp
++++ b/win32ss/gdi/ntgdi/baseobj.hpp
+@@ -80,7 +80,8 @@ public:
+     vUnlock(
+         VOID)
+     {
+-        if (this->cExclusiveLock > 0)
++        if ((this->cExclusiveLock > 0) &&
++            (this->dwThreadId == PtrToUlong(PsGetCurrentThreadId())))
+         {
+             GDIOBJ_vUnlockObject(this);
+         }
+@@ -107,4 +108,3 @@ public:
+ 
+ };
+ 
+-
+diff --git a/win32ss/gdi/ntgdi/freetype.c b/win32ss/gdi/ntgdi/freetype.c
+index 2dd5a875135..3bd5132ebb1 100644
+--- a/win32ss/gdi/ntgdi/freetype.c
++++ b/win32ss/gdi/ntgdi/freetype.c
+@@ -216,21 +216,131 @@ static PFAST_MUTEX      g_FreeTypeLock;
+ static RTL_STATIC_LIST_HEAD(g_FontListHead);
+ static BOOL             g_RenderingEnabled = TRUE;
+ 
++typedef struct _FREETYPE_LOCK_TRACE
++{
++    LONG Sequence;
++    PCSTR Operation;
++    ULONG Line;
++    PVOID Caller;
++    PVOID Owner;
++    PVOID CurrentThread;
++    UCHAR Irql;
++    ULONG_PTR StackPointer;
++} FREETYPE_LOCK_TRACE, *PFREETYPE_LOCK_TRACE;
++
++#define FREETYPE_LOCK_TRACE_COUNT 32
++
++static volatile LONG g_FreeTypeLockTraceSequence;
++static FREETYPE_LOCK_TRACE g_FreeTypeLockTrace[FREETYPE_LOCK_TRACE_COUNT];
++
++#if defined(__GNUC__) || defined(__clang__)
++#define FREETYPE_RETURN_ADDRESS() __builtin_return_address(0)
++#else
++#define FREETYPE_RETURN_ADDRESS() _ReturnAddress()
++#endif
++
++#if defined(_M_ARM64) && (defined(__GNUC__) || defined(__clang__))
++#define FREETYPE_READ_STACK_POINTER(_StackPointer) \
++    __asm__ __volatile__("mov %0, sp" : "=r"(_StackPointer))
++#else
++#define FREETYPE_READ_STACK_POINTER(_StackPointer) \
++    do { (_StackPointer) = 0; } while (0)
++#endif
++
++static VOID
++IntRecordFreeTypeLockTrace(
++    _In_ PCSTR Operation,
++    _In_ ULONG Line,
++    _In_opt_ PVOID Caller)
++{
++    LONG Sequence;
++    PFREETYPE_LOCK_TRACE Trace;
++    ULONG_PTR StackPointer;
++
++    FREETYPE_READ_STACK_POINTER(StackPointer);
++
++    Sequence = InterlockedIncrement(&g_FreeTypeLockTraceSequence);
++    Trace = &g_FreeTypeLockTrace[(ULONG)Sequence & (FREETYPE_LOCK_TRACE_COUNT - 1)];
++    Trace->Operation = Operation;
++    Trace->Line = Line;
++    Trace->Caller = Caller;
++    Trace->Owner = g_FreeTypeLock ? g_FreeTypeLock->Owner : NULL;
++    Trace->CurrentThread = KeGetCurrentThread();
++    Trace->Irql = KeGetCurrentIrql();
++    Trace->StackPointer = StackPointer;
++    Trace->Sequence = Sequence;
++}
++
++static VOID
++IntDumpFreeTypeLockTrace(
++    _In_ PCSTR Reason,
++    _In_ ULONG Line,
++    _In_opt_ PVOID Caller)
++{
++    LONG Sequence, Count;
++    ULONG_PTR StackPointer;
++    PFREETYPE_LOCK_TRACE Trace;
++
++    FREETYPE_READ_STACK_POINTER(StackPointer);
++
++    Sequence = g_FreeTypeLockTraceSequence;
++    DPRINT1("FREETYPE_LOCK_%s: line=%lu caller=%p lock=%p owner=%p current=%p "
++            "irql=%u sp=%p seq=%ld\n",
++            Reason,
++            Line,
++            Caller,
++            g_FreeTypeLock,
++            g_FreeTypeLock ? g_FreeTypeLock->Owner : NULL,
++            KeGetCurrentThread(),
++            KeGetCurrentIrql(),
++            (PVOID)StackPointer,
++            Sequence);
++
++    for (Count = 0; Count < FREETYPE_LOCK_TRACE_COUNT; Count++)
++    {
++        Trace = &g_FreeTypeLockTrace[(ULONG)(Sequence - Count) &
++                                     (FREETYPE_LOCK_TRACE_COUNT - 1)];
++        if (Trace->Sequence == 0)
++            continue;
++
++        DPRINT1("FREETYPE_LOCK_TRACE[%ld]: op=%s line=%lu caller=%p "
++                "owner=%p current=%p irql=%u sp=%p\n",
++                Trace->Sequence,
++                Trace->Operation,
++                Trace->Line,
++                Trace->Caller,
++                Trace->Owner,
++                Trace->CurrentThread,
++                Trace->Irql,
++                (PVOID)Trace->StackPointer);
++    }
++}
++
+ #define ASSERT_FREETYPE_LOCK_HELD() \
+-    ASSERT(g_FreeTypeLock->Owner == KeGetCurrentThread())
++do { \
++    if (g_FreeTypeLock->Owner != KeGetCurrentThread()) \
++        IntDumpFreeTypeLockTrace("HELD_MISMATCH", __LINE__, FREETYPE_RETURN_ADDRESS()); \
++    ASSERT(g_FreeTypeLock->Owner == KeGetCurrentThread()); \
++} while (0)
+ 
+ #define ASSERT_FREETYPE_LOCK_NOT_HELD() \
+-    ASSERT(g_FreeTypeLock->Owner != KeGetCurrentThread())
++do { \
++    if (g_FreeTypeLock->Owner == KeGetCurrentThread()) \
++        IntDumpFreeTypeLockTrace("REENTER", __LINE__, FREETYPE_RETURN_ADDRESS()); \
++    ASSERT(g_FreeTypeLock->Owner != KeGetCurrentThread()); \
++} while (0)
+ 
+ #define IntLockFreeType() \
+ do { \
+     ASSERT_FREETYPE_LOCK_NOT_HELD(); \
+     ExEnterCriticalRegionAndAcquireFastMutexUnsafe(g_FreeTypeLock); \
++    IntRecordFreeTypeLockTrace("LOCK", __LINE__, FREETYPE_RETURN_ADDRESS()); \
+ } while (0)
+ 
+ #define IntUnLockFreeType() \
+ do { \
+     ASSERT_FREETYPE_LOCK_HELD(); \
++    IntRecordFreeTypeLockTrace("UNLOCK", __LINE__, FREETYPE_RETURN_ADDRESS()); \
+     ExReleaseFastMutexUnsafeAndLeaveCriticalRegion(g_FreeTypeLock); \
+ } while(0)
+ 
+diff --git a/win32ss/gdi/ntgdi/gdiobj.c b/win32ss/gdi/ntgdi/gdiobj.c
+index 918c8dddfd7..aa06e4386b1 100644
+--- a/win32ss/gdi/ntgdi/gdiobj.c
++++ b/win32ss/gdi/ntgdi/gdiobj.c
+@@ -887,7 +887,19 @@ NTAPI
+ GDIOBJ_vUnlockObject(POBJ pobj)
+ {
+     ULONG cRefs, ulIndex;
++    DWORD dwThreadId = PtrToUlong(PsGetCurrentThreadId());
++
+     ASSERT(pobj->cExclusiveLock > 0);
++    if (pobj->dwThreadId != dwThreadId)
++    {
++        DPRINT1("GDIOBJ_vUnlockObject: wrong owner h=%p owner=0x%lx current=0x%lx locks=%u\n",
++                pobj->hHmgr,
++                pobj->dwThreadId,
++                dwThreadId,
++                pobj->cExclusiveLock);
++        ASSERT(FALSE);
++        return;
++    }
+ 
+     /* Decrease lock count */
+     pobj->cExclusiveLock--;
+@@ -1133,14 +1145,27 @@ GDIOBJ_vDeleteObject(POBJ pobj)
+         /* Check if the object is exclusively locked */
+         if (pobj->cExclusiveLock != 0)
+         {
+-            /* Reset lock owner and lock count */
+-            pobj->dwThreadId = 0;
+-            pobj->cExclusiveLock = 0;
++            DWORD dwThreadId = PtrToUlong(PsGetCurrentThreadId());
+ 
+-            /* Release the pushlock and reenable APCs */
+-            ExReleasePushLockExclusive(&pobj->pushlock);
+-            KeLeaveCriticalRegion();
+-            DECREASE_THREAD_LOCK_COUNT(pobj->hHmgr);
++            if (pobj->dwThreadId != dwThreadId)
++            {
++                DPRINT1("GDIOBJ_vDeleteObject: locked by another thread h=%p owner=0x%lx current=0x%lx locks=%u\n",
++                        pobj->hHmgr,
++                        pobj->dwThreadId,
++                        dwThreadId,
++                        pobj->cExclusiveLock);
++            }
++            else
++            {
++                /* Reset lock owner and lock count */
++                pobj->dwThreadId = 0;
++                pobj->cExclusiveLock = 0;
++
++                /* Release the pushlock and reenable APCs */
++                ExReleasePushLockExclusive(&pobj->pushlock);
++                KeLeaveCriticalRegion();
++                DECREASE_THREAD_LOCK_COUNT(pobj->hHmgr);
++            }
+         }
+     }
+ 

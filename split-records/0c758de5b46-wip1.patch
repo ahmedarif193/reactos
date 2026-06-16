@@ -1,0 +1,126 @@
+commit 0c758de5b46e6d6b7ab7a6b9f5446e48245cbb13
+Author:     Ahmed ARIF <arif.ing@outlook.com>
+AuthorDate: Mon Jun 15 19:24:18 2026 +0200
+Commit:     Ahmed ARIF <arif.ing@outlook.com>
+CommitDate: Mon Jun 15 19:24:18 2026 +0200
+
+    wip1
+
+diff --git a/hal/hal.spec b/hal/hal.spec
+index f3ba3a7bb79..70180c57513 100644
+--- a/hal/hal.spec
++++ b/hal/hal.spec
+@@ -171,6 +171,7 @@
+ @ fastcall -arch=arm64 HalSweepIcache()
+ @ fastcall -arch=arm64 HalSweepDcache()
+ @ fastcall -arch=arm64 HalSetGicPriorityMask(long)
++@ fastcall -arch=arm64 HalRaiseGicPriorityMask(long)
+ @ fastcall -arch=arm64 HalGetGicPriorityMask()
+ @ fastcall -arch=arm64 HalGetInterruptSource()
+ @ stdcall -arch=arm64 HalPerformEndOfInterrupt()
+diff --git a/hal/halarm64/halarm64.c b/hal/halarm64/halarm64.c
+index 8a9679c4e5f..9ea5350d3e3 100644
+--- a/hal/halarm64/halarm64.c
++++ b/hal/halarm64/halarm64.c
+@@ -5418,6 +5418,19 @@ HalSetGicPriorityMask(
+     HalpArm64SetPmrExact(Irql);
+ }
+ 
++VOID
++FASTCALL
++HalRaiseGicPriorityMask(
++    _In_ KIRQL Irql)
++{
++    if (Irql > HIGH_LEVEL)
++    {
++        Irql = HIGH_LEVEL;
++    }
++
++    HalpArm64SetPmrExact(Irql);
++}
++
+ /*
+  * HalGetGicPriorityMask - Read current GIC interrupt priority mask
+  *
+diff --git a/ntoskrnl/include/internal/arm64/ke.h b/ntoskrnl/include/internal/arm64/ke.h
+index e253a8bba21..1bb5180fc1b 100644
+--- a/ntoskrnl/include/internal/arm64/ke.h
++++ b/ntoskrnl/include/internal/arm64/ke.h
+@@ -395,6 +395,11 @@ FASTCALL
+ HalSetGicPriorityMask(
+     _In_ KIRQL Irql);
+ 
++VOID
++FASTCALL
++HalRaiseGicPriorityMask(
++    _In_ KIRQL Irql);
++
+ VOID
+ KiSetCurrentIrql(
+     _In_ KIRQL Irql);
+diff --git a/ntoskrnl/io/pnpmgr/pnppar.c b/ntoskrnl/io/pnpmgr/pnppar.c
+index 8866848dca8..0cf10c06f59 100644
+--- a/ntoskrnl/io/pnpmgr/pnppar.c
++++ b/ntoskrnl/io/pnpmgr/pnppar.c
+@@ -28,6 +28,8 @@ static LONG PiParallelPoolThreads = 0;
+ static LIST_ENTRY PiParallelWorkList;
+ static KSPIN_LOCK PiParallelWorkLock;
+ static KSEMAPHORE PiParallelWorkSem;
++static volatile LONG PiParallelEnumReady = 0;
++static volatile LONG PiParallelEnablerStarted = 0;
+ 
+ typedef struct _PI_PARALLEL_CONTEXT
+ {
+@@ -106,6 +108,18 @@ PiParallelPoolThread(_In_ PVOID Context)
+     }
+ }
+ 
++static
++VOID
++NTAPI
++PiParallelEnablerThread(_In_ PVOID Context)
++{
++    LARGE_INTEGER delay;
++    UNREFERENCED_PARAMETER(Context);
++    delay.QuadPart = -60LL * 10 * 1000 * 1000;
++    KeDelayExecutionThread(KernelMode, FALSE, &delay);
++    InterlockedExchange(&PiParallelEnumReady, 1);
++}
++
+ static
+ BOOLEAN
+ PiParallelPoolInit(VOID)
+@@ -160,6 +174,17 @@ PiProcessChildrenParallel(_In_ PDEVICE_NODE Parent)
+     if (!PnPBootDriversLoaded)
+         return FALSE;
+ 
++    if (!PiParallelEnumReady)
++    {
++        if (InterlockedCompareExchange(&PiParallelEnablerStarted, 1, 0) == 0)
++        {
++            HANDLE handle;
++            if (NT_SUCCESS(PsCreateSystemThread(&handle, THREAD_ALL_ACCESS, NULL, NULL, NULL, PiParallelEnablerThread, NULL)))
++                ZwClose(handle);
++        }
++        return FALSE;
++    }
++
+     KeAcquireSpinLock(&IopDeviceTreeLock, &oldIrql);
+     for (child = Parent->Child; child != NULL; child = child->Sibling)
+     {
+diff --git a/ntoskrnl/ke/arm64/irql.c b/ntoskrnl/ke/arm64/irql.c
+index 6801adc0f08..a1231ddde9a 100644
+--- a/ntoskrnl/ke/arm64/irql.c
++++ b/ntoskrnl/ke/arm64/irql.c
+@@ -94,6 +94,11 @@ KfRaiseIrql(
+ 
+     KiSetCurrentIrql(NewIrql);
+ 
++    if (KiHalInitialized)
++    {
++        HalRaiseGicPriorityMask(NewIrql);
++    }
++
+     return OldIrql;
+ }
+ 
