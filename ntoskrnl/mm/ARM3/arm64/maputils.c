@@ -63,7 +63,6 @@ MiArm64EnsureSystemTableEntry(
         MiInitializePfnForOtherProcess(PageFrameIndex,
                                        PteAddress,
                                        ParentPage);
-        Entry->u.Long = ARM64_MAKE_TABLE_DESCRIPTOR(PageFrameIndex);
         Created = TRUE;
     }
     else
@@ -77,13 +76,16 @@ MiArm64EnsureSystemTableEntry(
         }
     }
 
-    *TablePage = PFN_FROM_PTE(Entry);
+    *TablePage = Created ? PageFrameIndex : PFN_FROM_PTE(Entry);
 
     MiReleasePfnLock(OldIrql);
 
     if (Created)
     {
         MiArm64MapKseg0Page(PageFrameIndex);
+        MiArm64CleanPageToPoC((PVOID)MI_ARM64_PFN_TO_VA(PageFrameIndex));
+        Entry->u.Long = ARM64_MAKE_TABLE_DESCRIPTOR(PageFrameIndex);
+        MiArm64CleanEntryToPoC((volatile UINT64 *)Entry);
     }
 
     return Created;
