@@ -182,6 +182,11 @@ KiThreadStartup:
  */
     .seh_proc KiSwapContext
 KiSwapContext:
+    msr     daifset, #0x2
+    .seh_nop
+    isb
+    .seh_nop
+
     /* Reserve space for the switch frame and save non-volatile registers */
     sub     sp, sp, #KSWITCH_FRAME_LENGTH
     .seh_stackalloc KSWITCH_FRAME_LENGTH
