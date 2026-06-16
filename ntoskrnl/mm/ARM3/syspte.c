@@ -576,12 +576,17 @@ MiInitializeSystemPtes(IN PMMPTE StartingPte,
 
     MiSystemPteListBase[PoolType] = MetadataBuffer;
 
-    //
-    // Clear all the PTEs to start with
-    //
-    RtlZeroMemory(StartingPte, NumberOfPtes * sizeof(MMPTE));
     if (MetadataBuffer != NULL)
+    {
         RtlZeroMemory(MetadataBuffer, MiGetSystemPteMetadataSize(NumberOfPtes));
+    }
+    else
+    {
+        //
+        // Clear all the PTEs to start with
+        //
+        RtlZeroMemory(StartingPte, NumberOfPtes * sizeof(MMPTE));
+    }
 
     //
     // Make the first entry free and link it
