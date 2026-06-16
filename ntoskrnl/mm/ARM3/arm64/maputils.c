@@ -53,29 +53,30 @@ MiArm64EnsureSystemTableEntry(
     _In_ PFN_NUMBER ParentPage,
     _Out_ PFN_NUMBER *TablePage)
 {
-    KIRQL OldIrql;
     PFN_NUMBER PageFrameIndex = 0;
     ULONG64 EntryType;
     BOOLEAN Created = FALSE;
 
-    OldIrql = MiAcquirePfnLock();
-
     EntryType = Entry->u.Long & ARM64_PTE_TYPE_MASK;
     if (EntryType == ARM64_PTE_TYPE_INVALID)
     {
-        MI_SET_USAGE(MI_USAGE_PAGE_TABLE);
-        MI_SET_PROCESS2(PsGetCurrentProcess()->ImageFileName);
-        PageFrameIndex = MiRemoveZeroPage(MI_GET_NEXT_COLOR());
+        if (MiArm64IsPfnDatabaseReady())
+        {
+            MI_SET_USAGE(MI_USAGE_PAGE_TABLE);
+            MI_SET_PROCESS2(PsGetCurrentProcess()->ImageFileName);
+        }
+
+        PageFrameIndex = MiArm64AllocatePageTablePage();
         if (PageFrameIndex == 0)
         {
-            MiReleasePfnLock(OldIrql);
             *TablePage = 0;
             return FALSE;
         }
 
-        MiInitializePfnForOtherProcess(PageFrameIndex,
-                                       PteAddress,
-                                       ParentPage);
+        if (MiArm64IsPfnDatabaseReady())
+        {
+            MiInitializePfnForOtherProcess(PageFrameIndex, PteAddress, ParentPage);
+        }
         Created = TRUE;
     }
     else
@@ -83,7 +84,6 @@ MiArm64EnsureSystemTableEntry(
         ASSERT(EntryType == ARM64_PTE_TYPE_TABLE);
         if (EntryType != ARM64_PTE_TYPE_TABLE)
         {
-            MiReleasePfnLock(OldIrql);
             *TablePage = 0;
             return FALSE;
         }
@@ -91,11 +91,10 @@ MiArm64EnsureSystemTableEntry(
 
     *TablePage = Created ? PageFrameIndex : PFN_FROM_PTE(Entry);
 
-    MiReleasePfnLock(OldIrql);
-
     if (Created)
     {
         MiArm64MapKseg0Page(PageFrameIndex);
+        RtlZeroMemory((PVOID)MI_ARM64_PFN_TO_VA(PageFrameIndex), PAGE_SIZE);
         MiArm64CleanPageToPoC((PVOID)MI_ARM64_PFN_TO_VA(PageFrameIndex));
         Entry->u.Long = ARM64_MAKE_TABLE_DESCRIPTOR(PageFrameIndex);
         MiArm64CleanEntryToPoC((volatile UINT64 *)Entry);

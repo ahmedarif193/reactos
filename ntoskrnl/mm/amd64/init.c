@@ -240,6 +240,16 @@ MiAmd64EnsureKernelPageTableEntry(
         return FALSE;
     }
 
+    if (!MiPfnsInitialized)
+    {
+        PageFrameNumber = MxGetNextPage(1);
+        MI_MAKE_HARDWARE_PTE(&TempPte, PointerPte, MM_EXECUTE_READWRITE, PageFrameNumber);
+        MI_MAKE_DIRTY_PAGE(&TempPte);
+        MI_WRITE_VALID_PTE(PointerPte, TempPte);
+        RtlZeroMemory(MiPteToAddress(PointerPte), PAGE_SIZE);
+        return TRUE;
+    }
+
     OldIrql = MiAcquirePfnLock();
     if (PointerPte->u.Hard.Valid != 0)
     {
@@ -553,10 +563,6 @@ MiBuildSystemPteSpace(VOID)
     MiSystemPteSpaceStart = MiSystemVaRegions[AssignedRegionSystemPtes].BaseAddress;
     MiSystemPteSpaceEnd = (PUCHAR)MiSystemPteSpaceStart + NonPagedSystemSize;
     MmSystemPteSpaceStart = MiSystemPteSpaceStart;
-
-    /* Map the PPEs and PDEs for the system PTEs */
-    MiMapPPEs(MiSystemPteSpaceStart, MiSystemPteSpaceEnd);
-    MiMapPDEs(MiSystemPteSpaceStart, MiSystemPteSpaceEnd);
 
     /* Initialize the system PTE space */
     PointerPte = MiAddressToPte(MiSystemPteSpaceStart);

@@ -2316,6 +2316,14 @@ MiEnsureNonPagedPoolExpansionPtesBacked(
     _In_ ULONG NumberOfPtes);
 #endif
 
+#if defined(_M_ARM64)
+PFN_NUMBER
+MiArm64AllocatePageTablePage(VOID);
+
+BOOLEAN
+MiArm64IsPfnDatabaseReady(VOID);
+#endif
+
 VOID
 NTAPI
 MiReleaseNonPagedPoolExpansionPtes(
