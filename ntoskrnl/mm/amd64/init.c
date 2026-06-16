@@ -221,6 +221,135 @@ MiMapPTEs(
     }
 }
 
+static
+BOOLEAN
+MiAmd64EnsureKernelPageTableEntry(
+    _Inout_ PMMPTE PointerPte)
+{
+    KIRQL OldIrql;
+    PFN_NUMBER PageFrameNumber;
+    MMPTE TempPte;
+
+    if (PointerPte->u.Hard.Valid != 0)
+    {
+        return TRUE;
+    }
+
+    if (KeGetCurrentIrql() > DISPATCH_LEVEL)
+    {
+        return FALSE;
+    }
+
+    OldIrql = MiAcquirePfnLock();
+    if (PointerPte->u.Hard.Valid != 0)
+    {
+        MiReleasePfnLock(OldIrql);
+        return TRUE;
+    }
+
+    if (PointerPte->u.Long != 0)
+    {
+        ASSERT(FALSE);
+        MiReleasePfnLock(OldIrql);
+        return FALSE;
+    }
+
+    MI_SET_USAGE(MI_USAGE_PAGE_TABLE);
+    PageFrameNumber = MiRemoveZeroPage(MI_GET_NEXT_COLOR());
+    if (PageFrameNumber == 0)
+    {
+        MiReleasePfnLock(OldIrql);
+        return FALSE;
+    }
+
+    MiInitializePfn(PageFrameNumber, PointerPte, TRUE);
+    KeGetCurrentPrcb()->MmDemandZeroCount++;
+    MI_MAKE_HARDWARE_PTE(&TempPte, PointerPte, MM_EXECUTE_READWRITE, PageFrameNumber);
+    MI_MAKE_DIRTY_PAGE(&TempPte);
+    MI_WRITE_VALID_PTE(PointerPte, TempPte);
+    MiReleasePfnLock(OldIrql);
+
+    return TRUE;
+}
+
+static
+BOOLEAN
+MiAmd64EnsureKernelPageTablesValid(
+    _In_ PVOID Address)
+{
+    PMMPDE PointerPde = MiAddressToPde(Address);
+    PMMPPE PointerPpe = MiAddressToPpe(Address);
+    PMMPXE PointerPxe = MiAddressToPxe(Address);
+
+    if (!MiAmd64EnsureKernelPageTableEntry(PointerPxe))
+    {
+        return FALSE;
+    }
+
+    if (!MiAmd64EnsureKernelPageTableEntry(PointerPpe))
+    {
+        return FALSE;
+    }
+
+    if (!MiAmd64EnsureKernelPageTableEntry(PointerPde))
+    {
+        return FALSE;
+    }
+
+    return TRUE;
+}
+
+static
+BOOLEAN
+MiAmd64EnsureKernelPdeRangeBacked(
+    _In_ PVOID BaseVa,
+    _In_ SIZE_T NumberOfBytes)
+{
+    PVOID EndVa;
+    PMMPDE PointerPde, LastPde;
+
+    if (NumberOfBytes == 0)
+    {
+        return TRUE;
+    }
+
+    EndVa = Add2Ptr(BaseVa, NumberOfBytes - 1);
+    PointerPde = MiAddressToPde(BaseVa);
+    LastPde = MiAddressToPde(EndVa);
+    while (PointerPde <= LastPde)
+    {
+        if (!MiAmd64EnsureKernelPageTablesValid(MiPdeToAddress(PointerPde)))
+        {
+            return FALSE;
+        }
+
+        ASSERT(PointerPde->u.Hard.Valid == 1);
+        PointerPde++;
+    }
+
+    return TRUE;
+}
+
+BOOLEAN
+NTAPI
+MiEnsureSystemPtesBacked(
+    _In_ PMMPTE StartingPte,
+    _In_ ULONG NumberOfPtes)
+{
+    ASSERT(NumberOfPtes != 0);
+    return MiAmd64EnsureKernelPdeRangeBacked(MiPteToAddress(StartingPte), (SIZE_T)NumberOfPtes << PAGE_SHIFT);
+}
+
+BOOLEAN
+NTAPI
+MiEnsureNonPagedPoolExpansionPtesBacked(
+    _In_ PMMPTE StartingPte,
+    _In_ ULONG NumberOfPtes)
+{
+    ASSERT(NumberOfPtes != 0);
+    return MiAmd64EnsureKernelPdeRangeBacked(MiPteToAddress(StartingPte - 1), ((SIZE_T)NumberOfPtes + 2) << PAGE_SHIFT);
+}
+
 CODE_SEG("INIT")
 VOID
 NTAPI
@@ -321,6 +450,7 @@ MiBuildNonPagedPool(VOID)
 {
     /* Calculate the size of system RAM in bytes */
     ULONG64 SizeOfSystemRamInBytes = (ULONG64)MmNumberOfPhysicalPages * PAGE_SIZE;
+    PVOID InitialNonPagedPoolEnd;
 
     /* Check if we had a registry value for the maximum non-paged pool size percentage */
     if (MmMaximumNonPagedPoolPercent != 0)
@@ -393,13 +523,12 @@ MiBuildNonPagedPool(VOID)
 
     /* And this is where the none paged pool ends */
     MmNonPagedPoolEnd = Add2Ptr(MmNonPagedPoolStart, MmMaximumNonPagedPoolInBytes);
+    InitialNonPagedPoolEnd = Add2Ptr(MmNonPagedPoolExpansionStart, -1);
 
-    /* Map PPEs and PDEs for non paged pool (including expansion) */
-    MiMapPPEs(MmNonPagedPoolStart, MmNonPagedPoolEnd);
-    MiMapPDEs(MmNonPagedPoolStart, MmNonPagedPoolEnd);
-
-    /* Map the nonpaged pool PTEs (without expansion) */
-    MiMapPTEs(MmNonPagedPoolStart, (PUCHAR)MmNonPagedPoolExpansionStart - 1);
+    /* Map the initial nonpaged pool. Expansion is backed on demand. */
+    MiMapPPEs(MmNonPagedPoolStart, InitialNonPagedPoolEnd);
+    MiMapPDEs(MmNonPagedPoolStart, InitialNonPagedPoolEnd);
+    MiMapPTEs(MmNonPagedPoolStart, InitialNonPagedPoolEnd);
 
     MiSystemPteMetadataSize = MiGetSystemPteMetadataSize(MI_NUMBER_SYSTEM_PTES);
 
