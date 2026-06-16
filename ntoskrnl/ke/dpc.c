@@ -1036,7 +1036,11 @@ NTAPI
 KeIsExecutingDpc(VOID)
 {
     /* Return if the Dpc Routine is active */
+#if defined(_M_ARM64)
+    return _KeIsExecutingDpc();
+#else
     return KeGetCurrentPrcb()->DpcRoutineActive;
+#endif
 }
 
 /*
