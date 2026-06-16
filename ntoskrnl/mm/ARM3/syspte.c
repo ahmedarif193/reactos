@@ -458,4 +458,12 @@ MiInitializeSystemPtes(IN PMMPTE StartingPte,
     }
 }
 
+CODE_SEG("INIT")
+VOID
+NTAPI
+MiInitializeNonPagedPoolExpansionPtes(IN PMMPTE StartingPte, IN ULONG NumberOfPtes)
+{
+    MiInitializeSystemPtes(StartingPte, NumberOfPtes, NonPagedPoolExpansion);
+}
+
 /* EOF */
