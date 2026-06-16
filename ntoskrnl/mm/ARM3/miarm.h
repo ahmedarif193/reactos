@@ -2302,6 +2302,20 @@ MiReserveNonPagedPoolExpansionPtes(
     IN ULONG NumberOfPtes
 );
 
+#if defined(_M_AMD64) || defined(_M_ARM64)
+BOOLEAN
+NTAPI
+MiEnsureSystemPtesBacked(
+    _In_ PMMPTE StartingPte,
+    _In_ ULONG NumberOfPtes);
+
+BOOLEAN
+NTAPI
+MiEnsureNonPagedPoolExpansionPtesBacked(
+    _In_ PMMPTE StartingPte,
+    _In_ ULONG NumberOfPtes);
+#endif
+
 VOID
 NTAPI
 MiReleaseNonPagedPoolExpansionPtes(

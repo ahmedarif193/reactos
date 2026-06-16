@@ -22,6 +22,14 @@
 #define MODULE_INVOLVED_IN_ARM3
 #include <mm/ARM3/miarm.h>
 
+static KSPIN_LOCK MiArm64SystemPageDirectoryLock;
+
+VOID
+MiArm64InitializeSystemPageDirectoryLock(VOID)
+{
+    KeInitializeSpinLock(&MiArm64SystemPageDirectoryLock);
+}
+
 BOOLEAN
 MiArm64VaIsMapped(
     _In_ PVOID Va)
@@ -58,7 +66,12 @@ MiArm64EnsureSystemTableEntry(
         MI_SET_USAGE(MI_USAGE_PAGE_TABLE);
         MI_SET_PROCESS2(PsGetCurrentProcess()->ImageFileName);
         PageFrameIndex = MiRemoveZeroPage(MI_GET_NEXT_COLOR());
-        ASSERT(PageFrameIndex);
+        if (PageFrameIndex == 0)
+        {
+            MiReleasePfnLock(OldIrql);
+            *TablePage = 0;
+            return FALSE;
+        }
 
         MiInitializePfnForOtherProcess(PageFrameIndex,
                                        PteAddress,
@@ -163,4 +176,67 @@ FlushAndReturn:
             "dsb ish\n\t"
             "isb" ::: "memory");
     }
+}
+
+static
+BOOLEAN
+MiArm64EnsureSystemPdeRangeBacked(
+    _In_ PVOID BaseVa,
+    _In_ SIZE_T NumberOfBytes)
+{
+    KIRQL OldIrql;
+    PVOID TargetVa;
+    PMMPDE PointerPde, LastPde;
+    BOOLEAN Backed = TRUE;
+
+    if (NumberOfBytes == 0)
+    {
+        return TRUE;
+    }
+
+    if (KeGetCurrentIrql() > DISPATCH_LEVEL)
+    {
+        return FALSE;
+    }
+
+    KeAcquireSpinLock(&MiArm64SystemPageDirectoryLock, &OldIrql);
+    MiArm64FillSystemPageDirectory(BaseVa, NumberOfBytes);
+
+    PointerPde = MiAddressToPde(BaseVa);
+    LastPde = MiAddressToPde(Add2Ptr(BaseVa, NumberOfBytes - 1));
+    while (PointerPde <= LastPde)
+    {
+        TargetVa = MiPdeToAddress(PointerPde);
+        if (!MiIsPdeForAddressValid(TargetVa) ||
+            ((PointerPde->u.Long & ARM64_PTE_TYPE_MASK) != ARM64_PTE_TYPE_TABLE))
+        {
+            Backed = FALSE;
+            break;
+        }
+
+        PointerPde++;
+    }
+
+    KeReleaseSpinLock(&MiArm64SystemPageDirectoryLock, OldIrql);
+    return Backed;
+}
+
+BOOLEAN
+NTAPI
+MiEnsureSystemPtesBacked(
+    _In_ PMMPTE StartingPte,
+    _In_ ULONG NumberOfPtes)
+{
+    ASSERT(NumberOfPtes != 0);
+    return MiArm64EnsureSystemPdeRangeBacked(MiPteToAddress(StartingPte), (SIZE_T)NumberOfPtes << PAGE_SHIFT);
+}
+
+BOOLEAN
+NTAPI
+MiEnsureNonPagedPoolExpansionPtesBacked(
+    _In_ PMMPTE StartingPte,
+    _In_ ULONG NumberOfPtes)
+{
+    ASSERT(NumberOfPtes != 0);
+    return MiArm64EnsureSystemPdeRangeBacked(MiPteToAddress(StartingPte - 1), ((SIZE_T)NumberOfPtes + 2) << PAGE_SHIFT);
 }
