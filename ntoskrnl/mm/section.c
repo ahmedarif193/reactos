@@ -206,7 +206,6 @@ NTAPI
 MiFillSystemPageDirectory(IN PVOID Base,
                           IN SIZE_T NumberOfBytes);
 
-static
 PVOID
 MiRosFindSystemCacheView(
     _In_ PMMSUPPORT AddressSpace,
