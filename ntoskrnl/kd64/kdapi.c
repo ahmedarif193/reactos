@@ -75,6 +75,7 @@ KdpCopyMemoryChunks(
 {
     NTSTATUS Status;
     ULONG RemainingLength, CopyChunk;
+    ULONG64 StartAddress = Address;
 
     /* Check if we didn't get a chunk size or if it is too big */
     if (ChunkSize == 0)
@@ -131,7 +132,8 @@ KdpCopyMemoryChunks(
     }
 
     /* We may have modified executable code, flush the instruction cache */
-    KeSweepICache((PVOID)(ULONG_PTR)Address, TotalSize);
+    if (Flags & MMDBG_COPY_WRITE)
+        KeSweepICache((PVOID)(ULONG_PTR)StartAddress, TotalSize - RemainingLength);
 
     /*
      * Return the size we managed to copy and return
