@@ -130,6 +130,8 @@ KiScanReadyQueues(IN PKDPC Dpc,
 
     /* Return the index */
     *ScanLast = ScanIndex;
+
+    KiBalanceLoad();
 }
 
 VOID

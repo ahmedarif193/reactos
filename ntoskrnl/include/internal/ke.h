@@ -254,6 +254,18 @@ VOID
 FASTCALL
 KiDeferredReadyThread(IN PKTHREAD Thread);
 
+#ifdef CONFIG_SMP
+PKTHREAD
+FASTCALL
+KiTryStealReadyThread(IN PKPRCB Prcb);
+
+VOID
+FASTCALL
+KiBalanceLoad(VOID);
+#else
+#define KiBalanceLoad()
+#endif
+
 PKTHREAD
 FASTCALL
 KiIdleSchedule(

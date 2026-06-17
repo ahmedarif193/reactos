@@ -222,15 +222,20 @@ KiIdleLoop(VOID)
                 Prcb->NextThread = Ready;
             }
         }
+#ifdef CONFIG_SMP
+        if (!Prcb->NextThread)
+        {
+            PKTHREAD Stolen = KiTryStealReadyThread(Prcb);
+            if (Stolen != NULL) Prcb->NextThread = Stolen;
+        }
+#endif
         if (Prcb->NextThread)
         {
             PKTHREAD OldThread = Prcb->CurrentThread;
             PKTHREAD NewThread = Prcb->NextThread;
 
             if (SmpDbgEnabled)
-                DbgPrint("SMP4DBG idle-switch cpu=%lu old=%p oldprio=%d new=%p newprio=%d\n",
-                         KeGetCurrentProcessorNumber(), OldThread, (int)OldThread->Priority,
-                         NewThread, (int)NewThread->Priority);
+                DbgPrint("S%%7 %lu\n", KeGetCurrentProcessorNumber());
 
             Prcb->Sleeping = FALSE;
             InterlockedAnd64((PLONG64)&KiIdleSummary, (LONG64)~Prcb->SetMember);
@@ -271,7 +276,7 @@ KiIdleLoop(VOID)
                 __asm__ __volatile__("mrs %0, cntp_tval_el0" : "=r"(Tval));
                 TimerPpi = 30;
             }
-            __asm__ __volatile__("mrs %0, S3_0_C4_C6_0" : "=r"(Pmr));
+            Pmr = HalGetGicPriorityMask();
             SmpDbgCntv(Self, (ULONG)Ctl, (LONG)Tval, (ULONG)Pmr);
             HalArm64DbgGicState(TimerPpi, &Prio, &En, &Pend, &Act);
             SmpDbgGic(Self, Prio, En, Pend, Act);

@@ -299,7 +299,7 @@ KiSwapContextInternal:
      * scheduler lock before it was queued. Wait until the incoming thread is
      * no longer being saved on another CPU before reusing its kernel stack.
      * Skip when the scheduler reselected the running thread (x1 == x2).
-     * Wait with IRQ unmasked so a parked core still services IPIs (amd64 does the same).
+     * Wait with IRQ unmasked so a parked core still services IPIs.
      */
     cmp     x1, x2
     b.eq    .Lswapbusy_clear
