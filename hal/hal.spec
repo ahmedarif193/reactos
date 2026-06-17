@@ -59,6 +59,7 @@
 @ stdcall HalReadDmaCounter(ptr)
 @ stdcall HalReportResourceUsage()
 @ stdcall -arch=arm64 HalRequestDebugWakeIpi(long)
+@ stdcall -arch=arm64 HalArm64DbgGicState(long ptr ptr ptr ptr)
 @ stdcall HalRequestIpi(long)
 @ fastcall HalRequestSoftwareInterrupt(long)
 @ stdcall HalReturnToFirmware(long)

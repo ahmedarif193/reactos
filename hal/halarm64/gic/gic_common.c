@@ -879,3 +879,51 @@ HalpGicSetInterruptPriority(
 
     __asm__ __volatile__("dsb sy" ::: "memory");
 }
+
+/*
+ * SMP boot diagnostics (/SMPDIAG): read the live GIC priority/enable/pending/
+ * active state of an SGI or PPI on the current CPU, so the kernel idle probe can
+ * see why a timer PPI stops being delivered. Exported via hal.spec. The
+ * 0xFFFFFFFF sentinel means "unavailable".
+ */
+VOID
+NTAPI
+HalArm64DbgGicState(
+    _In_ ULONG IntId,
+    _Out_ PULONG Prio,
+    _Out_ PULONG Enable,
+    _Out_ PULONG Pending,
+    _Out_ PULONG Active)
+{
+    *Prio = 0xFFFFFFFF;
+    *Enable = 0xFFFFFFFF;
+    *Pending = 0xFFFFFFFF;
+    *Active = 0xFFFFFFFF;
+
+    if (IntId >= 32)
+        return;
+
+    if (HalpGicUseSysRegs)
+    {
+        ULONG Cpu = KeGetCurrentProcessorNumber();
+        ULONG_PTR SgiBase = HalpGicrSgiBase(Cpu);
+        volatile UCHAR *PrioBytes;
+
+        if (SgiBase == 0)
+            return;
+
+        PrioBytes = (volatile UCHAR *)HalpMmio(SgiBase, GICR_IPRIORITYR);
+        *Prio = PrioBytes[IntId];
+        *Enable = (*HalpMmio(SgiBase, GICR_ISENABLER0) >> IntId) & 1u;
+        *Pending = (*HalpMmio(SgiBase, GICR_ISPENDR0) >> IntId) & 1u;
+        *Active = (*HalpMmio(SgiBase, GICR_ISACTIVER0) >> IntId) & 1u;
+    }
+    else if (HalpGicdBase != 0)
+    {
+        volatile UCHAR *PrioBytes =
+            (volatile UCHAR *)HalpMmio((ULONG_PTR)HalpGicdBase, GICD_IPRIORITYR);
+        *Prio = PrioBytes[IntId];
+        *Enable = (*HalpMmio((ULONG_PTR)HalpGicdBase, GICD_ISENABLER) >> IntId) & 1u;
+        *Pending = (*HalpMmio((ULONG_PTR)HalpGicdBase, GICD_ISPENDR) >> IntId) & 1u;
+    }
+}

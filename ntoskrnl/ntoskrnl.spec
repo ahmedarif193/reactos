@@ -1740,6 +1740,10 @@
 @ stdcall -arch=arm64 KfAcquireSpinLock(ptr)
 @ stdcall -arch=arm64 KfReleaseSpinLock(ptr long)
 @ stdcall -arch=arm64 KeGetCurrentIrql()
+; ARM64 SMP diagnostics (smpdbg) recorders, called from the HAL
+@ stdcall -arch=arm64 SmpDbgTimerBegin(long long)
+@ stdcall -arch=arm64 SmpDbgTimerEoi(long long)
+@ stdcall -arch=arm64 SmpDbgTimerReject(long long)
 @ stdcall -arch=arm64 KxSaveFloatingPointState(ptr)
 @ stdcall -arch=arm64 KxRestoreFloatingPointState(ptr)
 @ stdcall -arch=arm64 KeAcquireSpinLock(ptr ptr)
