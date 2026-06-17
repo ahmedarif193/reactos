@@ -49,8 +49,7 @@ KiIpiSend(
         return;
 
     if (SmpDbgEnabled)
-        DbgPrint("SMP4DBG ipi-send cpu=%lu request=%lu targets=0x%Ix\n",
-                 KeGetCurrentProcessorNumber(), IpiRequest, (ULONG_PTR)TargetSet);
+        DbgPrint("S%%8 %lu\n", KeGetCurrentProcessorNumber());
 
     for (Index = 0, ProcessorMask = 1; Index < KeNumberProcessors; Index++, ProcessorMask <<= 1)
     {
@@ -61,8 +60,7 @@ KiIpiSend(
             {
                 InterlockedBitTestAndSet((PLONG)&Prcb->RequestSummary, IpiRequest);
                 if (SmpDbgEnabled)
-                    DbgPrint("SMP4DBG ipi-send-target cpu=%lu target=%lu request=%lu\n",
-                             KeGetCurrentProcessorNumber(), Index, IpiRequest);
+                    DbgPrint("S%%9 %lu %lu\n", KeGetCurrentProcessorNumber(), Index);
             }
         }
     }
@@ -128,9 +126,7 @@ KiIpiServiceRoutine(
 
         /* SMP boot diagnostics (/SMPDIAG): trace each serviced IPI. */
         if (SmpDbgEnabled)
-            DbgPrint("SMP4DBG ipi-service cpu=%lu request=0x%Ix dpcint=%u next=%p\n",
-                     KeGetCurrentProcessorNumber(), (ULONG_PTR)Prcb->RequestSummary,
-                     Prcb->DpcInterruptRequested, Prcb->NextThread);
+            DbgPrint("S%%10 %lu\n", KeGetCurrentProcessorNumber());
 
         /*
          * Check for freeze IPI FIRST, before any other processing.

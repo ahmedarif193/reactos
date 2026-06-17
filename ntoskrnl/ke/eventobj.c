@@ -186,8 +186,7 @@ KeSetEvent(IN PKEVENT Event,
     /* Save the Previous State */
     PreviousState = Event->Header.SignalState;
 
-    SMPDBG_TRACE("SMP4DBG ke-setevent locked cpu=%lu prev=%ld\n",
-                 KeGetCurrentProcessorNumber(), (LONG)PreviousState);
+    SMPDBG_TRACE("S%%5 %lu\n", KeGetCurrentProcessorNumber());
 
     /* Set the Event to Signaled */
     Event->Header.SignalState = 1;

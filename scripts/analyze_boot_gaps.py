@@ -22,9 +22,10 @@ import sys
 TS_RE = re.compile(r'^\[\s*(\d+\.\d+)\]\s?(.*)$')
 
 
-def load(path, grep=None, cpu=None):
+def load(path, grep=None, cpu=None, exclude=None):
     """Return list of (timestamp, raw_line) for lines that carry a timestamp."""
     grep_re = re.compile(grep) if grep else None
+    exclude_re = re.compile(exclude) if exclude else None
     cpu_tok = f"cpu={cpu}" if cpu is not None else None
     rows = []
     with open(path, errors='replace') as fh:
@@ -35,9 +36,12 @@ def load(path, grep=None, cpu=None):
                 continue
             if grep_re and not grep_re.search(raw):
                 continue
+            if exclude_re and exclude_re.search(raw):
+                continue
             if cpu_tok and cpu_tok not in raw:
                 continue
             rows.append((float(m.group(1)), raw))
+    rows.sort(key=lambda r: r[0])
     return rows
 
 
@@ -66,11 +70,15 @@ def main(argv=None):
                     help='show only the N largest gaps (default 25)')
     ap.add_argument('--grep', default=None,
                     help='only consider lines matching this regex')
+    ap.add_argument('--exclude', default=None,
+                    help='drop lines matching this regex before gap analysis '
+                         '(e.g. --exclude SMP4DBG: /SMPDIAG idle-loop spam fills '
+                         'every quiet moment and hides the real gaps)')
     ap.add_argument('--cpu', type=int, default=None,
                     help='only SMP4DBG lines for this cpu=N')
     args = ap.parse_args(argv)
 
-    rows = load(args.log, args.grep, args.cpu)
+    rows = load(args.log, args.grep, args.cpu, args.exclude)
     if len(rows) < 2:
         print(f"No timestamped lines in {args.log} (matched {len(rows)}).")
         return 1

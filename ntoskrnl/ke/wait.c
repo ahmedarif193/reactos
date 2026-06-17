@@ -108,8 +108,7 @@ KiUnwaitThread(IN PKTHREAD Thread,
                IN LONG_PTR WaitStatus,
                IN KPRIORITY Increment)
 {
-    SMPDBG_TRACE("SMP4DBG ke-unwait enter cpu=%lu status=%Ix\n",
-                 KeGetCurrentProcessorNumber(), (ULONG_PTR)WaitStatus);
+    SMPDBG_TRACE("S%%6 %lu\n", KeGetCurrentProcessorNumber());
 
     /* Unlink the thread */
     KiUnlinkThread(Thread, WaitStatus);

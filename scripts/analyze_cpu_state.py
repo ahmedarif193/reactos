@@ -47,6 +47,24 @@ def classify(msg):
     return 'other'
 
 
+# Compact serial tokens "S%<id> <cpu> [<target>]" decoded back to canonical
+# messages so the rest of the pipeline is unchanged. High-frequency events only;
+# the low-frequency timer-state/timer-gic dumps stay on the legacy SMP4DBG form.
+SCODE = {
+    1:  'ke-deferred-ready enter cpu={c}',
+    2:  'ke-deferred-ready selected cpu={c}',
+    3:  'ke-deferred-ready set-next cpu={c} target={t}',
+    4:  'ke-deferred-ready replace-next cpu={c} target={t}',
+    5:  'ke-setevent locked cpu={c}',
+    6:  'ke-unwait enter cpu={c}',
+    7:  'idle-switch cpu={c}',
+    8:  'ipi-send cpu={c}',
+    9:  'ipi-send-target cpu={c} target={t}',
+    10: 'ipi-service cpu={c}',
+}
+SCRE = re.compile(r'^S%(\d+)\s+(\d+)(?:\s+(\d+))?')
+
+
 def load(path):
     """Return (rows, ticks, gdb). rows=[(t,cpu,cls,msg)], ticks=[(t,[c0..])]."""
     rows, ticks = [], []
@@ -62,7 +80,16 @@ def load(path):
                 continue
             t = float(m.group(1))
             body = m.group(2)
-            if SMP in body:
+            sm = SCRE.match(body)
+            if sm:
+                sid, cpu, tgt = int(sm.group(1)), int(sm.group(2)), sm.group(3)
+                tmpl = SCODE.get(sid)
+                if tmpl is None:
+                    rows.append((t, cpu, 'other', body))
+                    continue
+                msg = tmpl.format(c=cpu, t=(tgt if tgt is not None else ''))
+                rows.append((t, cpu, classify(msg), msg))
+            elif SMP in body:
                 msg = body.split(SMP, 1)[1].strip()
                 cm = CPU.search(msg)
                 cpu = int(cm.group(1)) if cm else -1
