@@ -9,6 +9,7 @@
 #include <fpstate.h>
 #define NDEBUG
 #include <debug.h>
+#include <reactos/smpdbg.h>
 
 /*
  * Stack layout used during context acquisition:
@@ -226,6 +227,11 @@ KiIdleLoop(VOID)
             PKTHREAD OldThread = Prcb->CurrentThread;
             PKTHREAD NewThread = Prcb->NextThread;
 
+            if (SmpDbgEnabled)
+                DbgPrint("SMP4DBG idle-switch cpu=%lu old=%p oldprio=%d new=%p newprio=%d\n",
+                         KeGetCurrentProcessorNumber(), OldThread, (int)OldThread->Priority,
+                         NewThread, (int)NewThread->Priority);
+
             Prcb->Sleeping = FALSE;
             InterlockedAnd64((PLONG64)&KiIdleSummary, (LONG64)~Prcb->SetMember);
 
@@ -244,6 +250,32 @@ KiIdleLoop(VOID)
 
         /* Re-advertise this core as idle so KiSelectNextProcessor can hand off to it. */
         InterlockedOr64((PLONG64)&KiIdleSummary, (LONG64)Prcb->SetMember);
+
+        /* SMP boot diagnostics (/SMPDIAG): record this core's timer + GIC state.
+         * Report whichever architected timer is enabled - virtual (PPI 27) or
+         * physical (PPI 30). The PMR read is ICC_PMR_EL1 (GICv3 path). */
+        if (SmpDbgEnabled)
+        {
+            ULONG64 Ctl, Tval, Pmr;
+            ULONG Self = KeGetCurrentProcessorNumber();
+            ULONG TimerPpi, Prio = 0, En = 0, Pend = 0, Act = 0;
+            __asm__ __volatile__("mrs %0, cntv_ctl_el0" : "=r"(Ctl));
+            if (Ctl & 1u)
+            {
+                __asm__ __volatile__("mrs %0, cntv_tval_el0" : "=r"(Tval));
+                TimerPpi = 27;
+            }
+            else
+            {
+                __asm__ __volatile__("mrs %0, cntp_ctl_el0" : "=r"(Ctl));
+                __asm__ __volatile__("mrs %0, cntp_tval_el0" : "=r"(Tval));
+                TimerPpi = 30;
+            }
+            __asm__ __volatile__("mrs %0, S3_0_C4_C6_0" : "=r"(Pmr));
+            SmpDbgCntv(Self, (ULONG)Ctl, (LONG)Tval, (ULONG)Pmr);
+            HalArm64DbgGicState(TimerPpi, &Prio, &En, &Pend, &Act);
+            SmpDbgGic(Self, Prio, En, Pend, Act);
+        }
 
         /* WFI wakes on a pending interrupt even with DAIF.I masked; unmasking afterwards takes it immediately */
         __asm__ __volatile__("wfi" ::: "memory");
