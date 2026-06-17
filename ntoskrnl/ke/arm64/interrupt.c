@@ -13,6 +13,7 @@
 #define NDEBUG
 #include <debug.h>
 #include <arm64pl011.h>
+#include <reactos/smpdbg.h>
 
 /* HAL extension: not yet declared in public headers for ARM64 */
 extern ULONG FASTCALL HalGetInterruptSource(VOID);
@@ -288,6 +289,15 @@ KiArm64TimerIsr(
      */
     TrapFrame = KiArm64GetCurrentInterruptTrapFrame();
     Cpu = KeGetCurrentProcessorNumber();
+
+    /* SMP boot diagnostics (/SMPDIAG): per-CPU tick counter + periodic state dump. */
+    SmpDbgTimerTick(Cpu);
+    if (SmpDbgEnabled && (Cpu == 0))
+    {
+        static ULONG SmpDbgDumpThrottle = 0;
+        if ((++SmpDbgDumpThrottle & 0x3F) == 0)
+            SmpDbgDumpTimers((ULONG)KeActiveProcessors);
+    }
 
     /*
      * KeUpdateRunTime accounts kernel/user/idle/DPC/interrupt time from the

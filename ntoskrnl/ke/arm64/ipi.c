@@ -6,6 +6,7 @@
  */
 
 #include <ntoskrnl.h>
+#include <reactos/smpdbg.h>
 
 #ifdef CONFIG_SMP
 static struct
@@ -117,6 +118,12 @@ KiIpiServiceRoutine(
 #ifdef CONFIG_SMP
     {
         PKPRCB Prcb = KeGetCurrentPrcb();
+
+        /* SMP boot diagnostics (/SMPDIAG): trace each serviced IPI. */
+        if (SmpDbgEnabled)
+            DbgPrint("SMP4DBG ipi-service cpu=%lu request=0x%Ix dpcint=%u next=%p\n",
+                     KeGetCurrentProcessorNumber(), (ULONG_PTR)Prcb->RequestSummary,
+                     Prcb->DpcInterruptRequested, Prcb->NextThread);
 
         /*
          * Check for freeze IPI FIRST, before any other processing.
