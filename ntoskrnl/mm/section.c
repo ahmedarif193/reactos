@@ -2100,6 +2100,12 @@ MmNotPresentFaultSectionView(PMMSUPPORT AddressSpace,
                                         Page);
         if (!NT_SUCCESS(Status))
         {
+            if (Status == STATUS_UNSUCCESSFUL)
+            {
+                MmSetPageEntrySectionSegment(Segment, &Offset, 0);
+                MmUnlockSectionSegment(Segment);
+                return STATUS_MM_RESTART_OPERATION;
+            }
             DPRINT1("Unable to create virtual mapping\n");
             KeBugCheck(MEMORY_MANAGEMENT);
         }
