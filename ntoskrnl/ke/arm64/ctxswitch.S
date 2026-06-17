@@ -294,23 +294,29 @@ KiSwapContextInternal:
      */
     .seh_endprologue
 
-    msr     daifset, #0x2
-
     /*
      * The outgoing thread was marked busy by KiSetThreadSwapBusy under the
      * scheduler lock before it was queued. Wait until the incoming thread is
      * no longer being saved on another CPU before reusing its kernel stack.
      * Skip when the scheduler reselected the running thread (x1 == x2).
+     * Wait with IRQ unmasked so a parked core still services IPIs (amd64 does the same).
      */
     cmp     x1, x2
     b.eq    .Lswapbusy_clear
 
-.Lswapbusy_wait:
     ldrb    w3, [x2, #ThSwapBusy]
     cbz     w3, .Lswapbusy_clear
+    msr     daifclr, #0x2          /* unmask IRQ: stay responsive to IPIs while waiting */
+
+.Lswapbusy_wait:
+    ldrb    w3, [x2, #ThSwapBusy]
+    cbz     w3, .Lswapbusy_waited
     yield
     wfe
     b       .Lswapbusy_wait
+
+.Lswapbusy_waited:
+    msr     daifset, #0x2          /* re-mask IRQ for the atomic stack switch */
 
 .Lswapbusy_clear:
     dmb     ishld
