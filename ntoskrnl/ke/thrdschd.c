@@ -27,105 +27,11 @@ KAFFINITY KiIdleSMTSummary;
 
 /* FUNCTIONS *****************************************************************/
 
-#ifdef CONFIG_SMP
-static
-PKTHREAD
-FASTCALL
-KiStealReadyThread(IN PKPRCB Prcb)
-{
-    KAFFINITY ThisBit = Prcb->SetMember;
-    ULONG i;
-
-    for (i = 0; i < (ULONG)KeNumberProcessors; i++)
-    {
-        PKPRCB Remote = KiProcessorBlock[i];
-        LONG Priority;
-
-        if (Remote == Prcb) continue;
-        if (Remote->ReadySummary == 0) continue;
-
-        KiAcquirePrcbLock(Remote);
-
-        for (Priority = HIGH_PRIORITY; Priority >= 0; Priority--)
-        {
-            PLIST_ENTRY Head;
-            PLIST_ENTRY Entry;
-
-            if (!(Remote->ReadySummary & PRIORITY_MASK(Priority))) continue;
-
-            Head = &Remote->DispatcherReadyListHead[Priority];
-            for (Entry = Head->Flink; Entry != Head; Entry = Entry->Flink)
-            {
-                PKTHREAD Thread = CONTAINING_RECORD(Entry, KTHREAD, WaitListEntry);
-
-                if (Thread->State != Ready) continue;
-                if (!(KiThreadAffinityMask(Thread) & ThisBit)) continue;
-
-                if (RemoveEntryList(&Thread->WaitListEntry))
-                {
-                    Remote->ReadySummary ^= PRIORITY_MASK(Priority);
-                }
-
-                Thread->State = DeferredReady;
-                Thread->NextProcessor = Prcb->Number;
-                Thread->DeferredProcessor = Prcb->Number;
-
-                KiReleasePrcbLock(Remote);
-                return Thread;
-            }
-        }
-
-        KiReleasePrcbLock(Remote);
-    }
-
-    return NULL;
-}
-#endif
-
 PKTHREAD
 FASTCALL
 KiIdleSchedule(IN PKPRCB Prcb)
 {
-    PKTHREAD Thread;
-
-    Thread = KiSelectReadyThread(0, Prcb);
-    if (Thread != NULL)
-    {
-        InterlockedAnd64((PLONG64)&KiIdleSummary, (LONG64)~Prcb->SetMember);
-        return Thread;
-    }
-
-#ifdef CONFIG_SMP
-    {
-        PKTHREAD Stolen;
-
-        KiReleasePrcbLock(Prcb);
-        Stolen = KiStealReadyThread(Prcb);
-        KiAcquirePrcbLock(Prcb);
-
-        if (Stolen != NULL)
-        {
-            Stolen->WaitTime = KeTickCount.LowPart;
-
-            if (Prcb->NextThread != NULL)
-            {
-                LONG StolenPriority = Stolen->Priority;
-                Stolen->State = Ready;
-                InsertTailList(&Prcb->DispatcherReadyListHead[StolenPriority],
-                               &Stolen->WaitListEntry);
-                Prcb->ReadySummary |= PRIORITY_MASK(StolenPriority);
-                return Prcb->IdleThread;
-            }
-
-            Stolen->State = Ready;
-            Stolen->Preempted = FALSE;
-            InterlockedAnd64((PLONG64)&KiIdleSummary, (LONG64)~Prcb->SetMember);
-            return Stolen;
-        }
-    }
-#endif
-
-    InterlockedOrSetMember(&KiIdleSummary, Prcb->SetMember);
+    /* Unused on ARM64: the idle loop is a passive consumer now. Upstream stub. */
     return Prcb->IdleThread;
 }
 
