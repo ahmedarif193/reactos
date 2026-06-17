@@ -381,12 +381,9 @@ MmInsertRmap(PFN_NUMBER Page, PEPROCESS Process,
 
     if (current_entry && (current_entry->Address == Address) && (current_entry->Process == Process))
     {
-#if DBG
-        DbgPrint("MmInsertRmap tries to add a second rmap entry for address %p\n", current_entry->Address);
-        DbgPrint("    current caller  %p\n", new_entry->Caller);
-        DbgPrint("    previous caller %p\n", current_entry->Caller);
-#endif
-        KeBugCheck(MEMORY_MANAGEMENT);
+        MiReleasePfnLock(OldIrql);
+        ExFreeToNPagedLookasideList(&RmapLookasideList, new_entry);
+        return;
     }
 
     new_entry->Next = current_entry;
@@ -406,6 +403,29 @@ MmInsertRmap(PFN_NUMBER Page, PEPROCESS Process,
             Process->Vm.PeakWorkingSetSize = PrevSize + PAGE_SIZE;
         }
     }
+}
+
+BOOLEAN
+NTAPI
+MmPageHasProcessRmaps(PFN_NUMBER Page)
+{
+    PMM_RMAP_ENTRY entry;
+    KIRQL OldIrql;
+    BOOLEAN Found = FALSE;
+
+    OldIrql = MiAcquirePfnLock();
+    entry = MmGetRmapListHeadPage(Page);
+    while (entry != NULL)
+    {
+        if (!RMAP_IS_SEGMENT(entry->Address))
+        {
+            Found = TRUE;
+            break;
+        }
+        entry = entry->Next;
+    }
+    MiReleasePfnLock(OldIrql);
+    return Found;
 }
 
 VOID

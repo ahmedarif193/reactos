@@ -986,6 +986,12 @@ MmDeleteRmap(
     PVOID Address
 );
 
+BOOLEAN
+NTAPI
+MmPageHasProcessRmaps(
+    PFN_NUMBER Page
+);
+
 CODE_SEG("INIT")
 VOID
 NTAPI

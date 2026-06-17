@@ -3789,7 +3789,8 @@ MmFreeSectionPage(PVOID Context, MEMORY_AREA* MemoryArea, PVOID Address,
                 MmSetSavedSwapEntryPage(Page, 0);
             }
             MmDeleteRmap(Page, Process, Address);
-            MmReleasePageMemoryConsumer(MC_USER, Page);
+            if (!MmPageHasProcessRmaps(Page))
+                MmReleasePageMemoryConsumer(MC_USER, Page);
         }
         else
         {
