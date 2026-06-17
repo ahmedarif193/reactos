@@ -698,12 +698,12 @@ KiSwapProcess(_Inout_ PKPROCESS NewProcess,
     }
 #endif
 
-    NewUserRoot = NewProcess->DirectoryTableBase[0] & ARM64_PTE_ADDR_MASK;
+    NewUserRoot = NewProcess->DirectoryTableBase[0] & KI_ARM64_TTBR_COMPARE_MASK;
     NewKernelRoot = KiArm64KernelTtbrBase(NewProcess->DirectoryTableBase[0]);
     __asm__ __volatile__("mrs %0, ttbr0_el1" : "=r"(CurrentTtbr0));
     __asm__ __volatile__("mrs %0, ttbr1_el1" : "=r"(CurrentTtbr1));
-    CurrentUserRoot = CurrentTtbr0 & ARM64_PTE_ADDR_MASK;
-    CurrentKernelRoot = CurrentTtbr1 & MI_ARM64_PHYS_ADDR_MASK;
+    CurrentUserRoot = CurrentTtbr0 & KI_ARM64_TTBR_COMPARE_MASK;
+    CurrentKernelRoot = CurrentTtbr1 & KI_ARM64_TTBR_COMPARE_MASK;
 
     /*
      * APs may enter the scheduler with the right process object but stale TTBR

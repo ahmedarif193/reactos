@@ -24,6 +24,12 @@
 #define DTB1 DirectoryTableBase[1]
 #endif
 
+#if defined(_M_ARM64)
+#define MI_DTB0_TO_PA(Dtb0) ((Dtb0) & ARM64_PTE_ADDR_MASK)
+#else
+#define MI_DTB0_TO_PA(Dtb0) (Dtb0)
+#endif
+#define MI_DTB0_TO_PFN(Dtb0) (MI_DTB0_TO_PA(Dtb0) >> PAGE_SHIFT)
 
 /* GLOBALS ********************************************************************/
 
@@ -1003,7 +1009,7 @@ MmInitializeProcessAddressSpace(IN PEPROCESS Process,
     PointerPte = MiAddressToPte(PDE_BASE);
 #endif
     PageFrameNumber = PFN_FROM_PTE(PointerPte);
-    ASSERT(Process->Pcb.DTB0 == PageFrameNumber * PAGE_SIZE);
+    ASSERT(MI_DTB0_TO_PA(Process->Pcb.DTB0) == PageFrameNumber * PAGE_SIZE);
     MiInitializePfn(PageFrameNumber, PointerPte, TRUE);
 
     /* Do the same for hyperspace */
@@ -1045,7 +1051,7 @@ MmInitializeProcessAddressSpace(IN PEPROCESS Process,
     MiInitializeWorkingSetList(&Process->Vm);
 
     /* The rule is that the owner process is always in the FLINK of the PDE's PFN entry */
-    Pfn = MiGetPfnEntry(Process->Pcb.DTB0 >> PAGE_SHIFT);
+    Pfn = MiGetPfnEntry(MI_DTB0_TO_PFN(Process->Pcb.DTB0));
     ASSERT(Pfn->u4.PteFrame == MiGetPfnEntryIndex(Pfn));
     ASSERT(Pfn->u1.WsIndex == 0);
     Pfn->u1.Event = (PKEVENT)Process;
@@ -1282,6 +1288,10 @@ MmCreateProcessAddressSpace(IN ULONG MinWs,
         return FALSE;
     }
 
+#if defined(_M_ARM64)
+    MiArm64AssignProcessAsid(&DirectoryTableBase[0]);
+#endif
+
     /* Switch to phase 1 initialization */
     ASSERT(Process->AddressSpaceInitialized == 0);
     Process->AddressSpaceInitialized = 1;
@@ -1435,7 +1445,7 @@ MmDeleteProcessAddressSpace(IN PEPROCESS Process)
         ASSERT((Pfn1->u3.e2.ReferenceCount == 0) || (Pfn1->u3.e1.WriteInProgress));
 
         /* Finally, nuke the PDE itself */
-        PageFrameIndex = Process->Pcb.DTB0 >> PAGE_SHIFT;
+        PageFrameIndex = MI_DTB0_TO_PFN(Process->Pcb.DTB0);
         Pfn1 = MiGetPfnEntry(PageFrameIndex);
         MI_SET_PFN_DELETED(Pfn1);
         MiDecrementShareCount(Pfn1, PageFrameIndex);
@@ -1455,6 +1465,10 @@ MmDeleteProcessAddressSpace(IN PEPROCESS Process)
 
     /* Drop a reference on the session */
     if (Process->Session) MiReleaseProcessReferenceToSessionDataPage(Process->Session);
+
+#if defined(_M_ARM64)
+    MiArm64ReleaseProcessAsid(Process);
+#endif
 
     /* Clear out the PDE pages */
     Process->Pcb.DTB0 = 0;

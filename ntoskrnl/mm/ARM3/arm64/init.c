@@ -159,6 +159,15 @@ MiArm64FlushTranslationChanges(VOID)
 }
 
 static __inline VOID
+MiArm64SyncTableConstruction(VOID)
+{
+    __asm__ __volatile__(
+        "dsb ish\n\t"
+        "isb"
+        ::: "memory");
+}
+
+static __inline VOID
 MiArm64SyncL0ToRoot(ULONG L0Index, UINT64 Desc)
 {
     volatile UINT64 *RootL0;
@@ -173,7 +182,7 @@ MiArm64SyncL0ToRoot(ULONG L0Index, UINT64 Desc)
     RootL0 = (volatile UINT64 *)PXE_BASE;
     RootL0[L0Index] = Desc;
     MiArm64CleanEntryToPoC(&RootL0[L0Index]);
-    MiArm64FlushTranslationChanges();
+    MiArm64SyncTableConstruction();
 }
 
 #define ARM64_PTE_AF                PTE_ACCESSED  /* Access Flag - required for L3 page entries */
@@ -982,7 +991,7 @@ MiArm64PublishTableDesc(_Inout_ volatile UINT64 *Entry, _In_ PFN_NUMBER Pfn)
 {
     *Entry = MI_ARM64_MAKE_TABLE_DESC(Pfn);
     MiArm64CleanEntryToPoC(Entry);
-    MiArm64FlushTranslationChanges();
+    MiArm64SyncTableConstruction();
 }
 
 static __inline VOID
@@ -1084,10 +1093,7 @@ MiArm64SplitL1BlockToL2(_Inout_ volatile UINT64 *Entry, _In_ PFN_NUMBER ParentPf
     MiArm64BreakBeforeMake(Entry);
     MiArm64PublishTableDesc(Entry, NewPfn);
 
-    if (MiArm64PfnDatabaseReady)
-    {
-        MiInitializePfnForOtherProcess(NewPfn, (PVOID)Entry, ParentPfn);
-    }
+    MiArm64InitializePageTablePfn(NewPfn, (PVOID)Entry, ParentPfn);
 }
 
 static
@@ -1117,15 +1123,49 @@ MiArm64SplitL2BlockToL3(_Inout_ volatile UINT64 *Entry, _In_ PFN_NUMBER ParentPf
     MiArm64BreakBeforeMake(Entry);
     MiArm64PublishTableDesc(Entry, NewPfn);
 
-    if (MiArm64PfnDatabaseReady)
-    {
-        MiInitializePfnForOtherProcess(NewPfn, (PVOID)Entry, ParentPfn);
-    }
+    MiArm64InitializePageTablePfn(NewPfn, (PVOID)Entry, ParentPfn);
 }
 
 
 
 volatile LONG MiArm64PfnLockDepth[MAXIMUM_PROCESSORS] = {0};
+
+VOID
+MiArm64InitializePageTablePfn(
+    _In_ PFN_NUMBER PageFrameIndex,
+    _In_ PVOID PteAddress,
+    _In_ PFN_NUMBER PteFrame)
+{
+    KIRQL OldIrql;
+    ULONG CpuIndex;
+    BOOLEAN ReleasePfnLock;
+
+    if (!MiArm64PfnDatabaseReady)
+    {
+        return;
+    }
+
+    CpuIndex = KeGetCurrentProcessorNumber();
+    ReleasePfnLock = TRUE;
+
+    if ((CpuIndex < MAXIMUM_PROCESSORS) &&
+        (MiArm64PfnLockDepth[CpuIndex] > 0))
+    {
+        OldIrql = DISPATCH_LEVEL;
+        ReleasePfnLock = FALSE;
+    }
+    else
+    {
+        OldIrql = MiAcquirePfnLock();
+    }
+
+    MiInitializePfnForOtherProcess(PageFrameIndex, PteAddress, PteFrame);
+
+    if (ReleasePfnLock)
+    {
+        MiReleasePfnLock(OldIrql);
+    }
+}
 
 VOID
 MiArm64MapPageTablePage(UINT64 Ttbr1, PVOID TableVa, PFN_NUMBER Pfn)
@@ -1143,13 +1183,10 @@ MiArm64MapPageTablePage(UINT64 Ttbr1, PVOID TableVa, PFN_NUMBER Pfn)
             MiArm64CleanPageToPoC(MiArm64PfnToKseg0(NewPfn));
             MiArm64PublishTableDesc(&l0[l0_idx], NewPfn);
             MiArm64SyncL0ToRoot(l0_idx, l0[l0_idx]);
-            if (MiArm64PfnDatabaseReady)
             {
                 PFN_NUMBER L0Pfn = root_pa >> PAGE_SHIFT;
                 volatile UINT64 *L0Entry = &l0[l0_idx];
-                MiInitializePfnForOtherProcess(NewPfn,
-                                               (PVOID)L0Entry,
-                                               L0Pfn);
+                MiArm64InitializePageTablePfn(NewPfn, (PVOID)L0Entry, L0Pfn);
             }
         }
         MiArm64SelfMapL0MarkCreated(l0_idx);
@@ -1167,13 +1204,10 @@ MiArm64MapPageTablePage(UINT64 Ttbr1, PVOID TableVa, PFN_NUMBER Pfn)
             RtlZeroMemory(MiArm64PfnToKseg0(NewPfn), PAGE_SIZE);
             MiArm64CleanPageToPoC(MiArm64PfnToKseg0(NewPfn));
             MiArm64PublishTableDesc(&l1[l1_idx], NewPfn);
-            if (MiArm64PfnDatabaseReady)
             {
                 PFN_NUMBER L1Pfn = (l0[l0_idx] & ARM64_PTE_ADDR_MASK) >> PAGE_SHIFT;
                 volatile UINT64 *L1Entry = &l1[l1_idx];
-                MiInitializePfnForOtherProcess(NewPfn,
-                                               (PVOID)L1Entry,
-                                               L1Pfn);
+                MiArm64InitializePageTablePfn(NewPfn, (PVOID)L1Entry, L1Pfn);
             }
         }
         else if ((l1[l1_idx] & ARM64_PTE_TYPE_MASK) == ARM64_PTE_TYPE_BLOCK)
@@ -1193,14 +1227,11 @@ MiArm64MapPageTablePage(UINT64 Ttbr1, PVOID TableVa, PFN_NUMBER Pfn)
         RtlZeroMemory(MiArm64PfnToKseg0(NewPfn), PAGE_SIZE);
         MiArm64CleanPageToPoC(MiArm64PfnToKseg0(NewPfn));
         MiArm64PublishTableDesc(&l2[l2_idx], NewPfn);
-        if (MiArm64PfnDatabaseReady)
         {
             PFN_NUMBER L2Pfn = (l1[l1_idx] & ARM64_PTE_ADDR_MASK) >> PAGE_SHIFT;
             volatile UINT64 *L2Entry = &l2[l2_idx];
 
-            MiInitializePfnForOtherProcess(NewPfn,
-                                           (PVOID)L2Entry,
-                                           L2Pfn);
+            MiArm64InitializePageTablePfn(NewPfn, (PVOID)L2Entry, L2Pfn);
         }
     }
     else if ((l2[l2_idx] & ARM64_PTE_TYPE_MASK) == ARM64_PTE_TYPE_BLOCK)
@@ -1219,13 +1250,19 @@ MiArm64MapPageTablePage(UINT64 Ttbr1, PVOID TableVa, PFN_NUMBER Pfn)
                   (1ULL << 10) |
                   ARM64_PTE_PXN |
                   ARM64_PTE_UXN;
+    UINT64 OldDesc = l3[l3_idx];
 
-    if (l3[l3_idx] == Desc)
+    if (OldDesc == Desc)
         return;
+
+    if ((OldDesc & ARM64_PTE_TYPE_MASK) == ARM64_PTE_TYPE_PAGE)
+    {
+        MiArm64BreakBeforeMake(&l3[l3_idx]);
+    }
 
     l3[l3_idx] = Desc;
     MiArm64CleanEntryToPoC(&l3[l3_idx]);
-    __asm__ __volatile__("dsb ish\n\ttlbi vmalle1is\n\tdsb ish\n\tisb" ::: "memory");
+    MiArm64SyncTableConstruction();
 }
 
 static VOID MiArm64MapPxeAlias(VOID);
@@ -2033,17 +2070,6 @@ MiInitMachineDependent(_Inout_ PLOADER_PARAMETER_BLOCK LoaderBlock)
         MiArm64PfnFreeListsReady = TRUE;
         MiArm64PfnDatabaseReady = TRUE;
 
-        /* Session space page-directory pages are now backed on demand at
-         * session creation (MiEnsureSessionPageTablesBacked) instead of being
-         * eagerly premapped here. */
-
-        __asm__ __volatile__(
-            "dsb ishst\n\t"
-            "tlbi vmalle1is\n\t"
-            "dsb ish\n\t"
-            "isb"
-            ::: "memory");
-
         MiInitializeSharedUserData();
         MiProtectSharedUserPage();
     }
@@ -2132,13 +2158,10 @@ MiMapPPEPages(
                 MiArm64PublishAndZeroTableDesc(L0Entry, Pfn, MiAddressToPpe(TargetVa));
                 MiArm64SyncL0ToRoot(MiAddressToPxi(TargetVa), Desc);
 
-                if (MiArm64PfnDatabaseReady)
                 {
                     UINT64 RootPa = MI_ARM64_TTBR_TO_PA(Ttbr1);
                     PFN_NUMBER L0Pfn = RootPa >> PAGE_SHIFT;
-                    MiInitializePfnForOtherProcess(Pfn,
-                                                   (PVOID)L0Entry,
-                                                   L0Pfn);
+                    MiArm64InitializePageTablePfn(Pfn, (PVOID)L0Entry, L0Pfn);
                 }
                 EntryPhys = MiArm64LookupTableEntry(Ttbr1, TargetVa, 1);
             }
@@ -2199,7 +2222,6 @@ MiMapPPEs(
             PFN_NUMBER Pfn = MiArm64AllocatePageTablePage();
             MiArm64PublishAndZeroTableDesc(EntryPhys, Pfn, MiAddressToPde(TargetVa));
 
-            if (MiArm64PfnDatabaseReady)
             {
                 volatile UINT64 *L0Entry = MiArm64LookupTableEntry(Ttbr1, TargetVa, 0);
                 PFN_NUMBER L1Pfn = 0;
@@ -2207,9 +2229,7 @@ MiMapPPEs(
                 {
                     L1Pfn = (*L0Entry & ARM64_PTE_ADDR_MASK) >> PAGE_SHIFT;
                 }
-                MiInitializePfnForOtherProcess(Pfn,
-                                               (PVOID)EntryPhys,
-                                               L1Pfn);
+                MiArm64InitializePageTablePfn(Pfn, (PVOID)EntryPhys, L1Pfn);
             }
 
         }
@@ -2252,13 +2272,10 @@ MiMapPDEs(
                     MiArm64PublishAndZeroTableDesc(L0Entry, Pfn, MiAddressToPpe(TargetVa));
                     MiArm64SyncL0ToRoot(MiAddressToPxi(TargetVa), Desc);
 
-                    if (MiArm64PfnDatabaseReady)
                     {
                         UINT64 RootPa = MI_ARM64_TTBR_TO_PA(Ttbr1);
                         PFN_NUMBER L0Pfn = RootPa >> PAGE_SHIFT;
-                        MiInitializePfnForOtherProcess(Pfn,
-                                                       (PVOID)L0Entry,
-                                                       L0Pfn);
+                        MiArm64InitializePageTablePfn(Pfn, (PVOID)L0Entry, L0Pfn);
                     }
 
                     PerformedPdeMappings = TRUE;
@@ -2269,7 +2286,6 @@ MiMapPDEs(
                     PFN_NUMBER Pfn = MiArm64AllocatePageTablePage();
                     MiArm64PublishAndZeroTableDesc(PpeEntry, Pfn, MiAddressToPde(TargetVa));
 
-                    if (MiArm64PfnDatabaseReady)
                     {
                         volatile UINT64 *L0Entry = MiArm64LookupTableEntry(Ttbr1, TargetVa, 0);
                         PFN_NUMBER L1Pfn = 0;
@@ -2277,9 +2293,7 @@ MiMapPDEs(
                         {
                             L1Pfn = (*L0Entry & ARM64_PTE_ADDR_MASK) >> PAGE_SHIFT;
                         }
-                        MiInitializePfnForOtherProcess(Pfn,
-                                                       (PVOID)PpeEntry,
-                                                       L1Pfn);
+                        MiArm64InitializePageTablePfn(Pfn, (PVOID)PpeEntry, L1Pfn);
                     }
 
                     PerformedPdeMappings = TRUE;
@@ -2312,7 +2326,6 @@ MiMapPDEs(
                 PFN_NUMBER Pfn = MiArm64AllocatePageTablePage();
                 MiArm64PublishAndZeroTableDesc(EntryPhys, Pfn, MiAddressToPte(TargetVa));
 
-                if (MiArm64PfnDatabaseReady)
                 {
                     volatile UINT64 *PpeEntry = MiArm64LookupTableEntry(Ttbr1, TargetVa, 1);
                     PFN_NUMBER L2Pfn = 0;
@@ -2321,9 +2334,7 @@ MiMapPDEs(
                         L2Pfn = (*PpeEntry & ARM64_PTE_ADDR_MASK) >> PAGE_SHIFT;
                     }
 
-                    MiInitializePfnForOtherProcess(Pfn,
-                                                   (PVOID)EntryPhys,
-                                                   L2Pfn);
+                    MiArm64InitializePageTablePfn(Pfn, (PVOID)EntryPhys, L2Pfn);
                 }
 
                 PerformedPdeMappings = TRUE;
@@ -2333,7 +2344,7 @@ MiMapPDEs(
 
     if (PerformedPdeMappings)
     {
-        __asm__ __volatile__("dsb ishst\n\ttlbi vmalle1is\n\tdsb ish\n\tisb" ::: "memory");
+        MiArm64SyncTableConstruction();
     }
 }
 
@@ -2390,7 +2401,7 @@ MiMapPTEs(
 
     if (PerformedMappings)
     {
-        __asm__ __volatile__("dsb ishst\n\ttlbi vmalle1is\n\tdsb ish\n\tisb" ::: "memory");
+        MiArm64SyncTableConstruction();
     }
 }
 

@@ -73,10 +73,7 @@ MiArm64EnsureSystemTableEntry(
             return FALSE;
         }
 
-        if (MiArm64IsPfnDatabaseReady())
-        {
-            MiInitializePfnForOtherProcess(PageFrameIndex, PteAddress, ParentPage);
-        }
+        MiArm64InitializePageTablePfn(PageFrameIndex, PteAddress, ParentPage);
         Created = TRUE;
     }
     else

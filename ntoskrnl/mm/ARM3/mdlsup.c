@@ -311,6 +311,10 @@ MiUnmapLockedPagesInUserSpace(
     ULONG NumberOfPages;
     PPFN_NUMBER MdlPages;
     PFN_NUMBER PageTablePage;
+#if defined(_M_ARM64)
+    PVOID FlushBase = BaseAddress;
+    ULONG FlushPages = 0;
+#endif
 
     DPRINT("MiUnmapLockedPagesInUserSpace(%p, %p)\n", BaseAddress, Mdl);
 
@@ -350,6 +354,9 @@ MiUnmapLockedPagesInUserSpace(
 
         /* Invalidate it */
         MI_ERASE_PTE(PointerPte);
+#if defined(_M_ARM64)
+        FlushPages++;
+#endif
 
         /* We invalidated this PTE, so dereference the PDE */
         PointerPde = MiAddressToPde(BaseAddress);
@@ -369,7 +376,14 @@ MiUnmapLockedPagesInUserSpace(
         MdlPages++;
     }
 
+#if defined(_M_ARM64)
+    if (FlushPages != 0)
+    {
+        KeInvalidateTlbRange(FlushBase, FlushPages);
+    }
+#else
     KeFlushProcessTb();
+#endif
     MiReleasePfnLock(OldIrql);
     MiUnlockProcessWorkingSetUnsafe(Process, Thread);
     MmUnlockAddressSpace(&Process->Vm);

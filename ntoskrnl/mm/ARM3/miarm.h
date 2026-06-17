@@ -2333,8 +2333,22 @@ MiEnsurePagedPoolPdeBacked(
 PFN_NUMBER
 MiArm64AllocatePageTablePage(VOID);
 
+VOID
+MiArm64InitializePageTablePfn(
+    _In_ PFN_NUMBER PageFrameIndex,
+    _In_ PVOID PteAddress,
+    _In_ PFN_NUMBER PteFrame);
+
 BOOLEAN
 MiArm64IsPfnDatabaseReady(VOID);
+
+VOID
+MiArm64AssignProcessAsid(
+    _Inout_ PULONG_PTR DirectoryTableBase);
+
+VOID
+MiArm64ReleaseProcessAsid(
+    _Inout_ PEPROCESS Process);
 #endif
 
 VOID

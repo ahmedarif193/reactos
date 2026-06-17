@@ -41,6 +41,11 @@ extern NTKERNELAPI PVOID MmHighestUserAddress;
 #define KeGetTrapFrameInterruptState(TrapFrame) 0
 #define KeGetContextSwitches(Prcb)  ((Prcb)->KeContextSwitches)
 
+#define KI_ARM64_TTBR_ADDR_MASK 0x0000FFFFFFFFF000ULL
+#define KI_ARM64_TTBR_ASID_SHIFT 48
+#define KI_ARM64_TTBR_ASID_MASK (0xFFULL << KI_ARM64_TTBR_ASID_SHIFT)
+#define KI_ARM64_TTBR_COMPARE_MASK (KI_ARM64_TTBR_ADDR_MASK | KI_ARM64_TTBR_ASID_MASK)
+
 // HAL DMA entry points are not declared by MinGW for arm64. Mirror the
 // Windows kernel prototypes so the I/O manager can call into the HAL.
 NTHALAPI
@@ -71,6 +76,23 @@ KeInvalidateTlbEntry(
      */
     __asm__ __volatile__("dsb ishst" ::: "memory");
     __asm__ __volatile__("tlbi vaae1is, %0" :: "r"(Va) : "memory");
+    __asm__ __volatile__("dsb ish" ::: "memory");
+    __asm__ __volatile__("isb" ::: "memory");
+}
+
+FORCEINLINE
+VOID
+KeInvalidateTlbRange(
+    _In_ PVOID Address,
+    _In_ ULONG NumberOfPages)
+{
+    ULONG_PTR Va = (ULONG_PTR)Address >> PAGE_SHIFT;
+
+    __asm__ __volatile__("dsb ishst" ::: "memory");
+    while (NumberOfPages-- != 0)
+    {
+        __asm__ __volatile__("tlbi vaae1is, %0" :: "r"(Va++) : "memory");
+    }
     __asm__ __volatile__("dsb ish" ::: "memory");
     __asm__ __volatile__("isb" ::: "memory");
 }
@@ -133,13 +155,14 @@ ULONGLONG
 KiArm64KernelTtbrBase(
     _In_ ULONGLONG UserDirectoryBase)
 {
-    ULONGLONG RootBase = UserDirectoryBase & ~((ULONGLONG)PAGE_SIZE - 1ULL);
+    ULONGLONG RootBase = UserDirectoryBase & KI_ARM64_TTBR_ADDR_MASK;
+    ULONGLONG Asid = UserDirectoryBase & KI_ARM64_TTBR_ASID_MASK;
     ULONGLONG TcrEl1;
     ULONGLONG T1sz;
 
     __asm__ __volatile__("mrs %0, tcr_el1" : "=r"(TcrEl1));
     T1sz = (TcrEl1 >> 16) & 0x3FULL;
-    return (T1sz == 17) ? RootBase + KE_ARM64_TTBR1_L0_OFFSET : RootBase;
+    return ((T1sz == 17) ? RootBase + KE_ARM64_TTBR1_L0_OFFSET : RootBase) | Asid;
 }
 
 FORCEINLINE
@@ -147,36 +170,26 @@ VOID
 KiArm64WriteUserTtbr(
     _In_ ULONGLONG UserDirectoryBase)
 {
-    /*
-     * ARM64 ASID Note (Bring-up):
-     *
-     * TTBR0_EL1 format: [ASID:16][BADDR:48] (with 16-bit ASID if supported).
-     * Here we mask to page alignment, effectively setting ASID=0.
-     *
-     * This is INTENTIONAL for single-core bring-up:
-     * - We flush the entire TLB (vmalle1is) on every context switch
-     * - No ASID-based TLB tagging is used yet
-     * - All processes share ASID=0 semantics
-     *
-     * For SMP/performance: Must preserve ASID bits from DirectoryTableBase,
-     * use targeted TLBI (aside1is), and properly manage ASID allocation.
-     */
-    ULONGLONG RootBase = UserDirectoryBase & ~((ULONGLONG)PAGE_SIZE - 1ULL);
+    ULONGLONG RootBase = UserDirectoryBase & KI_ARM64_TTBR_ADDR_MASK;
     ULONGLONG KernelRootBase = KiArm64KernelTtbrBase(UserDirectoryBase);
+    ULONGLONG Asid = UserDirectoryBase & KI_ARM64_TTBR_ASID_MASK;
     ULONGLONG SavedDaif;
 
     __asm__ __volatile__("mrs %0, daif" : "=r"(SavedDaif));
     __asm__ __volatile__("msr daifset, #0xF" ::: "memory");
 
-    __asm__ __volatile__("msr ttbr0_el1, %0" :: "r"(RootBase) : "memory");
+    __asm__ __volatile__("dsb ishst" ::: "memory");
+    __asm__ __volatile__("msr ttbr0_el1, %0" :: "r"(RootBase | Asid) : "memory");
     __asm__ __volatile__("isb" ::: "memory");
     __asm__ __volatile__("msr ttbr1_el1, %0" :: "r"(KernelRootBase) : "memory");
     __asm__ __volatile__("isb" ::: "memory");
 
-    __asm__ __volatile__("dsb ishst" ::: "memory");
-    __asm__ __volatile__("tlbi vmalle1is" ::: "memory");
-    __asm__ __volatile__("dsb ish" ::: "memory");
-    __asm__ __volatile__("isb" ::: "memory");
+    if (Asid == 0)
+    {
+        __asm__ __volatile__("tlbi vmalle1is" ::: "memory");
+        __asm__ __volatile__("dsb ish" ::: "memory");
+        __asm__ __volatile__("isb" ::: "memory");
+    }
 
     __asm__ __volatile__("msr daif, %0" :: "r"(SavedDaif) : "memory");
 }

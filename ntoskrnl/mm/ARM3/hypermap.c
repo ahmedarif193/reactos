@@ -72,7 +72,11 @@ MiMapPageInHyperSpace(IN PEPROCESS Process,
     if (!Offset)
     {
         Offset = MI_HYPERSPACE_PTES;
+#if defined(_M_ARM64)
+        KeInvalidateTlbRange(MiPteToAddress(PointerPte + 1), MI_HYPERSPACE_PTES);
+#else
         KeFlushProcessTb();
+#endif
     }
     PointerPte->u.Hard.PageFrameNumber = Offset - 1;
 #else
@@ -88,7 +92,11 @@ MiMapPageInHyperSpace(IN PEPROCESS Process,
         // Reset the PTEs
         //
         Offset = MI_HYPERSPACE_PTES;
+#if defined(_M_ARM64)
+        KeInvalidateTlbRange(MiPteToAddress(PointerPte + 1), MI_HYPERSPACE_PTES);
+#else
         KeFlushProcessTb();
+#endif
     }
 
     //
@@ -169,7 +177,11 @@ MiMapPagesInZeroSpace(IN PMMPFN Pfn1,
         //
         Offset = MI_ZERO_PTES;
         PointerPte->u.Hard.PageFrameNumber = Offset;
+#if defined(_M_ARM64)
+        KeInvalidateTlbRange(MiPteToAddress(PointerPte + 1), MI_ZERO_PTES);
+#else
         KeFlushProcessTb();
+#endif
     }
 
     //
