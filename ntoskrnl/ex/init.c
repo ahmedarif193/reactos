@@ -11,6 +11,7 @@
 
 #include <ntoskrnl.h>
 #include <reactos/buildno.h>
+#include <reactos/smpdbg.h>
 #include "inbv/logo.h"
 
 #define NDEBUG
@@ -1714,6 +1715,12 @@ Phase1InitializationDiscard(IN PVOID Context)
          * as existing the maximum number of processors that can be handled */
         if (strstr(CommandLine, "MAXPROC"))
             KeMaximumProcessors = MAXIMUM_PROCESSORS;
+
+#if defined(_M_ARM64)
+        /* Check for SMPDIAG: enable verbose ARM64 SMP boot diagnostics (smpdbg) */
+        if (strstr(CommandLine, "SMPDIAG"))
+            SmpDbgEnabled = TRUE;
+#endif
     }
 
     /* Start Application Processors */
