@@ -147,8 +147,16 @@ ApphelpDuplicateUnicodeString(
     {
         Destination->MaximumLength = Destination->Length + sizeof(WCHAR);
         Destination->Buffer = ApphelpAlloc(Destination->MaximumLength);
-        RtlCopyMemory(Destination->Buffer, Source->Buffer, Destination->Length);
-        Destination->Buffer[Destination->Length / sizeof(WCHAR)] = UNICODE_NULL;
+        if (Destination->Buffer)
+        {
+            RtlCopyMemory(Destination->Buffer, Source->Buffer, Destination->Length);
+            Destination->Buffer[Destination->Length / sizeof(WCHAR)] = UNICODE_NULL;
+        }
+        else
+        {
+            Destination->Length = 0;
+            Destination->MaximumLength = 0;
+        }
     }
     else
     {
@@ -387,6 +395,11 @@ ApphelpCacheWrite(VOID)
 
     /* Now we allocate and prepare some helpers */
     Buffer = ApphelpAlloc(Length);
+    if (Buffer == NULL)
+    {
+        ApphelpCacheReleaseLock();
+        return FALSE;
+    }
     BufferNamePos = Buffer + Length;
     Header = (PSHIM_PERSISTENT_CACHE_HEADER)Buffer;
     WriteEntry = (PSHIM_PERSISTENT_CACHE_ENTRY)(Buffer + SHIM_CACHE_HEADER_SIZE);
