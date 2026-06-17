@@ -920,6 +920,7 @@ extern volatile LONG HalpGicOnlineCpuCount;
 extern volatile ULONG *HalpMmio(ULONG_PTR Base, ULONG Offset);
 extern ULONGLONG HalpMmioRead64(ULONG_PTR Base, ULONG Offset);
 extern VOID HalpMmioWrite64(ULONG_PTR Base, ULONG Offset, ULONGLONG Value);
+extern VOID HalpGicv2SetSpiTarget(ULONG IntId, ULONG CpuTarget);
 
 /*
  * ============================================================================

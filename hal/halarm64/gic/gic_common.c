@@ -88,6 +88,8 @@ ULONG HalpArm64AckRaw[MAXIMUM_PROCESSORS] = {0};
 /* Default interrupt affinity */
 KAFFINITY HalpDefaultInterruptAffinity = 1;
 
+LONG HalpGicSpiRotor = 0;
+
 /* Memory mapping mode */
 BOOLEAN HalpUseIdentityMapping = TRUE;
 
@@ -724,6 +726,12 @@ HalpGicEnableInterrupt(
         BitPos = IntId % 32;
 
         *HalpMmio((ULONG_PTR)HalpGicdBase, RegOffset) = (1u << BitPos);
+
+        if (!HalpGicUseSysRegs && KeNumberProcessors > 1)
+        {
+            ULONG Cpu = (ULONG)InterlockedIncrement(&HalpGicSpiRotor) % (ULONG)KeNumberProcessors;
+            HalpGicv2SetSpiTarget(IntId, 1u << Cpu);
+        }
     }
     else
     {
