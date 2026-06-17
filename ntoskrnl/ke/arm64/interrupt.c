@@ -656,6 +656,18 @@ KiArm64InterruptDispatchEntry(_In_ ULONG VectorId)
         return;
     }
 
+    if (IntId == ARM64_SGI_IPI)
+    {
+        /* Service the reschedule/generic-call IPI directly: KiIpiServiceRoutine is
+         * lockless, and taking the shared chain lock here can deadlock KeIpiGenericCall. */
+        if (HalBeginSystemInterrupt(IPI_LEVEL, IntId, &OldIrql))
+        {
+            KiIpiServiceRoutine(NULL, NULL);
+            HalEndSystemInterrupt(OldIrql, NULL);
+        }
+        return;
+    }
+
     Head = (IntId < ARM64_MAX_INTID) ? KiArm64IntTable[IntId] : NULL;
     if (Head != NULL)
     {

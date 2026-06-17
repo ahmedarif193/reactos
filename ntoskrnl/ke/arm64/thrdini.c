@@ -210,13 +210,15 @@ KiIdleLoop(VOID)
         }
 
         KiAcquirePrcbLock(Prcb);
-        if (!Prcb->NextThread)
+        /* Passive consumer: don't run the scheduler here, only drain a thread that
+         * KiDeferredReadyThread left on this core's local ready list (no NextThread/IPI). */
+        if (!Prcb->NextThread && Prcb->ReadySummary)
         {
-            PKTHREAD Candidate = KiIdleSchedule(Prcb);
-            if (Candidate != Prcb->IdleThread)
+            PKTHREAD Ready = KiSelectReadyThread(0, Prcb);
+            if (Ready != NULL)
             {
-                Candidate->State = Standby;
-                Prcb->NextThread = Candidate;
+                Ready->State = Standby;
+                Prcb->NextThread = Ready;
             }
         }
         if (Prcb->NextThread)
@@ -239,6 +241,9 @@ KiIdleLoop(VOID)
             continue;
         }
         KiReleasePrcbLock(Prcb);
+
+        /* Re-advertise this core as idle so KiSelectNextProcessor can hand off to it. */
+        InterlockedOr64((PLONG64)&KiIdleSummary, (LONG64)Prcb->SetMember);
 
         /* WFI wakes on a pending interrupt even with DAIF.I masked; unmasking afterwards takes it immediately */
         __asm__ __volatile__("wfi" ::: "memory");
@@ -385,15 +390,28 @@ KiDispatchInterrupt(VOID)
         OldThread = Prcb->CurrentThread;
         NewThread = Prcb->NextThread;
 
-        KiSetThreadSwapBusy(OldThread);
+        if (OldThread == Prcb->IdleThread)
+        {
+            /* Idle thread is never on a ready list; abandon it instead of queueing
+             * it through KxQueueReadyThread, which would corrupt the lists. */
+            InterlockedAnd64((PLONG64)&KiIdleSummary, (LONG64)~Prcb->SetMember);
+            Prcb->NextThread = NULL;
+            Prcb->CurrentThread = NewThread;
+            NewThread->State = Running;
+            KiReleasePrcbLock(Prcb);
+        }
+        else
+        {
+            KiSetThreadSwapBusy(OldThread);
 
-        Prcb->NextThread = NULL;
-        Prcb->CurrentThread = NewThread;
+            Prcb->NextThread = NULL;
+            Prcb->CurrentThread = NewThread;
 
-        NewThread->State = Running;
-        OldThread->WaitReason = WrDispatchInt;
+            NewThread->State = Running;
+            OldThread->WaitReason = WrDispatchInt;
 
-        KxQueueReadyThread(OldThread, Prcb);
+            KxQueueReadyThread(OldThread, Prcb);
+        }
 
         KiSwapContext(APC_LEVEL, OldThread);
     }
