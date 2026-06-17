@@ -124,6 +124,8 @@ CmpGetValueKeyFromCache(IN PCM_KEY_CONTROL_BLOCK Kcb,
     else
     {
         /* Get the cell index and the key value associated to it */
+        if (Index >= (ULONG)HvGetCellSize(Hive, CellData) / sizeof(HCELL_INDEX))
+            return SearchFail;
         Cell = CellData->u.KeyList[Index];
         KeyValue = (PCM_KEY_VALUE)HvGetCell(Hive, Cell);
         if (!KeyValue) return SearchFail;
