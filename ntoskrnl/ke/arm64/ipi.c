@@ -6,6 +6,7 @@
  */
 
 #include <ntoskrnl.h>
+#include <reactos/smpdbg.h>
 
 #ifdef CONFIG_SMP
 static struct
@@ -47,6 +48,10 @@ KiIpiSend(
     if (TargetSet == 0)
         return;
 
+    if (SmpDbgEnabled)
+        DbgPrint("SMP4DBG ipi-send cpu=%lu request=%lu targets=0x%Ix\n",
+                 KeGetCurrentProcessorNumber(), IpiRequest, (ULONG_PTR)TargetSet);
+
     for (Index = 0, ProcessorMask = 1; Index < KeNumberProcessors; Index++, ProcessorMask <<= 1)
     {
         if (TargetSet & ProcessorMask)
@@ -55,6 +60,9 @@ KiIpiSend(
             if (Prcb != NULL)
             {
                 InterlockedBitTestAndSet((PLONG)&Prcb->RequestSummary, IpiRequest);
+                if (SmpDbgEnabled)
+                    DbgPrint("SMP4DBG ipi-send-target cpu=%lu target=%lu request=%lu\n",
+                             KeGetCurrentProcessorNumber(), Index, IpiRequest);
             }
         }
     }
@@ -117,6 +125,12 @@ KiIpiServiceRoutine(
 #ifdef CONFIG_SMP
     {
         PKPRCB Prcb = KeGetCurrentPrcb();
+
+        /* SMP boot diagnostics (/SMPDIAG): trace each serviced IPI. */
+        if (SmpDbgEnabled)
+            DbgPrint("SMP4DBG ipi-service cpu=%lu request=0x%Ix dpcint=%u next=%p\n",
+                     KeGetCurrentProcessorNumber(), (ULONG_PTR)Prcb->RequestSummary,
+                     Prcb->DpcInterruptRequested, Prcb->NextThread);
 
         /*
          * Check for freeze IPI FIRST, before any other processing.

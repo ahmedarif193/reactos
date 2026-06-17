@@ -11,6 +11,7 @@
 #include <ntoskrnl.h>
 #define NDEBUG
 #include <debug.h>
+#include <reactos/smpdbg.h>
 
 /* FUNCTIONS *****************************************************************/
 
@@ -184,6 +185,9 @@ KeSetEvent(IN PKEVENT Event,
 
     /* Save the Previous State */
     PreviousState = Event->Header.SignalState;
+
+    SMPDBG_TRACE("SMP4DBG ke-setevent locked cpu=%lu prev=%ld\n",
+                 KeGetCurrentProcessorNumber(), (LONG)PreviousState);
 
     /* Set the Event to Signaled */
     Event->Header.SignalState = 1;

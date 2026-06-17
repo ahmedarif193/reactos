@@ -11,6 +11,7 @@
 #include <ntoskrnl.h>
 #define NDEBUG
 #include <debug.h>
+#include <reactos/smpdbg.h>
 
 #ifdef _WIN64
 # define InterlockedOrSetMember(Destination, SetMember) \
@@ -158,6 +159,9 @@ KiDeferredReadyThread(IN PKTHREAD Thread)
     ASSERT(Thread->State == DeferredReady);
     ASSERT((Thread->Priority >= 0) && (Thread->Priority <= HIGH_PRIORITY));
 
+    SMPDBG_TRACE("SMP4DBG ke-deferred-ready enter cpu=%lu prio=%d\n",
+                 KeGetCurrentProcessorNumber(), (int)Thread->Priority);
+
     /* Check if we have any adjusts to do */
     if (Thread->AdjustReason == AdjustBoost)
     {
@@ -302,6 +306,9 @@ KiDeferredReadyThread(IN PKTHREAD Thread)
     Processor = KiSelectNextProcessor(Thread);
     Thread->NextProcessor = Processor;
 
+    SMPDBG_TRACE("SMP4DBG ke-deferred-ready selected cpu=%lu target=%lu\n",
+                 KeGetCurrentProcessorNumber(), (ULONG)Processor);
+
     /* Get the PRCB and lock it */
     Prcb = KiProcessorBlock[Processor];
     KiAcquirePrcbLock(Prcb);
@@ -338,6 +345,9 @@ KiDeferredReadyThread(IN PKTHREAD Thread)
             Thread->State = Standby;
             Prcb->NextThread = Thread;
 
+            SMPDBG_TRACE("SMP4DBG ke-deferred-ready replace-next cpu=%lu target=%lu\n",
+                         KeGetCurrentProcessorNumber(), (ULONG)Processor);
+
             /* Set it in deferred ready mode */
             NextThread->State = DeferredReady;
             NextThread->DeferredProcessor = Prcb->Number;
@@ -358,6 +368,9 @@ KiDeferredReadyThread(IN PKTHREAD Thread)
             /* Set the thread on standby and as the next thread */
             Thread->State = Standby;
             Prcb->NextThread = Thread;
+
+            SMPDBG_TRACE("SMP4DBG ke-deferred-ready set-next cpu=%lu target=%lu\n",
+                         KeGetCurrentProcessorNumber(), (ULONG)Processor);
 
             /* Release the lock */
             KiReleasePrcbLock(Prcb);

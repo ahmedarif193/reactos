@@ -12,6 +12,7 @@
 #include <ntoskrnl.h>
 #define NDEBUG
 #include <debug.h>
+#include <reactos/smpdbg.h>
 
 /* PRIVATE FUNCTIONS *********************************************************/
 
@@ -107,6 +108,9 @@ KiUnwaitThread(IN PKTHREAD Thread,
                IN LONG_PTR WaitStatus,
                IN KPRIORITY Increment)
 {
+    SMPDBG_TRACE("SMP4DBG ke-unwait enter cpu=%lu status=%Ix\n",
+                 KeGetCurrentProcessorNumber(), (ULONG_PTR)WaitStatus);
+
     /* Unlink the thread */
     KiUnlinkThread(Thread, WaitStatus);
 
