@@ -55,7 +55,7 @@ ExpLookupHandleTableEntry(IN PHANDLE_TABLE HandleTable,
     Handle.TagBits = 0;
 
     /* Check if the handle is in the allocated range */
-    if (Handle.Value >= HandleTable->NextHandleNeedingPool)
+    if (Handle.Value >= ReadULongAcquire(&HandleTable->NextHandleNeedingPool))
     {
         return NULL;
     }
