@@ -279,6 +279,10 @@ MiInitializeNonPagedPool(VOID)
 {
     ULONG i;
     PFN_COUNT PoolPages;
+    PFN_COUNT SystemPteMetadataPages;
+    PFN_COUNT BitmapPages;
+    SIZE_T BitmapSize;
+    PULONG ExpansionPteBitmap;
     PMMFREE_POOL_ENTRY FreeEntry, FirstEntry;
     PMMPTE PointerPte;
     PAGED_CODE();
@@ -326,6 +330,37 @@ MiInitializeNonPagedPool(VOID)
     // Calculate how many pages the initial nonpaged pool has
     //
     PoolPages = (PFN_COUNT)BYTES_TO_PAGES(MmSizeOfNonPagedPoolInBytes);
+
+    if (MiSystemPteMetadataSize != 0)
+    {
+        SystemPteMetadataPages = (PFN_COUNT)BYTES_TO_PAGES(MiSystemPteMetadataSize);
+        ASSERT(PoolPages > SystemPteMetadataPages);
+        PoolPages -= SystemPteMetadataPages;
+        MiSystemPteMetadataBuffer = (PMMPTE)((ULONG_PTR)MmNonPagedPoolStart + (PoolPages << PAGE_SHIFT));
+        RtlZeroMemory(MiSystemPteMetadataBuffer, SystemPteMetadataPages << PAGE_SHIFT);
+    }
+
+    //
+    // Calculate the size of the expansion region alone
+    //
+    MiExpansionPoolPagesInitialCharge = (PFN_COUNT)
+    BYTES_TO_PAGES(MmMaximumNonPagedPoolInBytes - MmSizeOfNonPagedPoolInBytes);
+
+    //
+    // Remove 2 pages, since there's a guard page on top and on the bottom
+    //
+    MiExpansionPoolPagesInitialCharge -= 2;
+
+    //
+    // Keep expansion PTE allocator metadata outside the expansion PTE array.
+    //
+    BitmapSize = MiGetNonPagedPoolExpansionPteBitmapSize((ULONG)MiExpansionPoolPagesInitialCharge);
+    BitmapPages = (PFN_COUNT)BYTES_TO_PAGES(BitmapSize);
+    ASSERT(PoolPages > BitmapPages);
+    PoolPages -= BitmapPages;
+    ExpansionPteBitmap = (PULONG)((ULONG_PTR)MmNonPagedPoolStart + (PoolPages << PAGE_SHIFT));
+    RtlZeroMemory(ExpansionPteBitmap, BitmapPages << PAGE_SHIFT);
+
     MmNumberOfFreeNonPagedPool = PoolPages;
 
     //
@@ -380,27 +415,16 @@ MiInitializeNonPagedPool(VOID)
     // Validate the first nonpaged pool expansion page (which is a guard page)
     //
     PointerPte = MiAddressToPte(MmNonPagedPoolExpansionStart);
+#if !defined(_M_AMD64) && !defined(_M_ARM64)
     ASSERT(PointerPte->u.Hard.Valid == 0);
-
-    //
-    // Calculate the size of the expansion region alone
-    //
-    MiExpansionPoolPagesInitialCharge = (PFN_COUNT)
-    BYTES_TO_PAGES(MmMaximumNonPagedPoolInBytes - MmSizeOfNonPagedPoolInBytes);
-
-    //
-    // Remove 2 pages, since there's a guard page on top and on the bottom
-    //
-    MiExpansionPoolPagesInitialCharge -= 2;
+#endif
 
     //
     // Now initialize the nonpaged pool expansion PTE space. Remember there's a
     // guard page on top so make sure to skip it. The bottom guard page will be
     // guaranteed by the fact our size is off by one.
     //
-    MiInitializeSystemPtes(PointerPte + 1,
-                           MiExpansionPoolPagesInitialCharge,
-                           NonPagedPoolExpansion);
+    MiInitializeNonPagedPoolExpansionPtes(PointerPte + 1, (ULONG)MiExpansionPoolPagesInitialCharge, ExpansionPteBitmap);
 }
 
 POOL_TYPE
@@ -676,7 +700,7 @@ MiAllocatePoolPages(IN POOL_TYPE PoolType,
             MI_WRITE_VALID_PTE(PointerPte, TempPte);
             MiInitializePfnForOtherProcess(PageFrameNumber,
                                            PointerPte,
-                                           PFN_FROM_PTE(MiAddressToPde(BaseVa)));
+                                           PFN_FROM_PTE(MiAddressToPde(MiPteToAddress(PointerPte))));
 #else
             MI_WRITE_INVALID_PTE(PointerPte, TempPte);
 #endif
@@ -850,7 +874,7 @@ MiAllocatePoolPages(IN POOL_TYPE PoolType,
     //
     // Allocate some system PTEs
     //
-    StartPte = MiReserveSystemPtes(SizeInPages, NonPagedPoolExpansion);
+    StartPte = MiReserveNonPagedPoolExpansionPtes(SizeInPages);
     PointerPte = StartPte;
     if (StartPte == NULL)
     {
@@ -877,7 +901,7 @@ MiAllocatePoolPages(IN POOL_TYPE PoolType,
         MiReleasePfnLockFromDpcLevel();
         KeReleaseQueuedSpinLock(LockQueueMmNonPagedPoolLock, OldIrql);
 
-        MiReleaseSystemPtes(StartPte, SizeInPages, NonPagedPoolExpansion);
+        MiReleaseNonPagedPoolExpansionPtes(StartPte, SizeInPages);
 
         DPRINT1("OUT OF AVAILABLE PAGES! Required %lu, Available %lu\n", SizeInPages, MmAvailablePages);
 

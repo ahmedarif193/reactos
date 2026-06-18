@@ -115,6 +115,33 @@ MiInitializeSessionSpaceLayout(VOID)
 
 VOID
 NTAPI
+MiMapPXEs(
+    PVOID StartAddress,
+    PVOID EndAddress)
+{
+    PMMPDE PointerPxe;
+    MMPDE TmplPxe = ValidKernelPde;
+
+    /* Loop the PPEs */
+    for (PointerPxe = MiAddressToPxe(StartAddress);
+         PointerPxe <= MiAddressToPxe(EndAddress);
+         PointerPxe++)
+    {
+        /* Check if its already mapped */
+        if (!PointerPxe->u.Hard.Valid)
+        {
+            /* No, map it! */
+            TmplPxe.u.Hard.PageFrameNumber = MxGetNextPage(1);
+            MI_WRITE_VALID_PTE(PointerPxe, TmplPxe);
+
+            /* Zero out the page table */
+            RtlZeroMemory(MiPteToAddress(PointerPxe), PAGE_SIZE);
+        }
+    }
+}
+
+VOID
+NTAPI
 MiMapPPEs(
     PVOID StartAddress,
     PVOID EndAddress)
@@ -194,6 +221,181 @@ MiMapPTEs(
     }
 }
 
+static
+BOOLEAN
+MiAmd64EnsureKernelPageTableEntry(
+    _Inout_ PMMPTE PointerPte)
+{
+    KIRQL OldIrql;
+    PFN_NUMBER PageFrameNumber;
+    MMPTE TempPte;
+
+    if (PointerPte->u.Hard.Valid != 0)
+    {
+        return TRUE;
+    }
+
+    if (KeGetCurrentIrql() > DISPATCH_LEVEL)
+    {
+        return FALSE;
+    }
+
+    if (!MiPfnsInitialized)
+    {
+        PageFrameNumber = MxGetNextPage(1);
+        MI_MAKE_HARDWARE_PTE(&TempPte, PointerPte, MM_EXECUTE_READWRITE, PageFrameNumber);
+        MI_MAKE_DIRTY_PAGE(&TempPte);
+        MI_WRITE_VALID_PTE(PointerPte, TempPte);
+        RtlZeroMemory(MiPteToAddress(PointerPte), PAGE_SIZE);
+        return TRUE;
+    }
+
+    OldIrql = MiAcquirePfnLock();
+    if (PointerPte->u.Hard.Valid != 0)
+    {
+        MiReleasePfnLock(OldIrql);
+        return TRUE;
+    }
+
+    if (PointerPte->u.Long != 0)
+    {
+        ASSERT(FALSE);
+        MiReleasePfnLock(OldIrql);
+        return FALSE;
+    }
+
+    MI_SET_USAGE(MI_USAGE_PAGE_TABLE);
+    PageFrameNumber = MiRemoveZeroPage(MI_GET_NEXT_COLOR());
+    if (PageFrameNumber == 0)
+    {
+        MiReleasePfnLock(OldIrql);
+        return FALSE;
+    }
+
+    MiInitializePfn(PageFrameNumber, PointerPte, TRUE);
+    KeGetCurrentPrcb()->MmDemandZeroCount++;
+    MI_MAKE_HARDWARE_PTE(&TempPte, PointerPte, MM_EXECUTE_READWRITE, PageFrameNumber);
+    MI_MAKE_DIRTY_PAGE(&TempPte);
+    MI_WRITE_VALID_PTE(PointerPte, TempPte);
+    MiReleasePfnLock(OldIrql);
+
+    return TRUE;
+}
+
+static
+BOOLEAN
+MiAmd64EnsureKernelPageTablesValid(
+    _In_ PVOID Address)
+{
+    PMMPDE PointerPde = MiAddressToPde(Address);
+    PMMPPE PointerPpe = MiAddressToPpe(Address);
+    PMMPXE PointerPxe = MiAddressToPxe(Address);
+
+    if (!MiAmd64EnsureKernelPageTableEntry(PointerPxe))
+    {
+        return FALSE;
+    }
+
+    if (!MiAmd64EnsureKernelPageTableEntry(PointerPpe))
+    {
+        return FALSE;
+    }
+
+    if (!MiAmd64EnsureKernelPageTableEntry(PointerPde))
+    {
+        return FALSE;
+    }
+
+    return TRUE;
+}
+
+static
+BOOLEAN
+MiAmd64EnsureKernelPdeRangeBacked(
+    _In_ PVOID BaseVa,
+    _In_ SIZE_T NumberOfBytes)
+{
+    PVOID EndVa;
+    PMMPDE PointerPde, LastPde;
+
+    if (NumberOfBytes == 0)
+    {
+        return TRUE;
+    }
+
+    EndVa = Add2Ptr(BaseVa, NumberOfBytes - 1);
+    PointerPde = MiAddressToPde(BaseVa);
+    LastPde = MiAddressToPde(EndVa);
+    while (PointerPde <= LastPde)
+    {
+        if (!MiAmd64EnsureKernelPageTablesValid(MiPdeToAddress(PointerPde)))
+        {
+            return FALSE;
+        }
+
+        ASSERT(PointerPde->u.Hard.Valid == 1);
+        PointerPde++;
+    }
+
+    return TRUE;
+}
+
+BOOLEAN
+NTAPI
+MiEnsureSystemPtesBacked(
+    _In_ PMMPTE StartingPte,
+    _In_ ULONG NumberOfPtes)
+{
+    ASSERT(NumberOfPtes != 0);
+    return MiAmd64EnsureKernelPdeRangeBacked(MiPteToAddress(StartingPte), (SIZE_T)NumberOfPtes << PAGE_SHIFT);
+}
+
+BOOLEAN
+NTAPI
+MiEnsureNonPagedPoolExpansionPtesBacked(
+    _In_ PMMPTE StartingPte,
+    _In_ ULONG NumberOfPtes)
+{
+    ASSERT(NumberOfPtes != 0);
+    return MiAmd64EnsureKernelPdeRangeBacked(MiPteToAddress(StartingPte - 1), ((SIZE_T)NumberOfPtes + 2) << PAGE_SHIFT);
+}
+
+BOOLEAN
+NTAPI
+MiEnsureSessionPageTablesBacked(
+    _In_ PVOID BaseVa,
+    _In_ SIZE_T NumberOfBytes)
+{
+    PVOID EndVa;
+    PMMPPE PointerPpe, LastPpe;
+
+    if (NumberOfBytes == 0)
+    {
+        return TRUE;
+    }
+
+    /* Leave the session PDEs clear; MiSessionCreateInternal fills them. */
+    EndVa = Add2Ptr(BaseVa, NumberOfBytes - 1);
+    PointerPpe = MiAddressToPpe(BaseVa);
+    LastPpe = MiAddressToPpe(EndVa);
+    while (PointerPpe <= LastPpe)
+    {
+        if (!MiAmd64EnsureKernelPageTableEntry(MiAddressToPxe(MiPpeToAddress(PointerPpe))))
+        {
+            return FALSE;
+        }
+
+        if (!MiAmd64EnsureKernelPageTableEntry(PointerPpe))
+        {
+            return FALSE;
+        }
+
+        PointerPpe++;
+    }
+
+    return TRUE;
+}
+
 CODE_SEG("INIT")
 VOID
 NTAPI
@@ -240,22 +442,23 @@ MiInitializePageTable(VOID)
     /* Create PDPTs (72 KB) for shared system address space,
      * skip page tables TODO: use global pages. */
 
-    /* Loop the PXEs */
-    for (PointerPxe = MiAddressToPxe((PVOID)HYPER_SPACE);
-         PointerPxe <= MiAddressToPxe(MI_HIGHEST_SYSTEM_ADDRESS);
-         PointerPxe++)
+    /* Map the PXEs for all VA regions */
+    for (ULONG i = 0; i < ARRAYSIZE(MiSystemVaRegions); i++)
     {
-        /* Is the PXE already valid? */
-        if (!PointerPxe->u.Hard.Valid)
-        {
-            /* It's not Initialize it */
-            TmplPte.u.Flush.PageFrameNumber = MxGetNextPage(1);
-            *PointerPxe = TmplPte;
+        PMI_SYSTEM_VA_ASSIGNMENT Region = &MiSystemVaRegions[i];
 
-            /* Zero the page. The PXE is the PTE for the PDPT. */
-            RtlZeroMemory(MiPteToAddress(PointerPxe), PAGE_SIZE);
+        if ((Region->BaseAddress == NULL) ||
+            (i == AssignedRegionSystemCache) ||
+            (i == AssignedRegionKernelStacks))
+        {
+            continue;
         }
+
+        /* Map the PXE(s) */
+        MiMapPXEs(Region->BaseAddress,
+            Add2Ptr(Region->BaseAddress, Region->NumberOfBytes - 1));
     }
+
     PxePfn = PFN_FROM_PXE(MiAddressToPxe((PVOID)HYPER_SPACE));
 #if (NTDDI_VERSION >= NTDDI_LONGHORN)
     PsGetCurrentProcess()->Pcb.Unused0 = PxePfn << PAGE_SHIFT;
@@ -264,16 +467,11 @@ MiInitializePageTable(VOID)
 #endif
 
     /* Map PPEs for paged pool */
-    MiMapPPEs(MmPagedPoolStart, MmPagedPoolEnd);
+//    MmPagedPoolEnd = Add2Ptr(MmPagedPoolStart, MmSizeOfPagedPoolInBytes - 1);
+//    MiMapPPEs(MmPagedPoolStart, MmPagedPoolEnd);
 
     /* Setup 1 PPE for hyper space */
     MiMapPPEs((PVOID)HYPER_SPACE, (PVOID)HYPER_SPACE_END);
-
-    /* Setup PPEs for system space view */
-    MiMapPPEs(MiSystemViewStart, (PCHAR)MiSystemViewStart + MmSystemViewSize);
-
-    /* Setup PPEs for system cache views */
-    MiMapPPEs((PVOID)MI_SYSTEM_CACHE_START, (PVOID)MI_SYSTEM_CACHE_END);
 
     /* Setup the mapping PDEs */
     MiMapPDEs((PVOID)MI_MAPPING_RANGE_START, (PVOID)MI_MAPPING_RANGE_END);
@@ -282,11 +480,6 @@ MiInitializePageTable(VOID)
     MmFirstReservedMappingPte = MiAddressToPte((PVOID)MI_MAPPING_RANGE_START);
     MmLastReservedMappingPte = MiAddressToPte((PVOID)MI_MAPPING_RANGE_END);
     MmFirstReservedMappingPte->u.Hard.PageFrameNumber = MI_HYPERSPACE_PTES;
-
-    /* Setup debug mapping PTE */
-    MiMapPPEs((PVOID)MI_DEBUG_MAPPING, (PVOID)MI_DEBUG_MAPPING);
-    MiMapPDEs((PVOID)MI_DEBUG_MAPPING, (PVOID)MI_DEBUG_MAPPING);
-    MmDebugPte = MiAddressToPte((PVOID)MI_DEBUG_MAPPING);
 
     /* Setup PDE and PTEs for VAD bitmap and working set list */
     MiMapPDEs((PVOID)MI_VAD_BITMAP, (PVOID)(MI_WORKING_SET_LIST + PAGE_SIZE - 1));
@@ -298,90 +491,93 @@ VOID
 NTAPI
 MiBuildNonPagedPool(VOID)
 {
-    /* Check if this is a machine with less than 256MB of RAM, and no overide */
-    if ((MmNumberOfPhysicalPages <= MI_MIN_PAGES_FOR_NONPAGED_POOL_TUNING) &&
-        !(MmSizeOfNonPagedPoolInBytes))
+    /* Calculate the size of system RAM in bytes */
+    ULONG64 SizeOfSystemRamInBytes = (ULONG64)MmNumberOfPhysicalPages * PAGE_SIZE;
+    PVOID InitialNonPagedPoolEnd;
+
+    /* Check if we had a registry value for the maximum non-paged pool size percentage */
+    if (MmMaximumNonPagedPoolPercent != 0)
     {
-        /* Force the non paged pool to be 2MB so we can reduce RAM usage */
-        MmSizeOfNonPagedPoolInBytes = 2 * 1024 * 1024;
+        /* Cap the percentage to 90% */
+        if (MmMaximumNonPagedPoolPercent > 90)
+        {
+            MmMaximumNonPagedPoolPercent = 90;
+        }
+    }
+    else
+    {
+        /* Otherwise use default maximum non-paged pool size percentage of 75% */
+        MmMaximumNonPagedPoolPercent = 75;
     }
 
-    /* Check if the user gave a ridicuously large nonpaged pool RAM size */
-    if ((MmSizeOfNonPagedPoolInBytes >> PAGE_SHIFT) >
-        (MmNumberOfPhysicalPages * 7 / 8))
+    /* Now calculate the maximum non-paged pool size */
+    MmMaximumNonPagedPoolInBytes = (SizeOfSystemRamInBytes * MmMaximumNonPagedPoolPercent) / 100;
+
+    /* Round the maximum nonpaged pool size to pages */
+    MmMaximumNonPagedPoolInBytes = ROUND_TO_PAGES(MmMaximumNonPagedPoolInBytes);
+
+    /* Make sure the maximum is within the bounds of the VA region (128 GB) */
+    if (MmMaximumNonPagedPoolInBytes > MiSystemVaRegions[AssignedRegionNonPagedPool].NumberOfBytes)
     {
-        /* More than 7/8ths of RAM was dedicated to nonpaged pool, ignore! */
-        MmSizeOfNonPagedPoolInBytes = 0;
+        MmMaximumNonPagedPoolInBytes = MiSystemVaRegions[AssignedRegionNonPagedPool].NumberOfBytes;
     }
 
-    /* Check if no registry setting was set, or if the setting was too low */
-    if (MmSizeOfNonPagedPoolInBytes < MmMinimumNonPagedPoolSize)
+    /* Check if we had a registry value for the initial non-paged pool size */
+    if (MmSizeOfNonPagedPoolInBytes == 0)
     {
-        /* Start with the minimum (256 KB) and add 32 KB for each MB above 4 */
-        MmSizeOfNonPagedPoolInBytes = MmMinimumNonPagedPoolSize;
-        MmSizeOfNonPagedPoolInBytes += (SIZE_T)((MmNumberOfPhysicalPages - 1024) /
-                                       256) * MmMinAdditionNonPagedPoolPerMb;
+        /* Default initial non-paged pool size is 3% of system RAM */
+        MmSizeOfNonPagedPoolInBytes = (SizeOfSystemRamInBytes * 3 / 100);
     }
 
-    /* Check if the registy setting or our dynamic calculation was too high */
-    if (MmSizeOfNonPagedPoolInBytes > MI_MAX_INIT_NONPAGED_POOL_SIZE)
+    /* Check if this is less than 40 MB */
+    if (MmSizeOfNonPagedPoolInBytes < 40 * _1MB)
     {
-        /* Set it to the maximum */
-        MmSizeOfNonPagedPoolInBytes = MI_MAX_INIT_NONPAGED_POOL_SIZE;
+        /* Check if we have at least 400 MB of RAM */
+        if (SizeOfSystemRamInBytes >= (400 * _1MB))
+        {
+            /* Use 40 MB */
+            MmSizeOfNonPagedPoolInBytes = 40 * _1MB;
+        }
+        else
+        {
+            /* For less than 400 MB of RAM, use 10% of RAM */
+            MmSizeOfNonPagedPoolInBytes = SizeOfSystemRamInBytes / 10;
+        }
     }
 
-    /* Check if a percentage cap was set through the registry */
-    if (MmMaximumNonPagedPoolPercent)
-    {
-        /* Don't feel like supporting this right now */
-        UNIMPLEMENTED;
-    }
+    /* Round the nonpaged pool size to pages */
+    MmSizeOfNonPagedPoolInBytes = ROUND_TO_PAGES(MmSizeOfNonPagedPoolInBytes);
 
-    /* Page-align the nonpaged pool size */
-    MmSizeOfNonPagedPoolInBytes &= ~(PAGE_SIZE - 1);
-
-    /* Now, check if there was a registry size for the maximum size */
-    if (!MmMaximumNonPagedPoolInBytes)
+    /* Make sure the non-paged pool size not larger than the maximum */
+    if (MmSizeOfNonPagedPoolInBytes > MmMaximumNonPagedPoolInBytes)
     {
-        /* Start with the default (1MB) and add 400 KB for each MB above 4 */
-        MmMaximumNonPagedPoolInBytes = MmDefaultMaximumNonPagedPool;
-        MmMaximumNonPagedPoolInBytes += (SIZE_T)((MmNumberOfPhysicalPages - 1024) /
-                                         256) * MmMaxAdditionNonPagedPoolPerMb;
-    }
-
-    /* Don't let the maximum go too high */
-    if (MmMaximumNonPagedPoolInBytes > MI_MAX_NONPAGED_POOL_SIZE)
-    {
-        /* Set it to the upper limit */
-        MmMaximumNonPagedPoolInBytes = MI_MAX_NONPAGED_POOL_SIZE;
+        MmSizeOfNonPagedPoolInBytes = MmMaximumNonPagedPoolInBytes;
     }
 
     /* Convert nonpaged pool size from bytes to pages */
-    MmMaximumNonPagedPoolInPages = MmMaximumNonPagedPoolInBytes >> PAGE_SHIFT;
+    MmMaximumNonPagedPoolInPages = BYTES_TO_PAGES(MmMaximumNonPagedPoolInBytes);
 
-    /* Non paged pool starts after the PFN database */
-    MmNonPagedPoolStart = (PUCHAR)MmPfnDatabase + MxPfnAllocation * PAGE_SIZE;
+    /* Get non paged pool start address */
+    MmNonPagedPoolStart = MiSystemVaRegions[AssignedRegionNonPagedPool].BaseAddress;
 
     /* Calculate the nonpaged pool expansion start region */
-    MmNonPagedPoolExpansionStart = (PCHAR)MmNonPagedPoolStart +
-                                          MmSizeOfNonPagedPoolInBytes;
+    MmNonPagedPoolExpansionStart = Add2Ptr(MmNonPagedPoolStart, MmSizeOfNonPagedPoolInBytes);
     ASSERT(IS_PAGE_ALIGNED(MmNonPagedPoolExpansionStart));
 
     /* And this is where the none paged pool ends */
-    MmNonPagedPoolEnd = (PCHAR)MmNonPagedPoolStart + MmMaximumNonPagedPoolInBytes;
-    ASSERT(MmNonPagedPoolEnd < (PVOID)MM_HAL_VA_START);
+    MmNonPagedPoolEnd = Add2Ptr(MmNonPagedPoolStart, MmMaximumNonPagedPoolInBytes);
+    InitialNonPagedPoolEnd = Add2Ptr(MmNonPagedPoolExpansionStart, -1);
 
-    /* Map PPEs and PDEs for non paged pool (including expansion) */
-    MiMapPPEs(MmNonPagedPoolStart, MmNonPagedPoolEnd);
-    MiMapPDEs(MmNonPagedPoolStart, MmNonPagedPoolEnd);
+    /* Map the initial nonpaged pool. Expansion is backed on demand. */
+    MiMapPPEs(MmNonPagedPoolStart, InitialNonPagedPoolEnd);
+    MiMapPDEs(MmNonPagedPoolStart, InitialNonPagedPoolEnd);
+    MiMapPTEs(MmNonPagedPoolStart, InitialNonPagedPoolEnd);
 
-    /* Map the nonpaged pool PTEs (without expansion) */
-    MiMapPTEs(MmNonPagedPoolStart, (PCHAR)MmNonPagedPoolExpansionStart - 1);
+    MiSystemPteMetadataSize = MiGetSystemPteMetadataSize(MI_NUMBER_SYSTEM_PTES);
 
-    /* Initialize the ARM3 nonpaged pool */
+    /* Initialize the nonpaged pool */
     MiInitializeNonPagedPool();
     MiInitializeNonPagedPoolThresholds();
-
 }
 
 CODE_SEG("INIT")
@@ -397,16 +593,13 @@ MiBuildSystemPteSpace(VOID)
     NonPagedSystemSize = (MmNumberOfSystemPtes + 1) * PAGE_SIZE;
 
     /* Put system PTEs at the start of the system VA space */
-    MiSystemPteSpaceStart = MmNonPagedSystemStart;
+    MiSystemPteSpaceStart = MiSystemVaRegions[AssignedRegionSystemPtes].BaseAddress;
     MiSystemPteSpaceEnd = (PUCHAR)MiSystemPteSpaceStart + NonPagedSystemSize;
-
-    /* Map the PPEs and PDEs for the system PTEs */
-    MiMapPPEs(MiSystemPteSpaceStart, MiSystemPteSpaceEnd);
-    MiMapPDEs(MiSystemPteSpaceStart, MiSystemPteSpaceEnd);
+    MmSystemPteSpaceStart = MiSystemPteSpaceStart;
 
     /* Initialize the system PTE space */
     PointerPte = MiAddressToPte(MiSystemPteSpaceStart);
-    MiInitializeSystemPtes(PointerPte, MmNumberOfSystemPtes, SystemPteSpace);
+    MiInitializeSystemPtes(PointerPte, MmNumberOfSystemPtes, SystemPteSpace, MiSystemPteMetadataBuffer);
 
     /* Reserve system PTEs for zeroing PTEs and clear them */
     MiFirstReservedZeroingPte = MiReserveSystemPtes(MI_ZERO_PTES + 1,
@@ -415,6 +608,10 @@ MiBuildSystemPteSpace(VOID)
 
     /* Set the counter to maximum */
     MiFirstReservedZeroingPte->u.Hard.PageFrameNumber = MI_ZERO_PTES;
+
+    /* Allocate the debug PTE from system PTEs */
+    MmDebugPte = MiReserveSystemPtes(1, SystemPteSpace);
+    MiDebugMapping = MiPteToAddress(MmDebugPte);
 }
 
 static
@@ -714,10 +911,9 @@ MiInitMachineDependent(IN PLOADER_PARAMETER_BLOCK LoaderBlock)
 
     /* Set some hardcoded addresses */
     MmHyperSpaceEnd = (PVOID)HYPER_SPACE_END;
-    MmNonPagedSystemStart = (PVOID)MM_SYSTEM_SPACE_START;
-    MmPfnDatabase = (PVOID)MI_PFN_DATABASE;
+    //MmNonPagedSystemStart = (PVOID)MM_SYSTEM_SPACE_START;
+    MmPfnDatabase = MiSystemVaRegions[AssignedRegionPfnDatabase].BaseAddress;
     MmWorkingSetList = (PVOID)MI_WORKING_SET_LIST;
-
 
 //    PrototypePte.u.Proto.Valid = 1
 //    PrototypePte.u.ReadOnly
@@ -773,7 +969,7 @@ MiInitMachineDependent(IN PLOADER_PARAMETER_BLOCK LoaderBlock)
 
     /* Make sure we have everything we need */
     ASSERT(MmPfnDatabase);
-    ASSERT(MmNonPagedSystemStart);
+    //ASSERT(MmNonPagedSystemStart);
     ASSERT(MmNonPagedPoolStart);
     ASSERT(MmSizeOfNonPagedPoolInBytes);
     ASSERT(MmMaximumNonPagedPoolInBytes);

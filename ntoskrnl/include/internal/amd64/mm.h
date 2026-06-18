@@ -14,19 +14,10 @@
 #define HYPER_SPACE                            0xFFFFF70000000000ULL // 512 GB hyper space [MiVaProcessSpace]
 #define HYPER_SPACE_END                        0xFFFFF77FFFFFFFFFULL
 //#define MI_SHARED_SYSTEM_PAGE                0xFFFFF78000000000ULL
-#define MI_SYSTEM_CACHE_WS_START               0xFFFFF78000001000ULL // 512 GB - 4 KB system cache working set
-//#define MI_LOADER_MAPPINGS                   0xFFFFF80000000000ULL // 512 GB loader mappings aka KSEG0_BASE (NDK) [MiVaBootLoaded]
-#define MM_SYSTEM_SPACE_START                  0xFFFFF88000000000ULL // 128 GB system PTEs [MiVaSystemPtes]
-#define MI_DEBUG_MAPPING                (PVOID)0xFFFFF89FFFFFF000ULL // FIXME should be allocated from System PTEs
-#define MI_PAGED_POOL_START             (PVOID)0xFFFFF8A000000000ULL // 128 GB paged pool [MiVaPagedPool]
-//#define MI_PAGED_POOL_END                    0xFFFFF8BFFFFFFFFFULL
-//#define MI_SESSION_SPACE_START               0xFFFFF90000000000ULL // 512 GB session space [MiVaSessionSpace]
+#define MI_LOADER_MAPPINGS                     0xFFFFF80000000000ULL // 512 GB loader mappings aka KSEG0_BASE (NDK) [MiVaBootLoaded]
+#define MI_SESSION_SPACE_START                 0xFFFFF90000000000ULL // 512 GB session space [MiVaSessionSpace]
 //#define MI_SESSION_VIEW_END                    0xFFFFF97FFF000000ULL
 #define MI_SESSION_SPACE_END                   0xFFFFF98000000000ULL
-#define MI_SYSTEM_CACHE_START                  0xFFFFF98000000000ULL // 1 TB system cache (on Vista+ this is dynamic VA space) [MiVaSystemCache,MiVaSpecialPoolPaged,MiVaSpecialPoolNonPaged]
-#define MI_SYSTEM_CACHE_END                    0xFFFFFA7FFFFFFFFFULL
-#define MI_PFN_DATABASE                        0xFFFFFA8000000000ULL // up to 5.5 TB PFN database followed by non paged pool [MiVaPfnDatabase/MiVaNonPagedPool]
-#define MI_NONPAGED_POOL_END            (PVOID)0xFFFFFFFFFFBFFFFFULL
 //#define MM_HAL_VA_START                      0xFFFFFFFFFFC00000ULL // 4 MB HAL mappings, defined in NDK [MiVaHal]
 #define MI_HIGHEST_SYSTEM_ADDRESS       (PVOID)0xFFFFFFFFFFFFFFFFULL
 #define MmSystemRangeStart              ((PVOID)MI_REAL_SYSTEM_RANGE_START)
@@ -35,14 +26,10 @@
 #define MM_HIGHEST_USER_ADDRESS_WOW64   0x7FFEFFFF
 #define MM_SYSTEM_RANGE_START_WOW64     0x80000000
 
-/* The size of the virtual memory area that is mapped using a single PDE */
-#define PDE_MAPPED_VA (PTE_PER_PAGE * PAGE_SIZE)
-
 /* Misc address definitions */
 //#define MI_NON_PAGED_SYSTEM_START_MIN   MM_SYSTEM_SPACE_START // FIXME
 //#define MI_SYSTEM_PTE_START             MM_SYSTEM_SPACE_START
 //#define MI_SYSTEM_PTE_END               (MI_SYSTEM_PTE_START + MI_NUMBER_SYSTEM_PTES * PAGE_SIZE - 1)
-#define MI_SYSTEM_PTE_BASE              (PVOID)MiAddressToPte(KSEG0_BASE)
 #define MM_HIGHEST_VAD_ADDRESS          (PVOID)((ULONG_PTR)MM_HIGHEST_USER_ADDRESS - (16 * PAGE_SIZE))
 #define MI_MAPPING_RANGE_START          HYPER_SPACE
 #define MI_MAPPING_RANGE_END            (MI_MAPPING_RANGE_START + MI_HYPERSPACE_PTES * PAGE_SIZE)
@@ -379,4 +366,3 @@ MiIsPdeForAddressValid(PVOID Address)
             (MiAddressToPpe(Address)->u.Hard.Valid) &&
             (MiAddressToPde(Address)->u.Hard.Valid));
 }
-

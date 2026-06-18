@@ -46,6 +46,11 @@ MmDeleteSectionAssociationForPageTable(PFN_NUMBER Page,
                                        PCACHE_SECTION_PAGE_TABLE PageTable,
                                        ULONG RawOffset);
 
+PVOID
+MiRosFindSystemCacheView(
+    _In_ PMMSUPPORT AddressSpace,
+    _In_ SIZE_T ViewSize);
+
 /* io.c **********************************************************************/
 
 NTSTATUS

@@ -18,13 +18,14 @@
 
 /* GLOBALS ********************************************************************/
 
-PMMPTE MmSystemPteBase;
 PMMPTE MmSystemPtesStart[MaximumPtePoolTypes];
 PMMPTE MmSystemPtesEnd[MaximumPtePoolTypes];
 MMPTE MmFirstFreeSystemPte[MaximumPtePoolTypes];
 ULONG MmTotalFreeSystemPtes[MaximumPtePoolTypes];
 ULONG MmTotalSystemPtes;
 ULONG MiNumberOfExtraSystemPdes;
+PMMPTE MiSystemPteMetadataBuffer;
+SIZE_T MiSystemPteMetadataSize;
 const ULONG MmSysPteIndex[5] = { 1, 2, 4, 8, 16 };
 const UCHAR MmSysPteTables[] = { 0, // 1
                                  0, // 1
@@ -34,11 +35,13 @@ const UCHAR MmSysPteTables[] = { 0, // 1
                                  4, 4, 4, 4, 4, 4, 4, 4 // 16
                                };
 LONG MmSysPteListBySizeCount[5];
+static PMMPTE MiSystemPteListBase[MaximumPtePoolTypes];
+static RTL_BITMAP MiNonPagedPoolExpansionPteBitmap;
 
 /* PRIVATE FUNCTIONS **********************************************************/
 
 //
-// The free System Page Table Entries are stored in a bunch of clusters,
+// The free generic System Page Table Entries are stored in a bunch of clusters,
 // each consisting of one or more PTEs.  These PTE clusters are connected
 // in a singly linked list, ordered by increasing cluster size.
 //
@@ -67,6 +70,34 @@ LONG MmSysPteListBySizeCount[5];
 //
 
 FORCEINLINE
+PMMPTE
+MiSystemPteListFromOffset(IN MMSYSTEM_PTE_POOL_TYPE PoolType, IN ULONG Offset)
+{
+    PMMPTE ListBase = MiSystemPteListBase[PoolType];
+
+    ASSERT(Offset != MM_EMPTY_PTE_LIST);
+    if (ListBase == NULL)
+        ListBase = MmSystemPtesStart[PoolType];
+
+    ASSERT(Offset <= (ULONG)(MmSystemPtesEnd[PoolType] - MmSystemPtesStart[PoolType]));
+    return ListBase + Offset;
+}
+
+FORCEINLINE
+ULONG
+MiSystemPteListToOffset(IN MMSYSTEM_PTE_POOL_TYPE PoolType, IN PMMPTE ListPte)
+{
+    PMMPTE ListBase = MiSystemPteListBase[PoolType];
+
+    if (ListBase == NULL)
+        ListBase = MmSystemPtesStart[PoolType];
+
+    ASSERT(ListPte >= ListBase);
+    ASSERT((ULONG)(ListPte - ListBase) <= (ULONG)(MmSystemPtesEnd[PoolType] - MmSystemPtesStart[PoolType]));
+    return (ULONG)(ListPte - ListBase);
+}
+
+FORCEINLINE
 ULONG
 MI_GET_CLUSTER_SIZE(IN PMMPTE Pte)
 {
@@ -83,6 +114,20 @@ MI_GET_CLUSTER_SIZE(IN PMMPTE Pte)
     return (ULONG)Pte->u.List.NextEntry;
 }
 
+static
+BOOLEAN
+MiEnsureSystemPteRangeBacked(
+    _In_ PMMPTE StartingPte,
+    _In_ ULONG NumberOfPtes,
+    _In_ MMSYSTEM_PTE_POOL_TYPE SystemPtePoolType);
+
+static
+VOID
+MiReleaseSystemPtesToFreeList(
+    _In_ PMMPTE StartingPte,
+    _In_ ULONG NumberOfPtes,
+    _In_ MMSYSTEM_PTE_POOL_TYPE SystemPtePoolType);
+
 PMMPTE
 NTAPI
 MiReserveAlignedSystemPtes(IN ULONG NumberOfPtes,
@@ -91,7 +136,8 @@ MiReserveAlignedSystemPtes(IN ULONG NumberOfPtes,
 {
     KIRQL OldIrql;
     PMMPTE PreviousPte, NextPte, ReturnPte;
-    ULONG ClusterSize;
+    PMMPTE ReturnListPte;
+    ULONG ClusterSize, ClusterOffset, ReturnOffset;
 
     //
     // Sanity check
@@ -113,7 +159,7 @@ MiReserveAlignedSystemPtes(IN ULONG NumberOfPtes,
         //
         // Get the next cluster and its size
         //
-        NextPte = MmSystemPteBase + PreviousPte->u.List.NextEntry;
+        NextPte = MiSystemPteListFromOffset(SystemPtePoolType, PreviousPte->u.List.NextEntry);
         ClusterSize = MI_GET_CLUSTER_SIZE(NextPte);
 
         //
@@ -143,6 +189,7 @@ MiReserveAlignedSystemPtes(IN ULONG NumberOfPtes,
     //
     // Unlink the cluster
     //
+    ClusterOffset = PreviousPte->u.List.NextEntry;
     PreviousPte->u.List.NextEntry = NextPte->u.List.NextEntry;
 
     //
@@ -153,7 +200,7 @@ MiReserveAlignedSystemPtes(IN ULONG NumberOfPtes,
         //
         // Return the first PTE of this cluster
         //
-        ReturnPte = NextPte;
+        ReturnOffset = ClusterOffset;
 
         //
         // Zero the cluster
@@ -171,7 +218,8 @@ MiReserveAlignedSystemPtes(IN ULONG NumberOfPtes,
         // Divide the cluster into two parts
         //
         ClusterSize -= NumberOfPtes;
-        ReturnPte = NextPte + ClusterSize;
+        ReturnOffset = ClusterOffset + ClusterSize;
+        ReturnListPte = MiSystemPteListFromOffset(SystemPtePoolType, ReturnOffset);
 
         //
         // Set the size of the first cluster, zero the second if needed
@@ -179,7 +227,7 @@ MiReserveAlignedSystemPtes(IN ULONG NumberOfPtes,
         if (ClusterSize == 1)
         {
             NextPte->u.List.OneEntry = 1;
-            ReturnPte->u.Long = 0;
+            ReturnListPte->u.Long = 0;
         }
         else
         {
@@ -197,7 +245,7 @@ MiReserveAlignedSystemPtes(IN ULONG NumberOfPtes,
             //
             // Get the next cluster
             //
-            NextPte = MmSystemPteBase + PreviousPte->u.List.NextEntry;
+            NextPte = MiSystemPteListFromOffset(SystemPtePoolType, PreviousPte->u.List.NextEntry);
 
             //
             // Check if the cluster to insert is smaller or of equal size
@@ -214,11 +262,13 @@ MiReserveAlignedSystemPtes(IN ULONG NumberOfPtes,
         //
         // Retrieve the first cluster and link it back into the cluster list
         //
-        NextPte = ReturnPte - ClusterSize;
+        NextPte = MiSystemPteListFromOffset(SystemPtePoolType, ClusterOffset);
 
         NextPte->u.List.NextEntry = PreviousPte->u.List.NextEntry;
-        PreviousPte->u.List.NextEntry = NextPte - MmSystemPteBase;
+        PreviousPte->u.List.NextEntry = MiSystemPteListToOffset(SystemPtePoolType, NextPte);
     }
+
+    ReturnPte = MiSystemPteFromOffset(SystemPtePoolType, ReturnOffset);
 
     //
     // Decrease availability
@@ -229,6 +279,14 @@ MiReserveAlignedSystemPtes(IN ULONG NumberOfPtes,
     // Release the System PTE lock
     //
     KeReleaseQueuedSpinLock(LockQueueSystemSpaceLock, OldIrql);
+
+    if (!MiEnsureSystemPteRangeBacked(ReturnPte, NumberOfPtes, SystemPtePoolType))
+    {
+        MiReleaseSystemPtesToFreeList(ReturnPte, NumberOfPtes, SystemPtePoolType);
+        return NULL;
+    }
+
+    RtlZeroMemory(ReturnPte, NumberOfPtes * sizeof(MMPTE));
 
     //
     // Flush the TLB
@@ -261,15 +319,32 @@ MiReserveSystemPtes(IN ULONG NumberOfPtes,
     return PointerPte;
 }
 
+static
+BOOLEAN
+MiEnsureSystemPteRangeBacked(
+    _In_ PMMPTE StartingPte,
+    _In_ ULONG NumberOfPtes,
+    _In_ MMSYSTEM_PTE_POOL_TYPE SystemPtePoolType)
+{
+#if defined(_M_AMD64) || defined(_M_ARM64)
+    if (SystemPtePoolType == SystemPteSpace)
+    {
+        return MiEnsureSystemPtesBacked(StartingPte, NumberOfPtes);
+    }
+#endif
+    return TRUE;
+}
+
+static
 VOID
-NTAPI
-MiReleaseSystemPtes(IN PMMPTE StartingPte,
-                    IN ULONG NumberOfPtes,
-                    IN MMSYSTEM_PTE_POOL_TYPE SystemPtePoolType)
+MiReleaseSystemPtesToFreeList(
+    _In_ PMMPTE StartingPte,
+    _In_ ULONG NumberOfPtes,
+    _In_ MMSYSTEM_PTE_POOL_TYPE SystemPtePoolType)
 {
     KIRQL OldIrql;
-    ULONG ClusterSize;
-    PMMPTE PreviousPte, NextPte, InsertPte;
+    ULONG ClusterSize, StartingOffset, NextOffset;
+    PMMPTE PreviousPte, NextPte, InsertPte, StartingListPte;
 
     //
     // Check to make sure the PTE address is within bounds
@@ -278,10 +353,8 @@ MiReleaseSystemPtes(IN PMMPTE StartingPte,
     ASSERT(StartingPte >= MmSystemPtesStart[SystemPtePoolType]);
     ASSERT(StartingPte + NumberOfPtes - 1 <= MmSystemPtesEnd[SystemPtePoolType]);
 
-    //
-    // Zero PTEs
-    //
-    RtlZeroMemory(StartingPte, NumberOfPtes * sizeof(MMPTE));
+    StartingOffset = MiSystemPteToOffset(SystemPtePoolType, StartingPte);
+    StartingListPte = MiSystemPteListFromOffset(SystemPtePoolType, StartingOffset);
 
     //
     // Acquire the System PTE lock
@@ -304,22 +377,26 @@ MiReleaseSystemPtes(IN PMMPTE StartingPte,
         //
         // Get the next cluster and its size
         //
-        NextPte = MmSystemPteBase + PreviousPte->u.List.NextEntry;
+        NextOffset = PreviousPte->u.List.NextEntry;
+        NextPte = MiSystemPteListFromOffset(SystemPtePoolType, NextOffset);
         ClusterSize = MI_GET_CLUSTER_SIZE(NextPte);
 
         //
         // Check if this cluster is adjacent to the PTEs being released
         //
-        if ((NextPte + ClusterSize == StartingPte) ||
-            (StartingPte + NumberOfPtes == NextPte))
+        if ((NextOffset + ClusterSize == StartingOffset) ||
+            (StartingOffset + NumberOfPtes == NextOffset))
         {
             //
             // Add the PTEs in the cluster to the PTEs being released
             //
             NumberOfPtes += ClusterSize;
 
-            if (NextPte < StartingPte)
-                StartingPte = NextPte;
+            if (NextOffset < StartingOffset)
+            {
+                StartingOffset = NextOffset;
+                StartingListPte = NextPte;
+            }
 
             //
             // Unlink this cluster and zero it
@@ -364,19 +441,19 @@ MiReleaseSystemPtes(IN PMMPTE StartingPte,
     //
     if (NumberOfPtes != 1)
     {
-        StartingPte->u.List.OneEntry = 0;
+        StartingListPte->u.List.OneEntry = 0;
 
-        NextPte = StartingPte + 1;
+        NextPte = StartingListPte + 1;
         NextPte->u.List.NextEntry = NumberOfPtes;
     }
     else
-        StartingPte->u.List.OneEntry = 1;
+        StartingListPte->u.List.OneEntry = 1;
 
     //
     // Link the new cluster into the cluster list at the insertion location
     //
-    StartingPte->u.List.NextEntry = InsertPte->u.List.NextEntry;
-    InsertPte->u.List.NextEntry = StartingPte - MmSystemPteBase;
+    StartingListPte->u.List.NextEntry = InsertPte->u.List.NextEntry;
+    InsertPte->u.List.NextEntry = StartingOffset;
 
     //
     // Release the System PTE lock
@@ -384,46 +461,147 @@ MiReleaseSystemPtes(IN PMMPTE StartingPte,
     KeReleaseQueuedSpinLock(LockQueueSystemSpaceLock, OldIrql);
 }
 
+VOID
+NTAPI
+MiReleaseSystemPtes(IN PMMPTE StartingPte,
+                    IN ULONG NumberOfPtes,
+                    IN MMSYSTEM_PTE_POOL_TYPE SystemPtePoolType)
+{
+    //
+    // Check to make sure the PTE address is within bounds
+    //
+    ASSERT(NumberOfPtes != 0);
+    ASSERT(StartingPte >= MmSystemPtesStart[SystemPtePoolType]);
+    ASSERT(StartingPte + NumberOfPtes - 1 <= MmSystemPtesEnd[SystemPtePoolType]);
+
+    //
+    // Zero PTEs
+    //
+    RtlZeroMemory(StartingPte, NumberOfPtes * sizeof(MMPTE));
+    MiReleaseSystemPtesToFreeList(StartingPte, NumberOfPtes, SystemPtePoolType);
+}
+
+PMMPTE
+NTAPI
+MiReserveNonPagedPoolExpansionPtes(IN ULONG NumberOfPtes)
+{
+    KIRQL OldIrql;
+    ULONG BitIndex;
+    PMMPTE StartingPte;
+    BOOLEAN Backed = TRUE;
+
+    OldIrql = KeAcquireQueuedSpinLock(LockQueueSystemSpaceLock);
+    BitIndex = RtlFindClearBitsAndSet(&MiNonPagedPoolExpansionPteBitmap, NumberOfPtes, 0);
+    if (BitIndex == 0xFFFFFFFF)
+    {
+        KeReleaseQueuedSpinLock(LockQueueSystemSpaceLock, OldIrql);
+        return NULL;
+    }
+
+    MmTotalFreeSystemPtes[NonPagedPoolExpansion] -= NumberOfPtes;
+    KeReleaseQueuedSpinLock(LockQueueSystemSpaceLock, OldIrql);
+
+    StartingPte = MiSystemPteFromOffset(NonPagedPoolExpansion, BitIndex);
+#if defined(_M_AMD64) || defined(_M_ARM64)
+    Backed = MiEnsureNonPagedPoolExpansionPtesBacked(StartingPte, NumberOfPtes);
+#endif
+
+    if (!Backed)
+    {
+        OldIrql = KeAcquireQueuedSpinLock(LockQueueSystemSpaceLock);
+        RtlClearBits(&MiNonPagedPoolExpansionPteBitmap, BitIndex, NumberOfPtes);
+        MmTotalFreeSystemPtes[NonPagedPoolExpansion] += NumberOfPtes;
+        KeReleaseQueuedSpinLock(LockQueueSystemSpaceLock, OldIrql);
+        return NULL;
+    }
+
+#if !defined(_M_ARM64)
+    KeFlushProcessTb();
+#endif
+
+    return StartingPte;
+}
+
+VOID
+NTAPI
+MiReleaseNonPagedPoolExpansionPtes(IN PMMPTE StartingPte, IN ULONG NumberOfPtes)
+{
+    KIRQL OldIrql;
+    ULONG BitIndex;
+
+    ASSERT(NumberOfPtes != 0);
+    ASSERT(StartingPte >= MmSystemPtesStart[NonPagedPoolExpansion]);
+    ASSERT(StartingPte + NumberOfPtes - 1 <= MmSystemPtesEnd[NonPagedPoolExpansion]);
+
+    RtlZeroMemory(StartingPte, NumberOfPtes * sizeof(MMPTE));
+
+    BitIndex = MiSystemPteToOffset(NonPagedPoolExpansion, StartingPte);
+    OldIrql = KeAcquireQueuedSpinLock(LockQueueSystemSpaceLock);
+    RtlClearBits(&MiNonPagedPoolExpansionPteBitmap, BitIndex, NumberOfPtes);
+    MmTotalFreeSystemPtes[NonPagedPoolExpansion] += NumberOfPtes;
+    KeReleaseQueuedSpinLock(LockQueueSystemSpaceLock, OldIrql);
+}
+
+CODE_SEG("INIT")
+SIZE_T
+NTAPI
+MiGetSystemPteMetadataSize(IN ULONG NumberOfPtes)
+{
+    return NumberOfPtes * sizeof(MMPTE);
+}
+
 CODE_SEG("INIT")
 VOID
 NTAPI
 MiInitializeSystemPtes(IN PMMPTE StartingPte,
                        IN ULONG NumberOfPtes,
-                       IN MMSYSTEM_PTE_POOL_TYPE PoolType)
+                       IN MMSYSTEM_PTE_POOL_TYPE PoolType,
+                       IN PMMPTE MetadataBuffer)
 {
+    PMMPTE ListPte;
+
     //
     // Sanity checks
     //
     ASSERT(NumberOfPtes >= 1);
+    ASSERT((PoolType != SystemPteSpace) || (MiSystemPteMetadataSize == 0) || (MetadataBuffer != NULL));
 
     //
     // Set the starting and ending PTE addresses for this space
     //
-    MmSystemPteBase = MI_SYSTEM_PTE_BASE;
     MmSystemPtesStart[PoolType] = StartingPte;
     MmSystemPtesEnd[PoolType] = StartingPte + NumberOfPtes - 1;
     DPRINT("System PTE space for %d starting at: %p and ending at: %p\n",
            PoolType, MmSystemPtesStart[PoolType], MmSystemPtesEnd[PoolType]);
 
-    //
-    // Clear all the PTEs to start with
-    //
-    RtlZeroMemory(StartingPte, NumberOfPtes * sizeof(MMPTE));
+    MiSystemPteListBase[PoolType] = MetadataBuffer;
+
+    if (MetadataBuffer != NULL)
+    {
+        RtlZeroMemory(MetadataBuffer, MiGetSystemPteMetadataSize(NumberOfPtes));
+    }
+    else
+    {
+        //
+        // Clear all the PTEs to start with
+        //
+        RtlZeroMemory(StartingPte, NumberOfPtes * sizeof(MMPTE));
+    }
 
     //
     // Make the first entry free and link it
     //
-    StartingPte->u.List.NextEntry = MM_EMPTY_PTE_LIST;
+    ListPte = MiSystemPteListFromOffset(PoolType, 0);
+    ListPte->u.List.NextEntry = MM_EMPTY_PTE_LIST;
     MmFirstFreeSystemPte[PoolType].u.Long = 0;
-    MmFirstFreeSystemPte[PoolType].u.List.NextEntry = StartingPte -
-                                                      MmSystemPteBase;
+    MmFirstFreeSystemPte[PoolType].u.List.NextEntry = MiSystemPteToOffset(PoolType, StartingPte);
 
     //
     // The second entry stores the size of this PTE space
     //
-    StartingPte++;
-    StartingPte->u.Long = 0;
-    StartingPte->u.List.NextEntry = NumberOfPtes;
+    ListPte++;
+    ListPte->u.Long = 0;
+    ListPte->u.List.NextEntry = NumberOfPtes;
 
     //
     // We also keep a global for it
@@ -440,6 +618,34 @@ MiInitializeSystemPtes(IN PMMPTE StartingPte,
         //
         MmTotalSystemPtes = NumberOfPtes;
     }
+}
+
+CODE_SEG("INIT")
+SIZE_T
+NTAPI
+MiGetNonPagedPoolExpansionPteBitmapSize(IN ULONG NumberOfPtes)
+{
+    return ((NumberOfPtes + 31) / 32) * sizeof(ULONG);
+}
+
+CODE_SEG("INIT")
+VOID
+NTAPI
+MiInitializeNonPagedPoolExpansionPtes(IN PMMPTE StartingPte, IN ULONG NumberOfPtes, IN PULONG BitmapBuffer)
+{
+    ASSERT(NumberOfPtes >= 1);
+    ASSERT(BitmapBuffer != NULL);
+
+    MmSystemPtesStart[NonPagedPoolExpansion] = StartingPte;
+    MmSystemPtesEnd[NonPagedPoolExpansion] = StartingPte + NumberOfPtes - 1;
+    DPRINT("System PTE space for %d starting at: %p and ending at: %p\n",
+           NonPagedPoolExpansion,
+           MmSystemPtesStart[NonPagedPoolExpansion],
+           MmSystemPtesEnd[NonPagedPoolExpansion]);
+
+    RtlInitializeBitMap(&MiNonPagedPoolExpansionPteBitmap, BitmapBuffer, NumberOfPtes);
+    RtlClearAllBits(&MiNonPagedPoolExpansionPteBitmap);
+    MmTotalFreeSystemPtes[NonPagedPoolExpansion] = NumberOfPtes;
 }
 
 /* EOF */

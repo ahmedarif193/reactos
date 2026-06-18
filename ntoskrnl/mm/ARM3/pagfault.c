@@ -594,6 +594,63 @@ MiCheckPdeForPagedPool(IN PVOID Address)
     //
     return Status;
 }
+#elif defined(_M_ARM64)
+NTSTATUS
+FASTCALL
+MiCheckPdeForPagedPool(IN PVOID Address)
+{
+    PVOID PoolAddress;
+    PMMPDE PointerPde;
+    PFN_NUMBER PageFrameIndex;
+    PFN_NUMBER PteFrame;
+    NTSTATUS Status = STATUS_SUCCESS;
+
+    if (MI_IS_SYSTEM_PAGE_TABLE_ADDRESS(Address))
+    {
+        PoolAddress = MiPteToAddress((PMMPTE)Address);
+        PointerPde = (PMMPDE)MiAddressToPte(Address);
+        Status = STATUS_WAIT_1;
+    }
+    else if (Address < MmSystemRangeStart)
+    {
+        return STATUS_ACCESS_VIOLATION;
+    }
+    else
+    {
+        PoolAddress = Address;
+        PointerPde = MiAddressToPde(Address);
+    }
+
+    if ((PoolAddress < MmPagedPoolStart) || (PoolAddress > MmPagedPoolEnd))
+    {
+        return STATUS_ACCESS_VIOLATION;
+    }
+
+    if (!MiEnsurePagedPoolPdeBacked(PoolAddress))
+    {
+        return STATUS_NO_MEMORY;
+    }
+
+    if (PointerPde->u.Hard.Valid == 0)
+    {
+        NTSTATUS PfnStatus;
+
+        MI_SET_USAGE(MI_USAGE_PAGED_POOL);
+        MI_SET_PROCESS2("Kernel");
+        PteFrame = PFN_FROM_PTE(MiAddressToPpe(PoolAddress));
+        PfnStatus = MiInitializeAndChargePfn(&PageFrameIndex, PointerPde, PteFrame, FALSE);
+        if (PfnStatus == STATUS_RETRY)
+        {
+            return Status;
+        }
+        if (!NT_SUCCESS(PfnStatus))
+        {
+            return PfnStatus;
+        }
+    }
+
+    return Status;
+}
 #else
 NTSTATUS
 FASTCALL
@@ -907,6 +964,70 @@ MiResolveDemandZeroFault(IN PVOID Address,
     //
     DPRINT("Demand zero page has now been paged in\n");
     return STATUS_PAGE_FAULT_DEMAND_ZERO;
+}
+
+VOID
+NTAPI
+MiMakeKernelPageTableValid(
+    _In_ PVOID Address)
+{
+    PEPROCESS CurrentProcess = PsGetCurrentProcess();
+    PMMPTE PointerPte = MiAddressToPte(Address);
+    PMMPDE PointerPde = MiAddressToPde(Address);
+
+#if (_MI_PAGING_LEVELS >= 3)
+    PMMPPE PointerPpe = MiAddressToPpe(Address);
+
+#if defined(_M_AMD64)
+    /* Check if the PXE is valid */
+    PMMPXE PointerPxe = MiAddressToPxe(Address);
+    if (PointerPxe->u.Hard.Valid == 0)
+    {
+        /* Right now, we only handle scenarios where the PXE is totally empty */
+        ASSERT(PointerPxe->u.Long == 0);
+
+        /* Resolve a demand zero fault */
+        MiResolveDemandZeroFault(PointerPpe, PointerPxe, MM_EXECUTE_READWRITE, CurrentProcess, MM_NOIRQL);
+
+        /* We should come back with a valid PXE */
+        ASSERT(PointerPxe->u.Hard.Valid == 1);
+    }
+#endif
+
+    /* Check if the PPE is valid */
+    if (PointerPpe->u.Hard.Valid == 0)
+    {
+        /* Right now, we only handle scenarios where the PPE is totally empty */
+        ASSERT(PointerPpe->u.Long == 0);
+
+        /* Resolve a demand zero fault */
+        MiResolveDemandZeroFault(PointerPde,
+                                 PointerPpe,
+                                 MM_EXECUTE_READWRITE,
+                                 CurrentProcess,
+                                 MM_NOIRQL);
+
+        /* We should come back with a valid PPE */
+        ASSERT(PointerPpe->u.Hard.Valid == 1);
+    }
+#endif
+
+    /* Check if the PDE is valid */
+    if (PointerPde->u.Hard.Valid == 0)
+    {
+        /* Right now, we only handle scenarios where the PPE is totally empty */
+        ASSERT(PointerPde->u.Long == 0);
+
+        /* Resolve a demand zero fault */
+        MiResolveDemandZeroFault(PointerPte,
+                                 PointerPde,
+                                 MM_EXECUTE_READWRITE,
+                                 CurrentProcess,
+                                 MM_NOIRQL);
+
+        /* We should come back with a valid PPE */
+        ASSERT(PointerPde->u.Hard.Valid == 1);
+    }
 }
 
 static
@@ -2026,6 +2147,8 @@ MmArmAccessFault(IN ULONG FaultCode,
 
 #if (_MI_PAGING_LEVELS == 2)
         if (MI_IS_SYSTEM_PAGE_TABLE_ADDRESS(Address)) MiSynchronizeSystemPde((PMMPDE)PointerPte);
+        MiCheckPdeForPagedPool(Address);
+#elif defined(_M_ARM64)
         MiCheckPdeForPagedPool(Address);
 #endif
 

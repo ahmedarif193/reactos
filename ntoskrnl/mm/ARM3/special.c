@@ -21,7 +21,6 @@
 #include <mm/ARM3/miarm.h>
 
 extern ULONG ExpPoolFlags;
-extern PMMPTE MmSystemPteBase;
 
 PMMPTE
 NTAPI
@@ -169,7 +168,7 @@ MiInitializeSpecialPool(VOID)
     for (i = 0; i < PTE_PER_PAGE / 2; i++)
     {
         /* Point it to the next entry */
-        PointerPte->u.List.NextEntry = &PointerPte[2] - MmSystemPteBase;
+        PointerPte->u.List.NextEntry = MiSystemPteToOffset(SystemPteSpace, &PointerPte[2]);
 
         /* Move to the next pair */
         PointerPte += 2;
@@ -214,13 +213,13 @@ MmExpandSpecialPool(VOID)
     PointerPte = MiSpecialPoolExtra;
     ASSERT(MiSpecialPoolFirstPte == MiSpecialPoolLastPte);
     ASSERT(MiSpecialPoolFirstPte->u.List.NextEntry == MM_EMPTY_PTE_LIST);
-    MiSpecialPoolFirstPte->u.List.NextEntry = PointerPte - MmSystemPteBase;
+    MiSpecialPoolFirstPte->u.List.NextEntry = MiSystemPteToOffset(SystemPteSpace, PointerPte);
 
     ASSERT(MiSpecialPoolExtraCount >= PTE_PER_PAGE);
     for (i = 0; i < PTE_PER_PAGE / 2; i++)
     {
         /* Point it to the next entry */
-        PointerPte->u.List.NextEntry = &PointerPte[2] - MmSystemPteBase;
+        PointerPte->u.List.NextEntry = MiSystemPteToOffset(SystemPteSpace, &PointerPte[2]);
 
         /* Move to the next pair */
         PointerPte += 2;
@@ -325,7 +324,7 @@ MmAllocateSpecialPool(SIZE_T NumberOfBytes, ULONG Tag, POOL_TYPE PoolType, ULONG
     PointerPte = MiSpecialPoolFirstPte;
 
     /* Set the first PTE pointer to the next one in the list */
-    MiSpecialPoolFirstPte = MmSystemPteBase + PointerPte->u.List.NextEntry;
+    MiSpecialPoolFirstPte = MiSystemPteFromOffset(SystemPteSpace, PointerPte->u.List.NextEntry);
 
     /* Allocate a physical page */
     if (PoolType == PagedPool)
@@ -634,7 +633,7 @@ MmFreeSpecialPool(PVOID P)
     ASSERT(MiSpecialPoolLastPte->u.List.NextEntry == MM_EMPTY_PTE_LIST);
 
     /* Update the current last PTE next pointer */
-    MiSpecialPoolLastPte->u.List.NextEntry = PointerPte - MmSystemPteBase;
+    MiSpecialPoolLastPte->u.List.NextEntry = MiSystemPteToOffset(SystemPteSpace, PointerPte);
 
     /* PointerPte becomes the new last PTE */
     PointerPte->u.List.NextEntry = MM_EMPTY_PTE_LIST;

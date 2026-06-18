@@ -376,6 +376,9 @@ PspCreateProcess(OUT PHANDLE ProcessHandle,
     SECURITY_SUBJECT_CONTEXT SubjectContext;
     BOOLEAN NeedsPeb = FALSE;
     INITIAL_PEB InitialPeb;
+#if MI_TRACE_PFNS
+    PFN_NUMBER DirectoryTableBasePfn;
+#endif
     PAGED_CODE();
     PSTRACE(PS_PROCESS_DEBUG,
             "ProcessHandle: %p Parent: %p\n", ProcessHandle, ParentProcess);
@@ -716,7 +719,12 @@ PspCreateProcess(OUT PHANDLE ProcessHandle,
 
 #if MI_TRACE_PFNS
     /* Copy the process name now that we have it */
-    memcpy(MiGetPfnEntry(Process->Pcb.DirectoryTableBase[0] >> PAGE_SHIFT)->ProcessName, Process->ImageFileName, 16);
+#if defined(_M_ARM64)
+    DirectoryTableBasePfn = (Process->Pcb.DirectoryTableBase[0] & ARM64_PTE_ADDR_MASK) >> PAGE_SHIFT;
+#else
+    DirectoryTableBasePfn = Process->Pcb.DirectoryTableBase[0] >> PAGE_SHIFT;
+#endif
+    memcpy(MiGetPfnEntry(DirectoryTableBasePfn)->ProcessName, Process->ImageFileName, 16);
     if (Process->Pcb.DirectoryTableBase[1]) memcpy(MiGetPfnEntry(Process->Pcb.DirectoryTableBase[1] >> PAGE_SHIFT)->ProcessName, Process->ImageFileName, 16);
     if (Process->WorkingSetPage) memcpy(MiGetPfnEntry(Process->WorkingSetPage)->ProcessName, Process->ImageFileName, 16);
 #endif

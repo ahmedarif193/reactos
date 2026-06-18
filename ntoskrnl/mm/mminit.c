@@ -56,6 +56,56 @@ MiCreateArm3StaticMemoryArea(PVOID BaseAddress, SIZE_T Size, BOOLEAN Executable)
     // TODO: Perhaps it would be  prudent to bugcheck here, not only assert?
 }
 
+#if defined(_M_AMD64) || defined(_M_ARM64)
+CODE_SEG("INIT")
+static
+VOID
+MiSize64BitPagedPool(VOID)
+{
+    if (MmSizeOfPagedPoolInBytes < MI_MIN_INIT_PAGED_POOLSIZE)
+    {
+        MmSizeOfPagedPoolInBytes = MI_MIN_INIT_PAGED_POOLSIZE;
+    }
+
+    MmSizeOfPagedPoolInBytes = ALIGN_UP_BY(MmSizeOfPagedPoolInBytes, PDE_MAPPED_VA);
+    MmSizeOfPagedPoolInPages = MmSizeOfPagedPoolInBytes >> PAGE_SHIFT;
+    MmPagedPoolEnd = Add2Ptr(MmPagedPoolStart, MmSizeOfPagedPoolInBytes - 1);
+}
+
+CODE_SEG("INIT")
+static
+VOID
+MiReserveAssignedSystemVaRegions(VOID)
+{
+    PMI_SYSTEM_VA_ASSIGNMENT Region;
+    ULONG i;
+
+    for (i = 0; i < ARRAYSIZE(MiSystemVaRegions); i++)
+    {
+        Region = &MiSystemVaRegions[i];
+
+        if (Region->BaseAddress == NULL)
+        {
+            continue;
+        }
+
+#ifdef _M_AMD64
+        if (i == AssignedRegionSystemPtes)
+        {
+            continue;
+        }
+#endif
+
+        if ((i == AssignedRegionSystemCache) || (i == AssignedRegionNonPagedPool) || (i == AssignedRegionPagedPool))
+        {
+            continue;
+        }
+
+        MiCreateArm3StaticMemoryArea(Region->BaseAddress, Region->NumberOfBytes, FALSE);
+    }
+}
+#endif
+
 CODE_SEG("INIT")
 VOID
 NTAPI
@@ -68,30 +118,25 @@ MiInitSystemMemoryAreas(VOID)
     MmLockAddressSpace(MmGetKernelAddressSpace());
 
 #if defined(_M_AMD64) || defined(_M_ARM64)
-    // Reserved range FFFF800000000000 - FFFFF68000000000
-    MiCreateArm3StaticMemoryArea((PVOID)MI_REAL_SYSTEM_RANGE_START, PTE_BASE - MI_REAL_SYSTEM_RANGE_START, FALSE);
+    MiSize64BitPagedPool();
+    MiReserveAssignedSystemVaRegions();
+    MiCreateArm3StaticMemoryArea((PVOID)KI_USER_SHARED_DATA, PAGE_SIZE, FALSE);
+    MiCreateArm3StaticMemoryArea(MmNonPagedPoolStart, MmMaximumNonPagedPoolInBytes, FALSE);
+    MiCreateArm3StaticMemoryArea(MmPagedPoolStart, MmSizeOfPagedPoolInBytes, FALSE);
+#ifdef _M_AMD64
+    MiCreateArm3StaticMemoryArea(MmSystemPteSpaceStart, (MmNumberOfSystemPtes + 1) * PAGE_SIZE, FALSE);
 #endif
+#ifdef _M_ARM64
+    MiCreateArm3StaticMemoryArea((PVOID)KSEG0_BASE, max(((ULONG64)MmHighestPhysicalPage + 1) << PAGE_SHIFT, PXE_MAPPED_VA), FALSE);
+    MiCreateArm3StaticMemoryArea((PVOID)MI_SYSTEM_SPACE_START, 128 * _1GB, FALSE);
+    MiCreateArm3StaticMemoryArea((PVOID)MI_ARM64_PHYS_MAP_BASE, 0ULL - MI_ARM64_PHYS_MAP_BASE, FALSE);
+#else
+    MiCreateArm3StaticMemoryArea((PVOID)MM_HAL_VA_START, MM_HAL_VA_END - MM_HAL_VA_START + 1, FALSE);
+#endif
+#else /* _M_AMD64 || _M_ARM64 */
 
     // The loader mappings. The only Executable area.
-#ifdef _M_ARM64
-    MiCreateArm3StaticMemoryArea((PVOID)MI_ARM64_BOOT_IMAGE_BASE, MmBootImageSize, TRUE);
-#else
     MiCreateArm3StaticMemoryArea((PVOID)KSEG0_BASE, MmBootImageSize, TRUE);
-#endif
-
-#ifdef _M_ARM64
-    /*
-     * The boot image lives in the first Win64-style loader slot. Keep the
-     * rest of that slot out of the generic memory-area allocator.
-     */
-    if ((MI_ARM64_BOOT_IMAGE_BASE + MmBootImageSize) < MI_SYSTEM_SPACE_START)
-    {
-        MiCreateArm3StaticMemoryArea((PVOID)(MI_ARM64_BOOT_IMAGE_BASE + MmBootImageSize),
-                                     MI_SYSTEM_SPACE_START -
-                                         (MI_ARM64_BOOT_IMAGE_BASE + MmBootImageSize),
-                                     FALSE);
-    }
-#endif
 
     // The PTE base
     MiCreateArm3StaticMemoryArea((PVOID)PTE_BASE, PTE_TOP - PTE_BASE + 1, FALSE);
@@ -127,16 +172,13 @@ MiInitSystemMemoryAreas(VOID)
     // Reserved HAL area (includes KUSER_SHARED_DATA and KPCR)
     MiCreateArm3StaticMemoryArea((PVOID)MM_HAL_VA_START, MM_HAL_VA_END - MM_HAL_VA_START + 1, FALSE);
 #else /* _X86_ */
-#ifndef _M_AMD64
-#if !defined(_M_ARM64)
     // KPCR, one page per CPU. Only for 32-bit kernel.
     MiCreateArm3StaticMemoryArea(PCR, PAGE_SIZE * KeNumberProcessors, FALSE);
-#endif
-#endif /* _M_AMD64 */
 
     // KUSER_SHARED_DATA
     MiCreateArm3StaticMemoryArea((PVOID)KI_USER_SHARED_DATA, PAGE_SIZE, FALSE);
 #endif /* _X86_ */
+#endif /* _M_AMD64 || _M_ARM64 */
 
     MmUnlockAddressSpace(MmGetKernelAddressSpace());
 }

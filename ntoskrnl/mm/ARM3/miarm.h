@@ -15,9 +15,10 @@ extern "C" {
 #define MI_LOWEST_VAD_ADDRESS                   (PVOID)MM_LOWEST_USER_ADDRESS
 
 /* Make the code cleaner with some definitions for size multiples */
-#define _1KB (1024u)
+#define _1KB ((SIZE_T)1024u)
 #define _1MB (1024 * _1KB)
 #define _1GB (1024 * _1MB)
+#define _1TB (1024 * _1GB)
 
 #if defined(_M_ARM64)
 #define MI_ARM64_BOOT_POOL_SIZING_PAGES ((512 * _1MB) / PAGE_SIZE)
@@ -651,6 +652,8 @@ extern SIZE_T MmMinimumStackCommitInBytes;
 extern PFN_COUNT MiExpansionPoolPagesInitialCharge;
 extern PFN_NUMBER MmResidentAvailableAtInit;
 extern ULONG MmTotalFreeSystemPtes[MaximumPtePoolTypes];
+extern PMMPTE MiSystemPteMetadataBuffer;
+extern SIZE_T MiSystemPteMetadataSize;
 extern PFN_NUMBER MmTotalSystemDriverPages;
 extern ULONG MmCritsectTimeoutSeconds;
 extern PVOID MiSessionImageStart;
@@ -684,6 +687,28 @@ extern LARGE_INTEGER MmCriticalSectionTimeout;
 extern LIST_ENTRY MmWorkingSetExpansionHead;
 extern KSPIN_LOCK MmExpansionLock;
 extern PETHREAD MiExpansionLockOwner;
+
+FORCEINLINE
+ULONG
+MiSystemPteToOffset(
+    IN MMSYSTEM_PTE_POOL_TYPE PoolType,
+    IN PMMPTE PointerPte)
+{
+    ASSERT(PointerPte >= MmSystemPtesStart[PoolType]);
+    ASSERT(PointerPte <= MmSystemPtesEnd[PoolType]);
+    return (ULONG)(PointerPte - MmSystemPtesStart[PoolType]);
+}
+
+FORCEINLINE
+PMMPTE
+MiSystemPteFromOffset(
+    IN MMSYSTEM_PTE_POOL_TYPE PoolType,
+    IN ULONG Offset)
+{
+    ASSERT(Offset != MM_EMPTY_PTE_LIST);
+    ASSERT(Offset <= (ULONG)(MmSystemPtesEnd[PoolType] - MmSystemPtesStart[PoolType]));
+    return MmSystemPtesStart[PoolType] + Offset;
+}
 
 FORCEINLINE
 BOOLEAN
@@ -2227,12 +2252,36 @@ MiInitializeSessionPool(
 );
 
 CODE_SEG("INIT")
+SIZE_T
+NTAPI
+MiGetSystemPteMetadataSize(
+    IN ULONG NumberOfPtes
+);
+
+CODE_SEG("INIT")
 VOID
 NTAPI
 MiInitializeSystemPtes(
     IN PMMPTE StartingPte,
     IN ULONG NumberOfPtes,
-    IN MMSYSTEM_PTE_POOL_TYPE PoolType
+    IN MMSYSTEM_PTE_POOL_TYPE PoolType,
+    IN PMMPTE MetadataBuffer
+);
+
+CODE_SEG("INIT")
+SIZE_T
+NTAPI
+MiGetNonPagedPoolExpansionPteBitmapSize(
+    IN ULONG NumberOfPtes
+);
+
+CODE_SEG("INIT")
+VOID
+NTAPI
+MiInitializeNonPagedPoolExpansionPtes(
+    IN PMMPTE StartingPte,
+    IN ULONG NumberOfPtes,
+    IN PULONG BitmapBuffer
 );
 
 PMMPTE
@@ -2250,6 +2299,67 @@ MiReleaseSystemPtes(
     IN MMSYSTEM_PTE_POOL_TYPE SystemPtePoolType
 );
 
+PMMPTE
+NTAPI
+MiReserveNonPagedPoolExpansionPtes(
+    IN ULONG NumberOfPtes
+);
+
+#if defined(_M_AMD64) || defined(_M_ARM64)
+BOOLEAN
+NTAPI
+MiEnsureSystemPtesBacked(
+    _In_ PMMPTE StartingPte,
+    _In_ ULONG NumberOfPtes);
+
+BOOLEAN
+NTAPI
+MiEnsureNonPagedPoolExpansionPtesBacked(
+    _In_ PMMPTE StartingPte,
+    _In_ ULONG NumberOfPtes);
+#endif
+
+#if defined(_M_AMD64) || defined(_M_ARM64)
+BOOLEAN
+NTAPI
+MiEnsureSessionPageTablesBacked(
+    _In_ PVOID BaseVa,
+    _In_ SIZE_T NumberOfBytes);
+#endif
+
+#if defined(_M_ARM64)
+BOOLEAN
+NTAPI
+MiEnsurePagedPoolPdeBacked(
+    _In_ PVOID Address);
+
+PFN_NUMBER
+MiArm64AllocatePageTablePage(VOID);
+
+VOID
+MiArm64InitializePageTablePfn(
+    _In_ PFN_NUMBER PageFrameIndex,
+    _In_ PVOID PteAddress,
+    _In_ PFN_NUMBER PteFrame);
+
+BOOLEAN
+MiArm64IsPfnDatabaseReady(VOID);
+
+VOID
+MiArm64AssignProcessAsid(
+    _Inout_ PULONG_PTR DirectoryTableBase);
+
+VOID
+MiArm64ReleaseProcessAsid(
+    _Inout_ PEPROCESS Process);
+#endif
+
+VOID
+NTAPI
+MiReleaseNonPagedPoolExpansionPtes(
+    IN PMMPTE StartingPte,
+    IN ULONG NumberOfPtes
+);
 
 PFN_NUMBER
 NTAPI
