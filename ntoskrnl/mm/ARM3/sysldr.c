@@ -46,6 +46,281 @@ ULONG_PTR MmPteCodeStart, MmPteCodeEnd;
 
 /* FUNCTIONS ******************************************************************/
 
+static
+BOOLEAN
+MiSysLdrImageRangeValid(
+    _In_ PVOID ImageBase,
+    _In_ ULONG ImageSize,
+    _In_ ULONG Rva,
+    _In_ SIZE_T Size)
+{
+    UNREFERENCED_PARAMETER(ImageBase);
+
+    if (Rva >= ImageSize)
+        return FALSE;
+
+    if (Size > ImageSize - Rva)
+        return FALSE;
+
+    return TRUE;
+}
+
+static
+BOOLEAN
+MiSysLdrImagePointerValid(
+    _In_ PVOID ImageBase,
+    _In_ ULONG ImageSize,
+    _In_ PVOID Address,
+    _In_ SIZE_T Size)
+{
+    ULONG_PTR Base = (ULONG_PTR)ImageBase;
+    ULONG_PTR Pointer = (ULONG_PTR)Address;
+
+    if (Pointer < Base)
+        return FALSE;
+
+    if (Pointer - Base > MAXULONG)
+        return FALSE;
+
+    return MiSysLdrImageRangeValid(ImageBase, ImageSize, (ULONG)(Pointer - Base), Size);
+}
+
+#if defined(_M_ARM64)
+static
+VOID
+MiSysLdrArm64CleanInvalidateVa(
+    _In_ PVOID Address,
+    _In_ SIZE_T Size)
+{
+    ULONG64 Ctr;
+    ULONG DLine;
+    ULONG_PTR Start, End, Va;
+
+    __asm__ __volatile__("mrs %0, ctr_el0" : "=r"(Ctr));
+    DLine = 4u << ((Ctr >> 16) & 0xF);
+    Start = (ULONG_PTR)Address & ~(ULONG_PTR)(DLine - 1);
+    End = ((ULONG_PTR)Address + Size + DLine - 1) & ~(ULONG_PTR)(DLine - 1);
+
+    for (Va = Start; Va < End; Va += DLine)
+    {
+        __asm__ __volatile__("dc civac, %0" :: "r"(Va) : "memory");
+    }
+
+    __asm__ __volatile__("dsb sy\n\tisb" ::: "memory");
+}
+
+static
+BOOLEAN
+MiSysLdrProbeImportDirectoryCoherency(
+    _In_ PVOID ImageBase,
+    _In_ ULONG ImageSize,
+    _In_ PIMAGE_IMPORT_DESCRIPTOR ImportDescriptor,
+    _In_ ULONG ImportSize,
+    _In_ ULONG ImportDescriptorCount,
+    _In_ PIMAGE_IMPORT_DESCRIPTOR FailingDescriptor)
+{
+    IMAGE_IMPORT_DESCRIPTOR Before, After;
+    PMMPTE PointerPte;
+    MMPTE Pte;
+    PHYSICAL_ADDRESS PhysicalAddress;
+    PFN_NUMBER PtePfn, PhysicalPfn;
+    BOOLEAN ValidAfter;
+
+    RtlCopyMemory(&Before, FailingDescriptor, sizeof(Before));
+
+    PointerPte = MiAddressToPte(FailingDescriptor);
+    Pte.u.Long = ((volatile MMPTE*)PointerPte)->u.Long;
+    PtePfn = PFN_FROM_PTE(&Pte);
+    PhysicalAddress = MmGetPhysicalAddress(FailingDescriptor);
+    PhysicalPfn = (PFN_NUMBER)(PhysicalAddress.QuadPart >> PAGE_SHIFT);
+
+    DPRINT1("[SYSLDRCOH] before VA=%p PTEVA=%p PTE=%I64x PTEPFN=%Ix PA=%I64x PAPFN=%Ix ImageBase=%p Size=%lx Dir=%p DirSize=%lu Count=%lu Desc={OFT=%lx TDS=%lx FWD=%lx Name=%lx FT=%lx}\n",
+            FailingDescriptor,
+            PointerPte,
+            Pte.u.Long,
+            PtePfn,
+            PhysicalAddress.QuadPart,
+            PhysicalPfn,
+            ImageBase,
+            ImageSize,
+            ImportDescriptor,
+            ImportSize,
+            ImportDescriptorCount,
+            Before.OriginalFirstThunk,
+            Before.TimeDateStamp,
+            Before.ForwarderChain,
+            Before.Name,
+            Before.FirstThunk);
+
+    MiSysLdrArm64CleanInvalidateVa(FailingDescriptor, sizeof(*FailingDescriptor));
+    RtlCopyMemory(&After, FailingDescriptor, sizeof(After));
+
+    ValidAfter = !After.OriginalFirstThunk &&
+                 !After.TimeDateStamp &&
+                 !After.ForwarderChain &&
+                 !After.Name &&
+                 !After.FirstThunk;
+
+    DPRINT1("[SYSLDRCOH] after VA=%p verdict=%s Desc={OFT=%lx TDS=%lx FWD=%lx Name=%lx FT=%lx}\n",
+            FailingDescriptor,
+            ValidAfter ? "VALID_AFTER_CIVAC" : "STILL_BAD_AFTER_CIVAC",
+            After.OriginalFirstThunk,
+            After.TimeDateStamp,
+            After.ForwarderChain,
+            After.Name,
+            After.FirstThunk);
+
+    return ValidAfter;
+}
+#endif
+
+static
+BOOLEAN
+MiSysLdrImageStringValid(
+    _In_ PVOID ImageBase,
+    _In_ ULONG ImageSize,
+    _In_ ULONG Rva,
+    _Out_ PCHAR *String)
+{
+    PCHAR Current;
+    ULONG Offset;
+
+    if (!MiSysLdrImageRangeValid(ImageBase, ImageSize, Rva, 1))
+        return FALSE;
+
+    Current = Add2Ptr(ImageBase, Rva);
+    Offset = Rva;
+
+    while (Offset < ImageSize)
+    {
+        if (*Current == ANSI_NULL)
+        {
+            *String = Add2Ptr(ImageBase, Rva);
+            return TRUE;
+        }
+
+        Current++;
+        Offset++;
+    }
+
+    return FALSE;
+}
+
+static
+BOOLEAN
+MiSysLdrImportTargetValid(
+    _In_ PVOID ImageBase,
+    _In_ ULONG ImageSize,
+    _In_ ULONG_PTR Function)
+{
+    ULONG_PTR Base = (ULONG_PTR)ImageBase;
+
+#if defined(_M_ARM64)
+    if (Function < (ULONG_PTR)KSEG0_BASE)
+#else
+    if (Function < (ULONG_PTR)MmSystemRangeStart)
+#endif
+        return FALSE;
+
+    if ((Function >= Base) && (Function < (Base + ImageSize)))
+        return FALSE;
+
+    return TRUE;
+}
+
+NTSTATUS
+NTAPI
+MmValidateSystemImageImports(
+    _In_ PVOID ImageBase,
+    _In_ ULONG ImageSize)
+{
+    PIMAGE_IMPORT_DESCRIPTOR ImportDescriptor;
+    PIMAGE_IMPORT_DESCRIPTOR CurrentImport;
+    PIMAGE_THUNK_DATA FirstThunk;
+    ULONG ImportSize, ImportDescriptorCount, DescriptorIndex;
+
+    ImportDescriptor = RtlImageDirectoryEntryToData(ImageBase,
+                                                    TRUE,
+                                                    IMAGE_DIRECTORY_ENTRY_IMPORT,
+                                                    &ImportSize);
+    if (!ImportDescriptor)
+        return STATUS_SUCCESS;
+
+    if ((ImportSize < sizeof(IMAGE_IMPORT_DESCRIPTOR)) ||
+        !MiSysLdrImagePointerValid(ImageBase, ImageSize, ImportDescriptor, ImportSize))
+    {
+        return STATUS_INVALID_IMAGE_FORMAT;
+    }
+
+    ImportDescriptorCount = ImportSize / sizeof(IMAGE_IMPORT_DESCRIPTOR);
+    for (DescriptorIndex = 0;
+         DescriptorIndex < ImportDescriptorCount;
+         DescriptorIndex++)
+    {
+        CurrentImport = &ImportDescriptor[DescriptorIndex];
+        if (!CurrentImport->Name &&
+            !CurrentImport->OriginalFirstThunk &&
+            !CurrentImport->FirstThunk)
+        {
+            break;
+        }
+
+        if (!CurrentImport->Name ||
+            !CurrentImport->OriginalFirstThunk ||
+            !CurrentImport->FirstThunk)
+        {
+            DPRINT1("[SYSLDRIMP] invalid import descriptor ImageBase=%p Size=%lx Index=%lu Desc=%p NameRva=%lx OFT=%lx FT=%lx\n",
+                    ImageBase,
+                    ImageSize,
+                    DescriptorIndex,
+                    CurrentImport,
+                    CurrentImport->Name,
+                    CurrentImport->OriginalFirstThunk,
+                    CurrentImport->FirstThunk);
+            return STATUS_INVALID_IMAGE_FORMAT;
+        }
+
+        FirstThunk = (PVOID)((ULONG_PTR)ImageBase +
+                             CurrentImport->FirstThunk);
+
+        while (TRUE)
+        {
+            if (!MiSysLdrImagePointerValid(ImageBase,
+                                           ImageSize,
+                                           FirstThunk,
+                                           sizeof(*FirstThunk)))
+            {
+                DPRINT1("[SYSLDRIMP] unterminated snapped IAT ImageBase=%p Size=%lx Index=%lu First=%p\n",
+                        ImageBase,
+                        ImageSize,
+                        DescriptorIndex,
+                        FirstThunk);
+                return STATUS_INVALID_IMAGE_FORMAT;
+            }
+
+            if (!FirstThunk->u1.Function)
+                break;
+
+            if (!MiSysLdrImportTargetValid(ImageBase,
+                                           ImageSize,
+                                           FirstThunk->u1.Function))
+            {
+                DPRINT1("[SYSLDRIMP] raw snapped IAT entry ImageBase=%p Size=%lx Index=%lu First=%p Target=%p\n",
+                        ImageBase,
+                        ImageSize,
+                        DescriptorIndex,
+                        FirstThunk,
+                        (PVOID)FirstThunk->u1.Function);
+                return STATUS_INVALID_IMAGE_FORMAT;
+            }
+
+            FirstThunk++;
+        }
+    }
+
+    return STATUS_SUCCESS;
+}
+
 PVOID
 NTAPI
 MiCacheImageSymbols(IN PVOID BaseAddress)
@@ -206,6 +481,7 @@ MiLoadImageSection(_Inout_ PSECTION *SectionPtr,
     RtlCopyMemory(DriverBase, Base, PteCount << PAGE_SHIFT);
 #if defined(_M_ARM64)
     KeSweepICache(DriverBase, PteCount << PAGE_SHIFT);
+    KeSweepICache(NULL, 0);
 #endif
 
     /* Now unmap the view */
@@ -776,6 +1052,7 @@ MiSnapThunk(IN PVOID DllBase,
     PIMAGE_IMPORT_BY_NAME ForwardName;
     SIZE_T ForwardLength;
     IMAGE_THUNK_DATA ForwardThunk;
+    ULONG_PTR AddressOfData;
 
     PAGED_CODE();
 
@@ -791,8 +1068,9 @@ MiSnapThunk(IN PVOID DllBase,
     else
     {
         /* Get the VA if we don't have to snap */
-        if (!SnapForwarder) Name->u1.AddressOfData += (ULONG_PTR)ImageBase;
-        NameImport = (PIMAGE_IMPORT_BY_NAME)Name->u1.AddressOfData;
+        AddressOfData = Name->u1.AddressOfData;
+        if (!SnapForwarder) AddressOfData += (ULONG_PTR)ImageBase;
+        NameImport = (PIMAGE_IMPORT_BY_NAME)AddressOfData;
 
         /* Copy the procedure name */
         RtlStringCbCopyA(*MissingApi,
@@ -1050,7 +1328,8 @@ MiResolveImageReferences(IN PVOID ImageBase,
     PCHAR MissingApiBuffer = *MissingApi, ImportName;
     PIMAGE_IMPORT_DESCRIPTOR ImportDescriptor, CurrentImport;
     ULONG ImportSize, ImportCount = 0, LoadedImportsSize, ExportSize;
-    PLOAD_IMPORTS LoadedImports, NewImports;
+    ULONG ImageSize, ImportDescriptorCount, DescriptorIndex;
+    PLOAD_IMPORTS LoadedImports = NULL, NewImports;
     ULONG i;
     BOOLEAN GdiLink, NormalLink;
     BOOLEAN ReferenceNeeded, Loaded;
@@ -1062,11 +1341,18 @@ MiResolveImageReferences(IN PVOID ImageBase,
     PIMAGE_EXPORT_DIRECTORY ExportDirectory;
     NTSTATUS Status;
     PIMAGE_THUNK_DATA OrigThunk, FirstThunk;
+    PIMAGE_NT_HEADERS NtHeader;
 
     PAGED_CODE();
 
     DPRINT("%s - ImageBase: %p. ImageFileDirectory: %wZ\n",
            __FUNCTION__, ImageBase, ImageFileDirectory);
+
+    NtHeader = RtlImageNtHeader(ImageBase);
+    if (!NtHeader)
+        return STATUS_INVALID_IMAGE_FORMAT;
+
+    ImageSize = NtHeader->OptionalHeader.SizeOfImage;
 
     /* No name string buffer yet */
     NameString.Buffer = NULL;
@@ -1081,13 +1367,87 @@ MiResolveImageReferences(IN PVOID ImageBase,
                                                     &ImportSize);
     if (!ImportDescriptor) return STATUS_SUCCESS;
 
-    /* Loop all imports to count them */
-    for (CurrentImport = ImportDescriptor;
-         (CurrentImport->Name) && (CurrentImport->OriginalFirstThunk);
-         CurrentImport++)
+    if ((ImportSize < sizeof(IMAGE_IMPORT_DESCRIPTOR)) ||
+        !MiSysLdrImagePointerValid(ImageBase, ImageSize, ImportDescriptor, ImportSize))
     {
+        DPRINT1("[SYSLDRIMP] invalid import directory ImageBase=%p Size=%lx Dir=%p DirSize=%lu\n",
+                ImageBase, ImageSize, ImportDescriptor, ImportSize);
+        return STATUS_INVALID_IMAGE_FORMAT;
+    }
+
+    ImportDescriptorCount = ImportSize / sizeof(IMAGE_IMPORT_DESCRIPTOR);
+
+    /* Loop all imports to count them */
+    for (DescriptorIndex = 0;
+         DescriptorIndex < ImportDescriptorCount;
+         DescriptorIndex++)
+    {
+        CurrentImport = &ImportDescriptor[DescriptorIndex];
+        if (!CurrentImport->Name &&
+            !CurrentImport->OriginalFirstThunk &&
+            !CurrentImport->FirstThunk)
+        {
+            break;
+        }
+
+        if (!CurrentImport->Name ||
+            !CurrentImport->OriginalFirstThunk ||
+            !CurrentImport->FirstThunk)
+        {
+            DPRINT1("[SYSLDRIMP] invalid import descriptor ImageBase=%p Size=%lx Index=%lu Desc=%p NameRva=%lx OFT=%lx FT=%lx\n",
+                    ImageBase,
+                    ImageSize,
+                    DescriptorIndex,
+                    CurrentImport,
+                    CurrentImport->Name,
+                    CurrentImport->OriginalFirstThunk,
+                    CurrentImport->FirstThunk);
+            return STATUS_INVALID_IMAGE_FORMAT;
+        }
+
         /* One more */
         ImportCount++;
+    }
+
+    if (DescriptorIndex == ImportDescriptorCount)
+    {
+        CurrentImport = &ImportDescriptor[DescriptorIndex];
+
+        if (!MiSysLdrImagePointerValid(ImageBase,
+                                       ImageSize,
+                                       CurrentImport,
+                                       sizeof(*CurrentImport)) ||
+            CurrentImport->OriginalFirstThunk ||
+            CurrentImport->TimeDateStamp ||
+            CurrentImport->ForwarderChain ||
+            CurrentImport->Name ||
+            CurrentImport->FirstThunk)
+        {
+#if defined(_M_ARM64)
+            if (MiSysLdrImagePointerValid(ImageBase,
+                                          ImageSize,
+                                          CurrentImport,
+                                          sizeof(*CurrentImport)) &&
+                MiSysLdrProbeImportDirectoryCoherency(ImageBase,
+                                                      ImageSize,
+                                                      ImportDescriptor,
+                                                      ImportSize,
+                                                      ImportDescriptorCount,
+                                                      CurrentImport))
+            {
+                DPRINT1("[SYSLDRIMP] unterminated import directory recovered after dc civac ImageBase=%p Dir=%p Count=%lu\n",
+                        ImageBase,
+                        ImportDescriptor,
+                        ImportDescriptorCount);
+            }
+            else
+#endif
+            {
+            DPRINT1("[SYSLDRIMP] unterminated import directory ImageBase=%p Size=%lx Dir=%p DirSize=%lu Count=%lu\n",
+                    ImageBase, ImageSize, ImportDescriptor, ImportSize, ImportDescriptorCount);
+            return STATUS_INVALID_IMAGE_FORMAT;
+            }
+        }
     }
 
     /* Make sure we have non-zero imports */
@@ -1114,10 +1474,83 @@ MiResolveImageReferences(IN PVOID ImageBase,
     /* Reset the import count and loop descriptors again */
     GdiLink = NormalLink = FALSE;
     ImportCount = 0;
-    while ((ImportDescriptor->Name) && (ImportDescriptor->OriginalFirstThunk))
+    DescriptorIndex = 0;
+    while ((DescriptorIndex < ImportDescriptorCount) &&
+           (ImportDescriptor->Name) &&
+           (ImportDescriptor->OriginalFirstThunk) &&
+           (ImportDescriptor->FirstThunk))
     {
         /* Get the name */
-        ImportName = (PCHAR)((ULONG_PTR)ImageBase + ImportDescriptor->Name);
+        if (!MiSysLdrImageStringValid(ImageBase,
+                                      ImageSize,
+                                      ImportDescriptor->Name,
+                                      &ImportName))
+        {
+            DPRINT1("[SYSLDRIMP] invalid import name ImageBase=%p Size=%lx Index=%lu Desc=%p NameRva=%lx OFT=%lx FT=%lx\n",
+                    ImageBase,
+                    ImageSize,
+                    DescriptorIndex,
+                    ImportDescriptor,
+                    ImportDescriptor->Name,
+                    ImportDescriptor->OriginalFirstThunk,
+                    ImportDescriptor->FirstThunk);
+            Status = STATUS_INVALID_IMAGE_FORMAT;
+            goto Failure;
+        }
+
+        if (!*ImportName)
+        {
+            DPRINT1("[SYSLDRIMP] empty import name ImageBase=%p Size=%lx Index=%lu Desc=%p NameRva=%lx OFT=%lx FT=%lx\n",
+                    ImageBase,
+                    ImageSize,
+                    DescriptorIndex,
+                    ImportDescriptor,
+                    ImportDescriptor->Name,
+                    ImportDescriptor->OriginalFirstThunk,
+                    ImportDescriptor->FirstThunk);
+#if defined(_M_ARM64) && defined(CONFIG_SMP)
+            {
+                PHYSICAL_ADDRESS PhysicalAddress;
+                PFN_NUMBER Page;
+
+                PhysicalAddress = MmGetPhysicalAddress(ImportName);
+                Page = (PFN_NUMBER)(PhysicalAddress.QuadPart >> PAGE_SHIFT);
+                DPRINT1("[SYSLDRIMP] empty import name VA=%p PA=%I64x PFN=%Ix first=%02x\n",
+                        ImportName,
+                        (ULONGLONG)PhysicalAddress.QuadPart,
+                        Page,
+                        (UCHAR)*ImportName);
+
+                if (Page != 0)
+                {
+                    MiDumpSmpPageReleaseTrace(Page, ImportName, "empty-import-name");
+                }
+            }
+#endif
+            Status = STATUS_INVALID_IMAGE_FORMAT;
+            goto Failure;
+        }
+
+        if (!MiSysLdrImageRangeValid(ImageBase,
+                                     ImageSize,
+                                     ImportDescriptor->OriginalFirstThunk,
+                                     sizeof(IMAGE_THUNK_DATA)) ||
+            !MiSysLdrImageRangeValid(ImageBase,
+                                     ImageSize,
+                                     ImportDescriptor->FirstThunk,
+                                     sizeof(IMAGE_THUNK_DATA)))
+        {
+            DPRINT1("[SYSLDRIMP] invalid thunk ImageBase=%p Size=%lx Import=%s Index=%lu Desc=%p OFT=%lx FT=%lx\n",
+                    ImageBase,
+                    ImageSize,
+                    ImportName,
+                    DescriptorIndex,
+                    ImportDescriptor,
+                    ImportDescriptor->OriginalFirstThunk,
+                    ImportDescriptor->FirstThunk);
+            Status = STATUS_INVALID_IMAGE_FORMAT;
+            goto Failure;
+        }
 
         /* Check if this is a GDI driver */
         GdiLink = GdiLink ||
@@ -1362,13 +1795,40 @@ CheckDllState:
                                  ImportDescriptor->FirstThunk);
 
             /* Loop the IAT */
-            while (OrigThunk->u1.AddressOfData)
+            while (TRUE)
             {
+                PIMAGE_THUNK_DATA CurrentOrigThunk, CurrentFirstThunk;
+
+                if (!MiSysLdrImagePointerValid(ImageBase,
+                                               ImageSize,
+                                               OrigThunk,
+                                               sizeof(*OrigThunk)) ||
+                    !MiSysLdrImagePointerValid(ImageBase,
+                                               ImageSize,
+                                               FirstThunk,
+                                               sizeof(*FirstThunk)))
+                {
+                    DPRINT1("[SYSLDRIMP] unterminated thunk ImageBase=%p Size=%lx Import=%s Index=%lu Orig=%p First=%p\n",
+                            ImageBase,
+                            ImageSize,
+                            ImportName,
+                            DescriptorIndex,
+                            OrigThunk,
+                            FirstThunk);
+                    Status = STATUS_INVALID_IMAGE_FORMAT;
+                    goto Failure;
+                }
+
+                if (!OrigThunk->u1.AddressOfData)
+                    break;
+
                 /* Snap thunk */
+                CurrentOrigThunk = OrigThunk;
+                CurrentFirstThunk = FirstThunk;
                 Status = MiSnapThunk(ImportBase,
                                      ImageBase,
-                                     OrigThunk++,
-                                     FirstThunk++,
+                                     CurrentOrigThunk,
+                                     CurrentFirstThunk,
                                      ExportDirectory,
                                      ExportSize,
                                      FALSE,
@@ -1379,13 +1839,38 @@ CheckDllState:
                     goto Failure;
                 }
 
+                if (!MiSysLdrImportTargetValid(ImageBase,
+                                               ImageSize,
+                                               CurrentFirstThunk->u1.Function))
+                {
+                    DPRINT1("[SYSLDRIMP] invalid snapped import ImageBase=%p Size=%lx Import=%s Index=%lu First=%p Target=%p\n",
+                            ImageBase,
+                            ImageSize,
+                            ImportName,
+                            DescriptorIndex,
+                            CurrentFirstThunk,
+                            (PVOID)CurrentFirstThunk->u1.Function);
+                    Status = STATUS_INVALID_IMAGE_FORMAT;
+                    goto Failure;
+                }
+
                 /* Reset the buffer */
                 *MissingApi = MissingApiBuffer;
+
+                OrigThunk++;
+                FirstThunk++;
             }
         }
 
         /* Go to the next import */
         ImportDescriptor++;
+        DescriptorIndex++;
+    }
+
+    Status = MmValidateSystemImageImports(ImageBase, ImageSize);
+    if (!NT_SUCCESS(Status))
+    {
+        goto Failure;
     }
 
     /* Check if we have an import list */
@@ -3149,6 +3634,23 @@ LoaderScan:
         /* Check if this was supposed to be a session load */
         if (!Flags)
         {
+            if (LdrEntry->Flags & LDRP_LOAD_IN_PROGRESS)
+            {
+                DPRINT1("MM:SYSLDR %wZ is still load-in-progress\n", &PrefixName);
+                Status = STATUS_IMAGE_ALREADY_LOADED;
+                goto Quickie;
+            }
+
+            Status = MmValidateSystemImageImports(LdrEntry->DllBase,
+                                                  LdrEntry->SizeOfImage);
+            if (!NT_SUCCESS(Status))
+            {
+                DPRINT1("MM:SYSLDR %wZ has invalid imports, status 0x%x\n",
+                        &PrefixName,
+                        Status);
+                goto Quickie;
+            }
+
             /* It wasn't, so just return the data */
             *ModuleObject = LdrEntry;
             *ImageBaseAddress = LdrEntry->DllBase;
@@ -3456,6 +3958,16 @@ LoaderScan:
 
     /* Initialize the security cookie (Win7 is not doing this yet!) */
     LdrpInitSecurityCookie(LdrEntry);
+
+#if defined(_M_ARM64)
+    /*
+     * ARM64 driver images are copied into private system PTE pages, then fixed
+     * up in-place. Publish relocation, import, and cookie writes before another
+     * CPU can enter the driver through the load-balancer path.
+     */
+    KeSweepICache(LdrEntry->DllBase, LdrEntry->SizeOfImage);
+    KeSweepICache(NULL, 0);
+#endif
 
     /* Check if notifications are enabled */
     if (PsImageNotifyEnabled)

@@ -114,6 +114,13 @@ PspUserThreadStartup(IN PKSTART_ROUTINE StartRoutine,
 LONG
 PspUnhandledExceptionInSystemThread(PEXCEPTION_POINTERS ExceptionPointers)
 {
+#if defined(_M_ARM64)
+    PCONTEXT Context;
+    ULONG64 StackBase;
+    ULONG64 SystemRangeStart;
+    ULONG i;
+#endif
+
     /* Print debugging information */
     DPRINT1("PS: Unhandled Kernel Mode Exception Pointers = 0x%p\n",
             ExceptionPointers);
@@ -124,6 +131,63 @@ PspUnhandledExceptionInSystemThread(PEXCEPTION_POINTERS ExceptionPointers)
             ExceptionPointers->ExceptionRecord->ExceptionInformation[1],
             ExceptionPointers->ExceptionRecord->ExceptionInformation[2],
             ExceptionPointers->ExceptionRecord->ExceptionInformation[3]);
+
+#if defined(_M_ARM64)
+    Context = ExceptionPointers->ContextRecord;
+    if (Context)
+    {
+        DPRINT1("[A64SYSEX] Pc=%p Lr=%p Sp=%p Fp=%p Cpsr=0x%08lx X0=%p X1=%p X2=%p X3=%p\n",
+                (PVOID)(ULONG_PTR)Context->Pc,
+                (PVOID)(ULONG_PTR)Context->Lr,
+                (PVOID)(ULONG_PTR)Context->Sp,
+                (PVOID)(ULONG_PTR)Context->Fp,
+                Context->Cpsr,
+                (PVOID)(ULONG_PTR)Context->X0,
+                (PVOID)(ULONG_PTR)Context->X1,
+                (PVOID)(ULONG_PTR)Context->X2,
+                (PVOID)(ULONG_PTR)Context->X3);
+        DPRINT1("[A64SYSEX] X4=%p X5=%p X6=%p X7=%p X8=%p X9=%p X10=%p X11=%p\n",
+                (PVOID)(ULONG_PTR)Context->X4,
+                (PVOID)(ULONG_PTR)Context->X5,
+                (PVOID)(ULONG_PTR)Context->X6,
+                (PVOID)(ULONG_PTR)Context->X7,
+                (PVOID)(ULONG_PTR)Context->X8,
+                (PVOID)(ULONG_PTR)Context->X9,
+                (PVOID)(ULONG_PTR)Context->X10,
+                (PVOID)(ULONG_PTR)Context->X11);
+        DPRINT1("[A64SYSEX] X12=%p X13=%p X14=%p X15=%p X16=%p X17=%p X18=%p\n",
+                (PVOID)(ULONG_PTR)Context->X12,
+                (PVOID)(ULONG_PTR)Context->X13,
+                (PVOID)(ULONG_PTR)Context->X14,
+                (PVOID)(ULONG_PTR)Context->X15,
+                (PVOID)(ULONG_PTR)Context->X16,
+                (PVOID)(ULONG_PTR)Context->X17,
+                (PVOID)(ULONG_PTR)Context->X18);
+
+        StackBase = Context->Sp & ~7ULL;
+        SystemRangeStart = (ULONG64)(ULONG_PTR)MmSystemRangeStart;
+        if (StackBase >= SystemRangeStart)
+        {
+            for (i = 0; i < 16; i++)
+            {
+                PULONG64 Slot;
+
+                Slot = (PULONG64)(ULONG_PTR)(StackBase + i * sizeof(ULONG64));
+                if (MmIsAddressValid(Slot))
+                {
+                    DPRINT1("[A64SYSEX] stack[%02lu] %p=%p\n",
+                            i,
+                            Slot,
+                            (PVOID)(ULONG_PTR)*Slot);
+                }
+                else
+                {
+                    DPRINT1("[A64SYSEX] stack[%02lu] %p invalid\n", i, Slot);
+                }
+            }
+        }
+    }
+#endif
 
     /* Bugcheck the system */
     KeBugCheckEx(SYSTEM_THREAD_EXCEPTION_NOT_HANDLED,

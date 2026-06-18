@@ -285,14 +285,6 @@ GetEntry:
 
         if (Released) return STATUS_SUCCESS;
     }
-#ifdef NEWCC
-    else if (Type == MEMORY_AREA_CACHE)
-    {
-        /* NEWCC does locking itself */
-        MmUnlockAddressSpace(AddressSpace);
-        Status = MmpPageOutPhysicalAddress(Page);
-    }
-#endif
     else
     {
         KeBugCheck(MEMORY_MANAGEMENT);
@@ -322,7 +314,7 @@ WriteSegment:
     return STATUS_UNSUCCESSFUL;
 }
 
-VOID
+BOOLEAN
 NTAPI
 MmInsertRmap(PFN_NUMBER Page, PEPROCESS Process,
              PVOID Address)
@@ -381,9 +373,12 @@ MmInsertRmap(PFN_NUMBER Page, PEPROCESS Process,
 
     if (current_entry && (current_entry->Address == Address) && (current_entry->Process == Process))
     {
+#if defined(_M_ARM64) && defined(CONFIG_SMP)
+        MiDumpSmpPageReleaseTrace(Page, Address, "duplicate-rmap");
+#endif
         MiReleasePfnLock(OldIrql);
         ExFreeToNPagedLookasideList(&RmapLookasideList, new_entry);
-        return;
+        return FALSE;
     }
 
     new_entry->Next = current_entry;
@@ -403,6 +398,8 @@ MmInsertRmap(PFN_NUMBER Page, PEPROCESS Process,
             Process->Vm.PeakWorkingSetSize = PrevSize + PAGE_SIZE;
         }
     }
+
+    return TRUE;
 }
 
 BOOLEAN
@@ -428,13 +425,38 @@ MmPageHasProcessRmaps(PFN_NUMBER Page)
     return Found;
 }
 
-VOID
+ULONG
 NTAPI
-MmDeleteRmap(PFN_NUMBER Page, PEPROCESS Process,
-             PVOID Address)
+MmGetProcessRmapCount(PFN_NUMBER Page)
+{
+    PMM_RMAP_ENTRY entry;
+    KIRQL OldIrql;
+    ULONG Count = 0;
+
+    OldIrql = MiAcquirePfnLock();
+    entry = MmGetRmapListHeadPage(Page);
+    while (entry != NULL)
+    {
+        if (!RMAP_IS_SEGMENT(entry->Address))
+        {
+            Count++;
+        }
+        entry = entry->Next;
+    }
+    MiReleasePfnLock(OldIrql);
+    return Count;
+}
+
+BOOLEAN
+NTAPI
+MmDeleteRmapIfExists(PFN_NUMBER Page, PEPROCESS Process,
+                     PVOID Address)
 {
     PMM_RMAP_ENTRY current_entry, previous_entry;
     KIRQL OldIrql;
+
+    if (!RMAP_IS_SEGMENT(Address))
+        Address = (PVOID)PAGE_ROUND_DOWN(Address);
 
     OldIrql = MiAcquirePfnLock();
     previous_entry = NULL;
@@ -461,12 +483,28 @@ MmDeleteRmap(PFN_NUMBER Page, PEPROCESS Process,
                 ASSERT(Process != NULL);
                 (void)InterlockedExchangeAddUL(&Process->Vm.WorkingSetSize, -PAGE_SIZE);
             }
-            return;
+            return TRUE;
         }
         previous_entry = current_entry;
         current_entry = current_entry->Next;
     }
-    KeBugCheck(MEMORY_MANAGEMENT);
+    MiReleasePfnLock(OldIrql);
+    return FALSE;
+}
+
+VOID
+NTAPI
+MmDeleteRmap(PFN_NUMBER Page, PEPROCESS Process,
+             PVOID Address)
+{
+    if (MmDeleteRmapIfExists(Page, Process, Address))
+        return;
+
+    KeBugCheckEx(MEMORY_MANAGEMENT,
+                 Page,
+                 (ULONG_PTR)Process,
+                 (ULONG_PTR)Address,
+                 __LINE__);
 }
 
 /*
@@ -499,14 +537,26 @@ MmGetSegmentRmap(PFN_NUMBER Page, PULONG RawOffset)
     {
         if (RMAP_IS_SEGMENT(current_entry->Address))
         {
+            ULONG_PTR Entry;
+            ULONG Offset;
+
             Result = (PCACHE_SECTION_PAGE_TABLE)current_entry->Process;
-            *RawOffset = (ULONG_PTR)current_entry->Address & ~RMAP_SEGMENT_MASK;
+            Offset = (ULONG_PTR)current_entry->Address & ~RMAP_SEGMENT_MASK;
+
             if (*Result->Segment->Flags & MM_SEGMENT_INDELETE)
             {
-                return NULL;
+                current_entry = current_entry->Next;
+                continue;
             }
 
-            return Result;
+            Entry = Result->PageEntries[Offset];
+            if (Entry &&
+                !IS_SWAP_FROM_SSE(Entry) &&
+                (PFN_FROM_SSE(Entry) == Page))
+            {
+                *RawOffset = Offset;
+                return Result;
+            }
         }
         //previous_entry = current_entry;
         current_entry = current_entry->Next;
@@ -525,6 +575,15 @@ VOID
 NTAPI
 MmDeleteSectionAssociation(PFN_NUMBER Page)
 {
+    MmDeleteSectionAssociationForPageTable(Page, NULL, 0);
+}
+
+VOID
+NTAPI
+MmDeleteSectionAssociationForPageTable(PFN_NUMBER Page,
+                                       PCACHE_SECTION_PAGE_TABLE PageTable,
+                                       ULONG RawOffset)
+{
     PMM_RMAP_ENTRY current_entry, previous_entry;
     KIRQL OldIrql = MiAcquirePfnLock();
 
@@ -532,7 +591,10 @@ MmDeleteSectionAssociation(PFN_NUMBER Page)
     current_entry = MmGetRmapListHeadPage(Page);
     while (current_entry != NULL)
     {
-        if (RMAP_IS_SEGMENT(current_entry->Address))
+        if (RMAP_IS_SEGMENT(current_entry->Address) &&
+            (PageTable == NULL ||
+             ((PCACHE_SECTION_PAGE_TABLE)current_entry->Process == PageTable &&
+              ((ULONG_PTR)current_entry->Address & ~RMAP_SEGMENT_MASK) == RawOffset)))
         {
             if (previous_entry == NULL)
             {

@@ -983,6 +983,7 @@ GreGetDIBitsInternal(
         PVOID pDIBits ;
         HBITMAP hBmpDest;
         PSURFACE psurfDest;
+        PPALETTE ppalDIB;
         EXLATEOBJ exlo;
         RECT rcDest;
         POINTL srcPoint;
@@ -1006,8 +1007,14 @@ GreGetDIBitsInternal(
         /* Fixup values */
         Info->bmiHeader.biHeight = (height < 0) ?
                                    -(LONG)ScanLines : ScanLines;
-        /* Create the DIB */
-        hBmpDest = DIB_CreateDIBSection(pDC, Info, Usage, &pDIBits, NULL, 0, 0);
+        hBmpDest = GreCreateBitmapEx(Info->bmiHeader.biWidth,
+                                     ScanLines,
+                                     0,
+                                     BitmapFormat(bpp * planes, Info->bmiHeader.biCompression),
+                                     (Info->bmiHeader.biHeight < 0) ? BMF_TOPDOWN : 0,
+                                     0,
+                                     NULL,
+                                     0);
         /* Restore them */
         Info->bmiHeader.biHeight = height;
 
@@ -1020,6 +1027,25 @@ GreGetDIBitsInternal(
         }
 
         psurfDest = SURFACE_ShareLockSurface(hBmpDest);
+        if (!psurfDest)
+        {
+            GreDeleteObject(hBmpDest);
+            ScanLines = 0;
+            goto done;
+        }
+
+        ppalDIB = CreateDIBPalette(Info, pDC, Usage);
+        if (!ppalDIB)
+        {
+            SURFACE_ShareUnlockSurface(psurfDest);
+            GreDeleteObject(hBmpDest);
+            ScanLines = 0;
+            goto done;
+        }
+
+        SURFACE_vSetPalette(psurfDest, ppalDIB);
+        PALETTE_ShareUnlockPalette(ppalDIB);
+        pDIBits = psurfDest->SurfObj.pvBits;
 
         RECTL_vSetRect(&rcDest, 0, 0, Info->bmiHeader.biWidth, ScanLines);
         Info->bmiHeader.biWidth = width;

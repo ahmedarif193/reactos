@@ -684,6 +684,7 @@ NtCreateSymbolicLinkObject(OUT PHANDLE LinkHandle,
     HANDLE hLink;
     POBJECT_SYMBOLIC_LINK SymbolicLink;
     UNICODE_STRING CapturedLinkTarget;
+    PWSTR CapturedLinkTargetBuffer = NULL;
     KPROCESSOR_MODE PreviousMode = ExGetPreviousMode();
     NTSTATUS Status;
     PAGED_CODE();
@@ -729,9 +730,33 @@ NtCreateSymbolicLinkObject(OUT PHANDLE LinkHandle,
         !(CapturedLinkTarget.MaximumLength))
     {
         /* This message is displayed on the debugger in Windows */
-        DbgPrint("OB: Invalid symbolic link target - %wZ\n",
-                 &CapturedLinkTarget);
+        DbgPrint("OB: Invalid symbolic link target\n");
         return STATUS_INVALID_PARAMETER;
+    }
+
+    if (PreviousMode != KernelMode)
+    {
+        CapturedLinkTargetBuffer =
+            ExAllocatePoolWithTag(PagedPool,
+                                  CapturedLinkTarget.MaximumLength,
+                                  TAG_SYMLINK_TARGET);
+        if (!CapturedLinkTargetBuffer)
+            return STATUS_NO_MEMORY;
+
+        _SEH2_TRY
+        {
+            RtlCopyMemory(CapturedLinkTargetBuffer,
+                          CapturedLinkTarget.Buffer,
+                          CapturedLinkTarget.MaximumLength);
+        }
+        _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
+        {
+            ExFreePoolWithTag(CapturedLinkTargetBuffer, TAG_SYMLINK_TARGET);
+            _SEH2_YIELD(return _SEH2_GetExceptionCode());
+        }
+        _SEH2_END;
+
+        CapturedLinkTarget.Buffer = CapturedLinkTargetBuffer;
     }
 
     /* Create the object */
@@ -760,6 +785,8 @@ NtCreateSymbolicLinkObject(OUT PHANDLE LinkHandle,
         {
             /* Dereference the symbolic link object and fail */
             ObDereferenceObject(SymbolicLink);
+            if (CapturedLinkTargetBuffer)
+                ExFreePoolWithTag(CapturedLinkTargetBuffer, TAG_SYMLINK_TARGET);
             return STATUS_NO_MEMORY;
         }
 
@@ -773,6 +800,8 @@ NtCreateSymbolicLinkObject(OUT PHANDLE LinkHandle,
         _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
         {
             ObDereferenceObject(SymbolicLink);
+            if (CapturedLinkTargetBuffer)
+                ExFreePoolWithTag(CapturedLinkTargetBuffer, TAG_SYMLINK_TARGET);
             _SEH2_YIELD(return _SEH2_GetExceptionCode());
         }
         _SEH2_END;
@@ -804,6 +833,9 @@ NtCreateSymbolicLinkObject(OUT PHANDLE LinkHandle,
             _SEH2_END;
         }
     }
+
+    if (CapturedLinkTargetBuffer)
+        ExFreePoolWithTag(CapturedLinkTargetBuffer, TAG_SYMLINK_TARGET);
 
     /* Return status to caller */
     return Status;

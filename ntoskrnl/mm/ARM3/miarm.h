@@ -1120,9 +1120,12 @@ MI_UPDATE_VALID_PTE(IN PMMPTE PointerPte,
     ASSERT(PointerPte->u.Hard.Valid == 1);
     ASSERT(TempPte.u.Hard.Valid == 1);
     ASSERT(PointerPte->u.Hard.PageFrameNumber == TempPte.u.Hard.PageFrameNumber);
+#if defined(_M_ARM64)
+    TempPte = MI_ARM64_PREPARE_VALID_PTE(PointerPte, TempPte);
+#endif
     *PointerPte = TempPte;
 #if defined(_M_ARM64)
-    MiArm64CleanEntryToPoC(PointerPte);
+    MI_ARM64_FLUSH_VALID_PTE(PointerPte);
 #endif
 }
 

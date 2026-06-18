@@ -1455,6 +1455,9 @@ KxQueueReadyThread(IN PKTHREAD Thread,
 
         /* Update the ready summary */
         Prcb->ReadySummary |= PRIORITY_MASK(Priority);
+#ifdef CONFIG_SMP
+        InterlockedIncrement(&KiReadyQueueDepth[Prcb->Number]);
+#endif
 
         /* Sanity check */
         ASSERT(Priority == Thread->Priority);
@@ -1515,6 +1518,9 @@ KiSelectReadyThread(IN KPRIORITY Priority,
         /* The list is empty now, reset the ready summary */
         Prcb->ReadySummary ^= PRIORITY_MASK(HighPriority);
     }
+#ifdef CONFIG_SMP
+    InterlockedDecrement(&KiReadyQueueDepth[Prcb->Number]);
+#endif
 
     /* Sanity check and return the thread */
 Quickie:

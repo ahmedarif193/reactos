@@ -222,13 +222,6 @@ KiIdleLoop(VOID)
                 Prcb->NextThread = Ready;
             }
         }
-#ifdef CONFIG_SMP
-        if (!Prcb->NextThread)
-        {
-            PKTHREAD Stolen = KiTryStealReadyThread(Prcb);
-            if (Stolen != NULL) Prcb->NextThread = Stolen;
-        }
-#endif
         if (Prcb->NextThread)
         {
             PKTHREAD OldThread = Prcb->CurrentThread;
@@ -412,6 +405,26 @@ KiDispatchInterrupt(VOID)
         (Prcb->DeferredReadyListHead.Next))
     {
         KiRetireDpcListInDpcStack(Prcb, Prcb->DpcStack);
+    }
+
+    if (!Prcb->QuantumEnd &&
+        !Prcb->NextThread &&
+        (Prcb->CurrentThread == Prcb->IdleThread) &&
+        Prcb->ReadySummary)
+    {
+        KiAcquirePrcbLock(Prcb);
+        if (!Prcb->NextThread &&
+            (Prcb->CurrentThread == Prcb->IdleThread) &&
+            Prcb->ReadySummary)
+        {
+            NewThread = KiSelectReadyThread(0, Prcb);
+            if (NewThread)
+            {
+                NewThread->State = Standby;
+                Prcb->NextThread = NewThread;
+            }
+        }
+        KiReleasePrcbLock(Prcb);
     }
 
     _enable();

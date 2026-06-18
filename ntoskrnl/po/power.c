@@ -1226,14 +1226,10 @@ NtSetSystemPowerState(IN POWER_ACTION SystemAction,
         DPRINT("Flushing volumes\n");
         PopFlushVolumes(PopAction.Shutdown);
 
-#ifndef NEWCC
         /* Flush dirty cache pages */
         /* XXX: Is that still mandatory? As now we'll wait on lazy writer to complete? */
         CcRosFlushDirtyPages(MAXULONG, &Dummy, TRUE, FALSE);
         DPRINT("Cache flushed %lu pages\n", Dummy);
-#else
-        Dummy = 0;
-#endif
 
         /* Set IRP for drivers */
         PopAction.IrpMinor = IRP_MN_SET_POWER;

@@ -367,7 +367,6 @@ SonyHid_SendOutputReport(
     Irp->IoStatus.Status = STATUS_NOT_SUPPORTED;
 
     IoStack = IoGetNextIrpStackLocation(Irp);
-    RtlZeroMemory(IoStack, sizeof(*IoStack));
     IoStack->MajorFunction = IRP_MJ_WRITE;
     IoStack->Parameters.Write.Length = ReportLength;
     IoStack->DeviceObject = DeviceExtension->NextDeviceObject;
@@ -1687,7 +1686,6 @@ SonyHid_InitiateRead(
     DeviceExtension->Irp->IoStatus.Information = 0;
 
     IoStack = IoGetNextIrpStackLocation(DeviceExtension->Irp);
-    RtlZeroMemory(IoStack, sizeof(IO_STACK_LOCATION));
     IoStack->MajorFunction = IRP_MJ_READ;
     IoStack->Parameters.Read.Length = DeviceExtension->ReportLength;
     IoStack->FileObject = DeviceExtension->FileObject;

@@ -18,10 +18,30 @@
 #endif
 
 #define MI_ARM64_SWAP_ENTRY_MARKER 0x400ULL
-#define MI_ARM64_SWAP_FILE_FROM_ENTRY(Entry) ((ULONG)((Entry) & 0x0F))
-#define MI_ARM64_SWAP_OFFSET_FROM_ENTRY(Entry) ((ULONG_PTR)((Entry) >> 11))
+#define MI_ARM64_SWAP_PTE_MARKER 0x2000ULL
+#define MI_ARM64_DISABLED_PTE_OSAVAILABLE 1ULL
+#define MI_ARM64_DISABLED_PTE_OSAVAILABLE_MASK (3ULL << 57)
+#define MI_ARM64_DISABLED_PTE_MARKER (MI_ARM64_DISABLED_PTE_OSAVAILABLE << 57)
+#define MI_ARM64_SWAP_FILE_MASK 0x0FULL
+#define MI_ARM64_SWAP_OFFSET_MASK 0xFFFFFFFFULL
+#define MI_ARM64_SWAP_FILE_FROM_ENTRY(Entry) ((ULONG)((Entry) & MI_ARM64_SWAP_FILE_MASK))
+#define MI_ARM64_SWAP_OFFSET_FROM_ENTRY(Entry) \
+    ((ULONG_PTR)(((ULONG_PTR)(Entry) >> 11) & MI_ARM64_SWAP_OFFSET_MASK))
 #define MI_ARM64_SWAP_ENTRY_FROM_FILE_OFFSET(File, Offset) \
-    ((SWAPENTRY)((File) | ((ULONG_PTR)(Offset) << 11) | MI_ARM64_SWAP_ENTRY_MARKER))
+    ((SWAPENTRY)(((ULONG_PTR)(File) & MI_ARM64_SWAP_FILE_MASK) | \
+                 (((ULONG_PTR)(Offset) & MI_ARM64_SWAP_OFFSET_MASK) << 11) | \
+                 MI_ARM64_SWAP_ENTRY_MARKER))
+#define MI_ARM64_SWAP_ENTRY_CAN_ENCODE(Entry) \
+    (MI_ARM64_SWAP_ENTRY_FROM_FILE_OFFSET(MI_ARM64_SWAP_FILE_FROM_ENTRY(Entry), \
+                                          MI_ARM64_SWAP_OFFSET_FROM_ENTRY(Entry)) == \
+     (SWAPENTRY)(Entry))
+
+C_ASSERT(MI_ARM64_SWAP_ENTRY_CAN_ENCODE(MM_WAIT_ENTRY));
+C_ASSERT((MI_ARM64_DISABLED_PTE_OSAVAILABLE_MASK & ARM64_PTE_ADDR_MASK) == 0);
+C_ASSERT((MI_ARM64_DISABLED_PTE_OSAVAILABLE_MASK & PTE_PROTECT_MASK) == 0);
+C_ASSERT((MI_ARM64_DISABLED_PTE_OSAVAILABLE_MASK & MI_ARM64_SWAP_PTE_MARKER) == 0);
+C_ASSERT((MI_ARM64_DISABLED_PTE_OSAVAILABLE_MASK & PTE_PROTOTYPE) == 0);
+C_ASSERT((MI_ARM64_DISABLED_PTE_OSAVAILABLE_MASK & (1ULL << 11)) == 0);
 
 static
 NTSTATUS
@@ -136,6 +156,56 @@ typedef enum _MI_ARM64_DCACHE_OPERATION
     MiArm64DcacheInvalidate,
     MiArm64DcacheCleanInvalidate
 } MI_ARM64_DCACHE_OPERATION;
+
+FORCEINLINE
+BOOLEAN
+MiArm64IsSwapPte(
+    _In_ MMPTE Pte)
+{
+    return !Pte.u.Hard.Valid &&
+           !Pte.u.Soft.Transition &&
+           !Pte.u.Soft.Prototype &&
+           (Pte.u.Soft.Protection == MM_READWRITE) &&
+           ((Pte.u.Long & MI_ARM64_SWAP_PTE_MARKER) != 0) &&
+           (Pte.u.Soft.PageFileHigh != 0);
+}
+
+FORCEINLINE
+BOOLEAN
+MiArm64PtePfnInRange(
+    _In_ MMPTE Pte)
+{
+    PFN_NUMBER PageFrameNumber;
+
+    PageFrameNumber = Pte.u.Hard.PageFrameNumber;
+    return (PageFrameNumber != 0) && (PageFrameNumber <= MmHighestPhysicalPage);
+}
+
+FORCEINLINE
+BOOLEAN
+MiArm64IsDisabledPfnPte(
+    _In_ MMPTE Pte)
+{
+    return !Pte.u.Hard.Valid &&
+           !Pte.u.Soft.Transition &&
+           !Pte.u.Soft.Prototype &&
+           !MiArm64IsSwapPte(Pte) &&
+           (Pte.u.Hard.OsAvailable == MI_ARM64_DISABLED_PTE_OSAVAILABLE) &&
+           (Pte.u.Hard.Owner != 0) &&
+           (Pte.u.Hard.Shareability == 3) &&
+           MiArm64PtePfnInRange(Pte);
+}
+
+FORCEINLINE
+BOOLEAN
+MiArm64PteHasMappedPfn(
+    _In_ MMPTE Pte)
+{
+    return (Pte.u.Hard.Valid &&
+            Pte.u.Hard.NotLargePage &&
+            MiArm64PtePfnInRange(Pte)) ||
+           MiArm64IsDisabledPfnPte(Pte);
+}
 
 FORCEINLINE
 VOID
@@ -630,7 +700,7 @@ MiArm64EnsureUserPte(
         L2Table[L2Idx] = 0;
         MiArm64CleanEntryToPoC(&L2Table[L2Idx]);
         __asm__ __volatile__("dsb ishst\n\t"
-                             "tlbi vaale1is, %0\n\t"
+                             "tlbi vaae1is, %0\n\t"
                              "dsb ish\n\t"
                              "isb"
                              :: "r"((ULONG_PTR)Address >> PAGE_SHIFT) : "memory");
@@ -843,7 +913,7 @@ MiArm64InvalidateUserAddress(
     _In_ PVOID Address)
 {
     __asm__ __volatile__("dsb ishst" ::: "memory");
-    __asm__ __volatile__("tlbi vaale1is, %0" :: "r"((ULONG_PTR)Address >> PAGE_SHIFT) : "memory");
+    __asm__ __volatile__("tlbi vaae1is, %0" :: "r"((ULONG_PTR)Address >> PAGE_SHIFT) : "memory");
     __asm__ __volatile__("dsb ish" ::: "memory");
     __asm__ __volatile__("isb" ::: "memory");
 }
@@ -908,7 +978,7 @@ MiArm64CountUserTableEntries(
                 SharedEntries++;
             }
         }
-        else if (Entry.u.Hard.Valid || Entry.u.Soft.Transition)
+        else if (MiArm64PteHasMappedPfn(Entry) || Entry.u.Soft.Transition)
         {
             SharedEntries++;
         }
@@ -1047,7 +1117,7 @@ MiArm64ConsumeDirtyState(
     KIRQL OldIrql;
     BOOLEAN Dirty;
 
-    if (!OldPte.u.Hard.Valid)
+    if (!MiArm64PteHasMappedPfn(OldPte))
     {
         return FALSE;
     }
@@ -1091,7 +1161,7 @@ MiArm64PreserveDirtyStateForProtect(
     PMMPFN PfnEntry;
     KIRQL OldIrql;
 
-    if (!OldPte.u.Hard.Valid ||
+    if (!MiArm64PteHasMappedPfn(OldPte) ||
         !MI_IS_PAGE_DIRTY(&OldPte) ||
         MI_IS_PAGE_DIRTY(&NewPte))
     {
@@ -1253,7 +1323,7 @@ MiArm64ReleaseUserPageTableReference(
     }
 
     MiArm64WritePteEntry(&L2Table[L2Idx], 0);
-    MiArm64InvalidateUserAddress(Address);
+    KeFlushProcessTb();
     MiDecrementShareCount(PfnL2, L2Pfn);
     MI_SET_PFN_DELETED(PfnL3);
     MiDecrementShareCount(PfnL3, L3Pfn);
@@ -1293,7 +1363,7 @@ MiArm64ReleaseUserPageTableReference(
     }
 
     MiArm64WritePteEntry(&L1Table[L1Idx], 0);
-    MiArm64InvalidateUserAddress(Address);
+    KeFlushProcessTb();
     MiDecrementShareCount(PfnL1, L1Pfn);
     MI_SET_PFN_DELETED(PfnL2);
     MiDecrementShareCount(PfnL2, L2Pfn);
@@ -1333,7 +1403,7 @@ MiArm64ReleaseUserPageTableReference(
     }
 
     MiArm64WritePteEntry(&L0Table[L0Idx], 0);
-    MiArm64InvalidateUserAddress(Address);
+    KeFlushProcessTb();
     MiDecrementShareCount(PfnRoot, RootPfn);
     MI_SET_PFN_DELETED(PfnL1);
     MiDecrementShareCount(PfnL1, L1Pfn);
@@ -1385,7 +1455,12 @@ MiArm64GetUserPfn(
     }
 
     Pte.u.Long = Walk.PteValue;
-    return Pte.u.Hard.Valid ? Pte.u.Hard.PageFrameNumber : 0;
+    if (MiArm64PteHasMappedPfn(Pte))
+    {
+        return Pte.u.Hard.PageFrameNumber;
+    }
+
+    return 0;
 }
 
 static
@@ -1419,6 +1494,9 @@ MmCreateVirtualMapping(
 
     if (!MmIsPageInUse(Page))
     {
+#if defined(CONFIG_SMP)
+        MiDumpSmpPageReleaseTrace(Page, Address, "create-mapping-page-not-in-use");
+#endif
         DPRINT1("Page %Ix is not in use (Addr=%p Proc=%p)\n", Page, Address, Process);
 #if defined(CONFIG_SMP)
         /*
@@ -1524,6 +1602,12 @@ MmCreateVirtualMappingUnsafeEx(
         }
 
         OldPte = *PointerPte;
+        if (OldPte.u.Long != 0)
+        {
+            MiUnlockProcessWorkingSet(Process, PsGetCurrentThread());
+            return STATUS_UNSUCCESSFUL;
+        }
+
         OldEntryEmpty = (OldPte.u.Long == 0);
         OldEntryHasPageTableShare = OldPte.u.Hard.Valid || OldPte.u.Soft.Transition;
 
@@ -1664,6 +1748,8 @@ MmDeleteVirtualMappingEx(
 {
     MMPTE OldPte;
     BOOLEAN ProcessWorkingSetLocked = FALSE;
+    BOOLEAN HasMappedPageReference;
+    BOOLEAN HasMappedPfn;
 
     OldPte.u.Long = 0;
 
@@ -1694,7 +1780,9 @@ MmDeleteVirtualMappingEx(
         }
     }
 
-    if (OldPte.u.Long != 0)
+    HasMappedPfn = MiArm64PteHasMappedPfn(OldPte);
+
+    if (HasMappedPfn)
     {
         if (WasDirty)
         {
@@ -1711,7 +1799,9 @@ MmDeleteVirtualMappingEx(
             *Page = 0;
     }
 
-    if (!IsPhysical && OldPte.u.Hard.Valid)
+    HasMappedPageReference = HasMappedPfn;
+
+    if (!IsPhysical && HasMappedPageReference)
     {
         MiArm64ReleaseMappedPageReference(OldPte.u.Hard.PageFrameNumber);
     }
@@ -1720,7 +1810,7 @@ MmDeleteVirtualMappingEx(
     {
         MiArm64ReleaseUserPageTableReference(Process,
                                              Address,
-                                             OldPte.u.Hard.Valid || OldPte.u.Soft.Transition);
+                                             HasMappedPageReference || OldPte.u.Soft.Transition);
     }
 
     if (ProcessWorkingSetLocked)
@@ -1742,9 +1832,11 @@ MmCreatePageFileMapping(
     ASSERT(Address < MmSystemRangeStart);
     ASSERT(Process == PsGetCurrentProcess());
 
-    if (SwapEntry & ((ULONG_PTR)1 << (RTL_BITS_OF(SWAPENTRY) - 1)))
+    if (!MI_ARM64_SWAP_ENTRY_CAN_ENCODE(SwapEntry))
     {
-        KeBugCheck(MEMORY_MANAGEMENT);
+        DPRINT1("Swap entry 0x%Ix cannot be encoded in an ARM64 pagefile PTE\n",
+                (ULONG_PTR)SwapEntry);
+        KeBugCheckEx(MEMORY_MANAGEMENT, SwapEntry, (ULONG_PTR)Process, (ULONG_PTR)Address, 1);
     }
 
     MiLockProcessWorkingSetUnsafe(Process, PsGetCurrentThread());
@@ -1775,7 +1867,7 @@ MmCreatePageFileMapping(
         NewPte.u.Long = 0;
         NewPte.u.Soft.PageFileLow = MI_ARM64_SWAP_FILE_FROM_ENTRY(SwapEntry);
         NewPte.u.Soft.PageFileHigh = MI_ARM64_SWAP_OFFSET_FROM_ENTRY(SwapEntry);
-        NewPte.u.Soft.Prototype = 0;
+        NewPte.u.Long |= MI_ARM64_SWAP_PTE_MARKER;
         NewPte.u.Soft.Protection = MM_READWRITE;
 
         MiArm64WritePteEntry((volatile ULONG64 *)PointerPte, NewPte.u.Long);
@@ -1813,10 +1905,7 @@ MmDeletePageFileMapping(
         OldPte.u.Long = MiArm64ExchangePteEntry(Walk.PointerPte, 0);
     }
 
-    if (OldPte.u.Hard.Valid ||
-        OldPte.u.Soft.Prototype ||
-        OldPte.u.Soft.Transition ||
-        (OldPte.u.Soft.PageFileHigh == 0))
+    if (!MiArm64IsSwapPte(OldPte))
     {
         DPRINT1("Expected pagefile PTE at %p\n", Address);
         KeBugCheck(MEMORY_MANAGEMENT);
@@ -1855,10 +1944,7 @@ MmGetPageFileMapping(
             MMPTE TempPte;
             TempPte.u.Long = Walk.PteValue;
 
-            if (TempPte.u.Hard.Valid ||
-                TempPte.u.Soft.Prototype ||
-                TempPte.u.Soft.Transition ||
-                (TempPte.u.Soft.PageFileHigh == 0))
+            if (!MiArm64IsSwapPte(TempPte))
                 *SwapEntry = 0;
             else
                 *SwapEntry = MI_ARM64_SWAP_ENTRY_FROM_FILE_OFFSET(TempPte.u.Soft.PageFileLow,
@@ -1874,10 +1960,7 @@ MmGetPageFileMapping(
         MiLockProcessWorkingSetShared(Process, PsGetCurrentThread());
         PointerPte = MiAddressToPte(Address);
 
-        if (PointerPte->u.Hard.Valid ||
-            PointerPte->u.Soft.Prototype ||
-            PointerPte->u.Soft.Transition ||
-            (PointerPte->u.Soft.PageFileHigh == 0))
+        if (!MiArm64IsSwapPte(*PointerPte))
             *SwapEntry = 0;
         else
             *SwapEntry = MI_ARM64_SWAP_ENTRY_FROM_FILE_OFFSET(PointerPte->u.Soft.PageFileLow,
@@ -1940,17 +2023,14 @@ MmIsDisabledPage(
     ASSERT(Process == PsGetCurrentProcess());
 
     {
-        ULONG64 PteValue;
+        MI_ARM64_USER_PTE_WALK Walk;
         MMPTE TempPte;
 
-        if (!MiArm64ReadUserPtePhysically(Address, &PteValue, NULL))
+        if (!MiArm64GetUserPteAddress(Address, &Walk))
             return FALSE;
 
-        TempPte.u.Long = PteValue;
-        if (!TempPte.u.Hard.Valid)
-            return FALSE;
-
-        return (TempPte.u.Hard.Writable == 0) && (TempPte.u.Hard.CopyOnWrite == 0);
+        TempPte.u.Long = Walk.PteValue;
+        return MiArm64IsDisabledPfnPte(TempPte);
     }
 }
 
@@ -1978,10 +2058,7 @@ MmIsPageSwapEntry(
         MMPTE TempPte;
 
         TempPte.u.Long = Walk.PteValue;
-        return !TempPte.u.Hard.Valid &&
-               !TempPte.u.Soft.Prototype &&
-               !TempPte.u.Soft.Transition &&
-               (TempPte.u.Soft.PageFileHigh != 0);
+        return MiArm64IsSwapPte(TempPte);
     }
 }
 
@@ -2101,6 +2178,11 @@ MmSetPageProtect(
         }
 
         OldPte.u.Long = Walk.PteValue;
+        if (!OldPte.u.Hard.Valid && !MiArm64IsDisabledPfnPte(OldPte))
+        {
+            MiUnlockProcessWorkingSetUnsafe(Process, PsGetCurrentThread());
+            return;
+        }
 
         TempPte.u.Long = 0;
         TempPte.u.Long |= MmProtectToPteMask[ProtectionMask];
@@ -2111,11 +2193,17 @@ MmSetPageProtect(
         if ((ProtectionMask != MM_NOACCESS) && !FlagOn(ProtectionMask, MM_GUARDPAGE))
             TempPte.u.Hard.Valid = 1;
 
-        if (OldPte.u.Hard.Accessed)
+        if (TempPte.u.Hard.Valid && OldPte.u.Hard.Valid && OldPte.u.Hard.Accessed)
             TempPte.u.Hard.Accessed = 1;
 
         if (TempPte.u.Hard.Valid)
+        {
             TempPte.u.Hard.NotLargePage = 1;
+        }
+        else
+        {
+            TempPte.u.Hard.OsAvailable = MI_ARM64_DISABLED_PTE_OSAVAILABLE;
+        }
 
         if (TempPte.u.Hard.Writable)
             MI_MAKE_DIRTY_PAGE(&TempPte);
@@ -2129,7 +2217,7 @@ MmSetPageProtect(
         if (OldPte.u.Long != TempPte.u.Long)
         {
             __asm__ __volatile__("dsb ishst" ::: "memory");
-            __asm__ __volatile__("tlbi vaale1is, %0" :: "r"((ULONG_PTR)Address >> 12) : "memory");
+            __asm__ __volatile__("tlbi vaae1is, %0" :: "r"((ULONG_PTR)Address >> 12) : "memory");
             __asm__ __volatile__("dsb ish" ::: "memory");
             __asm__ __volatile__("isb" ::: "memory");
         }
@@ -2207,7 +2295,7 @@ MmSetDirtyBit(
         if (OldPte.u.Long != TempPte.u.Long)
         {
             __asm__ __volatile__("dsb ishst" ::: "memory");
-            __asm__ __volatile__("tlbi vaale1is, %0" :: "r"((ULONG_PTR)Address >> 12) : "memory");
+            __asm__ __volatile__("tlbi vaae1is, %0" :: "r"((ULONG_PTR)Address >> 12) : "memory");
             __asm__ __volatile__("dsb ish" ::: "memory");
             __asm__ __volatile__("isb" ::: "memory");
         }

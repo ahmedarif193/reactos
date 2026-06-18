@@ -106,6 +106,7 @@ extern ULONG64 KeFeatureBits;
 extern KAFFINITY KeActiveProcessors;
 extern PKPRCB KiProcessorBlock[];
 #ifdef CONFIG_SMP
+extern LONG KiReadyQueueDepth[MAXIMUM_PROCESSORS];
 extern ULONG KeMaximumProcessors;
 extern ULONG KeNumprocSpecified;
 extern ULONG KeBootprocSpecified;

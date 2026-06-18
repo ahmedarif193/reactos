@@ -128,6 +128,54 @@ IntRestoreTebWndCallback (HWND hWnd, PWND pWnd, PVOID pActCtx)
   ClientInfo->CallbackWnd.pActCtx = pActCtx;
 }
 
+static VOID
+IntLogWindowProcCallbackFailure(NTSTATUS Status, UINT Message, INT lParamBufferSize)
+{
+   static NTSTATUS LastStatus;
+   static UINT LastMessage;
+   static INT LastLParamBufferSize;
+   static HANDLE LastProcessId;
+   static HANDLE LastThreadId;
+   static volatile LONG RepeatCount;
+   HANDLE ProcessId = PsGetCurrentProcessId();
+   HANDLE ThreadId = PsGetCurrentThreadId();
+   LONG Count;
+
+   if ((Status == LastStatus) &&
+       (Message == LastMessage) &&
+       (lParamBufferSize == LastLParamBufferSize) &&
+       (ProcessId == LastProcessId) &&
+       (ThreadId == LastThreadId))
+   {
+      Count = InterlockedIncrement(&RepeatCount);
+      if ((Count > 4) && ((Count & 0x3f) != 0))
+         return;
+
+      ERR("Error Callback to User space Status %lx Message %u lParamSize %d Pid %p Tid %p Repeat %ld\n",
+          Status,
+          Message,
+          lParamBufferSize,
+          ProcessId,
+          ThreadId,
+          Count);
+      return;
+   }
+
+   LastStatus = Status;
+   LastMessage = Message;
+   LastLParamBufferSize = lParamBufferSize;
+   LastProcessId = ProcessId;
+   LastThreadId = ThreadId;
+   InterlockedExchange(&RepeatCount, 1);
+
+   ERR("Error Callback to User space Status %lx Message %u lParamSize %d Pid %p Tid %p\n",
+       Status,
+       Message,
+       lParamBufferSize,
+       ProcessId,
+       ThreadId);
+}
+
 /* FUNCTIONS *****************************************************************/
 
 /* Calls ClientLoadLibrary in user32 */
@@ -295,6 +343,7 @@ co_IntCallWindowProc(WNDPROC Proc,
    ULONG ResultLength;
    ULONG ArgumentLength;
    LRESULT Result;
+   BOOLEAN CallbackFailed;
 
    TRACE("co_IntCallWindowProc(Proc %p, IsAnsiProc: %s, Wnd %p, Message %u, wParam %Iu, lParam %Id, lParamBufferSize %d)\n",
        Proc, IsAnsiProc ? "TRUE" : "FALSE", Wnd, Message, wParam, lParam, lParamBufferSize);
@@ -338,24 +387,22 @@ co_IntCallWindowProc(WNDPROC Proc,
                                ArgumentLength,
                                &ResultPointer,
                                &ResultLength);
-   if (!NT_SUCCESS(Status))
-   {
-      ERR("Error Callback to User space Status %lx Message %d\n",Status,Message);
-      UserEnterCo();
-      return 0;
-   }
+   CallbackFailed = !NT_SUCCESS(Status);
 
-   _SEH2_TRY
+   if (!CallbackFailed)
    {
-      /* Simulate old behaviour: copy into our local buffer */
-      RtlMoveMemory(Arguments, ResultPointer, ArgumentLength);
+      _SEH2_TRY
+      {
+         /* Simulate old behaviour: copy into our local buffer */
+         RtlMoveMemory(Arguments, ResultPointer, ArgumentLength);
+      }
+      _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
+      {
+         ERR("Failed to copy result from user mode, Message %u lParam size %d!\n", Message, lParamBufferSize);
+         Status = _SEH2_GetExceptionCode();
+      }
+      _SEH2_END;
    }
-   _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
-   {
-      ERR("Failed to copy result from user mode, Message %u lParam size %d!\n", Message, lParamBufferSize);
-      Status = _SEH2_GetExceptionCode();
-   }
-   _SEH2_END;
 
    UserEnterCo();
 
@@ -363,12 +410,20 @@ co_IntCallWindowProc(WNDPROC Proc,
 
    if (!NT_SUCCESS(Status))
    {
-     ERR("Call to user mode failed! 0x%08lx\n",Status);
+      if (CallbackFailed)
+      {
+         IntLogWindowProcCallbackFailure(Status, Message, lParamBufferSize);
+      }
+      else
+      {
+         ERR("Call to user mode failed! 0x%08lx\n", Status);
+      }
+
       if (lParamBufferSize != -1)
       {
          IntCbFreeMemory(Arguments);
       }
-      return -1;
+      return CallbackFailed ? 0 : -1;
    }
    Result = Arguments->Result;
 

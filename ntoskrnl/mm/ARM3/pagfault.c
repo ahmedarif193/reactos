@@ -1833,6 +1833,18 @@ MiDispatchFault(IN ULONG FaultCode,
         return Status;
     }
 
+#if defined(_M_ARM64)
+    if ((Address < MmSystemRangeStart) &&
+        (Process != NULL) &&
+        MmIsDisabledPage(Process, Address))
+    {
+        ASSERT(TempPte.u.Hard.Valid == 0);
+        ASSERT(TempPte.u.Soft.Transition == 0);
+        ASSERT(TempPte.u.Soft.Prototype == 0);
+        return STATUS_ACCESS_VIOLATION;
+    }
+#endif
+
     /* Should we page the data back in ? */
     if (TempPte.u.Soft.PageFileHigh != 0)
     {

@@ -13,34 +13,14 @@ add_definitions(
     -D_NTSYSTEM_
     -DNTDDI_VERSION=${REACTOS_TARGET_NTDDI})
 
-if(NOT DEFINED NEWCC)
-    set(NEWCC FALSE)
-endif()
-
-if(NEWCC)
-    add_definitions(-DNEWCC)
-    list(APPEND SOURCE
-        ${REACTOS_SOURCE_DIR}/ntoskrnl/cache/cachesub.c
-        ${REACTOS_SOURCE_DIR}/ntoskrnl/cache/copysup.c
-        ${REACTOS_SOURCE_DIR}/ntoskrnl/cache/fssup.c
-        ${REACTOS_SOURCE_DIR}/ntoskrnl/cache/lazyrite.c
-        ${REACTOS_SOURCE_DIR}/ntoskrnl/cache/logsup.c
-        ${REACTOS_SOURCE_DIR}/ntoskrnl/cache/mdlsup.c
-        ${REACTOS_SOURCE_DIR}/ntoskrnl/cache/pinsup.c
-        ${REACTOS_SOURCE_DIR}/ntoskrnl/cache/section/fault.c
-        ${REACTOS_SOURCE_DIR}/ntoskrnl/cache/section/swapout.c
-        ${REACTOS_SOURCE_DIR}/ntoskrnl/cache/section/data.c
-        ${REACTOS_SOURCE_DIR}/ntoskrnl/cache/section/reqtools.c)
-else()
-    list(APPEND SOURCE
-        ${REACTOS_SOURCE_DIR}/ntoskrnl/cc/cacheman.c
-        ${REACTOS_SOURCE_DIR}/ntoskrnl/cc/copy.c
-        ${REACTOS_SOURCE_DIR}/ntoskrnl/cc/fs.c
-        ${REACTOS_SOURCE_DIR}/ntoskrnl/cc/lazywrite.c
-        ${REACTOS_SOURCE_DIR}/ntoskrnl/cc/mdl.c
-        ${REACTOS_SOURCE_DIR}/ntoskrnl/cc/pin.c
-        ${REACTOS_SOURCE_DIR}/ntoskrnl/cc/view.c)
-endif()
+list(APPEND SOURCE
+    ${REACTOS_SOURCE_DIR}/ntoskrnl/cc/cacheman.c
+    ${REACTOS_SOURCE_DIR}/ntoskrnl/cc/copy.c
+    ${REACTOS_SOURCE_DIR}/ntoskrnl/cc/fs.c
+    ${REACTOS_SOURCE_DIR}/ntoskrnl/cc/lazywrite.c
+    ${REACTOS_SOURCE_DIR}/ntoskrnl/cc/mdl.c
+    ${REACTOS_SOURCE_DIR}/ntoskrnl/cc/pin.c
+    ${REACTOS_SOURCE_DIR}/ntoskrnl/cc/view.c)
 
 list(APPEND SOURCE
     ${REACTOS_SOURCE_DIR}/ntoskrnl/cache/section/io.c

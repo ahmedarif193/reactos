@@ -32,6 +32,108 @@ static __attribute__((unused)) VOID KiArm64DbgPrintBacktraceImpl(_In_ PCONTEXT C
 }
 
 static
+VOID
+KiArm64DumpBadKernelException(
+    _In_ PEXCEPTION_RECORD ExceptionRecord,
+    _In_opt_ PKEXCEPTION_FRAME ExceptionFrame,
+    _In_ PKTRAP_FRAME TrapFrame,
+    _In_ PCONTEXT Context,
+    _In_ KPROCESSOR_MODE PreviousMode,
+    _In_ BOOLEAN FirstChance)
+{
+    ULONG i;
+    ULONG64 StackBase;
+    ULONG64 SystemRangeStart;
+    BOOLEAN BadPc;
+
+    SystemRangeStart = (ULONG64)(ULONG_PTR)MmSystemRangeStart;
+    BadPc = (Context->Pc == 0xE3E3E403D44101E2ULL) ||
+            (Context->Pc < SystemRangeStart) ||
+            ((Context->Pc & 0xFFFF000000000000ULL) != 0xFFFF000000000000ULL);
+
+    if (!BadPc)
+        return;
+
+    DbgPrintEx(DPFLTR_DEFAULT_ID,
+               DPFLTR_ERROR_LEVEL,
+               "[A64BADPC] Code=0x%08lx Flags=0x%08lx Address=%p Pc=%p Lr=%p Sp=%p Fp=%p Cpsr=0x%08lx Prev=%u First=%u Trap=%p ExceptionFrame=%p\n",
+               ExceptionRecord->ExceptionCode,
+               ExceptionRecord->ExceptionFlags,
+               ExceptionRecord->ExceptionAddress,
+               (PVOID)(ULONG_PTR)Context->Pc,
+               (PVOID)(ULONG_PTR)Context->Lr,
+               (PVOID)(ULONG_PTR)Context->Sp,
+               (PVOID)(ULONG_PTR)Context->Fp,
+               Context->Cpsr,
+               PreviousMode,
+               FirstChance,
+               TrapFrame,
+               ExceptionFrame);
+    DbgPrintEx(DPFLTR_DEFAULT_ID,
+               DPFLTR_ERROR_LEVEL,
+               "[A64BADPC] X0=%p X1=%p X2=%p X3=%p X4=%p X5=%p\n",
+               (PVOID)(ULONG_PTR)Context->X0,
+               (PVOID)(ULONG_PTR)Context->X1,
+               (PVOID)(ULONG_PTR)Context->X2,
+               (PVOID)(ULONG_PTR)Context->X3,
+               (PVOID)(ULONG_PTR)Context->X4,
+               (PVOID)(ULONG_PTR)Context->X5);
+    DbgPrintEx(DPFLTR_DEFAULT_ID,
+               DPFLTR_ERROR_LEVEL,
+               "[A64BADPC] X6=%p X7=%p X8=%p X9=%p X10=%p X11=%p\n",
+               (PVOID)(ULONG_PTR)Context->X6,
+               (PVOID)(ULONG_PTR)Context->X7,
+               (PVOID)(ULONG_PTR)Context->X8,
+               (PVOID)(ULONG_PTR)Context->X9,
+               (PVOID)(ULONG_PTR)Context->X10,
+               (PVOID)(ULONG_PTR)Context->X11);
+    DbgPrintEx(DPFLTR_DEFAULT_ID,
+               DPFLTR_ERROR_LEVEL,
+               "[A64BADPC] X12=%p X13=%p X14=%p X15=%p X16=%p X17=%p X18=%p\n",
+               (PVOID)(ULONG_PTR)Context->X12,
+               (PVOID)(ULONG_PTR)Context->X13,
+               (PVOID)(ULONG_PTR)Context->X14,
+               (PVOID)(ULONG_PTR)Context->X15,
+               (PVOID)(ULONG_PTR)Context->X16,
+               (PVOID)(ULONG_PTR)Context->X17,
+               (PVOID)(ULONG_PTR)Context->X18);
+
+    StackBase = Context->Sp & ~7ULL;
+    if (StackBase < SystemRangeStart)
+    {
+        DbgPrintEx(DPFLTR_DEFAULT_ID,
+                   DPFLTR_ERROR_LEVEL,
+                   "[A64BADPC] stack base %p below system range\n",
+                   (PVOID)(ULONG_PTR)StackBase);
+        return;
+    }
+
+    for (i = 0; i < 16; i++)
+    {
+        PULONG64 Slot;
+
+        Slot = (PULONG64)(ULONG_PTR)(StackBase + i * sizeof(ULONG64));
+        if (MmIsAddressValid(Slot))
+        {
+            DbgPrintEx(DPFLTR_DEFAULT_ID,
+                       DPFLTR_ERROR_LEVEL,
+                       "[A64BADPC] stack[%02lu] %p=%p\n",
+                       i,
+                       Slot,
+                       (PVOID)(ULONG_PTR)*Slot);
+        }
+        else
+        {
+            DbgPrintEx(DPFLTR_DEFAULT_ID,
+                       DPFLTR_ERROR_LEVEL,
+                       "[A64BADPC] stack[%02lu] %p invalid\n",
+                       i,
+                       Slot);
+        }
+    }
+}
+
+static
 BOOLEAN
 KiDispatchExceptionToUser(
     _In_ PKTRAP_FRAME TrapFrame,
@@ -423,6 +525,13 @@ KiDispatchException(_In_ PEXCEPTION_RECORD ExceptionRecord,
             }
         }
 #endif
+
+        KiArm64DumpBadKernelException(ExceptionRecord,
+                                      ExceptionFrame,
+                                      TrapFrame,
+                                      &Context,
+                                      PreviousMode,
+                                      FirstChance);
 
         KeBugCheckEx(KMODE_EXCEPTION_NOT_HANDLED,
                      ExceptionRecord->ExceptionCode,

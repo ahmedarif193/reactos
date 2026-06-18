@@ -486,6 +486,7 @@ LdrRelocateImageWithBias(
     ULONG_PTR Address;
     PUSHORT TypeOffset;
     LONGLONG Delta;
+    ULONGLONG PreferredBase;
 
     UNREFERENCED_PARAMETER(LoaderName);
 
@@ -506,7 +507,12 @@ LdrRelocateImageWithBias(
         return Success;
     }
 
-    Delta = (ULONG_PTR)BaseAddress - SWAPD(NtHeaders->OptionalHeader.ImageBase) + AdditionalBias;
+    if (SWAPW(NtHeaders->OptionalHeader.Magic) == IMAGE_NT_OPTIONAL_HDR64_MAGIC)
+        PreferredBase = SWAPQ(((PIMAGE_NT_HEADERS64)NtHeaders)->OptionalHeader.ImageBase);
+    else
+        PreferredBase = SWAPD(((PIMAGE_NT_HEADERS32)NtHeaders)->OptionalHeader.ImageBase);
+
+    Delta = (ULONG_PTR)BaseAddress - PreferredBase + AdditionalBias;
     RelocationDir = (PIMAGE_BASE_RELOCATION)((ULONG_PTR)BaseAddress + SWAPD(RelocationDDir->VirtualAddress));
     RelocationEnd = (PIMAGE_BASE_RELOCATION)((ULONG_PTR)RelocationDir + SWAPD(RelocationDDir->Size));
 

@@ -9,9 +9,6 @@
 /* INCLUDES ******************************************************************/
 
 #include <ntoskrnl.h>
-#ifdef NEWCC
-#include <cache/newcc.h>
-#endif
 
 #define NDEBUG
 #include <debug.h>
@@ -400,4 +397,3 @@ PoRequestShutdownEvent(OUT PVOID *Event)
     if (Event) *Event = &PopShutdownEvent;
     return STATUS_SUCCESS;
 }
-

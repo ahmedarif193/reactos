@@ -43,7 +43,6 @@
 
 #include <ntoskrnl.h>
 #define NDEBUG
-#include <cache/section/newmm.h>
 #include <debug.h>
 
 #include "ARM3/miarm.h"
@@ -128,6 +127,91 @@ MmIsAddressRangeFree(
     return (Result != TableFoundNode);
 }
 
+static VOID
+MiPurgeOrphanedRosMappings(
+    _In_ PMMSUPPORT AddressSpace,
+    _In_ PVOID BaseAddress,
+    _In_ ULONG_PTR Length)
+{
+    PEPROCESS Process;
+    ULONG_PTR Address;
+    ULONG_PTR EndAddress;
+    BOOLEAN Flushed = FALSE;
+
+    Process = MmGetAddressSpaceOwner(AddressSpace);
+    if (Process == NULL)
+    {
+        return;
+    }
+
+    ASSERT(Process == PsGetCurrentProcess());
+    ASSERT(BaseAddress < MmSystemRangeStart);
+
+    EndAddress = (ULONG_PTR)BaseAddress + PAGE_ROUND_UP(Length);
+    for (Address = (ULONG_PTR)BaseAddress;
+         Address < EndAddress;
+         Address += PAGE_SIZE)
+    {
+        PFN_NUMBER Page = 0;
+        BOOLEAN Dirty = FALSE;
+
+        if (MmIsPageSwapEntry(Process, (PVOID)Address))
+        {
+            SWAPENTRY SwapEntry = 0;
+
+            MmDeletePageFileMapping(Process, (PVOID)Address, &SwapEntry);
+            if (SwapEntry && (SwapEntry != MM_WAIT_ENTRY))
+            {
+                MmFreeSwapPage(SwapEntry);
+            }
+            Flushed = TRUE;
+            continue;
+        }
+
+        if (MmDeleteVirtualMapping(Process, (PVOID)Address, &Dirty, &Page))
+        {
+            if (Page != 0)
+            {
+                if (MmDeleteRmapIfExists(Page, Process, (PVOID)Address))
+                {
+                    LARGE_INTEGER Offset;
+                    PMM_SECTION_SEGMENT Segment;
+
+                    Segment = MmGetSectionAssociation(Page, &Offset);
+                    if (Segment != NULL)
+                    {
+                        ULONG_PTR Entry;
+
+                        MmLockSectionSegment(Segment);
+                        Entry = MmGetPageEntrySectionSegment(Segment, &Offset);
+                        if (Entry &&
+                            !IS_SWAP_FROM_SSE(Entry) &&
+                            !IS_WRITE_SSE(Entry) &&
+                            (PFN_FROM_SSE(Entry) == Page) &&
+                            (SHARE_COUNT_FROM_SSE(Entry) > MmGetProcessRmapCount(Page)))
+                        {
+                            MmUnsharePageEntrySectionSegment(NULL,
+                                                             Segment,
+                                                             &Offset,
+                                                             Dirty,
+                                                             FALSE,
+                                                             NULL);
+                        }
+                        MmUnlockSectionSegment(Segment);
+                        MmDereferenceSegment(Segment);
+                    }
+                }
+            }
+            Flushed = TRUE;
+        }
+    }
+
+    if (Flushed)
+    {
+        KeFlushProcessTb();
+    }
+}
+
 VOID
 NTAPI
 MiInsertVad(IN PMMVAD Vad,
@@ -156,11 +240,7 @@ MmInsertMemoryArea(
         ASSERT(Process != NULL);
         if (marea->Type != MEMORY_AREA_OWNED_BY_ARM3)
         {
-#ifdef NEWCC
-            ASSERT(marea->Type == MEMORY_AREA_SECTION_VIEW || marea->Type == MEMORY_AREA_CACHE);
-#else
             ASSERT(marea->Type == MEMORY_AREA_SECTION_VIEW);
-#endif
 
             /* Insert the VAD */
             MiLockProcessWorkingSetUnsafe(PsGetCurrentProcess(), PsGetCurrentThread());
@@ -306,7 +386,7 @@ MmFreeMemoryArea(
             {
                 DoFree = MmDeleteVirtualMapping(Process, (PVOID)Address, &Dirty, &Page);
             }
-            if (DoFree && (FreePage != NULL))
+            if ((FreePage != NULL) && (DoFree || (MemoryArea->Type == MEMORY_AREA_SECTION_VIEW)))
             {
                 FreePage(FreePageContext, MemoryArea, (PVOID)Address,
                          Page, SwapEntry, (BOOLEAN)Dirty);
@@ -316,11 +396,7 @@ MmFreeMemoryArea(
         if (MemoryArea->VadNode.StartingVpn < (ULONG_PTR)MmSystemRangeStart >> PAGE_SHIFT)
         {
             ASSERT(MemoryArea->VadNode.EndingVpn + 1 < (ULONG_PTR)MmSystemRangeStart >> PAGE_SHIFT);
-#ifdef NEWCC
-            ASSERT(MemoryArea->Type == MEMORY_AREA_SECTION_VIEW || MemoryArea->Type == MEMORY_AREA_CACHE);
-#else
             ASSERT(MemoryArea->Type == MEMORY_AREA_SECTION_VIEW);
-#endif
 
             /* We do not have fake ARM3 memory areas anymore. */
             ASSERT(MI_IS_MEMORY_AREA_VAD(&MemoryArea->VadNode));
@@ -445,6 +521,11 @@ MmCreateMemoryArea(PMMSUPPORT AddressSpace,
 
         MemoryArea->VadNode.StartingVpn = (ULONG_PTR)*BaseAddress >> PAGE_SHIFT;
         MemoryArea->VadNode.EndingVpn = ((ULONG_PTR)*BaseAddress + tmpLength - 1) >> PAGE_SHIFT;
+        if ((MemoryArea->Type == MEMORY_AREA_SECTION_VIEW) &&
+            (MmGetAddressSpaceOwner(AddressSpace) != NULL))
+        {
+            MiPurgeOrphanedRosMappings(AddressSpace, *BaseAddress, tmpLength);
+        }
         MmInsertMemoryArea(AddressSpace, MemoryArea, Protect);
     }
     else
@@ -477,6 +558,12 @@ MmCreateMemoryArea(PMMSUPPORT AddressSpace,
                 if (!(Type & MEMORY_AREA_STATIC)) ExFreePoolWithTag(MemoryArea, TAG_MAREA);
                 return STATUS_CONFLICTING_ADDRESSES;
             }
+        }
+
+        if ((MemoryArea->Type == MEMORY_AREA_SECTION_VIEW) &&
+            (MmGetAddressSpaceOwner(AddressSpace) != NULL))
+        {
+            MiPurgeOrphanedRosMappings(AddressSpace, *BaseAddress, tmpLength);
         }
 
         MemoryArea->VadNode.StartingVpn = (ULONG_PTR)*BaseAddress >> PAGE_SHIFT;
@@ -515,12 +602,6 @@ MiRosCleanupMemoryArea(
     {
         Status = MiRosUnmapViewOfSection(Process, MemoryArea, BaseAddress, Process->ProcessExiting);
     }
-#ifdef NEWCC
-    else if (MemoryArea->Type == MEMORY_AREA_CACHE)
-    {
-        Status = MmUnmapViewOfCacheSegment(&Process->Vm, BaseAddress);
-    }
-#endif
     else
     {
         /* There shouldn't be anything else! */

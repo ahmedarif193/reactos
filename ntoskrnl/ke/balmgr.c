@@ -79,6 +79,9 @@ KiScanReadyQueues(IN PKDPC Dpc,
                             /* The list is empty now */
                             Prcb->ReadySummary ^= PRIORITY_MASK(Index);
                         }
+#ifdef CONFIG_SMP
+                        InterlockedDecrement(&KiReadyQueueDepth[Prcb->Number]);
+#endif
 
                         /* Verify priority decrement and set the new one */
                         ASSERT((Thread->PriorityDecrement >= 0) &&

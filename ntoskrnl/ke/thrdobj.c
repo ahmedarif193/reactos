@@ -796,7 +796,7 @@ KeInitThread(IN OUT PKTHREAD Thread,
     /* Set swap settings */
     Thread->EnableStackSwap = TRUE;
     Thread->IdealProcessor = 1;
-#if (NTDDI_VERSION < NTDDI_WIN7)
+#if (NTDDI_VERSION < NTDDI_WIN7) || defined(_M_ARM64)
     Thread->SwapBusy = FALSE;
 #endif
     Thread->KernelStackResident = TRUE;

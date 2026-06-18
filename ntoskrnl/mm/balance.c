@@ -82,6 +82,10 @@ MmReleasePageMemoryConsumer(ULONG Consumer, PFN_NUMBER Page)
     (void)InterlockedDecrementUL(&MiMemoryConsumers[Consumer].PagesUsed);
     UpdateTotalCommittedPages(-1);
 
+#if defined(_M_ARM64) && defined(CONFIG_SMP)
+    MiTraceSmpPageRelease(Page, Consumer, _ReturnAddress());
+#endif
+
     OldIrql = MiAcquirePfnLock();
 
     MmDereferencePage(Page);

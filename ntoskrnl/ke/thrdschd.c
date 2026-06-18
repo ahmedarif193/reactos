@@ -40,8 +40,16 @@ typedef struct _KI_SCHED_CORE
 
 KI_SCHED_CORE KiSchedCores[MAXIMUM_PROCESSORS];
 LONG KiSchedulerRotor;
+LONG KiReadyQueueDepth[MAXIMUM_PROCESSORS];
 
 /* FUNCTIONS *****************************************************************/
+
+static
+VOID
+FASTCALL
+KiDeferredReadyThreadOnProcessor(
+    _In_ PKTHREAD Thread,
+    _In_ ULONG ForcedProcessor);
 
 PKTHREAD
 FASTCALL
@@ -134,22 +142,42 @@ KiCoreCapacity(IN ULONG Number)
 }
 
 FORCEINLINE
+BOOLEAN
+KiTryAcquirePrcbLock(IN PKPRCB Prcb)
+{
+    return InterlockedExchange((PLONG)&Prcb->PrcbLock, 1) == 0;
+}
+
+FORCEINLINE
 ULONG
-KiCoreScaledLoad(IN PKPRCB Prcb)
+KiCoreRawLoad(IN PKPRCB Prcb)
 {
     ULONG Raw = 0;
-    ULONG Summary = Prcb->ReadySummary;
+    LONG ReadyDepth;
 
-    while (Summary)
-    {
-        Summary &= (Summary - 1);
-        Raw++;
-    }
+    ReadyDepth = KiReadyQueueDepth[Prcb->Number];
+    if (ReadyDepth > 0) Raw += (ULONG)ReadyDepth;
 
     if (Prcb->NextThread != NULL) Raw++;
     if (Prcb->CurrentThread != Prcb->IdleThread) Raw++;
 
+    return Raw;
+}
+
+FORCEINLINE
+ULONG
+KiScaleCoreLoad(
+    _In_ PKPRCB Prcb,
+    _In_ ULONG Raw)
+{
     return Raw * KI_SCHED_REFERENCE_CAPACITY / KiCoreCapacity(Prcb->Number);
+}
+
+FORCEINLINE
+ULONG
+KiCoreScaledLoad(IN PKPRCB Prcb)
+{
+    return KiScaleCoreLoad(Prcb, KiCoreRawLoad(Prcb));
 }
 
 FORCEINLINE
@@ -239,11 +267,69 @@ KiSelectNextProcessor(
     return Best;
 }
 
-FORCEINLINE
-BOOLEAN
-KiTryAcquirePrcbLock(IN PKPRCB Prcb)
+static
+ULONG
+KiSelectBalanceProcessor(
+    _In_ PKTHREAD Thread,
+    _In_ ULONG Source)
 {
-    return InterlockedExchange((PLONG)&Prcb->PrcbLock, 1) == 0;
+    KAFFINITY Set, MinSet;
+    ULONG Class, Index, Best, BestLoad, Count, Pick;
+    UCHAR BestClass;
+    ULONG LoadCache[MAXIMUM_PROCESSORS];
+
+    Set = KiThreadAffinityMask(Thread) & KeActiveProcessors & ~AFFINITY_MASK(Source);
+    ASSERT(Set != 0);
+
+    Class = KiClassifyThread(Thread);
+    BestLoad = (ULONG)-1;
+    for (Index = 0; Index < (ULONG)KeNumberProcessors; Index++)
+    {
+        if (!(Set & AFFINITY_MASK(Index))) continue;
+        LoadCache[Index] = KiCoreScaledLoad(KiProcessorBlock[Index]);
+        if (LoadCache[Index] < BestLoad) BestLoad = LoadCache[Index];
+    }
+
+    BestClass = (Class == KI_CLASS_BACKGROUND) ? (UCHAR)0xFF : (UCHAR)0;
+    for (Index = 0; Index < (ULONG)KeNumberProcessors; Index++)
+    {
+        if (!(Set & AFFINITY_MASK(Index))) continue;
+        if (LoadCache[Index] != BestLoad) continue;
+        if ((Class == KI_CLASS_BACKGROUND) ? (KiSchedCores[Index].EfficiencyClass < BestClass)
+                                           : (KiSchedCores[Index].EfficiencyClass > BestClass))
+        {
+            BestClass = KiSchedCores[Index].EfficiencyClass;
+        }
+    }
+
+    MinSet = 0;
+    for (Index = 0; Index < (ULONG)KeNumberProcessors; Index++)
+    {
+        if (!(Set & AFFINITY_MASK(Index))) continue;
+        if (LoadCache[Index] != BestLoad) continue;
+        if (KiSchedCores[Index].EfficiencyClass != BestClass) continue;
+        MinSet |= AFFINITY_MASK(Index);
+    }
+
+    if (MinSet == 0) MinSet = Set;
+
+    Count = 0;
+    for (Index = 0; Index < (ULONG)KeNumberProcessors; Index++)
+    {
+        if (MinSet & AFFINITY_MASK(Index)) Count++;
+    }
+
+    Pick = (ULONG)InterlockedIncrement(&KiSchedulerRotor) % Count;
+    for (Index = 0; Index < (ULONG)KeNumberProcessors; Index++)
+    {
+        if (!(MinSet & AFFINITY_MASK(Index))) continue;
+        if (Pick == 0) return Index;
+        Pick--;
+    }
+
+    NT_VERIFY(BitScanForwardAffinity(&Best, MinSet) != FALSE);
+    ASSERT(Best < KeNumberProcessors);
+    return Best;
 }
 
 PKTHREAD
@@ -285,12 +371,17 @@ KiTryStealReadyThread(IN PKPRCB Prcb)
         {
             Candidate = CONTAINING_RECORD(Entry, KTHREAD, WaitListEntry);
             if (Candidate->State != Ready) continue;
+            if (Candidate->SwapBusy) continue;
+            ASSERT(Candidate->Priority == Priority);
+            ASSERT(Candidate->NextProcessor == Victim->Number);
+            if (Candidate->NextProcessor != Victim->Number) continue;
             if (!(KiThreadAffinityMask(Candidate) & Prcb->SetMember)) continue;
 
             if (RemoveEntryList(&Candidate->WaitListEntry))
             {
                 Victim->ReadySummary &= ~PRIORITY_MASK(Priority);
             }
+            InterlockedDecrement(&KiReadyQueueDepth[Victim->Number]);
             Candidate->State = Standby;
             Candidate->NextProcessor = Prcb->Number;
             Thread = Candidate;
@@ -310,52 +401,85 @@ KiBalanceLoad(VOID)
     PKPRCB Busy;
     PKTHREAD Thread, Candidate;
     PLIST_ENTRY Head, Entry;
-    ULONG Index, BusyNumber, BusyLoad, MinLoad, Load;
+    ULONG Index, BusyNumber, BusyLoad, MinLoad, Load, Move, MoveLimit, Target;
+    KAFFINITY CandidateSet;
+    KAFFINITY SkipSet = 0;
     LONG Priority;
 
-    BusyNumber = (ULONG)-1;
-    BusyLoad = 1;
-    MinLoad = (ULONG)-1;
-    for (Index = 0; Index < (ULONG)KeNumberProcessors; Index++)
+    MoveLimit = (ULONG)KeNumberProcessors;
+    for (Move = 0; Move < MoveLimit; Move++)
     {
-        Load = KiCoreScaledLoad(KiProcessorBlock[Index]);
-        if (Load > BusyLoad) { BusyLoad = Load; BusyNumber = Index; }
-        if (Load < MinLoad) MinLoad = Load;
-    }
-
-    if (BusyNumber == (ULONG)-1) return;
-    if (BusyLoad < MinLoad + 2) return;
-
-    Busy = KiProcessorBlock[BusyNumber];
-    if (!KiTryAcquirePrcbLock(Busy)) return;
-
-    Thread = NULL;
-    for (Priority = 0; Priority < LOW_REALTIME_PRIORITY; Priority++)
-    {
-        if (!(Busy->ReadySummary & PRIORITY_MASK(Priority))) continue;
-        Head = &Busy->DispatcherReadyListHead[Priority];
-        for (Entry = Head->Flink; Entry != Head; Entry = Entry->Flink)
+        BusyNumber = (ULONG)-1;
+        BusyLoad = 1 + KI_SCHED_MIGRATE_THRESHOLD;
+        MinLoad = (ULONG)-1;
+        for (Index = 0; Index < (ULONG)KeNumberProcessors; Index++)
         {
-            Candidate = CONTAINING_RECORD(Entry, KTHREAD, WaitListEntry);
-            if (Candidate->State != Ready) continue;
-            if (KiThreadAffinityMask(Candidate) == Busy->SetMember) continue;
-
-            if (RemoveEntryList(&Candidate->WaitListEntry))
+            Load = KiCoreScaledLoad(KiProcessorBlock[Index]);
+            if (!(SkipSet & AFFINITY_MASK(Index)) && (Load > BusyLoad))
             {
-                Busy->ReadySummary &= ~PRIORITY_MASK(Priority);
+                BusyLoad = Load;
+                BusyNumber = Index;
             }
-            Candidate->State = DeferredReady;
-            Candidate->NextProcessor = BusyNumber;
-            Candidate->DeferredProcessor = BusyNumber;
-            Thread = Candidate;
-            break;
+            if (Load < MinLoad) MinLoad = Load;
         }
-        if (Thread != NULL) break;
+
+        if (BusyNumber == (ULONG)-1) return;
+        if (BusyLoad < MinLoad + 2 + KI_SCHED_MIGRATE_THRESHOLD) return;
+
+        Busy = KiProcessorBlock[BusyNumber];
+        if (!KiTryAcquirePrcbLock(Busy))
+        {
+            SkipSet |= AFFINITY_MASK(BusyNumber);
+            continue;
+        }
+
+        if (KiCoreScaledLoad(Busy) < MinLoad + 2 + KI_SCHED_MIGRATE_THRESHOLD)
+        {
+            KiReleasePrcbLock(Busy);
+            SkipSet |= AFFINITY_MASK(BusyNumber);
+            continue;
+        }
+
+        Thread = NULL;
+        for (Priority = 0; Priority < LOW_REALTIME_PRIORITY; Priority++)
+        {
+            if (!(Busy->ReadySummary & PRIORITY_MASK(Priority))) continue;
+            Head = &Busy->DispatcherReadyListHead[Priority];
+            for (Entry = Head->Flink; Entry != Head; Entry = Entry->Flink)
+            {
+                Candidate = CONTAINING_RECORD(Entry, KTHREAD, WaitListEntry);
+                if (Candidate->State != Ready) continue;
+                if (Candidate->SwapBusy) continue;
+                ASSERT(Candidate->Priority == Priority);
+                ASSERT(Candidate->NextProcessor == BusyNumber);
+                if (Candidate->NextProcessor != BusyNumber) continue;
+                CandidateSet = KiThreadAffinityMask(Candidate) & KeActiveProcessors;
+                if (!(CandidateSet & ~Busy->SetMember)) continue;
+                Target = KiSelectBalanceProcessor(Candidate, BusyNumber);
+
+                if (RemoveEntryList(&Candidate->WaitListEntry))
+                {
+                    Busy->ReadySummary &= ~PRIORITY_MASK(Priority);
+                }
+                InterlockedDecrement(&KiReadyQueueDepth[Busy->Number]);
+                Candidate->State = DeferredReady;
+                Candidate->NextProcessor = Target;
+                Candidate->DeferredProcessor = Target;
+                Thread = Candidate;
+                break;
+            }
+            if (Thread != NULL) break;
+        }
+
+        KiReleasePrcbLock(Busy);
+
+        if (Thread == NULL)
+        {
+            SkipSet |= AFFINITY_MASK(BusyNumber);
+            continue;
+        }
+        KiDeferredReadyThreadOnProcessor(Thread, Target);
     }
-
-    KiReleasePrcbLock(Busy);
-
-    if (Thread != NULL) KiDeferredReadyThread(Thread);
 }
 #else
 #define KiSelectNextProcessor(Thread) 0
@@ -363,9 +487,12 @@ KiBalanceLoad(VOID)
 #define KiBalanceLoad()
 #endif
 
+static
 VOID
 FASTCALL
-KiDeferredReadyThread(IN PKTHREAD Thread)
+KiDeferredReadyThreadOnProcessor(
+    _In_ PKTHREAD Thread,
+    _In_ ULONG ForcedProcessor)
 {
     PKPRCB Prcb;
     BOOLEAN Preempted;
@@ -376,6 +503,9 @@ KiDeferredReadyThread(IN PKTHREAD Thread)
     /* Sanity checks */
     ASSERT(Thread->State == DeferredReady);
     ASSERT((Thread->Priority >= 0) && (Thread->Priority <= HIGH_PRIORITY));
+#ifndef CONFIG_SMP
+    UNREFERENCED_PARAMETER(ForcedProcessor);
+#endif
 
     SMPDBG_TRACE("S%%1 %lu\n", KeGetCurrentProcessorNumber());
 
@@ -520,7 +650,17 @@ KiDeferredReadyThread(IN PKTHREAD Thread)
     Thread->Preempted = FALSE;
 
     /* Select a processor to run on */
-    Processor = KiSelectNextProcessor(Thread);
+#ifdef CONFIG_SMP
+    if ((ForcedProcessor < (ULONG)KeNumberProcessors) &&
+        (KiThreadAffinityMask(Thread) & AFFINITY_MASK(ForcedProcessor)))
+    {
+        Processor = ForcedProcessor;
+    }
+    else
+#endif
+    {
+        Processor = KiSelectNextProcessor(Thread);
+    }
     Thread->NextProcessor = Processor;
 
     SMPDBG_TRACE("S%%2 %lu\n", KeGetCurrentProcessorNumber());
@@ -567,6 +707,10 @@ KiDeferredReadyThread(IN PKTHREAD Thread)
             NextThread->State = DeferredReady;
             NextThread->DeferredProcessor = Prcb->Number;
             KiReleasePrcbLock(Prcb);
+            if (KeGetCurrentProcessorNumber() != Thread->NextProcessor)
+            {
+                KiIpiSend(AFFINITY_MASK(Thread->NextProcessor), IPI_DPC);
+            }
             KiDeferredReadyThread(NextThread);
             return;
         }
@@ -614,12 +758,28 @@ KiDeferredReadyThread(IN PKTHREAD Thread)
 
     /* Update the ready summary */
     Prcb->ReadySummary |= PRIORITY_MASK(OldPriority);
+    InterlockedIncrement(&KiReadyQueueDepth[Prcb->Number]);
 
     /* Sanity check */
     ASSERT(OldPriority == Thread->Priority);
 
     /* Release the lock */
     KiReleasePrcbLock(Prcb);
+
+#ifdef CONFIG_SMP
+    if ((KeGetCurrentProcessorNumber() != Processor) &&
+        ((Prcb->CurrentThread == Prcb->IdleThread) || Prcb->Sleeping))
+    {
+        KiIpiSend(AFFINITY_MASK(Processor), IPI_DPC);
+    }
+#endif
+}
+
+VOID
+FASTCALL
+KiDeferredReadyThread(IN PKTHREAD Thread)
+{
+    KiDeferredReadyThreadOnProcessor(Thread, (ULONG)-1);
 }
 
 PKTHREAD
@@ -853,6 +1013,7 @@ KiSetPriorityThread(IN PKTHREAD Thread,
                             Prcb->ReadySummary ^= PRIORITY_MASK(Thread->
                                                                 Priority);
                         }
+                        InterlockedDecrement(&KiReadyQueueDepth[Prcb->Number]);
 
                         /* Update priority */
                         Thread->Priority = (SCHAR)Priority;
@@ -988,62 +1149,82 @@ KiUpdateEffectiveAffinityThread(
     _In_ PKTHREAD Thread)
 {
     PKPRCB Prcb;
+    ULONG Processor;
 
     /* Acquire the thread lock */
     KiAcquireThreadLock(Thread);
 
-    /* Get the PRCB that the thread is to be run on and lock it */
-    Prcb = KiProcessorBlock[Thread->NextProcessor];
-    KiAcquirePrcbLock(Prcb);
-
-    /* Set the thread's affinity and ideal processor */
-    Thread->Affinity = Thread->UserAffinity;
-    Thread->IdealProcessor = Thread->UserIdealProcessor;
-
-    /* Check if the affinity doesn't match with the current processor */
-    if ((Prcb->SetMember & KiThreadAffinityMask(Thread)) == 0)
+    for (;;)
     {
-        if (Thread->State == Running)
+        /* Get the PRCB that the thread is to be run on and lock it */
+        Processor = Thread->NextProcessor;
+        Prcb = KiProcessorBlock[Processor];
+        KiAcquirePrcbLock(Prcb);
+
+        if (((Thread->State == Ready) &&
+             !Thread->ProcessReadyQueue &&
+             (Thread->NextProcessor != Prcb->Number)) ||
+            ((Thread->State == Standby) &&
+             (Thread != Prcb->NextThread)) ||
+            ((Thread->State == Running) &&
+             (Thread != Prcb->CurrentThread)))
         {
-            /* Check if there is the next thread is selected already */
-            if (Prcb->NextThread == NULL)
+            KiReleasePrcbLock(Prcb);
+            continue;
+        }
+
+        /* Set the thread's affinity and ideal processor */
+        Thread->Affinity = Thread->UserAffinity;
+        Thread->IdealProcessor = Thread->UserIdealProcessor;
+
+        /* Check if the affinity doesn't match with the current processor */
+        if ((Prcb->SetMember & KiThreadAffinityMask(Thread)) == 0)
+        {
+            if (Thread->State == Running)
             {
-                /* It is not, select a new thread and set it on standby */
+                /* Check if there is the next thread is selected already */
+                if (Prcb->NextThread == NULL)
+                {
+                    /* It is not, select a new thread and set it on standby */
+                    Prcb->NextThread = KiSelectNextThread(Prcb);
+                    Prcb->NextThread->State = Standby;
+                }
+
+                /* Check if the thread is running on a different processor */
+                if (Prcb != KeGetCurrentPrcb())
+                {
+                    /* It is, send an IPI */
+                    KiIpiSend(AFFINITY_MASK(Thread->NextProcessor), IPI_DPC);
+                }
+            }
+            else if (Thread->State == Standby)
+            {
+                /* Select a new thread and set it on standby */
                 Prcb->NextThread = KiSelectNextThread(Prcb);
                 Prcb->NextThread->State = Standby;
-            }
 
-            /* Check if the thread is running on a different processor */
-            if (Prcb != KeGetCurrentPrcb())
+                /* Insert the thread back into the ready list */
+                KiInsertDeferredReadyList(Thread);
+            }
+            else if ((Thread->State == Ready) && !Thread->ProcessReadyQueue)
             {
-                /* It is, send an IPI */
-                KiIpiSend(AFFINITY_MASK(Thread->NextProcessor), IPI_DPC);
+                /* Remove it from the list */
+                if (RemoveEntryList(&Thread->WaitListEntry))
+                {
+                    /* The list is empty now, reset the ready summary */
+                    Prcb->ReadySummary &= ~PRIORITY_MASK(Thread->Priority);
+                }
+                InterlockedDecrement(&KiReadyQueueDepth[Prcb->Number]);
+
+                /* Insert the thread back into the ready list */
+                KiInsertDeferredReadyList(Thread);
             }
         }
-        else if (Thread->State == Standby)
-        {
-            /* Select a new thread and set it on standby */
-            Prcb->NextThread = KiSelectNextThread(Prcb);
-            Prcb->NextThread->State = Standby;
 
-            /* Insert the thread back into the ready list */
-            KiInsertDeferredReadyList(Thread);
-        }
-        else if (Thread->State == Ready)
-        {
-            /* Remove it from the list */
-            if (RemoveEntryList(&Thread->WaitListEntry))
-            {
-                /* The list is empty now, reset the ready summary */
-                Prcb->ReadySummary &= ~PRIORITY_MASK(Thread->Priority);
-            }
-
-            /* Insert the thread back into the ready list */
-            KiInsertDeferredReadyList(Thread);
-        }
+        KiReleasePrcbLock(Prcb);
+        break;
     }
 
-    KiReleasePrcbLock(Prcb);
     KiReleaseThreadLock(Thread);
 }
 #endif // CONFIG_SMP

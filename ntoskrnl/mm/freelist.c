@@ -38,6 +38,267 @@ SIZE_T MmtotalCommitLimitMaximum;
 PMMPFN FirstUserLRUPfn;
 PMMPFN LastUserLRUPfn;
 
+#if defined(_M_ARM64) && defined(CONFIG_SMP)
+#define MI_SMP_PAGE_TRACE_LENGTH 4096
+#define MI_SMP_PAGE_TRACE_EVENT_RELEASE 1
+#define MI_SMP_PAGE_TRACE_EVENT_DEREF 2
+
+typedef struct _MI_SMP_PAGE_TRACE_ENTRY
+{
+    volatile LONG Sequence;
+    PFN_NUMBER Page;
+    PVOID Caller;
+    PVOID Thread;
+    PMM_SECTION_SEGMENT Segment;
+    LARGE_INTEGER Offset;
+    ULONG_PTR SectionEntry;
+    ULONG Event;
+    ULONG Consumer;
+    ULONG Cpu;
+    ULONG OldRefCount;
+    ULONG NewRefCount;
+    ULONG PfnShareCount;
+    ULONG SseShareCount;
+    BOOLEAN Freed;
+} MI_SMP_PAGE_TRACE_ENTRY, *PMI_SMP_PAGE_TRACE_ENTRY;
+
+static volatile LONG MiSmpPageTraceSequence;
+static MI_SMP_PAGE_TRACE_ENTRY MiSmpPageTrace[MI_SMP_PAGE_TRACE_LENGTH];
+
+static
+PVOID
+MiFindRecentSmpPageReleaseCaller(
+    _In_ PFN_NUMBER Page)
+{
+    LONG Sequence, Oldest;
+    ULONG i;
+
+    Sequence = MiSmpPageTraceSequence;
+    Oldest = Sequence - MI_SMP_PAGE_TRACE_LENGTH;
+
+    for (i = 0; i < MI_SMP_PAGE_TRACE_LENGTH; i++)
+    {
+        PMI_SMP_PAGE_TRACE_ENTRY Entry;
+        LONG EntrySequence = Sequence - (LONG)i;
+
+        if (EntrySequence <= Oldest)
+            break;
+
+        Entry = &MiSmpPageTrace[(ULONG)EntrySequence & (MI_SMP_PAGE_TRACE_LENGTH - 1)];
+        if ((Entry->Sequence == EntrySequence) &&
+            (Entry->Page == Page) &&
+            (Entry->Event == MI_SMP_PAGE_TRACE_EVENT_RELEASE))
+        {
+            return Entry->Caller;
+        }
+    }
+
+    return NULL;
+}
+
+static
+VOID
+MiTraceSmpPageEvent(
+    _In_ PFN_NUMBER Page,
+    _In_ ULONG Event,
+    _In_ ULONG Consumer,
+    _In_opt_ PVOID Caller,
+    _In_ ULONG OldRefCount,
+    _In_ ULONG NewRefCount,
+    _In_ ULONG PfnShareCount,
+    _In_opt_ PMM_SECTION_SEGMENT Segment,
+    _In_ LARGE_INTEGER Offset,
+    _In_ ULONG_PTR SectionEntry,
+    _In_ ULONG SseShareCount,
+    _In_ BOOLEAN Freed)
+{
+    LONG Sequence;
+    PMI_SMP_PAGE_TRACE_ENTRY Entry;
+
+    Sequence = InterlockedIncrement(&MiSmpPageTraceSequence);
+    Entry = &MiSmpPageTrace[(ULONG)Sequence & (MI_SMP_PAGE_TRACE_LENGTH - 1)];
+    Entry->Sequence = 0;
+
+    Entry->Page = Page;
+    Entry->Caller = Caller;
+    Entry->Thread = PsGetCurrentThread();
+    Entry->Segment = Segment;
+    Entry->Offset = Offset;
+    Entry->SectionEntry = SectionEntry;
+    Entry->Event = Event;
+    Entry->Consumer = Consumer;
+    Entry->Cpu = KeGetCurrentProcessorNumber();
+    Entry->OldRefCount = OldRefCount;
+    Entry->NewRefCount = NewRefCount;
+    Entry->PfnShareCount = PfnShareCount;
+    Entry->SseShareCount = SseShareCount;
+    Entry->Freed = Freed;
+
+    KeMemoryBarrier();
+    Entry->Sequence = Sequence;
+}
+
+VOID
+NTAPI
+MiTraceSmpPageRelease(
+    PFN_NUMBER Page,
+    ULONG Consumer,
+    PVOID Caller)
+{
+    PMMPFN Pfn1;
+    KIRQL OldIrql;
+    ULONG RefCount = 0, ShareCount = 0;
+    LARGE_INTEGER Offset;
+    PMM_SECTION_SEGMENT Segment = NULL;
+    ULONG_PTR SectionEntry = 0;
+    ULONG SseShareCount = MAXULONG;
+
+    Offset.QuadPart = 0;
+
+    OldIrql = MiAcquirePfnLock();
+    Pfn1 = MiGetPfnEntry(Page);
+    if (Pfn1)
+    {
+        RefCount = Pfn1->u3.e2.ReferenceCount;
+        ShareCount = Pfn1->u2.ShareCount;
+    }
+    if (MmGetSectionAssociationPageEntryWithPfnLock(Page, &Offset, &SectionEntry, &Segment))
+    {
+        SseShareCount = SHARE_COUNT_FROM_SSE(SectionEntry);
+    }
+    MiReleasePfnLock(OldIrql);
+
+    MiTraceSmpPageEvent(Page,
+                        MI_SMP_PAGE_TRACE_EVENT_RELEASE,
+                        Consumer,
+                        Caller,
+                        RefCount,
+                        RefCount,
+                        ShareCount,
+                        Segment,
+                        Offset,
+                        SectionEntry,
+                        SseShareCount,
+                        FALSE);
+}
+
+static
+VOID
+MiTraceSmpPageDereference(
+    _In_ PFN_NUMBER Page,
+    _In_opt_ PVOID Caller,
+    _In_ ULONG OldRefCount,
+    _In_ ULONG NewRefCount,
+    _In_ ULONG ShareCount,
+    _In_ BOOLEAN Freed)
+{
+    LARGE_INTEGER Offset;
+    PMM_SECTION_SEGMENT Segment = NULL;
+    ULONG_PTR SectionEntry = 0;
+    ULONG SseShareCount = MAXULONG;
+
+    Offset.QuadPart = 0;
+    if (MmGetSectionAssociationPageEntryWithPfnLock(Page, &Offset, &SectionEntry, &Segment))
+    {
+        SseShareCount = SHARE_COUNT_FROM_SSE(SectionEntry);
+    }
+
+    if (Freed && (SectionEntry != 0))
+    {
+        PVOID ReleaseCaller = MiFindRecentSmpPageReleaseCaller(Page);
+
+        DPRINT1("SMPOVERFREE PFN=%Ix RA=%p RELRA=%p seg=%p off=%I64x share=%lu refs=%lu->%lu pfnshare=%lu sse=%Ix cpu=%lu\n",
+                Page,
+                Caller,
+                ReleaseCaller,
+                Segment,
+                Offset.QuadPart,
+                SseShareCount,
+                OldRefCount,
+                NewRefCount,
+                ShareCount,
+                SectionEntry,
+                KeGetCurrentProcessorNumber());
+    }
+
+    MiTraceSmpPageEvent(Page,
+                        MI_SMP_PAGE_TRACE_EVENT_DEREF,
+                        MAXULONG,
+                        Caller,
+                        OldRefCount,
+                        NewRefCount,
+                        ShareCount,
+                        Segment,
+                        Offset,
+                        SectionEntry,
+                        SseShareCount,
+                        Freed);
+
+    if (Freed && (SectionEntry != 0))
+    {
+        MiDumpSmpPageReleaseTrace(Page, NULL, "refzero-sse-mapped");
+    }
+}
+
+VOID
+NTAPI
+MiDumpSmpPageReleaseTrace(
+    PFN_NUMBER Page,
+    PVOID Address,
+    PCSTR Reason)
+{
+    LONG Sequence, Oldest;
+    ULONG i, Matches = 0;
+
+    Sequence = MiSmpPageTraceSequence;
+    Oldest = Sequence - MI_SMP_PAGE_TRACE_LENGTH;
+
+    DPRINT1("[SMPPFN] target page=%Ix address=%p reason=%s seq=%ld\n",
+            Page,
+            Address,
+            Reason ? Reason : "(null)",
+            Sequence);
+
+    for (i = 0; i < MI_SMP_PAGE_TRACE_LENGTH; i++)
+    {
+        PMI_SMP_PAGE_TRACE_ENTRY Entry;
+        LONG EntrySequence = Sequence - (LONG)i;
+
+        if (EntrySequence <= Oldest)
+            break;
+
+        Entry = &MiSmpPageTrace[(ULONG)EntrySequence & (MI_SMP_PAGE_TRACE_LENGTH - 1)];
+        if ((Entry->Sequence != EntrySequence) || (Entry->Page != Page))
+            continue;
+
+        DPRINT1("[SMPPFN] hit seq=%ld ev=%lu cpu=%lu page=%Ix caller=%p cons=%lu refs=%lu->%lu pfnshare=%lu sseshare=%lu freed=%u seg=%p off=%I64x sse=%Ix thread=%p\n",
+                Entry->Sequence,
+                Entry->Event,
+                Entry->Cpu,
+                Entry->Page,
+                Entry->Caller,
+                Entry->Consumer,
+                Entry->OldRefCount,
+                Entry->NewRefCount,
+                Entry->PfnShareCount,
+                Entry->SseShareCount,
+                Entry->Freed,
+                Entry->Segment,
+                Entry->Offset.QuadPart,
+                Entry->SectionEntry,
+                Entry->Thread);
+
+        if (++Matches == 32)
+            break;
+    }
+
+    if (!Matches)
+    {
+        DPRINT1("[SMPPFN] no recent release/deref records for page=%Ix\n", Page);
+    }
+}
+#endif
+
 /* FUNCTIONS *************************************************************/
 
 PFN_NUMBER
@@ -432,11 +693,23 @@ MmSetRmapListHeadPage(PFN_NUMBER Pfn, PMM_RMAP_ENTRY ListHead)
 
     Pfn1 = MiGetPfnEntry(Pfn);
     ASSERT(Pfn1);
+#if defined(_M_ARM64) && defined(CONFIG_SMP)
+    if (!MI_IS_ROS_PFN(Pfn1))
+    {
+        MiDumpSmpPageReleaseTrace(Pfn, NULL, "set-rmap-non-ros-pfn");
+    }
+#endif
     ASSERT_IS_ROS_PFN(Pfn1);
 
     if (ListHead)
     {
         /* Should not be trying to insert an RMAP for a non-active page */
+#if defined(_M_ARM64) && defined(CONFIG_SMP)
+        if (!MiIsPfnInUse(Pfn1))
+        {
+            MiDumpSmpPageReleaseTrace(Pfn, NULL, "set-rmap-page-not-in-use");
+        }
+#endif
         ASSERT(MiIsPfnInUse(Pfn1) == TRUE);
 
         /* Set the list head address */
@@ -445,6 +718,12 @@ MmSetRmapListHeadPage(PFN_NUMBER Pfn, PMM_RMAP_ENTRY ListHead)
     else
     {
         /* ReactOS semantics dictate the page is STILL active right now */
+#if defined(_M_ARM64) && defined(CONFIG_SMP)
+        if (!MiIsPfnInUse(Pfn1))
+        {
+            MiDumpSmpPageReleaseTrace(Pfn, NULL, "clear-rmap-page-not-in-use");
+        }
+#endif
         ASSERT(MiIsPfnInUse(Pfn1) == TRUE);
 
         /* In this case, the RMAP is actually being removed, so clear field */
@@ -566,6 +845,7 @@ NTAPI
 MmDereferencePage(PFN_NUMBER Pfn)
 {
     PMMPFN Pfn1;
+    ULONG OldRefCount;
     DPRINT("MmDereferencePage(PhysicalAddress %x)\n", Pfn << PAGE_SHIFT);
 
     MI_ASSERT_PFN_LOCK_HELD();
@@ -574,10 +854,28 @@ MmDereferencePage(PFN_NUMBER Pfn)
     ASSERT(Pfn1);
     ASSERT_IS_ROS_PFN(Pfn1);
 
-    ASSERT(Pfn1->u3.e2.ReferenceCount != 0);
-    Pfn1->u3.e2.ReferenceCount--;
+    OldRefCount = Pfn1->u3.e2.ReferenceCount;
+    ASSERT(OldRefCount != 0);
+    Pfn1->u3.e2.ReferenceCount = OldRefCount - 1;
+#if defined(_M_ARM64) && defined(CONFIG_SMP)
+    MiTraceSmpPageDereference(Pfn,
+                              _ReturnAddress(),
+                              OldRefCount,
+                              Pfn1->u3.e2.ReferenceCount,
+                              Pfn1->u2.ShareCount,
+                              Pfn1->u3.e2.ReferenceCount == 0);
+#endif
     if (Pfn1->u3.e2.ReferenceCount == 0)
     {
+        if (Pfn1->u2.ShareCount != 0)
+        {
+            KeBugCheckEx(MEMORY_MANAGEMENT,
+                         Pfn,
+                         Pfn1->u2.ShareCount,
+                         (ULONG_PTR)_ReturnAddress(),
+                         __LINE__);
+        }
+
         /* Apply LRU hack */
         if (Pfn1->u4.MustBeCached)
         {

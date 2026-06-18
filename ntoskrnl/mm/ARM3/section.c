@@ -465,8 +465,13 @@ MiFillSystemPageDirectory(IN PVOID Base,
                           IN SIZE_T NumberOfBytes)
 {
 #if defined(_M_ARM64)
+    PETHREAD CurrentThread;
     PAGED_CODE();
+
+    CurrentThread = PsGetCurrentThread();
+    MiLockWorkingSet(CurrentThread, &MmSystemCacheWs);
     MiArm64FillSystemPageDirectory(Base, NumberOfBytes);
+    MiUnlockWorkingSet(CurrentThread, &MmSystemCacheWs);
 #else
     PMMPDE PointerPde, LastPde, SystemMapPde;
     MMPDE TempPde;
@@ -1590,12 +1595,7 @@ MiGetFileObjectForVad(
         }
         else
         {
-#ifdef NEWCC
-            ASSERT(MemoryArea->Type == MEMORY_AREA_CACHE);
-            DPRINT1("VAD is a cache section!\n");
-#else
             ASSERT(FALSE);
-#endif
             return NULL;
         }
     }

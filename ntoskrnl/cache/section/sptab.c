@@ -209,10 +209,6 @@ _MmSetPageEntrySectionSegment(PMM_SECTION_SEGMENT Segment,
     {
         InterlockedIncrement64(Segment->ReferenceCount);
     }
-    if (OldEntry && !Entry)
-    {
-        MmDereferenceSegment(Segment);
-    }
 
     if (Entry && !IS_SWAP_FROM_SSE(Entry))
     {
@@ -222,7 +218,9 @@ _MmSetPageEntrySectionSegment(PMM_SECTION_SEGMENT Segment,
             /* The previous entry was valid. Shall we swap the Rmaps ? */
             if (PFN_FROM_SSE(Entry) != PFN_FROM_SSE(OldEntry))
             {
-                MmDeleteSectionAssociation(PFN_FROM_SSE(OldEntry));
+                MmDeleteSectionAssociationForPageTable(PFN_FROM_SSE(OldEntry),
+                                                       PageTable,
+                                                       PageIndex);
 
                 /* This has to be done before setting the new section association
                    to prevent a race condition with the paging out path */
@@ -239,10 +237,11 @@ _MmSetPageEntrySectionSegment(PMM_SECTION_SEGMENT Segment,
         {
             /*
              * We're switching to a valid entry from an invalid one.
-             * Add the Rmap and take a ref on the segment.
+             * Publish the segment rmap before the PTE so page trimming can
+             * find the segment association as soon as the entry is visible.
              */
-            PageTable->PageEntries[PageIndex] = Entry;
             MmSetSectionAssociation(PFN_FROM_SSE(Entry), Segment, Offset);
+            PageTable->PageEntries[PageIndex] = Entry;
 
             if (Offset->QuadPart >= (Segment->LastPage << PAGE_SHIFT))
                 Segment->LastPage = (Offset->QuadPart >> PAGE_SHIFT) + 1;
@@ -251,7 +250,9 @@ _MmSetPageEntrySectionSegment(PMM_SECTION_SEGMENT Segment,
     else if (OldEntry && !IS_SWAP_FROM_SSE(OldEntry))
     {
         /* We're switching to an invalid entry from a valid one */
-        MmDeleteSectionAssociation(PFN_FROM_SSE(OldEntry));
+        MmDeleteSectionAssociationForPageTable(PFN_FROM_SSE(OldEntry),
+                                               PageTable,
+                                               PageIndex);
         PageTable->PageEntries[PageIndex] = Entry;
 
         if (Offset->QuadPart == ((Segment->LastPage - 1ULL) << PAGE_SHIFT))
@@ -270,6 +271,11 @@ _MmSetPageEntrySectionSegment(PMM_SECTION_SEGMENT Segment,
     else
     {
         PageTable->PageEntries[PageIndex] = Entry;
+    }
+
+    if (OldEntry && !Entry)
+    {
+        MmDereferenceSegment(Segment);
     }
 
     return STATUS_SUCCESS;
@@ -348,6 +354,20 @@ MmFreePageTablesSectionSegment(PMM_SECTION_SEGMENT Segment,
                 }
             }
         }
+        {
+            ULONG i;
+
+            for (i = 0; i < ENTRIES_PER_ELEMENT; i++)
+            {
+                ULONG_PTR Entry = Element->PageEntries[i];
+                if (Entry && !IS_SWAP_FROM_SSE(Entry))
+                {
+                    MmDeleteSectionAssociationForPageTable(PFN_FROM_SSE(Entry),
+                                                           Element,
+                                                           i);
+                }
+            }
+        }
         DPRINT("Remove memory\n");
         RtlDeleteElementGenericTable(&Segment->PageTable, Element);
     }
@@ -383,16 +403,78 @@ MmGetSectionAssociation(PFN_NUMBER Page,
     PageTable = MmGetSegmentRmap(Page, &RawOffset);
     if (PageTable)
     {
+        ULONG_PTR Entry = PageTable->PageEntries[RawOffset];
+
+        if ((Entry == 0) ||
+            IS_SWAP_FROM_SSE(Entry) ||
+            (PFN_FROM_SSE(Entry) != Page))
+        {
+            MiReleasePfnLock(OldIrql);
+            return NULL;
+        }
+
         Segment = PageTable->Segment;
         Offset->QuadPart = PageTable->FileOffset.QuadPart +
                            ((ULONG64)RawOffset << PAGE_SHIFT);
-        ASSERT(PFN_FROM_SSE(PageTable->PageEntries[RawOffset]) == Page);
         InterlockedIncrement64(Segment->ReferenceCount);
     }
 
     MiReleasePfnLock(OldIrql);
 
     return Segment;
+}
+
+BOOLEAN
+NTAPI
+MmGetSectionAssociationPageEntryWithPfnLock(
+    PFN_NUMBER Page,
+    PLARGE_INTEGER Offset,
+    PULONG_PTR Entry,
+    PMM_SECTION_SEGMENT *Segment)
+{
+    ULONG RawOffset;
+    PCACHE_SECTION_PAGE_TABLE PageTable;
+    ULONG_PTR CurrentEntry;
+
+    *Entry = 0;
+    *Segment = NULL;
+    Offset->QuadPart = 0;
+
+    PageTable = MmGetSegmentRmap(Page, &RawOffset);
+    if (PageTable)
+    {
+        CurrentEntry = PageTable->PageEntries[RawOffset];
+        if (CurrentEntry &&
+            !IS_SWAP_FROM_SSE(CurrentEntry) &&
+            (PFN_FROM_SSE(CurrentEntry) == Page))
+        {
+            *Entry = CurrentEntry;
+            *Segment = PageTable->Segment;
+            Offset->QuadPart = PageTable->FileOffset.QuadPart +
+                               ((ULONG64)RawOffset << PAGE_SHIFT);
+            return TRUE;
+        }
+    }
+
+    return FALSE;
+}
+
+BOOLEAN
+NTAPI
+MmGetSectionAssociationPageEntry(
+    PFN_NUMBER Page,
+    PLARGE_INTEGER Offset,
+    PULONG_PTR Entry,
+    PMM_SECTION_SEGMENT *Segment)
+{
+    KIRQL OldIrql;
+    BOOLEAN Found;
+
+    OldIrql = MiAcquirePfnLock();
+    Found = MmGetSectionAssociationPageEntryWithPfnLock(Page, Offset, Entry, Segment);
+    MiReleasePfnLock(OldIrql);
+
+    return Found;
 }
 
 NTSTATUS

@@ -91,9 +91,6 @@ typedef ULONG_PTR SWAPENTRY;
 #endif
 
 #define MEMORY_AREA_SECTION_VIEW            (1)
-#ifdef NEWCC
-#define MEMORY_AREA_CACHE                   (2)
-#endif
 #define MEMORY_AREA_OWNED_BY_ARM3           (15)
 #define MEMORY_AREA_STATIC                  (0x80000000)
 
@@ -178,8 +175,10 @@ typedef ULONG_PTR SWAPENTRY;
 //
 #ifdef _M_IX86
 #define MM_WAIT_ENTRY            0x7ffffc00
-#elif defined(_M_AMD64) || defined(_M_ARM64) || defined(__aarch64__)
+#elif defined(_M_AMD64)
 #define MM_WAIT_ENTRY            0x7FFFFFFFFFFFFC00ULL
+#elif defined(_M_ARM64) || defined(__aarch64__)
+#define MM_WAIT_ENTRY            0x7FFFFFFFC00ULL
 #else
 #error Unsupported architecture!
 #endif
@@ -930,6 +929,24 @@ MmReleasePageMemoryConsumer(
     PFN_NUMBER Page
 );
 
+#if defined(_M_ARM64) && defined(CONFIG_SMP)
+VOID
+NTAPI
+MiTraceSmpPageRelease(
+    PFN_NUMBER Page,
+    ULONG Consumer,
+    PVOID Caller
+);
+
+VOID
+NTAPI
+MiDumpSmpPageReleaseTrace(
+    PFN_NUMBER Page,
+    PVOID Address,
+    PCSTR Reason
+);
+#endif
+
 NTSTATUS
 NTAPI
 MmRequestPageMemoryConsumer(
@@ -962,7 +979,7 @@ struct _MM_RMAP_ENTRY*
 NTAPI
 MmGetRmapListHeadPage(PFN_NUMBER Page);
 
-VOID
+BOOLEAN
 NTAPI
 MmInsertRmap(
     PFN_NUMBER Page,
@@ -988,7 +1005,21 @@ MmDeleteRmap(
 
 BOOLEAN
 NTAPI
+MmDeleteRmapIfExists(
+    PFN_NUMBER Page,
+    struct _EPROCESS *Process,
+    PVOID Address
+);
+
+BOOLEAN
+NTAPI
 MmPageHasProcessRmaps(
+    PFN_NUMBER Page
+);
+
+ULONG
+NTAPI
+MmGetProcessRmapCount(
     PFN_NUMBER Page
 );
 
@@ -1005,6 +1036,24 @@ PMM_SECTION_SEGMENT
 NTAPI
 MmGetSectionAssociation(PFN_NUMBER Page,
                         PLARGE_INTEGER Offset);
+
+BOOLEAN
+NTAPI
+MmGetSectionAssociationPageEntry(
+    PFN_NUMBER Page,
+    PLARGE_INTEGER Offset,
+    PULONG_PTR Entry,
+    PMM_SECTION_SEGMENT *Segment
+);
+
+BOOLEAN
+NTAPI
+MmGetSectionAssociationPageEntryWithPfnLock(
+    PFN_NUMBER Page,
+    PLARGE_INTEGER Offset,
+    PULONG_PTR Entry,
+    PMM_SECTION_SEGMENT *Segment
+);
 
 /* freelist.c **********************************************************/
 _IRQL_raises_(DISPATCH_LEVEL)
@@ -1677,6 +1726,12 @@ NTAPI
 MmCallDllInitialize(
     _In_ PLDR_DATA_TABLE_ENTRY LdrEntry,
     _In_ PLIST_ENTRY ModuleListHead);
+
+NTSTATUS
+NTAPI
+MmValidateSystemImageImports(
+    _In_ PVOID ImageBase,
+    _In_ ULONG ImageSize);
 
 VOID
 NTAPI

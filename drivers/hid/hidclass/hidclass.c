@@ -1044,7 +1044,6 @@ HidClass_DispatchMiniDriverRequest(
     SubIrp->UserBuffer = XferPacket;
 
     IoStack = IoGetNextIrpStackLocation(SubIrp);
-    RtlZeroMemory(IoStack, sizeof(*IoStack));
     IoStack->MajorFunction = IRP_MJ_INTERNAL_DEVICE_CONTROL;
     IoStack->Parameters.DeviceIoControl.IoControlCode = IoControlCode;
     IoStack->Parameters.DeviceIoControl.InputBufferLength = XferPacket->reportBufferLen;
@@ -1112,7 +1111,6 @@ HidClass_DispatchMiniDriverStringRequest(
     SubIrp->UserBuffer = StringBuffer;
 
     IoStack = IoGetNextIrpStackLocation(SubIrp);
-    RtlZeroMemory(IoStack, sizeof(*IoStack));
     IoStack->MajorFunction = IRP_MJ_INTERNAL_DEVICE_CONTROL;
     IoStack->Parameters.DeviceIoControl.IoControlCode = IoControlCode;
     IoStack->Parameters.DeviceIoControl.InputBufferLength = sizeof(ULONG);

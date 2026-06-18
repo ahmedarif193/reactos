@@ -703,6 +703,19 @@ IopInitializeDriverModule(
     ASSERT(ModuleObject->SizeOfImage == ROUND_TO_PAGES(NtHeaders->OptionalHeader.SizeOfImage));
     ASSERT(ModuleObject->EntryPoint == RVA(ModuleObject->DllBase, NtHeaders->OptionalHeader.AddressOfEntryPoint));
 
+    Status = MmValidateSystemImageImports(ModuleObject->DllBase,
+                                          ModuleObject->SizeOfImage);
+    if (!NT_SUCCESS(Status))
+    {
+        DPRINT1("Driver '%wZ' has invalid imports, status (0x%08lx)\n",
+                &DriverName,
+                Status);
+        RtlFreeUnicodeString(&ServiceName);
+        RtlFreeUnicodeString(&DriverName);
+        MmUnloadSystemImage(ModuleObject);
+        return Status;
+    }
+
     /* Obtain the registry path for the DriverInit routine */
     PKEY_NAME_INFORMATION nameInfo;
     ULONG infoLength;
@@ -872,6 +885,21 @@ IopInitializeDriverModule(
 
     RtlCopyUnicodeString(&driverNamePaged, &DriverName);
     driverObject->DriverName = driverNamePaged;
+
+    Status = MmValidateSystemImageImports(ModuleObject->DllBase,
+                                          ModuleObject->SizeOfImage);
+    if (!NT_SUCCESS(Status))
+    {
+        DPRINT1("Driver '%wZ' has invalid imports before DriverInit, status (0x%08lx)\n",
+                &DriverName,
+                Status);
+        ObMakeTemporaryObject(driverObject);
+        ObDereferenceObject(driverObject);
+        ExFreePoolWithTag(nameInfo, TAG_IO);
+        RtlFreeUnicodeString(&DriverName);
+        MmUnloadSystemImage(ModuleObject);
+        return Status;
+    }
 
     /* Finally, call its init function */
     Status = driverObject->DriverInit(driverObject, &RegistryPath);
