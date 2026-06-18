@@ -371,7 +371,9 @@ KiTryStealReadyThread(IN PKPRCB Prcb)
         {
             Candidate = CONTAINING_RECORD(Entry, KTHREAD, WaitListEntry);
             if (Candidate->State != Ready) continue;
+#if defined(_M_ARM64)
             if (Candidate->SwapBusy) continue;
+#endif
             ASSERT(Candidate->Priority == Priority);
             ASSERT(Candidate->NextProcessor == Victim->Number);
             if (Candidate->NextProcessor != Victim->Number) continue;
@@ -449,7 +451,9 @@ KiBalanceLoad(VOID)
             {
                 Candidate = CONTAINING_RECORD(Entry, KTHREAD, WaitListEntry);
                 if (Candidate->State != Ready) continue;
+#if defined(_M_ARM64)
                 if (Candidate->SwapBusy) continue;
+#endif
                 ASSERT(Candidate->Priority == Priority);
                 ASSERT(Candidate->NextProcessor == BusyNumber);
                 if (Candidate->NextProcessor != BusyNumber) continue;
