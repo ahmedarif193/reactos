@@ -1686,6 +1686,13 @@ MmAlterViewAttributes(PMMSUPPORT AddressSpace,
                 MmUnlockAddressSpace(AddressSpace);
                 KeDelayExecutionThread(KernelMode, FALSE, &TinyTime);
                 MmLockAddressSpace(AddressSpace);
+                /* View may have been torn down while unlocked; re-locate instead of using the freed cache. */
+                MemoryArea = MmLocateMemoryAreaByAddress(AddressSpace, Address);
+                if (MemoryArea == NULL || MemoryArea->DeleteInProgress)
+                {
+                    return;
+                }
+                Segment = MemoryArea->SectionData.Segment;
                 MmLockSectionSegment(Segment);
             }
             while (TRUE);

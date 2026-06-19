@@ -30,11 +30,11 @@ InsertAfterEntry(PLIST_ENTRY Previous,
     Previous->Flink = Entry;
 }
 
+/* Structural split only; the caller applies protection once, after all list mutation. */
 static PMM_REGION
 MmSplitRegion(PMM_REGION InitialRegion, PVOID InitialBaseAddress,
               PVOID StartAddress, SIZE_T Length, ULONG NewType,
-              ULONG NewProtect, PMMSUPPORT AddressSpace,
-              PMM_ALTER_REGION_FUNC AlterFunc)
+              ULONG NewProtect)
 {
     PMM_REGION NewRegion1;
     PMM_REGION NewRegion2;
@@ -63,13 +63,6 @@ MmSplitRegion(PMM_REGION InitialRegion, PVOID InitialBaseAddress,
     NewRegion1->Length = InternalLength;
     InsertAfterEntry(&InitialRegion->RegionListEntry,
                      &NewRegion1->RegionListEntry);
-
-    /*
-     * Call our helper function to do the changes on the addresses contained
-     * in the initial region.
-     */
-    AlterFunc(AddressSpace, StartAddress, InternalLength, InitialRegion->Type,
-              InitialRegion->Protect, NewType, NewProtect);
 
     /*
      * If necessary create a new region for the portion of the initial region
@@ -116,6 +109,7 @@ MmAlterRegion(PMMSUPPORT AddressSpace, PVOID BaseAddress,
     PMM_REGION CurrentRegion = NULL;
     PVOID CurrentBaseAddress;
     SIZE_T RemainingLength;
+    BOOLEAN AnyChanged = FALSE;
 
     /*
      * Find the first region containing part of the range of addresses to
@@ -128,9 +122,9 @@ MmAlterRegion(PMMSUPPORT AddressSpace, PVOID BaseAddress,
      */
     if (InitialRegion->Type != NewType || InitialRegion->Protect != NewProtect)
     {
+        AnyChanged = TRUE;
         NewRegion = MmSplitRegion(InitialRegion, InitialBaseAddress,
-                                  StartAddress, Length, NewType, NewProtect,
-                                  AddressSpace, AlterFunc);
+                                  StartAddress, Length, NewType, NewProtect);
         if (NewRegion == NULL)
         {
             return(STATUS_NO_MEMORY);
@@ -164,9 +158,7 @@ MmAlterRegion(PMMSUPPORT AddressSpace, PVOID BaseAddress,
         if (CurrentRegion->Type != NewType ||
                 CurrentRegion->Protect != NewProtect)
         {
-            AlterFunc(AddressSpace, CurrentBaseAddress, CurrentRegion->Length,
-                      CurrentRegion->Type, CurrentRegion->Protect,
-                      NewType, NewProtect);
+            AnyChanged = TRUE;
         }
 
         CurrentBaseAddress = (PVOID)((ULONG_PTR)CurrentBaseAddress + CurrentRegion->Length);
@@ -189,9 +181,7 @@ MmAlterRegion(PMMSUPPORT AddressSpace, PVOID BaseAddress,
         if (CurrentRegion->Type != NewType ||
                 CurrentRegion->Protect != NewProtect)
         {
-            AlterFunc(AddressSpace, CurrentBaseAddress, RemainingLength,
-                      CurrentRegion->Type, CurrentRegion->Protect,
-                      NewType, NewProtect);
+            AnyChanged = TRUE;
         }
         NewRegion->Length += RemainingLength;
         CurrentRegion->Length -= RemainingLength;
@@ -229,6 +219,13 @@ MmAlterRegion(PMMSUPPORT AddressSpace, PVOID BaseAddress,
             RemoveEntryList(&CurrentRegion->RegionListEntry);
             ExFreePoolWithTag(CurrentRegion, TAG_MM_REGION);
         }
+    }
+
+    /* Apply protection once, after all list mutation, so no cached region pointer outlives the lock-dropping callback; ~NewProtect forces the whole-range page walk (idempotent per page). */
+    if (AnyChanged)
+    {
+        AlterFunc(AddressSpace, StartAddress, Length, NewType, ~NewProtect,
+                  NewType, NewProtect);
     }
 
     return(STATUS_SUCCESS);
