@@ -126,6 +126,18 @@ KeAcquireQueuedSpinLockRaiseToSynch(
 
     KeRaiseIrql(SYNCH_LEVEL, &OldIrql);
     KxAcquireSpinLock(KeGetCurrentPrcb()->LockQueue[LockNumber].Lock);
+
+    /* Keep PFN-lock depth accounting symmetric with KeReleaseQueuedSpinLock,
+     * which decrements it unconditionally for LockQueuePfnLock. Acquiring via
+     * the RaiseToSynch path without this increment underflows the depth. */
+    if (LockNumber == LockQueuePfnLock)
+    {
+        ULONG CpuIndex = KeGetCurrentProcessorNumber();
+        if (CpuIndex < MAXIMUM_PROCESSORS)
+        {
+            InterlockedIncrement(&MiArm64PfnLockDepth[CpuIndex]);
+        }
+    }
     return OldIrql;
 }
 
@@ -211,8 +223,19 @@ KeTryToAcquireQueuedSpinLock(
     KeRaiseIrql(DISPATCH_LEVEL, OldIrql);
 
 #ifdef CONFIG_SMP
-    return KeTryToAcquireSpinLockAtDpcLevel(
-               KeGetCurrentPrcb()->LockQueue[LockNumber].Lock);
+    {
+        LOGICAL Acquired = KeTryToAcquireSpinLockAtDpcLevel(
+            KeGetCurrentPrcb()->LockQueue[LockNumber].Lock);
+        if (Acquired && (LockNumber == LockQueuePfnLock))
+        {
+            ULONG CpuIndex = KeGetCurrentProcessorNumber();
+            if (CpuIndex < MAXIMUM_PROCESSORS)
+            {
+                InterlockedIncrement(&MiArm64PfnLockDepth[CpuIndex]);
+            }
+        }
+        return Acquired;
+    }
 #else
     KeMemoryBarrierWithoutFence();
     return TRUE;
@@ -228,8 +251,19 @@ KeTryToAcquireQueuedSpinLockRaiseToSynch(
     KeRaiseIrql(SYNCH_LEVEL, OldIrql);
 
 #ifdef CONFIG_SMP
-    return KeTryToAcquireSpinLockAtDpcLevel(
-               KeGetCurrentPrcb()->LockQueue[LockNumber].Lock);
+    {
+        BOOLEAN Acquired = KeTryToAcquireSpinLockAtDpcLevel(
+            KeGetCurrentPrcb()->LockQueue[LockNumber].Lock);
+        if (Acquired && (LockNumber == LockQueuePfnLock))
+        {
+            ULONG CpuIndex = KeGetCurrentProcessorNumber();
+            if (CpuIndex < MAXIMUM_PROCESSORS)
+            {
+                InterlockedIncrement(&MiArm64PfnLockDepth[CpuIndex]);
+            }
+        }
+        return Acquired;
+    }
 #else
     KeMemoryBarrierWithoutFence();
     return TRUE;

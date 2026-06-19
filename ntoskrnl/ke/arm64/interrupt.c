@@ -18,6 +18,7 @@
 /* HAL extension: not yet declared in public headers for ARM64 */
 extern ULONG FASTCALL HalGetInterruptSource(VOID);
 extern VOID NTAPI HalPerformEndOfInterrupt(VOID);
+extern BOOLEAN NTAPI HalArm64ProfileSample(ULONG Increment);
 
 /* Simple vector→KINTERRUPT chain table (SPIs + optional LPIs) */
 #define ARM64_LPI_BASE 8192
@@ -290,14 +291,11 @@ KiArm64TimerIsr(
     TrapFrame = KiArm64GetCurrentInterruptTrapFrame();
     Cpu = KeGetCurrentProcessorNumber();
 
-    /* SMP boot diagnostics (/SMPDIAG): per-CPU tick counter + periodic state dump. */
+    /* SMP boot diagnostics: silent per-CPU tick counter only. The periodic
+     * serial dump is disabled for this probe - at 115200 baud it perturbs the
+     * timing race; the per-CPU counters are read via GDB at the stall instead. */
     SmpDbgTimerTick(Cpu);
-    if (SmpDbgEnabled && (Cpu == 0))
-    {
-        static ULONG SmpDbgDumpThrottle = 0;
-        if ((++SmpDbgDumpThrottle & 0x3F) == 0)
-            SmpDbgDumpTimers((ULONG)KeActiveProcessors);
-    }
+    SmpDbgHeartbeat(Cpu);
 
     /*
      * KeUpdateRunTime accounts kernel/user/idle/DPC/interrupt time from the
@@ -326,6 +324,18 @@ KiArm64TimerIsr(
                 KeUpdateRunTime(TrapFrame, TrapFrame->PreviousIrql);
             }
         }
+    }
+
+    /*
+     * Clock-driven profiling: ARM64 has no separate profile timer, so the
+     * architected-timer clock doubles as the profile source. HalArm64ProfileSample
+     * accumulates the per-tick increment and returns TRUE only once the requested
+     * profile interval has elapsed, so coarser intervals are honored instead of
+     * sampling on every single tick.
+     */
+    if (HalArm64ProfileSample(Increment))
+    {
+        KeProfileInterrupt(TrapFrame);
     }
 
     return TRUE;

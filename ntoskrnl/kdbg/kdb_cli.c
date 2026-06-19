@@ -3927,10 +3927,26 @@ KdbpCliInit(VOID)
     FileSize = min(FileSize, (ULONG)Iosb.Information);
     FileBuffer[FileSize] = ANSI_NULL;
 
-    /* Interpret the KDBinit file by calling back into the debugger */
+    /*
+     * Interpret the KDBinit file.
+     *
+     * Upstream triggers a breakpoint here (DbgBreakPointWithStatus) so that
+     * KdbEnterDebuggerException re-enters KDB and runs KdbpCliInterpretInitFile()
+     * from inside the debugger. On ARM64 SMP that round-trip is unreliable: the
+     * brk #0xF000 intermittently fails to be consumed/resumed and escapes as an
+     * unhandled STATUS_BREAKPOINT in this system-thread context, bugchecking
+     * 0x7E (SYSTEM_THREAD_EXCEPTION_NOT_HANDLED) ~12s into boot (right after
+     * "KDBinit executed"). The init file is interpreted at startup with no
+     * meaningful trapped context, so run it directly instead of via the fragile
+     * breakpoint. KdbpCliInterpretInitFile() takes ownership of
+     * KdbInitFileBuffer (it exchanges it back to NULL).
+     *
+     * NOTE: a "break" directive in KDBinit (interactive stop) still needs the
+     * real debugger context; it is intentionally unsupported on this path. The
+     * default KDBinit only issues "set" commands, which are context-free.
+     */
     InterlockedExchangePointer((PVOID*)&KdbInitFileBuffer, FileBuffer);
-    DbgBreakPointWithStatus(DBG_STATUS_CONTROL_C);
-    InterlockedExchangePointer((PVOID*)&KdbInitFileBuffer, NULL);
+    KdbpCliInterpretInitFile();
 
     ExFreePool(FileBuffer);
 

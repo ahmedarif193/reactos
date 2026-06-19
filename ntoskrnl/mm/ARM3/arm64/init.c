@@ -1923,13 +1923,13 @@ MiInitMachineDependent(_Inout_ PLOADER_PARAMETER_BLOCK LoaderBlock)
                 MiArm64CleanPageToPoC((PVOID)RootL0);
 
                 CurrentProcess->Pcb.DirectoryTableBase[0] = (ULONG_PTR)RootPa;
-                CurrentProcess->Pcb.DirectoryTableBase[1] = (ULONG_PTR)RootPa;
+                CurrentProcess->Pcb.Unused0 = (ULONG_PTR)RootPa;   /* hyperspace slot (0x030 is the Win11 ASID field) */
 
                 if ((PsIdleProcess != NULL) &&
                     (PsIdleProcess != CurrentProcess))
                 {
                     PsIdleProcess->Pcb.DirectoryTableBase[0] = (ULONG_PTR)RootPa;
-                    PsIdleProcess->Pcb.DirectoryTableBase[1] = (ULONG_PTR)RootPa;
+                    PsIdleProcess->Pcb.Unused0 = (ULONG_PTR)RootPa;
                 }
 
                 /*
@@ -2001,12 +2001,12 @@ MiInitMachineDependent(_Inout_ PLOADER_PARAMETER_BLOCK LoaderBlock)
             {
                 ULONG_PTR HyperL1Pa = (ULONG_PTR)(HyperL0Entry & ARM64_PTE_ADDR_MASK);
 
-                PsGetCurrentProcess()->Pcb.DirectoryTableBase[1] = HyperL1Pa;
+                PsGetCurrentProcess()->Pcb.Unused0 = HyperL1Pa;   /* hyperspace slot (0x030 is the Win11 ASID field) */
 
                 if (PsIdleProcess != NULL &&
                     PsIdleProcess != PsGetCurrentProcess())
                 {
-                    PsIdleProcess->Pcb.DirectoryTableBase[1] = HyperL1Pa;
+                    PsIdleProcess->Pcb.Unused0 = HyperL1Pa;
                 }
             }
             else

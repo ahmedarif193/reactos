@@ -128,12 +128,30 @@ KiConvertSystemDllAddressToUser(
     return (PVOID)((ULONG_PTR)PspSystemDllBase + Offset);
 }
 
+/*
+ * ARM64 ASID encoding inside KPROCESS DirectoryTableBase[0] (== TTBR0_EL1).
+ *
+ *   [63:56] ignored (8-bit ASID, TCR.AS=0)   [55:48] ASID   [47:12] table base
+ *
+ * KI_ARM64_TTBR_ADDR_MASK isolates the table base; KI_ARM64_TTBR_ASID_MASK the
+ * 8-bit ASID. The ASID allocator (ke/arm64/trapc.c, gated by KiArm64AsidEnabled,
+ * default off) writes the ASID into DirectoryTableBase[0]; with the default
+ * ASID == 0 every switch broadcast-flushes exactly as the original bring-up code
+ * did, so the encoding is behaviour-neutral until the allocator is enabled.
+ *
+ * Note: enabling targeted (flush-free) switching requires user leaf PTEs to be
+ * non-global (nG=1) and TCR.A1=0 so TTBR0.ASID is the current ASID.
+ */
+#define KI_ARM64_TTBR_ADDR_MASK   0x0000FFFFFFFFF000ULL
+#define KI_ARM64_TTBR_ASID_SHIFT  48
+#define KI_ARM64_TTBR_ASID_MASK   (0xFFULL << KI_ARM64_TTBR_ASID_SHIFT)
+
 FORCEINLINE
 ULONGLONG
 KiArm64KernelTtbrBase(
     _In_ ULONGLONG UserDirectoryBase)
 {
-    ULONGLONG RootBase = UserDirectoryBase & ~((ULONGLONG)PAGE_SIZE - 1ULL);
+    ULONGLONG RootBase = UserDirectoryBase & KI_ARM64_TTBR_ADDR_MASK;
     ULONGLONG TcrEl1;
     ULONGLONG T1sz;
 
@@ -148,35 +166,39 @@ KiArm64WriteUserTtbr(
     _In_ ULONGLONG UserDirectoryBase)
 {
     /*
-     * ARM64 ASID Note (Bring-up):
+     * ARM64 ASID-aware process switch.
      *
-     * TTBR0_EL1 format: [ASID:16][BADDR:48] (with 16-bit ASID if supported).
-     * Here we mask to page alignment, effectively setting ASID=0.
+     * When the ASID allocator is disabled (default), DirectoryTableBase[0] has
+     * ASID == 0: we write the bare table base and broadcast-flush the whole TLB,
+     * exactly as the original single-ASID bring-up code did.
      *
-     * This is INTENTIONAL for single-core bring-up:
-     * - We flush the entire TLB (vmalle1is) on every context switch
-     * - No ASID-based TLB tagging is used yet
-     * - All processes share ASID=0 semantics
-     *
-     * For SMP/performance: Must preserve ASID bits from DirectoryTableBase,
-     * use targeted TLBI (aside1is), and properly manage ASID allocation.
+     * When the allocator has tagged this process with a non-zero ASID, we write
+     * the ASID into TTBR0 and skip the flush entirely: the incoming process's
+     * translations are cached under its own ASID and the outgoing process's stay
+     * cached under theirs, so no eviction is needed on the switch. (ASIDs are
+     * recycled by degrading to ASID 0, never by reuse, so a freshly assigned
+     * ASID can never alias stale entries.)
      */
-    ULONGLONG RootBase = UserDirectoryBase & ~((ULONGLONG)PAGE_SIZE - 1ULL);
+    ULONGLONG RootBase = UserDirectoryBase & KI_ARM64_TTBR_ADDR_MASK;
+    ULONGLONG Asid = UserDirectoryBase & KI_ARM64_TTBR_ASID_MASK;
     ULONGLONG KernelRootBase = KiArm64KernelTtbrBase(UserDirectoryBase);
     ULONGLONG SavedDaif;
 
     __asm__ __volatile__("mrs %0, daif" : "=r"(SavedDaif));
     __asm__ __volatile__("msr daifset, #0xF" ::: "memory");
 
-    __asm__ __volatile__("msr ttbr0_el1, %0" :: "r"(RootBase) : "memory");
+    __asm__ __volatile__("dsb ishst" ::: "memory");
+    __asm__ __volatile__("msr ttbr0_el1, %0" :: "r"(RootBase | Asid) : "memory");
     __asm__ __volatile__("isb" ::: "memory");
     __asm__ __volatile__("msr ttbr1_el1, %0" :: "r"(KernelRootBase) : "memory");
     __asm__ __volatile__("isb" ::: "memory");
 
-    __asm__ __volatile__("dsb ishst" ::: "memory");
-    __asm__ __volatile__("tlbi vmalle1is" ::: "memory");
-    __asm__ __volatile__("dsb ish" ::: "memory");
-    __asm__ __volatile__("isb" ::: "memory");
+    if (Asid == 0)
+    {
+        __asm__ __volatile__("tlbi vmalle1is" ::: "memory");
+        __asm__ __volatile__("dsb ish" ::: "memory");
+        __asm__ __volatile__("isb" ::: "memory");
+    }
 
     __asm__ __volatile__("msr daif, %0" :: "r"(SavedDaif) : "memory");
 }

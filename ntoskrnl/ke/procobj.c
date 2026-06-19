@@ -137,6 +137,13 @@ KeInitializeProcess(IN OUT PKPROCESS Process,
 #if (NTDDI_VERSION >= NTDDI_LONGHORN) && !defined(_M_ARM64)
     Process->DirectoryTableBase = DirectoryTableBase[0];
     Process->Unused0 = DirectoryTableBase[1];
+#elif defined(_M_ARM64)
+    /* Win11 ARM64 KPROCESS: 0x028 = translation root, 0x030 = ASID. Keep the
+     * hyperspace root in the ReactOS-private Unused0 slot (exactly as amd64
+     * does) instead of DirectoryTableBase[1], so 0x030 stays the native ASID
+     * field used by the ARM64 ASID allocator. */
+    Process->DirectoryTableBase[0] = DirectoryTableBase[0];
+    Process->Unused0 = DirectoryTableBase[1];
 #else
     Process->DirectoryTableBase[0] = DirectoryTableBase[0];
     Process->DirectoryTableBase[1] = DirectoryTableBase[1];
