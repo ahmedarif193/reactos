@@ -780,6 +780,17 @@ KeStartAllProcessors(
 
     DPRINT1("[arm64] KeStartAllProcessors: Successfully started %lu APs\n", ProcessorCount);
 
+    {
+        extern KSCHEDULER_SUBNODE KiNode0SubNode;
+        ULONG HighestCpu;
+        KiNode0SubNode.Affinity = KeActiveProcessors;
+        KiNode0SubNode.SiblingMask = KeActiveProcessors;
+        KiNode0SubNode.NonParkedSet = KeActiveProcessors;
+        KiNode0SubNode.Lowest = 0;
+        if (BitScanReverseAffinity(&HighestCpu, KeActiveProcessors))
+            KiNode0SubNode.Highest = HighestCpu;
+    }
+
     /*
      * Update process affinities now that all CPUs are online.
      *

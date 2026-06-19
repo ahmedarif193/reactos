@@ -15,6 +15,8 @@ ARM64_CPU_FEATURES Arm64CpuFeatures;
 
 static LONG KiArm64OnlineProcessorCount;
 
+KSCHEDULER_SUBNODE KiNode0SubNode;
+
 struct _KPCR;
 
 FORCEINLINE
@@ -668,6 +670,15 @@ KiInitializePcr(_In_ ULONG ProcessorNumber,
     Pcr->Prcb.MultiThreadProcessorSet = Pcr->Prcb.SetMember;
     Pcr->Prcb.ParentNode = KeNodeBlock[0];
     Pcr->Prcb.ParentNode->ProcessorMask |= Pcr->Prcb.SetMember;
+
+    Pcr->Prcb.SchedulerSubNode = &KiNode0SubNode;
+    KiNode0SubNode.ParentNodeNumber = 0;
+    KiNode0SubNode.SubNodeNumber = 0;
+    KiNode0SubNode.Affinity |= Pcr->Prcb.SetMember;
+    KiNode0SubNode.SiblingMask |= Pcr->Prcb.SetMember;
+    KiNode0SubNode.NonParkedSet |= Pcr->Prcb.SetMember;
+    if (ProcessorNumber > KiNode0SubNode.Highest)
+        KiNode0SubNode.Highest = ProcessorNumber;
 
     Pcr->Prcb.CurrentThread = IdleThread;
     Pcr->Prcb.IdleThread = IdleThread;
