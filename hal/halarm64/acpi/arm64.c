@@ -426,6 +426,8 @@ HalpAcpiDiscoverArm64Tables(
                             Out->GicrBase = HalpReadUnalignedU64(&Gicc->GicrBaseAddress);
                             Out->GiccBase = HalpReadUnalignedU64(&Gicc->BaseAddress);
                             Out->Flags = Gicc->Flags;
+                            Out->ParkingVersion = Gicc->ParkingProtocolVersion;
+                            Out->ParkedAddress = HalpReadUnalignedU64(&Gicc->ParkedAddress);
                             HalpArm64GicInfo.GiccEntryCount++;
                             DPRINT1("[arm64][ACPI] MADT GICC[%lu]: MPIDR=0x%llx Flags=0x%lx GicrBase=0x%llx GiccBase=0x%llx\n",
                                     Index, Out->Mpidr, Out->Flags, Out->GicrBase, Out->GiccBase);

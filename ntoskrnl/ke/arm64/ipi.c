@@ -13,7 +13,9 @@ static struct
 {
     PKIPI_BROADCAST_WORKER volatile Function;
     volatile ULONG_PTR Argument;
-    volatile LONG TargetCount;
+    volatile LONG TargetCount;   /* remote targets still running the function   */
+    volatile LONG Arrived;       /* remote targets parked at the rendezvous      */
+    volatile LONG Release;       /* initiator sets 1 to let parked targets run   */
     volatile LONG Busy;
 } KiArm64IpiPacket;
 #endif
@@ -67,6 +69,14 @@ KiIpiSend(
 #endif
 }
 
+/*
+ * The KPRCB-packet IPI protocol (KiIpiSendPacket / KiIpiSignalPacketDone /
+ * KiIpiSignalPacketDoneAndStall) is unused on ARM64: the generic ke/ipi.c that
+ * drives it is excluded from the ARM64 build (ntos.cmake) in favour of this
+ * file's self-contained KeIpiGenericCall. These remain only to satisfy the
+ * internal prototypes. If a future shared path ever calls them, the warning
+ * below makes the otherwise-silent no-op visible instead of dropping the work.
+ */
 VOID
 NTAPI
 KiIpiSendPacket(
@@ -80,6 +90,9 @@ KiIpiSendPacket(
     UNREFERENCED_PARAMETER(WorkerFunction);
     UNREFERENCED_PARAMETER(BroadcastFunction);
     UNREFERENCED_PARAMETER(Context);
+
+    DbgPrint("[arm64] KiIpiSendPacket called but unimplemented on ARM64; use "
+             "KeIpiGenericCall instead (packet IPI work dropped)\n");
 
     if (Count != NULL)
     {
@@ -119,11 +132,9 @@ KiIpiServiceRoutine(
     {
         PKPRCB Prcb = KeGetCurrentPrcb();
 
-        /* SMP boot diagnostics (/SMPDIAG): trace each serviced IPI. */
-        if (SmpDbgEnabled)
-            DbgPrint("SMP4DBG ipi-service cpu=%lu request=0x%Ix dpcint=%u next=%p\n",
-                     KeGetCurrentProcessorNumber(), (ULONG_PTR)Prcb->RequestSummary,
-                     Prcb->DpcInterruptRequested, Prcb->NextThread);
+        /* SMP boot diagnostics: silent per-CPU IPI-service counter (no print:
+         * a serial DbgPrint here perturbs the very timing race we are probing). */
+        SmpDbgIpi(KeGetCurrentProcessorNumber());
 
         /*
          * Check for freeze IPI FIRST, before any other processing.
@@ -158,6 +169,21 @@ KiIpiServiceRoutine(
 
             if (Function != NULL)
             {
+                /*
+                 * Rendezvous with the initiator (KeIpiGenericCall): announce
+                 * arrival, then spin at IPI_LEVEL until the initiator confirms
+                 * every target is parked and signals Release. This guarantees
+                 * the whole machine is quiesced while the broadcast routine
+                 * runs, which is the contract callers rely on.
+                 */
+                InterlockedIncrement(&KiArm64IpiPacket.Arrived);
+
+                while (KiArm64IpiPacket.Release == 0)
+                {
+                    YieldProcessor();
+                    KeMemoryBarrier();
+                }
+
                 Function(Argument);
                 InterlockedDecrement(&KiArm64IpiPacket.TargetCount);
             }
@@ -187,7 +213,13 @@ KeIpiGenericCall(
         return 0;
     }
 
-    OldIrql = KfRaiseIrql(SYNCH_LEVEL);
+    /*
+     * Raise to IPI_LEVEL (not SYNCH_LEVEL) so the initiator cannot be preempted
+     * by clock/DPC interrupts while it owns the rendezvous and runs the
+     * broadcast routine. The debugger freeze SGI sits above IPI_LEVEL and is
+     * still deliverable.
+     */
+    OldIrql = KfRaiseIrql(IPI_LEVEL);
 
     while (InterlockedCompareExchange(&KiArm64IpiPacket.Busy, 1, 0) != 0)
     {
@@ -204,6 +236,8 @@ KeIpiGenericCall(
 
     KiArm64IpiPacket.Function = Function;
     KiArm64IpiPacket.Argument = Argument;
+    KiArm64IpiPacket.Arrived = 0;
+    KiArm64IpiPacket.Release = 0;
     InterlockedExchange(&KiArm64IpiPacket.TargetCount, TargetCount);
 
     if (Targets != 0)
@@ -211,12 +245,64 @@ KeIpiGenericCall(
         KiIpiSend(Targets, IPI_SYNCH_REQUEST);
     }
 
+    /*
+     * Phase 1 - quiesce: wait until every target has parked at the rendezvous
+     * (KiIpiServiceRoutine) before touching anything. While we spin here the
+     * targets are spinning there, so the machine is fully quiesced.
+     */
+    {
+        ULONG_PTR SpinCount = 0;
+
+        while (KiArm64IpiPacket.Arrived != TargetCount)
+        {
+            YieldProcessor();
+            KeMemoryBarrier();
+
+            if (SmpDbgEnabled && ((++SpinCount & 0x3FFFFFF) == 0))
+            {
+                DbgPrint("SMP4DBG KeIpiGenericCall quiesce stuck: cpu=%lu arrived=%ld/%ld targets=0x%Ix\n",
+                         KeGetCurrentProcessorNumber(),
+                         KiArm64IpiPacket.Arrived, TargetCount, (ULONG_PTR)Targets);
+            }
+        }
+    }
+
+    /*
+     * Phase 2 - release the parked targets, THEN run the routine locally so all
+     * CPUs execute it concurrently. This is required for barrier-style callbacks
+     * (e.g. PciIpiGenericCallHandler) that spin until every processor has entered
+     * the callback: if the initiator ran the callback before releasing the
+     * targets, it would wait inside the callback for CPUs that are still blocked
+     * on Release == 0 -> deadlock. The phase-1 quiesce above already guarantees
+     * every target is parked, so releasing first does not lose the rendezvous.
+     */
+    InterlockedExchange(&KiArm64IpiPacket.Release, 1);
+
     Result = Function(Argument);
 
-    while (KiArm64IpiPacket.TargetCount != 0)
     {
-        YieldProcessor();
-        KeMemoryBarrier();
+        ULONG_PTR SpinCount = 0;
+
+        while (KiArm64IpiPacket.TargetCount != 0)
+        {
+            YieldProcessor();
+            KeMemoryBarrier();
+
+            /*
+             * Watchdog: a target wedged at/above IPI_LEVEL (or not servicing
+             * SGIs) never drains the packet, which would hang here forever. The
+             * rendezvous contract still requires every target to run the
+             * function, so we keep waiting - but surface the stuck state under
+             * /SMPDIAG instead of spinning silently.
+             */
+            if (SmpDbgEnabled && ((++SpinCount & 0x3FFFFFF) == 0))
+            {
+                DbgPrint("SMP4DBG KeIpiGenericCall stuck: cpu=%lu remaining=%ld targets=0x%Ix\n",
+                         KeGetCurrentProcessorNumber(),
+                         KiArm64IpiPacket.TargetCount,
+                         (ULONG_PTR)Targets);
+            }
+        }
     }
 
     KiArm64IpiPacket.Function = NULL;

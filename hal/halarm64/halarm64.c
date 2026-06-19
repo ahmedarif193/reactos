@@ -5558,8 +5558,22 @@ HalInitializeProcessor(
         if ((ProcessorNumber != 0) && (HalpGiccBase != 0))
         {
             ULONG GiccCtlr = HalpGicv2ForceGroup0 ? 0x1 : 0x3;
-            *HalpMmio((ULONG_PTR)HalpGiccBase, GICC_PMR) = 0x00;
+
+            /*
+             * Bring the AP up with all priorities masked, exactly like the
+             * GICv3 path above (PMR == HalpArm64IrqlToPmr[HIGH_LEVEL]). Route it
+             * through HalpArm64SetPmrExact so the per-CPU PMR shadow stays in
+             * sync with the hardware; a raw GICC_PMR write would leave the
+             * shadow stale. The AP stays masked until KiInitializeKernel raises
+             * to HIGH_LEVEL and the idle loop lowers to DISPATCH_LEVEL, at which
+             * point the tracked IRQL and the GIC mask are realigned before any
+             * interrupt is allowed to fire.
+             */
             *HalpMmio((ULONG_PTR)HalpGiccBase, GICC_BPR) = 0x0;
+            /* Mask all priorities BEFORE enabling the CPU interface: otherwise a
+             * pending (or firmware-left-permissive) interrupt could be taken in
+             * the window between the GICC_CTLR enable and the PMR being set. */
+            HalpArm64SetPmrExact(HIGH_LEVEL);
             *HalpMmio((ULONG_PTR)HalpGiccBase, GICC_CTLR) = GiccCtlr;
 
             HalpArm64ProgramSgiPriorities();
@@ -5686,13 +5700,66 @@ HalSetEnvironmentVariable(
     return ESUCCESS;
 }
 
+/*
+ * ARM64 profiling support.
+ *
+ * There is no dedicated profile timer wired up, so profile samples are taken
+ * from the periodic architected-timer clock interrupt (KiArm64TimerIsr) while at
+ * least one profile source is active. The clock tick is the finest achievable
+ * resolution; a coarser requested interval is honored by accumulation in
+ * HalArm64ProfileSample, which the clock ISR calls once per tick.
+ *
+ * Active sources are tracked as a bitmask, not a call counter: profobj.c calls
+ * HalStart/StopProfileInterrupt unconditionally on every KeStart/StopProfile
+ * (even for an already-started/already-stopped profile), so a counter would
+ * drift (sampling forever, or stopping while still active). A per-source bit is
+ * idempotent.
+ */
+static volatile LONG HalpArm64ProfileSources = 0;   /* bitmask of active KPROFILE_SOURCEs */
+static ULONG HalpArm64ProfileInterval = 100000;     /* requested interval, 100ns units */
+static LONG HalpArm64ProfileAccum[MAXIMUM_PROCESSORS];
+
+BOOLEAN
+NTAPI
+HalArm64ProfileSample(
+    _In_ ULONG Increment)
+{
+    ULONG Cpu;
+
+    if (HalpArm64ProfileSources == 0)
+        return FALSE;
+
+    Cpu = KeGetCurrentProcessorNumber();
+    if (Cpu >= MAXIMUM_PROCESSORS)
+        return FALSE;
+
+    /* Honor the requested interval even when it is coarser than the clock tick. */
+    HalpArm64ProfileAccum[Cpu] += (LONG)Increment;
+    if (HalpArm64ProfileAccum[Cpu] >= (LONG)HalpArm64ProfileInterval)
+    {
+        HalpArm64ProfileAccum[Cpu] -= (LONG)HalpArm64ProfileInterval;
+        return TRUE;
+    }
+
+    return FALSE;
+}
+
 ULONG_PTR
 NTAPI
 HalSetProfileInterval(
     _In_ ULONG_PTR Interval)
 {
-    UNREFERENCED_PARAMETER(Interval);
-    UNIMPLEMENTED_STUB();
+    ULONG_PTR Minimum = KeQueryTimeIncrement();
+
+    if (Minimum == 0)
+        Minimum = 100000;
+
+    /* The clock tick is the finest achievable resolution; coarser intervals are
+     * honored by accumulation in HalArm64ProfileSample. */
+    if (Interval < Minimum)
+        Interval = Minimum;
+
+    HalpArm64ProfileInterval = (ULONG)Interval;
     return Interval;
 }
 
@@ -5759,7 +5826,23 @@ HalStartNextProcessor(
         return FALSE;
     }
 
-    /* Determine which processor to start next */
+    /*
+     * Determine which processor to start next, skipping over any MADT GICC
+     * entries whose enabled flag is clear. Advancing past disabled cores (rather
+     * than returning FALSE on the first one) lets a system with a disabled core
+     * in the middle of the MADT still bring up every later enabled core. Logical
+     * CPU numbers stay contiguous because they are assigned by the AP itself
+     * (KeNumberProcessors), independent of this MADT index.
+     */
+    while ((HalpStartedProcessorCount < HalpArm64GicInfo.GiccEntryCount) &&
+           !(HalpArm64GicInfo.GiccEntries[HalpStartedProcessorCount].Flags & 0x1))
+    {
+        DPRINT1("[arm64][HAL] HalStartNextProcessor: skipping disabled CPU %lu (MPIDR 0x%llx)\n",
+                HalpStartedProcessorCount,
+                HalpArm64GicInfo.GiccEntries[HalpStartedProcessorCount].Mpidr);
+        HalpStartedProcessorCount++;
+    }
+
     ProcessorNumber = HalpStartedProcessorCount;
 
     /* Check if we have more processors to start from MADT GICC entries */
@@ -5772,19 +5855,6 @@ HalStartNextProcessor(
 
     /* Get the MPIDR of the target processor from MADT GICC entries */
     TargetMpidr = HalpArm64GicInfo.GiccEntries[ProcessorNumber].Mpidr;
-
-    /* Check if this processor is enabled */
-    if (!(HalpArm64GicInfo.GiccEntries[ProcessorNumber].Flags & 0x1))
-    {
-        DPRINT1("[arm64][HAL] HalStartNextProcessor: CPU %lu (MPIDR 0x%llx) not enabled in MADT\n",
-                ProcessorNumber, TargetMpidr);
-        /*
-         * Skip disabled processors but try the next one.
-         * TODO: This is a simplification; we should iterate properly.
-         */
-        HalpStartedProcessorCount++;
-        return FALSE;
-    }
 
     DPRINT("[arm64][HAL] HalStartNextProcessor: starting CPU %lu (MPIDR 0x%llx)\n",
             ProcessorNumber, TargetMpidr);
@@ -5913,8 +5983,11 @@ NTAPI
 HalStartProfileInterrupt(
     _In_ KPROFILE_SOURCE ProfileSource)
 {
-    UNREFERENCED_PARAMETER(ProfileSource);
-    UNIMPLEMENTED_STUB();
+    /* Idempotent per source (profobj.c calls this unconditionally on every
+     * KeStartProfile, including already-started ones). Sources >= 31 share the
+     * top bit, which only loses precision between very-high source numbers. */
+    ULONG Bit = ((ULONG)ProfileSource < 31) ? (ULONG)ProfileSource : 31;
+    InterlockedOr(&HalpArm64ProfileSources, (LONG)(1u << Bit));
 }
 
 VOID
@@ -5922,8 +5995,8 @@ NTAPI
 HalStopProfileInterrupt(
     _In_ KPROFILE_SOURCE ProfileSource)
 {
-    UNREFERENCED_PARAMETER(ProfileSource);
-    UNIMPLEMENTED_STUB();
+    ULONG Bit = ((ULONG)ProfileSource < 31) ? (ULONG)ProfileSource : 31;
+    InterlockedAnd(&HalpArm64ProfileSources, (LONG)~(1u << Bit));
 }
 
 VOID

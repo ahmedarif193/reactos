@@ -16,40 +16,51 @@
 /* TODO(ARM64): Replace these stub implementations with real logic once the
  * debugger, user-mode callbacks, and memory manager are fully brought up. */
 
+/*
+ * User-mode protection -> PTE attribute table.
+ *
+ * Every (non-NOACCESS) entry sets ARM64_PTE_NG: user leaf translations are
+ * per-process and must be tagged non-global so the ASID allocator can keep them
+ * cached across context switches (a global entry would match any ASID and leak
+ * across processes once flush-free switching is enabled). This is the user
+ * counterpart to MmProtectToPteMaskKernel[], whose kernel pages stay global.
+ * With the ASID allocator disabled (default), every switch still broadcast-
+ * flushes, so the NG bit is behaviour-neutral until the allocator is enabled.
+ */
 const ULONG_PTR MmProtectToPteMask[32] =
 {
     0,
-    PTE_READONLY            | PTE_ENABLE_CACHE,
-    PTE_EXECUTE             | PTE_ENABLE_CACHE,
-    PTE_EXECUTE_READ        | PTE_ENABLE_CACHE,
-    PTE_READWRITE           | PTE_ENABLE_CACHE,
-    PTE_WRITECOPY           | PTE_ENABLE_CACHE,
-    PTE_EXECUTE_READWRITE   | PTE_ENABLE_CACHE,
-    PTE_EXECUTE_WRITECOPY   | PTE_ENABLE_CACHE,
+    PTE_READONLY            | PTE_ENABLE_CACHE         | ARM64_PTE_NG,
+    PTE_EXECUTE             | PTE_ENABLE_CACHE         | ARM64_PTE_NG,
+    PTE_EXECUTE_READ        | PTE_ENABLE_CACHE         | ARM64_PTE_NG,
+    PTE_READWRITE           | PTE_ENABLE_CACHE         | ARM64_PTE_NG,
+    PTE_WRITECOPY           | PTE_ENABLE_CACHE         | ARM64_PTE_NG,
+    PTE_EXECUTE_READWRITE   | PTE_ENABLE_CACHE         | ARM64_PTE_NG,
+    PTE_EXECUTE_WRITECOPY   | PTE_ENABLE_CACHE         | ARM64_PTE_NG,
     0,
-    PTE_READONLY            | PTE_DISABLE_CACHE,
-    PTE_EXECUTE             | PTE_DISABLE_CACHE,
-    PTE_EXECUTE_READ        | PTE_DISABLE_CACHE,
-    PTE_READWRITE           | PTE_DISABLE_CACHE,
-    PTE_WRITECOPY           | PTE_DISABLE_CACHE,
-    PTE_EXECUTE_READWRITE   | PTE_DISABLE_CACHE,
-    PTE_EXECUTE_WRITECOPY   | PTE_DISABLE_CACHE,
+    PTE_READONLY            | PTE_DISABLE_CACHE        | ARM64_PTE_NG,
+    PTE_EXECUTE             | PTE_DISABLE_CACHE        | ARM64_PTE_NG,
+    PTE_EXECUTE_READ        | PTE_DISABLE_CACHE        | ARM64_PTE_NG,
+    PTE_READWRITE           | PTE_DISABLE_CACHE        | ARM64_PTE_NG,
+    PTE_WRITECOPY           | PTE_DISABLE_CACHE        | ARM64_PTE_NG,
+    PTE_EXECUTE_READWRITE   | PTE_DISABLE_CACHE        | ARM64_PTE_NG,
+    PTE_EXECUTE_WRITECOPY   | PTE_DISABLE_CACHE        | ARM64_PTE_NG,
     0,
-    PTE_READONLY            | PTE_ENABLE_CACHE,
-    PTE_EXECUTE             | PTE_ENABLE_CACHE,
-    PTE_EXECUTE_READ        | PTE_ENABLE_CACHE,
-    PTE_READWRITE           | PTE_ENABLE_CACHE,
-    PTE_WRITECOPY           | PTE_ENABLE_CACHE,
-    PTE_EXECUTE_READWRITE   | PTE_ENABLE_CACHE,
-    PTE_EXECUTE_WRITECOPY   | PTE_ENABLE_CACHE,
+    PTE_READONLY            | PTE_ENABLE_CACHE         | ARM64_PTE_NG,
+    PTE_EXECUTE             | PTE_ENABLE_CACHE         | ARM64_PTE_NG,
+    PTE_EXECUTE_READ        | PTE_ENABLE_CACHE         | ARM64_PTE_NG,
+    PTE_READWRITE           | PTE_ENABLE_CACHE         | ARM64_PTE_NG,
+    PTE_WRITECOPY           | PTE_ENABLE_CACHE         | ARM64_PTE_NG,
+    PTE_EXECUTE_READWRITE   | PTE_ENABLE_CACHE         | ARM64_PTE_NG,
+    PTE_EXECUTE_WRITECOPY   | PTE_ENABLE_CACHE         | ARM64_PTE_NG,
     0,
-    PTE_READONLY            | PTE_WRITECOMBINED_CACHE,
-    PTE_EXECUTE             | PTE_WRITECOMBINED_CACHE,
-    PTE_EXECUTE_READ        | PTE_WRITECOMBINED_CACHE,
-    PTE_READWRITE           | PTE_WRITECOMBINED_CACHE,
-    PTE_WRITECOPY           | PTE_WRITECOMBINED_CACHE,
-    PTE_EXECUTE_READWRITE   | PTE_WRITECOMBINED_CACHE,
-    PTE_EXECUTE_WRITECOPY   | PTE_WRITECOMBINED_CACHE,
+    PTE_READONLY            | PTE_WRITECOMBINED_CACHE  | ARM64_PTE_NG,
+    PTE_EXECUTE             | PTE_WRITECOMBINED_CACHE  | ARM64_PTE_NG,
+    PTE_EXECUTE_READ        | PTE_WRITECOMBINED_CACHE  | ARM64_PTE_NG,
+    PTE_READWRITE           | PTE_WRITECOMBINED_CACHE  | ARM64_PTE_NG,
+    PTE_WRITECOPY           | PTE_WRITECOMBINED_CACHE  | ARM64_PTE_NG,
+    PTE_EXECUTE_READWRITE   | PTE_WRITECOMBINED_CACHE  | ARM64_PTE_NG,
+    PTE_EXECUTE_WRITECOPY   | PTE_WRITECOMBINED_CACHE  | ARM64_PTE_NG,
 };
 
 /*
@@ -619,16 +630,19 @@ KeStartAllProcessors(
     MaximumProcessors = MAXIMUM_PROCESSORS;
 
     /*
-     * TODO: Limit processors based on command line options when available.
-     * For now, we use the compiled-in maximum. Command-line processor
-     * limiting would require kernel command-line parsing integration:
-     * - /NUMPROC=N: Maximum number of processors to use
-     * - /ONECPU: Use only one processor (equivalent to /NUMPROC=1)
-     *
-     * These would set KeNumprocSpecified and KeBootprocSpecified.
+     * Honor the boot-time processor-count limits parsed from the kernel command
+     * line in ExpLoadInitialProcess (/NUMPROC=N, and /ONECPU which sets
+     * KeNumprocSpecified = 1). KeBootprocSpecified caps boot-time starts the
+     * same way. The loop below also stops naturally once the HAL reports no
+     * more enabled MADT entries, so this only ever lowers the cap.
      */
+    if ((KeNumprocSpecified != 0) && (KeNumprocSpecified < MaximumProcessors))
+        MaximumProcessors = KeNumprocSpecified;
+    if ((KeBootprocSpecified != 0) && (KeBootprocSpecified < MaximumProcessors))
+        MaximumProcessors = KeBootprocSpecified;
 
-    DPRINT1("[arm64] KeStartAllProcessors: Max=%lu\n", MaximumProcessors);
+    DPRINT1("[arm64] KeStartAllProcessors: Max=%lu (numproc=%lu bootproc=%lu)\n",
+            MaximumProcessors, KeNumprocSpecified, KeBootprocSpecified);
 
     /* Start from processor 1 since BSP (processor 0) is already running */
     for (ProcessorCount = 1; ProcessorCount < MaximumProcessors; ++ProcessorCount)

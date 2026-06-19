@@ -1465,9 +1465,12 @@ def capture_gdb_dump(reason):
         print(f"GDB state dump skipped: no GDB CLI found. Tried: {', '.join(gdb_candidates())}")
         return False
 
-    ntoskrnl_symbols = find_gdb_symbol_binary("ntoskrnl.exe")
+    # The SMP boot loads /KERNEL=ntkrnlmp.exe, whose code layout differs from the
+    # UP ntoskrnl.exe. Symbolizing an MP boot against ntoskrnl.exe gives wrong
+    # function/instruction attributions, so prefer ntkrnlmp.exe when present.
+    ntoskrnl_symbols = find_gdb_symbol_binary("ntkrnlmp.exe") or find_gdb_symbol_binary("ntoskrnl.exe")
     if not ntoskrnl_symbols:
-        print("GDB state dump skipped: ntoskrnl.exe not found.")
+        print("GDB state dump skipped: ntkrnlmp.exe/ntoskrnl.exe not found.")
         return False
 
     gdb_script = f"/tmp/vm_monitor_gdb_dump_{qemu_process.pid}.gdb"
@@ -1526,6 +1529,13 @@ def capture_gdb_dump(reason):
         "info symbol $pc",
         "info symbol $x30",
         "x/8i $pc",
+        'printf "SMP4DBG per-CPU counters at stall. Layout per CPU = 14 u32:\\n"',
+        'printf "  [Begin Eoi Reject Tick Ipi Park Wake Ctl Tval Pmr GicPrio GicEn GicPend GicAct]\\n"',
+        "info address SmpDbgCpu",
+        "x/112xw &SmpDbgCpu",
+        'printf "GICv2 GICD ISPENDR0 / ISACTIVER0 (phys, INTID 0-31):\\n"',
+        "monitor xp/1xw 0x08000200",
+        "monitor xp/1xw 0x08000300",
         ])
     else:
         commands.extend([

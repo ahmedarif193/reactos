@@ -561,6 +561,26 @@ HalpGicItsBuildSyncCmd(
     Cmd[2] = Rdbase & (((1ULL << 36) - 1) << 16);
 }
 
+static VOID
+HalpGicItsBuildMoviCmd(
+    _Out_writes_(4) UINT64 *Cmd,
+    _In_ ULONG DeviceId,
+    _In_ ULONG EventId,
+    _In_ ULONG CollectionId)
+{
+    RtlZeroMemory(Cmd, HAL_ARM64_ITS_CMD_ENTRY_SIZE);
+
+    /* Cmd[0]: Command + DeviceID */
+    Cmd[0] = (UINT64)GITS_CMD_MOVI;
+    Cmd[0] |= ((UINT64)DeviceId) << 32;
+
+    /* Cmd[1]: EventID (bits 31:0) */
+    Cmd[1] = (UINT64)EventId;
+
+    /* Cmd[2]: CollectionID (bits 15:0) - the destination collection */
+    Cmd[2] = (UINT64)(CollectionId & 0xFFFFu);
+}
+
 static UINT64
 HalpGicItsEncodeRdbase(
     _In_ PHALP_GIC_ITS_NODE ItsNode,
@@ -1624,6 +1644,31 @@ HalpGicItsInitAllNodes(VOID)
         if (!HalpGicCpuMpidrValid[Cpu] || (HalpGicrBase(Cpu) == 0))
             continue;
 
+        /*
+         * Only enable LPIs on the redistributor of the CPU we are running on.
+         *
+         * GICR_CTLR.EnableLPIs (and the GICR_PROPBASER/PENDBASER programming in
+         * HalpGicItsProgramCpuTables) MUST be performed by the CPU that owns the
+         * redistributor. This loop runs entirely on the MSI-allocating CPU, so
+         * programming another CPU's redistributor here is a cross-CPU write that,
+         * on QEMU's GICv3, stops the *target* CPU's PPI 27 (EL1 virtual timer):
+         * the AP's timer ISR stops firing, so it can never wake from WFI and the
+         * boot wedges (the boot thread then blocks forever on whatever it next
+         * waits on - drive letters, a driver's I/O, etc.). Observed via per-CPU
+         * heartbeats: the self-programmed boot CPU keeps ticking while every AP
+         * whose redistributor is enabled cross-CPU has its timer die ~1s later.
+         * The HAL's own Phase-1 comment already notes "enabling LPIs ... causes
+         * PPI 27 to stop firing on QEMU".
+         *
+         * Linux does the same thing per-CPU from its_cpu_init_lpis() running on
+         * each CPU. Boot-time MSIs are routed to the boot CPU, so enabling LPIs
+         * on the current CPU is sufficient for MSI/ITS delivery. (Enabling other
+         * CPUs' LPIs for MSI affinity must be done from those CPUs - e.g. via a
+         * per-CPU IPI - never by a cross-CPU redistributor write.)
+         */
+        if (Cpu != KeGetCurrentProcessorNumber())
+            continue;
+
         if (!HalpGicItsProgramCpuTables(Cpu))
         {
             DPRINT1("[arm64][ITS] Failed to program CPU tables for CPU %lu\n", Cpu);
@@ -1881,11 +1926,96 @@ HalpGicItsSetMsiAffinity(
     _In_ ULONG Lpi,
     _In_ ULONG TargetCpu)
 {
-    /* TODO: Implement MOVI command to move LPI to different collection */
-    /* This requires tracking which ITS node and device owns the LPI */
-    UNREFERENCED_PARAMETER(Lpi);
-    UNREFERENCED_PARAMETER(TargetCpu);
-    return STATUS_NOT_IMPLEMENTED;
+    ULONG NodeIndex;
+
+    if (!HalpGicItsInitialized)
+        return STATUS_DEVICE_NOT_READY;
+
+    if (TargetCpu >= MAXIMUM_PROCESSORS)
+        return STATUS_INVALID_PARAMETER;
+
+    /*
+     * Locate the ITS node + device + event that owns this LPI (collections are
+     * per-CPU, so CollectionId == CPU number), then issue MOVI to retarget the
+     * LPI to the destination collection, INV to drop the cached config, and
+     * SYNC against the destination redistributor.
+     */
+    for (NodeIndex = 0; NodeIndex < HalpGicItsNodeCount; ++NodeIndex)
+    {
+        PHALP_GIC_ITS_NODE ItsNode = &HalpGicItsNodes[NodeIndex];
+        KIRQL OldIrql;
+        ULONG Bucket;
+        PHALP_ARM64_ITS_DEVICE Device;
+        BOOLEAN Found = FALSE;
+        ULONG FoundDeviceId = 0;
+        ULONG FoundEventId = 0;
+        PHALP_ARM64_ITS_DEVICE FoundDevice = NULL;
+
+        if (!ItsNode->Enabled || !ItsNode->DeviceBuckets)
+            continue;
+
+        KeAcquireSpinLock(&ItsNode->DeviceLock, &OldIrql);
+        for (Bucket = 0; (Bucket < ItsNode->DeviceBucketCount) && !Found; ++Bucket)
+        {
+            for (Device = ItsNode->DeviceBuckets[Bucket];
+                 Device != NULL;
+                 Device = Device->Next)
+            {
+                ULONG Event;
+
+                if (!Device->EventToLpi)
+                    continue;
+
+                for (Event = 0; Event < Device->MaxEvents; ++Event)
+                {
+                    if (Device->EventToLpi[Event] == Lpi)
+                    {
+                        FoundDeviceId = Device->RequesterId;
+                        FoundEventId = Event;
+                        FoundDevice = Device;
+                        Found = TRUE;
+                        break;
+                    }
+                }
+
+                if (Found)
+                    break;
+            }
+        }
+        KeReleaseSpinLock(&ItsNode->DeviceLock, OldIrql);
+
+        if (!Found)
+            continue;
+
+        /* Make sure the destination collection is mapped on this ITS. */
+        if (!HalpGicItsEnsureCollectionOnNode(ItsNode, TargetCpu))
+            return STATUS_UNSUCCESSFUL;
+
+        {
+            UINT64 Cmd[4];
+
+            HalpGicItsBuildMoviCmd(Cmd, FoundDeviceId, FoundEventId, TargetCpu);
+            if (!HalpGicItsPostCommandOnNode(ItsNode, Cmd))
+                return STATUS_UNSUCCESSFUL;
+        }
+
+        HalpGicItsSendInvOnNode(ItsNode, FoundDeviceId, FoundEventId);
+        HalpGicItsSendSyncOnNode(ItsNode, TargetCpu,
+                                 ItsNode->CollectionTarget[TargetCpu]);
+
+        /* Publish the new affinity only now that the ITS has actually retargeted
+         * the LPI, so the software query path (HalpGicItsGetMsiInfo) never reports
+         * a CPU the hardware is not yet routing to, and a failed retarget above
+         * leaves the recorded collection unchanged. */
+        if (FoundDevice->EventToCollection)
+            FoundDevice->EventToCollection[FoundEventId] = TargetCpu;
+
+        DPRINT("[arm64][ITS] Moved LPI %lu (device 0x%lx event %lu) to CPU %lu\n",
+               Lpi, FoundDeviceId, FoundEventId, TargetCpu);
+        return STATUS_SUCCESS;
+    }
+
+    return STATUS_NOT_FOUND;
 }
 
 /*

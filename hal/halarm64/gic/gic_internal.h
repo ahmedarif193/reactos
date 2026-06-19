@@ -202,6 +202,7 @@
 /*
  * ITS command opcodes
  */
+#define GITS_CMD_MOVI       0x01
 #define GITS_CMD_SYNC       0x05
 #define GITS_CMD_MAPD       0x08
 #define GITS_CMD_MAPC       0x09

@@ -1705,6 +1705,9 @@ Phase1InitializationDiscard(IN PVOID Context)
         if (Option) Option = strstr(Option, "=");
         if (Option) KeNumprocSpecified = atol(Option + 1);
 
+        /* Check for ONECPU: force uniprocessor operation (cap at one CPU). */
+        if (strstr(CommandLine, "ONECPU")) KeNumprocSpecified = 1;
+
         /* Check for BOOTPROC (NT6+ and ReactOS): maximum number
          * of logical processors that can be started at boot-time */
         Option = strstr(CommandLine, "BOOTPROC");
@@ -2117,6 +2120,10 @@ Phase1InitializationDiscard(IN PVOID Context)
 
     /* Initialize the Process Manager at Phase 1 */
     if (!PsInitSystem(LoaderBlock)) KeBugCheck(PROCESS1_INITIALIZATION_FAILED);
+#if defined(_M_ARM64)
+    /* DIAG: start the all-idle deadlock watchdog now that Ps can create threads. */
+    SmpDbgStartWatchdog();
+#endif
 
     /* Make sure nobody touches the loader block again */
     if (LoaderBlock == KeLoaderBlock) KeLoaderBlock = NULL;

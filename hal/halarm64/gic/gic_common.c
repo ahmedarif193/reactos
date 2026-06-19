@@ -727,8 +727,11 @@ HalpGicEnableInterrupt(
     }
     else
     {
-        /* LPI: Enabled via ITS configuration table */
-        HalpGicItsEnableLpi(IntId - HAL_ARM64_LPI_BASE);
+        /* LPI: Enabled via ITS configuration table. HalpGicItsEnableLpi takes
+         * the full INTID (it derives the config-table index itself); passing a
+         * pre-subtracted index made it fail its own range check and silently do
+         * nothing. */
+        HalpGicItsEnableLpi(IntId);
     }
 
     __asm__ __volatile__("dsb sy" ::: "memory");
@@ -792,8 +795,9 @@ HalpGicDisableInterrupt(
     }
     else
     {
-        /* LPI: Disable via ITS configuration table - not implemented */
-        DPRINT("[arm64][GIC] LPI disable not fully implemented for INTID %lu\n", IntId);
+        /* LPI: disable via the ITS configuration table (clears the enable bit,
+         * keeps Group1/priority, then invalidates the cached config). */
+        HalpGicItsDisableLpi(IntId);
     }
 
     __asm__ __volatile__("dsb sy" ::: "memory");
@@ -862,8 +866,9 @@ HalpGicSetInterruptPriority(
     }
     else
     {
-        /* LPI: Priority set via configuration table - not implemented here */
-        DPRINT("[arm64][GIC] LPI priority not implemented for INTID %lu\n", IntId);
+        /* LPI: priority lives in the ITS configuration table (bits 7:2 of the
+         * per-LPI byte), not in a GICD/GICR IPRIORITYR register. */
+        HalpGicItsSetLpiPriority(IntId, (UCHAR)Priority);
         return;
     }
 

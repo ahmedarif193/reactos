@@ -566,9 +566,22 @@ HalpArm64DiscoverParkedCpus(
         PHALP_ARM64_GICC_ENTRY Entry = &HalpArm64GicInfo.GiccEntries[Index];
 
         HalpParkedCpus[Index].Mpidr = Entry->Mpidr;
-        HalpParkedCpus[Index].ParkedAddress = 0;
-        HalpParkedCpus[Index].ParkingVersion = 0;
+        HalpParkedCpus[Index].ParkedAddress = Entry->ParkedAddress;
+        HalpParkedCpus[Index].ParkingVersion = Entry->ParkingVersion;
         HalpParkedCpus[Index].Enabled = (Entry->Flags & 0x1) != 0;
+
+        /*
+         * The MADT advertises the ACPI parking protocol per-CPU. A non-zero
+         * protocol version together with a valid mailbox address means PSCI is
+         * not the wake-up method for this core and HalpArm64WakeParkedCpu must
+         * be used instead. (PSCI-based platforms leave both fields zero.)
+         */
+        if (HalpParkedCpus[Index].Enabled &&
+            (Entry->ParkingVersion != 0) &&
+            (Entry->ParkedAddress != 0))
+        {
+            HalpParkingProtocolAvailable = TRUE;
+        }
     }
 
     HalpParkedCpuCount = Index;
@@ -630,7 +643,15 @@ VOID
 HalpArm64EnableCpuInterface(VOID)
 {
     HalpWriteIccSre(7);
-    HalpWriteIccPmr(0x00);
+    /*
+     * Program the priority mask wide open (0xFF = allow every priority). This
+     * routine's job is to *enable* the CPU interface; the kernel IRQL layer
+     * (HalpArm64SetPmrExact) then tightens PMR to the current IRQL on the first
+     * KfRaiseIrql/KfLowerIrql. The previous 0x00 masked every interrupt, which
+     * contradicted the routine's purpose and would have silenced a core that
+     * ever relied on it for interrupt delivery.
+     */
+    HalpWriteIccPmr(0xFF);
     HalpWriteIccBpr1(0);
     HalpWriteIccIgrpen1(1);
     __asm__ __volatile__("isb" ::: "memory");
