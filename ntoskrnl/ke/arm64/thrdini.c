@@ -283,6 +283,12 @@ KiIdleLoop(VOID)
 
         /* Re-advertise this core as idle so KiSelectNextProcessor can hand off to it. */
         InterlockedOr64((PLONG64)&KiIdleSummary, (LONG64)Prcb->SetMember);
+        if (Prcb->SchedulerSubNode != NULL)
+        {
+            PKSCHEDULER_SUBNODE SubNode = (PKSCHEDULER_SUBNODE)Prcb->SchedulerSubNode;
+            InterlockedOr64((PLONG64)&SubNode->IdleCpuSet, (LONG64)Prcb->SetMember);
+            InterlockedOr64((PLONG64)&SubNode->IdleSmtSet, (LONG64)Prcb->SetMember);
+        }
 
         /* SMP boot diagnostics: the idle-loop GIC/PMR probe is DISABLED here.
          * It read ICC_PMR_EL1 (S3_0_C4_C6_0), a GICv3-only system register that
@@ -295,6 +301,12 @@ KiIdleLoop(VOID)
         __asm__ __volatile__("wfi" ::: "memory");
         SmpDbgWake(Prcb->Number);
         Prcb->Sleeping = FALSE;
+        if (Prcb->SchedulerSubNode != NULL)
+        {
+            PKSCHEDULER_SUBNODE SubNode = (PKSCHEDULER_SUBNODE)Prcb->SchedulerSubNode;
+            InterlockedAnd64((PLONG64)&SubNode->IdleCpuSet, (LONG64)~Prcb->SetMember);
+            InterlockedAnd64((PLONG64)&SubNode->IdleSmtSet, (LONG64)~Prcb->SetMember);
+        }
 
         if (Prcb->IpiFrozen == IPI_FROZEN_STATE_TARGET_FREEZE)
         {
