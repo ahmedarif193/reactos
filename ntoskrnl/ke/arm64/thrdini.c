@@ -148,6 +148,64 @@ KiInitializeContextThread(_Inout_ PKTHREAD Thread,
     SwitchFrame->ApcBypass = APC_LEVEL;
 }
 
+/*
+ * KiArm64IdleDispatchNextThread - dispatch a thread handed to this idle core.
+ *
+ * Returns TRUE (after KiSwapContext has returned to the idle thread) if a
+ * thread was selected and switched to, FALSE if there was nothing to run.
+ *
+ * Called both from the main idle wait and from the DPC/timer drain branch: a
+ * remote CPU can install (or replace) Prcb->NextThread while this core is busy
+ * draining DPCs, and that thread must be consumed before parking in WFI.
+ *
+ * Must be called with interrupts disabled and at DISPATCH_LEVEL (idle context).
+ */
+static
+BOOLEAN
+KiArm64IdleDispatchNextThread(_In_ PKPRCB Prcb)
+{
+    PKTHREAD OldThread, NewThread;
+
+    KiAcquirePrcbLock(Prcb);
+
+    /* Passive consumer: don't run the scheduler here, only drain a thread that
+     * KiDeferredReadyThread left on this core's local ready list (no NextThread/IPI). */
+    if (!Prcb->NextThread && Prcb->ReadySummary)
+    {
+        PKTHREAD Ready = KiSelectReadyThread(0, Prcb);
+        if (Ready != NULL)
+        {
+            Ready->State = Standby;
+            Prcb->NextThread = Ready;
+        }
+    }
+
+    if (!Prcb->NextThread)
+    {
+        KiReleasePrcbLock(Prcb);
+        return FALSE;
+    }
+
+    OldThread = Prcb->CurrentThread;
+    NewThread = Prcb->NextThread;
+
+    /* (diag) idle-switch trace removed: serial print here perturbs the SMP race. */
+
+    Prcb->Sleeping = FALSE;
+    InterlockedAnd64((PLONG64)&KiIdleSummary, (LONG64)~Prcb->SetMember);
+
+    Prcb->NextThread = NULL;
+    Prcb->CurrentThread = NewThread;
+    NewThread->State = Running;
+
+    KiReleasePrcbLock(Prcb);
+
+    ASSERT(OldThread != NULL);
+    KiSwapContext(APC_LEVEL, OldThread);
+    if (KeGetCurrentIrql() > DISPATCH_LEVEL) KeLowerIrql(DISPATCH_LEVEL);
+    return TRUE;
+}
+
 DECLSPEC_NORETURN
 VOID
 KiIdleLoop(VOID)
@@ -206,79 +264,36 @@ KiIdleLoop(VOID)
 
             /* KiRetireDpcList runs at DISPATCH_LEVEL and is entered and exited with interrupts disabled */
             KiRetireDpcList(Prcb);
+
+            /* A remote CPU may have handed us a thread (or the deferred-ready
+             * processing above may have produced one) while we were draining.
+             * Consume it now instead of looping back and parking in WFI with a
+             * runnable thread sitting in Prcb->NextThread. */
+            if (KiArm64IdleDispatchNextThread(Prcb))
+                continue;
+
             _enable();
             continue;
         }
 
-        KiAcquirePrcbLock(Prcb);
-        /* Passive consumer: don't run the scheduler here, only drain a thread that
-         * KiDeferredReadyThread left on this core's local ready list (no NextThread/IPI). */
-        if (!Prcb->NextThread && Prcb->ReadySummary)
-        {
-            PKTHREAD Ready = KiSelectReadyThread(0, Prcb);
-            if (Ready != NULL)
-            {
-                Ready->State = Standby;
-                Prcb->NextThread = Ready;
-            }
-        }
-        if (Prcb->NextThread)
-        {
-            PKTHREAD OldThread = Prcb->CurrentThread;
-            PKTHREAD NewThread = Prcb->NextThread;
-
-            if (SmpDbgEnabled)
-                DbgPrint("SMP4DBG idle-switch cpu=%lu old=%p oldprio=%d new=%p newprio=%d\n",
-                         KeGetCurrentProcessorNumber(), OldThread, (int)OldThread->Priority,
-                         NewThread, (int)NewThread->Priority);
-
-            Prcb->Sleeping = FALSE;
-            InterlockedAnd64((PLONG64)&KiIdleSummary, (LONG64)~Prcb->SetMember);
-
-            Prcb->NextThread = NULL;
-            Prcb->CurrentThread = NewThread;
-            NewThread->State = Running;
-
-            KiReleasePrcbLock(Prcb);
-
-            ASSERT(OldThread != NULL);
-            KiSwapContext(APC_LEVEL, OldThread);
-            if (KeGetCurrentIrql() > DISPATCH_LEVEL) KeLowerIrql(DISPATCH_LEVEL);
+        /* Dispatch a thread handed to this core (locally selected or installed
+         * by a remote KiDeferredReadyThread); otherwise fall through to WFI. */
+        if (KiArm64IdleDispatchNextThread(Prcb))
             continue;
-        }
-        KiReleasePrcbLock(Prcb);
 
         /* Re-advertise this core as idle so KiSelectNextProcessor can hand off to it. */
         InterlockedOr64((PLONG64)&KiIdleSummary, (LONG64)Prcb->SetMember);
 
-        /* SMP boot diagnostics (/SMPDIAG): record this core's timer + GIC state.
-         * Report whichever architected timer is enabled - virtual (PPI 27) or
-         * physical (PPI 30). The PMR read is ICC_PMR_EL1 (GICv3 path). */
-        if (SmpDbgEnabled)
-        {
-            ULONG64 Ctl, Tval, Pmr;
-            ULONG Self = KeGetCurrentProcessorNumber();
-            ULONG TimerPpi, Prio = 0, En = 0, Pend = 0, Act = 0;
-            __asm__ __volatile__("mrs %0, cntv_ctl_el0" : "=r"(Ctl));
-            if (Ctl & 1u)
-            {
-                __asm__ __volatile__("mrs %0, cntv_tval_el0" : "=r"(Tval));
-                TimerPpi = 27;
-            }
-            else
-            {
-                __asm__ __volatile__("mrs %0, cntp_ctl_el0" : "=r"(Ctl));
-                __asm__ __volatile__("mrs %0, cntp_tval_el0" : "=r"(Tval));
-                TimerPpi = 30;
-            }
-            __asm__ __volatile__("mrs %0, S3_0_C4_C6_0" : "=r"(Pmr));
-            SmpDbgCntv(Self, (ULONG)Ctl, (LONG)Tval, (ULONG)Pmr);
-            HalArm64DbgGicState(TimerPpi, &Prio, &En, &Pend, &Act);
-            SmpDbgGic(Self, Prio, En, Pend, Act);
-        }
+        /* SMP boot diagnostics: the idle-loop GIC/PMR probe is DISABLED here.
+         * It read ICC_PMR_EL1 (S3_0_C4_C6_0), a GICv3-only system register that
+         * is UNDEFINED on a GICv2 CPU interface and traps as an unknown-instruction
+         * exception (ESR EC=0) -> bugcheck 0x1E. We probe via silent counters and
+         * read GIC state externally (QEMU monitor) instead. */
 
         /* WFI wakes on a pending interrupt even with DAIF.I masked; unmasking afterwards takes it immediately */
+        SmpDbgPark(Prcb->Number);
         __asm__ __volatile__("wfi" ::: "memory");
+        SmpDbgWake(Prcb->Number);
         Prcb->Sleeping = FALSE;
 
         if (Prcb->IpiFrozen == IPI_FROZEN_STATE_TARGET_FREEZE)
