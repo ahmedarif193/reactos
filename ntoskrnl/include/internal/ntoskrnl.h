@@ -87,8 +87,11 @@
 #define KPROCESS_DTB0(Process)  ((Process)->DirectoryTableBase)
 #define KPROCESS_DTB1(Process)  ((Process)->Unused0)
 #else
+/* ARM64 (Win11 KPROCESS): 0x028 = translation root (DirectoryTableBase[0]),
+ * 0x030 = native ASID field. The hyperspace root lives in the ReactOS-private
+ * Unused0 slot, so DTB1 maps there (mirroring amd64). */
 #define KPROCESS_DTB0(Process)  ((Process)->DirectoryTableBase[0])
-#define KPROCESS_DTB1(Process)  ((Process)->DirectoryTableBase[1])
+#define KPROCESS_DTB1(Process)  ((Process)->Unused0)
 #endif
 
 /* ETHREAD.LpcReplyMessageId -> AlpcMessageId at Vista+ */

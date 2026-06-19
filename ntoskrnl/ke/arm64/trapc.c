@@ -668,6 +668,125 @@ KiSystemService(
     _Inout_ PKTRAP_FRAME TrapFrame,
     _In_ ULONG Instruction);
 
+/*
+ * ============================================================================
+ * ARM64 ASID allocator (E1/E2) - perf optimization, OFF by default.
+ * ============================================================================
+ *
+ * Each process is lazily tagged with a unique 8-bit ASID stored in the ASID
+ * field of DirectoryTableBase[0] (== TTBR0_EL1). KiArm64WriteUserTtbr then skips
+ * the per-switch broadcast TLB flush, because translations are kept tagged per
+ * ASID instead of shared under ASID 0.
+ *
+ * Default behaviour is unchanged: KiArm64AsidEnabled is FALSE, so no ASID is
+ * ever assigned, DirectoryTableBase[0] keeps ASID 0, and every switch flushes
+ * exactly as before. Enabling it (set KiArm64AsidEnabled = TRUE) requires user
+ * leaf PTEs to be non-global (nG=1) and TCR.A1=0 (set in KiInitializeKernel);
+ * this must be validated at runtime before flipping the default.
+ *
+ * Allocation is lock-free; ASIDs are never reused (a process that cannot get a
+ * free ASID simply keeps ASID 0 and full-flushes), so a freshly allocated ASID
+ * can never alias another process's cached translations.
+ */
+BOOLEAN KiArm64AsidEnabled = FALSE;
+
+#define KI_ARM64_ASID_COUNT 256
+static volatile LONG KiArm64AsidBitmap[KI_ARM64_ASID_COUNT / 32];
+
+static
+ULONG
+KiArm64AllocateAsid(VOID)
+{
+    ULONG Asid;
+
+    /* ASID 0 is reserved for the "no ASID / full-flush" fallback. */
+    for (Asid = 1; Asid < KI_ARM64_ASID_COUNT; Asid++)
+    {
+        if (!InterlockedBitTestAndSet(&KiArm64AsidBitmap[Asid >> 5], (LONG)(Asid & 31)))
+        {
+            return Asid;   /* transitioned this bit 0 -> 1: it is ours */
+        }
+    }
+
+    return 0;   /* exhausted: caller stays on ASID 0 (full-flush, still correct) */
+}
+
+static
+VOID
+KiArm64FreeAsid(
+    _In_ ULONG Asid)
+{
+    if ((Asid != 0) && (Asid < KI_ARM64_ASID_COUNT))
+    {
+        InterlockedBitTestAndReset(&KiArm64AsidBitmap[Asid >> 5], (LONG)(Asid & 31));
+    }
+}
+
+static
+VOID
+KiArm64EnsureProcessAsid(
+    _Inout_ PKPROCESS Process)
+{
+    ULONG Asid;
+
+    if (!KiArm64AsidEnabled || (Process == NULL))
+        return;
+
+    /* No address space yet, or already tagged: nothing to do. The ASID lives in
+     * the native Win11 KPROCESS.Asid field (0x030); DirectoryTableBase[0] stays
+     * a pure physical table base. */
+    if ((Process->DirectoryTableBase[0] == 0) || (Process->Asid != 0))
+        return;
+
+    Asid = KiArm64AllocateAsid();
+    if (Asid == 0)
+        return;   /* none free: leave at ASID 0 (full-flush path) */
+
+    /* Publish atomically; if another CPU tagged it first, give our ASID back. */
+    if (InterlockedCompareExchange((volatile LONG *)&Process->Asid, (LONG)Asid, 0) != 0)
+    {
+        KiArm64FreeAsid(Asid);
+    }
+}
+
+/*
+ * KiArm64ReleaseProcessAsid - reclaim a process's ASID when its address space
+ * is torn down (called from MmDeleteProcessAddressSpace).
+ *
+ * Freeing on teardown is what keeps the 256-entry ASID space from leaking: a
+ * killed process returns its ASID for reuse, so exhaustion (and the ASID-0
+ * full-flush fallback) only happens when more than 255 processes are alive at
+ * once, rather than after 255 processes have ever existed. The ASID's stale
+ * translations are invalidated before the slot can be recycled.
+ *
+ * No-op unless the allocator is enabled.
+ */
+VOID
+NTAPI
+KiArm64ReleaseProcessAsid(
+    _Inout_ PKPROCESS Process)
+{
+    ULONG Asid;
+
+    if (!KiArm64AsidEnabled || (Process == NULL))
+        return;
+
+    Asid = Process->Asid;
+    if (Asid == 0)
+        return;
+
+    /* Evict this ASID's translations before the slot is recycled. */
+    __asm__ __volatile__("dsb ishst" ::: "memory");
+    __asm__ __volatile__("tlbi aside1is, %0"
+                         :: "r"((ULONGLONG)Asid << KI_ARM64_TTBR_ASID_SHIFT)
+                         : "memory");
+    __asm__ __volatile__("dsb ish" ::: "memory");
+    __asm__ __volatile__("isb" ::: "memory");
+
+    KiArm64FreeAsid(Asid);
+    Process->Asid = 0;
+}
+
 VOID
 NTAPI
 KiSwapProcess(_Inout_ PKPROCESS NewProcess,
@@ -719,18 +838,25 @@ KiSwapProcess(_Inout_ PKPROCESS NewProcess,
 
     if ((OldProcess != NULL) &&
         (NewProcess->DirectoryTableBase[0] == OldProcess->DirectoryTableBase[0]) &&
-        (NewProcess->DirectoryTableBase[1] == OldProcess->DirectoryTableBase[1]) &&
+        (NewProcess->Unused0 == OldProcess->Unused0) &&
         (CurrentUserRoot == NewUserRoot) &&
         (CurrentKernelRoot == NewKernelRoot))
     {
-        /* Same TTBR roots, nothing to do */
+        /* Same TTBR roots and hyperspace, nothing to do */
         return;
     }
 
     ASSERT(NewProcess->DirectoryTableBase[0] != 0);
-    ASSERT(NewProcess->DirectoryTableBase[1] != 0);
+    ASSERT(NewProcess->Unused0 != 0);   /* hyperspace root (Win11 ARM64: 0x030 is the ASID field) */
 
-    KiArm64WriteUserTtbr(NewProcess->DirectoryTableBase[0]);
+    /* Lazily assign this process an ASID (no-op unless the allocator is enabled);
+     * KiArm64WriteUserTtbr then switches flush-free when an ASID is present. The
+     * ASID is composed into TTBR0 here; DirectoryTableBase[0] itself stays a
+     * pure physical table base. */
+    KiArm64EnsureProcessAsid(NewProcess);
+
+    KiArm64WriteUserTtbr((NewProcess->DirectoryTableBase[0] & KI_ARM64_TTBR_ADDR_MASK) |
+                         ((ULONGLONG)NewProcess->Asid << KI_ARM64_TTBR_ASID_SHIFT));
 }
 
 typedef struct _ARM64_EARLY_SYNC_CONTEXT
@@ -2376,6 +2502,40 @@ KiArm64HandleSynchronousException(
 
             TrapFrame = &Context->TrapFrame;
             KiArm64InitializeTrapFrame(Context, TrapFrame);
+
+            /*
+             * DIAG (bug #0): a kernel-mode brk #0xF000 (DbgBreakPoint / failed
+             * ASSERT / RtlpBreakWithStatusInstruction) reaching here escapes to
+             * bugcheck 0x7E in a system thread. DbgBreakPointWithStatus is a leaf
+             * (brk; ret), so X29 is already the caller's frame and X30 is the
+             * return into the immediate caller. Walk the FP chain to print the
+             * real culprit (the ASSERT / DbgBreakPoint site). MmIsAddressValid
+             * guards every dereference so the walk itself can never fault.
+             */
+            if (Mode == KernelMode && BrkImm == 0xF000)
+            {
+                ULONG_PTR Fp = (ULONG_PTR)Context->State.Registers.X[29];
+                ULONG i;
+                DPRINT1("[BRKBT] kernel brk #0xF000 elr=%p lr=%p cpu=%lu thr=%p irql=%u\n",
+                        (PVOID)(ULONG_PTR)Context->State.Elr,
+                        (PVOID)(ULONG_PTR)Context->State.Registers.X[30],
+                        KeGetCurrentProcessorNumber(), KeGetCurrentThread(),
+                        (ULONG)KeGetCurrentIrql());
+                for (i = 0; i < 16; i++)
+                {
+                    ULONG_PTR Next, RetAddr;
+                    if (Fp < (ULONG_PTR)0xFFFF000000000000ULL || (Fp & 0xF) != 0)
+                        break;
+                    if (!MmIsAddressValid((PVOID)Fp))
+                        break;
+                    Next = ((const ULONG_PTR *)Fp)[0];
+                    RetAddr = ((const ULONG_PTR *)Fp)[1];
+                    DPRINT1("[BRKBT]   #%lu fp=%p ret=%p\n", i, (PVOID)Fp, (PVOID)RetAddr);
+                    if (Next <= Fp)
+                        break;
+                    Fp = Next;
+                }
+            }
 
             {
                 EXCEPTION_RECORD ExceptionRecord;
