@@ -1055,6 +1055,26 @@ typedef struct _KNODE
     struct _SINGLE_LIST_ENTRY *PfnDeferredList;
 } KNODE, *PKNODE;
 
+typedef struct _KSCHEDULER_SUBNODE
+{
+    ULONG_PTR SubNodeLock;
+    KAFFINITY IdleNonParkedCpuSet;
+    KAFFINITY IdleCpuSet;
+    KAFFINITY IdleSmtSet;
+    KAFFINITY NonPairedSmtSet;
+    KAFFINITY DeepIdleSet;
+    KAFFINITY NonParkedSet;
+    KAFFINITY Affinity;
+    USHORT ParentNodeNumber;
+    USHORT SubNodeNumber;
+    KAFFINITY SiblingMask;
+    KAFFINITY SharedReadyQueueMask;
+    KAFFINITY LLCLeaders;
+    ULONG Lowest;
+    ULONG Highest;
+    UCHAR Flags;
+} KSCHEDULER_SUBNODE, *PKSCHEDULER_SUBNODE;
+
 //
 // Structure for Get/SetContext APC
 //
