@@ -415,7 +415,7 @@ KiInitializeKernel(_Inout_ PKPROCESS InitProcess,
                 NewTcr |= (0x1ULL << 26);    /* ORGN1 = Write-Back Write-Allocate */
                 NewTcr &= ~(0x3ULL << 24);
                 NewTcr |= (0x1ULL << 24);    /* IRGN1 = Write-Back Write-Allocate */
-                NewTcr |= (1ULL << 22);      /* A1: TTBR1 ASID selector */
+                NewTcr &= ~(1ULL << 22);     /* A1=0: TTBR0.ASID is the current ASID (ke/arm64 ASID allocator) */
                 NewTcr &= ~((1ULL << 36) |   /* AS */
                             (1ULL << 37) |   /* TBI0 */
                             (1ULL << 38) |   /* TBI1 */
