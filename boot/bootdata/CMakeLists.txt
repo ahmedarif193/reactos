@@ -71,6 +71,7 @@ add_cd_file(FILE ${CMAKE_CURRENT_SOURCE_DIR}/livecd/unattend.inf DESTINATION rea
 add_cd_file(FILE ${CMAKE_CURRENT_SOURCE_DIR}/preinstall/unattend.inf DESTINATION reactos FOR preinstall)
 
 add_cd_file(FILE ${CMAKE_CURRENT_SOURCE_DIR}/livecd_start.cmd DESTINATION "Profiles/Default User/My Documents" FOR livecd)
+add_cd_file(FILE ${CMAKE_CURRENT_SOURCE_DIR}/cpubench_start.cmd DESTINATION "Profiles/Default User/My Documents" FOR preinstall)
 
 
 # LiveImage shortcuts
@@ -204,7 +205,7 @@ add_livecd_shortcut("Registry Editor"
     DESTINATION "${dir_startmenu_systemtools}")
 add_livecd_shortcut("Task Manager"
     "shell:system\\taskmgr.exe" ICON_INDEX 0
-    DESTINATION "${dir_startmenu_systemtools}")
+    DESTINATION "${dir_allusers_desktop}" "${dir_startmenu_systemtools}")
 add_livecd_shortcut("Calculator"
     "shell:system\\calc.exe" ICON_INDEX 0
     WORKDIR "${envvar_homedrive}${envvar_homepath}"
