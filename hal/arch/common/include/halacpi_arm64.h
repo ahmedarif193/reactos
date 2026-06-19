@@ -9,6 +9,8 @@ typedef struct _HALP_ARM64_GICC_ENTRY
     ULONGLONG GicrBase;
     ULONGLONG GiccBase;
     ULONG Flags;
+    ULONG ParkingVersion;       /* MADT GICC Parking Protocol Version (0 = PSCI) */
+    ULONGLONG ParkedAddress;    /* MADT GICC Parked Address (mailbox PA)          */
 } HALP_ARM64_GICC_ENTRY, *PHALP_ARM64_GICC_ENTRY;
 
 /*

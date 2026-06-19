@@ -27,6 +27,11 @@ VOID NTAPI SmpDbgTimerReject(ULONG Cpu, ULONG IntId);
 
 /* Kernel-side recorders / dump. */
 VOID NTAPI SmpDbgTimerTick(ULONG Cpu);
+VOID NTAPI SmpDbgIpi(ULONG Cpu);
+VOID NTAPI SmpDbgPark(ULONG Cpu);
+VOID NTAPI SmpDbgWake(ULONG Cpu);
+VOID NTAPI SmpDbgHeartbeat(ULONG Cpu);
+VOID NTAPI SmpDbgStartWatchdog(VOID);
 VOID NTAPI SmpDbgCntv(ULONG Cpu, ULONG Ctl, LONG Tval, ULONG Pmr);
 VOID NTAPI SmpDbgGic(ULONG Cpu, ULONG Prio, ULONG En, ULONG Pend, ULONG Act);
 ULONG NTAPI SmpDbgGetTick(ULONG Cpu);
