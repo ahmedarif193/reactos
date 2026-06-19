@@ -123,6 +123,23 @@ KiSelectNextProcessor(
 
     /* If we have matching idle processors, use them */
     IdleSet = PreferredSet & KiIdleSummary;
+#ifdef _M_ARM64
+    if (IdleSet != 0 &&
+        Thread->IdealProcessor < (ULONG)KeNumberProcessors &&
+        KiProcessorBlock[Thread->IdealProcessor] != NULL)
+    {
+        PKSCHEDULER_SUBNODE SubNode =
+            (PKSCHEDULER_SUBNODE)KiProcessorBlock[Thread->IdealProcessor]->SchedulerSubNode;
+        if (SubNode != NULL)
+        {
+            KAFFINITY SubIdle = IdleSet & SubNode->IdleCpuSet;
+            if (SubIdle != 0)
+            {
+                IdleSet = SubIdle;
+            }
+        }
+    }
+#endif
     if (IdleSet != 0)
     {
         PreferredSet = IdleSet;
