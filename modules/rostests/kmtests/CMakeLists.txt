@@ -198,7 +198,8 @@ if(ARCH STREQUAL "arm64")
         kmArm64/KeArm64SmpChurn.c
         kmArm64/KeArm64SpinLock.c
         kmArm64/KeArm64ThreadProcess.c
-        kmArm64/RtlArm64UnwindLayout.c)
+        kmArm64/RtlArm64UnwindLayout.c
+        kmArm64/KeArm64SubNodeSched.c)
 endif()
 
 add_library(kmtest_drv MODULE ${KMTEST_DRV_SOURCE})
