@@ -1339,56 +1339,56 @@ SdBusPdoPnp(
     switch (IoStack->MinorFunction)
     {
         case IRP_MN_START_DEVICE:
-            DPRINT1("SdBusPdoPnp: IRP_MN_START_DEVICE\n");
+            DPRINT("SdBusPdoPnp: IRP_MN_START_DEVICE\n");
             Status = SdBusPdoStartDevice(PdoExtension, Irp);
             break;
 
         case IRP_MN_STOP_DEVICE:
-            DPRINT1("SdBusPdoPnp: IRP_MN_STOP_DEVICE\n");
+            DPRINT("SdBusPdoPnp: IRP_MN_STOP_DEVICE\n");
             Status = SdBusPdoStopDevice(PdoExtension, Irp);
             break;
 
         case IRP_MN_REMOVE_DEVICE:
-            DPRINT1("SdBusPdoPnp: IRP_MN_REMOVE_DEVICE\n");
+            DPRINT("SdBusPdoPnp: IRP_MN_REMOVE_DEVICE\n");
             /* Use the waiting variant to drain all outstanding I/O */
             IoReleaseRemoveLockAndWait(&PdoExtension->RemoveLock, Irp);
             return SdBusPdoRemoveDevice(PdoExtension, Irp);
 
         case IRP_MN_SURPRISE_REMOVAL:
-            DPRINT1("SdBusPdoPnp: IRP_MN_SURPRISE_REMOVAL\n");
+            DPRINT("SdBusPdoPnp: IRP_MN_SURPRISE_REMOVAL\n");
             Status = SdBusPdoSurpriseRemoval(PdoExtension, Irp);
             break;
 
         case IRP_MN_QUERY_ID:
-            DPRINT1("SdBusPdoPnp: IRP_MN_QUERY_ID (type %lu)\n",
+            DPRINT("SdBusPdoPnp: IRP_MN_QUERY_ID (type %lu)\n",
                    IoStack->Parameters.QueryId.IdType);
             Status = SdBusPdoQueryId(PdoExtension, Irp);
             break;
 
         case IRP_MN_QUERY_CAPABILITIES:
-            DPRINT1("SdBusPdoPnp: IRP_MN_QUERY_CAPABILITIES\n");
+            DPRINT("SdBusPdoPnp: IRP_MN_QUERY_CAPABILITIES\n");
             Status = SdBusPdoQueryCapabilities(PdoExtension, Irp);
             break;
 
         case IRP_MN_QUERY_DEVICE_TEXT:
-            DPRINT1("SdBusPdoPnp: IRP_MN_QUERY_DEVICE_TEXT\n");
+            DPRINT("SdBusPdoPnp: IRP_MN_QUERY_DEVICE_TEXT\n");
             Status = SdBusPdoQueryDeviceText(PdoExtension, Irp);
             break;
 
         case IRP_MN_QUERY_BUS_INFORMATION:
-            DPRINT1("SdBusPdoPnp: IRP_MN_QUERY_BUS_INFORMATION\n");
+            DPRINT("SdBusPdoPnp: IRP_MN_QUERY_BUS_INFORMATION\n");
             Status = SdBusPdoQueryBusInformation(PdoExtension, Irp);
             break;
 
         case IRP_MN_QUERY_INTERFACE:
-            DPRINT1("SdBusPdoPnp: IRP_MN_QUERY_INTERFACE\n");
+            DPRINT("SdBusPdoPnp: IRP_MN_QUERY_INTERFACE\n");
             Status = SdBusPdoQueryInterface(PdoExtension, Irp);
             break;
 
         case IRP_MN_QUERY_DEVICE_RELATIONS:
             if (IoStack->Parameters.QueryDeviceRelations.Type == TargetDeviceRelation)
             {
-                DPRINT1("SdBusPdoPnp: IRP_MN_QUERY_DEVICE_RELATIONS (TargetDevice)\n");
+                DPRINT("SdBusPdoPnp: IRP_MN_QUERY_DEVICE_RELATIONS (TargetDevice)\n");
                 Status = SdBusPdoQueryTargetRelation(PdoExtension, Irp);
             }
             else
@@ -1403,7 +1403,7 @@ SdBusPdoPnp(
             break;
 
         case IRP_MN_FILTER_RESOURCE_REQUIREMENTS:
-            DPRINT1("SdBusPdoPnp: IRP_MN_FILTER_RESOURCE_REQUIREMENTS\n");
+            DPRINT("SdBusPdoPnp: IRP_MN_FILTER_RESOURCE_REQUIREMENTS\n");
             Irp->IoStatus.Status = STATUS_SUCCESS;
             IoCompleteRequest(Irp, IO_NO_INCREMENT);
             Status = STATUS_SUCCESS;
@@ -1418,19 +1418,19 @@ SdBusPdoPnp(
             break;
 
         case IRP_MN_QUERY_PNP_DEVICE_STATE:
-            DPRINT1("SdBusPdoPnp: IRP_MN_QUERY_PNP_DEVICE_STATE\n");
+            DPRINT("SdBusPdoPnp: IRP_MN_QUERY_PNP_DEVICE_STATE\n");
             Status = SdBusPdoQueryPnpDeviceState(PdoExtension, Irp);
             break;
 
         case IRP_MN_DEVICE_USAGE_NOTIFICATION:
-            DPRINT1("SdBusPdoPnp: IRP_MN_DEVICE_USAGE_NOTIFICATION (type %u, inpath %u)\n",
+            DPRINT("SdBusPdoPnp: IRP_MN_DEVICE_USAGE_NOTIFICATION (type %u, inpath %u)\n",
                     IoStack->Parameters.UsageNotification.Type,
                     IoStack->Parameters.UsageNotification.InPath);
             Status = SdBusPdoDeviceUsageNotification(PdoExtension, Irp);
             break;
 
         case IRP_MN_EJECT:
-            DPRINT1("SdBusPdoPnp: IRP_MN_EJECT\n");
+            DPRINT("SdBusPdoPnp: IRP_MN_EJECT\n");
             Status = SdBusPdoEject(PdoExtension, Irp);
             break;
 
