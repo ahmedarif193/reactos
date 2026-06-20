@@ -25,6 +25,16 @@ if not exist "%BIN%\kmtest_.exe" goto nodriver
 "%S%\dbgprint.exe" KMTEST_EXIT KeArm64SubNodeSched %ERRORLEVEL%
 "%S%\dbgprint.exe" KMTEST_END KeArm64SubNodeSched
 
+"%S%\dbgprint.exe" KMTEST_BEGIN KeArm64Smt
+"%BIN%\kmtest_.exe" KeArm64Smt
+"%S%\dbgprint.exe" KMTEST_EXIT KeArm64Smt %ERRORLEVEL%
+"%S%\dbgprint.exe" KMTEST_END KeArm64Smt
+
+"%S%\dbgprint.exe" KMTEST_BEGIN KeArm64Numa
+"%BIN%\kmtest_.exe" KeArm64Numa
+"%S%\dbgprint.exe" KMTEST_EXIT KeArm64Numa %ERRORLEVEL%
+"%S%\dbgprint.exe" KMTEST_END KeArm64Numa
+
 "%S%\dbgprint.exe" KMTEST_BEGIN KeArm64DpcIpi
 "%BIN%\kmtest_.exe" KeArm64DpcIpi
 "%S%\dbgprint.exe" KMTEST_EXIT KeArm64DpcIpi %ERRORLEVEL%

@@ -32,7 +32,10 @@ PKPRCB KiProcessorBlock[MAXIMUM_PROCESSORS];
 
 /* NUMA Node Support */
 KNODE KiNode0;
-PKNODE KeNodeBlock[1] = { &KiNode0 };
+#ifdef _M_ARM64
+KNODE KiArm64NodeBlock[MAXIMUM_PROCESSORS - 1];
+#endif
+PKNODE KeNodeBlock[KI_MAX_NUMA_NODES] = { &KiNode0 };
 UCHAR KeNumberNodes = 1;
 UCHAR KeProcessNodeSeed;
 

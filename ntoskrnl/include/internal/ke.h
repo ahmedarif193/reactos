@@ -105,13 +105,20 @@ extern USHORT KeProcessorRevision;
 extern ULONG64 KeFeatureBits;
 extern KAFFINITY KeActiveProcessors;
 extern PKPRCB KiProcessorBlock[];
+#ifndef KI_MAX_NUMA_NODES
+#ifdef _M_ARM64
+#define KI_MAX_NUMA_NODES MAXIMUM_PROCESSORS
+#else
+#define KI_MAX_NUMA_NODES 1
+#endif
+#endif
 #ifdef CONFIG_SMP
 extern ULONG KeMaximumProcessors;
 extern ULONG KeNumprocSpecified;
 extern ULONG KeBootprocSpecified;
 #endif
 extern KNODE KiNode0;
-extern PKNODE KeNodeBlock[1];
+extern PKNODE KeNodeBlock[KI_MAX_NUMA_NODES];
 extern UCHAR KeNumberNodes;
 extern UCHAR KeProcessNodeSeed;
 extern ETHREAD KiInitialThread;

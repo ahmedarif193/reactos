@@ -1,0 +1,817 @@
+/*
+ * PROJECT:         ReactOS Kernel
+ * LICENSE:         BSD - See COPYING.ARM in the top level directory
+ * FILE:            ntoskrnl/ke/arm64/topology.c
+ * PURPOSE:         ARM64 NUMA topology discovery
+ * COPYRIGHT:       Copyright 2026 Ahmed ARIF <arif.ing@outlook.com>
+ */
+
+#include <ntoskrnl.h>
+#include <reactos/arm64/acpi.h>
+
+#define NDEBUG
+#include <debug.h>
+
+#define KI_ARM64_ACPI_ENABLED         0x1
+#define KI_ARM64_SRAT_TYPE_MEMORY     1
+#define KI_ARM64_SRAT_TYPE_GICC       3
+#define KI_ARM64_SRAT_ENABLED         0x1
+#define KI_ARM64_INVALID_NODE         0xFF
+#define KI_ARM64_SRAT_HEADER_SIZE     (sizeof(DESCRIPTION_HEADER) + sizeof(ULONG) + sizeof(ULONGLONG))
+#define KI_ARM64_SYSTEM_RANGE_BASE    0xFFFF800000000000ULL
+
+#include <pshpack1.h>
+typedef struct _KI_ARM64_SRAT_SUBTABLE
+{
+    UCHAR Type;
+    UCHAR Length;
+} KI_ARM64_SRAT_SUBTABLE, *PKI_ARM64_SRAT_SUBTABLE;
+
+typedef struct _KI_ARM64_SRAT_GICC_AFFINITY
+{
+    KI_ARM64_SRAT_SUBTABLE Header;
+    ULONG ProximityDomain;
+    ULONG AcpiProcessorUid;
+    ULONG Flags;
+    ULONG ClockDomain;
+} KI_ARM64_SRAT_GICC_AFFINITY, *PKI_ARM64_SRAT_GICC_AFFINITY;
+
+typedef struct _KI_ARM64_SRAT_MEMORY_AFFINITY
+{
+    KI_ARM64_SRAT_SUBTABLE Header;
+    ULONG ProximityDomain;
+    USHORT Reserved1;
+    ULONGLONG BaseAddress;
+    ULONGLONG Length;
+    ULONG Reserved2;
+    ULONG Flags;
+    ULONGLONG Reserved3;
+} KI_ARM64_SRAT_MEMORY_AFFINITY, *PKI_ARM64_SRAT_MEMORY_AFFINITY;
+#include <poppack.h>
+
+typedef struct _KI_ARM64_CPU_NUMA_TOPOLOGY
+{
+    BOOLEAN Present;
+    BOOLEAN HasSratNode;
+    ULONG AcpiProcessorUid;
+    ULONG ProximityDomain;
+    UCHAR NodeNumber;
+} KI_ARM64_CPU_NUMA_TOPOLOGY, *PKI_ARM64_CPU_NUMA_TOPOLOGY;
+
+typedef struct _KI_ARM64_NODE_DOMAIN
+{
+    BOOLEAN Present;
+    ULONG ProximityDomain;
+} KI_ARM64_NODE_DOMAIN, *PKI_ARM64_NODE_DOMAIN;
+
+extern KNODE KiArm64NodeBlock[MAXIMUM_PROCESSORS - 1];
+
+KI_ARM64_NUMA_NODE_RANGE KiArm64NumaNodeRanges[KI_MAX_NUMA_NODES];
+UCHAR KiArm64NumaNodeCount = 1;
+
+static BOOLEAN KiArm64NumaDiscovered;
+static BOOLEAN KiArm64NumaDefaultInitialized;
+static BOOLEAN KiArm64AcpiIdentityMapped;
+static BOOLEAN KiArm64NodeStorageInitialized;
+static KI_ARM64_CPU_NUMA_TOPOLOGY KiArm64CpuNumaTopology[MAXIMUM_PROCESSORS];
+static KI_ARM64_NODE_DOMAIN KiArm64NodeDomains[KI_MAX_NUMA_NODES];
+
+static
+PVOID
+KiArm64AcpiPointerFromPhysical(_In_ ULONGLONG PhysicalAddress)
+{
+    if (PhysicalAddress == 0)
+    {
+        return NULL;
+    }
+
+    if (PhysicalAddress >= KI_ARM64_SYSTEM_RANGE_BASE)
+    {
+        return (PVOID)(ULONG_PTR)PhysicalAddress;
+    }
+
+    if (KiArm64AcpiIdentityMapped)
+    {
+        return (PVOID)(ULONG_PTR)PhysicalAddress;
+    }
+
+    return NULL;
+}
+
+static
+ULONGLONG
+KiArm64ReadUnaligned64(_In_ const VOID *Source)
+{
+    ULONGLONG Value;
+
+    RtlCopyMemory(&Value, Source, sizeof(Value));
+    return Value;
+}
+
+static
+VOID
+KiArm64EnsureNodeStorage(VOID)
+{
+    ULONG Node;
+
+    KeNodeBlock[0] = &KiNode0;
+
+    for (Node = 1; Node < KI_MAX_NUMA_NODES; Node++)
+    {
+        KeNodeBlock[Node] = &KiArm64NodeBlock[Node - 1];
+    }
+
+    if (!KiArm64NodeStorageInitialized)
+    {
+        RtlZeroMemory(&KiNode0, sizeof(KiNode0));
+        RtlZeroMemory(KiArm64NodeBlock, sizeof(KiArm64NodeBlock));
+        KiArm64NodeStorageInitialized = TRUE;
+    }
+}
+
+static
+VOID
+KiArm64ResetNodeProcessorMasks(_In_ UCHAR NodeCount)
+{
+    ULONG Node;
+
+    KiArm64EnsureNodeStorage();
+
+    if (NodeCount == 0)
+    {
+        NodeCount = 1;
+    }
+
+    for (Node = 0; Node < NodeCount; Node++)
+    {
+        KeNodeBlock[Node]->NodeNumber = (UCHAR)Node;
+        KeNodeBlock[Node]->ProcessorMask = 0;
+    }
+}
+
+static
+PACPI_BIOS_MULTI_NODE
+KiArm64FindAcpiNode(_In_opt_ PLOADER_PARAMETER_BLOCK LoaderBlock)
+{
+    PCONFIGURATION_COMPONENT_DATA ComponentEntry;
+    PCONFIGURATION_COMPONENT_DATA Next = NULL;
+    PCM_PARTIAL_RESOURCE_LIST ResourceList;
+
+    if ((LoaderBlock == NULL) || (LoaderBlock->ConfigurationRoot == NULL))
+    {
+        return NULL;
+    }
+
+    ComponentEntry = KeFindConfigurationNextEntry(LoaderBlock->ConfigurationRoot,
+                                                  AdapterClass,
+                                                  MultiFunctionAdapter,
+                                                  NULL,
+                                                  &Next);
+    while (ComponentEntry != NULL)
+    {
+        if ((ComponentEntry->ComponentEntry.Identifier != NULL) &&
+            (_stricmp(ComponentEntry->ComponentEntry.Identifier, "ACPI BIOS") == 0))
+        {
+            break;
+        }
+
+        Next = ComponentEntry;
+        ComponentEntry = KeFindConfigurationNextEntry(LoaderBlock->ConfigurationRoot,
+                                                      AdapterClass,
+                                                      MultiFunctionAdapter,
+                                                      NULL,
+                                                      &Next);
+    }
+
+    if ((ComponentEntry == NULL) || (ComponentEntry->ConfigurationData == NULL))
+    {
+        return NULL;
+    }
+
+    ResourceList = ComponentEntry->ConfigurationData;
+    return (PACPI_BIOS_MULTI_NODE)(ResourceList + 1);
+}
+
+static
+PRSDP
+KiArm64FindRsdp(_In_opt_ PLOADER_PARAMETER_BLOCK LoaderBlock)
+{
+    PACPI_BIOS_MULTI_NODE AcpiNode;
+    PRSDP Rsdp;
+
+    AcpiNode = KiArm64FindAcpiNode(LoaderBlock);
+    if ((AcpiNode == NULL) || (AcpiNode->RsdpAddress.QuadPart == 0))
+    {
+        return NULL;
+    }
+
+    Rsdp = (PRSDP)KiArm64AcpiPointerFromPhysical(AcpiNode->RsdpAddress.QuadPart);
+    if ((Rsdp == NULL) || (Rsdp->Signature != RSDP_SIGNATURE))
+    {
+        return NULL;
+    }
+
+    return Rsdp;
+}
+
+static
+PDESCRIPTION_HEADER
+KiArm64FindAcpiTable(_In_opt_ PLOADER_PARAMETER_BLOCK LoaderBlock,
+                     _In_ ULONG Signature)
+{
+    PRSDP Rsdp;
+    PDESCRIPTION_HEADER Root;
+    ULONGLONG RootPa = 0;
+    ULONG Count;
+    ULONG Index;
+
+    Rsdp = KiArm64FindRsdp(LoaderBlock);
+    if (Rsdp != NULL)
+    {
+        if ((Rsdp->Revision >= 2) && (Rsdp->XsdtAddress.QuadPart != 0))
+        {
+            RootPa = Rsdp->XsdtAddress.QuadPart;
+        }
+        else
+        {
+            RootPa = Rsdp->RsdtAddress;
+        }
+    }
+
+    if (RootPa == 0)
+    {
+        PACPI_BIOS_MULTI_NODE AcpiNode = KiArm64FindAcpiNode(LoaderBlock);
+        if (AcpiNode != NULL)
+        {
+            RootPa = AcpiNode->RsdtAddress.QuadPart;
+        }
+    }
+
+    Root = (PDESCRIPTION_HEADER)KiArm64AcpiPointerFromPhysical(RootPa);
+    if ((Root == NULL) || (Root->Length < sizeof(DESCRIPTION_HEADER)))
+    {
+        return NULL;
+    }
+
+    if (Root->Signature == XSDT_SIGNATURE)
+    {
+        PXSDT Xsdt = (PXSDT)Root;
+
+        Count = (Root->Length - sizeof(DESCRIPTION_HEADER)) / sizeof(PHYSICAL_ADDRESS);
+        for (Index = 0; Index < Count; Index++)
+        {
+            ULONGLONG TablePa = KiArm64ReadUnaligned64(&Xsdt->Tables[Index]);
+            PDESCRIPTION_HEADER Header =
+                (PDESCRIPTION_HEADER)KiArm64AcpiPointerFromPhysical(TablePa);
+
+            if ((Header != NULL) &&
+                (Header->Length >= sizeof(DESCRIPTION_HEADER)) &&
+                (Header->Signature == Signature))
+            {
+                return Header;
+            }
+        }
+    }
+    else if (Root->Signature == RSDT_SIGNATURE)
+    {
+        PRSDT Rsdt = (PRSDT)Root;
+
+        Count = (Root->Length - sizeof(DESCRIPTION_HEADER)) / sizeof(ULONG);
+        for (Index = 0; Index < Count; Index++)
+        {
+            PDESCRIPTION_HEADER Header =
+                (PDESCRIPTION_HEADER)KiArm64AcpiPointerFromPhysical(Rsdt->Tables[Index]);
+
+            if ((Header != NULL) &&
+                (Header->Length >= sizeof(DESCRIPTION_HEADER)) &&
+                (Header->Signature == Signature))
+            {
+                return Header;
+            }
+        }
+    }
+
+    return NULL;
+}
+
+static
+VOID
+KiArm64InitializeDefaultNumaTopology(VOID)
+{
+    ULONG Cpu;
+
+    RtlZeroMemory(KiArm64CpuNumaTopology, sizeof(KiArm64CpuNumaTopology));
+    RtlZeroMemory(KiArm64NodeDomains, sizeof(KiArm64NodeDomains));
+    RtlZeroMemory(KiArm64NumaNodeRanges, sizeof(KiArm64NumaNodeRanges));
+
+    KiArm64NumaNodeCount = 1;
+    KeNumberNodes = 1;
+    KiArm64NodeDomains[0].Present = TRUE;
+    KiArm64NodeDomains[0].ProximityDomain = 0;
+    KiArm64ResetNodeProcessorMasks(1);
+
+    for (Cpu = 0; Cpu < MAXIMUM_PROCESSORS; Cpu++)
+    {
+        KiArm64CpuNumaTopology[Cpu].Present = TRUE;
+        KiArm64CpuNumaTopology[Cpu].AcpiProcessorUid = Cpu;
+        KiArm64CpuNumaTopology[Cpu].NodeNumber = 0;
+        KiArm64CpuNumaTopology[Cpu].ProximityDomain = 0;
+    }
+
+    KiArm64NumaDefaultInitialized = TRUE;
+}
+
+static
+VOID
+KiArm64EnsureDefaultNumaTopology(VOID)
+{
+    if (!KiArm64NumaDefaultInitialized)
+    {
+        KiArm64InitializeDefaultNumaTopology();
+    }
+}
+
+static
+BOOLEAN
+KiArm64FindCpuByUid(_In_ ULONG AcpiProcessorUid,
+                    _Out_ PULONG CpuNumber)
+{
+    ULONG Cpu;
+
+    for (Cpu = 0; Cpu < MAXIMUM_PROCESSORS; Cpu++)
+    {
+        if (KiArm64CpuNumaTopology[Cpu].Present &&
+            (KiArm64CpuNumaTopology[Cpu].AcpiProcessorUid == AcpiProcessorUid))
+        {
+            *CpuNumber = Cpu;
+            return TRUE;
+        }
+    }
+
+    return FALSE;
+}
+
+static
+UCHAR
+KiArm64CreateNodeForDomain(_In_ ULONG ProximityDomain)
+{
+    UCHAR Node;
+
+    for (Node = 0; Node < KiArm64NumaNodeCount; Node++)
+    {
+        if (KiArm64NodeDomains[Node].Present &&
+            (KiArm64NodeDomains[Node].ProximityDomain == ProximityDomain))
+        {
+            return Node;
+        }
+    }
+
+    if (KiArm64NumaNodeCount >= KI_MAX_NUMA_NODES)
+    {
+        return 0;
+    }
+
+    Node = KiArm64NumaNodeCount++;
+    KiArm64NodeDomains[Node].Present = TRUE;
+    KiArm64NodeDomains[Node].ProximityDomain = ProximityDomain;
+    KeNodeBlock[Node]->NodeNumber = Node;
+    KeNodeBlock[Node]->ProcessorMask = 0;
+    return Node;
+}
+
+static
+BOOLEAN
+KiArm64FindNodeForDomain(_In_ ULONG ProximityDomain,
+                         _Out_ PUCHAR NodeNumber)
+{
+    UCHAR Node;
+
+    for (Node = 0; Node < KiArm64NumaNodeCount; Node++)
+    {
+        if (KiArm64NodeDomains[Node].Present &&
+            (KiArm64NodeDomains[Node].ProximityDomain == ProximityDomain))
+        {
+            *NodeNumber = Node;
+            return TRUE;
+        }
+    }
+
+    return FALSE;
+}
+
+static
+VOID
+KiArm64UpdateNodeRange(_In_ UCHAR Node,
+                       _In_ ULONG ProximityDomain,
+                       _In_ ULONGLONG BaseAddress,
+                       _In_ ULONGLONG Length)
+{
+    PKI_ARM64_NUMA_NODE_RANGE Range;
+    ULONGLONG LimitAddress;
+
+    if ((Node >= KI_MAX_NUMA_NODES) || (Length == 0))
+    {
+        return;
+    }
+
+    if (BaseAddress > MAXULONGLONG - Length)
+    {
+        LimitAddress = MAXULONGLONG;
+    }
+    else
+    {
+        LimitAddress = BaseAddress + Length;
+    }
+
+    if (LimitAddress <= BaseAddress)
+    {
+        return;
+    }
+
+    Range = &KiArm64NumaNodeRanges[Node];
+    if (!Range->Enabled)
+    {
+        Range->BaseAddress = BaseAddress;
+        Range->LimitAddress = LimitAddress;
+        Range->ProximityDomain = ProximityDomain;
+        Range->Enabled = TRUE;
+    }
+    else
+    {
+        if (BaseAddress < Range->BaseAddress)
+        {
+            Range->BaseAddress = BaseAddress;
+        }
+
+        if (LimitAddress > Range->LimitAddress)
+        {
+            Range->LimitAddress = LimitAddress;
+        }
+    }
+
+    Range->Length = Range->LimitAddress - Range->BaseAddress;
+}
+
+static
+VOID
+KiArm64ParseMadtCpuUids(_In_opt_ PLOADER_PARAMETER_BLOCK LoaderBlock)
+{
+    PARM64_ACPI_MADT Madt;
+    ULONG_PTR EntryAddress;
+    ULONG_PTR TableEnd;
+    ULONG LogicalCpu = 0;
+
+    Madt = (PARM64_ACPI_MADT)KiArm64FindAcpiTable(LoaderBlock, APIC_SIGNATURE);
+    if ((Madt == NULL) || (Madt->Header.Length < sizeof(*Madt)))
+    {
+        return;
+    }
+
+    RtlZeroMemory(KiArm64CpuNumaTopology, sizeof(KiArm64CpuNumaTopology));
+
+    EntryAddress = (ULONG_PTR)Madt + sizeof(*Madt);
+    TableEnd = (ULONG_PTR)Madt + Madt->Header.Length;
+
+    while (EntryAddress + sizeof(ARM64_ACPI_MADT_SUBTABLE) <= TableEnd)
+    {
+        PARM64_ACPI_MADT_SUBTABLE Entry = (PARM64_ACPI_MADT_SUBTABLE)EntryAddress;
+
+        if ((Entry->Length < sizeof(*Entry)) || (EntryAddress + Entry->Length > TableEnd))
+        {
+            break;
+        }
+
+        if ((Entry->Type == ARM64_ACPI_MADT_TYPE_GENERIC_INTERRUPT) &&
+            (Entry->Length >= FIELD_OFFSET(ARM64_ACPI_MADT_GENERIC_INTERRUPT, AcpiProcessorUid) +
+                              sizeof(ULONG)) &&
+            (LogicalCpu < MAXIMUM_PROCESSORS))
+        {
+            PARM64_ACPI_MADT_GENERIC_INTERRUPT Gicc =
+                (PARM64_ACPI_MADT_GENERIC_INTERRUPT)Entry;
+
+            if (Gicc->Flags & KI_ARM64_ACPI_ENABLED)
+            {
+                KiArm64CpuNumaTopology[LogicalCpu].Present = TRUE;
+                KiArm64CpuNumaTopology[LogicalCpu].AcpiProcessorUid = Gicc->AcpiProcessorUid;
+                KiArm64CpuNumaTopology[LogicalCpu].NodeNumber = 0;
+                KiArm64CpuNumaTopology[LogicalCpu].ProximityDomain = 0;
+                LogicalCpu++;
+            }
+        }
+
+        EntryAddress += Entry->Length;
+    }
+}
+
+static
+VOID
+KiArm64ParseSratCpuAffinity(_In_ PDESCRIPTION_HEADER Srat)
+{
+    ULONG_PTR EntryAddress;
+    ULONG_PTR TableEnd;
+
+    KiArm64NumaNodeCount = 0;
+    RtlZeroMemory(KiArm64NodeDomains, sizeof(KiArm64NodeDomains));
+    RtlZeroMemory(KiArm64NumaNodeRanges, sizeof(KiArm64NumaNodeRanges));
+
+    EntryAddress = (ULONG_PTR)Srat + KI_ARM64_SRAT_HEADER_SIZE;
+    TableEnd = (ULONG_PTR)Srat + Srat->Length;
+
+    while (EntryAddress + sizeof(KI_ARM64_SRAT_SUBTABLE) <= TableEnd)
+    {
+        PKI_ARM64_SRAT_SUBTABLE Entry = (PKI_ARM64_SRAT_SUBTABLE)EntryAddress;
+
+        if ((Entry->Length < sizeof(*Entry)) || (EntryAddress + Entry->Length > TableEnd))
+        {
+            break;
+        }
+
+        if ((Entry->Type == KI_ARM64_SRAT_TYPE_GICC) &&
+            (Entry->Length >= sizeof(KI_ARM64_SRAT_GICC_AFFINITY)))
+        {
+            PKI_ARM64_SRAT_GICC_AFFINITY Gicc =
+                (PKI_ARM64_SRAT_GICC_AFFINITY)Entry;
+            ULONG CpuNumber;
+
+            if ((Gicc->Flags & KI_ARM64_SRAT_ENABLED) &&
+                KiArm64FindCpuByUid(Gicc->AcpiProcessorUid, &CpuNumber))
+            {
+                UCHAR Node = KiArm64CreateNodeForDomain(Gicc->ProximityDomain);
+
+                KiArm64CpuNumaTopology[CpuNumber].NodeNumber = Node;
+                KiArm64CpuNumaTopology[CpuNumber].ProximityDomain = Gicc->ProximityDomain;
+                KiArm64CpuNumaTopology[CpuNumber].HasSratNode = TRUE;
+            }
+        }
+
+        EntryAddress += Entry->Length;
+    }
+
+    if (KiArm64NumaNodeCount == 0)
+    {
+        KiArm64NumaNodeCount = 1;
+        KiArm64NodeDomains[0].Present = TRUE;
+        KiArm64NodeDomains[0].ProximityDomain = 0;
+    }
+}
+
+static
+VOID
+KiArm64ParseSratMemoryAffinity(_In_ PDESCRIPTION_HEADER Srat)
+{
+    ULONG_PTR EntryAddress;
+    ULONG_PTR TableEnd;
+
+    EntryAddress = (ULONG_PTR)Srat + KI_ARM64_SRAT_HEADER_SIZE;
+    TableEnd = (ULONG_PTR)Srat + Srat->Length;
+
+    while (EntryAddress + sizeof(KI_ARM64_SRAT_SUBTABLE) <= TableEnd)
+    {
+        PKI_ARM64_SRAT_SUBTABLE Entry = (PKI_ARM64_SRAT_SUBTABLE)EntryAddress;
+
+        if ((Entry->Length < sizeof(*Entry)) || (EntryAddress + Entry->Length > TableEnd))
+        {
+            break;
+        }
+
+        if ((Entry->Type == KI_ARM64_SRAT_TYPE_MEMORY) &&
+            (Entry->Length >= sizeof(KI_ARM64_SRAT_MEMORY_AFFINITY)))
+        {
+            PKI_ARM64_SRAT_MEMORY_AFFINITY Memory =
+                (PKI_ARM64_SRAT_MEMORY_AFFINITY)Entry;
+            UCHAR Node;
+
+            if ((Memory->Flags & KI_ARM64_SRAT_ENABLED) &&
+                KiArm64FindNodeForDomain(Memory->ProximityDomain, &Node))
+            {
+                KiArm64UpdateNodeRange(Node,
+                                       Memory->ProximityDomain,
+                                       Memory->BaseAddress,
+                                       Memory->Length);
+            }
+        }
+
+        EntryAddress += Entry->Length;
+    }
+}
+
+static
+VOID
+KiArm64ParseSrat(_In_opt_ PLOADER_PARAMETER_BLOCK LoaderBlock)
+{
+    PDESCRIPTION_HEADER Srat;
+
+    Srat = KiArm64FindAcpiTable(LoaderBlock, SRAT_SIGNATURE);
+    if ((Srat == NULL) ||
+        (Srat->Length < KI_ARM64_SRAT_HEADER_SIZE))
+    {
+        KiArm64NumaNodeCount = 1;
+        KeNumberNodes = 1;
+        KiArm64NodeDomains[0].Present = TRUE;
+        KiArm64NodeDomains[0].ProximityDomain = 0;
+        return;
+    }
+
+    KiArm64ParseSratCpuAffinity(Srat);
+    KiArm64ParseSratMemoryAffinity(Srat);
+
+    if (KiArm64NumaNodeCount == 0)
+    {
+        KiArm64NumaNodeCount = 1;
+    }
+
+    KeNumberNodes = KiArm64NumaNodeCount;
+    KiArm64ResetNodeProcessorMasks(KeNumberNodes);
+}
+
+VOID
+NTAPI
+KiArm64DiscoverNumaTopology(_In_opt_ PLOADER_PARAMETER_BLOCK LoaderBlock)
+{
+    if (KiArm64NumaDiscovered)
+    {
+        return;
+    }
+
+    if (KeGetCurrentIrql() > APC_LEVEL)
+    {
+        KiArm64EnsureDefaultNumaTopology();
+        return;
+    }
+
+    ASSERT(KeGetCurrentIrql() <= APC_LEVEL);
+
+    KiArm64AcpiIdentityMapped = TRUE;
+    KiArm64InitializeDefaultNumaTopology();
+    KiArm64ParseMadtCpuUids(LoaderBlock);
+    KiArm64ParseSrat(LoaderBlock);
+    KiArm64AcpiIdentityMapped = FALSE;
+    KiArm64NumaDiscovered = TRUE;
+}
+
+static
+VOID
+KiArm64MergeNodeRange(_Inout_ PKI_ARM64_NUMA_NODE_RANGE Destination,
+                      _In_ const KI_ARM64_NUMA_NODE_RANGE *Source)
+{
+    if (!Source->Enabled)
+    {
+        return;
+    }
+
+    if (!Destination->Enabled)
+    {
+        *Destination = *Source;
+        return;
+    }
+
+    if (Source->BaseAddress < Destination->BaseAddress)
+    {
+        Destination->BaseAddress = Source->BaseAddress;
+    }
+
+    if (Source->LimitAddress > Destination->LimitAddress)
+    {
+        Destination->LimitAddress = Source->LimitAddress;
+    }
+
+    Destination->Length = Destination->LimitAddress - Destination->BaseAddress;
+}
+
+static
+VOID
+KiArm64CompactActiveNumaNodes(_In_ KAFFINITY ActiveMask)
+{
+    UCHAR OldToNew[KI_MAX_NUMA_NODES];
+    KI_ARM64_NUMA_NODE_RANGE OldRanges[KI_MAX_NUMA_NODES];
+    KI_ARM64_NUMA_NODE_RANGE NewRanges[KI_MAX_NUMA_NODES];
+    KI_ARM64_NODE_DOMAIN OldDomains[KI_MAX_NUMA_NODES];
+    KI_ARM64_NODE_DOMAIN NewDomains[KI_MAX_NUMA_NODES];
+    ULONG Cpu;
+    ULONG Node;
+    UCHAR NewNodeCount = 0;
+
+    RtlFillMemory(OldToNew, sizeof(OldToNew), KI_ARM64_INVALID_NODE);
+    RtlCopyMemory(OldRanges, KiArm64NumaNodeRanges, sizeof(OldRanges));
+    RtlCopyMemory(OldDomains, KiArm64NodeDomains, sizeof(OldDomains));
+    RtlZeroMemory(NewRanges, sizeof(NewRanges));
+    RtlZeroMemory(NewDomains, sizeof(NewDomains));
+
+    for (Cpu = 0; Cpu < MAXIMUM_PROCESSORS; Cpu++)
+    {
+        UCHAR OldNode;
+
+        if (!KiArm64CpuNumaTopology[Cpu].Present ||
+            ((ActiveMask & AFFINITY_MASK(Cpu)) == 0))
+        {
+            continue;
+        }
+
+        OldNode = KiArm64CpuNumaTopology[Cpu].NodeNumber;
+        if (OldNode >= KI_MAX_NUMA_NODES)
+        {
+            OldNode = 0;
+        }
+
+        if (OldToNew[OldNode] == KI_ARM64_INVALID_NODE)
+        {
+            OldToNew[OldNode] = NewNodeCount++;
+        }
+
+        KiArm64CpuNumaTopology[Cpu].NodeNumber = OldToNew[OldNode];
+    }
+
+    if (NewNodeCount == 0)
+    {
+        NewNodeCount = 1;
+        OldToNew[0] = 0;
+    }
+
+    for (Node = 0; Node < KI_MAX_NUMA_NODES; Node++)
+    {
+        if (OldToNew[Node] != KI_ARM64_INVALID_NODE)
+        {
+            KiArm64MergeNodeRange(&NewRanges[OldToNew[Node]], &OldRanges[Node]);
+            NewDomains[OldToNew[Node]] = OldDomains[Node];
+        }
+    }
+
+    RtlCopyMemory(KiArm64NumaNodeRanges, NewRanges, sizeof(KiArm64NumaNodeRanges));
+    RtlCopyMemory(KiArm64NodeDomains, NewDomains, sizeof(KiArm64NodeDomains));
+
+    KiArm64NumaNodeCount = NewNodeCount;
+    KeNumberNodes = NewNodeCount;
+    KiArm64ResetNodeProcessorMasks(NewNodeCount);
+}
+
+VOID
+NTAPI
+KiArm64InitializeProcessorNumaTopology(_In_ ULONG ProcessorNumber,
+                                       _Inout_ PKPRCB Prcb,
+                                       _In_opt_ PLOADER_PARAMETER_BLOCK LoaderBlock)
+{
+    UCHAR NodeNumber;
+
+    KiArm64EnsureDefaultNumaTopology();
+
+    if ((Prcb == NULL) || (ProcessorNumber >= MAXIMUM_PROCESSORS))
+    {
+        return;
+    }
+
+    NodeNumber = KiArm64CpuNumaTopology[ProcessorNumber].NodeNumber;
+    if ((NodeNumber >= KeNumberNodes) || (KeNodeBlock[NodeNumber] == NULL))
+    {
+        NodeNumber = 0;
+    }
+
+    Prcb->ParentNode = KeNodeBlock[NodeNumber];
+    Prcb->ParentNode->ProcessorMask |= Prcb->SetMember;
+}
+
+VOID
+NTAPI
+KiArm64FinalizeNumaTopology(VOID)
+{
+    KAFFINITY ActiveMask = KeActiveProcessors;
+    ULONG Cpu;
+
+    if (!KiArm64NumaDiscovered)
+    {
+        KiArm64EnsureDefaultNumaTopology();
+        KiArm64NumaDiscovered = TRUE;
+    }
+
+    if (ActiveMask == 0)
+    {
+        ActiveMask = (KAFFINITY)1;
+    }
+
+    KiArm64CompactActiveNumaNodes(ActiveMask);
+
+    for (Cpu = 0; Cpu < MAXIMUM_PROCESSORS; Cpu++)
+    {
+        PKPRCB Prcb;
+        UCHAR NodeNumber;
+
+        if ((ActiveMask & AFFINITY_MASK(Cpu)) == 0)
+        {
+            continue;
+        }
+
+        Prcb = KiProcessorBlock[Cpu];
+        if (Prcb == NULL)
+        {
+            continue;
+        }
+
+        NodeNumber = KiArm64CpuNumaTopology[Cpu].NodeNumber;
+        if ((NodeNumber >= KeNumberNodes) || (KeNodeBlock[NodeNumber] == NULL))
+        {
+            NodeNumber = 0;
+        }
+
+        Prcb->ParentNode = KeNodeBlock[NodeNumber];
+        Prcb->ParentNode->ProcessorMask |= Prcb->SetMember;
+    }
+}
