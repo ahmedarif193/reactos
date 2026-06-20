@@ -5,6 +5,7 @@
  *
  * References:
  *   https://learn.microsoft.com/en-us/cpp/build/arm64-exception-handling
+ * COPYRIGHT:   Copyright 2026 Ahmed ARIF <arif.ing@outlook.com>
  */
 
 #pragma once
