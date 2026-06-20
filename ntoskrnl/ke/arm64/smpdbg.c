@@ -11,7 +11,7 @@
 
 #if defined(_M_ARM64)
 
-BOOLEAN SmpDbgEnabled = TRUE; /* TEMP DIAG: forced on for the SMP4 lost-wakeup probe (was /SMPDIAG-gated) */
+BOOLEAN SmpDbgEnabled = FALSE;
 
 #define SMPDBG_TIMER_PPI(_i) (((_i) == 27) || ((_i) == 30))
 

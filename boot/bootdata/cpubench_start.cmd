@@ -3,6 +3,9 @@
 set S=%SystemRoot%\system32
 set BIN=%SystemRoot%\bin
 
+"%S%\reg.exe" query "HKLM\SYSTEM\CurrentControlSet\Control" /v SystemStartOptions 2>nul | "%S%\findstr.exe" /i "KMTEST" >nul
+if errorlevel 1 goto :eof
+
 if not exist "%BIN%\kmtest_.exe" goto nodriver
 
 "%S%\dbgprint.exe" KMTEST_SUITE_BEGIN arm64
