@@ -3,6 +3,7 @@
  * LICENSE:         BSD - See COPYING.ARM in the top level directory
  * FILE:            ntoskrnl/ke/arm64/stubs.c
  * PURPOSE:         Minimal ARM64 kernel support stubs required for linking
+ * COPYRIGHT:       Copyright 2026 Ahmed ARIF <arif.ing@outlook.com>
  */
 
 #include <ntoskrnl.h>

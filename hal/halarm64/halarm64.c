@@ -2,6 +2,7 @@
  * PROJECT:         ReactOS HAL (ARM64)
  * PURPOSE:         Minimal stub implementation to satisfy kernel linkage
  *                  while the real Windows 11 style ARM64 HAL is brought up.
+ * COPYRIGHT:       Copyright 2026 Ahmed ARIF <arif.ing@outlook.com>
  */
 
 #include <ntifs.h>

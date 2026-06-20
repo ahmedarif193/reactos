@@ -3,6 +3,7 @@
  * LICENSE:         BSD - See COPYING.ARM in the top level directory
  * FILE:            ntoskrnl/ke/arm64/ke_i.h
  * PURPOSE:         Macro-generated system call wrappers for ARM64
+ * COPYRIGHT:       Copyright 2026 Ahmed ARIF <arif.ing@outlook.com>
  */
 
 #undef _1

@@ -2,6 +2,7 @@
  * PROJECT:     ReactOS Kernel (ARM64)
  * PURPOSE:     SMP boot diagnostics state. Recorded from ntoskrnl and the HAL,
  *              dumped from one place. Gated at runtime by /SMPDIAG (SmpDbgEnabled).
+ * COPYRIGHT:   Copyright 2026 Ahmed ARIF <arif.ing@outlook.com>
  */
 
 #include <ntoskrnl.h>

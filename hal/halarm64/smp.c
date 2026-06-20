@@ -29,6 +29,7 @@
  *   ARM64 has a relaxed memory model. All writes to shared data structures
  *   must use appropriate barriers (DSB) and cache maintenance operations
  *   to ensure visibility across CPUs.
+ * COPYRIGHT:       Copyright 2026 Ahmed ARIF <arif.ing@outlook.com>
  */
 
 #define NDEBUG

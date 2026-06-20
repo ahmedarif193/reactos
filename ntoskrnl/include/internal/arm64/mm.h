@@ -1,4 +1,9 @@
 /*
+ * PROJECT:         ReactOS Kernel (ARM64)
+ * COPYRIGHT:       Copyright 2026 Ahmed ARIF <arif.ing@outlook.com>
+ */
+
+/*
  * Kernel internal memory management definitions for arm64
  *
  * The layout follows the Windows 11 ARM64 split where user space occupies

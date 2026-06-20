@@ -2,6 +2,7 @@
  * PROJECT:         ReactOS Kernel (ARM64)
  * PURPOSE:         Stubbed-out RTL helpers required while the real ARM64
  *                  runtime support is brought online.
+ * COPYRIGHT:       Copyright 2026 Ahmed ARIF <arif.ing@outlook.com>
  */
 
 #include <ntoskrnl.h>

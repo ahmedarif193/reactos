@@ -1,6 +1,7 @@
 /*
  * PROJECT:         ReactOS Kernel (ARM64)
  * PURPOSE:         Interrupt request level management for ARM64
+ * COPYRIGHT:       Copyright 2026 Ahmed ARIF <arif.ing@outlook.com>
  */
 
 #include <ntoskrnl.h>

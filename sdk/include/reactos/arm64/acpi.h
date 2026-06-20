@@ -2,6 +2,7 @@
  * PROJECT:     ReactOS ARM64
  * LICENSE:     BSD - See COPYING.ARM in the top level directory
  * PURPOSE:     ARM64 ACPI table definitions shared by boot and HAL code
+ * COPYRIGHT:   Copyright 2026 Ahmed ARIF <arif.ing@outlook.com>
  */
 
 #pragma once

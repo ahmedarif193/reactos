@@ -1,3 +1,8 @@
+/*
+ * PROJECT:         ReactOS Kernel (ARM64)
+ * COPYRIGHT:       Copyright 2026 Ahmed ARIF <arif.ing@outlook.com>
+ */
+
 #pragma once
 
 #define ARM64_EARLY_TRAP_REGISTER_COUNT 31

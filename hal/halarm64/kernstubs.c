@@ -1,3 +1,8 @@
+/*
+ * PROJECT:         ReactOS HAL (ARM64)
+ * COPYRIGHT:       Copyright 2026 Ahmed ARIF <arif.ing@outlook.com>
+ */
+
 #include <ntddk.h>
 #include <reactos/hal/msi.h>
 

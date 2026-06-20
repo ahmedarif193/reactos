@@ -4,6 +4,7 @@
  *                  atomics while a real A64 barrier-aware implementation is
  *                  brought up. These are intentionally simple wrappers around
  *                  the compiler builtins.
+ * COPYRIGHT:       Copyright 2026 Ahmed ARIF <arif.ing@outlook.com>
  */
 
 #include <ntoskrnl.h>

@@ -13,6 +13,7 @@
  *    leaf-PTE assumption: "is this VA mapped at all?" and "is the given PTE
  *    a leaf entry?". The first uses MmGetPhysicalAddress which tolerates
  *    block descriptors; the second remains a straight check of the PTE.
+ * COPYRIGHT:       Copyright 2026 Ahmed ARIF <arif.ing@outlook.com>
  */
 
 #include <ntoskrnl.h>
