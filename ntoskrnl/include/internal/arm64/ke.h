@@ -67,6 +67,10 @@ VOID
 NTAPI
 KiArm64FinalizeNumaTopology(VOID);
 
+VOID
+NTAPI
+KiArm64FinalizeSmtTopology(VOID);
+
 #define SYNCH_LEVEL 12
 
 #define KD_BREAKPOINT_TYPE        ULONG

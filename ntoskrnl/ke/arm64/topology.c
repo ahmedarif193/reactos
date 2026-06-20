@@ -2,7 +2,7 @@
  * PROJECT:         ReactOS Kernel
  * LICENSE:         BSD - See COPYING.ARM in the top level directory
  * FILE:            ntoskrnl/ke/arm64/topology.c
- * PURPOSE:         ARM64 NUMA topology discovery
+ * PURPOSE:         ARM64 CPU, NUMA and SMT topology discovery
  * COPYRIGHT:       Copyright 2026 Ahmed ARIF <arif.ing@outlook.com>
  */
 
@@ -19,6 +19,11 @@
 #define KI_ARM64_INVALID_NODE         0xFF
 #define KI_ARM64_SRAT_HEADER_SIZE     (sizeof(DESCRIPTION_HEADER) + sizeof(ULONG) + sizeof(ULONGLONG))
 #define KI_ARM64_SYSTEM_RANGE_BASE    0xFFFF800000000000ULL
+#define KI_ARM64_MPIDR_MT             (1ULL << 24)
+#define KI_ARM64_MPIDR_AFF_ALL        0xFF00FFFFFFULL
+#define KI_ARM64_MPIDR_CORE_MT        0xFF00FFFF00ULL
+#define KI_ARM64_MPIDR_PACKAGE        0xFF00FF0000ULL
+#define KI_ARM64_NUMA_MM_MAX_NODES    1
 
 #include <pshpack1.h>
 typedef struct _KI_ARM64_SRAT_SUBTABLE
@@ -53,9 +58,11 @@ typedef struct _KI_ARM64_CPU_NUMA_TOPOLOGY
 {
     BOOLEAN Present;
     BOOLEAN HasSratNode;
+    BOOLEAN HasMpidr;
     ULONG AcpiProcessorUid;
     ULONG ProximityDomain;
     UCHAR NodeNumber;
+    ULONGLONG Mpidr;
 } KI_ARM64_CPU_NUMA_TOPOLOGY, *PKI_ARM64_CPU_NUMA_TOPOLOGY;
 
 typedef struct _KI_ARM64_NODE_DOMAIN
@@ -495,6 +502,14 @@ KiArm64ParseMadtCpuUids(_In_opt_ PLOADER_PARAMETER_BLOCK LoaderBlock)
                 KiArm64CpuNumaTopology[LogicalCpu].AcpiProcessorUid = Gicc->AcpiProcessorUid;
                 KiArm64CpuNumaTopology[LogicalCpu].NodeNumber = 0;
                 KiArm64CpuNumaTopology[LogicalCpu].ProximityDomain = 0;
+
+                if (Entry->Length >= FIELD_OFFSET(ARM64_ACPI_MADT_GENERIC_INTERRUPT, Mpidr) +
+                                     sizeof(ULONGLONG))
+                {
+                    KiArm64CpuNumaTopology[LogicalCpu].Mpidr = KiArm64ReadUnaligned64(&Gicc->Mpidr);
+                    KiArm64CpuNumaTopology[LogicalCpu].HasMpidr = TRUE;
+                }
+
                 LogicalCpu++;
             }
         }
@@ -620,8 +635,40 @@ KiArm64ParseSrat(_In_opt_ PLOADER_PARAMETER_BLOCK LoaderBlock)
         KiArm64NumaNodeCount = 1;
     }
 
-    KeNumberNodes = KiArm64NumaNodeCount;
+    KeNumberNodes = (KiArm64NumaNodeCount < KI_ARM64_NUMA_MM_MAX_NODES) ?
+                    KiArm64NumaNodeCount : KI_ARM64_NUMA_MM_MAX_NODES;
     KiArm64ResetNodeProcessorMasks(KeNumberNodes);
+}
+
+static
+VOID
+KiArm64SeedActiveProcessorNodeMasks(VOID)
+{
+    KAFFINITY ActiveMask = KeActiveProcessors;
+    ULONG Cpu;
+
+    if (ActiveMask == 0)
+    {
+        ActiveMask = (KAFFINITY)1;
+    }
+
+    for (Cpu = 0; Cpu < MAXIMUM_PROCESSORS; Cpu++)
+    {
+        UCHAR Node;
+
+        if ((ActiveMask & AFFINITY_MASK(Cpu)) == 0)
+        {
+            continue;
+        }
+
+        Node = KiArm64CpuNumaTopology[Cpu].NodeNumber;
+        if ((Node >= KeNumberNodes) || (KeNodeBlock[Node] == NULL))
+        {
+            Node = 0;
+        }
+
+        KeNodeBlock[Node]->ProcessorMask |= AFFINITY_MASK(Cpu);
+    }
 }
 
 VOID
@@ -636,6 +683,7 @@ KiArm64DiscoverNumaTopology(_In_opt_ PLOADER_PARAMETER_BLOCK LoaderBlock)
     if (KeGetCurrentIrql() > APC_LEVEL)
     {
         KiArm64EnsureDefaultNumaTopology();
+        KiArm64SeedActiveProcessorNodeMasks();
         return;
     }
 
@@ -646,6 +694,7 @@ KiArm64DiscoverNumaTopology(_In_opt_ PLOADER_PARAMETER_BLOCK LoaderBlock)
     KiArm64ParseMadtCpuUids(LoaderBlock);
     KiArm64ParseSrat(LoaderBlock);
     KiArm64AcpiIdentityMapped = FALSE;
+    KiArm64SeedActiveProcessorNodeMasks();
     KiArm64NumaDiscovered = TRUE;
 }
 
@@ -740,8 +789,9 @@ KiArm64CompactActiveNumaNodes(_In_ KAFFINITY ActiveMask)
     RtlCopyMemory(KiArm64NodeDomains, NewDomains, sizeof(KiArm64NodeDomains));
 
     KiArm64NumaNodeCount = NewNodeCount;
-    KeNumberNodes = NewNodeCount;
-    KiArm64ResetNodeProcessorMasks(NewNodeCount);
+    KeNumberNodes = (NewNodeCount < KI_ARM64_NUMA_MM_MAX_NODES) ?
+                    NewNodeCount : KI_ARM64_NUMA_MM_MAX_NODES;
+    KiArm64ResetNodeProcessorMasks(KeNumberNodes);
 }
 
 VOID
@@ -814,4 +864,129 @@ KiArm64FinalizeNumaTopology(VOID)
         Prcb->ParentNode = KeNodeBlock[NodeNumber];
         Prcb->ParentNode->ProcessorMask |= Prcb->SetMember;
     }
+
+    KeMemoryBarrier();
+}
+
+static
+ULONGLONG
+KiArm64SmtCoreId(_In_ ULONGLONG Mpidr)
+{
+    if (Mpidr & KI_ARM64_MPIDR_MT)
+    {
+        return Mpidr & KI_ARM64_MPIDR_CORE_MT;
+    }
+
+    return Mpidr & KI_ARM64_MPIDR_AFF_ALL;
+}
+
+static
+ULONGLONG
+KiArm64SmtPackageId(_In_ ULONGLONG Mpidr)
+{
+    return Mpidr & KI_ARM64_MPIDR_PACKAGE;
+}
+
+VOID
+NTAPI
+KiArm64FinalizeSmtTopology(VOID)
+{
+    KAFFINITY ActiveMask = KeActiveProcessors;
+    ULONG Cpu;
+    ULONG Other;
+
+    if (ActiveMask == 0)
+    {
+        ActiveMask = (KAFFINITY)1;
+    }
+
+    for (Cpu = 0; Cpu < MAXIMUM_PROCESSORS; Cpu++)
+    {
+        PKPRCB Prcb;
+        KAFFINITY Siblings = 0;
+        ULONG ThreadCount = 0;
+        ULONG CoreCount = 0;
+        ULONGLONG CoreId;
+        ULONGLONG PackageId;
+        ULONGLONG SeenCores[MAXIMUM_PROCESSORS];
+
+        if ((ActiveMask & AFFINITY_MASK(Cpu)) == 0)
+        {
+            continue;
+        }
+
+        Prcb = KiProcessorBlock[Cpu];
+        if (Prcb == NULL)
+        {
+            continue;
+        }
+
+        if (!KiArm64CpuNumaTopology[Cpu].HasMpidr)
+        {
+            Prcb->MultiThreadProcessorSet = Prcb->SetMember;
+            Prcb->LogicalProcessorsPerCore = 1;
+            Prcb->CoresPerPhysicalProcessor = 1;
+            continue;
+        }
+
+        CoreId = KiArm64SmtCoreId(KiArm64CpuNumaTopology[Cpu].Mpidr);
+        PackageId = KiArm64SmtPackageId(KiArm64CpuNumaTopology[Cpu].Mpidr);
+
+        for (Other = 0; Other < MAXIMUM_PROCESSORS; Other++)
+        {
+            ULONGLONG OtherCore;
+            ULONG Seen;
+
+            if ((ActiveMask & AFFINITY_MASK(Other)) == 0)
+            {
+                continue;
+            }
+
+            if (!KiArm64CpuNumaTopology[Other].HasMpidr)
+            {
+                continue;
+            }
+
+            OtherCore = KiArm64SmtCoreId(KiArm64CpuNumaTopology[Other].Mpidr);
+
+            if (OtherCore == CoreId)
+            {
+                Siblings |= AFFINITY_MASK(Other);
+                ThreadCount++;
+            }
+
+            if (KiArm64SmtPackageId(KiArm64CpuNumaTopology[Other].Mpidr) == PackageId)
+            {
+                for (Seen = 0; Seen < CoreCount; Seen++)
+                {
+                    if (SeenCores[Seen] == OtherCore)
+                    {
+                        break;
+                    }
+                }
+
+                if ((Seen == CoreCount) && (CoreCount < MAXIMUM_PROCESSORS))
+                {
+                    SeenCores[CoreCount++] = OtherCore;
+                }
+            }
+        }
+
+        if (Siblings == 0)
+        {
+            Siblings = Prcb->SetMember;
+            ThreadCount = 1;
+        }
+
+        if (CoreCount == 0)
+        {
+            CoreCount = 1;
+        }
+
+        Prcb->MultiThreadProcessorSet = Siblings;
+        Prcb->LogicalProcessorsPerCore = (UCHAR)ThreadCount;
+        Prcb->CoresPerPhysicalProcessor = (UCHAR)CoreCount;
+    }
+
+    KeMemoryBarrier();
 }
