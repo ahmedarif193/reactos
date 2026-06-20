@@ -75,6 +75,7 @@ extern KNODE KiArm64NodeBlock[MAXIMUM_PROCESSORS - 1];
 
 KI_ARM64_NUMA_NODE_RANGE KiArm64NumaNodeRanges[KI_MAX_NUMA_NODES];
 UCHAR KiArm64NumaNodeCount = 1;
+BOOLEAN KiArm64SmtFinalized = FALSE;
 
 static BOOLEAN KiArm64NumaDiscovered;
 static BOOLEAN KiArm64NumaDefaultInitialized;
@@ -791,7 +792,12 @@ KiArm64CompactActiveNumaNodes(_In_ KAFFINITY ActiveMask)
     KiArm64NumaNodeCount = NewNodeCount;
     KeNumberNodes = (NewNodeCount < KI_ARM64_NUMA_MM_MAX_NODES) ?
                     NewNodeCount : KI_ARM64_NUMA_MM_MAX_NODES;
-    KiArm64ResetNodeProcessorMasks(KeNumberNodes);
+
+    KiArm64EnsureNodeStorage();
+    for (Node = 0; Node < KeNumberNodes; Node++)
+    {
+        KeNodeBlock[Node]->NodeNumber = (UCHAR)Node;
+    }
 }
 
 VOID
@@ -989,4 +995,5 @@ KiArm64FinalizeSmtTopology(VOID)
     }
 
     KeMemoryBarrier();
+    KiArm64SmtFinalized = TRUE;
 }
