@@ -2,6 +2,7 @@
  * PROJECT:         ReactOS Kernel (ARM64)
  * PURPOSE:         Minimal soft-float helpers to keep kernel logging working
  *                  until the real floating-point runtime support is wired up.
+ * COPYRIGHT:       Copyright 2026 Ahmed ARIF <arif.ing@outlook.com>
  */
 
 #include <ntoskrnl.h>

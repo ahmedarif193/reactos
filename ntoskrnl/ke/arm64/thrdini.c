@@ -3,6 +3,7 @@
  * LICENSE:         BSD - See COPYING.ARM in the top level directory
  * FILE:            ntoskrnl/ke/arm64/thrdini.c
  * PURPOSE:         Thread startup stubs for ARM64
+ * COPYRIGHT:       Copyright 2026 Ahmed ARIF <arif.ing@outlook.com>
  */
 
 #include <ntoskrnl.h>

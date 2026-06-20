@@ -15,6 +15,7 @@
  *   - ARM GIC Architecture Specification (IHI 0069)
  *   - ARM GICv3/v4 Specification (IHI 0069)
  *   - ARM ITS Specification (part of GICv3)
+ * COPYRIGHT:       Copyright 2026 Ahmed ARIF <arif.ing@outlook.com>
  */
 
 #ifndef _GIC_INTERNAL_H_
