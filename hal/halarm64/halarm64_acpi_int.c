@@ -15,6 +15,7 @@
  * - GSI: ACPI's abstract interrupt numbering, used in MADT and _PRT
  * - INTID: GIC's interrupt ID (0-15 SGI, 16-31 PPI, 32-1019 SPI, 8192+ LPI)
  * - SystemVectorBase: Offset from GICD entry in MADT (usually 0)
+ * COPYRIGHT:       Copyright 2026 Ahmed ARIF <arif.ing@outlook.com>
  */
 
 #include <ntifs.h>
