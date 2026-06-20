@@ -68,8 +68,10 @@ DpcHandler(
     if (GetNTVersion() == _WIN32_WINNT_WS03)
     {
         ok_eq_uint(Prcb->DpcRoutineActive, 1);
-#if !defined(_M_ARM64)
-        /* this DPC is not in the list anymore, but it was at the head! */
+#if (NTDDI_VERSION < NTDDI_LONGHORN)
+        /* this DPC is not in the list anymore, but it was at the head!
+         * (pre-Longhorn _KDPC_DATA exposes a LIST_ENTRY DpcListHead; on
+         * Longhorn+ it is a singly-linked KDPC_LIST instead.) */
         ok_eq_pointer(Prcb->DpcData[DPC_NORMAL].DpcListHead.Flink, Dpc->DpcListEntry.Flink);
         ok_eq_pointer(Prcb->DpcData[DPC_NORMAL].DpcListHead.Blink, Dpc->DpcListEntry.Blink);
 #endif
