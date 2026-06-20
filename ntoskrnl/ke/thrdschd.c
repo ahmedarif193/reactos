@@ -137,6 +137,13 @@ KiSelectNextProcessor(
             {
                 IdleSet = SubIdle;
             }
+            {
+                KAFFINITY SmtIdle = IdleSet & SubNode->IdleCpuSet & SubNode->IdleSmtSet;
+                if (SmtIdle != 0)
+                {
+                    IdleSet = SmtIdle;
+                }
+            }
         }
     }
 #endif

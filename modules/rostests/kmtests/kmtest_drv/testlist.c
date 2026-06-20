@@ -79,6 +79,8 @@ KMT_TESTFUNC Test_KeArm64SpinLock;
 KMT_TESTFUNC Test_KeArm64ThreadProcess;
 KMT_TESTFUNC Test_RtlArm64UnwindLayout;
 KMT_TESTFUNC Test_KeArm64SubNodeSched;
+KMT_TESTFUNC Test_KeArm64Smt;
+KMT_TESTFUNC Test_KeArm64Numa;
 #endif
 KMT_TESTFUNC Test_KeDeviceQueue;
 KMT_TESTFUNC Test_KeDpc;
@@ -247,6 +249,8 @@ const KMT_TEST TestList[] =
     { "KeArm64ThreadProcess",               Test_KeArm64ThreadProcess },
     { "RtlArm64UnwindLayout",               Test_RtlArm64UnwindLayout },
     { "KeArm64SubNodeSched",                Test_KeArm64SubNodeSched },
+    { "KeArm64Smt",                         Test_KeArm64Smt },
+    { "KeArm64Numa",                        Test_KeArm64Numa },
 #endif
 #if defined(_M_IX86) || defined(_M_AMD64)
     { "IoStackKM",                          Test_IoStackKM },

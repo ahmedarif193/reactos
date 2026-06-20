@@ -85,6 +85,7 @@ ExArchPostHalInitSystemPhase0(
      * transitions on the DAIF-only path until HAL phase 1 re-enables the
      * timer PPI after MmArmInitSystem completes.
      */
+    KiArm64DiscoverNumaTopology(KeLoaderBlock);
 }
 
 CODE_SEG("INIT")
