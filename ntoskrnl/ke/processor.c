@@ -78,3 +78,26 @@ KeQueryMaximumProcessorCountEx(
 
     return KeQueryMaximumProcessorCount();
 }
+
+#ifndef _M_ARM64
+/* The ARM64 port provides its own KeGetCurrentProcessorNumberEx() in
+ * ke/arm64/irql.c; every other architecture uses this portable version. */
+ULONG
+NTAPI
+KeGetCurrentProcessorNumberEx(
+    _Out_opt_ PPROCESSOR_NUMBER ProcNumber)
+{
+    /* Only a single processor group (group 0) is supported, so the processor
+     * number within the group is simply the current processor number. */
+    ULONG Number = KeGetCurrentProcessorNumber();
+
+    if (ProcNumber != NULL)
+    {
+        ProcNumber->Group = 0;
+        ProcNumber->Number = (UCHAR)Number;
+        ProcNumber->Reserved = 0;
+    }
+
+    return Number;
+}
+#endif /* _M_ARM64 */
