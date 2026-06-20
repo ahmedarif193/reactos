@@ -1116,9 +1116,8 @@ HRESULT WINAPI GetThemeDocumentationProperty(LPCWSTR pszThemeName,
     TRACE("(%s,%s,%p,%d)\n", debugstr_w(pszThemeName), debugstr_w(pszPropertyName),
           pszValueBuff, cchMaxValChars);
 
-    if (!g_bThemeHooksActive)
-        return E_FAIL;
-
+    /* Reads the named file, not the active theme: must work without a visual
+     * style so EnumThemes() can list themes from the Classic desktop. */
     hr = MSSTYLES_OpenThemeFile(pszThemeName, NULL, NULL, &pt);
     if(FAILED(hr)) return hr;
 
@@ -1192,9 +1191,8 @@ HRESULT WINAPI OpenThemeFile(LPCWSTR pszThemeFileName, LPCWSTR pszColorName,
           debugstr_w(pszColorName), debugstr_w(pszSizeName),
           hThemeFile, unknown);
 
-    if (!g_bThemeHooksActive)
-        return E_FAIL;
-
+    /* Opens the named file, not the active theme: desk.cpl previews and
+     * applies a theme from the Classic desktop. */
     return MSSTYLES_OpenThemeFile(pszThemeFileName, pszColorName, pszSizeName, (PTHEME_FILE*)hThemeFile);
 }
 
@@ -1440,9 +1438,8 @@ HRESULT WINAPI EnumThemeColors(LPWSTR pszThemeFileName, LPWSTR pszSizeName,
     TRACE("(%s,%s,%d)\n", debugstr_w(pszThemeFileName),
           debugstr_w(pszSizeName), dwColorNum);
 
-    if (!g_bThemeHooksActive)
-        return E_FAIL;
-
+    /* Reads the named file, not the active theme: desk.cpl enumerates a
+     * theme's colors/sizes from the Classic desktop. */
     hr = MSSTYLES_OpenThemeFile(pszThemeFileName, NULL, pszSizeName, &pt);
     if(FAILED(hr)) return hr;
 
@@ -1503,9 +1500,8 @@ HRESULT WINAPI EnumThemeSizes(LPWSTR pszThemeFileName, LPWSTR pszColorName,
     TRACE("(%s,%s,%d)\n", debugstr_w(pszThemeFileName),
           debugstr_w(pszColorName), dwSizeNum);
 
-    if (!g_bThemeHooksActive)
-        return E_FAIL;
-
+    /* Reads the named file, not the active theme: desk.cpl enumerates a
+     * theme's colors/sizes from the Classic desktop. */
     hr = MSSTYLES_OpenThemeFile(pszThemeFileName, pszColorName, NULL, &pt);
     if(FAILED(hr)) return hr;
 
