@@ -213,6 +213,7 @@
 #define GITS_CMD_MOVALL     0x0E
 #define GITS_CMD_DISCARD    0x0F
 #define GITS_CMD_CLEAR      0x04
+#define GITS_CMD_INT        0x03
 
 /*
  * GICv4 ITS command opcodes (Virtual LPI support)
@@ -1561,6 +1562,16 @@ HalpGicItsSendDiscardOnNode(
     _Inout_ PHALP_GIC_ITS_NODE ItsNode,
     _In_ ULONG DeviceId,
     _In_ ULONG EventId);
+
+BOOLEAN
+HalpGicItsSendIntOnNode(
+    _Inout_ PHALP_GIC_ITS_NODE ItsNode,
+    _In_ ULONG DeviceId,
+    _In_ ULONG EventId);
+
+VOID
+HalpGicItsRependLpi(
+    _In_ ULONG Lpi);
 
 BOOLEAN
 HalpGicItsSendSyncOnNode(
