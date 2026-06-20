@@ -2625,6 +2625,12 @@ static ULONG HalpArm64DeferredIntId[MAXIMUM_PROCESSORS][HAL_ARM64_DEFERRED_INT_S
 static UCHAR HalpArm64DeferredIrql[MAXIMUM_PROCESSORS][HAL_ARM64_DEFERRED_INT_SLOTS];
 static UCHAR HalpArm64DeferredCount[MAXIMUM_PROCESSORS];
 
+// LPIs (MSIs) dropped by the lazy-IRQL deferral path; re-pended via ITS INT once IRQL falls to <= DISPATCH.
+#define HAL_ARM64_DROPPED_LPI_SLOTS 32
+static ULONG HalpArm64DroppedLpi[MAXIMUM_PROCESSORS][HAL_ARM64_DROPPED_LPI_SLOTS];
+static ULONG HalpArm64DroppedLpiCount[MAXIMUM_PROCESSORS];
+static BOOLEAN HalpArm64LpiFlushing[MAXIMUM_PROCESSORS];
+
 static
 VOID
 HalpArm64DeferInterrupt(
@@ -2681,6 +2687,58 @@ HalpArm64UndeferInterrupts(
             HalpGicEnableInterrupt(IntId);
         }
     }
+}
+
+// Record an LPI dropped by the deferral path. Called at DIRQL with IRQ masked; dedup keeps the small per-CPU list bounded.
+static VOID
+HalpArm64QueueDroppedLpi(
+    _In_ ULONG Cpu,
+    _In_ ULONG Lpi)
+{
+    ULONG Count;
+    ULONG i;
+
+    if (Cpu >= MAXIMUM_PROCESSORS)
+        return;
+    Count = HalpArm64DroppedLpiCount[Cpu];
+    for (i = 0; i < Count; i++)
+        if (HalpArm64DroppedLpi[Cpu][i] == Lpi)
+            return;
+    if (Count >= HAL_ARM64_DROPPED_LPI_SLOTS)
+    {
+        DPRINT1("[arm64][GIC] Dropped-LPI list overflow on CPU %lu, LPI %lu lost\n", Cpu, Lpi);
+        return;
+    }
+    HalpArm64DroppedLpi[Cpu][Count] = Lpi;
+    HalpArm64DroppedLpiCount[Cpu] = Count + 1;
+}
+
+// Re-pend dropped LPIs once IRQL has fallen to <= DISPATCH, where the ITS CmdLock is safe. Guarded against KeAcquireSpinLock-driven re-entry.
+static VOID
+HalpArm64FlushDroppedLpis(
+    _In_ ULONG Cpu)
+{
+    if (Cpu >= MAXIMUM_PROCESSORS || HalpArm64LpiFlushing[Cpu])
+        return;
+    HalpArm64LpiFlushing[Cpu] = TRUE;
+    for (;;)
+    {
+        ULONG Lpi = 0;
+        ULONG64 Daif;
+
+        __asm__ __volatile__("mrs %0, daif\n\tmsr daifset, #3" : "=r"(Daif) :: "memory");
+        if (HalpArm64DroppedLpiCount[Cpu] != 0)
+        {
+            ULONG Slot = HalpArm64DroppedLpiCount[Cpu] - 1;
+            Lpi = HalpArm64DroppedLpi[Cpu][Slot];
+            HalpArm64DroppedLpiCount[Cpu] = Slot;
+        }
+        __asm__ __volatile__("msr daif, %0" :: "r"(Daif) : "memory");
+        if (Lpi == 0)
+            break;
+        HalpGicItsRependLpi(Lpi);
+    }
+    HalpArm64LpiFlushing[Cpu] = FALSE;
 }
 
 static BOOLEAN HalpLoggedGicOnce = FALSE; /* One-time post-KD log */
@@ -3643,6 +3701,10 @@ HalBeginSystemInterrupt(
             {
                 HalpArm64DeferInterrupt(cpu, intid, Irql);
                 HalpArm64RependInterrupt(intid);
+            }
+            else if ((intid >= HAL_ARM64_LPI_BASE) && HalpGicItsEnabled && (cpu < MAXIMUM_PROCESSORS))
+            {
+                HalpArm64QueueDroppedLpi(cpu, intid);
             }
 
             HalpGicEndInterrupt(EoiValue);
@@ -5410,6 +5472,11 @@ HalSetGicPriorityMask(
         if (HalpArm64DeferredCount[Cpu] != 0)
         {
             HalpArm64UndeferInterrupts(Cpu, Irql);
+        }
+
+        if ((Irql <= DISPATCH_LEVEL) && (HalpArm64DroppedLpiCount[Cpu] != 0) && !HalpArm64LpiFlushing[Cpu])
+        {
+            HalpArm64FlushDroppedLpis(Cpu);
         }
 
         Shadow = HalpArm64PmrShadow[Cpu];

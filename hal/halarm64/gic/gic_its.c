@@ -77,6 +77,10 @@ UCHAR *HalpGicLpiPending[MAXIMUM_PROCESSORS] = {0};
 PHYSICAL_ADDRESS HalpGicLpiPendingPa[MAXIMUM_PROCESSORS] = {0};
 PVOID HalpGicLpiPendingRaw[MAXIMUM_PROCESSORS] = {0};
 
+// Reverse map LPI -> (DeviceId, EventId) so a dropped LPI can be re-pended via the ITS INT command (Linux its_send_int). Populated at MAPTI, cleared at unmap.
+typedef struct _HALP_GIC_LPI_TARGET { ULONG DeviceId; ULONG EventId; UCHAR Valid; } HALP_GIC_LPI_TARGET;
+static HALP_GIC_LPI_TARGET HalpGicLpiTarget[HAL_ARM64_LPI_COUNT] = {0};
+
 /*
  * ============================================================================
  * Helper Functions
@@ -547,6 +551,19 @@ HalpGicItsBuildDiscardCmd(
     Cmd[1] = (UINT64)EventId;
 }
 
+// Linux its_build_int_cmd: INT makes the LPI for (DeviceId,EventId) pending again.
+static VOID
+HalpGicItsBuildIntCmd(
+    _Out_writes_(4) UINT64 *Cmd,
+    _In_ ULONG DeviceId,
+    _In_ ULONG EventId)
+{
+    RtlZeroMemory(Cmd, HAL_ARM64_ITS_CMD_ENTRY_SIZE);
+    Cmd[0] = (UINT64)GITS_CMD_INT;
+    Cmd[0] |= ((UINT64)DeviceId) << 32;
+    Cmd[1] = (UINT64)EventId;
+}
+
 static VOID
 HalpGicItsBuildSyncCmd(
     _Out_writes_(4) UINT64 *Cmd,
@@ -678,6 +695,18 @@ HalpGicItsSendInvOnNode(
     UINT64 Cmd[4];
 
     HalpGicItsBuildInvCmd(Cmd, DeviceId, EventId);
+    return HalpGicItsPostCommandOnNode(ItsNode, Cmd);
+}
+
+BOOLEAN
+HalpGicItsSendIntOnNode(
+    _Inout_ PHALP_GIC_ITS_NODE ItsNode,
+    _In_ ULONG DeviceId,
+    _In_ ULONG EventId)
+{
+    UINT64 Cmd[4];
+
+    HalpGicItsBuildIntCmd(Cmd, DeviceId, EventId);
     return HalpGicItsPostCommandOnNode(ItsNode, Cmd);
 }
 
@@ -1812,6 +1841,13 @@ HalpGicItsAllocateMsi(
         Device->EventToCollection[EventId] = TargetCpu;
     Device->AllocatedEvents++;
 
+    if ((AllocatedLpi >= HAL_ARM64_LPI_BASE) && ((AllocatedLpi - HAL_ARM64_LPI_BASE) < HAL_ARM64_LPI_COUNT))
+    {
+        HalpGicLpiTarget[AllocatedLpi - HAL_ARM64_LPI_BASE].DeviceId = DeviceId;
+        HalpGicLpiTarget[AllocatedLpi - HAL_ARM64_LPI_BASE].EventId = EventId;
+        HalpGicLpiTarget[AllocatedLpi - HAL_ARM64_LPI_BASE].Valid = 1;
+    }
+
     /* Return MSI info */
     *Lpi = AllocatedLpi;
     MsiAddress->QuadPart = ItsNode->PhysicalBase.QuadPart + GITS_TRANSLATER;
@@ -1852,6 +1888,10 @@ HalpGicItsFreeMsi(
     Lpi = Device->EventToLpi ? Device->EventToLpi[EventId] : 0;
     if (Lpi == 0)
         return STATUS_NOT_FOUND;
+
+    // Invalidate the re-pend reverse map first: DisableLpi/DISCARD below release CmdLock (lower IRQL) and can trigger the LPI flush, which must not re-pend an LPI being torn down.
+    if ((Lpi >= HAL_ARM64_LPI_BASE) && ((Lpi - HAL_ARM64_LPI_BASE) < HAL_ARM64_LPI_COUNT))
+        HalpGicLpiTarget[Lpi - HAL_ARM64_LPI_BASE].Valid = 0;
 
     /* Disable LPI */
     HalpGicItsDisableLpi(Lpi);
@@ -1916,6 +1956,30 @@ HalpGicItsGetMsiInfo(
     MsiInfo->CollectionId = Device->EventToCollection ? Device->EventToCollection[EventId] : 0;
 
     return STATUS_SUCCESS;
+}
+
+// Re-pend a dropped LPI via ITS INT (Linux its_send_int). Caller must be at <= DISPATCH_LEVEL: PostCommandOnNode takes CmdLock via KeAcquireSpinLock.
+VOID
+HalpGicItsRependLpi(
+    _In_ ULONG Lpi)
+{
+    ULONG Index;
+    ULONG DeviceId;
+    ULONG EventId;
+    PHALP_GIC_ITS_NODE ItsNode;
+
+    if (!HalpGicItsEnabled || Lpi < HAL_ARM64_LPI_BASE)
+        return;
+    Index = Lpi - HAL_ARM64_LPI_BASE;
+    if (Index >= HAL_ARM64_LPI_COUNT || !HalpGicLpiTarget[Index].Valid)
+        return;
+    DeviceId = HalpGicLpiTarget[Index].DeviceId;
+    EventId = HalpGicLpiTarget[Index].EventId;
+    ItsNode = HalpGicItsSelectNodeForDevice(DeviceId);
+    if (!ItsNode || !ItsNode->Enabled)
+        return;
+    if (!HalpGicItsSendIntOnNode(ItsNode, DeviceId, EventId))
+        DPRINT1("[arm64][ITS] LPI %lu re-pend INT failed (dev %lu evt %lu)\n", Lpi, DeviceId, EventId);
 }
 
 /*
