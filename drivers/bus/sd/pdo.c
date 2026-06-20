@@ -1393,9 +1393,8 @@ SdBusPdoPnp(
             }
             else
             {
-                Irp->IoStatus.Status = STATUS_NOT_SUPPORTED;
+                Status = Irp->IoStatus.Status;
                 IoCompleteRequest(Irp, IO_NO_INCREMENT);
-                Status = STATUS_NOT_SUPPORTED;
             }
             break;
 
