@@ -21,6 +21,11 @@ device_tree_end=0x400000
 device_tree=bcm2711-rpi-4-b.dtb
 armstub=RPI4_EFI.fd
 otg_mode=1
+hdmi_force_hotplug=1
+hdmi_group=2
+hdmi_mode=16
+framebuffer_depth=32
+max_framebuffers=1
 
 [pi5]
 device_tree_address=0x1f0000

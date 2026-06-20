@@ -289,6 +289,7 @@ SdBusInitializeController(
     /* Read capabilities */
     Caps = SdBusReadReg32(FdoExtension, SDHCI_CAPABILITIES);
     Caps2 = SdBusReadReg32(FdoExtension, SDHCI_CAPABILITIES2);
+    Caps &= ~SDHCI_CAP_ADMA2_SUPPORT;
     FdoExtension->HostCapabilities = Caps;
     FdoExtension->HostCapabilities2 = Caps2;
 
@@ -502,16 +503,22 @@ SdBusInitializeController(
     if (Caps & SDHCI_CAP_SDMA_SUPPORT)
     {
         PHYSICAL_ADDRESS HighestAcceptable;
+        PHYSICAL_ADDRESS LowestAcceptable;
+        PHYSICAL_ADDRESS BoundaryMultiple;
         HighestAcceptable.QuadPart = 0xFFFFFFFF; /* 32-bit addressable */
+        LowestAcceptable.QuadPart = 0;
+        BoundaryMultiple.QuadPart = 0;
 
         FdoExtension->DmaBufferSize = 256 * 1024;
-        FdoExtension->DmaBuffer = MmAllocateContiguousMemory(
-            FdoExtension->DmaBufferSize, HighestAcceptable);
+        FdoExtension->DmaBuffer = MmAllocateContiguousMemorySpecifyCache(
+            FdoExtension->DmaBufferSize, LowestAcceptable, HighestAcceptable,
+            BoundaryMultiple, MmNonCached);
         if (FdoExtension->DmaBuffer == NULL)
         {
             FdoExtension->DmaBufferSize = 64 * 1024;
-            FdoExtension->DmaBuffer = MmAllocateContiguousMemory(
-                FdoExtension->DmaBufferSize, HighestAcceptable);
+            FdoExtension->DmaBuffer = MmAllocateContiguousMemorySpecifyCache(
+                FdoExtension->DmaBufferSize, LowestAcceptable, HighestAcceptable,
+                BoundaryMultiple, MmNonCached);
         }
 
         if (FdoExtension->DmaBuffer != NULL)

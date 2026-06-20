@@ -401,7 +401,10 @@ SdBusReadDataPio(
 
     if (WaitStatus == STATUS_IO_TIMEOUT)
     {
-        DPRINT1("SdBusReadDataPio: Timed out waiting for BUFFER_READ_READY\n");
+        DPRINT1("SdBusReadDataPio: Timed out BRR PS=%08lx IS=%08lx CLK=%04x\n",
+                SdBusReadReg32(FdoExtension, SDHCI_PRESENT_STATE),
+                SdBusReadReg32(FdoExtension, SDHCI_INT_STATUS),
+                SdBusReadReg16(FdoExtension, SDHCI_CLOCK_CONTROL));
         (void)SdBusResetHost(FdoExtension, SDHCI_RESET_DATA);
         return STATUS_IO_TIMEOUT;
     }
@@ -492,21 +495,17 @@ SdBusSendDataReadCommand(
     SdBusWriteReg32(FdoExtension, SDHCI_INT_STATUS, SDHCI_INT_ALL_MASK);
 
     /* Set block size and count */
-    SdBusWriteReg16(FdoExtension, SDHCI_BLOCK_SIZE,
-                    (USHORT)(DataLength & SDHCI_BLOCK_SIZE_MASK));
-    SdBusWriteReg16(FdoExtension, SDHCI_BLOCK_COUNT, 1);
-
-    /* Set transfer mode: single block read */
-    SdBusWriteReg16(FdoExtension, SDHCI_TRANSFER_MODE,
-                    SDHCI_TRNS_DATA_DIR_READ);
+    SdBusWriteReg32(FdoExtension, SDHCI_BLOCK_SIZE,
+                    (1UL << 16) | (DataLength & SDHCI_BLOCK_SIZE_MASK));
 
     /* Write argument */
     SdBusWriteReg32(FdoExtension, SDHCI_ARGUMENT, Argument);
 
-    /* Write command register (with data present flag) */
-    SdBusWriteReg16(FdoExtension, SDHCI_COMMAND,
-                    SDHCI_MAKE_CMD(CommandIndex,
-                                   CommandFlags | SDHCI_CMD_DATA_PRESENT));
+    /* Set transfer mode and issue command in one 32-bit write */
+    SdBusWriteReg32(FdoExtension, SDHCI_TRANSFER_MODE,
+                    ((ULONG)SDHCI_MAKE_CMD(CommandIndex,
+                                           CommandFlags | SDHCI_CMD_DATA_PRESENT) << 16) |
+                    SDHCI_TRNS_DATA_DIR_READ);
 
     /* Wait for command complete via interrupt */
     WaitStatus = SdBusWaitForInterrupt(
