@@ -1060,14 +1060,14 @@ SdBusFdoPnp(
     switch (IoStack->MinorFunction)
     {
         case IRP_MN_START_DEVICE:
-            DPRINT1("SdBusFdoPnp: IRP_MN_START_DEVICE\n");
+            DPRINT("SdBusFdoPnp: IRP_MN_START_DEVICE\n");
             Status = SdBusFdoStartDevice(FdoExtension, Irp);
             break;
 
         case IRP_MN_QUERY_DEVICE_RELATIONS:
             if (IoStack->Parameters.QueryDeviceRelations.Type == BusRelations)
             {
-                DPRINT1("SdBusFdoPnp: IRP_MN_QUERY_DEVICE_RELATIONS (BusRelations)\n");
+                DPRINT("SdBusFdoPnp: IRP_MN_QUERY_DEVICE_RELATIONS (BusRelations)\n");
                 Status = SdBusFdoQueryBusRelations(FdoExtension, Irp);
             }
             else
@@ -1079,18 +1079,18 @@ SdBusFdoPnp(
             break;
 
         case IRP_MN_STOP_DEVICE:
-            DPRINT1("SdBusFdoPnp: IRP_MN_STOP_DEVICE\n");
+            DPRINT("SdBusFdoPnp: IRP_MN_STOP_DEVICE\n");
             Status = SdBusFdoStopDevice(FdoExtension, Irp);
             break;
 
         case IRP_MN_REMOVE_DEVICE:
-            DPRINT1("SdBusFdoPnp: IRP_MN_REMOVE_DEVICE\n");
+            DPRINT("SdBusFdoPnp: IRP_MN_REMOVE_DEVICE\n");
             Status = SdBusFdoRemoveDevice(FdoExtension, Irp);
             /* RemoveLock released inside */
             return Status;
 
         case IRP_MN_SURPRISE_REMOVAL:
-            DPRINT1("SdBusFdoPnp: IRP_MN_SURPRISE_REMOVAL\n");
+            DPRINT("SdBusFdoPnp: IRP_MN_SURPRISE_REMOVAL\n");
             Status = SdBusFdoSurpriseRemoval(FdoExtension, Irp);
             break;
 
@@ -1104,7 +1104,7 @@ SdBusFdoPnp(
             break;
 
         case IRP_MN_FILTER_RESOURCE_REQUIREMENTS:
-            DPRINT1("SdBusFdoPnp: IRP_MN_FILTER_RESOURCE_REQUIREMENTS\n");
+            DPRINT("SdBusFdoPnp: IRP_MN_FILTER_RESOURCE_REQUIREMENTS\n");
             IoCopyCurrentIrpStackLocationToNext(Irp);
             Status = IoCallDriver(FdoExtension->LowerDevice, Irp);
             break;
