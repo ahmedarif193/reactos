@@ -708,8 +708,12 @@ ThemeHooksInstall()
         PREGISTER_UAH_WINXP lpfuncxp = (PREGISTER_UAH_WINXP)lpFunc;
         ret = lpfuncxp(hDllInst, ThemeInitApiHook);
     }
-    else if ( osvi.dwMajorVersion == 5 && osvi.dwMinorVersion == 2)
+    else
     {
+        /* Server 2003 and later (incl. the NT6/NT10 version personas): ReactOS's
+         * RegisterUserApiHook always takes the 2003-style USERAPIHOOKINFO, so
+         * route every non-XP version here. Previously anything newer than 5.2
+         * fell through to UNIMPLEMENTED, leaving visual styles inactive. */
         PREGISTER_UUAH_WIN2003 lpfunc2003 = (PREGISTER_UUAH_WIN2003)lpFunc;
         USERAPIHOOKINFO uah;
 
@@ -720,11 +724,6 @@ ThemeHooksInstall()
         uah.m_funname2 = NULL;
 
         ret = lpfunc2003(&uah);
-    }
-    else
-    {
-        UNIMPLEMENTED;
-        ret = FALSE;
     }
 
     UXTHEME_broadcast_theme_changed (NULL, TRUE);
