@@ -426,6 +426,7 @@ elseif(ARCH STREQUAL "arm64")
         ${REACTOS_SOURCE_DIR}/ntoskrnl/ke/arm64/spinlock.c
         ${REACTOS_SOURCE_DIR}/ntoskrnl/ke/arm64/stubs.c
         ${REACTOS_SOURCE_DIR}/ntoskrnl/ke/arm64/thrdini.c
+        ${REACTOS_SOURCE_DIR}/ntoskrnl/ke/arm64/topology.c
         ${REACTOS_SOURCE_DIR}/ntoskrnl/ke/arm64/trapc.c
         ${REACTOS_SOURCE_DIR}/ntoskrnl/ke/arm64/trapdump.c
         ${REACTOS_SOURCE_DIR}/ntoskrnl/ke/arm64/usercall.c

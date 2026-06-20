@@ -25,6 +25,10 @@
 #define ARM64_PSTATE_ASYNC_ABORT_MASK 0x100UL
 #define ARM64_PSTATE_IRQ_MASK         0x080UL
 
+#ifndef KI_MAX_NUMA_NODES
+#define KI_MAX_NUMA_NODES MAXIMUM_PROCESSORS
+#endif
+
 typedef struct _KSWITCHFRAME
 {
     ULONG64 Dummy;
@@ -32,6 +36,36 @@ typedef struct _KSWITCHFRAME
 
 extern NTKERNELAPI PVOID MmSystemRangeStart;
 extern NTKERNELAPI PVOID MmHighestUserAddress;
+
+#define KI_ARM64_NUMA_RANGE_VERSION 1
+
+typedef struct _KI_ARM64_NUMA_NODE_RANGE
+{
+    ULONGLONG BaseAddress;
+    ULONGLONG LimitAddress;
+    ULONGLONG Length;
+    ULONG ProximityDomain;
+    BOOLEAN Enabled;
+} KI_ARM64_NUMA_NODE_RANGE, *PKI_ARM64_NUMA_NODE_RANGE;
+
+extern KI_ARM64_NUMA_NODE_RANGE KiArm64NumaNodeRanges[KI_MAX_NUMA_NODES];
+extern UCHAR KiArm64NumaNodeCount;
+
+VOID
+NTAPI
+KiArm64DiscoverNumaTopology(
+    _In_opt_ PLOADER_PARAMETER_BLOCK LoaderBlock);
+
+VOID
+NTAPI
+KiArm64InitializeProcessorNumaTopology(
+    _In_ ULONG ProcessorNumber,
+    _Inout_ PKPRCB Prcb,
+    _In_opt_ PLOADER_PARAMETER_BLOCK LoaderBlock);
+
+VOID
+NTAPI
+KiArm64FinalizeNumaTopology(VOID);
 
 #define SYNCH_LEVEL 12
 
