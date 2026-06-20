@@ -114,6 +114,8 @@ HKLM,"SYSTEM\CurrentControlSet\Control\CriticalDeviceDatabase\PCI#CC_080501","Cl
 ; QEMU SDHCI controller
 HKLM,"SYSTEM\CurrentControlSet\Control\CriticalDeviceDatabase\PCI#VEN_1B36&DEV_0007","Service",0x00000000,"sdbus"
 HKLM,"SYSTEM\CurrentControlSet\Control\CriticalDeviceDatabase\PCI#VEN_1B36&DEV_0007","ClassGUID",0x00000000,"{a0a588a4-c46f-4b37-b7ea-c82fe89870c6}"
+HKLM,"SYSTEM\CurrentControlSet\Control\CriticalDeviceDatabase\ACPI#BRCME88C","Service",0x00000000,"sdbus"
+HKLM,"SYSTEM\CurrentControlSet\Control\CriticalDeviceDatabase\ACPI#BRCME88C","ClassGUID",0x00000000,"{a0a588a4-c46f-4b37-b7ea-c82fe89870c6}"
 ; SD card class driver (loaded on sdbus child PDOs)
 HKLM,"SYSTEM\CurrentControlSet\Control\CriticalDeviceDatabase\SD#CLASS_MEMORY","Service",0x00000000,"sffdisk"
 HKLM,"SYSTEM\CurrentControlSet\Control\CriticalDeviceDatabase\SD#CLASS_MEMORY","ClassGUID",0x00000000,"{4D36E967-E325-11CE-BFC1-08002BE10318}"
@@ -1943,14 +1945,14 @@ HKLM,"SYSTEM\CurrentControlSet\Services\sffdisk","Type",0x00010001,0x00000001
 HKLM,"SYSTEM\CurrentControlSet\Services\sdport","ErrorControl",0x00010001,0x00000001
 HKLM,"SYSTEM\CurrentControlSet\Services\sdport","Group",0x00000000,"System Bus Extender"
 HKLM,"SYSTEM\CurrentControlSet\Services\sdport","ImagePath",0x00020000,"system32\drivers\sdport.sys"
-HKLM,"SYSTEM\CurrentControlSet\Services\sdport","Start",0x00010001,0x00000003
+HKLM,"SYSTEM\CurrentControlSet\Services\sdport","Start",0x00010001,0x00000000
 HKLM,"SYSTEM\CurrentControlSet\Services\sdport","Type",0x00010001,0x00000001
 
 ; SDHCI miniport (registers with sdport, alternative stack)
 HKLM,"SYSTEM\CurrentControlSet\Services\sdhc","ErrorControl",0x00010001,0x00000001
 HKLM,"SYSTEM\CurrentControlSet\Services\sdhc","Group",0x00000000,"System Bus Extender"
 HKLM,"SYSTEM\CurrentControlSet\Services\sdhc","ImagePath",0x00020000,"system32\drivers\sdhc.sys"
-HKLM,"SYSTEM\CurrentControlSet\Services\sdhc","Start",0x00010001,0x00000003
+HKLM,"SYSTEM\CurrentControlSet\Services\sdhc","Start",0x00010001,0x00000000
 HKLM,"SYSTEM\CurrentControlSet\Services\sdhc","Type",0x00010001,0x00000001
 
 ; SD Storage Function Protocol driver (boot-start for eMMC boot support)
@@ -1959,6 +1961,13 @@ HKLM,"SYSTEM\CurrentControlSet\Services\sffp_sd","Group",0x00000000,"SCSI Class"
 HKLM,"SYSTEM\CurrentControlSet\Services\sffp_sd","ImagePath",0x00020000,"system32\drivers\sffp_sd.sys"
 HKLM,"SYSTEM\CurrentControlSet\Services\sffp_sd","Start",0x00010001,0x00000000
 HKLM,"SYSTEM\CurrentControlSet\Services\sffp_sd","Type",0x00010001,0x00000001
+
+; Partition manager (disk-class upper filter; creates \Device\HarddiskN\PartitionM)
+HKLM,"SYSTEM\CurrentControlSet\Services\partmgr","ErrorControl",0x00010001,0x00000001
+HKLM,"SYSTEM\CurrentControlSet\Services\partmgr","Group",0x00000000,"System Bus Extender"
+HKLM,"SYSTEM\CurrentControlSet\Services\partmgr","ImagePath",0x00020000,"system32\drivers\partmgr.sys"
+HKLM,"SYSTEM\CurrentControlSet\Services\partmgr","Start",0x00010001,0x00000000
+HKLM,"SYSTEM\CurrentControlSet\Services\partmgr","Type",0x00010001,0x00000001
 
 ; UniATA: disable legacy detection to avoid pre-PnP IDE claiming
 HKLM,"SYSTEM\CurrentControlSet\Services\UniATA\Parameters","LegacyDetection",0x00010001,0x00000000

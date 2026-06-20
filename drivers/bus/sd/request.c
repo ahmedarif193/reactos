@@ -1156,31 +1156,32 @@ SdBusSendSdhciCommand(
                             FdoExtension->DmaPhysical.LowPart);
         }
 
-        SdBusWriteReg16(FdoExtension, SDHCI_BLOCK_SIZE, BlockSizeReg);
-        SdBusWriteReg16(FdoExtension, SDHCI_BLOCK_COUNT, (USHORT)BlockCount);
+        SdBusWriteReg32(FdoExtension, SDHCI_BLOCK_SIZE,
+                        ((ULONG)(USHORT)BlockCount << 16) | BlockSizeReg);
     }
 
     /* Step 4: Write argument register */
     SdBusWriteReg32(FdoExtension, SDHCI_ARGUMENT, Argument);
 
-    /* Step 5: Write transfer mode register (before command) */
-    if (HasData)
-    {
-        TransferMode = SdBusBuildTransferMode(CmdDesc, DataLength,
-                                               SdBusTransferPathUsesDma(TransferPath));
-        SdBusWriteReg16(FdoExtension, SDHCI_TRANSFER_MODE, TransferMode);
-    }
-
-    /* Step 6: Write command register -- this triggers the command */
+    /* Step 5/6: Write transfer mode and command (combined for data commands) */
     CommandFlags = SdBusResponseTypeToFlags(CmdDesc->ResponseType);
     if (HasData)
     {
         CommandFlags |= SDHCI_CMD_DATA_PRESENT;
     }
 
-    /* For application commands, CMD55 has already been sent by the caller */
     CmdReg = SDHCI_MAKE_CMD(CmdDesc->Cmd, CommandFlags);
-    SdBusWriteReg16(FdoExtension, SDHCI_COMMAND, CmdReg);
+    if (HasData)
+    {
+        TransferMode = SdBusBuildTransferMode(CmdDesc, DataLength,
+                                               SdBusTransferPathUsesDma(TransferPath));
+        SdBusWriteReg32(FdoExtension, SDHCI_TRANSFER_MODE,
+                        ((ULONG)CmdReg << 16) | TransferMode);
+    }
+    else
+    {
+        SdBusWriteReg16(FdoExtension, SDHCI_COMMAND, CmdReg);
+    }
 
     /* Step 7: Wait for command completion via interrupt */
     {
