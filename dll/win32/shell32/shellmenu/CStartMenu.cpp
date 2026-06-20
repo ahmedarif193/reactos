@@ -289,6 +289,9 @@ private:
             case IDM_PROGRAMS:
             {
                 hr = AddStartMenuItems(pShellMenu, CSIDL_PROGRAMS, SMSET_TOP, m_psfPrograms);
+                /* LiveCD may lack the per-user Programs folder; match startup fallback. */
+                if (FAILED(hr))
+                    hr = AddStartMenuItems(pShellMenu, CSIDL_COMMON_PROGRAMS, SMSET_TOP);
                 break;
             }
             case IDM_FAVORITES:
