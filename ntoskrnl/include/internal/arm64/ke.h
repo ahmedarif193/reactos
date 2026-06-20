@@ -50,6 +50,7 @@ typedef struct _KI_ARM64_NUMA_NODE_RANGE
 
 extern KI_ARM64_NUMA_NODE_RANGE KiArm64NumaNodeRanges[KI_MAX_NUMA_NODES];
 extern UCHAR KiArm64NumaNodeCount;
+extern BOOLEAN KiArm64SmtFinalized;
 
 VOID
 NTAPI

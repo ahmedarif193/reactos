@@ -797,7 +797,6 @@ KeStartAllProcessors(
         KiNode0SubNode.Affinity = KeActiveProcessors;
         KiNode0SubNode.SiblingMask = KeActiveProcessors;
         KiNode0SubNode.NonParkedSet = KeActiveProcessors;
-        KiNode0SubNode.IdleSmtSet = 0;
         KiNode0SubNode.Lowest = 0;
         if (BitScanReverseAffinity(&HighestCpu, KeActiveProcessors))
             KiNode0SubNode.Highest = HighestCpu;

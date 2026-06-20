@@ -288,7 +288,8 @@ KiIdleLoop(VOID)
         {
             PKSCHEDULER_SUBNODE SubNode = (PKSCHEDULER_SUBNODE)Prcb->SchedulerSubNode;
             InterlockedOr64((PLONG64)&SubNode->IdleCpuSet, (LONG64)Prcb->SetMember);
-            if ((Prcb->MultiThreadProcessorSet & ~SubNode->IdleCpuSet) == 0)
+            if (KiArm64SmtFinalized &&
+                (Prcb->MultiThreadProcessorSet & ~SubNode->IdleCpuSet) == 0)
             {
                 InterlockedOr64((PLONG64)&SubNode->IdleSmtSet, (LONG64)Prcb->MultiThreadProcessorSet);
                 if ((Prcb->MultiThreadProcessorSet & ~SubNode->IdleCpuSet) != 0)
@@ -311,7 +312,8 @@ KiIdleLoop(VOID)
         {
             PKSCHEDULER_SUBNODE SubNode = (PKSCHEDULER_SUBNODE)Prcb->SchedulerSubNode;
             InterlockedAnd64((PLONG64)&SubNode->IdleCpuSet, (LONG64)~Prcb->SetMember);
-            InterlockedAnd64((PLONG64)&SubNode->IdleSmtSet, (LONG64)~Prcb->MultiThreadProcessorSet);
+            if (KiArm64SmtFinalized)
+                InterlockedAnd64((PLONG64)&SubNode->IdleSmtSet, (LONG64)~Prcb->MultiThreadProcessorSet);
         }
 
         if (Prcb->IpiFrozen == IPI_FROZEN_STATE_TARGET_FREEZE)
