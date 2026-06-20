@@ -789,6 +789,7 @@ KeStartAllProcessors(
     DPRINT1("[arm64] KeStartAllProcessors: Successfully started %lu APs\n", ProcessorCount);
 
     KiArm64FinalizeNumaTopology();
+    KiArm64FinalizeSmtTopology();
 
     {
         extern KSCHEDULER_SUBNODE KiNode0SubNode;
