@@ -669,8 +669,9 @@ KiInitializePcr(_In_ ULONG ProcessorNumber,
     Pcr->Prcb.GroupIndex = (UCHAR)ProcessorNumber;
     Pcr->Prcb.SetMember = 1ULL << ProcessorNumber;
     Pcr->Prcb.MultiThreadProcessorSet = Pcr->Prcb.SetMember;
-    Pcr->Prcb.ParentNode = KeNodeBlock[0];
-    Pcr->Prcb.ParentNode->ProcessorMask |= Pcr->Prcb.SetMember;
+    Pcr->Prcb.CoresPerPhysicalProcessor = 1;
+    Pcr->Prcb.LogicalProcessorsPerCore = 1;
+    KiArm64InitializeProcessorNumaTopology(ProcessorNumber, &Pcr->Prcb, KeLoaderBlock);
 
     Pcr->Prcb.SchedulerSubNode = &KiNode0SubNode;
     KiNode0SubNode.ParentNodeNumber = 0;
@@ -702,8 +703,6 @@ KiInitializePcr(_In_ ULONG ProcessorNumber,
 
         Pcr->Prcb.CycleCounterFrequency = CounterFrequency;
         Pcr->Prcb.MHz = (ULONG)((CounterFrequency + 999999ULL) / 1000000ULL);
-        Pcr->Prcb.CoresPerPhysicalProcessor = 1;
-        Pcr->Prcb.LogicalProcessorsPerCore = 1;
     }
 
     Arm64Block = (KeLoaderBlock != NULL) ? &KeLoaderBlock->u.Arm64 : NULL;

@@ -568,6 +568,9 @@ def start_qemu(rpi_mode=False, smp=4):
     img_path = boot_image_path
     is_iso_boot = (boot_media == "iso")
 
+    smp_arg = os.environ.get("ROS_QEMU_SMP", str(smp))
+    numa_args = os.environ.get("ROS_QEMU_NUMA", "").split()
+
     # Reset log file
     try:
         open(LOG_FILE, 'w').close()
@@ -603,7 +606,7 @@ def start_qemu(rpi_mode=False, smp=4):
                 # because -serial file: has buffering issues on macOS QEMU
                 qemu_cmd = [
                     "qemu-system-aarch64",
-                    "-smp", str(smp),
+                    "-smp", smp_arg, *numa_args,
                     "-device", "ramfb",
                     *arm64_usb_devices,
                     "-machine", machine_arg,
@@ -622,7 +625,7 @@ def start_qemu(rpi_mode=False, smp=4):
                     *arm64_usb_devices,
                     "-machine", machine_arg,
                     "-cpu", "max",
-                    "-smp", str(smp),
+                    "-smp", smp_arg, *numa_args,
                     "-m", QEMU_ARM64_MEMORY,
                     "-drive", "if=pflash,format=raw,readonly=on,file=/opt/homebrew/share/qemu/edk2-aarch64-code.fd",
                     *(qemu_arm64_iso_drive_args(img_path) if is_iso_boot else qemu_arm64_disk_drive_args(img_path)),
@@ -642,7 +645,7 @@ def start_qemu(rpi_mode=False, smp=4):
                 # Raspberry Pi emulation mode (cortex-a72, no KVM)
                 qemu_cmd = [
                     "qemu-system-aarch64",
-                    "-smp", str(smp),
+                    "-smp", smp_arg, *numa_args,
                     "-device", "ramfb",
                     *arm64_usb_devices,
                     "-machine", machine_arg,
@@ -657,7 +660,7 @@ def start_qemu(rpi_mode=False, smp=4):
                 # Default accelerated mode
                 qemu_cmd = [
                     "qemu-system-aarch64",
-                    "-smp", str(smp),
+                    "-smp", smp_arg, *numa_args,
                     "-device", "ramfb",
                     *arm64_usb_devices,
                     "-machine", machine_arg,
