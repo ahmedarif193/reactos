@@ -3,6 +3,7 @@
  * LICENSE:     GPL-3.0-or-later (https://spdx.org/licenses/GPL-3.0-or-later)
  * PURPOSE:     SMP boot diagnostics state. Recorded from ntoskrnl and the HAL,
  *              dumped from one place. Gated at runtime by /SMPDIAG (SmpDbgEnabled).
+ * COPYRIGHT:   Copyright 2026 Ahmed ARIF <arif.ing@outlook.com>
  */
 
 #include <ntoskrnl.h>
