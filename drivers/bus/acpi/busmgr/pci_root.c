@@ -786,6 +786,22 @@ AcpiPciRootEnumerateCallback(
 
         AcpiPciRootExtractResources(Handle, &RootInfo);
 
+        {
+            ACPI_OBJECT CbaResult;
+            ACPI_BUFFER CbaBuffer = { sizeof(CbaResult), &CbaResult };
+
+            Status = AcpiEvaluateObjectTyped(Handle,
+                                             "_CBA",
+                                             NULL,
+                                             &CbaBuffer,
+                                             ACPI_TYPE_INTEGER);
+            if (ACPI_SUCCESS(Status))
+            {
+                RootInfo.ConfigSpaceBasePresent = TRUE;
+                RootInfo.ConfigSpaceBase = CbaResult.Integer.Value;
+            }
+        }
+
         if (!RootInfo.BusRangePresent)
         {
             ULONG ClampedBus = (RootInfo.Bus <= 0xFF) ? RootInfo.Bus : 0xFF;
@@ -881,7 +897,7 @@ AcpiPciRootEnumerateCallback(
                     RootInfo.Osc.Failed ? " (firmware retained control)" : "");
         }
 
-        /* HalpConfigurePciRootBridge(&RootInfo); -- function not implemented; left as TODO from cherry-pick */
+        HalpConfigurePciRootBridge(&RootInfo);
     }
 
     if (Context)
