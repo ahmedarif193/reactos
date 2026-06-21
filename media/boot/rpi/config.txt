@@ -34,9 +34,15 @@ device_tree_address=0x1f0000
 device_tree_end=0x210000
 device_tree=bcm2712-rpi-5-b.dtb
 armstub=RPI5_EFI.fd
+os_check=0
+enable_rp1_uart=1
 framebuffer_depth=32
+max_framebuffers=1
 dtparam=pciex1
 dtparam=pciex1_gen=3
+
+[cm5]
+device_tree=bcm2712-rpi-cm5-cm5io.dtb
 
 [all]
 force_turbo=1
