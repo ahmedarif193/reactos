@@ -20,6 +20,8 @@ device_tree_address=0x3e0000
 device_tree_end=0x400000
 device_tree=bcm2711-rpi-4-b.dtb
 armstub=RPI4_EFI.fd
+dtparam=pcie=on
+dtparam=pcie_tperst_clk_ms=100
 otg_mode=1
 hdmi_force_hotplug=1
 hdmi_group=2
@@ -34,6 +36,7 @@ device_tree=bcm2712-rpi-5-b.dtb
 armstub=RPI5_EFI.fd
 framebuffer_depth=32
 dtparam=pciex1
+dtparam=pciex1_gen=3
 
 [all]
 force_turbo=1

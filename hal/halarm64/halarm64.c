@@ -3204,6 +3204,8 @@ HalInitSystem(
          * called at elevated IRQL during PnP resource assignment.
          */
 
+        HalpArm64Phase1PlatformInit();
+
         return TRUE;
     }
 

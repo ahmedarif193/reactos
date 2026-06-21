@@ -4361,10 +4361,10 @@ HalpAcpiEnumeratePciBusDebug(VOID)
             }
             else
             {
-                DPRINT1("HAL: Legacy config probe failed for bus %u (DWORD vendor=0x%08lx, WORD vendor=0x%04x)\n",
-                        BusNumber,
-                        VendorId,
-                        VendorWord);
+                DPRINT("HAL: No PCI device responding on bus %u (vendor=0x%08lx/0x%04x); stopping scan\n",
+                       BusNumber,
+                       VendorId,
+                       VendorWord);
             }
             /* If not bus 0, assume no more buses and stop */
             if (BusNumber != 0)
