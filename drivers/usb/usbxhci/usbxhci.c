@@ -9209,10 +9209,13 @@ XHCI_EnablePciBusMaster(
     USHORT Command;
     USHORT NewCommand;
 
-    if (!Extension || !XhciRegPacket.UsbPortReadWriteConfigSpace)
-    {
-        DPRINT1("usbxhci: UsbPortReadWriteConfigSpace not available – cannot enable bus mastering\n");
+    if (!Extension)
         return FALSE;
+
+    if (!XhciRegPacket.UsbPortReadWriteConfigSpace)
+    {
+        DPRINT("usbxhci: no PCI config space (MMIO/ACPI controller); skipping bus-master enable\n");
+        return TRUE;
     }
 
     if (!XHCI_ReadPciConfig(Extension,
@@ -9220,8 +9223,8 @@ XHCI_EnablePciBusMaster(
                             &Command,
                             sizeof(Command)))
     {
-        DPRINT1("usbxhci: failed to read PCI command register\n");
-        return FALSE;
+        DPRINT("usbxhci: PCI command read unavailable; treating as MMIO controller\n");
+        return TRUE;
     }
 
     NewCommand = Command | PCI_ENABLE_MEMORY_SPACE | PCI_ENABLE_BUS_MASTER;
@@ -12446,6 +12449,12 @@ XHCI_StartController(PVOID MiniPortExtension,
         Extension->CapabilityLength = CapHeader0 & 0xFF;
         /* HciVersion occupies bits 31:16 of the first dword (little-endian) */
         Extension->HciVersion = (USHORT)((CapHeader0 >> 16) & 0xFFFF);
+        if (CapHeader0 == 0xFFFFFFFF || Extension->CapabilityLength == 0 ||
+            Extension->CapabilityLength == 0xFF)
+        {
+            DPRINT1("usbxhci: controller absent/unpowered (caphdr0=%08lx)\n", CapHeader0);
+            return MP_STATUS_ERROR;
+        }
     }
     DPRINT("usbxhci: MMIO base=%p CAPLEN=%lu\n", Extension->MmioBase, Extension->CapabilityLength);
     if (Extension->CapabilityLength < sizeof(XHCI_CAPABILITY_REGISTERS))

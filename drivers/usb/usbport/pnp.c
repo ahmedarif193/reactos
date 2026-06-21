@@ -1571,6 +1571,8 @@ USBPORT_StartDevice(IN PDEVICE_OBJECT FdoDevice,
     ULONG LegacyBIOS;
     ULONG MiniportFlags;
     ULONG ix;
+    INTERFACE_TYPE LegacyBusType = PCIBus;
+    BOOLEAN IsPciBus;
 
     DPRINT("USBPORT_StartDevice: FdoDevice - %p, UsbPortResources - %p\n",
            FdoDevice,
@@ -1579,29 +1581,39 @@ USBPORT_StartDevice(IN PDEVICE_OBJECT FdoDevice,
     FdoExtension = FdoDevice->DeviceExtension;
     Packet = &FdoExtension->MiniPortInterface->Packet;
 
-    Status = USBPORT_QueryPciBusInterface(FdoDevice);
-    if (!NT_SUCCESS(Status))
-        goto ExitWithError;
+    Status = IoGetDeviceProperty(FdoExtension->CommonExtension.LowerPdoDevice,
+                                 DevicePropertyLegacyBusType,
+                                 sizeof(LegacyBusType),
+                                 &LegacyBusType,
+                                 &ResultLength);
+    IsPciBus = (NT_SUCCESS(Status) && LegacyBusType == PCIBus);
 
-    BytesRead = (*FdoExtension->BusInterface.GetBusData)(FdoExtension->BusInterface.Context,
-                                                         PCI_WHICHSPACE_CONFIG,
-                                                         &PciConfig,
-                                                         0,
-                                                         PCI_COMMON_HDR_LENGTH);
-
-    if (BytesRead != PCI_COMMON_HDR_LENGTH)
+    if (IsPciBus)
     {
-        DPRINT1("USBPORT_StartDevice: Failed to get pci config information!\n");
-        Status = STATUS_UNSUCCESSFUL;
-        goto ExitWithError;
-    }
+        Status = USBPORT_QueryPciBusInterface(FdoDevice);
+        if (!NT_SUCCESS(Status))
+            goto ExitWithError;
 
-    FdoExtension->VendorID = PciConfig.VendorID;
-    FdoExtension->DeviceID = PciConfig.DeviceID;
-    FdoExtension->RevisionID = PciConfig.RevisionID;
-    FdoExtension->ProgIf = PciConfig.ProgIf;
-    FdoExtension->SubClass = PciConfig.SubClass;
-    FdoExtension->BaseClass = PciConfig.BaseClass;
+        BytesRead = (*FdoExtension->BusInterface.GetBusData)(FdoExtension->BusInterface.Context,
+                                                             PCI_WHICHSPACE_CONFIG,
+                                                             &PciConfig,
+                                                             0,
+                                                             PCI_COMMON_HDR_LENGTH);
+
+        if (BytesRead != PCI_COMMON_HDR_LENGTH)
+        {
+            DPRINT1("USBPORT_StartDevice: Failed to get pci config information!\n");
+            Status = STATUS_UNSUCCESSFUL;
+            goto ExitWithError;
+        }
+
+        FdoExtension->VendorID = PciConfig.VendorID;
+        FdoExtension->DeviceID = PciConfig.DeviceID;
+        FdoExtension->RevisionID = PciConfig.RevisionID;
+        FdoExtension->ProgIf = PciConfig.ProgIf;
+        FdoExtension->SubClass = PciConfig.SubClass;
+        FdoExtension->BaseClass = PciConfig.BaseClass;
+    }
 
     RtlZeroMemory(&DeviceDescription, sizeof(DeviceDescription));
 
@@ -1624,7 +1636,7 @@ USBPORT_StartDevice(IN PDEVICE_OBJECT FdoDevice,
     UsbPortResources->Reserved &= ~USBPORT_RES_DMA_ADDR_MASK;
     UsbPortResources->Reserved |= Use64BitDma ? USBPORT_RES_DMA_ADDR_64BIT
                                               : USBPORT_RES_DMA_ADDR_32BIT;
-    DeviceDescription.InterfaceType = PCIBus;
+    DeviceDescription.InterfaceType = IsPciBus ? PCIBus : LegacyBusType;
     DeviceDescription.DmaSpeed = Compatible;
     DeviceDescription.MaximumLength = MAXULONG;
 
