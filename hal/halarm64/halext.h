@@ -146,6 +146,9 @@ VOID
 HalpArm64ProbePlatforms(
     _In_opt_ PLOADER_PARAMETER_BLOCK LoaderBlock);
 
+VOID
+HalpArm64Phase1PlatformInit(VOID);
+
 ULONG
 HalpArm64GetPlatformDeviceCount(VOID);
 
