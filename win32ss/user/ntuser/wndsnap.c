@@ -232,6 +232,10 @@ SnapPreviewInit(SNAP_PREVIEW_STATE *pState)
     RtlZeroMemory(pState, sizeof(*pState));
     pState->hbrFill = IntGdiCreateSolidBrush(RGB(176, 214, 244));
     pState->hbrBorder = IntGdiCreateSolidBrush(RGB(94, 150, 214));
+    if (pState->hbrFill)
+        GreSetObjectOwner(pState->hbrFill, GDI_OBJ_HMGR_POWNED);
+    if (pState->hbrBorder)
+        GreSetObjectOwner(pState->hbrBorder, GDI_OBJ_HMGR_POWNED);
 }
 
 BOOL
