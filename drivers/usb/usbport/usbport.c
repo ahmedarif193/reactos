@@ -724,9 +724,6 @@ USBPORT_GetSetConfigSpaceData(IN PDEVICE_OBJECT FdoDevice,
 
     if (IsReadData)
     {
-        if (!FdoExtension->BusInterface.GetBusData)
-            return STATUS_NOT_SUPPORTED;
-
         RtlZeroMemory(Buffer, Length);
 
         BytesReadWrite = (*FdoExtension->BusInterface.GetBusData)
@@ -738,9 +735,6 @@ USBPORT_GetSetConfigSpaceData(IN PDEVICE_OBJECT FdoDevice,
     }
     else
     {
-        if (!FdoExtension->BusInterface.SetBusData)
-            return STATUS_NOT_SUPPORTED;
-
         BytesReadWrite = (*FdoExtension->BusInterface.SetBusData)
                           (FdoExtension->BusInterface.Context,
                            PCI_WHICHSPACE_CONFIG,
