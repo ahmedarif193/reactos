@@ -172,8 +172,12 @@ ThemeInitDrawContext(PDRAW_CONTEXT pcontext,
     if (hRgn <= (HRGN)1)
     {
         hRgn = CreateRectRgnIndirect(&pcontext->wi.rcWindow);
+        pcontext->hRgn = hRgn;
     }
-    pcontext->hRgn = hRgn;
+    else
+    {
+        pcontext->hRgn = NULL;
+    }
 
     pcontext->hDC = GetDCEx(hWnd, hRgn, DCX_WINDOW | DCX_INTERSECTRGN | DCX_USESTYLE | DCX_KEEPCLIPRGN);
 }
