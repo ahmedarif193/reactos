@@ -237,6 +237,10 @@ KiSwapContextResume(
     /* Old thread is no longer busy */
 #if (NTDDI_VERSION < NTDDI_WIN7)
     OldThread->SwapBusy = FALSE;
+#else
+    NewThread->Running = TRUE;
+    KeMemoryBarrier();
+    OldThread->Running = FALSE;
 #endif
 
     /* Kernel APCs may be pending */
