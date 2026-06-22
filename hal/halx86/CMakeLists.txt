@@ -71,7 +71,7 @@ if(ARCH STREQUAL "i386")
 elseif(ARCH STREQUAL "amd64")
     include(pcidata.cmake)
 
-    add_hal(hal SOURCES ${HAL_SOURCE} COMPONENTS generic acpi up apic)
+    add_hal(hal SOURCES ${HAL_SOURCE} COMPONENTS generic acpi smp apic)
     add_hal(halmp SOURCES ${HAL_SOURCE} COMPONENTS generic acpi smp apic)
 
 endif()
