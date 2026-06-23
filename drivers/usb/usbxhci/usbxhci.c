@@ -6098,9 +6098,6 @@ XHCI_HandleCommandCompletion(
     {
         CommandContext->CompletionCode = CompletionCode;
         CommandContext->SlotId = SlotId;
-        CommandContext->Completed = TRUE;
-        if (CommandContext->CompletionEvent)
-            KeSetEvent(CommandContext->CompletionEvent, IO_NO_INCREMENT, FALSE);
     }
 
     if (CommandContext &&
@@ -6292,6 +6289,14 @@ XHCI_HandleCommandCompletion(
                     SlotId, CompletionCode);
             Slot->DisablePending = FALSE;
         }
+    }
+
+    if (CommandContext)
+    {
+        KeMemoryBarrier();
+        CommandContext->Completed = TRUE;
+        if (CommandContext->CompletionEvent)
+            KeSetEvent(CommandContext->CompletionEvent, IO_NO_INCREMENT, FALSE);
     }
 }
 
@@ -9931,6 +9936,7 @@ XHCI_WaitForCommandCompletion(
     }
 
 CheckCompletion:
+    KeMemoryBarrier();
     if (SlotIdOut)
         *SlotIdOut = CommandContext->SlotId;
     if (CompletionCodeOut)
