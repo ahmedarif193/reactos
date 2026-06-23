@@ -183,6 +183,7 @@ elseif(ARCH STREQUAL "amd64")
     add_compile_options(-Wno-error)
 elseif(ARCH STREQUAL "arm64")
     add_compile_options(-fno-optimize-sibling-calls -fno-omit-frame-pointer)
+    add_compile_options("$<$<NOT:$<COMPILE_LANGUAGE:ASM>>:-ffixed-x18>")
     add_compile_options("$<$<NOT:$<COMPILE_LANGUAGE:ASM>>:-fno-builtin-memcpy;-fno-builtin-memmove;-fno-builtin-memset>")
 endif()
 

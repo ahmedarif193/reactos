@@ -622,6 +622,7 @@ KiInitializePcr(_In_ ULONG ProcessorNumber,
          * currently running CPU.
          */
         __asm__ __volatile__("msr tpidr_el1, %0" : : "r"(Pcr) : "memory");
+        __asm__ __volatile__("mov x18, %0" : : "r"(Pcr) : "memory");
         __asm__ __volatile__("isb" ::: "memory");
 
         /*
