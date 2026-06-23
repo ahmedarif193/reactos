@@ -1,0 +1,11 @@
+100 stub GetBehaviorValue
+101 stub D3D12CreateDevice
+102 stub D3D12GetDebugInterface
+@ stub D3D12CoreCreateLayeredDevice
+@ stub D3D12CoreGetLayeredDeviceSize
+@ stub D3D12CoreRegisterLayers
+@ stub D3D12CreateRootSignatureDeserializer
+@ stub D3D12CreateVersionedRootSignatureDeserializer
+@ stub D3D12EnableExperimentalFeatures
+@ stub D3D12SerializeRootSignature
+@ stub D3D12SerializeVersionedRootSignature

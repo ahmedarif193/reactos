@@ -1,0 +1,16 @@
+@ stub CompileEffectDescription
+@ stub CreateEffectDescription
+@ stub DCompositionAttachMouseDragToHwnd
+@ stub DCompositionAttachMouseWheelToHwnd
+@ stub DCompositionCreateDevice2
+@ stub DCompositionCreateDevice3
+@ stub DCompositionCreateDevice
+@ stub DCompositionCreateSurfaceHandle
+@ stub DeserializeEffectDescription
+@ stub DllCanUnloadNow
+@ stub DllGetActivationFactory
+@ stub DllGetClassObject
+@ stub DwmEnableMMCSS
+@ stub DwmFlush
+@ stub DwmpEnableDDASupport
+@ stub SerializeEffectDescription

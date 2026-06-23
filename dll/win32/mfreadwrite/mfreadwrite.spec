@@ -1,0 +1,9 @@
+@ stub DllCanUnloadNow
+@ stub DllGetClassObject
+@ stub DllRegisterServer
+@ stub DllUnregisterServer
+@ stub MFCreateSinkWriterFromMediaSink
+@ stub MFCreateSinkWriterFromURL
+@ stub MFCreateSourceReaderFromByteStream
+@ stub MFCreateSourceReaderFromMediaSource
+@ stub MFCreateSourceReaderFromURL
