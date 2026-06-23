@@ -12,8 +12,6 @@ extern KIRQL KeArm64CurrentIrql;
 
 BOOLEAN KiHalInitialized = FALSE;
 
-#define ARM64_DAIF_IRQ_MASK 0x80ULL
-
 #undef KeLowerIrql
 #undef KeRaiseIrql
 #undef KeGetCurrentIrql
@@ -22,62 +20,34 @@ FORCEINLINE
 KIRQL
 KiQueryCurrentIrql(VOID)
 {
-    KIRQL Irql;
-    ULONG64 Daif;
+    ULONG_PTR Pcr = (ULONG_PTR)KeGetPcr();
+    ULONG Irql;
 
-    __asm__ __volatile__("mrs %0, daif\n\tmsr daifset, #3" : "=r"(Daif) :: "memory");
+    if (Pcr != 0)
     {
-        PKIPCR Pcr = KeGetPcr();
-        Irql = (Pcr != NULL) ? Pcr->CurrentIrql : KeArm64CurrentIrql;
+        __asm__ __volatile__("ldrb %w0, [x18, #" ARM64_KPCR_STRINGIFY(ARM64_KPCR_CURRENT_IRQL) "]"
+                             : "=r"(Irql) :: "memory");
+        return (KIRQL)Irql;
     }
-    __asm__ __volatile__("msr daif, %0" :: "r"(Daif) : "memory");
 
-    return Irql;
+    return KeArm64CurrentIrql;
 }
 
 VOID
 KiSetCurrentIrql(
     _In_ KIRQL Irql)
 {
-    PKIPCR Pcr = KeGetPcr();
-    if (Pcr != NULL)
+    ULONG_PTR Pcr = (ULONG_PTR)KeGetPcr();
+    ULONG Value = Irql;
+
+    if (Pcr != 0)
     {
-        Pcr->CurrentIrql = Irql;
+        __asm__ __volatile__("strb %w0, [x18, #" ARM64_KPCR_STRINGIFY(ARM64_KPCR_CURRENT_IRQL) "]"
+                             :: "r"(Value) : "memory");
         return;
     }
 
     KeArm64CurrentIrql = Irql;
-}
-
-static
-VOID
-KiRestoreInterruptFlag(
-    _In_ ULONG64 Daif)
-{
-    if (!(Daif & ARM64_DAIF_IRQ_MASK))
-    {
-        __asm__ __volatile__("msr daifclr, #2" ::: "memory");
-    }
-}
-
-static
-VOID
-KiSetCurrentIrqlAndGicMask(
-    _In_ KIRQL Irql)
-{
-    ULONG64 Daif;
-
-    __asm__ __volatile__("mrs %0, daif" : "=r"(Daif));
-    __asm__ __volatile__("msr daifset, #2" ::: "memory");
-
-    KiSetCurrentIrql(Irql);
-
-    if (KiHalInitialized)
-    {
-        HalSetGicPriorityMask(Irql);
-    }
-
-    KiRestoreInterruptFlag(Daif);
 }
 
 VOID
@@ -85,24 +55,29 @@ NTAPI
 KiRestoreTrapFrameIrql(
     _In_ KIRQL Irql)
 {
-    KiSetCurrentIrqlAndGicMask(Irql);
+    KiSetCurrentIrql(Irql);
+
+    if (KiHalInitialized)
+    {
+        HalSetGicPriorityMask(Irql);
+    }
 }
 
 ULONG
 NTAPI
 KeGetCurrentProcessorNumber(VOID)
 {
+    ULONG_PTR Pcr = (ULONG_PTR)KeGetPcr();
     ULONG Number;
-    ULONG64 Daif;
 
-    __asm__ __volatile__("mrs %0, daif\n\tmsr daifset, #3" : "=r"(Daif) :: "memory");
+    if (Pcr != 0)
     {
-        PKPRCB Prcb = KeGetCurrentPrcb();
-        Number = Prcb ? Prcb->Number : 0;
+        __asm__ __volatile__("ldr %w0, [x18, #" ARM64_KPCR_STRINGIFY(ARM64_KPCR_PRCB_NUMBER) "]"
+                             : "=r"(Number) :: "memory");
+        return Number;
     }
-    __asm__ __volatile__("msr daif, %0" :: "r"(Daif) : "memory");
 
-    return Number;
+    return 0;
 }
 
 ULONG
@@ -110,15 +85,18 @@ NTAPI
 KeGetCurrentProcessorNumberEx(
     _Out_opt_ PPROCESSOR_NUMBER ProcNumber)
 {
+    ULONG_PTR Pcr = (ULONG_PTR)KeGetPcr();
     ULONG Processor;
-    ULONG64 Daif;
 
-    __asm__ __volatile__("mrs %0, daif\n\tmsr daifset, #3" : "=r"(Daif) :: "memory");
+    if (Pcr != 0)
     {
-        PKPRCB Prcb = KeGetCurrentPrcb();
-        Processor = Prcb ? Prcb->Number : 0;
+        __asm__ __volatile__("ldr %w0, [x18, #" ARM64_KPCR_STRINGIFY(ARM64_KPCR_PRCB_NUMBER) "]"
+                             : "=r"(Processor) :: "memory");
     }
-    __asm__ __volatile__("msr daif, %0" :: "r"(Daif) : "memory");
+    else
+    {
+        Processor = 0;
+    }
 
     if (ProcNumber)
     {
@@ -142,33 +120,19 @@ FASTCALL
 KfRaiseIrql(
     _In_ KIRQL NewIrql)
 {
-    KIRQL OldIrql;
-    ULONG64 Daif;
-
-    __asm__ __volatile__("mrs %0, daif\n\tmsr daifset, #3" : "=r"(Daif) :: "memory");
-
-    OldIrql = KiQueryCurrentIrql();
+    KIRQL OldIrql = KiQueryCurrentIrql();
 
     if (NewIrql > HIGH_LEVEL)
     {
-        __asm__ __volatile__("msr daif, %0" :: "r"(Daif) : "memory");
         KeBugCheckEx(IRQL_NOT_GREATER_OR_EQUAL, NewIrql, OldIrql, 0, 0);
     }
 
     if (NewIrql <= OldIrql)
     {
-        __asm__ __volatile__("msr daif, %0" :: "r"(Daif) : "memory");
         return OldIrql;
     }
 
     KiSetCurrentIrql(NewIrql);
-
-    if (KiHalInitialized)
-    {
-        HalRaiseGicPriorityMask(NewIrql);
-    }
-
-    __asm__ __volatile__("msr daif, %0" :: "r"(Daif) : "memory");
 
     return OldIrql;
 }
@@ -178,17 +142,10 @@ FASTCALL
 KfLowerIrql(
     _In_ KIRQL NewIrql)
 {
-    KIRQL OldIrql;
-    ULONG64 Daif;
-    BOOLEAN DeliverApc = FALSE;
-
-    __asm__ __volatile__("mrs %0, daif\n\tmsr daifset, #3" : "=r"(Daif) :: "memory");
-
-    OldIrql = KiQueryCurrentIrql();
+    KIRQL OldIrql = KiQueryCurrentIrql();
 
     if (NewIrql > OldIrql)
     {
-        __asm__ __volatile__("msr daif, %0" :: "r"(Daif) : "memory");
         KeBugCheckEx(IRQL_NOT_GREATER_OR_EQUAL,
                      NewIrql,
                      OldIrql,
@@ -198,47 +155,41 @@ KfLowerIrql(
 
     if (NewIrql == OldIrql)
     {
-        __asm__ __volatile__("msr daif, %0" :: "r"(Daif) : "memory");
         return;
     }
 
-    if ((OldIrql >= APC_LEVEL) && (NewIrql < APC_LEVEL) &&
-        !(Daif & ARM64_DAIF_IRQ_MASK))
-    {
-        PKTHREAD Thread = KeGetCurrentThread();
-        if ((Thread != NULL) &&
-            (Thread->ApcState.KernelApcPending) &&
-            !(Thread->SpecialApcDisable))
-        {
-            DeliverApc = TRUE;
-        }
-    }
-
-    if (DeliverApc)
-    {
-        if (OldIrql != APC_LEVEL)
-        {
-            KiSetCurrentIrql(APC_LEVEL);
-            if (KiHalInitialized)
-            {
-                HalSetGicPriorityMask(APC_LEVEL);
-            }
-        }
-
-        __asm__ __volatile__("msr daif, %0" :: "r"(Daif) : "memory");
-
-        KiDeliverApc(KernelMode, NULL, NULL);
-
-        __asm__ __volatile__("mrs %0, daif\n\tmsr daifset, #3" : "=r"(Daif) :: "memory");
-    }
-
     KiSetCurrentIrql(NewIrql);
+
     if (KiHalInitialized)
     {
         HalSetGicPriorityMask(NewIrql);
     }
 
-    __asm__ __volatile__("msr daif, %0" :: "r"(Daif) : "memory");
+    if ((OldIrql >= APC_LEVEL) && (NewIrql < APC_LEVEL))
+    {
+        ULONG64 Daif;
+        PKTHREAD Thread;
+
+        __asm__ __volatile__("mrs %0, daif" : "=r"(Daif));
+        if (!(Daif & 0x80))
+        {
+            Thread = KeGetCurrentThread();
+            if ((Thread != NULL) &&
+                (Thread->ApcState.KernelApcPending) &&
+                !(Thread->SpecialApcDisable))
+            {
+                KiSetCurrentIrql(APC_LEVEL);
+                if (KiHalInitialized)
+                    HalSetGicPriorityMask(APC_LEVEL);
+
+                KiDeliverApc(KernelMode, NULL, NULL);
+
+                KiSetCurrentIrql(NewIrql);
+                if (KiHalInitialized)
+                    HalSetGicPriorityMask(NewIrql);
+            }
+        }
+    }
 }
 
 NTKERNELAPI
