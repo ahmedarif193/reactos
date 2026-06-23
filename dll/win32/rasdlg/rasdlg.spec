@@ -4,14 +4,14 @@
 @ stub RasAutodialDisableDlgW
 @ stub RasAutodialQueryDlgA
 @ stub RasAutodialQueryDlgW
-@ stdcall RasDialDlgA(str str str ptr)
-@ stdcall RasDialDlgW(wstr wstr wstr ptr)
-@ stdcall RasEntryDlgA(str str ptr)
+@ stub RasDialDlgA
+@ stub RasDialDlgW
+@ stub RasEntryDlgA
 @ stdcall RasEntryDlgW(wstr wstr ptr)
-@ stdcall RasMonitorDlgA(str ptr)
-@ stdcall RasMonitorDlgW(wstr ptr)
-@ stdcall RasPhonebookDlgA(str str ptr)
-@ stdcall RasPhonebookDlgW(wstr wstr ptr)
+@ stub RasMonitorDlgA
+@ stub RasMonitorDlgW
+@ stub RasPhonebookDlgA
+@ stub RasPhonebookDlgW
 @ stub RasSrvAddPropPages
 @ stub RasSrvAddWizPages
 @ stub RasSrvAllowConnectionsConfig
