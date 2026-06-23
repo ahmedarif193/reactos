@@ -1333,4 +1333,11 @@ TlsSetValue(IN DWORD Index,
     return TRUE;
 }
 
+BOOL
+WINAPI
+SetThreadInformation(HANDLE hThread, INT ThreadInformationClass, PVOID ThreadInformation, DWORD ThreadInformationSize)
+{
+    return TRUE;
+}
+
 /* EOF */

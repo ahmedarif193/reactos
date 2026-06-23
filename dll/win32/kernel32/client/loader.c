@@ -1146,4 +1146,11 @@ BaseProcessInitPostImport(VOID)
     return STATUS_SUCCESS;
 }
 
+BOOL
+WINAPI
+SetDefaultDllDirectories(DWORD DirectoryFlags)
+{
+    return TRUE;
+}
+
 /* EOF */

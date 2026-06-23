@@ -162,3 +162,13 @@ GetUserSidStringFromToken(HANDLE hToken,
 
     return TRUE;
 }
+
+
+HRESULT
+WINAPI
+DeriveAppContainerSidFromAppContainerName(PCWSTR pszAppContainerName, PSID *ppsidAppContainerSid)
+{
+    if (ppsidAppContainerSid)
+        *ppsidAppContainerSid = NULL;
+    return E_NOTIMPL;
+}

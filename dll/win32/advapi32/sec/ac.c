@@ -756,4 +756,18 @@ GetAuditedPermissionsFromAclA(IN PACL pacl,
     return ErrorCode;
 }
 
+BOOL
+WINAPI
+AddConditionalAce(PACL pAcl, DWORD dwAceRevision, DWORD AceFlags, DWORD AceType, DWORD AccessMask, PSID pSid, PWSTR ConditionStr, LPDWORD ReturnLength)
+{
+    return TRUE;
+}
+
+BOOL
+WINAPI
+AddMandatoryAce(PACL pAcl, DWORD dwAceRevision, DWORD AceFlags, DWORD MandatoryPolicy, PSID pLabelSid)
+{
+    return TRUE;
+}
+
 /* EOF */

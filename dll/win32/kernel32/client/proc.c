@@ -4488,4 +4488,18 @@ CreateProcessW(LPCWSTR lpApplicationName,
                                   NULL);
 }
 
+BOOL
+WINAPI
+GetProcessMitigationPolicy(HANDLE hProcess, INT MitigationPolicy, PVOID lpBuffer, SIZE_T dwLength)
+{
+    return TRUE;
+}
+
+BOOL
+WINAPI
+SetProcessMitigationPolicy(INT MitigationPolicy, PVOID lpBuffer, SIZE_T dwLength)
+{
+    return TRUE;
+}
+
 /* EOF */

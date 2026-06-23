@@ -924,4 +924,35 @@ UnregisterWaitEx(IN HANDLE WaitHandle,
     return TRUE;
 }
 
+NTSYSAPI
+NTSTATUS
+NTAPI
+RtlWaitOnAddress(volatile VOID *Address, PVOID CompareAddress, SIZE_T AddressSize, PLARGE_INTEGER Timeout);
+
+BOOL
+WINAPI
+WaitOnAddress(volatile VOID *Address, PVOID CompareAddress, SIZE_T AddressSize, DWORD dwMilliseconds)
+{
+    LARGE_INTEGER Timeout;
+    NTSTATUS Status;
+
+    if (dwMilliseconds == INFINITE)
+    {
+        Status = RtlWaitOnAddress(Address, CompareAddress, AddressSize, NULL);
+    }
+    else
+    {
+        Timeout.QuadPart = -(LONGLONG)dwMilliseconds * 10000LL;
+        Status = RtlWaitOnAddress(Address, CompareAddress, AddressSize, &Timeout);
+    }
+
+    if (!NT_SUCCESS(Status))
+    {
+        BaseSetLastNTError(Status);
+        return FALSE;
+    }
+
+    return TRUE;
+}
+
 /* EOF */

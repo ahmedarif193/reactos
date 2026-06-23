@@ -305,6 +305,7 @@
 305 stdcall SHGetFolderPathAndSubDirA(long long long long str ptr)
 306 stdcall SHGetFolderPathAndSubDirW(long long long long wstr ptr)
 307 stdcall SHGetFolderPathW(long long long long ptr)
+@ stdcall SHGetKnownFolderPath(ptr long ptr ptr)
 308 stdcall SHGetIconOverlayIndexA(str long)
 309 stdcall SHGetIconOverlayIndexW(wstr long)
 @ stdcall -version=0x600+ SHGetIDListFromObject(ptr ptr)

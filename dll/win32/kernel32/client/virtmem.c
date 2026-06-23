@@ -416,4 +416,11 @@ MapUserPhysicalPagesScatter(IN PVOID *VirtualAddresses,
     return TRUE;
 }
 
+BOOL
+WINAPI
+PrefetchVirtualMemory(HANDLE hProcess, ULONG_PTR NumberOfEntries, PVOID VirtualAddresses, ULONG Flags)
+{
+    return TRUE;
+}
+
 /* EOF */
