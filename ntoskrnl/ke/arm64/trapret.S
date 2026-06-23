@@ -101,7 +101,7 @@ KiTrapReturn:
     ldr     x16, [x20, #TfX16]
     b       3f
 1:
-    /* EL1 return path - falls through to common path */
+    mrs     x18, tpidr_el1
 3:
     /*
      * Restore KTHREAD.PreviousMode for ARM64 kernel Zw calls.  The SVC handler

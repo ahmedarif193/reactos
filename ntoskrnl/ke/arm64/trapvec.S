@@ -259,6 +259,8 @@ KiArm64SyncVectorCommon:
     str x17, [sp, #(ARM64_EARLY_STATE_REGS + 17 * 8)]
     str x18, [sp, #(ARM64_EARLY_STATE_REGS + 18 * 8)]
 
+    mrs x18, tpidr_el1
+
     /* Save x19-x27 (callee-saved, original - these were NOT touched by caller) */
     str x19, [sp, #(ARM64_EARLY_STATE_REGS + 19 * 8)]
     str x20, [sp, #(ARM64_EARLY_STATE_REGS + 20 * 8)]
@@ -667,6 +669,7 @@ KiArm64PermVectorIrqSp0_Handler:
     msr spsr_el1, x21
     ldp x20, x21, [sp, #0xA0]
     add sp, sp, #ARM64_IRQ_FRAME_SIZE
+    mrs x18, tpidr_el1
     dsb sy
     isb
     eret
@@ -724,6 +727,7 @@ KiArm64PermVectorFiqSp0_Handler:
     msr spsr_el1, x21
     ldp x20, x21, [sp, #0xA0]
     add sp, sp, #ARM64_IRQ_FRAME_SIZE
+    mrs x18, tpidr_el1
     dsb sy
     isb
     eret
@@ -781,6 +785,7 @@ KiArm64PermVectorIrqSpx_Handler:
     msr spsr_el1, x21
     ldp x20, x21, [sp, #0xA0]
     add sp, sp, #ARM64_IRQ_FRAME_SIZE
+    mrs x18, tpidr_el1
     dsb sy
     isb
     eret
@@ -838,6 +843,7 @@ KiArm64PermVectorFiqSpx_Handler:
     msr spsr_el1, x21
     ldp x20, x21, [sp, #0xA0]
     add sp, sp, #ARM64_IRQ_FRAME_SIZE
+    mrs x18, tpidr_el1
     dsb sy
     isb
     eret
@@ -884,6 +890,7 @@ KiArm64PermVectorIrqLowerA64_Handler:
     stp x18, x19, [sp, #0x90]
     mrs x9, sp_el0
     str x9, [sp, #0xD0]           /* Save user SP_EL0 after preserving x9 */
+    mrs x18, tpidr_el1
     ARM64_SAVE_NEON sp, ARM64_IRQ_NEON
     ARM64_SAVE_FP_CONTROL ARM64_IRQ_FPCR, ARM64_IRQ_FPSR
 
@@ -946,6 +953,7 @@ KiArm64PermVectorFiqLowerA64_Handler:
     stp x18, x19, [sp, #0x90]
     mrs x9, sp_el0
     str x9, [sp, #0xD0]           /* Save user SP_EL0 after preserving x9 */
+    mrs x18, tpidr_el1
     ARM64_SAVE_NEON sp, ARM64_IRQ_NEON
     ARM64_SAVE_FP_CONTROL ARM64_IRQ_FPCR, ARM64_IRQ_FPSR
 
@@ -1008,6 +1016,7 @@ KiArm64PermVectorIrqLowerA32_Handler:
     stp x18, x19, [sp, #0x90]
     mrs x9, sp_el0
     str x9, [sp, #0xD0]           /* Save user SP_EL0 after preserving x9 */
+    mrs x18, tpidr_el1
     ARM64_SAVE_NEON sp, ARM64_IRQ_NEON
     ARM64_SAVE_FP_CONTROL ARM64_IRQ_FPCR, ARM64_IRQ_FPSR
     dsb sy
@@ -1069,6 +1078,7 @@ KiArm64PermVectorFiqLowerA32_Handler:
     stp x18, x19, [sp, #0x90]
     mrs x9, sp_el0
     str x9, [sp, #0xD0]           /* Save user SP_EL0 after preserving x9 */
+    mrs x18, tpidr_el1
     ARM64_SAVE_NEON sp, ARM64_IRQ_NEON
     ARM64_SAVE_FP_CONTROL ARM64_IRQ_FPCR, ARM64_IRQ_FPSR
     dsb sy
