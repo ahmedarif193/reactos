@@ -396,11 +396,6 @@ HalSetGicPriorityMask(
     _In_ KIRQL Irql);
 
 VOID
-FASTCALL
-HalRaiseGicPriorityMask(
-    _In_ KIRQL Irql);
-
-VOID
 KiSetCurrentIrql(
     _In_ KIRQL Irql);
 

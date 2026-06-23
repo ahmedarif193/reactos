@@ -2654,11 +2654,7 @@ HalpArm64DeferInterrupt(
         }
     }
 
-    DPRINT1("Deferred interrupt table overflow on CPU %lu for INTID %lu at IRQL %u\n",
-            Cpu,
-            IntId,
-            Irql);
-    ASSERT(FALSE);
+    HalpGicDisableInterrupt(IntId);
 }
 
 static
@@ -5417,19 +5413,6 @@ HalSetGicPriorityMask(
         {
             return;
         }
-    }
-
-    HalpArm64SetPmrExact(Irql);
-}
-
-VOID
-FASTCALL
-HalRaiseGicPriorityMask(
-    _In_ KIRQL Irql)
-{
-    if (Irql > HIGH_LEVEL)
-    {
-        Irql = HIGH_LEVEL;
     }
 
     HalpArm64SetPmrExact(Irql);

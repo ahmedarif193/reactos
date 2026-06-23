@@ -11,8 +11,6 @@ extern KIRQL KeArm64CurrentIrql;
 
 BOOLEAN KiHalInitialized = FALSE;
 
-#define ARM64_DAIF_IRQ_MASK 0x80ULL
-
 #undef KeLowerIrql
 #undef KeRaiseIrql
 #undef KeGetCurrentIrql
@@ -42,37 +40,6 @@ KiSetCurrentIrql(
     }
 
     KeArm64CurrentIrql = Irql;
-}
-
-static
-VOID
-KiRestoreInterruptFlag(
-    _In_ ULONG64 Daif)
-{
-    if (!(Daif & ARM64_DAIF_IRQ_MASK))
-    {
-        __asm__ __volatile__("msr daifclr, #2" ::: "memory");
-    }
-}
-
-static
-VOID
-KiSetCurrentIrqlAndGicMask(
-    _In_ KIRQL Irql)
-{
-    ULONG64 Daif;
-
-    __asm__ __volatile__("mrs %0, daif" : "=r"(Daif));
-    __asm__ __volatile__("msr daifset, #2" ::: "memory");
-
-    KiSetCurrentIrql(Irql);
-
-    if (KiHalInitialized)
-    {
-        HalSetGicPriorityMask(Irql);
-    }
-
-    KiRestoreInterruptFlag(Daif);
 }
 
 ULONG
@@ -114,7 +81,6 @@ KfRaiseIrql(
     _In_ KIRQL NewIrql)
 {
     KIRQL OldIrql = KiQueryCurrentIrql();
-    ULONG64 Daif;
 
     if (NewIrql > HIGH_LEVEL)
     {
@@ -126,17 +92,7 @@ KfRaiseIrql(
         return OldIrql;
     }
 
-    __asm__ __volatile__("mrs %0, daif" : "=r"(Daif));
-    __asm__ __volatile__("msr daifset, #2" ::: "memory");
-
     KiSetCurrentIrql(NewIrql);
-
-    if (KiHalInitialized)
-    {
-        HalRaiseGicPriorityMask(NewIrql);
-    }
-
-    KiRestoreInterruptFlag(Daif);
 
     return OldIrql;
 }
@@ -147,7 +103,6 @@ KfLowerIrql(
     _In_ KIRQL NewIrql)
 {
     KIRQL OldIrql = KiQueryCurrentIrql();
-    BOOLEAN DeliverApc = FALSE;
 
     if (NewIrql > OldIrql)
     {
@@ -163,35 +118,38 @@ KfLowerIrql(
         return;
     }
 
+    KiSetCurrentIrql(NewIrql);
+
+    if (KiHalInitialized)
+    {
+        HalSetGicPriorityMask(NewIrql);
+    }
+
     if ((OldIrql >= APC_LEVEL) && (NewIrql < APC_LEVEL))
     {
         ULONG64 Daif;
         PKTHREAD Thread;
 
         __asm__ __volatile__("mrs %0, daif" : "=r"(Daif));
-        if (!(Daif & ARM64_DAIF_IRQ_MASK))
+        if (!(Daif & 0x80))
         {
             Thread = KeGetCurrentThread();
             if ((Thread != NULL) &&
                 (Thread->ApcState.KernelApcPending) &&
                 !(Thread->SpecialApcDisable))
             {
-                DeliverApc = TRUE;
+                KiSetCurrentIrql(APC_LEVEL);
+                if (KiHalInitialized)
+                    HalSetGicPriorityMask(APC_LEVEL);
+
+                KiDeliverApc(KernelMode, NULL, NULL);
+
+                KiSetCurrentIrql(NewIrql);
+                if (KiHalInitialized)
+                    HalSetGicPriorityMask(NewIrql);
             }
         }
     }
-
-    if (DeliverApc)
-    {
-        if (OldIrql != APC_LEVEL)
-        {
-            KiSetCurrentIrqlAndGicMask(APC_LEVEL);
-        }
-
-        KiDeliverApc(KernelMode, NULL, NULL);
-    }
-
-    KiSetCurrentIrqlAndGicMask(NewIrql);
 }
 
 NTKERNELAPI
