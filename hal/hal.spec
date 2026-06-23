@@ -173,7 +173,6 @@
 @ fastcall -arch=arm64 HalSweepIcache()
 @ fastcall -arch=arm64 HalSweepDcache()
 @ fastcall -arch=arm64 HalSetGicPriorityMask(long)
-@ fastcall -arch=arm64 HalRaiseGicPriorityMask(long)
 @ fastcall -arch=arm64 HalGetGicPriorityMask()
 @ fastcall -arch=arm64 HalGetInterruptSource()
 @ stdcall -arch=arm64 HalPerformEndOfInterrupt()

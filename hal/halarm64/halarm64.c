@@ -2661,11 +2661,11 @@ HalpArm64DeferInterrupt(
         }
     }
 
+    HalpArm64SetPmrExact(KeGetCurrentIrql());
     DPRINT1("Deferred interrupt table overflow on CPU %lu for INTID %lu at IRQL %u\n",
             Cpu,
             IntId,
             Irql);
-    ASSERT(FALSE);
 }
 
 static
@@ -3085,7 +3085,7 @@ HalInitSystem(
     NTSTATUS Status;
     KIRQL OldIrql;
 
-    if (KeGetCurrentPrcb()->Number != 0)
+    if (KeGetCurrentProcessorNumber() != 0)
     {
         return TRUE;
     }
@@ -5487,19 +5487,6 @@ HalSetGicPriorityMask(
         {
             return;
         }
-    }
-
-    HalpArm64SetPmrExact(Irql);
-}
-
-VOID
-FASTCALL
-HalRaiseGicPriorityMask(
-    _In_ KIRQL Irql)
-{
-    if (Irql > HIGH_LEVEL)
-    {
-        Irql = HIGH_LEVEL;
     }
 
     HalpArm64SetPmrExact(Irql);

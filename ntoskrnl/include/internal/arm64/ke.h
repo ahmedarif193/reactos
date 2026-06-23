@@ -465,12 +465,12 @@ HalSetGicPriorityMask(
     _In_ KIRQL Irql);
 
 VOID
-FASTCALL
-HalRaiseGicPriorityMask(
+KiSetCurrentIrql(
     _In_ KIRQL Irql);
 
 VOID
-KiSetCurrentIrql(
+NTAPI
+KiRestoreTrapFrameIrql(
     _In_ KIRQL Irql);
 
 VOID

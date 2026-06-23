@@ -872,6 +872,8 @@ C_ASSERT(FIELD_OFFSET(KIPCR, KvaUserModeTtbr1) == 0x0F8);
 C_ASSERT(FIELD_OFFSET(KIPCR, Idt) == 0x100);
 C_ASSERT(FIELD_OFFSET(KIPCR, IdtExt) == 0x900);
 C_ASSERT(FIELD_OFFSET(KIPCR, Prcb) == 0x980);
+C_ASSERT(FIELD_OFFSET(KIPCR, Prcb.CurrentThread) == 0x988);
+C_ASSERT(FIELD_OFFSET(KIPCR, Prcb.Number) == 0x9A4);
 C_ASSERT(sizeof(KIPCR) == 0xA880);
 C_ASSERT(sizeof(KPRCB) == 0x9F00);
 C_ASSERT(sizeof(KPROCESSOR_STATE) == 0x6D0);
@@ -951,39 +953,51 @@ C_ASSERT(FIELD_OFFSET(DISPATCHER_HEADER, WaitListHead) == 0x08);
 C_ASSERT(sizeof(KQUEUE) == 0x40);
 #endif // !__ASSEMBLER__
 
+#define ARM64_KPCR_CURRENT_IRQL 0x038
+#define ARM64_KPCR_PRCB 0x980
+#define ARM64_KPCR_PRCB_CURRENT_THREAD 0x988
+#define ARM64_KPCR_PRCB_NUMBER 0x9A4
+#define ARM64_KPCR_STRINGIFY2(_x) #_x
+#define ARM64_KPCR_STRINGIFY(_x) ARM64_KPCR_STRINGIFY2(_x)
+
 extern NTKERNELAPI PKIPCR KeArm64CurrentPcr;
 extern NTKERNELAPI PKTHREAD KeArm64CurrentThread;
 extern NTKERNELAPI KIRQL KeArm64CurrentIrql;
 extern NTKERNELAPI BOOLEAN KeArm64DpcRoutineActive;
 
 /*
- * ARM64: Use TPIDR_EL1 for per-CPU PCR access (ARM64 ABI convention).
+ * ARM64: Use x18 for per-CPU PCR access (ARM64 Windows ABI convention).
  *
- * TPIDR_EL1 is the ARM64 standard system register for kernel per-CPU data.
- * Each CPU has its own TPIDR_EL1 value, making it SMP-safe.
+ * TPIDR_EL1 remains the architectural backing store, but compiled C code must
+ * read the current PCR through fixed x18.  Loading TPIDR_EL1 into a scratch
+ * register and then dereferencing it reopens the IRQ migration window.
  *
- * Early boot fallback: Before TPIDR_EL1 is initialized, KeGetPcr() may read
+ * Early boot fallback: Before x18 is initialized, KeGetPcr() may read
  * NULL. Kernel builds fall back to KeArm64CurrentPcr in that case.
  * _NTOSKRNL_EARLY_INIT_ can still be used to force the fallback path.
  */
 #if defined(_M_ARM64) && !defined(_NTOSKRNL_EARLY_INIT_)
-/* Runtime path: Read PCR from TPIDR_EL1 (per-CPU, SMP-safe) */
-static __inline PKIPCR KeGetPcr(VOID)
+register PKIPCR KeArm64PcrRegister __asm__("x18");
+
+/* Runtime path: read PCR from fixed x18. */
+FORCEINLINE
+PKIPCR
+KeGetPcr(VOID)
 {
-    PKIPCR Pcr;
-    __asm__ __volatile__("mrs %0, tpidr_el1" : "=r"(Pcr));
-    return Pcr;
+    return KeArm64PcrRegister;
 }
 #else
-/* Early boot path: Use global variable (before TPIDR_EL1 init) */
+/* Early boot path: Use global variable (before x18/TPIDR_EL1 init) */
 #define KeGetPcr() (KeArm64CurrentPcr)
 #endif
 
 /*
  * ARM64: KeGetCurrentPrcb must cache KeGetPcr() result to avoid calling it 4 times.
- * Reading TPIDR_EL1 is cheap but we should still avoid redundant system register reads.
+ * Reading x18 is cheap but we should still avoid redundant per-CPU base reads.
  */
-static __inline PKPRCB KeGetCurrentPrcb(VOID)
+FORCEINLINE
+PKPRCB
+KeGetCurrentPrcb(VOID)
 {
     PKIPCR Pcr = KeGetPcr();
     if (Pcr == NULL)
@@ -1016,37 +1030,32 @@ static __inline PKPRCB KeGetCurrentPrcb(VOID)
  * is in a critical section, causing spurious assertion failures and
  * incorrect scheduler behavior.
  *
- * KeGetPcr() reads TPIDR_EL1 (per-CPU system register), giving each
- * CPU its own IRQL. Fallback to the global for very early boot before
- * TPIDR_EL1 is initialized.
+ * x18 carries the current CPU's PCR.  Use a single load from x18 so an IRQ
+ * cannot preempt between materializing the PCR pointer and reading CurrentIrql.
+ * Fallback to the global for very early boot before x18 is initialized.
  */
 #define KeGetCurrentIrql() \
     __extension__ ({ \
-        KIRQL _ci_irql; \
-        ULONG64 _ci_daif; \
-        __asm__ __volatile__("mrs %0, daif\n\tmsr daifset, #3" \
-                             : "=r"(_ci_daif) :: "memory"); \
-        { \
-            PKIPCR _irql_pcr = KeGetPcr(); \
-            _ci_irql = (_irql_pcr != NULL) ? _irql_pcr->CurrentIrql : KeArm64CurrentIrql; \
-        } \
-        __asm__ __volatile__("msr daif, %0" :: "r"(_ci_daif) : "memory"); \
-        _ci_irql; \
+        ULONG_PTR _ci_pcr = (ULONG_PTR)KeGetPcr(); \
+        ULONG _ci_irql; \
+        if (_ci_pcr != 0) \
+            __asm__ __volatile__("ldrb %w0, [x18, #" ARM64_KPCR_STRINGIFY(ARM64_KPCR_CURRENT_IRQL) "]" \
+                                 : "=r"(_ci_irql) :: "memory"); \
+        else \
+            _ci_irql = KeArm64CurrentIrql; \
+        (KIRQL)_ci_irql; \
     })
 #endif
 #define _KeGetCurrentThread() \
     __extension__ ({ \
+        ULONG_PTR _ct_pcr = (ULONG_PTR)KeGetPcr(); \
         PKTHREAD _ct_thread; \
-        ULONG64 _ct_daif; \
-        __asm__ __volatile__("mrs %0, daif\n\tmsr daifset, #3" \
-                             : "=r"(_ct_daif) :: "memory"); \
-        { \
-            PKIPCR _ct_pcr = KeGetPcr(); \
-            _ct_thread = (_ct_pcr != NULL) ? _ct_pcr->Prcb.CurrentThread \
-                                           : KeArm64CurrentThread; \
-        } \
-        __asm__ __volatile__("msr daif, %0" :: "r"(_ct_daif) : "memory"); \
-        _ct_thread; \
+        if (_ct_pcr != 0) \
+            __asm__ __volatile__("ldr %0, [x18, #" ARM64_KPCR_STRINGIFY(ARM64_KPCR_PRCB_CURRENT_THREAD) "]" \
+                                 : "=r"(_ct_thread) :: "memory"); \
+        else \
+            _ct_thread = NULL; \
+        (_ct_thread != NULL) ? _ct_thread : KeArm64CurrentThread; \
     })
 #define _KeGetPreviousMode() \
     __extension__ ({ \
