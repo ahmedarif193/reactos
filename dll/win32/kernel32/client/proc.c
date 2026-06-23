@@ -4502,4 +4502,33 @@ SetProcessMitigationPolicy(INT MitigationPolicy, PVOID lpBuffer, SIZE_T dwLength
     return TRUE;
 }
 
+BOOL
+WINAPI
+GetProcessInformation(HANDLE hProcess, INT ProcessInformationClass, PVOID ProcessInformation, DWORD ProcessInformationSize)
+{
+    SetLastError(ERROR_NOT_SUPPORTED);
+    return FALSE;
+}
+
+BOOL
+WINAPI
+SetProcessInformation(HANDLE hProcess, INT ProcessInformationClass, PVOID ProcessInformation, DWORD ProcessInformationSize)
+{
+    return TRUE;
+}
+
+LONG
+WINAPI
+GetPackagePathByFullName(PCWSTR packageFullName, UINT32 *pathLength, PWSTR path)
+{
+    return 15700L;
+}
+
+LONG
+WINAPI
+GetPackagesByPackageFamily(PCWSTR packageFamilyName, UINT32 *count, PWSTR *packageFullNames, UINT32 *bufferLength, PWSTR buffer)
+{
+    return 15700L;
+}
+
 /* EOF */

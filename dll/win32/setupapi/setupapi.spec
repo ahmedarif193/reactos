@@ -689,3 +689,4 @@
 @ stub pSetupWriteLogError
 @ stub -version=0x600 pSpAddInboxDriverPackage # Vista only
 @ stub -version=0x600 pSpDeleteInboxDriverPackage # Vista only
+@ stdcall CM_Get_DevNode_PropertyW(long ptr ptr ptr ptr long)

@@ -3447,3 +3447,34 @@ HRESULT WINAPI SHGetKnownFolderPath(REFKNOWNFOLDERID rfid, DWORD dwFlags, HANDLE
     return S_OK;
 }
 #endif
+
+
+#ifdef __REACTOS__
+HRESULT WINAPI SHCreateItemFromParsingName(PCWSTR pszPath, IBindCtx *pbc, REFIID riid, void **ppv)
+{
+    if (ppv) *ppv = NULL;
+    return E_NOTIMPL;
+}
+
+HRESULT WINAPI SHCreateAssociationRegistration(REFIID riid, void **ppv)
+{
+    if (ppv) *ppv = NULL;
+    return E_NOTIMPL;
+}
+
+HRESULT WINAPI SHGetPropertyStoreForWindow(HWND hwnd, REFIID riid, void **ppv)
+{
+    if (ppv) *ppv = NULL;
+    return E_NOTIMPL;
+}
+
+HRESULT WINAPI SHGetStockIconInfo(int siid, UINT uFlags, void *psii)
+{
+    return E_NOTIMPL;
+}
+
+HRESULT WINAPI SHQueryUserNotificationState(void *state)
+{
+    return E_NOTIMPL;
+}
+#endif

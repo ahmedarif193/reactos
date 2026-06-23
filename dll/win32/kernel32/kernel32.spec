@@ -85,6 +85,7 @@
 @ stdcall CommConfigDialogW(wstr long ptr)
 @ stdcall -stub -version=0x600+ CompareCalendarDates(ptr ptr ptr)
 @ stdcall CompareFileTime(ptr ptr)
+@ stdcall -version=0x600+ CompareObjectHandles(ptr ptr)
 @ stdcall CompareStringA(long long str long str long)
 @ stdcall -version=0x600+ CompareStringEx(wstr long wstr long wstr long ptr ptr ptr)
 @ stdcall -version=0x600+ CompareStringOrdinal(wstr long wstr long long)
@@ -211,6 +212,7 @@
 @ stdcall DeviceIoControl(long long ptr long ptr long ptr ptr)
 @ stdcall DisableThreadLibraryCalls(ptr)
 @ stub -version=0x600+ DisassociateCurrentThreadFromCallback
+@ stdcall -version=0x600+ DiscardVirtualMemory(ptr long)
 @ stdcall DisconnectNamedPipe(long)
 @ stdcall DnsHostnameToComputerNameA(str ptr ptr)
 @ stdcall DnsHostnameToComputerNameW(wstr ptr ptr)
@@ -345,6 +347,7 @@
 @ stdcall FreeUserPhysicalPages(long long long)
 @ stdcall GenerateConsoleCtrlEvent(long long)
 @ stdcall GetACP()
+@ stdcall -version=0x600+ GetActiveProcessorCount(long)
 @ stdcall -version=0x600+ GetApplicationRecoveryCallback(ptr ptr ptr ptr ptr)
 @ stub -version=0x600+ GetApplicationRestartSettings
 @ stdcall GetAtomNameA(long ptr long)
@@ -437,6 +440,7 @@
 @ stdcall GetCurrentProcessorNumber() ntdll.RtlGetCurrentProcessorNumber
 @ stdcall -norelay GetCurrentThread()
 @ stdcall -norelay GetCurrentThreadId()
+@ stdcall -version=0x600+ GetCurrentThreadStackLimits(ptr ptr)
 @ stdcall GetDateFormatA(long long ptr str ptr long)
 @ stdcall -version=0x600+ GetDateFormatEx(wstr long ptr wstr wstr long wstr)
 @ stdcall GetDateFormatW(long long ptr wstr ptr long)
@@ -503,6 +507,13 @@
 @ stdcall GetLocaleInfoA(long long ptr long)
 @ stdcall -version=0x600+ GetLocaleInfoEx(wstr long ptr long)
 @ stdcall GetLocaleInfoW(long long ptr long)
+@ stdcall -version=0x600+ GetLogicalProcessorInformationEx(long ptr ptr)
+@ stdcall -version=0x600+ GetMaximumProcessorCount(long)
+@ stdcall -version=0x600+ GetMaximumProcessorGroupCount()
+@ stdcall -version=0x600+ GetPackagePathByFullName(wstr ptr wstr)
+@ stdcall -version=0x600+ GetPackagesByPackageFamily(wstr ptr ptr ptr ptr)
+@ stdcall -version=0x600+ GetProcessInformation(long long ptr long)
+@ stdcall -version=0x600+ GetThreadGroupAffinity(long ptr)
 @ stdcall -version=0x600+ IsValidLocaleName(wstr)
 @ stdcall GetLogicalDriveStringsA(long ptr)
 @ stdcall GetLogicalDriveStringsW(long ptr)
@@ -886,6 +897,9 @@
 @ stdcall PeekConsoleInputW(ptr ptr long ptr)
 @ stdcall PeekNamedPipe(long ptr long ptr ptr ptr)
 @ stdcall PostQueuedCompletionStatus(long long ptr ptr)
+@ stdcall -version=0x600+ PowerClearRequest(ptr long)
+@ stdcall -version=0x600+ PowerCreateRequest(ptr)
+@ stdcall -version=0x600+ PowerSetRequest(ptr long)
 @ stdcall -version=0x602+ PrefetchVirtualMemory(ptr ptr ptr long)
 @ stdcall PrepareTape(ptr long long)
 @ stdcall PrivCopyFileExW(wstr wstr ptr ptr long long)
@@ -912,6 +926,7 @@
 @ stub -version=0x600+ QueryProcessAffinityUpdateMode
 @ stub -version=0x600+ QueryProcessCycleTime
 @ stub -version=0x600+ QueryThreadCycleTime
+@ stdcall -version=0x600+ QueryUnbiasedInterruptTimePrecise(ptr)
 @ stdcall QueueUserAPC(ptr long long)
 @ stdcall QueueUserWorkItem(ptr ptr long)
 @ stdcall -norelay RaiseException(long long long ptr)
@@ -966,6 +981,7 @@
 @ stdcall RequestWakeupLatency(long)
 @ stdcall ResetEvent(long)
 @ stdcall ResetWriteWatch(ptr long)
+@ stdcall -version=0x600+ ResolveLocaleName(wstr ptr long)
 @ stdcall RestoreLastError(long) ntdll.RtlRestoreLastWin32Error
 @ stdcall ResumeThread(long)
 @ stdcall -arch=x86_64,arm64 RtlAddFunctionTable(ptr long long) ntdll.RtlAddFunctionTable
@@ -1092,6 +1108,7 @@
 @ stdcall SetProcessAffinityMask(long long)
 @ stub -version=0x600+ SetProcessAffinityUpdateMode
 @ stub -version=0x600+ SetProcessDEPPolicy
+@ stdcall -version=0x600+ SetProcessInformation(long long ptr long)
 @ stdcall -version=0x602+ SetProcessMitigationPolicy(long ptr long)
 @ stdcall SetProcessPriorityBoost(long long)
 @ stdcall SetProcessShutdownParameters(long long)

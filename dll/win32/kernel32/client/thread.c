@@ -1340,4 +1340,24 @@ SetThreadInformation(HANDLE hThread, INT ThreadInformationClass, PVOID ThreadInf
     return TRUE;
 }
 
+VOID
+WINAPI
+GetCurrentThreadStackLimits(PULONG_PTR LowLimit, PULONG_PTR HighLimit)
+{
+    PTEB Teb = NtCurrentTeb();
+
+    if (LowLimit)
+        *LowLimit = (ULONG_PTR)Teb->NtTib.StackLimit;
+    if (HighLimit)
+        *HighLimit = (ULONG_PTR)Teb->NtTib.StackBase;
+}
+
+BOOL
+WINAPI
+GetThreadGroupAffinity(HANDLE hThread, PVOID GroupAffinity)
+{
+    SetLastError(ERROR_NOT_SUPPORTED);
+    return FALSE;
+}
+
 /* EOF */

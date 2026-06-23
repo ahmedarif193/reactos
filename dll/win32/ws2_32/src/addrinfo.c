@@ -1083,3 +1083,10 @@ Quickie:
     SetLastError(ErrorCode);
     return ErrorCode;
 }
+
+INT
+WINAPI
+GetAddrInfoExCancel(LPHANDLE lpHandle)
+{
+    return 0;
+}

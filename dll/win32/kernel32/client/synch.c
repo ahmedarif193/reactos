@@ -955,4 +955,38 @@ WaitOnAddress(volatile VOID *Address, PVOID CompareAddress, SIZE_T AddressSize, 
     return TRUE;
 }
 
+BOOL
+WINAPI
+CompareObjectHandles(HANDLE hFirstObjectHandle, HANDLE hSecondObjectHandle)
+{
+    return (hFirstObjectHandle == hSecondObjectHandle);
+}
+
+VOID
+WINAPI
+QueryUnbiasedInterruptTimePrecise(PULONGLONG lpUnbiasedInterruptTimePrecise)
+{
+    if (lpUnbiasedInterruptTimePrecise)
+        *lpUnbiasedInterruptTimePrecise = (ULONGLONG)GetTickCount64() * 10000ULL;
+}
+
+INT
+WINAPI
+ResolveLocaleName(LPCWSTR lpNameToResolve, LPWSTR lpLocaleName, INT cchLocaleName)
+{
+    INT len;
+
+    if (!lpNameToResolve)
+    {
+        SetLastError(ERROR_INVALID_PARAMETER);
+        return 0;
+    }
+
+    len = lstrlenW(lpNameToResolve) + 1;
+    if (lpLocaleName && cchLocaleName >= len)
+        lstrcpynW(lpLocaleName, lpNameToResolve, cchLocaleName);
+
+    return len;
+}
+
 /* EOF */

@@ -525,3 +525,10 @@ HRESULT WINAPI DllGetClassObject(REFCLSID clsid, REFIID riid, void **ppv)
 
     return CLASS_E_CLASSNOTAVAILABLE;
 }
+
+HRESULT
+WINAPI
+UiaDisconnectAllProviders(void)
+{
+    return S_OK;
+}

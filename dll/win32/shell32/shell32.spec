@@ -470,3 +470,9 @@
 757 stdcall -version=0x600+ DisplayNameOfW(ptr ptr long ptr long)
 866 stdcall -noname -version=0x600+ SHExtCoCreateInstance(wstr ptr ptr ptr ptr)
 887 stub -noname -version=0x601+ SHExtCoCreateInstanceCheckCategory
+@ stdcall SHCreateAssociationRegistration(ptr ptr)
+@ stdcall SHCreateItemFromParsingName(wstr ptr ptr ptr)
+@ stdcall SHGetPropertyStoreForWindow(long ptr ptr)
+@ stdcall SHGetStockIconInfo(long long ptr)
+@ stdcall SHQueryUserNotificationState(ptr)
+@ stdcall SetCurrentProcessExplicitAppUserModelID(wstr) shcore.SetCurrentProcessExplicitAppUserModelID

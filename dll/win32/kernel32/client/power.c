@@ -230,3 +230,25 @@ SetThreadExecutionState(EXECUTION_STATE esFlags)
 
     return esFlags;
 }
+
+HANDLE
+WINAPI
+PowerCreateRequest(PVOID Context)
+{
+    SetLastError(ERROR_CALL_NOT_IMPLEMENTED);
+    return INVALID_HANDLE_VALUE;
+}
+
+BOOL
+WINAPI
+PowerSetRequest(HANDLE PowerRequest, INT RequestType)
+{
+    return TRUE;
+}
+
+BOOL
+WINAPI
+PowerClearRequest(HANDLE PowerRequest, INT RequestType)
+{
+    return TRUE;
+}

@@ -102,3 +102,4 @@
 @ stub WindowPattern_Close
 @ stub WindowPattern_SetWindowVisualState
 @ stub WindowPattern_WaitForInputIdle
+@ stdcall UiaDisconnectAllProviders()

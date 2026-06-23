@@ -8874,3 +8874,10 @@ CM_Unregister_Device_Interface_ExW(
 
     return ret;
 }
+
+DWORD
+WINAPI
+CM_Get_DevNode_PropertyW(DWORD dnDevInst, const void *PropertyKey, void *PropertyType, PVOID PropertyBuffer, PULONG PropertyBufferSize, ULONG ulFlags)
+{
+    return CR_FAILURE;
+}

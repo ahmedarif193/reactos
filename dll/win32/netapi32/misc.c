@@ -321,4 +321,18 @@ NetpNtStatusToApiStatus(
     return ApiStatus;
 }
 
+HRESULT
+WINAPI
+NetGetAadJoinInformation(PCWSTR pcszTenantId, PVOID ppJoinInfo)
+{
+    if (ppJoinInfo) *(PVOID *)ppJoinInfo = NULL;
+    return E_NOTIMPL;
+}
+
+VOID
+WINAPI
+NetFreeAadJoinInformation(PVOID pJoinInfo)
+{
+}
+
 /* EOF */

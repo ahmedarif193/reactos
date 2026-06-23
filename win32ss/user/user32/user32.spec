@@ -347,7 +347,9 @@
 @ stdcall GetNextDlgTabItem(long long long)
 @ stdcall GetOpenClipboardWindow() NtUserGetOpenClipboardWindow
 @ stdcall GetParent(long)
+@ stdcall -version=0x600+ GetPointerDevice(long ptr)
 @ stdcall -version=0x602+ GetPointerInfo(long ptr)
+@ stdcall -version=0x600+ GetPointerPenInfo(long ptr)
 @ stdcall -version=0x602+ GetPointerTouchInfo(long ptr)
 @ stdcall -version=0x602+ GetPointerTouchInfoHistory(long ptr ptr)
 @ stdcall -version=0x601+ GetPointerDevices(ptr ptr)
@@ -466,6 +468,7 @@
 @ stdcall -stub -version=0xA00+ IsValidDpiAwarenessContext(long)
 @ stdcall IsWinEventHookInstalled(long)
 @ stdcall IsWindow(long)
+@ stdcall -version=0x600+ IsWindowArranged(long)
 @ stdcall IsWindowEnabled(long)
 @ stdcall IsWindowInDestroy(long)
 @ stdcall -version=0x600+ IsWindowRedirectedForPrint(long)
@@ -593,6 +596,7 @@
 @ stdcall RegisterRawInputDevices(ptr long long)
 @ stdcall RegisterServicesProcess(long)
 @ stdcall RegisterShellHookWindow(long)
+@ stdcall -version=0x600+ RegisterSuspendResumeNotification(ptr long)
 @ stdcall RegisterSystemThread(long long)
 @ stdcall RegisterTasklist(long) NtUserRegisterTasklist
 @ stdcall -version=0x602+ RegisterTouchHitTestingWindow(long long)

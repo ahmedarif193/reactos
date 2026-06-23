@@ -579,3 +579,34 @@ Win32PoolAllocationStats(DWORD dw1, DWORD dw2, DWORD dw3, DWORD dw4, DWORD dw5)
     UNIMPLEMENTED;
     return FALSE;
 }
+
+BOOL
+WINAPI
+GetPointerDevice(UINT32 deviceId, PVOID pointerDevice)
+{
+    SetLastError(ERROR_CALL_NOT_IMPLEMENTED);
+    return FALSE;
+}
+
+BOOL
+WINAPI
+GetPointerPenInfo(UINT32 pointerId, PVOID penInfo)
+{
+    SetLastError(ERROR_CALL_NOT_IMPLEMENTED);
+    return FALSE;
+}
+
+BOOL
+WINAPI
+IsWindowArranged(HWND hwnd)
+{
+    return FALSE;
+}
+
+PVOID
+WINAPI
+RegisterSuspendResumeNotification(HANDLE hRecipient, DWORD Flags)
+{
+    SetLastError(ERROR_CALL_NOT_IMPLEMENTED);
+    return NULL;
+}

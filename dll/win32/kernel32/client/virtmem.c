@@ -423,4 +423,11 @@ PrefetchVirtualMemory(HANDLE hProcess, ULONG_PTR NumberOfEntries, PVOID VirtualA
     return TRUE;
 }
 
+DWORD
+WINAPI
+DiscardVirtualMemory(PVOID VirtualAddress, SIZE_T Size)
+{
+    return ERROR_SUCCESS;
+}
+
 /* EOF */

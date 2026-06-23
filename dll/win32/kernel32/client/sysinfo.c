@@ -606,3 +606,36 @@ GetCurrentPackageId(UINT32 *BufferLength,
     STUB;
     return APPMODEL_ERROR_NO_PACKAGE;
 }
+
+DWORD
+WINAPI
+GetActiveProcessorCount(WORD GroupNumber)
+{
+    SYSTEM_INFO si;
+    GetSystemInfo(&si);
+    return si.dwNumberOfProcessors;
+}
+
+DWORD
+WINAPI
+GetMaximumProcessorCount(WORD GroupNumber)
+{
+    SYSTEM_INFO si;
+    GetSystemInfo(&si);
+    return si.dwNumberOfProcessors;
+}
+
+WORD
+WINAPI
+GetMaximumProcessorGroupCount(VOID)
+{
+    return 1;
+}
+
+BOOL
+WINAPI
+GetLogicalProcessorInformationEx(INT RelationshipType, PVOID Buffer, PDWORD ReturnedLength)
+{
+    SetLastError(ERROR_NOT_SUPPORTED);
+    return FALSE;
+}
