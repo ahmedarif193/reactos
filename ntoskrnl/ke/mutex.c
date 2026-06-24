@@ -32,15 +32,12 @@ KeInitializeMutant(IN PKMUTANT Mutant,
         CurrentThread = KeGetCurrentThread();
         Mutant->OwnerThread = CurrentThread;
 
-        /* We're about to touch the Thread, so lock the Dispatcher */
-        OldIrql = KiAcquireDispatcherLock();
-
-        /* And insert it into its list */
+        OldIrql = KeRaiseIrqlToSynchLevel();
+        KiAcquireThreadLock(CurrentThread);
         InsertTailList(&CurrentThread->MutantListHead,
                        &Mutant->MutantListEntry);
-
-        /* Release Dispatcher Lock */
-        KiReleaseDispatcherLock(OldIrql);
+        KiReleaseThreadLock(CurrentThread);
+        KeLowerIrql(OldIrql);
     }
     else
     {
@@ -107,69 +104,55 @@ KeReleaseMutant(IN PKMUTANT Mutant,
     ASSERT_MUTANT(Mutant);
     ASSERT_IRQL_LESS_OR_EQUAL(DISPATCH_LEVEL);
 
-    /* Lock the Dispatcher Database */
-    OldIrql = KiAcquireDispatcherLock();
+    OldIrql = KeRaiseIrqlToSynchLevel();
+    KiAcquireDispatcherObject(&Mutant->Header);
 
-    /* Save the Previous State */
     PreviousState = Mutant->Header.SignalState;
 
-    /* Check if it is to be abandonned */
     if (Abandon == FALSE)
     {
-        /* Make sure that the Owner Thread is the current Thread */
         if (Mutant->OwnerThread != CurrentThread)
         {
-            /* Release the lock */
-            KiReleaseDispatcherLock(OldIrql);
-
-            /* Raise an exception */
+            KiReleaseDispatcherObject(&Mutant->Header);
+            KiExitDispatcher(OldIrql);
             ExRaiseStatus(Mutant->Abandoned ? STATUS_ABANDONED :
                                               STATUS_MUTANT_NOT_OWNED);
         }
 
-        /* If the thread owns it, then increase the signal state */
         Mutant->Header.SignalState++;
     }
     else
     {
-        /* It's going to be abandonned */
         Mutant->Header.SignalState = 1;
         Mutant->Abandoned = TRUE;
     }
 
-    /* Check if the signal state is only single */
     if (Mutant->Header.SignalState == 1)
     {
-        /* Check if it's below 0 now */
         if (PreviousState <= 0)
         {
-            /* Remove the mutant from the list */
+            KiAcquireThreadLock(CurrentThread);
             RemoveEntryList(&Mutant->MutantListEntry);
-
-            /* Save if we need to re-enable APCs */
+            KiReleaseThreadLock(CurrentThread);
             EnableApc = Mutant->ApcDisable;
         }
 
-        /* Remove the Owning Thread and wake it */
         Mutant->OwnerThread = NULL;
 
-        /* Check if the Wait List isn't empty */
         if (!IsListEmpty(&Mutant->Header.WaitListHead))
         {
-            /* Wake the Mutant */
-            KiWaitTest(&Mutant->Header, Increment);
+            KiWaitTest(Mutant, Increment);
         }
     }
 
-    /* Check if the caller wants to wait after this release */
+    KiReleaseDispatcherObject(&Mutant->Header);
+
     if (Wait == FALSE)
     {
-        /* Release the Lock */
-        KiReleaseDispatcherLock(OldIrql);
+        KiExitDispatcher(OldIrql);
     }
     else
     {
-        /* Set a wait */
         CurrentThread->WaitNext = TRUE;
         CurrentThread->WaitIrql = OldIrql;
     }

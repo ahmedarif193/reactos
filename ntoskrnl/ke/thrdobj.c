@@ -110,13 +110,15 @@ KeReadyThread(IN PKTHREAD Thread)
     ASSERT_IRQL_LESS_OR_EQUAL(DISPATCH_LEVEL);
 
     /* Lock the Dispatcher Database */
-    OldIrql = KiAcquireDispatcherLock();
+    OldIrql = KeRaiseIrqlToSynchLevel();
 
     /* Make the thread ready */
+    KiAcquireThreadLock(Thread);
     KiReadyThread(Thread);
+    KiReleaseThreadLock(Thread);
 
     /* Unlock dispatcher database */
-    KiReleaseDispatcherLock(OldIrql);
+    KiExitDispatcher(OldIrql);
 }
 
 ULONG
@@ -128,11 +130,11 @@ KeAlertResumeThread(IN PKTHREAD Thread)
     ASSERT_THREAD(Thread);
     ASSERT_IRQL_LESS_OR_EQUAL(DISPATCH_LEVEL);
 
-    /* Lock the Dispatcher Database and the APC Queue */
+    /* Lock the APC Queue */
     KiAcquireApcLockRaiseToSynch(Thread, &ApcLock);
-    KiAcquireDispatcherLockAtSynchLevel();
 
     /* Return if Thread is already alerted. */
+    KiAcquireThreadLock(Thread);
     if (!Thread->Alerted[KernelMode])
     {
         /* If it's Blocked, unblock if it we should */
@@ -147,6 +149,7 @@ KeAlertResumeThread(IN PKTHREAD Thread)
             Thread->Alerted[KernelMode] = TRUE;
         }
     }
+    KiReleaseThreadLock(Thread);
 
     /* Save the old Suspend Count */
     PreviousCount = Thread->SuspendCount;
@@ -159,13 +162,14 @@ KeAlertResumeThread(IN PKTHREAD Thread)
         if (!(Thread->SuspendCount) && !(Thread->FreezeCount))
         {
             /* Signal and satisfy */
+            KiAcquireDispatcherObject(&Thread->SuspendSemaphore.Header);
             Thread->SuspendSemaphore.Header.SignalState++;
             KiWaitTest(&Thread->SuspendSemaphore.Header, IO_NO_INCREMENT);
+            KiReleaseDispatcherObject(&Thread->SuspendSemaphore.Header);
         }
     }
 
     /* Release Locks and return the Old State */
-    KiReleaseDispatcherLockFromSynchLevel();
     KiReleaseApcLockFromSynchLevel(&ApcLock);
     KiExitDispatcher(ApcLock.OldIrql);
     return PreviousCount;
@@ -185,9 +189,9 @@ KeAlertThread(IN PKTHREAD Thread,
     ASSERT((AlertMode == KernelMode) || (AlertMode == UserMode));
     AlertModeIndex = (UCHAR)AlertMode;
 
-    /* Lock the Dispatcher Database and the APC Queue */
+    /* Lock the APC Queue and the thread */
     KiAcquireApcLockRaiseToSynch(Thread, &ApcLock);
-    KiAcquireDispatcherLockAtSynchLevel();
+    KiAcquireThreadLock(Thread);
 
     /* Save the Previous State */
     PreviousState = Thread->Alerted[AlertModeIndex];
@@ -210,8 +214,8 @@ KeAlertThread(IN PKTHREAD Thread,
         }
     }
 
-    /* Release the Dispatcher Lock */
-    KiReleaseDispatcherLockFromSynchLevel();
+    /* Release the thread lock */
+    KiReleaseThreadLock(Thread);
     KiReleaseApcLockFromSynchLevel(&ApcLock);
     KiExitDispatcher(ApcLock.OldIrql);
 
@@ -229,7 +233,7 @@ KeBoostPriorityThread(IN PKTHREAD Thread,
     ASSERT_IRQL_LESS_OR_EQUAL(DISPATCH_LEVEL);
 
     /* Lock the Dispatcher Database */
-    OldIrql = KiAcquireDispatcherLock();
+    OldIrql = KeRaiseIrqlToSynchLevel();
 
     /* Only threads in the dynamic range get boosts */
     if (Thread->Priority < LOW_REALTIME_PRIORITY)
@@ -263,7 +267,7 @@ KeBoostPriorityThread(IN PKTHREAD Thread,
     }
 
     /* Release the dispatcher lokc */
-    KiReleaseDispatcherLock(OldIrql);
+    KiExitDispatcher(OldIrql);
 }
 
 ULONG
@@ -288,15 +292,15 @@ KeForceResumeThread(IN PKTHREAD Thread)
         Thread->SuspendCount = 0;
         Thread->FreezeCount = 0;
 
-        /* Lock the dispatcher */
-        KiAcquireDispatcherLockAtSynchLevel();
+        /* Lock the suspend semaphore */
+        KiAcquireDispatcherObject(&Thread->SuspendSemaphore.Header);
 
         /* Signal and satisfy */
         Thread->SuspendSemaphore.Header.SignalState++;
         KiWaitTest(&Thread->SuspendSemaphore.Header, IO_NO_INCREMENT);
 
-        /* Release the dispatcher */
-        KiReleaseDispatcherLockFromSynchLevel();
+        /* Release the suspend semaphore */
+        KiReleaseDispatcherObject(&Thread->SuspendSemaphore.Header);
     }
 
     /* Release Lock and return the Old State */
@@ -363,14 +367,14 @@ KeFreezeAllThreads(VOID)
                 }
                 else
                 {
-                    /* Lock the dispatcher */
-                    KiAcquireDispatcherLockAtSynchLevel();
+                    /* Lock the suspend semaphore */
+                    KiAcquireDispatcherObject(&Current->SuspendSemaphore.Header);
 
                     /* Unsignal the semaphore, the APC was already inserted */
                     Current->SuspendSemaphore.Header.SignalState--;
 
-                    /* Release the dispatcher */
-                    KiReleaseDispatcherLockFromSynchLevel();
+                    /* Release the suspend semaphore */
+                    KiReleaseDispatcherObject(&Current->SuspendSemaphore.Header);
                 }
             }
         }
@@ -411,15 +415,15 @@ KeResumeThread(IN PKTHREAD Thread)
         /* Check if the thrad is still suspended or not */
         if ((!Thread->SuspendCount) && (!Thread->FreezeCount))
         {
-            /* Acquire the dispatcher lock */
-            KiAcquireDispatcherLockAtSynchLevel();
+            /* Acquire the suspend semaphore lock */
+            KiAcquireDispatcherObject(&Thread->SuspendSemaphore.Header);
 
             /* Signal the Suspend Semaphore */
             Thread->SuspendSemaphore.Header.SignalState++;
             KiWaitTest(&Thread->SuspendSemaphore.Header, IO_NO_INCREMENT);
 
-            /* Release the dispatcher lock */
-            KiReleaseDispatcherLockFromSynchLevel();
+            /* Release the suspend semaphore lock */
+            KiReleaseDispatcherObject(&Thread->SuspendSemaphore.Header);
         }
     }
 
@@ -443,7 +447,7 @@ KeRundownThread(VOID)
     if (IsListEmpty(&Thread->MutantListHead)) return;
 
     /* Lock the Dispatcher Database */
-    OldIrql = KiAcquireDispatcherLock();
+    OldIrql = KeRaiseIrqlToSynchLevel();
 
     /* Get the List Pointers */
     ListHead = &Thread->MutantListHead;
@@ -468,7 +472,8 @@ KeRundownThread(VOID)
         /* Now we can remove it */
         RemoveEntryList(&Mutant->MutantListEntry);
 
-        /* Unconditionally abandon it */
+        /* Unconditionally abandon it under the mutant lock */
+        KiAcquireDispatcherObject(&Mutant->Header);
         Mutant->Header.SignalState = 1;
         Mutant->Abandoned = TRUE;
         Mutant->OwnerThread = NULL;
@@ -479,13 +484,14 @@ KeRundownThread(VOID)
             /* Wake the Mutant */
             KiWaitTest(&Mutant->Header, MUTANT_INCREMENT);
         }
+        KiReleaseDispatcherObject(&Mutant->Header);
 
         /* Move on */
         NextEntry = Thread->MutantListHead.Flink;
     }
 
     /* Release the Lock */
-    KiReleaseDispatcherLock(OldIrql);
+    KiExitDispatcher(OldIrql);
 }
 
 VOID
@@ -547,10 +553,7 @@ KeStartThread(IN OUT PKTHREAD Thread)
     Thread->IdealProcessor = IdealProcessor;
     Thread->UserIdealProcessor = IdealProcessor;
 
-    /* Lock the Dispatcher Database */
-    KiAcquireDispatcherLockAtSynchLevel();
-
-    /* Insert the thread into the process list */
+    /* Insert the thread into the process list under the process lock */
     InsertTailList(&Process->ThreadListHead, &Thread->ThreadListEntry);
 
     /* Increase the stack count */
@@ -558,7 +561,6 @@ KeStartThread(IN OUT PKTHREAD Thread)
     Process->StackCount++;
 
     /* Release locks and return */
-    KiReleaseDispatcherLockFromSynchLevel();
     KiReleaseProcessLock(&LockHandle);
 }
 
@@ -641,14 +643,14 @@ KeSuspendThread(PKTHREAD Thread)
             }
             else
             {
-                /* Lock the dispatcher */
-                KiAcquireDispatcherLockAtSynchLevel();
+                /* Lock the suspend semaphore */
+                KiAcquireDispatcherObject(&Thread->SuspendSemaphore.Header);
 
                 /* Unsignal the semaphore, the APC was already inserted */
                 Thread->SuspendSemaphore.Header.SignalState--;
 
-                /* Release the dispatcher */
-                KiReleaseDispatcherLockFromSynchLevel();
+                /* Release the suspend semaphore */
+                KiReleaseDispatcherObject(&Thread->SuspendSemaphore.Header);
             }
         }
     }
@@ -694,15 +696,15 @@ KeThawAllThreads(VOID)
             /* Check if both counts are zero now */
             if (!(Current->SuspendCount) && (!Current->FreezeCount))
             {
-                /* Lock the dispatcher */
-                KiAcquireDispatcherLockAtSynchLevel();
+                /* Lock the suspend semaphore */
+                KiAcquireDispatcherObject(&Current->SuspendSemaphore.Header);
 
                 /* Signal the suspend semaphore and wake it */
                 Current->SuspendSemaphore.Header.SignalState++;
                 KiWaitTest(&Current->SuspendSemaphore, 0);
 
-                /* Unlock the dispatcher */
-                KiReleaseDispatcherLockFromSynchLevel();
+                /* Unlock the suspend semaphore */
+                KiReleaseDispatcherObject(&Current->SuspendSemaphore.Header);
             }
         }
 
@@ -1068,7 +1070,8 @@ KeRevertToUserAffinityThread(VOID)
     ASSERT(CurrentThread->SystemAffinityActive != FALSE);
 
     /* Lock the Dispatcher Database */
-    OldIrql = KiAcquireDispatcherLock();
+    OldIrql = KeRaiseIrqlToSynchLevel();
+    KiAcquireThreadLock(CurrentThread);
 
     /* Set the user affinity and processor and disable system affinity */
     CurrentThread->Affinity = CurrentThread->UserAffinity;
@@ -1096,7 +1099,8 @@ KeRevertToUserAffinityThread(VOID)
     }
 
     /* Unlock dispatcher database */
-    KiReleaseDispatcherLock(OldIrql);
+    KiReleaseThreadLock(CurrentThread);
+    KiExitDispatcher(OldIrql);
 }
 
 /*
@@ -1112,7 +1116,8 @@ KeSetIdealProcessorThread(IN PKTHREAD Thread,
     ASSERT(Processor <= MAXIMUM_PROCESSORS);
 
     /* Lock the Dispatcher Database */
-    OldIrql = KiAcquireDispatcherLock();
+    OldIrql = KeRaiseIrqlToSynchLevel();
+    KiAcquireThreadLock(Thread);
 
     /* Save Old Ideal Processor */
     OldIdealProcessor = Thread->UserIdealProcessor;
@@ -1136,7 +1141,8 @@ KeSetIdealProcessorThread(IN PKTHREAD Thread,
     }
 
     /* Release dispatcher lock and return the old ideal CPU */
-    KiReleaseDispatcherLock(OldIrql);
+    KiReleaseThreadLock(Thread);
+    KiExitDispatcher(OldIrql);
     return OldIdealProcessor;
 }
 
@@ -1154,7 +1160,8 @@ KeSetSystemAffinityThread(IN KAFFINITY Affinity)
     ASSERT((Affinity & KeActiveProcessors) != 0);
 
     /* Lock the Dispatcher Database */
-    OldIrql = KiAcquireDispatcherLock();
+    OldIrql = KeRaiseIrqlToSynchLevel();
+    KiAcquireThreadLock(CurrentThread);
 
     /* Restore the affinity and enable system affinity */
     KiThreadAffinityMask(CurrentThread) = Affinity;
@@ -1187,7 +1194,8 @@ KeSetSystemAffinityThread(IN KAFFINITY Affinity)
     }
 
     /* Unlock dispatcher database */
-    KiReleaseDispatcherLock(OldIrql);
+    KiReleaseThreadLock(CurrentThread);
+    KiExitDispatcher(OldIrql);
 }
 
 /*
@@ -1237,7 +1245,7 @@ KeSetBasePriorityThread(IN PKTHREAD Thread,
     Process = Thread->ApcState.Process;
 
     /* Lock the Dispatcher Database */
-    OldIrql = KiAcquireDispatcherLock();
+    OldIrql = KeRaiseIrqlToSynchLevel();
 
     /* Lock the thread */
     KiAcquireThreadLock(Thread);
@@ -1333,7 +1341,7 @@ KeSetBasePriorityThread(IN PKTHREAD Thread,
     KiReleaseThreadLock(Thread);
 
     /* Release the dispatcher database and return old increment */
-    KiReleaseDispatcherLock(OldIrql);
+    KiExitDispatcher(OldIrql);
     return OldIncrement;
 }
 
@@ -1350,14 +1358,16 @@ KeSetAffinityThread(IN PKTHREAD Thread,
     ASSERT_THREAD(Thread);
     ASSERT_IRQL_LESS_OR_EQUAL(DISPATCH_LEVEL);
 
-    /* Lock the dispatcher database */
-    OldIrql = KiAcquireDispatcherLock();
+    /* Raise IRQL and lock the thread */
+    OldIrql = KeRaiseIrqlToSynchLevel();
+    KiAcquireThreadLock(Thread);
 
     /* Call the internal function */
     OldAffinity = KiSetAffinityThread(Thread, Affinity);
 
-    /* Release the dispatcher database and return old affinity */
-    KiReleaseDispatcherLock(OldIrql);
+    /* Release the thread lock and return old affinity */
+    KiReleaseThreadLock(Thread);
+    KiExitDispatcher(OldIrql);
     return OldAffinity;
 }
 
@@ -1377,7 +1387,7 @@ KeSetPriorityThread(IN PKTHREAD Thread,
     ASSERT(KeIsExecutingDpc() == FALSE);
 
     /* Lock the Dispatcher Database */
-    OldIrql = KiAcquireDispatcherLock();
+    OldIrql = KeRaiseIrqlToSynchLevel();
 
     /* Lock the thread */
     KiAcquireThreadLock(Thread);
@@ -1403,7 +1413,7 @@ KeSetPriorityThread(IN PKTHREAD Thread,
     KiReleaseThreadLock(Thread);
 
     /* Release the dispatcher database */
-    KiReleaseDispatcherLock(OldIrql);
+    KiExitDispatcher(OldIrql);
 
     /* Return Old Priority */
     return OldPriority;
@@ -1456,33 +1466,36 @@ KeTerminateThread(IN KPRIORITY Increment)
         /* Break out if the change was succesful */
     } while (Entry != SavedEntry);
 
-    /* Acquire the dispatcher lock */
-    KiAcquireDispatcherLockAtSynchLevel();
-
     /* Check if the reaper wasn't active */
     if (!Entry)
     {
         /* Activate it as a work item, directly through its Queue */
+        KiAcquireDispatcherObject(&ExWorkerQueue[HyperCriticalWorkQueue].WorkerQueue.Header);
         KiInsertQueue(&ExWorkerQueue[HyperCriticalWorkQueue].WorkerQueue,
                       &PspReaperWorkItem.List,
                       FALSE);
+        KiReleaseDispatcherObject(&ExWorkerQueue[HyperCriticalWorkQueue].WorkerQueue.Header);
     }
 
     /* Check the thread has an associated queue */
     if (Thread->Queue)
     {
         /* Remove it from the list, and handle the queue */
+        KiAcquireDispatcherObject(&Thread->Queue->Header);
         RemoveEntryList(&Thread->QueueListEntry);
         KiActivateWaiterQueue(Thread->Queue);
+        KiReleaseDispatcherObject(&Thread->Queue->Header);
     }
 
     /* Signal the thread */
+    KiAcquireDispatcherObject(&Thread->Header);
     Thread->Header.SignalState = TRUE;
     if (!IsListEmpty(&Thread->Header.WaitListHead))
     {
         /* Unwait the threads */
-        KxUnwaitThread(&Thread->Header, Increment);
+        KiWaitTest(Thread, Increment);
     }
+    KiReleaseDispatcherObject(&Thread->Header);
 
     /* Remove the thread from the list */
     RemoveEntryList(&Thread->ThreadListEntry);
@@ -1491,6 +1504,7 @@ KeTerminateThread(IN KPRIORITY Increment)
     KiReleaseProcessLockFromSynchLevel(&LockHandle);
 
     /* Set us as terminated, decrease the Process's stack count */
+    KiAcquireThreadLock(Thread);
     Thread->State = Terminated;
 
     /* Decrease stack count */
@@ -1506,6 +1520,6 @@ KeTerminateThread(IN KPRIORITY Increment)
     KiRundownThread(Thread);
 
     /* Swap to a new thread */
-    KiReleaseDispatcherLockFromSynchLevel();
-    KiSwapThread(Thread, KeGetCurrentPrcb());
+    KiReleaseThreadLock(Thread);
+    KiSwapThread(Thread, KeGetCurrentPrcb(), FALSE);
 }

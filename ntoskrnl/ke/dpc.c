@@ -129,8 +129,8 @@ KiTimerExpiration(IN PKDPC Dpc,
     Timers = 24;
     ActiveTimers = 4;
 
-    /* Lock the Database and Raise IRQL */
-    OldIrql = KiAcquireDispatcherLock();
+    /* Raise IRQL to synchronization level */
+    OldIrql = KeRaiseIrqlToSynchLevel();
 
     /* Start expiration loop */
     do
@@ -156,30 +156,22 @@ KiTimerExpiration(IN PKDPC Dpc,
                 ActiveTimers--;
                 KiRemoveEntryTimer(Timer);
 
-                /* Make it non-inserted, unlock it, and signal it */
+                /* Make it non-inserted and unlock it */
                 Timer->Header.Inserted = FALSE;
                 KiReleaseTimerLock(LockQueue);
-                Timer->Header.SignalState = 1;
 
                 /* Get the DPC and period */
                 TimerDpc = Timer->Dpc;
                 Period = Timer->Period;
 
-                /* Check if there's any waiters */
+                /* Signal it and wake waiters under the timer object lock */
+                KiAcquireDispatcherObject(&Timer->Header);
+                Timer->Header.SignalState = 1;
                 if (!IsListEmpty(&Timer->Header.WaitListHead))
                 {
-                    /* Check the type of event */
-                    if (Timer->Header.Type == TimerNotificationObject)
-                    {
-                        /* Unwait the thread */
-                        KxUnwaitThread(&Timer->Header, IO_NO_INCREMENT);
-                    }
-                    else
-                    {
-                        /* Otherwise unwait the thread and signal the timer */
-                        KxUnwaitThreadForEvent((PKEVENT)Timer, IO_NO_INCREMENT);
-                    }
+                    KiWaitTest(Timer, IO_NO_INCREMENT);
                 }
+                KiReleaseDispatcherObject(&Timer->Header);
 
                 /* Check if we have a period */
                 if (Period)
@@ -226,8 +218,8 @@ KiTimerExpiration(IN PKDPC Dpc,
                 /* Check if we're done processing */
                 if (!(ActiveTimers) || !(Timers))
                 {
-                    /* Release the dispatcher while doing DPCs */
-                    KiReleaseDispatcherLock(DISPATCH_LEVEL);
+                    /* Exit the dispatcher while doing DPCs */
+                    KiExitDispatcher(DISPATCH_LEVEL);
 
                     /* Start looping all DPC Entries */
                     for (i = 0; DpcCalls; DpcCalls--, i++)
@@ -248,8 +240,8 @@ KiTimerExpiration(IN PKDPC Dpc,
                     Timers = 24;
                     ActiveTimers = 4;
 
-                    /* Lock the dispatcher database */
-                    KiAcquireDispatcherLock();
+                    /* Raise back to synchronization level */
+                    KeRaiseIrqlToSynchLevel();
                 }
             }
             else
@@ -274,8 +266,8 @@ KiTimerExpiration(IN PKDPC Dpc,
                 /* Check if we've scanned all the timers we could */
                 if (!Timers)
                 {
-                    /* Release the dispatcher while doing DPCs */
-                    KiReleaseDispatcherLock(DISPATCH_LEVEL);
+                    /* Exit the dispatcher while doing DPCs */
+                    KiExitDispatcher(DISPATCH_LEVEL);
 
                     /* Start looping all DPC Entries */
                     for (i = 0; DpcCalls; DpcCalls--, i++)
@@ -296,8 +288,8 @@ KiTimerExpiration(IN PKDPC Dpc,
                     Timers = 24;
                     ActiveTimers = 4;
 
-                    /* Lock the dispatcher database */
-                    KiAcquireDispatcherLock();
+                    /* Raise back to synchronization level */
+                    KeRaiseIrqlToSynchLevel();
                 }
 
                 /* Done looping */
@@ -312,8 +304,8 @@ KiTimerExpiration(IN PKDPC Dpc,
     /* Check if we still have DPC entries */
     if (DpcCalls)
     {
-        /* Release the dispatcher while doing DPCs */
-        KiReleaseDispatcherLock(DISPATCH_LEVEL);
+        /* Exit the dispatcher while doing DPCs */
+        KiExitDispatcher(DISPATCH_LEVEL);
 
         /* Start looping all DPC Entries */
         for (i = 0; DpcCalls; DpcCalls--, i++)
@@ -335,8 +327,8 @@ KiTimerExpiration(IN PKDPC Dpc,
     }
     else
     {
-        /* Unlock the dispatcher */
-        KiReleaseDispatcherLock(OldIrql);
+        /* Exit the dispatcher */
+        KiExitDispatcher(OldIrql);
     }
 }
 
@@ -370,28 +362,18 @@ KiTimerListExpire(IN PLIST_ENTRY ExpiredListHead,
         /* Not inserted */
         Timer->Header.Inserted = FALSE;
 
-        /* Signal it */
-        Timer->Header.SignalState = 1;
-
         /* Get the DPC and period */
         TimerDpc = Timer->Dpc;
         Period = Timer->Period;
 
-        /* Check if there's any waiters */
+        /* Signal it and wake waiters under the timer object lock */
+        KiAcquireDispatcherObject(&Timer->Header);
+        Timer->Header.SignalState = 1;
         if (!IsListEmpty(&Timer->Header.WaitListHead))
         {
-            /* Check the type of event */
-            if (Timer->Header.Type == TimerNotificationObject)
-            {
-                /* Unwait the thread */
-                KxUnwaitThread(&Timer->Header, IO_NO_INCREMENT);
-            }
-            else
-            {
-                /* Otherwise unwait the thread and signal the timer */
-                KxUnwaitThreadForEvent((PKEVENT)Timer, IO_NO_INCREMENT);
-            }
+            KiWaitTest(Timer, IO_NO_INCREMENT);
         }
+        KiReleaseDispatcherObject(&Timer->Header);
 
         /* Check if we have a period */
         if (Period)
@@ -439,8 +421,8 @@ KiTimerListExpire(IN PLIST_ENTRY ExpiredListHead,
     /* Check if we still have DPC entries */
     if (DpcCalls)
     {
-        /* Release the dispatcher while doing DPCs */
-        KiReleaseDispatcherLock(DISPATCH_LEVEL);
+        /* Exit the dispatcher while doing DPCs */
+        KiExitDispatcher(DISPATCH_LEVEL);
 
         /* Start looping all DPC Entries */
         for (i = 0; DpcCalls; DpcCalls--, i++)
@@ -462,8 +444,8 @@ KiTimerListExpire(IN PLIST_ENTRY ExpiredListHead,
     }
     else
     {
-        /* Unlock the dispatcher */
-        KiReleaseDispatcherLock(OldIrql);
+        /* Exit the dispatcher */
+        KiExitDispatcher(OldIrql);
     }
 }
 

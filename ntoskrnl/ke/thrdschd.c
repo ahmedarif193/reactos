@@ -449,7 +449,8 @@ KiSelectNextThread(IN PKPRCB Prcb)
 LONG_PTR
 FASTCALL
 KiSwapThread(IN PKTHREAD CurrentThread,
-             IN PKPRCB Prcb)
+             IN PKPRCB Prcb,
+             IN BOOLEAN NormalWait)
 {
     BOOLEAN ApcState = FALSE;
     KIRQL WaitIrql;
@@ -507,6 +508,13 @@ KiSwapThread(IN PKTHREAD CurrentThread,
 
     /* Get the wait status */
     WaitStatus = CurrentThread->WaitStatus;
+
+    if (NormalWait &&
+        (CurrentThread->WaitBlockList != NULL) &&
+        (CurrentThread->WaitBlockList[0].Thread == CurrentThread))
+    {
+        KiUnlinkWaitBlocks(CurrentThread);
+    }
 
     /* Check if we need to deliver APCs */
     if (ApcState)

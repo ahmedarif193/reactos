@@ -56,9 +56,9 @@ KeWaitForGate(IN PKGATE Gate,
         }
         else
         {
-            /* Check if we have a queue and lock the dispatcher if so */
+            /* Check if we have a queue and lock it if so */
             Queue = Thread->Queue;
-            if (Queue) KiAcquireDispatcherLockAtSynchLevel();
+            if (Queue) KiAcquireDispatcherObject(&Queue->Header);
 
             /* Lock the thread */
             KiAcquireThreadLock(Thread);
@@ -76,8 +76,8 @@ KeWaitForGate(IN PKGATE Gate,
                 KiReleaseDispatcherObject(&Gate->Header);
                 KiReleaseThreadLock(Thread);
 
-                /* Release the gate lock */
-                if (Queue) KiReleaseDispatcherLockFromSynchLevel();
+                /* Release the queue lock */
+                if (Queue) KiReleaseDispatcherObject(&Queue->Header);
 
                 /* Release the APC lock and return */
                 KiReleaseApcLock(&ApcLock);
@@ -120,15 +120,15 @@ KeWaitForGate(IN PKGATE Gate,
                 /* Wake it up */
                 KiActivateWaiterQueue(Queue);
 
-                /* Release the dispatcher lock */
-                KiReleaseDispatcherLockFromSynchLevel();
+                /* Release the queue lock */
+                KiReleaseDispatcherObject(&Queue->Header);
             }
 
             /* Release the APC lock but stay at DPC level */
             KiReleaseApcLockFromSynchLevel(&ApcLock);
 
             /* Find a new thread to run */
-            Status = KiSwapThread(Thread, KeGetCurrentPrcb());
+            Status = KiSwapThread(Thread, KeGetCurrentPrcb(), FALSE);
 
             /* Make sure we weren't executing an APC */
             if (Status == STATUS_SUCCESS) return;
@@ -188,6 +188,7 @@ KeSignalGateBoostPriority(IN PKGATE Gate)
 
             /* Remove it */
             RemoveEntryList(&WaitBlock->WaitListEntry);
+            WaitBlock->WaitListEntry.Flink = NULL;
 
             /* Clear wait status */
             WaitThread->WaitStatus = STATUS_SUCCESS;
@@ -207,8 +208,10 @@ KeSignalGateBoostPriority(IN PKGATE Gate)
             /* Check if we have a queue */
             if (WaitThread->Queue)
             {
-                /* Acquire the dispatcher lock */
-                KiAcquireDispatcherLockAtSynchLevel();
+                PKQUEUE WaitQueue = WaitThread->Queue;
+
+                /* Lock the queue */
+                KiAcquireDispatcherObject(&WaitQueue->Header);
 
                 /* Check if we still have one */
                 if (WaitThread->Queue)
@@ -218,7 +221,7 @@ KeSignalGateBoostPriority(IN PKGATE Gate)
                 }
 
                 /* Release lock */
-                KiReleaseDispatcherLockFromSynchLevel();
+                KiReleaseDispatcherObject(&WaitQueue->Header);
             }
 
             /* Make the thread ready */

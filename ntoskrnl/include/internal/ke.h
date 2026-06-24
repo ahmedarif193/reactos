@@ -182,7 +182,8 @@ LONG_PTR
 FASTCALL
 KiSwapThread(
     IN PKTHREAD Thread,
-    IN PKPRCB Prcb
+    IN PKPRCB Prcb,
+    IN BOOLEAN NormalWait
 );
 
 VOID
@@ -566,6 +567,12 @@ FASTCALL
 KiUnlinkThread(
     IN PKTHREAD Thread,
     IN LONG_PTR WaitStatus
+);
+
+VOID
+FASTCALL
+KiUnlinkWaitBlocks(
+    IN PKTHREAD Thread
 );
 
 VOID
