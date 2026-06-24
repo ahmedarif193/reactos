@@ -234,36 +234,55 @@ GraphCtrl_EnablePerCpu(PTM_GRAPH_CONTROL inst, UINT32 nCpus)
 #define PERCPU_GAP 5
 
 static void
-GraphCtrl_PerCpuPane(PTM_GRAPH_CONTROL inst, UINT32 Cpu, INT *pLeft, INT *pRight)
+GraphCtrl_PerCpuGrid(PTM_GRAPH_CONTROL inst, UINT32 *pCols, UINT32 *pRows)
 {
-    INT RegionLeft = inst->BitmapWidth - inst->CpuRegionWidth;
-    INT Usable = inst->CpuRegionWidth - (INT)(inst->CpuSeries - 1) * PERCPU_GAP;
-    INT Slot;
+    UINT32 Rows = (inst->CpuSeries + 7) / 8;
 
-    if (Usable < (INT)inst->CpuSeries * 8)
-        Usable = inst->CpuSeries * 8;
-    Slot = Usable / inst->CpuSeries;
-
-    *pLeft = RegionLeft + (INT)Cpu * (Slot + PERCPU_GAP);
-    *pRight = *pLeft + Slot;
-    if (Cpu == inst->CpuSeries - 1)
-        *pRight = inst->BitmapWidth;
+    if (Rows < 1)
+        Rows = 1;
+    *pRows = Rows;
+    *pCols = (inst->CpuSeries + Rows - 1) / Rows;
 }
 
 static void
-GraphCtrl_PerCpuDrawPaneStatic(PTM_GRAPH_CONTROL inst, INT ColL, INT ColR)
+GraphCtrl_PerCpuPane(PTM_GRAPH_CONTROL inst, UINT32 Cpu, RECT *prc)
+{
+    INT    RegionLeft = inst->BitmapWidth - inst->CpuRegionWidth;
+    UINT32 Cols, Rows, Col, Row;
+    INT    UsableW, UsableH;
+
+    GraphCtrl_PerCpuGrid(inst, &Cols, &Rows);
+    Col = Cpu % Cols;
+    Row = Cpu / Cols;
+
+    UsableW = (INT)inst->CpuRegionWidth - (INT)(Cols - 1) * PERCPU_GAP;
+    UsableH = (INT)inst->BitmapHeight - (INT)(Rows - 1) * PERCPU_GAP;
+    if (UsableW < (INT)Cols * 8)
+        UsableW = (INT)Cols * 8;
+    if (UsableH < (INT)Rows * 8)
+        UsableH = (INT)Rows * 8;
+
+    prc->left   = RegionLeft + UsableW * (INT)Col / (INT)Cols + (INT)Col * PERCPU_GAP;
+    prc->right  = RegionLeft + UsableW * (INT)(Col + 1) / (INT)Cols + (INT)Col * PERCPU_GAP;
+    prc->top    = UsableH * (INT)Row / (INT)Rows + (INT)Row * PERCPU_GAP;
+    prc->bottom = UsableH * (INT)(Row + 1) / (INT)Rows + (INT)Row * PERCPU_GAP;
+}
+
+static void
+GraphCtrl_PerCpuDrawPaneStatic(PTM_GRAPH_CONTROL inst, const RECT *pc)
 {
     HDC hdcg = inst->hdcGraph;
-    INT h = inst->BitmapHeight;
+    INT ColL = pc->left, ColR = pc->right;
+    INT Top = pc->top, Bot = pc->bottom;
     INT p;
     RECT rc;
 
-    rc.left = ColL; rc.top = 0;
-    rc.right = ColR; rc.bottom = h;
+    rc.left = ColL; rc.top = Top;
+    rc.right = ColR; rc.bottom = Bot;
     FillRect(hdcg, &rc, inst->hBrushBack);
 
     SelectObject(hdcg, inst->hPenGrid);
-    for (p = inst->GridCellHeight - 1; p < h - 1; p += inst->GridCellHeight)
+    for (p = Top + inst->GridCellHeight - 1; p < Bot - 1; p += inst->GridCellHeight)
     {
         MoveToEx(hdcg, ColL + 1, p, NULL);
         LineTo(hdcg, ColR - 1, p);
@@ -271,8 +290,8 @@ GraphCtrl_PerCpuDrawPaneStatic(PTM_GRAPH_CONTROL inst, INT ColL, INT ColR)
 
     for (p = ColR - 2 - inst->CurrShift; p > ColL; p -= inst->GridCellWidth)
     {
-        MoveToEx(hdcg, p, 1, NULL);
-        LineTo(hdcg, p, h - 1);
+        MoveToEx(hdcg, p, Top + 1, NULL);
+        LineTo(hdcg, p, Bot - 1);
     }
 
     DrawEdge(hdcg, &rc, BDR_SUNKENOUTER, BF_RECT);
@@ -284,30 +303,33 @@ GraphCtrl_RedrawPerCpu(PTM_GRAPH_CONTROL inst)
     HDC    hdcg = inst->hdcGraph;
     RECT   rc;
     UINT32 Cpu;
-    INT    h = inst->BitmapHeight;
 
     rc.left = 0; rc.top = 0;
-    rc.right = inst->BitmapWidth; rc.bottom = h;
+    rc.right = inst->BitmapWidth; rc.bottom = inst->BitmapHeight;
     FillRect(hdcg, &rc, GetSysColorBrush(COLOR_3DFACE));
 
     for (Cpu = 0; Cpu < inst->CpuSeries; Cpu++)
     {
-        INT  ColL, ColR, x, y;
+        RECT pc;
+        INT  ColL, ColR, Top, Bot, CellH, x, y;
         UINT j, i;
         PBYTE t = inst->CpuBuffer + Cpu * inst->NumberOfPoints;
 
-        GraphCtrl_PerCpuPane(inst, Cpu, &ColL, &ColR);
-        GraphCtrl_PerCpuDrawPaneStatic(inst, ColL, ColR);
+        GraphCtrl_PerCpuPane(inst, Cpu, &pc);
+        GraphCtrl_PerCpuDrawPaneStatic(inst, &pc);
+
+        ColL = pc.left; ColR = pc.right; Top = pc.top; Bot = pc.bottom;
+        CellH = Bot - Top;
 
         SelectObject(hdcg, inst->hPen0);
         x = ColR - 2;
         j = inst->CurrIndex;
-        y = h - 2 - (*(t + j) * (h - 3)) / 100;
+        y = Bot - 2 - (*(t + j) * (CellH - 3)) / 100;
         MoveToEx(hdcg, x, y, NULL);
         for (i = 0; i < inst->NumberOfPoints && x > ColL + 1; i++)
         {
             j = (j ? j : inst->NumberOfPoints) - 1;
-            y = h - 2 - (*(t + j) * (h - 3)) / 100;
+            y = Bot - 2 - (*(t + j) * (CellH - 3)) / 100;
             x -= PLOT_SHIFT;
             if (x < ColL + 1)
                 x = ColL + 1;
@@ -322,7 +344,7 @@ GraphCtrl_AddPointsPerCpu(PTM_GRAPH_CONTROL inst, const BYTE *vals, UINT32 nCpus
     HDC    hdcg;
     RECT   rc;
     UINT32 Cpu;
-    INT    h, v;
+    INT    v;
 
     if (!inst->CpuBuffer || inst->CpuSeries != nCpus)
     {
@@ -350,7 +372,6 @@ GraphCtrl_AddPointsPerCpu(PTM_GRAPH_CONTROL inst, const BYTE *vals, UINT32 nCpus
         return;
 
     hdcg = inst->hdcGraph;
-    h = inst->BitmapHeight;
 
     v = inst->CurrShift + PLOT_SHIFT;
     if (v >= inst->GridCellWidth)
@@ -359,28 +380,31 @@ GraphCtrl_AddPointsPerCpu(PTM_GRAPH_CONTROL inst, const BYTE *vals, UINT32 nCpus
 
     for (Cpu = 0; Cpu < nCpus; Cpu++)
     {
-        INT   ColL, ColR, InL, InR, PrevY, CurrY, p;
+        RECT  pc;
+        INT   ColL, ColR, Top, Bot, CellH, InL, InR, PrevY, CurrY, p;
         RECT  rcDirt;
         UINT  PrevIdx;
         PBYTE t = inst->CpuBuffer + Cpu * inst->NumberOfPoints;
 
-        GraphCtrl_PerCpuPane(inst, Cpu, &ColL, &ColR);
+        GraphCtrl_PerCpuPane(inst, Cpu, &pc);
+        ColL = pc.left; ColR = pc.right; Top = pc.top; Bot = pc.bottom;
+        CellH = Bot - Top;
         InL = ColL + 1;
         InR = ColR - 1;
         if (InR - InL <= PLOT_SHIFT)
             continue;
 
-        BitBlt(hdcg, InL, 1, InR - InL - PLOT_SHIFT, h - 2,
-               hdcg, InL + PLOT_SHIFT, 1, SRCCOPY);
+        BitBlt(hdcg, InL, Top + 1, InR - InL - PLOT_SHIFT, CellH - 2,
+               hdcg, InL + PLOT_SHIFT, Top + 1, SRCCOPY);
 
         rcDirt.left = InR - PLOT_SHIFT;
-        rcDirt.top = 1;
+        rcDirt.top = Top + 1;
         rcDirt.right = InR;
-        rcDirt.bottom = h - 1;
+        rcDirt.bottom = Bot - 1;
         FillRect(hdcg, &rcDirt, inst->hBrushBack);
 
         SelectObject(hdcg, inst->hPenGrid);
-        for (p = inst->GridCellHeight - 1; p < h - 1; p += inst->GridCellHeight)
+        for (p = Top + inst->GridCellHeight - 1; p < Bot - 1; p += inst->GridCellHeight)
         {
             MoveToEx(hdcg, InR - PLOT_SHIFT, p, NULL);
             LineTo(hdcg, InR, p);
@@ -390,14 +414,14 @@ GraphCtrl_AddPointsPerCpu(PTM_GRAPH_CONTROL inst, const BYTE *vals, UINT32 nCpus
             p = InR - inst->CurrShift - 1;
             if (p >= InL)
             {
-                MoveToEx(hdcg, p, 1, NULL);
-                LineTo(hdcg, p, h - 1);
+                MoveToEx(hdcg, p, Top + 1, NULL);
+                LineTo(hdcg, p, Bot - 1);
             }
         }
 
         PrevIdx = inst->CurrIndex ? (inst->CurrIndex - 1) : (inst->NumberOfPoints - 1);
-        PrevY = h - 2 - (*(t + PrevIdx) * (h - 3)) / 100;
-        CurrY = h - 2 - (vals[Cpu] * (h - 3)) / 100;
+        PrevY = Bot - 2 - (*(t + PrevIdx) * (CellH - 3)) / 100;
+        CurrY = Bot - 2 - (vals[Cpu] * (CellH - 3)) / 100;
 
         SelectObject(hdcg, inst->hPen0);
         MoveToEx(hdcg, InR - PLOT_SHIFT - 1, PrevY, NULL);
