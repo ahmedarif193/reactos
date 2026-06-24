@@ -142,11 +142,6 @@ EBRUSHOBJ_vSetSolidRGBColor(EBRUSHOBJ *pebo, COLORREF crColor)
     else if (crColor & 0x02000000)
     {
         crColor &= 0x00FFFFFF;
-        if (pebo->ppalDC != gppalDefault)
-        {
-            index = PALETTE_ulGetNearestIndex(pebo->ppalDC, crColor);
-            crColor = PALETTE_ulGetRGBColorFromIndex(pebo->ppalDC, index);
-        }
     }
     else if ((crColor & 0x10FF0000) == 0x10FF0000)
     {

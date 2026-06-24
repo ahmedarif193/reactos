@@ -895,21 +895,8 @@ TranslateCOLORREF(PDC pdc, COLORREF crColor)
     }
     else if (crColor & 0x02000000)
     {
-        /* This is a PALETTERGB, get the nearest color from the DC palette */
-        if (pdc->dclevel.hpal != StockObjects[DEFAULT_PALETTE])
-        {
-            /* First find the nearest index in the dc palette */
-            ppalDC = pdc->dclevel.ppal;
-            index = PALETTE_ulGetNearestIndex(ppalDC, crColor & 0xFFFFFF);
-
-            /* Get the RGB value */
-            crColor = PALETTE_ulGetRGBColorFromIndex(ppalDC, index);
-        }
-        else
-        {
-            /* Use the raw RGB color */
-            crColor = crColor & 0x00FFFFFF;
-        }
+        /* PALETTERGB is treated as a raw RGB color (matches Windows DIB path) */
+        crColor = crColor & 0x00FFFFFF;
     }
     else if ((crColor & 0x10FF0000) == 0x10FF0000) // DIBINDEX flag
     {

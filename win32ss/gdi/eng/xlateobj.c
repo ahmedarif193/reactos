@@ -26,14 +26,14 @@ EXLATEOBJ gexloTrivial = {{0, XO_TRIVIAL, 0, 0, 0, 0}, EXLATEOBJ_iXlateTrivial};
 static ULONG giUniqueXlate = 0;
 
 static const BYTE gajXlate5to8[32] =
-{  0,  8, 16, 25, 33, 41, 49, 58, 66, 74, 82, 90, 99,107,115,123,
- 132,140,148,156,165,173,181,189,197,206,214,222,231,239,247,255};
+{  0,  8, 16, 24, 33, 41, 49, 57, 66, 74, 82, 90, 99,107,115,123,
+ 132,140,148,156,165,173,181,189,198,206,214,222,231,239,247,255};
 
 static const BYTE gajXlate6to8[64] =
-{ 0,  4,  8, 12, 16, 20, 24, 28, 32, 36, 40, 45, 49, 52, 57, 61,
+{ 0,  4,  8, 12, 16, 20, 24, 28, 32, 36, 40, 44, 48, 52, 56, 60,
  65, 69, 73, 77, 81, 85, 89, 93, 97,101,105,109,113,117,121,125,
 130,134,138,142,146,150,154,158,162,166,170,174,178,182,186,190,
-194,198,202,207,210,215,219,223,227,231,235,239,243,247,251,255};
+195,199,203,207,211,215,219,223,227,231,235,239,243,247,251,255};
 
 
 /** iXlate functions **********************************************************/
@@ -502,7 +502,9 @@ EXLATEOBJ_ulExpandBitfieldChannel(ULONG iColor, ULONG ulMask)
     if (cBits > 8)
         return ulValue >> (cBits - 8);
 
-    return (ulValue * 255 + ulMax / 2) / ulMax;
+    /* Replicate the top bits into the low bits, matching Windows get_field */
+    ulValue <<= (8 - cBits);
+    return ulValue | (ulValue >> cBits);
 }
 
 _Function_class_(FN_XLATE)
@@ -562,14 +564,7 @@ EXLATEOBJ_crRealizeColor(
 
     if (crColor & 0x02000000)
     {
-        crColor &= 0x00FFFFFF;
-        if (pdc->dclevel.hpal != StockObjects[DEFAULT_PALETTE])
-        {
-            ppal = pdc->dclevel.ppal;
-            index = PALETTE_ulGetNearestIndex(ppal, crColor);
-            crColor = PALETTE_ulGetRGBColorFromIndex(ppal, index);
-        }
-        return crColor;
+        return crColor & 0x00FFFFFF;
     }
 
     if ((crColor & 0x10FF0000) == 0x10FF0000)
