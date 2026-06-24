@@ -1547,8 +1547,10 @@ NtGdiSetPixel(
     ulDirty = pdc->pdcattr->ulDirty_;
     pdc->pdcattr->ulDirty_ &= ~DIRTY_TEXT;
 
-    /* Call the internal function */
-    bResult = IntPatBlt(pdc, x, y, 1, 1, PATCOPY, pebo);
+    /* Call the internal function, honoring the DC's ROP2 mix mode */
+    bResult = IntPatBlt(pdc, x, y, 1, 1,
+                        (DWORD)gajRop2ToRop3[(pdc->pdcattr->jROP2 - 1) & 0xF] << 16,
+                        pebo);
 
     /* Restore old text brush color and dirty flags */
     EBRUSHOBJ_iSetSolidColor(pebo, iOldColor);
