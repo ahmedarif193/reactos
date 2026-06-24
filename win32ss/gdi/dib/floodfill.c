@@ -56,10 +56,12 @@ static __inline VOID addItemFlood(FLOODINFO *info,
                                   ULONG y,
                                   SURFOBJ *DstSurf,
                                   RECTL *DstRect,
+                                  PREGION prgn,
                                   ULONG Color,
                                   BOOL isSurf)
 {
-  if (RECTL_bPointInRect(DstRect,x,y))
+  if (RECTL_bPointInRect(DstRect,x,y) &&
+      (prgn == NULL || REGION_PtInRegion(prgn, x, y)))
   {
     if (isSurf &&
       DibFunctionsForBitmapFormat[DstSurf->iBitmapFormat].DIB_GetPixel(DstSurf, x, y) != Color)
@@ -88,7 +90,8 @@ BOOLEAN DIB_XXBPP_FloodFillSolid(SURFOBJ *DstSurf,
                                  RECTL *DstRect,
                                  POINTL *Origin,
                                  ULONG ConvColor,
-                                 UINT FillType)
+                                 UINT FillType,
+                                 PREGION prgn)
 {
   ULONG x, y;
   ULONG BrushColor;
@@ -110,7 +113,7 @@ BOOLEAN DIB_XXBPP_FloodFillSolid(SURFOBJ *DstSurf,
     {
       return FALSE;
     }
-    addItemFlood(&flood, x, y, DstSurf, DstRect, ConvColor, FALSE);
+    addItemFlood(&flood, x, y, DstSurf, DstRect, prgn, ConvColor, FALSE);
     while (flood.floodLen != 0)
     {
       x = flood.floodStart->x;
@@ -124,10 +127,10 @@ BOOLEAN DIB_XXBPP_FloodFillSolid(SURFOBJ *DstSurf,
         finalizeFlood(&flood);
         return FALSE;
       }
-      addItemFlood(&flood, x, y + 1, DstSurf, DstRect, ConvColor, FALSE);
-      addItemFlood(&flood, x, y - 1, DstSurf, DstRect, ConvColor, FALSE);
-      addItemFlood(&flood, x + 1, y, DstSurf, DstRect, ConvColor, FALSE);
-      addItemFlood(&flood, x - 1, y, DstSurf, DstRect, ConvColor, FALSE);
+      addItemFlood(&flood, x, y + 1, DstSurf, DstRect, prgn, ConvColor, FALSE);
+      addItemFlood(&flood, x, y - 1, DstSurf, DstRect, prgn, ConvColor, FALSE);
+      addItemFlood(&flood, x + 1, y, DstSurf, DstRect, prgn, ConvColor, FALSE);
+      addItemFlood(&flood, x - 1, y, DstSurf, DstRect, prgn, ConvColor, FALSE);
     }
     finalizeFlood(&flood);
   }
@@ -143,7 +146,7 @@ BOOLEAN DIB_XXBPP_FloodFillSolid(SURFOBJ *DstSurf,
     {
       return FALSE;
     }
-    addItemFlood(&flood, x, y, DstSurf, DstRect, ConvColor, TRUE);
+    addItemFlood(&flood, x, y, DstSurf, DstRect, prgn, ConvColor, TRUE);
     while (flood.floodLen != 0)
     {
       x = flood.floodStart->x;
@@ -157,10 +160,10 @@ BOOLEAN DIB_XXBPP_FloodFillSolid(SURFOBJ *DstSurf,
         finalizeFlood(&flood);
         return FALSE;
       }
-      addItemFlood(&flood, x, y + 1, DstSurf, DstRect, ConvColor, TRUE);
-      addItemFlood(&flood, x, y - 1, DstSurf, DstRect, ConvColor, TRUE);
-      addItemFlood(&flood, x + 1, y, DstSurf, DstRect, ConvColor, TRUE);
-      addItemFlood(&flood, x - 1, y, DstSurf, DstRect, ConvColor, TRUE);
+      addItemFlood(&flood, x, y + 1, DstSurf, DstRect, prgn, ConvColor, TRUE);
+      addItemFlood(&flood, x, y - 1, DstSurf, DstRect, prgn, ConvColor, TRUE);
+      addItemFlood(&flood, x + 1, y, DstSurf, DstRect, prgn, ConvColor, TRUE);
+      addItemFlood(&flood, x - 1, y, DstSurf, DstRect, prgn, ConvColor, TRUE);
     }
     finalizeFlood(&flood);
   }

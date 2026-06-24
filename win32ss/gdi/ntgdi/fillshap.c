@@ -1240,7 +1240,7 @@ NtGdiExtFloodFill(
      * Version a (most likely slow): call DrvPatBlt for every pixel
      * Version b: create a flood mask and let MaskBlt blit a masked brush */
     ConvColor = XLATEOBJ_iXlate(&exlo.xlo, Color);
-    Ret = DIB_XXBPP_FloodFillSolid(&psurf->SurfObj, &dc->eboFill.BrushObject, &DestRect, &Pt, ConvColor, FillType);
+    Ret = DIB_XXBPP_FloodFillSolid(&psurf->SurfObj, &dc->eboFill.BrushObject, &DestRect, &Pt, ConvColor, FillType, prgn);
 
     /* Let shadow-buffer drivers flush the bits written directly above */
     if (Ret && (psurf->flags & HOOK_SYNCHRONIZE) && GDIDEVFUNCS(&psurf->SurfObj).SynchronizeSurface)
