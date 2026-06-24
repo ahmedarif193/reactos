@@ -174,6 +174,7 @@ KiDeferredReadyThread(IN PKTHREAD Thread)
 {
     PKPRCB Prcb;
     BOOLEAN Preempted;
+    KAFFINITY IdleRequest;
     ULONG Processor;
     KPRIORITY OldPriority;
     PKTHREAD NextThread;
@@ -329,6 +330,7 @@ KiDeferredReadyThread(IN PKTHREAD Thread)
     /* Get the PRCB and lock it */
     Prcb = KiProcessorBlock[Processor];
     KiAcquirePrcbLock(Prcb);
+    IdleRequest = 0;
 
 #ifndef CONFIG_SMP
     /* Check if we have an idle summary */
@@ -412,11 +414,25 @@ KiDeferredReadyThread(IN PKTHREAD Thread)
     /* Update the ready summary */
     Prcb->ReadySummary |= PRIORITY_MASK(OldPriority);
 
+#ifdef CONFIG_SMP
+    if ((Prcb != KeGetCurrentPrcb()) && (Prcb->SetMember & KiIdleSummary))
+    {
+        IdleRequest = Prcb->SetMember;
+    }
+#endif
+
     /* Sanity check */
     ASSERT(OldPriority == Thread->Priority);
 
     /* Release the lock */
     KiReleasePrcbLock(Prcb);
+
+#ifdef CONFIG_SMP
+    if (IdleRequest != 0)
+    {
+        KiIpiSend(IdleRequest, IPI_DPC);
+    }
+#endif
 }
 
 PKTHREAD
