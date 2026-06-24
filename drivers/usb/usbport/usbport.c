@@ -3764,10 +3764,13 @@ USBPORT_FlushMapTransfers(IN PDEVICE_OBJECT FdoDevice)
 
     while (TRUE)
     {
+        KeAcquireSpinLockAtDpcLevel(&FdoExtension->MapTransferSpinLock);
+
         MapTransferList = &FdoExtension->MapTransferList;
 
         if (IsListEmpty(&FdoExtension->MapTransferList))
         {
+            KeReleaseSpinLockFromDpcLevel(&FdoExtension->MapTransferSpinLock);
             KeLowerIrql(OldIrql);
             return FlushStatus;
         }
@@ -3777,6 +3780,10 @@ USBPORT_FlushMapTransfers(IN PDEVICE_OBJECT FdoDevice)
                                      TransferLink);
 
         RemoveHeadList(MapTransferList);
+        Transfer->TransferLink.Flink = NULL;
+        Transfer->TransferLink.Blink = NULL;
+
+        KeReleaseSpinLockFromDpcLevel(&FdoExtension->MapTransferSpinLock);
 
         Mdl = Transfer->Urb->UrbControlTransfer.TransferBufferMDL;
         TransferBufferLength = Transfer->TransferParameters.TransferBufferLength;
