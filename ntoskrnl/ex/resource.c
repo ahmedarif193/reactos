@@ -103,11 +103,11 @@ ExpVerifyResource(IN PERESOURCE Resource)
     /* Verify the resource data */
     ASSERT((((ULONG_PTR)Resource) & (sizeof(ULONG_PTR) - 1)) == 0);
     ASSERT(!Resource->SharedWaiters ||
-            Resource->SharedWaiters->Header.Type == SemaphoreObject);
+            ((Resource->SharedWaiters->Header.Type & KOBJECT_TYPE_MASK) == SemaphoreObject));
     ASSERT(!Resource->SharedWaiters ||
             Resource->SharedWaiters->Header.Size == (sizeof(KSEMAPHORE) / sizeof(ULONG)));
     ASSERT(!Resource->ExclusiveWaiters ||
-            Resource->ExclusiveWaiters->Header.Type == SynchronizationEvent);
+            ((Resource->ExclusiveWaiters->Header.Type & KOBJECT_TYPE_MASK) == SynchronizationEvent));
     ASSERT(!Resource->ExclusiveWaiters ||
             Resource->ExclusiveWaiters->Header.Size == (sizeof(KEVENT) / sizeof(ULONG)));
 }
@@ -367,15 +367,15 @@ ExpExpandResourceOwnerTable(IN PERESOURCE Resource,
         /* Copy the table */
         if (Owner) RtlCopyMemory(Table, Owner, OldSize * sizeof(OWNER_ENTRY));
 
-        /* Acquire dispatcher lock to prevent thread boosting */
-        OldIrql = KiAcquireDispatcherLock();
+        /* Raise IRQL to prevent thread boosting */
+        OldIrql = KeRaiseIrqlToSynchLevel();
 
         /* Set the new table data */
         Table->TableSize = NewSize;
         Resource->OwnerTable = Table;
 
-        /* Release dispatcher lock */
-        KiReleaseDispatcherLock(OldIrql);
+        /* Lower IRQL */
+        KeLowerIrql(OldIrql);
 
         /* Sanity check */
         ExpVerifyResource(Resource);
@@ -699,9 +699,9 @@ ExpWaitForResource(IN PERESOURCE Resource,
         /* Check if we can boost */
         if (IsBoostAllowed(Resource))
         {
-            /* Get the current kernel thread and lock the dispatcher */
+            /* Get the current kernel thread and raise to synch level */
             Thread = KeGetCurrentThread();
-            Thread->WaitIrql = KiAcquireDispatcherLock();
+            Thread->WaitIrql = KeRaiseIrqlToSynchLevel();
             Thread->WaitNext = TRUE;
 
             /* Get the owner thread and boost it */

@@ -44,7 +44,6 @@ ETHREAD KiInitialThread;
 EPROCESS KiInitialProcess;
 
 /* System-defined Spinlocks */
-KSPIN_LOCK KiDispatcherLock;
 KSPIN_LOCK MmPfnLock;
 KSPIN_LOCK MmSystemSpaceLock;
 KSPIN_LOCK CcBcbSpinLock;
@@ -221,7 +220,7 @@ KiInitSpinLocks(IN PKPRCB Prcb,
 
     /* Initialize Queued Spinlocks */
     Prcb->LockQueue[LockQueueDispatcherLock].Next = NULL;
-    Prcb->LockQueue[LockQueueDispatcherLock].Lock = &KiDispatcherLock;
+    Prcb->LockQueue[LockQueueDispatcherLock].Lock = NULL;
     Prcb->LockQueue[LockQueueExpansionLock].Next = NULL;
     Prcb->LockQueue[LockQueueExpansionLock].Lock = NULL;
     Prcb->LockQueue[LockQueuePfnLock].Next = NULL;
@@ -281,7 +280,6 @@ KiInitSpinLocks(IN PKPRCB Prcb,
     if (!Number)
     {
         /* Initialize the lock themselves */
-        KeInitializeSpinLock(&KiDispatcherLock);
         KeInitializeSpinLock(&KiReverseStallIpiLock);
         KeInitializeSpinLock(&MmPfnLock);
         KeInitializeSpinLock(&MmSystemSpaceLock);
