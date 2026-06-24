@@ -37,8 +37,8 @@ KiScanReadyQueues(IN PKDPC Dpc,
     PLIST_ENTRY ListHead, NextEntry;
     PKTHREAD Thread;
 
-    /* Lock the dispatcher and PRCB */
-    OldIrql = KiAcquireDispatcherLock();
+    /* Raise IRQL and lock the PRCB */
+    OldIrql = KeRaiseIrqlToSynchLevel();
     KiAcquirePrcbLock(Prcb);
     /* Check if there's any thread that need help */
     Summary = Prcb->ReadySummary & ((1 << THREAD_BOOST_PRIORITY) - 2);
@@ -108,9 +108,9 @@ KiScanReadyQueues(IN PKDPC Dpc,
         } while ((Summary) && (Number) && (Count));
     }
 
-    /* Release the locks and dispatcher */
+    /* Release the PRCB lock and exit the dispatcher */
     KiReleasePrcbLock(Prcb);
-    KiReleaseDispatcherLock(OldIrql);
+    KiExitDispatcher(OldIrql);
 
     /* Update the queue index for next time */
     if ((Count) && (Number))
@@ -139,7 +139,7 @@ KeBalanceSetManager(IN PVOID Context)
     KDPC ScanDpc;
     KTIMER PeriodTimer;
     LARGE_INTEGER DueTime;
-    KWAIT_BLOCK WaitBlockArray[1];
+    KWAIT_BLOCK WaitBlockArray[1] = {0};
     PVOID WaitObjects[1];
     NTSTATUS Status;
 

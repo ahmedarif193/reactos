@@ -76,40 +76,32 @@ KePulseEvent(IN PKEVENT Event,
     ASSERT_EVENT(Event);
     ASSERT_IRQL_LESS_OR_EQUAL(DISPATCH_LEVEL);
 
-    /* Lock the Dispatcher Database */
-    OldIrql = KiAcquireDispatcherLock();
+    OldIrql = KeRaiseIrqlToSynchLevel();
+    KiAcquireDispatcherObject(&Event->Header);
 
-    /* Save the Old State */
     PreviousState = Event->Header.SignalState;
 
-    /* Check if we are non-signaled and we have stuff in the Wait Queue */
     if (!PreviousState && !IsListEmpty(&Event->Header.WaitListHead))
     {
-        /* Set the Event to Signaled */
         Event->Header.SignalState = 1;
-
-        /* Wake the Event */
-        KiWaitTest(&Event->Header, Increment);
+        KiWaitTest(Event, Increment);
     }
 
-    /* Unsignal it */
     Event->Header.SignalState = 0;
 
-    /* Check what wait state was requested */
+    KiReleaseDispatcherObject(&Event->Header);
+
     if (Wait == FALSE)
     {
-        /* Wait not requested, release Dispatcher Database and return */
-        KiReleaseDispatcherLock(OldIrql);
+        KiExitDispatcher(OldIrql);
     }
     else
     {
-        /* Return Locked and with a Wait */
         Thread = KeGetCurrentThread();
         Thread->WaitNext = TRUE;
         Thread->WaitIrql = OldIrql;
     }
 
-    /* Return the previous State */
     return PreviousState;
 }
 
@@ -133,23 +125,10 @@ LONG
 NTAPI
 KeResetEvent(IN PKEVENT Event)
 {
-    KIRQL OldIrql;
-    LONG PreviousState;
     ASSERT_EVENT(Event);
     ASSERT_IRQL_LESS_OR_EQUAL(DISPATCH_LEVEL);
 
-    /* Lock the Dispatcher Database */
-    OldIrql = KiAcquireDispatcherLock();
-
-    /* Save the Previous State */
-    PreviousState = Event->Header.SignalState;
-
-    /* Set it to zero */
-    Event->Header.SignalState = 0;
-
-    /* Release Dispatcher Database and return previous state */
-    KiReleaseDispatcherLock(OldIrql);
-    return PreviousState;
+    return InterlockedExchange(&Event->Header.SignalState, 0);
 }
 
 /*
@@ -179,46 +158,30 @@ KeSetEvent(IN PKEVENT Event,
         return TRUE;
     }
 
-    /* Lock the Dispathcer Database */
-    OldIrql = KiAcquireDispatcherLock();
+    OldIrql = KeRaiseIrqlToSynchLevel();
+    KiAcquireDispatcherObject(&Event->Header);
 
-    /* Save the Previous State */
     PreviousState = Event->Header.SignalState;
-
-    /* Set the Event to Signaled */
     Event->Header.SignalState = 1;
 
-    /* Check if the event just became signaled now, and it has waiters */
     if (!(PreviousState) && !(IsListEmpty(&Event->Header.WaitListHead)))
     {
-        /* Check the type of event */
-        if (Event->Header.Type == EventNotificationObject)
-        {
-            /* Unwait the thread */
-            KxUnwaitThread(&Event->Header, Increment);
-        }
-        else
-        {
-            /* Otherwise unwait the thread and unsignal the event */
-            KxUnwaitThreadForEvent(Event, Increment);
-        }
+        KiWaitTest(Event, Increment);
     }
 
-    /* Check what wait state was requested */
+    KiReleaseDispatcherObject(&Event->Header);
+
     if (!Wait)
     {
-        /* Wait not requested, release Dispatcher Database and return */
-        KiReleaseDispatcherLock(OldIrql);
+        KiExitDispatcher(OldIrql);
     }
     else
     {
-        /* Return Locked and with a Wait */
         Thread = KeGetCurrentThread();
         Thread->WaitNext = TRUE;
         Thread->WaitIrql = OldIrql;
     }
 
-    /* Return the previous State */
     return PreviousState;
 }
 
@@ -233,59 +196,56 @@ KeSetEventBoostPriority(IN PKEVENT Event,
     KIRQL OldIrql;
     PKWAIT_BLOCK WaitBlock;
     PKTHREAD Thread = KeGetCurrentThread(), WaitThread;
-    ASSERT(Event->Header.Type == EventSynchronizationObject);
+    ASSERT((Event->Header.Type & KOBJECT_TYPE_MASK) == EventSynchronizationObject);
     ASSERT_IRQL_LESS_OR_EQUAL(DISPATCH_LEVEL);
 
-    /* Acquire Dispatcher Database Lock */
-    OldIrql = KiAcquireDispatcherLock();
+    OldIrql = KeRaiseIrqlToSynchLevel();
+    KiAcquireDispatcherObject(&Event->Header);
 
-    /* Check if the list is empty */
     if (IsListEmpty(&Event->Header.WaitListHead))
     {
-        /* Set the Event to Signaled */
         Event->Header.SignalState = 1;
-
-        /* Return */
-        KiReleaseDispatcherLock(OldIrql);
+        KiReleaseDispatcherObject(&Event->Header);
+        KiExitDispatcher(OldIrql);
         return;
     }
 
-    /* Get the Wait Block */
     WaitBlock = CONTAINING_RECORD(Event->Header.WaitListHead.Flink,
                                   KWAIT_BLOCK,
                                   WaitListEntry);
 
-    /* Check if this is a WaitAll */
     if (WaitBlock->WaitType == WaitAll)
     {
-        /* Set the Event to Signaled */
         Event->Header.SignalState = 1;
-
-        /* Unwait the thread and unsignal the event */
-        KxUnwaitThreadForEvent(Event, EVENT_INCREMENT);
+        KiWaitTest(Event, EVENT_INCREMENT);
     }
     else
     {
-        /* Return waiting thread to caller */
         WaitThread = WaitBlock->Thread;
         if (WaitingThread) *WaitingThread = WaitThread;
 
-        /* Calculate new priority */
-        Thread->Priority = KiComputeNewPriority(Thread, 0);
+        RemoveEntryList(&WaitBlock->WaitListEntry);
+        WaitBlock->WaitListEntry.Flink = NULL;
 
-        /* Unlink the waiting thread */
-        KiUnlinkThread(WaitThread, STATUS_SUCCESS);
-
-        /* Request priority boosting */
-        WaitThread->AdjustIncrement = Thread->Priority;
-        WaitThread->AdjustReason = AdjustBoost;
-
-        /* Ready the thread */
-        KiReadyThread(WaitThread);
+        KiAcquireThreadLock(WaitThread);
+        if (WaitThread->State == Waiting)
+        {
+            Thread->Priority = KiComputeNewPriority(Thread, 0);
+            WaitBlock->BlockState = WaitBlockInactive;
+            KiUnlinkThread(WaitThread, STATUS_SUCCESS);
+            WaitThread->AdjustIncrement = Thread->Priority;
+            WaitThread->AdjustReason = AdjustBoost;
+            KiReadyThread(WaitThread);
+        }
+        else
+        {
+            WaitBlock->BlockState = WaitBlockInactive;
+        }
+        KiReleaseThreadLock(WaitThread);
     }
 
-    /* Release the Dispatcher Database Lock */
-    KiReleaseDispatcherLock(OldIrql);
+    KiReleaseDispatcherObject(&Event->Header);
+    KiExitDispatcher(OldIrql);
 }
 
 /* EOF */

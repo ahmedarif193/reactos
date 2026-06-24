@@ -121,6 +121,14 @@ Author:
 #define KOBJECT_LOCK_BIT                0x80
 
 //
+// KWAIT_BLOCK.BlockState values (per-object dispatcher locking)
+//
+#define WaitBlockBypassStart            0
+#define WaitBlockBypassComplete         1
+#define WaitBlockActive                 4
+#define WaitBlockInactive               5
+
+//
 // Dispatcher Priority increments
 //
 #define THREAD_ALERT_INCREMENT          2

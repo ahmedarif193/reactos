@@ -45,19 +45,37 @@ KiActivateWaiterQueue(IN PKQUEUE Queue)
         if ((WaitEntry != &Queue->Header.WaitListHead) &&
             (QueueEntry != &Queue->EntryListHead))
         {
-            /* Remove this entry */
-            RemoveEntryList(QueueEntry);
-            QueueEntry->Flink = NULL;
-
-            /* Decrease the Signal State */
-            Queue->Header.SignalState--;
-
-            /* Unwait the Thread */
+            /* Get the Wait Block and the waiting Thread */
             WaitBlock = CONTAINING_RECORD(WaitEntry,
                                           KWAIT_BLOCK,
                                           WaitListEntry);
             Thread = WaitBlock->Thread;
-            KiUnwaitThread(Thread, (LONG_PTR)QueueEntry, IO_NO_INCREMENT);
+
+            /* Unwait it under its thread lock, and only if still waiting: the
+             * wake and the PRCB wait-list teardown (KiUnlinkThread) must be
+             * serialized by the thread lock against the wait commit. */
+            KiAcquireThreadLock(Thread);
+            if (Thread->State == Waiting)
+            {
+                /* Remove this entry */
+                RemoveEntryList(QueueEntry);
+                QueueEntry->Flink = NULL;
+
+                /* Decrease the Signal State */
+                Queue->Header.SignalState--;
+
+                /* Eagerly unlink the wait block from the queue's wait list.
+                 * The thread's embedded WaitBlock is reused by its next wait, so
+                 * leaving it linked here makes one LIST_ENTRY reachable from two
+                 * dispatcher lists -> a later KiWaitTest walks a stale block and
+                 * dereferences a garbage WaitBlock->Thread. (Caller holds the
+                 * queue object lock; Win11 unlinks wait blocks eagerly.) */
+                RemoveEntryList(WaitEntry);
+                WaitEntry->Flink = NULL;
+                WaitBlock->BlockState = WaitBlockInactive;
+                KiUnwaitThread(Thread, (LONG_PTR)QueueEntry, IO_NO_INCREMENT);
+            }
+            KiReleaseThreadLock(Thread);
         }
     }
 }
@@ -96,9 +114,11 @@ KiInsertQueue(IN PKQUEUE Queue,
     {
         /* Remove the wait entry */
         RemoveEntryList(WaitEntry);
+        WaitEntry->Flink = NULL;
 
         /* Get the Wait Block and Thread */
         WaitBlock = CONTAINING_RECORD(WaitEntry, KWAIT_BLOCK, WaitListEntry);
+        WaitBlock->BlockState = WaitBlockInactive;
         Thread = WaitBlock->Thread;
 
         /* Remove the queue from the thread's wait list */
@@ -177,14 +197,16 @@ KeInsertHeadQueue(IN PKQUEUE Queue,
     ASSERT_QUEUE(Queue);
     ASSERT_IRQL_LESS_OR_EQUAL(DISPATCH_LEVEL);
 
-    /* Lock the Dispatcher Database */
-    OldIrql = KiAcquireDispatcherLock();
+    /* Lock the Queue object */
+    OldIrql = KeRaiseIrqlToSynchLevel();
+    KiAcquireDispatcherObject(&Queue->Header);
 
     /* Insert the Queue */
     PreviousState = KiInsertQueue(Queue, Entry, TRUE);
 
-    /* Release the Dispatcher Lock */
-    KiReleaseDispatcherLock(OldIrql);
+    /* Release the Queue object */
+    KiReleaseDispatcherObject(&Queue->Header);
+    KiExitDispatcher(OldIrql);
 
     /* Return previous State */
     return PreviousState;
@@ -203,14 +225,16 @@ KeInsertQueue(IN PKQUEUE Queue,
     ASSERT_QUEUE(Queue);
     ASSERT_IRQL_LESS_OR_EQUAL(DISPATCH_LEVEL);
 
-    /* Lock the Dispatcher Database */
-    OldIrql = KiAcquireDispatcherLock();
+    /* Lock the Queue object */
+    OldIrql = KeRaiseIrqlToSynchLevel();
+    KiAcquireDispatcherObject(&Queue->Header);
 
     /* Insert the Queue */
     PreviousState = KiInsertQueue(Queue, Entry, FALSE);
 
-    /* Release the Dispatcher Lock */
-    KiReleaseDispatcherLock(OldIrql);
+    /* Release the Queue object */
+    KiReleaseDispatcherObject(&Queue->Header);
+    KiExitDispatcher(OldIrql);
 
     /* Return previous State */
     return PreviousState;
@@ -253,19 +277,21 @@ KeRemoveQueue(IN PKQUEUE Queue,
     ASSERT_QUEUE(Queue);
     ASSERT_IRQL_LESS_OR_EQUAL(DISPATCH_LEVEL);
 
+
     /* Check if the Lock is already held */
     if (Thread->WaitNext)
     {
         /* It is, so next time don't do expect this */
         Thread->WaitNext = FALSE;
         KxQueueThreadWait();
+        KiAcquireDispatcherObject(&Queue->Header);
     }
     else
     {
-        /* Raise IRQL to synch, prepare the wait, then lock the database */
+        /* Raise IRQL to synch, prepare the wait, then lock the queue */
         Thread->WaitIrql = KeRaiseIrqlToSynchLevel();
         KxQueueThreadWait();
-        KiAcquireDispatcherLockAtSynchLevel();
+        KiAcquireDispatcherObject(&Queue->Header);
     }
 
     /*
@@ -282,11 +308,20 @@ KeRemoveQueue(IN PKQUEUE Queue,
         QueueEntry = &Thread->QueueListEntry;
         if (PreviousQueue)
         {
+            /* Removing the thread from PreviousQueue's thread list AND waking a
+             * waiter both mutate PreviousQueue's lists, so take its object lock
+             * (the lock held above is the NEW queue's). The New<->Previous
+             * ordering is safe in practice: a thread's queue is assigned once at
+             * registration, never concurrently swapped between two queues. */
+            KiAcquireDispatcherObject(&PreviousQueue->Header);
+
             /* Remove from this list */
             RemoveEntryList(QueueEntry);
 
             /* Wake the queue */
             KiActivateWaiterQueue(PreviousQueue);
+
+            KiReleaseDispatcherObject(&PreviousQueue->Header);
         }
 
         /* Insert in this new Queue */
@@ -337,9 +372,9 @@ KeRemoveQueue(IN PKQUEUE Queue,
             if ((Thread->ApcState.KernelApcPending) &&
                 !(Thread->SpecialApcDisable) && (Thread->WaitIrql < APC_LEVEL))
             {
-                /* Increment the count and unlock the dispatcher */
+                /* Increment the count and unlock the queue */
                 Queue->CurrentCount++;
-                KiReleaseDispatcherLockFromSynchLevel();
+                KiReleaseDispatcherObject(&Queue->Header);
                 KiExitDispatcher(Thread->WaitIrql);
             }
             else
@@ -368,14 +403,21 @@ KeRemoveQueue(IN PKQUEUE Queue,
                     }
 
                     /* It didn't, so activate it */
+                    Timer->TimerListEntry.Flink = NULL;
+                    Timer->TimerListEntry.Blink = NULL;
                     Timer->Header.Inserted = TRUE;
                 }
 
                 /* Insert the wait block in the list */
+                WaitBlock->BlockState = WaitBlockActive;
+                if (Timeout) TimerBlock->BlockState = WaitBlockActive;
                 InsertTailList(&Queue->Header.WaitListHead,
                                &WaitBlock->WaitListEntry);
 
-                /* Setup the wait information */
+                /* Commit the wait under the thread lock: State, the PRCB
+                 * wait-list insertion (publishing WaitPrcb), and SwapBusy must
+                 * be serialized against the signaler's KiUnwaitThread. */
+                KiAcquireThreadLock(Thread);
                 Thread->State = Waiting;
 
                 /* Add the thread to the wait list */
@@ -384,27 +426,41 @@ KeRemoveQueue(IN PKQUEUE Queue,
                 /* Activate thread swap */
                 ASSERT(Thread->WaitIrql <= DISPATCH_LEVEL);
                 KiSetThreadSwapBusy(Thread);
+                KiReleaseThreadLock(Thread);
+
+                /* Release the queue object */
+                KiReleaseDispatcherObject(&Queue->Header);
 
                 /* Check if we have a timer */
                 if (Timeout)
                 {
                     /* Insert it */
-                    KxInsertTimer(Timer, Hand);
-                }
-                else
-                {
-                    /* Otherwise, unlock the dispatcher */
-                    KiReleaseDispatcherLockFromSynchLevel();
+                    KxInsertTimerNoRelease(Timer, Hand);
                 }
 
                 /* Do the actual swap */
-                Status = KiSwapThread(Thread, KeGetCurrentPrcb());
+                Status = KiSwapThread(Thread, KeGetCurrentPrcb(), TRUE);
 
                 /* Reset the wait reason */
                 Thread->WaitReason = 0;
 
                 /* Check if we were executing an APC */
-                if (Status != STATUS_KERNEL_APC) return (PLIST_ENTRY)Status;
+                if (Status != STATUS_KERNEL_APC)
+                {
+                    if (WaitBlock->WaitListEntry.Flink)
+                    {
+                        KIRQL CleanupIrql = KeRaiseIrqlToSynchLevel();
+                        KiAcquireDispatcherObject(&Queue->Header);
+                        if (WaitBlock->WaitListEntry.Flink)
+                        {
+                            RemoveEntryList(&WaitBlock->WaitListEntry);
+                            WaitBlock->WaitListEntry.Flink = NULL;
+                        }
+                        KiReleaseDispatcherObject(&Queue->Header);
+                        KeLowerIrql(CleanupIrql);
+                    }
+                    return (PLIST_ENTRY)Status;
+                }
 
                 /* Check if we had a timeout */
                 if (Timeout)
@@ -419,13 +475,13 @@ KeRemoveQueue(IN PKQUEUE Queue,
             /* Start another wait */
             Thread->WaitIrql = KeRaiseIrqlToSynchLevel();
             KxQueueThreadWait();
-            KiAcquireDispatcherLockAtSynchLevel();
+            KiAcquireDispatcherObject(&Queue->Header);
             Queue->CurrentCount--;
         }
     }
 
-    /* Unlock Database and return */
-    KiReleaseDispatcherLockFromSynchLevel();
+    /* Unlock the queue and return */
+    KiReleaseDispatcherObject(&Queue->Header);
     KiExitDispatcher(Thread->WaitIrql);
     return QueueEntry;
 }
@@ -449,8 +505,9 @@ KeRundownQueue(IN PKQUEUE Queue)
     ASSERT_IRQL_LESS_OR_EQUAL(DISPATCH_LEVEL);
     ASSERT(IsListEmpty(&Queue->Header.WaitListHead));
 
-    /* Get the Dispatcher Lock */
-    OldIrql = KiAcquireDispatcherLock();
+    /* Lock the Queue object */
+    OldIrql = KeRaiseIrqlToSynchLevel();
+    KiAcquireDispatcherObject(&Queue->Header);
 
     /* Check if the list is empty */
     FirstEntry = Queue->EntryListHead.Flink;
@@ -481,8 +538,8 @@ KeRundownQueue(IN PKQUEUE Queue)
         RemoveEntryList(NextEntry);
     }
 
-    /* Release the dispatcher lock */
-    KiReleaseDispatcherLockFromSynchLevel();
+    /* Release the queue object */
+    KiReleaseDispatcherObject(&Queue->Header);
 
     /* Exit the dispatcher and return the first entry (if any) */
     KiExitDispatcher(OldIrql);

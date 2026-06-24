@@ -37,6 +37,12 @@ KiInsertTreeTimer(IN PKTIMER Timer,
         /* Acquire the lock */
         LockQueue = KiAcquireTimerLock(Hand);
 
+        if (!Timer->Header.Inserted)
+        {
+            KiReleaseTimerLock(LockQueue);
+            return FALSE;
+        }
+
         /* Insert the timer */
         if (KiInsertTimerTable(Timer, Hand))
         {
@@ -126,17 +132,7 @@ KiSignalTimer(IN PKTIMER Timer)
     /* Check if the timer has waiters */
     if (!IsListEmpty(&Timer->Header.WaitListHead))
     {
-        /* Check the type of event */
-        if (Timer->Header.Type == TimerNotificationObject)
-        {
-            /* Unwait the thread */
-            KxUnwaitThread(&Timer->Header, IO_NO_INCREMENT);
-        }
-        else
-        {
-            /* Otherwise unwait the thread and signal the timer */
-            KxUnwaitThreadForEvent((PKEVENT)Timer, IO_NO_INCREMENT);
-        }
+        KiWaitTest(Timer, IO_NO_INCREMENT);
     }
 
     /* Check if we have a period */
@@ -185,8 +181,8 @@ KiCompleteTimer(IN PKTIMER Timer,
     /* Release the timer lock */
     KiReleaseTimerLock(LockQueue);
 
-    /* Acquire dispatcher lock */
-    KiAcquireDispatcherLockAtSynchLevel();
+    /* Acquire the timer object lock */
+    KiAcquireDispatcherObject(&Timer->Header);
 
     /* Signal the timer if it's still on our list */
     if (!IsListEmpty(&ListHead)) RequestInterrupt = KiSignalTimer(Timer);
@@ -203,8 +199,8 @@ KiCompleteTimer(IN PKTIMER Timer,
         Timer->TimerListEntry.Blink = NULL;
     }
 
-    /* Release the dispatcher lock */
-    KiReleaseDispatcherLockFromSynchLevel();
+    /* Release the timer object lock */
+    KiReleaseDispatcherObject(&Timer->Header);
 
     /* Request a DPC if needed */
     if (RequestInterrupt) HalRequestSoftwareInterrupt(DISPATCH_LEVEL);
@@ -228,15 +224,17 @@ KeCancelTimer(IN OUT PKTIMER Timer)
     ASSERT(KeGetCurrentIrql() <= DISPATCH_LEVEL);
     DPRINT("KeCancelTimer(): Timer %p\n", Timer);
 
-    /* Lock the Database and Raise IRQL */
-    OldIrql = KiAcquireDispatcherLock();
+    /* Raise IRQL and acquire the timer object lock */
+    OldIrql = KeRaiseIrqlToSynchLevel();
+    KiAcquireDispatcherObject(&Timer->Header);
 
     /* Check if it's inserted, and remove it if it is */
     Inserted = Timer->Header.Inserted;
     if (Inserted) KxRemoveTreeTimer(Timer);
 
-    /* Release Dispatcher Lock */
-    KiReleaseDispatcherLock(OldIrql);
+    /* Release the timer object lock */
+    KiReleaseDispatcherObject(&Timer->Header);
+    KeLowerIrql(OldIrql);
 
     /* Return the old state */
     return Inserted;
@@ -327,8 +325,9 @@ KeSetTimerEx(IN OUT PKTIMER Timer,
     DPRINT("KeSetTimerEx(): Timer %p, DueTime %I64d, Period %d, Dpc %p\n",
            Timer, DueTime.QuadPart, Period, Dpc);
 
-    /* Lock the Database and Raise IRQL */
-    OldIrql = KiAcquireDispatcherLock();
+    /* Raise IRQL and acquire the timer object lock */
+    OldIrql = KeRaiseIrqlToSynchLevel();
+    KiAcquireDispatcherObject(&Timer->Header);
 
     /* Check if it's inserted, and remove it if it is */
     Inserted = Timer->Header.Inserted;
@@ -342,8 +341,8 @@ KeSetTimerEx(IN OUT PKTIMER Timer,
         /* Signal the timer */
         RequestInterrupt = KiSignalTimer(Timer);
 
-        /* Release the dispatcher lock */
-        KiReleaseDispatcherLockFromSynchLevel();
+        /* Release the timer object lock */
+        KiReleaseDispatcherObject(&Timer->Header);
 
         /* Check if we need to do an interrupt */
         if (RequestInterrupt) HalRequestSoftwareInterrupt(DISPATCH_LEVEL);
@@ -352,7 +351,8 @@ KeSetTimerEx(IN OUT PKTIMER Timer,
     {
         /* Insert the timer */
         Timer->Header.SignalState = FALSE;
-        KxInsertTimer(Timer, Hand);
+        KiReleaseDispatcherObject(&Timer->Header);
+        KxInsertTimerNoRelease(Timer, Hand);
     }
 
     /* Exit the dispatcher */
