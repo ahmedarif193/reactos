@@ -1358,15 +1358,13 @@ KeSetAffinityThread(IN PKTHREAD Thread,
     ASSERT_THREAD(Thread);
     ASSERT_IRQL_LESS_OR_EQUAL(DISPATCH_LEVEL);
 
-    /* Raise IRQL and lock the thread */
+    /* Raise IRQL */
     OldIrql = KeRaiseIrqlToSynchLevel();
-    KiAcquireThreadLock(Thread);
 
-    /* Call the internal function */
+    /* Call the internal function (it acquires the thread lock itself) */
     OldAffinity = KiSetAffinityThread(Thread, Affinity);
 
-    /* Release the thread lock and return old affinity */
-    KiReleaseThreadLock(Thread);
+    /* Return old affinity */
     KiExitDispatcher(OldIrql);
     return OldAffinity;
 }
