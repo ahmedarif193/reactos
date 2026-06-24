@@ -36,6 +36,34 @@ static const RGBQUAD DefLogPaletteQuads[20] =   /* Copy of Default Logical Palet
     { 0xff, 0xff, 0xff, 0x00 }
 };
 
+static
+PBYTE
+FASTCALL
+DIB_AllocTempBits(_In_ SIZE_T cjBits)
+{
+    PVOID pvSection;
+    PBYTE pvBits;
+
+    pvBits = EngAllocSectionMem(&pvSection, 0, cjBits, TAG_DIB);
+    if (pvBits)
+    {
+        EngFreeSectionMem(pvSection, NULL);
+    }
+
+    return pvBits;
+}
+
+static
+VOID
+FASTCALL
+DIB_FreeTempBits(_In_opt_ PVOID pvBits)
+{
+    if (pvBits)
+    {
+        EngFreeSectionMem(NULL, pvBits);
+    }
+}
+
 PPALETTE
 NTAPI
 CreateDIBPalette(
@@ -1239,9 +1267,6 @@ NtGdiStretchDIBitsInternal(
 
     LPBITMAPINFO pbmiSafe;
     UINT cjAlloc;
-    HBITMAP hBitmap, hOldBitmap = NULL;
-    HDC hdcMem;
-    HPALETTE hPal = NULL;
     ULONG BmpFormat = 0;
     INT LinesCopied = 0;
 
@@ -1302,6 +1327,7 @@ NtGdiStretchDIBitsInternal(
     if (!(pdc = DC_LockDc(hdc)))
     {
         EngSetLastError(ERROR_INVALID_HANDLE);
+        ExFreePoolWithTag(pbmiSafe, 'imBG');
         return 0;
     }
 
@@ -1310,6 +1336,7 @@ NtGdiStretchDIBitsInternal(
     {
         DC_UnlockDc(pdc);
         // CHECKME
+        ExFreePoolWithTag(pbmiSafe, 'imBG');
         return TRUE;
     }
 
@@ -1321,9 +1348,10 @@ NtGdiStretchDIBitsInternal(
 
     if (pjInit && (cjMaxBits > 0))
     {
-        pvBits = ExAllocatePoolWithTag(PagedPool, cjMaxBits, TAG_DIB);
+        pvBits = DIB_AllocTempBits(cjMaxBits);
         if (!pvBits)
         {
+            ExFreePoolWithTag(pbmiSafe, 'imBG');
             return 0;
         }
 
@@ -1334,7 +1362,8 @@ NtGdiStretchDIBitsInternal(
         }
         _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
         {
-            ExFreePoolWithTag(pvBits, TAG_DIB);
+            DIB_FreeTempBits(pvBits);
+            ExFreePoolWithTag(pbmiSafe, 'imBG');
             return 0;
         }
         _SEH2_END;
@@ -1344,75 +1373,7 @@ NtGdiStretchDIBitsInternal(
         pvBits = NULL;
     }
 
-    /* Here we select between the dwRop with SRCCOPY or not. */
-    if (dwRop == SRCCOPY)
     {
-        hdcMem = NtGdiCreateCompatibleDC(hdc);
-        if (hdcMem == NULL)
-        {
-            DPRINT1("NtGdiCreateCompatibleDC failed to create hdc.\n");
-            EngSetLastError(ERROR_NO_SYSTEM_RESOURCES);
-            return 0;
-        }
-
-        hBitmap = NtGdiCreateCompatibleBitmap(hdc,
-                                              abs(pbmiSafe->bmiHeader.biWidth),
-                                              abs(pbmiSafe->bmiHeader.biHeight));
-        if (hBitmap == NULL)
-        {
-            DPRINT1("NtGdiCreateCompatibleBitmap failed to create bitmap.\n");
-            DPRINT1("hdc : 0x%08x \n", hdc);
-            DPRINT1("width : 0x%08x \n", pbmiSafe->bmiHeader.biWidth);
-            DPRINT1("height : 0x%08x \n", pbmiSafe->bmiHeader.biHeight);
-            EngSetLastError(ERROR_NO_SYSTEM_RESOURCES);
-            return 0;
-        }
-
-        /* Select the bitmap into hdcMem, and save a handle to the old bitmap */
-        hOldBitmap = NtGdiSelectBitmap(hdcMem, hBitmap);
-
-        if (dwUsage == DIB_PAL_COLORS)
-        {
-            hPal = NtGdiGetDCObject(hdc, GDI_OBJECT_TYPE_PALETTE);
-            hPal = GdiSelectPalette(hdcMem, hPal, FALSE);
-        }
-
-        pdc = DC_LockDc(hdcMem);
-        if (pdc != NULL)
-        {
-            IntSetDIBits(pdc, hBitmap, 0, abs(pbmiSafe->bmiHeader.biHeight), pvBits,
-                         cjMaxBits, pbmiSafe, dwUsage);
-            DC_UnlockDc(pdc);
-        }
-
-        /* Origin for DIBitmap may be bottom left (positive biHeight) or top
-           left (negative biHeight) */
-        if (cxSrc == cxDst && cySrc == cyDst)
-        {
-            NtGdiBitBlt(hdc, xDst, yDst, cxDst, cyDst,
-                        hdcMem, xSrc, abs(pbmiSafe->bmiHeader.biHeight) - cySrc - ySrc,
-                        dwRop, CLR_INVALID, 0);
-        }
-        else
-        {
-            NtGdiStretchBlt(hdc, xDst, yDst, cxDst, cyDst,
-                            hdcMem, xSrc, abs(pbmiSafe->bmiHeader.biHeight) - cySrc - ySrc,
-                            cxSrc, cySrc, dwRop, CLR_INVALID);
-        }
-
-        /* cleanup */
-        if (hPal)
-            GdiSelectPalette(hdcMem, hPal, FALSE);
-
-        if (hOldBitmap)
-            NtGdiSelectBitmap(hdcMem, hOldBitmap);
-
-        NtGdiDeleteObjectApp(hdcMem);
-        GreDeleteObject(hBitmap);
-
-    } /* End of dwRop == SRCCOPY */
-    else
-    { /* Start of dwRop != SRCCOPY */
         /* FIXME: Locking twice is cheesy, coord tranlation in UM will fix it */
         if (!(pdc = DC_LockDc(hdc)))
         {
@@ -1506,7 +1467,7 @@ NtGdiStretchDIBitsInternal(
         if (pdc) DC_UnlockDc(pdc);
     }
 
-    if (pvBits) ExFreePoolWithTag(pvBits, TAG_DIB);
+    DIB_FreeTempBits(pvBits);
 
     /* This is not what MSDN says is returned from this function, but it
      * follows Wine's dlls/gdi32/dib.c function nulldrv_StretchDIBits
@@ -1656,7 +1617,7 @@ NtGdiCreateDIBitmapInternal(
     if(pjInit && (fInit & CBM_INIT))
     {
         if (cjMaxBits == 0) return NULL;
-        safeBits = ExAllocatePoolWithTag(PagedPool, cjMaxBits, TAG_DIB);
+        safeBits = DIB_AllocTempBits(cjMaxBits);
         if(!safeBits)
         {
             DPRINT1("Failed to allocate %lu bytes\n", cjMaxBits);
@@ -1699,7 +1660,7 @@ NtGdiCreateDIBitmapInternal(
                                            hcmXform);
 
 cleanup:
-    if (safeBits) ExFreePoolWithTag(safeBits, TAG_DIB);
+    DIB_FreeTempBits(safeBits);
     return hbmResult;
 }
 
