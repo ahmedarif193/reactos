@@ -184,6 +184,14 @@ SURFACE_AllocSurface(
         cjBits = cjBufSize;
     }
 
+    if ((iType == STYPE_BITMAP) &&
+        (pvBits == NULL) &&
+        !(fjBitmap & (BMF_USERMEM | BMF_KMSECTION)) &&
+        (cjBits >= PAGE_SIZE))
+    {
+        fjBitmap |= BMF_KMSECTION;
+    }
+
     /* Check if we need an extra large object */
     if ((iType == STYPE_BITMAP) && (pvBits == NULL) &&
         !(fjBitmap & BMF_USERMEM) && !(fjBitmap & BMF_KMSECTION))
