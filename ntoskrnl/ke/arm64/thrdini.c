@@ -163,7 +163,7 @@ KiInitializeContextThread(_Inout_ PKTHREAD Thread,
  */
 static
 BOOLEAN
-KiArm64IdleDispatchNextThread(_In_ PKPRCB Prcb)
+KiArm64IdleDispatchNextThread(_In_ PKPRCB Prcb, _In_ BOOLEAN AdvertiseIdle)
 {
     PKTHREAD OldThread, NewThread;
 
@@ -183,6 +183,8 @@ KiArm64IdleDispatchNextThread(_In_ PKPRCB Prcb)
 
     if (!Prcb->NextThread)
     {
+        if (AdvertiseIdle)
+            InterlockedOr64((PLONG64)&KiIdleSummary, (LONG64)Prcb->SetMember);
         KiReleasePrcbLock(Prcb);
         return FALSE;
     }
@@ -270,7 +272,7 @@ KiIdleLoop(VOID)
              * processing above may have produced one) while we were draining.
              * Consume it now instead of looping back and parking in WFI with a
              * runnable thread sitting in Prcb->NextThread. */
-            if (KiArm64IdleDispatchNextThread(Prcb))
+            if (KiArm64IdleDispatchNextThread(Prcb, FALSE))
                 continue;
 
             _enable();
@@ -278,12 +280,11 @@ KiIdleLoop(VOID)
         }
 
         /* Dispatch a thread handed to this core (locally selected or installed
-         * by a remote KiDeferredReadyThread); otherwise fall through to WFI. */
-        if (KiArm64IdleDispatchNextThread(Prcb))
+         * by a remote KiDeferredReadyThread); otherwise fall through to WFI.
+         * Advertises this core idle under the PRCB lock when no work is found. */
+        if (KiArm64IdleDispatchNextThread(Prcb, TRUE))
             continue;
 
-        /* Re-advertise this core as idle so KiSelectNextProcessor can hand off to it. */
-        InterlockedOr64((PLONG64)&KiIdleSummary, (LONG64)Prcb->SetMember);
         if (Prcb->SchedulerSubNode != NULL)
         {
             PKSCHEDULER_SUBNODE SubNode = (PKSCHEDULER_SUBNODE)Prcb->SchedulerSubNode;
