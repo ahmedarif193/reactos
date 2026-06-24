@@ -624,12 +624,25 @@ SetDIBits(
     HPALETTE hPal = NULL;
     INT LinesCopied = 0;
     BOOL newDC = FALSE;
+    BITMAP bm;
 
-    if (fuColorUse != DIB_RGB_COLORS && fuColorUse != DIB_PAL_COLORS)
+    if (fuColorUse != DIB_RGB_COLORS &&
+        fuColorUse != DIB_PAL_COLORS &&
+        fuColorUse != DIB_PAL_COLORS + 1)
         return 0;
 
     if (!lpvBits || (GDI_HANDLE_GET_TYPE(hBitmap) != GDI_OBJECT_TYPE_BITMAP))
         return 0;
+
+    if (fuColorUse == DIB_PAL_COLORS + 1)
+    {
+        if ((GetObjectW(hBitmap, sizeof(bm), &bm) != sizeof(bm)) ||
+            (bm.bmPlanes != 1) ||
+            (bm.bmBitsPixel != 1))
+        {
+            return 0;
+        }
+    }
 
     if (lpbmi->bmiHeader.biSize >= sizeof(BITMAPINFOHEADER))
     {
@@ -649,6 +662,14 @@ SetDIBits(
             SetLastError(ERROR_INVALID_PARAMETER);
             return 0;
         }
+    }
+
+    if (((lpbmi->bmiHeader.biCompression == BI_RLE8) ||
+         (lpbmi->bmiHeader.biCompression == BI_RLE4)) &&
+        (lpbmi->bmiHeader.biHeight < 0))
+    {
+        SetLastError(ERROR_INVALID_PARAMETER);
+        return 0;
     }
 
     hDCc = NtGdiGetDCforBitmap(hBitmap); // hDC can be NULL, so, get it from the bitmap.
@@ -729,6 +750,7 @@ SetDIBitsToDevice(
     PVOID pvSafeBits = (PVOID) Bits;
     UINT bmiHeight;
     BOOL top_down;
+    BOOL isRle;
     INT src_y = 0;
     ULONG iFormat, cBitsPixel, cjBits, cjWidth;
 
@@ -755,6 +777,15 @@ SetDIBitsToDevice(
     if (ColorUse && ColorUse != DIB_PAL_COLORS && ColorUse != DIB_PAL_COLORS + 1)
         return 0;
 
+    if ((lpbmi->bmiHeader.biSize >= sizeof(BITMAPINFOHEADER)) &&
+        ((lpbmi->bmiHeader.biCompression == BI_RLE8) ||
+         (lpbmi->bmiHeader.biCompression == BI_RLE4)) &&
+        (lpbmi->bmiHeader.biHeight < 0))
+    {
+        SetLastError(ERROR_INVALID_PARAMETER);
+        return 0;
+    }
+
     pConvertedInfo = ConvertBitmapInfo(lpbmi, ColorUse, &ConvertedInfoSize, FALSE);
     if (!pConvertedInfo)
         return 0;
@@ -767,6 +798,15 @@ SetDIBitsToDevice(
 
     bmiHeight = abs(pConvertedInfo->bmiHeader.biHeight);
     top_down = (pConvertedInfo->bmiHeader.biHeight < 0);
+    isRle = (pConvertedInfo->bmiHeader.biCompression == BI_RLE8) ||
+            (pConvertedInfo->bmiHeader.biCompression == BI_RLE4);
+    if (isRle && (pConvertedInfo == lpbmi))
+    {
+        pConvertedInfo = RtlAllocateHeap(RtlGetProcessHeap(), 0, ConvertedInfoSize);
+        if (!pConvertedInfo)
+            goto Exit;
+        RtlCopyMemory(pConvertedInfo, lpbmi, ConvertedInfoSize);
+    }
     if ((StartScan > bmiHeight) && (ScanLines > bmiHeight))
     {
         DPRINT("Returning ScanLines of '%d'\n", ScanLines);
@@ -789,11 +829,25 @@ SetDIBitsToDevice(
     /* Below code modeled after Wine's nulldrv_SetDIBitsToDevice */
     if (StartScan <= YSrc + bmiHeight)
     {
-        if ((pConvertedInfo->bmiHeader.biCompression == BI_RLE8) ||
-            (pConvertedInfo->bmiHeader.biCompression == BI_RLE4))
+        if (isRle)
         {
+            if (top_down)
+            {
+                SetLastError(ERROR_INVALID_PARAMETER);
+                LinesCopied = 0;
+                goto Exit;
+            }
+
             StartScan = 0;
             ScanLines = bmiHeight;
+            pConvertedInfo->bmiHeader.biWidth = XSrc + Width;
+            pConvertedInfo->bmiHeader.biHeight = YSrc + Height;
+            if ((pConvertedInfo->bmiHeader.biWidth <= 0) ||
+                (pConvertedInfo->bmiHeader.biHeight <= 0))
+            {
+                LinesCopied = 0;
+                goto Exit;
+            }
         }
         else
         {
@@ -807,40 +861,47 @@ SetDIBitsToDevice(
                 ScanLines = bmiHeight - StartScan;
             }
             src_y = StartScan + ScanLines - (YSrc + Height);
-            if (!top_down)
+            if (src_y > 0)
             {
-                /* get rid of unnecessary lines */
-                if ((src_y < 0 || src_y >= (INT)ScanLines) &&
-                    pConvertedInfo->bmiHeader.biCompression != BI_BITFIELDS)
+                if (!top_down)
+                {
+                    if (src_y >= (INT)ScanLines)
+                    {
+                        LinesCopied = 0;
+                        goto Exit;
+                    }
+                    ScanLines -= src_y;
+                    src_y = 0;
+                }
+                else if (src_y >= (INT)ScanLines)
                 {
                     LinesCopied = ScanLines;
                     goto Exit;
                 }
-                if (YDest >= 0)
-                {
-                    LinesCopied = ScanLines + StartScan;
-                    ScanLines -= src_y;
-                }
-                else
-                {
-                    LinesCopied = ScanLines - src_y;
-                }
             }
-            else if (src_y < 0 || src_y >= (INT)ScanLines)
-            {
-                if (lpbmi->bmiHeader.biHeight < 0 &&
-                    StartScan > MaxScanLines)
-                {
-                    ScanLines = lpbmi->bmiHeader.biHeight - StartScan;
-                }
-                DPRINT("Returning ScanLines of '%d'\n", ScanLines);
-                LinesCopied = ScanLines;
-                goto Exit;
-            }
-            else
+            YSrc = src_y;
+            StartScan = 0;
+        }
+    }
+
+    if (GDI_HANDLE_GET_TYPE(hdc) == GDILoObjType_LO_ALTDC_TYPE)
+    {
+        PLDC pldc = GdiGetLDC(hdc);
+
+        if (!pldc)
+        {
+            SetLastError(ERROR_INVALID_HANDLE);
+            goto Exit;
+        }
+
+        if (pldc->iType == LDC_EMFLDC)
+        {
+            if (EMFDC_SetDIBitsToDevice(pldc, XDest, YDest, Width, Height, XSrc, YSrc,
+                                        StartScan, ScanLines, Bits, pConvertedInfo, ColorUse))
             {
                 LinesCopied = ScanLines;
             }
+            goto Exit;
         }
     }
 
@@ -888,8 +949,7 @@ SetDIBitsToDevice(
         }
     }
 
-    if ((pConvertedInfo->bmiHeader.biCompression == BI_RLE8) ||
-            (pConvertedInfo->bmiHeader.biCompression == BI_RLE4))
+    if (isRle)
     {
         /* For compressed data, we must set the whole thing */
         StartScan = 0;
@@ -936,24 +996,6 @@ SetDIBitsToDevice(
         goto Exit;
     }
 
-    /* Calculation of ScanLines for NtGdiSetDIBitsToDeviceInternal */
-    if (YDest >= 0)
-    {
-        ScanLines = min(Height, ScanLines);
-        if (YSrc > 0)
-            ScanLines += YSrc;
-    }
-    else
-    {
-         ScanLines = min(ScanLines,
-                         abs(pConvertedInfo->bmiHeader.biHeight) - StartScan);
-    }
-
-    if (YDest >= 0 && YSrc > 0 && bmiHeight <= MaxHeight)
-    {
-        ScanLines += YSrc;
-    }
-
     /* Find Format from lpbmi which is now pConvertedInfo */
     iFormat = BitmapFormat(pConvertedInfo->bmiHeader.biBitCount,
                            pConvertedInfo->bmiHeader.biCompression);
@@ -982,17 +1024,6 @@ SetDIBitsToDevice(
         }
     }
 
-    if (YDest >= 0)
-    {
-        ScanLines = min(Height, ScanLines);
-        if (YSrc > 0)
-        {
-            ScanLines += YSrc;
-            if (Height + YDest + 1 < ScanLines)
-                YSrc = 0;
-        }
-    }
-
     /*
      if ( !pDc_Attr || // DC is Public
      ColorUse == DIB_PAL_COLORS ||
@@ -1008,36 +1039,9 @@ SetDIBitsToDevice(
             TRUE,
             NULL);
     }
-
-    if (bmiHeight > MaxScanLines)
-    {
-        LinesCopied = ScanLines;
-    }
-
-    if (YDest < 0)
-    {
-        if (top_down)
-            LinesCopied = ScanLines;
-        else
-            LinesCopied = ScanLines - src_y;
-    }
-
-    if (pConvertedInfo->bmiHeader.biCompression == BI_RLE8 ||
-        pConvertedInfo->bmiHeader.biCompression == BI_RLE4)
+    if (isRle && LinesCopied)
     {
         LinesCopied = bmiHeight;
-    }
-
-    if (pConvertedInfo->bmiHeader.biHeight < 0)
-    {
-        if (pConvertedInfo->bmiHeader.biHeight < -MaxSourceHeight || YDest >= 0)
-        {
-            LinesCopied = ScanLines + src_y;
-        }
-        else
-        {
-            LinesCopied = ScanLines;
-        }
     }
 
 Exit:
@@ -1079,6 +1083,32 @@ StretchDIBits(
     BOOL Hit = FALSE;
 
     DPRINT("StretchDIBits %p : %p : %u\n", lpBits, lpBitsInfo, iUsage);
+
+    if (GDI_HANDLE_GET_TYPE(hdc) == GDILoObjType_LO_ALTDC_TYPE)
+    {
+        PLDC pldc = GdiGetLDC(hdc);
+
+        if (!pldc)
+        {
+            SetLastError(ERROR_INVALID_HANDLE);
+            return 0;
+        }
+
+        if (pldc->iType == LDC_EMFLDC)
+        {
+            pConvertedInfo = ConvertBitmapInfo(lpBitsInfo, iUsage, &ConvertedInfoSize, FALSE);
+            if (!pConvertedInfo)
+                return 0;
+
+            if (EMFDC_StretchDIBits(pldc, XDest, YDest, nDestWidth, nDestHeight,
+                                    XSrc, YSrc, nSrcWidth, nSrcHeight, lpBits,
+                                    pConvertedInfo, iUsage, dwRop))
+            {
+                LinesCopied = nDestHeight;
+            }
+            goto Exit;
+        }
+    }
 
     HANDLE_METADC( int,
                    StretchDIBits,
@@ -1214,5 +1244,3 @@ ClearBitmapAttributes(HBITMAP hbm, DWORD dwFlags)
     }
     return NtGdiClearBitmapAttributes( hbm, dwFlags );;
 }
-
-

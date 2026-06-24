@@ -2378,6 +2378,7 @@ PATH_ExtTextOut(
     const INT *dx)
 {
     PPATH pPath;
+    PTEXTOBJ TextObj;
     unsigned int idx, ggo_flags = GGO_NATIVE;
     POINT offset = {0, 0};
 
@@ -2395,6 +2396,20 @@ PATH_ExtTextOut(
 
     if (!count) return TRUE;
     if (flags & ETO_GLYPH_INDEX) ggo_flags |= GGO_GLYPH_INDEX;
+
+    TextObj = RealizeFontInit(dc->pdcattr->hlfntNew);
+    if (TextObj)
+    {
+        LOGFONTW *plf = &TextObj->logfont.elfEnumLogfontEx.elfLogFont;
+
+        if (IntIsFontLogicalRaster(plf))
+        {
+            TEXTOBJ_UnlockText(TextObj);
+            PATH_UnlockPath(pPath);
+            return TRUE;
+        }
+        TEXTOBJ_UnlockText(TextObj);
+    }
 
     for (idx = 0; idx < count; idx++)
     {

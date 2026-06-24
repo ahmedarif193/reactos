@@ -673,6 +673,7 @@ IntEngBitBlt(
     RECTL rclSrc;
     RECTL rclSrcClipped;
     POINTL ptlBrush;
+    POINTL ptlMask;
     PFN_DrvBitBlt pfnBitBlt;
     LONG lTmp;
     BOOLEAN bTopToBottom, bLeftToRight;
@@ -753,6 +754,13 @@ IntEngBitBlt(
 #else
         ptlBrush = *pptlBrush;
 #endif
+    }
+
+    if (psoMask && pptlMask)
+    {
+        ptlMask.x = pptlMask->x + rclClipped.left - prclTrg->left;
+        ptlMask.y = pptlMask->y + rclClipped.top - prclTrg->top;
+        pptlMask = &ptlMask;
     }
 
     /* Is the target surface device managed? */

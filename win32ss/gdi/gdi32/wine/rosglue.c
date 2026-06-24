@@ -219,6 +219,111 @@ bitmap_info_size(
     }
 }
 
+static
+DWORD
+bitmap_info_header_size(
+    const BITMAPINFO *info)
+{
+    DWORD masks = 0;
+
+    if (info->bmiHeader.biSize == sizeof(BITMAPCOREHEADER))
+        return sizeof(BITMAPCOREHEADER);
+
+    if (info->bmiHeader.biCompression == BI_BITFIELDS)
+        masks = 3;
+
+    return max(info->bmiHeader.biSize, sizeof(BITMAPINFOHEADER) + masks * sizeof(DWORD));
+}
+
+static
+const BITMAPINFO *
+get_dib_brush_packed_info(
+    HBRUSH hbr)
+{
+    LOGBRUSH logbrush;
+
+    if (!GetObjectA(hbr, sizeof(logbrush), &logbrush) ||
+        logbrush.lbStyle != BS_DIBPATTERN ||
+        logbrush.lbHatch == 0)
+    {
+        return NULL;
+    }
+
+    return (const BITMAPINFO *)logbrush.lbHatch;
+}
+
+static BOOL
+copy_dib_brush_info_table(
+    HBRUSH hbr,
+    BITMAPINFO *info,
+    UINT usage)
+{
+    const BITMAPINFO *packed_info;
+    DWORD dst_offset, dst_size, src_offset, src_size, table_size;
+    BOOL ret = FALSE;
+
+    packed_info = get_dib_brush_packed_info(hbr);
+    if (packed_info == NULL)
+        return FALSE;
+
+    _SEH2_TRY
+    {
+        dst_offset = bitmap_info_header_size(info);
+        dst_size = bitmap_info_size(info, usage);
+        src_offset = bitmap_info_header_size(packed_info);
+        src_size = bitmap_info_size(packed_info, usage);
+
+        if (dst_size >= dst_offset &&
+            src_size >= src_offset &&
+            src_size - src_offset >= dst_size - dst_offset)
+        {
+            table_size = dst_size - dst_offset;
+            CopyMemory((BYTE *)info + dst_offset, (const BYTE *)packed_info + src_offset, table_size);
+            ret = TRUE;
+        }
+    }
+    _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
+    {
+        ret = FALSE;
+    }
+    _SEH2_END;
+
+    return ret;
+}
+
+static BOOL
+copy_dib_brush_bits(
+    HBRUSH hbr,
+    const BITMAPINFO *info,
+    UINT usage,
+    PVOID bits)
+{
+    const BITMAPINFO *packed_info;
+    DWORD info_size;
+    BOOL ret = FALSE;
+
+    if (bits == NULL || info->bmiHeader.biSizeImage == 0)
+        return FALSE;
+
+    packed_info = get_dib_brush_packed_info(hbr);
+    if (packed_info == NULL)
+        return FALSE;
+
+    _SEH2_TRY
+    {
+        info_size = bitmap_info_size(packed_info, usage);
+        CopyMemory(bits, (const BYTE *)packed_info + info_size, info->bmiHeader.biSizeImage);
+        ret = TRUE;
+    }
+    _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
+    {
+        ret = FALSE;
+    }
+    _SEH2_END;
+
+    return ret;
+}
+
 BOOL
 get_brush_bitmap_info(
     HBRUSH hbr,
@@ -226,51 +331,63 @@ get_brush_bitmap_info(
     PVOID pvBits,
     PUINT puUsage)
 {
+    BYTE bmiBuffer[FIELD_OFFSET(BITMAPINFO, bmiColors) + 256 * sizeof(RGBQUAD)];
+    PBITMAPINFO pInfo = pbmi ? pbmi : (PBITMAPINFO)bmiBuffer;
     HBITMAP hbmp;
     HDC hdc;
-    PVOID Bits;
+    PVOID Bits = NULL;
+    UINT usage;
+    BOOL ret = FALSE;
 
     /* Call win32k to get the bitmap handle and color usage */
-    hbmp = NtGdiGetObjectBitmapHandle(hbr, puUsage);
+    hbmp = NtGdiGetObjectBitmapHandle(hbr, &usage);
     if (hbmp == NULL)
         return FALSE;
+    if (puUsage)
+        *puUsage = usage;
 
     hdc = GetDC(NULL);
     if (hdc == NULL)
         return FALSE;
 
     /* Initialize the BITMAPINFO */
-    ZeroMemory(pbmi, sizeof(*pbmi));
-    pbmi->bmiHeader.biSize = sizeof(BITMAPINFOHEADER);
+    ZeroMemory(pInfo, sizeof(*pInfo));
+    pInfo->bmiHeader.biSize = sizeof(BITMAPINFOHEADER);
 
     /* Retrieve information about the bitmap */
-    if (!GetDIBits(hdc, hbmp, 0, 0, NULL, pbmi, *puUsage))
-        return FALSE;
+    if (!GetDIBits(hdc, hbmp, 0, 0, NULL, pInfo, usage))
+        goto done;
+    copy_dib_brush_info_table(hbr, pInfo, usage);
 
     if (pvBits)
     {
-        /* Now allocate a buffer for the bits */
-        Bits = HeapAlloc(GetProcessHeap(), 0, pbmi->bmiHeader.biSizeImage);
-        if (Bits == NULL)
-            return FALSE;
-
-        /* Retrieve the bitmap bits */
-        if (!GetDIBits(hdc, hbmp, 0, pbmi->bmiHeader.biHeight, Bits, pbmi, *puUsage))
+        if (!copy_dib_brush_bits(hbr, pInfo, usage, pvBits))
         {
-            HeapFree(GetProcessHeap(), 0, Bits);
-            return FALSE;
-        }
+            /* Now allocate a buffer for the bits */
+            Bits = HeapAlloc(GetProcessHeap(), 0, pInfo->bmiHeader.biSizeImage);
+            if (Bits == NULL)
+                goto done;
 
-        CopyMemory( pvBits, Bits, pbmi->bmiHeader.biSizeImage );
+            /* Retrieve the bitmap bits */
+            if (!GetDIBits(hdc, hbmp, 0, pInfo->bmiHeader.biHeight, Bits, pInfo, usage))
+                goto done;
+
+            CopyMemory( pvBits, Bits, pInfo->bmiHeader.biSizeImage );
+        }
 
     }
 
     /* GetDIBits doesn't set biClrUsed, but wine code needs it, so we set it */
-    if (pbmi->bmiHeader.biBitCount <= 8)
+    if (pInfo->bmiHeader.biBitCount <= 8)
     {
-        pbmi->bmiHeader.biClrUsed =  1 << pbmi->bmiHeader.biBitCount;
+        pInfo->bmiHeader.biClrUsed =  1 << pInfo->bmiHeader.biBitCount;
     }
-    return TRUE;
+    ret = TRUE;
+
+done:
+    HeapFree(GetProcessHeap(), 0, Bits);
+    ReleaseDC(NULL, hdc);
+    return ret;
 }
 
 BOOL
@@ -353,6 +470,7 @@ METADC_RosGlueDeleteObject(HGDIOBJ hobj)
 {
     GDILOOBJTYPE eObjectType;
     HDC hdc;
+    BOOL found = FALSE;
 
     /* Check for one of the types we actually handle here */
     eObjectType = GDI_HANDLE_GET_TYPE(hobj);
@@ -365,25 +483,27 @@ METADC_RosGlueDeleteObject(HGDIOBJ hobj)
         return;
     }
 
-    /* Check if we have a client object link and remove it if it was found.
-       The link is the HDC that the object was selected into. */
-    hdc = GdiRemoveClientObjLink(hobj);
-    if (hdc == NULL)
+    /* Check if we have client object links and remove them if found.
+       The links are the HDCs that have recorded the object. */
+    while ((hdc = GdiRemoveClientObjLink(hobj)) != NULL)
     {
-        DPRINT1("the link was not found\n");
-        /* The link was not found, so we are not handling this object here */
-        return;
+        found = TRUE;
+
+        if ( GDI_HANDLE_GET_TYPE(hdc) == GDILoObjType_LO_METADC16_TYPE ) METADC_DeleteObject( hdc, hobj );
+
+        if ( GDI_HANDLE_GET_TYPE(hdc) == GDILoObjType_LO_ALTDC_TYPE )
+        {
+            LDC* pWineDc = GdiGetLDC(hdc);
+            if ( pWineDc )
+            {
+                emfdc_delete_object( hdc, hobj );
+            }
+        }
     }
 
-    if ( GDI_HANDLE_GET_TYPE(hdc) == GDILoObjType_LO_METADC16_TYPE ) METADC_DeleteObject( hdc, hobj );
-
-    if ( GDI_HANDLE_GET_TYPE(hdc) == GDILoObjType_LO_ALTDC_TYPE )
+    if (!found)
     {
-        LDC* pWineDc = GdiGetLDC(hdc);
-        if ( pWineDc )
-        {
-            emfdc_delete_object( hdc, hobj );
-        }
+        DPRINT1("the link was not found\n");
     }
 }
 
@@ -424,4 +544,3 @@ METADC_RosGlueDeleteDC(
 
     return NtGdiDeleteObjectApp(hdc);
 }
-

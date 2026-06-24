@@ -145,6 +145,22 @@ RealizePalette(
 
     if (GDI_HANDLE_GET_TYPE(hdc) != GDILoObjType_LO_DC_TYPE)
     {
+        PLDC pLDC = GdiGetLDC(hdc);
+
+        if (!pLDC)
+        {
+            SetLastError(ERROR_INVALID_HANDLE);
+            return GDI_ERROR;
+        }
+
+        if (pLDC->iType == LDC_EMFLDC)
+        {
+            if (!EMFDC_RealizePalette(pLDC))
+                return GDI_ERROR;
+
+            return 0;
+        }
+
         return GDI_ERROR;
     }
 

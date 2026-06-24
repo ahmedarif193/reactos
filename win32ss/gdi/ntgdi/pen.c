@@ -87,7 +87,7 @@ IntGdiExtCreatePen(
     HPEN hPen;
     PBRUSH pbrushPen;
     static ULONG aulStyleAlternate[] = { 1, 1 };
-    static ULONG aulStyleDash[] = { 6, 2 };
+    static ULONG aulStyleDash[] = { 18, 6 };
     static ULONG aulStyleDot[] = { 1, 1 };
     static ULONG aulStyleDashDot[] = { 3, 2, 1, 2 };
     static ULONG aulStyleDashDotDot[] = { 3, 1, 1, 1, 1, 1 };

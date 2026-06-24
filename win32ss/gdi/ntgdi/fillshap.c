@@ -809,11 +809,14 @@ IntRoundRect(
 
     ASSERT ( dc ); // Caller's responsibility to set this up
 
+    if ((Left == Right) || (Top == Bottom)) return TRUE;
+
+    if ((xCurveDiameter == 0) || (yCurveDiameter == 0))
+        return IntRectangle(dc, Left, Top, Right, Bottom);
+
     if ( PATH_IsPathOpen(dc->dclevel) )
         return PATH_RoundRect ( dc, Left, Top, Right, Bottom,
                                 xCurveDiameter, yCurveDiameter );
-
-    if ((Left == Right) || (Top == Bottom)) return TRUE;
 
     xCurveDiameter = max(abs( xCurveDiameter ), 1);
     yCurveDiameter = max(abs( yCurveDiameter ), 1);
@@ -826,6 +829,9 @@ IntRoundRect(
     {
        INT tmp = Bottom; Bottom = Top; Top = tmp;
     }
+
+    xCurveDiameter = min(xCurveDiameter, Right - Left);
+    yCurveDiameter = min(yCurveDiameter, Bottom - Top);
 
     pdcattr = dc->pdcattr;
 
@@ -870,6 +876,13 @@ IntRoundRect(
     RectBounds.top    += dc->ptlDCOrig.y;
     RectBounds.right  += dc->ptlDCOrig.x;
     RectBounds.bottom += dc->ptlDCOrig.y;
+
+    if (pdcattr->iGraphicsMode == GM_ADVANCED)
+    {
+        RECTL_vMakeWellOrdered(&RectBounds);
+        RectBounds.right++;
+        RectBounds.bottom++;
+    }
 
     pbrFill = BRUSH_ShareLockBrush(pdcattr->hbrush);
     if (!pbrFill)
@@ -975,7 +988,6 @@ GreGradientFill(
                 pTriangle->Vertex2 >= nVertex ||
                 pTriangle->Vertex3 >= nVertex)
             {
-                EngSetLastError(ERROR_INVALID_PARAMETER);
                 return FALSE;
             }
         }
@@ -987,7 +999,6 @@ GreGradientFill(
         {
             if (pRect->UpperLeft >= nVertex || pRect->LowerRight >= nVertex)
             {
-                EngSetLastError(ERROR_INVALID_PARAMETER);
                 return FALSE;
             }
         }

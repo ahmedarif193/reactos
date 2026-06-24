@@ -523,14 +523,15 @@ CreateBitCase(FILE *Out, unsigned Bpp, PROPINFO RopInfo, int Flags,
     {
         if (0 == (Flags & FLAG_BOTTOMUP))
         {
-            Output(Out, "PatternY = (BltInfo->DestRect.top - BltInfo->BrushOrigin.y) %%\n");
-            Output(Out, "           BltInfo->PatternSurface->sizlBitmap.cy;\n");
+            Output(Out, "PatternY = DIB_GetPatternCoord(BltInfo->DestRect.top -\n");
+            Output(Out, "           BltInfo->BrushOrigin.y,\n");
+            Output(Out, "           BltInfo->PatternSurface->sizlBitmap.cy);\n");
         }
         else
         {
-            Output(Out, "PatternY = (BltInfo->DestRect.bottom - 1 -\n");
-            Output(Out, "            BltInfo->BrushOrigin.y) %%\n");
-            Output(Out, "           BltInfo->PatternSurface->sizlBitmap.cy;\n");
+            Output(Out, "PatternY = DIB_GetPatternCoord(BltInfo->DestRect.bottom - 1 -\n");
+            Output(Out, "           BltInfo->BrushOrigin.y,\n");
+            Output(Out, "           BltInfo->PatternSurface->sizlBitmap.cy);\n");
         }
     }
     if (ROPCODE_SRCCOPY == RopInfo->RopCode &&
@@ -541,8 +542,9 @@ CreateBitCase(FILE *Out, unsigned Bpp, PROPINFO RopInfo, int Flags,
     }
     if (RopInfo->UsesPattern && 0 != (Flags & FLAG_PATTERNSURFACE))
     {
-        Output(Out, "BasePatternX = (BltInfo->DestRect.left - BltInfo->BrushOrigin.x) %%\n");
-        Output(Out, "           BltInfo->PatternSurface->sizlBitmap.cx;\n");
+        Output(Out, "BasePatternX = DIB_GetPatternCoord(BltInfo->DestRect.left -\n");
+        Output(Out, "           BltInfo->BrushOrigin.x,\n");
+        Output(Out, "           BltInfo->PatternSurface->sizlBitmap.cx);\n");
     }
 
     Output(Out, "for (LineIndex = 0; LineIndex < LineCount; LineIndex++)\n");

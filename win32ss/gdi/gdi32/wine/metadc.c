@@ -578,8 +578,15 @@ static INT16 metadc_create_brush( struct metadc *metadc, HBRUSH brush )
             mr->rdParm[1] = usage;
             dst_info = (BITMAPINFO *)(mr->rdParm + 2);
             get_brush_bitmap_info( brush, dst_info, (char *)dst_info + info_size, NULL );
-            if (dst_info->bmiHeader.biClrUsed == 1 << dst_info->bmiHeader.biBitCount)
-                dst_info->bmiHeader.biClrUsed = 0;
+            if (dst_info->bmiHeader.biBitCount <= 8)
+            {
+                DWORD colors = 1 << dst_info->bmiHeader.biBitCount;
+
+                if (dst_info->bmiHeader.biClrUsed == colors)
+                    dst_info->bmiHeader.biClrUsed = 0;
+                if (dst_info->bmiHeader.biClrImportant == colors)
+                    dst_info->bmiHeader.biClrImportant = 0;
+            }
             break;
         }
 
@@ -1236,7 +1243,13 @@ BOOL METADC_SelectPalette( HDC hdc, HPALETTE palette )
     log_palette->palVersion = 0x300;
     log_palette->palNumEntries = count;
 
-    GetPaletteEntries( palette, 0, count, log_palette->palPalEntry );
+    if (GetPaletteEntries( palette, 0, count, log_palette->palPalEntry ))
+    {
+        WORD i;
+
+        for (i = 0; i < count; i++)
+            log_palette->palPalEntry[i].peFlags = 0;
+    }
 
     ret = metadc_create_palette( metadc, palette, log_palette, size );
 

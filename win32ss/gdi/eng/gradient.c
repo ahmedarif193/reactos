@@ -27,10 +27,10 @@ const LONG LINC[2] = {-1, 1};
 
 /* Horizontal/Vertical gradients */
 #define HVINITCOL(Col, id) \
-  c[id] = v1->Col >> 8; \
-  dc[id] = abs((v2->Col >> 8) - c[id]); \
+  c[id] = v1->Col; \
+  dc[id] = abs((LONG)v2->Col - c[id]); \
   ec[id] = -(dy >> 1); \
-  ic[id] = LINC[(v2->Col >> 8) > c[id]]
+  ic[id] = LINC[v2->Col > c[id]]
 #define HVSTEPCOL(id) \
   ec[id] += dc[id]; \
   while(ec[id] > 0) \
@@ -110,7 +110,7 @@ IntEngGradientFillRect(
                         {
                             if (y >= FillRect.left)
                             {
-                                Color = XLATEOBJ_iXlate(pxlo, RGB(c[0], c[1], c[2]));
+                                Color = XLATEOBJ_iXlate(pxlo, RGB(c[0] >> 8, c[1] >> 8, c[2] >> 8));
                                 DibFunctionsForBitmapFormat[psoOutput->iBitmapFormat].DIB_VLine(
                                     psoOutput, y + Translate.x, FillRect.top + Translate.y, FillRect.bottom + Translate.y, Color);
                             }
@@ -138,7 +138,7 @@ IntEngGradientFillRect(
                     {
                         if (y >= FillRect.top)
                         {
-                            Color = XLATEOBJ_iXlate(pxlo, RGB(c[0], c[1], c[2]));
+                            Color = XLATEOBJ_iXlate(pxlo, RGB(c[0] >> 8, c[1] >> 8, c[2] >> 8));
                             DibFunctionsForBitmapFormat[psoOutput->iBitmapFormat].DIB_HLine(psoOutput,
                                                                                             FillRect.left + Translate.x,
                                                                                             FillRect.right + Translate.x,
@@ -464,11 +464,21 @@ static
 BOOL
 IntEngIsNULLTriangle(TRIVERTEX  *pVertex, GRADIENT_TRIANGLE *gt)
 {
-    if(COMPAREVERTEX(VERTEX(Vertex1), VERTEX(Vertex2)))
+    if (COMPAREVERTEX(VERTEX(Vertex1), VERTEX(Vertex2)) &&
+        COMPAREVERTEX(VERTEX(Vertex1), VERTEX(Vertex3)))
         return TRUE;
-    if(COMPAREVERTEX(VERTEX(Vertex1), VERTEX(Vertex3)))
+    return FALSE;
+}
+
+static
+BOOL
+IntEngIsDegenerateTriangle(TRIVERTEX  *pVertex, GRADIENT_TRIANGLE *gt)
+{
+    if (COMPAREVERTEX(VERTEX(Vertex1), VERTEX(Vertex2)))
         return TRUE;
-    if(COMPAREVERTEX(VERTEX(Vertex2), VERTEX(Vertex3)))
+    if (COMPAREVERTEX(VERTEX(Vertex1), VERTEX(Vertex3)))
+        return TRUE;
+    if (COMPAREVERTEX(VERTEX(Vertex2), VERTEX(Vertex3)))
         return TRUE;
     return FALSE;
 }
@@ -531,6 +541,10 @@ EngGradientFill(
                 {
                     /* skip empty triangles */
                     continue;
+                }
+                if (IntEngIsDegenerateTriangle(pVertex, gt))
+                {
+                    return FALSE;
                 }
                 if (!IntEngGradientFillTriangle(psoDest,
                                                 pco,

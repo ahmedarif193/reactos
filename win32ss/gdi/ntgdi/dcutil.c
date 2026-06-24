@@ -736,8 +736,8 @@ NtGdiGetBoundsRect(
           }
           rc.left   = max( rc.left, 0 );
           rc.top    = max( rc.top, 0 );
-          rc.right  = min( rc.right,  rcRgn.right - rcRgn.left );
-          rc.bottom = min( rc.bottom, rcRgn.bottom - rcRgn.top );
+          rc.right  = min( rc.right,  rcRgn.right );
+          rc.bottom = min( rc.bottom, rcRgn.bottom );
           DPRINT("Rao dc %p r %d b %d\n",pdc,rcRgn.right - rcRgn.left, rcRgn.bottom - rcRgn.top);
           DPRINT("rc  l %d t %d\n",rc.left,rc.top);
           DPRINT("    r %d b %d\n",rc.right,rc.bottom);
@@ -926,14 +926,14 @@ TranslateCOLORREF(PDC pdc, COLORREF crColor)
         }
         else
         {
-            /* Can't handle DIBINDEX, treat it as an RGB color */
-            crColor = crColor & 0x00FFFFFF;
+            /* Non-indexed surface: DIBINDEX has no color table, use pixel 0 */
+            crColor = 0;
         }
     }
     else
     {
         DPRINT("Invalid COLORREF 0x08X\n", crColor);
-        crColor = 0;
+        crColor = crColor & 0x00FFFFFF;
     }
 
     /* Initialize an XLATEOBJ from RGB to the target surface (no bg/fg colors) */
@@ -947,5 +947,3 @@ TranslateCOLORREF(PDC pdc, COLORREF crColor)
 
     return ulColor;
 }
-
-

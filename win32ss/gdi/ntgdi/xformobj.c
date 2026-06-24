@@ -94,6 +94,7 @@ HintFromAccel(ULONG flAccel)
             return GX_IDENTITY;
         case (XFORM_SCALE|XFORM_UNITY):
             return GX_OFFSET;
+        case (XFORM_SCALE|XFORM_NO_TRANSLATION):
         case XFORM_SCALE:
             return GX_SCALE;
         default:

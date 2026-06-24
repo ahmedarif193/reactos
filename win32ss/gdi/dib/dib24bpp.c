@@ -486,6 +486,7 @@ DIB_24BPP_BitBlt(PBLTINFO BltInfo)
 {
    LONG DestX, DestY;
    LONG SourceX, SourceY;
+   LONG PatternX;
    LONG PatternY = 0;
    ULONG Dest, Source = 0, Pattern = 0;
    BOOL UsesSource;
@@ -505,8 +506,8 @@ DIB_24BPP_BitBlt(PBLTINFO BltInfo)
    {
       if (BltInfo->PatternSurface)
       {
-         PatternY = (BltInfo->DestRect.top - BltInfo->BrushOrigin.y) %
-                    BltInfo->PatternSurface->sizlBitmap.cy;
+         PatternY = DIB_GetPatternCoord(BltInfo->DestRect.top - BltInfo->BrushOrigin.y,
+                    BltInfo->PatternSurface->sizlBitmap.cy);
       }
       else
       {
@@ -532,7 +533,9 @@ DIB_24BPP_BitBlt(PBLTINFO BltInfo)
 
          if (BltInfo->PatternSurface)
          {
-            Pattern = DIB_GetSourceIndex(BltInfo->PatternSurface, (DestX - BltInfo->BrushOrigin.x) % BltInfo->PatternSurface->sizlBitmap.cx, PatternY);
+            PatternX = DIB_GetPatternCoord(DestX - BltInfo->BrushOrigin.x,
+                       BltInfo->PatternSurface->sizlBitmap.cx);
+            Pattern = DIB_GetSourceIndex(BltInfo->PatternSurface, PatternX, PatternY);
          }
 
          Dest = DIB_DoRop(BltInfo->Rop4, Dest, Source, Pattern) & 0xFFFFFF;
@@ -721,6 +724,18 @@ Clamp8(ULONG val)
    return (val > 255) ? 255 : (UCHAR)val;
 }
 
+static __inline UCHAR
+AlphaMul(UCHAR Value, UCHAR Alpha)
+{
+  return (UCHAR)(((ULONG)Value * Alpha + 127) / 255);
+}
+
+static __inline UCHAR
+BlendColor(UCHAR Dst, UCHAR Src, ULONG Alpha)
+{
+  return (UCHAR)(((ULONG)Src * Alpha + (ULONG)Dst * (255 - Alpha) + 127) / 255);
+}
+
 BOOLEAN
 DIB_24BPP_AlphaBlend(SURFOBJ* Dest, SURFOBJ* Source, RECTL* DestRect,
                      RECTL* SourceRect, CLIPOBJ* ClipRegion,
@@ -773,21 +788,22 @@ DIB_24BPP_AlphaBlend(SURFOBJ* Dest, SURFOBJ* Source, RECTL* DestRect,
     while (++Cols <= DestRect->right - DestRect->left)
     {
       SrcPixel.ul = DIB_GetSource(Source, SrcX, SrcY, ColorTranslation);
-      SrcPixel.col.red = (SrcPixel.col.red * BlendFunc.SourceConstantAlpha) / 255;
-      SrcPixel.col.green = (SrcPixel.col.green * BlendFunc.SourceConstantAlpha) / 255;
-      SrcPixel.col.blue = (SrcPixel.col.blue * BlendFunc.SourceConstantAlpha) / 255;
       if (!(BlendFunc.AlphaFormat & AC_SRC_ALPHA))
       {
-          Alpha = BlendFunc.SourceConstantAlpha ;
+          DstPixel.col.red = BlendColor(*Dst, SrcPixel.col.red, BlendFunc.SourceConstantAlpha);
+          DstPixel.col.green = BlendColor(*(Dst+1), SrcPixel.col.green, BlendFunc.SourceConstantAlpha);
+          DstPixel.col.blue = BlendColor(*(Dst+2), SrcPixel.col.blue, BlendFunc.SourceConstantAlpha);
       }
       else
       {
-        Alpha = (SrcPixel.col.alpha * BlendFunc.SourceConstantAlpha) / 255;
+        SrcPixel.col.red = AlphaMul(SrcPixel.col.red, BlendFunc.SourceConstantAlpha);
+        SrcPixel.col.green = AlphaMul(SrcPixel.col.green, BlendFunc.SourceConstantAlpha);
+        SrcPixel.col.blue = AlphaMul(SrcPixel.col.blue, BlendFunc.SourceConstantAlpha);
+        Alpha = AlphaMul(SrcPixel.col.alpha, BlendFunc.SourceConstantAlpha);
+        DstPixel.col.red = Clamp8(AlphaMul(*Dst, 255 - Alpha) + SrcPixel.col.red) ;
+        DstPixel.col.green = Clamp8(AlphaMul(*(Dst+1), 255 - Alpha) + SrcPixel.col.green) ;
+        DstPixel.col.blue = Clamp8(AlphaMul(*(Dst+2), 255 - Alpha) + SrcPixel.col.blue) ;
       }
-
-      DstPixel.col.red = Clamp8((*Dst * (255 - Alpha)) / 255 + SrcPixel.col.red) ;
-      DstPixel.col.green = Clamp8((*(Dst+1) * (255 - Alpha) / 255 + SrcPixel.col.green)) ;
-      DstPixel.col.blue = Clamp8((*(Dst+2) * (255 - Alpha)) / 255 + SrcPixel.col.blue) ;
       *Dst++ = DstPixel.col.red;
       *Dst++ = DstPixel.col.green;
       *Dst++ = DstPixel.col.blue;

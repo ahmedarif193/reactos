@@ -412,6 +412,10 @@ GetTokenInformation(HANDLE TokenHandle,
                     PDWORD ReturnLength)
 {
     NTSTATUS Status;
+    ULONG LocalReturnLength;
+
+    if (!ReturnLength)
+        ReturnLength = &LocalReturnLength;
 
     Status = NtQueryInformationToken(TokenHandle,
                                      TokenInformationClass,

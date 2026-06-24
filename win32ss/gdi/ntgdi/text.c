@@ -25,6 +25,21 @@
    TMPF_VECTOR and TMPF_TRUETYPE, which can cause problems in edit boxes.
  */
 
+BOOL
+FASTCALL
+IntIsFontLogicalRaster(
+   _In_ const LOGFONTW *plf)
+{
+    return ((_wcsicmp(plf->lfFaceName, L"Courier") == 0) ||
+            (_wcsicmp(plf->lfFaceName, L"FixedSys") == 0) ||
+            (_wcsicmp(plf->lfFaceName, L"Helv") == 0) ||
+            (_wcsicmp(plf->lfFaceName, L"MS Sans Serif") == 0) ||
+            (_wcsicmp(plf->lfFaceName, L"MS Serif") == 0) ||
+            (_wcsicmp(plf->lfFaceName, L"System") == 0) ||
+            (_wcsicmp(plf->lfFaceName, L"Terminal") == 0) ||
+            (_wcsicmp(plf->lfFaceName, L"Tms Rmn") == 0));
+}
+
 VOID FASTCALL
 IntTMWFixUp(
    _In_ HDC hDC,
@@ -41,14 +56,7 @@ IntTMWFixUp(
      * out the problematic TrueType and Vector bits.
      * Our list below checks for Raster Font Facenames. */
     DPRINT("Font Facename is '%S'.\n", lf.lfFaceName);
-    if ((_wcsicmp(lf.lfFaceName, L"Courier") == 0) ||
-        (_wcsicmp(lf.lfFaceName, L"FixedSys") == 0) ||
-        (_wcsicmp(lf.lfFaceName, L"Helv") == 0) ||
-        (_wcsicmp(lf.lfFaceName, L"MS Sans Serif") == 0) ||
-        (_wcsicmp(lf.lfFaceName, L"MS Serif") == 0) ||
-        (_wcsicmp(lf.lfFaceName, L"System") == 0) ||
-        (_wcsicmp(lf.lfFaceName, L"Terminal") == 0) ||
-        (_wcsicmp(lf.lfFaceName, L"Tms Rmn") == 0))
+    if (IntIsFontLogicalRaster(&lf))
     {
         ptm->TextMetric.tmPitchAndFamily &= ~(TMPF_TRUETYPE | TMPF_VECTOR);
     }

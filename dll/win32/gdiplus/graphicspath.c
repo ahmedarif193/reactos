@@ -2347,6 +2347,13 @@ static void widen_closed_figure(const GpPointF *points, int start, int end,
     if (end <= start || pen_width == 0.0)
         return;
 
+    if (end == start + 1)
+    {
+        widen_open_figure(points, start, end, pen, pen_width,
+            pen->startcap, pen->customstart, pen->endcap, pen->customend, last_point);
+        return;
+    }
+
     /* left outline */
     prev_point = *last_point;
 

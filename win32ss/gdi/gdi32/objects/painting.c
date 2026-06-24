@@ -11,7 +11,27 @@ LineTo(
     _In_ INT x,
     _In_ INT y )
 {
+    PLDC pLDC;
+    PDC_ATTR pdcattr;
+
     HANDLE_METADC(BOOL, LineTo, FALSE, hdc, x, y);
+
+    if (GDI_HANDLE_GET_TYPE(hdc) == GDILoObjType_LO_ALTDC_TYPE)
+    {
+        pLDC = GdiGetLDC(hdc);
+        if (pLDC && pLDC->iType == LDC_EMFLDC && !EMFDC_IsPathOpen(pLDC))
+        {
+            pdcattr = GdiGetDcAttr(hdc);
+            if (pdcattr)
+            {
+                pdcattr->ptlCurrent.x = x;
+                pdcattr->ptlCurrent.y = y;
+                pdcattr->ulDirty_ &= ~DIRTY_PTLCURRENT;
+                pdcattr->ulDirty_ |= DIRTY_PTFXCURRENT | DIRTY_STYLESTATE;
+            }
+            return TRUE;
+        }
+    }
 
     if ( GdiConvertAndCheckDC(hdc) == NULL ) return FALSE;
 
@@ -799,6 +819,15 @@ PlgBlt(
     _In_ INT xMask,
     _In_ INT yMask)
 {
+    if (GDI_HANDLE_GET_TYPE(hdcDest) != GDILoObjType_LO_DC_TYPE &&
+        GDI_HANDLE_GET_TYPE(hdcDest) != GDILoObjType_LO_METADC16_TYPE)
+    {
+        PLDC pLDC = GdiGetLDC(hdcDest);
+
+        if (pLDC && pLDC->iType == LDC_EMFLDC)
+            return EMFDC_PlgBlt(pLDC, ppt, hdcSrc, xSrc, ySrc, cx, cy, hbmMask, xMask, yMask);
+    }
+
     HANDLE_EMETAFDC(BOOL,
                   PlgBlt,
                   FALSE,

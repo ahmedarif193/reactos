@@ -50,6 +50,8 @@ struct emf
     HANDLE   file;
     HBRUSH   dc_brush;
     HPEN     dc_pen;
+    HPALETTE palette;
+    HPALETTE realized_palette;
     BOOL     path;
 };
 
@@ -115,6 +117,39 @@ static void emfdc_update_bounds( struct emf *emf, RECTL *rect )
         bounds->right  = max(bounds->right,  vport_rect.right);
         bounds->bottom = max(bounds->bottom, vport_rect.bottom);
     }
+}
+
+BOOL EMFDC_IsPathOpen( WINEDC *dc_attr )
+{
+    return dc_attr->emf->path;
+}
+
+static void normalize_bitmap_info( BITMAPINFO *info )
+{
+    UINT bpp = info->bmiHeader.biBitCount;
+
+    if (bpp <= 8 && info->bmiHeader.biClrUsed == (1u << bpp))
+        info->bmiHeader.biClrUsed = 0;
+    if (bpp <= 8 && info->bmiHeader.biClrImportant == (1u << bpp))
+        info->bmiHeader.biClrImportant = 0;
+}
+
+static DWORD get_dib_image_size_for_record( const BITMAPINFO *info )
+{
+    if (info->bmiHeader.biCompression == BI_RGB || info->bmiHeader.biCompression == BI_BITFIELDS)
+        return get_dib_stride( info->bmiHeader.biWidth * info->bmiHeader.biPlanes,
+                               info->bmiHeader.biBitCount ) * abs( info->bmiHeader.biHeight );
+
+    return info->bmiHeader.biSizeImage;
+}
+
+static DWORD get_dib_lines_size_for_record( const BITMAPINFO *info, UINT lines )
+{
+    if (info->bmiHeader.biCompression == BI_RGB || info->bmiHeader.biCompression == BI_BITFIELDS)
+        return get_dib_stride( info->bmiHeader.biWidth * info->bmiHeader.biPlanes,
+                               info->bmiHeader.biBitCount ) * lines;
+
+    return info->bmiHeader.biSizeImage;
 }
 
 static UINT get_bitmap_info( HDC *hdc, HBITMAP *bitmap, BITMAPINFO *info )
@@ -183,6 +218,8 @@ static UINT get_bitmap_info( HDC *hdc, HBITMAP *bitmap, BITMAPINFO *info )
         goto err;
 
     bpp = info->bmiHeader.biBitCount;
+    normalize_bitmap_info( info );
+
     if (bpp <= 8)
         return sizeof(BITMAPINFOHEADER) + (1L << bpp) * sizeof(RGBQUAD);
     else if (bpp == 16 || bpp == 32)
@@ -308,6 +345,8 @@ static DWORD emfdc_create_brush( struct emf *emf, HBRUSH brush )
                 emr->emr.iType = EMR_CREATEMONOBRUSH;
                 usage = DIB_PAL_MONO;
                 emr->cbBmi = sizeof( BITMAPINFOHEADER );
+                info->bmiHeader.biClrUsed = 0;
+                info->bmiHeader.biClrImportant = 0;
             }
             else
             {
@@ -320,10 +359,19 @@ static DWORD emfdc_create_brush( struct emf *emf, HBRUSH brush )
             emr->cbBits = info->bmiHeader.biSizeImage;
             emr->emr.nSize = emr->offBits + emr->cbBits;
 
-            if (info->bmiHeader.biClrUsed == 1 << info->bmiHeader.biBitCount)
-                info->bmiHeader.biClrUsed = 0;
+            normalize_bitmap_info( info );
             memcpy( (BYTE *)emr + emr->offBmi, info, emr->cbBmi );
+            if (emr->emr.iType == EMR_CREATEMONOBRUSH)
+            {
+                ((BITMAPINFOHEADER *)((BYTE *)emr + emr->offBmi))->biClrUsed = 0;
+                ((BITMAPINFOHEADER *)((BYTE *)emr + emr->offBmi))->biClrImportant = 0;
+            }
             get_brush_bitmap_info( brush, NULL, (char *)emr + emr->offBits, NULL );
+            if (emr->emr.iType == EMR_CREATEMONOBRUSH)
+            {
+                ((BITMAPINFOHEADER *)((BYTE *)emr + emr->offBmi))->biClrUsed = 0;
+                ((BITMAPINFOHEADER *)((BYTE *)emr + emr->offBmi))->biClrImportant = 0;
+            }
 
             if (!emfdc_record( emf, &emr->emr )) index = 0;
             HeapFree( GetProcessHeap(), 0, emr );
@@ -507,6 +555,7 @@ static BOOL emfdc_select_pen( WINEDC *dc_attr, HPEN pen )
 static DWORD emfdc_create_palette( struct emf *emf, HPALETTE hPal )
 {
     WORD i;
+    WORD count;
     struct {
         EMRCREATEPALETTE hdr;
         PALETTEENTRY entry[255];
@@ -514,14 +563,20 @@ static DWORD emfdc_create_palette( struct emf *emf, HPALETTE hPal )
 
     memset( &pal, 0, sizeof(pal) );
 
-    if (!GetObjectW( hPal, sizeof(pal.hdr.lgpl) + sizeof(pal.entry), &pal.hdr.lgpl ))
+    if (!GetObjectW( hPal, sizeof(count), &count ) || !count || count > 256)
+        return 0;
+
+    pal.hdr.lgpl.palVersion = 0x300;
+    pal.hdr.lgpl.palNumEntries = count;
+    if (!GetPaletteEntries( hPal, 0, count, pal.hdr.lgpl.palPalEntry ))
         return 0;
 
     for (i = 0; i < pal.hdr.lgpl.palNumEntries; i++)
         pal.hdr.lgpl.palPalEntry[i].peFlags = 0;
 
     pal.hdr.emr.iType = EMR_CREATEPALETTE;
-    pal.hdr.emr.nSize = sizeof(pal.hdr) + pal.hdr.lgpl.palNumEntries * sizeof(PALETTEENTRY);
+    pal.hdr.emr.nSize = FIELD_OFFSET(EMRCREATEPALETTE, lgpl.palPalEntry) +
+                         pal.hdr.lgpl.palNumEntries * sizeof(PALETTEENTRY);
     pal.hdr.ihPal = emfdc_add_handle( emf, hPal );
 
     if (!emfdc_record( emf, &pal.hdr.emr ))
@@ -534,6 +589,7 @@ BOOL EMFDC_SelectPalette( WINEDC *dc_attr, HPALETTE palette )
     struct emf *emf = dc_attr->emf;
     EMRSELECTPALETTE emr;
     DWORD index = 0;
+    BOOL ret;
 
     if (palette == GetStockObject( DEFAULT_PALETTE ))
     {
@@ -548,7 +604,26 @@ BOOL EMFDC_SelectPalette( WINEDC *dc_attr, HPALETTE palette )
     emr.emr.iType = EMR_SELECTPALETTE;
     emr.emr.nSize = sizeof(emr);
     emr.ihPal = index;
-    return emfdc_record( emf, &emr.emr );
+    ret = emfdc_record( emf, &emr.emr );
+    if (ret) emf->palette = palette;
+    return ret;
+}
+
+BOOL EMFDC_RealizePalette( WINEDC *dc_attr )
+{
+    struct emf *emf = dc_attr->emf;
+    EMRREALIZEPALETTE emr;
+
+    if (!emf->palette || emf->palette == GetStockObject( DEFAULT_PALETTE ))
+        return TRUE;
+
+    emr.emr.iType = EMR_REALIZEPALETTE;
+    emr.emr.nSize = sizeof(emr);
+    if (!emfdc_record( emf, &emr.emr ))
+        return FALSE;
+
+    emf->realized_palette = emf->palette;
+    return TRUE;
 }
 
 BOOL EMFDC_SelectObject( WINEDC *dc_attr, HGDIOBJ obj )
@@ -696,6 +771,7 @@ BOOL EMFDC_MoveTo( WINEDC *dc_attr, INT x, INT y )
 
 BOOL EMFDC_LineTo( WINEDC *dc_attr, INT x, INT y )
 {
+    struct emf *emf = dc_attr->emf;
     EMRLINETO emr;
     BOOL Ret;
 
@@ -703,8 +779,11 @@ BOOL EMFDC_LineTo( WINEDC *dc_attr, INT x, INT y )
     emr.emr.nSize = sizeof(emr);
     emr.ptl.x = x;
     emr.ptl.y = y;
-    Ret = emfdc_record( dc_attr->emf, &emr.emr );
-    EMFDRV_LineTo( dc_attr, x,  y );
+    Ret = emfdc_record( emf, &emr.emr );
+    if (!emf->path)
+    {
+        EMFDRV_LineTo( dc_attr, x,  y );
+    }
     return Ret;
 }
 
@@ -738,7 +817,7 @@ BOOL EMFDC_ArcChordPie( WINEDC *dc_attr, INT left, INT top, INT right, INT botto
     emr.ptlEnd.x      = xend;
     emr.ptlEnd.y      = yend;
     Ret = emfdc_record( emf, &emr.emr );
-    EMFDRV_ArcChordPie( dc_attr, left, top, right, bottom, xstart, ystart, xend, yend, type );
+    if (!emf->path) EMFDRV_ArcChordPie( dc_attr, left, top, right, bottom, xstart, ystart, xend, yend, type );
     return Ret;
 }
 
@@ -776,7 +855,7 @@ BOOL EMFDC_Ellipse( WINEDC *dc_attr, INT left, INT top, INT right, INT bottom )
         emr.rclBox.bottom--;
     }
     Ret = emfdc_record( emf, &emr.emr );
-    EMFDRV_Ellipse( dc_attr, left, top, right, bottom );
+    if (!emf->path) EMFDRV_Ellipse( dc_attr, left, top, right, bottom );
     return Ret;
 }
 
@@ -800,7 +879,7 @@ BOOL EMFDC_Rectangle( WINEDC *dc_attr, INT left, INT top, INT right, INT bottom 
         emr.rclBox.bottom--;
     }
     Ret = emfdc_record( emf, &emr.emr );
-    EMFDRV_Rectangle( dc_attr, left, top, right, bottom );
+    if (!emf->path) EMFDRV_Rectangle( dc_attr, left, top, right, bottom );
     return Ret;
 }
 
@@ -827,12 +906,13 @@ BOOL EMFDC_RoundRect( WINEDC *dc_attr, INT left, INT top, INT right,
         emr.rclBox.bottom--;
     }
     Ret = emfdc_record( emf, &emr.emr );
-    EMFDRV_RoundRect( dc_attr, left, top, right, bottom, ell_width, ell_height );
+    if (!emf->path) EMFDRV_RoundRect( dc_attr, left, top, right, bottom, ell_width, ell_height );
     return Ret;
 }
 
 BOOL EMFDC_SetPixel( WINEDC *dc_attr, INT x, INT y, COLORREF color )
 {
+    struct emf *emf = dc_attr->emf;
     EMRSETPIXELV emr;
     BOOL Ret;
 
@@ -841,8 +921,8 @@ BOOL EMFDC_SetPixel( WINEDC *dc_attr, INT x, INT y, COLORREF color )
     emr.ptlPixel.x = x;
     emr.ptlPixel.y = y;
     emr.crColor = color;
-    Ret = emfdc_record( dc_attr->emf, &emr.emr );
-    EMFDRV_SetPixel( dc_attr, x, y, color );
+    Ret = emfdc_record( emf, &emr.emr );
+    if (!emf->path) EMFDRV_SetPixel( dc_attr, x, y, color );
     return Ret;
 }
 
@@ -1115,17 +1195,22 @@ BOOL EMFDC_ExtTextOut( WINEDC *dc_attr, INT x, INT y, UINT flags, const RECT *re
     EMREXTTEXTOUTW *emr;
     int text_height = 0;
     int text_width = 0;
+    int y_offset = 0;
+    int y_min = 0;
+    int y_max = 0;
     TEXTMETRICW tm;
-    DWORD size;
+    DWORD size, dx_size;
     BOOL ret;
 
     if (count > INT_MAX) return FALSE;
 
-    size = sizeof(*emr) + ((count+1) & ~1) * sizeof(WCHAR) + count * sizeof(INT);
+    dx_size = count * sizeof(INT) * ((flags & ETO_PDY) ? 2 : 1);
+    size = sizeof(*emr) + ((count+1) & ~1) * sizeof(WCHAR) + dx_size;
 
     TRACE( "%s %s count %d size = %d\n", debugstr_wn(str, count),
            wine_dbgstr_rect(rect), count, size );
     emr = HeapAlloc( GetProcessHeap(), HEAP_ZERO_MEMORY, size );
+    if (!emr) return FALSE;
 
     if (GetGraphicsMode(dc_attr->hdc) == GM_COMPATIBLE)
     {
@@ -1177,8 +1262,18 @@ BOOL EMFDC_ExtTextOut( WINEDC *dc_attr, INT x, INT y, UINT flags, const RECT *re
     {
         UINT i;
         SIZE str_size;
-        memcpy( (char*)emr + emr->emrtext.offDx, dx, count * sizeof(INT) );
-        for (i = 0; i < count; i++) text_width += dx[i];
+        memcpy( (char*)emr + emr->emrtext.offDx, dx, dx_size );
+        for (i = 0; i < count; i++)
+        {
+            if (flags & ETO_PDY)
+            {
+                text_width += dx[2 * i];
+                y_offset -= dx[2 * i + 1];
+                y_min = min( y_min, y_offset );
+                y_max = max( y_max, y_offset );
+            }
+            else text_width += dx[i];
+        }
         if (GetTextExtentPoint32W( dc_attr->hdc, str, count, &str_size ))
             text_height = str_size.cy;
     }
@@ -1241,6 +1336,11 @@ BOOL EMFDC_ExtTextOut( WINEDC *dc_attr, INT x, INT y, UINT flags, const RECT *re
     default: /* TA_TOP */
         emr->rclBounds.top    = y;
         emr->rclBounds.bottom = y + text_height + 1;
+    }
+    if (flags & ETO_PDY)
+    {
+        emr->rclBounds.top += y_min;
+        emr->rclBounds.bottom += y_max;
     }
     emfdc_update_bounds( emf, &emr->rclBounds );
 
@@ -1382,6 +1482,7 @@ static BOOL emfdrv_stretchblt( struct emf *emf, INT x_dst, INT y_dst, INT width_
     bmi->bmiHeader = src_info.bmiHeader;
     ret = GetDIBits( blit_dc, blit_bitmap, 0, src_info.bmiHeader.biHeight,
                      (BYTE *)emr + emr->offBitsSrc, bmi, DIB_RGB_COLORS );
+    if (ret) normalize_bitmap_info( bmi );
 
     if (ret)
     {
@@ -1557,13 +1658,18 @@ BOOL EMFDC_MaskBlt( WINEDC *dc_attr, INT x_dst, INT y_dst, INT width_dst, INT he
     ret = GetDIBits( blit_dc, blit_bitmap, 0, src_info.bmiHeader.biHeight,
                      (char *)emr + emr->offBitsSrc, bmi, DIB_RGB_COLORS );
     if (!ret) goto err;
+    normalize_bitmap_info( bmi );
 
     if (mask_info_size)
     {
         mask_bits_info->bmiHeader = mask_info.bmiHeader;
         ret = GetDIBits( blit_dc, mask_bitmap, 0, mask_info.bmiHeader.biHeight,
                          (char *)emr + emr->offBitsMask, mask_bits_info, DIB_RGB_COLORS );
-        if (ret) memcpy( (char *)emr + emr->offBmiMask, mask_bits_info, mask_info_size );
+        if (ret)
+        {
+            normalize_bitmap_info( mask_bits_info );
+            memcpy( (char *)emr + emr->offBmiMask, mask_bits_info, mask_info_size );
+        }
     }
 
     if (ret)
@@ -1671,13 +1777,18 @@ BOOL EMFDC_PlgBlt( WINEDC *dc_attr, const POINT *points, HDC hdc_src, INT x_src,
     ret = GetDIBits( blit_dc, blit_bitmap, 0, src_info.bmiHeader.biHeight,
                      (char *)emr + emr->offBitsSrc, bmi, DIB_RGB_COLORS );
     if (!ret) goto err;
+    normalize_bitmap_info( bmi );
 
     if (mask_info_size)
     {
         mask_bits_info->bmiHeader = mask_info.bmiHeader;
         ret = GetDIBits( blit_dc, mask_bitmap, 0, mask_info.bmiHeader.biHeight,
                          (char *)emr + emr->offBitsMask, mask_bits_info, DIB_RGB_COLORS );
-        if (ret) memcpy( (char *)emr + emr->offBmiMask, mask_bits_info, mask_info_size );
+        if (ret)
+        {
+            normalize_bitmap_info( mask_bits_info );
+            memcpy( (char *)emr + emr->offBmiMask, mask_bits_info, mask_info_size );
+        }
     }
 
     if (ret)
@@ -1702,18 +1813,20 @@ BOOL EMFDC_StretchDIBits( WINEDC *dc_attr, INT x_dst, INT y_dst, INT width_dst, 
     EMRSTRETCHDIBITS *emr;
     BOOL ret;
     UINT bmi_size, emr_size;
+    DWORD bits_size;
 
     /* calculate the size of the colour table */
     bmi_size = get_dib_info_size( info, usage );
+    bits_size = get_dib_image_size_for_record( info );
 
-    emr_size = sizeof (EMRSTRETCHDIBITS) + bmi_size + info->bmiHeader.biSizeImage;
+    emr_size = sizeof (EMRSTRETCHDIBITS) + bmi_size + bits_size;
     if (!(emr = HeapAlloc(GetProcessHeap(), 0, emr_size ))) return 0;
 
     /* write a bitmap info header (with colours) to the record */
     memcpy( &emr[1], info, bmi_size);
 
     /* write bitmap bits to the record */
-    memcpy ( (BYTE *)&emr[1] + bmi_size, bits, info->bmiHeader.biSizeImage );
+    memcpy ( (BYTE *)&emr[1] + bmi_size, bits, bits_size );
 
     /* fill in the EMR header at the front of our piece of memory */
     emr->emr.iType = EMR_STRETCHDIBITS;
@@ -1731,15 +1844,15 @@ BOOL EMFDC_StretchDIBits( WINEDC *dc_attr, INT x_dst, INT y_dst, INT width_dst, 
     emr->offBmiSrc    = sizeof (EMRSTRETCHDIBITS);
     emr->cbBmiSrc     = bmi_size;
     emr->offBitsSrc   = emr->offBmiSrc + bmi_size;
-    emr->cbBitsSrc    = info->bmiHeader.biSizeImage;
+    emr->cbBitsSrc    = bits_size;
 
     emr->cxSrc = width_src;
     emr->cySrc = height_src;
 
     emr->rclBounds.left   = x_dst;
     emr->rclBounds.top    = y_dst;
-    emr->rclBounds.right  = x_dst + width_dst;
-    emr->rclBounds.bottom = y_dst + height_dst;
+    emr->rclBounds.right  = x_dst + width_dst - 1;
+    emr->rclBounds.bottom = y_dst + height_dst - 1;
 
     /* save the record we just created */
     ret = emfdc_record( dc_attr->emf, &emr->emr );
@@ -1754,7 +1867,8 @@ BOOL EMFDC_SetDIBitsToDevice( WINEDC *dc_attr, INT x_dst, INT y_dst, DWORD width
 {
     EMRSETDIBITSTODEVICE *emr;
     DWORD bmiSize = get_dib_info_size( info, usage );
-    DWORD size = sizeof(EMRSETDIBITSTODEVICE) + bmiSize + info->bmiHeader.biSizeImage;
+    DWORD bitsSize = get_dib_lines_size_for_record( info, lines );
+    DWORD size = sizeof(EMRSETDIBITSTODEVICE) + bmiSize + bitsSize;
     BOOL ret;
 
     if (!(emr = HeapAlloc( GetProcessHeap(), 0, size ))) return FALSE;
@@ -1774,12 +1888,12 @@ BOOL EMFDC_SetDIBitsToDevice( WINEDC *dc_attr, INT x_dst, INT y_dst, DWORD width
     emr->offBmiSrc = sizeof(EMRSETDIBITSTODEVICE);
     emr->cbBmiSrc = bmiSize;
     emr->offBitsSrc = sizeof(EMRSETDIBITSTODEVICE) + bmiSize;
-    emr->cbBitsSrc = info->bmiHeader.biSizeImage;
+    emr->cbBitsSrc = bitsSize;
     emr->iUsageSrc = usage;
     emr->iStartScan = startscan;
     emr->cScans = lines;
     memcpy( (BYTE*)emr + emr->offBmiSrc, info, bmiSize );
-    memcpy( (BYTE*)emr + emr->offBitsSrc, bits, info->bmiHeader.biSizeImage );
+    memcpy( (BYTE*)emr + emr->offBitsSrc, bits, bitsSize );
 
     if ((ret = emfdc_record( dc_attr->emf, (EMR*)emr )))
         emfdc_update_bounds( dc_attr->emf, &emr->rclBounds );
@@ -2439,6 +2553,8 @@ HDC WINAPI CreateEnhMetaFileW( HDC hdc, const WCHAR *filename, const RECT *rect,
     emf->file = 0;
     emf->dc_brush = 0;
     emf->dc_pen = 0;
+    emf->palette = 0;
+    emf->realized_palette = 0;
     emf->path = FALSE;
 
     emf->emh->iType = EMR_HEADER;
@@ -2511,7 +2627,10 @@ HENHMETAFILE WINAPI CloseEnhMetaFile( HDC hdc )
     HENHMETAFILE hmf;
     struct emf *emf;
     WINEDC *dc_attr;
-    EMREOF emr;
+    EMREOF *emr;
+    PALETTEENTRY pal_entries[256];
+    WORD pal_count = 0;
+    DWORD eof_size;
     HANDLE mapping = 0;
 
     if (!(dc_attr = get_dc_ptr( hdc )) || !dc_attr->emf) return 0;
@@ -2523,12 +2642,34 @@ HENHMETAFILE WINAPI CloseEnhMetaFile( HDC hdc )
     if (emf->dc_brush) DeleteObject( emf->dc_brush );
     if (emf->dc_pen) DeleteObject( emf->dc_pen );
 
-    emr.emr.iType = EMR_EOF;
-    emr.emr.nSize = sizeof(emr);
-    emr.nPalEntries = 0;
-    emr.offPalEntries = FIELD_OFFSET(EMREOF, nSizeLast);
-    emr.nSizeLast = emr.emr.nSize;
-    emfdc_record( emf, &emr.emr );
+    if (emf->realized_palette && GetObjectW( emf->realized_palette, sizeof(pal_count), &pal_count ) &&
+        pal_count <= 256 && GetPaletteEntries( emf->realized_palette, 0, pal_count, pal_entries ))
+    {
+        WORD i;
+
+        for (i = 0; i < pal_count; i++)
+            pal_entries[i].peFlags = 0;
+        emf->emh->nPalEntries = pal_count;
+    }
+    else
+    {
+        pal_count = 0;
+        emf->emh->nPalEntries = 0;
+    }
+
+    eof_size = FIELD_OFFSET(EMREOF, nSizeLast) + pal_count * sizeof(PALETTEENTRY) + sizeof(DWORD);
+    emr = HeapAlloc( GetProcessHeap(), 0, eof_size );
+    if (!emr) return 0;
+
+    emr->emr.iType = EMR_EOF;
+    emr->emr.nSize = eof_size;
+    emr->nPalEntries = pal_count;
+    emr->offPalEntries = FIELD_OFFSET(EMREOF, nSizeLast);
+    if (pal_count)
+        memcpy( (BYTE *)emr + emr->offPalEntries, pal_entries, pal_count * sizeof(PALETTEENTRY) );
+    *(DWORD *)((BYTE *)emr + eof_size - sizeof(DWORD)) = eof_size;
+    emfdc_record( emf, &emr->emr );
+    HeapFree( GetProcessHeap(), 0, emr );
 
     emf->emh->rclBounds = dc_attr->emf_bounds;
 

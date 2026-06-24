@@ -29,6 +29,18 @@ Clamp8(ULONG val)
   return (val > 255) ? 255 : (UCHAR)val;
 }
 
+static __inline UCHAR
+AlphaMul(UCHAR Value, UCHAR Alpha)
+{
+  return (UCHAR)(((ULONG)Value * Alpha + 127) / 255);
+}
+
+static __inline UCHAR
+BlendColor(UCHAR Dst, UCHAR Src, ULONG Alpha)
+{
+  return (UCHAR)(((ULONG)Src * Alpha + (ULONG)Dst * (255 - Alpha) + 127) / 255);
+}
+
 BOOLEAN
 DIB_XXBPP_AlphaBlend(SURFOBJ* Dest, SURFOBJ* Source, RECTL* DestRect,
                      RECTL* SourceRect, CLIPOBJ* ClipRegion,
@@ -40,7 +52,7 @@ DIB_XXBPP_AlphaBlend(SURFOBJ* Dest, SURFOBJ* Source, RECTL* DestRect,
   register NICEPIXEL32 SrcPixel32;
   UCHAR Alpha, SrcBpp = BitsPerFormat(Source->iBitmapFormat);
   EXLATEOBJ* pexlo;
-  EXLATEOBJ exloSrcRGB, exloDstRGB, exloRGBSrc;
+  EXLATEOBJ exloSrcRGB, exloDstRGB, exloRGBDst;
   PFN_DIB_PutPixel pfnDibPutPixel = DibFunctionsForBitmapFormat[Dest->iBitmapFormat].DIB_PutPixel;
 
   DPRINT("DIB_XXBPP_AlphaBlend: srcRect: (%d,%d)-(%d,%d), dstRect: (%d,%d)-(%d,%d)\n",
@@ -77,9 +89,9 @@ DIB_XXBPP_AlphaBlend(SURFOBJ* Dest, SURFOBJ* Source, RECTL* DestRect,
   }
 
   pexlo = CONTAINING_RECORD(ColorTranslation, EXLATEOBJ, xlo);
-  EXLATEOBJ_vInitialize(&exloSrcRGB, pexlo->ppalSrc, &gpalRGB, 0, 0, 0);
-  EXLATEOBJ_vInitialize(&exloDstRGB, pexlo->ppalDst, &gpalRGB, 0, 0, 0);
-  EXLATEOBJ_vInitialize(&exloRGBSrc, &gpalRGB, pexlo->ppalSrc, 0, 0, 0);
+  EXLATEOBJ_vInitialize(&exloSrcRGB, pexlo->ppalSrc, &gpalRGB, 0, CLR_INVALID, 0);
+  EXLATEOBJ_vInitialize(&exloDstRGB, pexlo->ppalDst, &gpalRGB, 0, CLR_INVALID, 0);
+  EXLATEOBJ_vInitialize(&exloRGBDst, &gpalRGB, pexlo->ppalDst, CLR_INVALID, 0, 0);
 
   SrcY = SourceRect->top;
   DstY = DestRect->top;
@@ -90,20 +102,25 @@ DIB_XXBPP_AlphaBlend(SURFOBJ* Dest, SURFOBJ* Source, RECTL* DestRect,
     while(DstX < DestRect->right)
     {
       SrcPixel32.ul = DIB_GetSource(Source, SrcX, SrcY, &exloSrcRGB.xlo);
-      SrcPixel32.col.red = (SrcPixel32.col.red * BlendFunc.SourceConstantAlpha) / 255;
-      SrcPixel32.col.green = (SrcPixel32.col.green * BlendFunc.SourceConstantAlpha) / 255;
-      SrcPixel32.col.blue = (SrcPixel32.col.blue * BlendFunc.SourceConstantAlpha) / 255;
-
-      Alpha = ((BlendFunc.AlphaFormat & AC_SRC_ALPHA) != 0) ?
-           (SrcPixel32.col.alpha * BlendFunc.SourceConstantAlpha) / 255 :
-           BlendFunc.SourceConstantAlpha ;
-
       DstPixel32.ul = DIB_GetSource(Dest, DstX, DstY, &exloDstRGB.xlo);
-      DstPixel32.col.red = Clamp8((DstPixel32.col.red * (255 - Alpha)) / 255 + SrcPixel32.col.red) ;
-      DstPixel32.col.green = Clamp8((DstPixel32.col.green * (255 - Alpha)) / 255 + SrcPixel32.col.green) ;
-      DstPixel32.col.blue = Clamp8((DstPixel32.col.blue * (255 - Alpha)) / 255 + SrcPixel32.col.blue) ;
-      DstPixel32.ul = XLATEOBJ_iXlate(&exloRGBSrc.xlo, DstPixel32.ul);
-      pfnDibPutPixel(Dest, DstX, DstY, XLATEOBJ_iXlate(ColorTranslation, DstPixel32.ul));
+
+      if ((BlendFunc.AlphaFormat & AC_SRC_ALPHA) != 0)
+      {
+        SrcPixel32.col.red = AlphaMul(SrcPixel32.col.red, BlendFunc.SourceConstantAlpha);
+        SrcPixel32.col.green = AlphaMul(SrcPixel32.col.green, BlendFunc.SourceConstantAlpha);
+        SrcPixel32.col.blue = AlphaMul(SrcPixel32.col.blue, BlendFunc.SourceConstantAlpha);
+        Alpha = AlphaMul(SrcPixel32.col.alpha, BlendFunc.SourceConstantAlpha);
+        DstPixel32.col.red = Clamp8(AlphaMul(DstPixel32.col.red, 255 - Alpha) + SrcPixel32.col.red);
+        DstPixel32.col.green = Clamp8(AlphaMul(DstPixel32.col.green, 255 - Alpha) + SrcPixel32.col.green);
+        DstPixel32.col.blue = Clamp8(AlphaMul(DstPixel32.col.blue, 255 - Alpha) + SrcPixel32.col.blue);
+      }
+      else
+      {
+        DstPixel32.col.red = BlendColor(DstPixel32.col.red, SrcPixel32.col.red, BlendFunc.SourceConstantAlpha);
+        DstPixel32.col.green = BlendColor(DstPixel32.col.green, SrcPixel32.col.green, BlendFunc.SourceConstantAlpha);
+        DstPixel32.col.blue = BlendColor(DstPixel32.col.blue, SrcPixel32.col.blue, BlendFunc.SourceConstantAlpha);
+      }
+      pfnDibPutPixel(Dest, DstX, DstY, XLATEOBJ_iXlate(&exloRGBDst.xlo, DstPixel32.ul));
 
       DstX++;
       SrcX = SourceRect->left + ((DstX-DestRect->left)*(SourceRect->right - SourceRect->left))
@@ -115,9 +132,8 @@ DIB_XXBPP_AlphaBlend(SURFOBJ* Dest, SURFOBJ* Source, RECTL* DestRect,
   }
 
   EXLATEOBJ_vCleanup(&exloDstRGB);
-  EXLATEOBJ_vCleanup(&exloRGBSrc);
+  EXLATEOBJ_vCleanup(&exloRGBDst);
   EXLATEOBJ_vCleanup(&exloSrcRGB);
 
   return TRUE;
 }
-

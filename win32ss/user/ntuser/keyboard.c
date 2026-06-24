@@ -1744,6 +1744,7 @@ NtUserToUnicodeEx(
     HKL dwhkl)
 {
     PTHREADINFO pti;
+    BYTE abKeyState[256];
     BYTE afKeyState[256 * 2 / 8] = {0};
     PWCHAR pwszBuff = NULL;
     INT i, iRet = 0;
@@ -1759,25 +1760,25 @@ NtUserToUnicodeEx(
         return 0;
     }
 
-    _SEH2_TRY
+    if (!pKeyStateUnsafe)
     {
-        /* Probe and copy key state to smaller bitmap */
-        ProbeForRead(pKeyStateUnsafe, 256 * sizeof(BYTE), 1);
-        for (i = 0; i < 256; ++i)
-        {
-            if (pKeyStateUnsafe[i] & KS_DOWN_BIT)
-                SET_KEY_DOWN(afKeyState, i, TRUE);
-            if (pKeyStateUnsafe[i] & KS_LOCK_BIT)
-                SET_KEY_LOCKED(afKeyState, i, TRUE);
-        }
+        return 0;
     }
-    _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
+
+    Status = MmCopyFromCaller(abKeyState, pKeyStateUnsafe, sizeof(abKeyState));
+    if (!NT_SUCCESS(Status))
     {
-        ERR("Cannot copy key state\n");
-        SetLastNtError(_SEH2_GetExceptionCode());
-        _SEH2_YIELD(return 0);
+        SetLastNtError(Status);
+        return 0;
     }
-    _SEH2_END;
+
+    for (i = 0; i < 256; ++i)
+    {
+        if (abKeyState[i] & KS_DOWN_BIT)
+            SET_KEY_DOWN(afKeyState, i, TRUE);
+        if (abKeyState[i] & KS_LOCK_BIT)
+            SET_KEY_LOCKED(afKeyState, i, TRUE);
+    }
 
     pwszBuff = ExAllocatePoolWithTag(NonPagedPool, sizeof(WCHAR) * cchBuff, TAG_STRING);
     if (!pwszBuff)

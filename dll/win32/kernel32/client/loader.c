@@ -185,9 +185,74 @@ LoadLibraryW(LPCWSTR lpLibFileName)
 
 static
 NTSTATUS
-BasepLoadLibraryAsDatafile(PWSTR Path, LPCWSTR Name, HMODULE *hModule)
+BasepOpenDataFile(IN PWSTR Path,
+                  IN LPCWSTR Name,
+                  OUT PHANDLE FileHandle)
 {
     WCHAR FilenameW[MAX_PATH];
+    UNICODE_STRING FileName;
+    OBJECT_ATTRIBUTES ObjectAttributes;
+    IO_STATUS_BLOCK IoStatusBlock;
+    NTSTATUS Status;
+
+    *FileHandle = INVALID_HANDLE_VALUE;
+
+    if (Name[0] == L'\\' &&
+        Name[1] == L'?' &&
+        Name[2] == L'?' &&
+        Name[3] == L'\\')
+    {
+        RtlInitUnicodeString(&FileName, Name);
+        InitializeObjectAttributes(&ObjectAttributes,
+                                   &FileName,
+                                   OBJ_CASE_INSENSITIVE,
+                                   NULL,
+                                   NULL);
+
+        Status = NtOpenFile(FileHandle,
+                            GENERIC_READ | SYNCHRONIZE,
+                            &ObjectAttributes,
+                            &IoStatusBlock,
+                            FILE_SHARE_READ | FILE_SHARE_DELETE,
+                            FILE_SYNCHRONOUS_IO_NONALERT |
+                            FILE_NON_DIRECTORY_FILE);
+        if (!NT_SUCCESS(Status))
+        {
+            *FileHandle = INVALID_HANDLE_VALUE;
+        }
+
+        return Status;
+    }
+
+    if (!SearchPathW(Path,
+                     Name,
+                     L".DLL",
+                     sizeof(FilenameW) / sizeof(FilenameW[0]),
+                     FilenameW,
+                     NULL))
+    {
+        return NtCurrentTeb()->LastStatusValue;
+    }
+
+    *FileHandle = CreateFileW(FilenameW,
+                              GENERIC_READ,
+                              FILE_SHARE_READ | FILE_SHARE_DELETE,
+                              NULL,
+                              OPEN_EXISTING,
+                              0,
+                              0);
+    if (*FileHandle == INVALID_HANDLE_VALUE)
+    {
+        return NtCurrentTeb()->LastStatusValue;
+    }
+
+    return STATUS_SUCCESS;
+}
+
+static
+NTSTATUS
+BasepLoadLibraryAsDatafile(PWSTR Path, LPCWSTR Name, HMODULE *hModule)
+{
     HANDLE hFile = INVALID_HANDLE_VALUE;
     HANDLE hMapping;
     NTSTATUS Status;
@@ -211,29 +276,11 @@ BasepLoadLibraryAsDatafile(PWSTR Path, LPCWSTR Name, HMODULE *hModule)
                                                       NULL,
                                                       NULL);*/
 
-    /* Try to search for it */
-    if (!SearchPathW(Path,
-                     Name,
-                     L".DLL",
-                     sizeof(FilenameW) / sizeof(FilenameW[0]),
-                     FilenameW,
-                     NULL))
-    {
-        /* Return last status value directly */
-        return NtCurrentTeb()->LastStatusValue;
-    }
-
     /* Open this file we found */
-    hFile = CreateFileW(FilenameW,
-                        GENERIC_READ,
-                        FILE_SHARE_READ | FILE_SHARE_DELETE,
-                        NULL,
-                        OPEN_EXISTING,
-                        0,
-                        0);
+    Status = BasepOpenDataFile(Path, Name, &hFile);
 
     /* If opening failed - return last status value */
-    if (hFile == INVALID_HANDLE_VALUE) return NtCurrentTeb()->LastStatusValue;
+    if (!NT_SUCCESS(Status)) return Status;
 
     /* Create file mapping */
     hMapping = CreateFileMappingW(hFile, NULL, PAGE_READONLY, 0, 0, NULL);

@@ -833,6 +833,7 @@ extern BOOL EMFDC_IntersectClipRect( LDC *dc_attr, INT left, INT top, INT right,
                                      INT bottom ) DECLSPEC_HIDDEN;
 extern BOOL EMFDC_InvertRgn( LDC *dc_attr, HRGN hrgn ) DECLSPEC_HIDDEN;
 extern BOOL EMFDC_LineTo( LDC *dc_attr, INT x, INT y ) DECLSPEC_HIDDEN;
+extern BOOL EMFDC_IsPathOpen( LDC *dc_attr ) DECLSPEC_HIDDEN;
 extern BOOL EMFDC_ModifyWorldTransform( LDC *dc_attr, const XFORM *xform,
                                         DWORD mode ) DECLSPEC_HIDDEN;
 extern BOOL EMFDC_MoveTo( LDC *dc_attr, INT x, INT y ) DECLSPEC_HIDDEN;
@@ -852,6 +853,7 @@ extern BOOL EMFDC_Polyline( LDC *dc_attr, const POINT *points, INT count) DECLSP
 extern BOOL EMFDC_PolylineTo( LDC *dc_attr, const POINT *points, INT count ) DECLSPEC_HIDDEN;
 extern BOOL EMFDC_Rectangle( LDC *dc_attr, INT left, INT top, INT right,
                              INT bottom) DECLSPEC_HIDDEN;
+extern BOOL EMFDC_RealizePalette( LDC *dc_attr ) DECLSPEC_HIDDEN;
 extern BOOL EMFDC_RestoreDC( LDC *dc_attr, INT level ) DECLSPEC_HIDDEN;
 extern BOOL EMFDC_RoundRect( LDC *dc_attr, INT left, INT top, INT right, INT bottom,
                              INT ell_width, INT ell_height ) DECLSPEC_HIDDEN;

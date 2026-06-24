@@ -694,7 +694,7 @@ ExtSelectClipRgn(
     }
 #endif
     /* Batch handles RGN_COPY only! */
-    if (iMode == RGN_COPY)
+    if (iMode == RGN_COPY && !GdiIsMetaFileDC(hdc))
     {
         PDC_ATTR pdcattr;
         PRGN_ATTR pRgn_Attr = NULL;
@@ -1104,4 +1104,3 @@ SetMetaRgn(HDC hDC)
     }
     return NtGdiSetMetaRgn(hDC);
 }
-

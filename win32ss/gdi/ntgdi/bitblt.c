@@ -94,6 +94,14 @@ NtGdiAlphaBlend(
     SourceRect.right  += DCSrc->ptlDCOrig.x;
     SourceRect.bottom += DCSrc->ptlDCOrig.y;
 
+    if ((SourceRect.left > SourceRect.right) || (SourceRect.top > SourceRect.bottom))
+    {
+        GDIOBJ_vUnlockObject(&DCSrc->BaseObject);
+        GDIOBJ_vUnlockObject(&DCDest->BaseObject);
+        EngSetLastError(ERROR_INVALID_PARAMETER);
+        return FALSE;
+    }
+
     if (!DestRect.right ||
         !DestRect.bottom ||
         !SourceRect.right ||
@@ -160,6 +168,9 @@ NtGdiBitBlt(
     IN DWORD crBackColor,
     IN FLONG fl)
 {
+    DWORD dwCleanRop;
+    BOOL bUseStretch = FALSE;
+    PDC pdcDest;
 
     if (dwRop & CAPTUREBLT)
     {
@@ -177,7 +188,36 @@ NtGdiBitBlt(
                               crBackColor);
     }
 
-    dwRop = dwRop & ~(NOMIRRORBITMAP|CAPTUREBLT);
+    dwCleanRop = dwRop & ~CAPTUREBLT;
+    if (!(dwCleanRop & NOMIRRORBITMAP) &&
+        WIN32_ROP4_USES_SOURCE(MAKEROP4(dwCleanRop, dwCleanRop)))
+    {
+        pdcDest = DC_LockDc(hDCDest);
+        if (pdcDest)
+        {
+            bUseStretch = ((pdcDest->pdcattr->dwLayout & LAYOUT_RTL) &&
+                           !(pdcDest->pdcattr->dwLayout & LAYOUT_BITMAPORIENTATIONPRESERVED));
+            DC_UnlockDc(pdcDest);
+        }
+    }
+
+    if (bUseStretch)
+    {
+        return NtGdiStretchBlt(hDCDest,
+                               XDest,
+                               YDest,
+                               Width,
+                               Height,
+                               hDCSrc,
+                               XSrc,
+                               YSrc,
+                               Width,
+                               Height,
+                               dwCleanRop,
+                               crBackColor);
+    }
+
+    dwRop = dwCleanRop;
 
     /* Forward to NtGdiMaskBlt */
     // TODO: What's fl for? LOL not to send this to MaskBit!
@@ -192,7 +232,8 @@ NtGdiBitBlt(
                         NULL,
                         0,
                         0,
-                        MAKEROP4(dwRop, dwRop),
+                        MAKEROP4(dwRop & ~NOMIRRORBITMAP, dwRop & ~NOMIRRORBITMAP) |
+                            (dwRop & NOMIRRORBITMAP),
                         crBackColor);
 }
 
@@ -336,8 +377,12 @@ NtGdiMaskBlt(
     EXLATEOBJ exlo;
     XLATEOBJ *XlateObj = NULL;
     BOOL UsesSource, UsesPattern;
+    BOOL bPreserveBitmap;
+    BOOL bLayoutRtl;
     ROP4 rop4;
 
+    bPreserveBitmap = (dwRop4 & NOMIRRORBITMAP) != 0;
+    dwRop4 &= ~(NOMIRRORBITMAP|CAPTUREBLT);
     rop4 = WIN32_ROP4_TO_ENG_ROP4(dwRop4);
 
     if (!hdcDest)
@@ -425,12 +470,20 @@ NtGdiMaskBlt(
     }
 
     pdcattr = DCDest->pdcattr;
+    bPreserveBitmap = bPreserveBitmap ||
+                      (pdcattr->dwLayout & LAYOUT_BITMAPORIENTATIONPRESERVED);
+    bLayoutRtl = UsesSource && (pdcattr->dwLayout & LAYOUT_RTL);
 
     DestRect.left   = nXDest;
     DestRect.top    = nYDest;
     DestRect.right  = nXDest + nWidth;
     DestRect.bottom = nYDest + nHeight;
     IntLPtoDP(DCDest, (LPPOINT)&DestRect, 2);
+    if (bLayoutRtl && !bPreserveBitmap && (DestRect.left > DestRect.right))
+    {
+        DestRect.left++;
+        DestRect.right++;
+    }
 
     DestRect.left   += DCDest->ptlDCOrig.x;
     DestRect.top    += DCDest->ptlDCOrig.y;
@@ -576,7 +629,8 @@ GreStretchBltMask(
     IN DWORD dwBackColor,
     HDC hDCMask,
     INT XOriginMask,
-    INT YOriginMask)
+    INT YOriginMask,
+    BOOL bPreserveBitmap)
 {
     PDC DCDest;
     PDC DCSrc  = NULL;
@@ -595,6 +649,7 @@ GreStretchBltMask(
     POINTL BrushOrigin;
     BOOL UsesSource;
     BOOL UsesMask;
+    BOOL bLayoutRtl;
     ROP4 rop4;
     BOOL Case0000, Case0101, Case1010, CaseExcept;
 
@@ -656,6 +711,9 @@ GreStretchBltMask(
     CaseExcept = (Case0000 || Case0101 || Case1010);
 
     pdcattr = DCDest->pdcattr;
+    bPreserveBitmap = bPreserveBitmap ||
+                      (pdcattr->dwLayout & LAYOUT_BITMAPORIENTATIONPRESERVED);
+    bLayoutRtl = UsesSource && (pdcattr->dwLayout & LAYOUT_RTL);
 
     DestRect.left   = XOriginDest;
     DestRect.top    = YOriginDest;
@@ -675,6 +733,11 @@ GreStretchBltMask(
     }
 
     IntLPtoDP(DCDest, (LPPOINT)&DestRect, 2);
+    if (bLayoutRtl && !bPreserveBitmap && (DestRect.left > DestRect.right))
+    {
+        DestRect.left++;
+        DestRect.right++;
+    }
 
     DestRect.left   += DCDest->ptlDCOrig.x;
     DestRect.top    += DCDest->ptlDCOrig.y;
@@ -690,6 +753,12 @@ GreStretchBltMask(
     SourceRect.top    = YOriginSrc;
     SourceRect.right  = XOriginSrc+WidthSrc;
     SourceRect.bottom = YOriginSrc+HeightSrc;
+    if (bLayoutRtl && bPreserveBitmap)
+    {
+        LONG tmp = SourceRect.left;
+        SourceRect.left = SourceRect.right;
+        SourceRect.right = tmp;
+    }
 
     /* Account for possible negative span values */
     if ((WidthSrc < 0) && !CaseExcept)
@@ -779,6 +848,7 @@ GreStretchBltMask(
                               BitmapMask ? &MaskPoint : NULL,
                               &DCDest->eboFill.BrushObject,
                               &BrushOrigin,
+                              DCDest->pdcattr->jStretchBltMode,
                               rop4);
     if (UsesSource)
     {
@@ -816,6 +886,7 @@ NtGdiStretchBlt(
     DWORD dwRop3,
     IN DWORD dwBackColor)
 {
+    BOOL bPreserveBitmap = (dwRop3 & NOMIRRORBITMAP) != 0;
     dwRop3 = dwRop3 & ~(NOMIRRORBITMAP|CAPTUREBLT);
 
     return GreStretchBltMask(
@@ -833,7 +904,8 @@ NtGdiStretchBlt(
                 dwBackColor,
                 NULL,
                 0,
-                0);
+                0,
+                bPreserveBitmap);
 }
 
 
@@ -896,13 +968,7 @@ IntPatBlt(
        IntUpdateBoundsRect(pdc, &DestRect);
     }
 
-#ifdef _USE_DIBLIB_
-    BrushOrigin.x = pbrush->ptOrigin.x + pdc->ptlDCOrig.x + XLeft;
-    BrushOrigin.y = pbrush->ptOrigin.y + pdc->ptlDCOrig.y + YLeft;
-#else
-    BrushOrigin.x = pbrush->ptOrigin.x + pdc->ptlDCOrig.x;
-    BrushOrigin.y = pbrush->ptOrigin.y + pdc->ptlDCOrig.y;
-#endif
+    BrushOrigin = pdc->ptlFillOrigin;
 
     DC_vPrepareDCsForBlit(pdc, &DestRect, NULL, NULL);
 
@@ -1615,4 +1681,3 @@ leave:
     /* Return the new RGB color or -1 on failure */
     return ulRGBColor;
 }
-

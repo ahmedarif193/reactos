@@ -36,6 +36,7 @@ typedef BOOLEAN (APIENTRY *PSTRETCHRECTFUNC)(SURFOBJ* OutputObj,
                                             POINTL* MaskOrigin,
                                             BRUSHOBJ* pbo,
                                             POINTL* BrushOrigin,
+                                            ULONG Mode,
                                             ROP4 Rop4);
 
 static BOOLEAN APIENTRY
@@ -48,6 +49,7 @@ CallDibStretchBlt(SURFOBJ* psoDest,
                   POINTL* MaskOrigin,
                   BRUSHOBJ* pbo,
                   POINTL* BrushOrigin,
+                  ULONG Mode,
                   ROP4 Rop4)
 {
     POINTL RealBrushOrigin;
@@ -83,7 +85,7 @@ CallDibStretchBlt(SURFOBJ* psoDest,
     bResult = DibFunctionsForBitmapFormat[psoDest->iBitmapFormat].DIB_StretchBlt(
                psoDest, psoSource, Mask, psoPattern,
                OutputRect, InputRect, MaskOrigin, pbo, &RealBrushOrigin,
-               ColorTranslation, Rop4);
+               ColorTranslation, Mode, Rop4);
 
     return bResult;
 }
@@ -312,7 +314,7 @@ EngStretchBltROP(
 
             Ret = (*BltRectFunc)(psoOutput, psoInput, Mask,
                          ColorTranslation, &OutputRect, &InputRect, MaskOrigin,
-                         pbo, &AdjustedBrushOrigin, Rop4);
+                         pbo, &AdjustedBrushOrigin, Mode, Rop4);
             break;
         case DC_RECT:
             // Clip the blt to the clip rectangle
@@ -351,6 +353,7 @@ EngStretchBltROP(
                            MaskOrigin,
                            pbo,
                            &AdjustedBrushOrigin,
+                           Mode,
                            Rop4);
             }
             break;
@@ -414,6 +417,7 @@ EngStretchBltROP(
                            MaskOrigin,
                            pbo,
                            &AdjustedBrushOrigin,
+                           Mode,
                            Rop4);
                     }
                 }
@@ -477,6 +481,7 @@ IntEngStretchBlt(SURFOBJ *psoDest,
                  POINTL *pMaskOrigin,
                  BRUSHOBJ *pbo,
                  POINTL *BrushOrigin,
+                 ULONG Mode,
                  DWORD Rop4)
 {
     BOOLEAN ret;
@@ -725,15 +730,16 @@ IntEngStretchBlt(SURFOBJ *psoDest,
         InputClippedRect.bottom = DestRect->top;
     }
 
-    if (NULL == psoSource)
+    if (UsesSource && (NULL == psoSource))
     {
         DPRINT("Returning FALSE.\n");
         return FALSE;
     }
-    InputRect = *SourceRect;
+    InputRect = UsesSource ? *SourceRect : InputClippedRect;
 
-    if (InputRect.right < InputRect.left ||
-            InputRect.bottom < InputRect.top)
+    if (UsesSource &&
+            (InputRect.right < InputRect.left ||
+             InputRect.bottom < InputRect.top))
     {
         DPRINT("Returning TRUE.\n");
         /* Everything clipped away, nothing to do */
@@ -808,7 +814,7 @@ IntEngStretchBlt(SURFOBJ *psoDest,
                                                  &OutputRect,
                                                  &InputRect,
                                                  &MaskOrigin,
-                                                 COLORONCOLOR,
+                                                 Mode,
                                                  pbo,
                                                  Rop4);
     }
@@ -844,7 +850,7 @@ IntEngStretchBlt(SURFOBJ *psoDest,
                                &OutputRect,
                                &InputRect,
                                &MaskOrigin,
-                               COLORONCOLOR,
+                               Mode,
                                pbo,
                                Rop4);
     }

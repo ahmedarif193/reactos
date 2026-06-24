@@ -28,6 +28,27 @@ TranslateRects(RECT_ENUM *RectEnum, POINTL* Translate)
     }
 }
 
+static __inline VOID
+EngLineToPutPixel(
+    SURFOBJ *OutputObj,
+    LONG x,
+    LONG y,
+    ULONG Pixel,
+    ULONG Rop)
+{
+    if (Rop != R3_OPINDEX_PATCOPY)
+    {
+        ULONG Dest;
+
+        Dest = DibFunctionsForBitmapFormat[OutputObj->iBitmapFormat].DIB_GetPixel(
+            OutputObj, x, y);
+        Pixel = DIB_DoRop(Rop, Dest, 0, Pixel);
+    }
+
+    DibFunctionsForBitmapFormat[OutputObj->iBitmapFormat].DIB_PutPixel(
+        OutputObj, x, y, Pixel);
+}
+
 LONG
 HandleStyles(
     BRUSHOBJ *pbo,
@@ -72,7 +93,7 @@ HandleStyles(
         }
         else
         {
-            lStyleMax -= offStyle + 1;
+            lStyleMax -= pulStyles[iStyle] - offStyle;
         }
     }
     else
@@ -91,7 +112,7 @@ HandleStyles(
 void FASTCALL
 NWtoSE(SURFOBJ* OutputObj, CLIPOBJ* Clip,
        BRUSHOBJ* pbo, LONG x, LONG y, LONG deltax, LONG deltay,
-       POINTL* Translate)
+       POINTL* Translate, ULONG Rop)
 {
     int i;
     int error;
@@ -113,7 +134,7 @@ NWtoSE(SURFOBJ* OutputObj, CLIPOBJ* Clip,
     ClipRect = RectEnum.arcl;
     delta = max(deltax, deltay);
     i = 0;
-    error = delta >> 1;
+    error = (deltax < deltay) ? (2 * deltax - deltay) : (2 * deltay - deltax);
     while (i < delta && (ClipRect < RectEnum.arcl + RectEnum.c || EnumMore))
     {
         while ((ClipRect < RectEnum.arcl + RectEnum.c /* there's still a current clip rect */
@@ -137,8 +158,7 @@ NWtoSE(SURFOBJ* OutputObj, CLIPOBJ* Clip,
         {
             if ((ClipRect->left <= x && ClipRect->top <= y) && ((iStyle & 1) == 0))
             {
-                DibFunctionsForBitmapFormat[OutputObj->iBitmapFormat].DIB_PutPixel(
-                    OutputObj, x, y, Pixel);
+                EngLineToPutPixel(OutputObj, x, y, Pixel, Rop);
             }
             if (deltax < deltay)
             {
@@ -149,11 +169,14 @@ NWtoSE(SURFOBJ* OutputObj, CLIPOBJ* Clip,
                     iStyle = (iStyle + 1) % cStyles;
                     lStyleMax = y + pulStyles[iStyle];
                 }
-                error = error + deltax;
-                if (deltay <= error)
+                if (error > 0)
                 {
                     x++;
-                    error = error - deltay;
+                    error = error + 2 * deltax - 2 * deltay;
+                }
+                else
+                {
+                    error = error + 2 * deltax;
                 }
             }
             else
@@ -165,11 +188,14 @@ NWtoSE(SURFOBJ* OutputObj, CLIPOBJ* Clip,
                     iStyle = (iStyle + 1) % cStyles;
                     lStyleMax = x + pulStyles[iStyle];
                 }
-                error = error + deltay;
-                if (deltax <= error)
+                if (error > 0)
                 {
                     y++;
-                    error = error - deltax;
+                    error = error + 2 * deltay - 2 * deltax;
+                }
+                else
+                {
+                    error = error + 2 * deltay;
                 }
             }
             i++;
@@ -180,7 +206,7 @@ NWtoSE(SURFOBJ* OutputObj, CLIPOBJ* Clip,
 void FASTCALL
 SWtoNE(SURFOBJ* OutputObj, CLIPOBJ* Clip,
        BRUSHOBJ* pbo, LONG x, LONG y, LONG deltax, LONG deltay,
-       POINTL* Translate)
+       POINTL* Translate, ULONG Rop)
 {
     int i;
     int error;
@@ -202,7 +228,7 @@ SWtoNE(SURFOBJ* OutputObj, CLIPOBJ* Clip,
     ClipRect = RectEnum.arcl;
     delta = max(deltax, deltay);
     i = 0;
-    error = delta >> 1;
+    error = (deltax < deltay) ? (2 * deltax - deltay) : (2 * deltay - deltax);
     while (i < delta && (ClipRect < RectEnum.arcl + RectEnum.c || EnumMore))
     {
         while ((ClipRect < RectEnum.arcl + RectEnum.c
@@ -225,8 +251,7 @@ SWtoNE(SURFOBJ* OutputObj, CLIPOBJ* Clip,
         {
             if ((ClipRect->left <= x && y < ClipRect->bottom) && ((iStyle & 1) == 0))
             {
-                DibFunctionsForBitmapFormat[OutputObj->iBitmapFormat].DIB_PutPixel(
-                    OutputObj, x, y, Pixel);
+                EngLineToPutPixel(OutputObj, x, y, Pixel, Rop);
             }
             if (deltax < deltay)
             {
@@ -237,11 +262,14 @@ SWtoNE(SURFOBJ* OutputObj, CLIPOBJ* Clip,
                     iStyle = (iStyle - 1) % cStyles;
                     lStyleMax = y - pulStyles[iStyle];
                 }
-                error = error + deltax;
-                if (deltay <= error)
+                if (error > 0)
                 {
                     x++;
-                    error = error - deltay;
+                    error = error + 2 * deltax - 2 * deltay;
+                }
+                else
+                {
+                    error = error + 2 * deltax;
                 }
             }
             else
@@ -253,11 +281,14 @@ SWtoNE(SURFOBJ* OutputObj, CLIPOBJ* Clip,
                     iStyle = (iStyle + 1) % cStyles;
                     lStyleMax = x + pulStyles[iStyle];
                 }
-                error = error + deltay;
-                if (deltax <= error)
+                if (error >= 0)
                 {
                     y--;
-                    error = error - deltax;
+                    error = error + 2 * deltay - 2 * deltax;
+                }
+                else
+                {
+                    error = error + 2 * deltay;
                 }
             }
             i++;
@@ -268,7 +299,7 @@ SWtoNE(SURFOBJ* OutputObj, CLIPOBJ* Clip,
 void FASTCALL
 NEtoSW(SURFOBJ* OutputObj, CLIPOBJ* Clip,
        BRUSHOBJ* pbo, LONG x, LONG y, LONG deltax, LONG deltay,
-       POINTL* Translate)
+       POINTL* Translate, ULONG Rop)
 {
     int i;
     int error;
@@ -290,7 +321,7 @@ NEtoSW(SURFOBJ* OutputObj, CLIPOBJ* Clip,
     ClipRect = RectEnum.arcl;
     delta = max(deltax, deltay);
     i = 0;
-    error = delta >> 1;
+    error = (deltax < deltay) ? (2 * deltax - deltay) : (2 * deltay - deltax);
     while (i < delta && (ClipRect < RectEnum.arcl + RectEnum.c || EnumMore))
     {
         while ((ClipRect < RectEnum.arcl + RectEnum.c
@@ -313,8 +344,7 @@ NEtoSW(SURFOBJ* OutputObj, CLIPOBJ* Clip,
         {
             if ((x < ClipRect->right && ClipRect->top <= y) && ((iStyle & 1) == 0))
             {
-                DibFunctionsForBitmapFormat[OutputObj->iBitmapFormat].DIB_PutPixel(
-                    OutputObj, x, y, Pixel);
+                EngLineToPutPixel(OutputObj, x, y, Pixel, Rop);
             }
             if (deltax < deltay)
             {
@@ -325,11 +355,14 @@ NEtoSW(SURFOBJ* OutputObj, CLIPOBJ* Clip,
                     iStyle = (iStyle + 1) % cStyles;
                     lStyleMax = y + pulStyles[iStyle];
                 }
-                error = error + deltax;
-                if (deltay <= error)
+                if (error >= 0)
                 {
                     x--;
-                    error = error - deltay;
+                    error = error + 2 * deltax - 2 * deltay;
+                }
+                else
+                {
+                    error = error + 2 * deltax;
                 }
             }
             else
@@ -341,11 +374,14 @@ NEtoSW(SURFOBJ* OutputObj, CLIPOBJ* Clip,
                     iStyle = (iStyle - 1) % cStyles;
                     lStyleMax = x - pulStyles[iStyle];
                 }
-                error = error + deltay;
-                if (deltax <= error)
+                if (error > 0)
                 {
                     y++;
-                    error = error - deltax;
+                    error = error + 2 * deltay - 2 * deltax;
+                }
+                else
+                {
+                    error = error + 2 * deltay;
                 }
             }
             i++;
@@ -356,7 +392,7 @@ NEtoSW(SURFOBJ* OutputObj, CLIPOBJ* Clip,
 void FASTCALL
 SEtoNW(SURFOBJ* OutputObj, CLIPOBJ* Clip,
        BRUSHOBJ* pbo, LONG x, LONG y, LONG deltax, LONG deltay,
-       POINTL* Translate)
+       POINTL* Translate, ULONG Rop)
 {
     int i;
     int error;
@@ -378,7 +414,7 @@ SEtoNW(SURFOBJ* OutputObj, CLIPOBJ* Clip,
     ClipRect = RectEnum.arcl;
     delta = max(deltax, deltay);
     i = 0;
-    error = delta >> 1;
+    error = (deltax < deltay) ? (2 * deltax - deltay) : (2 * deltay - deltax);
     while (i < delta && (ClipRect < RectEnum.arcl + RectEnum.c || EnumMore))
     {
         while ((ClipRect < RectEnum.arcl + RectEnum.c
@@ -401,8 +437,7 @@ SEtoNW(SURFOBJ* OutputObj, CLIPOBJ* Clip,
         {
             if ((x < ClipRect->right && y < ClipRect->bottom) && ((iStyle & 1) == 0))
             {
-                DibFunctionsForBitmapFormat[OutputObj->iBitmapFormat].DIB_PutPixel(
-                    OutputObj, x, y, Pixel);
+                EngLineToPutPixel(OutputObj, x, y, Pixel, Rop);
             }
             if (deltax < deltay)
             {
@@ -413,11 +448,14 @@ SEtoNW(SURFOBJ* OutputObj, CLIPOBJ* Clip,
                     iStyle = (iStyle - 1) % cStyles;
                     lStyleMax = y - pulStyles[iStyle];
                 }
-                error = error + deltax;
-                if (deltay <= error)
+                if (error >= 0)
                 {
                     x--;
-                    error = error - deltay;
+                    error = error + 2 * deltax - 2 * deltay;
+                }
+                else
+                {
+                    error = error + 2 * deltax;
                 }
             }
             else
@@ -429,11 +467,14 @@ SEtoNW(SURFOBJ* OutputObj, CLIPOBJ* Clip,
                     iStyle = (iStyle - 1) % cStyles;
                     lStyleMax = x - pulStyles[iStyle];
                 }
-                error = error + deltay;
-                if (deltax <= error)
+                if (error >= 0)
                 {
                     y--;
-                    error = error - deltax;
+                    error = error + 2 * deltay - 2 * deltax;
+                }
+                else
+                {
+                    error = error + 2 * deltay;
                 }
             }
             i++;
@@ -459,6 +500,7 @@ EngLineTo(
     LONG x, y, deltax, deltay, xchange, ychange, hx, vy;
     ULONG i;
     ULONG Pixel = pbo->iSolidColor;
+    ULONG Rop = ROP4_FGND(MIX_TO_ROP4(mix));
     SURFOBJ *OutputObj;
     RECTL DestRect;
     POINTL Translate;
@@ -558,11 +600,23 @@ EngLineTo(
                         max(hx, RectEnum.arcl[i].left + Translate.x) <
                         min(hx + deltax, RectEnum.arcl[i].right + Translate.x))
                 {
-                    DibFunctionsForBitmapFormat[OutputObj->iBitmapFormat].DIB_HLine(
-                        OutputObj,
-                        max(hx, RectEnum.arcl[i].left + Translate.x),
-                        min(hx + deltax, RectEnum.arcl[i].right + Translate.x),
-                        y1, Pixel);
+                    LONG xStart, xEnd;
+
+                    xStart = max(hx, RectEnum.arcl[i].left + Translate.x);
+                    xEnd = min(hx + deltax, RectEnum.arcl[i].right + Translate.x);
+
+                    if (Rop == R3_OPINDEX_PATCOPY)
+                    {
+                        DibFunctionsForBitmapFormat[OutputObj->iBitmapFormat].DIB_HLine(
+                            OutputObj, xStart, xEnd, y1, Pixel);
+                    }
+                    else
+                    {
+                        for (x = xStart; x < xEnd; x++)
+                        {
+                            EngLineToPutPixel(OutputObj, x, y1, Pixel, Rop);
+                        }
+                    }
                 }
             }
         }
@@ -581,11 +635,23 @@ EngLineTo(
                         RectEnum.arcl[i].top + Translate.y <= vy + deltay &&
                         vy < RectEnum.arcl[i].bottom + Translate.y)
                 {
-                    DibFunctionsForBitmapFormat[OutputObj->iBitmapFormat].DIB_VLine(
-                        OutputObj, x1,
-                        max(vy, RectEnum.arcl[i].top + Translate.y),
-                        min(vy + deltay, RectEnum.arcl[i].bottom + Translate.y),
-                        Pixel);
+                    LONG yStart, yEnd;
+
+                    yStart = max(vy, RectEnum.arcl[i].top + Translate.y);
+                    yEnd = min(vy + deltay, RectEnum.arcl[i].bottom + Translate.y);
+
+                    if (Rop == R3_OPINDEX_PATCOPY)
+                    {
+                        DibFunctionsForBitmapFormat[OutputObj->iBitmapFormat].DIB_VLine(
+                            OutputObj, x1, yStart, yEnd, Pixel);
+                    }
+                    else
+                    {
+                        for (y = yStart; y < yEnd; y++)
+                        {
+                            EngLineToPutPixel(OutputObj, x1, y, Pixel, Rop);
+                        }
+                    }
                 }
             }
         }
@@ -597,22 +663,22 @@ EngLineTo(
         {
             if (0 < ychange)
             {
-                NWtoSE(OutputObj, Clip, pbo, x, y, deltax, deltay, &Translate);
+                NWtoSE(OutputObj, Clip, pbo, x, y, deltax, deltay, &Translate, Rop);
             }
             else
             {
-                SWtoNE(OutputObj, Clip, pbo, x, y, deltax, deltay, &Translate);
+                SWtoNE(OutputObj, Clip, pbo, x, y, deltax, deltay, &Translate, Rop);
             }
         }
         else
         {
             if (0 < ychange)
             {
-                NEtoSW(OutputObj, Clip, pbo, x, y, deltax, deltay, &Translate);
+                NEtoSW(OutputObj, Clip, pbo, x, y, deltax, deltay, &Translate, Rop);
             }
             else
             {
-                SEtoNW(OutputObj, Clip, pbo, x, y, deltax, deltay, &Translate);
+                SEtoNW(OutputObj, Clip, pbo, x, y, deltax, deltay, &Translate, Rop);
             }
         }
     }

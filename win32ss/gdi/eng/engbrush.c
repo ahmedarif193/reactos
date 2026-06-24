@@ -122,13 +122,51 @@ FASTCALL
 EBRUSHOBJ_vSetSolidRGBColor(EBRUSHOBJ *pebo, COLORREF crColor)
 {
     ULONG iSolidColor;
+    ULONG index;
     EXLATEOBJ exlo;
 
     /* Never use with non-solid brushes */
     ASSERT(pebo->flattrs & BR_IS_SOLID);
 
-    /* Set the RGB color */
-    crColor &= 0xFFFFFF;
+    if ((crColor & 0xFF000000) == 0)
+    {
+        /* RGB color */
+    }
+    else if (crColor & 0x01000000)
+    {
+        index = crColor & 0xFFFF;
+        if (index >= pebo->ppalDC->NumColors)
+            index = 0;
+        crColor = PALETTE_ulGetRGBColorFromIndex(pebo->ppalDC, index);
+    }
+    else if (crColor & 0x02000000)
+    {
+        crColor &= 0x00FFFFFF;
+        if (pebo->ppalDC != gppalDefault)
+        {
+            index = PALETTE_ulGetNearestIndex(pebo->ppalDC, crColor);
+            crColor = PALETTE_ulGetRGBColorFromIndex(pebo->ppalDC, index);
+        }
+    }
+    else if ((crColor & 0x10FF0000) == 0x10FF0000)
+    {
+        if (pebo->ppalSurf->flFlags & PAL_INDEXED)
+        {
+            index = crColor & 0xFF;
+            if (index >= pebo->ppalSurf->NumColors)
+                index = 0;
+            pebo->crRealize = PALETTE_ulGetRGBColorFromIndex(pebo->ppalSurf, index);
+            pebo->ulRGBColor = pebo->crRealize;
+            pebo->BrushObject.iSolidColor = index;
+            return;
+        }
+        crColor = 0;
+    }
+    else
+    {
+        crColor &= 0x00FFFFFF;
+    }
+
     pebo->crRealize = crColor;
     pebo->ulRGBColor = crColor;
 

@@ -205,6 +205,7 @@ CreateDIBPalette(
     {
         /* This is a bitfield / RGB palette */
         ULONG flRedMask, flGreenMask, flBlueMask;
+        FLONG flPaletteMode = PAL_BITFIELDS | PAL_DIBSECTION;
 
         /* Check if the DIB contains bitfield values */
         if ((pbmi->bmiHeader.biSize >= sizeof(BITMAPINFOHEADER)) &&
@@ -245,16 +246,23 @@ CreateDIBPalette(
                 flRedMask = 0xFF0000;
                 flGreenMask = 0x00FF00;
                 flBlueMask = 0x0000FF;
+                flPaletteMode = PAL_BGR | PAL_DIBSECTION;
             }
         }
 
-        /* Allocate the bitfield palette */
-        ppal = PALETTE_AllocPalette(PAL_BITFIELDS | PAL_DIBSECTION,
+        /* Allocate the palette */
+        ppal = PALETTE_AllocPalette(flPaletteMode,
                                     0,
                                     NULL,
                                     flRedMask,
                                     flGreenMask,
                                     flBlueMask);
+        if (ppal && !(flPaletteMode & PAL_BITFIELDS))
+        {
+            ppal->RedMask = flRedMask;
+            ppal->GreenMask = flGreenMask;
+            ppal->BlueMask = flBlueMask;
+        }
     }
 
     /* We're done, return the palette */
@@ -429,7 +437,7 @@ IntGdiCreateMaskFromRLE(
             if (NumPixels == 0)
                 continue;
 
-            DIB_1BPP_HLine(SurfObj, x, x + NumPixels, y, 1);
+            DIB_1BPP_HLine(SurfObj, x, x + NumPixels, Height - 1 - y, 1);
             x += NumPixels;
             continue;
         }
@@ -481,7 +489,7 @@ IntGdiCreateMaskFromRLE(
 
         if (NumPixels != 0)
         {
-            DIB_1BPP_HLine(SurfObj, x, x + NumPixels, y, 1);
+            DIB_1BPP_HLine(SurfObj, x, x + NumPixels, Height - 1 - y, 1);
             x += NumPixels;
         }
         i += ToSkip;
@@ -525,7 +533,7 @@ NtGdiSetDIBitsToDeviceInternal(
     EXLATEOBJ exlo;
     PPALETTE ppalDIB = NULL;
     LPBITMAPINFO pbmiSafe;
-    BOOL bResult;
+    BOOL bResult, bRle;
 
     if (!Bits) return 0;
 
@@ -555,6 +563,9 @@ NtGdiSetDIBitsToDeviceInternal(
            bmi->bmiHeader.biHeight, bmi->bmiHeader.biWidth,
            bmi->bmiHeader.biBitCount,
            XSrc, YSrc, XDest, YDest);
+
+    bRle = (bmi->bmiHeader.biCompression == BI_RLE8) ||
+           (bmi->bmiHeader.biCompression == BI_RLE4);
 
     if (YDest < 0)
     {
@@ -600,7 +611,7 @@ NtGdiSetDIBitsToDeviceInternal(
     }
 
     ptSource.x = XSrc;
-    ptSource.y = YSrc;
+    ptSource.y = bRle ? 0 : YSrc;
 
     SourceSize.cx = bmi->bmiHeader.biWidth;
     SourceSize.cy = ScanLines;
@@ -632,7 +643,7 @@ NtGdiSetDIBitsToDeviceInternal(
     }
 
     /* HACK: If this is a RLE bitmap, only the relevant pixels must be set. */
-    if ((bmi->bmiHeader.biCompression == BI_RLE8) || (bmi->bmiHeader.biCompression == BI_RLE4))
+    if (bRle)
     {
         hMaskBitmap = IntGdiCreateMaskFromRLE(bmi->bmiHeader.biWidth,
             ScanLines,
@@ -812,13 +823,13 @@ GreGetDIBitsInternal(
        - negative width is always an invalid value
        - non-null Bits and zero bpp is an invalid combination
        - only check the rest of the input params if either bpp is non-zero or Bits are set */
-    if (width < 0 || (bpp == 0 && Bits))
+    if (width < 0 || (bpp == 0 && Bits && ScanLines != 0))
     {
         ScanLines = 0;
         goto done;
     }
 
-    if (Bits || bpp)
+    if ((Bits && ScanLines != 0) || bpp)
     {
         if ((height == 0 || width == 0) || (compr && compr != BI_BITFIELDS && compr != BI_RGB))
         {
@@ -849,7 +860,10 @@ GreGetDIBitsInternal(
         Info->bmiHeader.biYPelsPerMeter = 0;
 
         if (Info->bmiHeader.biBitCount <= 8 && Info->bmiHeader.biClrUsed == 0)
+        {
             Info->bmiHeader.biClrUsed = 1 << Info->bmiHeader.biBitCount;
+            Info->bmiHeader.biClrImportant = Info->bmiHeader.biClrUsed;
+        }
 
         ScanLines = 1;
         goto done;
@@ -857,8 +871,6 @@ GreGetDIBitsInternal(
     case 1:
     case 4:
     case 8:
-        Info->bmiHeader.biClrUsed = 1 << bpp;
-
         /* If the bitmap is a DIB section and has the same format as what
          * is requested, go ahead! */
         if((psurf->hSecure) &&
@@ -867,7 +879,6 @@ GreGetDIBitsInternal(
             if(Usage == DIB_RGB_COLORS)
             {
                 ULONG colors = min(psurf->ppal->NumColors, 256);
-                if(colors != 256) Info->bmiHeader.biClrUsed = colors;
                 for(i = 0; i < colors; i++)
                 {
                     rgbQuads[i].rgbRed = psurf->ppal->IndexedColors[i].peRed;
@@ -1257,7 +1268,8 @@ NtGdiStretchDIBitsInternal(
     IN HANDLE hcmXform)
 {
     SIZEL sizel;
-    RECTL rcSrc, rcDst;
+    RECTL rcSrc, rcDst, rcBounds;
+    LONG lTmp;
     PDC pdc;
     HBITMAP hbmTmp = 0;
     PSURFACE psurfTmp = 0, psurfDst = 0;
@@ -1324,6 +1336,21 @@ NtGdiStretchDIBitsInternal(
         return 0;
     }
 
+    if ((pbmiSafe->bmiHeader.biSize >= sizeof(BITMAPINFOHEADER)) &&
+        ((pbmiSafe->bmiHeader.biWidth <= 0) ||
+         (pbmiSafe->bmiHeader.biHeight == 0)))
+    {
+        ExFreePoolWithTag(pbmiSafe, 'imBG');
+        return 0;
+    }
+
+    if (((cxSrc < 0) && (((xSrc + cxSrc) < 0) || (xSrc > pbmiSafe->bmiHeader.biWidth))) ||
+        ((cySrc < 0) && (((ySrc + cySrc) < 0) || (ySrc > abs(pbmiSafe->bmiHeader.biHeight)))))
+    {
+        ExFreePoolWithTag(pbmiSafe, 'imBG');
+        return 0;
+    }
+
     if (!(pdc = DC_LockDc(hdc)))
     {
         EngSetLastError(ERROR_INVALID_HANDLE);
@@ -1384,9 +1411,16 @@ NtGdiStretchDIBitsInternal(
 
         /* Calculate source and destination rect */
         rcSrc.left = xSrc;
-        rcSrc.top = ySrc;
-        rcSrc.right = xSrc + abs(cxSrc);
-        rcSrc.bottom = ySrc + abs(cySrc);
+        rcSrc.right = xSrc + cxSrc;
+        if (pbmiSafe->bmiHeader.biHeight > 0)
+        {
+            rcSrc.top = abs(pbmiSafe->bmiHeader.biHeight) - ySrc - cySrc;
+        }
+        else
+        {
+            rcSrc.top = ySrc;
+        }
+        rcSrc.bottom = rcSrc.top + cySrc;
         rcDst.left = xDst;
         rcDst.top = yDst;
         rcDst.right = rcDst.left + cxDst;
@@ -1396,7 +1430,20 @@ NtGdiStretchDIBitsInternal(
 
         if (pdc->fs & (DC_ACCUM_APP|DC_ACCUM_WMGR))
         {
-           IntUpdateBoundsRect(pdc, &rcDst);
+           rcBounds = rcDst;
+           if (rcBounds.left > rcBounds.right)
+           {
+               lTmp = rcBounds.left;
+               rcBounds.left = rcBounds.right;
+               rcBounds.right = lTmp;
+           }
+           if (rcBounds.top > rcBounds.bottom)
+           {
+               lTmp = rcBounds.top;
+               rcBounds.top = rcBounds.bottom;
+               rcBounds.bottom = lTmp;
+           }
+           IntUpdateBoundsRect(pdc, &rcBounds);
         }
 
         BmpFormat = BitmapFormat(pbmiSafe->bmiHeader.biBitCount,
@@ -1454,6 +1501,7 @@ NtGdiStretchDIBitsInternal(
                          NULL,
                          &pdc->eboFill.BrushObject,
                          NULL,
+                         pdc->pdcattr->jStretchBltMode,
                          WIN32_ROP3_TO_ENG_ROP4(dwRop));
 
         /* Cleanup */
@@ -1616,7 +1664,14 @@ NtGdiCreateDIBitmapInternal(
 
     if(pjInit && (fInit & CBM_INIT))
     {
+        ULONG_PTR Init = (ULONG_PTR)pjInit;
+        ULONG_PTR InitEnd;
+
         if (cjMaxBits == 0) return NULL;
+        InitEnd = Init + cjMaxBits - 1;
+        if ((InitEnd < Init) || (InitEnd >= (ULONG_PTR)MmUserProbeAddress))
+            return NULL;
+
         safeBits = DIB_AllocTempBits(cjMaxBits);
         if(!safeBits)
         {
@@ -1877,7 +1932,7 @@ DIB_CreateDIBSection(
     // Fill BITMAP32 structure with DIB data
     CONST BITMAPINFOHEADER *bi = &bmi->bmiHeader;
     INT effHeight;
-    ULONG totalSize;
+    ULONG totalSize, cjWidthBytes;
     BITMAP bm;
     //SIZEL Size;
     HANDLE hSecure;
@@ -1893,11 +1948,54 @@ DIB_CreateDIBSection(
         return (HBITMAP)NULL;
     }
 
+    if (usage > DIB_PAL_COLORS)
+    {
+        return (HBITMAP)NULL;
+    }
+
+    if ((bi->biSize >= sizeof(BITMAPINFOHEADER)) &&
+        (bi->biCompression == BI_BITFIELDS))
+    {
+        ULONG flRedMask, flGreenMask, flBlueMask;
+
+        if (bi->biSize >= sizeof(BITMAPV4HEADER))
+        {
+            CONST BITMAPV4HEADER *pbmV4Header = (CONST BITMAPV4HEADER *)bi;
+            flRedMask = pbmV4Header->bV4RedMask;
+            flGreenMask = pbmV4Header->bV4GreenMask;
+            flBlueMask = pbmV4Header->bV4BlueMask;
+        }
+        else
+        {
+            CONST DWORD *pdwColors = (CONST VOID *)((CONST CHAR *)bmi + bi->biSize);
+            flRedMask = pdwColors[0];
+            flGreenMask = pdwColors[1];
+            flBlueMask = pdwColors[2];
+        }
+
+        if (!flRedMask || !flGreenMask || !flBlueMask)
+        {
+            return (HBITMAP)NULL;
+        }
+    }
+
+    if ((bi->biWidth <= 0) || (bi->biHeight == 0) ||
+        (bi->biHeight == LONG_MIN) || (bi->biBitCount == 0))
+    {
+        return (HBITMAP)NULL;
+    }
+
+    if ((ULONG)bi->biWidth > (MAXULONG - 31) / bi->biBitCount)
+    {
+        return (HBITMAP)NULL;
+    }
+    cjWidthBytes = WIDTH_BYTES_ALIGN32(bi->biWidth, bi->biBitCount);
+
     effHeight = bi->biHeight >= 0 ? bi->biHeight : -bi->biHeight;
     bm.bmType = 0;
     bm.bmWidth = bi->biWidth;
     bm.bmHeight = effHeight;
-    bm.bmWidthBytes = ovr_pitch ? ovr_pitch : WIDTH_BYTES_ALIGN32(bm.bmWidth, bi->biBitCount);
+    bm.bmWidthBytes = ovr_pitch ? ovr_pitch : cjWidthBytes;
 
     bm.bmPlanes = bi->biPlanes;
     bm.bmBitsPixel = bi->biBitCount;
@@ -1905,8 +2003,10 @@ DIB_CreateDIBSection(
 
     // Get storage location for DIB bits.  Only use biSizeImage if it's valid and
     // we're dealing with a compressed bitmap.  Otherwise, use width * height.
-    totalSize = (bi->biSizeImage && (bi->biCompression != BI_RGB) && (bi->biCompression != BI_BITFIELDS))
-                ? bi->biSizeImage : (ULONG)(bm.bmWidthBytes * effHeight);
+    if (!NT_SUCCESS(RtlULongMult(bm.bmWidthBytes, effHeight, &totalSize)))
+    {
+        return (HBITMAP)NULL;
+    }
 
     if (section)
     {

@@ -365,8 +365,8 @@ NtUserCallOneParam(
         case ONEPARAM_ROUTINE_GETPROCDEFLAYOUT:
         {
             PPROCESSINFO ppi;
-            PDWORD pdwLayout;
-            Result = TRUE;
+            DWORD dwLayout;
+            NTSTATUS Status;
 
             if (PsGetCurrentProcess() == gpepCSRSS)
             {
@@ -375,18 +375,23 @@ NtUserCallOneParam(
                 break;
             }
 
-            ppi = PsGetCurrentProcessWin32Process();
-            _SEH2_TRY
+            if (!Param)
             {
-               pdwLayout = (PDWORD)Param;
-               *pdwLayout = ppi->dwLayout;
-            }
-            _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
-            {
-                SetLastNtError(_SEH2_GetExceptionCode());
+                SetLastNtError(STATUS_ACCESS_VIOLATION);
                 Result = FALSE;
+                break;
             }
-            _SEH2_END;
+
+            ppi = PsGetCurrentProcessWin32Process();
+            dwLayout = ppi->dwLayout;
+            Status = MmCopyToCaller((PVOID)Param, &dwLayout, sizeof(dwLayout));
+            if (!NT_SUCCESS(Status))
+            {
+                SetLastNtError(Status);
+                Result = FALSE;
+                break;
+            }
+            Result = TRUE;
             break;
         }
 

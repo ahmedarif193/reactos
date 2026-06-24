@@ -838,7 +838,7 @@ IntGdiSetMapMode(
 
     flXform = pdcattr->flXform & ~(ISO_OR_ANISO_MAP_MODE|PTOD_EFM22_NEGATIVE|
         PTOD_EFM11_NEGATIVE|POSITIVE_Y_IS_UP|PAGE_TO_DEVICE_SCALE_IDENTITY|
-        PAGE_TO_DEVICE_IDENTITY);
+        PAGE_TO_DEVICE_IDENTITY|PAGE_EXTENTS_CHANGED);
 
     switch (MapMode)
     {
@@ -903,9 +903,12 @@ IntGdiSetMapMode(
     pdcattr->iMapMode = MapMode;
 
     /* Update xform flags */
-    pdcattr->flXform = flXform | (PAGE_XLATE_CHANGED | PAGE_EXTENTS_CHANGED |
-                                  INVALIDATE_ATTRIBUTES | DEVICE_TO_PAGE_INVALID |
-                                  WORLD_XFORM_CHANGED | DEVICE_TO_WORLD_INVALID);
+    flXform |= PAGE_XLATE_CHANGED | INVALIDATE_ATTRIBUTES |
+               DEVICE_TO_PAGE_INVALID | WORLD_XFORM_CHANGED |
+               DEVICE_TO_WORLD_INVALID;
+    if (MapMode != MM_ISOTROPIC)
+        flXform |= PAGE_EXTENTS_CHANGED;
+    pdcattr->flXform = flXform;
 
     return iPrevMapMode;
 }
@@ -1071,7 +1074,11 @@ IntMirrorWindowOrg(PDC dc)
     //
     // WOrgx = wox - (Width - 1) * WExtx / VExtx
     //
-    X = (dc->erclWindow.right - dc->erclWindow.left) - 1; // Get device width - 1
+    if (dc->dctype == DCTYPE_MEMORY)
+        X = dc->dclevel.sizl.cx;
+    else
+        X = dc->erclWindow.right - dc->erclWindow.left;
+    X--; // Get device width - 1
 
     X = (X * pdcattr->szlWindowExt.cx) / cx;
 
@@ -1089,23 +1096,37 @@ DC_vSetLayout(
     IN DWORD dwLayout)
 {
     PDC_ATTR pdcattr = pdc->pdcattr;
+    BOOL bOldRtl = (pdcattr->dwLayout & LAYOUT_RTL) != 0;
+    BOOL bNewRtl = (dwLayout & LAYOUT_RTL) != 0;
 
     pdcattr->dwLayout = dwLayout;
-
-    if (!(dwLayout & LAYOUT_ORIENTATIONMASK)) return;
 
     if (dwLayout & LAYOUT_RTL)
     {
         pdcattr->iMapMode = MM_ANISOTROPIC;
     }
 
-    //pdcattr->szlWindowExt.cy = -pdcattr->szlWindowExt.cy;
-    //pdcattr->ptlWindowOrg.x  = -pdcattr->ptlWindowOrg.x;
+    if (bOldRtl != bNewRtl)
+    {
+        pdcattr->szlWindowExt.cx = -pdcattr->szlWindowExt.cx;
 
-    //if (wox == -1)
-    //    IntMirrorWindowOrg(pdc);
-    //else
-    //    pdcattr->ptlWindowOrg.x = wox - pdcattr->ptlWindowOrg.x;
+        if (wox == -1)
+            IntMirrorWindowOrg(pdc);
+        else
+            pdcattr->ptlWindowOrg.x = wox - pdcattr->ptlWindowOrg.x;
+    }
+
+    if (!(dwLayout & LAYOUT_ORIENTATIONMASK))
+    {
+        if (bOldRtl != bNewRtl)
+        {
+            pdcattr->flXform |= (PAGE_EXTENTS_CHANGED |
+                                 INVALIDATE_ATTRIBUTES |
+                                 WORLD_XFORM_CHANGED |
+                                 DEVICE_TO_WORLD_INVALID);
+        }
+        return;
+    }
 
     if (!(pdcattr->flTextAlign & TA_CENTER)) pdcattr->flTextAlign |= TA_RIGHT;
 

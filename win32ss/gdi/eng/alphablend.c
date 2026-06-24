@@ -71,23 +71,41 @@ EngAlphaBlend(
               OutputRect.top >= SourceRect->bottom || InputRect.top >= OutputRect.bottom))
     {
         DPRINT1("Source and destination rectangles overlap!\n");
+        EngSetLastError(ERROR_INVALID_PARAMETER);
         return FALSE;
     }
 
     if (BlendObj->BlendFunction.BlendOp != AC_SRC_OVER)
     {
         DPRINT1("BlendOp != AC_SRC_OVER (0x%x)\n", BlendObj->BlendFunction.BlendOp);
+        EngSetLastError(ERROR_INVALID_PARAMETER);
         return FALSE;
     }
     if (BlendObj->BlendFunction.BlendFlags != 0)
     {
         DPRINT1("BlendFlags != 0 (0x%x)\n", BlendObj->BlendFunction.BlendFlags);
+        EngSetLastError(ERROR_INVALID_PARAMETER);
         return FALSE;
     }
     if ((BlendObj->BlendFunction.AlphaFormat & ~AC_SRC_ALPHA) != 0)
     {
         DPRINT1("Unsupported AlphaFormat (0x%x)\n", BlendObj->BlendFunction.AlphaFormat);
+        EngSetLastError(ERROR_INVALID_PARAMETER);
         return FALSE;
+    }
+    if (BlendObj->BlendFunction.AlphaFormat & AC_SRC_ALPHA)
+    {
+        SURFACE *psurfSource = CONTAINING_RECORD(psoSource, SURFACE, SurfObj);
+
+        if ((psoSource->iBitmapFormat != BMF_32BPP) ||
+            (psurfSource->ppal == NULL) ||
+            (psurfSource->ppal->RedMask != RGB(0x00, 0x00, 0xff)) ||
+            (psurfSource->ppal->GreenMask != RGB(0x00, 0xff, 0x00)) ||
+            (psurfSource->ppal->BlueMask != RGB(0xff, 0x00, 0x00)))
+        {
+            EngSetLastError(ERROR_INVALID_PARAMETER);
+            return FALSE;
+        }
     }
 
     /* Check if there is anything to draw */
@@ -190,6 +208,9 @@ EngAlphaBlend(
     IntEngLeave(&EnterLeaveDest);
     IntEngLeave(&EnterLeaveSource);
 
+    if (!Ret)
+        EngSetLastError(ERROR_INVALID_PARAMETER);
+
     return Ret;
 }
 
@@ -276,4 +297,3 @@ NtGdiEngAlphaBlend(IN SURFOBJ *psoDest,
 
     return EngAlphaBlend(psoDest, psoSource, ClipRegion, ColorTranslation, &DestRect, &SourceRect, BlendObj);
 }
-

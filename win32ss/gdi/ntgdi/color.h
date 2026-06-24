@@ -19,6 +19,8 @@ typedef struct _COLORSPACE
 #define  COLORSPACEOBJ_LockCS(hCS) ((PCOLORSPACE)GDIOBJ_LockObject((HGDIOBJ)hCS, GDIObjType_ICMLCS_TYPE))
 #define  COLORSPACEOBJ_UnlockCS(pCS) GDIOBJ_vUnlockObject((POBJ)pCS)
 
+HCOLORSPACE FASTCALL IntGdiCreateColorSpace(PLOGCOLORSPACEEXW pLogColorSpace);
+
 typedef struct _COLORTRANSFORMOBJ
 {
   BASEOBJECT BaseObject;

@@ -257,6 +257,8 @@ struct GpGraphics{
     INT hdc_refs;
     BOOL owndc;
     BOOL alpha_hdc;
+    HBITMAP alpha_hbitmap;
+    INT alpha_hbitmap_width, alpha_hbitmap_height;
     BOOL printer_display;
     GpImage *image;
     ImageType image_type;
@@ -653,6 +655,8 @@ struct gdip_format_string_info {
     GDIPCONST WCHAR *string;
     INT index;
     INT length;
+    INT consumed;
+    BOOL clipped;
     struct gdip_font_link_info font_link_info;
     GDIPCONST RectF *rect;
     GDIPCONST GpStringFormat *format;

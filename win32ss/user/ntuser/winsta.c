@@ -1122,6 +1122,30 @@ NtUserGetObjectInformation(
     PUNICODE_STRING pStrNameU = NULL;
     PVOID pvData = NULL;
     SIZE_T nDataSize = 0;
+    ULONG_PTR Pointer;
+    ULONG_PTR PointerEnd;
+
+    if (nLengthNeeded)
+    {
+        Pointer = (ULONG_PTR)nLengthNeeded;
+        PointerEnd = Pointer + sizeof(*nLengthNeeded) - 1;
+        if ((PointerEnd < Pointer) || (PointerEnd >= (ULONG_PTR)MmUserProbeAddress))
+        {
+            SetLastNtError(STATUS_ACCESS_VIOLATION);
+            return FALSE;
+        }
+    }
+
+    if (nLength)
+    {
+        Pointer = (ULONG_PTR)pvInformation;
+        PointerEnd = Pointer + nLength - 1;
+        if ((PointerEnd < Pointer) || (PointerEnd >= (ULONG_PTR)MmUserProbeAddress))
+        {
+            SetLastNtError(STATUS_ACCESS_VIOLATION);
+            return FALSE;
+        }
+    }
 
     _SEH2_TRY
     {

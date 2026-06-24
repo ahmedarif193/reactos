@@ -445,6 +445,62 @@ GetTextExtentPointI(
     return NtGdiGetTextExtent(hdc, pgiIn, cgi, lpSize, GTEF_INDICES);
 }
 
+static
+BOOL
+IntConvertExtTextOutDx(
+    _In_ UINT fuOptions,
+    _In_reads_(cch) LPCSTR lpString,
+    _In_ UINT cch,
+    _In_ UINT cwc,
+    _In_reads_(cch) const INT *lpDx,
+    _Outptr_result_maybenull_ PINT *ppDxW)
+{
+    PINT pDxW;
+    UINT i, j;
+
+    *ppDxW = NULL;
+
+    if (!lpDx || cch == cwc || !cwc)
+        return TRUE;
+
+    pDxW = HeapAlloc(GetProcessHeap(),
+                     0,
+                     cwc * (fuOptions & ETO_PDY ? 2 : 1) * sizeof(*pDxW));
+    if (!pDxW)
+        return FALSE;
+
+    /* ExtTextOutA lpDx entries are per ANSI byte; ExtTextOutW needs one per WCHAR. */
+    for (i = j = 0; i < cch && j < cwc; ++j)
+    {
+        UINT k, cb = 1;
+
+        if (i + 1 < cch && IsDBCSLeadByteEx(CP_ACP, (BYTE)lpString[i]))
+            cb = 2;
+
+        if (fuOptions & ETO_PDY)
+        {
+            pDxW[2 * j] = 0;
+            pDxW[2 * j + 1] = 0;
+            for (k = 0; k < cb; ++k)
+            {
+                pDxW[2 * j] += lpDx[2 * (i + k)];
+                pDxW[2 * j + 1] += lpDx[2 * (i + k) + 1];
+            }
+        }
+        else
+        {
+            pDxW[j] = 0;
+            for (k = 0; k < cb; ++k)
+                pDxW[j] += lpDx[i + k];
+        }
+
+        i += cb;
+    }
+
+    *ppDxW = pDxW;
+    return TRUE;
+}
+
 /*
  * @implemented
  */
@@ -462,20 +518,44 @@ ExtTextOutA(
 {
     ANSI_STRING StringA;
     UNICODE_STRING StringU;
+    PINT pDxW = NULL;
+    const INT *lpDxW = lpDx;
+    UINT cwc;
     BOOL ret;
+    NTSTATUS Status;
 
     if (fuOptions & ETO_GLYPH_INDEX)
         return ExtTextOutW(hdc, x, y, fuOptions, lprc, (LPCWSTR)lpString, cch, lpDx);
 
+    if (cch > MAXUSHORT || (!lpString && cch))
+    {
+        GdiSetLastError(ERROR_INVALID_PARAMETER);
+        return FALSE;
+    }
+
     StringA.Buffer = (PCHAR)lpString;
-    StringA.Length = StringA.MaximumLength = cch;
-    RtlAnsiStringToUnicodeString(&StringU, &StringA, TRUE);
+    StringA.Length = StringA.MaximumLength = (USHORT)cch;
+    Status = RtlAnsiStringToUnicodeString(&StringU, &StringA, TRUE);
+    if (!NT_SUCCESS(Status))
+    {
+        GdiSetLastError(RtlNtStatusToDosError(Status));
+        return FALSE;
+    }
 
-    if (StringU.Length != StringA.Length * sizeof(WCHAR))
-        DPRINT1("ERROR: Should convert lpDx properly!\n");
+    cwc = StringU.Length / sizeof(WCHAR);
+    if (!IntConvertExtTextOutDx(fuOptions, lpString, cch, cwc, lpDx, &pDxW))
+    {
+        RtlFreeUnicodeString(&StringU);
+        GdiSetLastError(ERROR_NOT_ENOUGH_MEMORY);
+        return FALSE;
+    }
 
-    ret = ExtTextOutW(hdc, x, y, fuOptions, lprc, StringU.Buffer, cch, lpDx);
+    if (pDxW)
+        lpDxW = pDxW;
 
+    ret = ExtTextOutW(hdc, x, y, fuOptions, lprc, StringU.Buffer, cwc, lpDxW);
+
+    HeapFree(GetProcessHeap(), 0, pDxW);
     RtlFreeUnicodeString(&StringU);
 
     return ret;

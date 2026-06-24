@@ -114,6 +114,15 @@ IntArc( DC *dc,
     RectSEpts.right   += dc->ptlDCOrig.x;
     RectSEpts.bottom  += dc->ptlDCOrig.y;
 
+    if ((pdcattr->iGraphicsMode == GM_ADVANCED) &&
+        ((pdcattr->mxWorldToDevice.flAccel & (XFORM_SCALE | XFORM_UNITY)) ==
+         (XFORM_SCALE | XFORM_UNITY)))
+    {
+        RECTL_vMakeWellOrdered(&RectBounds);
+        RectBounds.right++;
+        RectBounds.bottom++;
+    }
+
     DPRINT("1: StartX: %d, StartY: %d, EndX: %d, EndY: %d\n",
                RectSEpts.left,RectSEpts.top,RectSEpts.right,RectSEpts.bottom);
 
@@ -406,4 +415,3 @@ NtGdiArcInternal(
   DC_UnlockDc( dc );
   return Ret;
 }
-

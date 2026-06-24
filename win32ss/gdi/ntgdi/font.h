@@ -90,5 +90,5 @@ typedef struct GDI_LOAD_FONT
     BOOL                IsTrueType;
     BYTE                CharSet;
     PFONT_ENTRY_MEM     PrivateEntry;
+    ULONG               VerticalFaceCount;
 } GDI_LOAD_FONT, *PGDI_LOAD_FONT;
-

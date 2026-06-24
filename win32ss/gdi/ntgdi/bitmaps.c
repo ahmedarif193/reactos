@@ -812,16 +812,15 @@ BITMAP_GetObject(SURFACE *psurf, INT Count, LPVOID buffer)
                    break;
 
                 case BMF_16BPP:
-                    if (psurf->ppal->flFlags & PAL_RGB16_555)
-                        pds->dsBmih.biCompression = BI_RGB;
-                    else
-                        pds->dsBmih.biCompression = BI_BITFIELDS;
+                    pds->dsBmih.biCompression = BI_BITFIELDS;
                     break;
 
                 case BMF_24BPP:
                 case BMF_32BPP:
                     /* 24/32bpp BI_RGB is actually BGR format */
-                    if (psurf->ppal->flFlags & PAL_BGR)
+                    if (psurf->ppal->flFlags & PAL_BITFIELDS)
+                        pds->dsBmih.biCompression = BI_BITFIELDS;
+                    else if (psurf->ppal->flFlags & PAL_BGR)
                         pds->dsBmih.biCompression = BI_RGB;
                     else
                         pds->dsBmih.biCompression = BI_BITFIELDS;
@@ -848,9 +847,18 @@ BITMAP_GetObject(SURFACE *psurf, INT Count, LPVOID buffer)
             pds->dsBmih.biYPelsPerMeter = 0;
             pds->dsBmih.biClrUsed = psurf->ppal->NumColors;
             pds->dsBmih.biClrImportant = psurf->biClrImportant;
-            pds->dsBitfields[0] = psurf->ppal->RedMask;
-            pds->dsBitfields[1] = psurf->ppal->GreenMask;
-            pds->dsBitfields[2] = psurf->ppal->BlueMask;
+            if (pds->dsBmih.biCompression == BI_BITFIELDS)
+            {
+                pds->dsBitfields[0] = psurf->ppal->RedMask;
+                pds->dsBitfields[1] = psurf->ppal->GreenMask;
+                pds->dsBitfields[2] = psurf->ppal->BlueMask;
+            }
+            else
+            {
+                pds->dsBitfields[0] = 0;
+                pds->dsBitfields[1] = 0;
+                pds->dsBitfields[2] = 0;
+            }
             pds->dshSection = psurf->hDIBSection;
             pds->dsOffset = psurf->dwOffset;
 

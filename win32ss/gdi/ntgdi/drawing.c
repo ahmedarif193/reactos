@@ -1468,6 +1468,25 @@ IntDrawRoundRect( PDC dc,
     rx = Wellipse/2;
     ry = Hellipse/2;
 
+    if ((Wellipse <= 1) && (Hellipse <= 1))
+    {
+        if (r.width > 2)
+        {
+            app_fill_rect(dc, rect(r.x + 1, r.y, r.width - 2, w),
+                          pbrushPen, TRUE);
+            app_fill_rect(dc, rect(r.x + 1, r.y + r.height - w, r.width - 2, w),
+                          pbrushPen, TRUE);
+        }
+        if (r.height > 2)
+        {
+            app_fill_rect(dc, rect(r.x, r.y + 1, w, r.height - 2),
+                          pbrushPen, TRUE);
+            app_fill_rect(dc, rect(r.x + r.width - w, r.y + 1, w, r.height - 2),
+                          pbrushPen, TRUE);
+        }
+        return TRUE;
+    }
+
     if (Wellipse > r.width)
     {
         if (Hellipse > r.height) // > W > H
