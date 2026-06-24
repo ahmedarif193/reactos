@@ -558,6 +558,16 @@ MiAllocatePoolPages(IN POOL_TYPE PoolType,
             BaseVa = MiPdeToPte(PointerPde);
             BaseVaStart = BaseVa;
 
+#if defined(_M_ARM64)
+            if (!MiEnsureSessionPageTablesBacked(MiPdeToAddress(PointerPde),
+                                                  (SIZE_T)PageTableCount << PDI_SHIFT))
+            {
+                DPRINT1("FAILED to back paged pool PDEs\n");
+                KeReleaseGuardedMutex(&MmPagedPoolMutex);
+                return NULL;
+            }
+#endif
+
             //
             // Lock the PFN database and loop pages
             //
