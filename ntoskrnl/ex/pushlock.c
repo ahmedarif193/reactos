@@ -198,7 +198,7 @@ ExfWakePushLock(PEX_PUSH_LOCK PushLock,
         if (!InterlockedBitTestAndReset(&WaitBlock->Flags, 1))
         {
             /* Nobody signaled us, so do it */
-            KeSignalGateBoostPriority(&WaitBlock->WakeGate);
+            KeSetEventBoostPriority(&WaitBlock->WakeEvent, NULL);
         }
 
         /* Set the wait block and check if there still is one to loop*/
@@ -589,8 +589,9 @@ ExfAcquirePushLockExclusive(PEX_PUSH_LOCK PushLock)
                 ExpOptimizePushLockList(PushLock, TempValue);
             }
 
-            /* Set up the Wait Gate */
-            KeInitializeGate(&WaitBlock->WakeGate);
+            KeInitializeEvent(&WaitBlock->WakeEvent,
+                              SynchronizationEvent,
+                              FALSE);
 
 #ifdef CONFIG_SMP
             /* Now spin on the push lock if necessary */
@@ -612,7 +613,11 @@ ExfAcquirePushLockExclusive(PEX_PUSH_LOCK PushLock)
             if (InterlockedBitTestAndReset(&WaitBlock->Flags, 1))
             {
                 /* Nobody removed it already, let's do a full wait */
-                KeWaitForGate(&WaitBlock->WakeGate, WrPushLock, KernelMode);
+                KeWaitForSingleObject(&WaitBlock->WakeEvent,
+                                      WrPushLock,
+                                      KernelMode,
+                                      FALSE,
+                                      NULL);
                 ASSERT(WaitBlock->Signaled);
             }
 
@@ -756,8 +761,9 @@ ExfAcquirePushLockShared(PEX_PUSH_LOCK PushLock)
                 ExpOptimizePushLockList(PushLock, OldValue);
             }
 
-            /* Set up the Wait Gate */
-            KeInitializeGate(&WaitBlock->WakeGate);
+            KeInitializeEvent(&WaitBlock->WakeEvent,
+                              SynchronizationEvent,
+                              FALSE);
 
 #ifdef CONFIG_SMP
             /* Now spin on the push lock if necessary */
@@ -779,7 +785,11 @@ ExfAcquirePushLockShared(PEX_PUSH_LOCK PushLock)
             if (InterlockedBitTestAndReset(&WaitBlock->Flags, 1))
             {
                 /* Fast-path did not work, we need to do a full wait */
-                KeWaitForGate(&WaitBlock->WakeGate, WrPushLock, KernelMode);
+                KeWaitForSingleObject(&WaitBlock->WakeEvent,
+                                      WrPushLock,
+                                      KernelMode,
+                                      FALSE,
+                                      NULL);
                 ASSERT(WaitBlock->Signaled);
             }
 

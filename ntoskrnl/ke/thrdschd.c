@@ -961,7 +961,15 @@ NtYieldExecution(VOID)
         KiAcquirePrcbLock(Prcb);
 
         /* Find a new thread to run if none was selected */
-        if (!Prcb->NextThread) Prcb->NextThread = KiSelectReadyThread(1, Prcb);
+        if (!Prcb->NextThread)
+        {
+            NextThread = KiSelectReadyThread(1, Prcb);
+            if (NextThread)
+            {
+                NextThread->State = Standby;
+                Prcb->NextThread = NextThread;
+            }
+        }
 
         /* Make sure we still have a next thread to schedule */
         NextThread = Prcb->NextThread;
