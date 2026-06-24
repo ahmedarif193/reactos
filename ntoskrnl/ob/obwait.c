@@ -127,10 +127,10 @@ NtWaitForMultipleObjects(IN ULONG ObjectCount,
     if (ObjectCount > THREAD_WAIT_OBJECTS)
     {
         /* Allocate from Pool */
-        WaitBlockArray = ExAllocatePoolWithTag(NonPagedPool,
-                                               ObjectCount *
-                                               sizeof(KWAIT_BLOCK),
-                                               TAG_WAIT);
+        WaitBlockArray = ExAllocatePoolZero(NonPagedPool,
+                                            ObjectCount *
+                                            sizeof(KWAIT_BLOCK),
+                                            TAG_WAIT);
         if (!WaitBlockArray)
         {
             /* Fail */

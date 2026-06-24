@@ -185,8 +185,8 @@ KiInsertQueueApc(IN PKAPC Apc,
         }
         else
         {
-            /* Acquire the dispatcher lock */
-            KiAcquireDispatcherLock();
+            /* Lock the target thread */
+            KiAcquireThreadLock(Thread);
 
             /* Check if this is a kernel-mode APC */
             if (ApcMode == KernelMode)
@@ -215,9 +215,6 @@ KiInsertQueueApc(IN PKAPC Apc,
                 }
                 else if (Thread->State == GateWait)
                 {
-                    /* Lock the thread */
-                    KiAcquireThreadLock(Thread);
-
                     /* Essentially do the same check as above */
                     if ((Thread->State == GateWait) &&
                         (Thread->WaitIrql == PASSIVE_LEVEL) &&
@@ -242,6 +239,7 @@ KiInsertQueueApc(IN PKAPC Apc,
 
                         /* Remove it from the waiters list */
                         RemoveEntryList(&Thread->WaitBlock[0].WaitListEntry);
+                        Thread->WaitBlock[0].WaitListEntry.Flink = NULL;
 
                         /* Unlock the gate */
                         KiReleaseDispatcherObject(&Gate->Header);
@@ -253,9 +251,6 @@ KiInsertQueueApc(IN PKAPC Apc,
                         Thread->WaitStatus = STATUS_KERNEL_APC;
                         KiInsertDeferredReadyList(Thread);
                     }
-
-                    /* Release the thread lock */
-                    KiReleaseThreadLock(Thread);
                 }
             }
             else if ((Thread->State == Waiting) &&
@@ -271,8 +266,8 @@ KiInsertQueueApc(IN PKAPC Apc,
                 KiUnwaitThread(Thread, Status, PriorityBoost);
             }
 
-            /* Release dispatcher lock */
-            KiReleaseDispatcherLockFromSynchLevel();
+            /* Release the thread lock */
+            KiReleaseThreadLock(Thread);
 
             /* Check if an interrupt was requested */
             KiRequestApcInterrupt(RequestInterrupt, Thread->NextProcessor);
@@ -919,8 +914,8 @@ KeRemoveQueueApc(IN PKAPC Apc)
         Apc->Inserted = FALSE;
         ApcState = Thread->ApcStatePointer[(UCHAR)Apc->ApcStateIndex];
 
-        /* Acquire the dispatcher lock and remove it from the list */
-        KiAcquireDispatcherLockAtSynchLevel();
+        /* Lock the thread and remove it from the list */
+        KiAcquireThreadLock(Thread);
         if (RemoveEntryList(&Apc->ApcListEntry))
         {
             /* Set the correct state based on the APC Mode */
@@ -936,8 +931,8 @@ KeRemoveQueueApc(IN PKAPC Apc)
             }
         }
 
-        /* Release dispatcher lock */
-        KiReleaseDispatcherLockFromSynchLevel();
+        /* Release the thread lock */
+        KiReleaseThreadLock(Thread);
     }
 
     /* Release the lock and return */

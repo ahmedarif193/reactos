@@ -46,9 +46,9 @@ KeSetSystemTime(IN PLARGE_INTEGER NewTime,
     /* Check if this is for the HAL */
     if (HalTime) RtlTimeToTimeFields(HalTime, &TimeFields);
 
-    /* Set affinity to this CPU, lock the dispatcher, and raise IRQL */
+    /* Set affinity to this CPU and raise IRQL to synchronization level */
     KeSetSystemAffinityThread(1);
-    OldIrql = KiAcquireDispatcherLock();
+    OldIrql = KeRaiseIrqlToSynchLevel();
     KeRaiseIrql(HIGH_LEVEL, &OldIrql2);
 
     /* Query the system time now */

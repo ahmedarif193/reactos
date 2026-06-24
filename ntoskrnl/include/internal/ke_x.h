@@ -153,6 +153,20 @@ KiReleaseDispatcherObject(IN DISPATCHER_HEADER* Object)
 }
 
 FORCEINLINE
+VOID
+KiAcquireWaitLock(IN PKPRCB Prcb)
+{
+    UNREFERENCED_PARAMETER(Prcb);
+}
+
+FORCEINLINE
+VOID
+KiReleaseWaitLock(IN PKPRCB Prcb)
+{
+    UNREFERENCED_PARAMETER(Prcb);
+}
+
+FORCEINLINE
 KIRQL
 KiAcquireDispatcherLock(VOID)
 {
@@ -357,6 +371,25 @@ KiReleaseDispatcherObject(IN DISPATCHER_HEADER* Object)
 }
 
 FORCEINLINE
+VOID
+KiAcquireWaitLock(IN PKPRCB Prcb)
+{
+    ASSERT(KeGetCurrentIrql() >= DISPATCH_LEVEL);
+
+    while (InterlockedExchange64((PLONG64)&Prcb->WaitLock, 1) != 0)
+    {
+        while (*(volatile LONG64*)&Prcb->WaitLock != 0) YieldProcessor();
+    }
+}
+
+FORCEINLINE
+VOID
+KiReleaseWaitLock(IN PKPRCB Prcb)
+{
+    InterlockedExchange64((PLONG64)&Prcb->WaitLock, 0);
+}
+
+FORCEINLINE
 KIRQL
 KiAcquireDispatcherLock(VOID)
 {
@@ -545,17 +578,7 @@ FORCEINLINE
 BOOLEAN
 KiTryThreadLock(IN PKTHREAD Thread)
 {
-    LONG Value;
-
-    /* If the lock isn't acquired, return false */
-    if (!Thread->ThreadLock) return FALSE;
-
-    /* Otherwise, try to acquire it and check the result */
-    Value = 1;
-    Value = InterlockedExchange((PLONG)&Thread->ThreadLock, Value);
-
-    /* Return the lock state */
-    return (Value == 1);
+    return InterlockedCompareExchange((PLONG)&Thread->ThreadLock, 1, 0) != 0;
 }
 
 FORCEINLINE
@@ -777,7 +800,8 @@ KiReleaseDeviceQueueLock(IN PKLOCK_QUEUE_HANDLE DeviceLock)
         /* Synchronization Timers and Events just get un-signaled */        \
         (Object)->Header.SignalState = 0;                                   \
     }                                                                       \
-    else if ((Object)->Header.Type == SemaphoreObject)                      \
+    else if (((Object)->Header.Type & KOBJECT_TYPE_MASK) ==                 \
+             SemaphoreObject)                                               \
     {                                                                       \
         /* These ones can have multiple states, so we only decrease it */   \
         (Object)->Header.SignalState--;                                     \
@@ -790,7 +814,7 @@ KiReleaseDeviceQueueLock(IN PKLOCK_QUEUE_HANDLE DeviceLock)
 #define KiSatisfyObjectWait(Object, Thread)                                 \
 {                                                                           \
     /* Special case for Mutants */                                          \
-    if ((Object)->Header.Type == MutantObject)                              \
+    if (((Object)->Header.Type & KOBJECT_TYPE_MASK) == MutantObject)        \
     {                                                                       \
         KiSatisfyMutantWait((Object), (Thread));                            \
     }                                                                       \
@@ -849,9 +873,16 @@ KiCheckThreadStackSwap(IN PKTHREAD Thread,
     /* Make sure it's swappable */                                          \
     if (Swappable)                                                          \
     {                                                                       \
-        /* Insert it into the PRCB's List */                                \
-        InsertTailList(&KeGetCurrentPrcb()->WaitListHead,                   \
+        /* Insert it into the PRCB's List under the PRCB wait lock. Publish  \
+         * WaitPrcb and the list link together inside the lock: WaitPrcb is  \
+         * the membership token (not Flink, which is also the ready-queue    \
+         * link), so a lock-free reader must never see one without the other.*/\
+        PKPRCB _WaitPrcb = KeGetCurrentPrcb();                              \
+        KiAcquireWaitLock(_WaitPrcb);                                       \
+        Thread->WaitPrcb = _WaitPrcb;                                       \
+        InsertTailList(&_WaitPrcb->WaitListHead,                            \
                        &Thread->WaitListEntry);                             \
+        KiReleaseWaitLock(_WaitPrcb);                                       \
     }                                                                       \
 }
 
@@ -951,7 +982,13 @@ KxInsertTimer(IN PKTIMER Timer,
 
     /* Acquire the lock and release the dispatcher lock */
     LockQueue = KiAcquireTimerLock(Hand);
-    KiReleaseDispatcherLockFromSynchLevel();
+    KiReleaseDispatcherObject(&Timer->Header);
+
+    if (!Timer->Header.Inserted)
+    {
+        KiReleaseTimerLock(LockQueue);
+        return;
+    }
 
     /* Try to insert the timer */
     if (KiInsertTimerTable(Timer, Hand))
@@ -962,6 +999,32 @@ KxInsertTimer(IN PKTIMER Timer,
     else
     {
         /* Do nothing, just release the lock */
+        KiReleaseTimerLock(LockQueue);
+    }
+}
+
+FORCEINLINE
+VOID
+KxInsertTimerNoRelease(IN PKTIMER Timer,
+                       IN ULONG Hand)
+{
+    PKSPIN_LOCK_QUEUE LockQueue;
+    ASSERT(KeGetCurrentIrql() >= SYNCH_LEVEL);
+
+    LockQueue = KiAcquireTimerLock(Hand);
+
+    if (!Timer->Header.Inserted)
+    {
+        KiReleaseTimerLock(LockQueue);
+        return;
+    }
+
+    if (KiInsertTimerTable(Timer, Hand))
+    {
+        KiCompleteTimer(Timer, LockQueue);
+    }
+    else
+    {
         KiReleaseTimerLock(LockQueue);
     }
 }
@@ -1013,6 +1076,8 @@ KiComputeDueTime(IN PKTIMER Timer,
     /* Get the handle */
     *Hand = KiComputeTimerTableIndex(Timer->DueTime.QuadPart);
     Timer->Header.Hand = (UCHAR)*Hand;
+    Timer->TimerListEntry.Flink = NULL;
+    Timer->TimerListEntry.Blink = NULL;
     Timer->Header.Inserted = TRUE;
     return TRUE;
 }
@@ -1023,33 +1088,42 @@ KiComputeDueTime(IN PKTIMER Timer,
 // Removes a timer from it's tree.
 //
 FORCEINLINE
-VOID
+BOOLEAN
 KxRemoveTreeTimer(IN PKTIMER Timer)
 {
     ULONG Hand = Timer->Header.Hand;
     PKSPIN_LOCK_QUEUE LockQueue;
     PKTIMER_TABLE_ENTRY TimerEntry;
+    BOOLEAN Removed = FALSE;
 
     /* Acquire timer lock */
     LockQueue = KiAcquireTimerLock(Hand);
 
-    /* Set the timer as non-inserted */
-    Timer->Header.Inserted = FALSE;
-
-    /* Remove it from the timer list */
-    if (RemoveEntryList(&Timer->TimerListEntry))
+    /* Only de-table if still inserted; the bucket lock makes this atomic */
+    if (Timer->Header.Inserted)
     {
-        /* Get the entry and check if it's empty */
-        TimerEntry = &KiTimerTableListHead[Hand];
-        if (IsListEmpty(&TimerEntry->Entry))
+        /* Set the timer as non-inserted */
+        Timer->Header.Inserted = FALSE;
+        Removed = TRUE;
+
+        /* Remove it from the timer list */
+        if (Timer->TimerListEntry.Flink && RemoveEntryList(&Timer->TimerListEntry))
         {
-            /* Clear the time then */
-            TimerEntry->Time.HighPart = 0xFFFFFFFF;
+            /* Get the entry and check if it's empty */
+            TimerEntry = &KiTimerTableListHead[Hand];
+            if (IsListEmpty(&TimerEntry->Entry))
+            {
+                /* Clear the time then */
+                TimerEntry->Time.HighPart = 0xFFFFFFFF;
+            }
         }
+        Timer->TimerListEntry.Flink = NULL;
+        Timer->TimerListEntry.Blink = NULL;
     }
 
     /* Release the timer lock */
     KiReleaseTimerLock(LockQueue);
+    return Removed;
 }
 
 FORCEINLINE
@@ -1151,6 +1225,8 @@ KxSetTimerForThreadWait(IN PKTIMER Timer,
     KxChainTimerOnly();                                                     \
     Timer->Header.WaitListHead.Flink = &TimerBlock->WaitListEntry;          \
     Timer->Header.WaitListHead.Blink = &TimerBlock->WaitListEntry;          \
+    TimerBlock->WaitListEntry.Flink = &Timer->Header.WaitListHead;          \
+    TimerBlock->WaitListEntry.Blink = &Timer->Header.WaitListHead;          \
                                                                             \
     /* Clear wait status */                                                 \
     Thread->WaitStatus = STATUS_SUCCESS;                                    \
@@ -1248,6 +1324,8 @@ KxSetTimerForThreadWait(IN PKTIMER Timer,
         /* Link the timer to this Wait Block */                             \
         Timer->Header.WaitListHead.Flink = &TimerBlock->WaitListEntry;      \
         Timer->Header.WaitListHead.Blink = &TimerBlock->WaitListEntry;      \
+        TimerBlock->WaitListEntry.Flink = &Timer->Header.WaitListHead;      \
+        TimerBlock->WaitListEntry.Blink = &Timer->Header.WaitListHead;      \
     }                                                                       \
     else                                                                    \
     {                                                                       \
@@ -1293,6 +1371,8 @@ KxSetTimerForThreadWait(IN PKTIMER Timer,
         /* Link the timer to this Wait Block */                             \
         Timer->Header.WaitListHead.Flink = &TimerBlock->WaitListEntry;      \
         Timer->Header.WaitListHead.Blink = &TimerBlock->WaitListEntry;      \
+        TimerBlock->WaitListEntry.Flink = &Timer->Header.WaitListHead;      \
+        TimerBlock->WaitListEntry.Blink = &Timer->Header.WaitListHead;      \
     }                                                                       \
     else                                                                    \
     {                                                                       \
