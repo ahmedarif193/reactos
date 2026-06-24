@@ -239,18 +239,18 @@ $if(_WDMDDK_)
     NT_ASSERT((Object)->Type == DeviceQueueObject)
 
 #define ASSERT_TIMER(Object) \
-    NT_ASSERT(((Object)->Header.Type == TimerNotificationObject) || \
-              ((Object)->Header.Type == TimerSynchronizationObject))
+    NT_ASSERT((((Object)->Header.Type & KOBJECT_TYPE_MASK) == TimerNotificationObject) || \
+              (((Object)->Header.Type & KOBJECT_TYPE_MASK) == TimerSynchronizationObject))
 
 #define ASSERT_MUTANT(Object) \
-    NT_ASSERT((Object)->Header.Type == MutantObject)
+    NT_ASSERT(((Object)->Header.Type & KOBJECT_TYPE_MASK) == MutantObject)
 
 #define ASSERT_SEMAPHORE(Object) \
-    NT_ASSERT((Object)->Header.Type == SemaphoreObject)
+    NT_ASSERT(((Object)->Header.Type & KOBJECT_TYPE_MASK) == SemaphoreObject)
 
 #define ASSERT_EVENT(Object) \
-    NT_ASSERT(((Object)->Header.Type == NotificationEvent) || \
-              ((Object)->Header.Type == SynchronizationEvent))
+    NT_ASSERT((((Object)->Header.Type & KOBJECT_TYPE_MASK) == NotificationEvent) || \
+              (((Object)->Header.Type & KOBJECT_TYPE_MASK) == SynchronizationEvent))
 
 #define DPC_NORMAL 0
 #define DPC_THREADED 1
@@ -1788,4 +1788,3 @@ typedef struct _KQUEUE {
 } KQUEUE, *PKQUEUE, *RESTRICTED_POINTER PRKQUEUE;
 
 $endif (_NTIFS_)
-
