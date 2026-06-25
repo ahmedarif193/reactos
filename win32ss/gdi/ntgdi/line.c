@@ -235,6 +235,24 @@ IntGdiLineTo(DC  *dc,
             }
             else
             {
+                /* In opaque mode a styled (dashed/dotted) cosmetic pen fills
+                   the gaps with the background colour: stroke the line solid
+                   in the background colour first, then the styled pen on top. */
+                if ((pdcattr->jBkMode == OPAQUE) &&
+                    (pbrLine->dwStyleCount != 0))
+                {
+                    if (pdcattr->ulDirty_ & DIRTY_BACKGROUND)
+                        DC_vUpdateBackgroundBrush(dc);
+
+                    IntEngLineTo(&psurf->SurfObj,
+                                 (CLIPOBJ *)&dc->co,
+                                 &dc->eboBackground.BrushObject,
+                                 Points[0].x, Points[0].y,
+                                 Points[1].x, Points[1].y,
+                                 &Bounds,
+                                 ROP2_TO_MIX(R2_COPYPEN));
+                }
+
                 Ret = IntEngLineTo(&psurf->SurfObj,
                                    (CLIPOBJ *)&dc->co,
                                    &dc->eboLine.BrushObject,
