@@ -429,6 +429,18 @@ DIB_32BPP_BitBltSrcCopy(PBLTINFO BltInfo)
 
       if (!bTopToBottom && !bLeftToRight)
       {
+        /* For an x8 bitfields destination (e.g. a8b8g8r8 = PAL_RGB|PAL_BITFIELDS)
+         * the colour masks only cover 24 bits; Windows zeroes the unused top
+         * byte on a colour-converting copy instead of leaking the 32-bpp
+         * source's alpha through the RGB<->BGR channel swap. AlphaBlend keeps
+         * its own (alpha-preserving) path, so this only affects SRCCOPY. */
+        EXLATEOBJ *pexloKeep = CONTAINING_RECORD(BltInfo->XlateSourceToDest, EXLATEOBJ, xlo);
+        ULONG keepmask = 0xFFFFFFFF;
+        if (pexloKeep->ppalDst->flFlags & PAL_BITFIELDS)
+          keepmask = pexloKeep->ppalDst->RedMask |
+                     pexloKeep->ppalDst->GreenMask |
+                     pexloKeep->ppalDst->BlueMask;
+
         if (BltInfo->DestRect.top < BltInfo->SourcePoint.y)
         {
           SourceBits = ((PBYTE)BltInfo->SourceSurface->pvScan0
@@ -442,7 +454,7 @@ DIB_32BPP_BitBltSrcCopy(PBLTINFO BltInfo)
               Source32 = (DWORD *) SourceBits;
               for (i = BltInfo->DestRect.left; i < BltInfo->DestRect.right; i++)
               {
-                *Dest32++ = XLATEOBJ_iXlate(BltInfo->XlateSourceToDest, *Source32++);
+                *Dest32++ = XLATEOBJ_iXlate(BltInfo->XlateSourceToDest, *Source32++) & keepmask;
               }
             }
             else
@@ -451,7 +463,7 @@ DIB_32BPP_BitBltSrcCopy(PBLTINFO BltInfo)
               Source32 = (DWORD *) SourceBits + (DestWidth - 1);
               for (i = BltInfo->DestRect.right - 1; BltInfo->DestRect.left <= i; i--)
               {
-                *Dest32-- = XLATEOBJ_iXlate(BltInfo->XlateSourceToDest, *Source32--);
+                *Dest32-- = XLATEOBJ_iXlate(BltInfo->XlateSourceToDest, *Source32--) & keepmask;
               }
             }
             SourceBits += BltInfo->SourceSurface->lDelta;
@@ -475,7 +487,7 @@ DIB_32BPP_BitBltSrcCopy(PBLTINFO BltInfo)
               Source32 = (DWORD *) SourceBits;
               for (i = BltInfo->DestRect.left; i < BltInfo->DestRect.right; i++)
               {
-                *Dest32++ = XLATEOBJ_iXlate(BltInfo->XlateSourceToDest, *Source32++);
+                *Dest32++ = XLATEOBJ_iXlate(BltInfo->XlateSourceToDest, *Source32++) & keepmask;
               }
             }
             else
@@ -484,7 +496,7 @@ DIB_32BPP_BitBltSrcCopy(PBLTINFO BltInfo)
               Source32 = (DWORD *) SourceBits + (DestWidth - 1);
               for (i = BltInfo->DestRect.right - 1; BltInfo->DestRect.left <= i; i--)
               {
-                *Dest32-- = XLATEOBJ_iXlate(BltInfo->XlateSourceToDest, *Source32--);
+                *Dest32-- = XLATEOBJ_iXlate(BltInfo->XlateSourceToDest, *Source32--) & keepmask;
               }
             }
             SourceBits -= BltInfo->SourceSurface->lDelta;
