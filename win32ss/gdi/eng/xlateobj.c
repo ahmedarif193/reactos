@@ -385,6 +385,9 @@ EXLATEOBJ_iXlate555toPal(PEXLATEOBJ pexlo, ULONG iColor)
 {
     iColor = EXLATEOBJ_iXlate555toRGB(pexlo, iColor);
 
+    if (pexlo->ppalDst->NumColors == 256)
+        iColor = (iColor & 0x00F8F8F8) | 0x00040404;
+
     return PALETTE_ulGetNearestPaletteIndex(pexlo->ppalDst, iColor);
 }
 
@@ -453,6 +456,9 @@ FASTCALL
 EXLATEOBJ_iXlate565toPal(EXLATEOBJ *pexlo, ULONG iColor)
 {
     iColor = EXLATEOBJ_iXlate565toRGB(pexlo, iColor);
+
+    if (pexlo->ppalDst->NumColors == 256)
+        iColor = (iColor & 0x00F8F8F8) | 0x00040404;
 
     return PALETTE_ulGetNearestPaletteIndex(pexlo->ppalDst, iColor);
 }
@@ -533,6 +539,11 @@ EXLATEOBJ_iXlateBitfieldsToPal(PEXLATEOBJ pexlo, ULONG iColor)
 {
     /* Convert bitfields to RGB */
     iColor = EXLATEOBJ_iXlateBitfieldsToRGB(pexlo, iColor);
+
+    /* Windows snaps each channel to the 5-bit bucket midpoint before the
+       8bpp nearest-colour search (Wine rgb_lookup_colortable). */
+    if (pexlo->ppalDst->NumColors == 256)
+        iColor = (iColor & 0x00F8F8F8) | 0x00040404;
 
     /* Return nearest index */
     return PALETTE_ulGetNearestPaletteIndex(pexlo->ppalDst, iColor);
