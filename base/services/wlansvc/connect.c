@@ -56,7 +56,7 @@ WlanSvcInstallProfileKey(PWLANSVC_INTERFACE Iface,
     ZeroMemory(&key, sizeof(key));
     key.Size = sizeof(key);
     key.InterfaceIndex = Iface->NwifiIndex;
-    key.Algorithm = cipher;
+    key.Algorithm = DOT11_CIPHER_ALGO_NONE;
     key.IsPairwise = FALSE;         /* PSK/group default key */
     key.KeyId = 0;
     key.KeyLength = (prof->KeyLength <= sizeof(key.KeyData))
