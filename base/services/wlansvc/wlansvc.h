@@ -94,6 +94,10 @@
  * scope here.
  */
 #ifndef _WLANAPI_H
+#define _WLANAPI_H
+#endif
+
+#ifndef _WLANAPI_H
 
 typedef enum _WLAN_NOTIFICATION_ACM {
     wlan_notification_acm_start = 0,
