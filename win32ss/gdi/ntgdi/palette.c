@@ -293,6 +293,18 @@ PALETTE_ulGetNearestPaletteIndex(PALETTE* ppal, ULONG iColor)
     return ulBestIndex;
 }
 
+static __inline ULONG
+PALETTE_ulClampMaskTo8Bits(ULONG ulMask)
+{
+    ULONG ulHigh, ulLow;
+    if (ulMask == 0) return 0;
+    BitScanReverse(&ulHigh, ulMask);
+    BitScanForward(&ulLow, ulMask);
+    if (ulHigh - ulLow >= 8)
+        return ulMask & (0xFFFFFFFFUL << (ulHigh - 7));
+    return ulMask;
+}
+
 ULONG
 NTAPI
 PALETTE_ulGetNearestBitFieldsIndex(PALETTE* ppal, ULONG ulColor)
@@ -305,9 +317,14 @@ PALETTE_ulGetNearestBitFieldsIndex(PALETTE* ppal, ULONG ulColor)
     ppal->ulGreenShift = CalculateShift(RGB(0,0xff,0), ppal->GreenMask);
     ppal->ulBlueShift = CalculateShift(RGB(0,0,0xff), ppal->BlueMask);
 
-    ulNewColor = _rotl(ulColor, ppal->ulRedShift) & ppal->RedMask;
-    ulNewColor |= _rotl(ulColor, ppal->ulGreenShift) & ppal->GreenMask;
-    ulNewColor |= _rotl(ulColor, ppal->ulBlueShift) & ppal->BlueMask;
+    /* Pack the 8-bit RGB colour into the destination fields. For a field
+     * wider than 8 bits the 8-bit value lands at the top of the field with
+     * the low bits zeroed (matching Wine put_field / the EXLATEOBJ solid
+     * path); a raw mask would pollute the low bits with the rotated bits of
+     * the neighbouring channel. */
+    ulNewColor = _rotl(ulColor, ppal->ulRedShift) & PALETTE_ulClampMaskTo8Bits(ppal->RedMask);
+    ulNewColor |= _rotl(ulColor, ppal->ulGreenShift) & PALETTE_ulClampMaskTo8Bits(ppal->GreenMask);
+    ulNewColor |= _rotl(ulColor, ppal->ulBlueShift) & PALETTE_ulClampMaskTo8Bits(ppal->BlueMask);
 
    return ulNewColor;
 }

@@ -517,6 +517,75 @@ EXLATEOBJ_iXlateShiftAndMask(PEXLATEOBJ pexlo, ULONG iColor)
     return iNewColor;
 }
 
+ULONG FASTCALL EXLATEOBJ_iXlate555toRGB(PEXLATEOBJ pxlo, ULONG iColor);
+ULONG FASTCALL EXLATEOBJ_iXlate565toRGB(PEXLATEOBJ pexlo, ULONG iColor);
+ULONG FASTCALL EXLATEOBJ_iXlate555to565(PEXLATEOBJ pxlo, ULONG iColor);
+ULONG FASTCALL EXLATEOBJ_iXlate565to555(PEXLATEOBJ pxlo, ULONG iColor);
+ULONG FASTCALL EXLATEOBJ_iXlateRGBto555(PEXLATEOBJ pxlo, ULONG iColor);
+ULONG FASTCALL EXLATEOBJ_iXlateRGBto565(PEXLATEOBJ pxlo, ULONG iColor);
+ULONG FASTCALL EXLATEOBJ_iXlateBitfieldsToRGB(PEXLATEOBJ pexlo, ULONG iColor);
+
+/* Source pixel -> 8-bit RGB -> bitfields destination.
+ *
+ * A direct rotate-and-mask of the raw source pixel into a destination whose
+ * channel width differs from the source channel width is wrong: it neither
+ * bit-replicates a narrow source channel up to the field width nor zero-fills
+ * the low bits of a wide destination field. Windows (and Wine's get_field /
+ * put_field) always expands every source channel to 8 bits (bit replication),
+ * then packs the 8-bit value into the top of the destination field with the
+ * low bits zeroed. For an 8-bit-channel source the expansion is the identity,
+ * so this matches the plain RGB->bitfields shift-and-mask used for solid fills;
+ * for sub-8-bit or over-8-bit source channels it is the only correct rule.
+ *
+ * The dest masks/shifts are set up (in EXLATEOBJ_vInitialize) as the
+ * 8-bit-RGB -> destination clamped shift-and-mask, identical to the solid path. */
+_Function_class_(FN_XLATE)
+ULONG
+FASTCALL
+EXLATEOBJ_iXlate555ToBitfields(PEXLATEOBJ pexlo, ULONG iColor)
+{
+    return EXLATEOBJ_iXlateShiftAndMask(pexlo,
+                                        EXLATEOBJ_iXlate555toRGB(pexlo, iColor));
+}
+
+_Function_class_(FN_XLATE)
+ULONG
+FASTCALL
+EXLATEOBJ_iXlate565ToBitfields(PEXLATEOBJ pexlo, ULONG iColor)
+{
+    return EXLATEOBJ_iXlateShiftAndMask(pexlo,
+                                        EXLATEOBJ_iXlate565toRGB(pexlo, iColor));
+}
+
+_Function_class_(FN_XLATE)
+ULONG
+FASTCALL
+EXLATEOBJ_iXlateBitfieldsToBitfields(PEXLATEOBJ pexlo, ULONG iColor)
+{
+    return EXLATEOBJ_iXlateShiftAndMask(pexlo,
+                                        EXLATEOBJ_iXlateBitfieldsToRGB(pexlo, iColor));
+}
+
+/* Bitfields source -> fixed 555 / 565 destination: expand the source channels
+ * to 8-bit RGB first, then use the dedicated RGB->555/565 packers. */
+_Function_class_(FN_XLATE)
+ULONG
+FASTCALL
+EXLATEOBJ_iXlateBitfieldsTo555(PEXLATEOBJ pexlo, ULONG iColor)
+{
+    return EXLATEOBJ_iXlateRGBto555(pexlo,
+                                    EXLATEOBJ_iXlateBitfieldsToRGB(pexlo, iColor));
+}
+
+_Function_class_(FN_XLATE)
+ULONG
+FASTCALL
+EXLATEOBJ_iXlateBitfieldsTo565(PEXLATEOBJ pexlo, ULONG iColor)
+{
+    return EXLATEOBJ_iXlateRGBto565(pexlo,
+                                    EXLATEOBJ_iXlateBitfieldsToRGB(pexlo, iColor));
+}
+
 static
 ULONG
 EXLATEOBJ_ulExpandBitfieldChannel(ULONG iColor, ULONG ulMask)
@@ -943,8 +1012,23 @@ EXLATEOBJ_vInitialize(
         else if (ppalDst->flFlags & PAL_RGB16_565)
             pexlo->pfnXlate = EXLATEOBJ_iXlate555to565;
 
+        /* A 555 destination also carries PAL_BITFIELDS, but the layout is
+         * identical to the 555 source, so this is a trivial copy. */
+        else if (ppalDst->flFlags & PAL_RGB16_555)
+            pexlo->pfnXlate = EXLATEOBJ_iXlateTrivial;
+
         else if (ppalDst->flFlags & PAL_BITFIELDS)
-            pexlo->pfnXlate = EXLATEOBJ_iXlateShiftAndMask;
+        {
+            /* Expand the 555 source to 8-bit RGB, then pack into the
+             * bitfields destination. The dest shifts must map an 8-bit RGB
+             * channel (not the 5-bit source field) into each dest field.
+             * The clamped dest masks keep the field's top bit, so they give
+             * the same CalculateShift result as the unclamped dest masks. */
+            pexlo->ulRedShift = CalculateShift(RGB(0xFF,0,0), pexlo->ulRedMask);
+            pexlo->ulGreenShift = CalculateShift(RGB(0,0xFF,0), pexlo->ulGreenMask);
+            pexlo->ulBlueShift = CalculateShift(RGB(0,0,0xFF), pexlo->ulBlueMask);
+            pexlo->pfnXlate = EXLATEOBJ_iXlate555ToBitfields;
+        }
     }
     else if (ppalSrc->flFlags & PAL_RGB16_565)
     {
@@ -960,8 +1044,19 @@ EXLATEOBJ_vInitialize(
         else if (ppalDst->flFlags & PAL_RGB16_555)
             pexlo->pfnXlate = EXLATEOBJ_iXlate565to555;
 
+        /* A 565 destination also carries PAL_BITFIELDS but is the same layout
+         * as the 565 source, so this is a trivial copy. */
+        else if (ppalDst->flFlags & PAL_RGB16_565)
+            pexlo->pfnXlate = EXLATEOBJ_iXlateTrivial;
+
         else if (ppalDst->flFlags & PAL_BITFIELDS)
-            pexlo->pfnXlate = EXLATEOBJ_iXlateShiftAndMask;
+        {
+            /* Expand the 565 source to 8-bit RGB, then pack (see the 555 case). */
+            pexlo->ulRedShift = CalculateShift(RGB(0xFF,0,0), pexlo->ulRedMask);
+            pexlo->ulGreenShift = CalculateShift(RGB(0,0xFF,0), pexlo->ulGreenMask);
+            pexlo->ulBlueShift = CalculateShift(RGB(0,0,0xFF), pexlo->ulBlueMask);
+            pexlo->pfnXlate = EXLATEOBJ_iXlate565ToBitfields;
+        }
     }
     else if (ppalSrc->flFlags & PAL_BITFIELDS)
     {
@@ -971,8 +1066,29 @@ EXLATEOBJ_vInitialize(
             pexlo->pfnXlate = EXLATEOBJ_iXlateBitfieldsToRGB;
         else if (ppalDst->flFlags & PAL_BGR)
             pexlo->pfnXlate = EXLATEOBJ_iXlateBitfieldsToBGR;
+        else if (ppalDst->flFlags & PAL_RGB16_555)
+            pexlo->pfnXlate = EXLATEOBJ_iXlateBitfieldsTo555;
+        else if (ppalDst->flFlags & PAL_RGB16_565)
+            pexlo->pfnXlate = EXLATEOBJ_iXlateBitfieldsTo565;
+        else if ((ppalSrc->RedMask == ppalDst->RedMask) &&
+                 (ppalSrc->GreenMask == ppalDst->GreenMask) &&
+                 (ppalSrc->BlueMask == ppalDst->BlueMask))
+        {
+            /* Identical bitfields layout: a straight copy (no expand/pack,
+             * which would drop the low bits of any field wider than 8 bits). */
+            pexlo->pfnXlate = EXLATEOBJ_iXlateTrivial;
+        }
         else
-            pexlo->pfnXlate = EXLATEOBJ_iXlateShiftAndMask;
+        {
+            /* Bitfields -> bitfields: expand each source channel to 8-bit RGB
+             * (bit replication), then pack into the destination fields. A raw
+             * rotate-and-mask of the source pixel is wrong whenever the source
+             * and destination channel widths differ (e.g. b6g6r6/r10g10b10). */
+            pexlo->ulRedShift = CalculateShift(RGB(0xFF,0,0), pexlo->ulRedMask);
+            pexlo->ulGreenShift = CalculateShift(RGB(0,0xFF,0), pexlo->ulGreenMask);
+            pexlo->ulBlueShift = CalculateShift(RGB(0,0,0xFF), pexlo->ulBlueMask);
+            pexlo->pfnXlate = EXLATEOBJ_iXlateBitfieldsToBitfields;
+        }
     }
 
     /* Check for a trivial shift and mask operation */
