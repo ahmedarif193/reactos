@@ -719,51 +719,94 @@ IntRectangle(PDC dc,
         {
             Mix = ROP2_TO_MIX(pdcattr->jROP2);
 
-            /* In opaque mode a styled (dashed) pen fills the gaps with the
-               background colour: stroke the frame solid in the background
-               colour first, then the styled pen on top. */
-            if ((pdcattr->jBkMode == OPAQUE) && (pbrLine->dwStyleCount != 0))
+            if (pbrLine->dwStyleCount != 0)
             {
-                if (pdcattr->ulDirty_ & DIRTY_BACKGROUND)
-                    DC_vUpdateBackgroundBrush(dc);
+                /* Styled (dashed) pen. Windows/Wine stroke the rectangle frame as
+                 * one continuous dashed polyline so the dash phase runs unbroken
+                 * around all four sides. We replicate that by carrying a running
+                 * dash phase (the number of pattern pixels already consumed,
+                 * mod ulStyleSize) from one edge into the next, in the same vertex
+                 * order Wine uses for the default arc direction (AD_COUNTERCLOCKWISE):
+                 * starting at the top-right corner and going anti-clockwise. */
+                ULONG ulStyleSize = pbrLine->ulStyleSize;
+                ULONG iDashPhase = 0;
+                LONG lEdgeH = DestRect.right - DestRect.left; /* horizontal edge length */
+                LONG lEdgeV = DestRect.bottom - DestRect.top; /* vertical edge length */
 
-                IntEngLineTo(&psurf->SurfObj, (CLIPOBJ *)&dc->co, &dc->eboBackground.BrushObject,
-                             DestRect.left, DestRect.top, DestRect.right, DestRect.top, &DestRect, ROP2_TO_MIX(R2_COPYPEN));
-                IntEngLineTo(&psurf->SurfObj, (CLIPOBJ *)&dc->co, &dc->eboBackground.BrushObject,
-                             DestRect.right, DestRect.top, DestRect.right, DestRect.bottom, &DestRect, ROP2_TO_MIX(R2_COPYPEN));
-                IntEngLineTo(&psurf->SurfObj, (CLIPOBJ *)&dc->co, &dc->eboBackground.BrushObject,
-                             DestRect.right, DestRect.bottom, DestRect.left, DestRect.bottom, &DestRect, ROP2_TO_MIX(R2_COPYPEN));
-                IntEngLineTo(&psurf->SurfObj, (CLIPOBJ *)&dc->co, &dc->eboBackground.BrushObject,
-                             DestRect.left, DestRect.bottom, DestRect.left, DestRect.top, &DestRect, ROP2_TO_MIX(R2_COPYPEN));
+                if (ulStyleSize == 0)
+                    ulStyleSize = 1;
+
+                /* In opaque mode a styled pen fills the dash gaps with the
+                 * background colour: stroke the frame solid in the background
+                 * colour first, then the styled pen on top. */
+                if (pdcattr->jBkMode == OPAQUE)
+                {
+                    if (pdcattr->ulDirty_ & DIRTY_BACKGROUND)
+                        DC_vUpdateBackgroundBrush(dc);
+
+                    IntEngLineTo(&psurf->SurfObj, (CLIPOBJ *)&dc->co, &dc->eboBackground.BrushObject,
+                                 DestRect.left, DestRect.top, DestRect.right, DestRect.top, &DestRect, ROP2_TO_MIX(R2_COPYPEN));
+                    IntEngLineTo(&psurf->SurfObj, (CLIPOBJ *)&dc->co, &dc->eboBackground.BrushObject,
+                                 DestRect.right, DestRect.top, DestRect.right, DestRect.bottom, &DestRect, ROP2_TO_MIX(R2_COPYPEN));
+                    IntEngLineTo(&psurf->SurfObj, (CLIPOBJ *)&dc->co, &dc->eboBackground.BrushObject,
+                                 DestRect.right, DestRect.bottom, DestRect.left, DestRect.bottom, &DestRect, ROP2_TO_MIX(R2_COPYPEN));
+                    IntEngLineTo(&psurf->SurfObj, (CLIPOBJ *)&dc->co, &dc->eboBackground.BrushObject,
+                                 DestRect.left, DestRect.bottom, DestRect.left, DestRect.top, &DestRect, ROP2_TO_MIX(R2_COPYPEN));
+                }
+
+                /* Top edge: top-right -> top-left */
+                ret = ret && IntEngLineToDash(&psurf->SurfObj, (CLIPOBJ *)&dc->co, &dc->eboLine.BrushObject,
+                                              DestRect.right, DestRect.top, DestRect.left, DestRect.top,
+                                              &DestRect, iDashPhase, Mix);
+                iDashPhase = (iDashPhase + lEdgeH) % ulStyleSize;
+
+                /* Left edge: top-left -> bottom-left */
+                ret = ret && IntEngLineToDash(&psurf->SurfObj, (CLIPOBJ *)&dc->co, &dc->eboLine.BrushObject,
+                                              DestRect.left, DestRect.top, DestRect.left, DestRect.bottom,
+                                              &DestRect, iDashPhase, Mix);
+                iDashPhase = (iDashPhase + lEdgeV) % ulStyleSize;
+
+                /* Bottom edge: bottom-left -> bottom-right */
+                ret = ret && IntEngLineToDash(&psurf->SurfObj, (CLIPOBJ *)&dc->co, &dc->eboLine.BrushObject,
+                                              DestRect.left, DestRect.bottom, DestRect.right, DestRect.bottom,
+                                              &DestRect, iDashPhase, Mix);
+                iDashPhase = (iDashPhase + lEdgeH) % ulStyleSize;
+
+                /* Right edge: bottom-right -> top-right */
+                ret = ret && IntEngLineToDash(&psurf->SurfObj, (CLIPOBJ *)&dc->co, &dc->eboLine.BrushObject,
+                                              DestRect.right, DestRect.bottom, DestRect.right, DestRect.top,
+                                              &DestRect, iDashPhase, Mix);
             }
+            else
+            {
+                ret = ret && IntEngLineTo(&psurf->SurfObj,
+                                          (CLIPOBJ *)&dc->co,
+                                          &dc->eboLine.BrushObject,
+                                          DestRect.left, DestRect.top, DestRect.right, DestRect.top,
+                                          &DestRect, // Bounding rectangle
+                                          Mix);
 
-            ret = ret && IntEngLineTo(&psurf->SurfObj,
-                                      (CLIPOBJ *)&dc->co,
-                                      &dc->eboLine.BrushObject,
-                                      DestRect.left, DestRect.top, DestRect.right, DestRect.top,
-                                      &DestRect, // Bounding rectangle
-                                      Mix);
+                ret = ret && IntEngLineTo(&psurf->SurfObj,
+                                          (CLIPOBJ *)&dc->co,
+                                          &dc->eboLine.BrushObject,
+                                          DestRect.right, DestRect.top, DestRect.right, DestRect.bottom,
+                                          &DestRect, // Bounding rectangle
+                                          Mix);
 
-            ret = ret && IntEngLineTo(&psurf->SurfObj,
-                                      (CLIPOBJ *)&dc->co,
-                                      &dc->eboLine.BrushObject,
-                                      DestRect.right, DestRect.top, DestRect.right, DestRect.bottom,
-                                      &DestRect, // Bounding rectangle
-                                      Mix);
+                ret = ret && IntEngLineTo(&psurf->SurfObj,
+                                          (CLIPOBJ *)&dc->co,
+                                          &dc->eboLine.BrushObject,
+                                          DestRect.right, DestRect.bottom, DestRect.left, DestRect.bottom,
+                                          &DestRect, // Bounding rectangle
+                                          Mix);
 
-            ret = ret && IntEngLineTo(&psurf->SurfObj,
-                                      (CLIPOBJ *)&dc->co,
-                                      &dc->eboLine.BrushObject,
-                                      DestRect.right, DestRect.bottom, DestRect.left, DestRect.bottom,
-                                      &DestRect, // Bounding rectangle
-                                      Mix);
-
-            ret = ret && IntEngLineTo(&psurf->SurfObj,
-                                      (CLIPOBJ *)&dc->co,
-                                      &dc->eboLine.BrushObject,
-                                      DestRect.left, DestRect.bottom, DestRect.left, DestRect.top,
-                                      &DestRect, // Bounding rectangle
-                                      Mix);
+                ret = ret && IntEngLineTo(&psurf->SurfObj,
+                                          (CLIPOBJ *)&dc->co,
+                                          &dc->eboLine.BrushObject,
+                                          DestRect.left, DestRect.bottom, DestRect.left, DestRect.top,
+                                          &DestRect, // Bounding rectangle
+                                          Mix);
+            }
         }
     }
 

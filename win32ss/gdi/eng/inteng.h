@@ -69,6 +69,18 @@ IntEngLineTo(SURFOBJ *Surface,
              MIX mix);
 
 BOOL APIENTRY
+IntEngLineToDash(SURFOBJ *Surface,
+                 CLIPOBJ *Clip,
+                 BRUSHOBJ *Brush,
+                 LONG x1,
+                 LONG y1,
+                 LONG x2,
+                 LONG y2,
+                 RECTL *RectBounds,
+                 ULONG iDashPhase,
+                 MIX mix);
+
+BOOL APIENTRY
 IntEngBitBlt(SURFOBJ *DestObj,
                SURFOBJ *SourceObj,
                SURFOBJ *Mask,

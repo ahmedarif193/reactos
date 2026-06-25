@@ -59,6 +59,7 @@ HandleStyles(
     LONG deltay,
     LONG dx,
     LONG dy,
+    ULONG iDashPhase,
     PULONG piStyle)
 {
     PEBRUSHOBJ pebo = (PEBRUSHOBJ)pbo;
@@ -70,16 +71,19 @@ HandleStyles(
     {
         if (deltax > deltay)
         {
-            offStyle = (- Translate->x) % pebo->pbrush->ulStyleSize;
+            offStyle = (iDashPhase - Translate->x) % pebo->pbrush->ulStyleSize;
             diStyle = dx;
             lStyleMax = x;
         }
         else
         {
-            offStyle = (- Translate->y) % pebo->pbrush->ulStyleSize;
+            offStyle = (iDashPhase - Translate->y) % pebo->pbrush->ulStyleSize;
             diStyle = dy;
             lStyleMax = y;
         }
+
+        if (offStyle < 0)
+            offStyle += pebo->pbrush->ulStyleSize;
 
         /* Now loop until we have found the style index */
         for (iStyle = 0; offStyle >= pulStyles[iStyle]; iStyle++)
@@ -112,7 +116,7 @@ HandleStyles(
 void FASTCALL
 NWtoSE(SURFOBJ* OutputObj, CLIPOBJ* Clip,
        BRUSHOBJ* pbo, LONG x, LONG y, LONG deltax, LONG deltay,
-       POINTL* Translate, ULONG Rop)
+       POINTL* Translate, ULONG iDashPhase, ULONG Rop)
 {
     int i;
     int error;
@@ -126,7 +130,7 @@ NWtoSE(SURFOBJ* OutputObj, CLIPOBJ* Clip,
     ULONG iStyle, cStyles = pebo->pbrush->dwStyleCount;
     LONG lStyleMax;
 
-    lStyleMax = HandleStyles(pbo, Translate, x, y, deltax, deltay, 1, 1, &iStyle);
+    lStyleMax = HandleStyles(pbo, Translate, x, y, deltax, deltay, 1, 1, iDashPhase, &iStyle);
 
     CLIPOBJ_cEnumStart(Clip, FALSE, CT_RECTANGLES, CD_RIGHTDOWN, 0);
     EnumMore = CLIPOBJ_bEnum(Clip, (ULONG) sizeof(RectEnum), (PVOID) &RectEnum);
@@ -206,7 +210,7 @@ NWtoSE(SURFOBJ* OutputObj, CLIPOBJ* Clip,
 void FASTCALL
 SWtoNE(SURFOBJ* OutputObj, CLIPOBJ* Clip,
        BRUSHOBJ* pbo, LONG x, LONG y, LONG deltax, LONG deltay,
-       POINTL* Translate, ULONG Rop)
+       POINTL* Translate, ULONG iDashPhase, ULONG Rop)
 {
     int i;
     int error;
@@ -220,7 +224,7 @@ SWtoNE(SURFOBJ* OutputObj, CLIPOBJ* Clip,
     ULONG iStyle, cStyles = pebo->pbrush->dwStyleCount;
     LONG lStyleMax;
 
-    lStyleMax = HandleStyles(pbo, Translate, x, y, deltax, deltay, 1, -1, &iStyle);
+    lStyleMax = HandleStyles(pbo, Translate, x, y, deltax, deltay, 1, -1, iDashPhase, &iStyle);
 
     CLIPOBJ_cEnumStart(Clip, FALSE, CT_RECTANGLES, CD_RIGHTUP, 0);
     EnumMore = CLIPOBJ_bEnum(Clip, (ULONG) sizeof(RectEnum), (PVOID) &RectEnum);
@@ -299,7 +303,7 @@ SWtoNE(SURFOBJ* OutputObj, CLIPOBJ* Clip,
 void FASTCALL
 NEtoSW(SURFOBJ* OutputObj, CLIPOBJ* Clip,
        BRUSHOBJ* pbo, LONG x, LONG y, LONG deltax, LONG deltay,
-       POINTL* Translate, ULONG Rop)
+       POINTL* Translate, ULONG iDashPhase, ULONG Rop)
 {
     int i;
     int error;
@@ -313,7 +317,7 @@ NEtoSW(SURFOBJ* OutputObj, CLIPOBJ* Clip,
     ULONG iStyle, cStyles = pebo->pbrush->dwStyleCount;
     LONG lStyleMax;
 
-    lStyleMax = HandleStyles(pbo, Translate, x, y, deltax, deltay, -1, 1, &iStyle);
+    lStyleMax = HandleStyles(pbo, Translate, x, y, deltax, deltay, -1, 1, iDashPhase, &iStyle);
 
     CLIPOBJ_cEnumStart(Clip, FALSE, CT_RECTANGLES, CD_LEFTDOWN, 0);
     EnumMore = CLIPOBJ_bEnum(Clip, (ULONG) sizeof(RectEnum), (PVOID) &RectEnum);
@@ -392,7 +396,7 @@ NEtoSW(SURFOBJ* OutputObj, CLIPOBJ* Clip,
 void FASTCALL
 SEtoNW(SURFOBJ* OutputObj, CLIPOBJ* Clip,
        BRUSHOBJ* pbo, LONG x, LONG y, LONG deltax, LONG deltay,
-       POINTL* Translate, ULONG Rop)
+       POINTL* Translate, ULONG iDashPhase, ULONG Rop)
 {
     int i;
     int error;
@@ -406,7 +410,7 @@ SEtoNW(SURFOBJ* OutputObj, CLIPOBJ* Clip,
     ULONG iStyle, cStyles = pebo->pbrush->dwStyleCount;
     LONG lStyleMax;
 
-    lStyleMax = HandleStyles(pbo, Translate, x, y, deltax, deltay, -1, -1, &iStyle);
+    lStyleMax = HandleStyles(pbo, Translate, x, y, deltax, deltay, -1, -1, iDashPhase, &iStyle);
 
     CLIPOBJ_cEnumStart(Clip, FALSE, CT_RECTANGLES, CD_LEFTUP, 0);
     EnumMore = CLIPOBJ_bEnum(Clip, (ULONG) sizeof(RectEnum), (PVOID) &RectEnum);
@@ -483,10 +487,15 @@ SEtoNW(SURFOBJ* OutputObj, CLIPOBJ* Clip,
 }
 
 /*
- * @implemented
+ * Internal worker for EngLineTo that supports an initial dash phase. This lets
+ * a sequence of styled (dashed) segments share one continuous dash pattern, the
+ * way Windows/Wine stroke a closed rectangle frame as a single dashed polyline.
+ * iDashPhase is the number of pixels of the style pattern already consumed at the
+ * line start (mod ulStyleSize). Pass 0 for the standalone (non-continuous) case.
  */
-BOOL APIENTRY
-EngLineTo(
+static
+BOOL
+EngLineToDash(
     _Inout_ SURFOBJ *DestObj,
     _In_ CLIPOBJ *Clip,
     _In_ BRUSHOBJ *pbo,
@@ -495,6 +504,7 @@ EngLineTo(
     _In_ LONG x2,
     _In_ LONG y2,
     _In_opt_ RECTL *RectBounds,
+    _In_ ULONG iDashPhase,
     _In_ MIX mix)
 {
     LONG x, y, deltax, deltay, xchange, ychange, hx, vy;
@@ -663,22 +673,22 @@ EngLineTo(
         {
             if (0 < ychange)
             {
-                NWtoSE(OutputObj, Clip, pbo, x, y, deltax, deltay, &Translate, Rop);
+                NWtoSE(OutputObj, Clip, pbo, x, y, deltax, deltay, &Translate, iDashPhase, Rop);
             }
             else
             {
-                SWtoNE(OutputObj, Clip, pbo, x, y, deltax, deltay, &Translate, Rop);
+                SWtoNE(OutputObj, Clip, pbo, x, y, deltax, deltay, &Translate, iDashPhase, Rop);
             }
         }
         else
         {
             if (0 < ychange)
             {
-                NEtoSW(OutputObj, Clip, pbo, x, y, deltax, deltay, &Translate, Rop);
+                NEtoSW(OutputObj, Clip, pbo, x, y, deltax, deltay, &Translate, iDashPhase, Rop);
             }
             else
             {
-                SEtoNW(OutputObj, Clip, pbo, x, y, deltax, deltay, &Translate, Rop);
+                SEtoNW(OutputObj, Clip, pbo, x, y, deltax, deltay, &Translate, iDashPhase, Rop);
             }
         }
     }
@@ -691,16 +701,35 @@ EngLineTo(
     return IntEngLeave(&EnterLeave);
 }
 
+/*
+ * @implemented
+ */
 BOOL APIENTRY
-IntEngLineTo(SURFOBJ *psoDest,
-             CLIPOBJ *ClipObj,
-             BRUSHOBJ *pbo,
-             LONG x1,
-             LONG y1,
-             LONG x2,
-             LONG y2,
-             RECTL *RectBounds,
-             MIX Mix)
+EngLineTo(
+    _Inout_ SURFOBJ *DestObj,
+    _In_ CLIPOBJ *Clip,
+    _In_ BRUSHOBJ *pbo,
+    _In_ LONG x1,
+    _In_ LONG y1,
+    _In_ LONG x2,
+    _In_ LONG y2,
+    _In_opt_ RECTL *RectBounds,
+    _In_ MIX mix)
+{
+    return EngLineToDash(DestObj, Clip, pbo, x1, y1, x2, y2, RectBounds, 0, mix);
+}
+
+BOOL APIENTRY
+IntEngLineToDash(SURFOBJ *psoDest,
+                 CLIPOBJ *ClipObj,
+                 BRUSHOBJ *pbo,
+                 LONG x1,
+                 LONG y1,
+                 LONG x2,
+                 LONG y2,
+                 RECTL *RectBounds,
+                 ULONG iDashPhase,
+                 MIX Mix)
 {
     BOOLEAN ret;
     SURFACE *psurfDest;
@@ -751,7 +780,10 @@ IntEngLineTo(SURFOBJ *psoDest,
     if (b.left == b.right) b.right++;
     if (b.top == b.bottom) b.bottom++;
 
-    if (psurfDest->flags & HOOK_LINETO)
+    /* The driver's DrvLineTo cannot carry a running dash phase, so only use it
+     * for the standalone (phase 0) case. Continuous-dash frames go to the
+     * engine, which honours iDashPhase. */
+    if ((iDashPhase == 0) && (psurfDest->flags & HOOK_LINETO))
     {
         /* Call the driver's DrvLineTo */
         ret = GDIDEVFUNCS(psoDest).LineTo(
@@ -767,10 +799,24 @@ IntEngLineTo(SURFOBJ *psoDest,
 
     if (! ret)
     {
-        ret = EngLineTo(psoDest, ClipObj, pbo, x1, y1, x2, y2, RectBounds, Mix);
+        ret = EngLineToDash(psoDest, ClipObj, pbo, x1, y1, x2, y2, RectBounds, iDashPhase, Mix);
     }
 
     return ret;
+}
+
+BOOL APIENTRY
+IntEngLineTo(SURFOBJ *psoDest,
+             CLIPOBJ *ClipObj,
+             BRUSHOBJ *pbo,
+             LONG x1,
+             LONG y1,
+             LONG x2,
+             LONG y2,
+             RECTL *RectBounds,
+             MIX Mix)
+{
+    return IntEngLineToDash(psoDest, ClipObj, pbo, x1, y1, x2, y2, RectBounds, 0, Mix);
 }
 
 BOOL APIENTRY
