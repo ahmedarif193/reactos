@@ -19,6 +19,11 @@ VOID
 DIB_4BPP_PutPixel(SURFOBJ *SurfObj, LONG x, LONG y, ULONG c)
 {
    PBYTE addr = (PBYTE)SurfObj->pvScan0 + (x>>1) + y * SurfObj->lDelta;
+   /* Mask the colour to a nibble before shifting. For an odd x the shift is 0,
+    * so an unmasked caller value (e.g. the raw DIB_DoRop result passed by
+    * EngLineToPutPixel for a non-PATCOPY ROP) would OR its high nibble into the
+    * neighbouring pixel and corrupt it. */
+   c &= 0x0f;
    *addr = (*addr & notmask[x&1]) | (BYTE)(c << ((1-(x&1))<<2));
 }
 
