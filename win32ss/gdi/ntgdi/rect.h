@@ -114,6 +114,36 @@ FASTCALL
 RECTL_vMakeWellOrdered(
     _Inout_ RECTL *prcl);
 
+/*
+ * Make a device-space rectangle well-ordered after a coordinate transform.
+ *
+ * Transforming a half-open logical rect [L, R) through a mirroring (RTL)
+ * world-to-device transform yields a reversed rect where left > right.
+ * Simply swapping the edges (as RECTL_vMakeWellOrdered does) is off by one,
+ * because the right edge must remain exclusive after mirroring.  Windows
+ * (and Wine's get_bounding_rect) handle this by adding 1 to both edges on
+ * reversal, so logical [L, R) maps to device [width - R, width - L).
+ */
+FORCEINLINE
+VOID
+RECTL_vMakeWellOrderedXform(
+    _Inout_ RECTL *prcl)
+{
+    LONG lTmp;
+    if (prcl->left > prcl->right)
+    {
+        lTmp = prcl->left;
+        prcl->left = prcl->right + 1;
+        prcl->right = lTmp + 1;
+    }
+    if (prcl->top > prcl->bottom)
+    {
+        lTmp = prcl->top;
+        prcl->top = prcl->bottom + 1;
+        prcl->bottom = lTmp + 1;
+    }
+}
+
 VOID
 FASTCALL
 RECTL_vInflateRect(

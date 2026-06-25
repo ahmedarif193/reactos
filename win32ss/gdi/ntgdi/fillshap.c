@@ -606,6 +606,10 @@ IntRectangle(PDC dc,
 
     IntLPtoDP(dc, (LPPOINT)&DestRect, 2);
 
+    /* A mirroring (LAYOUT_RTL) transform reverses the rectangle; restore a
+     * well-ordered device rect, keeping the right/bottom edges exclusive. */
+    RECTL_vMakeWellOrderedXform(&DestRect);
+
     DestRect.left   += dc->ptlDCOrig.x;
     DestRect.right  += dc->ptlDCOrig.x;
     DestRect.top    += dc->ptlDCOrig.y;
