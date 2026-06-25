@@ -316,6 +316,101 @@ EBRUSHOBJ_vUpdateFromDC(
     EBRUSHOBJ_vInitFromDC(pebo, pbrush, pdc);
 }
 
+/*
+ * Bayer 16x16 ordered-dither matrix, matching Windows' / Wine's monochrome
+ * pattern-brush realization (dlls/win32u/dibdrv/primitives.c rgb_to_pixel_mono).
+ */
+static const BYTE gaubBayer16x16[16][16] =
+{
+    {   0, 128,  32, 160,   8, 136,  40, 168,   2, 130,  34, 162,  10, 138,  42, 170 },
+    { 192,  64, 224,  96, 200,  72, 232, 104, 194,  66, 226,  98, 202,  74, 234, 106 },
+    {  48, 176,  16, 144,  56, 184,  24, 152,  50, 178,  18, 146,  58, 186,  26, 154 },
+    { 240, 112, 208,  80, 248, 120, 216,  88, 242, 114, 210,  82, 250, 122, 218,  90 },
+    {  12, 140,  44, 172,   4, 132,  36, 164,  14, 142,  46, 174,   6, 134,  38, 166 },
+    { 204,  76, 236, 108, 196,  68, 228, 100, 206,  78, 238, 110, 198,  70, 230, 102 },
+    {  60, 188,  28, 156,  52, 180,  20, 148,  62, 190,  30, 158,  54, 182,  22, 150 },
+    { 252, 124, 220,  92, 244, 116, 212,  84, 254, 126, 222,  94, 246, 118, 214,  86 },
+    {   3, 131,  35, 163,  11, 139,  43, 171,   1, 129,  33, 161,   9, 137,  41, 169 },
+    { 195,  67, 227,  99, 203,  75, 235, 107, 193,  65, 225,  97, 201,  73, 233, 105 },
+    {  51, 179,  19, 147,  59, 187,  27, 155,  49, 177,  17, 145,  57, 185,  25, 153 },
+    { 243, 115, 211,  83, 251, 123, 219,  91, 241, 113, 209,  81, 249, 121, 217,  89 },
+    {  15, 143,  47, 175,   7, 135,  39, 167,  13, 141,  45, 173,   5, 133,  37, 165 },
+    { 207,  79, 239, 111, 199,  71, 231, 103, 205,  77, 237, 109, 197,  69, 229, 101 },
+    {  63, 191,  31, 159,  55, 183,  23, 151,  61, 189,  29, 157,  53, 181,  21, 149 },
+    { 255, 127, 223,  95, 247, 119, 215,  87, 253, 125, 221,  93, 245, 117, 213,  85 },
+};
+
+/*
+ * Realize a colour (multi-bpp) pattern brush onto a 1bpp indexed destination
+ * using ordered (Bayer) dithering, exactly as Windows does.  ReactOS' normal
+ * realization path (EngCopyBits with a nearest-colour XLATEOBJ) does NOT dither,
+ * which makes PatBlt with a DIB pattern brush onto a 1bpp DIB produce a
+ * different result from Windows (gdi32:dib "* dib brush patblt" failures).
+ *
+ * For each realized-surface pixel (x, y) we:
+ *   1. read the pattern's pixel index and translate it to an RGB colour,
+ *   2. threshold it to black/white via luminance + Bayer[y%16][x%16] > 255,
+ *   3. map black/white to the nearest destination palette index.
+ *
+ * The dither coordinate is the realized-surface pixel position, and the pattern
+ * pixel is read at the same (x, y); EngCopyBits would copy surface-row -> row in
+ * the same way, so top-down / bottom-up DIB pattern orientation is honoured by
+ * the pattern surface's own GetPixel.
+ */
+static
+BOOL
+EngRealizeBrushDither(
+    SURFOBJ *psoRealize,
+    SURFOBJ *psoPattern,
+    PPALETTE ppalPattern,
+    PPALETTE ppalDst)
+{
+    EXLATEOBJ exloToRGB;
+    LONG x, y, cx, cy;
+    PFN_DIB_GetPixel pfnGetPattern;
+
+    cx = psoPattern->sizlBitmap.cx;
+    cy = psoPattern->sizlBitmap.cy;
+
+    pfnGetPattern = DibFunctionsForBitmapFormat[psoPattern->iBitmapFormat].DIB_GetPixel;
+    if (!pfnGetPattern)
+        return FALSE;
+
+    /* Build a pattern-palette -> RGB translation so we can recover the true
+     * colour of each pattern pixel before thresholding it. */
+    EXLATEOBJ_vInitialize(&exloToRGB, ppalPattern, &gpalRGB, 0, 0, 0);
+
+    for (y = 0; y < cy; y++)
+    {
+        for (x = 0; x < cx; x++)
+        {
+            ULONG iSrc, crRGB, iDst;
+            LONG r, g, b, lum;
+
+            iSrc = pfnGetPattern(psoPattern, x, y);
+            crRGB = XLATEOBJ_iXlate(&exloToRGB.xlo, iSrc);
+
+            r = crRGB & 0xFF;
+            g = (crRGB >> 8) & 0xFF;
+            b = (crRGB >> 16) & 0xFF;
+
+            /* Luminance + ordered dither, thresholded to black or white. */
+            lum = (30 * r + 59 * g + 11 * b) / 100;
+            if (lum + gaubBayer16x16[y % 16][x % 16] > 255)
+                crRGB = RGB(0xFF, 0xFF, 0xFF);
+            else
+                crRGB = RGB(0x00, 0x00, 0x00);
+
+            iDst = PALETTE_ulGetNearestPaletteIndex(ppalDst, crRGB);
+
+            DIB_1BPP_PutPixel(psoRealize, x, y, iDst);
+        }
+    }
+
+    EXLATEOBJ_vCleanup(&exloToRGB);
+    return TRUE;
+}
+
 /**
  * This function is not exported, because it makes no sense for
  * The driver to punt back to this function */
@@ -368,8 +463,36 @@ EngRealizeBrush(
     rclDest.right = psoPattern->sizlBitmap.cx;
     rclDest.bottom = psoPattern->sizlBitmap.cy;
     psoRealize = &psurfRealize->SurfObj;
-    EngCopyBits(psoRealize, psoPattern, NULL, pxlo, &rclDest, &ptlSrc);
 
+    /*
+     * Windows dithers a colour pattern brush when realizing it onto a 1bpp
+     * indexed destination.  Detect that case and use ordered dithering instead
+     * of the plain nearest-colour EngCopyBits, otherwise fall back to the
+     * generic copy.  pxlo (when present) is an EXLATEOBJ carrying the pattern
+     * and destination palettes.
+     */
+    if ((psoDst->iBitmapFormat == BMF_1BPP) &&
+        (psoPattern->iBitmapFormat != BMF_1BPP) &&
+        (pxlo != NULL))
+    {
+        PEXLATEOBJ pexlo = CONTAINING_RECORD(pxlo, EXLATEOBJ, xlo);
+        PPALETTE ppalPat = pexlo->ppalSrc;
+        PPALETTE ppalDst = pexlo->ppalDst;
+
+        if (ppalDst && (ppalDst->flFlags & PAL_INDEXED) &&
+            EngRealizeBrushDither(psoRealize, psoPattern, ppalPat, ppalDst))
+        {
+            /* Dithered realization done */
+        }
+        else
+        {
+            EngCopyBits(psoRealize, psoPattern, NULL, pxlo, &rclDest, &ptlSrc);
+        }
+    }
+    else
+    {
+        EngCopyBits(psoRealize, psoPattern, NULL, pxlo, &rclDest, &ptlSrc);
+    }
 
     pebo = CONTAINING_RECORD(pbo, EBRUSHOBJ, BrushObject);
     pebo->pengbrush = (PVOID)psurfRealize;
