@@ -827,6 +827,56 @@ DIB_32BPP_AlphaBlend(SURFOBJ* Dest, SURFOBJ* Source, RECTL* DestRect,
     (DestRect->left << 2));
   SrcBpp = BitsPerFormat(Source->iBitmapFormat);
 
+  /* For a true BGRA surface (PAL_BGR, e.g. the standard 8888 / 8888-bitfields
+     destination) Windows keeps a blended alpha channel.  For an RGBA bitfields
+     surface (a8b8g8r8 = PAL_BITFIELDS|PAL_RGB) the colour masks only cover the
+     low 24 bits, so Windows leaves the unused top byte as zero.  Mirror that. */
+  if ((pexlo->ppalDst->flFlags & PAL_BITFIELDS) &&
+      (pexlo->ppalDst->flFlags & PAL_RGB))
+  {
+      ULONG ulKeepMask = pexlo->ppalDst->RedMask |
+                         pexlo->ppalDst->GreenMask |
+                         pexlo->ppalDst->BlueMask;
+
+      Rows = 0;
+      SrcY = SourceRect->top;
+      while (++Rows <= DestRect->bottom - DestRect->top)
+      {
+        Cols = 0;
+        SrcX = SourceRect->left;
+        while (++Cols <= DestRect->right - DestRect->left)
+        {
+          SrcPixel.ul = DIB_GetSource(Source, SrcX, SrcY, ColorTranslation);
+          DstPixel.ul = *Dst;
+
+          if ((BlendFunc.AlphaFormat & AC_SRC_ALPHA) != 0)
+          {
+            SrcPixel.col.red = AlphaMul(SrcPixel.col.red, BlendFunc.SourceConstantAlpha);
+            SrcPixel.col.green = AlphaMul(SrcPixel.col.green, BlendFunc.SourceConstantAlpha);
+            SrcPixel.col.blue = AlphaMul(SrcPixel.col.blue, BlendFunc.SourceConstantAlpha);
+            Alpha = AlphaMul(SrcPixel.col.alpha, BlendFunc.SourceConstantAlpha);
+            DstPixel.col.red = Clamp8(AlphaMul(DstPixel.col.red, 255 - Alpha) + SrcPixel.col.red);
+            DstPixel.col.green = Clamp8(AlphaMul(DstPixel.col.green, 255 - Alpha) + SrcPixel.col.green);
+            DstPixel.col.blue = Clamp8(AlphaMul(DstPixel.col.blue, 255 - Alpha) + SrcPixel.col.blue);
+          }
+          else
+          {
+            DstPixel.col.red = BlendColor(DstPixel.col.red, SrcPixel.col.red, BlendFunc.SourceConstantAlpha);
+            DstPixel.col.green = BlendColor(DstPixel.col.green, SrcPixel.col.green, BlendFunc.SourceConstantAlpha);
+            DstPixel.col.blue = BlendColor(DstPixel.col.blue, SrcPixel.col.blue, BlendFunc.SourceConstantAlpha);
+          }
+          /* Keep only the bits covered by the destination colour masks. */
+          *Dst++ = DstPixel.ul & ulKeepMask;
+          SrcX = SourceRect->left + (Cols*(SourceRect->right - SourceRect->left))/(DestRect->right - DestRect->left);
+        }
+        Dst = (PULONG)((ULONG_PTR)Dest->pvScan0 + ((DestRect->top + Rows) * Dest->lDelta) +
+                    (DestRect->left << 2));
+        SrcY = SourceRect->top + (Rows*(SourceRect->bottom - SourceRect->top))/(DestRect->bottom - DestRect->top);
+      }
+
+      return TRUE;
+  }
+
   Rows = 0;
    SrcY = SourceRect->top;
    while (++Rows <= DestRect->bottom - DestRect->top)
