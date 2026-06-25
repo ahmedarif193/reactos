@@ -10,6 +10,26 @@
 #include <wlanapi.h>
 #include <stdio.h>
 
+static void
+WlanEmit(PCWSTR Format, ...)
+{
+    WCHAR WideBuffer[1024];
+    CHAR AnsiBuffer[1024];
+    va_list Args;
+
+    va_start(Args, Format);
+    _vsnwprintf(WideBuffer, ARRAYSIZE(WideBuffer) - 1, Format, Args);
+    va_end(Args);
+    WideBuffer[ARRAYSIZE(WideBuffer) - 1] = L'\0';
+
+    fputws(WideBuffer, stdout);
+    fflush(stdout);
+
+    WideCharToMultiByte(CP_UTF8, 0, WideBuffer, -1, AnsiBuffer, sizeof(AnsiBuffer), NULL, NULL);
+    OutputDebugStringA(AnsiBuffer);
+}
+#define wprintf WlanEmit
+
 static PCWSTR
 AuthName(DOT11_AUTH_ALGORITHM Auth)
 {
