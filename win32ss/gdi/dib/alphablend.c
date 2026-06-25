@@ -120,9 +120,13 @@ DIB_XXBPP_AlphaBlend(SURFOBJ* Dest, SURFOBJ* Source, RECTL* DestRect,
         DstPixel32.col.green = BlendColor(DstPixel32.col.green, SrcPixel32.col.green, BlendFunc.SourceConstantAlpha);
         DstPixel32.col.blue = BlendColor(DstPixel32.col.blue, SrcPixel32.col.blue, BlendFunc.SourceConstantAlpha);
       }
-      /* For an 8bpp indexed destination, Windows snaps each channel to the
-         5-bit bucket midpoint before the nearest-colour search. */
-      if (pexlo->ppalDst->NumColors == 256)
+      /* For 4bpp and 8bpp indexed destinations Windows snaps each channel to the
+         5-bit bucket midpoint before the nearest-colour search.  This matches
+         Wine's rgb_lookup_colortable, which keys on the top 5 bits and looks up
+         (c & 0xf8) | 4.  (1bpp uses a direct nearest-match with no snap, and
+         Windows diverges from Wine there, so it is intentionally excluded.) */
+      if ((pexlo->ppalDst->flFlags & PAL_INDEXED) &&
+          (Dest->iBitmapFormat == BMF_4BPP || Dest->iBitmapFormat == BMF_8BPP))
         DstPixel32.ul = (DstPixel32.ul & 0x00F8F8F8) | 0x00040404;
       pfnDibPutPixel(Dest, DstX, DstY, XLATEOBJ_iXlate(&exloRGBDst.xlo, DstPixel32.ul));
 
