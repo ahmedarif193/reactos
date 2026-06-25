@@ -350,6 +350,74 @@ CywScanStart(
     return Status;
 }
 
+NTSTATUS
+CywConnect(
+    _In_ PCYW_ADAPTER Adapter)
+{
+    CYW_SSID_LE Ssid;
+    ULONG Value;
+    ULONG Wsec;
+    ULONG WpaAuth;
+    NTSTATUS Status;
+
+    switch (Adapter->UnicastCipher)
+    {
+        case DOT11_CIPHER_ALGO_CCMP: Wsec = CYW_WSEC_AES; break;
+        case DOT11_CIPHER_ALGO_TKIP: Wsec = CYW_WSEC_TKIP; break;
+        case DOT11_CIPHER_ALGO_WEP40:
+        case DOT11_CIPHER_ALGO_WEP104: Wsec = CYW_WSEC_WEP; break;
+        default: Wsec = CYW_WSEC_NONE; break;
+    }
+
+    switch (Adapter->AuthAlgorithm)
+    {
+        case DOT11_AUTH_ALGO_RSNA_PSK: WpaAuth = CYW_WPA2_AUTH_PSK; break;
+        case DOT11_AUTH_ALGO_WPA_PSK: WpaAuth = CYW_WPA_AUTH_PSK; break;
+        default: WpaAuth = CYW_WPA_AUTH_DISABLED; break;
+    }
+
+    Value = Wsec;
+    CywFilCmdSet(Adapter, BRCMF_C_SET_WSEC, &Value, sizeof(Value));
+
+    Value = 1;
+    CywFilCmdSet(Adapter, BRCMF_C_SET_INFRA, &Value, sizeof(Value));
+
+    Value = CYW_AUTH_OPEN;
+    CywFilCmdSet(Adapter, BRCMF_C_SET_AUTH, &Value, sizeof(Value));
+
+    Value = WpaAuth;
+    CywFilCmdSet(Adapter, BRCMF_C_SET_WPA_AUTH, &Value, sizeof(Value));
+
+    if (WpaAuth != CYW_WPA_AUTH_DISABLED)
+    {
+        CywFilIovarSetInt(Adapter, "mfp", CYW_MFP_CAPABLE);
+    }
+
+    RtlZeroMemory(&Ssid, sizeof(Ssid));
+    Ssid.SsidLen = Adapter->DesiredSsidLength;
+    RtlCopyMemory(Ssid.Ssid, Adapter->DesiredSsid, Adapter->DesiredSsidLength);
+    Status = CywFilCmdSet(Adapter, BRCMF_C_SET_SSID, &Ssid, sizeof(Ssid));
+
+    DPRINT1("CYW: connect '%.*s' wsec %lu wpa_auth 0x%lx status 0x%08lx\n",
+            (int)Adapter->DesiredSsidLength, Adapter->DesiredSsid,
+            Wsec, WpaAuth, Status);
+    return Status;
+}
+
+NTSTATUS
+CywDisconnect(
+    _In_ PCYW_ADAPTER Adapter)
+{
+    ULONG Value = 0;
+
+    NdisAcquireSpinLock(&Adapter->Lock);
+    Adapter->Associated = FALSE;
+    Adapter->LinkUp = FALSE;
+    NdisReleaseSpinLock(&Adapter->Lock);
+
+    return CywFilCmdSet(Adapter, BRCMF_C_DISASSOC, &Value, sizeof(Value));
+}
+
 static
 VOID
 CywAddEscanResult(
@@ -450,6 +518,35 @@ CywProcessEvent(
         else
         {
             CywIndicateScanComplete(Adapter, NDIS_STATUS_SUCCESS);
+        }
+    }
+    else if (EventType == BRCMF_E_LINK)
+    {
+        USHORT LinkFlags = RtlUshortByteSwap(Msg->Flags);
+        if (LinkFlags & BRCMF_EVENT_MSG_LINK)
+        {
+            NdisAcquireSpinLock(&Adapter->Lock);
+            RtlCopyMemory(Adapter->ConnectedBssid, Msg->Addr, CYW_ADDRESS_LENGTH);
+            Adapter->Associated = TRUE;
+            NdisReleaseSpinLock(&Adapter->Lock);
+            DPRINT1("CYW: LINK up, associated - indicating ASSOCIATION_COMPLETION\n");
+            CywIndicateAssocComplete(Adapter, DOT11_ASSOC_STATUS_SUCCESS);
+        }
+        else
+        {
+            NdisAcquireSpinLock(&Adapter->Lock);
+            Adapter->Associated = FALSE;
+            Adapter->LinkUp = FALSE;
+            NdisReleaseSpinLock(&Adapter->Lock);
+            DPRINT1("CYW: LINK down\n");
+        }
+    }
+    else if (EventType == BRCMF_E_SET_SSID)
+    {
+        DPRINT1("CYW: SET_SSID event status %lu\n", EventStatus);
+        if (EventStatus != BRCMF_E_STATUS_SUCCESS)
+        {
+            CywIndicateAssocComplete(Adapter, DOT11_ASSOC_STATUS_FAILURE);
         }
     }
 }
