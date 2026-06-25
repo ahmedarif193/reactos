@@ -151,8 +151,25 @@ typedef struct _CYW_DLOAD_DATA
 #define BRCMF_C_DISASSOC                52
 #define BRCMF_C_SET_WSEC                134
 #define BRCMF_C_SET_BAND                142
+#define BRCMF_C_SET_AUTH                22
+#define BRCMF_C_SET_WPA_AUTH            165
 #define BRCMF_C_GET_VAR                 262
 #define BRCMF_C_SET_VAR                 263
+#define BRCMF_C_SET_WSEC_PMK            268
+
+#define CYW_WSEC_NONE                   0x00
+#define CYW_WSEC_WEP                    0x01
+#define CYW_WSEC_TKIP                   0x02
+#define CYW_WSEC_AES                    0x04
+#define CYW_WPA_AUTH_DISABLED           0x00
+#define CYW_WPA_AUTH_PSK                0x04
+#define CYW_WPA2_AUTH_PSK               0x80
+#define CYW_WPA3_AUTH_SAE_PSK           0x40000
+#define CYW_AUTH_OPEN                   0
+#define CYW_AUTH_SAE                    3
+#define CYW_MFP_NONE                    0
+#define CYW_MFP_CAPABLE                 1
+#define CYW_MFP_REQUIRED                2
 
 #define BRCMF_ESCAN_REQ_VERSION         1
 #define WL_ESCAN_ACTION_START           1
@@ -176,6 +193,8 @@ typedef struct _CYW_DLOAD_DATA
 
 #define BRCMF_E_STATUS_SUCCESS          0
 #define BRCMF_E_STATUS_PARTIAL          8
+
+#define BRCMF_EVENT_MSG_LINK            0x01
 
 #define ETH_P_LINK_CTL                  0x886C
 #define BCMILCP_BCM_SUBTYPE_EVENT       1
@@ -212,6 +231,25 @@ typedef struct _CYW_ETHER_HEADER
     UCHAR Src[6];
     USHORT Type;
 } CYW_ETHER_HEADER, *PCYW_ETHER_HEADER;
+
+typedef struct _CYW_DOT11_HEADER
+{
+    UCHAR FrameControl[2];
+    UCHAR DurationId[2];
+    UCHAR Address1[6];
+    UCHAR Address2[6];
+    UCHAR Address3[6];
+    UCHAR SequenceControl[2];
+} CYW_DOT11_HEADER, *PCYW_DOT11_HEADER;
+
+typedef struct _CYW_SNAP_HEADER
+{
+    UCHAR Dsap;
+    UCHAR Ssap;
+    UCHAR Control;
+    UCHAR Oui[3];
+    UCHAR EtherType[2];
+} CYW_SNAP_HEADER, *PCYW_SNAP_HEADER;
 
 typedef struct _CYW_EVENT_MSG
 {
@@ -298,6 +336,12 @@ typedef struct _CYW_ADAPTER
     UCHAR TxSeq;
     PUCHAR ControlBuffer;
     PMDL ControlMdl;
+    PUCHAR TxBuffer;
+    PUCHAR RxBuffer;
+    KEVENT CtrlEvent;
+    ULONG CtrlResponseLen;
+    BOOLEAN RxThreadRunning;
+    FAST_MUTEX F2Lock;
 
     UCHAR PermanentAddress[CYW_ADDRESS_LENGTH];
     UCHAR CurrentAddress[CYW_ADDRESS_LENGTH];
@@ -312,6 +356,22 @@ typedef struct _CYW_ADAPTER
     BOOLEAN ScanInProgress;
     CYW_BSS Bss[CYW_MAX_BSS];
     ULONG BssCount;
+
+    UCHAR DesiredSsid[DOT11_SSID_MAX_LENGTH];
+    ULONG DesiredSsidLength;
+    UCHAR DesiredBssid[CYW_ADDRESS_LENGTH];
+    BOOLEAN HasDesiredBssid;
+    ULONG AuthAlgorithm;
+    ULONG UnicastCipher;
+    ULONG MulticastCipher;
+    UCHAR ConnectedBssid[CYW_ADDRESS_LENGTH];
+    BOOLEAN Associated;
+    BOOLEAN LinkUp;
+    PNDIS_OID_REQUEST PendingConnectOid;
+
+    HANDLE RxThreadHandle;
+    PVOID RxThread;
+    volatile LONG RxThreadStop;
 
     NDIS_HANDLE InterruptWorkItem;
     volatile LONG InterruptPending;
@@ -363,6 +423,12 @@ VOID CywProcessEvent(_In_ PCYW_ADAPTER Adapter, _In_ PUCHAR Frame, _In_ ULONG Le
 VOID CywPollEvents(_In_ PCYW_ADAPTER Adapter);
 ULONG CywBuildBssList(_In_ PCYW_ADAPTER Adapter, _Out_ PUCHAR Buffer, _In_ ULONG BufferLength, _Out_ PULONG BytesNeeded);
 VOID CywIndicateScanComplete(_In_ PCYW_ADAPTER Adapter, _In_ NDIS_STATUS ScanStatus);
+VOID CywIndicateAssocStart(_In_ PCYW_ADAPTER Adapter);
+VOID CywIndicateAssocComplete(_In_ PCYW_ADAPTER Adapter, _In_ DOT11_ASSOC_STATUS Status);
+VOID CywIndicateConnectComplete(_In_ PCYW_ADAPTER Adapter, _In_ DOT11_ASSOC_STATUS Status);
+VOID CywIndicateLinkState(_In_ PCYW_ADAPTER Adapter, _In_ BOOLEAN Connected);
+NTSTATUS CywConnect(_In_ PCYW_ADAPTER Adapter);
+NTSTATUS CywDisconnect(_In_ PCYW_ADAPTER Adapter);
 
 PVOID CywAllocate(_In_ ULONG Size);
 VOID CywFree(_In_ PVOID Buffer);
