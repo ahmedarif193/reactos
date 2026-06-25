@@ -393,6 +393,14 @@ DIB_1BPP_BitBlt(PBLTINFO BltInfo)
 
   RoundedRight = BltInfo->DestRect.right -
     ((BltInfo->DestRect.right - BltInfo->DestRect.left) & 31);
+  /* The 32-pixel word-optimized inner loop assumes the destination starts on a
+   * 32-bit word boundary: it writes whole DWORDs at (DestRect.left >> 3), which
+   * drops the sub-byte bit offset and shifts every pixel (and clobbers the bits
+   * to the left of DestRect.left).  When the left edge is not word-aligned, skip
+   * the fast loop entirely and let the correct per-pixel tail handle the whole
+   * span via DIB_1BPP_GetPixel/PutPixel. */
+  if (BltInfo->DestRect.left & 31)
+    RoundedRight = BltInfo->DestRect.left;
   SourceY = BltInfo->SourcePoint.y;
 
   if (UsesPattern)
