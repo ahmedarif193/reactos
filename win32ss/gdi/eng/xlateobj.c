@@ -691,6 +691,48 @@ EXLATEOBJ_crRealizeColor(
     return crColor & 0x00FFFFFF;
 }
 
+/* Realize a destination fore/back colour, but keep a DIBINDEX value raw for a
+ * (non-mono) indexed surface. DIBINDEX colours are literal destination indices;
+ * round-tripping them through the colour table would collapse duplicate entries
+ * (e.g. several black slots) to the first match. Keeping them raw lets the
+ * mono->colour expansion use the index directly, as Windows does. */
+static COLORREF
+EXLATEOBJ_crRealizeDstColor(
+    _In_ PDC pdc,
+    _In_opt_ PSURFACE psurf,
+    _In_ COLORREF crColor)
+{
+    if (psurf && psurf->ppal &&
+        (psurf->ppal->flFlags & PAL_INDEXED) &&
+        !(psurf->ppal->flFlags & PAL_MONOCHROME) &&
+        (crColor & 0x10FF0000) == 0x10FF0000)
+    {
+        return crColor;
+    }
+
+    return EXLATEOBJ_crRealizeColor(pdc, crColor);
+}
+
+/* Map a realized destination fore/back colour to a destination index. A raw
+ * DIBINDEX is used as a literal index, clamped to 0 when it is out of range
+ * (matching Windows: an in-range index is used verbatim, an out-of-range one
+ * becomes index 0). Anything else is colour-matched to the nearest entry. */
+static ULONG
+EXLATEOBJ_iDstColorOrIndex(
+    _In_ PPALETTE ppalDst,
+    _In_ COLORREF crColor)
+{
+    if ((crColor & 0x10FF0000) == 0x10FF0000)
+    {
+        ULONG index = crColor & 0xFF;
+        if (index >= ppalDst->NumColors)
+            index = 0;
+        return index;
+    }
+
+    return PALETTE_ulGetNearestIndex(ppalDst, crColor);
+}
+
 VOID
 NTAPI
 EXLATEOBJ_vInitialize(
@@ -817,8 +859,8 @@ EXLATEOBJ_vInitialize(
                 /* Use the dest DCs back and fore color */
                 ULONG iBlack = PALETTE_ulGetNearestPaletteIndex(ppalSrc, 0x000000);
                 ULONG iWhite = iBlack ^ 1;
-                pexlo->xlo.pulXlate[iBlack] = PALETTE_ulGetNearestIndex(ppalDst, crDstForeColor);
-                pexlo->xlo.pulXlate[iWhite] = PALETTE_ulGetNearestIndex(ppalDst, crDstBackColor);
+                pexlo->xlo.pulXlate[iBlack] = EXLATEOBJ_iDstColorOrIndex(ppalDst, crDstForeColor);
+                pexlo->xlo.pulXlate[iWhite] = EXLATEOBJ_iDstColorOrIndex(ppalDst, crDstBackColor);
             }
         }
     }
@@ -1122,8 +1164,8 @@ EXLATEOBJ_vInitXlateFromDCs(
                           psurfSrc ? psurfSrc->ppal : gppalMono,
                           psurfDst ? psurfDst->ppal : gppalMono,
                           EXLATEOBJ_crRealizeColor(pdcSrc, pdcSrc->pdcattr->crBackgroundClr),
-                          EXLATEOBJ_crRealizeColor(pdcDst, pdcDst->pdcattr->crBackgroundClr),
-                          EXLATEOBJ_crRealizeColor(pdcDst, pdcDst->pdcattr->crForegroundClr));
+                          EXLATEOBJ_crRealizeDstColor(pdcDst, psurfDst, pdcDst->pdcattr->crBackgroundClr),
+                          EXLATEOBJ_crRealizeDstColor(pdcDst, psurfDst, pdcDst->pdcattr->crForegroundClr));
 
     pexlo->ppalDstDc = pdcDst->dclevel.ppal;
 }
@@ -1151,8 +1193,8 @@ EXLATEOBJ_vInitXlateFromDCsEx(
                           psurfSrc ? psurfSrc->ppal : gppalMono,
                           psurfDst ? psurfDst->ppal : gppalMono,
                           EXLATEOBJ_crRealizeColor(pdcSrc, crBackColor),
-                          EXLATEOBJ_crRealizeColor(pdcDst, pdcDst->pdcattr->crBackgroundClr),
-                          EXLATEOBJ_crRealizeColor(pdcDst, pdcDst->pdcattr->crForegroundClr));
+                          EXLATEOBJ_crRealizeDstColor(pdcDst, psurfDst, pdcDst->pdcattr->crBackgroundClr),
+                          EXLATEOBJ_crRealizeDstColor(pdcDst, psurfDst, pdcDst->pdcattr->crForegroundClr));
 
     pexlo->ppalDstDc = pdcDst->dclevel.ppal;
 }
