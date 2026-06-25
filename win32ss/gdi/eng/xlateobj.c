@@ -112,12 +112,15 @@ EXLATEOBJ_iXlateRGBToMono(_In_ PEXLATEOBJ pexlo, ULONG rgbColor)
     LONG b = GetBValue(rgbColor);
 
     /* Calculate the dot product of the color vector and the
-       back-to-fore distance vector. */
+       back-to-fore distance vector. The pixel is nearer to the foreground
+       color when 2*lDist > (|fore|^2 - |back|^2). lHalfDist holds the
+       right-hand side un-halved so the comparison stays exact (matching
+       Windows' tie handling) without integer truncation. */
     LONG lDist = r * pexlo->ToMono.lDeltaR +
                  g * pexlo->ToMono.lDeltaG +
                  b * pexlo->ToMono.lDeltaB;
 
-    return (lDist > pexlo->ToMono.lHalfDist);
+    return (2 * lDist > pexlo->ToMono.lHalfDist);
 }
 
 _Function_class_(FN_XLATE)
@@ -131,12 +134,35 @@ EXLATEOBJ_iXlateBGRToMono(_In_ PEXLATEOBJ pexlo, ULONG rgbColor)
     LONG r = GetBValue(rgbColor);
 
     /* Calculate the dot product of the color vector and the
+       back-to-fore distance vector. (See EXLATEOBJ_iXlateRGBToMono.) */
+    LONG lDist = r * pexlo->ToMono.lDeltaR +
+                 g * pexlo->ToMono.lDeltaG +
+                 b * pexlo->ToMono.lDeltaB;
+
+    return (2 * lDist > pexlo->ToMono.lHalfDist);
+}
+
+ULONG FASTCALL EXLATEOBJ_iXlateBitfieldsToRGB(PEXLATEOBJ pexlo, ULONG iColor);
+
+_Function_class_(FN_XLATE)
+ULONG
+FASTCALL
+EXLATEOBJ_iXlateBitfieldsToMono(_In_ PEXLATEOBJ pexlo, ULONG iColor)
+{
+    /* Expand the source bitfields pixel to a true RGB color first */
+    ULONG rgbColor = EXLATEOBJ_iXlateBitfieldsToRGB(pexlo, iColor);
+
+    LONG r = GetRValue(rgbColor);
+    LONG g = GetGValue(rgbColor);
+    LONG b = GetBValue(rgbColor);
+
+    /* Calculate the dot product of the color vector and the
        back-to-fore distance vector. */
     LONG lDist = r * pexlo->ToMono.lDeltaR +
                  g * pexlo->ToMono.lDeltaG +
                  b * pexlo->ToMono.lDeltaB;
 
-    return (lDist > pexlo->ToMono.lHalfDist);
+    return (2 * lDist > pexlo->ToMono.lHalfDist);
 }
 
 static
@@ -176,9 +202,11 @@ EXLATEOBJ_vInitRGBToMono(
         pexlo->ToMono.lDeltaR = lForeR - lBackR;
         pexlo->ToMono.lDeltaG = lForeG - lBackG;
         pexlo->ToMono.lDeltaB = lForeB - lBackB;
+        /* Store |fore|^2 - |back|^2 un-halved; the xlate compares 2*lDist
+           against this to avoid integer truncation at the tie point. */
         pexlo->ToMono.lHalfDist =
             (((lForeR * lForeR) + (lForeG * lForeG) + (lForeB * lForeB)) -
-             ((lBackR * lBackR) + (lBackG * lBackG) + (lBackB * lBackB))) / 2;
+             ((lBackR * lBackR) + (lBackG * lBackG) + (lBackB * lBackB)));
     }
 }
 
@@ -740,8 +768,14 @@ EXLATEOBJ_vInitialize(
         {
             pexlo->aulXlate[0] = crSrcBackColor;
 
-            /* Check if direct translation was requested (e.g. NtGdiSetPixel) */
-            if (crSrcBackColor == CLR_INVALID)
+            /* For a true color source painted onto a DIB monochrome destination
+             * Windows snaps each source pixel to the nearer of the DIB color
+             * table's two colors (index 0 -> background bit, index 1 ->
+             * foreground bit), instead of only matching the source back color.
+             * Also use this path for the explicit direct-translation request
+             * (e.g. NtGdiSetPixel passes CLR_INVALID). */
+            if ((ppalDst->flFlags & PAL_DIBSECTION) ||
+                (crSrcBackColor == CLR_INVALID))
             {
                 EXLATEOBJ_vInitRGBToMono(pexlo,
                                          PALETTE_ulGetRGBColorFromIndex(ppalDst, 0),
@@ -755,8 +789,9 @@ EXLATEOBJ_vInitialize(
                                      GetGValue(crSrcBackColor),
                                      GetRValue(crSrcBackColor));
 
-            /* Check if direct translation was requested (e.g. NtGdiSetPixel) */
-            if (crSrcBackColor == CLR_INVALID)
+            /* See the PAL_RGB case above. */
+            if ((ppalDst->flFlags & PAL_DIBSECTION) ||
+                (crSrcBackColor == CLR_INVALID))
             {
                 EXLATEOBJ_vInitRGBToMono(pexlo,
                                          PALETTE_ulGetRGBColorFromIndex(ppalDst, 0),
@@ -772,6 +807,27 @@ EXLATEOBJ_vInitialize(
             pexlo->ulBlueShift = CalculateShift(RGB(0,0,0xFF), pexlo->ulBlueMask);
 
             pexlo->aulXlate[0] = EXLATEOBJ_iXlateShiftAndMask(pexlo, crSrcBackColor);
+
+            /* For a bitfields source painted onto a DIB monochrome destination,
+             * snap each expanded RGB pixel to the nearer DIB color table color. */
+            if (ppalDst->flFlags & PAL_DIBSECTION)
+            {
+                ULONG rgbBack = PALETTE_ulGetRGBColorFromIndex(ppalDst, 0);
+                ULONG rgbFore = PALETTE_ulGetRGBColorFromIndex(ppalDst, 1);
+                LONG lForeR = GetRValue(rgbFore), lForeG = GetGValue(rgbFore), lForeB = GetBValue(rgbFore);
+                LONG lBackR = GetRValue(rgbBack), lBackG = GetGValue(rgbBack), lBackB = GetBValue(rgbBack);
+
+                /* Compute the back->fore distance vector for the nearest test.
+                   lHalfDist holds |fore|^2 - |back|^2 un-halved (see the xlate). */
+                pexlo->ToMono.lDeltaR = lForeR - lBackR;
+                pexlo->ToMono.lDeltaG = lForeG - lBackG;
+                pexlo->ToMono.lDeltaB = lForeB - lBackB;
+                pexlo->ToMono.lHalfDist =
+                    (((lForeR * lForeR) + (lForeG * lForeG) + (lForeB * lForeB)) -
+                     ((lBackR * lBackR) + (lBackG * lBackG) + (lBackB * lBackB)));
+
+                pexlo->pfnXlate = EXLATEOBJ_iXlateBitfieldsToMono;
+            }
         }
     }
     else if (ppalSrc->flFlags & PAL_INDEXED)
