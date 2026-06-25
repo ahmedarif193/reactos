@@ -1,0 +1,10 @@
+/* PROJECT:     ReactOS Broadcom/Cypress CYW43455 Native 802.11 Miniport
+ * LICENSE:     GPL-2.0-or-later (https://spdx.org/licenses/GPL-2.0-or-later)
+ * COPYRIGHT:   Copyright 2026 Ahmed ARIF <arif.ing@outlook.com>
+ */
+
+#define REACTOS_VERSION_DLL
+#define REACTOS_STR_FILE_DESCRIPTION  "ReactOS CYW43455 WiFi Driver"
+#define REACTOS_STR_INTERNAL_NAME     "cyw43455"
+#define REACTOS_STR_ORIGINAL_FILENAME "cyw43455.sys"
+#include <reactos/version.rc>

@@ -602,10 +602,6 @@ NwifiCreateControlDevice(VOID)
     PDEVICE_OBJECT DeviceObject = NULL;
     NDIS_STATUS Status;
 
-    InitializeListHead(&gNwifi.NotifyIrpQueue);
-    KeInitializeSpinLock(&gNwifi.NotifyLock);
-    gNwifi.NotifyHead = gNwifi.NotifyTail = gNwifi.NotifyCount = 0;
-
     RtlZeroMemory(Dispatch, sizeof(Dispatch));
     Dispatch[IRP_MJ_CREATE]         = NwifiDispatchCreateClose;
     Dispatch[IRP_MJ_CLOSE]          = NwifiDispatchCreateClose;
