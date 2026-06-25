@@ -823,6 +823,10 @@ IntAnimatePalette(HPALETTE hPal,
             }
         }
 
+        /* Bump the modification time so cached brush realizations re-resolve */
+        if (ret)
+            palPtr->ulTime++;
+
         PALETTE_ShareUnlockPalette(palPtr);
 
 #if 0
@@ -989,6 +993,11 @@ IntSetPaletteEntries(
         Entries = numEntries - Start;
     }
     memcpy(palGDI->IndexedColors + Start, pe, Entries * sizeof(PALETTEENTRY));
+
+    /* Bump the modification time so cached brush realizations re-resolve any
+     * PALETTEINDEX colors against the new entries. */
+    palGDI->ulTime++;
+
     PALETTE_ShareUnlockPalette(palGDI);
 
     return Entries;

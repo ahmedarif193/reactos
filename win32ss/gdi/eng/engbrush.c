@@ -47,6 +47,55 @@ InitBrushImpl(VOID)
     return STATUS_SUCCESS;
 }
 
+/*
+ * Resolve a logical COLORREF that may carry a PALETTEINDEX / PALETTERGB /
+ * DIBINDEX flag into a plain RGB color, using the DC palette for PALETTEINDEX.
+ * This mirrors TranslateCOLORREF() (win32ss/gdi/ntgdi/dcutil.c) and is needed
+ * so that the fore/back colors fed to a pattern (e.g. hatch) brush realization
+ * are real RGB values rather than raw logical-color magic values.
+ */
+static
+COLORREF
+EBRUSHOBJ_crResolveColorRef(EBRUSHOBJ *pebo, COLORREF crColor)
+{
+    ULONG index;
+
+    if ((crColor & 0xFF000000) == 0)
+    {
+        /* Plain RGB color */
+        return crColor;
+    }
+    else if (crColor & 0x01000000)
+    {
+        /* PALETTEINDEX: translate to RGB using the DC palette */
+        index = crColor & 0xFFFF;
+        if (!pebo->ppalDC || index >= pebo->ppalDC->NumColors)
+            index = 0;
+        if (pebo->ppalDC)
+            return PALETTE_ulGetRGBColorFromIndex(pebo->ppalDC, index);
+        return 0;
+    }
+    else if (crColor & 0x02000000)
+    {
+        /* PALETTERGB: use the raw RGB value */
+        return crColor & 0x00FFFFFF;
+    }
+    else if ((crColor & 0x10FF0000) == 0x10FF0000)
+    {
+        /* DIBINDEX: resolve against the target surface palette when indexed */
+        if (pebo->ppalSurf && (pebo->ppalSurf->flFlags & PAL_INDEXED))
+        {
+            index = crColor & 0xFF;
+            if (index >= pebo->ppalSurf->NumColors)
+                index = 0;
+            return PALETTE_ulGetRGBColorFromIndex(pebo->ppalSurf, index);
+        }
+        return 0;
+    }
+
+    return crColor & 0x00FFFFFF;
+}
+
 VOID
 NTAPI
 EBRUSHOBJ_vInit(EBRUSHOBJ *pebo,
@@ -66,10 +115,6 @@ EBRUSHOBJ_vInit(EBRUSHOBJ *pebo,
     pebo->flattrs = pbrush->flAttrs;
     pebo->psoMask = NULL;
 
-    /* Initialize 1 bpp fore and back colors */
-    pebo->crCurrentBack = crBackgroundClr;
-    pebo->crCurrentText = crForegroundClr;
-
     pebo->psurfTrg = psurf;
     /* We are initializing for a new memory DC */
     if(!pebo->psurfTrg)
@@ -85,6 +130,18 @@ EBRUSHOBJ_vInit(EBRUSHOBJ *pebo,
         pebo->ppalDC = gppalDefault;
     GDIOBJ_vReferenceObjectByPointer(&pebo->ppalDC->BaseObject);
     pebo->ppalDIB = NULL;
+
+    /* Remember the palette modification times this realization is based on, so
+     * a later palette change (e.g. SetPaletteEntries) can be detected and the
+     * brush re-realized. */
+    pebo->ulDCPalTime = pebo->ppalDC->ulTime;
+    pebo->ulSurfPalTime = pebo->ppalSurf->ulTime;
+
+    /* Initialize 1 bpp fore and back colors. These feed pattern brush
+     * realization (e.g. hatch fore/back), so resolve PALETTEINDEX etc. to RGB
+     * now that the palettes are set up. */
+    pebo->crCurrentBack = EBRUSHOBJ_crResolveColorRef(pebo, crBackgroundClr);
+    pebo->crCurrentText = EBRUSHOBJ_crResolveColorRef(pebo, crForegroundClr);
 
     if (pbrush->flAttrs & BR_IS_NULL)
     {
@@ -103,7 +160,8 @@ EBRUSHOBJ_vInit(EBRUSHOBJ *pebo,
 
         /* Use foreground color of hatch brushes */
         if (pbrush->flAttrs & BR_IS_HATCH)
-            pebo->crCurrentText = pbrush->BrushAttr.lbColor;
+            pebo->crCurrentText =
+                EBRUSHOBJ_crResolveColorRef(pebo, pbrush->BrushAttr.lbColor);
     }
 }
 

@@ -47,6 +47,8 @@ typedef struct _PALETTE
     ULONG ulGreenShift;
     ULONG ulBlueShift;
     HDEV  hPDev;
+    ULONG ulTime;   // Bumped whenever the palette entries change, so cached
+                    // brush realizations (EBRUSHOBJ) can detect staleness.
     PALETTEENTRY apalColors[0];
 } PALETTE, *PPALETTE;
 

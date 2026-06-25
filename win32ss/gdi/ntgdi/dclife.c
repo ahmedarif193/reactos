@@ -510,6 +510,22 @@ DC_vPrepareDCsForBlit(
 {
     PDC pdcFirst, pdcSecond;
     const RECT *prcFirst, *prcSecond;
+    PPALETTE ppalDC = pdcDest->dclevel.ppal;
+
+    /* If the DC palette entries changed since a brush was realized (e.g. by
+     * SetPaletteEntries), any cached PALETTEINDEX color resolution is stale.
+     * Mark the affected brushes dirty so they get re-realized below. */
+    if (ppalDC != NULL)
+    {
+        if (pdcDest->eboFill.ulDCPalTime != ppalDC->ulTime)
+            pdcDest->pdcattr->ulDirty_ |= DIRTY_FILL;
+        if (pdcDest->eboLine.ulDCPalTime != ppalDC->ulTime)
+            pdcDest->pdcattr->ulDirty_ |= DIRTY_LINE;
+        if (pdcDest->eboText.ulDCPalTime != ppalDC->ulTime)
+            pdcDest->pdcattr->ulDirty_ |= DIRTY_TEXT;
+        if (pdcDest->eboBackground.ulDCPalTime != ppalDC->ulTime)
+            pdcDest->pdcattr->ulDirty_ |= DIRTY_BACKGROUND;
+    }
 
     /* Update brushes */
     if (pdcDest->pdcattr->ulDirty_ & (DIRTY_FILL | DC_BRUSH_DIRTY))

@@ -11,12 +11,34 @@
 #define NDEBUG
 #include <debug.h>
 
+/*
+ * Returns TRUE if the palettes that a cached brush realization (pebo) was based
+ * on have been modified since (e.g. by SetPaletteEntries). In that case the
+ * realization is stale and must be rebuilt so PALETTEINDEX colors resolve
+ * against the current palette entries.
+ */
+static
+__inline
+BOOL
+DC_bPaletteStale(PDC pdc, PEBRUSHOBJ pebo)
+{
+    if (pdc->dclevel.ppal && (pdc->dclevel.ppal->ulTime != pebo->ulDCPalTime))
+        return TRUE;
+    if (pebo->ppalSurf && (pebo->ppalSurf->ulTime != pebo->ulSurfPalTime))
+        return TRUE;
+    return FALSE;
+}
+
 VOID
 FASTCALL
 DC_vUpdateFillBrush(PDC pdc)
 {
     PDC_ATTR pdcattr = pdc->pdcattr;
     PBRUSH pbrFill;
+
+    /* Re-realize if the palette changed under us */
+    if (DC_bPaletteStale(pdc, &pdc->eboFill))
+        pdcattr->ulDirty_ |= DIRTY_FILL;
 
     /* Check if the brush handle has changed */
     if (pdcattr->hbrush != pdc->dclevel.pbrFill->BaseObject.hHmgr)
@@ -63,6 +85,10 @@ DC_vUpdateLineBrush(PDC pdc)
 {
     PDC_ATTR pdcattr = pdc->pdcattr;
     PBRUSH pbrLine;
+
+    /* Re-realize if the palette changed under us */
+    if (DC_bPaletteStale(pdc, &pdc->eboLine))
+        pdcattr->ulDirty_ |= DIRTY_LINE;
 
     /* Check if the pen handle has changed */
     if (pdcattr->hpen != pdc->dclevel.pbrLine->BaseObject.hHmgr)
