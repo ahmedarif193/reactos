@@ -1321,9 +1321,12 @@ IntGdiFillRgn(
     /* Check if we have a fill brush */
     if (pbrFill != NULL)
     {
-        /* Initialize the brush object */
-        /// \todo Check parameters
-        EBRUSHOBJ_vInit(&eboFill, pbrFill, pdc->dclevel.pSurface, 0x00FFFFFF, 0, NULL);
+        /* Initialize the brush object from the DC so that pattern / hatch
+         * brushes (e.g. a brushed geometric pen) are realized with the DC's
+         * current text and background colours and palette, matching Windows.
+         * For solid brushes the colour comes from the brush itself, so this is
+         * equivalent to the previous hard-coded initialization. */
+        EBRUSHOBJ_vInitFromDC(&eboFill, pbrFill, pdc);
         pbo = &eboFill.BrushObject;
     }
     else
@@ -1344,6 +1347,11 @@ IntGdiFillRgn(
                        mix);
 
     DC_vFinishBlit(pdc, NULL);
+
+    /* Release the palette references taken by EBRUSHOBJ_vInitFromDC */
+    if (pbrFill != NULL)
+        EBRUSHOBJ_vCleanup(&eboFill);
+
     REGION_Delete(prgnClip);
     IntEngFreeClipResources(&xcoClip);
 
