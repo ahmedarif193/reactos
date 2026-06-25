@@ -584,7 +584,7 @@ ExpBoostOwnerThread(IN PKTHREAD Thread,
             (OwnerThread->Priority < 14))
         {
             /* Acquire the thread lock */
-            KiAcquireThreadLock(Thread);
+            KiAcquireThreadLock(OwnerThread);
 
             /* Set the new priority */
             OwnerThread->PriorityDecrement += 14 - OwnerThread->Priority;
@@ -596,7 +596,7 @@ ExpBoostOwnerThread(IN PKTHREAD Thread,
             KiSetPriorityThread(OwnerThread, 14);
 
             /* Release the thread lock */
-            KiReleaseThreadLock(Thread);
+            KiReleaseThreadLock(OwnerThread);
         }
     }
 }
