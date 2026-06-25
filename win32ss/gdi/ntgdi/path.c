@@ -1605,6 +1605,602 @@ PATH_FillPathEx(
     return TRUE;
 }
 
+/******************************************************************************
+ * Wide / geometric pen stroking by region union.
+ *
+ * This is a faithful port of Wine's win32u dibdrv wide-pen code
+ * (dlls/win32u/dibdrv/objects.c: wide_pen_lines and helpers).  Wine is the
+ * pixel-exact oracle for the gdi32:dib winetests, so we reproduce its integer
+ * arithmetic exactly.  Each line segment, end cap and join is turned into a
+ * region; all are unioned (RGN_OR) into a single total region that is then
+ * filled with the pen brush.  The points come from the flattened path and are
+ * already in device coordinates (relative to the DC, the DC origin is added
+ * later by IntGdiFillRgn).
+ *****************************************************************************/
+
+#ifndef w_round
+#define w_round(f) (((f) > 0) ? (LONG)((f) + 0.5) : (LONG)((f) - 0.5))
+#endif
+
+typedef struct _STROKE_FACE
+{
+    POINT start, end;
+    INT dx, dy;
+} STROKE_FACE;
+
+typedef struct _WIDEPEN_INFO
+{
+    INT     pen_width;
+    DWORD   pen_endcap;     /* PS_ENDCAP_* */
+    DWORD   pen_join;       /* PS_JOIN_* */
+    FLOAT   miter_limit;
+} WIDEPEN_INFO;
+
+/* Allocate an empty (locked) temporary region. */
+static
+PREGION
+PATH_AllocTempRgn(VOID)
+{
+    return REGION_AllocRgnWithHandle(0);
+}
+
+/* OR a 4 or 5 point polygon (ALTERNATE) into total. */
+static
+VOID
+PATH_OrPolygonRgn(PREGION total, const POINT *pts, INT count)
+{
+    ULONG cnt = (ULONG)count;
+    PREGION seg = PATH_AllocTempRgn();
+    if (seg == NULL) return;
+
+    if (REGION_SetPolyPolygonRgn(seg, pts, &cnt, 1, ALTERNATE))
+        IntGdiCombineRgn(total, total, seg, RGN_OR);
+
+    REGION_Delete(seg);
+}
+
+/* Wine create_miter_region.  Returns a temp region, or NULL if the miter is
+ * past the limit / degenerate (caller falls back to a bevel). */
+static
+PREGION
+PATH_CreateMiterRgn(const WIDEPEN_INFO *pi, const POINT *pt,
+                    const STROKE_FACE *face_1, const STROKE_FACE *face_2)
+{
+    INT det = face_1->dx * face_2->dy - face_1->dy * face_2->dx;
+    POINT pt_1, pt_2, pts[5];
+    PREGION rgn;
+    double a, b, x, y;
+
+    if (det == 0) return NULL;
+
+    if (det < 0)
+    {
+        const STROKE_FACE *tmp = face_1;
+        face_1 = face_2;
+        face_2 = tmp;
+        det = -det;
+    }
+
+    pt_1 = face_1->start;
+    pt_2 = face_2->end;
+
+    a = (double)(pt_2.x * face_2->dy - pt_2.y * face_2->dx) / det;
+    b = (double)(pt_1.x * face_1->dy - pt_1.y * face_1->dx) / det;
+
+    x = a * face_1->dx - b * face_2->dx;
+    y = a * face_1->dy - b * face_2->dy;
+
+    if (((x - pt->x) * (x - pt->x) + (y - pt->y) * (y - pt->y)) * 4 >
+        (double)pi->miter_limit * pi->miter_limit * pi->pen_width * pi->pen_width)
+        return NULL;
+
+    pts[0] = face_2->start;
+    pts[1] = face_1->start;
+    pts[2].x = w_round(x);
+    pts[2].y = w_round(y);
+    pts[3] = face_2->end;
+    pts[4] = face_1->end;
+
+    rgn = PATH_AllocTempRgn();
+    if (rgn == NULL) return NULL;
+
+    {
+        ULONG cnt = 5;
+        if (!REGION_SetPolyPolygonRgn(rgn, pts, &cnt, 1, ALTERNATE))
+        {
+            REGION_Delete(rgn);
+            return NULL;
+        }
+    }
+    return rgn;
+}
+
+/* Wine add_cap.  round_cap is the (locked) elliptic cap region centred at the
+ * origin, or NULL for flat/square caps. */
+static
+VOID
+PATH_AddCap(const WIDEPEN_INFO *pi, PREGION total, PREGION round_cap, const POINT *pt)
+{
+    switch (pi->pen_endcap)
+    {
+    case PS_ENDCAP_ROUND:
+        if (round_cap == NULL) return;
+        REGION_bOffsetRgn(round_cap, pt->x, pt->y);
+        IntGdiCombineRgn(total, total, round_cap, RGN_OR);
+        REGION_bOffsetRgn(round_cap, -pt->x, -pt->y);
+        return;
+
+    case PS_ENDCAP_SQUARE: /* already been handled in the segment */
+    case PS_ENDCAP_FLAT:
+    default:
+        return;
+    }
+}
+
+/* Wine add_join. */
+static
+VOID
+PATH_AddJoin(const WIDEPEN_INFO *pi, PREGION total, PREGION round_cap, const POINT *pt,
+             const STROKE_FACE *face_1, const STROKE_FACE *face_2)
+{
+    PREGION join;
+    POINT pts[4];
+
+    switch (pi->pen_join)
+    {
+    case PS_JOIN_ROUND:
+        if (round_cap == NULL) return;
+        REGION_bOffsetRgn(round_cap, pt->x, pt->y);
+        IntGdiCombineRgn(total, total, round_cap, RGN_OR);
+        REGION_bOffsetRgn(round_cap, -pt->x, -pt->y);
+        return;
+
+    case PS_JOIN_MITER:
+        join = PATH_CreateMiterRgn(pi, pt, face_1, face_2);
+        if (join != NULL) break;
+        /* fall through to bevel */
+    case PS_JOIN_BEVEL:
+    default:
+        pts[0] = face_1->start;
+        pts[1] = face_2->end;
+        pts[2] = face_1->end;
+        pts[3] = face_2->start;
+        join = PATH_AllocTempRgn();
+        if (join == NULL) return;
+        {
+            ULONG cnt = 4;
+            if (!REGION_SetPolyPolygonRgn(join, pts, &cnt, 1, ALTERNATE))
+            {
+                REGION_Delete(join);
+                return;
+            }
+        }
+        break;
+    }
+
+    IntGdiCombineRgn(total, total, join, RGN_OR);
+    REGION_Delete(join);
+}
+
+/* Wine wide_line_segment.  Builds one segment region and ORs it into total;
+ * fills face_1/face_2 (start of segment / end of segment) for joins. */
+static
+BOOL
+PATH_WideLineSegment(const WIDEPEN_INFO *pi, PREGION total,
+                     const POINT *pt_1, const POINT *pt_2, INT dx, INT dy,
+                     BOOL need_cap_1, BOOL need_cap_2,
+                     STROKE_FACE *face_1, STROKE_FACE *face_2)
+{
+    RECTL rect;
+    BOOL sq_cap_1 = need_cap_1 && (pi->pen_endcap == PS_ENDCAP_SQUARE);
+    BOOL sq_cap_2 = need_cap_2 && (pi->pen_endcap == PS_ENDCAP_SQUARE);
+
+    if (dx == 0 && dy == 0) return FALSE;
+
+    if (dy == 0)
+    {
+        rect.left = min(pt_1->x, pt_2->x);
+        rect.right = max(pt_1->x, pt_2->x);
+        rect.top = pt_1->y - pi->pen_width / 2;
+        rect.bottom = rect.top + pi->pen_width;
+        if ((sq_cap_1 && dx > 0) || (sq_cap_2 && dx < 0)) rect.left  -= pi->pen_width / 2;
+        if ((sq_cap_2 && dx > 0) || (sq_cap_1 && dx < 0)) rect.right += pi->pen_width / 2;
+        REGION_UnionRectWithRgn(total, &rect);
+        if (dx > 0)
+        {
+            face_1->start.x = face_1->end.x   = rect.left;
+            face_1->start.y = face_2->end.y   = rect.bottom;
+            face_1->end.y   = face_2->start.y = rect.top;
+            face_2->start.x = face_2->end.x   = rect.right - 1;
+        }
+        else
+        {
+            face_1->start.x = face_1->end.x   = rect.right;
+            face_1->start.y = face_2->end.y   = rect.top;
+            face_1->end.y   = face_2->start.y = rect.bottom;
+            face_2->start.x = face_2->end.x   = rect.left + 1;
+        }
+    }
+    else if (dx == 0)
+    {
+        rect.top = min(pt_1->y, pt_2->y);
+        rect.bottom = max(pt_1->y, pt_2->y);
+        rect.left = pt_1->x - pi->pen_width / 2;
+        rect.right = rect.left + pi->pen_width;
+        if ((sq_cap_1 && dy > 0) || (sq_cap_2 && dy < 0)) rect.top    -= pi->pen_width / 2;
+        if ((sq_cap_2 && dy > 0) || (sq_cap_1 && dy < 0)) rect.bottom += pi->pen_width / 2;
+        REGION_UnionRectWithRgn(total, &rect);
+        if (dy > 0)
+        {
+            face_1->start.x = face_2->end.x   = rect.left;
+            face_1->start.y = face_1->end.y   = rect.top;
+            face_1->end.x   = face_2->start.x = rect.right;
+            face_2->start.y = face_2->end.y   = rect.bottom - 1;
+        }
+        else
+        {
+            face_1->start.x = face_2->end.x   = rect.right;
+            face_1->start.y = face_1->end.y   = rect.bottom;
+            face_1->end.x   = face_2->start.x = rect.left;
+            face_2->start.y = face_2->end.y   = rect.top + 1;
+        }
+    }
+    else
+    {
+        double len = sqrt((double)dx * dx + (double)dy * dy);
+        double width_x, width_y;
+        POINT seg_pts[4];
+        POINT wide_half, narrow_half;
+
+        width_x = (double)pi->pen_width * abs(dy) / len;
+        width_y = (double)pi->pen_width * abs(dx) / len;
+
+        narrow_half.x = w_round(width_x / 2);
+        narrow_half.y = w_round(width_y / 2);
+        wide_half.x   = w_round((width_x + 1) / 2);
+        wide_half.y   = w_round((width_y + 1) / 2);
+
+        if (dx < 0)
+        {
+            wide_half.y   = -wide_half.y;
+            narrow_half.y = -narrow_half.y;
+        }
+
+        if (dy < 0)
+        {
+            POINT tmp = narrow_half; narrow_half = wide_half; wide_half = tmp;
+            wide_half.x   = -wide_half.x;
+            narrow_half.x = -narrow_half.x;
+        }
+
+        seg_pts[0].x = pt_1->x - narrow_half.x;
+        seg_pts[0].y = pt_1->y + narrow_half.y;
+        seg_pts[1].x = pt_1->x + wide_half.x;
+        seg_pts[1].y = pt_1->y - wide_half.y;
+        seg_pts[2].x = pt_2->x + wide_half.x;
+        seg_pts[2].y = pt_2->y - wide_half.y;
+        seg_pts[3].x = pt_2->x - narrow_half.x;
+        seg_pts[3].y = pt_2->y + narrow_half.y;
+
+        if (sq_cap_1)
+        {
+            seg_pts[0].x -= narrow_half.y;
+            seg_pts[1].x -= narrow_half.y;
+            seg_pts[0].y -= narrow_half.x;
+            seg_pts[1].y -= narrow_half.x;
+        }
+
+        if (sq_cap_2)
+        {
+            seg_pts[2].x += wide_half.y;
+            seg_pts[3].x += wide_half.y;
+            seg_pts[2].y += wide_half.x;
+            seg_pts[3].y += wide_half.x;
+        }
+
+        PATH_OrPolygonRgn(total, seg_pts, 4);
+
+        face_1->start = seg_pts[0];
+        face_1->end   = seg_pts[1];
+        face_2->start = seg_pts[2];
+        face_2->end   = seg_pts[3];
+    }
+
+    face_1->dx = face_2->dx = dx;
+    face_1->dy = face_2->dy = dy;
+
+    return TRUE;
+}
+
+/* Wine wide_line_segments. */
+static
+VOID
+PATH_WideLineSegments(const WIDEPEN_INFO *pi, INT num, const POINT *pts, BOOL close,
+                      INT start, INT count, const POINT *first_pt, const POINT *last_pt,
+                      PREGION round_cap, PREGION total)
+{
+    INT i;
+    STROKE_FACE face_1, face_2, prev_face, first_face;
+    const POINT *pt_1, *pt_2;
+
+    if (!close)
+    {
+        PATH_AddCap(pi, total, round_cap, first_pt);
+        PATH_AddCap(pi, total, round_cap, last_pt);
+    }
+
+    if (count == 1)
+    {
+        pt_1 = &pts[start];
+        pt_2 = &pts[(start + 1) % num];
+        PATH_WideLineSegment(pi, total, first_pt, last_pt, pt_2->x - pt_1->x, pt_2->y - pt_1->y,
+                             TRUE, TRUE, &face_1, &face_2);
+        return;
+    }
+
+    pt_1 = &pts[start];
+    pt_2 = &pts[(start + 1) % num];
+    PATH_WideLineSegment(pi, total, first_pt, pt_2, pt_2->x - pt_1->x, pt_2->y - pt_1->y,
+                         !close, FALSE, &first_face, &prev_face);
+
+    for (i = 1; i < count - 1; i++)
+    {
+        pt_1 = &pts[(start + i) % num];
+        pt_2 = &pts[(start + i + 1) % num];
+        if (PATH_WideLineSegment(pi, total, pt_1, pt_2, pt_2->x - pt_1->x, pt_2->y - pt_1->y,
+                                 FALSE, FALSE, &face_1, &face_2))
+        {
+            PATH_AddJoin(pi, total, round_cap, pt_1, &prev_face, &face_1);
+            prev_face = face_2;
+        }
+    }
+
+    pt_1 = &pts[(start + count - 1) % num];
+    pt_2 = &pts[(start + count) % num];
+    PATH_WideLineSegment(pi, total, pt_1, last_pt, pt_2->x - pt_1->x, pt_2->y - pt_1->y,
+                         FALSE, !close, &face_1, &face_2);
+    PATH_AddJoin(pi, total, round_cap, pt_1, &prev_face, &face_1);
+    if (close) PATH_AddJoin(pi, total, round_cap, last_pt, &face_2, &first_face);
+}
+
+/* Wine wide_pen_lines: stroke a single (sub)figure (num points) into total. */
+static
+VOID
+PATH_WidePenLines(const WIDEPEN_INFO *pi, INT num, POINT *pts, BOOL close, PREGION total)
+{
+    PREGION round_cap = NULL;
+    HRGN hCap = NULL;
+
+    if (num < 2) return;
+
+    /* skip empty segments */
+    while (num > 2 && pts[0].x == pts[1].x && pts[0].y == pts[1].y) { pts++; num--; }
+    while (num > 2 && pts[num - 1].x == pts[num - 2].x && pts[num - 1].y == pts[num - 2].y) num--;
+
+    if (pi->pen_join == PS_JOIN_ROUND || pi->pen_endcap == PS_ENDCAP_ROUND)
+    {
+        hCap = NtGdiCreateEllipticRgn(-(pi->pen_width / 2), -(pi->pen_width / 2),
+                                      (pi->pen_width + 1) / 2 + 1, (pi->pen_width + 1) / 2 + 1);
+        if (hCap != NULL)
+            round_cap = REGION_LockRgn(hCap);
+    }
+
+    if (close)
+        PATH_WideLineSegments(pi, num, pts, TRUE, 0, num, &pts[0], &pts[0], round_cap, total);
+    else
+        PATH_WideLineSegments(pi, num, pts, FALSE, 0, num - 1, &pts[0], &pts[num - 1], round_cap, total);
+
+    if (round_cap != NULL)
+    {
+        REGION_UnlockRgn(round_cap);
+        GreDeleteObject(hCap);
+    }
+}
+
+/*
+ * IntGdiStrokeWidePathRegion
+ *
+ * Builds the union region for a wide/geometric pen stroke of the (flattened)
+ * path pPath, faithfully reproducing Wine's wide_pen_lines.  Returns a locked
+ * PREGION (caller deletes), or NULL on failure / empty result.
+ */
+static
+PREGION
+FASTCALL
+IntGdiStrokeWidePathRegion(DC *dc, PPATH pPath, const WIDEPEN_INFO *pi)
+{
+    PREGION total;
+    PPATH flat_path;
+    POINT *figPts = NULL;
+    INT figAlloc = 0;
+    INT i, figStart;
+    KFLOATING_SAVE fpsave;
+    NTSTATUS status;
+
+    if (!(flat_path = PATH_FlattenPath(pPath)))
+    {
+        ERR("IntGdiStrokeWidePathRegion: PATH_FlattenPath failed\n");
+        return NULL;
+    }
+
+    if (flat_path->numEntriesUsed < 2)
+    {
+        HPATH h = flat_path->BaseObject.hHmgr;
+        PATH_UnlockPath(flat_path);
+        PATH_Delete(h);
+        return NULL;
+    }
+
+    total = PATH_AllocTempRgn();
+    if (total == NULL)
+    {
+        HPATH h = flat_path->BaseObject.hHmgr;
+        PATH_UnlockPath(flat_path);
+        PATH_Delete(h);
+        return NULL;
+    }
+
+    figAlloc = flat_path->numEntriesUsed + 1;
+    figPts = ExAllocatePoolWithTag(PagedPool, figAlloc * sizeof(POINT), TAG_PATH);
+    if (figPts == NULL)
+    {
+        HPATH h = flat_path->BaseObject.hHmgr;
+        REGION_Delete(total);
+        PATH_UnlockPath(flat_path);
+        PATH_Delete(h);
+        return NULL;
+    }
+
+    status = KeSaveFloatingPointState(&fpsave);
+    if (!NT_SUCCESS(status))
+    {
+        HPATH h = flat_path->BaseObject.hHmgr;
+        ExFreePoolWithTag(figPts, TAG_PATH);
+        REGION_Delete(total);
+        PATH_UnlockPath(flat_path);
+        PATH_Delete(h);
+        return NULL;
+    }
+
+    /* Walk the path one figure at a time.  A figure starts at PT_MOVETO and
+     * ends just before the next PT_MOVETO (or end of path).  A figure is
+     * "closed" if any of its points carry PT_CLOSEFIGURE; otherwise it is an
+     * open polyline (LineTo / Polyline) that gets end caps. */
+    figStart = 0;
+    for (i = 0; i <= flat_path->numEntriesUsed; i++)
+    {
+        BOOL atEnd = (i == flat_path->numEntriesUsed);
+        BOOL isMove = !atEnd && (flat_path->pFlags[i] == PT_MOVETO);
+
+        if ((atEnd || isMove) && i > figStart)
+        {
+            INT n = i - figStart;
+            BOOL closed = FALSE;
+            INT k;
+
+            for (k = figStart; k < i; k++)
+            {
+                if (flat_path->pFlags[k] & PT_CLOSEFIGURE)
+                {
+                    closed = TRUE;
+                    break;
+                }
+            }
+
+            RtlCopyMemory(figPts, &flat_path->pPoints[figStart], n * sizeof(POINT));
+
+            /* A closed figure whose last point coincides with the first is
+             * represented in the path with an explicit duplicate; Wine treats
+             * the close implicitly, so drop a trailing duplicate point. */
+            if (closed && n >= 2 &&
+                figPts[n - 1].x == figPts[0].x && figPts[n - 1].y == figPts[0].y)
+            {
+                n--;
+            }
+
+            if (n >= 2)
+                PATH_WidePenLines(pi, n, figPts, closed, total);
+
+            figStart = i;
+        }
+        else if (isMove && i == figStart)
+        {
+            /* leading MOVETO of a new figure, keep figStart */
+        }
+    }
+
+    KeRestoreFloatingPointState(&fpsave);
+
+    ExFreePoolWithTag(figPts, TAG_PATH);
+
+    {
+        HPATH h = flat_path->BaseObject.hHmgr;
+        PATH_UnlockPath(flat_path);
+        PATH_Delete(h);
+    }
+
+    return total;
+}
+
+/*
+ * PATH_StrokeWidePen
+ *
+ * Stroke the path with the current (wide / geometric) pen by building a union
+ * region and filling it with the pen brush.  Mirrors PATH_FillPathEx's
+ * MM_TEXT / identity-transform dance so that IntGdiFillRgn (which does an
+ * LP->DP transform) leaves the device-space points untouched.
+ *
+ * Returns TRUE on success, FALSE to fall back to the legacy outline widener.
+ */
+static
+BOOL
+FASTCALL
+PATH_StrokeWidePen(DC *dc, PPATH pPath, PBRUSH pbrLine)
+{
+    WIDEPEN_INFO pi;
+    PREGION prgn;
+    PDC_ATTR pdcattr = dc->pdcattr;
+    INT mapMode, graphicsMode;
+    SIZE ptViewportExt, ptWindowExt;
+    POINTL ptViewportOrg, ptWindowOrg;
+    XFORML xform;
+    DWORD penStyle;
+
+    penStyle = pbrLine->ulPenStyle;
+
+    pi.pen_width   = (INT)pbrLine->lWidth;
+    if (pi.pen_width < 1) pi.pen_width = 1;
+    pi.miter_limit = dc->dclevel.laPath.eMiterLimit;
+    if (pi.miter_limit < 1.0f) pi.miter_limit = 10.0f;
+
+    /* Old-style (CreatePen) wide pens use round caps and round joins on
+     * Windows.  For these PS_ENDCAP_MASK/PS_JOIN_MASK of a plain LOGPEN style
+     * (PS_SOLID == 0) already evaluate to PS_ENDCAP_ROUND / PS_JOIN_ROUND, so
+     * the mask extraction below yields the correct result for both pen kinds. */
+    pi.pen_endcap = penStyle & PS_ENDCAP_MASK;
+    pi.pen_join   = penStyle & PS_JOIN_MASK;
+
+    prgn = IntGdiStrokeWidePathRegion(dc, pPath, &pi);
+    if (prgn == NULL)
+        return FALSE;
+
+    /* Save mapping mode / world transform and switch to a 1:1 identity DC so
+     * that the already-device-space region is not transformed again. */
+    mapMode = pdcattr->iMapMode;
+    ptViewportExt = *DC_pszlViewportExt(dc);
+    ptViewportOrg = pdcattr->ptlViewportOrg;
+    ptWindowExt = pdcattr->szlWindowExt;
+    ptWindowOrg = pdcattr->ptlWindowOrg;
+    MatrixS2XForm(&xform, &dc->pdcattr->mxWorldToPage);
+
+    pdcattr->iMapMode = MM_TEXT;
+    pdcattr->ptlViewportOrg.x = 0;
+    pdcattr->ptlViewportOrg.y = 0;
+    pdcattr->ptlWindowOrg.x = 0;
+    pdcattr->ptlWindowOrg.y = 0;
+    graphicsMode = pdcattr->iGraphicsMode;
+    pdcattr->iGraphicsMode = GM_ADVANCED;
+    GreModifyWorldTransform(dc, (XFORML*)&xform, MWT_IDENTITY);
+    pdcattr->iGraphicsMode = graphicsMode;
+
+    IntGdiFillRgn(dc, prgn, pbrLine);
+
+    REGION_Delete(prgn);
+
+    /* Restore the mapping mode / world transform. */
+    pdcattr->iMapMode = mapMode;
+    pdcattr->szlViewportExt = ptViewportExt;
+    pdcattr->ptlViewportOrg = ptViewportOrg;
+    pdcattr->szlWindowExt = ptWindowExt;
+    pdcattr->ptlWindowOrg = ptWindowOrg;
+    graphicsMode = pdcattr->iGraphicsMode;
+    pdcattr->iGraphicsMode = GM_ADVANCED;
+    GreModifyWorldTransform(dc, (XFORML*)&xform, MWT_SET);
+    pdcattr->iGraphicsMode = graphicsMode;
+
+    return TRUE;
+}
+
 BOOL
 FASTCALL
 PATH_StrokePath(
@@ -1627,6 +2223,11 @@ PATH_StrokePath(
     pbrLine = dc->dclevel.pbrLine;
     if (IntIsEffectiveWidePen(pbrLine))
     {
+        /* Pixel-exact (Wine-compatible) wide pen stroking via region union. */
+        if (PATH_StrokeWidePen(dc, pPath, pbrLine))
+            return TRUE;
+
+        /* Fall back to the legacy outline widener if the region build failed. */
         pNewPath = PATH_WidenPathEx(dc, pPath);
         if (pNewPath)
         {
