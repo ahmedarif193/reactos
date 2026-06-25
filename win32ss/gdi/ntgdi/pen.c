@@ -174,6 +174,20 @@ IntGdiExtCreatePen(
     pbrushPen->ulStyleSize = 0;
     pbrushPen->flAttrs = bOldStylePen ? BR_IS_OLDSTYLEPEN : BR_IS_PEN;
 
+    /* For a geometric pen created with a pattern brush (BS_PATTERN), realize
+       the brush bitmap so the stroke is filled with a tiled pattern rather
+       than the (ignored) solid color. Mirrors NtGdiCreatePatternBrushInternal. */
+    if (ulBrushStyle == BS_PATTERN)
+    {
+        HBITMAP hbmPattern = BITMAP_CopyBitmap((HBITMAP)ulClientHatch);
+        if (hbmPattern != NULL)
+        {
+            GreSetBitmapOwner(hbmPattern, GDI_OBJ_HMGR_POWNED);
+            pbrushPen->hbmPattern = hbmPattern;
+            pbrushPen->flAttrs |= BR_IS_BITMAP;
+        }
+    }
+
     switch (dwPenStyle & PS_STYLE_MASK)
     {
     case PS_NULL:
@@ -251,6 +265,13 @@ IntGdiExtCreatePen(
         {
             pbrushPen->ulStyleSize += pbrushPen->pStyle[i];
         }
+    }
+
+    /* A realized pattern brush must not also be treated as solid: the dash
+       style switch above (e.g. PS_SOLID) sets BR_IS_SOLID, so drop it here. */
+    if (pbrushPen->flAttrs & BR_IS_BITMAP)
+    {
+        pbrushPen->flAttrs &= ~BR_IS_SOLID;
     }
 
     NT_ASSERT((pbrushPen->dwStyleCount == 0) || (pbrushPen->pStyle != NULL));

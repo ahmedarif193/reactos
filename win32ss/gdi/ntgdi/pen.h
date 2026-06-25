@@ -30,8 +30,14 @@ PEN_GetObject(
 
 VOID FASTCALL AddPenLinesBounds(PDC,int,POINT *);
 
+/* A pen is stroked through the wide-pen region path when it is wider than a
+ * single pixel, OR when it is a geometric pen whose fill is a pattern/hatch
+ * brush.  The latter is required even at width 1 because Windows fills a
+ * brushed geometric pen with its brush pattern, whereas the thin single-pixel
+ * line path would draw it with the (solid) realized line colour instead. */
 #define IntIsEffectiveWidePen(pbrLine) ( \
-    (pbrLine)->lWidth > 1 && \
-    ((pbrLine->flAttrs & BR_IS_OLDSTYLEPEN) || \
-     ((pbrLine)->ulPenStyle & PS_TYPE_MASK) == PS_GEOMETRIC) \
+    (((pbrLine->flAttrs & BR_IS_OLDSTYLEPEN) || \
+      ((pbrLine)->ulPenStyle & PS_TYPE_MASK) == PS_GEOMETRIC)) && \
+    ((pbrLine)->lWidth > 1 || \
+     ((pbrLine)->flAttrs & (BR_IS_BITMAP | BR_IS_DIB | BR_IS_HATCH))) \
 )
