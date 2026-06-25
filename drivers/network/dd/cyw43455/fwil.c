@@ -42,17 +42,79 @@ CywSdpcmSendCtl(
     Frame[1] = (UCHAR)((Total >> 8) & 0xFF);
     Frame[2] = (UCHAR)(~Frame[0]);
     Frame[3] = (UCHAR)(~Frame[1]);
-    Frame[4] = Adapter->TxSeq;
     Frame[5] = SDPCM_CHANNEL_CONTROL;
     Frame[7] = SDPCM_HEADER_LEN;
 
     RtlCopyMemory(Frame + SDPCM_HEADER_LEN, Data, Length);
 
+    KeWaitForSingleObject(&Adapter->F2Lock, Executive, KernelMode, FALSE, NULL);
+    Frame[SDPCM_SEQ_OFFSET] = Adapter->TxSeq;
     Status = CywSdioWriteBytes(Adapter, CYW_SDIO_FUNC_RADIO, SDIO_F2_FIFO, Frame, Padded);
     if (NT_SUCCESS(Status))
     {
         Adapter->TxSeq++;
     }
+    KeReleaseMutex(&Adapter->F2Lock, FALSE);
+    return Status;
+}
+
+static
+VOID
+CywUpdateCredits(
+    _In_ PCYW_ADAPTER Adapter,
+    _In_ PUCHAR Frame)
+{
+    UCHAR Max = Frame[9];
+
+    if ((UCHAR)(Max - Adapter->TxSeq) <= 0x40)
+    {
+        Adapter->TxMax = Max;
+    }
+    Adapter->TxFlow = Frame[8];
+}
+
+NTSTATUS
+CywSdpcmSendData(
+    _In_ PCYW_ADAPTER Adapter,
+    _In_ PUCHAR Eth,
+    _In_ ULONG EthLen)
+{
+    PUCHAR Frame = Adapter->TxBuffer;
+    ULONG Total = SDPCM_HEADER_LEN + BCDC_HEADER_LEN + EthLen;
+    ULONG Padded = ALIGN_UP(Total, ULONG);
+    UCHAR Avail;
+    NTSTATUS Status;
+
+    Avail = (UCHAR)(Adapter->TxMax - Adapter->TxSeq);
+    if ((Avail & 0x80) || Avail == 0 || Adapter->TxFlow)
+    {
+        return STATUS_DEVICE_BUSY;
+    }
+
+    if (Padded > CYW_CONTROL_BUFFER_SIZE)
+    {
+        return STATUS_BUFFER_TOO_SMALL;
+    }
+
+    RtlZeroMemory(Frame, SDPCM_HEADER_LEN + BCDC_HEADER_LEN);
+    Frame[0] = (UCHAR)(Total & 0xFF);
+    Frame[1] = (UCHAR)((Total >> 8) & 0xFF);
+    Frame[2] = (UCHAR)(~Frame[0]);
+    Frame[3] = (UCHAR)(~Frame[1]);
+    Frame[5] = SDPCM_CHANNEL_DATA;
+    Frame[7] = SDPCM_HEADER_LEN;
+    Frame[SDPCM_HEADER_LEN] = (UCHAR)(BCDC_PROTO_VER << 4);
+
+    RtlCopyMemory(Frame + SDPCM_HEADER_LEN + BCDC_HEADER_LEN, Eth, EthLen);
+
+    KeWaitForSingleObject(&Adapter->F2Lock, Executive, KernelMode, FALSE, NULL);
+    Frame[SDPCM_SEQ_OFFSET] = Adapter->TxSeq;
+    Status = CywSdioWriteBytes(Adapter, CYW_SDIO_FUNC_RADIO, SDIO_F2_FIFO, Frame, Padded);
+    if (NT_SUCCESS(Status))
+    {
+        Adapter->TxSeq = (UCHAR)(Adapter->TxSeq + 1);
+    }
+    KeReleaseMutex(&Adapter->F2Lock, FALSE);
     return Status;
 }
 
@@ -80,6 +142,7 @@ CywSdpcmRecvCtl(
             if (FrameLen >= SDPCM_HEADER_LEN && FrameLen <= CYW_CONTROL_BUFFER_SIZE &&
                 ((Frame[0] ^ Frame[2]) == 0xFF))
             {
+                CywUpdateCredits(Adapter, Frame);
                 DataOffset = Frame[SDPCM_DOFFSET_OFFSET];
                 if (DataOffset < FrameLen)
                 {
@@ -131,21 +194,26 @@ CywBcdcXfer(
     PUCHAR Msg;
     PCYW_BCDC_DCMD Dcmd;
     ULONG MsgLen = sizeof(CYW_BCDC_DCMD) + Length;
-    ULONG RecvLen;
+    ULONG BufLen = MsgLen + sizeof(CYW_BCDC_DCMD);
+    ULONG RecvLen = 0;
+    ULONG ReqId;
     NTSTATUS Status;
 
-    Msg = CywAllocate(MsgLen + sizeof(CYW_BCDC_DCMD));
+    Msg = CywAllocate(BufLen);
     if (Msg == NULL)
     {
         return STATUS_INSUFFICIENT_RESOURCES;
     }
 
+    KeWaitForSingleObject(&Adapter->CmdLock, Executive, KernelMode, FALSE, NULL);
+
     Adapter->BcdcRequestId++;
+    ReqId = Adapter->BcdcRequestId;
 
     Dcmd = (PCYW_BCDC_DCMD)Msg;
     Dcmd->Cmd = Cmd;
     Dcmd->Len = Length;
-    Dcmd->Flags = (Adapter->BcdcRequestId << BCDC_DCMD_ID_SHIFT) | BCDC_PROTO_VER;
+    Dcmd->Flags = (ReqId << BCDC_DCMD_ID_SHIFT) | BCDC_PROTO_VER;
     if (Set)
     {
         Dcmd->Flags |= BCDC_DCMD_SET;
@@ -157,15 +225,50 @@ CywBcdcXfer(
         RtlCopyMemory(Msg + sizeof(CYW_BCDC_DCMD), Data, Length);
     }
 
-    Status = CywSdpcmSendCtl(Adapter, Msg, MsgLen);
-    if (!NT_SUCCESS(Status))
+    if (Adapter->RxThreadRunning)
     {
-        CywFree(Msg);
-        return Status;
+        LARGE_INTEGER Timeout;
+
+        KeClearEvent(&Adapter->CtrlEvent);
+        Status = CywSdpcmSendCtl(Adapter, Msg, MsgLen);
+        if (NT_SUCCESS(Status))
+        {
+            Timeout.QuadPart = -20000000;
+            Status = KeWaitForSingleObject(&Adapter->CtrlEvent, Executive,
+                                           KernelMode, FALSE, &Timeout);
+            if (Status == STATUS_SUCCESS)
+            {
+                RecvLen = Adapter->CtrlResponseLen;
+                if (RecvLen > BufLen)
+                {
+                    RecvLen = BufLen;
+                }
+                RtlCopyMemory(Msg, Adapter->ControlBuffer, RecvLen);
+
+                Dcmd = (PCYW_BCDC_DCMD)Msg;
+                if (RecvLen >= sizeof(CYW_BCDC_DCMD) &&
+                    ((Dcmd->Flags & BCDC_DCMD_ID_MASK) >> BCDC_DCMD_ID_SHIFT) != ReqId)
+                {
+                    DPRINT1("CYW: BCDC cmd %lu reqid mismatch\n", Cmd);
+                    Status = STATUS_UNSUCCESSFUL;
+                }
+            }
+            else
+            {
+                Status = STATUS_IO_TIMEOUT;
+            }
+        }
+    }
+    else
+    {
+        Status = CywSdpcmSendCtl(Adapter, Msg, MsgLen);
+        if (NT_SUCCESS(Status))
+        {
+            RecvLen = BufLen;
+            Status = CywSdpcmRecvCtl(Adapter, Msg, &RecvLen);
+        }
     }
 
-    RecvLen = MsgLen + sizeof(CYW_BCDC_DCMD);
-    Status = CywSdpcmRecvCtl(Adapter, Msg, &RecvLen);
     if (NT_SUCCESS(Status) && RecvLen >= sizeof(CYW_BCDC_DCMD))
     {
         Dcmd = (PCYW_BCDC_DCMD)Msg;
@@ -185,6 +288,7 @@ CywBcdcXfer(
         }
     }
 
+    KeReleaseMutex(&Adapter->CmdLock, FALSE);
     CywFree(Msg);
     return Status;
 }
@@ -449,10 +553,10 @@ CywAddEscanResult(
     RtlCopyMemory(Entry->Ssid, Bss + 19, SsidLen);
     Entry->SsidLength = SsidLen;
     Entry->BssType = dot11_BSS_type_infrastructure;
-    Entry->Rssi = (LONG)(SHORT)(Bss[78] | (Bss[79] << 8));
+    Entry->Rssi = (LONG)(SHORT)(Bss[76] | (Bss[77] << 8));
     Entry->LinkQuality = (Entry->Rssi >= -50) ? 100 :
                          (Entry->Rssi <= -100) ? 0 : (2 * (Entry->Rssi + 100));
-    Entry->ChannelNumber = (Bss[72] | (Bss[73] << 8)) & 0xFF;
+    Entry->ChannelNumber = (Bss[71] | (Bss[72] << 8)) & 0xFF;
     Entry->CapabilityInformation = (USHORT)(Bss[16] | (Bss[17] << 8));
 
     Adapter->BssCount++;
@@ -552,31 +656,128 @@ CywProcessEvent(
 }
 
 VOID
-CywPollEvents(
-    _In_ PCYW_ADAPTER Adapter)
+CywRxData(
+    _In_ PCYW_ADAPTER Adapter,
+    _In_ PUCHAR Body,
+    _In_ ULONG BodyLen)
 {
-    PUCHAR Frame = Adapter->ControlBuffer;
+    PUCHAR Pay;
+    ULONG Off;
+    ULONG PayLen;
+    ULONG FrameLen;
+    PUCHAR Frame;
+    PCYW_DOT11_HEADER Dot11;
+    PCYW_SNAP_HEADER Snap;
+    PMDL Mdl;
+    PNET_BUFFER_LIST Nbl;
+
+    if (BodyLen < BCDC_HEADER_LEN)
+    {
+        return;
+    }
+
+    Off = BCDC_HEADER_LEN + ((ULONG)Body[3] << 2);
+    if (Off + sizeof(CYW_ETHER_HEADER) > BodyLen)
+    {
+        return;
+    }
+
+    Pay = Body + Off;
+    PayLen = BodyLen - Off;
+
+    FrameLen = sizeof(CYW_DOT11_HEADER) + sizeof(CYW_SNAP_HEADER) +
+               (PayLen - sizeof(CYW_ETHER_HEADER));
+    if (FrameLen > CYW_MAX_FRAME_SIZE)
+    {
+        return;
+    }
+
+    Frame = CywAllocate(FrameLen);
+    if (Frame == NULL)
+    {
+        return;
+    }
+
+    Dot11 = (PCYW_DOT11_HEADER)Frame;
+    RtlZeroMemory(Dot11, sizeof(CYW_DOT11_HEADER));
+    Dot11->FrameControl[0] = CYW_FC0_TYPE_DATA;
+    Dot11->FrameControl[1] = CYW_FC1_FROMDS;
+    RtlCopyMemory(Dot11->Address1, Adapter->CurrentAddress, CYW_ADDRESS_LENGTH);
+    RtlCopyMemory(Dot11->Address2, Adapter->ConnectedBssid, CYW_ADDRESS_LENGTH);
+    RtlCopyMemory(Dot11->Address3, Pay + CYW_ADDRESS_LENGTH, CYW_ADDRESS_LENGTH);
+
+    Snap = (PCYW_SNAP_HEADER)(Frame + sizeof(CYW_DOT11_HEADER));
+    Snap->Dsap = CYW_SNAP_DSAP;
+    Snap->Ssap = CYW_SNAP_SSAP;
+    Snap->Control = CYW_SNAP_CONTROL;
+    Snap->Oui[0] = 0;
+    Snap->Oui[1] = 0;
+    Snap->Oui[2] = 0;
+    Snap->EtherType[0] = Pay[12];
+    Snap->EtherType[1] = Pay[13];
+
+    RtlCopyMemory(Frame + sizeof(CYW_DOT11_HEADER) + sizeof(CYW_SNAP_HEADER),
+                  Pay + sizeof(CYW_ETHER_HEADER),
+                  PayLen - sizeof(CYW_ETHER_HEADER));
+
+    Mdl = NdisAllocateMdl(Adapter->MiniportAdapterHandle, Frame, FrameLen);
+    if (Mdl == NULL)
+    {
+        CywFree(Frame);
+        return;
+    }
+
+    Nbl = NdisAllocateNetBufferAndNetBufferList(Adapter->RxNblPool, 0, 0, Mdl, 0, FrameLen);
+    if (Nbl == NULL)
+    {
+        NdisFreeMdl(Mdl);
+        CywFree(Frame);
+        return;
+    }
+
+    Nbl->SourceHandle = Adapter->MiniportAdapterHandle;
+    NET_BUFFER_LIST_STATUS(Nbl) = NDIS_STATUS_SUCCESS;
+    NET_BUFFER_LIST_NEXT_NBL(Nbl) = NULL;
+
+    NdisMIndicateReceiveNetBufferLists(Adapter->MiniportAdapterHandle, Nbl,
+                                       NDIS_DEFAULT_PORT_NUMBER, 1,
+                                       NDIS_RECEIVE_FLAGS_RESOURCES);
+
+    NdisFreeNetBufferList(Nbl);
+    NdisFreeMdl(Mdl);
+    CywFree(Frame);
+}
+
+static
+VOID
+NTAPI
+CywRxThread(
+    _In_ PVOID Context)
+{
+    PCYW_ADAPTER Adapter = (PCYW_ADAPTER)Context;
+    PUCHAR Frame = Adapter->RxBuffer;
     NTSTATUS Status;
-    ULONG Retry;
     ULONG FrameLen;
     UCHAR Channel;
     ULONG DataOffset;
-    ULONG Events = 0;
 
-    for (Retry = 0; Retry < 2500; Retry++)
+    while (Adapter->RxThreadStop == 0)
     {
+        KeWaitForSingleObject(&Adapter->F2Lock, Executive, KernelMode, FALSE, NULL);
+
         Status = CywSdioReadBytes(Adapter, CYW_SDIO_FUNC_RADIO, SDIO_F2_FIFO,
                                   Frame, SDPCM_HEADER_LEN);
         FrameLen = Frame[0] | (Frame[1] << 8);
-        if (!NT_SUCCESS(Status) || FrameLen < SDPCM_HEADER_LEN ||
-            FrameLen > CYW_CONTROL_BUFFER_SIZE || ((Frame[0] ^ Frame[2]) != 0xFF))
+        if (!NT_SUCCESS(Status) || ((Frame[0] ^ Frame[2]) != 0xFF) ||
+            FrameLen < SDPCM_HEADER_LEN || FrameLen > CYW_CONTROL_BUFFER_SIZE)
         {
-            KeStallExecutionProcessor(2000);
+            KeReleaseMutex(&Adapter->F2Lock, FALSE);
+            KeStallExecutionProcessor(1500);
             continue;
         }
 
-        Channel = Frame[SDPCM_CHANNEL_OFFSET] & 0x0F;
-        DataOffset = Frame[SDPCM_DOFFSET_OFFSET];
+        CywUpdateCredits(Adapter, Frame);
+
         if (FrameLen > SDPCM_HEADER_LEN)
         {
             ULONG Body = ALIGN_UP(FrameLen - SDPCM_HEADER_LEN, ULONG);
@@ -594,12 +795,85 @@ CywPollEvents(
             }
         }
 
-        if (Channel == SDPCM_CHANNEL_EVENT && DataOffset < FrameLen)
+        KeReleaseMutex(&Adapter->F2Lock, FALSE);
+
+        Channel = Frame[SDPCM_CHANNEL_OFFSET] & 0x0F;
+        DataOffset = Frame[SDPCM_DOFFSET_OFFSET];
+        if (DataOffset >= FrameLen)
+        {
+            continue;
+        }
+
+        if (Channel == SDPCM_CHANNEL_CONTROL)
+        {
+            ULONG Payload = FrameLen - DataOffset;
+            RtlCopyMemory(Adapter->ControlBuffer, Frame + DataOffset, Payload);
+            Adapter->CtrlResponseLen = Payload;
+            KeSetEvent(&Adapter->CtrlEvent, IO_NO_INCREMENT, FALSE);
+        }
+        else if (Channel == SDPCM_CHANNEL_EVENT)
         {
             CywProcessEvent(Adapter, Frame + DataOffset, FrameLen - DataOffset);
-            Events++;
+        }
+        else if (Channel == SDPCM_CHANNEL_DATA)
+        {
+            CywRxData(Adapter, Frame + DataOffset, FrameLen - DataOffset);
         }
     }
 
-    DPRINT1("CYW: poll done, %lu events, %lu BSS\n", Events, Adapter->BssCount);
+    PsTerminateSystemThread(STATUS_SUCCESS);
+}
+
+NTSTATUS
+CywStartRxThread(
+    _In_ PCYW_ADAPTER Adapter)
+{
+    HANDLE Handle;
+    NTSTATUS Status;
+
+    Adapter->RxThreadStop = 0;
+    Adapter->RxThread = NULL;
+
+    Status = PsCreateSystemThread(&Handle, THREAD_ALL_ACCESS, NULL, NULL, NULL,
+                                  CywRxThread, Adapter);
+    if (!NT_SUCCESS(Status))
+    {
+        DPRINT1("CYW: RxThread create failed 0x%08lx\n", Status);
+        return Status;
+    }
+
+    Status = ObReferenceObjectByHandle(Handle, THREAD_ALL_ACCESS, *PsThreadType,
+                                       KernelMode, &Adapter->RxThread, NULL);
+    ZwClose(Handle);
+    if (NT_SUCCESS(Status))
+    {
+        Adapter->RxThreadRunning = TRUE;
+    }
+    else
+    {
+        InterlockedExchange(&Adapter->RxThreadStop, 1);
+        Adapter->RxThread = NULL;
+    }
+    return Status;
+}
+
+VOID
+CywStopRxThread(
+    _In_ PCYW_ADAPTER Adapter)
+{
+    if (!Adapter->RxThreadRunning)
+    {
+        return;
+    }
+
+    InterlockedExchange(&Adapter->RxThreadStop, 1);
+
+    if (Adapter->RxThread != NULL)
+    {
+        KeWaitForSingleObject(Adapter->RxThread, Executive, KernelMode, FALSE, NULL);
+        ObDereferenceObject(Adapter->RxThread);
+        Adapter->RxThread = NULL;
+    }
+
+    Adapter->RxThreadRunning = FALSE;
 }

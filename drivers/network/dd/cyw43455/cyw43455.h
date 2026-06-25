@@ -171,6 +171,16 @@ typedef struct _CYW_DLOAD_DATA
 #define CYW_MFP_CAPABLE                 1
 #define CYW_MFP_REQUIRED                2
 
+#define CYW_CRYPTO_ALGO_AES_CCM         4
+#define CYW_WSEC_PRIMARY_KEY            2
+
+#define CYW_FC0_TYPE_DATA               0x08
+#define CYW_FC1_FROMDS                  0x02
+#define CYW_SNAP_DSAP                   0xAA
+#define CYW_SNAP_SSAP                   0xAA
+#define CYW_SNAP_CONTROL                0x03
+#define ETH_P_EAPOL                     0x888E
+
 #define BRCMF_ESCAN_REQ_VERSION         1
 #define WL_ESCAN_ACTION_START           1
 #define WL_ESCAN_ACTION_CONTINUE        2
@@ -295,6 +305,26 @@ typedef struct _CYW_ESCAN_PARAMS_LE
 } CYW_ESCAN_PARAMS_LE, *PCYW_ESCAN_PARAMS_LE;
 #include <poppack.h>
 
+typedef struct _CYW_WSEC_KEY
+{
+    ULONG Index;
+    ULONG Len;
+    UCHAR Data[32];
+    ULONG Pad1[18];
+    ULONG Algo;
+    ULONG Flags;
+    ULONG Pad2[3];
+    ULONG IvInit;
+    ULONG Pad3;
+    struct
+    {
+        ULONG Hi;
+        USHORT Lo;
+    } Rxiv;
+    ULONG Pad4[2];
+    UCHAR Ea[6];
+} CYW_WSEC_KEY, *PCYW_WSEC_KEY;
+
 typedef struct _CYW_BSS
 {
     DOT11_MAC_ADDRESS Bssid;
@@ -334,6 +364,8 @@ typedef struct _CYW_ADAPTER
 
     ULONG BcdcRequestId;
     UCHAR TxSeq;
+    UCHAR TxMax;
+    UCHAR TxFlow;
     PUCHAR ControlBuffer;
     PMDL ControlMdl;
     PUCHAR TxBuffer;
@@ -341,7 +373,9 @@ typedef struct _CYW_ADAPTER
     KEVENT CtrlEvent;
     ULONG CtrlResponseLen;
     BOOLEAN RxThreadRunning;
-    FAST_MUTEX F2Lock;
+    KMUTEX F2Lock;
+    KMUTEX CmdLock;
+    NDIS_HANDLE RxNblPool;
 
     UCHAR PermanentAddress[CYW_ADDRESS_LENGTH];
     UCHAR CurrentAddress[CYW_ADDRESS_LENGTH];
@@ -420,7 +454,10 @@ NTSTATUS CywActivateEvents(_In_ PCYW_ADAPTER Adapter);
 
 NTSTATUS CywScanStart(_In_ PCYW_ADAPTER Adapter, _In_opt_ PDOT11_SCAN_REQUEST_V2 Request);
 VOID CywProcessEvent(_In_ PCYW_ADAPTER Adapter, _In_ PUCHAR Frame, _In_ ULONG Length);
-VOID CywPollEvents(_In_ PCYW_ADAPTER Adapter);
+NTSTATUS CywSdpcmSendData(_In_ PCYW_ADAPTER Adapter, _In_ PUCHAR Eth, _In_ ULONG EthLen);
+VOID CywRxData(_In_ PCYW_ADAPTER Adapter, _In_ PUCHAR Body, _In_ ULONG BodyLen);
+NTSTATUS CywStartRxThread(_In_ PCYW_ADAPTER Adapter);
+VOID CywStopRxThread(_In_ PCYW_ADAPTER Adapter);
 ULONG CywBuildBssList(_In_ PCYW_ADAPTER Adapter, _Out_ PUCHAR Buffer, _In_ ULONG BufferLength, _Out_ PULONG BytesNeeded);
 VOID CywIndicateScanComplete(_In_ PCYW_ADAPTER Adapter, _In_ NDIS_STATUS ScanStatus);
 VOID CywIndicateAssocStart(_In_ PCYW_ADAPTER Adapter);
@@ -429,6 +466,7 @@ VOID CywIndicateConnectComplete(_In_ PCYW_ADAPTER Adapter, _In_ DOT11_ASSOC_STAT
 VOID CywIndicateLinkState(_In_ PCYW_ADAPTER Adapter, _In_ BOOLEAN Connected);
 NTSTATUS CywConnect(_In_ PCYW_ADAPTER Adapter);
 NTSTATUS CywDisconnect(_In_ PCYW_ADAPTER Adapter);
+NTSTATUS CywSetKey(_In_ PCYW_ADAPTER Adapter, _In_ BOOLEAN Pairwise, _In_opt_ PUCHAR Ea, _In_ PUCHAR Key, _In_ ULONG KeyLen, _In_ ULONG KeyIndex);
 
 PVOID CywAllocate(_In_ ULONG Size);
 VOID CywFree(_In_ PVOID Buffer);
