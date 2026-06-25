@@ -435,19 +435,23 @@ SdBusInitializeController(
                     SDHCI_INT_CMD_ERROR_MASK |
                     SDHCI_INT_DATA_ERROR_MASK);
 
-    /* Enable interrupt signal delivery for all status bits (cmd/data + card) */
-    SdBusWriteReg32(FdoExtension, SDHCI_INT_SIGNAL_ENABLE,
-                    SDHCI_INT_CMD_COMPLETE |
-                    SDHCI_INT_XFER_COMPLETE |
-                    SDHCI_INT_DMA |
-                    SDHCI_INT_BUFFER_WRITE_READY |
-                    SDHCI_INT_BUFFER_READ_READY |
-                    SDHCI_INT_CARD_INSERTION |
-                    SDHCI_INT_CARD_REMOVAL |
-                    SDHCI_INT_CARD_INTERRUPT |
-                    SDHCI_INT_ERROR |
-                    SDHCI_INT_CMD_ERROR_MASK |
-                    SDHCI_INT_DATA_ERROR_MASK);
+    {
+        ULONG SignalEnable = SDHCI_INT_CMD_COMPLETE |
+                             SDHCI_INT_XFER_COMPLETE |
+                             SDHCI_INT_DMA |
+                             SDHCI_INT_BUFFER_WRITE_READY |
+                             SDHCI_INT_BUFFER_READ_READY |
+                             SDHCI_INT_ERROR |
+                             SDHCI_INT_CMD_ERROR_MASK |
+                             SDHCI_INT_DATA_ERROR_MASK;
+        if (!FdoExtension->NonRemovable)
+        {
+            SignalEnable |= SDHCI_INT_CARD_INSERTION |
+                            SDHCI_INT_CARD_REMOVAL |
+                            SDHCI_INT_CARD_INTERRUPT;
+        }
+        SdBusWriteReg32(FdoExtension, SDHCI_INT_SIGNAL_ENABLE, SignalEnable);
+    }
 
     /*
      * Try ADMA2 first (scatter-gather directly to caller pages, no bounce buffer).
@@ -759,7 +763,7 @@ SdBusFdoStartDevice(
 
     {
         ULONG PresentState = SdBusReadReg32(FdoExtension, SDHCI_PRESENT_STATE);
-        if (PresentState & SDHCI_PS_CARD_INSERTED)
+        if ((PresentState & SDHCI_PS_CARD_INSERTED) || FdoExtension->NonRemovable)
         {
             Status = SdBusEnumerateInsertedCard(FdoExtension, FALSE, FALSE);
             if (!NT_SUCCESS(Status))
