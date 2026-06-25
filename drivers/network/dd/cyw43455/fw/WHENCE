@@ -1,0 +1,15 @@
+WiFi firmware for the Broadcom/Cypress CYW43455 (BCM4345) FullMAC SDIO chip,
+as fitted to the Raspberry Pi 5. Installed to
+\SystemRoot\system32\drivers\brcm\ and loaded by the cyw43455 driver during
+chip bring-up.
+
+File: brcmfmac43455-sdio.bin
+File: brcmfmac43455-sdio.clm_blob
+  Broadcom firmware image and regulatory (CLM) blob, from linux-firmware
+  (brcm/). Copyright (c) Broadcom Corporation. Redistributable in binary form,
+  without modification, under the terms in LICENCE.broadcom_bcm43xx (this
+  directory).
+
+File: brcmfmac43455-sdio.txt
+  Board NVRAM configuration for the Raspberry Pi 5, from the Raspberry Pi
+  firmware. Redistributable for use with Raspberry Pi hardware.
