@@ -1,0 +1,71 @@
+; ReactOS Broadcom/Cypress CYW43455 SDIO Native 802.11 Miniport
+; Copyright 2026 Ahmed ARIF <arif.ing@outlook.com>
+
+[Version]
+Signature   = "$Windows NT$"
+Class       = Net
+ClassGUID   = {4d36e972-e325-11ce-bfc1-08002be10318}
+Provider    = %ReactOS%
+DriverVer   = 06/25/2026,1.0.0.0
+
+[DestinationDirs]
+DefaultDestDir = 12
+
+[Manufacturer]
+%ReactOS% = Models,NTamd64,NTARM64
+
+[Models]
+%cyw.DeviceDesc% = cyw.ndi, SDIO\VEN_02D0&DEV_A9BF&FUNC_1
+%cyw.DeviceDesc% = cyw.ndi, SDIO\VEN_02D0&DEV_4345&FUNC_1
+
+[Models.NTamd64]
+%cyw.DeviceDesc% = cyw.ndi, SDIO\VEN_02D0&DEV_A9BF&FUNC_1
+%cyw.DeviceDesc% = cyw.ndi, SDIO\VEN_02D0&DEV_4345&FUNC_1
+
+[Models.NTARM64]
+%cyw.DeviceDesc% = cyw.ndi, SDIO\VEN_02D0&DEV_A9BF&FUNC_1
+%cyw.DeviceDesc% = cyw.ndi, SDIO\VEN_02D0&DEV_4345&FUNC_1
+%cyw.DeviceDesc% = cyw.ndi, SDIO\CLASS_07
+
+[cyw.ndi]
+Characteristics = 0x84
+AddReg          = cyw.reg
+CopyFiles       = cyw.CopyFiles
+
+[cyw.ndi.Services]
+AddService = cyw43455, 2, cyw.Service, cyw.EventLog
+
+[cyw.reg]
+HKR, Ndi,               Service,    0, "cyw43455"
+HKR, Ndi\Interfaces,    UpperRange, 0, "ndis5"
+HKR, Ndi\Interfaces,    LowerRange, 0, "nativewifi"
+
+[cyw.CopyFiles]
+cyw43455.sys
+
+[cyw.Service]
+DisplayName    = %cyw.ServiceDesc%
+ServiceType    = 1
+StartType      = 3
+ErrorControl   = 1
+ServiceBinary  = %12%\cyw43455.sys
+LoadOrderGroup = NDIS
+
+[cyw.EventLog]
+AddReg = cyw.EventLog.Reg
+
+[cyw.EventLog.Reg]
+HKR, , EventMessageFile, 0x00020000, "%%SystemRoot%%\System32\netevent.dll"
+HKR, , TypesSupported,   0x00010001, 7
+
+[SourceDisksNames]
+1 = %DiskName%
+
+[SourceDisksFiles]
+cyw43455.sys = 1
+
+[Strings]
+ReactOS         = "ReactOS Team"
+cyw.DeviceDesc  = "Broadcom CYW43455 802.11ac SDIO WiFi Adapter"
+cyw.ServiceDesc = "ReactOS CYW43455 WiFi Driver"
+DiskName        = "ReactOS CYW43455 WiFi Driver Installation Disk"

@@ -200,6 +200,8 @@ DriverEntry(
     gNwifi.DriverObject = DriverObject;
     InitializeListHead(&gNwifi.AdapterList);
     NdisAllocateSpinLock(&gNwifi.AdapterLock);
+    InitializeListHead(&gNwifi.NotifyIrpQueue);
+    KeInitializeSpinLock(&gNwifi.NotifyLock);
     gNwifi.NextInterfaceIndex = 0;
 
     /* Both registrations must exist before NdisIMAssociateMiniport pairs
