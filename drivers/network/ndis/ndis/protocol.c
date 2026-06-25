@@ -791,7 +791,12 @@ NdisDeregisterProtocol(
 
     NDIS_DbgPrint(MAX_TRACE, ("Called.\n"));
 
-    /* FIXME: Make sure no adapter bindings exist */
+    if (!IsListEmpty(&Protocol->AdapterListHead))
+    {
+        NDIS_DbgPrint(MIN_TRACE, ("Protocol still has adapter bindings; not freeing\n"));
+        *Status = NDIS_STATUS_SUCCESS;
+        return;
+    }
 
     /* Remove protocol from global list */
     ExInterlockedRemoveEntryList(&Protocol->ListEntry, &ProtocolListLock);
@@ -1282,6 +1287,11 @@ NdisRegisterProtocol(
       }
 
       ExFreePool(PnPEvent);
+  }
+
+  if (*Status != NDIS_STATUS_SUCCESS && !IsListEmpty(&Protocol->AdapterListHead))
+  {
+      *Status = NDIS_STATUS_SUCCESS;
   }
 
   if (*Status == NDIS_STATUS_SUCCESS) {
