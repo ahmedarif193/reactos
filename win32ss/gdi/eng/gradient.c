@@ -15,6 +15,123 @@
 
 const LONG LINC[2] = {-1, 1};
 
+/* Bayer dithering matrix for 16bpp gradients, matching Wine's dibdrv
+ * (dlls/win32u/dibdrv/primitives.c). */
+static const BYTE bayer_4x4[4][4] =
+{
+    {  0,  8,  2, 10 },
+    { 12,  4, 14,  6 },
+    {  3, 11,  1,  9 },
+    { 15,  7, 13,  5 }
+};
+
+/*
+ * Destination format classification for gradient fills.
+ *
+ * We only special-case the formats where ReactOS's plain XLATEOBJ_iXlate
+ * output diverges from Windows/Wine:
+ *  - GRAD_FMT_ALPHA: plain BI_RGB a8r8g8b8 (32bpp).  Windows writes the
+ *    interpolated alpha vertex into the top byte.  (Note: the bitfields
+ *    variant a8r8g8b8 has a Windows bug that zeroes alpha, so it is excluded
+ *    via the PAL_BITFIELDS check, matching Wine.)
+ *  - GRAD_FMT_DITHER16: any 16bpp destination (555/565/444).  Windows dithers
+ *    the gradient with a 4x4 Bayer matrix in device coordinates.
+ *
+ * Indexed (<=8bpp) destinations are intentionally NOT handled: Windows uses a
+ * dithering that is not bit-exact with Wine's bayer_16x16 (the gdi32 winetest
+ * even marks those todo on Wine), so there is no reproducible rule to match.
+ */
+enum
+{
+    GRAD_FMT_DEFAULT = 0,
+    GRAD_FMT_ALPHA,
+    GRAD_FMT_DITHER16
+};
+
+static
+ULONG
+IntEngGradientFormat(SURFOBJ *psoDest)
+{
+    SURFACE *psurf = CONTAINING_RECORD(psoDest, SURFACE, SurfObj);
+    PALETTE *ppal = psurf->ppal;
+
+    if (psoDest->iBitmapFormat == BMF_16BPP)
+        return GRAD_FMT_DITHER16;
+
+    if ((psoDest->iBitmapFormat == BMF_32BPP) &&
+        (ppal != NULL) &&
+        (ppal->flFlags & PAL_BGR) &&
+        !(ppal->flFlags & PAL_BITFIELDS))
+    {
+        /* Plain BI_RGB a8r8g8b8: red mask 0xff0000, no bitfields. */
+        return GRAD_FMT_ALPHA;
+    }
+
+    return GRAD_FMT_DEFAULT;
+}
+
+/*
+ * Compute one gradient pixel using Wine's exact arithmetic for the special
+ * destination formats.  c0/c1 are the two endpoint vertices, pos/len describe
+ * the interpolation position along the gradient axis, and x/y are absolute
+ * device coordinates (used for the Bayer dither).
+ */
+static
+ULONG
+IntEngGradientColor(
+    XLATEOBJ *pxlo,
+    ULONG fmt,
+    const TRIVERTEX *c0,
+    const TRIVERTEX *c1,
+    LONG pos,
+    LONG len,
+    LONG x,
+    LONG y)
+{
+    if (len == 0) len = 1;
+
+    if (fmt == GRAD_FMT_DITHER16)
+    {
+        LONG r, g, b;
+        LONG bayer = bayer_4x4[y & 3][x & 3];
+
+        r = ((LONG)c0->Red   * (len - pos) + (LONG)c1->Red   * pos) / len / 128 + bayer;
+        g = ((LONG)c0->Green * (len - pos) + (LONG)c1->Green * pos) / len / 128 + bayer;
+        b = ((LONG)c0->Blue  * (len - pos) + (LONG)c1->Blue  * pos) / len / 128 + bayer;
+
+        r = min(31, max(0, r / 16));
+        g = min(31, max(0, g / 16));
+        b = min(31, max(0, b / 16));
+
+        /* Expand the dithered 5-bit channels to 8-bit (as Wine does) and let
+         * the xlate pack them into the actual destination format. */
+        r = (r << 3) | (r >> 2);
+        g = (g << 3) | (g >> 2);
+        b = (b << 3) | (b >> 2);
+
+        return XLATEOBJ_iXlate(pxlo, RGB(r, g, b));
+    }
+
+    if (fmt == GRAD_FMT_ALPHA)
+    {
+        ULONG a, color;
+
+        color = XLATEOBJ_iXlate(pxlo,
+                                RGB((((LONG)c0->Red   * (len - pos) + (LONG)c1->Red   * pos) / len) >> 8,
+                                    (((LONG)c0->Green * (len - pos) + (LONG)c1->Green * pos) / len) >> 8,
+                                    (((LONG)c0->Blue  * (len - pos) + (LONG)c1->Blue  * pos) / len) >> 8));
+
+        a = (((LONG)c0->Alpha * (len - pos) + (LONG)c1->Alpha * pos) / len) >> 8;
+        return (color & 0x00ffffff) | (a << 24);
+    }
+
+    /* GRAD_FMT_DEFAULT should not reach here */
+    return XLATEOBJ_iXlate(pxlo,
+                           RGB((((LONG)c0->Red   * (len - pos) + (LONG)c1->Red   * pos) / len) >> 8,
+                               (((LONG)c0->Green * (len - pos) + (LONG)c1->Green * pos) / len) >> 8,
+                               (((LONG)c0->Blue  * (len - pos) + (LONG)c1->Blue  * pos) / len) >> 8));
+}
+
 #define VERTEX(n) (pVertex + gt->n)
 #define COMPAREVERTEX(a, b) ((a)->x == (b)->x && (a)->y == (b)->y)
 
@@ -63,6 +180,7 @@ IntEngGradientFillRect(
     POINTL Translate;
     INTENG_ENTER_LEAVE EnterLeave;
     LONG y, dy, c[3], dc[3], ec[3], ic[3];
+    ULONG fmt;
 
     v1 = (pVertex + gRect->UpperLeft);
     v2 = (pVertex + gRect->LowerRight);
@@ -85,6 +203,64 @@ IntEngGradientFillRect(
     if(!IntEngEnter(&EnterLeave, psoDest, &rcSG, FALSE, &Translate, &psoOutput))
     {
         return FALSE;
+    }
+
+    fmt = IntEngGradientFormat(psoDest);
+
+    /*
+     * Special destination formats (plain a8r8g8b8 alpha, and 16bpp dithering)
+     * need Wine/Windows-exact per-pixel arithmetic, including a Bayer dither
+     * that varies with the device y coordinate.  The DDA path below cannot
+     * express that, so handle these formats with an explicit per-pixel loop.
+     */
+    if (fmt != GRAD_FMT_DEFAULT &&
+        (v1->Red != v2->Red || v1->Green != v2->Green || v1->Blue != v2->Blue) && dy > 1)
+    {
+        TRIVERTEX *cl, *ch;
+        LONG len;
+
+        if (Horizontal)
+        {
+            cl = (v1->x <= v2->x) ? v1 : v2;
+            ch = (v1->x <= v2->x) ? v2 : v1;
+            len = rcGradient.right - rcGradient.left;
+        }
+        else
+        {
+            cl = (v1->y <= v2->y) ? v1 : v2;
+            ch = (v1->y <= v2->y) ? v2 : v1;
+            len = rcGradient.bottom - rcGradient.top;
+        }
+
+        CLIPOBJ_cEnumStart(pco, FALSE, CT_RECTANGLES, CD_RIGHTDOWN, 0);
+        do
+        {
+            RECTL FillRect;
+            LONG xx, yy;
+            ULONG Color;
+
+            EnumMore = CLIPOBJ_bEnum(pco, (ULONG) sizeof(RectEnum), (PVOID) &RectEnum);
+            for (i = 0; i < RectEnum.c && RectEnum.arcl[i].top <= rcSG.bottom; i++)
+            {
+                if (RECTL_bIntersectRect(&FillRect, &RectEnum.arcl[i], &rcSG))
+                {
+                    for (yy = FillRect.top; yy < FillRect.bottom; yy++)
+                    {
+                        for (xx = FillRect.left; xx < FillRect.right; xx++)
+                        {
+                            LONG pos = Horizontal ? (xx - rcGradient.left)
+                                                  : (yy - rcGradient.top);
+                            Color = IntEngGradientColor(pxlo, fmt, cl, ch, pos, len, xx, yy);
+                            DibFunctionsForBitmapFormat[psoOutput->iBitmapFormat].DIB_PutPixel(
+                                psoOutput, xx + Translate.x, yy + Translate.y, Color);
+                        }
+                    }
+                }
+            }
+        }
+        while (EnumMore);
+
+        return IntEngLeave(&EnterLeave);
     }
 
     if((v1->Red != v2->Red || v1->Green != v2->Green || v1->Blue != v2->Blue) && dy > 1)
@@ -331,6 +507,7 @@ IntEngGradientFillTriangle(
     INTENG_ENTER_LEAVE EnterLeave;
     RECTL FillRect = { 0, 0, 0, 0 };
     ULONG Color;
+    ULONG fmt;
 
     BOOL sx[NLINES];
     LONG x[NLINES], dx[NLINES], dy[NLINES], incx[NLINES], ex[NLINES], destx[NLINES];
@@ -363,6 +540,8 @@ IntEngGradientFillTriangle(
     {
         return FALSE;
     }
+
+    fmt = IntEngGradientFormat(psoDest);
 
     if (VCMPCLRS(v1, v2, v3))
     {
@@ -419,11 +598,40 @@ IntEngGradientFillTriangle(
                      (LONGLONG)(dv3x - dv1x) * (yy - dv3y);
                 l3 = llDet - l1 - l2;
 
-                cr = (LONG)((v1->Red   * l1 + v2->Red   * l2 + v3->Red   * l3) / llDet / 256);
-                cg = (LONG)((v1->Green * l1 + v2->Green * l2 + v3->Green * l3) / llDet / 256);
-                cb = (LONG)((v1->Blue  * l1 + v2->Blue  * l2 + v3->Blue  * l3) / llDet / 256);
+                if (fmt == GRAD_FMT_DITHER16)
+                {
+                  /* 4x4 Bayer dither in device coordinates (Wine gradient_triangle_555). */
+                  LONG bayer = bayer_4x4[yy & 3][xx & 3];
 
-                Color = XLATEOBJ_iXlate(pxlo, RGB(cr, cg, cb));
+                  cr = (LONG)((v1->Red   * l1 + v2->Red   * l2 + v3->Red   * l3) / llDet / 128) + bayer;
+                  cg = (LONG)((v1->Green * l1 + v2->Green * l2 + v3->Green * l3) / llDet / 128) + bayer;
+                  cb = (LONG)((v1->Blue  * l1 + v2->Blue  * l2 + v3->Blue  * l3) / llDet / 128) + bayer;
+
+                  cr = min(31, max(0, cr / 16));
+                  cg = min(31, max(0, cg / 16));
+                  cb = min(31, max(0, cb / 16));
+
+                  cr = (cr << 3) | (cr >> 2);
+                  cg = (cg << 3) | (cg >> 2);
+                  cb = (cb << 3) | (cb >> 2);
+
+                  Color = XLATEOBJ_iXlate(pxlo, RGB(cr, cg, cb));
+                }
+                else
+                {
+                  cr = (LONG)((v1->Red   * l1 + v2->Red   * l2 + v3->Red   * l3) / llDet / 256);
+                  cg = (LONG)((v1->Green * l1 + v2->Green * l2 + v3->Green * l3) / llDet / 256);
+                  cb = (LONG)((v1->Blue  * l1 + v2->Blue  * l2 + v3->Blue  * l3) / llDet / 256);
+
+                  Color = XLATEOBJ_iXlate(pxlo, RGB(cr, cg, cb));
+
+                  if (fmt == GRAD_FMT_ALPHA)
+                  {
+                    LONG ca = (LONG)((v1->Alpha * l1 + v2->Alpha * l2 + v3->Alpha * l3) / llDet / 256);
+                    Color = (Color & 0x00ffffff) | ((ULONG)ca << 24);
+                  }
+                }
+
                 DibFunctionsForBitmapFormat[psoOutput->iBitmapFormat].DIB_PutPixel(psoOutput, xx, yy, Color);
               }
             }
