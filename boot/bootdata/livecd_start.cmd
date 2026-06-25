@@ -5,6 +5,10 @@ if not "%1" == "" (
     goto :eof
 )
 
+%SystemRoot%\system32\dbgprint.exe WIFISCAN_BEGIN
+%SystemRoot%\system32\wlanscan.exe
+%SystemRoot%\system32\dbgprint.exe WIFISCAN_END
+
 if not exist "%SystemRoot%\system32\cpubench.exe" goto :eof
 %SystemRoot%\system32\dbgprint.exe CPUBENCH_BEGIN
 start "ReactOS CPU Benchmark" /wait %SystemRoot%\system32\cpubench.exe
