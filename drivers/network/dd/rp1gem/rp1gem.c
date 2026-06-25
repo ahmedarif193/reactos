@@ -155,12 +155,30 @@ Rp1GemGetBufferPhysicalAddress(
 }
 
 static VOID
+Rp1GemDcacheInvalidate(
+    _In_ PVOID Base,
+    _In_ SIZE_T Length)
+{
+    ULONG_PTR Addr = (ULONG_PTR)Base & ~(ULONG_PTR)63;
+    ULONG_PTR End = (ULONG_PTR)Base + Length;
+
+    __asm__ __volatile__("dsb ish" ::: "memory");
+    while (Addr < End)
+    {
+        __asm__ __volatile__("dc ivac, %0" :: "r"(Addr) : "memory");
+        Addr += 64;
+    }
+    __asm__ __volatile__("dsb ish" ::: "memory");
+}
+
+static VOID
 Rp1GemRearmRxDescriptor(
     _In_ PRP1GEM_ADAPTER Adapter,
     _In_ ULONG Index)
 {
     ULONG Flags = (Index == (RP1GEM_RX_RING_SIZE - 1)) ? MACB_RX_WRAP : 0;
 
+    Rp1GemDcacheInvalidate(Adapter->RxBuffers[Index].VirtualAddress, RP1GEM_BUFFER_SIZE);
     Adapter->RxRing[Index].Control = 0;
     KeMemoryBarrier();
     Rp1GemSetDescriptorAddress(Adapter,
@@ -397,11 +415,9 @@ Rp1GemFreeDatapath(
 
     if (Adapter->RxBufferArea)
     {
-        NdisMFreeSharedMemory(Adapter->MiniportHandle,
-                              Adapter->RxBufferAreaLength,
-                              FALSE,
-                              Adapter->RxBufferArea,
-                              Adapter->RxBufferPhysical);
+        MmFreeContiguousMemorySpecifyCache(Adapter->RxBufferArea,
+                                           Adapter->RxBufferAreaLength,
+                                           MmCached);
         Adapter->RxBufferArea = NULL;
     }
 
@@ -467,13 +483,17 @@ Rp1GemAllocateReceivePath(
         return NDIS_STATUS_RESOURCES;
 
     Adapter->RxBufferAreaLength = RP1GEM_BUFFER_SIZE * RP1GEM_RX_RING_SIZE;
-    NdisMAllocateSharedMemory(Adapter->MiniportHandle,
-                              Adapter->RxBufferAreaLength,
-                              FALSE,
-                              &Adapter->RxBufferArea,
-                              &Adapter->RxBufferPhysical);
+    {
+        PHYSICAL_ADDRESS Low, High, Boundary;
+        Low.QuadPart = 0;
+        High.QuadPart = ~0ULL;
+        Boundary.QuadPart = 0;
+        Adapter->RxBufferArea = MmAllocateContiguousMemorySpecifyCache(
+            Adapter->RxBufferAreaLength, Low, High, Boundary, MmCached);
+    }
     if (!Adapter->RxBufferArea)
         return NDIS_STATUS_RESOURCES;
+    Adapter->RxBufferPhysical = MmGetPhysicalAddress(Adapter->RxBufferArea);
 
     RtlZeroMemory(Adapter->RxRing, Adapter->RxRingLength);
     for (i = 0; i < RP1GEM_RX_RING_SIZE; i++)
@@ -483,6 +503,18 @@ Rp1GemAllocateReceivePath(
         Rp1GemGetBufferPhysicalAddress(&Adapter->RxBuffers[i].PhysicalAddress,
                                        Adapter->RxBufferPhysical,
                                        i);
+
+        Adapter->RxBuffers[i].Mdl =
+            Rp1GemAllocateMdl(Adapter->RxBuffers[i].VirtualAddress, RP1GEM_BUFFER_SIZE);
+        if (!Adapter->RxBuffers[i].Mdl)
+            return NDIS_STATUS_RESOURCES;
+        Adapter->RxBuffers[i].NetBufferList =
+            NdisAllocateNetBufferAndNetBufferList(Adapter->RxNblPool, 0, 0,
+                                                  Adapter->RxBuffers[i].Mdl, 0, 0);
+        if (!Adapter->RxBuffers[i].NetBufferList)
+            return NDIS_STATUS_RESOURCES;
+        Adapter->RxBuffers[i].NetBufferList->SourceHandle = Adapter->MiniportHandle;
+
         Rp1GemRearmRxDescriptor(Adapter, i);
     }
 
@@ -1899,7 +1931,6 @@ Rp1GemReleaseReceiveNetBufferLists(
     for (Nbl = NetBufferLists; Nbl; Nbl = NextNbl)
     {
         ULONG Index;
-        PMDL Mdl = NULL;
 
         NextNbl = NET_BUFFER_LIST_NEXT_NBL(Nbl);
         NET_BUFFER_LIST_NEXT_NBL(Nbl) = NULL;
@@ -1909,18 +1940,10 @@ Rp1GemReleaseReceiveNetBufferLists(
         if (Index < RP1GEM_RX_RING_SIZE &&
             Adapter->RxBuffers[Index].NetBufferList == Nbl)
         {
-            Mdl = Adapter->RxBuffers[Index].Mdl;
-            Adapter->RxBuffers[Index].Mdl = NULL;
-            Adapter->RxBuffers[Index].NetBufferList = NULL;
             Adapter->RxBuffers[Index].Indicated = FALSE;
             Rp1GemRearmRxDescriptor(Adapter, Index);
         }
         NdisReleaseSpinLock(&Adapter->RxLock);
-
-        if (Mdl)
-            IoFreeMdl(Mdl);
-
-        NdisFreeNetBufferList(Nbl);
     }
 }
 
@@ -1946,7 +1969,6 @@ Rp1GemPollReceive(
         ULONG Address = Descriptor->Address;
         ULONG Control;
         ULONG Length;
-        PMDL Mdl;
         PNET_BUFFER_LIST Nbl;
 
         KeMemoryBarrier();
@@ -1968,32 +1990,15 @@ Rp1GemPollReceive(
             continue;
         }
 
-        Mdl = Rp1GemAllocateMdl(RxBuffer->VirtualAddress, Length);
-        if (!Mdl)
-        {
-            Adapter->RxNoBuffer++;
-            Rp1GemRearmRxDescriptor(Adapter, Index);
-            Adapter->RxTail = (Index + 1) % RP1GEM_RX_RING_SIZE;
-            continue;
-        }
+        Rp1GemDcacheInvalidate(RxBuffer->VirtualAddress, Length);
 
-        Nbl = NdisAllocateNetBufferAndNetBufferList(Adapter->RxNblPool,
-                                                    0,
-                                                    0,
-                                                    Mdl,
-                                                    0,
-                                                    Length);
-        if (!Nbl)
+        Nbl = RxBuffer->NetBufferList;
         {
-            IoFreeMdl(Mdl);
-            Adapter->RxNoBuffer++;
-            Rp1GemRearmRxDescriptor(Adapter, Index);
-            Adapter->RxTail = (Index + 1) % RP1GEM_RX_RING_SIZE;
-            continue;
+            PNET_BUFFER Nb = NET_BUFFER_LIST_FIRST_NB(Nbl);
+            NET_BUFFER_CURRENT_MDL(Nb) = RxBuffer->Mdl;
+            NET_BUFFER_CURRENT_MDL_OFFSET(Nb) = 0;
+            NET_BUFFER_DATA_LENGTH(Nb) = Length;
         }
-
-        RxBuffer->Mdl = Mdl;
-        RxBuffer->NetBufferList = Nbl;
         RxBuffer->Indicated = TRUE;
         Nbl->SourceHandle = Adapter->MiniportHandle;
         NET_BUFFER_LIST_STATUS(Nbl) = NDIS_STATUS_SUCCESS;
