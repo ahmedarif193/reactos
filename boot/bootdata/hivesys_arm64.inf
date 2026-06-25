@@ -16,7 +16,38 @@ HKLM,"SYSTEM\CurrentControlSet\Services\rp1","ImagePath",0x00020000,"system32\dr
 HKLM,"SYSTEM\CurrentControlSet\Services\rp1","Start",0x00010001,0x00000000
 HKLM,"SYSTEM\CurrentControlSet\Services\rp1","Type",0x00010001,0x00000001
 
+; Raspberry Pi 5 BCM2712 SDHCI controllers report _HID BRCM5D12 (SDC0 = SD card,
+; SDC1 = SDIO WiFi). ReactOS only had BRCME88C in the CDDB, so both failed to
+; install (Code 28) on real hardware. Bind both to sdbus.
+HKLM,"SYSTEM\CurrentControlSet\Control\CriticalDeviceDatabase\ACPI#BRCM5D12","Service",0x00000000,"sdbus"
+HKLM,"SYSTEM\CurrentControlSet\Control\CriticalDeviceDatabase\ACPI#BRCM5D12","ClassGUID",0x00000000,"{a0a588a4-c46f-4b37-b7ea-c82fe89870c6}"
+
 ; The RP1 Ethernet controller (RP1\GEM) is intentionally not seeded here:
 ; it is a regular PnP NDIS miniport, installed at runtime from netrp1gem.inf
 ; so that netcfgx creates NetCfgInstanceId, Linkage, the Connection object
 ; and the Tcpip interface parameters.
+
+; vwifi virtual miniport removed: the real CYW43455 SDIO miniport is now the
+; Native 802.11 adapter (cyw43455 service + CDDB seeded below).
+
+HKLM,"SYSTEM\CurrentControlSet\Services\Nwifi","Type",0x00010001,0x00000001
+HKLM,"SYSTEM\CurrentControlSet\Services\Nwifi","Start",0x00010001,0x00000001
+HKLM,"SYSTEM\CurrentControlSet\Services\Nwifi","ErrorControl",0x00010001,0x00000001
+HKLM,"SYSTEM\CurrentControlSet\Services\Nwifi","ImagePath",0x00020000,"system32\drivers\nwifi.sys"
+HKLM,"SYSTEM\CurrentControlSet\Services\Nwifi","Group",0x00000000,"NDIS"
+HKLM,"SYSTEM\CurrentControlSet\Services\Nwifi","DisplayName",0x00000000,"ReactOS Native WiFi Service"
+
+; CYW43455 SDIO WiFi miniport: bound when the SDIO bus enumerates the Broadcom
+; WiFi function (after bcm2712 drives WL_ON). Net-class instance is created at
+; runtime from cyw43455.inf, matching the RP1\GEM pattern.
+HKLM,"SYSTEM\CurrentControlSet\Control\CriticalDeviceDatabase\SDIO#VEN_02D0&DEV_A9BF","Service",0x00000000,"cyw43455"
+HKLM,"SYSTEM\CurrentControlSet\Control\CriticalDeviceDatabase\SDIO#VEN_02D0&DEV_A9BF","ClassGUID",0x00000000,"{4D36E972-E325-11CE-BFC1-08002BE10318}"
+HKLM,"SYSTEM\CurrentControlSet\Control\CriticalDeviceDatabase\SDIO#VEN_02D0&DEV_4345","Service",0x00000000,"cyw43455"
+HKLM,"SYSTEM\CurrentControlSet\Control\CriticalDeviceDatabase\SDIO#VEN_02D0&DEV_4345","ClassGUID",0x00000000,"{4D36E972-E325-11CE-BFC1-08002BE10318}"
+
+HKLM,"SYSTEM\CurrentControlSet\Services\cyw43455","Type",0x00010001,0x00000001
+HKLM,"SYSTEM\CurrentControlSet\Services\cyw43455","Start",0x00010001,0x00000003
+HKLM,"SYSTEM\CurrentControlSet\Services\cyw43455","ErrorControl",0x00010001,0x00000001
+HKLM,"SYSTEM\CurrentControlSet\Services\cyw43455","ImagePath",0x00020000,"system32\drivers\cyw43455.sys"
+HKLM,"SYSTEM\CurrentControlSet\Services\cyw43455","Group",0x00000000,"NDIS"
+HKLM,"SYSTEM\CurrentControlSet\Services\cyw43455","DisplayName",0x00000000,"ReactOS CYW43455 WiFi Driver"
