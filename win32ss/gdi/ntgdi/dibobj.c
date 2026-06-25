@@ -398,7 +398,8 @@ IntGdiCreateMaskFromRLE(
     DWORD Height,
     ULONG Compression,
     const BYTE* Bits,
-    DWORD BitsSize)
+    DWORD BitsSize,
+    BOOL TopDown)
 {
     HBITMAP Mask;
     DWORD x, y;
@@ -408,8 +409,10 @@ IntGdiCreateMaskFromRLE(
 
     ASSERT((Compression == BI_RLE8) || (Compression == BI_RLE4));
 
-    /* Create the bitmap */
-    Mask = GreCreateBitmapEx(Width, Height, 0, BMF_1BPP, 0, 0, NULL, 0);
+    /* Create the bitmap. When TopDown is requested the first decoded scanline
+     * ends up at surface row 0, matching a BMF_TOPDOWN colour surface. */
+    Mask = GreCreateBitmapEx(Width, Height, 0, BMF_1BPP,
+                             TopDown ? BMF_TOPDOWN : 0, 0, NULL, 0);
     if (!Mask)
         return NULL;
 
@@ -437,7 +440,7 @@ IntGdiCreateMaskFromRLE(
             if (NumPixels == 0)
                 continue;
 
-            DIB_1BPP_HLine(SurfObj, x, x + NumPixels, Height - 1 - y, 1);
+            DIB_1BPP_HLine(SurfObj, x, x + NumPixels, TopDown ? y : (Height - 1 - y), 1);
             x += NumPixels;
             continue;
         }
@@ -489,7 +492,7 @@ IntGdiCreateMaskFromRLE(
 
         if (NumPixels != 0)
         {
-            DIB_1BPP_HLine(SurfObj, x, x + NumPixels, Height - 1 - y, 1);
+            DIB_1BPP_HLine(SurfObj, x, x + NumPixels, TopDown ? y : (Height - 1 - y), 1);
             x += NumPixels;
         }
         i += ToSkip;
@@ -649,7 +652,8 @@ NtGdiSetDIBitsToDeviceInternal(
             ScanLines,
             bmi->bmiHeader.biCompression,
             Bits,
-            cjMaxBits);
+            cjMaxBits,
+            FALSE);
         if (!hMaskBitmap)
         {
             EngSetLastError(ERROR_NO_SYSTEM_RESOURCES);
@@ -1271,11 +1275,15 @@ NtGdiStretchDIBitsInternal(
     RECTL rcSrc, rcDst, rcBounds;
     LONG lTmp;
     PDC pdc;
-    HBITMAP hbmTmp = 0;
-    PSURFACE psurfTmp = 0, psurfDst = 0;
+    HBITMAP hbmTmp = 0, hbmMask = 0;
+    PSURFACE psurfTmp = 0, psurfDst = 0, psurfMask = 0;
     PPALETTE ppalDIB = 0;
     EXLATEOBJ exlo;
     PBYTE pvBits;
+    BOOL bRle = FALSE;
+    BOOL bWantClip = FALSE;
+    USHORT fjSrcBitmap = 0;
+    POINTL ptMaskOrigin = {0, 0};
 
     LPBITMAPINFO pbmiSafe;
     UINT cjAlloc;
@@ -1409,24 +1417,122 @@ NtGdiStretchDIBitsInternal(
             goto cleanup;
         }
 
-        /* Calculate source and destination rect */
-        rcSrc.left = xSrc;
-        rcSrc.right = xSrc + cxSrc;
-        if (pbmiSafe->bmiHeader.biHeight > 0)
+        /* Calculate source and destination rect, following Wine's
+         * nulldrv_StretchDIBits (dlls/win32u/dib.c) so that source orientation
+         * (top-down vs bottom-up), negative width/height (mirroring) and the
+         * SRCCOPY vs non-SRCCOPY ROP variants all match the reference exactly.
+         *
+         * dst.{x,y,width,height} are in (signed) device coords, src.* in source
+         * DIB coords. We normalise both into well-ordered positive rectangles so
+         * that the engine's own mirror handling becomes a no-op. */
         {
-            rcSrc.top = abs(pbmiSafe->bmiHeader.biHeight) - ySrc - cySrc;
+            LONG dstX, dstY, dstW, dstH;
+            LONG srcX, srcY, srcW, srcH;
+            LONG biHeightAbs = abs(pbmiSafe->bmiHeader.biHeight);
+            BOOL bTopDown = (pbmiSafe->bmiHeader.biHeight < 0);
+            BOOL bNonStretchFromOrigin;
+
+            /* Map the destination rectangle to device coordinates */
+            rcDst.left = xDst;
+            rcDst.top = yDst;
+            rcDst.right = xDst + cxDst;
+            rcDst.bottom = yDst + cyDst;
+            IntLPtoDP(pdc, (POINTL*)&rcDst, 2);
+            RECTL_vOffsetRect(&rcDst, pdc->ptlDCOrig.x, pdc->ptlDCOrig.y);
+
+            dstX = rcDst.left;
+            dstY = rcDst.top;
+            dstW = rcDst.right - rcDst.left;
+            dstH = rcDst.bottom - rcDst.top;
+
+            srcX = xSrc;
+            srcY = ySrc;
+            srcW = cxSrc;
+            srcH = cySrc;
+
+            bNonStretchFromOrigin = (srcX == 0) && (srcY == 0) &&
+                                    (srcW == dstW) && (srcH == dstH);
+
+            /* For RLE sources, only the explicitly-defined pixels are copied
+             * for a SRCCOPY non-stretch blit (the rest of the destination
+             * shows through). This matches Wine's want_clip behaviour. */
+            bRle = (pbmiSafe->bmiHeader.biCompression == BI_RLE8) ||
+                   (pbmiSafe->bmiHeader.biCompression == BI_RLE4);
+            bWantClip = bRle && bNonStretchFromOrigin && (dwRop == SRCCOPY);
+
+            if ((dwRop != SRCCOPY) || bNonStretchFromOrigin)
+            {
+                if ((dstW == 1) && (srcW > 1)) srcW--;
+                if ((dstH == 1) && (srcH > 1)) srcH--;
+            }
+
+            if (dwRop != SRCCOPY)
+            {
+                /* For non-SRCCOPY ROPs a matching negative extent on both src
+                 * and dst is normalised away (the off-by-one matches Windows). */
+                if ((dstW < 0) && (dstW == srcW))
+                {
+                    dstX += dstW; srcX += srcW;
+                    dstW = -dstW; srcW = -srcW;
+                }
+                if ((dstH < 0) && (dstH == srcH))
+                {
+                    dstY += dstH; srcY += srcH;
+                    dstH = -dstH; srcH = -srcH;
+                }
+            }
+
+            /* Flip the source Y origin from DIB (bottom-up) to top-origin
+             * surface coords. Done for every bottom-up source, and for a
+             * top-down source only when it is a real SRCCOPY stretch/offset. */
+            if (!bTopDown || ((dwRop == SRCCOPY) && !bNonStretchFromOrigin))
+                srcY = biHeightAbs - srcY - srcH;
+
+            /* Build well-ordered positive source rect (Wine get_bounding_rect).
+             * For a negative extent the corners are swapped with a +1 bias. */
+            if (srcW >= 0)
+            {
+                rcSrc.left = srcX;
+                rcSrc.right = srcX + srcW;
+            }
+            else
+            {
+                rcSrc.left = srcX + srcW + 1;
+                rcSrc.right = srcX + 1;
+            }
+            if (srcH >= 0)
+            {
+                rcSrc.top = srcY;
+                rcSrc.bottom = srcY + srcH;
+            }
+            else
+            {
+                rcSrc.top = srcY + srcH + 1;
+                rcSrc.bottom = srcY + 1;
+            }
+
+            /* Build well-ordered positive destination rect the same way */
+            if (dstW >= 0)
+            {
+                rcDst.left = dstX;
+                rcDst.right = dstX + dstW;
+            }
+            else
+            {
+                rcDst.left = dstX + dstW + 1;
+                rcDst.right = dstX + 1;
+            }
+            if (dstH >= 0)
+            {
+                rcDst.top = dstY;
+                rcDst.bottom = dstY + dstH;
+            }
+            else
+            {
+                rcDst.top = dstY + dstH + 1;
+                rcDst.bottom = dstY + 1;
+            }
         }
-        else
-        {
-            rcSrc.top = ySrc;
-        }
-        rcSrc.bottom = rcSrc.top + cySrc;
-        rcDst.left = xDst;
-        rcDst.top = yDst;
-        rcDst.right = rcDst.left + cxDst;
-        rcDst.bottom = rcDst.top + cyDst;
-        IntLPtoDP(pdc, (POINTL*)&rcDst, 2);
-        RECTL_vOffsetRect(&rcDst, pdc->ptlDCOrig.x, pdc->ptlDCOrig.y);
 
         if (pdc->fs & (DC_ACCUM_APP|DC_ACCUM_WMGR))
         {
@@ -1449,11 +1555,13 @@ NtGdiStretchDIBitsInternal(
         BmpFormat = BitmapFormat(pbmiSafe->bmiHeader.biBitCount,
                                  pbmiSafe->bmiHeader.biCompression);
 
+        fjSrcBitmap = (pbmiSafe->bmiHeader.biHeight < 0) ? BMF_TOPDOWN : 0;
+
         hbmTmp = GreCreateBitmapEx(pbmiSafe->bmiHeader.biWidth,
                                    abs(pbmiSafe->bmiHeader.biHeight),
                                    0,
                                    BmpFormat,
-                                   pbmiSafe->bmiHeader.biHeight < 0 ? BMF_TOPDOWN : 0,
+                                   fjSrcBitmap,
                                    cjMaxBits,
                                    pvBits,
                                    0);
@@ -1467,6 +1575,26 @@ NtGdiStretchDIBitsInternal(
         if (!psurfTmp)
         {
             goto cleanup;
+        }
+
+        /* Build a 1bpp mask of the defined RLE pixels so that undefined pixels
+         * leave the destination unchanged for a SRCCOPY non-stretch blit. */
+        if (bWantClip)
+        {
+            hbmMask = IntGdiCreateMaskFromRLE(pbmiSafe->bmiHeader.biWidth,
+                                              abs(pbmiSafe->bmiHeader.biHeight),
+                                              pbmiSafe->bmiHeader.biCompression,
+                                              pvBits,
+                                              cjMaxBits,
+                                              FALSE);
+            if (hbmMask)
+            {
+                psurfMask = SURFACE_ShareLockSurface(hbmMask);
+                /* The mask shares the source bitmap's geometry, so it is
+                 * sampled at the same coordinates as the source rectangle. */
+                ptMaskOrigin.x = rcSrc.left;
+                ptMaskOrigin.y = rcSrc.top;
+            }
         }
 
         /* Create a palette for the DIB */
@@ -1492,17 +1620,17 @@ NtGdiStretchDIBitsInternal(
         /* Perform the stretch operation */
         IntEngStretchBlt(&psurfDst->SurfObj,
                          &psurfTmp->SurfObj,
-                         NULL,
+                         psurfMask ? &psurfMask->SurfObj : NULL,
                          (CLIPOBJ *)&pdc->co,
                          &exlo.xlo,
                          &pdc->dclevel.ca,
                          &rcDst,
                          &rcSrc,
-                         NULL,
+                         psurfMask ? &ptMaskOrigin : NULL,
                          &pdc->eboFill.BrushObject,
                          NULL,
                          pdc->pdcattr->jStretchBltMode,
-                         WIN32_ROP3_TO_ENG_ROP4(dwRop));
+                         psurfMask ? ROP4_MASK : WIN32_ROP3_TO_ENG_ROP4(dwRop));
 
         /* Cleanup */
         DC_vFinishBlit(pdc, NULL);
@@ -1510,6 +1638,8 @@ NtGdiStretchDIBitsInternal(
 
     cleanup:
         if (ppalDIB) PALETTE_ShareUnlockPalette(ppalDIB);
+        if (psurfMask) SURFACE_ShareUnlockSurface(psurfMask);
+        if (hbmMask) GreDeleteObject(hbmMask);
         if (psurfTmp) SURFACE_ShareUnlockSurface(psurfTmp);
         if (hbmTmp) GreDeleteObject(hbmTmp);
         if (pdc) DC_UnlockDc(pdc);
