@@ -125,10 +125,22 @@ LONG
 NTAPI
 KeResetEvent(IN PKEVENT Event)
 {
+    KIRQL OldIrql;
+    LONG PreviousState;
+
     ASSERT_EVENT(Event);
     ASSERT_IRQL_LESS_OR_EQUAL(DISPATCH_LEVEL);
 
-    return InterlockedExchange(&Event->Header.SignalState, 0);
+    OldIrql = KeRaiseIrqlToSynchLevel();
+    KiAcquireDispatcherObject(&Event->Header);
+
+    PreviousState = Event->Header.SignalState;
+    Event->Header.SignalState = 0;
+
+    KiReleaseDispatcherObject(&Event->Header);
+    KeLowerIrql(OldIrql);
+
+    return PreviousState;
 }
 
 /*

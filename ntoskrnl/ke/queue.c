@@ -93,7 +93,6 @@ KiInsertQueue(IN PKQUEUE Queue,
     PKTHREAD Thread = KeGetCurrentThread();
     PKWAIT_BLOCK WaitBlock;
     PLIST_ENTRY WaitEntry;
-    PKTIMER Timer;
     ASSERT_QUEUE(Queue);
 
     /* Save the old state */
@@ -112,46 +111,36 @@ KiInsertQueue(IN PKQUEUE Queue,
         ((Thread->Queue != Queue) ||
          (Thread->WaitReason != WrQueue)))
     {
-        /* Remove the wait entry */
-        RemoveEntryList(WaitEntry);
-        WaitEntry->Flink = NULL;
-
         /* Get the Wait Block and Thread */
         WaitBlock = CONTAINING_RECORD(WaitEntry, KWAIT_BLOCK, WaitListEntry);
-        WaitBlock->BlockState = WaitBlockInactive;
         Thread = WaitBlock->Thread;
 
-        /* Remove the queue from the thread's wait list */
-        Thread->WaitStatus = (LONG_PTR)Entry;
-        if (Thread->WaitListEntry.Flink) RemoveEntryList(&Thread->WaitListEntry);
+        KiAcquireThreadLock(Thread);
+        if (Thread->State == Waiting)
+        {
+            RemoveEntryList(WaitEntry);
+            WaitEntry->Flink = NULL;
+            WaitBlock->BlockState = WaitBlockInactive;
+            KiUnwaitThread(Thread, (LONG_PTR)Entry, IO_NO_INCREMENT);
+            KiReleaseThreadLock(Thread);
+            return InitialState;
+        }
+        KiReleaseThreadLock(Thread);
+    }
 
-        /* Increase the active threads and remove any wait reason */
-        Queue->CurrentCount++;
-        Thread->WaitReason = 0;
+    /* Increase the Entries */
+    Queue->Header.SignalState++;
 
-        /* Check if there's a Thread Timer */
-        Timer = &Thread->Timer;
-        if (Timer->Header.Inserted) KxRemoveTreeTimer(Timer);
-
-        /* Reschedule the Thread */
-        KiReadyThread(Thread);
+    /* Check which mode we're using */
+    if (Head)
+    {
+        /* Insert in the head */
+        InsertHeadList(&Queue->EntryListHead, Entry);
     }
     else
     {
-        /* Increase the Entries */
-        Queue->Header.SignalState++;
-
-        /* Check which mode we're using */
-        if (Head)
-        {
-            /* Insert in the head */
-            InsertHeadList(&Queue->EntryListHead, Entry);
-        }
-        else
-        {
-            /* Insert at the end */
-            InsertTailList(&Queue->EntryListHead, Entry);
-        }
+        /* Insert at the end */
+        InsertTailList(&Queue->EntryListHead, Entry);
     }
 
     /* Return the previous state */
@@ -284,46 +273,31 @@ KeRemoveQueue(IN PKQUEUE Queue,
         /* It is, so next time don't do expect this */
         Thread->WaitNext = FALSE;
         KxQueueThreadWait();
-        KiAcquireDispatcherObject(&Queue->Header);
     }
     else
     {
-        /* Raise IRQL to synch, prepare the wait, then lock the queue */
+        /* Raise IRQL to synch and prepare the wait */
         Thread->WaitIrql = KeRaiseIrqlToSynchLevel();
         KxQueueThreadWait();
-        KiAcquireDispatcherObject(&Queue->Header);
     }
 
-    /*
-     * This is needed so that we can set the new queue right here,
-     * before additional processing
-     */
     PreviousQueue = Thread->Queue;
+    QueueEntry = &Thread->QueueListEntry;
+
+    if ((Queue != PreviousQueue) && (PreviousQueue != NULL))
+    {
+        KiAcquireDispatcherObject(&PreviousQueue->Header);
+        RemoveEntryList(QueueEntry);
+        KiActivateWaiterQueue(PreviousQueue);
+        KiReleaseDispatcherObject(&PreviousQueue->Header);
+    }
+
     Thread->Queue = Queue;
+    KiAcquireDispatcherObject(&Queue->Header);
 
     /* Check if this is a different queue */
     if (Queue != PreviousQueue)
     {
-        /* Get the current entry */
-        QueueEntry = &Thread->QueueListEntry;
-        if (PreviousQueue)
-        {
-            /* Removing the thread from PreviousQueue's thread list AND waking a
-             * waiter both mutate PreviousQueue's lists, so take its object lock
-             * (the lock held above is the NEW queue's). The New<->Previous
-             * ordering is safe in practice: a thread's queue is assigned once at
-             * registration, never concurrently swapped between two queues. */
-            KiAcquireDispatcherObject(&PreviousQueue->Header);
-
-            /* Remove from this list */
-            RemoveEntryList(QueueEntry);
-
-            /* Wake the queue */
-            KiActivateWaiterQueue(PreviousQueue);
-
-            KiReleaseDispatcherObject(&PreviousQueue->Header);
-        }
-
         /* Insert in this new Queue */
         InsertTailList(&Queue->ThreadListHead, QueueEntry);
     }
