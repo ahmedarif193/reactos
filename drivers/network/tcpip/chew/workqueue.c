@@ -7,7 +7,7 @@
  * PROGRAMMERS:     arty (ayerkes@speakeasy.net)
  */
 
-#include <wdm.h>
+#include <ntddk.h>
 
 #define FOURCC(w,x,y,z) (((w) << 24) | ((x) << 16) | ((y) << 8) | (z))
 #define CHEW_TAG FOURCC('C','H','E','W')
@@ -15,7 +15,10 @@
 PDEVICE_OBJECT WorkQueueDevice;
 LIST_ENTRY     WorkQueue;
 KSPIN_LOCK     WorkQueueLock;
+KEVENT         WorkQueueEvent;
 KEVENT         WorkQueueClear;
+PKTHREAD       WorkQueueThread;
+BOOLEAN        WorkQueueStop;
 
 typedef struct _WORK_ITEM
 {
@@ -25,23 +28,12 @@ typedef struct _WORK_ITEM
     PVOID WorkerContext;
 } WORK_ITEM, *PWORK_ITEM;
 
-VOID ChewInit(PDEVICE_OBJECT DeviceObject)
-{
-    WorkQueueDevice = DeviceObject;
-    InitializeListHead(&WorkQueue);
-    KeInitializeSpinLock(&WorkQueueLock);
-    KeInitializeEvent(&WorkQueueClear, NotificationEvent, TRUE);
-}
-
-VOID ChewShutdown(VOID)
-{
-    KeWaitForSingleObject(&WorkQueueClear, Executive, KernelMode, FALSE, NULL);
-}
-
 VOID NTAPI ChewWorkItem(PDEVICE_OBJECT DeviceObject, PVOID ChewItem)
 {
     PWORK_ITEM WorkItem = ChewItem;
     KIRQL OldIrql;
+
+    UNREFERENCED_PARAMETER(DeviceObject);
 
     WorkItem->Worker(WorkItem->WorkerContext);
 
@@ -58,32 +50,113 @@ VOID NTAPI ChewWorkItem(PDEVICE_OBJECT DeviceObject, PVOID ChewItem)
     ExFreePoolWithTag(WorkItem, CHEW_TAG);
 }
 
-BOOLEAN ChewCreate(VOID (*Worker)(PVOID), PVOID WorkerContext)
+VOID NTAPI ChewWorkerThread(PVOID Context)
 {
+    KIRQL OldIrql;
+    PLIST_ENTRY Entry;
     PWORK_ITEM Item;
-    Item = ExAllocatePoolWithTag(NonPagedPool,
-                                 sizeof(WORK_ITEM),
-                                 CHEW_TAG);
 
-    if (Item)
+    UNREFERENCED_PARAMETER(Context);
+
+    for (;;)
     {
-        Item->WorkItem = IoAllocateWorkItem(WorkQueueDevice);
-        if (!Item->WorkItem)
+        KeWaitForSingleObject(&WorkQueueEvent, Executive, KernelMode, FALSE, NULL);
+
+        for (;;)
         {
-            ExFreePool(Item);
-            return FALSE;
+            KeAcquireSpinLock(&WorkQueueLock, &OldIrql);
+            if (IsListEmpty(&WorkQueue))
+            {
+                KeReleaseSpinLock(&WorkQueueLock, OldIrql);
+                break;
+            }
+            Entry = RemoveHeadList(&WorkQueue);
+            KeReleaseSpinLock(&WorkQueueLock, OldIrql);
+
+            Item = CONTAINING_RECORD(Entry, WORK_ITEM, Entry);
+            Item->Worker(Item->WorkerContext);
+            ExFreePoolWithTag(Item, CHEW_TAG);
         }
 
-        Item->Worker = Worker;
-        Item->WorkerContext = WorkerContext;
-        ExInterlockedInsertTailList(&WorkQueue, &Item->Entry, &WorkQueueLock);
-        KeClearEvent(&WorkQueueClear);
-        IoQueueWorkItem(Item->WorkItem, ChewWorkItem, DelayedWorkQueue, Item);
+        if (WorkQueueStop)
+            break;
+    }
 
-        return TRUE;
+    PsTerminateSystemThread(STATUS_SUCCESS);
+}
+
+VOID ChewInit(PDEVICE_OBJECT DeviceObject)
+{
+    HANDLE ThreadHandle;
+
+    WorkQueueDevice = DeviceObject;
+    InitializeListHead(&WorkQueue);
+    KeInitializeSpinLock(&WorkQueueLock);
+    KeInitializeEvent(&WorkQueueEvent, SynchronizationEvent, FALSE);
+    KeInitializeEvent(&WorkQueueClear, NotificationEvent, TRUE);
+    WorkQueueStop = FALSE;
+    WorkQueueThread = NULL;
+
+    if (PsCreateSystemThread(&ThreadHandle, THREAD_ALL_ACCESS, NULL, NULL, NULL,
+                             ChewWorkerThread, NULL) == STATUS_SUCCESS)
+    {
+        ObReferenceObjectByHandle(ThreadHandle, THREAD_ALL_ACCESS, NULL, KernelMode,
+                                  (PVOID *)&WorkQueueThread, NULL);
+        ZwClose(ThreadHandle);
+    }
+}
+
+VOID ChewShutdown(VOID)
+{
+    WorkQueueStop = TRUE;
+
+    if (WorkQueueThread)
+    {
+        KeSetEvent(&WorkQueueEvent, 0, FALSE);
+        KeWaitForSingleObject(WorkQueueThread, Executive, KernelMode, FALSE, NULL);
+        ObDereferenceObject(WorkQueueThread);
+        WorkQueueThread = NULL;
     }
     else
     {
+        KeWaitForSingleObject(&WorkQueueClear, Executive, KernelMode, FALSE, NULL);
+    }
+}
+
+BOOLEAN ChewCreate(VOID (*Worker)(PVOID), PVOID WorkerContext)
+{
+    PWORK_ITEM Item;
+
+    if (WorkQueueStop)
+        return FALSE;
+
+    Item = ExAllocatePoolWithTag(NonPagedPool,
+                                 sizeof(WORK_ITEM),
+                                 CHEW_TAG);
+    if (!Item)
+        return FALSE;
+
+    Item->Worker = Worker;
+    Item->WorkerContext = WorkerContext;
+
+    if (WorkQueueThread)
+    {
+        Item->WorkItem = NULL;
+        ExInterlockedInsertTailList(&WorkQueue, &Item->Entry, &WorkQueueLock);
+        KeSetEvent(&WorkQueueEvent, 0, FALSE);
+        return TRUE;
+    }
+
+    Item->WorkItem = IoAllocateWorkItem(WorkQueueDevice);
+    if (!Item->WorkItem)
+    {
+        ExFreePoolWithTag(Item, CHEW_TAG);
         return FALSE;
     }
+
+    ExInterlockedInsertTailList(&WorkQueue, &Item->Entry, &WorkQueueLock);
+    KeClearEvent(&WorkQueueClear);
+    IoQueueWorkItem(Item->WorkItem, ChewWorkItem, DelayedWorkQueue, Item);
+
+    return TRUE;
 }
