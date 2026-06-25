@@ -57,6 +57,7 @@ typedef struct _FDO_EXTENSION {
     PVOID RegisterBase;
     ULONG RegisterLength;
     BOOLEAN RegistersMapped;
+    BOOLEAN NonRemovable;
 
     /* Optional hardware-specific controller extension */
     PVOID HardwareExtension;

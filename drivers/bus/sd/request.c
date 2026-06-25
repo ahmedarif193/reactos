@@ -1323,7 +1323,6 @@ SdBusSendSdhciCommand(
 
         if (WaitStatus == STATUS_IO_TIMEOUT)
         {
-            DPRINT1("SdBusSendSdhciCommand: SDMA transfer complete timed out\n");
             (void)SdBusResetHost(FdoExtension, SDHCI_RESET_DATA);
             Status = STATUS_IO_TIMEOUT;
             goto Cleanup;
