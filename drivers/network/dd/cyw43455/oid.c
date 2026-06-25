@@ -57,6 +57,9 @@ NDIS_OID CywSupportedOids[] =
     OID_DOT11_ENABLED_AUTHENTICATION_ALGORITHM,
     OID_DOT11_ENABLED_UNICAST_CIPHER_ALGORITHM,
     OID_DOT11_ENABLED_MULTICAST_CIPHER_ALGORITHM,
+    OID_DOT11_CIPHER_DEFAULT_KEY_ID,
+    OID_DOT11_CIPHER_DEFAULT_KEY,
+    OID_DOT11_CIPHER_KEY_MAPPING_KEY,
     OID_DOT11_CONNECT_REQUEST,
     OID_DOT11_DISCONNECT_REQUEST,
     OID_DOT11_RESET_REQUEST,
@@ -328,10 +331,17 @@ CywIndicateScanComplete(
 {
     NDIS_STATUS_INDICATION Indication;
     DOT11_STATUS_INDICATION Confirm;
+    BOOLEAN WasInProgress;
 
     NdisAcquireSpinLock(&Adapter->Lock);
+    WasInProgress = Adapter->ScanInProgress;
     Adapter->ScanInProgress = FALSE;
     NdisReleaseSpinLock(&Adapter->Lock);
+
+    if (!WasInProgress)
+    {
+        return;
+    }
 
     RtlZeroMemory(&Confirm, sizeof(Confirm));
     Confirm.uStatusType = DOT11_STATUS_SCAN_CONFIRM;
@@ -357,10 +367,12 @@ CywScanWorker(
 {
     PCYW_ADAPTER Adapter = (PCYW_ADAPTER)WorkItemContext;
     PNDIS_OID_REQUEST Request;
+    LARGE_INTEGER Delay;
 
     UNREFERENCED_PARAMETER(NdisIoWorkItemHandle);
 
-    CywPollEvents(Adapter);
+    Delay.QuadPart = -40000000;
+    KeDelayExecutionThread(KernelMode, FALSE, &Delay);
 
     NdisAcquireSpinLock(&Adapter->Lock);
     Request = Adapter->PendingScanOid;
@@ -413,12 +425,15 @@ CywConnectWorker(
 {
     PCYW_ADAPTER Adapter = (PCYW_ADAPTER)WorkItemContext;
     PNDIS_OID_REQUEST Request;
+    LARGE_INTEGER Delay;
 
     UNREFERENCED_PARAMETER(NdisIoWorkItemHandle);
 
     CywIndicateAssocStart(Adapter);
     CywConnect(Adapter);
-    CywPollEvents(Adapter);
+
+    Delay.QuadPart = -30000000;
+    KeDelayExecutionThread(KernelMode, FALSE, &Delay);
 
     NdisAcquireSpinLock(&Adapter->Lock);
     Request = Adapter->PendingConnectOid;
@@ -563,6 +578,46 @@ CywOidQuery(
     }
 }
 
+NTSTATUS
+CywSetKey(
+    _In_ PCYW_ADAPTER Adapter,
+    _In_ BOOLEAN Pairwise,
+    _In_opt_ PUCHAR Ea,
+    _In_ PUCHAR Key,
+    _In_ ULONG KeyLen,
+    _In_ ULONG KeyIndex)
+{
+    CYW_WSEC_KEY KeyData;
+    ULONG Copy = KeyLen;
+
+    if (Copy > sizeof(KeyData.Data))
+    {
+        Copy = sizeof(KeyData.Data);
+    }
+
+    RtlZeroMemory(&KeyData, sizeof(KeyData));
+    KeyData.Index = KeyIndex;
+    KeyData.Len = KeyLen;
+    RtlCopyMemory(KeyData.Data, Key, Copy);
+    KeyData.Algo = CYW_CRYPTO_ALGO_AES_CCM;
+    if (Pairwise)
+    {
+        KeyData.Flags = 0;
+        if (Ea != NULL)
+        {
+            RtlCopyMemory(KeyData.Ea, Ea, CYW_ADDRESS_LENGTH);
+        }
+    }
+    else
+    {
+        KeyData.Flags = CYW_WSEC_PRIMARY_KEY;
+    }
+
+    DPRINT1("CYW: set %s key index %lu len %lu\n",
+            Pairwise ? "pairwise" : "group", KeyIndex, KeyLen);
+    return CywFilIovarSet(Adapter, "wsec_key", &KeyData, sizeof(KeyData));
+}
+
 static
 NDIS_STATUS
 CywOidSet(
@@ -648,6 +703,43 @@ CywOidSet(
                     Adapter->MulticastCipher = List->AlgorithmIds[0];
                 }
             }
+            return NDIS_STATUS_SUCCESS;
+        case OID_DOT11_CIPHER_KEY_MAPPING_KEY:
+        {
+            ULONG Hdr = FIELD_OFFSET(DOT11_BYTE_ARRAY, ucBuffer) +
+                        FIELD_OFFSET(DOT11_CIPHER_KEY_MAPPING_KEY_VALUE, ucKey);
+            if (Length >= Hdr)
+            {
+                PDOT11_BYTE_ARRAY ByteArray = (PDOT11_BYTE_ARRAY)Buffer;
+                PDOT11_CIPHER_KEY_MAPPING_KEY_VALUE Value =
+                    (PDOT11_CIPHER_KEY_MAPPING_KEY_VALUE)ByteArray->ucBuffer;
+                if (Length >= Hdr + Value->usKeyLength)
+                {
+                    CywSetKey(Adapter, TRUE, Value->PeerMacAddr, Value->ucKey,
+                              Value->usKeyLength, 0);
+                }
+            }
+            Request->DATA.SET_INFORMATION.BytesRead = Length;
+            return NDIS_STATUS_SUCCESS;
+        }
+        case OID_DOT11_CIPHER_DEFAULT_KEY:
+        {
+            ULONG Hdr = FIELD_OFFSET(DOT11_CIPHER_DEFAULT_KEY_VALUE, ucKey);
+            if (Length >= Hdr)
+            {
+                PDOT11_CIPHER_DEFAULT_KEY_VALUE Value =
+                    (PDOT11_CIPHER_DEFAULT_KEY_VALUE)Buffer;
+                if (Length >= Hdr + Value->usKeyLength)
+                {
+                    CywSetKey(Adapter, FALSE, NULL, Value->ucKey,
+                              Value->usKeyLength, Value->uKeyIndex);
+                }
+            }
+            Request->DATA.SET_INFORMATION.BytesRead = Length;
+            return NDIS_STATUS_SUCCESS;
+        }
+        case OID_DOT11_CIPHER_DEFAULT_KEY_ID:
+            Request->DATA.SET_INFORMATION.BytesRead = Length;
             return NDIS_STATUS_SUCCESS;
         case OID_DOT11_CONNECT_REQUEST:
             return CywOidConnectRequest(Adapter, Request);
