@@ -29,6 +29,16 @@
 #define WLAN_NOTIFICATION_SOURCE_IHV          0x00000040
 #endif
 
+/*
+ * WIDL only inlines the <wlanapi.h> types that the RPC interface references.
+ * _RpcGetNetworkBssList transfers the BSS list as a raw byte buffer, so
+ * WLAN_BSS_LIST is never inlined into wlansvc_c.h.  wlanapi.dll only handles
+ * it as an opaque pointer (the buffer is passed straight through to the
+ * caller), so an incomplete type is enough here -- and it avoids clashing
+ * with the structs wlansvc_c.h does inline.
+ */
+typedef struct _WLAN_BSS_LIST WLAN_BSS_LIST, *PWLAN_BSS_LIST;
+
 DWORD WINAPI
 WlanGetNetworkBssList(IN HANDLE hClientHandle,
                       IN const GUID *pInterfaceGuid,

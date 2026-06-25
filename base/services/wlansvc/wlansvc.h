@@ -68,9 +68,9 @@
 #endif
 
 /*
- * WIDL emits the wlanapi.h types into the generated stub header but drops
- * preprocessor #defines; those are restated here, identical to
- * sdk/include/psdk/wlanapi.h.
+ * WIDL emits only the wlanapi.h types reachable from the RPC interface into the
+ * generated stub header, and drops every preprocessor #define.  The missing
+ * #defines and types are restated here, identical to sdk/include/psdk/wlanapi.h.
  */
 
 #ifndef WLAN_NOTIFICATION_SOURCE_NONE
@@ -81,6 +81,120 @@
 #define WLAN_NOTIFICATION_SOURCE_SECURITY     0x00000020
 #define WLAN_NOTIFICATION_SOURCE_IHV          0x00000040
 #endif
+
+/*
+ * WIDL emits only the wlanapi.h types reachable from the RPC interface; the
+ * ones below are used service-locally (built into opaque LPBYTE blobs by the
+ * BSS-list, connection-query and notification paths) and never named in
+ * wlansvc.idl, so they are absent from the generated stub.  Restate them here,
+ * identical to sdk/include/psdk/wlanapi.h and guarded by that header's own
+ * include sentinel so a real <wlanapi.h>, if ever pulled in, supersedes these
+ * rather than colliding.  Their member types (DOT11_*, WLAN_INTERFACE_STATE,
+ * WLAN_SIGNAL_QUALITY, WLAN_REASON_CODE, ...) do come from the stub and are in
+ * scope here.
+ */
+#ifndef _WLANAPI_H
+
+typedef enum _WLAN_NOTIFICATION_ACM {
+    wlan_notification_acm_start = 0,
+    wlan_notification_acm_autoconf_enabled,
+    wlan_notification_acm_autoconf_disabled,
+    wlan_notification_acm_background_scan_enabled,
+    wlan_notification_acm_background_scan_disabled,
+    wlan_notification_acm_bss_type_change,
+    wlan_notification_acm_power_setting_change,
+    wlan_notification_acm_scan_complete,
+    wlan_notification_acm_scan_fail,
+    wlan_notification_acm_connection_start,
+    wlan_notification_acm_connection_complete,
+    wlan_notification_acm_connection_attempt_fail,
+    wlan_notification_acm_filter_list_change,
+    wlan_notification_acm_interface_arrival,
+    wlan_notification_acm_interface_removal,
+    wlan_notification_acm_profile_change,
+    wlan_notification_acm_profile_name_change,
+    wlan_notification_acm_profiles_exhausted,
+    wlan_notification_acm_network_not_available,
+    wlan_notification_acm_network_available,
+    wlan_notification_acm_disconnecting,
+    wlan_notification_acm_disconnected,
+    wlan_notification_acm_adhoc_network_state_change,
+    wlan_notification_acm_profile_unblocked,
+    wlan_notification_acm_screen_power_change,
+    wlan_notification_acm_profile_blocked,
+    wlan_notification_acm_scan_list_refresh,
+    wlan_notification_acm_operational_state_change,
+    wlan_notification_acm_end
+} WLAN_NOTIFICATION_ACM, *PWLAN_NOTIFICATION_ACM;
+
+typedef struct _WLAN_RATE_SET {
+    ULONG uRateSetLength;
+    USHORT usRateSet[DOT11_RATE_SET_MAX_LENGTH];
+} WLAN_RATE_SET, *PWLAN_RATE_SET;
+
+typedef struct _WLAN_BSS_ENTRY {
+    DOT11_SSID dot11Ssid;
+    ULONG uPhyId;
+    DOT11_MAC_ADDRESS dot11Bssid;
+    DOT11_BSS_TYPE dot11BssType;
+    DOT11_PHY_TYPE dot11BssPhyType;
+    LONG lRssi;
+    ULONG uLinkQuality;
+    BOOLEAN bInRegDomain;
+    USHORT usBeaconPeriod;
+    ULONGLONG ullTimestamp;
+    ULONGLONG ullHostTimestamp;
+    USHORT usCapabilityInformation;
+    ULONG  ulChCenterFrequency;
+    WLAN_RATE_SET wlanRateSet;
+    ULONG ulIeOffset;
+    ULONG ulIeSize;
+} WLAN_BSS_ENTRY, *PWLAN_BSS_ENTRY;
+
+typedef struct _WLAN_BSS_LIST {
+    DWORD dwTotalSize;
+    DWORD dwNumberOfItems;
+    WLAN_BSS_ENTRY wlanBssEntries[1];
+} WLAN_BSS_LIST, *PWLAN_BSS_LIST;
+
+typedef struct _WLAN_ASSOCIATION_ATTRIBUTES {
+    DOT11_SSID dot11Ssid;
+    DOT11_BSS_TYPE dot11BssType;
+    DOT11_MAC_ADDRESS dot11Bssid;
+    DOT11_PHY_TYPE dot11PhyType;
+    ULONG uDot11PhyIndex;
+    WLAN_SIGNAL_QUALITY wlanSignalQuality;
+    ULONG ulRxRate;
+    ULONG ulTxRate;
+} WLAN_ASSOCIATION_ATTRIBUTES, *PWLAN_ASSOCIATION_ATTRIBUTES;
+
+typedef struct _WLAN_SECURITY_ATTRIBUTES {
+    BOOL bSecurityEnabled;
+    BOOL bOneXEnabled;
+    DOT11_AUTH_ALGORITHM dot11AuthAlgorithm;
+    DOT11_CIPHER_ALGORITHM dot11CipherAlgorithm;
+} WLAN_SECURITY_ATTRIBUTES, *PWLAN_SECURITY_ATTRIBUTES;
+
+typedef struct _WLAN_CONNECTION_ATTRIBUTES {
+    WLAN_INTERFACE_STATE isState;
+    WLAN_CONNECTION_MODE wlanConnectionMode;
+    WCHAR strProfileName[WLAN_MAX_NAME_LENGTH];
+    WLAN_ASSOCIATION_ATTRIBUTES wlanAssociationAttributes;
+    WLAN_SECURITY_ATTRIBUTES wlanSecurityAttributes;
+} WLAN_CONNECTION_ATTRIBUTES, *PWLAN_CONNECTION_ATTRIBUTES;
+
+typedef struct _WLAN_CONNECTION_NOTIFICATION_DATA {
+    WLAN_CONNECTION_MODE wlanConnectionMode;
+    WCHAR strProfileName[WLAN_MAX_NAME_LENGTH];
+    DOT11_SSID dot11Ssid;
+    DOT11_BSS_TYPE dot11BssType;
+    BOOL bSecurityEnabled;
+    WLAN_REASON_CODE wlanReasonCode;
+    DWORD dwFlags;
+    WCHAR strProfileXml[1];
+} WLAN_CONNECTION_NOTIFICATION_DATA, *PWLAN_CONNECTION_NOTIFICATION_DATA;
+
+#endif /* _WLANAPI_H */
 
 /* Service-side state objects. */
 
