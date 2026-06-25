@@ -496,6 +496,57 @@ DIB_24BPP_BitBlt(PBLTINFO BltInfo)
    UsesSource = ROP4_USES_SOURCE(BltInfo->Rop4);
    UsesPattern = ROP4_USES_PATTERN(BltInfo->Rop4);
 
+   /* When the ROP reads the source and source/destination are the same surface
+    * with overlapping rectangles, the copy must walk in a direction that avoids
+    * overwriting source pixels before they are read.  Use a reversed
+    * pixel-by-pixel walk in that case (matching the Wine dib engine). */
+   if (UsesSource &&
+       BltInfo->SourceSurface->pvScan0 == BltInfo->DestSurface->pvScan0)
+   {
+      LONG Width = BltInfo->DestRect.right - BltInfo->DestRect.left;
+      LONG Height = BltInfo->DestRect.bottom - BltInfo->DestRect.top;
+      BOOLEAN bRevY = (BltInfo->DestRect.top > BltInfo->SourcePoint.y);
+      BOOLEAN bRevX = (BltInfo->DestRect.left > BltInfo->SourcePoint.x);
+
+      if (bRevY || bRevX)
+      {
+         LONG yy, xx;
+
+         if (UsesPattern && !BltInfo->PatternSurface && BltInfo->Brush)
+            Pattern = BltInfo->Brush->iSolidColor;
+
+         for (yy = 0; yy < Height; yy++)
+         {
+            DestY = bRevY ? (BltInfo->DestRect.bottom - 1 - yy) : (BltInfo->DestRect.top + yy);
+            SourceY = bRevY ? (BltInfo->SourcePoint.y + Height - 1 - yy) : (BltInfo->SourcePoint.y + yy);
+
+            if (BltInfo->PatternSurface)
+            {
+               PatternY = DIB_GetPatternCoord(DestY - BltInfo->BrushOrigin.y,
+                          BltInfo->PatternSurface->sizlBitmap.cy);
+            }
+
+            for (xx = 0; xx < Width; xx++)
+            {
+               DestX = bRevX ? (BltInfo->DestRect.right - 1 - xx) : (BltInfo->DestRect.left + xx);
+               SourceX = bRevX ? (BltInfo->SourcePoint.x + Width - 1 - xx) : (BltInfo->SourcePoint.x + xx);
+
+               Dest = DIB_24BPP_GetPixel(BltInfo->DestSurface, DestX, DestY);
+               Source = DIB_GetSource(BltInfo->SourceSurface, SourceX, SourceY, BltInfo->XlateSourceToDest);
+               if (BltInfo->PatternSurface)
+               {
+                  PatternX = DIB_GetPatternCoord(DestX - BltInfo->BrushOrigin.x,
+                             BltInfo->PatternSurface->sizlBitmap.cx);
+                  Pattern = DIB_GetSourceIndex(BltInfo->PatternSurface, PatternX, PatternY);
+               }
+               DIB_24BPP_PutPixel(BltInfo->DestSurface, DestX, DestY,
+                  DIB_DoRop(BltInfo->Rop4, Dest, Source, Pattern) & 0xFFFFFF);
+            }
+         }
+         return TRUE;
+      }
+   }
+
    SourceY = BltInfo->SourcePoint.y;
    DestBits = (PBYTE)(
       (PBYTE)BltInfo->DestSurface->pvScan0 +

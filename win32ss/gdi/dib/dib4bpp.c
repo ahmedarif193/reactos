@@ -136,6 +136,48 @@ DIB_4BPP_BitBltSrcCopy(PBLTINFO BltInfo)
       DPRINT("4BPP Case Selected with DestRect Width of '%d'.\n",
              BltInfo->DestRect.right - BltInfo->DestRect.left);
 
+      /* When source and destination are the same surface and the rectangles
+       * overlap, the copy must walk in a direction that avoids overwriting
+       * source pixels that have not been read yet.  This mirrors the behaviour
+       * of the Wine dib engine (and the 24bpp/1bpp paths here).  It only
+       * applies to the normal (non-flipped) blit. */
+      if (!bTopToBottom && !bLeftToRight &&
+          BltInfo->SourceSurface->pvScan0 == BltInfo->DestSurface->pvScan0)
+      {
+        LONG Width = BltInfo->DestRect.right - BltInfo->DestRect.left;
+        LONG Height = BltInfo->DestRect.bottom - BltInfo->DestRect.top;
+        BOOLEAN bRevY = (BltInfo->DestRect.top > BltInfo->SourcePoint.y);
+        BOOLEAN bRevX = (BltInfo->DestRect.left > BltInfo->SourcePoint.x);
+
+        if (bRevY || bRevX)
+        {
+          for (j = 0; j < Height; j++)
+          {
+            LONG dj = bRevY ? (BltInfo->DestRect.bottom - 1 - j) : (BltInfo->DestRect.top + j);
+            sy = bRevY ? (BltInfo->SourcePoint.y + Height - 1 - j) : (BltInfo->SourcePoint.y + j);
+
+            for (i = 0; i < Width; i++)
+            {
+              LONG di = bRevX ? (BltInfo->DestRect.right - 1 - i) : (BltInfo->DestRect.left + i);
+              sx = bRevX ? (BltInfo->SourcePoint.x + Width - 1 - i) : (BltInfo->SourcePoint.x + i);
+
+              if (NULL != BltInfo->XlateSourceToDest)
+              {
+                DIB_4BPP_PutPixel(BltInfo->DestSurface, di, dj,
+                  XLATEOBJ_iXlate(BltInfo->XlateSourceToDest,
+                  DIB_4BPP_GetPixel(BltInfo->SourceSurface, sx, sy)));
+              }
+              else
+              {
+                DIB_4BPP_PutPixel(BltInfo->DestSurface, di, dj,
+                  DIB_4BPP_GetPixel(BltInfo->SourceSurface, sx, sy));
+              }
+            }
+          }
+          break;
+        }
+      }
+
       /* This sets sy to the top line */
       sy = BltInfo->SourcePoint.y;
 
@@ -397,6 +439,57 @@ DIB_4BPP_BitBlt(PBLTINFO BltInfo)
 
   UsesSource = ROP4_USES_SOURCE(BltInfo->Rop4);
   UsesPattern = ROP4_USES_PATTERN(BltInfo->Rop4);
+
+  /* When the ROP reads the source and source/destination are the same surface
+   * with overlapping rectangles, the copy must walk in a direction that avoids
+   * overwriting source pixels before they are read.  Use a reversed
+   * pixel-by-pixel walk in that case (matching the Wine dib engine).  This
+   * cannot use the word-optimized fast path below. */
+  if (UsesSource &&
+      BltInfo->SourceSurface->pvScan0 == BltInfo->DestSurface->pvScan0)
+  {
+    LONG Width = BltInfo->DestRect.right - BltInfo->DestRect.left;
+    LONG Height = BltInfo->DestRect.bottom - BltInfo->DestRect.top;
+    BOOLEAN bRevY = (BltInfo->DestRect.top > BltInfo->SourcePoint.y);
+    BOOLEAN bRevX = (BltInfo->DestRect.left > BltInfo->SourcePoint.x);
+
+    if (bRevY || bRevX)
+    {
+      LONG yy, xx;
+
+      if (UsesPattern && !BltInfo->PatternSurface && BltInfo->Brush)
+        Pattern = ExpandSolidColor[BltInfo->Brush->iSolidColor];
+
+      for (yy = 0; yy < Height; yy++)
+      {
+        DestY = bRevY ? (BltInfo->DestRect.bottom - 1 - yy) : (BltInfo->DestRect.top + yy);
+        SourceY = bRevY ? (BltInfo->SourcePoint.y + Height - 1 - yy) : (BltInfo->SourcePoint.y + yy);
+
+        if (BltInfo->PatternSurface)
+        {
+          PatternY = DIB_GetPatternCoord(DestY - BltInfo->BrushOrigin.y,
+            BltInfo->PatternSurface->sizlBitmap.cy);
+        }
+
+        for (xx = 0; xx < Width; xx++)
+        {
+          DestX = bRevX ? (BltInfo->DestRect.right - 1 - xx) : (BltInfo->DestRect.left + xx);
+          SourceX = bRevX ? (BltInfo->SourcePoint.x + Width - 1 - xx) : (BltInfo->SourcePoint.x + xx);
+
+          Dest = DIB_4BPP_GetPixel(BltInfo->DestSurface, DestX, DestY);
+          Source = DIB_GetSource(BltInfo->SourceSurface, SourceX, SourceY, BltInfo->XlateSourceToDest);
+          if (BltInfo->PatternSurface)
+          {
+            Pattern = DIB_GetSourceIndex(BltInfo->PatternSurface,
+              DIB_GetPatternCoord(DestX - BltInfo->BrushOrigin.x, BltInfo->PatternSurface->sizlBitmap.cx), PatternY);
+          }
+          DIB_4BPP_PutPixel(BltInfo->DestSurface, DestX, DestY,
+            DIB_DoRop(BltInfo->Rop4, Dest, Source, Pattern) & 0xF);
+        }
+      }
+      return TRUE;
+    }
+  }
 
   SourceY = BltInfo->SourcePoint.y;
   RoundedRight = BltInfo->DestRect.right -
