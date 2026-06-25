@@ -1634,7 +1634,85 @@ typedef struct _WIDEPEN_INFO
     DWORD   pen_endcap;     /* PS_ENDCAP_* */
     DWORD   pen_join;       /* PS_JOIN_* */
     FLOAT   miter_limit;
+    DWORD   pen_style;      /* PS_STYLE_MASK value (PS_SOLID/PS_DASH/...) */
 } WIDEPEN_INFO;
+
+/* Geometric dash patterns, mirroring Wine dash_patterns_geometric
+ * (dlls/win32u/dibdrv/objects.c).  Indexed by (style - 1). */
+typedef struct _PATH_DASH_PATTERN
+{
+    DWORD count;
+    DWORD dashes[16];
+    DWORD total_len;
+} PATH_DASH_PATTERN;
+
+static const PATH_DASH_PATTERN gPathDashGeometric[4] =
+{
+    { 2, { 3, 1 },             4 },  /* PS_DASH */
+    { 2, { 1, 1 },             2 },  /* PS_DOT */
+    { 4, { 3, 1, 1, 1 },       6 },  /* PS_DASHDOT */
+    { 6, { 3, 1, 1, 1, 1, 1 }, 8 },  /* PS_DASHDOTDOT */
+};
+
+typedef struct _PATH_DASH_POS
+{
+    INT  left_in_dash;
+    INT  cur_dash;
+    BOOL mark;
+} PATH_DASH_POS;
+
+/* scale_dash_pattern (Wine): scale a geometric dash pattern by the pen width,
+ * adjusting for non-flat end caps. */
+static
+VOID
+PATH_ScaleDashPattern(PATH_DASH_PATTERN *pattern, DWORD scale, DWORD endcap)
+{
+    DWORD i;
+
+    for (i = 0; i < pattern->count; i++) pattern->dashes[i] *= scale;
+    pattern->total_len *= scale;
+
+    if (endcap != PS_ENDCAP_FLAT)
+    {
+        for (i = 0; i + 1 < pattern->count; i += 2)
+        {
+            pattern->dashes[i] -= scale;
+            pattern->dashes[i + 1] += scale;
+        }
+    }
+}
+
+static
+VOID
+PATH_ResetDashOrigin(const PATH_DASH_PATTERN *pattern, PATH_DASH_POS *pos)
+{
+    pos->cur_dash = 0;
+    pos->left_in_dash = pattern->dashes[0];
+    pos->mark = TRUE;
+}
+
+/* skip_dash (Wine): advance the dash state machine by skip units. */
+static
+VOID
+PATH_SkipDash(const PATH_DASH_PATTERN *pattern, PATH_DASH_POS *pos, UINT skip)
+{
+    if (pattern->total_len == 0) return;
+    skip %= pattern->total_len;
+    do
+    {
+        if ((UINT)pos->left_in_dash > skip)
+        {
+            pos->left_in_dash -= skip;
+            return;
+        }
+        skip -= pos->left_in_dash;
+        pos->cur_dash++;
+        if ((DWORD)pos->cur_dash == pattern->count) pos->cur_dash = 0;
+        pos->left_in_dash = pattern->dashes[pos->cur_dash];
+        pos->mark = !pos->mark;
+    }
+    while (skip);
+}
 
 /* Allocate an empty (locked) temporary region. */
 static
@@ -1963,6 +2041,130 @@ PATH_WideLineSegments(const WIDEPEN_INFO *pi, INT num, const POINT *pts, BOOL cl
     if (close) PATH_AddJoin(pi, total, round_cap, last_pt, &face_2, &first_face);
 }
 
+/* Wine dashed_wide_pen_lines: stroke a single (sub)figure as a dashed wide
+ * pen, emitting one wide sub-segment per dash "mark" into total. */
+static
+VOID
+PATH_DashedWidePenLines(const WIDEPEN_INFO *pi, INT num, POINT *pts, BOOL close,
+                        PREGION total, PREGION round_cap)
+{
+    PATH_DASH_PATTERN pattern;
+    PATH_DASH_POS pos;
+    INT i, start, cur_len, initial_num = 0;
+    POINT initial_point = {0, 0}, start_point, end_point;
+
+    if ((pi->pen_style < PS_DASH) || (pi->pen_style > PS_DASHDOTDOT))
+        return;
+
+    /* Build the width-scaled geometric dash pattern. */
+    pattern = gPathDashGeometric[pi->pen_style - 1];
+    if (pi->pen_width > 1)
+        PATH_ScaleDashPattern(&pattern, (DWORD)pi->pen_width, pi->pen_endcap);
+
+    PATH_ResetDashOrigin(&pattern, &pos);
+
+    start = 0;
+    cur_len = 0;
+    start_point = pts[0];
+
+    for (i = 0; i < (close ? num : num - 1); i++)
+    {
+        const POINT *pt_1 = pts + i;
+        const POINT *pt_2 = pts + ((close && i == num - 1) ? 0 : i + 1);
+        INT dx = pt_2->x - pt_1->x;
+        INT dy = pt_2->y - pt_1->y;
+
+        if (dx == 0 && dy == 0) continue;
+
+        if (dy == 0)
+        {
+            if (abs(dx) - cur_len < pos.left_in_dash)
+            {
+                PATH_SkipDash(&pattern, &pos, abs(dx) - cur_len);
+                cur_len = 0;
+                continue;
+            }
+            cur_len += pos.left_in_dash;
+            dx = (dx > 0) ? cur_len : -cur_len;
+        }
+        else if (dx == 0)
+        {
+            if (abs(dy) - cur_len < pos.left_in_dash)
+            {
+                PATH_SkipDash(&pattern, &pos, abs(dy) - cur_len);
+                cur_len = 0;
+                continue;
+            }
+            cur_len += pos.left_in_dash;
+            dy = (dy > 0) ? cur_len : -cur_len;
+        }
+        else
+        {
+            double len = sqrt((double)dx * dx + (double)dy * dy);
+
+            if (len - cur_len < pos.left_in_dash)
+            {
+                PATH_SkipDash(&pattern, &pos, (UINT)(len - cur_len));
+                cur_len = 0;
+                continue;
+            }
+            cur_len += pos.left_in_dash;
+            dx = (INT)(dx * cur_len / len);
+            dy = (INT)(dy * cur_len / len);
+        }
+        end_point.x = pt_1->x + dx;
+        end_point.y = pt_1->y + dy;
+
+        if (pos.mark)
+        {
+            if (!initial_num && close)  /* first dash, save it for later */
+            {
+                initial_num = i - start + 1;
+                initial_point = end_point;
+            }
+            else
+            {
+                PATH_WideLineSegments(pi, num, pts, FALSE, start, i - start + 1,
+                                      &start_point, &end_point, round_cap, total);
+            }
+        }
+        if (!initial_num) initial_num = -1;  /* no need to close it */
+
+        PATH_SkipDash(&pattern, &pos, pos.left_in_dash);
+        start_point = end_point;
+        start = i;
+        i--;  /* continue on the same segment */
+    }
+
+    if (pos.mark)  /* final dash */
+    {
+        INT count;
+
+        if (initial_num > 0)
+        {
+            count = num - start + initial_num;
+            end_point = initial_point;
+        }
+        else if (close)
+        {
+            count = num - start;
+            end_point = pts[0];
+        }
+        else
+        {
+            count = num - start - 1;
+            end_point = pts[num - 1];
+        }
+        PATH_WideLineSegments(pi, num, pts, FALSE, start, count,
+                              &start_point, &end_point, round_cap, total);
+    }
+    else if (initial_num > 0)  /* initial dash only */
+    {
+        PATH_WideLineSegments(pi, num, pts, FALSE, 0, initial_num,
+                              &pts[0], &initial_point, round_cap, total);
+    }
+}
+
 /* Wine wide_pen_lines: stroke a single (sub)figure (num points) into total. */
 static
 VOID
@@ -1970,6 +2172,7 @@ PATH_WidePenLines(const WIDEPEN_INFO *pi, INT num, POINT *pts, BOOL close, PREGI
 {
     PREGION round_cap = NULL;
     HRGN hCap = NULL;
+    BOOL dashed = (pi->pen_style >= PS_DASH) && (pi->pen_style <= PS_DASHDOTDOT);
 
     if (num < 2) return;
 
@@ -1985,7 +2188,11 @@ PATH_WidePenLines(const WIDEPEN_INFO *pi, INT num, POINT *pts, BOOL close, PREGI
             round_cap = REGION_LockRgn(hCap);
     }
 
-    if (close)
+    if (dashed)
+    {
+        PATH_DashedWidePenLines(pi, num, pts, close, total, round_cap);
+    }
+    else if (close)
         PATH_WideLineSegments(pi, num, pts, TRUE, 0, num, &pts[0], &pts[0], round_cap, total);
     else
         PATH_WideLineSegments(pi, num, pts, FALSE, 0, num - 1, &pts[0], &pts[num - 1], round_cap, total);
@@ -2159,6 +2366,14 @@ PATH_StrokeWidePen(DC *dc, PPATH pPath, PBRUSH pbrLine)
      * the mask extraction below yields the correct result for both pen kinds. */
     pi.pen_endcap = penStyle & PS_ENDCAP_MASK;
     pi.pen_join   = penStyle & PS_JOIN_MASK;
+
+    /* Geometric dashed pens (PS_DASH..PS_DASHDOTDOT) stroke the line as a
+     * series of dash marks; PS_SOLID / PS_INSIDEFRAME stroke solid.  Old-style
+     * (CreatePen) wide pens are always solid here. */
+    if (pbrLine->flAttrs & BR_IS_OLDSTYLEPEN)
+        pi.pen_style = PS_SOLID;
+    else
+        pi.pen_style = penStyle & PS_STYLE_MASK;
 
     prgn = IntGdiStrokeWidePathRegion(dc, pPath, &pi);
     if (prgn == NULL)
