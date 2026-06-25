@@ -334,9 +334,7 @@ IntEngGradientFillTriangle(
 
     BOOL sx[NLINES];
     LONG x[NLINES], dx[NLINES], dy[NLINES], incx[NLINES], ex[NLINES], destx[NLINES];
-    LONG c[NLINES][3], dc[NLINES][3], ec[NLINES][3], ic[NLINES][3]; /* colors on lines */
-    LONG g, gx, gxi, gc[3], gd[3], ge[3], gi[3]; /* colors in triangle */
-    LONG sy, y, bt, g_end;
+    LONG sy, y, bt;
 
     v1 = (pVertex + gTriangle->Vertex1);
     v2 = (pVertex + gTriangle->Vertex2);
@@ -368,6 +366,19 @@ IntEngGradientFillTriangle(
 
     if (VCMPCLRS(v1, v2, v3))
     {
+      /* Barycentric gradient fill, matching Windows/Wine (device coordinates). */
+      LONGLONG llDet;
+      LONG dv1x = v1->x + pptlDitherOrg->x, dv1y = v1->y + pptlDitherOrg->y;
+      LONG dv2x = v2->x + pptlDitherOrg->x, dv2y = v2->y + pptlDitherOrg->y;
+      LONG dv3x = v3->x + pptlDitherOrg->x, dv3y = v3->y + pptlDitherOrg->y;
+
+      llDet = (LONGLONG)(dv3y - dv2y) * (dv3x - dv1x) -
+              (LONGLONG)(dv3x - dv2x) * (dv3y - dv1y);
+      if (llDet == 0)
+      {
+        return IntEngLeave(&EnterLeave);
+      }
+
       CLIPOBJ_cEnumStart(pco, FALSE, CT_RECTANGLES, CD_RIGHTDOWN, 0);
       do
       {
@@ -376,36 +387,45 @@ IntEngGradientFillTriangle(
         {
           if (RECTL_bIntersectRect(&FillRect, &RectEnum.arcl[i], prclExtents))
           {
-            BOOL InY;
+            LONG yy, xx, xl, xr, ex1, ex2;
 
-            DOINIT(v1, v3, 0);
-            DOINIT(v1, v2, 1);
-            DOINIT(v2, v3, 2);
-
-            y = v1->y;
-            sy = v1->y + pptlDitherOrg->y;
-            bt = min(v3->y + pptlDitherOrg->y, FillRect.bottom);
-
-            while (sy < bt)
+            for (yy = max(FillRect.top, dv1y); yy < min(FillRect.bottom, dv3y); yy++)
             {
-              InY = !(sy < FillRect.top || sy >= FillRect.bottom);
-              GOLINE(v1, v3, 0);
-              DOLINE(v1, v3, 0);
-              ENDLINE(v1, v3, 0);
+              /* Left/right triangle edge x at this scanline (Wine edge_coord). */
+              if (yy < dv2y)
+                ex1 = (dv2x > dv1x) ?
+                      dv2x + (yy - dv2y) * (dv2x - dv1x) / (dv2y - dv1y) :
+                      dv1x + (yy - dv1y) * (dv2x - dv1x) / (dv2y - dv1y);
+              else
+                ex1 = (dv3x > dv2x) ?
+                      dv3x + (yy - dv3y) * (dv3x - dv2x) / (dv3y - dv2y) :
+                      dv2x + (yy - dv2y) * (dv3x - dv2x) / (dv3y - dv2y);
 
-              GOLINE(v1, v2, 1);
-              DOLINE(v1, v2, 1);
-              FILLLINE(0, 1);
-              ENDLINE(v1, v2, 1);
+              ex2 = (dv3x > dv1x) ?
+                    dv3x + (yy - dv3y) * (dv3x - dv1x) / (dv3y - dv1y) :
+                    dv1x + (yy - dv1y) * (dv3x - dv1x) / (dv3y - dv1y);
 
-              GOLINE(v2, v3, 2);
-              FILLLINE(0, 2);
-              DOLINE(v2, v3, 2);
-              FILLLINE(0, 2);
-              ENDLINE(23, v3, 2);
+              xl = max(FillRect.left, min(ex1, ex2));
+              xr = min(FillRect.right, max(ex1, ex2));
 
-              y++;
-              sy++;
+              for (xx = xl; xx < xr; xx++)
+              {
+                LONGLONG l1, l2, l3;
+                LONG cr, cg, cb;
+
+                l1 = (LONGLONG)(dv2y - dv3y) * (xx - dv3x) -
+                     (LONGLONG)(dv2x - dv3x) * (yy - dv3y);
+                l2 = (LONGLONG)(dv3y - dv1y) * (xx - dv3x) -
+                     (LONGLONG)(dv3x - dv1x) * (yy - dv3y);
+                l3 = llDet - l1 - l2;
+
+                cr = (LONG)((v1->Red   * l1 + v2->Red   * l2 + v3->Red   * l3) / llDet / 256);
+                cg = (LONG)((v1->Green * l1 + v2->Green * l2 + v3->Green * l3) / llDet / 256);
+                cb = (LONG)((v1->Blue  * l1 + v2->Blue  * l2 + v3->Blue  * l3) / llDet / 256);
+
+                Color = XLATEOBJ_iXlate(pxlo, RGB(cr, cg, cb));
+                DibFunctionsForBitmapFormat[psoOutput->iBitmapFormat].DIB_PutPixel(psoOutput, xx, yy, Color);
+              }
             }
           }
         }
