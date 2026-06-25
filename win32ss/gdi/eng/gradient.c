@@ -815,6 +815,20 @@ IntEngGradientFill(
     psurf = CONTAINING_RECORD(psoDest, SURFACE, SurfObj);
     ASSERT(psurf);
 
+    /*
+     * Windows' GdiGradientFill leaves a 1bpp device-dependent bitmap (a DDB
+     * created e.g. via CreateBitmap, with no backing DIB section) completely
+     * untouched - it renders nothing.  This was verified against the gdi32:dib
+     * winetest oracle: the "1 ddb" / "1 ddb custom colors inverted" expected
+     * hashes equal the SHA1 of the unmodified 0xCC reset pattern for both the
+     * rect and triangle gradient checkpoints.  A 1bpp DIB section (hDIBSection
+     * set) is still rendered normally.  Match that behaviour here.
+     */
+    if ((psoDest->iBitmapFormat == BMF_1BPP) && (psurf->hDIBSection == NULL))
+    {
+        return TRUE;
+    }
+
     if (psurf->flags & HOOK_GRADIENTFILL)
     {
         Ret = GDIDEVFUNCS(psoDest).GradientFill(psoDest,
