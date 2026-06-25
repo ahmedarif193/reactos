@@ -611,6 +611,12 @@ IntRectangle(PDC dc,
     DestRect.top    += dc->ptlDCOrig.y;
     DestRect.bottom += dc->ptlDCOrig.y;
 
+    /* Windows draws nothing for a zero-width or zero-height rectangle */
+    if ((DestRect.left == DestRect.right) || (DestRect.top == DestRect.bottom))
+    {
+        return TRUE;
+    }
+
     if (dc->fs & (DC_ACCUM_APP|DC_ACCUM_WMGR))
     {
        IntUpdateBoundsRect(dc, &DestRect);
@@ -708,6 +714,25 @@ IntRectangle(PDC dc,
         else
         {
             Mix = ROP2_TO_MIX(pdcattr->jROP2);
+
+            /* In opaque mode a styled (dashed) pen fills the gaps with the
+               background colour: stroke the frame solid in the background
+               colour first, then the styled pen on top. */
+            if ((pdcattr->jBkMode == OPAQUE) && (pbrLine->dwStyleCount != 0))
+            {
+                if (pdcattr->ulDirty_ & DIRTY_BACKGROUND)
+                    DC_vUpdateBackgroundBrush(dc);
+
+                IntEngLineTo(&psurf->SurfObj, (CLIPOBJ *)&dc->co, &dc->eboBackground.BrushObject,
+                             DestRect.left, DestRect.top, DestRect.right, DestRect.top, &DestRect, ROP2_TO_MIX(R2_COPYPEN));
+                IntEngLineTo(&psurf->SurfObj, (CLIPOBJ *)&dc->co, &dc->eboBackground.BrushObject,
+                             DestRect.right, DestRect.top, DestRect.right, DestRect.bottom, &DestRect, ROP2_TO_MIX(R2_COPYPEN));
+                IntEngLineTo(&psurf->SurfObj, (CLIPOBJ *)&dc->co, &dc->eboBackground.BrushObject,
+                             DestRect.right, DestRect.bottom, DestRect.left, DestRect.bottom, &DestRect, ROP2_TO_MIX(R2_COPYPEN));
+                IntEngLineTo(&psurf->SurfObj, (CLIPOBJ *)&dc->co, &dc->eboBackground.BrushObject,
+                             DestRect.left, DestRect.bottom, DestRect.left, DestRect.top, &DestRect, ROP2_TO_MIX(R2_COPYPEN));
+            }
+
             ret = ret && IntEngLineTo(&psurf->SurfObj,
                                       (CLIPOBJ *)&dc->co,
                                       &dc->eboLine.BrushObject,
