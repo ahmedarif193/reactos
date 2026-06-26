@@ -155,6 +155,7 @@
 #define GEM_NCFGR_CLK_MASK (7u << 18)
 #define GEM_NCFGR_CLK_DIV96 (5u << 18)
 #define GEM_NCFGR_DBW128 (2u << 21)
+#define GEM_NCFGR_RXCOEN (1u << 24)
 
 #define GEM_DMACFG_FBLDO_INCR16 16u
 #define GEM_DMACFG_FBLDO_MASK 0x0000001f
