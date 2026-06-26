@@ -228,7 +228,7 @@ Rp1GemBuildNcfgr(
 {
     ULONG Ncfgr;
 
-    Ncfgr = GEM_NCFGR_CLK_DIV96 | GEM_NCFGR_DBW128 | MACB_NCFGR_DRFCS | MACB_NCFGR_BIG;
+    Ncfgr = GEM_NCFGR_CLK_DIV96 | GEM_NCFGR_DBW128 | MACB_NCFGR_DRFCS | MACB_NCFGR_BIG | GEM_NCFGR_RXCOEN;
 
     if (Adapter->PacketFilter & NDIS_PACKET_TYPE_PROMISCUOUS)
         Ncfgr |= MACB_NCFGR_CAF;
@@ -600,12 +600,12 @@ Rp1GemInitializeDatapath(
     Dmacfg &= ~(GEM_DMACFG_FBLDO_MASK |
                 GEM_DMACFG_RXBS_MASK |
                 GEM_DMACFG_ENDIA_DESC |
-                GEM_DMACFG_ENDIA_PKT |
-                GEM_DMACFG_TXCOEN);
+                GEM_DMACFG_ENDIA_PKT);
     Dmacfg |= GEM_DMACFG_FBLDO_INCR16 |
               GEM_DMACFG_RXBMS_FULL |
               GEM_DMACFG_TXPBMS |
               GEM_DMACFG_RXBS(RP1GEM_BUFFER_SIZE) |
+              GEM_DMACFG_TXCOEN |
               GEM_DMACFG_ADDR64;
     Rp1GemWrite32(Adapter, GEM_DMACFG, Dmacfg);
 
