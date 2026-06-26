@@ -156,6 +156,7 @@ typedef struct _CYW_DLOAD_DATA
 #define BRCMF_C_GET_VAR                 262
 #define BRCMF_C_SET_VAR                 263
 #define BRCMF_C_SET_WSEC_PMK            268
+#define BRCMF_C_SET_SCB_AUTHORIZE       121
 
 #define CYW_WSEC_NONE                   0x00
 #define CYW_WSEC_WEP                    0x01
@@ -195,9 +196,15 @@ typedef struct _CYW_DLOAD_DATA
 #define BRCMF_E_JOIN                    1
 #define BRCMF_E_AUTH                    3
 #define BRCMF_E_DEAUTH                  5
+#define BRCMF_E_DEAUTH_IND              6
 #define BRCMF_E_ASSOC                   7
+#define BRCMF_E_REASSOC                 9
+#define BRCMF_E_REASSOC_IND             10
 #define BRCMF_E_DISASSOC                11
+#define BRCMF_E_DISASSOC_IND            12
 #define BRCMF_E_LINK                    16
+#define BRCMF_E_MIC_ERROR               17
+#define BRCMF_E_ROAM                    19
 #define BRCMF_E_IF                      54
 #define BRCMF_E_ESCAN_RESULT            69
 
@@ -432,6 +439,7 @@ VOID CywSdioClose(_In_ PCYW_ADAPTER Adapter);
 NTSTATUS CywSdioReadByte(_In_ PCYW_ADAPTER Adapter, _In_ UCHAR Function, _In_ ULONG Address, _Out_ PUCHAR Value);
 NTSTATUS CywSdioWriteByte(_In_ PCYW_ADAPTER Adapter, _In_ UCHAR Function, _In_ ULONG Address, _In_ UCHAR Value);
 NTSTATUS CywSdioReadBytes(_In_ PCYW_ADAPTER Adapter, _In_ UCHAR Function, _In_ ULONG Address, _Out_ PUCHAR Buffer, _In_ ULONG Length);
+NTSTATUS CywSdioReadBlocks(_In_ PCYW_ADAPTER Adapter, _In_ UCHAR Function, _In_ ULONG Address, _Out_ PUCHAR Buffer, _In_ ULONG Length, _In_ ULONG BlockSize);
 NTSTATUS CywSdioWriteBytes(_In_ PCYW_ADAPTER Adapter, _In_ UCHAR Function, _In_ ULONG Address, _In_ PUCHAR Buffer, _In_ ULONG Length);
 NTSTATUS CywSdioEnableFunction(_In_ PCYW_ADAPTER Adapter, _In_ UCHAR Function);
 NTSTATUS CywSdioSetBlockSize(_In_ PCYW_ADAPTER Adapter, _In_ UCHAR Function, _In_ ULONG BlockSize);
@@ -455,7 +463,7 @@ NTSTATUS CywActivateEvents(_In_ PCYW_ADAPTER Adapter);
 NTSTATUS CywScanStart(_In_ PCYW_ADAPTER Adapter, _In_opt_ PDOT11_SCAN_REQUEST_V2 Request);
 VOID CywProcessEvent(_In_ PCYW_ADAPTER Adapter, _In_ PUCHAR Frame, _In_ ULONG Length);
 NTSTATUS CywSdpcmSendData(_In_ PCYW_ADAPTER Adapter, _In_ PUCHAR Eth, _In_ ULONG EthLen);
-VOID CywRxData(_In_ PCYW_ADAPTER Adapter, _In_ PUCHAR Body, _In_ ULONG BodyLen);
+PNET_BUFFER_LIST CywRxData(_In_ PCYW_ADAPTER Adapter, _In_ PUCHAR Body, _In_ ULONG BodyLen);
 NTSTATUS CywStartRxThread(_In_ PCYW_ADAPTER Adapter);
 VOID CywStopRxThread(_In_ PCYW_ADAPTER Adapter);
 ULONG CywBuildBssList(_In_ PCYW_ADAPTER Adapter, _Out_ PUCHAR Buffer, _In_ ULONG BufferLength, _Out_ PULONG BytesNeeded);
