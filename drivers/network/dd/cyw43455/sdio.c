@@ -156,6 +156,18 @@ CywSdioReadBytes(
 }
 
 NTSTATUS
+CywSdioReadBlocks(
+    _In_ PCYW_ADAPTER Adapter,
+    _In_ UCHAR Function,
+    _In_ ULONG Address,
+    _Out_ PUCHAR Buffer,
+    _In_ ULONG Length,
+    _In_ ULONG BlockSize)
+{
+    return CywSdioRw(Adapter, Function, FALSE, TRUE, Address, Buffer, Length, TRUE, BlockSize);
+}
+
+NTSTATUS
 CywSdioWriteBytes(
     _In_ PCYW_ADAPTER Adapter,
     _In_ UCHAR Function,
