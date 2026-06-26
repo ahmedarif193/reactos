@@ -19,6 +19,7 @@ KEVENT         WorkQueueEvent;
 KEVENT         WorkQueueClear;
 PKTHREAD       WorkQueueThread;
 BOOLEAN        WorkQueueStop;
+NPAGED_LOOKASIDE_LIST ChewLookaside;
 
 typedef struct _WORK_ITEM
 {
@@ -47,7 +48,7 @@ VOID NTAPI ChewWorkItem(PDEVICE_OBJECT DeviceObject, PVOID ChewItem)
 
     KeReleaseSpinLock(&WorkQueueLock, OldIrql);
 
-    ExFreePoolWithTag(WorkItem, CHEW_TAG);
+    ExFreeToNPagedLookasideList(&ChewLookaside, WorkItem);
 }
 
 VOID NTAPI ChewWorkerThread(PVOID Context)
@@ -75,7 +76,7 @@ VOID NTAPI ChewWorkerThread(PVOID Context)
 
             Item = CONTAINING_RECORD(Entry, WORK_ITEM, Entry);
             Item->Worker(Item->WorkerContext);
-            ExFreePoolWithTag(Item, CHEW_TAG);
+            ExFreeToNPagedLookasideList(&ChewLookaside, Item);
         }
 
         if (WorkQueueStop)
@@ -96,6 +97,9 @@ VOID ChewInit(PDEVICE_OBJECT DeviceObject)
     KeInitializeEvent(&WorkQueueClear, NotificationEvent, TRUE);
     WorkQueueStop = FALSE;
     WorkQueueThread = NULL;
+
+    ExInitializeNPagedLookasideList(&ChewLookaside, NULL, NULL, 0,
+                                    sizeof(WORK_ITEM), CHEW_TAG, 0);
 
     if (PsCreateSystemThread(&ThreadHandle, THREAD_ALL_ACCESS, NULL, NULL, NULL,
                              ChewWorkerThread, NULL) == STATUS_SUCCESS)
@@ -121,6 +125,8 @@ VOID ChewShutdown(VOID)
     {
         KeWaitForSingleObject(&WorkQueueClear, Executive, KernelMode, FALSE, NULL);
     }
+
+    ExDeleteNPagedLookasideList(&ChewLookaside);
 }
 
 BOOLEAN ChewCreate(VOID (*Worker)(PVOID), PVOID WorkerContext)
@@ -130,9 +136,7 @@ BOOLEAN ChewCreate(VOID (*Worker)(PVOID), PVOID WorkerContext)
     if (WorkQueueStop)
         return FALSE;
 
-    Item = ExAllocatePoolWithTag(NonPagedPool,
-                                 sizeof(WORK_ITEM),
-                                 CHEW_TAG);
+    Item = ExAllocateFromNPagedLookasideList(&ChewLookaside);
     if (!Item)
         return FALSE;
 
@@ -150,7 +154,7 @@ BOOLEAN ChewCreate(VOID (*Worker)(PVOID), PVOID WorkerContext)
     Item->WorkItem = IoAllocateWorkItem(WorkQueueDevice);
     if (!Item->WorkItem)
     {
-        ExFreePoolWithTag(Item, CHEW_TAG);
+        ExFreeToNPagedLookasideList(&ChewLookaside, Item);
         return FALSE;
     }
 
