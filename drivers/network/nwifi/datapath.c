@@ -95,6 +95,7 @@ NwifiBuildNbl(
     {
         return NULL;
     }
+    MmBuildMdlForNonPagedPool(Mdl);
 
     Nbl = NdisAllocateNetBufferAndNetBufferList(Pool, 0, 0, Mdl, 0, FrameLength);
     if (Nbl == NULL)
@@ -625,7 +626,7 @@ NwifiReceiveFromLower(
             ULONG FrameLength = NET_BUFFER_DATA_LENGTH(NetBuffer);
             PNET_BUFFER_LIST UpNbl;
 
-            if (!Running || FrameLength == 0 || FrameLength > sizeof(Frame))
+            if (FrameLength == 0 || FrameLength > sizeof(Frame))
             {
                 Adapter->RxError++;
                 continue;
@@ -652,6 +653,12 @@ NwifiReceiveFromLower(
                     NwifiFreeBuiltNbl(UpNbl);
                     continue;
                 }
+            }
+
+            if (!Running)
+            {
+                NwifiFreeBuiltNbl(UpNbl);
+                continue;
             }
 
             Adapter->RxOk++;

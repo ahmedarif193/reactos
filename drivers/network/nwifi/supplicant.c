@@ -228,6 +228,17 @@ NwifiSupplicantStart(
         return NDIS_STATUS_FAILURE;
     }
 
+    {
+        static const UCHAR RsnIe[22] = {
+            0x30, 0x14, 0x01, 0x00,
+            0x00, 0x0F, 0xAC, 0x04,
+            0x01, 0x00, 0x00, 0x0F, 0xAC, 0x04,
+            0x01, 0x00, 0x00, 0x0F, 0xAC, 0x02,
+            0x00, 0x00
+        };
+        RsnaSetRsnIe(&Sup->Ctx, RsnIe, sizeof(RsnIe));
+    }
+
     /* The supplicant is the station (SPA == our MAC). */
     RtlCopyMemory(Sup->OwnMac, Adapter->MacAddress, IEEE80211_ADDR_LEN);
     RsnaSetStaAddr(&Sup->Ctx, Sup->OwnMac);
@@ -418,6 +429,8 @@ NwifiSupplicantRxEapol(
 
     UNREFERENCED_PARAMETER(DstMac);
 
+    DPRINT1("NWIFI: sup rx eapol len %lu sup %p\n", Length, Sup);
+
     /* No supplicant armed (open network, or PSK not seeded): consume the EAPOL
      * frame anyway so it never leaks up to TCP/IP as bogus Ethernet. */
     if (Sup == NULL || !Sup->Initialised)
@@ -429,6 +442,7 @@ NwifiSupplicantRxEapol(
     RsnaSetApAddr(&Sup->Ctx, SrcMac);
 
     NewState = RsnaRxEapol(&Sup->Ctx, Eapol, Length, OutFrame, &OutLen);
+    DPRINT1("NWIFI: sup eapol in %lu out %lu state %d err %d\n", Length, (ULONG)OutLen, NewState, RsnaLastError(&Sup->Ctx));
 
     /* Transmit any reply (msg2 after msg1, msg4 after msg3) back to the AP as
      * an EAPOL frame, sent in the clear (the link is not yet encrypted). */
