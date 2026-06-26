@@ -3777,8 +3777,6 @@ MmFreeSectionPage(PVOID Context, MEMORY_AREA* MemoryArea, PVOID Address,
         if (IS_SWAP_FROM_SSE(Entry) ||
                 Page != PFN_FROM_SSE(Entry))
         {
-            ASSERT(Process != NULL);
-
             /*
              * Just dereference private pages
              */
@@ -3788,7 +3786,8 @@ MmFreeSectionPage(PVOID Context, MEMORY_AREA* MemoryArea, PVOID Address,
                 MmFreeSwapPage(SavedSwapEntry);
                 MmSetSavedSwapEntryPage(Page, 0);
             }
-            MmDeleteRmap(Page, Process, Address);
+            if (Process)
+                MmDeleteRmap(Page, Process, Address);
             MmReleasePageMemoryConsumer(MC_USER, Page);
         }
         else
