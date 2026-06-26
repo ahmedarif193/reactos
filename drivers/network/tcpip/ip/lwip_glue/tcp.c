@@ -97,7 +97,59 @@ PQUEUE_ENTRY LibTCPDequeuePacket(PCONNECTION_ENDPOINT Connection)
     return qp;
 }
 
-NTSTATUS LibTCPGetDataFromConnectionQueue(PCONNECTION_ENDPOINT Connection, PUCHAR RecvBuffer, UINT RecvLen, UINT *Received)
+static BOOLEAN WaitForEventSafely(PRKEVENT Event);
+
+static
+void
+LibTCPRecvedCallback(void *arg)
+{
+    struct lwip_callback_msg *msg = arg;
+    PTCP_PCB pcb;
+    u32_t Length;
+
+    ASSERT(msg);
+
+    pcb = (PTCP_PCB)msg->Input.Recved.Connection->SocketContext;
+    Length = msg->Input.Recved.Length;
+
+    while (pcb && Length > 0)
+    {
+        u16_t Chunk = (Length > 0xFFFF) ? 0xFFFF : (u16_t)Length;
+        tcp_recved(pcb, Chunk);
+        Length -= Chunk;
+    }
+
+    KeSetEvent(&msg->Event, IO_NO_INCREMENT, FALSE);
+}
+
+static
+void
+LibTCPRecved(PCONNECTION_ENDPOINT Connection, u32_t Length, const int safe)
+{
+    struct lwip_callback_msg msg;
+    PTCP_PCB pcb;
+
+    if (safe)
+    {
+        pcb = (PTCP_PCB)Connection->SocketContext;
+        while (pcb && Length > 0)
+        {
+            u16_t Chunk = (Length > 0xFFFF) ? 0xFFFF : (u16_t)Length;
+            tcp_recved(pcb, Chunk);
+            Length -= Chunk;
+        }
+        return;
+    }
+
+    KeInitializeEvent(&msg.Event, NotificationEvent, FALSE);
+    msg.Input.Recved.Connection = Connection;
+    msg.Input.Recved.Length = Length;
+
+    if (tcpip_callback_with_block(LibTCPRecvedCallback, &msg, 1) == ERR_OK)
+        WaitForEventSafely(&msg.Event);
+}
+
+NTSTATUS LibTCPGetDataFromConnectionQueue(PCONNECTION_ENDPOINT Connection, PUCHAR RecvBuffer, UINT RecvLen, UINT *Received, const int safe)
 {
     PQUEUE_ENTRY qp;
     struct pbuf* p;
@@ -168,6 +220,9 @@ NTSTATUS LibTCPGetDataFromConnectionQueue(PCONNECTION_ENDPOINT Connection, PUCHA
 
     UnlockObject(Connection);
 
+    if (*Received != 0)
+        LibTCPRecved(Connection, *Received, safe);
+
     return Status;
 }
 
@@ -226,8 +281,6 @@ InternalRecvEventHandler(void *arg, PTCP_PCB pcb, struct pbuf *p, const err_t er
     if (p)
     {
         LibTCPEnqueuePacket(Connection, p);
-
-        tcp_recved(pcb, p->tot_len);
 
         TCPRecvEventHandler(arg);
     }

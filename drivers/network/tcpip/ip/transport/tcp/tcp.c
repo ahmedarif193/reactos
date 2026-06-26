@@ -154,6 +154,7 @@ NTSTATUS TCPSocket( PCONNECTION_ENDPOINT Connection,
                     UINT Family, UINT Type, UINT Proto )
 {
     NTSTATUS Status;
+    PVOID SocketContext;
 
     LockObject(Connection);
 
@@ -161,8 +162,15 @@ NTSTATUS TCPSocket( PCONNECTION_ENDPOINT Connection,
                            "Proto %d, sizeof(CONNECTION_ENDPOINT) = %d\n",
                            Connection, Family, Type, Proto, sizeof(CONNECTION_ENDPOINT)));
 
-    Connection->SocketContext = LibTCPSocket(Connection);
-    if (Connection->SocketContext)
+    ReferenceObject(Connection);
+    UnlockObject(Connection);
+
+    SocketContext = LibTCPSocket(Connection);
+
+    LockObject(Connection);
+    DereferenceObject(Connection);
+    Connection->SocketContext = SocketContext;
+    if (SocketContext)
         Status = STATUS_SUCCESS;
     else
         Status = STATUS_INSUFFICIENT_RESOURCES;
@@ -544,7 +552,7 @@ NTSTATUS TCPReceiveData
 
     NdisQueryBuffer(Buffer, &DataBuffer, &DataLen);
 
-    Status = LibTCPGetDataFromConnectionQueue(Connection, DataBuffer, DataLen, &Received);
+    Status = LibTCPGetDataFromConnectionQueue(Connection, DataBuffer, DataLen, &Received, FALSE);
 
     if (Status == STATUS_PENDING)
     {
