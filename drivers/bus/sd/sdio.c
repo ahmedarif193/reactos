@@ -542,6 +542,33 @@ SdBusSdioEnumerateFunctions(
     HostPdo->SdioVendorId = CommonVid;
     HostPdo->SdioDeviceId = CommonDid;
 
+    {
+        UCHAR BusIf = (UCHAR)((BusIfCtrl & ~0x03) | 0x02);
+        UCHAR HighSpeed = 0;
+        UCHAR HostCtrl;
+
+        if (NT_SUCCESS(SdBusSdioWriteCccr(FdoExtension, SDIO_CCCR_BUS_INTERFACE, BusIf)))
+        {
+            HostCtrl = SdBusReadReg8(FdoExtension, SDHCI_HOST_CONTROL);
+            HostCtrl |= SDHCI_HC_DATA_WIDTH_4BIT;
+            SdBusWriteReg8(FdoExtension, SDHCI_HOST_CONTROL, HostCtrl);
+            FdoExtension->CurrentBusWidth = 4;
+            DPRINT1("SdBusSdioEnumerateFunctions: SDIO 4-bit bus enabled\n");
+        }
+
+        (void)SdBusSdioReadCccr(FdoExtension, SDIO_CCCR_HIGH_SPEED, &HighSpeed);
+        if (HighSpeed & 0x01)
+        {
+            HighSpeed |= 0x02;
+            if (NT_SUCCESS(SdBusSdioWriteCccr(FdoExtension, SDIO_CCCR_HIGH_SPEED, HighSpeed)))
+            {
+                HostCtrl = SdBusReadReg8(FdoExtension, SDHCI_HOST_CONTROL);
+                HostCtrl |= SDHCI_HC_HIGH_SPEED;
+                SdBusWriteReg8(FdoExtension, SDHCI_HOST_CONTROL, HostCtrl);
+                DPRINT1("SdBusSdioEnumerateFunctions: SDIO high-speed enabled\n");
+            }
+        }
+    }
 
     for (FunctionIndex = 1; FunctionIndex <= NumFunctions; FunctionIndex++)
     {
