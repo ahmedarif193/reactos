@@ -401,7 +401,7 @@ TCPRecvEventHandler(void *arg)
 
         NdisQueryBuffer( Mdl, &RecvBuffer, &RecvLen );
 
-        Status = LibTCPGetDataFromConnectionQueue(Connection, RecvBuffer, RecvLen, &Received);
+        Status = LibTCPGetDataFromConnectionQueue(Connection, RecvBuffer, RecvLen, &Received, TRUE);
         if (Status == STATUS_PENDING)
         {
             InsertHeadList(&Connection->ReceiveRequest, &Bucket->Entry);
