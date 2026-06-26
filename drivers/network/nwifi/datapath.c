@@ -671,9 +671,6 @@ NwifiReceiveFromLower(
                                                UpNbl, NDIS_DEFAULT_PORT_NUMBER, 1,
                                                ReceiveFlags |
                                                NDIS_RECEIVE_FLAGS_RESOURCES);
-            /* With RESOURCES set, the NBL is owned by us again on return. */
-            NwifiMiniportReturnNetBufferLists(Adapter->MiniportAdapterHandle,
-                                              UpNbl, ReturnFlags);
         }
 
         Nbl = NextNbl;
