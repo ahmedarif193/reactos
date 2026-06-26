@@ -28,6 +28,8 @@ typedef struct _LAN_WQ_ITEM {
     BOOLEAN LegacyReceive;
 } LAN_WQ_ITEM, *PLAN_WQ_ITEM;
 
+NPAGED_LOOKASIDE_LIST LanWqLookaside;
+
 typedef struct _RECONFIGURE_CONTEXT {
     ULONG State;
     PLAN_ADAPTER Adapter;
@@ -319,7 +321,7 @@ VOID LanReceiveWorker( PVOID Context ) {
     BytesTransferred = WorkItem->BytesTransferred;
     LegacyReceive = WorkItem->LegacyReceive;
 
-    ExFreePoolWithTag(WorkItem, WQ_CONTEXT_TAG);
+    ExFreeToNPagedLookasideList(&LanWqLookaside, WorkItem);
 
     Interface = Adapter->Context;
 
@@ -381,8 +383,7 @@ VOID LanSubmitReceiveWork(
     PNDIS_PACKET Packet,
     UINT BytesTransferred,
     BOOLEAN LegacyReceive) {
-    PLAN_WQ_ITEM WQItem = ExAllocatePoolWithTag(NonPagedPool, sizeof(LAN_WQ_ITEM),
-                                                WQ_CONTEXT_TAG);
+    PLAN_WQ_ITEM WQItem = ExAllocateFromNPagedLookasideList(&LanWqLookaside);
     PLAN_ADAPTER Adapter = (PLAN_ADAPTER)BindingContext;
 
     TI_DbgPrint(DEBUG_DATALINK,("called\n"));
@@ -395,7 +396,7 @@ VOID LanSubmitReceiveWork(
     WQItem->LegacyReceive = LegacyReceive;
 
     if (!ChewCreate( LanReceiveWorker, WQItem ))
-        ExFreePoolWithTag(WQItem, WQ_CONTEXT_TAG);
+        ExFreeToNPagedLookasideList(&LanWqLookaside, WQItem);
 }
 
 VOID NTAPI ProtocolTransferDataComplete(
@@ -1647,6 +1648,8 @@ LANUnregisterProtocol(VOID)
 
         NdisDeregisterProtocol(&NdisStatus, NdisProtocolHandle);
         ProtocolRegistered = FALSE;
+
+        ExDeleteNPagedLookasideList(&LanWqLookaside);
     }
 }
 
@@ -1678,6 +1681,9 @@ NTSTATUS LANRegisterProtocol(
 
     InitializeListHead(&AdapterListHead);
     KeInitializeSpinLock(&AdapterListLock);
+
+    ExInitializeNPagedLookasideList(&LanWqLookaside, NULL, NULL, 0,
+                                    sizeof(LAN_WQ_ITEM), WQ_CONTEXT_TAG, 0);
 
     /* Set up protocol characteristics */
     RtlZeroMemory(&ProtChars, sizeof(NDIS_PROTOCOL_CHARACTERISTICS));
