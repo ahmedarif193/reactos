@@ -154,7 +154,7 @@ add_livecd_shortcut("Command Prompt"
     DESTINATION "${dir_allusers_desktop}" "${dir_startmenu_accessories}" "${dir_quicklaunch}")
 add_livecd_shortcut("Device Manager"
     "shell:system\\devmgmt.exe" ICON_INDEX 0
-    DESTINATION "${dir_startmenu_admintools}")
+    DESTINATION "${dir_allusers_desktop}" "${dir_startmenu_admintools}")
 add_livecd_shortcut("Event Viewer"
     "shell:system\\eventvwr.exe" ICON_INDEX 0
     DESTINATION "${dir_startmenu_admintools}")
