@@ -106,6 +106,146 @@ Ndis6FreeAdapterName(_Inout_ PUNICODE_STRING Name)
     }
 }
 
+static HANDLE
+Ndis6ImOpenKey(_In_ PCWSTR Path)
+{
+    UNICODE_STRING KeyPath;
+    OBJECT_ATTRIBUTES Oa;
+    HANDLE Key = NULL;
+    ULONG Disp;
+
+    RtlInitUnicodeString(&KeyPath, Path);
+    InitializeObjectAttributes(&Oa, &KeyPath,
+        OBJ_CASE_INSENSITIVE | OBJ_KERNEL_HANDLE, NULL, NULL);
+    if (!NT_SUCCESS(ZwCreateKey(&Key, KEY_ALL_ACCESS, &Oa, 0, NULL,
+                                REG_OPTION_NON_VOLATILE, &Disp)))
+        return NULL;
+    return Key;
+}
+
+static VOID
+Ndis6ImSetSz(_In_ HANDLE Key, _In_ PCWSTR Name, _In_ ULONG Type, _In_ PCWSTR Value)
+{
+    UNICODE_STRING ValName;
+    SIZE_T Chars = wcslen(Value) + 1;
+    RtlInitUnicodeString(&ValName, Name);
+    if (Type == REG_MULTI_SZ)
+        Chars += 1;
+    ZwSetValueKey(Key, &ValName, 0, Type, (PVOID)Value,
+                  (ULONG)(Chars * sizeof(WCHAR)));
+}
+
+static VOID
+Ndis6ImAppendBind(_In_ PCWSTR Device)
+{
+    HANDLE Key;
+    UNICODE_STRING ValName;
+    NTSTATUS Status;
+    PKEY_VALUE_PARTIAL_INFORMATION Info;
+    ULONG Len = 0, NewLen, DevBytes = (ULONG)((wcslen(Device) + 1) * sizeof(WCHAR));
+    PWCHAR Buf, p;
+
+    Key = Ndis6ImOpenKey(L"\\Registry\\Machine\\SYSTEM\\CurrentControlSet\\Services\\Tcpip\\Linkage");
+    if (Key == NULL)
+        return;
+
+    RtlInitUnicodeString(&ValName, L"Bind");
+    ZwQueryValueKey(Key, &ValName, KeyValuePartialInformation, NULL, 0, &Len);
+
+    NewLen = (Len ? Len : FIELD_OFFSET(KEY_VALUE_PARTIAL_INFORMATION, Data)) + DevBytes + sizeof(WCHAR);
+    Info = (PKEY_VALUE_PARTIAL_INFORMATION)ExAllocatePoolWithTag(PagedPool, NewLen, NDIS6_ADAPTER_TAG);
+    if (Info == NULL) { ZwClose(Key); return; }
+
+    Buf = (PWCHAR)Info->Data;
+    if (Len)
+    {
+        Status = ZwQueryValueKey(Key, &ValName, KeyValuePartialInformation, Info, Len, &Len);
+        if (!NT_SUCCESS(Status)) { ExFreePoolWithTag(Info, NDIS6_ADAPTER_TAG); ZwClose(Key); return; }
+        for (p = Buf; *p; p += wcslen(p) + 1)
+        {
+            if (_wcsicmp(p, Device) == 0)
+            {
+                ExFreePoolWithTag(Info, NDIS6_ADAPTER_TAG);
+                ZwClose(Key);
+                return;
+            }
+        }
+        RtlCopyMemory(p, Device, DevBytes);
+        p[wcslen(Device) + 1] = L'\0';
+        NewLen = (ULONG)(((PUCHAR)(p + wcslen(Device) + 2)) - (PUCHAR)Buf);
+    }
+    else
+    {
+        RtlCopyMemory(Buf, Device, DevBytes);
+        Buf[wcslen(Device) + 1] = L'\0';
+        NewLen = DevBytes + sizeof(WCHAR);
+    }
+
+    ZwSetValueKey(Key, &ValName, 0, REG_MULTI_SZ, Buf, NewLen);
+    ExFreePoolWithTag(Info, NDIS6_ADAPTER_TAG);
+    ZwClose(Key);
+}
+
+VOID
+Ndis6ImSeedTcpipRegistry(_In_ PCUNICODE_STRING DeviceName)
+{
+    static const WCHAR ClassBase[] =
+        L"\\Registry\\Machine\\SYSTEM\\CurrentControlSet\\Control\\Class\\{4D36E972-E325-11CE-BFC1-08002BE10318}\\";
+    static const WCHAR IfBase[] =
+        L"\\Registry\\Machine\\SYSTEM\\CurrentControlSet\\Services\\Tcpip\\Parameters\\Interfaces\\";
+    static LONG InstanceSeq = 0x4000;
+    WCHAR Guid[64];
+    WCHAR Path[300];
+    HANDLE Key;
+    USHORT i, gstart = 0;
+    ULONG One = 1, glen;
+
+    for (i = (USHORT)(DeviceName->Length / sizeof(WCHAR)); i > 0; i--)
+    {
+        if (DeviceName->Buffer[i - 1] == L'\\') { gstart = i; break; }
+    }
+    glen = (DeviceName->Length / sizeof(WCHAR)) - gstart;
+    if (glen == 0 || glen >= RTL_NUMBER_OF(Guid))
+        return;
+    RtlCopyMemory(Guid, &DeviceName->Buffer[gstart], glen * sizeof(WCHAR));
+    Guid[glen] = L'\0';
+
+    RtlStringCchPrintfW(Path, RTL_NUMBER_OF(Path), L"%ls%04X", ClassBase,
+                        InterlockedIncrement(&InstanceSeq));
+    Key = Ndis6ImOpenKey(Path);
+    if (Key != NULL)
+    {
+        Ndis6ImSetSz(Key, L"DriverDesc", REG_SZ, L"ReactOS NDIS Virtual Miniport");
+        Ndis6ImSetSz(Key, L"NetCfgInstanceId", REG_SZ, Guid);
+        ZwClose(Key);
+    }
+    RtlStringCchCatW(Path, RTL_NUMBER_OF(Path), L"\\Linkage");
+    Key = Ndis6ImOpenKey(Path);
+    if (Key != NULL)
+    {
+        Ndis6ImSetSz(Key, L"RootDevice", REG_SZ, Guid);
+        Ndis6ImSetSz(Key, L"Export", REG_SZ, DeviceName->Buffer);
+        Ndis6ImSetSz(Key, L"UpperBind", REG_SZ, L"Tcpip");
+        ZwClose(Key);
+    }
+
+    RtlStringCchPrintfW(Path, RTL_NUMBER_OF(Path), L"%ls%ls", IfBase, Guid);
+    Key = Ndis6ImOpenKey(Path);
+    if (Key != NULL)
+    {
+        UNICODE_STRING ValName;
+        RtlInitUnicodeString(&ValName, L"EnableDHCP");
+        ZwSetValueKey(Key, &ValName, 0, REG_DWORD, &One, sizeof(One));
+        Ndis6ImSetSz(Key, L"IPAddress", REG_MULTI_SZ, L"0.0.0.0");
+        Ndis6ImSetSz(Key, L"SubnetMask", REG_MULTI_SZ, L"0.0.0.0");
+        Ndis6ImSetSz(Key, L"DefaultGateway", REG_MULTI_SZ, L"");
+        ZwClose(Key);
+    }
+
+    Ndis6ImAppendBind(DeviceName->Buffer);
+    DbgPrint("NDIS6: seeded TCPIP registry for %wZ\n", DeviceName);
+}
+
 /* ============================================================================
  *  Ndis6CreateLogicalAdapter
  *
@@ -887,6 +1027,8 @@ Ndis6InitializeImDeviceInstance(
     if (Status != NDIS_STATUS_SUCCESS)
         return Status;
 
+    Ndis6ImSeedTcpipRegistry(DeviceName);
+
     Status = Ndis6CallMiniportInitializeEx(Adapter);
     if (Status != NDIS_STATUS_SUCCESS)
     {
@@ -898,9 +1040,16 @@ Ndis6InitializeImDeviceInstance(
     if (Ext != NULL)
         Ext->Initialized = TRUE;
 
+    Ndis6CallMiniportRestartEx(Adapter);
+
     /* Bind every registered native NDIS 6 protocol; legacy NDIS 5 protocols
      * bind separately via their own Linkage\Bind list. */
     Ndis6BindAllProtocolsToAdapter(Adapter);
+
+    {
+        extern VOID ndisRebindAllProtocols(VOID);
+        ndisRebindAllProtocols();
+    }
 
     return NDIS_STATUS_SUCCESS;
 }
