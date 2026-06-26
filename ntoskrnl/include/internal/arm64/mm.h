@@ -667,6 +667,7 @@ VOID
 MiArm64CleanEntryToPoC(
     _In_ volatile VOID *Entry)
 {
+    __asm__ __volatile__("dsb ishst" ::: "memory");
     __asm__ __volatile__("dc civac, %0" :: "r"(Entry) : "memory");
     __asm__ __volatile__("dsb ish" ::: "memory");
 }
