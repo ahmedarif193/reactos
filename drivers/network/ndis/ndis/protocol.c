@@ -1416,6 +1416,22 @@ NdisReEnumerateProtocolBindings(IN NDIS_HANDLE NdisProtocolHandle)
     ndisBindMiniportsToProtocol(&NdisStatus, NdisProtocolHandle);
 }
 
+VOID
+ndisRebindAllProtocols(VOID)
+{
+    PLIST_ENTRY CurrentEntry;
+    PPROTOCOL_BINDING ProtocolBinding;
+    NDIS_STATUS NdisStatus;
+
+    CurrentEntry = ProtocolListHead.Flink;
+    while (CurrentEntry != &ProtocolListHead)
+    {
+        ProtocolBinding = CONTAINING_RECORD(CurrentEntry, PROTOCOL_BINDING, ListEntry);
+        ndisBindMiniportsToProtocol(&NdisStatus, ProtocolBinding);
+        CurrentEntry = CurrentEntry->Flink;
+    }
+}
+
 
 /*
  * @implemented

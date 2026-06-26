@@ -6474,7 +6474,7 @@ typedef struct _NET_BUFFER_POOL_PARAMETERS {
 #define NET_BUFFER_LIST_PROTOCOL_RESERVED(_NBL)  ((_NBL)->ProtocolReserved)
 #define NET_BUFFER_LIST_MINIPORT_RESERVED(_NBL)  ((_NBL)->MiniportReserved)
 #define NET_BUFFER_LIST_CONTEXT_DATA_START(_NBL) \
-    ((PUCHAR)((_NBL)->Context) + ((_NBL)->Context->Offset))
+    ((PUCHAR)((_NBL)->Context->ContextData) + ((_NBL)->Context->Offset))
 #define NET_BUFFER_LIST_CONTEXT_DATA_SIZE(_NBL)  ((_NBL)->Context->Size)
 #define NET_BUFFER_LIST_INFO(_NBL, _Id)          ((_NBL)->NetBufferListInfo[(_Id)])
 #define NET_BUFFER_LIST_STATUS(_NBL)             ((_NBL)->Status)
