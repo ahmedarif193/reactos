@@ -146,7 +146,7 @@ CywMiniportInitializeEx(
         PoolParams.ProtocolId = NDIS_PROTOCOL_ID_DEFAULT;
         PoolParams.fAllocateNetBuffer = TRUE;
         PoolParams.PoolTag = CYW_TAG;
-        PoolParams.DataSize = CYW_MAX_FRAME_SIZE;
+        PoolParams.DataSize = 0;
         Adapter->RxNblPool = NdisAllocateNetBufferListPool(NdisMiniportHandle, &PoolParams);
         if (Adapter->RxNblPool == NULL)
         {
@@ -367,9 +367,28 @@ CywSendWorker(
 
     UNREFERENCED_PARAMETER(NdisIoWorkItemHandle);
 
-    if (NT_SUCCESS(CywSdpcmSendData(Adapter, Work->Eth, Work->EthLen)))
     {
-        NblStatus = NDIS_STATUS_SUCCESS;
+        ULONG Retry;
+        for (Retry = 0; Retry < 1000; Retry++)
+        {
+            NTSTATUS SendStatus = CywSdpcmSendData(Adapter, Work->Eth, Work->EthLen);
+            if (NT_SUCCESS(SendStatus))
+            {
+                NblStatus = NDIS_STATUS_SUCCESS;
+                break;
+            }
+            if (SendStatus != STATUS_DEVICE_BUSY)
+            {
+                break;
+            }
+            KeStallExecutionProcessor(50);
+        }
+    }
+    if (NblStatus != NDIS_STATUS_SUCCESS)
+    {
+        DPRINT1("CYW: TX DROP TxMax=%u TxSeq=%u Avail=%u TxFlow=%u\n",
+                Adapter->TxMax, Adapter->TxSeq,
+                (UCHAR)(Adapter->TxMax - Adapter->TxSeq), Adapter->TxFlow);
     }
 
     NET_BUFFER_LIST_STATUS(Work->Nbl) = NblStatus;
@@ -408,30 +427,31 @@ CywMiniportSendNetBufferLists(
 
         NET_BUFFER_LIST_NEXT_NBL(Nbl) = NULL;
 
-        if (Adapter->Associated && Nb != NULL)
+        if (Nb != NULL)
         {
-            if (KeGetCurrentIrql() == PASSIVE_LEVEL)
+            UCHAR Scratch[CYW_MAX_FRAME_SIZE];
+            UCHAR Eth[CYW_MAX_FRAME_SIZE];
+            ULONG EthLen = CywBuildEthFromNbl(Nb, Scratch, Eth);
+            BOOLEAN IsEapol = (EthLen >= 14 && Eth[12] == 0x88 && Eth[13] == 0x8E);
+
+
+            if (EthLen != 0 && (Adapter->Associated || IsEapol))
             {
-                UCHAR Scratch[CYW_MAX_FRAME_SIZE];
-                UCHAR Eth[CYW_MAX_FRAME_SIZE];
-                ULONG EthLen = CywBuildEthFromNbl(Nb, Scratch, Eth);
-
-                if (EthLen != 0 && NT_SUCCESS(CywSdpcmSendData(Adapter, Eth, EthLen)))
+                if (KeGetCurrentIrql() == PASSIVE_LEVEL && IsEapol)
                 {
-                    NblStatus = NDIS_STATUS_SUCCESS;
-                }
-            }
-            else
-            {
-                PCYW_TX_WORK Work = CywAllocate(sizeof(CYW_TX_WORK));
-
-                if (Work != NULL)
-                {
-                    UCHAR Scratch[CYW_MAX_FRAME_SIZE];
-
-                    Work->EthLen = CywBuildEthFromNbl(Nb, Scratch, Work->Eth);
-                    if (Work->EthLen != 0)
+                    if (NT_SUCCESS(CywSdpcmSendData(Adapter, Eth, EthLen)))
                     {
+                        NblStatus = NDIS_STATUS_SUCCESS;
+                    }
+                }
+                else
+                {
+                    PCYW_TX_WORK Work = CywAllocate(sizeof(CYW_TX_WORK));
+
+                    if (Work != NULL)
+                    {
+                        RtlCopyMemory(Work->Eth, Eth, EthLen);
+                        Work->EthLen = EthLen;
                         Work->WorkItem = NdisAllocateIoWorkItem(Adapter->MiniportAdapterHandle);
                         if (Work->WorkItem != NULL)
                         {
@@ -440,10 +460,10 @@ CywMiniportSendNetBufferLists(
                             NdisQueueIoWorkItem(Work->WorkItem, CywSendWorker, Work);
                             Deferred = TRUE;
                         }
-                    }
-                    if (!Deferred)
-                    {
-                        CywFree(Work);
+                        if (!Deferred)
+                        {
+                            CywFree(Work);
+                        }
                     }
                 }
             }
@@ -466,9 +486,21 @@ CywMiniportReturnNetBufferLists(
     _In_ PNET_BUFFER_LIST NetBufferLists,
     _In_ ULONG ReturnFlags)
 {
+    PNET_BUFFER_LIST Nbl = NetBufferLists;
     UNREFERENCED_PARAMETER(MiniportAdapterContext);
-    UNREFERENCED_PARAMETER(NetBufferLists);
     UNREFERENCED_PARAMETER(ReturnFlags);
+
+    while (Nbl != NULL)
+    {
+        PNET_BUFFER_LIST Next = NET_BUFFER_LIST_NEXT_NBL(Nbl);
+        PNET_BUFFER Nb = NET_BUFFER_LIST_FIRST_NB(Nbl);
+        PMDL Mdl = NET_BUFFER_FIRST_MDL(Nb);
+        PUCHAR Frame = (PUCHAR)MmGetMdlVirtualAddress(Mdl);
+        NdisFreeMdl(Mdl);
+        CywFree(Frame);
+        NdisFreeNetBufferList(Nbl);
+        Nbl = Next;
+    }
 }
 
 VOID

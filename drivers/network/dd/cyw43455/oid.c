@@ -733,6 +733,9 @@ CywOidSet(
                 {
                     CywSetKey(Adapter, FALSE, NULL, Value->ucKey,
                               Value->usKeyLength, Value->uKeyIndex);
+                    CywFilCmdSet(Adapter, BRCMF_C_SET_SCB_AUTHORIZE,
+                                 Adapter->ConnectedBssid, CYW_ADDRESS_LENGTH);
+                    DPRINT1("CYW: SCB_AUTHORIZE bssid sent\n");
                 }
             }
             Request->DATA.SET_INFORMATION.BytesRead = Length;
