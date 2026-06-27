@@ -93,16 +93,15 @@ static VOID Arm64PopulatePsciConfiguration(PLOADER_PARAMETER_BLOCK LoaderBlock);
 /* -------------------------------------------------------------------------- */
 /*
  * PCR allocation size.
- * The KIPCR structure on ARM64 is currently 0x50D0 bytes (~20.6 KB) because
- * it embeds a KPRCB that contains large arrays (DispatcherReadyListHead[32],
- * LockQueue[], PPLookasideList[], etc.). We allocate 8 pages (32 KB) so the
- * mapped kernel-data block fully covers the kernel's
+ * The KIPCR structure on ARM64 embeds KPRCB and is larger than one page.
+ * Keep the loader allocation deliberately above the current public layout
+ * size so the mapped kernel-data block fully covers the kernel's
  * RtlZeroMemory(Pcr, sizeof(*Pcr)) at KiInitializePcr entry, leaving slack
  * for future struct growth. Undersizing this writes past the end of the
  * KSEG0-mapped KernelDataBlock and faults the kernel before its first PCR
  * field is set up.
  */
-#define PCR_ALLOCATION_SIZE     (8 * PAGE_SIZE)
+#define PCR_ALLOCATION_SIZE     (16 * PAGE_SIZE)
 
 typedef struct _ARM64_KERNEL_DATA
 {
@@ -112,7 +111,7 @@ typedef struct _ARM64_KERNEL_DATA
     CHAR InitialProcess[PAGE_SIZE];         /* Initial system process */
     CHAR InitialThread[PAGE_SIZE];          /* Initial system thread */
     CHAR Prcb[PAGE_SIZE];                   /* Processor Control Block (unused, PCR embeds PRCB) */
-    CHAR Pcr[PCR_ALLOCATION_SIZE];          /* Processor Control Region (~15KB with embedded PRCB) */
+    CHAR Pcr[PCR_ALLOCATION_SIZE];          /* Processor Control Region with embedded PRCB */
 } ARM64_KERNEL_DATA, *PARM64_KERNEL_DATA;
 
 static PARM64_KERNEL_DATA KernelDataBlock = NULL;

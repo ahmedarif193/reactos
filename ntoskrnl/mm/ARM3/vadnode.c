@@ -268,6 +268,10 @@ MiInsertVadEx(
     PETHREAD CurrentThread;
     TABLE_SEARCH_RESULT Result;
     PMMADDRESS_NODE Parent;
+#ifdef _M_ARM64
+    TABLE_SEARCH_RESULT BasedResult;
+    PMMADDRESS_NODE BasedNode;
+#endif
 
     /* Align the view size to pages */
     ViewSize = ALIGN_UP_BY(ViewSize, PAGE_SIZE);
@@ -296,13 +300,54 @@ MiInsertVadEx(
         /* Which way should we search? */
         if ((AllocationType & MEM_TOP_DOWN) || CurrentProcess->VmTopDown)
         {
-            /* Find an address top-down */
-            Result = MiFindEmptyAddressRangeDownTree(ViewSize,
-                                                     HighestAddress,
-                                                     Alignment,
-                                                     &CurrentProcess->VadRoot,
-                                                     &StartingAddress,
-                                                     &Parent);
+            do
+            {
+                /* Find an address top-down */
+                Result = MiFindEmptyAddressRangeDownTree(ViewSize,
+                                                         HighestAddress,
+                                                         Alignment,
+                                                         &CurrentProcess->VadRoot,
+                                                         &StartingAddress,
+                                                         &Parent);
+
+                /* Get the ending address, which is the last piece we need for the VAD */
+                EndingAddress = StartingAddress + ViewSize - 1;
+
+                /* Check if we found a suitable location */
+                if ((Result == TableFoundNode) || (EndingAddress > HighestAddress))
+                {
+                    DPRINT1("Not enough free space to insert this VAD node!\n");
+                    MmUnlockAddressSpace(&CurrentProcess->Vm);
+                    return STATUS_NO_MEMORY;
+                }
+
+#ifdef _M_ARM64
+                KeAcquireGuardedMutex(&MmSectionBasedMutex);
+                BasedResult = MiCheckForConflictingNode(StartingAddress,
+                                                        EndingAddress,
+                                                        &MmSectionBasedRoot,
+                                                        &BasedNode);
+                KeReleaseGuardedMutex(&MmSectionBasedMutex);
+                if (BasedResult == TableFoundNode)
+                {
+                    if (BasedNode->StartingVpn <= (ULONG_PTR)MI_LOWEST_VAD_ADDRESS)
+                    {
+                        DPRINT1("Not enough free space to insert this VAD node!\n");
+                        MmUnlockAddressSpace(&CurrentProcess->Vm);
+                        return STATUS_NO_MEMORY;
+                    }
+
+                    /*
+                     * Based sections reserve fixed user addresses globally.
+                     * Top-down automatic allocations must skip those ranges so
+                     * future based-section mappings keep their promised VA.
+                     */
+                    HighestAddress = BasedNode->StartingVpn - 1;
+                    continue;
+                }
+#endif
+                break;
+            } while (TRUE);
         }
         else
         {
@@ -312,16 +357,17 @@ MiInsertVadEx(
                                                    &CurrentProcess->VadRoot,
                                                    &Parent,
                                                    &StartingAddress);
-        }
-        /* Get the ending address, which is the last piece we need for the VAD */
-        EndingAddress = StartingAddress + ViewSize - 1;
 
-        /* Check if we found a suitable location */
-        if ((Result == TableFoundNode) || (EndingAddress > HighestAddress))
-        {
-            DPRINT1("Not enough free space to insert this VAD node!\n");
-            MmUnlockAddressSpace(&CurrentProcess->Vm);
-            return STATUS_NO_MEMORY;
+            /* Get the ending address, which is the last piece we need for the VAD */
+            EndingAddress = StartingAddress + ViewSize - 1;
+
+            /* Check if we found a suitable location */
+            if ((Result == TableFoundNode) || (EndingAddress > HighestAddress))
+            {
+                DPRINT1("Not enough free space to insert this VAD node!\n");
+                MmUnlockAddressSpace(&CurrentProcess->Vm);
+                return STATUS_NO_MEMORY;
+            }
         }
 
         ASSERT(StartingAddress != 0);

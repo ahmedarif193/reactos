@@ -2,42 +2,13 @@
  * PROJECT:         ReactOS Kernel (ARM64)
  * PURPOSE:         Interrupt request level management for ARM64
  *
- * ARCHITECTURAL NOTES (from expert review):
- *
- * 1. FIXED: Per-CPU re-entrancy guard
- *    - Now using Prcb->InHighLevelTransition instead of global variable
- *    - Prevents false re-entrancy on SMP when multiple CPUs lower IRQL concurrently
- *
- * 2. TODO: GIC Priority Masking (ICC_PMR_EL1)
- *    - Current implementation uses binary DAIF masking (all IRQs on/off)
- *    - For production SMP, should use GIC priority masking via ICC_PMR_EL1
- *    - This allows high-priority interrupts (clock, IPI) to nest/preempt lower-priority ISRs
- *    - Need IRQL->GIC priority mapping table and PMR manipulation in KiApplyIrqMaskForIrqlTransition
- *
- * 3. DONE: TPIDR_EL1 per-CPU PCR access
- *    - KiInitializePcr() writes TPIDR_EL1 = Pcr (see kiinit.c)
- *    - KeGetPcr() in ketypes.h reads tpidr_el1 with NULL fallback to global
- *    - KeGetCurrentIrql/Thread/DPC macros now read from PCR/PRCB directly
- *
- * 4. TODO: Explicit memory barriers
- *    - Consider adding KeMemoryBarrier() or __dmb(_ARM64_BARRIER_SY) around CurrentIrql updates
- *    - Windows uses barriers for ordering IRQL writes vs interrupt unmasking
- *
- * 5. SError policy
- *    - Keep SError (DAIF.A bit) masked during normal IRQL transitions
- *    - The earlier PASSIVE_LEVEL unmask policy delivered pending async aborts
- *      during idle/context-switch paths without reliable source attribution
- *    - Revisit only after the ARM64 port has validated SError attribution and
- *      a deliberate handling policy beyond fatal bugcheck
- *
- * 6. TODO: Scheduler triggers on IRQL lowering
- *    - Windows checks Prcb->QuantumEnd and Prcb->NextThread on IRQL lowering
- *    - May need reschedule IPI or software interrupt trigger
- *    - Currently only handling DPCs/Timers
+ * ARM64 keeps the logical IRQL in the current PCR. Interrupt masking uses
+ * DAIF before HAL initialization and GIC priority masking afterwards, with
+ * HIGH_LEVEL transitions still updating DAIF directly.
  */
 
 #include <ntoskrnl.h>
-//#define NDEBUG  /* Temporarily disabled for timer debugging */
+#define NDEBUG
 #include <debug.h>
 
 /*
@@ -46,6 +17,9 @@
  * at the current PCR.
  */
 extern KIRQL KeArm64CurrentIrql;
+
+/* One bit per CPU while that CPU is changing the HIGH_LEVEL interrupt mask. */
+static volatile LONG64 KiArm64HighLevelTransitionMask;
 
 /*
  * KiHalInitialized - Flag tracking whether HAL.DLL has been initialized
@@ -369,8 +343,13 @@ KiApplyIrqMaskForIrqlTransition(
          */
         if (Prcb)
         {
-            LONG OldFlag = InterlockedCompareExchange(&Prcb->InHighLevelTransition, 1, 0);
-            if (OldFlag != 0)
+            /* Per-CPU re-entrancy guard via KAFFINITY-style bitmask. Bit N is
+             * set while CPU N is mid-transition; re-entrant callers observe
+             * the bit and skip the DAIF write. */
+            ULONG CpuIndex = (ULONG)Prcb->Number;
+            BOOLEAN WonRace = !InterlockedBitTestAndSet64(&KiArm64HighLevelTransitionMask,
+                                                          (LONG)CpuIndex);
+            if (!WonRace)
             {
                 /* Re-entrancy detected - just update GIC PMR, don't touch DAIF or flag */
                 HalSetGicPriorityMask(NewIrql);
@@ -385,12 +364,9 @@ KiApplyIrqMaskForIrqlTransition(
             ARM64_SYNC_BARRIER();
             KiTraceSerrorPolicy("high-drop", OldIrql, NewIrql);
 
-            /*
-             * Clear re-entrancy flag unconditionally. We MUST clear it because
-             * we're the thread that set it. No early returns between setting
-             * and clearing to prevent flag leakage.
-             */
-            InterlockedExchange(&Prcb->InHighLevelTransition, 0);
+            /* Clear our bit so a future high-IRQL drop on this CPU sees us
+             * out of the transition. Atomic to coexist with other CPUs. */
+            InterlockedBitTestAndReset64(&KiArm64HighLevelTransitionMask, (LONG)CpuIndex);
         }
         else
         {
@@ -603,7 +579,7 @@ KfLowerIrql(
      *
      * SCHEDULER INTEGRATION:
      *   - DpcInterruptRequested: Software interrupt flag for DPC delivery
-     *   - TimerRequest: Pending timer expiration
+     *   - TimerExpirationDpc.DpcData: Pending timer expiration (queued DPC)
      *   - DpcData[0].DpcQueueDepth: Normal-priority DPC queue
      *   - DpcData[1].DpcQueueDepth: High-priority DPC queue
      *   - QuantumEnd: Thread quantum expired, need reschedule
@@ -617,27 +593,17 @@ KfLowerIrql(
         PKPRCB Prcb = KeGetCurrentPrcb();
         BOOLEAN NeedDispatch = FALSE;
 
-        /* Debug: Periodically log when we check for DPC delivery (disabled for performance) */
-#if 0
-        static ULONG DpcCheckCounter = 0;
-        DpcCheckCounter++;
-        if (DpcCheckCounter % 10000 == 1 && Prcb)
-        {
-            DPRINT1("[arm64] KfLowerIrql DPC check: Old=%u New=%u TimerReq=%p DpcReq=%d DpcDepth[0]=%lu DpcDepth[1]=%lu\n",
-                    OldIrql, NewIrql, (PVOID)Prcb->TimerRequest,
-                    Prcb->DpcInterruptRequested,
-                    Prcb->DpcData[0].DpcQueueDepth,
-                    Prcb->DpcData[1].DpcQueueDepth);
-        }
-#endif
-
         if (Prcb)
         {
-            /* Check all dispatch triggers */
-            if (Prcb->DpcInterruptRequested)
+            /* Check all dispatch triggers. */
+            if (Prcb->DpcNormalProcessingRequested)
                 NeedDispatch = TRUE;
 
-            if (Prcb->TimerRequest)
+            /*
+             * Timer expiration uses a per-processor DPC on ARM64. DpcData
+             * being non-NULL means the DPC is queued.
+             */
+            if (Prcb->TimerExpirationDpc.DpcData != NULL)
                 NeedDispatch = TRUE;
 
             /*
@@ -658,12 +624,13 @@ KfLowerIrql(
         {
             /*
              * Clear the DpcInterruptRequested flag FIRST to prevent re-delivery.
-             * Note: TimerRequest is cleared by KiDispatchInterrupt itself.
-             * If DPCs are queued again during KiDispatchInterrupt,
-             * the flag will be set again and we'll deliver on the next IRQL lowering.
+             * Note: TimerExpirationDpc is consumed by the normal DPC drain. If
+             * DPCs are queued again during
+             * KiDispatchInterrupt, the flag will be set again and we'll deliver
+             * on the next IRQL lowering.
              */
-            if (Prcb->DpcInterruptRequested)
-                Prcb->DpcInterruptRequested = FALSE;
+            if (Prcb->DpcNormalProcessingRequested)
+                Prcb->DpcNormalProcessingRequested = 0;
 
             /*
              * Dispatch the DPC interrupt.
@@ -774,33 +741,7 @@ KxRaiseIrql(
     return KfRaiseIrql(NewIrql);
 }
 
-NTKERNELAPI
-KIRQL
-KxRaiseIrqlToDpcLevel(VOID)
-{
-    return KeRaiseIrqlToDpcLevel();
-}
-
-KIRQL
-NTAPI
-KeRaiseIrqlToDpcLevel(VOID)
-{
-    return KfRaiseIrql(DISPATCH_LEVEL);
-}
-
-NTKERNELAPI
-KIRQL
-KxRaiseIrqlToSynchLevel(VOID)
-{
-    return KeRaiseIrqlToSynchLevel();
-}
-
-KIRQL
-NTAPI
-KeRaiseIrqlToSynchLevel(VOID)
-{
-    return KfRaiseIrql(SYNCH_LEVEL);
-}
+/* KeRaiseIrqlTo*Level are inline ARM64 helpers in the public headers. */
 
 VOID
 NTAPI

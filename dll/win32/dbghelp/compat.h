@@ -81,6 +81,18 @@ const char *wine_dbg_sprintf( const char *format, ... );
 #define __EXCEPT_PAGE_FAULT else
 #define __ENDTRY
 
+#ifdef TARGET_arm64ec
+#define DBGHELP_TARGET_ARM64EC 1
+#else
+#define DBGHELP_TARGET_ARM64EC 0
+#endif
+
+#if defined TARGET_amd64 || DBGHELP_TARGET_ARM64EC
+#define DBGHELP_TARGET_AMD64_CONTEXT 1
+#else
+#define DBGHELP_TARGET_AMD64_CONTEXT 0
+#endif
+
 // basetsd.h
 typedef ULONG_PTR KAFFINITY;
 
@@ -337,7 +349,7 @@ typedef struct _CONTEXT {
   BYTE ExtendedRegisters[MAXIMUM_SUPPORTED_EXTENSION];
 } CONTEXT;
 
-#elif defined TARGET_amd64
+#elif DBGHELP_TARGET_AMD64_CONTEXT
 
 typedef struct _M128A {
     ULONGLONG Low;

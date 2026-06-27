@@ -667,6 +667,7 @@
 #define IMAGE_FILE_MACHINE_CEE        0xC0EE
 #define IMAGE_FILE_MACHINE_TRICORE    0x0520
 #define IMAGE_FILE_MACHINE_CEF        0x0CEF
+#define IMAGE_FILE_MACHINE_ARM64EC    0xA641
 #define IMAGE_FILE_MACHINE_ARM64      0xAA64
 
 #define IMAGE_FILE_EXPORT_DIRECTORY        0
@@ -1485,7 +1486,7 @@ typedef struct DECLSPEC_ALIGN(16) _CONTEXT {
 } CONTEXT;
 
 
-#if defined(_M_AMD64) || defined(_M_IX86)
+#if _VCRT_X86_INTRINSICS || defined(_M_ARM64EC) || defined(__arm64ec__)
 
 typedef struct _KNONVOLATILE_CONTEXT_POINTERS {
     union {
@@ -1533,7 +1534,7 @@ typedef struct _KNONVOLATILE_CONTEXT_POINTERS {
     } DUMMYUNIONNAME2;
 } KNONVOLATILE_CONTEXT_POINTERS, *PKNONVOLATILE_CONTEXT_POINTERS;
 
-#elif defined(_M_ARM64) || defined(__aarch64__)
+#elif _VCRT_ARM64_INTRINSICS
 
 typedef struct _KNONVOLATILE_CONTEXT_POINTERS {
     PULONG64 X19;
@@ -1708,6 +1709,14 @@ RtlVirtualUnwind(
     _Out_ PVOID *HandlerData,
     _Out_ PDWORD64 EstablisherFrame,
     _Inout_opt_ PKNONVOLATILE_CONTEXT_POINTERS ContextPointers);
+
+#if defined(_M_ARM64EC)
+NTSYSAPI
+BOOLEAN
+NTAPI
+RtlIsEcCode(
+    _In_ ULONG_PTR CodeAddress);
+#endif
 
 NTSYSAPI
 VOID
@@ -2562,6 +2571,28 @@ typedef struct _DISPATCHER_CONTEXT_ARM64
     BOOLEAN ControlPcIsUnwound;
     PBYTE NonVolatileRegisters;
 } DISPATCHER_CONTEXT_ARM64, *PDISPATCHER_CONTEXT_ARM64;
+
+#ifdef _ARM64EC_
+typedef struct _DISPATCHER_CONTEXT_ARM64EC
+{
+    DWORD64 ControlPc;
+    DWORD64 ImageBase;
+    PRUNTIME_FUNCTION FunctionEntry;
+    DWORD64 EstablisherFrame;
+    union
+    {
+        DWORD64 TargetIp;
+        DWORD64 TargetPc;
+    } DUMMYUNIONNAME;
+    PCONTEXT ContextRecord;
+    PEXCEPTION_ROUTINE LanguageHandler;
+    PVOID HandlerData;
+    struct _UNWIND_HISTORY_TABLE *HistoryTable;
+    DWORD ScopeIndex;
+    BOOLEAN ControlPcIsUnwound;
+    PBYTE NonVolatileRegisters;
+} DISPATCHER_CONTEXT_ARM64EC, *PDISPATCHER_CONTEXT_ARM64EC;
+#endif
 
 #define NONVOL_INT_NUMREG_ARM64 11
 #define NONVOL_FP_NUMREG_ARM64  8
@@ -3816,6 +3847,13 @@ typedef struct _IMAGE_RESOURCE_DATA_ENTRY {
   DWORD Reserved;
 } IMAGE_RESOURCE_DATA_ENTRY, *PIMAGE_RESOURCE_DATA_ENTRY;
 
+typedef struct _IMAGE_LOAD_CONFIG_CODE_INTEGRITY {
+  WORD Flags;
+  WORD Catalog;
+  DWORD CatalogOffset;
+  DWORD Reserved;
+} IMAGE_LOAD_CONFIG_CODE_INTEGRITY, *PIMAGE_LOAD_CONFIG_CODE_INTEGRITY;
+
 typedef struct _IMAGE_LOAD_CONFIG_DIRECTORY32 {
   DWORD Size;
   DWORD TimeDateStamp;
@@ -3837,6 +3875,27 @@ typedef struct _IMAGE_LOAD_CONFIG_DIRECTORY32 {
   DWORD SecurityCookie;
   DWORD SEHandlerTable;
   DWORD SEHandlerCount;
+  DWORD GuardCFCheckFunctionPointer;
+  DWORD GuardCFDispatchFunctionPointer;
+  DWORD GuardCFFunctionTable;
+  DWORD GuardCFFunctionCount;
+  DWORD GuardFlags;
+  IMAGE_LOAD_CONFIG_CODE_INTEGRITY CodeIntegrity;
+  DWORD GuardAddressTakenIatEntryTable;
+  DWORD GuardAddressTakenIatEntryCount;
+  DWORD GuardLongJumpTargetTable;
+  DWORD GuardLongJumpTargetCount;
+  DWORD DynamicValueRelocTable;
+  DWORD CHPEMetadataPointer;
+  DWORD GuardRFFailureRoutine;
+  DWORD GuardRFFailureRoutineFunctionPointer;
+  DWORD DynamicValueRelocTableOffset;
+  WORD DynamicValueRelocTableSection;
+  WORD Reserved2;
+  DWORD GuardRFVerifyStackPointerFunctionPointer;
+  DWORD HotPatchTableOffset;
+  DWORD Reserved3;
+  DWORD EnclaveConfigurationPointer;
 } IMAGE_LOAD_CONFIG_DIRECTORY32, *PIMAGE_LOAD_CONFIG_DIRECTORY32;
 
 typedef struct _IMAGE_LOAD_CONFIG_DIRECTORY64 {
@@ -3860,6 +3919,27 @@ typedef struct _IMAGE_LOAD_CONFIG_DIRECTORY64 {
   ULONGLONG SecurityCookie;
   ULONGLONG SEHandlerTable;
   ULONGLONG SEHandlerCount;
+  ULONGLONG GuardCFCheckFunctionPointer;
+  ULONGLONG GuardCFDispatchFunctionPointer;
+  ULONGLONG GuardCFFunctionTable;
+  ULONGLONG GuardCFFunctionCount;
+  DWORD GuardFlags;
+  IMAGE_LOAD_CONFIG_CODE_INTEGRITY CodeIntegrity;
+  ULONGLONG GuardAddressTakenIatEntryTable;
+  ULONGLONG GuardAddressTakenIatEntryCount;
+  ULONGLONG GuardLongJumpTargetTable;
+  ULONGLONG GuardLongJumpTargetCount;
+  ULONGLONG DynamicValueRelocTable;
+  ULONGLONG CHPEMetadataPointer;
+  ULONGLONG GuardRFFailureRoutine;
+  ULONGLONG GuardRFFailureRoutineFunctionPointer;
+  DWORD DynamicValueRelocTableOffset;
+  WORD DynamicValueRelocTableSection;
+  WORD Reserved2;
+  ULONGLONG GuardRFVerifyStackPointerFunctionPointer;
+  DWORD HotPatchTableOffset;
+  DWORD Reserved3;
+  ULONGLONG EnclaveConfigurationPointer;
 } IMAGE_LOAD_CONFIG_DIRECTORY64, *PIMAGE_LOAD_CONFIG_DIRECTORY64;
 
 #ifdef _WIN64
@@ -4730,7 +4810,7 @@ FORCEINLINE PVOID GetCurrentFiber(VOID)
 {
     return (PVOID)(ULONG_PTR)__readfsdword(0x10);
 }
-#elif defined (_M_AMD64)
+#elif _VCRT_AMD64_INTRINSICS
 FORCEINLINE struct _TEB * NtCurrentTeb(VOID)
 {
     return (struct _TEB *)__readgsqword(FIELD_OFFSET(NT_TIB, Self));
@@ -4761,7 +4841,7 @@ FORCEINLINE PVOID GetCurrentFiber(VOID)
     return ((PNT_TIB)(ULONG_PTR)_MoveFromCoprocessor(CP15_TPIDRURW))->FiberData;
 #endif
 }
-#elif defined (_M_ARM64)
+#elif _VCRT_ARM64_INTRINSICS
 FORCEINLINE struct _TEB * NtCurrentTeb(VOID)
 {
     return (struct _TEB *)__getReg(18);
@@ -4799,7 +4879,7 @@ FORCEINLINE PVOID GetFiberData(VOID)
     return *((PVOID *)GetCurrentFiber());
 }
 
-#if defined(_M_IX86) || defined(_M_AMD64)
+#if _VCRT_X86_INTRINSICS
 
 #define YieldProcessor _mm_pause
 
@@ -4817,7 +4897,7 @@ DbgRaiseAssertionFailure(VOID)
 #define YieldProcessor() __asm__ __volatile__("nop");
 #elif defined(_M_ARM)
 #define YieldProcessor __yield
-#elif defined(_M_ARM64)
+#elif _VCRT_ARM64_INTRINSICS
 #define YieldProcessor __yield
 #else
 #error Unknown architecture

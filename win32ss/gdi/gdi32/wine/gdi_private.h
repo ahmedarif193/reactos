@@ -23,6 +23,7 @@
 
 #include <limits.h>
 #include <math.h>
+#include <msvctarget.h>
 #include "windef.h"
 #include "winbase.h"
 #include "wingdi.h"
@@ -234,7 +235,7 @@ BOOL WINAPI SetWorldTransformForMetafile(HDC hdc, const XFORM *pxform);
 #endif
 #ifdef _M_ARM
 #define DbgRaiseAssertionFailure() __emit(0xdefc)
-#elif defined(_M_ARM64)
+#elif REACTOS_TARGET_ARM64_CODEGEN
 #define DbgRaiseAssertionFailure() __break(0xf001)
 #else
 #define DbgRaiseAssertionFailure() __int2c()

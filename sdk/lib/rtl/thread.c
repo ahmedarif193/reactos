@@ -167,6 +167,44 @@ RtlpFreeUserStack(IN HANDLE ProcessHandle,
 
 /* FUNCTIONS ***************************************************************/
 
+#if defined(_M_ARM64EC)
+
+#ifndef CONTEXT_ARM64
+#define CONTEXT_ARM64           0x00400000L
+#endif
+#ifndef CONTEXT_ARM64_CONTROL
+#define CONTEXT_ARM64_CONTROL   (CONTEXT_ARM64 | 0x00000001L)
+#endif
+#ifndef CONTEXT_ARM64_INTEGER
+#define CONTEXT_ARM64_INTEGER   (CONTEXT_ARM64 | 0x00000002L)
+#endif
+
+VOID
+NTAPI
+RtlUserThreadStart(
+    _In_ PTHREAD_START_ROUTINE StartAddress,
+    _In_opt_ PVOID Parameter);
+
+static
+VOID
+RtlpInitializeArm64EcThreadContext(
+    _Out_ PARM64_NT_CONTEXT ThreadContext,
+    _In_opt_ PVOID ThreadStartParam,
+    _In_ PTHREAD_START_ROUTINE ThreadStartAddress,
+    _In_ PINITIAL_TEB InitialStack)
+{
+    RtlZeroMemory(ThreadContext, sizeof(*ThreadContext));
+
+    ThreadContext->ContextFlags = CONTEXT_ARM64_CONTROL | CONTEXT_ARM64_INTEGER;
+    ThreadContext->Pc = (ULONG64)RtlUserThreadStart;
+    ThreadContext->Sp = ALIGN_DOWN_BY((ULONG64)InitialStack, 16);
+    ThreadContext->X0 = (ULONG64)ThreadStartAddress;
+    ThreadContext->X1 = (ULONG64)ThreadStartParam;
+    ThreadContext->Lr = (ULONG64)RtlExitUserThread;
+}
+
+#endif /* _M_ARM64EC */
+
 
 /*
  * @implemented
@@ -230,7 +268,11 @@ RtlCreateUserThread(IN HANDLE ProcessHandle,
     CLIENT_ID ThreadCid;
     INITIAL_TEB InitialTeb;
     OBJECT_ATTRIBUTES ObjectAttributes;
+#if defined(_M_ARM64EC)
+    ARM64_NT_CONTEXT NativeContext;
+#else
     CONTEXT Context;
+#endif
 
     /* First, we'll create the Stack */
     Status = RtlpCreateUserStack(ProcessHandle,
@@ -241,11 +283,22 @@ RtlCreateUserThread(IN HANDLE ProcessHandle,
     if (!NT_SUCCESS(Status)) return Status;
 
     /* Next, we'll set up the Initial Context */
+#if defined(_M_ARM64EC)
+    /*
+     * ARM64EC user-mode exposes the AMD64 CONTEXT layout, but NtCreateThread
+     * enters the native ARM64 kernel and consumes a native ARM64 context.
+     */
+    RtlpInitializeArm64EcThreadContext(&NativeContext,
+                                       Parameter,
+                                       StartAddress,
+                                       InitialTeb.StackBase);
+#else
     RtlInitializeContext(ProcessHandle,
                          &Context,
                          Parameter,
                          StartAddress,
                          InitialTeb.StackBase);
+#endif
 
     /* We are now ready to create the Kernel Thread Object */
     InitializeObjectAttributes(&ObjectAttributes,
@@ -258,7 +311,11 @@ RtlCreateUserThread(IN HANDLE ProcessHandle,
                             &ObjectAttributes,
                             ProcessHandle,
                             &ThreadCid,
+#if defined(_M_ARM64EC)
+                            (PCONTEXT)&NativeContext,
+#else
                             &Context,
+#endif
                             &InitialTeb,
                             CreateSuspended);
     if (!NT_SUCCESS(Status))

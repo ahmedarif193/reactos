@@ -6551,10 +6551,54 @@ HRESULT WINAPI DispCallFunc( void* pvInstance, ULONG_PTR oVft, CALLCONV cc, VART
     return S_OK;
 }
 
-#elif defined(__x86_64__)
+#elif defined(__arm64ec__) || defined(__x86_64__)
 
 extern DWORD_PTR CDECL call_method( void *func, int nb_args, const DWORD_PTR *args );
 extern double CDECL call_double_method( void *func, int nb_args, const DWORD_PTR *args );
+#ifdef __arm64ec__
+__attribute__((naked)) DWORD_PTR CDECL call_method( void *func, int nb_args, const DWORD_PTR *args )
+{
+    __asm__( ".seh_proc \"#call_method\"\n\t"
+             "stp x29, x30, [sp, #-0x20]!\n\t"
+             ".seh_save_fplr_x 0x20\n\t"
+             "stp x19, x20, [sp, #0x10]\n\t"
+             ".seh_save_regp x19, 0x10\n\t"
+             ".seh_endprologue\n\t"
+             "mov x29, sp\n\t"
+             "mov x19, x0\n\t"
+             "mov x9, #4\n\t"
+             "cmp x1, x9\n\t"
+             "csel x9, x1, x9, hi\n\t"
+             "lsl x9, x9, #3\n\t"
+             "add x9, x9, #15\n\t"
+             "and x9, x9, #0xfffffffffffffff0\n\t"
+             "sub sp, sp, x9\n\t"
+             "mov x10, sp\n\t"
+             "mov x11, x2\n\t"
+             "lsr x12, x9, #3\n"
+             "1:\tldr x15, [x11], #8\n\t"
+             "str x15, [x10], #8\n\t"
+             "subs x12, x12, #1\n\t"
+             "b.ne 1b\n\t"
+             "ldp x0, x1, [sp]\n\t"
+             "ldp x2, x3, [sp, #0x10]\n\t"
+             "ldr d0, [sp]\n\t"
+             "ldr d1, [sp, #0x8]\n\t"
+             "ldr d2, [sp, #0x10]\n\t"
+             "ldr d3, [sp, #0x18]\n\t"
+             "blr x19\n\t"
+             "mov sp, x29\n\t"
+             "ldp x19, x20, [sp, #0x10]\n\t"
+             "ldp x29, x30, [sp], #0x20\n\t"
+             "ret\n\t"
+             ".seh_endproc" );
+}
+
+__attribute__((naked)) double CDECL call_double_method( void *func, int nb_args, const DWORD_PTR *args )
+{
+    __asm__( "b \"#call_method\"" );
+}
+#else
 __ASM_GLOBAL_FUNC( call_method,
                    "pushq %rbp\n\t"
                    __ASM_SEH(".seh_pushreg %rbp\n\t")
@@ -6601,6 +6645,7 @@ __ASM_GLOBAL_FUNC( call_method,
                    "ret")
 __ASM_GLOBAL_FUNC( call_double_method,
                    "jmp " __ASM_NAME("call_method") )
+#endif
 
 HRESULT WINAPI DispCallFunc( void* pvInstance, ULONG_PTR oVft, CALLCONV cc, VARTYPE vtReturn,
                              UINT cActuals, VARTYPE* prgvt, VARIANTARG** prgpvarg, VARIANT* pvargResult )

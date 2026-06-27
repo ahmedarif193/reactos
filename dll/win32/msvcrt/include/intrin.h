@@ -7,7 +7,9 @@
 #ifndef _INC_INTRIN
 #define _INC_INTRIN
 
-#if defined(__i386__) || (defined(__x86_64__) && !defined(__arm64ec__))
+#include "target.h"
+
+#if MSVCRT_TARGET_X86_CODEGEN
 # include <x86intrin.h>
 #endif
 
@@ -19,7 +21,7 @@ extern "C" {
 # define __has_builtin(x) 0
 #endif
 
-#if defined(__i386__) || (defined(__x86_64__) && !defined(__arm64ec__))
+#if MSVCRT_TARGET_X86_CODEGEN
 
 #if __has_builtin(__cpuidex) || (defined(_MSC_VER) && !defined(__clang__))
 void __cpuidex(int info[4], int ax, int cx);
@@ -43,7 +45,7 @@ static inline void __cpuid(int info[4], int ax)
 
 #endif
 
-#if defined(__aarch64__) || defined(__arm64ec__)
+#if MSVCRT_TARGET_ARM64_CODEGEN
 typedef enum _tag_ARM64INTR_BARRIER_TYPE
 {
     _ARM64_BARRIER_OSHLD  = 0x1,
@@ -75,7 +77,7 @@ typedef enum _tag_ARMINTR_BARRIER_TYPE
 } _ARMINTR_BARRIER_TYPE;
 #endif
 
-#if defined(_MSC_VER) && (defined(__arm__) || defined(__aarch64__) || defined(__arm64ec__))
+#if defined(_MSC_VER) && (MSVCRT_TARGET_ARM_CODEGEN || MSVCRT_TARGET_ARM64_CODEGEN)
 
 void __dmb(unsigned int);
 
@@ -83,7 +85,7 @@ void __dmb(unsigned int);
 
 #endif
 
-#if defined(_MSC_VER) && (defined(__aarch64__) || defined(__arm64ec__))
+#if defined(_MSC_VER) && MSVCRT_TARGET_ARM64_CODEGEN
 
 unsigned __int64 __getReg(int);
 #pragma intrinsic(__getReg)

@@ -227,7 +227,7 @@ elseif(ARCH STREQUAL "arm")
     list(APPEND CRT_MATH_ASM_SOURCE
         math/arm/_logb.s
     )
-elseif(ARCH STREQUAL "arm64")
+elseif(ARCH_USES_ARM64_CODEGEN)
     list(APPEND LIBCNTPR_MATH_SOURCE
         math/arm64/atan.c
         math/arm64/_set_statfp.c
@@ -320,7 +320,7 @@ elseif(ARCH STREQUAL "amd64")
     list(APPEND ATAN2_SOURCE math/_invoke_matherr.c math/amd64/_set_statfp.c math/libm_sse2/_handle_error.c math/libm_sse2/atan2.c)
 elseif(ARCH STREQUAL "arm")
     list(APPEND ATAN2_ASM_SOURCE math/arm/atan2.s)
-elseif(ARCH STREQUAL "arm64")
+elseif(ARCH_USES_ARM64_CODEGEN)
     list(APPEND ATAN2_SOURCE
         math/_invoke_matherr.c
         math/arm64/_set_statfp.c

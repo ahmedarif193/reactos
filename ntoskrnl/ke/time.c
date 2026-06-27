@@ -33,6 +33,20 @@ KiCheckForTimerExpiration(
     Hand = KeTickCount.LowPart & (TIMER_TABLE_SIZE - 1);
     if (KiTimerTableListHead[Hand].Time.QuadPart <= (ULONG64)InterruptTime.QuadPart)
     {
+#ifdef _M_ARM64
+        PKDPC TimerExpirationDpc = &Prcb->TimerExpirationDpc;
+
+        /*
+         * Timer expiration is queued through the per-processor DPC. DpcData
+         * being non-NULL means the DPC is already queued.
+         */
+        UNREFERENCED_PARAMETER(TrapFrame);
+        if (TimerExpirationDpc->DpcData == NULL)
+        {
+            KeInsertQueueDpc(TimerExpirationDpc, ULongToPtr(Hand), NULL);
+            HalRequestSoftwareInterrupt(DISPATCH_LEVEL);
+        }
+#else
         /* Check if we are already doing expiration */
         if (!Prcb->TimerRequest)
         {
@@ -41,6 +55,7 @@ KiCheckForTimerExpiration(
             Prcb->TimerHand = Hand;
             HalRequestSoftwareInterrupt(DISPATCH_LEVEL);
         }
+#endif
     }
 }
 

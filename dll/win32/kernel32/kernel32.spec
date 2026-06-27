@@ -196,7 +196,8 @@
 @ stdcall DelayLoadFailureHook(str str)
 @ stdcall DeleteAtom(long)
 @ stub -version=0x600+ DeleteBoundaryDescriptor
-@ stdcall DeleteCriticalSection(ptr) ntdll.RtlDeleteCriticalSection
+@ stdcall -arch=!arm64ec DeleteCriticalSection(ptr) ntdll.RtlDeleteCriticalSection
+@ stdcall -arch=arm64ec DeleteCriticalSection(ptr)
 @ stdcall DeleteFiber(ptr)
 @ stdcall DeleteFileA(str)
 @ stub -version=0x600+ DeleteFileTransactedA
@@ -223,7 +224,8 @@
 @ stdcall EncodeSystemPointer(ptr) ntdll.RtlEncodeSystemPointer
 @ stdcall EndUpdateResourceA(long long)
 @ stdcall EndUpdateResourceW(long long)
-@ stdcall EnterCriticalSection(ptr) ntdll.RtlEnterCriticalSection
+@ stdcall -arch=!arm64ec EnterCriticalSection(ptr) ntdll.RtlEnterCriticalSection
+@ stdcall -arch=arm64ec EnterCriticalSection(ptr)
 @ stdcall EnumCalendarInfoA(ptr long long long)
 @ stdcall EnumCalendarInfoExA(ptr long long long)
 @ stdcall -version=0x600+ EnumCalendarInfoExEx(ptr wstr long wstr long long)
@@ -497,7 +499,8 @@
 @ stdcall GetHandleInformation(long ptr)
 @ stdcall GetLargePageMinimum()
 @ stdcall GetLargestConsoleWindowSize(long)
-@ stdcall GetLastError() ntdll.RtlGetLastWin32Error
+@ stdcall -arch=!arm64ec GetLastError() ntdll.RtlGetLastWin32Error
+@ stdcall -arch=arm64ec GetLastError()
 @ stdcall -version=0x500-0x502 GetLinguistLangSize(ptr)
 @ stdcall GetLocalTime(ptr)
 @ stdcall GetLocaleInfoA(long long ptr long)
@@ -689,13 +692,15 @@
 @ stdcall Heap32ListFirst(long ptr)
 @ stdcall Heap32ListNext(long ptr)
 @ stdcall Heap32Next(ptr)
-@ stdcall HeapAlloc(long long long) ntdll.RtlAllocateHeap
+@ stdcall -arch=!arm64ec HeapAlloc(long long long) ntdll.RtlAllocateHeap
+@ stdcall -arch=arm64ec HeapAlloc(long long long)
 @ stdcall HeapCompact(long long)
 @ stdcall HeapCreate(long long long)
 @ stdcall -version=0x351-0x502 HeapCreateTagsW(ptr long wstr wstr)
 @ stdcall HeapDestroy(long)
 @ stdcall -version=0x351-0x502 HeapExtend(long long ptr long)
-@ stdcall HeapFree(long long long) ntdll.RtlFreeHeap
+@ stdcall -arch=!arm64ec HeapFree(long long long) ntdll.RtlFreeHeap
+@ stdcall -arch=arm64ec HeapFree(long long long)
 @ stdcall HeapLock(long)
 @ stdcall HeapQueryInformation(long long ptr long ptr)
 @ stdcall -version=0x351-0x502 HeapQueryTagW(long long long long ptr)
@@ -802,7 +807,8 @@
 @ stdcall LZRead(long str long)
 @ stdcall LZSeek(long long long)
 @ stdcall LZStart()
-@ stdcall LeaveCriticalSection(ptr) ntdll.RtlLeaveCriticalSection
+@ stdcall -arch=!arm64ec LeaveCriticalSection(ptr) ntdll.RtlLeaveCriticalSection
+@ stdcall -arch=arm64ec LeaveCriticalSection(ptr)
 @ stub -version=0x600+ LeaveCriticalSectionWhenCallbackReturns
 @ stdcall LoadLibraryA(str)
 @ stdcall LoadLibraryExA(str long long)
@@ -966,22 +972,28 @@
 @ stdcall ResetWriteWatch(ptr long)
 @ stdcall RestoreLastError(long) ntdll.RtlRestoreLastWin32Error
 @ stdcall ResumeThread(long)
-@ stdcall -arch=x86_64,arm64 RtlAddFunctionTable(ptr long long) ntdll.RtlAddFunctionTable
-@ stdcall -register RtlCaptureContext(ptr) ntdll.RtlCaptureContext
+@ stdcall -arch=x86_64,arm64,!arm64ec RtlAddFunctionTable(ptr long long) ntdll.RtlAddFunctionTable
+@ stdcall -arch=arm64ec RtlAddFunctionTable(ptr long long)
+@ stdcall -register -arch=!arm64ec RtlCaptureContext(ptr) ntdll.RtlCaptureContext
+@ stdcall -register -arch=arm64ec RtlCaptureContext(ptr)
 @ stdcall RtlCaptureStackBackTrace(long long ptr ptr) ntdll.RtlCaptureStackBackTrace
 @ stdcall -arch=x86_64,arm64 RtlCompareMemory(ptr ptr ptr) ntdll.RtlCompareMemory
 @ stdcall -arch=x86_64,arm64 RtlCopyMemory(ptr ptr ptr) ntdll.memcpy
 @ stdcall -arch=x86_64,arm64 RtlDeleteFunctionTable(ptr) ntdll.RtlDeleteFunctionTable
 @ stdcall RtlFillMemory(ptr long long) ntdll.RtlFillMemory
 @ stdcall -arch=x86_64,arm64 RtlInstallFunctionTableCallback(double double long ptr ptr ptr) ntdll.RtlInstallFunctionTableCallback
-@ stdcall -arch=x86_64,arm64 RtlLookupFunctionEntry(ptr ptr ptr) ntdll.RtlLookupFunctionEntry
+@ stdcall -arch=x86_64,arm64,!arm64ec RtlLookupFunctionEntry(ptr ptr ptr) ntdll.RtlLookupFunctionEntry
+@ stdcall -arch=arm64ec RtlLookupFunctionEntry(ptr ptr ptr)
 @ stdcall RtlMoveMemory(ptr ptr long) ntdll.RtlMoveMemory
 @ stdcall -arch=x86_64,arm64 RtlPcToFileHeader(ptr ptr) ntdll.RtlPcToFileHeader
 @ stdcall -arch=x86_64,arm64 RtlRaiseException(ptr) ntdll.RtlRaiseException
 @ stdcall -arch=x86_64,arm64 RtlRestoreContext(ptr ptr) ntdll.RtlRestoreContext
-@ stdcall RtlUnwind(ptr ptr ptr ptr) ntdll.RtlUnwind
-@ stdcall -arch=x86_64,arm64 RtlUnwindEx(ptr ptr ptr ptr ptr ptr) ntdll.RtlUnwindEx
-@ stdcall -arch=x86_64,arm64 RtlVirtualUnwind(long int64 int64 ptr ptr ptr ptr ptr) ntdll.RtlVirtualUnwind
+@ stdcall -arch=!arm64ec RtlUnwind(ptr ptr ptr ptr) ntdll.RtlUnwind
+@ stdcall -arch=arm64ec RtlUnwind(ptr ptr ptr ptr)
+@ stdcall -arch=x86_64,arm64,!arm64ec RtlUnwindEx(ptr ptr ptr ptr ptr ptr) ntdll.RtlUnwindEx
+@ stdcall -arch=arm64ec RtlUnwindEx(ptr ptr ptr ptr ptr ptr)
+@ stdcall -arch=x86_64,arm64,!arm64ec RtlVirtualUnwind(long int64 int64 ptr ptr ptr ptr ptr) ntdll.RtlVirtualUnwind
+@ stdcall -arch=arm64ec RtlVirtualUnwind(long int64 int64 ptr ptr ptr ptr ptr)
 @ stdcall RtlZeroMemory(ptr long) ntdll.RtlZeroMemory
 @ stdcall ScrollConsoleScreenBufferA(long ptr ptr ptr ptr)
 @ stdcall ScrollConsoleScreenBufferW(long ptr ptr ptr ptr)
@@ -1075,7 +1087,8 @@
 @ stdcall SetHandleInformation(long long long)
 @ stdcall SetInformationJobObject(long long ptr long)
 @ stdcall SetLastConsoleEventActive() ; missing in XP SP3
-@ stdcall SetLastError(long) ntdll.RtlSetLastWin32Error
+@ stdcall -arch=!arm64ec SetLastError(long) ntdll.RtlSetLastWin32Error
+@ stdcall -arch=arm64ec SetLastError(long)
 @ stdcall SetLocalPrimaryComputerNameA(long long) ; missing in XP SP3
 @ stdcall SetLocalPrimaryComputerNameW(long long) ; missing in XP SP3
 @ stdcall SetLocalTime(ptr)
@@ -1158,7 +1171,8 @@
 @ stdcall TransmitCommChar(long long)
 @ stdcall -version=0x601+ TryAcquireSRWLockExclusive(ptr) ntdll.RtlTryAcquireSRWLockExclusive
 @ stdcall -version=0x601+ TryAcquireSRWLockShared(ptr) ntdll.RtlTryAcquireSRWLockShared
-@ stdcall TryEnterCriticalSection(ptr) ntdll.RtlTryEnterCriticalSection
+@ stdcall -arch=!arm64ec TryEnterCriticalSection(ptr) ntdll.RtlTryEnterCriticalSection
+@ stdcall -arch=arm64ec TryEnterCriticalSection(ptr)
 @ stdcall -version=0x600+ TrySubmitThreadpoolCallback(ptr ptr ptr)
 @ stdcall TzSpecificLocalTimeToSystemTime(ptr ptr ptr)
 @ stdcall UTRegister(long str str str ptr ptr ptr)
@@ -1268,7 +1282,8 @@
 @ stdcall _lclose(long)
 @ stdcall _lcreat(str long)
 @ stdcall _llseek(long long long)
-@ stdcall -arch=x86_64,arm64 _local_unwind() ntdll._local_unwind
+@ stdcall -arch=x86_64,arm64,!arm64ec _local_unwind() ntdll._local_unwind
+@ stdcall -arch=arm64ec _local_unwind(ptr ptr)
 @ stdcall _lopen(str long)
 @ stdcall _lread(long ptr long) _hread
 @ stdcall _lwrite(long ptr long) _hwrite

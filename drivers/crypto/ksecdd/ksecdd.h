@@ -35,7 +35,9 @@ typedef struct _KSEC_CONNECTION_INFO
     ULONG Flags;
 } KSEC_CONNECTION_INFO;
 
-#if defined(_M_IX86) || defined(_M_AMD64)
+#if NDK_TARGET_ARM64_CODEGEN
+typedef ULONG KSEC_MACHINE_SPECIFIC_COUNTERS, *PKSEC_MACHINE_SPECIFIC_COUNTERS;
+#elif defined(_M_IX86) || defined(_M_AMD64)
 typedef struct _KSEC_MACHINE_SPECIFIC_COUNTERS
 {
     ULONG64 Tsc;
@@ -49,8 +51,6 @@ typedef struct _KSEC_MACHINE_SPECIFIC_COUNTERS
 {
     ULONG Ccr;
 } KSEC_MACHINE_SPECIFIC_COUNTERS, *PKSEC_MACHINE_SPECIFIC_COUNTERS;
-#else
-typedef ULONG KSEC_MACHINE_SPECIFIC_COUNTERS, *PKSEC_MACHINE_SPECIFIC_COUNTERS;
 #endif
 
 typedef struct _KSEC_ENTROPY_DATA
@@ -109,4 +109,3 @@ KsecDecryptMemory (
     _Inout_ PVOID Buffer,
     _In_ ULONG Length,
     _In_ ULONG OptionFlags);
-

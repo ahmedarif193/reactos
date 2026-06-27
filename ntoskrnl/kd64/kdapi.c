@@ -75,6 +75,7 @@ KdpCopyMemoryChunks(
 {
     NTSTATUS Status;
     ULONG RemainingLength, CopyChunk;
+    ULONG64 StartAddress;
 
     /* Check if we didn't get a chunk size or if it is too big */
     if (ChunkSize == 0)
@@ -89,6 +90,7 @@ KdpCopyMemoryChunks(
     }
 
     /* Copy the whole range in aligned chunks */
+    StartAddress = Address;
     RemainingLength = TotalSize;
     CopyChunk = 1;
     while (RemainingLength > 0)
@@ -130,8 +132,17 @@ KdpCopyMemoryChunks(
         RemainingLength = RemainingLength - CopyChunk;
     }
 
-    /* We may have modified executable code, flush the instruction cache */
-    KeSweepICache((PVOID)(ULONG_PTR)Address, TotalSize);
+    /*
+     * We may have modified executable code. Flush only after a successful
+     * virtual write; ARM64 cache maintenance by VA can fault on invalid user
+     * addresses, and reads do not publish new instruction bytes.
+     */
+    if ((Flags & MMDBG_COPY_WRITE) &&
+        !(Flags & MMDBG_COPY_PHYSICAL) &&
+        (RemainingLength == 0))
+    {
+        KeSweepICache((PVOID)(ULONG_PTR)StartAddress, TotalSize);
+    }
 
     /*
      * Return the size we managed to copy and return

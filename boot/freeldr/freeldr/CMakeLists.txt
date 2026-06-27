@@ -124,7 +124,7 @@ elseif(ARCH STREQUAL "amd64")
 
 elseif(ARCH STREQUAL "arm")
     #TBD
-elseif(ARCH STREQUAL "arm64")
+elseif(ARCH_USES_ARM64_CODEGEN)
     list(APPEND FREELDR_BOOTLIB_SOURCE
         lib/math_stubs.c
         lib/unwind_stubs.c)

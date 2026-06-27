@@ -29,7 +29,28 @@ KiUserExceptionDispatcher(PEXCEPTION_RECORD ExceptionRecord,
     EXCEPTION_RECORD NestedExceptionRecord;
     NTSTATUS Status;
 
-#if defined(_M_ARM64)
+#if defined(_M_ARM64EC)
+    if (ChpeIsChpeProcess())
+    {
+        ARM64EC_NT_CONTEXT Arm64EcContext;
+        PARM64_NT_CONTEXT Arm64Context = (PARM64_NT_CONTEXT)Context;
+
+        ChpeDispatchException(ExceptionRecord, (PCONTEXT)Arm64Context);
+        ChpeArm64ContextToArm64Ec(&Arm64EcContext, Arm64Context);
+
+        if (RtlDispatchException(ExceptionRecord, (PCONTEXT)&Arm64EcContext))
+        {
+            ChpeArm64EcContextToArm64(Arm64Context, &Arm64EcContext);
+            Status = NtContinue((PCONTEXT)Arm64Context, FALSE);
+        }
+        else
+        {
+            Status = NtRaiseException(ExceptionRecord, (PCONTEXT)Arm64Context, FALSE);
+        }
+
+        goto RaiseNestedException;
+    }
+#elif defined(_M_ARM64)
     if (ChpeIsChpeProcess())
     {
         ChpeDispatchException(ExceptionRecord, Context);
@@ -48,6 +69,7 @@ KiUserExceptionDispatcher(PEXCEPTION_RECORD ExceptionRecord,
         Status = NtRaiseException(ExceptionRecord, Context, FALSE);
     }
 
+RaiseNestedException:
     /* Setup the Exception record */
     NestedExceptionRecord.ExceptionCode = Status;
     NestedExceptionRecord.ExceptionFlags = EXCEPTION_NONCONTINUABLE;

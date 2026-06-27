@@ -60,6 +60,29 @@ BasepAnsiStringToUnicodeSize(IN PANSI_STRING String)
 }
 
 static
+VOID
+NTAPI
+BasepSetFileApisToOem(VOID)
+{
+    Basep8BitStringToUnicodeString = (PRTL_CONVERT_STRING)RtlOemStringToUnicodeString;
+    BasepUnicodeStringTo8BitString = RtlUnicodeStringToOemString;
+    BasepUnicodeStringTo8BitSize = BasepUnicodeStringToOemSize;
+    Basep8BitStringToUnicodeSize = BasepOemStringToUnicodeSize;
+    bIsFileApiAnsi = FALSE;
+}
+
+VOID
+NTAPI
+BasepSetFileApisToAnsi(VOID)
+{
+    Basep8BitStringToUnicodeString = RtlAnsiStringToUnicodeString;
+    BasepUnicodeStringTo8BitString = RtlUnicodeStringToAnsiString;
+    BasepUnicodeStringTo8BitSize = BasepUnicodeStringToAnsiSize;
+    Basep8BitStringToUnicodeSize = BasepAnsiStringToUnicodeSize;
+    bIsFileApiAnsi = TRUE;
+}
+
+static
 NTSTATUS
 NTAPI
 BasepQueryEnvironmentMaximumSize(
@@ -978,14 +1001,7 @@ VOID
 WINAPI
 SetFileApisToOEM(VOID)
 {
-    /* Set the correct Base Api */
-    Basep8BitStringToUnicodeString = (PRTL_CONVERT_STRING)RtlOemStringToUnicodeString;
-    BasepUnicodeStringTo8BitString = RtlUnicodeStringToOemString;
-    BasepUnicodeStringTo8BitSize = BasepUnicodeStringToOemSize;
-    Basep8BitStringToUnicodeSize = BasepOemStringToUnicodeSize;
-
-    /* FIXME: Old, deprecated way */
-    bIsFileApiAnsi = FALSE;
+    BasepSetFileApisToOem();
 }
 
 
@@ -996,14 +1012,7 @@ VOID
 WINAPI
 SetFileApisToANSI(VOID)
 {
-    /* Set the correct Base Api */
-    Basep8BitStringToUnicodeString = RtlAnsiStringToUnicodeString;
-    BasepUnicodeStringTo8BitString = RtlUnicodeStringToAnsiString;
-    BasepUnicodeStringTo8BitSize = BasepUnicodeStringToAnsiSize;
-    Basep8BitStringToUnicodeSize = BasepAnsiStringToUnicodeSize;
-
-    /* FIXME: Old, deprecated way */
-    bIsFileApiAnsi = TRUE;
+    BasepSetFileApisToAnsi();
 }
 
 /*
@@ -1013,7 +1022,7 @@ BOOL
 WINAPI
 AreFileApisANSI(VOID)
 {
-   return Basep8BitStringToUnicodeString == RtlAnsiStringToUnicodeString;
+   return bIsFileApiAnsi;
 }
 
 /*

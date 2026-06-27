@@ -128,9 +128,13 @@ elseif(ARCH STREQUAL "arm")
     list(APPEND ASM_SOURCE
         client/arm/fiber.S
         client/arm/thread.S)
-elseif(ARCH STREQUAL "arm64")
+elseif(ARCH_USES_ARM64_CODEGEN)
     list(APPEND SOURCE
         client/arm64/fiber.c)
+    if(ARCH STREQUAL "arm64ec")
+        list(APPEND SOURCE
+            client/arm64ec/forward.c)
+    endif()
 endif()
 
 add_asm_files(kernel32_asm ${ASM_SOURCE})

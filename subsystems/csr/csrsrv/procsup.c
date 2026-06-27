@@ -126,6 +126,11 @@ CsrProcessRefcountZero(IN PCSR_PROCESS CsrProcess)
     /* Check if there's a session */
     if (CsrProcess->NtSession)
     {
+        DPRINT1("CSRSS: session process %p.%p exited, completing session %lu\n",
+                CsrProcess->ClientId.UniqueProcess,
+                CsrProcess->ClientId.UniqueThread,
+                CsrProcess->NtSession->SessionId);
+
         /* Dereference the Session */
         CsrDereferenceNtSession(CsrProcess->NtSession, STATUS_SUCCESS);
     }
@@ -755,6 +760,14 @@ CsrDestroyProcess(IN PCLIENT_ID Cid,
         CsrReleaseProcessLock();
         return STATUS_THREAD_IS_TERMINATING;
     }
+
+    DPRINT1("CSRSS: CsrDestroyProcess cid=%p.%p exit=0x%08lx refs=%ld threads=%lu flags=0x%lx\n",
+            ClientId.UniqueProcess,
+            ClientId.UniqueThread,
+            ExitStatus,
+            CsrProcess->ReferenceCount,
+            CsrProcess->ThreadCount,
+            CsrProcess->Flags);
 
     /* Set the terminated flag */
     CsrProcess->Flags |= CsrProcessTerminating;

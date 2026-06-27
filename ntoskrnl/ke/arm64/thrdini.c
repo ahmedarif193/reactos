@@ -191,27 +191,31 @@ KiIdleLoop(VOID)
         /*
          * Check for pending DPC work. On ARM64, also check DpcInterruptRequested
          * which is set by HalRequestSoftwareInterrupt when a DPC is queued.
+         *
+         * Timer expiration is queued through the per-processor DPC. Pending
+         * timer work is implied by DpcQueueDepth, but check DpcData explicitly
+         * so idle wakes as soon as the tick handler queues the expiration DPC.
          */
         if (Prcb->DpcData[0].DpcQueueDepth ||
-            Prcb->TimerRequest ||
+            (Prcb->TimerExpirationDpc.DpcData != NULL) ||
             Prcb->DeferredReadyListHead.Next ||
-            Prcb->DpcInterruptRequested)
+            Prcb->DpcNormalProcessingRequested)
         {
             if (KiArm64ShouldTraceIdle())
             {
                 DbgPrintEx(DPFLTR_DEFAULT_ID,
                            DPFLTR_ERROR_LEVEL,
-                           "[arm64][IDLE] dispatch work: DpcDepth=%lu TimerReq=%p Deferred=%p DpcReq=%u Next=%p Ready=0x%Ix\n",
+                           "[arm64][IDLE] dispatch work: DpcDepth=%lu TimerDpc=%p Deferred=%p DpcReq=%u Next=%p Ready=0x%Ix\n",
                            Prcb->DpcData[0].DpcQueueDepth,
-                           Prcb->TimerRequest,
+                           Prcb->TimerExpirationDpc.DpcData,
                            Prcb->DeferredReadyListHead.Next,
-                           Prcb->DpcInterruptRequested,
+                           Prcb->DpcNormalProcessingRequested,
                            Prcb->NextThread,
                            Prcb->ReadySummary);
             }
 
             HalClearSoftwareInterrupt(DISPATCH_LEVEL);
-            Prcb->DpcInterruptRequested = FALSE;
+            Prcb->DpcNormalProcessingRequested = 0;
             KiRetireDpcList(Prcb);
 
             /* ARM64: Memory barrier after KiRetireDpcList to ensure NextThread is visible */
@@ -601,8 +605,9 @@ KiDispatchInterrupt(VOID)
     _disable();
 
     /* Process pending DPCs, timers, and deferred ready threads */
+    /* Timer expiration is queued through the per-processor DPC. */
     if ((Prcb->DpcData[0].DpcQueueDepth) ||
-        (Prcb->TimerRequest) ||
+        (Prcb->TimerExpirationDpc.DpcData != NULL) ||
         (Prcb->DeferredReadyListHead.Next))
     {
         KiRetireDpcList(Prcb);

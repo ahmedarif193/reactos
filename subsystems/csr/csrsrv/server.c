@@ -406,12 +406,12 @@ CsrSrvCreateSharedSection(IN PCHAR ParameterValue)
                              NULL);
     if (!NT_SUCCESS(Status)) return Status;
 
-    /* Map the section */
+    /* Map the section and commit the initial heap page. */
     Status = NtMapViewOfSection(CsrSrvSharedSection,
                                 NtCurrentProcess(),
                                 &CsrSrvSharedSectionBase,
                                 0,
-                                0,
+                                CsrNtSysInfo.PageSize,
                                 NULL,
                                 &ViewSize,
                                 ViewUnmap,

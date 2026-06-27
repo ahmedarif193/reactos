@@ -537,7 +537,7 @@ LdrpInitializeThread(IN PCONTEXT Context)
     /* Allocate TLS */
     LdrpAllocateTls();
 
-#if defined(_M_ARM64)
+#if defined(_M_ARM64) || defined(_M_ARM64EC)
     if (ChpeIsChpeProcess())
     {
         Status = ChpeInitializeThread();
@@ -1093,7 +1093,7 @@ LdrShutdownProcess(VOID)
 
     /* FIXME: Do Heap detection and Etw final shutdown */
 
-#if defined(_M_ARM64)
+#if defined(_M_ARM64) || defined(_M_ARM64EC)
     /* CHPE: notify the emulator that this process is terminating */
     if (ChpeIsChpeProcess())
     {
@@ -1293,7 +1293,7 @@ LdrShutdownThread(VOID)
     /* Free the activation context stack */
     RtlFreeThreadActivationContextStack();
 
-#if defined(_M_ARM64)
+#if defined(_M_ARM64) || defined(_M_ARM64EC)
     /* CHPE: notify the emulator that this thread is terminating */
     if (ChpeIsChpeProcess())
     {
@@ -2029,6 +2029,7 @@ LdrpInitializeProcess(IN PCONTEXT Context,
                         Peb->TlsBitmapBits,
                         TLS_MINIMUM_AVAILABLE);
     RtlSetBit(&TlsBitMap, 0);
+    RtlSetBit(&TlsBitMap, NTDLL_TLS_ERRNO);
     RtlInitializeBitMap(&TlsExpansionBitMap,
                         Peb->TlsExpansionBitmapBits,
                         TLS_EXPANSION_SLOTS);
@@ -2319,7 +2320,7 @@ LdrpInitializeProcess(IN PCONTEXT Context,
     LdrpNtDllDataTableEntry = NtLdrEntry;
     LdrpInsertMemoryTableEntry(NtLdrEntry);
 
-#if defined(_M_ARM64)
+#if defined(_M_ARM64) || defined(_M_ARM64EC)
     if (ChpeIsChpeProcess())
     {
         Status = ChpeInitializeProcess();

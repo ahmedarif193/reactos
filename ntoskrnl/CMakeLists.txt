@@ -26,6 +26,9 @@ add_asm_files(ntoskrnl_asm ${NTOSKRNL_ASM_SOURCE})
 if(CMAKE_C_COMPILER_ID STREQUAL "Clang")
     # Clang optimises strcmp calls to memcmp.
     target_link_libraries(libntoskrnl INTERFACE memcmp)
+    if(ARCH STREQUAL "arm64ec" AND TARGET libntoskrnl_native)
+        target_link_libraries(libntoskrnl_native INTERFACE memcmp_native)
+    endif()
 endif()
 
 if((CMAKE_C_COMPILER_ID STREQUAL "Clang") OR (CMAKE_C_COMPILER_ID STREQUAL "GNU"))

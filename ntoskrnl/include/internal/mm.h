@@ -1668,6 +1668,20 @@ MmCheckSystemImage(
 
 NTSTATUS
 NTAPI
+MmCheckSystemDllImage(
+    _In_ HANDLE ImageHandle);
+
+#ifdef _M_ARM64
+BOOLEAN
+NTAPI
+MmGetArm64EcNativeSystemDllEntryPoint(
+    _In_ PVOID ImageBase,
+    _In_ PVOID EntryPoint,
+    _Out_ PVOID *NativeEntryPoint);
+#endif
+
+NTSTATUS
+NTAPI
 MmCallDllInitialize(
     _In_ PLDR_DATA_TABLE_ENTRY LdrEntry,
     _In_ PLIST_ENTRY ModuleListHead);

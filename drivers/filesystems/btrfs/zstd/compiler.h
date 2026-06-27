@@ -83,7 +83,9 @@
 #ifndef __has_attribute
   #define __has_attribute(x) 0  /* Compatibility with non-clang compilers. */
 #endif
-#if defined(__GNUC__) || defined(__ICCARM__)
+#if (defined(__GNUC__) || defined(__ICCARM__)) && \
+    (defined(__i386__) || defined(__x86_64__) || defined(_M_IX86) || defined(_M_X64)) && \
+    !defined(__arm64ec__) && !defined(_M_ARM64EC)
 #  define TARGET_ATTRIBUTE(target) __attribute__((__target__(target)))
 #else
 #  define TARGET_ATTRIBUTE(target)
@@ -97,6 +99,7 @@
       || (defined(__GNUC__) \
           && (__GNUC__ >= 5 || (__GNUC__ == 4 && __GNUC_MINOR__ >= 8)))) \
       && (defined(__x86_64__) || defined(_M_X86)) \
+      && !defined(__arm64ec__) && !defined(_M_ARM64EC) \
       && !defined(__BMI2__)
   #  define DYNAMIC_BMI2 1
   #else

@@ -131,7 +131,11 @@ ProbeForRead(IN CONST VOID *Address,
             ExRaiseAccessViolation();
         }
 
+#ifdef _M_ARM64
+        MiArm64ProbeForRead(Current, Last);
+#else
         /* ProbeForRead doesn't check if memory pages are readable! */
+#endif
     }
 }
 

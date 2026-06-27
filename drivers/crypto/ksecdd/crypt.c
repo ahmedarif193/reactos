@@ -96,10 +96,10 @@ KsecGetKeyData (
         ProcessData.Process = CurrentProcess;
         ProcessData.ProcessId = CurrentProcess->UniqueProcessId;
         ProcessData.CreateTime = PsGetProcessCreateTimeQuadPart(CurrentProcess);
-#if (NTDDI_VERSION >= NTDDI_LONGHORN) && !defined(_M_ARM64)
-        ProcessData.DirectoryTableBase = CurrentProcess->Pcb.DirectoryTableBase;
-#else
+#if NDK_TARGET_ARM64_ABI || (NTDDI_VERSION < NTDDI_LONGHORN)
         ProcessData.DirectoryTableBase = CurrentProcess->Pcb.DirectoryTableBase[0];
+#else
+        ProcessData.DirectoryTableBase = CurrentProcess->Pcb.DirectoryTableBase;
 #endif
         MD5Update(&Md5Contexts[0], (PVOID)&ProcessData, sizeof(ProcessData));
         MD5Update(&Md5Contexts[1], (PVOID)&ProcessData, sizeof(ProcessData));

@@ -3612,7 +3612,40 @@ done:
 }
 
 extern void do_cpuid( unsigned int ax, unsigned int *p );
-#if defined(_MSC_VER)
+#if defined(__arm64ec__) || defined(_M_ARM64EC)
+#define CPUID_CHARS(a,b,c,d) ((unsigned int)(unsigned char)(a) | ((unsigned int)(unsigned char)(b) << 8) | \
+                              ((unsigned int)(unsigned char)(c) << 16) | ((unsigned int)(unsigned char)(d) << 24))
+void do_cpuid( unsigned int ax, unsigned int *p )
+{
+    p[0] = p[1] = p[2] = p[3] = 0;
+
+    switch (ax)
+    {
+    case 0:
+        p[0] = 1;
+        p[1] = CPUID_CHARS( 'A', 'R', 'M', ' ' );
+        p[2] = CPUID_CHARS( ' ', ' ', ' ', ' ' );
+        p[3] = CPUID_CHARS( 'L', 't', 'd', '.' );
+        break;
+    case 0x80000000:
+        p[0] = 0x80000004;
+        break;
+    case 0x80000002:
+        p[0] = CPUID_CHARS( 'A', 'R', 'M', '6' );
+        p[1] = CPUID_CHARS( '4', 'E', 'C', ' ' );
+        p[2] = CPUID_CHARS( 'P', 'r', 'o', 'c' );
+        p[3] = CPUID_CHARS( 'e', 's', 's', 'o' );
+        break;
+    case 0x80000003:
+        p[0] = CPUID_CHARS( 'r', ' ', ' ', ' ' );
+        p[1] = CPUID_CHARS( ' ', ' ', ' ', ' ' );
+        p[2] = CPUID_CHARS( ' ', ' ', ' ', ' ' );
+        p[3] = CPUID_CHARS( ' ', ' ', ' ', ' ' );
+        break;
+    }
+}
+#undef CPUID_CHARS
+#elif defined(_MSC_VER)
 void do_cpuid( unsigned int ax, unsigned int *p )
 {
     __cpuid( p, ax );
@@ -3689,8 +3722,26 @@ static const WCHAR *get_osarchitecture(void)
 {
     SYSTEM_INFO info;
     GetNativeSystemInfo( &info );
-    if (info.u.s.wProcessorArchitecture == PROCESSOR_ARCHITECTURE_AMD64) return os_64bitW;
+    if (info.u.s.wProcessorArchitecture == PROCESSOR_ARCHITECTURE_AMD64 ||
+        info.u.s.wProcessorArchitecture == PROCESSOR_ARCHITECTURE_ARM64) return os_64bitW;
     return os_32bitW;
+}
+static UINT16 get_processor_architecture(void)
+{
+    SYSTEM_INFO info;
+    GetNativeSystemInfo( &info );
+
+    switch (info.u.s.wProcessorArchitecture)
+    {
+    case PROCESSOR_ARCHITECTURE_INTEL:
+        return 0;
+    case PROCESSOR_ARCHITECTURE_AMD64:
+        return 9;
+    case PROCESSOR_ARCHITECTURE_ARM64:
+        return 12;
+    default:
+        return get_osarchitecture() == os_32bitW ? 0 : 9;
+    }
 }
 static void get_processor_caption( WCHAR *caption, UINT len )
 {
@@ -3700,13 +3751,17 @@ static void get_processor_caption( WCHAR *caption, UINT len )
     static const WCHAR x86W[] = {'x','8','6',0};
     static const WCHAR intel64W[] = {'I','n','t','e','l','6','4',0};
     static const WCHAR amd64W[] = {'A','M','D','6','4',0};
+    static const WCHAR arm64W[] = {'A','R','M','6','4',0};
     static const WCHAR authenticamdW[] = {'A','u','t','h','e','n','t','i','c','A','M','D',0};
     const WCHAR *arch;
     WCHAR manufacturer[13];
+    SYSTEM_INFO info;
     unsigned int regs[4] = {0, 0, 0, 0}, family, model, stepping;
 
+    GetNativeSystemInfo( &info );
     get_processor_manufacturer( manufacturer, ARRAY_SIZE( manufacturer ) );
     if (get_osarchitecture() == os_32bitW) arch = x86W;
+    else if (info.u.s.wProcessorArchitecture == PROCESSOR_ARCHITECTURE_ARM64) arch = arm64W;
     else if (!wcscmp( manufacturer, authenticamdW )) arch = amd64W;
     else arch = intel64W;
 
@@ -3823,7 +3878,7 @@ static enum fill_status fill_processor( struct table *table, const struct expr *
     {
         rec = (struct record_processor *)(table->data + offset);
         rec->addresswidth           = get_osarchitecture() == os_32bitW ? 32 : 64;
-        rec->architecture           = get_osarchitecture() == os_32bitW ? 0 : 9;
+        rec->architecture           = get_processor_architecture();
         rec->caption                = heap_strdupW( caption );
         rec->cpu_status             = 1; /* CPU Enabled */
         rec->currentclockspeed      = get_processor_currentclockspeed( i );

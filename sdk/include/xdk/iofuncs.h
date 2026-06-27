@@ -38,7 +38,7 @@ $if (_WDMDDK_)
     } \
 }
 
-#if !defined(_M_AMD64)
+#if !_VCRT_AMD64_INTRINSICS
 NTHALAPI
 VOID
 NTAPI

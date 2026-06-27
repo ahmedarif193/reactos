@@ -131,7 +131,8 @@ KiIpiServiceRoutine(
 
         if (InterlockedBitTestAndReset((PLONG)&Prcb->IpiFrozen, IPI_DPC))
         {
-            Prcb->DpcInterruptRequested = TRUE;
+            /* Request a normal DPC pass on this processor. */
+            Prcb->DpcNormalProcessingRequested = 1;
             HalRequestSoftwareInterrupt(DISPATCH_LEVEL);
         }
 

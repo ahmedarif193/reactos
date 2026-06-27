@@ -1,0 +1,86 @@
+/*
+ * MSVCRT target/code-generation helpers.
+ */
+
+#ifndef _MSVCRT_TARGET_H
+#define _MSVCRT_TARGET_H
+
+#if defined(__i386__) || defined(_M_IX86)
+#define MSVCRT_TARGET_I386_CODEGEN 1
+#else
+#define MSVCRT_TARGET_I386_CODEGEN 0
+#endif
+
+#if defined(__arm64ec__) || defined(_M_ARM64EC)
+#define MSVCRT_TARGET_ARM64EC_CODEGEN 1
+#else
+#define MSVCRT_TARGET_ARM64EC_CODEGEN 0
+#endif
+
+#if defined(__aarch64__) || defined(_M_ARM64) || MSVCRT_TARGET_ARM64EC_CODEGEN
+#define MSVCRT_TARGET_ARM64_CODEGEN 1
+#else
+#define MSVCRT_TARGET_ARM64_CODEGEN 0
+#endif
+
+#if MSVCRT_TARGET_ARM64_CODEGEN && !MSVCRT_TARGET_ARM64EC_CODEGEN
+#define MSVCRT_TARGET_NATIVE_ARM64_CODEGEN 1
+#else
+#define MSVCRT_TARGET_NATIVE_ARM64_CODEGEN 0
+#endif
+
+#if defined(__arm__) || defined(_M_ARM)
+#define MSVCRT_TARGET_ARM_CODEGEN 1
+#else
+#define MSVCRT_TARGET_ARM_CODEGEN 0
+#endif
+
+#if defined(__x86_64__) && !defined(__arm64ec__)
+#define MSVCRT_TARGET_GNU_AMD64_CODEGEN 1
+#else
+#define MSVCRT_TARGET_GNU_AMD64_CODEGEN 0
+#endif
+
+#if defined(__x86_64__) || defined(_M_X64) || defined(_M_AMD64)
+#define MSVCRT_TARGET_X64_COMPATIBLE 1
+#else
+#define MSVCRT_TARGET_X64_COMPATIBLE 0
+#endif
+
+#if MSVCRT_TARGET_X64_COMPATIBLE && !MSVCRT_TARGET_ARM64EC_CODEGEN
+#define MSVCRT_TARGET_AMD64_CODEGEN 1
+#else
+#define MSVCRT_TARGET_AMD64_CODEGEN 0
+#endif
+
+#if MSVCRT_TARGET_I386_CODEGEN || MSVCRT_TARGET_AMD64_CODEGEN
+#define MSVCRT_TARGET_X86_CODEGEN 1
+#else
+#define MSVCRT_TARGET_X86_CODEGEN 0
+#endif
+
+#if (defined(__GNUC__) || defined(__clang__)) && MSVCRT_TARGET_I386_CODEGEN
+#define MSVCRT_TARGET_GNU_I386_CODEGEN 1
+#else
+#define MSVCRT_TARGET_GNU_I386_CODEGEN 0
+#endif
+
+#if (defined(__GNUC__) || defined(__clang__) || defined(_MSC_VER)) && MSVCRT_TARGET_I386_CODEGEN
+#define MSVCRT_TARGET_COMPILER_I386_CODEGEN 1
+#else
+#define MSVCRT_TARGET_COMPILER_I386_CODEGEN 0
+#endif
+
+#if MSVCRT_TARGET_X64_COMPATIBLE || MSVCRT_TARGET_ARM64EC_CODEGEN
+#define MSVCRT_TARGET_X64_FLOAT_STATE 1
+#else
+#define MSVCRT_TARGET_X64_FLOAT_STATE 0
+#endif
+
+#if MSVCRT_TARGET_I386_CODEGEN || MSVCRT_TARGET_X64_FLOAT_STATE
+#define MSVCRT_TARGET_X86_FLOAT_STATE 1
+#else
+#define MSVCRT_TARGET_X86_FLOAT_STATE 0
+#endif
+
+#endif /* _MSVCRT_TARGET_H */

@@ -59,7 +59,7 @@ elseif(ARCH STREQUAL "arm")
         arch/arm/macharm.c
         arch/arm/debug.c)
     #TBD
-elseif(ARCH STREQUAL "arm64")
+elseif(ARCH_USES_ARM64_CODEGEN)
     list(APPEND UEFILDR_ARC_SOURCE
         arch/uefi/arm64/early_uart.c)
     list(APPEND UEFILDR_COMMON_ASM_SOURCE
@@ -101,7 +101,7 @@ elseif(ARCH STREQUAL "amd64")
 elseif(ARCH STREQUAL "arm")
     list(APPEND FREELDR_NTLDR_SOURCE
         ntldr/arch/arm/winldr.c)
-elseif(ARCH STREQUAL "arm64")
+elseif(ARCH_USES_ARM64_CODEGEN)
     list(APPEND FREELDR_NTLDR_SOURCE
         ntldr/arch/arm64/winldr.c)
 else()
@@ -114,6 +114,9 @@ add_library(uefifreeldr_common
     ${FREELDR_BOOTLIB_SOURCE}
     ${UEFILDR_BOOTMGR_SOURCE}
     ${FREELDR_NTLDR_SOURCE})
+if(ARCH STREQUAL "arm64ec" AND COMMAND set_arm64ec_native_target)
+    set_arm64ec_native_target(uefifreeldr_common)
+endif()
 
 # Keep setjmp before freetype so the archive does not satisfy FreeType's
 # longjmp reference with the vcruntime implementation, which needs RtlUnwind.
@@ -169,7 +172,7 @@ target_compile_definitions(uefildr PRIVATE UEFIBOOT)
 # and early VA/PA assumptions close to the platform loader this path emulates.
 if(ARCH STREQUAL "amd64")
     set_image_base(uefildr 0x10000)
-elseif(ARCH STREQUAL "arm64")
+elseif(ARCH_USES_ARM64_CODEGEN)
     set_image_base(uefildr 0x10000000)
 endif()
 
@@ -184,7 +187,7 @@ endif()
     # We don't need hotpatching
     remove_target_compile_option(uefildr "/hotpatch")
 else()
-    if(ARCH STREQUAL "arm64")
+    if(ARCH_USES_ARM64_CODEGEN)
         target_link_options(uefildr PRIVATE -Wl,--exclude-all-symbols,--file-alignment,0x200,--section-alignment,0x1000)
     else()
         target_link_options(uefildr PRIVATE -Wl,--exclude-all-symbols,--file-alignment,0x200,--section-alignment,0x200)
@@ -199,7 +202,7 @@ endif()
 if(MSVC)
     set_subsystem(uefildr EFI_APPLICATION)
 elseif(CMAKE_C_COMPILER_ID STREQUAL "Clang")
-    if(ARCH STREQUAL "arm64")
+    if(ARCH_USES_ARM64_CODEGEN)
         target_link_options(uefildr PRIVATE
             -Wl,--subsystem,efi_application:1.00
             -Wl,--major-os-version,0
@@ -214,6 +217,9 @@ else()
 endif()
 
 set_entrypoint(uefildr EfiEntry)
+if(ARCH STREQUAL "arm64ec" AND COMMAND set_arm64ec_native_target)
+    set_arm64ec_native_target(uefildr)
+endif()
 
 target_link_libraries(uefildr uefifreeldr_common cportlib blcmlib blrtl libcntpr)
 if(FREELDR_WIM_RAMDISK)

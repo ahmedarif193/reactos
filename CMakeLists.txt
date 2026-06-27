@@ -36,11 +36,28 @@ endif()
 string(TOLOWER ${ARCH} ARCH)
 
 # set possible values for cmake GUI
-set_property(CACHE ARCH PROPERTY STRINGS "i386" "amd64" "arm" "arm64")
+set_property(CACHE ARCH PROPERTY STRINGS "i386" "amd64" "arm" "arm64" "arm64ec")
+
+set(ARCH_IS_64BIT FALSE)
+if(ARCH MATCHES "64$" OR ARCH STREQUAL "arm64ec")
+    set(ARCH_IS_64BIT TRUE)
+endif()
+
+set(ARCH_USES_ARM64_CODEGEN FALSE)
+if(ARCH STREQUAL "arm64" OR ARCH STREQUAL "arm64ec")
+    set(ARCH_USES_ARM64_CODEGEN TRUE)
+endif()
+
+set(ARCH_HAS_NATIVE_SEH FALSE)
+if(ARCH STREQUAL "amd64" OR ARCH_USES_ARM64_CODEGEN)
+    set(ARCH_HAS_NATIVE_SEH TRUE)
+endif()
 
 # Alternative WinNT-compatible architecture string
 if(ARCH STREQUAL "i386")
     set(WINARCH "x86")
+elseif(ARCH STREQUAL "arm64ec")
+    set(WINARCH "arm64")
 else()
     set(WINARCH ${ARCH})
 endif()
@@ -152,6 +169,8 @@ if(NOT CMAKE_CROSSCOMPILING)
             add_definitions(-D__arm__)
         elseif(ARCH STREQUAL "arm64")
             add_definitions(-D__aarch64__)
+        elseif(ARCH STREQUAL "arm64ec")
+            add_definitions(-D__arm64ec__ -D__x86_64__)
         endif()
         if(MSVC_VERSION GREATER 1699)
             add_definitions(/D_ALLOW_KEYWORD_MACROS)
@@ -285,6 +304,8 @@ Enable this if the module uses typeid or dynamic_cast. You will probably need to
     elseif(ARCH STREQUAL "arm64")
         # GNU tools refer to arm64 as aarch64
         add_definitions(-D_ARM64_ -D_M_ARM64 -D__arm64__ -D__aarch64__ -D_WIN64)
+    elseif(ARCH STREQUAL "arm64ec")
+        add_definitions(-D_AMD64_ -D_M_AMD64 -D_M_X64 -D_ARM64EC_ -D_M_ARM64EC -D__arm64ec__ -D_WIN64)
     endif()
 
     # Other
@@ -295,7 +316,7 @@ Enable this if the module uses typeid or dynamic_cast. You will probably need to
         add_compile_definitions(USE_COMPILER_EXCEPTIONS)
     elseif(ARCH STREQUAL "arm")
         add_compile_definitions(USE_COMPILER_EXCEPTIONS)
-    elseif(ARCH STREQUAL "arm64")
+    elseif(ARCH_USES_ARM64_CODEGEN)
         add_compile_definitions(USE_COMPILER_EXCEPTIONS)
     endif()
 
@@ -360,7 +381,7 @@ Enable this if the module uses typeid or dynamic_cast. You will probably need to
 
     add_subdirectory(sdk/include)
 
-    if(ARCH MATCHES "64$")
+    if(ARCH_IS_64BIT)
         include(sdk/cmake/baseaddress64.cmake)
     elseif(NO_ROSSYM)
         include(sdk/cmake/baseaddress_dwarf.cmake)

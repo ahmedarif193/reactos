@@ -22,16 +22,18 @@
 #ifndef _INCLUDED_MM2
 #define _INCLUDED_MM2
 
+#include "intrin_target.h"
+
 /* When building with Clang, use Clang's own intrinsics headers instead.
  * ReactOS's versions use GCC-specific __builtin_ia32_* builtins that
  * don't exist in Clang. */
-#if defined(__clang__) && !defined(_MSC_VER) && (defined(_M_IX86) || defined(_M_X64) || defined(_M_AMD64))
+#if _VCRT_USE_CLANG_X86_INTRINSICS
 #include_next <xmmintrin.h>
 /* Define ReactOS-specific macros that code may depend on */
 #ifndef __ATTRIBUTE_SSE__
 #define __ATTRIBUTE_SSE__
 #endif
-#elif defined(_M_ARM64) || defined(__aarch64__)
+#elif _VCRT_ARM64_CODEGEN
 /* ARM64: no x86 intrinsics available */
 #else
 
@@ -197,7 +199,7 @@ int _mm_ucomineq_ss(__m128 a, __m128 b);
 int _mm_cvt_ss2si(__m128 a);
 int _mm_cvtt_ss2si(__m128 a);
 __m128 _mm_cvt_si2ss(__m128 a, int b);
-#ifdef _M_IX86
+#if _VCRT_I386_INTRINSICS
 __m64 _mm_cvt_ps2pi(__m128 a);
 __m64 _mm_cvtt_ps2pi(__m128 a);
 __m128 _mm_cvt_pi2ps(__m128 a, __m64 b);
@@ -230,7 +232,7 @@ void _mm_storeu_ps(float* p, __m128 a);
 void _mm_store_ps1(float* p, __m128 a);
 void _mm_storer_ps(float* p, __m128 a);
 __m128 _mm_move_ss(__m128 a, __m128 b);
-#ifdef _M_IX86
+#if _VCRT_I386_INTRINSICS
 int _m_pextrw(__m64 a, int imm8);
 __m64 _m_pinsrw(__m64 a, int i, int imm8);
 __m64 _m_pmaxsw(__m64 a, __m64 b);
@@ -248,7 +250,7 @@ void _mm_stream_pi(__m64* p, __m64 a);
 #endif
 void _mm_stream_ps(float* p, __m128 a);
 void _mm_sfence(void);
-#ifdef _M_AMD64
+#if _VCRT_AMD64_INTRINSICS
 __int64 _mm_cvtss_si64(__m128 a);
 __int64 _mm_cvttss_si64(__m128 a);
 __m128  _mm_cvtsi64_ss(__m128 a, __int64 b);
@@ -278,7 +280,7 @@ __m128  _mm_cvtsi64_ss(__m128 a, __int64 b);
 #define _mm_avg_pu16      _m_pavgw
 #define _mm_sad_pu8       _m_psadbw
 
-#ifdef _M_IX86
+#if _VCRT_I386_INTRINSICS
 /* Inline functions from Clang: https://github.com/llvm/llvm-project/blob/main/clang/lib/Headers/xmmintrin.h */
 
 __ATTRIBUTE_SSE__
@@ -374,7 +376,7 @@ static __inline __m64 _mm_cvtps_pi8(__m128 __a)
     return _mm_packs_pi16(__b, __c);
 }
 
-#endif /* _M_IX86 */
+#endif /* _VCRT_I386_INTRINSICS */
 
 /* Transpose the 4x4 matrix composed of row[0-3].  */
 #define _MM_TRANSPOSE4_PS(row0, row1, row2, row3) \
@@ -478,11 +480,11 @@ do {                                              \
 #pragma intrinsic(_mm_cvt_ss2si)
 #pragma intrinsic(_mm_cvtt_ss2si)
 #pragma intrinsic(_mm_cvt_si2ss)
-#ifdef _M_IX86
+#if _VCRT_I386_INTRINSICS
 #pragma intrinsic(_mm_cvt_ps2pi)
 #pragma intrinsic(_mm_cvtt_ps2pi)
 #pragma intrinsic(_mm_cvt_pi2ps)
-#endif // _M_IX86
+#endif /* _VCRT_I386_INTRINSICS */
 #pragma intrinsic(_mm_shuffle_ps)
 #pragma intrinsic(_mm_unpackhi_ps)
 #pragma intrinsic(_mm_unpacklo_ps)
@@ -511,7 +513,7 @@ do {                                              \
 #pragma intrinsic(_mm_store_ps1)
 #pragma intrinsic(_mm_storer_ps)
 #pragma intrinsic(_mm_move_ss)
-#ifdef _M_IX86
+#if _VCRT_I386_INTRINSICS
 #pragma intrinsic(_m_pextrw)
 #pragma intrinsic(_m_pinsrw)
 #pragma intrinsic(_m_pmaxsw)
@@ -526,14 +528,14 @@ do {                                              \
 #pragma intrinsic(_m_pavgw)
 #pragma intrinsic(_m_psadbw)
 #pragma intrinsic(_mm_stream_pi)
-#endif // _M_IX86
+#endif /* _VCRT_I386_INTRINSICS */
 #pragma intrinsic(_mm_stream_ps)
 #pragma intrinsic(_mm_sfence)
-#ifdef _M_AMD64
+#if _VCRT_AMD64_INTRINSICS
 #pragma intrinsic(_mm_cvtss_si64)
 #pragma intrinsic(_mm_cvttss_si64)
 #pragma intrinsic(_mm_cvtsi64_ss)
-#endif // _M_AMD64
+#endif /* _VCRT_AMD64_INTRINSICS */
 
 #else /* _MSC_VER */
 
@@ -878,7 +880,7 @@ __INTRIN_INLINE_SSE int _mm_cvtss_si32(__m128 __a)
     return __builtin_ia32_cvtss2si((__v4sf)__a);
 }
 
-#ifdef _M_AMD64
+#if _VCRT_AMD64_INTRINSICS
 __INTRIN_INLINE_SSE long long _mm_cvtss_si64(__m128 __a)
 {
     return __builtin_ia32_cvtss2si64((__v4sf)__a);
@@ -897,7 +899,7 @@ __INTRIN_INLINE_SSE int _mm_cvttss_si32(__m128 __a)
     return __builtin_ia32_cvttss2si((__v4sf)__a);
 }
 
-#ifdef _M_AMD64
+#if _VCRT_AMD64_INTRINSICS
 __INTRIN_INLINE_SSE long long _mm_cvttss_si64(__m128 __a)
 {
     return __builtin_ia32_cvttss2si64((__v4sf)__a);
@@ -917,7 +919,7 @@ __INTRIN_INLINE_SSE __m128 _mm_cvtsi32_ss(__m128 __a, int __b)
     return __a;
 }
 
-#ifdef _M_AMD64
+#if _VCRT_AMD64_INTRINSICS
 __INTRIN_INLINE_SSE __m128 _mm_cvtsi64_ss(__m128 __a, long long __b)
 {
     __a[0] = __b;

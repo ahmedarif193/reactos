@@ -46,7 +46,7 @@ VOID NTAPI RtlpBreakWithStatusInstruction(VOID);
 #elif defined(_M_ARM64)
 
 #define KPCR_SELF_PCR_OFFSET           FIELD_OFFSET(KIPCR, Self)
-#define KPCR_CURRENT_PRCB_OFFSET       FIELD_OFFSET(KIPCR, CurrentPrcb)
+#define KPCR_CURRENT_PRCB_OFFSET       FIELD_OFFSET(KIPCR, Prcb)
 #define KPCR_CONTAINED_PRCB_OFFSET     FIELD_OFFSET(KIPCR, Prcb)
 #define KPCR_INITIAL_STACK_OFFSET      0
 #define KPCR_STACK_LIMIT_OFFSET        0
@@ -641,8 +641,13 @@ KDDEBUGGER_DATA64 KdDebuggerDataBlock =
     FIELD_OFFSET(KPRCB, DpcRoutineActive),
     FIELD_OFFSET(KPRCB, CurrentThread),
     FIELD_OFFSET(KPRCB, MHz),
+#if defined(_M_ARM64)
+    FIELD_OFFSET(KPRCB, ProcessorModel),
+    FIELD_OFFSET(KPRCB, ProcessorVendorString),
+#else
     FIELD_OFFSET(KPRCB, CpuType),
     FIELD_OFFSET(KPRCB, VendorString),
+#endif
     FIELD_OFFSET(KPRCB, ProcessorState.ContextFrame),
     FIELD_OFFSET(KPRCB, Number),
     sizeof(ETHREAD),

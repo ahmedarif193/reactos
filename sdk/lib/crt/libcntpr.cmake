@@ -32,3 +32,16 @@ target_compile_definitions(libcntpr
     __CRT__NO_INLINE
     CRTDLL)
 add_dependencies(libcntpr psdk asm)
+
+if(ARCH STREQUAL "arm64ec" AND COMMAND set_arm64ec_native_target)
+    add_library(libcntpr_native STATIC ${LIBCNTPR_SOURCE} ${libcntpr_asm})
+    set_arm64ec_native_target(libcntpr_native)
+    target_compile_definitions(libcntpr_native
+     PRIVATE    NO_RTL_INLINES
+        _NTSYSTEM_
+        _NTDLLBUILD_
+        _LIBCNT_
+        __CRT__NO_INLINE
+        CRTDLL)
+    add_dependencies(libcntpr_native psdk asm)
+endif()

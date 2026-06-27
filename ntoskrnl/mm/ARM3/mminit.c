@@ -627,7 +627,9 @@ MiComputeColorInformation(VOID)
 
     /* Compute the mask and store it */
     MmSecondaryColorMask = MmSecondaryColors - 1;
+#ifndef _M_ARM64
     KeGetCurrentPrcb()->SecondaryColorMask = MmSecondaryColorMask;
+#endif
 }
 
 CODE_SEG("INIT")

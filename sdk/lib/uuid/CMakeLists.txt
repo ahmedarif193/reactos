@@ -225,3 +225,8 @@ list(APPEND SOURCE
 
 add_library(uuid ${SOURCE})
 add_dependencies(uuid psdk)
+if(ARCH STREQUAL "arm64ec" AND COMMAND set_arm64ec_native_target)
+    add_library(uuid_native ${SOURCE})
+    set_arm64ec_native_target(uuid_native)
+    add_dependencies(uuid_native psdk)
+endif()

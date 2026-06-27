@@ -16,23 +16,19 @@ index 3dba2d564..1a3d96989 100644
  }
  
  static uint64_t CalculateCyclesPerNanosecond() {
-diff --git a/Source/Windows/ARM64EC/CMakeLists.txt b/Source/Windows/ARM64EC/CMakeLists.txt
-index 0c9a57a17..9097a65bd 100644
---- a/Source/Windows/ARM64EC/CMakeLists.txt
-+++ b/Source/Windows/ARM64EC/CMakeLists.txt
-@@ -19,7 +19,11 @@ target_link_libraries(arm64ecfex PRIVATE
-   CommonWindowsRuntime
-   ntdll_ex)
+diff --git a/FEXCore/include/FEXCore/Utils/AllocatorHooks.h b/FEXCore/include/FEXCore/Utils/AllocatorHooks.h
+--- a/FEXCore/include/FEXCore/Utils/AllocatorHooks.h
++++ b/FEXCore/include/FEXCore/Utils/AllocatorHooks.h
+@@ -97,7 +97,8 @@ inline bool VirtualProtect(void* Ptr, size_t Size, ProtectOptions options) {
+     LOGMAN_MSG_A_FMT("Unknown VirtualProtect options combination");
+   }
  
--target_link_options(arm64ecfex PRIVATE -static -nostdlib -nostartfiles -nodefaultlibs -lc++ -lc++abi -lunwind)
-+if (REACTOS)
-+  target_link_options(arm64ecfex PRIVATE -static -nostdlib -nostartfiles -lc++ -lc++abi -lunwind -lucrt -lmingwex)
-+else()
-+  target_link_options(arm64ecfex PRIVATE -static -nostdlib -nostartfiles -nodefaultlibs -lc++ -lc++abi -lunwind)
-+endif()
- target_link_libraries(arm64ecfex PRIVATE ${LIBGCC_PATH})
- install(TARGETS arm64ecfex RUNTIME
-   DESTINATION ${CMAKE_INSTALL_LIBDIR}
+-  return ::VirtualProtect(Ptr, Size, prot, nullptr) == 0;
++  DWORD OldProtect;
++  return ::VirtualProtect(Ptr, Size, prot, &OldProtect) != 0;
+ }
+ 
+ FEX_DEFAULT_VISIBILITY extern VirtualNamePtr VirtualName;
 diff --git a/Source/Windows/CMakeLists.txt b/Source/Windows/CMakeLists.txt
 index 0693c0826..ed74ca89f 100644
 --- a/Source/Windows/CMakeLists.txt
@@ -52,11 +48,86 @@ index 0693c0826..ed74ca89f 100644
      COMMENT "Building lib${name_ex}.a")
  
    add_library(${name_ex} SHARED IMPORTED)
+diff --git a/Source/Windows/Common/ImageTracker.cpp b/Source/Windows/Common/ImageTracker.cpp
+--- a/Source/Windows/Common/ImageTracker.cpp
++++ b/Source/Windows/Common/ImageTracker.cpp
+@@ -124,11 +124,15 @@ ImageTracker::MappedImageInfo::MappedImageInfo(std::string_view Path, uint64_t
+           .Relocations = std::move(Relocations)}
+   , SectionInfo {.FileInfo = Info, .FileStartVA = Address, .BeginVA = Address, .EndVA = Address + Nt->OptionalHeader.SizeOfImage} {}
+ 
+-FEXCore::ExecutableFileSectionInfo ImageTracker::HandleImageMap(std::string_view Path, uint64_t Address, bool MainImage) {
++std::optional<FEXCore::ExecutableFileSectionInfo> ImageTracker::HandleImageMap(std::string_view Path, uint64_t Address, bool MainImage) {
+   std::scoped_lock Lock(CTX.GetCodeInvalidationMutex());
+   const fextl::string ModuleName {BaseName(Path)};
+   const auto Module = reinterpret_cast<HMODULE>(Address);
+   auto* Nt = reinterpret_cast<ArchImageNtHeaders*>(RtlImageNtHeader(Module));
++  if (!Nt) {
++    return std::nullopt;
++  }
++
+   MappedImageInfo* ImageInfo = nullptr;
+   {
+     auto Relocations = [&]() {
+diff --git a/Source/Windows/Common/ImageTracker.h b/Source/Windows/Common/ImageTracker.h
+--- a/Source/Windows/Common/ImageTracker.h
++++ b/Source/Windows/Common/ImageTracker.h
+@@ -39,7 +39,7 @@ FEXCore::CodeMapFileId ComputeCodeMapId(std::string_view FileName, uint32_t Tim
+ class ImageTracker : public FEXCore::CodeMapOpener {
+ public:
+   ImageTracker(FEXCore::Context::Context& CTX, bool IsGeneratingCache);
+-  FEXCore::ExecutableFileSectionInfo HandleImageMap(std::string_view Path, uint64_t Address, bool MainImage);
++  std::optional<FEXCore::ExecutableFileSectionInfo> HandleImageMap(std::string_view Path, uint64_t Address, bool MainImage);
+   void HandleImageUnmap(uint64_t Address, uint64_t Size);
+ 
+   std::optional<FEXCore::ExecutableFileSectionInfo> LookupExecutableFileSection(uint64_t Address);
+diff --git a/Source/Windows/Common/InvalidationTracker.cpp b/Source/Windows/Common/InvalidationTracker.cpp
+--- a/Source/Windows/Common/InvalidationTracker.cpp
++++ b/Source/Windows/Common/InvalidationTracker.cpp
+@@ -62,6 +62,10 @@ void InvalidationTracker::HandleMemoryProtectionNotification(uint64_t Address, u
+ 
+ void InvalidationTracker::HandleImageMap(std::string_view Name, uint64_t Address) {
+   auto* Nt = RtlImageNtHeader(reinterpret_cast<HMODULE>(Address));
++  if (!Nt) {
++    return;
++  }
++
+   auto* SectionsBegin = IMAGE_FIRST_SECTION(Nt);
+   auto* SectionsEnd = SectionsBegin + Nt->FileHeader.NumberOfSections;
+   uint64_t LastExecutableSectionEnd = 0;
 diff --git a/Source/Windows/ARM64EC/Module.S b/Source/Windows/ARM64EC/Module.S
 index 365931332..d5eccfe54 100644
 --- a/Source/Windows/ARM64EC/Module.S
 +++ b/Source/Windows/ARM64EC/Module.S
-@@ -141,7 +141,11 @@ DIRECT_SYSCALL_WRAPPER("#NtProtectVirtualMemoryNative", WineNtProtectVirtualMemo
+@@ -104,10 +104,19 @@
+ 
+   // Makes a wrapper for calling a system call directly, skipping the usual ntdll thunks
+ #define HASH #
++#ifdef __reactos__
+ #define DIRECT_SYSCALL_WRAPPER(Name, WineIdName, WindowsId) \
+   .global Name; \
+   Name:; \
+-    adrp x16, WineSyscallDispatcher; \
++    adrp x8, WineIdName; \
++    ldr x8, [x8, HASH:lo12:WineIdName]; \
++    svc HASH 0; \
++    ret
++#else
++#define DIRECT_SYSCALL_WRAPPER(Name, WineIdName, WindowsId) \
++  .global Name; \
++  Name:; \
++  adrp x16, WineSyscallDispatcher; \
+     ldr x16, [x16, HASH:lo12:WineSyscallDispatcher]; \
+     cbz x16, 1f; \
+     mov x9, x30; \
+@@ -118,6 +127,7 @@
+   1:; \
+     svc HASH WindowsId; \
+     ret
++#endif
+ 
+   // Allows for continuing from a full native context, as the NTDLL NtContinue export takes in an x64 context with EC and
+   // the conversion to that loses the ARM64EC ABI-disallowed registers that FEX uses.
+@@ -141,7 +151,11 @@ DIRECT_SYSCALL_WRAPPER("#NtProtectVirtualMemoryNative", WineNtProtectVirtualMemo
    adrp x17, NtDllRedirectionLUTSize
    ldr x17, [x17, #:lo12:NtDllRedirectionLUTSize]
    cmp x16, x17
@@ -144,7 +215,140 @@ index 241da1038..8e23b9cf3 100644
  }
  
  void PatchCallChecker() {
-@@ -625,7 +670,16 @@ NTSTATUS ProcessInit() {
+@@ -216,6 +261,7 @@ void PatchCallChecker() {
+   WriteModuleRVA(Module, CHPEMetadata->__os_arm64x_dispatch_icall_cfg, &CheckCall);
+ }
+ 
++#ifndef __reactos__
+ // Fills in the syscall numbers necessary to call *Native variants of syscalls from FEX under wine.
+ void ParseWineSyscallNumbers(HMODULE NtDll) {
+   ULONG Size;
+@@ -259,7 +305,108 @@ void ParseWineSyscallNumbers(HMODULE NtDll) {
+     }
+   }
+ }
++#endif
+ 
++#ifdef __reactos__
++bool DecodeReactOsArm64SyscallStub(uintptr_t Address, uint64_t* SyscallId) {
++  constexpr uint32_t MovzX8Mask = 0xFFE0001F;
++  constexpr uint32_t MovzX8 = 0xD2800008;
++  constexpr uint32_t SvcZero = 0xD4000001;
++  const auto* Code = reinterpret_cast<const uint32_t*>(Address);
++
++  if ((Code[0] & MovzX8Mask) != MovzX8 || Code[1] != SvcZero) {
++    return false;
++  }
++
++  *SyscallId = (Code[0] >> 5) & 0xFFFF;
++  return true;
++}
++
++uint32_t ResolveReactOsNativeExportRVA(HMODULE NtDll, uint32_t ExportRVA) {
++  ULONG Size;
++  const auto* LoadConfig =
++    reinterpret_cast<_IMAGE_LOAD_CONFIG_DIRECTORY64*>(RtlImageDirectoryEntryToData(NtDll, true, IMAGE_DIRECTORY_ENTRY_LOAD_CONFIG, &Size));
++
++  if (LoadConfig &&
++      Size >= __builtin_offsetof(_IMAGE_LOAD_CONFIG_DIRECTORY64, CHPEMetadataPointer) + sizeof(LoadConfig->CHPEMetadataPointer) &&
++      LoadConfig->CHPEMetadataPointer) {
++    const auto* CHPEMetadata = reinterpret_cast<IMAGE_ARM64EC_METADATA*>(LoadConfig->CHPEMetadataPointer);
++    if (!CHPEMetadata->RedirectionMetadata || !CHPEMetadata->RedirectionMetadataCount) {
++      return ExportRVA;
++    }
++
++    const auto* RedirectionTableBegin = reinterpret_cast<IMAGE_ARM64EC_REDIRECTION_ENTRY*>(NtDllBase + CHPEMetadata->RedirectionMetadata);
++    const auto* RedirectionTableEnd = RedirectionTableBegin + CHPEMetadata->RedirectionMetadataCount;
++
++    for (auto It = RedirectionTableBegin; It != RedirectionTableEnd; It++) {
++      if (It->Source == ExportRVA) {
++        return It->Destination;
++      }
++    }
++  }
++
++  const auto* Bytes = reinterpret_cast<const uint8_t*>(NtDllBase + ExportRVA);
++  for (uint32_t Offset = 0; Offset != 16; Offset++) {
++    if (Bytes[Offset] != 0xE9) {
++      continue;
++    }
++
++    const uint32_t RawRelative =
++      static_cast<uint32_t>(Bytes[Offset + 1]) |
++      (static_cast<uint32_t>(Bytes[Offset + 2]) << 8) |
++      (static_cast<uint32_t>(Bytes[Offset + 3]) << 16) |
++      (static_cast<uint32_t>(Bytes[Offset + 4]) << 24);
++    return ExportRVA + Offset + 5 + static_cast<int32_t>(RawRelative);
++  }
++
++  return ExportRVA;
++}
++
++bool ReadReactOsSyscallId(HMODULE NtDll,
++                          const IMAGE_EXPORT_DIRECTORY* Exports,
++                          const uint32_t* NameTable,
++                          const uint32_t* FunctionTable,
++                          const uint16_t* OrdinalTable,
++                          const char* ExportName,
++                          uint64_t* SyscallId) {
++  for (uint32_t Idx = 0; Idx < Exports->NumberOfNames; Idx++) {
++    const char* Name = reinterpret_cast<const char*>(NtDllBase + NameTable[Idx]);
++    if (strcmp(Name, ExportName) != 0) {
++      continue;
++    }
++
++    const uint32_t ExportRVA = FunctionTable[OrdinalTable[Idx]];
++    const uint32_t NativeRVA = ResolveReactOsNativeExportRVA(NtDll, ExportRVA);
++    return DecodeReactOsArm64SyscallStub(NtDllBase + NativeRVA, SyscallId);
++  }
++
++  return false;
++}
++
++// ReactOS ARM64 uses x8 + svc #0 instead of Windows' stable svc immediates.
++// ARM64EC exports point at x64 fast-forward thunks, so resolve them to their
++// native ARM64 targets and decode the current build's service ID from the stub.
++void ParseReactOsSyscallNumbers(HMODULE NtDll) {
++  ULONG Size;
++  const auto* Exports = reinterpret_cast<IMAGE_EXPORT_DIRECTORY*>(RtlImageDirectoryEntryToData(NtDll, true, IMAGE_DIRECTORY_ENTRY_EXPORT, &Size));
++  if (!Exports) {
++    return;
++  }
++
++  const auto* NameTable = reinterpret_cast<uint32_t*>(NtDllBase + Exports->AddressOfNames);
++  const auto* FunctionTable = reinterpret_cast<uint32_t*>(NtDllBase + Exports->AddressOfFunctions);
++  const auto* OrdinalTable = reinterpret_cast<uint16_t*>(NtDllBase + Exports->AddressOfNameOrdinals);
++
++  WineNtContinueSyscallId = ~0ull;
++  WineNtAllocateVirtualMemorySyscallId = ~0ull;
++  WineNtProtectVirtualMemorySyscallId = ~0ull;
++
++  ReadReactOsSyscallId(NtDll, Exports, NameTable, FunctionTable, OrdinalTable, "ZwContinue", &WineNtContinueSyscallId);
++  ReadReactOsSyscallId(NtDll, Exports, NameTable, FunctionTable, OrdinalTable, "ZwAllocateVirtualMemory", &WineNtAllocateVirtualMemorySyscallId);
++  ReadReactOsSyscallId(NtDll, Exports, NameTable, FunctionTable, OrdinalTable, "ZwProtectVirtualMemory", &WineNtProtectVirtualMemorySyscallId);
++}
++#endif
++
+ // Syscall thunks may have been patched before FEX has loaded, the default call checker installed by ntdll into FEX will
+ // try to invoke the JIT when calling such patched syscalls but this obviously doesn't work before FEX is initalised.
+ // This function parses ntdll and sets up a custom call checker to prevent this, as such it must avoid using any syscall
+@@ -270,11 +417,15 @@ void InitSyscalls() {
+   const auto NtDll = GetModuleHandle("ntdll.dll");
+   NtDllBase = reinterpret_cast<uintptr_t>(NtDll);
+ 
++#ifdef __reactos__
++  ParseReactOsSyscallNumbers(NtDll);
++#else
+   const auto WineSyscallDispatcherPtr = reinterpret_cast<void**>(GetProcAddress(NtDll, "__wine_syscall_dispatcher"));
+   if (WineSyscallDispatcherPtr) {
+     WineSyscallDispatcher = *WineSyscallDispatcherPtr;
+     ParseWineSyscallNumbers(NtDll);
+   }
++#endif
+ 
+   FillNtDllLUTs(NtDll);
+   PatchCallChecker();
+@@ -625,7 +776,16 @@ NTSTATUS ProcessInit() {
    *reinterpret_cast<uint8_t*>(X64ReturnInstr) = 0xc3;
  
    const uintptr_t KiUserExceptionDispatcherFFS = reinterpret_cast<uintptr_t>(GetProcAddress(NtDll, "KiUserExceptionDispatcher"));
@@ -161,56 +365,3 @@ index 241da1038..8e23b9cf3 100644
  
    FEX_CONFIG_OPT(TSOEnabled, TSOENABLED);
    if (TSOEnabled()) {
-diff --git a/Source/Windows/Common/CRT/Misc.cpp b/Source/Windows/Common/CRT/Misc.cpp
-index 76f8b997b..0117f89e0 100644
---- a/Source/Windows/Common/CRT/Misc.cpp
-+++ b/Source/Windows/Common/CRT/Misc.cpp
-@@ -51,6 +51,7 @@ void InitEnv() {
- __attribute__((used, section(".CRT$FEXB"))) void (*_InitEnv)(void) = InitEnv;
- } // namespace
- 
-+#ifndef __reactos__
- char*** __p__environ() {
-   return &EnvArray;
- }
-@@ -72,11 +73,13 @@ char* getenv(const char* VarName) {
- 
-   return Ret;
- }
-+#endif
- 
- int atexit(void (*)(void)) {
-   return 0;
- }
- 
-+#ifndef __reactos__
- #pragma push_macro("abort")
- #undef abort
- void abort(void) {
-@@ -87,14 +90,17 @@ void abort(void) {
- int getpid(void) {
-   return static_cast<int>(GetCurrentProcessId());
- }
-+#endif
- 
- void exit(int _Code) {
-   UNIMPLEMENTED();
- }
- 
-+#ifndef __reactos__
- DLLEXPORT_FUNC(void, _assert, (const char* message, const char* file, unsigned line)) {
-   UNIMPLEMENTED();
- }
-+#endif
- 
- DLLEXPORT_FUNC(
-   uintptr_t, _beginthreadex,
-@@ -102,6 +108,8 @@ DLLEXPORT_FUNC(
-   UNIMPLEMENTED();
- }
- 
-+#ifndef __reactos__
- DLLEXPORT_FUNC(int*, __sys_nerr, (void)) {
-   UNIMPLEMENTED();
- }
-+#endif

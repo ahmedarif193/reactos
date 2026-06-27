@@ -55,7 +55,13 @@ NTAPI
 KsecReadMachineSpecificCounters(
     _Out_ PKSEC_MACHINE_SPECIFIC_COUNTERS MachineSpecificCounters)
 {
-#if defined(_M_IX86) || defined(_M_AMD64)
+#if NDK_TARGET_ARM64_CODEGEN
+    {
+        ULONG64 cntvct;
+        __asm__ volatile("mrs %0, CNTVCT_EL0" : "=r"(cntvct));
+        *MachineSpecificCounters = (ULONG)cntvct;
+    }
+#elif defined(_M_IX86) || defined(_M_AMD64)
     /* Check if RDTSC is available */
     if (ExIsProcessorFeaturePresent(PF_RDTSC_INSTRUCTION_AVAILABLE))
     {
@@ -78,12 +84,6 @@ KsecReadMachineSpecificCounters(
 #elif defined(_M_ARM)
     /* Read the Cycle Counter Register */
     MachineSpecificCounters->Ccr = _MoveFromCoprocessor(CP15_PMCCNTR);
-#elif defined(_M_ARM64) || defined(__aarch64__)
-    {
-        ULONG64 cntvct;
-        __asm__ volatile("mrs %0, CNTVCT_EL0" : "=r"(cntvct));
-        *MachineSpecificCounters = (ULONG)cntvct;
-    }
 #else
     #error Implement me!
 #endif

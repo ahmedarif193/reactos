@@ -86,6 +86,20 @@ static HRESULT WINAPI wrapper_Release(IUnknown *iface)
         "jmp *" #off "(%eax)\n\t")
 #endif
 
+#elif defined(__arm64ec__)
+
+#define DEFINE_WRAPPER_FUNC(n, x, off)                                  \
+    __attribute__((naked)) HRESULT WINAPI wrapper_func_##n(IUnknown *iface) \
+    {                                                                   \
+        __asm__(                                                        \
+            "ldr x0, [x0, #8]\n\t"                                      \
+            "ldr x16, [x0]\n\t"                                         \
+            "ldr x9, [x16, #" #off "]\n\t"                              \
+            "adrp x16, __os_arm64x_x64_jump\n\t"                        \
+            "ldr x16, [x16, #:lo12:__os_arm64x_x64_jump]\n\t"           \
+            "br x16\n\t");                                             \
+    }
+
 #elif defined(__x86_64__)
 
 #define DEFINE_WRAPPER_FUNC(n, x, off)          \

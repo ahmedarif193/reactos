@@ -26,6 +26,13 @@ if(CMAKE_CROSSCOMPILING)
     target_compile_definitions(blcmlib PRIVATE _BLDR_)
     add_dependencies(blcmlib bugcodes xdk)
     add_pch(blcmlib cmlib.h SOURCE)
+    if(ARCH STREQUAL "arm64ec" AND COMMAND set_arm64ec_native_target)
+        add_library(blcmlib_native ${SOURCE})
+        set_arm64ec_native_target(blcmlib_native)
+        target_compile_definitions(blcmlib_native PRIVATE _BLDR_)
+        add_dependencies(blcmlib_native bugcodes xdk)
+        add_pch(blcmlib_native cmlib.h SOURCE)
+    endif()
 
     # CMLIB for NT kernel
     add_library(cmlib ${SOURCE})

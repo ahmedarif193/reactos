@@ -100,7 +100,7 @@ KiFindIdealProcessor(
     OriginalIdealPrcb = KiProcessorBlock[OriginalIdealProcessor];
 
     /* Check if we can use the original node */
-    NodeMask = OriginalIdealPrcb->ParentNode->ProcessorMask & ProcessorSet;
+    NodeMask = KiPrcbParentNode(OriginalIdealPrcb)->ProcessorMask & ProcessorSet;
     if (NodeMask)
     {
         /* Use the node set instead */
@@ -415,7 +415,7 @@ KiSelectNextThread(IN PKPRCB Prcb)
         Thread = Prcb->IdleThread;
 
         /* Enable idle scheduling */
-        InterlockedOrSetMember(&KiIdleSummary, Prcb->SetMember);
+        InterlockedOrSetMember(&KiIdleSummary, KiPrcbSetMember(Prcb));
         Prcb->IdleSchedule = TRUE;
 
         /* FIXME: SMT support */
@@ -464,7 +464,7 @@ KiSwapThread(IN PKTHREAD CurrentThread,
         else
         {
             /* Set the idle summary */
-            InterlockedOrSetMember(&KiIdleSummary, Prcb->SetMember);
+            InterlockedOrSetMember(&KiIdleSummary, KiPrcbSetMember(Prcb));
 
             /* Schedule the idle thread */
             NextThread = Prcb->IdleThread;
@@ -779,9 +779,9 @@ KiUpdateEffectiveAffinityThread(
 
     /* Check if the affinity doesn't match with the current processor */
 #if (NTDDI_VERSION >= NTDDI_WIN7)
-    if ((Prcb->SetMember & Thread->Affinity.Mask) == 0)
+    if ((KiPrcbSetMember(Prcb) & Thread->Affinity.Mask) == 0)
 #else
-    if ((Prcb->SetMember & Thread->Affinity) == 0)
+    if ((KiPrcbSetMember(Prcb) & Thread->Affinity) == 0)
 #endif
     {
         if (Thread->State == Running)

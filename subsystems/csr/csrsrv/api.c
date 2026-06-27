@@ -630,6 +630,13 @@ CsrApiRequestThread(IN PVOID Parameter)
                 ClientDiedMsg = (PCLIENT_DIED_MSG)&ReceiveMsg;
                 if (ClientDiedMsg->CreateTime.QuadPart == CsrThread->CreateTime.QuadPart)
                 {
+                    DPRINT1("CSRSS: LPC_CLIENT_DIED cid=%p.%p thread-count=%lu proc-flags=0x%lx create=%I64x\n",
+                            ReceiveMsg.Header.ClientId.UniqueProcess,
+                            ReceiveMsg.Header.ClientId.UniqueThread,
+                            CsrProcess->ThreadCount,
+                            CsrProcess->Flags,
+                            ClientDiedMsg->CreateTime.QuadPart);
+
                     /* Now we reply to the dying client */
                     ReplyPort = CsrThread->Process->ClientPort;
 

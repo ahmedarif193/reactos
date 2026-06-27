@@ -388,7 +388,7 @@ elseif(ARCH STREQUAL "arm")
         ${REACTOS_SOURCE_DIR}/ntoskrnl/mm/ARM3/arm/init.c
         ${REACTOS_SOURCE_DIR}/ntoskrnl/ps/arm/psctx.c
         ${REACTOS_SOURCE_DIR}/ntoskrnl/rtl/arm/rtlexcpt.c)
-elseif(ARCH STREQUAL "arm64")
+elseif(ARCH_USES_ARM64_CODEGEN)
     include_directories(${REACTOS_SOURCE_DIR}/ntoskrnl/arch/arm64/include)
     list(REMOVE_ITEM SOURCE ${REACTOS_SOURCE_DIR}/ntoskrnl/ke/ipi.c)
     list(APPEND ASM_SOURCE
@@ -455,7 +455,7 @@ endif()
         endif()
     elseif(ARCH STREQUAL "arm")
         list(APPEND SOURCE ${REACTOS_SOURCE_DIR}/ntoskrnl/kd/arm/kdserial.c)
-    elseif(ARCH STREQUAL "arm64")
+    elseif(ARCH_USES_ARM64_CODEGEN)
         list(APPEND SOURCE ${REACTOS_SOURCE_DIR}/ntoskrnl/kd/arm64/kdserial.c)
         if(KDBG)
             list(APPEND ASM_SOURCE ${REACTOS_SOURCE_DIR}/ntoskrnl/kdbg/arm64/kdb_help.S)

@@ -50,7 +50,7 @@ usage() {
 	echo "Usage: configure.sh [options]"
 	echo "  --clang              Use Clang/LLVM from ~/.local/opt/rosbe/llvm-mingw (default)"
 	echo "  --gcc                Use GCC from ~/.local/opt/rosbe/mingw-gcc"
-	echo "  -a, --arch <arch>    Target architecture: amd64, i386, arm64 (default: amd64)"
+	echo "  -a, --arch <arch>    Target architecture: amd64, i386, arm64, arm64ec (default: amd64)"
 	echo "  -r, --release        Configure a Release build (default: Debug)"
 	echo "  makefiles            Use Unix Makefiles generator (default: Ninja)"
 	echo "  -D<var>=<val>        Pass option to CMake"
@@ -63,7 +63,7 @@ fail() {
 }
 
 sync_arm64_submodules() {
-	[ "$ARCH" = "arm64" ] || return 0
+	[ "$ARCH" = "arm64" ] || [ "$ARCH" = "arm64ec" ] || return 0
 
 	if [ ! -d "$REACTOS_SOURCE_DIR/.git" ]; then
 		echo "Skipping ARM64 submodule sync outside a Git checkout."
@@ -78,13 +78,16 @@ sync_arm64_submodules() {
 }
 
 prepare_arm64_fex_source() {
-	[ "$ARCH" = "arm64" ] || return 0
+	[ "$ARCH" = "arm64" ] || [ "$ARCH" = "arm64ec" ] || return 0
 
 	case " $ROS_CMAKEOPTS " in
 		*" -DENABLE_FEX_ARM64EC=ON "*|*" -DENABLE_FEX_ARM64EC:BOOL=ON "*|*" -DENABLE_FEX_ARM64EC=TRUE "*|*" -DENABLE_FEX_ARM64EC:BOOL=TRUE "*|*" -DENABLE_FEX_ARM64EC=1 "*|*" -DENABLE_FEX_ARM64EC:BOOL=1 "*)
 			;;
-		*)
+		*" -DENABLE_FEX_ARM64EC=OFF "*|*" -DENABLE_FEX_ARM64EC:BOOL=OFF "*|*" -DENABLE_FEX_ARM64EC=FALSE "*|*" -DENABLE_FEX_ARM64EC:BOOL=FALSE "*|*" -DENABLE_FEX_ARM64EC=0 "*|*" -DENABLE_FEX_ARM64EC:BOOL=0 "*)
 			return 0
+			;;
+		*)
+			[ "$ARCH" = "arm64ec" ] || return 0
 			;;
 	esac
 
@@ -130,6 +133,9 @@ normalize_arch() {
 		arm64|aarch64)
 			echo arm64
 			;;
+		arm64ec)
+			echo arm64ec
+			;;
 		arm)
 			echo arm
 			;;
@@ -149,6 +155,9 @@ gcc_triplet_for_arch() {
 			;;
 		arm64)
 			echo aarch64-w64-mingw32
+			;;
+		arm64ec)
+			echo arm64ec-w64-mingw32
 			;;
 		arm)
 			echo arm-mingw32ce

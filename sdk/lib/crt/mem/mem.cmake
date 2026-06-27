@@ -36,3 +36,8 @@ endif()
 # Needed by ext2fs. Should use RtlCompareMemory instead?
 add_library(memcmp mem/memcmp.c)
 add_dependencies(memcmp psdk)
+if(ARCH STREQUAL "arm64ec" AND COMMAND set_arm64ec_native_target)
+    add_library(memcmp_native mem/memcmp.c)
+    set_arm64ec_native_target(memcmp_native)
+    add_dependencies(memcmp_native psdk)
+endif()

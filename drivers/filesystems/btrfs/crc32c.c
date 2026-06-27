@@ -58,7 +58,7 @@ const uint32_t crctable[] = {
 };
 
 // x86 and amd64 versions live in asm files
-#if !defined(_X86_) && !defined(_AMD64_)
+#if (!defined(_X86_) && !defined(_AMD64_)) || defined(_M_ARM64EC) || defined(__arm64ec__)
 uint32_t __stdcall calc_crc32c_sw(_In_ uint32_t seed, _In_reads_bytes_(msglen) uint8_t* msg, _In_ uint32_t msglen) {
     uint32_t rem = seed;
 

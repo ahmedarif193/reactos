@@ -41,6 +41,7 @@ GENERIC_MAPPING PspThreadMapping =
 PVOID PspSystemDllBase;
 PVOID PspSystemDllSection;
 PVOID PspSystemDllEntryPoint;
+PVOID PspSystemDllThreadStart;
 
 UNICODE_STRING PsNtDllPathName =
     RTL_CONSTANT_STRING(L"\\SystemRoot\\System32\\ntdll.dll");
@@ -68,12 +69,28 @@ PspLookupSystemDllEntryPoint(
     _In_ PCSTR Name,
     _Out_ PVOID* EntryPoint)
 {
+    NTSTATUS Status;
+
     /* Call the internal API */
-    return RtlpFindExportedRoutineByName(PspSystemDllBase,
-                                         Name,
-                                         EntryPoint,
-                                         NULL,
-                                         STATUS_PROCEDURE_NOT_FOUND);
+    Status = RtlpFindExportedRoutineByName(PspSystemDllBase,
+                                           Name,
+                                           EntryPoint,
+                                           NULL,
+                                           STATUS_PROCEDURE_NOT_FOUND);
+#ifdef _M_ARM64
+    if (NT_SUCCESS(Status))
+    {
+        PVOID NativeEntryPoint;
+
+        if (MmGetArm64EcNativeSystemDllEntryPoint(PspSystemDllBase,
+                                                  *EntryPoint,
+                                                  &NativeEntryPoint))
+        {
+            *EntryPoint = NativeEntryPoint;
+        }
+    }
+#endif
+    return Status;
 }
 
 static CODE_SEG("INIT")
@@ -212,7 +229,7 @@ PsLocateSystemDll(VOID)
     }
 
     /* Check if the image is valid */
-    Status = MmCheckSystemImage(FileHandle);
+    Status = MmCheckSystemDllImage(FileHandle);
     if (Status == STATUS_IMAGE_CHECKSUM_MISMATCH || Status == STATUS_INVALID_IMAGE_PROTECT)
     {
         /* Raise a hard error */
@@ -281,6 +298,14 @@ PspInitializeSystemDll(VOID)
     {
         /* Failed, bugcheck */
         KeBugCheckEx(PROCESS1_INITIALIZATION_FAILED, Status, 7, 0, 0);
+    }
+
+    Status = PspLookupSystemDllEntryPoint("RtlUserThreadStart",
+                                          &PspSystemDllThreadStart);
+    if (!NT_SUCCESS(Status))
+    {
+        /* Failed, bugcheck */
+        KeBugCheckEx(PROCESS1_INITIALIZATION_FAILED, Status, 7, 1, 0);
     }
 
     /* Get all the other entrypoints */

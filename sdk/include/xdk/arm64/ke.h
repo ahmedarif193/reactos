@@ -12,9 +12,16 @@ $if (_WDMDDK_)
 #define POWER_LEVEL             14
 #define PROFILE_LEVEL           15
 #define HIGH_LEVEL              15
+#define SYNCH_LEVEL             12
 
 #define KI_USER_SHARED_DATA     0xFFFFF78000000000ULL
 #define SharedUserData          ((KUSER_SHARED_DATA * const)KI_USER_SHARED_DATA)
+
+/* ARM64 uses the 64-bit shared-user-data time fields. */
+#define SharedInterruptTime     (KI_USER_SHARED_DATA + 0x8)
+#define SharedSystemTime        (KI_USER_SHARED_DATA + 0x14)
+#define SharedTickCount         (KI_USER_SHARED_DATA + 0x320)
+/* KeQueryTickCount is defined later in this file as _KeQueryTickCount. */
 
 #define PAGE_SIZE               0x1000
 #define PAGE_SHIFT              12L
@@ -53,6 +60,38 @@ YieldProcessor(
 #else
     __yield();
 #endif
+}
+
+FORCEINLINE
+ULONGLONG
+KiArm64ReadSharedSystemTime(
+    _In_ ULONG_PTR SharedTimeAddress)
+{
+    volatile const KSYSTEM_TIME *SharedTime = (volatile const KSYSTEM_TIME *)SharedTimeAddress;
+    LARGE_INTEGER Time;
+
+    do
+    {
+        Time.HighPart = SharedTime->High1Time;
+        Time.LowPart = SharedTime->LowPart;
+    } while (Time.HighPart != SharedTime->High2Time);
+
+    return Time.QuadPart;
+}
+
+FORCEINLINE
+ULONGLONG
+KeQueryInterruptTime(VOID)
+{
+    return KiArm64ReadSharedSystemTime(SharedInterruptTime);
+}
+
+FORCEINLINE
+VOID
+KeQuerySystemTime(
+    _Out_ PLARGE_INTEGER CurrentTime)
+{
+    CurrentTime->QuadPart = KiArm64ReadSharedSystemTime(SharedSystemTime);
 }
 
 #ifndef MemoryBarrier
@@ -103,18 +142,20 @@ KfRaiseIrql(
     _In_ KIRQL NewIrql);
 #define KeRaiseIrql(a,b) *(b) = KfRaiseIrql(a)
 
-_IRQL_requires_max_(DISPATCH_LEVEL)
-_IRQL_saves_
-_IRQL_raises_(DISPATCH_LEVEL)
-NTHALAPI
+/* ARM64 exposes these helpers inline in the public header. */
+FORCEINLINE
 KIRQL
-NTAPI
-KeRaiseIrqlToDpcLevel(VOID);
+KeRaiseIrqlToDpcLevel(VOID)
+{
+    return KfRaiseIrql(DISPATCH_LEVEL);
+}
 
-NTHALAPI
+FORCEINLINE
 KIRQL
-NTAPI
-KeRaiseIrqlToSynchLevel(VOID);
+KeRaiseIrqlToSynchLevel(VOID)
+{
+    return KfRaiseIrql(SYNCH_LEVEL);
+}
 
 #if !defined(_NTOSKRNL_) && !defined(_NTSYSTEM_)
 FORCEINLINE

@@ -27,6 +27,7 @@ Author:
 #include <rtltypes.h>
 #include <pstypes.h>
 #include <extypes.h>
+#include <arch/target.h>
 #include "in6addr.h"
 #include "inaddr.h"
 
@@ -2231,7 +2232,7 @@ RtlFindCharInUnicodeString(
 //
 // Memory Functions
 //
-#if defined(_M_AMD64)
+#if NDK_TARGET_AMD64_CODEGEN
 
 FORCEINLINE
 VOID
@@ -3603,7 +3604,7 @@ RtlTestBit(
     _In_range_(<, BitMapHeader->SizeOfBitMap) ULONG BitNumber
 );
 
-#if defined(_M_AMD64)
+#if NDK_TARGET_AMD64_CODEGEN
 _Must_inspect_result_
 FORCEINLINE
 BOOLEAN
@@ -3615,7 +3616,7 @@ RtlCheckBit(
 }
 #else
 #define RtlCheckBit(BMH,BP) (((((PLONG)(BMH)->Buffer)[(BP)/32]) >> ((BP)%32)) & 0x1)
-#endif /* defined(_M_AMD64) */
+#endif /* NDK_TARGET_AMD64_CODEGEN */
 
 #endif // NTOS_MODE_USER
 

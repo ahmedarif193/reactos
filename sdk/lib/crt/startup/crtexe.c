@@ -138,12 +138,19 @@ pre_cpp_init (void)
 
 static int __cdecl __tmainCRTStartup (void);
 
+#if defined(__SEH__) && !defined(__arm__) && !defined(__aarch64__) && \
+    !defined(_M_ARM) && !defined(_M_ARM64) && !defined(_M_ARM64EC)
+#define CRT_STARTUP_SEH_FILTER 1
+#else
+#define CRT_STARTUP_SEH_FILTER 0
+#endif
+
 int __cdecl WinMainCRTStartup (void);
 
 int __cdecl WinMainCRTStartup (void)
 {
   int ret = 255;
-#ifdef __SEH__
+#if CRT_STARTUP_SEH_FILTER
   asm ("\t.l_startw:\n"
     "\t.seh_handler __C_specific_handler, @except\n"
     "\t.seh_handlerdata\n"
@@ -155,7 +162,7 @@ int __cdecl WinMainCRTStartup (void)
   mingw_app_type = 1;
   __security_init_cookie ();
   ret = __tmainCRTStartup ();
-#ifdef __SEH__
+#if CRT_STARTUP_SEH_FILTER
   asm ("\tnop\n"
     "\t.l_endw: nop\n");
 #endif
@@ -178,7 +185,7 @@ int __cdecl mainCRTStartup (void)
       return -1;
   }
 #endif
-#ifdef __SEH__
+#if CRT_STARTUP_SEH_FILTER
   asm ("\t.l_start:\n"
     "\t.seh_handler __C_specific_handler, @except\n"
     "\t.seh_handlerdata\n"
@@ -190,7 +197,7 @@ int __cdecl mainCRTStartup (void)
   mingw_app_type = 0;
   __security_init_cookie ();
   ret = __tmainCRTStartup ();
-#ifdef __SEH__
+#if CRT_STARTUP_SEH_FILTER
   asm ("\tnop\n"
     "\t.l_end: nop\n");
 #endif

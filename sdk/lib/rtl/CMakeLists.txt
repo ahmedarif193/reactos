@@ -96,6 +96,8 @@ list(APPEND SOURCE
     workitem.c
     rtl.h)
 
+set(RTL_COMMON_SOURCE ${SOURCE})
+
 if(ARCH STREQUAL "i386")
     list(APPEND ASM_SOURCE
         i386/debug_asm.S
@@ -137,6 +139,18 @@ elseif(ARCH STREQUAL "arm64")
         arm64/unwind.c
         byteswap.c
         mem.c)
+elseif(ARCH STREQUAL "arm64ec")
+    list(APPEND ASM_SOURCE
+        arm64/context_asm.S
+        arm64/debug_asm.S)
+    list(APPEND SOURCE
+        amd64/dynfntbl.c
+        amd64/except.c
+        amd64/stubs.c
+        amd64/unwind.c
+        arm64ec/except.c
+        byteswap.c
+        mem.c)
 endif()
 
 add_asm_files(rtl_asm ${ASM_SOURCE})
@@ -144,6 +158,25 @@ add_library(rtl ${SOURCE} ${rtl_asm})
 target_link_libraries(rtl PRIVATE pseh)
 add_pch(rtl rtl.h SOURCE)
 add_dependencies(rtl psdk asm)
+
+if(ARCH STREQUAL "arm64ec" AND COMMAND set_arm64ec_native_target)
+    set(RTL_NATIVE_SOURCE
+        ${RTL_COMMON_SOURCE}
+        arm64/except.c
+        arm64/stubs.c
+        arm64/unwind.c
+        byteswap.c
+        mem.c)
+    set(RTL_NATIVE_ASM_SOURCE
+        arm64/context_asm.S
+        arm64/debug_asm.S)
+    add_asm_files(rtl_native_asm ${RTL_NATIVE_ASM_SOURCE})
+    add_library(rtl_native ${RTL_NATIVE_SOURCE} ${rtl_native_asm})
+    set_arm64ec_native_target(rtl_native)
+    target_link_libraries(rtl_native PRIVATE pseh)
+    add_pch(rtl_native rtl.h RTL_NATIVE_SOURCE)
+    add_dependencies(rtl_native psdk asm)
+endif()
 
 list(APPEND SOURCE_VISTA
     ${RTL_WINE_SOURCE_VISTA}
@@ -159,3 +192,11 @@ add_library(rtl_vista ${SOURCE_VISTA})
 add_pch(rtl_vista rtl_vista.h SOURCE_VISTA)
 add_dependencies(rtl_vista psdk)
 target_link_libraries(rtl_vista PRIVATE pseh)
+
+if(ARCH STREQUAL "arm64ec" AND COMMAND set_arm64ec_native_target)
+    add_library(rtl_vista_native ${SOURCE_VISTA})
+    set_arm64ec_native_target(rtl_vista_native)
+    add_pch(rtl_vista_native rtl_vista.h SOURCE_VISTA)
+    add_dependencies(rtl_vista_native psdk)
+    target_link_libraries(rtl_vista_native PRIVATE pseh)
+endif()

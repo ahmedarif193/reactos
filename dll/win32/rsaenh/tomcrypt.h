@@ -94,7 +94,7 @@ typedef ULONG32 ulong32;
            ((unsigned long)((y)[2] & 255)<<8)  | \
            ((unsigned long)((y)[3] & 255)); }
 
-#if defined(__GNUC__) && (defined(__i386__) || defined(__x86_64__)) && !defined(INTEL_CC)
+#if defined(__GNUC__) && (defined(__i386__) || defined(__x86_64__)) && !defined(__arm64ec__) && !defined(_M_ARM64EC) && !defined(INTEL_CC)
 
 static inline unsigned ROR(unsigned word, int i)
 {

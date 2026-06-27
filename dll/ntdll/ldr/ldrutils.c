@@ -102,9 +102,10 @@ LdrpCallInitRoutine(IN PDLL_INIT_ROUTINE EntryPoint,
                     IN ULONG Reason,
                     IN PVOID Context)
 {
-#if defined(_M_ARM64)
+#if defined(_M_ARM64) || defined(_M_ARM64EC)
     PIMAGE_NT_HEADERS NtHeaders;
     ULONG_PTR EntryPointRva, NativeEntryPointRva;
+    USHORT ImageMachine;
 
     NtHeaders = RtlImageNtHeader(BaseAddress);
     if (NtHeaders && (ULONG_PTR)EntryPoint >= (ULONG_PTR)BaseAddress)
@@ -112,7 +113,9 @@ LdrpCallInitRoutine(IN PDLL_INIT_ROUTINE EntryPoint,
         EntryPointRva = (ULONG_PTR)EntryPoint - (ULONG_PTR)BaseAddress;
         if (EntryPointRva < NtHeaders->OptionalHeader.SizeOfImage)
         {
-            ChpeRegisterArm64EcImage(BaseAddress);
+            ImageMachine = ChpeGetImageMachine(BaseAddress);
+            if (ImageMachine == IMAGE_FILE_MACHINE_ARM64EC)
+                ChpeRegisterArm64EcImage(BaseAddress);
 
             if (ChpeGetArm64EcRedirection(BaseAddress,
                                           EntryPointRva,
@@ -121,7 +124,9 @@ LdrpCallInitRoutine(IN PDLL_INIT_ROUTINE EntryPoint,
                 EntryPoint = (PDLL_INIT_ROUTINE)((ULONG_PTR)BaseAddress +
                                                  NativeEntryPointRva);
             }
-            else if (NtHeaders->FileHeader.Machine == IMAGE_FILE_MACHINE_AMD64)
+            else if (ImageMachine == IMAGE_FILE_MACHINE_AMD64 ||
+                     (ImageMachine == IMAGE_FILE_MACHINE_ARM64EC &&
+                      !RtlIsEcCode((ULONG_PTR)EntryPoint)))
             {
                 return ChpeCallX64DllMain(EntryPoint, BaseAddress, Reason, Context);
             }
@@ -1535,6 +1540,17 @@ NoRelocNeeded:
 
     // FIXME: LdrpCheckCorImage() is missing
 
+#if defined(_M_ARM64) || defined(_M_ARM64EC)
+    if (NT_SUCCESS(Status) &&
+        LdrEntry &&
+        ChpeIsChpeProcess() &&
+        !ChpeRegisterImageCodeRanges(LdrEntry->DllBase))
+    {
+        DPRINT1("LDR: CHPE failed to register image code ranges for %wZ\n",
+                &LdrEntry->BaseDllName);
+    }
+#endif
+
     /* Check if this is an SMP Machine and a DLL */
     if ((LdrpNumberOfProcessors > 1) &&
         (LdrEntry && (LdrEntry->Flags & LDRP_IMAGE_DLL)))
@@ -2411,7 +2427,7 @@ LdrpGetProcedureAddress(
         /* Make sure we're OK till here */
         if (NT_SUCCESS(Status))
         {
-#if defined(_M_ARM64)
+#if defined(_M_ARM64) || defined(_M_ARM64EC)
             ULONG_PTR FunctionRva, NativeFunctionRva;
 
             if ((ULONG_PTR)Thunk.u1.Function >= (ULONG_PTR)LdrEntry->DllBase)
@@ -2651,6 +2667,15 @@ LdrpLoadDll(IN BOOLEAN Redirected,
         else
         {
             /* We were already loaded. Are we a DLL? */
+#if defined(_M_ARM64) || defined(_M_ARM64EC)
+            if (ChpeIsChpeProcess() &&
+                !ChpeRegisterImageCodeRanges(LdrEntry->DllBase))
+            {
+                DPRINT1("LDR: CHPE failed to register existing image code ranges for %wZ\n",
+                        &LdrEntry->BaseDllName);
+            }
+#endif
+
             if ((LdrEntry->Flags & LDRP_IMAGE_DLL) && (LdrEntry->LoadCount != 0xFFFF))
             {
                 /* Increase load count */

@@ -578,10 +578,10 @@
 @ cdecl -arch=x86_64,arm64 KeAcquireInStackQueuedSpinLock(ptr ptr)
 @ fastcall KeAcquireInStackQueuedSpinLockAtDpcLevel(ptr ptr)
 @ fastcall KeAcquireInStackQueuedSpinLockForDpc(ptr ptr)
-@ cdecl -arch=x86_64,arm64 KeAcquireInStackQueuedSpinLockRaiseToSynch(ptr ptr)
+@ cdecl -arch=x86_64 KeAcquireInStackQueuedSpinLockRaiseToSynch(ptr ptr)
 @ stdcall KeAcquireInterruptSpinLock(ptr)
 @ cdecl -arch=x86_64,arm64 KeAcquireQueuedSpinLock(long)
-@ cdecl -arch=x86_64,arm64 KeAcquireQueuedSpinLockRaiseToSynch(long)
+@ cdecl -arch=x86_64 KeAcquireQueuedSpinLockRaiseToSynch(long)
 @ stdcall KeAcquireSpinLockAtDpcLevel(ptr)
 @ fastcall KeAcquireSpinLockForDpc(ptr)
 @ stdcall -arch=x86_64,arm64 KeAcquireSpinLockRaiseToDpc(ptr)
@@ -664,15 +664,15 @@
 @ stdcall KeQueryActiveProcessorCount(ptr)
 @ stdcall KeQueryActiveProcessors()
 @ stdcall KeQueryHighestNodeNumber()
-@ stdcall -arch=i386,arm,arm64 KeQueryInterruptTime()
+@ stdcall -arch=i386,arm KeQueryInterruptTime()
 ;@ cdecl -arch=x86_64,arm64 KeQueryMultiThreadProcessorSet
 ;@ cdecl -arch=x86_64,arm64 KeQueryPrcbAddress
 @ stdcall KeQueryPriorityThread(ptr)
 @ stdcall KeQueryRuntimeThread(ptr ptr)
-@ stdcall -arch=i386,arm,arm64 KeQuerySystemTime(ptr)
+@ stdcall -arch=i386,arm KeQuerySystemTime(ptr)
 @ stdcall -arch=i386,arm,arm64 KeQueryTickCount(ptr)
 @ stdcall KeQueryTimeIncrement()
-@ cdecl -arch=x86_64,arm64 KeRaiseIrqlToDpcLevel() KxRaiseIrqlToDpcLevel
+@ cdecl -arch=x86_64 KeRaiseIrqlToDpcLevel() KxRaiseIrqlToDpcLevel
 @ stdcall KeRaiseUserException(long)
 @ stdcall KeReadStateEvent(ptr)
 @ stdcall KeReadStateMutant(ptr)
@@ -737,7 +737,7 @@
 @ extern -arch=i386,arm,arm64 KeTickCount
 @ fastcall KeTryToAcquireGuardedMutex(ptr)
 @ cdecl -arch=x86_64,arm64 KeTryToAcquireQueuedSpinLock(long long)
-@ cdecl -arch=x86_64,arm64 KeTryToAcquireQueuedSpinLockRaiseToSynch(long long)
+@ cdecl -arch=x86_64 KeTryToAcquireQueuedSpinLockRaiseToSynch(long long)
 @ fastcall KeTryToAcquireSpinLockAtDpcLevel(ptr)
 @ stdcall KeUnstackDetachProcess(ptr)
 @ stdcall KeUpdateRunTime(ptr long)
@@ -1702,4 +1702,3 @@
 @ stdcall -arch=arm64 KxRestoreFloatingPointState(ptr)
 @ stdcall -arch=arm64 KeAcquireSpinLock(ptr ptr)
 @ stdcall -arch=arm64 KeRaiseIrql(long ptr)
-@ stdcall -arch=arm64 KeRaiseIrqlToSynchLevel()

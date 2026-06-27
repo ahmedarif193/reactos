@@ -11,7 +11,7 @@ extern "C"
 {
 #endif
 
-#if !defined(_M_ARM) && !defined(_M_ARM64)
+#if !defined(_M_ARM) && !defined(_M_ARM64) && !defined(_M_ARM64EC)
 FORCEINLINE
 KPROCESSOR_MODE
 KeGetPreviousMode(VOID)
@@ -592,11 +592,16 @@ KiAcquireTimerLock(IN ULONG Hand)
     LockIndex = Hand >> LOCK_QUEUE_TIMER_LOCK_SHIFT;
     LockIndex &= (LOCK_QUEUE_TIMER_TABLE_LOCKS - 1);
 
+#if defined(_M_ARM64) || defined(_M_ARM64EC)
+    LockQueue = (PKSPIN_LOCK_QUEUE)&KiTimerTableLock[LockIndex];
+    KeAcquireSpinLockAtDpcLevel((PKSPIN_LOCK)LockQueue);
+#else
     /* Now get the lock */
     LockQueue = &KeGetCurrentPrcb()->LockQueue[LockQueueTimerTableLock + LockIndex];
 
     /* Acquire it and return */
     KeAcquireQueuedSpinLockAtDpcLevel(LockQueue);
+#endif
     return LockQueue;
 }
 
@@ -606,8 +611,12 @@ KiReleaseTimerLock(IN PKSPIN_LOCK_QUEUE LockQueue)
 {
     ASSERT(KeGetCurrentIrql() >= DISPATCH_LEVEL);
 
+#if defined(_M_ARM64) || defined(_M_ARM64EC)
+    KeReleaseSpinLockFromDpcLevel((PKSPIN_LOCK)LockQueue);
+#else
     /* Release the lock */
     KeReleaseQueuedSpinLockFromDpcLevel(LockQueue);
+#endif
 }
 
 #endif
@@ -1378,9 +1387,9 @@ KxQueueReadyThread(IN PKTHREAD Thread,
     /* Check if this thread is allowed to run in this CPU */
 #ifdef CONFIG_SMP
 #if (NTDDI_VERSION >= NTDDI_WIN7)
-    if ((Thread->Affinity.Mask) & (Prcb->SetMember))
+    if ((Thread->Affinity.Mask) & KiPrcbSetMember(Prcb))
 #else
-    if ((Thread->Affinity) & (Prcb->SetMember))
+    if ((Thread->Affinity) & KiPrcbSetMember(Prcb))
 #endif
 #else
     if (TRUE)
@@ -1709,7 +1718,7 @@ KiReleaseNmiListLock(IN KIRQL OldIrql)
     KeReleaseSpinLock(&KiNmiCallbackListLock, OldIrql);
 }
 
-#if defined(_M_IX86) || defined(_M_AMD64)
+#if defined(_M_IX86) || (defined(_M_AMD64) && !defined(_M_ARM64EC))
 FORCEINLINE
 VOID
 KiCpuId(
@@ -1728,7 +1737,7 @@ KiCpuIdEx(
 {
     __cpuidex((INT*)CpuInfo->AsUINT32, Function, SubFunction);
 }
-#endif /* _M_IX86 || _M_AMD64 */
+#endif /* _M_IX86 || (_M_AMD64 && !_M_ARM64EC) */
 
 #ifdef __cplusplus
 } // extern "C"

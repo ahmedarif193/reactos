@@ -135,6 +135,9 @@ extern LIST_ENTRY KeBugcheckCallbackListHead, KeBugcheckReasonCallbackListHead;
 extern KSPIN_LOCK BugCheckCallbackLock;
 extern KDPC KiTimerExpireDpc;
 extern KTIMER_TABLE_ENTRY KiTimerTableListHead[TIMER_TABLE_SIZE];
+#if defined(_M_ARM64) || defined(_M_ARM64EC)
+extern KSPIN_LOCK KiTimerTableLock[LOCK_QUEUE_TIMER_TABLE_LOCKS];
+#endif
 extern FAST_MUTEX KiGenericCallDpcMutex;
 extern LIST_ENTRY KiProfileListHead, KiProfileSourceListHead;
 extern KSPIN_LOCK KiProfileLock;
@@ -161,6 +164,19 @@ extern VOID __cdecl KiInterruptTemplate(VOID);
 /* MACROS *************************************************************************/
 
 #define PRIORITY_MASK(Priority) (1UL << (Priority))
+
+#if defined(_M_ARM64) || defined(_M_ARM64EC)
+#define KiPrcbSetMember(Prcb)              ((Prcb)->GroupSetMember)
+#define KiPrcbProcessorSet(Prcb)           ((Prcb)->ScanSiblingMask)
+#define KiPrcbIsProcessorSetMaster(Prcb)   (((Prcb)->CoreControlBlock == NULL) || \
+                                            (*(PKPRCB *)(Prcb)->CoreControlBlock == (Prcb)))
+#define KiPrcbParentNode(Prcb)             ((PKNODE)(Prcb)->SchedulerSubNode)
+#else
+#define KiPrcbSetMember(Prcb)              ((Prcb)->SetMember)
+#define KiPrcbProcessorSet(Prcb)           ((Prcb)->MultiThreadProcessorSet)
+#define KiPrcbIsProcessorSetMaster(Prcb)   ((Prcb) == (Prcb)->MultiThreadSetMaster)
+#define KiPrcbParentNode(Prcb)             ((Prcb)->ParentNode)
+#endif
 
 /* Tells us if the Timer or Event is a Syncronization or Notification Object */
 #define TIMER_OR_EVENT_TYPE 0x7L

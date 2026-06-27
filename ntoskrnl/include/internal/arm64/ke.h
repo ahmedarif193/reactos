@@ -25,8 +25,6 @@ typedef struct _KSWITCHFRAME
 extern NTKERNELAPI PVOID MmSystemRangeStart;
 extern NTKERNELAPI PVOID MmHighestUserAddress;
 
-#define SYNCH_LEVEL DISPATCH_LEVEL
-
 #define KD_BREAKPOINT_TYPE        ULONG
 #define KD_BREAKPOINT_SIZE        sizeof(ULONG)
 #define KD_BREAKPOINT_VALUE       0xD43E0000

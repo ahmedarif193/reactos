@@ -202,12 +202,30 @@
 #define ROUND_DOWN(a,b)      (((a)/(b))*(b))
 #endif
 
+#ifdef TARGET_arm64ec
+#define CMLIB_TARGET_ARM64EC 1
+#else
+#define CMLIB_TARGET_ARM64EC 0
+#endif
+
+#if defined(TARGET_arm64) || CMLIB_TARGET_ARM64EC
+#define CMLIB_TARGET_ARM64_CODEGEN 1
+#else
+#define CMLIB_TARGET_ARM64_CODEGEN 0
+#endif
+
+#if defined(TARGET_i386) || defined(TARGET_amd64) || \
+    defined(TARGET_arm)  || CMLIB_TARGET_ARM64_CODEGEN
+#define CMLIB_TARGET_HAS_4K_PAGE_SIZE 1
+#else
+#define CMLIB_TARGET_HAS_4K_PAGE_SIZE 0
+#endif
+
 //
 // PAGE_SIZE definition
 //
 #ifndef PAGE_SIZE
-#if defined(TARGET_i386) || defined(TARGET_amd64) || \
-    defined(TARGET_arm)  || defined(TARGET_arm64)
+#if CMLIB_TARGET_HAS_4K_PAGE_SIZE
 #define PAGE_SIZE 0x1000
 #else
 #error Local PAGE_SIZE definition required when built as host

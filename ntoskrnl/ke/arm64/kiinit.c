@@ -29,6 +29,20 @@ KiArm64TtbrToPa(
 #define SCTLR_EL1_BT0   (1ULL << 35)
 #define SCTLR_EL1_BT1   (1ULL << 36)
 #define KI_ARM64_ID_AA64ISAR0_ATOMIC_LSE 2
+#define CNTKCTL_EL1_EL0PCTEN (1ULL << 0)
+#define CNTKCTL_EL1_EL0VCTEN (1ULL << 1)
+
+static
+VOID
+KiArm64EnableUserCounterAccess(VOID)
+{
+    ULONG64 Cntkctl;
+
+    __asm__ __volatile__("mrs %0, cntkctl_el1" : "=r"(Cntkctl));
+    Cntkctl |= CNTKCTL_EL1_EL0PCTEN | CNTKCTL_EL1_EL0VCTEN;
+    __asm__ __volatile__("msr cntkctl_el1, %0" :: "r"(Cntkctl) : "memory");
+    __asm__ __volatile__("isb" ::: "memory");
+}
 
 static
 ARM64_CPU_FEATURES
@@ -254,7 +268,6 @@ KiArm64PrepareBootPcr(_Inout_opt_ PLOADER_PARAMETER_BLOCK LoaderBlock)
     Pcr = &KiArm64BootPcr;
     KeArm64CurrentPcr = Pcr;
     Pcr->Self = (struct _KPCR *)Pcr;
-    Pcr->CurrentPrcb = &Pcr->Prcb;
     Pcr->CurrentIrql = PASSIVE_LEVEL;
 
     KeArm64CurrentIrql = PASSIVE_LEVEL;
@@ -266,7 +279,7 @@ KiArm64PrepareBootPcr(_Inout_opt_ PLOADER_PARAMETER_BLOCK LoaderBlock)
         Pcr->Prcb.CurrentThread = KeArm64CurrentThread;
         Pcr->Prcb.IdleThread = KeArm64CurrentThread;
         Pcr->Prcb.NextThread = NULL;
-        Pcr->Prcb.RspBase = (UINT64)(ULONG_PTR)LoaderBlock->KernelStack;
+        Pcr->Prcb.SpBase = (PVOID)(ULONG_PTR)LoaderBlock->KernelStack;
     }
     else
     {
@@ -279,7 +292,6 @@ KiArm64InitializeStubPcr(VOID)
 {
     RtlZeroMemory(&KiArm64PcrStub, sizeof(KiArm64PcrStub));
     KeArm64CurrentPcr = &KiArm64PcrStub;
-    KeArm64CurrentPcr->CurrentPrcb = &KeArm64CurrentPcr->Prcb;
     KeArm64CurrentPcr->Self = (struct _KPCR *)KeArm64CurrentPcr;
     KeArm64CurrentPcr->CurrentIrql = PASSIVE_LEVEL;
     RtlZeroMemory(&KeArm64CurrentPcr->Prcb, sizeof(KeArm64CurrentPcr->Prcb));
@@ -336,7 +348,7 @@ KiInitializeKernel(_Inout_ PKPROCESS InitProcess,
     KiInitSpinLocks(Prcb, Number);
 
     /* Bind the idle stack */
-    Prcb->RspBase = (ULONG_PTR)IdleStack;
+    Prcb->SpBase = IdleStack;
 
     /* Boot CPU only work */
     if (Number == 0)
@@ -582,14 +594,13 @@ KiInitializePcr(_In_ ULONG ProcessorNumber,
     RtlZeroMemory(Pcr, sizeof(*Pcr));
 
     Pcr->Self = (struct _KPCR *)Pcr;
-    Pcr->CurrentPrcb = &Pcr->Prcb;
     Pcr->CurrentIrql = PASSIVE_LEVEL;
     Pcr->Prcb.CurrentThread = IdleThread;
     Pcr->Prcb.IdleThread = IdleThread;
     Pcr->Prcb.NextThread = NULL;
     if (KeLoaderBlock != NULL)
     {
-        Pcr->Prcb.RspBase = (UINT64)(ULONG_PTR)KeLoaderBlock->KernelStack;
+        Pcr->Prcb.SpBase = (PVOID)(ULONG_PTR)KeLoaderBlock->KernelStack;
     }
 
     if (SetCurrentPcr)
@@ -648,7 +659,6 @@ KiInitializePcr(_In_ ULONG ProcessorNumber,
     }
 
     Pcr->Self = (struct _KPCR *)Pcr;
-    Pcr->CurrentPrcb = &Pcr->Prcb;
     Pcr->CurrentIrql = PASSIVE_LEVEL;
 
     Pcr->MajorVersion = PCR_MAJOR_VERSION;
@@ -665,16 +675,21 @@ KiInitializePcr(_In_ ULONG ProcessorNumber,
 #endif
 
     Pcr->Prcb.Number = (UCHAR)ProcessorNumber;
-    Pcr->Prcb.SetMember = 1ULL << ProcessorNumber;
-    Pcr->Prcb.MultiThreadProcessorSet = Pcr->Prcb.SetMember;
-    Pcr->Prcb.ParentNode = KeNodeBlock[0];
-    Pcr->Prcb.ParentNode->ProcessorMask |= Pcr->Prcb.SetMember;
+    Pcr->Prcb.GroupSetMember = 1ULL << ProcessorNumber;
+    Pcr->Prcb.ScanSiblingMask = Pcr->Prcb.GroupSetMember;
+
+    /* Start with a single-node topology until ACPI/SRAT data is plumbed in. */
+    Pcr->Prcb.PackageId = 0;
+    Pcr->Prcb.DieId = 0;
+    Pcr->Prcb.ModuleId = 0;
+    Pcr->Prcb.SchedulerSubNode = KeNodeBlock[0];
+    KeNodeBlock[0]->ProcessorMask |= Pcr->Prcb.GroupSetMember;
 
     Pcr->Prcb.CurrentThread = IdleThread;
     Pcr->Prcb.IdleThread = IdleThread;
     Pcr->Prcb.NextThread = NULL;
 
-    KiProcessorBlock[ProcessorNumber] = Pcr->CurrentPrcb;
+    KiProcessorBlock[ProcessorNumber] = &Pcr->Prcb;
 
     Pcr->StallScaleFactor = 50;
     Pcr->SecondLevelCacheSize = 0;
@@ -901,7 +916,7 @@ KiInitializeSystem(_Inout_ PLOADER_PARAMETER_BLOCK LoaderBlock)
 
         if (LoaderBlock->KernelStack != 0)
         {
-            Pcr->Prcb.RspBase = (ULONG_PTR)LoaderBlock->KernelStack;
+            Pcr->Prcb.SpBase = (PVOID)(ULONG_PTR)LoaderBlock->KernelStack;
         }
     }
 
@@ -949,6 +964,7 @@ KiInitializeSystem(_Inout_ PLOADER_PARAMETER_BLOCK LoaderBlock)
          * and all loaded images are built with landing pads.
          */
         KiArm64ApplySctlrPolicy();
+        KiArm64EnableUserCounterAccess();
 
         /*
          * PAN (Privileged Access Never):
@@ -1079,6 +1095,7 @@ KiInitializeSystem(_Inout_ PLOADER_PARAMETER_BLOCK LoaderBlock)
          * enforcement is disabled because loaded images do not carry BTI pads.
          */
         KiArm64ApplySctlrPolicy();
+        KiArm64EnableUserCounterAccess();
 
         /*
          * PAN: Disable on this AP (same as BSP).
@@ -1149,7 +1166,7 @@ KiInitializeSystem(_Inout_ PLOADER_PARAMETER_BLOCK LoaderBlock)
 
 
     ProcessorMask = (Pcr != NULL) ?
-                    Pcr->Prcb.SetMember :
+                    Pcr->Prcb.GroupSetMember :
                     ((KAFFINITY)1 << ProcessorNumber);
 
     KeActiveProcessors |= ProcessorMask;

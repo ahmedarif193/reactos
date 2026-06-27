@@ -78,7 +78,8 @@
 @ cdecl __AdjustPointer(ptr ptr)
 @ stub __BuildCatchObject
 @ stub __BuildCatchObjectHelper
-@ cdecl -arch=!i386 __C_specific_handler(ptr long ptr ptr) ntdll.__C_specific_handler
+@ cdecl -arch=!i386,!arm64ec __C_specific_handler(ptr long ptr ptr) ntdll.__C_specific_handler
+@ cdecl -arch=arm64ec __C_specific_handler(ptr long ptr ptr)
 @ cdecl -stub -arch=!i386 __C_specific_handler_noexcept(ptr long ptr ptr)
 @ cdecl __CxxDetectRethrow(ptr)
 @ cdecl __CxxExceptionFilter(ptr ptr long ptr)
@@ -615,7 +616,8 @@
 @ cdecl -arch=i386 -norelay _libm_sse2_sqrt_precise()
 @ cdecl -arch=i386 -norelay _libm_sse2_tan_precise()
 @ cdecl _loaddll(str)
-@ cdecl -arch=win64 _local_unwind(ptr ptr) ntdll._local_unwind
+@ cdecl -arch=win64,!arm64ec _local_unwind(ptr ptr) ntdll._local_unwind
+@ cdecl -arch=arm64ec _local_unwind(ptr ptr)
 @ cdecl -arch=i386 _local_unwind2(ptr long)
 @ cdecl -arch=i386 _local_unwind4(ptr ptr long)
 @ cdecl _localtime32(ptr)

@@ -22,12 +22,14 @@ PRTLP_UNHANDLED_EXCEPTION_FILTER RtlpUnhandledExceptionFilter;
 
 /* FUNCTIONS ***************************************************************/
 
-#if defined(_M_AMD64)
+#if defined(_M_AMD64) || defined(_M_ARM64)
 FORCEINLINE
 ULONG64
 RtlpGetCallerFramePointer(VOID)
 {
-#if defined(_MSC_VER)
+#if defined(_M_ARM64)
+    return *(PULONG64)_AddressOfReturnAddress();
+#elif defined(_MSC_VER)
     return *(PULONG64)((ULONG_PTR)_AddressOfReturnAddress() - sizeof(PVOID));
 #else
     return *(PULONG64)__builtin_frame_address(0);
@@ -35,7 +37,7 @@ RtlpGetCallerFramePointer(VOID)
 }
 #endif
 
-#if !defined(_M_IX86) && !defined(_M_AMD64)
+#if (!defined(_M_IX86) && !defined(_M_AMD64)) || defined(_M_ARM64EC)
 
 /*
  * @implemented
@@ -55,6 +57,17 @@ RtlRaiseException(IN PEXCEPTION_RECORD ExceptionRecord)
 
     /* Write the context flag */
     Context.ContextFlags = CONTEXT_FULL;
+
+#if defined(_M_AMD64)
+    Context.Rip = (ULONG64)_ReturnAddress();
+    Context.Rsp = (ULONG64)_AddressOfReturnAddress() + sizeof(PVOID);
+    Context.Rbp = RtlpGetCallerFramePointer();
+#elif defined(_M_ARM64)
+    Context.Pc = (ULONG64)_ReturnAddress();
+    Context.Lr = (ULONG64)_ReturnAddress();
+    Context.Sp = (ULONG64)_AddressOfReturnAddress() + 2 * sizeof(PVOID);
+    Context.Fp = RtlpGetCallerFramePointer();
+#endif
 
     /* Check if user mode debugger is active */
     if (RtlpCheckForActiveDebugger())
@@ -122,6 +135,15 @@ RtlRaiseStatus(IN NTSTATUS Status)
     Context.Rip = (ULONG64)_ReturnAddress();
     Context.Rsp = (ULONG64)_AddressOfReturnAddress() + sizeof(PVOID);
     Context.Rbp = RtlpGetCallerFramePointer();
+#elif defined(_M_ARM64)
+    /*
+     * Same issue as amd64: RtlCaptureContext records this helper's PC/SP.
+     * Start dispatch at the caller so the caller's SEH scope is visible.
+     */
+    Context.Pc = (ULONG64)_ReturnAddress();
+    Context.Lr = (ULONG64)_ReturnAddress();
+    Context.Sp = (ULONG64)_AddressOfReturnAddress() + 2 * sizeof(PVOID);
+    Context.Fp = RtlpGetCallerFramePointer();
 #endif
 
     /* Check if user mode debugger is active */

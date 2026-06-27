@@ -9,6 +9,7 @@
 #include <ntifs.h>
 #include <arc/arc.h>
 #include <ntndk.h>
+#include <arch/target.h>
 #include <bugcodes.h>
 
 /* KD Support */
@@ -17,7 +18,10 @@
 #include <wdbgexts.h>
 #include <kddll.h>
 
-#ifdef _M_AMD64
+#define GENINCDATA_ARM64_TEMPLATE NDK_TARGET_ARM64_CODEGEN
+#define GENINCDATA_AMD64_TEMPLATE NDK_TARGET_AMD64_CODEGEN
+
+#if GENINCDATA_AMD64_TEMPLATE
 enum
 {
     P1Home = 1 * sizeof(PVOID),
@@ -63,11 +67,11 @@ ASMGENDATA Table[] =
 /* ARCHITECTURE SPECIFIC CONTSTANTS ******************************************/
 #ifdef _M_IX86
 #include "ks386.template.h"
-#elif defined(_M_AMD64)
+#elif GENINCDATA_AMD64_TEMPLATE
 #include "ksamd64.template.h"
 #elif defined(_M_ARM)
 #include "ksarm.template.h"
-#elif defined(_M_ARM64)
+#elif GENINCDATA_ARM64_TEMPLATE
 #include "ksarm64.template.h"
 #endif
 
@@ -77,4 +81,3 @@ ASMGENDATA Table[] =
     /* End of list */
     {TYPE_END, "", 0}
 };
-

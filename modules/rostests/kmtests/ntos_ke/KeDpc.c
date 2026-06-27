@@ -61,6 +61,7 @@ DpcHandler(
     ok_eq_pointer(Dpc->SystemArgument2, SystemArgument2);
     ok_eq_pointer(Dpc->DpcData, NULL);
 
+#if (NTDDI_VERSION < NTDDI_LONGHORN)
     if (GetNTVersion() == _WIN32_WINNT_WS03)
     {
         ok_eq_uint(Prcb->DpcRoutineActive, 1);
@@ -68,6 +69,7 @@ DpcHandler(
         ok_eq_pointer(Prcb->DpcData[DPC_NORMAL].DpcListHead.Flink, Dpc->DpcListEntry.Flink);
         ok_eq_pointer(Prcb->DpcData[DPC_NORMAL].DpcListHead.Blink, Dpc->DpcListEntry.Blink);
     }
+#endif
 }
 
 START_TEST(KeDpc)

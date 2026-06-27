@@ -248,7 +248,7 @@ KxFreezeExecution(
      * The freeze state is already communicated via IpiFrozen assignment above.
      * We just need the SGI to interrupt the target CPUs.
      */
-    HalRequestIpi(KeActiveProcessors & ~CurrentPrcb->SetMember);
+    HalRequestIpi(KeActiveProcessors & ~CurrentPrcb->GroupSetMember);
     KiArm64WaitForFrozenTargets(CurrentPrcb);
 }
 

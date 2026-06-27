@@ -2128,6 +2128,13 @@ MmCreateArm3Section(OUT PVOID *SectionObject,
     PFILE_OBJECT File;
     BOOLEAN UserRefIncremented = FALSE;
     PVOID PreviousSectionPointer;
+#ifdef _M_ARM64
+    PEPROCESS CurrentProcess;
+    PMMADDRESS_NODE ConflictNode;
+    TABLE_SEARCH_RESULT ConflictResult;
+    SIZE_T BasedSize;
+    ULONG_PTR BasedBase, BasedEnd, ConflictStart, HighestSectionAddress;
+#endif
 
     /* Make the same sanity checks that the Nt interface should've validated */
     ASSERT((AllocationAttributes & ~(SEC_COMMIT | SEC_RESERVE | SEC_BASED |
@@ -2456,6 +2463,10 @@ MmCreateArm3Section(OUT PVOID *SectionObject,
     if (AllocationAttributes & SEC_BASED)
     {
         /* Lock the VAD tree during the search */
+#ifdef _M_ARM64
+        CurrentProcess = PsGetCurrentProcess();
+        MmLockAddressSpace(&CurrentProcess->Vm);
+#endif
         KeAcquireGuardedMutex(&MmSectionBasedMutex);
 
         /* Is it a brand new ControArea ? */
@@ -2463,16 +2474,62 @@ MmCreateArm3Section(OUT PVOID *SectionObject,
         {
             ASSERT(ControlArea->u.Flags.Based == 1);
             /* Then we must find a global address, top-down */
+#ifdef _M_ARM64
+            BasedSize = (SIZE_T)ControlArea->Segment->SizeOfSegment;
+            HighestSectionAddress = (ULONG_PTR)MmHighSectionBase;
+            do
+            {
+                Status = MiFindEmptyAddressRangeDownBasedTree(BasedSize,
+                                                              HighestSectionAddress,
+                                                              _64K,
+                                                              &MmSectionBasedRoot,
+                                                              (ULONG_PTR*)&ControlArea->Segment->BasedAddress);
+
+                if (!NT_SUCCESS(Status))
+                {
+                    break;
+                }
+
+                BasedBase = (ULONG_PTR)ControlArea->Segment->BasedAddress;
+                BasedEnd = BasedBase + BasedSize - 1;
+                ConflictResult = MiCheckForConflictingNode(BasedBase >> PAGE_SHIFT,
+                                                           BasedEnd >> PAGE_SHIFT,
+                                                           &CurrentProcess->VadRoot,
+                                                           &ConflictNode);
+                if (ConflictResult != TableFoundNode)
+                {
+                    break;
+                }
+
+                /*
+                 * SEC_BASED chooses one address for all processes. If the first
+                 * creator already owns that range, retry below the conflicting
+                 * VAD so the later MapViewOfSection cannot immediately fail.
+                 */
+                ConflictStart = ConflictNode->StartingVpn << PAGE_SHIFT;
+                if (ConflictStart <= (ULONG_PTR)MI_LOWEST_VAD_ADDRESS)
+                {
+                    Status = STATUS_NO_MEMORY;
+                    break;
+                }
+
+                HighestSectionAddress = ConflictStart - 1;
+            } while (TRUE);
+#else
             Status = MiFindEmptyAddressRangeDownBasedTree((SIZE_T)ControlArea->Segment->SizeOfSegment,
                                                           (ULONG_PTR)MmHighSectionBase,
                                                           _64K,
                                                           &MmSectionBasedRoot,
                                                           (ULONG_PTR*)&ControlArea->Segment->BasedAddress);
+#endif
 
             if (!NT_SUCCESS(Status))
             {
                 /* No way to find a valid range. */
                 KeReleaseGuardedMutex(&MmSectionBasedMutex);
+#ifdef _M_ARM64
+                MmUnlockAddressSpace(&CurrentProcess->Vm);
+#endif
                 ControlArea->u.Flags.Based = 0;
                 NewSection->u.Flags.Based = 0;
                 ObDereferenceObject(NewSection);
@@ -2491,6 +2548,9 @@ MmCreateArm3Section(OUT PVOID *SectionObject,
         }
 
         KeReleaseGuardedMutex(&MmSectionBasedMutex);
+#ifdef _M_ARM64
+        MmUnlockAddressSpace(&CurrentProcess->Vm);
+#endif
     }
 
     /* The control area is not being created anymore */

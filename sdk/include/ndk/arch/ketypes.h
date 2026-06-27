@@ -19,19 +19,21 @@ Author:
 #ifndef _ARCH_KETYPES_H
 #define _ARCH_KETYPES_H
 
+#include <arch/target.h>
+
 //
 // Include the right file for this architecture.
 //
 #ifdef _M_IX86
 #include <i386/ketypes.h>
-#elif defined(_M_AMD64)
-#include <amd64/ketypes.h>
 #elif defined(_M_PPC)
 #include <powerpc/ketypes.h>
 #elif defined(_M_ARM)
 #include <arm/ketypes.h>
-#elif defined(_M_ARM64)
+#elif NDK_TARGET_ARM64_ABI
 #include <arm64/ketypes.h>
+#elif NDK_TARGET_AMD64_ABI
+#include <amd64/ketypes.h>
 #else
 #error "Unknown processor"
 #endif

@@ -21,6 +21,15 @@
 #define KiResetDebugDpcTime(Prcb) ((Prcb)->DebugDpcTime = 0)
 #endif
 
+/* Use the architecture-specific PRCB field for pending DPC delivery. */
+#ifdef _M_ARM64
+#define KiDpcInterruptRequested(Prcb)        ((Prcb)->DpcNormalProcessingRequested)
+#define KiSetDpcInterruptRequested(Prcb, V)  ((Prcb)->DpcNormalProcessingRequested = (V) ? 1 : 0)
+#else
+#define KiDpcInterruptRequested(Prcb)        ((Prcb)->DpcInterruptRequested)
+#define KiSetDpcInterruptRequested(Prcb, V)  ((Prcb)->DpcInterruptRequested = (V))
+#endif
+
 /* GLOBALS *******************************************************************/
 
 ULONG KiMaximumDpcQueueDepth = 4;
@@ -62,8 +71,12 @@ KiCheckTimerTable(IN ULARGE_INTEGER CurrentTime)
             if (Timer->DueTime.QuadPart <= CurrentTime.QuadPart)
             {
                 /* Check if the DPC was queued, but didn't run */
+#ifdef _M_ARM64
+                if (KeGetCurrentPrcb()->TimerExpirationDpc.DpcData == NULL)
+#else
                 if (!(KeGetCurrentPrcb()->TimerRequest) &&
                     !(*((volatile PULONG*)(&KiTimerExpireDpc.DpcData))))
+#endif
                 {
                     /* This is bad, breakpoint! */
                     DPRINT1("Invalid timer state!\n");
@@ -475,12 +488,18 @@ KiQuantumEnd(VOID)
     PKPRCB Prcb = KeGetCurrentPrcb();
     PKTHREAD NextThread, Thread = Prcb->CurrentThread;
 
+#ifndef _M_ARM64
+    /*
+     * The per-PRCB DpcEvent wake handshake is only present on the legacy
+     * PRCB layouts.
+     */
     /* Check if a DPC Event was requested to be signaled */
     if (InterlockedExchange(&Prcb->DpcSetEventRequest, 0))
     {
         /* Signal it */
         KeSetEvent(&Prcb->DpcEvent, 0, 0);
     }
+#endif
 
     /* Raise to synchronization level and lock the PRCB and thread */
     KeRaiseIrqlToSynchLevel();
@@ -573,7 +592,9 @@ KiRetireDpcList(IN PKPRCB Prcb)
     PKDPC Dpc;
     PKDEFERRED_ROUTINE DeferredRoutine;
     PVOID DeferredContext, SystemArgument1, SystemArgument2;
+#ifndef _M_ARM64
     ULONG_PTR TimerHand;
+#endif
 #ifdef CONFIG_SMP
     KIRQL OldIrql;
 #endif
@@ -590,6 +611,11 @@ KiRetireDpcList(IN PKPRCB Prcb)
         /* Set us as active */
         Prcb->DpcRoutineActive = TRUE;
 
+#ifndef _M_ARM64
+        /*
+         * Legacy PRCB layouts carry a single pending timer request. ARM64
+         * uses TimerExpirationDpc and drains it through the normal DPC queue.
+         */
         /* Check if this is a timer expiration request */
         if (Prcb->TimerRequest)
         {
@@ -602,6 +628,7 @@ KiRetireDpcList(IN PKPRCB Prcb)
             KiTimerExpiration(NULL, NULL, (PVOID)TimerHand, NULL);
             _disable();
         }
+#endif
 
         /* Loop while we have entries in the queue */
         while (DpcData->DpcQueueDepth != 0)
@@ -685,7 +712,7 @@ KiRetireDpcList(IN PKPRCB Prcb)
 
         /* Clear DPC Flags */
         Prcb->DpcRoutineActive = FALSE;
-        Prcb->DpcInterruptRequested = FALSE;
+        KiSetDpcInterruptRequested(Prcb, FALSE);
 
 #ifdef CONFIG_SMP
         /* Check if we have deferred threads */
@@ -854,7 +881,7 @@ KeInsertQueueDpc(IN PKDPC Dpc,
         else
         {
             /* Make sure a DPC isn't executing already */
-            if (!(Prcb->DpcRoutineActive) && !(Prcb->DpcInterruptRequested))
+            if (!(Prcb->DpcRoutineActive) && !KiDpcInterruptRequested(Prcb))
             {
                 /* Check if this is the same CPU */
                 if (Prcb != CurrentPrcb)
@@ -867,11 +894,14 @@ KeInsertQueueDpc(IN PKDPC Dpc,
                     if (((Dpc->Importance == HighImportance) ||
                         (DpcData->DpcQueueDepth >=
                          Prcb->MaximumDpcQueueDepth)) &&
-                        (!(AFFINITY_MASK(Cpu) & KiIdleSummary) ||
-                         (Prcb->Sleeping)))
+                        (!(AFFINITY_MASK(Cpu) & KiIdleSummary)
+#ifndef _M_ARM64
+                         || (Prcb->Sleeping)
+#endif
+                         ))
                     {
                         /* Set interrupt requested */
-                        Prcb->DpcInterruptRequested = TRUE;
+                        KiSetDpcInterruptRequested(Prcb, TRUE);
 
                         /* Set DPC inserted */
                         DpcInserted = TRUE;
@@ -886,7 +916,7 @@ KeInsertQueueDpc(IN PKDPC Dpc,
                         (Prcb->DpcRequestRate < Prcb->MinimumDpcRate))
                     {
                         /* Set interrupt requested */
-                        Prcb->DpcInterruptRequested = TRUE;
+                        KiSetDpcInterruptRequested(Prcb, TRUE);
 
                         /* Set DPC inserted */
                         DpcInserted = TRUE;
@@ -1010,7 +1040,7 @@ KeFlushQueuedDpcs(VOID)
             {
                 /* Attach to the target processor. This will cause a DPC
                    interrupt on the target processor and flush all DPCs. */
-                KeSetSystemAffinityThread(TargetPrcb->SetMember);
+                KeSetSystemAffinityThread(KiPrcbSetMember(TargetPrcb));
             }
         }
     }

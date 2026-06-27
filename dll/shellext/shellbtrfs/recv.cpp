@@ -30,11 +30,11 @@
 #ifdef __REACTOS__
 #define __cpuidex __cpuidex_ // prevent redeclaration
 #endif
-#if !defined(_M_ARM64) && !defined(__aarch64__)
+#if !defined(_M_ARM64) && !defined(_M_ARM64EC) && !defined(__aarch64__) && !defined(__arm64ec__)
 #include <cpuid.h>
 #endif
 #else
-#if !defined(_M_ARM64) && !defined(__aarch64__)
+#if !defined(_M_ARM64) && !defined(_M_ARM64EC) && !defined(__aarch64__) && !defined(__arm64ec__)
 #include <intrin.h>
 #endif
 #endif
@@ -1367,7 +1367,7 @@ void BtrfsRecv::do_recv(const win_handle& f, uint64_t* pos, uint64_t size, const
     }
 }
 
-#if defined(_X86_) || defined(_AMD64_)
+#if (defined(_X86_) || defined(_AMD64_)) && !defined(_M_ARM64EC) && !defined(__arm64ec__)
 static void check_cpu() {
     bool have_sse42 = false;
 
@@ -1537,7 +1537,7 @@ void BtrfsRecv::Open(HWND hwnd, const wstring& file, const wstring& path, bool q
     dirpath = path;
     subvolpath = L"";
 
-#if defined(_X86_) || defined(_AMD64_)
+#if (defined(_X86_) || defined(_AMD64_)) && !defined(_M_ARM64EC) && !defined(__arm64ec__)
     check_cpu();
 #endif
 

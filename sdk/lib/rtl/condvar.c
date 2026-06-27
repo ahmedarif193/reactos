@@ -268,14 +268,16 @@ InternalWake(IN OUT PRTL_CONDITION_VARIABLE ConditionVariable,
     LARGE_INTEGER Timeout;
     PCOND_VAR_WAIT_ENTRY RemoveOnUnlockEntry;
 
-    ASSERT(CondVarKeyedEventHandle != NULL);
-
     if (HeadEntry == NULL)
     {
         /* There is noone there to wake up. In this case do nothing
            and return immediately. We don't stockpile releases. */
         return;
     }
+
+    ASSERT(CondVarKeyedEventHandle != NULL);
+    if (CondVarKeyedEventHandle == NULL)
+        RtlRaiseStatus(STATUS_INVALID_HANDLE);
 
     Timeout.QuadPart = 0;
     RemoveOnUnlockEntry = NULL;
@@ -377,8 +379,11 @@ InternalSleep(IN OUT PRTL_CONDITION_VARIABLE ConditionVariable,
     COND_VAR_WAIT_ENTRY OwnEntry;
     NTSTATUS Status;
 
-    ASSERT(CondVarKeyedEventHandle != NULL);
     ASSERT((CriticalSection == NULL) != (SRWLock == NULL));
+    ASSERT(CondVarKeyedEventHandle != NULL);
+
+    if (CondVarKeyedEventHandle == NULL)
+        RtlRaiseStatus(STATUS_INVALID_HANDLE);
 
     RtlZeroMemory(&OwnEntry, sizeof(OwnEntry));
 
@@ -459,16 +464,30 @@ VOID
 NTAPI
 RtlpInitializeKeyedEvent(VOID)
 {
-    ASSERT(CondVarKeyedEventHandle == NULL);
-    NtCreateKeyedEvent(&CondVarKeyedEventHandle, EVENT_ALL_ACCESS, NULL, 0);
+    NTSTATUS Status;
+
+    if (CondVarKeyedEventHandle != NULL)
+        return;
+
+    Status = NtCreateKeyedEvent(&CondVarKeyedEventHandle,
+                                KEYEDEVENT_ALL_ACCESS,
+                                NULL,
+                                0);
+    if (!NT_SUCCESS(Status))
+    {
+        DPRINT1("RtlpInitializeKeyedEvent failed: 0x%08lx\n", Status);
+        CondVarKeyedEventHandle = NULL;
+        RtlRaiseStatus(Status);
+    }
 }
 
 VOID
 NTAPI
 RtlpCloseKeyedEvent(VOID)
 {
-    ASSERT(CondVarKeyedEventHandle != NULL);
-    NtClose(CondVarKeyedEventHandle);
+    if (CondVarKeyedEventHandle != NULL)
+        NtClose(CondVarKeyedEventHandle);
+
     CondVarKeyedEventHandle = NULL;
 }
 

@@ -38,19 +38,23 @@ KiDispatchExceptionToUser(
     _In_ PCONTEXT Context,
     _In_ PEXCEPTION_RECORD ExceptionRecord)
 {
-    EXCEPTION_RECORD LocalExceptRecord;
     ULONG_PTR UserSp;
+    ULONG_PTR UserStackEnd;
+    SIZE_T UserStackSize;
     PKUSER_EXCEPTION_STACK UserStack;
+    NTSTATUS Status;
 
     ASSERT(TrapFrame != NULL);
     ASSERT(Context != NULL);
     ASSERT(ExceptionRecord != NULL);
 
-    if (Context->Sp < sizeof(KUSER_EXCEPTION_STACK))
+    UserStackSize = sizeof(KUSER_EXCEPTION_STACK);
+
+    if (Context->Sp < UserStackSize)
     {
         DPRINT1("[arm64][EXC] KiDispatchExceptionToUser: SP too low Sp=%p Need=%Ix Pc=%p Lr=%p Code=0x%08lx\n",
                 (PVOID)(ULONG_PTR)Context->Sp,
-                sizeof(KUSER_EXCEPTION_STACK),
+                UserStackSize,
                 (PVOID)(ULONG_PTR)Context->Pc,
                 (PVOID)(ULONG_PTR)Context->Lr,
                 ExceptionRecord->ExceptionCode);
@@ -136,118 +140,51 @@ KiDispatchExceptionToUser(
     }
 
     /* Allocate a 16-byte aligned exception stack frame on the user stack */
-    UserSp = (ULONG_PTR)(Context->Sp - sizeof(KUSER_EXCEPTION_STACK));
+    UserSp = (ULONG_PTR)(Context->Sp - UserStackSize);
     UserSp &= ~0xFULL;
+    UserStackEnd = UserSp + UserStackSize - 1;
     UserStack = (PKUSER_EXCEPTION_STACK)UserSp;
 
-    if ((UserSp + sizeof(KUSER_EXCEPTION_STACK) - 1) > (ULONG_PTR)MmUserProbeAddress)
+    if ((UserStackEnd < UserSp) ||
+        (UserStackEnd > (ULONG_PTR)MmUserProbeAddress))
     {
-        RtlZeroMemory(&LocalExceptRecord, sizeof(LocalExceptRecord));
-        LocalExceptRecord.ExceptionCode = STATUS_ACCESS_VIOLATION;
-        LocalExceptRecord.ExceptionFlags = 0;
-        LocalExceptRecord.ExceptionRecord = NULL;
-        LocalExceptRecord.NumberParameters = 0;
-        ExceptionRecord = &LocalExceptRecord;
-    }
-
-    /*
-     * ARM64 FIX: PSEH2 uses label-based pseudo-SEH on ARM64 which CANNOT
-     * catch hardware page faults. The _SEH2_TRY below will NOT protect
-     * against faults when writing to unmapped user stack pages.
-     *
-     * Pre-validate that all pages of the user exception frame are present
-     * in TTBR0 page tables by walking via KSEG0 direct mapping. If any
-     * page is not mapped, return FALSE to force process termination
-     * instead of causing an unhandled kernel fault that stalls the system.
-     *
-     * This handles the case where a thread's stack has been freed (VAD
-     * removed, PTEs cleared) but the thread still tries to dispatch an
-     * exception — e.g., svchost.exe accessing a freed thread stack.
-     */
-    {
-        ULONG64 Ttbr0Val;
-        __asm__ __volatile__("mrs %0, ttbr0_el1" : "=r"(Ttbr0Val));
-        ULONG64 RootPa = Ttbr0Val & 0x0000FFFFFFFFF000ULL;
-        ULONG_PTR BadPage = 0;
-
-        if (RootPa == 0)
-        {
-            DPRINT1("[arm64][EXC] KiDispatchExceptionToUser: TTBR0 root is zero Pc=%p Lr=%p Sp=%p\n",
-                    (PVOID)(ULONG_PTR)Context->Pc,
-                    (PVOID)(ULONG_PTR)Context->Lr,
-                    (PVOID)(ULONG_PTR)Context->Sp);
-            return FALSE;
-        }
-
-        ULONG_PTR StartPage = UserSp & ~(ULONG_PTR)0xFFF;
-        ULONG_PTR EndPage = (UserSp + sizeof(KUSER_EXCEPTION_STACK) - 1) & ~(ULONG_PTR)0xFFF;
-
-        for (ULONG_PTR ChkPage = StartPage; ChkPage <= EndPage; ChkPage += PAGE_SIZE)
-        {
-            volatile ULONG64 *T;
-            ULONG64 E;
-
-            /* L0 */
-            T = (volatile ULONG64 *)MI_ARM64_PHYS_TO_VA(RootPa);
-            E = T[(ChkPage >> 39) & 0x1FF];
-            if ((E & 0x3ULL) != 0x3ULL) { BadPage = ChkPage; goto StackNotMapped; }
-
-            /* L1 */
-            T = (volatile ULONG64 *)MI_ARM64_PHYS_TO_VA(E & 0x0000FFFFFFFFF000ULL);
-            E = T[(ChkPage >> 30) & 0x1FF];
-            if ((E & 0x3ULL) != 0x3ULL) { BadPage = ChkPage; goto StackNotMapped; }
-
-            /* L2 */
-            T = (volatile ULONG64 *)MI_ARM64_PHYS_TO_VA(E & 0x0000FFFFFFFFF000ULL);
-            E = T[(ChkPage >> 21) & 0x1FF];
-            if ((E & 0x3ULL) != 0x3ULL) { BadPage = ChkPage; goto StackNotMapped; }
-
-            /* L3 */
-            T = (volatile ULONG64 *)MI_ARM64_PHYS_TO_VA(E & 0x0000FFFFFFFFF000ULL);
-            E = T[(ChkPage >> 12) & 0x1FF];
-            if ((E & 0x3ULL) != 0x3ULL) { BadPage = ChkPage; goto StackNotMapped; }
-        }
-        goto StackOk;
-
-    StackNotMapped:
-        DPRINT1("[arm64][EXC] KiDispatchExceptionToUser: user exception stack unmapped Start=%p End=%p BadPage=%p Pc=%p Lr=%p\n",
-                (PVOID)StartPage,
-                (PVOID)EndPage,
-                (PVOID)BadPage,
+        DPRINT1("[arm64][EXC] KiDispatchExceptionToUser: stack frame outside user range "
+                "Frame=%p End=%p Pc=%p Lr=%p Code=0x%08lx\n",
+                (PVOID)UserSp,
+                (PVOID)UserStackEnd,
                 (PVOID)(ULONG_PTR)Context->Pc,
-                (PVOID)(ULONG_PTR)Context->Lr);
+                (PVOID)(ULONG_PTR)Context->Lr,
+                ExceptionRecord->ExceptionCode);
         return FALSE;
-
-    StackOk:
-        ;
     }
 
     _enable();
 
-    _SEH2_TRY
+    /*
+     * Page-in and make the user exception frame writable before touching it.
+     * ARM64 PSEH cannot yet catch every software-raised probe status reliably,
+     * so use the status-returning probe here and fail the dispatch cleanly.
+     */
+    Status = MiArm64ProbeForWriteStatus(UserSp, UserStackEnd);
+    if (!NT_SUCCESS(Status))
     {
-        ProbeForWrite(UserStack,
-                      sizeof(*UserStack),
-                      TYPE_ALIGNMENT(KUSER_EXCEPTION_STACK));
-        RtlZeroMemory(UserStack, sizeof(*UserStack));
-        UserStack->Context = *Context;
-        UserStack->ExceptionRecord = *ExceptionRecord;
-        UserStack->MachineFrame.Sp = Context->Sp;
-        UserStack->MachineFrame.Pc = Context->Pc;
-    }
-    _SEH2_EXCEPT((LocalExceptRecord = *_SEH2_GetExceptionInformation()->ExceptionRecord),
-                 EXCEPTION_EXECUTE_HANDLER)
-    {
-        DPRINT1("[arm64][EXC] KiDispatchExceptionToUser: ProbeForWrite failed Code=0x%08lx Addr=%p Pc=%p Lr=%p Sp=%p\n",
-                LocalExceptRecord.ExceptionCode,
-                LocalExceptRecord.ExceptionAddress,
+        DPRINT1("[arm64][EXC] KiDispatchExceptionToUser: user stack probe failed "
+                "Status=0x%08lx Frame=%p End=%p Pc=%p Lr=%p Sp=%p\n",
+                Status,
+                (PVOID)UserSp,
+                (PVOID)UserStackEnd,
                 (PVOID)(ULONG_PTR)Context->Pc,
                 (PVOID)(ULONG_PTR)Context->Lr,
                 (PVOID)(ULONG_PTR)Context->Sp);
         _disable();
         return FALSE;
     }
-    _SEH2_END;
+
+    RtlZeroMemory((PVOID)UserSp, UserStackSize);
+    UserStack->Context = *Context;
+    UserStack->ExceptionRecord = *ExceptionRecord;
+    UserStack->MachineFrame.Sp = Context->Sp;
+    UserStack->MachineFrame.Pc = Context->Pc;
 
     /*
      * ARM64 FIX: Convert KeUserExceptionDispatcher to user address.
@@ -281,7 +218,6 @@ KiDispatchExceptionToUser(
         TrapFrame->Sp = UserSp;
         TrapFrame->Pc = (ULONG64)(ULONG_PTR)UserExceptionDispatcher;
         TrapFrame->Lr = (ULONG64)(ULONG_PTR)UserExceptionDispatcher;
-
     }
 
     _disable();

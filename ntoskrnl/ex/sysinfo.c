@@ -2668,8 +2668,10 @@ QSI_DEF(SystemLogicalProcessorInformation)
     LONG i;
     PKPRCB Prcb;
     KAFFINITY CurrentProc;
+    KAFFINITY ProcessorMask, ProcessorSetMember;
     NTSTATUS Status = STATUS_SUCCESS;
     ULONG DataSize = 0, ProcessorFlags;
+    BOOLEAN ProcessorCoreMaster;
     PSYSTEM_LOGICAL_PROCESSOR_INFORMATION CurrentInfo;
 
     /* First, browse active processors, thanks to the map */
@@ -2680,8 +2682,11 @@ QSI_DEF(SystemLogicalProcessorInformation)
     {
         /* If current processor is active and is main in case of HT/MC, return it */
         Prcb = KiProcessorBlock[i];
-        if ((CurrentProc & 1) &&
-            Prcb == Prcb->MultiThreadSetMaster)
+        ProcessorCoreMaster = KiPrcbIsProcessorSetMaster(Prcb);
+        ProcessorSetMember = KiPrcbSetMember(Prcb);
+        ProcessorMask = KiPrcbProcessorSet(Prcb);
+
+        if ((CurrentProc & 1) && ProcessorCoreMaster)
         {
             /* Assume processor can do HT or multicore */
             ProcessorFlags = 1;
@@ -2689,7 +2694,7 @@ QSI_DEF(SystemLogicalProcessorInformation)
             /* If set is the same for PRCB and multithread, then
              * actually, the processor is single core
              */
-            if (Prcb->SetMember == Prcb->MultiThreadProcessorSet)
+            if (ProcessorSetMember == ProcessorMask)
             {
                 ProcessorFlags = 0;
             }
@@ -2704,7 +2709,7 @@ QSI_DEF(SystemLogicalProcessorInformation)
             {
                 /* Zero output and return */
                 RtlZeroMemory(CurrentInfo, sizeof(SYSTEM_LOGICAL_PROCESSOR_INFORMATION));
-                CurrentInfo->ProcessorMask = Prcb->MultiThreadProcessorSet;
+                CurrentInfo->ProcessorMask = ProcessorMask;
 
                 /* Processor core needs 1 if HT/MC is supported */
                 CurrentInfo->Relationship = RelationProcessorCore;

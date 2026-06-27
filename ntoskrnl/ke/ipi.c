@@ -111,7 +111,16 @@ KiIpiSendPacket(IN KAFFINITY TargetSet,
     ASSERT(KeGetCurrentIrql() == SYNCH_LEVEL);
 
     CurrentPrcb = KeGetCurrentPrcb();
+#ifdef _M_ARM64
+    /*
+     * ARM64 uses the sender's request mailbox to track pending IPI targets.
+     * Targets clear their bit in KiIpiServiceRoutine.
+     */
+    (void)InterlockedExchange64((volatile LONG64*)&CurrentPrcb->RequestMailbox[0],
+                                (LONG64)TargetSet);
+#else
     (void)InterlockedExchangeUL(&CurrentPrcb->TargetSet, TargetSet);
+#endif
     (void)InterlockedExchangeUL(&CurrentPrcb->WorkerRoutine, (ULONG_PTR)WorkerRoutine);
     (void)InterlockedExchangePointer(&CurrentPrcb->CurrentPacket[0], Argument);
     (void)InterlockedExchangeUL(&CurrentPrcb->CurrentPacket[1], Count);
@@ -124,13 +133,13 @@ KiIpiSendPacket(IN KAFFINITY TargetSet,
             Prcb = KiProcessorBlock[i];
             while (0 != InterlockedCompareExchangeUL(&Prcb->SignalDone, (LONG)CurrentPrcb, 0));
             InterlockedBitTestAndSet((PLONG)&Prcb->IpiFrozen, IPI_SYNCH_REQUEST);
-            if (Processor != CurrentPrcb->SetMember)
+            if (Processor != KiPrcbSetMember(CurrentPrcb))
             {
                 HalRequestIpi(i);
             }
         }
     }
-    if (TargetSet & CurrentPrcb->SetMember)
+    if (TargetSet & KiPrcbSetMember(CurrentPrcb))
     {
         KeRaiseIrql(IPI_LEVEL, &oldIrql);
         KiIpiServiceRoutine(NULL, NULL);
@@ -163,7 +172,12 @@ KiIpiServiceRoutine(IN PKTRAP_FRAME TrapFrame,
 
     if (InterlockedBitTestAndReset((PLONG)&Prcb->IpiFrozen, IPI_DPC))
     {
+#ifdef _M_ARM64
+        /* Request a normal DPC pass on this processor. */
+        Prcb->DpcNormalProcessingRequested = 1;
+#else
         Prcb->DpcInterruptRequested = TRUE;
+#endif
         HalRequestSoftwareInterrupt(DISPATCH_LEVEL);
     }
 
@@ -178,11 +192,24 @@ KiIpiServiceRoutine(IN PKTRAP_FRAME TrapFrame,
             while (0 != InterlockedCompareExchangeUL(&Prcb->SignalDone->CurrentPacket[1], 0, 0));
         }
         ((VOID (NTAPI*)(PVOID))(Prcb->SignalDone->WorkerRoutine))(Prcb->SignalDone->CurrentPacket[0]);
+#ifdef _M_ARM64
+        /*
+         * Targets clear their affinity bit in the sender's request mailbox.
+         * The sender observes the mask drain to zero.
+         */
+        InterlockedBitTestAndReset64((volatile LONG64*)&Prcb->SignalDone->RequestMailbox[0],
+                                     KeGetCurrentProcessorNumber());
+        if (InterlockedCompareExchangeUL(&Prcb->SignalDone->CurrentPacket[2], 0, 0))
+        {
+            while (0 != InterlockedCompareExchange64((volatile LONG64*)&Prcb->SignalDone->RequestMailbox[0], 0, 0));
+        }
+#else
         InterlockedBitTestAndReset((PLONG)&Prcb->SignalDone->TargetSet, KeGetCurrentProcessorNumber());
         if (InterlockedCompareExchangeUL(&Prcb->SignalDone->CurrentPacket[2], 0, 0))
         {
             while (0 != InterlockedCompareExchangeUL(&Prcb->SignalDone->TargetSet, 0, 0));
         }
+#endif
         (void)InterlockedExchangePointer((PVOID*)&Prcb->SignalDone, NULL);
 #endif // _M_ARM
     }
@@ -216,7 +243,7 @@ KeIpiGenericCall(IN PKIPI_BROADCAST_WORKER Function,
     Affinity = KeActiveProcessors;
 
     /* Exclude ourselves */
-    Affinity &= ~Prcb->SetMember;
+    Affinity &= ~KiPrcbSetMember(Prcb);
 #endif
 
     /* Acquire the IPI lock */

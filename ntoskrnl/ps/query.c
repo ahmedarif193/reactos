@@ -1926,6 +1926,16 @@ NtSetInformationProcess(
                 PspClearProcessFlag(Process, PSF_BREAK_ON_TERMINATION_BIT);
             }
 
+            if (RtlCompareMemory(Process->ImageFileName,
+                                 "winlogon.exe",
+                                 sizeof("winlogon.exe") - 1) ==
+                sizeof("winlogon.exe") - 1)
+            {
+                DPRINT1("[arm64ec] winlogon ProcessBreakOnTermination=%lu PreviousMode=%lu\n",
+                        Break,
+                        PreviousMode);
+            }
+
             break;
 
         case ProcessAffinityMask:

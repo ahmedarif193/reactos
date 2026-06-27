@@ -1568,18 +1568,31 @@ SASWindowProc(
         }
         case WM_CREATE:
         {
+            DWORD SetupType;
+
             /* Get the session pointer from the create data */
             Session = (PWLSESSION)((LPCREATESTRUCT)lParam)->lpCreateParams;
 
             /* Save the Session pointer */
             SetWindowLongPtrW(hwndDlg, GWLP_USERDATA, (LONG_PTR)Session);
-            if (GetSetupType())
+            SetupType = GetSetupType();
+            DbgPrint("WL: SAS WM_CREATE hwnd=%p session=%p setup=%lu\n",
+                     hwndDlg,
+                     Session,
+                     SetupType);
+            if (SetupType)
                 return TRUE;
             return RegisterHotKeys(Session, hwndDlg);
         }
         case WM_DESTROY:
         {
-            if (!GetSetupType())
+            DWORD SetupType = GetSetupType();
+
+            DbgPrint("WL: SAS WM_DESTROY hwnd=%p session=%p setup=%lu\n",
+                     hwndDlg,
+                     Session,
+                     SetupType);
+            if (!SetupType)
                 UnregisterHotKeys(Session, hwndDlg);
             PostQuitMessage(0);
             return TRUE;
@@ -1781,6 +1794,7 @@ InitializeSAS(
         ERR("WL: Failed to create SAS window\n");
         goto cleanup;
     }
+    DbgPrint("WL: created SAS window hwnd=%p\n", Session->SASWindow);
 
     /* Register SAS window to receive SAS notifications */
     if (!SetLogonNotifyWindow(Session->SASWindow))

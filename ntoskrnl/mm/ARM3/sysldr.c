@@ -16,6 +16,93 @@
 #define MODULE_INVOLVED_IN_ARM3
 #include <mm/ARM3/miarm.h>
 
+#ifndef IMAGE_FILE_MACHINE_ARM64EC
+#define IMAGE_FILE_MACHINE_ARM64EC 0xA641
+#endif
+
+#ifdef _M_ARM64
+typedef struct _MI_IMAGE_ARM64EC_METADATA
+{
+    ULONG Version;
+    ULONG CodeMap;
+    ULONG CodeMapCount;
+    ULONG CodeRangesToEntryPoints;
+    ULONG RedirectionMetadata;
+    ULONG DispatchCallNoRedirect;
+    ULONG DispatchRet;
+    ULONG DispatchCall;
+    ULONG DispatchIcall;
+    ULONG DispatchIcallCfg;
+    ULONG AlternateEntryPoint;
+    ULONG AuxiliaryIat;
+    ULONG CodeRangesToEntryPointsCount;
+    ULONG RedirectionMetadataCount;
+    ULONG GetX64InformationFunctionPointer;
+    ULONG SetX64InformationFunctionPointer;
+    ULONG ExtraRfeTable;
+    ULONG ExtraRfeTableSize;
+    ULONG DispatchFptr;
+    ULONG AuxiliaryIatCopy;
+    ULONG Helper[9];
+} MI_IMAGE_ARM64EC_METADATA, *PMI_IMAGE_ARM64EC_METADATA;
+
+typedef struct _MI_IMAGE_CHPE_RANGE_ENTRY
+{
+    ULONG StartOffset;
+    ULONG Length;
+} MI_IMAGE_CHPE_RANGE_ENTRY, *PMI_IMAGE_CHPE_RANGE_ENTRY;
+
+typedef struct _MI_IMAGE_ARM64EC_REDIRECTION_ENTRY
+{
+    ULONG Source;
+    ULONG Destination;
+} MI_IMAGE_ARM64EC_REDIRECTION_ENTRY, *PMI_IMAGE_ARM64EC_REDIRECTION_ENTRY;
+
+typedef struct _MI_IMAGE_LOAD_CONFIG_CODE_INTEGRITY
+{
+    USHORT Flags;
+    USHORT Catalog;
+    ULONG CatalogOffset;
+    ULONG Reserved;
+} MI_IMAGE_LOAD_CONFIG_CODE_INTEGRITY, *PMI_IMAGE_LOAD_CONFIG_CODE_INTEGRITY;
+
+typedef struct _MI_IMAGE_LOAD_CONFIG_DIRECTORY64_CHPE
+{
+    ULONG Size;
+    ULONG TimeDateStamp;
+    USHORT MajorVersion;
+    USHORT MinorVersion;
+    ULONG GlobalFlagsClear;
+    ULONG GlobalFlagsSet;
+    ULONG CriticalSectionDefaultTimeout;
+    ULONGLONG DeCommitFreeBlockThreshold;
+    ULONGLONG DeCommitTotalFreeThreshold;
+    ULONGLONG LockPrefixTable;
+    ULONGLONG MaximumAllocationSize;
+    ULONGLONG VirtualMemoryThreshold;
+    ULONGLONG ProcessAffinityMask;
+    ULONG ProcessHeapFlags;
+    USHORT CSDVersion;
+    USHORT DependentLoadFlags;
+    ULONGLONG EditList;
+    ULONGLONG SecurityCookie;
+    ULONGLONG SEHandlerTable;
+    ULONGLONG SEHandlerCount;
+    ULONGLONG GuardCFCheckFunctionPointer;
+    ULONGLONG GuardCFDispatchFunctionPointer;
+    ULONGLONG GuardCFFunctionTable;
+    ULONGLONG GuardCFFunctionCount;
+    ULONG GuardFlags;
+    MI_IMAGE_LOAD_CONFIG_CODE_INTEGRITY CodeIntegrity;
+    ULONGLONG GuardAddressTakenIatEntryTable;
+    ULONGLONG GuardAddressTakenIatEntryCount;
+    ULONGLONG GuardLongJumpTargetTable;
+    ULONGLONG GuardLongJumpTargetCount;
+    ULONGLONG DynamicValueRelocTable;
+    ULONGLONG CHPEMetadataPointer;
+} MI_IMAGE_LOAD_CONFIG_DIRECTORY64_CHPE, *PMI_IMAGE_LOAD_CONFIG_DIRECTORY64_CHPE;
+#endif
+
 /* GLOBALS ********************************************************************/
 
 LIST_ENTRY PsLoadedModuleList;
@@ -45,6 +132,121 @@ ULONG_PTR MmPteCodeStart, MmPteCodeEnd;
 #endif
 
 /* FUNCTIONS ******************************************************************/
+
+#ifdef _M_ARM64
+static
+PMI_IMAGE_ARM64EC_METADATA
+NTAPI
+MiGetArm64EcMetadata(
+    _In_ PVOID ImageBase,
+    _In_ PIMAGE_NT_HEADERS NtHeaders)
+{
+    PMI_IMAGE_LOAD_CONFIG_DIRECTORY64_CHPE LoadConfig;
+    ULONG ConfigSize, SizeOfImage;
+    ULONG_PTR ImageStart, ImageEnd, Candidate;
+    PMI_IMAGE_ARM64EC_METADATA Metadata;
+
+    if (NtHeaders->FileHeader.Machine != IMAGE_FILE_MACHINE_AMD64 &&
+        NtHeaders->FileHeader.Machine != IMAGE_FILE_MACHINE_ARM64EC)
+    {
+        return NULL;
+    }
+
+    SizeOfImage = NtHeaders->OptionalHeader.SizeOfImage;
+    if (SizeOfImage < sizeof(*Metadata))
+        return NULL;
+
+    ImageStart = (ULONG_PTR)ImageBase;
+    ImageEnd = ImageStart + SizeOfImage;
+    if (ImageEnd < ImageStart)
+        return NULL;
+
+    LoadConfig = RtlImageDirectoryEntryToData(ImageBase,
+                                              TRUE,
+                                              IMAGE_DIRECTORY_ENTRY_LOAD_CONFIG,
+                                              &ConfigSize);
+    if (!LoadConfig ||
+        ConfigSize < RTL_SIZEOF_THROUGH_FIELD(MI_IMAGE_LOAD_CONFIG_DIRECTORY64_CHPE,
+                                              CHPEMetadataPointer))
+    {
+        return NULL;
+    }
+
+    Candidate = (ULONG_PTR)LoadConfig->CHPEMetadataPointer;
+    if (Candidate < ImageStart ||
+        Candidate > ImageEnd - sizeof(*Metadata))
+    {
+        return NULL;
+    }
+
+    Metadata = (PMI_IMAGE_ARM64EC_METADATA)Candidate;
+    if (Metadata->Version != 1 ||
+        !Metadata->CodeMap ||
+        !Metadata->CodeMapCount ||
+        Metadata->CodeMap >= SizeOfImage ||
+        Metadata->CodeMapCount >
+        (SizeOfImage - Metadata->CodeMap) / sizeof(MI_IMAGE_CHPE_RANGE_ENTRY))
+    {
+        return NULL;
+    }
+
+    return Metadata;
+}
+
+BOOLEAN
+NTAPI
+MmGetArm64EcNativeSystemDllEntryPoint(
+    _In_ PVOID ImageBase,
+    _In_ PVOID EntryPoint,
+    _Out_ PVOID *NativeEntryPoint)
+{
+    PIMAGE_NT_HEADERS NtHeaders;
+    ULONG Index;
+    ULONG SizeOfImage;
+    ULONG_PTR EntryPointRva;
+    PMI_IMAGE_ARM64EC_METADATA Metadata;
+    PMI_IMAGE_ARM64EC_REDIRECTION_ENTRY Redirection;
+
+    NtHeaders = RtlImageNtHeader(ImageBase);
+    if (!NtHeaders ||
+        (ULONG_PTR)EntryPoint < (ULONG_PTR)ImageBase)
+    {
+        return FALSE;
+    }
+
+    SizeOfImage = NtHeaders->OptionalHeader.SizeOfImage;
+    EntryPointRva = (ULONG_PTR)EntryPoint - (ULONG_PTR)ImageBase;
+    if (EntryPointRva >= SizeOfImage || EntryPointRva > MAXULONG)
+        return FALSE;
+
+    Metadata = MiGetArm64EcMetadata(ImageBase, NtHeaders);
+    if (!Metadata ||
+        !Metadata->RedirectionMetadata ||
+        !Metadata->RedirectionMetadataCount ||
+        Metadata->RedirectionMetadata >= SizeOfImage ||
+        Metadata->RedirectionMetadataCount >
+        (SizeOfImage - Metadata->RedirectionMetadata) / sizeof(*Redirection))
+    {
+        return FALSE;
+    }
+
+    Redirection = (PMI_IMAGE_ARM64EC_REDIRECTION_ENTRY)
+        ((PUCHAR)ImageBase + Metadata->RedirectionMetadata);
+    for (Index = 0; Index < Metadata->RedirectionMetadataCount; Index++)
+    {
+        if (Redirection[Index].Source == (ULONG)EntryPointRva)
+        {
+            if (Redirection[Index].Destination >= SizeOfImage)
+                return FALSE;
+
+            *NativeEntryPoint = (PUCHAR)ImageBase + Redirection[Index].Destination;
+            return TRUE;
+        }
+    }
+
+    return FALSE;
+}
+#endif
 
 PVOID
 NTAPI
@@ -2769,10 +2971,12 @@ MmVerifyImageIsOkForMpUse(
 }
 #endif // CONFIG_SMP
 
+static
 NTSTATUS
 NTAPI
-MmCheckSystemImage(
-    _In_ HANDLE ImageHandle)
+MiCheckSystemImage(
+    _In_ HANDLE ImageHandle,
+    _In_ BOOLEAN AllowArm64Ec)
 {
     NTSTATUS Status;
     HANDLE SectionHandle;
@@ -2783,6 +2987,7 @@ MmCheckSystemImage(
     KAPC_STATE ApcState;
     PIMAGE_NT_HEADERS NtHeaders;
     OBJECT_ATTRIBUTES ObjectAttributes;
+    USHORT ImageMachine;
     PAGED_CODE();
 
     /* Setup the object attributes */
@@ -2858,7 +3063,20 @@ MmCheckSystemImage(
         }
 
         /* Make sure it's for the correct architecture */
-        if ((NtHeaders->FileHeader.Machine != IMAGE_FILE_MACHINE_NATIVE) ||
+        ImageMachine = NtHeaders->FileHeader.Machine;
+#ifdef _M_ARM64
+        if (AllowArm64Ec &&
+            ImageMachine == IMAGE_FILE_MACHINE_AMD64 &&
+            MiGetArm64EcMetadata(ViewBase, NtHeaders))
+        {
+            ImageMachine = IMAGE_FILE_MACHINE_ARM64EC;
+        }
+#endif
+        if (((ImageMachine != IMAGE_FILE_MACHINE_NATIVE)
+#ifdef _M_ARM64
+            && !(AllowArm64Ec && ImageMachine == IMAGE_FILE_MACHINE_ARM64EC)
+#endif
+            ) ||
             (NtHeaders->OptionalHeader.Magic != IMAGE_NT_OPTIONAL_HDR_MAGIC))
         {
             /* Set protection failure */
@@ -2882,6 +3100,22 @@ Fail:
     KeUnstackDetachProcess(&ApcState);
     ZwClose(SectionHandle);
     return Status;
+}
+
+NTSTATUS
+NTAPI
+MmCheckSystemImage(
+    _In_ HANDLE ImageHandle)
+{
+    return MiCheckSystemImage(ImageHandle, FALSE);
+}
+
+NTSTATUS
+NTAPI
+MmCheckSystemDllImage(
+    _In_ HANDLE ImageHandle)
+{
+    return MiCheckSystemImage(ImageHandle, TRUE);
 }
 
 

@@ -69,6 +69,7 @@ RunSetupThreadProc(
     DWORD dwExitCode;
 
     TRACE("RunSetup() called\n");
+    DbgPrint("WL: RunSetup thread start\n");
 
     /* Open key */
     dwError = RegOpenKeyExW(HKEY_LOCAL_MACHINE,
@@ -77,7 +78,10 @@ RunSetupThreadProc(
                             KEY_QUERY_VALUE,
                             &hKey);
     if (dwError != ERROR_SUCCESS)
+    {
+        DbgPrint("WL: failed to open setup key, error %lu\n", dwError);
         return FALSE;
+    }
 
     /* Read key */
     dwSize = sizeof(Shell);
@@ -89,7 +93,10 @@ RunSetupThreadProc(
                                &dwSize);
     RegCloseKey(hKey);
     if (dwError != ERROR_SUCCESS)
+    {
+        DbgPrint("WL: failed to read setup command line, error %lu\n", dwError);
         return FALSE;
+    }
 
     /* Finish string */
     Shell[dwSize / sizeof(WCHAR)] = UNICODE_NULL;
@@ -100,9 +107,13 @@ RunSetupThreadProc(
     else if (dwType == REG_SZ)
         wcscpy(CommandLine, Shell);
     else
+    {
+        DbgPrint("WL: unsupported setup command line type %lu\n", dwType);
         return FALSE;
+    }
 
     TRACE("Should run '%s' now\n", debugstr_w(CommandLine));
+    DbgPrint("WL: setup command line '%S'\n", CommandLine);
 
     SwitchDesktop(WLSession->ApplicationDesktop);
 
@@ -127,15 +138,19 @@ RunSetupThreadProc(
                             &ProcessInformation);
     if (!Result)
     {
-        TRACE("Failed to run setup process\n");
+        DbgPrint("WL: failed to run setup process, error %lu\n", GetLastError());
         SwitchDesktop(WLSession->WinlogonDesktop);
         return FALSE;
     }
+    DbgPrint("WL: setup process started pid=%lu thread=%lu\n",
+            ProcessInformation.dwProcessId,
+            ProcessInformation.dwThreadId);
 
     /* Wait for process termination */
     WaitForSingleObject(ProcessInformation.hProcess, INFINITE);
 
     GetExitCodeProcess(ProcessInformation.hProcess, &dwExitCode);
+    DbgPrint("WL: setup process exited code=0x%08lx\n", dwExitCode);
 
     /* Close handles */
     CloseHandle(ProcessInformation.hThread);
@@ -160,8 +175,13 @@ RunSetup(VOID)
                            NULL,
                            0,
                            NULL);
+    if (hThread == NULL)
+        DbgPrint("WL: CreateThread for setup failed, error %lu\n", GetLastError());
     if (hThread != NULL)
+    {
+        DbgPrint("WL: setup thread created handle=%p\n", hThread);
         CloseHandle(hThread);
+    }
 
     return hThread != NULL;
 }

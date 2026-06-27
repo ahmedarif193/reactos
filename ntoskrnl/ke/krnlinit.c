@@ -212,6 +212,10 @@ KiInitSpinLocks(IN PKPRCB Prcb,
     KeInitializeDpc(&Prcb->CallDpc, NULL, NULL);
     KeSetTargetProcessorDpc(&Prcb->CallDpc, Number);
     KeSetImportanceDpc(&Prcb->CallDpc, HighImportance);
+#ifdef _M_ARM64
+    KeInitializeDpc(&Prcb->TimerExpirationDpc, KiTimerExpiration, NULL);
+    KeSetTargetProcessorDpc(&Prcb->TimerExpirationDpc, Number);
+#endif
 
     /* Initialize the Wait List Head */
     InitializeListHead(&Prcb->WaitListHead);
@@ -252,6 +256,13 @@ KiInitSpinLocks(IN PKPRCB Prcb,
     Prcb->LockQueue[LockQueueUnusedSpare16].Next = NULL;
     Prcb->LockQueue[LockQueueUnusedSpare16].Lock = NULL;
 
+#ifdef _M_ARM64
+    if (!Number)
+    {
+        for (i = 0; i < LOCK_QUEUE_TIMER_TABLE_LOCKS; i++)
+            KeInitializeSpinLock(&KiTimerTableLock[i]);
+    }
+#else
     /* Loop timer locks (shared amongst all CPUs) */
     for (i = 0; i < LOCK_QUEUE_TIMER_TABLE_LOCKS; i++)
     {
@@ -264,6 +275,7 @@ KiInitSpinLocks(IN PKPRCB Prcb,
         Prcb->LockQueue[LockQueueTimerTableLock + i].Lock =
             &KiTimerTableLock[i];
     }
+#endif
 
     /* Initialize the PRCB lock */
     KeInitializeSpinLock(&Prcb->PrcbLock);

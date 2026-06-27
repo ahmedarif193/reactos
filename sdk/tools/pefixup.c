@@ -130,6 +130,19 @@ static int add_loadconfig(unsigned char *buffer, PIMAGE_NT_HEADERS nt_header)
 
 static int driver_fixup(enum fixup_mode mode, unsigned char *buffer, PIMAGE_NT_HEADERS nt_header)
 {
+    /*
+     * Strip IMAGE_FILE_DLL from kernel drivers. lld with mingw drivers
+     * default to producing a .sys with the DLL bit set (because it was
+     * built like a shared library); Win11 ARM64's kernel image loader
+     * rejects that as STATUS_INVALID_IMAGE_FORMAT (0xC1 ERROR_BAD_EXE_FORMAT).
+     * Real Windows kernel drivers are executable images, not DLLs.
+     */
+    if (mode == MODE_KERNELDRIVER || mode == MODE_WDMDRIVER)
+    {
+        /* IMAGE_FILE_DLL = 0x2000 (avoid header drift between host & target PE.h). */
+        nt_header->FileHeader.Characteristics &= ~0x2000;
+    }
+
     /* GNU LD just doesn't know what a driver is, and has notably no idea of paged vs non-paged sections */
     for (unsigned int i = 0; i < nt_header->FileHeader.NumberOfSections; i++)
     {

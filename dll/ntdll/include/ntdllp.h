@@ -23,6 +23,9 @@
 /* Page heap flags */
 #define DPH_FLAG_DLL_NOTIFY 0x40
 
+/* Wine-compatible ntdll CRT errno TLS slot. */
+#define NTDLL_TLS_ERRNO 16
+
 typedef struct _LDRP_TLS_DATA
 {
     LIST_ENTRY TlsLinks;
@@ -221,6 +224,7 @@ LdrpGetResidentSize(PIMAGE_NT_HEADERS NTHeaders);
 NTSTATUS
 NTAPI
 LdrpLoadImportModule(IN PWSTR DllPath OPTIONAL,
+                     IN PVOID ImportBase,
                      IN LPSTR ImportName,
                      OUT PLDR_DATA_TABLE_ENTRY *DataTableEntry,
                      OUT PBOOLEAN Existing);
@@ -262,7 +266,7 @@ RtlpInitializeThreadPooling(
     VOID);
 
 /* CHPE (ARM64EC) emulator integration -- chpe.c */
-#if defined(_M_ARM64)
+#if defined(_M_ARM64) || defined(_M_ARM64EC)
 
 BOOLEAN
 NTAPI
@@ -301,6 +305,18 @@ NTAPI
 ChpeDispatchException(
     PEXCEPTION_RECORD ExceptionRecord,
     PCONTEXT Context);
+
+VOID
+NTAPI
+ChpeArm64ContextToArm64Ec(
+    _Out_ PARM64EC_NT_CONTEXT Arm64EcContext,
+    _In_ PARM64_NT_CONTEXT Arm64Context);
+
+VOID
+NTAPI
+ChpeArm64EcContextToArm64(
+    _Inout_ PARM64_NT_CONTEXT Arm64Context,
+    _In_ PARM64EC_NT_CONTEXT Arm64EcContext);
 
 VOID
 NTAPI
@@ -358,6 +374,28 @@ NTAPI
 ChpeShouldEmulateImage(
     PVOID ImageBase);
 
+USHORT
+NTAPI
+ChpeGetImageMachine(
+    PVOID ImageBase);
+
+BOOLEAN
+NTAPI
+ChpeShouldRedirectImport(
+    PVOID ImportBase,
+    PUNICODE_STRING ImportName);
+
+NTSTATUS
+NTAPI
+ChpeValidateImportThunk(
+    PVOID ImportBase,
+    PVOID ExportBase,
+    ULONG_PTR Function,
+    PCSTR DllName,
+    PCSTR ImportName,
+    ULONG Ordinal,
+    BOOLEAN IsOrdinal);
+
 BOOLEAN
 NTAPI
 ChpeRegisterArm64EcImage(
@@ -365,10 +403,41 @@ ChpeRegisterArm64EcImage(
 
 BOOLEAN
 NTAPI
+ChpeRegisterImageCodeRanges(
+    PVOID ImageBase);
+
+BOOLEAN
+NTAPI
+ChpeMarkEcCodeRange(
+    PVOID Address,
+    SIZE_T Length);
+
+BOOLEAN
+NTAPI
+RtlIsEcCode(
+    ULONG_PTR CodeAddress);
+
+BOOLEAN
+NTAPI
 ChpeGetArm64EcRedirection(
     PVOID ImageBase,
     ULONG_PTR SourceRva,
     PULONG_PTR DestinationRva);
+
+BOOLEAN
+NTAPI
+ChpePatchArm64ImportThunk(
+    PVOID ImportBase,
+    PVOID ExportBase,
+    PIMAGE_THUNK_DATA Thunk);
+
+BOOLEAN
+NTAPI
+ChpePatchArm64EcAuxiliaryIat(
+    PVOID ImportBase,
+    PVOID ExportBase,
+    PIMAGE_THUNK_DATA Thunk,
+    ULONG_PTR Function);
 
 BOOLEAN
 NTAPI
@@ -384,6 +453,6 @@ ChpeRtlUserThreadStart(
     PVOID StartAddress,
     PVOID Parameter);
 
-#endif /* _M_ARM64 */
+#endif /* _M_ARM64 || _M_ARM64EC */
 
 /* EOF */

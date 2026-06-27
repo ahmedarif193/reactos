@@ -20,7 +20,7 @@ int
 __cdecl
 __isa_available_init(void)
 {
-#if defined(_M_IX86) || defined(_M_X64)
+#if _VCRT_X86_INTRINSICS
     if (IsProcessorFeaturePresent(PF_AVX512F_INSTRUCTIONS_AVAILABLE))
     {
         __isa_available = __ISA_AVAILABLE_AVX512;
@@ -45,11 +45,11 @@ __isa_available_init(void)
     {
         __isa_available = __ISA_AVAILABLE_X86;
     }
-#elif defined(_M_ARM) || defined(_M_ARM64)
+#elif defined(_M_ARM) || _VCRT_ARM64_INTRINSICS
     // CHECKME: Is this correct?
     if (IsProcessorFeaturePresent(PF_ARM_V8_INSTRUCTIONS_AVAILABLE))
     {
-#ifdef _M_ARM64
+#if _VCRT_ARM64_INTRINSICS
         __isa_available = __ISA_AVAILABLE_NEON_ARM64;
 #else
         __isa_available = __ISA_AVAILABLE_NEON;

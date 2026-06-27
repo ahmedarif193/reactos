@@ -2794,7 +2794,7 @@ KdbpCmdPcr(
 #else
 #ifdef _M_ARM64
     KdbpPrint("  Self:                          0x%p\n", Pcr->Self);
-    KdbpPrint("  CurrentPrcb:                   0x%p\n", Pcr->CurrentPrcb);
+    KdbpPrint("  CurrentPrcb:                   0x%p\n", (PVOID)&Pcr->Prcb);
     KdbpPrint("  LockArray:                     0x%p\n", Pcr->LockArray);
     KdbpPrint("  Used_Self:                     0x%p\n", Pcr->Used_Self);
     KdbpPrint("  CurrentIrql:                   %u\n", Pcr->CurrentIrql);

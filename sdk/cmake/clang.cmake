@@ -50,7 +50,7 @@ if(USE_DUMMY_PSEH)
     add_definitions(-D_USE_DUMMY_PSEH=1)
 endif()
 
-if((ARCH STREQUAL "amd64" OR ARCH STREQUAL "arm64") AND NOT USE_DUMMY_PSEH)
+if(ARCH_HAS_NATIVE_SEH AND NOT USE_DUMMY_PSEH)
     add_definitions(-D_USE_NATIVE_SEH=1)
 endif()
 
@@ -170,7 +170,7 @@ if(ARCH STREQUAL "i386")
     endif()
 elseif(ARCH STREQUAL "amd64")
     add_compile_options(-Wno-error)
-elseif(ARCH STREQUAL "arm64")
+elseif(ARCH_USES_ARM64_CODEGEN)
     add_compile_options(-fno-optimize-sibling-calls -fno-omit-frame-pointer -mstrict-align)
 endif()
 
@@ -205,6 +205,8 @@ elseif(ARCH STREQUAL "arm")
     set(LLVM_DLLTOOL_MACHINE arm)
 elseif(ARCH STREQUAL "arm64")
     set(LLVM_DLLTOOL_MACHINE arm64)
+elseif(ARCH STREQUAL "arm64ec")
+    set(LLVM_DLLTOOL_MACHINE arm64ec)
 endif()
 set(_target_tool_triplet ${CMAKE_C_COMPILER_TARGET})
 
@@ -269,18 +271,19 @@ set(CMAKE_CXX_COMPILE_OBJECT "<CMAKE_CXX_COMPILER> <DEFINES>${_reactos_cppstl_pr
 set(CMAKE_ASM_COMPILE_OBJECT "<CMAKE_ASM_COMPILER> ${_compress_debug_sections_flag} -x assembler-with-cpp -o <OBJECT> -I${REACTOS_SOURCE_DIR}/sdk/include/asm -I${REACTOS_BINARY_DIR}/sdk/include/asm <INCLUDES> <FLAGS> <DEFINES> -D__ASM__ -c <SOURCE>")
 
 set(_rc_target_flag)
+set(RC_PREPROCESSOR_TARGET "--preprocessor-arg=--target=${CMAKE_C_COMPILER_TARGET}")
 if(ARCH STREQUAL "i386")
     set(_rc_target_flag "--target=pe-i386")
 elseif(ARCH STREQUAL "amd64")
     set(_rc_target_flag "--target=pe-x86-64")
-elseif(ARCH STREQUAL "arm64")
+elseif(ARCH STREQUAL "arm64ec")
+    set(RC_PREPROCESSOR_TARGET "")
+elseif(ARCH_USES_ARM64_CODEGEN)
     # The toolchain file selects aarch64-w64-mingw32-windres before RC is
     # enabled, because changing CMAKE_RC_COMPILER here invalidates the cache.
 endif()
 
 set(CMAKE_RC_COMPILE_OBJECT "<CMAKE_RC_COMPILER> ${_rc_target_flag} -O coff <INCLUDES> <FLAGS> -DRC_INVOKED -D__WIN32__=1 -D__FLAT__=1 ${I18N_DEFS} <DEFINES> <SOURCE> <OBJECT>")
-
-set(RC_PREPROCESSOR_TARGET "--preprocessor-arg=--target=${CMAKE_C_COMPILER_TARGET}")
 
 # We have to pass args to windres. one... by... one...
 set(CMAKE_DEPFILE_FLAGS_RC "--preprocessor=\"${CMAKE_C_COMPILER}\" ${RC_PREPROCESSOR_TARGET} --preprocessor-arg=-E --preprocessor-arg=-nostdlibinc --preprocessor-arg=-xc-header --preprocessor-arg=-MMD --preprocessor-arg=-MF --preprocessor-arg=<DEPFILE> --preprocessor-arg=-MT --preprocessor-arg=<OBJECT>")
@@ -308,14 +311,170 @@ function(set_image_base MODULE IMAGE_BASE)
     target_link_options(${MODULE} PRIVATE "-Wl,--image-base,${IMAGE_BASE}")
 endfunction()
 
+function(reactos_translate_target_link_library OUT_VAR MODULE LIBRARY)
+    set(_translated_library "${LIBRARY}")
+
+    if(ARCH STREQUAL "arm64ec")
+        get_target_property(_arm64ec_native ${MODULE} REACTOS_ARM64EC_NATIVE)
+        if(_arm64ec_native)
+            set(_arm64ec_dual_abi_libraries
+                blcmlib
+                blrtl
+                chkstk
+                copysup
+                cryptlib
+                dmilib
+                dx10guid
+                dxguid
+                hidparser_km
+                libcntpr
+                libsamplerate
+                memcmp
+                mmixer
+                poguid
+                pseh
+                rdbsslib
+                rtlver
+                rxce
+                sdbuslib
+                setjmp
+                sptilib
+                strmiids
+                stdunk
+                uuid
+                wdfdriverentry
+                wdmguid
+                zlib_solo)
+
+            if("${LIBRARY}" STREQUAL "libgcc" AND TARGET libgcc_native)
+                set(_translated_library libgcc_native)
+            elseif("${LIBRARY}" IN_LIST _arm64ec_dual_abi_libraries)
+                set(_translated_library "${LIBRARY}_native")
+            elseif(TARGET "${LIBRARY}_native")
+                set(_translated_library "${LIBRARY}_native")
+            elseif(TARGET "${LIBRARY}")
+                get_target_property(_linked_type "${LIBRARY}" TYPE)
+                get_target_property(_linked_imported "${LIBRARY}" IMPORTED)
+                if(NOT _linked_imported AND
+                   (_linked_type STREQUAL "STATIC_LIBRARY" OR _linked_type STREQUAL "OBJECT_LIBRARY"))
+                    set_arm64ec_native_target("${LIBRARY}")
+                endif()
+            endif()
+        endif()
+    endif()
+
+    set(${OUT_VAR} "${_translated_library}" PARENT_SCOPE)
+endfunction()
+
+function(_rewrite_arm64ec_native_link_libraries MODULE PROPERTY_NAME)
+    get_target_property(_link_libraries ${MODULE} ${PROPERTY_NAME})
+    if(NOT _link_libraries OR _link_libraries STREQUAL "_link_libraries-NOTFOUND")
+        return()
+    endif()
+
+    set(_translated_libraries)
+    foreach(_library IN LISTS _link_libraries)
+        reactos_translate_target_link_library(_translated_library ${MODULE} "${_library}")
+        list(APPEND _translated_libraries "${_translated_library}")
+    endforeach()
+
+    set_target_properties(${MODULE} PROPERTIES ${PROPERTY_NAME} "${_translated_libraries}")
+endfunction()
+
+function(set_arm64ec_native_target MODULE)
+    if(NOT ARCH STREQUAL "arm64ec")
+        return()
+    endif()
+
+    get_target_property(_already_native ${MODULE} REACTOS_ARM64EC_NATIVE)
+    if(_already_native)
+        return()
+    endif()
+
+    get_target_property(_target_imported ${MODULE} IMPORTED)
+    if(_target_imported)
+        return()
+    endif()
+
+    set_target_properties(${MODULE} PROPERTIES REACTOS_ARM64EC_NATIVE TRUE)
+    target_compile_options(${MODULE} PRIVATE
+        $<$<COMPILE_LANGUAGE:C,CXX,ASM>:--target=aarch64-w64-mingw32>
+        -U_AMD64_ -U_M_AMD64 -U_M_X64
+        -U_ARM64EC_ -U_M_ARM64EC -U__arm64ec__
+        -U__x86_64__ -U__x86_64 -U__amd64__
+        -D_ARM64_ -D_M_ARM64 -D__arm64__ -D__aarch64__)
+
+    get_target_property(_native_sources ${MODULE} SOURCES)
+    if(_native_sources)
+        foreach(_native_source_file IN LISTS _native_sources)
+            if(_native_source_file MATCHES "\\.rc$")
+                set_source_files_properties(${_native_source_file} PROPERTIES
+                    COMPILE_FLAGS "--target=arm64 --preprocessor-arg=--target=aarch64-w64-mingw32")
+            endif()
+        endforeach()
+    endif()
+
+    get_target_property(_target_type ${MODULE} TYPE)
+    if(NOT _target_type STREQUAL "STATIC_LIBRARY" AND
+       NOT _target_type STREQUAL "OBJECT_LIBRARY" AND
+       NOT _target_type STREQUAL "INTERFACE_LIBRARY")
+        target_link_options(${MODULE} PRIVATE --target=aarch64-w64-mingw32)
+    endif()
+
+    _rewrite_arm64ec_native_link_libraries(${MODULE} LINK_LIBRARIES)
+    _rewrite_arm64ec_native_link_libraries(${MODULE} INTERFACE_LINK_LIBRARIES)
+endfunction()
+
+function(add_arm64ec_chpe_support MODULE)
+    if(NOT ARCH STREQUAL "arm64ec")
+        return()
+    endif()
+
+    get_target_property(_arm64ec_native ${MODULE} REACTOS_ARM64EC_NATIVE)
+    if(_arm64ec_native)
+        return()
+    endif()
+
+    get_target_property(_chpe_added ${MODULE} REACTOS_ARM64EC_CHPE_ADDED)
+    if(_chpe_added)
+        return()
+    endif()
+
+    get_target_property(_arm64ec_module_sources ${MODULE} SOURCES)
+    set(_arm64ec_has_c_link_language FALSE)
+    foreach(_source_file IN LISTS _arm64ec_module_sources)
+        if(_source_file MATCHES "\\.(c|cc|cpp|cxx)$")
+            set(_arm64ec_has_c_link_language TRUE)
+        endif()
+    endforeach()
+    if(NOT _arm64ec_has_c_link_language)
+        set_target_properties(${MODULE} PROPERTIES LINKER_LANGUAGE C)
+    endif()
+
+    target_sources(${MODULE} PRIVATE ${REACTOS_SOURCE_DIR}/sdk/lib/vcruntime/arm64ec/chpe.S)
+    set_target_properties(${MODULE} PROPERTIES REACTOS_ARM64EC_CHPE_ADDED TRUE)
+endfunction()
+
 function(set_module_type_toolchain MODULE TYPE)
     # Set the PE image version numbers from the NT OS version ReactOS is based on
     target_link_options(${MODULE} PRIVATE
-        -Wl,--major-image-version,5 -Wl,--minor-image-version,01 -Wl,--major-os-version,5 -Wl,--minor-os-version,01)
+        -Wl,--major-image-version,${_NT_MAJOR} -Wl,--minor-image-version,0${_NT_MINOR} -Wl,--major-os-version,${_NT_MAJOR} -Wl,--minor-os-version,0${_NT_MINOR})
+
+    if(ARCH STREQUAL "arm64ec" AND TYPE IN_LIST KERNEL_MODULE_TYPES)
+        set_arm64ec_native_target(${MODULE})
+    endif()
+
+    if(ARCH STREQUAL "arm64ec" AND NOT TYPE IN_LIST KERNEL_MODULE_TYPES)
+        add_arm64ec_chpe_support(${MODULE})
+    endif()
 
     # Clang's _setjmp builtin on x64 lowers to __intrinsic_setjmp which must be
     # statically linked (it captures the caller's frame, so a DLL export won't work).
-    target_link_libraries(${MODULE} setjmp)
+    if(ARCH STREQUAL "arm64ec" AND TYPE IN_LIST KERNEL_MODULE_TYPES)
+        target_link_libraries(${MODULE} setjmp_native)
+    else()
+        target_link_libraries(${MODULE} setjmp)
+    endif()
 
     if(TYPE IN_LIST KERNEL_MODULE_TYPES)
         if(${TYPE} STREQUAL "kmdfdriver")
@@ -373,10 +532,10 @@ function(fixup_load_config _target)
         DEPENDS native-pefixup)
 endfunction()
 
-function(generate_import_lib _libname _dllname _spec_file __version_arg __dbg_arg)
+function(generate_import_lib_for_machine _libname _dllname _spec_file _arch _machine __version_arg __dbg_arg)
     add_custom_command(
         OUTPUT ${CMAKE_CURRENT_BINARY_DIR}/${_libname}_implib.def
-        COMMAND native-spec2def ${__version_arg} ${__dbg_arg} -n=${_dllname} -a=${ARCH2} ${ARGN} --implib -d=${CMAKE_CURRENT_BINARY_DIR}/${_libname}_implib.def ${CMAKE_CURRENT_SOURCE_DIR}/${_spec_file}
+        COMMAND native-spec2def ${__version_arg} ${__dbg_arg} -n=${_dllname} -a=${_arch} ${ARGN} --implib -d=${CMAKE_CURRENT_BINARY_DIR}/${_libname}_implib.def ${CMAKE_CURRENT_SOURCE_DIR}/${_spec_file}
         DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/${_spec_file} native-spec2def)
 
     # llvm-dlltool uses short flags: -d (def), -k (kill-at), -l (output-lib), -m (machine)
@@ -384,7 +543,7 @@ function(generate_import_lib _libname _dllname _spec_file __version_arg __dbg_ar
     add_custom_command(
         OUTPUT ${LIBRARY_PRIVATE_DIR}/${_libname}.a
         COMMAND ${CMAKE_COMMAND} -E rm -f ${LIBRARY_PRIVATE_DIR}/${_libname}.a
-        COMMAND ${CMAKE_DLLTOOL} -d ${CMAKE_CURRENT_BINARY_DIR}/${_libname}_implib.def -k -l ${_libname}.a -m ${LLVM_DLLTOOL_MACHINE} -t ${_libname}
+        COMMAND ${CMAKE_DLLTOOL} -d ${CMAKE_CURRENT_BINARY_DIR}/${_libname}_implib.def -k -l ${_libname}.a -m ${_machine} -t ${_libname}
         DEPENDS ${CMAKE_CURRENT_BINARY_DIR}/${_libname}_implib.def
         WORKING_DIRECTORY ${LIBRARY_PRIVATE_DIR})
 
@@ -393,7 +552,15 @@ function(generate_import_lib _libname _dllname _spec_file __version_arg __dbg_ar
     _add_library(${_libname} STATIC IMPORTED GLOBAL)
     set_target_properties(${_libname} PROPERTIES IMPORTED_LOCATION ${LIBRARY_PRIVATE_DIR}/${_libname}.a)
     add_dependencies(${_libname} ${_libname}_implib_target)
+endfunction()
 
+function(generate_import_lib _libname _dllname _spec_file __version_arg __dbg_arg)
+    generate_import_lib_for_machine(${_libname} ${_dllname} ${_spec_file} ${ARCH2} ${LLVM_DLLTOOL_MACHINE} "${__version_arg}" "${__dbg_arg}" ${ARGN})
+
+    if(ARCH STREQUAL "arm64ec")
+        generate_import_lib_for_machine(${_libname}_native ${_dllname} ${_spec_file} arm64 arm64 "${__version_arg}" "${__dbg_arg}" ${ARGN})
+        set_target_properties(${_libname}_native PROPERTIES REACTOS_ARM64EC_NATIVE TRUE)
+    endif()
 endfunction()
 
 function(spec2def _dllname _spec_file)
@@ -645,7 +812,7 @@ endfunction()
         set(_clang_builtins_name libclang_rt.builtins-x86_64.a)
     elseif(ARCH STREQUAL "arm")
         set(_clang_builtins_name libclang_rt.builtins-arm.a)
-    elseif(ARCH STREQUAL "arm64")
+    elseif(ARCH_USES_ARM64_CODEGEN)
         set(_clang_builtins_name libclang_rt.builtins-aarch64.a)
     else()
         message(FATAL_ERROR "Unsupported ARCH for llvm-mingw runtime: ${ARCH}")
@@ -698,6 +865,8 @@ endfunction()
 
     add_library(libgcc INTERFACE)
     target_link_libraries(libgcc INTERFACE ${_clang_rt_builtins} libkernel32)
+    add_library(libgcc_native INTERFACE)
+    target_link_libraries(libgcc_native INTERFACE ${_clang_rt_builtins})
     link_libraries(${_clang_rt_builtins})
     add_link_options(-Wl,--allow-multiple-definition)
     add_compile_options(

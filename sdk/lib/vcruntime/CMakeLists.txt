@@ -81,7 +81,7 @@ elseif(${ARCH} STREQUAL "arm")
         arm/__longjmp_noframe.s
         arm/_setjmp.s
     )
-elseif(${ARCH} STREQUAL "arm64")
+elseif(ARCH_USES_ARM64_CODEGEN)
     list(APPEND VCRT_SETJMP_SOURCES
         arm64/longjmp.c
     )
@@ -95,6 +95,11 @@ add_asm_files(vcrt_setjmp_asm ${VCRT_SETJMP_ASM_SOURCES})
 # Separate library, so we can link it to ftfd
 add_library(setjmp ${VCRT_SETJMP_SOURCES} ${vcrt_setjmp_asm})
 add_dependencies(setjmp psdk asm)
+if(ARCH STREQUAL "arm64ec" AND COMMAND set_arm64ec_native_target)
+    add_library(setjmp_native ${VCRT_SETJMP_SOURCES} ${vcrt_setjmp_asm})
+    set_arm64ec_native_target(setjmp_native)
+    add_dependencies(setjmp_native psdk asm)
+endif()
 
 list(APPEND VCRT_RUNTIME_SOURCES
     ${vcrt_runtime_asm}

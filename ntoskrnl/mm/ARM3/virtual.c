@@ -1725,8 +1725,22 @@ MiQueryAddressState(IN PVOID Va,
             /* The PTE is valid, so it's not zeroed out */
             DemandZeroPte = FALSE;
 
-            /* Is it a decommited, invalid, or faulted PTE? */
-            if ((TempPte.u.Soft.Protection == MM_DECOMMIT) &&
+            if ((TempPte.u.Soft.Valid == 0) &&
+                (TempPte.u.Soft.Prototype == 1) &&
+                (Vad->u.VadFlags.PrivateMemory == 0) &&
+                (Vad->ControlArea))
+            {
+                ProtoPte = MI_GET_PROTOTYPE_PTE_FOR_VPN(Vad,
+                                                        (ULONG_PTR)Va >> PAGE_SHIFT);
+                TempProtoPte = *ProtoPte;
+                if (TempProtoPte.u.Long)
+                {
+                    State = MEM_COMMIT;
+                    ASSERT(Vad->u.VadFlags.VadType != VadImageMap);
+                    Protect = MmProtectToValue[Vad->u.VadFlags.Protection];
+                }
+            }
+            else if ((TempPte.u.Soft.Protection == MM_DECOMMIT) &&
                 (TempPte.u.Hard.Valid == 0) &&
                 ((TempPte.u.Soft.Prototype == 0) ||
                  (TempPte.u.Soft.PageFileHigh == MI_PTE_LOOKUP_NEEDED)))
@@ -1747,16 +1761,6 @@ MiQueryAddressState(IN PVOID Va,
 
                 /* Get protection state of this page */
                 Protect = MiGetPageProtection(PointerPte);
-
-                /* Check if this is an image-backed VAD */
-                if ((TempPte.u.Soft.Valid == 0) &&
-                    (TempPte.u.Soft.Prototype == 1) &&
-                    (Vad->u.VadFlags.PrivateMemory == 0) &&
-                    (Vad->ControlArea))
-                {
-                    DPRINT1("Not supported\n");
-                    ASSERT(FALSE);
-                }
             }
         }
     }
@@ -2071,7 +2075,6 @@ MiQueryMemoryBasicInformation(IN HANDLE ProcessHandle,
         MemoryInfo.BaseAddress = Address;
         MemoryInfo.AllocationBase = (PVOID)(Vad->StartingVpn << PAGE_SHIFT);
         MemoryInfo.AllocationProtect = MmProtectToValue[Vad->u.VadFlags.Protection];
-        MemoryInfo.Type = MEM_PRIVATE;
 
         /* Acquire the working set lock (shared is enough) */
         MiLockProcessWorkingSetShared(TargetProcess, PsGetCurrentThread());
@@ -4824,11 +4827,13 @@ NtAllocateVirtualMemory(IN HANDLE ProcessHandle,
         return STATUS_INVALID_PARAMETER_4;
     }
 
+#ifndef _WIN64
     if (PRegionSize >= MAXULONG)
     {
         DPRINT1("Region size is too large\n");
         return STATUS_INVALID_PARAMETER_4;
     }
+#endif
 
     /* Make sure there's a size specified */
     if (!PRegionSize)

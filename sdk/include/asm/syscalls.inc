@@ -1,4 +1,10 @@
 
+#if defined(_M_ARM64) || defined(_M_ARM64EC)
+#define SYSCALLS_ARM64_STUBS 1
+#else
+#define SYSCALLS_ARM64_STUBS 0
+#endif
+
 #ifdef _M_ARM
 
 #include <ksarm.h>
@@ -46,7 +52,7 @@ $NtFuncEndName
 $ZwFuncEndName
 	MEND
 
-#elif defined(_M_ARM64)
+#elif SYSCALLS_ARM64_STUBS
 
 #include <ksarm64.h>
 

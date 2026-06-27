@@ -19,6 +19,8 @@ Author:
 #ifndef _ARCH_MMTYPES_H
 #define _ARCH_MMTYPES_H
 
+#include <arch/target.h>
+
 //
 // Include the right file for this architecture.
 //
@@ -28,10 +30,10 @@ Author:
 #include <powerpc/mmtypes.h>
 #elif defined(_M_ARM)
 #include <arm/mmtypes.h>
-#elif  defined(_M_AMD64)
-#include <amd64/mmtypes.h>
-#elif  defined(_M_ARM64)
+#elif NDK_TARGET_ARM64_ABI
 #include <arm64/mmtypes.h>
+#elif NDK_TARGET_AMD64_ABI
+#include <amd64/mmtypes.h>
 #else
 #error "Unknown processor"
 #endif

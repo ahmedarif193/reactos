@@ -619,6 +619,22 @@ PspExitThread(IN NTSTATUS ExitStatus)
                DbgkExitThread(ExitStatus);
     }
 
+    if (Last ||
+        (RtlCompareMemory(CurrentProcess->ImageFileName,
+                          "winlogon.exe",
+                          sizeof("winlogon.exe") - 1) ==
+         sizeof("winlogon.exe") - 1))
+    {
+        DPRINT1("[arm64ec] PspExitThread proc=%s thread=%p status=0x%08lx last=%u process-status=0x%08lx break-process=%u break-thread=%u\n",
+                CurrentProcess->ImageFileName,
+                Thread,
+                ExitStatus,
+                Last,
+                CurrentProcess->ExitStatus,
+                CurrentProcess->BreakOnTermination,
+                Thread->BreakOnTermination);
+    }
+
     /* Check if this is a Critical Thread */
     if ((KdDebuggerEnabled) && (Thread->BreakOnTermination))
     {

@@ -43,7 +43,21 @@
 #include "include/limits.h"
 #include "include/locale.h"
 #include "include/math.h"
-#if defined(_M_IX86) || defined(_M_X64) || defined(_M_AMD64)
+#include "include/target.h"
+
+#if MSVCRT_TARGET_X86_FLOAT_STATE
+#define MSVCRT_INCLUDE_XMMINTRIN 1
+#else
+#define MSVCRT_INCLUDE_XMMINTRIN 0
+#endif
+
+#if defined(__REACTOS__) && !MSVCRT_TARGET_ARM64EC_CODEGEN
+#define MSVCRT_USE_REACTOS_SSE_ATTRIBUTE 1
+#else
+#define MSVCRT_USE_REACTOS_SSE_ATTRIBUTE 0
+#endif
+
+#if MSVCRT_INCLUDE_XMMINTRIN
 #include <xmmintrin.h>
 #endif
 
@@ -198,7 +212,7 @@ int CDECL _set_FMA3_enable(int flag)
 # endif
 #endif
 
-#if !defined(__i386__) || _MSVCR_VER>=120
+#if !MSVCRT_TARGET_I386_CODEGEN || _MSVCR_VER>=120
 
 /*********************************************************************
  *      _chgsignf (MSVCRT.@)
@@ -283,18 +297,18 @@ static BOOL sqrtf_validate( float *x )
     return TRUE;
 }
 
-#ifdef __arm64ec__
+#if MSVCRT_TARGET_ARM64EC_CODEGEN
 static float __attribute__((naked)) CDECL asm_sqrtf(float x)
 {
     asm( "fsqrt s0,s0; ret" );
 }
-#elif defined __aarch64__
+#elif MSVCRT_TARGET_NATIVE_ARM64_CODEGEN
 float CDECL asm_sqrtf(float);
 __ASM_GLOBAL_FUNC( asm_sqrtf, "fsqrt s0,s0; ret" )
-#elif defined __arm__
+#elif MSVCRT_TARGET_ARM_CODEGEN
 float CDECL asm_sqrtf(float);
 __ASM_GLOBAL_FUNC( asm_sqrtf, "vsqrt s0,s0; bx lr" )
-#elif defined __x86_64__
+#elif MSVCRT_TARGET_AMD64_CODEGEN
 float CDECL asm_sqrtf(float);
 __ASM_GLOBAL_FUNC( asm_sqrtf, "sqrtss %xmm0, %xmm0; ret" )
 #endif
@@ -425,18 +439,18 @@ static BOOL sqrt_validate( double *x, BOOL update_sw )
     return TRUE;
 }
 
-#ifdef __arm64ec__
+#if MSVCRT_TARGET_ARM64EC_CODEGEN
 static double __attribute__((naked)) CDECL asm_sqrt(double x)
 {
     asm( "fsqrt d0,d0; ret" );
 }
-#elif defined __aarch64__
+#elif MSVCRT_TARGET_NATIVE_ARM64_CODEGEN
 double CDECL asm_sqrt(double);
 __ASM_GLOBAL_FUNC( asm_sqrt, "fsqrt d0,d0; ret" )
-#elif defined __arm__
+#elif MSVCRT_TARGET_ARM_CODEGEN
 double CDECL asm_sqrt(double);
 __ASM_GLOBAL_FUNC( asm_sqrt, "vsqrt d0,d0; bx lr" )
-#elif defined __x86_64__
+#elif MSVCRT_TARGET_AMD64_CODEGEN
 double CDECL asm_sqrt(double);
 __ASM_GLOBAL_FUNC( asm_sqrt, "sqrtsd %xmm0, %xmm0; ret" )
 #elif defined __i386__
@@ -475,7 +489,7 @@ double CDECL MSVCRT_tanh( double x )
 }
 #endif
 
-#if (defined(__GNUC__) || defined(__clang__)) && defined(__i386__)
+#if MSVCRT_TARGET_GNU_I386_CODEGEN
 
 #define CREATE_FPU_FUNC1(name, call) \
     __ASM_GLOBAL_FUNC(name, \
@@ -589,7 +603,7 @@ __ASM_GLOBAL_FUNC(_ftol,
         __ASM_CFI(".cfi_same_value %ebp\n\t")
         "ret")
 
-#endif /* (defined(__GNUC__) || defined(__clang__)) && defined(__i386__) */
+#endif /* MSVCRT_TARGET_GNU_I386_CODEGEN */
 
 #ifndef __REACTOS__
 /*********************************************************************
@@ -716,7 +730,7 @@ __int64 CDECL _abs64( __int64 n )
     return n >= 0 ? n : -n;
 }
 
-#if defined(__i386__) || defined(__x86_64__)
+#if MSVCRT_TARGET_X86_FLOAT_STATE
 #ifdef _MSC_VER
 #define get_mxcsr() _mm_getcsr()
 #define set_mxcsr(val) _mm_setcsr(val)
@@ -724,7 +738,7 @@ __int64 CDECL _abs64( __int64 n )
 static unsigned int get_mxcsr(void)
 {
     unsigned int ret;
-#ifdef __arm64ec__
+#if MSVCRT_TARGET_ARM64EC_CODEGEN
     extern NTSTATUS (*__os_arm64x_get_x64_information)(ULONG,void*,void*);
     __os_arm64x_get_x64_information( 0, &ret, NULL );
 #else
@@ -735,7 +749,7 @@ static unsigned int get_mxcsr(void)
 
 static void set_mxcsr( unsigned int val )
 {
-#ifdef __arm64ec__
+#if MSVCRT_TARGET_ARM64EC_CODEGEN
     extern NTSTATUS (*__os_arm64x_set_x64_information)(ULONG,ULONG_PTR,void*);
     __os_arm64x_set_x64_information( 0, val, NULL );
 #else
@@ -744,7 +758,7 @@ static void set_mxcsr( unsigned int val )
 }
 #endif
 
-#ifdef __REACTOS__
+#if MSVCRT_USE_REACTOS_SSE_ATTRIBUTE
 __ATTRIBUTE_SSE__
 #endif
 static void _setfp_sse( unsigned int *cw, unsigned int cw_mask,
@@ -845,7 +859,7 @@ static void _setfp_sse( unsigned int *cw, unsigned int cw_mask,
 static void _setfp( unsigned int *cw, unsigned int cw_mask,
         unsigned int *sw, unsigned int sw_mask )
 {
-#if (defined(__GNUC__) || defined(__clang__) || defined(_MSC_VER)) && defined(__i386__)
+#if MSVCRT_TARGET_COMPILER_I386_CODEGEN
     unsigned long oldcw = 0, newcw = 0;
     unsigned long oldsw = 0, newsw = 0;
     unsigned int flags;
@@ -983,9 +997,9 @@ static void _setfp( unsigned int *cw, unsigned int cw_mask,
 #else
         __asm__ __volatile__( "fldcw %0" : : "m" (newcw) );
 #endif
-#elif defined(__x86_64__)
+#elif MSVCRT_TARGET_X64_FLOAT_STATE
     _setfp_sse(cw, cw_mask, sw, sw_mask);
-#elif defined(__aarch64__)
+#elif MSVCRT_TARGET_NATIVE_ARM64_CODEGEN
     ULONG_PTR old_fpsr = 0, fpsr = 0, old_fpcr = 0, fpcr = 0;
     unsigned int flags;
 
@@ -1141,7 +1155,7 @@ static void _setfp( unsigned int *cw, unsigned int cw_mask,
 /**********************************************************************
  *		_statusfp2 (MSVCR80.@)
  */
-#if defined(__i386__)
+#if MSVCRT_TARGET_I386_CODEGEN
 void CDECL _statusfp2( unsigned int *x86_sw, unsigned int *sse2_sw )
 {
     if (x86_sw)
@@ -1159,7 +1173,7 @@ void CDECL _statusfp2( unsigned int *x86_sw, unsigned int *sse2_sw )
 unsigned int CDECL _statusfp(void)
 {
     unsigned int flags = 0;
-#if defined(__i386__)
+#if MSVCRT_TARGET_I386_CODEGEN
     unsigned int x86_sw, sse2_sw;
 
     _statusfp2( &x86_sw, &sse2_sw );
@@ -1268,7 +1282,7 @@ int CDECL __control87_2( unsigned int newval, unsigned int mask,
 unsigned int CDECL _control87(unsigned int newval, unsigned int mask)
 {
     unsigned int flags = 0;
-#if defined(__i386__) && (_MSVCR_VER == 0 || _MSVCR_VER >= 80)
+#if MSVCRT_TARGET_I386_CODEGEN && (_MSVCR_VER == 0 || _MSVCR_VER >= 80)
     unsigned int sse2_cw;
 
     __control87_2( newval, mask, &flags, &sse2_cw );
@@ -1320,7 +1334,7 @@ int CDECL _controlfp_s(unsigned int *cur, unsigned int newval, unsigned int mask
     return 0;
 }
 
-#if _MSVCR_VER >= 140 && (defined(__i386__) || defined(__x86_64__))
+#if _MSVCR_VER >= 140 && MSVCRT_TARGET_X86_FLOAT_STATE
 enum fenv_masks
 {
     FENV_X_INVALID = 0x00100010,
@@ -1441,7 +1455,7 @@ static BOOL fenv_decode(__msvcrt_ulong enc, unsigned int *x, unsigned int *y)
  */
 int CDECL fegetenv(fenv_t *env)
 {
-#if _MSVCR_VER>=140 && defined(__i386__)
+#if _MSVCR_VER>=140 && MSVCRT_TARGET_I386_CODEGEN
     unsigned int x87, sse;
     __control87_2(0, 0, &x87, &sse);
     env->_Fe_ctl = fenv_encode(x87, sse);
@@ -1526,7 +1540,7 @@ int CDECL feclearexcept(int flags)
  */
 int CDECL fegetexceptflag(fexcept_t *status, int excepts)
 {
-#if _MSVCR_VER>=140 && defined(__i386__)
+#if _MSVCR_VER>=140 && MSVCRT_TARGET_I386_CODEGEN
     unsigned int x87, sse;
     _statusfp2(&x87, &sse);
     *status = fenv_encode(x87 & excepts, sse & excepts);
@@ -1593,7 +1607,7 @@ int CDECL _finite(double num)
  */
 void CDECL _fpreset(void)
 {
-#if (defined(__GNUC__) || defined(__clang__)) && defined(__i386__)
+#if MSVCRT_TARGET_GNU_I386_CODEGEN
     const unsigned int x86_cw = 0x27f;
     __asm__ __volatile__( "fninit; fldcw %0" : : "m" (x86_cw) );
     if (sse2_supported)
@@ -2896,7 +2910,7 @@ float CDECL _scalbf(float num, __msvcrt_long power)
  */
 double CDECL MSVCRT_remainder(double x, double y)
 {
-#ifdef __x86_64__
+#if MSVCRT_TARGET_X64_FLOAT_STATE
     if (isnan(x) || isnan(y)) *_errno() = EDOM;
 #endif
     return remainder(x, y);
@@ -2907,7 +2921,7 @@ double CDECL MSVCRT_remainder(double x, double y)
  */
 float CDECL MSVCRT_remainderf(float x, float y)
 {
-#ifdef __x86_64__
+#if MSVCRT_TARGET_X64_FLOAT_STATE
     if (isnan(x) || isnan(y)) *_errno() = EDOM;
 #endif
     return remainderf(x, y);

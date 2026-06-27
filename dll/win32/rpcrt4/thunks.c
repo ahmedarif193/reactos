@@ -142,6 +142,36 @@ __ASM_GLOBAL_FUNC( call_stubless_func,
     ".long " __ASM_NAME("call_stubless_func") "-1f\n" \
     "1:\n\t"
 
+#elif defined __arm64ec__
+
+__ASM_GLOBAL_FUNC( call_stubless_func,
+                   "stp x29, x30, [sp, #-0x50]!\n\t"
+                   ".seh_save_fplr_x 0x50\n\t"
+                   "stp x19, x20, [sp, #0x10]\n\t"
+                   ".seh_save_regp x19, 0x10\n\t"
+                   ".seh_endprologue\n\t"
+                   "mov x29, sp\n\t"
+                   "stp x0, x1, [x4, #-0x20]!\n\t"
+                   "stp x2, x3, [x4, #0x10]\n\t"
+                   "str d0, [sp, #0x20]\n\t"
+                   "str d1, [sp, #0x28]\n\t"
+                   "str d2, [sp, #0x30]\n\t"
+                   "str d3, [sp, #0x38]\n\t"
+                   "mov w0, w16\n\t"            /* index */
+                   "mov x1, x4\n\t"             /* args */
+                   "add x2, sp, #0x20\n\t"      /* fpu_regs */
+                   "bl \"#ndr_stubless_client_call\"\n\t"
+                   "mov sp, x29\n\t"
+                   "ldp x19, x20, [sp, #0x10]\n\t"
+                   "ldp x29, x30, [sp], #0x50\n\t"
+                   "ret" )
+
+#define T(num) \
+    ".globl ObjectStublessClient" #num "\n" \
+    "ObjectStublessClient" #num ":\n\t" \
+    "mov w16,#"#num"\n\t" \
+    "b call_stubless_func\n\t"
+
 #elif defined __x86_64__
 
 __ASM_GLOBAL_FUNC( call_stubless_func,
@@ -254,6 +284,19 @@ __ASM_GLOBAL_FUNC( stubless_thunks, ALL_THUNK_ENTRIES )
     ".byte 0xff,0xa0\n\t" /* jmp *offset(%eax) */ \
     ".long 4*"#num"\n\t"
 
+#elif defined __arm64ec__
+
+#define T(num)                                                             \
+    __attribute__((naked)) void NdrProxyForwardingFunction##num(void)      \
+    {                                                                      \
+        __asm__(                                                           \
+            "ldr x0, [x0, #0x20]\n\t"                                      \
+            "ldr x16, [x0]\n\t"                                            \
+            "mov x17, #" #num "\n\t"                                       \
+            "ldr x16, [x16, x17, lsl #3]\n\t"                              \
+            "br x16\n\t");                                                \
+    }
+
 #elif defined __x86_64__
 
 #define T(num) \
@@ -288,7 +331,11 @@ __ASM_GLOBAL_FUNC( stubless_thunks, ALL_THUNK_ENTRIES )
 
 #endif  /* __i386__ */
 
+#ifdef __arm64ec__
+ALL_THUNK_ENTRIES
+#else
 __ASM_GLOBAL_FUNC( vtbl_thunks, ALL_THUNK_ENTRIES )
+#endif
 
 #undef T
 
@@ -442,6 +489,40 @@ __ASM_GLOBAL_FUNC( call_server_func,
                    "popl %ebp\n\t"
                    __ASM_CFI(".cfi_def_cfa %esp,4\n\t")
                    __ASM_CFI(".cfi_same_value %ebp\n\t")
+                   "ret" )
+#elif defined __arm64ec__
+__ASM_GLOBAL_FUNC( call_server_func,
+                   "stp x29, x30, [sp, #-0x20]!\n\t"
+                   ".seh_save_fplr_x 0x20\n\t"
+                   "stp x19, x20, [sp, #0x10]\n\t"
+                   ".seh_save_regp x19, 0x10\n\t"
+                   ".seh_endprologue\n\t"
+                   "mov x29, sp\n\t"
+                   "mov x19, x0\n\t"       /* func */
+                   "mov x20, x1\n\t"       /* args */
+                   "mov x9, #32\n\t"
+                   "cmp x2, x9\n\t"
+                   "csel x9, x2, x9, hi\n\t"
+                   "add x9, x9, #15\n\t"
+                   "and x9, x9, #0xfffffffffffffff0\n\t"
+                   "sub sp, sp, x9\n\t"
+                   "mov x10, sp\n\t"
+                   "mov x11, x20\n\t"
+                   "lsr x12, x9, #3\n"
+                   "1:\tldr x15, [x11], #8\n\t"
+                   "str x15, [x10], #8\n\t"
+                   "subs x12, x12, #1\n\t"
+                   "b.ne 1b\n\t"
+                   "ldp x0, x1, [sp]\n\t"
+                   "ldp x2, x3, [sp, #0x10]\n\t"
+                   "ldr d0, [sp]\n\t"
+                   "ldr d1, [sp, #0x8]\n\t"
+                   "ldr d2, [sp, #0x10]\n\t"
+                   "ldr d3, [sp, #0x18]\n\t"
+                   "blr x19\n\t"
+                   "mov sp, x29\n\t"
+                   "ldp x19, x20, [sp, #0x10]\n\t"
+                   "ldp x29, x30, [sp], #0x20\n\t"
                    "ret" )
 #elif defined __x86_64__
 __ASM_GLOBAL_FUNC( call_server_func,

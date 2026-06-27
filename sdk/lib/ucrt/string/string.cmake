@@ -109,7 +109,7 @@ else()
     list(APPEND UCRT_STRING_SOURCES
         string/arm/strlen.c
     )
-    if(${ARCH} STREQUAL "arm64")
+    if(ARCH_USES_ARM64_CODEGEN)
         list(APPEND UCRT_STRING_SOURCES
             string/arm64/wcslen.c
         )

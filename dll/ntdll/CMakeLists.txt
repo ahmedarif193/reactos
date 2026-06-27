@@ -51,7 +51,7 @@ elseif(ARCH STREQUAL "amd64")
         compat/amd64/msys2.S)
 elseif(ARCH STREQUAL "arm")
     list(APPEND ASM_SOURCE dispatch/arm/stubs_asm.s)
-elseif(ARCH STREQUAL "arm64")
+elseif(ARCH STREQUAL "arm64" OR ARCH STREQUAL "arm64ec")
     list(APPEND ASM_SOURCE dispatch/arm64/dispatch.S)
     list(APPEND SOURCE dispatch/dispatch.c)
 else()
@@ -68,7 +68,16 @@ if(ARCH STREQUAL "arm64")
         arm64/ehandler.c
         arm64/stubs.c
         chpe.c
-        chpewrap.c)
+        chpewrap.c
+        rtl/errno.c)
+elseif(ARCH STREQUAL "arm64ec")
+    list(APPEND SOURCE
+        arm64ec/ehandler.c
+        arm64ec/msys2.c
+        arm64/stubs.c
+        chpe.c
+        chpewrap.c
+        rtl/errno.c)
 endif()
 
 add_library(ntdll MODULE
@@ -85,6 +94,9 @@ set_subsystem(ntdll console)
 ################# END  HACK #################
 
 target_link_libraries(ntdll ntdll_vista_static etwtrace csrlib rtl rtl_um rtl_vista ntdllsys libcntpr setjmp uuid ${PSEH_LIB})
+if(ARCH_USES_ARM64_CODEGEN)
+    target_link_libraries(ntdll chkstk)
+endif()
 if(DLL_EXPORT_VERSION GREATER_EQUAL 0x600)
     target_link_libraries(ntdll cryptlib)
 endif()

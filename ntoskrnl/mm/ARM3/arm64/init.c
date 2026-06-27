@@ -19,6 +19,10 @@
 #define ARM64_PTE_ADDR_MASK     0x0000FFFFFFFFF000ULL
 /* TTBR1 contains ASID in bits[63:48] when TCR.A1=1; mask to PA bits. */
 #define MI_ARM64_TTBR_TO_PA(_Ttbr) ((UINT64)(_Ttbr) & ARM64_PTE_ADDR_MASK)
+/* Freeldr reserves 16 pages for the boot PCR, which embeds the PRCB. */
+#define MI_ARM64_BOOT_PCR_MAPPING_SIZE (16 * PAGE_SIZE)
+
+C_ASSERT(sizeof(KIPCR) <= MI_ARM64_BOOT_PCR_MAPPING_SIZE);
 
 BOOLEAN MiArm64PfnFinalizePending = FALSE;
 BOOLEAN MiArm64SelfMapReady = FALSE;
@@ -660,9 +664,9 @@ MiArm64MapLoaderProcessorState(
     }
 
     MiArm64MapKseg0IdentityRange((PVOID)(ULONG_PTR)Arm64Block->PcrPage,
-                                 8 * PAGE_SIZE);
+                                 MI_ARM64_BOOT_PCR_MAPPING_SIZE);
     MiArm64MapEarlyAliasRange((PVOID)(ULONG_PTR)Arm64Block->PcrPage,
-                              8 * PAGE_SIZE);
+                              MI_ARM64_BOOT_PCR_MAPPING_SIZE);
 
     if (LoaderBlock->KernelStack != 0)
     {

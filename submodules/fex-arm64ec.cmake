@@ -3,10 +3,11 @@
 # This builds FEX's arm64ecfex.dll from the FEX submodule using FEX's own
 # CMake build system as an external project, then deploys the resulting DLL.
 #
-# Disabled by default. Configure with -DENABLE_FEX_ARM64EC=ON.
+# Disabled by default on pure ARM64. ARM64EC builds enable it by default
+# because their AMD64 user-mode entry points need the emulator at startup.
 
-if(NOT ARCH STREQUAL "arm64")
-    message(FATAL_ERROR "FEX ARM64EC module is only supported on ARM64 builds")
+if(NOT (ARCH STREQUAL "arm64" OR ARCH STREQUAL "arm64ec"))
+    message(FATAL_ERROR "FEX ARM64EC module is only supported on ARM64/ARM64EC builds")
 endif()
 
 set(FEX_UPSTREAM_DIR "${REACTOS_SOURCE_DIR}/submodules/fex-arm64ec")
@@ -25,7 +26,7 @@ endif()
 
 if(NOT EXISTS "${FEX_SOURCE_DIR}/CMakeLists.txt")
     message(FATAL_ERROR "Prepared FEX ARM64EC source not found at ${FEX_SOURCE_DIR}. "
-        "Run configure.sh for the ARM64 build with -DENABLE_FEX_ARM64EC=ON")
+        "Run configure.sh for the ARM64/ARM64EC build with -DENABLE_FEX_ARM64EC=ON")
 endif()
 
 include(ExternalProject)
@@ -115,6 +116,60 @@ add_cd_file(
 add_dependencies(bootcd fex-arm64ec-build)
 add_dependencies(livecd fex-arm64ec-build)
 
+set(FEX_ARM64EC_DLL_BUILD_DIR
+    "${REACTOS_SOURCE_DIR}/output-Clang-arm64ec-debug"
+    CACHE PATH "Optional ARM64EC build tree with x64-callable user DLLs")
+
+set(FEX_ARM64EC_IMPORT_DLL_PATHS
+    dll/3rdparty/libpng/libpng.dll
+    dll/win32/advapi32/advapi32.dll
+    dll/win32/comctl32/comctl32.dll
+    dll/win32/comdlg32/comdlg32.dll
+    dll/win32/kernel32/kernel32.dll
+    dll/win32/msvcrt/msvcrt.dll
+    dll/win32/shell32/shell32.dll
+    dll/win32/ucrtbase/ucrtbase.dll
+    dll/win32/usp10/usp10.dll
+    win32ss/gdi/gdi32/gdi32.dll
+    win32ss/user/user32/user32.dll)
+
+set(FEX_ARM64EC_IMPORT_DLL_OUTPUTS)
+foreach(_fex_arm64ec_dll_path IN LISTS FEX_ARM64EC_IMPORT_DLL_PATHS)
+    set(_fex_arm64ec_dll_src "${FEX_ARM64EC_DLL_BUILD_DIR}/${_fex_arm64ec_dll_path}")
+    get_filename_component(_fex_arm64ec_dll_name "${_fex_arm64ec_dll_path}" NAME)
+    set(_fex_arm64ec_dll_dest "${CMAKE_CURRENT_BINARY_DIR}/arm64ec/${_fex_arm64ec_dll_name}")
+
+    if(EXISTS "${_fex_arm64ec_dll_src}")
+        add_custom_command(
+            OUTPUT "${_fex_arm64ec_dll_dest}"
+            COMMAND ${CMAKE_COMMAND} -E make_directory
+                "${CMAKE_CURRENT_BINARY_DIR}/arm64ec"
+            COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                "${_fex_arm64ec_dll_src}"
+                "${_fex_arm64ec_dll_dest}"
+            DEPENDS "${_fex_arm64ec_dll_src}"
+            COMMENT "Copying ARM64EC ${_fex_arm64ec_dll_name} for CHPE import redirection")
+
+        list(APPEND FEX_ARM64EC_IMPORT_DLL_OUTPUTS "${_fex_arm64ec_dll_dest}")
+
+        add_cd_file(
+            FILE "${_fex_arm64ec_dll_dest}"
+            DESTINATION reactos/system32/arm64ec
+            NAME_ON_CD "${_fex_arm64ec_dll_name}"
+            NO_CAB
+            FOR all)
+    else()
+        message(STATUS "FEX ARM64EC: optional ARM64EC DLL missing: ${_fex_arm64ec_dll_src}")
+    endif()
+endforeach()
+
+if(FEX_ARM64EC_IMPORT_DLL_OUTPUTS)
+    add_custom_target(fex-arm64ec-import-dlls
+        DEPENDS ${FEX_ARM64EC_IMPORT_DLL_OUTPUTS})
+    add_dependencies(bootcd fex-arm64ec-import-dlls)
+    add_dependencies(livecd fex-arm64ec-import-dlls)
+endif()
+
 set(FEX_ARM64EC_AMD64_TEST_BINARY
     "${REACTOS_SOURCE_DIR}/output-Clang-amd64-debug/modules/rostests/win32/cmd/cmd_rostest.exe"
     CACHE FILEPATH "Optional AMD64 test binary to deploy as cmd_rostest_x64.exe")
@@ -165,6 +220,58 @@ if(EXISTS "${FEX_ARM64EC_AMD64_NTDLL_APITEST_BINARY}")
         NO_CAB
         FOR all)
     message(STATUS "FEX ARM64EC: AMD64 ntdll apitest binary = ${FEX_ARM64EC_AMD64_NTDLL_APITEST_BINARY}")
+endif()
+
+set(FEX_ARM64EC_AMD64_NOTEPAD_BINARY
+    "${REACTOS_SOURCE_DIR}/output-Clang-amd64-debug/base/applications/notepad/notepad.exe"
+    CACHE FILEPATH "Optional AMD64 GUI test binary to deploy as notepad_x64.exe")
+
+if(EXISTS "${FEX_ARM64EC_AMD64_NOTEPAD_BINARY}")
+    set(FEX_ARM64EC_AMD64_NOTEPAD_DEST "${CMAKE_CURRENT_BINARY_DIR}/notepad_x64.exe")
+    add_custom_command(
+        OUTPUT "${FEX_ARM64EC_AMD64_NOTEPAD_DEST}"
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            "${FEX_ARM64EC_AMD64_NOTEPAD_BINARY}"
+            "${FEX_ARM64EC_AMD64_NOTEPAD_DEST}"
+        COMMENT "Copying optional AMD64 notepad.exe for GUI CHPE testing")
+    add_custom_target(fex-arm64ec-amd64-notepad-binary
+        DEPENDS "${FEX_ARM64EC_AMD64_NOTEPAD_DEST}")
+    add_dependencies(bootcd fex-arm64ec-amd64-notepad-binary)
+    add_dependencies(livecd fex-arm64ec-amd64-notepad-binary)
+
+    add_cd_file(
+        FILE "${FEX_ARM64EC_AMD64_NOTEPAD_DEST}"
+        DESTINATION reactos/system32
+        NAME_ON_CD notepad_x64.exe
+        NO_CAB
+        FOR all)
+    message(STATUS "FEX ARM64EC: AMD64 notepad binary = ${FEX_ARM64EC_AMD64_NOTEPAD_BINARY}")
+endif()
+
+set(FEX_ARM64EC_AMD64_CALC_BINARY
+    "${REACTOS_SOURCE_DIR}/output-Clang-amd64-debug/base/applications/calc/calc.exe"
+    CACHE FILEPATH "Optional AMD64 GUI test binary to deploy as calc_x64.exe")
+
+if(EXISTS "${FEX_ARM64EC_AMD64_CALC_BINARY}")
+    set(FEX_ARM64EC_AMD64_CALC_DEST "${CMAKE_CURRENT_BINARY_DIR}/calc_x64.exe")
+    add_custom_command(
+        OUTPUT "${FEX_ARM64EC_AMD64_CALC_DEST}"
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            "${FEX_ARM64EC_AMD64_CALC_BINARY}"
+            "${FEX_ARM64EC_AMD64_CALC_DEST}"
+        COMMENT "Copying optional AMD64 calc.exe for GUI CHPE testing")
+    add_custom_target(fex-arm64ec-amd64-calc-binary
+        DEPENDS "${FEX_ARM64EC_AMD64_CALC_DEST}")
+    add_dependencies(bootcd fex-arm64ec-amd64-calc-binary)
+    add_dependencies(livecd fex-arm64ec-amd64-calc-binary)
+
+    add_cd_file(
+        FILE "${FEX_ARM64EC_AMD64_CALC_DEST}"
+        DESTINATION reactos/system32
+        NAME_ON_CD calc_x64.exe
+        NO_CAB
+        FOR all)
+    message(STATUS "FEX ARM64EC: AMD64 calc binary = ${FEX_ARM64EC_AMD64_CALC_BINARY}")
 endif()
 
 message(STATUS "FEX ARM64EC: submodule   = ${FEX_UPSTREAM_DIR}")

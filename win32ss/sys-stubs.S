@@ -11,7 +11,7 @@
 
     END
 
-#elif defined(_M_ARM64)
+#elif SYSCALLS_ARM64_STUBS
 
     .text
     .set SyscallId, 0x1000
@@ -33,7 +33,7 @@ SyscallId = HEX(1000)
 #include "w32ksvc32.h"
 #endif
 
-#ifndef _M_ARM64
+#if !SYSCALLS_ARM64_STUBS
     END
 #endif
 #endif

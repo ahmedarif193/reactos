@@ -5,7 +5,7 @@ if(ARCH STREQUAL "i386")
         i386/seh_prolog.s)
 endif()
 
-if(MSVC OR ((CMAKE_C_COMPILER_ID STREQUAL "Clang") AND ((ARCH STREQUAL "amd64") OR (ARCH STREQUAL "arm64"))))
+if(MSVC OR ((CMAKE_C_COMPILER_ID STREQUAL "Clang") AND ARCH_HAS_NATIVE_SEH))
     list(APPEND SOURCE dummy.c)
     add_asm_files(pseh_asm ${ASM_SOURCE})
     add_library(pseh ${SOURCE} ${pseh_asm})
@@ -49,6 +49,17 @@ else()
 endif()
 
 target_include_directories(pseh INTERFACE include)
+
+if(ARCH STREQUAL "arm64ec" AND COMMAND set_arm64ec_native_target)
+    get_target_property(_pseh_type pseh TYPE)
+    if(_pseh_type STREQUAL "STATIC_LIBRARY")
+        add_library(pseh_native ${SOURCE} ${pseh_asm} ${ASM_SOURCE})
+        set_arm64ec_native_target(pseh_native)
+        add_dependencies(pseh_native psdk asm)
+        target_include_directories(pseh_native INTERFACE include)
+        target_include_directories(pseh_native PRIVATE include/pseh)
+    endif()
+endif()
 
 # Make it clear that we are using PSEH2
 if ((CMAKE_C_COMPILER_ID STREQUAL "GNU") OR

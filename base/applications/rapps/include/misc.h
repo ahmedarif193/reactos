@@ -10,7 +10,7 @@
 #elif defined(_M_ARM)
 #define CurrentArchitecture L"arm"
 #elif defined(_M_ARM64)
-#define CurrentArchitecture L"arm64"
+#define CurrentArchitecture L"amd64"
 #elif defined(_M_IA64)
 #define CurrentArchitecture L"ia64"
 #elif defined(_M_PPC)

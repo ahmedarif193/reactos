@@ -21,10 +21,19 @@
 #define ARM64_PTE_ADDR_MASK 0x0000FFFFFFFFF000ULL
 #endif
 
+#define ESR_EC_WFX_TRAP 0x01
+#define ESR_EC_MSR_MRS 0x18
 #define ESR_EC_BRK 0x3C
+#define ESR_WFX_ISS_TI_WFE 0x1
 #define ARM64_PREVIOUS_MODE_COOKIE 0x50564D00UL
 #define ARM64_PREVIOUS_MODE_MASK   0xFFFFFF00UL
 #define ARM64_PREVIOUS_MODE_VALUE  0x000000FFUL
+
+#define ARM64_MRS_CNTFRQ_EL0    0xD53BE000UL
+#define ARM64_MRS_CNTPCT_EL0    0xD53BE020UL
+#define ARM64_MRS_CNTVCT_EL0    0xD53BE040UL
+#define ARM64_MRS_TPIDRRO_EL0   0xD53BD060UL
+#define ARM64_MRS_SYSREG_MASK   0xFFFFFFE0UL
 
 /* Forward declaration for SError handler */
 BOOLEAN NTAPI KiSErrorHandler(_In_ PKTRAP_FRAME TrapFrame);
@@ -721,7 +730,7 @@ KiSwapProcess(_Inout_ PKPROCESS NewProcess,
         PKIPCR Pcr = KeGetPcr();
         if (Pcr != NULL)
         {
-            KAFFINITY Member = Pcr->Prcb.SetMember;
+            KAFFINITY Member = Pcr->Prcb.GroupSetMember;
 
             NewProcess->ActiveProcessors ^= Member;
             if (OldProcess != NULL)
@@ -777,6 +786,81 @@ C_ASSERT(FIELD_OFFSET(ARM64_EARLY_SYNC_CONTEXT, ExceptionFramePointer) == 0x140)
 C_ASSERT(FIELD_OFFSET(ARM64_EARLY_SYNC_CONTEXT, TrapFrame) == 0x148);
 #define ARM64_EARLY_SYNC_CONTEXT_ALLOC_SIZE 0x590
 C_ASSERT(sizeof(ARM64_EARLY_SYNC_CONTEXT) <= ARM64_EARLY_SYNC_CONTEXT_ALLOC_SIZE);
+
+static
+BOOLEAN
+KiArm64EmulateUserMrs(
+    _Inout_ PARM64_EARLY_SYNC_CONTEXT Context,
+    _Inout_ PKTRAP_FRAME TrapFrame)
+{
+    ULONG Instruction = 0;
+    ULONG Rt;
+    ULONG64 Value;
+    NTSTATUS ProbeStatus = STATUS_SUCCESS;
+
+    _SEH2_TRY
+    {
+        ProbeForRead((PVOID)(ULONG_PTR)Context->State.Elr, sizeof(Instruction), 1);
+        Instruction = *(volatile ULONG *)(ULONG_PTR)Context->State.Elr;
+    }
+    _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
+    {
+        ProbeStatus = _SEH2_GetExceptionCode();
+    }
+    _SEH2_END;
+
+    if (!NT_SUCCESS(ProbeStatus))
+        return FALSE;
+
+    switch (Instruction & ARM64_MRS_SYSREG_MASK)
+    {
+        case ARM64_MRS_CNTFRQ_EL0:
+            __asm__ __volatile__("mrs %0, cntfrq_el0" : "=r"(Value));
+            break;
+
+        case ARM64_MRS_CNTPCT_EL0:
+            __asm__ __volatile__("mrs %0, cntpct_el0" : "=r"(Value));
+            break;
+
+        case ARM64_MRS_CNTVCT_EL0:
+            __asm__ __volatile__("mrs %0, cntvct_el0" : "=r"(Value));
+            break;
+
+        case ARM64_MRS_TPIDRRO_EL0:
+            __asm__ __volatile__("mrs %0, tpidrro_el0" : "=r"(Value));
+            break;
+
+        default:
+            return FALSE;
+    }
+
+    Rt = Instruction & 0x1FUL;
+    if (Rt != 31)
+    {
+        Context->State.Registers.X[Rt] = Value;
+
+        if (Rt < RTL_NUMBER_OF(TrapFrame->X))
+        {
+            TrapFrame->X[Rt] = Value;
+        }
+        else if (Rt <= 28)
+        {
+            (&Context->ExceptionFrame.X19)[Rt - 19] = Value;
+        }
+        else if (Rt == 29)
+        {
+            Context->ExceptionFrame.Fp = Value;
+        }
+        else if (Rt == 30)
+        {
+            Context->ExceptionFrame.Lr = Value;
+        }
+    }
+
+    Context->State.Elr += 4;
+    TrapFrame->Pc = Context->State.Elr;
+    return TRUE;
+}
 
 /*
  * KiArm64PreviousModeFromContext - Determine the true previous mode
@@ -1246,6 +1330,98 @@ KiArm64HandleSynchronousException(
 
     switch (EsrClass)
     {
+                case ESR_EC_WFX_TRAP:
+                {
+                    EXCEPTION_RECORD ExceptionRecord;
+
+                    TrapFrame = &Context->TrapFrame;
+                    KiArm64InitializeTrapFrame(Context, TrapFrame);
+                    PreviousMode = KiArm64PreviousModeFromContext(Context->State.Spsr,
+                                                                  Context->State.Elr);
+
+                    /*
+                     * EL0 WFE can be trapped by SCTLR_EL1.nTWE. Treat it as a
+                     * spurious immediate wake-up, which is valid WFE behavior.
+                     */
+                    if ((PreviousMode == UserMode) &&
+                        ((Iss & ESR_WFX_ISS_TI_WFE) != 0))
+                    {
+                        TrapFrame->Pc = (ULONG64)((ULONG_PTR)TrapFrame->Pc + 4);
+                        Context->State.Elr += 4;
+                        Context->TrapFramePointer = TrapFrame;
+                        Context->ExceptionFramePointer = &Context->ExceptionFrame;
+                        KiArm64ClearTrapActive();
+                        return TRUE;
+                    }
+
+                    if (PreviousMode == KernelMode)
+                    {
+                        KiArm64BugCheckSynchronousException(Context);
+                        /* not reached */
+                    }
+
+                    RtlZeroMemory(&ExceptionRecord, sizeof(ExceptionRecord));
+                    ExceptionRecord.ExceptionCode = STATUS_ILLEGAL_INSTRUCTION;
+                    ExceptionRecord.ExceptionFlags = 0;
+                    ExceptionRecord.ExceptionRecord = NULL;
+                    ExceptionRecord.ExceptionAddress = (PVOID)(ULONG_PTR)Context->State.Elr;
+                    ExceptionRecord.NumberParameters = 0;
+
+                    KiDispatchException(&ExceptionRecord,
+                                        Context->ExceptionFramePointer,
+                                        TrapFrame,
+                                        PreviousMode,
+                                        TRUE);
+
+                    Context->TrapFramePointer = TrapFrame;
+                    Context->ExceptionFramePointer = &Context->ExceptionFrame;
+                    KiArm64ClearTrapActive();
+                    return TRUE;
+                }
+
+                case ESR_EC_MSR_MRS:
+                {
+                    EXCEPTION_RECORD ExceptionRecord;
+
+                    TrapFrame = &Context->TrapFrame;
+                    KiArm64InitializeTrapFrame(Context, TrapFrame);
+                    PreviousMode = KiArm64PreviousModeFromContext(Context->State.Spsr,
+                                                                  Context->State.Elr);
+
+                    if (PreviousMode == UserMode &&
+                        KiArm64EmulateUserMrs(Context, TrapFrame))
+                    {
+                        Context->TrapFramePointer = TrapFrame;
+                        Context->ExceptionFramePointer = &Context->ExceptionFrame;
+                        KiArm64ClearTrapActive();
+                        return TRUE;
+                    }
+
+                    if (PreviousMode == KernelMode)
+                    {
+                        KiArm64BugCheckSynchronousException(Context);
+                        /* not reached */
+                    }
+
+                    RtlZeroMemory(&ExceptionRecord, sizeof(ExceptionRecord));
+                    ExceptionRecord.ExceptionCode = STATUS_ILLEGAL_INSTRUCTION;
+                    ExceptionRecord.ExceptionFlags = 0;
+                    ExceptionRecord.ExceptionRecord = NULL;
+                    ExceptionRecord.ExceptionAddress = (PVOID)(ULONG_PTR)Context->State.Elr;
+                    ExceptionRecord.NumberParameters = 0;
+
+                    KiDispatchException(&ExceptionRecord,
+                                        Context->ExceptionFramePointer,
+                                        TrapFrame,
+                                        PreviousMode,
+                                        TRUE);
+
+                    Context->TrapFramePointer = TrapFrame;
+                    Context->ExceptionFramePointer = &Context->ExceptionFrame;
+                    KiArm64ClearTrapActive();
+                    return TRUE;
+                }
+
                 case ESR_EC_FP_TRAP:  /* FP/ASIMD access when trapped */
                 case ESR_EC_SVE_TRAP: /* SVE access when trapped */
                 case ESR_EC_SME_TRAP: /* SME access when trapped */

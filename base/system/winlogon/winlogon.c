@@ -445,6 +445,7 @@ WinMain(
     NTSTATUS Status;
 #endif
     ULONG HardErrorResponse;
+    DWORD SetupType;
     MSG Msg;
 
     UNREFERENCED_PARAMETER(hPrevInstance);
@@ -452,6 +453,7 @@ WinMain(
     UNREFERENCED_PARAMETER(nShowCmd);
 
     hAppInstance = hInstance;
+    DbgPrint("WL: WinMain start hInstance=%p\n", hInstance);
 
     /* Make us critical */
     RtlSetProcessIsCritical(TRUE, NULL, FALSE);
@@ -466,6 +468,7 @@ WinMain(
         NtRaiseHardError(STATUS_SYSTEM_PROCESS_TERMINATED, 0, 0, NULL, OptionOk, &HardErrorResponse);
         ExitProcess(1);
     }
+    DbgPrint("WL: registered logon process pid=%lu\n", GetCurrentProcessId());
 
     WLSession = (PWLSESSION)HeapAlloc(GetProcessHeap(), 0, sizeof(WLSESSION));
     if (!WLSession)
@@ -487,6 +490,7 @@ WinMain(
         NtRaiseHardError(STATUS_SYSTEM_PROCESS_TERMINATED, 0, 0, NULL, OptionOk, &HardErrorResponse);
         ExitProcess(1);
     }
+    DbgPrint("WL: window station and desktops ready\n");
 
     LockWorkstation(WLSession);
 
@@ -580,6 +584,7 @@ WinMain(
         ERR("WL: Failed to initialize SAS\n");
         ExitProcess(2);
     }
+    DbgPrint("WL: SAS initialized hwnd=%p\n", WLSession->SASWindow);
 
     // DisplayStatusMessage(Session, Session->WinlogonDesktop, IDS_PREPARENETWORKCONNECTIONS);
     // DisplayStatusMessage(Session, Session->WinlogonDesktop, IDS_APPLYINGCOMPUTERSETTINGS);
@@ -589,11 +594,15 @@ WinMain(
     RemoveStatusMessage(WLSession);
 
     /* Check for pending setup */
-    if (GetSetupType() != 0)
+    SetupType = GetSetupType();
+    DbgPrint("WL: setup type %lu\n", SetupType);
+    if (SetupType != 0)
     {
         /* Run setup and reboot when done */
         TRACE("WL: Setup mode detected\n");
-        RunSetup();
+        DbgPrint("WL: setup mode detected, starting setup thread\n");
+        if (!RunSetup())
+            ERR("WL: failed to start setup thread, error %lu\n", GetLastError());
     }
     else
     {
@@ -605,16 +614,24 @@ WinMain(
     NtInitializeRegistry(CM_BOOT_FLAG_ACCEPTED | 1);
 
     /* Message loop for the SAS window */
+    DbgPrint("WL: entering SAS message loop hwnd=%p\n", WLSession->SASWindow);
     while (GetMessageW(&Msg, WLSession->SASWindow, 0, 0))
     {
         TranslateMessage(&Msg);
         DispatchMessageW(&Msg);
     }
+    DbgPrint("WL: SAS message loop ended hwnd=%p msg=0x%x wParam=%p lParam=%p error=%lu\n",
+             Msg.hwnd,
+             Msg.message,
+             (PVOID)Msg.wParam,
+             (PVOID)Msg.lParam,
+             GetLastError());
 
     CleanupNotifications();
 
     /* We never go there */
     // TODO: Shutdown if we are in session 0, otherwise let the process terminate.
+    DbgPrint("WL: WinMain reached post-loop sleep\n");
     SleepEx(INFINITE, FALSE);
     return 0;
 }

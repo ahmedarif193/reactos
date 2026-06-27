@@ -11,7 +11,25 @@ extern NTKERNELAPI ULONG64 MmUserProbeAddress;
 
 VOID
 NTAPI
+MiArm64ProbeForRead(
+    _In_ ULONG_PTR Current,
+    _In_ ULONG_PTR Last);
+
+NTSTATUS
+NTAPI
+MiArm64ProbeForReadStatus(
+    _In_ ULONG_PTR Current,
+    _In_ ULONG_PTR Last);
+
+VOID
+NTAPI
 MiArm64ProbeForWrite(
+    _In_ ULONG_PTR Current,
+    _In_ ULONG_PTR Last);
+
+NTSTATUS
+NTAPI
+MiArm64ProbeForWriteStatus(
     _In_ ULONG_PTR Current,
     _In_ ULONG_PTR Last);
 
@@ -261,7 +279,7 @@ C_ASSERT(MI_SECONDARY_COLORS == 64);
 #define MI_WRITE_VALID_PXE MI_WRITE_VALID_PDE
 #define ValidKernelPpe ValidKernelPde
 
-#if defined(_M_ARM64)
+#if defined(_M_ARM64) || defined(_M_ARM64EC)
 extern BOOLEAN MiArm64SelfMapReady;
 
 VOID

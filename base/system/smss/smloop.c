@@ -51,8 +51,15 @@ SmpSessionComplete(IN PSM_API_MSG SmApiMsg,
                    IN PSMP_CLIENT_CONTEXT ClientContext,
                    IN HANDLE SmApiPort)
 {
-    DPRINT1("%s is not yet implemented\n", __FUNCTION__);
-    return STATUS_NOT_IMPLEMENTED;
+    PSM_SESSION_COMPLETE_MSG SessionComplete = &SmApiMsg->u.SessionComplete;
+
+    DPRINT1("SMSS: Session %lu completed by subsystem %p, status 0x%08lx\n",
+            SessionComplete->SessionId,
+            ClientContext->Subsystem,
+            SessionComplete->SessionStatus);
+
+    SmpDeleteSession(SessionComplete->SessionId);
+    return STATUS_SUCCESS;
 }
 
 NTSTATUS

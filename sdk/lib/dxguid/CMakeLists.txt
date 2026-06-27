@@ -1,6 +1,18 @@
 
 add_library(dxguid dxguid-mingw.c)
 add_library(dx10guid dx10guid.c)
+if(ARCH STREQUAL "arm64ec" AND COMMAND set_arm64ec_native_target)
+    add_library(dxguid_native dxguid-mingw.c)
+    set_arm64ec_native_target(dxguid_native)
+    add_library(dx10guid_native dx10guid.c)
+    set_arm64ec_native_target(dx10guid_native)
+endif()
 
 add_dependencies(dxguid psdk)
 add_dependencies(dx10guid psdk d3d_idl_headers)
+if(TARGET dxguid_native)
+    add_dependencies(dxguid_native psdk)
+endif()
+if(TARGET dx10guid_native)
+    add_dependencies(dx10guid_native psdk d3d_idl_headers)
+endif()

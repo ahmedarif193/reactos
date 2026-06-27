@@ -10,7 +10,7 @@ elseif(ARCH STREQUAL "arm")
     set(SARCH "omap3-zoom2" CACHE STRING
     "Sub-architecture (board) to build for. Specify one of:
      kurobox versatile omap3-zoom2 omap3-beagle")
-elseif(ARCH STREQUAL "arm64")
+elseif(ARCH_USES_ARM64_CODEGEN)
     # By design, arm64 kernels and OSes should be intercompatible, but
     # due to SoC vendors seemingly not being able to follow ARM design guidelines
     # properly, there might be a need for board-specific builds later on...
@@ -30,7 +30,7 @@ elseif(ARCH STREQUAL "arm")
     set(OARCH "armv7-a" CACHE STRING
     "Generate instructions for this CPU type. Specify one of:
      armv5te armv7-a")
-elseif(ARCH STREQUAL "arm64")
+elseif(ARCH_USES_ARM64_CODEGEN)
     # This should not be bumped unless REALLY needed, because (as of 2021)
     # there are still new designs using the original A53 cores w/ armv8.0.
     set(OARCH "armv8-a" CACHE STRING
@@ -44,7 +44,7 @@ if(ARCH STREQUAL "i386" OR ARCH STREQUAL "amd64")
 elseif(ARCH STREQUAL "arm")
     set(TUNE "generic-armv7-a" CACHE STRING
     "Which CPU ReactOS should be optimized for.")
-elseif(ARCH STREQUAL "arm64")
+elseif(ARCH_USES_ARM64_CODEGEN)
     set(TUNE "generic" CACHE STRING
     "Which CPU ReactOS should be optimized for.")
 endif()
@@ -114,8 +114,13 @@ cmake_dependent_option(ISAPNP_ENABLE "Whether to enable the ISA PnP support." ON
 set(GENERATE_DEPENDENCY_GRAPH FALSE CACHE BOOL
 "Whether to create a GraphML dependency graph of DLLs.")
 
-set(ENABLE_FEX_ARM64EC FALSE CACHE BOOL
+set(ENABLE_FEX_ARM64EC_DEFAULT FALSE)
+if(ARCH STREQUAL "arm64ec")
+    set(ENABLE_FEX_ARM64EC_DEFAULT TRUE)
+endif()
+set(ENABLE_FEX_ARM64EC ${ENABLE_FEX_ARM64EC_DEFAULT} CACHE BOOL
 "Whether to build the optional FEX ARM64EC emulator for running AMD64 binaries on ARM64.")
+unset(ENABLE_FEX_ARM64EC_DEFAULT)
 
 if(CMAKE_C_COMPILER_ID STREQUAL "MSVC")
     option(_PREFAST_ "Whether to enable PREFAST while compiling." OFF)

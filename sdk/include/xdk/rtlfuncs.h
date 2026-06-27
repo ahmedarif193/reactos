@@ -284,7 +284,7 @@ RtlAssert(
 
 #define RtlCopyBytes RtlCopyMemory
 
-#if defined(_M_AMD64)
+#if defined(_M_AMD64) && !defined(_M_ARM64EC)
 NTSYSAPI
 VOID
 NTAPI
@@ -2358,7 +2358,7 @@ NTAPI
 RtlCreateSystemVolumeInformationFolder(
   _In_ PCUNICODE_STRING VolumeRootPath);
 
-#if defined(_M_AMD64)
+#if defined(_M_AMD64) && !defined(_M_ARM64EC)
 
 FORCEINLINE
 VOID
@@ -3070,8 +3070,18 @@ $if (_WDMDDK_)
 
 #if defined(_AMD64_)
 
+#if defined(_M_ARM64EC)
+static __inline ULONG64
+UnsignedMultiplyHigh(
+  _In_ ULONG64 Multiplicand,
+  _In_ ULONG64 Multiplier)
+{
+  return (ULONG64)(((unsigned __int128)Multiplicand * Multiplier) >> 64);
+}
+#else
 #define MultiplyHigh __mulh
 #define UnsignedMultiplyHigh __umulh
+#endif
 
 //DECLSPEC_DEPRECATED_DDK
 static __inline
@@ -3144,7 +3154,7 @@ RtlSecureZeroMemory(
   _In_ SIZE_T Size)
 {
   volatile char* vptr = (volatile char*)Pointer;
-#if defined(_M_AMD64)
+#if defined(_M_AMD64) && !defined(_M_ARM64EC)
   __stosb((PUCHAR)vptr, 0, Size);
 #else
   char * endptr = (char *)vptr + Size;
@@ -3155,7 +3165,7 @@ RtlSecureZeroMemory(
    return Pointer;
 }
 
-#if defined(_M_AMD64)
+#if defined(_M_AMD64) && !defined(_M_ARM64EC)
 _Must_inspect_result_
 FORCEINLINE
 BOOLEAN

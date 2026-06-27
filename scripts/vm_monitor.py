@@ -41,13 +41,17 @@ import socket
 
 # Configuration (never change those values)
 LOG_FILE = "/tmp/freeldr_arm64.log"
+QEMU_STDERR_LOG = "/tmp/qemu_arm64_stderr.log"
+QEMU_SUDO_STDERR_LOG = "/tmp/sudo_qemu_arm64_stderr.log"
 STALL_TIMEOUT = int(os.environ.get("ROS_VM_STALL_TIMEOUT", "15"))
 HARD_TIMEOUT = int(os.environ.get("ROS_VM_HARD_TIMEOUT", "60"))
 VM_NAME = os.environ.get("ROS_VM_NAME", "ROS11")
 ENABLE_GDB_DUMP = os.environ.get("ROS_VM_GDB_DUMP", "1") != "0"
-QEMU_GDB_PORT = int(os.environ.get("ROS_QEMU_GDB_PORT", "1234"))
+QEMU_GDB_PORT = int(os.environ.get("ROS_QEMU_GDB_PORT", "1235"))
+QEMU_USE_SUDO = os.environ.get("ROS_QEMU_USE_SUDO", "auto").strip().lower()
 QEMU_ARM64_GIC_VERSION = os.environ.get("ROS_QEMU_GIC_VERSION", "auto")
-QEMU_ARM64_MEMORY = os.environ.get("ROS_QEMU_ARM64_MEMORY", "24G")
+QEMU_ARM64_MEMORY = os.environ.get("ROS_QEMU_ARM64_MEMORY", "2G")
+QEMU_ARM64_USB_HOSTS = os.environ.get("ROS_QEMU_ARM64_USB_HOSTS", "054c:0ce6")
 KERNEL_TEXT_ADDRESS = (
     int(os.environ["ROS_KERNEL_TEXT"], 0)
     if "ROS_KERNEL_TEXT" in os.environ else None
@@ -403,6 +407,89 @@ def add_qemu_gdb_server(qemu_cmd):
     qemu_cmd.extend(["-gdb", f"tcp::{QEMU_GDB_PORT}"])
 
 
+def resolve_executable_path(executable):
+    """Return an absolute executable path when PATH lookup succeeds."""
+    if os.path.isabs(executable):
+        return executable if os.path.exists(executable) else None
+
+    resolved = shutil.which(executable)
+    if resolved:
+        return os.path.abspath(resolved)
+
+    return None
+
+
+def sudo_mode_enabled():
+    """Return whether QEMU may be wrapped in sudo on macOS."""
+    return QEMU_USE_SUDO not in ("0", "false", "no", "off", "never")
+
+
+def sudo_mode_required():
+    """Return whether missing passwordless sudo should fail startup."""
+    return QEMU_USE_SUDO in ("1", "true", "yes", "on", "always", "required")
+
+
+def sudo_passwordless_qemu_available(qemu_path):
+    """Return True if sudo can run this QEMU binary without prompting."""
+    if platform.system() != "Darwin" or not sudo_mode_enabled():
+        return False
+
+    if not qemu_path:
+        return False
+
+    try:
+        result = subprocess.run(
+            ["sudo", "-n", qemu_path, "--version"],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            timeout=5
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return False
+
+    return result.returncode == 0
+
+
+def maybe_wrap_qemu_with_sudo(qemu_cmd):
+    """Use passwordless sudo for QEMU on macOS when the sudoers rule allows it."""
+    if platform.system() != "Darwin" or not sudo_mode_enabled():
+        return qemu_cmd, False
+
+    qemu_path = resolve_executable_path(qemu_cmd[0])
+    if not qemu_path:
+        if sudo_mode_required():
+            raise RuntimeError(f"Cannot resolve QEMU executable '{qemu_cmd[0]}' for sudo")
+        return qemu_cmd, False
+
+    qemu_cmd = [qemu_path, *qemu_cmd[1:]]
+
+    if sudo_passwordless_qemu_available(qemu_path):
+        return ["sudo", "-n", *qemu_cmd], True
+
+    if sudo_mode_required():
+        raise RuntimeError(
+            f"Passwordless sudo is not available for {qemu_path}; "
+            "install a sudoers NOPASSWD rule or set ROS_QEMU_USE_SUDO=0"
+        )
+
+    print(f"  sudo: passwordless sudo is not available for {qemu_path}; running QEMU without sudo.")
+    return qemu_cmd, False
+
+
+def qemu_stderr_log_path(uses_sudo):
+    """Return the stderr log path for this QEMU run."""
+    return QEMU_SUDO_STDERR_LOG if uses_sudo else QEMU_STDERR_LOG
+
+
+def log_qemu_command(log_path, qemu_cmd):
+    """Write the final command line into the QEMU stderr log."""
+    try:
+        with open(log_path, "a") as log_file:
+            log_file.write("Command: " + " ".join(qemu_cmd) + "\n")
+    except OSError as e:
+        print(f"Warning: failed to write QEMU command log {log_path}: {e}")
+
+
 def force_kill_vm():
     """Forcefully kill VM - called on exit."""
     global qemu_process, use_qemu, boot_image_path, vm_cleanup_done
@@ -504,6 +591,28 @@ def qemu_arm64_disk_drive_args(image_path):
     ]
 
 
+def qemu_usb_host_args(host_specs, bus):
+    """Return QEMU usb-host args from vid:pid entries."""
+    args = []
+
+    for host_spec in re.split(r"[,\s]+", host_specs.strip()):
+        if not host_spec:
+            continue
+
+        match = re.fullmatch(r"(?:0x)?([0-9a-fA-F]{4}):(?:0x)?([0-9a-fA-F]{4})", host_spec)
+        if not match:
+            print(f"Warning: ignoring invalid USB host spec '{host_spec}', expected vid:pid")
+            continue
+
+        vendor_id, product_id = match.groups()
+        args.extend([
+            "-device",
+            f"usb-host,bus={bus},vendorid=0x{vendor_id.lower()},productid=0x{product_id.lower()}",
+        ])
+
+    return args
+
+
 def resolve_qemu_arm64_gic_version(rpi_mode, is_darwin=False):
     """Return the QEMU virt GIC version to use for ARM64."""
     requested = str(QEMU_ARM64_GIC_VERSION).strip().lower()
@@ -556,6 +665,8 @@ def start_qemu(rpi_mode=False, smp=4):
     # Reset log file
     try:
         open(LOG_FILE, 'w').close()
+        open(QEMU_STDERR_LOG, 'w').close()
+        open(QEMU_SUDO_STDERR_LOG, 'w').close()
     except Exception as e:
         print(f"Error resetting log file: {e}")
         return False
@@ -568,6 +679,7 @@ def start_qemu(rpi_mode=False, smp=4):
             "-device", "qemu-xhci,id=xhci",
             "-device", "usb-kbd,bus=xhci.0",
             "-device", "usb-tablet,bus=xhci.0",
+            *qemu_usb_host_args(QEMU_ARM64_USB_HOSTS, "xhci.0"),
         ]
         gic_desc = f", GIC {gic_version}" if gic_version else ""
         if rpi_mode:
@@ -655,7 +767,13 @@ def start_qemu(rpi_mode=False, smp=4):
                 ]
 
         add_qemu_gdb_server(qemu_cmd)
+        qemu_cmd, qemu_uses_sudo = maybe_wrap_qemu_with_sudo(qemu_cmd)
+        qemu_stderr_path = qemu_stderr_log_path(qemu_uses_sudo)
+        log_qemu_command(qemu_stderr_path, qemu_cmd)
         print(f"  Command: {' '.join(qemu_cmd)}")
+        if qemu_uses_sudo:
+            print(f"  sudo: using passwordless sudo for QEMU")
+        print(f"  QEMU stderr log: {qemu_stderr_path}")
 
         try:
             if rpi_mode:
@@ -670,13 +788,15 @@ def start_qemu(rpi_mode=False, smp=4):
                 )
             else:
                 # Other ARM64 modes: serial goes directly to file via QEMU
+                qemu_stderr = open(qemu_stderr_path, 'a')
                 qemu_process = subprocess.Popen(
                     qemu_cmd,
                     cwd=BUILD_DIR,
                     stdout=subprocess.DEVNULL,
-                    stderr=subprocess.STDOUT,
+                    stderr=qemu_stderr,
                     stdin=subprocess.DEVNULL
                 )
+                qemu_stderr.close()
             print(f"QEMU ARM64 started with PID {qemu_process.pid}")
             return True
         except Exception as e:
@@ -795,7 +915,13 @@ def start_qemu(rpi_mode=False, smp=4):
             qemu_cmd.insert(1, "-enable-kvm")
 
         add_qemu_gdb_server(qemu_cmd)
+        qemu_cmd, qemu_uses_sudo = maybe_wrap_qemu_with_sudo(qemu_cmd)
+        qemu_stderr_path = qemu_stderr_log_path(qemu_uses_sudo)
+        log_qemu_command(qemu_stderr_path, qemu_cmd)
         print(f"  Command: {' '.join(qemu_cmd)}")
+        if qemu_uses_sudo:
+            print(f"  sudo: using passwordless sudo for QEMU")
+        print(f"  QEMU stderr log: {qemu_stderr_path}")
 
         if use_uefi:
             # UEFI mode: serial goes to stdio, redirect to log file
@@ -1664,7 +1790,7 @@ def main():
                         help='Use QEMU instead of VirtualBox; ARM64 builds and boots livecd.iso')
     parser.add_argument('--vbox', action='store_true', help='Use VirtualBox (default behavior)')
     parser.add_argument('--rpi', action='store_true', help='Use Raspberry Pi emulation mode (cortex-a72, no HVF)')
-    parser.add_argument('--smp', type=int, default=4, help='Number of CPU cores (default: 4)')
+    parser.add_argument('--smp', type=int, default=None, help='Number of CPU cores (default: 2 for ARM64, 4 otherwise)')
     parser.add_argument('--img', action='store_true', help='Build and boot ReactOS.img instead of the default QEMU livecd.iso')
     parser.add_argument('--livecd', action='store_true', help='Build and boot livecd.iso instead of ReactOS.img')
     parser.add_argument('--iso', nargs='?', const=LIVECD_ISO, default=None,
@@ -1705,6 +1831,8 @@ def main():
     if target_arch == "arm64":
         use_qemu = True
 
+    smp = args.smp if args.smp is not None else (2 if target_arch == "arm64" else 4)
+
     atexit.register(force_kill_vm)
     signal.signal(signal.SIGINT, signal_handler)
     signal.signal(signal.SIGTERM, signal_handler)
@@ -1736,7 +1864,7 @@ def main():
         if not create_fat32_img():
             print("Warning: Could not create FAT32 image...")
 
-    if not start_vm(rpi_mode=args.rpi, smp=args.smp):
+    if not start_vm(rpi_mode=args.rpi, smp=smp):
         sys.exit(1)
 
     time.sleep(2)

@@ -92,7 +92,7 @@ RtlFillMemory(PVOID Destination,
 }
 
 
-#ifndef _M_AMD64
+#if !defined(_M_AMD64) || defined(_M_ARM64EC)
 /*
  * @implemented
  */
@@ -132,7 +132,7 @@ RtlFillMemoryUlonglong(
     }
 }
 #endif // _WIN64
-#endif // _M_AMD64
+#endif // !_M_AMD64 || _M_ARM64EC
 
 #undef RtlMoveMemory
 /*

@@ -9,7 +9,7 @@
 #define NDEBUG
 #include <debug.h>
 
-#if defined(_M_ARM64)
+#if defined(_M_ARM64) || defined(_M_ARM64EC)
 
 /*
  * @implemented
@@ -25,6 +25,8 @@ NtAllocateVirtualMemoryEx(HANDLE ProcessHandle,
                           ULONG ExtendedParameterCount)
 {
     ULONG Index;
+    BOOLEAN EcCode = FALSE;
+    NTSTATUS Status;
 
     if (ExtendedParameterCount && !ExtendedParameters)
         return STATUS_INVALID_PARAMETER;
@@ -36,6 +38,9 @@ NtAllocateVirtualMemoryEx(HANDLE ProcessHandle,
             case MemExtendedParameterAttributeFlags:
                 if (ExtendedParameters[Index].ULong64 & ~MEM_EXTENDED_PARAMETER_EC_CODE)
                     return STATUS_INVALID_PARAMETER;
+
+                if (ExtendedParameters[Index].ULong64 & MEM_EXTENDED_PARAMETER_EC_CODE)
+                    EcCode = TRUE;
                 break;
 
             case MemExtendedParameterNumaNode:
@@ -47,12 +52,23 @@ NtAllocateVirtualMemoryEx(HANDLE ProcessHandle,
         }
     }
 
-    return NtAllocateVirtualMemory(ProcessHandle,
-                                   BaseAddress,
-                                   0,
-                                   RegionSize,
-                                   AllocationType,
-                                   Protect);
+    Status = NtAllocateVirtualMemory(ProcessHandle,
+                                     BaseAddress,
+                                     0,
+                                     RegionSize,
+                                     AllocationType,
+                                     Protect);
+
+    if (NT_SUCCESS(Status) &&
+        EcCode &&
+        ProcessHandle == NtCurrentProcess() &&
+        BaseAddress &&
+        RegionSize)
+    {
+        ChpeMarkEcCodeRange(*BaseAddress, *RegionSize);
+    }
+
+    return Status;
 }
 
-#endif /* _M_ARM64 */
+#endif /* _M_ARM64 || _M_ARM64EC */

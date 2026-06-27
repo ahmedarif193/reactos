@@ -1,3 +1,10 @@
 
 add_library(poguid poguid.c)
+if(ARCH STREQUAL "arm64ec" AND COMMAND set_arm64ec_native_target)
+    add_library(poguid_native poguid.c)
+    set_arm64ec_native_target(poguid_native)
+endif()
 add_dependencies(poguid psdk)
+if(TARGET poguid_native)
+    add_dependencies(poguid_native psdk)
+endif()

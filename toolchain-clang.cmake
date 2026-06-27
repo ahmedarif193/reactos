@@ -60,6 +60,11 @@ set(CMAKE_TRY_COMPILE_PLATFORM_VARIABLES
     REACTOS_CLANG_LLVM_MINGW_ROOT)
 set(CMAKE_SYSTEM_NAME Windows)
 
+set(_ARCH_USES_ARM64_CODEGEN FALSE)
+if(ARCH STREQUAL "arm64" OR ARCH STREQUAL "arm64ec")
+    set(_ARCH_USES_ARM64_CODEGEN TRUE)
+endif()
+
 if(ARCH STREQUAL "i386")
     set(CMAKE_SYSTEM_PROCESSOR i686)
 elseif(ARCH STREQUAL "amd64")
@@ -68,6 +73,8 @@ elseif(ARCH STREQUAL "arm")
     set(CMAKE_SYSTEM_PROCESSOR arm)
 elseif(ARCH STREQUAL "arm64")
     set(CMAKE_SYSTEM_PROCESSOR aarch64)
+elseif(ARCH STREQUAL "arm64ec")
+    set(CMAKE_SYSTEM_PROCESSOR arm64ec)
 else()
     message(FATAL_ERROR "Unsupported ARCH: ${ARCH}")
 endif()
@@ -123,13 +130,13 @@ set(CMAKE_ASM_COMPILER_TARGET ${triplet})
 set(CMAKE_ASM_COMPILER_ID Clang)
 
 set(CMAKE_MC_COMPILER native-windmc)
-if(ARCH STREQUAL "arm64")
+if(_ARCH_USES_ARM64_CODEGEN)
     # llvm-windres --target=pe-aarch64 currently fails at codegen with
-    # LLVM 21.1.7. Use llvm-mingw's triplet-named symlink from the selected
+    # LLVM 21.1.7. Use llvm-mingw's triplet-named wrapper from the selected
     # llvm-mingw root.
-    find_program(CMAKE_RC_COMPILER NAMES aarch64-w64-mingw32-windres HINTS ${_llvm_tool_bin_hints} NO_DEFAULT_PATH)
+    find_program(CMAKE_RC_COMPILER NAMES ${triplet}-windres HINTS ${_llvm_tool_bin_hints} NO_DEFAULT_PATH)
     if(NOT CMAKE_RC_COMPILER)
-        message(FATAL_ERROR "aarch64-w64-mingw32-windres not found in llvm-mingw root")
+        message(FATAL_ERROR "${triplet}-windres not found in llvm-mingw root")
     endif()
 else()
     require_llvm_program(CMAKE_RC_COMPILER llvm-windres)

@@ -585,10 +585,28 @@ endif()
 
 function(add_importlibs _module)
     add_dependency_node(${_module})
+    get_target_property(_arm64ec_native ${_module} REACTOS_ARM64EC_NATIVE)
     foreach(LIB ${ARGN})
-        target_link_libraries(${_module} lib${LIB})
+        if(ARCH STREQUAL "arm64ec" AND _arm64ec_native)
+            target_link_libraries(${_module} lib${LIB}_native)
+        else()
+            target_link_libraries(${_module} lib${LIB})
+        endif()
         add_dependency_edge(${_module} ${LIB})
     endforeach()
+endfunction()
+
+function(target_link_libraries _target)
+    if(COMMAND reactos_translate_target_link_library)
+        set(_translated_libraries)
+        foreach(_library IN LISTS ARGN)
+            reactos_translate_target_link_library(_translated_library ${_target} "${_library}")
+            list(APPEND _translated_libraries "${_translated_library}")
+        endforeach()
+        _target_link_libraries(${_target} ${_translated_libraries})
+    else()
+        _target_link_libraries(${_target} ${ARGN})
+    endif()
 endfunction()
 
 # Some helper lists
@@ -643,6 +661,12 @@ function(set_module_type MODULE TYPE)
 
     # Set our target property
     set_target_properties(${MODULE} PROPERTIES REACTOS_MODULE_TYPE ${TYPE})
+    if(TYPE IN_LIST KERNEL_MODULE_TYPES)
+        target_compile_definitions(${MODULE} PRIVATE REACTOS_KERNEL_MODE)
+    endif()
+    if(ARCH STREQUAL "arm64ec" AND TYPE IN_LIST KERNEL_MODULE_TYPES AND COMMAND set_arm64ec_native_target)
+        set_arm64ec_native_target(${MODULE})
+    endif()
 
     # Add the module to the module group list, if it is defined
     if(DEFINED CURRENT_MODULE_GROUP)
@@ -711,6 +735,14 @@ function(set_module_type MODULE TYPE)
         # special case for kernel
         if (TYPE STREQUAL kernel)
             set_image_base(${MODULE} 0x00400000)
+        elseif(ARCH_USES_ARM64_CODEGEN)
+            # Win11 ARM64 ntoskrnl image-loader policy rejects PE images
+            # whose ImageBase falls in the i386-era 0x10000 range with
+            # STATUS_INVALID_IMAGE_FORMAT (surfaced as ERROR_BAD_EXE_FORMAT
+            # 0xC1 by sc.exe). Windows ARM64 drivers conventionally use
+            # 0x140000000 -- match that so every kernel module ReactOS
+            # ARM64 builds is loadable by both ReactOS and Win11.
+            set_image_base(${MODULE} 0x0000000140000000)
         else()
             set_image_base(${MODULE} 0x00010000)
         endif()

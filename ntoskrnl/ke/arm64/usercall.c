@@ -89,62 +89,31 @@ KiArm64CopyToCurrentUserBuffer(
     _In_z_ PCSTR Tag)
 {
     ULONG_PTR CurrentVa;
-    SIZE_T RemainingSize;
-    EXCEPTION_RECORD ExceptionRecord;
+    ULONG_PTR LastVa;
     NTSTATUS Status = STATUS_SUCCESS;
 
     UNREFERENCED_PARAMETER(Tag);
 
     CurrentVa = (ULONG_PTR)TargetAddress;
-    RemainingSize = BufferSize;
 
-    while (RemainingSize > 0)
+    if (BufferSize == 0)
     {
-        PVOID PageAddress;
-        SIZE_T PageOffset;
-        SIZE_T ChunkSize;
-
-        PageAddress = PAGE_ALIGN((PVOID)CurrentVa);
-        PageOffset = BYTE_OFFSET(CurrentVa);
-        ChunkSize = PAGE_SIZE - PageOffset;
-        if (ChunkSize > RemainingSize)
-        {
-            ChunkSize = RemainingSize;
-        }
-
-        Status = MmAccessFaultEx(FALSE, PageAddress, UserMode, NULL, FALSE);
-        if (!NT_SUCCESS(Status))
-        {
-            return Status;
-        }
-
-        CurrentVa += ChunkSize;
-        RemainingSize -= ChunkSize;
+        return STATUS_SUCCESS;
     }
 
-    /*
-     * Copy the APC frame through the actual EL0 VA once the pages are known to
-     * be resident. This matches the established exception/callout paths and
-     * removes the PFN-alias/full-page-DC-CIVAC workaround that can defer a
-     * bad cache-maintenance side effect until the first ERET into user mode.
-     */
-    _SEH2_TRY
+    if ((CurrentVa & (sizeof(ULONG64) - 1)) != 0)
     {
-        ProbeForWrite(TargetAddress, BufferSize, sizeof(ULONG64));
-        RtlCopyMemory(TargetAddress, Buffer, BufferSize);
+        return STATUS_DATATYPE_MISALIGNMENT;
     }
-    _SEH2_EXCEPT(ExceptionRecord = *_SEH2_GetExceptionInformation()->ExceptionRecord,
-                 EXCEPTION_EXECUTE_HANDLER)
-    {
-        Status = ExceptionRecord.ExceptionCode;
-    }
-    _SEH2_END;
 
+    LastVa = CurrentVa + BufferSize - 1;
+    Status = MiArm64ProbeForWriteStatus(CurrentVa, LastVa);
     if (!NT_SUCCESS(Status))
     {
         return Status;
     }
 
+    RtlCopyMemory(TargetAddress, Buffer, BufferSize);
     return STATUS_SUCCESS;
 }
 
@@ -589,7 +558,7 @@ KiUserModeCallout(
     Pcr = (PKIPCR)KeGetPcr();
     if (Pcr != NULL)
     {
-        Pcr->Prcb.RspBase = InitialStack;
+        Pcr->Prcb.SpBase = (PVOID)InitialStack;
     }
 
     CallbackTrapFrame.Pc = (ULONG_PTR)UserCallbackDispatcher;
@@ -731,7 +700,7 @@ NtCallbackReturn(
 
     if (Pcr != NULL)
     {
-        Pcr->Prcb.RspBase = CalloutFrame->InitialStack;
+        Pcr->Prcb.SpBase = (PVOID)CalloutFrame->InitialStack;
     }
 
     CurrentThread->InitialStack = (PVOID)CalloutFrame->InitialStack;

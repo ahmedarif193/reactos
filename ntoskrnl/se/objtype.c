@@ -115,6 +115,12 @@ SepValidateObjectTypeList(
 
             /* Get the object type and check that we can read from it */
             ObjectTypeGuid = ObjectTypeList[ObjectTypeIndex].ObjectType;
+            if (ObjectTypeGuid == NULL)
+            {
+                DPRINT1("The object type GUID is NULL (at index %lu)\n", ObjectTypeIndex);
+                _SEH2_YIELD(return STATUS_ACCESS_VIOLATION);
+            }
+
             ProbeForRead(ObjectTypeGuid, sizeof(GUID), sizeof(ULONG));
 
             /*

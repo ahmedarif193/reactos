@@ -94,7 +94,7 @@ DllMain(HANDLE hDll,
     DPRINT("DllMain(hInst %p, dwReason %lu)\n",
            hDll, dwReason);
 
-    Basep8BitStringToUnicodeString = RtlAnsiStringToUnicodeString;
+    BasepSetFileApisToAnsi();
 
     /* Cache the PEB and Session ID */
     Peb = NtCurrentPeb();

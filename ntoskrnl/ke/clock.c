@@ -165,7 +165,7 @@ KeQueryTickCount(_Out_ PLARGE_INTEGER TickCount)
     *TickCount = KiReadSystemTime(&KeTickCount);
 }
 
-#ifndef _M_AMD64
+#if !defined(_M_AMD64) && !defined(_M_ARM64)
 /*
  * @implemented
  */
@@ -220,7 +220,7 @@ KeQueryInterruptTime(VOID)
     /* Return the time value */
     return CurrentTime.QuadPart;
 }
-#endif
+#endif /* !_M_AMD64 && !_M_ARM64 */
 
 /*
  * @implemented

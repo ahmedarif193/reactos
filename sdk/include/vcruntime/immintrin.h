@@ -9,10 +9,12 @@
 
 #define _INCLUDED_IMM
 
+#include "intrin_target.h"
+
 /* When building with Clang, use Clang's own intrinsics headers instead. */
-#if defined(__clang__) && !defined(_MSC_VER) && (defined(_M_IX86) || defined(_M_X64) || defined(_M_AMD64))
+#if _VCRT_USE_CLANG_X86_INTRINSICS
 #include_next <immintrin.h>
-#elif defined(_M_ARM64) || defined(__aarch64__)
+#elif _VCRT_ARM64_CODEGEN
 /* ARM64: no x86 intrinsics */
 #else
 
@@ -55,13 +57,13 @@ extern void __cdecl _mm256_zeroupper(void);
 
 extern int __cdecl _rdrand16_step(unsigned short *random_val);
 extern int __cdecl _rdrand32_step(unsigned int *random_val);
-#if defined(_M_X64)
+#if _VCRT_AMD64_INTRINSICS
 extern int __cdecl _rdrand64_step(unsigned __int64 *random_val);
 #endif
 
 extern int __cdecl _rdseed16_step(unsigned short *random_val);
 extern int __cdecl _rdseed32_step(unsigned int *random_val);
-#if defined(_M_X64)
+#if _VCRT_AMD64_INTRINSICS
 extern int __cdecl _rdseed64_step(unsigned __int64 *random_val);
 #endif
 
@@ -73,7 +75,7 @@ void __cdecl _xsaveopt(void *, unsigned __int64);
 void __cdecl _xsaves(void *, unsigned __int64);
 void __cdecl _xrstor(void const *, unsigned __int64);
 void __cdecl _xrstors(void const *, unsigned __int64);
-#if defined (_M_X64)
+#if _VCRT_AMD64_INTRINSICS
 void __cdecl _fxsave64(void *);
 void __cdecl _fxrstor64(void const *);
 void __cdecl _xsave64(void *, unsigned __int64);
@@ -98,12 +100,12 @@ void __cdecl _xsetbv(unsigned int, unsigned __int64);
 
 #pragma intrinsic(_rdrand16_step)
 #pragma intrinsic(_rdrand32_step)
-#if defined(_M_X64)
+#if _VCRT_AMD64_INTRINSICS
 #pragma intrinsic(_rdrand64_step)
 #endif
 #pragma intrinsic(_rdseed16_step)
 #pragma intrinsic(_rdseed32_step)
-#if defined(_M_X64)
+#if _VCRT_AMD64_INTRINSICS
 #pragma intrinsic(_rdseed64_step)
 #endif
 
@@ -115,7 +117,7 @@ void __cdecl _xsetbv(unsigned int, unsigned __int64);
 #pragma intrinsic(_xsaves)
 #pragma intrinsic(_xrstor)
 #pragma intrinsic(_xrstors)
-#if defined (_M_X64)
+#if _VCRT_AMD64_INTRINSICS
 #pragma intrinsic(_fxsave64)
 #pragma intrinsic(_fxrstor64)
 #pragma intrinsic(_xsave64)
@@ -183,14 +185,14 @@ __INTRIN_INLINE int _rdrand32_step(unsigned int* random_val)
     return (int)ok;
 }
 
-#if defined(__x86_64__)
+#if _VCRT_GNU_AMD64_CODEGEN
 __INTRIN_INLINE int _rdrand64_step(unsigned __int64* random_val)
 {
     unsigned char ok;
     __asm__ __volatile__("rdrand %0; setc %1" : "=r"(*random_val), "=qm"(ok));
     return (int)ok;
 }
-#endif // __x86_64__
+#endif /* _VCRT_GNU_AMD64_CODEGEN */
 
 __INTRIN_INLINE int _rdseed16_step(unsigned short* random_val)
 {
@@ -206,14 +208,14 @@ __INTRIN_INLINE int _rdseed32_step(unsigned int* random_val)
     return (int)ok;
 }
 
-#if defined(__x86_64__)
+#if _VCRT_GNU_AMD64_CODEGEN
 __INTRIN_INLINE int _rdseed64_step(unsigned __int64* random_val)
 {
     unsigned char ok;
     __asm__ __volatile__("rdseed %0; setc %1" : "=r"(*random_val), "=qm"(ok));
     return (int)ok;
 }
-#endif // __x86_64__
+#endif /* _VCRT_GNU_AMD64_CODEGEN */
 
 __INTRIN_INLINE void _fxsave(void *__P)
 {
@@ -233,7 +235,7 @@ __INTRIN_INLINE void _fxrstor(void const *__P)
 #endif
 }
 
-#if defined(__x86_64__)
+#if _VCRT_GNU_AMD64_CODEGEN
 __INTRIN_INLINE void _fxsave64(void *__P)
 {
     __builtin_ia32_fxsave64(__P);
@@ -243,7 +245,7 @@ __INTRIN_INLINE void _fxrstor64(void const *__P)
 {
     __builtin_ia32_fxrstor64((void*)__P);
 }
-#endif // __x86_64__
+#endif /* _VCRT_GNU_AMD64_CODEGEN */
 
 #ifdef __clang__
 #define __ATTRIBUTE_XSAVE__ __attribute__((__target__("xsave")))
@@ -298,7 +300,7 @@ __INTRIN_INLINE_XSAVE void _xrstors(void const *__P, unsigned __int64 __M)
 #endif
 }
 
-#if defined(__x86_64__)
+#if _VCRT_GNU_AMD64_CODEGEN
 __INTRIN_INLINE_XSAVE void _xsave64(void *__P, unsigned __int64 __M)
 {
     __builtin_ia32_xsave64(__P, __M);
@@ -344,7 +346,7 @@ __INTRIN_INLINE_XSAVE void _xrstors64(void const *__P, unsigned __int64 __M)
     __asm__ __volatile__("xrstors %0" : "=m" (*(char*)__P) : "a" ((unsigned int)__M), "d" ((unsigned int)(__M >> 32)) : "memory");
 #endif
 }
-#endif // __x86_64__
+#endif /* _VCRT_GNU_AMD64_CODEGEN */
 
 #ifndef __clang__
 __INTRIN_INLINE unsigned __int64 _xgetbv(unsigned int __A)

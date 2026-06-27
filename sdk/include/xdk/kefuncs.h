@@ -4,7 +4,7 @@
 $if (_WDMDDK_)
 #if defined(_M_IX86)
 $include(x86/ke.h)
-#elif defined(_M_AMD64)
+#elif _VCRT_AMD64_INTRINSICS
 $include(amd64/ke.h)
 #elif defined(_M_IA64)
 $include(ia64/ke.h)
@@ -14,7 +14,7 @@ $include(ppc/ke.h)
 $include(mips/ke.h)
 #elif defined(_M_ARM)
 $include(arm/ke.h)
-#elif defined(_M_ARM64)
+#elif _VCRT_ARM64_INTRINSICS
 $include(arm64/ke.h)
 #else
 #error Unknown Architecture
@@ -157,7 +157,7 @@ KeQueryActiveProcessors(VOID);
 $endif (_WDMDDK_ || _NTDDK_)
 
 $if (_WDMDDK_)
-#if !defined(_M_AMD64)
+#if !_VCRT_AMD64_INTRINSICS && !_VCRT_ARM64_INTRINSICS
 NTKERNELAPI
 ULONGLONG
 NTAPI
@@ -168,7 +168,7 @@ VOID
 NTAPI
 KeQuerySystemTime(
   _Out_ PLARGE_INTEGER CurrentTime);
-#endif /* !_M_AMD64 */
+#endif /* !_VCRT_AMD64_INTRINSICS && !_VCRT_ARM64_INTRINSICS */
 
 #if !defined(_X86_) && !defined(_M_ARM)
 _Requires_lock_not_held_(*SpinLock)

@@ -71,7 +71,7 @@ endif()
 
 if(NOT MSVC)
     add_host_tool(pefixup pefixup.c)
-    if (ARCH STREQUAL "amd64" OR ARCH STREQUAL "arm64")
+    if(ARCH_IS_64BIT)
         target_compile_definitions(pefixup PRIVATE _TARGET_PE64)
     endif()
     target_link_libraries(pefixup PRIVATE host_includes)

@@ -535,7 +535,7 @@ KeStartThread(IN OUT PKTHREAD Thread)
     DbgBreakPoint();
     Set = 0;
 #else
-    Set = ~NodePrcb->MultiThreadProcessorSet;
+    Set = ~KiPrcbProcessorSet(NodePrcb);
 #endif
     Mask = Node->ProcessorMask & Process->Affinity;
     Set &= Mask;
@@ -1082,9 +1082,9 @@ KeRevertToUserAffinityThread(VOID)
     /* Get the current PRCB and check if it doesn't match this affinity */
     Prcb = KeGetCurrentPrcb();
 #if (NTDDI_VERSION >= NTDDI_WIN7)
-    if (!(Prcb->SetMember & CurrentThread->Affinity.Mask))
+    if (!(KiPrcbSetMember(Prcb) & CurrentThread->Affinity.Mask))
 #else
-    if (!(Prcb->SetMember & CurrentThread->Affinity))
+    if (!(KiPrcbSetMember(Prcb) & CurrentThread->Affinity))
 #endif
     {
         /* Lock the PRCB */
@@ -1185,9 +1185,9 @@ KeSetSystemAffinityThread(IN KAFFINITY Affinity)
     /* Get the current PRCB and check if it doesn't match this affinity */
     Prcb = KeGetCurrentPrcb();
 #if (NTDDI_VERSION >= NTDDI_WIN7)
-    if (!(Prcb->SetMember & CurrentThread->Affinity.Mask))
+    if (!(KiPrcbSetMember(Prcb) & CurrentThread->Affinity.Mask))
 #else
-    if (!(Prcb->SetMember & CurrentThread->Affinity))
+    if (!(KiPrcbSetMember(Prcb) & CurrentThread->Affinity))
 #endif
     {
         /* Lock the PRCB */

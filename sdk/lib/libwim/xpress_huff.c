@@ -19,6 +19,7 @@
 
 /* Runtime SIMD dispatch on Intel; decompress-only builds stay scalar. */
 #if !defined(XPRESS_HUFF_DECOMPRESS_ONLY) && \
+    !defined(__arm64ec__) && !defined(_M_ARM64EC) && \
     (defined(__x86_64__) || defined(_M_X64))
 #  if defined(__has_include)
 #    if __has_include(<emmintrin.h>)

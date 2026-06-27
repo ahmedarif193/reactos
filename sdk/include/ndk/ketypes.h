@@ -23,6 +23,7 @@ Author:
 // Dependencies
 //
 #include <umtypes.h>
+#include <arch/target.h>
 #ifndef NTOS_MODE_USER
 #include <haltypes.h>
 #include <potypes.h>
@@ -168,7 +169,7 @@ typedef struct _FIBER                                    /* Field offsets:    */
 //
 // Number of dispatch codes supported by KINTERRUPT
 //
-#ifdef _M_AMD64
+#if NDK_TARGET_AMD64_ABI
 #define DISPATCH_LENGTH                 4
 #elif (NTDDI_VERSION >= NTDDI_LONGHORN)
 #define DISPATCH_LENGTH                 135
@@ -897,7 +898,7 @@ typedef enum _KAPC_ENVIRONMENT
 
 typedef struct _KTIMER_TABLE_ENTRY
 {
-#if (NTDDI_VERSION >= NTDDI_LONGHORN) || defined(_M_ARM) || defined(_M_AMD64)
+#if (NTDDI_VERSION >= NTDDI_LONGHORN) || defined(_M_ARM) || NDK_TARGET_AMD64_ABI
     KSPIN_LOCK Lock;
 #endif
     LIST_ENTRY Entry;
@@ -977,14 +978,22 @@ typedef struct _KDPC_DATA
     LIST_ENTRY DpcListHead;
 #endif
     ULONG_PTR DpcLock;
-#if defined(_M_AMD64) || defined(_M_ARM)
+#if NDK_TARGET_AMD64_ABI || defined(_M_ARM)
     volatile LONG DpcQueueDepth;
 #else
     volatile ULONG DpcQueueDepth;
 #endif
     ULONG DpcCount;
-#if (NTDDI_VERSION >= NTDDI_LONGHORN) || defined(_M_ARM)
+#if (NTDDI_VERSION >= NTDDI_LONGHORN) || defined(_M_ARM) || NDK_TARGET_ARM64_ABI
     PKDPC ActiveDpc;
+#endif
+#if NDK_TARGET_ARM64_ABI
+    /*
+     * ARM64 keeps KDPC_DATA at 0x30 bytes while preserving the ReactOS prefix
+     * layout used by shared DPC code.
+     */
+    LONG LongDpcPresent;
+    ULONG Padding;
 #endif
 } KDPC_DATA, *PKDPC_DATA;
 
@@ -1086,7 +1095,7 @@ typedef struct _KINTERRUPT
 #if (NTDDI_VERSION >= NTDDI_LONGHORN)
     ULONGLONG Rsvd1;
 #endif
-#ifdef _M_AMD64
+#if NDK_TARGET_AMD64_ABI
     PKTRAP_FRAME TrapFrame;
     PVOID Reserved;
 #endif
@@ -1326,7 +1335,7 @@ typedef struct _KLOCK_ENTRY
 // TODO: These are stub definitions for asm offset generation.
 // Full UMS support is not yet implemented in ReactOS.
 //
-#if (NTDDI_VERSION >= NTDDI_WIN7) && defined(_M_AMD64)
+#if (NTDDI_VERSION >= NTDDI_WIN7) && NDK_TARGET_AMD64_ABI
 
 typedef struct _KUMS_CONTEXT_HEADER
 {
@@ -1360,7 +1369,7 @@ typedef struct _UMS_CONTROL_BLOCK
     PVOID UmsTeb;
 } UMS_CONTROL_BLOCK, *PUMS_CONTROL_BLOCK;
 
-#endif /* NTDDI_WIN7 && _M_AMD64 */
+#endif /* NTDDI_WIN7 && NDK_TARGET_AMD64_ABI */
 
 //
 // Kernel Thread (KTHREAD)
@@ -1437,7 +1446,7 @@ typedef struct _KTHREAD
         };
     };
     KSPIN_LOCK ApcQueueLock;
-#if !defined(_M_AMD64) && !defined(_M_ARM64) // [
+#if !NDK_TARGET_AMD64_ABI && !NDK_TARGET_ARM64_ABI // [
     ULONG ContextSwitches;
     volatile UCHAR State;
     UCHAR NpxState;
@@ -1487,7 +1496,7 @@ typedef struct _KTHREAD
         SINGLE_LIST_ENTRY SwapListEntry;
     };
     PKQUEUE Queue;
-#if !defined(_M_AMD64) && !defined(_M_ARM64) // [
+#if !NDK_TARGET_AMD64_ABI && !NDK_TARGET_ARM64_ABI // [
     ULONG WaitTime;
     union
     {
@@ -1798,7 +1807,7 @@ typedef struct _KTHREAD
     LIST_ENTRY MutantListHead;
 #endif // ]
     PVOID SListFaultAddress;
-#ifdef _M_AMD64 // [
+#if NDK_TARGET_AMD64_ABI // [
     LONG64 ReadOperationCount;
     LONG64 WriteOperationCount;
     LONG64 OtherOperationCount;
@@ -1812,9 +1821,9 @@ typedef struct _KTHREAD
 #elif (NTDDI_VERSION >= NTDDI_LONGHORN) // ][
     PVOID MdlForLockedTeb;
 #endif // ]
-#if defined(__REACTOS__) && defined(_M_AMD64) // HACK!
+#if defined(__REACTOS__) && NDK_TARGET_AMD64_ABI // HACK!
     XSAVE_FORMAT* StateSaveArea;
-#elif defined(__REACTOS__) && defined(_M_ARM64)
+#elif defined(__REACTOS__) && NDK_TARGET_ARM64_ABI
     PVOID StateSaveArea;
     PVOID Arm64FpState;
 #endif
@@ -1846,7 +1855,7 @@ typedef struct _KTHREAD
     ULONG ExpectedRunTime;
     PVOID KernelStack;
     XSAVE_FORMAT* StateSaveArea;
-#if defined(__REACTOS__) && defined(_M_ARM64)
+#if defined(__REACTOS__) && NDK_TARGET_ARM64_ABI
     PVOID Arm64FpState;
 #endif
     struct _KSCHEDULING_GROUP* SchedulingGroup;
@@ -2258,7 +2267,7 @@ typedef struct _KPROCESS
 {
     DISPATCHER_HEADER Header;
     LIST_ENTRY ProfileListHead;
-#if defined(_M_ARM64) || defined(__aarch64__)
+#if NDK_TARGET_ARM64_ABI
     ULONG_PTR DirectoryTableBase[2];
     ULONG_PTR Unused0;
 #elif (NTDDI_VERSION >= NTDDI_LONGHORN)
@@ -2271,7 +2280,7 @@ typedef struct _KPROCESS
     KGDTENTRY LdtDescriptor;
     KIDTENTRY Int21Descriptor;
 #endif
-#if defined(_M_AMD64) && (NTDDI_VERSION >= NTDDI_VISTA)
+#if NDK_TARGET_AMD64_ABI && (NTDDI_VERSION >= NTDDI_VISTA)
     KGDTENTRY64 LdtSystemDescriptor;
     PVOID LdtBaseAddress;
 #endif

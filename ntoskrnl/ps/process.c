@@ -13,6 +13,10 @@
 #define NDEBUG
 #include <debug.h>
 
+#ifndef IMAGE_FILE_MACHINE_ARM64EC
+#define IMAGE_FILE_MACHINE_ARM64EC 0xA641
+#endif
+
 /* GLOBALS *******************************************************************/
 
 extern ULONG PsMinimumWorkingSet, PsMaximumWorkingSet;
@@ -1532,6 +1536,10 @@ NtCreateUserProcess(OUT PHANDLE ProcessHandle,
     SECTION_IMAGE_INFORMATION ImageInformation;
     PEPROCESS Process = NULL;
     PETHREAD Thread = NULL;
+    PVOID UserThreadStart = NULL;
+#ifdef _M_ARM64
+    BOOLEAN IsArm64EcImage = FALSE;
+#endif
     CLIENT_ID ClientId;
     INITIAL_TEB InitialTeb;
     CONTEXT ThreadContext;
@@ -1894,6 +1902,17 @@ NtCreateUserProcess(OUT PHANDLE ProcessHandle,
         DPRINT("NtCreateUserProcess: TransferAddress=%p, SectionBaseAddress=%p\n",
                ImageInformation.TransferAddress, ActualBase);
 
+#ifdef _M_ARM64
+        UserThreadStart = KiConvertSystemDllAddressToUser(PspSystemDllThreadStart,
+                                                          Process);
+        if (!UserThreadStart &&
+            PspSystemDllThreadStart &&
+            (ULONG_PTR)PspSystemDllThreadStart < (ULONG_PTR)MmSystemRangeStart)
+        {
+            UserThreadStart = PspSystemDllThreadStart;
+        }
+#endif
+
         if (ActualBase && ImageInformation.TransferAddress)
         {
             /*
@@ -1937,6 +1956,32 @@ NtCreateUserProcess(OUT PHANDLE ProcessHandle,
                     DPRINT("NtCreateUserProcess: Adjusted TransferAddress=%p\n",
                             ImageInformation.TransferAddress);
                 }
+
+#ifdef _M_ARM64
+                if (ImageInformation.Machine == IMAGE_FILE_MACHINE_AMD64 ||
+                    ImageInformation.Machine == IMAGE_FILE_MACHINE_ARM64EC)
+                {
+                    KAPC_STATE ApcState;
+                    PVOID NativeTransferAddress;
+
+                    KeStackAttachProcess(&Process->Pcb, &ApcState);
+                    _SEH2_TRY
+                    {
+                        if (MmGetArm64EcNativeSystemDllEntryPoint(ActualBase,
+                                                                  ImageInformation.TransferAddress,
+                                                                  &NativeTransferAddress))
+                        {
+                            ImageInformation.TransferAddress = NativeTransferAddress;
+                            IsArm64EcImage = TRUE;
+                        }
+                    }
+                    _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
+                    {
+                    }
+                    _SEH2_END;
+                    KeUnstackDetachProcess(&ApcState);
+                }
+#endif
 
                 ObDereferenceObject(SectionObject);
             }
@@ -2254,10 +2299,26 @@ NtCreateUserProcess(OUT PHANDLE ProcessHandle,
     ThreadContext.SegSs = KGDT_R3_DATA | RPL_MASK;
 #elif defined(_M_ARM64)
     /* ARM64: Set up initial context */
-    ThreadContext.Pc = (ULONG64)ImageInformation.TransferAddress;
     ThreadContext.Sp = (ULONG64)InitialTeb.StackBase;
     ThreadContext.Sp &= ~15ULL;
-    ThreadContext.X0 = (ULONG64)ProcessBasicInfo.PebBaseAddress;
+    if (ImageInformation.Machine == IMAGE_FILE_MACHINE_AMD64 &&
+        !IsArm64EcImage &&
+        UserThreadStart)
+    {
+        /*
+         * Pure AMD64 images cannot execute their entry point directly on ARM64.
+         * Resume through ntdll's thread-start shim; it initializes CHPE/FEX and
+         * calls the x64 entry with the same PEB argument used by AMD64 setup.
+         */
+        ThreadContext.Pc = (ULONG64)UserThreadStart;
+        ThreadContext.X0 = (ULONG64)ImageInformation.TransferAddress;
+        ThreadContext.X1 = (ULONG64)ProcessBasicInfo.PebBaseAddress;
+    }
+    else
+    {
+        ThreadContext.Pc = (ULONG64)ImageInformation.TransferAddress;
+        ThreadContext.X0 = (ULONG64)ProcessBasicInfo.PebBaseAddress;
+    }
     ThreadContext.Cpsr = 0;  /* User mode */
 #elif defined(_M_ARM)
     /* ARM: Set up initial context */

@@ -11,3 +11,8 @@ list(APPEND SOURCE
 
 add_library(cryptlib ${SOURCE})
 add_dependencies(cryptlib xdk)
+if(ARCH STREQUAL "arm64ec" AND COMMAND set_arm64ec_native_target)
+    add_library(cryptlib_native ${SOURCE})
+    set_arm64ec_native_target(cryptlib_native)
+    add_dependencies(cryptlib_native xdk)
+endif()

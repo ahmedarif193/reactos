@@ -680,7 +680,7 @@ typedef struct _KLOCK_QUEUE_HANDLE {
   KIRQL OldIrql;
 } KLOCK_QUEUE_HANDLE, *PKLOCK_QUEUE_HANDLE;
 
-#if defined(_AMD64_)
+#if _VCRT_AMD64_INTRINSICS
 
 typedef ULONG64 KSPIN_LOCK_QUEUE_NUMBER;
 
@@ -703,6 +703,29 @@ typedef ULONG64 KSPIN_LOCK_QUEUE_NUMBER;
 #define LockQueueUnusedSpare16 16
 #define LockQueueTimerTableLock 17
 #define LockQueueMaximumLock (LockQueueTimerTableLock + LOCK_QUEUE_TIMER_TABLE_LOCKS)
+
+#elif _VCRT_ARM64_INTRINSICS
+
+typedef enum _KSPIN_LOCK_QUEUE_NUMBER {
+  LockQueueDispatcherLock,
+  LockQueueExpansionLock,
+  LockQueuePfnLock,
+  LockQueueSystemSpaceLock,
+  LockQueueVacbLock,
+  LockQueueMasterLock,
+  LockQueueNonPagedPoolLock,
+  LockQueueIoCancelLock,
+  LockQueueWorkQueueLock,
+  LockQueueIoVpbLock,
+  LockQueueIoDatabaseLock,
+  LockQueueIoCompletionLock,
+  LockQueueNtfsStructLock,
+  LockQueueAfdWorkQueueLock,
+  LockQueueBcbLock,
+  LockQueueMmNonPagedPoolLock,
+  LockQueueUnusedSpare16,
+  LockQueueMaximumLock = LockQueueUnusedSpare16 + 1
+} KSPIN_LOCK_QUEUE_NUMBER, *PKSPIN_LOCK_QUEUE_NUMBER;
 
 #else
 
@@ -1723,4 +1746,3 @@ typedef struct _KQUEUE {
 } KQUEUE, *PKQUEUE, *RESTRICTED_POINTER PRKQUEUE;
 
 $endif (_NTIFS_)
-

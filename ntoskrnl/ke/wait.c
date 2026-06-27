@@ -885,7 +885,18 @@ NtDelayExecution(IN BOOLEAN Alertable,
 {
     KPROCESSOR_MODE PreviousMode = ExGetPreviousMode();
     LARGE_INTEGER SafeInterval;
+    PEPROCESS Process;
+    BOOLEAN TraceWinlogon = FALSE;
     NTSTATUS Status;
+
+    Process = PsGetCurrentProcess();
+    if (RtlCompareMemory(Process->ImageFileName,
+                         "winlogon.exe",
+                         sizeof("winlogon.exe") - 1) ==
+        sizeof("winlogon.exe") - 1)
+    {
+        TraceWinlogon = TRUE;
+    }
 
     /* Check the previous mode */
     if (PreviousMode != KernelMode)
@@ -905,10 +916,24 @@ NtDelayExecution(IN BOOLEAN Alertable,
         _SEH2_END;
    }
 
+   if (TraceWinlogon)
+   {
+       DPRINT1("[arm64ec] winlogon NtDelayExecution alert=%u interval=0x%I64x PreviousMode=%lu\n",
+               Alertable,
+               DelayInterval ? DelayInterval->QuadPart : 0,
+               PreviousMode);
+   }
+
    /* Call the Kernel Function */
    Status = KeDelayExecutionThread(PreviousMode,
                                    Alertable,
                                    DelayInterval);
+
+   if (TraceWinlogon)
+   {
+       DPRINT1("[arm64ec] winlogon NtDelayExecution returned 0x%08lx\n",
+               Status);
+   }
 
    /* Return Status */
    return Status;
