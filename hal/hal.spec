@@ -177,6 +177,33 @@
 @ fastcall -arch=arm64 HalGetInterruptSource()
 @ stdcall -arch=arm64 HalPerformEndOfInterrupt()
 
+; Win11 hal.dll ABI export-table parity (name-set match with Win11 ARM64 hal.dll).
+; In Win11 these names are FORWARDERS to ntoskrnl (HAL merged into the kernel
+; since Win10). ReactOS ntoskrnl exports none of them, so they are provided as
+; local stubs (kernstubs.c; HalDma*CrashDumpRegistersEx in common sysinfo_stubs.c)
+; and exported here by bare name. Pure ABI-completeness exports: none are invoked
+; on the ARM64 boot path, so they are boot-neutral.
+@ stdcall -arch=arm64 HalDmaAllocateCrashDumpRegistersEx(ptr long long ptr ptr)
+@ stdcall -arch=arm64 HalDmaFreeCrashDumpRegistersEx(ptr long)
+@ stdcall -arch=arm64 HalEnumerateProcessors(ptr ptr)
+@ stdcall -arch=arm64 HalQueryMaximumProcessorCount()
+@ stdcall -arch=arm64 HalRegisterDynamicProcessor(ptr ptr)
+@ stdcall -arch=arm64 HalStartDynamicProcessor(ptr ptr)
+@ stdcall -arch=arm64 HalIsHyperThreadingEnabled()
+@ stdcall -arch=arm64 HalBeginSystemInterruptUnspecified(long ptr)
+@ stdcall -arch=arm64 HalRequestClockInterrupt(long)
+@ stdcall -arch=arm64 HalRequestDeferredRecoveryServiceInterrupt()
+@ stdcall -arch=arm64 HalRequestIpiSpecifyVector(int64 long)
+@ stdcall -arch=arm64 HalSendSoftwareInterrupt(int64 long)
+@ stdcall -arch=arm64 HalSetMpam0(int64)
+@ stdcall -arch=arm64 HalAcpiGetTableEx(ptr long)
+@ stdcall -arch=arm64 HalInitializeOnResume(ptr)
+@ stdcall -arch=arm64 HalRegisterErrataCallbacks(ptr)
+@ stdcall -arch=arm64 HalWheaHandleSea(ptr)
+@ stdcall -arch=arm64 HalWheaHandleSei(ptr)
+@ stdcall -arch=arm64 HalWheaUpdateCmciPolicy(ptr)
+@ extern -arch=arm64 KdHvComPortInUse
+
 ; Internal kernel entry points needed by early ARM64 HAL code.
 @ stdcall -arch=arm64 KxSaveFloatingPointState(ptr) ntoskrnl.KxSaveFloatingPointState
 @ stdcall -arch=arm64 KxRestoreFloatingPointState(ptr) ntoskrnl.KxRestoreFloatingPointState
