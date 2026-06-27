@@ -548,7 +548,6 @@ KiArm64FixupUserAccessFlagFault(
     volatile ULONG64 *L0Table, *L1Table, *L2Table, *L3Table;
     ULONG L0Idx, L1Idx, L2Idx, L3Idx;
     ULONG64 L0Entry, L1Entry, L2Entry, L3Entry;
-    volatile ULONG64 *DirtyEntry = NULL;
 
     /* Access Flag fault codes: 0x9/0xA/0xB for levels 1/2/3 */
     if ((FaultStatus != 0x9) && (FaultStatus != 0xA) && (FaultStatus != 0xB))
@@ -580,7 +579,6 @@ KiArm64FixupUserAccessFlagFault(
     {
         if ((L1Entry & (1ULL << 10)) == 0)
             L1Table[L1Idx] = (L1Entry | (1ULL << 10));
-        DirtyEntry = &L1Table[L1Idx];
         goto TlbFlush;
     }
     if ((L1Entry & 0x3ULL) != 0x3ULL)
@@ -594,7 +592,6 @@ KiArm64FixupUserAccessFlagFault(
     {
         if ((L2Entry & (1ULL << 10)) == 0)
             L2Table[L2Idx] = (L2Entry | (1ULL << 10));
-        DirtyEntry = &L2Table[L2Idx];
         goto TlbFlush;
     }
     if ((L2Entry & 0x3ULL) != 0x3ULL)
@@ -606,18 +603,12 @@ KiArm64FixupUserAccessFlagFault(
     {
         if ((L3Entry & (1ULL << 10)) == 0)
             L3Table[L3Idx] = (L3Entry | (1ULL << 10));
-        DirtyEntry = &L3Table[L3Idx];
         goto TlbFlush;
     }
 
     return FALSE;
 
 TlbFlush:
-    if (DirtyEntry != NULL)
-    {
-        __asm__ __volatile__("dc civac, %0" :: "r"(DirtyEntry) : "memory");
-        __asm__ __volatile__("dsb ish" ::: "memory");
-    }
     __asm__ __volatile__("dsb ishst" ::: "memory");
     __asm__ __volatile__("tlbi vaae1is, %0" :: "r"((ULONG_PTR)FaultAddress >> PAGE_SHIFT) : "memory");
     __asm__ __volatile__("dsb ish" ::: "memory");
