@@ -450,6 +450,70 @@ GetArcComponentInterface(
     return Interface;
 }
 
+static BOOLEAN
+FindBootDisplayFromLoaderGop(
+    _Out_ PPHYSICAL_ADDRESS VideoRamAddress,
+    _Out_ PULONG VideoRamSize,
+    _Out_ PCM_FRAMEBUF_DEVICE_DATA VideoConfigData,
+    _Out_opt_ PINTERFACE_TYPE Interface,
+    _Out_opt_ PULONG BusNumber)
+{
+    PLOADER_PARAMETER_EXTENSION Extension;
+    PLOADER_PARAMETER_FRAMEBUFFER Framebuffer;
+
+    if (!KeLoaderBlock || !KeLoaderBlock->Extension)
+        return FALSE;
+
+    Extension = KeLoaderBlock->Extension;
+    if ((Extension->Size < RTL_SIZEOF_THROUGH_FIELD(LOADER_PARAMETER_EXTENSION, GopFramebuffer)) ||
+        !Extension->BootViaEFI)
+    {
+        return FALSE;
+    }
+
+    Framebuffer = &Extension->GopFramebuffer;
+    if ((Framebuffer->FrameBufferBase.QuadPart == 0) ||
+        (Framebuffer->FrameBufferSize == 0) ||
+        (Framebuffer->HorizontalResolution == 0) ||
+        (Framebuffer->VerticalResolution == 0) ||
+        (Framebuffer->PixelsPerScanLine == 0) ||
+        (Framebuffer->PixelFormat == 0))
+    {
+        return FALSE;
+    }
+
+    VideoRamAddress->QuadPart = Framebuffer->FrameBufferBase.QuadPart;
+    *VideoRamSize = Framebuffer->FrameBufferSize;
+
+    RtlZeroMemory(VideoConfigData, sizeof(*VideoConfigData));
+    VideoConfigData->Version = 1;
+    VideoConfigData->Revision = 3;
+    VideoConfigData->FrameBufferOffset = 0;
+    VideoConfigData->ScreenWidth = Framebuffer->HorizontalResolution;
+    VideoConfigData->ScreenHeight = Framebuffer->VerticalResolution;
+    VideoConfigData->PixelsPerScanLine = Framebuffer->PixelsPerScanLine;
+    VideoConfigData->BitsPerPixel = Framebuffer->PixelFormat;
+    VideoConfigData->PixelMasks.RedMask = Framebuffer->RedMask;
+    VideoConfigData->PixelMasks.GreenMask = Framebuffer->GreenMask;
+    VideoConfigData->PixelMasks.BlueMask = Framebuffer->BlueMask;
+    VideoConfigData->PixelMasks.ReservedMask = Framebuffer->Reserved;
+
+    if (Interface)
+        *Interface = Internal;
+    if (BusNumber)
+        *BusNumber = 0;
+
+    DPRINT1("Display: loader UEFI GOP framebuffer 0x%I64X size=%lu %lux%lu stride=%lu bpp=%lu\n",
+            VideoRamAddress->QuadPart,
+            *VideoRamSize,
+            VideoConfigData->ScreenWidth,
+            VideoConfigData->ScreenHeight,
+            VideoConfigData->PixelsPerScanLine,
+            VideoConfigData->BitsPerPixel);
+
+    return TRUE;
+}
+
 static NTSTATUS
 FindBootDisplayFromLoaderARCTree(
     _Out_ PPHYSICAL_ADDRESS VideoRamAddress,
@@ -583,12 +647,23 @@ FindBootDisplay(
      * even if the caller does not require the monitor data itself
      * to be returned.
      */
-    Status = FindBootDisplayFromLoaderARCTree(VideoRamAddress,
-                                              VideoRamSize,
-                                              VideoConfigData,
-                                              &LocalMonitorConfigData,
-                                              &LocalInterface,
-                                              &LocalBusNumber);
+    if (FindBootDisplayFromLoaderGop(VideoRamAddress,
+                                     VideoRamSize,
+                                     VideoConfigData,
+                                     &LocalInterface,
+                                     &LocalBusNumber))
+    {
+        Status = STATUS_SUCCESS;
+    }
+    else
+    {
+        Status = FindBootDisplayFromLoaderARCTree(VideoRamAddress,
+                                                  VideoRamSize,
+                                                  VideoConfigData,
+                                                  &LocalMonitorConfigData,
+                                                  &LocalInterface,
+                                                  &LocalBusNumber);
+    }
     if (!NT_SUCCESS(Status))
     {
         DPRINT1("Boot Display not found\n");
