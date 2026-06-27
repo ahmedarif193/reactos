@@ -481,8 +481,6 @@ Rp1GetChildInterrupt(
     _Out_ PUCHAR InterruptLine)
 {
     ULONG MessageVector;
-    KIRQL Irql;
-    KAFFINITY TargetAffinity;
 
     if (!FdoExt || !Level || !Vector || !Affinity || !Flags ||
         !ShareDisposition || !InterruptLine)
@@ -493,18 +491,12 @@ Rp1GetChildInterrupt(
     if (FdoExt->MsixReady && ChildIndex == RP1_CHILD_ETHERNET)
     {
         MessageVector = Rp1MsiVectorFromHwirq(RP1_INT_ETH);
-        MessageVector = HalGetInterruptVector(Internal,
-                                              0,
-                                              MessageVector,
-                                              MessageVector,
-                                              &Irql,
-                                              &TargetAffinity);
         if (MessageVector == 0)
             return FALSE;
 
-        *Level = Irql;
+        *Level = FdoExt->RawInterruptLevel ? FdoExt->RawInterruptLevel : MessageVector;
         *Vector = MessageVector;
-        *Affinity = TargetAffinity ? TargetAffinity : 1;
+        *Affinity = FdoExt->RawInterruptAffinity ? FdoExt->RawInterruptAffinity : 1;
         *Flags = CM_RESOURCE_INTERRUPT_LATCHED | CM_RESOURCE_INTERRUPT_MESSAGE;
         *ShareDisposition = CmResourceShareDeviceExclusive;
         *InterruptLine = (MessageVector <= 0xff) ? (UCHAR)MessageVector : 0xff;

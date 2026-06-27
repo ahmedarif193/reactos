@@ -29,6 +29,20 @@ __INTRIN_INLINE void _ReadWriteBarrier(void)
 #define _ReadBarrier _ReadWriteBarrier
 #define _WriteBarrier _ReadWriteBarrier
 
+#if !HAS_BUILTIN(_disable)
+__INTRIN_INLINE void _disable(void)
+{
+    __asm__ __volatile__("msr daifset, #0x2\n\tisb" : : : "memory");
+}
+#endif
+
+#if !HAS_BUILTIN(_enable)
+__INTRIN_INLINE void _enable(void)
+{
+    __asm__ __volatile__("msr daifclr, #0x2\n\tisb" : : : "memory");
+}
+#endif
+
 #if !HAS_BUILTIN(_byteswap_ushort)
 __INTRIN_INLINE unsigned short _byteswap_ushort(unsigned short value)
 {
