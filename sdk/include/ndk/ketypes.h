@@ -1046,22 +1046,71 @@ typedef struct _PP_LOOKASIDE_LIST
 //
 // Kernel Memory Node
 //
+// The Win11 (ntkrnlmp.pdb _KNODE, type 0x1B32) _KNODE is a 0x178-byte topology
+// node that bears no resemblance to the pre-Vista layout ReactOS historically
+// used (ProcessorMask/Color/Seed/FreeCount...). The fields the tree actually
+// reads (ProcessorMask, Seed, NodeNumber, FreeCount) are kept by name - either
+// as a real Win11 field (NodeNumber) or as a ReactOS-compat alias unioned over
+// the Win11 member that holds the same datum (ProcessorMask == ActiveGroups
+// group-0 mask) or over a Win11 region ReactOS never touches (Seed, FreeCount).
+//
 typedef struct _KNODE
 {
-    SLIST_HEADER DeadStackList;
-    SLIST_HEADER PfnDereferenceSListHead;
-    KAFFINITY ProcessorMask;
-    UCHAR Color;
-    UCHAR Seed;
-    UCHAR NodeNumber;
-    struct _flags {
-        UCHAR Removable : 1;
-        UCHAR Fill : 7;
+    /* Public Win11 architectural fields. */
+    USHORT NodeNumber;                                   // 0x000
+    USHORT PrimaryNodeNumber;                            // 0x002
+    ULONG ProximityId;                                   // 0x004
+    USHORT MaximumProcessors;                            // 0x008
+    struct                                               // 0x00A (sizeof 1)
+    {
+        UCHAR ProcessorOnly : 1;
+        UCHAR GroupsAssigned : 1;
+        UCHAR MeasurableDistance : 1;
     } Flags;
-    ULONG MmShiftedColor;
-    ULONG_PTR FreeCount[2];
-    struct _SINGLE_LIST_ENTRY *PfnDeferredList;
+    union                                                // 0x00B
+    {
+        UCHAR GroupSeed;                                 // Win11
+        /* ReactOS-private: legacy per-node thread round-robin seed (procobj.c).
+           Win11 keeps the scheduling seed in KSCHEDULER_SUBNODE.ProcessSeed. */
+        UCHAR Seed;
+    };
+    UCHAR PrimaryGroup;                                  // 0x00C
+    UCHAR Padding[3];                                    // 0x00D
+    union                                                // 0x010
+    {
+        ULONG64 ActiveGroups[2];                         // Win11 KGROUP_MASK { ULONG64 Masks[2] }
+        /* ReactOS-compat alias: this node's processor mask == ActiveGroups[0]
+           (group 0), mirroring how Win11 stores the per-node affinity. Read and
+           written across procobj.c/thrdobj.c/thrdschd.c/topology.c/sysinfo.c. */
+        KAFFINITY ProcessorMask;
+    };
+    union                                                // 0x020
+    {
+        struct _KSCHEDULER_SUBNODE *SchedulerSubNodes[32];   // Win11 (256 bytes)
+        /* ReactOS-private: legacy MM per-node free-page counts (read-only in
+           sysinfo.c, never written in this tree -> always 0). Overlays the
+           ReactOS-unused Win11 SchedulerSubNodes pointer array. */
+        ULONG_PTR FreeCount[2];
+    };
+    ULONG ActiveTopologyElements[5];                     // 0x120 (20 bytes)
+    UCHAR PerformanceSearchRanks[32];                    // 0x134 _KNODE_SUBNODE_SEARCH_RANKS[1]
+    UCHAR EfficiencySearchRanks[32];                     // 0x154 _KNODE_SUBNODE_SEARCH_RANKS[1]
+    UCHAR Pad174[0x178 - 0x174];                         // tail pad to sizeof 0x178
 } KNODE, *PKNODE;
+
+#ifdef _WIN64
+C_ASSERT(sizeof(KNODE) == 0x178);
+C_ASSERT(FIELD_OFFSET(KNODE, NodeNumber) == 0x0);
+C_ASSERT(FIELD_OFFSET(KNODE, GroupSeed) == 0xB);
+C_ASSERT(FIELD_OFFSET(KNODE, Seed) == 0xB);
+C_ASSERT(FIELD_OFFSET(KNODE, ActiveGroups) == 0x10);
+C_ASSERT(FIELD_OFFSET(KNODE, ProcessorMask) == 0x10);
+C_ASSERT(FIELD_OFFSET(KNODE, SchedulerSubNodes) == 0x20);
+C_ASSERT(FIELD_OFFSET(KNODE, FreeCount) == 0x20);
+C_ASSERT(FIELD_OFFSET(KNODE, ActiveTopologyElements) == 0x120);
+C_ASSERT(FIELD_OFFSET(KNODE, PerformanceSearchRanks) == 0x134);
+C_ASSERT(FIELD_OFFSET(KNODE, EfficiencySearchRanks) == 0x154);
+#endif
 
 typedef struct _KSCHEDULER_SUBNODE
 {
@@ -1491,20 +1540,51 @@ typedef struct _KERNEL_STACK_SEGMENT
     ULONG_PTR InitialStack;
 } KERNEL_STACK_SEGMENT, *PKERNEL_STACK_SEGMENT;
 
+// The Win11 (ntkrnlmp.pdb _KSTACK_CONTROL, type 0x1B79, fieldList 0x1B78) struct
+// is 0x40 bytes. ReactOS historically used a simplified 0x30-byte body that
+// omitted CalloutState/Padding, which left Previous at 0x10 instead of its real
+// 0x20 - so the embedded KERNEL_STACK_SEGMENT (and every Previous.* OFFSET the
+// asm helpers derive) sat 0x10 too low versus Win11.
 typedef struct _KSTACK_CONTROL
 {
-    ULONG_PTR StackBase;
-    union
+    /* Public Win11 architectural fields. */
+    ULONG_PTR StackBase;                                 // 0x00
+    union                                                // 0x08
     {
         ULONG_PTR ActualLimit;
         ULONG_PTR StackExpansion:1;
     };
-    KERNEL_STACK_SEGMENT Previous;
+    PVOID CalloutState;                                  // 0x10 Win11 (was absent in ReactOS)
+    PVOID Padding;                                       // 0x18 Win11 (was absent in ReactOS)
+    KERNEL_STACK_SEGMENT Previous;                       // 0x20 (was wrongly at 0x10)
 #ifdef _M_IX86
+    /* ReactOS-private i386-only save slots, consumed by the i386 stack-expansion
+       asm via ksx.template.h (KcTrapFrame/KcExceptionList). */
     struct _KTRAP_FRAME *PreviousTrapFrame;
     PVOID PreviousExceptionList;
 #endif
 } KSTACK_CONTROL, *PKSTACK_CONTROL;
+
+#if defined(_M_ARM64)
+/* Lock KSTACK_CONTROL to the Win11 ARM64 ntkrnlmp.pdb layout (type 0x1B79,
+   sizeof 0x40). The OFFSET()s emitted from ksx.template.h - StackBase,
+   ActualLimit and Previous.{StackBase,StackLimit,KernelStack,InitialStack} -
+   are symbolic and auto-track these C offsets. amd64 is intentionally NOT
+   asserted here: there is no amd64 PDB ground truth in this tree and the vendored
+   ksamd64.inc reports a different size (KSTACK_CONTROL_LENGTH == 0x50), so a
+   shared _WIN64 assert would be an unverified parity claim. */
+C_ASSERT(sizeof(KERNEL_STACK_SEGMENT) == 0x20);
+C_ASSERT(sizeof(KSTACK_CONTROL) == 0x40);
+C_ASSERT(FIELD_OFFSET(KSTACK_CONTROL, StackBase) == 0x00);
+C_ASSERT(FIELD_OFFSET(KSTACK_CONTROL, ActualLimit) == 0x08);
+C_ASSERT(FIELD_OFFSET(KSTACK_CONTROL, CalloutState) == 0x10);
+C_ASSERT(FIELD_OFFSET(KSTACK_CONTROL, Padding) == 0x18);
+C_ASSERT(FIELD_OFFSET(KSTACK_CONTROL, Previous) == 0x20);
+C_ASSERT(FIELD_OFFSET(KSTACK_CONTROL, Previous.StackBase) == 0x20);
+C_ASSERT(FIELD_OFFSET(KSTACK_CONTROL, Previous.StackLimit) == 0x28);
+C_ASSERT(FIELD_OFFSET(KSTACK_CONTROL, Previous.KernelStack) == 0x30);
+C_ASSERT(FIELD_OFFSET(KSTACK_CONTROL, Previous.InitialStack) == 0x38);
+#endif
 
 #define KSTACK_ACTUAL_LIMIT_EXPANDED 1
 #endif /* NTDDI_WIN8 */
