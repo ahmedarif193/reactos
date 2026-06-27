@@ -1069,19 +1069,75 @@ typedef struct _KSCHEDULER_SUBNODE
     KAFFINITY IdleNonParkedCpuSet;
     KAFFINITY IdleCpuSet;
     KAFFINITY IdleSmtSet;
+    KAFFINITY IdleModuleSet;
     KAFFINITY NonPairedSmtSet;
+    KAFFINITY ThreadQosGroupingSet;
+    ULONG_PTR Spare1;
+    UCHAR Pad40[0x80 - 0x40];
     KAFFINITY DeepIdleSet;
+    KAFFINITY IdleConstrainedSet;
     KAFFINITY NonParkedSet;
+    KAFFINITY ParkRequestSet;
+    KAFFINITY SoftParkRequestSet;
+    KAFFINITY ForceParkRequestSet;
+    KAFFINITY NonIsrTargetedSet;
+    LONG ParkLock;
+    UCHAR ProcessSeed;
+    UCHAR Spare5[3];
+    UCHAR PadC0[0x100 - 0xC0];
     KAFFINITY Affinity;
+    USHORT AffinityGroup;
     USHORT ParentNodeNumber;
     USHORT SubNodeNumber;
+    USHORT Spare;
     KAFFINITY SiblingMask;
     KAFFINITY SharedReadyQueueMask;
+    KAFFINITY StrideMask;
     KAFFINITY LLCLeaders;
     ULONG Lowest;
     ULONG Highest;
     UCHAR Flags;
+    UCHAR WorkloadClasses;
+    UCHAR Pad13A[0x180 - 0x13A];
+    PVOID HeteroSets;
+    PVOID PerformanceRanks;
+    PVOID EfficiencyRanks;
+    KAFFINITY Spare6[5];
+    UCHAR Pad1C0[0x200 - 0x1C0];
+    KAFFINITY PpmConfiguredQosSets[7];
+    KAFFINITY Spare7;
+    UCHAR Pad240[0x280 - 0x240];
+    UCHAR PpmQosGroupingSets[16];
+    KAFFINITY Spare8[6];
+    UCHAR Pad2C0[0x300 - 0x2C0];
+    volatile KAFFINITY StealableLocalReadyQueues;
+    volatile KAFFINITY StealableSharedReadyQueues;
+    volatile KAFFINITY StealableStandbyThreads;
+    KAFFINITY Spare9[5];
+    UCHAR Pad340[0x380 - 0x340];
+    UCHAR SoftParkRanks[64];
+    UCHAR CoreShareCounts[64];
+    UCHAR ModuleShareCounts[64];
+    UCHAR ThreadQosGroupingCoreShareCounts[64];
+    UCHAR ThreadQosGroupingModuleShareCounts[64];
+    UCHAR Pad4C0[0x500 - 0x4C0];
 } KSCHEDULER_SUBNODE, *PKSCHEDULER_SUBNODE;
+
+#ifdef _WIN64
+C_ASSERT(sizeof(KSCHEDULER_SUBNODE) == 0x500);
+C_ASSERT(FIELD_OFFSET(KSCHEDULER_SUBNODE, IdleCpuSet) == 0x10);
+C_ASSERT(FIELD_OFFSET(KSCHEDULER_SUBNODE, IdleSmtSet) == 0x18);
+C_ASSERT(FIELD_OFFSET(KSCHEDULER_SUBNODE, DeepIdleSet) == 0x80);
+C_ASSERT(FIELD_OFFSET(KSCHEDULER_SUBNODE, NonParkedSet) == 0x90);
+C_ASSERT(FIELD_OFFSET(KSCHEDULER_SUBNODE, Affinity) == 0x100);
+C_ASSERT(FIELD_OFFSET(KSCHEDULER_SUBNODE, ParentNodeNumber) == 0x10A);
+C_ASSERT(FIELD_OFFSET(KSCHEDULER_SUBNODE, SubNodeNumber) == 0x10C);
+C_ASSERT(FIELD_OFFSET(KSCHEDULER_SUBNODE, SiblingMask) == 0x110);
+C_ASSERT(FIELD_OFFSET(KSCHEDULER_SUBNODE, LLCLeaders) == 0x128);
+C_ASSERT(FIELD_OFFSET(KSCHEDULER_SUBNODE, Lowest) == 0x130);
+C_ASSERT(FIELD_OFFSET(KSCHEDULER_SUBNODE, Highest) == 0x134);
+C_ASSERT(FIELD_OFFSET(KSCHEDULER_SUBNODE, HeteroSets) == 0x180);
+#endif
 
 //
 // Structure for Get/SetContext APC
