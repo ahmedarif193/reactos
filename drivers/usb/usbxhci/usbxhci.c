@@ -8659,12 +8659,6 @@ XHCI_DetectHardwareQuirks(
                                  XHCI_QUIRK_QEMU_PORT_RESET;
             DPRINT("usbxhci: detected qemu-xhci, enabling QEMU quirks + poll fallback\n");
         }
-
-        if (VendorId == 0x1DE4 &&
-            (DeviceId == 0x0100 || DeviceId == 0x0101))
-        {
-            Extension->Quirks |= XHCI_QUIRK_RP1_POLL_XFERS;
-        }
     }
 
     /*
@@ -9214,10 +9208,21 @@ XHCI_EnablePciBusMaster(
     USHORT Command;
     USHORT NewCommand;
 
-    if (!Extension || !XhciRegPacket.UsbPortReadWriteConfigSpace)
-    {
-        DPRINT1("usbxhci: UsbPortReadWriteConfigSpace not available – cannot enable bus mastering\n");
+    if (!Extension)
         return FALSE;
+
+    /* On an ACPI/UEFI-enumerated controller there is no PCI config space:
+     * usbport returns STATUS_NOT_SUPPORTED for config accesses (the bus
+     * interface / GetBusData is absent), so the accessor is either missing or
+     * the read fails. The firmware has already enabled MEM decode and bus
+     * mastering for such a controller and the HAL provides the DMA window, so
+     * treat a missing/failed config read as success and skip the (impossible)
+     * PCI command-register programming. Real PCI controllers, whose config
+     * reads succeed, fall through and are programmed exactly as before. */
+    if (!XhciRegPacket.UsbPortReadWriteConfigSpace)
+    {
+        DPRINT1("usbxhci: no PCI config space (ACPI-enumerated controller), skipping bus-master enable\n");
+        return TRUE;
     }
 
     if (!XHCI_ReadPciConfig(Extension,
@@ -9225,8 +9230,8 @@ XHCI_EnablePciBusMaster(
                             &Command,
                             sizeof(Command)))
     {
-        DPRINT1("usbxhci: failed to read PCI command register\n");
-        return FALSE;
+        DPRINT1("usbxhci: no PCI config space (ACPI-enumerated controller), skipping bus-master enable\n");
+        return TRUE;
     }
 
     NewCommand = Command | PCI_ENABLE_MEMORY_SPACE | PCI_ENABLE_BUS_MASTER;
