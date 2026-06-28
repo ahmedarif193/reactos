@@ -1634,6 +1634,7 @@ Retry:
             //
             Entry->Key = Key;
             Entry->NumberOfPages = NumberOfPages;
+            Entry->QuotaObject = NULL;
 
             //
             // Add one more entry to the count, and see if we're getting within
@@ -1689,7 +1690,8 @@ ULONG
 NTAPI
 ExpFindAndRemoveTagBigPages(IN PVOID Va,
                             OUT PULONG_PTR BigPages,
-                            IN POOL_TYPE PoolType)
+                            IN POOL_TYPE PoolType,
+                            OUT PVOID *QuotaObject)
 {
     BOOLEAN FirstTry = TRUE;
     SIZE_T TableSize;
@@ -1730,6 +1732,7 @@ ExpFindAndRemoveTagBigPages(IN PVOID Va,
                 //
                 KeReleaseSpinLock(&ExpLargePoolTableLock, OldIrql);
                 *BigPages = 0;
+                *QuotaObject = NULL;
                 return ' GIB';
             }
 
@@ -1747,6 +1750,7 @@ ExpFindAndRemoveTagBigPages(IN PVOID Va,
     //
     Entry = &PoolBigPageTable[Hash];
     *BigPages = Entry->NumberOfPages;
+    *QuotaObject = Entry->QuotaObject;
     PoolTag = Entry->Key;
 
     //
@@ -1769,6 +1773,49 @@ ExpFindAndRemoveTagBigPages(IN PVOID Va,
         KeReleaseSpinLock(&ExpLargePoolTableLock, OldIrql);
     }
     return PoolTag;
+}
+
+BOOLEAN
+NTAPI
+ExpSetBigPoolQuotaObject(IN PVOID Va,
+                         IN PVOID QuotaObject)
+{
+    BOOLEAN FirstTry = TRUE;
+    SIZE_T TableSize;
+    KIRQL OldIrql;
+    ULONG Hash;
+    ASSERT(((ULONG_PTR)Va & POOL_BIG_TABLE_ENTRY_FREE) == 0);
+
+    //
+    // Locate the big page table entry for this allocation (same probe sequence
+    // as ExpFindAndRemoveTagBigPages) and record the quota owner process.
+    //
+    Hash = ExpComputePartialHashForAddress(Va);
+    KeAcquireSpinLock(&ExpLargePoolTableLock, &OldIrql);
+    Hash &= PoolBigPageTableHash;
+    TableSize = PoolBigPageTableSize;
+
+    while (PoolBigPageTable[Hash].Va != Va)
+    {
+        if (++Hash >= TableSize)
+        {
+            if (!FirstTry)
+            {
+                //
+                // The allocation was never inserted (it received the generic
+                // 'BIG' tag), so there is nowhere to record the owner.
+                //
+                KeReleaseSpinLock(&ExpLargePoolTableLock, OldIrql);
+                return FALSE;
+            }
+            Hash = 0;
+            FirstTry = FALSE;
+        }
+    }
+
+    PoolBigPageTable[Hash].QuotaObject = QuotaObject;
+    KeReleaseSpinLock(&ExpLargePoolTableLock, OldIrql);
+    return TRUE;
 }
 
 VOID
@@ -2529,6 +2576,7 @@ ExFreePoolWithTag(IN PVOID P,
     PKPRCB Prcb = KeGetCurrentPrcb();
     PGENERAL_LOOKASIDE LookasideList;
     PEPROCESS Process;
+    PVOID QuotaObject = NULL;
 
     //
     // Check if any of the debug flags are enabled
@@ -2610,7 +2658,7 @@ ExFreePoolWithTag(IN PVOID P,
         //
         PoolType = MmDeterminePoolType(P);
         ExpCheckPoolIrqlLevel(PoolType, 0, P);
-        Tag = ExpFindAndRemoveTagBigPages(P, &PageCount, PoolType);
+        Tag = ExpFindAndRemoveTagBigPages(P, &PageCount, PoolType, &QuotaObject);
         if (!Tag)
         {
             DPRINT1("We do not know the size of this allocation. This is not yet supported\n");
@@ -2640,6 +2688,16 @@ ExFreePoolWithTag(IN PVOID P,
         // tracker now
         //
         ExpRemovePoolTracker(Tag, PageCount << PAGE_SHIFT, PoolType);
+
+        //
+        // If this big page allocation was charged to a process (Win8+ quota),
+        // return the quota and release the reference taken at allocation time.
+        //
+        if (QuotaObject != NULL)
+        {
+            PsReturnPoolQuota((PEPROCESS)QuotaObject, PoolType, PageCount << PAGE_SHIFT);
+            ObDereferenceObject((PEPROCESS)QuotaObject);
+        }
 
         //
         // Check if any of the debug flags are enabled
@@ -3120,7 +3178,53 @@ ExAllocatePoolWithQuotaTag(IN POOL_TYPE PoolType,
         ((PVOID *)POOL_NEXT_BLOCK(Entry))[-1] = Process;
         ObReferenceObject(Process);
     }
-    else if (!(Buffer) && (Raise))
+    else if (Buffer != NULL)
+    {
+        //
+        // Page-aligned (big pool) allocation. Starting with Windows 8 these also
+        // charge quota and reference the owning process; since there is no pool
+        // header to hold the owner, it is recorded in the big pool table.
+        //
+        if ((Process != PsInitialSystemProcess) &&
+            !((ExpPoolFlags & POOL_FLAG_SPECIAL_POOL) &&
+              (MmIsSpecialPoolAddress(Buffer))))
+        {
+            /*
+             * Charge the same (ULONG-truncated) page count the big pool tracker
+             * records and the free path returns, so charge == return exactly.
+             */
+            SIZE_T QuotaCharge = ((SIZE_T)(ULONG)BYTES_TO_PAGES(NumberOfBytes)) << PAGE_SHIFT;
+
+            Status = PsChargeProcessPoolQuota(Process,
+                                              PoolType & BASE_POOL_TYPE_MASK,
+                                              QuotaCharge);
+            if (!NT_SUCCESS(Status))
+            {
+                //
+                // Quota failed, back out the allocation and fail
+                //
+                ExFreePoolWithTag(Buffer, Tag);
+                if (Raise) RtlRaiseStatus(Status);
+                return NULL;
+            }
+
+            //
+            // Record the owner in the big pool table and reference it. If it
+            // cannot be recorded, refund the quota we just charged.
+            //
+            if (ExpSetBigPoolQuotaObject(Buffer, Process))
+            {
+                ObReferenceObject(Process);
+            }
+            else
+            {
+                PsReturnPoolQuota(Process,
+                                  PoolType & BASE_POOL_TYPE_MASK,
+                                  QuotaCharge);
+            }
+        }
+    }
+    else if (Raise)
     {
         //
         // The allocation failed, raise an error if we are in raise mode
