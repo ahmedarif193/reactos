@@ -1032,4 +1032,128 @@ RtlIpv6StringToAddressExW(
 
 /* End of Wine implementation */
 
+/*
+ * Ethernet (DL_EUI48) address <-> string helpers. The public DL_EUI48 type is a
+ * 6-byte union declared in ws2def.h; a layout-compatible local type keeps this
+ * translation unit self-contained.
+ */
+typedef struct _RTL_EUI48 { UCHAR Byte[6]; } RTL_EUI48;
+
+static int
+RtlpHexDigitValue(WCHAR Char)
+{
+    if (Char >= L'0' && Char <= L'9') return Char - L'0';
+    if (Char >= L'a' && Char <= L'f') return Char - L'a' + 10;
+    if (Char >= L'A' && Char <= L'F') return Char - L'A' + 10;
+    return -1;
+}
+
+/*
+ * @implemented
+ */
+PWSTR
+NTAPI
+RtlEthernetAddressToStringW(
+    _In_ const RTL_EUI48 *Addr,
+    _Out_writes_(18) PWSTR S)
+{
+    static const WCHAR Hex[] = L"0123456789ABCDEF";
+    int i;
+
+    for (i = 0; i < 6; i++)
+    {
+        *S++ = Hex[(Addr->Byte[i] >> 4) & 0xF];
+        *S++ = Hex[Addr->Byte[i] & 0xF];
+        if (i != 5)
+            *S++ = L'-';
+    }
+    *S = UNICODE_NULL;
+    return S;
+}
+
+/*
+ * @implemented
+ */
+PSTR
+NTAPI
+RtlEthernetAddressToStringA(
+    _In_ const RTL_EUI48 *Addr,
+    _Out_writes_(18) PSTR S)
+{
+    static const char Hex[] = "0123456789ABCDEF";
+    int i;
+
+    for (i = 0; i < 6; i++)
+    {
+        *S++ = Hex[(Addr->Byte[i] >> 4) & 0xF];
+        *S++ = Hex[Addr->Byte[i] & 0xF];
+        if (i != 5)
+            *S++ = '-';
+    }
+    *S = ANSI_NULL;
+    return S;
+}
+
+/*
+ * @implemented
+ */
+NTSTATUS
+NTAPI
+RtlEthernetStringToAddressW(
+    _In_ PCWSTR S,
+    _Out_ LPCWSTR *Terminator,
+    _Out_ RTL_EUI48 *Addr)
+{
+    PCWSTR p = S;
+    int i;
+
+    for (i = 0; i < 6; i++)
+    {
+        int Hi = RtlpHexDigitValue(*p), Lo;
+        if (Hi < 0) { if (Terminator) *Terminator = p; return STATUS_INVALID_PARAMETER; }
+        p++;
+        Lo = RtlpHexDigitValue(*p);
+        if (Lo >= 0) { Addr->Byte[i] = (UCHAR)((Hi << 4) | Lo); p++; }
+        else { Addr->Byte[i] = (UCHAR)Hi; }
+        if (i != 5)
+        {
+            if (*p == L'-' || *p == L':') p++;
+            else { if (Terminator) *Terminator = p; return STATUS_INVALID_PARAMETER; }
+        }
+    }
+    if (Terminator) *Terminator = p;
+    return STATUS_SUCCESS;
+}
+
+/*
+ * @implemented
+ */
+NTSTATUS
+NTAPI
+RtlEthernetStringToAddressA(
+    _In_ PCSTR S,
+    _Out_ PCSTR *Terminator,
+    _Out_ RTL_EUI48 *Addr)
+{
+    PCSTR p = S;
+    int i;
+
+    for (i = 0; i < 6; i++)
+    {
+        int Hi = RtlpHexDigitValue((WCHAR)(UCHAR)*p), Lo;
+        if (Hi < 0) { if (Terminator) *Terminator = p; return STATUS_INVALID_PARAMETER; }
+        p++;
+        Lo = RtlpHexDigitValue((WCHAR)(UCHAR)*p);
+        if (Lo >= 0) { Addr->Byte[i] = (UCHAR)((Hi << 4) | Lo); p++; }
+        else { Addr->Byte[i] = (UCHAR)Hi; }
+        if (i != 5)
+        {
+            if (*p == '-' || *p == ':') p++;
+            else { if (Terminator) *Terminator = p; return STATUS_INVALID_PARAMETER; }
+        }
+    }
+    if (Terminator) *Terminator = p;
+    return STATUS_SUCCESS;
+}
+
 /* EOF */

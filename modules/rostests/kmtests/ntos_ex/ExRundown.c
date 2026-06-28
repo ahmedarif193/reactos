@@ -37,6 +37,9 @@ TestRundownBasic(VOID)
     ok_bool_true(Acquired, "acquire after reinit");
     ExReleaseRundownProtection(&Ref);
 
+    /* ExRundownCompleted must follow ExWaitForRundownProtectionRelease, which
+     * places the descriptor into the active (run-down) state. */
+    ExWaitForRundownProtectionRelease(&Ref);
     ExRundownCompleted(&Ref);
     Acquired = ExAcquireRundownProtection(&Ref);
     ok_bool_false(Acquired, "acquire after completed");

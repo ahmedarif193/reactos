@@ -103,4 +103,59 @@ RtlComputeCrc32(_In_ ULONG Initial,
   return ~CrcValue;
 }
 
+/*
+ * @implemented
+ *
+ * CRC-32C (Castagnoli, reflected polynomial 0x82F63B78), as used by RtlCrc32.
+ * This differs from the zlib CRC-32 computed by RtlComputeCrc32 above.
+ */
+ULONG
+NTAPI
+RtlCrc32(
+    _In_reads_bytes_(Size) const void *Buffer,
+    _In_ SIZE_T Size,
+    _In_ ULONG InitialCrc)
+{
+    const UCHAR *p = (const UCHAR *)Buffer;
+    ULONG Crc = ~InitialCrc;
+    SIZE_T i;
+    int k;
+
+    for (i = 0; i < Size; i++)
+    {
+        Crc ^= p[i];
+        for (k = 0; k < 8; k++)
+            Crc = (Crc >> 1) ^ (0x82F63B78u & (0u - (Crc & 1u)));
+    }
+
+    return ~Crc;
+}
+
+/*
+ * @implemented
+ *
+ * CRC-64 with reflected polynomial 0x9A6C9329AC4BC9B5, as used by RtlCrc64.
+ */
+ULONGLONG
+NTAPI
+RtlCrc64(
+    _In_reads_bytes_(Size) const void *Buffer,
+    _In_ SIZE_T Size,
+    _In_ ULONGLONG InitialCrc)
+{
+    const UCHAR *p = (const UCHAR *)Buffer;
+    ULONGLONG Crc = ~InitialCrc;
+    SIZE_T i;
+    int k;
+
+    for (i = 0; i < Size; i++)
+    {
+        Crc ^= p[i];
+        for (k = 0; k < 8; k++)
+            Crc = (Crc >> 1) ^ (0x9A6C9329AC4BC9B5ULL & (0ULL - (Crc & 1ULL)));
+    }
+
+    return ~Crc;
+}
+
 /* EOF */

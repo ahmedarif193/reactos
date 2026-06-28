@@ -189,6 +189,140 @@ ExpQueryModuleInformation(IN PLIST_ENTRY KernelModeList,
     return Status;
 }
 
+/*
+ * RtlQueryModuleInformation enumerates the loaded kernel modules into an array
+ * of RTL_MODULE_BASIC_INFO or RTL_MODULE_EXTENDED_INFO records (a NULL ModuleInfo
+ * buffer is a size query). AuxKlib's AuxKlibQueryModuleInformation forwards to it.
+ */
+typedef struct _RTL_MODULE_BASIC_INFO
+{
+    PVOID ImageBase;
+} RTL_MODULE_BASIC_INFO;
+
+typedef struct _RTL_MODULE_EXTENDED_INFO
+{
+    RTL_MODULE_BASIC_INFO BasicInfo;
+    ULONG ImageSize;
+    USHORT FileNameOffset;
+    UCHAR FullPathName[256];
+} RTL_MODULE_EXTENDED_INFO, *PRTL_MODULE_EXTENDED_INFO;
+
+NTSTATUS
+NTAPI
+RtlQueryModuleInformation(
+    _Inout_ PULONG InformationLength,
+    _In_ ULONG SizePerModule,
+    _Out_writes_bytes_opt_(*InformationLength) PVOID ModuleInfo)
+{
+    PLIST_ENTRY NextEntry;
+    PLDR_DATA_TABLE_ENTRY LdrEntry;
+    ULONG ModuleCount = 0;
+    ULONG RequiredLength;
+    NTSTATUS Status = STATUS_SUCCESS;
+    PUCHAR OutPtr;
+    BOOLEAN Extended;
+
+    if (SizePerModule != sizeof(RTL_MODULE_BASIC_INFO) &&
+        SizePerModule != sizeof(RTL_MODULE_EXTENDED_INFO))
+    {
+        return STATUS_INVALID_PARAMETER_2;
+    }
+    Extended = (SizePerModule == sizeof(RTL_MODULE_EXTENDED_INFO));
+
+    KeEnterCriticalRegion();
+    ExAcquireResourceSharedLite(&PsLoadedModuleResource, TRUE);
+
+    for (NextEntry = PsLoadedModuleList.Flink;
+         NextEntry != &PsLoadedModuleList;
+         NextEntry = NextEntry->Flink)
+    {
+        ModuleCount++;
+    }
+    RequiredLength = ModuleCount * SizePerModule;
+
+    /* A NULL buffer is a size query */
+    if (ModuleInfo == NULL)
+    {
+        *InformationLength = RequiredLength;
+        goto Done;
+    }
+
+    if (*InformationLength < RequiredLength)
+    {
+        *InformationLength = RequiredLength;
+        Status = STATUS_BUFFER_TOO_SMALL;
+        goto Done;
+    }
+
+    /* Emit one fixed-stride record per module */
+    OutPtr = (PUCHAR)ModuleInfo;
+    for (NextEntry = PsLoadedModuleList.Flink;
+         NextEntry != &PsLoadedModuleList;
+         NextEntry = NextEntry->Flink)
+    {
+        LdrEntry = CONTAINING_RECORD(NextEntry,
+                                     LDR_DATA_TABLE_ENTRY,
+                                     InLoadOrderLinks);
+
+        if (Extended)
+        {
+            PRTL_MODULE_EXTENDED_INFO Ext = (PRTL_MODULE_EXTENDED_INFO)OutPtr;
+            ANSI_STRING AnsiName;
+            PCHAR p;
+
+            Ext->BasicInfo.ImageBase = LdrEntry->DllBase;
+            Ext->ImageSize = LdrEntry->SizeOfImage;
+            Ext->FileNameOffset = 0;
+
+            RtlInitEmptyAnsiString(&AnsiName,
+                                   (PCHAR)Ext->FullPathName,
+                                   sizeof(Ext->FullPathName));
+            Status = RtlUnicodeStringToAnsiString(&AnsiName,
+                                                  &LdrEntry->FullDllName,
+                                                  FALSE);
+            if (NT_SUCCESS(Status) || (Status == STATUS_BUFFER_OVERFLOW))
+            {
+                if (AnsiName.Length < sizeof(Ext->FullPathName))
+                    Ext->FullPathName[AnsiName.Length] = ANSI_NULL;
+                else
+                    Ext->FullPathName[sizeof(Ext->FullPathName) - 1] = ANSI_NULL;
+
+                /* Offset to the bare file name (past the last separator) */
+                p = (PCHAR)Ext->FullPathName + AnsiName.Length;
+                while ((p > (PCHAR)Ext->FullPathName) && (*--p))
+                {
+                    if (*p == OBJ_NAME_PATH_SEPARATOR)
+                    {
+                        p++;
+                        break;
+                    }
+                }
+                Ext->FileNameOffset = (USHORT)(p - (PCHAR)Ext->FullPathName);
+            }
+            else
+            {
+                Ext->FullPathName[0] = ANSI_NULL;
+                Ext->FileNameOffset = 0;
+            }
+
+            Status = STATUS_SUCCESS;
+        }
+        else
+        {
+            ((RTL_MODULE_BASIC_INFO *)OutPtr)->ImageBase = LdrEntry->DllBase;
+        }
+
+        OutPtr += SizePerModule;
+    }
+
+    *InformationLength = RequiredLength;
+
+Done:
+    ExReleaseResourceLite(&PsLoadedModuleResource);
+    KeLeaveCriticalRegion();
+    return Status;
+}
+
 VOID
 NTAPI
 ExUnlockUserBuffer(PMDL Mdl)
