@@ -319,6 +319,11 @@ static void *virtqueue_get_buf_split(
 
     /* Get the first used descriptor */
     idx = (u16)vq->vring.used->ring[idx].id;
+    if (idx >= vq->vring.num || vq->opaque[idx] == NULL)
+    {
+        DPrintf(0, "%s: bad used id %u\n", __FUNCTION__, idx);
+        return NULL;
+    }
     opaque = vq->opaque[idx];
 
     /* Put all descriptors back to the free list */
