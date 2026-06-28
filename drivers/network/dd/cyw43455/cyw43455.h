@@ -29,6 +29,8 @@
 #define SDIO_CCCR_IOEx                  0x02
 #define SDIO_CCCR_IORx                  0x03
 #define SDIO_CCCR_INTEN                 0x04
+#define SDIO_CCCR_INT_PENDING           0x05
+#define SDIO_CCCR_IOABORT               0x06
 #define SDIO_CCCR_BUS_IF                0x07
 #define SDIO_FUNC_ENABLE_1              0x02
 #define SDIO_FUNC_ENABLE_2              0x04
@@ -39,13 +41,18 @@
 #define SBSDIO_FUNC1_SBADDRLOW          0x1000A
 #define SBSDIO_FUNC1_SBADDRMID          0x1000B
 #define SBSDIO_FUNC1_SBADDRHIGH         0x1000C
+#define SBSDIO_FUNC1_FRAMECTRL          0x1000D
+#define SFC_RF_TERM                     0x02
 #define SBSDIO_FUNC1_CHIPCLKCSR         0x1000E
 #define SBSDIO_FUNC1_WATERMARK          0x10008
+#define SBSDIO_DEVICE_CTL               0x10009
 #define SBSDIO_FUNC1_MESBUSYCTRL        0x1001D
 #define SBSDIO_FUNC1_SLEEPCSR           0x1001F
 
 #define CY_43455_F2_WATERMARK           0x60
+#define CY_43455_MES_WATERMARK          0x50
 #define SBSDIO_MESBUSYCTRL_ENAB         0x80
+#define SBSDIO_DEVCTL_F2WM_ENAB         0x10
 
 #define SBSDIO_SB_OFT_ADDR_MASK         0x07FFF
 #define SBSDIO_SB_OFT_ADDR_LIMIT        0x08000
@@ -78,6 +85,19 @@
 #define CYW43455_RAMBASE                0x198000
 
 #define ARMCR4_BCMA_IOCTL_CPUHALT       0x20
+
+#define SD_REG_INTSTATUS                0x020
+#define SD_REG_HOSTINTMASK              0x024
+#define SD_REG_TOSBMAILBOX              0x040
+#define SD_REG_TOSBMAILBOXDATA          0x048
+#define SD_REG_TOHOSTMAILBOXDATA        0x04C
+#define SMB_DATA_VERSION                0x00040000
+#define I_HMB_FRAME_IND                 0x40
+#define I_HMB_HOST_INT                  0x80
+#define I_HMB_SW_MASK                   0xF0
+#define I_CHIPACTIVE                    0x20000000
+#define CYW_HOSTINTMASK                 (I_HMB_SW_MASK | I_CHIPACTIVE)
+#define SMB_INT_ACK                     0x00000002
 
 #define BCM_CORE_REG_BANKIDX            0x40
 #define BCM_CORE_REG_BANKPDA            0x4C
@@ -149,6 +169,7 @@ typedef struct _CYW_DLOAD_DATA
 #define BRCMF_C_SET_PASSIVE_SCAN        49
 #define BRCMF_C_SCAN                    50
 #define BRCMF_C_DISASSOC                52
+#define BRCMF_C_SET_PM                  86
 #define BRCMF_C_SET_WSEC                134
 #define BRCMF_C_SET_BAND                142
 #define BRCMF_C_SET_AUTH                22
@@ -220,6 +241,8 @@ typedef struct _CYW_DLOAD_DATA
 #define CYW_MAX_BSS                     48
 #define CYW_MAX_BSS_IE                  512
 #define CYW_CONTROL_BUFFER_SIZE         2048
+#define CYW_RX_BUFFER_SIZE              262144
+#define CYW_RX_POOL_COUNT              384
 #define CYW_ADDRESS_LENGTH              6
 #define CYW_MTU_SIZE                    1500
 #define CYW_MAX_FRAME_SIZE              DOT11_MAX_PDU_SIZE
@@ -310,6 +333,13 @@ typedef struct _CYW_ESCAN_PARAMS_LE
     USHORT SyncId;
     CYW_SCAN_PARAMS_LE Params;
 } CYW_ESCAN_PARAMS_LE, *PCYW_ESCAN_PARAMS_LE;
+
+typedef struct _CYW_COUNTRY_LE
+{
+    CHAR CountryAbbrev[4];
+    LONG Rev;
+    CHAR Ccode[4];
+} CYW_COUNTRY_LE, *PCYW_COUNTRY_LE;
 #include <poppack.h>
 
 typedef struct _CYW_WSEC_KEY
@@ -348,6 +378,13 @@ typedef struct _CYW_BSS
     ULONG IeLength;
 } CYW_BSS, *PCYW_BSS;
 
+typedef struct _CYW_RX_BUF
+{
+    struct _CYW_RX_BUF *Next;
+    PUCHAR Buffer;
+    PMDL Mdl;
+} CYW_RX_BUF, *PCYW_RX_BUF;
+
 typedef struct _CYW_ADAPTER
 {
     NDIS_HANDLE MiniportAdapterHandle;
@@ -362,6 +399,7 @@ typedef struct _CYW_ADAPTER
     ULONG RamSize;
     ULONG Cr4CoreBase;
     ULONG Cr4WrapBase;
+    ULONG SdioCoreBase;
     ULONG RstVec;
     ULONG ChipCommonBase;
     ULONG SocramBase;
@@ -377,12 +415,20 @@ typedef struct _CYW_ADAPTER
     PMDL ControlMdl;
     PUCHAR TxBuffer;
     PUCHAR RxBuffer;
+    PUCHAR RegScratch;
+    USHORT GlomLens[256];
+    ULONG GlomCount;
     KEVENT CtrlEvent;
+    KEVENT RxEvent;
+    LIST_ENTRY TxQueue;
+    KSPIN_LOCK TxLock;
     ULONG CtrlResponseLen;
     BOOLEAN RxThreadRunning;
     KMUTEX F2Lock;
     KMUTEX CmdLock;
     NDIS_HANDLE RxNblPool;
+    PCYW_RX_BUF RxBufFree;
+    KSPIN_LOCK RxBufLock;
 
     UCHAR PermanentAddress[CYW_ADDRESS_LENGTH];
     UCHAR CurrentAddress[CYW_ADDRESS_LENGTH];
@@ -417,6 +463,7 @@ typedef struct _CYW_ADAPTER
     NDIS_HANDLE InterruptWorkItem;
     volatile LONG InterruptPending;
     BOOLEAN Halting;
+    BOOLEAN CardIntRegistered;
 } CYW_ADAPTER, *PCYW_ADAPTER;
 
 DRIVER_INITIALIZE DriverEntry;
@@ -441,12 +488,15 @@ NTSTATUS CywSdioWriteByte(_In_ PCYW_ADAPTER Adapter, _In_ UCHAR Function, _In_ U
 NTSTATUS CywSdioReadBytes(_In_ PCYW_ADAPTER Adapter, _In_ UCHAR Function, _In_ ULONG Address, _Out_ PUCHAR Buffer, _In_ ULONG Length);
 NTSTATUS CywSdioReadBlocks(_In_ PCYW_ADAPTER Adapter, _In_ UCHAR Function, _In_ ULONG Address, _Out_ PUCHAR Buffer, _In_ ULONG Length, _In_ ULONG BlockSize);
 NTSTATUS CywSdioWriteBytes(_In_ PCYW_ADAPTER Adapter, _In_ UCHAR Function, _In_ ULONG Address, _In_ PUCHAR Buffer, _In_ ULONG Length);
+NTSTATUS CywSdioWriteBlocks(_In_ PCYW_ADAPTER Adapter, _In_ UCHAR Function, _In_ ULONG Address, _In_ PUCHAR Buffer, _In_ ULONG Length, _In_ ULONG BlockSize);
 NTSTATUS CywSdioEnableFunction(_In_ PCYW_ADAPTER Adapter, _In_ UCHAR Function);
 NTSTATUS CywSdioSetBlockSize(_In_ PCYW_ADAPTER Adapter, _In_ UCHAR Function, _In_ ULONG BlockSize);
 
 NTSTATUS CywBackplaneSetWindow(_In_ PCYW_ADAPTER Adapter, _In_ ULONG Address);
 NTSTATUS CywBackplaneReadl(_In_ PCYW_ADAPTER Adapter, _In_ ULONG Address, _Out_ PULONG Value);
 NTSTATUS CywBackplaneWritel(_In_ PCYW_ADAPTER Adapter, _In_ ULONG Address, _In_ ULONG Value);
+NTSTATUS CywBackplaneReadlSc(_In_ PCYW_ADAPTER Adapter, _In_ ULONG Address, _Out_ PULONG Value, _Inout_ PUCHAR Scratch);
+NTSTATUS CywBackplaneWritelSc(_In_ PCYW_ADAPTER Adapter, _In_ ULONG Address, _In_ ULONG Value, _Inout_ PUCHAR Scratch);
 NTSTATUS CywRamWrite(_In_ PCYW_ADAPTER Adapter, _In_ ULONG Address, _In_ PUCHAR Buffer, _In_ ULONG Length);
 
 NTSTATUS CywChipRecognize(_In_ PCYW_ADAPTER Adapter);
@@ -466,6 +516,7 @@ NTSTATUS CywSdpcmSendData(_In_ PCYW_ADAPTER Adapter, _In_ PUCHAR Eth, _In_ ULONG
 PNET_BUFFER_LIST CywRxData(_In_ PCYW_ADAPTER Adapter, _In_ PUCHAR Body, _In_ ULONG BodyLen);
 NTSTATUS CywStartRxThread(_In_ PCYW_ADAPTER Adapter);
 VOID CywStopRxThread(_In_ PCYW_ADAPTER Adapter);
+VOID CywDrainTxQueue(_In_ PCYW_ADAPTER Adapter);
 ULONG CywBuildBssList(_In_ PCYW_ADAPTER Adapter, _Out_ PUCHAR Buffer, _In_ ULONG BufferLength, _Out_ PULONG BytesNeeded);
 VOID CywIndicateScanComplete(_In_ PCYW_ADAPTER Adapter, _In_ NDIS_STATUS ScanStatus);
 VOID CywIndicateAssocStart(_In_ PCYW_ADAPTER Adapter);

@@ -38,7 +38,6 @@ CywSetMiniportAttributes(
         (PNDIS_MINIPORT_ADAPTER_ATTRIBUTES)&RegAttr);
     if (Status != NDIS_STATUS_SUCCESS)
     {
-        DPRINT1("CYW: SetMiniportAttributes(registration) failed 0x%08X\n", Status);
         return Status;
     }
 
@@ -48,7 +47,7 @@ CywSetMiniportAttributes(
     GenAttr.Header.Size = sizeof(NDIS_MINIPORT_ADAPTER_GENERAL_ATTRIBUTES);
 
     GenAttr.MediaType = NdisMediumNative802_11;
-    GenAttr.PhysicalMediumType = (NDIS_MEDIUM)NdisPhysicalMediumNative802_11;
+    GenAttr.PhysicalMediumType = NdisPhysicalMediumNative802_11;
     GenAttr.MtuSize = CYW_MTU_SIZE;
     GenAttr.MaxXmitLinkSpeed = CYW_LINK_SPEED_BPS;
     GenAttr.MaxRcvLinkSpeed = CYW_LINK_SPEED_BPS;
@@ -80,11 +79,76 @@ CywSetMiniportAttributes(
 
     Status = NdisMSetMiniportAttributes(Adapter->MiniportAdapterHandle,
         (PNDIS_MINIPORT_ADAPTER_ATTRIBUTES)&GenAttr);
-    if (Status != NDIS_STATUS_SUCCESS)
-    {
-        DPRINT1("CYW: SetMiniportAttributes(general) failed 0x%08X\n", Status);
-    }
     return Status;
+}
+
+static
+VOID
+NTAPI
+CywCardInterruptCallback(
+    _In_ PVOID CallbackRoutineContext,
+    _In_ ULONG InterruptType)
+{
+    PCYW_ADAPTER Adapter = (PCYW_ADAPTER)CallbackRoutineContext;
+
+    UNREFERENCED_PARAMETER(InterruptType);
+
+    if (Adapter->Halting)
+    {
+        return;
+    }
+    KeSetEvent(&Adapter->RxEvent, IO_NETWORK_INCREMENT, FALSE);
+}
+
+static
+VOID
+CywEnableCardInterrupt(
+    _In_ PCYW_ADAPTER Adapter)
+{
+    SDBUS_INTERFACE_PARAMETERS Params;
+    NTSTATUS Status;
+
+    if (Adapter->SdioCoreBase == 0 || Adapter->SdBus.InitializeInterface == NULL)
+    {
+        return;
+    }
+
+    RtlZeroMemory(&Params, sizeof(Params));
+    Params.Size = sizeof(Params);
+    Params.TargetObject = Adapter->Pdo;
+    Params.DeviceGeneratesInterrupts = TRUE;
+    Params.CallbackAtDpcLevel = TRUE;
+    Params.CallbackRoutine = CywCardInterruptCallback;
+    Params.CallbackRoutineContext = Adapter;
+
+    Status = Adapter->SdBus.InitializeInterface(Adapter->SdBus.Context, &Params);
+    if (NT_SUCCESS(Status))
+    {
+        Adapter->CardIntRegistered = TRUE;
+    }
+}
+
+static
+VOID
+CywDisableCardInterrupt(
+    _In_ PCYW_ADAPTER Adapter)
+{
+    SDBUS_INTERFACE_PARAMETERS Params;
+
+    if (!Adapter->CardIntRegistered || Adapter->SdBus.InitializeInterface == NULL)
+    {
+        return;
+    }
+
+    RtlZeroMemory(&Params, sizeof(Params));
+    Params.Size = sizeof(Params);
+    Params.TargetObject = Adapter->Pdo;
+    Params.DeviceGeneratesInterrupts = FALSE;
+    Params.CallbackRoutine = NULL;
+    Params.CallbackRoutineContext = NULL;
+
+    Adapter->SdBus.InitializeInterface(Adapter->SdBus.Context, &Params);
+    Adapter->CardIntRegistered = FALSE;
 }
 
 NDIS_STATUS
@@ -101,8 +165,6 @@ CywMiniportInitializeEx(
     UNREFERENCED_PARAMETER(MiniportDriverContext);
     UNREFERENCED_PARAMETER(MiniportInitParameters);
 
-    DPRINT1("CYW: MiniportInitializeEx (CYW43455 SDIO)\n");
-
     Adapter = CywAllocate(sizeof(CYW_ADAPTER));
     if (Adapter == NULL)
     {
@@ -110,6 +172,7 @@ CywMiniportInitializeEx(
     }
 
     Adapter->MiniportAdapterHandle = NdisMiniportHandle;
+    Adapter->RxBufFree = NULL;
     NdisAllocateSpinLock(&Adapter->Lock);
     Adapter->CurrentPhyType = dot11_phy_type_ht;
     Adapter->CurrentOperationMode = DOT11_OPERATION_MODE_EXTENSIBLE_STATION;
@@ -125,10 +188,11 @@ CywMiniportInitializeEx(
     RtlCopyMemory(Adapter->CurrentAddress, Adapter->PermanentAddress, CYW_ADDRESS_LENGTH);
 
     Adapter->ControlBuffer = CywAllocate(CYW_CONTROL_BUFFER_SIZE);
-    Adapter->RxBuffer = CywAllocate(CYW_CONTROL_BUFFER_SIZE);
+    Adapter->RxBuffer = CywAllocate(CYW_RX_BUFFER_SIZE);
     Adapter->TxBuffer = CywAllocate(CYW_CONTROL_BUFFER_SIZE);
+    Adapter->RegScratch = CywAllocate(64);
     if (Adapter->ControlBuffer == NULL || Adapter->RxBuffer == NULL ||
-        Adapter->TxBuffer == NULL)
+        Adapter->TxBuffer == NULL || Adapter->RegScratch == NULL)
     {
         Status = NDIS_STATUS_RESOURCES;
         goto Fail;
@@ -136,6 +200,9 @@ CywMiniportInitializeEx(
     KeInitializeMutex(&Adapter->F2Lock, 0);
     KeInitializeMutex(&Adapter->CmdLock, 0);
     KeInitializeEvent(&Adapter->CtrlEvent, NotificationEvent, FALSE);
+    KeInitializeEvent(&Adapter->RxEvent, SynchronizationEvent, FALSE);
+    InitializeListHead(&Adapter->TxQueue);
+    KeInitializeSpinLock(&Adapter->TxLock);
 
     {
         NET_BUFFER_LIST_POOL_PARAMETERS PoolParams;
@@ -155,6 +222,34 @@ CywMiniportInitializeEx(
         }
     }
 
+    KeInitializeSpinLock(&Adapter->RxBufLock);
+    Adapter->RxBufFree = NULL;
+    {
+        ULONG RbIdx;
+        for (RbIdx = 0; RbIdx < CYW_RX_POOL_COUNT; RbIdx++)
+        {
+            PCYW_RX_BUF Rb = CywAllocate(sizeof(CYW_RX_BUF));
+            if (Rb == NULL)
+                break;
+            Rb->Buffer = CywAllocate(CYW_MAX_FRAME_SIZE);
+            if (Rb->Buffer == NULL)
+            {
+                CywFree(Rb);
+                break;
+            }
+            Rb->Mdl = NdisAllocateMdl(NdisMiniportHandle, Rb->Buffer, CYW_MAX_FRAME_SIZE);
+            if (Rb->Mdl == NULL)
+            {
+                CywFree(Rb->Buffer);
+                CywFree(Rb);
+                break;
+            }
+            MmBuildMdlForNonPagedPool(Rb->Mdl);
+            Rb->Next = Adapter->RxBufFree;
+            Adapter->RxBufFree = Rb;
+        }
+    }
+
     NdisMGetDeviceProperty(NdisMiniportHandle,
                            &Adapter->Pdo,
                            NULL,
@@ -163,7 +258,6 @@ CywMiniportInitializeEx(
                            NULL);
     if (Adapter->Pdo == NULL)
     {
-        DPRINT1("CYW: no physical device object\n");
         Status = NDIS_STATUS_FAILURE;
         goto Fail;
     }
@@ -178,7 +272,6 @@ CywMiniportInitializeEx(
     NtStatus = CywChipBringUp(Adapter);
     if (!NT_SUCCESS(NtStatus))
     {
-        DPRINT1("CYW: chip bring-up failed 0x%08lx\n", NtStatus);
         Status = NDIS_STATUS_HARD_ERRORS;
         goto Fail;
     }
@@ -199,13 +292,12 @@ CywMiniportInitializeEx(
     NtStatus = CywStartRxThread(Adapter);
     if (!NT_SUCCESS(NtStatus))
     {
-        DPRINT1("CYW: RxThread start failed 0x%08lx\n", NtStatus);
         Status = NDIS_STATUS_FAILURE;
         goto Fail;
     }
 
-    DPRINT1("CYW: MiniportInitializeEx succeeded (chip 0x%lx rev %lu)\n",
-            Adapter->ChipId, Adapter->ChipRev);
+    CywEnableCardInterrupt(Adapter);
+
     return NDIS_STATUS_SUCCESS;
 
 Fail:
@@ -218,6 +310,16 @@ Fail:
     CywFree(Adapter->ControlBuffer);
     CywFree(Adapter->RxBuffer);
     CywFree(Adapter->TxBuffer);
+    CywFree(Adapter->RegScratch);
+    while (Adapter->RxBufFree != NULL)
+    {
+        PCYW_RX_BUF Rb = Adapter->RxBufFree;
+        Adapter->RxBufFree = Rb->Next;
+        if (Rb->Mdl != NULL)
+            NdisFreeMdl(Rb->Mdl);
+        CywFree(Rb->Buffer);
+        CywFree(Rb);
+    }
     if (Adapter->RxNblPool != NULL)
     {
         NdisFreeNetBufferListPool(Adapter->RxNblPool);
@@ -237,11 +339,14 @@ CywMiniportHaltEx(
 
     UNREFERENCED_PARAMETER(HaltAction);
 
-    DPRINT1("CYW: MiniportHaltEx\n");
-
     Adapter->Halting = TRUE;
 
     CywStopRxThread(Adapter);
+    CywDrainTxQueue(Adapter);
+
+    CywDisableCardInterrupt(Adapter);
+
+    KeFlushQueuedDpcs();
 
     if (Adapter->InterruptWorkItem != NULL)
     {
@@ -253,6 +358,16 @@ CywMiniportHaltEx(
     CywFree(Adapter->ControlBuffer);
     CywFree(Adapter->RxBuffer);
     CywFree(Adapter->TxBuffer);
+    CywFree(Adapter->RegScratch);
+    while (Adapter->RxBufFree != NULL)
+    {
+        PCYW_RX_BUF Rb = Adapter->RxBufFree;
+        Adapter->RxBufFree = Rb->Next;
+        if (Rb->Mdl != NULL)
+            NdisFreeMdl(Rb->Mdl);
+        CywFree(Rb->Buffer);
+        CywFree(Rb);
+    }
     if (Adapter->RxNblPool != NULL)
     {
         NdisFreeNetBufferListPool(Adapter->RxNblPool);
@@ -270,7 +385,6 @@ CywMiniportPauseEx(
     UNREFERENCED_PARAMETER(MiniportAdapterContext);
     UNREFERENCED_PARAMETER(MiniportPauseParameters);
 
-    DPRINT1("CYW: MiniportPauseEx\n");
     return NDIS_STATUS_SUCCESS;
 }
 
@@ -283,7 +397,6 @@ CywMiniportRestartEx(
     UNREFERENCED_PARAMETER(MiniportAdapterContext);
     UNREFERENCED_PARAMETER(MiniportRestartParameters);
 
-    DPRINT1("CYW: MiniportRestartEx\n");
     return NDIS_STATUS_SUCCESS;
 }
 
@@ -309,9 +422,8 @@ CywMiniportDevicePnpEventNotify(
 
 typedef struct _CYW_TX_WORK
 {
-    PCYW_ADAPTER Adapter;
+    LIST_ENTRY Link;
     PNET_BUFFER_LIST Nbl;
-    NDIS_HANDLE WorkItem;
     ULONG EthLen;
     UCHAR Eth[CYW_MAX_FRAME_SIZE];
 } CYW_TX_WORK, *PCYW_TX_WORK;
@@ -355,48 +467,35 @@ CywBuildEthFromNbl(
     return sizeof(CYW_ETHER_HEADER) + PayloadLen;
 }
 
-static
 VOID
-CywSendWorker(
-    _In_ PVOID WorkItemContext,
-    _In_ NDIS_HANDLE NdisIoWorkItemHandle)
+CywDrainTxQueue(
+    _In_ PCYW_ADAPTER Adapter)
 {
-    PCYW_TX_WORK Work = (PCYW_TX_WORK)WorkItemContext;
-    PCYW_ADAPTER Adapter = Work->Adapter;
-    NDIS_STATUS NblStatus = NDIS_STATUS_FAILURE;
-
-    UNREFERENCED_PARAMETER(NdisIoWorkItemHandle);
-
+    for (;;)
     {
-        ULONG Retry;
-        for (Retry = 0; Retry < 1000; Retry++)
+        PLIST_ENTRY Entry = ExInterlockedRemoveHeadList(&Adapter->TxQueue, &Adapter->TxLock);
+        PCYW_TX_WORK Work;
+        NTSTATUS SendStatus;
+
+        if (Entry == NULL)
         {
-            NTSTATUS SendStatus = CywSdpcmSendData(Adapter, Work->Eth, Work->EthLen);
-            if (NT_SUCCESS(SendStatus))
-            {
-                NblStatus = NDIS_STATUS_SUCCESS;
-                break;
-            }
-            if (SendStatus != STATUS_DEVICE_BUSY)
-            {
-                break;
-            }
-            KeStallExecutionProcessor(50);
+            break;
         }
-    }
-    if (NblStatus != NDIS_STATUS_SUCCESS)
-    {
-        DPRINT1("CYW: TX DROP TxMax=%u TxSeq=%u Avail=%u TxFlow=%u\n",
-                Adapter->TxMax, Adapter->TxSeq,
-                (UCHAR)(Adapter->TxMax - Adapter->TxSeq), Adapter->TxFlow);
-    }
 
-    NET_BUFFER_LIST_STATUS(Work->Nbl) = NblStatus;
-    NET_BUFFER_LIST_NEXT_NBL(Work->Nbl) = NULL;
-    NdisMSendNetBufferListsComplete(Adapter->MiniportAdapterHandle, Work->Nbl, 0);
+        Work = CONTAINING_RECORD(Entry, CYW_TX_WORK, Link);
+        SendStatus = CywSdpcmSendData(Adapter, Work->Eth, Work->EthLen);
+        if (SendStatus == STATUS_DEVICE_BUSY && !Adapter->Halting)
+        {
+            ExInterlockedInsertHeadList(&Adapter->TxQueue, &Work->Link, &Adapter->TxLock);
+            break;
+        }
 
-    NdisFreeIoWorkItem(Work->WorkItem);
-    CywFree(Work);
+        NET_BUFFER_LIST_STATUS(Work->Nbl) =
+            NT_SUCCESS(SendStatus) ? NDIS_STATUS_SUCCESS : NDIS_STATUS_FAILURE;
+        NET_BUFFER_LIST_NEXT_NBL(Work->Nbl) = NULL;
+        NdisMSendNetBufferListsComplete(Adapter->MiniportAdapterHandle, Work->Nbl, 0);
+        CywFree(Work);
+    }
 }
 
 VOID
@@ -434,17 +533,20 @@ CywMiniportSendNetBufferLists(
             ULONG EthLen = CywBuildEthFromNbl(Nb, Scratch, Eth);
             BOOLEAN IsEapol = (EthLen >= 14 && Eth[12] == 0x88 && Eth[13] == 0x8E);
 
-
             if (EthLen != 0 && (Adapter->Associated || IsEapol))
             {
-                if (KeGetCurrentIrql() == PASSIVE_LEVEL && IsEapol)
+                NTSTATUS SendStatus = STATUS_DEVICE_BUSY;
+
+                if (KeGetCurrentIrql() == PASSIVE_LEVEL)
                 {
-                    if (NT_SUCCESS(CywSdpcmSendData(Adapter, Eth, EthLen)))
+                    SendStatus = CywSdpcmSendData(Adapter, Eth, EthLen);
+                    if (NT_SUCCESS(SendStatus))
                     {
                         NblStatus = NDIS_STATUS_SUCCESS;
                     }
                 }
-                else
+
+                if (SendStatus == STATUS_DEVICE_BUSY)
                 {
                     PCYW_TX_WORK Work = CywAllocate(sizeof(CYW_TX_WORK));
 
@@ -452,18 +554,12 @@ CywMiniportSendNetBufferLists(
                     {
                         RtlCopyMemory(Work->Eth, Eth, EthLen);
                         Work->EthLen = EthLen;
-                        Work->WorkItem = NdisAllocateIoWorkItem(Adapter->MiniportAdapterHandle);
-                        if (Work->WorkItem != NULL)
-                        {
-                            Work->Adapter = Adapter;
-                            Work->Nbl = Nbl;
-                            NdisQueueIoWorkItem(Work->WorkItem, CywSendWorker, Work);
-                            Deferred = TRUE;
-                        }
-                        if (!Deferred)
-                        {
-                            CywFree(Work);
-                        }
+                        Work->Nbl = Nbl;
+                        ExInterlockedInsertTailList(&Adapter->TxQueue,
+                                                    &Work->Link,
+                                                    &Adapter->TxLock);
+                        KeSetEvent(&Adapter->RxEvent, IO_NETWORK_INCREMENT, FALSE);
+                        Deferred = TRUE;
                     }
                 }
             }
@@ -486,19 +582,23 @@ CywMiniportReturnNetBufferLists(
     _In_ PNET_BUFFER_LIST NetBufferLists,
     _In_ ULONG ReturnFlags)
 {
+    PCYW_ADAPTER Adapter = (PCYW_ADAPTER)MiniportAdapterContext;
     PNET_BUFFER_LIST Nbl = NetBufferLists;
-    UNREFERENCED_PARAMETER(MiniportAdapterContext);
     UNREFERENCED_PARAMETER(ReturnFlags);
 
     while (Nbl != NULL)
     {
         PNET_BUFFER_LIST Next = NET_BUFFER_LIST_NEXT_NBL(Nbl);
-        PNET_BUFFER Nb = NET_BUFFER_LIST_FIRST_NB(Nbl);
-        PMDL Mdl = NET_BUFFER_FIRST_MDL(Nb);
-        PUCHAR Frame = (PUCHAR)MmGetMdlVirtualAddress(Mdl);
-        NdisFreeMdl(Mdl);
-        CywFree(Frame);
+        PCYW_RX_BUF Rb = (PCYW_RX_BUF)Nbl->MiniportReserved[0];
         NdisFreeNetBufferList(Nbl);
+        if (Rb != NULL)
+        {
+            KIRQL OldIrql;
+            KeAcquireSpinLock(&Adapter->RxBufLock, &OldIrql);
+            Rb->Next = Adapter->RxBufFree;
+            Adapter->RxBufFree = Rb;
+            KeReleaseSpinLock(&Adapter->RxBufLock, OldIrql);
+        }
         Nbl = Next;
     }
 }
@@ -520,8 +620,6 @@ CywMiniportUnload(
 {
     UNREFERENCED_PARAMETER(DriverObject);
 
-    DPRINT1("CYW: DriverUnload\n");
-
     if (gMiniportDriverHandle != NULL)
     {
         NdisMDeregisterMiniportDriver(gMiniportDriverHandle);
@@ -537,8 +635,6 @@ DriverEntry(
 {
     NDIS_MINIPORT_DRIVER_CHARACTERISTICS Chars;
     NDIS_STATUS Status;
-
-    DPRINT1("CYW: DriverEntry\n");
 
     RtlZeroMemory(&Chars, sizeof(Chars));
     Chars.Header.Type = NDIS_OBJECT_TYPE_MINIPORT_DRIVER_CHARACTERISTICS;
@@ -569,10 +665,6 @@ DriverEntry(
                                          NULL,
                                          &Chars,
                                          &gMiniportDriverHandle);
-    if (Status != NDIS_STATUS_SUCCESS)
-    {
-        DPRINT1("CYW: NdisMRegisterMiniportDriver failed 0x%08X\n", Status);
-    }
 
     return (NTSTATUS)Status;
 }
