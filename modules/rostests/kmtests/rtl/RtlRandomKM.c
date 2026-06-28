@@ -11,29 +11,28 @@
 
 START_TEST(RtlRandomKM)
 {
-    ULONG Seed1, Seed2, Seed;
-    ULONG V1, V2, V3;
+    ULONG Seed;
+    ULONG V1, V2;
     ULONG i, Changed;
 
-    Seed1 = 0x12345678;
-    Seed2 = 0x12345678;
-    V1 = RtlRandom(&Seed1);
-    V2 = RtlRandom(&Seed2);
-    ok_eq_ulong(V1, V2);
-    ok(Seed1 != 0x12345678, "seed not advanced\n");
-    ok_eq_ulong(Seed1, Seed2);
-
-    V3 = RtlRandom(&Seed1);
-    ok(V3 != V1, "consecutive randoms equal: %lx\n", V1);
-
-    Seed1 = 0x12345678;
-    Seed2 = 0x12345678;
-    V1 = RtlRandomEx(&Seed1);
-    V2 = RtlRandomEx(&Seed2);
-    ok_eq_ulong(V1, V2);
-    ok_eq_ulong(Seed1, Seed2);
+    /*
+     * Win11's RtlRandom/RtlRandomEx use mutable global state, so they are NOT
+     * deterministic per seed: two calls with the same input seed yield
+     * different results (the global vector advances between calls). ReactOS's
+     * RtlRandom is currently deterministic per seed, but the only portable,
+     * Win11-aligned contract is: the seed advances and the sequence varies.
+     * (Validated against the Win11 reference kernel.)
+     */
+    Seed = 0x12345678;
+    V1 = RtlRandom(&Seed);
+    ok(Seed != 0x12345678, "RtlRandom: seed not advanced\n");
+    V2 = RtlRandom(&Seed);
+    ok(V2 != V1, "RtlRandom: consecutive values equal (0x%lx)\n", V1);
 
     Seed = 0x12345678;
+    V1 = RtlRandomEx(&Seed);
+    ok(Seed != 0x12345678, "RtlRandomEx: seed not advanced\n");
+
     Changed = 0;
     V1 = RtlRandomEx(&Seed);
     for (i = 0; i < 64; i++)
@@ -42,5 +41,5 @@ START_TEST(RtlRandomKM)
         if (V2 != V1) Changed++;
         V1 = V2;
     }
-    ok(Changed >= 60, "random sequence too static: %lu changes\n", Changed);
+    ok(Changed >= 60, "RtlRandomEx: sequence too static: %lu changes\n", Changed);
 }

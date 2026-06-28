@@ -25,6 +25,9 @@ KMT_TESTFUNC Test_ExTimeZone;
 KMT_TESTFUNC Test_IoCancelKM;
 KMT_TESTFUNC Test_PsProcessInfo;
 KMT_TESTFUNC Test_RtlStringSupportKM;
+#ifdef _M_ARM64
+KMT_TESTFUNC Test_Win11NewKM;
+#endif
 KMT_TESTFUNC Test_ExResource;
 KMT_TESTFUNC Test_ExRundown;
 KMT_TESTFUNC Test_ExSequencedList;
@@ -328,6 +331,9 @@ const KMT_TEST TestList[] =
     { "RtlRegistryKM",                      Test_RtlRegistry },
     { "RtlTimeKM",                          Test_RtlTimeKM },
     { "RtlStringSupportKM",                 Test_RtlStringSupportKM },
+#ifdef _M_ARM64
+    { "Win11NewKM",                         Test_Win11NewKM },
+#endif
     { "RtlSplayTreeKM",                     Test_RtlSplayTree },
     { "RtlStackKM",                         Test_RtlStack },
     { "RtlStrSafeKM",                       Test_RtlStrSafe },

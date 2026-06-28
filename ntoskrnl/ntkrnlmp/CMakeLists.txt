@@ -23,6 +23,14 @@ endif()
 list(APPEND NTKRNLMP_PCH_SKIP_SOURCE
     ${REACTOS_SOURCE_DIR}/ntoskrnl/guid.c)
 
+# ARM64 Win11 ABI export parity (see ../CMakeLists.txt). ntkrnlmp shares
+# ntoskrnl.spec, so it needs the same generated stubs + placeholder data exports.
+if(ARCH STREQUAL "arm64")
+    list(APPEND NTKRNLMP_PCH_SKIP_SOURCE
+        ${REACTOS_SOURCE_DIR}/ntoskrnl/ke/arm64/exports.c
+        ${CMAKE_CURRENT_BINARY_DIR}/ntkrnlmp_stubs.c)
+endif()
+
 add_executable(ntkrnlmp
     ${ntkrnlmp_asm}
     ${NTKRNLMP_SOURCE}

@@ -13,6 +13,8 @@
 #include "debug.h"
 
 POBJECT_TYPE CmpKeyObjectType;
+/* Windows exports the key object type under the public name CmKeyObjectType. */
+POBJECT_TYPE CmKeyObjectType = NULL;
 PCMHIVE CmiVolatileHive;
 LIST_ENTRY CmpHiveListHead;
 ERESOURCE CmpRegistryLock;
@@ -1026,7 +1028,12 @@ CmpCreateObjectTypes(VOID)
     ObjectTypeInitializer.InvalidAttributes = OBJ_EXCLUSIVE | OBJ_PERMANENT;
 
     /* Create it */
-    return ObCreateObjectType(&Name, &ObjectTypeInitializer, NULL, &CmpKeyObjectType);
+    {
+        NTSTATUS Status = ObCreateObjectType(&Name, &ObjectTypeInitializer, NULL, &CmpKeyObjectType);
+        /* Mirror it to the public CmKeyObjectType export. */
+        if (NT_SUCCESS(Status)) CmKeyObjectType = CmpKeyObjectType;
+        return Status;
+    }
 }
 
 CODE_SEG("INIT")

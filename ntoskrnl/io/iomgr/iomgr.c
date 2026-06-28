@@ -302,6 +302,11 @@ IopCreateObjectTypes(VOID)
                                        &ObjectTypeInitializer,
                                        NULL,
                                        &IoCompletionType))) return FALSE;
+    {
+        /* Mirror it to the public IoCompletionObjectType export. */
+        extern POBJECT_TYPE IoCompletionObjectType;
+        IoCompletionObjectType = IoCompletionType;
+    }
 
     /* Initialize the File object type  */
     RtlInitUnicodeString(&Name, L"File");

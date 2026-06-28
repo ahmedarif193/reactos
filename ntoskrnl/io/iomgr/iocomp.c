@@ -14,6 +14,8 @@
 #include <debug.h>
 
 POBJECT_TYPE IoCompletionType;
+/* Windows exports the completion object type as IoCompletionObjectType. */
+POBJECT_TYPE IoCompletionObjectType = NULL;
 
 GENERAL_LOOKASIDE IoCompletionPacketLookaside;
 

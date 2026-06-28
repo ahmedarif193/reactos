@@ -2803,3 +2803,123 @@ RtlDnsHostNameToComputerName(PUNICODE_STRING ComputerName, PUNICODE_STRING DnsHo
     return Status;
 }
 
+/*
+ * @implemented
+ *
+ * Lexicographically compares two counted (not NUL-terminated) wide strings.
+ */
+LONG
+NTAPI
+RtlCompareUnicodeStrings(
+    _In_reads_(String1Length) PCWCH String1,
+    _In_ SIZE_T String1Length,
+    _In_reads_(String2Length) PCWCH String2,
+    _In_ SIZE_T String2Length,
+    _In_ BOOLEAN CaseInSensitive)
+{
+    SIZE_T MinLength = (String1Length < String2Length) ? String1Length : String2Length;
+    SIZE_T Index;
+    LONG Result;
+
+    for (Index = 0; Index < MinLength; Index++)
+    {
+        if (CaseInSensitive)
+            Result = (LONG)RtlUpcaseUnicodeChar(String1[Index]) -
+                     (LONG)RtlUpcaseUnicodeChar(String2[Index]);
+        else
+            Result = (LONG)String1[Index] - (LONG)String2[Index];
+
+        if (Result != 0)
+            return Result;
+    }
+
+    return (LONG)((LONG_PTR)String1Length - (LONG_PTR)String2Length);
+}
+
+/*
+ * @implemented
+ *
+ * Returns TRUE if String1 is a suffix of String2.
+ */
+BOOLEAN
+NTAPI
+RtlSuffixUnicodeString(
+    _In_ PCUNICODE_STRING String1,
+    _In_ PCUNICODE_STRING String2,
+    _In_ BOOLEAN CaseInSensitive)
+{
+    PCWCH p1, p2;
+    SIZE_T Count, Index;
+
+    if (String1->Length > String2->Length)
+        return FALSE;
+
+    p1 = String1->Buffer;
+    p2 = String2->Buffer + (String2->Length - String1->Length) / sizeof(WCHAR);
+    Count = String1->Length / sizeof(WCHAR);
+
+    for (Index = 0; Index < Count; Index++)
+    {
+        if (CaseInSensitive)
+        {
+            if (RtlUpcaseUnicodeChar(p1[Index]) != RtlUpcaseUnicodeChar(p2[Index]))
+                return FALSE;
+        }
+        else if (p1[Index] != p2[Index])
+        {
+            return FALSE;
+        }
+    }
+
+    return TRUE;
+}
+
+/*
+ * @implemented
+ *
+ * Like RtlStringFromGUID, but formats into a caller-supplied buffer unless
+ * Allocate is set (in which case it allocates as RtlStringFromGUID does).
+ */
+NTSTATUS
+NTAPI
+RtlStringFromGUIDEx(
+    _In_ REFGUID Guid,
+    _Inout_ PUNICODE_STRING GuidString,
+    _In_ BOOLEAN Allocate)
+{
+    static const WCHAR Hex[] = L"0123456789abcdef";
+    USHORT Needed = 38 * sizeof(WCHAR);
+    PWCH p;
+    ULONG i;
+
+    if (Allocate)
+        return RtlStringFromGUID(Guid, GuidString);
+
+    if (GuidString->Buffer == NULL || GuidString->MaximumLength < Needed)
+        return STATUS_BUFFER_TOO_SMALL;
+
+    p = GuidString->Buffer;
+    *p++ = L'{';
+    for (i = 8; i > 0; i--) *p++ = Hex[(Guid->Data1 >> ((i - 1) * 4)) & 0xF];
+    *p++ = L'-';
+    for (i = 4; i > 0; i--) *p++ = Hex[(Guid->Data2 >> ((i - 1) * 4)) & 0xF];
+    *p++ = L'-';
+    for (i = 4; i > 0; i--) *p++ = Hex[(Guid->Data3 >> ((i - 1) * 4)) & 0xF];
+    *p++ = L'-';
+    *p++ = Hex[(Guid->Data4[0] >> 4) & 0xF]; *p++ = Hex[Guid->Data4[0] & 0xF];
+    *p++ = Hex[(Guid->Data4[1] >> 4) & 0xF]; *p++ = Hex[Guid->Data4[1] & 0xF];
+    *p++ = L'-';
+    for (i = 2; i < 8; i++)
+    {
+        *p++ = Hex[(Guid->Data4[i] >> 4) & 0xF];
+        *p++ = Hex[Guid->Data4[i] & 0xF];
+    }
+    *p++ = L'}';
+
+    GuidString->Length = Needed;
+    if (GuidString->MaximumLength >= Needed + sizeof(WCHAR))
+        *p = UNICODE_NULL;
+
+    return STATUS_SUCCESS;
+}
+

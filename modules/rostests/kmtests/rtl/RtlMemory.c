@@ -331,7 +331,11 @@ START_TEST(RtlMemory)
     ok_eq_hex(Status, STATUS_SUCCESS);
     KeRaiseIrql(HIGH_LEVEL, &Irql);
 
-    /* RtlCompareMemoryUlong */
+    /* RtlCompareMemoryUlong.
+     * NOTE: Win11 ARM64 returns 0 (instead of the full 4) for several of these
+     * full-match cases when invoked at HIGH_LEVEL IRQL. ReactOS's 4 is the
+     * correct value, so the assertion is kept strict here; the Win11 quirk is a
+     * known divergence on the reference kernel, not something ReactOS emulates. */
     MakeBuffer(Buffer, 8, 0x55, Size - 8, 0, 0);
     RetSize = RtlCompareMemoryUlong(Buffer, sizeof(ULONG), 0x55555555LU);
     ok_eq_size(RetSize, 4);
