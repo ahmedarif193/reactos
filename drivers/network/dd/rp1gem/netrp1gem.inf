@@ -1,7 +1,7 @@
-; PROJECT:     ReactOS RP1 Ethernet Driver
+; PROJECT:     ReactOS Project - RP1 (Cadence GEM) Ethernet Driver
 ; LICENSE:     GPL-2.0+ (https://spdx.org/licenses/GPL-2.0+)
 ; FILE:        drivers/network/dd/rp1gem/netrp1gem.inf
-; PURPOSE:     RP1 Ethernet miniport installation file
+; PURPOSE:     RP1 (Cadence GEM) Ethernet miniport installation file
 ; COPYRIGHT:   Copyright 2026 Ahmed ARIF <arif.ing@outlook.com>
 
 [Version]
@@ -9,18 +9,18 @@ Signature="$Windows NT$"
 LayoutFile=layout.inf
 Class=Net
 ClassGUID={4D36E972-E325-11CE-BFC1-08002BE10318}
-Provider=%ReactOS%
-DriverVer=01/01/2026,1.00
+Provider=%ProviderName%
+DriverVer=06/28/2026,1.0.0.0
 
 [DestinationDirs]
 DefaultDestDir=12
 RP1GEM_CopyFiles.NT=12
 
 [Manufacturer]
-%RaspberryPiMfg%=RaspberryPiMfg
+%ManufacturerName%=CadenceMfg
 
-[RaspberryPiMfg]
-%RP1GEM.DeviceDesc%=RP1GEM_Inst.ndi,RP1\GEM
+[CadenceMfg]
+%RP1GEM.DeviceDesc%=RP1GEM_Inst.ndi,ACPI\PRP0001
 
 [RP1GEM_Inst.ndi.NT]
 Characteristics=0x4
@@ -47,12 +47,13 @@ ServiceBinary=%12%\rp1gem.sys
 LoadOrderGroup=NDIS
 
 [SourceDisksNames]
-1=%ReactOS%,,,
+1=%DiskName%,,,
 
 [SourceDisksFiles]
 rp1gem.sys=1
 
 [Strings]
-ReactOS="ReactOS"
-RaspberryPiMfg="Raspberry Pi"
-RP1GEM.DeviceDesc="RP1 Ethernet Controller"
+ProviderName="Ahmed ARIF"
+ManufacturerName="Cadence"
+DiskName="RP1 GEM Ethernet Driver Disk"
+RP1GEM.DeviceDesc="Cadence GEM Ethernet Controller"

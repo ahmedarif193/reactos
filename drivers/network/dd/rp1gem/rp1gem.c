@@ -20,6 +20,12 @@ Rp1GemPollReceive(
     _In_ PRP1GEM_ADAPTER Adapter,
     _In_ ULONG Budget);
 
+static VOID
+Rp1GemWriteDiag(
+    _In_ PRP1GEM_ADAPTER Adapter,
+    _In_ ULONG Stage,
+    _In_ NDIS_STATUS LastStatus);
+
 static const NDIS_OID Rp1GemSupportedOids[] =
 {
     OID_GEN_SUPPORTED_LIST,
@@ -70,36 +76,6 @@ Rp1GemWrite32(
     WRITE_REGISTER_ULONG((PULONG)((PUCHAR)Adapter->RegisterBase + Offset), Value);
 }
 
-static VOID
-Rp1GemAckRp1Interrupt(
-    _In_ PRP1GEM_ADAPTER Adapter)
-{
-    if (!Adapter->Rp1ApbsBase)
-        return;
-
-    WRITE_REGISTER_ULONG((PULONG)((PUCHAR)Adapter->Rp1ApbsBase +
-                                  RP1GEM_PCIE_APBS_REG_SET +
-                                  RP1GEM_MSIX_CFG(RP1GEM_INT_ETH)),
-                         RP1GEM_MSIX_CFG_IACK);
-}
-
-static __inline ULONG
-Rp1GemReadSideband32(
-    _In_ PVOID Base,
-    _In_ ULONG Offset)
-{
-    return READ_REGISTER_ULONG((PULONG)((PUCHAR)Base + Offset));
-}
-
-static __inline VOID
-Rp1GemWriteSideband32(
-    _In_ PVOID Base,
-    _In_ ULONG Offset,
-    _In_ ULONG Value)
-{
-    WRITE_REGISTER_ULONG((PULONG)((PUCHAR)Base + Offset), Value);
-}
-
 static BOOLEAN
 Rp1GemIsValidMacAddress(
     _In_reads_(ETH_LENGTH_OF_ADDRESS) const UCHAR *MacAddress)
@@ -143,15 +119,6 @@ Rp1GemSetDescriptorAddress(
     Descriptor->AddressHigh = Adapter->Dma64Bit ? PhysicalAddress.HighPart : 0;
     KeMemoryBarrier();
     Descriptor->Address = PhysicalAddress.LowPart | AddressFlags;
-}
-
-static VOID
-Rp1GemGetBufferPhysicalAddress(
-    _Out_ PNDIS_PHYSICAL_ADDRESS PhysicalAddress,
-    _In_ NDIS_PHYSICAL_ADDRESS Base,
-    _In_ ULONG Index)
-{
-    PhysicalAddress->QuadPart = Base.QuadPart + ((ULONGLONG)Index * RP1GEM_BUFFER_SIZE);
 }
 
 static VOID
@@ -307,7 +274,6 @@ Rp1GemEnableInterrupts(
     if (Adapter->RegisterBase)
     {
         Rp1GemWrite32(Adapter, MACB_IER, RP1GEM_INT_MASK);
-        Rp1GemAckRp1Interrupt(Adapter);
     }
 }
 
@@ -349,15 +315,6 @@ static VOID
 Rp1GemUnmapResources(
     _In_ PRP1GEM_ADAPTER Adapter)
 {
-    if (Adapter->Rp1ApbsBase)
-    {
-        NdisMUnmapIoSpace(Adapter->MiniportHandle,
-                          Adapter->Rp1ApbsBase,
-                          Adapter->Rp1ApbsLength);
-        Adapter->Rp1ApbsBase = NULL;
-        Adapter->Rp1ApbsLength = 0;
-    }
-
     if (Adapter->RegisterBase)
     {
         NdisMUnmapIoSpace(Adapter->MiniportHandle,
@@ -375,19 +332,23 @@ Rp1GemFreeDatapath(
 
     Adapter->DatapathReady = FALSE;
 
-    if (Adapter->TxRing)
+    for (i = 0; i < RP1GEM_TX_RING_SIZE; i++)
     {
-        for (i = 0; i < RP1GEM_TX_RING_SIZE; i++)
+        if (Adapter->TxBuffers[i].NetBufferList)
         {
-            if (Adapter->TxBuffers[i].NetBufferList)
-            {
-                NET_BUFFER_LIST_STATUS(Adapter->TxBuffers[i].NetBufferList) =
-                    NDIS_STATUS_RESET_IN_PROGRESS;
-                NdisMSendNetBufferListsComplete(Adapter->MiniportHandle,
-                                                Adapter->TxBuffers[i].NetBufferList,
-                                                0);
-                Adapter->TxBuffers[i].NetBufferList = NULL;
-            }
+            NET_BUFFER_LIST_STATUS(Adapter->TxBuffers[i].NetBufferList) =
+                NDIS_STATUS_RESET_IN_PROGRESS;
+            NdisMSendNetBufferListsComplete(Adapter->MiniportHandle,
+                                            Adapter->TxBuffers[i].NetBufferList,
+                                            0);
+            Adapter->TxBuffers[i].NetBufferList = NULL;
+        }
+        if (Adapter->TxBuffers[i].VirtualAddress)
+        {
+            MmFreeContiguousMemorySpecifyCache(Adapter->TxBuffers[i].VirtualAddress,
+                                               RP1GEM_BUFFER_SIZE,
+                                               MmCached);
+            Adapter->TxBuffers[i].VirtualAddress = NULL;
         }
     }
 
@@ -395,15 +356,21 @@ Rp1GemFreeDatapath(
     {
         if (Adapter->RxBuffers[i].NetBufferList)
         {
-            if (Adapter->RxBuffers[i].Mdl)
-            {
-                IoFreeMdl(Adapter->RxBuffers[i].Mdl);
-                Adapter->RxBuffers[i].Mdl = NULL;
-            }
-
             NdisFreeNetBufferList(Adapter->RxBuffers[i].NetBufferList);
             Adapter->RxBuffers[i].NetBufferList = NULL;
             Adapter->RxBuffers[i].Indicated = FALSE;
+        }
+        if (Adapter->RxBuffers[i].Mdl)
+        {
+            IoFreeMdl(Adapter->RxBuffers[i].Mdl);
+            Adapter->RxBuffers[i].Mdl = NULL;
+        }
+        if (Adapter->RxBuffers[i].VirtualAddress)
+        {
+            MmFreeContiguousMemorySpecifyCache(Adapter->RxBuffers[i].VirtualAddress,
+                                               RP1GEM_BUFFER_SIZE,
+                                               MmCached);
+            Adapter->RxBuffers[i].VirtualAddress = NULL;
         }
     }
 
@@ -413,43 +380,101 @@ Rp1GemFreeDatapath(
         Adapter->RxNblPool = NULL;
     }
 
-    if (Adapter->RxBufferArea)
-    {
-        MmFreeContiguousMemorySpecifyCache(Adapter->RxBufferArea,
-                                           Adapter->RxBufferAreaLength,
-                                           MmCached);
-        Adapter->RxBufferArea = NULL;
-    }
-
     if (Adapter->RxRing)
     {
-        NdisMFreeSharedMemory(Adapter->MiniportHandle,
-                              Adapter->RxRingLength,
-                              FALSE,
-                              Adapter->RxRing,
-                              Adapter->RxRingPhysical);
+        MmFreeContiguousMemorySpecifyCache(Adapter->RxRing,
+                                           Adapter->RxRingLength,
+                                           MmNonCached);
         Adapter->RxRing = NULL;
-    }
-
-    if (Adapter->TxBufferArea)
-    {
-        NdisMFreeSharedMemory(Adapter->MiniportHandle,
-                              Adapter->TxBufferAreaLength,
-                              FALSE,
-                              Adapter->TxBufferArea,
-                              Adapter->TxBufferPhysical);
-        Adapter->TxBufferArea = NULL;
     }
 
     if (Adapter->TxRing)
     {
-        NdisMFreeSharedMemory(Adapter->MiniportHandle,
-                              Adapter->TxRingLength,
-                              FALSE,
-                              Adapter->TxRing,
-                              Adapter->TxRingPhysical);
+        MmFreeContiguousMemorySpecifyCache(Adapter->TxRing,
+                                           Adapter->TxRingLength,
+                                           MmNonCached);
         Adapter->TxRing = NULL;
     }
+}
+
+/*
+ * Allocate a DMA-visible common buffer for descriptor rings / TX data.
+ *
+ * We use MmAllocateContiguousMemorySpecifyCache instead of
+ * NdisMAllocateSharedMemory because Win11 ARM64 will not build a bus-master
+ * DMA adapter object for a bare ACPI\PRP0001 node (it has no _CCA / DMA
+ * properties), so NdisMAllocateSharedMemory fails there with
+ * STATUS_INSUFFICIENT_RESOURCES (0xC000009A) -> MiniportInitializeEx fails ->
+ * Code 10. ReactOS's NDIS is lenient and the same call succeeds, which is why
+ * the identical .sys works on ROS but not Win11.
+ *
+ * The RP1 GEM DMA is cache-coherent and 1:1 mapped to system RAM on the RPi5
+ * (the RX *data* buffers already use this exact MmAllocateContiguousMemory +
+ * MmGetPhysicalAddress path and the link comes up at 1Gbps on ReactOS), so the
+ * CPU physical address equals the device DMA address. MmNonCached keeps the
+ * rings coherent without explicit cache maintenance, matching the previous
+ * NdisMAllocateSharedMemory(Cached=FALSE) behaviour. This path is identical on
+ * ReactOS and Win11, preserving parity.
+ */
+static PVOID
+Rp1GemAllocateDmaCommonBuffer(
+    _In_ ULONG Length,
+    _Out_ PNDIS_PHYSICAL_ADDRESS Physical)
+{
+    PHYSICAL_ADDRESS Low, High, Boundary;
+    PVOID Va;
+
+    Low.QuadPart = 0;
+    High.QuadPart = ~0ULL;
+    Boundary.QuadPart = 0;
+
+    Va = MmAllocateContiguousMemorySpecifyCache(Length, Low, High, Boundary,
+                                                MmNonCached);
+    if (Va)
+        *Physical = MmGetPhysicalAddress(Va);
+    else
+        Physical->QuadPart = 0;
+
+    return Va;
+}
+
+/*
+ * Allocate ONE DMA packet buffer per ring slot. RP1GEM_BUFFER_SIZE (1536) is
+ * smaller than a page, so MmAllocateContiguousMemory is contractually
+ * guaranteed to return a physically-contiguous block that does not cross a
+ * page boundary -- without ever requesting a large contiguous run. The old
+ * design allocated ONE 384KB contiguous area (1536 * 256) and sliced it; Win11
+ * ARM64's fragmented allocator refuses that big run (STATUS_INSUFFICIENT_
+ * RESOURCES), whereas per-slot single-page allocations always succeed. Buffers
+ * need not be contiguous with each other -- each descriptor carries its own
+ * buffer's physical address.
+ *
+ * Cache type MmNonCached: the descriptor rings (Rp1GemAllocateDmaCommonBuffer)
+ * already use MmNonCached and allocate fine on Win11 ARM64, whereas an MmCached
+ * contiguous allocation failed there (STATUS_INSUFFICIENT_RESOURCES). MmNonCached
+ * also removes the cache-coherency assumption the cleanroom flagged for the data
+ * buffers (the GEM DMA no longer needs to snoop CPU caches), making the driver
+ * self-consistent and DMA-safe on both ReactOS and Win11 -- parity preserved.
+ */
+static PVOID
+Rp1GemAllocateDmaPacketBuffer(
+    _Out_ PNDIS_PHYSICAL_ADDRESS Physical)
+{
+    PHYSICAL_ADDRESS Low, High, Boundary;
+    PVOID Va;
+
+    Low.QuadPart = 0;
+    High.QuadPart = ~0ULL;
+    Boundary.QuadPart = 0;
+
+    Va = MmAllocateContiguousMemorySpecifyCache(RP1GEM_BUFFER_SIZE, Low, High,
+                                                Boundary, MmNonCached);
+    if (Va)
+        *Physical = MmGetPhysicalAddress(Va);
+    else
+        Physical->QuadPart = 0;
+
+    return Va;
 }
 
 static NDIS_STATUS
@@ -459,6 +484,8 @@ Rp1GemAllocateReceivePath(
     NET_BUFFER_LIST_POOL_PARAMETERS PoolParams;
     ULONG i;
 
+    Adapter->DiagSubStage = 51;
+
     RtlZeroMemory(&PoolParams, sizeof(PoolParams));
     PoolParams.Header.Type = NDIS_OBJECT_TYPE_DEFAULT;
     PoolParams.Header.Revision = NET_BUFFER_LIST_POOL_PARAMETERS_REVISION_1;
@@ -466,48 +493,48 @@ Rp1GemAllocateReceivePath(
     PoolParams.ProtocolId = NDIS_PROTOCOL_ID_DEFAULT;
     PoolParams.fAllocateNetBuffer = TRUE;
     PoolParams.PoolTag = RP1GEM_TAG;
-    PoolParams.DataSize = RP1GEM_BUFFER_SIZE;
+    /*
+     * DataSize MUST be 0: this driver attaches its OWN MDL/buffer to each
+     * NET_BUFFER (see NdisAllocateNetBufferAndNetBufferList with an explicit
+     * MdlChain below). The NDIS contract requires that when a pool is created
+     * with a nonzero DataSize (pool-allocated data), the MdlChain passed at
+     * allocation be NULL. Win11 enforces this and returns NULL for the
+     * mismatched call (NBL alloc fails -> MiniportInitializeEx fails); ReactOS
+     * is lenient and allowed DataSize=1536 + an explicit MdlChain. Zero works
+     * on both -> parity preserved.
+     */
+    PoolParams.DataSize = 0;
 
     Adapter->RxNblPool = NdisAllocateNetBufferListPool(Adapter->MiniportHandle,
                                                        &PoolParams);
     if (!Adapter->RxNblPool)
         return NDIS_STATUS_RESOURCES;
 
+    Adapter->DiagSubStage = 52;
     Adapter->RxRingLength = sizeof(RP1GEM_DMA_DESCRIPTOR) * RP1GEM_RX_RING_SIZE;
-    NdisMAllocateSharedMemory(Adapter->MiniportHandle,
-                              Adapter->RxRingLength,
-                              FALSE,
-                              (PVOID *)&Adapter->RxRing,
-                              &Adapter->RxRingPhysical);
+    Adapter->RxRing = (PRP1GEM_DMA_DESCRIPTOR)
+        Rp1GemAllocateDmaCommonBuffer(Adapter->RxRingLength,
+                                      &Adapter->RxRingPhysical);
     if (!Adapter->RxRing)
         return NDIS_STATUS_RESOURCES;
 
-    Adapter->RxBufferAreaLength = RP1GEM_BUFFER_SIZE * RP1GEM_RX_RING_SIZE;
-    {
-        PHYSICAL_ADDRESS Low, High, Boundary;
-        Low.QuadPart = 0;
-        High.QuadPart = ~0ULL;
-        Boundary.QuadPart = 0;
-        Adapter->RxBufferArea = MmAllocateContiguousMemorySpecifyCache(
-            Adapter->RxBufferAreaLength, Low, High, Boundary, MmCached);
-    }
-    if (!Adapter->RxBufferArea)
-        return NDIS_STATUS_RESOURCES;
-    Adapter->RxBufferPhysical = MmGetPhysicalAddress(Adapter->RxBufferArea);
-
+    Adapter->DiagSubStage = 53;
     RtlZeroMemory(Adapter->RxRing, Adapter->RxRingLength);
     for (i = 0; i < RP1GEM_RX_RING_SIZE; i++)
     {
+        Adapter->DiagLoopIndex = i;
+        Adapter->DiagSubStage = 531;
         Adapter->RxBuffers[i].VirtualAddress =
-            (PUCHAR)Adapter->RxBufferArea + (i * RP1GEM_BUFFER_SIZE);
-        Rp1GemGetBufferPhysicalAddress(&Adapter->RxBuffers[i].PhysicalAddress,
-                                       Adapter->RxBufferPhysical,
-                                       i);
+            Rp1GemAllocateDmaPacketBuffer(&Adapter->RxBuffers[i].PhysicalAddress);
+        if (!Adapter->RxBuffers[i].VirtualAddress)
+            return NDIS_STATUS_RESOURCES;
 
+        Adapter->DiagSubStage = 532;
         Adapter->RxBuffers[i].Mdl =
             Rp1GemAllocateMdl(Adapter->RxBuffers[i].VirtualAddress, RP1GEM_BUFFER_SIZE);
         if (!Adapter->RxBuffers[i].Mdl)
             return NDIS_STATUS_RESOURCES;
+        Adapter->DiagSubStage = 533;
         Adapter->RxBuffers[i].NetBufferList =
             NdisAllocateNetBufferAndNetBufferList(Adapter->RxNblPool, 0, 0,
                                                   Adapter->RxBuffers[i].Mdl, 0, 0);
@@ -528,24 +555,15 @@ Rp1GemAllocateTransmitPath(
 {
     ULONG i;
 
+    Adapter->DiagSubStage = 55;
     Adapter->TxRingLength = sizeof(RP1GEM_DMA_DESCRIPTOR) * RP1GEM_TX_RING_SIZE;
-    NdisMAllocateSharedMemory(Adapter->MiniportHandle,
-                              Adapter->TxRingLength,
-                              FALSE,
-                              (PVOID *)&Adapter->TxRing,
-                              &Adapter->TxRingPhysical);
+    Adapter->TxRing = (PRP1GEM_DMA_DESCRIPTOR)
+        Rp1GemAllocateDmaCommonBuffer(Adapter->TxRingLength,
+                                      &Adapter->TxRingPhysical);
     if (!Adapter->TxRing)
         return NDIS_STATUS_RESOURCES;
 
-    Adapter->TxBufferAreaLength = RP1GEM_BUFFER_SIZE * RP1GEM_TX_RING_SIZE;
-    NdisMAllocateSharedMemory(Adapter->MiniportHandle,
-                              Adapter->TxBufferAreaLength,
-                              FALSE,
-                              &Adapter->TxBufferArea,
-                              &Adapter->TxBufferPhysical);
-    if (!Adapter->TxBufferArea)
-        return NDIS_STATUS_RESOURCES;
-
+    Adapter->DiagSubStage = 56;
     RtlZeroMemory(Adapter->TxRing, Adapter->TxRingLength);
     for (i = 0; i < RP1GEM_TX_RING_SIZE; i++)
     {
@@ -554,11 +572,12 @@ Rp1GemAllocateTransmitPath(
         if (i == (RP1GEM_TX_RING_SIZE - 1))
             Control |= MACB_TX_WRAP;
 
+        Adapter->DiagLoopIndex = i;
+        Adapter->DiagSubStage = 561;
         Adapter->TxBuffers[i].VirtualAddress =
-            (PUCHAR)Adapter->TxBufferArea + (i * RP1GEM_BUFFER_SIZE);
-        Rp1GemGetBufferPhysicalAddress(&Adapter->TxBuffers[i].PhysicalAddress,
-                                       Adapter->TxBufferPhysical,
-                                       i);
+            Rp1GemAllocateDmaPacketBuffer(&Adapter->TxBuffers[i].PhysicalAddress);
+        if (!Adapter->TxBuffers[i].VirtualAddress)
+            return NDIS_STATUS_RESOURCES;
         Rp1GemSetDescriptorAddress(Adapter,
                                    &Adapter->TxRing[i],
                                    Adapter->TxBuffers[i].PhysicalAddress,
@@ -658,79 +677,6 @@ Rp1GemWaitMdioIdle(
     }
 
     return FALSE;
-}
-
-static VOID
-Rp1GemResetPhy(
-    _In_ PRP1GEM_ADAPTER Adapter)
-{
-    PHYSICAL_ADDRESS BarBase;
-    PHYSICAL_ADDRESS GpioPhysical;
-    PHYSICAL_ADDRESS RioPhysical;
-    PHYSICAL_ADDRESS PadsPhysical;
-    PVOID GpioBase;
-    PVOID RioBase;
-    PVOID PadsBase;
-    ULONG Ctrl;
-    ULONG Pad;
-
-    if (Adapter->RegisterPhysical.QuadPart < RP1GEM_ETH_OFFSET)
-        return;
-
-    BarBase.QuadPart = Adapter->RegisterPhysical.QuadPart - RP1GEM_ETH_OFFSET;
-    GpioPhysical.QuadPart = BarBase.QuadPart + RP1GEM_GPIO_OFFSET;
-    RioPhysical.QuadPart = BarBase.QuadPart + RP1GEM_RIO_OFFSET;
-    PadsPhysical.QuadPart = BarBase.QuadPart + RP1GEM_PADS_OFFSET;
-
-    GpioBase = MmMapIoSpace(GpioPhysical, RP1GEM_GPIO_WINDOW_LENGTH, MmNonCached);
-    RioBase = MmMapIoSpace(RioPhysical, RP1GEM_GPIO_WINDOW_LENGTH, MmNonCached);
-    PadsBase = MmMapIoSpace(PadsPhysical, RP1GEM_GPIO_WINDOW_LENGTH, MmNonCached);
-    if (!GpioBase || !RioBase || !PadsBase)
-    {
-        DPRINT1("RP1GEM: failed to map RP1 GPIO sideband for PHY reset\n");
-        goto Cleanup;
-    }
-
-    /*
-     * Raspberry Pi 5 connects the external Ethernet PHY reset to RP1 GPIO32,
-     * active low.  Preload the low value before switching the pin to GPIO
-     * output so the reset assertion is not skipped.
-     */
-    Rp1GemWriteSideband32(RioBase,
-                          RP1GEM_PHY_RESET_RIO_BANK + RP1_RIO_OUT + RP1_CLR_OFFSET,
-                          RP1GEM_PHY_RESET_BIT);
-    Rp1GemWriteSideband32(RioBase,
-                          RP1GEM_PHY_RESET_RIO_BANK + RP1_RIO_OE + RP1_SET_OFFSET,
-                          RP1GEM_PHY_RESET_BIT);
-
-    Pad = Rp1GemReadSideband32(PadsBase, RP1GEM_PHY_RESET_PAD_CTRL);
-    Pad &= ~(RP1_PAD_PULL_MASK | RP1_PAD_OUT_DISABLE_MASK);
-    Pad |= RP1_PAD_IN_ENABLE_MASK;
-    Rp1GemWriteSideband32(PadsBase, RP1GEM_PHY_RESET_PAD_CTRL, Pad);
-
-    Ctrl = Rp1GemReadSideband32(GpioBase, RP1GEM_PHY_RESET_GPIO_CTRL);
-    Ctrl &= ~(RP1_GPIO_CTRL_FUNCSEL_MASK |
-              RP1_GPIO_CTRL_OUTOVER_MASK |
-              RP1_GPIO_CTRL_OEOVER_MASK |
-              RP1_GPIO_CTRL_INOVER_MASK);
-    Ctrl |= RP1_FSEL_GPIO;
-    Rp1GemWriteSideband32(GpioBase, RP1GEM_PHY_RESET_GPIO_CTRL, Ctrl);
-
-    KeStallExecutionProcessor(5000);
-    Rp1GemWriteSideband32(RioBase,
-                          RP1GEM_PHY_RESET_RIO_BANK + RP1_RIO_OUT + RP1_SET_OFFSET,
-                          RP1GEM_PHY_RESET_BIT);
-    KeStallExecutionProcessor(20000);
-
-    DPRINT("RP1GEM: PHY reset GPIO%u toggled\n", RP1GEM_PHY_RESET_GPIO);
-
-Cleanup:
-    if (PadsBase)
-        MmUnmapIoSpace(PadsBase, RP1GEM_GPIO_WINDOW_LENGTH);
-    if (RioBase)
-        MmUnmapIoSpace(RioBase, RP1GEM_GPIO_WINDOW_LENGTH);
-    if (GpioBase)
-        MmUnmapIoSpace(GpioBase, RP1GEM_GPIO_WINDOW_LENGTH);
 }
 
 static NDIS_STATUS
@@ -1313,13 +1259,36 @@ Rp1GemIndicateLinkState(
     RtlZeroMemory(&StatusIndication, sizeof(StatusIndication));
     StatusIndication.Header.Type = NDIS_OBJECT_TYPE_STATUS_INDICATION;
     StatusIndication.Header.Revision = NDIS_STATUS_INDICATION_REVISION_1;
-    StatusIndication.Header.Size = sizeof(StatusIndication);
+    StatusIndication.Header.Size = NDIS_SIZEOF_STATUS_INDICATION_REVISION_1;
     StatusIndication.SourceHandle = Adapter->MiniportHandle;
     StatusIndication.StatusCode = NDIS_STATUS_LINK_STATE;
     StatusIndication.StatusBuffer = &LinkState;
     StatusIndication.StatusBufferSize = sizeof(LinkState);
 
     NdisMIndicateStatusEx(Adapter->MiniportHandle, &StatusIndication);
+}
+
+/*
+ * Runtime diagnostics. The link timer runs at DISPATCH_LEVEL, but Rp1GemWriteDiag
+ * uses Zw* registry calls that require PASSIVE_LEVEL, so the timer queues this NDIS
+ * IO work item (PASSIVE) to snapshot the live datapath state (NCR RE/TE, RSR/TSR,
+ * interrupt + RX/TX packet counts) into HKLM\SOFTWARE\Rp1GemDiag for the Win11
+ * launcher to read back -- there is no kernel debugger on the target.
+ */
+static VOID NTAPI
+Rp1GemDiagWork(
+    _In_ PVOID WorkItemContext,
+    _In_ NDIS_HANDLE NdisIoWorkItemHandle)
+{
+    PRP1GEM_ADAPTER Adapter = (PRP1GEM_ADAPTER)WorkItemContext;
+
+    UNREFERENCED_PARAMETER(NdisIoWorkItemHandle);
+
+    if (Adapter)
+    {
+        Rp1GemWriteDiag(Adapter, 99, NDIS_STATUS_SUCCESS);
+        InterlockedExchange(&Adapter->DiagWorkBusy, 0);
+    }
 }
 
 static VOID NTAPI
@@ -1350,6 +1319,13 @@ Rp1GemLinkTimer(
     {
         Rp1GemPollReceive(Adapter, RP1GEM_RX_BUDGET);
         Rp1GemDrainTxCompletions(Adapter, 0);
+    }
+
+    /* Snapshot runtime datapath state to the registry (at PASSIVE via work item). */
+    if (Adapter->DiagWorkItem &&
+        InterlockedCompareExchange(&Adapter->DiagWorkBusy, 1, 0) == 0)
+    {
+        NdisQueueIoWorkItem(Adapter->DiagWorkItem, Rp1GemDiagWork, Adapter);
     }
 }
 
@@ -1382,158 +1358,6 @@ Rp1GemStopLinkTimer(
     }
 }
 
-static BOOLEAN
-Rp1GemMailboxWaitClear(
-    _In_ PVOID MailboxBase,
-    _In_ ULONG Offset,
-    _In_ ULONG Mask)
-{
-    ULONG i;
-
-    for (i = 0; i < 1000000; i++)
-    {
-        if (!(Rp1GemReadSideband32(MailboxBase, Offset) & Mask))
-            return TRUE;
-
-        KeStallExecutionProcessor(1);
-    }
-
-    return FALSE;
-}
-
-static BOOLEAN
-Rp1GemMailboxReadResponse(
-    _In_ PVOID MailboxBase,
-    _In_ ULONG ExpectedMessage)
-{
-    ULONG i;
-
-    for (i = 0; i < 1000000; i++)
-    {
-        if (!(Rp1GemReadSideband32(MailboxBase, BCM2712_MBOX_MAIL0_STA) & BCM2712_MBOX_STATUS_EMPTY))
-        {
-            ULONG Message = Rp1GemReadSideband32(MailboxBase, BCM2712_MBOX_MAIL0_RD);
-
-            if ((Message & 0xf) == BCM2712_MBOX_PROPERTY_CHANNEL &&
-                (Message & ~0xf) == ExpectedMessage)
-            {
-                return TRUE;
-            }
-        }
-
-        KeStallExecutionProcessor(1);
-    }
-
-    return FALSE;
-}
-
-static BOOLEAN
-Rp1GemReadFirmwareMacProperty(
-    _In_ ULONG Tag,
-    _In_ PCSTR Name,
-    _Out_writes_(ETH_LENGTH_OF_ADDRESS) UCHAR *MacAddress)
-{
-    PHYSICAL_ADDRESS LowAddress, HighAddress, BoundaryAddress, MailboxPhysical, MessagePhysical;
-    PRP1GEM_MAILBOX_PROPERTY Message;
-    PVOID MailboxBase;
-    ULONG MailboxMessage;
-    BOOLEAN Success = FALSE;
-
-    LowAddress.QuadPart = 0;
-    HighAddress.QuadPart = 0xffffffffULL;
-    BoundaryAddress.QuadPart = 0;
-    Message = MmAllocateContiguousMemorySpecifyCache(sizeof(*Message),
-                                                     LowAddress,
-                                                     HighAddress,
-                                                     BoundaryAddress,
-                                                     MmNonCached);
-    if (!Message)
-        return FALSE;
-
-    MessagePhysical = MmGetPhysicalAddress(Message);
-    if (MessagePhysical.HighPart != 0 || (MessagePhysical.LowPart & 0xf))
-    {
-        DPRINT1("RP1GEM: firmware MAC mailbox buffer unusable pa=0x%I64x\n",
-                MessagePhysical.QuadPart);
-        goto CleanupMessage;
-    }
-
-    MailboxPhysical.QuadPart = BCM2712_MBOX_PHYS;
-    MailboxBase = MmMapIoSpace(MailboxPhysical, BCM2712_MBOX_LENGTH, MmNonCached);
-    if (!MailboxBase)
-        goto CleanupMessage;
-
-    RtlZeroMemory(Message, sizeof(*Message));
-    Message->Size = sizeof(*Message);
-    Message->Code = 0;
-    Message->Tag = Tag;
-    Message->ValueSize = ETH_LENGTH_OF_ADDRESS;
-    Message->RequestResponse = 0;
-    Message->EndTag = 0;
-    KeMemoryBarrier();
-
-    MailboxMessage = MessagePhysical.LowPart | BCM2712_MBOX_PROPERTY_CHANNEL;
-    if (!Rp1GemMailboxWaitClear(MailboxBase,
-                                BCM2712_MBOX_MAIL1_STA,
-                                BCM2712_MBOX_STATUS_FULL))
-    {
-        DPRINT1("RP1GEM: firmware MAC mailbox %s write FIFO stayed full\n", Name);
-        goto CleanupMailbox;
-    }
-
-    Rp1GemWriteSideband32(MailboxBase, BCM2712_MBOX_MAIL1_WRT, MailboxMessage);
-    if (!Rp1GemMailboxReadResponse(MailboxBase, MessagePhysical.LowPart))
-    {
-        DPRINT1("RP1GEM: firmware MAC mailbox %s timed out\n", Name);
-        goto CleanupMailbox;
-    }
-
-    KeMemoryBarrier();
-    if (Message->Code == BCM2712_MBOX_PROPERTY_SUCCESS &&
-        (Message->RequestResponse & BCM2712_MBOX_TAG_RESPONSE) &&
-        (Message->RequestResponse & ~BCM2712_MBOX_TAG_RESPONSE) >= ETH_LENGTH_OF_ADDRESS)
-    {
-        RtlCopyMemory(MacAddress, Message->Value, ETH_LENGTH_OF_ADDRESS);
-        Success = Rp1GemIsValidMacAddress(MacAddress);
-    }
-
-    DPRINT("RP1GEM: firmware MAC %s tag=0x%08lx status=0x%08lx response=0x%08lx value=%02x:%02x:%02x:%02x:%02x:%02x valid=%u\n",
-           Name,
-           Tag,
-           Message->Code,
-           Message->RequestResponse,
-           ((PUCHAR)Message->Value)[0],
-           ((PUCHAR)Message->Value)[1],
-           ((PUCHAR)Message->Value)[2],
-           ((PUCHAR)Message->Value)[3],
-           ((PUCHAR)Message->Value)[4],
-           ((PUCHAR)Message->Value)[5],
-           Success ? 1 : 0);
-
-CleanupMailbox:
-    MmUnmapIoSpace(MailboxBase, BCM2712_MBOX_LENGTH);
-
-CleanupMessage:
-    MmFreeContiguousMemorySpecifyCache(Message, sizeof(*Message), MmNonCached);
-    return Success;
-}
-
-static BOOLEAN
-Rp1GemReadFirmwareMacAddress(
-    _Out_writes_(ETH_LENGTH_OF_ADDRESS) UCHAR *MacAddress)
-{
-    if (Rp1GemReadFirmwareMacProperty(BCM2712_MBOX_GET_ETHERNET_MAC,
-                                      "ethernet",
-                                      MacAddress))
-    {
-        return TRUE;
-    }
-
-    return Rp1GemReadFirmwareMacProperty(BCM2712_MBOX_GET_BOARD_MAC,
-                                         "board",
-                                         MacAddress);
-}
-
 static VOID
 Rp1GemReadMacAddress(
     _In_ PRP1GEM_ADAPTER Adapter)
@@ -1552,26 +1376,15 @@ Rp1GemReadMacAddress(
     {
         static const UCHAR FallbackAddress[ETH_LENGTH_OF_ADDRESS] =
             { 0x02, 0x00, 0x00, 0x27, 0x12, 0x01 };
-        UCHAR FirmwareAddress[ETH_LENGTH_OF_ADDRESS];
 
         DPRINT("RP1GEM: hardware MAC registers invalid SA1B=0x%08lx SA1T=0x%08lx\n",
                Sa1b,
                Sa1t);
 
-        if (Rp1GemReadFirmwareMacAddress(FirmwareAddress))
-        {
-            RtlCopyMemory(Adapter->PermanentMacAddress,
-                          FirmwareAddress,
-                          ETH_LENGTH_OF_ADDRESS);
-            DPRINT("RP1GEM: using Raspberry Pi firmware MAC address\n");
-        }
-        else
-        {
-            RtlCopyMemory(Adapter->PermanentMacAddress,
-                          FallbackAddress,
-                          sizeof(FallbackAddress));
-            DPRINT("RP1GEM: using fallback locally-administered MAC address\n");
-        }
+        RtlCopyMemory(Adapter->PermanentMacAddress,
+                      FallbackAddress,
+                      sizeof(FallbackAddress));
+        DPRINT("RP1GEM: using fallback locally-administered MAC address\n");
     }
 
     RtlCopyMemory(Adapter->CurrentMacAddress,
@@ -1611,9 +1424,9 @@ Rp1GemSetGeneralAttributes(
     RtlZeroMemory(&GenAttrs, sizeof(GenAttrs));
     GenAttrs.Header.Type = NDIS_OBJECT_TYPE_MINIPORT_ADAPTER_GENERAL_ATTRIBUTES;
     GenAttrs.Header.Revision = NDIS_MINIPORT_ADAPTER_GENERAL_ATTRIBUTES_REVISION_1;
-    GenAttrs.Header.Size = sizeof(GenAttrs);
+    GenAttrs.Header.Size = NDIS_SIZEOF_MINIPORT_ADAPTER_GENERAL_ATTRIBUTES_REVISION_1;
     GenAttrs.MediaType = NdisMedium802_3;
-    GenAttrs.PhysicalMediumType = (NDIS_MEDIUM)NdisPhysicalMedium802_3;
+    GenAttrs.PhysicalMediumType = NdisPhysicalMedium802_3;
     GenAttrs.MtuSize = RP1GEM_MTU;
     GenAttrs.MaxXmitLinkSpeed = RP1GEM_LINK_SPEED_1G;
     GenAttrs.MaxRcvLinkSpeed = RP1GEM_LINK_SPEED_1G;
@@ -1666,6 +1479,13 @@ Rp1GemMapResources(
 
     Descriptor = &ResourceList->PartialDescriptors[0];
 
+    /* Record what NDIS actually handed us so the Win11 diag readback can show
+     * the CM resource types (e.g. Memory=3 vs MemoryLarge=7) and count. */
+    Adapter->DiagResCount = ResourceList->Count;
+    Adapter->DiagResTypes = 0;
+    for (i = 0; i < ResourceList->Count && i < 4; i++)
+        Adapter->DiagResTypes |= ((ULONG)Descriptor[i].Type & 0xff) << (i * 8);
+
     for (i = 0; i < ResourceList->Count; i++, Descriptor++)
     {
         switch (Descriptor->Type)
@@ -1689,37 +1509,6 @@ Rp1GemMapResources(
                            Adapter->RegisterPhysical.QuadPart,
                            Adapter->RegisterLength,
                            Adapter->RegisterBase);
-
-                    if (!Adapter->Rp1ApbsBase &&
-                        Adapter->RegisterPhysical.QuadPart >= RP1GEM_ETH_OFFSET)
-                    {
-                        PHYSICAL_ADDRESS ApbsPhysical;
-
-                        ApbsPhysical.QuadPart =
-                            Adapter->RegisterPhysical.QuadPart -
-                            RP1GEM_ETH_OFFSET +
-                            RP1GEM_PCIE_APBS_OFFSET;
-                        Adapter->Rp1ApbsLength = RP1GEM_PCIE_APBS_LENGTH;
-                        Status = NdisMMapIoSpace(&Adapter->Rp1ApbsBase,
-                                                 Adapter->MiniportHandle,
-                                                 ApbsPhysical,
-                                                 Adapter->Rp1ApbsLength);
-                        if (Status == NDIS_STATUS_SUCCESS)
-                        {
-                            DPRINT("RP1GEM: RP1 APBS interrupt ack phys=0x%I64x len=0x%lx va=%p\n",
-                                   ApbsPhysical.QuadPart,
-                                   Adapter->Rp1ApbsLength,
-                                   Adapter->Rp1ApbsBase);
-                        }
-                        else
-                        {
-                            Adapter->Rp1ApbsBase = NULL;
-                            Adapter->Rp1ApbsLength = 0;
-                            DPRINT1("RP1GEM: RP1 APBS interrupt ack map failed 0x%08x\n",
-                                    Status);
-                        }
-                    }
-
                 }
                 break;
 
@@ -1747,7 +1536,6 @@ Rp1GemProbeHardware(
 {
     ULONG Ncr, Ncfgr, Mid, Dcfg1, Dcfg2, Dcfg6;
 
-    Rp1GemResetPhy(Adapter);
     Rp1GemWrite32(Adapter, MACB_IDR, 0xffffffff);
     Rp1GemWrite32(Adapter, MACB_TSR, MACB_TSR_ALL);
     Rp1GemWrite32(Adapter, MACB_RSR, MACB_RSR_ALL);
@@ -2060,7 +1848,6 @@ Rp1GemInterrupt(
     if (!Isr)
     {
         Adapter->SpuriousInterruptCount++;
-        Rp1GemAckRp1Interrupt(Adapter);
         return FALSE;
     }
 
@@ -2098,7 +1885,6 @@ Rp1GemInterruptDpc(
     if (Pending & (MACB_INT_TCOMP | MACB_INT_TXERR | MACB_INT_TUND | MACB_INT_RLE | MACB_INT_TXUBR))
         Rp1GemDrainTxCompletions(Adapter, NDIS_SEND_COMPLETE_FLAGS_DISPATCH_LEVEL);
 
-    Rp1GemAckRp1Interrupt(Adapter);
     Rp1GemEnableInterrupts(Adapter);
 }
 
@@ -2132,13 +1918,13 @@ Rp1GemRegisterInterrupt(
     RtlZeroMemory(&IntChars, sizeof(IntChars));
     IntChars.Header.Type = NDIS_OBJECT_TYPE_MINIPORT_INTERRUPT;
     IntChars.Header.Revision = NDIS_MINIPORT_INTERRUPT_REVISION_1;
-    IntChars.Header.Size = sizeof(IntChars);
+    IntChars.Header.Size = NDIS_SIZEOF_MINIPORT_INTERRUPT_CHARACTERISTICS_REVISION_1;
     IntChars.InterruptHandler = Rp1GemInterrupt;
     IntChars.InterruptDpcHandler = Rp1GemInterruptDpc;
     IntChars.DisableInterruptHandler = Rp1GemDisableInterruptEx;
     IntChars.EnableInterruptHandler = Rp1GemEnableInterruptEx;
     IntChars.InterruptType = NDIS_CONNECT_LINE_BASED;
-    IntChars.MsiSupported = TRUE;
+    IntChars.MsiSupported = FALSE;
 
     Status = NdisMRegisterInterruptEx(Adapter->MiniportHandle,
                                       Adapter,
@@ -2401,6 +2187,109 @@ Rp1GemSetInformation(
     }
 }
 
+/*
+ * Win11-on-RPi5 init diagnostics. The same .sys brings the link up at 1Gbps on
+ * ReactOS but fails MiniportInitializeEx on Win11 ARM64 (Code 10 / 0xC0000001),
+ * and Win11 has no kernel debugger attached so DPRINT is invisible. Dump a
+ * decisive snapshot to \Registry\Machine\SOFTWARE\Rp1GemDiag that the guest can
+ * read back: which Stage we reached, the failing NDIS status, the CM resources
+ * NDIS handed us, and live GEM register reads (MID/DCFG*) that reveal whether
+ * the MMIO mapping is actually alive.
+ */
+static VOID
+Rp1GemWriteDiag(
+    _In_ PRP1GEM_ADAPTER Adapter,
+    _In_ ULONG Stage,
+    _In_ NDIS_STATUS LastStatus)
+{
+    OBJECT_ATTRIBUTES ObjA;
+    UNICODE_STRING KeyName, ValName;
+    HANDLE hKey = NULL;
+    NTSTATUS NtStatus;
+    ULONG Disp;
+    ULONG Mid = 0, Dcfg1 = 0, Dcfg6 = 0, Ncr = 0, Nsr = 0;
+    ULONG Rsr = 0, Tsr = 0, Imr = 0;
+    ULONG MacLo, MacHi;
+
+    if (Adapter->RegisterBase)
+    {
+        Mid = Rp1GemRead32(Adapter, MACB_MID);
+        Dcfg1 = Rp1GemRead32(Adapter, GEM_DCFG1);
+        Dcfg6 = Rp1GemRead32(Adapter, GEM_DCFG6);
+        Ncr = Rp1GemRead32(Adapter, MACB_NCR);
+        Nsr = Rp1GemRead32(Adapter, MACB_NSR);
+        Rsr = Rp1GemRead32(Adapter, MACB_RSR);
+        Tsr = Rp1GemRead32(Adapter, MACB_TSR);
+        Imr = Rp1GemRead32(Adapter, MACB_IMR);
+    }
+    MacLo = Adapter->CurrentMacAddress[0] |
+            (Adapter->CurrentMacAddress[1] << 8) |
+            (Adapter->CurrentMacAddress[2] << 16) |
+            ((ULONG)Adapter->CurrentMacAddress[3] << 24);
+    MacHi = Adapter->CurrentMacAddress[4] |
+            (Adapter->CurrentMacAddress[5] << 8);
+
+    RtlInitUnicodeString(&KeyName, L"\\Registry\\Machine\\SOFTWARE\\Rp1GemDiag");
+    InitializeObjectAttributes(&ObjA, &KeyName,
+                               OBJ_CASE_INSENSITIVE | OBJ_KERNEL_HANDLE,
+                               NULL, NULL);
+    NtStatus = ZwCreateKey(&hKey, KEY_ALL_ACCESS, &ObjA, 0, NULL,
+                           REG_OPTION_NON_VOLATILE, &Disp);
+    if (!NT_SUCCESS(NtStatus))
+        return;
+
+#define DIAG_SET(_name, _val) do {                                      \
+        ULONG _v = (ULONG)(_val);                                       \
+        RtlInitUnicodeString(&ValName, _name);                         \
+        ZwSetValueKey(hKey, &ValName, 0, REG_DWORD, &_v, sizeof(_v));  \
+    } while (0)
+
+    DIAG_SET(L"DiagVer", 7);
+    DIAG_SET(L"Stage", Stage);
+    DIAG_SET(L"SubStage", Adapter->DiagSubStage);
+    DIAG_SET(L"LoopIndex", Adapter->DiagLoopIndex);
+    DIAG_SET(L"LastStatus", (ULONG)LastStatus);
+    DIAG_SET(L"ResCount", Adapter->DiagResCount);
+    DIAG_SET(L"ResTypes", Adapter->DiagResTypes);
+    DIAG_SET(L"RegPhysHi", Adapter->RegisterPhysical.HighPart);
+    DIAG_SET(L"RegPhysLo", Adapter->RegisterPhysical.LowPart);
+    DIAG_SET(L"RegLen", Adapter->RegisterLength);
+    DIAG_SET(L"RegMapped", Adapter->RegisterBase ? 1 : 0);
+    DIAG_SET(L"MID", Mid);
+    DIAG_SET(L"DCFG1", Dcfg1);
+    DIAG_SET(L"DCFG6", Dcfg6);
+    DIAG_SET(L"NCR", Ncr);
+    DIAG_SET(L"NSR", Nsr);
+    DIAG_SET(L"RSR", Rsr);
+    DIAG_SET(L"TSR", Tsr);
+    DIAG_SET(L"IMR", Imr);
+    DIAG_SET(L"RxPackets", (ULONG)Adapter->RxPackets);
+    DIAG_SET(L"TxPackets", (ULONG)Adapter->TxPackets);
+    DIAG_SET(L"RxBytes", (ULONG)Adapter->RxBytes);
+    DIAG_SET(L"TxBytes", (ULONG)Adapter->TxBytes);
+    DIAG_SET(L"RxErrors", (ULONG)Adapter->RxErrors);
+    DIAG_SET(L"TxErrors", (ULONG)Adapter->TxErrors);
+    DIAG_SET(L"RxNoBuffer", (ULONG)Adapter->RxNoBuffer);
+    DIAG_SET(L"IsrCount", Adapter->InterruptIsrCount);
+    DIAG_SET(L"DpcCount", Adapter->InterruptDpcCount);
+    DIAG_SET(L"IsrRecognized", Adapter->InterruptRecognizedCount);
+    DIAG_SET(L"IsrSpurious", Adapter->SpuriousInterruptCount);
+    DIAG_SET(L"IsrLastRaw", Adapter->InterruptLastRawIsr);
+    DIAG_SET(L"MediaConnect", (ULONG)Adapter->MediaConnectState);
+    DIAG_SET(L"Dma64", Adapter->Dma64Bit ? 1 : 0);
+    DIAG_SET(L"IntVec", Adapter->InterruptVector);
+    DIAG_SET(L"IntLvl", Adapter->InterruptLevel);
+    DIAG_SET(L"MacLo", MacLo);
+    DIAG_SET(L"MacHi", MacHi);
+    DIAG_SET(L"PhyAddr", Adapter->PhyAddress);
+    DIAG_SET(L"PhyId1", Adapter->PhyId1);
+    DIAG_SET(L"PhyId2", Adapter->PhyId2);
+
+#undef DIAG_SET
+
+    ZwClose(hKey);
+}
+
 static NDIS_STATUS NTAPI
 Rp1GemInitializeEx(
     _In_ NDIS_HANDLE MiniportAdapterHandle,
@@ -2454,6 +2343,7 @@ Rp1GemInitializeEx(
         (PNDIS_RESOURCE_LIST)MiniportInitParameters->AllocatedResources);
     if (Status != NDIS_STATUS_SUCCESS)
     {
+        Rp1GemWriteDiag(Adapter, 3, Status);
         Rp1GemUnmapResources(Adapter);
         NdisFreeSpinLock(&Adapter->TxLock);
         NdisFreeSpinLock(&Adapter->RxLock);
@@ -2463,10 +2353,15 @@ Rp1GemInitializeEx(
 
     Rp1GemProbeHardware(Adapter);
 
+    /* Decisive snapshot: MMIO is mapped now, so MID/DCFG6/MAC reads here tell
+     * us whether the register window is actually alive on Win11 ARM64. */
+    Rp1GemWriteDiag(Adapter, 4, NDIS_STATUS_SUCCESS);
+
     Status = Rp1GemInitializeDatapath(Adapter);
     if (Status != NDIS_STATUS_SUCCESS)
     {
         DPRINT1("RP1GEM: datapath initialization failed 0x%08x\n", Status);
+        Rp1GemWriteDiag(Adapter, 5, Status);
         Rp1GemStopHardware(Adapter);
         Rp1GemFreeDatapath(Adapter);
         Rp1GemUnmapResources(Adapter);
@@ -2476,9 +2371,12 @@ Rp1GemInitializeEx(
         return Status;
     }
 
+    Rp1GemWriteDiag(Adapter, 5, NDIS_STATUS_SUCCESS);
+
     Status = Rp1GemRegisterInterrupt(Adapter);
     if (Status != NDIS_STATUS_SUCCESS)
     {
+        Rp1GemWriteDiag(Adapter, 6, Status);
         Rp1GemStopHardware(Adapter);
         Rp1GemFreeDatapath(Adapter);
         Rp1GemUnmapResources(Adapter);
@@ -2487,11 +2385,14 @@ Rp1GemInitializeEx(
         ExFreePoolWithTag(Adapter, RP1GEM_TAG);
         return Status;
     }
+
+    Rp1GemWriteDiag(Adapter, 6, NDIS_STATUS_SUCCESS);
 
     Status = Rp1GemSetGeneralAttributes(Adapter);
     if (Status != NDIS_STATUS_SUCCESS)
     {
         DPRINT1("RP1GEM: general attributes failed 0x%08x\n", Status);
+        Rp1GemWriteDiag(Adapter, 7, Status);
         Rp1GemDeregisterInterrupt(Adapter);
         Rp1GemStopHardware(Adapter);
         Rp1GemFreeDatapath(Adapter);
@@ -2504,7 +2405,9 @@ Rp1GemInitializeEx(
 
     Rp1GemDiscardPendingReceive(Adapter);
     Rp1GemEnableInterrupts(Adapter);
+    Adapter->DiagWorkItem = NdisAllocateIoWorkItem(Adapter->MiniportHandle);
     Rp1GemStartLinkTimer(Adapter);
+    Rp1GemWriteDiag(Adapter, 8, NDIS_STATUS_SUCCESS);
     DPRINT("RP1GEM: initialized\n");
     return NDIS_STATUS_SUCCESS;
 }
@@ -2524,6 +2427,19 @@ Rp1GemHaltEx(
         return;
 
     Rp1GemStopLinkTimer(Adapter);
+    if (Adapter->DiagWorkItem)
+    {
+        /* Timer is cancelled + DPCs flushed, so no new diag work will be queued.
+         * Wait out any in-flight item (PASSIVE) before freeing it / the adapter. */
+        ULONG Spin = 0;
+        while (Adapter->DiagWorkBusy && Spin < 1000)
+        {
+            NdisMSleep(1000);
+            Spin++;
+        }
+        NdisFreeIoWorkItem(Adapter->DiagWorkItem);
+        Adapter->DiagWorkItem = NULL;
+    }
     Rp1GemDeregisterInterrupt(Adapter);
     Rp1GemStopHardware(Adapter);
     Rp1GemFreeDatapath(Adapter);
@@ -2792,10 +2708,16 @@ DriverEntry(
 
     RtlZeroMemory(&Chars, sizeof(Chars));
     Chars.Header.Type = NDIS_OBJECT_TYPE_MINIPORT_DRIVER_CHARACTERISTICS;
-    Chars.Header.Revision = NDIS_MINIPORT_DRIVER_CHARACTERISTICS_REVISION_1;
-    Chars.Header.Size = sizeof(Chars);
+    /* Win11 ARM64 enforces an NDIS version floor of 6.30 (public WinSDK
+     * km/ndis.h: NDIS_MIN_API=0x630 on ARM64/ARM, vs 0x400 on x86/x64).
+     * A miniport declaring < 6.30 is rejected by NdisMRegisterMiniportDriver
+     * with NDIS_STATUS_BAD_VERSION. Declare 6.30 with the matching
+     * characteristics REVISION_2 (Direct-OID handlers stay NULL). ReactOS's
+     * NDIS accepts this too; this keeps one binary working on both. */
+    Chars.Header.Revision = NDIS_MINIPORT_DRIVER_CHARACTERISTICS_REVISION_2;
+    Chars.Header.Size = NDIS_SIZEOF_MINIPORT_DRIVER_CHARACTERISTICS_REVISION_2;
     Chars.MajorNdisVersion = 6;
-    Chars.MinorNdisVersion = 20;
+    Chars.MinorNdisVersion = 30;
     Chars.MajorDriverVersion = 1;
     Chars.MinorDriverVersion = 0;
     Chars.InitializeHandlerEx = Rp1GemInitializeEx;
