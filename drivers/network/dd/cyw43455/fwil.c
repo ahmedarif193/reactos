@@ -14,6 +14,8 @@
 #define SDPCM_CHANNEL_CONTROL   0
 #define SDPCM_CHANNEL_EVENT     1
 #define SDPCM_CHANNEL_DATA      2
+#define SDPCM_CHANNEL_GLOM      3
+#define SDPCM_GLOMDESC_FLAG     0x80
 #define SDPCM_SEQ_OFFSET        4
 #define SDPCM_CHANNEL_OFFSET    5
 #define SDPCM_DOFFSET_OFFSET    7
@@ -96,6 +98,15 @@ CywSdpcmSendData(
         return STATUS_BUFFER_TOO_SMALL;
     }
 
+    KeWaitForSingleObject(&Adapter->F2Lock, Executive, KernelMode, FALSE, NULL);
+
+    Avail = (UCHAR)(Adapter->TxMax - Adapter->TxSeq);
+    if ((Avail & 0x80) || Avail == 0 || Adapter->TxFlow)
+    {
+        KeReleaseMutex(&Adapter->F2Lock, FALSE);
+        return STATUS_DEVICE_BUSY;
+    }
+
     RtlZeroMemory(Frame, SDPCM_HEADER_LEN + BCDC_HEADER_LEN);
     Frame[0] = (UCHAR)(Total & 0xFF);
     Frame[1] = (UCHAR)((Total >> 8) & 0xFF);
@@ -107,9 +118,23 @@ CywSdpcmSendData(
 
     RtlCopyMemory(Frame + SDPCM_HEADER_LEN + BCDC_HEADER_LEN, Eth, EthLen);
 
-    KeWaitForSingleObject(&Adapter->F2Lock, Executive, KernelMode, FALSE, NULL);
     Frame[SDPCM_SEQ_OFFSET] = Adapter->TxSeq;
-    Status = CywSdioWriteBytes(Adapter, CYW_SDIO_FUNC_RADIO, SDIO_F2_FIFO, Frame, Padded);
+    {
+        ULONG Blocks = Padded / CYW_F2_BLOCKSIZE;
+        ULONG Done = 0;
+        Status = STATUS_SUCCESS;
+        if (Blocks > 0)
+        {
+            Status = CywSdioWriteBlocks(Adapter, CYW_SDIO_FUNC_RADIO, SDIO_F2_FIFO,
+                                        Frame, Blocks * CYW_F2_BLOCKSIZE, CYW_F2_BLOCKSIZE);
+            Done = Blocks * CYW_F2_BLOCKSIZE;
+        }
+        if (NT_SUCCESS(Status) && Done < Padded)
+        {
+            Status = CywSdioWriteBytes(Adapter, CYW_SDIO_FUNC_RADIO, SDIO_F2_FIFO,
+                                       Frame + Done, Padded - Done);
+        }
+    }
     if (NT_SUCCESS(Status))
     {
         Adapter->TxSeq = (UCHAR)(Adapter->TxSeq + 1);
@@ -249,7 +274,6 @@ CywBcdcXfer(
                 if (RecvLen >= sizeof(CYW_BCDC_DCMD) &&
                     ((Dcmd->Flags & BCDC_DCMD_ID_MASK) >> BCDC_DCMD_ID_SHIFT) != ReqId)
                 {
-                    DPRINT1("CYW: BCDC cmd %lu reqid mismatch\n", Cmd);
                     Status = STATUS_UNSUCCESSFUL;
                 }
             }
@@ -274,7 +298,6 @@ CywBcdcXfer(
         Dcmd = (PCYW_BCDC_DCMD)Msg;
         if (Dcmd->Flags & BCDC_DCMD_ERROR)
         {
-            DPRINT1("CYW: BCDC cmd %lu firmware error %d\n", Cmd, (LONG)Dcmd->Status);
             Status = STATUS_UNSUCCESSFUL;
         }
         else if (!Set && Data != NULL)
@@ -447,7 +470,6 @@ CywScanStart(
 
     if (!NT_SUCCESS(Status))
     {
-        DPRINT1("CYW: escan start failed 0x%08lx\n", Status);
         NdisAcquireSpinLock(&Adapter->Lock);
         Adapter->ScanInProgress = FALSE;
         NdisReleaseSpinLock(&Adapter->Lock);
@@ -514,14 +536,16 @@ CywConnect(
 
     CywFilIovarSetInt(Adapter, "roam_off", 1);
 
+    {
+        ULONG Pm = 0;
+        CywFilCmdSet(Adapter, BRCMF_C_SET_PM, &Pm, sizeof(Pm));
+    }
+
     RtlZeroMemory(&Ssid, sizeof(Ssid));
     Ssid.SsidLen = Adapter->DesiredSsidLength;
     RtlCopyMemory(Ssid.Ssid, Adapter->DesiredSsid, Adapter->DesiredSsidLength);
     Status = CywFilCmdSet(Adapter, BRCMF_C_SET_SSID, &Ssid, sizeof(Ssid));
 
-    DPRINT1("CYW: connect '%.*s' wsec %lu wpa_auth 0x%lx status 0x%08lx\n",
-            (int)Adapter->DesiredSsidLength, Adapter->DesiredSsid,
-            Wsec, WpaAuth, Status);
     return Status;
 }
 
@@ -570,10 +594,10 @@ CywAddEscanResult(
     RtlCopyMemory(Entry->Ssid, Bss + 19, SsidLen);
     Entry->SsidLength = SsidLen;
     Entry->BssType = dot11_BSS_type_infrastructure;
-    Entry->Rssi = (LONG)(SHORT)(Bss[76] | (Bss[77] << 8));
+    Entry->Rssi = (LONG)(SHORT)(USHORT)(Bss[76] | (Bss[77] << 8));
     Entry->LinkQuality = (Entry->Rssi >= -50) ? 100 :
                          (Entry->Rssi <= -100) ? 0 : (2 * (Entry->Rssi + 100));
-    Entry->ChannelNumber = (Bss[71] | (Bss[72] << 8)) & 0xFF;
+    Entry->ChannelNumber = Bss[71];
     Entry->CapabilityInformation = (USHORT)(Bss[16] | (Bss[17] << 8));
 
     Adapter->BssCount++;
@@ -650,7 +674,6 @@ CywProcessEvent(
             RtlCopyMemory(Adapter->ConnectedBssid, Msg->Addr, CYW_ADDRESS_LENGTH);
             Adapter->Associated = TRUE;
             NdisReleaseSpinLock(&Adapter->Lock);
-            DPRINT1("CYW: LINK up, associated - indicating ASSOCIATION_COMPLETION\n");
             CywIndicateAssocComplete(Adapter, DOT11_ASSOC_STATUS_SUCCESS);
         }
         else
@@ -659,24 +682,10 @@ CywProcessEvent(
             Adapter->Associated = FALSE;
             Adapter->LinkUp = FALSE;
             NdisReleaseSpinLock(&Adapter->Lock);
-            DPRINT1("CYW: LINK down\n");
         }
-    }
-    else if (EventType == BRCMF_E_DEAUTH || EventType == BRCMF_E_DEAUTH_IND ||
-             EventType == BRCMF_E_DISASSOC || EventType == BRCMF_E_DISASSOC_IND)
-    {
-        DPRINT1("CYW: DEAUTH/DISASSOC evt %lu status %lu reason %lu\n",
-                EventType, EventStatus, RtlUlongByteSwap(Msg->Reason));
-    }
-    else if (EventType == BRCMF_E_REASSOC || EventType == BRCMF_E_REASSOC_IND ||
-             EventType == BRCMF_E_ROAM || EventType == BRCMF_E_MIC_ERROR)
-    {
-        DPRINT1("CYW: REASSOC/ROAM/MIC evt %lu status %lu reason %lu\n",
-                EventType, EventStatus, RtlUlongByteSwap(Msg->Reason));
     }
     else if (EventType == BRCMF_E_SET_SSID)
     {
-        DPRINT1("CYW: SET_SSID event status %lu\n", EventStatus);
         if (EventStatus != BRCMF_E_STATUS_SUCCESS)
         {
             CywIndicateAssocComplete(Adapter, DOT11_ASSOC_STATUS_FAILURE);
@@ -699,6 +708,8 @@ CywRxData(
     PCYW_SNAP_HEADER Snap;
     PMDL Mdl;
     PNET_BUFFER_LIST Nbl;
+    PCYW_RX_BUF Rb;
+    KIRQL OldIrql;
 
     if (BodyLen < BCDC_HEADER_LEN)
     {
@@ -721,11 +732,16 @@ CywRxData(
         return NULL;
     }
 
-    Frame = CywAllocate(FrameLen);
-    if (Frame == NULL)
+    KeAcquireSpinLock(&Adapter->RxBufLock, &OldIrql);
+    Rb = Adapter->RxBufFree;
+    if (Rb != NULL)
+        Adapter->RxBufFree = Rb->Next;
+    KeReleaseSpinLock(&Adapter->RxBufLock, OldIrql);
+    if (Rb == NULL)
     {
         return NULL;
     }
+    Frame = Rb->Buffer;
 
     Dot11 = (PCYW_DOT11_HEADER)Frame;
     RtlZeroMemory(Dot11, sizeof(CYW_DOT11_HEADER));
@@ -749,27 +765,61 @@ CywRxData(
                   Pay + sizeof(CYW_ETHER_HEADER),
                   PayLen - sizeof(CYW_ETHER_HEADER));
 
-    Mdl = NdisAllocateMdl(Adapter->MiniportAdapterHandle, Frame, FrameLen);
-    if (Mdl == NULL)
-    {
-        CywFree(Frame);
-        return NULL;
-    }
-    MmBuildMdlForNonPagedPool(Mdl);
+    Mdl = Rb->Mdl;
 
     Nbl = NdisAllocateNetBufferAndNetBufferList(Adapter->RxNblPool, 0, 0, Mdl, 0, FrameLen);
     if (Nbl == NULL)
     {
-        NdisFreeMdl(Mdl);
-        CywFree(Frame);
+        KeAcquireSpinLock(&Adapter->RxBufLock, &OldIrql);
+        Rb->Next = Adapter->RxBufFree;
+        Adapter->RxBufFree = Rb;
+        KeReleaseSpinLock(&Adapter->RxBufLock, OldIrql);
         return NULL;
     }
 
+    Nbl->MiniportReserved[0] = Rb;
     Nbl->SourceHandle = Adapter->MiniportAdapterHandle;
     NET_BUFFER_LIST_STATUS(Nbl) = NDIS_STATUS_SUCCESS;
     NET_BUFFER_LIST_NEXT_NBL(Nbl) = NULL;
 
     return Nbl;
+}
+
+static
+VOID
+CywClearChipInterrupt(
+    _In_ PCYW_ADAPTER Adapter)
+{
+    ULONG Ist = 0;
+
+    if (Adapter->SdioCoreBase == 0)
+    {
+        return;
+    }
+
+    if (!NT_SUCCESS(CywBackplaneReadlSc(Adapter,
+                                        Adapter->SdioCoreBase + SD_REG_INTSTATUS,
+                                        &Ist, Adapter->RegScratch)))
+    {
+        return;
+    }
+
+    Ist &= CYW_HOSTINTMASK;
+    if (Ist != 0)
+    {
+        CywBackplaneWritelSc(Adapter, Adapter->SdioCoreBase + SD_REG_INTSTATUS,
+                             Ist, Adapter->RegScratch);
+        if (Ist & I_HMB_HOST_INT)
+        {
+            ULONG Hmb = 0;
+            CywBackplaneReadlSc(Adapter,
+                                Adapter->SdioCoreBase + SD_REG_TOHOSTMAILBOXDATA,
+                                &Hmb, Adapter->RegScratch);
+            CywBackplaneWritelSc(Adapter,
+                                 Adapter->SdioCoreBase + SD_REG_TOSBMAILBOX,
+                                 SMB_INT_ACK, Adapter->RegScratch);
+        }
+    }
 }
 
 static
@@ -786,101 +836,220 @@ CywRxThread(
     ULONG DataOffset;
     PNET_BUFFER_LIST ChainHead = NULL, ChainTail = NULL;
     ULONG ChainCount = 0;
+    BOOLEAN WasInt = FALSE;
+
+    KeSetPriorityThread(KeGetCurrentThread(), LOW_REALTIME_PRIORITY);
 
     while (Adapter->RxThreadStop == 0)
     {
-        KeWaitForSingleObject(&Adapter->F2Lock, Executive, KernelMode, FALSE, NULL);
+        BOOLEAN AnyFrame = FALSE;
+        LARGE_INTEGER RxWait;
+        NTSTATUS WaitStatus;
 
-        Status = CywSdioReadBytes(Adapter, CYW_SDIO_FUNC_RADIO, SDIO_F2_FIFO,
-                                  Frame, SDPCM_HEADER_LEN);
-        FrameLen = Frame[0] | (Frame[1] << 8);
-        if (!NT_SUCCESS(Status) || ((Frame[0] ^ Frame[2]) != 0xFF) ||
-            FrameLen < SDPCM_HEADER_LEN || FrameLen > CYW_CONTROL_BUFFER_SIZE)
+        if (WasInt)
+            CywClearChipInterrupt(Adapter);
+
+        CywDrainTxQueue(Adapter);
+
+        while (Adapter->RxThreadStop == 0)
         {
-            LARGE_INTEGER RxWait;
+            KeWaitForSingleObject(&Adapter->F2Lock, Executive, KernelMode, FALSE, NULL);
+
+            Status = CywSdioReadBytes(Adapter, CYW_SDIO_FUNC_RADIO, SDIO_F2_FIFO,
+                                      Frame, SDPCM_HEADER_LEN);
+            FrameLen = Frame[0] | (Frame[1] << 8);
+            if (!NT_SUCCESS(Status) || ((Frame[0] ^ Frame[2]) != 0xFF) ||
+                FrameLen < SDPCM_HEADER_LEN || FrameLen > CYW_RX_BUFFER_SIZE - CYW_F2_BLOCKSIZE)
+            {
+                KeReleaseMutex(&Adapter->F2Lock, FALSE);
+                break;
+            }
+
+            CywUpdateCredits(Adapter, Frame);
+
+            if (FrameLen > SDPCM_HEADER_LEN)
+            {
+                ULONG Body = FrameLen - SDPCM_HEADER_LEN;
+                ULONG Blocks = Body / CYW_F2_BLOCKSIZE;
+                ULONG Done = 0;
+                if (Blocks > 0)
+                {
+                    CywSdioReadBlocks(Adapter, CYW_SDIO_FUNC_RADIO, SDIO_F2_FIFO,
+                                      Frame + SDPCM_HEADER_LEN, Blocks * CYW_F2_BLOCKSIZE,
+                                      CYW_F2_BLOCKSIZE);
+                    Done = Blocks * CYW_F2_BLOCKSIZE;
+                }
+                if (Done < Body)
+                {
+                    CywSdioReadBytes(Adapter, CYW_SDIO_FUNC_RADIO, SDIO_F2_FIFO,
+                                     Frame + SDPCM_HEADER_LEN + Done,
+                                     ALIGN_UP(Body - Done, ULONG));
+                }
+            }
+
             KeReleaseMutex(&Adapter->F2Lock, FALSE);
-            if (ChainHead != NULL)
+            AnyFrame = TRUE;
+            CywDrainTxQueue(Adapter);
+
+            Channel = Frame[SDPCM_CHANNEL_OFFSET] & 0x0F;
+            DataOffset = Frame[SDPCM_DOFFSET_OFFSET];
+
+            if (Frame[SDPCM_CHANNEL_OFFSET] & SDPCM_GLOMDESC_FLAG)
             {
-                NdisMIndicateReceiveNetBufferLists(Adapter->MiniportAdapterHandle,
-                                                   ChainHead, NDIS_DEFAULT_PORT_NUMBER,
-                                                   ChainCount, 0);
-                ChainHead = NULL;
-                ChainTail = NULL;
-                ChainCount = 0;
+                ULONG n = 0;
+                ULONG p = DataOffset;
+                while (p + 2 <= FrameLen && n < 256)
+                {
+                    Adapter->GlomLens[n] = (USHORT)(Frame[p] | (Frame[p + 1] << 8));
+                    n++;
+                    p += 2;
+                }
+                Adapter->GlomCount = n;
+                continue;
             }
-            RxWait.QuadPart = -2500;
-            KeDelayExecutionThread(KernelMode, FALSE, &RxWait);
+
+            if (Channel == SDPCM_CHANNEL_GLOM)
+            {
+                ULONG Cnt = Adapter->GlomCount;
+                ULONG Off = DataOffset;
+                ULONG i;
+                Adapter->GlomCount = 0;
+                for (i = 0; i < Cnt; i++)
+                {
+                    ULONG HdrAt = Off;
+                    ULONG SubLen = Adapter->GlomLens[i];
+                    PUCHAR Sub;
+                    ULONG OwnLen;
+                    UCHAR SubChan;
+                    ULONG SubDoff;
+                    Off += SubLen;
+                    if (HdrAt + SDPCM_HEADER_LEN > FrameLen)
+                        continue;
+                    Sub = Frame + HdrAt;
+                    OwnLen = Sub[0] | (Sub[1] << 8);
+                    if (OwnLen < SDPCM_HEADER_LEN || HdrAt + OwnLen > FrameLen ||
+                        ((Sub[0] ^ Sub[2]) != 0xFF))
+                        continue;
+                    SubChan = Sub[SDPCM_CHANNEL_OFFSET] & 0x0F;
+                    SubDoff = Sub[SDPCM_DOFFSET_OFFSET];
+                    if (SubDoff < SDPCM_HEADER_LEN || SubDoff >= OwnLen)
+                        continue;
+                    if (SubChan == SDPCM_CHANNEL_DATA)
+                    {
+                        PNET_BUFFER_LIST Nbl = CywRxData(Adapter, Sub + SubDoff, OwnLen - SubDoff);
+                        if (Nbl != NULL)
+                        {
+                            if (ChainTail != NULL)
+                                NET_BUFFER_LIST_NEXT_NBL(ChainTail) = Nbl;
+                            else
+                                ChainHead = Nbl;
+                            ChainTail = Nbl;
+                            ChainCount++;
+                        }
+                    }
+                    else if (SubChan == SDPCM_CHANNEL_EVENT)
+                    {
+                        CywProcessEvent(Adapter, Sub + SubDoff, OwnLen - SubDoff);
+                    }
+                }
+                if (ChainCount >= 32)
+                {
+                    NdisMIndicateReceiveNetBufferLists(Adapter->MiniportAdapterHandle,
+                                                       ChainHead, NDIS_DEFAULT_PORT_NUMBER,
+                                                       ChainCount, 0);
+                    ChainHead = NULL;
+                    ChainTail = NULL;
+                    ChainCount = 0;
+                }
+                continue;
+            }
+
+            if (DataOffset >= FrameLen)
+            {
+                continue;
+            }
+
+            if (Channel == SDPCM_CHANNEL_CONTROL)
+            {
+                ULONG Payload = FrameLen - DataOffset;
+                RtlCopyMemory(Adapter->ControlBuffer, Frame + DataOffset, Payload);
+                Adapter->CtrlResponseLen = Payload;
+                KeSetEvent(&Adapter->CtrlEvent, IO_NO_INCREMENT, FALSE);
+            }
+            else if (Channel == SDPCM_CHANNEL_EVENT)
+            {
+                CywProcessEvent(Adapter, Frame + DataOffset, FrameLen - DataOffset);
+            }
+            else if (Channel == SDPCM_CHANNEL_DATA)
+            {
+                PNET_BUFFER_LIST Nbl = CywRxData(Adapter, Frame + DataOffset,
+                                                 FrameLen - DataOffset);
+                if (Nbl != NULL)
+                {
+                    if (ChainTail != NULL)
+                    {
+                        NET_BUFFER_LIST_NEXT_NBL(ChainTail) = Nbl;
+                    }
+                    else
+                    {
+                        ChainHead = Nbl;
+                    }
+                    ChainTail = Nbl;
+                    ChainCount++;
+                }
+                if (ChainCount >= 32)
+                {
+                    NdisMIndicateReceiveNetBufferLists(Adapter->MiniportAdapterHandle,
+                                                       ChainHead, NDIS_DEFAULT_PORT_NUMBER,
+                                                       ChainCount, 0);
+                    ChainHead = NULL;
+                    ChainTail = NULL;
+                    ChainCount = 0;
+                }
+            }
+        }
+
+        if (ChainHead != NULL)
+        {
+            NdisMIndicateReceiveNetBufferLists(Adapter->MiniportAdapterHandle,
+                                               ChainHead, NDIS_DEFAULT_PORT_NUMBER,
+                                               ChainCount, 0);
+            ChainHead = NULL;
+            ChainTail = NULL;
+            ChainCount = 0;
+        }
+
+        if (AnyFrame)
+        {
+            if (WasInt && Adapter->CardIntRegistered && Adapter->SdBus.AcknowledgeInterrupt != NULL)
+            {
+                Adapter->SdBus.AcknowledgeInterrupt(Adapter->SdBus.Context);
+            }
+            WasInt = FALSE;
             continue;
         }
 
-        CywUpdateCredits(Adapter, Frame);
-
-        if (FrameLen > SDPCM_HEADER_LEN)
+        if (WasInt)
         {
-            ULONG Body = FrameLen - SDPCM_HEADER_LEN;
-            ULONG Blocks = Body / CYW_F2_BLOCKSIZE;
-            ULONG Done = 0;
-            if (Blocks > 0)
-            {
-                CywSdioReadBlocks(Adapter, CYW_SDIO_FUNC_RADIO, SDIO_F2_FIFO,
-                                  Frame + SDPCM_HEADER_LEN, Blocks * CYW_F2_BLOCKSIZE,
-                                  CYW_F2_BLOCKSIZE);
-                Done = Blocks * CYW_F2_BLOCKSIZE;
-            }
-            if (Done < Body)
-            {
-                CywSdioReadBytes(Adapter, CYW_SDIO_FUNC_RADIO, SDIO_F2_FIFO,
-                                 Frame + SDPCM_HEADER_LEN + Done,
-                                 ALIGN_UP(Body - Done, ULONG));
-            }
+            LARGE_INTEGER Bk;
+            Bk.QuadPart = -10000;
+            KeDelayExecutionThread(KernelMode, FALSE, &Bk);
         }
 
-        KeReleaseMutex(&Adapter->F2Lock, FALSE);
-
-        Channel = Frame[SDPCM_CHANNEL_OFFSET] & 0x0F;
-        DataOffset = Frame[SDPCM_DOFFSET_OFFSET];
-        if (DataOffset >= FrameLen)
+        if (WasInt && Adapter->CardIntRegistered && Adapter->SdBus.AcknowledgeInterrupt != NULL)
         {
-            continue;
+            Adapter->SdBus.AcknowledgeInterrupt(Adapter->SdBus.Context);
         }
-
-        if (Channel == SDPCM_CHANNEL_CONTROL)
+        RxWait.QuadPart = -2500;
+        WaitStatus = KeWaitForSingleObject(&Adapter->RxEvent, Executive, KernelMode,
+                                           FALSE, &RxWait);
+        if (WaitStatus == STATUS_TIMEOUT)
         {
-            ULONG Payload = FrameLen - DataOffset;
-            RtlCopyMemory(Adapter->ControlBuffer, Frame + DataOffset, Payload);
-            Adapter->CtrlResponseLen = Payload;
-            KeSetEvent(&Adapter->CtrlEvent, IO_NO_INCREMENT, FALSE);
+            WasInt = FALSE;
         }
-        else if (Channel == SDPCM_CHANNEL_EVENT)
+        else
         {
-            CywProcessEvent(Adapter, Frame + DataOffset, FrameLen - DataOffset);
-        }
-        else if (Channel == SDPCM_CHANNEL_DATA)
-        {
-            PNET_BUFFER_LIST Nbl = CywRxData(Adapter, Frame + DataOffset,
-                                             FrameLen - DataOffset);
-            if (Nbl != NULL)
-            {
-                if (ChainTail != NULL)
-                {
-                    NET_BUFFER_LIST_NEXT_NBL(ChainTail) = Nbl;
-                }
-                else
-                {
-                    ChainHead = Nbl;
-                }
-                ChainTail = Nbl;
-                ChainCount++;
-            }
-            if (ChainCount >= 32)
-            {
-                NdisMIndicateReceiveNetBufferLists(Adapter->MiniportAdapterHandle,
-                                                   ChainHead, NDIS_DEFAULT_PORT_NUMBER,
-                                                   ChainCount, 0);
-                ChainHead = NULL;
-                ChainTail = NULL;
-                ChainCount = 0;
-            }
+            WasInt = TRUE;
         }
     }
 
@@ -901,7 +1070,6 @@ CywStartRxThread(
                                   CywRxThread, Adapter);
     if (!NT_SUCCESS(Status))
     {
-        DPRINT1("CYW: RxThread create failed 0x%08lx\n", Status);
         return Status;
     }
 
@@ -930,6 +1098,7 @@ CywStopRxThread(
     }
 
     InterlockedExchange(&Adapter->RxThreadStop, 1);
+    KeSetEvent(&Adapter->RxEvent, IO_NO_INCREMENT, FALSE);
 
     if (Adapter->RxThread != NULL)
     {

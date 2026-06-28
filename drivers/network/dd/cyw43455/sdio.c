@@ -41,10 +41,6 @@ CywSdioOpen(
     {
         Adapter->SdBusOpened = TRUE;
     }
-    else
-    {
-        DPRINT1("CYW: SdBusOpenInterface failed 0x%08lx\n", Status);
-    }
 
     return Status;
 }
@@ -179,6 +175,18 @@ CywSdioWriteBytes(
 }
 
 NTSTATUS
+CywSdioWriteBlocks(
+    _In_ PCYW_ADAPTER Adapter,
+    _In_ UCHAR Function,
+    _In_ ULONG Address,
+    _In_ PUCHAR Buffer,
+    _In_ ULONG Length,
+    _In_ ULONG BlockSize)
+{
+    return CywSdioRw(Adapter, Function, TRUE, TRUE, Address, Buffer, Length, TRUE, BlockSize);
+}
+
+NTSTATUS
 CywSdioEnableFunction(
     _In_ PCYW_ADAPTER Adapter,
     _In_ UCHAR Function)
@@ -211,7 +219,6 @@ CywSdioEnableFunction(
         KeStallExecutionProcessor(1000);
     }
 
-    DPRINT1("CYW: function %u failed to become ready\n", Function);
     return STATUS_DEVICE_NOT_READY;
 }
 
@@ -310,6 +317,52 @@ CywBackplaneWritel(
 }
 
 NTSTATUS
+CywBackplaneReadlSc(
+    _In_ PCYW_ADAPTER Adapter,
+    _In_ ULONG Address,
+    _Out_ PULONG Value,
+    _Inout_ PUCHAR Scratch)
+{
+    NTSTATUS Status;
+    ULONG Offset;
+
+    Status = CywBackplaneSetWindow(Adapter, Address);
+    if (!NT_SUCCESS(Status))
+    {
+        return Status;
+    }
+
+    Offset = (Address & SBSDIO_SB_OFT_ADDR_MASK) | SBSDIO_SB_ACCESS_2_4B_FLAG;
+    Status = CywSdioReadBytes(Adapter, CYW_SDIO_FUNC_BACKPLANE, Offset, Scratch, 4);
+    if (NT_SUCCESS(Status) && Value != NULL)
+    {
+        *Value = ((PULONG)Scratch)[0];
+    }
+    return Status;
+}
+
+NTSTATUS
+CywBackplaneWritelSc(
+    _In_ PCYW_ADAPTER Adapter,
+    _In_ ULONG Address,
+    _In_ ULONG Value,
+    _Inout_ PUCHAR Scratch)
+{
+    NTSTATUS Status;
+    ULONG Offset;
+
+    Status = CywBackplaneSetWindow(Adapter, Address);
+    if (!NT_SUCCESS(Status))
+    {
+        return Status;
+    }
+
+    ((PULONG)Scratch)[0] = Value;
+    Offset = (Address & SBSDIO_SB_OFT_ADDR_MASK) | SBSDIO_SB_ACCESS_2_4B_FLAG;
+    return CywSdioWriteBytes(Adapter, CYW_SDIO_FUNC_BACKPLANE, Offset, Scratch, 4);
+}
+
+NTSTATUS
 CywRamWrite(
     _In_ PCYW_ADAPTER Adapter,
     _In_ ULONG Address,
@@ -357,7 +410,6 @@ CywRamWrite(
         }
         if (!NT_SUCCESS(Status))
         {
-            DPRINT1("CYW: RAM write failed at 0x%lx 0x%08lx\n", Address, Status);
             return Status;
         }
 
