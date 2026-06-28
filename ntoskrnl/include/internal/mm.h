@@ -1594,6 +1594,16 @@ MmMakeDataSectionResident(
     _In_ ULONG Length,
     _In_ PLARGE_INTEGER ValidDataLength);
 
+/*
+ * Race-safely references the RosMm data-file segment (MM_SECTION_SEGMENT) hanging
+ * off a file's SECTION_OBJECT_POINTERS->DataSectionObject, or returns NULL if
+ * there is none. The returned segment is always tagged MM_DATAFILE_SEGMENT and
+ * must be released with MmDereferenceSegment.
+ */
+PMM_SECTION_SEGMENT
+MiGrabDataSection(
+    _In_ PSECTION_OBJECT_POINTERS SectionObjectPointer);
+
 BOOLEAN
 NTAPI
 MmPurgeSegment(

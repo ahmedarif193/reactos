@@ -871,8 +871,41 @@ MiCheckSecuredVad(IN PMMVAD Vad,
         ProtectionMask = 0;
     }
 
-    /* ARM3 doesn't support this yet */
-    ASSERT(Vad->u2.VadFlags2.MultipleSecured == 0);
+    /* MultipleSecured VAD (built by MmSecureVirtualMemory): walk every range */
+    if (Vad->u2.VadFlags2.MultipleSecured)
+    {
+        PLIST_ENTRY ListHead, NextEntry;
+        PMMSECURE_ENTRY Secure;
+        CHAR Required;
+
+        ListHead = &((PMMVAD_LONG)Vad)->u3.List;
+        for (NextEntry = ListHead->Flink;
+             NextEntry != ListHead;
+             NextEntry = NextEntry->Flink)
+        {
+            Secure = CONTAINING_RECORD(NextEntry, MMSECURE_ENTRY, List);
+
+            /* Ignore ranges that don't overlap the affected region */
+            if ((StartAddress > Secure->EndVa) || (EndAddress < Secure->StartVa))
+                continue;
+
+            /* A secured range can never be decommitted, freed, or guard-paged */
+            if (ProtectionMask & MM_DECOMMIT)
+            {
+                DPRINT1("Not allowed to change protection on secured range!\n");
+                return STATUS_INVALID_PAGE_PROTECTION;
+            }
+
+            /* The new protection must still satisfy the secured floor */
+            Required = (Secure->ProbeMode == PAGE_READONLY) ?
+                       MM_READ_ONLY_ALLOWED : MM_READ_WRITE_ALLOWED;
+            if (MmReadWrite[ProtectionMask] < Required)
+            {
+                DPRINT1("Invalid protection mask for secured range!\n");
+                return STATUS_INVALID_PAGE_PROTECTION;
+            }
+        }
+    }
 
     /* Is this a one-secured VAD, like a TEB or PEB? */
     if (Vad->u2.VadFlags2.OneSecured)

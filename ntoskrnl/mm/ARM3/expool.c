@@ -2027,9 +2027,31 @@ ExAllocatePoolWithTag(IN POOL_TYPE PoolType,
     if (!PoolDesc) return NULL;
 
     //
-    // Check if this is a big page allocation
+    // Should never request 0 bytes from the pool, but since so many drivers do
+    // it, we'll just assume they want 1 byte, based on NT's similar behavior.
+    // Hoisted above the size-class test so a degenerate 0-byte cache-aligned
+    // request is still routed through the page allocator below.
     //
-    if (NumberOfBytes > POOL_MAX_ALLOC)
+    if (!NumberOfBytes) NumberOfBytes = 1;
+
+    //
+    // Check if this is a big page allocation, or any cache-aligned allocation.
+    //
+    // CacheAligned pool types (NonPagedPoolCacheAligned / PagedPoolCacheAligned
+    // and the *MustS variants) must return a buffer aligned to the CPU cache
+    // line. ReactOS's small-block allocator places a 16-byte POOL_HEADER in the
+    // bytes immediately preceding the returned data and, on free, walks an
+    // in-page boundary-tag chain keyed off that header, so it cannot move the
+    // data onto a cache-line boundary without re-homing the header. Page-granular
+    // blocks, however, are returned PAGE_SIZE-aligned by MiAllocatePoolPages
+    // (hence cache-line aligned, since the cache line is always <= PAGE_SIZE),
+    // and ExFreePoolWithTag already frees any page-aligned pointer through the
+    // big-pool path. Windows itself page-backs large cache-aligned requests for
+    // the same reason; we extend that to small ones, leaving the free path
+    // unchanged.
+    //
+    if ((NumberOfBytes > POOL_MAX_ALLOC) ||
+        (OriginalType & CACHE_ALIGNED_POOL_MASK))
     {
         //
         // Allocate pages for it
@@ -2117,12 +2139,6 @@ ExAllocatePoolWithTag(IN POOL_TYPE PoolType,
         ExpInsertPoolTracker(Tag, ROUND_TO_PAGES(NumberOfBytes), OriginalType);
         return Entry;
     }
-
-    //
-    // Should never request 0 bytes from the pool, but since so many drivers do
-    // it, we'll just assume they want 1 byte, based on NT's similar behavior
-    //
-    if (!NumberOfBytes) NumberOfBytes = 1;
 
     //
     // A pool allocation is defined by its data, a linked list to connect it to
@@ -3020,18 +3036,51 @@ ExFreePool(PVOID P)
 }
 
 /*
- * @unimplemented
+ * @implemented
  */
 SIZE_T
 NTAPI
 ExQueryPoolBlockSize(IN PVOID PoolBlock,
                      OUT PBOOLEAN QuotaCharged)
 {
+    PPOOL_HEADER Entry;
+
     //
-    // Not implemented
+    // Page-aligned blocks come from the big pool (or special pool) and have no
+    // POOL_HEADER to read; report a page and no quota.
     //
-    UNIMPLEMENTED;
-    return FALSE;
+    if (PAGE_ALIGN(PoolBlock) == PoolBlock)
+    {
+        *QuotaCharged = FALSE;
+        return PAGE_SIZE;
+    }
+
+    //
+    // The pool header precedes the block. BlockSize counts POOL_BLOCK_SIZE units
+    // (header included); the quota bit records whether the block was charged.
+    //
+    Entry = (PPOOL_HEADER)PoolBlock - 1;
+
+    //
+    // A block is quota-charged only if it actually carries a billed-process
+    // owner (non-NULL and not the -1 sentinel) before the next block; the
+    // QUOTA_POOL_MASK bit alone can linger after ExReturnPoolQuota.
+    //
+    if ((Entry->PoolType - 1) & QUOTA_POOL_MASK)
+    {
+        PVOID Owner = ((PVOID *)POOL_NEXT_BLOCK(Entry))[-1];
+        *QuotaCharged = (Owner != NULL && Owner != (PVOID)(LONG_PTR)-1) ? TRUE : FALSE;
+    }
+    else
+    {
+        *QuotaCharged = FALSE;
+    }
+
+    //
+    // Return the usable size: the block granule minus the pool header overhead
+    // (matches Windows: (BlockSize << POOL_BLOCK_SHIFT) - sizeof(POOL_HEADER)).
+    //
+    return (SIZE_T)Entry->BlockSize * POOL_BLOCK_SIZE - sizeof(POOL_HEADER);
 }
 
 /*

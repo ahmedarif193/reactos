@@ -90,7 +90,6 @@ _MmUnlockSectionSegment(PMM_SECTION_SEGMENT Segment, const char *file, int line)
 }
 #endif
 
-static
 PMM_SECTION_SEGMENT
 MiGrabDataSection(PSECTION_OBJECT_POINTERS SectionObjectPointer)
 {

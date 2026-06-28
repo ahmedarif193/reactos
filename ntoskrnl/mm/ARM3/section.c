@@ -2716,26 +2716,154 @@ MmMapViewOfArm3Section(
 }
 
 /*
- * @unimplemented
+ * @implemented
+ *
+ * Disables the modified-page writer for a file's data section. Returns TRUE when
+ * the request can be honoured, FALSE when a writable user view is currently
+ * mapped (it cannot be disabled while in use) or there is no data section.
  */
 BOOLEAN
 NTAPI
 MmDisableModifiedWriteOfSection(IN PSECTION_OBJECT_POINTERS SectionObjectPointer)
 {
-   UNIMPLEMENTED;
-   return FALSE;
+    PMM_SECTION_SEGMENT Segment;
+    ULONG UserReferences;
+    BOOLEAN Result;
+
+    /*
+     * Disambiguate SectionObjectPointer->DataSectionObject exactly as every other
+     * data-section helper does. MiGrabDataSection only ever returns a RosMm
+     * MM_SECTION_SEGMENT tagged MM_DATAFILE_SEGMENT; a file's DataSectionObject is
+     * never an ARM3 CONTROL_AREA in ReactOS, because ARM3 (MmCreateArm3Section)
+     * only builds anonymous/pagefile sections, which have no file
+     * SECTION_OBJECT_POINTERS - file-backed data sections always go through
+     * MmCreateDataFileSection. So the segment is never misread.
+     */
+    Segment = MiGrabDataSection(SectionObjectPointer);
+    if (Segment == NULL)
+    {
+        /* No data section -> nothing to disable. */
+        return FALSE;
+    }
+
+    MmLockSectionSegment(Segment);
+
+    /*
+     * Count the non-cache (user) references. SectionCount is the number of
+     * section objects on this data segment; when the file is cached the cache
+     * manager owns exactly one of them (its internal SEC_CACHE section), which is
+     * not a user reference. SharedCacheMap != NULL means the cache holds it, so
+     * subtract it - identical bookkeeping to MmCanFileBeTruncated.
+     */
+    UserReferences = Segment->SectionCount;
+    if ((SectionObjectPointer->SharedCacheMap != NULL) && (UserReferences > 0))
+    {
+        UserReferences--;
+    }
+
+    /*
+     * Windows refuses (FALSE) while a writable user view is mapped and only sets
+     * CONTROL_AREA->u.Flags.NoModifiedWriting when none is; mirror that observable
+     * contract by succeeding only when nothing but the cache (or nothing)
+     * references the data segment.
+     *
+     * NOTE: ReactOS has no separate per-section modified-page writer to suspend,
+     * so the NoModifiedWriting bit has no RosMm storage or consumer; the return
+     * value reflects whether disabling is currently possible. This is the one
+     * behavioural detail that differs from the Win11 reference (which persists the
+     * flag) - flagged for verification.
+     */
+    Result = (UserReferences == 0);
+
+    MmUnlockSectionSegment(Segment);
+
+    /* Release the reference MiGrabDataSection took. */
+    MmDereferenceSegment(Segment);
+
+    return Result;
 }
 
 /*
- * @unimplemented
+ * @implemented
+ *
+ * Forces the file's sections closed: discards the image section (if any) and
+ * purges the data section, provided nothing but the cache still references them.
+ * Returns TRUE when everything could be closed/purged, FALSE when an open mapping
+ * or user reference prevents it.
  */
 BOOLEAN
 NTAPI
 MmForceSectionClosed(IN PSECTION_OBJECT_POINTERS SectionObjectPointer,
                      IN BOOLEAN DelayClose)
 {
-   UNIMPLEMENTED;
-   return FALSE;
+    PMM_SECTION_SEGMENT Segment;
+    BOOLEAN Result = TRUE;
+
+    /*
+     * DelayClose only conveys that asynchronous teardown is acceptable to the
+     * caller. ReactOS performs the teardown inline either way, so the hint changes
+     * nothing observable; keep the parameter for contract/ABI parity.
+     */
+    UNREFERENCED_PARAMETER(DelayClose);
+
+    /*
+     * Image section first. MmFlushImageSection(MmFlushForDelete) discards the
+     * image's pages and frees the image section object when nothing maps it, and
+     * refuses (FALSE) while sections/mappings remain - exactly the "could not be
+     * closed" condition. It returns TRUE when there is no image section, so the
+     * call is always safe.
+     */
+    if (SectionObjectPointer->ImageSectionObject != NULL)
+    {
+        if (!MmFlushImageSection(SectionObjectPointer, MmFlushForDelete))
+        {
+            Result = FALSE;
+        }
+    }
+
+    /*
+     * Write any dirty data of the data section back to the file before we touch
+     * it, so the purge below can never discard unwritten data. MmFlushSegment is
+     * a safe no-op when there is no data section or nothing is dirty.
+     */
+    MmFlushSegment(SectionObjectPointer, NULL, 0, NULL);
+
+    /*
+     * Data section. Grab it race-safely (RosMm MM_SECTION_SEGMENT; see the
+     * disambiguation note on MmDisableModifiedWriteOfSection).
+     */
+    Segment = MiGrabDataSection(SectionObjectPointer);
+    if (Segment != NULL)
+    {
+        BOOLEAN UserReferenced;
+
+        MmLockSectionSegment(Segment);
+
+        /*
+         * The data section can only be torn down when nothing but the cache (or
+         * nothing) references it - the same test MmCanFileBeTruncated uses. If a
+         * user still maps it, ReactOS cannot safely revoke its views, so the close
+         * fails.
+         */
+        UserReferenced = !((Segment->SectionCount == 0) ||
+                           ((Segment->SectionCount == 1) &&
+                            (SectionObjectPointer->SharedCacheMap != NULL)));
+
+        MmUnlockSectionSegment(Segment);
+        MmDereferenceSegment(Segment);
+
+        if (UserReferenced)
+        {
+            Result = FALSE;
+        }
+        else if (!MmPurgeSegment(SectionObjectPointer, NULL, 0))
+        {
+            /* Pages still actively in use -> could not purge. */
+            Result = FALSE;
+        }
+    }
+
+    return Result;
 }
 
 /*
@@ -3039,12 +3167,69 @@ MiDeleteARM3Section(PVOID ObjectBody)
     MiCheckControlArea(ControlArea, OldIrql);
 }
 
+/*
+ * @implemented
+ *
+ * Returns the number of user-mode references that can write through the file's
+ * data section to the file (0 if none).
+ */
 ULONG
 NTAPI
 MmDoesFileHaveUserWritableReferences(IN PSECTION_OBJECT_POINTERS SectionPointer)
 {
-    UNIMPLEMENTED_ONCE;
-    return 0;
+    PMM_SECTION_SEGMENT Segment;
+    ULONG WritableReferences;
+
+    /*
+     * Disambiguate SectionPointer->DataSectionObject as in
+     * MmDisableModifiedWriteOfSection: MiGrabDataSection only ever returns a
+     * RosMm MM_SECTION_SEGMENT tagged MM_DATAFILE_SEGMENT (never an ARM3
+     * CONTROL_AREA), so the struct is never misread.
+     */
+    Segment = MiGrabDataSection(SectionPointer);
+    if (Segment == NULL)
+    {
+        /* No data section at all -> no references. */
+        return 0;
+    }
+
+    MmLockSectionSegment(Segment);
+
+    /*
+     * SectionCount is the number of section objects on this data segment. When
+     * the file is cached, the cache manager owns exactly one of them (its
+     * internal SEC_CACHE section from CcpAllocateSection); that one is not a user
+     * reference. SharedCacheMap != NULL means the cache holds it, so subtract it -
+     * identical bookkeeping to MmCanFileBeTruncated.
+     */
+    WritableReferences = Segment->SectionCount;
+    if ((SectionPointer->SharedCacheMap != NULL) && (WritableReferences > 0))
+    {
+        WritableReferences--;
+    }
+
+    /*
+     * Only a shared read/write data segment can dirty the file. Read-only and
+     * copy-on-write segments never write through, so report none - this mirrors
+     * the ARM3 WritableUserReferences rule (counted only for
+     * PAGE_READWRITE | PAGE_EXECUTE_READWRITE; see MiMapViewOfDataSection).
+     *
+     * NOTE: RosMm tracks protection per segment, not per reference, so a
+     * read-only user reference to a writable segment is still counted. This is
+     * the conservative direction and is the closest RosMm can get to the Win11
+     * per-view WritableUserReferences counter - flagged for verification.
+     */
+    if (!(Segment->Protection & (PAGE_READWRITE | PAGE_EXECUTE_READWRITE)))
+    {
+        WritableReferences = 0;
+    }
+
+    MmUnlockSectionSegment(Segment);
+
+    /* Release the reference MiGrabDataSection took. */
+    MmDereferenceSegment(Segment);
+
+    return WritableReferences;
 }
 
 /* SYSTEM CALLS ***************************************************************/

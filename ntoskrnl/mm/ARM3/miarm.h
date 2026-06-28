@@ -285,6 +285,23 @@ extern const ULONG MmProtectToValue[32];
 #define MM_DELETE_CHECK         85
 
 //
+// Per-secured-range descriptor produced by MmSecureVirtualMemory and linked
+// into the owning private VAD's MMVAD_LONG.u3.List (when MultipleSecured == 1).
+// The returned secure handle IS the address of one of these descriptors.
+//
+typedef struct _MMSECURE_ENTRY
+{
+    LIST_ENTRY List;        // Links into MMVAD_LONG.u3.List
+    PEPROCESS Process;      // Owning process (for the address-space lock on unsecure)
+    PMMVAD Vad;             // Owning VAD
+    ULONG_PTR StartVa;      // Page-aligned first byte of the secured range
+    ULONG_PTR EndVa;        // Last byte of the secured range (| PAGE_SIZE - 1)
+    ULONG ProbeMode;        // PAGE_READONLY or PAGE_READWRITE (the protection floor)
+} MMSECURE_ENTRY, *PMMSECURE_ENTRY;
+
+#define TAG_MM_SECURE 'eSmM'
+
+//
 // System views are binned into 64K chunks
 //
 #define MI_SYSTEM_VIEW_BUCKET_SIZE  _64K
