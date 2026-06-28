@@ -268,23 +268,34 @@ NdisReturnPackets(
     UINT i;
     PLOGICAL_ADAPTER Adapter;
     KIRQL OldIrql;
+    BOOLEAN ReturnPacket;
+    BOOLEAN IsNdis6;
 
     NDIS_DbgPrint(MID_TRACE, ("Returning %d packets\n", NumberOfPackets));
 
     for (i = 0; i < NumberOfPackets; i++)
     {
+        Adapter = (PVOID)(ULONG_PTR)PacketsToReturn[i]->Reserved[1];
+        ReturnPacket = FALSE;
+
+        KeAcquireSpinLock(&Adapter->NdisMiniportBlock.Lock, &OldIrql);
         PacketsToReturn[i]->WrapperReserved[0]--;
         if (PacketsToReturn[i]->WrapperReserved[0] == 0)
         {
-            Adapter = (PVOID)(ULONG_PTR)PacketsToReturn[i]->Reserved[1];
+            ReturnPacket = TRUE;
+            IsNdis6 = Adapter->IsNdis6;
+        }
+        KeReleaseSpinLock(&Adapter->NdisMiniportBlock.Lock, OldIrql);
 
+        if (ReturnPacket)
+        {
             NDIS_DbgPrint(MAX_TRACE, ("Freeing packet %d (adapter = 0x%p)\n", i, Adapter));
 
             /* dev-nt6-1: NDIS 6 adapters route returns through the
              * Phase 3 RX thunk. The legacy ReturnPacketHandler is NULL
              * for them — defer to the bridge which decrements the per-NBL
              * refcount and possibly returns the NBL to the miniport. */
-            if (Adapter->IsNdis6)
+            if (IsNdis6)
             {
                 extern VOID Ndis6RxReturnLegacyPacket(PNDIS_PACKET);
                 Ndis6RxReturnLegacyPacket(PacketsToReturn[i]);
@@ -322,6 +333,13 @@ MiniIndicateReceivePacket(
 
     KeAcquireSpinLock(&Adapter->NdisMiniportBlock.Lock, &OldIrql);
 
+    for (i = 0; i < NumberOfPackets; i++)
+    {
+        /* Store the indicating miniport in the packet */
+        PacketArray[i]->Reserved[1] = (ULONG_PTR)Adapter;
+        PacketArray[i]->WrapperReserved[0] = 1;
+    }
+
     CurrentEntry = Adapter->ProtocolListHead.Flink;
 
     while (CurrentEntry != &Adapter->ProtocolListHead)
@@ -330,9 +348,6 @@ MiniIndicateReceivePacket(
 
         for (i = 0; i < NumberOfPackets; i++)
         {
-            /* Store the indicating miniport in the packet */
-            PacketArray[i]->Reserved[1] = (ULONG_PTR)Adapter;
-
             if (AdapterBinding->ProtocolBinding->Chars.ReceivePacketHandler &&
                 NDIS_GET_PACKET_STATUS(PacketArray[i]) != NDIS_STATUS_RESOURCES)
             {
@@ -392,6 +407,11 @@ MiniIndicateReceivePacket(
      * set up for return the packets to the miniport */
     for (i = 0; i < NumberOfPackets; i++)
     {
+        if (NDIS_GET_PACKET_STATUS(PacketArray[i]) != NDIS_STATUS_RESOURCES)
+        {
+            PacketArray[i]->WrapperReserved[0]--;
+        }
+
         /* First, check the initial packet status */
         if (NDIS_GET_PACKET_STATUS(PacketArray[i]) == NDIS_STATUS_RESOURCES)
         {
