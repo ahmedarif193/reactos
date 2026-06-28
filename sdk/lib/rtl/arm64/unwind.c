@@ -873,15 +873,8 @@ RtlUnwind(
                 NULL);
 }
 
-VOID
-NTAPI
-RtlRestoreContext(
-    _In_ PCONTEXT Context,
-    _In_opt_ PEXCEPTION_RECORD ExceptionRecord)
-{
-    (VOID)Context;
-    (VOID)ExceptionRecord;
-}
+/* RtlRestoreContext is implemented in arm64/context_asm.S (it must load the
+ * register file and branch, which cannot be expressed in C). */
 
 BOOLEAN
 NTAPI

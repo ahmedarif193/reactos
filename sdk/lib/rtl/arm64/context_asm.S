@@ -72,3 +72,54 @@ RtlCaptureContext:
 
     ret
     .seh_endproc
+
+    /*
+     * VOID NTAPI RtlRestoreContext(PCONTEXT Context, PEXCEPTION_RECORD Record)
+     *
+     * Load the integer register state, stack pointer and PC from Context and
+     * branch to Context->Pc. Used to resume execution at a handler-patched
+     * context (e.g. an __except body) - the kernel/user equivalent of a context
+     * switch back into the unwound frame. Does NOT return. The ExceptionRecord
+     * argument (x1) is accepted for ABI compatibility and ignored here (no
+     * collided-unwind handling).
+     */
+    .global RtlRestoreContext
+    .seh_proc RtlRestoreContext
+RtlRestoreContext:
+    .seh_endprologue
+
+    mov     x16, x0                 /* x16 (IP0) = Context base, scratch */
+
+    /* Callee-saved integer registers x19..x28 */
+    ldp     x19, x20, [x16, #CxX19]
+    ldp     x21, x22, [x16, #CxX21]
+    ldp     x23, x24, [x16, #CxX23]
+    ldp     x25, x26, [x16, #CxX25]
+    ldp     x27, x28, [x16, #CxX27]
+
+    /* Frame pointer (x29) and link register (x30) */
+    ldr     x29, [x16, #CxFp]
+    ldr     x30, [x16, #CxLr]
+
+    /* Restore the stack pointer for the resumed frame */
+    ldr     x17, [x16, #CxSp]
+    mov     sp,  x17
+
+    /* Target PC into x17 (IP1) for the final branch */
+    ldr     x17, [x16, #CxPc]
+
+    /* Volatile registers x2..x15 and x18 (x16/x17 stay as scratch) */
+    ldp     x2,  x3,  [x16, #CxX2]
+    ldp     x4,  x5,  [x16, #CxX4]
+    ldp     x6,  x7,  [x16, #CxX6]
+    ldp     x8,  x9,  [x16, #CxX8]
+    ldp     x10, x11, [x16, #CxX10]
+    ldp     x12, x13, [x16, #CxX12]
+    ldp     x14, x15, [x16, #CxX14]
+    ldr     x18,      [x16, #CxX18]
+
+    /* x0/x1 last, since x16 aliases the context pointer until now */
+    ldp     x0,  x1,  [x16, #CxX0]
+
+    br      x17
+    .seh_endproc

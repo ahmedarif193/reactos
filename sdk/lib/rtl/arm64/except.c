@@ -18,6 +18,9 @@
 #define ARM64_XDATA_EPILOGUE_COUNT_MASK 0x1FUL
 #define ARM64_XDATA_CODE_WORDS_SHIFT 27
 #define ARM64_XDATA_CODE_WORDS_MASK 0x1FUL
+#ifndef UNW_FLAG_NHANDLER
+#define UNW_FLAG_NHANDLER 0x0
+#endif
 #ifndef UNW_FLAG_EHANDLER
 #define UNW_FLAG_EHANDLER 0x1
 #define UNW_FLAG_UHANDLER 0x2
@@ -183,6 +186,45 @@ RtlGetCallersAddress(
 {
     *CallersAddress = _ReturnAddress();
     *CallersCaller = NULL;
+}
+
+/*
+ * Advance a freshly captured CONTEXT up exactly one frame so it describes this
+ * routine's caller instead of the helper that captured it.
+ *
+ * RtlRaiseStatus / RtlRaiseException capture their own register state with
+ * RtlCaptureContext, which records Pc/Sp/Fp pointing INTO the raise helper. The
+ * exception logically originates at the helper's call site, so dispatch must
+ * begin in the caller (where the __try scope lives). amd64 fixes this by
+ * rewriting Rip/Rsp/Rbp from intrinsics; arm64's return address lives in a
+ * frame-relative slot rather than at a fixed stack offset, so do one virtual
+ * unwind step instead - it yields a fully self-consistent caller context
+ * (Pc, Sp, Fp, Lr) regardless of the helper's frame layout.
+ */
+VOID
+NTAPI
+RtlpArm64StepContextToCaller(
+    _Inout_ PCONTEXT Context)
+{
+    PRUNTIME_FUNCTION FunctionEntry;
+    ULONG_PTR ImageBase = 0;
+    ULONG64 EstablisherFrame = 0;
+    PVOID HandlerData = NULL;
+
+    FunctionEntry = RtlLookupFunctionEntry(Context->Pc,
+                                           (PULONG_PTR)&ImageBase,
+                                           NULL);
+    if (FunctionEntry != NULL)
+    {
+        RtlVirtualUnwind(UNW_FLAG_NHANDLER,
+                         (ULONG64)ImageBase,
+                         Context->Pc,
+                         FunctionEntry,
+                         Context,
+                         &HandlerData,
+                         &EstablisherFrame,
+                         NULL);
+    }
 }
 
 BOOLEAN
