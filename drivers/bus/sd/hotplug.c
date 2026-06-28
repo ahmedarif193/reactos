@@ -36,6 +36,7 @@ SdBusInterruptService(
     ULONG CmdDataBits;
     ULONG DmaBit;
     ULONG CardBits;
+    ULONG CardSignalEnable;
 
     UNREFERENCED_PARAMETER(Interrupt);
 
@@ -49,16 +50,13 @@ SdBusInterruptService(
         return FALSE;
     }
 
-    /* Read the interrupt status register */
     IntStatus = SdBusReadReg32(FdoExtension, SDHCI_INT_STATUS);
 
     if (IntStatus == 0 || IntStatus == 0xFFFFFFFF)
     {
-        /* Not our interrupt, or the device is gone */
         return FALSE;
     }
 
-    /* Separate command/data bits from card-detect bits */
     CmdDataBits = IntStatus & (SDHCI_INT_CMD_COMPLETE |
                                SDHCI_INT_XFER_COMPLETE |
                                SDHCI_INT_BUFFER_READ_READY |
@@ -69,19 +67,16 @@ SdBusInterruptService(
 
     DmaBit = IntStatus & SDHCI_INT_DMA;
 
-    CardBits = IntStatus & (SDHCI_INT_CARD_INSERTION |
-                            SDHCI_INT_CARD_REMOVAL |
-                            SDHCI_INT_CARD_INTERRUPT);
+    CardSignalEnable = SdBusReadReg32(FdoExtension, SDHCI_INT_SIGNAL_ENABLE);
+    CardBits = IntStatus & CardSignalEnable & (SDHCI_INT_CARD_INSERTION |
+                                               SDHCI_INT_CARD_REMOVAL |
+                                               SDHCI_INT_CARD_INTERRUPT);
 
     if ((CmdDataBits | DmaBit | CardBits) == 0)
     {
         return FALSE;
     }
 
-    /*
-     * Command/data path: acknowledge bits, accumulate for the waiting
-     * thread, and signal the completion event.
-     */
     if (CmdDataBits)
     {
         SdBusWriteReg32(FdoExtension, SDHCI_INT_STATUS, CmdDataBits);
@@ -89,11 +84,6 @@ SdBusInterruptService(
         KeInsertQueueDpc(&FdoExtension->CommandDpc, NULL, NULL);
     }
 
-    /*
-     * SDMA boundary: handle entirely in ISR. Read the updated SDMA system
-     * address and write it back to resume the transfer. No need to wake
-     * the waiting thread -- it is waiting for XFER_COMPLETE.
-     */
     if (DmaBit)
     {
         ULONG NextAddr = SdBusReadReg32(FdoExtension, SDHCI_SDMA_ADDRESS);
@@ -101,15 +91,10 @@ SdBusInterruptService(
         SdBusWriteReg32(FdoExtension, SDHCI_SDMA_ADDRESS, NextAddr);
     }
 
-    /*
-     * Card-detect path: acknowledge, mask to prevent storms, accumulate
-     * into PendingInterruptStatus for the card-detect DPC/worker.
-     */
     if (CardBits)
     {
         SdBusWriteReg32(FdoExtension, SDHCI_INT_STATUS, CardBits);
 
-        /* Mask card insert/remove signals while worker processes the event */
         if (CardBits & (SDHCI_INT_CARD_INSERTION | SDHCI_INT_CARD_REMOVAL))
         {
             ULONG SignalEnable;
@@ -118,10 +103,13 @@ SdBusInterruptService(
             SdBusWriteReg32(FdoExtension, SDHCI_INT_SIGNAL_ENABLE, SignalEnable);
         }
 
-        /* Mask SDIO card interrupt until function driver acknowledges */
         if (CardBits & SDHCI_INT_CARD_INTERRUPT)
         {
             ULONG SignalEnable;
+            ULONG StatusEnable;
+            StatusEnable = SdBusReadReg32(FdoExtension, SDHCI_INT_STATUS_ENABLE);
+            StatusEnable &= ~SDHCI_INT_CARD_INTERRUPT;
+            SdBusWriteReg32(FdoExtension, SDHCI_INT_STATUS_ENABLE, StatusEnable);
             SignalEnable = SdBusReadReg32(FdoExtension, SDHCI_INT_SIGNAL_ENABLE);
             SignalEnable &= ~SDHCI_INT_CARD_INTERRUPT;
             SdBusWriteReg32(FdoExtension, SDHCI_INT_SIGNAL_ENABLE, SignalEnable);
@@ -261,7 +249,6 @@ SdBusEnumerateInsertedCard(
 
     if (CardAlreadyEnumerated)
     {
-        DPRINT1("SdBusEnumerateInsertedCard: card already enumerated\n");
         return STATUS_SUCCESS;
     }
 
@@ -346,7 +333,6 @@ SdBusCardDetectWorker(
      */
     if (PendingStatus & SDHCI_INT_CARD_INSERTION)
     {
-        DPRINT1("SdBusCardDetectWorker: Card insertion detected\n");
         (VOID)SdBusEnumerateInsertedCard(FdoExtension, TRUE, TRUE);
     }
 
@@ -357,8 +343,6 @@ SdBusCardDetectWorker(
     {
         PLIST_ENTRY Entry;
         PPDO_EXTENSION PdoExtension;
-
-        DPRINT1("SdBusCardDetectWorker: Card removal detected\n");
 
         /* Mark all child PDOs as absent */
         KeAcquireSpinLock(&FdoExtension->Lock, &OldIrql);
@@ -490,14 +474,53 @@ SdBusCardDetectDpc(
         return;
     }
 
-    /* Allocate and queue a work item to handle card detect at PASSIVE_LEVEL.
-     * IoCreateDevice, card enumeration (with delays), and
-     * IoInvalidateDeviceRelations all require IRQL <= APC_LEVEL. */
+    if (FdoExtension->PendingInterruptStatus & SDHCI_INT_CARD_INTERRUPT)
+    {
+        PLIST_ENTRY Entry;
+        PPDO_EXTENSION PdoExtension;
+        PSDBUS_CALLBACK_ROUTINE Callback;
+        PVOID CallbackCtx;
+        KIRQL OldIrql;
+        BOOLEAN Handled = FALSE;
+
+        KeAcquireSpinLock(&FdoExtension->Lock, &OldIrql);
+        for (Entry = FdoExtension->ChildPdoList.Flink;
+             Entry != &FdoExtension->ChildPdoList;
+             Entry = Entry->Flink)
+        {
+            PdoExtension = CONTAINING_RECORD(Entry, PDO_EXTENSION, ListEntry);
+            if (PdoExtension->Present && PdoExtension->CallbackRoutine != NULL &&
+                PdoExtension->CallbackAtDpcLevel)
+            {
+                Callback = PdoExtension->CallbackRoutine;
+                CallbackCtx = PdoExtension->CallbackContext;
+                KeReleaseSpinLock(&FdoExtension->Lock, OldIrql);
+                Callback(CallbackCtx, 0);
+                KeAcquireSpinLock(&FdoExtension->Lock, &OldIrql);
+                Handled = TRUE;
+                break;
+            }
+        }
+        KeReleaseSpinLock(&FdoExtension->Lock, OldIrql);
+
+        if (Handled)
+        {
+            InterlockedAnd((volatile LONG *)&FdoExtension->PendingInterruptStatus,
+                           ~(LONG)SDHCI_INT_CARD_INTERRUPT);
+        }
+    }
+
+    if (!(FdoExtension->PendingInterruptStatus &
+          (SDHCI_INT_CARD_INSERTION | SDHCI_INT_CARD_REMOVAL |
+           SDHCI_INT_CARD_INTERRUPT)))
+    {
+        return;
+    }
+
     WorkItem = IoAllocateWorkItem(FdoExtension->Common.Self);
     if (WorkItem == NULL)
     {
         DPRINT1("SdBusCardDetectDpc: Failed to allocate work item\n");
-        /* Re-enable interrupts so we don't lose future events */
         SdBusUpdateInterruptSignalEnable(FdoExtension,
                                          SDHCI_INT_CARD_INSERTION |
                                          SDHCI_INT_CARD_REMOVAL,

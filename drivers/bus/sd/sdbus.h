@@ -175,6 +175,7 @@ typedef struct _PDO_EXTENSION {
     /* Interface callback */
     PSDBUS_CALLBACK_ROUTINE CallbackRoutine;
     PVOID CallbackContext;
+    BOOLEAN CallbackAtDpcLevel;
     ULONG FunctionNumber;
 
     USHORT SdioVendorId;
@@ -738,6 +739,14 @@ SdBusUpdateInterruptSignalEnableSynchronized(
     _In_ PVOID Context)
 {
     PSDBUS_SIGNAL_ENABLE_UPDATE Update = (PSDBUS_SIGNAL_ENABLE_UPDATE)Context;
+
+    {
+        ULONG StatusEnable;
+        StatusEnable = SdBusReadReg32(Update->FdoExtension, SDHCI_INT_STATUS_ENABLE);
+        StatusEnable |= (Update->SetMask & SDHCI_INT_CARD_INTERRUPT);
+        StatusEnable &= ~(Update->ClearMask & SDHCI_INT_CARD_INTERRUPT);
+        SdBusWriteReg32(Update->FdoExtension, SDHCI_INT_STATUS_ENABLE, StatusEnable);
+    }
 
     Update->Value = SdBusReadReg32(Update->FdoExtension, SDHCI_INT_SIGNAL_ENABLE);
     Update->Value |= Update->SetMask;
