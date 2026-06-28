@@ -203,7 +203,11 @@ if(ARCH STREQUAL "arm64")
         kmArm64/KeArm64Smt.c
         kmArm64/KeArm64Numa.c
         rtl/Win11NewKM.c
-        ntos_mm/MmWin11KM.c)
+        ntos_mm/MmWin11KM.c
+        ntos_mm/MmMdlWin11KM.c
+        ntos_mm/MmPoolWin11KM.c
+        ntos_mm/MmSectionWin11KM.c
+        ntos_mm/MmPteWin11KM.c)
 endif()
 
 add_library(kmtest_drv MODULE ${KMTEST_DRV_SOURCE})

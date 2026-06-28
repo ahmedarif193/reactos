@@ -1367,6 +1367,19 @@ MmCleanProcessAddressSpace(IN PEPROCESS Process)
             MiUnlockProcessWorkingSetUnsafe(Process, Thread);
         }
 
+        /* Free any secured-range descriptors still attached to this VAD */
+        if (Vad->u2.VadFlags2.MultipleSecured)
+        {
+            PLIST_ENTRY ListHead = &((PMMVAD_LONG)Vad)->u3.List;
+            while (!IsListEmpty(ListHead))
+            {
+                PLIST_ENTRY Entry = RemoveHeadList(ListHead);
+                ExFreePoolWithTag(CONTAINING_RECORD(Entry, MMSECURE_ENTRY, List),
+                                  TAG_MM_SECURE);
+            }
+            Vad->u2.VadFlags2.MultipleSecured = 0;
+        }
+
         /* Free the VAD memory */
         ExFreePool(Vad);
 

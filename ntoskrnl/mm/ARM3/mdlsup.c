@@ -15,6 +15,13 @@
 #define MODULE_INVOLVED_IN_ARM3
 #include <mm/ARM3/miarm.h>
 
+/*
+ * Top bit of a PFN_NUMBER slot: marks the LAST page MmAdvanceMdl parked at the
+ * tail of the PFN array. Real frame numbers never set it, and (PFN | this) can
+ * never equal LIST_HEAD (ULONG_PTR_MAX), so the teardown scans are bounded.
+ */
+#define MI_PARKED_PFN_END (((PFN_NUMBER)1) << (sizeof(PFN_NUMBER) * 8 - 1))
+
 /* GLOBALS ********************************************************************/
 
 BOOLEAN MmTrackPtes;
@@ -879,11 +886,14 @@ MmUnmapLockedPages(IN PVOID BaseAddress,
         PointerPte = MiAddressToPte(BaseAddress);
 
         //
-        // This should be a resident system PTE
+        // This should be a resident system PTE - either a valid mapping or a
+        // transition PTE parked by MmProtectMdlSystemAddress(PAGE_NOACCESS),
+        // which the release below handles either way.
         //
         ASSERT(PointerPte >= MmSystemPtesStart[SystemPteSpace]);
         ASSERT(PointerPte <= MmSystemPtesEnd[SystemPteSpace]);
-        ASSERT(PointerPte->u.Hard.Valid == 1);
+        ASSERT((PointerPte->u.Hard.Valid == 1) ||
+               (PointerPte->u.Trans.Transition == 1));
 
         //
         // Check if the caller wants us to free advanced pages
@@ -895,22 +905,39 @@ MmUnmapLockedPages(IN PVOID BaseAddress,
             //
             MdlPages = MmGetMdlPfnArray(Mdl);
 
-            /* Number of extra pages stored after the PFN array */
-            ExtraPageCount = (PFN_COUNT)*(MdlPages + PageCount);
+            //
+            // MmAdvanceMdl parked the consumed pages right after the current
+            // span and tagged the last one with MI_PARKED_PFN_END. Count them
+            // by scanning to that sentinel.
+            //
+            for (ExtraPageCount = 0;
+                 !(MdlPages[PageCount + ExtraPageCount] & MI_PARKED_PFN_END);
+                 ExtraPageCount++)
+            {
+                NOTHING;
+            }
+            ExtraPageCount++;
 
             //
-            // Do the math
+            // Free the leading PTEs too and walk the base/PTE pointer back to
+            // the original (pre-advance) mapping start
             //
-            PageCount += ExtraPageCount;
             PointerPte -= ExtraPageCount;
             ASSERT(PointerPte >= MmSystemPtesStart[SystemPteSpace]);
             ASSERT(PointerPte <= MmSystemPtesEnd[SystemPteSpace]);
-
-            //
-            // Get the new base address
-            //
             BaseAddress = (PVOID)((ULONG_PTR)BaseAddress -
                                   (ExtraPageCount << PAGE_SHIFT));
+            PageCount += ExtraPageCount;
+
+            //
+            // Restore the MDL to its pre-advance page span: clear the sentinel
+            // and walk StartVa/ByteCount back so any later MmUnlockPages sees a
+            // whole MDL (order-independent; survivors stay at the front).
+            //
+            MdlPages[PageCount - 1] &= ~MI_PARKED_PFN_END;
+            Mdl->StartVa = (PVOID)((ULONG_PTR)Mdl->StartVa -
+                                   (ExtraPageCount << PAGE_SHIFT));
+            Mdl->ByteCount += (ExtraPageCount << PAGE_SHIFT);
         }
 
         //
@@ -1502,6 +1529,20 @@ MmUnlockPages(IN PMDL Mdl)
     ASSERT(PageCount != 0);
 
     //
+    // If MmAdvanceMdl parked consumed pages and no MmUnmapLockedPages restored
+    // them (an unmapped MDL), fold them back into the span so every originally
+    // locked page is released. For a mapped MDL, MmUnmapLockedPages above already
+    // restored the full span and cleared the flag, so this is skipped.
+    //
+    if (Mdl->MdlFlags & MDL_FREE_EXTRA_PTES)
+    {
+        while (!(MdlPages[PageCount] & MI_PARKED_PFN_END)) PageCount++;
+        MdlPages[PageCount] &= ~MI_PARKED_PFN_END;
+        PageCount++;
+        Mdl->MdlFlags &= ~MDL_FREE_EXTRA_PTES;
+    }
+
+    //
     // We don't support AWE
     //
     if (Flags & MDL_DESCRIBES_AWE) ASSERT(FALSE);
@@ -1636,15 +1677,72 @@ MmUnlockPages(IN PMDL Mdl)
 }
 
 /*
- * @unimplemented
+ * @implemented
+ *
+ * Advance the MDL forward by NumberOfBytes (Win11 contract, verified against
+ * the ARM64 ntoskrnl disassembly). The consumed leading pages are rotated to
+ * the tail and the last one is tagged with MI_PARKED_PFN_END (rather than
+ * dropped), so MDL teardown can still free their PTEs and release their lock
+ * references; MmUnmapLockedPages / MmUnmapReservedMapping / MmUnlockPages
+ * recover the parked pages by scanning to that sentinel (see those routines).
  */
 NTSTATUS
 NTAPI
 MmAdvanceMdl(IN PMDL Mdl,
              IN ULONG NumberOfBytes)
 {
-    UNIMPLEMENTED;
-    return STATUS_NOT_IMPLEMENTED;
+    PPFN_NUMBER MdlPages;
+    PFN_NUMBER Tmp;
+    ULONG TotalPages, PageCount, Lo, Hi, NewByteOffset;
+
+    //
+    // Proceed only if NumberOfBytes is strictly less than the described bytes
+    // (a surviving page is guaranteed); otherwise it is an invalid request.
+    //
+    if (NumberOfBytes >= Mdl->ByteCount)
+        return STATUS_INVALID_PARAMETER_2;
+
+    TotalPages = ADDRESS_AND_SIZE_TO_SPAN_PAGES(MmGetMdlVirtualAddress(Mdl),
+                                                Mdl->ByteCount);
+    NewByteOffset = Mdl->ByteOffset + NumberOfBytes;
+    PageCount = NewByteOffset >> PAGE_SHIFT;     // whole pages consumed by the advance
+
+    if (PageCount != 0)
+    {
+        MdlPages = MmGetMdlPfnArray(Mdl);
+
+        //
+        // Left-rotate the current logical sub-array [0..TotalPages-1] by
+        // PageCount (three-reversal, in place): survivors move to the front so
+        // PFN[0] maps the new start, consumed pages move just before any pages
+        // parked by an earlier advance (which stay put). Tail order is
+        // irrelevant to teardown.
+        //
+        for (Lo = 0, Hi = PageCount - 1; Lo < Hi; Lo++, Hi--)
+            { Tmp = MdlPages[Lo]; MdlPages[Lo] = MdlPages[Hi]; MdlPages[Hi] = Tmp; }
+        for (Lo = PageCount, Hi = TotalPages - 1; Lo < Hi; Lo++, Hi--)
+            { Tmp = MdlPages[Lo]; MdlPages[Lo] = MdlPages[Hi]; MdlPages[Hi] = Tmp; }
+        for (Lo = 0, Hi = TotalPages - 1; Lo < Hi; Lo++, Hi--)
+            { Tmp = MdlPages[Lo]; MdlPages[Lo] = MdlPages[Hi]; MdlPages[Hi] = Tmp; }
+
+        //
+        // The first advance tags the end sentinel; later advances leave it at
+        // the original last slot.
+        //
+        if (!(Mdl->MdlFlags & MDL_FREE_EXTRA_PTES))
+            MdlPages[TotalPages - 1] |= MI_PARKED_PFN_END;
+
+        Mdl->StartVa = (PVOID)((PUCHAR)Mdl->StartVa +
+                               ((ULONG_PTR)PageCount << PAGE_SHIFT));
+        Mdl->MdlFlags |= MDL_FREE_EXTRA_PTES;
+    }
+
+    Mdl->ByteOffset = NewByteOffset & (PAGE_SIZE - 1);
+    Mdl->ByteCount -= NumberOfBytes;
+    if (Mdl->MdlFlags & MDL_MAPPED_TO_SYSTEM_VA)
+        Mdl->MappedSystemVa = (PVOID)((PUCHAR)Mdl->MappedSystemVa + NumberOfBytes);
+
+    return STATUS_SUCCESS;
 }
 
 /*
@@ -1830,10 +1928,12 @@ MmUnmapReservedMapping(
     // Skip our two helper PTEs
     PointerPte += 2;
 
-    // This should be a resident system PTE
+    // This should be a resident system PTE - either a valid mapping or a
+    // transition PTE parked by MmProtectMdlSystemAddress(PAGE_NOACCESS).
     ASSERT(PointerPte >= MmSystemPtesStart[SystemPteSpace]);
     ASSERT(PointerPte <= MmSystemPtesEnd[SystemPteSpace]);
-    ASSERT(PointerPte->u.Hard.Valid == 1);
+    ASSERT((PointerPte->u.Hard.Valid == 1) ||
+           (PointerPte->u.Trans.Transition == 1));
 
     // TODO: check the MDL range makes sense with regard to the mapping range
     // TODO: check if any of them are already zero
@@ -1846,18 +1946,30 @@ MmUnmapReservedMapping(
         // Get the MDL page array
         MdlPages = MmGetMdlPfnArray(Mdl);
 
-        /* Number of extra pages stored after the PFN array */
-        ExtraPageCount = MdlPages[PageCount];
+        // MmAdvanceMdl parked the consumed pages after the current span and
+        // tagged the last with MI_PARKED_PFN_END; count them by scanning to it.
+        for (ExtraPageCount = 0;
+             !(MdlPages[PageCount + ExtraPageCount] & MI_PARKED_PFN_END);
+             ExtraPageCount++)
+        {
+            NOTHING;
+        }
+        ExtraPageCount++;
 
-        // Do the math
+        // Unlike MmUnmapLockedPages (which anchors PointerPte on the ADVANCED
+        // MappedSystemVa and must walk back to the region start), the reserved-
+        // mapping base is the ORIGINAL page-0 address - the pool-tag helper PTEs
+        // at BaseAddress-2 force that - so PointerPte already points at page 0
+        // after the "+= 2" above. We must NOT move PointerPte; we only widen the
+        // zeroed span to cover the parked pages so every reserved PTE is released.
         PageCount += ExtraPageCount;
-        PointerPte -= ExtraPageCount;
-        ASSERT(PointerPte >= MmSystemPtesStart[SystemPteSpace]);
-        ASSERT(PointerPte <= MmSystemPtesEnd[SystemPteSpace]);
 
-        // Get the new base address
-        BaseAddress = (PVOID)((ULONG_PTR)BaseAddress -
-                              (ExtraPageCount << PAGE_SHIFT));
+        // Restore the MDL to its pre-advance page span (clear the sentinel,
+        // walk StartVa/ByteCount back) so a later MmUnlockPages sees a whole MDL.
+        MdlPages[PageCount - 1] &= ~MI_PARKED_PFN_END;
+        Mdl->StartVa = (PVOID)((ULONG_PTR)Mdl->StartVa -
+                               (ExtraPageCount << PAGE_SHIFT));
+        Mdl->ByteCount += (ExtraPageCount << PAGE_SHIFT);
     }
 
     // Zero the PTEs
@@ -1939,15 +2051,234 @@ MmPrefetchPages(IN ULONG NumberOfLists,
 }
 
 /*
- * @unimplemented
+ * @implemented
  */
 NTSTATUS
 NTAPI
 MmProtectMdlSystemAddress(IN PMDL MemoryDescriptorList,
                           IN ULONG NewProtect)
 {
-    UNIMPLEMENTED;
-    return STATUS_NOT_IMPLEMENTED;
+    PVOID SystemAddress;
+    ULONG_PTR Va;
+    PMMPTE PointerPte;
+    MMPTE OldPte, TempPte;
+    PFN_NUMBER NumberOfPages, PageFrameIndex;
+    ULONG ProtectionMask;
+    BOOLEAN NoAccess;
+
+    //
+    // The MDL must already own a system-space mapping (built by
+    // MmMapLockedPagesSpecifyCache / MmGetSystemAddressForMdlSafe). There is
+    // nothing to reprotect otherwise.
+    //
+    if (!(MemoryDescriptorList->MdlFlags & MDL_MAPPED_TO_SYSTEM_VA))
+    {
+        DPRINT1("MDL %p has no system mapping to protect\n", MemoryDescriptorList);
+        return STATUS_NOT_MAPPED_VIEW;
+    }
+
+    SystemAddress = MemoryDescriptorList->MappedSystemVa;
+
+    //
+    // Large/super-page and direct physical mappings are not described by the
+    // ordinary system PTEs we rewrite below, so they cannot be reprotected.
+    //
+    if (MI_IS_PHYSICAL_ADDRESS(SystemAddress))
+    {
+        DPRINT1("Cannot protect physical mapping at %p\n", SystemAddress);
+        return STATUS_NOT_SUPPORTED;
+    }
+
+    //
+    // Translate the Win32 protection into the internal protection mask and reject
+    // the combinations that are illegal for a system MDL mapping. This mirrors the
+    // Windows validation: a valid mask, no stand-alone PAGE_NOCACHE / PAGE_GUARD,
+    // no PAGE_WRITECOMBINE next to access bits, and no copy-on-write.
+    //
+    ProtectionMask = MiMakeProtectionMask(NewProtect);
+    if (ProtectionMask == MM_INVALID_PROTECTION)
+    {
+        DPRINT1("Invalid protection 0x%lx\n", NewProtect);
+        return STATUS_INVALID_PAGE_PROTECTION;
+    }
+
+    /* PAGE_NOCACHE family (0x08..0x0F) and PAGE_GUARD family (0x10..0x17) */
+    if (((ProtectionMask >> 3) == (MM_NOCACHE >> 3)) ||
+        ((ProtectionMask >> 3) == (MM_GUARDPAGE >> 3)))
+    {
+        return STATUS_INVALID_PAGE_PROTECTION;
+    }
+
+    /* PAGE_WRITECOMBINE (0x18) must not carry any access bits here */
+    if (((ProtectionMask & MM_PROTECT_SPECIAL) == MM_WRITECOMBINE) &&
+        ((ProtectionMask & MM_PROTECT_ACCESS) != 0))
+    {
+        return STATUS_INVALID_PAGE_PROTECTION;
+    }
+
+    /* MM_WRITECOPY (5) and MM_EXECUTE_WRITECOPY (7) both have bits 0 and 2 set */
+    if ((ProtectionMask & MM_WRITECOPY) == MM_WRITECOPY)
+    {
+        return STATUS_INVALID_PAGE_PROTECTION;
+    }
+
+    //
+    // MM_NOACCESS shares its numeric encoding (0x18) with MM_WRITECOMBINE; with no
+    // access bits set it means "remove all access".
+    //
+    NoAccess = (ProtectionMask == MM_NOACCESS);
+
+    //
+    // Walk every system PTE that maps the locked pages. The pages stay locked by
+    // the MDL, so we only rewrite the protection bits of their system PTEs and
+    // never touch PFN share counts; no PFN lock is required.
+    //
+    Va = (ULONG_PTR)PAGE_ALIGN(SystemAddress);
+    NumberOfPages = ADDRESS_AND_SIZE_TO_SPAN_PAGES(SystemAddress,
+                                                   MemoryDescriptorList->ByteCount);
+    PointerPte = MiAddressToPte(SystemAddress);
+
+    while (NumberOfPages != 0)
+    {
+        OldPte = *PointerPte;
+
+        //
+        // Recover the page frame. A live mapping is a valid hardware PTE; a page
+        // previously set to PAGE_NOACCESS by this routine is parked as a
+        // transition PTE that still records the frame.
+        //
+        if (OldPte.u.Hard.Valid)
+        {
+            PageFrameIndex = PFN_FROM_PTE(&OldPte);
+        }
+        else if ((OldPte.u.Trans.Transition == 1) && (OldPte.u.Trans.Prototype == 0))
+        {
+            PageFrameIndex = OldPte.u.Trans.PageFrameNumber;
+        }
+        else
+        {
+            //
+            // A system MDL PTE must be valid or a transition PTE; anything else
+            // means the mapping (or the MDL) has been corrupted.
+            //
+            KeBugCheckEx(MEMORY_MANAGEMENT,
+                         0x1235,
+                         (ULONG_PTR)MemoryDescriptorList,
+                         (ULONG_PTR)PointerPte,
+                         (ULONG_PTR)OldPte.u.Long);
+        }
+
+        if (NoAccess)
+        {
+            //
+            // Remove access: park the frame in a transition PTE carrying the
+            // MM_NOACCESS protection so a later call can restore it. The frame
+            // remains locked by the MDL, so its PFN entry is left untouched.
+            //
+            MI_MAKE_TRANSITION_PTE(&TempPte, PageFrameIndex, MM_NOACCESS);
+
+#if defined(_M_ARM64)
+            //
+            // The transition Protection field overlaps the hardware MAIR index
+            // (CacheType[1:0] + OsAvailable2), so MI_MAKE_TRANSITION_PTE cannot
+            // keep the memory type in place. Stash the original AttrIndx in the
+            // transition spare bits so the NOACCESS->valid round-trip restores the
+            // exact type (a non-cached / write-combined mapping would otherwise
+            // silently come back write-back). These transition PTEs live in
+            // system-PTE space (not the PFN transition list) and are read back
+            // only here, so reusing Spare/OnStandbyLookaside is safe.
+            //
+            if (OldPte.u.Hard.Valid)
+            {
+                TempPte.u.Trans.Spare = OldPte.u.Hard.CacheType;
+                TempPte.u.Trans.OnStandbyLookaside = OldPte.u.Hard.OsAvailable2;
+            }
+            else
+            {
+                /* Already parked - carry the previously-stashed AttrIndx forward. */
+                TempPte.u.Trans.Spare = OldPte.u.Trans.Spare;
+                TempPte.u.Trans.OnStandbyLookaside = OldPte.u.Trans.OnStandbyLookaside;
+            }
+#endif
+
+            MI_WRITE_INVALID_PTE(PointerPte, TempPte);
+
+            /* Only a previously-valid translation can be cached in the TLB */
+            if (OldPte.u.Hard.Valid)
+            {
+                KeInvalidateTlbEntry((PVOID)Va);
+            }
+        }
+        else
+        {
+            //
+            // Build a fresh valid kernel PTE with the requested access/execute
+            // rights for the same frame.
+            //
+            MI_MAKE_HARDWARE_PTE_KERNEL(&TempPte,
+                                        PointerPte,
+                                        ProtectionMask,
+                                        PageFrameIndex);
+
+            //
+            // MI_MAKE_HARDWARE_PTE_KERNEL resets the memory type to write-back, so
+            // transplant the cache attribute that MmMapLockedPagesSpecifyCache
+            // originally installed (e.g. non-cached or write-combined framebuffer
+            // mappings). Changing cacheability under a live mapping would corrupt
+            // the page, so we keep the original memory type and only change access.
+            // The cache fields live at different PTE bits per architecture.
+            //
+#if defined(_M_ARM64)
+            /* ARM64 holds the MAIR AttrIndx in CacheType[1:0] + OsAvailable2[2]. */
+            if (OldPte.u.Hard.Valid)
+            {
+                /* valid->valid: the live PTE still carries the real AttrIndx. */
+                TempPte.u.Hard.CacheType = OldPte.u.Hard.CacheType;
+                TempPte.u.Hard.OsAvailable2 = OldPte.u.Hard.OsAvailable2;
+            }
+            else
+            {
+                /* NOACCESS->valid: recover the AttrIndx stashed at park time (the
+                   transition Protection field overlapped the live cache bits). */
+                TempPte.u.Hard.CacheType = OldPte.u.Trans.Spare;
+                TempPte.u.Hard.OsAvailable2 = OldPte.u.Trans.OnStandbyLookaside;
+            }
+#elif defined(_M_AMD64) || defined(_M_IX86)
+            /* x86/x64 hold the memory type in PCD (CacheDisable) + PWT (WriteThrough).
+               Note: the NOACCESS->valid round-trip reads these from a transition PTE
+               (same limitation as the ARM64 path before the spare-bit stash); not
+               addressed here as this is ARM64 parity work and is untested on x86. */
+            TempPte.u.Hard.CacheDisable = OldPte.u.Hard.CacheDisable;
+            TempPte.u.Hard.WriteThrough = OldPte.u.Hard.WriteThrough;
+#endif
+
+            if (OldPte.u.Hard.Valid)
+            {
+                //
+                // In-place permission change of a live mapping (same frame). The
+                // valid-to-valid update needs an explicit TLB invalidation.
+                //
+                MI_UPDATE_VALID_PTE(PointerPte, TempPte);
+                KeInvalidateTlbEntry((PVOID)Va);
+            }
+            else
+            {
+                //
+                // Re-validate a page that had been parked at PAGE_NOACCESS. The
+                // invalid-to-valid write needs no TLB shootdown (no stale entry
+                // was cached); the write helper publishes the new translation.
+                //
+                MI_WRITE_VALID_PTE(PointerPte, TempPte);
+            }
+        }
+
+        /* Advance to the next page */
+        PointerPte++;
+        Va += PAGE_SIZE;
+        NumberOfPages--;
+    }
+
+    return STATUS_SUCCESS;
 }
 
 /**
