@@ -41,13 +41,20 @@ KeInitializeMutant(IN PKMUTANT Mutant,
     }
     else
     {
-        /* In this case, we don't have an owner yet */
+        /* In this case, we don't have an owner yet. Windows 10+ zeroes the
+         * mutant list entry of an unowned mutant (it is only linked when owned). */
         Mutant->OwnerThread = NULL;
+        Mutant->MutantListEntry.Flink = NULL;
+        Mutant->MutantListEntry.Blink = NULL;
     }
 
-    /* Now we set up the Dispatcher Header */
+    /*
+     * Set up the Dispatcher Header. Windows 10+ leaves the Size/Abandoned/
+     * DpcActive header bytes zero (older NT kept the dword object size in
+     * Header.Size), so zero the leading bytes before setting Type/SignalState.
+     */
+    RtlZeroMemory(&Mutant->Header, FIELD_OFFSET(DISPATCHER_HEADER, SignalState));
     Mutant->Header.Type = MutantObject;
-    Mutant->Header.Size = sizeof(KMUTANT) / sizeof(ULONG);
     Mutant->Header.SignalState = InitialOwner ? 0 : 1;
     InitializeListHead(&(Mutant->Header.WaitListHead));
 
@@ -64,14 +71,18 @@ NTAPI
 KeInitializeMutex(IN PKMUTEX Mutex,
                   IN ULONG Level)
 {
-    /* Set up the Dispatcher Header */
+    /* Set up the Dispatcher Header (Windows 10+ leaves Size/Abandoned/DpcActive
+     * zero - see KeInitializeMutant). */
+    RtlZeroMemory(&Mutex->Header, FIELD_OFFSET(DISPATCHER_HEADER, SignalState));
     Mutex->Header.Type = MutantObject;
-    Mutex->Header.Size = sizeof(KMUTEX) / sizeof(ULONG);
     Mutex->Header.SignalState = 1;
     InitializeListHead(&(Mutex->Header.WaitListHead));
 
-    /* Initialize the default data */
+    /* Initialize the default data (an unowned mutex has an empty list entry on
+     * Windows 10+). */
     Mutex->OwnerThread = NULL;
+    Mutex->MutantListEntry.Flink = NULL;
+    Mutex->MutantListEntry.Blink = NULL;
     Mutex->Abandoned = FALSE;
     Mutex->ApcDisable = 1;
 }
