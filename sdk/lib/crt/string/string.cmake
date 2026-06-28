@@ -1,5 +1,6 @@
 
 list(APPEND LIBCNTPR_STRING_SOURCE
+    string/string_s.c
     string/_splitpath.c
     string/_stricmp_nt.c
     string/_strlwr_nt.c
