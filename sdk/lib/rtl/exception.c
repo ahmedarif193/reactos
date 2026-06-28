@@ -35,6 +35,26 @@ RtlpGetCallerFramePointer(VOID)
 }
 #endif
 
+#if defined(_M_ARM64)
+/* Defined in rtl/arm64/except.c - advances a captured CONTEXT one frame up so it
+ * describes the caller of the routine that captured it (used by RtlRaiseStatus
+ * and RtlRaiseException to raise from the caller's frame). */
+VOID
+NTAPI
+RtlpArm64StepContextToCaller(
+    _Inout_ PCONTEXT Context);
+
+/* Defined in rtl/arm64/context_asm.S - loads the register file from Context and
+ * branches to Context->Pc (does not return). Used to resume at a handler-patched
+ * context; ZwContinue cannot resume a kernel-mode context from a non-trap call
+ * site. */
+VOID
+NTAPI
+RtlRestoreContext(
+    _In_ PCONTEXT Context,
+    _In_opt_ PEXCEPTION_RECORD ExceptionRecord);
+#endif
+
 #if !defined(_M_IX86) && !defined(_M_AMD64)
 
 /*
@@ -72,6 +92,11 @@ RtlRaiseException(IN PEXCEPTION_RECORD ExceptionRecord)
         }
         else
         {
+#if defined(_M_ARM64)
+            /* See RtlRaiseStatus: resume the handler-patched context directly;
+             * ZwContinue cannot resume a kernel-mode context here. */
+            RtlRestoreContext(&Context, ExceptionRecord);
+#endif
             /* Continue, go back to previous context */
             Status = ZwContinue(&Context, FALSE);
         }
@@ -125,6 +150,14 @@ RtlRaiseStatus(IN NTSTATUS Status)
     Context.Rip = (ULONG64)_ReturnAddress();
     Context.Rsp = (ULONG64)_AddressOfReturnAddress() + sizeof(PVOID);
     Context.Rbp = RtlpGetCallerFramePointer();
+#elif defined(_M_ARM64)
+    /*
+     * Same problem on arm64: RtlCaptureContext records this helper's own
+     * Pc/Sp/Fp, so dispatch would begin inside RtlRaiseStatus and never match
+     * the caller's __try scope. Step the captured context up one frame so it
+     * describes the caller (see RtlpArm64StepContextToCaller).
+     */
+    RtlpArm64StepContextToCaller(&Context);
 #endif
 
     /* Check if user mode debugger is active */
@@ -135,11 +168,31 @@ RtlRaiseStatus(IN NTSTATUS Status)
     }
     else
     {
-        /* Dispatch the exception */
-        RtlDispatchException(&ExceptionRecord, &Context);
-
-        /* Raise exception if we got here */
-        Status = ZwRaiseException(&ExceptionRecord, &Context, FALSE);
+        /*
+         * Dispatch the exception. If a frame handler claimed it, resume at the
+         * (handler-updated) context instead of raising a second-chance
+         * exception - the same contract RtlRaiseException uses.
+         */
+        if (RtlDispatchException(&ExceptionRecord, &Context))
+        {
+#if defined(_M_ARM64)
+            /*
+             * The ARM64 language handler resolves an __except by patching the
+             * context to the handler block and returning continue-execution.
+             * Restore the register file directly to reach it - ZwContinue cannot
+             * resume a kernel-mode context from this non-trap site.
+             * RtlRestoreContext does not return.
+             */
+            RtlRestoreContext(&Context, &ExceptionRecord);
+#endif
+            /* Continue, go back to the (handler-updated) context */
+            Status = ZwContinue(&Context, FALSE);
+        }
+        else
+        {
+            /* Raise exception if we got here */
+            Status = ZwRaiseException(&ExceptionRecord, &Context, FALSE);
+        }
     }
 
     /* If we returned, raise a status */
@@ -186,9 +239,12 @@ RtlCaptureStackBackTrace(IN ULONG FramesToSkip,
         /* Don't go past the limit */
         if ((FramesToSkip + i) >= FrameCount) break;
 
-        /* Save this entry and hash it */
-        BackTrace[i] = Frames[FramesToSkip + i];
-        Hash += PtrToUlong(BackTrace[i]);
+        /* Save this entry and hash it. Windows (Vista+) tolerates a NULL
+         * BackTrace buffer - callers may pass NULL to obtain only the count or
+         * hash - so guard the store instead of faulting. */
+        if (BackTrace != NULL)
+            BackTrace[i] = Frames[FramesToSkip + i];
+        Hash += PtrToUlong(Frames[FramesToSkip + i]);
     }
 
     /* Write the hash */
