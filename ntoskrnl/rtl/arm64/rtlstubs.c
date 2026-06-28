@@ -1001,12 +1001,9 @@ RtlLookupFunctionEntry(
     return NULL;
 }
 
-VOID NTAPI RtlRestoreContext(PCONTEXT Context, PEXCEPTION_RECORD ExceptionRecord)
-{
-    (VOID)Context;
-    (VOID)ExceptionRecord;
-    NOTHING;
-}
+/* RtlRestoreContext is implemented in sdk/lib/rtl/arm64/context_asm.S (linked in
+ * via the rtl library); a do-nothing stub here would shadow it and break SEH
+ * handler resume. */
 
 void _local_unwind2(void) {}
 void _global_unwind2(void) {}

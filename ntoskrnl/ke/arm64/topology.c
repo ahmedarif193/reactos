@@ -845,6 +845,23 @@ KiArm64FinalizeNumaTopology(VOID)
 
     KiArm64CompactActiveNumaNodes(ActiveMask);
 
+    /*
+     * Rebuild the node processor masks from scratch: per-processor init folds a
+     * node bit in for every prepared PCR, including one for a processor that
+     * ultimately fails to start, leaving a stale bit not present in
+     * KeActiveProcessors. Reset and re-accumulate from the active processors.
+     */
+    {
+        ULONG Node;
+        for (Node = 0; Node < KeNumberNodes; Node++)
+        {
+            if (KeNodeBlock[Node] != NULL)
+            {
+                KeNodeBlock[Node]->ProcessorMask = 0;
+            }
+        }
+    }
+
     for (Cpu = 0; Cpu < MAXIMUM_PROCESSORS; Cpu++)
     {
         PKPRCB Prcb;
