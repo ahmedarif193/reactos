@@ -40,7 +40,6 @@ CywReadFile(
                           NULL, 0);
     if (!NT_SUCCESS(Status))
     {
-        DPRINT1("CYW: cannot open %S 0x%08lx\n", Path, Status);
         return Status;
     }
 
@@ -116,7 +115,6 @@ CywClockRequest(
         KeStallExecutionProcessor(200);
     }
 
-    DPRINT1("CYW: clock 0x%02x not available (csr 0x%02x)\n", AvailMask, Csr);
     return STATUS_DEVICE_NOT_READY;
 }
 
@@ -128,28 +126,20 @@ CywChipRecognize(
     ULONG RegData;
 
     Status = CywClockRequest(Adapter, SBSDIO_ALP_AVAIL_REQ, SBSDIO_ALP_AVAIL);
-    if (!NT_SUCCESS(Status))
-    {
-        DPRINT1("CYW: ALP clock not available\n");
-    }
 
     Adapter->ChipCommonBase = SI_ENUM_BASE_DEFAULT;
 
     Status = CywBackplaneReadl(Adapter, SI_ENUM_BASE_DEFAULT, &RegData);
     if (!NT_SUCCESS(Status))
     {
-        DPRINT1("CYW: cannot read chip id 0x%08lx\n", Status);
         return Status;
     }
 
     Adapter->ChipId = RegData & CID_ID_MASK;
     Adapter->ChipRev = (RegData & CID_REV_MASK) >> CID_REV_SHIFT;
 
-    DPRINT1("CYW: chip id 0x%04lx rev %lu\n", Adapter->ChipId, Adapter->ChipRev);
-
     if (Adapter->ChipId != BRCM_CC_4345_CHIP_ID)
     {
-        DPRINT1("CYW: unsupported chip 0x%04lx (expected 0x4345)\n", Adapter->ChipId);
         return STATUS_DEVICE_CONFIGURATION_ERROR;
     }
 
@@ -233,9 +223,6 @@ CywDownloadNvram(
         Status = CywRamWrite(Adapter, j + OutLen, (PUCHAR)&Token, sizeof(Token));
     }
 
-    DPRINT1("CYW: nvram %lu bytes (%lu words) at 0x%lx token 0x%08lx\n",
-            OutLen, Words, j, Token);
-
     CywFree(Stripped);
     CywFree(Raw);
     return Status;
@@ -293,13 +280,10 @@ CywDownloadClm(
         Status = CywFilIovarSet(Adapter, "clmload", Chunk, HdrSize + Len);
         if (!NT_SUCCESS(Status))
         {
-            DPRINT1("CYW: clmload at %lu failed 0x%08lx\n", Offset, Status);
             break;
         }
         Offset += Len;
     }
-
-    DPRINT1("CYW: clm %lu bytes status 0x%08lx\n", BlobSize, Status);
 
     CywFree(Chunk);
     CywFree(Blob);
@@ -317,29 +301,21 @@ CywChipDownloadFirmware(
     Status = CywReadFile(CYW_FW_DIR CYW_FW_BIN, &FwImage, &FwSize);
     if (!NT_SUCCESS(Status))
     {
-        DPRINT1("CYW: firmware image not found\n");
         return Status;
     }
 
     Adapter->RstVec = ((PULONG)FwImage)[0];
-    DPRINT1("CYW: downloading firmware %lu bytes to 0x%lx (rstvec 0x%08lx)\n",
-            FwSize, Adapter->RamBase, Adapter->RstVec);
 
     Status = CywRamWrite(Adapter, Adapter->RamBase, FwImage, FwSize);
     CywFree(FwImage);
     if (!NT_SUCCESS(Status))
     {
-        DPRINT1("CYW: firmware download failed 0x%08lx\n", Status);
         return Status;
     }
 
     if (Adapter->RamSize > 0)
     {
         Status = CywDownloadNvram(Adapter);
-        if (!NT_SUCCESS(Status))
-        {
-            DPRINT1("CYW: nvram download failed 0x%08lx (continuing)\n", Status);
-        }
     }
 
     return STATUS_SUCCESS;
@@ -464,13 +440,16 @@ CywChipEnumerateCores(
         {
             Adapter->Cr4CoreBase = RegBase;
             Adapter->Cr4WrapBase = WrapBase;
-            DPRINT1("CYW: CR4 core base 0x%lx wrap 0x%lx\n", RegBase, WrapBase);
+        }
+
+        if (CoreId == BCMA_CORE_SDIO_DEV)
+        {
+            Adapter->SdioCoreBase = RegBase;
         }
     }
 
     if (Adapter->Cr4WrapBase == 0)
     {
-        DPRINT1("CYW: CR4 core not found in EROM\n");
         return STATUS_DEVICE_CONFIGURATION_ERROR;
     }
     return STATUS_SUCCESS;
@@ -564,8 +543,23 @@ CywChipSetActive(
     CywRamWrite(Adapter, 0, Adapter->ControlBuffer, 4);
 
     CywChipResetCore(Adapter, Adapter->Cr4WrapBase, ARMCR4_BCMA_IOCTL_CPUHALT, 0, 0);
+}
 
-    DPRINT1("CYW: CR4 released from reset (rstvec 0x%08lx)\n", Rstvec);
+static
+NTSTATUS
+CywSetCountry(
+    _In_ PCYW_ADAPTER Adapter,
+    _In_ PCSTR Alpha2)
+{
+    CYW_COUNTRY_LE Cc;
+
+    RtlZeroMemory(&Cc, sizeof(Cc));
+    Cc.Rev = -1;
+    Cc.CountryAbbrev[0] = Alpha2[0];
+    Cc.CountryAbbrev[1] = Alpha2[1];
+    Cc.Ccode[0] = Alpha2[0];
+    Cc.Ccode[1] = Alpha2[1];
+    return CywFilIovarSet(Adapter, "country", &Cc, sizeof(Cc));
 }
 
 NTSTATUS
@@ -617,15 +611,17 @@ CywChipBringUp(
     CywChipSetActive(Adapter, Adapter->RstVec);
 
     Status = CywClockRequest(Adapter, SBSDIO_HT_AVAIL_REQ, SBSDIO_HT_AVAIL);
-    if (!NT_SUCCESS(Status))
-    {
-        DPRINT1("CYW: HT clock not available after firmware\n");
-    }
 
+    {
+        UCHAR Devctl = 0;
+        CywSdioReadByte(Adapter, CYW_SDIO_FUNC_BACKPLANE, SBSDIO_DEVICE_CTL, &Devctl);
+        Devctl |= SBSDIO_DEVCTL_F2WM_ENAB;
+        CywSdioWriteByte(Adapter, CYW_SDIO_FUNC_BACKPLANE, SBSDIO_DEVICE_CTL, Devctl);
+    }
     CywSdioWriteByte(Adapter, CYW_SDIO_FUNC_BACKPLANE, SBSDIO_FUNC1_WATERMARK,
                      CY_43455_F2_WATERMARK);
     CywSdioWriteByte(Adapter, CYW_SDIO_FUNC_BACKPLANE, SBSDIO_FUNC1_MESBUSYCTRL,
-                     CY_43455_F2_WATERMARK | SBSDIO_MESBUSYCTRL_ENAB);
+                     CY_43455_MES_WATERMARK | SBSDIO_MESBUSYCTRL_ENAB);
 
     Status = CywSdioSetBlockSize(Adapter, CYW_SDIO_FUNC_RADIO, CYW_F2_BLOCKSIZE);
     if (!NT_SUCCESS(Status))
@@ -633,10 +629,15 @@ CywChipBringUp(
         return Status;
     }
 
+    if (Adapter->SdioCoreBase != 0)
+    {
+        CywBackplaneWritel(Adapter, Adapter->SdioCoreBase + SD_REG_TOSBMAILBOXDATA,
+                           SMB_DATA_VERSION);
+    }
+
     Status = CywSdioEnableFunction(Adapter, CYW_SDIO_FUNC_RADIO);
     if (!NT_SUCCESS(Status))
     {
-        DPRINT1("CYW: radio function (F2) not ready - firmware may not be running\n");
         return Status;
     }
 
@@ -644,7 +645,14 @@ CywChipBringUp(
     if (NT_SUCCESS(Status))
     {
         CywSdioWriteByte(Adapter, CYW_SDIO_FUNC_BUS, SDIO_CCCR_INTEN,
-                         (UCHAR)(IntStatus | SDIO_INTR_ENABLE_MASTER | SDIO_FUNC_ENABLE_2));
+                         (UCHAR)(IntStatus | SDIO_INTR_ENABLE_MASTER |
+                                 SDIO_FUNC_ENABLE_1 | SDIO_FUNC_ENABLE_2));
+    }
+
+    if (Adapter->SdioCoreBase != 0)
+    {
+        CywBackplaneWritel(Adapter, Adapter->SdioCoreBase + SD_REG_HOSTINTMASK,
+                           CYW_HOSTINTMASK);
     }
 
     Adapter->ChipUp = TRUE;
@@ -652,15 +660,25 @@ CywChipBringUp(
 
     CywDownloadClm(Adapter);
 
+    CywSetCountry(Adapter, "FR");
+
+    CywFilIovarSetInt(Adapter, "ampdu_rx", 1);
+
+    CywFilIovarSetInt(Adapter, "mpc", 0);
+
+    {
+        ULONG Bw[2];
+        Bw[0] = 2; Bw[1] = 0x3;
+        CywFilIovarSet(Adapter, "bw_cap", Bw, sizeof(Bw));
+        Bw[0] = 1; Bw[1] = 0x7;
+        CywFilIovarSet(Adapter, "bw_cap", Bw, sizeof(Bw));
+    }
+
     {
         ULONG Infra = 1;
         ULONG Up = 0;
         CywFilCmdSet(Adapter, BRCMF_C_SET_INFRA, &Infra, sizeof(Infra));
         Status = CywFilCmdSet(Adapter, BRCMF_C_UP, &Up, sizeof(Up));
-    }
-    if (!NT_SUCCESS(Status))
-    {
-        DPRINT1("CYW: BRCMF_C_UP failed 0x%08lx\n", Status);
     }
 
     CywActivateEvents(Adapter);
@@ -668,6 +686,5 @@ CywChipBringUp(
     CywFilIovarGet(Adapter, "cur_etheraddr", Adapter->CurrentAddress, CYW_ADDRESS_LENGTH);
     RtlCopyMemory(Adapter->PermanentAddress, Adapter->CurrentAddress, CYW_ADDRESS_LENGTH);
 
-    DPRINT1("CYW: bring-up complete, firmware running\n");
     return STATUS_SUCCESS;
 }
