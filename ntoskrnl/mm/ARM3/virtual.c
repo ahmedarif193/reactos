@@ -1540,16 +1540,82 @@ MmFlushVirtualMemory(IN PEPROCESS Process,
                      IN OUT PSIZE_T RegionSize,
                      OUT PIO_STATUS_BLOCK IoStatusBlock)
 {
+    PMMSUPPORT AddressSpace;
+    PMEMORY_AREA MemoryArea;
+    PMM_SECTION_SEGMENT Segment;
+    PFILE_OBJECT FileObject = NULL;
+    PVOID Base;
+    ULONG_PTR StartingAddress, EndingAddress;
+    SIZE_T Region;
+    LARGE_INTEGER FileOffset = {{0, 0}};
+    NTSTATUS Status = STATUS_SUCCESS;
+    BOOLEAN Attached = FALSE;
+    KAPC_STATE ApcState;
+
     PAGED_CODE();
 
-    UNIMPLEMENTED;
-
-    // Report actual state.
-    IoStatusBlock->Status = STATUS_NOT_IMPLEMENTED;
+    IoStatusBlock->Status = STATUS_SUCCESS;
     IoStatusBlock->Information = 0;
 
-    // Pretend success.
-    return STATUS_SUCCESS; // STATUS_NOT_IMPLEMENTED
+    /* Page-align the requested range and report it back to the caller */
+    StartingAddress = (ULONG_PTR)PAGE_ALIGN(*BaseAddress);
+    EndingAddress = ((ULONG_PTR)*BaseAddress + *RegionSize - 1) | (PAGE_SIZE - 1);
+    Base = (PVOID)StartingAddress;
+    Region = EndingAddress - StartingAddress + 1;
+    *BaseAddress = Base;
+    *RegionSize = Region;
+
+    /* Operate in the target process' context */
+    if (PsGetCurrentProcess() != Process)
+    {
+        KeStackAttachProcess(&Process->Pcb, &ApcState);
+        Attached = TRUE;
+    }
+
+    AddressSpace = &Process->Vm;
+    MmLockAddressSpace(AddressSpace);
+
+    /* Find the mapped view backing the start of the range (NULL for private) */
+    MemoryArea = MmLocateMemoryAreaByAddress(AddressSpace, Base);
+    if ((MemoryArea != NULL) &&
+        (MemoryArea->Type == MEMORY_AREA_SECTION_VIEW) &&
+        !MemoryArea->DeleteInProgress)
+    {
+        Segment = MemoryArea->SectionData.Segment;
+
+        /* Only data-file sections have anything to write back */
+        if ((Segment != NULL) &&
+            (Segment->FileObject != NULL) &&
+            (Segment->Flags != NULL) &&
+            (*Segment->Flags & MM_DATAFILE_SEGMENT))
+        {
+            /* Translate the VA range into a byte offset into the file */
+            FileOffset.QuadPart = MemoryArea->SectionData.ViewOffset +
+                                  (LONGLONG)(StartingAddress -
+                                             MA_GetStartingAddress(MemoryArea));
+
+            /* Keep the file object alive across the lock-free writeback */
+            FileObject = Segment->FileObject;
+            ObReferenceObject(FileObject);
+        }
+    }
+
+    MmUnlockAddressSpace(AddressSpace);
+
+    if (Attached) KeUnstackDetachProcess(&ApcState);
+
+    /* Perform the actual writeback outside of the address-space lock */
+    if (FileObject != NULL)
+    {
+        Status = MmFlushSegment(FileObject->SectionObjectPointer,
+                                &FileOffset,
+                                (ULONG)Region,
+                                IoStatusBlock);
+        ObDereferenceObject(FileObject);
+        IoStatusBlock->Status = Status;
+    }
+
+    return Status;
 }
 
 ULONG
@@ -2445,12 +2511,22 @@ MiProtectVirtualMemory(IN PEPROCESS Process,
         goto FailPath;
     }
 
-    /* Check for a VAD whose protection can't be changed */
+    /* Check for a VAD whose protection can't be changed, e.g. a secured VAD.
+       Unlike a blanket rejection, MiCheckSecuredVad only fails changes that
+       drop a secured range below the protection it was secured for (and never
+       allows decommit/guard of a secured range). This is the WRK pattern and
+       matches the section path in NtAllocateVirtualMemory. */
     if (Vad->u.VadFlags.NoChange == 1)
     {
-        DPRINT1("Trying to change protection of a NoChange VAD\n");
-        Status = STATUS_INVALID_PAGE_PROTECTION;
-        goto FailPath;
+        Status = MiCheckSecuredVad(Vad,
+                                   (PVOID)StartingAddress,
+                                   EndingAddress - StartingAddress + 1,
+                                   ProtectionMask);
+        if (!NT_SUCCESS(Status))
+        {
+            DPRINT1("Trying to change protection of a secured VAD\n");
+            goto FailPath;
+        }
     }
 
     /* Is this section, or private memory? */
@@ -3012,26 +3088,151 @@ MmGetVirtualForPhysical(IN PHYSICAL_ADDRESS PhysicalAddress)
 }
 
 /*
- * @unimplemented
+ * @implemented
+ *
+ * Records a "secured" sub-range inside the owning private VAD so that a later
+ * attempt to drop the protection of any overlapping page below ProbeMode (via
+ * NtProtectVirtualMemory) or to decommit/free it (via NtFreeVirtualMemory) is
+ * rejected until MmUnsecureVirtualMemory() is called with the returned handle.
+ *
+ * Mirrors the Win11/WRK mechanism using ReactOS' existing MMVAD_LONG secured
+ * fields (u2.VadFlags2.MultipleSecured + u3.List of MMSECURE_ENTRY).
  */
 PVOID
 NTAPI
 MmSecureVirtualMemory(IN PVOID Address,
                       IN SIZE_T Length,
-                      IN ULONG Mode)
+                      IN ULONG ProbeMode)
 {
-    static ULONG Warn; if (!Warn++) UNIMPLEMENTED;
-    return Address;
+    PEPROCESS Process = PsGetCurrentProcess();
+    PMMSUPPORT AddressSpace;
+    PMMVAD Vad;
+    PMMVAD_LONG LongVad;
+    PMMSECURE_ENTRY Secure;
+    ULONG_PTR StartVa, EndVa;
+    ULONG SecureProbe;
+
+    PAGED_CODE();
+
+    /* Reject empty ranges */
+    if (Length == 0) return NULL;
+
+    /* Normalize the probe mode: PAGE_READONLY stays read-only, anything that
+       requests write becomes read/write (matches the Win11 csel). */
+    SecureProbe = (ProbeMode == PAGE_READONLY) ? PAGE_READONLY : PAGE_READWRITE;
+
+    /* Page-align the range and guard against wrap / non-user addresses */
+    StartVa = (ULONG_PTR)PAGE_ALIGN(Address);
+    EndVa = ((ULONG_PTR)Address + Length - 1) | (PAGE_SIZE - 1);
+    if (EndVa <= StartVa) return NULL;
+    if (EndVa > (ULONG_PTR)MM_HIGHEST_USER_ADDRESS) return NULL;
+
+    /* Allocate the descriptor before taking the lock */
+    Secure = ExAllocatePoolWithTag(NonPagedPool, sizeof(*Secure), TAG_MM_SECURE);
+    if (Secure == NULL) return NULL;
+
+    /* Lock the address space against VAD changes */
+    AddressSpace = &Process->Vm;
+    MmLockAddressSpace(AddressSpace);
+
+    if (Process->VmDeleted) goto Fail;
+
+    /* Find the VAD that owns the start of the range */
+    Vad = MiLocateAddress((PVOID)StartVa);
+    if (Vad == NULL) goto Fail;
+
+    /* ROSMM section views embed a *short* MMVAD (no u3 list) - not securable here */
+    if (MI_IS_ROSMM_VAD(Vad)) goto Fail;
+
+    /* Only private memory is supported by this minimal mechanism */
+    if (Vad->u.VadFlags.PrivateMemory == 0) goto Fail;
+
+    /* The whole range must live inside this single VAD */
+    if (((StartVa >> PAGE_SHIFT) < Vad->StartingVpn) ||
+        ((EndVa >> PAGE_SHIFT) > Vad->EndingVpn))
+        goto Fail;
+
+    /* AWE / physical / large-page VADs cannot be secured */
+    if ((Vad->u.VadFlags.VadType == VadAwe) ||
+        (Vad->u.VadFlags.VadType == VadDevicePhysicalMemory) ||
+        (Vad->u.VadFlags.VadType == VadLargePages))
+        goto Fail;
+
+    /* The internal OneSecured slot (PEB/TEB) uses the same u3 union - don't mix */
+    if (Vad->u2.VadFlags2.OneSecured) goto Fail;
+
+    LongVad = (PMMVAD_LONG)Vad;
+
+    /* Initialize the secured list and mark the VAD on the first secure only */
+    if (Vad->u2.VadFlags2.MultipleSecured == 0)
+    {
+        InitializeListHead(&LongVad->u3.List);
+        Vad->u2.VadFlags2.MultipleSecured = 1;
+        Vad->u2.VadFlags2.LongVad = 1;
+        Vad->u.VadFlags.NoChange = 1;
+    }
+
+    /* Fill and link the descriptor */
+    Secure->Process = Process;
+    Secure->Vad = Vad;
+    Secure->StartVa = StartVa;
+    Secure->EndVa = EndVa;
+    Secure->ProbeMode = SecureProbe;
+    InsertTailList(&LongVad->u3.List, &Secure->List);
+
+    MmUnlockAddressSpace(AddressSpace);
+
+    /* The descriptor pointer is the opaque secure handle */
+    return (PVOID)Secure;
+
+Fail:
+    MmUnlockAddressSpace(AddressSpace);
+    ExFreePoolWithTag(Secure, TAG_MM_SECURE);
+    return NULL;
 }
 
 /*
- * @unimplemented
+ * @implemented
+ *
+ * Removes the secured-range descriptor identified by SecureMem. When the owning
+ * VAD has no more secured ranges, the NoChange/MultipleSecured state is cleared
+ * so the range can be reprotected or released again.
  */
 VOID
 NTAPI
 MmUnsecureVirtualMemory(IN PVOID SecureMem)
 {
-    static ULONG Warn; if (!Warn++) UNIMPLEMENTED;
+    PMMSECURE_ENTRY Secure = (PMMSECURE_ENTRY)SecureMem;
+    PMMSUPPORT AddressSpace;
+    PMMVAD_LONG LongVad;
+
+    PAGED_CODE();
+
+    if (Secure == NULL) return;
+
+    /* Lock the address space of the process that owns the secured range */
+    AddressSpace = &Secure->Process->Vm;
+    MmLockAddressSpace(AddressSpace);
+
+    LongVad = (PMMVAD_LONG)Secure->Vad;
+
+    /* Unlink this descriptor */
+    RemoveEntryList(&Secure->List);
+
+    /* If nothing is secured anymore, clear the VAD's secured state */
+    if (IsListEmpty(&LongVad->u3.List))
+    {
+        ((PMMVAD)LongVad)->u2.VadFlags2.MultipleSecured = 0;
+        ((PMMVAD)LongVad)->u.VadFlags.NoChange = 0;
+
+        /* Leave the u3 union in a clean (zeroed) state */
+        LongVad->u3.List.Flink = NULL;
+        LongVad->u3.List.Blink = NULL;
+    }
+
+    MmUnlockAddressSpace(AddressSpace);
+
+    ExFreePoolWithTag(Secure, TAG_MM_SECURE);
 }
 
 /* SYSTEM CALLS ***************************************************************/
