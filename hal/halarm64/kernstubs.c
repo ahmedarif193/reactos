@@ -124,10 +124,13 @@ NTSTATUS NTAPI HalEnumerateProcessors(PVOID Buffer, PULONG Count)
     return STATUS_NOT_SUPPORTED;
 }
 
+/* Number of processors the firmware (MADT GICC entries) described / brought up. */
+extern ULONG HalpStartedProcessorCount;
+
 ULONG NTAPI HalQueryMaximumProcessorCount(VOID)
 {
-    DPRINT1("%s: UNIMPLEMENTED\n", __FUNCTION__);
-    return 1;
+    ULONG Count = HalpStartedProcessorCount;
+    return (Count != 0) ? Count : 1;
 }
 
 NTSTATUS NTAPI HalRegisterDynamicProcessor(PVOID NewProcessor, PVOID ProcessorInfo)
@@ -148,7 +151,7 @@ NTSTATUS NTAPI HalStartDynamicProcessor(PVOID ProcessorState, PVOID Context)
 
 BOOLEAN NTAPI HalIsHyperThreadingEnabled(VOID)
 {
-    DPRINT1("%s: UNIMPLEMENTED\n", __FUNCTION__);
+    /* ARM64 has no x86-style SMT/hyper-threading. */
     return FALSE;
 }
 

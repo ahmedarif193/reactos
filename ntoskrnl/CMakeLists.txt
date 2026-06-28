@@ -37,6 +37,16 @@ endif()
 list(APPEND PCH_SKIP_SOURCE
     guid.c)
 
+# ARM64 Win11 ABI export parity: spec2def-generated stubs for the unimplemented
+# Win11 exports, plus hand-written placeholder data exports. Both are kept out of
+# the PCH (ntoskrnl_stubs.c already gets SKIP_PRECOMPILE_HEADERS from spec2def();
+# ke/arm64/exports.c is header-independent on purpose).
+if(ARCH STREQUAL "arm64")
+    list(APPEND PCH_SKIP_SOURCE
+        ke/arm64/exports.c
+        ${CMAKE_CURRENT_BINARY_DIR}/ntoskrnl_stubs.c)
+endif()
+
 add_executable(ntoskrnl
     ${ntoskrnl_asm}
     ${NTOSKRNL_SOURCE}

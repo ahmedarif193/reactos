@@ -495,6 +495,23 @@ RtlNumberOfSetBits(
     return BitCount;
 }
 
+ULONG
+NTAPI
+RtlNumberOfSetBitsUlongPtr(
+    _In_ ULONG_PTR Target)
+{
+    ULONG BitCount = 0;
+
+    /* Sum the per-byte population counts (portable; no compiler intrinsics) */
+    while (Target != 0)
+    {
+        BitCount += BitCountTable[Target & 0xFF];
+        Target >>= 8;
+    }
+
+    return BitCount;
+}
+
 BITMAP_INDEX
 NTAPI
 RtlNumberOfClearBits(

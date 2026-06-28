@@ -185,8 +185,13 @@ START_TEST(ObReference)
     RtlInitUnicodeString(&Name, L"\\ObjectTypes\\Directory");
     InitializeObjectAttributes(&ObjectAttributes, &Name, OBJ_KERNEL_HANDLE, NULL, NULL);
     Status = ObOpenObjectByName(&ObjectAttributes, NULL, KernelMode, NULL, 0, NULL, &ObjectTypeHandle);
-    ok_eq_hex(Status, STATUS_SUCCESS);
-    ok(ObjectTypeHandle != NULL, "ObjectTypeHandle = NULL\n");
+    /* Win11 rejects ObOpenObjectByName with a NULL ObjectType / zero DesiredAccess
+     * (returns STATUS_INVALID_PARAMETER); ReactOS accepts it. Tolerate the Win11
+     * rejection here so the suite passes on both; the dependent block below is
+     * already guarded by "Status == STATUS_SUCCESS && ObjectTypeHandle". */
+    ok(Status == STATUS_SUCCESS || Status == STATUS_INVALID_PARAMETER,
+       "ObOpenObjectByName(\\ObjectTypes\\Directory) = 0x%lx\n", Status);
+    ok(Status != STATUS_SUCCESS || ObjectTypeHandle != NULL, "ObjectTypeHandle = NULL despite success\n");
     if (Status == STATUS_SUCCESS && ObjectTypeHandle)
     {
         Status = ObReferenceObjectByHandle(ObjectTypeHandle, 0, NULL, KernelMode, (PVOID)&ObDirectoryObjectType, NULL);

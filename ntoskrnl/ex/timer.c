@@ -16,6 +16,8 @@
 
 /* Timer Object Type */
 POBJECT_TYPE ExTimerType = NULL;
+/* Windows exports the timer object type under the public name ExTimerObjectType. */
+POBJECT_TYPE ExTimerObjectType = NULL;
 
 KSPIN_LOCK ExpWakeListLock;
 LIST_ENTRY ExpWakeList;
@@ -238,6 +240,7 @@ ExpInitializeTimerImplementation(VOID)
     ObjectTypeInitializer.DeleteProcedure = ExpDeleteTimer;
     Status = ObCreateObjectType(&Name, &ObjectTypeInitializer, NULL, &ExTimerType);
     if (!NT_SUCCESS(Status)) return FALSE;
+    ExTimerObjectType = ExTimerType;
 
     /* Initialize the Wait List and Lock */
     KeInitializeSpinLock(&ExpWakeListLock);

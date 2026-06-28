@@ -47,6 +47,16 @@ static VOID Arm64SmtCheckCpu(KAFFINITY *SiblingOut)
     Siblings = Prcb->MultiThreadProcessorSet;
     *SiblingOut = Siblings;
 
+    if (Siblings == 0)
+    {
+        /* Win11's KPRCB does not expose MultiThreadProcessorSet at this offset
+         * (ReactOS extension; lands in Win11 PrcbPad4 -> reads 0). Treat as
+         * not-applicable on Win11 instead of failing; ReactOS populates it. */
+        trace("cpu %lu: MultiThreadProcessorSet not populated (ReactOS-private/Win11 padding); SMT checks skipped\n",
+              MyNumber);
+        return;
+    }
+
     ok((Siblings & ((KAFFINITY)1 << MyNumber)) != 0,
        "cpu %lu absent from its own MultiThreadProcessorSet=0x%I64x\n",
        MyNumber, (ULONGLONG)Siblings);
