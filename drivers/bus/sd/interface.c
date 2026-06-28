@@ -106,26 +106,25 @@ SdBusInitializeInterfaceImpl(
         return STATUS_INVALID_PARAMETER;
     }
 
-    /* Store the function driver's callback information */
     InterfaceContext->CallbackRoutine = Params->CallbackRoutine;
     InterfaceContext->CallbackContext = Params->CallbackRoutineContext;
     InterfaceContext->DeviceGeneratesInterrupts = Params->DeviceGeneratesInterrupts;
 
-    /* Also store in the PDO extension for ISR dispatch */
     PdoExtension->CallbackRoutine = Params->CallbackRoutine;
     PdoExtension->CallbackContext = Params->CallbackRoutineContext;
+    PdoExtension->CallbackAtDpcLevel = Params->CallbackAtDpcLevel;
 
-    DPRINT1("SdBusInitializeInterfaceImpl: Callback %p Context %p\n",
-           Params->CallbackRoutine,
-           Params->CallbackRoutineContext);
-
-    /* If the function generates interrupts, enable SDIO card interrupt
-     * signal delivery. */
     if (Params->DeviceGeneratesInterrupts && PdoExtension->FdoExtension)
     {
         SdBusUpdateInterruptSignalEnable(PdoExtension->FdoExtension,
                                          SDHCI_INT_CARD_INTERRUPT,
                                          0);
+    }
+    else if (PdoExtension->FdoExtension)
+    {
+        SdBusUpdateInterruptSignalEnable(PdoExtension->FdoExtension,
+                                         0,
+                                         SDHCI_INT_CARD_INTERRUPT);
     }
 
     return STATUS_SUCCESS;
@@ -162,12 +161,10 @@ SdBusAcknowledgeInterruptImpl(
         return STATUS_INVALID_PARAMETER;
     }
 
-    /* Re-enable the SDIO card interrupt signal */
     SdBusUpdateInterruptSignalEnable(FdoExtension,
                                      SDHCI_INT_CARD_INTERRUPT,
                                      0);
 
-    DPRINT1("SdBusAcknowledgeInterruptImpl: Card interrupt re-enabled\n");
     return STATUS_SUCCESS;
 }
 
@@ -230,9 +227,6 @@ SdBusOpenInterfaceImpl(
 
     /* Take an initial reference */
     InterlockedIncrement(&PdoExtension->InterfaceReferenceCount);
-
-    DPRINT1("SdBusOpenInterfaceImpl: Interface opened for PDO %p\n",
-           PdoExtension->Common.Self);
 
     return STATUS_SUCCESS;
 }
