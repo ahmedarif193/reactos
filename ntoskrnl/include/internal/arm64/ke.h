@@ -183,8 +183,11 @@ KiConvertSystemDllAddressToUser(
  * ASID == 0 every switch broadcast-flushes exactly as the original bring-up code
  * did, so the encoding is behaviour-neutral until the allocator is enabled.
  *
- * Note: enabling targeted (flush-free) switching requires user leaf PTEs to be
- * non-global (nG=1) and TCR.A1=0 so TTBR0.ASID is the current ASID.
+ * Note: TCR.A1=1 is now forced (TTBR1 selects the current ASID, matching Win11),
+ * but this helper still composes the ASID into TTBR0. Before enabling targeted
+ * (flush-free) switching, move the ASID into TTBR1_EL1.ASID to match A1=1 and
+ * confirm user leaf PTEs are non-global (nG=1); otherwise the current ASID stays
+ * 0 and the flush-free path corrupts cross-process translations.
  */
 #define KI_ARM64_TTBR_ADDR_MASK   0x0000FFFFFFFFF000ULL
 #define KI_ARM64_TTBR_ASID_SHIFT  48
