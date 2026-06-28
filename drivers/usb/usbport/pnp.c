@@ -1580,28 +1580,46 @@ USBPORT_StartDevice(IN PDEVICE_OBJECT FdoDevice,
     Packet = &FdoExtension->MiniPortInterface->Packet;
 
     Status = USBPORT_QueryPciBusInterface(FdoDevice);
-    if (!NT_SUCCESS(Status))
-        goto ExitWithError;
 
-    BytesRead = (*FdoExtension->BusInterface.GetBusData)(FdoExtension->BusInterface.Context,
-                                                         PCI_WHICHSPACE_CONFIG,
-                                                         &PciConfig,
-                                                         0,
-                                                         PCI_COMMON_HDR_LENGTH);
-
-    if (BytesRead != PCI_COMMON_HDR_LENGTH)
+    if (NT_SUCCESS(Status))
     {
-        DPRINT1("USBPORT_StartDevice: Failed to get pci config information!\n");
-        Status = STATUS_UNSUCCESSFUL;
-        goto ExitWithError;
+        BytesRead = (*FdoExtension->BusInterface.GetBusData)(FdoExtension->BusInterface.Context,
+                                                             PCI_WHICHSPACE_CONFIG,
+                                                             &PciConfig,
+                                                             0,
+                                                             PCI_COMMON_HDR_LENGTH);
+    }
+    else
+    {
+        BytesRead = 0;
     }
 
-    FdoExtension->VendorID = PciConfig.VendorID;
-    FdoExtension->DeviceID = PciConfig.DeviceID;
-    FdoExtension->RevisionID = PciConfig.RevisionID;
-    FdoExtension->ProgIf = PciConfig.ProgIf;
-    FdoExtension->SubClass = PciConfig.SubClass;
-    FdoExtension->BaseClass = PciConfig.BaseClass;
+    if (BytesRead == PCI_COMMON_HDR_LENGTH)
+    {
+        FdoExtension->VendorID = PciConfig.VendorID;
+        FdoExtension->DeviceID = PciConfig.DeviceID;
+        FdoExtension->RevisionID = PciConfig.RevisionID;
+        FdoExtension->ProgIf = PciConfig.ProgIf;
+        FdoExtension->SubClass = PciConfig.SubClass;
+        FdoExtension->BaseClass = PciConfig.BaseClass;
+    }
+    else
+    {
+        /* No PCI parent: an ACPI-enumerated controller (e.g. an xHCI exposed
+         * via _HID under ACPI) has no PCI config space, so either the bus
+         * interface query failed or GetBusData returned fewer than a full
+         * PCI header. The firmware has already programmed MEM decode / bus
+         * mastering and the HAL provides the DMA window, so tolerate this and
+         * continue with zeroed identity fields instead of failing the start.
+         * Modelled on the null-guard in USBPORT_GetSetConfigSpaceData. */
+        DPRINT1("USBPORT_StartDevice: no PCI config space (ACPI-enumerated controller), continuing\n");
+        FdoExtension->VendorID = 0;
+        FdoExtension->DeviceID = 0;
+        FdoExtension->RevisionID = 0;
+        FdoExtension->ProgIf = 0;
+        FdoExtension->SubClass = 0;
+        FdoExtension->BaseClass = 0;
+    }
 
     RtlZeroMemory(&DeviceDescription, sizeof(DeviceDescription));
 

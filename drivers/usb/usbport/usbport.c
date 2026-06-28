@@ -720,6 +720,17 @@ USBPORT_GetSetConfigSpaceData(IN PDEVICE_OBJECT FdoDevice,
 
     FdoExtension = FdoDevice->DeviceExtension;
 
+    /* No PCI parent (e.g. an ACPI-enumerated controller) means there is no
+     * config space and BusInterface is not populated. Fail gracefully instead
+     * of dereferencing a NULL GetBusData/SetBusData and bugchecking. */
+    if (!FdoExtension->BusInterface.GetBusData ||
+        !FdoExtension->BusInterface.SetBusData)
+    {
+        if (IsReadData)
+            RtlZeroMemory(Buffer, Length);
+        return STATUS_NOT_SUPPORTED;
+    }
+
     BytesReadWrite = Length;
 
     if (IsReadData)
