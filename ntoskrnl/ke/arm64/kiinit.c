@@ -418,7 +418,7 @@ KiInitializeKernel(_Inout_ PKPROCESS InitProcess,
                 NewTcr |= (0x1ULL << 26);    /* ORGN1 = Write-Back Write-Allocate */
                 NewTcr &= ~(0x3ULL << 24);
                 NewTcr |= (0x1ULL << 24);    /* IRGN1 = Write-Back Write-Allocate */
-                NewTcr &= ~(1ULL << 22);     /* A1=0: TTBR0.ASID is the current ASID (ke/arm64 ASID allocator) */
+                NewTcr |= (1ULL << 22);      /* A1=1: TTBR1 defines the current ASID (matches Win11 + the AP path) */
                 NewTcr &= ~((1ULL << 36) |   /* AS */
                             (1ULL << 37) |   /* TBI0 */
                             (1ULL << 38) |   /* TBI1 */
@@ -430,6 +430,29 @@ KiInitializeKernel(_Inout_ PKPROCESS InitProcess,
                 __asm__ __volatile__("isb" ::: "memory");
                 __asm__ __volatile__("tlbi vmalle1is" ::: "memory");
                 __asm__ __volatile__("dsb ish" ::: "memory");
+                __asm__ __volatile__("isb" ::: "memory");
+            }
+        }
+
+        /*
+         * Force TCR_EL1.A1=1 (TTBR1 defines the current ASID) on the BSP,
+         * independent of the geometry fixup above, which only runs when
+         * firmware leaves the wrong VA/PA sizes. Otherwise the BSP keeps
+         * firmware's arbitrary A1 while every AP sets A1=1 (secondary path
+         * below), so MmSelfMap's A1 check passes or fails depending on which
+         * CPU it ran on. ASID tagging is disabled by default (every switch
+         * full-flushes) so A1 only selects which TTBR's ASID field is current;
+         * keeping it 1 on all CPUs matches the Windows ARM64 contract.
+         */
+        {
+            ULONG64 CurrentTcr, FixedTcr;
+
+            __asm__ __volatile__("mrs %0, tcr_el1" : "=r"(CurrentTcr));
+            FixedTcr = CurrentTcr | (1ULL << 22);
+            if (FixedTcr != CurrentTcr)
+            {
+                __asm__ __volatile__("dsb ish" ::: "memory");
+                __asm__ __volatile__("msr tcr_el1, %0" :: "r"(FixedTcr) : "memory");
                 __asm__ __volatile__("isb" ::: "memory");
             }
         }

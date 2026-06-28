@@ -27,6 +27,7 @@ KMT_TESTFUNC Test_PsProcessInfo;
 KMT_TESTFUNC Test_RtlStringSupportKM;
 #ifdef _M_ARM64
 KMT_TESTFUNC Test_Win11NewKM;
+KMT_TESTFUNC Test_MmWin11KM;
 #endif
 KMT_TESTFUNC Test_ExResource;
 KMT_TESTFUNC Test_ExRundown;
@@ -333,6 +334,7 @@ const KMT_TEST TestList[] =
     { "RtlStringSupportKM",                 Test_RtlStringSupportKM },
 #ifdef _M_ARM64
     { "Win11NewKM",                         Test_Win11NewKM },
+    { "MmWin11KM",                          Test_MmWin11KM },
 #endif
     { "RtlSplayTreeKM",                     Test_RtlSplayTree },
     { "RtlStackKM",                         Test_RtlStack },
