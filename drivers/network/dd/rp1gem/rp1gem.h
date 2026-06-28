@@ -62,50 +62,7 @@
                                   NDIS_PACKET_TYPE_BROADCAST | \
                                   NDIS_PACKET_TYPE_PROMISCUOUS)
 
-/* RP1 BAR1 sideband registers used by the Raspberry Pi 5 PHY reset GPIO. */
-#define RP1GEM_ETH_OFFSET 0x00100000
-#define RP1GEM_PCIE_APBS_OFFSET 0x00108000
-#define RP1GEM_PCIE_APBS_LENGTH 0x00001000
-#define RP1GEM_PCIE_APBS_REG_SET 0x00000800
-#define RP1GEM_MSIX_CFG(_Irq) (0x00000008 + (sizeof(ULONG) * (_Irq)))
-#define RP1GEM_MSIX_CFG_ENABLE (1u << 0)
-#define RP1GEM_MSIX_CFG_IACK (1u << 2)
-#define RP1GEM_MSIX_CFG_IACK_EN (1u << 3)
-#define RP1GEM_INT_ETH 6u
-#define RP1GEM_GPIO_OFFSET 0x000d0000
-#define RP1GEM_RIO_OFFSET 0x000e0000
-#define RP1GEM_PADS_OFFSET 0x000f0000
-#define RP1GEM_GPIO_WINDOW_LENGTH 0x0000c000
-
-#define RP1GEM_PHY_RESET_GPIO 32
-#define RP1GEM_PHY_RESET_BANK_MIN 28
-#define RP1GEM_PHY_RESET_PIN (RP1GEM_PHY_RESET_GPIO - RP1GEM_PHY_RESET_BANK_MIN)
-#define RP1GEM_PHY_RESET_BIT (1u << RP1GEM_PHY_RESET_PIN)
-#define RP1GEM_PHY_RESET_BANK_OFFSET 0x4000
-#define RP1GEM_PHY_RESET_GPIO_CTRL (RP1GEM_PHY_RESET_BANK_OFFSET + \
-                                    (RP1GEM_PHY_RESET_PIN * sizeof(ULONG) * 2) + \
-                                    RP1_GPIO_CTRL)
-#define RP1GEM_PHY_RESET_RIO_BANK RP1GEM_PHY_RESET_BANK_OFFSET
-#define RP1GEM_PHY_RESET_PAD_CTRL (0x4004 + (RP1GEM_PHY_RESET_PIN * sizeof(ULONG)))
-
-#define RP1_SET_OFFSET 0x2000
-#define RP1_CLR_OFFSET 0x3000
-
-#define RP1_GPIO_CTRL 0x0004
-#define RP1_GPIO_CTRL_FUNCSEL_MASK 0x0000001f
-#define RP1_GPIO_CTRL_OUTOVER_MASK 0x00003000
-#define RP1_GPIO_CTRL_OEOVER_MASK 0x0000c000
-#define RP1_GPIO_CTRL_INOVER_MASK 0x00030000
-#define RP1_FSEL_GPIO 0x05
-
-#define RP1_RIO_OUT 0x00
-#define RP1_RIO_OE 0x04
-
-#define RP1_PAD_PULL_MASK 0x0000000c
-#define RP1_PAD_IN_ENABLE_MASK 0x00000040
-#define RP1_PAD_OUT_DISABLE_MASK 0x00000080
-
-/* Cadence MACB/GEM register offsets used by the RP1 GEM probe path. */
+/* Cadence MACB/GEM register offsets. */
 #define MACB_NCR 0x0000
 #define MACB_NCFGR 0x0004
 #define MACB_NSR 0x0008
@@ -300,20 +257,6 @@
 #define BCM54810_SHD_CLK_CTL 0x03
 #define BCM54810_SHD_CLK_CTL_GTXCLK_EN (1u << 9)
 
-#define BCM2712_MBOX_PHYS 0x107C013880ULL
-#define BCM2712_MBOX_LENGTH 0x40
-#define BCM2712_MBOX_MAIL0_RD 0x00
-#define BCM2712_MBOX_MAIL0_STA 0x18
-#define BCM2712_MBOX_MAIL1_WRT 0x20
-#define BCM2712_MBOX_MAIL1_STA 0x38
-#define BCM2712_MBOX_STATUS_FULL (1u << 31)
-#define BCM2712_MBOX_STATUS_EMPTY (1u << 30)
-#define BCM2712_MBOX_PROPERTY_CHANNEL 8
-#define BCM2712_MBOX_PROPERTY_SUCCESS 0x80000000
-#define BCM2712_MBOX_TAG_RESPONSE 0x80000000
-#define BCM2712_MBOX_GET_BOARD_MAC 0x00010003
-#define BCM2712_MBOX_GET_ETHERNET_MAC 0x00030082
-
 typedef struct _RP1GEM_DMA_DESCRIPTOR
 {
     ULONG Address;
@@ -347,8 +290,6 @@ typedef struct _RP1GEM_ADAPTER
     PVOID RegisterBase;
     ULONG RegisterLength;
     PHYSICAL_ADDRESS RegisterPhysical;
-    PVOID Rp1ApbsBase;
-    ULONG Rp1ApbsLength;
 
     ULONG InterruptVector;
     ULONG InterruptLevel;
@@ -411,15 +352,13 @@ typedef struct _RP1GEM_ADAPTER
     ULONG InterruptLastRawIsr;
     ULONG InterruptLastPending;
     ULONG SpuriousInterruptCount;
-} RP1GEM_ADAPTER, *PRP1GEM_ADAPTER;
 
-typedef struct _RP1GEM_MAILBOX_PROPERTY
-{
-    ULONG Size;
-    ULONG Code;
-    ULONG Tag;
-    ULONG ValueSize;
-    ULONG RequestResponse;
-    ULONG Value[2];
-    ULONG EndTag;
-} RP1GEM_MAILBOX_PROPERTY, *PRP1GEM_MAILBOX_PROPERTY;
+    /* Win11-on-RPi5 init diagnostics: which step reached, what NDIS handed us. */
+    ULONG DiagResCount;
+    ULONG DiagResTypes;     /* packed type of first 4 CM descriptors, one byte each */
+    ULONG DiagPhyStatus;    /* last NDIS_STATUS from the MDIO/PHY path */
+    ULONG DiagSubStage;     /* which datapath allocation we last attempted */
+    ULONG DiagLoopIndex;    /* ring slot index at the last attempted allocation */
+    NDIS_HANDLE DiagWorkItem;   /* NDIS IO work item to write diag at PASSIVE_LEVEL */
+    volatile LONG DiagWorkBusy; /* 1 while a runtime-diag work item is queued/running */
+} RP1GEM_ADAPTER, *PRP1GEM_ADAPTER;
