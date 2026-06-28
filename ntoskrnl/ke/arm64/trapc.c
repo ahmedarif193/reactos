@@ -681,9 +681,15 @@ KiSystemService(
  *
  * Default behaviour is unchanged: KiArm64AsidEnabled is FALSE, so no ASID is
  * ever assigned, DirectoryTableBase[0] keeps ASID 0, and every switch flushes
- * exactly as before. Enabling it (set KiArm64AsidEnabled = TRUE) requires user
- * leaf PTEs to be non-global (nG=1) and TCR.A1=0 (set in KiInitializeKernel);
- * this must be validated at runtime before flipping the default.
+ * exactly as before.
+ *
+ * WARNING: KiInitializeKernel now forces TCR.A1=1 (TTBR1 selects the current
+ * ASID, matching Win11), but this allocator still composes the ASID into TTBR0
+ * (KiArm64WriteUserTtbr) -- which is only the current ASID when A1=0. Do NOT set
+ * KiArm64AsidEnabled = TRUE until the allocator is reworked to place the ASID in
+ * TTBR1_EL1.ASID (the A1=1 model) and user leaf PTEs are confirmed non-global
+ * (nG=1); otherwise the flush-free switch would run with every user translation
+ * tagged ASID 0 -> cross-process stale-translation corruption.
  *
  * Allocation is lock-free; ASIDs are never reused (a process that cannot get a
  * free ASID simply keeps ASID 0 and full-flushes), so a freshly allocated ASID

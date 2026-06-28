@@ -2989,14 +2989,26 @@ MiResetPrivatePages(
 /* PUBLIC FUNCTIONS ***********************************************************/
 
 /*
- * @unimplemented
+ * @implemented
  */
 PVOID
 NTAPI
 MmGetVirtualForPhysical(IN PHYSICAL_ADDRESS PhysicalAddress)
 {
-    UNIMPLEMENTED;
-    return 0;
+    PFN_NUMBER PageFrameIndex;
+    PMMPFN Pfn1;
+
+    /* Get the page frame index and its PFN database entry */
+    PageFrameIndex = (PFN_NUMBER)(PhysicalAddress.QuadPart >> PAGE_SHIFT);
+    Pfn1 = MiGetPfnEntry(PageFrameIndex);
+    if (Pfn1 == NULL) return NULL;
+
+    /*
+     * The PFN entry records the PTE that maps this page; reverse that PTE back
+     * to the virtual address it maps and add the byte offset within the page.
+     */
+    return (PVOID)((ULONG_PTR)MiPteToAddress(Pfn1->PteAddress) +
+                   BYTE_OFFSET(PhysicalAddress.LowPart));
 }
 
 /*
