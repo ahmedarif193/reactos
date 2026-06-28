@@ -1428,14 +1428,7 @@ IopInitializeBootDrivers(VOID)
             LdrEntry = DriverInfo->DataTableEntry->LdrEntry;
 
             /* Initialize it */
-            if (IopInitializeBuiltinDriver(LdrEntry))
-            {
-                // it does not make sense to enumerate the tree if there are no new devices added
-                PiQueueDeviceAction(IopRootDeviceNode->PhysicalDeviceObject,
-                                    PiActionEnumRootDevices,
-                                    NULL,
-                                    NULL);
-            }
+            IopInitializeBuiltinDriver(LdrEntry);
         }
     }
 
