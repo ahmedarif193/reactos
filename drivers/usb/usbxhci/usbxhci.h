@@ -55,8 +55,8 @@ typedef struct _XHCI_ISO_PACKET_CONTEXT XHCI_ISO_PACKET_CONTEXT, *PXHCI_ISO_PACK
 #define XHCI_QUIRK_IS_QEMU_XHCI       0x00002000
 
 /* Mask of quirks that force transfer polling for the fallback event drain.
- * Board-specific controllers (e.g. RP1) must request polling via a registry
- * quirk override, not a hardcoded VID/DID match in this generic driver. */
+ * Board-specific controllers must request polling via a registry quirk
+ * override, not a hardcoded VID/DID match in this generic driver. */
 #define XHCI_QUIRK_POLL_XFERS_MASK    (XHCI_QUIRK_VBOX_POLL_XFERS | \
                                        XHCI_QUIRK_QEMU_POLL_XFERS)
 #define XHCI_BOUNCE_POOL_SLOTS 32
