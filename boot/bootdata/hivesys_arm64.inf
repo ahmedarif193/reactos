@@ -6,21 +6,28 @@
 
 [AddReg]
 
-; Raspberry Pi 5 RP1 southbridge bus driver
-HKLM,"SYSTEM\CurrentControlSet\Control\CriticalDeviceDatabase\PCI#VEN_1DE4&DEV_0001","Service",0x00000000,"rp1"
-HKLM,"SYSTEM\CurrentControlSet\Control\CriticalDeviceDatabase\PCI#VEN_1DE4&DEV_0001","ClassGUID",0x00000000,"{4D36E97D-E325-11CE-BFC1-08002BE10318}"
-
-HKLM,"SYSTEM\CurrentControlSet\Services\rp1","ErrorControl",0x00010001,0x00000001
-HKLM,"SYSTEM\CurrentControlSet\Services\rp1","Group",0x00000000,"System Bus Extender"
-HKLM,"SYSTEM\CurrentControlSet\Services\rp1","ImagePath",0x00020000,"system32\drivers\rp1.sys"
-HKLM,"SYSTEM\CurrentControlSet\Services\rp1","Start",0x00010001,0x00000000
-HKLM,"SYSTEM\CurrentControlSet\Services\rp1","Type",0x00010001,0x00000001
+; Raspberry Pi 5 RP1 southbridge: no OS bus driver. The UEFI firmware exposes
+; the RP1 functions (USB XHC0/XHC1, Ethernet ETH0) as standard ACPI devices
+; under the RP1B ACPI0004 container and hides the RP1 PCIe endpoint, so acpi.sys
+; enumerates them generically and in-box/generic function drivers bind directly
+; (ETH0 -> ACPI\RPI5ETH -> rp1gem). This matches how Windows consumes RP1, so no
+; rp1.sys (and no PCI\VEN_1DE4 CriticalDeviceDatabase seed) is required.
 
 ; Raspberry Pi 5 BCM2712 SDHCI controllers report _HID BRCM5D12 (SDC0 = SD card,
 ; SDC1 = SDIO WiFi). ReactOS only had BRCME88C in the CDDB, so both failed to
 ; install (Code 28) on real hardware. Bind both to sdbus.
 HKLM,"SYSTEM\CurrentControlSet\Control\CriticalDeviceDatabase\ACPI#BRCM5D12","Service",0x00000000,"sdbus"
 HKLM,"SYSTEM\CurrentControlSet\Control\CriticalDeviceDatabase\ACPI#BRCM5D12","ClassGUID",0x00000000,"{a0a588a4-c46f-4b37-b7ea-c82fe89870c6}"
+
+; Raspberry Pi 5 RP1 xHCI USB host controllers (XHC0/XHC1) are exposed by the
+; UEFI firmware as ACPI devices with _HID "PNP0D10" (ACPI\PNP0D10), not as PCI
+; functions. The USB stack is the boot path (the boot disk hangs off USB behind
+; RP1), so seed the CriticalDeviceDatabase to bind the in-box xHCI miniport
+; (usbxhci, already a boot-start service in hivesys.inf) before any INF runs.
+; ClassGUID is the USB host-controller class {36FC9E60-C465-11CF-8056-444553540000}.
+; The kernel rewrites '\' to '#' in the hardware-id key.
+HKLM,"SYSTEM\CurrentControlSet\Control\CriticalDeviceDatabase\ACPI#PNP0D10","Service",0x00000000,"usbxhci"
+HKLM,"SYSTEM\CurrentControlSet\Control\CriticalDeviceDatabase\ACPI#PNP0D10","ClassGUID",0x00000000,"{36FC9E60-C465-11CF-8056-444553540000}"
 
 ; The RP1 Ethernet controller (RP1\GEM) is intentionally not seeded here:
 ; it is a regular PnP NDIS miniport, installed at runtime from netrp1gem.inf
@@ -51,3 +58,21 @@ HKLM,"SYSTEM\CurrentControlSet\Services\cyw43455","ErrorControl",0x00010001,0x00
 HKLM,"SYSTEM\CurrentControlSet\Services\cyw43455","ImagePath",0x00020000,"system32\drivers\cyw43455.sys"
 HKLM,"SYSTEM\CurrentControlSet\Services\cyw43455","Group",0x00000000,"NDIS"
 HKLM,"SYSTEM\CurrentControlSet\Services\cyw43455","DisplayName",0x00000000,"ReactOS CYW43455 WiFi Driver"
+
+; nwifi virtual 802.3 miniport uses a fixed GUID (NwifiUpperName in
+; drivers/network/nwifi/protocol.c) and is created at runtime by the NDIS IM, so
+; it has no PnP/netcfgx footprint. Seed the net-class instance + Tcpip linkage so
+; TCP/IP binds it and DHCP runs over WiFi.
+HKLM,"SYSTEM\CurrentControlSet\Control\Class\{4D36E972-E325-11CE-BFC1-08002BE10318}\0100","DriverDesc",0x00000000,"ReactOS Native WiFi Virtual Adapter"
+HKLM,"SYSTEM\CurrentControlSet\Control\Class\{4D36E972-E325-11CE-BFC1-08002BE10318}\0100","NetCfgInstanceId",0x00000000,"{B1D2C3E4-5F6A-4B8C-9D0E-02524F535731}"
+HKLM,"SYSTEM\CurrentControlSet\Control\Class\{4D36E972-E325-11CE-BFC1-08002BE10318}\0100","Characteristics",0x00010001,0x00000001
+HKLM,"SYSTEM\CurrentControlSet\Control\Class\{4D36E972-E325-11CE-BFC1-08002BE10318}\0100\Linkage","RootDevice",0x00000000,"{B1D2C3E4-5F6A-4B8C-9D0E-02524F535731}"
+HKLM,"SYSTEM\CurrentControlSet\Control\Class\{4D36E972-E325-11CE-BFC1-08002BE10318}\0100\Linkage","Export",0x00000000,"\Device\{B1D2C3E4-5F6A-4B8C-9D0E-02524F535731}"
+HKLM,"SYSTEM\CurrentControlSet\Control\Class\{4D36E972-E325-11CE-BFC1-08002BE10318}\0100\Linkage","UpperBind",0x00000000,"Tcpip"
+HKLM,"SYSTEM\CurrentControlSet\Services\Tcpip\Linkage","Bind",0x00010000,"\Device\{B1D2C3E4-5F6A-4B8C-9D0E-02524F535731}"
+HKLM,"SYSTEM\CurrentControlSet\Services\Tcpip\Linkage","Route",0x00010000,"{B1D2C3E4-5F6A-4B8C-9D0E-02524F535731}"
+HKLM,"SYSTEM\CurrentControlSet\Services\Tcpip\Linkage","Export",0x00010000,"\Device\Tcpip_{B1D2C3E4-5F6A-4B8C-9D0E-02524F535731}"
+HKLM,"SYSTEM\CurrentControlSet\Services\Tcpip\Parameters\Interfaces\{B1D2C3E4-5F6A-4B8C-9D0E-02524F535731}","EnableDHCP",0x00010001,0x00000001
+HKLM,"SYSTEM\CurrentControlSet\Services\Tcpip\Parameters\Interfaces\{B1D2C3E4-5F6A-4B8C-9D0E-02524F535731}","IPAddress",0x00010000,"0.0.0.0"
+HKLM,"SYSTEM\CurrentControlSet\Services\Tcpip\Parameters\Interfaces\{B1D2C3E4-5F6A-4B8C-9D0E-02524F535731}","SubnetMask",0x00010000,"0.0.0.0"
+HKLM,"SYSTEM\CurrentControlSet\Services\Tcpip\Parameters\Interfaces\{B1D2C3E4-5F6A-4B8C-9D0E-02524F535731}","DefaultGateway",0x00010000,"0.0.0.0"

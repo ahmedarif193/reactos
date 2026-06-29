@@ -70,7 +70,6 @@ list(APPEND SOURCES
     ${HAL_ARM64_SOURCE_DIR}/halarm64.c
     ${HAL_ARM64_SOURCE_DIR}/halarm64_acpi_int.c
     ${HAL_ARM64_SOURCE_DIR}/halext.c
-    ${HAL_ARM64_SOURCE_DIR}/bcm2712_pci.c
     ${HAL_ARM64_SOURCE_DIR}/bcm2711_pci.c
     ${HAL_ARM64_SOURCE_DIR}/bcm2711_vc.c
     ${HAL_ARM64_SOURCE_DIR}/bcm2837_intc.c
