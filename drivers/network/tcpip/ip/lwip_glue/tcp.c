@@ -99,70 +99,23 @@ PQUEUE_ENTRY LibTCPDequeuePacket(PCONNECTION_ENDPOINT Connection)
 
 static
 void
-LibTCPRecvedFlush(void *arg)
-{
-    struct lwip_callback_msg *msg = arg;
-    PCONNECTION_ENDPOINT Connection = msg->Input.Recved.Connection;
-    PTCP_PCB pcb;
-    LONG Credit;
-
-    ASSERT(msg);
-
-    InterlockedExchange(&Connection->CreditFlushQueued, 0);
-    Credit = InterlockedExchange(&Connection->PendingRecvCredit, 0);
-    pcb = (PTCP_PCB)Connection->SocketContext;
-
-    while (pcb && Credit > 0)
-    {
-        u16_t Chunk = (Credit > 0xFFFF) ? 0xFFFF : (u16_t)Credit;
-        tcp_recved(pcb, Chunk);
-        Credit -= Chunk;
-    }
-
-    DereferenceObject(Connection);
-    ExFreeToNPagedLookasideList(&MessageLookasideList, msg);
-}
-
-static
-void
 LibTCPRecved(PCONNECTION_ENDPOINT Connection, u32_t Length, const int safe)
 {
     PTCP_PCB pcb;
-    struct lwip_callback_msg *msg;
 
-    if (safe)
+    if (!safe)
+        LOCK_TCPIP_CORE();
+
+    pcb = (PTCP_PCB)Connection->SocketContext;
+    while (pcb && Length > 0)
     {
-        pcb = (PTCP_PCB)Connection->SocketContext;
-        while (pcb && Length > 0)
-        {
-            u16_t Chunk = (Length > 0xFFFF) ? 0xFFFF : (u16_t)Length;
-            tcp_recved(pcb, Chunk);
-            Length -= Chunk;
-        }
-        return;
+        u16_t Chunk = (Length > 0xFFFF) ? 0xFFFF : (u16_t)Length;
+        tcp_recved(pcb, Chunk);
+        Length -= Chunk;
     }
 
-    InterlockedExchangeAdd(&Connection->PendingRecvCredit, (LONG)Length);
-
-    if (InterlockedCompareExchange(&Connection->CreditFlushQueued, 1, 0) != 0)
-        return;
-
-    msg = ExAllocateFromNPagedLookasideList(&MessageLookasideList);
-    if (!msg)
-    {
-        InterlockedExchange(&Connection->CreditFlushQueued, 0);
-        return;
-    }
-
-    ReferenceObject(Connection);
-    msg->Input.Recved.Connection = Connection;
-
-    if (tcpip_callback_with_block(LibTCPRecvedFlush, msg, 1) != ERR_OK)
-    {
-        DereferenceObject(Connection);
-        ExFreeToNPagedLookasideList(&MessageLookasideList, msg);
-        InterlockedExchange(&Connection->CreditFlushQueued, 0);
-    }
+    if (!safe)
+        UNLOCK_TCPIP_CORE();
 }
 
 NTSTATUS LibTCPGetDataFromConnectionQueue(PCONNECTION_ENDPOINT Connection, PUCHAR RecvBuffer, UINT RecvLen, UINT *Received, const int safe)
