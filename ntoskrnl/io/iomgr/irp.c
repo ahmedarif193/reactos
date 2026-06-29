@@ -380,9 +380,9 @@ IopCompleteRequest(IN PKAPC Apc,
                 if ((FileObject->Flags & FO_SYNCHRONOUS_IO) &&
                     !(Irp->Flags & IRP_OB_QUERY_NAME))
                 {
-                    /* Signal the file object and set the status */
-                    KeSetEvent(&FileObject->Event, 0, FALSE);
+                    /* Set the status and signal the file object */
                     FileObject->FinalStatus = Irp->IoStatus.Status;
+                    KeSetEvent(&FileObject->Event, 0, FALSE);
                 }
 
                 /*
@@ -399,9 +399,9 @@ IopCompleteRequest(IN PKAPC Apc,
         }
         else if (FileObject)
         {
-            /* Signal the file object and set the status */
-            KeSetEvent(&FileObject->Event, 0, FALSE);
+            /* Set the status and signal the file object */
             FileObject->FinalStatus = Irp->IoStatus.Status;
+            KeSetEvent(&FileObject->Event, 0, FALSE);
 
             /*
             * This could also be a create operation, in which case we want
