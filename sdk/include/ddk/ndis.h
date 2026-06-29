@@ -6877,6 +6877,21 @@ typedef struct _NDIS_DEVICE_OBJECT_ATTRIBUTES {
 #define NDIS_SIZEOF_DEVICE_OBJECT_ATTRIBUTES_REVISION_1 \
   RTL_SIZEOF_THROUGH_FIELD(NDIS_DEVICE_OBJECT_ATTRIBUTES, DeviceClassGuid)
 
+NDISAPI
+NDIS_STATUS
+NTAPI
+NdisRegisterDeviceEx(
+  _In_ NDIS_HANDLE NdisDriverHandle,
+  _In_ PVOID DeviceObjectAttributes,
+  _Out_ PDEVICE_OBJECT *pDeviceObject,
+  _Out_ PNDIS_HANDLE NdisDeviceHandle);
+
+NDISAPI
+NDIS_STATUS
+NTAPI
+NdisDeregisterDeviceEx(
+  _In_ NDIS_HANDLE NdisDeviceHandle);
+
 typedef struct _NDIS_MINIPORT_INIT_PARAMETERS {
   NDIS_OBJECT_HEADER          Header;
   ULONG                       Flags;

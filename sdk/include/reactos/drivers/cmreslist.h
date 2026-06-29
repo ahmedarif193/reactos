@@ -5,6 +5,8 @@
  * COPYRIGHT:   Copyright 2020 Timo Kreuzer (timo.kreuzer@reactos.org)
  */
 
+#pragma once
+
 #include <wdm.h>
 
 //
