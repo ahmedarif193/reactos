@@ -278,7 +278,6 @@ typedef struct _RP1GEM_TX_BUFFER
 {
     PVOID VirtualAddress;
     NDIS_PHYSICAL_ADDRESS PhysicalAddress;
-    PNET_BUFFER_LIST NetBufferList;
     ULONG Length;
 } RP1GEM_TX_BUFFER, *PRP1GEM_TX_BUFFER;
 
