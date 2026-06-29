@@ -139,6 +139,23 @@ Rp1GemDcacheInvalidate(
 }
 
 static VOID
+Rp1GemDcacheClean(
+    _In_ PVOID Base,
+    _In_ SIZE_T Length)
+{
+    ULONG_PTR Addr = (ULONG_PTR)Base & ~(ULONG_PTR)63;
+    ULONG_PTR End = (ULONG_PTR)Base + Length;
+
+    __asm__ __volatile__("dsb ish" ::: "memory");
+    while (Addr < End)
+    {
+        __asm__ __volatile__("dc cvac, %0" :: "r"(Addr) : "memory");
+        Addr += 64;
+    }
+    __asm__ __volatile__("dsb ish" ::: "memory");
+}
+
+static VOID
 Rp1GemRearmRxDescriptor(
     _In_ PRP1GEM_ADAPTER Adapter,
     _In_ ULONG Index)
@@ -334,15 +351,6 @@ Rp1GemFreeDatapath(
 
     for (i = 0; i < RP1GEM_TX_RING_SIZE; i++)
     {
-        if (Adapter->TxBuffers[i].NetBufferList)
-        {
-            NET_BUFFER_LIST_STATUS(Adapter->TxBuffers[i].NetBufferList) =
-                NDIS_STATUS_RESET_IN_PROGRESS;
-            NdisMSendNetBufferListsComplete(Adapter->MiniportHandle,
-                                            Adapter->TxBuffers[i].NetBufferList,
-                                            0);
-            Adapter->TxBuffers[i].NetBufferList = NULL;
-        }
         if (Adapter->TxBuffers[i].VirtualAddress)
         {
             MmFreeContiguousMemorySpecifyCache(Adapter->TxBuffers[i].VirtualAddress,
@@ -449,12 +457,8 @@ Rp1GemAllocateDmaCommonBuffer(
  * need not be contiguous with each other -- each descriptor carries its own
  * buffer's physical address.
  *
- * Cache type MmNonCached: the descriptor rings (Rp1GemAllocateDmaCommonBuffer)
- * already use MmNonCached and allocate fine on Win11 ARM64, whereas an MmCached
- * contiguous allocation failed there (STATUS_INSUFFICIENT_RESOURCES). MmNonCached
- * also removes the cache-coherency assumption the cleanroom flagged for the data
- * buffers (the GEM DMA no longer needs to snoop CPU caches), making the driver
- * self-consistent and DMA-safe on both ReactOS and Win11 -- parity preserved.
+ * Packet buffers are cached for CPU copy throughput. The driver performs
+ * explicit cache maintenance before handing buffers to the GEM DMA engine.
  */
 static PVOID
 Rp1GemAllocateDmaPacketBuffer(
@@ -468,7 +472,7 @@ Rp1GemAllocateDmaPacketBuffer(
     Boundary.QuadPart = 0;
 
     Va = MmAllocateContiguousMemorySpecifyCache(RP1GEM_BUFFER_SIZE, Low, High,
-                                                Boundary, MmNonCached);
+                                                Boundary, MmCached);
     if (Va)
         *Physical = MmGetPhysicalAddress(Va);
     else
@@ -624,7 +628,6 @@ Rp1GemInitializeDatapath(
               GEM_DMACFG_RXBMS_FULL |
               GEM_DMACFG_TXPBMS |
               GEM_DMACFG_RXBS(RP1GEM_BUFFER_SIZE) |
-              GEM_DMACFG_TXCOEN |
               GEM_DMACFG_ADDR64;
     Rp1GemWrite32(Adapter, GEM_DMACFG, Dmacfg);
 
@@ -637,8 +640,8 @@ Rp1GemInitializeDatapath(
            GEM_AMP_AW2B_FILL;
     Rp1GemWrite32(Adapter, GEM_AMP, Amp);
 
-    Intmod = GEM_INTMOD_RX(RP1GEM_INTMOD_50US) |
-             GEM_INTMOD_TX(RP1GEM_INTMOD_50US);
+    /* Per-packet interrupts avoid delaying sparse RX traffic such as TCP ACKs. */
+    Intmod = 0;
     Rp1GemWrite32(Adapter, GEM_INTMOD, Intmod);
 
     Rp1GemWrite32(Adapter, MACB_RBQPH, Adapter->RxRingPhysical.HighPart);
@@ -1591,8 +1594,7 @@ Rp1GemDrainTxCompletions(
     _In_ PRP1GEM_ADAPTER Adapter,
     _In_ ULONG CompleteFlags)
 {
-    PNET_BUFFER_LIST CompleteHead = NULL;
-    PNET_BUFFER_LIST CompleteTail = NULL;
+    UNREFERENCED_PARAMETER(CompleteFlags);
 
     if (!Adapter->DatapathReady)
         return;
@@ -1602,48 +1604,27 @@ Rp1GemDrainTxCompletions(
     while (Adapter->TxFree < RP1GEM_TX_RING_SIZE)
     {
         ULONG Index = Adapter->TxTail;
-        PRP1GEM_TX_BUFFER TxBuffer = &Adapter->TxBuffers[Index];
-        PNET_BUFFER_LIST Nbl = TxBuffer->NetBufferList;
-        ULONG Length = TxBuffer->Length;
         ULONG Control = Adapter->TxRing[Index].Control;
 
-        if (!Nbl || !(Control & MACB_TX_USED))
+        if (!(Control & MACB_TX_USED))
             break;
-
-        TxBuffer->NetBufferList = NULL;
-        TxBuffer->Length = 0;
-        Adapter->TxTail = (Index + 1) % RP1GEM_TX_RING_SIZE;
-        Adapter->TxFree++;
 
         if (Control & MACB_TX_ERROR_MASK)
         {
             Adapter->TxErrors++;
-            if (Nbl)
-                NET_BUFFER_LIST_STATUS(Nbl) = NDIS_STATUS_FAILURE;
         }
         else
         {
             Adapter->TxPackets++;
-            Adapter->TxBytes += Length;
-            if (Nbl)
-                NET_BUFFER_LIST_STATUS(Nbl) = NDIS_STATUS_SUCCESS;
+            Adapter->TxBytes += Adapter->TxBuffers[Index].Length;
         }
 
-        if (Nbl)
-        {
-            NET_BUFFER_LIST_NEXT_NBL(Nbl) = NULL;
-            if (!CompleteHead)
-                CompleteHead = Nbl;
-            else
-                NET_BUFFER_LIST_NEXT_NBL(CompleteTail) = Nbl;
-            CompleteTail = Nbl;
-        }
+        Adapter->TxBuffers[Index].Length = 0;
+        Adapter->TxTail = (Index + 1) % RP1GEM_TX_RING_SIZE;
+        Adapter->TxFree++;
     }
 
     NdisReleaseSpinLock(&Adapter->TxLock);
-
-    if (CompleteHead)
-        NdisMSendNetBufferListsComplete(Adapter->MiniportHandle, CompleteHead, CompleteFlags);
 
     Rp1GemWrite32(Adapter, MACB_TSR, MACB_TSR_ALL);
 }
@@ -1818,6 +1799,9 @@ Rp1GemPollReceive(
                                            0,
                                            Received,
                                            Flags);
+
+        /* NDIS_RECEIVE_FLAGS_RESOURCES requires immediate buffer reclamation. */
+        Rp1GemReleaseReceiveNetBufferLists(Adapter, NblChain);
     }
 
     Rp1GemWrite32(Adapter, MACB_RSR, MACB_RSR_ALL);
@@ -2481,6 +2465,8 @@ Rp1GemSendNetBufferLists(
     PNET_BUFFER_LIST NextNbl;
     PNET_BUFFER_LIST FailHead = NULL;
     PNET_BUFFER_LIST FailTail = NULL;
+    PNET_BUFFER_LIST OkHead = NULL;
+    PNET_BUFFER_LIST OkTail = NULL;
     ULONG CompleteFlags = 0;
     BOOLEAN KickTx = FALSE;
 
@@ -2541,10 +2527,11 @@ Rp1GemSendNetBufferLists(
             goto FailNbl;
         }
 
-        Adapter->TxBuffers[Index].NetBufferList = Nbl;
         Adapter->TxBuffers[Index].Length = Length;
         Adapter->TxHead = (Index + 1) % RP1GEM_TX_RING_SIZE;
         Adapter->TxFree--;
+
+        Rp1GemDcacheClean(Adapter->TxBuffers[Index].VirtualAddress, Length);
 
         Rp1GemSetDescriptorAddress(Adapter,
                                    &Adapter->TxRing[Index],
@@ -2557,6 +2544,13 @@ Rp1GemSendNetBufferLists(
             ((Index == (RP1GEM_TX_RING_SIZE - 1)) ? MACB_TX_WRAP : 0);
 
         NdisReleaseSpinLock(&Adapter->TxLock);
+
+        NET_BUFFER_LIST_STATUS(Nbl) = NDIS_STATUS_SUCCESS;
+        if (!OkHead)
+            OkHead = Nbl;
+        else
+            NET_BUFFER_LIST_NEXT_NBL(OkTail) = Nbl;
+        OkTail = Nbl;
         KickTx = TRUE;
         continue;
 
@@ -2575,8 +2569,17 @@ FailNbl:
                       MACB_NCR,
                       Rp1GemRead32(Adapter, MACB_NCR) | MACB_NCR_TSTART);
 
+    if (OkHead)
+    {
+        NET_BUFFER_LIST_NEXT_NBL(OkTail) = NULL;
+        NdisMSendNetBufferListsComplete(Adapter->MiniportHandle, OkHead, CompleteFlags);
+    }
+
     if (FailHead)
+    {
+        NET_BUFFER_LIST_NEXT_NBL(FailTail) = NULL;
         NdisMSendNetBufferListsComplete(Adapter->MiniportHandle, FailHead, CompleteFlags);
+    }
 
     Rp1GemDrainTxCompletions(Adapter, CompleteFlags);
 }
