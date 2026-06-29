@@ -59,6 +59,46 @@ typedef struct _SECURITY_ATTRIBUTES SECURITY_ATTRIBUTES, *LPSECURITY_ATTRIBUTES;
 #include <wingdi.h>
 #define _ENGINE_EXPORT_
 #include <winddi.h>
+
+/*
+ * win32k still builds with NTDDI_WS03SP1 for broad compatibility, but the
+ * internal display driver tables must be large enough for Win7-era CDD WDDM
+ * entry points. Keep these indices local to win32k instead of raising the
+ * subsystem-wide NTDDI target.
+ */
+#ifndef INDEX_DrvRenderHint
+#define INDEX_DrvRenderHint               93L
+#endif
+#ifndef INDEX_DrvCreateDeviceBitmapEx
+#define INDEX_DrvCreateDeviceBitmapEx     94L
+#endif
+#ifndef INDEX_DrvDeleteDeviceBitmapEx
+#define INDEX_DrvDeleteDeviceBitmapEx     95L
+#endif
+#ifndef INDEX_DrvAssociateSharedSurface
+#define INDEX_DrvAssociateSharedSurface   96L
+#endif
+#ifndef INDEX_DrvSynchronizeRedirectionBitmaps
+#define INDEX_DrvSynchronizeRedirectionBitmaps 97L
+#endif
+#ifndef INDEX_DrvAccumulateD3DDirtyRect
+#define INDEX_DrvAccumulateD3DDirtyRect   98L
+#endif
+#ifndef INDEX_DrvStartDxInterop
+#define INDEX_DrvStartDxInterop           99L
+#endif
+#ifndef INDEX_DrvEndDxInterop
+#define INDEX_DrvEndDxInterop            100L
+#endif
+#ifndef INDEX_DrvLockDisplayArea
+#define INDEX_DrvLockDisplayArea         101L
+#endif
+#ifndef INDEX_DrvUnlockDisplayArea
+#define INDEX_DrvUnlockDisplayArea       102L
+#endif
+#undef INDEX_LAST
+#define INDEX_LAST                       103L
+
 #define OEMRESOURCE
 #include <winuser.h>
 #include <ndk/rtltypes.h>

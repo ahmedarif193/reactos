@@ -1427,7 +1427,7 @@ static void test_SHGetImageList(void)
     BOOL ret;
     HIMAGELIST lg, sm;
     ULONG start_refs, refs;
-    int i, width, height, expect;
+    int i, width, height, expect = 0;
     BOOL dpi_aware = pIsProcessDPIAware && pIsProcessDPIAware();
 
     hr = SHGetImageList( SHIL_LARGE, &IID_IImageList, (void **)&list );

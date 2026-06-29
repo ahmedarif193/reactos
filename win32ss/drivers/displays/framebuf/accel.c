@@ -121,6 +121,52 @@ FbNormalizeAndClipRect(_In_ PPDEV ppdev,
     return TRUE;
 }
 
+static VOID
+FbShadowFlushPathResult(_In_ PPDEV ppdev,
+                        _In_opt_ const CLIPOBJ *pco)
+{
+    RECTL rclFlush;
+
+    if (pco != NULL)
+    {
+        FbShadowFlushRect(ppdev, &pco->rclBounds);
+        return;
+    }
+
+    rclFlush.left = 0;
+    rclFlush.top = 0;
+    rclFlush.right = ppdev->ScreenWidth;
+    rclFlush.bottom = ppdev->ScreenHeight;
+    FbShadowFlushRect(ppdev, &rclFlush);
+}
+
+static VOID
+FbPresentDirtyRect(
+   _In_ PPDEV ppdev,
+   _In_ const RECTL *prcl)
+{
+    RECTL rcl;
+    DWORD returned = 0;
+
+    if (!ppdev->SysmemFramebuffer)
+        return;
+
+    if (!FbNormalizeAndClipRect(ppdev, prcl, &rcl))
+        return;
+
+    if (EngDeviceIoControl(ppdev->hDriver,
+                           IOCTL_VIDEO_DXGK_PRESENT_DIRTY_RECT,
+                           &rcl,
+                           sizeof(rcl),
+                           NULL,
+                           0,
+                           &returned))
+    {
+        FB_DBG("dirty-rect present failed for (%ld,%ld)-(%ld,%ld)\n",
+               rcl.left, rcl.top, rcl.right, rcl.bottom);
+    }
+}
+
 FORCEINLINE VOID
 FbShadowCopyToVram(_Out_writes_bytes_all_(Length) PVOID Destination,
                    _In_reads_bytes_(Length) const VOID *Source,
@@ -171,7 +217,16 @@ FbShadowFlushRect(
    _In_ PPDEV ppdev,
    _In_ const RECTL *prcl)
 {
-   if (!ppdev->UsingShadow || !ppdev->ShadowBuffer || !ppdev->VramPtr || !prcl)
+   if (!ppdev->UsingShadow || !ppdev->ShadowBuffer || !prcl)
+      return;
+
+   if (ppdev->SysmemFramebuffer)
+   {
+      FbPresentDirtyRect(ppdev, prcl);
+      return;
+   }
+
+   if (!ppdev->VramPtr)
       return;
 
    {
@@ -193,7 +248,16 @@ FbShadowFlushRects(
    BOOLEAN valid1, valid2;
 
    if (!ppdev->UsingShadow || !ppdev->ShadowBuffer || !ppdev->VramPtr)
+   {
+      if (ppdev->UsingShadow && ppdev->ShadowBuffer && ppdev->SysmemFramebuffer)
+      {
+         if (prcl1 != NULL)
+            FbPresentDirtyRect(ppdev, prcl1);
+         if (prcl2 != NULL)
+            FbPresentDirtyRect(ppdev, prcl2);
+      }
       return;
+   }
 
    valid1 = FbNormalizeAndClipRect(ppdev, prcl1, &rcl1);
    valid2 = FbNormalizeAndClipRect(ppdev, prcl2, &rcl2);
@@ -1538,23 +1602,7 @@ DrvStrokePath(
                                pptlBrushOrg, plineattrs, mix);
         if (result)
         {
-            RECTFX rcfx;
-            RECTL rclPath;
-            PATHOBJ_vGetBounds(ppo, &rcfx);
-            rclPath.left   = rcfx.xLeft >> 4;
-            rclPath.top    = rcfx.yTop >> 4;
-            rclPath.right  = (rcfx.xRight + 15) >> 4;
-            rclPath.bottom = (rcfx.yBottom + 15) >> 4;
-            if (pco && pco->iDComplexity != DC_TRIVIAL)
-            {
-                RECTL rclFlush;
-                if (FbIntersectRectPair(&rclFlush, &rclPath, &pco->rclBounds))
-                    FbShadowFlushRect(ppdev, &rclFlush);
-            }
-            else
-            {
-                FbShadowFlushRect(ppdev, &rclPath);
-            }
+            FbShadowFlushPathResult(ppdev, pco);
         }
         return result;
     }
@@ -1580,23 +1628,7 @@ DrvFillPath(
                              mix, flOptions);
         if (result)
         {
-            RECTFX rcfx;
-            RECTL rclPath;
-            PATHOBJ_vGetBounds(ppo, &rcfx);
-            rclPath.left   = rcfx.xLeft >> 4;
-            rclPath.top    = rcfx.yTop >> 4;
-            rclPath.right  = (rcfx.xRight + 15) >> 4;
-            rclPath.bottom = (rcfx.yBottom + 15) >> 4;
-            if (pco && pco->iDComplexity != DC_TRIVIAL)
-            {
-                RECTL rclFlush;
-                if (FbIntersectRectPair(&rclFlush, &rclPath, &pco->rclBounds))
-                    FbShadowFlushRect(ppdev, &rclFlush);
-            }
-            else
-            {
-                FbShadowFlushRect(ppdev, &rclPath);
-            }
+            FbShadowFlushPathResult(ppdev, pco);
         }
         return result;
     }
@@ -1626,23 +1658,7 @@ DrvStrokeAndFillPath(
                                       pptlBrushOrg, mixFill, flOptions);
         if (result)
         {
-            RECTFX rcfx;
-            RECTL rclPath;
-            PATHOBJ_vGetBounds(ppo, &rcfx);
-            rclPath.left   = rcfx.xLeft >> 4;
-            rclPath.top    = rcfx.yTop >> 4;
-            rclPath.right  = (rcfx.xRight + 15) >> 4;
-            rclPath.bottom = (rcfx.yBottom + 15) >> 4;
-            if (pco && pco->iDComplexity != DC_TRIVIAL)
-            {
-                RECTL rclFlush;
-                if (FbIntersectRectPair(&rclFlush, &rclPath, &pco->rclBounds))
-                    FbShadowFlushRect(ppdev, &rclFlush);
-            }
-            else
-            {
-                FbShadowFlushRect(ppdev, &rclPath);
-            }
+            FbShadowFlushPathResult(ppdev, pco);
         }
         return result;
     }

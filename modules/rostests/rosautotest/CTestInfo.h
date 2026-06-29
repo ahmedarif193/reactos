@@ -9,6 +9,7 @@ class CTestInfo
 {
 public:
     wstring CommandLine;
+    string Executable;
     string Module;
     string Test;
     string Log;

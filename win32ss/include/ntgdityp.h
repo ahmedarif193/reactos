@@ -656,13 +656,58 @@ typedef struct _DRIVER_FUNCTIONS
     PFN_DrvNotify                  Notify;
     PFN_DrvSynchronizeSurface      SynchronizeSurface;
     PFN_DrvResetDevice             ResetDevice;
-    PVOID                          Reserved9;
-    PVOID                          Reserved10;
-    PVOID                          Reserved11; /* 92 */
+    PVOID                          Reserved9;                     /* 90 */
+    PVOID                          Reserved10;                    /* 91 */
+    PVOID                          Reserved11;                    /* 92 */
+    PVOID                          RenderHint;                    /* 93 */
+    PVOID                          CreateDeviceBitmapEx;          /* 94 */
+    PVOID                          DeleteDeviceBitmapEx;          /* 95 */
+    PVOID                          AssociateSharedSurface;        /* 96 */
+    PVOID                          SynchronizeRedirectionBitmaps; /* 97 */
+    PVOID                          AccumulateD3DDirtyRect;        /* 98 */
+    PVOID                          StartDxInterop;                /* 99 */
+    PVOID                          EndDxInterop;                  /* 100 */
+    PVOID                          LockDisplayArea;               /* 101 */
+    PVOID                          UnlockDisplayArea;             /* 102 */
 
     /* ReactOS specify */
     PFN_DrvEnableDriver            EnableDriver; //ReactOS Extra
 } DRIVER_FUNCTIONS, *PDRIVER_FUNCTIONS;
+
+/*
+ * Keep the internal DRIVER_FUNCTIONS layout aligned with Win7-era display
+ * DDIs even when the including module builds against an older NTDDI target.
+ */
+#ifndef INDEX_DrvRenderHint
+#define INDEX_DrvRenderHint               93L
+#endif
+#ifndef INDEX_DrvCreateDeviceBitmapEx
+#define INDEX_DrvCreateDeviceBitmapEx     94L
+#endif
+#ifndef INDEX_DrvDeleteDeviceBitmapEx
+#define INDEX_DrvDeleteDeviceBitmapEx     95L
+#endif
+#ifndef INDEX_DrvAssociateSharedSurface
+#define INDEX_DrvAssociateSharedSurface   96L
+#endif
+#ifndef INDEX_DrvSynchronizeRedirectionBitmaps
+#define INDEX_DrvSynchronizeRedirectionBitmaps 97L
+#endif
+#ifndef INDEX_DrvAccumulateD3DDirtyRect
+#define INDEX_DrvAccumulateD3DDirtyRect   98L
+#endif
+#ifndef INDEX_DrvStartDxInterop
+#define INDEX_DrvStartDxInterop           99L
+#endif
+#ifndef INDEX_DrvEndDxInterop
+#define INDEX_DrvEndDxInterop            100L
+#endif
+#ifndef INDEX_DrvLockDisplayArea
+#define INDEX_DrvLockDisplayArea         101L
+#endif
+#ifndef INDEX_DrvUnlockDisplayArea
+#define INDEX_DrvUnlockDisplayArea       102L
+#endif
 
 #define ASSERT_PFN(pfn) \
  C_ASSERT(FIELD_OFFSET(DRIVER_FUNCTIONS, pfn) == sizeof(PVOID) * INDEX_Drv##pfn)
@@ -752,5 +797,18 @@ ASSERT_PFN(QueryGlyphAttrs);
 ASSERT_PFN(Notify);
 ASSERT_PFN(SynchronizeSurface);
 ASSERT_PFN(ResetDevice);
+ASSERT_PFN(Reserved9);
+ASSERT_PFN(Reserved10);
+ASSERT_PFN(Reserved11);
+ASSERT_PFN(RenderHint);
+ASSERT_PFN(CreateDeviceBitmapEx);
+ASSERT_PFN(DeleteDeviceBitmapEx);
+ASSERT_PFN(AssociateSharedSurface);
+ASSERT_PFN(SynchronizeRedirectionBitmaps);
+ASSERT_PFN(AccumulateD3DDirtyRect);
+ASSERT_PFN(StartDxInterop);
+ASSERT_PFN(EndDxInterop);
+ASSERT_PFN(LockDisplayArea);
+ASSERT_PFN(UnlockDisplayArea);
 
 #endif

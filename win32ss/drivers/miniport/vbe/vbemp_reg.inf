@@ -3,7 +3,7 @@
 HKLM,"SYSTEM\CurrentControlSet\Services\vga","ErrorControl",0x00010001,0x00000000
 HKLM,"SYSTEM\CurrentControlSet\Services\vga","Group",0x00000000,"Video Save"
 HKLM,"SYSTEM\CurrentControlSet\Services\vga","ImagePath",0x00020000,"system32\drivers\vgapnp.sys"
-HKLM,"SYSTEM\CurrentControlSet\Services\vga","Start",0x00010001,0x00000001
+HKLM,"SYSTEM\CurrentControlSet\Services\vga","Start",0x00010001,0x00000004
 HKLM,"SYSTEM\CurrentControlSet\Services\vga","Type",0x00010001,0x00000001
 HKLM,"SYSTEM\CurrentControlSet\Services\vga","Tag",0x00010001,0x00000001
 HKLM,"SYSTEM\CurrentControlSet\Services\vga\Video","Service",0x00000000,"vga"

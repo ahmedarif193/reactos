@@ -837,6 +837,31 @@ IntVideoPortAddDevice(
     /* Get the initialization data we saved in VideoPortInitialize. */
     DriverExtension = IoGetDriverObjectExtension(DriverObject, DriverObject);
 
+    /*
+     * WDDM coexistence guard #1: if dxgkrnl already created an FDO above
+     * this PDO, do not attach a second FDO.  Return STATUS_DEVICE_ALREADY_ATTACHED
+     * so PnP knows the device is already owned.
+     */
+    if (VidPortCheckWddmFdoPresent(PhysicalDeviceObject))
+    {
+        WARN_(VIDEOPRT, "IntVideoPortAddDevice: dxgkrnl FDO already present on PDO %p — yielding to WDDM path\n",
+              PhysicalDeviceObject);
+        return STATUS_DEVICE_ALREADY_ATTACHED;
+    }
+
+    /*
+     * WDDM coexistence guard #2: if this miniport called DxgkInitialize (i.e.
+     * the driver-object extension's first ULONG >= DXGKDDI_INTERFACE_VERSION_VISTA),
+     * this is a WDDM driver.  Refuse to create an XDDM device for it; PnP will
+     * retry with dxgkrnl.sys.
+     */
+    if (VidPortIsWddmDriver(DriverObject))
+    {
+        WARN_(VIDEOPRT, "IntVideoPortAddDevice: miniport %p called DxgkInitialize — refusing XDDM AddDevice\n",
+              DriverObject);
+        return VidPortHandoffToWddm(NULL);
+    }
+
     /* Create adapter device object. */
     Status = IntVideoPortCreateAdapterDeviceObject(DriverObject,
                                                    DriverExtension,

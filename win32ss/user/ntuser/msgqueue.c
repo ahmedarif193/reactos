@@ -21,8 +21,69 @@ PUSER_MESSAGE_QUEUE gpqCursor;
 ULONG_PTR gdwMouseMoveExtraInfo = 0;
 DWORD gdwMouseMoveTimeStamp = 0;
 LIST_ENTRY usmList;
+static LONG gCursorDcFallbackCount = 0;
 
 /* FUNCTIONS *****************************************************************/
+
+static
+HDC
+FASTCALL
+IntAcquireCursorDC(
+    _Out_ PBOOL pbDeleteAfterUse)
+{
+    HDC hdc;
+    PDC pdc;
+
+    *pbDeleteAfterUse = FALSE;
+
+    hdc = IntGetScreenDC();
+    if (hdc)
+    {
+        pdc = DC_LockDc(hdc);
+        if (pdc)
+        {
+            BOOL bUsable;
+
+            bUsable = (pdc->dctype == DCTYPE_DIRECT &&
+                       pdc->ppdev != NULL &&
+                       pdc->ppdev->pSurface != NULL);
+            DC_UnlockDc(pdc);
+
+            if (bUsable)
+                return hdc;
+        }
+    }
+
+    if (gpmdev && gpmdev->ppdevGlobal && gpmdev->ppdevGlobal->pSurface)
+    {
+        UNICODE_STRING DriverName = RTL_CONSTANT_STRING(L"DISPLAY");
+        hdc = IntGdiCreateDC(&DriverName, NULL, NULL, NULL, FALSE);
+    }
+    else
+    {
+        hdc = NULL;
+    }
+
+    if (hdc)
+    {
+        *pbDeleteAfterUse = TRUE;
+        if (InterlockedIncrement(&gCursorDcFallbackCount) <= 4)
+            TRACE("Cursor path: using transient display DC fallback\n");
+    }
+
+    return hdc;
+}
+
+static
+VOID
+FASTCALL
+IntReleaseCursorDC(
+    _In_opt_ HDC hdc,
+    _In_ BOOL bDeleteAfterUse)
+{
+    if (bDeleteAfterUse && hdc)
+        GreDeleteObject(hdc);
+}
 
 CODE_SEG("INIT")
 NTSTATUS
@@ -95,7 +156,8 @@ UserSetCursor(
     BOOL ForceChange)
 {
     PCURICON_OBJECT OldCursor;
-    HDC hdcScreen;
+    HDC hdcScreen = NULL;
+    BOOL bDeleteScreenDC = FALSE;
     PTHREADINFO pti;
     PUSER_MESSAGE_QUEUE MessageQueue;
     PWND pWnd;
@@ -132,8 +194,7 @@ UserSetCursor(
     pWnd = IntTopLevelWindowFromPoint(gpsi->ptCursor.x, gpsi->ptCursor.y);
     if (pWnd && pWnd->head.pti->MessageQueue == MessageQueue)
     {
-       /* Get the screen DC */
-        if (!(hdcScreen = IntGetScreenDC()))
+        if (!(hdcScreen = IntAcquireCursorDC(&bDeleteScreenDC)))
         {
             return NULL;
         }
@@ -163,6 +224,7 @@ UserSetCursor(
             TRACE("Removing pointer!\n");
         }
         IntGetSysCursorInfo()->CurrentCursorObject = NewCursor;
+        IntReleaseCursorDC(hdcScreen, bDeleteScreenDC);
     }
 
     /* Return the old cursor */
@@ -173,15 +235,11 @@ UserSetCursor(
  * User32 macro NtUserShowCursor */
 int UserShowCursor(BOOL bShow)
 {
-    HDC hdcScreen;
+    HDC hdcScreen = NULL;
+    BOOL bDeleteScreenDC = FALSE;
     PTHREADINFO pti;
     PUSER_MESSAGE_QUEUE MessageQueue;
     PWND pWnd;
-
-    if (!(hdcScreen = IntGetScreenDC()))
-    {
-        return -1; /* No mouse */
-    }
 
     pti = PsGetCurrentThreadWin32Thread();
     MessageQueue = pti->MessageQueue;
@@ -203,6 +261,9 @@ int UserShowCursor(BOOL bShow)
     if (gpsi == NULL)
         return MessageQueue->iCursorLevel;
 
+    if (!(hdcScreen = IntAcquireCursorDC(&bDeleteScreenDC)))
+        return -1; /* No mouse */
+
     /* Check if cursor is above window owned by this MessageQueue */
     pWnd = IntTopLevelWindowFromPoint(gpsi->ptCursor.x, gpsi->ptCursor.y);
     if (pWnd && pWnd->head.pti->MessageQueue == MessageQueue)
@@ -223,6 +284,8 @@ int UserShowCursor(BOOL bShow)
         /* Update global info */
         IntGetSysCursorInfo()->ShowingCursor = MessageQueue->iCursorLevel;
     }
+
+    IntReleaseCursorDC(hdcScreen, bDeleteScreenDC);
 
     return MessageQueue->iCursorLevel;
 }
@@ -593,6 +656,7 @@ co_MsqInsertMouseMessage(MSG* Msg, DWORD flags, ULONG_PTR dwExtraInfo, BOOL Hook
 //   PDESKTOP pDesk;
    PWND pwnd, pwndDesktop;
    HDC hdcScreen;
+   BOOL bDeleteScreenDC = FALSE;
    PTHREADINFO pti;
    PUSER_MESSAGE_QUEUE MessageQueue;
    PSYSTEM_CURSORINFO CurInfo;
@@ -647,7 +711,7 @@ co_MsqInsertMouseMessage(MSG* Msg, DWORD flags, ULONG_PTR dwExtraInfo, BOOL Hook
        if (pwnd) Msg->hwnd = UserHMGetHandle(pwnd);
    }
 
-   hdcScreen = IntGetScreenDC();
+   hdcScreen = IntAcquireCursorDC(&bDeleteScreenDC);
    CurInfo = IntGetSysCursorInfo();
 
    /* Check if we found a window */
@@ -659,6 +723,7 @@ co_MsqInsertMouseMessage(MSG* Msg, DWORD flags, ULONG_PTR dwExtraInfo, BOOL Hook
        if (MessageQueue->QF_flags & QF_INDESTROY)
        {
           ERR("Mouse is over a Window with a Dead Message Queue!\n");
+          IntReleaseCursorDC(hdcScreen, bDeleteScreenDC);
           return;
        }
 
@@ -688,15 +753,16 @@ co_MsqInsertMouseMessage(MSG* Msg, DWORD flags, ULONG_PTR dwExtraInfo, BOOL Hook
                                            MessageQueue->CursorObject->hbmAlpha : MessageQueue->CursorObject->hbmColor,
                                        MessageQueue->CursorObject->xHotspot,
                                        MessageQueue->CursorObject->yHotspot,
-                                       gpsi->ptCursor.x,
-                                       gpsi->ptCursor.y,
+                                       Msg->pt.x,
+                                       Msg->pt.y,
                                        MessageQueue->CursorObject->hbmAlpha ? SPS_ALPHA : 0);
 
                } else
                    GreMovePointer(hdcScreen, Msg->pt.x, Msg->pt.y);
+
            }
            /* Check if we have to hide cursor */
-           else if (CurInfo->ShowingCursor >= 0)
+           else if (hdcScreen && CurInfo->ShowingCursor >= 0)
                GreMovePointer(hdcScreen, -1, -1);
 
            /* Update global cursor info */
@@ -735,6 +801,8 @@ co_MsqInsertMouseMessage(MSG* Msg, DWORD flags, ULONG_PTR dwExtraInfo, BOOL Hook
        GreMovePointer(hdcScreen, Msg->pt.x, Msg->pt.y);
        CurInfo->ShowingCursor = 0;
    }
+
+   IntReleaseCursorDC(hdcScreen, bDeleteScreenDC);
 }
 
 PUSER_MESSAGE FASTCALL
@@ -2378,11 +2446,14 @@ MsqCleanupMessageQueue(PTHREADINFO pti)
        if (IntGetSysCursorInfo()->CurrentCursorObject == pCursor)
        {
            HDC hdcScreen;
+           BOOL bDeleteScreenDC = FALSE;
 
-           /* Get the screen DC */
-           hdcScreen = IntGetScreenDC();
+           hdcScreen = IntAcquireCursorDC(&bDeleteScreenDC);
            if (hdcScreen)
+           {
                GreMovePointer(hdcScreen, -1, -1);
+               IntReleaseCursorDC(hdcScreen, bDeleteScreenDC);
+           }
            IntGetSysCursorInfo()->CurrentCursorObject = NULL;
        }
 

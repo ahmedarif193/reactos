@@ -12,6 +12,15 @@ DBG_DEFAULT_CHANNEL(UserPainting);
 BOOL UserExtTextOutW(HDC hdc, INT x, INT y, UINT flags, PRECTL lprc,
                      LPCWSTR lpString, UINT count);
 
+static LONG g_IntPrintWindowTraceCount;
+
+static __inline BOOL
+ShouldTraceIntPrintWindow(
+    _In_ LONG Sample)
+{
+    return (Sample <= 48 || ((Sample % 128) == 0));
+}
+
 /* PRIVATE FUNCTIONS **********************************************************/
 
 /**
@@ -1261,47 +1270,124 @@ IntPrintWindow(
     HDC hdcBlt,
     UINT nFlags)
 {
-    HDC hdcSrc;
-    INT cx, cy, xSrc, ySrc;
+    BOOL PublicizedCaptureDc = FALSE;
+    BOOL RetargetedCaptureDc = FALSE;
+    BOOL TargetIsForeignProcess;
+    HWND hWnd;
+    KAPC_STATE ApcState;
+    ULONG DcOwner = GDI_OBJ_HMGR_PUBLIC;
+    LRESULT Result;
+    PEPROCESS TargetProcess = NULL;
+    ULONG uPrintFlags;
+    LONG TraceIndex;
 
-    if ( nFlags & PW_CLIENTONLY)
+    if (!hdcBlt)
+        return FALSE;
+
+    hWnd = UserHMGetHandle(pwnd);
+    TargetIsForeignProcess = (pwnd->head.pti->ppi != PsGetCurrentProcessWin32Process());
+    if (TargetIsForeignProcess)
+        TargetProcess = pwnd->head.pti->ppi->peProcess;
+    uPrintFlags = PRF_CHECKVISIBLE | PRF_ERASEBKGND | PRF_CLIENT | PRF_CHILDREN;
+    if (!(nFlags & PW_CLIENTONLY))
+        uPrintFlags |= PRF_NONCLIENT;
+
+    TraceIndex = InterlockedIncrement(&g_IntPrintWindowTraceCount);
+    if (ShouldTraceIntPrintWindow(TraceIndex))
     {
-       cx = pwnd->rcClient.right - pwnd->rcClient.left;
-       cy = pwnd->rcClient.bottom - pwnd->rcClient.top;
-       xSrc = pwnd->rcClient.left - pwnd->rcWindow.left;
-       ySrc = pwnd->rcClient.top - pwnd->rcWindow.top;
+        ERR("IntPrintWindow[%ld]: hwnd=%p flags=0x%x print=0x%lx fnid=0x%x style=0x%08lx ex=0x%08lx state=0x%08lx state2=0x%08lx rcWindow=(%ld,%ld)-(%ld,%ld) rcClient=(%ld,%ld)-(%ld,%ld)\n",
+            TraceIndex,
+            hWnd,
+            nFlags,
+            uPrintFlags,
+            pwnd->fnid,
+            pwnd->style,
+            pwnd->ExStyle,
+            pwnd->state,
+            pwnd->state2,
+            pwnd->rcWindow.left,
+            pwnd->rcWindow.top,
+            pwnd->rcWindow.right,
+            pwnd->rcWindow.bottom,
+            pwnd->rcClient.left,
+            pwnd->rcClient.top,
+            pwnd->rcClient.right,
+            pwnd->rcClient.bottom);
     }
-    else
+
+    if (TargetIsForeignProcess)
     {
-       cx = pwnd->rcWindow.right - pwnd->rcWindow.left;
-       cy = pwnd->rcWindow.bottom - pwnd->rcWindow.top;
-       xSrc = 0;
-       ySrc = 0;
+        DcOwner = GreGetObjectOwner(hdcBlt);
+        if (DcOwner == GDI_OBJ_HMGR_POWNED)
+        {
+            PublicizedCaptureDc = GreSetDCOwner(hdcBlt, GDI_OBJ_HMGR_NONE);
+            if (!PublicizedCaptureDc)
+            {
+                ERR("IntPrintWindow[%ld]: hwnd=%p failed to share capture HDC %p for foreign process\n",
+                    TraceIndex,
+                    hWnd,
+                    hdcBlt);
+            }
+            else
+            {
+                KeStackAttachProcess(&TargetProcess->Pcb, &ApcState);
+                RetargetedCaptureDc = GreSetDCOwner(hdcBlt, GDI_OBJ_HMGR_POWNED);
+                KeUnstackDetachProcess(&ApcState);
+                if (!RetargetedCaptureDc)
+                {
+                    ERR("IntPrintWindow[%ld]: hwnd=%p failed to retarget capture HDC %p to target process\n",
+                        TraceIndex,
+                        hWnd,
+                        hdcBlt);
+                }
+            }
+        }
+
+        if (ShouldTraceIntPrintWindow(TraceIndex))
+        {
+            ERR("IntPrintWindow[%ld]: hwnd=%p foreignProcess=1 hdc=%p owner=0x%lx publicized=%d retargeted=%d\n",
+                TraceIndex,
+                hWnd,
+                hdcBlt,
+                DcOwner,
+                PublicizedCaptureDc,
+                RetargetedCaptureDc);
+        }
     }
 
-    // TODO: Setup Redirection for Print.
-    return FALSE;
+    Result = co_IntSendMessage(hWnd, WM_PRINT, (WPARAM)hdcBlt, (LPARAM)uPrintFlags);
 
-    /* Update the window just incase. */
-    co_IntUpdateWindows( pwnd, RDW_ALLCHILDREN, FALSE);
+    if (PublicizedCaptureDc)
+    {
+        if (RetargetedCaptureDc)
+        {
+            KeStackAttachProcess(&TargetProcess->Pcb, &ApcState);
+            if (!GreSetDCOwner(hdcBlt, GDI_OBJ_HMGR_NONE))
+            {
+                ERR("IntPrintWindow[%ld]: hwnd=%p failed to release target ownership for capture HDC %p\n",
+                    TraceIndex,
+                    hWnd,
+                    hdcBlt);
+            }
+            KeUnstackDetachProcess(&ApcState);
+        }
 
-    hdcSrc = UserGetDCEx( pwnd, NULL, DCX_CACHE|DCX_WINDOW);
-    /* Print window to printer context. */
-    NtGdiBitBlt( hdcBlt,
-                 0,
-                 0,
-                 cx,
-                 cy,
-                 hdcSrc,
-                 xSrc,
-                 ySrc,
-                 SRCCOPY,
-                 0,
-                 0);
+        if (!GreSetDCOwner(hdcBlt, GDI_OBJ_HMGR_POWNED))
+        {
+            ERR("IntPrintWindow[%ld]: hwnd=%p failed to restore capture HDC %p owner\n",
+                TraceIndex,
+                hWnd,
+                hdcBlt);
+        }
+    }
 
-    UserReleaseDC( pwnd, hdcSrc, FALSE);
-
-    // TODO: Release Redirection from Print.
+    if (ShouldTraceIntPrintWindow(TraceIndex))
+    {
+        ERR("IntPrintWindow[%ld]: hwnd=%p WM_PRINT result=0x%Ix\n",
+            TraceIndex,
+            hWnd,
+            Result);
+    }
 
     return TRUE;
 }
@@ -2243,7 +2329,16 @@ BOOL UserDrawCaption(
 
       if(!GreGradientFill(hDc, Vertices, 2, &gcap, 1, GRADIENT_FILL_RECT_H))
       {
-         ERR("GreGradientFill() failed!\n");
+         ERR("GreGradientFill() failed: hwnd=%p hdc=%p flags=0x%x style=0x%08lx ex=0x%08lx rect=(%ld,%ld)-(%ld,%ld)\n",
+             pWnd ? UserHMGetHandle(pWnd) : NULL,
+             hDc,
+             uFlags,
+             pWnd ? pWnd->style : 0,
+             pWnd ? pWnd->ExStyle : 0,
+             Rect.left,
+             Rect.top,
+             Rect.right,
+             Rect.bottom);
          goto cleanup;
       }
    }

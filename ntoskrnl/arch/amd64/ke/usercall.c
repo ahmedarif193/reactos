@@ -168,7 +168,18 @@ KiUserModeCallout(
         Status = MmGrowKernelStack((PVOID)InitialStack);
 
         /* Quit if we failed */
-        if (!NT_SUCCESS(Status)) return Status;
+        if (!NT_SUCCESS(Status))
+        {
+            DPRINT1("KiUserModeCallout: STACK OVERFLOW! "
+                    "InitialStack=%p StackBase=%p StackLimit=%p "
+                    "Used=0x%lX LargeStack=%d\n",
+                    (PVOID)InitialStack,
+                    CurrentThread->StackBase,
+                    (PVOID)CurrentThread->StackLimit,
+                    (ULONG)((ULONG_PTR)CurrentThread->StackBase - InitialStack),
+                    CurrentThread->LargeStack);
+            return Status;
+        }
     }
 
     /* Save the current callback stack and initial stack */

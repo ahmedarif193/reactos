@@ -1,7 +1,9 @@
 # api-ms-win-crt-locale-l1-1-0 - Auto-generated forwarders to ucrtbase.dll
 # Generated from ucrtbase.spec exports matching category patterns
 
+@ cdecl ___lc_codepage_func() ucrtbase.___lc_codepage_func
 @ cdecl ___lc_locale_name_func() ucrtbase.___lc_locale_name_func
+@ cdecl ___mb_cur_max_func() ucrtbase.___mb_cur_max_func
 @ cdecl __initialize_lconv_for_unsigned_char() ucrtbase.__initialize_lconv_for_unsigned_char
 @ cdecl _configthreadlocale(long) ucrtbase._configthreadlocale
 @ cdecl _create_locale(long str) ucrtbase._create_locale

@@ -918,12 +918,54 @@ BOOL WINAPI DECLSPEC_HOTPATCH wglSwapBuffers(HDC hdc)
 
 BOOL WINAPI wglSwapLayerBuffers(HDC hdc, UINT fuPlanes)
 {
+    struct wgl_dc_data* dc_data = get_dc_data(hdc);
+
+    if(!dc_data)
+    {
+        SetLastError(ERROR_INVALID_HANDLE);
+        return FALSE;
+    }
+
+    if(!dc_data->pixelformat)
+    {
+        SetLastError(ERROR_INVALID_PIXEL_FORMAT);
+        return FALSE;
+    }
+
+    if(dc_data->icd_data)
+        return dc_data->icd_data->DrvSwapLayerBuffers(hdc, fuPlanes);
+
+    /* Software implementation: only main plane (WGL_SWAP_MAIN_PLANE) is supported */
+    if(fuPlanes == WGL_SWAP_MAIN_PLANE)
+        return sw_SwapBuffers(hdc, dc_data);
+
     return FALSE;
 }
 
 DWORD WINAPI wglSwapMultipleBuffers(UINT count, CONST WGLSWAP * toSwap)
 {
-    return 0;
+    UINT i;
+    DWORD failMask = 0;
+
+    if (!count || !toSwap)
+        return 0;
+
+    for (i = 0; i < count; i++)
+    {
+        struct wgl_dc_data* dc_data = get_dc_data(toSwap[i].hdc);
+
+        if (dc_data && dc_data->icd_data && dc_data->icd_data->DrvSwapMultipleBuffers)
+        {
+            /* If the ICD supports atomic multi-swap, delegate the whole batch */
+            return dc_data->icd_data->DrvSwapMultipleBuffers(count, toSwap);
+        }
+
+        /* Fall back to per-DC swap */
+        if (!wglSwapLayerBuffers(toSwap[i].hdc, toSwap[i].uiFlags))
+            failMask |= (1 << i);
+    }
+
+    return failMask;
 }
 
 /* Clean up on DLL unload */

@@ -18,6 +18,7 @@
 @ stdcall EngClearEvent(ptr)
 @ stdcall EngComputeGlyphSet(long long long)
 @ stdcall EngControlSprites(ptr long)
+@ stdcall EngCreateRedirectionDeviceBitmap(ptr long long long)
 @ stdcall EngCopyBits(ptr ptr ptr ptr ptr ptr)
 @ stdcall EngCreateBitmap(long long long long long ptr)
 @ stdcall EngCreateClip()
@@ -104,6 +105,7 @@
 @ stdcall EngPlgBlt(ptr ptr ptr ptr ptr ptr ptr ptr ptr ptr long)
 @ stdcall EngProbeForRead(ptr long long) NTOSKRNL.ProbeForRead
 @ stdcall EngProbeForReadAndWrite(ptr long long) NTOSKRNL.ProbeForWrite
+@ stdcall EngQueryW32kCddInterface(long ptr ptr long)
 @ stdcall EngQueryDeviceAttribute(ptr long ptr long ptr long)
 @ stdcall EngQueryFileTimeStamp(ptr)
 @ stdcall EngQueryLocalTime(ptr)

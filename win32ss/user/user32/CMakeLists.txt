@@ -49,6 +49,7 @@ list(APPEND SOURCE
     windows/defwnd.c
     windows/dialog.c
     windows/draw.c
+    windows/dwm_stubs.c
     windows/font.c
     windows/hook.c
     windows/input.c

@@ -3212,7 +3212,7 @@ static void test_D3DXFloat_Array(void)
     {
         DWORD d;
         float f;
-    } single;
+    } single = { 0 };
 
     struct
     {

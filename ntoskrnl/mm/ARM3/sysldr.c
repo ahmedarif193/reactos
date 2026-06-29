@@ -1263,9 +1263,14 @@ MiResolveImageReferences(IN PVOID ImageBase,
         GdiLink = GdiLink ||
                   !(_strnicmp(ImportName, "win32k", sizeof("win32k") - 1));
 
-        /* We can also allow dxapi (for Windows compat, allow IRT and coverage) */
+        /*
+         * GDI/session drivers legitimately import core kernel exports too.
+         * Only reject non-core helpers here.
+         */
         NormalLink = NormalLink ||
                      ((_strnicmp(ImportName, "win32k", sizeof("win32k") - 1)) &&
+                      (_strnicmp(ImportName, "ntoskrnl", sizeof("ntoskrnl") - 1)) &&
+                      (_strnicmp(ImportName, "hal", sizeof("hal") - 1)) &&
                       (_strnicmp(ImportName, "dxapi", sizeof("dxapi") - 1)) &&
                       (_strnicmp(ImportName, "coverage", sizeof("coverage") - 1)) &&
                       (_strnicmp(ImportName, "irt", sizeof("irt") - 1)));
@@ -3538,7 +3543,8 @@ LoaderScan:
             /* It wasn't, so just return the data */
             *ModuleObject = LdrEntry;
             *ImageBaseAddress = LdrEntry->DllBase;
-            Status = STATUS_IMAGE_ALREADY_LOADED;
+            /* Windows returns 0xC000010E (STATUS_DRIVER_ALREADY_LOADED) here */
+            Status = (NTSTATUS)0xC000010EL;
         }
         else
         {

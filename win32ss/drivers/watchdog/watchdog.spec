@@ -1,3 +1,21 @@
+; Display Manager functions
+@ stdcall DMgrAcquireDisplayOwnership(ptr)
+@ stdcall DMgrAcquireGdiViewId(ptr)
+@ stdcall DMgrGetDisplayOwnership()
+@ stdcall DMgrReleaseDisplayOwnership(ptr)
+@ stdcall DMgrReleaseGdiViewId(long)
+@ stdcall DMgrWriteDeviceCountToRegistry(long)
+
+; Session Manager functions
+@ stdcall SMgrGetActiveSessionProcess()
+@ stdcall SMgrGdiCallout(ptr)
+
+; Watchdog diagnostic functions
+@ stdcall WdDiagInit(ptr long)
+@ stdcall WdDiagNotifyUser(ptr long)
+@ stdcall WdDiagShutdown(ptr)
+
+; Watchdog core functions
 @ fastcall WdEnterMonitoredSection(ptr)
 @ fastcall WdExitMonitoredSection(ptr)
 @ fastcall WdResetDeferredWatch(ptr)

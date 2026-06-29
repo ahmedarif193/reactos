@@ -1,5 +1,8 @@
 #pragma once
 
-#ifndef PROXY_CLSID_IS
-#define PROXY_CLSID_IS {0x79EAC9F1,0xBAF9,0x11CE,{0x8C,0x82,0x00,0xAA,0x00,0x4B,0xA9,0x0B}}
+/* Use the existing CLSID_PSFactoryBuffer defined in urlmon_main.c (via DEFINE_GUID + INITGUID).
+ * PROXY_CLSID causes rpcproxy.h to emit 'extern CLSID PROXY_CLSID' (declaration only),
+ * avoiding a duplicate definition with urlmon_main.c. */
+#ifndef PROXY_CLSID
+#define PROXY_CLSID CLSID_PSFactoryBuffer
 #endif

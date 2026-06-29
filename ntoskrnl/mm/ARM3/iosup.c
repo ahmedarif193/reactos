@@ -229,13 +229,52 @@ MmMapIoSpace(IN PHYSICAL_ADDRESS PhysicalAddress,
                                                NumberOfBytes);
 
     //
-    // Compute the PFN and check if it's a known I/O mapping
-    // Also translate the cache attribute
+    // Compute the PFN and check if it's a known I/O mapping.
+    // Also translate the cache attribute.
+    //
+    // Determine whether this is an I/O (MMIO) mapping by checking if
+    // the PFN is beyond the highest physical RAM page.  We must NOT
+    // rely solely on MiGetPfnEntry() for this determination because:
+    //
+    //   1. On amd64, PFNs for MMIO regions above 4 GB (e.g. 64-bit
+    //      PCI BARs) can be larger than MAXULONG, which causes the
+    //      bitmap index in MiGetPfnEntry to overflow when cast to ULONG.
+    //      The aliased bit index might correspond to a valid RAM PFN,
+    //      making MiGetPfnEntry return a non-NULL pointer into the PFN
+    //      database -- but that entry belongs to a different physical
+    //      page.  Dereferencing or trusting it corrupts state.
+    //
+    //   2. Even when the PFN fits in ULONG, MiGetPfnEntry returns
+    //      &MmPfnDatabase[Pfn].  If the PFN falls in a physical memory
+    //      hole (within MmHighestPhysicalPage but not in any memory
+    //      descriptor), the corresponding PFN database pages may not be
+    //      mapped (MiBuildPfnDatabase only maps PTEs for descriptor
+    //      ranges).  The returned pointer is garbage.
+    //
+    // Checking Pfn > MmHighestPhysicalPage is the correct, safe test:
+    // it is a simple integer comparison with no pointer dereference, and
+    // MmHighestPhysicalPage is set from the firmware memory map during
+    // MmInitSystem.  Any PFN above it is definitively MMIO.
     //
     Pfn = (PFN_NUMBER)(PhysicalAddress.QuadPart >> PAGE_SHIFT);
     PhysicalPage = Pfn;
-    Pfn1 = MiGetPfnEntry(Pfn);
-    IsIoMapping = (Pfn1 == NULL) ? TRUE : FALSE;
+    IsIoMapping = (Pfn > MmHighestPhysicalPage) ? TRUE : FALSE;
+
+    if (!IsIoMapping)
+    {
+        //
+        // PFN is within RAM range.  MiGetPfnEntry is safe to call here
+        // since the PFN database is mapped for all PFNs within the
+        // physical memory descriptors.  If MiGetPfnEntry returns NULL
+        // (PFN falls in a hole inside the RAM range), treat it as I/O.
+        //
+        Pfn1 = MiGetPfnEntry(Pfn);
+        if (Pfn1 == NULL)
+        {
+            IsIoMapping = TRUE;
+        }
+    }
+
     CacheAttribute = MiPlatformCacheAttributes[IsIoMapping][CacheType];
 
     //
@@ -317,10 +356,11 @@ MmMapIoSpace(IN PHYSICAL_ADDRESS PhysicalAddress,
 #endif
 
     //
-    // Sanity check
+    // Sanity check: Pfn must still match the original computation.
+    // Do NOT call MiGetPfnEntry again for MMIO PFNs -- it is unsafe
+    // to dereference PFN database entries outside the RAM range.
     //
-    Pfn = (PFN_NUMBER)(PhysicalAddress.QuadPart >> PAGE_SHIFT);
-    ASSERT((Pfn1 == MiGetPfnEntry(Pfn)) || (Pfn1 == NULL));
+    ASSERT(Pfn == (PFN_NUMBER)(PhysicalAddress.QuadPart >> PAGE_SHIFT));
 
     //
     // Do the mapping
@@ -359,17 +399,26 @@ MmMapIoSpace(IN PHYSICAL_ADDRESS PhysicalAddress,
     } while (--PageCount);
 
     //
-    // Flush TLB and caches after writing PTEs so stale cached lines from
-    // a previous mapping at the same VA cannot satisfy reads to the new
-    // non-cached / write-combined region.  One flush after all PTEs are
-    // written is sufficient (the old code flushed twice before the PTEs
-    // were even written, which was both redundant and expensive — each
-    // KeInvalidateAllCaches() executes WBINVD which serialises the entire
-    // pipeline and flushes L1/L2/L3).
+    // Always flush the TLB on all processors after writing the PTEs.
     //
+    // Even though x86-64 does not negatively cache invalid PTEs, we must
+    // flush because the system PTE allocator recycles VA ranges.  A stale
+    // TLB entry from a PREVIOUS mapping at the same VA (on this processor
+    // or another) could route accesses to the old physical page instead
+    // of the MMIO target.  This is the root cause of the intermittent
+    // "page fault on MmMapIoSpace VA for addresses above 4 GB" bug:
+    // a stale zero/invalid TLB entry from a prior MmUnmapIoSpace at the
+    // same VA wins the TLB lookup race against the freshly-written PTE,
+    // causing the access to fault.
+    //
+    // For non-cached or write-combined mappings we additionally invalidate
+    // all CPU caches (WBINVD) so that stale cached data from a prior
+    // cached mapping at the same VA cannot satisfy reads to the new
+    // non-cached / write-combined region.
+    //
+    KeFlushEntireTb(TRUE, TRUE);
     if (CacheAttribute != MiCached)
     {
-        KeFlushEntireTb(TRUE, TRUE);
         KeInvalidateAllCaches();
     }
 
@@ -411,24 +460,50 @@ MmUnmapIoSpace(IN PVOID BaseAddress,
     //
     // Is this an I/O mapping?
     //
-    if (!MiGetPfnEntry(Pfn))
+    // Use the same safe detection as MmMapIoSpace: check against
+    // MmHighestPhysicalPage first, then fall back to MiGetPfnEntry
+    // only for PFNs within the RAM range.  This avoids the ULONG
+    // truncation bug in MiGetPfnEntry's bitmap check on amd64 and
+    // the unmapped PFN database access for MMIO holes.
+    //
     {
-        CacheAttribute = MiGetPteCacheAttribute(PointerPte);
-        MiRemoveIoSpaceMap(Pfn,
-                           PageCount,
-                           CacheAttribute,
-                           BaseAddress);
+        BOOLEAN IsIoUnmap;
 
-        //
-        // Destroy the PTE
-        //
-        RtlZeroMemory(PointerPte, PageCount * sizeof(MMPTE));
+        if (Pfn > MmHighestPhysicalPage)
+        {
+            IsIoUnmap = TRUE;
+        }
+        else
+        {
+            IsIoUnmap = (MiGetPfnEntry(Pfn) == NULL) ? TRUE : FALSE;
+        }
 
-        //
-        // Blow the TLB
-        //
-        KeFlushEntireTb(TRUE, TRUE);
+        if (IsIoUnmap)
+        {
+            CacheAttribute = MiGetPteCacheAttribute(PointerPte);
+            MiRemoveIoSpaceMap(Pfn,
+                               PageCount,
+                               CacheAttribute,
+                               BaseAddress);
+        }
     }
+
+    //
+    // Zero the PTEs before releasing them.  This must happen for ALL
+    // mappings (both I/O and RAM-backed) so that MiReleaseSystemPtes
+    // does not inherit PTEs with valid content.  The original code only
+    // zeroed PTEs for I/O mappings, leaving RAM-backed pages with valid
+    // PTEs that could cause stale TLB hits after the PTEs were recycled.
+    //
+    RtlZeroMemory(PointerPte, PageCount * sizeof(MMPTE));
+
+    //
+    // Flush the TLB so that stale entries pointing to the old physical
+    // pages cannot be used after the PTEs are returned to the free pool.
+    // Without this, a newly-allocated mapping at the same VA could see
+    // accesses routed to the OLD physical page via cached TLB entries.
+    //
+    KeFlushEntireTb(TRUE, TRUE);
 
     //
     // Release the PTEs

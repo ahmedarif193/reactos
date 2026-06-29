@@ -1101,6 +1101,12 @@ PspExitProcess(IN BOOLEAN LastThread,
 
         /* Run the Notification Routines */
         PspRunCreateProcessNotifyRoutines(Process, FALSE);
+
+        /* Run the Ex-variant notification routines for process exit.
+         * A NULL CreateInfo pointer signals termination to callbacks. */
+        PspRunCreateProcessNotifyRoutinesEx(Process,
+                                            Process->UniqueProcessId,
+                                            NULL);
     }
 
     /* Cleanup the power state */

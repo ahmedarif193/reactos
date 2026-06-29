@@ -13,6 +13,29 @@ static const DWORD ListTimeout = 10000;
 // Otherwise, sysreg2 kills the VM before we can kill the process.
 static const DWORD ProcessActivityTimeout = 170000;
 
+static bool
+IsTestRunnerExecutable(PCWSTR FileName)
+{
+    size_t Length;
+
+    Length = wcslen(FileName);
+    if (Length < 4 || _wcsicmp(FileName + Length - 4, L".exe") != 0)
+        return false;
+
+    return _wcsicmp(FileName, L"kmtest_.exe") == 0 ||
+           wcsstr(FileName, L"_apitest") != NULL ||
+           wcsstr(FileName, L"_winetest") != NULL ||
+           wcsstr(FileName, L"_unittest") != NULL ||
+           wcsstr(FileName, L"_rostest") != NULL ||
+           wcsstr(FileName, L"_drvtest") != NULL;
+}
+
+static bool
+ShouldUseTestExecutable(PCWSTR FileName)
+{
+    return _wcsicmp(FileName, TestName) != 0 && IsTestRunnerExecutable(FileName);
+}
+
 
 /**
  * Constructs a CWineTest object.
@@ -44,7 +67,7 @@ CWineTest::CWineTest()
  */
 CWineTest::~CWineTest()
 {
-    if(m_hFind)
+    if(m_hFind && m_hFind != INVALID_HANDLE_VALUE)
         FindClose(m_hFind);
 
     if(m_ListBuffer)
@@ -60,33 +83,9 @@ CWineTest::~CWineTest()
 bool
 CWineTest::GetNextFile()
 {
-    bool FoundFile = false;
     WIN32_FIND_DATAW fd;
 
-    /* Did we already begin searching for files? */
-    if (m_hFind)
-    {
-        /* Then get the next file (if any) */
-        if (FindNextFileW(m_hFind, &fd))
-        {
-            // printf("cFileName is '%S'.\n", fd.cFileName);
-            /* If it was NOT rosautotest.exe then proceed as normal */
-            if (_wcsicmp(fd.cFileName, TestName) != 0)
-            {
-                FoundFile = true;
-            }
-            else
-            {
-                /* It was rosautotest.exe so get the next file (if any) */
-                if (FindNextFileW(m_hFind, &fd))
-                {
-                    FoundFile = true;
-                }
-                // printf("cFileName is '%S'.\n", fd.cFileName);
-            }
-        }
-    }
-    else
+    if (!m_hFind)
     {
         /* Start searching for test files */
         wstring FindPath = m_TestPath;
@@ -107,31 +106,31 @@ CWineTest::GetNextFile()
         /* Search for the first file and check whether we got one */
         m_hFind = FindFirstFileW(FindPath.c_str(), &fd);
 
-        /* If we returned a good handle */
-        if (m_hFind != INVALID_HANDLE_VALUE)
+        if (m_hFind == INVALID_HANDLE_VALUE)
         {
-            // printf("cFileName is '%S'.\n", fd.cFileName);
-            /* If it was NOT rosautotest.exe then proceed as normal */
-            if (_wcsicmp(fd.cFileName, TestName) != 0)
-            {
-                FoundFile = true;
-            }
-            else
-            {
-                /* It was rosautotest.exe so get the next file (if any) */
-                if (FindNextFileW(m_hFind, &fd))
-                {
-                    FoundFile = true;
-                }
-                // printf("cFileName is '%S'.\n", fd.cFileName);
-            }
+            m_hFind = NULL;
+            return false;
+        }
+
+        if (ShouldUseTestExecutable(fd.cFileName))
+        {
+            m_CurrentFile = fd.cFileName;
+            return true;
         }
     }
 
-    if(FoundFile)
-        m_CurrentFile = fd.cFileName;
+    while (FindNextFileW(m_hFind, &fd))
+    {
+        if (ShouldUseTestExecutable(fd.cFileName))
+        {
+            m_CurrentFile = fd.cFileName;
+            return true;
+        }
+    }
 
-    return FoundFile;
+    FindClose(m_hFind);
+    m_hFind = NULL;
+    return false;
 }
 
 /**
@@ -273,6 +272,7 @@ CWineTest::GetNextTestInfo()
                     TestInfo->CommandLine += m_CurrentFile;
                     TestInfo->CommandLine += ' ';
                     TestInfo->CommandLine += AsciiToUnicode(m_CurrentTest);
+                    TestInfo->Executable = UnicodeToAscii(m_CurrentFile);
 
                     /* Store the Module name */
                     UnderscorePosition = m_CurrentFile.find_last_of('_');
@@ -323,7 +323,7 @@ CWineTest::RunTest(CTestInfo* TestInfo)
     DWORD BytesAvailable;
     stringstream ss, ssFinish;
     DWORD StartTime;
-    float TotalTime;
+    string OutputPrefix;
     string tailString;
     CPipe Pipe;
     char Buffer[1024];
@@ -332,6 +332,11 @@ CWineTest::RunTest(CTestInfo* TestInfo)
     StringOut(ss.str());
 
     SetCurrentDirectoryW(m_TestPath.c_str());
+    OutputPrefix = "[";
+    OutputPrefix += TestInfo->Executable;
+    OutputPrefix += ":";
+    OutputPrefix += TestInfo->Test;
+    OutputPrefix += "] ";
 
     StartTime = GetTickCount();
 
@@ -348,7 +353,7 @@ CWineTest::RunTest(CTestInfo* TestInfo)
             {
                 /* Output text through StringOut, even while the test is still running */
                 Buffer[BytesAvailable] = 0;
-                tailString = StringOut(tailString.append(string(Buffer)), false);
+                tailString = StringOutWithPrefix(tailString.append(string(Buffer)), OutputPrefix, false);
 
                 if (Configuration.DoSubmit())
                     TestInfo->Log += Buffer;
@@ -373,7 +378,7 @@ CWineTest::RunTest(CTestInfo* TestInfo)
     catch(CTestException& e)
     {
         if(!tailString.empty())
-            StringOut(tailString);
+            StringOutWithPrefix(tailString, OutputPrefix);
         tailString.clear();
         StringOut(e.GetMessage());
         TestInfo->Log += e.GetMessage();
@@ -381,11 +386,10 @@ CWineTest::RunTest(CTestInfo* TestInfo)
 
     /* Print what's left */
     if(!tailString.empty())
-        StringOut(tailString);
+        StringOutWithPrefix(tailString, OutputPrefix);
 
-    TotalTime = ((float)GetTickCount() - StartTime)/1000;
     ssFinish << "Test " << TestInfo->Test << " completed in ";
-    ssFinish << setprecision(2) << fixed << TotalTime << " seconds." << endl;
+    ssFinish << FormatMillisecondsAsSeconds(GetTickCount() - StartTime) << " seconds." << endl;
     StringOut(ssFinish.str());
     TestInfo->Log += ssFinish.str();
 }

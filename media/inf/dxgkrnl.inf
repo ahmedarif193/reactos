@@ -1,0 +1,183 @@
+; dxgkrnl.inf
+;
+; INF file for the DirectX Graphics Kernel (dxgkrnl.sys).
+;
+; dxgkrnl.sys is a PORT DRIVER, not a device driver.  It is analogous to
+; storport.sys or videoprt.sys: it provides a stable ABI (DxgkInitialize)
+; that WDDM miniport drivers call from their DriverEntry routines.
+;
+; Because dxgkrnl.sys does not bind to a specific PnP device, it is
+; installed as a standalone kernel-mode service rather than via a device-
+; class INF.  This mirrors how win32k.sys is a system component with its
+; own installation path independent of any device.
+;
+; INSTALLATION NOTE:
+;   This INF is processed by the ReactOS/Windows text-mode setup (syssetup)
+;   and/or by "Setup /a" silent installation.  It may also be passed to
+;   SetupAPI via:
+;       rundll32 setupapi.dll,InstallHinfSection DefaultInstall 128 dxgkrnl.inf
+;
+; LOAD ORDER:
+;   StartType = SERVICE_SYSTEM_START (1)
+;   LoadOrderGroup = "Video"
+;
+;   The "Video" group loads during IopInitializeSystemDrivers() before the
+;   "Video Save" group where WDDM miniports reside.  This guarantees that
+;   DxgkInitialize is callable by any miniport DriverEntry at the time PnP
+;   triggers AddDevice for display adapters.
+;
+;   Reference: boot/bootdata/hivesys.inf  ServiceGroupOrder "Video" entry.
+;
+; ---------------------------------------------------------------------------
+
+[Version]
+Signature   = "$Windows NT$"
+; No Class/ClassGUID: dxgkrnl is not a device driver, so it has no device class.
+Provider    = %ReactOS%
+DriverVer   = 03/17/2026,1.0.0.0
+
+; ---------------------------------------------------------------------------
+; Destination directories
+;
+;   12  = %SystemRoot%\System32\Drivers
+; ---------------------------------------------------------------------------
+
+[DestinationDirs]
+DefaultDestDir          = 12
+DxgKrnl_CopyFiles       = 12
+
+; ---------------------------------------------------------------------------
+; Source disks (required by SetupAPI even for standalone INFs)
+; ---------------------------------------------------------------------------
+
+[SourceDisksNames]
+1 = %DiskName%,,,""
+
+[SourceDisksFiles]
+dxgkrnl.sys = 1,,
+
+; ---------------------------------------------------------------------------
+; Default install section
+;
+; Used when the INF is invoked directly (e.g., via DefaultInstall).
+; Copies the binary and installs the service entry.
+; ---------------------------------------------------------------------------
+
+[DefaultInstall]
+CopyFiles   = DxgKrnl_CopyFiles
+AddReg      = DxgKrnl_AddReg
+
+[DefaultInstall.Services]
+AddService  = dxgkrnl, 0, DxgKrnl_Service_Inst, DxgKrnl_EventLog_Inst
+
+; ---------------------------------------------------------------------------
+; File copy list
+; ---------------------------------------------------------------------------
+
+[DxgKrnl_CopyFiles]
+dxgkrnl.sys
+
+; ---------------------------------------------------------------------------
+; Service installation
+;
+; Type        = 1  SERVICE_KERNEL_DRIVER
+; StartType   = 1  SERVICE_SYSTEM_START
+;               dxgkrnl must be resident before any WDDM miniport DriverEntry
+;               runs, since miniports call DxgkInitialize() from DriverEntry.
+; ErrorControl= 1  SERVICE_ERROR_NORMAL
+;               Boot failure is non-fatal; the system can fall back to VGA/
+;               XDDM display if no WDDM miniport is present.
+; LoadOrderGroup  = "Video"
+;               Placed in the "Video" group so it loads after "Video Init"
+;               (Blue screen driver, etc.) but before "Video Save" where
+;               WDDM miniport .sys files are loaded.
+;               See hivesys.inf ServiceGroupOrder for the full ordering.
+; ---------------------------------------------------------------------------
+
+[DxgKrnl_Service_Inst]
+DisplayName     = %DxgKrnl_SvcDesc%
+ServiceType     = %SERVICE_KERNEL_DRIVER%
+StartType       = %SERVICE_SYSTEM_START%
+ErrorControl    = %SERVICE_ERROR_NORMAL%
+ServiceBinary   = %12%\dxgkrnl.sys
+LoadOrderGroup  = Video
+Description     = %DxgKrnl_Description%
+
+; ---------------------------------------------------------------------------
+; Event log registration
+;
+; Registers dxgkrnl as a source under the System event log so that kernel-
+; mode debug output can be directed to the Windows Event Log infrastructure.
+; ---------------------------------------------------------------------------
+
+[DxgKrnl_EventLog_Inst]
+AddReg = DxgKrnl_EventLog_AddReg
+
+[DxgKrnl_EventLog_AddReg]
+; EventMessageFile points to the standard IoLogMsg.dll message table.
+HKR,, EventMessageFile, %REG_EXPAND_SZ%, "%%SystemRoot%%\System32\IoLogMsg.dll"
+; TypesSupported = 7 (Error | Warning | Information)
+HKR,, TypesSupported,   %REG_DWORD%,     7
+
+; ---------------------------------------------------------------------------
+; Additional registry values written under the Services\dxgkrnl key.
+;
+; The "KernelDriverVersion" value is read by user-mode components (dxgi.dll,
+; d3d10.dll) to confirm the WDDM version supported by dxgkrnl.  A value of
+; 1 indicates WDDM 1.0 (Vista baseline).  ReactOS increments this as
+; additional DDI revisions are implemented.
+;
+; The "DisableBlocklist" value is advisory: set to 1 to suppress any
+; hardware-specific block-list checks during early bringup.
+; ---------------------------------------------------------------------------
+
+[DxgKrnl_AddReg]
+; Version advertisement for user-mode DXGI/D3D runtimes.
+HKLM, SYSTEM\CurrentControlSet\Services\dxgkrnl, KernelDriverVersion, %REG_DWORD%, 1
+
+; During early ReactOS WDDM bringup, suppress hardware workaround blocklists.
+HKLM, SYSTEM\CurrentControlSet\Services\dxgkrnl, DisableBlocklist, %REG_DWORD%, 1
+
+; Seed the GraphicsDrivers control key that win32k/dxgkrnl use to discover
+; the WDDM subsystem mode at runtime.  The "DxSubSystem" value tells win32k
+; that a WDDM-capable graphics kernel is present.
+HKLM, SYSTEM\CurrentControlSet\Control\GraphicsDrivers, DxSubSystem, %REG_DWORD%, 1
+
+; ---------------------------------------------------------------------------
+; Uninstall section (referenced by Add/Remove Programs if present)
+; ---------------------------------------------------------------------------
+
+[DefaultUninstall]
+DelReg      = DxgKrnl_DelReg
+DelFiles    = DxgKrnl_CopyFiles
+
+[DefaultUninstall.Services]
+DelService  = dxgkrnl, 0x200    ; SPSVCINST_STOPSERVICE
+
+[DxgKrnl_DelReg]
+HKLM, SYSTEM\CurrentControlSet\Services\dxgkrnl
+HKLM, SYSTEM\CurrentControlSet\Control\GraphicsDrivers, DxSubSystem
+
+; ---------------------------------------------------------------------------
+; Strings
+; ---------------------------------------------------------------------------
+
+[Strings]
+; Non-localizable
+ReactOS                 = "ReactOS Project"
+DiskName                = "ReactOS DirectX Graphics Kernel Installation Disk"
+
+; Service constants (numeric values written as string tokens so the INF
+; engine substitutes the DWORD values during AddService processing).
+SERVICE_KERNEL_DRIVER   = 0x00000001
+SERVICE_SYSTEM_START    = 0x00000001
+SERVICE_ERROR_NORMAL    = 0x00000001
+
+; Registry type tokens
+REG_DWORD               = 0x00010001
+REG_EXPAND_SZ           = 0x00020000
+REG_SZ                  = 0x00000000
+
+; Localizable
+DxgKrnl_SvcDesc         = "DirectX Graphics Kernel"
+DxgKrnl_Description     = "ReactOS DirectX Graphics Kernel (dxgkrnl.sys) - WDDM port driver"

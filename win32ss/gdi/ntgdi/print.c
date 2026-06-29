@@ -149,6 +149,77 @@ NtGdiExtEscape(
       DC_UnlockDc(pDC);
    }
 
+   /*
+    * Handle DWM-specific escape codes before checking driver support.
+    * The DWM compositor uses this to suppress cursor hide/show during
+    * its full-screen composition present, which would otherwise cause
+    * visible cursor flicker at the composition frame rate.
+    */
+#define DWM_ESCAPE_SUPPRESS_CURSOR      0x44574D01
+#define DWM_ESCAPE_COMPOSITION_SYNC     0x44574D02
+   if (Escape == DWM_ESCAPE_SUPPRESS_CURSOR)
+   {
+      LONG Value;
+
+      if (InSize < (INT)sizeof(LONG) || UnsafeInData == NULL)
+      {
+         EngSetLastError(ERROR_INVALID_PARAMETER);
+         Result = -1;
+         goto Exit;
+      }
+
+      _SEH2_TRY
+      {
+         ProbeForRead(UnsafeInData, sizeof(LONG), 1);
+         Value = *(volatile LONG *)UnsafeInData;
+      }
+      _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
+      {
+         SetLastNtError(_SEH2_GetExceptionCode());
+         Result = -1;
+         goto Exit;
+      }
+      _SEH2_END;
+
+      InterlockedExchange(&ppdev->DwmSuppressMouseSafety, Value);
+      Result = 1;
+      goto Exit;
+   }
+
+   /*
+    * DWM composition synchronization: signals the dxgkrnl present worker
+    * that a composition BitBlt is in progress so it skips copying a
+    * partially-drawn shadow framebuffer.  Value=1 begin, Value=0 end.
+    */
+   if (Escape == DWM_ESCAPE_COMPOSITION_SYNC)
+   {
+      LONG Value;
+
+      if (InSize < (INT)sizeof(LONG) || UnsafeInData == NULL)
+      {
+         EngSetLastError(ERROR_INVALID_PARAMETER);
+         Result = -1;
+         goto Exit;
+      }
+
+      _SEH2_TRY
+      {
+         ProbeForRead(UnsafeInData, sizeof(LONG), 1);
+         Value = *(volatile LONG *)UnsafeInData;
+      }
+      _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
+      {
+         SetLastNtError(_SEH2_GetExceptionCode());
+         Result = -1;
+         goto Exit;
+      }
+      _SEH2_END;
+
+      InterlockedExchange(&ppdev->DwmCompositionInProgress, Value);
+      Result = 1;
+      goto Exit;
+   }
+
    /* See if we actually have a driver function to call */
    if (ppdev->DriverFunctions.Escape == NULL)
    {

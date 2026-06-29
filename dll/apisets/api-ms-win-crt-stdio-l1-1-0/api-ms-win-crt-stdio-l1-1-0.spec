@@ -22,6 +22,7 @@
 @ cdecl __stdio_common_vfwscanf(int64 ptr wstr ptr ptr) ucrtbase.__stdio_common_vfwscanf
 @ cdecl __stdio_common_vsnprintf_s(int64 ptr long long str ptr ptr) ucrtbase.__stdio_common_vsnprintf_s
 @ cdecl __stdio_common_vsnwprintf_s(int64 ptr long long wstr ptr ptr) ucrtbase.__stdio_common_vsnwprintf_s
+@ cdecl __stdio_common_vsprintf(int64 ptr long str ptr ptr) ucrtbase.__stdio_common_vsprintf
 @ cdecl __stdio_common_vsprintf_p(int64 ptr long str ptr ptr) ucrtbase.__stdio_common_vsprintf_p
 @ cdecl __stdio_common_vsprintf_s(int64 ptr long str ptr ptr) ucrtbase.__stdio_common_vsprintf_s
 @ cdecl __stdio_common_vsscanf(int64 ptr long str ptr ptr) ucrtbase.__stdio_common_vsscanf
@@ -30,9 +31,11 @@
 @ cdecl __stdio_common_vswprintf_s(int64 ptr long wstr ptr ptr) ucrtbase.__stdio_common_vswprintf_s
 @ cdecl __stdio_common_vswscanf(int64 ptr long wstr ptr ptr) ucrtbase.__stdio_common_vswscanf
 @ cdecl __p__commode() ucrtbase.__p__commode
+@ cdecl _close(long) ucrtbase._close
 @ cdecl _cgets(ptr) ucrtbase._cgets
 @ cdecl _cgets_s(str long ptr) ucrtbase._cgets_s
 @ cdecl _cputs(str) ucrtbase._cputs
+@ cdecl _dup(long) ucrtbase._dup
 @ cdecl _fclose_nolock(ptr) ucrtbase._fclose_nolock
 @ cdecl _fcloseall() ucrtbase._fcloseall
 @ cdecl _fdopen(long str) ucrtbase._fdopen
@@ -42,6 +45,7 @@
 @ cdecl _fgetwc_nolock(ptr) ucrtbase._fgetwc_nolock
 @ cdecl _fgetwchar() ucrtbase._fgetwchar
 @ cdecl _fileno(ptr) ucrtbase._fileno
+@ cdecl _isatty(long) ucrtbase._isatty
 @ cdecl _fputc_nolock(long ptr) ucrtbase._fputc_nolock
 @ cdecl _fputchar(long) ucrtbase._fputchar
 @ cdecl _fputwc_nolock(long ptr) ucrtbase._fputwc_nolock
@@ -66,6 +70,7 @@
 @ cdecl _getwch_nolock() ucrtbase._getwch_nolock
 @ cdecl _getwche() ucrtbase._getwche
 @ cdecl _getwche_nolock() ucrtbase._getwche_nolock
+@ cdecl _open(str long) ucrtbase._open
 @ cdecl _o___conio_common_vcprintf(int64 str ptr ptr) ucrtbase._o___conio_common_vcprintf
 @ cdecl _o___conio_common_vcprintf_p() ucrtbase._o___conio_common_vcprintf_p
 @ cdecl _o___conio_common_vcprintf_s() ucrtbase._o___conio_common_vcprintf_s
@@ -188,6 +193,7 @@
 @ cdecl _o_tmpnam_s(ptr long) ucrtbase._o_tmpnam_s
 @ cdecl _o_ungetc(long ptr) ucrtbase._o_ungetc
 @ cdecl _o_ungetwc(long ptr) ucrtbase._o_ungetwc
+@ cdecl _read(long ptr long) ucrtbase._read
 @ cdecl _putc_nolock(long ptr) ucrtbase._putc_nolock
 @ cdecl _putch(long) ucrtbase._putch
 @ cdecl _putch_nolock(long) ucrtbase._putch_nolock
@@ -195,6 +201,7 @@
 @ cdecl _putwch(long) ucrtbase._putwch
 @ cdecl _putwch_nolock(long) ucrtbase._putwch_nolock
 @ cdecl _set_printf_count_output(long) ucrtbase._set_printf_count_output
+@ cdecl _setmode(long long) ucrtbase._setmode
 @ cdecl _tempnam(str str) ucrtbase._tempnam
 @ cdecl _ungetc_nolock(long ptr) ucrtbase._ungetc_nolock
 @ cdecl _ungetch(long) ucrtbase._ungetch

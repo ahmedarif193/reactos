@@ -1,5 +1,5 @@
 
-spec2def(watchdog.sys watchdog.spec)
+spec2def(watchdog.sys watchdog.spec ADD_IMPORTLIB)
 
 add_library(watchdog MODULE
     watchdog.c

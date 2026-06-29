@@ -266,6 +266,12 @@ InbvDriverInitialize(
                     Fb->FrameBufferSize,
                     Fb->PixelFormat);
         }
+        else
+        {
+            DPRINT1("INBV: No framebuffer from loader (Base=%I64x Size=0x%lx)\n",
+                    (ULONGLONG)Fb->FrameBufferBase.QuadPart,
+                    Fb->FrameBufferSize);
+        }
 
         if (Extension->GopFramebuffers && Extension->GopFramebufferCount)
         {

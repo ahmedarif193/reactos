@@ -7,6 +7,7 @@ spec2def(d3d9.dll d3d9.spec ADD_IMPORTLIB)
 list(APPEND SOURCE
     buffer.c
     d3d9_main.c
+    d3d9_wddm.c
     device.c
     directx.c
     query.c

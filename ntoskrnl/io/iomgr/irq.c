@@ -72,6 +72,38 @@ IopGetMessageEntriesFromInfo(
 }
 
 static
+PCM_PARTIAL_RESOURCE_DESCRIPTOR
+IopFindMessageInterruptDescriptor(
+    _In_ PCM_RESOURCE_LIST ResourceList)
+{
+    PCM_FULL_RESOURCE_DESCRIPTOR FullDescriptor;
+    ULONG i;
+
+    if (ResourceList == NULL)
+        return NULL;
+
+    FullDescriptor = &ResourceList->List[0];
+    for (i = 0; i < ResourceList->Count; i++, FullDescriptor++)
+    {
+        PCM_PARTIAL_RESOURCE_LIST PartialList = &FullDescriptor->PartialResourceList;
+        ULONG j;
+
+        for (j = 0; j < PartialList->Count; j++)
+        {
+            PCM_PARTIAL_RESOURCE_DESCRIPTOR Descriptor = &PartialList->PartialDescriptors[j];
+
+            if (Descriptor->Type == CmResourceTypeInterrupt &&
+                (Descriptor->Flags & CM_RESOURCE_INTERRUPT_MESSAGE))
+            {
+                return Descriptor;
+            }
+        }
+    }
+
+    return NULL;
+}
+
+static
 KAFFINITY
 IopSelectMessageTarget(
     _In_ KAFFINITY Affinity,
@@ -521,8 +553,12 @@ IoConnectInterruptEx(
     PIO_INTERRUPT_MESSAGE_INFO MessageInfo;
     PIO_INTERRUPT_MESSAGE_ENTRY MessageEntries;
     PCM_RESOURCE_LIST ResourceList = NULL;
+    PCM_RESOURCE_LIST RawResourceList = NULL;
+    PCM_RESOURCE_LIST TranslatedResourceList = NULL;
     PCM_FULL_RESOURCE_DESCRIPTOR FullDescriptor;
     PCM_PARTIAL_RESOURCE_DESCRIPTOR Descriptor = NULL;
+    PCM_PARTIAL_RESOURCE_DESCRIPTOR RawDescriptor = NULL;
+    PDEVICE_NODE DeviceNode;
     ULONG Length = 0;
     ULONG MessageCount;
     ULONG i;
@@ -550,53 +586,21 @@ IoConnectInterruptEx(
                 return STATUS_INVALID_PARAMETER;
             }
 
-            Status = IoGetDeviceProperty(Parameters->MessageBased.PhysicalDeviceObject,
-                                         DevicePropertyAllocatedResources,
-                                         0,
-                                         NULL,
-                                         &Length);
-            if (Status != STATUS_BUFFER_TOO_SMALL || Length == 0)
-                return Status;
+            DeviceNode = IopGetDeviceNode(Parameters->MessageBased.PhysicalDeviceObject);
+            if (DeviceNode == NULL)
+                return STATUS_INVALID_DEVICE_STATE;
 
-            ResourceList = ExAllocatePoolWithTag(PagedPool, Length, TAG_IO_INTERRUPT);
-            if (!ResourceList)
-                return STATUS_INSUFFICIENT_RESOURCES;
+            RawResourceList = DeviceNode->ResourceList;
+            TranslatedResourceList = DeviceNode->ResourceListTranslated;
+            if (RawResourceList == NULL || TranslatedResourceList == NULL)
+                return STATUS_INVALID_DEVICE_STATE;
 
-            Status = IoGetDeviceProperty(Parameters->MessageBased.PhysicalDeviceObject,
-                                         DevicePropertyAllocatedResources,
-                                         Length,
-                                         ResourceList,
-                                         &Length);
-            if (!NT_SUCCESS(Status))
-            {
-                ExFreePoolWithTag(ResourceList, TAG_IO_INTERRUPT);
-                return Status;
-            }
-
-            FullDescriptor = &ResourceList->List[0];
-            for (i = 0; i < ResourceList->Count && !Descriptor; i++, FullDescriptor++)
-            {
-                PCM_PARTIAL_RESOURCE_LIST PartialList = &FullDescriptor->PartialResourceList;
-                ULONG j;
-
-                for (j = 0; j < PartialList->Count; j++)
-                {
-                    if (PartialList->PartialDescriptors[j].Type == CmResourceTypeInterrupt &&
-                        (PartialList->PartialDescriptors[j].Flags & CM_RESOURCE_INTERRUPT_MESSAGE))
-                    {
-                        Descriptor = &PartialList->PartialDescriptors[j];
-                        break;
-                    }
-                }
-            }
-
-            if (!Descriptor)
-            {
-                ExFreePoolWithTag(ResourceList, TAG_IO_INTERRUPT);
+            RawDescriptor = IopFindMessageInterruptDescriptor(RawResourceList);
+            Descriptor = IopFindMessageInterruptDescriptor(TranslatedResourceList);
+            if (RawDescriptor == NULL || Descriptor == NULL)
                 return STATUS_NOT_FOUND;
-            }
 
-            MessageCount = Descriptor->u.MessageInterrupt.Raw.MessageCount;
+            MessageCount = RawDescriptor->u.MessageInterrupt.Raw.MessageCount;
             if (MessageCount == 0)
                 MessageCount = 1;
 
@@ -613,10 +617,7 @@ IoConnectInterruptEx(
                                              TotalSize,
                                              TAG_IO_INTERRUPT);
                 if (!Context)
-                {
-                    ExFreePoolWithTag(ResourceList, TAG_IO_INTERRUPT);
                     return STATUS_INSUFFICIENT_RESOURCES;
-                }
 
                 MessageInfo = &Context->MessageInfoHeader;
                 MessageEntries = (PIO_INTERRUPT_MESSAGE_ENTRY)((PUCHAR)Context + MessageInfoSize);
@@ -756,7 +757,6 @@ IoConnectInterruptEx(
                         KeDisconnectInterrupt(&MessageEntries[k].Interrupt);
 
                     ExFreePoolWithTag(Context, TAG_IO_INTERRUPT);
-                    ExFreePoolWithTag(ResourceList, TAG_IO_INTERRUPT);
                     return STATUS_INVALID_PARAMETER;
                 }
 
@@ -769,8 +769,6 @@ IoConnectInterruptEx(
              * The kernel provides the vector information, but actual hardware
              * table programming is done at the driver level.
              */
-
-            ExFreePoolWithTag(ResourceList, TAG_IO_INTERRUPT);
 
             *Parameters->MessageBased.ConnectionContext.InterruptMessageTable = MessageInfo;
             return STATUS_SUCCESS;

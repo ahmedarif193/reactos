@@ -361,6 +361,42 @@ DefWndHandleSetCursor(PWND pWnd, WPARAM wParam, LPARAM lParam)
    return FALSE;
 }
 
+static
+VOID
+FASTCALL
+DefWndPrintChildren(
+    PWND pwnd,
+    HDC hdc,
+    ULONG uFlags)
+{
+    PWND Child;
+
+    for (Child = pwnd->spwndChild; Child; Child = Child->spwndNext)
+    {
+        LONG Dx, Dy;
+        INT SavedDc;
+
+        if (!(Child->style & WS_VISIBLE) || (Child->state & WNDS_DESTROYED))
+            continue;
+
+        SavedDc = NtGdiSaveDC(hdc);
+        if (SavedDc == 0)
+            continue;
+
+        Dx = Child->rcWindow.left - pwnd->rcWindow.left;
+        Dy = Child->rcWindow.top - pwnd->rcWindow.top;
+
+        NtGdiOffsetViewportOrgEx(hdc, Dx, Dy, NULL);
+        NtGdiIntersectClipRect(hdc,
+                               0,
+                               0,
+                               Child->rcWindow.right - Child->rcWindow.left,
+                               Child->rcWindow.bottom - Child->rcWindow.top);
+        co_IntSendMessage(UserHMGetHandle(Child), WM_PRINT, (WPARAM)hdc, uFlags);
+        NtGdiRestoreDC(hdc, SavedDc);
+    }
+}
+
 /* Win: xxxDWPPrint */
 VOID FASTCALL DefWndPrint( PWND pwnd, HDC hdc, ULONG uFlags)
 {
@@ -371,15 +407,8 @@ VOID FASTCALL DefWndPrint( PWND pwnd, HDC hdc, ULONG uFlags)
        !IntIsWindowVisible(pwnd) )
       return;
 
-  /*
-   * Unimplemented flags.
-   */
-  if ( (uFlags & PRF_CHILDREN) ||
-       (uFlags & PRF_OWNED)    ||
-       (uFlags & PRF_NONCLIENT) )
-  {
-    FIXME("WM_PRINT message with unsupported flags\n");
-  }
+  if (uFlags & PRF_NONCLIENT)
+    NC_DoNCPaint(pwnd, hdc, -1);
 
   /*
    * Background
@@ -392,6 +421,12 @@ VOID FASTCALL DefWndPrint( PWND pwnd, HDC hdc, ULONG uFlags)
    */
   if ( uFlags & PRF_CLIENT)
     co_IntSendMessage(UserHMGetHandle(pwnd), WM_PRINTCLIENT, (WPARAM)hdc, uFlags);
+
+  if (uFlags & PRF_CHILDREN)
+    DefWndPrintChildren(pwnd, hdc, uFlags);
+
+  if (uFlags & PRF_OWNED)
+    FIXME("WM_PRINT with PRF_OWNED is not implemented yet\n");
 }
 
 BOOL

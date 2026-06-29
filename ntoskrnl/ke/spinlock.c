@@ -320,11 +320,18 @@ KeTryToAcquireSpinLockAtDpcLevel(IN OUT PKSPIN_LOCK SpinLock)
                      0);
     }
 
-    /* Make sure that we don't own the lock already */
+    /*
+     * Check if we already own the lock.  Unlike KxAcquireSpinLock (which
+     * bugchecks on re-entrant acquire because it's a mandatory acquire),
+     * KeTryToAcquireSpinLockAtDpcLevel is a "try" operation — re-entrant
+     * attempts must return FALSE, not crash.  Windows behaves this way;
+     * KdPollBreakIn relies on it when checking KdpDebuggerLock from a
+     * timer DPC while KdEnableDebuggerWithLock already holds the lock.
+     */
     if (((KSPIN_LOCK)KeGetCurrentThread() | 1) == *SpinLock)
     {
-        /* We do, bugcheck! */
-        KeBugCheckEx(SPIN_LOCK_ALREADY_OWNED, (ULONG_PTR)SpinLock, 0, 0, 0);
+        /* Already owned by us — fail gracefully. */
+        return FALSE;
     }
 #endif
 
@@ -372,6 +379,18 @@ KeTryToAcquireSpinLockAtDpcLevel(IN OUT PKSPIN_LOCK SpinLock)
             return FALSE;
         }
     }
+#elif defined(_M_AMD64)
+    /*
+     * AMD64: Use 64-bit InterlockedCompareExchange64 for a single atomic
+     * try-acquire. This matches the 64-bit release in KxReleaseSpinLock
+     * and avoids 32/64-bit operand size mismatches in DBG builds where
+     * the lock holds a full 64-bit thread pointer.
+     */
+    if (InterlockedCompareExchange64((PLONG64)SpinLock, 1, 0) != 0)
+    {
+        /* Lock was not free */
+        return FALSE;
+    }
 #else
     /* Check if it's already acquired */
     if (!(*SpinLock))
@@ -388,7 +407,7 @@ KeTryToAcquireSpinLockAtDpcLevel(IN OUT PKSPIN_LOCK SpinLock)
         /* It was already acquired */
         return FALSE;
     }
-#endif /* _M_ARM64 */
+#endif /* _M_ARM64 / _M_AMD64 */
 #endif /* CONFIG_SMP */
 
 #if DBG

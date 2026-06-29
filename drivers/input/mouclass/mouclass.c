@@ -24,6 +24,7 @@ static DRIVER_DISPATCH ClassPower;
 static DRIVER_ADD_DEVICE ClassAddDevice;
 static DRIVER_STARTIO ClassStartIo;
 static DRIVER_CANCEL ClassCancelRoutine;
+static LONG gMouClassCallbackLogCount;
 static NTSTATUS
 HandleReadIrp(
 	IN PDEVICE_OBJECT DeviceObject,
@@ -451,6 +452,17 @@ ClassCallback(
 	KeAcquireSpinLock(&ClassDeviceExtension->SpinLock, &OldIrql);
 	if (InputCount > 0)
 	{
+        if (InterlockedIncrement(&gMouClassCallbackLogCount) <= 64)
+        {
+            DPRINT1("Mouclass ClassCallback: count=%Iu dx=%ld dy=%ld flags=0x%04x buttons=0x%04x raw=0x%08lx\n",
+                    InputCount,
+                    DataStart->LastX,
+                    DataStart->LastY,
+                    DataStart->Flags,
+                    DataStart->ButtonFlags,
+                    DataStart->RawButtons);
+        }
+
 		if (ClassDeviceExtension->InputCount + InputCount > ClassDeviceExtension->DriverExtension->DataQueueSize)
 		{
 			/*

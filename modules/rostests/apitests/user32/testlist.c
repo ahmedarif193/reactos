@@ -8,6 +8,7 @@ extern void func_CloseWindow(void);
 extern void func_CopyImage(void);
 extern void func_CreateDialog(void);
 extern void func_CreateIconFromResourceEx(void);
+extern void func_CursorMoveVisual(void);
 extern void func_CreateWindowEx(void);
 extern void func_DeferWindowPos(void);
 extern void func_DestroyCursorIcon(void);
@@ -73,6 +74,7 @@ const struct test winetest_testlist[] =
     { "CopyImage", func_CopyImage },
     { "CreateDialog", func_CreateDialog },
     { "CreateIconFromResourceEx", func_CreateIconFromResourceEx },
+    { "CursorMoveVisual", func_CursorMoveVisual },
     { "CreateWindowEx", func_CreateWindowEx },
     { "DeferWindowPos", func_DeferWindowPos },
     { "DestroyCursorIcon", func_DestroyCursorIcon },
@@ -131,4 +133,3 @@ const struct test winetest_testlist[] =
     { "wsprintfApi", func_wsprintf },
     { 0, 0 }
 };
-

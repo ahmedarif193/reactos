@@ -1,2 +1,8 @@
 @ stdcall D3DKMTCreateDCFromMemory(ptr)
 @ stdcall D3DKMTDestroyDCFromMemory(ptr)
+@ stdcall D3DKMTOpenAdapterFromGdiDisplayName(ptr)
+@ stdcall D3DKMTCreateAllocation(ptr)
+@ stdcall D3DKMTOpenResource(ptr)
+@ stdcall D3DKMTCreateSynchronizationObject(ptr)
+@ stdcall D3DKMTSignalSynchronizationObject(ptr)
+@ stdcall D3DKMTWaitForSynchronizationObject(ptr)

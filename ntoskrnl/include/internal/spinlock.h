@@ -86,6 +86,46 @@ KxAcquireSpinLock(
             : "memory"
         );
     }
+#elif defined(_M_AMD64)
+    /*
+     * AMD64 SMP: Use 64-bit InterlockedCompareExchange for spinlock acquisition.
+     *
+     * On amd64, KSPIN_LOCK is a 64-bit ULONG_PTR. In DBG builds, the lock is
+     * overwritten with the full 64-bit thread pointer (Owner = Thread | 1).
+     * The release path uses InterlockedAnd64 to zero all 64 bits.
+     *
+     * Using InterlockedBitTestAndSet((PLONG)SpinLock, 0) is a 32-bit LOCK BTS
+     * that only operates on the lower 32 bits. While architecturally safe on
+     * x86-64 (strong memory model, cache-line locking), the mismatch between
+     * the 32-bit acquire and 64-bit release creates a race window in DBG builds:
+     *
+     *   1. CPU A releases: InterlockedAnd64 -> *SpinLock = 0 (all 64 bits)
+     *   2. CPU B acquires: 32-bit LOCK BTS sets bit 0 -> *SpinLock = 1 (lower 32)
+     *   3. CPU B DBG writes: *SpinLock = ThreadB | 1 (full 64-bit)
+     *   4. CPU A tries to re-acquire, DBG reads *SpinLock -> sees ThreadB | 1
+     *   5. CPU A's DBG check passes (ThreadA != ThreadB)
+     *   6. CPU A spins on InterlockedBitTestAndSet (32-bit) which checks only
+     *      bit 0 of lower 32 bits, but the full 64-bit value has upper bits set
+     *
+     * The 32-bit BTS can also lose a race with the 64-bit AND release if the
+     * operations happen on different halves of the same cache line in quick
+     * succession on different cores, leading to SPIN_LOCK_ALREADY_OWNED when
+     * the DBG ownership check sees a stale value from the local store buffer.
+     *
+     * Fix: Use a full 64-bit InterlockedCompareExchange64 (LOCK CMPXCHG16B on
+     * older CPUs, LOCK CMPXCHG8B equivalent for 64-bit) to atomically transition
+     * the lock from 0 to 1. This ensures the acquire and release operations use
+     * the same operand size, eliminating any potential 32/64-bit interaction issues.
+     */
+    while (InterlockedCompareExchange64((PLONG64)SpinLock, 1, 0) != 0)
+    {
+        /* It's locked... spin until it's unlocked */
+        while (*(volatile KSPIN_LOCK *)SpinLock != 0)
+        {
+            /* Yield and keep looping */
+            YieldProcessor();
+        }
+    }
 #else
     while (InterlockedBitTestAndSet((PLONG)SpinLock, 0))
     {
@@ -101,7 +141,7 @@ KxAcquireSpinLock(
         }
 #endif
     }
-#endif /* _M_ARM64 */
+#endif /* _M_ARM64 / _M_AMD64 */
 #endif /* CONFIG_SMP */
 
 #if DBG

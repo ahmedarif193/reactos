@@ -2424,6 +2424,47 @@ NtLoadDriver(IN PUNICODE_STRING DriverServiceName)
 }
 
 /*
+ * IoLoadDriver
+ *
+ * Loads a kernel-mode driver from a given registry service key path.
+ * This is a kernel-mode API that bypasses the privilege checks performed
+ * by NtLoadDriver, making it suitable for kernel components (such as
+ * dxgkrnl.sys) that need to programmatically load dependent drivers
+ * (such as dxgmms1.sys) without holding SeLoadDriverPrivilege.
+ *
+ * Parameters
+ *    DriverServiceName
+ *       Kernel-mode UNICODE_STRING pointer to the registry service key path
+ *       (e.g. L"\\Registry\\Machine\\System\\CurrentControlSet\\Services\\dxgmms1").
+ *       The string must already be accessible at PASSIVE_LEVEL.
+ *
+ * Return Value
+ *    STATUS_SUCCESS, or an NTSTATUS error code from IopDoLoadUnloadDriver.
+ *    Returns STATUS_DRIVER_ALREADY_LOADED if the driver is already loaded.
+ *
+ * Status
+ *    implemented
+ */
+NTSTATUS
+NTAPI
+IoLoadDriver(
+    _In_ PUNICODE_STRING DriverServiceName)
+{
+    PDRIVER_OBJECT DriverObject;
+
+    PAGED_CODE();
+
+    DPRINT("IoLoadDriver('%wZ')\n", DriverServiceName);
+
+    /* Kernel callers are trusted; skip privilege check and string capture.
+     * Dispatch through the common load/unload worker so that the actual
+     * MmLoadSystemImage call is always made in PsInitialSystemProcess
+     * context (required for correct module tracking). */
+    DriverObject = NULL;
+    return IopDoLoadUnloadDriver(DriverServiceName, &DriverObject);
+}
+
+/*
  * NtUnloadDriver
  *
  * Unloads a legacy device driver.

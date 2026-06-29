@@ -422,6 +422,15 @@ IntInitScreenInfo(
    ppdev->GreenMask = SelectedMode->GreenMask;
    ppdev->BlueMask = SelectedMode->BlueMask;
 
+   /*
+    * Check DriverSpecificAttributeFlags for the dxgkrnl signal that the
+    * framebuffer is already a system-memory shadow.  When set, framebuf
+    * must NOT allocate its own shadow buffer -- GDI should draw directly
+    * to the buffer that DxgkDdiPresentDisplayOnly reads from.
+    */
+   ppdev->SysmemFramebuffer =
+       (SelectedMode->DriverSpecificAttributeFlags & 0x0001) ? TRUE : FALSE;
+
    pGdiInfo->ulVersion = GDI_DRIVER_VERSION;
    pGdiInfo->ulTechnology = DT_RASDISPLAY;
    pGdiInfo->ulHorzSize = SelectedMode->XMillimeter;

@@ -18,6 +18,7 @@ static PGRAPHICS_DEVICE gpVgaGraphicsDevice;
 static PGRAPHICS_DEVICE gpGraphicsDeviceFirst = NULL;
 static PGRAPHICS_DEVICE gpGraphicsDeviceLast = NULL;
 static HSEMAPHORE ghsemGraphicsDeviceList;
+HSEMAPHORE ghsemDynamicModeChange;
 static ULONG giDevNum = 1;
 
 CODE_SEG("INIT")
@@ -27,6 +28,10 @@ InitDeviceImpl(VOID)
 {
     ghsemGraphicsDeviceList = EngCreateSemaphore();
     if (!ghsemGraphicsDeviceList)
+        return STATUS_INSUFFICIENT_RESOURCES;
+
+    ghsemDynamicModeChange = EngCreateSemaphore();
+    if (!ghsemDynamicModeChange)
         return STATUS_INSUFFICIENT_RESOURCES;
 
     return STATUS_SUCCESS;
@@ -1086,6 +1091,44 @@ EngDeviceIoControl(
     }
 
     return Status;
+}
+
+/*
+ * EngpCountDisplayPaths
+ *
+ * Counts the number of active display paths (source->target connections)
+ * in the current GRAPHICS_DEVICE list. Used by CCD APIs
+ * (GetDisplayConfigBufferSizes) to determine array sizes.
+ *
+ * Each attached GRAPHICS_DEVICE represents one source->target path.
+ * Returns count of devices with DISPLAY_DEVICE_ATTACHED_TO_DESKTOP set.
+ */
+ULONG
+NTAPI
+EngpCountDisplayPaths(VOID)
+{
+    PGRAPHICS_DEVICE pGraphicsDevice;
+    ULONG cPaths = 0;
+
+    EngAcquireSemaphore(ghsemGraphicsDeviceList);
+
+    for (pGraphicsDevice = gpGraphicsDeviceFirst;
+         pGraphicsDevice;
+         pGraphicsDevice = pGraphicsDevice->pNextGraphicsDevice)
+    {
+        if (pGraphicsDevice->StateFlags & DISPLAY_DEVICE_ATTACHED_TO_DESKTOP)
+        {
+            cPaths++;
+        }
+    }
+
+    EngReleaseSemaphore(ghsemGraphicsDeviceList);
+
+    /* Always report at least 1 path if we have any device at all */
+    if (cPaths == 0 && gpGraphicsDeviceFirst != NULL)
+        cPaths = 1;
+
+    return cPaths;
 }
 
 /* EOF */

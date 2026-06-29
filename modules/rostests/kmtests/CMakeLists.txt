@@ -1,6 +1,11 @@
 
 include_directories(include)
 
+set(KMTEST_ENABLE_RAMDISK_IOCTL TRUE)
+if(ARCH STREQUAL "amd64" AND NOT MSVC)
+    set(KMTEST_ENABLE_RAMDISK_IOCTL FALSE)
+endif()
+
 #
 # subdirectories containing special-purpose drivers
 #
@@ -81,7 +86,6 @@ list(APPEND KMTEST_DRV_SOURCE
     ntos_io/IoIrp.c
     ntos_io/IoMdl.c
     ntos_io/IoVolume.c
-    ${REACTOS_SOURCE_DIR}/boot/tests/ramdisk/RamdiskIoctl.c
     ntos_kd/KdSystemDebugControl.c
     ntos_ke/KeApc.c
     ntos_ke/KeDevQueue.c
@@ -115,11 +119,20 @@ list(APPEND KMTEST_DRV_SOURCE
     ntos_se/SeLogonSession.c
     ntos_se/SeQueryInfoToken.c
     ntos_se/SeTokenFiltering.c
+    ntos_wdm/WdmExRundown.c
+    ntos_wdm/WdmIoRemoveLock.c
+    ntos_wdm/WdmIoShareAccess.c
+    ntos_wdm/WdmNt81Abi.c
     rtl/RtlIsValidOemCharacter.c
     rtl/RtlRangeList.c
     ${COMMON_SOURCE}
 
     kmtest_drv/kmtest_drv.rc)
+
+if(KMTEST_ENABLE_RAMDISK_IOCTL)
+    list(APPEND KMTEST_DRV_SOURCE
+        ${REACTOS_SOURCE_DIR}/boot/tests/ramdisk/RamdiskIoctl.c)
+endif()
 
 if(ARCH STREQUAL "i386" OR ARCH STREQUAL "amd64")
     add_asm_files(KMTEST_DRV_ASM
@@ -135,6 +148,9 @@ target_link_libraries(kmtest_drv kmtest_printf chkstk memcmp ntoskrnl_vista ${PS
 add_importlibs(kmtest_drv ntoskrnl hal)
 add_dependencies(kmtest_drv bugcodes xdk)
 target_compile_definitions(kmtest_drv PRIVATE KMT_KERNEL_MODE NTDDI_VERSION=NTDDI_WS03SP1)
+if(KMTEST_ENABLE_RAMDISK_IOCTL)
+    target_compile_definitions(kmtest_drv PRIVATE KMT_ENABLE_RAMDISK_IOCTL)
+endif()
 #add_pch(kmtest_drv include/kmt_test.h)
 add_rostests_file(TARGET kmtest_drv)
 
@@ -179,17 +195,24 @@ list(APPEND KMTEST_SOURCE
     ntos_mm/MmMapLockedPagesSpecifyCache_user.c
     ntos_mm/NtCreateSection_user.c
     ntos_po/PoIrp_user.c
-    ${REACTOS_SOURCE_DIR}/boot/tests/ramdisk/RamdiskIoctl_user.c
     tcpip/TcpIp_user.c
     ${COMMON_SOURCE}
 
     kmtest/kmtest.rc)
+
+if(KMTEST_ENABLE_RAMDISK_IOCTL)
+    list(APPEND KMTEST_SOURCE
+        ${REACTOS_SOURCE_DIR}/boot/tests/ramdisk/RamdiskIoctl_user.c)
+endif()
 
 add_executable(kmtest ${KMTEST_SOURCE})
 set_module_type(kmtest win32cui)
 target_link_libraries(kmtest ${PSEH_LIB})
 add_importlibs(kmtest fltlib advapi32 ws2_32 msvcrt kernel32 ntdll)
 target_compile_definitions(kmtest PRIVATE KMT_USER_MODE NTDDI_VERSION=NTDDI_WS03SP1)
+if(KMTEST_ENABLE_RAMDISK_IOCTL)
+    target_compile_definitions(kmtest PRIVATE KMT_ENABLE_RAMDISK_IOCTL)
+endif()
 #add_pch(kmtest include/kmt_test.h)
 set_target_properties(kmtest PROPERTIES OUTPUT_NAME "kmtest_")
 add_rostests_file(TARGET kmtest)

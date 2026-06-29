@@ -79,6 +79,9 @@ string EscapeString(const string& Input);
 string GetINIValue(PCWCH AppName, PCWCH KeyName, PCWCH FileName);
 bool IsNumber(const char* Input);
 string StringOut(const string& String, bool forcePrint = true);
+string StringOutWithPrefix(const string& String, const string& Prefix, bool forcePrint = true);
+string FormatMillisecondsAsMinutes(DWORD Milliseconds);
+string FormatMillisecondsAsSeconds(DWORD Milliseconds);
 string UnicodeToAscii(PCWSTR UnicodeString);
 string UnicodeToAscii(const wstring& UnicodeString);
 

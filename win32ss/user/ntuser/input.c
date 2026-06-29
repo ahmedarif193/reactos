@@ -20,6 +20,7 @@ HANDLE ghKeyboardDevice = NULL;
 
 static DWORD LastInputTick = 0;
 static HANDLE ghMouseDevice;
+static LONG gRawInputMouseLogCount;
 
 /* FUNCTIONS *****************************************************************/
 
@@ -182,7 +183,7 @@ RawInputThreadMain(VOID)
             if (NT_SUCCESS(Status))
             {
                 ++cMaxWaitObjects;
-                TRACE("Mouse connected!\n");
+                ERR("RawInput mouse connected: handle=%p file=%p\n", ghMouseDevice, pMouDevice);
             }
         }
         if (!ghKeyboardDevice)
@@ -228,6 +229,15 @@ RawInputThreadMain(VOID)
                                        sizeof(MOUSE_INPUT_DATA),
                                        &ByteOffset,
                                        NULL);
+
+                if (InterlockedIncrement(&gRawInputMouseLogCount) <= 64)
+                {
+                    ERR("RawInput mouse read: status=0x%lx pending=%u handle=%p file=%p\n",
+                        MouStatus,
+                        MouStatus == STATUS_PENDING,
+                        ghMouseDevice,
+                        pMouDevice);
+                }
             }
 
             if (MouStatus == STATUS_PENDING)
@@ -298,7 +308,16 @@ RawInputThreadMain(VOID)
         /* Have we successed reading from mouse? */
         if (NT_SUCCESS(MouStatus) && MouStatus != STATUS_PENDING)
         {
-            TRACE("MouseEvent\n");
+            if (InterlockedIncrement(&gRawInputMouseLogCount) <= 64)
+            {
+                ERR("MouseEvent: flags=0x%04x buttons=0x%04x raw=0x%08lx dx=%ld dy=%ld extra=0x%08lx\n",
+                    MouseInput.Flags,
+                    MouseInput.ButtonFlags,
+                    MouseInput.RawButtons,
+                    MouseInput.LastX,
+                    MouseInput.LastY,
+                    MouseInput.ExtraInformation);
+            }
 
             /* Set LastInputTick */
             IntLastInputTick(TRUE);

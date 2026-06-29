@@ -52,6 +52,7 @@ IopInstallCriticalDevice(PDEVICE_NODE DeviceNode)
     UNICODE_STRING HardwareIdU = RTL_CONSTANT_STRING(L"HardwareID");
     UNICODE_STRING ServiceU = RTL_CONSTANT_STRING(L"Service");
     UNICODE_STRING ClassGuidU = RTL_CONSTANT_STRING(L"ClassGUID");
+    UNICODE_STRING DeviceDescU = RTL_CONSTANT_STRING(L"DeviceDesc");
     PKEY_VALUE_PARTIAL_INFORMATION PartialInfo;
     ULONG HidLength = 0, CidLength = 0, BufferLength;
     PWCHAR IdBuffer, OriginalIdBuffer;
@@ -239,16 +240,22 @@ IopInstallCriticalDevice(PDEVICE_NODE DeviceNode)
                         continue;
                     }
 
-                    /* Check if there's already a driver installed */
+                    /* Check if there's already a driver (Service) assigned.
+                     * Windows checks for Service, not ClassGUID, because PCI bus
+                     * drivers set ClassGUID on child PDOs before CDD runs.
+                     * Checking ClassGUID would cause CDD to skip all PCI children. */
                     Status = ZwQueryValueKey(InstanceKey,
-                                             &ClassGuidU,
+                                             &ServiceU,
                                              KeyValuePartialInformation,
                                              NULL,
                                              0,
                                              &NeededLength);
                     if (Status == STATUS_BUFFER_OVERFLOW || Status == STATUS_BUFFER_TOO_SMALL)
                     {
+                        DPRINT("IopInstallCriticalDevice: Service already set for '%wZ', skipping CDD\n",
+                               &DeviceNode->InstancePath);
                         ExFreePool(BasicInfo);
+                        ZwClose(ChildKeyHandle);
                         continue;
                     }
 
@@ -353,7 +360,123 @@ IopInstallCriticalDevice(PDEVICE_NODE DeviceNode)
                             continue;
                         }
 
-                        DPRINT("Installed service '%S' for critical device '%wZ'\n", PartialInfo->Data, &ChildIdNameU);
+                        DPRINT1("IopInstallCriticalDevice: installed service '%S' for '%wZ' (instance '%wZ')\n",
+                                (PWCHAR)PartialInfo->Data, &ChildIdNameU, &DeviceNode->InstancePath);
+
+                        /*
+                         * Propagate an optional DeviceDesc from the critical device
+                         * database so user-mode consumers do not fall back to a
+                         * generic PCI class name before full INF installation runs.
+                         */
+                        Status = ZwQueryValueKey(ChildKeyHandle,
+                                                 &DeviceDescU,
+                                                 KeyValuePartialInformation,
+                                                 NULL,
+                                                 0,
+                                                 &NeededLength);
+                        if (Status == STATUS_BUFFER_OVERFLOW || Status == STATUS_BUFFER_TOO_SMALL)
+                        {
+                            ExFreePool(PartialInfo);
+                            PartialInfo = ExAllocatePool(PagedPool, NeededLength);
+                            if (!PartialInfo)
+                            {
+                                ExFreePool(OriginalIdBuffer);
+                                ExFreePool(BasicInfo);
+                                ZwClose(InstanceKey);
+                                ZwClose(ChildKeyHandle);
+                                ZwClose(CriticalDeviceKey);
+                                return;
+                            }
+
+                            Status = ZwQueryValueKey(ChildKeyHandle,
+                                                     &DeviceDescU,
+                                                     KeyValuePartialInformation,
+                                                     PartialInfo,
+                                                     NeededLength,
+                                                     &NeededLength);
+                            if (NT_SUCCESS(Status))
+                            {
+                                Status = ZwSetValueKey(InstanceKey,
+                                                       &DeviceDescU,
+                                                       0,
+                                                       REG_SZ,
+                                                       PartialInfo->Data,
+                                                       PartialInfo->DataLength);
+                                if (!NT_SUCCESS(Status))
+                                {
+                                    DPRINT1("IopInstallCriticalDevice: failed to write DeviceDesc for '%wZ' (0x%08lx)\n",
+                                            &DeviceNode->InstancePath, Status);
+                                }
+                            }
+                        }
+
+                        /*
+                         * Also create the Class driver key so IoOpenDeviceRegistryKey
+                         * (PLUGPLAY_REGKEY_DRIVER) works for CDD-matched devices.
+                         * This mirrors what INF installation does for the "Driver" value.
+                         */
+                        {
+                            HANDLE ClassRootKey;
+                            UNICODE_STRING ClassRootPath;
+                            WCHAR ClassRootBuf[128];
+                            UNICODE_STRING DriverValueName = RTL_CONSTANT_STRING(L"Driver");
+                            UNICODE_STRING InstanceSubKey = RTL_CONSTANT_STRING(L"0000");
+                            HANDLE ClassInstanceKey;
+                            ULONG ClassDisposition;
+                            PKEY_VALUE_PARTIAL_INFORMATION ClassGuidInfo = NULL;
+                            ULONG ClassGuidLen = 0;
+
+                            /* Read the ClassGUID that was just written */
+                            Status = ZwQueryValueKey(InstanceKey, &ClassGuidU,
+                                                     KeyValuePartialInformation, NULL, 0, &ClassGuidLen);
+                            if (Status == STATUS_BUFFER_TOO_SMALL || Status == STATUS_BUFFER_OVERFLOW)
+                            {
+                                ClassGuidInfo = ExAllocatePool(PagedPool, ClassGuidLen);
+                                if (ClassGuidInfo)
+                                {
+                                    Status = ZwQueryValueKey(InstanceKey, &ClassGuidU,
+                                                             KeyValuePartialInformation,
+                                                             ClassGuidInfo, ClassGuidLen, &ClassGuidLen);
+                                }
+                            }
+
+                            if (ClassGuidInfo && NT_SUCCESS(Status) && ClassGuidInfo->DataLength > sizeof(WCHAR))
+                            {
+                                /* Build the Class root path: CCS\Control\Class\{GUID} */
+                                RtlStringCbPrintfW(ClassRootBuf, sizeof(ClassRootBuf),
+                                    L"\\Registry\\Machine\\System\\CurrentControlSet\\Control\\Class\\%s",
+                                    (PWCHAR)ClassGuidInfo->Data);
+                                RtlInitUnicodeString(&ClassRootPath, ClassRootBuf);
+
+                                InitializeObjectAttributes(&ObjectAttributes, &ClassRootPath,
+                                    OBJ_KERNEL_HANDLE | OBJ_CASE_INSENSITIVE, NULL, NULL);
+                                Status = ZwCreateKey(&ClassRootKey, KEY_CREATE_SUB_KEY,
+                                    &ObjectAttributes, 0, NULL, REG_OPTION_NON_VOLATILE, NULL);
+                                if (NT_SUCCESS(Status))
+                                {
+                                    /* Create the \0000 subkey */
+                                    InitializeObjectAttributes(&ObjectAttributes, &InstanceSubKey,
+                                        OBJ_KERNEL_HANDLE | OBJ_CASE_INSENSITIVE, ClassRootKey, NULL);
+                                    Status = ZwCreateKey(&ClassInstanceKey, KEY_WRITE,
+                                        &ObjectAttributes, 0, NULL, REG_OPTION_NON_VOLATILE, &ClassDisposition);
+                                    if (NT_SUCCESS(Status))
+                                    {
+                                        ZwClose(ClassInstanceKey);
+                                    }
+                                    ZwClose(ClassRootKey);
+
+                                    /* Write "Driver" = "{GUID}\0000" to the device instance key */
+                                    {
+                                        WCHAR DriverValue[80];
+                                        RtlStringCbPrintfW(DriverValue, sizeof(DriverValue),
+                                            L"%s\\0000", (PWCHAR)ClassGuidInfo->Data);
+                                        ZwSetValueKey(InstanceKey, &DriverValueName, 0, REG_SZ,
+                                            DriverValue, (ULONG)(wcslen(DriverValue) + 1) * sizeof(WCHAR));
+                                    }
+                                }
+                                ExFreePool(ClassGuidInfo);
+                            }
+                        }
                     }
                     else
                     {

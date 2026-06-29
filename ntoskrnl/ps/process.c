@@ -354,7 +354,7 @@ PspCreateProcess(OUT PHANDLE ProcessHandle,
                  IN HANDLE ExceptionPort OPTIONAL,
                  IN BOOLEAN InJob)
 {
-    HANDLE hProcess;
+    HANDLE hProcess = NULL;
     PEPROCESS Process, Parent;
     PVOID ExceptionPortObject;
     PDEBUG_OBJECT DebugObject;
@@ -852,6 +852,44 @@ PspCreateProcess(OUT PHANDLE ProcessHandle,
     /* Set the Creation Time */
     KeQuerySystemTime(&Process->CreateTime);
 
+    /* Run the Notification Routines */
+    PspRunCreateProcessNotifyRoutines(Process, TRUE);
+
+    /* Run the Ex-variant notification routines (Vista+ WDDM/AV callbacks).
+     * For process creation CreateInfo is non-NULL; for termination it is NULL.
+     * We fill in the minimum required fields; full ImageFileName/CommandLine
+     * population is a TODO once NtCreateUserProcess is fully integrated. */
+    if (PspProcessNotifyRoutineExCount)
+    {
+        PS_CREATE_NOTIFY_INFO NotifyInfo;
+        RtlZeroMemory(&NotifyInfo, sizeof(NotifyInfo));
+        NotifyInfo.Size            = sizeof(NotifyInfo);
+        NotifyInfo.Flags           = 0;
+        NotifyInfo.ParentProcessId =
+            (HANDLE)Process->InheritedFromUniqueProcessId;
+        NotifyInfo.CreatingThreadId.UniqueProcess =
+            PsGetCurrentProcessId();
+        NotifyInfo.CreatingThreadId.UniqueThread  =
+            PsGetCurrentThreadId();
+        NotifyInfo.FileObject      = NULL;
+        NotifyInfo.ImageFileName   = NULL;  /* TODO: populate from section */
+        NotifyInfo.CommandLine     = NULL;  /* TODO: populate from PEB */
+        NotifyInfo.CreationStatus  = Status;
+        PspRunCreateProcessNotifyRoutinesEx(Process,
+                                            Process->UniqueProcessId,
+                                            &NotifyInfo);
+        /* Propagate any veto from a registered callback */
+        if (!NT_SUCCESS(NotifyInfo.CreationStatus))
+            Status = NotifyInfo.CreationStatus;
+    }
+
+    /* A vetoed create must not leak the inserted process handle. */
+    if (!NT_SUCCESS(Status))
+    {
+        ObCloseHandle(hProcess, PreviousMode);
+        goto CleanupWithRef;
+    }
+
     /* Protect against bad user-mode pointer */
     _SEH2_TRY
     {
@@ -862,17 +900,20 @@ PspCreateProcess(OUT PHANDLE ProcessHandle,
         }
 
         /* Save the process handle */
-       *ProcessHandle = hProcess;
+        *ProcessHandle = hProcess;
     }
     _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
     {
         /* Get the exception code */
-       Status = _SEH2_GetExceptionCode();
+        Status = _SEH2_GetExceptionCode();
     }
     _SEH2_END;
 
-    /* Run the Notification Routines */
-    PspRunCreateProcessNotifyRoutines(Process, TRUE);
+    if (!NT_SUCCESS(Status))
+    {
+        ObCloseHandle(hProcess, PreviousMode);
+        goto CleanupWithRef;
+    }
 
     /* If 12 processes have been created, enough of user-mode is ready */
     if (++ProcessCount == 12) Ki386PerfEnd();

@@ -1,0 +1,58 @@
+; KMDOD.INF
+;
+; Installation file for the Microsoft KMDOD Sample Display-Only Driver
+; adapted for ReactOS.
+;
+; Targets:
+;   PCI\VEN_1234&DEV_1111  -- QEMU Standard VGA / BOCHS Display Adapter
+;   ROOT\KMDOD             -- Root-enumerated virtual display adapter
+;
+; Class: Display (WDDM kernel-mode driver)
+
+[Version]
+Signature  = "$Windows NT$"
+LayoutFile = layout.inf
+Class      = Display
+ClassGUID  = {4D36E968-E325-11CE-BFC1-08002BE10318}
+Provider   = %ReactOS%
+DriverVer  = 01/01/2024,6.2.0.0
+
+[DestinationDirs]
+DefaultDestDir = 12      ; %windir%\system32\drivers
+
+[Manufacturer]
+%ReactOSMfg% = KmdodDevices,NTamd64
+
+; --- amd64 device list ---
+
+[KmdodDevices.NTamd64]
+%Kmdod.DeviceDesc% = Kmdod_Inst, PCI\VEN_1234&DEV_1111
+%Kmdod.DeviceDesc% = Kmdod_Inst, PCI\VEN_1234&DEV_1111&SUBSYS_00000000
+%Kmdod.DeviceDesc% = Kmdod_Inst, ROOT\KMDOD
+
+; --- Install section ---
+
+[Kmdod_Inst.NTamd64]
+CopyFiles = Kmdod_CopyFiles
+
+[Kmdod_CopyFiles]
+kmdod.sys
+
+; --- Service install ---
+
+[Kmdod_Inst.NTamd64.Services]
+AddService = kmdod, 0x00000002, Kmdod_Service_Inst
+
+[Kmdod_Service_Inst]
+ServiceType    = 1                  ; SERVICE_KERNEL_DRIVER
+StartType      = 3                  ; SERVICE_DEMAND_START
+ErrorControl   = 0                  ; SERVICE_ERROR_IGNORE
+ServiceBinary  = %12%\kmdod.sys
+LoadOrderGroup = Video
+
+; --- Strings ---
+
+[Strings]
+ReactOS            = "ReactOS Project"
+ReactOSMfg         = "ReactOS WDDM Display-Only Driver"
+Kmdod.DeviceDesc   = "ReactOS KMDOD Display-Only Driver (kmdod)"

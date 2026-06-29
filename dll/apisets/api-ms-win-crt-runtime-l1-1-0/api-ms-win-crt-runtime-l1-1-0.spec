@@ -2,6 +2,7 @@
 # Generated from ucrtbase.spec exports matching category patterns
 
 @ cdecl _Exit(long) ucrtbase._Exit
+@ cdecl __sys_nerr() ucrtbase.__sys_nerr
 @ cdecl __p___argc() ucrtbase.__p___argc
 @ cdecl __p___argv() ucrtbase.__p___argv
 @ cdecl __p___wargv() ucrtbase.__p___wargv
@@ -109,3 +110,5 @@
 @ cdecl perror(str) ucrtbase.perror
 @ cdecl raise(long) ucrtbase.raise
 @ cdecl signal(long long) ucrtbase.signal
+@ cdecl strerror(long) ucrtbase.strerror
+@ cdecl strerror_s(ptr long long) ucrtbase.strerror_s

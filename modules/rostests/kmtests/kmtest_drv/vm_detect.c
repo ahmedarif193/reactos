@@ -29,6 +29,9 @@ static
 BOOLEAN
 VmIsVbox(VOID)
 {
+    typedef BOOLEAN (NTAPI *PHAL_QUERY_PCI_BUS_RANGE)(PULONG MinBus, PULONG MaxBus);
+    static PHAL_QUERY_PCI_BUS_RANGE pHalQueryPciBusRange;
+    static BOOLEAN HalQueryPciBusRangeResolved;
     ULONG PciId, BytesRead;
     PCI_SLOT_NUMBER Slot;
 
@@ -39,7 +42,14 @@ VmIsVbox(VOID)
     {
         ULONG MinBus, MaxBus;
 
-        if (HalQueryPciBusRange(&MinBus, &MaxBus) &&
+        if (!HalQueryPciBusRangeResolved)
+        {
+            pHalQueryPciBusRange = KmtGetSystemRoutineAddress(L"HalQueryPciBusRange");
+            HalQueryPciBusRangeResolved = TRUE;
+        }
+
+        if (pHalQueryPciBusRange &&
+            pHalQueryPciBusRange(&MinBus, &MaxBus) &&
             (0 < MinBus || 0 > MaxBus))
         {
             return FALSE;

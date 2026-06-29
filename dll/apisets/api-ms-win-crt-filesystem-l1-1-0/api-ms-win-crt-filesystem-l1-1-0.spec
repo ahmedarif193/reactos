@@ -7,6 +7,7 @@
 @ cdecl _fstat32i64(long ptr) ucrtbase._fstat32i64
 @ cdecl _fstat64(long ptr) ucrtbase._fstat64
 @ cdecl _fstat64i32(long ptr) ucrtbase._fstat64i32
+@ cdecl _lock_file(ptr) ucrtbase._lock_file
 @ cdecl _mkdir(str) ucrtbase._mkdir
 @ cdecl _o__access(str long) ucrtbase._o__access
 @ cdecl _o__access_s(str long) ucrtbase._o__access_s
@@ -31,6 +32,8 @@
 @ cdecl _o__wstat64(wstr ptr) ucrtbase._o__wstat64
 @ cdecl _o__wstat64i32(wstr ptr) ucrtbase._o__wstat64i32
 @ cdecl _rmdir(str) ucrtbase._rmdir
+@ cdecl _unlink(str) ucrtbase._unlink
+@ cdecl _unlock_file(ptr) ucrtbase._unlock_file
 @ cdecl _stat32(str ptr) ucrtbase._stat32
 @ cdecl _stat32i64(str ptr) ucrtbase._stat32i64
 @ cdecl _stat64(str ptr) ucrtbase._stat64
@@ -45,3 +48,4 @@
 @ cdecl _wstat32i64(wstr ptr) ucrtbase._wstat32i64
 @ cdecl _wstat64(wstr ptr) ucrtbase._wstat64
 @ cdecl _wstat64i32(wstr ptr) ucrtbase._wstat64i32
+@ cdecl remove(str) ucrtbase.remove

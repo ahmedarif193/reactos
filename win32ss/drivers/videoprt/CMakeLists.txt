@@ -23,7 +23,8 @@ list(APPEND SOURCE
     spinlock.c
     stubs.c
     timer.c
-    videoprt.c)
+    videoprt.c
+    wddm_detect.c)
 
 if(ARCH STREQUAL "i386" OR ARCH STREQUAL "amd64")
     list(APPEND SOURCE int10.c)
@@ -42,6 +43,6 @@ add_library(videoprt MODULE
 
 set_module_type(videoprt kernelmodedriver)
 target_link_libraries(videoprt ${PSEH_LIB})
-add_importlibs(videoprt ntoskrnl hal wmilib)
+add_importlibs(videoprt ntoskrnl hal wmilib watchdog)
 add_pch(videoprt videoprt.h "${PCH_SKIP_SOURCE}")
 add_cd_file(TARGET videoprt DESTINATION reactos/system32/drivers FOR all)

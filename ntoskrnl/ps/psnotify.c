@@ -17,9 +17,11 @@
 
 BOOLEAN PsImageNotifyEnabled = FALSE;
 ULONG PspThreadNotifyRoutineCount, PspProcessNotifyRoutineCount;
+ULONG PspProcessNotifyRoutineExCount;
 ULONG PspLoadImageNotifyRoutineCount;
 EX_CALLBACK PspThreadNotifyRoutine[PSP_MAX_CREATE_THREAD_NOTIFY];
 EX_CALLBACK PspProcessNotifyRoutine[PSP_MAX_CREATE_PROCESS_NOTIFY];
+EX_CALLBACK PspProcessNotifyRoutineEx[PSP_MAX_CREATE_PROCESS_NOTIFY];
 EX_CALLBACK PspLoadImageNotifyRoutine[PSP_MAX_LOAD_IMAGE_NOTIFY];
 PLEGO_NOTIFY_ROUTINE PspLegoNotifyRoutine;
 
@@ -284,6 +286,98 @@ PsSetCreateThreadNotifyRoutine(IN PCREATE_THREAD_NOTIFY_ROUTINE NotifyRoutine)
     /* No free space found, fail */
     ExFreeCallBack(CallBack);
     return STATUS_INSUFFICIENT_RESOURCES;
+}
+
+/*
+ * @implemented
+ *
+ * PsSetCreateProcessNotifyRoutineEx
+ *
+ * Registers or removes an extended process creation/termination notify
+ * routine (Vista SP1+ API required by WDDM drivers such as dxgkrnl.sys).
+ *
+ * The extended variant passes a PS_CREATE_NOTIFY_INFO structure on creation
+ * (non-NULL) or NULL on termination, giving the callback richer context
+ * (image name, command line, creation status propagation) compared to the
+ * original PCREATE_PROCESS_NOTIFY_ROUTINE interface.
+ *
+ * The callback is stored in the dedicated PspProcessNotifyRoutineEx[] array
+ * so that it is dispatched via PspRunCreateProcessNotifyRoutinesEx() at the
+ * same code-path as the legacy callbacks.
+ *
+ * Parameters
+ *    NotifyRoutine  -- The Ex-style callback to register or remove.
+ *    Remove         -- TRUE to remove an already-registered callback.
+ *
+ * Return Value
+ *    STATUS_SUCCESS on success.
+ *    STATUS_INVALID_PARAMETER if no free slot is found during registration,
+ *    or if the routine is not found during removal.
+ */
+NTSTATUS
+NTAPI
+PsSetCreateProcessNotifyRoutineEx(
+    IN PCREATE_PROCESS_NOTIFY_ROUTINE_EX NotifyRoutine,
+    IN BOOLEAN Remove)
+{
+    ULONG i;
+    PEX_CALLBACK_ROUTINE_BLOCK CallBack;
+    PAGED_CODE();
+
+    if (Remove)
+    {
+        /* Walk the Ex slot array looking for a matching entry */
+        for (i = 0; i < PSP_MAX_CREATE_PROCESS_NOTIFY; i++)
+        {
+            CallBack = ExReferenceCallBackBlock(&PspProcessNotifyRoutineEx[i]);
+            if (!CallBack)
+                continue;
+
+            if (ExGetCallBackBlockRoutine(CallBack) == (PVOID)NotifyRoutine)
+            {
+                if (ExCompareExchangeCallBack(&PspProcessNotifyRoutineEx[i],
+                                              NULL,
+                                              CallBack))
+                {
+                    /* Successfully unregistered; clean up */
+                    InterlockedDecrement((PLONG)&PspProcessNotifyRoutineExCount);
+                    ExDereferenceCallBackBlock(&PspProcessNotifyRoutineEx[i],
+                                               CallBack);
+                    ExWaitForCallBacks(CallBack);
+                    ExFreeCallBack(CallBack);
+                    return STATUS_SUCCESS;
+                }
+            }
+
+            ExDereferenceCallBackBlock(&PspProcessNotifyRoutineEx[i], CallBack);
+        }
+
+        return STATUS_PROCEDURE_NOT_FOUND;
+    }
+    else
+    {
+        /* Allocate a new callback block wrapping the Ex routine */
+        CallBack = ExAllocateCallBack((PEX_CALLBACK_FUNCTION)NotifyRoutine,
+                                      NULL);
+        if (!CallBack)
+            return STATUS_INSUFFICIENT_RESOURCES;
+
+        /* Find an empty slot in the Ex array */
+        for (i = 0; i < PSP_MAX_CREATE_PROCESS_NOTIFY; i++)
+        {
+            if (ExCompareExchangeCallBack(&PspProcessNotifyRoutineEx[i],
+                                          CallBack,
+                                          NULL))
+            {
+                InterlockedIncrement((PLONG)&PspProcessNotifyRoutineExCount);
+                return STATUS_SUCCESS;
+            }
+        }
+
+        /* No free slot available */
+        ExFreeCallBack(CallBack);
+        return STATUS_INVALID_PARAMETER;
+    }
 }
 
 /* EOF */

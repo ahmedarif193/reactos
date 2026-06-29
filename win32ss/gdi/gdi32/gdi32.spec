@@ -614,12 +614,12 @@
 @ stdcall -version=0x600+ D3DKMTCheckMonitorPowerState(ptr) NtGdiDdDDICheckMonitorPowerState
 @ stdcall -version=0x600+ D3DKMTCheckOcclusion(ptr) NtGdiDdDDICheckOcclusion
 @ stdcall -version=0x600+ D3DKMTCloseAdapter(ptr) NtGdiDdDDICloseAdapter
-@ stdcall -version=0x600+ D3DKMTCreateAllocation(ptr) NtGdiDdDDICreateAllocation
+@ stdcall -version=0x600+ D3DKMTCreateAllocation(ptr)
 @ stdcall -version=0x600+ D3DKMTCreateContext(ptr) NtGdiDdDDICreateContext
 @ stdcall -version=0x600+ D3DKMTCreateDCFromMemory(ptr)
 @ stdcall -version=0x600+ D3DKMTCreateDevice(ptr) NtGdiDdDDICreateDevice
 @ stdcall -version=0x600+ D3DKMTCreateOverlay(ptr) NtGdiDdDDICreateOverlay
-@ stdcall -version=0x600+ D3DKMTCreateSynchronizationObject(ptr) NtGdiDdDDICreateSynchronizationObject
+@ stdcall -version=0x600+ D3DKMTCreateSynchronizationObject(ptr)
 @ stdcall -version=0x600+ D3DKMTDestroyAllocation(ptr) NtGdiDdDDIDestroyAllocation
 @ stdcall -version=0x600+ D3DKMTDestroyContext(ptr) NtGdiDdDDIDestroyContext
 @ stdcall -version=0x600+ D3DKMTDestroyDCFromMemory(ptr)
@@ -642,7 +642,7 @@
 @ stdcall -version=0x600+ D3DKMTOpenAdapterFromDeviceName(ptr) NtGdiDdDDIOpenAdapterFromDeviceName
 @ stdcall -version=0x600+ D3DKMTOpenAdapterFromGdiDisplayName(ptr)
 @ stdcall -version=0x600+ D3DKMTOpenAdapterFromHdc(ptr) NtGdiDdDDIOpenAdapterFromHdc
-@ stdcall -version=0x600+ D3DKMTOpenResource(ptr) NtGdiDdDDIOpenResource
+@ stdcall -version=0x600+ D3DKMTOpenResource(ptr)
 @ stdcall -version=0x600+ D3DKMTPollDisplayChildren(ptr) NtGdiDdDDIPollDisplayChildren
 @ stdcall -version=0x600+ D3DKMTPresent(ptr) NtGdiDdDDIPresent
 @ stdcall -version=0x600+ D3DKMTQueryAdapterInfo(ptr) NtGdiDdDDIQueryAdapterInfo
@@ -661,9 +661,34 @@
 @ stdcall -version=0x600+ D3DKMTSetVidPnSourceOwner(ptr) NtGdiDdDDISetVidPnSourceOwner
 @ stdcall -version=0x600+ D3DKMTSharedPrimaryLockNotification(ptr) NtGdiDdDDISharedPrimaryLockNotification
 @ stdcall -version=0x600+ D3DKMTSharedPrimaryUnLockNotification(ptr) NtGdiDdDDISharedPrimaryUnLockNotification
-@ stdcall -version=0x600+ D3DKMTSignalSynchronizationObject(ptr) NtGdiDdDDISignalSynchronizationObject
+@ stdcall -version=0x600+ D3DKMTSignalSynchronizationObject(ptr)
 @ stdcall -version=0x600+ D3DKMTUnlock(ptr) NtGdiDdDDIUnlock
 @ stdcall -version=0x600+ D3DKMTUpdateOverlay(ptr) NtGdiDdDDIUpdateOverlay
 @ stdcall -version=0x600+ D3DKMTWaitForIdle(ptr) NtGdiDdDDIWaitForIdle
-@ stdcall -version=0x600+ D3DKMTWaitForSynchronizationObject(ptr) NtGdiDdDDIWaitForSynchronizationObject
+@ stdcall -version=0x600+ D3DKMTWaitForSynchronizationObject(ptr)
 @ stdcall -version=0x600+ D3DKMTWaitForVerticalBlankEvent(ptr) NtGdiDdDDIWaitForVerticalBlankEvent
+
+; Win7 WDDM 1.1 additions
+@ stdcall -version=0x601+ D3DKMTAcquireKeyedMutex(ptr) NtGdiDdDDIAcquireKeyedMutex
+@ stdcall -version=0x601+ D3DKMTCheckSharedResourceAccess(ptr) NtGdiDdDDICheckSharedResourceAccess
+@ stdcall -version=0x601+ D3DKMTCheckVidPnExclusiveOwnership(ptr) NtGdiDdDDICheckVidPnExclusiveOwnership
+@ stdcall -version=0x601+ D3DKMTConfigureSharedResource(ptr) NtGdiDdDDIConfigureSharedResource
+@ stdcall -version=0x601+ D3DKMTCreateAllocation2(ptr) NtGdiDdDDICreateAllocation2
+@ stdcall -version=0x601+ D3DKMTCreateKeyedMutex(ptr) NtGdiDdDDICreateKeyedMutex
+@ stdcall -version=0x601+ D3DKMTCreateSynchronizationObject2(ptr) NtGdiDdDDICreateSynchronizationObject2
+@ stdcall -version=0x601+ D3DKMTDestroyKeyedMutex(ptr) NtGdiDdDDIDestroyKeyedMutex
+@ stdcall -version=0x601+ D3DKMTGetOverlayState(ptr) NtGdiDdDDIGetOverlayState
+@ stdcall -version=0x601+ D3DKMTGetPresentQueueEvent(long ptr) NtGdiDdDDIGetPresentQueueEvent
+@ stdcall -version=0x601+ D3DKMTOpenKeyedMutex(ptr) NtGdiDdDDIOpenKeyedMutex
+@ stdcall -version=0x601+ D3DKMTOpenResource2(ptr) NtGdiDdDDIOpenResource2
+@ stdcall -version=0x601+ D3DKMTOpenSynchronizationObject(ptr) NtGdiDdDDIOpenSynchronizationObject
+@ stdcall -version=0x601+ D3DKMTReleaseKeyedMutex(ptr) NtGdiDdDDIReleaseKeyedMutex
+@ stdcall -version=0x601+ D3DKMTSignalSynchronizationObject2(ptr) NtGdiDdDDISignalSynchronizationObject2
+@ stdcall -version=0x601+ D3DKMTWaitForSynchronizationObject2(ptr) NtGdiDdDDIWaitForSynchronizationObject2
+# WDDM 1.2 additions (Win8+)
+@ stdcall -version=0x602+ D3DKMTEnumAdapters(ptr) NtGdiDdDDIEnumAdapters
+@ stdcall -version=0x602+ D3DKMTOpenAdapterFromLuid(ptr) NtGdiDdDDIOpenAdapterFromLuid
+@ stdcall -version=0x602+ D3DKMTOfferAllocations(ptr) NtGdiDdDDIOfferAllocations
+@ stdcall -version=0x602+ D3DKMTReclaimAllocations(ptr) NtGdiDdDDIReclaimAllocations
+@ stdcall -version=0x602+ D3DKMTSetVidPnSourceOwner1(ptr) NtGdiDdDDISetVidPnSourceOwner1
+@ stdcall -version=0x602+ D3DKMTWaitForVerticalBlankEvent2(ptr) NtGdiDdDDIWaitForVerticalBlankEvent2

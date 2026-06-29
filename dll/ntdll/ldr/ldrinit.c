@@ -951,7 +951,7 @@ LdrpRunInitializeRoutines(IN PCONTEXT Context OPTIONAL)
             _SEH2_TRY
             {
                 /* Check if it has TLS */
-                if (LdrEntry->TlsIndex && Context)
+                if (LdrEntry->TlsIndex)
                 {
                     /* Call TLS */
                     LdrpCallTlsInitializers(LdrEntry, DLL_PROCESS_ATTACH);
@@ -1450,6 +1450,106 @@ LdrpInitializeTls(VOID)
 
     /* Done setting up TLS, allocate entries */
     return LdrpAllocateTls();
+}
+
+NTSTATUS
+NTAPI
+LdrpHandleTlsData(IN PLDR_DATA_TABLE_ENTRY LdrEntry)
+{
+    PIMAGE_TLS_DIRECTORY TlsDirectory;
+    PLDRP_TLS_DATA TlsData;
+    ULONG Size;
+    SIZE_T TlsDataSize;
+    PVOID *OldVector, *NewVector;
+    PVOID TlsBlock;
+    ULONG NewIndex;
+    PTEB Teb = NtCurrentTeb();
+
+    /* Check if this DLL has a TLS directory */
+    TlsDirectory = RtlImageDirectoryEntryToData(LdrEntry->DllBase,
+                                                TRUE,
+                                                IMAGE_DIRECTORY_ENTRY_TLS,
+                                                &Size);
+    if (!TlsDirectory) return STATUS_SUCCESS;
+
+    /* Mark that the image has TLS */
+    LdrpImageHasTls = TRUE;
+
+    DPRINT1("LDR: Dynamic Tls Found in %wZ at %p\n",
+            &LdrEntry->BaseDllName, TlsDirectory);
+
+    /* Allocate a TLS data entry */
+    TlsData = RtlAllocateHeap(RtlGetProcessHeap(), 0, sizeof(LDRP_TLS_DATA));
+    if (!TlsData) return STATUS_NO_MEMORY;
+
+    /* Pin the DLL and mark it for TLS usage */
+    LdrEntry->LoadCount = -1;
+    LdrEntry->TlsIndex = -1;
+
+    /* Cache the TLS directory */
+    TlsData->TlsDirectory = *TlsDirectory;
+
+    /* Assign the next TLS index */
+    NewIndex = LdrpNumberOfTlsEntries;
+    *(PLONG)TlsData->TlsDirectory.AddressOfIndex = NewIndex;
+    TlsData->TlsDirectory.Characteristics = NewIndex;
+
+    /* Add to the global TLS list */
+    InsertTailList(&LdrpTlsList, &TlsData->TlsLinks);
+    LdrpNumberOfTlsEntries++;
+
+    /* Now expand the current thread's TLS vector */
+    OldVector = Teb->ThreadLocalStoragePointer;
+
+    /* Allocate a new vector with room for the new entry */
+    NewVector = RtlAllocateHeap(RtlGetProcessHeap(),
+                                0,
+                                LdrpNumberOfTlsEntries * sizeof(PVOID));
+    if (!NewVector) return STATUS_NO_MEMORY;
+
+    /* Copy old entries if they existed */
+    if (OldVector)
+    {
+        RtlCopyMemory(NewVector, OldVector, NewIndex * sizeof(PVOID));
+    }
+    else
+    {
+        RtlZeroMemory(NewVector, LdrpNumberOfTlsEntries * sizeof(PVOID));
+    }
+
+    /* Allocate the TLS data block for this module */
+    TlsDataSize = TlsData->TlsDirectory.EndAddressOfRawData -
+                  TlsData->TlsDirectory.StartAddressOfRawData;
+    TlsBlock = RtlAllocateHeap(RtlGetProcessHeap(),
+                               0,
+                               TlsDataSize + TlsData->TlsDirectory.SizeOfZeroFill);
+    if (!TlsBlock)
+    {
+        RtlFreeHeap(RtlGetProcessHeap(), 0, NewVector);
+        return STATUS_NO_MEMORY;
+    }
+
+    /* Copy the template data and zero-fill the rest */
+    RtlCopyMemory(TlsBlock,
+                  (PVOID)TlsData->TlsDirectory.StartAddressOfRawData,
+                  TlsDataSize);
+    RtlZeroMemory((PCHAR)TlsBlock + TlsDataSize,
+                  TlsData->TlsDirectory.SizeOfZeroFill);
+
+    /* Set the new slot */
+    NewVector[NewIndex] = TlsBlock;
+
+    /* Swap the vector */
+    Teb->ThreadLocalStoragePointer = NewVector;
+
+    /* Free the old vector (not the data blocks it pointed to -- those are still live) */
+    if (OldVector)
+        RtlFreeHeap(RtlGetProcessHeap(), 0, OldVector);
+
+    DPRINT1("LDR: Dynamic TLS index %lu assigned to %wZ, vector %p\n",
+            NewIndex, &LdrEntry->BaseDllName, NewVector);
+
+    return STATUS_SUCCESS;
 }
 
 NTSTATUS

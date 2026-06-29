@@ -32,6 +32,7 @@
 @ stdcall CascadeChildWindows(long long)
 @ stdcall CascadeWindows(long long ptr long ptr)
 @ stdcall ChangeClipboardChain(long long) NtUserChangeClipboardChain
+@ stdcall -version=0x600+ CheckDesktopByThreadId(long)
 @ stdcall ChangeDisplaySettingsA(ptr long)
 @ stdcall ChangeDisplaySettingsExA(str ptr long long ptr)
 @ stdcall ChangeDisplaySettingsExW(wstr ptr long long ptr)
@@ -201,6 +202,8 @@
 @ stdcall DrawTextExA(long str long ptr long ptr)
 @ stdcall DrawTextExW(long wstr long ptr long ptr)
 @ stdcall DrawTextW(long wstr long ptr long)
+@ stdcall -version=0x600+ DwmStartRedirection(ptr)
+@ stdcall -version=0x600+ DwmStopRedirection()
 @ stdcall EditWndProc(long long long long) EditWndProcA
 @ stdcall EmptyClipboard() NtUserEmptyClipboard
 @ stdcall EnableMenuItem(long long long)
@@ -392,6 +395,8 @@
 @ stdcall GetUserObjectSecurity (long ptr ptr long ptr)
 @ stdcall GetWinStationInfo(ptr)
 @ stdcall GetWindow(long long)
+@ stdcall -version=0x600+ GetWindowCompositionAttribute(ptr ptr)
+@ stdcall -version=0x600+ GetWindowCompositionInfo(ptr ptr)
 @ stdcall GetWindowContextHelpId(long)
 @ stdcall GetWindowDC(long) NtUserGetWindowDC
 @ stdcall -version=0x601+ GetWindowDisplayAffinity(long ptr)
@@ -415,8 +420,10 @@
 @ stdcall GetWindowWord(long long)
 @ stdcall GrayStringA(long long ptr long long long long long long)
 @ stdcall GrayStringW(long long ptr long long long long long long)
+@ stdcall -version=0x600+ GhostWindowFromHungWindow(ptr)
 @ stdcall HideCaret(long) NtUserHideCaret
 @ stdcall HiliteMenuItem(long long long long) NtUserHiliteMenuItem
+@ stdcall -version=0x600+ HungWindowFromGhostWindow(ptr)
 @ stdcall IMPGetIMEA(long ptr)
 @ stdcall IMPGetIMEW(long ptr)
 @ stdcall IMPQueryIMEA(ptr)
@@ -462,6 +469,7 @@
 @ stdcall IsRectEmpty(ptr)
 @ stdcall IsSETEnabled()
 @ stdcall IsServerSideWindow(long)
+@ stdcall -version=0x600+ IsThreadDesktopComposited()
 @ stdcall -version=0x601+ IsTouchWindow(long ptr)
 @ stdcall -stub -version=0xA00+ IsValidDpiAwarenessContext(long)
 @ stdcall IsWinEventHookInstalled(long)
@@ -585,6 +593,9 @@
 @ stdcall RegisterClipboardFormatW(wstr)
 @ stdcall RegisterDeviceNotificationA(long ptr long) RegisterDeviceNotificationW
 @ stdcall RegisterDeviceNotificationW(long ptr long)
+@ stdcall -version=0x600+ RegisterErrorReportingDialog(ptr long)
+@ stdcall -version=0x600+ RegisterFrostWindow(ptr)
+@ stdcall -version=0x600+ RegisterGhostWindow(ptr)
 @ stdcall RegisterHotKey(long long long long) NtUserRegisterHotKey
 @ stdcall RegisterLogonProcess(long long)
 @ stdcall RegisterMessagePumpHook(ptr)
@@ -592,6 +603,7 @@
 @ stdcall -version=0x600+ RegisterPowerSettingNotification(long ptr long)
 @ stdcall RegisterRawInputDevices(ptr long long)
 @ stdcall RegisterServicesProcess(long)
+@ stdcall -version=0x600+ RegisterSessionPort(ptr)
 @ stdcall RegisterShellHookWindow(long)
 @ stdcall RegisterSystemThread(long long)
 @ stdcall RegisterTasklist(long) NtUserRegisterTasklist
@@ -762,6 +774,7 @@
 @ stdcall UnregisterMessagePumpHook()
 @ stdcall -version=0x601+ UnregisterTouchWindow(ptr)
 @ stdcall -version=0x600+ UnregisterPowerSettingNotification(ptr)
+@ stdcall -version=0x600+ UnregisterSessionPort()
 @ stdcall -version=0x602+ UnregisterSuspendResumeNotification(ptr)
 @ stdcall UnregisterUserApiHook() NtUserUnregisterUserApiHook
 @ stdcall UpdateLayeredWindow(long long ptr ptr long ptr long ptr long)

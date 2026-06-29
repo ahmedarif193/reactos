@@ -28,6 +28,7 @@
 @ cdecl _copysign(double double) ucrtbase._copysign
 @ cdecl _copysignf(float float) ucrtbase._copysignf
 @ cdecl _expand(ptr long) ucrtbase._expand
+@ cdecl _fdopen(long str) ucrtbase._fdopen
 @ cdecl _finite(double) ucrtbase._finite
 @ cdecl _fpclass(double) ucrtbase._fpclass
 @ cdecl _get_fmode(ptr) ucrtbase._get_fmode
@@ -186,16 +187,24 @@
 @ cdecl asin(double) ucrtbase.asin
 @ cdecl atan(double) ucrtbase.atan
 @ cdecl atan2(double double) ucrtbase.atan2
+@ cdecl atan2f(float float) ucrtbase.atan2f
+@ cdecl atanf(float) ucrtbase.atanf
 @ cdecl ceil(double) ucrtbase.ceil
+@ cdecl ceilf(float) ucrtbase.ceilf
 @ cdecl cos(double) ucrtbase.cos
+@ cdecl cosf(float) ucrtbase.cosf
 @ cdecl cosh(double) ucrtbase.cosh
 @ cdecl exp(double) ucrtbase.exp
+@ cdecl expf(float) ucrtbase.expf
 @ cdecl exp2(double) ucrtbase.exp2
 @ cdecl exp2f(float) ucrtbase.exp2f
 @ cdecl exp2l(double) ucrtbase.exp2l
 @ cdecl expm1l(double) ucrtbase.expm1l
 @ cdecl fabs(double) ucrtbase.fabs
 @ cdecl floor(double) ucrtbase.floor
+@ cdecl floorf(float) ucrtbase.floorf
+@ cdecl fma(double double double) ucrtbase.fma
+@ cdecl fmaf(float float float) ucrtbase.fmaf
 @ cdecl fmod(double double) ucrtbase.fmod
 @ cdecl frexp(double ptr) ucrtbase.frexp
 @ cdecl hypot(double double) ucrtbase.hypot
@@ -204,7 +213,9 @@
 @ cdecl iswprint(long) ucrtbase.iswprint
 @ cdecl labs(long) ucrtbase.labs
 @ cdecl ldexp(double long) ucrtbase.ldexp
+@ cdecl llround(double) ucrtbase.llround
 @ cdecl log(double) ucrtbase.log
+@ cdecl logf(float) ucrtbase.logf
 @ cdecl log10(double) ucrtbase.log10
 @ cdecl log1pl(double) ucrtbase.log1pl
 @ cdecl log2(double) ucrtbase.log2
@@ -214,19 +225,27 @@
 @ cdecl lrint(double) ucrtbase.lrint
 @ cdecl lrintf(float) ucrtbase.lrintf
 @ cdecl lrintl(double) ucrtbase.lrintl
+@ cdecl lround(double) ucrtbase.lround
+@ cdecl lroundf(float) ucrtbase.lroundf
 @ cdecl lroundl(double) ucrtbase.lroundl
 @ cdecl modf(double ptr) ucrtbase.modf
 @ cdecl nanl(str) ucrtbase.nanl
 @ cdecl nextafterf(float float) ucrtbase.nextafterf
 @ cdecl pow(double double) ucrtbase.pow
+@ cdecl powf(float float) ucrtbase.powf
+@ cdecl rint(double) ucrtbase.rint
+@ cdecl rintf(float) ucrtbase.rintf
 @ cdecl rintl(double) ucrtbase.rintl
 @ cdecl round(double) ucrtbase.round
 @ cdecl roundf(float) ucrtbase.roundf
 @ cdecl roundl(double) ucrtbase.roundl
 @ cdecl set_unexpected(ptr) ucrtbase.set_unexpected
 @ cdecl sin(double) ucrtbase.sin
+@ cdecl sinf(float) ucrtbase.sinf
 @ cdecl sinh(double) ucrtbase.sinh
 @ cdecl sqrt(double) ucrtbase.sqrt
 @ cdecl tan(double) ucrtbase.tan
 @ cdecl tanh(double) ucrtbase.tanh
+@ cdecl trunc(double) ucrtbase.trunc
+@ cdecl truncf(float) ucrtbase.truncf
 @ cdecl truncl(double) ucrtbase.truncl

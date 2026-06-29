@@ -2569,6 +2569,15 @@ LdrpLoadDll(IN BOOLEAN Redirected,
             InsertTailList(&Peb->Ldr->InInitializationOrderModuleList,
                            &LdrEntry->InInitializationOrderLinks);
 
+            /* Handle TLS for dynamically loaded DLLs.  During process init,
+             * LdrpInitializeTls() handles all statically-imported DLLs after
+             * the import graph is fully resolved.  We only need to act for
+             * DLLs loaded later via LoadLibrary (LdrpLdrDatabaseIsSetup). */
+            if (LdrpLdrDatabaseIsSetup)
+            {
+                LdrpHandleTlsData(LdrEntry);
+            }
+
             /* If we have to run the entrypoint, make sure the DB is ready */
             if (CallInit && LdrpLdrDatabaseIsSetup)
             {

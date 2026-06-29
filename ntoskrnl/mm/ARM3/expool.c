@@ -3139,30 +3139,20 @@ ExFreePoolWithTag(IN PVOID P,
     PGENERAL_LOOKASIDE LookasideList;
     PEPROCESS Process;
 
-#if defined(_M_ARM64) || defined(__aarch64__)
+    /*
+     * Pool frees must never be routed to MmFreeContiguousMemory.
+     * If a caller passes NULL or an address outside the pool VA ranges,
+     * fail as an invalid pool free instead of silently treating it as a
+     * contiguous-memory allocation.
+     */
     {
         BOOLEAN InNonPaged = ((P >= MmNonPagedPoolStart) && (P < MmNonPagedPoolEnd));
         BOOLEAN InPaged = ((P >= MmPagedPoolStart) && (P < MmPagedPoolEnd));
-        if (!InNonPaged && !InPaged)
+        if (!P || (!InNonPaged && !InPaged && !MmIsSpecialPoolAddress(P)))
         {
-            static volatile LONG LogBudget = 4;
-            if (InterlockedDecrement(&LogBudget) >= 0)
-            {
-                DbgPrintEx(DPFLTR_MM_ID,
-                           DPFLTR_ERROR_LEVEL,
-                           "ExFreePoolWithTag: pointer %p outside pool (NP %p-%p, PP %p-%p) caller=%p tag=0x%lx\n",
-                           P,
-                           MmNonPagedPoolStart,
-                           MmNonPagedPoolEnd,
-                           MmPagedPoolStart,
-                           MmPagedPoolEnd,
-                           _ReturnAddress(),
-                           TagToFree);
-            }
-            return;
+            KeBugCheckEx(BAD_POOL_CALLER, 0x60, (ULONG_PTR)P, 0, 0);
         }
     }
-#endif
 
     //
     // Check if any of the debug flags are enabled

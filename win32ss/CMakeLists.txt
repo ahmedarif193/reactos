@@ -25,6 +25,16 @@ add_subdirectory(user/winsrv)
 
 spec2def(win32k.sys win32k.spec ADD_IMPORTLIB)
 
+add_custom_command(
+    OUTPUT ${CMAKE_CURRENT_BINARY_DIR}/win32k_sorted.def
+    COMMAND ${CMAKE_COMMAND}
+            -DINPUT=${CMAKE_CURRENT_BINARY_DIR}/win32k.def
+            -DOUTPUT=${CMAKE_CURRENT_BINARY_DIR}/win32k_sorted.def
+            -P ${CMAKE_CURRENT_SOURCE_DIR}/sort_win32k_def.cmake
+    DEPENDS
+            ${CMAKE_CURRENT_BINARY_DIR}/win32k.def
+            ${CMAKE_CURRENT_SOURCE_DIR}/sort_win32k_def.cmake)
+
 # embed RTC libs
 if (STACK_PROTECTOR)
     target_sources(libwin32k PRIVATE $<TARGET_OBJECTS:gcc_ssp_win32k>)
@@ -64,6 +74,7 @@ list(APPEND SOURCE
     gdi/dib/dib32bpp.c
     gdi/dib/floodfill.c
     gdi/dib/stretchblt.c
+    gdi/eng/cddinterface.c
     gdi/eng/alphablend.c
     gdi/eng/bitblt.c
     gdi/eng/engbrush.c
@@ -124,6 +135,7 @@ list(APPEND SOURCE
     user/ntuser/dde.c
     user/ntuser/defwnd.c
     user/ntuser/desktop.c
+    user/ntuser/dwm.c
     user/ntuser/display.c
     user/ntuser/draw.c
     user/ntuser/event.c
@@ -246,10 +258,10 @@ add_library(win32k MODULE
     gdi/ntgdi/brush.cpp
     ${win32k_asm}
     win32k.rc
-    ${CMAKE_CURRENT_BINARY_DIR}/win32k.def)
+    ${CMAKE_CURRENT_BINARY_DIR}/win32k_sorted.def)
 
 set_module_type(win32k kernelmodedriver)
-target_link_libraries(win32k ${PSEH_LIB} dxguid libcntpr)
+target_link_libraries(win32k ${PSEH_LIB} dxguid libcntpr wddm_bridge)
 
 if(USE_DIBLIB)
     target_link_libraries(win32k diblib)

@@ -162,6 +162,7 @@ DrvEnablePDEV(
    ppdev->FallbackSection = NULL;
    ppdev->AccelBackend = NULL;
    ppdev->BackendContext = NULL;
+   ppdev->SysmemFramebuffer = FALSE;
 
    if (!IntInitScreenInfo(ppdev, pdm, &GdiInfo, &DevInfo))
    {

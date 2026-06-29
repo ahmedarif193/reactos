@@ -1000,6 +1000,7 @@ MiAllocatePoolPages(IN POOL_TYPE PoolType,
     }
 
     //
+    //
     // Loop the pages
     //
     TempPte = ValidKernelPte;
@@ -1039,6 +1040,7 @@ MiAllocatePoolPages(IN POOL_TYPE PoolType,
         /* Write the PTE for it */
         TempPte.u.Hard.PageFrameNumber = PageFrameNumber;
         MI_WRITE_VALID_PTE(PointerPte++, TempPte);
+
     } while (--SizeInPages > 0);
 
     //

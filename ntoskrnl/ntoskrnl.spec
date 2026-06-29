@@ -319,6 +319,7 @@
 @ stdcall InbvInstallDisplayStringFilter(ptr)
 @ stdcall InbvIsBootDriverInstalled()
 @ stdcall InbvGetGopFrameBufferInfo(ptr)
+@ stdcall InbvHasValidGopFrameBuffer()
 @ stdcall InbvQueryGopModeCount(ptr)
 @ stdcall InbvQueryGopModeInfo(long ptr)
 @ stdcall InbvGetGopPreferredMode()
@@ -372,7 +373,7 @@
 @ stdcall IoCheckShareAccess(long long ptr ptr long)
 @ stdcall IoCompleteRequest(ptr long)
 @ stdcall IoConnectInterrupt(ptr ptr ptr ptr long long long long long long long)
-@ stdcall -version=0x600+ IoConnectInterruptEx(ptr)
+@ stdcall IoConnectInterruptEx(ptr)
 @ stdcall IoCreateController(long)
 @ stdcall IoCreateDevice(ptr long ptr long long long ptr)
 @ stdcall IoCreateDisk(ptr ptr)
@@ -401,7 +402,7 @@
 @ extern IoDeviceHandlerObjectType
 @ extern IoDeviceObjectType
 @ stdcall IoDisconnectInterrupt(ptr)
-@ stdcall -version=0x600+ IoDisconnectInterruptEx(ptr)
+@ stdcall IoDisconnectInterruptEx(ptr)
 @ stdcall IopReserveIrqVectors(ptr long)
 @ stdcall IopReleaseIrqVectors(ptr long)
 @ extern IoDriverObjectType
@@ -453,6 +454,7 @@
 @ stdcall IoIsSystemThread(ptr)
 @ stdcall IoIsValidNameGraftingBuffer(ptr ptr)
 @ stdcall IoIsWdmVersionAvailable(long long)
+@ stdcall IoLoadDriver(ptr)
 @ stdcall IoMakeAssociatedIrp(ptr long)
 @ stdcall IoOpenDeviceInterfaceRegistryKey(ptr long ptr)
 @ stdcall IoOpenDeviceRegistryKey(ptr long long ptr)
@@ -603,6 +605,7 @@
 @ stdcall KeGenericCallDpc(ptr ptr)
 @ stdcall KeGetCurrentThread()
 @ stdcall -arch=arm64 KeGetCurrentIrql()
+@ stdcall -arch=x86_64 KeGetCurrentIrql() KxGetCurrentIrql
 @ stdcall -arch=arm64 KeGetCurrentProcessorNumberEx(ptr)
 @ stdcall KeGetPreviousMode()
 @ stdcall KeGetRecommendedSharedDataAlignment()
@@ -627,7 +630,7 @@
 @ stdcall KeInitializeMutex(ptr long)
 @ stdcall KeInitializeQueue(ptr long)
 @ stdcall KeInitializeSemaphore(ptr long long)
-@ stdcall -arch=i386,arm KeInitializeSpinLock(ptr) _KeInitializeSpinLock
+@ stdcall -arch=i386,arm,x86_64 KeInitializeSpinLock(ptr) _KeInitializeSpinLock
 @ stdcall KeInitializeThreadedDpc(ptr ptr ptr)
 @ stdcall KeInitializeTimer(ptr)
 @ stdcall KeInitializeTimerEx(ptr long)
@@ -1050,6 +1053,7 @@
 @ stdcall PsRevertToSelf()
 @ stdcall PsSetContextThread(ptr ptr long)
 @ stdcall PsSetCreateProcessNotifyRoutine(ptr long)
+@ stdcall PsSetCreateProcessNotifyRoutineEx(ptr long)
 @ stdcall PsSetCreateThreadNotifyRoutine(ptr)
 @ stdcall PsSetJobUIRestrictionsClass(ptr long)
 @ stdcall PsSetLegoNotifyRoutine(ptr)

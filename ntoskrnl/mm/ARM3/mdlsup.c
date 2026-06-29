@@ -350,7 +350,14 @@ MiUnmapLockedPagesInUserSpace(
 
         if (MiDecrementPageTableReferences(BaseAddress) == 0)
         {
-            ASSERT(MiIsPteOnPdeBoundary(PointerPte + 1) || (NumberOfPages == 1));
+            /*
+             * We can only delete the page table once the next virtual page
+             * would live under a different PDE, or when this was the last
+             * page in the mapping. Key off the actual VA transition instead
+             * of the self-map PTE alias layout.
+             */
+            ASSERT((NumberOfPages == 1) ||
+                   (MiAddressToPde((PVOID)((ULONG_PTR)BaseAddress + PAGE_SIZE)) != PointerPde));
             MiDeletePde(PointerPde, Process);
         }
 

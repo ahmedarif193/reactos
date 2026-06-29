@@ -378,7 +378,7 @@ MapFramebuffer:
    ppdev->ShadowSection = NULL;
    ppdev->VramPtr = NULL;
 
-   if (!ppdev->UsingFallbackSurface && ppdev->ScreenPtr)
+   if (!ppdev->UsingFallbackSurface && ppdev->ScreenPtr && !ppdev->SysmemFramebuffer)
    {
       SIZE_T shadowSize = (SIZE_T)ppdev->ScreenDelta * (SIZE_T)ppdev->ScreenHeight;
       PVOID shadowMapping;
@@ -406,6 +406,21 @@ MapFramebuffer:
       {
          FB_DBG("Shadow buffer allocation failed, using direct VRAM\n");
       }
+   }
+   else if (!ppdev->UsingFallbackSurface && ppdev->ScreenPtr && ppdev->SysmemFramebuffer)
+   {
+      /*
+       * dxgkrnl returned a system-memory scanout buffer.  Reuse the
+       * existing shadow/hook path so GDI dispatches through our Drv*
+       * hooks, but do not allocate or copy a second shadow.
+       */
+      ppdev->ShadowBuffer = ppdev->ScreenPtr;
+      ppdev->ShadowSection = NULL;
+      ppdev->VramPtr = NULL;
+      ppdev->UsingShadow = TRUE;
+
+      FB_DBG("Using dxgkrnl sysmem framebuffer @ %p with immediate dirty-rect presents\n",
+             ppdev->ScreenPtr);
    }
 
    switch (ppdev->BitsPerPixel)
@@ -507,8 +522,10 @@ MapFramebuffer:
 ShadowFailed:
       /* Shadow setup failed — tear down and fall back to direct VRAM */
       FB_DBG("Shadow setup failed, falling back to direct VRAM\n");
-      EngFreeSectionMem(ppdev->ShadowSection, ppdev->ShadowBuffer);
-      ppdev->ScreenPtr = ppdev->VramPtr;
+      if (ppdev->ShadowSection && ppdev->ShadowBuffer)
+         EngFreeSectionMem(ppdev->ShadowSection, ppdev->ShadowBuffer);
+      if (!ppdev->SysmemFramebuffer)
+         ppdev->ScreenPtr = ppdev->VramPtr;
       ppdev->ShadowBuffer = NULL;
       ppdev->ShadowSection = NULL;
       ppdev->VramPtr = NULL;
@@ -581,8 +598,10 @@ DrvDisableSurface(
          EngDeleteSurface(ppdev->hShadowBitmap);
          ppdev->hShadowBitmap = NULL;
       }
-      EngFreeSectionMem(ppdev->ShadowSection, ppdev->ShadowBuffer);
-      ppdev->ScreenPtr = ppdev->VramPtr;
+      if (ppdev->ShadowSection && ppdev->ShadowBuffer)
+         EngFreeSectionMem(ppdev->ShadowSection, ppdev->ShadowBuffer);
+      if (!ppdev->SysmemFramebuffer)
+         ppdev->ScreenPtr = ppdev->VramPtr;
       ppdev->ShadowBuffer = NULL;
       ppdev->ShadowSection = NULL;
       ppdev->VramPtr = NULL;

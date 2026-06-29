@@ -38,7 +38,9 @@ KMT_TESTFUNC Test_IoInterrupt;
 KMT_TESTFUNC Test_IoIrp;
 KMT_TESTFUNC Test_IoMdl;
 KMT_TESTFUNC Test_IoVolume;
+#ifdef KMT_ENABLE_RAMDISK_IOCTL
 KMT_TESTFUNC Test_RamdiskIoctl;
+#endif
 KMT_TESTFUNC Test_KdSystemDebugControl;
 KMT_TESTFUNC Test_KeApc;
 KMT_TESTFUNC Test_KeDeviceQueue;
@@ -75,6 +77,10 @@ KMT_TESTFUNC Test_SeInheritance;
 KMT_TESTFUNC Test_SeLogonSession;
 KMT_TESTFUNC Test_SeQueryInfoToken;
 KMT_TESTFUNC Test_SeTokenFiltering;
+KMT_TESTFUNC Test_WdmExRundown;
+KMT_TESTFUNC Test_WdmIoRemoveLock;
+KMT_TESTFUNC Test_WdmIoShareAccess;
+KMT_TESTFUNC Test_WdmNt81Abi;
 KMT_TESTFUNC Test_RtlAvlTree;
 KMT_TESTFUNC Test_RtlCaptureContext;
 KMT_TESTFUNC Test_RtlException;
@@ -126,7 +132,9 @@ const KMT_TEST TestList[] =
     { "IoIrp",                              Test_IoIrp },
     { "IoMdl",                              Test_IoMdl },
     { "IoVolume",                           Test_IoVolume },
+#ifdef KMT_ENABLE_RAMDISK_IOCTL
     { "RamdiskIoctl",                       Test_RamdiskIoctl },
+#endif
     { "KdSystemDebugControl",               Test_KdSystemDebugControl },
     { "KeApc",                              Test_KeApc },
     { "KeDeviceQueue",                      Test_KeDeviceQueue },
@@ -174,6 +182,10 @@ const KMT_TEST TestList[] =
     { "SeLogonSession",                     Test_SeLogonSession },
     { "SeQueryInfoToken",                   Test_SeQueryInfoToken },
     { "SeTokenFiltering",                   Test_SeTokenFiltering },
+    { "WdmExRundown",                       Test_WdmExRundown },
+    { "WdmIoRemoveLock",                    Test_WdmIoRemoveLock },
+    { "WdmIoShareAccess",                   Test_WdmIoShareAccess },
+    { "WdmNt81Abi",                         Test_WdmNt81Abi },
     { "ZwAllocateVirtualMemory",            Test_ZwAllocateVirtualMemory },
     { "ZwCreateSection",                    Test_ZwCreateSection },
     { "ZwMapViewOfSection",                 Test_ZwMapViewOfSection },

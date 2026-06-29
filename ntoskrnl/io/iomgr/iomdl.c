@@ -43,7 +43,14 @@ IoAllocateMdl(IN PVOID VirtualAddress,
         /* This is bigger then our fixed-size MDLs. Calculate real size */
         Size *= sizeof(PFN_NUMBER);
         Size += sizeof(MDL);
-        if (Size > MAXUSHORT) return NULL;
+        /*
+         * Windows allows MDLs larger than MAXUSHORT bytes.  The original
+         * ReactOS check rejected MDLs for buffers > ~8 MB on amd64
+         * (where PFN_NUMBER is 8 bytes).  Large GPU framebuffer
+         * allocations (e.g., 44 MB from viogpudo) need MDLs that
+         * exceed 65535 bytes.  Use a ULONG-range check instead.
+         */
+        if (Size > (ULONG)0x10000000) return NULL; /* ~256 MB MDL max */
     }
     else
     {

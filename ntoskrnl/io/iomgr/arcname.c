@@ -30,6 +30,49 @@ IopFormatString(
     ...);
 
 static
+NTSTATUS
+IopProbeReadableDevice(
+    _In_ PDEVICE_OBJECT DeviceObject,
+    _In_ PLARGE_INTEGER StartingOffset,
+    _In_ ULONG Length)
+{
+    PVOID Buffer;
+    KEVENT Event;
+    IO_STATUS_BLOCK IoStatusBlock;
+    PIRP Irp;
+    NTSTATUS Status;
+
+    Buffer = ExAllocatePoolWithTag(NonPagedPoolCacheAligned, Length, TAG_IO);
+    if (!Buffer)
+        return STATUS_INSUFFICIENT_RESOURCES;
+
+    KeInitializeEvent(&Event, NotificationEvent, FALSE);
+
+    Irp = IoBuildSynchronousFsdRequest(IRP_MJ_READ,
+                                      DeviceObject,
+                                      Buffer,
+                                      Length,
+                                      StartingOffset,
+                                      &Event,
+                                      &IoStatusBlock);
+    if (!Irp)
+    {
+        ExFreePoolWithTag(Buffer, TAG_IO);
+        return STATUS_INSUFFICIENT_RESOURCES;
+    }
+
+    Status = IoCallDriver(DeviceObject, Irp);
+    if (Status == STATUS_PENDING)
+    {
+        KeWaitForSingleObject(&Event, Executive, KernelMode, FALSE, NULL);
+        Status = IoStatusBlock.Status;
+    }
+
+    ExFreePoolWithTag(Buffer, TAG_IO);
+    return Status;
+}
+
+static
 BOOLEAN
 IopParseArcNumberComponent(
     _In_reads_or_z_(MAXULONG) PCSTR String,
@@ -346,6 +389,7 @@ IopCreateArcBootAliasFallback(
     for (ULONG Index = 0; Index < CandidateCount; Index++)
     {
         UNICODE_STRING *TargetString = &Candidates[Index];
+        static const UNICODE_STRING CdRomPrefix = RTL_CONSTANT_STRING(L"\\Device\\CdRom");
         PFILE_OBJECT FileObject;
         PDEVICE_OBJECT DeviceObject;
         NTSTATUS QueryStatus;
@@ -372,6 +416,23 @@ IopCreateArcBootAliasFallback(
         }
 
         ObDereferenceObject(FileObject);
+
+        if (RtlPrefixUnicodeString(&CdRomPrefix, TargetString, TRUE))
+        {
+            LARGE_INTEGER StartingOffset;
+
+            StartingOffset.QuadPart = 0x8000;
+            QueryStatus = IopProbeReadableDevice(DeviceObject,
+                                                 &StartingOffset,
+                                                 2048);
+            if (!NT_SUCCESS(QueryStatus))
+            {
+                ARC_WARN("CreateArcNames fallback read probe failed for %wZ (0x%08lx)\n",
+                         TargetString,
+                         QueryStatus);
+                continue;
+            }
+        }
 
         LinkStatus = IoAssignArcName(&ArcUnicode, TargetString);
         if (NT_SUCCESS(LinkStatus))

@@ -145,6 +145,8 @@ typedef struct _PDEVOBJ
     UINT SafetyRemoveLevel; /* at what level was the cursor removed?
                               0 for not removed */
     UINT SafetyRemoveCount;
+    volatile LONG DwmSuppressMouseSafety;    /* Set by DWM via ExtEscape to skip cursor hide/show during composition present */
+    volatile LONG DwmCompositionInProgress;  /* Set by DWM via ExtEscape while BitBlt is in progress — present worker skips */
     struct _EDD_DIRECTDRAW_GLOBAL * pEDDgpl;
 } PDEVOBJ, *PPDEVOBJ;
 

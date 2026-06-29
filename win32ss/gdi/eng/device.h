@@ -55,6 +55,13 @@ DWORD
 EngpGetDisplayDriverAccelerationLevel(
     _In_ PGRAPHICS_DEVICE pGraphicsDevice);
 
+/* Display mode change serialization semaphore (CCD / VidPN) */
+extern HSEMAPHORE ghsemDynamicModeChange;
+
+ULONG
+NTAPI
+EngpCountDisplayPaths(VOID);
+
 CODE_SEG("INIT")
 NTSTATUS
 NTAPI

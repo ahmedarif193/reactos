@@ -1022,19 +1022,21 @@ LdrpApisetVersion(VOID)
             CompatVersion = OsVersion;
         }
 
-        if ((CompatVersion < _WIN32_WINNT_WIN7) &&
-            (OsVersion >= _WIN32_WINNT_WIN7))
+        if (CompatVersion < _WIN32_WINNT_WIN7)
         {
             /*
-             * Modern Windows keeps the apiset layer available even when the
-             * requested compatibility GUID predates Windows 7.  ReactOS needs
-             * the same behaviour because contemporary applications import the
-             * api-ms-win-* DLLs unconditionally.
+             * ReactOS reports OS version 5.2 (Server 2003) but ships API set
+             * forwarder DLLs and ucrtbase.dll for WDDM/modern driver support.
+             * Without API set resolution, the loader loads each api-ms-win-*
+             * DLL as a separate forwarder image, causing deep recursion in
+             * LdrpLoadDll that overflows the stack for DLLs with many API set
+             * dependencies (e.g. Mesa/virgl).
+             *
+             * Enable API set resolution unconditionally — this matches Windows
+             * 10 behavior where the API set layer is always active regardless
+             * of the application's compatibility manifest.
              */
-            DPRINT1("Compat version %x < Win7 but OS %x supports apisets; forcing Win7\n",
-                    CompatVersion,
-                    OsVersion);
-            CompatVersion = _WIN32_WINNT_WIN7;
+            CompatVersion = _WIN32_WINNT_WIN10;
         }
 
         switch (CompatVersion)
@@ -1057,22 +1059,18 @@ LdrpApisetVersion(VOID)
 
             case _WIN32_WINNT_WIN7:
                 CachedApisetVersion = APISET_WIN7;
-                DPRINT1("Activating apisets for Win7\n");
                 break;
 
             case _WIN32_WINNT_WIN8:
                 CachedApisetVersion = APISET_WIN8;
-                DPRINT1("Activating apisets for Win8\n");
                 break;
 
             case _WIN32_WINNT_WINBLUE:
                 CachedApisetVersion = APISET_WIN81;
-                DPRINT1("Activating apisets for Win8.1\n");
                 break;
 
             case _WIN32_WINNT_WIN10:
                 CachedApisetVersion = APISET_WIN10;
-                DPRINT1("Activating apisets for Win10\n");
                 break;
 
             default:

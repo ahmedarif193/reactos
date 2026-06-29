@@ -114,13 +114,7 @@ typedef enum {
 typedef struct DISPLAYCONFIG_PATH_TARGET_INFO {
     LUID                                  adapterId;
     UINT32                                id;
-    union {
-        UINT32 modeInfoIdx;
-        struct {
-            UINT32 desktopModeInfoIdx : 16;
-            UINT32 targetModeInfoIdx : 16;
-        } DUMMYSTRUCTNAME;
-    } DUMMYUNIONNAME;
+    UINT32                                modeInfoIdx;
     DISPLAYCONFIG_VIDEO_OUTPUT_TECHNOLOGY outputTechnology;
     DISPLAYCONFIG_ROTATION                rotation;
     DISPLAYCONFIG_SCALING                 scaling;
@@ -133,14 +127,8 @@ typedef struct DISPLAYCONFIG_PATH_TARGET_INFO {
 typedef struct DISPLAYCONFIG_PATH_SOURCE_INFO {
     LUID   adapterId;
     UINT32 id;
-    union {
-        UINT32 modeInfoIdx;
-        struct {
-          UINT32 cloneGroupId : 16;
-          UINT32 sourceModeInfoIdx : 16;
-        } DUMMYSTRUCTNAME;
-    } DUMMYUNIONNAME;
-  UINT32 statusFlags;
+    UINT32 modeInfoIdx;
+    UINT32 statusFlags;
 } DISPLAYCONFIG_PATH_SOURCE_INFO;
 
 typedef struct DISPLAYCONFIG_PATH_INFO {
@@ -183,7 +171,7 @@ typedef struct DISPLAYCONFIG_VIDEO_SIGNAL_INFO {
             UINT32 reserved : 10;
         } AdditionalSignalInfo;
         UINT32 videoStandard;
-    } DUMMYUNIONNAME;
+    };
   DISPLAYCONFIG_SCANLINE_ORDERING scanLineOrdering;
 } DISPLAYCONFIG_VIDEO_SIGNAL_INFO;
 typedef struct DISPLAYCONFIG_TARGET_MODE
@@ -204,20 +192,70 @@ typedef struct DISPLAYCONFIG_MODE_INFO {
         DISPLAYCONFIG_TARGET_MODE        targetMode;
         DISPLAYCONFIG_SOURCE_MODE        sourceMode;
         DISPLAYCONFIG_DESKTOP_IMAGE_INFO desktopImageInfo;
-    } DUMMYUNIONNAME;
+    };
 } DISPLAYCONFIG_MODE_INFO;
 
 
+/* QDC_* flags for QueryDisplayConfig */
+#define QDC_ALL_PATHS                   0x00000001
+#define QDC_ONLY_ACTIVE_PATHS           0x00000002
+#define QDC_DATABASE_CURRENT            0x00000004
+
+/* DISPLAYCONFIG_PATH_INFO flags */
+#define DISPLAYCONFIG_PATH_ACTIVE       0x00000001
+
+/* DISPLAYCONFIG_PATH_TARGET_INFO statusFlags */
+#define DISPLAYCONFIG_TARGET_IN_USE     0x00000001
+
+/* DISPLAYCONFIG_PATH_SOURCE_INFO statusFlags */
+#define DISPLAYCONFIG_SOURCE_IN_USE     0x00000001
+
+/*
+ * Count active display devices by enumerating with EnumDisplayDevicesW.
+ * Returns the number of attached-to-desktop displays.
+ */
+static UINT32 CountActiveDisplayDevices(void)
+{
+    DISPLAY_DEVICEW dd;
+    UINT32 count = 0;
+    DWORD iDevNum;
+
+    dd.cb = sizeof(dd);
+    for (iDevNum = 0; EnumDisplayDevicesW(NULL, iDevNum, &dd, 0); iDevNum++)
+    {
+        if (dd.StateFlags & DISPLAY_DEVICE_ATTACHED_TO_DESKTOP)
+            count++;
+    }
+
+    return count ? count : 1; /* at least 1 */
+}
+
 LONG
-WINAPI 
+WINAPI
 GetDisplayConfigBufferSizes(
     UINT32 flags,
     UINT32 *numPathArrayElements,
     UINT32 *numModeInfoArrayElements)
 {
-  *numPathArrayElements = 0;
-  *numModeInfoArrayElements = 0;
-  return 0;
+    UINT32 cActive;
+
+    if (!numPathArrayElements || !numModeInfoArrayElements)
+        return ERROR_INVALID_PARAMETER;
+
+    if (!(flags & (QDC_ALL_PATHS | QDC_ONLY_ACTIVE_PATHS | QDC_DATABASE_CURRENT)))
+        return ERROR_INVALID_PARAMETER;
+
+    cActive = CountActiveDisplayDevices();
+
+    /*
+     * Each active path needs:
+     *   - 1 DISPLAYCONFIG_PATH_INFO entry
+     *   - 1 source mode + 1 target mode = 2 DISPLAYCONFIG_MODE_INFO entries
+     */
+    *numPathArrayElements = cActive;
+    *numModeInfoArrayElements = cActive * 2;
+
+    return ERROR_SUCCESS;
 }
 
 LONG
@@ -230,7 +268,123 @@ QueryDisplayConfig(
     DISPLAYCONFIG_MODE_INFO   *modeInfoArray,
     DISPLAYCONFIG_TOPOLOGY_ID *currentTopologyId)
 {
-  return ERROR_ACCESS_DENIED;
+    DISPLAY_DEVICEW dd;
+    DEVMODEW dm;
+    DWORD iDevNum;
+    UINT32 pathIdx = 0, modeIdx = 0;
+    UINT32 maxPaths, maxModes;
+    LUID adapterLuid;
+
+    if (!numPathArrayElements || !pathArray ||
+        !numModeInfoArrayElements || !modeInfoArray)
+        return ERROR_INVALID_PARAMETER;
+
+    if (!(flags & (QDC_ALL_PATHS | QDC_ONLY_ACTIVE_PATHS | QDC_DATABASE_CURRENT)))
+        return ERROR_INVALID_PARAMETER;
+
+    maxPaths = *numPathArrayElements;
+    maxModes = *numModeInfoArrayElements;
+
+    /* Use a synthetic adapter LUID (session-unique identifier) */
+    adapterLuid.LowPart = 0x10001;
+    adapterLuid.HighPart = 0;
+
+    memset(pathArray, 0, maxPaths * sizeof(DISPLAYCONFIG_PATH_INFO));
+    memset(modeInfoArray, 0, maxModes * sizeof(DISPLAYCONFIG_MODE_INFO));
+
+    dd.cb = sizeof(dd);
+    for (iDevNum = 0; EnumDisplayDevicesW(NULL, iDevNum, &dd, 0); iDevNum++)
+    {
+        BOOL isActive = (dd.StateFlags & DISPLAY_DEVICE_ATTACHED_TO_DESKTOP) != 0;
+
+        if ((flags & QDC_ONLY_ACTIVE_PATHS) && !isActive)
+            continue;
+
+        if (pathIdx >= maxPaths || (modeIdx + 1) >= maxModes)
+        {
+            *numPathArrayElements = pathIdx;
+            *numModeInfoArrayElements = modeIdx;
+            return ERROR_INSUFFICIENT_BUFFER;
+        }
+
+        /* Get current display settings for this device */
+        memset(&dm, 0, sizeof(dm));
+        dm.dmSize = sizeof(dm);
+        if (!EnumDisplaySettingsW(dd.DeviceName, ENUM_CURRENT_SETTINGS, &dm))
+        {
+            /* Fall back to registry settings */
+            if (!EnumDisplaySettingsW(dd.DeviceName, ENUM_REGISTRY_SETTINGS, &dm))
+                continue;
+        }
+
+        /* Fill source mode info */
+        modeInfoArray[modeIdx].infoType = DISPLAYCONFIG_MODE_INFO_TYPE_SOURCE;
+        modeInfoArray[modeIdx].id = iDevNum;
+        modeInfoArray[modeIdx].adapterId = adapterLuid;
+        modeInfoArray[modeIdx].sourceMode.width = dm.dmPelsWidth;
+        modeInfoArray[modeIdx].sourceMode.height = dm.dmPelsHeight;
+        modeInfoArray[modeIdx].sourceMode.pixelFormat =
+            (dm.dmBitsPerPel == 32) ? DISPLAYCONFIG_PIXELFORMAT_32BPP :
+            (dm.dmBitsPerPel == 24) ? DISPLAYCONFIG_PIXELFORMAT_24BPP :
+            (dm.dmBitsPerPel == 16) ? DISPLAYCONFIG_PIXELFORMAT_16BPP :
+            (dm.dmBitsPerPel == 8)  ? DISPLAYCONFIG_PIXELFORMAT_8BPP :
+            DISPLAYCONFIG_PIXELFORMAT_32BPP;
+        modeInfoArray[modeIdx].sourceMode.position.x = dm.dmPosition.x;
+        modeInfoArray[modeIdx].sourceMode.position.y = dm.dmPosition.y;
+
+        /* Fill target mode info */
+        modeInfoArray[modeIdx + 1].infoType = DISPLAYCONFIG_MODE_INFO_TYPE_TARGET;
+        modeInfoArray[modeIdx + 1].id = iDevNum;
+        modeInfoArray[modeIdx + 1].adapterId = adapterLuid;
+        modeInfoArray[modeIdx + 1].targetMode.targetVideoSignalInfo.activeSize.cx = dm.dmPelsWidth;
+        modeInfoArray[modeIdx + 1].targetMode.targetVideoSignalInfo.activeSize.cy = dm.dmPelsHeight;
+        modeInfoArray[modeIdx + 1].targetMode.targetVideoSignalInfo.totalSize.cx = dm.dmPelsWidth;
+        modeInfoArray[modeIdx + 1].targetMode.targetVideoSignalInfo.totalSize.cy = dm.dmPelsHeight;
+        if (dm.dmDisplayFrequency > 0)
+        {
+            modeInfoArray[modeIdx + 1].targetMode.targetVideoSignalInfo.vSyncFreq.Numerator = dm.dmDisplayFrequency;
+            modeInfoArray[modeIdx + 1].targetMode.targetVideoSignalInfo.vSyncFreq.Denominator = 1;
+        }
+        modeInfoArray[modeIdx + 1].targetMode.targetVideoSignalInfo.scanLineOrdering =
+            DISPLAYCONFIG_SCANLINE_ORDERING_PROGRESSIVE;
+
+        /* Fill path info */
+        pathArray[pathIdx].sourceInfo.adapterId = adapterLuid;
+        pathArray[pathIdx].sourceInfo.id = iDevNum;
+        pathArray[pathIdx].sourceInfo.modeInfoIdx = modeIdx;
+        pathArray[pathIdx].sourceInfo.statusFlags = isActive ? DISPLAYCONFIG_SOURCE_IN_USE : 0;
+
+        pathArray[pathIdx].targetInfo.adapterId = adapterLuid;
+        pathArray[pathIdx].targetInfo.id = iDevNum;
+        pathArray[pathIdx].targetInfo.modeInfoIdx = modeIdx + 1;
+        pathArray[pathIdx].targetInfo.outputTechnology = DISPLAYCONFIG_OUTPUT_TECHNOLOGY_OTHER;
+        pathArray[pathIdx].targetInfo.rotation = DISPLAYCONFIG_ROTATION_IDENTITY;
+        pathArray[pathIdx].targetInfo.scaling = DISPLAYCONFIG_SCALING_IDENTITY;
+        if (dm.dmDisplayFrequency > 0)
+        {
+            pathArray[pathIdx].targetInfo.refreshRate.Numerator = dm.dmDisplayFrequency;
+            pathArray[pathIdx].targetInfo.refreshRate.Denominator = 1;
+        }
+        pathArray[pathIdx].targetInfo.scanLineOrdering = DISPLAYCONFIG_SCANLINE_ORDERING_PROGRESSIVE;
+        pathArray[pathIdx].targetInfo.targetAvailable = TRUE;
+        pathArray[pathIdx].targetInfo.statusFlags = isActive ? DISPLAYCONFIG_TARGET_IN_USE : 0;
+
+        pathArray[pathIdx].flags = isActive ? DISPLAYCONFIG_PATH_ACTIVE : 0;
+
+        pathIdx++;
+        modeIdx += 2;
+    }
+
+    *numPathArrayElements = pathIdx;
+    *numModeInfoArrayElements = modeIdx;
+
+    if (currentTopologyId && (flags & QDC_DATABASE_CURRENT))
+    {
+        *currentTopologyId = (pathIdx > 1) ? DISPLAYCONFIG_TOPOLOGY_EXTEND
+                                           : DISPLAYCONFIG_TOPOLOGY_INTERNAL;
+    }
+
+    return ERROR_SUCCESS;
 }
 
 typedef enum ORIENTATION_PREFERENCE {

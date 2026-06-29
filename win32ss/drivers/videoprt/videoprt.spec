@@ -1,3 +1,4 @@
+@ varargs ScsiPortNotification(long ptr) VideoPortNotification
 @ stdcall VideoPortAcquireDeviceLock(ptr)
 @ stdcall VideoPortAcquireSpinLock(ptr ptr ptr)
 @ stdcall VideoPortAcquireSpinLockAtDpcLevel(ptr ptr)
@@ -19,6 +20,9 @@
 @ stdcall VideoPortCreateSecondaryDisplay(ptr ptr long)
 @ stdcall VideoPortCreateSpinLock(ptr ptr)
 @ stdcall VideoPortDDCMonitorHelper(ptr ptr ptr long)
+@ stdcall VideoPortDbgReportComplete(ptr)
+@ stdcall VideoPortDbgReportCreate(ptr long ptr ptr ptr ptr)
+@ stdcall VideoPortDbgReportSecondaryData(ptr ptr long)
 @ varargs VideoPortDebugPrint(long str)
 @ stdcall VideoPortDeleteEvent(ptr ptr)
 @ stdcall VideoPortDeleteSpinLock(ptr ptr)
@@ -67,6 +71,7 @@
 @ stdcall VideoPortMapDmaMemory(ptr ptr double ptr ptr ptr ptr ptr)
 @ stdcall VideoPortMapMemory(ptr long long ptr ptr ptr)
 @ stdcall VideoPortMoveMemory(ptr ptr long) NTOSKRNL.RtlMoveMemory
+@ varargs VideoPortNotification(long ptr)
 @ stdcall VideoPortPutDmaAdapter(ptr ptr)
 @ stdcall VideoPortQueryPerformanceCounter(ptr ptr)
 @ stdcall VideoPortQueryServices(ptr long ptr)

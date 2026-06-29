@@ -196,6 +196,153 @@ is_icon(PCURICON_OBJECT object)
     return MAKEINTRESOURCE(object->rt) == RT_ICON;
 }
 
+static
+BOOL
+IntIsCursorDataIcon(
+    _In_ const CURSORDATA *pcursordata)
+{
+    return MAKEINTRESOURCE(pcursordata->rt) == RT_ICON;
+}
+
+static
+BOOL
+IntValidateCursorBitmap(
+    _In_ HBITMAP hbm,
+    _In_ ULONG cx,
+    _In_ ULONG cy,
+    _In_ ULONG ExpectedFormat,
+    _In_z_ PCSTR Name)
+{
+    PSURFACE psurf;
+    BOOL Ret = FALSE;
+
+    psurf = SURFACE_ShareLockSurface(hbm);
+    if (psurf == NULL)
+    {
+        ERR("Unable to lock cursor %s bitmap %p.\n", Name, hbm);
+        EngSetLastError(ERROR_INVALID_PARAMETER);
+        return FALSE;
+    }
+
+    if (psurf->SurfObj.sizlBitmap.cx != (LONG)cx ||
+        psurf->SurfObj.sizlBitmap.cy != (LONG)cy)
+    {
+        ERR("Invalid cursor %s bitmap size %ldx%ld, expected %lux%lu.\n",
+            Name,
+            psurf->SurfObj.sizlBitmap.cx,
+            psurf->SurfObj.sizlBitmap.cy,
+            cx,
+            cy);
+        EngSetLastError(ERROR_INVALID_PARAMETER);
+        goto Cleanup;
+    }
+
+    if (ExpectedFormat != 0 &&
+        psurf->SurfObj.iBitmapFormat != ExpectedFormat)
+    {
+        ERR("Invalid cursor %s bitmap format %lu, expected %lu.\n",
+            Name,
+            psurf->SurfObj.iBitmapFormat,
+            ExpectedFormat);
+        EngSetLastError(ERROR_INVALID_PARAMETER);
+        goto Cleanup;
+    }
+
+    if (ExpectedFormat == 0 &&
+        (psurf->SurfObj.iBitmapFormat < BMF_1BPP ||
+         psurf->SurfObj.iBitmapFormat > BMF_32BPP))
+    {
+        ERR("Invalid cursor %s bitmap format %lu.\n",
+            Name,
+            psurf->SurfObj.iBitmapFormat);
+        EngSetLastError(ERROR_INVALID_PARAMETER);
+        goto Cleanup;
+    }
+
+    Ret = TRUE;
+
+Cleanup:
+    SURFACE_ShareUnlockSurface(psurf);
+    return Ret;
+}
+
+static
+BOOL
+IntValidateCursorDataSurfaces(
+    _In_ const CURSORDATA *pcursordata)
+{
+    ULONG cx = pcursordata->cx;
+    ULONG cy = pcursordata->cy;
+    ULONG maskCy;
+
+    if (cx == 0 || cy == 0 || cx > MAXLONG || cy > MAXLONG)
+    {
+        ERR("Invalid cursor size %lux%lu.\n", cx, cy);
+        EngSetLastError(ERROR_INVALID_PARAMETER);
+        return FALSE;
+    }
+
+    if (!IntIsCursorDataIcon(pcursordata) &&
+        (pcursordata->xHotspot < 0 ||
+         pcursordata->yHotspot < 0 ||
+         (ULONG)pcursordata->xHotspot >= cx ||
+         (ULONG)pcursordata->yHotspot >= cy))
+    {
+        ERR("Invalid cursor hotspot (%d,%d) for %lux%lu cursor.\n",
+            pcursordata->xHotspot,
+            pcursordata->yHotspot,
+            cx,
+            cy);
+        EngSetLastError(ERROR_INVALID_PARAMETER);
+        return FALSE;
+    }
+
+    if (pcursordata->hbmColor || pcursordata->hbmAlpha)
+    {
+        maskCy = cy;
+    }
+    else
+    {
+        if (cy > MAXLONG / 2)
+        {
+            EngSetLastError(ERROR_INVALID_PARAMETER);
+            return FALSE;
+        }
+        maskCy = cy * 2;
+    }
+
+    if (!IntValidateCursorBitmap(pcursordata->hbmMask,
+                                 cx,
+                                 maskCy,
+                                 BMF_1BPP,
+                                 "mask"))
+    {
+        return FALSE;
+    }
+
+    if (pcursordata->hbmColor &&
+        !IntValidateCursorBitmap(pcursordata->hbmColor,
+                                 cx,
+                                 cy,
+                                 0,
+                                 "color"))
+    {
+        return FALSE;
+    }
+
+    if (pcursordata->hbmAlpha &&
+        !IntValidateCursorBitmap(pcursordata->hbmAlpha,
+                                 cx,
+                                 cy,
+                                 BMF_32BPP,
+                                 "alpha"))
+    {
+        return FALSE;
+    }
+
+    return TRUE;
+}
+
 /* This function creates a reference for the object! */
 PCURICON_OBJECT FASTCALL UserGetCurIconObject(HCURSOR hCurIcon)
 {
@@ -268,15 +415,20 @@ BOOL UserSetCursorPos( INT x, INT y, DWORD flags, ULONG_PTR dwExtraInfo, BOOL Ho
     pt.x = x;
     pt.y = y;
 
+    /*
+     * Update the shared cursor position before dispatching WM_MOUSEMOVE so
+     * hit-testing, cursor shape changes, and any nested cursor queries all see
+     * the new coordinates instead of the previous move.
+     */
+    gpsi->ptCursor = pt;
+
     /* 1. Generate a mouse move message, this sets the htEx and Track Window too */
     Msg.message = WM_MOUSEMOVE;
     Msg.wParam = UserGetMouseButtonsState();
     Msg.lParam = MAKELPARAM(x, y);
     Msg.pt = pt;
-    co_MsqInsertMouseMessage(&Msg, flags, dwExtraInfo, Hook);
 
-    /* 2. Store the new cursor position */
-    gpsi->ptCursor = pt;
+    co_MsqInsertMouseMessage(&Msg, flags, dwExtraInfo, Hook);
 
     return TRUE;
 }
@@ -1153,6 +1305,11 @@ IntSetCursorData(
     {
         ERR("NtUserSetCursorIconData was got no hbmMask.\n");
         EngSetLastError(ERROR_INVALID_PARAMETER);
+        return FALSE;
+    }
+
+    if (!IntValidateCursorDataSurfaces(pcursordata))
+    {
         return FALSE;
     }
 

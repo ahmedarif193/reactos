@@ -1,5 +1,10 @@
 
 add_subdirectory(d3d8thk)
+add_subdirectory(d3d10)
+add_subdirectory(d3d10_1)
+add_subdirectory(d3d10core)
+add_subdirectory(d3d10warp)
+add_subdirectory(dxgi)
 #add_subdirectory(bdaplgin) #disabled in trunk
 #add_subdirectory(d3d8) #disabled in trunk, see wine subfolder
 #add_subdirectory(d3d9) #disabled in trunk, see wine subfolder
@@ -9,4 +14,5 @@ add_subdirectory(d3d8thk)
 add_subdirectory(ksuser)
 #add_subdirectory(msdvbnp) #disabled in trunk
 #add_subdirectory(msvidctl) #disabled in trunk
+add_subdirectory(d3d11)
 add_subdirectory(wine)

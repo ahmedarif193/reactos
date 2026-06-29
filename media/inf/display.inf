@@ -27,10 +27,31 @@ HKR, , Installer32,     0, "desk.cpl,DisplayClassInstaller"
 %StdMfg% = StdMfg
 
 [StdMfg]
+; KMDOD WDDM DOD — specific device match (higher priority)
+%KMDOD.DeviceDesc% = KMDOD_Inst,PCI\VEN_1234&DEV_1111
+; Generic VGA fallback
 %VGA.DeviceDesc% = VGA_Inst,PCI\CC_0000
 %VGA.DeviceDesc% = VGA_Inst,PCI\CC_0001
 %VGA.DeviceDesc% = VGA_Inst,PCI\CC_0300
 %VGA.DeviceDesc% = VGA_Inst,PCI\CC_0301
+
+;------------------------ KMDOD WDDM DOD DRIVER -------------------------
+
+[KMDOD_Inst.NT]
+CopyFiles = KMDOD_CopyFiles.NT
+
+[KMDOD_CopyFiles.NT]
+kmdod.sys
+
+[KMDOD_Inst.NT.Services]
+AddService = kmdod, 0x00000002, KMDOD_Service_Inst
+
+[KMDOD_Service_Inst]
+ServiceType   = 1
+StartType     = 3
+ErrorControl  = 0
+ServiceBinary = %12%\kmdod.sys
+LoadOrderGroup = Video Save
 
 ;---------------------------- VGA/VBE DRIVER ----------------------------
 
@@ -66,6 +87,7 @@ DisplayClassName = "Display Adapters"
 
 StdMfg = "(Standard display adapters)"
 VGA.DeviceDesc = "VGA-compatible graphics card"
+KMDOD.DeviceDesc = "WDDM Kernel Mode Display-Only Driver"
 
 [Strings.0404]
 DisplayClassName = "顯示介面卡"

@@ -1998,6 +1998,29 @@ NtUserDragObject(
     DWORD dw1,
     HCURSOR hc1);
 
+/* DWM support syscalls (Vista+) */
+BOOL
+NTAPI
+NtUserDwmGetDxRgn(
+    _In_ HWND hwnd,
+    _In_ HANDLE hrgn,
+    _In_ DWORD dwFlags);
+
+BOOL
+NTAPI
+NtUserDwmHintDxUpdate(
+    _In_ HWND hwnd,
+    _In_ DWORD dwFlags);
+
+BOOL
+NTAPI
+NtUserDwmStartRedirection(
+    _Out_ PVOID pRedirectionInfo);
+
+BOOL
+NTAPI
+NtUserDwmStopRedirection(VOID);
+
 BOOL
 NTAPI
 NtUserDrawAnimatedRects(
@@ -2551,12 +2574,22 @@ NtUserGetWOWClass(
     HINSTANCE hInstance,
     PUNICODE_STRING ClassName);
 
+HWND
+NTAPI
+NtUserGhostWindowFromHungWindow(
+    _In_ HWND hwndHung);
+
 DWORD
 NTAPI
 NtUserHardErrorControl(
     DWORD dwUnknown1,
     DWORD dwUnknown2,
     DWORD dwUnknown3);
+
+HWND
+NTAPI
+NtUserHungWindowFromGhostWindow(
+    _In_ HWND hwndGhost);
 
 BOOL
 NTAPI
@@ -2920,11 +2953,22 @@ NtUserRegisterUserApiHook(
 
 BOOL
 NTAPI
+NtUserRegisterErrorReportingDialog(
+    _In_ HWND hwndDialog,
+    _In_ DWORD dwFlags);
+
+BOOL
+NTAPI
 NtUserRegisterHotKey(
     HWND hWnd,
     int id,
     UINT fsModifiers,
     UINT vk);
+
+BOOL
+NTAPI
+NtUserRegisterSessionPort(
+    _In_ HANDLE hPort);
 
 DWORD
 NTAPI
@@ -3490,6 +3534,10 @@ NTAPI
 NtUserUnregisterHotKey(
     HWND hWnd,
     int id);
+
+BOOL
+NTAPI
+NtUserUnregisterSessionPort(VOID);
 
 BOOL
 NTAPI

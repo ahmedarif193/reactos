@@ -783,6 +783,15 @@ function(set_module_type MODULE TYPE)
     # Now do some stuff which is specific to each type
     if(TYPE IN_LIST KERNEL_MODULE_TYPES)
         add_dependencies(${MODULE} bugcodes xdk)
+        # Kernel-mode code must not use SSE/XMM registers — the kernel does not
+        # save/restore FPU/SSE state on context switch or interrupt entry.  Clang
+        # with -msse2 (set globally for header compat) will auto-vectorise struct
+        # copies into movaps/movups, silently corrupting user-mode XMM state.
+        # -mno-implicit-float prevents Clang from emitting FP/SIMD instructions
+        # for non-floating-point operations (memcpy, struct copies, zeroing).
+        if(CMAKE_C_COMPILER_ID STREQUAL "Clang" AND (ARCH STREQUAL "amd64" OR ARCH STREQUAL "i386"))
+            target_compile_options(${MODULE} PRIVATE -mno-implicit-float)
+        endif()
         if((${TYPE} STREQUAL kernelmodedriver) OR (${TYPE} STREQUAL wdmdriver))
             set_target_properties(${MODULE} PROPERTIES SUFFIX ".sys")
             sign_driver_if_needed(${MODULE})

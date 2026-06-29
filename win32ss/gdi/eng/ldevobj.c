@@ -201,6 +201,15 @@ LDEVOBJ_bEnableDriver(
     /* Fill the driver function array */
     for (i = 0; i < ded.c; i++)
     {
+        if (ded.pdrvfn[i].iFunc >= INDEX_LAST)
+        {
+            ERR("Driver '%wZ' published out-of-range DDI index %lu (max %lu)\n",
+                &pldev->pGdiDriverInfo->DriverName,
+                ded.pdrvfn[i].iFunc,
+                INDEX_LAST - 1);
+            ASSERT(ded.pdrvfn[i].iFunc < INDEX_LAST);
+            return FALSE;
+        }
         pldev->apfn[ded.pdrvfn[i].iFunc] = ded.pdrvfn[i].pfn;
     }
 

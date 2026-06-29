@@ -6,18 +6,22 @@
  *              Copyright 2024 Timo Kreuzer <timo.kreuzer@reactos.org>
  */
 
+/* Include C++ standard library headers before GCC plugin headers.
+ * GCC plugin headers (via safe-ctype.h) define macros like isupper/islower
+ * that conflict with macOS libc++ when included first. */
+#include <iostream>
+#include <sstream>
+#include <unordered_map>
+#include <vector>
+#include <cstdio>
+#include <cstring>
+
 #include <gcc-plugin.h>
 #include <plugin-version.h>
 #include <function.h>
 #include <tree.h>
 #include <c-family/c-pragma.h>
 #include <c-family/c-common.h>
-
-#include <iostream>
-#include <sstream>
-#include <unordered_map>
-#include <vector>
-#include <cstdio>
 
 #if 0 // To enable tracing
 #define trace(...) fprintf(stderr, __VA_ARGS__)
@@ -92,11 +96,24 @@ get_seh_function()
 }
 
 static
+bool
+set_asm_header_text(tree asm_header_text, const std::string& asm_text)
+{
+    const size_t buffer_size = TREE_STRING_LENGTH(asm_header_text);
+    char* buffer = const_cast<char*>(TREE_STRING_POINTER(asm_header_text));
+
+    if (asm_text.size() >= buffer_size)
+        return false;
+
+    memcpy(buffer, asm_text.c_str(), asm_text.size() + 1);
+    return true;
+}
+
+static
 void
 handle_seh_pragma(cpp_reader* UNUSED parser)
 {
     tree x, arg, line;
-    std::stringstream label_decl;
     bool is_except;
 
     if (!cfun)
@@ -117,7 +134,7 @@ handle_seh_pragma(cpp_reader* UNUSED parser)
         return;
     }
 
-    trace(stderr, "Pragma: %s, %u\n", IDENTIFIER_POINTER(arg), TREE_INT_CST_LOW(line));
+    trace("Pragma: %s, %u\n", IDENTIFIER_POINTER(arg), TREE_INT_CST_LOW(line));
 
     const char* op = IDENTIFIER_POINTER(arg);
 
@@ -163,7 +180,8 @@ finish_seh_function(void* event_data, void* UNUSED user_data)
     if (DECL_FUNCTION_PERSONALITY(fndef) != nullptr)
     {
         error("Function %s has a personality. Are you mixing SEH with C++ exceptions ?",
-              IDENTIFIER_POINTER(fndef));
+              IDENTIFIER_POINTER(DECL_NAME(fndef)));
+        delete seh_fun;
         return;
     }
 
@@ -190,11 +208,17 @@ finish_seh_function(void* event_data, void* UNUSED user_data)
     }
     asm_str << "\n\t.seh_code\n";
 
-    strncpy(const_cast<char*>(TREE_STRING_POINTER(seh_fun->asm_header_text)),
-            asm_str.str().c_str(),
-            TREE_STRING_LENGTH(seh_fun->asm_header_text));
+    const std::string asm_text = asm_str.str();
+    if (!set_asm_header_text(seh_fun->asm_header_text, asm_text))
+    {
+        error("Generated SEH metadata for function %s exceeds %zu bytes",
+              IDENTIFIER_POINTER(DECL_NAME(fndef)),
+              TREE_STRING_LENGTH(seh_fun->asm_header_text) - 1);
+        delete seh_fun;
+        return;
+    }
 
-    trace(stderr, "ASM: %s\n", asm_str.str().c_str());
+    trace("ASM: %s\n", asm_text.c_str());
 
     delete seh_fun;
 }

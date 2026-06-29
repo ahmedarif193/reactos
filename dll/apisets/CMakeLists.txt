@@ -1,4 +1,5 @@
 
+add_subdirectory(api-ms-win-core-localization-l1-2-1)
 add_subdirectory(api-ms-win-core-synch-l1-2-0)
 add_subdirectory(api-ms-win-crt-convert-l1-1-0)
 add_subdirectory(api-ms-win-crt-environment-l1-1-0)
@@ -6,6 +7,7 @@ add_subdirectory(api-ms-win-crt-filesystem-l1-1-0)
 add_subdirectory(api-ms-win-crt-heap-l1-1-0)
 add_subdirectory(api-ms-win-crt-locale-l1-1-0)
 add_subdirectory(api-ms-win-crt-math-l1-1-0)
+add_subdirectory(api-ms-win-crt-private-l1-1-0)
 add_subdirectory(api-ms-win-crt-process-l1-1-0)
 add_subdirectory(api-ms-win-crt-runtime-l1-1-0)
 add_subdirectory(api-ms-win-crt-stdio-l1-1-0)

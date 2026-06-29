@@ -2998,15 +2998,15 @@ NtUserMessageCall( HWND hWnd,
         {
             PTHREADINFO pti;
             PCLIENTINFO ClientInfo;
-            PHOOK NextObj, Hook;
+            PHOOK CurrentHook, NextObj;
 
             pti = GetW32ThreadInfo();
 
-            Hook = pti->sphkCurrent;
+            CurrentHook = pti->sphkCurrent;
 
-            if (!Hook) break;
+            if (!CurrentHook) break;
 
-            NextObj = Hook->phkNext;
+            NextObj = CurrentHook->phkNext;
             ClientInfo = pti->pClientInfo;
             _SEH2_TRY
             {
@@ -3020,26 +3020,30 @@ NtUserMessageCall( HWND hWnd,
 
             if (!ClientInfo || !NextObj) break;
 
+            /* Advance to the next hook so CallNextHookEx does not recurse
+             * back into the current WH_CALLWNDPROC/RET handler. */
+            pti->sphkCurrent = NextObj;
             NextObj->phkNext = IntGetNextHook(NextObj);
+            ASSERT(NextObj->HookId == CurrentHook->HookId);
 
-            if ( Hook->HookId == WH_CALLWNDPROC)
+            if (NextObj->HookId == WH_CALLWNDPROC)
             {
                 CWPSTRUCT CWP;
                 CWP.hwnd    = hWnd;
                 CWP.message = Msg;
                 CWP.wParam  = wParam;
                 CWP.lParam  = lParam;
-                TRACE("WH_CALLWNDPROC: Hook %p NextHook %p\n", Hook, NextObj);
+                TRACE("WH_CALLWNDPROC: Hook %p NextHook %p\n", CurrentHook, NextObj);
 
-                lResult = co_IntCallHookProc( Hook->HookId,
+                lResult = co_IntCallHookProc( NextObj->HookId,
                                               HC_ACTION,
                                               ((ClientInfo->CI_flags & CI_CURTHPRHOOK) ? 1 : 0),
                                               (LPARAM)&CWP,
-                                              Hook->Proc,
-                                              Hook->ihmod,
-                                              Hook->offPfn,
-                                              Hook->Ansi,
-                                              &Hook->ModuleName);
+                                              NextObj->Proc,
+                                              NextObj->ihmod,
+                                              NextObj->offPfn,
+                                              NextObj->Ansi,
+                                              &NextObj->ModuleName);
             }
             else
             {
@@ -3050,15 +3054,15 @@ NtUserMessageCall( HWND hWnd,
                 CWPR.lParam  = lParam;
                 CWPR.lResult = ClientInfo->dwHookData;
 
-                lResult = co_IntCallHookProc( Hook->HookId,
+                lResult = co_IntCallHookProc( NextObj->HookId,
                                               HC_ACTION,
                                               ((ClientInfo->CI_flags & CI_CURTHPRHOOK) ? 1 : 0),
                                               (LPARAM)&CWPR,
-                                              Hook->Proc,
-                                              Hook->ihmod,
-                                              Hook->offPfn,
-                                              Hook->Ansi,
-                                              &Hook->ModuleName);
+                                              NextObj->Proc,
+                                              NextObj->ihmod,
+                                              NextObj->offPfn,
+                                              NextObj->Ansi,
+                                              &NextObj->ModuleName);
             }
         }
         break;

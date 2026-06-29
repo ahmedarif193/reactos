@@ -117,6 +117,9 @@ NTSTATUS
 APIENTRY
 DxDdCleanupDxGraphics(VOID)
 {
+    /* Release cached \Device\DxgKrnl connection */
+    DxDdpCloseDxgKrnl();
+
     DdHmgDestroy();
 
     if (ghsemDummyPage != 0 )

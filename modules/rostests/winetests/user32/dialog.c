@@ -2455,9 +2455,83 @@ static INT_PTR CALLBACK custom_test_dialog_proc(HWND hdlg, UINT msg, WPARAM wpar
     return FALSE;
 }
 
+static WORD *custom_dialog_add_word(WORD *ptr, WORD value)
+{
+    *ptr++ = value;
+    return ptr;
+}
+
+static WORD *custom_dialog_add_dword(WORD *ptr, DWORD value)
+{
+    memcpy(ptr, &value, sizeof(value));
+    return ptr + (sizeof(DWORD) / sizeof(*ptr));
+}
+
+static WORD *custom_dialog_add_wstr(WORD *ptr, const WCHAR *value)
+{
+    SIZE_T count = lstrlenW(value) + 1;
+
+    memcpy(ptr, value, count * sizeof(*value));
+    return ptr + count;
+}
+
+static WORD *custom_dialog_align_dword(WORD *ptr)
+{
+    return (WORD *)(((ULONG_PTR)ptr + sizeof(DWORD) - 1) & ~(sizeof(DWORD) - 1));
+}
+
+static WORD *custom_dialog_add_control(WORD *ptr, const WCHAR *text, SHORT x, SHORT y)
+{
+    static const WCHAR class_nameW[] = {'T','E','S','T','C','O','N','T','R','O','L',0};
+    static const WORD extra_data[] = { 1, 2, 3, 4, 5 };
+
+    ptr = custom_dialog_align_dword(ptr);
+    ptr = custom_dialog_add_dword(ptr, 0);
+    ptr = custom_dialog_add_dword(ptr, 0);
+    ptr = custom_dialog_add_dword(ptr, WS_CHILD | WS_VISIBLE | WS_BORDER | WS_TABSTOP);
+    ptr = custom_dialog_add_word(ptr, x);
+    ptr = custom_dialog_add_word(ptr, y);
+    ptr = custom_dialog_add_word(ptr, 100);
+    ptr = custom_dialog_add_word(ptr, 50);
+    ptr = custom_dialog_add_dword(ptr, (DWORD)-1);
+    ptr = custom_dialog_add_wstr(ptr, class_nameW);
+    ptr = custom_dialog_add_wstr(ptr, text);
+    ptr = custom_dialog_add_word(ptr, sizeof(extra_data));
+    memcpy(ptr, extra_data, sizeof(extra_data));
+    ptr += sizeof(extra_data) / sizeof(extra_data[0]);
+
+    return ptr;
+}
+
 static void test_dialog_custom_data(void)
 {
-    DialogBoxA(g_hinst, "CUSTOM_TEST_DIALOG", NULL, custom_test_dialog_proc);
+    static const WCHAR captionW[] = {'C','u','s','t','o','m',' ','T','e','s','t',' ','D','i','a','l','o','g',0};
+    static const WCHAR even_textW[] = {'e','v','e','n','l','e','n','g','t','h','t','e','x','t',0};
+    static const WCHAR odd_textW[] = {'o','d','d','l','e','n','g','t','h','t','e','x','t',0};
+    DWORD dlgdata[128];
+    WORD *ptr = (WORD *)dlgdata;
+    INT_PTR ret;
+
+    memset(dlgdata, 0, sizeof(dlgdata));
+
+    ptr = custom_dialog_add_word(ptr, 1);
+    ptr = custom_dialog_add_word(ptr, 0xffff);
+    ptr = custom_dialog_add_dword(ptr, 0);
+    ptr = custom_dialog_add_dword(ptr, 0);
+    ptr = custom_dialog_add_dword(ptr, DS_MODALFRAME | WS_POPUP | WS_VISIBLE | WS_CAPTION | WS_SYSMENU);
+    ptr = custom_dialog_add_word(ptr, 2);
+    ptr = custom_dialog_add_word(ptr, 6);
+    ptr = custom_dialog_add_word(ptr, 15);
+    ptr = custom_dialog_add_word(ptr, 207);
+    ptr = custom_dialog_add_word(ptr, 111);
+    ptr = custom_dialog_add_word(ptr, 0);
+    ptr = custom_dialog_add_word(ptr, 0);
+    ptr = custom_dialog_add_wstr(ptr, captionW);
+    ptr = custom_dialog_add_control(ptr, even_textW, 10, 10);
+    ptr = custom_dialog_add_control(ptr, odd_textW, 10, 60);
+
+    ret = DialogBoxIndirectParamW(g_hinst, (LPCDLGTEMPLATEW)dlgdata, NULL, custom_test_dialog_proc, 0);
+    ok(ret == 0, "got %Id\n", ret);
 }
 
 START_TEST(dialog)

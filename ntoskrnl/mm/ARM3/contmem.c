@@ -451,6 +451,7 @@ MiAllocateContiguousMemory(IN SIZE_T NumberOfBytes,
                                          CacheType);
     if (!BaseAddress)
     {
+        ULONG r;
         DPRINT1("Unable to allocate contiguous memory for %d bytes (%d pages), out of memory!\n", NumberOfBytes, SizeInPages);
     }
     return BaseAddress;
@@ -641,7 +642,13 @@ MmAllocateContiguousMemory(IN SIZE_T NumberOfBytes,
     //
     // Let the contiguous memory allocator handle it
     //
-    return MiAllocateContiguousMemory(NumberOfBytes, 0, HighestPfn, 0, MmCached);
+    {
+        PVOID Result = MiAllocateContiguousMemory(NumberOfBytes, 0, HighestPfn, 0, MmCached);
+        if (!Result)
+            DPRINT1("MmAllocateContiguousMemory FAILED: %lu bytes, HighestAddr=0x%llX\n",
+                    (ULONG)NumberOfBytes, HighestAcceptableAddress.QuadPart);
+        return Result;
+    }
 }
 
 /*

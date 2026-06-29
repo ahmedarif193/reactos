@@ -58,6 +58,14 @@ MouseSafetyOnDrawStart(
         return FALSE;
     }
 
+    /* DWM compositor suppresses cursor hide/show during present to avoid
+     * flicker.  The DWM renders cursor as part of composition in Phase 2;
+     * Phase 1 just leaves the cursor alone during the full-screen blit. */
+    if (ppdev->DwmSuppressMouseSafety)
+    {
+        return FALSE;
+    }
+
     ppdev->SafetyRemoveCount++;
 
     if (ppdev->SafetyRemoveLevel != 0)
@@ -543,7 +551,7 @@ EngSetPointerShape(
         if (prcl != NULL)
         {
             prcl->left = x - pgp->HotSpot.x;
-            prcl->top = y - pgp->HotSpot.x;
+            prcl->top = y - pgp->HotSpot.y;
             prcl->right = prcl->left + pgp->Size.cx;
             prcl->bottom = prcl->top + pgp->Size.cy;
         }

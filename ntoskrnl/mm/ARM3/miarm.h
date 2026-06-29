@@ -2868,6 +2868,7 @@ MiIncrementPageTableReferences(IN PVOID Address)
 {
     PMMPDE PointerPde = MiAddressToPde(Address);
     PMMPFN Pfn;
+    USHORT UsedEntries;
 
     /* We should not tinker with this one. */
     ASSERT(PointerPde != (PMMPDE)PXE_SELFMAP);
@@ -2882,10 +2883,11 @@ MiIncrementPageTableReferences(IN PVOID Address)
     /* This lies on the PFN */
     Pfn = MiGetPfnEntry(PFN_FROM_PDE(PointerPde));
     Pfn->OriginalPte.u.Soft.UsedPageTableEntries++;
+    UsedEntries = Pfn->OriginalPte.u.Soft.UsedPageTableEntries;
 
-    ASSERT(Pfn->OriginalPte.u.Soft.UsedPageTableEntries <= PTE_PER_PAGE);
+    ASSERT(UsedEntries <= PTE_PER_PAGE);
 
-    return Pfn->OriginalPte.u.Soft.UsedPageTableEntries;
+    return UsedEntries;
 }
 
 FORCEINLINE
@@ -2894,6 +2896,7 @@ MiDecrementPageTableReferences(IN PVOID Address)
 {
     PMMPDE PointerPde = MiAddressToPde(Address);
     PMMPFN Pfn;
+    USHORT UsedEntries;
 
     /* We should not tinker with this one. */
     ASSERT(PointerPde != (PMMPDE)PXE_SELFMAP);
@@ -2911,10 +2914,11 @@ MiDecrementPageTableReferences(IN PVOID Address)
 
     ASSERT(Pfn->OriginalPte.u.Soft.UsedPageTableEntries != 0);
     Pfn->OriginalPte.u.Soft.UsedPageTableEntries--;
+    UsedEntries = Pfn->OriginalPte.u.Soft.UsedPageTableEntries;
 
-    ASSERT(Pfn->OriginalPte.u.Soft.UsedPageTableEntries < PTE_PER_PAGE);
+    ASSERT(UsedEntries < PTE_PER_PAGE);
 
-    return Pfn->OriginalPte.u.Soft.UsedPageTableEntries;
+    return UsedEntries;
 }
 #endif
 

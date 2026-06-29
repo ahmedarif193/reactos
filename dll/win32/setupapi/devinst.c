@@ -408,6 +408,24 @@ done:
     return TRUE;
 }
 
+static VOID
+NormalizeInfPlatformVersion(
+    IN PSP_ALTPLATFORM_INFO PlatformInfo)
+{
+    /*
+     * ReactOS still reports itself as NT 5.2 globally, but modern driver INFs
+     * often only publish NT 10.0-decorated model sections. Keep the
+     * compatibility lie local to SetupAPI section selection instead of changing
+     * the process-visible OS version.
+     */
+    if (PlatformInfo->Platform == VER_PLATFORM_WIN32_NT &&
+        PlatformInfo->MajorVersion < 10)
+    {
+        PlatformInfo->MajorVersion = 10;
+        PlatformInfo->MinorVersion = 0;
+    }
+}
+
 /***********************************************************************
  *		SetupDiGetActualSectionToInstallExW (SETUPAPI.@)
  */
@@ -467,6 +485,7 @@ SetupDiGetActualSectionToInstallExW(
                 CurrentPlatform.MinorVersion = OsVersionInfo.dwMinorVersion;
                 CurrentPlatform.ProcessorArchitecture = SystemInfo.wProcessorArchitecture;
                 CurrentPlatform.Reserved = 0;
+                NormalizeInfPlatformVersion(&CurrentPlatform);
                 CurrentProductType = OsVersionInfo.wProductType;
                 CurrentSuiteMask = OsVersionInfo.wSuiteMask;
             }

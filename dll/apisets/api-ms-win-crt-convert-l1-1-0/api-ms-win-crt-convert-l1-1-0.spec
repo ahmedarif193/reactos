@@ -102,13 +102,19 @@
 @ cdecl atof(str) ucrtbase.atof
 @ cdecl atoi(str) ucrtbase.atoi
 @ cdecl atol(str) ucrtbase.atol
+@ cdecl mbrtowc(ptr str long ptr) ucrtbase.mbrtowc
 @ cdecl strtod(str ptr) ucrtbase.strtod
 @ cdecl strtof(str ptr) ucrtbase.strtof
 @ cdecl strtol(str ptr long) ucrtbase.strtol
 @ cdecl strtold(str ptr) ucrtbase.strtold
+@ cdecl strtoll(str ptr long) ucrtbase.strtoll
 @ cdecl strtoul(str ptr long) ucrtbase.strtoul
+@ cdecl strtoull(str ptr long) ucrtbase.strtoull
+@ cdecl wcrtomb(ptr long ptr) ucrtbase.wcrtomb
 @ cdecl wcstod(wstr ptr) ucrtbase.wcstod
 @ cdecl wcstof(ptr ptr) ucrtbase.wcstof
 @ cdecl wcstol(wstr ptr long) ucrtbase.wcstol
 @ cdecl wcstold(wstr ptr) ucrtbase.wcstold
+@ cdecl wcstoll(wstr ptr long) ucrtbase.wcstoll
 @ cdecl wcstoul(wstr ptr long) ucrtbase.wcstoul
+@ cdecl wcstoull(wstr ptr long) ucrtbase.wcstoull

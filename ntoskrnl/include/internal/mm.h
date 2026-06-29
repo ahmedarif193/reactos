@@ -1135,6 +1135,22 @@ MiGetPfnEntry(IN PFN_NUMBER Pfn)
      */
     (void)MiPfnBitMap; /* Suppress unused warning */
 #else
+    /*
+     * The PFN bitmap tracks which PFNs correspond to real physical memory
+     * (set in MiPfnBitMap during MmInitSystem from MmPhysicalMemoryBlock).
+     * PFNs not in the bitmap are MMIO holes or firmware-reserved regions
+     * with no backing PFN database entry.
+     *
+     * On amd64, PFN_NUMBER is 64-bit but RtlTestBit takes a ULONG index.
+     * The first check (Pfn > MmHighestPhysicalPage) guarantees Pfn is
+     * within the bitmap's range, so the cast to ULONG is safe as long as
+     * MmHighestPhysicalPage itself fits in ULONG (true for systems with
+     * less than 16 TB of physical address space).  For defense-in-depth,
+     * explicitly reject PFNs that would overflow the ULONG bit index.
+     */
+#ifdef _WIN64
+    if (Pfn > (PFN_NUMBER)MAXULONG) return NULL;
+#endif
     if ((MiPfnBitMap.Buffer) && !(RtlTestBit(&MiPfnBitMap, (ULONG)Pfn))) return NULL;
 #endif
 

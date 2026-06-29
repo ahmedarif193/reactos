@@ -291,6 +291,24 @@ IntVideoPortMapPhysicalMemory(
    IN ULONG Protect,
    IN OUT PVOID *VirtualAddress  OPTIONAL);
 
+/* wddm_detect.c */
+
+BOOLEAN NTAPI
+VidPortIsWddmDriver(
+    _In_ PDRIVER_OBJECT DriverObject);
+
+NTSTATUS NTAPI
+VidPortHandoffToWddm(
+    _In_opt_ PVOID MiniportDeviceContext);
+
+BOOLEAN NTAPI
+VidPortCheckWddmFdoPresent(
+    _In_ PDEVICE_OBJECT PhysicalDeviceObject);
+
+BOOLEAN NTAPI
+VidPortQueryWddmCapableFromRegistry(
+    _In_ PDRIVER_OBJECT DriverObject);
+
 /* videoprt.c */
 
 extern PKPROCESS CsrProcess;

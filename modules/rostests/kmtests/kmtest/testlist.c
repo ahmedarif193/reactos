@@ -25,7 +25,9 @@ KMT_TESTFUNC Test_MmMapLockedPagesSpecifyCache;
 KMT_TESTFUNC Test_NtCreateSection;
 KMT_TESTFUNC Test_NtSystemDebugControl;
 KMT_TESTFUNC Test_PoIrp;
+#ifdef KMT_ENABLE_RAMDISK_IOCTL
 KMT_TESTFUNC Test_RamdiskIoctl;
+#endif
 KMT_TESTFUNC Test_RtlAvlTree;
 KMT_TESTFUNC Test_RtlCaptureContext;
 KMT_TESTFUNC Test_RtlException;
@@ -62,7 +64,9 @@ const KMT_TEST TestList[] =
     { "NtCreateSection",              Test_NtCreateSection },
     { "NtSystemDebugControl",         Test_NtSystemDebugControl },
     { "PoIrp",                        Test_PoIrp },
+#ifdef KMT_ENABLE_RAMDISK_IOCTL
     { "RamdiskIoctl",                Test_RamdiskIoctl },
+#endif
     { "RtlAvlTree",                   Test_RtlAvlTree },
     { "RtlException",                 Test_RtlException },
     { "RtlIntSafe",                   Test_RtlIntSafe },

@@ -6,14 +6,14 @@
  *              Copyright 2024 Katayama Hirofumi MZ <katayama.hirofumi.mz@gmail.com>
  */
 
+#include <set>
+#include <map>
+
 #include "interop.h"
 
 #include <winnls.h>
 #include <strsafe.h>
 #include <shlwapi.h>
-
-#include <set>
-#include <map>
 
 enum E_MODULE
 {

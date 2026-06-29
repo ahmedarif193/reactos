@@ -8,6 +8,7 @@ list(APPEND SOURCE
     CopyImage.c
     CreateDialog.c
     CreateIconFromResourceEx.c
+    CursorMoveVisual.c
     CreateWindowEx.c
     DeferWindowPos.c
     DestroyCursorIcon.c

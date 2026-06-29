@@ -1,0 +1,101 @@
+; dxgmms1.inf
+;
+; Service registration for the DirectX GPU Memory Manager (dxgmms1.sys).
+;
+; dxgmms1.sys is loaded ON-DEMAND by dxgkrnl.sys (not by PnP) via:
+;
+;   ZwLoadDriver(L"\\Registry\\Machine\\System\\CurrentControlSet\\Services\\dxgmms1")
+;
+; This happens on first WDDM adapter initialization inside dxgkrnl.  The
+; service entry therefore uses StartType = SERVICE_DEMAND_START (3) so the
+; SCM does not attempt to load it independently at boot.  It is harmless and
+; correct to register it here so the service key exists in the hive before
+; dxgkrnl tries to load it.
+;
+; dxgmms1.sys provides GPU memory scheduling (VIDMM) and preemption
+; primitives consumed by dxgkrnl through the DxgkMmsRegister() interface.
+; See drivers/directx/BOOT_INTEGRATION.md for the full load sequence.
+
+[Version]
+Signature   = "$Windows NT$"
+Provider    = %ReactOS%
+DriverVer   = 03/17/2026,1.0.0.0
+
+[DestinationDirs]
+DefaultDestDir      = 12
+DxgMms1_CopyFiles   = 12
+
+[SourceDisksNames]
+1 = %DiskName%,,,""
+
+[SourceDisksFiles]
+dxgmms1.sys = 1,,
+
+[DefaultInstall]
+CopyFiles   = DxgMms1_CopyFiles
+
+[DefaultInstall.Services]
+AddService  = dxgmms1, 0, DxgMms1_Service_Inst
+
+; ---------------------------------------------------------------------------
+; File copy list
+; ---------------------------------------------------------------------------
+
+[DxgMms1_CopyFiles]
+dxgmms1.sys
+
+; ---------------------------------------------------------------------------
+; Service installation
+;
+; Type        = 1  SERVICE_KERNEL_DRIVER
+; StartType   = 3  SERVICE_DEMAND_START
+;               dxgmms1 is explicitly loaded by dxgkrnl via ZwLoadDriver;
+;               it must NOT be auto-started by the boot loader because
+;               dxgkrnl.sys must finish its own initialisation first.
+; ErrorControl= 0  SERVICE_ERROR_IGNORE
+;               If dxgmms1 fails to load, dxgkrnl logs the error and
+;               operates in a degraded mode without GPU scheduling.
+; LoadOrderGroup  = "Video"
+;               Same group as dxgkrnl for registry bookkeeping; the actual
+;               load ordering is controlled by dxgkrnl at runtime.
+; ---------------------------------------------------------------------------
+
+[DxgMms1_Service_Inst]
+DisplayName     = %DxgMms1_SvcDesc%
+ServiceType     = %SERVICE_KERNEL_DRIVER%
+StartType       = %SERVICE_DEMAND_START%
+ErrorControl    = %SERVICE_ERROR_IGNORE%
+ServiceBinary   = %12%\dxgmms1.sys
+LoadOrderGroup  = Video
+Description     = %DxgMms1_Description%
+
+; ---------------------------------------------------------------------------
+; Uninstall section
+; ---------------------------------------------------------------------------
+
+[DefaultUninstall]
+DelFiles    = DxgMms1_CopyFiles
+
+[DefaultUninstall.Services]
+DelService  = dxgmms1, 0x200    ; SPSVCINST_STOPSERVICE
+
+; ---------------------------------------------------------------------------
+; Strings
+; ---------------------------------------------------------------------------
+
+[Strings]
+; Non-localizable
+ReactOS                 = "ReactOS Project"
+DiskName                = "ReactOS DirectX GPU Memory Manager Installation Disk"
+
+SERVICE_KERNEL_DRIVER   = 0x00000001
+SERVICE_DEMAND_START    = 0x00000003
+SERVICE_ERROR_IGNORE    = 0x00000000
+
+REG_DWORD               = 0x00010001
+REG_EXPAND_SZ           = 0x00020000
+REG_SZ                  = 0x00000000
+
+; Localizable
+DxgMms1_SvcDesc         = "DirectX Graphics MMS"
+DxgMms1_Description     = "ReactOS DirectX GPU Memory Manager and Scheduler (dxgmms1.sys)"

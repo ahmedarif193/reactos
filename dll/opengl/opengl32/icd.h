@@ -362,12 +362,31 @@ typedef VOID (APIENTRY * PFN_SETPROCTABLE)(const GLCLTPROCTABLE*);
 /* This doesn't seem to be anywhere in ddk or psdk */
 DECLARE_HANDLE(DHGLRC);
 
+typedef struct _OPENGL32_PRESENTBUFFERSCB
+{
+    UINT nVersion;
+    UINT syncType;
+    LUID luidAdapter;
+    LPVOID pPrivData;
+    RECT updateRect;
+} OPENGL32_PRESENTBUFFERSCB, *LPOPENGL32_PRESENTBUFFERSCB;
+
+typedef struct _OPENGL32_PRESENTBUFFERS
+{
+    HANDLE hSurface;
+    LUID luidAdapter;
+    ULONGLONG ullPresentToken;
+    LPVOID pPrivData;
+} OPENGL32_PRESENTBUFFERS, *LPOPENGL32_PRESENTBUFFERS;
+
 struct ICD_Data
 {
     /* The Name returned with OPENGL_GETINFO escape code */
     WCHAR DriverName[256];
     /* The DLL handle */
     HMODULE hModule;
+    /* WDDM-discovered ICD loaded via UMOPENGLINFO */
+    BOOL IsWddmIcd;
 
     /* The ICD DLL exports */
     BOOL      (WINAPI *DrvCopyContext)( DHGLRC, DHGLRC, UINT );
@@ -386,10 +405,12 @@ struct ICD_Data
     BOOL      (WINAPI *DrvShareLists)( DHGLRC, DHGLRC );
     BOOL      (WINAPI *DrvSwapBuffers)( HDC );
     BOOL      (WINAPI *DrvSwapLayerBuffers)( HDC, UINT );
+    BOOL      (WINAPI *DrvPresentBuffers)( HDC, LPOPENGL32_PRESENTBUFFERS );
+    DWORD     (WINAPI *DrvSwapMultipleBuffers)( UINT, CONST WGLSWAP * );
+    void      (WINAPI *DrvSetCallbackProcs)( int, PROC * );
 
     /* Make this a linked list */
     struct ICD_Data* next;
 };
 
 struct ICD_Data* IntGetIcdData(HDC hdc);
-

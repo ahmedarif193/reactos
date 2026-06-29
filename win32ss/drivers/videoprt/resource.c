@@ -148,6 +148,20 @@ IntVideoPortFilterResourceRequirements(
 
     if (OldResList)
     {
+        /*
+         * If the existing resource requirements list has multiple alternative
+         * lists (e.g. a modern GPU with complex BARs), we cannot safely append
+         * legacy VGA resources — the append offset calculation only works for
+         * a single alternative list.  Skip appending; the device clearly has
+         * its own proper resources and does not need legacy VGA I/O ranges.
+         */
+        if (OldResList->AlternativeLists != 1)
+        {
+            INFO_(VIDEOPRT, "Skipping legacy resource append: AlternativeLists=%lu\n",
+                  OldResList->AlternativeLists);
+            return Irp->IoStatus.Status;
+        }
+
         /* Already one there so let's add to it */
         ListSize = OldResList->ListSize + sizeof(IO_RESOURCE_DESCRIPTOR) * AccessRangeCount;
         ResList = ExAllocatePool(NonPagedPool,
@@ -155,8 +169,6 @@ IntVideoPortFilterResourceRequirements(
         if (!ResList) return STATUS_NO_MEMORY;
 
         RtlCopyMemory(ResList, OldResList, OldResList->ListSize);
-
-        ASSERT(ResList->AlternativeLists == 1);
 
         ResList->ListSize = ListSize;
         ResList->List[0].Count += AccessRangeCount;

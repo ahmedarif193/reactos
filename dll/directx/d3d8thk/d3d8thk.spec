@@ -1,3 +1,4 @@
+@ stdcall OsThunkDxgGenericThunk(ptr ptr ptr ptr ptr ptr) gdi32.DdEntry0
 @ stdcall OsThunkD3dContextCreate(ptr ptr ptr ptr) gdi32.DdEntry1
 @ stdcall OsThunkD3dContextDestroy(ptr) gdi32.DdEntry2
 @ stdcall OsThunkD3dContextDestroyAll(ptr) gdi32.DdEntry3
@@ -21,10 +22,10 @@
 @ stdcall OsThunkDdDeleteSurfaceObject(ptr) gdi32.DdEntry21
 @ stdcall OsThunkDdDestroyD3DBuffer(ptr) gdi32.DdEntry24
 @ stdcall OsThunkDdDestroyMoComp(ptr ptr) gdi32.DdEntry22
-@ stdcall OsThunkDdDestroySurface(ptr ptr) gdi32.DdEntry23
+@ stdcall OsThunkDdDestroySurface(ptr long) gdi32.DdEntry23
 @ stdcall OsThunkDdEndMoCompFrame(ptr ptr) gdi32.DdEntry25
 @ stdcall OsThunkDdFlip(ptr ptr ptr ptr ptr) gdi32.DdEntry26
-@ stdcall OsThunkDdFlipToGDISurface(ptr ptr) gdi32.DdEntry27
+@ stdcall OsThunkDdFlipToGDISurface(ptr long) gdi32.DdEntry27
 @ stdcall OsThunkDdGetAvailDriverMemory(ptr ptr) gdi32.DdEntry28
 @ stdcall OsThunkDdGetBltStatus(ptr ptr) gdi32.DdEntry29
 @ stdcall OsThunkDdGetDC(ptr ptr) gdi32.DdEntry30
@@ -52,5 +53,5 @@
 @ stdcall OsThunkDdUnattachSurface(ptr ptr) gdi32.DdEntry52
 @ stdcall OsThunkDdUnlock(ptr ptr) gdi32.DdEntry53
 @ stdcall OsThunkDdUnlockD3D(ptr ptr) gdi32.DdEntry54
-@ stdcall OsThunkDdUpdateOverlay(ptr ptr ptr) gdi32.DdEntry55
+@ stdcall OsThunkDdUpdateOverlay(ptr ptr long) gdi32.DdEntry55
 @ stdcall OsThunkDdWaitForVerticalBlank(ptr ptr) gdi32.DdEntry56

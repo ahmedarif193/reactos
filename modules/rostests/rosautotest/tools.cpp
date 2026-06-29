@@ -10,6 +10,69 @@
 #define DBGPRINT_BUFSIZE   511
 static const char HexCharacters[] = "0123456789ABCDEF";
 
+static string
+FormatFixedHundredths(ULONGLONG Hundredths)
+{
+    string Result;
+    ULONGLONG WholePart = Hundredths / 100;
+    ULONGLONG FractionPart = Hundredths % 100;
+
+    Result = to_string(WholePart);
+    Result += '.';
+
+    if (FractionPart < 10)
+        Result += '0';
+
+    Result += to_string(FractionPart);
+    return Result;
+}
+
+static void
+DebugPrintString(const string& String)
+{
+    char DbgString[DBGPRINT_BUFSIZE + 1];
+    size_t Offset = 0;
+
+    while (Offset < String.size())
+    {
+        size_t ChunkSize = String.size() - Offset;
+        if (ChunkSize > DBGPRINT_BUFSIZE)
+            ChunkSize = DBGPRINT_BUFSIZE;
+
+        memcpy(DbgString, String.c_str() + Offset, ChunkSize);
+        DbgString[ChunkSize] = 0;
+        DbgPrint("%s", DbgString);
+        Offset += ChunkSize;
+    }
+}
+
+static string
+PrefixLines(const string& String, const string& Prefix)
+{
+    string Result;
+    bool AtLineStart = true;
+
+    if (Prefix.empty())
+        return String;
+
+    Result.reserve(String.size() + Prefix.size());
+
+    for (size_t i = 0; i < String.size(); ++i)
+    {
+        if (AtLineStart)
+        {
+            Result += Prefix;
+            AtLineStart = false;
+        }
+
+        Result += String[i];
+        if (String[i] == '\n')
+            AtLineStart = true;
+    }
+
+    return Result;
+}
+
 /**
  * Escapes a string according to RFC 1738.
  * Required for passing parameters to the web service.
@@ -95,9 +158,19 @@ IsNumber(const char* Input)
 string
 StringOut(const string& String, bool forcePrint)
 {
-    char DbgString[DBGPRINT_BUFSIZE + 1];
+    return StringOutWithPrefix(String, string(), forcePrint);
+}
+
+string
+StringOutWithPrefix(const string& String, const string& Prefix, bool forcePrint)
+{
     size_t i, start = 0, last_newline = 0, size = 0, curr_pos = 0;
+    size_t PrintableSize;
     string NewString;
+    string PrintableString;
+
+    if (String.empty())
+        return String;
 
     /* Unify the line endings (the piped output of the tests may use CRLF) */
     for(i = 0; i < String.size(); i++)
@@ -124,48 +197,54 @@ StringOut(const string& String, bool forcePrint)
                 /* No newlines so far, or the string just fits */
                 if(last_newline <= start || ((curr_pos - start == DBGPRINT_BUFSIZE) && NewString[curr_pos - 1] == '\n'))
                 {
-                    size = curr_pos - start;
-                    memcpy(DbgString, NewString.c_str() + start, size);
                     start = curr_pos;
                 }
                 else
                 {
-                    size = last_newline - start;
-                    memcpy(DbgString, NewString.c_str() + start, size);
                     start = last_newline;
                 }
-
-                DbgString[size] = 0;
-                DbgPrint("%s", DbgString);
             }
 
             last_newline = curr_pos;
         }
     }
 
-    size = curr_pos - start;
-
     /* Only print if forced to or if the rest is a whole line */
     if(forcePrint == true || NewString[curr_pos - 1] == '\n')
+        PrintableSize = NewString.size();
+    else
+        PrintableSize = start;
+
+    PrintableString = PrefixLines(NewString.substr(0, PrintableSize), Prefix);
+    if(!PrintableString.empty())
     {
-        /* Output the whole string */
         if(Configuration.DoPrint())
-            cout << NewString << flush;
+            cout << PrintableString << flush;
 
-        memcpy(DbgString, NewString.c_str() + start, size);
-        DbgString[size] = 0;
-        DbgPrint("%s", DbgString);
-
-        NewString.clear();
-        return NewString;
+        DebugPrintString(PrintableString);
     }
 
-    /* Output full lines only */
-    if(Configuration.DoPrint())
-        cout << NewString.substr(0, start) << flush;
-
     /* Return the remaining chunk */
-    return NewString.substr(start, size);
+    size = curr_pos - PrintableSize;
+    return NewString.substr(PrintableSize, size);
+}
+
+string
+FormatMillisecondsAsSeconds(DWORD Milliseconds)
+{
+    ULONGLONG Hundredths;
+
+    Hundredths = (static_cast<ULONGLONG>(Milliseconds) * 100 + 500) / 1000;
+    return FormatFixedHundredths(Hundredths);
+}
+
+string
+FormatMillisecondsAsMinutes(DWORD Milliseconds)
+{
+    ULONGLONG Hundredths;
+
+    Hundredths = (static_cast<ULONGLONG>(Milliseconds) * 100 + 30000) / 60000;
+    return FormatFixedHundredths(Hundredths);
 }
 
 /**

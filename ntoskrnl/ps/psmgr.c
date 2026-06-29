@@ -477,6 +477,7 @@ PspInitPhase0(IN PLOADER_PARAMETER_BLOCK LoaderBlock)
     for (i = 0; i < PSP_MAX_CREATE_PROCESS_NOTIFY; i++)
     {
         ExInitializeCallBack(&PspProcessNotifyRoutine[i]);
+        ExInitializeCallBack(&PspProcessNotifyRoutineEx[i]);
     }
     for (i = 0; i < PSP_MAX_LOAD_IMAGE_NOTIFY; i++)
     {

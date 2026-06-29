@@ -64,16 +64,17 @@ static bool __cdecl initialize_global_variables()
 #pragma warning( suppress: 4505 )
     static bool __cdecl initialize_environment()
     {
-        if (_initialize_narrow_environment() < 0)
-        {
-            return false;
-        }
-
-        if (!_get_initial_narrow_environment())
-        {
-            return false;
-        }
-
+        /*
+         * Defer environment initialization to first use.  Calling
+         * _initialize_narrow_environment() during DLL_PROCESS_ATTACH
+         * adds significant stack depth (GetEnvironmentStringsA → locale
+         * conversion → heap) on top of an already deep loader call chain.
+         * For DLLs with many dependencies (e.g. Mesa viogpu_wgl.dll),
+         * this tips the 2 MB default stack over the edge.
+         *
+         * The environment is lazy-initialized on first access through
+         * _get_initial_narrow_environment() / common_get_or_create_environment_nolock().
+         */
         return true;
     }
 

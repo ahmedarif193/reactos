@@ -204,6 +204,9 @@ DWORD NTAPI DxDdUnlock(HANDLE hSurface, PDD_UNLOCKDATA puUnlockData);
 HANDLE NTAPI DxDdCreateSurfaceObject(HANDLE hDirectDrawLocal, HANDLE hSurface, PDD_SURFACE_LOCAL puSurfaceLocal, PDD_SURFACE_MORE puSurfaceMore, PDD_SURFACE_GLOBAL puSurfaceGlobal, BOOL bComplete);
 
 
+/* DxDdIoctl gateway cleanup (historic.c) */
+VOID DxDdpCloseDxgKrnl(VOID);
+
 /* Internal functions */
 BOOL FASTCALL VerifyObjectOwner(PDD_ENTRY pEntry);
 BOOL FASTCALL DdHmgCreate(VOID);

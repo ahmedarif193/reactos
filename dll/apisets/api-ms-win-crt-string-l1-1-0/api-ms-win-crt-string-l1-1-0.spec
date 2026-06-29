@@ -54,6 +54,7 @@
 @ cdecl _o_wcstok_s(ptr wstr ptr) ucrtbase._o_wcstok_s
 @ cdecl _o_wmemcpy_s(ptr long ptr long) ucrtbase._o_wmemcpy_s
 @ cdecl _o_wmemmove_s(ptr long ptr long) ucrtbase._o_wmemmove_s
+@ cdecl _stricmp(str str) ucrtbase._stricmp
 @ cdecl _strcoll_l(str str ptr) ucrtbase._strcoll_l
 @ cdecl _strdup(str) ucrtbase._strdup
 @ cdecl _strerror(long) ucrtbase._strerror
@@ -79,6 +80,11 @@
 @ cdecl _wcsupr_s_l(wstr long ptr) ucrtbase._wcsupr_s_l
 @ cdecl _wcsxfrm_l(ptr wstr long ptr) ucrtbase._wcsxfrm_l
 @ cdecl btowc(long) ucrtbase.btowc
+@ cdecl isalnum(long) ucrtbase.isalnum
+@ cdecl isdigit(long) ucrtbase.isdigit
+@ cdecl isspace(long) ucrtbase.isspace
+@ cdecl isxdigit(long) ucrtbase.isxdigit
+@ cdecl mbrlen(ptr long ptr) ucrtbase.mbrlen
 @ cdecl mbstowcs(ptr str long) ucrtbase.mbstowcs
 @ cdecl mbstowcs_s(ptr ptr long str long) ucrtbase.mbstowcs_s
 @ cdecl mbtowc(ptr str long) ucrtbase.mbtowc
@@ -110,6 +116,7 @@
 @ cdecl strrchr(str long) ucrtbase.strrchr
 @ cdecl strspn(str str) ucrtbase.strspn
 @ cdecl strstr(str str) ucrtbase.strstr
+@ cdecl tolower(long) ucrtbase.tolower
 @ cdecl strtok(str str) ucrtbase.strtok
 @ cdecl strtok_s(ptr str ptr) ucrtbase.strtok_s
 @ cdecl strxfrm(ptr str long) ucrtbase.strxfrm

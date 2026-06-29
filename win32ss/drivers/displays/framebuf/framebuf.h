@@ -106,6 +106,12 @@ typedef struct _PDEV
    DDPIXELFORMAT ddpfDisplay;
    const FB_ACCEL_BACKEND *AccelBackend;
    PVOID BackendContext;
+
+   /* Set when dxgkrnl signals that the framebuffer is already a system-memory
+    * shadow (via DriverSpecificAttributeFlags).  When TRUE, framebuf skips
+    * its own shadow buffer allocation so GDI draws directly to the buffer
+    * that DxgkDdiPresentDisplayOnly reads from. */
+   BOOLEAN SysmemFramebuffer;
 } PDEV, *PPDEV;
 
 typedef struct _FB_ACCEL_BACKEND
@@ -122,6 +128,11 @@ typedef struct _FB_ACCEL_BACKEND
 
 #define DEVICE_NAME	L"framebuf"
 #define ALLOC_TAG	'FUBF'
+
+#ifndef IOCTL_VIDEO_DXGK_PRESENT_DIRTY_RECT
+#define IOCTL_VIDEO_DXGK_PRESENT_DIRTY_RECT \
+    CTL_CODE(FILE_DEVICE_VIDEO, 0x920, METHOD_BUFFERED, FILE_ANY_ACCESS)
+#endif
 
 
 BOOL APIENTRY

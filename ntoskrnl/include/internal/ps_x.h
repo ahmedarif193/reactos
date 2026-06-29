@@ -81,6 +81,43 @@ PspRunCreateProcessNotifyRoutines(IN PEPROCESS CurrentProcess,
 
 FORCEINLINE
 VOID
+PspRunCreateProcessNotifyRoutinesEx(
+    IN PEPROCESS CurrentProcess,
+    IN HANDLE ProcessId,
+    IN PPS_CREATE_NOTIFY_INFO CreateInfo)
+{
+    ULONG i;
+    PEX_CALLBACK_ROUTINE_BLOCK CallbackBlock;
+    PCREATE_PROCESS_NOTIFY_ROUTINE_EX Routine;
+
+    /* Check if we have registered Ex routines */
+    if (!PspProcessNotifyRoutineExCount)
+        return;
+
+    /* Loop the Ex callback slots */
+    for (i = 0; i < PSP_MAX_CREATE_PROCESS_NOTIFY; i++)
+    {
+        /* Reference the block */
+        CallbackBlock = ExReferenceCallBackBlock(&PspProcessNotifyRoutineEx[i]);
+        if (!CallbackBlock)
+            continue;
+
+        /* Extract the Ex callback pointer and invoke it directly.
+         * The Ex prototype is:
+         *   VOID NTAPI Routine(PEPROCESS, HANDLE, PPS_CREATE_NOTIFY_INFO)
+         * which differs from the non-Ex variant's (HANDLE, HANDLE, BOOLEAN)
+         * signature, so we cannot use ExDoCallBack here. */
+        Routine = (PCREATE_PROCESS_NOTIFY_ROUTINE_EX)
+                  ExGetCallBackBlockRoutine(CallbackBlock);
+        Routine(CurrentProcess, ProcessId, CreateInfo);
+
+        /* Release the reference */
+        ExDereferenceCallBackBlock(&PspProcessNotifyRoutineEx[i], CallbackBlock);
+    }
+}
+
+FORCEINLINE
+VOID
 PspRunLoadImageNotifyRoutines(PUNICODE_STRING FullImageName,
                               HANDLE ProcessId,
                               PIMAGE_INFO ImageInfo)
