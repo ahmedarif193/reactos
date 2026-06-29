@@ -665,8 +665,6 @@ NwifiReceiveFromLower(
             Adapter->RxBytes += NWIFI_NBL_CTX(UpNbl)->DataLength;
             InterlockedIncrement(&Adapter->PendingReceives);
 
-            /* Indicate with RESOURCES so NDIS returns the NBL synchronously;
-             * the copy is then freed immediately in ReturnNetBufferLists. */
             NdisMIndicateReceiveNetBufferLists(Adapter->MiniportAdapterHandle,
                                                UpNbl, NDIS_DEFAULT_PORT_NUMBER, 1,
                                                ReceiveFlags |
