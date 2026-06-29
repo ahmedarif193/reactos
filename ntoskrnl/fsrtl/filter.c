@@ -63,7 +63,7 @@ FsRtlIsNtstatusExpected(IN NTSTATUS NtStatus)
     return((STATUS_DATATYPE_MISALIGNMENT == NtStatus) ||
            (STATUS_ACCESS_VIOLATION == NtStatus) ||
            (STATUS_ILLEGAL_INSTRUCTION == NtStatus) ||
-           (STATUS_INSTRUCTION_MISALIGNMENT == NtStatus)) ? TRUE : FALSE;
+           (STATUS_INSTRUCTION_MISALIGNMENT == NtStatus)) ? FALSE : TRUE;
 }
 
 /*++
