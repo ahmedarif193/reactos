@@ -623,8 +623,8 @@ HalpArm64HasPciConfigSpaceBackend(
     ULONG RootCount;
 
     /*
-     * Platform-registered config-space backend (e.g. the BCM2712 indirect
-     * CFG_INDEX/CFG_DATA accessor on RPi5).  Report as available — actual
+     * Platform-registered config-space backend (e.g. the BCM2711 indirect
+     * CFG_INDEX/CFG_DATA accessor on RPi4).  Report as available — actual
      * MMIO mapping is deferred to the first config access, but the early
      * scan works because HalpPhase0GetPciDataByOffsetArm64 calls through
      * our dispatch which triggers the backend's lazy init at that point.
@@ -859,8 +859,8 @@ HalpArm64AccessPciConfigSpace(
 {
     /*
      * Try the platform-registered config-space backend first.  This
-     * handles SoCs where no MCFG or _CBA is published (e.g. the BCM2712
-     * indirect accessor on RPi5).  The pointer is set once during the
+     * handles SoCs where no MCFG or _CBA is published (e.g. the BCM2711
+     * indirect accessor on RPi4).  The pointer is set once during the
      * platform probe — zero overhead elsewhere.
      */
     if (HalpArm64PciConfigBackend &&
@@ -3529,7 +3529,7 @@ HalAllocateCommonBuffer(
      *
      * With MmCached, command ring TRBs written by the CPU stay in L1/L2
      * cache and never reach DRAM — the xHCI reads stale zeros and never
-     * processes commands (seen as NOOP/Enable Slot timeout on RPi5 RP1).
+     * processes commands (seen as NOOP/Enable-Slot timeouts on non-coherent xHCI).
      *
      * Cache-coherent platforms can honor a cached common-buffer request: the
      * interconnect keeps CPU caches and DMA masters coherent, and the cached
@@ -6448,7 +6448,7 @@ IoMapTransfer(
      * On ARM64, bus-master devices handle their own DMA addressing.
      * The shared adapter object's Dma64BitAddresses flag is unreliable
      * (overwritten by the last HalGetAdapter caller). Since ARM64
-     * systems typically have all RAM above 4GB (e.g., RPi5), bounce
+     * systems typically have all RAM above 4GB, bounce
      * buffer allocation below 4GB would fail anyway. Skip bounce
      * buffers entirely — the device driver is responsible for ensuring
      * its DMA addresses are reachable (via XHCI 64-bit capability, etc.).

@@ -624,6 +624,23 @@ HalpAcpiValidateEcamAllocation(
     if (FoundLegacy && Mismatches)
         return FALSE;
 
+    if (!FoundLegacy)
+    {
+        for (Dev = 0; Dev < PCI_MAX_DEVICES; Dev++)
+        {
+            EcamId = HalpAcpiReadEcamUlong(AllocationIndex, Allocation,
+                                           Allocation->StartBusNumber, Dev, 0, 0);
+            if (EcamId == 0xFFFFFFFF)
+                continue;
+
+            return HalpPciVendorIdLooksSane(EcamId, 0);
+        }
+
+        HalpAcpiRecordEcamEvent(HALP_ACPI_ECAM_COVERAGE_VENDOR_ALL_ONES,
+                                "HAL: ECAM segment had only 0xFFFFFFFF; disabling ECAM for segment");
+        return FALSE;
+    }
+
     return TRUE;
 }
 
@@ -3201,57 +3218,74 @@ HalpAcpiAccessConfigEcam(
         HalpAcpiRecordEcamEvent(HALP_ACPI_ECAM_COVERAGE_SEGMENT_ANY, NULL);
     }
 
-    Allocation = HalpAcpiFindMcfgAllocation(Segment, (UCHAR)BusNumber);
-    if (!Allocation)
+    //
+    // First allocation for this (segment, bus) that validates; Find skips
+    // disabled windows so a dead window can't shadow a working one.
+    //
+    for (;;)
     {
-        HalpAcpiRecordEcamEvent(
-            HALP_ACPI_ECAM_COVERAGE_NO_ALLOCATION,
-            "HAL: PCI Express MMCONFIG has no allocation that covers the requested bus; using legacy configuration space.");
-        return FALSE;
-    }
-
-    if (HalpAcpiEcamForceLegacySegment != 0xFFFF &&
-        Allocation->PciSegment == HalpAcpiEcamForceLegacySegment)
-    {
-        if (!HalpAcpiEcamForceLegacyLogged)
+        Allocation = HalpAcpiFindMcfgAllocation(Segment, (UCHAR)BusNumber);
+        if (!Allocation)
         {
-            CHAR msg[128];
-            RtlStringCbPrintfA(msg,
-                               sizeof(msg),
-                               "HAL: ECAM disabled for segment %u due to firmware decode failure; using legacy configuration space.",
-                               Allocation->PciSegment);
-            HalpAcpiRecordEcamEvent(HALP_ACPI_ECAM_COVERAGE_FORCED_LEGACY, msg);
-            HalpAcpiEcamForceLegacyLogged = TRUE;
-        }
-        return FALSE;
-    }
-
-    AllocationIndex = (ULONG)(Allocation - HalpAcpiMcfgAllocations);
-    if (HalpAcpiMcfgSegDisabled && AllocationIndex < HalpAcpiMcfgSegDisabledCount)
-    {
-        State = HalpAcpiMcfgSegDisabled[AllocationIndex];
-        if (State == HALP_ACPI_ECAM_STATE_UNKNOWN)
-        {
-            if (!HalpAcpiValidateEcamAllocation(AllocationIndex, Allocation))
-            {
-                HalpAcpiMcfgSegDisabled[AllocationIndex] = HALP_ACPI_ECAM_STATE_DISABLED;
-                HalpAcpiRecordEcamEvent(HALP_ACPI_ECAM_COVERAGE_VENDOR_ALL_ONES,
-                                        "HAL: PCI Express MMCONFIG decode mismatch; using legacy configuration space.");
-                return FALSE;
-            }
-
-            HalpAcpiMcfgSegDisabled[AllocationIndex] = HALP_ACPI_ECAM_STATE_WORKING;
-        }
-        else if (State == HALP_ACPI_ECAM_STATE_DISABLED)
-        {
-            CHAR msg[128];
-            RtlStringCbPrintfA(msg,
-                               sizeof(msg),
-                               "HAL: ECAM disabled for segment %u; using legacy configuration space.",
-                               Allocation->PciSegment);
-            HalpAcpiRecordEcamEvent(HALP_ACPI_ECAM_COVERAGE_FORCED_LEGACY, msg);
+            HalpAcpiRecordEcamEvent(
+                HALP_ACPI_ECAM_COVERAGE_NO_ALLOCATION,
+                "HAL: PCI Express MMCONFIG has no allocation that covers the requested bus; using legacy configuration space.");
             return FALSE;
         }
+
+        if (HalpAcpiEcamForceLegacySegment != 0xFFFF &&
+            Allocation->PciSegment == HalpAcpiEcamForceLegacySegment)
+        {
+            if (!HalpAcpiEcamForceLegacyLogged)
+            {
+                CHAR msg[128];
+                RtlStringCbPrintfA(msg,
+                                   sizeof(msg),
+                                   "HAL: ECAM disabled for segment %u due to firmware decode failure; using legacy configuration space.",
+                                   Allocation->PciSegment);
+                HalpAcpiRecordEcamEvent(HALP_ACPI_ECAM_COVERAGE_FORCED_LEGACY, msg);
+                HalpAcpiEcamForceLegacyLogged = TRUE;
+            }
+            return FALSE;
+        }
+
+        AllocationIndex = (ULONG)(Allocation - HalpAcpiMcfgAllocations);
+        if (!HalpAcpiMcfgSegDisabled || AllocationIndex >= HalpAcpiMcfgSegDisabledCount)
+        {
+            break;
+        }
+
+        State = HalpAcpiMcfgSegDisabled[AllocationIndex];
+        if (State == HALP_ACPI_ECAM_STATE_WORKING)
+        {
+            break;
+        }
+
+        /* UNKNOWN (Find already skips DISABLED): validate this window once. */
+        if (HalpAcpiValidateEcamAllocation(AllocationIndex, Allocation))
+        {
+            HalpAcpiMcfgSegDisabled[AllocationIndex] = HALP_ACPI_ECAM_STATE_WORKING;
+            break;
+        }
+
+        HalpAcpiMcfgSegDisabled[AllocationIndex] = HALP_ACPI_ECAM_STATE_DISABLED;
+        HalpAcpiRecordEcamEvent(HALP_ACPI_ECAM_COVERAGE_VENDOR_ALL_ONES,
+                                "HAL: PCI Express MMCONFIG decode mismatch; using legacy configuration space.");
+        /* Loop: Find now skips this disabled window and returns the next. */
+    }
+
+    //
+    // Single-bus allocations expose only BDF xx:00.0 (firmware single-function
+    // ECAM quirk); report any other device/function absent. Multi-bus unaffected.
+    //
+    if (Allocation->StartBusNumber == Allocation->EndBusNumber &&
+        (Slot.u.bits.DeviceNumber != 0 || Slot.u.bits.FunctionNumber != 0))
+    {
+        if (!Write)
+        {
+            RtlFillMemory(Buffer, Length, 0xFF);
+        }
+        return TRUE;
     }
 
     BusCount = (ULONGLONG)(Allocation->EndBusNumber - Allocation->StartBusNumber + 1);
@@ -3342,6 +3376,12 @@ HalpAcpiFindMcfgAllocation(
 
         if (BusNumber < Allocation->StartBusNumber ||
             BusNumber > Allocation->EndBusNumber)
+        {
+            continue;
+        }
+
+        if (HalpAcpiMcfgSegDisabled && Index < HalpAcpiMcfgSegDisabledCount &&
+            HalpAcpiMcfgSegDisabled[Index] == HALP_ACPI_ECAM_STATE_DISABLED)
         {
             continue;
         }
