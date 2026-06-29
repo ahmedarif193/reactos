@@ -495,7 +495,7 @@ Return Value:
 
     SetFlag( IrpContext->Flags, IRP_CONTEXT_FLAG_SWAPPED_STACK );
 
-    status = KeExpandKernelStackAndCalloutEx( FatCommonCreateCallout,
+    status = KeExpandKernelStackAndCalloutEx( (PEXPAND_STACK_CALLOUT)FatCommonCreateCallout,
                                               &CalloutParameters,
                                               KERNEL_STACK_SIZE,
                                               FALSE,
