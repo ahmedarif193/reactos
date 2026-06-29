@@ -45,9 +45,11 @@
  * add support for other transport mediums */
 #define TCP_MSS                         1460
 
-#define TCP_WND                         0xFFFF
+#define LWIP_WND_SCALE                  1
+#define TCP_RCV_SCALE                   3
+#define TCP_WND                         (104 * 1024)
 
-#define TCP_SND_BUF                     TCP_WND
+#define TCP_SND_BUF                     (64 * 1024)
 
 #define TCP_MAXRTX                      8
 
@@ -56,6 +58,10 @@
 #define TCP_LISTEN_BACKLOG              1
 
 #define LWIP_TCP_TIMESTAMPS             1
+
+#define LWIP_TCP_SACK_OUT               1
+
+#define TCP_TMR_INTERVAL                25
 
 #define LWIP_SOCKET                     0
 
