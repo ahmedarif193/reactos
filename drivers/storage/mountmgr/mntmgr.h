@@ -17,7 +17,7 @@ typedef struct _DEVICE_EXTENSION
     LIST_ENTRY DeviceListHead;
     LIST_ENTRY OfflineDeviceListHead;
     PVOID NotificationEntry;
-    KSEMAPHORE DeviceLock;
+    KMUTEX DeviceLock;
     KSEMAPHORE RemoteDatabaseLock;
     BOOLEAN AutomaticDriveLetter;
     LIST_ENTRY IrpListHead;
@@ -38,6 +38,23 @@ typedef struct _DEVICE_EXTENSION
     ULONG OnlineNotificationCount;
     KEVENT OnlineNotificationEvent;
 } DEVICE_EXTENSION, *PDEVICE_EXTENSION;
+
+/* A mutex (rather than a semaphore) so that a synchronous mount which re-enters
+ * mountmgr on the same thread - e.g. querying mount points during volume arrival -
+ * recurses rather than self-deadlocking. */
+FORCEINLINE
+VOID
+MmpAcquireDeviceLock(_Inout_ PDEVICE_EXTENSION DeviceExtension)
+{
+    KeWaitForSingleObject(&(DeviceExtension->DeviceLock), Executive, KernelMode, FALSE, NULL);
+}
+
+FORCEINLINE
+VOID
+MmpReleaseDeviceLock(_Inout_ PDEVICE_EXTENSION DeviceExtension)
+{
+    KeReleaseMutex(&(DeviceExtension->DeviceLock), FALSE);
+}
 
 typedef struct _DEVICE_INFORMATION
 {

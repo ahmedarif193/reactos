@@ -458,19 +458,19 @@ RemoveWorkItem(IN PUNIQUE_ID_WORK_ITEM WorkItem)
 {
     PDEVICE_EXTENSION DeviceExtension = WorkItem->DeviceExtension;
 
-    KeWaitForSingleObject(&(DeviceExtension->DeviceLock), Executive, KernelMode, FALSE, NULL);
+    MmpAcquireDeviceLock(DeviceExtension);
 
     /* If even if being worked, it's too late */
     if (WorkItem->Event)
     {
-        KeReleaseSemaphore(&(DeviceExtension->DeviceLock), IO_NO_INCREMENT, 1, FALSE);
+        MmpReleaseDeviceLock(DeviceExtension);
         KeSetEvent(WorkItem->Event, 0, FALSE);
     }
     else
     {
         /* Otherwise, remove it from the list, and delete it */
         RemoveEntryList(&(WorkItem->UniqueIdWorkerItemListEntry));
-        KeReleaseSemaphore(&(DeviceExtension->DeviceLock), IO_NO_INCREMENT, 1, FALSE);
+        MmpReleaseDeviceLock(DeviceExtension);
         IoFreeIrp(WorkItem->Irp);
         FreePool(WorkItem->DeviceName.Buffer);
         FreePool(WorkItem->IrpBuffer);
@@ -709,9 +709,9 @@ IssueUniqueIdChangeNotify(IN PDEVICE_EXTENSION DeviceExtension,
     WorkItem->IrpBufferLength = sizeof(MOUNTDEV_UNIQUE_ID_CHANGE_NOTIFY_OUTPUT) + 1024;
 
     /* Add the worker in the list */
-    KeWaitForSingleObject(&(DeviceExtension->DeviceLock), Executive, KernelMode, FALSE, NULL);
+    MmpAcquireDeviceLock(DeviceExtension);
     InsertHeadList(&(DeviceExtension->UniqueIdWorkerItemListHead), &(WorkItem->UniqueIdWorkerItemListEntry));
-    KeReleaseSemaphore(&(DeviceExtension->DeviceLock), IO_NO_INCREMENT, 1, FALSE);
+    MmpReleaseDeviceLock(DeviceExtension);
 
     /* And call the worker */
     IssueUniqueIdChangeNotifyWorker(WorkItem, UniqueId);
