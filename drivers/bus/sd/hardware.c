@@ -6,7 +6,6 @@
  */
 
 #include "hardware.h"
-#include "bcm2712.h"
 
 #define NDEBUG
 #include <debug.h>
@@ -17,15 +16,9 @@ SdBusHardwareMapResources(
     _In_ PHYSICAL_ADDRESS HostPhysicalAddress,
     _In_ PCM_PARTIAL_RESOURCE_LIST PartialList)
 {
-    NTSTATUS Status;
-
-    Status = SdBusBcm2712MapResources(FdoExtension,
-                                      HostPhysicalAddress,
-                                      PartialList);
-    if (!NT_SUCCESS(Status) || FdoExtension->HardwareExtension != NULL)
-    {
-        return Status;
-    }
+    UNREFERENCED_PARAMETER(FdoExtension);
+    UNREFERENCED_PARAMETER(HostPhysicalAddress);
+    UNREFERENCED_PARAMETER(PartialList);
 
     return STATUS_SUCCESS;
 }
@@ -98,7 +91,7 @@ SdBusHardwareCanVoltageSwitch(
         HardwareExtension->Ops == NULL ||
         HardwareExtension->Ops->CanVoltageSwitch == NULL)
     {
-        return TRUE;
+        return FALSE;
     }
 
     return HardwareExtension->Ops->CanVoltageSwitch(FdoExtension);

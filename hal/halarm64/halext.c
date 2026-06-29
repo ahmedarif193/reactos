@@ -19,7 +19,6 @@
 #include "gic_internal.h"
 
 /* Platform probes — the one allowed list of platform knowledge. */
-#include "bcm2712_pci.h"
 #include "bcm2711_pci.h"
 #include "bcm2711_vc.h"
 #include "bcm2837.h"
@@ -39,7 +38,6 @@ typedef struct _HAL_ARM64_PLATFORM
 
 static const HAL_ARM64_PLATFORM HalpArm64Platforms[] =
 {
-    { "BCM2712 (Raspberry Pi 5)", Bcm2712PciProbe },
     { "BCM2711 (Raspberry Pi 4)", Bcm2711PciProbe },
     { "BCM2837 (Raspberry Pi 3)", Bcm2837InterruptProbe },
 };
