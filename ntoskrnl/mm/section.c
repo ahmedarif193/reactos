@@ -5420,6 +5420,7 @@ MmFlushSegment(
 {
     LARGE_INTEGER FlushStart, FlushEnd;
     NTSTATUS Status;
+    NTSTATUS FlushStatus = STATUS_SUCCESS;
 
     if (Offset)
     {
@@ -5498,6 +5499,8 @@ MmFlushSegment(
             MmUnlockSectionSegment(Segment);
             WriteStatus = MiWritePageRun(Segment, RunStart.QuadPart, Pages, RunPages);
             MmLockSectionSegment(Segment);
+            if (!NT_SUCCESS(WriteStatus))
+                FlushStatus = WriteStatus;
 
             for (ULONG i = 0; i < RunPages; i++)
             {
@@ -5529,11 +5532,10 @@ MmFlushSegment(
     MmDereferenceSegment(Segment);
 
 Quit:
-    /* FIXME: Handle failures */
     if (Iosb)
-        Iosb->Status = STATUS_SUCCESS;
+        Iosb->Status = FlushStatus;
 
-    return STATUS_SUCCESS;
+    return FlushStatus;
 }
 
 _Requires_exclusive_lock_held_(Segment->Lock)
