@@ -297,11 +297,11 @@ MountMgrCheckUnprocessedVolumes(IN PDEVICE_EXTENSION DeviceExtension,
     /* No offline volumes, nothing more to do */
     if (IsListEmpty(&(DeviceExtension->OfflineDeviceListHead)))
     {
-        KeReleaseSemaphore(&(DeviceExtension->DeviceLock), IO_NO_INCREMENT, 1, FALSE);
+        MmpReleaseDeviceLock(DeviceExtension);
         return STATUS_SUCCESS;
     }
 
-    KeReleaseSemaphore(&(DeviceExtension->DeviceLock), IO_NO_INCREMENT, 1, FALSE);
+    MmpReleaseDeviceLock(DeviceExtension);
 
     /* Reactivate all the offline volumes */
     while (!IsListEmpty(&(DeviceExtension->OfflineDeviceListHead)))
@@ -1519,9 +1519,9 @@ MountMgrQueryDosVolumePaths(IN PDEVICE_EXTENSION DeviceExtension,
         /* Reconcile database */
         ReconcileContext.DeviceExtension = DeviceExtension;
         ReconcileContext.DeviceInformation = FailedDevice;
-        KeReleaseSemaphore(&DeviceExtension->DeviceLock, IO_NO_INCREMENT, 1, FALSE);
+        MmpReleaseDeviceLock(DeviceExtension);
         ReconcileThisDatabaseWithMasterWorker(&ReconcileContext);
-        KeWaitForSingleObject(&DeviceExtension->DeviceLock, Executive, KernelMode, FALSE, NULL);
+        MmpAcquireDeviceLock(DeviceExtension);
 
         /* Look for our device, to check it's online */
         for (Entry = DeviceExtension->DeviceListHead.Flink;
@@ -2679,7 +2679,7 @@ MountMgrDeviceControl(IN PDEVICE_OBJECT DeviceObject,
     Stack = IoGetCurrentIrpStackLocation(Irp);
     DeviceExtension = DeviceObject->DeviceExtension;
 
-    KeWaitForSingleObject(&(DeviceExtension->DeviceLock), Executive, KernelMode, FALSE, NULL);
+    MmpAcquireDeviceLock(DeviceExtension);
 
     switch (Stack->Parameters.DeviceIoControl.IoControlCode)
     {
@@ -2713,10 +2713,10 @@ MountMgrDeviceControl(IN PDEVICE_OBJECT DeviceObject,
             break;
 
         case IOCTL_MOUNTMGR_VOLUME_MOUNT_POINT_CREATED:
-            KeReleaseSemaphore(&(DeviceExtension->DeviceLock), IO_NO_INCREMENT, 1, FALSE);
+            MmpReleaseDeviceLock(DeviceExtension);
 
             LockStatus = WaitForRemoteDatabaseSemaphore(DeviceExtension);
-            KeWaitForSingleObject(&(DeviceExtension->DeviceLock), Executive, KernelMode, FALSE, NULL);
+            MmpAcquireDeviceLock(DeviceExtension);
             Status = MountMgrVolumeMountPointCreated(DeviceExtension, Irp, LockStatus);
             if (NT_SUCCESS(LockStatus))
             {
@@ -2726,10 +2726,10 @@ MountMgrDeviceControl(IN PDEVICE_OBJECT DeviceObject,
             break;
 
         case IOCTL_MOUNTMGR_VOLUME_MOUNT_POINT_DELETED:
-            KeReleaseSemaphore(&(DeviceExtension->DeviceLock), IO_NO_INCREMENT, 1, FALSE);
+            MmpReleaseDeviceLock(DeviceExtension);
 
             LockStatus = WaitForRemoteDatabaseSemaphore(DeviceExtension);
-            KeWaitForSingleObject(&(DeviceExtension->DeviceLock), Executive, KernelMode, FALSE, NULL);
+            MmpAcquireDeviceLock(DeviceExtension);
             Status = MountMgrVolumeMountPointDeleted(DeviceExtension, Irp, LockStatus);
             if (NT_SUCCESS(LockStatus))
             {
@@ -2751,7 +2751,7 @@ MountMgrDeviceControl(IN PDEVICE_OBJECT DeviceObject,
             goto Complete;
 
         case IOCTL_MOUNTMGR_VOLUME_ARRIVAL_NOTIFICATION:
-            KeReleaseSemaphore(&(DeviceExtension->DeviceLock), IO_NO_INCREMENT, 1, FALSE);
+            MmpReleaseDeviceLock(DeviceExtension);
             Status = MountMgrVolumeArrivalNotification(DeviceExtension, Irp);
             goto Complete;
 
@@ -2779,7 +2779,7 @@ MountMgrDeviceControl(IN PDEVICE_OBJECT DeviceObject,
             Status = STATUS_INVALID_DEVICE_REQUEST;
     }
 
-    KeReleaseSemaphore(&(DeviceExtension->DeviceLock), IO_NO_INCREMENT, 1, FALSE);
+    MmpReleaseDeviceLock(DeviceExtension);
 
     if (Status != STATUS_PENDING)
     {

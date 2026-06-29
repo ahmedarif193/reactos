@@ -82,7 +82,7 @@ MountMgrUniqueIdChangeRoutine(IN PDEVICE_EXTENSION DeviceExtension,
 
     /* Synchronise with remote databases */
     Status = WaitForRemoteDatabaseSemaphore(DeviceExtension);
-    KeWaitForSingleObject(&(DeviceExtension->DeviceLock), Executive, KernelMode, FALSE, NULL);
+    MmpAcquireDeviceLock(DeviceExtension);
 
     RtlZeroMemory(QueryTable, sizeof(QueryTable));
     QueryTable[0].QueryRoutine = ChangeUniqueIdRoutine;
@@ -120,8 +120,7 @@ MountMgrUniqueIdChangeRoutine(IN PDEVICE_EXTENSION DeviceExtension,
     /* If we didn't find any release everything and quit */
     if (ListHead == NextEntry)
     {
-        KeReleaseSemaphore(&(DeviceExtension->DeviceLock), IO_NO_INCREMENT,
-                           1, FALSE);
+        MmpReleaseDeviceLock(DeviceExtension);
 
         if (NT_SUCCESS(Status))
         {
@@ -135,8 +134,7 @@ MountMgrUniqueIdChangeRoutine(IN PDEVICE_EXTENSION DeviceExtension,
     if (!NT_SUCCESS(Status))
     {
         ReconcileThisDatabaseWithMaster(DeviceExtension, DeviceInformation);
-        KeReleaseSemaphore(&(DeviceExtension->DeviceLock), IO_NO_INCREMENT,
-                           1, FALSE);
+        MmpReleaseDeviceLock(DeviceExtension);
         return;
     }
 
@@ -144,8 +142,7 @@ MountMgrUniqueIdChangeRoutine(IN PDEVICE_EXTENSION DeviceExtension,
     UniqueId = AllocatePool(NewUniqueId->UniqueIdLength + sizeof(MOUNTDEV_UNIQUE_ID));
     if (!UniqueId)
     {
-        KeReleaseSemaphore(&(DeviceExtension->DeviceLock), IO_NO_INCREMENT,
-                           1, FALSE);
+        MmpReleaseDeviceLock(DeviceExtension);
         ReleaseRemoteDatabaseSemaphore(DeviceExtension);
         return;
     }
@@ -208,7 +205,7 @@ MountMgrUniqueIdChangeRoutine(IN PDEVICE_EXTENSION DeviceExtension,
         NextEntry = NextEntry->Flink;
     }
 
-    KeReleaseSemaphore(&(DeviceExtension->DeviceLock), IO_NO_INCREMENT, 1, FALSE);
+    MmpReleaseDeviceLock(DeviceExtension);
     ReleaseRemoteDatabaseSemaphore(DeviceExtension);
 
     return;

@@ -920,8 +920,7 @@ MountMgrUnload(IN PDRIVER_OBJECT DriverObject)
     IoUnregisterPlugPlayNotification(DeviceExtension->NotificationEntry);
 
     /* Acquire the driver exclusively */
-    KeWaitForSingleObject(&(DeviceExtension->DeviceLock), Executive, KernelMode,
-                          FALSE, NULL);
+    MmpAcquireDeviceLock(DeviceExtension);
 
     /* Clear offline devices list */
     while (!IsListEmpty(&(DeviceExtension->OfflineDeviceListHead)))
@@ -948,8 +947,7 @@ MountMgrUnload(IN PDRIVER_OBJECT DriverObject)
         KeClearEvent(&UnloadEvent);
         WorkItem->Event = &UnloadEvent;
 
-        KeReleaseSemaphore(&(DeviceExtension->DeviceLock), IO_NO_INCREMENT,
-                           1, FALSE);
+        MmpReleaseDeviceLock(DeviceExtension);
 
         IoCancelIrp(WorkItem->Irp);
         KeWaitForSingleObject(&UnloadEvent, Executive, KernelMode, FALSE, NULL);
@@ -959,8 +957,7 @@ MountMgrUnload(IN PDRIVER_OBJECT DriverObject)
         FreePool(WorkItem->IrpBuffer);
         FreePool(WorkItem);
 
-        KeWaitForSingleObject(&(DeviceExtension->DeviceLock), Executive, KernelMode,
-                              FALSE, NULL);
+        MmpAcquireDeviceLock(DeviceExtension);
     }
 
     /* If we have drive letter data, release */
@@ -971,7 +968,7 @@ MountMgrUnload(IN PDRIVER_OBJECT DriverObject)
     }
 
     /* Release driver & quit */
-    KeReleaseSemaphore(&(DeviceExtension->DeviceLock), IO_NO_INCREMENT, 1, FALSE);
+    MmpReleaseDeviceLock(DeviceExtension);
 
     GlobalDeleteSymbolicLink(&DosDevicesMount);
     IoDeleteDevice(gdeviceObject);
@@ -1073,7 +1070,7 @@ MountMgrMountedDeviceArrival(IN PDEVICE_EXTENSION DeviceExtension,
                                     &IsFT);
     if (!NT_SUCCESS(Status))
     {
-        KeWaitForSingleObject(&(DeviceExtension->DeviceLock), Executive, KernelMode, FALSE, NULL);
+        MmpAcquireDeviceLock(DeviceExtension);
 
         for (NextEntry = DeviceExtension->OfflineDeviceListHead.Flink;
              NextEntry != &(DeviceExtension->OfflineDeviceListHead);
@@ -1096,7 +1093,7 @@ MountMgrMountedDeviceArrival(IN PDEVICE_EXTENSION DeviceExtension,
             InsertTailList(&(DeviceExtension->OfflineDeviceListHead), &(DeviceInformation->DeviceListEntry));
         }
 
-        KeReleaseSemaphore(&(DeviceExtension->DeviceLock), IO_NO_INCREMENT, 1, FALSE);
+        MmpReleaseDeviceLock(DeviceExtension);
 
         return Status;
     }
@@ -1132,7 +1129,7 @@ MountMgrMountedDeviceArrival(IN PDEVICE_EXTENSION DeviceExtension,
     }
 
     /* Acquire driver exclusively */
-    KeWaitForSingleObject(&(DeviceExtension->DeviceLock), Executive, KernelMode, FALSE, NULL);
+    MmpAcquireDeviceLock(DeviceExtension);
 
     /* Check if we already have device in to prevent double registration */
     for (NextEntry = DeviceExtension->DeviceListHead.Flink;
@@ -1160,7 +1157,7 @@ MountMgrMountedDeviceArrival(IN PDEVICE_EXTENSION DeviceExtension,
         FreePool(DeviceInformation->SymbolicName.Buffer);
         FreePool(DeviceInformation);
 
-        KeReleaseSemaphore(&(DeviceExtension->DeviceLock), IO_NO_INCREMENT, 1, FALSE);
+        MmpReleaseDeviceLock(DeviceExtension);
 
         return STATUS_SUCCESS;
     }
@@ -1470,7 +1467,7 @@ MountMgrMountedDeviceArrival(IN PDEVICE_EXTENSION DeviceExtension,
         SetOnline = FALSE;
 
     /* Finally, release the exclusive lock */
-    KeReleaseSemaphore(&(DeviceExtension->DeviceLock), IO_NO_INCREMENT, 1, FALSE);
+    MmpReleaseDeviceLock(DeviceExtension);
 
     /* Set the device online now if necessary */
     if (SetOnline)
@@ -1494,7 +1491,7 @@ MountMgrMountedDeviceArrival(IN PDEVICE_EXTENSION DeviceExtension,
      */
     if (DeviceExtension->AutomaticDriveLetter)
     {
-        KeWaitForSingleObject(&(DeviceExtension->DeviceLock), Executive, KernelMode, FALSE, NULL);
+        MmpAcquireDeviceLock(DeviceExtension);
 
         ReconcileThisDatabaseWithMaster(DeviceExtension, DeviceInformation);
 
@@ -1511,7 +1508,7 @@ MountMgrMountedDeviceArrival(IN PDEVICE_EXTENSION DeviceExtension,
             CurrentDevice = CONTAINING_RECORD(NextEntry, DEVICE_INFORMATION, DeviceListEntry);
         }
 
-        KeReleaseSemaphore(&(DeviceExtension->DeviceLock), IO_NO_INCREMENT, 1, FALSE);
+        MmpReleaseDeviceLock(DeviceExtension);
     }
 
     return STATUS_SUCCESS;
@@ -1532,7 +1529,7 @@ MountMgrMountedDeviceRemoval(IN PDEVICE_EXTENSION DeviceExtension,
     PDEVICE_INFORMATION DeviceInformation, CurrentDevice;
 
     /* Acquire device exclusively */
-    KeWaitForSingleObject(&(DeviceExtension->DeviceLock), Executive, KernelMode, FALSE, NULL);
+    MmpAcquireDeviceLock(DeviceExtension);
 
     /* Look for the leaving device */
     for (NextEntry = DeviceExtension->DeviceListHead.Flink;
@@ -1678,7 +1675,7 @@ MountMgrMountedDeviceRemoval(IN PDEVICE_EXTENSION DeviceExtension,
     }
 
     /* Release driver */
-    KeReleaseSemaphore(&(DeviceExtension->DeviceLock), IO_NO_INCREMENT, 1, FALSE);
+    MmpReleaseDeviceLock(DeviceExtension);
 }
 
 /*
@@ -1900,7 +1897,7 @@ DriverEntry(IN PDRIVER_OBJECT DriverObject,
     InitializeListHead(&(DeviceExtension->DeviceListHead));
     InitializeListHead(&(DeviceExtension->OfflineDeviceListHead));
 
-    KeInitializeSemaphore(&(DeviceExtension->DeviceLock), 1, 1);
+    KeInitializeMutex(&(DeviceExtension->DeviceLock), 0);
     KeInitializeSemaphore(&(DeviceExtension->RemoteDatabaseLock), 1, 1);
 
     InitializeListHead(&(DeviceExtension->IrpListHead));

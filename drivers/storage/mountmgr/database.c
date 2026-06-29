@@ -597,7 +597,7 @@ ReconcileThisDatabaseWithMasterWorker(IN PVOID Parameter)
     }
 
     /* Find the DB to reconcile */
-    KeWaitForSingleObject(&DeviceExtension->DeviceLock, Executive, KernelMode, FALSE, NULL);
+    MmpAcquireDeviceLock(DeviceExtension);
     for (Entry = DeviceExtension->DeviceListHead.Flink;
          Entry != &DeviceExtension->DeviceListHead;
          Entry = Entry->Flink)
@@ -612,7 +612,7 @@ ReconcileThisDatabaseWithMasterWorker(IN PVOID Parameter)
     /* If not found, or if removable, bail out */
     if (Entry == &DeviceExtension->DeviceListHead || DeviceInformation->Removable)
     {
-        KeReleaseSemaphore(&DeviceExtension->DeviceLock, IO_NO_INCREMENT, 1, FALSE);
+        MmpReleaseDeviceLock(DeviceExtension);
         goto ReleaseRDS;
     }
 
@@ -620,7 +620,7 @@ ReconcileThisDatabaseWithMasterWorker(IN PVOID Parameter)
     Status = IoGetDeviceObjectPointer(&ListDeviceInfo->DeviceName, FILE_READ_ATTRIBUTES, &FileObject, &DeviceObject);
     if (!NT_SUCCESS(Status))
     {
-        KeReleaseSemaphore(&DeviceExtension->DeviceLock, IO_NO_INCREMENT, 1, FALSE);
+        MmpReleaseDeviceLock(DeviceExtension);
         goto ReleaseRDS;
     }
 
@@ -676,7 +676,7 @@ ReconcileThisDatabaseWithMasterWorker(IN PVOID Parameter)
         {
             CloseRemoteDatabase(DatabaseHandle);
         }
-        KeReleaseSemaphore(&DeviceExtension->DeviceLock, IO_NO_INCREMENT, 1, FALSE);
+        MmpReleaseDeviceLock(DeviceExtension);
         goto ReleaseRDS;
     }
 
@@ -709,7 +709,7 @@ ReconcileThisDatabaseWithMasterWorker(IN PVOID Parameter)
             TruncateRemoteDatabase(DatabaseHandle, 0);
             CloseRemoteDatabase(DatabaseHandle);
         }
-        KeReleaseSemaphore(&DeviceExtension->DeviceLock, IO_NO_INCREMENT, 1, FALSE);
+        MmpReleaseDeviceLock(DeviceExtension);
         goto ReleaseRDS;
     }
 
@@ -740,7 +740,7 @@ ReconcileThisDatabaseWithMasterWorker(IN PVOID Parameter)
             TruncateRemoteDatabase(DatabaseHandle, 0);
             CloseRemoteDatabase(DatabaseHandle);
         }
-        KeReleaseSemaphore(&DeviceExtension->DeviceLock, IO_NO_INCREMENT, 1, FALSE);
+        MmpReleaseDeviceLock(DeviceExtension);
         goto ReleaseRDS;
     }
 
@@ -752,12 +752,12 @@ ReconcileThisDatabaseWithMasterWorker(IN PVOID Parameter)
         DatabaseHandle = OpenRemoteDatabase(DeviceInformation, TRUE);
         if (DatabaseHandle == 0)
         {
-            KeReleaseSemaphore(&DeviceExtension->DeviceLock, IO_NO_INCREMENT, 1, FALSE);
+            MmpReleaseDeviceLock(DeviceExtension);
             goto ReleaseRDS;
         }
     }
 
-    KeReleaseSemaphore(&DeviceExtension->DeviceLock, IO_NO_INCREMENT, 1, FALSE);
+    MmpReleaseDeviceLock(DeviceExtension);
 
     /* Reset all the references to our DB entries */
     Offset = 0;
@@ -873,7 +873,7 @@ ReconcileThisDatabaseWithMasterWorker(IN PVOID Parameter)
             else
             {
                 /* Query the Unique ID associated to that mount point in case it changed */
-                KeWaitForSingleObject(&DeviceExtension->DeviceLock, Executive, KernelMode, FALSE, NULL);
+                MmpAcquireDeviceLock(DeviceExtension);
                 Status = QueryUniqueIdFromMaster(DeviceExtension, &SymbolicName, &UniqueId);
                 if (!NT_SUCCESS(Status))
                 {
@@ -892,7 +892,7 @@ ReconcileThisDatabaseWithMasterWorker(IN PVOID Parameter)
                         goto ReleaseDeviceLock;
                     }
 
-                    KeReleaseSemaphore(&DeviceExtension->DeviceLock, IO_NO_INCREMENT, 1, FALSE);
+                    MmpReleaseDeviceLock(DeviceExtension);
                     FreePool(DatabaseEntry);
                 }
                 /* If the Unique ID didn't change */
@@ -910,7 +910,7 @@ ReconcileThisDatabaseWithMasterWorker(IN PVOID Parameter)
                     }
 
                     FreePool(UniqueId);
-                    KeReleaseSemaphore(&DeviceExtension->DeviceLock, IO_NO_INCREMENT, 1, FALSE);
+                    MmpReleaseDeviceLock(DeviceExtension);
                     FreePool(DatabaseEntry);
                 }
                 /* Would, by chance, the Unique ID be present elsewhere? */
@@ -932,7 +932,7 @@ ReconcileThisDatabaseWithMasterWorker(IN PVOID Parameter)
                     }
 
                     FreePool(UniqueId);
-                    KeReleaseSemaphore(&DeviceExtension->DeviceLock, IO_NO_INCREMENT, 1, FALSE);
+                    MmpReleaseDeviceLock(DeviceExtension);
                     FreePool(DatabaseEntry);
                 }
                 else
@@ -975,7 +975,7 @@ ReconcileThisDatabaseWithMasterWorker(IN PVOID Parameter)
 
                     FreePool(UniqueId);
                     FreePool(DatabaseEntry);
-                    KeReleaseSemaphore(&DeviceExtension->DeviceLock, IO_NO_INCREMENT, 1, FALSE);
+                    MmpReleaseDeviceLock(DeviceExtension);
                 }
             }
         }
@@ -984,10 +984,10 @@ ReconcileThisDatabaseWithMasterWorker(IN PVOID Parameter)
             /* We failed finding it remotely
              * So, let's allocate a new remote DB entry
              */
-            KeWaitForSingleObject(&DeviceExtension->DeviceLock, Executive, KernelMode, FALSE, NULL);
+            MmpAcquireDeviceLock(DeviceExtension);
             /* To be able to do so, we need the device Unique ID, ask master */
             Status = QueryUniqueIdFromMaster(DeviceExtension, &SymbolicName, &UniqueId);
-            KeReleaseSemaphore(&DeviceExtension->DeviceLock, IO_NO_INCREMENT, 1, FALSE);
+            MmpReleaseDeviceLock(DeviceExtension);
             if (NT_SUCCESS(Status))
             {
                 /* Allocate a new entry big enough */
@@ -1022,7 +1022,7 @@ ReconcileThisDatabaseWithMasterWorker(IN PVOID Parameter)
         }
 
         /* Find info about the device associated associated with the mount point */
-        KeWaitForSingleObject(&DeviceExtension->DeviceLock, Executive, KernelMode, FALSE, NULL);
+        MmpAcquireDeviceLock(DeviceExtension);
         Status = FindDeviceInfo(DeviceExtension, &SymbolicName, FALSE, &ListDeviceInfo);
         if (!NT_SUCCESS(Status))
         {
@@ -1053,14 +1053,14 @@ ReconcileThisDatabaseWithMasterWorker(IN PVOID Parameter)
             }
         }
 
-        KeReleaseSemaphore(&DeviceExtension->DeviceLock, IO_NO_INCREMENT, 1, FALSE);
+        MmpReleaseDeviceLock(DeviceExtension);
     }
 
     /* We don't need mount points any longer */
     ZwClose(Handle);
 
     /* Look for the DB again */
-    KeWaitForSingleObject(&DeviceExtension->DeviceLock, Executive, KernelMode, FALSE, NULL);
+    MmpAcquireDeviceLock(DeviceExtension);
     for (Entry = DeviceExtension->DeviceListHead.Flink;
          Entry != &DeviceExtension->DeviceListHead;
          Entry = Entry->Flink)
@@ -1095,7 +1095,7 @@ ReconcileThisDatabaseWithMasterWorker(IN PVOID Parameter)
             if (!NT_SUCCESS(Status))
             {
                 FreePool(DatabaseEntry);
-                KeReleaseSemaphore(&DeviceExtension->DeviceLock, IO_NO_INCREMENT, 1, FALSE);
+                MmpReleaseDeviceLock(DeviceExtension);
                 goto CloseRDB;
             }
         }
@@ -1119,14 +1119,14 @@ ReconcileThisDatabaseWithMasterWorker(IN PVOID Parameter)
         DeviceInformation->NoDatabase = FALSE;
     }
 
-    KeReleaseSemaphore(&DeviceExtension->DeviceLock, IO_NO_INCREMENT, 1, FALSE);
+    MmpReleaseDeviceLock(DeviceExtension);
 
     goto CloseRDB;
 
 FreeUniqueId:
     FreePool(UniqueId);
 ReleaseDeviceLock:
-    KeReleaseSemaphore(&DeviceExtension->DeviceLock, IO_NO_INCREMENT, 1, FALSE);
+    MmpReleaseDeviceLock(DeviceExtension);
 FreeDBEntry:
     FreePool(DatabaseEntry);
 FreeVolume:
