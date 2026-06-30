@@ -20,6 +20,7 @@ int _tmain(int argc, TCHAR ** argv)
     size_t bufsize;
     int i;
     size_t offset;
+    int ExitCode = 0;
 
     bufsize = 0;
     for(i = 1; i < argc; i++)
@@ -72,12 +73,17 @@ int _tmain(int argc, TCHAR ** argv)
                                 *nlptr2 = '\n';
                             OutputDebugStringA(psBuffer2);
                         }
-                        _pclose(pPipe2);
+                        ExitCode |= _pclose(pPipe2);
                     }
                 }
             }
-            _pclose(pPipe);
+            ExitCode |= _pclose(pPipe);
         }
+        else
+        {
+            ExitCode = -1;
+        }
+        return ExitCode;
     }
     else if (_tcsstr(argv[1], "--process") && (argc == 3))
     {
@@ -92,8 +98,13 @@ int _tmain(int argc, TCHAR ** argv)
                 puts(psBuffer);
                 OutputDebugStringA(psBuffer);
             }
-            _pclose(pPipe);
+            ExitCode = _pclose(pPipe);
         }
+        else
+        {
+            ExitCode = -1;
+        }
+        return ExitCode;
     }
     else
     {
