@@ -16,6 +16,7 @@
 
 #include "dxgkrnl_private.h"
 #include "present.h"
+#include "vidpn.h"
 
 /* ========================================================================
  * Helper: find the adapter that owns a given D3DKMT device handle.
@@ -345,8 +346,18 @@ DxgkPresent(
 
         if (Entry.hSource != 0 &&
             Entry.hDestination == 0 &&
-            Adapter->SharedPrimaryAllocationHandle != NULL)
+            Adapter->SharedPrimaryAllocationHandle != NULL &&
+            DxgkpDeviceOwnsVidPnSource(pPresent->hDevice, Entry.VidPnSourceId))
         {
+            /*
+             * Only the VidPn source owner may present straight to the primary.
+             * A present with no destination from a non-owner is a windowed
+             * present: it must succeed but must NOT scan its surface out to the
+             * primary (which would paint over the live desktop).  Leaving
+             * hDestination == 0 makes the present a no-op-to-screen below.
+             * This mirrors the Windows model where DWM owns the primary and
+             * composites app presents into their window.
+             */
             Entry.hDestination =
                 (D3DKMT_HANDLE)(ULONG_PTR)Adapter->SharedPrimaryAllocationHandle;
         }
