@@ -22,6 +22,11 @@ add_dependencies(gdi32_vista_static psdk)
 
 target_link_libraries(gdi32_vista win32ksys)
 
+# D3DKMTOpenAdapterFromGdiDisplayName resolves a GDI display name to a DC and
+# defers to D3DKMTOpenAdapterFromHdc, so the standalone gdi32_vista.dll needs
+# gdi32 (CreateDCW/DeleteDC) and ntdll (memset from RtlZeroMemory). The
+# gdi32_vista_static variant linked into gdi32.dll already resolves these.
+add_importlibs(gdi32_vista gdi32 ntdll)
 #add_importlibs(gdi32_vista user32 advapi32 kernel32 ntdll)
 #add_pch(gdi32_vista include/precomp.h SOURCE)
 add_dependencies(gdi32_vista psdk)

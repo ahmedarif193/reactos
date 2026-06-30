@@ -4311,4 +4311,724 @@ APIENTRY
 NtGdiDdDDIWaitForSynchronizationObject(
     _In_ const D3DKMT_WAITFORSYNCHRONIZATIONOBJECT* unnamedParam1);
 
+/* WDDM 2.0 D3DKMT additions (ReactOS) */
+__kernel_entry
+W32KAPI
+NTSTATUS
+APIENTRY
+NtGdiDdDDICreateSynchronizationObject2(
+    _Inout_ D3DKMT_CREATESYNCHRONIZATIONOBJECT2* unnamedParam1);
+
+__kernel_entry
+W32KAPI
+NTSTATUS
+APIENTRY
+NtGdiDdDDIWaitForSynchronizationObject2(
+    _In_ const D3DKMT_WAITFORSYNCHRONIZATIONOBJECT2* unnamedParam1);
+
+__kernel_entry
+W32KAPI
+NTSTATUS
+APIENTRY
+NtGdiDdDDISignalSynchronizationObject2(
+    _In_ const D3DKMT_SIGNALSYNCHRONIZATIONOBJECT2* unnamedParam1);
+
+/*
+ * The WDDM 2.0 residency / paging-queue / video-memory structures are gated
+ * behind DXGKDDI_INTERFACE_VERSION >= WDDM2_0 in d3dkmthk.h / d3dukmdt.h.
+ * ntgdi.h is included by translation units built at lower interface versions
+ * (e.g. winegdi), so reference these argument structures by tag — a pointer to
+ * an incomplete type is sufficient for the syscall prototypes, and resolves to
+ * the full type wherever it is available.
+ */
+struct D3DDDI_MAKERESIDENT;
+struct _D3DKMT_EVICT;
+struct _D3DKMT_QUERYVIDEOMEMORYINFO;
+struct _D3DKMT_CREATEPAGINGQUEUE;
+struct D3DDDI_DESTROYPAGINGQUEUE;
+
+__kernel_entry
+W32KAPI
+NTSTATUS
+APIENTRY
+NtGdiDdDDIMakeResident(
+    _Inout_ struct D3DDDI_MAKERESIDENT* unnamedParam1);
+
+__kernel_entry
+W32KAPI
+NTSTATUS
+APIENTRY
+NtGdiDdDDIEvict(
+    _Inout_ struct _D3DKMT_EVICT* unnamedParam1);
+
+__kernel_entry
+W32KAPI
+NTSTATUS
+APIENTRY
+NtGdiDdDDIQueryVideoMemoryInfo(
+    _Inout_ struct _D3DKMT_QUERYVIDEOMEMORYINFO* unnamedParam1);
+
+__kernel_entry
+W32KAPI
+NTSTATUS
+APIENTRY
+NtGdiDdDDICreatePagingQueue(
+    _Inout_ struct _D3DKMT_CREATEPAGINGQUEUE* unnamedParam1);
+
+__kernel_entry
+W32KAPI
+NTSTATUS
+APIENTRY
+NtGdiDdDDIDestroyPagingQueue(
+    _Inout_ struct D3DDDI_DESTROYPAGINGQUEUE* unnamedParam1);
+
+/* WDDM 1.2 residency + WDDM 2.0 GPU virtual addressing (tag-only, see above) */
+struct _D3DKMT_OFFERALLOCATIONS;
+struct _D3DKMT_RECLAIMALLOCATIONS;
+struct _D3DDDI_RESERVEGPUVIRTUALADDRESS;
+struct _D3DDDI_MAPGPUVIRTUALADDRESS;
+struct _D3DKMT_FREEGPUVIRTUALADDRESS;
+struct _D3DKMT_UPDATEGPUVIRTUALADDRESS;
+
+__kernel_entry
+W32KAPI
+NTSTATUS
+APIENTRY
+NtGdiDdDDIOfferAllocations(
+    _In_ const struct _D3DKMT_OFFERALLOCATIONS* unnamedParam1);
+
+__kernel_entry
+W32KAPI
+NTSTATUS
+APIENTRY
+NtGdiDdDDIReclaimAllocations(
+    _Inout_ struct _D3DKMT_RECLAIMALLOCATIONS* unnamedParam1);
+
+__kernel_entry
+W32KAPI
+NTSTATUS
+APIENTRY
+NtGdiDdDDIReserveGpuVirtualAddress(
+    _Inout_ struct _D3DDDI_RESERVEGPUVIRTUALADDRESS* unnamedParam1);
+
+__kernel_entry
+W32KAPI
+NTSTATUS
+APIENTRY
+NtGdiDdDDIMapGpuVirtualAddress(
+    _Inout_ struct _D3DDDI_MAPGPUVIRTUALADDRESS* unnamedParam1);
+
+__kernel_entry
+W32KAPI
+NTSTATUS
+APIENTRY
+NtGdiDdDDIFreeGpuVirtualAddress(
+    _In_ const struct _D3DKMT_FREEGPUVIRTUALADDRESS* unnamedParam1);
+
+__kernel_entry
+W32KAPI
+NTSTATUS
+APIENTRY
+NtGdiDdDDIUpdateGpuVirtualAddress(
+    _In_ const struct _D3DKMT_UPDATEGPUVIRTUALADDRESS* unnamedParam1);
+
+struct _D3DKMT_WAITFORSYNCHRONIZATIONOBJECTFROMCPU;
+struct _D3DKMT_SIGNALSYNCHRONIZATIONOBJECTFROMCPU;
+
+__kernel_entry
+W32KAPI
+NTSTATUS
+APIENTRY
+NtGdiDdDDIWaitForSynchronizationObjectFromCpu(
+    _In_ const struct _D3DKMT_WAITFORSYNCHRONIZATIONOBJECTFROMCPU* unnamedParam1);
+
+__kernel_entry
+W32KAPI
+NTSTATUS
+APIENTRY
+NtGdiDdDDISignalSynchronizationObjectFromCpu(
+    _In_ const struct _D3DKMT_SIGNALSYNCHRONIZATIONOBJECTFROMCPU* unnamedParam1);
+
+/* WDDM 1.x display extensions (pre-wired lower layers; tag-only protos) */
+struct _D3DKMT_SETVIDPNSOURCEOWNER1;
+struct _D3DKMT_WAITFORVERTICALBLANKEVENT2;
+struct _D3DKMT_CHECKVIDPNEXCLUSIVEOWNERSHIP;
+
+__kernel_entry
+W32KAPI
+NTSTATUS
+APIENTRY
+NtGdiDdDDISetVidPnSourceOwner1(
+    _In_ const struct _D3DKMT_SETVIDPNSOURCEOWNER1* unnamedParam1);
+
+__kernel_entry
+W32KAPI
+NTSTATUS
+APIENTRY
+NtGdiDdDDIWaitForVerticalBlankEvent2(
+    _In_ const struct _D3DKMT_WAITFORVERTICALBLANKEVENT2* unnamedParam1);
+
+__kernel_entry
+W32KAPI
+NTSTATUS
+APIENTRY
+NtGdiDdDDICheckVidPnExclusiveOwnership(
+    _In_ const struct _D3DKMT_CHECKVIDPNEXCLUSIVEOWNERSHIP* unnamedParam1);
+
+/*
+ * WDDM 1.2 / 2.0 adapter-enumeration and allocation/keyed-mutex/overlay
+ * additions (ReactOS).  Argument structures are referenced by tag so this
+ * header still compiles in translation units built below the matching
+ * DXGKDDI_INTERFACE_VERSION; the tags unify with the full types where present.
+ */
+struct _D3DKMT_ENUMADAPTERS;
+struct _D3DKMT_ENUMADAPTERS2;
+struct _D3DKMT_OPENADAPTERFROMLUID;
+struct _D3DKMT_OPENRESOURCE;
+struct _D3DKMT_OPENSYNCHRONIZATIONOBJECT;
+struct _D3DKMT_CREATEKEYEDMUTEX;
+struct _D3DKMT_OPENKEYEDMUTEX;
+struct _D3DKMT_DESTROYKEYEDMUTEX;
+struct _D3DKMT_ACQUIREKEYEDMUTEX;
+struct _D3DKMT_RELEASEKEYEDMUTEX;
+struct _D3DKMT_GETOVERLAYSTATE;
+struct _D3DKMT_CHECKSHAREDRESOURCEACCESS;
+
+__kernel_entry
+W32KAPI
+NTSTATUS
+APIENTRY
+NtGdiDdDDIEnumAdapters(
+    _Inout_ struct _D3DKMT_ENUMADAPTERS* unnamedParam1);
+
+__kernel_entry
+W32KAPI
+NTSTATUS
+APIENTRY
+NtGdiDdDDIEnumAdapters2(
+    _Inout_ struct _D3DKMT_ENUMADAPTERS2* unnamedParam1);
+
+__kernel_entry
+W32KAPI
+NTSTATUS
+APIENTRY
+NtGdiDdDDIOpenAdapterFromLuid(
+    _Inout_ struct _D3DKMT_OPENADAPTERFROMLUID* unnamedParam1);
+
+__kernel_entry
+W32KAPI
+NTSTATUS
+APIENTRY
+NtGdiDdDDICreateAllocation2(
+    _Inout_ struct _D3DKMT_CREATEALLOCATION* unnamedParam1);
+
+__kernel_entry
+W32KAPI
+NTSTATUS
+APIENTRY
+NtGdiDdDDIOpenResource2(
+    _Inout_ struct _D3DKMT_OPENRESOURCE* unnamedParam1);
+
+__kernel_entry
+W32KAPI
+NTSTATUS
+APIENTRY
+NtGdiDdDDIOpenSynchronizationObject(
+    _Inout_ struct _D3DKMT_OPENSYNCHRONIZATIONOBJECT* unnamedParam1);
+
+__kernel_entry
+W32KAPI
+NTSTATUS
+APIENTRY
+NtGdiDdDDICreateKeyedMutex(
+    _Inout_ struct _D3DKMT_CREATEKEYEDMUTEX* unnamedParam1);
+
+__kernel_entry
+W32KAPI
+NTSTATUS
+APIENTRY
+NtGdiDdDDIOpenKeyedMutex(
+    _Inout_ struct _D3DKMT_OPENKEYEDMUTEX* unnamedParam1);
+
+__kernel_entry
+W32KAPI
+NTSTATUS
+APIENTRY
+NtGdiDdDDIDestroyKeyedMutex(
+    _In_ const struct _D3DKMT_DESTROYKEYEDMUTEX* unnamedParam1);
+
+__kernel_entry
+W32KAPI
+NTSTATUS
+APIENTRY
+NtGdiDdDDIAcquireKeyedMutex(
+    _Inout_ struct _D3DKMT_ACQUIREKEYEDMUTEX* unnamedParam1);
+
+__kernel_entry
+W32KAPI
+NTSTATUS
+APIENTRY
+NtGdiDdDDIReleaseKeyedMutex(
+    _Inout_ struct _D3DKMT_RELEASEKEYEDMUTEX* unnamedParam1);
+
+__kernel_entry
+W32KAPI
+NTSTATUS
+APIENTRY
+NtGdiDdDDIGetOverlayState(
+    _Inout_ struct _D3DKMT_GETOVERLAYSTATE* unnamedParam1);
+
+__kernel_entry
+W32KAPI
+NTSTATUS
+APIENTRY
+NtGdiDdDDICheckSharedResourceAccess(
+    _In_ const struct _D3DKMT_CHECKSHAREDRESOURCEACCESS* unnamedParam1);
+
+
+/*
+ * WDDM 2.x extended D3DKMT additions (ReactOS contract stubs).  Argument
+ * structures referenced by tag so this header compiles below the matching
+ * DXGKDDI_INTERFACE_VERSION.
+ */
+struct D3DDDI_UPDATEALLOCPROPERTY;
+struct _D3DKMT_CHANGEVIDEOMMEMORYRESERVATION;
+struct _D3DKMT_CHECKMULTIPLANEOVERLAYSUPPORT;
+struct _D3DKMT_CREATEHWQUEUE;
+struct _D3DKMT_CREATE_OUTPUTDUPL;
+struct _D3DKMT_DESTROYALLOCATION2;
+struct _D3DKMT_DESTROYHWQUEUE;
+struct _D3DKMT_DESTROY_OUTPUTDUPL;
+struct _D3DKMT_GETALLOCATIONPRIORITY;
+struct _D3DKMT_GETCONTEXTINPROCESSSCHEDULINGPRIORITY;
+struct _D3DKMT_GETSHAREDRESOURCEADAPTERLUID;
+struct _D3DKMT_INVALIDATECACHE;
+struct _D3DKMT_LOCK2;
+struct _D3DKMT_OPENNTHANDLEFROMNAME;
+struct _D3DKMT_OPENRESOURCEFROMNTHANDLE;
+struct _D3DKMT_OPENSYNCOBJECTFROMNTHANDLE2;
+struct _D3DKMT_OPENSYNCOBJECTFROMNTHANDLE;
+struct _D3DKMT_OPENSYNCOBJECTNTHANDLEFROMNAME;
+struct _D3DKMT_OUTPUTDUPLPRESENT;
+struct _D3DKMT_OUTPUTDUPL_GET_FRAMEINFO;
+struct _D3DKMT_OUTPUTDUPL_GET_POINTER_SHAPE_DATA;
+struct _D3DKMT_OUTPUTDUPL_METADATA;
+struct _D3DKMT_OUTPUTDUPL_RELEASE_FRAME;
+struct _D3DKMT_PRESENT_MULTIPLANE_OVERLAY;
+struct _D3DKMT_QUERYCLOCKCALIBRATION;
+struct _D3DKMT_QUERYRESOURCEINFOFROMNTHANDLE;
+struct _D3DKMT_REGISTERBUDGETCHANGENOTIFICATION;
+struct _D3DKMT_REGISTERTRIMNOTIFICATION;
+struct _D3DKMT_SETCONTEXTINPROCESSSCHEDULINGPRIORITY;
+struct _D3DKMT_SETSTABLEPOWERSTATE;
+struct _D3DKMT_SUBMITCOMMAND;
+struct _D3DKMT_SUBMITCOMMANDTOHWQUEUE;
+struct _D3DKMT_UNLOCK2;
+struct _D3DKMT_UNREGISTERBUDGETCHANGENOTIFICATION;
+struct _D3DKMT_UNREGISTERTRIMNOTIFICATION;
+
+__kernel_entry
+W32KAPI
+NTSTATUS
+APIENTRY
+NtGdiDdDDIDestroyAllocation2(
+    _In_ const struct _D3DKMT_DESTROYALLOCATION2* unnamedParam1);
+
+__kernel_entry
+W32KAPI
+NTSTATUS
+APIENTRY
+NtGdiDdDDILock2(
+    _Inout_ struct _D3DKMT_LOCK2* unnamedParam1);
+
+__kernel_entry
+W32KAPI
+NTSTATUS
+APIENTRY
+NtGdiDdDDIUnlock2(
+    _In_ const struct _D3DKMT_UNLOCK2* unnamedParam1);
+
+__kernel_entry
+W32KAPI
+NTSTATUS
+APIENTRY
+NtGdiDdDDICreateHwQueue(
+    _Inout_ struct _D3DKMT_CREATEHWQUEUE* unnamedParam1);
+
+__kernel_entry
+W32KAPI
+NTSTATUS
+APIENTRY
+NtGdiDdDDIDestroyHwQueue(
+    _In_ const struct _D3DKMT_DESTROYHWQUEUE* unnamedParam1);
+
+__kernel_entry
+W32KAPI
+NTSTATUS
+APIENTRY
+NtGdiDdDDISubmitCommandToHwQueue(
+    _In_ const struct _D3DKMT_SUBMITCOMMANDTOHWQUEUE* unnamedParam1);
+
+__kernel_entry
+W32KAPI
+NTSTATUS
+APIENTRY
+NtGdiDdDDISubmitCommand(
+    _In_ const struct _D3DKMT_SUBMITCOMMAND* unnamedParam1);
+
+__kernel_entry
+W32KAPI
+NTSTATUS
+APIENTRY
+NtGdiDdDDIGetAllocationPriority(
+    _In_ const struct _D3DKMT_GETALLOCATIONPRIORITY* unnamedParam1);
+
+__kernel_entry
+W32KAPI
+NTSTATUS
+APIENTRY
+NtGdiDdDDIUpdateAllocationProperty(
+    _Inout_ struct D3DDDI_UPDATEALLOCPROPERTY* unnamedParam1);
+
+__kernel_entry
+W32KAPI
+NTSTATUS
+APIENTRY
+NtGdiDdDDIChangeVideoMemoryReservation(
+    _In_ const struct _D3DKMT_CHANGEVIDEOMMEMORYRESERVATION* unnamedParam1);
+
+__kernel_entry
+W32KAPI
+NTSTATUS
+APIENTRY
+NtGdiDdDDISetStablePowerState(
+    _In_ const struct _D3DKMT_SETSTABLEPOWERSTATE* unnamedParam1);
+
+__kernel_entry
+W32KAPI
+NTSTATUS
+APIENTRY
+NtGdiDdDDIQueryClockCalibration(
+    _Inout_ struct _D3DKMT_QUERYCLOCKCALIBRATION* unnamedParam1);
+
+__kernel_entry
+W32KAPI
+NTSTATUS
+APIENTRY
+NtGdiDdDDISetContextInProcessSchedulingPriority(
+    _In_ const struct _D3DKMT_SETCONTEXTINPROCESSSCHEDULINGPRIORITY* unnamedParam1);
+
+__kernel_entry
+W32KAPI
+NTSTATUS
+APIENTRY
+NtGdiDdDDIGetContextInProcessSchedulingPriority(
+    _Inout_ struct _D3DKMT_GETCONTEXTINPROCESSSCHEDULINGPRIORITY* unnamedParam1);
+
+__kernel_entry
+W32KAPI
+NTSTATUS
+APIENTRY
+NtGdiDdDDIRegisterTrimNotification(
+    _Inout_ struct _D3DKMT_REGISTERTRIMNOTIFICATION* unnamedParam1);
+
+__kernel_entry
+W32KAPI
+NTSTATUS
+APIENTRY
+NtGdiDdDDIUnregisterTrimNotification(
+    _Inout_ struct _D3DKMT_UNREGISTERTRIMNOTIFICATION* unnamedParam1);
+
+__kernel_entry
+W32KAPI
+NTSTATUS
+APIENTRY
+NtGdiDdDDIRegisterBudgetChangeNotification(
+    _Inout_ struct _D3DKMT_REGISTERBUDGETCHANGENOTIFICATION* unnamedParam1);
+
+__kernel_entry
+W32KAPI
+NTSTATUS
+APIENTRY
+NtGdiDdDDIUnregisterBudgetChangeNotification(
+    _Inout_ struct _D3DKMT_UNREGISTERBUDGETCHANGENOTIFICATION* unnamedParam1);
+
+__kernel_entry
+W32KAPI
+NTSTATUS
+APIENTRY
+NtGdiDdDDIInvalidateCache(
+    _In_ const struct _D3DKMT_INVALIDATECACHE* unnamedParam1);
+
+__kernel_entry
+W32KAPI
+NTSTATUS
+APIENTRY
+NtGdiDdDDIGetSharedResourceAdapterLuid(
+    _Inout_ struct _D3DKMT_GETSHAREDRESOURCEADAPTERLUID* unnamedParam1);
+
+__kernel_entry
+W32KAPI
+NTSTATUS
+APIENTRY
+NtGdiDdDDIOpenResourceFromNtHandle(
+    _Inout_ struct _D3DKMT_OPENRESOURCEFROMNTHANDLE* unnamedParam1);
+
+__kernel_entry
+W32KAPI
+NTSTATUS
+APIENTRY
+NtGdiDdDDIQueryResourceInfoFromNtHandle(
+    _Inout_ struct _D3DKMT_QUERYRESOURCEINFOFROMNTHANDLE* unnamedParam1);
+
+__kernel_entry
+W32KAPI
+NTSTATUS
+APIENTRY
+NtGdiDdDDIOpenSyncObjectFromNtHandle(
+    _Inout_ struct _D3DKMT_OPENSYNCOBJECTFROMNTHANDLE* unnamedParam1);
+
+__kernel_entry
+W32KAPI
+NTSTATUS
+APIENTRY
+NtGdiDdDDIOpenSyncObjectFromNtHandle2(
+    _Inout_ struct _D3DKMT_OPENSYNCOBJECTFROMNTHANDLE2* unnamedParam1);
+
+__kernel_entry
+W32KAPI
+NTSTATUS
+APIENTRY
+NtGdiDdDDIOpenSyncObjectNtHandleFromName(
+    _Inout_ struct _D3DKMT_OPENSYNCOBJECTNTHANDLEFROMNAME* unnamedParam1);
+
+__kernel_entry
+W32KAPI
+NTSTATUS
+APIENTRY
+NtGdiDdDDIOpenNtHandleFromName(
+    _Inout_ struct _D3DKMT_OPENNTHANDLEFROMNAME* unnamedParam1);
+
+__kernel_entry
+W32KAPI
+NTSTATUS
+APIENTRY
+NtGdiDdDDICreateOutputDupl(
+    _In_ const struct _D3DKMT_CREATE_OUTPUTDUPL* unnamedParam1);
+
+__kernel_entry
+W32KAPI
+NTSTATUS
+APIENTRY
+NtGdiDdDDIDestroyOutputDupl(
+    _In_ const struct _D3DKMT_DESTROY_OUTPUTDUPL* unnamedParam1);
+
+__kernel_entry
+W32KAPI
+NTSTATUS
+APIENTRY
+NtGdiDdDDIOutputDuplGetFrameInfo(
+    _Inout_ struct _D3DKMT_OUTPUTDUPL_GET_FRAMEINFO* unnamedParam1);
+
+__kernel_entry
+W32KAPI
+NTSTATUS
+APIENTRY
+NtGdiDdDDIOutputDuplGetMetaData(
+    _Inout_ struct _D3DKMT_OUTPUTDUPL_METADATA* unnamedParam1);
+
+__kernel_entry
+W32KAPI
+NTSTATUS
+APIENTRY
+NtGdiDdDDIOutputDuplGetPointerShapeData(
+    _Inout_ struct _D3DKMT_OUTPUTDUPL_GET_POINTER_SHAPE_DATA* unnamedParam1);
+
+__kernel_entry
+W32KAPI
+NTSTATUS
+APIENTRY
+NtGdiDdDDIOutputDuplPresent(
+    _In_ const struct _D3DKMT_OUTPUTDUPLPRESENT* unnamedParam1);
+
+__kernel_entry
+W32KAPI
+NTSTATUS
+APIENTRY
+NtGdiDdDDIOutputDuplReleaseFrame(
+    _In_ const struct _D3DKMT_OUTPUTDUPL_RELEASE_FRAME* unnamedParam1);
+
+__kernel_entry
+W32KAPI
+NTSTATUS
+APIENTRY
+NtGdiDdDDIPresentMultiPlaneOverlay(
+    _In_ const struct _D3DKMT_PRESENT_MULTIPLANE_OVERLAY* unnamedParam1);
+
+__kernel_entry
+W32KAPI
+NTSTATUS
+APIENTRY
+NtGdiDdDDICheckMultiPlaneOverlaySupport(
+    _Inout_ struct _D3DKMT_CHECKMULTIPLANEOVERLAYSUPPORT* unnamedParam1);
+
+
+/* WDDM 2.x extended additions, batch 2 (ReactOS contract stubs). */
+struct _D3DKMT_ENUMADAPTERS3;
+struct _D3DKMT_ACQUIREKEYEDMUTEX2;
+struct _D3DKMT_CREATEKEYEDMUTEX2;
+struct _D3DKMT_OPENKEYEDMUTEX2;
+struct _D3DKMT_RELEASEKEYEDMUTEX2;
+struct _D3DKMT_CANCEL_PRESENTS;
+struct _D3DKMT_CREATECONTEXTVIRTUAL;
+struct _D3DKMT_GETVERTICALBLANKEVENT;
+struct _D3DKMT_GET_MULTIPLANE_OVERLAY_CAPS;
+struct _D3DKMT_QUERYVIDPNEXCLUSIVEOWNERSHIP;
+struct _D3DKMT_SETSYNCREFRESHCOUNTWAITTARGET;
+struct _D3DKMT_SETVIDPNSOURCEOWNER2;
+struct _D3DKMT_SIGNALSYNCHRONIZATIONOBJECTFROMGPU;
+struct _D3DKMT_CHECKMULTIPLANEOVERLAYSUPPORT2;
+struct _D3DKMT_CHECKMULTIPLANEOVERLAYSUPPORT3;
+struct _D3DKMT_PRESENT_MULTIPLANE_OVERLAY2;
+struct _D3DKMT_PRESENT_MULTIPLANE_OVERLAY3;
+
+__kernel_entry
+W32KAPI
+NTSTATUS
+APIENTRY
+NtGdiDdDDIEnumAdapters3(
+    _Inout_ struct _D3DKMT_ENUMADAPTERS3* unnamedParam1);
+
+__kernel_entry
+W32KAPI
+NTSTATUS
+APIENTRY
+NtGdiDdDDIAcquireKeyedMutex2(
+    _Inout_ struct _D3DKMT_ACQUIREKEYEDMUTEX2* unnamedParam1);
+
+__kernel_entry
+W32KAPI
+NTSTATUS
+APIENTRY
+NtGdiDdDDICreateKeyedMutex2(
+    _Inout_ struct _D3DKMT_CREATEKEYEDMUTEX2* unnamedParam1);
+
+__kernel_entry
+W32KAPI
+NTSTATUS
+APIENTRY
+NtGdiDdDDIOpenKeyedMutex2(
+    _Inout_ struct _D3DKMT_OPENKEYEDMUTEX2* unnamedParam1);
+
+__kernel_entry
+W32KAPI
+NTSTATUS
+APIENTRY
+NtGdiDdDDIReleaseKeyedMutex2(
+    _Inout_ struct _D3DKMT_RELEASEKEYEDMUTEX2* unnamedParam1);
+
+__kernel_entry
+W32KAPI
+NTSTATUS
+APIENTRY
+NtGdiDdDDICancelPresents(
+    _In_ const struct _D3DKMT_CANCEL_PRESENTS* unnamedParam1);
+
+__kernel_entry
+W32KAPI
+NTSTATUS
+APIENTRY
+NtGdiDdDDICreateContextVirtual(
+    _Inout_ struct _D3DKMT_CREATECONTEXTVIRTUAL* unnamedParam1);
+
+__kernel_entry
+W32KAPI
+NTSTATUS
+APIENTRY
+NtGdiDdDDIGetDWMVerticalBlankEvent(
+    _In_ const struct _D3DKMT_GETVERTICALBLANKEVENT* unnamedParam1);
+
+__kernel_entry
+W32KAPI
+NTSTATUS
+APIENTRY
+NtGdiDdDDIGetMultiPlaneOverlayCaps(
+    _Inout_ struct _D3DKMT_GET_MULTIPLANE_OVERLAY_CAPS* unnamedParam1);
+
+__kernel_entry
+W32KAPI
+NTSTATUS
+APIENTRY
+NtGdiDdDDIQueryVidPnExclusiveOwnership(
+    _Inout_ struct _D3DKMT_QUERYVIDPNEXCLUSIVEOWNERSHIP* unnamedParam1);
+
+__kernel_entry
+W32KAPI
+NTSTATUS
+APIENTRY
+NtGdiDdDDISetSyncRefreshCountWaitTarget(
+    _In_ const struct _D3DKMT_SETSYNCREFRESHCOUNTWAITTARGET* unnamedParam1);
+
+__kernel_entry
+W32KAPI
+NTSTATUS
+APIENTRY
+NtGdiDdDDISetVidPnSourceOwner2(
+    _In_ const struct _D3DKMT_SETVIDPNSOURCEOWNER2* unnamedParam1);
+
+__kernel_entry
+W32KAPI
+NTSTATUS
+APIENTRY
+NtGdiDdDDISignalSynchronizationObjectFromGpu(
+    _In_ const struct _D3DKMT_SIGNALSYNCHRONIZATIONOBJECTFROMGPU* unnamedParam1);
+
+__kernel_entry
+W32KAPI
+NTSTATUS
+APIENTRY
+NtGdiDdDDICheckMultiPlaneOverlaySupport2(
+    _Inout_ struct _D3DKMT_CHECKMULTIPLANEOVERLAYSUPPORT2* unnamedParam1);
+
+__kernel_entry
+W32KAPI
+NTSTATUS
+APIENTRY
+NtGdiDdDDICheckMultiPlaneOverlaySupport3(
+    _Inout_ struct _D3DKMT_CHECKMULTIPLANEOVERLAYSUPPORT3* unnamedParam1);
+
+__kernel_entry
+W32KAPI
+NTSTATUS
+APIENTRY
+NtGdiDdDDIPresentMultiPlaneOverlay2(
+    _In_ const struct _D3DKMT_PRESENT_MULTIPLANE_OVERLAY2* unnamedParam1);
+
+__kernel_entry
+W32KAPI
+NTSTATUS
+APIENTRY
+NtGdiDdDDIPresentMultiPlaneOverlay3(
+    _In_ const struct _D3DKMT_PRESENT_MULTIPLANE_OVERLAY3* unnamedParam1);
+
+/* Multi-argument D3DKMT entry points (non-single-struct signatures). */
+__kernel_entry
+W32KAPI
+NTSTATUS
+APIENTRY
+NtGdiDdDDIGetPresentQueueEvent(
+    _In_ D3DKMT_HANDLE hAdapter,
+    _Inout_ HANDLE* unnamedParam2);
+
+__kernel_entry
+W32KAPI
+NTSTATUS
+APIENTRY
+NtGdiDdDDIShareObjects(
+    _In_ UINT cObjects,
+    _In_reads_(cObjects) const D3DKMT_HANDLE* hObjects,
+    _In_ PVOID pObjectAttributes,
+    _In_ DWORD dwDesiredAccess,
+    _Out_ HANDLE* phSharedNtHandle);
+
 #endif /* _NTGDI_ */
