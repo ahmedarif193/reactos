@@ -215,6 +215,35 @@ DxgkpEnsureSourceOwnerMutex(VOID)
 }
 
 /* ========================================================================
+ * DxgkpDeviceOwnsVidPnSource
+ *
+ * Returns TRUE if hDevice currently owns VidPnSourceId (exclusive or shared,
+ * via D3DKMTSetVidPnSourceOwner).  The present path uses this to decide whether
+ * a present may scan out to the primary: only the source owner drives scanout.
+ * This mirrors Windows, where the desktop compositor owns the primary and an
+ * ordinary app present is composited into the app's window rather than
+ * overwriting the live desktop.  Without it, any process presenting an
+ * arbitrary surface to source 0 would paint directly over the desktop.
+ * ====================================================================== */
+BOOLEAN
+DxgkpDeviceOwnsVidPnSource(
+    _In_ D3DKMT_HANDLE hDevice,
+    _In_ D3DDDI_VIDEO_PRESENT_SOURCE_ID VidPnSourceId)
+{
+    BOOLEAN Owns;
+
+    if (hDevice == 0 || VidPnSourceId >= DXGKP_MAX_SOURCES)
+        return FALSE;
+
+    DxgkpEnsureSourceOwnerMutex();
+    ExAcquireFastMutex(&g_SourceOwnerMutex);
+    Owns = (BOOLEAN)(g_SourceOwners[VidPnSourceId].OwnerDevice == hDevice);
+    ExReleaseFastMutex(&g_SourceOwnerMutex);
+
+    return Owns;
+}
+
+/* ========================================================================
  * Handle validation helpers
  * ====================================================================== */
 
