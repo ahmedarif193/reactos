@@ -799,6 +799,33 @@ InbvGetGopFrameBufferInfo(
     return TRUE;
 }
 
+/*
+ * @implemented
+ *
+ * Returns TRUE when Inbv holds a usable UEFI GOP framebuffer (non-zero base,
+ * size and resolution). The WDDM display port driver (dxgkrnl) queries this to
+ * decide whether it can take over the boot framebuffer.
+ */
+BOOLEAN
+NTAPI
+InbvHasValidGopFrameBuffer(VOID)
+{
+    LOADER_PARAMETER_FRAMEBUFFER FrameBuffer;
+
+    if (!InbvGetGopFrameBufferInfo(&FrameBuffer))
+        return FALSE;
+
+    if ((FrameBuffer.FrameBufferBase.QuadPart == 0) ||
+        (FrameBuffer.FrameBufferSize == 0) ||
+        (FrameBuffer.HorizontalResolution == 0) ||
+        (FrameBuffer.VerticalResolution == 0))
+    {
+        return FALSE;
+    }
+
+    return TRUE;
+}
+
 NTSTATUS
 NTAPI
 NtDisplayString(IN PUNICODE_STRING DisplayString)

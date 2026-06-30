@@ -338,6 +338,7 @@
 @ stdcall InbvEnableBootDriver(long)
 @ stdcall InbvEnableDisplayString(long)
 @ stdcall InbvGetGopFrameBufferInfo(ptr)
+@ stdcall InbvHasValidGopFrameBuffer()
 @ stdcall InbvInstallDisplayStringFilter(ptr)
 @ stdcall InbvIsBootDriverInstalled()
 @ stdcall InbvNotifyDisplayOwnershipLost(ptr)
@@ -2917,7 +2918,7 @@
 @ stub -arch=arm64 PsRemoveSiloContext
 @ stub -arch=arm64 PsReplaceSiloContext
 @ stub -arch=arm64 PsRevertToUserMultipleGroupAffinityThread
-@ stub -arch=arm64 PsSetCreateProcessNotifyRoutineEx
+@ stdcall -arch=arm64 PsSetCreateProcessNotifyRoutineEx(ptr long)
 @ stub -arch=arm64 PsSetCreateProcessNotifyRoutineEx2
 @ stub -arch=arm64 PsSetCreateThreadNotifyRoutineEx
 @ stub -arch=arm64 PsSetCurrentThreadPrefetching

@@ -63,19 +63,58 @@ PspRunCreateProcessNotifyRoutines(IN PEPROCESS CurrentProcess,
                                   IN BOOLEAN Create)
 {
     ULONG i;
+    PEX_CALLBACK_ROUTINE_BLOCK CallBack;
+    PEX_CALLBACK_FUNCTION Routine;
+    PS_CREATE_NOTIFY_INFO CreateInfo;
+    PPS_CREATE_NOTIFY_INFO pCreateInfo = NULL;
 
     /* Check if we have registered routines */
-    if (PspProcessNotifyRoutineCount)
+    if (!PspProcessNotifyRoutineCount) return;
+
+    /*
+     * Build the extended create-notify info once; only Ex callbacks consume it,
+     * and only on process creation (it is NULL on process exit).
+     */
+    if (Create)
     {
-        /* Loop callbacks */
-        for (i = 0; i < PSP_MAX_CREATE_PROCESS_NOTIFY; i++)
+        RtlZeroMemory(&CreateInfo, sizeof(CreateInfo));
+        CreateInfo.Size = sizeof(CreateInfo);
+        CreateInfo.ParentProcessId = CurrentProcess->InheritedFromUniqueProcessId;
+        CreateInfo.CreatingThreadId = PsGetCurrentThread()->Cid;
+        CreateInfo.CreationStatus = STATUS_SUCCESS;
+        if (CurrentProcess->SeAuditProcessCreationInfo.ImageFileName)
         {
-            /* Do the callback */
-            ExDoCallBack(&PspProcessNotifyRoutine[i],
-                         CurrentProcess->InheritedFromUniqueProcessId,
-                         CurrentProcess->UniqueProcessId,
-                         (PVOID)(ULONG_PTR)Create);
+            CreateInfo.ImageFileName =
+                &CurrentProcess->SeAuditProcessCreationInfo.ImageFileName->Name;
+            CreateInfo.FileOpenNameAvailable = TRUE;
         }
+        pCreateInfo = &CreateInfo;
+    }
+
+    /* Loop callbacks */
+    for (i = 0; i < PSP_MAX_CREATE_PROCESS_NOTIFY; i++)
+    {
+        CallBack = ExReferenceCallBackBlock(&PspProcessNotifyRoutine[i]);
+        if (!CallBack) continue;
+
+        Routine = ExGetCallBackBlockRoutine(CallBack);
+        if ((ULONG_PTR)Routine & 1)
+        {
+            /* Extended (Ex) callback: untag and pass PS_CREATE_NOTIFY_INFO. */
+            PCREATE_PROCESS_NOTIFY_ROUTINE_EX ExRoutine =
+                (PCREATE_PROCESS_NOTIFY_ROUTINE_EX)((ULONG_PTR)Routine & ~(ULONG_PTR)1);
+            ExRoutine(CurrentProcess, CurrentProcess->UniqueProcessId, pCreateInfo);
+        }
+        else
+        {
+            /* Legacy callback. */
+            ((PCREATE_PROCESS_NOTIFY_ROUTINE)Routine)(
+                CurrentProcess->InheritedFromUniqueProcessId,
+                CurrentProcess->UniqueProcessId,
+                Create);
+        }
+
+        ExDereferenceCallBackBlock(&PspProcessNotifyRoutine[i], CallBack);
     }
 }
 

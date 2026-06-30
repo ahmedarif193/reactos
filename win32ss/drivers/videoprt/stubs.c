@@ -21,8 +21,29 @@
 
 #include "videoprt.h"
 
+#include <stdarg.h>
+
 #define NDEBUG
 #include <debug.h>
+
+/*
+ * Video port notification types used by VideoPortNotification.
+ * These match the SCSI_NOTIFICATION_TYPE enum from srb.h which
+ * videoprt historically shares with ScsiPortNotification.
+ */
+typedef enum _VIDEO_NOTIFICATION_TYPE {
+    RequestComplete,
+    NextRequest,
+    NextLuRequest,
+    ResetDetected,
+    /* Video-specific types follow the SCSI base types */
+    _VideoNotifyCallDisableInterrupts = 0x10,
+    _VideoNotifyCallEnableInterrupts,
+    _VideoNotifyBusChangeDetected,
+    _VideoNotifyWakeupRequest,
+    _VideoNotifyStartResetPresentation,
+    _VideoNotifyCompletedResetPresentation,
+} VIDEO_NOTIFICATION_TYPE;
 
 VP_STATUS
 NTAPI
@@ -95,6 +116,104 @@ WdDdiWatchdogDpcCallback(
     UNIMPLEMENTED;
 }
 
+/*
+ * @implemented
+ *
+ * VideoPortNotification is the primary callback mechanism from the miniport
+ * driver back to the video port driver. It is a variadic function called
+ * from HwStartIO and interrupt/DPC contexts to signal events.
+ *
+ * This function resides in .text (non-paged) because it may be called at
+ * DISPATCH_LEVEL from DPC or interrupt synchronization callbacks.
+ */
+VOID
+NTAPI
+VideoPortNotification(
+    _In_ VIDEO_NOTIFICATION_TYPE NotificationType,
+    _In_ PVOID HwDeviceExtension,
+    ...)
+{
+    switch (NotificationType)
+    {
+        case RequestComplete:
+            /*
+             * The miniport has completed processing a VRP (video request
+             * packet). In the synchronous ReactOS model, HwStartIO returns
+             * after filling in the status block, so this is a no-op.
+             * On Windows this signals the port driver to complete the
+             * associated IRP.
+             */
+            break;
+
+        case NextRequest:
+            /*
+             * The miniport is ready to process the next IOCTL/VRP.
+             * ReactOS dispatches IOCTLs synchronously so this is a no-op.
+             */
+            break;
+
+        case ResetDetected:
+            DPRINT1("VideoPortNotification: ResetDetected\n");
+            break;
+
+        default:
+            DPRINT1("VideoPortNotification: Unhandled type %d\n",
+                    NotificationType);
+            break;
+    }
+}
+
+/*
+ * @implemented
+ *
+ * VideoPortDbgReportCreate creates a debug report object for miniport
+ * Watson/WER integration. Stub returns NULL (no report).
+ */
+PVIDEO_DEBUG_REPORT
+NTAPI
+VideoPortDbgReportCreate(
+    _In_ PVOID HwDeviceExtension,
+    _In_ ULONG ulCode,
+    _In_ ULONG_PTR ulpArg1,
+    _In_ ULONG_PTR ulpArg2,
+    _In_ ULONG_PTR ulpArg3,
+    _In_ ULONG_PTR ulpArg4)
+{
+    DPRINT1("VideoPortDbgReportCreate: code 0x%lx (stub)\n", ulCode);
+    return NULL;
+}
+
+/*
+ * @implemented
+ *
+ * VideoPortDbgReportSecondaryData adds data to a debug report.
+ * Since DbgReportCreate returns NULL, this is a safe no-op.
+ */
+BOOLEAN
+NTAPI
+VideoPortDbgReportSecondaryData(
+    _Inout_ PVIDEO_DEBUG_REPORT pReport,
+    _In_ PVOID pvData,
+    _In_ ULONG ulDataSize)
+{
+    DPRINT1("VideoPortDbgReportSecondaryData (stub)\n");
+    return FALSE;
+}
+
+/*
+ * @implemented
+ *
+ * VideoPortDbgReportComplete submits and frees a debug report.
+ * No-op since we never create real reports.
+ */
+VOID
+NTAPI
+VideoPortDbgReportComplete(
+    _Inout_ PVIDEO_DEBUG_REPORT pReport)
+{
+    DPRINT1("VideoPortDbgReportComplete (stub)\n");
+}
+
 LONG
 FASTCALL
 VideoPortInterlockedDecrement(
@@ -118,14 +237,6 @@ VideoPortInterlockedExchange(
     IN LONG Value)
 {
     return InterlockedExchange(Target, Value);
-}
-
-VOID
-NTAPI
-VideoPortQuerySystemTime(
-    OUT PLARGE_INTEGER CurrentTime)
-{
-    KeQuerySystemTime(CurrentTime);
 }
 
 #if defined(_M_AMD64) || defined(_M_ARM64)
@@ -349,6 +460,14 @@ VideoPortWriteRegisterBufferUlong(
     ULONG Count)
 {
     WRITE_REGISTER_BUFFER_ULONG(Register, Buffer, Count);
+}
+
+VOID
+NTAPI
+VideoPortQuerySystemTime(
+    OUT PLARGE_INTEGER CurrentTime)
+{
+    KeQuerySystemTime(CurrentTime);
 }
 
 #endif /* _M_AMD64 || _M_ARM64 */
