@@ -69,7 +69,7 @@ VWifiSetMiniportAttributes(
 
     /* nwifi.sys binds only to miniports advertising native 802.11 media. */
     GenAttr.MediaType = NdisMediumNative802_11;
-    GenAttr.PhysicalMediumType = (NDIS_MEDIUM)NdisPhysicalMediumNative802_11;
+    GenAttr.PhysicalMediumType = NdisPhysicalMediumNative802_11;
     GenAttr.MtuSize = VWIFI_MTU_SIZE;
     GenAttr.MaxXmitLinkSpeed = VWIFI_LINK_SPEED_BPS;
     GenAttr.MaxRcvLinkSpeed = VWIFI_LINK_SPEED_BPS;
