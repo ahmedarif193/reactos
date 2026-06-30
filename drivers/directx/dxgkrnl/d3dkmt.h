@@ -1,0 +1,539 @@
+/*
+ * PROJECT:     ReactOS WDDM DirectX Graphics Kernel
+ * LICENSE:     GPL-2.0-or-later (https://spdx.org/licenses/GPL-2.0-or-later)
+ * PURPOSE:     D3DKMT dispatch private declarations and type definitions
+ * COPYRIGHT:   Copyright 2024 ReactOS WDDM Team
+ *
+ * D3DKMT type definitions for adapter enumeration
+ * ================================================
+ * The D3DKMT_ENUMADAPTERS, D3DKMT_ADAPTERINFO, and D3DKMT_OPENADAPTERFROMLUID
+ * types are guarded by DXGKDDI_INTERFACE_VERSION >= WIN8 in d3dkmthk.h, but
+ * dxgkrnl targets WDDM 1.0 (Vista) for the miniport DDI layer.
+ *
+ * We need these types in kernel space to process user-mode D3DKMT IOCTLs
+ * from DXGI / D3D9 / D3D11 regardless of the miniport DDI version.
+ * Define them locally to avoid changing the global interface version.
+ */
+
+#pragma once
+
+/* ========================================================================
+ * D3DKMT adapter enumeration types (Win8+ API, needed for IOCTL dispatch)
+ *
+ * Keep a local fallback only for pre-Win8 interface builds. Once the public
+ * d3dkmthk.h exposes these types, dxgkrnl should consume the shared copies.
+ * ====================================================================== */
+
+#if (DXGKDDI_INTERFACE_VERSION < DXGKDDI_INTERFACE_VERSION_WIN8)
+
+#ifndef MAX_ENUM_ADAPTERS
+#define MAX_ENUM_ADAPTERS   16
+#endif
+
+#ifndef _D3DKMT_ADAPTERINFO_DEFINED
+#define _D3DKMT_ADAPTERINFO_DEFINED
+typedef struct _D3DKMT_ADAPTERINFO
+{
+    D3DKMT_HANDLE       hAdapter;
+    LUID                AdapterLuid;
+    ULONG               NumOfSources;
+    BOOL                bPrecisePresentRegionsPreferred;
+} D3DKMT_ADAPTERINFO;
+#endif
+
+#ifndef _D3DKMT_ENUMADAPTERS_DEFINED
+#define _D3DKMT_ENUMADAPTERS_DEFINED
+typedef struct _D3DKMT_ENUMADAPTERS
+{
+    ULONG               NumAdapters;
+    D3DKMT_ADAPTERINFO  Adapters[MAX_ENUM_ADAPTERS];
+} D3DKMT_ENUMADAPTERS;
+#endif
+
+#ifndef _D3DKMT_ENUMADAPTERS2_DEFINED
+#define _D3DKMT_ENUMADAPTERS2_DEFINED
+typedef struct _D3DKMT_ENUMADAPTERS2
+{
+    ULONG               NumAdapters;
+    D3DKMT_ADAPTERINFO *pAdapters;
+} D3DKMT_ENUMADAPTERS2;
+#endif
+
+#ifndef _D3DKMT_OPENADAPTERFROMLUID_DEFINED
+#define _D3DKMT_OPENADAPTERFROMLUID_DEFINED
+typedef struct _D3DKMT_OPENADAPTERFROMLUID
+{
+    LUID                AdapterLuid;
+    D3DKMT_HANDLE       hAdapter;
+} D3DKMT_OPENADAPTERFROMLUID;
+#endif
+
+#endif /* DXGKDDI_INTERFACE_VERSION < DXGKDDI_INTERFACE_VERSION_WIN8 */
+
+/* ========================================================================
+ * D3DKMT segment and driver version types (Vista+, needed for QueryAdapterInfo)
+ * ====================================================================== */
+
+#ifndef _D3DKMT_SEGMENTSIZEINFO_DEFINED
+#define _D3DKMT_SEGMENTSIZEINFO_DEFINED
+typedef struct _D3DKMT_SEGMENTSIZEINFO
+{
+    ULONGLONG           DedicatedVideoMemorySize;
+    ULONGLONG           DedicatedSystemMemorySize;
+    ULONGLONG           SharedSystemMemorySize;
+} D3DKMT_SEGMENTSIZEINFO;
+#endif
+
+/*
+ * D3DKMT_DRIVERVERSION / KMT_DRIVERVERSION_WDDM_1_0 are always available
+ * at Vista level from d3dkmthk.h — no local definition needed.
+ *
+ * D3DKMT_SEGMENTSIZEINFO is also available at Vista level.
+ */
+
+/*
+ * KMTQUERYADAPTERINFOTYPE enum values used in QueryAdapterInfo dispatch.
+ *
+ * The base enum (KMTQAITYPE_UMDRIVERPRIVATE through KMTQAITYPE_DRIVERVERSION)
+ * is always available at Vista level.  KMTQAITYPE_ADAPTERTYPE (value 15) is
+ * behind the WIN8 interface guard — we use the literal value 15 in the switch
+ * statement in d3dkmt.c to avoid dependency on the enum extension.
+ */
+
+/* ========================================================================
+ * D3DKMT IOCTL code definitions
+ *
+ * Device type 0x23 (FILE_DEVICE_VIDEO) matches the dxgkrnl convention.
+ * Function codes start at 0x100 to avoid collision with IOCTL_VIDEO_*.
+ * All use METHOD_BUFFERED for safe user/kernel data transfer.
+ * ====================================================================== */
+
+#define DXGKRNL_DEVICE_TYPE     0x23
+
+#define IOCTL_D3DKMT_ENUMADAPTERS \
+    CTL_CODE(DXGKRNL_DEVICE_TYPE, 0x100, METHOD_BUFFERED, FILE_ANY_ACCESS)
+#define IOCTL_D3DKMT_ENUMADAPTERS2 \
+    CTL_CODE(DXGKRNL_DEVICE_TYPE, 0x101, METHOD_BUFFERED, FILE_ANY_ACCESS)
+#define IOCTL_D3DKMT_OPENADAPTERFROMLUID \
+    CTL_CODE(DXGKRNL_DEVICE_TYPE, 0x102, METHOD_BUFFERED, FILE_ANY_ACCESS)
+#define IOCTL_D3DKMT_CLOSEADAPTER \
+    CTL_CODE(DXGKRNL_DEVICE_TYPE, 0x103, METHOD_BUFFERED, FILE_ANY_ACCESS)
+#define IOCTL_D3DKMT_QUERYADAPTERINFO \
+    CTL_CODE(DXGKRNL_DEVICE_TYPE, 0x104, METHOD_BUFFERED, FILE_ANY_ACCESS)
+#define IOCTL_D3DKMT_GETDISPLAYMODELIST \
+    CTL_CODE(DXGKRNL_DEVICE_TYPE, 0x105, METHOD_BUFFERED, FILE_ANY_ACCESS)
+
+/* Priority 1: Bridge operations from win32k → dxgkrnl */
+#define IOCTL_D3DKMT_OPENADAPTERFROMHDC \
+    CTL_CODE(DXGKRNL_DEVICE_TYPE, 0x110, METHOD_BUFFERED, FILE_ANY_ACCESS)
+#define IOCTL_D3DKMT_OPENADAPTERFROMGDIDISPLAYNAME \
+    CTL_CODE(DXGKRNL_DEVICE_TYPE, 0x111, METHOD_BUFFERED, FILE_ANY_ACCESS)
+#define IOCTL_D3DKMT_OPENADAPTERFROMDEVICENAME \
+    CTL_CODE(DXGKRNL_DEVICE_TYPE, 0x112, METHOD_BUFFERED, FILE_ANY_ACCESS)
+#define IOCTL_D3DKMT_CREATEDEVICE \
+    CTL_CODE(DXGKRNL_DEVICE_TYPE, 0x120, METHOD_BUFFERED, FILE_ANY_ACCESS)
+#define IOCTL_D3DKMT_DESTROYDEVICE \
+    CTL_CODE(DXGKRNL_DEVICE_TYPE, 0x121, METHOD_BUFFERED, FILE_ANY_ACCESS)
+#define IOCTL_D3DKMT_CREATEALLOCATION \
+    CTL_CODE(DXGKRNL_DEVICE_TYPE, 0x130, METHOD_BUFFERED, FILE_ANY_ACCESS)
+#define IOCTL_D3DKMT_DESTROYALLOCATION \
+    CTL_CODE(DXGKRNL_DEVICE_TYPE, 0x131, METHOD_BUFFERED, FILE_ANY_ACCESS)
+#define IOCTL_D3DKMT_LOCK \
+    CTL_CODE(DXGKRNL_DEVICE_TYPE, 0x132, METHOD_BUFFERED, FILE_ANY_ACCESS)
+#define IOCTL_D3DKMT_UNLOCK \
+    CTL_CODE(DXGKRNL_DEVICE_TYPE, 0x133, METHOD_BUFFERED, FILE_ANY_ACCESS)
+#define IOCTL_D3DKMT_QUERYRESOURCEINFO \
+    CTL_CODE(DXGKRNL_DEVICE_TYPE, 0x134, METHOD_BUFFERED, FILE_ANY_ACCESS)
+#define IOCTL_D3DKMT_OPENRESOURCE \
+    CTL_CODE(DXGKRNL_DEVICE_TYPE, 0x135, METHOD_BUFFERED, FILE_ANY_ACCESS)
+#define IOCTL_D3DKMT_GETSHAREDPRIMARYHANDLE \
+    CTL_CODE(DXGKRNL_DEVICE_TYPE, 0x136, METHOD_BUFFERED, FILE_ANY_ACCESS)
+#define IOCTL_D3DKMT_GETSHADOWSURFACE \
+    CTL_CODE(DXGKRNL_DEVICE_TYPE, 0x137, METHOD_BUFFERED, FILE_ANY_ACCESS)
+#define IOCTL_D3DKMT_RENDER \
+    CTL_CODE(DXGKRNL_DEVICE_TYPE, 0x140, METHOD_BUFFERED, FILE_ANY_ACCESS)
+#define IOCTL_D3DKMT_PRESENT \
+    CTL_CODE(DXGKRNL_DEVICE_TYPE, 0x141, METHOD_BUFFERED, FILE_ANY_ACCESS)
+#define IOCTL_D3DKMT_WAITFORSYNCHRONIZATIONOBJECT \
+    CTL_CODE(DXGKRNL_DEVICE_TYPE, 0x150, METHOD_BUFFERED, FILE_ANY_ACCESS)
+#define IOCTL_D3DKMT_SIGNALSYNCHRONIZATIONOBJECT \
+    CTL_CODE(DXGKRNL_DEVICE_TYPE, 0x151, METHOD_BUFFERED, FILE_ANY_ACCESS)
+#define IOCTL_D3DKMT_SETDISPLAYMODE \
+    CTL_CODE(DXGKRNL_DEVICE_TYPE, 0x160, METHOD_BUFFERED, FILE_ANY_ACCESS)
+
+/* Context operations */
+#define IOCTL_D3DKMT_CREATECONTEXT \
+    CTL_CODE(DXGKRNL_DEVICE_TYPE, 0x122, METHOD_BUFFERED, FILE_ANY_ACCESS)
+#define IOCTL_D3DKMT_DESTROYCONTEXT \
+    CTL_CODE(DXGKRNL_DEVICE_TYPE, 0x123, METHOD_BUFFERED, FILE_ANY_ACCESS)
+
+/* Synchronisation object operations */
+#define IOCTL_D3DKMT_CREATESYNCHRONIZATIONOBJECT \
+    CTL_CODE(DXGKRNL_DEVICE_TYPE, 0x152, METHOD_BUFFERED, FILE_ANY_ACCESS)
+#define IOCTL_D3DKMT_DESTROYSYNCHRONIZATIONOBJECT \
+    CTL_CODE(DXGKRNL_DEVICE_TYPE, 0x153, METHOD_BUFFERED, FILE_ANY_ACCESS)
+
+/* Escape/passthrough */
+#define IOCTL_D3DKMT_ESCAPE \
+    CTL_CODE(DXGKRNL_DEVICE_TYPE, 0x170, METHOD_BUFFERED, FILE_ANY_ACCESS)
+
+/* VidPn source ownership */
+#define IOCTL_D3DKMT_SETVIDPNSOURCEOWNER \
+    CTL_CODE(DXGKRNL_DEVICE_TYPE, 0x161, METHOD_BUFFERED, FILE_ANY_ACCESS)
+
+/* Device state */
+#define IOCTL_D3DKMT_GETDEVICESTATE \
+    CTL_CODE(DXGKRNL_DEVICE_TYPE, 0x124, METHOD_BUFFERED, FILE_ANY_ACCESS)
+
+/* Allocation priority and residency query */
+#define IOCTL_D3DKMT_SETALLOCATIONPRIORITY \
+    CTL_CODE(DXGKRNL_DEVICE_TYPE, 0x162, METHOD_BUFFERED, FILE_ANY_ACCESS)
+#define IOCTL_D3DKMT_QUERYALLOCATIONRESIDENCY \
+    CTL_CODE(DXGKRNL_DEVICE_TYPE, 0x163, METHOD_BUFFERED, FILE_ANY_ACCESS)
+
+/* Shared resource access check */
+#define IOCTL_D3DKMT_CHECKSHAREDRESOURCEACCESS \
+    CTL_CODE(DXGKRNL_DEVICE_TYPE, 0x164, METHOD_BUFFERED, FILE_ANY_ACCESS)
+
+/* Present history and queue event */
+#define IOCTL_D3DKMT_GETPRESENTHISTORY \
+    CTL_CODE(DXGKRNL_DEVICE_TYPE, 0x142, METHOD_BUFFERED, FILE_ANY_ACCESS)
+#define IOCTL_D3DKMT_GETPRESENTQUEUEEVENT \
+    CTL_CODE(DXGKRNL_DEVICE_TYPE, 0x143, METHOD_BUFFERED, FILE_ANY_ACCESS)
+
+/* VidPn exclusive ownership check */
+#define IOCTL_D3DKMT_CHECKVIDPNEXCLUSIVEOWNERSHIP \
+    CTL_CODE(DXGKRNL_DEVICE_TYPE, 0x165, METHOD_BUFFERED, FILE_ANY_ACCESS)
+
+/* Vertical blank and scan line */
+#define IOCTL_D3DKMT_WAITFORVERTICALBLANKEVENT \
+    CTL_CODE(DXGKRNL_DEVICE_TYPE, 0x166, METHOD_BUFFERED, FILE_ANY_ACCESS)
+#define IOCTL_D3DKMT_GETSCANLINE \
+    CTL_CODE(DXGKRNL_DEVICE_TYPE, 0x167, METHOD_BUFFERED, FILE_ANY_ACCESS)
+
+/* Monitor and device state checks */
+#define IOCTL_D3DKMT_CHECKMONITORPOWERSTATE \
+    CTL_CODE(DXGKRNL_DEVICE_TYPE, 0x168, METHOD_BUFFERED, FILE_ANY_ACCESS)
+#define IOCTL_D3DKMT_CHECKOCCLUSION \
+    CTL_CODE(DXGKRNL_DEVICE_TYPE, 0x169, METHOD_BUFFERED, FILE_ANY_ACCESS)
+#define IOCTL_D3DKMT_CHECKEXCLUSIVEOWNERSHIP \
+    CTL_CODE(DXGKRNL_DEVICE_TYPE, 0x16A, METHOD_BUFFERED, FILE_ANY_ACCESS)
+#define IOCTL_D3DKMT_WAITFORIDLE \
+    CTL_CODE(DXGKRNL_DEVICE_TYPE, 0x16B, METHOD_BUFFERED, FILE_ANY_ACCESS)
+
+/* Scheduling priority */
+#define IOCTL_D3DKMT_SETCONTEXTSCHEDULINGPRIORITY \
+    CTL_CODE(DXGKRNL_DEVICE_TYPE, 0x125, METHOD_BUFFERED, FILE_ANY_ACCESS)
+#define IOCTL_D3DKMT_GETCONTEXTSCHEDULINGPRIORITY \
+    CTL_CODE(DXGKRNL_DEVICE_TYPE, 0x126, METHOD_BUFFERED, FILE_ANY_ACCESS)
+#define IOCTL_D3DKMT_SETPROCESSSCHEDULINGPRIORITYCLASS \
+    CTL_CODE(DXGKRNL_DEVICE_TYPE, 0x127, METHOD_BUFFERED, FILE_ANY_ACCESS)
+#define IOCTL_D3DKMT_GETPROCESSSCHEDULINGPRIORITYCLASS \
+    CTL_CODE(DXGKRNL_DEVICE_TYPE, 0x128, METHOD_BUFFERED, FILE_ANY_ACCESS)
+
+/* VidPn source owner release and queued limit */
+#define IOCTL_D3DKMT_RELEASEPROCESSVIDPNSOURCEOWNERS \
+    CTL_CODE(DXGKRNL_DEVICE_TYPE, 0x16C, METHOD_BUFFERED, FILE_ANY_ACCESS)
+#define IOCTL_D3DKMT_SETQUEUEDLIMIT \
+    CTL_CODE(DXGKRNL_DEVICE_TYPE, 0x16D, METHOD_BUFFERED, FILE_ANY_ACCESS)
+
+/* Gamma ramp */
+#define IOCTL_D3DKMT_SETGAMMARAMP \
+    CTL_CODE(DXGKRNL_DEVICE_TYPE, 0x16E, METHOD_BUFFERED, FILE_ANY_ACCESS)
+
+/* Multisample and runtime data */
+#define IOCTL_D3DKMT_GETMULTISAMPLEMETHODLIST \
+    CTL_CODE(DXGKRNL_DEVICE_TYPE, 0x16F, METHOD_BUFFERED, FILE_ANY_ACCESS)
+#define IOCTL_D3DKMT_GETRUNTIMEDATA \
+    CTL_CODE(DXGKRNL_DEVICE_TYPE, 0x171, METHOD_BUFFERED, FILE_ANY_ACCESS)
+#define IOCTL_D3DKMT_QUERYSTATISTICS \
+    CTL_CODE(DXGKRNL_DEVICE_TYPE, 0x172, METHOD_BUFFERED, FILE_ANY_ACCESS)
+
+/* DC-from-memory (GDI interop) */
+#define IOCTL_D3DKMT_CREATEDCFROMMEMORY \
+    CTL_CODE(DXGKRNL_DEVICE_TYPE, 0x173, METHOD_BUFFERED, FILE_ANY_ACCESS)
+#define IOCTL_D3DKMT_DESTROYDCFROMMEMORY \
+    CTL_CODE(DXGKRNL_DEVICE_TYPE, 0x174, METHOD_BUFFERED, FILE_ANY_ACCESS)
+
+/* Shared primary notifications */
+#define IOCTL_D3DKMT_SHAREDPRIMARYLOCKNOTIFICATION \
+    CTL_CODE(DXGKRNL_DEVICE_TYPE, 0x175, METHOD_BUFFERED, FILE_ANY_ACCESS)
+#define IOCTL_D3DKMT_SHAREDPRIMARYUNLOCKNOTIFICATION \
+    CTL_CODE(DXGKRNL_DEVICE_TYPE, 0x176, METHOD_BUFFERED, FILE_ANY_ACCESS)
+
+/* Display private driver format */
+#define IOCTL_D3DKMT_SETDISPLAYPRIVATEDRIVERFORMAT \
+    CTL_CODE(DXGKRNL_DEVICE_TYPE, 0x177, METHOD_BUFFERED, FILE_ANY_ACCESS)
+
+/* Invalidate and poll */
+#define IOCTL_D3DKMT_INVALIDATEACTIVEVIDPN \
+    CTL_CODE(DXGKRNL_DEVICE_TYPE, 0x178, METHOD_BUFFERED, FILE_ANY_ACCESS)
+#define IOCTL_D3DKMT_POLLDISPLAYCHILDREN \
+    CTL_CODE(DXGKRNL_DEVICE_TYPE, 0x179, METHOD_BUFFERED, FILE_ANY_ACCESS)
+
+/* Keyed mutex operations */
+#define IOCTL_D3DKMT_CREATEKEYEDMUTEX \
+    CTL_CODE(DXGKRNL_DEVICE_TYPE, 0x190, METHOD_BUFFERED, FILE_ANY_ACCESS)
+#define IOCTL_D3DKMT_DESTROYKEYEDMUTEX \
+    CTL_CODE(DXGKRNL_DEVICE_TYPE, 0x191, METHOD_BUFFERED, FILE_ANY_ACCESS)
+#define IOCTL_D3DKMT_OPENKEYEDMUTEX \
+    CTL_CODE(DXGKRNL_DEVICE_TYPE, 0x192, METHOD_BUFFERED, FILE_ANY_ACCESS)
+#define IOCTL_D3DKMT_ACQUIREKEYEDMUTEX \
+    CTL_CODE(DXGKRNL_DEVICE_TYPE, 0x193, METHOD_BUFFERED, FILE_ANY_ACCESS)
+#define IOCTL_D3DKMT_RELEASEKEYEDMUTEX \
+    CTL_CODE(DXGKRNL_DEVICE_TYPE, 0x194, METHOD_BUFFERED, FILE_ANY_ACCESS)
+
+/* Overlay operations */
+#define IOCTL_D3DKMT_CREATEOVERLAY \
+    CTL_CODE(DXGKRNL_DEVICE_TYPE, 0x1A0, METHOD_BUFFERED, FILE_ANY_ACCESS)
+#define IOCTL_D3DKMT_DESTROYOVERLAY \
+    CTL_CODE(DXGKRNL_DEVICE_TYPE, 0x1A1, METHOD_BUFFERED, FILE_ANY_ACCESS)
+#define IOCTL_D3DKMT_FLIPOVERLAY \
+    CTL_CODE(DXGKRNL_DEVICE_TYPE, 0x1A2, METHOD_BUFFERED, FILE_ANY_ACCESS)
+#define IOCTL_D3DKMT_UPDATEOVERLAY \
+    CTL_CODE(DXGKRNL_DEVICE_TYPE, 0x1A3, METHOD_BUFFERED, FILE_ANY_ACCESS)
+#define IOCTL_D3DKMT_GETOVERLAYSTATE \
+    CTL_CODE(DXGKRNL_DEVICE_TYPE, 0x1A4, METHOD_BUFFERED, FILE_ANY_ACCESS)
+
+/* ---- WDDM 1.2: Additional operations ---------------------------------- */
+#define IOCTL_D3DKMT_OFFERALLOCATIONS \
+    CTL_CODE(DXGKRNL_DEVICE_TYPE, 0x1B0, METHOD_BUFFERED, FILE_ANY_ACCESS)
+#define IOCTL_D3DKMT_RECLAIMALLOCATIONS \
+    CTL_CODE(DXGKRNL_DEVICE_TYPE, 0x1B1, METHOD_BUFFERED, FILE_ANY_ACCESS)
+#define IOCTL_D3DKMT_SETVIDPNSOURCEOWNER1 \
+    CTL_CODE(DXGKRNL_DEVICE_TYPE, 0x1B2, METHOD_BUFFERED, FILE_ANY_ACCESS)
+#define IOCTL_D3DKMT_WAITFORVERTICALBLANKEVENT2 \
+    CTL_CODE(DXGKRNL_DEVICE_TYPE, 0x1B3, METHOD_BUFFERED, FILE_ANY_ACCESS)
+#define IOCTL_D3DKMT_CREATESYNCHRONIZATIONOBJECT2 \
+    CTL_CODE(DXGKRNL_DEVICE_TYPE, 0x1B4, METHOD_BUFFERED, FILE_ANY_ACCESS)
+#define IOCTL_D3DKMT_WAITFORSYNCHRONIZATIONOBJECT2 \
+    CTL_CODE(DXGKRNL_DEVICE_TYPE, 0x1B5, METHOD_BUFFERED, FILE_ANY_ACCESS)
+#define IOCTL_D3DKMT_SIGNALSYNCHRONIZATIONOBJECT2 \
+    CTL_CODE(DXGKRNL_DEVICE_TYPE, 0x1B6, METHOD_BUFFERED, FILE_ANY_ACCESS)
+
+/* ---- WDDM 2.0: GPU virtual addressing and residency -------------------- */
+#define IOCTL_D3DKMT_MAKERESIDENT \
+    CTL_CODE(DXGKRNL_DEVICE_TYPE, 0x180, METHOD_BUFFERED, FILE_ANY_ACCESS)
+#define IOCTL_D3DKMT_EVICT \
+    CTL_CODE(DXGKRNL_DEVICE_TYPE, 0x181, METHOD_BUFFERED, FILE_ANY_ACCESS)
+#define IOCTL_D3DKMT_MAPGPUVIRTUALADDRESS \
+    CTL_CODE(DXGKRNL_DEVICE_TYPE, 0x182, METHOD_BUFFERED, FILE_ANY_ACCESS)
+#define IOCTL_D3DKMT_RESERVEGPUVIRTUALADDRESS \
+    CTL_CODE(DXGKRNL_DEVICE_TYPE, 0x183, METHOD_BUFFERED, FILE_ANY_ACCESS)
+#define IOCTL_D3DKMT_FREEGPUVIRTUALADDRESS \
+    CTL_CODE(DXGKRNL_DEVICE_TYPE, 0x184, METHOD_BUFFERED, FILE_ANY_ACCESS)
+#define IOCTL_D3DKMT_UPDATEGPUVIRTUALADDRESS \
+    CTL_CODE(DXGKRNL_DEVICE_TYPE, 0x185, METHOD_BUFFERED, FILE_ANY_ACCESS)
+#define IOCTL_D3DKMT_CREATEPAGINGQUEUE \
+    CTL_CODE(DXGKRNL_DEVICE_TYPE, 0x186, METHOD_BUFFERED, FILE_ANY_ACCESS)
+#define IOCTL_D3DKMT_DESTROYPAGINGQUEUE \
+    CTL_CODE(DXGKRNL_DEVICE_TYPE, 0x187, METHOD_BUFFERED, FILE_ANY_ACCESS)
+#define IOCTL_D3DKMT_QUERYVIDEOMEMORYINFO \
+    CTL_CODE(DXGKRNL_DEVICE_TYPE, 0x188, METHOD_BUFFERED, FILE_ANY_ACCESS)
+#define IOCTL_D3DKMT_WAITFORSYNCHRONIZATIONOBJECTFROMCPU \
+    CTL_CODE(DXGKRNL_DEVICE_TYPE, 0x189, METHOD_BUFFERED, FILE_ANY_ACCESS)
+#define IOCTL_D3DKMT_SIGNALSYNCHRONIZATIONOBJECTFROMCPU \
+    CTL_CODE(DXGKRNL_DEVICE_TYPE, 0x18A, METHOD_BUFFERED, FILE_ANY_ACCESS)
+
+/*
+ * Private kernel-to-kernel interface exchange IOCTL.
+ *
+ * Sent by win32k during initialization to request the
+ * REACTOS_WIN32K_DXGKRNL_INTERFACE callback table from dxgkrnl.
+ * Uses IRP_MJ_INTERNAL_DEVICE_CONTROL (kernel-only).
+ *
+ * Input:  DXGKRNL_INTERFACE_EXCHANGE_IN  (version handshake)
+ * Output: REACTOS_WIN32K_DXGKRNL_INTERFACE (filled callback table)
+ */
+#define IOCTL_DXGKRNL_EXCHANGE_INTERFACE \
+    CTL_CODE(DXGKRNL_DEVICE_TYPE, 0x200, METHOD_BUFFERED, FILE_ANY_ACCESS)
+
+/*
+ * Interface exchange handshake structure.
+ * win32k passes its version; dxgkrnl validates and returns the callback table.
+ */
+#define DXGKRNL_INTERFACE_VERSION_1  1
+
+typedef struct _DXGKRNL_INTERFACE_EXCHANGE_IN
+{
+    ULONG Version;      /* Must be DXGKRNL_INTERFACE_VERSION_1 */
+    ULONG Size;         /* sizeof(REACTOS_WIN32K_DXGKRNL_INTERFACE) */
+} DXGKRNL_INTERFACE_EXCHANGE_IN, *PDXGKRNL_INTERFACE_EXCHANGE_IN;
+
+typedef struct _DXGKMT_GETSHADOWSURFACE
+{
+    D3DKMT_HANDLE                  hAdapter;
+    D3DDDI_VIDEO_PRESENT_SOURCE_ID VidPnSourceId;
+    D3DKMT_HANDLE                  hShadowSurface;
+    UINT                           Width;
+    UINT                           Height;
+    UINT                           Pitch;
+    D3DDDIFORMAT                   Format;
+} DXGKMT_GETSHADOWSURFACE, *PDXGKMT_GETSHADOWSURFACE;
+
+/* ========================================================================
+ * WDDM 2.0 GPU virtual addressing types
+ *
+ * These types are defined in d3dukmdt.h / d3dkmthk.h behind
+ * D3D_UMD_INTERFACE_VERSION >= WDDM2_0 guards.  dxgkrnl does not set that
+ * version high enough to enable them globally, but needs them to process
+ * the corresponding IOCTLs.  Define local copies using include guards.
+ * ====================================================================== */
+
+#ifndef _D3DDDI_MAPGPUVIRTUALADDRESS_LOCAL_
+#define _D3DDDI_MAPGPUVIRTUALADDRESS_LOCAL_
+
+typedef struct _D3DDDIGPUVIRTUALADDRESS_PROTECTION_TYPE_LOCAL
+{
+    union
+    {
+        struct
+        {
+            UINT64  Write           : 1;
+            UINT64  Execute         : 1;
+            UINT64  Zero            : 1;
+            UINT64  NoAccess        : 1;
+            UINT64  SystemUseOnly   : 1;
+            UINT64  Reserved        : 59;
+        };
+        UINT64 Value;
+    };
+} D3DDDIGPUVIRTUALADDRESS_PROTECTION_TYPE_LOCAL;
+
+typedef struct _D3DDDI_MAKERESIDENT_FLAGS_LOCAL
+{
+    union
+    {
+        struct
+        {
+            UINT CantTrimFurther    : 1;
+            UINT MustSucceed        : 1;
+            UINT Reserved           : 30;
+        };
+        UINT Value;
+    };
+} D3DDDI_MAKERESIDENT_FLAGS_LOCAL;
+
+/*
+ * D3DDDI_MAPGPUVIRTUALADDRESS — local copy for IOCTL dispatch.
+ */
+typedef struct _D3DDDI_MAPGPUVIRTUALADDRESS_LOCAL
+{
+    D3DKMT_HANDLE               hPagingQueue;
+    D3DGPU_VIRTUAL_ADDRESS      BaseAddress;
+    D3DGPU_VIRTUAL_ADDRESS      MinimumAddress;
+    D3DGPU_VIRTUAL_ADDRESS      MaximumAddress;
+    D3DKMT_HANDLE               hAllocation;
+    UINT64                      OffsetInPages;
+    UINT64                      SizeInPages;
+    D3DDDIGPUVIRTUALADDRESS_PROTECTION_TYPE_LOCAL Protection;
+    UINT64                      DriverProtection;
+    UINT                        Reserved0;
+    UINT64                      Reserved1;
+    D3DGPU_VIRTUAL_ADDRESS      VirtualAddress;
+    UINT64                      PagingFenceValue;
+} D3DDDI_MAPGPUVIRTUALADDRESS_LOCAL;
+
+/*
+ * D3DDDI_RESERVEGPUVIRTUALADDRESS — local copy for IOCTL dispatch.
+ */
+typedef struct _D3DDDI_RESERVEGPUVIRTUALADDRESS_LOCAL
+{
+    union
+    {
+        D3DKMT_HANDLE           hPagingQueue;
+        D3DKMT_HANDLE           hAdapter;
+    };
+    D3DGPU_VIRTUAL_ADDRESS      BaseAddress;
+    D3DGPU_VIRTUAL_ADDRESS      MinimumAddress;
+    D3DGPU_VIRTUAL_ADDRESS      MaximumAddress;
+    UINT64                      Size;
+    UINT                        ReservationType;
+    UINT64                      DriverProtection;
+    D3DGPU_VIRTUAL_ADDRESS      VirtualAddress;
+    UINT64                      PagingFenceValue;
+} D3DDDI_RESERVEGPUVIRTUALADDRESS_LOCAL;
+
+/*
+ * D3DKMT_FREEGPUVIRTUALADDRESS — local copy.
+ */
+typedef struct _D3DKMT_FREEGPUVIRTUALADDRESS_LOCAL
+{
+    D3DKMT_HANDLE               hAdapter;
+    D3DGPU_VIRTUAL_ADDRESS      BaseAddress;
+    UINT64                      Size;
+} D3DKMT_FREEGPUVIRTUALADDRESS_LOCAL;
+
+/*
+ * D3DKMT_UPDATEGPUVIRTUALADDRESS — local copy.
+ */
+typedef struct _D3DKMT_UPDATEGPUVIRTUALADDRESS_LOCAL
+{
+    D3DKMT_HANDLE               hDevice;
+    D3DKMT_HANDLE               hContext;
+    D3DKMT_HANDLE               hFenceObject;
+    UINT                        NumOperations;
+    PVOID                       Operations;
+    UINT64                      Reserved0;
+    UINT64                      Reserved1;
+    UINT64                      FenceValue;
+    union
+    {
+        struct
+        {
+            UINT DoNotWait  : 1;
+            UINT Reserved   : 31;
+        };
+        UINT Value;
+    } Flags;
+} D3DKMT_UPDATEGPUVIRTUALADDRESS_LOCAL;
+
+/*
+ * D3DDDI_MAKERESIDENT — local copy.
+ */
+typedef struct _D3DDDI_MAKERESIDENT_LOCAL
+{
+    D3DKMT_HANDLE               hPagingQueue;
+    UINT                        NumAllocations;
+    CONST D3DKMT_HANDLE        *AllocationList;
+    CONST UINT                 *PriorityList;
+    D3DDDI_MAKERESIDENT_FLAGS_LOCAL Flags;
+    UINT64                      PagingFenceValue;
+    UINT64                      NumBytesToTrim;
+} D3DDDI_MAKERESIDENT_LOCAL;
+
+typedef struct _D3DDDI_EVICT_FLAGS_LOCAL
+{
+    union
+    {
+        struct
+        {
+            UINT EvictOnlyIfNecessary   : 1;
+            UINT NotWrittenTo           : 1;
+            UINT Reserved               : 30;
+        };
+        UINT Value;
+    };
+} D3DDDI_EVICT_FLAGS_LOCAL;
+
+/*
+ * D3DKMT_EVICT — local copy.
+ */
+typedef struct _D3DKMT_EVICT_LOCAL
+{
+    D3DKMT_HANDLE               hDevice;
+    UINT                        NumAllocations;
+    CONST D3DKMT_HANDLE        *AllocationList;
+    D3DDDI_EVICT_FLAGS_LOCAL    Flags;
+    UINT64                      NumBytesToTrim;
+} D3DKMT_EVICT_LOCAL;
+
+#endif /* _D3DDDI_MAPGPUVIRTUALADDRESS_LOCAL_ */
+
+/* All D3DKMT dispatch prototypes are declared in dxgkrnl_private.h. */
+
+/* Called from display.c to forward D3DKMT IOCTLs received on \Device\Video0 */
+NTSTATUS
+DxgkpDispatchBufferedIoctl(
+    _In_ PIRP              Irp,
+    _In_ PIO_STACK_LOCATION Stack);

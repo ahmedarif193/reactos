@@ -1,0 +1,90 @@
+#define STANDALONE
+#include <apitest.h>
+
+extern void func_D3dkmtAdapter(void);
+extern void func_D3dkmtDevice(void);
+extern void func_D3dkmtAlloc(void);
+extern void func_D3dkmtSync(void);
+extern void func_D3dkmtDisplay(void);
+extern void func_D3dkmtPresent(void);
+extern void func_pagingqueue(void);
+extern void func_residency(void);
+extern void func_gpuva(void);
+extern void func_hwqueue(void);
+extern void func_sync2(void);
+extern void func_videomem(void);
+extern void func_enum2(void);
+extern void func_context2(void);
+extern void func_alloc2(void);
+extern void func_keyedmutex(void);
+extern void func_overlay(void);
+extern void func_power(void);
+extern void func_D3dkmtAdapterInfo(void);
+extern void func_adapterclass(void);
+extern void func_sharing(void);
+extern void func_syncext(void);
+extern void func_keyedmutexlife(void);
+extern void func_allocstandard(void);
+extern void func_allocflags(void);
+extern void func_allocpriority(void);
+extern void func_allocresidency(void);
+extern void func_allocreserve(void);
+extern void func_allocdestroy2(void);
+extern void func_displayext(void);
+extern void func_presentext(void);
+extern void func_misc(void);
+extern void func_renderadapter(void);
+extern void func_luidident(void);
+extern void func_handletype(void);
+extern void func_stalehandle(void);
+extern void func_modelistsize(void);
+extern void func_vidmm(void);
+extern void func_present(void);
+extern void func_dwm(void);
+extern void func_display(void);
+
+const struct test winetest_testlist[] =
+{
+    { "D3dkmtAdapter", func_D3dkmtAdapter },
+    { "D3dkmtDevice",  func_D3dkmtDevice },
+    { "D3dkmtAlloc",   func_D3dkmtAlloc },
+    { "D3dkmtSync",    func_D3dkmtSync },
+    { "D3dkmtDisplay", func_D3dkmtDisplay },
+    { "D3dkmtPresent", func_D3dkmtPresent },
+    { "pagingqueue",   func_pagingqueue },
+    { "residency",     func_residency },
+    { "gpuva",         func_gpuva },
+    { "hwqueue",       func_hwqueue },
+    { "sync2",         func_sync2 },
+    { "videomem",      func_videomem },
+    { "enum2",         func_enum2 },
+    { "context2",      func_context2 },
+    { "alloc2",        func_alloc2 },
+    { "keyedmutex",    func_keyedmutex },
+    { "overlay",       func_overlay },
+    { "power",         func_power },
+    { "D3dkmtAdapterInfo", func_D3dkmtAdapterInfo },
+    { "adapterclass",  func_adapterclass },
+    { "sharing",       func_sharing },
+    { "syncext",       func_syncext },
+    { "keyedmutexlife", func_keyedmutexlife },
+    { "allocstandard", func_allocstandard },
+    { "allocflags",    func_allocflags },
+    { "allocpriority", func_allocpriority },
+    { "allocresidency", func_allocresidency },
+    { "allocreserve",  func_allocreserve },
+    { "allocdestroy2", func_allocdestroy2 },
+    { "displayext",    func_displayext },
+    { "presentext",    func_presentext },
+    { "misc",          func_misc },
+    { "renderadapter", func_renderadapter },
+    { "luidident",     func_luidident },
+    { "handletype",    func_handletype },
+    { "stalehandle",   func_stalehandle },
+    { "modelistsize",  func_modelistsize },
+    { "vidmm",         func_vidmm },
+    { "present",       func_present },
+    { "dwm",           func_dwm },
+    { "display",       func_display },
+    { 0, 0 }
+};

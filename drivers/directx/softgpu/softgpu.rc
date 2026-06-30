@@ -1,0 +1,7 @@
+#define REACTOS_VERSION_DLL
+#define REACTOS_STR_FILE_DESCRIPTION  "ReactOS WDDM Null/Software GPU Miniport"
+#define REACTOS_STR_INTERNAL_NAME     "softgpu"
+#define REACTOS_STR_ORIGINAL_FILENAME "softgpu.sys"
+#define REACTOS_STR_PRODUCT_VERSION   "6.0.0.0"
+#define REACTOS_STR_FILE_VERSION      "6.0.0.0"
+#include <reactos/version.rc>

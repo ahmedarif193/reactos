@@ -1,4 +1,5 @@
 
+add_subdirectory(cdd)
 add_subdirectory(framebuf)
 if(ARCH STREQUAL "arm64")
     add_subdirectory(rpi5vc4)

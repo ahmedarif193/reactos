@@ -26,9 +26,41 @@
 
 extern BOOLEAN VpBaseVideo;
 
-static UNICODE_STRING VideoClassName = RTL_CONSTANT_STRING(L"VIDEO");
+static
+BOOLEAN
+VideoPortIsPciBusInRange(
+    _In_ ULONG BusNumber)
+{
+    ULONG MinBus, MaxBus;
+
+    if (!HalQueryPciBusRange(&MinBus, &MaxBus))
+    {
+        /* HAL has not published PCI limits yet; fall back to legacy behaviour. */
+        return TRUE;
+    }
+
+    if (BusNumber < MinBus || BusNumber > MaxBus)
+    {
+        WARN_(VIDEOPRT,
+              "Skipping PCI configuration access on bus %lu; firmware range is [%lu-%lu].\n",
+              BusNumber,
+              MinBus,
+              MaxBus);
+        return FALSE;
+    }
+
+    return TRUE;
+}
 
 /* PRIVATE FUNCTIONS **********************************************************/
+
+static BOOLEAN
+IntIsVgaSaveDriver(
+    IN PVIDEO_PORT_DEVICE_EXTENSION DeviceExtension)
+{
+    UNICODE_STRING VgaSave = RTL_CONSTANT_STRING(L"\\Driver\\VgaSave");
+    return RtlEqualUnicodeString(&VgaSave, &DeviceExtension->DriverObject->DriverName, TRUE);
+}
 
 NTSTATUS NTAPI
 IntVideoPortGetLegacyResources(
@@ -50,6 +82,12 @@ IntVideoPortGetLegacyResources(
 
     if (DriverExtension->InitializationData.HwGetLegacyResources)
     {
+        if (DeviceExtension->AdapterInterfaceType == PCIBus &&
+            !VideoPortIsPciBusInRange(DeviceExtension->SystemIoBusNumber))
+        {
+            return STATUS_NO_SUCH_DEVICE;
+        }
+
         ReadLength = HalGetBusData(PCIConfiguration,
                                    DeviceExtension->SystemIoBusNumber,
                                    DeviceExtension->SystemIoSlotNumber,
@@ -106,118 +144,51 @@ IntVideoPortFilterResourceRequirements(
         return Irp->IoStatus.Status;
     }
 
-    /* OK, we've got the access ranges now. Let's set up the resource requirements list.
-     *
-     * The PnP manager and bus drivers may hand us a multi-alternative
-     * IO_RESOURCE_REQUIREMENTS_LIST (e.g. the PCI bus driver emits one
-     * alternative per supported interrupt mode: MSI-X / MSI / legacy).
-     * The legacy VGA access ranges we need to add must apply to EVERY
-     * alternative because the arbiter is free to pick any of them.
-     */
+    /* OK, we've got the access ranges now. Let's set up the resource requirements list */
 
     if (OldResList)
     {
-        ULONG AlternativeCount = OldResList->AlternativeLists;
-        ULONG Alt;
-        PIO_RESOURCE_LIST OldAlt;
-        PIO_RESOURCE_LIST NewAlt;
+        /*
+         * If the existing resource requirements list has multiple alternative
+         * lists (e.g. a modern GPU with complex BARs), we cannot safely append
+         * legacy VGA resources — the append offset calculation only works for
+         * a single alternative list.  Skip appending; the device clearly has
+         * its own proper resources and does not need legacy VGA I/O ranges.
+         */
+        if (OldResList->AlternativeLists != 1)
+        {
+            INFO_(VIDEOPRT, "Skipping legacy resource append: AlternativeLists=%lu\n",
+                  OldResList->AlternativeLists);
+            return Irp->IoStatus.Status;
+        }
 
-        if (AlternativeCount == 0)
-            AlternativeCount = 1;
-
-        /* New size: original header + each alternative grows by AccessRangeCount
-         * descriptors. The header (FIELD_OFFSET to List[0]) stays the same. */
-        ListSize = OldResList->ListSize +
-                   AlternativeCount * AccessRangeCount * sizeof(IO_RESOURCE_DESCRIPTOR);
-        ResList = ExAllocatePool(NonPagedPool, ListSize);
+        /* Already one there so let's add to it */
+        ListSize = OldResList->ListSize + sizeof(IO_RESOURCE_DESCRIPTOR) * AccessRangeCount;
+        ResList = ExAllocatePool(NonPagedPool,
+                                 ListSize);
         if (!ResList) return STATUS_NO_MEMORY;
 
-        RtlZeroMemory(ResList, ListSize);
+        RtlCopyMemory(ResList, OldResList, OldResList->ListSize);
 
-        /* Copy the fixed header, then walk each alternative and append. */
-        RtlCopyMemory(ResList,
-                      OldResList,
-                      FIELD_OFFSET(IO_RESOURCE_REQUIREMENTS_LIST, List));
         ResList->ListSize = ListSize;
-        ResList->AlternativeLists = AlternativeCount;
+        ResList->List[0].Count += AccessRangeCount;
 
-        OldAlt = &OldResList->List[0];
-        NewAlt = &ResList->List[0];
-        for (Alt = 0; Alt < AlternativeCount; Alt++)
-        {
-            ULONG OldCount = OldAlt->Count;
-            ULONG NewCount = OldCount + AccessRangeCount;
-            ULONG OldAltSize, NewAltSize;
-
-            NewAlt->Version = OldAlt->Version;
-            NewAlt->Revision = OldAlt->Revision;
-            NewAlt->Count = NewCount;
-
-            if (OldCount)
-            {
-                RtlCopyMemory(&NewAlt->Descriptors[0],
-                              &OldAlt->Descriptors[0],
-                              OldCount * sizeof(IO_RESOURCE_DESCRIPTOR));
-            }
-
-            CurrentDescriptor = &NewAlt->Descriptors[OldCount];
-            for (i = 0; i < AccessRangeCount; i++)
-            {
-                CurrentDescriptor->Option = 0;
-                if (AccessRanges[i].RangeInIoSpace)
-                    CurrentDescriptor->Type = CmResourceTypePort;
-                else
-                    CurrentDescriptor->Type = CmResourceTypeMemory;
-                CurrentDescriptor->ShareDisposition =
-                    (AccessRanges[i].RangeShareable ? CmResourceShareShared
-                                                    : CmResourceShareDeviceExclusive);
-                CurrentDescriptor->Flags = 0;
-                if (CurrentDescriptor->Type == CmResourceTypePort)
-                {
-                    CurrentDescriptor->u.Port.Length = AccessRanges[i].RangeLength;
-                    CurrentDescriptor->u.Port.MinimumAddress = AccessRanges[i].RangeStart;
-                    CurrentDescriptor->u.Port.MaximumAddress.QuadPart =
-                        AccessRanges[i].RangeStart.QuadPart + AccessRanges[i].RangeLength - 1;
-                    CurrentDescriptor->u.Port.Alignment = 1;
-                    if (AccessRanges[i].RangePassive & VIDEO_RANGE_PASSIVE_DECODE)
-                        CurrentDescriptor->Flags |= CM_RESOURCE_PORT_PASSIVE_DECODE;
-                    if (AccessRanges[i].RangePassive & VIDEO_RANGE_10_BIT_DECODE)
-                        CurrentDescriptor->Flags |= CM_RESOURCE_PORT_10_BIT_DECODE;
-                }
-                else
-                {
-                    CurrentDescriptor->u.Memory.Length = AccessRanges[i].RangeLength;
-                    CurrentDescriptor->u.Memory.MinimumAddress = AccessRanges[i].RangeStart;
-                    CurrentDescriptor->u.Memory.MaximumAddress.QuadPart =
-                        AccessRanges[i].RangeStart.QuadPart + AccessRanges[i].RangeLength - 1;
-                    CurrentDescriptor->u.Memory.Alignment = 1;
-                    CurrentDescriptor->Flags |= CM_RESOURCE_MEMORY_READ_WRITE;
-                }
-                CurrentDescriptor++;
-            }
-
-            /* Advance to the next alternative in BOTH lists. */
-            OldAltSize = FIELD_OFFSET(IO_RESOURCE_LIST, Descriptors) +
-                         OldCount * sizeof(IO_RESOURCE_DESCRIPTOR);
-            NewAltSize = FIELD_OFFSET(IO_RESOURCE_LIST, Descriptors) +
-                         NewCount * sizeof(IO_RESOURCE_DESCRIPTOR);
-            OldAlt = (PIO_RESOURCE_LIST)((PUCHAR)OldAlt + OldAltSize);
-            NewAlt = (PIO_RESOURCE_LIST)((PUCHAR)NewAlt + NewAltSize);
-        }
+        CurrentDescriptor = (PIO_RESOURCE_DESCRIPTOR)((PUCHAR)ResList + OldResList->ListSize);
 
         ExFreePool(OldResList);
         Irp->IoStatus.Information = 0;
     }
     else
     {
-        /* No prior list. Build a fresh single-alternative list. */
-        ListSize = sizeof(IO_RESOURCE_REQUIREMENTS_LIST) +
-                   sizeof(IO_RESOURCE_DESCRIPTOR) * (AccessRangeCount - 1);
-        ResList = ExAllocatePool(NonPagedPool, ListSize);
+        /* We need to make a new one */
+        ListSize = sizeof(IO_RESOURCE_REQUIREMENTS_LIST) + sizeof(IO_RESOURCE_DESCRIPTOR) * (AccessRangeCount - 1);
+        ResList = ExAllocatePool(NonPagedPool,
+                                 ListSize);
         if (!ResList) return STATUS_NO_MEMORY;
 
         RtlZeroMemory(ResList, ListSize);
 
+        /* We need to initialize some fields */
         ResList->ListSize = ListSize;
         ResList->InterfaceType = DeviceExtension->AdapterInterfaceType;
         ResList->BusNumber = DeviceExtension->SystemIoBusNumber;
@@ -228,40 +199,44 @@ IntVideoPortFilterResourceRequirements(
         ResList->List[0].Count = AccessRangeCount;
 
         CurrentDescriptor = ResList->List[0].Descriptors;
-        for (i = 0; i < AccessRangeCount; i++)
+    }
+
+    for (i = 0; i < AccessRangeCount; i++)
+    {
+        /* This is a required resource */
+        CurrentDescriptor->Option = 0;
+
+        if (AccessRanges[i].RangeInIoSpace)
+            CurrentDescriptor->Type = CmResourceTypePort;
+        else
+            CurrentDescriptor->Type = CmResourceTypeMemory;
+
+        CurrentDescriptor->ShareDisposition =
+        (AccessRanges[i].RangeShareable ? CmResourceShareShared : CmResourceShareDeviceExclusive);
+
+        CurrentDescriptor->Flags = 0;
+
+        if (CurrentDescriptor->Type == CmResourceTypePort)
         {
-            CurrentDescriptor->Option = 0;
-            if (AccessRanges[i].RangeInIoSpace)
-                CurrentDescriptor->Type = CmResourceTypePort;
-            else
-                CurrentDescriptor->Type = CmResourceTypeMemory;
-            CurrentDescriptor->ShareDisposition =
-                (AccessRanges[i].RangeShareable ? CmResourceShareShared
-                                                : CmResourceShareDeviceExclusive);
-            CurrentDescriptor->Flags = 0;
-            if (CurrentDescriptor->Type == CmResourceTypePort)
-            {
-                CurrentDescriptor->u.Port.Length = AccessRanges[i].RangeLength;
-                CurrentDescriptor->u.Port.MinimumAddress = AccessRanges[i].RangeStart;
-                CurrentDescriptor->u.Port.MaximumAddress.QuadPart =
-                    AccessRanges[i].RangeStart.QuadPart + AccessRanges[i].RangeLength - 1;
-                CurrentDescriptor->u.Port.Alignment = 1;
-                if (AccessRanges[i].RangePassive & VIDEO_RANGE_PASSIVE_DECODE)
-                    CurrentDescriptor->Flags |= CM_RESOURCE_PORT_PASSIVE_DECODE;
-                if (AccessRanges[i].RangePassive & VIDEO_RANGE_10_BIT_DECODE)
-                    CurrentDescriptor->Flags |= CM_RESOURCE_PORT_10_BIT_DECODE;
-            }
-            else
-            {
-                CurrentDescriptor->u.Memory.Length = AccessRanges[i].RangeLength;
-                CurrentDescriptor->u.Memory.MinimumAddress = AccessRanges[i].RangeStart;
-                CurrentDescriptor->u.Memory.MaximumAddress.QuadPart =
-                    AccessRanges[i].RangeStart.QuadPart + AccessRanges[i].RangeLength - 1;
-                CurrentDescriptor->u.Memory.Alignment = 1;
-                CurrentDescriptor->Flags |= CM_RESOURCE_MEMORY_READ_WRITE;
-            }
-            CurrentDescriptor++;
+            CurrentDescriptor->u.Port.Length = AccessRanges[i].RangeLength;
+            CurrentDescriptor->u.Port.MinimumAddress = AccessRanges[i].RangeStart;
+            CurrentDescriptor->u.Port.MaximumAddress.QuadPart = AccessRanges[i].RangeStart.QuadPart + AccessRanges[i].RangeLength - 1;
+            CurrentDescriptor->u.Port.Alignment = 1;
+            if (AccessRanges[i].RangePassive & VIDEO_RANGE_PASSIVE_DECODE)
+                CurrentDescriptor->Flags |= CM_RESOURCE_PORT_PASSIVE_DECODE;
+            if (AccessRanges[i].RangePassive & VIDEO_RANGE_10_BIT_DECODE)
+                CurrentDescriptor->Flags |= CM_RESOURCE_PORT_10_BIT_DECODE;
         }
+        else
+        {
+            CurrentDescriptor->u.Memory.Length = AccessRanges[i].RangeLength;
+            CurrentDescriptor->u.Memory.MinimumAddress = AccessRanges[i].RangeStart;
+            CurrentDescriptor->u.Memory.MaximumAddress.QuadPart = AccessRanges[i].RangeStart.QuadPart + AccessRanges[i].RangeLength - 1;
+            CurrentDescriptor->u.Memory.Alignment = 1;
+            CurrentDescriptor->Flags |= CM_RESOURCE_MEMORY_READ_WRITE;
+        }
+
+        CurrentDescriptor++;
     }
 
     Irp->IoStatus.Information = (ULONG_PTR)ResList;
@@ -278,41 +253,63 @@ IntVideoPortReleaseResources(
     // An empty CM_RESOURCE_LIST
     UCHAR EmptyResourceList[FIELD_OFFSET(CM_RESOURCE_LIST, List)] = {0};
 
-    if (DeviceExtension->IsLegacyDevice || DeviceExtension->IsLegacyDetect || DeviceExtension->IsVgaDetect)
-    {
-        Status = IoReportResourceForDetection(
-                    DeviceExtension->DriverObject,
-                    NULL, 0, /* Driver List */
-                    DeviceExtension->PhysicalDeviceObject,
-                    (PCM_RESOURCE_LIST)EmptyResourceList,
-                    sizeof(EmptyResourceList),
-                    &ConflictDetected);
+    Status = IoReportResourceForDetection(
+                DeviceExtension->DriverObject,
+                NULL, 0, /* Driver List */
+                DeviceExtension->PhysicalDeviceObject,
+                (PCM_RESOURCE_LIST)EmptyResourceList,
+                sizeof(EmptyResourceList),
+                &ConflictDetected);
 
-        if (!NT_SUCCESS(Status))
-        {
-            ERR_(VIDEOPRT,
-                 "VideoPortReleaseResources (Detect) failed with 0x%08lx ; ConflictDetected: %s\n",
-                 Status, ConflictDetected ? "TRUE" : "FALSE");
-        }
-    }
-    else
+    if (!NT_SUCCESS(Status))
     {
-        Status = IoReportResourceUsage(&VideoClassName,
-                                       DeviceExtension->DriverObject,
-                                       NULL,
-                                       0,
-                                       DeviceExtension->PhysicalDeviceObject,
-                                       (PCM_RESOURCE_LIST)EmptyResourceList,
-                                       sizeof(EmptyResourceList),
-                                       FALSE,
-                                       &ConflictDetected);
-        if (!NT_SUCCESS(Status))
-        {
-            ERR_(VIDEOPRT,
-                 "VideoPortReleaseResources (Usage) failed with 0x%08lx ; ConflictDetected: %s\n",
-                 Status, ConflictDetected ? "TRUE" : "FALSE");
-        }
+        DPRINT1("VideoPortReleaseResources IoReportResource failed with 0x%08lx ; ConflictDetected: %s\n",
+                Status, ConflictDetected ? "TRUE" : "FALSE");
     }
+
+    if (DeviceExtension->MiniportAccessRanges)
+    {
+        ExFreePoolWithTag(DeviceExtension->MiniportAccessRanges, TAG_VIDEO_PORT);
+        DeviceExtension->MiniportAccessRanges = NULL;
+        DeviceExtension->MiniportAccessRangeCount = 0;
+    }
+    /* Ignore the returned status however... */
+}
+
+static
+BOOLEAN
+VpMiniportRangeCovers(_In_ PVIDEO_PORT_DEVICE_EXTENSION DeviceExtension,
+                      _In_ PHYSICAL_ADDRESS Address,
+                      _In_ ULONG Length)
+{
+    ULONG i;
+    ULONGLONG start, end;
+
+    if (!DeviceExtension->MiniportAccessRanges ||
+        DeviceExtension->MiniportAccessRangeCount == 0)
+    {
+        return FALSE;
+    }
+
+    start = Address.QuadPart;
+    end = start + Length;
+
+    for (i = 0; i < DeviceExtension->MiniportAccessRangeCount; ++i)
+    {
+        const VIDEO_ACCESS_RANGE *range = &DeviceExtension->MiniportAccessRanges[i];
+        ULONGLONG rangeStart, rangeEnd;
+
+        if (range->RangeLength == 0 || range->RangeInIoSpace)
+            continue;
+
+        rangeStart = range->RangeStart.QuadPart;
+        rangeEnd = rangeStart + range->RangeLength;
+
+        if (start >= rangeStart && end <= rangeEnd)
+            return TRUE;
+    }
+
+    return FALSE;
 }
 
 NTSTATUS NTAPI
@@ -365,38 +362,6 @@ IntVideoPortMapPhysicalMemory(
    return Status;
 }
 
-static BOOLEAN
-IntAccessRangeIsInAllocatedResources(
-    _In_ PVIDEO_PORT_DEVICE_EXTENSION DeviceExtension,
-    _In_ PVIDEO_ACCESS_RANGE Range)
-{
-    CM_RESOURCE_LIST *Res = DeviceExtension->AllocatedResources;
-    CM_FULL_RESOURCE_DESCRIPTOR *Full;
-    CM_PARTIAL_RESOURCE_DESCRIPTOR *Desc;
-
-    if (!Res || Res->Count == 0)
-        return FALSE;
-    Full = &Res->List[0];
-    for (Desc = Full->PartialResourceList.PartialDescriptors;
-         Desc < Full->PartialResourceList.PartialDescriptors + Full->PartialResourceList.Count;
-         ++Desc)
-    {
-        if (Range->RangeInIoSpace && Desc->Type == CmResourceTypePort)
-        {
-            if (Desc->u.Port.Start.QuadPart == Range->RangeStart.QuadPart &&
-                Desc->u.Port.Length == Range->RangeLength)
-                return TRUE;
-        }
-        else if (!Range->RangeInIoSpace && Desc->Type == CmResourceTypeMemory)
-        {
-            if (Desc->u.Memory.Start.QuadPart == Range->RangeStart.QuadPart &&
-                Desc->u.Memory.Length == Range->RangeLength)
-                return TRUE;
-        }
-    }
-    return FALSE;
-}
-
 
 PVOID NTAPI
 IntVideoPortMapMemory(
@@ -412,12 +377,15 @@ IntVideoPortMapMemory(
    ULONG AddressSpace;
    PVOID MappedAddress;
    PLIST_ENTRY Entry;
+   const ULONG OriginalInIoSpace = InIoSpace;
 
    INFO_(VIDEOPRT, "- IoAddress: %lx\n", IoAddress.u.LowPart);
    INFO_(VIDEOPRT, "- NumberOfUchars: %lx\n", NumberOfUchars);
    INFO_(VIDEOPRT, "- InIoSpace: %x\n", InIoSpace);
 
    InIoSpace &= ~VIDEO_MEMORY_SPACE_DENSE;
+   /* Preserve VIDEO_MEMORY_SPACE_P6CACHE so we can honor write-combined mappings
+    * for linear framebuffers when requested by miniports. */
 
    if (ProcessHandle != NULL && (InIoSpace & VIDEO_MEMORY_SPACE_USER_MODE) == 0)
    {
@@ -447,8 +415,7 @@ IntVideoPortMapMemory(
             VIDEO_PORT_ADDRESS_MAPPING,
             List);
          if (IoAddress.QuadPart == AddressMapping->IoAddress.QuadPart &&
-             NumberOfUchars <= AddressMapping->NumberOfUchars &&
-             ((InIoSpace ^ AddressMapping->InIoSpace) & VIDEO_MEMORY_SPACE_P6CACHE) == 0)
+             NumberOfUchars <= AddressMapping->NumberOfUchars)
          {
             {
                AddressMapping->MappingCount++;
@@ -462,6 +429,12 @@ IntVideoPortMapMemory(
    }
 
    AddressSpace = (ULONG)InIoSpace;
+   /*
+    * Mask off flags that are only meaningful to videoprt, not HAL.
+    * VIDEO_MEMORY_SPACE_P6CACHE is a caching hint for MmMapIoSpace,
+    * VIDEO_MEMORY_SPACE_USER_MODE is for user/kernel mapping selection.
+    * HAL only cares about VIDEO_MEMORY_SPACE_IO (bit 0).
+    */
    AddressSpace &= ~(VIDEO_MEMORY_SPACE_USER_MODE | VIDEO_MEMORY_SPACE_P6CACHE);
    if (HalTranslateBusAddress(
           DeviceExtension->AdapterInterfaceType,
@@ -470,10 +443,51 @@ IntVideoPortMapMemory(
           &AddressSpace,
           &TranslatedAddress) == FALSE)
    {
-      if (Status)
-         *Status = ERROR_INVALID_PARAMETER;
+      BOOLEAN AllowIdentityMap = FALSE;
 
-      return NULL;
+      if (DeviceExtension->AdapterInterfaceType == Internal)
+      {
+         AllowIdentityMap = TRUE;
+      }
+      else if ((DeviceExtension->AdapterInterfaceType == PCIBus) &&
+               (DeviceExtension->PhysicalDeviceObject == NULL))
+      {
+         AllowIdentityMap = TRUE;
+      }
+      else if (VpMiniportRangeCovers(DeviceExtension, IoAddress, NumberOfUchars))
+      {
+         AllowIdentityMap = TRUE;
+      }
+
+      if (!AllowIdentityMap)
+      {
+         if (Status)
+            *Status = ERROR_NOT_ENOUGH_MEMORY;
+
+         return NULL;
+      }
+
+      TranslatedAddress = IoAddress;
+      AddressSpace = 0;
+   }
+
+   /*
+    * Some firmware paths (notably the synthetic \"Internal\" GOP miniport) report
+    * framebuffer ranges that HalTranslateBusAddress classifies as I/O space
+    * even though the caller explicitly requested memory. Honor the caller's
+    * intent and map through MmMapIoSpace so display miniports receive a
+    * kernel VA instead of a raw physical address.
+    */
+   if ((AddressSpace != 0) &&
+       ((DeviceExtension->AdapterInterfaceType == Internal) ||
+        VpMiniportRangeCovers(DeviceExtension, IoAddress, NumberOfUchars)) &&
+       ((OriginalInIoSpace & VIDEO_MEMORY_SPACE_IO) == 0))
+   {
+      INFO_(VIDEOPRT,
+            "Forcing memory mapping for adapter (PA=%I64x Len=%lu)\n",
+            (ULONGLONG)TranslatedAddress.QuadPart,
+            NumberOfUchars);
+      AddressSpace = 0;
    }
 
    /* I/O space */
@@ -490,35 +504,31 @@ IntVideoPortMapMemory(
    if ((InIoSpace & VIDEO_MEMORY_SPACE_USER_MODE) != 0)
    {
       NTSTATUS NtStatus;
-      ULONG Protect;
-      if (InIoSpace & VIDEO_MEMORY_SPACE_P6CACHE)
-          Protect = PAGE_READWRITE | PAGE_WRITECOMBINE;
-      else
-          Protect = PAGE_READWRITE | PAGE_NOCACHE;
       MappedAddress = NULL;
       NtStatus = IntVideoPortMapPhysicalMemory(ProcessHandle,
                                                TranslatedAddress,
                                                NumberOfUchars,
-                                               Protect,
+                                               PAGE_READWRITE/* | PAGE_WRITECOMBINE*/,
                                                &MappedAddress);
       if (!NT_SUCCESS(NtStatus))
       {
-         ERR_(VIDEOPRT, "IntVideoPortMapPhysicalMemory() failed! (0x%x)\n", NtStatus);
+         WARN_(VIDEOPRT, "IntVideoPortMapPhysicalMemory() failed! (0x%x)\n", NtStatus);
          if (Status)
-            *Status = ERROR_INVALID_PARAMETER;
+            *Status = NO_ERROR;
          return NULL;
       }
       INFO_(VIDEOPRT, "Mapped user address = 0x%08x\n", MappedAddress);
    }
    else /* kernel space */
    {
-      MEMORY_CACHING_TYPE CacheType;
-
-      /* Honor P6CACHE as a write-combined mapping, mirroring the user-mode
-       * branch above (PAGE_WRITECOMBINE vs PAGE_NOCACHE). */
-      CacheType = (InIoSpace & VIDEO_MEMORY_SPACE_P6CACHE) ?
-         MmWriteCombined : MmNonCached;
-
+      MEMORY_CACHING_TYPE CacheType = ((InIoSpace & VIDEO_MEMORY_SPACE_P6CACHE) != 0)
+                                        ? MmWriteCombined
+                                        : MmNonCached;
+      INFO_(VIDEOPRT,
+            "Mapping kernel space: PA=%I64x Len=%lu Cache=%s\n",
+            (ULONGLONG)TranslatedAddress.QuadPart,
+            NumberOfUchars,
+            (CacheType == MmWriteCombined) ? "WC" : "NC");
       MappedAddress = MmMapIoSpace(
          TranslatedAddress,
          NumberOfUchars,
@@ -545,7 +555,6 @@ IntVideoPortMapMemory(
          AddressMapping->NumberOfUchars = NumberOfUchars;
          AddressMapping->IoAddress = IoAddress;
          AddressMapping->SystemIoBusNumber = DeviceExtension->SystemIoBusNumber;
-         AddressMapping->InIoSpace = InIoSpace;
          AddressMapping->MappedAddress = MappedAddress;
          AddressMapping->MappingCount = 1;
          InsertHeadList(
@@ -556,11 +565,12 @@ IntVideoPortMapMemory(
       return MappedAddress;
    }
 
-   ERR_(VIDEOPRT,
-        "Couldn't map video memory. IoAddress: 0x%lx, NumberOfUchars: 0x%lx, InIoSpace: 0x%x\n",
-        IoAddress.u.LowPart, NumberOfUchars, InIoSpace);
+   WARN_(VIDEOPRT, "MmMapIoSpace returned NULL for PA=%I64x Len=%lu Cache=%s\n",
+         (ULONGLONG)TranslatedAddress.QuadPart,
+         NumberOfUchars,
+         ((InIoSpace & VIDEO_MEMORY_SPACE_P6CACHE) != 0) ? "WC" : "NC");
    if (Status)
-      *Status = ERROR_INVALID_PARAMETER;
+      *Status = ERROR_NOT_ENOUGH_MEMORY;
 
    return NULL;
 }
@@ -806,12 +816,34 @@ VideoPortGetAccessRanges(
     DriverObject = DeviceExtension->DriverObject;
     DriverExtension = IoGetDriverObjectExtension(DriverObject, DriverObject);
 
+    if (DeviceExtension->MiniportAccessRanges)
+    {
+        if (NumAccessRanges < DeviceExtension->MiniportAccessRangeCount)
+            return ERROR_MORE_DATA;
+
+        if (!AccessRanges)
+            return ERROR_INVALID_PARAMETER;
+
+        RtlCopyMemory(AccessRanges,
+                      DeviceExtension->MiniportAccessRanges,
+                      DeviceExtension->MiniportAccessRangeCount * sizeof(VIDEO_ACCESS_RANGE));
+        if (Slot)
+            *Slot = 0;
+
+        return NO_ERROR;
+    }
+
     if (NumRequestedResources == 0)
     {
         AllocatedResources = DeviceExtension->AllocatedResources;
         if (AllocatedResources == NULL &&
             DeviceExtension->AdapterInterfaceType == PCIBus)
         {
+            if (!VideoPortIsPciBusInRange(DeviceExtension->SystemIoBusNumber))
+            {
+                return ERROR_DEV_NOT_EXIST;
+            }
+
             if (DeviceExtension->PhysicalDeviceObject != NULL)
             {
                 PciSlotNumber.u.AsULONG = DeviceExtension->SystemIoSlotNumber;
@@ -961,7 +993,7 @@ VideoPortGetAccessRanges(
         return ERROR_NOT_ENOUGH_MEMORY;
 
     /* Return the slot number if the caller wants it */
-    if (Slot != NULL) *Slot = DeviceExtension->SystemIoSlotNumber;
+    if (Slot != NULL) *Slot = DeviceExtension->SystemIoBusNumber;
 
     if (AllocatedResources->Count != 1)
     {
@@ -1110,82 +1142,12 @@ VideoPortVerifyAccessRanges(
     {
         /* Release the resources and do nothing more for now... */
         IntVideoPortReleaseResources(DeviceExtension);
-        /* If releasing VGA device resources, clear tracked ranges */
-        if (DeviceExtension->IsVgaDriver)
-        {
-            KeWaitForMutexObject(&VgaSyncLock, Executive, KernelMode, FALSE, NULL);
-            if (VgaRanges)
-            {
-                ExFreePoolWithTag(VgaRanges, TAG_VIDEO_PORT);
-                VgaRanges = NULL;
-            }
-            NumOfVgaRanges = 0;
-            VgaDeviceExtension = NULL;
-            KeReleaseMutex(&VgaSyncLock, FALSE);
-        }
         return NO_ERROR;
     }
 
-    /*
-     * For non-legacy PCI devices, validate that the relevant I/O or memory
-     * decoding bits are enabled in the PCI command register before claiming
-     */
-    if (!DeviceExtension->IsLegacyDevice && DeviceExtension->AdapterInterfaceType == PCIBus)
-    {
-        USHORT PciCommand;
-        ULONG BytesRead;
-
-        BytesRead = HalGetBusDataByOffset(PCIConfiguration,
-                                          DeviceExtension->SystemIoBusNumber,
-                                          DeviceExtension->SystemIoSlotNumber,
-                                          &PciCommand,
-                                          FIELD_OFFSET(PCI_COMMON_CONFIG, Command),
-                                          sizeof(PciCommand));
-        if (BytesRead == sizeof(PciCommand))
-        {
-            for (i = 0; i < NumAccessRanges; i++)
-            {
-                if (AccessRanges[i].RangeInIoSpace)
-                {
-                    if ((PciCommand & PCI_ENABLE_IO_SPACE) == 0)
-                    {
-                        WARN_(VIDEOPRT, "PCI I/O space disabled; refusing access range claim\n");
-                        return ERROR_INVALID_PARAMETER;
-                    }
-                }
-                else
-                {
-                    if ((PciCommand & PCI_ENABLE_MEMORY_SPACE) == 0)
-                    {
-                        WARN_(VIDEOPRT, "PCI memory space disabled; refusing access range claim\n");
-                        return ERROR_INVALID_PARAMETER;
-                    }
-                }
-            }
-        }
-    }
-
-    /* Determine which ranges need to be claimed (exclude PnP-assigned ones) */
-    ULONG Needed = 0;
-    for (i = 0; i < NumAccessRanges; ++i)
-    {
-        if (DeviceExtension->PhysicalDeviceObject && !DeviceExtension->IsLegacyDevice)
-        {
-            if (IntAccessRangeIsInAllocatedResources(DeviceExtension, &AccessRanges[i]))
-                continue;
-        }
-        ++Needed;
-    }
-
-    if (Needed == 0)
-    {
-        /* Nothing to report/claim */
-        return NO_ERROR;
-    }
-
-    /* Create the resource list for the non-PnP-assigned ranges */
+    /* Create the resource list */
     ResourceListSize = sizeof(CM_RESOURCE_LIST)
-        + (Needed - 1) * sizeof(CM_PARTIAL_RESOURCE_DESCRIPTOR);
+        + (NumAccessRanges - 1) * sizeof(CM_PARTIAL_RESOURCE_DESCRIPTOR);
     ResourceList = ExAllocatePoolWithTag(PagedPool, ResourceListSize, TAG_VIDEO_PORT);
     if (!ResourceList)
     {
@@ -1199,87 +1161,49 @@ VideoPortVerifyAccessRanges(
     ResourceList->List[0].BusNumber = DeviceExtension->SystemIoBusNumber;
     ResourceList->List[0].PartialResourceList.Version = 1;
     ResourceList->List[0].PartialResourceList.Revision = 1;
-    ResourceList->List[0].PartialResourceList.Count = Needed;
-
-    ULONG j = 0;
-    for (i = 0; i < NumAccessRanges; ++i)
+    ResourceList->List[0].PartialResourceList.Count = NumAccessRanges;
+    for (i = 0; i < NumAccessRanges; i++, AccessRanges++)
     {
-        if (DeviceExtension->PhysicalDeviceObject && !DeviceExtension->IsLegacyDevice)
-        {
-            if (IntAccessRangeIsInAllocatedResources(DeviceExtension, &AccessRanges[i]))
-                continue;
-        }
-
-        PartialDescriptor = &ResourceList->List[0].PartialResourceList.PartialDescriptors[j++];
-        if (AccessRanges[i].RangeInIoSpace)
+        PartialDescriptor = &ResourceList->List[0].PartialResourceList.PartialDescriptors[i];
+        if (AccessRanges->RangeInIoSpace)
         {
             PartialDescriptor->Type = CmResourceTypePort;
-            PartialDescriptor->u.Port.Start = AccessRanges[i].RangeStart;
-            PartialDescriptor->u.Port.Length = AccessRanges[i].RangeLength;
+            PartialDescriptor->u.Port.Start = AccessRanges->RangeStart;
+            PartialDescriptor->u.Port.Length = AccessRanges->RangeLength;
         }
         else
         {
             PartialDescriptor->Type = CmResourceTypeMemory;
-            PartialDescriptor->u.Memory.Start = AccessRanges[i].RangeStart;
-            PartialDescriptor->u.Memory.Length = AccessRanges[i].RangeLength;
+            PartialDescriptor->u.Memory.Start = AccessRanges->RangeStart;
+            PartialDescriptor->u.Memory.Length = AccessRanges->RangeLength;
         }
-        PartialDescriptor->ShareDisposition = AccessRanges[i].RangeShareable ?
-            CmResourceShareShared : CmResourceShareDeviceExclusive;
+        if (AccessRanges->RangeShareable)
+            PartialDescriptor->ShareDisposition = CmResourceShareShared;
+        else
+            PartialDescriptor->ShareDisposition = CmResourceShareDeviceExclusive;
         PartialDescriptor->Flags = 0;
-        if (AccessRanges[i].RangePassive & VIDEO_RANGE_PASSIVE_DECODE)
+        if (AccessRanges->RangePassive & VIDEO_RANGE_PASSIVE_DECODE)
             PartialDescriptor->Flags |= CM_RESOURCE_PORT_PASSIVE_DECODE;
-        if (AccessRanges[i].RangePassive & VIDEO_RANGE_10_BIT_DECODE)
+        if (AccessRanges->RangePassive & VIDEO_RANGE_10_BIT_DECODE)
             PartialDescriptor->Flags |= CM_RESOURCE_PORT_10_BIT_DECODE;
     }
 
-    if (DeviceExtension->IsLegacyDevice || DeviceExtension->IsLegacyDetect || DeviceExtension->IsVgaDetect)
-    {
-        Status = IoReportResourceForDetection(
-                    DeviceExtension->DriverObject,
-                    NULL, 0, /* Driver List */
-                    DeviceExtension->PhysicalDeviceObject,
-                    ResourceList, ResourceListSize,
-                    &ConflictDetected);
+    /* Try to acquire all resource ranges */
+    Status = IoReportResourceForDetection(
+                DeviceExtension->DriverObject,
+                NULL, 0, /* Driver List */
+                DeviceExtension->PhysicalDeviceObject,
+                ResourceList, ResourceListSize,
+                &ConflictDetected);
 
-        /* IntIsVgaSaveDriver() will later ignore STATUS_CONFLICTING_ADDRESSES, but we still claim it */
-        if (!NT_SUCCESS(Status) && DeviceExtension->IsVgaDriver)
-        {
-            NTSTATUS fbStatus;
-            BOOLEAN fbConflict = FALSE;
-            fbStatus = IoReportResourceUsage(&VideoClassName,
-                                             DeviceExtension->DriverObject,
-                                             NULL,
-                                             0,
-                                             DeviceExtension->PhysicalDeviceObject,
-                                             ResourceList,
-                                             ResourceListSize,
-                                             FALSE,
-                                             &fbConflict);
-            INFO_(VIDEOPRT, "VGA detect->usage fallback: Status=0x%lx Conflict=%d fbStatus=0x%lx fbConflict=%d\n",
-                  Status, ConflictDetected, fbStatus, fbConflict);
-            Status = fbStatus;
-            ConflictDetected = fbConflict;
-        }
-    }
-    else
-    {
-        Status = IoReportResourceUsage(&VideoClassName,
-                                       DeviceExtension->DriverObject,
-                                       NULL,
-                                       0,
-                                       DeviceExtension->PhysicalDeviceObject,
-                                       ResourceList,
-                                       ResourceListSize,
-                                       FALSE,
-                                       &ConflictDetected);
-    }
     ExFreePoolWithTag(ResourceList, TAG_VIDEO_PORT);
 
-    /* If VgaSave driver is conflicting and we don't explicitly want
+    /* If VgaSave driver is conflicting and we don't explicitely want
      * to use it, ignore the problem (because win32k will try to use
      * this driver only if all other ones are failing). */
-    if ((Status == STATUS_CONFLICTING_ADDRESSES || ConflictDetected) &&
-        DeviceExtension->IsVgaDriver && !VpBaseVideo)
+    if (Status == STATUS_CONFLICTING_ADDRESSES &&
+        IntIsVgaSaveDriver(DeviceExtension) &&
+        !VpBaseVideo)
     {
         return NO_ERROR;
     }
@@ -1287,34 +1211,81 @@ VideoPortVerifyAccessRanges(
     if (!NT_SUCCESS(Status) || ConflictDetected)
         return ERROR_INVALID_PARAMETER;
     else
-    {
-        /* Track VGA access ranges on success for fallback handling */
-        if (DeviceExtension->IsVgaDriver && AccessRanges != VgaRanges)
-        {
-            KeWaitForMutexObject(&VgaSyncLock, Executive, KernelMode, FALSE, NULL);
-            if (VgaRanges)
-            {
-                ExFreePoolWithTag(VgaRanges, TAG_VIDEO_PORT);
-                VgaRanges = NULL;
-                NumOfVgaRanges = 0;
-            }
-            if (NumAccessRanges)
-            {
-                SIZE_T sz = NumAccessRanges * sizeof(VIDEO_ACCESS_RANGE);
-                VgaRanges = ExAllocatePoolWithTag(PagedPool, sz, TAG_VIDEO_PORT);
-                if (VgaRanges)
-                {
-                    RtlCopyMemory(VgaRanges, AccessRanges, sz);
-                    NumOfVgaRanges = NumAccessRanges;
-                    VgaDeviceExtension = DeviceExtension;
-                }
-            }
-            KeReleaseMutex(&VgaSyncLock, FALSE);
-        }
-        /* Leave VGA detect phase after first successful claim */
-        DeviceExtension->IsVgaDetect = FALSE;
         return NO_ERROR;
+}
+
+static
+VP_STATUS
+VpCacheMiniportAccessRanges(
+    _In_ PVIDEO_PORT_DEVICE_EXTENSION DeviceExtension,
+    _In_opt_ ULONG NumAccessRanges,
+    _In_reads_opt_(NumAccessRanges) PVIDEO_ACCESS_RANGE AccessRanges)
+{
+    SIZE_T Length;
+    PVIDEO_ACCESS_RANGE CopiedRanges;
+
+    if (NumAccessRanges && AccessRanges == NULL)
+        return ERROR_INVALID_PARAMETER;
+
+    if (DeviceExtension->MiniportAccessRanges)
+    {
+        ExFreePoolWithTag(DeviceExtension->MiniportAccessRanges, TAG_VIDEO_PORT);
+        DeviceExtension->MiniportAccessRanges = NULL;
+        DeviceExtension->MiniportAccessRangeCount = 0;
     }
+
+    if ((NumAccessRanges == 0) || (AccessRanges == NULL))
+        return NO_ERROR;
+
+    Length = sizeof(VIDEO_ACCESS_RANGE) * NumAccessRanges;
+    CopiedRanges = ExAllocatePoolWithTag(PagedPool, Length, TAG_VIDEO_PORT);
+    if (!CopiedRanges)
+        return ERROR_NOT_ENOUGH_MEMORY;
+
+    RtlCopyMemory(CopiedRanges, AccessRanges, Length);
+    DeviceExtension->MiniportAccessRanges = CopiedRanges;
+    DeviceExtension->MiniportAccessRangeCount = NumAccessRanges;
+
+    return NO_ERROR;
+}
+
+VP_STATUS
+NTAPI
+VideoPortSetAccessRanges(
+    _In_ PVOID HwDeviceExtension,
+    _In_ ULONG NumAccessRanges,
+    _In_reads_opt_(NumAccessRanges) PVIDEO_ACCESS_RANGE AccessRanges)
+{
+    PVIDEO_PORT_DEVICE_EXTENSION DeviceExtension;
+    VP_STATUS Status;
+
+    TRACE_(VIDEOPRT, "VideoPortSetAccessRanges(%lu)\n", NumAccessRanges);
+
+    DeviceExtension = VIDEO_PORT_GET_DEVICE_EXTENSION(HwDeviceExtension);
+
+    Status = VideoPortVerifyAccessRanges(
+        HwDeviceExtension,
+        NumAccessRanges,
+        AccessRanges);
+    if (Status != NO_ERROR)
+        return Status;
+
+    return VpCacheMiniportAccessRanges(DeviceExtension, NumAccessRanges, AccessRanges);
+}
+
+VP_STATUS
+NTAPI
+VideoPortCacheAccessRanges(
+    _In_ PVOID HwDeviceExtension,
+    _In_ ULONG NumAccessRanges,
+    _In_reads_opt_(NumAccessRanges) PVIDEO_ACCESS_RANGE AccessRanges)
+{
+    PVIDEO_PORT_DEVICE_EXTENSION DeviceExtension;
+
+    TRACE_(VIDEOPRT, "VideoPortCacheAccessRanges(%lu)\n", NumAccessRanges);
+
+    DeviceExtension = VIDEO_PORT_GET_DEVICE_EXTENSION(HwDeviceExtension);
+    return VpCacheMiniportAccessRanges(DeviceExtension, NumAccessRanges, AccessRanges);
 }
 
 /*
@@ -1436,7 +1407,10 @@ VideoPortLockPages(
     }
 
     /* lock the buffer */
-    Buffer = VideoPortLockBuffer(HwDeviceExtension, pVrp->InputBuffer, pVrp->InputBufferLength, (VP_LOCK_OPERATION)IoModifyAccess);
+    Buffer = VideoPortLockBuffer(HwDeviceExtension,
+                                 pVrp->InputBuffer,
+                                 pVrp->InputBufferLength,
+                                 (VP_LOCK_OPERATION)IoModifyAccess);
 
     if (Buffer)
     {
@@ -1510,6 +1484,12 @@ VideoPortGetBusData(
          SlotNumber = DeviceExtension->SystemIoSlotNumber;
    }
 
+   if (BusDataType == PCIConfiguration &&
+       !VideoPortIsPciBusInRange(DeviceExtension->SystemIoBusNumber))
+   {
+      return 0;
+   }
+
    return HalGetBusDataByOffset(
       BusDataType,
       DeviceExtension->SystemIoBusNumber,
@@ -1543,6 +1523,12 @@ VideoPortSetBusData(
       /* Legacy vs. PnP behaviour */
       if (DeviceExtension->PhysicalDeviceObject != NULL)
          SlotNumber = DeviceExtension->SystemIoSlotNumber;
+   }
+
+   if (BusDataType == PCIConfiguration &&
+       !VideoPortIsPciBusInRange(DeviceExtension->SystemIoBusNumber))
+   {
+      return 0;
    }
 
    return HalSetBusDataByOffset(

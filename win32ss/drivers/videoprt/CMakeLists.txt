@@ -3,9 +3,9 @@ include_directories(${REACTOS_SOURCE_DIR}/ntoskrnl/include)
 add_definitions(-D_VIDEOPORT_)
 spec2def(videoprt.sys videoprt.spec ADD_IMPORTLIB)
 
-# Link GCC stack protector lib
+# Embed RTC libs
 if (STACK_PROTECTOR)
-    target_link_libraries(libvideoprt INTERFACE gcc_ssp_videoprt)
+    target_sources(libvideoprt PRIVATE $<TARGET_OBJECTS:gcc_ssp_videoprt>)
 endif()
 
 list(APPEND SOURCE
@@ -16,7 +16,6 @@ list(APPEND SOURCE
     dma.c
     event.c
     funclist.c
-    int10.c
     interrupt.c
     registry.c
     resource.c
@@ -24,7 +23,14 @@ list(APPEND SOURCE
     spinlock.c
     stubs.c
     timer.c
-    videoprt.c)
+    videoprt.c
+    wddm_detect.c)
+
+if(ARCH STREQUAL "i386" OR ARCH STREQUAL "amd64")
+    list(APPEND SOURCE int10.c)
+else()
+    list(APPEND SOURCE int10_stub.c)
+endif()
 
 list(APPEND PCH_SKIP_SOURCE
     guid.c)
@@ -37,6 +43,6 @@ add_library(videoprt MODULE
 
 set_module_type(videoprt kernelmodedriver)
 target_link_libraries(videoprt ${PSEH_LIB})
-add_importlibs(videoprt ntoskrnl hal)
+add_importlibs(videoprt ntoskrnl hal wmilib)
 add_pch(videoprt videoprt.h "${PCH_SKIP_SOURCE}")
 add_cd_file(TARGET videoprt DESTINATION reactos/system32/drivers FOR all)

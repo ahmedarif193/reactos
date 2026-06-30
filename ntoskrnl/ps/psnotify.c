@@ -26,12 +26,19 @@ PLEGO_NOTIFY_ROUTINE PspLegoNotifyRoutine;
 /* PUBLIC FUNCTIONS **********************************************************/
 
 /*
- * @implemented
+ * PspSetCreateProcessNotifyRoutine
+ *
+ * Internal worker shared by PsSetCreateProcessNotifyRoutine (legacy) and
+ * PsSetCreateProcessNotifyRoutineEx. The routine pointer is stored verbatim in
+ * PspProcessNotifyRoutine; Ex callers pass a pointer with bit 0 set so the
+ * dispatcher (PspRunCreateProcessNotifyRoutines) knows to invoke it with the
+ * extended PS_CREATE_NOTIFY_INFO signature. The even-address invariant of
+ * function pointers guarantees the tag never collides with a real routine.
  */
+static
 NTSTATUS
-NTAPI
-PsSetCreateProcessNotifyRoutine(IN PCREATE_PROCESS_NOTIFY_ROUTINE NotifyRoutine,
-                                IN BOOLEAN Remove)
+PspSetCreateProcessNotifyRoutine(IN PVOID NotifyRoutine,
+                                 IN BOOLEAN Remove)
 {
     ULONG i;
     PEX_CALLBACK_ROUTINE_BLOCK CallBack;
@@ -105,6 +112,42 @@ PsSetCreateProcessNotifyRoutine(IN PCREATE_PROCESS_NOTIFY_ROUTINE NotifyRoutine,
         ExFreeCallBack(CallBack);
         return STATUS_INVALID_PARAMETER;
     }
+}
+
+/*
+ * @implemented
+ */
+NTSTATUS
+NTAPI
+PsSetCreateProcessNotifyRoutine(IN PCREATE_PROCESS_NOTIFY_ROUTINE NotifyRoutine,
+                                IN BOOLEAN Remove)
+{
+    /* Legacy callback: store the routine pointer verbatim (untagged). */
+    return PspSetCreateProcessNotifyRoutine((PVOID)NotifyRoutine, Remove);
+}
+
+/*
+ * @implemented
+ *
+ * Extended process create/exit notification. The callback uses the richer
+ * PCREATE_PROCESS_NOTIFY_ROUTINE_EX signature and receives a PS_CREATE_NOTIFY_INFO
+ * on create (NULL on exit). We tag bit 0 of the stored routine pointer so the
+ * dispatcher (PspRunCreateProcessNotifyRoutines) can tell Ex callbacks apart from
+ * legacy ones. Required by the WDDM kernel stack (dxgkrnl registers
+ * DxgkProcessCleanup here) and other Vista+ drivers.
+ */
+NTSTATUS
+NTAPI
+PsSetCreateProcessNotifyRoutineEx(IN PCREATE_PROCESS_NOTIFY_ROUTINE_EX NotifyRoutine,
+                                  IN BOOLEAN Remove)
+{
+    PAGED_CODE();
+
+    if (!NotifyRoutine) return STATUS_INVALID_PARAMETER;
+
+    /* Tag bit 0 to mark this as an extended (Ex) callback. */
+    return PspSetCreateProcessNotifyRoutine((PVOID)((ULONG_PTR)NotifyRoutine | 1),
+                                            Remove);
 }
 
 /*
