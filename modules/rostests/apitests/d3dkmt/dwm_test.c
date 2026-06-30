@@ -181,6 +181,17 @@ static void Test_CompositionSyncUnderLoad(void)
     }
     ok(ret == 1, "CompositionSync begin should return 1, got %d\n", ret);
 
+    /*
+     * Snapshot the live screen region into the scratch bitmap first so the
+     * BitBlt load below copies the desktop back onto itself instead of an
+     * uninitialised bitmap.  This keeps the test non-destructive: on a
+     * compositor that does not continuously recomposite an idle desktop,
+     * blitting a blank bitmap to the screen DC would otherwise leave a black
+     * rectangle behind.  The escape contract + BitBlt-under-sync path are
+     * exercised identically either way.
+     */
+    BitBlt(hDcMem, 0, 0, 640, 480, hDcScreen, 0, 0, SRCCOPY);
+
     /* BitBlt under composition sync */
     for (i = 0; i < 10; ++i)
     {
