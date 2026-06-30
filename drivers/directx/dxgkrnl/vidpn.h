@@ -128,6 +128,18 @@ typedef struct _DXGKP_VIDPN_SOURCE_OWNER
     D3DKMT_VIDPNSOURCEOWNER_TYPE    OwnerType;
 } DXGKP_VIDPN_SOURCE_OWNER, *PDXGKP_VIDPN_SOURCE_OWNER;
 
+/*
+ * DxgkpDeviceOwnsVidPnSource
+ *
+ * TRUE if hDevice owns VidPnSourceId (via D3DKMTSetVidPnSourceOwner).  The
+ * present path gates primary scanout on this so an app present only reaches the
+ * primary when the app owns the source (Windows DWM-ownership model).
+ */
+BOOLEAN
+DxgkpDeviceOwnsVidPnSource(
+    _In_ D3DKMT_HANDLE hDevice,
+    _In_ D3DDDI_VIDEO_PRESENT_SOURCE_ID VidPnSourceId);
+
 /* ========================================================================
  * DXGKP_VIDPN - Internal VidPN object
  *
