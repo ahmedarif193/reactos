@@ -25,6 +25,18 @@
 typedef struct _OBJECT_ATTRIBUTES OBJECT_ATTRIBUTES;
 typedef OBJECT_ATTRIBUTES *POBJECT_ATTRIBUTES;
 
+/* PALETTEENTRY is normally from wingdi.h; provide a minimal definition
+ * for kernel-mode callers that do not include wingdi.h. */
+#ifndef _PALETTEENTRY_DEFINED
+#define _PALETTEENTRY_DEFINED
+typedef struct tagPALETTEENTRY {
+    BYTE peRed;
+    BYTE peGreen;
+    BYTE peBlue;
+    BYTE peFlags;
+} PALETTEENTRY, *PPALETTEENTRY, *LPPALETTEENTRY;
+#endif /* _PALETTEENTRY_DEFINED */
+
 //
 // Available only for Vista (LONGHORN) and later and for
 // multiplatform tools such as debugger extensions
@@ -1658,12 +1670,15 @@ typedef struct _D3DKMT_OPENGLINFO
     ULONG               Flags;
 } D3DKMT_OPENGLINFO;
 
+#ifndef _D3DKMT_SEGMENTSIZEINFO_DEFINED
+#define _D3DKMT_SEGMENTSIZEINFO_DEFINED
 typedef struct _D3DKMT_SEGMENTSIZEINFO
 {
     D3DKMT_ALIGN64 ULONGLONG           DedicatedVideoMemorySize;
     D3DKMT_ALIGN64 ULONGLONG           DedicatedSystemMemorySize;
     D3DKMT_ALIGN64 ULONGLONG           SharedSystemMemorySize;
 } D3DKMT_SEGMENTSIZEINFO;
+#endif
 
 typedef struct _D3DKMT_SEGMENTGROUPSIZEINFO
 {
@@ -4404,7 +4419,35 @@ typedef struct _D3DKMT_CHECKSHAREDRESOURCEACCESS
     UINT            ClientPid;      // in: Client process PID
 } D3DKMT_CHECKSHAREDRESOURCEACCESS;
 
+#if defined(__REACTOS__) && (DXGKDDI_INTERFACE_VERSION < DXGKDDI_INTERFACE_VERSION_WIN8)
+#ifndef _D3DKMT_OFFERALLOCATIONS_DEFINED
+#define _D3DKMT_OFFERALLOCATIONS_DEFINED
+typedef enum _D3DKMT_OFFER_PRIORITY
+{
+    D3DKMT_OFFER_PRIORITY_LOW=1,    // Content is not useful
+    D3DKMT_OFFER_PRIORITY_NORMAL,   // Content is useful but easy to regenerate
+    D3DKMT_OFFER_PRIORITY_HIGH,     // Content is useful and difficult to regenerate
+    D3DKMT_OFFER_PRIORITY_AUTO,     // Let VidMm decide offer priority based on eviction priority
+} D3DKMT_OFFER_PRIORITY;
+
+typedef struct _D3DKMT_OFFERALLOCATIONS
+{
+    D3DKMT_HANDLE hDevice;                        // in: Device that created the allocations
+    D3DKMT_PTR(D3DKMT_HANDLE*, pResources);       // in: array of D3D runtime resource handles.
+    union
+    {
+        D3DKMT_PTR(CONST D3DKMT_HANDLE*, HandleList);      // in: array of allocation handles. If non-NULL, pResources must be NULL.
+        D3DKMT_PTR(CONST D3DKMT_HANDLE*, AllocationList);  // compatibility name used by older callers.
+    };
+    UINT NumAllocations;                          // in: number of items in whichever of pResources or HandleList is non-NULL.
+    D3DKMT_OFFER_PRIORITY Priority;               // in: priority with which to offer the allocations
+} D3DKMT_OFFERALLOCATIONS;
+#endif /* _D3DKMT_OFFERALLOCATIONS_DEFINED */
+#endif /* __REACTOS__ && DXGKDDI_INTERFACE_VERSION < DXGKDDI_INTERFACE_VERSION_WIN8 */
+
 #if (DXGKDDI_INTERFACE_VERSION >= DXGKDDI_INTERFACE_VERSION_WIN8)
+#ifndef _D3DKMT_OFFERALLOCATIONS_DEFINED
+#define _D3DKMT_OFFERALLOCATIONS_DEFINED
 typedef enum _D3DKMT_OFFER_PRIORITY
 {
     D3DKMT_OFFER_PRIORITY_LOW=1,    // Content is not useful
@@ -4433,13 +4476,18 @@ typedef struct _D3DKMT_OFFERALLOCATIONS
 {
     D3DKMT_HANDLE hDevice;                        // in: Device that created the allocations
     D3DKMT_PTR(D3DKMT_HANDLE*, pResources);       // in: array of D3D runtime resource handles.
-    D3DKMT_PTR(CONST D3DKMT_HANDLE*, HandleList); // in: array of allocation handles. If non-NULL, pResources must be NULL.
+    union
+    {
+        D3DKMT_PTR(CONST D3DKMT_HANDLE*, HandleList);      // in: array of allocation handles. If non-NULL, pResources must be NULL.
+        D3DKMT_PTR(CONST D3DKMT_HANDLE*, AllocationList);  // compatibility name used by older callers.
+    };
     UINT NumAllocations;                          // in: number of items in whichever of pResources or HandleList is non-NULL.
     D3DKMT_OFFER_PRIORITY Priority;               // in: priority with which to offer the allocations
 #if (DXGKDDI_INTERFACE_VERSION >= DXGKDDI_INTERFACE_VERSION_WDDM2_0)
     D3DKMT_OFFER_FLAGS Flags;                     // in: various flags for determining offer behavior
 #endif // DXGKDDI_INTERFACE_VERSION
 } D3DKMT_OFFERALLOCATIONS;
+#endif /* _D3DKMT_OFFERALLOCATIONS_DEFINED */
 
 typedef struct _D3DKMT_RECLAIMALLOCATIONS
 {
@@ -5633,6 +5681,7 @@ typedef _Check_return_ NTSTATUS (APIENTRY *PFND3DKMT_ENUMADAPTERS3)(_Inout_ D3DK
 typedef _Check_return_ NTSTATUS (APIENTRY *PFND3DKMT_PINRESOURCES)(_Inout_ D3DKMT_PINRESOURCES*);
 typedef _Check_return_ NTSTATUS (APIENTRY *PFND3DKMT_UNPINRESOURCES)(_In_ CONST D3DKMT_UNPINRESOURCES*);
 #ifdef _WIN32
+typedef struct _D3DKMT_DISPLAYPORT_OPERATION_HEADER D3DKMT_DISPLAYPORT_OPERATION_HEADER;
 typedef _Check_return_ NTSTATUS (APIENTRY *PFND3DKMT_DISPLAYPORT_OPERATION)(_Inout_ D3DKMT_DISPLAYPORT_OPERATION_HEADER*);
 #endif // _WIN32
 
@@ -6035,4 +6084,3 @@ typedef enum _DXGKMT_POWER_SHARED_TYPE
 #pragma endregion
 
 #endif /* _D3DKMTHK_H_ */
-

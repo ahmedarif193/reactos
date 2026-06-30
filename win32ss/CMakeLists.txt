@@ -248,7 +248,7 @@ add_library(win32k MODULE
     ${CMAKE_CURRENT_BINARY_DIR}/win32k.def)
 
 set_module_type(win32k kernelmodedriver)
-target_link_libraries(win32k ${PSEH_LIB} dxguid libcntpr)
+target_link_libraries(win32k ${PSEH_LIB} dxguid libcntpr wddm_bridge)
 
 if(USE_DIBLIB)
     target_link_libraries(win32k diblib)

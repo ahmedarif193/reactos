@@ -168,6 +168,7 @@ list(APPEND KMTEST_DRV_SOURCE
     rtl/RtlRandomKM.c
     rtl/RtlRangeList.c
     rtl/RtlStringSupportKM.c
+    win32ss/CddDisplay.c
     ${COMMON_SOURCE}
 
     kmtest_drv/kmtest_drv.rc)
