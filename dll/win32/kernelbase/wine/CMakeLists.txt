@@ -1,3 +1,5 @@
+# Drop the inherited global target version before bumping to 0xA01 (avoids a redefinition warning)
+remove_definitions(-D_WIN32_WINNT=${REACTOS_TARGET_NT} -DWINVER=${REACTOS_TARGET_NT})
 add_definitions(-D_WIN32_WINNT=0xA01 -DWINVER=0xA01)
 
 add_definitions(
