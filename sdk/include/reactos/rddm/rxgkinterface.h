@@ -8,6 +8,7 @@
 #pragma once
 
 #include <d3dkmddi.h>
+#include <d3dkmthk.h>
 
 /*
  * Every structure in here is shared across two or more modules and doesn't currently
@@ -45,25 +46,25 @@ typedef DXGADAPTER_CLOSEADAPTER *PDXGADAPTER_CLOSEADAPTER;
 
 typedef
 NTSTATUS
-DXGADAPTER_CREATECONTEXT(_Inout_ const D3DKMT_CREATECONTEXT* unnamedParam1);
+DXGADAPTER_CREATECONTEXT(_Inout_ D3DKMT_CREATECONTEXT* unnamedParam1);
 
 typedef DXGADAPTER_CREATECONTEXT *PDXGADAPTER_CREATECONTEXT;
 
 typedef
 NTSTATUS
-DXGADAPTER_CREATEDEVICE(_Inout_ const D3DKMT_CREATEDEVICE* unnamedParam1);
+DXGADAPTER_CREATEDEVICE(_Inout_ D3DKMT_CREATEDEVICE* unnamedParam1);
 
 typedef DXGADAPTER_CREATEDEVICE *PDXGADAPTER_CREATEDEVICE;
 
 typedef
 NTSTATUS
-DXGADAPTER_CREATEOVERLAY(_Inout_ const D3DKMT_CREATEOVERLAY* unnamedParam1);
+DXGADAPTER_CREATEOVERLAY(_Inout_ D3DKMT_CREATEOVERLAY* unnamedParam1);
 
 typedef DXGADAPTER_CREATEOVERLAY *PDXGADAPTER_CREATEOVERLAY;
 
 typedef
 NTSTATUS
-DXGADAPTER_CREATESYNCHRONIZATIONOBJECT(_Inout_ const D3DKMT_CREATESYNCHRONIZATIONOBJECT* unnamedParam1);
+DXGADAPTER_CREATESYNCHRONIZATIONOBJECT(_Inout_ D3DKMT_CREATESYNCHRONIZATIONOBJECT* unnamedParam1);
 
 typedef DXGADAPTER_CREATESYNCHRONIZATIONOBJECT *PDXGADAPTER_CREATESYNCHRONIZATIONOBJECT;
 
@@ -111,7 +112,7 @@ typedef DXGADAPTER_FLIPOVERLAY *PDXGADAPTER_FLIPOVERLAY;
 
 typedef
 NTSTATUS
-DXGADAPTER_GETCONTEXTSCHEDULINGPRIORITY(_Inout_ const D3DKMT_GETCONTEXTSCHEDULINGPRIORITY* unnamedParam1);
+DXGADAPTER_GETCONTEXTSCHEDULINGPRIORITY(_Inout_ D3DKMT_GETCONTEXTSCHEDULINGPRIORITY* unnamedParam1);
 
 typedef DXGADAPTER_GETCONTEXTSCHEDULINGPRIORITY *PDXGADAPTER_GETCONTEXTSCHEDULINGPRIORITY;
 
@@ -135,7 +136,7 @@ typedef DXGADAPTER_GETMULTISAMPLEMETHODLIST *PDXGADAPTER_GETMULTISAMPLEMETHODLIS
 
 typedef
 NTSTATUS
-DXGADAPTER_GETRUNTIMEDATA(_Inout_ const D3DKMT_GETRUNTIMEDATA* unnamedParam1);
+DXGADAPTER_GETRUNTIMEDATA(_Inout_ CONST D3DKMT_GETRUNTIMEDATA* unnamedParam1);
 
 typedef DXGADAPTER_GETRUNTIMEDATA *PDXGADAPTER_GETRUNTIMEDATA;
 
@@ -316,7 +317,7 @@ typedef DXGADAPTER_PRESENT *PDXGADAPTER_PRESENT;
 
 typedef
 NTSTATUS
-DXGADAPTER_QUERYADAPTERINFO(_Inout_ const D3DKMT_QUERYADAPTERINFO* unnamedParam1);
+DXGADAPTER_QUERYADAPTERINFO(_Inout_ CONST D3DKMT_QUERYADAPTERINFO* unnamedParam1);
 
 typedef DXGADAPTER_QUERYADAPTERINFO *PDXGADAPTER_QUERYADAPTERINFO;
 
@@ -328,7 +329,7 @@ typedef DXGADAPTER_QUERYALLOCATIONRESIDENCY *PDXGADAPTER_QUERYALLOCATIONRESIDENC
 
 typedef
 NTSTATUS
-DXGADAPTER_QUERYSTATISTICS(_Inout_ const D3DKMT_QUERYSTATISTICS* unnamedParam1);
+DXGADAPTER_QUERYSTATISTICS(_Inout_ CONST D3DKMT_QUERYSTATISTICS* unnamedParam1);
 
 typedef DXGADAPTER_QUERYSTATISTICS *PDXGADAPTER_QUERYSTATISTICS;
 
@@ -349,6 +350,445 @@ NTSTATUS
 DXGADAPTER_SETCONTEXTSCHEDULINGPRIORITY(_In_ const D3DKMT_SETCONTEXTSCHEDULINGPRIORITY* unnamedParam1);
 
 typedef DXGADAPTER_SETCONTEXTSCHEDULINGPRIORITY *PDXGADAPTER_SETCONTEXTSCHEDULINGPRIORITY;
+
+/*
+ * WDDM 1.2 (Win8) type fallbacks.
+ *
+ * These D3DKMT types are guarded by DXGKDDI_INTERFACE_VERSION >= WIN8 in
+ * d3dkmthk.h, but we need them here regardless of the miniport DDI version
+ * because they are used in the user-mode D3DKMT plumbing (gdi32 -> win32k).
+ *
+ * The guard below fires when either macro is undefined (win32k/d3dkmt_stubs.c
+ * compiles without dispmprt.h) or when the interface version is below Win8.
+ */
+#if !defined(DXGKDDI_INTERFACE_VERSION) || !defined(DXGKDDI_INTERFACE_VERSION_WIN8) || \
+    (DXGKDDI_INTERFACE_VERSION < DXGKDDI_INTERFACE_VERSION_WIN8)
+
+#ifndef MAX_ENUM_ADAPTERS
+#define MAX_ENUM_ADAPTERS   16
+#endif
+
+#ifndef _D3DKMT_ADAPTERINFO_DEFINED
+#define _D3DKMT_ADAPTERINFO_DEFINED
+typedef struct _D3DKMT_ADAPTERINFO
+{
+    D3DKMT_HANDLE       hAdapter;
+    LUID                AdapterLuid;
+    ULONG               NumOfSources;
+    BOOL                bPrecisePresentRegionsPreferred;
+} D3DKMT_ADAPTERINFO;
+#endif
+
+#ifndef _D3DKMT_ENUMADAPTERS_DEFINED
+#define _D3DKMT_ENUMADAPTERS_DEFINED
+typedef struct _D3DKMT_ENUMADAPTERS
+{
+    ULONG               NumAdapters;
+    D3DKMT_ADAPTERINFO  Adapters[MAX_ENUM_ADAPTERS];
+} D3DKMT_ENUMADAPTERS;
+#endif
+
+#ifndef _D3DKMT_ENUMADAPTERS2_DEFINED
+#define _D3DKMT_ENUMADAPTERS2_DEFINED
+typedef struct _D3DKMT_ENUMADAPTERS2
+{
+    ULONG               NumAdapters;       /* in/out: capacity / count enumerated */
+    D3DKMT_ADAPTERINFO *pAdapters;         /* out: caller buffer of NumAdapters elements */
+} D3DKMT_ENUMADAPTERS2;
+#endif
+
+#ifndef _D3DKMT_OPENADAPTERFROMLUID_DEFINED
+#define _D3DKMT_OPENADAPTERFROMLUID_DEFINED
+typedef struct _D3DKMT_OPENADAPTERFROMLUID
+{
+    LUID                AdapterLuid;
+    D3DKMT_HANDLE       hAdapter;
+} D3DKMT_OPENADAPTERFROMLUID;
+#endif
+
+#ifndef _D3DKMT_OFFERALLOCATIONS_DEFINED
+#define _D3DKMT_OFFERALLOCATIONS_DEFINED
+typedef enum _D3DKMT_OFFER_PRIORITY
+{
+    D3DKMT_OFFER_PRIORITY_LOW = 1,
+    D3DKMT_OFFER_PRIORITY_NORMAL,
+    D3DKMT_OFFER_PRIORITY_HIGH,
+    D3DKMT_OFFER_PRIORITY_AUTO,
+} D3DKMT_OFFER_PRIORITY;
+
+typedef struct _D3DKMT_OFFERALLOCATIONS
+{
+    D3DKMT_HANDLE       hDevice;
+    D3DKMT_HANDLE      *pResources;
+    const D3DKMT_HANDLE *HandleList;
+    UINT                NumAllocations;
+    D3DKMT_OFFER_PRIORITY Priority;
+} D3DKMT_OFFERALLOCATIONS;
+#endif
+
+#ifndef _D3DKMT_RECLAIMALLOCATIONS_DEFINED
+#define _D3DKMT_RECLAIMALLOCATIONS_DEFINED
+typedef struct _D3DKMT_RECLAIMALLOCATIONS
+{
+    D3DKMT_HANDLE       hDevice;
+    D3DKMT_HANDLE      *pResources;
+    D3DKMT_HANDLE      *HandleList;
+    BOOL               *pDiscarded;
+    UINT                NumAllocations;
+} D3DKMT_RECLAIMALLOCATIONS;
+#endif
+
+#ifndef _D3DKMT_VIDPNSOURCEOWNER_FLAGS_DEFINED
+#define _D3DKMT_VIDPNSOURCEOWNER_FLAGS_DEFINED
+typedef struct _D3DKMT_VIDPNSOURCEOWNER_FLAGS
+{
+    union
+    {
+        struct
+        {
+            UINT AllowOutputDuplication : 1;
+            UINT DisableDWMVirtualMode  : 1;
+            UINT UseNtHandles           : 1;
+            UINT Reserved               : 29;
+        };
+        UINT Value;
+    };
+} D3DKMT_VIDPNSOURCEOWNER_FLAGS;
+#endif
+
+#ifndef _D3DKMT_SETVIDPNSOURCEOWNER1_DEFINED
+#define _D3DKMT_SETVIDPNSOURCEOWNER1_DEFINED
+typedef struct _D3DKMT_SETVIDPNSOURCEOWNER1
+{
+    D3DKMT_SETVIDPNSOURCEOWNER      Version0;
+    D3DKMT_VIDPNSOURCEOWNER_FLAGS   Flags;
+} D3DKMT_SETVIDPNSOURCEOWNER1;
+#endif
+
+/*
+ * WDDM 2.0 type fallbacks.
+ *
+ * These public types live behind DXGKDDI_INTERFACE_VERSION >= WDDM2_0 guards
+ * in d3dkmthk.h / d3dukmdt.h.  dxgkrnl pins the interface version to WIN7, so
+ * they are unavailable there even though the user-mode D3DKMT plumbing needs
+ * them.  Layout matches the public (_WIN32) definitions exactly so the IOCTL
+ * marshalling between win32k (WDDM3_0 public structs) and dxgkrnl is binary
+ * compatible.
+ */
+#ifndef _D3DKMT_WDDM2_FALLBACK_DEFINED
+#define _D3DKMT_WDDM2_FALLBACK_DEFINED
+
+typedef enum D3DDDI_PAGINGQUEUE_PRIORITY
+{
+    D3DDDI_PAGINGQUEUE_PRIORITY_BELOW_NORMAL = -1,
+    D3DDDI_PAGINGQUEUE_PRIORITY_NORMAL       = 0,
+    D3DDDI_PAGINGQUEUE_PRIORITY_ABOVE_NORMAL = 1,
+} D3DDDI_PAGINGQUEUE_PRIORITY;
+
+typedef struct _D3DKMT_CREATEPAGINGQUEUE
+{
+    D3DKMT_HANDLE               hDevice;
+    D3DDDI_PAGINGQUEUE_PRIORITY Priority;
+    D3DKMT_HANDLE               hPagingQueue;
+    D3DKMT_HANDLE               hSyncObject;
+    VOID                       *FenceValueCPUVirtualAddress;
+    UINT                        PhysicalAdapterIndex;
+} D3DKMT_CREATEPAGINGQUEUE;
+
+typedef struct D3DDDI_DESTROYPAGINGQUEUE
+{
+    D3DKMT_HANDLE               hPagingQueue;
+} D3DDDI_DESTROYPAGINGQUEUE;
+
+/*
+ * D3DKMT_MEMORY_SEGMENT_GROUP is declared unconditionally in d3dkmthk.h
+ * (no interface-version guard), so it is always available — do not redefine it.
+ */
+
+typedef struct _D3DKMT_QUERYVIDEOMEMORYINFO
+{
+    HANDLE                      hProcess;
+    D3DKMT_HANDLE               hAdapter;
+    D3DKMT_MEMORY_SEGMENT_GROUP MemorySegmentGroup;
+    UINT64                      Budget;
+    UINT64                      CurrentUsage;
+    UINT64                      CurrentReservation;
+    UINT64                      AvailableForReservation;
+    UINT                        PhysicalAdapterIndex;
+} D3DKMT_QUERYVIDEOMEMORYINFO;
+
+typedef struct D3DDDI_MAKERESIDENT_FLAGS
+{
+    union
+    {
+        struct
+        {
+            UINT CantTrimFurther : 1;
+            UINT MustSucceed     : 1;
+            UINT Reserved        : 30;
+        };
+        UINT Value;
+    };
+} D3DDDI_MAKERESIDENT_FLAGS;
+
+typedef struct D3DDDI_MAKERESIDENT
+{
+    D3DKMT_HANDLE               hPagingQueue;
+    UINT                        NumAllocations;
+    CONST D3DKMT_HANDLE        *AllocationList;
+    CONST UINT                 *PriorityList;
+    D3DDDI_MAKERESIDENT_FLAGS   Flags;
+    UINT64                      PagingFenceValue;
+    UINT64                      NumBytesToTrim;
+} D3DDDI_MAKERESIDENT;
+
+typedef struct D3DDDI_EVICT_FLAGS
+{
+    union
+    {
+        struct
+        {
+            UINT EvictOnlyIfNecessary : 1;
+            UINT NotWrittenTo         : 1;
+            UINT Reserved             : 30;
+        };
+        UINT Value;
+    };
+} D3DDDI_EVICT_FLAGS;
+
+typedef struct _D3DKMT_EVICT
+{
+    D3DKMT_HANDLE               hDevice;
+    UINT                        NumAllocations;
+    CONST D3DKMT_HANDLE        *AllocationList;
+    D3DDDI_EVICT_FLAGS          Flags;
+    UINT64                      NumBytesToTrim;
+} D3DKMT_EVICT;
+
+/*
+ * GPU virtual addressing.  Layouts are byte-for-byte identical to the public
+ * (_WIN32) WDDM 2.0 structures and to the dxgkrnl-private *_LOCAL copies, so
+ * the win32k <-> dxgkrnl IOCTL marshalling is binary compatible.  Bitfield
+ * protection/flags fields are represented by their backing scalar.
+ */
+typedef struct _D3DDDI_RESERVEGPUVIRTUALADDRESS
+{
+    union
+    {
+        D3DKMT_HANDLE           hPagingQueue;
+        D3DKMT_HANDLE           hAdapter;
+    };
+    D3DGPU_VIRTUAL_ADDRESS      BaseAddress;
+    D3DGPU_VIRTUAL_ADDRESS      MinimumAddress;
+    D3DGPU_VIRTUAL_ADDRESS      MaximumAddress;
+    UINT64                      Size;
+    UINT                        ReservationType;
+    UINT64                      DriverProtection;
+    D3DGPU_VIRTUAL_ADDRESS      VirtualAddress;
+    UINT64                      PagingFenceValue;
+} D3DDDI_RESERVEGPUVIRTUALADDRESS;
+
+typedef struct _D3DDDI_MAPGPUVIRTUALADDRESS
+{
+    D3DKMT_HANDLE               hPagingQueue;
+    D3DGPU_VIRTUAL_ADDRESS      BaseAddress;
+    D3DGPU_VIRTUAL_ADDRESS      MinimumAddress;
+    D3DGPU_VIRTUAL_ADDRESS      MaximumAddress;
+    D3DKMT_HANDLE               hAllocation;
+    UINT64                      OffsetInPages;
+    UINT64                      SizeInPages;
+    UINT64                      Protection;
+    UINT64                      DriverProtection;
+    UINT                        Reserved0;
+    UINT64                      Reserved1;
+    D3DGPU_VIRTUAL_ADDRESS      VirtualAddress;
+    UINT64                      PagingFenceValue;
+} D3DDDI_MAPGPUVIRTUALADDRESS;
+
+typedef struct _D3DKMT_FREEGPUVIRTUALADDRESS
+{
+    D3DKMT_HANDLE               hAdapter;
+    D3DGPU_VIRTUAL_ADDRESS      BaseAddress;
+    UINT64                      Size;
+} D3DKMT_FREEGPUVIRTUALADDRESS;
+
+typedef struct _D3DKMT_UPDATEGPUVIRTUALADDRESS
+{
+    D3DKMT_HANDLE               hDevice;
+    D3DKMT_HANDLE               hContext;
+    D3DKMT_HANDLE               hFenceObject;
+    UINT                        NumOperations;
+    VOID                       *Operations;
+    UINT64                      Reserved0;
+    UINT64                      Reserved1;
+    UINT64                      FenceValue;
+    union
+    {
+        struct
+        {
+            UINT DoNotWait : 1;
+            UINT Reserved  : 31;
+        };
+        UINT Value;
+    } Flags;
+} D3DKMT_UPDATEGPUVIRTUALADDRESS;
+
+/*
+ * Monitored-fence CPU wait/signal.  Flags fields are represented by their
+ * backing UINT (the public D3DDDICB_SIGNALFLAGS / *_FROMCPU_FLAGS are UINT
+ * sized) so the layout matches without pulling in the guarded flag types.
+ */
+typedef struct _D3DKMT_WAITFORSYNCHRONIZATIONOBJECTFROMCPU
+{
+    D3DKMT_HANDLE               hDevice;
+    UINT                        ObjectCount;
+    CONST D3DKMT_HANDLE        *ObjectHandleArray;
+    CONST UINT64               *FenceValueArray;
+    HANDLE                      hAsyncEvent;
+    UINT                        Flags;
+} D3DKMT_WAITFORSYNCHRONIZATIONOBJECTFROMCPU;
+
+typedef struct _D3DKMT_SIGNALSYNCHRONIZATIONOBJECTFROMCPU
+{
+    D3DKMT_HANDLE               hDevice;
+    UINT                        ObjectCount;
+    CONST D3DKMT_HANDLE        *ObjectHandleArray;
+    CONST UINT64               *FenceValueArray;
+    UINT                        Flags;
+} D3DKMT_SIGNALSYNCHRONIZATIONOBJECTFROMCPU;
+
+#endif /* _D3DKMT_WDDM2_FALLBACK_DEFINED */
+
+#endif /* WDDM 1.2 type fallbacks */
+
+/*
+ * D3DKMT_WAITFORVERTICALBLANKEVENT2 is always defined in d3dkmthk.h
+ * (not behind any interface-version guard), so no fallback is needed.
+ */
+
+/* WDDM 1.2 callback types */
+
+typedef
+NTSTATUS
+DXGADAPTER_ENUMADAPTERS(_Inout_ D3DKMT_ENUMADAPTERS* unnamedParam1);
+
+typedef DXGADAPTER_ENUMADAPTERS *PDXGADAPTER_ENUMADAPTERS;
+
+typedef
+NTSTATUS
+DXGADAPTER_OPENADAPTERFROMLUID(_Inout_ D3DKMT_OPENADAPTERFROMLUID* unnamedParam1);
+
+typedef DXGADAPTER_OPENADAPTERFROMLUID *PDXGADAPTER_OPENADAPTERFROMLUID;
+
+typedef
+NTSTATUS
+DXGADAPTER_OFFERALLOCATIONS(_In_ const D3DKMT_OFFERALLOCATIONS* unnamedParam1);
+
+typedef DXGADAPTER_OFFERALLOCATIONS *PDXGADAPTER_OFFERALLOCATIONS;
+
+typedef
+NTSTATUS
+DXGADAPTER_RECLAIMALLOCATIONS(_Inout_ D3DKMT_RECLAIMALLOCATIONS* unnamedParam1);
+
+typedef DXGADAPTER_RECLAIMALLOCATIONS *PDXGADAPTER_RECLAIMALLOCATIONS;
+
+typedef
+NTSTATUS
+DXGADAPTER_SETVIDPNSOURCEOWNER1(_In_ const D3DKMT_SETVIDPNSOURCEOWNER1* unnamedParam1);
+
+typedef DXGADAPTER_SETVIDPNSOURCEOWNER1 *PDXGADAPTER_SETVIDPNSOURCEOWNER1;
+
+typedef
+NTSTATUS
+DXGADAPTER_WAITFORVERTICALBLANKEVENT2(_In_ const D3DKMT_WAITFORVERTICALBLANKEVENT2* unnamedParam1);
+
+typedef DXGADAPTER_WAITFORVERTICALBLANKEVENT2 *PDXGADAPTER_WAITFORVERTICALBLANKEVENT2;
+
+typedef
+NTSTATUS
+DXGADAPTER_CREATESYNCHRONIZATIONOBJECT2(_Inout_ D3DKMT_CREATESYNCHRONIZATIONOBJECT2* unnamedParam1);
+
+typedef DXGADAPTER_CREATESYNCHRONIZATIONOBJECT2 *PDXGADAPTER_CREATESYNCHRONIZATIONOBJECT2;
+
+typedef
+NTSTATUS
+DXGADAPTER_WAITFORSYNCHRONIZATIONOBJECT2(_In_ const D3DKMT_WAITFORSYNCHRONIZATIONOBJECT2* unnamedParam1);
+
+typedef DXGADAPTER_WAITFORSYNCHRONIZATIONOBJECT2 *PDXGADAPTER_WAITFORSYNCHRONIZATIONOBJECT2;
+
+typedef
+NTSTATUS
+DXGADAPTER_SIGNALSYNCHRONIZATIONOBJECT2(_In_ const D3DKMT_SIGNALSYNCHRONIZATIONOBJECT2* unnamedParam1);
+
+typedef DXGADAPTER_SIGNALSYNCHRONIZATIONOBJECT2 *PDXGADAPTER_SIGNALSYNCHRONIZATIONOBJECT2;
+
+/* WDDM 2.0 additions */
+
+typedef
+NTSTATUS
+DXGADAPTER_MAKERESIDENT(_Inout_ D3DDDI_MAKERESIDENT* unnamedParam1);
+
+typedef DXGADAPTER_MAKERESIDENT *PDXGADAPTER_MAKERESIDENT;
+
+typedef
+NTSTATUS
+DXGADAPTER_EVICT(_Inout_ D3DKMT_EVICT* unnamedParam1);
+
+typedef DXGADAPTER_EVICT *PDXGADAPTER_EVICT;
+
+typedef
+NTSTATUS
+DXGADAPTER_QUERYVIDEOMEMORYINFO(_Inout_ D3DKMT_QUERYVIDEOMEMORYINFO* unnamedParam1);
+
+typedef DXGADAPTER_QUERYVIDEOMEMORYINFO *PDXGADAPTER_QUERYVIDEOMEMORYINFO;
+
+typedef
+NTSTATUS
+DXGADAPTER_CREATEPAGINGQUEUE(_Inout_ D3DKMT_CREATEPAGINGQUEUE* unnamedParam1);
+
+typedef DXGADAPTER_CREATEPAGINGQUEUE *PDXGADAPTER_CREATEPAGINGQUEUE;
+
+typedef
+NTSTATUS
+DXGADAPTER_DESTROYPAGINGQUEUE(_Inout_ D3DDDI_DESTROYPAGINGQUEUE* unnamedParam1);
+
+typedef DXGADAPTER_DESTROYPAGINGQUEUE *PDXGADAPTER_DESTROYPAGINGQUEUE;
+
+typedef
+NTSTATUS
+DXGADAPTER_RESERVEGPUVIRTUALADDRESS(_Inout_ D3DDDI_RESERVEGPUVIRTUALADDRESS* unnamedParam1);
+
+typedef DXGADAPTER_RESERVEGPUVIRTUALADDRESS *PDXGADAPTER_RESERVEGPUVIRTUALADDRESS;
+
+typedef
+NTSTATUS
+DXGADAPTER_MAPGPUVIRTUALADDRESS(_Inout_ D3DDDI_MAPGPUVIRTUALADDRESS* unnamedParam1);
+
+typedef DXGADAPTER_MAPGPUVIRTUALADDRESS *PDXGADAPTER_MAPGPUVIRTUALADDRESS;
+
+typedef
+NTSTATUS
+DXGADAPTER_FREEGPUVIRTUALADDRESS(_In_ const D3DKMT_FREEGPUVIRTUALADDRESS* unnamedParam1);
+
+typedef DXGADAPTER_FREEGPUVIRTUALADDRESS *PDXGADAPTER_FREEGPUVIRTUALADDRESS;
+
+typedef
+NTSTATUS
+DXGADAPTER_UPDATEGPUVIRTUALADDRESS(_In_ const D3DKMT_UPDATEGPUVIRTUALADDRESS* unnamedParam1);
+
+typedef DXGADAPTER_UPDATEGPUVIRTUALADDRESS *PDXGADAPTER_UPDATEGPUVIRTUALADDRESS;
+
+typedef
+NTSTATUS
+DXGADAPTER_WAITFORSYNCHRONIZATIONOBJECTFROMCPU(_In_ const D3DKMT_WAITFORSYNCHRONIZATIONOBJECTFROMCPU* unnamedParam1);
+
+typedef DXGADAPTER_WAITFORSYNCHRONIZATIONOBJECTFROMCPU *PDXGADAPTER_WAITFORSYNCHRONIZATIONOBJECTFROMCPU;
+
+typedef
+NTSTATUS
+DXGADAPTER_SIGNALSYNCHRONIZATIONOBJECTFROMCPU(_In_ const D3DKMT_SIGNALSYNCHRONIZATIONOBJECTFROMCPU* unnamedParam1);
+
+typedef DXGADAPTER_SIGNALSYNCHRONIZATIONOBJECTFROMCPU *PDXGADAPTER_SIGNALSYNCHRONIZATIONOBJECTFROMCPU;
 
 /*
  * This structure is the callbacks list that exist between DXGKNRL and Win32k.
@@ -407,4 +847,28 @@ typedef struct _REACTOS_WIN32K_DXGKRNL_INTERFACE
     PDXGADAPTER_SETDISPLAYMODE RxgkIntPfnSetDisplayMode;
     PDXGADAPTER_SETDISPLAYPRIVATEDRIVERFORMAT RxgkIntPfnSetDisplayPrivateDriverFormat;
     PDXGADAPTER_UNLOCK RxgkIntPfnUnlock;
+
+    /* WDDM 1.2 additions */
+    PDXGADAPTER_ENUMADAPTERS RxgkIntPfnEnumAdapters;
+    PDXGADAPTER_OPENADAPTERFROMLUID RxgkIntPfnOpenAdapterFromLuid;
+    PDXGADAPTER_OFFERALLOCATIONS RxgkIntPfnOfferAllocations;
+    PDXGADAPTER_RECLAIMALLOCATIONS RxgkIntPfnReclaimAllocations;
+    PDXGADAPTER_SETVIDPNSOURCEOWNER1 RxgkIntPfnSetVidPnSourceOwner1;
+    PDXGADAPTER_WAITFORVERTICALBLANKEVENT2 RxgkIntPfnWaitForVerticalBlankEvent2;
+    PDXGADAPTER_CREATESYNCHRONIZATIONOBJECT2 RxgkIntPfnCreateSynchronizationObject2;
+    PDXGADAPTER_WAITFORSYNCHRONIZATIONOBJECT2 RxgkIntPfnWaitForSynchronizationObject2;
+    PDXGADAPTER_SIGNALSYNCHRONIZATIONOBJECT2 RxgkIntPfnSignalSynchronizationObject2;
+
+    /* WDDM 2.0 additions */
+    PDXGADAPTER_MAKERESIDENT RxgkIntPfnMakeResident;
+    PDXGADAPTER_EVICT RxgkIntPfnEvict;
+    PDXGADAPTER_QUERYVIDEOMEMORYINFO RxgkIntPfnQueryVideoMemoryInfo;
+    PDXGADAPTER_CREATEPAGINGQUEUE RxgkIntPfnCreatePagingQueue;
+    PDXGADAPTER_DESTROYPAGINGQUEUE RxgkIntPfnDestroyPagingQueue;
+    PDXGADAPTER_RESERVEGPUVIRTUALADDRESS RxgkIntPfnReserveGpuVirtualAddress;
+    PDXGADAPTER_MAPGPUVIRTUALADDRESS RxgkIntPfnMapGpuVirtualAddress;
+    PDXGADAPTER_FREEGPUVIRTUALADDRESS RxgkIntPfnFreeGpuVirtualAddress;
+    PDXGADAPTER_UPDATEGPUVIRTUALADDRESS RxgkIntPfnUpdateGpuVirtualAddress;
+    PDXGADAPTER_WAITFORSYNCHRONIZATIONOBJECTFROMCPU RxgkIntPfnWaitForSynchronizationObjectFromCpu;
+    PDXGADAPTER_SIGNALSYNCHRONIZATIONOBJECTFROMCPU RxgkIntPfnSignalSynchronizationObjectFromCpu;
 } REACTOS_WIN32K_DXGKRNL_INTERFACE, *PREACTOS_WIN32K_DXGKRNL_INTERFACE;

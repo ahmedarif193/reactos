@@ -49,11 +49,11 @@ IntVideoPortGetMonitorId(
 
     /* Convert the Monitor ID to a readable form */
     _swprintf(Buffer,
-              L"%C%C%C%04hx",
-              (WCHAR)((Manufacturer >> 10 & 0x001F) + 'A' - 1),
-              (WCHAR)((Manufacturer >> 5 & 0x001F) + 'A' - 1),
-              (WCHAR)((Manufacturer & 0x001F) + 'A' - 1),
-              Model);
+             L"%C%C%C%04hx",
+             (WCHAR)((Manufacturer >> 10 & 0x001F) + 'A' - 1),
+             (WCHAR)((Manufacturer >> 5 & 0x001F) + 'A' - 1),
+             (WCHAR)((Manufacturer & 0x001F) + 'A' - 1),
+             Model);
 
     /* And we're done */
     return TRUE;
@@ -407,6 +407,8 @@ IntVideoPortDispatchPdoPnp(
 {
     PIO_STACK_LOCATION IrpSp;
     NTSTATUS Status = Irp->IoStatus.Status;
+    PVIDEO_PORT_CHILD_EXTENSION ChildExtension = DeviceObject->DeviceExtension;
+    PVIDEO_PORT_DEVICE_EXTENSION ParentExtension = ChildExtension->ParentDeviceExtension;
 
     IrpSp = IoGetCurrentIrpStackLocation(Irp);
 
@@ -425,14 +427,14 @@ IntVideoPortDispatchPdoPnp(
 
         case IRP_MN_QUERY_ID:
             /* Call our helper */
-            Status = IntVideoPortChildQueryId(DeviceObject->DeviceExtension,
+            Status = IntVideoPortChildQueryId(ChildExtension,
                                               Irp,
                                               IrpSp);
             break;
 
         case IRP_MN_QUERY_CAPABILITIES:
             /* Call our helper */
-            Status = IntVideoPortChildQueryCapabilities(DeviceObject->DeviceExtension,
+            Status = IntVideoPortChildQueryCapabilities(ChildExtension,
                                                         Irp,
                                                         IrpSp);
             break;
@@ -444,20 +446,22 @@ IntVideoPortDispatchPdoPnp(
 
         case IRP_MN_REMOVE_DEVICE:
             Irp->IoStatus.Status = STATUS_SUCCESS;
+            if (ParentExtension)
+                RemoveEntryList(&ChildExtension->ListEntry);
             IoCompleteRequest(Irp, IO_NO_INCREMENT);
             IoDeleteDevice(DeviceObject);
             return STATUS_SUCCESS;
 
         case IRP_MN_QUERY_DEVICE_RELATIONS:
             /* Call our helper */
-            Status = IntVideoPortChildQueryRelations(DeviceObject->DeviceExtension,
+            Status = IntVideoPortChildQueryRelations(ChildExtension,
                                                      Irp,
                                                      IrpSp);
             break;
 
         case IRP_MN_QUERY_DEVICE_TEXT:
             /* Call our helper */
-            Status = IntVideoPortChildQueryText(DeviceObject->DeviceExtension,
+            Status = IntVideoPortChildQueryText(ChildExtension,
                                                 Irp,
                                                 IrpSp);
             break;
