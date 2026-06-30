@@ -1007,6 +1007,25 @@ RtlpNtSetValueKey(IN HANDLE KeyHandle,
 
 /*
  * @implemented
+ *
+ * RtlQueryRegistryValuesEx shares RtlQueryRegistryValues' prototype and
+ * contract. KMDF (wdf01000) resolves it via MmGetSystemRoutineAddress and
+ * calls it during driver init, so on ARM64 it must be a real export rather
+ * than a raising stub (which bugchecks 0x7E in the storport/cdrom boot path).
+ */
+NTSTATUS
+NTAPI
+RtlQueryRegistryValuesEx(IN ULONG RelativeTo,
+                         IN PCWSTR Path,
+                         IN PRTL_QUERY_REGISTRY_TABLE QueryTable,
+                         IN PVOID Context,
+                         IN PVOID Environment OPTIONAL)
+{
+    return RtlQueryRegistryValues(RelativeTo, Path, QueryTable, Context, Environment);
+}
+
+/*
+ * @implemented
  */
 NTSTATUS
 NTAPI

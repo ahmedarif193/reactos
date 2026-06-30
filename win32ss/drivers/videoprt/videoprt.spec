@@ -1,3 +1,4 @@
+@ varargs ScsiPortNotification(long ptr) VideoPortNotification
 @ stdcall VideoPortAcquireDeviceLock(ptr)
 @ stdcall VideoPortAcquireSpinLock(ptr ptr ptr)
 @ stdcall VideoPortAcquireSpinLockAtDpcLevel(ptr ptr)
@@ -19,6 +20,9 @@
 @ stdcall VideoPortCreateSecondaryDisplay(ptr ptr long)
 @ stdcall VideoPortCreateSpinLock(ptr ptr)
 @ stdcall VideoPortDDCMonitorHelper(ptr ptr ptr long)
+@ stdcall VideoPortDbgReportComplete(ptr)
+@ stdcall VideoPortDbgReportCreate(ptr long ptr ptr ptr ptr)
+@ stdcall VideoPortDbgReportSecondaryData(ptr ptr long)
 @ varargs VideoPortDebugPrint(long str)
 @ stdcall VideoPortDeleteEvent(ptr ptr)
 @ stdcall VideoPortDeleteSpinLock(ptr ptr)
@@ -46,9 +50,10 @@
 @ stdcall VideoPortGetRegistryParameters(ptr wstr long ptr ptr)
 @ stdcall VideoPortGetRomImage(ptr ptr long long)
 @ stdcall VideoPortGetVersion(ptr ptr)
+@ stdcall VideoPortGetPowerState(ptr long ptr)
 @ stdcall VideoPortGetVgaStatus(ptr ptr)
 @ stdcall VideoPortInitialize(ptr ptr ptr ptr)
-@ stdcall VideoPortInt10(ptr ptr)
+@ stdcall -arch=i386,x86_64 VideoPortInt10(ptr ptr)
 ;;@ fastcall -arch=i386,arm VideoPortInterlockedDecrement(ptr) NTOSKRNL.InterlockedDecrement
 ;;@ fastcall -arch=x86_64 VideoPortInterlockedDecrement(ptr)
 @ fastcall VideoPortInterlockedDecrement(ptr)
@@ -66,10 +71,12 @@
 @ stdcall VideoPortMapDmaMemory(ptr ptr double ptr ptr ptr ptr ptr)
 @ stdcall VideoPortMapMemory(ptr long long ptr ptr ptr)
 @ stdcall VideoPortMoveMemory(ptr ptr long) NTOSKRNL.RtlMoveMemory
+@ varargs VideoPortNotification(long ptr)
 @ stdcall VideoPortPutDmaAdapter(ptr ptr)
 @ stdcall VideoPortQueryPerformanceCounter(ptr ptr)
 @ stdcall VideoPortQueryServices(ptr long ptr)
-@ stdcall VideoPortQuerySystemTime(ptr)
+@ stdcall -arch=i386,arm VideoPortQuerySystemTime(ptr) NTOSKRNL.KeQuerySystemTime
+@ stdcall -arch=x86_64,arm64 VideoPortQuerySystemTime(ptr)
 @ stdcall VideoPortQueueDpc(ptr ptr ptr)
 @ stdcall -arch=i386,arm VideoPortReadPortBufferUchar(ptr ptr long) HAL.READ_PORT_BUFFER_UCHAR
 @ stdcall -arch=x86_64,arm64 VideoPortReadPortBufferUchar(ptr ptr long)
@@ -104,9 +111,11 @@
 @ stdcall VideoPortReleaseSpinLockFromDpcLevel(ptr ptr)
 @ stdcall VideoPortScanRom(ptr ptr long ptr)
 @ stdcall VideoPortSetBusData(ptr long long ptr long long)
+@ stdcall VideoPortSetAccessRanges(ptr long ptr)
 @ stdcall VideoPortSetBytesUsed(ptr ptr long)
 @ stdcall VideoPortSetDmaContext(ptr ptr ptr)
 @ stdcall VideoPortSetEvent(ptr ptr)
+@ stdcall VideoPortSetPowerState(ptr long ptr)
 @ stdcall VideoPortSetRegistryParameters(ptr wstr ptr long)
 @ stdcall VideoPortSetTrappedEmulatorPorts(ptr long ptr)
 @ stdcall VideoPortSignalDmaComplete(ptr ptr)
@@ -147,5 +156,6 @@
 @ stdcall -arch=x86_64,arm64 VideoPortWriteRegisterUshort(ptr long)
 @ stdcall VideoPortZeroDeviceMemory(ptr long) NTOSKRNL.RtlZeroMemory
 @ stdcall VideoPortZeroMemory(ptr long) NTOSKRNL.RtlZeroMemory
+@ stdcall VideoPortCacheAccessRanges(ptr long ptr)
 @ stdcall VpNotifyEaData(ptr ptr)
 @ stdcall WdDdiWatchdogDpcCallback(ptr ptr ptr ptr)

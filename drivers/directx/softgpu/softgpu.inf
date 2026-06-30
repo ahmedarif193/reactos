@@ -1,0 +1,75 @@
+; SOFTGPU.INF
+;
+; Installation file for the ReactOS WDDM Null/Software GPU Miniport.
+;
+; Targets:
+;   PCI\VEN_1234&DEV_1111  — QEMU Standard VGA / BOCHS Display Adapter
+;   ROOT\SOFTGPU           — Root-enumerated virtual display adapter
+;
+; Class: Display (WDDM kernel-mode driver)
+
+[Version]
+Signature  = "$Windows NT$"
+LayoutFile = layout.inf
+Class      = Display
+ClassGUID  = {4D36E968-E325-11CE-BFC1-08002BE10318}
+Provider   = %ReactOS%
+DriverVer  = 01/01/2024,6.0.0.0
+
+[DestinationDirs]
+DefaultDestDir = 12      ; %windir%\system32\drivers
+
+[Manufacturer]
+%ReactOSMfg% = ReactOSDisplayDevices,NTamd64,NTarm64
+
+; --- amd64 device list ---
+
+[ReactOSDisplayDevices.NTamd64]
+%SoftGPU.DeviceDesc% = SoftGPU_Inst, PCI\VEN_1234&DEV_1111
+%SoftGPU.DeviceDesc% = SoftGPU_Inst, PCI\VEN_1234&DEV_1111&SUBSYS_00000000
+%SoftGPU.DeviceDesc% = SoftGPU_Inst, ROOT\SOFTGPU
+
+; --- arm64 device list ---
+; On ARM64 QEMU virt the firmware framebuffer is enumerated by freeldr
+; (DetectDisplayController) as the UEFI GOP device -> ntoskrnl PnP device
+; DETECTEDInternal\uefifb. With XPDM (uefifb.sys) retired, softgpu claims it
+; and drives it through the WDDM stack (dxgkrnl display-only path -> GOP).
+
+[ReactOSDisplayDevices.NTarm64]
+%SoftGPU.DeviceDesc% = SoftGPU_Inst, DETECTEDInternal\uefifb
+%SoftGPU.DeviceDesc% = SoftGPU_Inst, DETECTED\uefifb
+%SoftGPU.DeviceDesc% = SoftGPU_Inst, ROOT\UEFIFB
+%SoftGPU.DeviceDesc% = SoftGPU_Inst, ROOT\SOFTGPU
+
+; --- Install section ---
+
+[SoftGPU_Inst.NTamd64]
+CopyFiles = SoftGPU_CopyFiles
+
+[SoftGPU_Inst.NTarm64]
+CopyFiles = SoftGPU_CopyFiles
+
+[SoftGPU_CopyFiles]
+softgpu.sys
+
+; --- Service install ---
+
+[SoftGPU_Inst.NTamd64.Services]
+AddService = softgpu, 0x00000002, SoftGPU_Service_Inst
+
+[SoftGPU_Inst.NTarm64.Services]
+AddService = softgpu, 0x00000002, SoftGPU_Service_Inst
+
+[SoftGPU_Service_Inst]
+ServiceType    = 1                  ; SERVICE_KERNEL_DRIVER
+StartType      = 3                  ; SERVICE_DEMAND_START
+ErrorControl   = 0                  ; SERVICE_ERROR_IGNORE
+ServiceBinary  = %12%\softgpu.sys
+LoadOrderGroup = Video
+
+; --- Strings ---
+
+[Strings]
+ReactOS            = "ReactOS Project"
+ReactOSMfg         = "ReactOS WDDM Software GPU"
+SoftGPU.DeviceDesc = "ReactOS WDDM Null/Software GPU (softgpu)"

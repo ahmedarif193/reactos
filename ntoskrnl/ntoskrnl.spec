@@ -338,6 +338,7 @@
 @ stdcall InbvEnableBootDriver(long)
 @ stdcall InbvEnableDisplayString(long)
 @ stdcall InbvGetGopFrameBufferInfo(ptr)
+@ stdcall InbvHasValidGopFrameBuffer()
 @ stdcall InbvInstallDisplayStringFilter(ptr)
 @ stdcall InbvIsBootDriverInstalled()
 @ stdcall InbvNotifyDisplayOwnershipLost(ptr)
@@ -2899,7 +2900,7 @@
 @ stub -arch=arm64 PsRemoveSiloContext
 @ stub -arch=arm64 PsReplaceSiloContext
 @ stub -arch=arm64 PsRevertToUserMultipleGroupAffinityThread
-@ stub -arch=arm64 PsSetCreateProcessNotifyRoutineEx
+@ stdcall -arch=arm64 PsSetCreateProcessNotifyRoutineEx(ptr long)
 @ stub -arch=arm64 PsSetCreateProcessNotifyRoutineEx2
 @ stub -arch=arm64 PsSetCreateThreadNotifyRoutineEx
 @ stub -arch=arm64 PsSetCurrentThreadPrefetching
@@ -3093,7 +3094,7 @@
 @ stub -arch=arm64 RtlQueryProcessPlaceholderCompatibilityMode
 @ stub -arch=arm64 RtlQueryPropertyStore
 @ stub -arch=arm64 RtlQueryRegistryValueWithFallback
-@ stub -arch=arm64 RtlQueryRegistryValuesEx
+@ stdcall -arch=arm64 RtlQueryRegistryValuesEx(long wstr ptr ptr ptr)
 @ stub -arch=arm64 RtlQueryThreadPlaceholderCompatibilityMode
 @ stub -arch=arm64 RtlQueryValidationRunlevel
 @ stub -arch=arm64 RtlRaiseCustomSystemEventTrigger
