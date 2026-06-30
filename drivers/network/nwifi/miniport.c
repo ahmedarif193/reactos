@@ -50,7 +50,7 @@ NwifiSetMiniportAttributes(
      * Native802_11 keeps the wireless nature discoverable (matches Windows
      * nwifi: MediaType 802_3, PhysicalMediumType NativeWifi). */
     GenAttr.MediaType = NdisMedium802_3;
-    GenAttr.PhysicalMediumType = (NDIS_MEDIUM)NdisPhysicalMediumNative802_11;
+    GenAttr.PhysicalMediumType = NdisPhysicalMediumNative802_11;
     GenAttr.MtuSize = ETH_MTU;
     GenAttr.MaxXmitLinkSpeed = NWIFI_DEFAULT_LINK_SPEED;
     GenAttr.MaxRcvLinkSpeed = NWIFI_DEFAULT_LINK_SPEED;

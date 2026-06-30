@@ -837,7 +837,7 @@ NdisMMapIoSpace(
       return Ndis6MMapIoSpace(VirtualAddress, MiniportAdapterHandle, PhysicalAddress, Length);
   }
 
-  if(!HalTranslateBusAddress(Adapter->NdisMiniportBlock.BusType, Adapter->NdisMiniportBlock.BusNumber,
+  if(!HalTranslateBusAddress((INTERFACE_TYPE)Adapter->NdisMiniportBlock.BusType, Adapter->NdisMiniportBlock.BusNumber,
                              PhysicalAddress, &AddressSpace, &TranslatedAddress))
   {
       NDIS_DbgPrint(MIN_TRACE, ("Unable to translate address\n"));
@@ -1018,7 +1018,7 @@ NdisMRegisterInterrupt(
   Interrupt->IsrRequested = RequestIsr;
   Interrupt->Miniport = &Adapter->NdisMiniportBlock;
 
-  MappedIRQ = HalGetInterruptVector(Adapter->NdisMiniportBlock.BusType, Adapter->NdisMiniportBlock.BusNumber,
+  MappedIRQ = HalGetInterruptVector((INTERFACE_TYPE)Adapter->NdisMiniportBlock.BusType, Adapter->NdisMiniportBlock.BusNumber,
                                     InterruptLevel, InterruptVector, &DIrql,
                                     &Affinity);
 
@@ -1096,7 +1096,7 @@ NdisMRegisterIoPortRange(
 
   NDIS_DbgPrint(MAX_TRACE, ("Translating address 0x%x 0x%x\n", PortAddress.u.HighPart, PortAddress.u.LowPart));
 
-  if(!HalTranslateBusAddress(Adapter->NdisMiniportBlock.BusType, Adapter->NdisMiniportBlock.BusNumber,
+  if(!HalTranslateBusAddress((INTERFACE_TYPE)Adapter->NdisMiniportBlock.BusType, Adapter->NdisMiniportBlock.BusNumber,
                              PortAddress, &AddressSpace, &TranslatedAddress))
     {
       NDIS_DbgPrint(MIN_TRACE, ("Unable to translate address\n"));
@@ -1161,7 +1161,7 @@ NdisMDeregisterIoPortRange(IN  NDIS_HANDLE MiniportAdapterHandle,
     }
 
     /* Translate the initial port again to find the address space of the translated address */
-    if(!HalTranslateBusAddress(Adapter->NdisMiniportBlock.BusType, Adapter->NdisMiniportBlock.BusNumber,
+    if(!HalTranslateBusAddress((INTERFACE_TYPE)Adapter->NdisMiniportBlock.BusType, Adapter->NdisMiniportBlock.BusNumber,
                                PortAddress, &AddressSpace, &TranslatedAddress))
     {
         NDIS_DbgPrint(MIN_TRACE, ("Unable to translate address\n"));
