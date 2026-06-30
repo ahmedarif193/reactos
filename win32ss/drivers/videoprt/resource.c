@@ -1317,7 +1317,7 @@ VideoPortAllocatePool(
    IN ULONG Tag)
 {
    TRACE_(VIDEOPRT, "VideoPortAllocatePool\n");
-   return ExAllocatePoolWithTag(PoolType, NumberOfBytes, Tag);
+   return ExAllocatePoolWithTag((POOL_TYPE)PoolType, NumberOfBytes, Tag);
 }
 
 /*
@@ -1379,7 +1379,7 @@ VideoPortLockBuffer(
         return NULL;
     }
     /* FIXME use seh */
-    MmProbeAndLockPages(Mdl, KernelMode,Operation);
+    MmProbeAndLockPages(Mdl, KernelMode, (LOCK_OPERATION)Operation);
     return Mdl;
 }
 
@@ -1408,7 +1408,7 @@ VideoPortLockPages(
     }
 
     /* lock the buffer */
-    Buffer = VideoPortLockBuffer(HwDeviceExtension, pVrp->InputBuffer, pVrp->InputBufferLength, IoModifyAccess);
+    Buffer = VideoPortLockBuffer(HwDeviceExtension, pVrp->InputBuffer, pVrp->InputBufferLength, (VP_LOCK_OPERATION)IoModifyAccess);
 
     if (Buffer)
     {
