@@ -2081,7 +2081,7 @@
 @ stub -arch=arm64 EtwEnableTrace
 @ stub -arch=arm64 EtwEventEnabled
 @ stub -arch=arm64 EtwProviderEnabled
-@ stub -arch=arm64 EtwRegisterClassicProvider
+@ stdcall EtwRegisterClassicProvider(ptr long ptr ptr ptr)
 @ stub -arch=arm64 EtwSendTraceBuffer
 @ stub -arch=arm64 EtwSetInformation
 @ stub -arch=arm64 EtwTelemetryCoverageReport
