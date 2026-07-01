@@ -44,6 +44,9 @@ set_module_type(softgpu kernelmodedriver)
 add_importlibs(softgpu dxgkrnl ntoskrnl hal)
 add_pch(softgpu softgpu.h "${SOURCE}")
 add_cd_file(TARGET softgpu DESTINATION reactos/system32/drivers FOR all)
-# Index softgpu.inf into the PnP driver database so it matches the firmware
-# framebuffer device (DETECTEDInternal\uefifb) once XPDM/uefifb is retired.
-add_driver_inf(softgpu softgpu.inf)
+# softgpu.inf is intentionally NOT indexed into the PnP driver database: the
+# genuine virtio-gpu WDDM DOD (viogpudo) drives the display, and indexing
+# softgpu.inf would let it auto-bind the firmware framebuffer device
+# (DETECTEDInternal\uefifb), reintroducing the two-adapter mode conflict.
+# softgpu.sys stays on the image as a manual fail-safe but is not enumerated.
+# add_driver_inf(softgpu softgpu.inf)

@@ -11,3 +11,4 @@
 add_subdirectory(dxgmms1)
 add_subdirectory(dxgkrnl)
 add_subdirectory(softgpu)   # software WDDM test miniport (binds via PnP, drives dxgkrnl)
+add_subdirectory(viogpu)    # GENUINE Red Hat viogpudo.sys (virtio-win, as-is) for the QEMU virtio-gpu PCI device

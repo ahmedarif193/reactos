@@ -1,0 +1,33 @@
+; Service + CriticalDeviceDatabase registration for the GENUINE Red Hat
+; VirtIO GPU WDDM Display-Only Driver (viogpudo.sys), used AS-IS from
+; virtio-win (md5 de615259c5a259be6089490cd6b2fc75, ARM64, w11/2k25).
+;
+; PnP binds it to the QEMU virtio-gpu PCI device (VEN_1AF4&DEV_1050, modern;
+; DEV_1000 transitional) via the CriticalDeviceDatabase, exactly like the
+; native virtgpu miniport.  dxgkrnl loads it as a WDDM DOD miniport.
+
+[AddReg]
+; MSI-X is left ENABLED (the ARM64 default): dxgkrnl detects the message-based
+; interrupt from the RAW resource descriptor and connects it CONNECT_MESSAGE_BASED
+; (the TRANSLATED descriptor drops CM_RESOURCE_INTERRUPT_MESSAGE on ROS ARM64),
+; so the viogpudo ISR fires on the device's MSI-X vector for runtime present/
+; cursor completions.  (StartDevice itself polls the virtio queues.)
+HKLM,"SYSTEM\CurrentControlSet\Control\CriticalDeviceDatabase\PCI#VEN_1AF4&DEV_1050","ClassGUID",0x00000000,"{4D36E968-E325-11CE-BFC1-08002BE10318}"
+HKLM,"SYSTEM\CurrentControlSet\Control\CriticalDeviceDatabase\PCI#VEN_1AF4&DEV_1050","Service",0x00000000,"viogpudo"
+HKLM,"SYSTEM\CurrentControlSet\Control\CriticalDeviceDatabase\PCI#VEN_1AF4&DEV_1000&SUBSYS_00101AF4","ClassGUID",0x00000000,"{4D36E968-E325-11CE-BFC1-08002BE10318}"
+HKLM,"SYSTEM\CurrentControlSet\Control\CriticalDeviceDatabase\PCI#VEN_1AF4&DEV_1000&SUBSYS_00101AF4","Service",0x00000000,"viogpudo"
+
+HKLM,"SYSTEM\CurrentControlSet\Services\viogpudo","ErrorControl",0x00010001,0x00000000
+HKLM,"SYSTEM\CurrentControlSet\Services\viogpudo","Group",0x00000000,"Video"
+HKLM,"SYSTEM\CurrentControlSet\Services\viogpudo","ImagePath",0x00020000,"system32\drivers\viogpudo.sys"
+HKLM,"SYSTEM\CurrentControlSet\Services\viogpudo","Start",0x00010001,0x00000001
+HKLM,"SYSTEM\CurrentControlSet\Services\viogpudo","Type",0x00010001,0x00000001
+HKLM,"SYSTEM\CurrentControlSet\Services\viogpudo","Tag",0x00010001,0x00000002
+HKLM,"SYSTEM\CurrentControlSet\Services\viogpudo\Video","Service",0x00000000,"viogpudo"
+
+HKLM,"SYSTEM\CurrentControlSet\Services\viogpudo\Device0","Device Description",0x00000000,"Red Hat VirtIO GPU DOD"
+HKLM,"SYSTEM\CurrentControlSet\Services\viogpudo\Device0","DefaultSettings.BitsPerPel",0x00010001,0x00000020
+HKLM,"SYSTEM\CurrentControlSet\Services\viogpudo\Device0","DefaultSettings.XResolution",0x00010001,0x00000400
+HKLM,"SYSTEM\CurrentControlSet\Services\viogpudo\Device0","DefaultSettings.YResolution",0x00010001,0x00000300
+HKLM,"SYSTEM\CurrentControlSet\Services\viogpudo\Device0","DefaultSettings.VRefresh",0x00010001,0x00000001
+HKLM,"SYSTEM\CurrentControlSet\Services\viogpudo\Device0","VgaCompatible",0x00010001,0x00000000

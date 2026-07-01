@@ -12,7 +12,10 @@ add_importlibs(virtgpu ntoskrnl videoprt hal)
 target_link_libraries(virtgpu virtio libcntpr)
 add_pch(virtgpu virtgpu.h SOURCE)
 add_cd_file(TARGET virtgpu DESTINATION reactos/system32/drivers FOR all)
-add_registry_inf(virtgpu_reg.inf)
+# CDDB for PCI\VEN_1AF4&DEV_1050 is claimed by the GENUINE viogpudo (virtio-win)
+# instead — see drivers/directx/viogpu. Disable the native miniport's binding so
+# PnP loads the real Red Hat WDDM DOD on the QEMU virtio-gpu device.
+#add_registry_inf(virtgpu_reg.inf)
 add_driver_inf(virtgpu virtgpu.inf)
 
 list(APPEND DISPLAY_SOURCE
