@@ -40,6 +40,135 @@ IopFixupDeviceId(PWCHAR String)
     }
 }
 
+/*
+ * A CriticalDeviceDatabase install writes only ClassGUID + Service to the
+ * device's Enum instance key.  A full PnP install also creates the driver key
+ * Control\Class\{ClassGUID}\NNNN and points the instance's "Driver" value at
+ * it.  Without that, IoGetDeviceProperty(DevicePropertyDriverKeyName) and thus
+ * IoOpenDeviceRegistryKey(PLUGPLAY_REGKEY_DRIVER) fail with
+ * STATUS_OBJECT_NAME_NOT_FOUND for every CDDB-installed device (e.g. the
+ * virtio-gpu WDDM display-only driver, whose StartDevice reads/writes its
+ * driver key).  Create the driver key on demand and record it, mirroring a
+ * normal install.  Idempotent: a device that already has a "Driver" value is
+ * left untouched.
+ */
+static
+VOID
+IopEnsureCriticalDeviceDriverKey(
+    _In_ HANDLE InstanceKey)
+{
+    UNICODE_STRING DriverU = RTL_CONSTANT_STRING(L"Driver");
+    UNICODE_STRING ClassGuidU = RTL_CONSTANT_STRING(L"ClassGUID");
+    UNICODE_STRING ClassPrefixU = RTL_CONSTANT_STRING(L"\\Registry\\Machine\\System\\CurrentControlSet\\Control\\Class\\");
+    PKEY_VALUE_PARTIAL_INFORMATION PartialInfo;
+    OBJECT_ATTRIBUTES ObjectAttributes;
+    UNICODE_STRING KeyName;
+    HANDLE ClassKey = NULL, InstKey = NULL;
+    PWSTR ClassGuidStr, PathBuffer, DriverValue;
+    WCHAR InstanceName[8];
+    ULONG Length = 0, Instance, Disposition, GuidBytes, GuidChars;
+    NTSTATUS Status;
+
+    /* Idempotency: leave an already-installed driver key untouched */
+    Status = ZwQueryValueKey(InstanceKey, &DriverU, KeyValuePartialInformation, NULL, 0, &Length);
+    if (Status == STATUS_SUCCESS || Status == STATUS_BUFFER_OVERFLOW || Status == STATUS_BUFFER_TOO_SMALL)
+        return;
+
+    /* Read the device's ClassGUID */
+    Length = 0;
+    Status = ZwQueryValueKey(InstanceKey, &ClassGuidU, KeyValuePartialInformation, NULL, 0, &Length);
+    if (Status != STATUS_BUFFER_OVERFLOW && Status != STATUS_BUFFER_TOO_SMALL)
+        return;
+    PartialInfo = ExAllocatePool(PagedPool, Length);
+    if (!PartialInfo)
+        return;
+    Status = ZwQueryValueKey(InstanceKey, &ClassGuidU, KeyValuePartialInformation, PartialInfo, Length, &Length);
+    if (!NT_SUCCESS(Status) || PartialInfo->Type != REG_SZ ||
+        PartialInfo->DataLength < 2 * sizeof(WCHAR))
+    {
+        ExFreePool(PartialInfo);
+        return;
+    }
+    ClassGuidStr = (PWSTR)PartialInfo->Data;
+    GuidChars = PartialInfo->DataLength / sizeof(WCHAR);
+    if (ClassGuidStr[GuidChars - 1] != UNICODE_NULL)
+    {
+        ExFreePool(PartialInfo);
+        return;
+    }
+    GuidBytes = PartialInfo->DataLength - sizeof(WCHAR); /* without terminating NUL */
+
+    /* Open (create) Control\Class\{ClassGUID} */
+    PathBuffer = ExAllocatePool(PagedPool, ClassPrefixU.Length + PartialInfo->DataLength);
+    if (!PathBuffer)
+    {
+        ExFreePool(PartialInfo);
+        return;
+    }
+    RtlCopyMemory(PathBuffer, ClassPrefixU.Buffer, ClassPrefixU.Length);
+    RtlCopyMemory((PUCHAR)PathBuffer + ClassPrefixU.Length, ClassGuidStr, PartialInfo->DataLength);
+    RtlInitUnicodeString(&KeyName, PathBuffer);
+    InitializeObjectAttributes(&ObjectAttributes, &KeyName,
+                               OBJ_CASE_INSENSITIVE | OBJ_KERNEL_HANDLE, NULL, NULL);
+    Status = ZwCreateKey(&ClassKey, KEY_ALL_ACCESS, &ObjectAttributes, 0, NULL,
+                         REG_OPTION_NON_VOLATILE, NULL);
+    if (!NT_SUCCESS(Status))
+    {
+        ExFreePool(PathBuffer);
+        ExFreePool(PartialInfo);
+        return;
+    }
+
+    /* Allocate the first free NNNN instance subkey under the class */
+    for (Instance = 0; Instance < 1000; Instance++)
+    {
+        InstanceName[0] = L'0' + (WCHAR)((Instance / 1000) % 10);
+        InstanceName[1] = L'0' + (WCHAR)((Instance / 100) % 10);
+        InstanceName[2] = L'0' + (WCHAR)((Instance / 10) % 10);
+        InstanceName[3] = L'0' + (WCHAR)(Instance % 10);
+        InstanceName[4] = UNICODE_NULL;
+        RtlInitUnicodeString(&KeyName, InstanceName);
+        InitializeObjectAttributes(&ObjectAttributes, &KeyName,
+                                   OBJ_CASE_INSENSITIVE | OBJ_KERNEL_HANDLE, ClassKey, NULL);
+        Status = ZwCreateKey(&InstKey, KEY_ALL_ACCESS, &ObjectAttributes, 0, NULL,
+                             REG_OPTION_NON_VOLATILE, &Disposition);
+        if (!NT_SUCCESS(Status))
+        {
+            InstKey = NULL;
+            break;
+        }
+        if (Disposition == REG_CREATED_NEW_KEY)
+            break;
+        ZwClose(InstKey);
+        InstKey = NULL;
+    }
+    ZwClose(ClassKey);
+    if (InstKey == NULL)
+    {
+        ExFreePool(PathBuffer);
+        ExFreePool(PartialInfo);
+        return;
+    }
+    ZwClose(InstKey);
+
+    /* Record "Driver" = "{ClassGUID}\NNNN" on the device instance */
+    DriverValue = ExAllocatePool(PagedPool, GuidBytes + 6 * sizeof(WCHAR));
+    if (DriverValue)
+    {
+        RtlCopyMemory(DriverValue, ClassGuidStr, GuidBytes);
+        DriverValue[GuidBytes / sizeof(WCHAR)] = L'\\';
+        RtlCopyMemory((PUCHAR)DriverValue + GuidBytes + sizeof(WCHAR), InstanceName, 4 * sizeof(WCHAR));
+        DriverValue[GuidBytes / sizeof(WCHAR) + 5] = UNICODE_NULL;
+        Status = ZwSetValueKey(InstanceKey, &DriverU, 0, REG_SZ, DriverValue,
+                               (GuidBytes / sizeof(WCHAR) + 6) * sizeof(WCHAR));
+        DPRINT1("CDDB: set Driver='%S' for critical device (0x%08lX)\n", DriverValue, Status);
+        ExFreePool(DriverValue);
+    }
+
+    ExFreePool(PathBuffer);
+    ExFreePool(PartialInfo);
+}
+
 VOID
 NTAPI
 IopInstallCriticalDevice(PDEVICE_NODE DeviceNode)
@@ -359,6 +488,11 @@ IopInstallCriticalDevice(PDEVICE_NODE DeviceNode)
                     {
                         DPRINT1("Installed NULL service for critical device '%wZ'\n", &ChildIdNameU);
                     }
+
+                    /* Create the Control\Class driver key + "Driver" value so
+                     * IoOpenDeviceRegistryKey(PLUGPLAY_REGKEY_DRIVER) works for
+                     * this CDDB-installed device. */
+                    IopEnsureCriticalDeviceDriverKey(InstanceKey);
 
                     ExFreePool(OriginalIdBuffer);
                     ExFreePool(PartialInfo);
