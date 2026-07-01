@@ -159,6 +159,17 @@ static RECTL g_PresentDirtyRect;
 static volatile LONGLONG g_LastDirtyNotify100ns = 0;
 static volatile LONGLONG g_LastPresentSubmit100ns = 0;
 
+/*
+ * Timestamp (100ns) of the last IOCTL_VIDEO_DXGK_COMPOSITION_BEGIN.  The present
+ * work item skips presenting while a DWM composition BitBlt is in progress, but
+ * if COMPOSITION_END is never delivered (e.g. the compositing thread dies
+ * mid-frame — seen as msgqueue "Receiving Thread woken up dead"), the
+ * DwmCompositionInProgress flag would stick and freeze the display forever.
+ * We treat a composition older than this threshold as abandoned and recover.
+ */
+static volatile LONGLONG g_DwmCompositionBegin100ns = 0;
+#define DXGK_DWM_COMPOSITION_STALE_100NS (100ULL * 10000ULL) /* 100 ms */
+
 typedef struct _DXGK_PRESENT_LOCK_STATE
 {
     KIRQL OldIrql;
@@ -439,6 +450,7 @@ DxgkDisplayCommitVidPn(
         UINT TargetWidth = 0, TargetHeight = 0;
         UINT DesiredWidth = 0, DesiredHeight = 0;
         UINT SourceWidth = 0, SourceHeight = 0;
+        UINT DodDesktopW = 0, DodDesktopH = 0;
         BOOLEAN PreferPostSourceMode = FALSE;
         BOOLEAN PreferClosestPostSourceMode = FALSE;
 
@@ -517,7 +529,104 @@ DxgkDisplayCommitVidPn(
         DesiredWidth = TargetWidth;
         DesiredHeight = TargetHeight;
 
-        if (Adapter->PostDisplayWidth > 0 &&
+        /*
+         * Display-only driver (viogpudo): the POST/GOP resolution is an
+         * unreliable fallback (often 640x480) that does NOT match the real
+         * desktop mode win32k/the CDD render at (the EDID/source mode, e.g.
+         * 1024x768).  Committing the POST size makes dxgkrnl's primary
+         * (CommittedWidth -> MAP_VIDEO_MEMORY -> SharedPrimaryWidth -> every
+         * SET_SCANOUT) mismatch GDI's live output, so the scanout alternates
+         * two resources and freezes on the boot frame.  Pin the LARGEST
+         * advertised source mode (== the EDID preferred == win32k's desktop
+         * mode) so the target/source pin, CommittedWidth, the primary surface
+         * and every SET_SCANOUT agree at the real resolution.
+         */
+        if (Adapter->MiniportContext != NULL &&
+            Adapter->MiniportContext->IsDisplayOnlyDriver &&
+            VidPn->SourceModeSets[0] != NULL &&
+            VidPn->SourceModeSets[0]->NumModes > 0)
+        {
+            PDXGKP_VIDPN_SOURCE_MODESET DodSrc = VidPn->SourceModeSets[0];
+            for (i = 0; i < DodSrc->NumModes; i++)
+            {
+                UINT cx = (UINT)DodSrc->Modes[i].Format.Graphics.PrimSurfSize.cx;
+                UINT cy = (UINT)DodSrc->Modes[i].Format.Graphics.PrimSurfSize.cy;
+                if ((ULONGLONG)cx * cy > (ULONGLONG)DodDesktopW * DodDesktopH)
+                {
+                    DodDesktopW = cx;
+                    DodDesktopH = cy;
+                }
+            }
+        }
+
+        if (DodDesktopW > 0 && DodDesktopH > 0)
+        {
+            DesiredWidth = DodDesktopW;
+            DesiredHeight = DodDesktopH;
+
+            /* Re-pin the target to the desktop mode if the set advertises it. */
+            if (VidPn->TargetModeSets[0] != NULL)
+            {
+                PDXGKP_VIDPN_TARGET_MODESET DodTgt = VidPn->TargetModeSets[0];
+                BOOLEAN FoundDodTgt = FALSE;
+                SIZE_T PinIdx = 0;
+
+                for (i = 0; i < DodTgt->NumModes; i++)
+                {
+                    UINT tw, th;
+                    DxgkpGetTargetModeDimensions(&DodTgt->Modes[i], &tw, &th);
+                    if (tw == DodDesktopW && th == DodDesktopH)
+                    {
+                        DodTgt->PinnedModeId = DodTgt->Modes[i].Id;
+                        TargetWidth = tw;
+                        TargetHeight = th;
+                        FoundDodTgt = TRUE;
+                        break;
+                    }
+                }
+
+                /*
+                 * The DOD's target modeset usually carries only the POST
+                 * fallback (640x480), not the real desktop mode.  If so, the
+                 * committed TARGET (640) disagrees with the SOURCE (1024),
+                 * which makes viogpudo build its framebuffer at 640 then
+                 * RE-CREATE at 1024 on the size change — recycling virtio
+                 * resource ids (0x1<->0x2) so SET_SCANOUT desyncs from the
+                 * live present target and the scanout freezes.  Force the
+                 * pinned target mode's dimensions to the desktop size so
+                 * TARGET==SOURCE==DodDesktop and viogpudo builds the FB ONCE.
+                 */
+                if (!FoundDodTgt && DodTgt->NumModes > 0)
+                {
+                    for (i = 0; i < DodTgt->NumModes; i++)
+                    {
+                        if (DodTgt->Modes[i].Id == DodTgt->PinnedModeId)
+                        {
+                            PinIdx = i;
+                            break;
+                        }
+                    }
+                    DodTgt->Modes[PinIdx].VideoSignalInfo.ActiveSize.cx = DodDesktopW;
+                    DodTgt->Modes[PinIdx].VideoSignalInfo.ActiveSize.cy = DodDesktopH;
+                    DodTgt->Modes[PinIdx].VideoSignalInfo.TotalSize.cx  = DodDesktopW;
+                    DodTgt->Modes[PinIdx].VideoSignalInfo.TotalSize.cy  = DodDesktopH;
+                    DodTgt->PinnedModeId = DodTgt->Modes[PinIdx].Id;
+                    TargetWidth = DodDesktopW;
+                    TargetHeight = DodDesktopH;
+                    DXGKRNL_WARN("DxgkpCommitVidPnToMiniport: DOD — forced target "
+                                 "mode to %ux%u (was POST fallback)\n",
+                                 DodDesktopW, DodDesktopH);
+                }
+            }
+
+            DXGKRNL_WARN("DxgkpCommitVidPnToMiniport: DOD — committing real desktop "
+                         "mode %ux%u instead of POST %ux%u\n",
+                         DodDesktopW, DodDesktopH,
+                         Adapter->PostDisplayWidth, Adapter->PostDisplayHeight);
+        }
+
+        if (DodDesktopW == 0 &&
+            Adapter->PostDisplayWidth > 0 &&
             Adapter->PostDisplayHeight > 0 &&
             VidPn->SourceModeSets[0] != NULL)
         {
@@ -703,7 +812,8 @@ DxgkDisplayCommitVidPn(
          * viogpudo's StartDevice already initialized the display from the
          * POST framebuffer via DxgkCbAcquirePostDisplayOwnership.
          */
-        if (Adapter->PostDisplayWidth > 0 && Adapter->PostDisplayHeight > 0)
+        if (Adapter->CommittedWidth == 0 &&
+            Adapter->PostDisplayWidth > 0 && Adapter->PostDisplayHeight > 0)
         {
             Adapter->CommittedWidth  = Adapter->PostDisplayWidth;
             Adapter->CommittedHeight = Adapter->PostDisplayHeight;
@@ -1199,8 +1309,32 @@ DxgkpPresentWorkItemRoutineEx(
          */
         if (InterlockedCompareExchange(&Adapter->DwmCompositionInProgress, 0, 0) != 0)
         {
-            InterlockedExchange(&g_PresentDispatchBusy, 0);
-            return;
+            /*
+             * A composition BitBlt is in progress — normally skip so we don't
+             * present a partially-drawn frame.  But if COMPOSITION_END was never
+             * delivered (compositing thread died mid-frame), the flag sticks and
+             * every present is skipped, freezing the display.  Recover: if the
+             * BEGIN is older than the stale threshold, treat it as abandoned,
+             * clear the flag and present anyway.
+             */
+            ULONGLONG NowC   = (ULONGLONG)DxgkpDisplayTraceNow100ns();
+            ULONGLONG BeginC = (ULONGLONG)InterlockedCompareExchange64(
+                                   &g_DwmCompositionBegin100ns, 0, 0);
+            if (BeginC == 0 || NowC <= BeginC ||
+                (NowC - BeginC) < DXGK_DWM_COMPOSITION_STALE_100NS)
+            {
+                InterlockedExchange(&g_PresentDispatchBusy, 0);
+                return;
+            }
+            InterlockedExchange(&Adapter->DwmCompositionInProgress, 0);
+            {
+                static volatile LONG s_StaleLogged = 0;
+                if (InterlockedIncrement(&s_StaleLogged) <= 5)
+                    DXGKRNL_WARN("DxgkpPresentWorkItem: stale DWM composition "
+                                 "(no COMPOSITION_END for >%lu ms) — clearing and "
+                                 "presenting\n",
+                                 (ULONG)(DXGK_DWM_COMPOSITION_STALE_100NS / 10000ULL));
+            }
         }
 
         HasDirty = DxgkpConsumeDirtyRect(Adapter, &DirtyRect);
@@ -1660,20 +1794,46 @@ DxgkpDisplayDispatch(
                 /* Store the shadow FB pointer in the adapter for PresentDisplayOnly. */
                 if (g_DisplayAdapter != NULL)
                 {
-                    if (g_DisplayAdapter->ShadowFb != NULL)
+                    /*
+                     * Display-only driver with an active WDDM shared-primary:
+                     * DxgkpEnsureSharedPrimary already pointed ShadowFb at the
+                     * CDD/WDDM primary's CPU VA — that surface is where GDI draws
+                     * the live desktop and what the present timer scans out.
+                     * framebuf.dll's MAP_VIDEO_MEMORY must NOT replace it with a
+                     * private NonPagedPool buffer: doing so splits the primary
+                     * into two virtio-gpu resources (a frozen framebuf resource
+                     * vs the live WDDM resource) that fight over the scanout, and
+                     * would ExFreePoolWithTag() a mapped VA never pool-allocated.
+                     * Hand framebuf the WDDM primary so there is exactly one.
+                     */
+                    if (g_DisplayAdapter->MiniportContext != NULL &&
+                        g_DisplayAdapter->MiniportContext->IsDisplayOnlyDriver &&
+                        g_DisplayAdapter->SharedPrimaryAllocationHandle != NULL &&
+                        g_DisplayAdapter->ShadowFb != NULL)
                     {
-                        DxgkpStopPresentTimer(g_DisplayAdapter);
-                        ExFreePoolWithTag(g_DisplayAdapter->ShadowFb, TAG_DXGK_DISPLAY);
+                        ExFreePoolWithTag(FbVa, TAG_DXGK_DISPLAY);
+                        FbVa = g_DisplayAdapter->ShadowFb;
+                        FbSize = g_DisplayAdapter->ShadowFbSize;
+                        if (g_DisplayAdapter->VidPnCommitted)
+                            DxgkpStartPresentTimer(g_DisplayAdapter);
                     }
-
-                    g_DisplayAdapter->ShadowFb = FbVa;
-                    g_DisplayAdapter->ShadowFbPitch = Width * 4;
-                    g_DisplayAdapter->ShadowFbSize = FbSize;
-
-                    /* Start the periodic present timer if CommitVidPn succeeded. */
-                    if (g_DisplayAdapter->VidPnCommitted)
+                    else
                     {
-                        DxgkpStartPresentTimer(g_DisplayAdapter);
+                        if (g_DisplayAdapter->ShadowFb != NULL)
+                        {
+                            DxgkpStopPresentTimer(g_DisplayAdapter);
+                            ExFreePoolWithTag(g_DisplayAdapter->ShadowFb, TAG_DXGK_DISPLAY);
+                        }
+
+                        g_DisplayAdapter->ShadowFb = FbVa;
+                        g_DisplayAdapter->ShadowFbPitch = Width * 4;
+                        g_DisplayAdapter->ShadowFbSize = FbSize;
+
+                        /* Start the periodic present timer if CommitVidPn succeeded. */
+                        if (g_DisplayAdapter->VidPnCommitted)
+                        {
+                            DxgkpStartPresentTimer(g_DisplayAdapter);
+                        }
                     }
                 }
 
@@ -1753,7 +1913,11 @@ DxgkpDisplayDispatch(
         case IOCTL_VIDEO_DXGK_COMPOSITION_BEGIN:
         {
             if (g_DisplayAdapter != NULL)
+            {
+                InterlockedExchange64(&g_DwmCompositionBegin100ns,
+                                      (LONGLONG)DxgkpDisplayTraceNow100ns());
                 InterlockedExchange(&g_DisplayAdapter->DwmCompositionInProgress, 1);
+            }
             Status = STATUS_SUCCESS;
             break;
         }
