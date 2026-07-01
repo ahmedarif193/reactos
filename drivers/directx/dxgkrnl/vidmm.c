@@ -631,15 +631,22 @@ DxgkVidMmInitializeAdapter(
 
     /*
      * Display-Only Drivers (DOD) do not implement DxgkDdiQueryAdapterInfo
-     * for DXGKQAITYPE_QUERYSEGMENT — they have no GPU memory segments.
-     * Skip VidMm initialization for DODs.  A DOD is identified by having
-     * DxgkDdiCreateAllocation == NULL (DODs don't create allocations).
+     * for DXGKQAITYPE_QUERYSEGMENT — they have no GPU memory segments, so
+     * skip VidMm initialization for them.  The reliable indicator is
+     * IsDisplayOnlyDriver (set when the miniport registers through
+     * DxgkInitializeDisplayOnlyDriver).  The "DxgkDdiCreateAllocation == NULL"
+     * heuristic is NOT sufficient: the smaller KMDDOD_INITIALIZATION_DATA
+     * overlaps that slot, so a genuine DOD (e.g. the Red Hat virtio-gpu
+     * display-only driver viogpudo.sys) can present a non-NULL value there
+     * and would otherwise fall through to a QUERYSEGMENT it can't service
+     * (STATUS_NOT_SUPPORTED -> adapter start fails 0xC00000BB).
      */
     DPRINT("DxgkVidMmInitializeAdapter: DxgkDdiCreateAllocation=%p DOD=%d\n",
            Adapter->MiniportContext->InitData.s.DxgkDdiCreateAllocation,
            (int)Adapter->MiniportContext->IsDisplayOnlyDriver);
 
-    if (Adapter->MiniportContext->InitData.s.DxgkDdiCreateAllocation == NULL)
+    if (Adapter->MiniportContext->IsDisplayOnlyDriver ||
+        Adapter->MiniportContext->InitData.s.DxgkDdiCreateAllocation == NULL)
     {
         DPRINT("DxgkVidMmInitializeAdapter: DOD driver — skipping segment query\n");
         return STATUS_SUCCESS;

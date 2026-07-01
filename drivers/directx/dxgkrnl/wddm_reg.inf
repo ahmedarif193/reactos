@@ -32,33 +32,12 @@ HKLM,"SYSTEM\CurrentControlSet\Services\dxgkrnl","Start",0x00010001,0x00000001
 HKLM,"SYSTEM\CurrentControlSet\Services\dxgkrnl","Type",0x00010001,0x00000001
 HKLM,"SYSTEM\CurrentControlSet\Services\dxgkrnl","Tag",0x00010001,0x00000002
 
-; --- softgpu (WDDM software miniport, PnP) ---
-HKLM,"SYSTEM\CurrentControlSet\Services\softgpu","ErrorControl",0x00010001,0x00000000
-HKLM,"SYSTEM\CurrentControlSet\Services\softgpu","Group",0x00000000,"Video"
-HKLM,"SYSTEM\CurrentControlSet\Services\softgpu","ImagePath",0x00020000,"system32\drivers\softgpu.sys"
-HKLM,"SYSTEM\CurrentControlSet\Services\softgpu","Start",0x00010001,0x00000001
-HKLM,"SYSTEM\CurrentControlSet\Services\softgpu","Type",0x00010001,0x00000001
-HKLM,"SYSTEM\CurrentControlSet\Services\softgpu","Tag",0x00010001,0x00000003
-HKLM,"SYSTEM\CurrentControlSet\Services\softgpu\Video","Service",0x00000000,"softgpu"
-
-HKLM,"SYSTEM\CurrentControlSet\Services\softgpu\Device0","InstalledDisplayDrivers",0x00010000,"framebuf"
-HKLM,"SYSTEM\CurrentControlSet\Services\softgpu\Device0","DefaultSettings.VRefresh",0x00010001,0x00000001
-HKLM,"SYSTEM\CurrentControlSet\Services\softgpu\Device0","DefaultSettings.BitsPerPel",0x00010001,0x00000020
-HKLM,"SYSTEM\CurrentControlSet\Services\softgpu\Device0","DefaultSettings.XResolution",0x00010001,0x00000400
-HKLM,"SYSTEM\CurrentControlSet\Services\softgpu\Device0","DefaultSettings.YResolution",0x00010001,0x00000300
-HKLM,"SYSTEM\CurrentControlSet\Services\softgpu\Device0","Device Description",0x00000000,"ReactOS WDDM Software GPU"
-HKLM,"SYSTEM\CurrentControlSet\Services\softgpu\Device0","VgaCompatible",0x00010001,0x00000000
-
-; --- Root-enumerated PnP device instance for softgpu ---
-; softgpu is a PnP WDDM miniport (DxgkInitialize installs an AddDevice handler),
-; so it needs a PDO to bind to. Preregister a root device so the PnP root bus
-; (ntoskrnl pnproot.c enumerates SYSTEM\CurrentControlSet\Enum\Root) creates the
-; PDO and, because Service+ClassGUID are already set, starts softgpu at boot ->
-; AddDevice -> DxgkAdapterStart -> DxgkDisplayRegister (\Device\Video0 +
-; HARDWARE\DEVICEMAP\VIDEO) before win32k's display init runs.
-HKLM,"SYSTEM\CurrentControlSet\Enum\Root\SOFTGPU\0000","DeviceDesc",0x00000000,"ReactOS WDDM Software GPU"
-HKLM,"SYSTEM\CurrentControlSet\Enum\Root\SOFTGPU\0000","HardwareID",0x00010000,"ROOT\SOFTGPU"
-HKLM,"SYSTEM\CurrentControlSet\Enum\Root\SOFTGPU\0000","Service",0x00000000,"softgpu"
-HKLM,"SYSTEM\CurrentControlSet\Enum\Root\SOFTGPU\0000","Class",0x00000000,"Display"
-HKLM,"SYSTEM\CurrentControlSet\Enum\Root\SOFTGPU\0000","ClassGUID",0x00000000,"{4D36E968-E325-11CE-BFC1-08002BE10318}"
-HKLM,"SYSTEM\CurrentControlSet\Enum\Root\SOFTGPU\0000","ConfigFlags",0x00010001,0x00000000
+; --- softgpu DISABLED (genuine virtio-gpu viogpudo drives the display) ---
+; softgpu (the WDDM software miniport) is intentionally NOT registered here.
+; The genuine Red Hat virtio-gpu WDDM display-only driver (viogpudo) is the
+; display.  Registering softgpu's Root\SOFTGPU device + service in parallel
+; created a two-adapter mode conflict (softgpu committed its own mode while
+; viogpudo owned the live scanout -> black/garbled desktop), and once softgpu's
+; binary is absent its leftover Root\SOFTGPU instance stalls first-boot PnP at
+; "Installing devices...".  softgpu stays in the tree as a manual fail-safe but
+; is not enumerated or started by default.
