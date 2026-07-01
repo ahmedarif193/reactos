@@ -356,8 +356,16 @@ WmiTraceMessage(IN TRACEHANDLE LoggerHandle,
                 IN USHORT MessageNumber,
                 IN ...)
 {
-    UNIMPLEMENTED;
-    return STATUS_NOT_IMPLEMENTED;
+    UNREFERENCED_PARAMETER(LoggerHandle);
+    UNREFERENCED_PARAMETER(MessageFlags);
+    /*
+     * Diagnostic: surface classic-WPP DoTraceMessage output (the trace-point
+     * GUID + message number) so otherwise-silent WPP-instrumented drivers
+     * (e.g. viogpudo.sys) reveal their init progress in the serial log.
+     */
+    DbgPrint("WPPTRACE: guid=%08lX msg=%u\n",
+             MessageGuid ? MessageGuid->Data1 : 0, MessageNumber);
+    return STATUS_SUCCESS;
 }
 
 /*
