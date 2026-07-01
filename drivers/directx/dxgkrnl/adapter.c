@@ -1652,6 +1652,23 @@ DxgkCbMapMemory(
     }
     else
     {
+#if defined(_M_ARM64)
+        /*
+         * ARM64: a device BAR (MMIO) MUST be mapped as Device memory so the
+         * miniport's register accesses keep strict MMIO ordering and are not
+         * speculated or write-combined.  The MDL + MmMapLockedPagesSpecifyCache
+         * route used on amd64 (below) yields a Normal-NonCacheable mapping,
+         * which breaks virtio register handshakes — the genuine viogpudo
+         * StartDevice negotiates the virtio-gpu over this BAR and times out
+         * (INSUFFICIENT_RESOURCES) when it is not Device memory.  MmMapIoSpace
+         * gives a proper Device mapping here; the amd64 system-PTE collision
+         * the MDL route works around does not apply on ARM64.
+         */
+        MapStart100ns = DxgkpTraceNow100ns();
+        Va = MmMapIoSpace(TranslatedAddress, Length, MmNonCached);
+        MapUs = DxgkpTraceElapsedUs(MapStart100ns);
+        MapMethod = "iospace-device";
+#else
         /*
          * On amd64/UEFI, MmMapIoSpace can return a system-PTE VA in the
          * same FFFFF880... range that the current kernel stack expands into.
@@ -1734,6 +1751,7 @@ DxgkCbMapMemory(
         }
 
         MapUs = DxgkpTraceElapsedUs(MapStart100ns);
+#endif /* _M_ARM64 */
     }
 
     if (Va == NULL)
@@ -2827,7 +2845,9 @@ DxgkAdapterStart(
     }
     else
     {
-        DXGKRNL_ERR("DxgkAdapterStart: NO translated resources!\n");
+        DXGKRNL_ERR("DxgkAdapterStart: NO translated resources! (PDO=%p DOD=%d)\n",
+                    Adapter->PhysicalDeviceObject,
+                    Adapter->MiniportContext ? Adapter->MiniportContext->IsDisplayOnlyDriver : -1);
     }
 
     /* Save raw PCI resource lists for DxgkCbGetDeviceInformation. */
@@ -2853,8 +2873,20 @@ DxgkAdapterStart(
                 &RawPartialList->PartialDescriptors[ri] : NULL;
             if (Desc->Type == CmResourceTypeInterrupt)
             {
+                /* ROS ARM64's interrupt-resource translation drops the
+                 * CM_RESOURCE_INTERRUPT_MESSAGE flag from the TRANSLATED
+                 * descriptor even though PCI keeps MSI-X enabled (the RAW
+                 * descriptor retains the flag — that is what PciPdoEnableMsix
+                 * keys off).  Trust the RAW descriptor so an MSI-X device is
+                 * connected message-based (CONNECT_MESSAGE_BASED, which keys
+                 * off the PDO's MSI assignment) instead of as a masked line
+                 * interrupt that never fires — the viogpudo Code-10 root cause. */
                 Adapter->InterruptMessageBased =
-                    (Desc->Flags & CM_RESOURCE_INTERRUPT_MESSAGE) ? TRUE : FALSE;
+                    ((Desc->Flags & CM_RESOURCE_INTERRUPT_MESSAGE) ||
+                     (RawDesc != NULL &&
+                      RawDesc->Type == CmResourceTypeInterrupt &&
+                      (RawDesc->Flags & CM_RESOURCE_INTERRUPT_MESSAGE)))
+                    ? TRUE : FALSE;
 
                 if (Adapter->InterruptMessageBased)
                 {
@@ -3185,7 +3217,9 @@ DxgkAdapterStart(
 
     if (!NT_SUCCESS(Status))
     {
-        DXGKRNL_ERR("DxgkAdapterStart: DxgkDdiStartDevice failed 0x%08lX\n", Status);
+        DXGKRNL_ERR("DxgkAdapterStart: DxgkDdiStartDevice failed 0x%08lX (IRQs fired during start=%ld, vec=%lu msgbased=%d)\n",
+                    Status, Adapter->InterruptCount,
+                    Adapter->InterruptVector, Adapter->InterruptMessageBased);
         /* Disconnect interrupt if we connected it */
         if (Adapter->InterruptMessageTable != NULL)
         {
