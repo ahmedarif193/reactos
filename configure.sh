@@ -62,8 +62,29 @@ fail() {
 	exit 1
 }
 
+# FEX ARM64EC is opt-in (default OFF, matching sdk/cmake/config.cmake). It is
+# enabled only when -DENABLE_FEX_ARM64EC=ON (or an equivalent) is passed.
+fex_arm64ec_enabled() {
+	case " $ROS_CMAKEOPTS " in
+		*" -DENABLE_FEX_ARM64EC=ON "*|*" -DENABLE_FEX_ARM64EC:BOOL=ON "*|*" -DENABLE_FEX_ARM64EC=TRUE "*|*" -DENABLE_FEX_ARM64EC:BOOL=TRUE "*|*" -DENABLE_FEX_ARM64EC=1 "*|*" -DENABLE_FEX_ARM64EC:BOOL=1 "*)
+			return 0
+			;;
+		*)
+			return 1
+			;;
+	esac
+}
+
 sync_arm64_submodules() {
 	[ "$ARCH" = "arm64" ] || return 0
+
+	# The FEX submodule (and its recursive gvisor test binaries) is huge; only
+	# fetch it when FEX ARM64EC is explicitly enabled.
+	if ! fex_arm64ec_enabled; then
+		echo "FEX ARM64EC disabled (default); skipping FEX submodule sync."
+		echo "  Pass -DENABLE_FEX_ARM64EC=ON to configure.sh to enable it."
+		return 0
+	fi
 
 	if [ ! -d "$REACTOS_SOURCE_DIR/.git" ]; then
 		echo "Skipping ARM64 submodule sync outside a Git checkout."
@@ -72,7 +93,7 @@ sync_arm64_submodules() {
 
 	command -v git >/dev/null 2>&1 || fail "git is required to initialize ARM64 submodules"
 
-	echo "Syncing ARM64 submodules..."
+	echo "Syncing FEX ARM64EC submodule..."
 	git -C "$REACTOS_SOURCE_DIR" submodule sync -- submodules/fex-arm64ec || fail "failed to sync FEX submodule metadata"
 	git -C "$REACTOS_SOURCE_DIR" submodule update --init --recursive -- submodules/fex-arm64ec || fail "failed to initialize FEX submodule"
 }
@@ -80,13 +101,7 @@ sync_arm64_submodules() {
 prepare_arm64_fex_source() {
 	[ "$ARCH" = "arm64" ] || return 0
 
-	case " $ROS_CMAKEOPTS " in
-		*" -DENABLE_FEX_ARM64EC=ON "*|*" -DENABLE_FEX_ARM64EC:BOOL=ON "*|*" -DENABLE_FEX_ARM64EC=TRUE "*|*" -DENABLE_FEX_ARM64EC:BOOL=TRUE "*|*" -DENABLE_FEX_ARM64EC=1 "*|*" -DENABLE_FEX_ARM64EC:BOOL=1 "*)
-			;;
-		*)
-			return 0
-			;;
-	esac
+	fex_arm64ec_enabled || return 0
 
 	FEX_UPSTREAM_DIR="$REACTOS_SOURCE_DIR/submodules/fex-arm64ec"
 	FEX_PATCH_FILE="$REACTOS_SOURCE_DIR/submodules/fex-arm64ec-reactos.patch"
