@@ -8,7 +8,8 @@ list(APPEND MSVCRTEX_SOURCE
     misc/isblank.c
     misc/iswblank.c
     misc/ofmt_stub.c
-    stdio/acrt_iob_func.c)
+    stdio/acrt_iob_func.c
+    stdio/ms_fwprintf.c)
 
 if(DLL_EXPORT_VERSION LESS 0x600)
     list(APPEND MSVCRTEX_SOURCE
