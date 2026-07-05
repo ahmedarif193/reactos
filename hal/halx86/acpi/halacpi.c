@@ -861,6 +861,11 @@ HalpSetupAcpiPhase0(IN PLOADER_PARAMETER_BLOCK LoaderBlock)
             /* Map it */
             HalpLowStub = HalpMapPhysicalMemory64(HalpLowStubPhysicalAddress, HALP_LOW_STUB_SIZE_IN_PAGES);
         }
+        else
+        {
+            /* No <1MB page for the AP stub (e.g. UEFI): SMP unavailable */
+            DPRINT1("HAL: No low memory for AP startup stub, SMP unavailable\n");
+        }
     }
 
     /* Grab a page for flushes */

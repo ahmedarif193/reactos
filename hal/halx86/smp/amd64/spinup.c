@@ -91,6 +91,13 @@ HalStartNextProcessor(
     if (HalpStartedProcessorCount == HalpApicInfoTable.ProcessorCount)
         return FALSE;
 
+    /* No low (<1MB) trampoline stub (e.g. UEFI left no low memory): stay UP */
+    if (HalpLowStub == NULL)
+    {
+        DPRINT1("HalStartNextProcessor: no low-memory AP stub, continuing as UP\n");
+        return FALSE;
+    }
+
     /* Build the temporary page tables used during the mode transition */
     TemporaryCr3 = HalpSetupTemporaryMappings();
     if (!TemporaryCr3)
