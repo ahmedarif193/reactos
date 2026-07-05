@@ -54,13 +54,13 @@ HalppFormatSize(
     if (!Size) return;
 
     if (Size < 1024ULL)
-        sprintf(Buffer, " [size=%u]", (ULONG)Size);
+        sprintf(Buffer, " [size=%lu]", (ULONG)Size);
     else if (Size < 1048576ULL)
-        sprintf(Buffer, " [size=%uK]", (ULONG)(Size / 1024ULL));
+        sprintf(Buffer, " [size=%luK]", (ULONG)(Size / 1024ULL));
     else if (Size < 1073741824ULL)
-        sprintf(Buffer, " [size=%uM]", (ULONG)(Size / 1048576ULL));
+        sprintf(Buffer, " [size=%luM]", (ULONG)(Size / 1048576ULL));
     else
-        sprintf(Buffer, " [size=%uG]", (ULONG)(Size / 1073741824ULL));
+        sprintf(Buffer, " [size=%luG]", (ULONG)(Size / 1073741824ULL));
 }
 
 CODE_SEG("INIT")
