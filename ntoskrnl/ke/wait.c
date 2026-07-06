@@ -598,6 +598,197 @@ NoWait:
 
 /*
  * @implemented
+ *
+ * Blocks the current thread until it is alerted by NtAlertThreadByThreadId
+ * (targeting this thread's id) or until the optional timeout expires. This is
+ * the kernel half of the Win8+ thread-alert-by-id primitive that backs
+ * ntdll's RtlWaitOnAddress / WaitOnAddress.
+ *
+ * The wait is committed on the thread's own timer with no dispatcher object:
+ * the only things that end it are the paired alert (delivered by
+ * KeAlertThreadByThreadId via KiUnwaitThread with STATUS_ALERTED), the timer
+ * (STATUS_TIMEOUT) or a kernel APC (which is delivered and the wait re-armed).
+ * It is deliberately NOT an alertable wait, so classic user-mode alerts and
+ * user APCs do not disturb it - matching Windows, where this wait uses the
+ * distinct KTHREAD.AlertedByThreadId flag and the WrAlertByThreadId reason
+ * rather than the classic Alerted[] array.
+ *
+ * The pending-alert flag (Thread->AlertedByThreadId) is read-and-cleared under
+ * the thread lock at the exact point the thread transitions to Waiting, so it
+ * serializes against KeAlertThreadByThreadId (which takes the same thread lock
+ * to either set the flag or unwait a committed waiter). There is therefore no
+ * lost-wakeup window between the pre-block flag check and the block itself.
+ */
+NTSTATUS
+NTAPI
+KeWaitForAlertByThreadId(IN PVOID Address,
+                         IN PLARGE_INTEGER Timeout OPTIONAL)
+{
+    PKTHREAD Thread = KeGetCurrentThread();
+    PKTIMER Timer = &Thread->Timer;
+    PKWAIT_BLOCK TimerBlock = &Thread->WaitBlock[TIMER_WAIT_BLOCK];
+    NTSTATUS WaitStatus;
+    BOOLEAN Swappable;
+    PLARGE_INTEGER OriginalDueTime = Timeout;
+    LARGE_INTEGER DueTime = {{0}}, NewDueTime, InterruptTime;
+    ULONG Hand = 0;
+
+    /* The Address argument is a user-mode cookie that Windows records only for
+     * ETW tracing; it does NOT participate in the wake decision (a waiter is
+     * paired with an alerter purely by thread id), so we simply ignore it. */
+    UNREFERENCED_PARAMETER(Address);
+
+    /* We are always entered fresh, without a wait lock already held */
+    ASSERT(KeGetCurrentIrql() <= APC_LEVEL);
+    ASSERT(!Thread->WaitNext);
+
+WaitStart:
+    /* Raise to synch level to begin the wait */
+    Thread->WaitIrql = KeRaiseIrqlToSynchLevel();
+
+    /* Set up the wait: no object, reason WrAlertByThreadId, non-alertable */
+    Thread->WaitBlockList = TimerBlock;
+    Thread->WaitStatus = STATUS_SUCCESS;
+    Thread->Alertable = FALSE;
+    Thread->WaitReason = WrAlertByThreadId;
+    Thread->WaitMode = KernelMode;
+    Thread->WaitBlockCount = 1;
+    Thread->TimerActive = FALSE;
+    Thread->WaitListEntry.Flink = NULL;
+    Swappable = KiCheckThreadStackSwap(Thread, KernelMode);
+    Thread->WaitTime = KeTickCount.LowPart;
+
+    /* Arm the timeout timer, if one was supplied */
+    if (Timeout)
+    {
+        KxSetTimerForThreadWait(Timer, *Timeout, &Hand);
+        DueTime.QuadPart = Timer->DueTime.QuadPart;
+
+        /* Point the (single) timer wait block at the timer */
+        Timer->Header.WaitListHead.Flink = &TimerBlock->WaitListEntry;
+        Timer->Header.WaitListHead.Blink = &TimerBlock->WaitListEntry;
+        TimerBlock->WaitListEntry.Flink = &Timer->Header.WaitListHead;
+        TimerBlock->WaitListEntry.Blink = &Timer->Header.WaitListHead;
+    }
+
+    /* Take the thread timer's dispatcher lock as the wait's commit anchor */
+    KiAcquireDispatcherObject(&Timer->Header);
+
+    /* Start the wait loop */
+    for (;;)
+    {
+        /* Disable pre-emption */
+        Thread->Preempted = FALSE;
+
+        /* Deliver a pending, deliverable kernel APC before blocking */
+        if ((Thread->ApcState.KernelApcPending) && !(Thread->SpecialApcDisable) &&
+            (Thread->WaitIrql < APC_LEVEL))
+        {
+            /* Unlock the dispatcher and let the APC run */
+            KiReleaseDispatcherObject(&Timer->Header);
+            KiExitDispatcher(Thread->WaitIrql);
+        }
+        else
+        {
+            /* If a timeout was given, check whether it already expired */
+            if (Timeout)
+            {
+                InterruptTime.QuadPart = KeQueryInterruptTime();
+                if ((ULONGLONG)InterruptTime.QuadPart >= Timer->DueTime.QuadPart)
+                {
+                    /* Timed out with nothing to wait for */
+                    WaitStatus = STATUS_TIMEOUT;
+                    goto NoWait;
+                }
+
+                /* It didn't, so activate the timer */
+                Timer->TimerListEntry.Flink = NULL;
+                Timer->TimerListEntry.Blink = NULL;
+                Timer->Header.Inserted = TRUE;
+                TimerBlock->BlockState = WaitBlockActive;
+            }
+
+            /* Handle a waiter on this thread's own queue, under the queue lock */
+            if (Thread->Queue)
+            {
+                KiAcquireDispatcherObject(&Thread->Queue->Header);
+                KiActivateWaiterQueue(Thread->Queue);
+                KiReleaseDispatcherObject(&Thread->Queue->Header);
+            }
+
+            /* Commit the wait under the thread lock. AlertedByThreadId is read
+             * and cleared here, atomically with the State transition, so it
+             * serializes against KeAlertThreadByThreadId (same thread lock):
+             * either we observe the pending alert and abort the block, or the
+             * alerter observes State == Waiting and unwaits us. No lost wakeup. */
+            KiAcquireThreadLock(Thread);
+            if (InterlockedBitTestAndReset(&Thread->ThreadFlags,
+                                           KTHREAD_ALERTED_BY_THREAD_ID_BIT))
+            {
+                /* An alert is already pending: consume it and don't block */
+                KiReleaseThreadLock(Thread);
+
+                /* Roll back the timer we armed (it has not been inserted yet) */
+                if (Timeout)
+                {
+                    Timer->Header.Inserted = FALSE;
+                    TimerBlock->BlockState = WaitBlockInactive;
+                }
+                WaitStatus = STATUS_ALERTED;
+                goto NoWait;
+            }
+            Thread->State = Waiting;
+
+            /* Add the thread to the wait list */
+            KiAddThreadToWaitList(Thread, Swappable);
+
+            /* Set up the swap */
+            ASSERT(Thread->WaitIrql <= DISPATCH_LEVEL);
+            KiSetThreadSwapBusy(Thread);
+            KiReleaseThreadLock(Thread);
+
+            /* Release the timer lock and insert the timer if we armed one */
+            KiReleaseDispatcherObject(&Timer->Header);
+            if (Timeout) KxInsertTimerNoRelease(Timer, Hand);
+
+            /* Swap the thread out */
+            WaitStatus = (NTSTATUS)KiSwapThread(Thread, KeGetCurrentPrcb(), TRUE);
+
+            /* Check if this wasn't a kernel APC interruption */
+            if (WaitStatus != STATUS_KERNEL_APC)
+            {
+                /* STATUS_ALERTED (paired alert) or STATUS_TIMEOUT (timer) */
+                return WaitStatus;
+            }
+
+            /* A kernel APC ran; recompute the remaining timeout and retry */
+            if (Timeout)
+            {
+                Timeout = KiRecalculateDueTime(OriginalDueTime,
+                                               &DueTime,
+                                               &NewDueTime);
+                if (!Timeout)
+                {
+                    /* The timeout fully elapsed while the APC was running */
+                    return STATUS_TIMEOUT;
+                }
+            }
+        }
+
+        /* Set up a new wait */
+        goto WaitStart;
+    }
+
+NoWait:
+    /* We aren't going to block: release the timer lock, exit the dispatcher via
+     * the quantum adjustment, and return the completed wait status. */
+    KiReleaseDispatcherObject(&Timer->Header);
+    KiAdjustQuantumThread(Thread);
+    return WaitStatus;
+}
+
+/*
+ * @implemented
  */
 NTSTATUS
 NTAPI
