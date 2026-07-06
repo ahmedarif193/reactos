@@ -126,9 +126,14 @@ NTAPI
 IoIsWdmVersionAvailable(IN UCHAR MajorVersion,
                         IN UCHAR MinorVersion)
 {
-    /* Return support for WDM 1.30 (Windows Server 2003) */
-    if (MajorVersion <= 1 && MinorVersion <= 0x30) return TRUE;
-    return FALSE;
+    /*
+     * NT10 reports WDM 6.00 (WDM_MAJORVERSION/WDM_MINORVERSION in the
+     * Windows 10 WDK wdm.h). A requested version is available when it is
+     * lexicographically <= the OS WDM version, which also satisfies all
+     * legacy 1.x0 probes.
+     */
+    return (MajorVersion < 6) ||
+           ((MajorVersion == 6) && (MinorVersion == 0));
 }
 
 /*

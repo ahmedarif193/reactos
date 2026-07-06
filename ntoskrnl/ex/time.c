@@ -15,6 +15,9 @@
 
 #define TICKSPERMINUTE  600000000
 
+/* ExRealTimeIsUniversal is an internal export not declared by the DDK. */
+NTKERNELAPI BOOLEAN NTAPI ExRealTimeIsUniversal(VOID);
+
 /* GLOBALS ******************************************************************/
 
 /* Note: Bias[minutes] = UTC - local time */
@@ -634,6 +637,18 @@ ExSystemTimeToLocalTime(PLARGE_INTEGER SystemTime,
                         PLARGE_INTEGER LocalTime)
 {
     LocalTime->QuadPart = SystemTime->QuadPart - ExpTimeZoneBias.QuadPart;
+}
+
+/*
+ * @implemented
+ */
+BOOLEAN
+NTAPI
+ExRealTimeIsUniversal(VOID)
+{
+    /* The hardware clock is kept in local time unless the
+     * TimeZoneInformation\RealTimeIsUniversal registry value opts into UTC */
+    return ExpRealTimeIsUniversal;
 }
 
 /*
