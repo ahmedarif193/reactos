@@ -140,6 +140,7 @@
 #include "ob.h"
 #include "mm.h"
 #include "ex.h"
+#include "wnf.h"
 #include "cm.h"
 #include "ps.h"
 #include "cc.h"
