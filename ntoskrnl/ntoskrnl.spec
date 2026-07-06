@@ -2691,7 +2691,7 @@
 @ stub -arch=arm64 NtGetEnvironmentVariableEx
 @ stub -arch=arm64 NtGetNotificationResourceManager
 @ stub -arch=arm64 NtImageInfo
-@ stub -arch=arm64 NtNotifyChangeDirectoryFileEx
+@ stdcall -arch=arm64 NtNotifyChangeDirectoryFileEx(ptr ptr ptr ptr ptr ptr long long long long)
 @ stub -arch=arm64 NtOpenEnlistment
 @ stub -arch=arm64 NtOpenResourceManager
 @ stub -arch=arm64 NtOpenTransaction
@@ -3348,14 +3348,14 @@
 @ stdcall -version=0x602+ -arch=arm64 ZwDeleteWnfStateData(ptr ptr)
 @ stdcall -version=0x602+ -arch=arm64 ZwDeleteWnfStateName(ptr)
 @ stub -arch=arm64 ZwEnumerateTransactionObject
-@ stub -arch=arm64 ZwFlushBuffersFileEx
+@ stdcall -arch=arm64 ZwFlushBuffersFileEx(ptr long ptr long ptr)
 @ stub -arch=arm64 ZwGetCachedSigningLevel
 @ stub -arch=arm64 ZwGetNextProcess
 @ stub -arch=arm64 ZwGetNextThread
 @ stub -arch=arm64 ZwGetNotificationResourceManager
 @ stub -arch=arm64 ZwManagePartition
 @ stub -arch=arm64 ZwMapViewOfSectionEx
-@ stub -arch=arm64 ZwNotifyChangeDirectoryFileEx
+@ stdcall -arch=arm64 ZwNotifyChangeDirectoryFileEx(ptr ptr ptr ptr ptr ptr long long long long)
 @ stub -arch=arm64 ZwNotifyChangeSession
 @ stub -arch=arm64 ZwOpenCpuPartition
 @ stub -arch=arm64 ZwOpenEnlistment
