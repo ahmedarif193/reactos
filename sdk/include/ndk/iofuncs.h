@@ -233,6 +233,18 @@ NtFlushBuffersFile(
     _Out_ PIO_STATUS_BLOCK IoStatusBlock
 );
 
+__kernel_entry
+NTSYSCALLAPI
+NTSTATUS
+NTAPI
+NtFlushBuffersFileEx(
+    _In_ HANDLE FileHandle,
+    _In_ ULONG Flags,
+    _In_reads_bytes_(ParametersSize) PVOID Parameters,
+    _In_ ULONG ParametersSize,
+    _Out_ PIO_STATUS_BLOCK IoStatusBlock
+);
+
 NTSYSCALLAPI
 NTSTATUS
 NTAPI
@@ -305,6 +317,35 @@ NtNotifyChangeDirectoryFile(
     _In_ ULONG BufferSize,
     _In_ ULONG CompletionFilter,
     _In_ BOOLEAN WatchTree
+);
+
+#ifdef NTOS_MODE_USER
+//
+// Output format selector for NtNotifyChangeDirectoryFileEx
+// (in kernel mode this comes from wdm.h)
+//
+typedef enum _DIRECTORY_NOTIFY_INFORMATION_CLASS
+{
+    DirectoryNotifyInformation = 1,
+    DirectoryNotifyExtendedInformation
+} DIRECTORY_NOTIFY_INFORMATION_CLASS, *PDIRECTORY_NOTIFY_INFORMATION_CLASS;
+#endif
+
+__kernel_entry
+NTSYSCALLAPI
+NTSTATUS
+NTAPI
+NtNotifyChangeDirectoryFileEx(
+    _In_ HANDLE FileHandle,
+    _In_opt_ HANDLE Event,
+    _In_opt_ PIO_APC_ROUTINE ApcRoutine,
+    _In_opt_ PVOID ApcContext,
+    _Out_ PIO_STATUS_BLOCK IoStatusBlock,
+    _Out_writes_bytes_(BufferSize) PVOID Buffer,
+    _In_ ULONG BufferSize,
+    _In_ ULONG CompletionFilter,
+    _In_ BOOLEAN WatchTree,
+    _In_ DIRECTORY_NOTIFY_INFORMATION_CLASS DirectoryNotifyInformationClass
 );
 
 NTSYSCALLAPI
@@ -788,6 +829,18 @@ ZwFlushBuffersFile(
     _Out_ PIO_STATUS_BLOCK IoStatusBlock
 );
 
+_IRQL_requires_max_(PASSIVE_LEVEL)
+NTSYSAPI
+NTSTATUS
+NTAPI
+ZwFlushBuffersFileEx(
+    _In_ HANDLE FileHandle,
+    _In_ ULONG Flags,
+    _In_reads_bytes_(ParametersSize) PVOID Parameters,
+    _In_ ULONG ParametersSize,
+    _Out_ PIO_STATUS_BLOCK IoStatusBlock
+);
+
 NTSYSAPI
 NTSTATUS
 NTAPI
@@ -848,6 +901,22 @@ ZwNotifyChangeDirectoryFile(
     _In_ ULONG BufferSize,
     _In_ ULONG CompletionFilter,
     _In_ BOOLEAN WatchTree
+);
+
+NTSYSAPI
+NTSTATUS
+NTAPI
+ZwNotifyChangeDirectoryFileEx(
+    _In_ HANDLE FileHandle,
+    _In_opt_ HANDLE Event,
+    _In_opt_ PIO_APC_ROUTINE ApcRoutine,
+    _In_opt_ PVOID ApcContext,
+    _Out_ PIO_STATUS_BLOCK IoStatusBlock,
+    _Out_writes_bytes_(BufferSize) PVOID Buffer,
+    _In_ ULONG BufferSize,
+    _In_ ULONG CompletionFilter,
+    _In_ BOOLEAN WatchTree,
+    _In_ DIRECTORY_NOTIFY_INFORMATION_CLASS DirectoryNotifyInformationClass
 );
 
 NTSYSAPI

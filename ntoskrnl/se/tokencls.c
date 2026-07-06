@@ -50,12 +50,48 @@ static const INFORMATION_CLASS_INFO SeTokenInformationClass[] = {
     /* TokenSessionReference */
     IQS_SAME(ULONG, ULONG, ICIF_SET),
     /* TokenSandBoxInert */
-    IQS_SAME(ULONG, ULONG, ICIF_QUERY),
+    IQS_SAME(ULONG, ULONG, ICIF_QUERY | ICIF_QUERY_SIZE_VARIABLE),
     /* TokenAuditPolicy */
     IQS_SAME(TOKEN_AUDIT_POLICY_INFORMATION, ULONG, ICIF_SET | ICIF_SET_SIZE_VARIABLE),
     /* TokenOrigin */
-    IQS_SAME(TOKEN_ORIGIN, ULONG, ICIF_QUERY | ICIF_SET),
+    IQS_SAME(TOKEN_ORIGIN, ULONG, ICIF_QUERY | ICIF_QUERY_SIZE_VARIABLE | ICIF_SET),
 };
+
+/* PRIVATE FUNCTIONS **********************************************************/
+
+/**
+ * @brief
+ * Computes the size needed to marshal a SID_AND_ATTRIBUTES array with each
+ * SID blob rounded up to pointer size, so that any structure arrays packed
+ * after the SID data remain naturally aligned. Windows sizes the Sids and
+ * RestrictedSids regions of TOKEN_GROUPS_AND_PRIVILEGES this way.
+ *
+ * @param[in] Count
+ * Total count of entries in the array.
+ *
+ * @param[in] Src
+ * Source that points to the attributes and SID entry structure.
+ *
+ * @return
+ * Returns the total length the marshaled array occupies.
+ */
+static
+ULONG
+SepLengthSidAndAttributesAligned(
+    _In_ ULONG Count,
+    _In_ PSID_AND_ATTRIBUTES Src)
+{
+    ULONG i;
+    ULONG Length;
+
+    PAGED_CODE();
+
+    Length = Count * sizeof(SID_AND_ATTRIBUTES);
+    for (i = 0; i < Count; i++)
+        Length += ALIGN_UP_BY(RtlLengthSid(Src[i].Sid), sizeof(PVOID));
+
+    return Length;
+}
 
 /* PUBLIC FUNCTIONS *****************************************************************/
 
@@ -86,9 +122,8 @@ static const INFORMATION_CLASS_INFO SeTokenInformationClass[] = {
  *
  * @remarks
  * Only certain information classes are not implemented in this function and
- * these are TokenOrigin, TokenGroupsAndPrivileges, TokenRestrictedSids and
- * TokenSandBoxInert. The following classes are implemented in NtQueryInformationToken
- * only.
+ * these are TokenOrigin, TokenRestrictedSids and TokenSandBoxInert. The
+ * following classes are implemented in NtQueryInformationToken only.
  */
 NTSTATUS
 NTAPI
@@ -424,8 +459,8 @@ SeQueryInformationToken(
             ULONG SidLen, RestrictedSidLen;
 
             DPRINT("SeQueryInformationToken(TokenGroupsAndPrivileges)\n");
-            UserGroupLength = RtlLengthSidAndAttributes(Token->UserAndGroupCount, Token->UserAndGroups);
-            RestrictedSidLength = RtlLengthSidAndAttributes(Token->RestrictedSidCount, Token->RestrictedSids);
+            UserGroupLength = SepLengthSidAndAttributesAligned(Token->UserAndGroupCount, Token->UserAndGroups);
+            RestrictedSidLength = SepLengthSidAndAttributesAligned(Token->RestrictedSidCount, Token->RestrictedSids);
             PrivilegeLength = Token->PrivilegeCount * sizeof(LUID_AND_ATTRIBUTES);
             RequiredLength = sizeof(TOKEN_GROUPS_AND_PRIVILEGES) +
                              UserGroupLength + RestrictedSidLength + PrivilegeLength;
@@ -453,7 +488,7 @@ SeQueryInformationToken(
             gap->RestrictedSidCount = Token->RestrictedSidCount;
             gap->RestrictedSidLength = RestrictedSidLength;
             gap->RestrictedSids = NULL;
-            if (SeTokenIsRestricted(Token))
+            if (Token->RestrictedSidCount != 0)
             {
                 gap->RestrictedSids = (PSID_AND_ATTRIBUTES)((ULONG_PTR)gap->Sids + UserGroupLength);
                 RestrictedSid = (PSID)((ULONG_PTR)gap->RestrictedSids + (Token->RestrictedSidCount * sizeof(SID_AND_ATTRIBUTES)));
@@ -628,17 +663,19 @@ NtQueryInformationToken(
                 PTOKEN_GROUPS tg = (PTOKEN_GROUPS)TokenInformation;
 
                 DPRINT("NtQueryInformationToken(TokenGroups)\n");
-                RequiredLength = sizeof(tg->GroupCount) +
+                /* The SID blobs follow the 8-aligned Groups array, so the
+                 * length base is FIELD_OFFSET(TOKEN_GROUPS, Groups), matching
+                 * Win11 (same layout fix as TokenRestrictedSids below) */
+                RequiredLength = FIELD_OFFSET(TOKEN_GROUPS, Groups) +
                     RtlLengthSidAndAttributes(Token->UserAndGroupCount - 1, &Token->UserAndGroups[1]);
 
                 _SEH2_TRY
                 {
                     if (TokenInformationLength >= RequiredLength)
                     {
-                        ULONG SidLen = RequiredLength - sizeof(tg->GroupCount) -
+                        ULONG SidLen = RequiredLength - FIELD_OFFSET(TOKEN_GROUPS, Groups) -
                             ((Token->UserAndGroupCount - 1) * sizeof(SID_AND_ATTRIBUTES));
-                        PSID Sid = (PSID_AND_ATTRIBUTES)((ULONG_PTR)tg + sizeof(tg->GroupCount) +
-                                                         ((Token->UserAndGroupCount - 1) * sizeof(SID_AND_ATTRIBUTES)));
+                        PSID Sid = (PSID)&tg->Groups[Token->UserAndGroupCount - 1];
 
                         tg->GroupCount = Token->UserAndGroupCount - 1;
                         Status = RtlCopySidAndAttributesArray(Token->UserAndGroupCount - 1,
@@ -952,7 +989,7 @@ NtQueryInformationToken(
                 {
                     if (TokenInformationLength >= RequiredLength)
                     {
-                        to->OriginatingLogonSession = Token->AuthenticationId;
+                        to->OriginatingLogonSession = Token->OriginatingLogonSession;
                     }
                     else
                     {
@@ -978,8 +1015,8 @@ NtQueryInformationToken(
                 PTOKEN_GROUPS_AND_PRIVILEGES GroupsAndPrivs = (PTOKEN_GROUPS_AND_PRIVILEGES)TokenInformation;
 
                 DPRINT("NtQueryInformationToken(TokenGroupsAndPrivileges)\n");
-                UserGroupLength = RtlLengthSidAndAttributes(Token->UserAndGroupCount, Token->UserAndGroups);
-                RestrictedSidLength = RtlLengthSidAndAttributes(Token->RestrictedSidCount, Token->RestrictedSids);
+                UserGroupLength = SepLengthSidAndAttributesAligned(Token->UserAndGroupCount, Token->UserAndGroups);
+                RestrictedSidLength = SepLengthSidAndAttributesAligned(Token->RestrictedSidCount, Token->RestrictedSids);
                 PrivilegeLength = Token->PrivilegeCount * sizeof(LUID_AND_ATTRIBUTES);
 
                 RequiredLength = sizeof(TOKEN_GROUPS_AND_PRIVILEGES) +
@@ -1007,7 +1044,7 @@ NtQueryInformationToken(
                         GroupsAndPrivs->RestrictedSidCount = Token->RestrictedSidCount;
                         GroupsAndPrivs->RestrictedSidLength = RestrictedSidLength;
                         GroupsAndPrivs->RestrictedSids = NULL;
-                        if (SeTokenIsRestricted(Token))
+                        if (Token->RestrictedSidCount != 0)
                         {
                             GroupsAndPrivs->RestrictedSids = (PSID_AND_ATTRIBUTES)((ULONG_PTR)GroupsAndPrivs->Sids + UserGroupLength);
 
@@ -1054,17 +1091,16 @@ NtQueryInformationToken(
                 PTOKEN_GROUPS tg = (PTOKEN_GROUPS)TokenInformation;
 
                 DPRINT("NtQueryInformationToken(TokenRestrictedSids)\n");
-                RequiredLength = sizeof(tg->GroupCount) +
+                RequiredLength = FIELD_OFFSET(TOKEN_GROUPS, Groups) +
                 RtlLengthSidAndAttributes(Token->RestrictedSidCount, Token->RestrictedSids);
 
                 _SEH2_TRY
                 {
                     if (TokenInformationLength >= RequiredLength)
                     {
-                        ULONG SidLen = RequiredLength - sizeof(tg->GroupCount) -
+                        ULONG SidLen = RequiredLength - FIELD_OFFSET(TOKEN_GROUPS, Groups) -
                             (Token->RestrictedSidCount * sizeof(SID_AND_ATTRIBUTES));
-                        PSID Sid = (PSID)((ULONG_PTR)tg + sizeof(tg->GroupCount) +
-                                          (Token->RestrictedSidCount * sizeof(SID_AND_ATTRIBUTES)));
+                        PSID Sid = (PSID)&tg->Groups[Token->RestrictedSidCount];
 
                         tg->GroupCount = Token->RestrictedSidCount;
                         Status = RtlCopySidAndAttributesArray(Token->RestrictedSidCount,
@@ -1096,13 +1132,21 @@ NtQueryInformationToken(
                 ULONG IsTokenSandBoxInert;
 
                 DPRINT("NtQueryInformationToken(TokenSandBoxInert)\n");
+                RequiredLength = sizeof(ULONG);
 
                 IsTokenSandBoxInert = SeTokenIsInert(Token);
                 _SEH2_TRY
                 {
-                    /* Buffer size was already verified, no need to check here again */
-                    *(PULONG)TokenInformation = IsTokenSandBoxInert;
-                    *ReturnLength = sizeof(ULONG);
+                    if (TokenInformationLength >= RequiredLength)
+                    {
+                        *(PULONG)TokenInformation = IsTokenSandBoxInert;
+                    }
+                    else
+                    {
+                        Status = STATUS_BUFFER_TOO_SMALL;
+                    }
+
+                    *ReturnLength = RequiredLength;
                 }
                 _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
                 {

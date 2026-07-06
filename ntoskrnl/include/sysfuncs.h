@@ -325,3 +325,9 @@
     SVC_(AlertThreadByThreadId, 1)
     SVC_(WaitForAlertByThreadId, 2)
 #endif
+#if (NTDDI_VERSION >= NTDDI_WIN8)
+    SVC_(FlushBuffersFileEx, 5)
+#endif
+#if (NTDDI_VERSION >= NTDDI_WIN10_RS3)
+    SVC_(NotifyChangeDirectoryFileEx, 10)
+#endif
